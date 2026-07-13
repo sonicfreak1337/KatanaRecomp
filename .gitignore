@@ -1,0 +1,45 @@
+﻿# Build-Ausgaben
+/build/
+/out/
+/generated/
+
+# CMake
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+CTestTestfile.cmake
+Testing/
+
+# Visual Studio
+/.vs/
+*.sln
+*.vcxproj
+*.vcxproj.filters
+*.user
+*.pdb
+*.ilk
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# Dreamcast-Spieldaten
+/private/
+/disc/
+/discs/
+/bios/
+/dumps/
+/traces/
+*.gdi
+*.cdi
+*.chd
+*.iso
+track*.bin
+track*.raw
+dc_boot.bin
+dc_flash.bin
+
+# Betriebssystem
+Thumbs.db
+.DS_Store
