@@ -379,3 +379,243 @@ add_test(
     NAME katana-generated-status-tests
     COMMAND katana-generated-status-tests
 )
+add_executable(katana-sub-neg-not-tests
+    tests/alu/sub_neg_not_tests.cpp
+)
+
+target_link_libraries(
+    katana-sub-neg-not-tests
+    PRIVATE
+        katana_core
+)
+
+katana_enable_warnings(katana-sub-neg-not-tests)
+
+add_test(
+    NAME katana-sub-neg-not-tests
+    COMMAND katana-sub-neg-not-tests
+)
+
+set(
+    KATANA_GENERATED_SUB_NEG_NOT_CPP
+    ${KATANA_GENERATED_TEST_DIR}/generated_sub_neg_not_program.cpp
+)
+
+add_custom_command(
+    OUTPUT
+        ${KATANA_GENERATED_SUB_NEG_NOT_CPP}
+    COMMAND
+        ${CMAKE_COMMAND}
+        -E
+        make_directory
+        ${KATANA_GENERATED_TEST_DIR}
+    COMMAND
+        $<TARGET_FILE:katana-recomp>
+        emit-cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/sub_neg_not_execution.bin
+        8C010000
+        ${KATANA_GENERATED_SUB_NEG_NOT_CPP}
+        8C010000
+    DEPENDS
+        katana-recomp
+        ${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/sub_neg_not_execution.bin
+    COMMENT
+        "Generiere C++-Programm fuer KR-1101 End-to-End-Test"
+    VERBATIM
+)
+
+set_source_files_properties(
+    ${KATANA_GENERATED_SUB_NEG_NOT_CPP}
+    PROPERTIES
+        GENERATED TRUE
+        HEADER_FILE_ONLY TRUE
+)
+
+set_source_files_properties(
+    tests/alu/generated_sub_neg_not_tests.cpp
+    PROPERTIES
+        OBJECT_DEPENDS ${KATANA_GENERATED_SUB_NEG_NOT_CPP}
+)
+
+add_executable(katana-generated-sub-neg-not-tests
+    tests/alu/generated_sub_neg_not_tests.cpp
+    ${KATANA_GENERATED_SUB_NEG_NOT_CPP}
+)
+
+target_include_directories(
+    katana-generated-sub-neg-not-tests
+    PRIVATE
+        ${KATANA_GENERATED_TEST_DIR}
+)
+
+katana_enable_warnings(katana-generated-sub-neg-not-tests)
+
+add_dependencies(
+    katana-generated-sub-neg-not-tests
+    katana-recomp
+)
+
+add_test(
+    NAME katana-generated-sub-neg-not-tests
+    COMMAND katana-generated-sub-neg-not-tests
+)
+add_executable(katana-and-or-xor-tests
+    tests/alu/and_or_xor_tests.cpp
+)
+
+target_link_libraries(
+    katana-and-or-xor-tests
+    PRIVATE
+        katana_core
+)
+
+katana_enable_warnings(katana-and-or-xor-tests)
+
+add_test(
+    NAME katana-and-or-xor-tests
+    COMMAND katana-and-or-xor-tests
+)
+
+set(
+    KATANA_GENERATED_AND_OR_XOR_CPP
+    ${KATANA_GENERATED_TEST_DIR}/generated_and_or_xor_program.cpp
+)
+
+add_custom_command(
+    OUTPUT
+        ${KATANA_GENERATED_AND_OR_XOR_CPP}
+    COMMAND
+        ${CMAKE_COMMAND}
+        -E
+        make_directory
+        ${KATANA_GENERATED_TEST_DIR}
+    COMMAND
+        $<TARGET_FILE:katana-recomp>
+        emit-cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/and_or_xor_execution.bin
+        8C010000
+        ${KATANA_GENERATED_AND_OR_XOR_CPP}
+        8C010000
+    DEPENDS
+        katana-recomp
+        ${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/and_or_xor_execution.bin
+    COMMENT
+        "Generiere C++-Programm fuer KR-1102 End-to-End-Test"
+    VERBATIM
+)
+
+set_source_files_properties(
+    ${KATANA_GENERATED_AND_OR_XOR_CPP}
+    PROPERTIES
+        GENERATED TRUE
+        HEADER_FILE_ONLY TRUE
+)
+
+set_source_files_properties(
+    tests/alu/generated_and_or_xor_tests.cpp
+    PROPERTIES
+        OBJECT_DEPENDS ${KATANA_GENERATED_AND_OR_XOR_CPP}
+)
+
+add_executable(katana-generated-and-or-xor-tests
+    tests/alu/generated_and_or_xor_tests.cpp
+    ${KATANA_GENERATED_AND_OR_XOR_CPP}
+)
+
+target_include_directories(
+    katana-generated-and-or-xor-tests
+    PRIVATE
+        ${KATANA_GENERATED_TEST_DIR}
+)
+
+katana_enable_warnings(katana-generated-and-or-xor-tests)
+
+add_dependencies(
+    katana-generated-and-or-xor-tests
+    katana-recomp
+)
+
+add_test(
+    NAME katana-generated-and-or-xor-tests
+    COMMAND katana-generated-and-or-xor-tests
+)
+add_executable(katana-cmp-variants-tests
+    tests/alu/cmp_variants_tests.cpp
+)
+
+target_link_libraries(
+    katana-cmp-variants-tests
+    PRIVATE
+        katana_core
+)
+
+katana_enable_warnings(katana-cmp-variants-tests)
+
+add_test(
+    NAME katana-cmp-variants-tests
+    COMMAND katana-cmp-variants-tests
+)
+
+set(
+    KATANA_GENERATED_CMP_VARIANTS_CPP
+    ${KATANA_GENERATED_TEST_DIR}/generated_cmp_variants_program.cpp
+)
+
+add_custom_command(
+    OUTPUT
+        ${KATANA_GENERATED_CMP_VARIANTS_CPP}
+    COMMAND
+        ${CMAKE_COMMAND}
+        -E
+        make_directory
+        ${KATANA_GENERATED_TEST_DIR}
+    COMMAND
+        $<TARGET_FILE:katana-recomp>
+        emit-cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/cmp_variants_execution.bin
+        8C010000
+        ${KATANA_GENERATED_CMP_VARIANTS_CPP}
+        8C010000
+    DEPENDS
+        katana-recomp
+        ${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/cmp_variants_execution.bin
+    COMMENT
+        "Generiere C++-Programm fuer KR-1103 End-to-End-Test"
+    VERBATIM
+)
+
+set_source_files_properties(
+    ${KATANA_GENERATED_CMP_VARIANTS_CPP}
+    PROPERTIES
+        GENERATED TRUE
+        HEADER_FILE_ONLY TRUE
+)
+
+set_source_files_properties(
+    tests/alu/generated_cmp_variants_tests.cpp
+    PROPERTIES
+        OBJECT_DEPENDS ${KATANA_GENERATED_CMP_VARIANTS_CPP}
+)
+
+add_executable(katana-generated-cmp-variants-tests
+    tests/alu/generated_cmp_variants_tests.cpp
+    ${KATANA_GENERATED_CMP_VARIANTS_CPP}
+)
+
+target_include_directories(
+    katana-generated-cmp-variants-tests
+    PRIVATE
+        ${KATANA_GENERATED_TEST_DIR}
+)
+
+katana_enable_warnings(katana-generated-cmp-variants-tests)
+
+add_dependencies(
+    katana-generated-cmp-variants-tests
+    katana-recomp
+)
+
+add_test(
+    NAME katana-generated-cmp-variants-tests
+    COMMAND katana-generated-cmp-variants-tests
+)

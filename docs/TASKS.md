@@ -25,7 +25,7 @@ Dieses Dokument zerlegt die Roadmap in issue-taugliche Arbeitspakete.
 
 ## v0.11.0 - ALU und Statussemantik
 
-### [ ] KR-1101 - SUB, NEG und NOT
+### [x] KR-1101 - SUB, NEG und NOT
 
 Abhaengigkeiten: v0.10.0
 
@@ -45,7 +45,7 @@ Akzeptanz:
 - Quellregister bleiben unveraendert
 - bekannte Alt-Tests bestehen
 
-### [ ] KR-1102 - AND, OR und XOR
+### [x] KR-1102 - AND, OR und XOR
 
 Abhaengigkeiten: KR-1101
 
@@ -60,7 +60,7 @@ Akzeptanz:
 - Bitmuster `0x00000000`, `0xFFFFFFFF`, alternierende Bits
 - Immediate-Werte werden ohne Vorzeichenerweiterung behandelt
 
-### [ ] KR-1103 - CMP-Varianten
+### [x] KR-1103 - CMP-Varianten
 
 Abhaengigkeiten: KR-1101
 

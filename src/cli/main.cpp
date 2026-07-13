@@ -117,6 +117,9 @@ void print_ir_instruction(
     switch (instruction.operation) {
         case katana::ir::Operation::MovImmediate:
         case katana::ir::Operation::AddImmediate:
+        case katana::ir::Operation::AndImmediate:
+        case katana::ir::Operation::OrImmediate:
+        case katana::ir::Operation::XorImmediate:
         case katana::ir::Operation::CompareEqualImmediate:
         case katana::ir::Operation::TestImmediate:
             std::cout
@@ -131,7 +134,18 @@ void print_ir_instruction(
 
         case katana::ir::Operation::MovRegister:
         case katana::ir::Operation::AddRegister:
+        case katana::ir::Operation::SubRegister:
+        case katana::ir::Operation::NegateRegister:
+        case katana::ir::Operation::NotRegister:
+        case katana::ir::Operation::AndRegister:
+        case katana::ir::Operation::OrRegister:
+        case katana::ir::Operation::XorRegister:
         case katana::ir::Operation::CompareEqualRegister:
+        case katana::ir::Operation::CompareHigherOrSame:
+        case katana::ir::Operation::CompareGreaterOrEqual:
+        case katana::ir::Operation::CompareHigher:
+        case katana::ir::Operation::CompareGreaterThan:
+        case katana::ir::Operation::CompareString:
         case katana::ir::Operation::TestRegister:
             std::cout
                 << " r"
@@ -145,6 +159,15 @@ void print_ir_instruction(
                 );
             break;
 
+        case katana::ir::Operation::ComparePositiveOrZero:
+        case katana::ir::Operation::ComparePositive:
+            std::cout
+                << " r"
+                << std::dec
+                << static_cast<unsigned>(
+                    instruction.destination_register
+                );
+            break;
         case katana::ir::Operation::LoadByteSigned:
         case katana::ir::Operation::LoadWordSigned:
         case katana::ir::Operation::LoadLong:

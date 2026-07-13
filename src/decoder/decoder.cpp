@@ -152,6 +152,124 @@ DecodedInstruction decode(const std::uint16_t opcode) {
         return instruction;
     }
 
+    if ((opcode & 0xF00Fu) == 0x3008u) {
+        instruction.kind = InstructionKind::SubRegister;
+        decode_memory_registers(instruction, opcode);
+
+        instruction.text =
+            "sub " +
+            register_name(instruction.source_register) +
+            ", " +
+            register_name(instruction.destination_register);
+
+        return instruction;
+    }
+
+    if ((opcode & 0xF00Fu) == 0x600Bu) {
+        instruction.kind = InstructionKind::NegateRegister;
+        decode_memory_registers(instruction, opcode);
+
+        instruction.text =
+            "neg " +
+            register_name(instruction.source_register) +
+            ", " +
+            register_name(instruction.destination_register);
+
+        return instruction;
+    }
+
+    if ((opcode & 0xF00Fu) == 0x6007u) {
+        instruction.kind = InstructionKind::NotRegister;
+        decode_memory_registers(instruction, opcode);
+
+        instruction.text =
+            "not " +
+            register_name(instruction.source_register) +
+            ", " +
+            register_name(instruction.destination_register);
+
+        return instruction;
+    }
+    if ((opcode & 0xF00Fu) == 0x2009u) {
+        instruction.kind = InstructionKind::AndRegister;
+        decode_memory_registers(instruction, opcode);
+
+        instruction.text =
+            "and " +
+            register_name(instruction.source_register) +
+            ", " +
+            register_name(instruction.destination_register);
+
+        return instruction;
+    }
+
+    if ((opcode & 0xF00Fu) == 0x200Au) {
+        instruction.kind = InstructionKind::XorRegister;
+        decode_memory_registers(instruction, opcode);
+
+        instruction.text =
+            "xor " +
+            register_name(instruction.source_register) +
+            ", " +
+            register_name(instruction.destination_register);
+
+        return instruction;
+    }
+
+    if ((opcode & 0xF00Fu) == 0x200Bu) {
+        instruction.kind = InstructionKind::OrRegister;
+        decode_memory_registers(instruction, opcode);
+
+        instruction.text =
+            "or " +
+            register_name(instruction.source_register) +
+            ", " +
+            register_name(instruction.destination_register);
+
+        return instruction;
+    }
+
+    if ((opcode & 0xFF00u) == 0xC900u) {
+        instruction.kind = InstructionKind::AndImmediate;
+        instruction.destination_register = 0;
+        instruction.immediate =
+            static_cast<std::int32_t>(opcode & 0x00FFu);
+
+        instruction.text =
+            "and #" +
+            std::to_string(instruction.immediate) +
+            ", r0";
+
+        return instruction;
+    }
+
+    if ((opcode & 0xFF00u) == 0xCA00u) {
+        instruction.kind = InstructionKind::XorImmediate;
+        instruction.destination_register = 0;
+        instruction.immediate =
+            static_cast<std::int32_t>(opcode & 0x00FFu);
+
+        instruction.text =
+            "xor #" +
+            std::to_string(instruction.immediate) +
+            ", r0";
+
+        return instruction;
+    }
+
+    if ((opcode & 0xFF00u) == 0xCB00u) {
+        instruction.kind = InstructionKind::OrImmediate;
+        instruction.destination_register = 0;
+        instruction.immediate =
+            static_cast<std::int32_t>(opcode & 0x00FFu);
+
+        instruction.text =
+            "or #" +
+            std::to_string(instruction.immediate) +
+            ", r0";
+
+        return instruction;
+    }
     if (opcode == 0x0008u) {
         instruction.kind = InstructionKind::ClearT;
         instruction.text = "clrt";
@@ -190,6 +308,94 @@ DecodedInstruction decode(const std::uint16_t opcode) {
         return instruction;
     }
 
+    if ((opcode & 0xF00Fu) == 0x3002u) {
+        instruction.kind = InstructionKind::CompareHigherOrSame;
+        decode_memory_registers(instruction, opcode);
+
+        instruction.text =
+            "cmp/hs " +
+            register_name(instruction.source_register) +
+            ", " +
+            register_name(instruction.destination_register);
+
+        return instruction;
+    }
+
+    if ((opcode & 0xF00Fu) == 0x3003u) {
+        instruction.kind = InstructionKind::CompareGreaterOrEqual;
+        decode_memory_registers(instruction, opcode);
+
+        instruction.text =
+            "cmp/ge " +
+            register_name(instruction.source_register) +
+            ", " +
+            register_name(instruction.destination_register);
+
+        return instruction;
+    }
+
+    if ((opcode & 0xF00Fu) == 0x3006u) {
+        instruction.kind = InstructionKind::CompareHigher;
+        decode_memory_registers(instruction, opcode);
+
+        instruction.text =
+            "cmp/hi " +
+            register_name(instruction.source_register) +
+            ", " +
+            register_name(instruction.destination_register);
+
+        return instruction;
+    }
+
+    if ((opcode & 0xF00Fu) == 0x3007u) {
+        instruction.kind = InstructionKind::CompareGreaterThan;
+        decode_memory_registers(instruction, opcode);
+
+        instruction.text =
+            "cmp/gt " +
+            register_name(instruction.source_register) +
+            ", " +
+            register_name(instruction.destination_register);
+
+        return instruction;
+    }
+
+    if ((opcode & 0xF0FFu) == 0x4011u) {
+        instruction.kind = InstructionKind::ComparePositiveOrZero;
+        instruction.destination_register =
+            static_cast<std::uint8_t>((opcode >> 8u) & 0x0Fu);
+
+        instruction.text =
+            "cmp/pz " +
+            register_name(instruction.destination_register);
+
+        return instruction;
+    }
+
+    if ((opcode & 0xF0FFu) == 0x4015u) {
+        instruction.kind = InstructionKind::ComparePositive;
+        instruction.destination_register =
+            static_cast<std::uint8_t>((opcode >> 8u) & 0x0Fu);
+
+        instruction.text =
+            "cmp/pl " +
+            register_name(instruction.destination_register);
+
+        return instruction;
+    }
+
+    if ((opcode & 0xF00Fu) == 0x200Cu) {
+        instruction.kind = InstructionKind::CompareString;
+        decode_memory_registers(instruction, opcode);
+
+        instruction.text =
+            "cmp/str " +
+            register_name(instruction.source_register) +
+            ", " +
+            register_name(instruction.destination_register);
+
+        return instruction;
+    }
     if ((opcode & 0xFF00u) == 0xC800u) {
         instruction.kind = InstructionKind::TestImmediate;
         instruction.destination_register = 0;

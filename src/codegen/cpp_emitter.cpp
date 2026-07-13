@@ -122,6 +122,103 @@ void emit_simple_instruction(
                 << "];\n";
             return;
 
+        case Operation::SubRegister:
+            output
+                << "cpu.r["
+                << static_cast<unsigned>(
+                    instruction.destination_register
+                )
+                << "] -= cpu.r["
+                << static_cast<unsigned>(
+                    instruction.source_register
+                )
+                << "];\n";
+            return;
+
+        case Operation::NegateRegister:
+            output
+                << "cpu.r["
+                << static_cast<unsigned>(
+                    instruction.destination_register
+                )
+                << "] = 0u - cpu.r["
+                << static_cast<unsigned>(
+                    instruction.source_register
+                )
+                << "];\n";
+            return;
+
+        case Operation::NotRegister:
+            output
+                << "cpu.r["
+                << static_cast<unsigned>(
+                    instruction.destination_register
+                )
+                << "] = ~cpu.r["
+                << static_cast<unsigned>(
+                    instruction.source_register
+                )
+                << "];\n";
+            return;
+        case Operation::AndRegister:
+            output
+                << "cpu.r["
+                << static_cast<unsigned>(
+                    instruction.destination_register
+                )
+                << "] &= cpu.r["
+                << static_cast<unsigned>(
+                    instruction.source_register
+                )
+                << "];\n";
+            return;
+
+        case Operation::OrRegister:
+            output
+                << "cpu.r["
+                << static_cast<unsigned>(
+                    instruction.destination_register
+                )
+                << "] |= cpu.r["
+                << static_cast<unsigned>(
+                    instruction.source_register
+                )
+                << "];\n";
+            return;
+
+        case Operation::XorRegister:
+            output
+                << "cpu.r["
+                << static_cast<unsigned>(
+                    instruction.destination_register
+                )
+                << "] ^= cpu.r["
+                << static_cast<unsigned>(
+                    instruction.source_register
+                )
+                << "];\n";
+            return;
+
+        case Operation::AndImmediate:
+            output
+                << "cpu.r[0] &= static_cast<std::uint32_t>("
+                << instruction.immediate
+                << ");\n";
+            return;
+
+        case Operation::OrImmediate:
+            output
+                << "cpu.r[0] |= static_cast<std::uint32_t>("
+                << instruction.immediate
+                << ");\n";
+            return;
+
+        case Operation::XorImmediate:
+            output
+                << "cpu.r[0] ^= static_cast<std::uint32_t>("
+                << instruction.immediate
+                << ");\n";
+            return;
         case Operation::ClearT:
             output << "cpu.t = false;\n";
             return;
@@ -150,6 +247,120 @@ void emit_simple_instruction(
                 << "];\n";
             return;
 
+        case Operation::CompareHigherOrSame:
+            output
+                << "cpu.t = cpu.r["
+                << static_cast<unsigned>(
+                    instruction.destination_register
+                )
+                << "] >= cpu.r["
+                << static_cast<unsigned>(
+                    instruction.source_register
+                )
+                << "];\n";
+            return;
+
+        case Operation::CompareGreaterOrEqual:
+            output
+                << "cpu.t = (cpu.r["
+                << static_cast<unsigned>(
+                    instruction.destination_register
+                )
+                << "] ^ 0x80000000u) >= (cpu.r["
+                << static_cast<unsigned>(
+                    instruction.source_register
+                )
+                << "] ^ 0x80000000u);\n";
+            return;
+
+        case Operation::CompareHigher:
+            output
+                << "cpu.t = cpu.r["
+                << static_cast<unsigned>(
+                    instruction.destination_register
+                )
+                << "] > cpu.r["
+                << static_cast<unsigned>(
+                    instruction.source_register
+                )
+                << "];\n";
+            return;
+
+        case Operation::CompareGreaterThan:
+            output
+                << "cpu.t = (cpu.r["
+                << static_cast<unsigned>(
+                    instruction.destination_register
+                )
+                << "] ^ 0x80000000u) > (cpu.r["
+                << static_cast<unsigned>(
+                    instruction.source_register
+                )
+                << "] ^ 0x80000000u);\n";
+            return;
+
+        case Operation::ComparePositiveOrZero:
+            output
+                << "cpu.t = (cpu.r["
+                << static_cast<unsigned>(
+                    instruction.destination_register
+                )
+                << "] & 0x80000000u) == 0u;\n";
+            return;
+
+        case Operation::ComparePositive:
+            output
+                << "cpu.t = cpu.r["
+                << static_cast<unsigned>(
+                    instruction.destination_register
+                )
+                << "] != 0u && (cpu.r["
+                << static_cast<unsigned>(
+                    instruction.destination_register
+                )
+                << "] & 0x80000000u) == 0u;\n";
+            return;
+
+        case Operation::CompareString:
+            output
+                << "cpu.t =\n"
+                << "    (((cpu.r["
+                << static_cast<unsigned>(
+                    instruction.destination_register
+                )
+                << "] ^ cpu.r["
+                << static_cast<unsigned>(
+                    instruction.source_register
+                )
+                << "]) & 0x000000FFu) == 0u) ||\n"
+                << "    (((cpu.r["
+                << static_cast<unsigned>(
+                    instruction.destination_register
+                )
+                << "] ^ cpu.r["
+                << static_cast<unsigned>(
+                    instruction.source_register
+                )
+                << "]) & 0x0000FF00u) == 0u) ||\n"
+                << "    (((cpu.r["
+                << static_cast<unsigned>(
+                    instruction.destination_register
+                )
+                << "] ^ cpu.r["
+                << static_cast<unsigned>(
+                    instruction.source_register
+                )
+                << "]) & 0x00FF0000u) == 0u) ||\n"
+                << "    (((cpu.r["
+                << static_cast<unsigned>(
+                    instruction.destination_register
+                )
+                << "] ^ cpu.r["
+                << static_cast<unsigned>(
+                    instruction.source_register
+                )
+                << "]) & 0xFF000000u) == 0u);\n";
+            return;
         case Operation::TestImmediate:
             output
                 << "cpu.t = (cpu.r[0] & static_cast<std::uint32_t>("
@@ -513,10 +724,26 @@ void emit_terminal(
         case Operation::AddImmediate:
         case Operation::MovRegister:
         case Operation::AddRegister:
+        case Operation::SubRegister:
+        case Operation::NegateRegister:
+        case Operation::NotRegister:
+        case Operation::AndRegister:
+        case Operation::OrRegister:
+        case Operation::XorRegister:
+        case Operation::AndImmediate:
+        case Operation::OrImmediate:
+        case Operation::XorImmediate:
         case Operation::ClearT:
         case Operation::SetT:
         case Operation::CompareEqualImmediate:
         case Operation::CompareEqualRegister:
+        case Operation::CompareHigherOrSame:
+        case Operation::CompareGreaterOrEqual:
+        case Operation::CompareHigher:
+        case Operation::CompareGreaterThan:
+        case Operation::ComparePositiveOrZero:
+        case Operation::ComparePositive:
+        case Operation::CompareString:
         case Operation::TestImmediate:
         case Operation::TestRegister:
         case Operation::LoadByteSigned:
@@ -554,10 +781,26 @@ bool is_control_flow(
         case Operation::AddImmediate:
         case Operation::MovRegister:
         case Operation::AddRegister:
+        case Operation::SubRegister:
+        case Operation::NegateRegister:
+        case Operation::NotRegister:
+        case Operation::AndRegister:
+        case Operation::OrRegister:
+        case Operation::XorRegister:
+        case Operation::AndImmediate:
+        case Operation::OrImmediate:
+        case Operation::XorImmediate:
         case Operation::ClearT:
         case Operation::SetT:
         case Operation::CompareEqualImmediate:
         case Operation::CompareEqualRegister:
+        case Operation::CompareHigherOrSame:
+        case Operation::CompareGreaterOrEqual:
+        case Operation::CompareHigher:
+        case Operation::CompareGreaterThan:
+        case Operation::ComparePositiveOrZero:
+        case Operation::ComparePositive:
+        case Operation::CompareString:
         case Operation::TestImmediate:
         case Operation::TestRegister:
         case Operation::LoadByteSigned:

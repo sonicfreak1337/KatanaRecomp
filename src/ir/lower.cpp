@@ -35,6 +35,31 @@ Operation lower_operation(
         case Source::AddRegister:
             return Operation::AddRegister;
 
+        case Source::SubRegister:
+            return Operation::SubRegister;
+
+        case Source::NegateRegister:
+            return Operation::NegateRegister;
+
+        case Source::NotRegister:
+            return Operation::NotRegister;
+        case Source::AndRegister:
+            return Operation::AndRegister;
+
+        case Source::OrRegister:
+            return Operation::OrRegister;
+
+        case Source::XorRegister:
+            return Operation::XorRegister;
+
+        case Source::AndImmediate:
+            return Operation::AndImmediate;
+
+        case Source::OrImmediate:
+            return Operation::OrImmediate;
+
+        case Source::XorImmediate:
+            return Operation::XorImmediate;
         case Source::ClearT:
             return Operation::ClearT;
 
@@ -47,6 +72,26 @@ Operation lower_operation(
         case Source::CompareEqualRegister:
             return Operation::CompareEqualRegister;
 
+        case Source::CompareHigherOrSame:
+            return Operation::CompareHigherOrSame;
+
+        case Source::CompareGreaterOrEqual:
+            return Operation::CompareGreaterOrEqual;
+
+        case Source::CompareHigher:
+            return Operation::CompareHigher;
+
+        case Source::CompareGreaterThan:
+            return Operation::CompareGreaterThan;
+
+        case Source::ComparePositiveOrZero:
+            return Operation::ComparePositiveOrZero;
+
+        case Source::ComparePositive:
+            return Operation::ComparePositive;
+
+        case Source::CompareString:
+            return Operation::CompareString;
         case Source::TestImmediate:
             return Operation::TestImmediate;
 
@@ -151,6 +196,31 @@ std::string_view operation_name(
         case Operation::AddRegister:
             return "add_reg";
 
+        case Operation::SubRegister:
+            return "sub_reg";
+
+        case Operation::NegateRegister:
+            return "neg_reg";
+
+        case Operation::NotRegister:
+            return "not_reg";
+        case Operation::AndRegister:
+            return "and_reg";
+
+        case Operation::OrRegister:
+            return "or_reg";
+
+        case Operation::XorRegister:
+            return "xor_reg";
+
+        case Operation::AndImmediate:
+            return "and_imm";
+
+        case Operation::OrImmediate:
+            return "or_imm";
+
+        case Operation::XorImmediate:
+            return "xor_imm";
         case Operation::ClearT:
             return "clear_t";
 
@@ -163,6 +233,26 @@ std::string_view operation_name(
         case Operation::CompareEqualRegister:
             return "compare_equal_reg";
 
+        case Operation::CompareHigherOrSame:
+            return "compare_higher_or_same";
+
+        case Operation::CompareGreaterOrEqual:
+            return "compare_greater_or_equal";
+
+        case Operation::CompareHigher:
+            return "compare_higher";
+
+        case Operation::CompareGreaterThan:
+            return "compare_greater_than";
+
+        case Operation::ComparePositiveOrZero:
+            return "compare_positive_or_zero";
+
+        case Operation::ComparePositive:
+            return "compare_positive";
+
+        case Operation::CompareString:
+            return "compare_string";
         case Operation::TestImmediate:
             return "test_imm";
 
