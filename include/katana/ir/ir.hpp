@@ -1,0 +1,62 @@
+#pragma once
+
+#include <cstdint>
+#include <optional>
+#include <string_view>
+#include <vector>
+
+namespace katana::ir {
+
+enum class Operation {
+    Unknown,
+    Nop,
+    MovImmediate,
+    AddImmediate,
+    MovRegister,
+    AddRegister,
+    Branch,
+    Call,
+    BranchIfTrue,
+    BranchIfFalse,
+    JumpRegister,
+    CallRegister,
+    Return
+};
+
+struct Instruction {
+    std::uint32_t source_address = 0;
+    std::uint16_t original_opcode = 0;
+
+    Operation operation = Operation::Unknown;
+
+    std::uint8_t destination_register = 0;
+    std::uint8_t source_register = 0;
+    std::uint8_t branch_register = 0;
+
+    std::int32_t immediate = 0;
+    std::optional<std::uint32_t> target_address;
+
+    bool has_delay_slot = false;
+    bool is_delay_slot = false;
+};
+
+struct BasicBlock {
+    std::uint32_t start_address = 0;
+    std::vector<Instruction> instructions;
+    std::vector<std::uint32_t> successors;
+    bool has_indirect_successor = false;
+};
+
+struct Function {
+    std::uint32_t entry_address = 0;
+
+    std::vector<BasicBlock> blocks;
+    std::vector<std::uint32_t> direct_callees;
+    std::vector<std::uint32_t> indirect_call_sites;
+};
+
+[[nodiscard]] std::string_view operation_name(
+    Operation operation
+) noexcept;
+
+}

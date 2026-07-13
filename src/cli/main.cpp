@@ -1,6 +1,7 @@
 #include "katana/analysis/basic_blocks.hpp"
 #include "katana/analysis/function_analysis.hpp"
 #include "katana/io/binary_reader.hpp"
+#include "katana/ir/lower.hpp"
 #include "katana/sh4/decoder.hpp"
 #include "katana/sh4/disassembler.hpp"
 
@@ -98,6 +99,81 @@ void print_address(const std::uint32_t address) {
         << std::setw(8)
         << std::setfill('0')
         << address;
+}
+
+void print_ir_instruction(
+    const katana::ir::Instruction& instruction
+) {
+    print_address(instruction.source_address);
+
+    std::cout
+        << "  "
+        << katana::ir::operation_name(
+            instruction.operation
+        );
+
+    switch (instruction.operation) {
+        case katana::ir::Operation::MovImmediate:
+        case katana::ir::Operation::AddImmediate:
+            std::cout
+                << " r"
+                << std::dec
+                << static_cast<unsigned>(
+                    instruction.destination_register
+                )
+                << ", "
+                << instruction.immediate;
+            break;
+
+        case katana::ir::Operation::MovRegister:
+        case katana::ir::Operation::AddRegister:
+            std::cout
+                << " r"
+                << std::dec
+                << static_cast<unsigned>(
+                    instruction.destination_register
+                )
+                << ", r"
+                << static_cast<unsigned>(
+                    instruction.source_register
+                );
+            break;
+
+        case katana::ir::Operation::Branch:
+        case katana::ir::Operation::Call:
+        case katana::ir::Operation::BranchIfTrue:
+        case katana::ir::Operation::BranchIfFalse:
+            if (instruction.target_address.has_value()) {
+                std::cout << " ";
+                print_address(*instruction.target_address);
+            }
+            break;
+
+        case katana::ir::Operation::JumpRegister:
+        case katana::ir::Operation::CallRegister:
+            std::cout
+                << " r"
+                << std::dec
+                << static_cast<unsigned>(
+                    instruction.branch_register
+                );
+            break;
+
+        case katana::ir::Operation::Unknown:
+        case katana::ir::Operation::Nop:
+        case katana::ir::Operation::Return:
+            break;
+    }
+
+    if (instruction.has_delay_slot) {
+        std::cout << " [delayed]";
+    }
+
+    if (instruction.is_delay_slot) {
+        std::cout << " [delay-slot]";
+    }
+
+    std::cout << '\n';
 }
 
 int decode_single_opcode(const std::string& text) {
@@ -375,6 +451,90 @@ int analyze_functions(
     return 0;
 }
 
+int analyze_ir(
+    const std::filesystem::path& path,
+    const std::uint32_t entry_address,
+    const std::uint32_t base_address
+) {
+    const auto bytes = katana::io::read_binary_file(path);
+    const auto lines = katana::sh4::disassemble(
+        bytes,
+        base_address
+    );
+
+    const std::array<std::uint32_t, 1> seeds = {
+        entry_address
+    };
+
+    const auto discovered =
+        katana::analysis::discover_functions(
+            lines,
+            seeds
+        );
+
+    const auto program =
+        katana::ir::lower_program(
+            lines,
+            discovered
+        );
+
+    std::cout
+        << "Datei:         " << path.string() << '\n'
+        << "IR-Funktionen: "
+        << std::dec
+        << program.size()
+        << "\n\n";
+
+    for (const auto& function : program) {
+        std::cout << "Funktion ";
+        print_address(function.entry_address);
+        std::cout << '\n';
+
+        for (const auto& block : function.blocks) {
+            std::cout << "  Block ";
+            print_address(block.start_address);
+            std::cout << '\n';
+
+            for (const auto& instruction : block.instructions) {
+                std::cout << "    ";
+                print_ir_instruction(instruction);
+            }
+
+            std::cout << "    Nachfolger: ";
+
+            if (
+                block.successors.empty() &&
+                !block.has_indirect_successor
+            ) {
+                std::cout << "keine";
+            } else {
+                bool first = true;
+
+                for (const auto successor : block.successors) {
+                    if (!first) {
+                        std::cout << ", ";
+                    }
+
+                    print_address(successor);
+                    first = false;
+                }
+
+                if (block.has_indirect_successor) {
+                    if (!first) {
+                        std::cout << ", ";
+                    }
+
+                    std::cout << "indirekt";
+                }
+            }
+
+            std::cout << "\n\n";
+        }
+    }
+
+    return 0;
+}
+
 void print_usage() {
     std::cerr
         << "Verwendung:\n"
@@ -382,11 +542,12 @@ void print_usage() {
         << "  katana-recomp opcode <Opcode>\n"
         << "  katana-recomp disasm <Datei> [Basisadresse]\n"
         << "  katana-recomp blocks <Datei> [Basisadresse]\n"
-        << "  katana-recomp functions <Datei> <Einstieg> [Basisadresse]\n\n"
+        << "  katana-recomp functions <Datei> <Einstieg> [Basisadresse]\n"
+        << "  katana-recomp ir <Datei> <Einstieg> [Basisadresse]\n\n"
         << "Beispiele:\n"
         << "  katana-recomp E1FF\n"
-        << "  katana-recomp blocks programm.bin 8C010000\n"
-        << "  katana-recomp functions programm.bin 8C010000 8C010000\n";
+        << "  katana-recomp functions programm.bin 8C010000 8C010000\n"
+        << "  katana-recomp ir programm.bin 8C010000 8C010000\n";
 }
 
 }
@@ -463,6 +624,33 @@ int main(const int argc, char* argv[]) {
                     : 0u;
 
             return analyze_functions(
+                std::filesystem::path(argv[2]),
+                entry_address,
+                base_address
+            );
+        }
+
+        if (
+            (argc == 4 || argc == 5) &&
+            std::string(argv[1]) == "ir"
+        ) {
+            const auto entry_address =
+                parse_hex_value(
+                    argv[3],
+                    std::numeric_limits<std::uint32_t>::max(),
+                    "Die Einstiegsadresse"
+                );
+
+            const auto base_address =
+                argc == 5
+                    ? parse_hex_value(
+                        argv[4],
+                        std::numeric_limits<std::uint32_t>::max(),
+                        "Die Basisadresse"
+                    )
+                    : 0u;
+
+            return analyze_ir(
                 std::filesystem::path(argv[2]),
                 entry_address,
                 base_address

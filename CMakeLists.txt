@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.25)
 
 project(
     KatanaRecomp
-    VERSION 0.5.0
+    VERSION 0.6.0
     DESCRIPTION "Dreamcast SH-4 static recompilation framework"
     LANGUAGES CXX
 )
@@ -38,6 +38,7 @@ add_library(katana_core STATIC
     src/analysis/disassembler.cpp
     src/analysis/basic_blocks.cpp
     src/analysis/function_analysis.cpp
+    src/ir/lower.cpp
 )
 
 target_include_directories(
@@ -145,4 +146,21 @@ katana_enable_warnings(katana-function-analysis-tests)
 add_test(
     NAME katana-function-analysis-tests
     COMMAND katana-function-analysis-tests
+)
+
+add_executable(katana-ir-lowering-tests
+    tests/ir/ir_lowering_tests.cpp
+)
+
+target_link_libraries(
+    katana-ir-lowering-tests
+    PRIVATE
+        katana_core
+)
+
+katana_enable_warnings(katana-ir-lowering-tests)
+
+add_test(
+    NAME katana-ir-lowering-tests
+    COMMAND katana-ir-lowering-tests
 )

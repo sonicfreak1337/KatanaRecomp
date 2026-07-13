@@ -1,4 +1,4 @@
-﻿# Build-Ausgaben
+# Build-Ausgaben
 /build/
 /out/
 /generated/
@@ -43,3 +43,9 @@ dc_flash.bin
 # Betriebssystem
 Thumbs.db
 .DS_Store
+
+# Lokale Migrations- und Sicherungsdateien
+.katana_backup_*/
+KatanaRecomp_Meilenstein*.ps1
+KatanaRecomp_*Fix.ps1
+KatanaRecomp_Encoding_*.ps1
