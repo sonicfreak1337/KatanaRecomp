@@ -26,7 +26,7 @@ SH-4-Binaerdaten
     -> semantischer Laufzeittest
 `
 
-Der aktuelle Teststand umfasst **18 automatische Tests**.
+Der aktuelle Teststand umfasst **20 automatische Tests**.
 
 ## Implementierte SH-4-Instruktionen
 

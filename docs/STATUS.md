@@ -10,7 +10,7 @@ KatanaRecomp besitzt einen durchgaengigen Prototyp-Pfad von SH-4-Binaerdaten bis
 ## Teststatus
 
 `	ext
-100% tests passed out of 18
+100% tests passed out of 20
 `
 
 ## Fertiggestellte Roadmap-Tasks
@@ -30,4 +30,5 @@ KatanaRecomp besitzt einen durchgaengigen Prototyp-Pfad von SH-4-Binaerdaten bis
 - kein Dreamcast-Speicherbus oder MMIO
 - keine Plattformhardware
 - indirekte Spruenge und Calls nur eingeschraenkt aufgeloest
-- [ ] KR-1105 - Extend, Swap und XTRCT
+- [x] KR-1105 - Extend, Swap und XTRCT
+- [ ] KR-1106 - DT und MOVT

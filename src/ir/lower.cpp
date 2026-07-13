@@ -57,6 +57,26 @@ Operation lower_operation(
 
         case Source::NegateWithCarry:
             return Operation::NegateWithCarry;
+        case Source::ExtendUnsignedByte:
+            return Operation::ExtendUnsignedByte;
+
+        case Source::ExtendUnsignedWord:
+            return Operation::ExtendUnsignedWord;
+
+        case Source::ExtendSignedByte:
+            return Operation::ExtendSignedByte;
+
+        case Source::ExtendSignedWord:
+            return Operation::ExtendSignedWord;
+
+        case Source::SwapBytes:
+            return Operation::SwapBytes;
+
+        case Source::SwapWords:
+            return Operation::SwapWords;
+
+        case Source::ExtractMiddle:
+            return Operation::ExtractMiddle;
         case Source::AndRegister:
             return Operation::AndRegister;
 
@@ -232,6 +252,26 @@ std::string_view operation_name(
 
         case Operation::NegateWithCarry:
             return "negate_with_carry";
+        case Operation::ExtendUnsignedByte:
+            return "extend_unsigned_byte";
+
+        case Operation::ExtendUnsignedWord:
+            return "extend_unsigned_word";
+
+        case Operation::ExtendSignedByte:
+            return "extend_signed_byte";
+
+        case Operation::ExtendSignedWord:
+            return "extend_signed_word";
+
+        case Operation::SwapBytes:
+            return "swap_bytes";
+
+        case Operation::SwapWords:
+            return "swap_words";
+
+        case Operation::ExtractMiddle:
+            return "extract_middle";
         case Operation::AndRegister:
             return "and_reg";
 

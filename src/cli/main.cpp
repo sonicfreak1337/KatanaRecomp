@@ -142,6 +142,13 @@ void print_ir_instruction(
         case katana::ir::Operation::SubWithCarry:
         case katana::ir::Operation::SubWithOverflow:
         case katana::ir::Operation::NegateWithCarry:
+        case katana::ir::Operation::ExtendUnsignedByte:
+        case katana::ir::Operation::ExtendUnsignedWord:
+        case katana::ir::Operation::ExtendSignedByte:
+        case katana::ir::Operation::ExtendSignedWord:
+        case katana::ir::Operation::SwapBytes:
+        case katana::ir::Operation::SwapWords:
+        case katana::ir::Operation::ExtractMiddle:
         case katana::ir::Operation::AndRegister:
         case katana::ir::Operation::OrRegister:
         case katana::ir::Operation::XorRegister:

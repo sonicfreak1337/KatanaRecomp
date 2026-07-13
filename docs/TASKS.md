@@ -97,7 +97,7 @@ Akzeptanz:
 - T-Bit als Carry, Borrow oder Overflow ist pro Instruktion dokumentiert
 - Grenzwerte fuer signed und unsigned sind getestet
 
-### [ ] KR-1105 - Extend, Swap und XTRCT
+### [x] KR-1105 - Extend, Swap und XTRCT
 
 Abhaengigkeiten: KR-1101
 

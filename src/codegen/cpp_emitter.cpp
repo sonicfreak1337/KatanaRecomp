@@ -282,6 +282,127 @@ void emit_simple_instruction(
                 << "cpu.t = subtrahend != 0ull;\n"
                 << "}\n";
             return;
+        case Operation::ExtendUnsignedByte:
+            output
+                << "cpu.r["
+                << static_cast<unsigned>(
+                    instruction.destination_register
+                )
+                << "] = cpu.r["
+                << static_cast<unsigned>(
+                    instruction.source_register
+                )
+                << "] & 0x000000FFu;\n";
+            return;
+
+        case Operation::ExtendUnsignedWord:
+            output
+                << "cpu.r["
+                << static_cast<unsigned>(
+                    instruction.destination_register
+                )
+                << "] = cpu.r["
+                << static_cast<unsigned>(
+                    instruction.source_register
+                )
+                << "] & 0x0000FFFFu;\n";
+            return;
+
+        case Operation::ExtendSignedByte:
+            output
+                << "{\n"
+                << "std::uint32_t value = cpu.r["
+                << static_cast<unsigned>(
+                    instruction.source_register
+                )
+                << "] & 0x000000FFu;\n"
+                << "if ((value & 0x00000080u) != 0u) {\n"
+                << "    value |= 0xFFFFFF00u;\n"
+                << "}\n"
+                << "cpu.r["
+                << static_cast<unsigned>(
+                    instruction.destination_register
+                )
+                << "] = value;\n"
+                << "}\n";
+            return;
+
+        case Operation::ExtendSignedWord:
+            output
+                << "{\n"
+                << "std::uint32_t value = cpu.r["
+                << static_cast<unsigned>(
+                    instruction.source_register
+                )
+                << "] & 0x0000FFFFu;\n"
+                << "if ((value & 0x00008000u) != 0u) {\n"
+                << "    value |= 0xFFFF0000u;\n"
+                << "}\n"
+                << "cpu.r["
+                << static_cast<unsigned>(
+                    instruction.destination_register
+                )
+                << "] = value;\n"
+                << "}\n";
+            return;
+
+        case Operation::SwapBytes:
+            output
+                << "{\n"
+                << "const std::uint32_t value = cpu.r["
+                << static_cast<unsigned>(
+                    instruction.source_register
+                )
+                << "];\n"
+                << "cpu.r["
+                << static_cast<unsigned>(
+                    instruction.destination_register
+                )
+                << "] =\n"
+                << "    (value & 0xFFFF0000u) |\n"
+                << "    ((value & 0x000000FFu) << 8u) |\n"
+                << "    ((value & 0x0000FF00u) >> 8u);\n"
+                << "}\n";
+            return;
+
+        case Operation::SwapWords:
+            output
+                << "{\n"
+                << "const std::uint32_t value = cpu.r["
+                << static_cast<unsigned>(
+                    instruction.source_register
+                )
+                << "];\n"
+                << "cpu.r["
+                << static_cast<unsigned>(
+                    instruction.destination_register
+                )
+                << "] = (value << 16u) | (value >> 16u);\n"
+                << "}\n";
+            return;
+
+        case Operation::ExtractMiddle:
+            output
+                << "{\n"
+                << "const std::uint32_t source = cpu.r["
+                << static_cast<unsigned>(
+                    instruction.source_register
+                )
+                << "];\n"
+                << "const std::uint32_t destination = cpu.r["
+                << static_cast<unsigned>(
+                    instruction.destination_register
+                )
+                << "];\n"
+                << "cpu.r["
+                << static_cast<unsigned>(
+                    instruction.destination_register
+                )
+                << "] =\n"
+                << "    (source << 16u) |\n"
+                << "    (destination >> 16u);\n"
+                << "}\n";
+            return;
         case Operation::AndRegister:
             output
                 << "cpu.r["
@@ -854,6 +975,13 @@ void emit_terminal(
         case Operation::SubWithCarry:
         case Operation::SubWithOverflow:
         case Operation::NegateWithCarry:
+        case Operation::ExtendUnsignedByte:
+        case Operation::ExtendUnsignedWord:
+        case Operation::ExtendSignedByte:
+        case Operation::ExtendSignedWord:
+        case Operation::SwapBytes:
+        case Operation::SwapWords:
+        case Operation::ExtractMiddle:
         case Operation::AndRegister:
         case Operation::OrRegister:
         case Operation::XorRegister:
@@ -916,6 +1044,13 @@ bool is_control_flow(
         case Operation::SubWithCarry:
         case Operation::SubWithOverflow:
         case Operation::NegateWithCarry:
+        case Operation::ExtendUnsignedByte:
+        case Operation::ExtendUnsignedWord:
+        case Operation::ExtendSignedByte:
+        case Operation::ExtendSignedWord:
+        case Operation::SwapBytes:
+        case Operation::SwapWords:
+        case Operation::ExtractMiddle:
         case Operation::AndRegister:
         case Operation::OrRegister:
         case Operation::XorRegister:

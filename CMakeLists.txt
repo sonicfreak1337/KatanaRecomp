@@ -699,3 +699,83 @@ add_test(
     NAME katana-generated-carry-overflow-tests
     COMMAND katana-generated-carry-overflow-tests
 )
+add_executable(katana-extend-swap-xtrct-tests
+    tests/alu/extend_swap_xtrct_tests.cpp
+)
+
+target_link_libraries(
+    katana-extend-swap-xtrct-tests
+    PRIVATE
+        katana_core
+)
+
+katana_enable_warnings(katana-extend-swap-xtrct-tests)
+
+add_test(
+    NAME katana-extend-swap-xtrct-tests
+    COMMAND katana-extend-swap-xtrct-tests
+)
+
+set(
+    KATANA_GENERATED_EXTEND_SWAP_XTRCT_CPP
+    ${KATANA_GENERATED_TEST_DIR}/generated_extend_swap_xtrct_program.cpp
+)
+
+add_custom_command(
+    OUTPUT
+        ${KATANA_GENERATED_EXTEND_SWAP_XTRCT_CPP}
+    COMMAND
+        ${CMAKE_COMMAND}
+        -E
+        make_directory
+        ${KATANA_GENERATED_TEST_DIR}
+    COMMAND
+        $<TARGET_FILE:katana-recomp>
+        emit-cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/extend_swap_xtrct_execution.bin
+        8C010000
+        ${KATANA_GENERATED_EXTEND_SWAP_XTRCT_CPP}
+        8C010000
+    DEPENDS
+        katana-recomp
+        ${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/extend_swap_xtrct_execution.bin
+    COMMENT
+        "Generiere C++-Programm fuer KR-1105 End-to-End-Test"
+    VERBATIM
+)
+
+set_source_files_properties(
+    ${KATANA_GENERATED_EXTEND_SWAP_XTRCT_CPP}
+    PROPERTIES
+        GENERATED TRUE
+        HEADER_FILE_ONLY TRUE
+)
+
+set_source_files_properties(
+    tests/alu/generated_extend_swap_xtrct_tests.cpp
+    PROPERTIES
+        OBJECT_DEPENDS ${KATANA_GENERATED_EXTEND_SWAP_XTRCT_CPP}
+)
+
+add_executable(katana-generated-extend-swap-xtrct-tests
+    tests/alu/generated_extend_swap_xtrct_tests.cpp
+    ${KATANA_GENERATED_EXTEND_SWAP_XTRCT_CPP}
+)
+
+target_include_directories(
+    katana-generated-extend-swap-xtrct-tests
+    PRIVATE
+        ${KATANA_GENERATED_TEST_DIR}
+)
+
+katana_enable_warnings(katana-generated-extend-swap-xtrct-tests)
+
+add_dependencies(
+    katana-generated-extend-swap-xtrct-tests
+    katana-recomp
+)
+
+add_test(
+    NAME katana-generated-extend-swap-xtrct-tests
+    COMMAND katana-generated-extend-swap-xtrct-tests
+)

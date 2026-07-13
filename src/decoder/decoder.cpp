@@ -254,6 +254,96 @@ DecodedInstruction decode(const std::uint16_t opcode) {
 
         return instruction;
     }
+    if ((opcode & 0xF00Fu) == 0x600Cu) {
+        instruction.kind = InstructionKind::ExtendUnsignedByte;
+        decode_memory_registers(instruction, opcode);
+
+        instruction.text =
+            "extu.b " +
+            register_name(instruction.source_register) +
+            ", " +
+            register_name(instruction.destination_register);
+
+        return instruction;
+    }
+
+    if ((opcode & 0xF00Fu) == 0x600Du) {
+        instruction.kind = InstructionKind::ExtendUnsignedWord;
+        decode_memory_registers(instruction, opcode);
+
+        instruction.text =
+            "extu.w " +
+            register_name(instruction.source_register) +
+            ", " +
+            register_name(instruction.destination_register);
+
+        return instruction;
+    }
+
+    if ((opcode & 0xF00Fu) == 0x600Eu) {
+        instruction.kind = InstructionKind::ExtendSignedByte;
+        decode_memory_registers(instruction, opcode);
+
+        instruction.text =
+            "exts.b " +
+            register_name(instruction.source_register) +
+            ", " +
+            register_name(instruction.destination_register);
+
+        return instruction;
+    }
+
+    if ((opcode & 0xF00Fu) == 0x600Fu) {
+        instruction.kind = InstructionKind::ExtendSignedWord;
+        decode_memory_registers(instruction, opcode);
+
+        instruction.text =
+            "exts.w " +
+            register_name(instruction.source_register) +
+            ", " +
+            register_name(instruction.destination_register);
+
+        return instruction;
+    }
+
+    if ((opcode & 0xF00Fu) == 0x6008u) {
+        instruction.kind = InstructionKind::SwapBytes;
+        decode_memory_registers(instruction, opcode);
+
+        instruction.text =
+            "swap.b " +
+            register_name(instruction.source_register) +
+            ", " +
+            register_name(instruction.destination_register);
+
+        return instruction;
+    }
+
+    if ((opcode & 0xF00Fu) == 0x6009u) {
+        instruction.kind = InstructionKind::SwapWords;
+        decode_memory_registers(instruction, opcode);
+
+        instruction.text =
+            "swap.w " +
+            register_name(instruction.source_register) +
+            ", " +
+            register_name(instruction.destination_register);
+
+        return instruction;
+    }
+
+    if ((opcode & 0xF00Fu) == 0x200Du) {
+        instruction.kind = InstructionKind::ExtractMiddle;
+        decode_memory_registers(instruction, opcode);
+
+        instruction.text =
+            "xtrct " +
+            register_name(instruction.source_register) +
+            ", " +
+            register_name(instruction.destination_register);
+
+        return instruction;
+    }
     if ((opcode & 0xF00Fu) == 0x2009u) {
         instruction.kind = InstructionKind::AndRegister;
         decode_memory_registers(instruction, opcode);
