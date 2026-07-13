@@ -167,7 +167,7 @@ Umfang:
 - Shift um 2, 8 und 16 Bit
 - links und rechts
 
-### [ ] KR-1203 - Rotationen
+### [x] KR-1203 - Rotationen
 
 Abhaengigkeiten: KR-1201
 

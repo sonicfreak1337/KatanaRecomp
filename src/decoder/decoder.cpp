@@ -485,6 +485,53 @@ DecodedInstruction decode(const std::uint16_t opcode) {
 
         return instruction;
     }
+    if ((opcode & 0xF0FFu) == 0x4004u) {
+        instruction.kind = InstructionKind::RotateLeft;
+        instruction.destination_register =
+            static_cast<std::uint8_t>((opcode >> 8u) & 0x0Fu);
+
+        instruction.text =
+            "rotl " +
+            register_name(instruction.destination_register);
+
+        return instruction;
+    }
+
+    if ((opcode & 0xF0FFu) == 0x4005u) {
+        instruction.kind = InstructionKind::RotateRight;
+        instruction.destination_register =
+            static_cast<std::uint8_t>((opcode >> 8u) & 0x0Fu);
+
+        instruction.text =
+            "rotr " +
+            register_name(instruction.destination_register);
+
+        return instruction;
+    }
+
+    if ((opcode & 0xF0FFu) == 0x4024u) {
+        instruction.kind = InstructionKind::RotateLeftThroughT;
+        instruction.destination_register =
+            static_cast<std::uint8_t>((opcode >> 8u) & 0x0Fu);
+
+        instruction.text =
+            "rotcl " +
+            register_name(instruction.destination_register);
+
+        return instruction;
+    }
+
+    if ((opcode & 0xF0FFu) == 0x4025u) {
+        instruction.kind = InstructionKind::RotateRightThroughT;
+        instruction.destination_register =
+            static_cast<std::uint8_t>((opcode >> 8u) & 0x0Fu);
+
+        instruction.text =
+            "rotcr " +
+            register_name(instruction.destination_register);
+
+        return instruction;
+    }
     if ((opcode & 0xF00Fu) == 0x2009u) {
         instruction.kind = InstructionKind::AndRegister;
         decode_memory_registers(instruction, opcode);

@@ -95,7 +95,7 @@ Fortschritt:
 
 - [x] KR-1201 - Ein-Bit-Shifts
 - [x] KR-1202 - Feste Mehrfach-Shifts
-- [ ] KR-1203 - Rotationen
+- [x] KR-1203 - Rotationen
 - [ ] KR-1204 - Dynamische Shifts
 - [ ] KR-1205 - v0.12 Release-Gate
 

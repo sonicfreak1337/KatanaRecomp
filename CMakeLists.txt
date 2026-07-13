@@ -1019,3 +1019,83 @@ add_test(
     NAME katana-generated-fixed-shift-tests
     COMMAND katana-generated-fixed-shift-tests
 )
+add_executable(katana-rotation-tests
+    tests/alu/rotation_tests.cpp
+)
+
+target_link_libraries(
+    katana-rotation-tests
+    PRIVATE
+        katana_core
+)
+
+katana_enable_warnings(katana-rotation-tests)
+
+add_test(
+    NAME katana-rotation-tests
+    COMMAND katana-rotation-tests
+)
+
+set(
+    KATANA_GENERATED_ROTATION_CPP
+    ${KATANA_GENERATED_TEST_DIR}/generated_rotation_program.cpp
+)
+
+add_custom_command(
+    OUTPUT
+        ${KATANA_GENERATED_ROTATION_CPP}
+    COMMAND
+        ${CMAKE_COMMAND}
+        -E
+        make_directory
+        ${KATANA_GENERATED_TEST_DIR}
+    COMMAND
+        $<TARGET_FILE:katana-recomp>
+        emit-cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/rotation_execution.bin
+        8C010000
+        ${KATANA_GENERATED_ROTATION_CPP}
+        8C010000
+    DEPENDS
+        katana-recomp
+        ${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/rotation_execution.bin
+    COMMENT
+        "Generiere C++-Programm fuer KR-1203 End-to-End-Test"
+    VERBATIM
+)
+
+set_source_files_properties(
+    ${KATANA_GENERATED_ROTATION_CPP}
+    PROPERTIES
+        GENERATED TRUE
+        HEADER_FILE_ONLY TRUE
+)
+
+set_source_files_properties(
+    tests/alu/generated_rotation_tests.cpp
+    PROPERTIES
+        OBJECT_DEPENDS ${KATANA_GENERATED_ROTATION_CPP}
+)
+
+add_executable(katana-generated-rotation-tests
+    tests/alu/generated_rotation_tests.cpp
+    ${KATANA_GENERATED_ROTATION_CPP}
+)
+
+target_include_directories(
+    katana-generated-rotation-tests
+    PRIVATE
+        ${KATANA_GENERATED_TEST_DIR}
+)
+
+katana_enable_warnings(katana-generated-rotation-tests)
+
+add_dependencies(
+    katana-generated-rotation-tests
+    katana-recomp
+)
+
+add_test(
+    NAME katana-generated-rotation-tests
+    COMMAND katana-generated-rotation-tests
+)

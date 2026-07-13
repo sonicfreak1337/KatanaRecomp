@@ -110,6 +110,17 @@ Operation lower_operation(
 
         case Source::ShiftLogicalRightSixteen:
             return Operation::ShiftLogicalRightSixteen;
+        case Source::RotateLeft:
+            return Operation::RotateLeft;
+
+        case Source::RotateRight:
+            return Operation::RotateRight;
+
+        case Source::RotateLeftThroughT:
+            return Operation::RotateLeftThroughT;
+
+        case Source::RotateRightThroughT:
+            return Operation::RotateRightThroughT;
         case Source::AndRegister:
             return Operation::AndRegister;
 
@@ -338,6 +349,17 @@ std::string_view operation_name(
 
         case Operation::ShiftLogicalRightSixteen:
             return "shift_logical_right_sixteen";
+        case Operation::RotateLeft:
+            return "rotate_left";
+
+        case Operation::RotateRight:
+            return "rotate_right";
+
+        case Operation::RotateLeftThroughT:
+            return "rotate_left_through_t";
+
+        case Operation::RotateRightThroughT:
+            return "rotate_right_through_t";
         case Operation::AndRegister:
             return "and_reg";
 

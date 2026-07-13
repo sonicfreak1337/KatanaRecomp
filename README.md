@@ -28,7 +28,7 @@ SH-4-Binaerdaten
     -> semantischer Laufzeittest
 `
 
-Der aktuelle Teststand umfasst **26 automatische Tests**.
+Der aktuelle Teststand umfasst **28 automatische Tests**.
 
 ## Implementierte SH-4-Instruktionen
 
@@ -98,6 +98,14 @@ Das herausgeschobene Bit wird in T uebernommen. SHAR erhaelt das Vorzeichenbit o
 - SHLR16 Rn
 
 Diese Instruktionen verschieben um eine feste Distanz und veraendern das T-Bit nicht.
+### Rotationen
+
+- ROTL Rn
+- ROTR Rn
+- ROTCL Rn
+- ROTCR Rn
+
+ROTL und ROTR rotieren innerhalb des Registers. ROTCL und ROTCR verwenden T als zusaetzliches Carry-Bit und schreiben das herausrotierte Bit zurueck nach T.
 ## Analysefunktionen
 
 KatanaRecomp unterstuetzt aktuell:

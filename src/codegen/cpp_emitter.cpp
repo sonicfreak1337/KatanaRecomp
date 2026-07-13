@@ -534,6 +534,77 @@ void emit_simple_instruction(
                 )
                 << "] >>= 16u;\n";
             return;
+        case Operation::RotateLeft:
+            output
+                << "{\n"
+                << "const std::uint32_t value = cpu.r["
+                << static_cast<unsigned>(
+                    instruction.destination_register
+                )
+                << "];\n"
+                << "cpu.t = (value & 0x80000000u) != 0u;\n"
+                << "cpu.r["
+                << static_cast<unsigned>(
+                    instruction.destination_register
+                )
+                << "] = (value << 1u) | (value >> 31u);\n"
+                << "}\n";
+            return;
+
+        case Operation::RotateRight:
+            output
+                << "{\n"
+                << "const std::uint32_t value = cpu.r["
+                << static_cast<unsigned>(
+                    instruction.destination_register
+                )
+                << "];\n"
+                << "cpu.t = (value & 0x00000001u) != 0u;\n"
+                << "cpu.r["
+                << static_cast<unsigned>(
+                    instruction.destination_register
+                )
+                << "] = (value >> 1u) | (value << 31u);\n"
+                << "}\n";
+            return;
+
+        case Operation::RotateLeftThroughT:
+            output
+                << "{\n"
+                << "const std::uint32_t value = cpu.r["
+                << static_cast<unsigned>(
+                    instruction.destination_register
+                )
+                << "];\n"
+                << "const bool old_t = cpu.t;\n"
+                << "cpu.t = (value & 0x80000000u) != 0u;\n"
+                << "cpu.r["
+                << static_cast<unsigned>(
+                    instruction.destination_register
+                )
+                << "] = (value << 1u) | (old_t ? 1u : 0u);\n"
+                << "}\n";
+            return;
+
+        case Operation::RotateRightThroughT:
+            output
+                << "{\n"
+                << "const std::uint32_t value = cpu.r["
+                << static_cast<unsigned>(
+                    instruction.destination_register
+                )
+                << "];\n"
+                << "const bool old_t = cpu.t;\n"
+                << "cpu.t = (value & 0x00000001u) != 0u;\n"
+                << "cpu.r["
+                << static_cast<unsigned>(
+                    instruction.destination_register
+                )
+                << "] =\n"
+                << "    (value >> 1u) |\n"
+                << "    (old_t ? 0x80000000u : 0u);\n"
+                << "}\n";
+            return;
         case Operation::AndRegister:
             output
                 << "cpu.r["
@@ -1125,6 +1196,10 @@ void emit_terminal(
         case Operation::ShiftLogicalRightTwo:
         case Operation::ShiftLogicalRightEight:
         case Operation::ShiftLogicalRightSixteen:
+        case Operation::RotateLeft:
+        case Operation::RotateRight:
+        case Operation::RotateLeftThroughT:
+        case Operation::RotateRightThroughT:
         case Operation::AndRegister:
         case Operation::OrRegister:
         case Operation::XorRegister:
@@ -1206,6 +1281,10 @@ bool is_control_flow(
         case Operation::ShiftLogicalRightTwo:
         case Operation::ShiftLogicalRightEight:
         case Operation::ShiftLogicalRightSixteen:
+        case Operation::RotateLeft:
+        case Operation::RotateRight:
+        case Operation::RotateLeftThroughT:
+        case Operation::RotateRightThroughT:
         case Operation::AndRegister:
         case Operation::OrRegister:
         case Operation::XorRegister:
