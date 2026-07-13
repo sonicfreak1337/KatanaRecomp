@@ -160,6 +160,128 @@ void emit_simple_instruction(
                 )
                 << "];\n";
             return;
+        case Operation::AddWithCarry:
+            output
+                << "{\n"
+                << "const std::uint64_t carry_in = cpu.t ? 1ull : 0ull;\n"
+                << "const std::uint64_t result =\n"
+                << "    static_cast<std::uint64_t>(cpu.r["
+                << static_cast<unsigned>(
+                    instruction.destination_register
+                )
+                << "]) +\n"
+                << "    static_cast<std::uint64_t>(cpu.r["
+                << static_cast<unsigned>(
+                    instruction.source_register
+                )
+                << "]) +\n"
+                << "    carry_in;\n"
+                << "cpu.r["
+                << static_cast<unsigned>(
+                    instruction.destination_register
+                )
+                << "] = static_cast<std::uint32_t>(result);\n"
+                << "cpu.t = result > 0xFFFFFFFFull;\n"
+                << "}\n";
+            return;
+
+        case Operation::AddWithOverflow:
+            output
+                << "{\n"
+                << "const std::uint32_t lhs = cpu.r["
+                << static_cast<unsigned>(
+                    instruction.destination_register
+                )
+                << "];\n"
+                << "const std::uint32_t rhs = cpu.r["
+                << static_cast<unsigned>(
+                    instruction.source_register
+                )
+                << "];\n"
+                << "const std::uint32_t result = lhs + rhs;\n"
+                << "cpu.r["
+                << static_cast<unsigned>(
+                    instruction.destination_register
+                )
+                << "] = result;\n"
+                << "cpu.t =\n"
+                << "    ((~(lhs ^ rhs) & (lhs ^ result)) & "
+                << "0x80000000u) != 0u;\n"
+                << "}\n";
+            return;
+
+        case Operation::SubWithCarry:
+            output
+                << "{\n"
+                << "const std::uint64_t borrow_in = cpu.t ? 1ull : 0ull;\n"
+                << "const std::uint64_t minuend =\n"
+                << "    static_cast<std::uint64_t>(cpu.r["
+                << static_cast<unsigned>(
+                    instruction.destination_register
+                )
+                << "]);\n"
+                << "const std::uint64_t subtrahend =\n"
+                << "    static_cast<std::uint64_t>(cpu.r["
+                << static_cast<unsigned>(
+                    instruction.source_register
+                )
+                << "]) + borrow_in;\n"
+                << "cpu.r["
+                << static_cast<unsigned>(
+                    instruction.destination_register
+                )
+                << "] = static_cast<std::uint32_t>(\n"
+                << "    minuend - subtrahend\n"
+                << ");\n"
+                << "cpu.t = minuend < subtrahend;\n"
+                << "}\n";
+            return;
+
+        case Operation::SubWithOverflow:
+            output
+                << "{\n"
+                << "const std::uint32_t lhs = cpu.r["
+                << static_cast<unsigned>(
+                    instruction.destination_register
+                )
+                << "];\n"
+                << "const std::uint32_t rhs = cpu.r["
+                << static_cast<unsigned>(
+                    instruction.source_register
+                )
+                << "];\n"
+                << "const std::uint32_t result = lhs - rhs;\n"
+                << "cpu.r["
+                << static_cast<unsigned>(
+                    instruction.destination_register
+                )
+                << "] = result;\n"
+                << "cpu.t =\n"
+                << "    (((lhs ^ rhs) & (lhs ^ result)) & "
+                << "0x80000000u) != 0u;\n"
+                << "}\n";
+            return;
+
+        case Operation::NegateWithCarry:
+            output
+                << "{\n"
+                << "const std::uint64_t borrow_in = cpu.t ? 1ull : 0ull;\n"
+                << "const std::uint64_t subtrahend =\n"
+                << "    static_cast<std::uint64_t>(cpu.r["
+                << static_cast<unsigned>(
+                    instruction.source_register
+                )
+                << "]) + borrow_in;\n"
+                << "cpu.r["
+                << static_cast<unsigned>(
+                    instruction.destination_register
+                )
+                << "] = static_cast<std::uint32_t>(\n"
+                << "    0ull - subtrahend\n"
+                << ");\n"
+                << "cpu.t = subtrahend != 0ull;\n"
+                << "}\n";
+            return;
         case Operation::AndRegister:
             output
                 << "cpu.r["
@@ -727,6 +849,11 @@ void emit_terminal(
         case Operation::SubRegister:
         case Operation::NegateRegister:
         case Operation::NotRegister:
+        case Operation::AddWithCarry:
+        case Operation::AddWithOverflow:
+        case Operation::SubWithCarry:
+        case Operation::SubWithOverflow:
+        case Operation::NegateWithCarry:
         case Operation::AndRegister:
         case Operation::OrRegister:
         case Operation::XorRegister:
@@ -784,6 +911,11 @@ bool is_control_flow(
         case Operation::SubRegister:
         case Operation::NegateRegister:
         case Operation::NotRegister:
+        case Operation::AddWithCarry:
+        case Operation::AddWithOverflow:
+        case Operation::SubWithCarry:
+        case Operation::SubWithOverflow:
+        case Operation::NegateWithCarry:
         case Operation::AndRegister:
         case Operation::OrRegister:
         case Operation::XorRegister:

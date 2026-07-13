@@ -43,6 +43,20 @@ Operation lower_operation(
 
         case Source::NotRegister:
             return Operation::NotRegister;
+        case Source::AddWithCarry:
+            return Operation::AddWithCarry;
+
+        case Source::AddWithOverflow:
+            return Operation::AddWithOverflow;
+
+        case Source::SubWithCarry:
+            return Operation::SubWithCarry;
+
+        case Source::SubWithOverflow:
+            return Operation::SubWithOverflow;
+
+        case Source::NegateWithCarry:
+            return Operation::NegateWithCarry;
         case Source::AndRegister:
             return Operation::AndRegister;
 
@@ -204,6 +218,20 @@ std::string_view operation_name(
 
         case Operation::NotRegister:
             return "not_reg";
+        case Operation::AddWithCarry:
+            return "add_with_carry";
+
+        case Operation::AddWithOverflow:
+            return "add_with_overflow";
+
+        case Operation::SubWithCarry:
+            return "sub_with_carry";
+
+        case Operation::SubWithOverflow:
+            return "sub_with_overflow";
+
+        case Operation::NegateWithCarry:
+            return "negate_with_carry";
         case Operation::AndRegister:
             return "and_reg";
 

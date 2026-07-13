@@ -80,7 +80,7 @@ Akzeptanz:
 - Gleichheit und Grenzwerte sind getestet
 - `CMP/STR` testet Bytegruppen korrekt
 
-### [ ] KR-1104 - Carry und Overflow
+### [x] KR-1104 - Carry und Overflow
 
 Abhaengigkeiten: KR-1101
 

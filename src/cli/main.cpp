@@ -137,6 +137,11 @@ void print_ir_instruction(
         case katana::ir::Operation::SubRegister:
         case katana::ir::Operation::NegateRegister:
         case katana::ir::Operation::NotRegister:
+        case katana::ir::Operation::AddWithCarry:
+        case katana::ir::Operation::AddWithOverflow:
+        case katana::ir::Operation::SubWithCarry:
+        case katana::ir::Operation::SubWithOverflow:
+        case katana::ir::Operation::NegateWithCarry:
         case katana::ir::Operation::AndRegister:
         case katana::ir::Operation::OrRegister:
         case katana::ir::Operation::XorRegister:

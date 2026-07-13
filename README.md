@@ -26,7 +26,7 @@ SH-4-Binaerdaten
     -> semantischer Laufzeittest
 `
 
-Der aktuelle Teststand umfasst **16 automatische Tests**.
+Der aktuelle Teststand umfasst **18 automatische Tests**.
 
 ## Implementierte SH-4-Instruktionen
 
@@ -113,6 +113,9 @@ Der C++-Emitter erzeugt aktuell:
 
 Generierter Code wird in den End-to-End-Tests automatisch kompiliert und ausgefuehrt.
 
+## T-Bit-Semantik
+
+Die Carry-, Borrow- und signed-Overflow-Regeln sind in `docs/SH4_STATUS_SEMANTICS.md` dokumentiert und durch Grenzwerttests abgesichert.
 ## Noch nicht implementiert
 
 KatanaRecomp ist noch kein vollstaendiger Dreamcast-Recompiler. Unter anderem fehlen:

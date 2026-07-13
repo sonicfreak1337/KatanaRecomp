@@ -49,3 +49,7 @@ Thumbs.db
 KatanaRecomp_Meilenstein*.ps1
 KatanaRecomp_*Fix.ps1
 KatanaRecomp_Encoding_*.ps1
+
+# Local migration and milestone scripts
+/KatanaRecomp_*.ps1
+/.katana_backup_*/

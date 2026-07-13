@@ -190,6 +190,70 @@ DecodedInstruction decode(const std::uint16_t opcode) {
 
         return instruction;
     }
+    if ((opcode & 0xF00Fu) == 0x300Eu) {
+        instruction.kind = InstructionKind::AddWithCarry;
+        decode_memory_registers(instruction, opcode);
+
+        instruction.text =
+            "addc " +
+            register_name(instruction.source_register) +
+            ", " +
+            register_name(instruction.destination_register);
+
+        return instruction;
+    }
+
+    if ((opcode & 0xF00Fu) == 0x300Fu) {
+        instruction.kind = InstructionKind::AddWithOverflow;
+        decode_memory_registers(instruction, opcode);
+
+        instruction.text =
+            "addv " +
+            register_name(instruction.source_register) +
+            ", " +
+            register_name(instruction.destination_register);
+
+        return instruction;
+    }
+
+    if ((opcode & 0xF00Fu) == 0x300Au) {
+        instruction.kind = InstructionKind::SubWithCarry;
+        decode_memory_registers(instruction, opcode);
+
+        instruction.text =
+            "subc " +
+            register_name(instruction.source_register) +
+            ", " +
+            register_name(instruction.destination_register);
+
+        return instruction;
+    }
+
+    if ((opcode & 0xF00Fu) == 0x300Bu) {
+        instruction.kind = InstructionKind::SubWithOverflow;
+        decode_memory_registers(instruction, opcode);
+
+        instruction.text =
+            "subv " +
+            register_name(instruction.source_register) +
+            ", " +
+            register_name(instruction.destination_register);
+
+        return instruction;
+    }
+
+    if ((opcode & 0xF00Fu) == 0x600Au) {
+        instruction.kind = InstructionKind::NegateWithCarry;
+        decode_memory_registers(instruction, opcode);
+
+        instruction.text =
+            "negc " +
+            register_name(instruction.source_register) +
+            ", " +
+            register_name(instruction.destination_register);
+
+        return instruction;
+    }
     if ((opcode & 0xF00Fu) == 0x2009u) {
         instruction.kind = InstructionKind::AndRegister;
         decode_memory_registers(instruction, opcode);

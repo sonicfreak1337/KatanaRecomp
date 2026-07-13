@@ -619,3 +619,83 @@ add_test(
     NAME katana-generated-cmp-variants-tests
     COMMAND katana-generated-cmp-variants-tests
 )
+add_executable(katana-carry-overflow-tests
+    tests/alu/carry_overflow_tests.cpp
+)
+
+target_link_libraries(
+    katana-carry-overflow-tests
+    PRIVATE
+        katana_core
+)
+
+katana_enable_warnings(katana-carry-overflow-tests)
+
+add_test(
+    NAME katana-carry-overflow-tests
+    COMMAND katana-carry-overflow-tests
+)
+
+set(
+    KATANA_GENERATED_CARRY_OVERFLOW_CPP
+    ${KATANA_GENERATED_TEST_DIR}/generated_carry_overflow_program.cpp
+)
+
+add_custom_command(
+    OUTPUT
+        ${KATANA_GENERATED_CARRY_OVERFLOW_CPP}
+    COMMAND
+        ${CMAKE_COMMAND}
+        -E
+        make_directory
+        ${KATANA_GENERATED_TEST_DIR}
+    COMMAND
+        $<TARGET_FILE:katana-recomp>
+        emit-cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/carry_overflow_execution.bin
+        8C010000
+        ${KATANA_GENERATED_CARRY_OVERFLOW_CPP}
+        8C010000
+    DEPENDS
+        katana-recomp
+        ${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/carry_overflow_execution.bin
+    COMMENT
+        "Generiere C++-Programm fuer KR-1104 End-to-End-Test"
+    VERBATIM
+)
+
+set_source_files_properties(
+    ${KATANA_GENERATED_CARRY_OVERFLOW_CPP}
+    PROPERTIES
+        GENERATED TRUE
+        HEADER_FILE_ONLY TRUE
+)
+
+set_source_files_properties(
+    tests/alu/generated_carry_overflow_tests.cpp
+    PROPERTIES
+        OBJECT_DEPENDS ${KATANA_GENERATED_CARRY_OVERFLOW_CPP}
+)
+
+add_executable(katana-generated-carry-overflow-tests
+    tests/alu/generated_carry_overflow_tests.cpp
+    ${KATANA_GENERATED_CARRY_OVERFLOW_CPP}
+)
+
+target_include_directories(
+    katana-generated-carry-overflow-tests
+    PRIVATE
+        ${KATANA_GENERATED_TEST_DIR}
+)
+
+katana_enable_warnings(katana-generated-carry-overflow-tests)
+
+add_dependencies(
+    katana-generated-carry-overflow-tests
+    katana-recomp
+)
+
+add_test(
+    NAME katana-generated-carry-overflow-tests
+    COMMAND katana-generated-carry-overflow-tests
+)
