@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.25)
 
 project(
     KatanaRecomp
-    VERSION 0.10.0
+    VERSION 0.11.0
     DESCRIPTION "Dreamcast SH-4 static recompilation framework"
     LANGUAGES CXX
 )
