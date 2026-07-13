@@ -49,6 +49,8 @@ enum class InstructionKind {
     MultiplyLong,
     MultiplySignedWord,
     MultiplyUnsignedWord,
+    DoubleMultiplySignedLong,
+    DoubleMultiplyUnsignedLong,
     AndRegister,
     OrRegister,
     XorRegister,

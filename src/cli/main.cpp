@@ -154,6 +154,8 @@ void print_ir_instruction(
         case katana::ir::Operation::MultiplyLong:
         case katana::ir::Operation::MultiplySignedWord:
         case katana::ir::Operation::MultiplyUnsignedWord:
+        case katana::ir::Operation::DoubleMultiplySignedLong:
+        case katana::ir::Operation::DoubleMultiplyUnsignedLong:
         case katana::ir::Operation::AndRegister:
         case katana::ir::Operation::OrRegister:
         case katana::ir::Operation::XorRegister:

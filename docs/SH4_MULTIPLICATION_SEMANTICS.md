@@ -53,7 +53,49 @@ Das groesste Ergebnis ist:
 
 Es passt vollstaendig in MACL.
 
+## Doppelte 32-Bit-Multiplikation
+
+KR-1302 erweitert den generierten CPU-Zustand um das 32-Bit-Register `MACH`. Zusammen bilden die beiden Register das 64-Bit-Ergebnis:
+
+```text
+MACH:MACL
+obere 32 Bit : untere 32 Bit
+```
+
+### DMULU.L Rm,Rn
+
+`DMULU.L` multipliziert beide Register als vorzeichenlose 32-Bit-Werte.
+
+```text
+product = uint64(Rn) * uint64(Rm)
+MACH = product >> 32
+MACL = product & 0xFFFFFFFF
+```
+
+### DMULS.L Rm,Rn
+
+`DMULS.L` interpretiert beide Register als vorzeichenbehaftete 32-Bit-Zweierkomplementwerte. Die 32-Bit-Vorzeichenerweiterung erfolgt explizit nach 64 Bit.
+
+```text
+source = sign_extend_32(Rm)
+destination = sign_extend_32(Rn)
+signed_product = source * destination
+product_bits = uint64(signed_product)
+MACH = product_bits >> 32
+MACL = product_bits & 0xFFFFFFFF
+```
+
+Das signed 32-mal-32-Bit-Produkt passt vollstaendig in einen vorzeichenbehafteten 64-Bit-Wert. Die anschliessende Umwandlung nach `uint64_t` ist fuer negative Ergebnisse als Modulo-2-hoch-64-Konvertierung definiert. Dadurch bleiben die exakten Zweierkomplementbits fuer MACH und MACL erhalten.
+
+`DMULS.L` und `DMULU.L` veraendern weder die allgemeinen Quellregister noch das T-Bit.
 ## Getestete Grenzfaelle
+
+- `DMULU.L` mit `0xFFFFFFFF * 0xFFFFFFFF`
+- gesetztes Bit 63 im unsigned Produkt
+- gemischtes 64-Bit-Produkt mit nichttrivialen High- und Low-Haelften
+- `DMULS.L` mit `-1`, `INT32_MIN` und `INT32_MAX`
+- negative und positive signed 64-Bit-Produkte
+- korrekte Aufteilung nach MACH und MACL
 
 - 32-Bit-Wraparound bei MUL.L
 - negative und positive 16-Bit-Operanden bei MULS.W

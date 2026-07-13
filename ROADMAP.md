@@ -116,7 +116,7 @@ Release-Gate:
 Fortschritt:
 
 - [x] KR-1301 - Einfache Multiplikation
-- [ ] KR-1302 - Doppelte Multiplikation
+- [x] KR-1302 - Doppelte Multiplikation
 - [ ] KR-1303 - MAC-Instruktionen
 - [ ] KR-1304 - Division
 - [ ] KR-1305 - v0.13 Release-Gate

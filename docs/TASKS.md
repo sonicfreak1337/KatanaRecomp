@@ -222,7 +222,7 @@ Umfang:
 - `MULS.W`
 - `MULU.W`
 
-### [ ] KR-1302 - Doppelte Multiplikation
+### [x] KR-1302 - Doppelte Multiplikation
 
 Abhaengigkeiten: KR-1301
 

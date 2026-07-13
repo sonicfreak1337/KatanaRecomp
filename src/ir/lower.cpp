@@ -134,6 +134,11 @@ Operation lower_operation(
 
         case Source::MultiplyUnsignedWord:
             return Operation::MultiplyUnsignedWord;
+        case Source::DoubleMultiplySignedLong:
+            return Operation::DoubleMultiplySignedLong;
+
+        case Source::DoubleMultiplyUnsignedLong:
+            return Operation::DoubleMultiplyUnsignedLong;
         case Source::AndRegister:
             return Operation::AndRegister;
 
@@ -386,6 +391,11 @@ std::string_view operation_name(
 
         case Operation::MultiplyUnsignedWord:
             return "multiply_unsigned_word";
+        case Operation::DoubleMultiplySignedLong:
+            return "double_multiply_signed_long";
+
+        case Operation::DoubleMultiplyUnsignedLong:
+            return "double_multiply_unsigned_long";
         case Operation::AndRegister:
             return "and_reg";
 

@@ -11,7 +11,7 @@ KatanaRecomp besitzt einen durchgaengigen Prototyp-Pfad von SH-4-Binaerdaten bis
 ## Teststatus
 
 ```text
-100% tests passed out of 32
+100% tests passed out of 34
 ```
 
 ## Fertiggestellte Roadmap-Tasks
@@ -29,10 +29,11 @@ KatanaRecomp besitzt einen durchgaengigen Prototyp-Pfad von SH-4-Binaerdaten bis
 - [x] KR-1204 - Dynamische Shifts
 - [x] KR-1205 - v0.12.0 Release-Gate
 - [x] KR-1301 - Einfache Multiplikation
+- [x] KR-1302 - Doppelte Multiplikation
 
 ## Naechster Roadmap-Task
 
-- [ ] KR-1302 - Doppelte Multiplikation
+- [ ] KR-1303 - MAC-Instruktionen
 
 ## Aktuelle Einschraenkungen
 

@@ -28,7 +28,7 @@ SH-4-Binaerdaten
     -> semantischer Laufzeittest
 `
 
-Der aktuelle Teststand umfasst **32 automatische Tests**.
+Der aktuelle Teststand umfasst **34 automatische Tests**.
 
 ## Implementierte SH-4-Instruktionen
 
@@ -119,6 +119,12 @@ Positive Zaehler verschieben nach links, negative Zaehler nach rechts. Nur die r
 - MULU.W Rm,Rn
 
 Die Ergebnisse werden nach MACL geschrieben. MUL.L behaelt die unteren 32 Produktbits. MULS.W und MULU.W verwenden nur die unteren 16 Bit der beiden Quellregister. Die vollstaendige Semantik steht in `docs/SH4_MULTIPLICATION_SEMANTICS.md`.
+### Doppelte Multiplikation
+
+- DMULS.L Rm,Rn
+- DMULU.L Rm,Rn
+
+Die vollstaendigen 64-Bit-Produkte werden in `MACH:MACL` abgelegt. DMULS.L verwendet vorzeichenbehaftete 32-Bit-Operanden, DMULU.L vorzeichenlose. Die Semantik und Grenzwerte stehen in `docs/SH4_MULTIPLICATION_SEMANTICS.md`.
 ## Analysefunktionen
 
 KatanaRecomp unterstuetzt aktuell:
@@ -162,7 +168,7 @@ Die Carry-, Borrow- und signed-Overflow-Regeln sind in `docs/SH4_STATUS_SEMANTIC
 KatanaRecomp ist noch kein vollstaendiger Dreamcast-Recompiler. Unter anderem fehlen:
 
 - grosse Teile des SH-4-Befehlssatzes
-- doppelte Multiplikation, Division, MAC und erweiterte Integer-Flags
+- Division, MAC und erweiterte Integer-Flags
 - FPU- und Vektoroperationen
 - vollstaendiges Statusregister
 - Dreamcast-Speicherabbild

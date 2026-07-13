@@ -740,6 +740,53 @@ void emit_simple_instruction(
                 )
                 << "] & 0x0000FFFFu);\n";
             return;
+        case Operation::DoubleMultiplyUnsignedLong:
+            output
+                << "{\n"
+                << "const std::uint64_t product =\n"
+                << "    static_cast<std::uint64_t>(cpu.r["
+                << static_cast<unsigned>(
+                    instruction.destination_register
+                )
+                << "]) *\n"
+                << "    static_cast<std::uint64_t>(cpu.r["
+                << static_cast<unsigned>(
+                    instruction.source_register
+                )
+                << "]);\n"
+                << "cpu.mach = static_cast<std::uint32_t>(product >> 32u);\n"
+                << "cpu.macl = static_cast<std::uint32_t>(product);\n"
+                << "}\n";
+            return;
+
+        case Operation::DoubleMultiplySignedLong:
+            output
+                << "{\n"
+                << "const std::uint32_t source_raw = cpu.r["
+                << static_cast<unsigned>(
+                    instruction.source_register
+                )
+                << "];\n"
+                << "const std::uint32_t destination_raw = cpu.r["
+                << static_cast<unsigned>(
+                    instruction.destination_register
+                )
+                << "];\n"
+                << "const std::int64_t source =\n"
+                << "    (source_raw & 0x80000000u) != 0u\n"
+                << "    ? static_cast<std::int64_t>(source_raw) - 0x100000000ll\n"
+                << "    : static_cast<std::int64_t>(source_raw);\n"
+                << "const std::int64_t destination =\n"
+                << "    (destination_raw & 0x80000000u) != 0u\n"
+                << "    ? static_cast<std::int64_t>(destination_raw) - 0x100000000ll\n"
+                << "    : static_cast<std::int64_t>(destination_raw);\n"
+                << "const std::int64_t signed_product = source * destination;\n"
+                << "const std::uint64_t product =\n"
+                << "    static_cast<std::uint64_t>(signed_product);\n"
+                << "cpu.mach = static_cast<std::uint32_t>(product >> 32u);\n"
+                << "cpu.macl = static_cast<std::uint32_t>(product);\n"
+                << "}\n";
+            return;
         case Operation::AndRegister:
             output
                 << "cpu.r["
@@ -1340,6 +1387,8 @@ void emit_terminal(
         case Operation::MultiplyLong:
         case Operation::MultiplySignedWord:
         case Operation::MultiplyUnsignedWord:
+        case Operation::DoubleMultiplySignedLong:
+        case Operation::DoubleMultiplyUnsignedLong:
         case Operation::AndRegister:
         case Operation::OrRegister:
         case Operation::XorRegister:
@@ -1430,6 +1479,8 @@ bool is_control_flow(
         case Operation::MultiplyLong:
         case Operation::MultiplySignedWord:
         case Operation::MultiplyUnsignedWord:
+        case Operation::DoubleMultiplySignedLong:
+        case Operation::DoubleMultiplyUnsignedLong:
         case Operation::AndRegister:
         case Operation::OrRegister:
         case Operation::XorRegister:
@@ -1651,6 +1702,7 @@ std::string emit_cpp_program(
         << "    std::array<std::uint32_t, 16> r{};\n"
         << "    std::uint32_t pc = 0;\n"
         << "    std::uint32_t pr = 0;\n"
+        << "    std::uint32_t mach = 0;\n"
         << "    std::uint32_t macl = 0;\n"
         << "    bool t = false;\n"
         << "    Memory memory{};\n"

@@ -557,6 +557,31 @@ DecodedInstruction decode(const std::uint16_t opcode) {
 
         return instruction;
     }
+    if ((opcode & 0xF00Fu) == 0x300Du) {
+        instruction.kind = InstructionKind::DoubleMultiplySignedLong;
+        decode_memory_registers(instruction, opcode);
+
+        instruction.text =
+            "dmuls.l " +
+            register_name(instruction.source_register) +
+            ", " +
+            register_name(instruction.destination_register);
+
+        return instruction;
+    }
+
+    if ((opcode & 0xF00Fu) == 0x3005u) {
+        instruction.kind = InstructionKind::DoubleMultiplyUnsignedLong;
+        decode_memory_registers(instruction, opcode);
+
+        instruction.text =
+            "dmulu.l " +
+            register_name(instruction.source_register) +
+            ", " +
+            register_name(instruction.destination_register);
+
+        return instruction;
+    }
     if ((opcode & 0xF00Fu) == 0x0007u) {
         instruction.kind = InstructionKind::MultiplyLong;
         decode_memory_registers(instruction, opcode);

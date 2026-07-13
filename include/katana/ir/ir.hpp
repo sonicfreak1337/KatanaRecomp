@@ -50,6 +50,8 @@ enum class Operation {
     MultiplyLong,
     MultiplySignedWord,
     MultiplyUnsignedWord,
+    DoubleMultiplySignedLong,
+    DoubleMultiplyUnsignedLong,
     AndRegister,
     OrRegister,
     XorRegister,
