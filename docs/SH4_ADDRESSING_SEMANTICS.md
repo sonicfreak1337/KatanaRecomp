@@ -121,6 +121,31 @@ Wenn die berechnete Adresse ausserhalb des begrenzten Runtime-Speichers liegt, s
 
 Referenzgrundlage ist das [Renesas SH-4A Software Manual](https://www.renesas.com/en/document/mas/sh-4a-software-manual), insbesondere die MOV-Strukturdatenformen und ihre Displacement-Skalierung.
 
+## R0-indexierte Adressierung
+
+KR-1403 unterstuetzt die sechs R0-indexierten Formen:
+
+```text
+MOV.B Rm,@(R0,Rn)
+MOV.W Rm,@(R0,Rn)
+MOV.L Rm,@(R0,Rn)
+MOV.B @(R0,Rm),Rn
+MOV.W @(R0,Rm),Rn
+MOV.L @(R0,Rm),Rn
+```
+
+Die effektive Adresse ist fuer alle Breiten identisch:
+
+```text
+address = R0 + base_register
+```
+
+Die Addition verwendet `std::uint32_t` und damit definiertes Modulo-2-hoch-32-Verhalten. Anders als bei Post-Increment werden weder R0 noch das Basisregister fortgeschaltet. Byte- und Word-Loads werden auf 32 Bit vorzeichenerweitert.
+
+R0 kann zugleich Index und Datenregister eines Stores oder Index und Zielregister eines Loads sein. Die effektive Adresse und der zu speichernde Wert werden aus dem alten Registerzustand gelesen; ein Load schreibt sein Ziel erst nach einem erfolgreichen Speicherzugriff.
+
+Ungueltige effektive Adressen schlagen sichtbar fehl, ohne die beteiligten Register vorzeitig zu veraendern.
+
 ## Speicherreihenfolge
 
 KatanaRecomp modelliert die sichtbare Reihenfolge explizit:
@@ -160,6 +185,11 @@ Dadurch bleiben auch identische Registerpaare deterministisch.
 - unveraenderte Basisregister
 - 32-Bit-Wraparound der effektiven Displacement-Adresse
 - ungueltige Displacement-Adresse ohne vorzeitige Registeraenderung
+- alle sechs R0-indexierten Byte-, Word- und Long-Formen
+- R0 zugleich als Index und Store-Quelle
+- R0 zugleich als Index und Load-Ziel
+- 32-Bit-Wraparound der R0-indexierten Adresse
+- ungueltige R0-indexierte Adresse ohne Registeraenderung
 - unveraenderte Status- und MAC-Register
 - direkte generierte Funktionsaufrufe
 - kompletter BSR-Aufrufspfad

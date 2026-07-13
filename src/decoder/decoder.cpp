@@ -1118,6 +1118,93 @@ DecodedInstruction decode(const std::uint16_t opcode) {
         return instruction;
     }
 
+    if ((opcode & 0xF00Fu) == 0x0004u) {
+        instruction.kind =
+            InstructionKind::MovByteStoreR0Indexed;
+        decode_memory_registers(instruction, opcode);
+
+        instruction.text =
+            "mov.b " +
+            register_name(instruction.source_register) +
+            ", @(r0, " +
+            register_name(instruction.destination_register) +
+            ")";
+
+        return instruction;
+    }
+
+    if ((opcode & 0xF00Fu) == 0x0005u) {
+        instruction.kind =
+            InstructionKind::MovWordStoreR0Indexed;
+        decode_memory_registers(instruction, opcode);
+
+        instruction.text =
+            "mov.w " +
+            register_name(instruction.source_register) +
+            ", @(r0, " +
+            register_name(instruction.destination_register) +
+            ")";
+
+        return instruction;
+    }
+
+    if ((opcode & 0xF00Fu) == 0x0006u) {
+        instruction.kind =
+            InstructionKind::MovLongStoreR0Indexed;
+        decode_memory_registers(instruction, opcode);
+
+        instruction.text =
+            "mov.l " +
+            register_name(instruction.source_register) +
+            ", @(r0, " +
+            register_name(instruction.destination_register) +
+            ")";
+
+        return instruction;
+    }
+
+    if ((opcode & 0xF00Fu) == 0x000Cu) {
+        instruction.kind =
+            InstructionKind::MovByteLoadR0Indexed;
+        decode_memory_registers(instruction, opcode);
+
+        instruction.text =
+            "mov.b @(r0, " +
+            register_name(instruction.source_register) +
+            "), " +
+            register_name(instruction.destination_register);
+
+        return instruction;
+    }
+
+    if ((opcode & 0xF00Fu) == 0x000Du) {
+        instruction.kind =
+            InstructionKind::MovWordLoadR0Indexed;
+        decode_memory_registers(instruction, opcode);
+
+        instruction.text =
+            "mov.w @(r0, " +
+            register_name(instruction.source_register) +
+            "), " +
+            register_name(instruction.destination_register);
+
+        return instruction;
+    }
+
+    if ((opcode & 0xF00Fu) == 0x000Eu) {
+        instruction.kind =
+            InstructionKind::MovLongLoadR0Indexed;
+        decode_memory_registers(instruction, opcode);
+
+        instruction.text =
+            "mov.l @(r0, " +
+            register_name(instruction.source_register) +
+            "), " +
+            register_name(instruction.destination_register);
+
+        return instruction;
+    }
+
     if ((opcode & 0xF00Fu) == 0x2000u) {
         instruction.kind = InstructionKind::MovByteStore;
         decode_memory_registers(instruction, opcode);

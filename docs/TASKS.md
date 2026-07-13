@@ -274,7 +274,7 @@ Umfang:
 
 Abhaengigkeiten: KR-1401
 
-### [ ] KR-1403 - R0-indexierte Adressierung
+### [x] KR-1403 - R0-indexierte Adressierung
 
 Abhaengigkeiten: KR-1402
 

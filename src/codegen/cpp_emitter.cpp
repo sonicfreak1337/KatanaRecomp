@@ -1443,6 +1443,84 @@ void emit_simple_instruction(
                 << "u);\n";
             return;
 
+        case Operation::StoreByteR0Indexed:
+            output
+                << "cpu.memory.write_u8(cpu.r[0] + cpu.r["
+                << static_cast<unsigned>(
+                    instruction.destination_register
+                )
+                << "], static_cast<std::uint8_t>(cpu.r["
+                << static_cast<unsigned>(
+                    instruction.source_register
+                )
+                << "]));\n";
+            return;
+
+        case Operation::StoreWordR0Indexed:
+            output
+                << "cpu.memory.write_u16(cpu.r[0] + cpu.r["
+                << static_cast<unsigned>(
+                    instruction.destination_register
+                )
+                << "], static_cast<std::uint16_t>(cpu.r["
+                << static_cast<unsigned>(
+                    instruction.source_register
+                )
+                << "]));\n";
+            return;
+
+        case Operation::StoreLongR0Indexed:
+            output
+                << "cpu.memory.write_u32(cpu.r[0] + cpu.r["
+                << static_cast<unsigned>(
+                    instruction.destination_register
+                )
+                << "], cpu.r["
+                << static_cast<unsigned>(
+                    instruction.source_register
+                )
+                << "]);\n";
+            return;
+
+        case Operation::LoadByteSignedR0Indexed:
+            output
+                << "cpu.r["
+                << static_cast<unsigned>(
+                    instruction.destination_register
+                )
+                << "] = cpu.memory.read_s8(cpu.r[0] + cpu.r["
+                << static_cast<unsigned>(
+                    instruction.source_register
+                )
+                << "]);\n";
+            return;
+
+        case Operation::LoadWordSignedR0Indexed:
+            output
+                << "cpu.r["
+                << static_cast<unsigned>(
+                    instruction.destination_register
+                )
+                << "] = cpu.memory.read_s16(cpu.r[0] + cpu.r["
+                << static_cast<unsigned>(
+                    instruction.source_register
+                )
+                << "]);\n";
+            return;
+
+        case Operation::LoadLongR0Indexed:
+            output
+                << "cpu.r["
+                << static_cast<unsigned>(
+                    instruction.destination_register
+                )
+                << "] = cpu.memory.read_u32(cpu.r[0] + cpu.r["
+                << static_cast<unsigned>(
+                    instruction.source_register
+                )
+                << "]);\n";
+            return;
+
 
         case Operation::StoreBytePreDecrement:
             output
@@ -1962,6 +2040,12 @@ void emit_terminal(
         case Operation::LoadByteSignedDisplacement:
         case Operation::LoadWordSignedDisplacement:
         case Operation::LoadLongDisplacement:
+        case Operation::StoreByteR0Indexed:
+        case Operation::StoreWordR0Indexed:
+        case Operation::StoreLongR0Indexed:
+        case Operation::LoadByteSignedR0Indexed:
+        case Operation::LoadWordSignedR0Indexed:
+        case Operation::LoadLongR0Indexed:
             break;
     }
 
@@ -2073,6 +2157,12 @@ bool is_control_flow(
         case Operation::LoadByteSignedDisplacement:
         case Operation::LoadWordSignedDisplacement:
         case Operation::LoadLongDisplacement:
+        case Operation::StoreByteR0Indexed:
+        case Operation::StoreWordR0Indexed:
+        case Operation::StoreLongR0Indexed:
+        case Operation::LoadByteSignedR0Indexed:
+        case Operation::LoadWordSignedR0Indexed:
+        case Operation::LoadLongR0Indexed:
             return false;
     }
 

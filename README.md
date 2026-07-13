@@ -28,7 +28,7 @@ SH-4-Binaerdaten
     -> semantischer Laufzeittest
 `
 
-Der aktuelle Teststand umfasst **42 automatische Tests**.
+Der aktuelle Teststand umfasst **44 automatische Tests**.
 
 ## Implementierte SH-4-Instruktionen
 
@@ -162,6 +162,17 @@ Pre-Decrement sichert den alten Quellwert und verringert das Adressregister vor 
 - MOV.L @(disp,Rm),Rn
 
 Das unsigned 4-Bit-Displacement wird fuer Byte, Word und Long mit 1, 2 beziehungsweise 4 skaliert. Die effektive Adresse verwendet definiertes 32-Bit-Wraparound; Byte- und Word-Loads werden vorzeichenerweitert. Details und Grenzfaelle stehen in `docs/SH4_ADDRESSING_SEMANTICS.md`.
+
+### R0-indexierte Adressierung
+
+- MOV.B Rm,@(R0,Rn)
+- MOV.W Rm,@(R0,Rn)
+- MOV.L Rm,@(R0,Rn)
+- MOV.B @(R0,Rm),Rn
+- MOV.W @(R0,Rm),Rn
+- MOV.L @(R0,Rm),Rn
+
+Die effektive Adresse ist die modulo-2-hoch-32-Summe aus R0 und dem Basisregister. Alle Basis- und Quellregister bleiben unveraendert; auch Ueberlappungen mit R0 werden in definierter Reihenfolge ausgewertet.
 
 ## Analysefunktionen
 

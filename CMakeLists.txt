@@ -1658,3 +1658,81 @@ add_test(
     NAME katana-generated-register-displacement-tests
     COMMAND katana-generated-register-displacement-tests
 )
+
+add_executable(katana-r0-indexed-tests
+    tests/memory/r0_indexed_tests.cpp
+)
+
+target_link_libraries(
+    katana-r0-indexed-tests
+    PRIVATE
+        katana_core
+)
+
+katana_enable_warnings(katana-r0-indexed-tests)
+
+add_test(
+    NAME katana-r0-indexed-tests
+    COMMAND katana-r0-indexed-tests
+)
+
+set(
+    KATANA_GENERATED_R0_INDEXED_CPP
+    ${KATANA_GENERATED_TEST_DIR}/generated_r0_indexed_program.cpp
+)
+
+add_custom_command(
+    OUTPUT
+        ${KATANA_GENERATED_R0_INDEXED_CPP}
+    COMMAND
+        ${CMAKE_COMMAND}
+        -E
+        make_directory
+        ${KATANA_GENERATED_TEST_DIR}
+    COMMAND
+        $<TARGET_FILE:katana-r0-indexed-tests>
+        --emit-cpp
+        ${KATANA_GENERATED_R0_INDEXED_CPP}
+    DEPENDS
+        katana-r0-indexed-tests
+        tests/memory/r0_indexed_tests.cpp
+    COMMENT
+        "Generiere C++-Programm fuer KR-1403 End-to-End-Test"
+    VERBATIM
+)
+
+set_source_files_properties(
+    ${KATANA_GENERATED_R0_INDEXED_CPP}
+    PROPERTIES
+        GENERATED TRUE
+        HEADER_FILE_ONLY TRUE
+)
+
+set_source_files_properties(
+    tests/memory/generated_r0_indexed_tests.cpp
+    PROPERTIES
+        OBJECT_DEPENDS ${KATANA_GENERATED_R0_INDEXED_CPP}
+)
+
+add_executable(katana-generated-r0-indexed-tests
+    tests/memory/generated_r0_indexed_tests.cpp
+    ${KATANA_GENERATED_R0_INDEXED_CPP}
+)
+
+target_include_directories(
+    katana-generated-r0-indexed-tests
+    PRIVATE
+        ${KATANA_GENERATED_TEST_DIR}
+)
+
+katana_enable_warnings(katana-generated-r0-indexed-tests)
+
+add_dependencies(
+    katana-generated-r0-indexed-tests
+    katana-r0-indexed-tests
+)
+
+add_test(
+    NAME katana-generated-r0-indexed-tests
+    COMMAND katana-generated-r0-indexed-tests
+)
