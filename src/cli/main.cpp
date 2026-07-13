@@ -1,9 +1,11 @@
 #include "katana/analysis/basic_blocks.hpp"
+#include "katana/analysis/function_analysis.hpp"
 #include "katana/io/binary_reader.hpp"
 #include "katana/sh4/decoder.hpp"
 #include "katana/sh4/disassembler.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cctype>
 #include <cstdint>
 #include <exception>
@@ -269,17 +271,122 @@ int analyze_blocks(
     return 0;
 }
 
+int analyze_functions(
+    const std::filesystem::path& path,
+    const std::uint32_t entry_address,
+    const std::uint32_t base_address
+) {
+    const auto bytes = katana::io::read_binary_file(path);
+    const auto lines = katana::sh4::disassemble(
+        bytes,
+        base_address
+    );
+
+    const std::array<std::uint32_t, 1> seeds = {
+        entry_address
+    };
+
+    const auto functions =
+        katana::analysis::discover_functions(
+            lines,
+            seeds
+        );
+
+    std::cout
+        << "Datei:         " << path.string() << '\n'
+        << "Dateigroesse:  " << std::dec << bytes.size() << " Bytes\n"
+        << "Einstieg:      ";
+
+    print_address(entry_address);
+
+    std::cout
+        << "\nFunktionen:    "
+        << std::dec
+        << functions.size()
+        << "\n\n";
+
+    for (const auto& function : functions) {
+        std::cout
+            << "Funktion "
+            << std::dec
+            << function.id
+            << ": ";
+
+        print_address(function.entry_address);
+        std::cout << '\n';
+
+        std::cout << "  Basic Blocks: ";
+
+        if (function.block_addresses.empty()) {
+            std::cout << "keine";
+        } else {
+            for (
+                std::size_t index = 0;
+                index < function.block_addresses.size();
+                ++index
+            ) {
+                if (index != 0u) {
+                    std::cout << ", ";
+                }
+
+                print_address(function.block_addresses[index]);
+            }
+        }
+
+        std::cout << "\n  Direkte Aufrufe: ";
+
+        if (function.direct_callees.empty()) {
+            std::cout << "keine";
+        } else {
+            for (
+                std::size_t index = 0;
+                index < function.direct_callees.size();
+                ++index
+            ) {
+                if (index != 0u) {
+                    std::cout << ", ";
+                }
+
+                print_address(function.direct_callees[index]);
+            }
+        }
+
+        std::cout << "\n  Indirekte Aufrufe: ";
+
+        if (function.indirect_call_sites.empty()) {
+            std::cout << "keine";
+        } else {
+            for (
+                std::size_t index = 0;
+                index < function.indirect_call_sites.size();
+                ++index
+            ) {
+                if (index != 0u) {
+                    std::cout << ", ";
+                }
+
+                print_address(function.indirect_call_sites[index]);
+            }
+        }
+
+        std::cout << "\n\n";
+    }
+
+    return 0;
+}
+
 void print_usage() {
     std::cerr
         << "Verwendung:\n"
         << "  katana-recomp <Opcode>\n"
         << "  katana-recomp opcode <Opcode>\n"
         << "  katana-recomp disasm <Datei> [Basisadresse]\n"
-        << "  katana-recomp blocks <Datei> [Basisadresse]\n\n"
+        << "  katana-recomp blocks <Datei> [Basisadresse]\n"
+        << "  katana-recomp functions <Datei> <Einstieg> [Basisadresse]\n\n"
         << "Beispiele:\n"
         << "  katana-recomp E1FF\n"
-        << "  katana-recomp disasm programm.bin 8C010000\n"
-        << "  katana-recomp blocks programm.bin 8C010000\n";
+        << "  katana-recomp blocks programm.bin 8C010000\n"
+        << "  katana-recomp functions programm.bin 8C010000 8C010000\n";
 }
 
 }
@@ -331,6 +438,33 @@ int main(const int argc, char* argv[]) {
 
             return analyze_blocks(
                 std::filesystem::path(argv[2]),
+                base_address
+            );
+        }
+
+        if (
+            (argc == 4 || argc == 5) &&
+            std::string(argv[1]) == "functions"
+        ) {
+            const auto entry_address =
+                parse_hex_value(
+                    argv[3],
+                    std::numeric_limits<std::uint32_t>::max(),
+                    "Die Einstiegsadresse"
+                );
+
+            const auto base_address =
+                argc == 5
+                    ? parse_hex_value(
+                        argv[4],
+                        std::numeric_limits<std::uint32_t>::max(),
+                        "Die Basisadresse"
+                    )
+                    : 0u;
+
+            return analyze_functions(
+                std::filesystem::path(argv[2]),
+                entry_address,
                 base_address
             );
         }

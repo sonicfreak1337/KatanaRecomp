@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.25)
 
 project(
     KatanaRecomp
-    VERSION 0.5.0
+    VERSION 0.4.0
     DESCRIPTION "Dreamcast SH-4 static recompilation framework"
     LANGUAGES CXX
 )
@@ -37,7 +37,6 @@ add_library(katana_core STATIC
     src/io/binary_reader.cpp
     src/analysis/disassembler.cpp
     src/analysis/basic_blocks.cpp
-    src/analysis/function_analysis.cpp
 )
 
 target_include_directories(
@@ -128,21 +127,4 @@ katana_enable_warnings(katana-basic-block-tests)
 add_test(
     NAME katana-basic-block-tests
     COMMAND katana-basic-block-tests
-)
-
-add_executable(katana-function-analysis-tests
-    tests/functions/function_analysis_tests.cpp
-)
-
-target_link_libraries(
-    katana-function-analysis-tests
-    PRIVATE
-        katana_core
-)
-
-katana_enable_warnings(katana-function-analysis-tests)
-
-add_test(
-    NAME katana-function-analysis-tests
-    COMMAND katana-function-analysis-tests
 )

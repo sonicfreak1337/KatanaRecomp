@@ -1,0 +1,234 @@
+#include "katana/analysis/function_analysis.hpp"
+
+#include "katana/analysis/basic_blocks.hpp"
+#include "katana/sh4/instruction.hpp"
+
+#include <algorithm>
+#include <cstddef>
+#include <cstdint>
+#include <deque>
+#include <set>
+#include <span>
+#include <unordered_map>
+#include <unordered_set>
+#include <vector>
+
+namespace katana::analysis {
+namespace {
+
+const katana::sh4::DisassemblyLine& controlling_line(
+    const BasicBlock& block
+) {
+    const auto last_index = block.lines.size() - 1u;
+
+    if (
+        block.lines[last_index].is_delay_slot &&
+        last_index > 0u
+    ) {
+        return block.lines[last_index - 1u];
+    }
+
+    return block.lines[last_index];
+}
+
+void add_sorted_unique(
+    std::vector<std::uint32_t>& values,
+    const std::uint32_t value
+) {
+    if (
+        std::find(
+            values.begin(),
+            values.end(),
+            value
+        ) == values.end()
+    ) {
+        values.push_back(value);
+        std::sort(values.begin(), values.end());
+    }
+}
+
+}
+
+std::vector<FunctionInfo> discover_functions(
+    const std::span<const katana::sh4::DisassemblyLine> lines,
+    const std::span<const std::uint32_t> seed_entries
+) {
+    const auto blocks = build_basic_blocks(lines);
+
+    if (blocks.empty()) {
+        return {};
+    }
+
+    std::unordered_map<std::uint32_t, std::size_t> block_by_start;
+    block_by_start.reserve(blocks.size());
+
+    for (std::size_t index = 0; index < blocks.size(); ++index) {
+        block_by_start.emplace(
+            blocks[index].start_address,
+            index
+        );
+    }
+
+    std::set<std::uint32_t> known_entries;
+
+    for (const auto entry : seed_entries) {
+        if (block_by_start.contains(entry)) {
+            known_entries.insert(entry);
+        }
+    }
+
+    for (const auto& block : blocks) {
+        if (block.lines.empty()) {
+            continue;
+        }
+
+        const auto& control = controlling_line(block);
+
+        if (
+            control.instruction.control_flow ==
+                katana::sh4::ControlFlowKind::Call &&
+            control.target_address.has_value() &&
+            block_by_start.contains(*control.target_address)
+        ) {
+            known_entries.insert(*control.target_address);
+        }
+    }
+
+    std::deque<std::uint32_t> pending_entries(
+        known_entries.begin(),
+        known_entries.end()
+    );
+
+    std::unordered_set<std::uint32_t> processed_entries;
+    std::vector<FunctionInfo> functions;
+
+    while (!pending_entries.empty()) {
+        const auto entry = pending_entries.front();
+        pending_entries.pop_front();
+
+        if (processed_entries.contains(entry)) {
+            continue;
+        }
+
+        const auto entry_block = block_by_start.find(entry);
+
+        if (entry_block == block_by_start.end()) {
+            continue;
+        }
+
+        processed_entries.insert(entry);
+
+        FunctionInfo function;
+        function.id = functions.size();
+        function.entry_address = entry;
+
+        std::deque<std::uint32_t> pending_blocks;
+        std::unordered_set<std::uint32_t> visited_blocks;
+
+        pending_blocks.push_back(entry);
+
+        while (!pending_blocks.empty()) {
+            const auto block_address = pending_blocks.front();
+            pending_blocks.pop_front();
+
+            if (visited_blocks.contains(block_address)) {
+                continue;
+            }
+
+            if (
+                block_address != entry &&
+                known_entries.contains(block_address)
+            ) {
+                continue;
+            }
+
+            const auto block_iterator =
+                block_by_start.find(block_address);
+
+            if (block_iterator == block_by_start.end()) {
+                continue;
+            }
+
+            visited_blocks.insert(block_address);
+            add_sorted_unique(
+                function.block_addresses,
+                block_address
+            );
+
+            const auto& block = blocks[block_iterator->second];
+
+            if (block.lines.empty()) {
+                continue;
+            }
+
+            const auto& control = controlling_line(block);
+            const auto flow = control.instruction.control_flow;
+
+            if (
+                flow == katana::sh4::ControlFlowKind::Call &&
+                control.target_address.has_value()
+            ) {
+                add_sorted_unique(
+                    function.direct_callees,
+                    *control.target_address
+                );
+
+                if (
+                    block_by_start.contains(*control.target_address) &&
+                    !processed_entries.contains(*control.target_address)
+                ) {
+                    pending_entries.push_back(
+                        *control.target_address
+                    );
+                }
+            }
+
+            if (
+                flow ==
+                katana::sh4::ControlFlowKind::IndirectCall
+            ) {
+                add_sorted_unique(
+                    function.indirect_call_sites,
+                    control.address
+                );
+            }
+
+            for (const auto successor : block.successors) {
+                if (
+                    flow == katana::sh4::ControlFlowKind::Call &&
+                    control.target_address.has_value() &&
+                    successor == *control.target_address
+                ) {
+                    continue;
+                }
+
+                if (
+                    successor != entry &&
+                    known_entries.contains(successor)
+                ) {
+                    continue;
+                }
+
+                pending_blocks.push_back(successor);
+            }
+        }
+
+        functions.push_back(std::move(function));
+    }
+
+    std::sort(
+        functions.begin(),
+        functions.end(),
+        [](const FunctionInfo& left, const FunctionInfo& right) {
+            return left.entry_address < right.entry_address;
+        }
+    );
+
+    for (std::size_t index = 0; index < functions.size(); ++index) {
+        functions[index].id = index;
+    }
+
+    return functions;
+}
+
+}
