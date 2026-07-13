@@ -32,4 +32,4 @@ KatanaRecomp besitzt einen durchgaengigen Prototyp-Pfad von SH-4-Binaerdaten bis
 - indirekte Spruenge und Calls nur eingeschraenkt aufgeloest
 - [x] KR-1105 - Extend, Swap und XTRCT
 - [x] KR-1106 - DT und MOVT
-- [ ] KR-1107 - v0.11.0 Release-Gate
+- [x] KR-1107 - v0.11.0 Release-Gate
