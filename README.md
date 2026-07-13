@@ -28,7 +28,7 @@ SH-4-Binaerdaten
     -> semantischer Laufzeittest
 `
 
-Der aktuelle Teststand umfasst **24 automatische Tests**.
+Der aktuelle Teststand umfasst **26 automatische Tests**.
 
 ## Implementierte SH-4-Instruktionen
 
@@ -88,6 +88,16 @@ Bedingte Spruenge koennen damit bereits auf zuvor berechnete T-Bit-Zustaende rea
 - SHAR Rn
 
 Das herausgeschobene Bit wird in T uebernommen. SHAR erhaelt das Vorzeichenbit ohne implementation-defined signed Shift in C++.
+### Feste Mehrfach-Shifts
+
+- SHLL2 Rn
+- SHLL8 Rn
+- SHLL16 Rn
+- SHLR2 Rn
+- SHLR8 Rn
+- SHLR16 Rn
+
+Diese Instruktionen verschieben um eine feste Distanz und veraendern das T-Bit nicht.
 ## Analysefunktionen
 
 KatanaRecomp unterstuetzt aktuell:

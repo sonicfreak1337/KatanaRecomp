@@ -11,7 +11,7 @@ KatanaRecomp besitzt einen durchgaengigen Prototyp-Pfad von SH-4-Binaerdaten bis
 ## Teststatus
 
 ```text
-100% tests passed out of 24
+100% tests passed out of 26
 ```
 
 ## Fertiggestellte Roadmap-Tasks
@@ -24,10 +24,11 @@ KatanaRecomp besitzt einen durchgaengigen Prototyp-Pfad von SH-4-Binaerdaten bis
 - [x] KR-1106 - DT und MOVT
 - [x] KR-1107 - v0.11.0 Release-Gate
 - [x] KR-1201 - Ein-Bit-Shifts
+- [x] KR-1202 - Feste Mehrfach-Shifts
 
 ## Naechster Roadmap-Task
 
-- [ ] KR-1202 - Feste Mehrfach-Shifts
+- [ ] KR-1203 - Rotationen
 
 ## Aktuelle Einschraenkungen
 

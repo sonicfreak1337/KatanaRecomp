@@ -93,6 +93,23 @@ Operation lower_operation(
 
         case Source::ShiftArithmeticRightOne:
             return Operation::ShiftArithmeticRightOne;
+        case Source::ShiftLogicalLeftTwo:
+            return Operation::ShiftLogicalLeftTwo;
+
+        case Source::ShiftLogicalLeftEight:
+            return Operation::ShiftLogicalLeftEight;
+
+        case Source::ShiftLogicalLeftSixteen:
+            return Operation::ShiftLogicalLeftSixteen;
+
+        case Source::ShiftLogicalRightTwo:
+            return Operation::ShiftLogicalRightTwo;
+
+        case Source::ShiftLogicalRightEight:
+            return Operation::ShiftLogicalRightEight;
+
+        case Source::ShiftLogicalRightSixteen:
+            return Operation::ShiftLogicalRightSixteen;
         case Source::AndRegister:
             return Operation::AndRegister;
 
@@ -304,6 +321,23 @@ std::string_view operation_name(
 
         case Operation::ShiftArithmeticRightOne:
             return "shift_arithmetic_right_one";
+        case Operation::ShiftLogicalLeftTwo:
+            return "shift_logical_left_two";
+
+        case Operation::ShiftLogicalLeftEight:
+            return "shift_logical_left_eight";
+
+        case Operation::ShiftLogicalLeftSixteen:
+            return "shift_logical_left_sixteen";
+
+        case Operation::ShiftLogicalRightTwo:
+            return "shift_logical_right_two";
+
+        case Operation::ShiftLogicalRightEight:
+            return "shift_logical_right_eight";
+
+        case Operation::ShiftLogicalRightSixteen:
+            return "shift_logical_right_sixteen";
         case Operation::AndRegister:
             return "and_reg";
 

@@ -158,7 +158,7 @@ Akzeptanz:
 - herausgeschobenes Bit landet korrekt in T
 - arithmetischer und logischer Shift sind getrennt getestet
 
-### [ ] KR-1202 - Feste Mehrfach-Shifts
+### [x] KR-1202 - Feste Mehrfach-Shifts
 
 Abhaengigkeiten: KR-1201
 

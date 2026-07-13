@@ -186,6 +186,12 @@ void print_ir_instruction(
         case katana::ir::Operation::ShiftLogicalRightOne:
         case katana::ir::Operation::ShiftArithmeticLeftOne:
         case katana::ir::Operation::ShiftArithmeticRightOne:
+        case katana::ir::Operation::ShiftLogicalLeftTwo:
+        case katana::ir::Operation::ShiftLogicalLeftEight:
+        case katana::ir::Operation::ShiftLogicalLeftSixteen:
+        case katana::ir::Operation::ShiftLogicalRightTwo:
+        case katana::ir::Operation::ShiftLogicalRightEight:
+        case katana::ir::Operation::ShiftLogicalRightSixteen:
             std::cout
                 << " r"
                 << std::dec

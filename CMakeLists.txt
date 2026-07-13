@@ -939,3 +939,83 @@ add_test(
     NAME katana-generated-one-bit-shift-tests
     COMMAND katana-generated-one-bit-shift-tests
 )
+add_executable(katana-fixed-shift-tests
+    tests/alu/fixed_shift_tests.cpp
+)
+
+target_link_libraries(
+    katana-fixed-shift-tests
+    PRIVATE
+        katana_core
+)
+
+katana_enable_warnings(katana-fixed-shift-tests)
+
+add_test(
+    NAME katana-fixed-shift-tests
+    COMMAND katana-fixed-shift-tests
+)
+
+set(
+    KATANA_GENERATED_FIXED_SHIFT_CPP
+    ${KATANA_GENERATED_TEST_DIR}/generated_fixed_shift_program.cpp
+)
+
+add_custom_command(
+    OUTPUT
+        ${KATANA_GENERATED_FIXED_SHIFT_CPP}
+    COMMAND
+        ${CMAKE_COMMAND}
+        -E
+        make_directory
+        ${KATANA_GENERATED_TEST_DIR}
+    COMMAND
+        $<TARGET_FILE:katana-recomp>
+        emit-cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/fixed_shift_execution.bin
+        8C010000
+        ${KATANA_GENERATED_FIXED_SHIFT_CPP}
+        8C010000
+    DEPENDS
+        katana-recomp
+        ${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/fixed_shift_execution.bin
+    COMMENT
+        "Generiere C++-Programm fuer KR-1202 End-to-End-Test"
+    VERBATIM
+)
+
+set_source_files_properties(
+    ${KATANA_GENERATED_FIXED_SHIFT_CPP}
+    PROPERTIES
+        GENERATED TRUE
+        HEADER_FILE_ONLY TRUE
+)
+
+set_source_files_properties(
+    tests/alu/generated_fixed_shift_tests.cpp
+    PROPERTIES
+        OBJECT_DEPENDS ${KATANA_GENERATED_FIXED_SHIFT_CPP}
+)
+
+add_executable(katana-generated-fixed-shift-tests
+    tests/alu/generated_fixed_shift_tests.cpp
+    ${KATANA_GENERATED_FIXED_SHIFT_CPP}
+)
+
+target_include_directories(
+    katana-generated-fixed-shift-tests
+    PRIVATE
+        ${KATANA_GENERATED_TEST_DIR}
+)
+
+katana_enable_warnings(katana-generated-fixed-shift-tests)
+
+add_dependencies(
+    katana-generated-fixed-shift-tests
+    katana-recomp
+)
+
+add_test(
+    NAME katana-generated-fixed-shift-tests
+    COMMAND katana-generated-fixed-shift-tests
+)

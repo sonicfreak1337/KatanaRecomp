@@ -481,6 +481,59 @@ void emit_simple_instruction(
                 << "    (value & 0x80000000u);\n"
                 << "}\n";
             return;
+        case Operation::ShiftLogicalLeftTwo:
+            output
+                << "cpu.r["
+                << static_cast<unsigned>(
+                    instruction.destination_register
+                )
+                << "] <<= 2u;\n";
+            return;
+
+        case Operation::ShiftLogicalLeftEight:
+            output
+                << "cpu.r["
+                << static_cast<unsigned>(
+                    instruction.destination_register
+                )
+                << "] <<= 8u;\n";
+            return;
+
+        case Operation::ShiftLogicalLeftSixteen:
+            output
+                << "cpu.r["
+                << static_cast<unsigned>(
+                    instruction.destination_register
+                )
+                << "] <<= 16u;\n";
+            return;
+
+        case Operation::ShiftLogicalRightTwo:
+            output
+                << "cpu.r["
+                << static_cast<unsigned>(
+                    instruction.destination_register
+                )
+                << "] >>= 2u;\n";
+            return;
+
+        case Operation::ShiftLogicalRightEight:
+            output
+                << "cpu.r["
+                << static_cast<unsigned>(
+                    instruction.destination_register
+                )
+                << "] >>= 8u;\n";
+            return;
+
+        case Operation::ShiftLogicalRightSixteen:
+            output
+                << "cpu.r["
+                << static_cast<unsigned>(
+                    instruction.destination_register
+                )
+                << "] >>= 16u;\n";
+            return;
         case Operation::AndRegister:
             output
                 << "cpu.r["
@@ -1066,6 +1119,12 @@ void emit_terminal(
         case Operation::ShiftLogicalRightOne:
         case Operation::ShiftArithmeticLeftOne:
         case Operation::ShiftArithmeticRightOne:
+        case Operation::ShiftLogicalLeftTwo:
+        case Operation::ShiftLogicalLeftEight:
+        case Operation::ShiftLogicalLeftSixteen:
+        case Operation::ShiftLogicalRightTwo:
+        case Operation::ShiftLogicalRightEight:
+        case Operation::ShiftLogicalRightSixteen:
         case Operation::AndRegister:
         case Operation::OrRegister:
         case Operation::XorRegister:
@@ -1141,6 +1200,12 @@ bool is_control_flow(
         case Operation::ShiftLogicalRightOne:
         case Operation::ShiftArithmeticLeftOne:
         case Operation::ShiftArithmeticRightOne:
+        case Operation::ShiftLogicalLeftTwo:
+        case Operation::ShiftLogicalLeftEight:
+        case Operation::ShiftLogicalLeftSixteen:
+        case Operation::ShiftLogicalRightTwo:
+        case Operation::ShiftLogicalRightEight:
+        case Operation::ShiftLogicalRightSixteen:
         case Operation::AndRegister:
         case Operation::OrRegister:
         case Operation::XorRegister:
