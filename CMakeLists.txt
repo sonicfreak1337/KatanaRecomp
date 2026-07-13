@@ -132,6 +132,18 @@ add_test(
     COMMAND katana-sh4-specification-tests
 )
 
+add_executable(katana-decoder-fuzzer
+    tools/decoder_fuzzer.cpp
+)
+
+target_link_libraries(katana-decoder-fuzzer PRIVATE katana_core)
+katana_enable_warnings(katana-decoder-fuzzer)
+
+add_test(
+    NAME katana-decoder-fuzzer
+    COMMAND katana-decoder-fuzzer 0x00C0FFEE 200000
+)
+
 add_executable(katana-disassembler-tests
     tests/disassembler/disassembler_tests.cpp
 )

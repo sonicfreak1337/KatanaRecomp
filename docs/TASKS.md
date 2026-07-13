@@ -342,7 +342,7 @@ Abhaengigkeiten: KR-1501
 
 Abhaengigkeiten: KR-1501
 
-### [ ] KR-1505 - Decoder-Fuzzer
+### [x] KR-1505 - Decoder-Fuzzer
 
 Abhaengigkeiten: KR-1502
 

@@ -19,3 +19,16 @@ Die Vektoren sind absichtlich nicht aus `instruction_metadata.cpp` generiert. Si
 - reservierte beziehungsweise noch nicht implementierte Kodierungen bleiben `Unknown`
 
 Die Tests validieren Decoderergebnisse. Sie beanspruchen keine vollstaendige SH-4-Konformitaet fuer noch nicht implementierte Instruktionen.
+
+## Reproduzierbarer Mutationsfuzzer
+
+`katana-decoder-fuzzer [Seed] [Iterationen]` beginnt mit jeder implementierten Opcode-Regel sowie bekannten Unknown-Faellen. Pro Iteration wird ein einzelnes Bit gekippt, ein kompletter Zufallswert eingesetzt oder ein Zufallsmuster mit dem Korpus kombiniert.
+
+Der CTest-Lauf verwendet den festen Seed `0x00C0FFEE` und 200.000 Iterationen. Ein Fehler meldet den konkreten Opcode; derselbe Lauf kann damit exakt wiederholt werden. Geprueft werden:
+
+- bitidentische Decoderergebnisse bei Wiederholung
+- genau eine Metadatenregel je bekanntem Opcode
+- keine Metadatenregel je unbekanntem Opcode
+- Uebereinstimmung von Metadaten- und Decoder-Kind
+- Registeroperanden nur im Bereich R0 bis R15
+- nicht leere Disassembly fuer bekannte und unbekannte Werte
