@@ -859,3 +859,83 @@ add_test(
     NAME katana-generated-dt-movt-tests
     COMMAND katana-generated-dt-movt-tests
 )
+add_executable(katana-one-bit-shift-tests
+    tests/alu/one_bit_shift_tests.cpp
+)
+
+target_link_libraries(
+    katana-one-bit-shift-tests
+    PRIVATE
+        katana_core
+)
+
+katana_enable_warnings(katana-one-bit-shift-tests)
+
+add_test(
+    NAME katana-one-bit-shift-tests
+    COMMAND katana-one-bit-shift-tests
+)
+
+set(
+    KATANA_GENERATED_ONE_BIT_SHIFT_CPP
+    ${KATANA_GENERATED_TEST_DIR}/generated_one_bit_shift_program.cpp
+)
+
+add_custom_command(
+    OUTPUT
+        ${KATANA_GENERATED_ONE_BIT_SHIFT_CPP}
+    COMMAND
+        ${CMAKE_COMMAND}
+        -E
+        make_directory
+        ${KATANA_GENERATED_TEST_DIR}
+    COMMAND
+        $<TARGET_FILE:katana-recomp>
+        emit-cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/one_bit_shift_execution.bin
+        8C010000
+        ${KATANA_GENERATED_ONE_BIT_SHIFT_CPP}
+        8C010000
+    DEPENDS
+        katana-recomp
+        ${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/one_bit_shift_execution.bin
+    COMMENT
+        "Generiere C++-Programm fuer KR-1201 End-to-End-Test"
+    VERBATIM
+)
+
+set_source_files_properties(
+    ${KATANA_GENERATED_ONE_BIT_SHIFT_CPP}
+    PROPERTIES
+        GENERATED TRUE
+        HEADER_FILE_ONLY TRUE
+)
+
+set_source_files_properties(
+    tests/alu/generated_one_bit_shift_tests.cpp
+    PROPERTIES
+        OBJECT_DEPENDS ${KATANA_GENERATED_ONE_BIT_SHIFT_CPP}
+)
+
+add_executable(katana-generated-one-bit-shift-tests
+    tests/alu/generated_one_bit_shift_tests.cpp
+    ${KATANA_GENERATED_ONE_BIT_SHIFT_CPP}
+)
+
+target_include_directories(
+    katana-generated-one-bit-shift-tests
+    PRIVATE
+        ${KATANA_GENERATED_TEST_DIR}
+)
+
+katana_enable_warnings(katana-generated-one-bit-shift-tests)
+
+add_dependencies(
+    katana-generated-one-bit-shift-tests
+    katana-recomp
+)
+
+add_test(
+    NAME katana-generated-one-bit-shift-tests
+    COMMAND katana-generated-one-bit-shift-tests
+)

@@ -144,7 +144,7 @@ Umfang:
 
 ## v0.12.0 - Shifts und Rotationen
 
-### [ ] KR-1201 - Ein-Bit-Shifts
+### [x] KR-1201 - Ein-Bit-Shifts
 
 Abhaengigkeiten: KR-1107
 

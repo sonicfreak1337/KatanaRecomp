@@ -428,6 +428,59 @@ void emit_simple_instruction(
                 )
                 << "] = cpu.t ? 1u : 0u;\n";
             return;
+        case Operation::ShiftLogicalLeftOne:
+        case Operation::ShiftArithmeticLeftOne:
+            output
+                << "{\n"
+                << "const std::uint32_t value = cpu.r["
+                << static_cast<unsigned>(
+                    instruction.destination_register
+                )
+                << "];\n"
+                << "cpu.t = (value & 0x80000000u) != 0u;\n"
+                << "cpu.r["
+                << static_cast<unsigned>(
+                    instruction.destination_register
+                )
+                << "] = value << 1u;\n"
+                << "}\n";
+            return;
+
+        case Operation::ShiftLogicalRightOne:
+            output
+                << "{\n"
+                << "const std::uint32_t value = cpu.r["
+                << static_cast<unsigned>(
+                    instruction.destination_register
+                )
+                << "];\n"
+                << "cpu.t = (value & 0x00000001u) != 0u;\n"
+                << "cpu.r["
+                << static_cast<unsigned>(
+                    instruction.destination_register
+                )
+                << "] = value >> 1u;\n"
+                << "}\n";
+            return;
+
+        case Operation::ShiftArithmeticRightOne:
+            output
+                << "{\n"
+                << "const std::uint32_t value = cpu.r["
+                << static_cast<unsigned>(
+                    instruction.destination_register
+                )
+                << "];\n"
+                << "cpu.t = (value & 0x00000001u) != 0u;\n"
+                << "cpu.r["
+                << static_cast<unsigned>(
+                    instruction.destination_register
+                )
+                << "] =\n"
+                << "    (value >> 1u) |\n"
+                << "    (value & 0x80000000u);\n"
+                << "}\n";
+            return;
         case Operation::AndRegister:
             output
                 << "cpu.r["
@@ -1009,6 +1062,10 @@ void emit_terminal(
         case Operation::ExtractMiddle:
         case Operation::DecrementAndTest:
         case Operation::MoveT:
+        case Operation::ShiftLogicalLeftOne:
+        case Operation::ShiftLogicalRightOne:
+        case Operation::ShiftArithmeticLeftOne:
+        case Operation::ShiftArithmeticRightOne:
         case Operation::AndRegister:
         case Operation::OrRegister:
         case Operation::XorRegister:
@@ -1080,6 +1137,10 @@ bool is_control_flow(
         case Operation::ExtractMiddle:
         case Operation::DecrementAndTest:
         case Operation::MoveT:
+        case Operation::ShiftLogicalLeftOne:
+        case Operation::ShiftLogicalRightOne:
+        case Operation::ShiftArithmeticLeftOne:
+        case Operation::ShiftArithmeticRightOne:
         case Operation::AndRegister:
         case Operation::OrRegister:
         case Operation::XorRegister:

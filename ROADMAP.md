@@ -1,7 +1,7 @@
 # KatanaRecomp Roadmap
 
 Status: Pre-Alpha  
-Aktuelle Basis: v0.10.0  
+Aktuelle Basis: v0.11.0  
 Planungsmodell: Semantic Versioning, kleine ueberpruefbare Meilensteine
 
 Diese Roadmap beschreibt die technische Entwicklung von KatanaRecomp vom aktuellen Architektur-Prototyp bis zu einem belastbaren Dreamcast-Recompiler-Framework.
@@ -91,6 +91,13 @@ Release-Gate:
 - kein bestehender End-to-End-Test veraendert sein Ergebnis
 
 ### v0.12.0 - Shifts und Rotationen
+Fortschritt:
+
+- [x] KR-1201 - Ein-Bit-Shifts
+- [ ] KR-1202 - Feste Mehrfach-Shifts
+- [ ] KR-1203 - Rotationen
+- [ ] KR-1204 - Dynamische Shifts
+- [ ] KR-1205 - v0.12 Release-Gate
 
 Enthalten:
 

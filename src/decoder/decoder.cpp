@@ -367,6 +367,53 @@ DecodedInstruction decode(const std::uint16_t opcode) {
 
         return instruction;
     }
+    if ((opcode & 0xF0FFu) == 0x4000u) {
+        instruction.kind = InstructionKind::ShiftLogicalLeftOne;
+        instruction.destination_register =
+            static_cast<std::uint8_t>((opcode >> 8u) & 0x0Fu);
+
+        instruction.text =
+            "shll " +
+            register_name(instruction.destination_register);
+
+        return instruction;
+    }
+
+    if ((opcode & 0xF0FFu) == 0x4001u) {
+        instruction.kind = InstructionKind::ShiftLogicalRightOne;
+        instruction.destination_register =
+            static_cast<std::uint8_t>((opcode >> 8u) & 0x0Fu);
+
+        instruction.text =
+            "shlr " +
+            register_name(instruction.destination_register);
+
+        return instruction;
+    }
+
+    if ((opcode & 0xF0FFu) == 0x4020u) {
+        instruction.kind = InstructionKind::ShiftArithmeticLeftOne;
+        instruction.destination_register =
+            static_cast<std::uint8_t>((opcode >> 8u) & 0x0Fu);
+
+        instruction.text =
+            "shal " +
+            register_name(instruction.destination_register);
+
+        return instruction;
+    }
+
+    if ((opcode & 0xF0FFu) == 0x4021u) {
+        instruction.kind = InstructionKind::ShiftArithmeticRightOne;
+        instruction.destination_register =
+            static_cast<std::uint8_t>((opcode >> 8u) & 0x0Fu);
+
+        instruction.text =
+            "shar " +
+            register_name(instruction.destination_register);
+
+        return instruction;
+    }
     if ((opcode & 0xF00Fu) == 0x2009u) {
         instruction.kind = InstructionKind::AndRegister;
         decode_memory_registers(instruction, opcode);

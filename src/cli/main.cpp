@@ -182,6 +182,10 @@ void print_ir_instruction(
             break;
         case katana::ir::Operation::DecrementAndTest:
         case katana::ir::Operation::MoveT:
+        case katana::ir::Operation::ShiftLogicalLeftOne:
+        case katana::ir::Operation::ShiftLogicalRightOne:
+        case katana::ir::Operation::ShiftArithmeticLeftOne:
+        case katana::ir::Operation::ShiftArithmeticRightOne:
             std::cout
                 << " r"
                 << std::dec

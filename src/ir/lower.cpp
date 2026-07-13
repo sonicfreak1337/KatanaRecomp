@@ -82,6 +82,17 @@ Operation lower_operation(
 
         case Source::MoveT:
             return Operation::MoveT;
+        case Source::ShiftLogicalLeftOne:
+            return Operation::ShiftLogicalLeftOne;
+
+        case Source::ShiftLogicalRightOne:
+            return Operation::ShiftLogicalRightOne;
+
+        case Source::ShiftArithmeticLeftOne:
+            return Operation::ShiftArithmeticLeftOne;
+
+        case Source::ShiftArithmeticRightOne:
+            return Operation::ShiftArithmeticRightOne;
         case Source::AndRegister:
             return Operation::AndRegister;
 
@@ -282,6 +293,17 @@ std::string_view operation_name(
 
         case Operation::MoveT:
             return "move_t";
+        case Operation::ShiftLogicalLeftOne:
+            return "shift_logical_left_one";
+
+        case Operation::ShiftLogicalRightOne:
+            return "shift_logical_right_one";
+
+        case Operation::ShiftArithmeticLeftOne:
+            return "shift_arithmetic_left_one";
+
+        case Operation::ShiftArithmeticRightOne:
+            return "shift_arithmetic_right_one";
         case Operation::AndRegister:
             return "and_reg";
 

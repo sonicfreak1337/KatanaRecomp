@@ -2,6 +2,7 @@
 
 Version: 0.11.0
 Phase: Pre-Alpha
+Aktiver Meilenstein: v0.12.0 - Shifts und Rotationen
 
 ## Zusammenfassung
 
@@ -9,19 +10,24 @@ KatanaRecomp besitzt einen durchgaengigen Prototyp-Pfad von SH-4-Binaerdaten bis
 
 ## Teststatus
 
-`	ext
-100% tests passed out of 22
-`
+```text
+100% tests passed out of 24
+```
 
 ## Fertiggestellte Roadmap-Tasks
 
 - [x] KR-1101 - SUB, NEG und NOT
 - [x] KR-1102 - AND, OR und XOR
 - [x] KR-1103 - CMP-Varianten
+- [x] KR-1104 - Carry und Overflow
+- [x] KR-1105 - Extend, Swap und XTRCT
+- [x] KR-1106 - DT und MOVT
+- [x] KR-1107 - v0.11.0 Release-Gate
+- [x] KR-1201 - Ein-Bit-Shifts
 
 ## Naechster Roadmap-Task
 
-- [x] KR-1104 - Carry und Overflow
+- [ ] KR-1202 - Feste Mehrfach-Shifts
 
 ## Aktuelle Einschraenkungen
 
@@ -30,6 +36,3 @@ KatanaRecomp besitzt einen durchgaengigen Prototyp-Pfad von SH-4-Binaerdaten bis
 - kein Dreamcast-Speicherbus oder MMIO
 - keine Plattformhardware
 - indirekte Spruenge und Calls nur eingeschraenkt aufgeloest
-- [x] KR-1105 - Extend, Swap und XTRCT
-- [x] KR-1106 - DT und MOVT
-- [x] KR-1107 - v0.11.0 Release-Gate

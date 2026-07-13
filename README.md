@@ -4,7 +4,7 @@ Aktuelle Pre-Alpha-Version: `0.11.0`
 
 KatanaRecomp ist ein unabhaengiges, in C++20 entwickeltes Framework fuer die statische Rekompilierung von Sega-Dreamcast-SH-4-Code.
 
-Das Projekt befindet sich in einer fruehen Pre-Alpha-Phase. Der aktuelle Stand ist **Version 0.10.0**.
+Das Projekt befindet sich in einer fruehen Pre-Alpha-Phase. Der aktuelle Stand ist **Version 0.11.0**.
 
 KatanaRecomp ist kein Emulator, kein ISO-Loader und kein Paket fuer kommerzielle Spieldaten. BIOS-Dateien, Disc-Images, urheberrechtlich geschuetzte Assets und automatisch erzeugter Code aus kommerziellen Spielen gehoeren nicht in dieses Repository.
 
@@ -28,7 +28,7 @@ SH-4-Binaerdaten
     -> semantischer Laufzeittest
 `
 
-Der aktuelle Teststand umfasst **22 automatische Tests**.
+Der aktuelle Teststand umfasst **24 automatische Tests**.
 
 ## Implementierte SH-4-Instruktionen
 
@@ -80,6 +80,14 @@ Direkte Sprungziele werden berechnet. Delay Slots werden erkannt und in der Anal
 
 Bedingte Spruenge koennen damit bereits auf zuvor berechnete T-Bit-Zustaende reagieren.
 
+### Ein-Bit-Shifts
+
+- SHLL Rn
+- SHLR Rn
+- SHAL Rn
+- SHAR Rn
+
+Das herausgeschobene Bit wird in T uebernommen. SHAR erhaelt das Vorzeichenbit ohne implementation-defined signed Shift in C++.
 ## Analysefunktionen
 
 KatanaRecomp unterstuetzt aktuell:
@@ -123,7 +131,7 @@ Die Carry-, Borrow- und signed-Overflow-Regeln sind in `docs/SH4_STATUS_SEMANTIC
 KatanaRecomp ist noch kein vollstaendiger Dreamcast-Recompiler. Unter anderem fehlen:
 
 - grosse Teile des SH-4-Befehlssatzes
-- Multiplikation, Division, Shifts und erweiterte Integer-Flags
+- Multiplikation, Division, weitere Shifts und erweiterte Integer-Flags
 - FPU- und Vektoroperationen
 - vollstaendiges Statusregister
 - Dreamcast-Speicherabbild
