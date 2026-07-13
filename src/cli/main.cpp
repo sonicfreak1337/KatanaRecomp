@@ -5,6 +5,7 @@
 #include "katana/ir/lower.hpp"
 #include "katana/sh4/decoder.hpp"
 #include "katana/sh4/disassembler.hpp"
+#include "katana/sh4/isa_coverage.hpp"
 
 #include <algorithm>
 #include <array>
@@ -939,6 +940,7 @@ void print_usage() {
         << "Verwendung:\n"
         << "  katana-recomp <Opcode>\n"
         << "  katana-recomp opcode <Opcode>\n"
+        << "  katana-recomp isa-report\n"
         << "  katana-recomp disasm <Datei> [Basisadresse]\n"
         << "  katana-recomp blocks <Datei> [Basisadresse]\n"
         << "  katana-recomp functions <Datei> <Einstieg> [Basisadresse]\n"
@@ -952,6 +954,13 @@ void print_usage() {
 
 int main(const int argc, char* argv[]) {
     try {
+        if (argc == 2 && std::string(argv[1]) == "isa-report") {
+            std::cout << katana::sh4::format_isa_coverage_report(
+                katana::sh4::build_isa_coverage_report()
+            );
+            return 0;
+        }
+
         if (argc == 2) {
             return decode_single_opcode(argv[1]);
         }

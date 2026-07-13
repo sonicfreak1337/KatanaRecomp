@@ -36,6 +36,7 @@ add_library(katana_core STATIC
     src/decoder/decoder.cpp
     src/decoder/decoder_validation.cpp
     src/decoder/instruction_metadata.cpp
+    src/decoder/isa_coverage.cpp
     src/io/binary_reader.cpp
     src/analysis/disassembler.cpp
     src/analysis/basic_blocks.cpp
@@ -105,6 +106,18 @@ katana_enable_warnings(katana-decoder-collision-tests)
 add_test(
     NAME katana-decoder-collision-tests
     COMMAND katana-decoder-collision-tests
+)
+
+add_executable(katana-isa-coverage-tests
+    tests/decoder/isa_coverage_tests.cpp
+)
+
+target_link_libraries(katana-isa-coverage-tests PRIVATE katana_core)
+katana_enable_warnings(katana-isa-coverage-tests)
+
+add_test(
+    NAME katana-isa-coverage-tests
+    COMMAND katana-isa-coverage-tests
 )
 
 add_executable(katana-disassembler-tests

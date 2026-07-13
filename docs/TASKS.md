@@ -334,7 +334,7 @@ Abhaengigkeiten: KR-1408
 
 Abhaengigkeiten: KR-1501
 
-### [ ] KR-1503 - ISA-Abdeckungsbericht
+### [x] KR-1503 - ISA-Abdeckungsbericht
 
 Abhaengigkeiten: KR-1501
 
