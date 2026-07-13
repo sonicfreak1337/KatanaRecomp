@@ -16,14 +16,12 @@ std::vector<DisassemblyLine> disassemble(
 ) {
     if ((bytes.size() % 2u) != 0u) {
         throw std::invalid_argument(
-            "Die BinÃ¤rdatei besitzt eine ungerade Anzahl Bytes."
+            "Die Binärdatei besitzt eine ungerade Anzahl Bytes."
         );
     }
 
     std::vector<DisassemblyLine> lines;
     lines.reserve(bytes.size() / 2u);
-
-    bool previous_instruction_has_delay_slot = false;
 
     for (std::size_t offset = 0; offset < bytes.size(); offset += 2u) {
         const auto expanded_address =
@@ -35,7 +33,7 @@ std::vector<DisassemblyLine> disassemble(
             std::numeric_limits<std::uint32_t>::max()
         ) {
             throw std::overflow_error(
-                "Die berechnete Instruktionsadresse Ã¼berschreitet 32 Bit."
+                "Die berechnete Instruktionsadresse überschreitet 32 Bit."
             );
         }
 
@@ -45,16 +43,8 @@ std::vector<DisassemblyLine> disassemble(
         line.address = static_cast<std::uint32_t>(expanded_address);
         line.opcode = opcode;
         line.instruction = decode(opcode);
-        line.is_delay_slot = previous_instruction_has_delay_slot;
-        line.target_address = calculate_direct_branch_target(
-            line.instruction,
-            line.address
-        );
 
-        previous_instruction_has_delay_slot =
-            line.instruction.has_delay_slot;
-
-        lines.push_back(line);
+        lines.push_back(std::move(line));
     }
 
     return lines;

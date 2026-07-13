@@ -1,0 +1,182 @@
+﻿#include "katana/io/binary_reader.hpp"
+#include "katana/sh4/decoder.hpp"
+#include "katana/sh4/disassembler.hpp"
+
+#include <algorithm>
+#include <cctype>
+#include <cstdint>
+#include <exception>
+#include <filesystem>
+#include <iomanip>
+#include <iostream>
+#include <limits>
+#include <stdexcept>
+#include <string>
+
+namespace {
+
+std::uint32_t parse_hex_value(
+    std::string text,
+    const std::uint32_t maximum,
+    const std::string& description
+) {
+    if (text.starts_with("0x") || text.starts_with("0X")) {
+        text.erase(0, 2);
+    }
+
+    if (text.empty()) {
+        throw std::invalid_argument(description + " darf nicht leer sein.");
+    }
+
+    const bool valid = std::all_of(
+        text.begin(),
+        text.end(),
+        [](const unsigned char character) {
+            return std::isxdigit(character) != 0;
+        }
+    );
+
+    if (!valid) {
+        throw std::invalid_argument(
+            description + " enthält ungültige Hex-Zeichen."
+        );
+    }
+
+    std::size_t parsed_characters = 0;
+    const auto value = std::stoull(text, &parsed_characters, 16);
+
+    if (parsed_characters != text.length() || value > maximum) {
+        throw std::invalid_argument(
+            description + " liegt außerhalb des erlaubten Bereichs."
+        );
+    }
+
+    return static_cast<std::uint32_t>(value);
+}
+
+int decode_single_opcode(const std::string& text) {
+    const auto opcode = static_cast<std::uint16_t>(
+        parse_hex_value(text, 0xFFFFu, "Der Opcode")
+    );
+
+    const auto instruction = katana::sh4::decode(opcode);
+
+    std::cout
+        << "Opcode:      0x"
+        << std::hex
+        << std::uppercase
+        << std::setw(4)
+        << std::setfill('0')
+        << opcode
+        << '\n'
+        << "Instruktion: "
+        << instruction.text
+        << '\n'
+        << "Status:      "
+        << (instruction.is_known() ? "erkannt" : "unbekannt")
+        << '\n';
+
+    return instruction.is_known() ? 0 : 1;
+}
+
+int disassemble_file(
+    const std::filesystem::path& path,
+    const std::uint32_t base_address
+) {
+    const auto bytes = katana::io::read_binary_file(path);
+    const auto lines = katana::sh4::disassemble(bytes, base_address);
+
+    std::size_t unknown_count = 0;
+
+    std::cout
+        << "Datei:        " << path.string() << '\n'
+        << "Größe:        " << std::dec << bytes.size() << " Bytes\n"
+        << "Basisadresse: 0x"
+        << std::hex
+        << std::uppercase
+        << std::setw(8)
+        << std::setfill('0')
+        << base_address
+        << "\n\n";
+
+    for (const auto& line : lines) {
+        if (!line.instruction.is_known()) {
+            ++unknown_count;
+        }
+
+        std::cout
+            << "0x"
+            << std::hex
+            << std::uppercase
+            << std::setw(8)
+            << std::setfill('0')
+            << line.address
+            << "  "
+            << std::setw(4)
+            << line.opcode
+            << "  "
+            << line.instruction.text
+            << '\n';
+    }
+
+    std::cout
+        << "\nInstruktionen:      "
+        << std::dec
+        << lines.size()
+        << "\nUnbekannte Opcodes: "
+        << unknown_count
+        << '\n';
+
+    return 0;
+}
+
+void print_usage() {
+    std::cerr
+        << "Verwendung:\n"
+        << "  katana-recomp <Opcode>\n"
+        << "  katana-recomp opcode <Opcode>\n"
+        << "  katana-recomp disasm <Datei> [Basisadresse]\n\n"
+        << "Beispiele:\n"
+        << "  katana-recomp E1FF\n"
+        << "  katana-recomp opcode 312C\n"
+        << "  katana-recomp disasm programm.bin 8C010000\n";
+}
+
+}
+
+int main(const int argc, char* argv[]) {
+    try {
+        if (argc == 2) {
+            return decode_single_opcode(argv[1]);
+        }
+
+        if (argc == 3 && std::string(argv[1]) == "opcode") {
+            return decode_single_opcode(argv[2]);
+        }
+
+        if (
+            (argc == 3 || argc == 4) &&
+            std::string(argv[1]) == "disasm"
+        ) {
+            const auto base_address =
+                argc == 4
+                    ? parse_hex_value(
+                        argv[3],
+                        std::numeric_limits<std::uint32_t>::max(),
+                        "Die Basisadresse"
+                    )
+                    : 0u;
+
+            return disassemble_file(
+                std::filesystem::path(argv[2]),
+                base_address
+            );
+        }
+
+        print_usage();
+        return 2;
+    } catch (const std::exception& error) {
+        std::cerr << "Fehler: " << error.what() << '\n';
+        return 2;
+    }
+}

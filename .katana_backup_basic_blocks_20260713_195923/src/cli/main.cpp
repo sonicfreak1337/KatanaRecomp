@@ -1,4 +1,3 @@
-#include "katana/analysis/basic_blocks.hpp"
 #include "katana/io/binary_reader.hpp"
 #include "katana/sh4/decoder.hpp"
 #include "katana/sh4/disassembler.hpp"
@@ -88,16 +87,6 @@ std::string format_disassembly_text(
     return output.str();
 }
 
-void print_address(const std::uint32_t address) {
-    std::cout
-        << "0x"
-        << std::hex
-        << std::uppercase
-        << std::setw(8)
-        << std::setfill('0')
-        << address;
-}
-
 int decode_single_opcode(const std::string& text) {
     const auto opcode = static_cast<std::uint16_t>(
         parse_hex_value(text, 0xFFFFu, "Der Opcode")
@@ -167,9 +156,13 @@ int disassemble_file(
             ++delay_slot_count;
         }
 
-        print_address(line.address);
-
         std::cout
+            << "0x"
+            << std::hex
+            << std::uppercase
+            << std::setw(8)
+            << std::setfill('0')
+            << line.address
             << "  "
             << std::setw(4)
             << line.opcode
@@ -193,93 +186,16 @@ int disassemble_file(
     return 0;
 }
 
-int analyze_blocks(
-    const std::filesystem::path& path,
-    const std::uint32_t base_address
-) {
-    const auto bytes = katana::io::read_binary_file(path);
-    const auto lines = katana::sh4::disassemble(
-        bytes,
-        base_address
-    );
-    const auto blocks = katana::analysis::build_basic_blocks(lines);
-
-    std::cout
-        << "Datei:         " << path.string() << '\n'
-        << "Dateigroesse:  " << std::dec << bytes.size() << " Bytes\n"
-        << "Basic Blocks:  " << blocks.size()
-        << "\n\n";
-
-    for (const auto& block : blocks) {
-        std::cout
-            << "Block "
-            << std::dec
-            << block.id
-            << ": ";
-
-        print_address(block.start_address);
-        std::cout << " - ";
-        print_address(block.end_address);
-        std::cout << '\n';
-
-        for (const auto& line : block.lines) {
-            std::cout << "  ";
-            print_address(line.address);
-
-            std::cout
-                << "  "
-                << std::setw(4)
-                << line.opcode
-                << "  "
-                << format_disassembly_text(line)
-                << '\n';
-        }
-
-        std::cout << "  Nachfolger: ";
-
-        if (
-            block.successors.empty() &&
-            !block.has_indirect_successor
-        ) {
-            std::cout << "keine";
-        } else {
-            bool first = true;
-
-            for (const auto successor : block.successors) {
-                if (!first) {
-                    std::cout << ", ";
-                }
-
-                print_address(successor);
-                first = false;
-            }
-
-            if (block.has_indirect_successor) {
-                if (!first) {
-                    std::cout << ", ";
-                }
-
-                std::cout << "indirekt";
-            }
-        }
-
-        std::cout << "\n\n";
-    }
-
-    return 0;
-}
-
 void print_usage() {
     std::cerr
         << "Verwendung:\n"
         << "  katana-recomp <Opcode>\n"
         << "  katana-recomp opcode <Opcode>\n"
-        << "  katana-recomp disasm <Datei> [Basisadresse]\n"
-        << "  katana-recomp blocks <Datei> [Basisadresse]\n\n"
+        << "  katana-recomp disasm <Datei> [Basisadresse]\n\n"
         << "Beispiele:\n"
         << "  katana-recomp E1FF\n"
-        << "  katana-recomp disasm programm.bin 8C010000\n"
-        << "  katana-recomp blocks programm.bin 8C010000\n";
+        << "  katana-recomp opcode A001\n"
+        << "  katana-recomp disasm programm.bin 8C010000\n";
 }
 
 }
@@ -311,25 +227,6 @@ int main(const int argc, char* argv[]) {
                     : 0u;
 
             return disassemble_file(
-                std::filesystem::path(argv[2]),
-                base_address
-            );
-        }
-
-        if (
-            (argc == 3 || argc == 4) &&
-            std::string(argv[1]) == "blocks"
-        ) {
-            const auto base_address =
-                argc == 4
-                    ? parse_hex_value(
-                        argv[3],
-                        std::numeric_limits<std::uint32_t>::max(),
-                        "Die Basisadresse"
-                    )
-                    : 0u;
-
-            return analyze_blocks(
                 std::filesystem::path(argv[2]),
                 base_address
             );

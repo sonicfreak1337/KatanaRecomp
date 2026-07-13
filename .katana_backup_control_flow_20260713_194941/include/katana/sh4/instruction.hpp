@@ -12,25 +12,7 @@ enum class InstructionKind {
     MovImmediate,
     AddImmediate,
     MovRegister,
-    AddRegister,
-    Bra,
-    Bsr,
-    Bt,
-    Bf,
-    BtS,
-    BfS,
-    Jmp,
-    Jsr
-};
-
-enum class ControlFlowKind {
-    None,
-    UnconditionalBranch,
-    ConditionalBranch,
-    Call,
-    Return,
-    IndirectBranch,
-    IndirectCall
+    AddRegister
 };
 
 struct DecodedInstruction {
@@ -39,22 +21,12 @@ struct DecodedInstruction {
 
     std::uint8_t destination_register = 0;
     std::uint8_t source_register = 0;
-    std::uint8_t branch_register = 0;
-
     std::int32_t immediate = 0;
-    std::int32_t displacement = 0;
-
-    ControlFlowKind control_flow = ControlFlowKind::None;
-    bool has_delay_slot = false;
 
     std::string text;
 
     [[nodiscard]] bool is_known() const noexcept {
         return kind != InstructionKind::Unknown;
-    }
-
-    [[nodiscard]] bool changes_control_flow() const noexcept {
-        return control_flow != ControlFlowKind::None;
     }
 };
 

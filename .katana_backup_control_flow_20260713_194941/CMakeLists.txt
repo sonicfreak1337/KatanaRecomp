@@ -1,8 +1,8 @@
-cmake_minimum_required(VERSION 3.25)
+﻿cmake_minimum_required(VERSION 3.25)
 
 project(
     KatanaRecomp
-    VERSION 0.4.0
+    VERSION 0.2.0
     DESCRIPTION "Dreamcast SH-4 static recompilation framework"
     LANGUAGES CXX
 )
@@ -19,7 +19,6 @@ function(katana_enable_warnings target)
                 /W4
                 /permissive-
                 /EHsc
-                /utf-8
         )
     else()
         target_compile_options(
@@ -36,7 +35,6 @@ add_library(katana_core STATIC
     src/decoder/decoder.cpp
     src/io/binary_reader.cpp
     src/analysis/disassembler.cpp
-    src/analysis/basic_blocks.cpp
 )
 
 target_include_directories(
@@ -93,38 +91,4 @@ katana_enable_warnings(katana-disassembler-tests)
 add_test(
     NAME katana-disassembler-tests
     COMMAND katana-disassembler-tests
-)
-
-add_executable(katana-control-flow-tests
-    tests/control_flow/control_flow_tests.cpp
-)
-
-target_link_libraries(
-    katana-control-flow-tests
-    PRIVATE
-        katana_core
-)
-
-katana_enable_warnings(katana-control-flow-tests)
-
-add_test(
-    NAME katana-control-flow-tests
-    COMMAND katana-control-flow-tests
-)
-
-add_executable(katana-basic-block-tests
-    tests/basic_blocks/basic_block_tests.cpp
-)
-
-target_link_libraries(
-    katana-basic-block-tests
-    PRIVATE
-        katana_core
-)
-
-katana_enable_warnings(katana-basic-block-tests)
-
-add_test(
-    NAME katana-basic-block-tests
-    COMMAND katana-basic-block-tests
 )

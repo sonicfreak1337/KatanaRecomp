@@ -3,7 +3,6 @@
 #include "katana/sh4/instruction.hpp"
 
 #include <cstdint>
-#include <optional>
 #include <span>
 #include <vector>
 
@@ -13,9 +12,6 @@ struct DisassemblyLine {
     std::uint32_t address = 0;
     std::uint16_t opcode = 0;
     DecodedInstruction instruction;
-
-    bool is_delay_slot = false;
-    std::optional<std::uint32_t> target_address;
 };
 
 [[nodiscard]] std::vector<DisassemblyLine> disassemble(
