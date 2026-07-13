@@ -261,6 +261,20 @@ Der Helfer 	ools\release-version.ps1 aktualisiert VERSION und CMake und kann ein
 9. FPU-Unterstuetzung
 10. Loader fuer eigenstaendig bereitgestellte Testprogramme
 
+
+## Roadmap und Arbeitsuebergabe
+
+- `ROADMAP.md`: langfristige technische Phasen und Release-Gates
+- `docs/TASKS.md`: issue-taugliche Task-IDs mit Abhaengigkeiten
+- `docs/CODEX_HANDOFF.md`: verbindliche Arbeitsregeln fuer Codex
+- `docs/TASK_TEMPLATE.md`: Vorlage fuer neue Arbeitspakete
+- `tools/next-roadmap-task.ps1`: zeigt den naechsten offenen Task
+
+Naechsten offenen Task anzeigen:
+
+```powershell
+.\tools\next-roadmap-task.ps1
+```
 ## Rechtlicher Rahmen
 
 KatanaRecomp wird unabhaengig entwickelt. Referenzprojekte duerfen zum Verstaendnis allgemeiner Arbeitsablaeufe untersucht werden, ihr Code wird jedoch nicht uebernommen.
