@@ -330,7 +330,7 @@ Akzeptanz:
 
 Abhaengigkeiten: KR-1408
 
-### [ ] KR-1502 - Decoder-Kollisionspruefung
+### [x] KR-1502 - Decoder-Kollisionspruefung
 
 Abhaengigkeiten: KR-1501
 
