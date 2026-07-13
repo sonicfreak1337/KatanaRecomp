@@ -128,7 +128,7 @@ Akzeptanz:
 - `DT` setzt T nur bei Ergebnis null
 - End-to-End-Schleife terminiert mit erwartetem Registerzustand
 
-### [ ] KR-1107 - v0.11 Release-Gate
+### [x] KR-1107 - v0.11 Release-Gate
 
 Abhaengigkeiten: KR-1101 bis KR-1106
 
