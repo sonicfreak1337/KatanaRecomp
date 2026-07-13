@@ -264,6 +264,16 @@ void print_ir_instruction(
                 << "]";
             break;
 
+        case katana::ir::Operation::LoadByteSignedGbrDisplacement:
+        case katana::ir::Operation::LoadWordSignedGbrDisplacement:
+        case katana::ir::Operation::LoadLongGbrDisplacement:
+            std::cout
+                << " r0, [gbr + "
+                << std::dec
+                << instruction.displacement
+                << "]";
+            break;
+
         case katana::ir::Operation::LoadByteSigned:
         case katana::ir::Operation::LoadWordSigned:
         case katana::ir::Operation::LoadLong:
@@ -325,6 +335,16 @@ void print_ir_instruction(
                 << static_cast<unsigned>(
                     instruction.source_register
                 );
+            break;
+
+        case katana::ir::Operation::StoreByteGbrDisplacement:
+        case katana::ir::Operation::StoreWordGbrDisplacement:
+        case katana::ir::Operation::StoreLongGbrDisplacement:
+            std::cout
+                << " [gbr + "
+                << std::dec
+                << instruction.displacement
+                << "], r0";
             break;
 
         case katana::ir::Operation::StoreByte:

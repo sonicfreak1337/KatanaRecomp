@@ -1521,6 +1521,60 @@ void emit_simple_instruction(
                 << "]);\n";
             return;
 
+        case Operation::StoreByteGbrDisplacement:
+            output
+                << "cpu.memory.write_u8(cpu.gbr + "
+                << static_cast<std::uint32_t>(
+                    instruction.displacement
+                )
+                << "u, static_cast<std::uint8_t>(cpu.r[0]));\n";
+            return;
+
+        case Operation::StoreWordGbrDisplacement:
+            output
+                << "cpu.memory.write_u16(cpu.gbr + "
+                << static_cast<std::uint32_t>(
+                    instruction.displacement
+                )
+                << "u, static_cast<std::uint16_t>(cpu.r[0]));\n";
+            return;
+
+        case Operation::StoreLongGbrDisplacement:
+            output
+                << "cpu.memory.write_u32(cpu.gbr + "
+                << static_cast<std::uint32_t>(
+                    instruction.displacement
+                )
+                << "u, cpu.r[0]);\n";
+            return;
+
+        case Operation::LoadByteSignedGbrDisplacement:
+            output
+                << "cpu.r[0] = cpu.memory.read_s8(cpu.gbr + "
+                << static_cast<std::uint32_t>(
+                    instruction.displacement
+                )
+                << "u);\n";
+            return;
+
+        case Operation::LoadWordSignedGbrDisplacement:
+            output
+                << "cpu.r[0] = cpu.memory.read_s16(cpu.gbr + "
+                << static_cast<std::uint32_t>(
+                    instruction.displacement
+                )
+                << "u);\n";
+            return;
+
+        case Operation::LoadLongGbrDisplacement:
+            output
+                << "cpu.r[0] = cpu.memory.read_u32(cpu.gbr + "
+                << static_cast<std::uint32_t>(
+                    instruction.displacement
+                )
+                << "u);\n";
+            return;
+
 
         case Operation::StoreBytePreDecrement:
             output
@@ -2046,6 +2100,12 @@ void emit_terminal(
         case Operation::LoadByteSignedR0Indexed:
         case Operation::LoadWordSignedR0Indexed:
         case Operation::LoadLongR0Indexed:
+        case Operation::StoreByteGbrDisplacement:
+        case Operation::StoreWordGbrDisplacement:
+        case Operation::StoreLongGbrDisplacement:
+        case Operation::LoadByteSignedGbrDisplacement:
+        case Operation::LoadWordSignedGbrDisplacement:
+        case Operation::LoadLongGbrDisplacement:
             break;
     }
 
@@ -2163,6 +2223,12 @@ bool is_control_flow(
         case Operation::LoadByteSignedR0Indexed:
         case Operation::LoadWordSignedR0Indexed:
         case Operation::LoadLongR0Indexed:
+        case Operation::StoreByteGbrDisplacement:
+        case Operation::StoreWordGbrDisplacement:
+        case Operation::StoreLongGbrDisplacement:
+        case Operation::LoadByteSignedGbrDisplacement:
+        case Operation::LoadWordSignedGbrDisplacement:
+        case Operation::LoadLongGbrDisplacement:
             return false;
     }
 
@@ -2359,6 +2425,7 @@ std::string emit_cpp_program(
         << "    std::array<std::uint32_t, 16> r{};\n"
         << "    std::uint32_t pc = 0;\n"
         << "    std::uint32_t pr = 0;\n"
+        << "    std::uint32_t gbr = 0;\n"
         << "    std::uint32_t mach = 0;\n"
         << "    std::uint32_t macl = 0;\n"
         << "    bool t = false;\n"

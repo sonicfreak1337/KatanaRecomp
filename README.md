@@ -28,7 +28,7 @@ SH-4-Binaerdaten
     -> semantischer Laufzeittest
 `
 
-Der aktuelle Teststand umfasst **44 automatische Tests**.
+Der aktuelle Teststand umfasst **46 automatische Tests**.
 
 ## Implementierte SH-4-Instruktionen
 
@@ -174,6 +174,17 @@ Das unsigned 4-Bit-Displacement wird fuer Byte, Word und Long mit 1, 2 beziehung
 
 Die effektive Adresse ist die modulo-2-hoch-32-Summe aus R0 und dem Basisregister. Alle Basis- und Quellregister bleiben unveraendert; auch Ueberlappungen mit R0 werden in definierter Reihenfolge ausgewertet.
 
+### GBR-relative Adressierung
+
+- MOV.B R0,@(disp,GBR)
+- MOV.W R0,@(disp,GBR)
+- MOV.L R0,@(disp,GBR)
+- MOV.B @(disp,GBR),R0
+- MOV.W @(disp,GBR),R0
+- MOV.L @(disp,GBR),R0
+
+Das unsigned 8-Bit-Displacement wird breitenabhaengig skaliert. Der generierte CPU-Zustand modelliert GBR explizit; GBR bleibt bei allen Zugriffen unveraendert.
+
 ## Analysefunktionen
 
 KatanaRecomp unterstuetzt aktuell:
@@ -196,7 +207,7 @@ Der C++-Emitter erzeugt aktuell:
 
 - einen einfachen SH-4-CPU-Zustand
 - 16 allgemeine Register
-- PC, PR, MACH, MACL sowie T-, S-, Q- und M-Bit
+- PC, PR, GBR, MACH, MACL sowie T-, S-, Q- und M-Bit
 - einen begrenzten Runtime-Speicher
 - Bounds-Checks
 - Register- und Immediate-Operationen

@@ -278,7 +278,7 @@ Abhaengigkeiten: KR-1401
 
 Abhaengigkeiten: KR-1402
 
-### [ ] KR-1404 - GBR-relative Adressierung
+### [x] KR-1404 - GBR-relative Adressierung
 
 Abhaengigkeiten: KR-1402
 

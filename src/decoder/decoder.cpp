@@ -1205,6 +1205,84 @@ DecodedInstruction decode(const std::uint16_t opcode) {
         return instruction;
     }
 
+    if ((opcode & 0xFF00u) == 0xC000u) {
+        instruction.kind =
+            InstructionKind::MovByteStoreGbrDisplacement;
+        instruction.source_register = 0u;
+        instruction.displacement =
+            static_cast<std::int32_t>(opcode & 0x00FFu);
+        instruction.text =
+            "mov.b r0, @(" +
+            std::to_string(instruction.displacement) +
+            ", gbr)";
+        return instruction;
+    }
+
+    if ((opcode & 0xFF00u) == 0xC100u) {
+        instruction.kind =
+            InstructionKind::MovWordStoreGbrDisplacement;
+        instruction.source_register = 0u;
+        instruction.displacement =
+            static_cast<std::int32_t>((opcode & 0x00FFu) * 2u);
+        instruction.text =
+            "mov.w r0, @(" +
+            std::to_string(instruction.displacement) +
+            ", gbr)";
+        return instruction;
+    }
+
+    if ((opcode & 0xFF00u) == 0xC200u) {
+        instruction.kind =
+            InstructionKind::MovLongStoreGbrDisplacement;
+        instruction.source_register = 0u;
+        instruction.displacement =
+            static_cast<std::int32_t>((opcode & 0x00FFu) * 4u);
+        instruction.text =
+            "mov.l r0, @(" +
+            std::to_string(instruction.displacement) +
+            ", gbr)";
+        return instruction;
+    }
+
+    if ((opcode & 0xFF00u) == 0xC400u) {
+        instruction.kind =
+            InstructionKind::MovByteLoadGbrDisplacement;
+        instruction.destination_register = 0u;
+        instruction.displacement =
+            static_cast<std::int32_t>(opcode & 0x00FFu);
+        instruction.text =
+            "mov.b @(" +
+            std::to_string(instruction.displacement) +
+            ", gbr), r0";
+        return instruction;
+    }
+
+    if ((opcode & 0xFF00u) == 0xC500u) {
+        instruction.kind =
+            InstructionKind::MovWordLoadGbrDisplacement;
+        instruction.destination_register = 0u;
+        instruction.displacement =
+            static_cast<std::int32_t>((opcode & 0x00FFu) * 2u);
+        instruction.text =
+            "mov.w @(" +
+            std::to_string(instruction.displacement) +
+            ", gbr), r0";
+        return instruction;
+    }
+
+    if ((opcode & 0xFF00u) == 0xC600u) {
+        instruction.kind =
+            InstructionKind::MovLongLoadGbrDisplacement;
+        instruction.destination_register = 0u;
+        instruction.displacement =
+            static_cast<std::int32_t>((opcode & 0x00FFu) * 4u);
+        instruction.text =
+            "mov.l @(" +
+            std::to_string(instruction.displacement) +
+            ", gbr), r0";
+        return instruction;
+    }
+
     if ((opcode & 0xF00Fu) == 0x2000u) {
         instruction.kind = InstructionKind::MovByteStore;
         decode_memory_registers(instruction, opcode);

@@ -283,6 +283,24 @@ Operation lower_operation(
         case Source::MovLongLoadR0Indexed:
             return Operation::LoadLongR0Indexed;
 
+        case Source::MovByteStoreGbrDisplacement:
+            return Operation::StoreByteGbrDisplacement;
+
+        case Source::MovWordStoreGbrDisplacement:
+            return Operation::StoreWordGbrDisplacement;
+
+        case Source::MovLongStoreGbrDisplacement:
+            return Operation::StoreLongGbrDisplacement;
+
+        case Source::MovByteLoadGbrDisplacement:
+            return Operation::LoadByteSignedGbrDisplacement;
+
+        case Source::MovWordLoadGbrDisplacement:
+            return Operation::LoadWordSignedGbrDisplacement;
+
+        case Source::MovLongLoadGbrDisplacement:
+            return Operation::LoadLongGbrDisplacement;
+
         case Source::Bra:
             return Operation::Branch;
 
@@ -612,6 +630,24 @@ std::string_view operation_name(
 
         case Operation::LoadLongR0Indexed:
             return "load_u32_r0_indexed";
+
+        case Operation::StoreByteGbrDisplacement:
+            return "store_u8_gbr_displacement";
+
+        case Operation::StoreWordGbrDisplacement:
+            return "store_u16_gbr_displacement";
+
+        case Operation::StoreLongGbrDisplacement:
+            return "store_u32_gbr_displacement";
+
+        case Operation::LoadByteSignedGbrDisplacement:
+            return "load_s8_gbr_displacement";
+
+        case Operation::LoadWordSignedGbrDisplacement:
+            return "load_s16_gbr_displacement";
+
+        case Operation::LoadLongGbrDisplacement:
+            return "load_u32_gbr_displacement";
 
         case Operation::Branch:
             return "branch";

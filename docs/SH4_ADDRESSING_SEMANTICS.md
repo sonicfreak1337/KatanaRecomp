@@ -146,6 +146,37 @@ R0 kann zugleich Index und Datenregister eines Stores oder Index und Zielregiste
 
 Ungueltige effektive Adressen schlagen sichtbar fehl, ohne die beteiligten Register vorzeitig zu veraendern.
 
+## GBR-relative Adressierung
+
+KR-1404 unterstuetzt die sechs GBR-relativen Formen:
+
+```text
+MOV.B R0,@(disp,GBR)
+MOV.W R0,@(disp,GBR)
+MOV.L R0,@(disp,GBR)
+MOV.B @(disp,GBR),R0
+MOV.W @(disp,GBR),R0
+MOV.L @(disp,GBR),R0
+```
+
+Das Opcodefeld enthaelt ein unsigned 8-Bit-Displacement. Die Skalierung erfolgt bereits im Decoder:
+
+| Breite | Skalierung | Byte-Bereich |
+|---|---:|---:|
+| Byte | 1 | 0 bis 255 |
+| Word | 2 | 0 bis 510 |
+| Long | 4 | 0 bis 1020 |
+
+Die effektive Adresse lautet:
+
+```text
+address = GBR + scaled_displacement
+```
+
+GBR ist ein explizites `std::uint32_t`-Feld des generierten CPU-Zustands und bleibt bei allen Zugriffen unveraendert. Die Adressaddition besitzt definiertes Modulo-2-hoch-32-Verhalten. Stores lesen immer R0; Loads schreiben immer R0. Byte- und Word-Loads werden vorzeichenerweitert.
+
+Ungueltige Runtime-Adressen schlagen vor einer Registeraenderung fehl.
+
 ## Speicherreihenfolge
 
 KatanaRecomp modelliert die sichtbare Reihenfolge explizit:
@@ -190,6 +221,12 @@ Dadurch bleiben auch identische Registerpaare deterministisch.
 - R0 zugleich als Index und Load-Ziel
 - 32-Bit-Wraparound der R0-indexierten Adresse
 - ungueltige R0-indexierte Adresse ohne Registeraenderung
+- alle sechs GBR-relativen Byte-, Word- und Long-Formen
+- unsigned 8-Bit-Displacements null und maximal
+- GBR-Skalierung mit 1, 2 und 4
+- unveraendertes GBR
+- 32-Bit-Wraparound der GBR-relativen Adresse
+- ungueltige GBR-Adresse ohne Registeraenderung
 - unveraenderte Status- und MAC-Register
 - direkte generierte Funktionsaufrufe
 - kompletter BSR-Aufrufspfad
