@@ -1580,3 +1580,81 @@ add_test(
     NAME katana-generated-predec-postinc-tests
     COMMAND katana-generated-predec-postinc-tests
 )
+
+add_executable(katana-register-displacement-tests
+    tests/memory/register_displacement_tests.cpp
+)
+
+target_link_libraries(
+    katana-register-displacement-tests
+    PRIVATE
+        katana_core
+)
+
+katana_enable_warnings(katana-register-displacement-tests)
+
+add_test(
+    NAME katana-register-displacement-tests
+    COMMAND katana-register-displacement-tests
+)
+
+set(
+    KATANA_GENERATED_REGISTER_DISPLACEMENT_CPP
+    ${KATANA_GENERATED_TEST_DIR}/generated_register_displacement_program.cpp
+)
+
+add_custom_command(
+    OUTPUT
+        ${KATANA_GENERATED_REGISTER_DISPLACEMENT_CPP}
+    COMMAND
+        ${CMAKE_COMMAND}
+        -E
+        make_directory
+        ${KATANA_GENERATED_TEST_DIR}
+    COMMAND
+        $<TARGET_FILE:katana-register-displacement-tests>
+        --emit-cpp
+        ${KATANA_GENERATED_REGISTER_DISPLACEMENT_CPP}
+    DEPENDS
+        katana-register-displacement-tests
+        tests/memory/register_displacement_tests.cpp
+    COMMENT
+        "Generiere C++-Programm fuer KR-1402 End-to-End-Test"
+    VERBATIM
+)
+
+set_source_files_properties(
+    ${KATANA_GENERATED_REGISTER_DISPLACEMENT_CPP}
+    PROPERTIES
+        GENERATED TRUE
+        HEADER_FILE_ONLY TRUE
+)
+
+set_source_files_properties(
+    tests/memory/generated_register_displacement_tests.cpp
+    PROPERTIES
+        OBJECT_DEPENDS ${KATANA_GENERATED_REGISTER_DISPLACEMENT_CPP}
+)
+
+add_executable(katana-generated-register-displacement-tests
+    tests/memory/generated_register_displacement_tests.cpp
+    ${KATANA_GENERATED_REGISTER_DISPLACEMENT_CPP}
+)
+
+target_include_directories(
+    katana-generated-register-displacement-tests
+    PRIVATE
+        ${KATANA_GENERATED_TEST_DIR}
+)
+
+katana_enable_warnings(katana-generated-register-displacement-tests)
+
+add_dependencies(
+    katana-generated-register-displacement-tests
+    katana-register-displacement-tests
+)
+
+add_test(
+    NAME katana-generated-register-displacement-tests
+    COMMAND katana-generated-register-displacement-tests
+)

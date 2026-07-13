@@ -246,6 +246,25 @@ Operation lower_operation(
 
         case Source::MovLongLoadPostIncrement:
             return Operation::LoadLongPostIncrement;
+
+        case Source::MovByteStoreDisplacement:
+            return Operation::StoreByteDisplacement;
+
+        case Source::MovWordStoreDisplacement:
+            return Operation::StoreWordDisplacement;
+
+        case Source::MovLongStoreDisplacement:
+            return Operation::StoreLongDisplacement;
+
+        case Source::MovByteLoadDisplacement:
+            return Operation::LoadByteSignedDisplacement;
+
+        case Source::MovWordLoadDisplacement:
+            return Operation::LoadWordSignedDisplacement;
+
+        case Source::MovLongLoadDisplacement:
+            return Operation::LoadLongDisplacement;
+
         case Source::Bra:
             return Operation::Branch;
 
@@ -293,6 +312,7 @@ Instruction lower_instruction(
         source.instruction.branch_register;
 
     result.immediate = source.instruction.immediate;
+    result.displacement = source.instruction.displacement;
     result.target_address = source.target_address;
 
     result.has_delay_slot =
@@ -538,6 +558,25 @@ std::string_view operation_name(
 
         case Operation::LoadLongPostIncrement:
             return "load_u32_postincrement";
+
+        case Operation::StoreByteDisplacement:
+            return "store_u8_displacement";
+
+        case Operation::StoreWordDisplacement:
+            return "store_u16_displacement";
+
+        case Operation::StoreLongDisplacement:
+            return "store_u32_displacement";
+
+        case Operation::LoadByteSignedDisplacement:
+            return "load_s8_displacement";
+
+        case Operation::LoadWordSignedDisplacement:
+            return "load_s16_displacement";
+
+        case Operation::LoadLongDisplacement:
+            return "load_u32_displacement";
+
         case Operation::Branch:
             return "branch";
 

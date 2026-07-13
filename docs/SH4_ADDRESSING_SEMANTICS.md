@@ -86,6 +86,41 @@ R14 enthaelt danach ausschliesslich den geladenen und vorzeichenerweiterten Wert
 
 Diese Regel ist fuer alle drei Breiten identisch.
 
+## Register-Displacements
+
+KR-1402 unterstuetzt die sechs registerrelativen Displacement-Formen:
+
+```text
+MOV.B R0,@(disp,Rn)
+MOV.W R0,@(disp,Rn)
+MOV.L Rm,@(disp,Rn)
+MOV.B @(disp,Rm),R0
+MOV.W @(disp,Rm),R0
+MOV.L @(disp,Rm),Rn
+```
+
+Das Opcodefeld enthaelt ein unsigned 4-Bit-Displacement. KatanaRecomp skaliert es bereits im Decoder auf ein Byte-Displacement:
+
+| Breite | Skalierung | Byte-Bereich |
+|---|---:|---:|
+| Byte | 1 | 0 bis 15 |
+| Word | 2 | 0 bis 30 |
+| Long | 4 | 0 bis 60 |
+
+Die effektive Adresse wird danach ohne weitere Opcodekenntnis gebildet:
+
+```text
+address = base_register + scaled_displacement
+```
+
+Die Addition verwendet `std::uint32_t` und besitzt definiertes Modulo-2-hoch-32-Verhalten. Die Basisregister bleiben unveraendert. Byte- und Word-Loads werden auf 32 Bit vorzeichenerweitert; Long-Loads uebernehmen alle Bits unveraendert.
+
+Bei Byte- und Word-Stores ist R0 fest als Quellregister kodiert. Bei Byte- und Word-Loads ist R0 fest als Zielregister kodiert. Die Long-Formen erlauben unabhaengige allgemeine Quell-, Basis- und Zielregister.
+
+Wenn die berechnete Adresse ausserhalb des begrenzten Runtime-Speichers liegt, schlaegt der Zugriff sichtbar fehl. Ein fehlgeschlagener Load veraendert das Zielregister nicht.
+
+Referenzgrundlage ist das [Renesas SH-4A Software Manual](https://www.renesas.com/en/document/mas/sh-4a-software-manual), insbesondere die MOV-Strukturdatenformen und ihre Displacement-Skalierung.
+
 ## Speicherreihenfolge
 
 KatanaRecomp modelliert die sichtbare Reihenfolge explizit:
@@ -119,6 +154,12 @@ Dadurch bleiben auch identische Registerpaare deterministisch.
 - Pre-Decrement-Wraparound auf eine ungueltige Runtime-Adresse
 - ungueltige Post-Increment-Leseadresse
 - keine vorzeitigen Registeraenderungen bei fehlgeschlagenen Zugriffen
+- alle sechs Register-Displacement-Formen
+- Displacements null und maximal
+- Skalierung mit 1, 2 und 4
+- unveraenderte Basisregister
+- 32-Bit-Wraparound der effektiven Displacement-Adresse
+- ungueltige Displacement-Adresse ohne vorzeitige Registeraenderung
 - unveraenderte Status- und MAC-Register
 - direkte generierte Funktionsaufrufe
 - kompletter BSR-Aufrufspfad

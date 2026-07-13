@@ -1341,6 +1341,108 @@ void emit_simple_instruction(
                 << "]);\n";
             return;
 
+        case Operation::StoreByteDisplacement:
+            output
+                << "cpu.memory.write_u8(cpu.r["
+                << static_cast<unsigned>(
+                    instruction.destination_register
+                )
+                << "] + "
+                << static_cast<std::uint32_t>(
+                    instruction.displacement
+                )
+                << "u, static_cast<std::uint8_t>(cpu.r["
+                << static_cast<unsigned>(
+                    instruction.source_register
+                )
+                << "]));\n";
+            return;
+
+        case Operation::StoreWordDisplacement:
+            output
+                << "cpu.memory.write_u16(cpu.r["
+                << static_cast<unsigned>(
+                    instruction.destination_register
+                )
+                << "] + "
+                << static_cast<std::uint32_t>(
+                    instruction.displacement
+                )
+                << "u, static_cast<std::uint16_t>(cpu.r["
+                << static_cast<unsigned>(
+                    instruction.source_register
+                )
+                << "]));\n";
+            return;
+
+        case Operation::StoreLongDisplacement:
+            output
+                << "cpu.memory.write_u32(cpu.r["
+                << static_cast<unsigned>(
+                    instruction.destination_register
+                )
+                << "] + "
+                << static_cast<std::uint32_t>(
+                    instruction.displacement
+                )
+                << "u, cpu.r["
+                << static_cast<unsigned>(
+                    instruction.source_register
+                )
+                << "]);\n";
+            return;
+
+        case Operation::LoadByteSignedDisplacement:
+            output
+                << "cpu.r["
+                << static_cast<unsigned>(
+                    instruction.destination_register
+                )
+                << "] = cpu.memory.read_s8(cpu.r["
+                << static_cast<unsigned>(
+                    instruction.source_register
+                )
+                << "] + "
+                << static_cast<std::uint32_t>(
+                    instruction.displacement
+                )
+                << "u);\n";
+            return;
+
+        case Operation::LoadWordSignedDisplacement:
+            output
+                << "cpu.r["
+                << static_cast<unsigned>(
+                    instruction.destination_register
+                )
+                << "] = cpu.memory.read_s16(cpu.r["
+                << static_cast<unsigned>(
+                    instruction.source_register
+                )
+                << "] + "
+                << static_cast<std::uint32_t>(
+                    instruction.displacement
+                )
+                << "u);\n";
+            return;
+
+        case Operation::LoadLongDisplacement:
+            output
+                << "cpu.r["
+                << static_cast<unsigned>(
+                    instruction.destination_register
+                )
+                << "] = cpu.memory.read_u32(cpu.r["
+                << static_cast<unsigned>(
+                    instruction.source_register
+                )
+                << "] + "
+                << static_cast<std::uint32_t>(
+                    instruction.displacement
+                )
+                << "u);\n";
+            return;
+
 
         case Operation::StoreBytePreDecrement:
             output
@@ -1854,6 +1956,12 @@ void emit_terminal(
         case Operation::LoadByteSignedPostIncrement:
         case Operation::LoadWordSignedPostIncrement:
         case Operation::LoadLongPostIncrement:
+        case Operation::StoreByteDisplacement:
+        case Operation::StoreWordDisplacement:
+        case Operation::StoreLongDisplacement:
+        case Operation::LoadByteSignedDisplacement:
+        case Operation::LoadWordSignedDisplacement:
+        case Operation::LoadLongDisplacement:
             break;
     }
 
@@ -1959,6 +2067,12 @@ bool is_control_flow(
         case Operation::LoadByteSignedPostIncrement:
         case Operation::LoadWordSignedPostIncrement:
         case Operation::LoadLongPostIncrement:
+        case Operation::StoreByteDisplacement:
+        case Operation::StoreWordDisplacement:
+        case Operation::StoreLongDisplacement:
+        case Operation::LoadByteSignedDisplacement:
+        case Operation::LoadWordSignedDisplacement:
+        case Operation::LoadLongDisplacement:
             return false;
     }
 

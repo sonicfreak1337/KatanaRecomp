@@ -28,7 +28,7 @@ SH-4-Binaerdaten
     -> semantischer Laufzeittest
 `
 
-Der aktuelle Teststand umfasst **40 automatische Tests**.
+Der aktuelle Teststand umfasst **42 automatische Tests**.
 
 ## Implementierte SH-4-Instruktionen
 
@@ -151,6 +151,17 @@ Der generierte CPU-Zustand modelliert Q, M und T explizit. DIV0U und DIV0S initi
 - MOV.L @Rm+,Rn
 
 Pre-Decrement sichert den alten Quellwert und verringert das Adressregister vor dem Store. Post-Increment liest zuerst und erhoeht das Adressregister nur dann, wenn Quell- und Zielregister verschieden sind. Die vollstaendige Semantik steht in `docs/SH4_ADDRESSING_SEMANTICS.md`.
+
+### Register-Displacements
+
+- MOV.B R0,@(disp,Rn)
+- MOV.W R0,@(disp,Rn)
+- MOV.L Rm,@(disp,Rn)
+- MOV.B @(disp,Rm),R0
+- MOV.W @(disp,Rm),R0
+- MOV.L @(disp,Rm),Rn
+
+Das unsigned 4-Bit-Displacement wird fuer Byte, Word und Long mit 1, 2 beziehungsweise 4 skaliert. Die effektive Adresse verwendet definiertes 32-Bit-Wraparound; Byte- und Word-Loads werden vorzeichenerweitert. Details und Grenzfaelle stehen in `docs/SH4_ADDRESSING_SEMANTICS.md`.
 
 ## Analysefunktionen
 

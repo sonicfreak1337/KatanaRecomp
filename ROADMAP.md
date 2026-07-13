@@ -141,7 +141,7 @@ Release-Gate:
 Fortschritt:
 
 - [x] KR-1401 - Pre-Decrement und Post-Increment
-- [ ] KR-1402 - Register-Displacements
+- [x] KR-1402 - Register-Displacements
 - [ ] KR-1403 - R0-indexierte Adressierung
 - [ ] KR-1404 - GBR-relative Adressierung
 - [ ] KR-1405 - PC-relative Loads und MOVA

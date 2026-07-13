@@ -270,7 +270,7 @@ Umfang:
 - Byte-, Word- und Long-Formen
 - Sonderfall identisches Quell- und Zielregister
 
-### [ ] KR-1402 - Register-Displacements
+### [x] KR-1402 - Register-Displacements
 
 Abhaengigkeiten: KR-1401
 

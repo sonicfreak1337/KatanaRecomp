@@ -90,6 +90,12 @@ enum class Operation {
     LoadByteSignedPostIncrement,
     LoadWordSignedPostIncrement,
     LoadLongPostIncrement,
+    StoreByteDisplacement,
+    StoreWordDisplacement,
+    StoreLongDisplacement,
+    LoadByteSignedDisplacement,
+    LoadWordSignedDisplacement,
+    LoadLongDisplacement,
     Branch,
     Call,
     BranchIfTrue,
@@ -110,6 +116,7 @@ struct Instruction {
     std::uint8_t branch_register = 0;
 
     std::int32_t immediate = 0;
+    std::int32_t displacement = 0;
     std::optional<std::uint32_t> target_address;
 
     bool has_delay_slot = false;

@@ -11,7 +11,7 @@ KatanaRecomp besitzt einen durchgaengigen Prototyp-Pfad von SH-4-Binaerdaten bis
 ## Teststatus
 
 ```text
-100% tests passed out of 40
+100% tests passed out of 42
 ```
 
 ## Fertiggestellte Roadmap-Tasks
@@ -34,10 +34,11 @@ KatanaRecomp besitzt einen durchgaengigen Prototyp-Pfad von SH-4-Binaerdaten bis
 - [x] KR-1304 - Division
 - [x] KR-1305 - v0.13.0 Release-Gate
 - [x] KR-1401 - Pre-Decrement und Post-Increment
+- [x] KR-1402 - Register-Displacements
 
 ## Naechster Roadmap-Task
 
-- [ ] KR-1402 - Register-Displacements
+- [ ] KR-1403 - R0-indexierte Adressierung
 
 ## Aktuelle Einschraenkungen
 
