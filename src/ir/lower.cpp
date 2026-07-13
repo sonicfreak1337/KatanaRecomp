@@ -126,6 +126,14 @@ Operation lower_operation(
 
         case Source::ShiftLogicalDynamic:
             return Operation::ShiftLogicalDynamic;
+        case Source::MultiplyLong:
+            return Operation::MultiplyLong;
+
+        case Source::MultiplySignedWord:
+            return Operation::MultiplySignedWord;
+
+        case Source::MultiplyUnsignedWord:
+            return Operation::MultiplyUnsignedWord;
         case Source::AndRegister:
             return Operation::AndRegister;
 
@@ -370,6 +378,14 @@ std::string_view operation_name(
 
         case Operation::ShiftLogicalDynamic:
             return "shift_logical_dynamic";
+        case Operation::MultiplyLong:
+            return "multiply_long";
+
+        case Operation::MultiplySignedWord:
+            return "multiply_signed_word";
+
+        case Operation::MultiplyUnsignedWord:
+            return "multiply_unsigned_word";
         case Operation::AndRegister:
             return "and_reg";
 

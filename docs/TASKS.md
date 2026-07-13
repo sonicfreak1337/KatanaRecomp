@@ -212,7 +212,7 @@ Abhaengigkeiten: KR-1201 bis KR-1204
 
 ## v0.13.0 - Multiplikation, Division und MAC
 
-### [ ] KR-1301 - Einfache Multiplikation
+### [x] KR-1301 - Einfache Multiplikation
 
 Abhaengigkeiten: KR-1205
 

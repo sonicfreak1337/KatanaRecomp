@@ -557,6 +557,44 @@ DecodedInstruction decode(const std::uint16_t opcode) {
 
         return instruction;
     }
+    if ((opcode & 0xF00Fu) == 0x0007u) {
+        instruction.kind = InstructionKind::MultiplyLong;
+        decode_memory_registers(instruction, opcode);
+
+        instruction.text =
+            "mul.l " +
+            register_name(instruction.source_register) +
+            ", " +
+            register_name(instruction.destination_register);
+
+        return instruction;
+    }
+
+    if ((opcode & 0xF00Fu) == 0x200Fu) {
+        instruction.kind = InstructionKind::MultiplySignedWord;
+        decode_memory_registers(instruction, opcode);
+
+        instruction.text =
+            "muls.w " +
+            register_name(instruction.source_register) +
+            ", " +
+            register_name(instruction.destination_register);
+
+        return instruction;
+    }
+
+    if ((opcode & 0xF00Fu) == 0x200Eu) {
+        instruction.kind = InstructionKind::MultiplyUnsignedWord;
+        decode_memory_registers(instruction, opcode);
+
+        instruction.text =
+            "mulu.w " +
+            register_name(instruction.source_register) +
+            ", " +
+            register_name(instruction.destination_register);
+
+        return instruction;
+    }
     if ((opcode & 0xF00Fu) == 0x2009u) {
         instruction.kind = InstructionKind::AndRegister;
         decode_memory_registers(instruction, opcode);

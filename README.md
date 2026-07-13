@@ -28,7 +28,7 @@ SH-4-Binaerdaten
     -> semantischer Laufzeittest
 `
 
-Der aktuelle Teststand umfasst **30 automatische Tests**.
+Der aktuelle Teststand umfasst **32 automatische Tests**.
 
 ## Implementierte SH-4-Instruktionen
 
@@ -112,6 +112,13 @@ ROTL und ROTR rotieren innerhalb des Registers. ROTCL und ROTCR verwenden T als 
 - SHLD Rm,Rn
 
 Positive Zaehler verschieben nach links, negative Zaehler nach rechts. Nur die relevanten unteren Zaehlerbits werden verwendet. Negative Vielfache von 32 besitzen definierte Sonderfaelle. Die vollstaendige Semantik steht in `docs/SH4_SHIFT_SEMANTICS.md`.
+### Einfache Multiplikation
+
+- MUL.L Rm,Rn
+- MULS.W Rm,Rn
+- MULU.W Rm,Rn
+
+Die Ergebnisse werden nach MACL geschrieben. MUL.L behaelt die unteren 32 Produktbits. MULS.W und MULU.W verwenden nur die unteren 16 Bit der beiden Quellregister. Die vollstaendige Semantik steht in `docs/SH4_MULTIPLICATION_SEMANTICS.md`.
 ## Analysefunktionen
 
 KatanaRecomp unterstuetzt aktuell:
@@ -155,7 +162,7 @@ Die Carry-, Borrow- und signed-Overflow-Regeln sind in `docs/SH4_STATUS_SEMANTIC
 KatanaRecomp ist noch kein vollstaendiger Dreamcast-Recompiler. Unter anderem fehlen:
 
 - grosse Teile des SH-4-Befehlssatzes
-- Multiplikation, Division, weitere Shifts und erweiterte Integer-Flags
+- doppelte Multiplikation, Division, MAC und erweiterte Integer-Flags
 - FPU- und Vektoroperationen
 - vollstaendiges Statusregister
 - Dreamcast-Speicherabbild

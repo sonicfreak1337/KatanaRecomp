@@ -1179,3 +1179,83 @@ add_test(
     NAME katana-generated-dynamic-shift-tests
     COMMAND katana-generated-dynamic-shift-tests
 )
+add_executable(katana-simple-multiplication-tests
+    tests/alu/simple_multiplication_tests.cpp
+)
+
+target_link_libraries(
+    katana-simple-multiplication-tests
+    PRIVATE
+        katana_core
+)
+
+katana_enable_warnings(katana-simple-multiplication-tests)
+
+add_test(
+    NAME katana-simple-multiplication-tests
+    COMMAND katana-simple-multiplication-tests
+)
+
+set(
+    KATANA_GENERATED_SIMPLE_MULTIPLICATION_CPP
+    ${KATANA_GENERATED_TEST_DIR}/generated_simple_multiplication_program.cpp
+)
+
+add_custom_command(
+    OUTPUT
+        ${KATANA_GENERATED_SIMPLE_MULTIPLICATION_CPP}
+    COMMAND
+        ${CMAKE_COMMAND}
+        -E
+        make_directory
+        ${KATANA_GENERATED_TEST_DIR}
+    COMMAND
+        $<TARGET_FILE:katana-recomp>
+        emit-cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/simple_multiplication_execution.bin
+        8C010000
+        ${KATANA_GENERATED_SIMPLE_MULTIPLICATION_CPP}
+        8C010000
+    DEPENDS
+        katana-recomp
+        ${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/simple_multiplication_execution.bin
+    COMMENT
+        "Generiere C++-Programm fuer KR-1301 End-to-End-Test"
+    VERBATIM
+)
+
+set_source_files_properties(
+    ${KATANA_GENERATED_SIMPLE_MULTIPLICATION_CPP}
+    PROPERTIES
+        GENERATED TRUE
+        HEADER_FILE_ONLY TRUE
+)
+
+set_source_files_properties(
+    tests/alu/generated_simple_multiplication_tests.cpp
+    PROPERTIES
+        OBJECT_DEPENDS ${KATANA_GENERATED_SIMPLE_MULTIPLICATION_CPP}
+)
+
+add_executable(katana-generated-simple-multiplication-tests
+    tests/alu/generated_simple_multiplication_tests.cpp
+    ${KATANA_GENERATED_SIMPLE_MULTIPLICATION_CPP}
+)
+
+target_include_directories(
+    katana-generated-simple-multiplication-tests
+    PRIVATE
+        ${KATANA_GENERATED_TEST_DIR}
+)
+
+katana_enable_warnings(katana-generated-simple-multiplication-tests)
+
+add_dependencies(
+    katana-generated-simple-multiplication-tests
+    katana-recomp
+)
+
+add_test(
+    NAME katana-generated-simple-multiplication-tests
+    COMMAND katana-generated-simple-multiplication-tests
+)
