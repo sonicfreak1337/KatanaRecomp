@@ -1,10 +1,10 @@
 # KatanaRecomp
 
-Aktuelle Pre-Alpha-Version: `0.13.0`
+Aktuelle Pre-Alpha-Version: `0.14.0`
 
 KatanaRecomp ist ein unabhaengiges, in C++20 entwickeltes Framework fuer die statische Rekompilierung von Sega-Dreamcast-SH-4-Code.
 
-Das Projekt befindet sich in einer fruehen Pre-Alpha-Phase. Der aktuelle Stand ist **Version 0.13.0**.
+Das Projekt befindet sich in einer fruehen Pre-Alpha-Phase. Der aktuelle Stand ist **Version 0.14.0**.
 
 KatanaRecomp ist kein Emulator, kein ISO-Loader und kein Paket fuer kommerzielle Spieldaten. BIOS-Dateien, Disc-Images, urheberrechtlich geschuetzte Assets und automatisch erzeugter Code aus kommerziellen Spielen gehoeren nicht in dieses Repository.
 
@@ -28,7 +28,7 @@ SH-4-Binaerdaten
     -> semantischer Laufzeittest
 `
 
-Der aktuelle Teststand umfasst **52 automatische Tests**.
+Der aktuelle Teststand umfasst **53 automatische Tests**.
 
 ## Implementierte SH-4-Instruktionen
 

@@ -311,9 +311,16 @@ Umfang:
 - `SLEEP`
 - vorerst klarer Runtime-Vertrag, auch wenn Plattformlogik spaeter folgt
 
-### [ ] KR-1408 - v0.14 Release-Gate
+### [x] KR-1408 - v0.14 Release-Gate
 
 Abhaengigkeiten: KR-1401 bis KR-1407
+
+Akzeptanz:
+
+- Debug- und Release-Build sind sauber
+- vollstaendige Regression besteht
+- KR-1402 bis KR-1405 laufen aus committed Binaer-Fixtures ueber Binary Reader und CLI
+- Version, Changelog, Status und Release Notes stimmen ueberein
 
 ---
 

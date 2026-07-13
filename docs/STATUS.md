@@ -1,8 +1,8 @@
 # Projektstatus
 
-Version: 0.13.0
+Version: 0.14.0
 Phase: Pre-Alpha
-Aktiver Meilenstein: v0.14.0 - Adressierung und Systemregister
+Aktiver Meilenstein: v0.15.0 - Decoder-Haertung
 
 ## Zusammenfassung
 
@@ -11,7 +11,7 @@ KatanaRecomp besitzt einen durchgaengigen Prototyp-Pfad von SH-4-Binaerdaten bis
 ## Teststatus
 
 ```text
-100% tests passed out of 52
+100% tests passed out of 53
 ```
 
 ## Fertiggestellte Roadmap-Tasks
@@ -40,10 +40,11 @@ KatanaRecomp besitzt einen durchgaengigen Prototyp-Pfad von SH-4-Binaerdaten bis
 - [x] KR-1405 - PC-relative Loads und MOVA
 - [x] KR-1406 - Systemregistertransfers
 - [x] KR-1407 - Privilegierte Kontrollinstruktionen
+- [x] KR-1408 - v0.14.0 Release-Gate
 
 ## Naechster Roadmap-Task
 
-- [ ] KR-1408 - v0.14 Release-Gate
+- [ ] KR-1501 - Zentrale Instruktionsmetadaten
 
 ## Aktuelle Einschraenkungen
 

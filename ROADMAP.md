@@ -1,7 +1,7 @@
 # KatanaRecomp Roadmap
 
 Status: Pre-Alpha
-Aktuelle Basis: v0.13.0
+Aktuelle Basis: v0.14.0
 Planungsmodell: Semantic Versioning, kleine ueberpruefbare Meilensteine
 
 Diese Roadmap beschreibt die technische Entwicklung von KatanaRecomp vom aktuellen Architektur-Prototyp bis zu einem belastbaren Dreamcast-Recompiler-Framework.
@@ -147,7 +147,7 @@ Fortschritt:
 - [x] KR-1405 - PC-relative Loads und MOVA
 - [x] KR-1406 - Systemregistertransfers
 - [x] KR-1407 - Privilegierte Kontrollinstruktionen
-- [ ] KR-1408 - v0.14 Release-Gate
+- [x] KR-1408 - v0.14 Release-Gate
 
 Enthalten:
 
@@ -166,6 +166,7 @@ Release-Gate:
 - Adressberechnung ist aus der Instruktionssemantik herausgeloest
 - Ausrichtungs- und Wraparound-Faelle sind getestet
 - privilegierte Instruktionen sind markiert
+- KR-1402 bis KR-1405 besitzen Binaer-Fixtures und durchlaufen den normalen CLI-Codegen-Pfad
 
 ### v0.15.0 - Decoder-Haertung und ISA-Abdeckung
 

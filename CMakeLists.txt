@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.25)
 
 project(
     KatanaRecomp
-    VERSION 0.13.0
+    VERSION 0.14.0
     DESCRIPTION "Dreamcast SH-4 static recompilation framework"
     LANGUAGES CXX
 )
@@ -1612,14 +1612,17 @@ add_custom_command(
         make_directory
         ${KATANA_GENERATED_TEST_DIR}
     COMMAND
-        $<TARGET_FILE:katana-register-displacement-tests>
-        --emit-cpp
+        $<TARGET_FILE:katana-recomp>
+        emit-cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/register_displacement_execution.bin
+        8C010000
         ${KATANA_GENERATED_REGISTER_DISPLACEMENT_CPP}
+        8C010000
     DEPENDS
-        katana-register-displacement-tests
-        tests/memory/register_displacement_tests.cpp
+        katana-recomp
+        ${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/register_displacement_execution.bin
     COMMENT
-        "Generiere C++-Programm fuer KR-1402 End-to-End-Test"
+        "Generiere KR-1402 C++ ueber Binary-Reader und CLI"
     VERBATIM
 )
 
@@ -1651,7 +1654,7 @@ katana_enable_warnings(katana-generated-register-displacement-tests)
 
 add_dependencies(
     katana-generated-register-displacement-tests
-    katana-register-displacement-tests
+    katana-recomp
 )
 
 add_test(
@@ -1690,14 +1693,17 @@ add_custom_command(
         make_directory
         ${KATANA_GENERATED_TEST_DIR}
     COMMAND
-        $<TARGET_FILE:katana-r0-indexed-tests>
-        --emit-cpp
+        $<TARGET_FILE:katana-recomp>
+        emit-cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/r0_indexed_execution.bin
+        8C010000
         ${KATANA_GENERATED_R0_INDEXED_CPP}
+        8C010000
     DEPENDS
-        katana-r0-indexed-tests
-        tests/memory/r0_indexed_tests.cpp
+        katana-recomp
+        ${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/r0_indexed_execution.bin
     COMMENT
-        "Generiere C++-Programm fuer KR-1403 End-to-End-Test"
+        "Generiere KR-1403 C++ ueber Binary-Reader und CLI"
     VERBATIM
 )
 
@@ -1729,7 +1735,7 @@ katana_enable_warnings(katana-generated-r0-indexed-tests)
 
 add_dependencies(
     katana-generated-r0-indexed-tests
-    katana-r0-indexed-tests
+    katana-recomp
 )
 
 add_test(
@@ -1768,14 +1774,17 @@ add_custom_command(
         make_directory
         ${KATANA_GENERATED_TEST_DIR}
     COMMAND
-        $<TARGET_FILE:katana-gbr-displacement-tests>
-        --emit-cpp
+        $<TARGET_FILE:katana-recomp>
+        emit-cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/gbr_displacement_execution.bin
+        8C010000
         ${KATANA_GENERATED_GBR_DISPLACEMENT_CPP}
+        8C010000
     DEPENDS
-        katana-gbr-displacement-tests
-        tests/memory/gbr_displacement_tests.cpp
+        katana-recomp
+        ${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/gbr_displacement_execution.bin
     COMMENT
-        "Generiere C++-Programm fuer KR-1404 End-to-End-Test"
+        "Generiere KR-1404 C++ ueber Binary-Reader und CLI"
     VERBATIM
 )
 
@@ -1807,7 +1816,7 @@ katana_enable_warnings(katana-generated-gbr-displacement-tests)
 
 add_dependencies(
     katana-generated-gbr-displacement-tests
-    katana-gbr-displacement-tests
+    katana-recomp
 )
 
 add_test(
@@ -1846,14 +1855,17 @@ add_custom_command(
         make_directory
         ${KATANA_GENERATED_TEST_DIR}
     COMMAND
-        $<TARGET_FILE:katana-pc-relative-tests>
-        --emit-cpp
+        $<TARGET_FILE:katana-recomp>
+        emit-cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/pc_relative_execution.bin
+        00000100
         ${KATANA_GENERATED_PC_RELATIVE_CPP}
+        00000100
     DEPENDS
-        katana-pc-relative-tests
-        tests/memory/pc_relative_tests.cpp
+        katana-recomp
+        ${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/pc_relative_execution.bin
     COMMENT
-        "Generiere C++-Programm fuer KR-1405 End-to-End-Test"
+        "Generiere KR-1405 C++ ueber Binary-Reader und CLI"
     VERBATIM
 )
 
@@ -1885,12 +1897,61 @@ katana_enable_warnings(katana-generated-pc-relative-tests)
 
 add_dependencies(
     katana-generated-pc-relative-tests
-    katana-pc-relative-tests
+    katana-recomp
 )
 
 add_test(
     NAME katana-generated-pc-relative-tests
     COMMAND katana-generated-pc-relative-tests
+)
+
+set(
+    KATANA_GENERATED_PC_RELATIVE_EDGE_CPP
+    ${KATANA_GENERATED_TEST_DIR}/generated_pc_relative_edge_program.cpp
+)
+
+add_custom_command(
+    OUTPUT ${KATANA_GENERATED_PC_RELATIVE_EDGE_CPP}
+    COMMAND
+        $<TARGET_FILE:katana-pc-relative-tests>
+        --emit-cpp
+        ${KATANA_GENERATED_PC_RELATIVE_EDGE_CPP}
+    DEPENDS
+        katana-pc-relative-tests
+        tests/memory/pc_relative_tests.cpp
+    COMMENT "Generiere synthetische KR-1405-Codegen-Grenzfaelle"
+    VERBATIM
+)
+
+set_source_files_properties(
+    ${KATANA_GENERATED_PC_RELATIVE_EDGE_CPP}
+    PROPERTIES GENERATED TRUE HEADER_FILE_ONLY TRUE
+)
+
+set_source_files_properties(
+    tests/memory/generated_pc_relative_edge_tests.cpp
+    PROPERTIES OBJECT_DEPENDS ${KATANA_GENERATED_PC_RELATIVE_EDGE_CPP}
+)
+
+add_executable(katana-generated-pc-relative-edge-tests
+    tests/memory/generated_pc_relative_edge_tests.cpp
+    ${KATANA_GENERATED_PC_RELATIVE_EDGE_CPP}
+)
+
+target_include_directories(
+    katana-generated-pc-relative-edge-tests
+    PRIVATE ${KATANA_GENERATED_TEST_DIR}
+)
+
+katana_enable_warnings(katana-generated-pc-relative-edge-tests)
+add_dependencies(
+    katana-generated-pc-relative-edge-tests
+    katana-pc-relative-tests
+)
+
+add_test(
+    NAME katana-generated-pc-relative-edge-tests
+    COMMAND katana-generated-pc-relative-edge-tests
 )
 
 add_executable(katana-system-register-tests

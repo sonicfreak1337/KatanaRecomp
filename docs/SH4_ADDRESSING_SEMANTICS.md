@@ -221,6 +221,8 @@ Dadurch bleiben auch identische Registerpaare deterministisch.
 
 ## Getestete Faelle
 
+Die KR-1402- bis KR-1405-End-to-End-Programme werden aus committed `.bin`-Fixtures ueber den normalen Binary Reader und `katana-recomp emit-cpp` erzeugt. Damit prueft die Suite neben Decoder, IR und Codegenerator auch Dateieingabe und CLI-Argumentverarbeitung. Zusaetzliche synthetische Grenzfaelle sind ausdruecklich getrennt benannt.
+
 - Byte-, Word- und Long-Pre-Decrement
 - Byte-, Word- und Long-Post-Increment
 - Little-Endian-Speicherwerte
