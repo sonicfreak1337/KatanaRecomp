@@ -921,6 +921,89 @@ DecodedInstruction decode(const std::uint16_t opcode) {
 
         return instruction;
     }
+    if ((opcode & 0xF00Fu) == 0x2004u) {
+        instruction.kind =
+            InstructionKind::MovByteStorePreDecrement;
+        decode_memory_registers(instruction, opcode);
+
+        instruction.text =
+            "mov.b " +
+            register_name(instruction.source_register) +
+            ", @-" +
+            register_name(instruction.destination_register);
+
+        return instruction;
+    }
+
+    if ((opcode & 0xF00Fu) == 0x2005u) {
+        instruction.kind =
+            InstructionKind::MovWordStorePreDecrement;
+        decode_memory_registers(instruction, opcode);
+
+        instruction.text =
+            "mov.w " +
+            register_name(instruction.source_register) +
+            ", @-" +
+            register_name(instruction.destination_register);
+
+        return instruction;
+    }
+
+    if ((opcode & 0xF00Fu) == 0x2006u) {
+        instruction.kind =
+            InstructionKind::MovLongStorePreDecrement;
+        decode_memory_registers(instruction, opcode);
+
+        instruction.text =
+            "mov.l " +
+            register_name(instruction.source_register) +
+            ", @-" +
+            register_name(instruction.destination_register);
+
+        return instruction;
+    }
+
+    if ((opcode & 0xF00Fu) == 0x6004u) {
+        instruction.kind =
+            InstructionKind::MovByteLoadPostIncrement;
+        decode_memory_registers(instruction, opcode);
+
+        instruction.text =
+            "mov.b @" +
+            register_name(instruction.source_register) +
+            "+, " +
+            register_name(instruction.destination_register);
+
+        return instruction;
+    }
+
+    if ((opcode & 0xF00Fu) == 0x6005u) {
+        instruction.kind =
+            InstructionKind::MovWordLoadPostIncrement;
+        decode_memory_registers(instruction, opcode);
+
+        instruction.text =
+            "mov.w @" +
+            register_name(instruction.source_register) +
+            "+, " +
+            register_name(instruction.destination_register);
+
+        return instruction;
+    }
+
+    if ((opcode & 0xF00Fu) == 0x6006u) {
+        instruction.kind =
+            InstructionKind::MovLongLoadPostIncrement;
+        decode_memory_registers(instruction, opcode);
+
+        instruction.text =
+            "mov.l @" +
+            register_name(instruction.source_register) +
+            "+, " +
+            register_name(instruction.destination_register);
+
+        return instruction;
+    }
     if ((opcode & 0xF00Fu) == 0x2000u) {
         instruction.kind = InstructionKind::MovByteStore;
         decode_memory_registers(instruction, opcode);

@@ -214,6 +214,21 @@ void print_ir_instruction(
                     instruction.destination_register
                 );
             break;
+        case katana::ir::Operation::LoadByteSignedPostIncrement:
+        case katana::ir::Operation::LoadWordSignedPostIncrement:
+        case katana::ir::Operation::LoadLongPostIncrement:
+            std::cout
+                << " r"
+                << std::dec
+                << static_cast<unsigned>(
+                    instruction.destination_register
+                )
+                << ", [r"
+                << static_cast<unsigned>(
+                    instruction.source_register
+                )
+                << "+]";
+            break;
         case katana::ir::Operation::LoadByteSigned:
         case katana::ir::Operation::LoadWordSigned:
         case katana::ir::Operation::LoadLong:
@@ -230,6 +245,20 @@ void print_ir_instruction(
                 << "]";
             break;
 
+        case katana::ir::Operation::StoreBytePreDecrement:
+        case katana::ir::Operation::StoreWordPreDecrement:
+        case katana::ir::Operation::StoreLongPreDecrement:
+            std::cout
+                << " [--r"
+                << std::dec
+                << static_cast<unsigned>(
+                    instruction.destination_register
+                )
+                << "], r"
+                << static_cast<unsigned>(
+                    instruction.source_register
+                );
+            break;
         case katana::ir::Operation::StoreByte:
         case katana::ir::Operation::StoreWord:
         case katana::ir::Operation::StoreLong:

@@ -229,6 +229,23 @@ Operation lower_operation(
         case Source::MovLongStore:
             return Operation::StoreLong;
 
+        case Source::MovByteStorePreDecrement:
+            return Operation::StoreBytePreDecrement;
+
+        case Source::MovWordStorePreDecrement:
+            return Operation::StoreWordPreDecrement;
+
+        case Source::MovLongStorePreDecrement:
+            return Operation::StoreLongPreDecrement;
+
+        case Source::MovByteLoadPostIncrement:
+            return Operation::LoadByteSignedPostIncrement;
+
+        case Source::MovWordLoadPostIncrement:
+            return Operation::LoadWordSignedPostIncrement;
+
+        case Source::MovLongLoadPostIncrement:
+            return Operation::LoadLongPostIncrement;
         case Source::Bra:
             return Operation::Branch;
 
@@ -504,6 +521,23 @@ std::string_view operation_name(
         case Operation::StoreLong:
             return "store_u32";
 
+        case Operation::StoreBytePreDecrement:
+            return "store_u8_predecrement";
+
+        case Operation::StoreWordPreDecrement:
+            return "store_u16_predecrement";
+
+        case Operation::StoreLongPreDecrement:
+            return "store_u32_predecrement";
+
+        case Operation::LoadByteSignedPostIncrement:
+            return "load_s8_postincrement";
+
+        case Operation::LoadWordSignedPostIncrement:
+            return "load_s16_postincrement";
+
+        case Operation::LoadLongPostIncrement:
+            return "load_u32_postincrement";
         case Operation::Branch:
             return "branch";
 

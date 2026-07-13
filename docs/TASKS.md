@@ -261,7 +261,7 @@ Abhaengigkeiten: KR-1301 bis KR-1304
 
 ## v0.14.0 - Adressierung und Systemregister
 
-### [ ] KR-1401 - Pre-Decrement und Post-Increment
+### [x] KR-1401 - Pre-Decrement und Post-Increment
 
 Abhaengigkeiten: KR-1305
 

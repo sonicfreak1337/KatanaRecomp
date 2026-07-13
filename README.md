@@ -28,7 +28,7 @@ SH-4-Binaerdaten
     -> semantischer Laufzeittest
 `
 
-Der aktuelle Teststand umfasst **38 automatische Tests**.
+Der aktuelle Teststand umfasst **40 automatische Tests**.
 
 ## Implementierte SH-4-Instruktionen
 
@@ -140,6 +140,18 @@ Die MAC-Instruktionen lesen signed Operanden aus dem Speicher, schalten beide Ad
 - DIV1 Rm,Rn
 
 Der generierte CPU-Zustand modelliert Q, M und T explizit. DIV0U und DIV0S initialisieren den iterativen Divisionszustand; DIV1 fuehrt exakt einen bitweisen Hardware-Divisionsschritt aus. Die vollstaendige Zustandstabelle und die Referenzvektoren stehen in `docs/SH4_DIVISION_SEMANTICS.md`.
+
+### Pre-Decrement und Post-Increment
+
+- MOV.B Rm,@-Rn
+- MOV.W Rm,@-Rn
+- MOV.L Rm,@-Rn
+- MOV.B @Rm+,Rn
+- MOV.W @Rm+,Rn
+- MOV.L @Rm+,Rn
+
+Pre-Decrement sichert den alten Quellwert und verringert das Adressregister vor dem Store. Post-Increment liest zuerst und erhoeht das Adressregister nur dann, wenn Quell- und Zielregister verschieden sind. Die vollstaendige Semantik steht in `docs/SH4_ADDRESSING_SEMANTICS.md`.
+
 ## Analysefunktionen
 
 KatanaRecomp unterstuetzt aktuell:

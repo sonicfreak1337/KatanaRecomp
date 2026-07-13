@@ -1499,3 +1499,84 @@ add_test(
     NAME katana-generated-division-tests
     COMMAND katana-generated-division-tests
 )
+
+add_executable(katana-predec-postinc-tests
+    tests/memory/predec_postinc_tests.cpp
+)
+
+target_link_libraries(
+    katana-predec-postinc-tests
+    PRIVATE
+        katana_core
+)
+
+katana_enable_warnings(katana-predec-postinc-tests)
+
+add_test(
+    NAME katana-predec-postinc-tests
+    COMMAND katana-predec-postinc-tests
+)
+
+set(
+    KATANA_GENERATED_PREDEC_POSTINC_CPP
+    ${KATANA_GENERATED_TEST_DIR}/generated_predec_postinc_program.cpp
+)
+
+add_custom_command(
+    OUTPUT
+        ${KATANA_GENERATED_PREDEC_POSTINC_CPP}
+    COMMAND
+        ${CMAKE_COMMAND}
+        -E
+        make_directory
+        ${KATANA_GENERATED_TEST_DIR}
+    COMMAND
+        $<TARGET_FILE:katana-recomp>
+        emit-cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/predec_postinc_execution.bin
+        8C010000
+        ${KATANA_GENERATED_PREDEC_POSTINC_CPP}
+        8C010000
+    DEPENDS
+        katana-recomp
+        ${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/predec_postinc_execution.bin
+    COMMENT
+        "Generiere C++-Programm fuer KR-1401 End-to-End-Test"
+    VERBATIM
+)
+
+set_source_files_properties(
+    ${KATANA_GENERATED_PREDEC_POSTINC_CPP}
+    PROPERTIES
+        GENERATED TRUE
+        HEADER_FILE_ONLY TRUE
+)
+
+set_source_files_properties(
+    tests/memory/generated_predec_postinc_tests.cpp
+    PROPERTIES
+        OBJECT_DEPENDS ${KATANA_GENERATED_PREDEC_POSTINC_CPP}
+)
+
+add_executable(katana-generated-predec-postinc-tests
+    tests/memory/generated_predec_postinc_tests.cpp
+    ${KATANA_GENERATED_PREDEC_POSTINC_CPP}
+)
+
+target_include_directories(
+    katana-generated-predec-postinc-tests
+    PRIVATE
+        ${KATANA_GENERATED_TEST_DIR}
+)
+
+katana_enable_warnings(katana-generated-predec-postinc-tests)
+
+add_dependencies(
+    katana-generated-predec-postinc-tests
+    katana-recomp
+)
+
+add_test(
+    NAME katana-generated-predec-postinc-tests
+    COMMAND katana-generated-predec-postinc-tests
+)

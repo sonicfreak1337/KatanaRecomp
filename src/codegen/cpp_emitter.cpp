@@ -1341,6 +1341,177 @@ void emit_simple_instruction(
                 << "]);\n";
             return;
 
+
+        case Operation::StoreBytePreDecrement:
+            output
+                << "{\n"
+                << "const std::uint32_t value = cpu.r["
+                << static_cast<unsigned>(
+                    instruction.source_register
+                )
+                << "];\n"
+                << "const std::uint32_t address = cpu.r["
+                << static_cast<unsigned>(
+                    instruction.destination_register
+                )
+                << "] - 1u;\n"
+                << "cpu.memory.write_u8(\n"
+                << "    address,\n"
+                << "    static_cast<std::uint8_t>(value)\n"
+                << ");\n"
+                << "cpu.r["
+                << static_cast<unsigned>(
+                    instruction.destination_register
+                )
+                << "] = address;\n"
+                << "}\n";
+            return;
+
+        case Operation::StoreWordPreDecrement:
+            output
+                << "{\n"
+                << "const std::uint32_t value = cpu.r["
+                << static_cast<unsigned>(
+                    instruction.source_register
+                )
+                << "];\n"
+                << "const std::uint32_t address = cpu.r["
+                << static_cast<unsigned>(
+                    instruction.destination_register
+                )
+                << "] - 2u;\n"
+                << "cpu.memory.write_u16(\n"
+                << "    address,\n"
+                << "    static_cast<std::uint16_t>(value)\n"
+                << ");\n"
+                << "cpu.r["
+                << static_cast<unsigned>(
+                    instruction.destination_register
+                )
+                << "] = address;\n"
+                << "}\n";
+            return;
+
+        case Operation::StoreLongPreDecrement:
+            output
+                << "{\n"
+                << "const std::uint32_t value = cpu.r["
+                << static_cast<unsigned>(
+                    instruction.source_register
+                )
+                << "];\n"
+                << "const std::uint32_t address = cpu.r["
+                << static_cast<unsigned>(
+                    instruction.destination_register
+                )
+                << "] - 4u;\n"
+                << "cpu.memory.write_u32(address, value);\n"
+                << "cpu.r["
+                << static_cast<unsigned>(
+                    instruction.destination_register
+                )
+                << "] = address;\n"
+                << "}\n";
+            return;
+
+        case Operation::LoadByteSignedPostIncrement:
+            output
+                << "{\n"
+                << "const bool same_register = "
+                << (
+                    instruction.source_register ==
+                    instruction.destination_register
+                    ? "true"
+                    : "false"
+                )
+                << ";\n"
+                << "const std::uint32_t address = cpu.r["
+                << static_cast<unsigned>(
+                    instruction.source_register
+                )
+                << "];\n"
+                << "const std::uint32_t value =\n"
+                << "    cpu.memory.read_s8(address);\n"
+                << "cpu.r["
+                << static_cast<unsigned>(
+                    instruction.destination_register
+                )
+                << "] = value;\n"
+                << "if (!same_register) {\n"
+                << "    cpu.r["
+                << static_cast<unsigned>(
+                    instruction.source_register
+                )
+                << "] = address + 1u;\n"
+                << "}\n"
+                << "}\n";
+            return;
+
+        case Operation::LoadWordSignedPostIncrement:
+            output
+                << "{\n"
+                << "const bool same_register = "
+                << (
+                    instruction.source_register ==
+                    instruction.destination_register
+                    ? "true"
+                    : "false"
+                )
+                << ";\n"
+                << "const std::uint32_t address = cpu.r["
+                << static_cast<unsigned>(
+                    instruction.source_register
+                )
+                << "];\n"
+                << "const std::uint32_t value =\n"
+                << "    cpu.memory.read_s16(address);\n"
+                << "cpu.r["
+                << static_cast<unsigned>(
+                    instruction.destination_register
+                )
+                << "] = value;\n"
+                << "if (!same_register) {\n"
+                << "    cpu.r["
+                << static_cast<unsigned>(
+                    instruction.source_register
+                )
+                << "] = address + 2u;\n"
+                << "}\n"
+                << "}\n";
+            return;
+
+        case Operation::LoadLongPostIncrement:
+            output
+                << "{\n"
+                << "const bool same_register = "
+                << (
+                    instruction.source_register ==
+                    instruction.destination_register
+                    ? "true"
+                    : "false"
+                )
+                << ";\n"
+                << "const std::uint32_t address = cpu.r["
+                << static_cast<unsigned>(
+                    instruction.source_register
+                )
+                << "];\n"
+                << "const std::uint32_t value =\n"
+                << "    cpu.memory.read_u32(address);\n"
+                << "cpu.r["
+                << static_cast<unsigned>(
+                    instruction.destination_register
+                )
+                << "] = value;\n"
+                << "if (!same_register) {\n"
+                << "    cpu.r["
+                << static_cast<unsigned>(
+                    instruction.source_register
+                )
+                << "] = address + 4u;\n"
+                << "}\n"
+                << "}\n";
+            return;
         case Operation::Unknown:
             output
                 << "throw std::runtime_error("
@@ -1677,6 +1848,12 @@ void emit_terminal(
         case Operation::StoreByte:
         case Operation::StoreWord:
         case Operation::StoreLong:
+        case Operation::StoreBytePreDecrement:
+        case Operation::StoreWordPreDecrement:
+        case Operation::StoreLongPreDecrement:
+        case Operation::LoadByteSignedPostIncrement:
+        case Operation::LoadWordSignedPostIncrement:
+        case Operation::LoadLongPostIncrement:
             break;
     }
 
@@ -1776,6 +1953,12 @@ bool is_control_flow(
         case Operation::StoreByte:
         case Operation::StoreWord:
         case Operation::StoreLong:
+        case Operation::StoreBytePreDecrement:
+        case Operation::StoreWordPreDecrement:
+        case Operation::StoreLongPreDecrement:
+        case Operation::LoadByteSignedPostIncrement:
+        case Operation::LoadWordSignedPostIncrement:
+        case Operation::LoadLongPostIncrement:
             return false;
     }
 
