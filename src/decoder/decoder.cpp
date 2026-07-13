@@ -557,6 +557,33 @@ DecodedInstruction decode(const std::uint16_t opcode) {
 
         return instruction;
     }
+    if ((opcode & 0xF00Fu) == 0x400Fu) {
+        instruction.kind = InstructionKind::MultiplyAccumulateWord;
+        decode_memory_registers(instruction, opcode);
+
+        instruction.text =
+            "mac.w @" +
+            register_name(instruction.source_register) +
+            "+, @" +
+            register_name(instruction.destination_register) +
+            "+";
+
+        return instruction;
+    }
+
+    if ((opcode & 0xF00Fu) == 0x000Fu) {
+        instruction.kind = InstructionKind::MultiplyAccumulateLong;
+        decode_memory_registers(instruction, opcode);
+
+        instruction.text =
+            "mac.l @" +
+            register_name(instruction.source_register) +
+            "+, @" +
+            register_name(instruction.destination_register) +
+            "+";
+
+        return instruction;
+    }
     if ((opcode & 0xF00Fu) == 0x300Du) {
         instruction.kind = InstructionKind::DoubleMultiplySignedLong;
         decode_memory_registers(instruction, opcode);
@@ -698,6 +725,17 @@ DecodedInstruction decode(const std::uint16_t opcode) {
             std::to_string(instruction.immediate) +
             ", r0";
 
+        return instruction;
+    }
+    if (opcode == 0x0048u) {
+        instruction.kind = InstructionKind::ClearS;
+        instruction.text = "clrs";
+        return instruction;
+    }
+
+    if (opcode == 0x0058u) {
+        instruction.kind = InstructionKind::SetS;
+        instruction.text = "sets";
         return instruction;
     }
     if (opcode == 0x0008u) {

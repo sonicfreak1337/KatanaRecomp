@@ -11,7 +11,7 @@ KatanaRecomp besitzt einen durchgaengigen Prototyp-Pfad von SH-4-Binaerdaten bis
 ## Teststatus
 
 ```text
-100% tests passed out of 34
+100% tests passed out of 36
 ```
 
 ## Fertiggestellte Roadmap-Tasks
@@ -30,15 +30,16 @@ KatanaRecomp besitzt einen durchgaengigen Prototyp-Pfad von SH-4-Binaerdaten bis
 - [x] KR-1205 - v0.12.0 Release-Gate
 - [x] KR-1301 - Einfache Multiplikation
 - [x] KR-1302 - Doppelte Multiplikation
+- [x] KR-1303 - MAC-Instruktionen
 
 ## Naechster Roadmap-Task
 
-- [ ] KR-1303 - MAC-Instruktionen
+- [ ] KR-1304 - Division
 
 ## Aktuelle Einschraenkungen
 
 - unvollstaendiger SH-4-Befehlssatz
-- keine Division oder MAC-Instruktionen
+- keine Division
 - keine FPU
 - kein Dreamcast-Speicherbus oder MMIO
 - keine Plattformhardware

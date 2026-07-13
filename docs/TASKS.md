@@ -232,7 +232,7 @@ Umfang:
 - `DMULU.L`
 - `MACH`, `MACL`
 
-### [ ] KR-1303 - MAC-Instruktionen
+### [x] KR-1303 - MAC-Instruktionen
 
 Abhaengigkeiten: KR-1302
 

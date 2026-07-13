@@ -88,6 +88,82 @@ MACL = product_bits & 0xFFFFFFFF
 Das signed 32-mal-32-Bit-Produkt passt vollstaendig in einen vorzeichenbehafteten 64-Bit-Wert. Die anschliessende Umwandlung nach `uint64_t` ist fuer negative Ergebnisse als Modulo-2-hoch-64-Konvertierung definiert. Dadurch bleiben die exakten Zweierkomplementbits fuer MACH und MACL erhalten.
 
 `DMULS.L` und `DMULU.L` veraendern weder die allgemeinen Quellregister noch das T-Bit.
+## Multiply-Accumulate
+
+KR-1303 implementiert `MAC.W` und `MAC.L` einschliesslich Speicherzugriff, Post-Inkrement und S-Bit-Saettigung.
+
+Der generierte CPU-Zustand besitzt dafuer ein boolesches `S`-Bit. `SETS` setzt dieses Bit, `CLRS` loescht es. Die MAC-Instruktionen veraendern T und S nicht.
+
+### Adressierung und Registerfortschaltung
+
+```text
+MAC.W @Rm+,@Rn+:
+    signed_word_m = memory16[Rm]
+    signed_word_n = memory16[Rn]
+    Rm += 2
+    Rn += 2
+
+MAC.L @Rm+,@Rn+:
+    signed_long_m = memory32[Rm]
+    signed_long_n = memory32[Rn]
+    Rm += 4
+    Rn += 4
+```
+
+Wenn Rm und Rn dasselbe Register bezeichnen, werden zwei aufeinanderfolgende Speicherwerte gelesen. Das Register wird zweimal fortgeschaltet:
+
+```text
+MAC.W gleiches Register: insgesamt +4
+MAC.L gleiches Register: insgesamt +8
+```
+
+### S gleich 0
+
+Ohne Saettigung wird das signed Produkt modulo 2 hoch 64 zu `MACH:MACL` addiert.
+
+```text
+accumulator = uint64(MACH:MACL)
+result = accumulator + uint64(signed_product)
+MACH = result[63:32]
+MACL = result[31:0]
+```
+
+Die Addition wird mit unsigned 64-Bit-Operationen ausgefuehrt. Wraparound ist damit in C++ definiert.
+
+### MAC.W mit S gleich 1
+
+`MAC.W` saettigt das Ergebnis auf einen signed 32-Bit-Wert in MACL:
+
+```text
+Minimum: 0x80000000
+Maximum: 0x7FFFFFFF
+```
+
+MACH bleibt in diesem Modus unveraendert.
+
+### MAC.L mit S gleich 1
+
+`MAC.L` saettigt auf einen signed 48-Bit-Wert:
+
+```text
+Minimum: MACH=0x00008000, MACL=0x00000000
+Maximum: MACH=0x00007FFF, MACL=0xFFFFFFFF
+```
+
+Im Saettigungsmodus werden nur die unteren 16 Bit von MACH als oberer Teil des 48-Bit-Akkumulators verwendet. KatanaRecomp setzt die oberen 16 Bit von MACH nach der Operation kanonisch auf null.
+
+### Getestete MAC-Grenzfaelle
+
+- positive und negative signed Produkte
+- 64-Bit-Wraparound ohne Saettigung
+- positive und negative 32-Bit-Saettigung von MAC.W
+- positive und negative 48-Bit-Saettigung von MAC.L
+- negative nicht gesaettigte 48-Bit-Ergebnisse
+- verschiedene Adressregister
+- identische Adressregister
+- unveraendertes T- und S-Bit
+- `SETS` und `CLRS`
+- kompletter generierter Aufrufspfad
 ## Getestete Grenzfaelle
 
 - `DMULU.L` mit `0xFFFFFFFF * 0xFFFFFFFF`

@@ -787,6 +787,149 @@ void emit_simple_instruction(
                 << "cpu.macl = static_cast<std::uint32_t>(product);\n"
                 << "}\n";
             return;
+        case Operation::MultiplyAccumulateWord:
+            output
+                << "{\n"
+                << "const bool same_register = "
+                << (
+                    instruction.source_register ==
+                    instruction.destination_register
+                    ? "true"
+                    : "false"
+                )
+                << ";\n"
+                << "const std::uint32_t destination_address = cpu.r["
+                << static_cast<unsigned>(
+                    instruction.destination_register
+                )
+                << "];\n"
+                << "const std::uint32_t source_address = cpu.r["
+                << static_cast<unsigned>(
+                    instruction.source_register
+                )
+                << "] + (same_register ? 2u : 0u);\n"
+                << "const std::uint32_t destination_raw =\n"
+                << "    cpu.memory.read_u16(destination_address);\n"
+                << "const std::uint32_t source_raw =\n"
+                << "    cpu.memory.read_u16(source_address);\n"
+                << "const std::int64_t destination =\n"
+                << "    (destination_raw & 0x00008000u) != 0u\n"
+                << "    ? static_cast<std::int64_t>(destination_raw) - 0x00010000ll\n"
+                << "    : static_cast<std::int64_t>(destination_raw);\n"
+                << "const std::int64_t source =\n"
+                << "    (source_raw & 0x00008000u) != 0u\n"
+                << "    ? static_cast<std::int64_t>(source_raw) - 0x00010000ll\n"
+                << "    : static_cast<std::int64_t>(source_raw);\n"
+                << "const std::int64_t product = source * destination;\n"
+                << "cpu.r["
+                << static_cast<unsigned>(
+                    instruction.destination_register
+                )
+                << "] += 2u;\n"
+                << "cpu.r["
+                << static_cast<unsigned>(
+                    instruction.source_register
+                )
+                << "] += 2u;\n"
+                << "if (cpu.s) {\n"
+                << "    const std::int64_t accumulator =\n"
+                << "        (cpu.macl & 0x80000000u) != 0u\n"
+                << "        ? static_cast<std::int64_t>(cpu.macl) - 0x100000000ll\n"
+                << "        : static_cast<std::int64_t>(cpu.macl);\n"
+                << "    std::int64_t result = accumulator + product;\n"
+                << "    if (result > 0x000000007FFFFFFFll) {\n"
+                << "        result = 0x000000007FFFFFFFll;\n"
+                << "    } else if (result < -0x0000000080000000ll) {\n"
+                << "        result = -0x0000000080000000ll;\n"
+                << "    }\n"
+                << "    cpu.macl = static_cast<std::uint32_t>(result);\n"
+                << "} else {\n"
+                << "    const std::uint64_t accumulator =\n"
+                << "        (static_cast<std::uint64_t>(cpu.mach) << 32u) |\n"
+                << "        static_cast<std::uint64_t>(cpu.macl);\n"
+                << "    const std::uint64_t result =\n"
+                << "        accumulator + static_cast<std::uint64_t>(product);\n"
+                << "    cpu.mach = static_cast<std::uint32_t>(result >> 32u);\n"
+                << "    cpu.macl = static_cast<std::uint32_t>(result);\n"
+                << "}\n"
+                << "}\n";
+            return;
+
+        case Operation::MultiplyAccumulateLong:
+            output
+                << "{\n"
+                << "const bool same_register = "
+                << (
+                    instruction.source_register ==
+                    instruction.destination_register
+                    ? "true"
+                    : "false"
+                )
+                << ";\n"
+                << "const std::uint32_t destination_address = cpu.r["
+                << static_cast<unsigned>(
+                    instruction.destination_register
+                )
+                << "];\n"
+                << "const std::uint32_t source_address = cpu.r["
+                << static_cast<unsigned>(
+                    instruction.source_register
+                )
+                << "] + (same_register ? 4u : 0u);\n"
+                << "const std::uint32_t destination_raw =\n"
+                << "    cpu.memory.read_u32(destination_address);\n"
+                << "const std::uint32_t source_raw =\n"
+                << "    cpu.memory.read_u32(source_address);\n"
+                << "const std::int64_t destination =\n"
+                << "    (destination_raw & 0x80000000u) != 0u\n"
+                << "    ? static_cast<std::int64_t>(destination_raw) - 0x100000000ll\n"
+                << "    : static_cast<std::int64_t>(destination_raw);\n"
+                << "const std::int64_t source =\n"
+                << "    (source_raw & 0x80000000u) != 0u\n"
+                << "    ? static_cast<std::int64_t>(source_raw) - 0x100000000ll\n"
+                << "    : static_cast<std::int64_t>(source_raw);\n"
+                << "const std::int64_t product = source * destination;\n"
+                << "cpu.r["
+                << static_cast<unsigned>(
+                    instruction.destination_register
+                )
+                << "] += 4u;\n"
+                << "cpu.r["
+                << static_cast<unsigned>(
+                    instruction.source_register
+                )
+                << "] += 4u;\n"
+                << "if (cpu.s) {\n"
+                << "    const std::uint64_t accumulator_raw =\n"
+                << "        (static_cast<std::uint64_t>(cpu.mach & 0x0000FFFFu) << 32u) |\n"
+                << "        static_cast<std::uint64_t>(cpu.macl);\n"
+                << "    const std::int64_t accumulator =\n"
+                << "        (accumulator_raw & 0x0000800000000000ull) != 0u\n"
+                << "        ? static_cast<std::int64_t>(accumulator_raw) - 0x0001000000000000ll\n"
+                << "        : static_cast<std::int64_t>(accumulator_raw);\n"
+                << "    std::int64_t result = accumulator + product;\n"
+                << "    if (result > 0x00007FFFFFFFFFFFll) {\n"
+                << "        result = 0x00007FFFFFFFFFFFll;\n"
+                << "    } else if (result < -0x0000800000000000ll) {\n"
+                << "        result = -0x0000800000000000ll;\n"
+                << "    }\n"
+                << "    const std::uint64_t result_bits =\n"
+                << "        static_cast<std::uint64_t>(result) & 0x0000FFFFFFFFFFFFull;\n"
+                << "    cpu.mach = static_cast<std::uint32_t>(\n"
+                << "        (result_bits >> 32u) & 0x0000FFFFu\n"
+                << "    );\n"
+                << "    cpu.macl = static_cast<std::uint32_t>(result_bits);\n"
+                << "} else {\n"
+                << "    const std::uint64_t accumulator =\n"
+                << "        (static_cast<std::uint64_t>(cpu.mach) << 32u) |\n"
+                << "        static_cast<std::uint64_t>(cpu.macl);\n"
+                << "    const std::uint64_t result =\n"
+                << "        accumulator + static_cast<std::uint64_t>(product);\n"
+                << "    cpu.mach = static_cast<std::uint32_t>(result >> 32u);\n"
+                << "    cpu.macl = static_cast<std::uint32_t>(result);\n"
+                << "}\n"
+                << "}\n";
+            return;
         case Operation::AndRegister:
             output
                 << "cpu.r["
@@ -845,6 +988,13 @@ void emit_simple_instruction(
                 << "cpu.r[0] ^= static_cast<std::uint32_t>("
                 << instruction.immediate
                 << ");\n";
+            return;
+        case Operation::ClearS:
+            output << "cpu.s = false;\n";
+            return;
+
+        case Operation::SetS:
+            output << "cpu.s = true;\n";
             return;
         case Operation::ClearT:
             output << "cpu.t = false;\n";
@@ -1389,12 +1539,16 @@ void emit_terminal(
         case Operation::MultiplyUnsignedWord:
         case Operation::DoubleMultiplySignedLong:
         case Operation::DoubleMultiplyUnsignedLong:
+        case Operation::MultiplyAccumulateWord:
+        case Operation::MultiplyAccumulateLong:
         case Operation::AndRegister:
         case Operation::OrRegister:
         case Operation::XorRegister:
         case Operation::AndImmediate:
         case Operation::OrImmediate:
         case Operation::XorImmediate:
+        case Operation::ClearS:
+        case Operation::SetS:
         case Operation::ClearT:
         case Operation::SetT:
         case Operation::CompareEqualImmediate:
@@ -1481,12 +1635,16 @@ bool is_control_flow(
         case Operation::MultiplyUnsignedWord:
         case Operation::DoubleMultiplySignedLong:
         case Operation::DoubleMultiplyUnsignedLong:
+        case Operation::MultiplyAccumulateWord:
+        case Operation::MultiplyAccumulateLong:
         case Operation::AndRegister:
         case Operation::OrRegister:
         case Operation::XorRegister:
         case Operation::AndImmediate:
         case Operation::OrImmediate:
         case Operation::XorImmediate:
+        case Operation::ClearS:
+        case Operation::SetS:
         case Operation::ClearT:
         case Operation::SetT:
         case Operation::CompareEqualImmediate:
@@ -1705,6 +1863,7 @@ std::string emit_cpp_program(
         << "    std::uint32_t mach = 0;\n"
         << "    std::uint32_t macl = 0;\n"
         << "    bool t = false;\n"
+        << "    bool s = false;\n"
         << "    Memory memory{};\n"
         << "};\n\n"
         << "[[noreturn]] void unresolved_call(\n"

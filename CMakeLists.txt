@@ -1339,3 +1339,83 @@ add_test(
     NAME katana-generated-double-multiplication-tests
     COMMAND katana-generated-double-multiplication-tests
 )
+add_executable(katana-mac-tests
+    tests/alu/mac_tests.cpp
+)
+
+target_link_libraries(
+    katana-mac-tests
+    PRIVATE
+        katana_core
+)
+
+katana_enable_warnings(katana-mac-tests)
+
+add_test(
+    NAME katana-mac-tests
+    COMMAND katana-mac-tests
+)
+
+set(
+    KATANA_GENERATED_MAC_CPP
+    ${KATANA_GENERATED_TEST_DIR}/generated_mac_program.cpp
+)
+
+add_custom_command(
+    OUTPUT
+        ${KATANA_GENERATED_MAC_CPP}
+    COMMAND
+        ${CMAKE_COMMAND}
+        -E
+        make_directory
+        ${KATANA_GENERATED_TEST_DIR}
+    COMMAND
+        $<TARGET_FILE:katana-recomp>
+        emit-cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/mac_execution.bin
+        8C010000
+        ${KATANA_GENERATED_MAC_CPP}
+        8C010000
+    DEPENDS
+        katana-recomp
+        ${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/mac_execution.bin
+    COMMENT
+        "Generiere C++-Programm fuer KR-1303 End-to-End-Test"
+    VERBATIM
+)
+
+set_source_files_properties(
+    ${KATANA_GENERATED_MAC_CPP}
+    PROPERTIES
+        GENERATED TRUE
+        HEADER_FILE_ONLY TRUE
+)
+
+set_source_files_properties(
+    tests/alu/generated_mac_tests.cpp
+    PROPERTIES
+        OBJECT_DEPENDS ${KATANA_GENERATED_MAC_CPP}
+)
+
+add_executable(katana-generated-mac-tests
+    tests/alu/generated_mac_tests.cpp
+    ${KATANA_GENERATED_MAC_CPP}
+)
+
+target_include_directories(
+    katana-generated-mac-tests
+    PRIVATE
+        ${KATANA_GENERATED_TEST_DIR}
+)
+
+katana_enable_warnings(katana-generated-mac-tests)
+
+add_dependencies(
+    katana-generated-mac-tests
+    katana-recomp
+)
+
+add_test(
+    NAME katana-generated-mac-tests
+    COMMAND katana-generated-mac-tests
+)

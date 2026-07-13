@@ -28,7 +28,7 @@ SH-4-Binaerdaten
     -> semantischer Laufzeittest
 `
 
-Der aktuelle Teststand umfasst **34 automatische Tests**.
+Der aktuelle Teststand umfasst **36 automatische Tests**.
 
 ## Implementierte SH-4-Instruktionen
 
@@ -125,6 +125,14 @@ Die Ergebnisse werden nach MACL geschrieben. MUL.L behaelt die unteren 32 Produk
 - DMULU.L Rm,Rn
 
 Die vollstaendigen 64-Bit-Produkte werden in `MACH:MACL` abgelegt. DMULS.L verwendet vorzeichenbehaftete 32-Bit-Operanden, DMULU.L vorzeichenlose. Die Semantik und Grenzwerte stehen in `docs/SH4_MULTIPLICATION_SEMANTICS.md`.
+### Multiply-Accumulate
+
+- MAC.W @Rm+,@Rn+
+- MAC.L @Rm+,@Rn+
+- SETS
+- CLRS
+
+Die MAC-Instruktionen lesen signed Operanden aus dem Speicher, schalten beide Adressregister fort und addieren das Produkt zu `MACH:MACL`. Das S-Bit aktiviert die 32-Bit-Saettigung fuer MAC.W beziehungsweise die 48-Bit-Saettigung fuer MAC.L. Die vollstaendige Semantik steht in `docs/SH4_MULTIPLICATION_SEMANTICS.md`.
 ## Analysefunktionen
 
 KatanaRecomp unterstuetzt aktuell:
@@ -168,7 +176,7 @@ Die Carry-, Borrow- und signed-Overflow-Regeln sind in `docs/SH4_STATUS_SEMANTIC
 KatanaRecomp ist noch kein vollstaendiger Dreamcast-Recompiler. Unter anderem fehlen:
 
 - grosse Teile des SH-4-Befehlssatzes
-- Division, MAC und erweiterte Integer-Flags
+- Division und erweiterte Integer-Flags
 - FPU- und Vektoroperationen
 - vollstaendiges Statusregister
 - Dreamcast-Speicherabbild

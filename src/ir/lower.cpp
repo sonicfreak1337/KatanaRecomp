@@ -139,6 +139,11 @@ Operation lower_operation(
 
         case Source::DoubleMultiplyUnsignedLong:
             return Operation::DoubleMultiplyUnsignedLong;
+        case Source::MultiplyAccumulateWord:
+            return Operation::MultiplyAccumulateWord;
+
+        case Source::MultiplyAccumulateLong:
+            return Operation::MultiplyAccumulateLong;
         case Source::AndRegister:
             return Operation::AndRegister;
 
@@ -156,6 +161,11 @@ Operation lower_operation(
 
         case Source::XorImmediate:
             return Operation::XorImmediate;
+        case Source::ClearS:
+            return Operation::ClearS;
+
+        case Source::SetS:
+            return Operation::SetS;
         case Source::ClearT:
             return Operation::ClearT;
 
@@ -396,6 +406,11 @@ std::string_view operation_name(
 
         case Operation::DoubleMultiplyUnsignedLong:
             return "double_multiply_unsigned_long";
+        case Operation::MultiplyAccumulateWord:
+            return "multiply_accumulate_word";
+
+        case Operation::MultiplyAccumulateLong:
+            return "multiply_accumulate_long";
         case Operation::AndRegister:
             return "and_reg";
 
@@ -413,6 +428,11 @@ std::string_view operation_name(
 
         case Operation::XorImmediate:
             return "xor_imm";
+        case Operation::ClearS:
+            return "clear_s";
+
+        case Operation::SetS:
+            return "set_s";
         case Operation::ClearT:
             return "clear_t";
 
