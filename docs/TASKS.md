@@ -282,7 +282,7 @@ Abhaengigkeiten: KR-1402
 
 Abhaengigkeiten: KR-1402
 
-### [ ] KR-1405 - PC-relative Loads und MOVA
+### [x] KR-1405 - PC-relative Loads und MOVA
 
 Abhaengigkeiten: KR-1402
 

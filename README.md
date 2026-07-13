@@ -28,7 +28,7 @@ SH-4-Binaerdaten
     -> semantischer Laufzeittest
 `
 
-Der aktuelle Teststand umfasst **46 automatische Tests**.
+Der aktuelle Teststand umfasst **48 automatische Tests**.
 
 ## Implementierte SH-4-Instruktionen
 
@@ -184,6 +184,14 @@ Die effektive Adresse ist die modulo-2-hoch-32-Summe aus R0 und dem Basisregiste
 - MOV.L @(disp,GBR),R0
 
 Das unsigned 8-Bit-Displacement wird breitenabhaengig skaliert. Der generierte CPU-Zustand modelliert GBR explizit; GBR bleibt bei allen Zugriffen unveraendert.
+
+### PC-relative Loads und MOVA
+
+- MOV.W @(disp,PC),Rn
+- MOV.L @(disp,PC),Rn
+- MOVA @(disp,PC),R0
+
+`MOV.W` verwendet `PC + 4` und skaliert das unsigned 8-Bit-Displacement mit zwei. `MOV.L` und `MOVA` richten den Instruktions-PC zuerst auf vier Byte aus und skalieren mit vier. Word-Loads werden vorzeichenerweitert; `MOVA` schreibt die berechnete Adresse ohne Speicherzugriff nach R0.
 
 ## Analysefunktionen
 

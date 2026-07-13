@@ -1814,3 +1814,81 @@ add_test(
     NAME katana-generated-gbr-displacement-tests
     COMMAND katana-generated-gbr-displacement-tests
 )
+
+add_executable(katana-pc-relative-tests
+    tests/memory/pc_relative_tests.cpp
+)
+
+target_link_libraries(
+    katana-pc-relative-tests
+    PRIVATE
+        katana_core
+)
+
+katana_enable_warnings(katana-pc-relative-tests)
+
+add_test(
+    NAME katana-pc-relative-tests
+    COMMAND katana-pc-relative-tests
+)
+
+set(
+    KATANA_GENERATED_PC_RELATIVE_CPP
+    ${KATANA_GENERATED_TEST_DIR}/generated_pc_relative_program.cpp
+)
+
+add_custom_command(
+    OUTPUT
+        ${KATANA_GENERATED_PC_RELATIVE_CPP}
+    COMMAND
+        ${CMAKE_COMMAND}
+        -E
+        make_directory
+        ${KATANA_GENERATED_TEST_DIR}
+    COMMAND
+        $<TARGET_FILE:katana-pc-relative-tests>
+        --emit-cpp
+        ${KATANA_GENERATED_PC_RELATIVE_CPP}
+    DEPENDS
+        katana-pc-relative-tests
+        tests/memory/pc_relative_tests.cpp
+    COMMENT
+        "Generiere C++-Programm fuer KR-1405 End-to-End-Test"
+    VERBATIM
+)
+
+set_source_files_properties(
+    ${KATANA_GENERATED_PC_RELATIVE_CPP}
+    PROPERTIES
+        GENERATED TRUE
+        HEADER_FILE_ONLY TRUE
+)
+
+set_source_files_properties(
+    tests/memory/generated_pc_relative_tests.cpp
+    PROPERTIES
+        OBJECT_DEPENDS ${KATANA_GENERATED_PC_RELATIVE_CPP}
+)
+
+add_executable(katana-generated-pc-relative-tests
+    tests/memory/generated_pc_relative_tests.cpp
+    ${KATANA_GENERATED_PC_RELATIVE_CPP}
+)
+
+target_include_directories(
+    katana-generated-pc-relative-tests
+    PRIVATE
+        ${KATANA_GENERATED_TEST_DIR}
+)
+
+katana_enable_warnings(katana-generated-pc-relative-tests)
+
+add_dependencies(
+    katana-generated-pc-relative-tests
+    katana-pc-relative-tests
+)
+
+add_test(
+    NAME katana-generated-pc-relative-tests
+    COMMAND katana-generated-pc-relative-tests
+)

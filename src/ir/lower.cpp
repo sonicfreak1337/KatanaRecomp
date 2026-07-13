@@ -301,6 +301,15 @@ Operation lower_operation(
         case Source::MovLongLoadGbrDisplacement:
             return Operation::LoadLongGbrDisplacement;
 
+        case Source::MovWordLoadPcRelative:
+            return Operation::LoadWordSignedPcRelative;
+
+        case Source::MovLongLoadPcRelative:
+            return Operation::LoadLongPcRelative;
+
+        case Source::MoveAddressPcRelative:
+            return Operation::MoveAddressPcRelative;
+
         case Source::Bra:
             return Operation::Branch;
 
@@ -349,6 +358,29 @@ Instruction lower_instruction(
 
     result.immediate = source.instruction.immediate;
     result.displacement = source.instruction.displacement;
+
+    const auto displacement = static_cast<std::uint32_t>(
+        source.instruction.displacement
+    );
+
+    switch (result.operation) {
+        case Operation::LoadWordSignedPcRelative:
+            result.effective_address =
+                source.address + 4u + displacement;
+            break;
+
+        case Operation::LoadLongPcRelative:
+        case Operation::MoveAddressPcRelative:
+            result.effective_address =
+                (source.address & 0xFFFFFFFCu) +
+                4u +
+                displacement;
+            break;
+
+        default:
+            break;
+    }
+
     result.target_address = source.target_address;
 
     result.has_delay_slot =
@@ -648,6 +680,15 @@ std::string_view operation_name(
 
         case Operation::LoadLongGbrDisplacement:
             return "load_u32_gbr_displacement";
+
+        case Operation::LoadWordSignedPcRelative:
+            return "load_s16_pc_relative";
+
+        case Operation::LoadLongPcRelative:
+            return "load_u32_pc_relative";
+
+        case Operation::MoveAddressPcRelative:
+            return "move_address_pc_relative";
 
         case Operation::Branch:
             return "branch";

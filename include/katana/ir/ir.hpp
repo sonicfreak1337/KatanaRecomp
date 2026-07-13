@@ -108,6 +108,9 @@ enum class Operation {
     LoadByteSignedGbrDisplacement,
     LoadWordSignedGbrDisplacement,
     LoadLongGbrDisplacement,
+    LoadWordSignedPcRelative,
+    LoadLongPcRelative,
+    MoveAddressPcRelative,
     Branch,
     Call,
     BranchIfTrue,
@@ -129,6 +132,7 @@ struct Instruction {
 
     std::int32_t immediate = 0;
     std::int32_t displacement = 0;
+    std::optional<std::uint32_t> effective_address;
     std::optional<std::uint32_t> target_address;
 
     bool has_delay_slot = false;

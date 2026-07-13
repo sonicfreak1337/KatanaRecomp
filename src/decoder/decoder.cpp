@@ -1283,6 +1283,49 @@ DecodedInstruction decode(const std::uint16_t opcode) {
         return instruction;
     }
 
+    if ((opcode & 0xF000u) == 0x9000u) {
+        instruction.kind =
+            InstructionKind::MovWordLoadPcRelative;
+        instruction.destination_register =
+            static_cast<std::uint8_t>((opcode >> 8u) & 0x0Fu);
+        instruction.displacement =
+            static_cast<std::int32_t>((opcode & 0x00FFu) * 2u);
+        instruction.text =
+            "mov.w @(" +
+            std::to_string(instruction.displacement) +
+            ", pc), " +
+            register_name(instruction.destination_register);
+        return instruction;
+    }
+
+    if ((opcode & 0xF000u) == 0xD000u) {
+        instruction.kind =
+            InstructionKind::MovLongLoadPcRelative;
+        instruction.destination_register =
+            static_cast<std::uint8_t>((opcode >> 8u) & 0x0Fu);
+        instruction.displacement =
+            static_cast<std::int32_t>((opcode & 0x00FFu) * 4u);
+        instruction.text =
+            "mov.l @(" +
+            std::to_string(instruction.displacement) +
+            ", pc), " +
+            register_name(instruction.destination_register);
+        return instruction;
+    }
+
+    if ((opcode & 0xFF00u) == 0xC700u) {
+        instruction.kind =
+            InstructionKind::MoveAddressPcRelative;
+        instruction.destination_register = 0u;
+        instruction.displacement =
+            static_cast<std::int32_t>((opcode & 0x00FFu) * 4u);
+        instruction.text =
+            "mova @(" +
+            std::to_string(instruction.displacement) +
+            ", pc), r0";
+        return instruction;
+    }
+
     if ((opcode & 0xF00Fu) == 0x2000u) {
         instruction.kind = InstructionKind::MovByteStore;
         decode_memory_registers(instruction, opcode);

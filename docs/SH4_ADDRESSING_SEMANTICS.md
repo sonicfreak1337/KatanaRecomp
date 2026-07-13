@@ -177,6 +177,28 @@ GBR ist ein explizites `std::uint32_t`-Feld des generierten CPU-Zustands und ble
 
 Ungueltige Runtime-Adressen schlagen vor einer Registeraenderung fehl.
 
+## PC-relative Loads und MOVA
+
+KR-1405 unterstuetzt die drei PC-relativen Formen:
+
+```text
+MOV.W @(disp,PC),Rn
+MOV.L @(disp,PC),Rn
+MOVA @(disp,PC),R0
+```
+
+Das Opcodefeld enthaelt jeweils ein unsigned 8-Bit-Displacement. Der PC bezeichnet die Adresse der aktuellen Instruktion. Die effektiven Adressen werden beim Absenken explizit in der Katana-IR festgehalten:
+
+```text
+MOV.W: address = PC + 4 + disp * 2
+MOV.L: address = (PC & 0xFFFFFFFC) + 4 + disp * 4
+MOVA:  address = (PC & 0xFFFFFFFC) + 4 + disp * 4
+```
+
+Damit reicht das skalierte Displacement bei `MOV.W` von 0 bis 510 Byte und bei `MOV.L` sowie `MOVA` von 0 bis 1020 Byte. `MOV.W` liest ein Word und erweitert es mit Vorzeichen auf 32 Bit. `MOV.L` liest ein unveraendertes 32-Bit-Longword. `MOVA` fuehrt keinen Speicherzugriff aus, sondern schreibt nur die berechnete Adresse nach R0.
+
+PC-Addition und Ausrichtung verwenden `std::uint32_t`. Ungueltige Runtime-Adressen schlagen vor einer Aenderung des Zielregisters fehl.
+
 ## Speicherreihenfolge
 
 KatanaRecomp modelliert die sichtbare Reihenfolge explizit:
@@ -227,6 +249,13 @@ Dadurch bleiben auch identische Registerpaare deterministisch.
 - unveraendertes GBR
 - 32-Bit-Wraparound der GBR-relativen Adresse
 - ungueltige GBR-Adresse ohne Registeraenderung
+- PC-relative Word- und Long-Loads
+- MOV.W ohne PC-Ausrichtung sowie MOV.L und MOVA mit Vier-Byte-Ausrichtung
+- unsigned 8-Bit-Displacements bis zum jeweiligen Maximum
+- Vorzeichenerweiterung des PC-relativen Word-Loads
+- MOVA ohne Speicherzugriff
+- PC-relativer Load von Adresse null
+- ungueltige PC-relative Adresse ohne Registeraenderung
 - unveraenderte Status- und MAC-Register
 - direkte generierte Funktionsaufrufe
 - kompletter BSR-Aufrufspfad

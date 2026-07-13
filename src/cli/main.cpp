@@ -274,6 +274,28 @@ void print_ir_instruction(
                 << "]";
             break;
 
+        case katana::ir::Operation::LoadWordSignedPcRelative:
+        case katana::ir::Operation::LoadLongPcRelative:
+            std::cout
+                << " r"
+                << std::dec
+                << static_cast<unsigned>(
+                    instruction.destination_register
+                )
+                << ", [";
+            if (instruction.effective_address.has_value()) {
+                print_address(*instruction.effective_address);
+            }
+            std::cout << "]";
+            break;
+
+        case katana::ir::Operation::MoveAddressPcRelative:
+            std::cout << " r0, ";
+            if (instruction.effective_address.has_value()) {
+                print_address(*instruction.effective_address);
+            }
+            break;
+
         case katana::ir::Operation::LoadByteSigned:
         case katana::ir::Operation::LoadWordSigned:
         case katana::ir::Operation::LoadLong:

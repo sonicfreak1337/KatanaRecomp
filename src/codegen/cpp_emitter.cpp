@@ -1575,6 +1575,50 @@ void emit_simple_instruction(
                 << "u);\n";
             return;
 
+        case Operation::LoadWordSignedPcRelative:
+            if (!instruction.effective_address.has_value()) {
+                throw std::runtime_error(
+                    "PC-relativem Word-Load fehlt die effektive Adresse."
+                );
+            }
+            output
+                << "cpu.r["
+                << static_cast<unsigned>(
+                    instruction.destination_register
+                )
+                << "] = cpu.memory.read_s16("
+                << hex32(*instruction.effective_address)
+                << ");\n";
+            return;
+
+        case Operation::LoadLongPcRelative:
+            if (!instruction.effective_address.has_value()) {
+                throw std::runtime_error(
+                    "PC-relativem Long-Load fehlt die effektive Adresse."
+                );
+            }
+            output
+                << "cpu.r["
+                << static_cast<unsigned>(
+                    instruction.destination_register
+                )
+                << "] = cpu.memory.read_u32("
+                << hex32(*instruction.effective_address)
+                << ");\n";
+            return;
+
+        case Operation::MoveAddressPcRelative:
+            if (!instruction.effective_address.has_value()) {
+                throw std::runtime_error(
+                    "MOVA fehlt die effektive Adresse."
+                );
+            }
+            output
+                << "cpu.r[0] = "
+                << hex32(*instruction.effective_address)
+                << ";\n";
+            return;
+
 
         case Operation::StoreBytePreDecrement:
             output
@@ -2106,6 +2150,9 @@ void emit_terminal(
         case Operation::LoadByteSignedGbrDisplacement:
         case Operation::LoadWordSignedGbrDisplacement:
         case Operation::LoadLongGbrDisplacement:
+        case Operation::LoadWordSignedPcRelative:
+        case Operation::LoadLongPcRelative:
+        case Operation::MoveAddressPcRelative:
             break;
     }
 
@@ -2229,6 +2276,9 @@ bool is_control_flow(
         case Operation::LoadByteSignedGbrDisplacement:
         case Operation::LoadWordSignedGbrDisplacement:
         case Operation::LoadLongGbrDisplacement:
+        case Operation::LoadWordSignedPcRelative:
+        case Operation::LoadLongPcRelative:
+        case Operation::MoveAddressPcRelative:
             return false;
     }
 
