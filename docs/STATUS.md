@@ -1,8 +1,8 @@
 # Projektstatus
 
-Version: 0.11.0
+Version: 0.12.0
 Phase: Pre-Alpha
-Aktiver Meilenstein: v0.12.0 - Shifts und Rotationen
+Aktiver Meilenstein: v0.13.0 - Multiplikation, Division und MAC
 
 ## Zusammenfassung
 
@@ -27,10 +27,11 @@ KatanaRecomp besitzt einen durchgaengigen Prototyp-Pfad von SH-4-Binaerdaten bis
 - [x] KR-1202 - Feste Mehrfach-Shifts
 - [x] KR-1203 - Rotationen
 - [x] KR-1204 - Dynamische Shifts
+- [x] KR-1205 - v0.12.0 Release-Gate
 
 ## Naechster Roadmap-Task
 
-- [ ] KR-1205 - v0.12 Release-Gate
+- [ ] KR-1301 - Einfache Multiplikation
 
 ## Aktuelle Einschraenkungen
 

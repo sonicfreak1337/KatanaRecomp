@@ -24,6 +24,11 @@ Dieses Dokument zerlegt die Roadmap in issue-taugliche Arbeitspakete.
 10. KR-1203
 11. KR-1204
 12. KR-1205
+13. KR-1301
+14. KR-1302
+15. KR-1303
+16. KR-1304
+17. KR-1305
 
 ---
 
@@ -199,7 +204,7 @@ Akzeptanz:
 - positive, negative und Grenz-Shiftwerte
 - Verhalten bei grossen Shiftzaehlern dokumentiert
 
-### [ ] KR-1205 - v0.12 Release-Gate
+### [x] KR-1205 - v0.12 Release-Gate
 
 Abhaengigkeiten: KR-1201 bis KR-1204
 
