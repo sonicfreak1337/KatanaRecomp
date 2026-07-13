@@ -1,5 +1,6 @@
 # Build-Ausgaben
 /build/
+/build-*/
 /out/
 /generated/
 

@@ -49,6 +49,14 @@ std::string unknown_instruction_text(const std::uint16_t opcode) {
     return output.str();
 }
 
+bool matches_metadata(
+    const std::uint16_t opcode,
+    const InstructionKind kind
+) {
+    const auto* metadata = metadata_for_kind(kind);
+    return metadata != nullptr && metadata->matches(opcode);
+}
+
 void decode_memory_registers(
     DecodedInstruction& instruction,
     const std::uint16_t opcode
@@ -117,13 +125,13 @@ DecodedInstruction decode(const std::uint16_t opcode) {
         return instruction;
     }
 
-    if (opcode == 0x0009u) {
+    if (matches_metadata(opcode, InstructionKind::Nop)) {
         instruction.kind = InstructionKind::Nop;
         instruction.text = "nop";
         return instruction;
     }
 
-    if (opcode == 0x000Bu) {
+    if (matches_metadata(opcode, InstructionKind::Rts)) {
         instruction.kind = InstructionKind::Rts;
         instruction.control_flow = ControlFlowKind::Return;
         instruction.has_delay_slot = true;
@@ -131,7 +139,7 @@ DecodedInstruction decode(const std::uint16_t opcode) {
         return instruction;
     }
 
-    if (opcode == 0x002Bu) {
+    if (matches_metadata(opcode, InstructionKind::ReturnFromException)) {
         instruction.kind = InstructionKind::ReturnFromException;
         instruction.control_flow = ControlFlowKind::ExceptionReturn;
         instruction.has_delay_slot = true;
@@ -140,7 +148,7 @@ DecodedInstruction decode(const std::uint16_t opcode) {
         return instruction;
     }
 
-    if (opcode == 0x001Bu) {
+    if (matches_metadata(opcode, InstructionKind::Sleep)) {
         instruction.kind = InstructionKind::Sleep;
         instruction.control_flow = ControlFlowKind::Halt;
         instruction.is_privileged = true;
@@ -148,7 +156,7 @@ DecodedInstruction decode(const std::uint16_t opcode) {
         return instruction;
     }
 
-    if ((opcode & 0xFF00u) == 0xC300u) {
+    if (matches_metadata(opcode, InstructionKind::TrapAlways)) {
         instruction.kind = InstructionKind::TrapAlways;
         instruction.immediate = static_cast<std::int32_t>(opcode & 0x00FFu);
         instruction.control_flow = ControlFlowKind::Trap;
@@ -156,7 +164,7 @@ DecodedInstruction decode(const std::uint16_t opcode) {
         return instruction;
     }
 
-    if ((opcode & 0xF000u) == 0xA000u) {
+    if (matches_metadata(opcode, InstructionKind::Bra)) {
         instruction.kind = InstructionKind::Bra;
         instruction.displacement = sign_extend_12(opcode) * 2;
         instruction.control_flow = ControlFlowKind::UnconditionalBranch;
@@ -165,7 +173,7 @@ DecodedInstruction decode(const std::uint16_t opcode) {
         return instruction;
     }
 
-    if ((opcode & 0xF000u) == 0xB000u) {
+    if (matches_metadata(opcode, InstructionKind::Bsr)) {
         instruction.kind = InstructionKind::Bsr;
         instruction.displacement = sign_extend_12(opcode) * 2;
         instruction.control_flow = ControlFlowKind::Call;
@@ -174,7 +182,7 @@ DecodedInstruction decode(const std::uint16_t opcode) {
         return instruction;
     }
 
-    if ((opcode & 0xFF00u) == 0x8900u) {
+    if (matches_metadata(opcode, InstructionKind::Bt)) {
         instruction.kind = InstructionKind::Bt;
         instruction.displacement = sign_extend_8(opcode) * 2;
         instruction.control_flow = ControlFlowKind::ConditionalBranch;
@@ -182,7 +190,7 @@ DecodedInstruction decode(const std::uint16_t opcode) {
         return instruction;
     }
 
-    if ((opcode & 0xFF00u) == 0x8B00u) {
+    if (matches_metadata(opcode, InstructionKind::Bf)) {
         instruction.kind = InstructionKind::Bf;
         instruction.displacement = sign_extend_8(opcode) * 2;
         instruction.control_flow = ControlFlowKind::ConditionalBranch;
@@ -190,7 +198,7 @@ DecodedInstruction decode(const std::uint16_t opcode) {
         return instruction;
     }
 
-    if ((opcode & 0xFF00u) == 0x8D00u) {
+    if (matches_metadata(opcode, InstructionKind::BtS)) {
         instruction.kind = InstructionKind::BtS;
         instruction.displacement = sign_extend_8(opcode) * 2;
         instruction.control_flow = ControlFlowKind::ConditionalBranch;
@@ -199,7 +207,7 @@ DecodedInstruction decode(const std::uint16_t opcode) {
         return instruction;
     }
 
-    if ((opcode & 0xFF00u) == 0x8F00u) {
+    if (matches_metadata(opcode, InstructionKind::BfS)) {
         instruction.kind = InstructionKind::BfS;
         instruction.displacement = sign_extend_8(opcode) * 2;
         instruction.control_flow = ControlFlowKind::ConditionalBranch;
@@ -208,7 +216,7 @@ DecodedInstruction decode(const std::uint16_t opcode) {
         return instruction;
     }
 
-    if ((opcode & 0xF0FFu) == 0x402Bu) {
+    if (matches_metadata(opcode, InstructionKind::Jmp)) {
         instruction.kind = InstructionKind::Jmp;
         instruction.branch_register =
             static_cast<std::uint8_t>((opcode >> 8u) & 0x0Fu);
@@ -219,7 +227,7 @@ DecodedInstruction decode(const std::uint16_t opcode) {
         return instruction;
     }
 
-    if ((opcode & 0xF0FFu) == 0x400Bu) {
+    if (matches_metadata(opcode, InstructionKind::Jsr)) {
         instruction.kind = InstructionKind::Jsr;
         instruction.branch_register =
             static_cast<std::uint8_t>((opcode >> 8u) & 0x0Fu);
@@ -230,7 +238,7 @@ DecodedInstruction decode(const std::uint16_t opcode) {
         return instruction;
     }
 
-    if ((opcode & 0xF00Fu) == 0x3008u) {
+    if (matches_metadata(opcode, InstructionKind::SubRegister)) {
         instruction.kind = InstructionKind::SubRegister;
         decode_memory_registers(instruction, opcode);
 
@@ -243,7 +251,7 @@ DecodedInstruction decode(const std::uint16_t opcode) {
         return instruction;
     }
 
-    if ((opcode & 0xF00Fu) == 0x600Bu) {
+    if (matches_metadata(opcode, InstructionKind::NegateRegister)) {
         instruction.kind = InstructionKind::NegateRegister;
         decode_memory_registers(instruction, opcode);
 
@@ -256,7 +264,7 @@ DecodedInstruction decode(const std::uint16_t opcode) {
         return instruction;
     }
 
-    if ((opcode & 0xF00Fu) == 0x6007u) {
+    if (matches_metadata(opcode, InstructionKind::NotRegister)) {
         instruction.kind = InstructionKind::NotRegister;
         decode_memory_registers(instruction, opcode);
 
@@ -268,7 +276,7 @@ DecodedInstruction decode(const std::uint16_t opcode) {
 
         return instruction;
     }
-    if ((opcode & 0xF00Fu) == 0x300Eu) {
+    if (matches_metadata(opcode, InstructionKind::AddWithCarry)) {
         instruction.kind = InstructionKind::AddWithCarry;
         decode_memory_registers(instruction, opcode);
 
@@ -281,7 +289,7 @@ DecodedInstruction decode(const std::uint16_t opcode) {
         return instruction;
     }
 
-    if ((opcode & 0xF00Fu) == 0x300Fu) {
+    if (matches_metadata(opcode, InstructionKind::AddWithOverflow)) {
         instruction.kind = InstructionKind::AddWithOverflow;
         decode_memory_registers(instruction, opcode);
 
@@ -294,7 +302,7 @@ DecodedInstruction decode(const std::uint16_t opcode) {
         return instruction;
     }
 
-    if ((opcode & 0xF00Fu) == 0x300Au) {
+    if (matches_metadata(opcode, InstructionKind::SubWithCarry)) {
         instruction.kind = InstructionKind::SubWithCarry;
         decode_memory_registers(instruction, opcode);
 
@@ -307,7 +315,7 @@ DecodedInstruction decode(const std::uint16_t opcode) {
         return instruction;
     }
 
-    if ((opcode & 0xF00Fu) == 0x300Bu) {
+    if (matches_metadata(opcode, InstructionKind::SubWithOverflow)) {
         instruction.kind = InstructionKind::SubWithOverflow;
         decode_memory_registers(instruction, opcode);
 
@@ -320,7 +328,7 @@ DecodedInstruction decode(const std::uint16_t opcode) {
         return instruction;
     }
 
-    if ((opcode & 0xF00Fu) == 0x600Au) {
+    if (matches_metadata(opcode, InstructionKind::NegateWithCarry)) {
         instruction.kind = InstructionKind::NegateWithCarry;
         decode_memory_registers(instruction, opcode);
 
@@ -332,7 +340,7 @@ DecodedInstruction decode(const std::uint16_t opcode) {
 
         return instruction;
     }
-    if ((opcode & 0xF00Fu) == 0x600Cu) {
+    if (matches_metadata(opcode, InstructionKind::ExtendUnsignedByte)) {
         instruction.kind = InstructionKind::ExtendUnsignedByte;
         decode_memory_registers(instruction, opcode);
 
@@ -345,7 +353,7 @@ DecodedInstruction decode(const std::uint16_t opcode) {
         return instruction;
     }
 
-    if ((opcode & 0xF00Fu) == 0x600Du) {
+    if (matches_metadata(opcode, InstructionKind::ExtendUnsignedWord)) {
         instruction.kind = InstructionKind::ExtendUnsignedWord;
         decode_memory_registers(instruction, opcode);
 
@@ -358,7 +366,7 @@ DecodedInstruction decode(const std::uint16_t opcode) {
         return instruction;
     }
 
-    if ((opcode & 0xF00Fu) == 0x600Eu) {
+    if (matches_metadata(opcode, InstructionKind::ExtendSignedByte)) {
         instruction.kind = InstructionKind::ExtendSignedByte;
         decode_memory_registers(instruction, opcode);
 
@@ -371,7 +379,7 @@ DecodedInstruction decode(const std::uint16_t opcode) {
         return instruction;
     }
 
-    if ((opcode & 0xF00Fu) == 0x600Fu) {
+    if (matches_metadata(opcode, InstructionKind::ExtendSignedWord)) {
         instruction.kind = InstructionKind::ExtendSignedWord;
         decode_memory_registers(instruction, opcode);
 
@@ -384,7 +392,7 @@ DecodedInstruction decode(const std::uint16_t opcode) {
         return instruction;
     }
 
-    if ((opcode & 0xF00Fu) == 0x6008u) {
+    if (matches_metadata(opcode, InstructionKind::SwapBytes)) {
         instruction.kind = InstructionKind::SwapBytes;
         decode_memory_registers(instruction, opcode);
 
@@ -397,7 +405,7 @@ DecodedInstruction decode(const std::uint16_t opcode) {
         return instruction;
     }
 
-    if ((opcode & 0xF00Fu) == 0x6009u) {
+    if (matches_metadata(opcode, InstructionKind::SwapWords)) {
         instruction.kind = InstructionKind::SwapWords;
         decode_memory_registers(instruction, opcode);
 
@@ -410,7 +418,7 @@ DecodedInstruction decode(const std::uint16_t opcode) {
         return instruction;
     }
 
-    if ((opcode & 0xF00Fu) == 0x200Du) {
+    if (matches_metadata(opcode, InstructionKind::ExtractMiddle)) {
         instruction.kind = InstructionKind::ExtractMiddle;
         decode_memory_registers(instruction, opcode);
 
@@ -422,7 +430,7 @@ DecodedInstruction decode(const std::uint16_t opcode) {
 
         return instruction;
     }
-    if ((opcode & 0xF0FFu) == 0x4010u) {
+    if (matches_metadata(opcode, InstructionKind::DecrementAndTest)) {
         instruction.kind = InstructionKind::DecrementAndTest;
         instruction.destination_register =
             static_cast<std::uint8_t>((opcode >> 8u) & 0x0Fu);
@@ -434,7 +442,7 @@ DecodedInstruction decode(const std::uint16_t opcode) {
         return instruction;
     }
 
-    if ((opcode & 0xF0FFu) == 0x0029u) {
+    if (matches_metadata(opcode, InstructionKind::MoveT)) {
         instruction.kind = InstructionKind::MoveT;
         instruction.destination_register =
             static_cast<std::uint8_t>((opcode >> 8u) & 0x0Fu);
@@ -445,7 +453,7 @@ DecodedInstruction decode(const std::uint16_t opcode) {
 
         return instruction;
     }
-    if ((opcode & 0xF0FFu) == 0x4000u) {
+    if (matches_metadata(opcode, InstructionKind::ShiftLogicalLeftOne)) {
         instruction.kind = InstructionKind::ShiftLogicalLeftOne;
         instruction.destination_register =
             static_cast<std::uint8_t>((opcode >> 8u) & 0x0Fu);
@@ -457,7 +465,7 @@ DecodedInstruction decode(const std::uint16_t opcode) {
         return instruction;
     }
 
-    if ((opcode & 0xF0FFu) == 0x4001u) {
+    if (matches_metadata(opcode, InstructionKind::ShiftLogicalRightOne)) {
         instruction.kind = InstructionKind::ShiftLogicalRightOne;
         instruction.destination_register =
             static_cast<std::uint8_t>((opcode >> 8u) & 0x0Fu);
@@ -469,7 +477,7 @@ DecodedInstruction decode(const std::uint16_t opcode) {
         return instruction;
     }
 
-    if ((opcode & 0xF0FFu) == 0x4020u) {
+    if (matches_metadata(opcode, InstructionKind::ShiftArithmeticLeftOne)) {
         instruction.kind = InstructionKind::ShiftArithmeticLeftOne;
         instruction.destination_register =
             static_cast<std::uint8_t>((opcode >> 8u) & 0x0Fu);
@@ -481,7 +489,7 @@ DecodedInstruction decode(const std::uint16_t opcode) {
         return instruction;
     }
 
-    if ((opcode & 0xF0FFu) == 0x4021u) {
+    if (matches_metadata(opcode, InstructionKind::ShiftArithmeticRightOne)) {
         instruction.kind = InstructionKind::ShiftArithmeticRightOne;
         instruction.destination_register =
             static_cast<std::uint8_t>((opcode >> 8u) & 0x0Fu);
@@ -492,7 +500,7 @@ DecodedInstruction decode(const std::uint16_t opcode) {
 
         return instruction;
     }
-    if ((opcode & 0xF0FFu) == 0x4008u) {
+    if (matches_metadata(opcode, InstructionKind::ShiftLogicalLeftTwo)) {
         instruction.kind = InstructionKind::ShiftLogicalLeftTwo;
         instruction.destination_register =
             static_cast<std::uint8_t>((opcode >> 8u) & 0x0Fu);
@@ -504,7 +512,7 @@ DecodedInstruction decode(const std::uint16_t opcode) {
         return instruction;
     }
 
-    if ((opcode & 0xF0FFu) == 0x4018u) {
+    if (matches_metadata(opcode, InstructionKind::ShiftLogicalLeftEight)) {
         instruction.kind = InstructionKind::ShiftLogicalLeftEight;
         instruction.destination_register =
             static_cast<std::uint8_t>((opcode >> 8u) & 0x0Fu);
@@ -516,7 +524,7 @@ DecodedInstruction decode(const std::uint16_t opcode) {
         return instruction;
     }
 
-    if ((opcode & 0xF0FFu) == 0x4028u) {
+    if (matches_metadata(opcode, InstructionKind::ShiftLogicalLeftSixteen)) {
         instruction.kind = InstructionKind::ShiftLogicalLeftSixteen;
         instruction.destination_register =
             static_cast<std::uint8_t>((opcode >> 8u) & 0x0Fu);
@@ -528,7 +536,7 @@ DecodedInstruction decode(const std::uint16_t opcode) {
         return instruction;
     }
 
-    if ((opcode & 0xF0FFu) == 0x4009u) {
+    if (matches_metadata(opcode, InstructionKind::ShiftLogicalRightTwo)) {
         instruction.kind = InstructionKind::ShiftLogicalRightTwo;
         instruction.destination_register =
             static_cast<std::uint8_t>((opcode >> 8u) & 0x0Fu);
@@ -540,7 +548,7 @@ DecodedInstruction decode(const std::uint16_t opcode) {
         return instruction;
     }
 
-    if ((opcode & 0xF0FFu) == 0x4019u) {
+    if (matches_metadata(opcode, InstructionKind::ShiftLogicalRightEight)) {
         instruction.kind = InstructionKind::ShiftLogicalRightEight;
         instruction.destination_register =
             static_cast<std::uint8_t>((opcode >> 8u) & 0x0Fu);
@@ -552,7 +560,7 @@ DecodedInstruction decode(const std::uint16_t opcode) {
         return instruction;
     }
 
-    if ((opcode & 0xF0FFu) == 0x4029u) {
+    if (matches_metadata(opcode, InstructionKind::ShiftLogicalRightSixteen)) {
         instruction.kind = InstructionKind::ShiftLogicalRightSixteen;
         instruction.destination_register =
             static_cast<std::uint8_t>((opcode >> 8u) & 0x0Fu);
@@ -563,7 +571,7 @@ DecodedInstruction decode(const std::uint16_t opcode) {
 
         return instruction;
     }
-    if ((opcode & 0xF0FFu) == 0x4004u) {
+    if (matches_metadata(opcode, InstructionKind::RotateLeft)) {
         instruction.kind = InstructionKind::RotateLeft;
         instruction.destination_register =
             static_cast<std::uint8_t>((opcode >> 8u) & 0x0Fu);
@@ -575,7 +583,7 @@ DecodedInstruction decode(const std::uint16_t opcode) {
         return instruction;
     }
 
-    if ((opcode & 0xF0FFu) == 0x4005u) {
+    if (matches_metadata(opcode, InstructionKind::RotateRight)) {
         instruction.kind = InstructionKind::RotateRight;
         instruction.destination_register =
             static_cast<std::uint8_t>((opcode >> 8u) & 0x0Fu);
@@ -587,7 +595,7 @@ DecodedInstruction decode(const std::uint16_t opcode) {
         return instruction;
     }
 
-    if ((opcode & 0xF0FFu) == 0x4024u) {
+    if (matches_metadata(opcode, InstructionKind::RotateLeftThroughT)) {
         instruction.kind = InstructionKind::RotateLeftThroughT;
         instruction.destination_register =
             static_cast<std::uint8_t>((opcode >> 8u) & 0x0Fu);
@@ -599,7 +607,7 @@ DecodedInstruction decode(const std::uint16_t opcode) {
         return instruction;
     }
 
-    if ((opcode & 0xF0FFu) == 0x4025u) {
+    if (matches_metadata(opcode, InstructionKind::RotateRightThroughT)) {
         instruction.kind = InstructionKind::RotateRightThroughT;
         instruction.destination_register =
             static_cast<std::uint8_t>((opcode >> 8u) & 0x0Fu);
@@ -610,7 +618,7 @@ DecodedInstruction decode(const std::uint16_t opcode) {
 
         return instruction;
     }
-    if ((opcode & 0xF00Fu) == 0x400Cu) {
+    if (matches_metadata(opcode, InstructionKind::ShiftArithmeticDynamic)) {
         instruction.kind = InstructionKind::ShiftArithmeticDynamic;
         decode_memory_registers(instruction, opcode);
 
@@ -623,7 +631,7 @@ DecodedInstruction decode(const std::uint16_t opcode) {
         return instruction;
     }
 
-    if ((opcode & 0xF00Fu) == 0x400Du) {
+    if (matches_metadata(opcode, InstructionKind::ShiftLogicalDynamic)) {
         instruction.kind = InstructionKind::ShiftLogicalDynamic;
         decode_memory_registers(instruction, opcode);
 
@@ -635,13 +643,13 @@ DecodedInstruction decode(const std::uint16_t opcode) {
 
         return instruction;
     }
-    if (opcode == 0x0019u) {
+    if (matches_metadata(opcode, InstructionKind::DivideInitializeUnsigned)) {
         instruction.kind = InstructionKind::DivideInitializeUnsigned;
         instruction.text = "div0u";
         return instruction;
     }
 
-    if ((opcode & 0xF00Fu) == 0x2007u) {
+    if (matches_metadata(opcode, InstructionKind::DivideInitializeSigned)) {
         instruction.kind = InstructionKind::DivideInitializeSigned;
         decode_memory_registers(instruction, opcode);
 
@@ -654,7 +662,7 @@ DecodedInstruction decode(const std::uint16_t opcode) {
         return instruction;
     }
 
-    if ((opcode & 0xF00Fu) == 0x3004u) {
+    if (matches_metadata(opcode, InstructionKind::DivideStep)) {
         instruction.kind = InstructionKind::DivideStep;
         decode_memory_registers(instruction, opcode);
 
@@ -666,7 +674,7 @@ DecodedInstruction decode(const std::uint16_t opcode) {
 
         return instruction;
     }
-    if ((opcode & 0xF00Fu) == 0x400Fu) {
+    if (matches_metadata(opcode, InstructionKind::MultiplyAccumulateWord)) {
         instruction.kind = InstructionKind::MultiplyAccumulateWord;
         decode_memory_registers(instruction, opcode);
 
@@ -680,7 +688,7 @@ DecodedInstruction decode(const std::uint16_t opcode) {
         return instruction;
     }
 
-    if ((opcode & 0xF00Fu) == 0x000Fu) {
+    if (matches_metadata(opcode, InstructionKind::MultiplyAccumulateLong)) {
         instruction.kind = InstructionKind::MultiplyAccumulateLong;
         decode_memory_registers(instruction, opcode);
 
@@ -693,7 +701,7 @@ DecodedInstruction decode(const std::uint16_t opcode) {
 
         return instruction;
     }
-    if ((opcode & 0xF00Fu) == 0x300Du) {
+    if (matches_metadata(opcode, InstructionKind::DoubleMultiplySignedLong)) {
         instruction.kind = InstructionKind::DoubleMultiplySignedLong;
         decode_memory_registers(instruction, opcode);
 
@@ -706,7 +714,7 @@ DecodedInstruction decode(const std::uint16_t opcode) {
         return instruction;
     }
 
-    if ((opcode & 0xF00Fu) == 0x3005u) {
+    if (matches_metadata(opcode, InstructionKind::DoubleMultiplyUnsignedLong)) {
         instruction.kind = InstructionKind::DoubleMultiplyUnsignedLong;
         decode_memory_registers(instruction, opcode);
 
@@ -718,7 +726,7 @@ DecodedInstruction decode(const std::uint16_t opcode) {
 
         return instruction;
     }
-    if ((opcode & 0xF00Fu) == 0x0007u) {
+    if (matches_metadata(opcode, InstructionKind::MultiplyLong)) {
         instruction.kind = InstructionKind::MultiplyLong;
         decode_memory_registers(instruction, opcode);
 
@@ -731,7 +739,7 @@ DecodedInstruction decode(const std::uint16_t opcode) {
         return instruction;
     }
 
-    if ((opcode & 0xF00Fu) == 0x200Fu) {
+    if (matches_metadata(opcode, InstructionKind::MultiplySignedWord)) {
         instruction.kind = InstructionKind::MultiplySignedWord;
         decode_memory_registers(instruction, opcode);
 
@@ -744,7 +752,7 @@ DecodedInstruction decode(const std::uint16_t opcode) {
         return instruction;
     }
 
-    if ((opcode & 0xF00Fu) == 0x200Eu) {
+    if (matches_metadata(opcode, InstructionKind::MultiplyUnsignedWord)) {
         instruction.kind = InstructionKind::MultiplyUnsignedWord;
         decode_memory_registers(instruction, opcode);
 
@@ -756,7 +764,7 @@ DecodedInstruction decode(const std::uint16_t opcode) {
 
         return instruction;
     }
-    if ((opcode & 0xF00Fu) == 0x2009u) {
+    if (matches_metadata(opcode, InstructionKind::AndRegister)) {
         instruction.kind = InstructionKind::AndRegister;
         decode_memory_registers(instruction, opcode);
 
@@ -769,7 +777,7 @@ DecodedInstruction decode(const std::uint16_t opcode) {
         return instruction;
     }
 
-    if ((opcode & 0xF00Fu) == 0x200Au) {
+    if (matches_metadata(opcode, InstructionKind::XorRegister)) {
         instruction.kind = InstructionKind::XorRegister;
         decode_memory_registers(instruction, opcode);
 
@@ -782,7 +790,7 @@ DecodedInstruction decode(const std::uint16_t opcode) {
         return instruction;
     }
 
-    if ((opcode & 0xF00Fu) == 0x200Bu) {
+    if (matches_metadata(opcode, InstructionKind::OrRegister)) {
         instruction.kind = InstructionKind::OrRegister;
         decode_memory_registers(instruction, opcode);
 
@@ -795,7 +803,7 @@ DecodedInstruction decode(const std::uint16_t opcode) {
         return instruction;
     }
 
-    if ((opcode & 0xFF00u) == 0xC900u) {
+    if (matches_metadata(opcode, InstructionKind::AndImmediate)) {
         instruction.kind = InstructionKind::AndImmediate;
         instruction.destination_register = 0;
         instruction.immediate =
@@ -809,7 +817,7 @@ DecodedInstruction decode(const std::uint16_t opcode) {
         return instruction;
     }
 
-    if ((opcode & 0xFF00u) == 0xCA00u) {
+    if (matches_metadata(opcode, InstructionKind::XorImmediate)) {
         instruction.kind = InstructionKind::XorImmediate;
         instruction.destination_register = 0;
         instruction.immediate =
@@ -823,7 +831,7 @@ DecodedInstruction decode(const std::uint16_t opcode) {
         return instruction;
     }
 
-    if ((opcode & 0xFF00u) == 0xCB00u) {
+    if (matches_metadata(opcode, InstructionKind::OrImmediate)) {
         instruction.kind = InstructionKind::OrImmediate;
         instruction.destination_register = 0;
         instruction.immediate =
@@ -836,30 +844,30 @@ DecodedInstruction decode(const std::uint16_t opcode) {
 
         return instruction;
     }
-    if (opcode == 0x0048u) {
+    if (matches_metadata(opcode, InstructionKind::ClearS)) {
         instruction.kind = InstructionKind::ClearS;
         instruction.text = "clrs";
         return instruction;
     }
 
-    if (opcode == 0x0058u) {
+    if (matches_metadata(opcode, InstructionKind::SetS)) {
         instruction.kind = InstructionKind::SetS;
         instruction.text = "sets";
         return instruction;
     }
-    if (opcode == 0x0008u) {
+    if (matches_metadata(opcode, InstructionKind::ClearT)) {
         instruction.kind = InstructionKind::ClearT;
         instruction.text = "clrt";
         return instruction;
     }
 
-    if (opcode == 0x0018u) {
+    if (matches_metadata(opcode, InstructionKind::SetT)) {
         instruction.kind = InstructionKind::SetT;
         instruction.text = "sett";
         return instruction;
     }
 
-    if ((opcode & 0xFF00u) == 0x8800u) {
+    if (matches_metadata(opcode, InstructionKind::CompareEqualImmediate)) {
         instruction.kind = InstructionKind::CompareEqualImmediate;
         instruction.destination_register = 0;
         instruction.immediate = sign_extend_8(opcode);
@@ -872,7 +880,7 @@ DecodedInstruction decode(const std::uint16_t opcode) {
         return instruction;
     }
 
-    if ((opcode & 0xF00Fu) == 0x3000u) {
+    if (matches_metadata(opcode, InstructionKind::CompareEqualRegister)) {
         instruction.kind = InstructionKind::CompareEqualRegister;
         decode_memory_registers(instruction, opcode);
 
@@ -885,7 +893,7 @@ DecodedInstruction decode(const std::uint16_t opcode) {
         return instruction;
     }
 
-    if ((opcode & 0xF00Fu) == 0x3002u) {
+    if (matches_metadata(opcode, InstructionKind::CompareHigherOrSame)) {
         instruction.kind = InstructionKind::CompareHigherOrSame;
         decode_memory_registers(instruction, opcode);
 
@@ -898,7 +906,7 @@ DecodedInstruction decode(const std::uint16_t opcode) {
         return instruction;
     }
 
-    if ((opcode & 0xF00Fu) == 0x3003u) {
+    if (matches_metadata(opcode, InstructionKind::CompareGreaterOrEqual)) {
         instruction.kind = InstructionKind::CompareGreaterOrEqual;
         decode_memory_registers(instruction, opcode);
 
@@ -911,7 +919,7 @@ DecodedInstruction decode(const std::uint16_t opcode) {
         return instruction;
     }
 
-    if ((opcode & 0xF00Fu) == 0x3006u) {
+    if (matches_metadata(opcode, InstructionKind::CompareHigher)) {
         instruction.kind = InstructionKind::CompareHigher;
         decode_memory_registers(instruction, opcode);
 
@@ -924,7 +932,7 @@ DecodedInstruction decode(const std::uint16_t opcode) {
         return instruction;
     }
 
-    if ((opcode & 0xF00Fu) == 0x3007u) {
+    if (matches_metadata(opcode, InstructionKind::CompareGreaterThan)) {
         instruction.kind = InstructionKind::CompareGreaterThan;
         decode_memory_registers(instruction, opcode);
 
@@ -937,7 +945,7 @@ DecodedInstruction decode(const std::uint16_t opcode) {
         return instruction;
     }
 
-    if ((opcode & 0xF0FFu) == 0x4011u) {
+    if (matches_metadata(opcode, InstructionKind::ComparePositiveOrZero)) {
         instruction.kind = InstructionKind::ComparePositiveOrZero;
         instruction.destination_register =
             static_cast<std::uint8_t>((opcode >> 8u) & 0x0Fu);
@@ -949,7 +957,7 @@ DecodedInstruction decode(const std::uint16_t opcode) {
         return instruction;
     }
 
-    if ((opcode & 0xF0FFu) == 0x4015u) {
+    if (matches_metadata(opcode, InstructionKind::ComparePositive)) {
         instruction.kind = InstructionKind::ComparePositive;
         instruction.destination_register =
             static_cast<std::uint8_t>((opcode >> 8u) & 0x0Fu);
@@ -961,7 +969,7 @@ DecodedInstruction decode(const std::uint16_t opcode) {
         return instruction;
     }
 
-    if ((opcode & 0xF00Fu) == 0x200Cu) {
+    if (matches_metadata(opcode, InstructionKind::CompareString)) {
         instruction.kind = InstructionKind::CompareString;
         decode_memory_registers(instruction, opcode);
 
@@ -973,7 +981,7 @@ DecodedInstruction decode(const std::uint16_t opcode) {
 
         return instruction;
     }
-    if ((opcode & 0xFF00u) == 0xC800u) {
+    if (matches_metadata(opcode, InstructionKind::TestImmediate)) {
         instruction.kind = InstructionKind::TestImmediate;
         instruction.destination_register = 0;
         instruction.immediate =
@@ -987,7 +995,7 @@ DecodedInstruction decode(const std::uint16_t opcode) {
         return instruction;
     }
 
-    if ((opcode & 0xF00Fu) == 0x2008u) {
+    if (matches_metadata(opcode, InstructionKind::TestRegister)) {
         instruction.kind = InstructionKind::TestRegister;
         decode_memory_registers(instruction, opcode);
 
@@ -999,7 +1007,7 @@ DecodedInstruction decode(const std::uint16_t opcode) {
 
         return instruction;
     }
-    if ((opcode & 0xF00Fu) == 0x2004u) {
+    if (matches_metadata(opcode, InstructionKind::MovByteStorePreDecrement)) {
         instruction.kind =
             InstructionKind::MovByteStorePreDecrement;
         decode_memory_registers(instruction, opcode);
@@ -1013,7 +1021,7 @@ DecodedInstruction decode(const std::uint16_t opcode) {
         return instruction;
     }
 
-    if ((opcode & 0xF00Fu) == 0x2005u) {
+    if (matches_metadata(opcode, InstructionKind::MovWordStorePreDecrement)) {
         instruction.kind =
             InstructionKind::MovWordStorePreDecrement;
         decode_memory_registers(instruction, opcode);
@@ -1027,7 +1035,7 @@ DecodedInstruction decode(const std::uint16_t opcode) {
         return instruction;
     }
 
-    if ((opcode & 0xF00Fu) == 0x2006u) {
+    if (matches_metadata(opcode, InstructionKind::MovLongStorePreDecrement)) {
         instruction.kind =
             InstructionKind::MovLongStorePreDecrement;
         decode_memory_registers(instruction, opcode);
@@ -1041,7 +1049,7 @@ DecodedInstruction decode(const std::uint16_t opcode) {
         return instruction;
     }
 
-    if ((opcode & 0xF00Fu) == 0x6004u) {
+    if (matches_metadata(opcode, InstructionKind::MovByteLoadPostIncrement)) {
         instruction.kind =
             InstructionKind::MovByteLoadPostIncrement;
         decode_memory_registers(instruction, opcode);
@@ -1055,7 +1063,7 @@ DecodedInstruction decode(const std::uint16_t opcode) {
         return instruction;
     }
 
-    if ((opcode & 0xF00Fu) == 0x6005u) {
+    if (matches_metadata(opcode, InstructionKind::MovWordLoadPostIncrement)) {
         instruction.kind =
             InstructionKind::MovWordLoadPostIncrement;
         decode_memory_registers(instruction, opcode);
@@ -1069,7 +1077,7 @@ DecodedInstruction decode(const std::uint16_t opcode) {
         return instruction;
     }
 
-    if ((opcode & 0xF00Fu) == 0x6006u) {
+    if (matches_metadata(opcode, InstructionKind::MovLongLoadPostIncrement)) {
         instruction.kind =
             InstructionKind::MovLongLoadPostIncrement;
         decode_memory_registers(instruction, opcode);
@@ -1083,7 +1091,7 @@ DecodedInstruction decode(const std::uint16_t opcode) {
         return instruction;
     }
 
-    if ((opcode & 0xFF00u) == 0x8000u) {
+    if (matches_metadata(opcode, InstructionKind::MovByteStoreDisplacement)) {
         instruction.kind =
             InstructionKind::MovByteStoreDisplacement;
         instruction.source_register = 0u;
@@ -1102,7 +1110,7 @@ DecodedInstruction decode(const std::uint16_t opcode) {
         return instruction;
     }
 
-    if ((opcode & 0xFF00u) == 0x8100u) {
+    if (matches_metadata(opcode, InstructionKind::MovWordStoreDisplacement)) {
         instruction.kind =
             InstructionKind::MovWordStoreDisplacement;
         instruction.source_register = 0u;
@@ -1121,7 +1129,7 @@ DecodedInstruction decode(const std::uint16_t opcode) {
         return instruction;
     }
 
-    if ((opcode & 0xF000u) == 0x1000u) {
+    if (matches_metadata(opcode, InstructionKind::MovLongStoreDisplacement)) {
         instruction.kind =
             InstructionKind::MovLongStoreDisplacement;
         decode_memory_registers(instruction, opcode);
@@ -1140,7 +1148,7 @@ DecodedInstruction decode(const std::uint16_t opcode) {
         return instruction;
     }
 
-    if ((opcode & 0xFF00u) == 0x8400u) {
+    if (matches_metadata(opcode, InstructionKind::MovByteLoadDisplacement)) {
         instruction.kind =
             InstructionKind::MovByteLoadDisplacement;
         instruction.destination_register = 0u;
@@ -1159,7 +1167,7 @@ DecodedInstruction decode(const std::uint16_t opcode) {
         return instruction;
     }
 
-    if ((opcode & 0xFF00u) == 0x8500u) {
+    if (matches_metadata(opcode, InstructionKind::MovWordLoadDisplacement)) {
         instruction.kind =
             InstructionKind::MovWordLoadDisplacement;
         instruction.destination_register = 0u;
@@ -1178,7 +1186,7 @@ DecodedInstruction decode(const std::uint16_t opcode) {
         return instruction;
     }
 
-    if ((opcode & 0xF000u) == 0x5000u) {
+    if (matches_metadata(opcode, InstructionKind::MovLongLoadDisplacement)) {
         instruction.kind =
             InstructionKind::MovLongLoadDisplacement;
         decode_memory_registers(instruction, opcode);
@@ -1196,7 +1204,7 @@ DecodedInstruction decode(const std::uint16_t opcode) {
         return instruction;
     }
 
-    if ((opcode & 0xF00Fu) == 0x0004u) {
+    if (matches_metadata(opcode, InstructionKind::MovByteStoreR0Indexed)) {
         instruction.kind =
             InstructionKind::MovByteStoreR0Indexed;
         decode_memory_registers(instruction, opcode);
@@ -1211,7 +1219,7 @@ DecodedInstruction decode(const std::uint16_t opcode) {
         return instruction;
     }
 
-    if ((opcode & 0xF00Fu) == 0x0005u) {
+    if (matches_metadata(opcode, InstructionKind::MovWordStoreR0Indexed)) {
         instruction.kind =
             InstructionKind::MovWordStoreR0Indexed;
         decode_memory_registers(instruction, opcode);
@@ -1226,7 +1234,7 @@ DecodedInstruction decode(const std::uint16_t opcode) {
         return instruction;
     }
 
-    if ((opcode & 0xF00Fu) == 0x0006u) {
+    if (matches_metadata(opcode, InstructionKind::MovLongStoreR0Indexed)) {
         instruction.kind =
             InstructionKind::MovLongStoreR0Indexed;
         decode_memory_registers(instruction, opcode);
@@ -1241,7 +1249,7 @@ DecodedInstruction decode(const std::uint16_t opcode) {
         return instruction;
     }
 
-    if ((opcode & 0xF00Fu) == 0x000Cu) {
+    if (matches_metadata(opcode, InstructionKind::MovByteLoadR0Indexed)) {
         instruction.kind =
             InstructionKind::MovByteLoadR0Indexed;
         decode_memory_registers(instruction, opcode);
@@ -1255,7 +1263,7 @@ DecodedInstruction decode(const std::uint16_t opcode) {
         return instruction;
     }
 
-    if ((opcode & 0xF00Fu) == 0x000Du) {
+    if (matches_metadata(opcode, InstructionKind::MovWordLoadR0Indexed)) {
         instruction.kind =
             InstructionKind::MovWordLoadR0Indexed;
         decode_memory_registers(instruction, opcode);
@@ -1269,7 +1277,7 @@ DecodedInstruction decode(const std::uint16_t opcode) {
         return instruction;
     }
 
-    if ((opcode & 0xF00Fu) == 0x000Eu) {
+    if (matches_metadata(opcode, InstructionKind::MovLongLoadR0Indexed)) {
         instruction.kind =
             InstructionKind::MovLongLoadR0Indexed;
         decode_memory_registers(instruction, opcode);
@@ -1283,7 +1291,7 @@ DecodedInstruction decode(const std::uint16_t opcode) {
         return instruction;
     }
 
-    if ((opcode & 0xFF00u) == 0xC000u) {
+    if (matches_metadata(opcode, InstructionKind::MovByteStoreGbrDisplacement)) {
         instruction.kind =
             InstructionKind::MovByteStoreGbrDisplacement;
         instruction.source_register = 0u;
@@ -1296,7 +1304,7 @@ DecodedInstruction decode(const std::uint16_t opcode) {
         return instruction;
     }
 
-    if ((opcode & 0xFF00u) == 0xC100u) {
+    if (matches_metadata(opcode, InstructionKind::MovWordStoreGbrDisplacement)) {
         instruction.kind =
             InstructionKind::MovWordStoreGbrDisplacement;
         instruction.source_register = 0u;
@@ -1309,7 +1317,7 @@ DecodedInstruction decode(const std::uint16_t opcode) {
         return instruction;
     }
 
-    if ((opcode & 0xFF00u) == 0xC200u) {
+    if (matches_metadata(opcode, InstructionKind::MovLongStoreGbrDisplacement)) {
         instruction.kind =
             InstructionKind::MovLongStoreGbrDisplacement;
         instruction.source_register = 0u;
@@ -1322,7 +1330,7 @@ DecodedInstruction decode(const std::uint16_t opcode) {
         return instruction;
     }
 
-    if ((opcode & 0xFF00u) == 0xC400u) {
+    if (matches_metadata(opcode, InstructionKind::MovByteLoadGbrDisplacement)) {
         instruction.kind =
             InstructionKind::MovByteLoadGbrDisplacement;
         instruction.destination_register = 0u;
@@ -1335,7 +1343,7 @@ DecodedInstruction decode(const std::uint16_t opcode) {
         return instruction;
     }
 
-    if ((opcode & 0xFF00u) == 0xC500u) {
+    if (matches_metadata(opcode, InstructionKind::MovWordLoadGbrDisplacement)) {
         instruction.kind =
             InstructionKind::MovWordLoadGbrDisplacement;
         instruction.destination_register = 0u;
@@ -1348,7 +1356,7 @@ DecodedInstruction decode(const std::uint16_t opcode) {
         return instruction;
     }
 
-    if ((opcode & 0xFF00u) == 0xC600u) {
+    if (matches_metadata(opcode, InstructionKind::MovLongLoadGbrDisplacement)) {
         instruction.kind =
             InstructionKind::MovLongLoadGbrDisplacement;
         instruction.destination_register = 0u;
@@ -1361,7 +1369,7 @@ DecodedInstruction decode(const std::uint16_t opcode) {
         return instruction;
     }
 
-    if ((opcode & 0xF000u) == 0x9000u) {
+    if (matches_metadata(opcode, InstructionKind::MovWordLoadPcRelative)) {
         instruction.kind =
             InstructionKind::MovWordLoadPcRelative;
         instruction.destination_register =
@@ -1376,7 +1384,7 @@ DecodedInstruction decode(const std::uint16_t opcode) {
         return instruction;
     }
 
-    if ((opcode & 0xF000u) == 0xD000u) {
+    if (matches_metadata(opcode, InstructionKind::MovLongLoadPcRelative)) {
         instruction.kind =
             InstructionKind::MovLongLoadPcRelative;
         instruction.destination_register =
@@ -1391,7 +1399,7 @@ DecodedInstruction decode(const std::uint16_t opcode) {
         return instruction;
     }
 
-    if ((opcode & 0xFF00u) == 0xC700u) {
+    if (matches_metadata(opcode, InstructionKind::MoveAddressPcRelative)) {
         instruction.kind =
             InstructionKind::MoveAddressPcRelative;
         instruction.destination_register = 0u;
@@ -1404,7 +1412,7 @@ DecodedInstruction decode(const std::uint16_t opcode) {
         return instruction;
     }
 
-    if ((opcode & 0xF00Fu) == 0x2000u) {
+    if (matches_metadata(opcode, InstructionKind::MovByteStore)) {
         instruction.kind = InstructionKind::MovByteStore;
         decode_memory_registers(instruction, opcode);
         instruction.text =
@@ -1415,7 +1423,7 @@ DecodedInstruction decode(const std::uint16_t opcode) {
         return instruction;
     }
 
-    if ((opcode & 0xF00Fu) == 0x2001u) {
+    if (matches_metadata(opcode, InstructionKind::MovWordStore)) {
         instruction.kind = InstructionKind::MovWordStore;
         decode_memory_registers(instruction, opcode);
         instruction.text =
@@ -1426,7 +1434,7 @@ DecodedInstruction decode(const std::uint16_t opcode) {
         return instruction;
     }
 
-    if ((opcode & 0xF00Fu) == 0x2002u) {
+    if (matches_metadata(opcode, InstructionKind::MovLongStore)) {
         instruction.kind = InstructionKind::MovLongStore;
         decode_memory_registers(instruction, opcode);
         instruction.text =
@@ -1437,7 +1445,7 @@ DecodedInstruction decode(const std::uint16_t opcode) {
         return instruction;
     }
 
-    if ((opcode & 0xF00Fu) == 0x6000u) {
+    if (matches_metadata(opcode, InstructionKind::MovByteLoad)) {
         instruction.kind = InstructionKind::MovByteLoad;
         decode_memory_registers(instruction, opcode);
         instruction.text =
@@ -1448,7 +1456,7 @@ DecodedInstruction decode(const std::uint16_t opcode) {
         return instruction;
     }
 
-    if ((opcode & 0xF00Fu) == 0x6001u) {
+    if (matches_metadata(opcode, InstructionKind::MovWordLoad)) {
         instruction.kind = InstructionKind::MovWordLoad;
         decode_memory_registers(instruction, opcode);
         instruction.text =
@@ -1459,7 +1467,7 @@ DecodedInstruction decode(const std::uint16_t opcode) {
         return instruction;
     }
 
-    if ((opcode & 0xF00Fu) == 0x6002u) {
+    if (matches_metadata(opcode, InstructionKind::MovLongLoad)) {
         instruction.kind = InstructionKind::MovLongLoad;
         decode_memory_registers(instruction, opcode);
         instruction.text =
@@ -1470,7 +1478,7 @@ DecodedInstruction decode(const std::uint16_t opcode) {
         return instruction;
     }
 
-    if ((opcode & 0xF000u) == 0xE000u) {
+    if (matches_metadata(opcode, InstructionKind::MovImmediate)) {
         instruction.kind = InstructionKind::MovImmediate;
         instruction.destination_register =
             static_cast<std::uint8_t>((opcode >> 8u) & 0x0Fu);
@@ -1485,7 +1493,7 @@ DecodedInstruction decode(const std::uint16_t opcode) {
         return instruction;
     }
 
-    if ((opcode & 0xF000u) == 0x7000u) {
+    if (matches_metadata(opcode, InstructionKind::AddImmediate)) {
         instruction.kind = InstructionKind::AddImmediate;
         instruction.destination_register =
             static_cast<std::uint8_t>((opcode >> 8u) & 0x0Fu);
@@ -1500,7 +1508,7 @@ DecodedInstruction decode(const std::uint16_t opcode) {
         return instruction;
     }
 
-    if ((opcode & 0xF00Fu) == 0x6003u) {
+    if (matches_metadata(opcode, InstructionKind::MovRegister)) {
         instruction.kind = InstructionKind::MovRegister;
         decode_memory_registers(instruction, opcode);
 
@@ -1513,7 +1521,7 @@ DecodedInstruction decode(const std::uint16_t opcode) {
         return instruction;
     }
 
-    if ((opcode & 0xF00Fu) == 0x300Cu) {
+    if (matches_metadata(opcode, InstructionKind::AddRegister)) {
         instruction.kind = InstructionKind::AddRegister;
         decode_memory_registers(instruction, opcode);
 

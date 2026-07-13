@@ -346,7 +346,7 @@ Abhaengigkeiten: KR-1501
 
 Abhaengigkeiten: KR-1502
 
-### [ ] KR-1506 - v0.15 Release-Gate
+### [x] KR-1506 - v0.15 Release-Gate
 
 Abhaengigkeiten: KR-1501 bis KR-1505
 

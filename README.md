@@ -1,10 +1,10 @@
 # KatanaRecomp
 
-Aktuelle Pre-Alpha-Version: `0.14.0`
+Aktuelle Pre-Alpha-Version: `0.15.0`
 
 KatanaRecomp ist ein unabhaengiges, in C++20 entwickeltes Framework fuer die statische Rekompilierung von Sega-Dreamcast-SH-4-Code.
 
-Das Projekt befindet sich in einer fruehen Pre-Alpha-Phase. Der aktuelle Stand ist **Version 0.14.0**.
+Das Projekt befindet sich in einer fruehen Pre-Alpha-Phase. Der aktuelle Stand ist **Version 0.15.0**.
 
 KatanaRecomp ist kein Emulator, kein ISO-Loader und kein Paket fuer kommerzielle Spieldaten. BIOS-Dateien, Disc-Images, urheberrechtlich geschuetzte Assets und automatisch erzeugter Code aus kommerziellen Spielen gehoeren nicht in dieses Repository.
 
@@ -28,7 +28,9 @@ SH-4-Binaerdaten
     -> semantischer Laufzeittest
 `
 
-Der aktuelle Teststand umfasst **53 automatische Tests**.
+Der aktuelle Teststand umfasst **58 automatische Tests**.
+
+Der v0.15-Decoder verwendet eine zentrale Metadatenquelle fuer alle implementierten Opcode-Masken, Operandenformate, Kontrollfluss- und Privileginformationen. `katana-recomp isa-report` berichtet deterministisch ueber den gesamten 16-Bit-Opcode-Raum; Kollisions-, Spezifikations- und Fuzztests sichern die Regeln ab.
 
 ## Implementierte SH-4-Instruktionen
 
@@ -295,6 +297,12 @@ Einzelnen Opcode dekodieren:
 .\build\katana-recomp.exe E1FF
 `
 
+ISA-Abdeckungsbericht erzeugen:
+
+`powershell
+.\build\katana-recomp.exe isa-report
+`
+
 Binaerdatei disassemblieren:
 
 `powershell
@@ -382,16 +390,13 @@ Der Helfer 	ools\release-version.ps1 aktualisiert VERSION und CMake und kann ein
 
 ## Naechste technische Ziele
 
-1. weitere Integer- und Bitoperationen
-2. Shifts und Rotationen
-3. Multiplikation und MAC-Instruktionen
-4. weitere Adressierungsarten
-5. echtes Dreamcast-Speicherabbild
-6. Aufloesung indirekter Calls und Jump Tables
-7. Trennung von generierter Runtime und generiertem Programmcode
-8. erste Optimierungspasses auf Katana-IR
-9. FPU-Unterstuetzung
-10. Loader fuer eigenstaendig bereitgestellte Testprogramme
+1. neutrales Executable-Image- und Segmentmodell
+2. Raw-Binary-Loader auf dem Image-Modell
+3. ELF32-SH-Loader
+4. Symbole, Map-Dateien und minimale Relocations
+5. versioniertes Projektmanifest fuer Eingaben und Adresslayout
+6. rekursive Codeentdeckung
+7. Aufloesung indirekter Calls und Jump Tables
 
 
 ## Roadmap und Arbeitsuebergabe

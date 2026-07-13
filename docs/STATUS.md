@@ -1,8 +1,8 @@
 # Projektstatus
 
-Version: 0.14.0
+Version: 0.15.0
 Phase: Pre-Alpha
-Aktiver Meilenstein: v0.15.0 - Decoder-Haertung
+Aktiver Meilenstein: v0.16.0 - Executable-Image-Modell
 
 ## Zusammenfassung
 
@@ -11,7 +11,7 @@ KatanaRecomp besitzt einen durchgaengigen Prototyp-Pfad von SH-4-Binaerdaten bis
 ## Teststatus
 
 ```text
-100% tests passed out of 53
+100% tests passed out of 58
 ```
 
 ## Fertiggestellte Roadmap-Tasks
@@ -41,10 +41,16 @@ KatanaRecomp besitzt einen durchgaengigen Prototyp-Pfad von SH-4-Binaerdaten bis
 - [x] KR-1406 - Systemregistertransfers
 - [x] KR-1407 - Privilegierte Kontrollinstruktionen
 - [x] KR-1408 - v0.14.0 Release-Gate
+- [x] KR-1501 - Zentrale Instruktionsmetadaten
+- [x] KR-1502 - Decoder-Kollisionspruefung
+- [x] KR-1503 - ISA-Abdeckungsbericht
+- [x] KR-1504 - Spezifikations-Testvektoren
+- [x] KR-1505 - Decoder-Fuzzer
+- [x] KR-1506 - v0.15.0 Release-Gate
 
 ## Naechster Roadmap-Task
 
-- [ ] KR-1501 - Zentrale Instruktionsmetadaten
+- [ ] KR-1601 - Image- und Segmentmodell
 
 ## Aktuelle Einschraenkungen
 
