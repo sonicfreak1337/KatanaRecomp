@@ -1892,3 +1892,81 @@ add_test(
     NAME katana-generated-pc-relative-tests
     COMMAND katana-generated-pc-relative-tests
 )
+
+add_executable(katana-system-register-tests
+    tests/system/system_register_tests.cpp
+)
+
+target_link_libraries(
+    katana-system-register-tests
+    PRIVATE
+        katana_core
+)
+
+katana_enable_warnings(katana-system-register-tests)
+
+add_test(
+    NAME katana-system-register-tests
+    COMMAND katana-system-register-tests
+)
+
+set(
+    KATANA_GENERATED_SYSTEM_REGISTER_CPP
+    ${KATANA_GENERATED_TEST_DIR}/generated_system_register_program.cpp
+)
+
+add_custom_command(
+    OUTPUT
+        ${KATANA_GENERATED_SYSTEM_REGISTER_CPP}
+    COMMAND
+        ${CMAKE_COMMAND}
+        -E
+        make_directory
+        ${KATANA_GENERATED_TEST_DIR}
+    COMMAND
+        $<TARGET_FILE:katana-system-register-tests>
+        --emit-cpp
+        ${KATANA_GENERATED_SYSTEM_REGISTER_CPP}
+    DEPENDS
+        katana-system-register-tests
+        tests/system/system_register_tests.cpp
+    COMMENT
+        "Generiere C++-Programm fuer KR-1406 End-to-End-Test"
+    VERBATIM
+)
+
+set_source_files_properties(
+    ${KATANA_GENERATED_SYSTEM_REGISTER_CPP}
+    PROPERTIES
+        GENERATED TRUE
+        HEADER_FILE_ONLY TRUE
+)
+
+set_source_files_properties(
+    tests/system/generated_system_register_tests.cpp
+    PROPERTIES
+        OBJECT_DEPENDS ${KATANA_GENERATED_SYSTEM_REGISTER_CPP}
+)
+
+add_executable(katana-generated-system-register-tests
+    tests/system/generated_system_register_tests.cpp
+    ${KATANA_GENERATED_SYSTEM_REGISTER_CPP}
+)
+
+target_include_directories(
+    katana-generated-system-register-tests
+    PRIVATE
+        ${KATANA_GENERATED_TEST_DIR}
+)
+
+katana_enable_warnings(katana-generated-system-register-tests)
+
+add_dependencies(
+    katana-generated-system-register-tests
+    katana-system-register-tests
+)
+
+add_test(
+    NAME katana-generated-system-register-tests
+    COMMAND katana-generated-system-register-tests
+)

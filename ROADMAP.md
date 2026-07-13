@@ -145,7 +145,7 @@ Fortschritt:
 - [x] KR-1403 - R0-indexierte Adressierung
 - [x] KR-1404 - GBR-relative Adressierung
 - [x] KR-1405 - PC-relative Loads und MOVA
-- [ ] KR-1406 - Systemregistertransfers
+- [x] KR-1406 - Systemregistertransfers
 - [ ] KR-1407 - Privilegierte Kontrollinstruktionen
 - [ ] KR-1408 - v0.14 Release-Gate
 

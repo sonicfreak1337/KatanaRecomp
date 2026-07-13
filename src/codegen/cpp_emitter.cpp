@@ -51,6 +51,71 @@ std::uint32_t fallthrough_address(
         (instruction.has_delay_slot ? 4u : 2u);
 }
 
+std::string special_register_read_expression(
+    const katana::ir::SpecialRegister special_register
+) {
+    using Register = katana::ir::SpecialRegister;
+    switch (special_register) {
+        case Register::Mach: return "cpu.mach";
+        case Register::Macl: return "cpu.macl";
+        case Register::Pr: return "cpu.pr";
+        case Register::Fpul: return "cpu.fpul";
+        case Register::Fpscr: return "cpu.fpscr";
+        case Register::Sr: return "cpu.read_sr()";
+        case Register::Gbr: return "cpu.gbr";
+        case Register::Vbr: return "cpu.vbr";
+        case Register::Ssr: return "cpu.ssr";
+        case Register::Spc: return "cpu.spc";
+        case Register::Sgr: return "cpu.sgr";
+        case Register::Dbr: return "cpu.dbr";
+        case Register::Bank0: return "cpu.r_bank[0]";
+        case Register::Bank1: return "cpu.r_bank[1]";
+        case Register::Bank2: return "cpu.r_bank[2]";
+        case Register::Bank3: return "cpu.r_bank[3]";
+        case Register::Bank4: return "cpu.r_bank[4]";
+        case Register::Bank5: return "cpu.r_bank[5]";
+        case Register::Bank6: return "cpu.r_bank[6]";
+        case Register::Bank7: return "cpu.r_bank[7]";
+        case Register::None:
+            throw std::runtime_error("IR-Transfer ohne Spezialregister.");
+    }
+    throw std::runtime_error("Unbekanntes Spezialregister.");
+}
+
+void emit_special_register_write(
+    std::ostringstream& output,
+    const katana::ir::SpecialRegister special_register,
+    const std::string& value
+) {
+    using Register = katana::ir::SpecialRegister;
+    switch (special_register) {
+        case Register::Mach: output << "cpu.mach = " << value << ";\n"; return;
+        case Register::Macl: output << "cpu.macl = " << value << ";\n"; return;
+        case Register::Pr: output << "cpu.pr = " << value << ";\n"; return;
+        case Register::Fpul: output << "cpu.fpul = " << value << ";\n"; return;
+        case Register::Fpscr: output << "cpu.fpscr = " << value << " & 0x003FFFFFu;\n"; return;
+        case Register::Sr: output << "cpu.write_sr(" << value << ");\n"; return;
+        case Register::Gbr: output << "cpu.gbr = " << value << ";\n"; return;
+        case Register::Vbr: output << "cpu.vbr = " << value << ";\n"; return;
+        case Register::Ssr: output << "cpu.ssr = " << value << ";\n"; return;
+        case Register::Spc: output << "cpu.spc = " << value << ";\n"; return;
+        case Register::Sgr:
+            throw std::runtime_error("SGR kann nicht mit LDC geladen werden.");
+        case Register::Dbr: output << "cpu.dbr = " << value << ";\n"; return;
+        case Register::Bank0: output << "cpu.r_bank[0] = " << value << ";\n"; return;
+        case Register::Bank1: output << "cpu.r_bank[1] = " << value << ";\n"; return;
+        case Register::Bank2: output << "cpu.r_bank[2] = " << value << ";\n"; return;
+        case Register::Bank3: output << "cpu.r_bank[3] = " << value << ";\n"; return;
+        case Register::Bank4: output << "cpu.r_bank[4] = " << value << ";\n"; return;
+        case Register::Bank5: output << "cpu.r_bank[5] = " << value << ";\n"; return;
+        case Register::Bank6: output << "cpu.r_bank[6] = " << value << ";\n"; return;
+        case Register::Bank7: output << "cpu.r_bank[7] = " << value << ";\n"; return;
+        case Register::None:
+            throw std::runtime_error("IR-Transfer ohne Spezialregister.");
+    }
+    throw std::runtime_error("Unbekanntes Spezialregister.");
+}
+
 void emit_indent(
     std::ostringstream& output,
     const int level
@@ -1619,6 +1684,65 @@ void emit_simple_instruction(
                 << ";\n";
             return;
 
+        case Operation::StoreSpecialRegister:
+            output
+                << "cpu.r["
+                << static_cast<unsigned>(instruction.destination_register)
+                << "] = "
+                << special_register_read_expression(instruction.special_register)
+                << ";\n";
+            return;
+
+        case Operation::StoreSpecialRegisterPreDecrement:
+            output
+                << "{\n"
+                << "const std::uint32_t value = "
+                << special_register_read_expression(instruction.special_register)
+                << ";\n"
+                << "const std::uint32_t address = cpu.r["
+                << static_cast<unsigned>(instruction.destination_register)
+                << "] - 4u;\n"
+                << "cpu.memory.write_u32(address, value);\n"
+                << "cpu.r["
+                << static_cast<unsigned>(instruction.destination_register)
+                << "] = address;\n"
+                << "}\n";
+            return;
+
+        case Operation::LoadSpecialRegister: {
+            output
+                << "{\n"
+                << "const std::uint32_t value = cpu.r["
+                << static_cast<unsigned>(instruction.source_register)
+                << "];\n";
+            emit_special_register_write(
+                output,
+                instruction.special_register,
+                "value"
+            );
+            output << "}\n";
+            return;
+        }
+
+        case Operation::LoadSpecialRegisterPostIncrement: {
+            output
+                << "{\n"
+                << "const std::uint32_t address = cpu.r["
+                << static_cast<unsigned>(instruction.source_register)
+                << "];\n"
+                << "const std::uint32_t value = cpu.memory.read_u32(address);\n"
+                << "cpu.r["
+                << static_cast<unsigned>(instruction.source_register)
+                << "] = address + 4u;\n";
+            emit_special_register_write(
+                output,
+                instruction.special_register,
+                "value"
+            );
+            output << "}\n";
+            return;
+        }
+
 
         case Operation::StoreBytePreDecrement:
             output
@@ -2153,6 +2277,10 @@ void emit_terminal(
         case Operation::LoadWordSignedPcRelative:
         case Operation::LoadLongPcRelative:
         case Operation::MoveAddressPcRelative:
+        case Operation::StoreSpecialRegister:
+        case Operation::StoreSpecialRegisterPreDecrement:
+        case Operation::LoadSpecialRegister:
+        case Operation::LoadSpecialRegisterPostIncrement:
             break;
     }
 
@@ -2279,6 +2407,10 @@ bool is_control_flow(
         case Operation::LoadWordSignedPcRelative:
         case Operation::LoadLongPcRelative:
         case Operation::MoveAddressPcRelative:
+        case Operation::StoreSpecialRegister:
+        case Operation::StoreSpecialRegisterPreDecrement:
+        case Operation::LoadSpecialRegister:
+        case Operation::LoadSpecialRegisterPostIncrement:
             return false;
     }
 
@@ -2383,6 +2515,7 @@ std::string emit_cpp_program(
         << "#include <cstddef>\n"
         << "#include <cstdint>\n"
         << "#include <stdexcept>\n"
+        << "#include <utility>\n"
         << "#include <vector>\n\n"
         << "namespace katana_generated {\n\n"
         << "class Memory {\n"
@@ -2473,16 +2606,47 @@ std::string emit_cpp_program(
         << "};\n\n"
         << "struct CpuState {\n"
         << "    std::array<std::uint32_t, 16> r{};\n"
+        << "    std::array<std::uint32_t, 8> r_bank{};\n"
         << "    std::uint32_t pc = 0;\n"
         << "    std::uint32_t pr = 0;\n"
         << "    std::uint32_t gbr = 0;\n"
+        << "    std::uint32_t vbr = 0;\n"
+        << "    std::uint32_t ssr = 0;\n"
+        << "    std::uint32_t spc = 0;\n"
+        << "    std::uint32_t sgr = 0;\n"
+        << "    std::uint32_t dbr = 0;\n"
         << "    std::uint32_t mach = 0;\n"
         << "    std::uint32_t macl = 0;\n"
+        << "    std::uint32_t fpul = 0;\n"
+        << "    std::uint32_t fpscr = 0;\n"
+        << "    std::uint32_t sr = 0;\n"
         << "    bool t = false;\n"
         << "    bool s = false;\n"
         << "    bool q = false;\n"
         << "    bool m = false;\n"
-        << "    Memory memory{};\n"
+        << "    Memory memory{};\n\n"
+        << "    [[nodiscard]] std::uint32_t read_sr() const {\n"
+        << "        return (sr & ~0x00000303u) |\n"
+        << "            (m ? 0x00000200u : 0u) |\n"
+        << "            (q ? 0x00000100u : 0u) |\n"
+        << "            (s ? 0x00000002u : 0u) |\n"
+        << "            (t ? 0x00000001u : 0u);\n"
+        << "    }\n\n"
+        << "    void write_sr(const std::uint32_t value) {\n"
+        << "        const std::uint32_t masked = value & 0x700083F3u;\n"
+        << "        const bool old_rb = (sr & 0x20000000u) != 0u;\n"
+        << "        const bool new_rb = (masked & 0x20000000u) != 0u;\n"
+        << "        if (old_rb != new_rb) {\n"
+        << "            for (std::size_t index = 0; index < r_bank.size(); ++index) {\n"
+        << "                std::swap(r[index], r_bank[index]);\n"
+        << "            }\n"
+        << "        }\n"
+        << "        sr = masked;\n"
+        << "        m = (masked & 0x00000200u) != 0u;\n"
+        << "        q = (masked & 0x00000100u) != 0u;\n"
+        << "        s = (masked & 0x00000002u) != 0u;\n"
+        << "        t = (masked & 0x00000001u) != 0u;\n"
+        << "    }\n"
         << "};\n\n"
         << "[[noreturn]] void unresolved_call(\n"
         << "    CpuState&,\n"

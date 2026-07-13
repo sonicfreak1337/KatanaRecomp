@@ -7,6 +7,30 @@
 
 namespace katana::ir {
 
+enum class SpecialRegister {
+    None,
+    Mach,
+    Macl,
+    Pr,
+    Fpul,
+    Fpscr,
+    Sr,
+    Gbr,
+    Vbr,
+    Ssr,
+    Spc,
+    Sgr,
+    Dbr,
+    Bank0,
+    Bank1,
+    Bank2,
+    Bank3,
+    Bank4,
+    Bank5,
+    Bank6,
+    Bank7
+};
+
 enum class Operation {
     Unknown,
     Nop,
@@ -111,6 +135,10 @@ enum class Operation {
     LoadWordSignedPcRelative,
     LoadLongPcRelative,
     MoveAddressPcRelative,
+    StoreSpecialRegister,
+    StoreSpecialRegisterPreDecrement,
+    LoadSpecialRegister,
+    LoadSpecialRegisterPostIncrement,
     Branch,
     Call,
     BranchIfTrue,
@@ -132,11 +160,13 @@ struct Instruction {
 
     std::int32_t immediate = 0;
     std::int32_t displacement = 0;
+    SpecialRegister special_register = SpecialRegister::None;
     std::optional<std::uint32_t> effective_address;
     std::optional<std::uint32_t> target_address;
 
     bool has_delay_slot = false;
     bool is_delay_slot = false;
+    bool is_privileged = false;
 };
 
 struct BasicBlock {

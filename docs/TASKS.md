@@ -290,7 +290,7 @@ Akzeptanz:
 
 - PC-Ausrichtung und Displacement-Skalierung sind getestet
 
-### [ ] KR-1406 - Systemregistertransfers
+### [x] KR-1406 - Systemregistertransfers
 
 Abhaengigkeiten: KR-1401
 

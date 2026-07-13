@@ -5,6 +5,30 @@
 
 namespace katana::sh4 {
 
+enum class SpecialRegister {
+    None,
+    Mach,
+    Macl,
+    Pr,
+    Fpul,
+    Fpscr,
+    Sr,
+    Gbr,
+    Vbr,
+    Ssr,
+    Spc,
+    Sgr,
+    Dbr,
+    Bank0,
+    Bank1,
+    Bank2,
+    Bank3,
+    Bank4,
+    Bank5,
+    Bank6,
+    Bank7
+};
+
 enum class InstructionKind {
     Unknown,
     Nop,
@@ -110,6 +134,10 @@ enum class InstructionKind {
     MovWordLoadPcRelative,
     MovLongLoadPcRelative,
     MoveAddressPcRelative,
+    StoreSpecialRegister,
+    StoreSpecialRegisterPreDecrement,
+    LoadSpecialRegister,
+    LoadSpecialRegisterPostIncrement,
     Bra,
     Bsr,
     Bt,
@@ -140,9 +168,11 @@ struct DecodedInstruction {
 
     std::int32_t immediate = 0;
     std::int32_t displacement = 0;
+    SpecialRegister special_register = SpecialRegister::None;
 
     ControlFlowKind control_flow = ControlFlowKind::None;
     bool has_delay_slot = false;
+    bool is_privileged = false;
 
     std::string text;
 

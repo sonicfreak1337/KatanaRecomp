@@ -1,0 +1,125 @@
+#include "generated_system_register_program.cpp"
+
+#include <array>
+#include <cstdlib>
+#include <iostream>
+#include <stdexcept>
+#include <string>
+
+namespace {
+
+void require(const bool condition, const std::string& message) {
+    if (!condition) {
+        std::cerr << "TEST FEHLGESCHLAGEN: " << message << '\n';
+        std::exit(EXIT_FAILURE);
+    }
+}
+
+using TransferFunction = void (*)(katana_generated::CpuState&);
+
+void run_direct_cases() {
+    constexpr std::array functions = {
+        katana_generated::fn_00000100, katana_generated::fn_00000110,
+        katana_generated::fn_00000120, katana_generated::fn_00000130,
+        katana_generated::fn_00000140, katana_generated::fn_00000150,
+        katana_generated::fn_00000160, katana_generated::fn_00000170,
+        katana_generated::fn_00000180, katana_generated::fn_00000190,
+        katana_generated::fn_000001A0, katana_generated::fn_000001B0,
+        katana_generated::fn_000001C0, katana_generated::fn_000001D0,
+        katana_generated::fn_000001E0, katana_generated::fn_000001F0,
+        katana_generated::fn_00000200, katana_generated::fn_00000210,
+        katana_generated::fn_00000220
+    };
+
+    for (std::size_t index = 0; index < functions.size(); ++index) {
+        katana_generated::CpuState cpu;
+        cpu.r[0] = 0xFFFFFFFFu;
+        cpu.pc = 0x100u + static_cast<std::uint32_t>(index) * 0x10u;
+        functions[index](cpu);
+        const auto expected = index == 4u
+            ? 0x003FFFFFu
+            : index == 5u ? 0x700083F3u : 0xFFFFFFFFu;
+        require(cpu.r[1] == expected, "Direkter Spezialregistertransfer ist falsch.");
+    }
+
+    katana_generated::CpuState cpu;
+    cpu.sgr = 0x89ABCDEFu;
+    cpu.pc = 0x230u;
+    katana_generated::fn_00000230(cpu);
+    require(cpu.r[1] == 0x89ABCDEFu, "STC SGR,Rn ist falsch.");
+}
+
+void run_sr_bank_case() {
+    katana_generated::CpuState cpu;
+    cpu.r[0] = 0x20000001u;
+    cpu.r[2] = 0x11111111u;
+    cpu.r_bank[2] = 0x22222222u;
+    cpu.pc = 0x150u;
+    katana_generated::fn_00000150(cpu);
+
+    require(
+        cpu.r[2] == 0x22222222u && cpu.r_bank[2] == 0x11111111u,
+        "LDC SR wechselt die aktive Registerbank nicht."
+    );
+    require(cpu.t && cpu.read_sr() == 0x20000001u, "SR-Bits wurden falsch synchronisiert.");
+}
+
+void run_memory_cases() {
+    katana_generated::CpuState cpu;
+    cpu.pr = 0x89ABCDEFu;
+    cpu.r[2] = 0x204u;
+    cpu.pc = 0x240u;
+    katana_generated::fn_00000240(cpu);
+    require(
+        cpu.memory.read_u32(0x200u) == 0x89ABCDEFu &&
+        cpu.mach == 0x89ABCDEFu && cpu.r[2] == 0x204u,
+        "STS.L/LDS.L oder Little Endian sind falsch."
+    );
+
+    cpu.write_sr(0x40000303u);
+    cpu.r[8] = 0x304u;
+    cpu.pc = 0x250u;
+    katana_generated::fn_00000250(cpu);
+    require(
+        cpu.memory.read_u32(0x300u) == 0x40000303u &&
+        cpu.read_sr() == 0x40000303u && cpu.r[8] == 0x304u,
+        "SR-Speicherformen sind falsch."
+    );
+}
+
+void run_invalid_cases() {
+    {
+        katana_generated::CpuState cpu;
+        cpu.pr = 0x12345678u;
+        cpu.r[2] = 0u;
+        cpu.pc = 0x260u;
+        bool threw = false;
+        try { katana_generated::fn_00000260(cpu); }
+        catch (const std::out_of_range&) { threw = true; }
+        require(threw && cpu.r[2] == 0u, "Fehlgeschlagenes STS.L aendert Rn.");
+    }
+    {
+        katana_generated::CpuState cpu;
+        cpu.pr = 0x12345678u;
+        cpu.r[2] = 1024u * 1024u - 2u;
+        cpu.pc = 0x270u;
+        bool threw = false;
+        try { katana_generated::fn_00000270(cpu); }
+        catch (const std::out_of_range&) { threw = true; }
+        require(
+            threw && cpu.r[2] == 1024u * 1024u - 2u && cpu.pr == 0x12345678u,
+            "Fehlgeschlagenes LDS.L aendert Registerzustand."
+        );
+    }
+}
+
+}
+
+int main() {
+    run_direct_cases();
+    run_sr_bank_case();
+    run_memory_cases();
+    run_invalid_cases();
+    std::cout << "KR-1406 End-to-End-Semantik wurde erfolgreich ausgefuehrt.\n";
+    return EXIT_SUCCESS;
+}

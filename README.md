@@ -28,7 +28,7 @@ SH-4-Binaerdaten
     -> semantischer Laufzeittest
 `
 
-Der aktuelle Teststand umfasst **48 automatische Tests**.
+Der aktuelle Teststand umfasst **50 automatische Tests**.
 
 ## Implementierte SH-4-Instruktionen
 
@@ -193,6 +193,15 @@ Das unsigned 8-Bit-Displacement wird breitenabhaengig skaliert. Der generierte C
 
 `MOV.W` verwendet `PC + 4` und skaliert das unsigned 8-Bit-Displacement mit zwei. `MOV.L` und `MOVA` richten den Instruktions-PC zuerst auf vier Byte aus und skalieren mit vier. Word-Loads werden vorzeichenerweitert; `MOVA` schreibt die berechnete Adresse ohne Speicherzugriff nach R0.
 
+### Systemregistertransfers
+
+- STS und STS.L
+- LDS und LDS.L
+- STC und STC.L
+- LDC und LDC.L
+
+Direkte und speicherbasierte Transfers decken MACH, MACL, PR, FPUL, FPSCR sowie die SH-4-Kontrollregister und Registerbanken ab. SR- und FPSCR-Schreibwerte werden spezifikationsgemaess maskiert; SR.RB wechselt die aktive Registerbank. Privilegierte Formen sind in Decoder und IR markiert. Der genaue Runtime-Vertrag steht in `docs/SH4_SYSTEM_CONTROL_SEMANTICS.md`.
+
 ## Analysefunktionen
 
 KatanaRecomp unterstuetzt aktuell:
@@ -215,7 +224,7 @@ Der C++-Emitter erzeugt aktuell:
 
 - einen einfachen SH-4-CPU-Zustand
 - 16 allgemeine Register
-- PC, PR, GBR, MACH, MACL sowie T-, S-, Q- und M-Bit
+- PC, System- und Kontrollregister, Registerbanken sowie T-, S-, Q- und M-Bit
 - einen begrenzten Runtime-Speicher
 - Bounds-Checks
 - Register- und Immediate-Operationen

@@ -14,6 +14,36 @@
 namespace katana::ir {
 namespace {
 
+SpecialRegister lower_special_register(
+    const katana::sh4::SpecialRegister source
+) {
+    using Source = katana::sh4::SpecialRegister;
+    switch (source) {
+        case Source::None: return SpecialRegister::None;
+        case Source::Mach: return SpecialRegister::Mach;
+        case Source::Macl: return SpecialRegister::Macl;
+        case Source::Pr: return SpecialRegister::Pr;
+        case Source::Fpul: return SpecialRegister::Fpul;
+        case Source::Fpscr: return SpecialRegister::Fpscr;
+        case Source::Sr: return SpecialRegister::Sr;
+        case Source::Gbr: return SpecialRegister::Gbr;
+        case Source::Vbr: return SpecialRegister::Vbr;
+        case Source::Ssr: return SpecialRegister::Ssr;
+        case Source::Spc: return SpecialRegister::Spc;
+        case Source::Sgr: return SpecialRegister::Sgr;
+        case Source::Dbr: return SpecialRegister::Dbr;
+        case Source::Bank0: return SpecialRegister::Bank0;
+        case Source::Bank1: return SpecialRegister::Bank1;
+        case Source::Bank2: return SpecialRegister::Bank2;
+        case Source::Bank3: return SpecialRegister::Bank3;
+        case Source::Bank4: return SpecialRegister::Bank4;
+        case Source::Bank5: return SpecialRegister::Bank5;
+        case Source::Bank6: return SpecialRegister::Bank6;
+        case Source::Bank7: return SpecialRegister::Bank7;
+    }
+    return SpecialRegister::None;
+}
+
 Operation lower_operation(
     const katana::sh4::InstructionKind kind
 ) {
@@ -310,6 +340,18 @@ Operation lower_operation(
         case Source::MoveAddressPcRelative:
             return Operation::MoveAddressPcRelative;
 
+        case Source::StoreSpecialRegister:
+            return Operation::StoreSpecialRegister;
+
+        case Source::StoreSpecialRegisterPreDecrement:
+            return Operation::StoreSpecialRegisterPreDecrement;
+
+        case Source::LoadSpecialRegister:
+            return Operation::LoadSpecialRegister;
+
+        case Source::LoadSpecialRegisterPostIncrement:
+            return Operation::LoadSpecialRegisterPostIncrement;
+
         case Source::Bra:
             return Operation::Branch;
 
@@ -358,6 +400,9 @@ Instruction lower_instruction(
 
     result.immediate = source.instruction.immediate;
     result.displacement = source.instruction.displacement;
+    result.special_register = lower_special_register(
+        source.instruction.special_register
+    );
 
     const auto displacement = static_cast<std::uint32_t>(
         source.instruction.displacement
@@ -387,6 +432,8 @@ Instruction lower_instruction(
         source.instruction.has_delay_slot;
     result.is_delay_slot =
         source.is_delay_slot;
+    result.is_privileged =
+        source.instruction.is_privileged;
 
     return result;
 }
@@ -689,6 +736,18 @@ std::string_view operation_name(
 
         case Operation::MoveAddressPcRelative:
             return "move_address_pc_relative";
+
+        case Operation::StoreSpecialRegister:
+            return "store_special_register";
+
+        case Operation::StoreSpecialRegisterPreDecrement:
+            return "store_special_register_pre_decrement";
+
+        case Operation::LoadSpecialRegister:
+            return "load_special_register";
+
+        case Operation::LoadSpecialRegisterPostIncrement:
+            return "load_special_register_post_increment";
 
         case Operation::Branch:
             return "branch";

@@ -19,6 +19,7 @@
 #include <sstream>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 
 namespace {
 
@@ -101,6 +102,36 @@ void print_address(const std::uint32_t address) {
         << std::setw(8)
         << std::setfill('0')
         << address;
+}
+
+std::string_view special_register_name(
+    const katana::ir::SpecialRegister special_register
+) {
+    using Register = katana::ir::SpecialRegister;
+    switch (special_register) {
+        case Register::None: return "none";
+        case Register::Mach: return "mach";
+        case Register::Macl: return "macl";
+        case Register::Pr: return "pr";
+        case Register::Fpul: return "fpul";
+        case Register::Fpscr: return "fpscr";
+        case Register::Sr: return "sr";
+        case Register::Gbr: return "gbr";
+        case Register::Vbr: return "vbr";
+        case Register::Ssr: return "ssr";
+        case Register::Spc: return "spc";
+        case Register::Sgr: return "sgr";
+        case Register::Dbr: return "dbr";
+        case Register::Bank0: return "r0_bank";
+        case Register::Bank1: return "r1_bank";
+        case Register::Bank2: return "r2_bank";
+        case Register::Bank3: return "r3_bank";
+        case Register::Bank4: return "r4_bank";
+        case Register::Bank5: return "r5_bank";
+        case Register::Bank6: return "r6_bank";
+        case Register::Bank7: return "r7_bank";
+    }
+    return "none";
 }
 
 void print_ir_instruction(
@@ -294,6 +325,43 @@ void print_ir_instruction(
             if (instruction.effective_address.has_value()) {
                 print_address(*instruction.effective_address);
             }
+            break;
+
+        case katana::ir::Operation::StoreSpecialRegister:
+            std::cout
+                << " r"
+                << std::dec
+                << static_cast<unsigned>(instruction.destination_register)
+                << ", "
+                << special_register_name(instruction.special_register);
+            break;
+
+        case katana::ir::Operation::StoreSpecialRegisterPreDecrement:
+            std::cout
+                << " [--r"
+                << std::dec
+                << static_cast<unsigned>(instruction.destination_register)
+                << "], "
+                << special_register_name(instruction.special_register);
+            break;
+
+        case katana::ir::Operation::LoadSpecialRegister:
+            std::cout
+                << " "
+                << special_register_name(instruction.special_register)
+                << ", r"
+                << std::dec
+                << static_cast<unsigned>(instruction.source_register);
+            break;
+
+        case katana::ir::Operation::LoadSpecialRegisterPostIncrement:
+            std::cout
+                << " "
+                << special_register_name(instruction.special_register)
+                << ", [r"
+                << std::dec
+                << static_cast<unsigned>(instruction.source_register)
+                << "+]";
             break;
 
         case katana::ir::Operation::LoadByteSigned:
