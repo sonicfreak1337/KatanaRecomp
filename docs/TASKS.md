@@ -338,7 +338,7 @@ Abhaengigkeiten: KR-1501
 
 Abhaengigkeiten: KR-1501
 
-### [ ] KR-1504 - Spezifikations-Testvektoren
+### [x] KR-1504 - Spezifikations-Testvektoren
 
 Abhaengigkeiten: KR-1501
 

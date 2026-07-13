@@ -120,6 +120,18 @@ add_test(
     COMMAND katana-isa-coverage-tests
 )
 
+add_executable(katana-sh4-specification-tests
+    tests/decoder/sh4_specification_vectors.cpp
+)
+
+target_link_libraries(katana-sh4-specification-tests PRIVATE katana_core)
+katana_enable_warnings(katana-sh4-specification-tests)
+
+add_test(
+    NAME katana-sh4-specification-tests
+    COMMAND katana-sh4-specification-tests
+)
+
 add_executable(katana-disassembler-tests
     tests/disassembler/disassembler_tests.cpp
 )
