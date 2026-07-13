@@ -44,6 +44,8 @@ enum class InstructionKind {
     RotateRight,
     RotateLeftThroughT,
     RotateRightThroughT,
+    ShiftArithmeticDynamic,
+    ShiftLogicalDynamic,
     AndRegister,
     OrRegister,
     XorRegister,

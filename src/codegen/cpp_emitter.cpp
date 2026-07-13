@@ -605,6 +605,83 @@ void emit_simple_instruction(
                 << "    (old_t ? 0x80000000u : 0u);\n"
                 << "}\n";
             return;
+        case Operation::ShiftLogicalDynamic:
+            output
+                << "{\n"
+                << "const std::uint32_t count = cpu.r["
+                << static_cast<unsigned>(
+                    instruction.source_register
+                )
+                << "];\n"
+                << "const std::uint32_t value = cpu.r["
+                << static_cast<unsigned>(
+                    instruction.destination_register
+                )
+                << "];\n"
+                << "if ((count & 0x80000000u) == 0u) {\n"
+                << "    const std::uint32_t amount = count & 0x1Fu;\n"
+                << "    cpu.r["
+                << static_cast<unsigned>(
+                    instruction.destination_register
+                )
+                << "] = value << amount;\n"
+                << "} else {\n"
+                << "    const std::uint32_t amount =\n"
+                << "        ((~count) & 0x1Fu) + 1u;\n"
+                << "    cpu.r["
+                << static_cast<unsigned>(
+                    instruction.destination_register
+                )
+                << "] = amount == 32u ? 0u : value >> amount;\n"
+                << "}\n"
+                << "}\n";
+            return;
+
+        case Operation::ShiftArithmeticDynamic:
+            output
+                << "{\n"
+                << "const std::uint32_t count = cpu.r["
+                << static_cast<unsigned>(
+                    instruction.source_register
+                )
+                << "];\n"
+                << "const std::uint32_t value = cpu.r["
+                << static_cast<unsigned>(
+                    instruction.destination_register
+                )
+                << "];\n"
+                << "if ((count & 0x80000000u) == 0u) {\n"
+                << "    const std::uint32_t amount = count & 0x1Fu;\n"
+                << "    cpu.r["
+                << static_cast<unsigned>(
+                    instruction.destination_register
+                )
+                << "] = value << amount;\n"
+                << "} else {\n"
+                << "    const std::uint32_t amount =\n"
+                << "        ((~count) & 0x1Fu) + 1u;\n"
+                << "    if (amount == 32u) {\n"
+                << "        cpu.r["
+                << static_cast<unsigned>(
+                    instruction.destination_register
+                )
+                << "] = (value & 0x80000000u) != 0u\n"
+                << "            ? 0xFFFFFFFFu\n"
+                << "            : 0u;\n"
+                << "    } else {\n"
+                << "        const std::uint32_t sign_fill =\n"
+                << "            (value & 0x80000000u) != 0u\n"
+                << "            ? 0xFFFFFFFFu << (32u - amount)\n"
+                << "            : 0u;\n"
+                << "        cpu.r["
+                << static_cast<unsigned>(
+                    instruction.destination_register
+                )
+                << "] = (value >> amount) | sign_fill;\n"
+                << "    }\n"
+                << "}\n"
+                << "}\n";
+            return;
         case Operation::AndRegister:
             output
                 << "cpu.r["
@@ -1200,6 +1277,8 @@ void emit_terminal(
         case Operation::RotateRight:
         case Operation::RotateLeftThroughT:
         case Operation::RotateRightThroughT:
+        case Operation::ShiftArithmeticDynamic:
+        case Operation::ShiftLogicalDynamic:
         case Operation::AndRegister:
         case Operation::OrRegister:
         case Operation::XorRegister:
@@ -1285,6 +1364,8 @@ bool is_control_flow(
         case Operation::RotateRight:
         case Operation::RotateLeftThroughT:
         case Operation::RotateRightThroughT:
+        case Operation::ShiftArithmeticDynamic:
+        case Operation::ShiftLogicalDynamic:
         case Operation::AndRegister:
         case Operation::OrRegister:
         case Operation::XorRegister:

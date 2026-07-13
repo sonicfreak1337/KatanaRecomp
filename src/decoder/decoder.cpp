@@ -532,6 +532,31 @@ DecodedInstruction decode(const std::uint16_t opcode) {
 
         return instruction;
     }
+    if ((opcode & 0xF00Fu) == 0x400Cu) {
+        instruction.kind = InstructionKind::ShiftArithmeticDynamic;
+        decode_memory_registers(instruction, opcode);
+
+        instruction.text =
+            "shad " +
+            register_name(instruction.source_register) +
+            ", " +
+            register_name(instruction.destination_register);
+
+        return instruction;
+    }
+
+    if ((opcode & 0xF00Fu) == 0x400Du) {
+        instruction.kind = InstructionKind::ShiftLogicalDynamic;
+        decode_memory_registers(instruction, opcode);
+
+        instruction.text =
+            "shld " +
+            register_name(instruction.source_register) +
+            ", " +
+            register_name(instruction.destination_register);
+
+        return instruction;
+    }
     if ((opcode & 0xF00Fu) == 0x2009u) {
         instruction.kind = InstructionKind::AndRegister;
         decode_memory_registers(instruction, opcode);

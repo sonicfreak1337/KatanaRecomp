@@ -20,6 +20,10 @@ Dieses Dokument zerlegt die Roadmap in issue-taugliche Arbeitspakete.
 6. KR-1106
 7. KR-1107
 8. KR-1201
+9. KR-1202
+10. KR-1203
+11. KR-1204
+12. KR-1205
 
 ---
 
@@ -181,7 +185,7 @@ Akzeptanz:
 - Rotationen mit und ohne T-Bit
 - bitgenaue Testvektoren
 
-### [ ] KR-1204 - Dynamische Shifts
+### [x] KR-1204 - Dynamische Shifts
 
 Abhaengigkeiten: KR-1201
 

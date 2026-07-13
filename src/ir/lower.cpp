@@ -121,6 +121,11 @@ Operation lower_operation(
 
         case Source::RotateRightThroughT:
             return Operation::RotateRightThroughT;
+        case Source::ShiftArithmeticDynamic:
+            return Operation::ShiftArithmeticDynamic;
+
+        case Source::ShiftLogicalDynamic:
+            return Operation::ShiftLogicalDynamic;
         case Source::AndRegister:
             return Operation::AndRegister;
 
@@ -360,6 +365,11 @@ std::string_view operation_name(
 
         case Operation::RotateRightThroughT:
             return "rotate_right_through_t";
+        case Operation::ShiftArithmeticDynamic:
+            return "shift_arithmetic_dynamic";
+
+        case Operation::ShiftLogicalDynamic:
+            return "shift_logical_dynamic";
         case Operation::AndRegister:
             return "and_reg";
 

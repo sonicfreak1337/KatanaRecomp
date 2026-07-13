@@ -45,6 +45,8 @@ enum class Operation {
     RotateRight,
     RotateLeftThroughT,
     RotateRightThroughT,
+    ShiftArithmeticDynamic,
+    ShiftLogicalDynamic,
     AndRegister,
     OrRegister,
     XorRegister,

@@ -28,7 +28,7 @@ SH-4-Binaerdaten
     -> semantischer Laufzeittest
 `
 
-Der aktuelle Teststand umfasst **28 automatische Tests**.
+Der aktuelle Teststand umfasst **30 automatische Tests**.
 
 ## Implementierte SH-4-Instruktionen
 
@@ -106,6 +106,12 @@ Diese Instruktionen verschieben um eine feste Distanz und veraendern das T-Bit n
 - ROTCR Rn
 
 ROTL und ROTR rotieren innerhalb des Registers. ROTCL und ROTCR verwenden T als zusaetzliches Carry-Bit und schreiben das herausrotierte Bit zurueck nach T.
+### Dynamische Shifts
+
+- SHAD Rm,Rn
+- SHLD Rm,Rn
+
+Positive Zaehler verschieben nach links, negative Zaehler nach rechts. Nur die relevanten unteren Zaehlerbits werden verwendet. Negative Vielfache von 32 besitzen definierte Sonderfaelle. Die vollstaendige Semantik steht in `docs/SH4_SHIFT_SEMANTICS.md`.
 ## Analysefunktionen
 
 KatanaRecomp unterstuetzt aktuell:

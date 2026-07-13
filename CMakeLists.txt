@@ -1099,3 +1099,83 @@ add_test(
     NAME katana-generated-rotation-tests
     COMMAND katana-generated-rotation-tests
 )
+add_executable(katana-dynamic-shift-tests
+    tests/alu/dynamic_shift_tests.cpp
+)
+
+target_link_libraries(
+    katana-dynamic-shift-tests
+    PRIVATE
+        katana_core
+)
+
+katana_enable_warnings(katana-dynamic-shift-tests)
+
+add_test(
+    NAME katana-dynamic-shift-tests
+    COMMAND katana-dynamic-shift-tests
+)
+
+set(
+    KATANA_GENERATED_DYNAMIC_SHIFT_CPP
+    ${KATANA_GENERATED_TEST_DIR}/generated_dynamic_shift_program.cpp
+)
+
+add_custom_command(
+    OUTPUT
+        ${KATANA_GENERATED_DYNAMIC_SHIFT_CPP}
+    COMMAND
+        ${CMAKE_COMMAND}
+        -E
+        make_directory
+        ${KATANA_GENERATED_TEST_DIR}
+    COMMAND
+        $<TARGET_FILE:katana-recomp>
+        emit-cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/dynamic_shift_execution.bin
+        8C010000
+        ${KATANA_GENERATED_DYNAMIC_SHIFT_CPP}
+        8C010000
+    DEPENDS
+        katana-recomp
+        ${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/dynamic_shift_execution.bin
+    COMMENT
+        "Generiere C++-Programm fuer KR-1204 End-to-End-Test"
+    VERBATIM
+)
+
+set_source_files_properties(
+    ${KATANA_GENERATED_DYNAMIC_SHIFT_CPP}
+    PROPERTIES
+        GENERATED TRUE
+        HEADER_FILE_ONLY TRUE
+)
+
+set_source_files_properties(
+    tests/alu/generated_dynamic_shift_tests.cpp
+    PROPERTIES
+        OBJECT_DEPENDS ${KATANA_GENERATED_DYNAMIC_SHIFT_CPP}
+)
+
+add_executable(katana-generated-dynamic-shift-tests
+    tests/alu/generated_dynamic_shift_tests.cpp
+    ${KATANA_GENERATED_DYNAMIC_SHIFT_CPP}
+)
+
+target_include_directories(
+    katana-generated-dynamic-shift-tests
+    PRIVATE
+        ${KATANA_GENERATED_TEST_DIR}
+)
+
+katana_enable_warnings(katana-generated-dynamic-shift-tests)
+
+add_dependencies(
+    katana-generated-dynamic-shift-tests
+    katana-recomp
+)
+
+add_test(
+    NAME katana-generated-dynamic-shift-tests
+    COMMAND katana-generated-dynamic-shift-tests
+)
