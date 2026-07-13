@@ -77,6 +77,11 @@ Operation lower_operation(
 
         case Source::ExtractMiddle:
             return Operation::ExtractMiddle;
+        case Source::DecrementAndTest:
+            return Operation::DecrementAndTest;
+
+        case Source::MoveT:
+            return Operation::MoveT;
         case Source::AndRegister:
             return Operation::AndRegister;
 
@@ -272,6 +277,11 @@ std::string_view operation_name(
 
         case Operation::ExtractMiddle:
             return "extract_middle";
+        case Operation::DecrementAndTest:
+            return "decrement_and_test";
+
+        case Operation::MoveT:
+            return "move_t";
         case Operation::AndRegister:
             return "and_reg";
 

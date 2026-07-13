@@ -403,6 +403,31 @@ void emit_simple_instruction(
                 << "    (destination >> 16u);\n"
                 << "}\n";
             return;
+        case Operation::DecrementAndTest:
+            output
+                << "{\n"
+                << "const std::uint32_t result = cpu.r["
+                << static_cast<unsigned>(
+                    instruction.destination_register
+                )
+                << "] - 1u;\n"
+                << "cpu.r["
+                << static_cast<unsigned>(
+                    instruction.destination_register
+                )
+                << "] = result;\n"
+                << "cpu.t = result == 0u;\n"
+                << "}\n";
+            return;
+
+        case Operation::MoveT:
+            output
+                << "cpu.r["
+                << static_cast<unsigned>(
+                    instruction.destination_register
+                )
+                << "] = cpu.t ? 1u : 0u;\n";
+            return;
         case Operation::AndRegister:
             output
                 << "cpu.r["
@@ -982,6 +1007,8 @@ void emit_terminal(
         case Operation::SwapBytes:
         case Operation::SwapWords:
         case Operation::ExtractMiddle:
+        case Operation::DecrementAndTest:
+        case Operation::MoveT:
         case Operation::AndRegister:
         case Operation::OrRegister:
         case Operation::XorRegister:
@@ -1051,6 +1078,8 @@ bool is_control_flow(
         case Operation::SwapBytes:
         case Operation::SwapWords:
         case Operation::ExtractMiddle:
+        case Operation::DecrementAndTest:
+        case Operation::MoveT:
         case Operation::AndRegister:
         case Operation::OrRegister:
         case Operation::XorRegister:

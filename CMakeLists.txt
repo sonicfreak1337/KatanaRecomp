@@ -779,3 +779,83 @@ add_test(
     NAME katana-generated-extend-swap-xtrct-tests
     COMMAND katana-generated-extend-swap-xtrct-tests
 )
+add_executable(katana-dt-movt-tests
+    tests/alu/dt_movt_tests.cpp
+)
+
+target_link_libraries(
+    katana-dt-movt-tests
+    PRIVATE
+        katana_core
+)
+
+katana_enable_warnings(katana-dt-movt-tests)
+
+add_test(
+    NAME katana-dt-movt-tests
+    COMMAND katana-dt-movt-tests
+)
+
+set(
+    KATANA_GENERATED_DT_MOVT_CPP
+    ${KATANA_GENERATED_TEST_DIR}/generated_dt_movt_program.cpp
+)
+
+add_custom_command(
+    OUTPUT
+        ${KATANA_GENERATED_DT_MOVT_CPP}
+    COMMAND
+        ${CMAKE_COMMAND}
+        -E
+        make_directory
+        ${KATANA_GENERATED_TEST_DIR}
+    COMMAND
+        $<TARGET_FILE:katana-recomp>
+        emit-cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/dt_movt_execution.bin
+        8C010000
+        ${KATANA_GENERATED_DT_MOVT_CPP}
+        8C010000
+    DEPENDS
+        katana-recomp
+        ${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/dt_movt_execution.bin
+    COMMENT
+        "Generiere C++-Programm fuer KR-1106 End-to-End-Test"
+    VERBATIM
+)
+
+set_source_files_properties(
+    ${KATANA_GENERATED_DT_MOVT_CPP}
+    PROPERTIES
+        GENERATED TRUE
+        HEADER_FILE_ONLY TRUE
+)
+
+set_source_files_properties(
+    tests/alu/generated_dt_movt_tests.cpp
+    PROPERTIES
+        OBJECT_DEPENDS ${KATANA_GENERATED_DT_MOVT_CPP}
+)
+
+add_executable(katana-generated-dt-movt-tests
+    tests/alu/generated_dt_movt_tests.cpp
+    ${KATANA_GENERATED_DT_MOVT_CPP}
+)
+
+target_include_directories(
+    katana-generated-dt-movt-tests
+    PRIVATE
+        ${KATANA_GENERATED_TEST_DIR}
+)
+
+katana_enable_warnings(katana-generated-dt-movt-tests)
+
+add_dependencies(
+    katana-generated-dt-movt-tests
+    katana-recomp
+)
+
+add_test(
+    NAME katana-generated-dt-movt-tests
+    COMMAND katana-generated-dt-movt-tests
+)

@@ -29,6 +29,8 @@ enum class Operation {
     SwapBytes,
     SwapWords,
     ExtractMiddle,
+    DecrementAndTest,
+    MoveT,
     AndRegister,
     OrRegister,
     XorRegister,

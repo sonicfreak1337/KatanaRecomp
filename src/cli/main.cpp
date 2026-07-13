@@ -180,6 +180,15 @@ void print_ir_instruction(
                     instruction.destination_register
                 );
             break;
+        case katana::ir::Operation::DecrementAndTest:
+        case katana::ir::Operation::MoveT:
+            std::cout
+                << " r"
+                << std::dec
+                << static_cast<unsigned>(
+                    instruction.destination_register
+                );
+            break;
         case katana::ir::Operation::LoadByteSigned:
         case katana::ir::Operation::LoadWordSigned:
         case katana::ir::Operation::LoadLong:

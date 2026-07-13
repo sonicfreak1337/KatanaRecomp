@@ -113,7 +113,7 @@ Akzeptanz:
 - Byte- und Word-Grenzwerte
 - Vorzeichenerweiterung ist plattformunabhaengig
 
-### [ ] KR-1106 - DT und MOVT
+### [x] KR-1106 - DT und MOVT
 
 Abhaengigkeiten: KR-1103
 

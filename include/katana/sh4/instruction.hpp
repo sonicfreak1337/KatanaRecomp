@@ -28,6 +28,8 @@ enum class InstructionKind {
     SwapBytes,
     SwapWords,
     ExtractMiddle,
+    DecrementAndTest,
+    MoveT,
     AndRegister,
     OrRegister,
     XorRegister,
