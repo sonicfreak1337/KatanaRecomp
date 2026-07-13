@@ -326,7 +326,7 @@ Akzeptanz:
 
 ## v0.15.0 - Decoder-Haertung
 
-### [ ] KR-1501 - Zentrale Instruktionsmetadaten
+### [x] KR-1501 - Zentrale Instruktionsmetadaten
 
 Abhaengigkeiten: KR-1408
 

@@ -4,6 +4,8 @@
 
 ### Hinzugefuegt
 
+- KR-1501: Zentrale, unveraenderliche Instruktionsmetadaten fuer Opcode-Masken, Operandenformate, Kontrollfluss, Delay Slots und Privilegstatus eingefuehrt; Systemregisterkodierungen verwenden dieselbe Quelle im Decoder und in Tests.
+
 ## [0.14.0] - 2026-07-14
 
 ### Hinzugefuegt

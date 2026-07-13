@@ -34,6 +34,7 @@ endfunction()
 
 add_library(katana_core STATIC
     src/decoder/decoder.cpp
+    src/decoder/instruction_metadata.cpp
     src/io/binary_reader.cpp
     src/analysis/disassembler.cpp
     src/analysis/basic_blocks.cpp
@@ -79,6 +80,18 @@ katana_enable_warnings(katana-decoder-tests)
 add_test(
     NAME katana-decoder-tests
     COMMAND katana-decoder-tests
+)
+
+add_executable(katana-instruction-metadata-tests
+    tests/decoder/instruction_metadata_tests.cpp
+)
+
+target_link_libraries(katana-instruction-metadata-tests PRIVATE katana_core)
+katana_enable_warnings(katana-instruction-metadata-tests)
+
+add_test(
+    NAME katana-instruction-metadata-tests
+    COMMAND katana-instruction-metadata-tests
 )
 
 add_executable(katana-disassembler-tests

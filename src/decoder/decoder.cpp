@@ -1,4 +1,5 @@
 #include "katana/sh4/decoder.hpp"
+#include "katana/sh4/instruction_metadata.hpp"
 
 #include <array>
 #include <cstdint>
@@ -59,172 +60,51 @@ void decode_memory_registers(
         static_cast<std::uint8_t>((opcode >> 4u) & 0x0Fu);
 }
 
-struct SpecialRegisterEncoding {
-    std::uint16_t code;
-    SpecialRegister special_register;
-    const char* name;
-    bool privileged;
-};
-
-template <std::size_t Size>
-bool decode_special_register_family(
+bool decode_special_register_transfer(
     DecodedInstruction& instruction,
-    const std::uint16_t opcode,
-    const std::array<SpecialRegisterEncoding, Size>& encodings,
-    const InstructionKind kind,
-    const char* mnemonic,
-    const bool memory_form,
-    const bool register_is_source
+    const std::uint16_t opcode
 ) {
-    for (const auto& encoding : encodings) {
-        if ((opcode & 0xF0FFu) != encoding.code) {
+    for (const auto& encoding : special_register_encoding_metadata()) {
+        if (!encoding.matches(opcode)) {
             continue;
         }
 
         const auto general_register =
             static_cast<std::uint8_t>((opcode >> 8u) & 0x0Fu);
-        instruction.kind = kind;
+        instruction.kind = encoding.kind;
         instruction.special_register = encoding.special_register;
-        instruction.is_privileged = encoding.privileged;
+        instruction.is_privileged = encoding.is_privileged;
 
-        if (register_is_source) {
+        if (encoding.register_is_source) {
             instruction.source_register = general_register;
         } else {
             instruction.destination_register = general_register;
         }
 
-        if (memory_form && register_is_source) {
+        if (encoding.memory_form && encoding.register_is_source) {
             instruction.text =
-                std::string(mnemonic) + " @" +
+                std::string(encoding.mnemonic) + " @" +
                 register_name(general_register) + "+, " +
-                encoding.name;
-        } else if (memory_form) {
+                std::string(encoding.special_register_name);
+        } else if (encoding.memory_form) {
             instruction.text =
-                std::string(mnemonic) + " " + encoding.name +
+                std::string(encoding.mnemonic) + " " +
+                std::string(encoding.special_register_name) +
                 ", @-" + register_name(general_register);
-        } else if (register_is_source) {
+        } else if (encoding.register_is_source) {
             instruction.text =
-                std::string(mnemonic) + " " +
+                std::string(encoding.mnemonic) + " " +
                 register_name(general_register) + ", " +
-                encoding.name;
+                std::string(encoding.special_register_name);
         } else {
             instruction.text =
-                std::string(mnemonic) + " " + encoding.name +
+                std::string(encoding.mnemonic) + " " +
+                std::string(encoding.special_register_name) +
                 ", " + register_name(general_register);
         }
         return true;
     }
     return false;
-}
-
-bool decode_special_register_transfer(
-    DecodedInstruction& instruction,
-    const std::uint16_t opcode
-) {
-    constexpr std::array system_direct_store = {
-        SpecialRegisterEncoding{0x000Au, SpecialRegister::Mach, "mach", false},
-        SpecialRegisterEncoding{0x001Au, SpecialRegister::Macl, "macl", false},
-        SpecialRegisterEncoding{0x002Au, SpecialRegister::Pr, "pr", false},
-        SpecialRegisterEncoding{0x005Au, SpecialRegister::Fpul, "fpul", false},
-        SpecialRegisterEncoding{0x006Au, SpecialRegister::Fpscr, "fpscr", false}
-    };
-    constexpr std::array system_memory_store = {
-        SpecialRegisterEncoding{0x4002u, SpecialRegister::Mach, "mach", false},
-        SpecialRegisterEncoding{0x4012u, SpecialRegister::Macl, "macl", false},
-        SpecialRegisterEncoding{0x4022u, SpecialRegister::Pr, "pr", false},
-        SpecialRegisterEncoding{0x4052u, SpecialRegister::Fpul, "fpul", false},
-        SpecialRegisterEncoding{0x4062u, SpecialRegister::Fpscr, "fpscr", false}
-    };
-    constexpr std::array system_direct_load = {
-        SpecialRegisterEncoding{0x400Au, SpecialRegister::Mach, "mach", false},
-        SpecialRegisterEncoding{0x401Au, SpecialRegister::Macl, "macl", false},
-        SpecialRegisterEncoding{0x402Au, SpecialRegister::Pr, "pr", false},
-        SpecialRegisterEncoding{0x405Au, SpecialRegister::Fpul, "fpul", false},
-        SpecialRegisterEncoding{0x406Au, SpecialRegister::Fpscr, "fpscr", false}
-    };
-    constexpr std::array system_memory_load = {
-        SpecialRegisterEncoding{0x4006u, SpecialRegister::Mach, "mach", false},
-        SpecialRegisterEncoding{0x4016u, SpecialRegister::Macl, "macl", false},
-        SpecialRegisterEncoding{0x4026u, SpecialRegister::Pr, "pr", false},
-        SpecialRegisterEncoding{0x4056u, SpecialRegister::Fpul, "fpul", false},
-        SpecialRegisterEncoding{0x4066u, SpecialRegister::Fpscr, "fpscr", false}
-    };
-    constexpr std::array control_direct_store = {
-        SpecialRegisterEncoding{0x0002u, SpecialRegister::Sr, "sr", true},
-        SpecialRegisterEncoding{0x0012u, SpecialRegister::Gbr, "gbr", false},
-        SpecialRegisterEncoding{0x0022u, SpecialRegister::Vbr, "vbr", true},
-        SpecialRegisterEncoding{0x0032u, SpecialRegister::Ssr, "ssr", true},
-        SpecialRegisterEncoding{0x0042u, SpecialRegister::Spc, "spc", true},
-        SpecialRegisterEncoding{0x003Au, SpecialRegister::Sgr, "sgr", true},
-        SpecialRegisterEncoding{0x00FAu, SpecialRegister::Dbr, "dbr", true},
-        SpecialRegisterEncoding{0x0082u, SpecialRegister::Bank0, "r0_bank", true},
-        SpecialRegisterEncoding{0x0092u, SpecialRegister::Bank1, "r1_bank", true},
-        SpecialRegisterEncoding{0x00A2u, SpecialRegister::Bank2, "r2_bank", true},
-        SpecialRegisterEncoding{0x00B2u, SpecialRegister::Bank3, "r3_bank", true},
-        SpecialRegisterEncoding{0x00C2u, SpecialRegister::Bank4, "r4_bank", true},
-        SpecialRegisterEncoding{0x00D2u, SpecialRegister::Bank5, "r5_bank", true},
-        SpecialRegisterEncoding{0x00E2u, SpecialRegister::Bank6, "r6_bank", true},
-        SpecialRegisterEncoding{0x00F2u, SpecialRegister::Bank7, "r7_bank", true}
-    };
-    constexpr std::array control_memory_store = {
-        SpecialRegisterEncoding{0x4003u, SpecialRegister::Sr, "sr", true},
-        SpecialRegisterEncoding{0x4013u, SpecialRegister::Gbr, "gbr", false},
-        SpecialRegisterEncoding{0x4023u, SpecialRegister::Vbr, "vbr", true},
-        SpecialRegisterEncoding{0x4033u, SpecialRegister::Ssr, "ssr", true},
-        SpecialRegisterEncoding{0x4043u, SpecialRegister::Spc, "spc", true},
-        SpecialRegisterEncoding{0x4032u, SpecialRegister::Sgr, "sgr", true},
-        SpecialRegisterEncoding{0x40F2u, SpecialRegister::Dbr, "dbr", true},
-        SpecialRegisterEncoding{0x4083u, SpecialRegister::Bank0, "r0_bank", true},
-        SpecialRegisterEncoding{0x4093u, SpecialRegister::Bank1, "r1_bank", true},
-        SpecialRegisterEncoding{0x40A3u, SpecialRegister::Bank2, "r2_bank", true},
-        SpecialRegisterEncoding{0x40B3u, SpecialRegister::Bank3, "r3_bank", true},
-        SpecialRegisterEncoding{0x40C3u, SpecialRegister::Bank4, "r4_bank", true},
-        SpecialRegisterEncoding{0x40D3u, SpecialRegister::Bank5, "r5_bank", true},
-        SpecialRegisterEncoding{0x40E3u, SpecialRegister::Bank6, "r6_bank", true},
-        SpecialRegisterEncoding{0x40F3u, SpecialRegister::Bank7, "r7_bank", true}
-    };
-    constexpr std::array control_direct_load = {
-        SpecialRegisterEncoding{0x400Eu, SpecialRegister::Sr, "sr", true},
-        SpecialRegisterEncoding{0x401Eu, SpecialRegister::Gbr, "gbr", false},
-        SpecialRegisterEncoding{0x402Eu, SpecialRegister::Vbr, "vbr", true},
-        SpecialRegisterEncoding{0x403Eu, SpecialRegister::Ssr, "ssr", true},
-        SpecialRegisterEncoding{0x404Eu, SpecialRegister::Spc, "spc", true},
-        SpecialRegisterEncoding{0x40FAu, SpecialRegister::Dbr, "dbr", true},
-        SpecialRegisterEncoding{0x408Eu, SpecialRegister::Bank0, "r0_bank", true},
-        SpecialRegisterEncoding{0x409Eu, SpecialRegister::Bank1, "r1_bank", true},
-        SpecialRegisterEncoding{0x40AEu, SpecialRegister::Bank2, "r2_bank", true},
-        SpecialRegisterEncoding{0x40BEu, SpecialRegister::Bank3, "r3_bank", true},
-        SpecialRegisterEncoding{0x40CEu, SpecialRegister::Bank4, "r4_bank", true},
-        SpecialRegisterEncoding{0x40DEu, SpecialRegister::Bank5, "r5_bank", true},
-        SpecialRegisterEncoding{0x40EEu, SpecialRegister::Bank6, "r6_bank", true},
-        SpecialRegisterEncoding{0x40FEu, SpecialRegister::Bank7, "r7_bank", true}
-    };
-    constexpr std::array control_memory_load = {
-        SpecialRegisterEncoding{0x4007u, SpecialRegister::Sr, "sr", true},
-        SpecialRegisterEncoding{0x4017u, SpecialRegister::Gbr, "gbr", false},
-        SpecialRegisterEncoding{0x4027u, SpecialRegister::Vbr, "vbr", true},
-        SpecialRegisterEncoding{0x4037u, SpecialRegister::Ssr, "ssr", true},
-        SpecialRegisterEncoding{0x4047u, SpecialRegister::Spc, "spc", true},
-        SpecialRegisterEncoding{0x40F6u, SpecialRegister::Dbr, "dbr", true},
-        SpecialRegisterEncoding{0x4087u, SpecialRegister::Bank0, "r0_bank", true},
-        SpecialRegisterEncoding{0x4097u, SpecialRegister::Bank1, "r1_bank", true},
-        SpecialRegisterEncoding{0x40A7u, SpecialRegister::Bank2, "r2_bank", true},
-        SpecialRegisterEncoding{0x40B7u, SpecialRegister::Bank3, "r3_bank", true},
-        SpecialRegisterEncoding{0x40C7u, SpecialRegister::Bank4, "r4_bank", true},
-        SpecialRegisterEncoding{0x40D7u, SpecialRegister::Bank5, "r5_bank", true},
-        SpecialRegisterEncoding{0x40E7u, SpecialRegister::Bank6, "r6_bank", true},
-        SpecialRegisterEncoding{0x40F7u, SpecialRegister::Bank7, "r7_bank", true}
-    };
-
-    return
-        decode_special_register_family(instruction, opcode, system_direct_store, InstructionKind::StoreSpecialRegister, "sts", false, false) ||
-        decode_special_register_family(instruction, opcode, system_memory_store, InstructionKind::StoreSpecialRegisterPreDecrement, "sts.l", true, false) ||
-        decode_special_register_family(instruction, opcode, system_direct_load, InstructionKind::LoadSpecialRegister, "lds", false, true) ||
-        decode_special_register_family(instruction, opcode, system_memory_load, InstructionKind::LoadSpecialRegisterPostIncrement, "lds.l", true, true) ||
-        decode_special_register_family(instruction, opcode, control_direct_store, InstructionKind::StoreSpecialRegister, "stc", false, false) ||
-        decode_special_register_family(instruction, opcode, control_memory_store, InstructionKind::StoreSpecialRegisterPreDecrement, "stc.l", true, false) ||
-        decode_special_register_family(instruction, opcode, control_direct_load, InstructionKind::LoadSpecialRegister, "ldc", false, true) ||
-        decode_special_register_family(instruction, opcode, control_memory_load, InstructionKind::LoadSpecialRegisterPostIncrement, "ldc.l", true, true);
 }
 
 }
