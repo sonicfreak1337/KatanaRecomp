@@ -139,13 +139,6 @@ std::vector<BasicBlock> build_basic_blocks(
         blocks.push_back(std::move(block));
     }
 
-    std::unordered_map<std::uint32_t, std::size_t> block_by_start;
-    block_by_start.reserve(blocks.size());
-
-    for (std::size_t index = 0; index < blocks.size(); ++index) {
-        block_by_start.emplace(blocks[index].start_address, index);
-    }
-
     for (std::size_t block_index = 0; block_index < blocks.size(); ++block_index) {
         auto& block = blocks[block_index];
 
@@ -173,7 +166,11 @@ std::vector<BasicBlock> build_basic_blocks(
             continue;
         }
 
-        if (control_line.target_address.has_value()) {
+        if (
+            control_line.target_address.has_value() &&
+            instruction.control_flow !=
+                katana::sh4::ControlFlowKind::Call
+        ) {
             add_unique_successor(
                 block.successors,
                 *control_line.target_address

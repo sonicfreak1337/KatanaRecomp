@@ -1,4 +1,4 @@
-﻿#include "katana/sh4/decoder.hpp"
+#include "katana/sh4/decoder.hpp"
 
 #include <cstdint>
 #include <iomanip>
@@ -45,6 +45,17 @@ std::string unknown_instruction_text(const std::uint16_t opcode) {
         << opcode;
 
     return output.str();
+}
+
+void decode_memory_registers(
+    DecodedInstruction& instruction,
+    const std::uint16_t opcode
+) {
+    instruction.destination_register =
+        static_cast<std::uint8_t>((opcode >> 8u) & 0x0Fu);
+
+    instruction.source_register =
+        static_cast<std::uint8_t>((opcode >> 4u) & 0x0Fu);
 }
 
 }
@@ -141,6 +152,136 @@ DecodedInstruction decode(const std::uint16_t opcode) {
         return instruction;
     }
 
+    if (opcode == 0x0008u) {
+        instruction.kind = InstructionKind::ClearT;
+        instruction.text = "clrt";
+        return instruction;
+    }
+
+    if (opcode == 0x0018u) {
+        instruction.kind = InstructionKind::SetT;
+        instruction.text = "sett";
+        return instruction;
+    }
+
+    if ((opcode & 0xFF00u) == 0x8800u) {
+        instruction.kind = InstructionKind::CompareEqualImmediate;
+        instruction.destination_register = 0;
+        instruction.immediate = sign_extend_8(opcode);
+
+        instruction.text =
+            "cmp/eq #" +
+            std::to_string(instruction.immediate) +
+            ", r0";
+
+        return instruction;
+    }
+
+    if ((opcode & 0xF00Fu) == 0x3000u) {
+        instruction.kind = InstructionKind::CompareEqualRegister;
+        decode_memory_registers(instruction, opcode);
+
+        instruction.text =
+            "cmp/eq " +
+            register_name(instruction.source_register) +
+            ", " +
+            register_name(instruction.destination_register);
+
+        return instruction;
+    }
+
+    if ((opcode & 0xFF00u) == 0xC800u) {
+        instruction.kind = InstructionKind::TestImmediate;
+        instruction.destination_register = 0;
+        instruction.immediate =
+            static_cast<std::int32_t>(opcode & 0x00FFu);
+
+        instruction.text =
+            "tst #" +
+            std::to_string(instruction.immediate) +
+            ", r0";
+
+        return instruction;
+    }
+
+    if ((opcode & 0xF00Fu) == 0x2008u) {
+        instruction.kind = InstructionKind::TestRegister;
+        decode_memory_registers(instruction, opcode);
+
+        instruction.text =
+            "tst " +
+            register_name(instruction.source_register) +
+            ", " +
+            register_name(instruction.destination_register);
+
+        return instruction;
+    }
+    if ((opcode & 0xF00Fu) == 0x2000u) {
+        instruction.kind = InstructionKind::MovByteStore;
+        decode_memory_registers(instruction, opcode);
+        instruction.text =
+            "mov.b " +
+            register_name(instruction.source_register) +
+            ", @" +
+            register_name(instruction.destination_register);
+        return instruction;
+    }
+
+    if ((opcode & 0xF00Fu) == 0x2001u) {
+        instruction.kind = InstructionKind::MovWordStore;
+        decode_memory_registers(instruction, opcode);
+        instruction.text =
+            "mov.w " +
+            register_name(instruction.source_register) +
+            ", @" +
+            register_name(instruction.destination_register);
+        return instruction;
+    }
+
+    if ((opcode & 0xF00Fu) == 0x2002u) {
+        instruction.kind = InstructionKind::MovLongStore;
+        decode_memory_registers(instruction, opcode);
+        instruction.text =
+            "mov.l " +
+            register_name(instruction.source_register) +
+            ", @" +
+            register_name(instruction.destination_register);
+        return instruction;
+    }
+
+    if ((opcode & 0xF00Fu) == 0x6000u) {
+        instruction.kind = InstructionKind::MovByteLoad;
+        decode_memory_registers(instruction, opcode);
+        instruction.text =
+            "mov.b @" +
+            register_name(instruction.source_register) +
+            ", " +
+            register_name(instruction.destination_register);
+        return instruction;
+    }
+
+    if ((opcode & 0xF00Fu) == 0x6001u) {
+        instruction.kind = InstructionKind::MovWordLoad;
+        decode_memory_registers(instruction, opcode);
+        instruction.text =
+            "mov.w @" +
+            register_name(instruction.source_register) +
+            ", " +
+            register_name(instruction.destination_register);
+        return instruction;
+    }
+
+    if ((opcode & 0xF00Fu) == 0x6002u) {
+        instruction.kind = InstructionKind::MovLongLoad;
+        decode_memory_registers(instruction, opcode);
+        instruction.text =
+            "mov.l @" +
+            register_name(instruction.source_register) +
+            ", " +
+            register_name(instruction.destination_register);
+        return instruction;
+    }
+
     if ((opcode & 0xF000u) == 0xE000u) {
         instruction.kind = InstructionKind::MovImmediate;
         instruction.destination_register =
@@ -173,10 +314,7 @@ DecodedInstruction decode(const std::uint16_t opcode) {
 
     if ((opcode & 0xF00Fu) == 0x6003u) {
         instruction.kind = InstructionKind::MovRegister;
-        instruction.destination_register =
-            static_cast<std::uint8_t>((opcode >> 8u) & 0x0Fu);
-        instruction.source_register =
-            static_cast<std::uint8_t>((opcode >> 4u) & 0x0Fu);
+        decode_memory_registers(instruction, opcode);
 
         instruction.text =
             "mov " +
@@ -189,10 +327,7 @@ DecodedInstruction decode(const std::uint16_t opcode) {
 
     if ((opcode & 0xF00Fu) == 0x300Cu) {
         instruction.kind = InstructionKind::AddRegister;
-        instruction.destination_register =
-            static_cast<std::uint8_t>((opcode >> 8u) & 0x0Fu);
-        instruction.source_register =
-            static_cast<std::uint8_t>((opcode >> 4u) & 0x0Fu);
+        decode_memory_registers(instruction, opcode);
 
         instruction.text =
             "add " +

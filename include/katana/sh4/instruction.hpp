@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 
 #include <cstdint>
 #include <string>
@@ -13,6 +13,18 @@ enum class InstructionKind {
     AddImmediate,
     MovRegister,
     AddRegister,
+    ClearT,
+    SetT,
+    CompareEqualImmediate,
+    CompareEqualRegister,
+    TestImmediate,
+    TestRegister,
+    MovByteStore,
+    MovWordStore,
+    MovLongStore,
+    MovByteLoad,
+    MovWordLoad,
+    MovLongLoad,
     Bra,
     Bsr,
     Bt,

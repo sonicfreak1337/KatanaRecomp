@@ -35,6 +35,41 @@ Operation lower_operation(
         case Source::AddRegister:
             return Operation::AddRegister;
 
+        case Source::ClearT:
+            return Operation::ClearT;
+
+        case Source::SetT:
+            return Operation::SetT;
+
+        case Source::CompareEqualImmediate:
+            return Operation::CompareEqualImmediate;
+
+        case Source::CompareEqualRegister:
+            return Operation::CompareEqualRegister;
+
+        case Source::TestImmediate:
+            return Operation::TestImmediate;
+
+        case Source::TestRegister:
+            return Operation::TestRegister;
+        case Source::MovByteLoad:
+            return Operation::LoadByteSigned;
+
+        case Source::MovWordLoad:
+            return Operation::LoadWordSigned;
+
+        case Source::MovLongLoad:
+            return Operation::LoadLong;
+
+        case Source::MovByteStore:
+            return Operation::StoreByte;
+
+        case Source::MovWordStore:
+            return Operation::StoreWord;
+
+        case Source::MovLongStore:
+            return Operation::StoreLong;
+
         case Source::Bra:
             return Operation::Branch;
 
@@ -115,6 +150,41 @@ std::string_view operation_name(
 
         case Operation::AddRegister:
             return "add_reg";
+
+        case Operation::ClearT:
+            return "clear_t";
+
+        case Operation::SetT:
+            return "set_t";
+
+        case Operation::CompareEqualImmediate:
+            return "compare_equal_imm";
+
+        case Operation::CompareEqualRegister:
+            return "compare_equal_reg";
+
+        case Operation::TestImmediate:
+            return "test_imm";
+
+        case Operation::TestRegister:
+            return "test_reg";
+        case Operation::LoadByteSigned:
+            return "load_s8";
+
+        case Operation::LoadWordSigned:
+            return "load_s16";
+
+        case Operation::LoadLong:
+            return "load_u32";
+
+        case Operation::StoreByte:
+            return "store_u8";
+
+        case Operation::StoreWord:
+            return "store_u16";
+
+        case Operation::StoreLong:
+            return "store_u32";
 
         case Operation::Branch:
             return "branch";

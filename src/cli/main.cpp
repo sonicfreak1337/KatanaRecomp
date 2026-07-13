@@ -1,5 +1,6 @@
 #include "katana/analysis/basic_blocks.hpp"
 #include "katana/analysis/function_analysis.hpp"
+#include "katana/codegen/cpp_emitter.hpp"
 #include "katana/io/binary_reader.hpp"
 #include "katana/ir/lower.hpp"
 #include "katana/sh4/decoder.hpp"
@@ -11,6 +12,7 @@
 #include <cstdint>
 #include <exception>
 #include <filesystem>
+#include <fstream>
 #include <iomanip>
 #include <iostream>
 #include <limits>
@@ -115,6 +117,8 @@ void print_ir_instruction(
     switch (instruction.operation) {
         case katana::ir::Operation::MovImmediate:
         case katana::ir::Operation::AddImmediate:
+        case katana::ir::Operation::CompareEqualImmediate:
+        case katana::ir::Operation::TestImmediate:
             std::cout
                 << " r"
                 << std::dec
@@ -127,6 +131,8 @@ void print_ir_instruction(
 
         case katana::ir::Operation::MovRegister:
         case katana::ir::Operation::AddRegister:
+        case katana::ir::Operation::CompareEqualRegister:
+        case katana::ir::Operation::TestRegister:
             std::cout
                 << " r"
                 << std::dec
@@ -139,6 +145,36 @@ void print_ir_instruction(
                 );
             break;
 
+        case katana::ir::Operation::LoadByteSigned:
+        case katana::ir::Operation::LoadWordSigned:
+        case katana::ir::Operation::LoadLong:
+            std::cout
+                << " r"
+                << std::dec
+                << static_cast<unsigned>(
+                    instruction.destination_register
+                )
+                << ", [r"
+                << static_cast<unsigned>(
+                    instruction.source_register
+                )
+                << "]";
+            break;
+
+        case katana::ir::Operation::StoreByte:
+        case katana::ir::Operation::StoreWord:
+        case katana::ir::Operation::StoreLong:
+            std::cout
+                << " [r"
+                << std::dec
+                << static_cast<unsigned>(
+                    instruction.destination_register
+                )
+                << "], r"
+                << static_cast<unsigned>(
+                    instruction.source_register
+                );
+            break;
         case katana::ir::Operation::Branch:
         case katana::ir::Operation::Call:
         case katana::ir::Operation::BranchIfTrue:
@@ -161,6 +197,8 @@ void print_ir_instruction(
 
         case katana::ir::Operation::Unknown:
         case katana::ir::Operation::Nop:
+        case katana::ir::Operation::ClearT:
+        case katana::ir::Operation::SetT:
         case katana::ir::Operation::Return:
             break;
     }
@@ -174,6 +212,33 @@ void print_ir_instruction(
     }
 
     std::cout << '\n';
+}
+
+std::vector<katana::ir::Function> build_ir_program(
+    const std::filesystem::path& path,
+    const std::uint32_t entry_address,
+    const std::uint32_t base_address
+) {
+    const auto bytes = katana::io::read_binary_file(path);
+    const auto lines = katana::sh4::disassemble(
+        bytes,
+        base_address
+    );
+
+    const std::array<std::uint32_t, 1> seeds = {
+        entry_address
+    };
+
+    const auto discovered =
+        katana::analysis::discover_functions(
+            lines,
+            seeds
+        );
+
+    return katana::ir::lower_program(
+        lines,
+        discovered
+    );
 }
 
 int decode_single_opcode(const std::string& text) {
@@ -456,27 +521,11 @@ int analyze_ir(
     const std::uint32_t entry_address,
     const std::uint32_t base_address
 ) {
-    const auto bytes = katana::io::read_binary_file(path);
-    const auto lines = katana::sh4::disassemble(
-        bytes,
+    const auto program = build_ir_program(
+        path,
+        entry_address,
         base_address
     );
-
-    const std::array<std::uint32_t, 1> seeds = {
-        entry_address
-    };
-
-    const auto discovered =
-        katana::analysis::discover_functions(
-            lines,
-            seeds
-        );
-
-    const auto program =
-        katana::ir::lower_program(
-            lines,
-            discovered
-        );
 
     std::cout
         << "Datei:         " << path.string() << '\n'
@@ -535,6 +584,67 @@ int analyze_ir(
     return 0;
 }
 
+int emit_cpp(
+    const std::filesystem::path& input_path,
+    const std::uint32_t entry_address,
+    const std::filesystem::path& output_path,
+    const std::uint32_t base_address
+) {
+    const auto program = build_ir_program(
+        input_path,
+        entry_address,
+        base_address
+    );
+
+    const auto source =
+        katana::codegen::emit_cpp_program(
+            program,
+            entry_address
+        );
+
+    if (output_path.has_parent_path()) {
+        std::filesystem::create_directories(
+            output_path.parent_path()
+        );
+    }
+
+    std::ofstream output(
+        output_path,
+        std::ios::binary
+    );
+
+    if (!output) {
+        throw std::runtime_error(
+            "Die Ausgabedatei konnte nicht geoeffnet werden."
+        );
+    }
+
+    output.write(
+        source.data(),
+        static_cast<std::streamsize>(source.size())
+    );
+
+    if (!output) {
+        throw std::runtime_error(
+            "Der generierte C++-Code konnte nicht gespeichert werden."
+        );
+    }
+
+    std::cout
+        << "C++-Code erzeugt: "
+        << output_path.string()
+        << '\n'
+        << "Funktionen:       "
+        << std::dec
+        << program.size()
+        << '\n'
+        << "Zeichen:          "
+        << source.size()
+        << '\n';
+
+    return 0;
+}
+
 void print_usage() {
     std::cerr
         << "Verwendung:\n"
@@ -543,11 +653,10 @@ void print_usage() {
         << "  katana-recomp disasm <Datei> [Basisadresse]\n"
         << "  katana-recomp blocks <Datei> [Basisadresse]\n"
         << "  katana-recomp functions <Datei> <Einstieg> [Basisadresse]\n"
-        << "  katana-recomp ir <Datei> <Einstieg> [Basisadresse]\n\n"
-        << "Beispiele:\n"
-        << "  katana-recomp E1FF\n"
-        << "  katana-recomp functions programm.bin 8C010000 8C010000\n"
-        << "  katana-recomp ir programm.bin 8C010000 8C010000\n";
+        << "  katana-recomp ir <Datei> <Einstieg> [Basisadresse]\n"
+        << "  katana-recomp emit-cpp <Datei> <Einstieg> <Ausgabe.cpp> [Basisadresse]\n\n"
+        << "Beispiel:\n"
+        << "  katana-recomp emit-cpp programm.bin 8C010000 generated.cpp 8C010000\n";
 }
 
 }
@@ -653,6 +762,34 @@ int main(const int argc, char* argv[]) {
             return analyze_ir(
                 std::filesystem::path(argv[2]),
                 entry_address,
+                base_address
+            );
+        }
+
+        if (
+            (argc == 5 || argc == 6) &&
+            std::string(argv[1]) == "emit-cpp"
+        ) {
+            const auto entry_address =
+                parse_hex_value(
+                    argv[3],
+                    std::numeric_limits<std::uint32_t>::max(),
+                    "Die Einstiegsadresse"
+                );
+
+            const auto base_address =
+                argc == 6
+                    ? parse_hex_value(
+                        argv[5],
+                        std::numeric_limits<std::uint32_t>::max(),
+                        "Die Basisadresse"
+                    )
+                    : 0u;
+
+            return emit_cpp(
+                std::filesystem::path(argv[2]),
+                entry_address,
+                std::filesystem::path(argv[4]),
                 base_address
             );
         }
