@@ -53,3 +53,4 @@ KatanaRecomp_Encoding_*.ps1
 # Local migration and milestone scripts
 /KatanaRecomp_*.ps1
 /.katana_backup_*/
+/build-release/
