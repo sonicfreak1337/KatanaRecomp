@@ -28,7 +28,7 @@ SH-4-Binaerdaten
     -> semantischer Laufzeittest
 `
 
-Der aktuelle Teststand umfasst **36 automatische Tests**.
+Der aktuelle Teststand umfasst **38 automatische Tests**.
 
 ## Implementierte SH-4-Instruktionen
 
@@ -133,6 +133,13 @@ Die vollstaendigen 64-Bit-Produkte werden in `MACH:MACL` abgelegt. DMULS.L verwe
 - CLRS
 
 Die MAC-Instruktionen lesen signed Operanden aus dem Speicher, schalten beide Adressregister fort und addieren das Produkt zu `MACH:MACL`. Das S-Bit aktiviert die 32-Bit-Saettigung fuer MAC.W beziehungsweise die 48-Bit-Saettigung fuer MAC.L. Die vollstaendige Semantik steht in `docs/SH4_MULTIPLICATION_SEMANTICS.md`.
+### Division
+
+- DIV0U
+- DIV0S Rm,Rn
+- DIV1 Rm,Rn
+
+Der generierte CPU-Zustand modelliert Q, M und T explizit. DIV0U und DIV0S initialisieren den iterativen Divisionszustand; DIV1 fuehrt exakt einen bitweisen Hardware-Divisionsschritt aus. Die vollstaendige Zustandstabelle und die Referenzvektoren stehen in `docs/SH4_DIVISION_SEMANTICS.md`.
 ## Analysefunktionen
 
 KatanaRecomp unterstuetzt aktuell:
@@ -155,7 +162,7 @@ Der C++-Emitter erzeugt aktuell:
 
 - einen einfachen SH-4-CPU-Zustand
 - 16 allgemeine Register
-- PC, PR und T-Bit
+- PC, PR, MACH, MACL sowie T-, S-, Q- und M-Bit
 - einen begrenzten Runtime-Speicher
 - Bounds-Checks
 - Register- und Immediate-Operationen
@@ -176,7 +183,7 @@ Die Carry-, Borrow- und signed-Overflow-Regeln sind in `docs/SH4_STATUS_SEMANTIC
 KatanaRecomp ist noch kein vollstaendiger Dreamcast-Recompiler. Unter anderem fehlen:
 
 - grosse Teile des SH-4-Befehlssatzes
-- Division und erweiterte Integer-Flags
+- weitere Integer- und Systemregister-Flags
 - FPU- und Vektoroperationen
 - vollstaendiges Statusregister
 - Dreamcast-Speicherabbild

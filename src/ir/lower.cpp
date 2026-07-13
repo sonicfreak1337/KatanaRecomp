@@ -144,6 +144,14 @@ Operation lower_operation(
 
         case Source::MultiplyAccumulateLong:
             return Operation::MultiplyAccumulateLong;
+        case Source::DivideInitializeUnsigned:
+            return Operation::DivideInitializeUnsigned;
+
+        case Source::DivideInitializeSigned:
+            return Operation::DivideInitializeSigned;
+
+        case Source::DivideStep:
+            return Operation::DivideStep;
         case Source::AndRegister:
             return Operation::AndRegister;
 
@@ -411,6 +419,14 @@ std::string_view operation_name(
 
         case Operation::MultiplyAccumulateLong:
             return "multiply_accumulate_long";
+        case Operation::DivideInitializeUnsigned:
+            return "divide_initialize_unsigned";
+
+        case Operation::DivideInitializeSigned:
+            return "divide_initialize_signed";
+
+        case Operation::DivideStep:
+            return "divide_step";
         case Operation::AndRegister:
             return "and_reg";
 

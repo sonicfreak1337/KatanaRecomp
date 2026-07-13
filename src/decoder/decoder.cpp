@@ -557,6 +557,37 @@ DecodedInstruction decode(const std::uint16_t opcode) {
 
         return instruction;
     }
+    if (opcode == 0x0019u) {
+        instruction.kind = InstructionKind::DivideInitializeUnsigned;
+        instruction.text = "div0u";
+        return instruction;
+    }
+
+    if ((opcode & 0xF00Fu) == 0x2007u) {
+        instruction.kind = InstructionKind::DivideInitializeSigned;
+        decode_memory_registers(instruction, opcode);
+
+        instruction.text =
+            "div0s " +
+            register_name(instruction.source_register) +
+            ", " +
+            register_name(instruction.destination_register);
+
+        return instruction;
+    }
+
+    if ((opcode & 0xF00Fu) == 0x3004u) {
+        instruction.kind = InstructionKind::DivideStep;
+        decode_memory_registers(instruction, opcode);
+
+        instruction.text =
+            "div1 " +
+            register_name(instruction.source_register) +
+            ", " +
+            register_name(instruction.destination_register);
+
+        return instruction;
+    }
     if ((opcode & 0xF00Fu) == 0x400Fu) {
         instruction.kind = InstructionKind::MultiplyAccumulateWord;
         decode_memory_registers(instruction, opcode);

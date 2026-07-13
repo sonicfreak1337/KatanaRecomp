@@ -158,6 +158,8 @@ void print_ir_instruction(
         case katana::ir::Operation::DoubleMultiplyUnsignedLong:
         case katana::ir::Operation::MultiplyAccumulateWord:
         case katana::ir::Operation::MultiplyAccumulateLong:
+        case katana::ir::Operation::DivideInitializeSigned:
+        case katana::ir::Operation::DivideStep:
         case katana::ir::Operation::AndRegister:
         case katana::ir::Operation::OrRegister:
         case katana::ir::Operation::XorRegister:
@@ -264,6 +266,7 @@ void print_ir_instruction(
 
         case katana::ir::Operation::Unknown:
         case katana::ir::Operation::Nop:
+        case katana::ir::Operation::DivideInitializeUnsigned:
         case katana::ir::Operation::ClearS:
         case katana::ir::Operation::SetS:
         case katana::ir::Operation::ClearT:

@@ -930,6 +930,112 @@ void emit_simple_instruction(
                 << "}\n"
                 << "}\n";
             return;
+        case Operation::DivideInitializeUnsigned:
+            output
+                << "cpu.q = false;\n"
+                << "cpu.m = false;\n"
+                << "cpu.t = false;\n";
+            return;
+
+        case Operation::DivideInitializeSigned:
+            output
+                << "cpu.q = (cpu.r["
+                << static_cast<unsigned>(
+                    instruction.destination_register
+                )
+                << "] & 0x80000000u) != 0u;\n"
+                << "cpu.m = (cpu.r["
+                << static_cast<unsigned>(
+                    instruction.source_register
+                )
+                << "] & 0x80000000u) != 0u;\n"
+                << "cpu.t = cpu.m != cpu.q;\n";
+            return;
+
+        case Operation::DivideStep:
+            output
+                << "{\n"
+                << "const bool old_q = cpu.q;\n"
+                << "cpu.q = (cpu.r["
+                << static_cast<unsigned>(
+                    instruction.destination_register
+                )
+                << "] & 0x80000000u) != 0u;\n"
+                << "const std::uint32_t divisor = cpu.r["
+                << static_cast<unsigned>(
+                    instruction.source_register
+                )
+                << "];\n"
+                << "cpu.r["
+                << static_cast<unsigned>(
+                    instruction.destination_register
+                )
+                << "] = (cpu.r["
+                << static_cast<unsigned>(
+                    instruction.destination_register
+                )
+                << "] << 1u) | (cpu.t ? 1u : 0u);\n"
+                << "const std::uint32_t shifted = cpu.r["
+                << static_cast<unsigned>(
+                    instruction.destination_register
+                )
+                << "];\n"
+                << "if (!old_q) {\n"
+                << "    if (!cpu.m) {\n"
+                << "        cpu.r["
+                << static_cast<unsigned>(
+                    instruction.destination_register
+                )
+                << "] = shifted - divisor;\n"
+                << "        const bool borrow = cpu.r["
+                << static_cast<unsigned>(
+                    instruction.destination_register
+                )
+                << "] > shifted;\n"
+                << "        cpu.q = cpu.q != borrow;\n"
+                << "    } else {\n"
+                << "        cpu.r["
+                << static_cast<unsigned>(
+                    instruction.destination_register
+                )
+                << "] = shifted + divisor;\n"
+                << "        const bool carry = cpu.r["
+                << static_cast<unsigned>(
+                    instruction.destination_register
+                )
+                << "] < shifted;\n"
+                << "        cpu.q = (!cpu.q) != carry;\n"
+                << "    }\n"
+                << "} else {\n"
+                << "    if (!cpu.m) {\n"
+                << "        cpu.r["
+                << static_cast<unsigned>(
+                    instruction.destination_register
+                )
+                << "] = shifted + divisor;\n"
+                << "        const bool carry = cpu.r["
+                << static_cast<unsigned>(
+                    instruction.destination_register
+                )
+                << "] < shifted;\n"
+                << "        cpu.q = cpu.q != carry;\n"
+                << "    } else {\n"
+                << "        cpu.r["
+                << static_cast<unsigned>(
+                    instruction.destination_register
+                )
+                << "] = shifted - divisor;\n"
+                << "        const bool borrow = cpu.r["
+                << static_cast<unsigned>(
+                    instruction.destination_register
+                )
+                << "] > shifted;\n"
+                << "        cpu.q = (!cpu.q) != borrow;\n"
+                << "    }\n"
+                << "}\n"
+                << "cpu.t = cpu.q == cpu.m;\n"
+                << "}\n";
+            return;
         case Operation::AndRegister:
             output
                 << "cpu.r["
@@ -1541,6 +1647,9 @@ void emit_terminal(
         case Operation::DoubleMultiplyUnsignedLong:
         case Operation::MultiplyAccumulateWord:
         case Operation::MultiplyAccumulateLong:
+        case Operation::DivideInitializeUnsigned:
+        case Operation::DivideInitializeSigned:
+        case Operation::DivideStep:
         case Operation::AndRegister:
         case Operation::OrRegister:
         case Operation::XorRegister:
@@ -1637,6 +1746,9 @@ bool is_control_flow(
         case Operation::DoubleMultiplyUnsignedLong:
         case Operation::MultiplyAccumulateWord:
         case Operation::MultiplyAccumulateLong:
+        case Operation::DivideInitializeUnsigned:
+        case Operation::DivideInitializeSigned:
+        case Operation::DivideStep:
         case Operation::AndRegister:
         case Operation::OrRegister:
         case Operation::XorRegister:
@@ -1864,6 +1976,8 @@ std::string emit_cpp_program(
         << "    std::uint32_t macl = 0;\n"
         << "    bool t = false;\n"
         << "    bool s = false;\n"
+        << "    bool q = false;\n"
+        << "    bool m = false;\n"
         << "    Memory memory{};\n"
         << "};\n\n"
         << "[[noreturn]] void unresolved_call(\n"

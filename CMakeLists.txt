@@ -1419,3 +1419,83 @@ add_test(
     NAME katana-generated-mac-tests
     COMMAND katana-generated-mac-tests
 )
+add_executable(katana-division-tests
+    tests/alu/division_tests.cpp
+)
+
+target_link_libraries(
+    katana-division-tests
+    PRIVATE
+        katana_core
+)
+
+katana_enable_warnings(katana-division-tests)
+
+add_test(
+    NAME katana-division-tests
+    COMMAND katana-division-tests
+)
+
+set(
+    KATANA_GENERATED_DIVISION_CPP
+    ${KATANA_GENERATED_TEST_DIR}/generated_division_program.cpp
+)
+
+add_custom_command(
+    OUTPUT
+        ${KATANA_GENERATED_DIVISION_CPP}
+    COMMAND
+        ${CMAKE_COMMAND}
+        -E
+        make_directory
+        ${KATANA_GENERATED_TEST_DIR}
+    COMMAND
+        $<TARGET_FILE:katana-recomp>
+        emit-cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/division_execution.bin
+        8C010000
+        ${KATANA_GENERATED_DIVISION_CPP}
+        8C010000
+    DEPENDS
+        katana-recomp
+        ${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/division_execution.bin
+    COMMENT
+        "Generiere C++-Programm fuer KR-1304 End-to-End-Test"
+    VERBATIM
+)
+
+set_source_files_properties(
+    ${KATANA_GENERATED_DIVISION_CPP}
+    PROPERTIES
+        GENERATED TRUE
+        HEADER_FILE_ONLY TRUE
+)
+
+set_source_files_properties(
+    tests/alu/generated_division_tests.cpp
+    PROPERTIES
+        OBJECT_DEPENDS ${KATANA_GENERATED_DIVISION_CPP}
+)
+
+add_executable(katana-generated-division-tests
+    tests/alu/generated_division_tests.cpp
+    ${KATANA_GENERATED_DIVISION_CPP}
+)
+
+target_include_directories(
+    katana-generated-division-tests
+    PRIVATE
+        ${KATANA_GENERATED_TEST_DIR}
+)
+
+katana_enable_warnings(katana-generated-division-tests)
+
+add_dependencies(
+    katana-generated-division-tests
+    katana-recomp
+)
+
+add_test(
+    NAME katana-generated-division-tests
+    COMMAND katana-generated-division-tests
+)

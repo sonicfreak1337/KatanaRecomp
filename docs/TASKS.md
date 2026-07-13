@@ -242,7 +242,7 @@ Umfang:
 - `MAC.L`
 - Speicheradressierung und Registerfortschaltung
 
-### [ ] KR-1304 - Division
+### [x] KR-1304 - Division
 
 Abhaengigkeiten: KR-1104
 
