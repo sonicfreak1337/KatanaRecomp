@@ -253,7 +253,7 @@ Umfang:
 - `DIV1`
 - Q-, M- und T-Bit
 
-### [ ] KR-1305 - v0.13 Release-Gate
+### [x] KR-1305 - v0.13 Release-Gate
 
 Abhaengigkeiten: KR-1301 bis KR-1304
 

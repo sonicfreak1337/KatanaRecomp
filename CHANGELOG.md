@@ -2,7 +2,7 @@
 
 ## [Unreleased]
 
-## [0.12.0] - 2026-07-13
+## [0.13.0] - 2026-07-14
 
 ### Hinzugefuegt
 
@@ -13,6 +13,14 @@
 - KR-1302: `DMULS.L` und `DMULU.L` sowie das generierte CPU-Register `MACH` mit portabler signed und unsigned 64-Bit-Produktsemantik implementiert.
 
 - KR-1301: `MUL.L`, `MULS.W` und `MULU.W` sowie das generierte CPU-Register `MACL` mit portabler 16- und 32-Bit-Produktsemantik implementiert.
+
+## [0.12.0] - 2026-07-13
+
+### Hinzugefuegt
+
+
+
+
 
 - KR-1204: `SHAD` und `SHLD` mit positiven, negativen und grossen Shiftzaehlern sowie dokumentierten Sonderfaellen fuer negative Vielfache von 32 implementiert.
 

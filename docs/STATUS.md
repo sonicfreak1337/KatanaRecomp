@@ -1,8 +1,8 @@
 # Projektstatus
 
-Version: 0.12.0
+Version: 0.13.0
 Phase: Pre-Alpha
-Aktiver Meilenstein: v0.13.0 - Multiplikation, Division und MAC
+Aktiver Meilenstein: v0.14.0 - Adressierung und Systemregister
 
 ## Zusammenfassung
 
@@ -32,10 +32,11 @@ KatanaRecomp besitzt einen durchgaengigen Prototyp-Pfad von SH-4-Binaerdaten bis
 - [x] KR-1302 - Doppelte Multiplikation
 - [x] KR-1303 - MAC-Instruktionen
 - [x] KR-1304 - Division
+- [x] KR-1305 - v0.13.0 Release-Gate
 
 ## Naechster Roadmap-Task
 
-- [ ] KR-1305 - v0.13 Release-Gate
+- [ ] KR-1401 - Pre-Decrement und Post-Increment
 
 ## Aktuelle Einschraenkungen
 

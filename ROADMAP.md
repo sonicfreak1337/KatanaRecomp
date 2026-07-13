@@ -1,7 +1,7 @@
 # KatanaRecomp Roadmap
 
 Status: Pre-Alpha
-Aktuelle Basis: v0.12.0
+Aktuelle Basis: v0.13.0
 Planungsmodell: Semantic Versioning, kleine ueberpruefbare Meilensteine
 
 Diese Roadmap beschreibt die technische Entwicklung von KatanaRecomp vom aktuellen Architektur-Prototyp bis zu einem belastbaren Dreamcast-Recompiler-Framework.
@@ -119,7 +119,7 @@ Fortschritt:
 - [x] KR-1302 - Doppelte Multiplikation
 - [x] KR-1303 - MAC-Instruktionen
 - [x] KR-1304 - Division
-- [ ] KR-1305 - v0.13 Release-Gate
+- [x] KR-1305 - v0.13 Release-Gate
 
 Enthalten:
 
