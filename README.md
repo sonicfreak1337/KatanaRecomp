@@ -28,7 +28,7 @@ SH-4-Binaerdaten
     -> semantischer Laufzeittest
 `
 
-Der aktuelle Teststand umfasst **50 automatische Tests**.
+Der aktuelle Teststand umfasst **52 automatische Tests**.
 
 ## Implementierte SH-4-Instruktionen
 
@@ -36,6 +36,9 @@ Der aktuelle Teststand umfasst **50 automatische Tests**.
 
 - NOP
 - RTS
+- RTE
+- TRAPA #imm
+- SLEEP
 
 ### Register und Immediate
 
@@ -68,6 +71,8 @@ Byte- und Word-Loads werden mit korrekter Vorzeichenerweiterung behandelt. Mehrb
 - RTS
 
 Direkte Sprungziele werden berechnet. Delay Slots werden erkannt und in der Analyse sowie im generierten C++ beruecksichtigt.
+
+`TRAPA` sichert SR, PC und R15 und erzeugt einen sichtbaren Trapzustand. `RTE` stellt SSR und SPC mit spezifikationsgemaesser Delay-Slot-Reihenfolge wieder her. `SLEEP` haelt die generierte Ausfuehrung in einem expliziten Schlafzustand an. Details stehen in `docs/SH4_SYSTEM_CONTROL_SEMANTICS.md`.
 
 ### Statusregister und T-Bit
 

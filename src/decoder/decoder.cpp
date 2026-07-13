@@ -251,6 +251,31 @@ DecodedInstruction decode(const std::uint16_t opcode) {
         return instruction;
     }
 
+    if (opcode == 0x002Bu) {
+        instruction.kind = InstructionKind::ReturnFromException;
+        instruction.control_flow = ControlFlowKind::ExceptionReturn;
+        instruction.has_delay_slot = true;
+        instruction.is_privileged = true;
+        instruction.text = "rte";
+        return instruction;
+    }
+
+    if (opcode == 0x001Bu) {
+        instruction.kind = InstructionKind::Sleep;
+        instruction.control_flow = ControlFlowKind::Halt;
+        instruction.is_privileged = true;
+        instruction.text = "sleep";
+        return instruction;
+    }
+
+    if ((opcode & 0xFF00u) == 0xC300u) {
+        instruction.kind = InstructionKind::TrapAlways;
+        instruction.immediate = static_cast<std::int32_t>(opcode & 0x00FFu);
+        instruction.control_flow = ControlFlowKind::Trap;
+        instruction.text = "trapa #" + std::to_string(instruction.immediate);
+        return instruction;
+    }
+
     if ((opcode & 0xF000u) == 0xA000u) {
         instruction.kind = InstructionKind::Bra;
         instruction.displacement = sign_extend_12(opcode) * 2;

@@ -213,6 +213,9 @@ std::vector<BasicBlock> build_basic_blocks(
 
             case katana::sh4::ControlFlowKind::UnconditionalBranch:
             case katana::sh4::ControlFlowKind::Return:
+            case katana::sh4::ControlFlowKind::Trap:
+            case katana::sh4::ControlFlowKind::ExceptionReturn:
+            case katana::sh4::ControlFlowKind::Halt:
             case katana::sh4::ControlFlowKind::None:
                 break;
         }

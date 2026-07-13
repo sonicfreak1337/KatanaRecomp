@@ -352,6 +352,15 @@ Operation lower_operation(
         case Source::LoadSpecialRegisterPostIncrement:
             return Operation::LoadSpecialRegisterPostIncrement;
 
+        case Source::TrapAlways:
+            return Operation::TrapAlways;
+
+        case Source::ReturnFromException:
+            return Operation::ReturnFromException;
+
+        case Source::Sleep:
+            return Operation::Sleep;
+
         case Source::Bra:
             return Operation::Branch;
 
@@ -748,6 +757,15 @@ std::string_view operation_name(
 
         case Operation::LoadSpecialRegisterPostIncrement:
             return "load_special_register_post_increment";
+
+        case Operation::TrapAlways:
+            return "trap_always";
+
+        case Operation::ReturnFromException:
+            return "return_from_exception";
+
+        case Operation::Sleep:
+            return "sleep";
 
         case Operation::Branch:
             return "branch";

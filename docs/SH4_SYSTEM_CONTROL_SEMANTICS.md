@@ -65,3 +65,32 @@ Alle laut SH-4-ISA privilegierten STC/LDC-Formen tragen diese Eigenschaft expliz
 - Pre-Decrement und Post-Increment
 - unveraenderter Zustand bei ungueltigen Speicheradressen
 - korrekte Privilegmarkierung mit GBR-Ausnahme
+
+## Privilegierte Kontrollpfade
+
+KR-1407 modelliert `TRAPA`, `RTE` und `SLEEP` als terminale Runtime-Pfade.
+
+### TRAPA
+
+`TRAPA #imm` fuehrt folgende sichtbare Zustandsaenderungen aus:
+
+1. `TRA = imm << 2`
+2. aktuelles SR nach SSR sichern
+3. Instruktions-PC plus zwei nach SPC sichern
+4. R15 nach SGR sichern
+5. `EXPEVT = 0x160`
+6. SR.MD, SR.BL und SR.RB setzen
+7. `PC = VBR + 0x100`
+8. `trap_pending = true`
+
+Der SR.RB-Wechsel aktiviert dabei die alternative Registerbank. Der generierte Funktionsaufruf kehrt anschließend zum Runtime-Dispatcher zurueck, weil der VBR-Inhalt erst zur Laufzeit bekannt ist.
+
+### RTE
+
+`RTE` ist privilegiert und besitzt einen Delay Slot. SPC wird vor dem Delay Slot als Ruecksprungziel gesichert. SSR wird bereits vor Ausfuehrung des Delay Slots nach SR uebernommen; dadurch sieht der Delay Slot die wiederhergestellten Statusbits und die wiederhergestellte Registerbank. Danach werden PC auf das gesicherte SPC gesetzt und `trap_pending` geloescht.
+
+### SLEEP
+
+`SLEEP` setzt `sleeping = true`, setzt PC auf die Folgeinstruktion und kehrt zum Runtime-Dispatcher zurueck. Alle anderen CPU-Felder bleiben erhalten. Ein spaeteres Interrupt- und Scheduler-Subsystem ist fuer das Aufwecken verantwortlich; KR-1407 simuliert keinen Plattforminterrupt.
+
+Die Privilegmarkierung ist in Decoder, IR und CLI sichtbar. Eine Illegal-Instruction-Ausnahme bei Ausfuehrung im User-Modus folgt mit dem spaeteren Ausnahme-Subsystem.

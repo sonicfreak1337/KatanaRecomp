@@ -138,6 +138,9 @@ enum class InstructionKind {
     StoreSpecialRegisterPreDecrement,
     LoadSpecialRegister,
     LoadSpecialRegisterPostIncrement,
+    TrapAlways,
+    ReturnFromException,
+    Sleep,
     Bra,
     Bsr,
     Bt,
@@ -155,7 +158,10 @@ enum class ControlFlowKind {
     Call,
     Return,
     IndirectBranch,
-    IndirectCall
+    IndirectCall,
+    Trap,
+    ExceptionReturn,
+    Halt
 };
 
 struct DecodedInstruction {

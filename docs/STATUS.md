@@ -11,7 +11,7 @@ KatanaRecomp besitzt einen durchgaengigen Prototyp-Pfad von SH-4-Binaerdaten bis
 ## Teststatus
 
 ```text
-100% tests passed out of 50
+100% tests passed out of 52
 ```
 
 ## Fertiggestellte Roadmap-Tasks
@@ -39,10 +39,11 @@ KatanaRecomp besitzt einen durchgaengigen Prototyp-Pfad von SH-4-Binaerdaten bis
 - [x] KR-1404 - GBR-relative Adressierung
 - [x] KR-1405 - PC-relative Loads und MOVA
 - [x] KR-1406 - Systemregistertransfers
+- [x] KR-1407 - Privilegierte Kontrollinstruktionen
 
 ## Naechster Roadmap-Task
 
-- [ ] KR-1407 - Privilegierte Kontrollinstruktionen
+- [ ] KR-1408 - v0.14 Release-Gate
 
 ## Aktuelle Einschraenkungen
 

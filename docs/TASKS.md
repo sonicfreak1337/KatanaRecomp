@@ -300,7 +300,7 @@ Umfang:
 - `STC`, `LDC`
 - direkte und Speicherformen
 
-### [ ] KR-1407 - Privilegierte Kontrollinstruktionen
+### [x] KR-1407 - Privilegierte Kontrollinstruktionen
 
 Abhaengigkeiten: KR-1406
 

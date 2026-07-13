@@ -1929,6 +1929,9 @@ void emit_simple_instruction(
         case Operation::JumpRegister:
         case Operation::CallRegister:
         case Operation::Return:
+        case Operation::TrapAlways:
+        case Operation::ReturnFromException:
+        case Operation::Sleep:
             output
                 << "throw std::runtime_error("
                 << "\"Kontrollfluss im Delay Slot wird nicht unterstuetzt\");\n";
@@ -2174,6 +2177,60 @@ void emit_terminal(
             output << "return;\n";
             return;
 
+        case Operation::TrapAlways:
+            emit_indent(output, indent);
+            output << "const std::uint32_t old_sr = cpu.read_sr();\n";
+            emit_indent(output, indent);
+            output << "cpu.tra = "
+                << hex32(static_cast<std::uint32_t>(instruction.immediate) << 2u)
+                << ";\n";
+            emit_indent(output, indent);
+            output << "cpu.ssr = old_sr;\n";
+            emit_indent(output, indent);
+            output << "cpu.spc = "
+                << hex32(instruction.source_address + 2u)
+                << ";\n";
+            emit_indent(output, indent);
+            output << "cpu.sgr = cpu.r[15];\n";
+            emit_indent(output, indent);
+            output << "cpu.expevt = 0x00000160u;\n";
+            emit_indent(output, indent);
+            output << "cpu.write_sr(old_sr | 0x70000000u);\n";
+            emit_indent(output, indent);
+            output << "cpu.trap_pending = true;\n";
+            emit_indent(output, indent);
+            output << "cpu.pc = cpu.vbr + 0x00000100u;\n";
+            emit_indent(output, indent);
+            output << "return;\n";
+            return;
+
+        case Operation::ReturnFromException:
+            emit_indent(output, indent);
+            output << "const std::uint32_t return_target = cpu.spc;\n";
+            emit_indent(output, indent);
+            output << "cpu.write_sr(cpu.ssr);\n";
+            if (delay_slot != nullptr) {
+                emit_simple_instruction(output, *delay_slot, indent);
+            }
+            emit_indent(output, indent);
+            output << "cpu.trap_pending = false;\n";
+            emit_indent(output, indent);
+            output << "cpu.pc = return_target;\n";
+            emit_indent(output, indent);
+            output << "return;\n";
+            return;
+
+        case Operation::Sleep:
+            emit_indent(output, indent);
+            output << "cpu.sleeping = true;\n";
+            emit_indent(output, indent);
+            output << "cpu.pc = "
+                << hex32(instruction.source_address + 2u)
+                << ";\n";
+            emit_indent(output, indent);
+            output << "return;\n";
+            return;
+
         case Operation::Unknown:
         case Operation::Nop:
         case Operation::MovImmediate:
@@ -2302,6 +2359,9 @@ bool is_control_flow(
         case Operation::JumpRegister:
         case Operation::CallRegister:
         case Operation::Return:
+        case Operation::TrapAlways:
+        case Operation::ReturnFromException:
+        case Operation::Sleep:
             return true;
 
         case Operation::Unknown:
@@ -2615,6 +2675,8 @@ std::string emit_cpp_program(
         << "    std::uint32_t spc = 0;\n"
         << "    std::uint32_t sgr = 0;\n"
         << "    std::uint32_t dbr = 0;\n"
+        << "    std::uint32_t tra = 0;\n"
+        << "    std::uint32_t expevt = 0;\n"
         << "    std::uint32_t mach = 0;\n"
         << "    std::uint32_t macl = 0;\n"
         << "    std::uint32_t fpul = 0;\n"
@@ -2624,6 +2686,8 @@ std::string emit_cpp_program(
         << "    bool s = false;\n"
         << "    bool q = false;\n"
         << "    bool m = false;\n"
+        << "    bool trap_pending = false;\n"
+        << "    bool sleeping = false;\n"
         << "    Memory memory{};\n\n"
         << "    [[nodiscard]] std::uint32_t read_sr() const {\n"
         << "        return (sr & ~0x00000303u) |\n"

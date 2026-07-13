@@ -1970,3 +1970,65 @@ add_test(
     NAME katana-generated-system-register-tests
     COMMAND katana-generated-system-register-tests
 )
+
+add_executable(katana-privileged-control-tests
+    tests/control_flow/privileged_control_tests.cpp
+)
+
+target_link_libraries(katana-privileged-control-tests PRIVATE katana_core)
+katana_enable_warnings(katana-privileged-control-tests)
+
+add_test(
+    NAME katana-privileged-control-tests
+    COMMAND katana-privileged-control-tests
+)
+
+set(
+    KATANA_GENERATED_PRIVILEGED_CONTROL_CPP
+    ${KATANA_GENERATED_TEST_DIR}/generated_privileged_control_program.cpp
+)
+
+add_custom_command(
+    OUTPUT ${KATANA_GENERATED_PRIVILEGED_CONTROL_CPP}
+    COMMAND ${CMAKE_COMMAND} -E make_directory ${KATANA_GENERATED_TEST_DIR}
+    COMMAND
+        $<TARGET_FILE:katana-privileged-control-tests>
+        --emit-cpp
+        ${KATANA_GENERATED_PRIVILEGED_CONTROL_CPP}
+    DEPENDS
+        katana-privileged-control-tests
+        tests/control_flow/privileged_control_tests.cpp
+    COMMENT "Generiere C++-Programm fuer KR-1407 End-to-End-Test"
+    VERBATIM
+)
+
+set_source_files_properties(
+    ${KATANA_GENERATED_PRIVILEGED_CONTROL_CPP}
+    PROPERTIES GENERATED TRUE HEADER_FILE_ONLY TRUE
+)
+
+set_source_files_properties(
+    tests/control_flow/generated_privileged_control_tests.cpp
+    PROPERTIES OBJECT_DEPENDS ${KATANA_GENERATED_PRIVILEGED_CONTROL_CPP}
+)
+
+add_executable(katana-generated-privileged-control-tests
+    tests/control_flow/generated_privileged_control_tests.cpp
+    ${KATANA_GENERATED_PRIVILEGED_CONTROL_CPP}
+)
+
+target_include_directories(
+    katana-generated-privileged-control-tests
+    PRIVATE ${KATANA_GENERATED_TEST_DIR}
+)
+
+katana_enable_warnings(katana-generated-privileged-control-tests)
+add_dependencies(
+    katana-generated-privileged-control-tests
+    katana-privileged-control-tests
+)
+
+add_test(
+    NAME katana-generated-privileged-control-tests
+    COMMAND katana-generated-privileged-control-tests
+)

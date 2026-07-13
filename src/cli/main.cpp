@@ -471,6 +471,10 @@ void print_ir_instruction(
                 );
             break;
 
+        case katana::ir::Operation::TrapAlways:
+            std::cout << " #" << std::dec << instruction.immediate;
+            break;
+
         case katana::ir::Operation::Unknown:
         case katana::ir::Operation::Nop:
         case katana::ir::Operation::DivideInitializeUnsigned:
@@ -479,6 +483,8 @@ void print_ir_instruction(
         case katana::ir::Operation::ClearT:
         case katana::ir::Operation::SetT:
         case katana::ir::Operation::Return:
+        case katana::ir::Operation::ReturnFromException:
+        case katana::ir::Operation::Sleep:
             break;
     }
 
@@ -488,6 +494,10 @@ void print_ir_instruction(
 
     if (instruction.is_delay_slot) {
         std::cout << " [delay-slot]";
+    }
+
+    if (instruction.is_privileged) {
+        std::cout << " [privileged]";
     }
 
     std::cout << '\n';

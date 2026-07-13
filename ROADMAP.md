@@ -146,7 +146,7 @@ Fortschritt:
 - [x] KR-1404 - GBR-relative Adressierung
 - [x] KR-1405 - PC-relative Loads und MOVA
 - [x] KR-1406 - Systemregistertransfers
-- [ ] KR-1407 - Privilegierte Kontrollinstruktionen
+- [x] KR-1407 - Privilegierte Kontrollinstruktionen
 - [ ] KR-1408 - v0.14 Release-Gate
 
 Enthalten:
