@@ -2,8 +2,6 @@
 
 ## [Unreleased]
 
-### Hinzugefuegt
-
 ## [0.15.0] - 2026-07-14
 
 ### Hinzugefuegt
