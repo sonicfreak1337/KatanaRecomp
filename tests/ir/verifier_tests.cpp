@@ -19,6 +19,16 @@ void require(const bool condition, const std::string& message) {
     }
 }
 
+bool has_issue(
+    const std::vector<katana::ir::VerificationIssue>& issues,
+    const std::string& fragment
+) {
+    for (const auto& issue : issues) {
+        if (issue.message.find(fragment) != std::string::npos) return true;
+    }
+    return false;
+}
+
 }
 
 int main() {
@@ -53,6 +63,47 @@ int main() {
     require(
         !katana::ir::verify_function(orphan_slot).empty(),
         "Verwaister Delay Slot wird nicht abgelehnt."
+    );
+
+    auto wrong_distance = program.front();
+    auto& wrong_owner = wrong_distance.blocks.front().instructions[1];
+    wrong_owner.delay_slot.counterpart_address = wrong_owner.source_address + 4u;
+    require(
+        has_issue(
+            katana::ir::verify_function(wrong_distance),
+            "nicht gegenseitig verknuepft"
+        ),
+        "Nicht direkt folgende Delay-Slot-Gegenadresse wird akzeptiert."
+    );
+
+    auto false_owner = program.front();
+    false_owner.blocks.front().instructions[1].original_opcode = 0x0009u;
+    require(
+        has_issue(
+            katana::ir::verify_function(false_owner),
+            "keinen verzoegerten Originalopcode"
+        ),
+        "Owner-Rolle bei nicht verzoegertem Opcode wird akzeptiert."
+    );
+
+    auto missing_owner = program.front();
+    missing_owner.blocks.front().instructions[1].delay_slot = {};
+    require(
+        has_issue(
+            katana::ir::verify_function(missing_owner),
+            "keine Owner-Rolle"
+        ),
+        "Verzoegerter Opcode ohne Owner-Rolle wird akzeptiert."
+    );
+
+    auto control_in_slot = program.front();
+    control_in_slot.blocks.front().instructions[2].original_opcode = 0x000Bu;
+    require(
+        has_issue(
+            katana::ir::verify_function(control_in_slot),
+            "Kontrollflussinstruktion ist als Delay Slot ungueltig"
+        ),
+        "Kontrollflussopcode im Delay Slot wird akzeptiert."
     );
 
     bool codegen_rejected = false;

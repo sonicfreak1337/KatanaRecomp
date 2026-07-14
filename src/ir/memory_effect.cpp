@@ -21,7 +21,11 @@ constexpr MemoryEffects postincrement_read(const OperandWidth width) noexcept {
 
 }
 
-MemoryEffects operation_memory_effects(const Operation operation) noexcept {
+MemoryEffects instruction_memory_effects(
+    const Operation operation,
+    const std::uint8_t destination_register,
+    const std::uint8_t source_register
+) noexcept {
     switch (operation) {
         case Operation::LoadByteSigned:
         case Operation::LoadByteSignedDisplacement:
@@ -67,11 +71,17 @@ MemoryEffects operation_memory_effects(const Operation operation) noexcept {
             return predecrement_write(OperandWidth::Bits32);
 
         case Operation::LoadByteSignedPostIncrement:
-            return postincrement_read(OperandWidth::Bits8);
+            return destination_register == source_register
+                ? read(OperandWidth::Bits8)
+                : postincrement_read(OperandWidth::Bits8);
         case Operation::LoadWordSignedPostIncrement:
-            return postincrement_read(OperandWidth::Bits16);
+            return destination_register == source_register
+                ? read(OperandWidth::Bits16)
+                : postincrement_read(OperandWidth::Bits16);
         case Operation::LoadLongPostIncrement:
-            return postincrement_read(OperandWidth::Bits32);
+            return destination_register == source_register
+                ? read(OperandWidth::Bits32)
+                : postincrement_read(OperandWidth::Bits32);
         case Operation::LoadSpecialRegisterPostIncrement:
             return postincrement_read(OperandWidth::Bits32);
 

@@ -11,7 +11,7 @@ KatanaRecomp besitzt einen durchgaengigen Prototyp-Pfad von Raw- und ELF32-SH-Ei
 ## Teststatus
 
 ```text
-100% tests passed out of 71
+100% tests passed out of 75
 ```
 
 ## Fertiggestellte Roadmap-Tasks

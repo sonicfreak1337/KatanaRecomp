@@ -105,6 +105,18 @@ bool contains_status_bit(
 ) noexcept {
     const auto mask = static_cast<std::uint8_t>(effects);
     const auto requested = static_cast<std::uint8_t>(bit);
+    const auto full_mask = static_cast<std::uint8_t>(StatusRegisterBit::Full);
+    const auto named_bits = static_cast<std::uint8_t>(StatusRegisterBit::T) |
+        static_cast<std::uint8_t>(StatusRegisterBit::S) |
+        static_cast<std::uint8_t>(StatusRegisterBit::Q) |
+        static_cast<std::uint8_t>(StatusRegisterBit::M);
+    if (
+        (mask & full_mask) != 0u &&
+        requested != 0u &&
+        (requested & static_cast<std::uint8_t>(~named_bits)) == 0u
+    ) {
+        return true;
+    }
     return requested != 0u && (mask & requested) == requested;
 }
 

@@ -43,7 +43,7 @@ void append_synthetic_function(
     access.source_address = entry;
     access.operation = operation;
     access.widths = katana::ir::operation_operand_widths(operation);
-    access.memory_effects = katana::ir::operation_memory_effects(operation);
+    access.memory_effects = katana::ir::instruction_memory_effects(operation);
     access.status_effects = katana::ir::instruction_status_effects(operation);
     access.destination_register = destination;
     access.effective_address = effective_address;
@@ -55,16 +55,38 @@ void append_synthetic_function(
     return_instruction.widths = katana::ir::operation_operand_widths(
         katana::ir::Operation::Return
     );
-    return_instruction.memory_effects = katana::ir::operation_memory_effects(
+    return_instruction.memory_effects = katana::ir::instruction_memory_effects(
         katana::ir::Operation::Return
     );
     return_instruction.status_effects = katana::ir::instruction_status_effects(
         katana::ir::Operation::Return
     );
+    return_instruction.delay_slot = {
+        katana::ir::DelaySlotRole::Owner,
+        return_instruction.source_address + 2u
+    };
+
+    katana::ir::Instruction delay_slot;
+    delay_slot.source_address = return_instruction.source_address + 2u;
+    delay_slot.original_opcode = 0x0009u;
+    delay_slot.operation = katana::ir::Operation::Nop;
+    delay_slot.widths = katana::ir::operation_operand_widths(
+        katana::ir::Operation::Nop
+    );
+    delay_slot.memory_effects = katana::ir::instruction_memory_effects(
+        katana::ir::Operation::Nop
+    );
+    delay_slot.status_effects = katana::ir::instruction_status_effects(
+        katana::ir::Operation::Nop
+    );
+    delay_slot.delay_slot = {
+        katana::ir::DelaySlotRole::Slot,
+        return_instruction.source_address
+    };
 
     katana::ir::BasicBlock block;
     block.start_address = entry;
-    block.instructions = {access, return_instruction};
+    block.instructions = {access, return_instruction, delay_slot};
 
     katana::ir::Function function;
     function.entry_address = entry;

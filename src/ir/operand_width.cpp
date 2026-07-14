@@ -39,10 +39,13 @@ OperandWidths operation_operand_widths(const Operation operation) noexcept {
         case Operation::ClearT:
         case Operation::SetT:
         case Operation::DivideInitializeUnsigned:
-        case Operation::DivideInitializeSigned:
-        case Operation::ReturnFromException:
         case Operation::Sleep:
             return {};
+
+        case Operation::DivideInitializeSigned:
+            return {none, longword, none, none, none, none};
+        case Operation::ReturnFromException:
+            return {none, longword, none, none, none, longword};
 
         case Operation::MovImmediate:
             return {longword, none, byte, none, none, none};
@@ -71,9 +74,9 @@ OperandWidths operation_operand_widths(const Operation operation) noexcept {
         case Operation::DoubleMultiplyUnsignedLong:
             return {quadword, longword, none, none, none, none};
         case Operation::MultiplyAccumulateWord:
-            return {quadword, word, none, none, word, longword};
+            return {none, word, none, none, word, longword};
         case Operation::MultiplyAccumulateLong:
-            return {quadword, longword, none, none, longword, longword};
+            return {none, longword, none, none, longword, longword};
 
         case Operation::StoreByte:
         case Operation::StoreBytePreDecrement:

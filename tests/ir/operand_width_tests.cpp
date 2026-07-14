@@ -82,6 +82,61 @@ int main() {
         "Doppelte Multiplikation bildet ihre Ergebnisbreite nicht ab."
     );
 
+    const auto div0s = operation_operand_widths(Operation::DivideInitializeSigned);
+    require(
+        div0s.result == OperandWidth::None
+            && div0s.input == OperandWidth::Bits32,
+        "DIV0S behauptet eine Ausgabe oder verliert seine 32-Bit-Eingaben."
+    );
+
+    const auto rte = operation_operand_widths(Operation::ReturnFromException);
+    require(
+        rte.result == OperandWidth::None
+            && rte.input == OperandWidth::Bits32
+            && rte.address == OperandWidth::Bits32,
+        "RTE besitzt falsche Eingabe- oder Adressbreiten."
+    );
+
+    const auto mac_word = operation_operand_widths(Operation::MultiplyAccumulateWord);
+    const auto mac_long = operation_operand_widths(Operation::MultiplyAccumulateLong);
+    require(
+        mac_word.result == OperandWidth::None
+            && mac_word.input == OperandWidth::Bits16
+            && mac_long.result == OperandWidth::None
+            && mac_long.input == OperandWidth::Bits32,
+        "MAC.W oder MAC.L behauptet ein pauschales 64-Bit-Ergebnis."
+    );
+
+    const auto mac_word_effects =
+        katana::ir::operation_accumulator_effects(Operation::MultiplyAccumulateWord);
+    const auto mac_long_effects =
+        katana::ir::operation_accumulator_effects(Operation::MultiplyAccumulateLong);
+    require(
+        !katana::ir::contains_accumulator_register(
+            mac_word_effects.reads_if_s_set,
+            katana::ir::AccumulatorRegister::Mach
+        ) && katana::ir::contains_accumulator_register(
+            mac_word_effects.reads_if_s_set,
+            katana::ir::AccumulatorRegister::Macl
+        ) && katana::ir::contains_accumulator_register(
+            mac_word_effects.writes_if_s_clear,
+            katana::ir::AccumulatorRegister::Mach
+        ) && !katana::ir::contains_accumulator_register(
+            mac_word_effects.writes_if_s_set,
+            katana::ir::AccumulatorRegister::Mach
+        ) && katana::ir::contains_accumulator_register(
+            mac_word_effects.writes_if_s_set,
+            katana::ir::AccumulatorRegister::Macl
+        ) && katana::ir::contains_accumulator_register(
+            mac_long_effects.writes_if_s_set,
+            katana::ir::AccumulatorRegister::Mach
+        ) && katana::ir::contains_accumulator_register(
+            mac_long_effects.writes_if_s_set,
+            katana::ir::AccumulatorRegister::Macl
+        ),
+        "S-abhaengige MACH/MACL-Schreibwirkungen sind unvollstaendig."
+    );
+
     const auto nop = operation_operand_widths(Operation::Nop);
     require(
         nop.result == OperandWidth::None

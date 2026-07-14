@@ -71,6 +71,21 @@ struct MemoryEffects {
     bool operator==(const MemoryEffects&) const = default;
 };
 
+enum class AccumulatorRegister : std::uint8_t {
+    None = 0u,
+    Mach = 1u << 0u,
+    Macl = 1u << 1u
+};
+
+struct AccumulatorEffects {
+    AccumulatorRegister reads_if_s_clear = AccumulatorRegister::None;
+    AccumulatorRegister reads_if_s_set = AccumulatorRegister::None;
+    AccumulatorRegister writes_if_s_clear = AccumulatorRegister::None;
+    AccumulatorRegister writes_if_s_set = AccumulatorRegister::None;
+
+    bool operator==(const AccumulatorEffects&) const = default;
+};
+
 enum class DelaySlotRole : std::uint8_t {
     None,
     Owner,
@@ -236,6 +251,7 @@ struct Instruction {
     OperandWidths widths;
     StatusRegisterEffects status_effects;
     MemoryEffects memory_effects;
+    AccumulatorEffects accumulator_effects;
 
     std::uint8_t destination_register = 0;
     std::uint8_t source_register = 0;
@@ -280,6 +296,17 @@ struct Function {
     StatusRegisterBit effects,
     StatusRegisterBit bit
 ) noexcept;
-[[nodiscard]] MemoryEffects operation_memory_effects(Operation operation) noexcept;
+[[nodiscard]] MemoryEffects instruction_memory_effects(
+    Operation operation,
+    std::uint8_t destination_register = 0u,
+    std::uint8_t source_register = 0u
+) noexcept;
+[[nodiscard]] AccumulatorEffects operation_accumulator_effects(
+    Operation operation
+) noexcept;
+[[nodiscard]] bool contains_accumulator_register(
+    AccumulatorRegister effects,
+    AccumulatorRegister accumulator
+) noexcept;
 
 }

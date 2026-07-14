@@ -1,8 +1,8 @@
 # Katana-IR
 
 Katana-IR beschreibt die dekodierten SH-4-Operationen unabhaengig vom C++-Backend.
-Die Metadaten einer Instruktion werden beim Lowering aus der Operation abgeleitet und
-sind deshalb deterministisch.
+Die Metadaten einer Instruktion werden beim Lowering aus Operation und Operanden
+abgeleitet und sind deshalb deterministisch.
 
 ## Operandbreiten
 
@@ -25,11 +25,18 @@ Das Basisregister wird dabei nicht als Daten-Input missverstanden. Ein Vergleich
 besitzt ein boolesches `result=i1` und 32-Bit-Eingaben; die Bindung dieses Ergebnisses
 an Statusregister wird getrennt modelliert.
 
+`MAC.W` und `MAC.L` besitzen kein pauschales 64-Bit-Ergebnis. Ihre Akkumulator-
+Metadaten nennen stattdessen getrennt, welche Teile von MACH/MACL bei geloeschtem
+oder gesetztem S-Bit geschrieben werden. Bei gesetztem S schreibt `MAC.W` nur MACL,
+waehrend `MAC.L` weiterhin MACH und MACL schreibt.
+
 ## Statusregistereffekte
 
 `StatusRegisterEffects` trennt gelesene und geschriebene SR-Bestandteile. Die
 Bitmaske unterscheidet T, S, Q und M. `Full` markiert einen Zugriff auf das gesamte
 Statusregister, beispielsweise fuer `STC SR`, `LDC SR`, `TRAPA` und `RTE`.
+
+Eine `Full`-Maske beantwortet Abfragen nach T, S, Q und M ebenfalls positiv.
 
 Die Effekte beschreiben die bereits implementierte Semantik explizit. So liest und
 schreibt `ADDC` das T-Bit, ein Vergleich schreibt T ohne es zu lesen und `DIV1`
@@ -50,6 +57,10 @@ besitzen jeweils zwei Reads und zwei Post-Increment-Updates. Die Transferbreite 
 mit `OperandWidths.memory` uebereinstimmen; diese Beziehung wird vom IR-Verifier
 geprueft.
 
+Bei `MOV.B/W/L @Rm+,Rn` werden Operation und konkrete Register gemeinsam
+ausgewertet. Falls `Rm == Rn` ist, findet gemaess SH-4-Semantik kein
+Post-Increment-Registerupdate statt; andernfalls wird genau ein Update ausgewiesen.
+
 ## Delay Slots
 
 `DelaySlotRelation` ersetzt unabhaengige Wahrheitswerte durch drei eindeutige Rollen:
@@ -57,6 +68,11 @@ geprueft.
 Gegenparts. Der C++-Codegenerator akzeptiert eine Delay-Slot-Instruktion nur dann
 als Teil des Kontrolltransfers, wenn beide Rollen und beide Adressen zueinander
 passen.
+
+Der Verifier gleicht die Owner-Rolle zusaetzlich mit den Decoder-Metadaten des
+Originalopcodes ab. Ein Paar muss exakt aus Owner-Adresse und Owner-Adresse plus
+zwei bestehen. Nicht verzoegerte Owner, verzoegerte Opcodes ohne Owner, verwaiste
+Slots und Kontrollflussopcodes im Slot sind ungueltig.
 
 Damit ist die Ausfuehrungsreihenfolge nicht mehr aus zwei lose gekoppelten Markern
 zu erraten. Fehlende, verwaiste oder widerspruechliche Beziehungen koennen vor dem
@@ -70,7 +86,7 @@ Adresse und Meldung sortierte Diagnosen. Geprueft werden mindestens:
 - vorhandene und eindeutige Bloecke und Instruktionsadressen
 - ein zum Funktionseintritt passender Startblock
 - ausgerichtete Instruktionen und Register aus R0 bis R15
-- kanonische Operandbreiten sowie Status- und Speichereffekte
+- kanonische Operandbreiten sowie Status-, Speicher- und Akkumulatoreffekte
 - vollstaendige direkte Kontrollflussziele und vorhandene Blocknachfolger
 - gegenseitig konsistente Delay-Slot-Beziehungen und Blockterminale
 

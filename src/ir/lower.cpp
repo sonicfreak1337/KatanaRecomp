@@ -400,7 +400,7 @@ Instruction lower_instruction(
     result.original_opcode = source.opcode;
     result.operation = lower_operation(source.instruction.kind);
     result.widths = operation_operand_widths(result.operation);
-    result.memory_effects = operation_memory_effects(result.operation);
+    result.accumulator_effects = operation_accumulator_effects(result.operation);
 
     result.destination_register =
         source.instruction.destination_register;
@@ -408,6 +408,11 @@ Instruction lower_instruction(
         source.instruction.source_register;
     result.branch_register =
         source.instruction.branch_register;
+    result.memory_effects = instruction_memory_effects(
+        result.operation,
+        result.destination_register,
+        result.source_register
+    );
 
     result.immediate = source.instruction.immediate;
     result.displacement = source.instruction.displacement;

@@ -1,4 +1,5 @@
 #include "katana/ir/verifier.hpp"
+#include "katana/sh4/decoder.hpp"
 
 #include <algorithm>
 #include <iomanip>
@@ -80,6 +81,17 @@ void verify_delay_slot(
     const auto& instruction = block.instructions[index];
     const auto role = instruction.delay_slot.role;
     const auto peer = instruction.delay_slot.counterpart_address;
+    const auto decoded = katana::sh4::decode(instruction.original_opcode);
+    const bool opcode_has_delay_slot = decoded.has_delay_slot;
+
+    if (role == DelaySlotRole::Owner && !opcode_has_delay_slot) {
+        add_issue(issues, instruction.source_address,
+            "Delay-Slot-Owner verwendet keinen verzoegerten Originalopcode.");
+    }
+    if (role != DelaySlotRole::Owner && opcode_has_delay_slot) {
+        add_issue(issues, instruction.source_address,
+            "Verzoegerter Originalopcode besitzt keine Owner-Rolle.");
+    }
 
     if (role == DelaySlotRole::None) {
         if (peer.has_value()) {
@@ -106,6 +118,8 @@ void verify_delay_slot(
         }
         const auto& slot = block.instructions[index + 1u];
         if (
+            *peer != instruction.source_address + 2u ||
+            slot.source_address != instruction.source_address + 2u ||
             *peer != slot.source_address ||
             slot.delay_slot.role != DelaySlotRole::Slot ||
             slot.delay_slot.counterpart_address != instruction.source_address
@@ -127,6 +141,8 @@ void verify_delay_slot(
     }
     const auto& owner = block.instructions[index - 1u];
     if (
+        instruction.source_address != owner.source_address + 2u ||
+        *peer != instruction.source_address - 2u ||
         *peer != owner.source_address ||
         owner.delay_slot.role != DelaySlotRole::Owner ||
         owner.delay_slot.counterpart_address != instruction.source_address
@@ -134,7 +150,7 @@ void verify_delay_slot(
         add_issue(issues, instruction.source_address,
             "Delay Slot und vorhergehender Owner sind nicht gegenseitig verknuepft.");
     }
-    if (is_control_flow(instruction.operation)) {
+    if (is_control_flow(instruction.operation) || decoded.changes_control_flow()) {
         add_issue(issues, instruction.source_address,
             "Kontrollflussinstruktion ist als Delay Slot ungueltig.");
     }
@@ -200,9 +216,22 @@ std::vector<VerificationIssue> verify_function(const Function& function) {
                 add_issue(issues, instruction.source_address,
                     "Statusregistereffekte passen nicht zur Operation.");
             }
-            if (instruction.memory_effects != operation_memory_effects(instruction.operation)) {
+            if (
+                instruction.memory_effects != instruction_memory_effects(
+                    instruction.operation,
+                    instruction.destination_register,
+                    instruction.source_register
+                )
+            ) {
                 add_issue(issues, instruction.source_address,
                     "Speichereffekte passen nicht zur Operation.");
+            }
+            if (
+                instruction.accumulator_effects !=
+                    operation_accumulator_effects(instruction.operation)
+            ) {
+                add_issue(issues, instruction.source_address,
+                    "Akkumulatoreffekte passen nicht zur Operation.");
             }
             verify_memory_effects(instruction, issues);
             verify_delay_slot(block, index, issues);

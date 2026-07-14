@@ -60,6 +60,22 @@ int main() {
             && stc_gbr.reads == StatusRegisterBit::None,
         "STC muss SR- und Nicht-SR-Transfers unterscheiden."
     );
+    require(
+        contains_status_bit(stc_sr.reads, StatusRegisterBit::T),
+        "Full-SR-Effekt deckt T nicht ab."
+    );
+    require(
+        contains_status_bit(stc_sr.reads, StatusRegisterBit::S),
+        "Full-SR-Effekt deckt S nicht ab."
+    );
+    require(
+        contains_status_bit(stc_sr.reads, StatusRegisterBit::Q),
+        "Full-SR-Effekt deckt Q nicht ab."
+    );
+    require(
+        contains_status_bit(stc_sr.reads, StatusRegisterBit::M),
+        "Full-SR-Effekt deckt M nicht ab."
+    );
 
     const auto load = instruction_status_effects(Operation::LoadLong);
     require(

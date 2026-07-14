@@ -35,7 +35,7 @@ katana::ir::Instruction transfer(
     instruction.operation = operation;
     instruction.special_register = special_register;
     instruction.widths = katana::ir::operation_operand_widths(operation);
-    instruction.memory_effects = katana::ir::operation_memory_effects(operation);
+    instruction.memory_effects = katana::ir::instruction_memory_effects(operation);
     instruction.status_effects = katana::ir::instruction_status_effects(
         operation,
         special_register
@@ -63,10 +63,27 @@ void append_function(
     return_instruction.operation = Operation::Return;
     return_instruction.widths = katana::ir::operation_operand_widths(Operation::Return);
     return_instruction.memory_effects =
-        katana::ir::operation_memory_effects(Operation::Return);
+        katana::ir::instruction_memory_effects(Operation::Return);
     return_instruction.status_effects =
         katana::ir::instruction_status_effects(Operation::Return);
+    return_instruction.delay_slot = {
+        katana::ir::DelaySlotRole::Owner,
+        return_instruction.source_address + 2u
+    };
     instructions.push_back(return_instruction);
+
+    katana::ir::Instruction delay_slot;
+    delay_slot.source_address = return_instruction.source_address + 2u;
+    delay_slot.original_opcode = 0x0009u;
+    delay_slot.operation = Operation::Nop;
+    delay_slot.widths = katana::ir::operation_operand_widths(Operation::Nop);
+    delay_slot.memory_effects = katana::ir::instruction_memory_effects(Operation::Nop);
+    delay_slot.status_effects = katana::ir::instruction_status_effects(Operation::Nop);
+    delay_slot.delay_slot = {
+        katana::ir::DelaySlotRole::Slot,
+        return_instruction.source_address
+    };
+    instructions.push_back(delay_slot);
 
     katana::ir::BasicBlock block;
     block.start_address = entry;
