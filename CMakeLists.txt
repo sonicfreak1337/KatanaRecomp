@@ -112,6 +112,18 @@ add_test(
     COMMAND katana-runtime-tests
 )
 
+add_executable(katana-cpu-state-tests
+    tests/runtime/cpu_state_tests.cpp
+)
+
+target_link_libraries(katana-cpu-state-tests PRIVATE katana_runtime)
+katana_enable_warnings(katana-cpu-state-tests)
+
+add_test(
+    NAME katana-cpu-state-tests
+    COMMAND katana-cpu-state-tests
+)
+
 add_executable(katana-decoder-tests
     tests/decoder/decoder_tests.cpp
 )

@@ -6,7 +6,7 @@ ungeloesten Kontrollflusspfaden mehr.
 
 ## ABI
 
-Die aktuelle Runtime-ABI ist Version `1`.
+Die aktuelle Runtime-ABI ist Version `2`.
 
 Generierter Code enthaelt eine Compile-Time-Pruefung gegen diese Version. Eine
 abweichende Runtime wird beim Kompilieren sichtbar abgelehnt.
@@ -23,12 +23,26 @@ target_link_libraries(mein_programm PRIVATE KatanaRecomp::runtime)
 Der generierte C++-Code bindet automatisch
 `katana/runtime/runtime.hpp` ein.
 
-## Enthaltene Grundlage
+## Zentraler CPU-Zustand
+
+`katana::runtime::CpuState` enthaelt die fuer v0.21 benoetigten
+Architektur- und Runtime-Daten an einer Stelle:
+
+- 16 allgemeine Register und acht banked Register
+- getrennte 16er-Rohbitbaenke `FR` und `XF`
+- `PC`, `SR`, `GBR`, `VBR`, `SSR`, `SPC`, `SGR` und `DBR`
+- `MACH`, `MACL`, `PR`, `FPUL` und `FPSCR`
+- `TRA`, `EXPEVT` und `INTEVT`
+- explizite T-, S-, Q- und M-Zustandsbits
+- sichtbare Trap- und Schlafzustaende
+- den aktuellen Runtime-Speicher
+
+Die FPU-Baenke speichern vorerst ausschliesslich unveraenderte 32-Bit-Rohwerte.
+Arithmetik, Bankumschaltung und `FPSCR`-Modi folgen in der FPU-Phase.
+
+## Weitere Runtime-Grundlage
 
 - `katana::runtime::Memory`
-- `katana::runtime::CpuState`
-- allgemeine und banked Register
-- SH-4-System- und Statusregister
 - Little-Endian-Speicherzugriffe
 - sichtbare Fehlerpfade fuer ungeloeste Calls und Spruenge
 

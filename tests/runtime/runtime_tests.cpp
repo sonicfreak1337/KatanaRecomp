@@ -18,8 +18,8 @@ void require(const bool condition, const std::string& message) {
 
 int main() {
     require(
-        katana::runtime::abi_version == 1u,
-        "Die Runtime-ABI besitzt nicht Version 1."
+        katana::runtime::abi_version == 2u,
+        "Die Runtime-ABI besitzt nicht Version 2."
     );
 
     katana::runtime::Memory memory(16u);
