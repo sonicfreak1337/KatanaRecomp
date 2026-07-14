@@ -77,9 +77,11 @@ int main() {
         );
 
     require(
+        source.find("#include \"katana/runtime/exception.hpp\"") !=
+            std::string::npos &&
         source.find("#include \"katana/runtime/runtime.hpp\"") !=
             std::string::npos,
-        "Der generierte Code bindet die zentrale Runtime nicht ein."
+        "Der generierte Code bindet Exception-Pfad oder Runtime nicht ein."
     );
     require(
         source.find(

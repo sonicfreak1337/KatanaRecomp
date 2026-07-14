@@ -2265,43 +2265,22 @@ void emit_terminal(
 
         case Operation::TrapAlways:
             emit_indent(output, indent);
-            output << "const std::uint32_t old_sr = cpu.read_sr();\n";
-            emit_indent(output, indent);
-            output << "cpu.tra = "
-                << hex32(static_cast<std::uint32_t>(instruction.immediate) << 2u)
-                << ";\n";
-            emit_indent(output, indent);
-            output << "cpu.ssr = old_sr;\n";
-            emit_indent(output, indent);
-            output << "cpu.spc = "
-                << hex32(instruction.source_address + 2u)
-                << ";\n";
-            emit_indent(output, indent);
-            output << "cpu.sgr = cpu.r[15];\n";
-            emit_indent(output, indent);
-            output << "cpu.expevt = 0x00000160u;\n";
-            emit_indent(output, indent);
-            output << "cpu.write_sr(old_sr | 0x70000000u);\n";
-            emit_indent(output, indent);
-            output << "cpu.trap_pending = true;\n";
-            emit_indent(output, indent);
-            output << "cpu.pc = cpu.vbr + 0x00000100u;\n";
+            output
+                << "raise_trapa(cpu, "
+                << static_cast<unsigned>(instruction.immediate)
+                << "u, "
+                << hex32(instruction.source_address)
+                << ");\n";
             emit_indent(output, indent);
             output << "return;\n";
             return;
 
         case Operation::ReturnFromException:
             emit_indent(output, indent);
-            output << "const std::uint32_t return_target = cpu.spc;\n";
-            emit_indent(output, indent);
-            output << "cpu.write_sr(cpu.ssr);\n";
+            output << "return_from_exception(cpu);\n";
             if (delay_slot != nullptr) {
                 emit_simple_instruction(output, *delay_slot, indent);
             }
-            emit_indent(output, indent);
-            output << "cpu.trap_pending = false;\n";
-            emit_indent(output, indent);
-            output << "cpu.pc = return_target;\n";
             emit_indent(output, indent);
             output << "return;\n";
             return;
@@ -2663,6 +2642,7 @@ std::string emit_cpp_program(
     std::ostringstream output;
 
     output
+        << "#include \"katana/runtime/exception.hpp\"\n"
         << "#include \"katana/runtime/runtime.hpp\"\n"
         << "#include <cstdint>\n"
         << "#include <stdexcept>\n\n"
@@ -2674,6 +2654,8 @@ std::string emit_cpp_program(
         << ");\n\n"
         << "using CpuState = katana::runtime::CpuState;\n"
         << "using Memory = katana::runtime::Memory;\n"
+        << "using katana::runtime::raise_trapa;\n"
+        << "using katana::runtime::return_from_exception;\n"
         << "using katana::runtime::unresolved_call;\n"
         << "using katana::runtime::unresolved_jump;\n\n";
 
