@@ -30,7 +30,86 @@ std::uint32_t region_offset(
     return address - info.base_address;
 }
 
+std::size_t width_bytes(const MemoryAccessWidth width) {
+    return static_cast<std::size_t>(width);
+}
+
+void require_device_access(
+    const std::size_t device_size,
+    const std::uint32_t offset,
+    const MemoryAccessWidth width
+) {
+    const auto access_size = width_bytes(width);
+    const auto start = static_cast<std::size_t>(offset);
+    if (access_size > device_size || start > device_size - access_size) {
+        throw std::out_of_range(
+            "Speichergeraetezugriff ausserhalb der Region."
+        );
+    }
+}
+
+std::uint32_t width_mask(const MemoryAccessWidth width) {
+    switch (width) {
+        case MemoryAccessWidth::Byte:
+            return 0x000000FFu;
+        case MemoryAccessWidth::Halfword:
+            return 0x0000FFFFu;
+        case MemoryAccessWidth::Word:
+            return 0xFFFFFFFFu;
+    }
+    throw std::invalid_argument("Ungueltige Speicherzugriffsbreite.");
+}
+
 } // namespace
+
+std::uint16_t MemoryDevice::read_u16(const std::uint32_t offset) const {
+    require_device_access(size(), offset, MemoryAccessWidth::Halfword);
+    return static_cast<std::uint16_t>(
+        static_cast<std::uint16_t>(read_u8(offset)) |
+        (static_cast<std::uint16_t>(read_u8(offset + 1u)) << 8u)
+    );
+}
+
+std::uint32_t MemoryDevice::read_u32(const std::uint32_t offset) const {
+    require_device_access(size(), offset, MemoryAccessWidth::Word);
+    return
+        static_cast<std::uint32_t>(read_u8(offset)) |
+        (static_cast<std::uint32_t>(read_u8(offset + 1u)) << 8u) |
+        (static_cast<std::uint32_t>(read_u8(offset + 2u)) << 16u) |
+        (static_cast<std::uint32_t>(read_u8(offset + 3u)) << 24u);
+}
+
+void MemoryDevice::write_u16(
+    const std::uint32_t offset,
+    const std::uint16_t value
+) {
+    require_device_access(size(), offset, MemoryAccessWidth::Halfword);
+    write_u8(offset, static_cast<std::uint8_t>(value & 0xFFu));
+    write_u8(
+        offset + 1u,
+        static_cast<std::uint8_t>((value >> 8u) & 0xFFu)
+    );
+}
+
+void MemoryDevice::write_u32(
+    const std::uint32_t offset,
+    const std::uint32_t value
+) {
+    require_device_access(size(), offset, MemoryAccessWidth::Word);
+    write_u8(offset, static_cast<std::uint8_t>(value & 0xFFu));
+    write_u8(
+        offset + 1u,
+        static_cast<std::uint8_t>((value >> 8u) & 0xFFu)
+    );
+    write_u8(
+        offset + 2u,
+        static_cast<std::uint8_t>((value >> 16u) & 0xFFu)
+    );
+    write_u8(
+        offset + 3u,
+        static_cast<std::uint8_t>((value >> 24u) & 0xFFu)
+    );
+}
 
 LinearMemoryDevice::LinearMemoryDevice(const std::size_t size)
     : bytes_(size, 0u) {
@@ -66,6 +145,107 @@ void LinearMemoryDevice::check(const std::uint32_t offset) const {
             "Speichergeraetezugriff ausserhalb der Region."
         );
     }
+}
+
+MmioMemoryDevice::MmioMemoryDevice(
+    const std::size_t size,
+    MmioReadHandler read_handler,
+    MmioWriteHandler write_handler
+)
+    : size_(size),
+      read_handler_(std::move(read_handler)),
+      write_handler_(std::move(write_handler)) {
+    if (size_ == 0u) {
+        throw std::invalid_argument(
+            "Eine MMIO-Region darf nicht leer sein."
+        );
+    }
+    if (!read_handler_ && !write_handler_) {
+        throw std::invalid_argument(
+            "Eine MMIO-Region braucht mindestens einen Handler."
+        );
+    }
+}
+
+std::size_t MmioMemoryDevice::size() const noexcept {
+    return size_;
+}
+
+std::uint8_t MmioMemoryDevice::read_u8(
+    const std::uint32_t offset
+) const {
+    return static_cast<std::uint8_t>(
+        read(offset, MemoryAccessWidth::Byte)
+    );
+}
+
+std::uint16_t MmioMemoryDevice::read_u16(
+    const std::uint32_t offset
+) const {
+    return static_cast<std::uint16_t>(
+        read(offset, MemoryAccessWidth::Halfword)
+    );
+}
+
+std::uint32_t MmioMemoryDevice::read_u32(
+    const std::uint32_t offset
+) const {
+    return read(offset, MemoryAccessWidth::Word);
+}
+
+void MmioMemoryDevice::write_u8(
+    const std::uint32_t offset,
+    const std::uint8_t value
+) {
+    write(offset, value, MemoryAccessWidth::Byte);
+}
+
+void MmioMemoryDevice::write_u16(
+    const std::uint32_t offset,
+    const std::uint16_t value
+) {
+    write(offset, value, MemoryAccessWidth::Halfword);
+}
+
+void MmioMemoryDevice::write_u32(
+    const std::uint32_t offset,
+    const std::uint32_t value
+) {
+    write(offset, value, MemoryAccessWidth::Word);
+}
+
+void MmioMemoryDevice::check(
+    const std::uint32_t offset,
+    const MemoryAccessWidth width
+) const {
+    require_device_access(size_, offset, width);
+}
+
+std::uint32_t MmioMemoryDevice::read(
+    const std::uint32_t offset,
+    const MemoryAccessWidth width
+) const {
+    check(offset, width);
+    if (!read_handler_) {
+        throw std::runtime_error(
+            "MMIO-Lesezugriff ohne registrierten Lesehandler."
+        );
+    }
+    return read_handler_(offset, width) & width_mask(width);
+}
+
+void MmioMemoryDevice::write(
+    const std::uint32_t offset,
+    const std::uint32_t value,
+    const MemoryAccessWidth width
+) {
+    check(offset, width);
+    if (!write_handler_) {
+        throw std::runtime_error(
+            "MMIO-Schreibzugriff ohne registrierten Schreibhandler."
+        );
+    }
+    write_handler_(offset, value & width_mask(width), width);
 }
 
 Memory::Memory(const std::size_t legacy_size) {
@@ -188,21 +368,12 @@ std::uint8_t Memory::read_u8(const std::uint32_t address) const {
 
 std::uint16_t Memory::read_u16(const std::uint32_t address) const {
     const auto& mapped = resolve(address, 2u);
-    const auto offset = region_offset(mapped.info, address);
-    return static_cast<std::uint16_t>(
-        static_cast<std::uint16_t>(mapped.device->read_u8(offset)) |
-        (static_cast<std::uint16_t>(mapped.device->read_u8(offset + 1u)) << 8u)
-    );
+    return mapped.device->read_u16(region_offset(mapped.info, address));
 }
 
 std::uint32_t Memory::read_u32(const std::uint32_t address) const {
     const auto& mapped = resolve(address, 4u);
-    const auto offset = region_offset(mapped.info, address);
-    return
-        static_cast<std::uint32_t>(mapped.device->read_u8(offset)) |
-        (static_cast<std::uint32_t>(mapped.device->read_u8(offset + 1u)) << 8u) |
-        (static_cast<std::uint32_t>(mapped.device->read_u8(offset + 2u)) << 16u) |
-        (static_cast<std::uint32_t>(mapped.device->read_u8(offset + 3u)) << 24u);
+    return mapped.device->read_u32(region_offset(mapped.info, address));
 }
 
 std::uint32_t Memory::read_s8(const std::uint32_t address) const {
@@ -232,15 +403,7 @@ void Memory::write_u16(
     const std::uint16_t value
 ) {
     const auto& mapped = resolve_writable(address, 2u);
-    const auto offset = region_offset(mapped.info, address);
-    mapped.device->write_u8(
-        offset,
-        static_cast<std::uint8_t>(value & 0xFFu)
-    );
-    mapped.device->write_u8(
-        offset + 1u,
-        static_cast<std::uint8_t>((value >> 8u) & 0xFFu)
-    );
+    mapped.device->write_u16(region_offset(mapped.info, address), value);
 }
 
 void Memory::write_u32(
@@ -248,23 +411,7 @@ void Memory::write_u32(
     const std::uint32_t value
 ) {
     const auto& mapped = resolve_writable(address, 4u);
-    const auto offset = region_offset(mapped.info, address);
-    mapped.device->write_u8(
-        offset,
-        static_cast<std::uint8_t>(value & 0xFFu)
-    );
-    mapped.device->write_u8(
-        offset + 1u,
-        static_cast<std::uint8_t>((value >> 8u) & 0xFFu)
-    );
-    mapped.device->write_u8(
-        offset + 2u,
-        static_cast<std::uint8_t>((value >> 16u) & 0xFFu)
-    );
-    mapped.device->write_u8(
-        offset + 3u,
-        static_cast<std::uint8_t>((value >> 24u) & 0xFFu)
-    );
+    mapped.device->write_u32(region_offset(mapped.info, address), value);
 }
 
 const Memory::MappedRegion& Memory::resolve(

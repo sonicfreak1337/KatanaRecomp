@@ -6,11 +6,13 @@ ungeloesten Kontrollflusspfaden mehr.
 
 ## ABI
 
-Die aktuelle Runtime-ABI ist Version `3`.
+Die aktuelle Runtime-ABI ist Version `4`.
 
 Generierter Code enthaelt eine Compile-Time-Pruefung gegen diese Version. Eine
 abweichende Runtime wird beim Kompilieren sichtbar abgelehnt. ABI-Version 3
-kennzeichnet den Wechsel vom flachen Runtime-Speicher zum regionbasierten Bus.
+kennzeichnete den Wechsel vom flachen Runtime-Speicher zum regionbasierten Bus.
+ABI-Version 4 erweitert die virtuelle Speichergeraete-API um breitenbewusste
+16- und 32-Bit-Zugriffe fuer MMIO-Nebenwirkungen.
 
 ## CMake
 
@@ -139,7 +141,27 @@ Adresslayout und Zugriffsrechte wurden unabhaengig gegen Flycast
 (`core/hw/holly/sb_mem.cpp`) gegengeprueft. Es wurden weder Referenzcode noch
 BIOS-, Flash- oder andere geschuetzte Binaerdaten uebernommen.
 
-MMIO bleibt der naechste getrennte Task der v0.22-Roadmap.
+## Breitenbewusste MMIO-Handler
+
+KR-2205 fuehrt `MmioMemoryDevice` ein. Ein MMIO-Geraet besitzt eine feste
+Regionsgroesse und optionale Lese- und Schreibcallbacks. Jeder Callback erhaelt
+den lokalen Geraeteoffset und `MemoryAccessWidth` fuer Byte, Halfword oder Word.
+Schreibcallbacks erhalten zusaetzlich den auf die Zugriffsbreite maskierten Wert.
+
+Der Speicherbus delegiert 16- und 32-Bit-Zugriffe jetzt direkt an das
+Speichergeraet. Dadurch loest ein Registerzugriff genau einen MMIO-Callback aus
+und wird nicht mehr in mehrere Bytezugriffe mit mehrfachen Nebenwirkungen
+zerlegt. `MemoryDevice` stellt weiterhin Standardimplementierungen bereit, die
+bytebasierte RAM-, VRAM- und Firmwaregeraete little-endian zusammensetzen.
+
+Ein MMIO-Geraet darf reine Lese- oder Schreibhandler besitzen. Der jeweils
+fehlende Zugriffspfad wird sichtbar als Laufzeitfehler gemeldet. Regionsschutz
+wie `ReadOnly` greift weiterhin vor dem Geraetehandler. Bereichsueberschreitende
+Zugriffe werden abgelehnt, bevor ein Callback ausgefuehrt wird.
+
+KR-2205 stellt bewusst nur die generische Handler-Infrastruktur bereit.
+Konkrete Dreamcast-System-, AICA-, GD-ROM-, Maple- oder PVR-Registermodelle
+gehoeren zu den spaeteren Plattformkomponenten.
 
 ## Deterministischer CPU-Reset
 
@@ -165,4 +187,4 @@ spaetere Plattformkonfiguration.
 ## Weitere Runtime-Grundlage
 
 - sichtbare Fehlerpfade fuer ungeloeste Calls und Spruenge
-- Runtime-Tests fuer CPU-Zustand, Reset, Speicherbus sowie Dreamcast-RAM-, VRAM-, AICA-RAM-, BIOS- und Flash-Aliase
+- Runtime-Tests fuer CPU-Zustand, Reset, Speicherbus, breitenbewusste MMIO-Handler sowie Dreamcast-RAM-, VRAM-, AICA-RAM-, BIOS- und Flash-Aliase

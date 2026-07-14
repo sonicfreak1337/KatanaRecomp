@@ -8,10 +8,11 @@
 - KR-2202: `map_dreamcast_main_ram` registriert ein gemeinsames, nullinitialisiertes 16-MiB-Backing in allen direkten Area-3-, U0/P0-, P1-, P2- und derzeitigen P3-No-MMU-Aliasfenstern. Schreibzugriffe durch jedes Fenster bleiben bytegenau sichtbar; P4 wird ausdruecklich nicht als RAM abgebildet.
 - KR-2203: `map_dreamcast_vram` registriert ein gemeinsames 8-MiB-Backing ueber lineare 64-Bit- und bankinterleavte 32-Bit-Zugriffsfenster; `map_dreamcast_aica_ram` bildet 2 MiB Sound-RAM in allen direkten Spiegelungen ab. Beide Konfigurationen pruefen Kollisionen vor der ersten Registrierung.
 - KR-2204: `map_dreamcast_bios` bildet ein optional bereitgestelltes 2-MiB-BIOS read-only ab; `map_dreamcast_flash` registriert ein separates beschreibbares 128-KiB-Flash-Backing. Fehlende Firmware wird deterministisch mit `0xFF` initialisiert, falsche Abbildgroessen und Kollisionen werden vor der ersten Registrierung abgelehnt.
+- KR-2205: `MmioMemoryDevice` leitet 8-, 16- und 32-Bit-Zugriffe als genau einen breitenbewussten Callback weiter. Bestehende bytebasierte Speichergeraete behalten einen zentralen Little-Endian-Fallback; fehlende Lese- oder Schreibhandler und ueberlaufende Zugriffe schlagen sichtbar fehl.
 
 ### Geaendert
 
-- Die Runtime-ABI steigt auf Version 3. Der bisherige Standardkonstruktor behaelt eine lineare 1-MiB-Kompatibilitaetsregion fuer synthetische Tests; Dreamcast-Plattformcode wendet das RAM-Layout explizit auf einen leeren Bus an.
+- Die Runtime-ABI steigt auf Version 4. Version 3 fuehrte den regionbasierten Bus ein; Version 4 erweitert `MemoryDevice` um breitenbewusste 16-/32-Bit-Zugriffe und ermoeglicht MMIO-Callbacks ohne mehrfache Byte-Nebenwirkungen. Der Standardkonstruktor behaelt die lineare 1-MiB-Kompatibilitaetsregion fuer synthetische Tests.
 
 ## [0.21.0] - 2026-07-14
 

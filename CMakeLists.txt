@@ -168,6 +168,18 @@ add_test(
     COMMAND katana-dreamcast-firmware-memory-tests
 )
 
+add_executable(katana-mmio-memory-tests
+    tests/runtime/mmio_memory_tests.cpp
+)
+
+target_link_libraries(katana-mmio-memory-tests PRIVATE katana_runtime)
+katana_enable_warnings(katana-mmio-memory-tests)
+
+add_test(
+    NAME katana-mmio-memory-tests
+    COMMAND katana-mmio-memory-tests
+)
+
 add_executable(katana-cpu-state-tests
     tests/runtime/cpu_state_tests.cpp
 )

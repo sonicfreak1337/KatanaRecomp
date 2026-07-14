@@ -8,7 +8,7 @@
 
 namespace katana::runtime {
 
-inline constexpr std::uint32_t abi_version = 3u;
+inline constexpr std::uint32_t abi_version = 4u;
 
 inline constexpr std::size_t general_register_count = 16u;
 inline constexpr std::size_t banked_register_count = 8u;

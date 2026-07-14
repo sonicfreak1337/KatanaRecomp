@@ -625,9 +625,27 @@ Akzeptanz:
 - Flycast wurde nur zum unabhaengigen Abgleich von Adresslayout und Zugriffsrechten verwendet
 - keine BIOS-, Flash- oder anderen geschuetzten Binaerdaten wurden hinzugefuegt
 
-### [ ] KR-2205 - MMIO-Handler
+### [x] KR-2205 - MMIO-Handler
 
 Abhaengigkeiten: KR-2201
+
+Umfang:
+
+- breitenbewusste virtuelle 8-, 16- und 32-Bit-Zugriffe auf `MemoryDevice`
+- zentraler Little-Endian-Fallback fuer bestehende bytebasierte Geraete
+- `MmioMemoryDevice` mit optionalen Lese- und Schreibcallbacks
+- lokaler Geraeteoffset, maskierter Wert und explizite Zugriffsbreite pro Callback
+- Runtime-ABI Version 4 fuer die erweiterte virtuelle Geraete-API
+
+Akzeptanz:
+
+- ein 8-, 16- oder 32-Bit-Buszugriff loest genau einen passenden MMIO-Callback aus
+- MMIO-Aliase verwenden denselben Handler mit identischen lokalen Offsets
+- fehlende Lese- oder Schreibhandler schlagen sichtbar fehl
+- Read-only-Regionsschutz greift vor dem Schreibcallback
+- ueberlaufende Zugriffe rufen keinen Handler auf
+- bestehende bytebasierte Speichergeraete behalten Little-Endian-Mehrbytezugriffe
+- generierter Code prueft Runtime-ABI Version 4
 
 ### [ ] KR-2206 - Ausrichtung, Fehler und Watchpoints
 
