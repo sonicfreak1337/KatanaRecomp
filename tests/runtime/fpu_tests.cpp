@@ -81,6 +81,144 @@ int main() {
     fpu_convert_double_to_single(cpu, 12u);
     require(std::bit_cast<float>(cpu.fpul) == 1.5f, "FCNVDS konvertiert DRn falsch.");
 
+    cpu.write_fpscr(fpscr_pr_mask);
+    write_dr_double(cpu, 0u, 2147483647.0);
+    fpu_truncate_to_fpul(cpu, 0u);
+    require(cpu.fpul == 0x7FFFFFFFu, "FTRC verliert die exakte positive Integergrenze.");
+    write_dr_double(cpu, 0u, -2147483648.0);
+    fpu_truncate_to_fpul(cpu, 0u);
+    require(cpu.fpul == 0x80000000u, "FTRC verliert die exakte negative Integergrenze.");
+    write_dr_double(cpu, 0u, 2147483648.0);
+    fpu_truncate_to_fpul(cpu, 0u);
+    require(cpu.fpul == 0x7FFFFFFFu, "FTRC saettigt positive Uebersteuerung nicht.");
+    write_dr_double(cpu, 0u, -2147483649.0);
+    fpu_truncate_to_fpul(cpu, 0u);
+    require(cpu.fpul == 0x80000000u, "FTRC saettigt negative Uebersteuerung nicht.");
+    write_dr_double(cpu, 0u, std::numeric_limits<double>::quiet_NaN());
+    fpu_truncate_to_fpul(cpu, 0u);
+    require(cpu.fpul == 0x80000000u, "FTRC behandelt NaN nicht deterministisch.");
+
+    cpu.write_fpscr(0u);
+    write_fr_single(cpu, 0u, 0.0f);
+    write_fr_single(cpu, 1u, 1.0f);
+    fpu_binary(cpu, FpuBinaryOperation::Divide, 0u, 1u);
+    require(cpu.fr[1] == 0x7F800000u, "FDIV durch +0 liefert nicht +Infinity.");
+    write_fr_single(cpu, 0u, -0.0f);
+    write_fr_single(cpu, 1u, 1.0f);
+    fpu_binary(cpu, FpuBinaryOperation::Divide, 0u, 1u);
+    require(cpu.fr[1] == 0xFF800000u, "FDIV durch -0 verliert das Vorzeichen.");
+    write_fr_single(cpu, 0u, 0.0f);
+    write_fr_single(cpu, 1u, 0.0f);
+    fpu_binary(cpu, FpuBinaryOperation::Divide, 0u, 1u);
+    require(cpu.fr[1] == 0x7FBFFFFFu, "FDIV 0/0 liefert kein kanonisches NaN.");
+
+    write_fr_single(cpu, 2u, -1.0f);
+    fpu_square_root(cpu, 2u);
+    require(cpu.fr[2] == 0x7FBFFFFFu, "FSQRT eines negativen Werts liefert kein kanonisches NaN.");
+    write_fr_single(cpu, 2u, -0.0f);
+    fpu_square_root(cpu, 2u);
+    require(cpu.fr[2] == 0x80000000u, "FSQRT verliert das Vorzeichen von -0.");
+
+    cpu.fr[3] = 0xFFC00000u;
+    cpu.fr[4] = 0x7F800001u;
+    write_fr_single(cpu, 5u, 1.0f);
+    fpu_compare_equal(cpu, 3u, 5u);
+    require(!cpu.t, "FCMP/EQ behandelt ein negatives NaN als geordnet.");
+    fpu_compare_greater(cpu, 4u, 5u);
+    require(!cpu.t, "FCMP/GT behandelt ein Signaling-NaN als geordnet.");
+    fpu_binary(cpu, FpuBinaryOperation::Add, 3u, 5u);
+    require(cpu.fr[5] == 0x7FBFFFFFu, "Ein negatives NaN wird nicht positiv kanonisiert.");
+    write_fr_single(cpu, 5u, 1.0f);
+    fpu_binary(cpu, FpuBinaryOperation::Add, 4u, 5u);
+    require(cpu.fr[5] == 0x7FBFFFFFu, "Ein Signaling-NaN wird nicht kanonisiert.");
+    write_fr_single(cpu, 6u, std::numeric_limits<float>::infinity());
+    write_fr_single(cpu, 7u, std::numeric_limits<float>::infinity());
+    fpu_compare_equal(cpu, 6u, 7u);
+    require(cpu.t, "FCMP/EQ erkennt gleiche Infinities nicht.");
+    write_fr_single(cpu, 7u, 1.0f);
+    fpu_compare_greater(cpu, 7u, 6u);
+    require(cpu.t, "FCMP/GT ordnet Infinity nicht oberhalb endlicher Werte ein.");
+
+    cpu.write_fpscr(fpscr_pr_mask);
+    write_dr_double(cpu, 0u, 1.0);
+    write_dr_double(cpu, 2u, std::ldexp(3.0, -54));
+    fpu_binary(cpu, FpuBinaryOperation::Add, 2u, 0u);
+    const double double_nearest = read_dr_double(cpu, 0u);
+    cpu.write_fpscr(fpscr_pr_mask | 1u);
+    write_dr_double(cpu, 0u, 1.0);
+    fpu_binary(cpu, FpuBinaryOperation::Add, 2u, 0u);
+    require(
+        double_nearest == std::nextafter(1.0, 2.0) && read_dr_double(cpu, 0u) == 1.0,
+        "FPSCR.RM wirkt nicht auf Double-Precision-Ergebnisse."
+    );
+
+    cpu.write_fpscr(fpscr_pr_mask);
+    write_dr_double(cpu, 4u, 1.0 + std::ldexp(3.0, -25));
+    fpu_convert_double_to_single(cpu, 4u);
+    const float conversion_nearest = std::bit_cast<float>(cpu.fpul);
+    cpu.write_fpscr(fpscr_pr_mask | 1u);
+    fpu_convert_double_to_single(cpu, 4u);
+    require(
+        conversion_nearest == std::nextafter(1.0f, 2.0f) &&
+        std::bit_cast<float>(cpu.fpul) == 1.0f,
+        "FPSCR.RM wirkt nicht auf FCNVDS."
+    );
+
+    cpu.write_fpscr(0u);
+    cpu.fpul = 0x7FFFFFFFu;
+    fpu_float_from_fpul(cpu, 8u);
+    const std::uint32_t float_nearest_bits = cpu.fr[8];
+    cpu.write_fpscr(1u);
+    fpu_float_from_fpul(cpu, 8u);
+    require(
+        float_nearest_bits == 0x4F000000u && cpu.fr[8] == 0x4EFFFFFFu,
+        "FPSCR.RM wirkt nicht auf FLOAT."
+    );
+
+    cpu.write_fpscr(0u);
+    write_fr_single(cpu, 0u, 2.0f);
+    fpu_multiply_accumulate(cpu, 0u, 0u);
+    require(read_fr_single(cpu, 0u) == 6.0f, "FMAC scheitert bei FR0 == FRm == FRn.");
+
+    cpu.write_fpscr(0u);
+    cpu.fr[0] = 0x00000001u;
+    cpu.fr[1] = 0x3F800000u;
+    fpu_binary(cpu, FpuBinaryOperation::Multiply, 0u, 1u);
+    require(cpu.fr[1] == 0x00000001u, "DN=0 erhaelt ein Single-Denormalergebnis nicht.");
+    cpu.write_fpscr(fpscr_dn_mask);
+    cpu.fr[0] = 0x80000001u;
+    cpu.fr[1] = 0x3F800000u;
+    fpu_binary(cpu, FpuBinaryOperation::Multiply, 0u, 1u);
+    require(cpu.fr[1] == 0x80000000u, "DN=1 erhaelt das Vorzeichen einer denormalen Null nicht.");
+    cpu.fr[0] = 0x40000000u;
+    cpu.fr[1] = 0x00800000u;
+    fpu_binary(cpu, FpuBinaryOperation::Divide, 0u, 1u);
+    require(cpu.fr[1] == 0x00000000u, "DN=1 spuelt ein denormales Single-Ergebnis nicht auf null.");
+    cpu.fr[2] = 0x80000001u;
+    fpu_absolute(cpu, 2u);
+    require(cpu.fr[2] == 0x00000001u, "FABS darf Denormalwerte bei DN=1 nicht spuellen.");
+    fpu_negate(cpu, 2u);
+    require(cpu.fr[2] == 0x80000001u, "FNEG darf Denormalwerte bei DN=1 nicht spuellen.");
+
+    cpu.write_fpscr(fpscr_pr_mask);
+    cpu.fr[0] = 0u;
+    cpu.fr[1] = 1u;
+    write_dr_double(cpu, 2u, 1.0);
+    fpu_binary(cpu, FpuBinaryOperation::Multiply, 0u, 2u);
+    require(
+        cpu.fr[2] == 0u && cpu.fr[3] == 1u,
+        "DN=0 erhaelt ein Double-Denormalergebnis nicht."
+    );
+    cpu.write_fpscr(fpscr_pr_mask | fpscr_dn_mask);
+    cpu.fr[0] = 0u;
+    cpu.fr[1] = 1u;
+    write_dr_double(cpu, 2u, 1.0);
+    fpu_binary(cpu, FpuBinaryOperation::Multiply, 0u, 2u);
+    require(
+        cpu.fr[2] == 0u && cpu.fr[3] == 0u,
+        "DN=1 spuelt ein denormales Double-Ergebnis nicht auf null."
+    );
+
     std::cout << "SH-4-FPU-Runtime-Grundoperationen erfolgreich.\n";
     return EXIT_SUCCESS;
 }

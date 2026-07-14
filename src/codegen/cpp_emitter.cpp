@@ -259,12 +259,30 @@ void emit_fpu_mode_guard(
         instruction.operation == Operation::Fsqrt ||
         instruction.operation == Operation::FloatFromFpul ||
         instruction.operation == Operation::FcnvSingleToDouble;
+    const bool checks_rounding_mode =
+        instruction.operation == Operation::Fadd ||
+        instruction.operation == Operation::Fsub ||
+        instruction.operation == Operation::Fmul ||
+        instruction.operation == Operation::Fdiv ||
+        instruction.operation == Operation::FcmpEqual ||
+        instruction.operation == Operation::FcmpGreater ||
+        instruction.operation == Operation::FloatFromFpul ||
+        instruction.operation == Operation::Fmac ||
+        instruction.operation == Operation::Fsqrt ||
+        instruction.operation == Operation::Ftrc ||
+        instruction.operation == Operation::FcnvDoubleToSingle ||
+        instruction.operation == Operation::FcnvSingleToDouble;
 
     if (checks_source && (instruction.source_register & 1u) != 0u) {
         append_condition("cpu.fpu_double_precision()");
     }
     if (checks_destination && (instruction.destination_register & 1u) != 0u) {
         append_condition("cpu.fpu_double_precision()");
+    }
+    if (checks_rounding_mode) {
+        append_condition(
+            "((cpu.read_fpscr() & katana::runtime::fpscr_rounding_mode_mask) > 1u)"
+        );
     }
 
     if (invalid_condition.empty()) {

@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <iostream>
+#include <memory>
 #include <string>
 
 namespace {
@@ -133,6 +134,22 @@ int main() {
         );
     }
 
+    for (const std::uint32_t reserved_rm : {2u, 3u}) {
+        katana_generated::CpuState cpu;
+        cpu.write_fpscr(reserved_rm);
+        cpu.fr[1] = 0x3F800000u;
+        cpu.fr[3] = 0x40000000u;
+        cpu.pc = 0x146u;
+        katana_generated::fn_00000146(cpu);
+        require(
+            cpu.last_exception_cause ==
+                katana::runtime::ExceptionCause::IllegalInstruction &&
+            cpu.expevt == katana::runtime::event_illegal_instruction &&
+            cpu.spc == 0x146u && cpu.fr[3] == 0x40000000u,
+            "Ein reservierter FPSCR.RM-Wert erreicht die FPU-Ausfuehrung."
+        );
+    }
+
     {
         katana_generated::CpuState cpu;
         cpu.fr[0] = std::bit_cast<std::uint32_t>(1.0f);
@@ -174,6 +191,57 @@ int main() {
             cpu.r[6] == 0x7Cu && cpu.memory.read_u32(0x7Cu) == 0x40400000u &&
             cpu.memory.read_u32(0x80u) == 0x40400000u,
             "Generierte FMOV-Register- oder Speicherformen sind falsch."
+        );
+    }
+
+    {
+        katana_generated::CpuState cpu;
+        cpu.memory = katana::runtime::Memory(0u);
+        cpu.memory.map_region(
+            "left",
+            0x1000u,
+            std::make_shared<katana::runtime::LinearMemoryDevice>(16u)
+        );
+        cpu.memory.map_region(
+            "right",
+            0x1010u,
+            std::make_shared<katana::runtime::LinearMemoryDevice>(16u)
+        );
+        cpu.write_fpscr(katana::runtime::fpscr_sz_mask);
+        cpu.memory.write_u32(0x100Cu, 0x89ABCDEFu);
+        cpu.memory.write_u32(0x1010u, 0x01234567u);
+        cpu.r[4] = 0x100Cu;
+        cpu.pc = 0x14Cu;
+        katana_generated::fn_0000014C(cpu);
+        require(
+            katana::runtime::read_fpu_pair_bits(cpu, 4u) ==
+                0x0123456789ABCDEFull &&
+            cpu.r[4] == 0x1014u,
+            "64-Bit-FMOV @R4+,FR4 scheitert an einer angrenzenden Regionsgrenze."
+        );
+
+        katana::runtime::write_fpu_pair_bits(cpu, 4u, 0xFEDCBA9876543210ull);
+        cpu.r[4] = 0x1014u;
+        cpu.pc = 0x152u;
+        katana_generated::fn_00000152(cpu);
+        require(
+            cpu.r[4] == 0x100Cu &&
+            cpu.memory.read_u32(0x100Cu) == 0x76543210u &&
+            cpu.memory.read_u32(0x1010u) == 0xFEDCBA98u,
+            "64-Bit-FMOV FR4,@-R4 scheitert bei identischem Registerindex."
+        );
+
+        cpu.r[4] = 0x101Cu;
+        cpu.fr[4] = 0xAAAAAAAAu;
+        cpu.fr[5] = 0xBBBBBBBBu;
+        cpu.pc = 0x14Cu;
+        katana_generated::fn_0000014C(cpu);
+        require(
+            cpu.last_exception_cause ==
+                katana::runtime::ExceptionCause::BusErrorRead &&
+            cpu.spc == 0x14Cu && cpu.r_bank[4] == 0x101Cu &&
+            cpu.fr[4] == 0xAAAAAAAAu && cpu.fr[5] == 0xBBBBBBBBu,
+            "Fehlgeschlagenes 64-Bit-FMOV an der Speichergrenze hinterlaesst Teilzustand."
         );
     }
 

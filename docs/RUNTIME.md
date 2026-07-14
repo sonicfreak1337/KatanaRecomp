@@ -256,11 +256,15 @@ Konstanten und FPUL-Transfers, `FADD`, `FSUB`, `FMUL`, `FDIV`, `FMAC`,
 `FCNVSD`, `FRCHG` und `FSCHG`. Single- und Double-Ergebnisse verwenden eine
 strikte Host-Floating-Point-Umgebung; Round-to-Nearest und Round-to-Zero werden
 aus `FPSCR.RM` abgeleitet. NaN-Ergebnisse werden auf die SH-4-Bitmuster
-kanonisiert. Unzulaessige Register- oder PR/SZ-Kombinationen werden vor einer
-Teilwirkung als strukturierte illegale Instruktion gemeldet.
+kanonisiert. `FPSCR.DN` behandelt denormalisierte Single- und Double-Operanden
+und -Ergebnisse als vorzeichenbehaftete Null; Rohbittransfers, `FNEG` und
+`FABS` bleiben unveraendert. Unzulaessige Register- oder PR/SZ-Kombinationen
+sowie die reservierten RM-Werte 2 und 3 werden vor einer Teilwirkung als
+strukturierte illegale Instruktion gemeldet.
 
-Denormals, Exception-Flags sowie die Vektor- und Spezialoperationen `FSCA`,
-`FSRRA`, `FIPR` und `FTRV` gehoeren zum folgenden v0.25.0-Meilenstein.
+Die vollstaendige FPU-Exception-Flag-Semantik sowie die Vektor- und
+Spezialoperationen `FSCA`, `FSRRA`, `FIPR` und `FTRV` gehoeren zum folgenden
+v0.25.0-Meilenstein.
 
 ## Deterministischer CPU-Reset
 

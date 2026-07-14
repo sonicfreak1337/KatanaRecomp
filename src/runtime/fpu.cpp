@@ -35,17 +35,38 @@ std::uint8_t even_register(const std::uint8_t index) noexcept {
     return static_cast<std::uint8_t>(index & 0x0Eu);
 }
 
+template<typename Float>
+Float flush_denormalized(const CpuState& cpu, const Float value) noexcept {
+    if (cpu.fpu_flush_denormals() && std::fpclassify(value) == FP_SUBNORMAL) {
+        return std::copysign(static_cast<Float>(0.0), value);
+    }
+    return value;
+}
+
+float read_single_operand(const CpuState& cpu, const std::uint8_t index) noexcept {
+    return flush_denormalized(
+        cpu,
+        std::bit_cast<float>(cpu.fr[index & 0x0Fu])
+    );
+}
+
+double read_double_operand(const CpuState& cpu, const std::uint8_t index) noexcept {
+    return flush_denormalized(cpu, read_dr_double(cpu, index));
+}
+
 void write_single_result(CpuState& cpu, const std::uint8_t index, const float value) noexcept {
-    cpu.fr[index & 0x0Fu] = std::isnan(value)
+    const float normalized = flush_denormalized(cpu, value);
+    cpu.fr[index & 0x0Fu] = std::isnan(normalized)
         ? canonical_single_nan
-        : std::bit_cast<std::uint32_t>(value);
+        : std::bit_cast<std::uint32_t>(normalized);
 }
 
 void write_double_result(CpuState& cpu, const std::uint8_t index, const double value) noexcept {
     const std::uint8_t even = even_register(index);
-    const std::uint64_t bits = std::isnan(value)
+    const double normalized = flush_denormalized(cpu, value);
+    const std::uint64_t bits = std::isnan(normalized)
         ? canonical_double_nan
-        : std::bit_cast<std::uint64_t>(value);
+        : std::bit_cast<std::uint64_t>(normalized);
     cpu.fr[even] = static_cast<std::uint32_t>(bits >> 32u);
     cpu.fr[even + 1u] = static_cast<std::uint32_t>(bits);
 }
@@ -129,14 +150,22 @@ void fpu_binary(
         write_double_result(
             cpu,
             destination,
-            binary_result(operation, read_dr_double(cpu, destination), read_dr_double(cpu, source))
+            binary_result(
+                operation,
+                read_double_operand(cpu, destination),
+                read_double_operand(cpu, source)
+            )
         );
         return;
     }
     write_single_result(
         cpu,
         destination,
-        binary_result(operation, read_fr_single(cpu, destination), read_fr_single(cpu, source))
+        binary_result(
+            operation,
+            read_single_operand(cpu, destination),
+            read_single_operand(cpu, source)
+        )
     );
 }
 
@@ -156,9 +185,9 @@ void fpu_negate(CpuState& cpu, const std::uint8_t destination) noexcept {
 void fpu_square_root(CpuState& cpu, const std::uint8_t destination) noexcept {
     const ScopedHostRounding rounding(cpu);
     if (cpu.fpu_double_precision()) {
-        write_double_result(cpu, destination, std::sqrt(read_dr_double(cpu, destination)));
+        write_double_result(cpu, destination, std::sqrt(read_double_operand(cpu, destination)));
     } else {
-        write_single_result(cpu, destination, std::sqrt(read_fr_single(cpu, destination)));
+        write_single_result(cpu, destination, std::sqrt(read_single_operand(cpu, destination)));
     }
 }
 
@@ -172,9 +201,9 @@ void fpu_multiply_accumulate(
         cpu,
         destination,
         std::fma(
-            read_fr_single(cpu, 0u),
-            read_fr_single(cpu, source),
-            read_fr_single(cpu, destination)
+            read_single_operand(cpu, 0u),
+            read_single_operand(cpu, source),
+            read_single_operand(cpu, destination)
         )
     );
 }
@@ -185,8 +214,8 @@ void fpu_compare_equal(
     const std::uint8_t destination
 ) noexcept {
     cpu.t = cpu.fpu_double_precision()
-        ? read_dr_double(cpu, destination) == read_dr_double(cpu, source)
-        : read_fr_single(cpu, destination) == read_fr_single(cpu, source);
+        ? read_double_operand(cpu, destination) == read_double_operand(cpu, source)
+        : read_single_operand(cpu, destination) == read_single_operand(cpu, source);
 }
 
 void fpu_compare_greater(
@@ -195,8 +224,8 @@ void fpu_compare_greater(
     const std::uint8_t destination
 ) noexcept {
     cpu.t = cpu.fpu_double_precision()
-        ? read_dr_double(cpu, destination) > read_dr_double(cpu, source)
-        : read_fr_single(cpu, destination) > read_fr_single(cpu, source);
+        ? read_double_operand(cpu, destination) > read_double_operand(cpu, source)
+        : read_single_operand(cpu, destination) > read_single_operand(cpu, source);
 }
 
 void fpu_float_from_fpul(CpuState& cpu, const std::uint8_t destination) noexcept {
@@ -211,20 +240,24 @@ void fpu_float_from_fpul(CpuState& cpu, const std::uint8_t destination) noexcept
 
 void fpu_truncate_to_fpul(CpuState& cpu, const std::uint8_t source) noexcept {
     cpu.fpul = cpu.fpu_double_precision()
-        ? truncate_to_integer_bits(read_dr_double(cpu, source))
-        : truncate_to_integer_bits(read_fr_single(cpu, source));
+        ? truncate_to_integer_bits(read_double_operand(cpu, source))
+        : truncate_to_integer_bits(read_single_operand(cpu, source));
 }
 
 void fpu_convert_double_to_single(CpuState& cpu, const std::uint8_t source) noexcept {
     const ScopedHostRounding rounding(cpu);
-    const float result = static_cast<float>(read_dr_double(cpu, source));
+    const float result = static_cast<float>(read_double_operand(cpu, source));
     cpu.fpul = std::isnan(result)
         ? canonical_single_nan
         : std::bit_cast<std::uint32_t>(result);
 }
 
 void fpu_convert_single_to_double(CpuState& cpu, const std::uint8_t destination) noexcept {
-    write_double_result(cpu, destination, static_cast<double>(std::bit_cast<float>(cpu.fpul)));
+    write_double_result(
+        cpu,
+        destination,
+        static_cast<double>(flush_denormalized(cpu, std::bit_cast<float>(cpu.fpul)))
+    );
 }
 
 } // namespace katana::runtime

@@ -14,6 +14,8 @@
 - KR-2404: Zentrale `FPSCR`-Masken und Zugriffe modellieren `PR`, `SZ`, `FR`, `DN` und `RM`; Round-to-Nearest und Round-to-Zero laufen in einer strikt gesetzten Host-Rundungsumgebung.
 - KR-2405: Gepaarte FR-Register bilden Double Precision ab. Arithmetik, Vergleiche, Quadratwurzel, Konvertierungen und Little-Endian-64-Bit-Transfers sind abgedeckt.
 - KR-2406: FPU-Disable-Ausnahmen sichern `EXPEVT`, Slotkontext und Owner-`SPC`; unzulaessige Moduskombinationen werden vor Teilwirkungen abgewiesen. Der generierte Pfad wird kompiliert und einschliesslich eines BRA-Delay-Slot-Fehlers ausgefuehrt.
+- Die Release-Regression deckt FTRC-Grenzen und -Saettigung, vorzeichenbehaftete Null bei Division und Quadratwurzel, Quiet-/Signaling-NaNs, Infinity-Vergleiche, Double- und Konvertierungsrundung, vollstaendig ueberlappendes FMAC sowie 64-Bit-FMOV an Regionsgrenzen ab.
+- `FPSCR.DN` spuelt denormalisierte Single- und Double-Operanden und -Ergebnisse auf vorzeichenbehaftete Null; `FABS`, `FNEG` und Rohbittransfers bleiben davon ausgenommen. Reservierte RM-Werte werden vor einer Rechenwirkung deterministisch abgewiesen.
 
 ### Geaendert
 

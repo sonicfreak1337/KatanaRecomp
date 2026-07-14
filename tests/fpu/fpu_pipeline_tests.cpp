@@ -33,15 +33,18 @@ void require(const bool condition, const std::string& message) {
 
 std::vector<katana::ir::Function> build_program() {
     auto bytes = std::vector<std::uint8_t>(fixture.begin(), fixture.end());
-    const std::array<std::uint8_t, 22> tail = {
+    const std::array<std::uint8_t, 34> tail = {
         0x46u, 0xF9u, 0x97u, 0xF6u, 0x0Bu, 0x00u, 0x09u, 0x00u,
         0x00u, 0xA0u, 0x00u, 0xF1u, 0x0Bu, 0x00u, 0x09u, 0x00u,
-        0x10u, 0xF3u, 0x0Bu, 0x00u, 0x09u, 0x00u
+        0x10u, 0xF3u, 0x0Bu, 0x00u, 0x09u, 0x00u,
+        0x49u, 0xF4u, 0x0Bu, 0x00u, 0x09u, 0x00u,
+        0x4Bu, 0xF4u, 0x0Bu, 0x00u, 0x09u, 0x00u
     };
     bytes.insert(bytes.end(), tail.begin(), tail.end());
     const auto lines = katana::sh4::disassemble(bytes, base_address);
-    constexpr std::array<std::uint32_t, 7> seeds = {
-        0x100u, 0x110u, 0x118u, 0x122u, 0x12Cu, 0x13Eu, 0x146u
+    constexpr std::array<std::uint32_t, 9> seeds = {
+        0x100u, 0x110u, 0x118u, 0x122u, 0x12Cu, 0x13Eu, 0x146u,
+        0x14Cu, 0x152u
     };
     const auto functions = katana::analysis::discover_functions(lines, seeds);
     return katana::ir::lower_program(lines, functions);

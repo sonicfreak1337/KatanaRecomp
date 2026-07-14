@@ -297,7 +297,7 @@ KatanaRecomp ist noch kein vollstaendiger Dreamcast-Recompiler. Unter anderem fe
 
 - grosse Teile des SH-4-Befehlssatzes
 - weitere Integer- und Systemregister-Flags
-- FPU-Vektor- und Spezialoperationen sowie Denormal- und Exception-Flag-Semantik
+- FPU-Vektor- und Spezialoperationen sowie vollstaendige FPU-Exception-Flag-Semantik
 - vollstaendiges Statusregister
 - konkrete Dreamcast-MMIO- und Hardware-Register
 - noch nicht modellierte SH-4-Exception- und Interruptquellen

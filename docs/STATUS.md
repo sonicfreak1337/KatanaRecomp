@@ -114,7 +114,7 @@ KatanaRecomp besitzt einen durchgaengigen Prototyp-Pfad von Raw- und ELF32-SH-Ei
 ## Aktuelle Einschraenkungen
 
 - unvollstaendiger SH-4-Befehlssatz
-- FPU-Grundoperationen sind vorhanden; Vektoroperationen, Denormals und FPU-Exception-Flags folgen in v0.25.0
+- FPU-Grundoperationen und grundlegendes DN-Verhalten sind vorhanden; Vektoroperationen und vollstaendige FPU-Exception-Flags folgen in v0.25.0
 - Dreamcast-Speicherbereiche, MMIO-Handler, strukturierte SH-4-Ausnahmen, Interruptprioritaeten und Watchpoints sind vorhanden; konkrete Plattformregister fehlen noch
 - keine Plattformhardware
 - nur einfache konstante indirekte Ziele und bekannte begrenzte Jump Tables werden aufgeloest

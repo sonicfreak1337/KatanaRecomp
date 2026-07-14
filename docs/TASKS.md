@@ -761,6 +761,10 @@ Abhaengigkeiten: KR-2401 bis KR-2405
 Akzeptanz:
 
 - NaN-, Infinity- und beide unterstuetzten Rundungsmodi sind regressionsgesichert
+- FTRC-Grenzen, Nullvorzeichen, Signaling-NaN, FMAC-Ueberlappung und Double-/Konvertierungsrundung sind regressionsgesichert
+- DN=1 spuelt denormalisierte Single- und Double-Werte mit korrektem Vorzeichen; Transfers, FNEG und FABS bleiben rohbitgetreu
+- reservierte RM-Werte erreichen keine FPU-Rechenwirkung
+- 64-Bit-FMOV ist ueber angrenzende Regionsgrenzen und am nicht abgebildeten Rand getestet
 - FPU-Sperren und ungueltige Moduskombinationen nehmen den strukturierten Exception-Pfad
 - generierter FPU-Code wird kompiliert und ausgefuehrt, einschliesslich Delay-Slot-Fehlern
 - alle 95 Tests bestehen in frischen lokalen Debug- und Release-Builds
