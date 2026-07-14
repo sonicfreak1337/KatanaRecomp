@@ -28,6 +28,61 @@ void apply_local_transfer(
                     static_cast<std::uint32_t>(instruction.immediate);
             }
             return;
+        case katana::sh4::InstructionKind::AddRegister:
+            if (state.registers[instruction.destination_register].has_value()
+                && state.registers[instruction.source_register].has_value()) {
+                *state.registers[instruction.destination_register] +=
+                    *state.registers[instruction.source_register];
+            } else {
+                state.registers[instruction.destination_register].reset();
+            }
+            return;
+        case katana::sh4::InstructionKind::SubRegister:
+            if (state.registers[instruction.destination_register].has_value()
+                && state.registers[instruction.source_register].has_value()) {
+                *state.registers[instruction.destination_register] -=
+                    *state.registers[instruction.source_register];
+            } else {
+                state.registers[instruction.destination_register].reset();
+            }
+            return;
+        case katana::sh4::InstructionKind::AndRegister:
+        case katana::sh4::InstructionKind::OrRegister:
+        case katana::sh4::InstructionKind::XorRegister:
+            if (state.registers[instruction.destination_register].has_value()
+                && state.registers[instruction.source_register].has_value()) {
+                auto& destination = *state.registers[instruction.destination_register];
+                const auto source = *state.registers[instruction.source_register];
+                if (instruction.kind == katana::sh4::InstructionKind::AndRegister) {
+                    destination &= source;
+                } else if (instruction.kind == katana::sh4::InstructionKind::OrRegister) {
+                    destination |= source;
+                } else {
+                    destination ^= source;
+                }
+            } else {
+                state.registers[instruction.destination_register].reset();
+            }
+            return;
+        case katana::sh4::InstructionKind::AndImmediate:
+        case katana::sh4::InstructionKind::OrImmediate:
+        case katana::sh4::InstructionKind::XorImmediate:
+            if (state.registers[0].has_value()) {
+                auto& destination = *state.registers[0];
+                const auto immediate = static_cast<std::uint32_t>(instruction.immediate);
+                if (instruction.kind == katana::sh4::InstructionKind::AndImmediate) {
+                    destination &= immediate;
+                } else if (instruction.kind == katana::sh4::InstructionKind::OrImmediate) {
+                    destination |= immediate;
+                } else {
+                    destination ^= immediate;
+                }
+            }
+            return;
+        case katana::sh4::InstructionKind::Jmp:
+        case katana::sh4::InstructionKind::Jsr:
+        case katana::sh4::InstructionKind::Rts:
+            return;
         default:
             state.registers.fill(std::nullopt);
             return;
@@ -52,6 +107,27 @@ std::vector<ConstantTraceEntry> propagate_local_constants(
         trace.push_back(std::move(entry));
     }
     return trace;
+}
+
+RegisterValueAnalysis analyze_register_values(
+    const std::span<const katana::sh4::DisassemblyLine> lines,
+    const RegisterConstants& initial
+) {
+    RegisterValueAnalysis analysis;
+    analysis.trace = propagate_local_constants(lines, initial);
+    for (std::size_t index = 0; index < lines.size(); ++index) {
+        if (lines[index].instruction.kind != katana::sh4::InstructionKind::Jmp
+            && lines[index].instruction.kind != katana::sh4::InstructionKind::Jsr) {
+            continue;
+        }
+        const auto register_index = lines[index].instruction.branch_register;
+        analysis.indirect_control_flow.push_back({
+            lines[index].address,
+            register_index,
+            analysis.trace[index].before.registers[register_index]
+        });
+    }
+    return analysis;
 }
 
 }

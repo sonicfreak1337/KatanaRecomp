@@ -422,7 +422,7 @@ Abhaengigkeiten: KR-1701 bis KR-1706
 
 Abhaengigkeiten: KR-1707
 
-### [ ] KR-1802 - Registerwertanalyse
+### [x] KR-1802 - Registerwertanalyse
 
 Abhaengigkeiten: KR-1801
 

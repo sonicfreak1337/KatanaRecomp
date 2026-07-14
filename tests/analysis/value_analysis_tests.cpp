@@ -32,7 +32,28 @@ int main() {
     require(trace[1].after.registers[1] == 8u, "ADD #imm wurde nicht propagiert.");
     require(trace[2].after.registers[2] == 8u, "Registerkopie wurde nicht propagiert.");
     require(trace[3].after.registers[2] == 8u, "NOP hat eine Konstante zerstoert.");
-    require(!trace[4].after.registers[1].has_value() && !trace[4].after.registers[2].has_value(), "Unmodellierter Effekt wurde nicht konservativ verworfen.");
+    require(
+        trace[4].after.registers[1] == 8u
+            && trace[4].after.registers[2] == 16u
+            && !trace[4].after.registers[3].has_value(),
+        "Registerweises ADD hat unabhaengige Konstanten verworfen oder den Zielwert falsch berechnet."
+    );
+
+    constexpr std::array<std::uint8_t, 8> indirect_bytes{
+        0x20u, 0xE1u,
+        0x03u, 0x71u,
+        0x13u, 0x62u,
+        0x2Bu, 0x42u
+    };
+    const auto indirect_lines = katana::sh4::disassemble(indirect_bytes, 0x1000u);
+    const auto values = katana::analysis::analyze_register_values(indirect_lines);
+    require(values.indirect_control_flow.size() == 1u, "Indirekte Kontrollflussstelle wurde nicht beobachtet.");
+    require(
+        values.indirect_control_flow[0].instruction_address == 0x1006u
+            && values.indirect_control_flow[0].register_index == 2u
+            && values.indirect_control_flow[0].value == 0x23u,
+        "Registerwert am indirekten Sprung wurde falsch analysiert."
+    );
 
     std::cout << "KR-1801 Lokale Konstantenpropagation erfolgreich.\n";
     return EXIT_SUCCESS;
