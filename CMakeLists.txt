@@ -46,6 +46,7 @@ add_library(katana_core STATIC
     src/analysis/disassembler.cpp
     src/analysis/basic_blocks.cpp
     src/analysis/function_analysis.cpp
+    src/analysis/recursive_analysis.cpp
     src/ir/lower.cpp
     src/codegen/cpp_emitter.cpp
 )
@@ -278,6 +279,18 @@ katana_enable_warnings(katana-function-analysis-tests)
 add_test(
     NAME katana-function-analysis-tests
     COMMAND katana-function-analysis-tests
+)
+
+add_executable(katana-recursive-analysis-tests
+    tests/analysis/recursive_analysis_tests.cpp
+)
+
+target_link_libraries(katana-recursive-analysis-tests PRIVATE katana_core)
+katana_enable_warnings(katana-recursive-analysis-tests)
+
+add_test(
+    NAME katana-recursive-analysis-tests
+    COMMAND katana-recursive-analysis-tests
 )
 
 add_executable(katana-ir-lowering-tests

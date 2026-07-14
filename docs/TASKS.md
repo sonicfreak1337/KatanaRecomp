@@ -386,7 +386,7 @@ Abhaengigkeiten: KR-1601 bis KR-1606
 
 ## v0.17.0 - Rekursive Analyse
 
-### [ ] KR-1701 - Worklist ab Einstiegspunkten
+### [x] KR-1701 - Worklist ab Einstiegspunkten
 
 Abhaengigkeiten: KR-1607
 
