@@ -8,6 +8,7 @@
 #include "katana/io/raw_binary_loader.hpp"
 #include "katana/io/project_manifest.hpp"
 #include "katana/ir/lower.hpp"
+#include "katana/ir/serialize.hpp"
 #include "katana/sh4/decoder.hpp"
 #include "katana/sh4/disassembler.hpp"
 #include "katana/sh4/isa_coverage.hpp"
@@ -832,7 +833,8 @@ int analyze_functions(
 int analyze_ir(
     const std::filesystem::path& path,
     const std::uint32_t entry_address,
-    const std::uint32_t base_address
+    const std::uint32_t base_address,
+    const bool json
 ) {
     const auto program = build_ir_program(
         path,
@@ -840,59 +842,9 @@ int analyze_ir(
         base_address
     );
 
-    std::cout
-        << "Datei:         " << path.string() << '\n'
-        << "IR-Funktionen: "
-        << std::dec
-        << program.size()
-        << "\n\n";
-
-    for (const auto& function : program) {
-        std::cout << "Funktion ";
-        print_address(function.entry_address);
-        std::cout << '\n';
-
-        for (const auto& block : function.blocks) {
-            std::cout << "  Block ";
-            print_address(block.start_address);
-            std::cout << '\n';
-
-            for (const auto& instruction : block.instructions) {
-                std::cout << "    ";
-                print_ir_instruction(instruction);
-            }
-
-            std::cout << "    Nachfolger: ";
-
-            if (
-                block.successors.empty() &&
-                !block.has_indirect_successor
-            ) {
-                std::cout << "keine";
-            } else {
-                bool first = true;
-
-                for (const auto successor : block.successors) {
-                    if (!first) {
-                        std::cout << ", ";
-                    }
-
-                    print_address(successor);
-                    first = false;
-                }
-
-                if (block.has_indirect_successor) {
-                    if (!first) {
-                        std::cout << ", ";
-                    }
-
-                    std::cout << "indirekt";
-                }
-            }
-
-            std::cout << "\n\n";
-        }
-    }
+    std::cout << (json
+        ? katana::ir::emit_ir_json(program)
+        : katana::ir::emit_ir_text(program));
 
     return 0;
 }
@@ -969,6 +921,7 @@ void print_usage() {
         << "  katana-recomp blocks <Datei> [Basisadresse]\n"
         << "  katana-recomp functions <Datei> <Einstieg> [Basisadresse]\n"
         << "  katana-recomp ir <Datei> <Einstieg> [Basisadresse]\n"
+        << "  katana-recomp ir-json <Datei> <Einstieg> [Basisadresse]\n"
         << "  katana-recomp emit-cpp <Datei> <Einstieg> <Ausgabe.cpp> [Basisadresse]\n\n"
         << "Beispiel:\n"
         << "  katana-recomp emit-cpp programm.bin 8C010000 generated.cpp 8C010000\n";
@@ -1072,7 +1025,7 @@ int main(const int argc, char* argv[]) {
 
         if (
             (argc == 4 || argc == 5) &&
-            std::string(argv[1]) == "ir"
+            (std::string(argv[1]) == "ir" || std::string(argv[1]) == "ir-json")
         ) {
             const auto entry_address =
                 parse_hex_value(
@@ -1093,7 +1046,8 @@ int main(const int argc, char* argv[]) {
             return analyze_ir(
                 std::filesystem::path(argv[2]),
                 entry_address,
-                base_address
+                base_address,
+                std::string(argv[1]) == "ir-json"
             );
         }
 

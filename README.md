@@ -29,7 +29,7 @@ SH-4-Binaerdaten
     -> semantischer Laufzeittest
 `
 
-Der aktuelle Teststand umfasst **75 automatische Tests**.
+Der aktuelle Teststand umfasst **76 automatische Tests**.
 
 Der v0.15-Decoder verwendet eine zentrale Metadatenquelle fuer alle implementierten Opcode-Masken, Operandenformate, Kontrollfluss- und Privileginformationen. `katana-recomp isa-report` berichtet deterministisch ueber den gesamten 16-Bit-Opcode-Raum; Kollisions-, Spezifikations- und Fuzztests sichern die Regeln ab.
 
@@ -332,6 +332,12 @@ Katana-IR anzeigen:
 
 `powershell
 .\build\katana-recomp.exe ir ".\samples\ir_demo.bin" 8C010000 8C010000
+`
+
+Katana-IR als maschinenlesbares JSON anzeigen:
+
+`powershell
+.\build\katana-recomp.exe ir-json ".\samples\ir_demo.bin" 8C010000 8C010000
 `
 
 C++ erzeugen:

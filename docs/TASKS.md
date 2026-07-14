@@ -470,7 +470,7 @@ Abhaengigkeiten: KR-1901
 
 Abhaengigkeiten: KR-1901 bis KR-1904
 
-### [ ] KR-1906 - Deterministische Text- und JSON-Ausgabe
+### [x] KR-1906 - Deterministische Text- und JSON-Ausgabe
 
 Abhaengigkeiten: KR-1905
 

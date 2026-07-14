@@ -95,3 +95,16 @@ und Instruktionsadresse. `emit_cpp_program` ruft diese Pruefung fuer jede Funkti
 auf, bevor irgendein C++-Text erzeugt wird. Tests, die IR absichtlich von Hand
 aufbauen, muessen daher dieselben expliziten Metadaten wie das normale Lowering
 setzen.
+
+## Deterministische Ausgabe
+
+`emit_ir_text` und `emit_ir_json` verifizieren jede Funktion vor der Ausgabe und
+sortieren Funktionen, Bloecke, Nachfolger und Aufruflisten nach Adresse. Doppelte
+Funktionseinstiege werden abgelehnt. Instruktionen erscheinen in Adressreihenfolge.
+
+Beide Formate enthalten Operandbreiten, konkrete Operanden, Status-, Speicher- und
+Akkumulatoreffekte, Delay-Slot-Beziehungen, Privilegstatus und Kontrollflussdaten.
+Die JSON-Ausgabe verwendet das Schema `katana-ir-v2`, hexadezimale Adressen als
+Strings und feste englische Feld- und Enum-Namen. `katana-recomp ir` gibt das
+Textformat aus; `katana-recomp ir-json` liefert JSON ohne dateipfadabhaengige
+Kopfzeilen.

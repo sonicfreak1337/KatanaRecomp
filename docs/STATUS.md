@@ -11,7 +11,7 @@ KatanaRecomp besitzt einen durchgaengigen Prototyp-Pfad von Raw- und ELF32-SH-Ei
 ## Teststatus
 
 ```text
-100% tests passed out of 75
+100% tests passed out of 76
 ```
 
 ## Fertiggestellte Roadmap-Tasks
@@ -76,7 +76,8 @@ KatanaRecomp besitzt einen durchgaengigen Prototyp-Pfad von Raw- und ELF32-SH-Ei
 - [x] KR-1903 - Speicher-Seiteneffekte
 - [x] KR-1904 - Delay-Slot-Normalisierung
 - [x] KR-1905 - IR-Verifier
-- [ ] KR-1906 - Deterministische Text- und JSON-Ausgabe
+- [x] KR-1906 - Deterministische Text- und JSON-Ausgabe
+- [ ] KR-1907 - v0.19 Release-Gate
 
 ## Aktuelle Einschraenkungen
 
