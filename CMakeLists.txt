@@ -39,6 +39,7 @@ add_library(katana_core STATIC
     src/decoder/isa_coverage.cpp
     src/io/binary_reader.cpp
     src/io/executable_image.cpp
+    src/io/raw_binary_loader.cpp
     src/analysis/disassembler.cpp
     src/analysis/basic_blocks.cpp
     src/analysis/function_analysis.cpp
@@ -95,6 +96,21 @@ katana_enable_warnings(katana-executable-image-tests)
 add_test(
     NAME katana-executable-image-tests
     COMMAND katana-executable-image-tests
+)
+
+add_executable(katana-raw-binary-loader-tests
+    tests/io/raw_binary_loader_tests.cpp
+)
+
+target_link_libraries(katana-raw-binary-loader-tests PRIVATE katana_core)
+target_compile_definitions(katana-raw-binary-loader-tests PRIVATE
+    KATANA_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}"
+)
+katana_enable_warnings(katana-raw-binary-loader-tests)
+
+add_test(
+    NAME katana-raw-binary-loader-tests
+    COMMAND katana-raw-binary-loader-tests
 )
 
 add_executable(katana-instruction-metadata-tests

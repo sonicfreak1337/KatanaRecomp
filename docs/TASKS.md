@@ -358,7 +358,7 @@ Abhaengigkeiten: KR-1501 bis KR-1505
 
 Abhaengigkeiten: KR-1506
 
-### [ ] KR-1602 - Raw-Binary-Loader
+### [x] KR-1602 - Raw-Binary-Loader
 
 Abhaengigkeiten: KR-1601
 
