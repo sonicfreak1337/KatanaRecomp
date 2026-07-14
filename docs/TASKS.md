@@ -494,7 +494,7 @@ Abhaengigkeiten: KR-2001
 
 Abhaengigkeiten: KR-2002
 
-### [ ] KR-2004 - CFG-Simplifizierung
+### [x] KR-2004 - CFG-Simplifizierung
 
 Abhaengigkeiten: KR-2003
 

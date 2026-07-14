@@ -13,5 +13,6 @@ struct OptimizationResult {
 [[nodiscard]] OptimizationResult fold_constants(Function& function);
 [[nodiscard]] OptimizationResult propagate_copies(Function& function);
 [[nodiscard]] OptimizationResult eliminate_dead_code(Function& function);
+[[nodiscard]] OptimizationResult simplify_cfg(Function& function);
 
 }

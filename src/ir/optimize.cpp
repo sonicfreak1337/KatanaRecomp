@@ -2,9 +2,12 @@
 
 #include "katana/ir/verifier.hpp"
 
+#include <algorithm>
 #include <array>
 #include <cstdint>
 #include <optional>
+#include <unordered_set>
+#include <vector>
 
 namespace katana::ir {
 namespace {
@@ -365,6 +368,54 @@ OptimizationResult eliminate_dead_block_code(BasicBlock& block) {
     return result;
 }
 
+OptimizationResult simplify_function_cfg(Function& function) {
+    std::unordered_set<std::uint32_t> reachable;
+    std::vector<std::uint32_t> worklist = {function.entry_address};
+    while (!worklist.empty()) {
+        const auto address = worklist.back();
+        worklist.pop_back();
+        if (!reachable.insert(address).second) continue;
+        for (const auto& block : function.blocks) {
+            if (block.start_address != address) continue;
+            worklist.insert(
+                worklist.end(),
+                block.successors.begin(),
+                block.successors.end()
+            );
+            break;
+        }
+    }
+
+    OptimizationResult result;
+    const auto original_size = function.blocks.size();
+    function.blocks.erase(
+        std::remove_if(
+            function.blocks.begin(),
+            function.blocks.end(),
+            [&reachable](const BasicBlock& block) {
+                return !reachable.contains(block.start_address);
+            }
+        ),
+        function.blocks.end()
+    );
+    result.changes += original_size - function.blocks.size();
+
+    for (auto& block : function.blocks) {
+        const auto successor_size = block.successors.size();
+        std::sort(block.successors.begin(), block.successors.end());
+        block.successors.erase(
+            std::unique(block.successors.begin(), block.successors.end()),
+            block.successors.end()
+        );
+        result.changes += successor_size - block.successors.size();
+    }
+    std::sort(function.blocks.begin(), function.blocks.end(),
+        [](const BasicBlock& left, const BasicBlock& right) {
+            return left.start_address < right.start_address;
+        });
+    return result;
+}
+
 }
 
 OptimizationResult fold_constants(Function& function) {
@@ -393,6 +444,13 @@ OptimizationResult eliminate_dead_code(Function& function) {
     for (auto& block : function.blocks) {
         result.changes += eliminate_dead_block_code(block).changes;
     }
+    require_valid_function(function);
+    return result;
+}
+
+OptimizationResult simplify_cfg(Function& function) {
+    require_valid_function(function);
+    const auto result = simplify_function_cfg(function);
     require_valid_function(function);
     return result;
 }

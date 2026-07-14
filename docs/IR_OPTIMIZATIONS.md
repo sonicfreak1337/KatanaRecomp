@@ -28,3 +28,10 @@ alle betroffenen Beziehungen. Unbekannte Registerwirkungen leeren den Aliaszusta
 vor jeder Nutzung durch eine weitere reine Definition desselben Registers ersetzt
 werden. Blockanfaenge bleiben stabil. Delay Slots sowie Status-, Speicher-,
 Akkumulator-, Privileg- und unbekannte Effekte bilden harte Grenzen.
+
+## CFG-Simplifizierung
+
+`simplify_cfg` berechnet die vom Funktionseintritt erreichbaren Bloecke und entfernt
+den nicht erreichbaren Rest. Nachfolgerlisten werden sortiert und dedupliziert;
+Blockreihenfolgen werden nach Startadresse kanonisiert. Kontrollinstruktionen und
+ihre Delay Slots werden nicht umgeschrieben.

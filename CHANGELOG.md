@@ -10,6 +10,8 @@
 
 - KR-2003: Dead-Code-Elimination entfernt innerhalb eines Blocks reine Registerdefinitionen, die vor jeder Nutzung eindeutig ueberschrieben werden.
 
+- KR-2004: CFG-Simplifizierung entfernt unerreichbare Funktionsbloecke und kanonisiert Nachfolgerlisten deterministisch.
+
 ## [0.19.0] - 2026-07-14
 
 ### Hinzugefuegt

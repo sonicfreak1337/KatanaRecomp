@@ -102,6 +102,36 @@ int main() {
     require(katana::ir::verify_function(dead_function).empty(),
         "Dead-Code-Elimination erzeugt ungueltige Katana-IR.");
 
+    auto cfg_function = dead_function;
+    katana::ir::Instruction unreachable_nop;
+    unreachable_nop.source_address = 0x8C03FF00u;
+    unreachable_nop.original_opcode = 0x0009u;
+    unreachable_nop.operation = katana::ir::Operation::Nop;
+    unreachable_nop.widths = katana::ir::operation_operand_widths(
+        unreachable_nop.operation
+    );
+    unreachable_nop.status_effects = katana::ir::instruction_status_effects(
+        unreachable_nop.operation
+    );
+    unreachable_nop.memory_effects = katana::ir::instruction_memory_effects(
+        unreachable_nop.operation
+    );
+    unreachable_nop.accumulator_effects =
+        katana::ir::operation_accumulator_effects(unreachable_nop.operation);
+    katana::ir::BasicBlock unreachable_block;
+    unreachable_block.start_address = unreachable_nop.source_address;
+    unreachable_block.instructions = {unreachable_nop};
+    cfg_function.blocks.push_back(unreachable_block);
+    require(katana::ir::verify_function(cfg_function).empty(),
+        "CFG-Testaufbau ist keine gueltige Katana-IR.");
+    const auto cfg_result = katana::ir::simplify_cfg(cfg_function);
+    require(
+        cfg_result.changes == 1u && cfg_function.blocks.size() == 1u,
+        "CFG-Simplifizierung entfernt unerreichbaren Block nicht."
+    );
+    require(katana::ir::verify_function(cfg_function).empty(),
+        "CFG-Simplifizierung erzeugt ungueltige Katana-IR.");
+
     std::cout << "KR-2001 Constant Folding erfolgreich.\n";
     return EXIT_SUCCESS;
 }
