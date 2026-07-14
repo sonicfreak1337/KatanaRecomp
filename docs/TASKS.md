@@ -410,7 +410,7 @@ Abhaengigkeiten: KR-1702
 
 Abhaengigkeiten: KR-1701 bis KR-1705
 
-### [ ] KR-1707 - v0.17 Release-Gate
+### [x] KR-1707 - v0.17 Release-Gate
 
 Abhaengigkeiten: KR-1701 bis KR-1706
 

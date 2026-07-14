@@ -1,10 +1,10 @@
 # KatanaRecomp
 
-Aktuelle Pre-Alpha-Version: `0.16.0`
+Aktuelle Pre-Alpha-Version: `0.17.0`
 
 KatanaRecomp ist ein unabhaengiges, in C++20 entwickeltes Framework fuer die statische Rekompilierung von Sega-Dreamcast-SH-4-Code.
 
-Das Projekt befindet sich in einer fruehen Pre-Alpha-Phase. Der aktuelle Stand ist **Version 0.16.0**.
+Das Projekt befindet sich in einer fruehen Pre-Alpha-Phase. Der aktuelle Stand ist **Version 0.17.0**.
 
 KatanaRecomp ist kein Emulator, kein ISO-Loader und kein Paket fuer kommerzielle Spieldaten. BIOS-Dateien, Disc-Images, urheberrechtlich geschuetzte Assets und automatisch erzeugter Code aus kommerziellen Spielen gehoeren nicht in dieses Repository.
 
@@ -29,11 +29,13 @@ SH-4-Binaerdaten
     -> semantischer Laufzeittest
 `
 
-Der aktuelle Teststand umfasst **63 automatische Tests**.
+Der aktuelle Teststand umfasst **65 automatische Tests**.
 
 Der v0.15-Decoder verwendet eine zentrale Metadatenquelle fuer alle implementierten Opcode-Masken, Operandenformate, Kontrollfluss- und Privileginformationen. `katana-recomp isa-report` berichtet deterministisch ueber den gesamten 16-Bit-Opcode-Raum; Kollisions-, Spezifikations- und Fuzztests sichern die Regeln ab.
 
 v0.16 fuehrt ein formatneutrales Executable Image mit Code-, Daten- und Unknown-Segmenten ein. Raw-Binaries und Little-Endian-ELF32-SH-Dateien werden mit virtuellen Adressen, Dateioffsets, Berechtigungen und Einstiegspunkten geladen. ELF-Symbole, optionale Map-Dateien, minimale `R_SH_DIR32`-/`R_SH_REL32`-Relocations und ein strikt versioniertes Projektmanifest v1 sind abgedeckt. Der normale Analyzerpfad dekodiert nur ausfuehrbare Code-Segmente.
+
+v0.17 entdeckt Code rekursiv ab Image-Einstiegspunkten, direkten Calls und Funktionssymbolen. Analyseberichte trennen Code, Daten und unbekannte beziehungsweise unerreichbare Bereiche, begruenden Funktionskandidaten und melden mehrdeutige Delay-Slot-Rollen. `katana-recomp analyze <Manifest>` gibt diesen Bericht aus; `disasm` bleibt der lineare Diagnosemodus.
 
 ## Implementierte SH-4-Instruktionen
 

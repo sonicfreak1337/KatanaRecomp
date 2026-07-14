@@ -1,7 +1,9 @@
 #include "katana/analysis/basic_blocks.hpp"
 #include "katana/analysis/function_analysis.hpp"
+#include "katana/analysis/recursive_analysis.hpp"
 #include "katana/codegen/cpp_emitter.hpp"
 #include "katana/io/raw_binary_loader.hpp"
+#include "katana/io/project_manifest.hpp"
 #include "katana/ir/lower.hpp"
 #include "katana/sh4/decoder.hpp"
 #include "katana/sh4/disassembler.hpp"
@@ -513,7 +515,7 @@ std::vector<katana::ir::Function> build_ir_program(
     options.base_address = base_address;
     options.entry_point = entry_address;
     const auto image = katana::io::load_raw_binary(path, options);
-    const auto lines = katana::sh4::disassemble(image);
+    const auto lines = katana::analysis::analyze_reachable_code(image).instructions;
 
     const std::array<std::uint32_t, 1> seeds = {
         entry_address
@@ -560,6 +562,13 @@ int decode_single_opcode(const std::string& text) {
         << '\n';
 
     return instruction.is_known() ? 0 : 1;
+}
+
+int analyze_manifest(const std::filesystem::path& path) {
+    const auto image = katana::io::load_project_manifest(path);
+    const auto result = katana::analysis::analyze_reachable_code(image);
+    std::cout << katana::analysis::format_recursive_analysis_report(result);
+    return 0;
 }
 
 int disassemble_file(
@@ -631,8 +640,9 @@ int analyze_blocks(
 ) {
     katana::io::RawBinaryLoadOptions options;
     options.base_address = base_address;
+    options.entry_point = base_address;
     const auto image = katana::io::load_raw_binary(path, options);
-    const auto lines = katana::sh4::disassemble(image);
+    const auto lines = katana::analysis::analyze_reachable_code(image).instructions;
     const auto blocks = katana::analysis::build_basic_blocks(lines);
 
     std::cout
@@ -709,7 +719,7 @@ int analyze_functions(
     options.base_address = base_address;
     options.entry_point = entry_address;
     const auto image = katana::io::load_raw_binary(path, options);
-    const auto lines = katana::sh4::disassemble(image);
+    const auto lines = katana::analysis::analyze_reachable_code(image).instructions;
 
     const std::array<std::uint32_t, 1> seeds = {
         entry_address
@@ -939,6 +949,7 @@ void print_usage() {
         << "  katana-recomp <Opcode>\n"
         << "  katana-recomp opcode <Opcode>\n"
         << "  katana-recomp isa-report\n"
+        << "  katana-recomp analyze <Projektmanifest>\n"
         << "  katana-recomp disasm <Datei> [Basisadresse]\n"
         << "  katana-recomp blocks <Datei> [Basisadresse]\n"
         << "  katana-recomp functions <Datei> <Einstieg> [Basisadresse]\n"
@@ -957,6 +968,10 @@ int main(const int argc, char* argv[]) {
                 katana::sh4::build_isa_coverage_report()
             );
             return 0;
+        }
+
+        if (argc == 3 && std::string(argv[1]) == "analyze") {
+            return analyze_manifest(std::filesystem::path(argv[2]));
         }
 
         if (argc == 2) {

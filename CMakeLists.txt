@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.25)
 
 project(
     KatanaRecomp
-    VERSION 0.16.0
+    VERSION 0.17.0
     DESCRIPTION "Dreamcast SH-4 static recompilation framework"
     LANGUAGES CXX
 )
@@ -291,6 +291,17 @@ katana_enable_warnings(katana-recursive-analysis-tests)
 add_test(
     NAME katana-recursive-analysis-tests
     COMMAND katana-recursive-analysis-tests
+)
+
+add_test(
+    NAME katana-recursive-analysis-cli-tests
+    COMMAND katana-recomp analyze
+        ${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/recursive_analysis.katana
+)
+
+set_tests_properties(
+    katana-recursive-analysis-cli-tests
+    PROPERTIES PASS_REGULAR_EXPRESSION "Katana rekursive Analyse"
 )
 
 add_executable(katana-ir-lowering-tests

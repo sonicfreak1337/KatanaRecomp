@@ -1,8 +1,8 @@
 # Projektstatus
 
-Version: 0.16.0
+Version: 0.17.0
 Phase: Pre-Alpha
-Aktiver Meilenstein: v0.17.0 - Rekursive Codeentdeckung
+Aktiver Meilenstein: v0.18.0 - Indirekter Kontrollfluss und Jump Tables
 
 ## Zusammenfassung
 
@@ -11,7 +11,7 @@ KatanaRecomp besitzt einen durchgaengigen Prototyp-Pfad von Raw- und ELF32-SH-Ei
 ## Teststatus
 
 ```text
-100% tests passed out of 63
+100% tests passed out of 65
 ```
 
 ## Fertiggestellte Roadmap-Tasks
@@ -54,10 +54,17 @@ KatanaRecomp besitzt einen durchgaengigen Prototyp-Pfad von Raw- und ELF32-SH-Ei
 - [x] KR-1605 - Relocations
 - [x] KR-1606 - Projektmanifest Version 1
 - [x] KR-1607 - v0.16.0 Release-Gate
+- [x] KR-1701 - Worklist ab Einstiegspunkten
+- [x] KR-1702 - Code-Daten-Klassifikation
+- [x] KR-1703 - Herkunft und Konfidenz von Funktionen
+- [x] KR-1704 - Nicht erreichbare Bereiche
+- [x] KR-1705 - Ueberlappende Bereiche
+- [x] KR-1706 - Analysebericht
+- [x] KR-1707 - v0.17.0 Release-Gate
 
 ## Naechster Roadmap-Task
 
-- [ ] KR-1701 - Worklist ab Einstiegspunkten
+- [ ] KR-1801 - Lokale Konstantenpropagation
 
 ## Aktuelle Einschraenkungen
 

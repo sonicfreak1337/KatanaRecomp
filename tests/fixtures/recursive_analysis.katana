@@ -1,0 +1,8 @@
+version = 1
+format = raw
+input = codegen_execution.bin
+base_address = 0x8C010000
+entry_point = 0x8C010000
+segment_name = .text
+segment_kind = code
+permissions = r-x

@@ -1,7 +1,7 @@
 # KatanaRecomp Roadmap
 
 Status: Pre-Alpha
-Aktuelle Basis: v0.16.0
+Aktuelle Basis: v0.17.0
 Planungsmodell: Semantic Versioning, kleine ueberpruefbare Meilensteine
 
 Diese Roadmap beschreibt die technische Entwicklung von KatanaRecomp vom aktuellen Architektur-Prototyp bis zu einem belastbaren Dreamcast-Recompiler-Framework.
@@ -227,6 +227,16 @@ Release-Gate:
 - Loaderfehler nennen Datei, Offset und Ursache
 
 ### v0.17.0 - Rekursive Codeentdeckung
+
+Fortschritt:
+
+- [x] KR-1701 - Worklist ab Einstiegspunkten
+- [x] KR-1702 - Code-Daten-Klassifikation
+- [x] KR-1703 - Herkunft und Konfidenz von Funktionen
+- [x] KR-1704 - Nicht erreichbare Bereiche
+- [x] KR-1705 - Ueberlappende Bereiche
+- [x] KR-1706 - Analysebericht
+- [x] KR-1707 - v0.17 Release-Gate
 
 Enthalten:
 
