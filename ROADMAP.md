@@ -1,7 +1,7 @@
 # KatanaRecomp Roadmap
 
 Status: Pre-Alpha
-Aktuelle Basis: v0.17.0
+Aktuelle Basis: v0.18.0
 Planungsmodell: Semantic Versioning, kleine ueberpruefbare Meilensteine
 
 Diese Roadmap beschreibt die technische Entwicklung von KatanaRecomp vom aktuellen Architektur-Prototyp bis zu einem belastbaren Dreamcast-Recompiler-Framework.
@@ -254,6 +254,16 @@ Release-Gate:
 - lineare Analyse bleibt als Diagnosemodus erhalten
 
 ### v0.18.0 - Indirekter Kontrollfluss und Jump Tables
+
+Fortschritt:
+
+- [x] KR-1801 - Lokale Konstantenpropagation
+- [x] KR-1802 - Registerwertanalyse
+- [x] KR-1803 - Einfache indirekte Calls und Jumps
+- [x] KR-1804 - Jump Tables
+- [x] KR-1805 - Override-Datei
+- [x] KR-1806 - Bericht ungeloester Kontrollflussstellen
+- [x] KR-1807 - v0.18 Release-Gate
 
 Enthalten:
 

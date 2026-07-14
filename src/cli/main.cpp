@@ -1,6 +1,10 @@
 #include "katana/analysis/basic_blocks.hpp"
 #include "katana/analysis/function_analysis.hpp"
 #include "katana/analysis/recursive_analysis.hpp"
+#include "katana/analysis/analysis_overrides.hpp"
+#include "katana/analysis/control_flow_report.hpp"
+#include "katana/analysis/jump_table_analysis.hpp"
+#include "katana/analysis/value_analysis.hpp"
 #include "katana/codegen/cpp_emitter.hpp"
 #include "katana/io/raw_binary_loader.hpp"
 #include "katana/io/project_manifest.hpp"
@@ -564,10 +568,60 @@ int decode_single_opcode(const std::string& text) {
     return instruction.is_known() ? 0 : 1;
 }
 
-int analyze_manifest(const std::filesystem::path& path) {
-    const auto image = katana::io::load_project_manifest(path);
+bool is_executable_code_address(
+    const katana::io::ExecutableImage& image,
+    const std::uint32_t address
+) {
+    const auto* segment = image.find_segment(address, 2u);
+    return (address & 1u) == 0u && segment != nullptr
+        && segment->kind == katana::io::SegmentKind::Code
+        && segment->permissions.executable;
+}
+
+int analyze_manifest(
+    const std::filesystem::path& path,
+    const std::optional<std::filesystem::path>& override_path = std::nullopt
+) {
+    auto image = katana::io::load_project_manifest(path);
+    std::optional<katana::analysis::AnalysisOverrides> overrides;
+    if (override_path.has_value()) {
+        overrides = katana::analysis::parse_analysis_overrides(*override_path);
+        for (const auto entry : overrides->function_entries) {
+            if (!is_executable_code_address(image, entry)) {
+                throw std::runtime_error("Override-Funktion zeigt nicht auf ausfuehrbaren Code.");
+            }
+            image.add_entry_point(entry);
+        }
+    }
     const auto result = katana::analysis::analyze_reachable_code(image);
     std::cout << katana::analysis::format_recursive_analysis_report(result);
+    auto resolutions = katana::analysis::resolve_indirect_control_flow(result.instructions, image);
+    std::vector<katana::analysis::JumpTableAnalysis> jump_tables;
+    if (overrides.has_value()) {
+        for (const auto& jump : overrides->jumps) {
+            const auto resolution = std::find_if(
+                resolutions.begin(), resolutions.end(),
+                [&jump](const auto& candidate) {
+                    return candidate.instruction_address == jump.instruction_address;
+                }
+            );
+            if (resolution == resolutions.end()) {
+                throw std::runtime_error("Override-Sprungstelle ist kein entdeckter indirekter Sprung.");
+            }
+            if (!is_executable_code_address(image, jump.target)) {
+                throw std::runtime_error("Override-Sprungziel zeigt nicht auf ausfuehrbaren Code.");
+            }
+            resolution->status = katana::analysis::ResolutionStatus::Resolved;
+            resolution->target = jump.target;
+            resolution->reason = "user-override";
+        }
+        for (const auto& table : overrides->jump_tables) {
+            jump_tables.push_back(katana::analysis::analyze_jump_table(
+                image, table.dispatch_address, table.table_address, table.entry_count
+            ));
+        }
+    }
+    std::cout << katana::analysis::format_indirect_control_flow_report(resolutions, jump_tables);
     return 0;
 }
 
@@ -949,7 +1003,7 @@ void print_usage() {
         << "  katana-recomp <Opcode>\n"
         << "  katana-recomp opcode <Opcode>\n"
         << "  katana-recomp isa-report\n"
-        << "  katana-recomp analyze <Projektmanifest>\n"
+        << "  katana-recomp analyze <Projektmanifest> [Override-Datei]\n"
         << "  katana-recomp disasm <Datei> [Basisadresse]\n"
         << "  katana-recomp blocks <Datei> [Basisadresse]\n"
         << "  katana-recomp functions <Datei> <Einstieg> [Basisadresse]\n"
@@ -970,8 +1024,13 @@ int main(const int argc, char* argv[]) {
             return 0;
         }
 
-        if (argc == 3 && std::string(argv[1]) == "analyze") {
-            return analyze_manifest(std::filesystem::path(argv[2]));
+        if ((argc == 3 || argc == 4) && std::string(argv[1]) == "analyze") {
+            return analyze_manifest(
+                std::filesystem::path(argv[2]),
+                argc == 4
+                    ? std::optional<std::filesystem::path>{std::filesystem::path(argv[3])}
+                    : std::nullopt
+            );
         }
 
         if (argc == 2) {

@@ -1,0 +1,8 @@
+version = 1
+format = raw
+input = indirect_control_flow.bin
+base_address = 0
+entry_point = 0
+segment_name = .text
+segment_kind = code
+permissions = r-x

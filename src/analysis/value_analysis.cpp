@@ -100,7 +100,11 @@ std::vector<ConstantTraceEntry> propagate_local_constants(
     RegisterConstants state = initial;
     std::vector<ConstantTraceEntry> trace;
     trace.reserve(lines.size());
-    for (const auto& line : lines) {
+    for (std::size_t index = 0u; index < lines.size(); ++index) {
+        const auto& line = lines[index];
+        if (index != 0u && line.address != lines[index - 1u].address + 2u) {
+            state.registers.fill(std::nullopt);
+        }
         ConstantTraceEntry entry;
         entry.address = line.address;
         entry.before = state;

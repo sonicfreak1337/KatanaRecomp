@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.25)
 
 project(
     KatanaRecomp
-    VERSION 0.17.0
+    VERSION 0.18.0
     DESCRIPTION "Dreamcast SH-4 static recompilation framework"
     LANGUAGES CXX
 )
@@ -305,7 +305,19 @@ add_test(
 
 set_tests_properties(
     katana-recursive-analysis-cli-tests
-    PROPERTIES PASS_REGULAR_EXPRESSION "Katana rekursive Analyse"
+    PROPERTIES PASS_REGULAR_EXPRESSION "Katana rekursive Analyse;Indirekter Kontrollfluss;Aufgeloest:;Ungeloest:"
+)
+
+add_test(
+    NAME katana-indirect-control-flow-cli-tests
+    COMMAND katana-recomp analyze
+        ${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/indirect_control_flow.katana
+        ${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/indirect_control_flow.overrides
+)
+
+set_tests_properties(
+    katana-indirect-control-flow-cli-tests
+    PROPERTIES PASS_REGULAR_EXPRESSION "user-override"
 )
 
 add_executable(katana-value-analysis-tests

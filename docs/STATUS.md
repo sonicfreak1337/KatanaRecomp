@@ -1,8 +1,8 @@
 # Projektstatus
 
-Version: 0.17.0
+Version: 0.18.0
 Phase: Pre-Alpha
-Aktiver Meilenstein: v0.18.0 - Indirekter Kontrollfluss und Jump Tables
+Aktiver Meilenstein: v0.19.0 - IR Version 2
 
 ## Zusammenfassung
 
@@ -11,7 +11,7 @@ KatanaRecomp besitzt einen durchgaengigen Prototyp-Pfad von Raw- und ELF32-SH-Ei
 ## Teststatus
 
 ```text
-100% tests passed out of 65
+100% tests passed out of 69
 ```
 
 ## Fertiggestellte Roadmap-Tasks
@@ -61,10 +61,17 @@ KatanaRecomp besitzt einen durchgaengigen Prototyp-Pfad von Raw- und ELF32-SH-Ei
 - [x] KR-1705 - Ueberlappende Bereiche
 - [x] KR-1706 - Analysebericht
 - [x] KR-1707 - v0.17.0 Release-Gate
+- [x] KR-1801 - Lokale Konstantenpropagation
+- [x] KR-1802 - Registerwertanalyse
+- [x] KR-1803 - Einfache indirekte Calls und Jumps
+- [x] KR-1804 - Jump Tables
+- [x] KR-1805 - Override-Datei
+- [x] KR-1806 - Bericht ungeloester Kontrollflussstellen
+- [x] KR-1807 - v0.18.0 Release-Gate
 
 ## Naechster Roadmap-Task
 
-- [ ] KR-1801 - Lokale Konstantenpropagation
+- [ ] KR-1901 - Explizite Operandbreiten
 
 ## Aktuelle Einschraenkungen
 
@@ -72,4 +79,4 @@ KatanaRecomp besitzt einen durchgaengigen Prototyp-Pfad von Raw- und ELF32-SH-Ei
 - keine FPU
 - kein Dreamcast-Speicherbus oder MMIO
 - keine Plattformhardware
-- indirekte Spruenge und Calls nur eingeschraenkt aufgeloest
+- nur einfache konstante indirekte Ziele und bekannte begrenzte Jump Tables werden aufgeloest

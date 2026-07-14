@@ -87,6 +87,20 @@ int main() {
         "Ungelesene Kontrollflussstelle besitzt keinen Grund oder Nutzerhinweis."
     );
 
+    auto separated_lines = katana::sh4::disassemble(
+        std::array<std::uint8_t, 2>{0x08u, 0xE1u}, 0u
+    );
+    const auto separated_jump = katana::sh4::disassemble(
+        std::array<std::uint8_t, 2>{0x2Bu, 0x41u}, 0x100u
+    );
+    separated_lines.push_back(separated_jump[0]);
+    const auto separated = katana::analysis::analyze_register_values(separated_lines);
+    require(
+        separated.indirect_control_flow.size() == 1u
+            && !separated.indirect_control_flow[0].value.has_value(),
+        "Registerkonstante wurde ueber eine nicht zusammenhaengende Codeluecke getragen."
+    );
+
     std::cout << "KR-1801 Lokale Konstantenpropagation erfolgreich.\n";
     return EXIT_SUCCESS;
 }

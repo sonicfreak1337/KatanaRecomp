@@ -442,7 +442,7 @@ Abhaengigkeiten: KR-1606
 
 Abhaengigkeiten: KR-1803, KR-1804
 
-### [ ] KR-1807 - v0.18 Release-Gate
+### [x] KR-1807 - v0.18 Release-Gate
 
 Abhaengigkeiten: KR-1801 bis KR-1806
 
