@@ -274,13 +274,12 @@ Task: KR-XXXX
 ## Aktuell empfohlener Einstieg
 
 ```text
-KR-2204 - BIOS- und Flash-Abstraktionen
+KR-2205 - MMIO-Handler
 ```
 
 Danach:
 
 ```text
-KR-2205 - MMIO-Handler
 KR-2206 - Ausrichtung, Fehler und Watchpoints
 KR-2207 - v0.22 Release-Gate
 ```

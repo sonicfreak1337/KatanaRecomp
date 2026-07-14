@@ -17,6 +17,7 @@ struct PendingMapping {
     std::string name;
     std::uint32_t base_address = 0u;
     std::shared_ptr<MemoryDevice> device;
+    MemoryRegionAccess access = MemoryRegionAccess::ReadWrite;
 };
 
 class Vram32BitMemoryDevice final : public MemoryDevice {
@@ -156,9 +157,55 @@ void map_all(
         memory.map_region(
             std::move(mapping.name),
             mapping.base_address,
-            std::move(mapping.device)
+            std::move(mapping.device),
+            mapping.access
         );
     }
+}
+
+std::shared_ptr<LinearMemoryDevice> make_firmware_device(
+    const std::size_t expected_size,
+    const std::span<const std::uint8_t> image,
+    const std::string& description
+) {
+    if (!image.empty() && image.size() != expected_size) {
+        throw std::invalid_argument(
+            description + " muss leer oder exakt " +
+            std::to_string(expected_size) + " Byte gross sein."
+        );
+    }
+
+    auto device = std::make_shared<LinearMemoryDevice>(expected_size);
+    const auto fill_value = static_cast<std::uint8_t>(0xFFu);
+
+    for (std::size_t index = 0u; index < expected_size; ++index) {
+        const auto value = image.empty() ? fill_value : image[index];
+        device->write_u8(static_cast<std::uint32_t>(index), value);
+    }
+
+    return device;
+}
+
+std::vector<PendingMapping> make_direct_mappings(
+    const std::string& name_prefix,
+    const std::uint32_t physical_base,
+    const std::shared_ptr<MemoryDevice>& device,
+    const MemoryRegionAccess access
+) {
+    std::vector<PendingMapping> mappings;
+    mappings.reserve(dreamcast_direct_segment_bases.size());
+
+    for (const auto segment_base : dreamcast_direct_segment_bases) {
+        const auto base = segment_base + physical_base;
+        mappings.push_back(PendingMapping{
+            name_prefix + hex_address(base),
+            base,
+            device,
+            access
+        });
+    }
+
+    return mappings;
 }
 
 } // namespace
@@ -242,6 +289,50 @@ map_dreamcast_aica_ram(Memory& memory) {
 
     map_all(memory, std::move(mappings));
     return aica_ram;
+}
+
+std::shared_ptr<LinearMemoryDevice>
+map_dreamcast_bios(
+    Memory& memory,
+    const std::span<const std::uint8_t> image
+) {
+    auto bios = make_firmware_device(
+        dreamcast_bios_size,
+        image,
+        "Das Dreamcast-BIOS-Abbild"
+    );
+
+    auto mappings = make_direct_mappings(
+        "dreamcast-bios-",
+        dreamcast_bios_physical_base,
+        bios,
+        MemoryRegionAccess::ReadOnly
+    );
+
+    map_all(memory, std::move(mappings));
+    return bios;
+}
+
+std::shared_ptr<LinearMemoryDevice>
+map_dreamcast_flash(
+    Memory& memory,
+    const std::span<const std::uint8_t> image
+) {
+    auto flash = make_firmware_device(
+        dreamcast_flash_size,
+        image,
+        "Das Dreamcast-Flash-Abbild"
+    );
+
+    auto mappings = make_direct_mappings(
+        "dreamcast-flash-",
+        dreamcast_flash_physical_base,
+        flash,
+        MemoryRegionAccess::ReadWrite
+    );
+
+    map_all(memory, std::move(mappings));
+    return flash;
 }
 
 } // namespace katana::runtime

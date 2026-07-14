@@ -6,6 +6,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <span>
 
 namespace katana::runtime {
 
@@ -13,6 +14,10 @@ inline constexpr std::size_t dreamcast_main_ram_size = 0x01000000u;
 inline constexpr std::size_t dreamcast_main_ram_mirrors_per_area = 4u;
 inline constexpr std::size_t dreamcast_vram_size = 0x00800000u;
 inline constexpr std::size_t dreamcast_aica_ram_size = 0x00200000u;
+inline constexpr std::size_t dreamcast_bios_size = 0x00200000u;
+inline constexpr std::size_t dreamcast_flash_size = 0x00020000u;
+inline constexpr std::uint32_t dreamcast_bios_physical_base = 0x00000000u;
+inline constexpr std::uint32_t dreamcast_flash_physical_base = 0x00200000u;
 
 inline constexpr std::array<std::uint32_t, 7>
     dreamcast_direct_segment_bases = {
@@ -75,6 +80,10 @@ inline constexpr std::size_t dreamcast_vram_alias_count =
 inline constexpr std::size_t dreamcast_aica_ram_alias_count =
     dreamcast_direct_segment_bases.size() *
     dreamcast_aica_ram_physical_bases.size();
+inline constexpr std::size_t dreamcast_bios_alias_count =
+    dreamcast_direct_segment_bases.size();
+inline constexpr std::size_t dreamcast_flash_alias_count =
+    dreamcast_direct_segment_bases.size();
 
 [[nodiscard]] std::shared_ptr<LinearMemoryDevice>
 map_dreamcast_main_ram(Memory& memory);
@@ -84,5 +93,17 @@ map_dreamcast_vram(Memory& memory);
 
 [[nodiscard]] std::shared_ptr<LinearMemoryDevice>
 map_dreamcast_aica_ram(Memory& memory);
+
+[[nodiscard]] std::shared_ptr<LinearMemoryDevice>
+map_dreamcast_bios(
+    Memory& memory,
+    std::span<const std::uint8_t> image = {}
+);
+
+[[nodiscard]] std::shared_ptr<LinearMemoryDevice>
+map_dreamcast_flash(
+    Memory& memory,
+    std::span<const std::uint8_t> image = {}
+);
 
 } // namespace katana::runtime

@@ -116,7 +116,30 @@ wurden unabhaengig gegen Flycast (`core/hw/sh4/sh4_mem.cpp` und
 `core/hw/pvr/pvr_mem.cpp`) gegengeprueft; es wurde kein Referenzcode
 uebernommen.
 
-BIOS, Flash und MMIO bleiben getrennte Folgetasks der v0.22-Roadmap.
+## Dreamcast-BIOS und Flash
+
+KR-2204 fuehrt `map_dreamcast_bios` und `map_dreamcast_flash` ein. Beide
+Funktionen akzeptieren optional ein exakt grosses Byte-Abbild, kopieren es in
+ein eigenes Runtime-Backing und registrieren sieben direkte U0/P0-, P1-, P2-
+und derzeitige P3-No-MMU-Aliase. P4 bleibt ausgespart.
+
+Das BIOS umfasst 2 MiB ab physisch `0x00000000`. Alle Busregionen sind
+read-only; Schreibversuche schlagen sichtbar fehl. Das Flash umfasst 128 KiB
+ab physisch `0x00200000` und bleibt als getrenntes beschreibbares Backing
+erhalten. Ohne bereitgestelltes Abbild werden beide Geraete deterministisch
+mit `0xFF` initialisiert. Ein Abbild mit falscher Groesse wird abgelehnt, bevor
+eine Region registriert wird.
+
+Die Flash-Abstraktion modelliert in KR-2204 bewusst noch kein herstellerspezifisches
+Programmier-, Loesch- oder Kommando-Protokoll. Buszugriffe schreiben direkt in
+das Flash-Backing; eine spaetere Plattformintegration kann darauf einen
+zustandsbehafteten Handler aufsetzen.
+
+Adresslayout und Zugriffsrechte wurden unabhaengig gegen Flycast
+(`core/hw/holly/sb_mem.cpp`) gegengeprueft. Es wurden weder Referenzcode noch
+BIOS-, Flash- oder andere geschuetzte Binaerdaten uebernommen.
+
+MMIO bleibt der naechste getrennte Task der v0.22-Roadmap.
 
 ## Deterministischer CPU-Reset
 
@@ -142,4 +165,4 @@ spaetere Plattformkonfiguration.
 ## Weitere Runtime-Grundlage
 
 - sichtbare Fehlerpfade fuer ungeloeste Calls und Spruenge
-- Runtime-Tests fuer CPU-Zustand, Reset, Speicherbus sowie Dreamcast-RAM-, VRAM- und AICA-RAM-Aliase
+- Runtime-Tests fuer CPU-Zustand, Reset, Speicherbus sowie Dreamcast-RAM-, VRAM-, AICA-RAM-, BIOS- und Flash-Aliase

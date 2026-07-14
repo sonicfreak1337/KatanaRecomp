@@ -602,9 +602,28 @@ Akzeptanz:
 - fehlgeschlagene Konfigurationen hinterlassen keine Teilabbildungen
 - Flycast wurde nur zum unabhaengigen Abgleich von Adresslayout und beobachtbarem Bankverhalten verwendet
 
-### [ ] KR-2204 - BIOS- und Flash-Abstraktionen
+### [x] KR-2204 - BIOS- und Flash-Abstraktionen
 
 Abhaengigkeiten: KR-2201
+
+Umfang:
+
+- 2 MiB Dreamcast-BIOS mit sieben direkten read-only Aliasfenstern
+- 128 KiB Dreamcast-Flash mit sieben direkten beschreibbaren Aliasfenstern
+- optionale, exakt grosse BIOS- und Flash-Abbilder ohne proprietaere Fixtures
+- deterministische `0xFF`-Initialisierung ohne bereitgestelltes Abbild
+- atomare Ablehnung falscher Abbildgroessen und kollidierender Konfigurationen
+
+Akzeptanz:
+
+- alle BIOS-Aliase lesen dasselbe Backing und lehnen Bus-Schreibzugriffe ab
+- alle Flash-Aliase lesen und schreiben dasselbe persistente Backing
+- erstes und letztes Byte sowie Little-Endian-Mehrbytezugriffe sind abgedeckt
+- P4 enthaelt weder BIOS noch Flash
+- RAM, VRAM, AICA-RAM, BIOS und Flash lassen sich gemeinsam abbilden
+- fehlgeschlagene Konfigurationen hinterlassen keine Teilabbildungen
+- Flycast wurde nur zum unabhaengigen Abgleich von Adresslayout und Zugriffsrechten verwendet
+- keine BIOS-, Flash- oder anderen geschuetzten Binaerdaten wurden hinzugefuegt
 
 ### [ ] KR-2205 - MMIO-Handler
 
