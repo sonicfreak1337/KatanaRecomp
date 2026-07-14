@@ -466,7 +466,7 @@ Abhaengigkeiten: KR-1901
 
 Abhaengigkeiten: KR-1901
 
-### [ ] KR-1905 - IR-Verifier
+### [x] KR-1905 - IR-Verifier
 
 Abhaengigkeiten: KR-1901 bis KR-1904
 

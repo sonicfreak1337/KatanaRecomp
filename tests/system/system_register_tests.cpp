@@ -34,6 +34,12 @@ katana::ir::Instruction transfer(
     instruction.source_address = address;
     instruction.operation = operation;
     instruction.special_register = special_register;
+    instruction.widths = katana::ir::operation_operand_widths(operation);
+    instruction.memory_effects = katana::ir::operation_memory_effects(operation);
+    instruction.status_effects = katana::ir::instruction_status_effects(
+        operation,
+        special_register
+    );
     if (
         operation == Operation::LoadSpecialRegister ||
         operation == Operation::LoadSpecialRegisterPostIncrement
@@ -55,6 +61,11 @@ void append_function(
         entry + static_cast<std::uint32_t>(instructions.size() * 2u);
     return_instruction.original_opcode = 0x000Bu;
     return_instruction.operation = Operation::Return;
+    return_instruction.widths = katana::ir::operation_operand_widths(Operation::Return);
+    return_instruction.memory_effects =
+        katana::ir::operation_memory_effects(Operation::Return);
+    return_instruction.status_effects =
+        katana::ir::instruction_status_effects(Operation::Return);
     instructions.push_back(return_instruction);
 
     katana::ir::BasicBlock block;

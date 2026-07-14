@@ -29,6 +29,8 @@ struct OperandWidths {
     // Memory is the transfer width; address is the effective-address width.
     OperandWidth memory = OperandWidth::None;
     OperandWidth address = OperandWidth::None;
+
+    bool operator==(const OperandWidths&) const = default;
 };
 
 enum class StatusRegisterBit : std::uint8_t {
@@ -43,6 +45,8 @@ enum class StatusRegisterBit : std::uint8_t {
 struct StatusRegisterEffects {
     StatusRegisterBit reads = StatusRegisterBit::None;
     StatusRegisterBit writes = StatusRegisterBit::None;
+
+    bool operator==(const StatusRegisterEffects&) const = default;
 };
 
 enum class MemoryAccessKind : std::uint8_t {
@@ -63,6 +67,8 @@ struct MemoryEffects {
     std::uint8_t access_count = 0u;
     AddressUpdateKind address_update = AddressUpdateKind::None;
     std::uint8_t updated_register_count = 0u;
+
+    bool operator==(const MemoryEffects&) const = default;
 };
 
 enum class DelaySlotRole : std::uint8_t {
@@ -74,6 +80,8 @@ enum class DelaySlotRole : std::uint8_t {
 struct DelaySlotRelation {
     DelaySlotRole role = DelaySlotRole::None;
     std::optional<std::uint32_t> counterpart_address;
+
+    bool operator==(const DelaySlotRelation&) const = default;
 };
 
 enum class SpecialRegister {

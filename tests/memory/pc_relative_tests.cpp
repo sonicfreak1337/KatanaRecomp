@@ -42,6 +42,9 @@ void append_synthetic_function(
     katana::ir::Instruction access;
     access.source_address = entry;
     access.operation = operation;
+    access.widths = katana::ir::operation_operand_widths(operation);
+    access.memory_effects = katana::ir::operation_memory_effects(operation);
+    access.status_effects = katana::ir::instruction_status_effects(operation);
     access.destination_register = destination;
     access.effective_address = effective_address;
 
@@ -49,6 +52,15 @@ void append_synthetic_function(
     return_instruction.source_address = entry + 2u;
     return_instruction.original_opcode = 0x000Bu;
     return_instruction.operation = katana::ir::Operation::Return;
+    return_instruction.widths = katana::ir::operation_operand_widths(
+        katana::ir::Operation::Return
+    );
+    return_instruction.memory_effects = katana::ir::operation_memory_effects(
+        katana::ir::Operation::Return
+    );
+    return_instruction.status_effects = katana::ir::instruction_status_effects(
+        katana::ir::Operation::Return
+    );
 
     katana::ir::BasicBlock block;
     block.start_address = entry;

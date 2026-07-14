@@ -61,3 +61,21 @@ passen.
 Damit ist die Ausfuehrungsreihenfolge nicht mehr aus zwei lose gekoppelten Markern
 zu erraten. Fehlende, verwaiste oder widerspruechliche Beziehungen koennen vor dem
 Codegenerator vom IR-Verifier abgelehnt werden.
+
+## Verifikation
+
+`verify_function` prueft jede Funktion unabhaengig und liefert deterministisch nach
+Adresse und Meldung sortierte Diagnosen. Geprueft werden mindestens:
+
+- vorhandene und eindeutige Bloecke und Instruktionsadressen
+- ein zum Funktionseintritt passender Startblock
+- ausgerichtete Instruktionen und Register aus R0 bis R15
+- kanonische Operandbreiten sowie Status- und Speichereffekte
+- vollstaendige direkte Kontrollflussziele und vorhandene Blocknachfolger
+- gegenseitig konsistente Delay-Slot-Beziehungen und Blockterminale
+
+`require_valid_function` verdichtet die erste Diagnose zu einem Fehler mit Funktions-
+und Instruktionsadresse. `emit_cpp_program` ruft diese Pruefung fuer jede Funktion
+auf, bevor irgendein C++-Text erzeugt wird. Tests, die IR absichtlich von Hand
+aufbauen, muessen daher dieselben expliziten Metadaten wie das normale Lowering
+setzen.

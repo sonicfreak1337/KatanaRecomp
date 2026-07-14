@@ -1,6 +1,7 @@
 #include "katana/analysis/function_analysis.hpp"
 #include "katana/codegen/cpp_emitter.hpp"
 #include "katana/ir/lower.hpp"
+#include "katana/ir/verifier.hpp"
 #include "katana/sh4/decoder.hpp"
 #include "katana/sh4/disassembler.hpp"
 
@@ -101,7 +102,7 @@ int main() {
         "OR Immediate muss ohne Vorzeichenerweiterung dekodiert werden."
     );
 
-    constexpr std::array<std::uint8_t, 24> bytes = {
+    constexpr std::array<std::uint8_t, 26> bytes = {
         0xF0, 0xE1,
         0x0F, 0xE2,
         0x29, 0x21,
@@ -113,7 +114,8 @@ int main() {
         0x0F, 0xC9,
         0x80, 0xCB,
         0xFF, 0xCA,
-        0x0B, 0x00
+        0x0B, 0x00,
+        0x09, 0x00
     };
 
     const auto lines = katana::sh4::disassemble(
@@ -146,7 +148,7 @@ int main() {
         program[0].blocks[0].instructions;
 
     require(
-        instructions.size() == 12u,
+        instructions.size() == 13u,
         "Der IR-Block besitzt eine falsche Instruktionsanzahl."
     );
 
@@ -174,6 +176,12 @@ int main() {
         instructions[10].operation == Operation::XorImmediate,
         "XOR Immediate wurde nicht korrekt in IR abgesenkt."
     );
+
+    const auto verification = katana::ir::verify_function(program[0]);
+    if (!verification.empty()) {
+        std::cerr << verification.front().message << '\n';
+    }
+    require(verification.empty(), "Logiktest erzeugt ungueltige Katana-IR.");
 
     const auto source =
         katana::codegen::emit_cpp_program(

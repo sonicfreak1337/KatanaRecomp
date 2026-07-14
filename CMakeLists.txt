@@ -57,6 +57,7 @@ add_library(katana_core STATIC
     src/ir/memory_effect.cpp
     src/ir/operand_width.cpp
     src/ir/status_effect.cpp
+    src/ir/verifier.cpp
     src/codegen/cpp_emitter.cpp
 )
 
@@ -439,6 +440,18 @@ katana_enable_warnings(katana-ir-memory-effect-tests)
 add_test(
     NAME katana-ir-memory-effect-tests
     COMMAND katana-ir-memory-effect-tests
+)
+
+add_executable(katana-ir-verifier-tests
+    tests/ir/verifier_tests.cpp
+)
+
+target_link_libraries(katana-ir-verifier-tests PRIVATE katana_core)
+katana_enable_warnings(katana-ir-verifier-tests)
+
+add_test(
+    NAME katana-ir-verifier-tests
+    COMMAND katana-ir-verifier-tests
 )
 
 add_executable(katana-cpp-emitter-tests

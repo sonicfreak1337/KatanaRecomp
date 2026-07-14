@@ -1,4 +1,5 @@
 #include "katana/codegen/cpp_emitter.hpp"
+#include "katana/ir/verifier.hpp"
 
 #include "katana/ir/ir.hpp"
 
@@ -2558,6 +2559,10 @@ std::string emit_cpp_program(
         throw std::invalid_argument(
             "Es wurden keine IR-Funktionen uebergeben."
         );
+    }
+
+    for (const auto& function : functions) {
+        katana::ir::require_valid_function(function);
     }
 
     std::unordered_set<std::uint32_t> known_functions;

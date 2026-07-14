@@ -1,6 +1,7 @@
 #include "katana/analysis/function_analysis.hpp"
 #include "katana/codegen/cpp_emitter.hpp"
 #include "katana/ir/lower.hpp"
+#include "katana/ir/verifier.hpp"
 #include "katana/sh4/decoder.hpp"
 #include "katana/sh4/disassembler.hpp"
 
@@ -75,13 +76,14 @@ int main() {
         "NOT besitzt falschen Disassembly-Text."
     );
 
-    constexpr std::array<std::uint8_t, 12> bytes = {
+    constexpr std::array<std::uint8_t, 14> bytes = {
         0x05, 0xE1,
         0x02, 0xE2,
         0x28, 0x31,
         0x1B, 0x63,
         0x27, 0x64,
-        0x0B, 0x00
+        0x0B, 0x00,
+        0x09, 0x00
     };
 
     const auto lines = katana::sh4::disassemble(
@@ -114,7 +116,7 @@ int main() {
         program[0].blocks[0].instructions;
 
     require(
-        instructions.size() == 6u,
+        instructions.size() == 7u,
         "Der IR-Block besitzt eine falsche Instruktionsanzahl."
     );
 
@@ -130,6 +132,12 @@ int main() {
         instructions[4].operation == Operation::NotRegister,
         "NOT wurde nicht korrekt in IR abgesenkt."
     );
+
+    const auto verification = katana::ir::verify_function(program[0]);
+    if (!verification.empty()) {
+        std::cerr << verification.front().message << '\n';
+    }
+    require(verification.empty(), "ALU-Test erzeugt ungueltige Katana-IR.");
 
     const auto source =
         katana::codegen::emit_cpp_program(
