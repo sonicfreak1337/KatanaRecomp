@@ -145,8 +145,10 @@ int main() {
         );
 
     require(
-        source.find("std::uint32_t macl = 0;") != std::string::npos,
-        "MACL fehlt im generierten CPU-Zustand."
+        source.find(
+            "using CpuState = katana::runtime::CpuState;"
+        ) != std::string::npos,
+        "Der generierte MUL-Code bindet den zentralen CPU-Zustand nicht ein."
     );
 
     require(

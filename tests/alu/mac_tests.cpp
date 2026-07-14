@@ -165,8 +165,10 @@ int main() {
         );
 
     require(
-        source.find("bool s = false;") != std::string::npos,
-        "Das S-Bit fehlt im generierten CPU-Zustand."
+        source.find(
+            "using CpuState = katana::runtime::CpuState;"
+        ) != std::string::npos,
+        "Der generierte MAC-Code bindet den zentralen CPU-Zustand nicht ein."
     );
 
     require(

@@ -134,8 +134,10 @@ int main() {
         );
 
     require(
-        source.find("std::uint32_t mach = 0;") != std::string::npos,
-        "MACH fehlt im generierten CPU-Zustand."
+        source.find(
+            "using CpuState = katana::runtime::CpuState;"
+        ) != std::string::npos,
+        "Der generierte DMUL-Code bindet den zentralen CPU-Zustand nicht ein."
     );
 
     require(

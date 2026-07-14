@@ -32,6 +32,20 @@ function(katana_enable_warnings target)
     endif()
 endfunction()
 
+add_library(katana_runtime STATIC
+    src/runtime/runtime.cpp
+)
+
+add_library(KatanaRecomp::runtime ALIAS katana_runtime)
+
+target_include_directories(
+    katana_runtime
+    PUBLIC
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+
+katana_enable_warnings(katana_runtime)
+
 add_library(katana_core STATIC
     src/decoder/decoder.cpp
     src/decoder/decoder_validation.cpp
@@ -85,6 +99,18 @@ target_link_libraries(
 katana_enable_warnings(katana-recomp)
 
 enable_testing()
+
+add_executable(katana-runtime-tests
+    tests/runtime/runtime_tests.cpp
+)
+
+target_link_libraries(katana-runtime-tests PRIVATE katana_runtime)
+katana_enable_warnings(katana-runtime-tests)
+
+add_test(
+    NAME katana-runtime-tests
+    COMMAND katana-runtime-tests
+)
 
 add_executable(katana-decoder-tests
     tests/decoder/decoder_tests.cpp
@@ -514,6 +540,7 @@ add_test(
         -DCXX_COMPILER=${CMAKE_CXX_COMPILER}
         -DCXX_COMPILER_ID=${CMAKE_CXX_COMPILER_ID}
         -DEXECUTABLE_SUFFIX=${CMAKE_EXECUTABLE_SUFFIX}
+        -DKATANA_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}
         -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/cmake/check_optimization_cli.cmake
 )
 
@@ -2444,3 +2471,18 @@ add_test(
     NAME katana-generated-privileged-control-tests
     COMMAND katana-generated-privileged-control-tests
 )
+get_property(
+    KATANA_BUILD_TARGETS
+    DIRECTORY
+    PROPERTY BUILDSYSTEM_TARGETS
+)
+
+foreach(KATANA_BUILD_TARGET IN LISTS KATANA_BUILD_TARGETS)
+    if(KATANA_BUILD_TARGET MATCHES "^katana-generated-")
+        target_link_libraries(
+            ${KATANA_BUILD_TARGET}
+            PRIVATE
+                katana_runtime
+        )
+    endif()
+endforeach()

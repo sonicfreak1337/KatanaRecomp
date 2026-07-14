@@ -29,7 +29,7 @@ SH-4-Binaerdaten
     -> semantischer Laufzeittest
 `
 
-Der aktuelle Teststand umfasst **79 automatische Tests**.
+Der aktuelle Teststand umfasst **81 automatische Tests**.
 
 Der v0.15-Decoder verwendet eine zentrale Metadatenquelle fuer alle implementierten Opcode-Masken, Operandenformate, Kontrollfluss- und Privileginformationen. `katana-recomp isa-report` berichtet deterministisch ueber den gesamten 16-Bit-Opcode-Raum; Kollisions-, Spezifikations- und Fuzztests sichern die Regeln ab.
 
@@ -46,6 +46,11 @@ Propagation, Dead-Code-Elimination, CFG- und Load-Store-Vereinfachungen ein.
 Alle Paesse bleiben einzeln schaltbar, verifizieren ihre IR-Grenzen und erhalten
 sichtbare CPU- und Speichereffekte. `emit-cpp --no-opt` deaktiviert die Pipeline;
 `--dump-ir` schreibt deterministische Vorher-/Nachher-Dumps.
+
+KR-2101 beginnt die v0.21-Runtime-Grundlage: Speicher, CPU-Zustand und sichtbare
+Fehlerpfade liegen in `KatanaRecomp::runtime`. Generierter C++-Code enthaelt nur
+noch die SH-4-Programmlogik, bindet `katana/runtime/runtime.hpp` ein und prueft
+die Runtime-ABI beim Kompilieren. Details stehen in `docs/RUNTIME.md`.
 
 ## Implementierte SH-4-Instruktionen
 

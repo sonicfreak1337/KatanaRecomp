@@ -6,12 +6,12 @@ Aktiver Meilenstein: v0.21.0 - Runtime und CPU-Zustand
 
 ## Zusammenfassung
 
-KatanaRecomp besitzt einen durchgaengigen Prototyp-Pfad von Raw- und ELF32-SH-Eingaben ueber ein segmentiertes Executable Image bis zu generiertem, kompiliertem und ausgefuehrtem C++.
+KatanaRecomp besitzt einen durchgaengigen Prototyp-Pfad von Raw- und ELF32-SH-Eingaben ueber ein segmentiertes Executable Image bis zu generiertem, gegen die zentrale Runtime-Bibliothek gelinktem und ausgefuehrtem C++.
 
 ## Teststatus
 
 ```text
-100% tests passed out of 80
+100% tests passed out of 81
 ```
 
 ## Fertiggestellte Roadmap-Tasks
@@ -82,10 +82,11 @@ KatanaRecomp besitzt einen durchgaengigen Prototyp-Pfad von Raw- und ELF32-SH-Ei
 - [x] KR-2005 - Load-Store-Vereinfachung
 - [x] KR-2006 - Pass-Pipeline und Debug-Schalter
 - [x] KR-2007 - v0.20.0 Release-Gate
+- [x] KR-2101 - Runtime aus generiertem Code auslagern
 
 ## Naechster Roadmap-Task
 
-- [ ] KR-2101 - Runtime aus generiertem Code auslagern
+- [ ] KR-2102 - Vollstaendigen CPU-Zustand zentralisieren
 
 ## Aktuelle Einschraenkungen
 

@@ -196,8 +196,10 @@ int main(const int argc, char* argv[]) {
         base_address
     );
     require(
-        source.find("std::uint32_t gbr = 0;") != std::string::npos,
-        "Der generierte CPU-Zustand besitzt kein GBR."
+        source.find(
+            "using CpuState = katana::runtime::CpuState;"
+        ) != std::string::npos,
+        "Der generierte GBR-Code bindet den zentralen CPU-Zustand nicht ein."
     );
     require(
         source.find("cpu.gbr + 255u") != std::string::npos &&

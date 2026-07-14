@@ -150,9 +150,10 @@ int main() {
         );
 
     require(
-        source.find("bool q = false;") != std::string::npos &&
-        source.find("bool m = false;") != std::string::npos,
-        "Q- oder M-Bit fehlen im generierten CPU-Zustand."
+        source.find(
+            "using CpuState = katana::runtime::CpuState;"
+        ) != std::string::npos,
+        "Der generierte Divisionscode bindet den zentralen CPU-Zustand nicht ein."
     );
 
     require(

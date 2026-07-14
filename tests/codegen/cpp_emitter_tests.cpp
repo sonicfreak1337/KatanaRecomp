@@ -77,8 +77,27 @@ int main() {
         );
 
     require(
-        source.find("struct CpuState") != std::string::npos,
-        "Der generierte Runtime-State fehlt."
+        source.find("#include \"katana/runtime/runtime.hpp\"") !=
+            std::string::npos,
+        "Der generierte Code bindet die zentrale Runtime nicht ein."
+    );
+    require(
+        source.find(
+            "using CpuState = katana::runtime::CpuState;"
+        ) != std::string::npos &&
+        source.find(
+            "using Memory = katana::runtime::Memory;"
+        ) != std::string::npos,
+        "Der generierte Kompatibilitaets-Namespace fehlt."
+    );
+    require(
+        source.find("struct CpuState") == std::string::npos &&
+        source.find("class Memory") == std::string::npos,
+        "Der generierte Code enthaelt weiterhin eine Runtime-Implementierung."
+    );
+    require(
+        source.find("required_runtime_abi = 1u") != std::string::npos,
+        "Der generierte Code prueft die Runtime-ABI nicht."
     );
 
     require(

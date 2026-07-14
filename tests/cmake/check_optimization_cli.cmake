@@ -1,6 +1,9 @@
 if(NOT DEFINED KATANA_RECOMP OR NOT DEFINED FIXTURE OR NOT DEFINED OUTPUT_DIR
-    OR NOT DEFINED CXX_COMPILER OR NOT DEFINED CXX_COMPILER_ID)
-    message(FATAL_ERROR "KatanaRecomp, Fixture, Compiler oder Ausgabeverzeichnis fehlt.")
+    OR NOT DEFINED CXX_COMPILER OR NOT DEFINED CXX_COMPILER_ID
+    OR NOT DEFINED KATANA_SOURCE_DIR)
+    message(FATAL_ERROR
+        "KatanaRecomp, Fixture, Compiler, Quellpfad oder Ausgabeverzeichnis fehlt."
+    )
 endif()
 
 file(MAKE_DIRECTORY "${OUTPUT_DIR}")
@@ -61,7 +64,15 @@ foreach(variant IN ITEMS optimized unoptimized)
     )
     if(CXX_COMPILER_ID STREQUAL "MSVC")
         execute_process(
-            COMMAND "${CXX_COMPILER}" /nologo /std:c++20 /EHsc "${harness}"
+            COMMAND
+                "${CXX_COMPILER}"
+                /nologo
+                /std:c++20
+                /EHsc
+                /utf-8
+                "/I${KATANA_SOURCE_DIR}/include"
+                "${harness}"
+                "${KATANA_SOURCE_DIR}/src/runtime/runtime.cpp"
                 "/Fe${executable}"
             RESULT_VARIABLE compile_result
             OUTPUT_VARIABLE compile_output
@@ -69,7 +80,14 @@ foreach(variant IN ITEMS optimized unoptimized)
         )
     else()
         execute_process(
-            COMMAND "${CXX_COMPILER}" -std=c++20 "${harness}" -o "${executable}"
+            COMMAND
+                "${CXX_COMPILER}"
+                -std=c++20
+                "-I${KATANA_SOURCE_DIR}/include"
+                "${harness}"
+                "${KATANA_SOURCE_DIR}/src/runtime/runtime.cpp"
+                -o
+                "${executable}"
             RESULT_VARIABLE compile_result
             OUTPUT_VARIABLE compile_output
             ERROR_VARIABLE compile_error
