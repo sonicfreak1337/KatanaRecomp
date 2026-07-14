@@ -43,3 +43,10 @@ Formen `function = ADRESSE`, `jump = STELLE ZIEL` und
 dezimal. Der Parser sortiert alle Hinweise numerisch und weist doppelte Stellen,
 unbekannte Felder sowie unbekannte Versionen zurueck. Overrides sind explizite
 Nutzerhinweise und werden in Berichten als solche gekennzeichnet.
+
+## Bericht
+
+Der Bericht trennt `Aufgeloest` und `Ungeloest` in stabiler Reihenfolge. Sichere
+Ziele nennen ihren Beweisgrund. Jede ungeloeste Stelle nennt ihren Ablehnungsgrund
+und zeigt die passende `jump`- oder `jump_table`-Zeile fuer eine Override-Datei.
+Eine teilweise gueltige Jump Table bleibt vollstaendig im ungeloesten Abschnitt.

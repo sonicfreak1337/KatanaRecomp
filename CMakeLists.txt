@@ -50,6 +50,7 @@ add_library(katana_core STATIC
     src/analysis/value_analysis.cpp
     src/analysis/jump_table_analysis.cpp
     src/analysis/analysis_overrides.cpp
+    src/analysis/control_flow_report.cpp
     src/ir/lower.cpp
     src/codegen/cpp_emitter.cpp
 )

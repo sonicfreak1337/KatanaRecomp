@@ -438,7 +438,7 @@ Abhaengigkeiten: KR-1802
 
 Abhaengigkeiten: KR-1606
 
-### [ ] KR-1806 - Bericht ungeloester Kontrollflussstellen
+### [x] KR-1806 - Bericht ungeloester Kontrollflussstellen
 
 Abhaengigkeiten: KR-1803, KR-1804
 

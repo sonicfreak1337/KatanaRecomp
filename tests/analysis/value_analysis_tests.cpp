@@ -1,4 +1,5 @@
 #include "katana/analysis/value_analysis.hpp"
+#include "katana/analysis/control_flow_report.hpp"
 #include "katana/sh4/disassembler.hpp"
 
 #include <array>
@@ -73,6 +74,17 @@ int main() {
         resolutions[1].status == katana::analysis::ResolutionStatus::Unresolved
             && resolutions[1].reason == "register-value-unknown",
         "Ein unbekanntes Registerziel wurde faelschlich aufgeloest."
+    );
+    const auto report = katana::analysis::format_indirect_control_flow_report(resolutions);
+    require(
+        report.find("Aufgeloest:") < report.find("Ungeloest:")
+            && report.find("0x00000008 [constant-register]") != std::string::npos,
+        "Aufgeloester Kontrollfluss fehlt im getrennten Bericht."
+    );
+    require(
+        report.find("[register-value-unknown]") != std::string::npos
+            && report.find("Hinweis: jump = 0x00000006 ZIEL") != std::string::npos,
+        "Ungelesene Kontrollflussstelle besitzt keinen Grund oder Nutzerhinweis."
     );
 
     std::cout << "KR-1801 Lokale Konstantenpropagation erfolgreich.\n";
