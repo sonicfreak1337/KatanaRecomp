@@ -9,10 +9,11 @@
 - KR-2203: `map_dreamcast_vram` registriert ein gemeinsames 8-MiB-Backing ueber lineare 64-Bit- und bankinterleavte 32-Bit-Zugriffsfenster; `map_dreamcast_aica_ram` bildet 2 MiB Sound-RAM in allen direkten Spiegelungen ab. Beide Konfigurationen pruefen Kollisionen vor der ersten Registrierung.
 - KR-2204: `map_dreamcast_bios` bildet ein optional bereitgestelltes 2-MiB-BIOS read-only ab; `map_dreamcast_flash` registriert ein separates beschreibbares 128-KiB-Flash-Backing. Fehlende Firmware wird deterministisch mit `0xFF` initialisiert, falsche Abbildgroessen und Kollisionen werden vor der ersten Registrierung abgelehnt.
 - KR-2205: `MmioMemoryDevice` leitet 8-, 16- und 32-Bit-Zugriffe als genau einen breitenbewussten Callback weiter. Bestehende bytebasierte Speichergeraete behalten einen zentralen Little-Endian-Fallback; fehlende Lese- oder Schreibhandler und ueberlaufende Zugriffe schlagen sichtbar fehl.
+- KR-2206: Der Speicherbus prueft standardmaessig die natuerliche Ausrichtung von Halfword- und Word-Zugriffen, meldet Adressfehler als strukturierte `MemoryAccessError`-Gruende und bietet optionale globale Traces sowie adress- und zugriffsgefilterte Watchpoints.
 
 ### Geaendert
 
-- Die Runtime-ABI steigt auf Version 4. Version 3 fuehrte den regionbasierten Bus ein; Version 4 erweitert `MemoryDevice` um breitenbewusste 16-/32-Bit-Zugriffe und ermoeglicht MMIO-Callbacks ohne mehrfache Byte-Nebenwirkungen. Der Standardkonstruktor behaelt die lineare 1-MiB-Kompatibilitaetsregion fuer synthetische Tests.
+- Die Runtime-ABI steigt auf Version 5. Version 3 fuehrte den regionbasierten Bus ein, Version 4 breitenbewusste MMIO-Zugriffe und Version 5 strukturierte Zugriffsfehler, konfigurierbare Ausrichtung sowie Trace- und Watchpoint-Zustand in `Memory`. Normale Busse sind standardmaessig strikt ausgerichtet; der historische lineare 1-MiB-Speicher in `CpuState` bleibt bis zur SH-4-Adressfehlerphase explizit permissiv.
 
 ## [0.21.0] - 2026-07-14
 

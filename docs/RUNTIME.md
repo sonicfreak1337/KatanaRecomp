@@ -6,13 +6,14 @@ ungeloesten Kontrollflusspfaden mehr.
 
 ## ABI
 
-Die aktuelle Runtime-ABI ist Version `4`.
+Die aktuelle Runtime-ABI ist Version `5`.
 
 Generierter Code enthaelt eine Compile-Time-Pruefung gegen diese Version. Eine
 abweichende Runtime wird beim Kompilieren sichtbar abgelehnt. ABI-Version 3
-kennzeichnete den Wechsel vom flachen Runtime-Speicher zum regionbasierten Bus.
-ABI-Version 4 erweitert die virtuelle Speichergeraete-API um breitenbewusste
-16- und 32-Bit-Zugriffe fuer MMIO-Nebenwirkungen.
+kennzeichnete den Wechsel zum regionbasierten Bus, ABI-Version 4 fuehrte
+breitenbewusste MMIO-Zugriffe ein. ABI-Version 5 erweitert `Memory` um
+Ausrichtungsrichtlinie, strukturierte Zugriffsfehler, Trace-Handler und
+Watchpoint-Zustand.
 
 ## CMake
 
@@ -62,9 +63,11 @@ Der Bus garantiert zentral:
 - keine Bereiche ausserhalb des 32-Bit-Adressraums
 - ein Zugriff bleibt vollstaendig innerhalb genau einer Region
 - Little-Endian-Verhalten fuer 16- und 32-Bit-Zugriffe
-- sichtbare Fehler fuer nicht zugeordnete Adressen
+- standardmaessig natuerliche 2- und 4-Byte-Ausrichtung
+- strukturierte Fehler fuer Ausrichtung, Adressraum, Regionen und Schreibschutz
 - optionalen Schreibschutz pro Region
 - auslesbare Regionsmetadaten fuer Tests und Diagnose
+- optionale globale Traces und gefilterte Watchpoints
 
 ## Dreamcast-Haupt-RAM und Spiegelungen
 
@@ -163,6 +166,41 @@ KR-2205 stellt bewusst nur die generische Handler-Infrastruktur bereit.
 Konkrete Dreamcast-System-, AICA-, GD-ROM-, Maple- oder PVR-Registermodelle
 gehoeren zu den spaeteren Plattformkomponenten.
 
+## Ausrichtung, Fehler und Watchpoints
+
+KR-2206 verwendet standardmaessig `MemoryAlignmentPolicy::Strict`. Bytezugriffe
+sind immer gueltig; Halfwords muessen auf zwei und Words auf vier Byte
+ausgerichtet sein. `MemoryAlignmentPolicy::Permissive` bleibt fuer explizite
+Diagnose- und Kompatibilitaetsfaelle verfuegbar.
+
+Der historische lineare 1-MiB-Speicher in `CpuState` wird vorerst explizit
+permissiv initialisiert. Die bestehenden generierten Semantik-Harnesses nutzen
+absichtlich teilweise unaligned Testadressen und besitzen noch keinen
+SH-4-Adressfehlerpfad. Echte oder explizit erzeugte `Memory`-Busse bleiben
+standardmaessig strikt; der Kompatibilitaetsmodus kann nach der Ausnahmephase
+durch eine architekturgerechte Fehlerbehandlung ersetzt werden.
+
+Busfehler werden als `MemoryAccessError` mit maschinenlesbaren Metadaten
+gemeldet:
+
+- `Misaligned`
+- `Unmapped`
+- `CrossRegion`
+- `ReadOnly`
+- `AddressOverflow`
+
+Jeder Fehler enthaelt Operation, Adresse, Zugriffsbreite und, sofern vorhanden,
+den Regionsnamen. Die Pruefung erfolgt vor dem Geraetezugriff und vor jeder
+Beobachterbenachrichtigung.
+
+Ein globaler Trace-Handler kann jeden erfolgreichen Read oder Write beobachten.
+Watchpoints filtern zusaetzlich nach Adressbereich und Zugriffstyp. Ereignisse
+enthalten Operation, absolute Adresse, Breite, Wert und den tatsaechlich
+aufgeloesten Regionsnamen, sodass auch Aliase unterscheidbar bleiben.
+Fehlgeschlagene Zugriffe erzeugen weder Trace- noch Watchpoint-Ereignisse.
+Observer werden vor dem Aufruf kopiert, damit sie Watchpoints waehrend eines
+Callbacks sicher entfernen oder veraendern koennen.
+
 ## Deterministischer CPU-Reset
 
 `katana::runtime::reset_cpu` stellt einen wiederholbaren CPU-Zustand her.
@@ -187,4 +225,4 @@ spaetere Plattformkonfiguration.
 ## Weitere Runtime-Grundlage
 
 - sichtbare Fehlerpfade fuer ungeloeste Calls und Spruenge
-- Runtime-Tests fuer CPU-Zustand, Reset, Speicherbus, breitenbewusste MMIO-Handler sowie Dreamcast-RAM-, VRAM-, AICA-RAM-, BIOS- und Flash-Aliase
+- Runtime-Tests fuer CPU-Zustand, Reset, Speicherbus, Ausrichtung, strukturierte Fehler, Traces, Watchpoints, breitenbewusste MMIO-Handler sowie Dreamcast-RAM-, VRAM-, AICA-RAM-, BIOS- und Flash-Aliase

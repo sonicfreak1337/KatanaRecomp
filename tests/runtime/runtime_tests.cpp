@@ -18,8 +18,8 @@ void require(const bool condition, const std::string& message) {
 
 int main() {
     require(
-        katana::runtime::abi_version == 4u,
-        "Die Runtime-ABI besitzt nicht Version 4."
+        katana::runtime::abi_version == 5u,
+        "Die Runtime-ABI besitzt nicht Version 5."
     );
 
     katana::runtime::Memory memory(16u);
@@ -37,17 +37,17 @@ int main() {
     );
 
     memory.write_u8(0u, 0x80u);
-    memory.write_u16(1u, 0x8000u);
+    memory.write_u16(2u, 0x8000u);
     require(
         memory.read_s8(0u) == 0xFFFFFF80u &&
-        memory.read_s16(1u) == 0xFFFF8000u,
+        memory.read_s16(2u) == 0xFFFF8000u,
         "Vorzeichenerweiterte Runtime-Loads sind falsch."
     );
 
     bool bounds_failed = false;
     try {
-        static_cast<void>(memory.read_u32(14u));
-    } catch (const std::out_of_range&) {
+        static_cast<void>(memory.read_u32(16u));
+    } catch (const katana::runtime::MemoryAccessError&) {
         bounds_failed = true;
     }
     require(

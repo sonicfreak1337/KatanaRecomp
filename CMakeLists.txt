@@ -180,6 +180,21 @@ add_test(
     COMMAND katana-mmio-memory-tests
 )
 
+add_executable(katana-memory-diagnostics-tests
+    tests/runtime/memory_diagnostics_tests.cpp
+)
+
+target_link_libraries(
+    katana-memory-diagnostics-tests
+    PRIVATE katana_runtime
+)
+katana_enable_warnings(katana-memory-diagnostics-tests)
+
+add_test(
+    NAME katana-memory-diagnostics-tests
+    COMMAND katana-memory-diagnostics-tests
+)
+
 add_executable(katana-cpu-state-tests
     tests/runtime/cpu_state_tests.cpp
 )

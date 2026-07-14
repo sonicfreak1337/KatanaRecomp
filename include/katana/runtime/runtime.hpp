@@ -8,7 +8,7 @@
 
 namespace katana::runtime {
 
-inline constexpr std::uint32_t abi_version = 4u;
+inline constexpr std::uint32_t abi_version = 5u;
 
 inline constexpr std::size_t general_register_count = 16u;
 inline constexpr std::size_t banked_register_count = 8u;
@@ -49,7 +49,10 @@ struct CpuState {
     bool m = false;
     bool trap_pending = false;
     bool sleeping = false;
-    Memory memory{};
+    Memory memory{
+        1024u * 1024u,
+        MemoryAlignmentPolicy::Permissive
+    };
 
     [[nodiscard]] std::uint32_t read_sr() const noexcept;
     void write_sr(std::uint32_t value) noexcept;

@@ -87,13 +87,13 @@ int main() {
         "Schreibzugriffe auf Read-only-Regionen werden nicht abgelehnt."
     );
     require(
-        throws<std::out_of_range>([&bus] {
+        throws<katana::runtime::MemoryAccessError>([&bus] {
             static_cast<void>(bus.read_u16(0x0000100Fu));
         }),
-        "Ein Zugriff darf nicht still ueber Regionsgrenzen laufen."
+        "Ein fehlplatzierter Mehrbytezugriff wird nicht sichtbar abgelehnt."
     );
     require(
-        throws<std::out_of_range>([&bus] {
+        throws<katana::runtime::MemoryAccessError>([&bus] {
             static_cast<void>(bus.read_u8(0x00003000u));
         }),
         "Nicht zugeordnete Adressen werden nicht sichtbar abgelehnt."

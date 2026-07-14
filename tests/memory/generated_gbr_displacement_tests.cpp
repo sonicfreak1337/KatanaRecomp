@@ -109,8 +109,14 @@ void run_invalid_access_case() {
     try {
         cpu.pc = 0x8C010030u;
         katana_generated::fn_8C010030(cpu);
-    } catch (const std::out_of_range&) {
-        threw = true;
+    } catch (const katana::runtime::MemoryAccessError& error) {
+        threw =
+            error.reason() ==
+                katana::runtime::MemoryAccessErrorReason::Unmapped &&
+            error.operation() ==
+                katana::runtime::MemoryAccessOperation::Write &&
+            error.width() ==
+                katana::runtime::MemoryAccessWidth::Byte;
     }
 
     require(threw, "Eine ungueltige GBR-Adresse muss fehlschlagen.");

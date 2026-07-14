@@ -274,11 +274,11 @@ Task: KR-XXXX
 ## Aktuell empfohlener Einstieg
 
 ```text
-KR-2206 - Ausrichtung, Fehler und Watchpoints
+KR-2207 - v0.22 Release-Gate
 ```
 
 Danach:
 
 ```text
-KR-2207 - v0.22 Release-Gate
+KR-2301 - SR-Felder und Interruptmasken
 ```

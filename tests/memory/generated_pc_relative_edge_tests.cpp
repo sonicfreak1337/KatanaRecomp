@@ -21,8 +21,12 @@ void run_invalid_access_case() {
     try {
         cpu.pc = 0x00000200u;
         katana_generated::fn_00000200(cpu);
-    } catch (const std::out_of_range&) {
-        threw = true;
+    } catch (const katana::runtime::MemoryAccessError& error) {
+        threw =
+            error.reason() ==
+                katana::runtime::MemoryAccessErrorReason::Unmapped &&
+            error.operation() ==
+                katana::runtime::MemoryAccessOperation::Read;
     }
     require(threw, "Ein PC-relativer Zugriff ausserhalb des Speichers muss fehlschlagen.");
     require(

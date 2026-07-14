@@ -94,8 +94,17 @@ void run_invalid_cases() {
         cpu.r[2] = 0u;
         cpu.pc = 0x260u;
         bool threw = false;
-        try { katana_generated::fn_00000260(cpu); }
-        catch (const std::out_of_range&) { threw = true; }
+        try {
+            katana_generated::fn_00000260(cpu);
+        } catch (const katana::runtime::MemoryAccessError& error) {
+            threw =
+                error.reason() ==
+                    katana::runtime::MemoryAccessErrorReason::Unmapped &&
+                error.operation() ==
+                    katana::runtime::MemoryAccessOperation::Write &&
+                error.width() ==
+                    katana::runtime::MemoryAccessWidth::Word;
+        }
         require(threw && cpu.r[2] == 0u, "Fehlgeschlagenes STS.L aendert Rn.");
     }
     {
@@ -104,8 +113,18 @@ void run_invalid_cases() {
         cpu.r[2] = 1024u * 1024u - 2u;
         cpu.pc = 0x270u;
         bool threw = false;
-        try { katana_generated::fn_00000270(cpu); }
-        catch (const std::out_of_range&) { threw = true; }
+        try {
+            katana_generated::fn_00000270(cpu);
+        } catch (const katana::runtime::MemoryAccessError& error) {
+            threw =
+                error.reason() ==
+                    katana::runtime::MemoryAccessErrorReason::CrossRegion &&
+                error.operation() ==
+                    katana::runtime::MemoryAccessOperation::Read &&
+                error.width() ==
+                    katana::runtime::MemoryAccessWidth::Word &&
+                error.region_name() == "legacy-linear-memory";
+        }
         require(
             threw && cpu.r[2] == 1024u * 1024u - 2u && cpu.pr == 0x12345678u,
             "Fehlgeschlagenes LDS.L aendert Registerzustand."

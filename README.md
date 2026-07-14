@@ -29,7 +29,7 @@ SH-4-Binaerdaten
     -> semantischer Laufzeittest
 `
 
-Der aktuelle Teststand umfasst **88 automatische Tests**.
+Der aktuelle Teststand umfasst **89 automatische Tests**.
 
 Der v0.15-Decoder verwendet eine zentrale Metadatenquelle fuer alle implementierten Opcode-Masken, Operandenformate, Kontrollfluss- und Privileginformationen. `katana-recomp isa-report` berichtet deterministisch ueber den gesamten 16-Bit-Opcode-Raum; Kollisions-, Spezifikations- und Fuzztests sichern die Regeln ab.
 
@@ -68,6 +68,8 @@ erganzt ein read-only 2-MiB-BIOS und ein getrenntes beschreibbares
 128-KiB-Flash-Backing mit optionaler Image-Initialisierung. KR-2205 fuehrt
 breitenbewusste MMIO-Handler ein, sodass ein 8-, 16- oder 32-Bit-Registerzugriff
 genau einen Callback mit lokalem Offset, Wert und Zugriffsbreite ausloest.
+KR-2206 ergaenzt strikte natuerliche Ausrichtung, strukturierte Speicherfehler
+sowie optionale Traces und gefilterte Watchpoints fuer erfolgreiche Zugriffe.
 
 ## Implementierte SH-4-Instruktionen
 

@@ -37,11 +37,17 @@ int main() {
     static_assert(katana::runtime::fpu_register_count == 16u);
 
     require(
-        katana::runtime::abi_version == 4u,
-        "Der vollstaendige CPU-Zustand erfordert Runtime-ABI 4."
+        katana::runtime::abi_version == 5u,
+        "Der vollstaendige CPU-Zustand erfordert Runtime-ABI 5."
     );
 
     CpuState cpu;
+
+    require(
+        cpu.memory.alignment_policy() ==
+            katana::runtime::MemoryAlignmentPolicy::Permissive,
+        "Der historische CpuState-Kompatibilitaetsspeicher muss permissiv bleiben."
+    );
 
     require(
         cpu.r.size() == katana::runtime::general_register_count &&

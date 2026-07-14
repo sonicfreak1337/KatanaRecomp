@@ -194,8 +194,14 @@ void run_invalid_access_cases() {
         bool threw = false;
         try {
             katana_generated::fn_8C010030(cpu);
-        } catch (const std::out_of_range&) {
-            threw = true;
+        } catch (const katana::runtime::MemoryAccessError& error) {
+            threw =
+                error.reason() ==
+                    katana::runtime::MemoryAccessErrorReason::Unmapped &&
+                error.operation() ==
+                    katana::runtime::MemoryAccessOperation::Write &&
+                error.width() ==
+                    katana::runtime::MemoryAccessWidth::Byte;
         }
 
         require(
@@ -217,8 +223,14 @@ void run_invalid_access_cases() {
         bool threw = false;
         try {
             katana_generated::fn_8C010048(cpu);
-        } catch (const std::out_of_range&) {
-            threw = true;
+        } catch (const katana::runtime::MemoryAccessError& error) {
+            threw =
+                error.reason() ==
+                    katana::runtime::MemoryAccessErrorReason::Unmapped &&
+                error.operation() ==
+                    katana::runtime::MemoryAccessOperation::Read &&
+                error.width() ==
+                    katana::runtime::MemoryAccessWidth::Byte;
         }
 
         require(

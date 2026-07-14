@@ -647,9 +647,32 @@ Akzeptanz:
 - bestehende bytebasierte Speichergeraete behalten Little-Endian-Mehrbytezugriffe
 - generierter Code prueft Runtime-ABI Version 4
 
-### [ ] KR-2206 - Ausrichtung, Fehler und Watchpoints
+### [x] KR-2206 - Ausrichtung, Fehler und Watchpoints
 
 Abhaengigkeiten: KR-2201
+
+Umfang:
+
+- standardmaessig strikte natuerliche Ausrichtung fuer 16- und 32-Bit-Zugriffe
+- expliziter permissiver Modus fuer Diagnose und Kompatibilitaet
+- `MemoryAccessError` mit Operation, Adresse, Breite, Regionsname und Fehlergrund
+- globale Trace-Handler fuer alle erfolgreichen Speicherzugriffe
+- Watchpoints mit Adressbereich und Read-, Write- oder ReadWrite-Filter
+- Runtime-ABI Version 5 fuer den erweiterten `Memory`-Zustand
+- permissiver historischer `CpuState`-Kompatibilitaetsspeicher bis zur SH-4-Adressfehlerbehandlung
+
+Akzeptanz:
+
+- fehlplatzierte Halfword- und Word-Zugriffe werden vor dem Geraet abgelehnt
+- permissive Busse behalten unaligned Little-Endian-Zugriffe
+- ungemappte, regionsueberschreitende, schreibgeschuetzte und ueberlaufende Zugriffe sind unterscheidbar
+- erfolgreiche Zugriffe melden Operation, absolute Adresse, Breite, Wert und Regionsname
+- Watchpoints reagieren auf ueberlappende Zugriffsbereiche und passende Zugriffstypen
+- Aliase bleiben ueber den gemeldeten Regionsnamen unterscheidbar
+- fehlgeschlagene Zugriffe erzeugen keine Trace- oder Watchpoint-Ereignisse
+- Watchpoints lassen sich eindeutig entfernen und vollstaendig leeren
+- generierte Speicher-Grenzfalltests pruefen strukturierte Fehlergruende statt veralteter Standardausnahmen
+- generierter Code prueft Runtime-ABI Version 5
 
 ### [ ] KR-2207 - v0.22 Release-Gate
 
