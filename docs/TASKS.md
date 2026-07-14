@@ -394,7 +394,7 @@ Abhaengigkeiten: KR-1607
 
 Abhaengigkeiten: KR-1701
 
-### [ ] KR-1703 - Herkunft und Konfidenz von Funktionen
+### [x] KR-1703 - Herkunft und Konfidenz von Funktionen
 
 Abhaengigkeiten: KR-1701
 

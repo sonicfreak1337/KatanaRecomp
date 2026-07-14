@@ -20,9 +20,29 @@ struct ClassifiedRange {
     DiscoveredByteKind kind = DiscoveredByteKind::Unknown;
 };
 
+enum class FunctionOrigin {
+    EntryPoint,
+    DirectCall,
+    Symbol
+};
+
+enum class AnalysisConfidence {
+    Low,
+    Medium,
+    High,
+    Certain
+};
+
+struct FunctionCandidate {
+    std::uint32_t address = 0u;
+    AnalysisConfidence confidence = AnalysisConfidence::Low;
+    std::vector<FunctionOrigin> origins;
+};
+
 struct RecursiveAnalysisResult {
     std::vector<katana::sh4::DisassemblyLine> instructions;
     std::vector<ClassifiedRange> ranges;
+    std::vector<FunctionCandidate> functions;
 };
 
 [[nodiscard]] RecursiveAnalysisResult analyze_reachable_code(
@@ -30,5 +50,7 @@ struct RecursiveAnalysisResult {
 );
 
 [[nodiscard]] const char* discovered_byte_kind_name(DiscoveredByteKind kind) noexcept;
+[[nodiscard]] const char* function_origin_name(FunctionOrigin origin) noexcept;
+[[nodiscard]] const char* analysis_confidence_name(AnalysisConfidence confidence) noexcept;
 
 }

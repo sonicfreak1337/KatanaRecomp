@@ -4,6 +4,7 @@
 #include "katana/sh4/decoder.hpp"
 
 #include <cstdint>
+#include <algorithm>
 #include <deque>
 #include <limits>
 #include <map>
@@ -99,6 +100,23 @@ void classify_image(
     }
 }
 
+void add_function_evidence(
+    std::map<std::uint32_t, FunctionCandidate>& candidates,
+    const std::uint32_t address,
+    const FunctionOrigin origin,
+    const AnalysisConfidence confidence
+) {
+    auto& candidate = candidates[address];
+    candidate.address = address;
+    if (static_cast<int>(confidence) > static_cast<int>(candidate.confidence)) {
+        candidate.confidence = confidence;
+    }
+    if (std::find(candidate.origins.begin(), candidate.origins.end(), origin) == candidate.origins.end()) {
+        candidate.origins.push_back(origin);
+        std::sort(candidate.origins.begin(), candidate.origins.end());
+    }
+}
+
 }
 
 RecursiveAnalysisResult analyze_reachable_code(const katana::io::ExecutableImage& image) {
@@ -106,11 +124,31 @@ RecursiveAnalysisResult analyze_reachable_code(const katana::io::ExecutableImage
     std::set<std::uint32_t> processed;
     std::set<std::uint32_t> delay_slots;
     std::map<std::uint32_t, katana::sh4::DisassemblyLine> discovered;
+    std::map<std::uint32_t, FunctionCandidate> function_candidates;
 
     for (const auto entry : image.entry_points()) {
         if ((entry & 1u) != 0u || executable_segment(image, entry) == nullptr) {
             throw std::invalid_argument("Analyse-Einstiegspunkt liegt nicht in committed ausfuehrbarem Code.");
         }
+        add_function_evidence(
+            function_candidates,
+            entry,
+            FunctionOrigin::EntryPoint,
+            AnalysisConfidence::Certain
+        );
+    }
+    for (const auto& symbol : image.symbols()) {
+        if (symbol.kind != katana::io::SymbolKind::Function || (symbol.address & 1u) != 0u
+            || executable_segment(image, symbol.address) == nullptr) {
+            continue;
+        }
+        enqueue(pending, symbol.address);
+        add_function_evidence(
+            function_candidates,
+            symbol.address,
+            FunctionOrigin::Symbol,
+            AnalysisConfidence::High
+        );
     }
 
     while (!pending.empty()) {
@@ -164,6 +202,15 @@ RecursiveAnalysisResult analyze_reachable_code(const katana::io::ExecutableImage
             case katana::sh4::ControlFlowKind::Call:
                 if (line.target_address.has_value()) {
                     enqueue(pending, *line.target_address);
+                    if ((*line.target_address & 1u) == 0u
+                        && executable_segment(image, *line.target_address) != nullptr) {
+                        add_function_evidence(
+                            function_candidates,
+                            *line.target_address,
+                            FunctionOrigin::DirectCall,
+                            AnalysisConfidence::High
+                        );
+                    }
                 }
                 enqueue_next(pending, address, fallthrough_distance);
                 break;
@@ -191,6 +238,11 @@ RecursiveAnalysisResult analyze_reachable_code(const katana::io::ExecutableImage
         result.instructions.push_back(std::move(line));
     }
     classify_image(image, discovered, result);
+    result.functions.reserve(function_candidates.size());
+    for (auto& [address, candidate] : function_candidates) {
+        static_cast<void>(address);
+        result.functions.push_back(std::move(candidate));
+    }
     return result;
 }
 
@@ -199,6 +251,25 @@ const char* discovered_byte_kind_name(const DiscoveredByteKind kind) noexcept {
         case DiscoveredByteKind::Unknown: return "unknown";
         case DiscoveredByteKind::Code: return "code";
         case DiscoveredByteKind::Data: return "data";
+    }
+    return "unknown";
+}
+
+const char* function_origin_name(const FunctionOrigin origin) noexcept {
+    switch (origin) {
+        case FunctionOrigin::EntryPoint: return "entry-point";
+        case FunctionOrigin::DirectCall: return "direct-call";
+        case FunctionOrigin::Symbol: return "symbol";
+    }
+    return "unknown";
+}
+
+const char* analysis_confidence_name(const AnalysisConfidence confidence) noexcept {
+    switch (confidence) {
+        case AnalysisConfidence::Low: return "low";
+        case AnalysisConfidence::Medium: return "medium";
+        case AnalysisConfidence::High: return "high";
+        case AnalysisConfidence::Certain: return "certain";
     }
     return "unknown";
 }

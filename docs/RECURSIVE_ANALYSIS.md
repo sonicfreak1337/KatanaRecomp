@@ -27,3 +27,10 @@ Das Analyseergebnis enthaelt normalisierte, adresssortierte Bereiche. Erreichbar
 Instruktionsbytes in ausfuehrbaren Code-Segmenten sind `Code`. Der Inhalt eines
 deklarierten Datensegments ist `Data`. Nicht erreichte Bytes eines Code-Segments,
 Zero-Fill und unbekannte oder nicht ausfuehrbare Segmente bleiben `Unknown`.
+
+## Funktionsherkunft und Konfidenz
+
+Funktionskandidaten speichern alle beobachteten Herkunftsgründe. Image-
+Einstiegspunkte sind `certain`; gueltige direkte Callziele und Funktionssymbole
+sind `high`. Treffen mehrere Gruende auf dieselbe Adresse, werden ihre Evidenzen
+deterministisch zusammengefuehrt und die hoechste Konfidenz bleibt erhalten.

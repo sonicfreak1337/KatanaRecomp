@@ -42,6 +42,9 @@ int main() {
         {true, false, false}, {5u, 6u, 7u, 8u}
     });
     image.add_entry_point(0x8C010000u);
+    image.add_symbol({
+        "subroutine", 0x8C010008u, 4u, SymbolKind::Function, SymbolBinding::Global
+    });
 
     const auto result = katana::analysis::analyze_reachable_code(image);
     require(result.instructions.size() == 6u, "Die Worklist hat nicht genau den erreichbaren Code entdeckt.");
@@ -71,6 +74,24 @@ int main() {
     require(
         std::string(katana::analysis::discovered_byte_kind_name(result.ranges[2].kind)) == "data",
         "Klassifikationsname ist instabil."
+    );
+    require(result.functions.size() == 2u, "Funktionskandidaten wurden nicht zusammengefuehrt.");
+    require(
+        result.functions[0].address == 0x8C010000u
+            && result.functions[0].confidence == katana::analysis::AnalysisConfidence::Certain
+            && result.functions[0].origins == std::vector<katana::analysis::FunctionOrigin>{katana::analysis::FunctionOrigin::EntryPoint},
+        "Einstiegspunkt-Herkunft oder Konfidenz ist falsch."
+    );
+    require(
+        result.functions[1].address == 0x8C010008u
+            && result.functions[1].confidence == katana::analysis::AnalysisConfidence::High
+            && result.functions[1].origins.size() == 2u,
+        "Call- und Symbolherkunft wurden nicht kombiniert."
+    );
+    require(
+        std::string(katana::analysis::function_origin_name(result.functions[1].origins[0])) == "direct-call"
+            && std::string(katana::analysis::analysis_confidence_name(result.functions[0].confidence)) == "certain",
+        "Herkunfts- oder Konfidenzname ist instabil."
     );
 
     ExecutableImage invalid;
