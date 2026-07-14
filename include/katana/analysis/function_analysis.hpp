@@ -1,6 +1,6 @@
 #pragma once
 
-#include "katana/sh4/disassembler.hpp"
+#include "katana/analysis/basic_blocks.hpp"
 
 #include <cstddef>
 #include <cstdint>
@@ -20,7 +20,8 @@ struct FunctionInfo {
 
 [[nodiscard]] std::vector<FunctionInfo> discover_functions(
     std::span<const katana::sh4::DisassemblyLine> lines,
-    std::span<const std::uint32_t> seed_entries
+    std::span<const std::uint32_t> seed_entries,
+    std::span<const ResolvedControlFlowEdge> resolved_edges = {}
 );
 
 }

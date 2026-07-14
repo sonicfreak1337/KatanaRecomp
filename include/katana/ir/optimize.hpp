@@ -18,7 +18,7 @@ struct OptimizationOptions {
     bool copy_propagation = true;
     bool dead_code_elimination = true;
     bool cfg_simplification = true;
-    bool load_store_simplification = true;
+    bool load_store_simplification = false;
     bool capture_dumps = false;
 };
 

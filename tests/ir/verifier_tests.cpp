@@ -47,6 +47,102 @@ int main() {
         "Gueltige abgesenkte Funktion wird abgelehnt."
     );
 
+    auto descending = program.front();
+    std::swap(
+        descending.blocks.front().instructions[0],
+        descending.blocks.front().instructions[1]
+    );
+    require(
+        has_issue(
+            katana::ir::verify_function(descending),
+            "nicht streng aufsteigend"
+        ),
+        "Nicht aufsteigende Instruktionsadressen werden akzeptiert."
+    );
+
+    auto stale_calls = program.front();
+    stale_calls.direct_callees.push_back(0x8C020000u);
+    require(
+        has_issue(
+            katana::ir::verify_function(stale_calls),
+            "Callee-Metadaten"
+        ),
+        "Veraltete Call-Metadaten werden akzeptiert."
+    );
+
+    auto wrong_successor = program.front();
+    wrong_successor.blocks.front().successors.push_back(
+        wrong_successor.entry_address
+    );
+    require(
+        has_issue(
+            katana::ir::verify_function(wrong_successor),
+            "Terminaloperation"
+        ),
+        "CFG-Nachfolger entgegen der Terminaloperation werden akzeptiert."
+    );
+
+    auto missing_effective = program.front();
+    auto& effective_instruction =
+        missing_effective.blocks.front().instructions.front();
+    effective_instruction.operation =
+        katana::ir::Operation::LoadLongPcRelative;
+    effective_instruction.original_operation = effective_instruction.operation;
+    effective_instruction.widths = katana::ir::operation_operand_widths(
+        effective_instruction.operation
+    );
+    effective_instruction.memory_effects = katana::ir::instruction_memory_effects(
+        effective_instruction.operation
+    );
+    require(
+        has_issue(
+            katana::ir::verify_function(missing_effective),
+            "effektive Adresse"
+        ),
+        "Fehlende erforderliche effektive Adresse wird akzeptiert."
+    );
+
+    auto missing_special = program.front();
+    auto& special_instruction = missing_special.blocks.front().instructions.front();
+    special_instruction.operation = katana::ir::Operation::StoreSpecialRegister;
+    special_instruction.original_operation = special_instruction.operation;
+    special_instruction.widths = katana::ir::operation_operand_widths(
+        special_instruction.operation
+    );
+    special_instruction.memory_effects = katana::ir::instruction_memory_effects(
+        special_instruction.operation
+    );
+    require(
+        has_issue(
+            katana::ir::verify_function(missing_special),
+            "kein Spezialregister"
+        ),
+        "Fehlendes erforderliches Spezialregister wird akzeptiert."
+    );
+
+    auto invalid_transform = program.front();
+    auto& transformed = invalid_transform.blocks.front().instructions.front();
+    transformed.operation = katana::ir::Operation::AddImmediate;
+    transformed.widths = katana::ir::operation_operand_widths(transformed.operation);
+    require(
+        has_issue(
+            katana::ir::verify_function(invalid_transform),
+            "synthetische Operation"
+        ),
+        "Ursprungsoperation und transformierte IR werden vermischt."
+    );
+
+    const std::array<katana::ir::Function, 2> duplicate_entries = {
+        program.front(), program.front()
+    };
+    require(
+        has_issue(
+            katana::ir::verify_program(duplicate_entries),
+            "doppelt vorhanden"
+        ),
+        "Doppelte Funktionseinstiege werden akzeptiert."
+    );
+
     auto invalid_width = program.front();
     invalid_width.blocks.front().instructions.front().widths.result =
         katana::ir::OperandWidth::Bits8;

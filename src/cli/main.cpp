@@ -6,6 +6,7 @@
 #include "katana/analysis/control_flow_analysis.hpp"
 #include "katana/codegen/cpp_emitter.hpp"
 #include "katana/io/raw_binary_loader.hpp"
+#include "katana/io/elf32_sh_loader.hpp"
 #include "katana/io/project_manifest.hpp"
 #include "katana/ir/lower.hpp"
 #include "katana/ir/optimize.hpp"
@@ -514,28 +515,47 @@ void print_ir_instruction(
 std::vector<katana::ir::Function> build_ir_program(
     const std::filesystem::path& path,
     const std::uint32_t entry_address,
-    const std::uint32_t base_address
+    const std::uint32_t base_address,
+    const std::optional<std::filesystem::path>& override_path = std::nullopt
 ) {
-    katana::io::RawBinaryLoadOptions options;
-    options.base_address = base_address;
-    options.entry_point = entry_address;
-    const auto image = katana::io::load_raw_binary(path, options);
-    const auto lines = katana::analysis::analyze_reachable_code(image).instructions;
+    auto extension = path.extension().string();
+    std::transform(extension.begin(), extension.end(), extension.begin(),
+        [](const unsigned char value) {
+            return static_cast<char>(std::tolower(value));
+        });
 
-    const std::array<std::uint32_t, 1> seeds = {
-        entry_address
-    };
+    katana::io::ExecutableImage image;
+    if (extension == ".katana" || extension == ".manifest") {
+        image = katana::io::load_project_manifest(path);
+    } else {
+        std::ifstream input(path, std::ios::binary);
+        std::array<unsigned char, 4> magic{};
+        input.read(reinterpret_cast<char*>(magic.data()),
+            static_cast<std::streamsize>(magic.size()));
+        const bool is_elf = input.gcount() ==
+                static_cast<std::streamsize>(magic.size()) &&
+            magic[0] == 0x7Fu && magic[1] == 'E' &&
+            magic[2] == 'L' && magic[3] == 'F';
+        if (is_elf) {
+            image = katana::io::load_elf32_sh(path);
+        } else {
+            katana::io::RawBinaryLoadOptions options;
+            options.base_address = base_address;
+            options.entry_point = entry_address;
+            image = katana::io::load_raw_binary(path, options);
+        }
+    }
+    image.add_entry_point(entry_address);
 
-    const auto discovered =
-        katana::analysis::discover_functions(
-            lines,
-            seeds
-        );
-
-    return katana::ir::lower_program(
-        lines,
-        discovered
+    std::optional<katana::analysis::AnalysisOverrides> overrides;
+    if (override_path) {
+        overrides = katana::analysis::parse_analysis_overrides(*override_path);
+    }
+    const auto analysis = katana::analysis::analyze_control_flow(
+        image,
+        overrides ? &*overrides : nullptr
     );
+    return katana::ir::lower_program(analysis);
 }
 
 int decode_single_opcode(const std::string& text) {
@@ -835,12 +855,14 @@ int analyze_ir(
     const std::filesystem::path& path,
     const std::uint32_t entry_address,
     const std::uint32_t base_address,
-    const bool json
+    const bool json,
+    const std::optional<std::filesystem::path>& override_path
 ) {
     const auto program = build_ir_program(
         path,
         entry_address,
-        base_address
+        base_address,
+        override_path
     );
 
     std::cout << (json
@@ -856,12 +878,14 @@ int emit_cpp(
     const std::filesystem::path& output_path,
     const std::uint32_t base_address,
     katana::ir::OptimizationOptions optimization_options,
-    const std::optional<std::filesystem::path>& dump_prefix
+    const std::optional<std::filesystem::path>& dump_prefix,
+    const std::optional<std::filesystem::path>& override_path
 ) {
     auto program = build_ir_program(
         input_path,
         entry_address,
-        base_address
+        base_address,
+        override_path
     );
 
     const auto before_optimization = dump_prefix
@@ -960,9 +984,9 @@ void print_usage() {
         << "  katana-recomp disasm <Datei> [Basisadresse]\n"
         << "  katana-recomp blocks <Datei> [Basisadresse]\n"
         << "  katana-recomp functions <Datei> <Einstieg> [Basisadresse]\n"
-        << "  katana-recomp ir <Datei> <Einstieg> [Basisadresse]\n"
-        << "  katana-recomp ir-json <Datei> <Einstieg> [Basisadresse]\n"
-        << "  katana-recomp emit-cpp <Datei> <Einstieg> <Ausgabe.cpp> [Basisadresse] [--no-opt] [--dump-ir <Praefix>]\n\n"
+        << "  katana-recomp ir <Raw|ELF|Manifest> <Einstieg> [Basisadresse] [--overrides <Datei>]\n"
+        << "  katana-recomp ir-json <Raw|ELF|Manifest> <Einstieg> [Basisadresse] [--overrides <Datei>]\n"
+        << "  katana-recomp emit-cpp <Raw|ELF|Manifest> <Einstieg> <Ausgabe.cpp> [Basisadresse] [--no-opt] [--dump-ir <Praefix>] [--overrides <Datei>]\n\n"
         << "Beispiel:\n"
         << "  katana-recomp emit-cpp programm.bin 8C010000 generated.cpp 8C010000\n";
 }
@@ -1047,14 +1071,13 @@ int main(const int argc, char* argv[]) {
                     "Die Einstiegsadresse"
                 );
 
-            const auto base_address =
-                argc == 5
-                    ? parse_hex_value(
-                        argv[4],
-                        std::numeric_limits<std::uint32_t>::max(),
-                        "Die Basisadresse"
-                    )
-                    : 0u;
+            const auto base_address = argc == 5
+                ? parse_hex_value(
+                    argv[4],
+                    std::numeric_limits<std::uint32_t>::max(),
+                    "Die Basisadresse"
+                )
+                : 0u;
 
             return analyze_functions(
                 std::filesystem::path(argv[2]),
@@ -1064,7 +1087,7 @@ int main(const int argc, char* argv[]) {
         }
 
         if (
-            (argc == 4 || argc == 5) &&
+            (argc >= 4 && argc <= 7) &&
             (std::string(argv[1]) == "ir" || std::string(argv[1]) == "ir-json")
         ) {
             const auto entry_address =
@@ -1074,25 +1097,43 @@ int main(const int argc, char* argv[]) {
                     "Die Einstiegsadresse"
                 );
 
-            const auto base_address =
-                argc == 5
-                    ? parse_hex_value(
-                        argv[4],
-                        std::numeric_limits<std::uint32_t>::max(),
-                        "Die Basisadresse"
-                    )
-                    : 0u;
+            std::size_t argument = 4u;
+            std::uint32_t base_address = 0u;
+            if (
+                argument < static_cast<std::size_t>(argc) &&
+                !std::string_view(argv[argument]).starts_with("--")
+            ) {
+                base_address = parse_hex_value(
+                    argv[argument++],
+                    std::numeric_limits<std::uint32_t>::max(),
+                    "Die Basisadresse"
+                );
+            }
+            std::optional<std::filesystem::path> override_path;
+            while (argument < static_cast<std::size_t>(argc)) {
+                const std::string_view option = argv[argument++];
+                if (
+                    option != "--overrides" || override_path ||
+                    argument >= static_cast<std::size_t>(argc)
+                ) {
+                    throw std::invalid_argument(
+                        "Ungueltige IR-Option; erwartet wird --overrides <Datei>."
+                    );
+                }
+                override_path = std::filesystem::path(argv[argument++]);
+            }
 
             return analyze_ir(
                 std::filesystem::path(argv[2]),
                 entry_address,
                 base_address,
-                std::string(argv[1]) == "ir-json"
+                std::string(argv[1]) == "ir-json",
+                override_path
             );
         }
 
         if (
-            (argc >= 5 && argc <= 9) &&
+            (argc >= 5 && argc <= 11) &&
             std::string(argv[1]) == "emit-cpp"
         ) {
             const auto entry_address =
@@ -1117,6 +1158,7 @@ int main(const int argc, char* argv[]) {
 
             katana::ir::OptimizationOptions optimization_options;
             std::optional<std::filesystem::path> dump_prefix;
+            std::optional<std::filesystem::path> override_path;
             while (argument < static_cast<std::size_t>(argc)) {
                 const std::string_view option = argv[argument++];
                 if (option == "--no-opt") {
@@ -1131,6 +1173,16 @@ int main(const int argc, char* argv[]) {
                         );
                     }
                     dump_prefix = std::filesystem::path(argv[argument++]);
+                } else if (option == "--overrides") {
+                    if (
+                        override_path ||
+                        argument >= static_cast<std::size_t>(argc)
+                    ) {
+                        throw std::invalid_argument(
+                            "--overrides erwartet genau eine Datei."
+                        );
+                    }
+                    override_path = std::filesystem::path(argv[argument++]);
                 } else {
                     throw std::invalid_argument(
                         "Unbekannte emit-cpp-Option: " + std::string(option)
@@ -1144,7 +1196,8 @@ int main(const int argc, char* argv[]) {
                 std::filesystem::path(argv[4]),
                 base_address,
                 optimization_options,
-                dump_prefix
+                dump_prefix,
+                override_path
             );
         }
 

@@ -74,6 +74,15 @@ std::string_view address_update_name(const AddressUpdateKind value) noexcept {
     return "unknown";
 }
 
+std::string_view memory_region_name(const MemoryRegionKind value) noexcept {
+    switch (value) {
+        case MemoryRegionKind::Unknown: return "unknown";
+        case MemoryRegionKind::NormalRam: return "normal_ram";
+        case MemoryRegionKind::Volatile: return "volatile";
+    }
+    return "unknown";
+}
+
 std::string_view delay_role_name(const DelaySlotRole value) noexcept {
     switch (value) {
         case DelaySlotRole::None: return "none";
@@ -120,10 +129,8 @@ std::vector<const Function*> sorted_functions(
 ) {
     std::vector<const Function*> result;
     result.reserve(functions.size());
-    for (const auto& function : functions) {
-        require_valid_function(function);
-        result.push_back(&function);
-    }
+    require_valid_program(functions);
+    for (const auto& function : functions) result.push_back(&function);
     std::sort(result.begin(), result.end(), [](const auto* left, const auto* right) {
         return left->entry_address < right->entry_address;
     });
@@ -208,6 +215,7 @@ void emit_json_addresses(
 void emit_text_instruction(std::ostringstream& output, const Instruction& value) {
     output << "    instruction " << hex32(value.source_address)
         << " opcode=" << hex16(value.original_opcode)
+        << " original_operation=" << operation_name(value.original_operation)
         << " operation=" << operation_name(value.operation) << '\n'
         << "      widths result=" << operand_width_name(value.widths.result)
         << " input=" << operand_width_name(value.widths.input)
@@ -224,7 +232,10 @@ void emit_text_instruction(std::ostringstream& output, const Instruction& value)
         << " forwarded=" << (value.forwarded_value_register
             ? "r" + std::to_string(*value.forwarded_value_register) : "null")
         << " effective=" << (value.effective_address ? hex32(*value.effective_address) : "null")
-        << " target=" << (value.target_address ? hex32(*value.target_address) : "null") << '\n'
+        << " target=" << (value.target_address ? hex32(*value.target_address) : "null")
+        << " resolved_targets=";
+    emit_text_addresses(output, sorted_values(value.resolved_targets));
+    output << '\n'
         << "      status reads=";
     emit_text_names(output, status_names(value.status_effects.reads));
     output << " writes=";
@@ -234,7 +245,8 @@ void emit_text_instruction(std::ostringstream& output, const Instruction& value)
         << " count=" << static_cast<unsigned>(value.memory_effects.access_count)
         << " update=" << address_update_name(value.memory_effects.address_update)
         << " updated_registers="
-        << static_cast<unsigned>(value.memory_effects.updated_register_count) << '\n'
+        << static_cast<unsigned>(value.memory_effects.updated_register_count)
+        << " region=" << memory_region_name(value.memory_effects.region) << '\n'
         << "      accumulator reads_s0=";
     emit_text_names(output, accumulator_names(value.accumulator_effects.reads_if_s_clear));
     output << " reads_s1=";
@@ -254,6 +266,7 @@ void emit_json_instruction(std::ostringstream& output, const Instruction& value)
     output << '{'
         << "\"address\":\"" << hex32(value.source_address) << "\","
         << "\"opcode\":\"" << hex16(value.original_opcode) << "\","
+        << "\"original_operation\":\"" << operation_name(value.original_operation) << "\","
         << "\"operation\":\"" << operation_name(value.operation) << "\","
         << "\"widths\":{"
         << "\"result\":\"" << operand_width_name(value.widths.result) << "\","
@@ -282,6 +295,8 @@ void emit_json_instruction(std::ostringstream& output, const Instruction& value)
     output << ",\"target_address\":";
     if (value.target_address) output << '"' << hex32(*value.target_address) << '"';
     else output << "null";
+    output << ",\"resolved_targets\":";
+    emit_json_addresses(output, sorted_values(value.resolved_targets));
     output << "},\"status\":{\"reads\":";
     emit_json_names(output, status_names(value.status_effects.reads));
     output << ",\"writes\":";
@@ -293,6 +308,7 @@ void emit_json_instruction(std::ostringstream& output, const Instruction& value)
         << "\"address_update\":\"" << address_update_name(value.memory_effects.address_update) << "\","
         << "\"updated_register_count\":"
         << static_cast<unsigned>(value.memory_effects.updated_register_count)
+        << ",\"region\":\"" << memory_region_name(value.memory_effects.region) << "\""
         << "},\"accumulator_effects\":{\"reads_if_s_clear\":";
     emit_json_names(output, accumulator_names(value.accumulator_effects.reads_if_s_clear));
     output << ",\"reads_if_s_set\":";

@@ -477,6 +477,22 @@ add_test(
         -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/cmake/check_ir_cli.cmake
 )
 
+add_executable(katana-cli-input-fixture-writer
+    tests/io/cli_input_fixture_writer.cpp
+)
+katana_enable_warnings(katana-cli-input-fixture-writer)
+
+add_test(
+    NAME katana-cli-input-path-tests
+    COMMAND ${CMAKE_COMMAND}
+        -DKATANA_RECOMP=$<TARGET_FILE:katana-recomp>
+        -DFIXTURE_WRITER=$<TARGET_FILE:katana-cli-input-fixture-writer>
+        -DOUTPUT_DIR=${CMAKE_CURRENT_BINARY_DIR}/cli-input-path-tests
+        -DOVERRIDE_MANIFEST=${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/indirect_control_flow.katana
+        -DOVERRIDE_FILE=${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/indirect_control_flow.overrides
+        -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/cmake/check_cli_input_paths.cmake
+)
+
 add_executable(katana-ir-optimization-tests
     tests/ir/optimization_tests.cpp
 )
@@ -495,6 +511,9 @@ add_test(
         -DKATANA_RECOMP=$<TARGET_FILE:katana-recomp>
         -DFIXTURE=${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/codegen_execution.bin
         -DOUTPUT_DIR=${CMAKE_CURRENT_BINARY_DIR}/optimization-cli-tests
+        -DCXX_COMPILER=${CMAKE_CXX_COMPILER}
+        -DCXX_COMPILER_ID=${CMAKE_CXX_COMPILER_ID}
+        -DEXECUTABLE_SUFFIX=${CMAKE_EXECUTABLE_SUFFIX}
         -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/cmake/check_optimization_cli.cmake
 )
 

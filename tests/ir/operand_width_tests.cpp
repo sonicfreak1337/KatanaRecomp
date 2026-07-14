@@ -137,6 +137,55 @@ int main() {
         "S-abhaengige MACH/MACL-Schreibwirkungen sind unvollstaendig."
     );
 
+    const auto mul_l = katana::ir::operation_accumulator_effects(
+        Operation::MultiplyLong
+    );
+    const auto muls_w = katana::ir::operation_accumulator_effects(
+        Operation::MultiplySignedWord
+    );
+    const auto mulu_w = katana::ir::operation_accumulator_effects(
+        Operation::MultiplyUnsignedWord
+    );
+    const auto dmuls_l = katana::ir::operation_accumulator_effects(
+        Operation::DoubleMultiplySignedLong
+    );
+    const auto dmulu_l = katana::ir::operation_accumulator_effects(
+        Operation::DoubleMultiplyUnsignedLong
+    );
+    require(
+        katana::ir::contains_accumulator_register(
+            mul_l.writes_if_s_clear, katana::ir::AccumulatorRegister::Macl
+        ) && katana::ir::contains_accumulator_register(
+            muls_w.writes_if_s_set, katana::ir::AccumulatorRegister::Macl
+        ) && katana::ir::contains_accumulator_register(
+            mulu_w.writes_if_s_clear, katana::ir::AccumulatorRegister::Macl
+        ) && katana::ir::contains_accumulator_register(
+            dmuls_l.writes_if_s_clear, katana::ir::AccumulatorRegister::Mach
+        ) && katana::ir::contains_accumulator_register(
+            dmuls_l.writes_if_s_clear, katana::ir::AccumulatorRegister::Macl
+        ) && katana::ir::contains_accumulator_register(
+            dmulu_l.writes_if_s_set, katana::ir::AccumulatorRegister::Mach
+        ) && katana::ir::contains_accumulator_register(
+            dmulu_l.writes_if_s_set, katana::ir::AccumulatorRegister::Macl
+        ),
+        "MUL-/DMUL-Akkumulatorschreibwirkungen sind unvollstaendig."
+    );
+
+    const auto sts_mach = katana::ir::operation_accumulator_effects(
+        Operation::StoreSpecialRegister, katana::ir::SpecialRegister::Mach
+    );
+    const auto lds_macl = katana::ir::operation_accumulator_effects(
+        Operation::LoadSpecialRegister, katana::ir::SpecialRegister::Macl
+    );
+    require(
+        katana::ir::contains_accumulator_register(
+            sts_mach.reads_if_s_clear, katana::ir::AccumulatorRegister::Mach
+        ) && katana::ir::contains_accumulator_register(
+            lds_macl.writes_if_s_set, katana::ir::AccumulatorRegister::Macl
+        ),
+        "Spezialregistertransfers modellieren MACH/MACL nicht."
+    );
+
     const auto nop = operation_operand_widths(Operation::Nop);
     require(
         nop.result == OperandWidth::None

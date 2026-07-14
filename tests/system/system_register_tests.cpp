@@ -40,6 +40,10 @@ katana::ir::Instruction transfer(
         operation,
         special_register
     );
+    instruction.accumulator_effects = katana::ir::operation_accumulator_effects(
+        operation,
+        special_register
+    );
     if (
         operation == Operation::LoadSpecialRegister ||
         operation == Operation::LoadSpecialRegisterPostIncrement

@@ -51,9 +51,10 @@ void add_sorted_unique(
 
 std::vector<FunctionInfo> discover_functions(
     const std::span<const katana::sh4::DisassemblyLine> lines,
-    const std::span<const std::uint32_t> seed_entries
+    const std::span<const std::uint32_t> seed_entries,
+    const std::span<const ResolvedControlFlowEdge> resolved_edges
 ) {
-    const auto blocks = build_basic_blocks(lines);
+    const auto blocks = build_basic_blocks(lines, resolved_edges, seed_entries);
 
     if (blocks.empty()) {
         return {};
@@ -91,6 +92,14 @@ std::vector<FunctionInfo> discover_functions(
             block_by_start.contains(*control.target_address)
         ) {
             known_entries.insert(*control.target_address);
+        }
+    }
+    for (const auto& edge : resolved_edges) {
+        if (
+            edge.kind == ResolvedControlFlowKind::Call &&
+            block_by_start.contains(edge.target_address)
+        ) {
+            known_entries.insert(edge.target_address);
         }
     }
 
@@ -191,6 +200,20 @@ std::vector<FunctionInfo> discover_functions(
                     function.indirect_call_sites,
                     control.address
                 );
+            }
+
+            for (const auto& edge : resolved_edges) {
+                if (edge.instruction_address != control.address) continue;
+                if (edge.kind == ResolvedControlFlowKind::Call) {
+                    add_sorted_unique(function.direct_callees, edge.target_address);
+                    add_sorted_unique(function.indirect_call_sites, control.address);
+                    if (
+                        block_by_start.contains(edge.target_address) &&
+                        !processed_entries.contains(edge.target_address)
+                    ) {
+                        pending_entries.push_back(edge.target_address);
+                    }
+                }
             }
 
             for (const auto successor : block.successors) {

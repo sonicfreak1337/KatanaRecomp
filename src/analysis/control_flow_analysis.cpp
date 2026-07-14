@@ -241,6 +241,49 @@ ControlFlowAnalysisResult analyze_control_flow(
             break;
         }
     }
+    analysis.resolved_edges.clear();
+    for (const auto& resolution : analysis.indirect_control_flow) {
+        if (
+            resolution.status == ResolutionStatus::Resolved &&
+            resolution.target.has_value()
+        ) {
+            analysis.resolved_edges.push_back({
+                resolution.instruction_address,
+                *resolution.target,
+                resolution.kind == IndirectControlFlowKind::Call
+                    ? ResolvedControlFlowKind::Call
+                    : ResolvedControlFlowKind::Jump
+            });
+        }
+    }
+    for (const auto& table : analysis.jump_tables) {
+        if (!table.resolved) continue;
+        for (const auto& entry : table.entries) {
+            analysis.resolved_edges.push_back({
+                table.dispatch_address,
+                entry.target,
+                table.dispatch_kind == JumpTableDispatchKind::Call
+                    ? ResolvedControlFlowKind::Call
+                    : ResolvedControlFlowKind::Jump
+            });
+        }
+    }
+    std::sort(
+        analysis.resolved_edges.begin(), analysis.resolved_edges.end(),
+        [](const auto& left, const auto& right) {
+            if (left.instruction_address != right.instruction_address) {
+                return left.instruction_address < right.instruction_address;
+            }
+            if (left.target_address != right.target_address) {
+                return left.target_address < right.target_address;
+            }
+            return left.kind < right.kind;
+        }
+    );
+    analysis.resolved_edges.erase(
+        std::unique(analysis.resolved_edges.begin(), analysis.resolved_edges.end()),
+        analysis.resolved_edges.end()
+    );
     return analysis;
 }
 

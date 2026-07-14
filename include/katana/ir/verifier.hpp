@@ -3,6 +3,7 @@
 #include "katana/ir/ir.hpp"
 
 #include <cstdint>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -18,5 +19,11 @@ struct VerificationIssue {
 );
 
 void require_valid_function(const Function& function);
+
+[[nodiscard]] std::vector<VerificationIssue> verify_program(
+    std::span<const Function> functions
+);
+
+void require_valid_program(std::span<const Function> functions);
 
 }

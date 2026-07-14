@@ -1,5 +1,6 @@
-if(NOT DEFINED KATANA_RECOMP OR NOT DEFINED FIXTURE OR NOT DEFINED OUTPUT_DIR)
-    message(FATAL_ERROR "KatanaRecomp, Fixture oder Ausgabeverzeichnis fehlt.")
+if(NOT DEFINED KATANA_RECOMP OR NOT DEFINED FIXTURE OR NOT DEFINED OUTPUT_DIR
+    OR NOT DEFINED CXX_COMPILER OR NOT DEFINED CXX_COMPILER_ID)
+    message(FATAL_ERROR "KatanaRecomp, Fixture, Compiler oder Ausgabeverzeichnis fehlt.")
 endif()
 
 file(MAKE_DIRECTORY "${OUTPUT_DIR}")
@@ -47,4 +48,51 @@ if(NOT before_dump MATCHES "^katana-ir-v2" OR NOT after_dump MATCHES "^katana-ir
 endif()
 if(NOT unoptimized_output MATCHES "Optimierungen:    0")
     message(FATAL_ERROR "--no-opt meldet keine vollstaendige Deaktivierung.")
+endif()
+
+foreach(variant IN ITEMS optimized unoptimized)
+    set(harness "${OUTPUT_DIR}/${variant}_harness.cpp")
+    set(executable "${OUTPUT_DIR}/${variant}_harness${EXECUTABLE_SUFFIX}")
+    file(WRITE "${harness}"
+        "#include \"${variant}.cpp\"\n"
+        "#include <iostream>\n"
+        "int main() { katana_generated::CpuState cpu; katana_generated::run(cpu); "
+        "std::cout << cpu.r[1] << ' ' << cpu.r[2] << ' ' << cpu.pc << ' ' << cpu.pr << '\\n'; }\n"
+    )
+    if(CXX_COMPILER_ID STREQUAL "MSVC")
+        execute_process(
+            COMMAND "${CXX_COMPILER}" /nologo /std:c++20 /EHsc "${harness}"
+                "/Fe${executable}"
+            RESULT_VARIABLE compile_result
+            OUTPUT_VARIABLE compile_output
+            ERROR_VARIABLE compile_error
+        )
+    else()
+        execute_process(
+            COMMAND "${CXX_COMPILER}" -std=c++20 "${harness}" -o "${executable}"
+            RESULT_VARIABLE compile_result
+            OUTPUT_VARIABLE compile_output
+            ERROR_VARIABLE compile_error
+        )
+    endif()
+    if(NOT compile_result EQUAL 0)
+        message(FATAL_ERROR "${variant}-Harness kompiliert nicht: ${compile_output}${compile_error}")
+    endif()
+    execute_process(
+        COMMAND "${executable}"
+        RESULT_VARIABLE run_result
+        OUTPUT_VARIABLE run_output
+        ERROR_VARIABLE run_error
+    )
+    if(NOT run_result EQUAL 0)
+        message(FATAL_ERROR "${variant}-Harness laeuft nicht: ${run_error}")
+    endif()
+    set(${variant}_semantics "${run_output}")
+endforeach()
+
+if(NOT optimized_semantics STREQUAL unoptimized_semantics)
+    message(FATAL_ERROR
+        "Optimierter und --no-opt-Lauf unterscheiden sich semantisch: "
+        "${optimized_semantics} != ${unoptimized_semantics}"
+    )
 endif()

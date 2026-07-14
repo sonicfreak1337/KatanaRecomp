@@ -61,12 +61,19 @@ enum class AddressUpdateKind : std::uint8_t {
     PostIncrement
 };
 
+enum class MemoryRegionKind : std::uint8_t {
+    Unknown,
+    NormalRam,
+    Volatile
+};
+
 struct MemoryEffects {
     MemoryAccessKind access = MemoryAccessKind::None;
     OperandWidth width = OperandWidth::None;
     std::uint8_t access_count = 0u;
     AddressUpdateKind address_update = AddressUpdateKind::None;
     std::uint8_t updated_register_count = 0u;
+    MemoryRegionKind region = MemoryRegionKind::Unknown;
 
     bool operator==(const MemoryEffects&) const = default;
 };
@@ -127,6 +134,7 @@ enum class Operation {
     Unknown,
     Nop,
     MovImmediate,
+    Constant32,
     AddImmediate,
     MovRegister,
     AddRegister,
@@ -247,6 +255,7 @@ struct Instruction {
     std::uint32_t source_address = 0;
     std::uint16_t original_opcode = 0;
 
+    Operation original_operation = Operation::Unknown;
     Operation operation = Operation::Unknown;
     OperandWidths widths;
     StatusRegisterEffects status_effects;
@@ -262,6 +271,7 @@ struct Instruction {
     SpecialRegister special_register = SpecialRegister::None;
     std::optional<std::uint32_t> effective_address;
     std::optional<std::uint32_t> target_address;
+    std::vector<std::uint32_t> resolved_targets;
     std::optional<std::uint8_t> forwarded_value_register;
 
     DelaySlotRelation delay_slot;
@@ -303,7 +313,8 @@ struct Function {
     std::uint8_t source_register = 0u
 ) noexcept;
 [[nodiscard]] AccumulatorEffects operation_accumulator_effects(
-    Operation operation
+    Operation operation,
+    SpecialRegister special_register = SpecialRegister::None
 ) noexcept;
 [[nodiscard]] bool contains_accumulator_register(
     AccumulatorRegister effects,
