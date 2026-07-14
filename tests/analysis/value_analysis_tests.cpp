@@ -55,6 +55,26 @@ int main() {
         "Registerwert am indirekten Sprung wurde falsch analysiert."
     );
 
+    katana::io::ExecutableImage image;
+    image.add_segment({
+        ".text", 0u, 0u, 12u, katana::io::SegmentKind::Code, {true, false, true},
+        {0x08u, 0xE1u, 0x2Bu, 0x41u, 0x09u, 0x00u, 0x2Bu, 0x42u, 0x0Bu, 0x00u, 0x09u, 0x00u}
+    });
+    const auto resolution_lines = katana::sh4::disassemble(image.segments()[0].bytes, 0u);
+    const auto resolutions = katana::analysis::resolve_indirect_control_flow(resolution_lines, image);
+    require(resolutions.size() == 2u, "Indirekte Kontrollflussstellen wurden nicht vollstaendig klassifiziert.");
+    require(
+        resolutions[0].status == katana::analysis::ResolutionStatus::Resolved
+            && resolutions[0].target == 8u
+            && resolutions[0].reason == "constant-register",
+        "Ein beweisbares indirektes Sprungziel wurde nicht aufgeloest."
+    );
+    require(
+        resolutions[1].status == katana::analysis::ResolutionStatus::Unresolved
+            && resolutions[1].reason == "register-value-unknown",
+        "Ein unbekanntes Registerziel wurde faelschlich aufgeloest."
+    );
+
     std::cout << "KR-1801 Lokale Konstantenpropagation erfolgreich.\n";
     return EXIT_SUCCESS;
 }

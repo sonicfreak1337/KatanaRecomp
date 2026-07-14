@@ -426,7 +426,7 @@ Abhaengigkeiten: KR-1707
 
 Abhaengigkeiten: KR-1801
 
-### [ ] KR-1803 - Einfache indirekte Calls und Jumps
+### [x] KR-1803 - Einfache indirekte Calls und Jumps
 
 Abhaengigkeiten: KR-1802
 

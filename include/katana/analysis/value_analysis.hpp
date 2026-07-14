@@ -1,11 +1,13 @@
 #pragma once
 
 #include "katana/sh4/disassembler.hpp"
+#include "katana/io/executable_image.hpp"
 
 #include <array>
 #include <cstdint>
 #include <optional>
 #include <span>
+#include <string>
 #include <vector>
 
 namespace katana::analysis {
@@ -31,6 +33,25 @@ struct RegisterValueAnalysis {
     std::vector<RegisterValueObservation> indirect_control_flow;
 };
 
+enum class IndirectControlFlowKind {
+    Jump,
+    Call
+};
+
+enum class ResolutionStatus {
+    Resolved,
+    Unresolved
+};
+
+struct IndirectControlFlowResolution {
+    std::uint32_t instruction_address = 0u;
+    IndirectControlFlowKind kind = IndirectControlFlowKind::Jump;
+    std::uint8_t register_index = 0u;
+    ResolutionStatus status = ResolutionStatus::Unresolved;
+    std::optional<std::uint32_t> target;
+    std::string reason;
+};
+
 [[nodiscard]] std::vector<ConstantTraceEntry> propagate_local_constants(
     std::span<const katana::sh4::DisassemblyLine> lines,
     const RegisterConstants& initial = {}
@@ -39,6 +60,11 @@ struct RegisterValueAnalysis {
 [[nodiscard]] RegisterValueAnalysis analyze_register_values(
     std::span<const katana::sh4::DisassemblyLine> lines,
     const RegisterConstants& initial = {}
+);
+
+[[nodiscard]] std::vector<IndirectControlFlowResolution> resolve_indirect_control_flow(
+    std::span<const katana::sh4::DisassemblyLine> lines,
+    const katana::io::ExecutableImage& image
 );
 
 }

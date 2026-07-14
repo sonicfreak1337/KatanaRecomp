@@ -3,6 +3,7 @@
 #include "katana/sh4/instruction.hpp"
 
 #include <cstdint>
+#include <algorithm>
 
 namespace katana::analysis {
 namespace {
@@ -82,6 +83,7 @@ void apply_local_transfer(
         case katana::sh4::InstructionKind::Jmp:
         case katana::sh4::InstructionKind::Jsr:
         case katana::sh4::InstructionKind::Rts:
+            state.registers.fill(std::nullopt);
             return;
         default:
             state.registers.fill(std::nullopt);
@@ -128,6 +130,53 @@ RegisterValueAnalysis analyze_register_values(
         });
     }
     return analysis;
+}
+
+std::vector<IndirectControlFlowResolution> resolve_indirect_control_flow(
+    const std::span<const katana::sh4::DisassemblyLine> lines,
+    const katana::io::ExecutableImage& image
+) {
+    const auto values = analyze_register_values(lines);
+    std::vector<IndirectControlFlowResolution> resolutions;
+    resolutions.reserve(values.indirect_control_flow.size());
+    for (const auto& observation : values.indirect_control_flow) {
+        const auto line = std::find_if(
+            lines.begin(),
+            lines.end(),
+            [&observation](const katana::sh4::DisassemblyLine& candidate) {
+                return candidate.address == observation.instruction_address;
+            }
+        );
+        IndirectControlFlowResolution resolution;
+        resolution.instruction_address = observation.instruction_address;
+        resolution.register_index = observation.register_index;
+        resolution.kind = line != lines.end()
+                && line->instruction.kind == katana::sh4::InstructionKind::Jsr
+            ? IndirectControlFlowKind::Call
+            : IndirectControlFlowKind::Jump;
+        if (!observation.value.has_value()) {
+            resolution.reason = "register-value-unknown";
+            resolutions.push_back(std::move(resolution));
+            continue;
+        }
+        const auto target = *observation.value;
+        const auto* segment = image.find_segment(target, 2u);
+        const auto byte_offset = segment == nullptr ? std::optional<std::size_t>{}
+                                                    : segment->byte_offset(target);
+        if ((target & 1u) != 0u || segment == nullptr
+            || segment->kind != katana::io::SegmentKind::Code
+            || !segment->permissions.executable || !byte_offset.has_value()
+            || segment->bytes.size() < 2u || *byte_offset > segment->bytes.size() - 2u) {
+            resolution.reason = "target-not-committed-executable-code";
+            resolutions.push_back(std::move(resolution));
+            continue;
+        }
+        resolution.status = ResolutionStatus::Resolved;
+        resolution.target = target;
+        resolution.reason = "constant-register";
+        resolutions.push_back(std::move(resolution));
+    }
+    return resolutions;
 }
 
 }
