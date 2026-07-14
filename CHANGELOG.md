@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.22.0] - 2026-07-14
+
 ### Hinzugefuegt
 
 - KR-2201: `katana::runtime::Memory` dekodiert Adressen jetzt ueber benannte, nicht ueberlappende 32-Bit-Regionen und delegiert Bytezugriffe an registrierbare `MemoryDevice`-Instanzen. `LinearMemoryDevice`, Read-only-Regionen, Little-Endian-Mehrbytezugriffe und auslesbare Regionsmetadaten bilden die Grundlage fuer die folgenden Dreamcast-Speicherbereiche.
@@ -10,6 +12,7 @@
 - KR-2204: `map_dreamcast_bios` bildet ein optional bereitgestelltes 2-MiB-BIOS read-only ab; `map_dreamcast_flash` registriert ein separates beschreibbares 128-KiB-Flash-Backing. Fehlende Firmware wird deterministisch mit `0xFF` initialisiert, falsche Abbildgroessen und Kollisionen werden vor der ersten Registrierung abgelehnt.
 - KR-2205: `MmioMemoryDevice` leitet 8-, 16- und 32-Bit-Zugriffe als genau einen breitenbewussten Callback weiter. Bestehende bytebasierte Speichergeraete behalten einen zentralen Little-Endian-Fallback; fehlende Lese- oder Schreibhandler und ueberlaufende Zugriffe schlagen sichtbar fehl.
 - KR-2206: Der Speicherbus prueft standardmaessig die natuerliche Ausrichtung von Halfword- und Word-Zugriffen, meldet Adressfehler als strukturierte `MemoryAccessError`-Gruende und bietet optionale globale Traces sowie adress- und zugriffsgefilterte Watchpoints.
+- KR-2207: Das v0.22-Release-Gate prueft die gesamte 8-MiB-Offsetabbildung des bankinterleavten 32-Bit-VRAM-Pfads, fuehrt frische Debug- und Release-Regressionen aus und etabliert GitHub Actions fuer Linux/GCC und Windows/MSVC.
 
 ### Geaendert
 

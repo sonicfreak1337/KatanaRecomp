@@ -1,8 +1,8 @@
 # Projektstatus
 
-Version: 0.21.0
+Version: 0.22.0
 Phase: Pre-Alpha
-Aktiver Meilenstein: v0.22.0 - Dreamcast-Speicherbus
+Aktiver Meilenstein: v0.23.0 - Ausnahmen und Interrupts
 
 ## Zusammenfassung
 
@@ -92,10 +92,11 @@ KatanaRecomp besitzt einen durchgaengigen Prototyp-Pfad von Raw- und ELF32-SH-Ei
 - [x] KR-2204 - BIOS- und Flash-Abstraktionen
 - [x] KR-2205 - MMIO-Handler
 - [x] KR-2206 - Ausrichtung, Fehler und Watchpoints
+- [x] KR-2207 - v0.22 Release-Gate
 
 ## Naechster Roadmap-Task
 
-- [ ] KR-2207 - v0.22 Release-Gate
+- [ ] KR-2301 - SR-Felder und Interruptmasken
 
 ## Aktuelle Einschraenkungen
 

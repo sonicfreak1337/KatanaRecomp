@@ -274,11 +274,11 @@ Task: KR-XXXX
 ## Aktuell empfohlener Einstieg
 
 ```text
-KR-2207 - v0.22 Release-Gate
+KR-2301 - SR-Felder und Interruptmasken
 ```
 
 Danach:
 
 ```text
-KR-2301 - SR-Felder und Interruptmasken
+KR-2302 - Exception-Eintritt
 ```

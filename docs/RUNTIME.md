@@ -121,6 +121,13 @@ wurden unabhaengig gegen Flycast (`core/hw/sh4/sh4_mem.cpp` und
 `core/hw/pvr/pvr_mem.cpp`) gegengeprueft; es wurde kein Referenzcode
 uebernommen.
 
+Das v0.22-Release-Gate prueft `dreamcast_vram_32bit_to_linear_offset`
+exhaustiv fuer alle 8.388.608 Eingabe-Offsets. Eine unabhaengige
+Bank-/Wort-Berechnung und eine Bijektivitaetspruefung sichern den kompletten
+8-MiB-Bereich ab. Zusaetzliche Buszugriffe testen alle Bytepositionen beider
+Baenke, Halfword- und Word-Grenzen, den Wechsel bei `0x00400000`,
+fortlaufende Wortfolgen und alle 28 direkten 32-Bit-Aliase.
+
 ## Dreamcast-BIOS und Flash
 
 KR-2204 fuehrt `map_dreamcast_bios` und `map_dreamcast_flash` ein. Beide

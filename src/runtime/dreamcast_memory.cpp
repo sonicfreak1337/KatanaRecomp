@@ -40,33 +40,22 @@ public:
     [[nodiscard]] std::uint8_t read_u8(
         const std::uint32_t offset
     ) const override {
-        return backing_->read_u8(map_offset(offset));
+        return backing_->read_u8(
+            dreamcast_vram_32bit_to_linear_offset(offset)
+        );
     }
 
     void write_u8(
         const std::uint32_t offset,
         const std::uint8_t value
     ) override {
-        backing_->write_u8(map_offset(offset), value);
+        backing_->write_u8(
+            dreamcast_vram_32bit_to_linear_offset(offset),
+            value
+        );
     }
 
 private:
-    [[nodiscard]] static std::uint32_t map_offset(
-        const std::uint32_t offset
-    ) noexcept {
-        constexpr std::uint32_t bank_bit = 0x00400000u;
-        constexpr std::uint32_t byte_bits = 0x00000003u;
-        constexpr std::uint32_t word_offset_bits = 0x003FFFFCu;
-
-        const std::uint32_t bank =
-            (offset & bank_bit) == 0u ? 0u : 1u;
-
-        return
-            (offset & byte_bits) |
-            ((offset & word_offset_bits) << 1u) |
-            (bank << 2u);
-    }
-
     std::shared_ptr<LinearMemoryDevice> backing_;
 };
 

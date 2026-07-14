@@ -674,9 +674,29 @@ Akzeptanz:
 - generierte Speicher-Grenzfalltests pruefen strukturierte Fehlergruende statt veralteter Standardausnahmen
 - generierter Code prueft Runtime-ABI Version 5
 
-### [ ] KR-2207 - v0.22 Release-Gate
+### [x] KR-2207 - v0.22 Release-Gate
 
 Abhaengigkeiten: KR-2201 bis KR-2206
+
+Umfang:
+
+- Version und Release-Dokumentation auf v0.22.0 aktualisieren
+- 32-Bit-VRAM-Offsetabbildung als zentrale, testbare Runtime-Funktion formulieren
+- alle 8.388.608 VRAM-Byte-Offsets exhaustiv und bijektiv pruefen
+- Bank-, Byte-, Halfword-, Word-, Sequenz- und Aliasgrenzen zusaetzlich ueber den Bus pruefen
+- frische lokale Debug- und Release-Builds
+- GitHub-Actions-Regression unter Linux/GCC und Windows/MSVC
+- annotierten Tag `v0.22.0` erst nach erfolgreichen CI-Checks erstellen
+
+Akzeptanz:
+
+- alle 89 Tests bestehen in frischen lokalen Debug- und Release-Builds
+- die exhaustive VRAM-Pruefung deckt beide Baenke und den kompletten 8-MiB-Offsetraum ab
+- Linux- und Windows-CI bauen und testen Debug sowie Release erfolgreich
+- der Release-Commit besitzt echte GitHub-Statuschecks
+- `VERSION`, CMake, README, Roadmap, Status, Changelog und Release Notes stimmen auf 0.22.0 ueberein
+- keine Buildartefakte, ROMs, BIOS-Dateien, Disc-Images oder geschuetzten Assets werden committed
+- der Release-Tag zeigt exakt auf den von CI bestaetigten Release-Commit
 
 ---
 

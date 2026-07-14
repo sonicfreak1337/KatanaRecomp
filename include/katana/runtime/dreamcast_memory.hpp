@@ -16,8 +16,25 @@ inline constexpr std::size_t dreamcast_vram_size = 0x00800000u;
 inline constexpr std::size_t dreamcast_aica_ram_size = 0x00200000u;
 inline constexpr std::size_t dreamcast_bios_size = 0x00200000u;
 inline constexpr std::size_t dreamcast_flash_size = 0x00020000u;
+inline constexpr std::uint32_t dreamcast_vram_bank_size = 0x00400000u;
 inline constexpr std::uint32_t dreamcast_bios_physical_base = 0x00000000u;
 inline constexpr std::uint32_t dreamcast_flash_physical_base = 0x00200000u;
+
+[[nodiscard]] constexpr std::uint32_t
+dreamcast_vram_32bit_to_linear_offset(
+    const std::uint32_t offset
+) noexcept {
+    constexpr std::uint32_t bytes_per_word = 4u;
+
+    const auto bank = offset / dreamcast_vram_bank_size;
+    const auto offset_in_bank = offset % dreamcast_vram_bank_size;
+    const auto word_in_bank = offset_in_bank / bytes_per_word;
+    const auto byte_in_word = offset_in_bank % bytes_per_word;
+
+    return
+        ((word_in_bank * 2u + bank) * bytes_per_word) +
+        byte_in_word;
+}
 
 inline constexpr std::array<std::uint32_t, 7>
     dreamcast_direct_segment_bases = {

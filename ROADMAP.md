@@ -1,7 +1,7 @@
 # KatanaRecomp Roadmap
 
 Status: Pre-Alpha
-Aktuelle Basis: v0.21.0
+Aktuelle Basis: v0.22.0
 Planungsmodell: Semantic Versioning, kleine ueberpruefbare Meilensteine
 
 Diese Roadmap beschreibt die technische Entwicklung von KatanaRecomp vom aktuellen Architektur-Prototyp bis zu einem belastbaren Dreamcast-Recompiler-Framework.
@@ -361,7 +361,7 @@ Fortschritt:
 - [x] KR-2204 - BIOS- und Flash-Abstraktionen
 - [x] KR-2205 - MMIO-Handler
 - [x] KR-2206 - Ausrichtung, Fehler und Watchpoints
-- [ ] KR-2207 - v0.22 Release-Gate
+- [x] KR-2207 - v0.22 Release-Gate
 
 Enthalten:
 

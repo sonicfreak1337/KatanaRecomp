@@ -1,10 +1,12 @@
 # KatanaRecomp
 
-Aktuelle Pre-Alpha-Version: `0.21.0`
+[![CI](https://github.com/sonicfreak1337/KatanaRecomp/actions/workflows/ci.yml/badge.svg)](https://github.com/sonicfreak1337/KatanaRecomp/actions/workflows/ci.yml)
+
+Aktuelle Pre-Alpha-Version: `0.22.0`
 
 KatanaRecomp ist ein unabhaengiges, in C++20 entwickeltes Framework fuer die statische Rekompilierung von Sega-Dreamcast-SH-4-Code.
 
-Das Projekt befindet sich in einer fruehen Pre-Alpha-Phase. Der aktuelle Stand ist **Version 0.21.0**.
+Das Projekt befindet sich in einer fruehen Pre-Alpha-Phase. Der aktuelle Stand ist **Version 0.22.0**.
 
 KatanaRecomp ist kein Emulator, kein ISO-Loader und kein Paket fuer kommerzielle Spieldaten. BIOS-Dateien, Disc-Images, urheberrechtlich geschuetzte Assets und automatisch erzeugter Code aus kommerziellen Spielen gehoeren nicht in dieses Repository.
 
@@ -56,20 +58,15 @@ konfigurierbarer, deterministischer CPU-Reset setzt den Architekturzustand
 reproduzierbar zurueck und bewahrt den Runtime-Speicher. Details stehen in
 `docs/RUNTIME.md`.
 
-Der aktuelle Unreleased-Stand fuer v0.22 fuehrt mit KR-2201 einen
-regionbasierten Speicherbus ein. Speichergeraete werden an benannte,
-nicht ueberlappende 32-Bit-Adressbereiche gebunden; Little-Endian-Zugriffe,
-Read-only-Schutz und ungueltige Adressen werden zentral behandelt. KR-2202
-erganzt ein gemeinsames 16-MiB-Dreamcast-Haupt-RAM mit den direkten
-Area-3-, U0/P0-, P1-, P2- und P3-No-MMU-Spiegelungen. KR-2203 bildet
-zusaetzlich 8 MiB VRAM ueber lineare 64-Bit- und bankinterleavte
-32-Bit-Fenster sowie 2 MiB AICA-RAM mit direkten Spiegelungen ab. KR-2204
-erganzt ein read-only 2-MiB-BIOS und ein getrenntes beschreibbares
-128-KiB-Flash-Backing mit optionaler Image-Initialisierung. KR-2205 fuehrt
-breitenbewusste MMIO-Handler ein, sodass ein 8-, 16- oder 32-Bit-Registerzugriff
-genau einen Callback mit lokalem Offset, Wert und Zugriffsbreite ausloest.
-KR-2206 ergaenzt strikte natuerliche Ausrichtung, strukturierte Speicherfehler
-sowie optionale Traces und gefilterte Watchpoints fuer erfolgreiche Zugriffe.
+v0.22 fuehrt einen regionbasierten Dreamcast-Speicherbus ein.
+Speichergeraete werden an benannte, nicht ueberlappende 32-Bit-Adressbereiche
+gebunden. Haupt-RAM, lineares und bankinterleavtes VRAM, AICA-RAM, BIOS und
+Flash besitzen explizite Aliasfenster und Zugriffsrechte. Breitenbewusste
+MMIO-Handler, strikte natuerliche Ausrichtung, strukturierte Speicherfehler,
+Traces und Watchpoints bilden die Diagnosegrundlage. Das Release-Gate prueft
+die komplette 8-MiB-Offsetabbildung des 32-Bit-VRAM-Pfads und fuehrt Debug-
+sowie Release-Regressionen lokal und per GitHub Actions unter Linux und
+Windows aus.
 
 ## Implementierte SH-4-Instruktionen
 
