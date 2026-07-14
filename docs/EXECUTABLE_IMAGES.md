@@ -67,3 +67,11 @@ Relocation-Adresse. Ergebnisse werden mit 32-Bit-Wraparound in die geladenen
 Segmentdaten geschrieben. Unbekannte Typen bleiben als `Unsupported` im Image
 sichtbar und veraendern keine Bytes. Ungeloeste Symbole, ungueltige Tabellen und
 Ziele ausserhalb committed Segmentdaten schlagen mit Datei, Offset und Ursache fehl.
+
+## Projektmanifest
+
+`parse_project_manifest` liest das strikt versionierte Manifest-v1-Schema;
+`load_project_manifest` waehlt Raw- oder ELF32-SH-Loader, wendet das deklarierte
+Adresslayout an und laedt optional eine Symbol-Map. Relative Eingabe- und
+Map-Pfade beziehen sich immer auf das Manifestverzeichnis. Das vollstaendige
+Format steht in `docs/PROJECT_MANIFEST.md`.

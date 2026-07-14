@@ -374,7 +374,7 @@ Abhaengigkeiten: KR-1603
 
 Abhaengigkeiten: KR-1603
 
-### [ ] KR-1606 - Projektmanifest Version 1
+### [x] KR-1606 - Projektmanifest Version 1
 
 Abhaengigkeiten: KR-1602, KR-1603
 

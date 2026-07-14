@@ -40,6 +40,7 @@ add_library(katana_core STATIC
     src/io/binary_reader.cpp
     src/io/executable_image.cpp
     src/io/elf32_sh_loader.cpp
+    src/io/project_manifest.cpp
     src/io/raw_binary_loader.cpp
     src/io/symbol_map.cpp
     src/analysis/disassembler.cpp
@@ -137,6 +138,18 @@ katana_enable_warnings(katana-symbol-map-tests)
 add_test(
     NAME katana-symbol-map-tests
     COMMAND katana-symbol-map-tests
+)
+
+add_executable(katana-project-manifest-tests
+    tests/io/project_manifest_tests.cpp
+)
+
+target_link_libraries(katana-project-manifest-tests PRIVATE katana_core)
+katana_enable_warnings(katana-project-manifest-tests)
+
+add_test(
+    NAME katana-project-manifest-tests
+    COMMAND katana-project-manifest-tests
 )
 
 add_executable(katana-instruction-metadata-tests
