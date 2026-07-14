@@ -80,7 +80,8 @@ KatanaRecomp besitzt einen durchgaengigen Prototyp-Pfad von Raw- und ELF32-SH-Ei
 
 - [x] KR-2001 - Constant Folding
 - [x] KR-2002 - Copy Propagation
-- [ ] KR-2003 - Dead-Code-Elimination
+- [x] KR-2003 - Dead-Code-Elimination
+- [ ] KR-2004 - CFG-Simplifizierung
 
 ## Aktuelle Einschraenkungen
 

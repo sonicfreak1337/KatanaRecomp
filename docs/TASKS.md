@@ -490,7 +490,7 @@ Abhaengigkeiten: KR-1907
 
 Abhaengigkeiten: KR-2001
 
-### [ ] KR-2003 - Dead-Code-Elimination
+### [x] KR-2003 - Dead-Code-Elimination
 
 Abhaengigkeiten: KR-2002
 

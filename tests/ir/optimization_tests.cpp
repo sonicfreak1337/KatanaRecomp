@@ -76,6 +76,32 @@ int main() {
     require(katana::ir::verify_function(copy_function).empty(),
         "Copy Propagation erzeugt ungueltige Katana-IR.");
 
+    constexpr std::array<std::uint8_t, 10> dead_bytes = {
+        0x01u, 0xE1u, // MOV #1,R1 (Blockanfang bleibt erhalten)
+        0x02u, 0xE2u, // MOV #2,R2 (tot)
+        0x03u, 0xE2u, // MOV #3,R2
+        0x0Bu, 0x00u, // RTS
+        0x09u, 0x00u  // NOP
+    };
+    const auto dead_lines = katana::sh4::disassemble(dead_bytes, 0x8C030000u);
+    constexpr std::array<std::uint32_t, 1> dead_seeds = {0x8C030000u};
+    const auto dead_discovered = katana::analysis::discover_functions(
+        dead_lines,
+        dead_seeds
+    );
+    auto dead_program = katana::ir::lower_program(dead_lines, dead_discovered);
+    auto& dead_function = dead_program.front();
+    const auto dead_result = katana::ir::eliminate_dead_code(dead_function);
+    const auto& dead_instructions = dead_function.blocks.front().instructions;
+    require(
+        dead_result.changes == 1u &&
+        dead_instructions.size() == 4u &&
+        dead_instructions[1].source_address == 0x8C030004u,
+        "Dead-Code-Elimination entfernt keine eindeutig ueberschriebene Definition."
+    );
+    require(katana::ir::verify_function(dead_function).empty(),
+        "Dead-Code-Elimination erzeugt ungueltige Katana-IR.");
+
     std::cout << "KR-2001 Constant Folding erfolgreich.\n";
     return EXIT_SUCCESS;
 }

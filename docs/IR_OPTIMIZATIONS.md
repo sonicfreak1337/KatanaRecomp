@@ -21,3 +21,10 @@ gesamten lokalen Konstantenzustand.
 modellierter arithmetischer, logischer und vergleichender Operationen. Ein
 Schreibzugriff auf die kopierte Quelle, das Ziel oder eine Alias-Kette invalidiert
 alle betroffenen Beziehungen. Unbekannte Registerwirkungen leeren den Aliaszustand.
+
+## Dead-Code-Elimination
+
+`eliminate_dead_code` entfernt nur reine Registerdefinitionen, die im selben Block
+vor jeder Nutzung durch eine weitere reine Definition desselben Registers ersetzt
+werden. Blockanfaenge bleiben stabil. Delay Slots sowie Status-, Speicher-,
+Akkumulator-, Privileg- und unbekannte Effekte bilden harte Grenzen.

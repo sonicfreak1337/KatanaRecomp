@@ -288,6 +288,83 @@ OptimizationResult propagate_block_copies(BasicBlock& block) {
     return result;
 }
 
+bool is_pure_register_write(const Instruction& instruction) noexcept {
+    if (
+        instruction.delay_slot.role != DelaySlotRole::None ||
+        instruction.is_privileged ||
+        instruction.status_effects != StatusRegisterEffects{} ||
+        instruction.memory_effects != MemoryEffects{} ||
+        instruction.accumulator_effects != AccumulatorEffects{}
+    ) {
+        return false;
+    }
+    return writes_destination(instruction.operation);
+}
+
+bool reads_register(
+    const Instruction& instruction,
+    const std::uint8_t register_index
+) noexcept {
+    switch (instruction.operation) {
+        case Operation::MovImmediate:
+            return false;
+        case Operation::MovRegister:
+        case Operation::NegateRegister:
+        case Operation::NotRegister:
+            return instruction.source_register == register_index;
+        case Operation::AddImmediate:
+            return instruction.destination_register == register_index;
+        case Operation::AddRegister:
+        case Operation::SubRegister:
+        case Operation::AndRegister:
+        case Operation::OrRegister:
+        case Operation::XorRegister:
+            return instruction.destination_register == register_index ||
+                instruction.source_register == register_index;
+        default:
+            return true;
+    }
+}
+
+OptimizationResult eliminate_dead_block_code(BasicBlock& block) {
+    OptimizationResult result;
+    std::size_t index = 1u;
+    while (index < block.instructions.size()) {
+        const auto& candidate = block.instructions[index];
+        if (!is_pure_register_write(candidate)) {
+            ++index;
+            continue;
+        }
+
+        const auto destination = candidate.destination_register;
+        bool overwritten = false;
+        for (std::size_t next = index + 1u; next < block.instructions.size(); ++next) {
+            const auto& instruction = block.instructions[next];
+            if (reads_register(instruction, destination)) break;
+            if (
+                is_pure_register_write(instruction) &&
+                instruction.destination_register == destination
+            ) {
+                overwritten = true;
+                break;
+            }
+            if (!is_pure_register_write(instruction) &&
+                instruction.operation != Operation::Nop) {
+                break;
+            }
+        }
+
+        if (overwritten) {
+            block.instructions.erase(block.instructions.begin() +
+                static_cast<std::ptrdiff_t>(index));
+            ++result.changes;
+        } else {
+            ++index;
+        }
+    }
+    return result;
+}
+
 }
 
 OptimizationResult fold_constants(Function& function) {
@@ -305,6 +382,16 @@ OptimizationResult propagate_copies(Function& function) {
     OptimizationResult result;
     for (auto& block : function.blocks) {
         result.changes += propagate_block_copies(block).changes;
+    }
+    require_valid_function(function);
+    return result;
+}
+
+OptimizationResult eliminate_dead_code(Function& function) {
+    require_valid_function(function);
+    OptimizationResult result;
+    for (auto& block : function.blocks) {
+        result.changes += eliminate_dead_block_code(block).changes;
     }
     require_valid_function(function);
     return result;
