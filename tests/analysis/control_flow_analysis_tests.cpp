@@ -223,19 +223,23 @@ int main() {
         "Teilweise ungueltige Jump Table speiste sichere Teilziele in die Worklist."
     );
 
-    auto table_call_image = table_jump_image;
-    table_call_image = code_image({
-        0x0Bu, 0x41u, 0x09u, 0x00u, 0x09u, 0x00u, 0x0Bu, 0x00u,
-        0x0Bu, 0x00u, 0x09u, 0x00u, 0x0Bu, 0x00u, 0x09u, 0x00u
+    auto table_call_image = code_image({
+        0x0Bu, 0x41u, 0x09u, 0x00u,
+        0x0Bu, 0x00u, 0x09u, 0x00u,
+        0x09u, 0x00u, 0x09u, 0x00u,
+        0x0Bu, 0x00u, 0x09u, 0x00u,
+        0x09u, 0x00u, 0x09u, 0x00u,
+        0x0Bu, 0x00u, 0x09u, 0x00u
     });
     table_call_image.add_segment({
-        ".table", 0x100u, 16u, 8u, katana::io::SegmentKind::Data, {true, false, false},
-        {0x08u, 0x00u, 0x00u, 0x00u, 0x0Cu, 0x00u, 0x00u, 0x00u}
+        ".table", 0x100u, 24u, 8u, katana::io::SegmentKind::Data,
+        {true, false, false},
+        {0x0Cu, 0x00u, 0x00u, 0x00u, 0x14u, 0x00u, 0x00u, 0x00u}
     });
     const auto table_call = katana::analysis::analyze_control_flow(
         table_call_image, &table_override
     );
-    const auto* table_function = find_function(table_call, 8u);
+    const auto* table_function = find_function(table_call, 12u);
     require(table_function != nullptr, "JSR-Tabelle erzeugte keinen Funktionskandidaten.");
     require(
         table_function->origins == std::vector<katana::analysis::FunctionOrigin>{
@@ -250,11 +254,27 @@ int main() {
         [](const auto& function) { return function.entry_address == 0u; }
     );
     require(
-        main_ir != table_call_ir.end() &&
-        main_ir->direct_callees == std::vector<std::uint32_t>{8u, 12u} &&
-        main_ir->indirect_call_sites == std::vector<std::uint32_t>{0u} &&
-        katana::ir::verify_program(table_call_ir).empty(),
-        "Call-Tabelle liefert keine konsistenten Funktions- und Call-Metadaten."
+        main_ir != table_call_ir.end(),
+        "Call-Tabelle besitzt keine IR-Hauptfunktion."
+    );
+    require(
+        main_ir->direct_callees ==
+            std::vector<std::uint32_t>{12u, 20u},
+        "Call-Tabelle liefert falsche direkte Callee-Metadaten."
+    );
+    require(
+        main_ir->indirect_call_sites ==
+            std::vector<std::uint32_t>{0u},
+        "Call-Tabelle liefert falsche indirekte Callsite-Metadaten."
+    );
+    const auto table_call_issues = katana::ir::verify_program(table_call_ir);
+    for (const auto& issue : table_call_issues) {
+        std::cerr << "IR-VERIFIER: " << issue.address
+            << ": " << issue.message << '\n';
+    }
+    require(
+        table_call_issues.empty(),
+        "Call-Tabellen-IR ist laut Verifier inkonsistent."
     );
 
     katana::analysis::AnalysisOverrides bad_dispatch;
