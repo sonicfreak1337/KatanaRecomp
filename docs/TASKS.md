@@ -450,7 +450,7 @@ Abhaengigkeiten: KR-1801 bis KR-1806
 
 ## v0.19.0 - IR Version 2
 
-### [ ] KR-1901 - Explizite Operandbreiten
+### [x] KR-1901 - Explizite Operandbreiten
 
 Abhaengigkeiten: KR-1807
 

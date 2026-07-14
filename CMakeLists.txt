@@ -54,6 +54,7 @@ add_library(katana_core STATIC
     src/analysis/control_flow_report.cpp
     src/analysis/control_flow_analysis.cpp
     src/ir/lower.cpp
+    src/ir/operand_width.cpp
     src/codegen/cpp_emitter.cpp
 )
 
@@ -400,6 +401,18 @@ katana_enable_warnings(katana-ir-lowering-tests)
 add_test(
     NAME katana-ir-lowering-tests
     COMMAND katana-ir-lowering-tests
+)
+
+add_executable(katana-ir-operand-width-tests
+    tests/ir/operand_width_tests.cpp
+)
+
+target_link_libraries(katana-ir-operand-width-tests PRIVATE katana_core)
+katana_enable_warnings(katana-ir-operand-width-tests)
+
+add_test(
+    NAME katana-ir-operand-width-tests
+    COMMAND katana-ir-operand-width-tests
 )
 
 add_executable(katana-cpp-emitter-tests

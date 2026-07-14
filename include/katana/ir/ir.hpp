@@ -7,6 +7,30 @@
 
 namespace katana::ir {
 
+enum class OperandWidth : std::uint8_t {
+    None = 0u,
+    Bit1 = 1u,
+    Bits4 = 4u,
+    Bits8 = 8u,
+    Bits12 = 12u,
+    Bits16 = 16u,
+    Bits32 = 32u,
+    Bits64 = 64u
+};
+
+struct OperandWidths {
+    // Semantic value widths are independent from encoded field widths. Multiple
+    // register inputs of one operation share `input` on the current SH-4 IR.
+    OperandWidth result = OperandWidth::None;
+    OperandWidth input = OperandWidth::None;
+    // Immediate and displacement describe their encoded instruction fields.
+    OperandWidth immediate = OperandWidth::None;
+    OperandWidth displacement = OperandWidth::None;
+    // Memory is the transfer width; address is the effective-address width.
+    OperandWidth memory = OperandWidth::None;
+    OperandWidth address = OperandWidth::None;
+};
+
 enum class SpecialRegister {
     None,
     Mach,
@@ -156,6 +180,7 @@ struct Instruction {
     std::uint16_t original_opcode = 0;
 
     Operation operation = Operation::Unknown;
+    OperandWidths widths;
 
     std::uint8_t destination_register = 0;
     std::uint8_t source_register = 0;
@@ -190,5 +215,8 @@ struct Function {
 [[nodiscard]] std::string_view operation_name(
     Operation operation
 ) noexcept;
+
+[[nodiscard]] OperandWidths operation_operand_widths(Operation operation) noexcept;
+[[nodiscard]] std::string_view operand_width_name(OperandWidth width) noexcept;
 
 }

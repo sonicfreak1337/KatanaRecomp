@@ -134,6 +134,13 @@ int main() {
         sub_block.instructions[0].immediate == 5,
         "MOV Immediate besitzt den falschen Wert."
     );
+    require(
+        sub_block.instructions[0].widths.result
+                == katana::ir::OperandWidth::Bits32
+            && sub_block.instructions[0].widths.immediate
+                == katana::ir::OperandWidth::Bits8,
+        "MOV Immediate verlor seine expliziten Operandbreiten beim Lowering."
+    );
 
     require(
         sub_block.instructions[1].operation ==
@@ -143,6 +150,11 @@ int main() {
     require(
         sub_block.instructions[1].immediate == -1,
         "ADD Immediate besitzt den falschen Wert."
+    );
+    require(
+        call.widths.displacement == katana::ir::OperandWidth::Bits12
+            && call.widths.address == katana::ir::OperandWidth::Bits32,
+        "BSR verlor Displacement- oder Adressbreite beim Lowering."
     );
 
     require(
