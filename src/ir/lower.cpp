@@ -443,10 +443,17 @@ Instruction lower_instruction(
 
     result.target_address = source.target_address;
 
-    result.has_delay_slot =
-        source.instruction.has_delay_slot;
-    result.is_delay_slot =
-        source.is_delay_slot;
+    if (source.instruction.has_delay_slot) {
+        result.delay_slot = {
+            DelaySlotRole::Owner,
+            source.address + 2u
+        };
+    } else if (source.is_delay_slot) {
+        result.delay_slot = {
+            DelaySlotRole::Slot,
+            source.address - 2u
+        };
+    }
     result.is_privileged =
         source.instruction.is_privileged;
 

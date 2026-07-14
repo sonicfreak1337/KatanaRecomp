@@ -494,11 +494,11 @@ void print_ir_instruction(
             break;
     }
 
-    if (instruction.has_delay_slot) {
+    if (instruction.delay_slot.role == katana::ir::DelaySlotRole::Owner) {
         std::cout << " [delayed]";
     }
 
-    if (instruction.is_delay_slot) {
+    if (instruction.delay_slot.role == katana::ir::DelaySlotRole::Slot) {
         std::cout << " [delay-slot]";
     }
 

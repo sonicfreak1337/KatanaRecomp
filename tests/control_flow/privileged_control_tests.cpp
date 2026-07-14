@@ -104,8 +104,11 @@ int main(const int argc, char* argv[]) {
     );
     require(
         lowered_rte != nullptr && lowered_rte->operation == Operation::ReturnFromException &&
-        lowered_rte->has_delay_slot && lowered_rte->is_privileged &&
-        delay_slot != nullptr && delay_slot->is_delay_slot,
+        lowered_rte->delay_slot.role == katana::ir::DelaySlotRole::Owner &&
+        lowered_rte->is_privileged && delay_slot != nullptr &&
+        delay_slot->delay_slot.role == katana::ir::DelaySlotRole::Slot &&
+        lowered_rte->delay_slot.counterpart_address == delay_slot->source_address &&
+        delay_slot->delay_slot.counterpart_address == lowered_rte->source_address,
         "RTE-Delay-Slot wurde falsch analysiert oder abgesenkt."
     );
     require(

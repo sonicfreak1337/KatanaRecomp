@@ -462,7 +462,7 @@ Abhaengigkeiten: KR-1901
 
 Abhaengigkeiten: KR-1901
 
-### [ ] KR-1904 - Delay-Slot-Normalisierung
+### [x] KR-1904 - Delay-Slot-Normalisierung
 
 Abhaengigkeiten: KR-1901
 

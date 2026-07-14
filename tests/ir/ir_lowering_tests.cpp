@@ -84,7 +84,8 @@ int main() {
         "Der IR-Aufruf besitzt das falsche Ziel."
     );
     require(
-        call.has_delay_slot,
+        call.delay_slot.role == katana::ir::DelaySlotRole::Owner
+            && call.delay_slot.counterpart_address == 0x8C010002u,
         "Der IR-Aufruf verlor seine Delay-Slot-Eigenschaft."
     );
 
@@ -96,7 +97,8 @@ int main() {
         "Der Delay Slot des Aufrufs ist kein NOP."
     );
     require(
-        call_delay.is_delay_slot,
+        call_delay.delay_slot.role == katana::ir::DelaySlotRole::Slot
+            && call_delay.delay_slot.counterpart_address == 0x8C010000u,
         "Der IR-Delay-Slot wurde nicht markiert."
     );
 
@@ -173,7 +175,9 @@ int main() {
         "RTS der Unterfunktion wurde falsch abgesenkt."
     );
     require(
-        sub_block.instructions[4].is_delay_slot,
+        sub_block.instructions[4].delay_slot.role == katana::ir::DelaySlotRole::Slot
+            && sub_block.instructions[4].delay_slot.counterpart_address
+                == sub_block.instructions[3].source_address,
         "Der RTS-Delay-Slot wurde im IR nicht markiert."
     );
 

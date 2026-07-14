@@ -48,7 +48,7 @@ std::uint32_t fallthrough_address(
     const katana::ir::Instruction& instruction
 ) {
     return instruction.source_address +
-        (instruction.has_delay_slot ? 4u : 2u);
+        (instruction.delay_slot.role == katana::ir::DelaySlotRole::Owner ? 4u : 2u);
 }
 
 std::string special_register_read_expression(
@@ -1977,9 +1977,14 @@ void emit_terminal(
     const katana::ir::Instruction* delay_slot = nullptr;
 
     if (
-        instruction.has_delay_slot &&
+        instruction.delay_slot.role == katana::ir::DelaySlotRole::Owner &&
         control_index + 1u < block.instructions.size() &&
-        block.instructions[control_index + 1u].is_delay_slot
+        block.instructions[control_index + 1u].delay_slot.role ==
+            katana::ir::DelaySlotRole::Slot &&
+        instruction.delay_slot.counterpart_address ==
+            block.instructions[control_index + 1u].source_address &&
+        block.instructions[control_index + 1u].delay_slot.counterpart_address ==
+            instruction.source_address
     ) {
         delay_slot =
             &block.instructions[control_index + 1u];
@@ -2497,7 +2502,7 @@ void emit_block(
         const auto& instruction =
             block.instructions[index];
 
-        if (instruction.is_delay_slot) {
+        if (instruction.delay_slot.role == katana::ir::DelaySlotRole::Slot) {
             continue;
         }
 

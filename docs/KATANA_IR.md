@@ -49,3 +49,15 @@ Pre-Decrement-Store schreibt nach vorheriger Adressaenderung. `MAC.W` und `MAC.L
 besitzen jeweils zwei Reads und zwei Post-Increment-Updates. Die Transferbreite muss
 mit `OperandWidths.memory` uebereinstimmen; diese Beziehung wird vom IR-Verifier
 geprueft.
+
+## Delay Slots
+
+`DelaySlotRelation` ersetzt unabhaengige Wahrheitswerte durch drei eindeutige Rollen:
+`None`, `Owner` und `Slot`. Owner und Slot nennen jeweils die Adresse ihres
+Gegenparts. Der C++-Codegenerator akzeptiert eine Delay-Slot-Instruktion nur dann
+als Teil des Kontrolltransfers, wenn beide Rollen und beide Adressen zueinander
+passen.
+
+Damit ist die Ausfuehrungsreihenfolge nicht mehr aus zwei lose gekoppelten Markern
+zu erraten. Fehlende, verwaiste oder widerspruechliche Beziehungen koennen vor dem
+Codegenerator vom IR-Verifier abgelehnt werden.

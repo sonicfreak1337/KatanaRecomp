@@ -65,6 +65,17 @@ struct MemoryEffects {
     std::uint8_t updated_register_count = 0u;
 };
 
+enum class DelaySlotRole : std::uint8_t {
+    None,
+    Owner,
+    Slot
+};
+
+struct DelaySlotRelation {
+    DelaySlotRole role = DelaySlotRole::None;
+    std::optional<std::uint32_t> counterpart_address;
+};
+
 enum class SpecialRegister {
     None,
     Mach,
@@ -228,8 +239,7 @@ struct Instruction {
     std::optional<std::uint32_t> effective_address;
     std::optional<std::uint32_t> target_address;
 
-    bool has_delay_slot = false;
-    bool is_delay_slot = false;
+    DelaySlotRelation delay_slot;
     bool is_privileged = false;
 };
 
