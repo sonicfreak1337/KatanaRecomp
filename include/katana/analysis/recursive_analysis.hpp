@@ -4,6 +4,7 @@
 #include "katana/sh4/disassembler.hpp"
 
 #include <cstdint>
+#include <string>
 #include <vector>
 
 namespace katana::analysis {
@@ -65,5 +66,8 @@ struct RecursiveAnalysisResult {
 [[nodiscard]] const char* function_origin_name(FunctionOrigin origin) noexcept;
 [[nodiscard]] const char* analysis_confidence_name(AnalysisConfidence confidence) noexcept;
 [[nodiscard]] const char* analysis_conflict_kind_name(AnalysisConflictKind kind) noexcept;
+[[nodiscard]] std::string format_recursive_analysis_report(
+    const RecursiveAnalysisResult& result
+);
 
 }

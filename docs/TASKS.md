@@ -406,7 +406,7 @@ Abhaengigkeiten: KR-1702
 
 Abhaengigkeiten: KR-1702
 
-### [ ] KR-1706 - Analysebericht
+### [x] KR-1706 - Analysebericht
 
 Abhaengigkeiten: KR-1701 bis KR-1705
 

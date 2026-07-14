@@ -132,6 +132,17 @@ int main() {
             == "function-entry-in-delay-slot",
         "Konfliktname ist instabil."
     );
+    const auto report = katana::analysis::format_recursive_analysis_report(result);
+    require(report == katana::analysis::format_recursive_analysis_report(result), "Analysebericht ist nicht deterministisch.");
+    require(
+        report.find("Funktion 0x8C010000 Konfidenz=certain Herkunft=entry-point") != std::string::npos,
+        "Analysebericht erklaert den Einstiegspunkt nicht."
+    );
+    require(
+        report.find("Funktion 0x8C010008 Konfidenz=high Herkunft=direct-call,symbol") != std::string::npos,
+        "Analysebericht erklaert den Call-/Symbolkandidaten nicht."
+    );
+    require(report.find("Unerreichbar 0x8C01000C Groesse=2") != std::string::npos, "Unerreichbarer Bereich fehlt im Bericht.");
 
     std::cout << "KR-1701 Worklist ab Einstiegspunkten erfolgreich.\n";
     return EXIT_SUCCESS;

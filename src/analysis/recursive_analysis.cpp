@@ -7,8 +7,10 @@
 #include <algorithm>
 #include <deque>
 #include <limits>
+#include <iomanip>
 #include <map>
 #include <set>
+#include <sstream>
 #include <stdexcept>
 
 namespace katana::analysis {
@@ -299,6 +301,50 @@ const char* analysis_conflict_kind_name(const AnalysisConflictKind kind) noexcep
             return "function-entry-in-delay-slot";
     }
     return "unknown";
+}
+
+std::string format_recursive_analysis_report(const RecursiveAnalysisResult& result) {
+    std::ostringstream output;
+    output << "Katana rekursive Analyse\n"
+           << "Instruktionen: " << result.instructions.size() << '\n'
+           << "Funktionen: " << result.functions.size() << '\n'
+           << "Bereiche: " << result.ranges.size() << '\n'
+           << "Unerreichbar: " << result.unreachable_code.size() << '\n'
+           << "Konflikte: " << result.conflicts.size() << "\n\n";
+    const auto address = [&output](const std::uint32_t value) {
+        output << "0x" << std::hex << std::uppercase << std::setw(8)
+               << std::setfill('0') << value << std::dec << std::setfill(' ');
+    };
+
+    for (const auto& function : result.functions) {
+        output << "Funktion ";
+        address(function.address);
+        output << " Konfidenz=" << analysis_confidence_name(function.confidence) << " Herkunft=";
+        for (std::size_t index = 0; index < function.origins.size(); ++index) {
+            if (index != 0u) {
+                output << ',';
+            }
+            output << function_origin_name(function.origins[index]);
+        }
+        output << '\n';
+    }
+    for (const auto& range : result.ranges) {
+        output << "Bereich ";
+        address(range.start_address);
+        output << " Groesse=" << range.size << " Art=" << discovered_byte_kind_name(range.kind) << '\n';
+    }
+    for (const auto& range : result.unreachable_code) {
+        output << "Unerreichbar ";
+        address(range.start_address);
+        output << " Groesse=" << range.size << '\n';
+    }
+    for (const auto& conflict : result.conflicts) {
+        output << "Konflikt ";
+        address(conflict.address);
+        output << " Groesse=" << conflict.size
+               << " Grund=" << analysis_conflict_kind_name(conflict.kind) << '\n';
+    }
+    return output.str();
 }
 
 }

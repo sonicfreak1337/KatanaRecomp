@@ -48,3 +48,10 @@ mehrdeutige Rollenbelegung. Die Analyse verarbeitet die Adresse weiterhin nur
 einmal und gibt einen deterministischen Konfliktbereich mit dem Grund
 `function-entry-in-delay-slot` aus. Physisch ueberlappende Image-Segmente bleiben
 bereits durch das Executable-Image-Modell ungueltig.
+
+## Analysebericht
+
+`format_recursive_analysis_report` erzeugt eine deterministische Textausgabe mit
+Summen und adresssortierten Details. Jede Funktion nennt Konfidenz und alle
+Herkunftsgruende; Bereiche, unerreichbarer Code und Konflikte enthalten Adresse,
+Groesse, Klassifikation beziehungsweise Grund.
