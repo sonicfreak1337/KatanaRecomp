@@ -221,6 +221,8 @@ void emit_text_instruction(std::ostringstream& output, const Instruction& value)
         << " immediate=" << value.immediate
         << " displacement=" << value.displacement
         << " special=" << special_register_name(value.special_register)
+        << " forwarded=" << (value.forwarded_value_register
+            ? "r" + std::to_string(*value.forwarded_value_register) : "null")
         << " effective=" << (value.effective_address ? hex32(*value.effective_address) : "null")
         << " target=" << (value.target_address ? hex32(*value.target_address) : "null") << '\n'
         << "      status reads=";
@@ -267,6 +269,13 @@ void emit_json_instruction(std::ostringstream& output, const Instruction& value)
         << "\"immediate\":" << value.immediate << ','
         << "\"displacement\":" << value.displacement << ','
         << "\"special_register\":\"" << special_register_name(value.special_register) << "\","
+        << "\"forwarded_value_register\":";
+    if (value.forwarded_value_register) {
+        output << static_cast<unsigned>(*value.forwarded_value_register);
+    } else {
+        output << "null";
+    }
+    output << ','
         << "\"effective_address\":";
     if (value.effective_address) output << '"' << hex32(*value.effective_address) << '"';
     else output << "null";

@@ -45,6 +45,7 @@ void replace_with_constant(
     instruction.special_register = SpecialRegister::None;
     instruction.effective_address.reset();
     instruction.target_address.reset();
+    instruction.forwarded_value_register.reset();
     canonicalize(instruction);
 }
 
@@ -416,6 +417,24 @@ OptimizationResult simplify_function_cfg(Function& function) {
     return result;
 }
 
+OptimizationResult simplify_block_load_store(BasicBlock& block) {
+    OptimizationResult result;
+    for (std::size_t index = 1u; index < block.instructions.size(); ++index) {
+        const auto& store = block.instructions[index - 1u];
+        auto& load = block.instructions[index];
+        if (
+            store.operation == Operation::StoreLong &&
+            load.operation == Operation::LoadLong &&
+            store.destination_register == load.source_register &&
+            !load.forwarded_value_register.has_value()
+        ) {
+            load.forwarded_value_register = store.source_register;
+            ++result.changes;
+        }
+    }
+    return result;
+}
+
 }
 
 OptimizationResult fold_constants(Function& function) {
@@ -451,6 +470,16 @@ OptimizationResult eliminate_dead_code(Function& function) {
 OptimizationResult simplify_cfg(Function& function) {
     require_valid_function(function);
     const auto result = simplify_function_cfg(function);
+    require_valid_function(function);
+    return result;
+}
+
+OptimizationResult simplify_load_store(Function& function) {
+    require_valid_function(function);
+    OptimizationResult result;
+    for (auto& block : function.blocks) {
+        result.changes += simplify_block_load_store(block).changes;
+    }
     require_valid_function(function);
     return result;
 }

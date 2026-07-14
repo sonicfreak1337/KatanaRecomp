@@ -1,4 +1,5 @@
 #include "katana/analysis/function_analysis.hpp"
+#include "katana/codegen/cpp_emitter.hpp"
 #include "katana/ir/lower.hpp"
 #include "katana/ir/optimize.hpp"
 #include "katana/ir/verifier.hpp"
@@ -132,6 +133,53 @@ int main() {
     require(katana::ir::verify_function(cfg_function).empty(),
         "CFG-Simplifizierung erzeugt ungueltige Katana-IR.");
 
-    std::cout << "KR-2001 Constant Folding erfolgreich.\n";
+    constexpr std::array<std::uint8_t, 8> load_store_bytes = {
+        0x22u, 0x21u, // MOV.L R2,@R1
+        0x12u, 0x63u, // MOV.L @R1,R3
+        0x0Bu, 0x00u, // RTS
+        0x09u, 0x00u  // NOP
+    };
+    const auto load_store_lines = katana::sh4::disassemble(
+        load_store_bytes,
+        0x8C040000u
+    );
+    constexpr std::array<std::uint32_t, 1> load_store_seeds = {0x8C040000u};
+    const auto load_store_discovered = katana::analysis::discover_functions(
+        load_store_lines,
+        load_store_seeds
+    );
+    auto load_store_program = katana::ir::lower_program(
+        load_store_lines,
+        load_store_discovered
+    );
+    auto& load_store_function = load_store_program.front();
+    const auto load_store_result = katana::ir::simplify_load_store(
+        load_store_function
+    );
+    const auto& forwarded_load =
+        load_store_function.blocks.front().instructions[1];
+    require(
+        load_store_result.changes == 1u &&
+        forwarded_load.forwarded_value_register == 2u &&
+        forwarded_load.memory_effects.access == katana::ir::MemoryAccessKind::Read,
+        "Load-Store-Pass leitet den Wert nicht weiter oder entfernt den Read-Effekt."
+    );
+    require(katana::ir::verify_function(load_store_function).empty(),
+        "Load-Store-Vereinfachung erzeugt ungueltige Katana-IR.");
+    const std::array<katana::ir::Function, 1> forwarded_program = {
+        load_store_function
+    };
+    const auto forwarded_cpp = katana::codegen::emit_cpp_program(
+        forwarded_program,
+        load_store_function.entry_address
+    );
+    require(
+        forwarded_cpp.find("static_cast<void>(cpu.memory.read_u32(cpu.r[1]));") !=
+            std::string::npos &&
+        forwarded_cpp.find("cpu.r[3] = forwarded_value;") != std::string::npos,
+        "Codegen erhaelt den Speicher-Read beim Load-Forwarding nicht."
+    );
+
+    std::cout << "Katana-IR-Optimierungen erfolgreich.\n";
     return EXIT_SUCCESS;
 }

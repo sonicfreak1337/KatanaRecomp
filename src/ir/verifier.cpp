@@ -199,7 +199,9 @@ std::vector<VerificationIssue> verify_function(const Function& function) {
             if (
                 instruction.destination_register >= 16u ||
                 instruction.source_register >= 16u ||
-                instruction.branch_register >= 16u
+                instruction.branch_register >= 16u ||
+                (instruction.forwarded_value_register &&
+                    *instruction.forwarded_value_register >= 16u)
             ) {
                 add_issue(issues, instruction.source_address,
                     "Allgemeines Register liegt ausserhalb R0 bis R15.");
@@ -234,6 +236,20 @@ std::vector<VerificationIssue> verify_function(const Function& function) {
                     "Akkumulatoreffekte passen nicht zur Operation.");
             }
             verify_memory_effects(instruction, issues);
+            if (instruction.forwarded_value_register) {
+                const bool valid_forward =
+                    instruction.operation == Operation::LoadLong &&
+                    index != 0u &&
+                    block.instructions[index - 1u].operation == Operation::StoreLong &&
+                    block.instructions[index - 1u].destination_register ==
+                        instruction.source_register &&
+                    block.instructions[index - 1u].source_register ==
+                        *instruction.forwarded_value_register;
+                if (!valid_forward) {
+                    add_issue(issues, instruction.source_address,
+                        "Load-Forwarding besitzt keinen passenden direkten Store.");
+                }
+            }
             verify_delay_slot(block, index, issues);
 
             const bool control_flow = is_control_flow(instruction.operation);

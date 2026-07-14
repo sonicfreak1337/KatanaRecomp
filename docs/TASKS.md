@@ -498,7 +498,7 @@ Abhaengigkeiten: KR-2002
 
 Abhaengigkeiten: KR-2003
 
-### [ ] KR-2005 - Load-Store-Vereinfachung
+### [x] KR-2005 - Load-Store-Vereinfachung
 
 Abhaengigkeiten: KR-1903, KR-2001
 

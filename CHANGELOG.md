@@ -12,6 +12,8 @@
 
 - KR-2004: CFG-Simplifizierung entfernt unerreichbare Funktionsbloecke und kanonisiert Nachfolgerlisten deterministisch.
 
+- KR-2005: Unmittelbar aufeinanderfolgende, adressgleiche 32-Bit-Stores und -Loads reichen den Registerwert weiter, ohne den sichtbaren Speicher-Read zu entfernen.
+
 ## [0.19.0] - 2026-07-14
 
 ### Hinzugefuegt

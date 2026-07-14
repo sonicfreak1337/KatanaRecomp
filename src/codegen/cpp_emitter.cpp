@@ -1356,16 +1356,27 @@ void emit_simple_instruction(
             return;
 
         case Operation::LoadLong:
-            output
-                << "cpu.r["
-                << static_cast<unsigned>(
-                    instruction.destination_register
-                )
-                << "] = cpu.memory.read_u32(cpu.r["
-                << static_cast<unsigned>(
-                    instruction.source_register
-                )
-                << "]);\n";
+            if (instruction.forwarded_value_register) {
+                output
+                    << "{\n"
+                    << "const std::uint32_t forwarded_value = cpu.r["
+                    << static_cast<unsigned>(*instruction.forwarded_value_register)
+                    << "];\n"
+                    << "static_cast<void>(cpu.memory.read_u32(cpu.r["
+                    << static_cast<unsigned>(instruction.source_register)
+                    << "]));\n"
+                    << "cpu.r["
+                    << static_cast<unsigned>(instruction.destination_register)
+                    << "] = forwarded_value;\n"
+                    << "}\n";
+            } else {
+                output
+                    << "cpu.r["
+                    << static_cast<unsigned>(instruction.destination_register)
+                    << "] = cpu.memory.read_u32(cpu.r["
+                    << static_cast<unsigned>(instruction.source_register)
+                    << "]);\n";
+            }
             return;
 
         case Operation::StoreByte:

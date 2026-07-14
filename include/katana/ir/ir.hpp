@@ -262,6 +262,7 @@ struct Instruction {
     SpecialRegister special_register = SpecialRegister::None;
     std::optional<std::uint32_t> effective_address;
     std::optional<std::uint32_t> target_address;
+    std::optional<std::uint8_t> forwarded_value_register;
 
     DelaySlotRelation delay_slot;
     bool is_privileged = false;

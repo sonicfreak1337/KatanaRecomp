@@ -35,3 +35,14 @@ Akkumulator-, Privileg- und unbekannte Effekte bilden harte Grenzen.
 den nicht erreichbaren Rest. Nachfolgerlisten werden sortiert und dedupliziert;
 Blockreihenfolgen werden nach Startadresse kanonisiert. Kontrollinstruktionen und
 ihre Delay Slots werden nicht umgeschrieben.
+
+## Load-Store-Vereinfachung
+
+`simplify_load_store` erkennt einen unmittelbar auf `MOV.L Rm,@Rn` folgenden
+`MOV.L @Rn,Rd` im selben Block. Der Load erhaelt den zuvor gespeicherten
+Registerwert, fuehrt seinen `read_u32` aber weiterhin aus. Damit bleiben
+Speichergrenzen und spaetere beobachtbare Bus- oder MMIO-Effekte erhalten.
+
+Andere Transferbreiten, verschiedene Adressregister und nicht direkt benachbarte
+Zugriffe werden nicht veraendert. Der Verifier akzeptiert eine Weiterleitung nur,
+wenn der passende Store direkt vor dem Load steht.

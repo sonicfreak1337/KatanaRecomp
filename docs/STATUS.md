@@ -82,7 +82,8 @@ KatanaRecomp besitzt einen durchgaengigen Prototyp-Pfad von Raw- und ELF32-SH-Ei
 - [x] KR-2002 - Copy Propagation
 - [x] KR-2003 - Dead-Code-Elimination
 - [x] KR-2004 - CFG-Simplifizierung
-- [ ] KR-2005 - Load-Store-Vereinfachung
+- [x] KR-2005 - Load-Store-Vereinfachung
+- [ ] KR-2006 - Pass-Pipeline und Debug-Schalter
 
 ## Aktuelle Einschraenkungen
 
