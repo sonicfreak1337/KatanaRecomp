@@ -35,6 +35,7 @@ endfunction()
 add_library(katana_runtime STATIC
     src/runtime/dreamcast_memory.cpp
     src/runtime/exception.cpp
+    src/runtime/interrupt.cpp
     src/runtime/memory.cpp
     src/runtime/runtime.cpp
 )
@@ -230,6 +231,18 @@ katana_enable_warnings(katana-exception-tests)
 add_test(
     NAME katana-exception-tests
     COMMAND katana-exception-tests
+)
+
+add_executable(katana-interrupt-tests
+    tests/runtime/interrupt_tests.cpp
+)
+
+target_link_libraries(katana-interrupt-tests PRIVATE katana_runtime)
+katana_enable_warnings(katana-interrupt-tests)
+
+add_test(
+    NAME katana-interrupt-tests
+    COMMAND katana-interrupt-tests
 )
 
 add_executable(katana-decoder-tests
