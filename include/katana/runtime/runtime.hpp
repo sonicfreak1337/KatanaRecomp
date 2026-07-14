@@ -1,13 +1,14 @@
 #pragma once
 
+#include "katana/runtime/memory.hpp"
+
 #include <array>
 #include <cstddef>
 #include <cstdint>
-#include <vector>
 
 namespace katana::runtime {
 
-inline constexpr std::uint32_t abi_version = 2u;
+inline constexpr std::uint32_t abi_version = 3u;
 
 inline constexpr std::size_t general_register_count = 16u;
 inline constexpr std::size_t banked_register_count = 8u;
@@ -19,27 +20,6 @@ struct ResetState {
     std::uint32_t vector_base = 0u;
     std::uint32_t status_register = 0u;
     std::uint32_t fpscr = 0u;
-};
-
-class Memory {
-public:
-    explicit Memory(std::size_t size = 1024u * 1024u);
-
-    [[nodiscard]] std::size_t size() const noexcept;
-    [[nodiscard]] std::uint8_t read_u8(std::uint32_t address) const;
-    [[nodiscard]] std::uint16_t read_u16(std::uint32_t address) const;
-    [[nodiscard]] std::uint32_t read_u32(std::uint32_t address) const;
-    [[nodiscard]] std::uint32_t read_s8(std::uint32_t address) const;
-    [[nodiscard]] std::uint32_t read_s16(std::uint32_t address) const;
-
-    void write_u8(std::uint32_t address, std::uint8_t value);
-    void write_u16(std::uint32_t address, std::uint16_t value);
-    void write_u32(std::uint32_t address, std::uint32_t value);
-
-private:
-    void check(std::uint32_t address, std::size_t width) const;
-
-    std::vector<std::uint8_t> bytes_;
 };
 
 struct CpuState {
@@ -83,4 +63,4 @@ void reset_cpu(
 [[noreturn]] void unresolved_call(CpuState& cpu, std::uint32_t target);
 [[noreturn]] void unresolved_jump(CpuState& cpu, std::uint32_t target);
 
-}
+} // namespace katana::runtime

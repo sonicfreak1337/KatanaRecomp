@@ -274,15 +274,15 @@ Task: KR-XXXX
 ## Aktuell empfohlener Einstieg
 
 ```text
-KR-1101 - SUB, NEG und NOT
+KR-2202 - RAM und Spiegelungen
 ```
 
 Danach:
 
 ```text
-KR-1102 - AND, OR und XOR
-KR-1103 - CMP-Varianten
-KR-1104 - Carry und Overflow
-KR-1105 - Extend, Swap und XTRCT
-KR-1106 - DT und MOVT
+KR-2203 - VRAM und AICA-RAM-Abstraktionen
+KR-2204 - BIOS- und Flash-Abstraktionen
+KR-2205 - MMIO-Handler
+KR-2206 - Ausrichtung, Fehler und Watchpoints
+KR-2207 - v0.22 Release-Gate
 ```

@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+### Hinzugefuegt
+
+- KR-2201: `katana::runtime::Memory` dekodiert Adressen jetzt ueber benannte, nicht ueberlappende 32-Bit-Regionen und delegiert Bytezugriffe an registrierbare `MemoryDevice`-Instanzen. `LinearMemoryDevice`, Read-only-Regionen, Little-Endian-Mehrbytezugriffe und auslesbare Regionsmetadaten bilden die Grundlage fuer die folgenden Dreamcast-Speicherbereiche.
+
+### Geaendert
+
+- Die Runtime-ABI steigt auf Version 3. Der bisherige Standardkonstruktor behaelt voruebergehend eine lineare 1-MiB-Kompatibilitaetsregion; echte RAM- und Spiegelungsregeln folgen in KR-2202.
+
 ## [0.21.0] - 2026-07-14
 
 ### Hinzugefuegt

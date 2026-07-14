@@ -6,10 +6,11 @@ ungeloesten Kontrollflusspfaden mehr.
 
 ## ABI
 
-Die aktuelle Runtime-ABI ist Version `2`.
+Die aktuelle Runtime-ABI ist Version `3`.
 
 Generierter Code enthaelt eine Compile-Time-Pruefung gegen diese Version. Eine
-abweichende Runtime wird beim Kompilieren sichtbar abgelehnt.
+abweichende Runtime wird beim Kompilieren sichtbar abgelehnt. ABI-Version 3
+kennzeichnet den Wechsel vom flachen Runtime-Speicher zum regionbasierten Bus.
 
 ## CMake
 
@@ -25,8 +26,8 @@ Der generierte C++-Code bindet automatisch
 
 ## Zentraler CPU-Zustand
 
-`katana::runtime::CpuState` enthaelt die fuer v0.21 benoetigten
-Architektur- und Runtime-Daten an einer Stelle:
+`katana::runtime::CpuState` enthaelt die Architektur- und Runtime-Daten an einer
+Stelle:
 
 - 16 allgemeine Register und acht banked Register
 - getrennte 16er-Rohbitbaenke `FR` und `XF`
@@ -35,10 +36,36 @@ Architektur- und Runtime-Daten an einer Stelle:
 - `TRA`, `EXPEVT` und `INTEVT`
 - explizite T-, S-, Q- und M-Zustandsbits
 - sichtbare Trap- und Schlafzustaende
-- den aktuellen Runtime-Speicher
+- den zentralen regionbasierten Speicherbus
 
 Die FPU-Baenke speichern vorerst ausschliesslich unveraenderte 32-Bit-Rohwerte.
 Arithmetik, Bankumschaltung und `FPSCR`-Modi folgen in der FPU-Phase.
+
+## Regionbasierter Speicherbus
+
+KR-2201 fuehrt die zentrale Adressdekodierung in `katana::runtime::Memory` ein.
+Der Bus bindet benannte `MemoryDevice`-Instanzen an 32-Bit-Adressbereiche.
+`LinearMemoryDevice` stellt dafuer einen einfachen Byte-Speicher bereit.
+
+Eine leere Buskonfiguration entsteht mit `Memory(0u)`. Regionen werden mit
+`map_region` registriert und anhand ihrer Basisadresse deterministisch sortiert.
+Der bisherige Konstruktor bleibt kompatibel: `Memory()` registriert vorerst eine
+lineare 1-MiB-Region ab Adresse null, bis KR-2202 das echte Dreamcast-RAM-Layout
+einfuehrt.
+
+Der Bus garantiert zentral:
+
+- keine leeren oder namenlosen Regionen
+- keine Ueberlappungen
+- keine Bereiche ausserhalb des 32-Bit-Adressraums
+- ein Zugriff bleibt vollstaendig innerhalb genau einer Region
+- Little-Endian-Verhalten fuer 16- und 32-Bit-Zugriffe
+- sichtbare Fehler fuer nicht zugeordnete Adressen
+- optionalen Schreibschutz pro Region
+- auslesbare Regionsmetadaten fuer Tests und Diagnose
+
+RAM-Spiegelungen, VRAM, AICA-RAM, BIOS, Flash und MMIO bleiben getrennte
+Folgetasks der v0.22-Roadmap.
 
 ## Deterministischer CPU-Reset
 
@@ -57,14 +84,11 @@ Akkumulatoren, FPU-Rohregister und Runtime-Flags auf null. Eine optionale
 `SR` wird dabei ueber dieselbe Maskierungs- und Registerbanklogik geschrieben wie
 ein normaler Statusregistertransfer.
 
-Ein CPU-Reset loescht den Runtime-Speicher absichtlich nicht. Speicherabbild,
-Boot-ROM-Layout und Dreamcast-spezifische Startwerte gehoeren in die spaetere
-Plattformkonfiguration.
+Ein CPU-Reset loescht oder ersetzt den Speicherbus und seine registrierten
+Geraete absichtlich nicht. Dreamcast-spezifische Startwerte gehoeren in die
+spaetere Plattformkonfiguration.
 
 ## Weitere Runtime-Grundlage
 
-- `katana::runtime::Memory`
-- Little-Endian-Speicherzugriffe
 - sichtbare Fehlerpfade fuer ungeloeste Calls und Spruenge
-
-Der Dreamcast-Speicherbus und MMIO werden erst in v0.22 aufgebaut.
+- Runtime-Tests fuer CPU-Zustand, Reset und Speicherbus

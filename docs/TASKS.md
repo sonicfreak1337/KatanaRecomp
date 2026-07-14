@@ -541,9 +541,24 @@ Konsolidierung gegenueber der frueheren Feinplanung:
 
 ## v0.22.0 - Speicherbus
 
-### [ ] KR-2201 - Regionbasierter Bus
+### [x] KR-2201 - Regionbasierter Bus
 
 Abhaengigkeiten: KR-2104
+
+Umfang:
+
+- zentrale 32-Bit-Adressdekodierung
+- benannte, deterministisch sortierte Speicherregionen
+- registrierbare Speichergeraete
+- Little-Endian-Mehrbytezugriffe
+- Read-only-Schutz und sichtbare Adressfehler
+
+Akzeptanz:
+
+- leere, ueberlappende und ueberlaufende Regionen werden abgelehnt
+- ein Zugriff darf keine Regionsgrenze ueberschreiten
+- nicht zugeordnete Adressen schlagen sichtbar fehl
+- bestehende generierte Programme verwenden weiterhin die Runtime-API
 
 ### [ ] KR-2202 - RAM und Spiegelungen
 

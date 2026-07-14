@@ -29,7 +29,7 @@ SH-4-Binaerdaten
     -> semantischer Laufzeittest
 `
 
-Der aktuelle Teststand umfasst **83 automatische Tests**.
+Der aktuelle Teststand umfasst **84 automatische Tests**.
 
 Der v0.15-Decoder verwendet eine zentrale Metadatenquelle fuer alle implementierten Opcode-Masken, Operandenformate, Kontrollfluss- und Privileginformationen. `katana-recomp isa-report` berichtet deterministisch ueber den gesamten 16-Bit-Opcode-Raum; Kollisions-, Spezifikations- und Fuzztests sichern die Regeln ab.
 
@@ -55,6 +55,11 @@ System- und Ereignisregister sowie getrennte `FR`-/`XF`-Rohbitbaenke. Ein
 konfigurierbarer, deterministischer CPU-Reset setzt den Architekturzustand
 reproduzierbar zurueck und bewahrt den Runtime-Speicher. Details stehen in
 `docs/RUNTIME.md`.
+
+Der aktuelle Unreleased-Stand fuer v0.22 fuehrt mit KR-2201 einen
+regionbasierten Speicherbus ein. Speichergeraete werden an benannte,
+nicht ueberlappende 32-Bit-Adressbereiche gebunden; Little-Endian-Zugriffe,
+Read-only-Schutz und ungueltige Adressen werden zentral behandelt.
 
 ## Implementierte SH-4-Instruktionen
 
@@ -389,7 +394,7 @@ src/
     decoder/       SH-4-Decoder
     io/            Binaerdatei-Zugriff
     ir/            IR-Lowering
-    runtime/       Zukuenftige Runtime-Komponenten
+    runtime/       CPU-Zustand und regionbasierter Speicherbus
 
 tests/
     basic_blocks/
@@ -425,13 +430,12 @@ Der Helfer 	ools\release-version.ps1 aktualisiert VERSION und CMake und kann ein
 
 ## Naechste technische Ziele
 
-1. neutrales Executable-Image- und Segmentmodell
-2. Raw-Binary-Loader auf dem Image-Modell
-3. ELF32-SH-Loader
-4. Symbole, Map-Dateien und minimale Relocations
-5. versioniertes Projektmanifest fuer Eingaben und Adresslayout
-6. rekursive Codeentdeckung
-7. Aufloesung indirekter Calls und Jump Tables
+1. Dreamcast-RAM und Spiegelungen auf dem regionbasierten Bus
+2. VRAM und AICA-RAM-Abstraktionen
+3. BIOS- und Flash-Abstraktionen
+4. MMIO-Handler
+5. Ausrichtungsfehler und Watchpoints
+6. v0.22 Release-Gate
 
 
 ## Roadmap und Arbeitsuebergabe

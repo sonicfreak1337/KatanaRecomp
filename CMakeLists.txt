@@ -33,6 +33,7 @@ function(katana_enable_warnings target)
 endfunction()
 
 add_library(katana_runtime STATIC
+    src/runtime/memory.cpp
     src/runtime/runtime.cpp
 )
 
@@ -110,6 +111,18 @@ katana_enable_warnings(katana-runtime-tests)
 add_test(
     NAME katana-runtime-tests
     COMMAND katana-runtime-tests
+)
+
+add_executable(katana-memory-bus-tests
+    tests/runtime/memory_bus_tests.cpp
+)
+
+target_link_libraries(katana-memory-bus-tests PRIVATE katana_runtime)
+katana_enable_warnings(katana-memory-bus-tests)
+
+add_test(
+    NAME katana-memory-bus-tests
+    COMMAND katana-memory-bus-tests
 )
 
 add_executable(katana-cpu-state-tests

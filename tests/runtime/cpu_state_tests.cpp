@@ -37,8 +37,8 @@ int main() {
     static_assert(katana::runtime::fpu_register_count == 16u);
 
     require(
-        katana::runtime::abi_version == 2u,
-        "Der vollstaendige CPU-Zustand erfordert Runtime-ABI 2."
+        katana::runtime::abi_version == 3u,
+        "Der vollstaendige CPU-Zustand erfordert Runtime-ABI 3."
     );
 
     CpuState cpu;
