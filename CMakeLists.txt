@@ -39,6 +39,7 @@ add_library(katana_core STATIC
     src/decoder/isa_coverage.cpp
     src/io/binary_reader.cpp
     src/io/executable_image.cpp
+    src/io/elf32_sh_loader.cpp
     src/io/raw_binary_loader.cpp
     src/analysis/disassembler.cpp
     src/analysis/basic_blocks.cpp
@@ -111,6 +112,18 @@ katana_enable_warnings(katana-raw-binary-loader-tests)
 add_test(
     NAME katana-raw-binary-loader-tests
     COMMAND katana-raw-binary-loader-tests
+)
+
+add_executable(katana-elf32-sh-loader-tests
+    tests/io/elf32_sh_loader_tests.cpp
+)
+
+target_link_libraries(katana-elf32-sh-loader-tests PRIVATE katana_core)
+katana_enable_warnings(katana-elf32-sh-loader-tests)
+
+add_test(
+    NAME katana-elf32-sh-loader-tests
+    COMMAND katana-elf32-sh-loader-tests
 )
 
 add_executable(katana-instruction-metadata-tests

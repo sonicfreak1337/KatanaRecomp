@@ -362,7 +362,7 @@ Abhaengigkeiten: KR-1506
 
 Abhaengigkeiten: KR-1601
 
-### [ ] KR-1603 - ELF32-SH-Loader
+### [x] KR-1603 - ELF32-SH-Loader
 
 Abhaengigkeiten: KR-1601
 
