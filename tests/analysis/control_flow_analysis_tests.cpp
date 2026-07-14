@@ -73,10 +73,6 @@ int main() {
         0x0Cu, 0xE1u, 0x0Bu, 0x41u, 0x09u, 0x00u, 0x09u, 0x00u,
         0x0Bu, 0x00u, 0x09u, 0x00u, 0x0Bu, 0x00u, 0x09u, 0x00u
     });
-    call_image.add_symbol({
-        "indirect_target", 12u, 4u, katana::io::SymbolKind::Function,
-        katana::io::SymbolBinding::Global
-    });
     const auto call = katana::analysis::analyze_control_flow(call_image);
     require(has_instruction(call, 12u), "Aufgeloestes indirektes JSR-Ziel wurde nicht entdeckt.");
     require(has_instruction(call, 6u), "Rueckkehrpfad des indirekten JSR fehlt.");
@@ -85,9 +81,22 @@ int main() {
     require(call_function != nullptr, "Indirektes JSR-Ziel ist kein Funktionskandidat.");
     require(
         call_function->origins == std::vector<katana::analysis::FunctionOrigin>{
-            katana::analysis::FunctionOrigin::IndirectCall,
-            katana::analysis::FunctionOrigin::Symbol
+            katana::analysis::FunctionOrigin::IndirectCall
         },
+        "Symbolfreies automatisches JSR-Ziel wurde nicht allein als indirekter Call entdeckt."
+    );
+    call_image.add_symbol({
+        "indirect_target", 12u, 4u, katana::io::SymbolKind::Function,
+        katana::io::SymbolBinding::Global
+    });
+    const auto call_with_symbol = katana::analysis::analyze_control_flow(call_image);
+    const auto* merged_function = find_function(call_with_symbol, 12u);
+    require(
+        merged_function != nullptr
+            && merged_function->origins == std::vector<katana::analysis::FunctionOrigin>{
+                katana::analysis::FunctionOrigin::IndirectCall,
+                katana::analysis::FunctionOrigin::Symbol
+            },
         "Indirekte Call- und Symbolherkunft wurden nicht zusammengefuehrt."
     );
 

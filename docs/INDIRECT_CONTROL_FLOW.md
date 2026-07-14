@@ -51,6 +51,9 @@ Formen `function = ADRESSE`, `jump = STELLE ZIEL` und
 dezimal. Der Parser sortiert alle Hinweise numerisch und weist doppelte Stellen,
 unbekannte Felder sowie unbekannte Versionen zurueck. Overrides sind explizite
 Nutzerhinweise und werden in Berichten als solche gekennzeichnet.
+Dieselbe Dispatch-Adresse darf nicht zugleich als `jump` und `jump_table`
+angegeben werden; eine Kollision wird mit Datei, beiden Zeilen und Adresse
+abgelehnt, bevor sie die Analyse beeinflussen kann.
 
 Function- und Jump-Ziele verwenden dieselbe committed-Code-Pruefung wie die
 automatische Analyse. Fehler nennen Override-Datei, Zeile, Adresse und einen

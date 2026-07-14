@@ -59,6 +59,26 @@ int main() {
     } catch (const std::exception& error) {
         require(std::string(error.what()).find("Version 1") != std::string::npos, "Versionsdiagnose fehlt.");
     }
+
+    save(
+        path,
+        "version = 1\n"
+        "jump_table = 0x1000 0x3000 4\n"
+        "jump = 0x1000 0x2000\n"
+    );
+    try {
+        static_cast<void>(katana::analysis::parse_analysis_overrides(path));
+        require(false, "Widerspruechliche jump- und jump_table-Overrides wurden akzeptiert.");
+    } catch (const std::exception& error) {
+        const std::string message = error.what();
+        require(
+            message.find(path.string()) != std::string::npos
+                && message.find("Zeilen 2 und 3") != std::string::npos
+                && message.find("jump und jump_table") != std::string::npos
+                && message.find("0x00001000") != std::string::npos,
+            "Kollisionsdiagnose nennt Datei, beide Zeilen, Kategorien oder Dispatch-Adresse nicht."
+        );
+    }
     std::filesystem::remove(path);
     std::cout << "KR-1805 Override-Datei erfolgreich.\n";
     return EXIT_SUCCESS;

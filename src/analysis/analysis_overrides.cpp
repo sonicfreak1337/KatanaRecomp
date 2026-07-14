@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <charconv>
 #include <fstream>
+#include <iomanip>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -57,6 +58,13 @@ std::vector<std::string> words(const std::string& text) {
         result.push_back(std::move(word));
     }
     return result;
+}
+
+std::string hex_address(const std::uint32_t address) {
+    std::ostringstream output;
+    output << "0x" << std::hex << std::uppercase << std::setw(8)
+           << std::setfill('0') << address;
+    return output.str();
 }
 
 }
@@ -144,6 +152,26 @@ AnalysisOverrides parse_analysis_overrides(const std::filesystem::path& path) {
             return left.dispatch_address == right.dispatch_address;
         }) != overrides.jump_tables.end()) {
         fail(path, 0u, "doppelter jump_table-Eintrag.");
+    }
+    auto jump = overrides.jumps.begin();
+    auto table = overrides.jump_tables.begin();
+    while (jump != overrides.jumps.end() && table != overrides.jump_tables.end()) {
+        if (jump->instruction_address < table->dispatch_address) {
+            ++jump;
+            continue;
+        }
+        if (table->dispatch_address < jump->instruction_address) {
+            ++table;
+            continue;
+        }
+        const auto first_line = std::min(jump->line, table->line);
+        const auto second_line = std::max(jump->line, table->line);
+        throw std::runtime_error(
+            "Override-Fehler in " + path.string() + " in Zeilen "
+            + std::to_string(first_line) + " und " + std::to_string(second_line)
+            + ": jump und jump_table verwenden dieselbe Dispatch-Adresse "
+            + hex_address(jump->instruction_address) + "."
+        );
     }
     return overrides;
 }
