@@ -34,3 +34,12 @@ akzeptiert, wenn sie gerade sind und auf committed ausfuehrbaren Code zeigen.
 Die Bereichsschranke liegt bei 4096 Eintraegen. Fehlende Eintraege, ungueltige
 Ziele und unbeschraenkte Kandidaten bleiben als abgelehnt sichtbar; eine nur
 teilweise gueltige Tabelle gilt nicht als aufgeloest.
+
+## Override-Datei Version 1
+
+Die Textdatei beginnt mit `version = 1`. Wiederholbare Eintraege besitzen die
+Formen `function = ADRESSE`, `jump = STELLE ZIEL` und
+`jump_table = STELLE TABELLE ANZAHL`. Adressen sind hexadezimal, die Anzahl ist
+dezimal. Der Parser sortiert alle Hinweise numerisch und weist doppelte Stellen,
+unbekannte Felder sowie unbekannte Versionen zurueck. Overrides sind explizite
+Nutzerhinweise und werden in Berichten als solche gekennzeichnet.

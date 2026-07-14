@@ -434,7 +434,7 @@ Abhaengigkeiten: KR-1802
 
 Abhaengigkeiten: KR-1802
 
-### [ ] KR-1805 - Override-Datei
+### [x] KR-1805 - Override-Datei
 
 Abhaengigkeiten: KR-1606
 
