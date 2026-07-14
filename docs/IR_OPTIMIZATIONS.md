@@ -46,3 +46,22 @@ Speichergrenzen und spaetere beobachtbare Bus- oder MMIO-Effekte erhalten.
 Andere Transferbreiten, verschiedene Adressregister und nicht direkt benachbarte
 Zugriffe werden nicht veraendert. Der Verifier akzeptiert eine Weiterleitung nur,
 wenn der passende Store direkt vor dem Load steht.
+
+## Pass-Pipeline
+
+`optimize_program` fuehrt die Paesse deterministisch in dieser Reihenfolge aus:
+
+1. Constant Folding
+2. Copy Propagation
+3. Dead-Code-Elimination
+4. CFG-Simplifizierung
+5. Load-Store-Vereinfachung
+
+Jeder Pass kann ueber `OptimizationOptions` einzeln abgeschaltet werden. Mit
+`capture_dumps` enthaelt der Bericht fuer jeden aktiven Pass eine deterministische
+Text-IR vor und nach seiner Ausfuehrung. `enabled=false` laesst das gesamte Programm
+bytegenau unveraendert.
+
+Der CLI-Pfad `emit-cpp` verwendet die Pipeline standardmaessig. `--no-opt`
+deaktiviert sie vollstaendig; `--dump-ir <Praefix>` schreibt
+`<Praefix>.before.ir` und `<Praefix>.after.ir`.

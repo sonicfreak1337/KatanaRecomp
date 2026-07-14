@@ -2,6 +2,7 @@
 #include "katana/codegen/cpp_emitter.hpp"
 #include "katana/ir/lower.hpp"
 #include "katana/ir/optimize.hpp"
+#include "katana/ir/serialize.hpp"
 #include "katana/ir/verifier.hpp"
 #include "katana/sh4/disassembler.hpp"
 
@@ -178,6 +179,43 @@ int main() {
             std::string::npos &&
         forwarded_cpp.find("cpu.r[3] = forwarded_value;") != std::string::npos,
         "Codegen erhaelt den Speicher-Read beim Load-Forwarding nicht."
+    );
+
+    auto pipeline_program = katana::ir::lower_program(lines, discovered);
+    katana::ir::OptimizationOptions pipeline_options;
+    pipeline_options.copy_propagation = false;
+    pipeline_options.dead_code_elimination = false;
+    pipeline_options.cfg_simplification = false;
+    pipeline_options.load_store_simplification = false;
+    pipeline_options.capture_dumps = true;
+    const auto pipeline_report = katana::ir::optimize_program(
+        pipeline_program,
+        pipeline_options
+    );
+    require(
+        pipeline_report.passes.size() == 1u &&
+        pipeline_report.passes.front().name == "constant-folding" &&
+        pipeline_report.passes.front().changes == 2u &&
+        pipeline_report.total_changes == 2u &&
+        pipeline_report.passes.front().before !=
+            pipeline_report.passes.front().after,
+        "Pass-Pipeline respektiert Einzelschalter oder Dumps nicht."
+    );
+
+    auto disabled_program = katana::ir::lower_program(lines, discovered);
+    const auto disabled_before = katana::ir::emit_ir_text(disabled_program);
+    katana::ir::OptimizationOptions disabled_options;
+    disabled_options.enabled = false;
+    disabled_options.capture_dumps = true;
+    const auto disabled_report = katana::ir::optimize_program(
+        disabled_program,
+        disabled_options
+    );
+    require(
+        disabled_report.passes.empty() &&
+        disabled_report.total_changes == 0u &&
+        katana::ir::emit_ir_text(disabled_program) == disabled_before,
+        "Globaler Debug-Schalter deaktiviert nicht alle Optimierungen."
     );
 
     std::cout << "Katana-IR-Optimierungen erfolgreich.\n";

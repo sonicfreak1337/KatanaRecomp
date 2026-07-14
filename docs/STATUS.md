@@ -11,7 +11,7 @@ KatanaRecomp besitzt einen durchgaengigen Prototyp-Pfad von Raw- und ELF32-SH-Ei
 ## Teststatus
 
 ```text
-100% tests passed out of 78
+100% tests passed out of 79
 ```
 
 ## Fertiggestellte Roadmap-Tasks
@@ -83,7 +83,8 @@ KatanaRecomp besitzt einen durchgaengigen Prototyp-Pfad von Raw- und ELF32-SH-Ei
 - [x] KR-2003 - Dead-Code-Elimination
 - [x] KR-2004 - CFG-Simplifizierung
 - [x] KR-2005 - Load-Store-Vereinfachung
-- [ ] KR-2006 - Pass-Pipeline und Debug-Schalter
+- [x] KR-2006 - Pass-Pipeline und Debug-Schalter
+- [ ] KR-2007 - v0.20 Release-Gate
 
 ## Aktuelle Einschraenkungen
 

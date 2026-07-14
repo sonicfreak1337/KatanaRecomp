@@ -1,5 +1,6 @@
 #include "katana/ir/optimize.hpp"
 
+#include "katana/ir/serialize.hpp"
 #include "katana/ir/verifier.hpp"
 
 #include <algorithm>
@@ -7,6 +8,7 @@
 #include <cstdint>
 #include <optional>
 #include <unordered_set>
+#include <utility>
 #include <vector>
 
 namespace katana::ir {
@@ -482,6 +484,45 @@ OptimizationResult simplify_load_store(Function& function) {
     }
     require_valid_function(function);
     return result;
+}
+
+OptimizationPipelineReport optimize_program(
+    std::vector<Function>& program,
+    const OptimizationOptions& options
+) {
+    OptimizationPipelineReport report;
+    if (!options.enabled) return report;
+
+    using Pass = OptimizationResult (*)(Function&);
+    const auto run_pass = [&program, &options, &report](
+        const char* name,
+        const bool enabled,
+        const Pass pass
+    ) {
+        if (!enabled) return;
+        OptimizationPassReport pass_report;
+        pass_report.name = name;
+        if (options.capture_dumps) {
+            pass_report.before = emit_ir_text(program);
+        }
+        for (auto& function : program) {
+            pass_report.changes += pass(function).changes;
+        }
+        if (options.capture_dumps) {
+            pass_report.after = emit_ir_text(program);
+        }
+        report.total_changes += pass_report.changes;
+        report.passes.push_back(std::move(pass_report));
+    };
+
+    run_pass("constant-folding", options.constant_folding, fold_constants);
+    run_pass("copy-propagation", options.copy_propagation, propagate_copies);
+    run_pass("dead-code-elimination", options.dead_code_elimination,
+        eliminate_dead_code);
+    run_pass("cfg-simplification", options.cfg_simplification, simplify_cfg);
+    run_pass("load-store-simplification", options.load_store_simplification,
+        simplify_load_store);
+    return report;
 }
 
 }

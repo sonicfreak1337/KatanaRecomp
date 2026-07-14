@@ -8,6 +8,7 @@
 #include "katana/io/raw_binary_loader.hpp"
 #include "katana/io/project_manifest.hpp"
 #include "katana/ir/lower.hpp"
+#include "katana/ir/optimize.hpp"
 #include "katana/ir/serialize.hpp"
 #include "katana/sh4/decoder.hpp"
 #include "katana/sh4/disassembler.hpp"
@@ -853,13 +854,49 @@ int emit_cpp(
     const std::filesystem::path& input_path,
     const std::uint32_t entry_address,
     const std::filesystem::path& output_path,
-    const std::uint32_t base_address
+    const std::uint32_t base_address,
+    katana::ir::OptimizationOptions optimization_options,
+    const std::optional<std::filesystem::path>& dump_prefix
 ) {
-    const auto program = build_ir_program(
+    auto program = build_ir_program(
         input_path,
         entry_address,
         base_address
     );
+
+    const auto before_optimization = dump_prefix
+        ? katana::ir::emit_ir_text(program)
+        : std::string{};
+    optimization_options.capture_dumps = dump_prefix.has_value();
+    const auto optimization_report = katana::ir::optimize_program(
+        program,
+        optimization_options
+    );
+
+    if (dump_prefix) {
+        const auto write_dump = [](const std::filesystem::path& path,
+                                   const std::string& contents) {
+            if (path.has_parent_path()) {
+                std::filesystem::create_directories(path.parent_path());
+            }
+            std::ofstream output(path, std::ios::binary);
+            if (!output) {
+                throw std::runtime_error(
+                    "Der IR-Dump konnte nicht geoeffnet werden."
+                );
+            }
+            output.write(contents.data(),
+                static_cast<std::streamsize>(contents.size()));
+            if (!output) {
+                throw std::runtime_error(
+                    "Der IR-Dump konnte nicht gespeichert werden."
+                );
+            }
+        };
+        write_dump(dump_prefix->string() + ".before.ir", before_optimization);
+        write_dump(dump_prefix->string() + ".after.ir",
+            katana::ir::emit_ir_text(program));
+    }
 
     const auto source =
         katana::codegen::emit_cpp_program(
@@ -905,6 +942,9 @@ int emit_cpp(
         << '\n'
         << "Zeichen:          "
         << source.size()
+        << '\n'
+        << "Optimierungen:    "
+        << optimization_report.total_changes
         << '\n';
 
     return 0;
@@ -922,7 +962,7 @@ void print_usage() {
         << "  katana-recomp functions <Datei> <Einstieg> [Basisadresse]\n"
         << "  katana-recomp ir <Datei> <Einstieg> [Basisadresse]\n"
         << "  katana-recomp ir-json <Datei> <Einstieg> [Basisadresse]\n"
-        << "  katana-recomp emit-cpp <Datei> <Einstieg> <Ausgabe.cpp> [Basisadresse]\n\n"
+        << "  katana-recomp emit-cpp <Datei> <Einstieg> <Ausgabe.cpp> [Basisadresse] [--no-opt] [--dump-ir <Praefix>]\n\n"
         << "Beispiel:\n"
         << "  katana-recomp emit-cpp programm.bin 8C010000 generated.cpp 8C010000\n";
 }
@@ -1052,7 +1092,7 @@ int main(const int argc, char* argv[]) {
         }
 
         if (
-            (argc == 5 || argc == 6) &&
+            (argc >= 5 && argc <= 9) &&
             std::string(argv[1]) == "emit-cpp"
         ) {
             const auto entry_address =
@@ -1062,20 +1102,49 @@ int main(const int argc, char* argv[]) {
                     "Die Einstiegsadresse"
                 );
 
-            const auto base_address =
-                argc == 6
-                    ? parse_hex_value(
-                        argv[5],
-                        std::numeric_limits<std::uint32_t>::max(),
-                        "Die Basisadresse"
-                    )
-                    : 0u;
+            std::size_t argument = 5u;
+            std::uint32_t base_address = 0u;
+            if (
+                argument < static_cast<std::size_t>(argc) &&
+                !std::string_view(argv[argument]).starts_with("--")
+            ) {
+                base_address = parse_hex_value(
+                    argv[argument++],
+                    std::numeric_limits<std::uint32_t>::max(),
+                    "Die Basisadresse"
+                );
+            }
+
+            katana::ir::OptimizationOptions optimization_options;
+            std::optional<std::filesystem::path> dump_prefix;
+            while (argument < static_cast<std::size_t>(argc)) {
+                const std::string_view option = argv[argument++];
+                if (option == "--no-opt") {
+                    optimization_options.enabled = false;
+                } else if (option == "--dump-ir") {
+                    if (
+                        dump_prefix ||
+                        argument >= static_cast<std::size_t>(argc)
+                    ) {
+                        throw std::invalid_argument(
+                            "--dump-ir erwartet genau ein Praefix."
+                        );
+                    }
+                    dump_prefix = std::filesystem::path(argv[argument++]);
+                } else {
+                    throw std::invalid_argument(
+                        "Unbekannte emit-cpp-Option: " + std::string(option)
+                    );
+                }
+            }
 
             return emit_cpp(
                 std::filesystem::path(argv[2]),
                 entry_address,
                 std::filesystem::path(argv[4]),
-                base_address
+                base_address,
+                optimization_options,
+                dump_prefix
             );
         }
 

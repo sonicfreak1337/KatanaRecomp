@@ -14,6 +14,8 @@
 
 - KR-2005: Unmittelbar aufeinanderfolgende, adressgleiche 32-Bit-Stores und -Loads reichen den Registerwert weiter, ohne den sichtbaren Speicher-Read zu entfernen.
 
+- KR-2006: Eine deterministische Pipeline fuehrt alle sicheren IR-Paesse in fester Reihenfolge aus, erlaubt Einzelschalter und Vorher-/Nachher-Dumps und kann per `--no-opt` vollstaendig deaktiviert werden.
+
 ## [0.19.0] - 2026-07-14
 
 ### Hinzugefuegt

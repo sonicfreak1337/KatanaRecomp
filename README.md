@@ -29,7 +29,7 @@ SH-4-Binaerdaten
     -> semantischer Laufzeittest
 `
 
-Der aktuelle Teststand umfasst **78 automatische Tests**.
+Der aktuelle Teststand umfasst **79 automatische Tests**.
 
 Der v0.15-Decoder verwendet eine zentrale Metadatenquelle fuer alle implementierten Opcode-Masken, Operandenformate, Kontrollfluss- und Privileginformationen. `katana-recomp isa-report` berichtet deterministisch ueber den gesamten 16-Bit-Opcode-Raum; Kollisions-, Spezifikations- und Fuzztests sichern die Regeln ab.
 
@@ -351,6 +351,11 @@ C++ erzeugen:
     ".\generated\codegen_demo.cpp"
     8C010000
 `
+
+`emit-cpp` fuehrt die sicheren IR-Optimierungen standardmaessig aus. Fuer einen
+unoptimierten Debug-Lauf kann `--no-opt` angehaengt werden. Mit
+`--dump-ir ".\generated\pipeline"` entstehen deterministische Dumps als
+`pipeline.before.ir` und `pipeline.after.ir`.
 
 ## Projektstruktur
 

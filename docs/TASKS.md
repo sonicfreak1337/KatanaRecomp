@@ -502,7 +502,7 @@ Abhaengigkeiten: KR-2003
 
 Abhaengigkeiten: KR-1903, KR-2001
 
-### [ ] KR-2006 - Pass-Pipeline und Debug-Schalter
+### [x] KR-2006 - Pass-Pipeline und Debug-Schalter
 
 Abhaengigkeiten: KR-2001 bis KR-2005
 

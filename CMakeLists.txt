@@ -489,6 +489,15 @@ add_test(
     COMMAND katana-ir-optimization-tests
 )
 
+add_test(
+    NAME katana-optimization-cli-tests
+    COMMAND ${CMAKE_COMMAND}
+        -DKATANA_RECOMP=$<TARGET_FILE:katana-recomp>
+        -DFIXTURE=${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/codegen_execution.bin
+        -DOUTPUT_DIR=${CMAKE_CURRENT_BINARY_DIR}/optimization-cli-tests
+        -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/cmake/check_optimization_cli.cmake
+)
+
 add_executable(katana-cpp-emitter-tests
     tests/codegen/cpp_emitter_tests.cpp
 )
