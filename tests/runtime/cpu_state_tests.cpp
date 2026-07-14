@@ -37,8 +37,8 @@ int main() {
     static_assert(katana::runtime::fpu_register_count == 16u);
 
     require(
-        katana::runtime::abi_version == 5u,
-        "Der vollstaendige CPU-Zustand erfordert Runtime-ABI 5."
+        katana::runtime::abi_version == 6u,
+        "Der Exception-Zustand erfordert Runtime-ABI 6."
     );
 
     CpuState cpu;
@@ -75,6 +75,7 @@ int main() {
         cpu.sgr == 0u &&
         cpu.dbr == 0u &&
         cpu.tra == 0u &&
+        cpu.tea == 0u &&
         cpu.expevt == 0u &&
         cpu.intevt == 0u &&
         cpu.mach == 0u &&
@@ -91,6 +92,8 @@ int main() {
         !cpu.q &&
         !cpu.m &&
         !cpu.trap_pending &&
+        cpu.last_exception_cause == katana::runtime::ExceptionCause::None &&
+        !cpu.exception_in_delay_slot &&
         !cpu.sleeping,
         "Ein Runtime-Zustandsflag besitzt keinen definierten Grundwert."
     );

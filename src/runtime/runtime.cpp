@@ -77,6 +77,7 @@ void reset_cpu(
     cpu.sgr = 0u;
     cpu.dbr = 0u;
     cpu.tra = 0u;
+    cpu.tea = 0u;
     cpu.expevt = 0u;
     cpu.intevt = 0u;
     cpu.mach = 0u;
@@ -90,6 +91,8 @@ void reset_cpu(
     cpu.q = false;
     cpu.m = false;
     cpu.trap_pending = false;
+    cpu.last_exception_cause = ExceptionCause::None;
+    cpu.exception_in_delay_slot = false;
     cpu.sleeping = false;
 
     cpu.r[15] = state.stack_pointer;

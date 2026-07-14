@@ -2667,7 +2667,7 @@ std::string emit_cpp_program(
         << "#include <cstdint>\n"
         << "#include <stdexcept>\n\n"
         << "namespace katana_generated {\n\n"
-        << "inline constexpr std::uint32_t required_runtime_abi = 5u;\n"
+        << "inline constexpr std::uint32_t required_runtime_abi = 6u;\n"
         << "static_assert(\n"
         << "    katana::runtime::abi_version == required_runtime_abi,\n"
         << "    \"Inkompatible Katana-Runtime-ABI\"\n"

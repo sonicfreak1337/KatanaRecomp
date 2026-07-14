@@ -8,7 +8,7 @@
 
 namespace katana::runtime {
 
-inline constexpr std::uint32_t abi_version = 5u;
+inline constexpr std::uint32_t abi_version = 6u;
 
 inline constexpr std::uint32_t sr_t_mask = 0x00000001u;
 inline constexpr std::uint32_t sr_s_mask = 0x00000002u;
@@ -24,6 +24,18 @@ inline constexpr std::uint32_t sr_writable_mask = 0x700083F3u;
 inline constexpr std::size_t general_register_count = 16u;
 inline constexpr std::size_t banked_register_count = 8u;
 inline constexpr std::size_t fpu_register_count = 16u;
+
+enum class ExceptionCause : std::uint8_t {
+    None,
+    Trap,
+    IllegalInstruction,
+    SlotIllegalInstruction,
+    AddressErrorRead,
+    AddressErrorWrite,
+    BusErrorRead,
+    BusErrorWrite,
+    Interrupt
+};
 
 struct ResetState {
     std::uint32_t program_counter = 0u;
@@ -47,6 +59,7 @@ struct CpuState {
     std::uint32_t sgr = 0u;
     std::uint32_t dbr = 0u;
     std::uint32_t tra = 0u;
+    std::uint32_t tea = 0u;
     std::uint32_t expevt = 0u;
     std::uint32_t intevt = 0u;
     std::uint32_t mach = 0u;
@@ -59,6 +72,8 @@ struct CpuState {
     bool q = false;
     bool m = false;
     bool trap_pending = false;
+    ExceptionCause last_exception_cause = ExceptionCause::None;
+    bool exception_in_delay_slot = false;
     bool sleeping = false;
     Memory memory{
         1024u * 1024u,

@@ -34,6 +34,7 @@ endfunction()
 
 add_library(katana_runtime STATIC
     src/runtime/dreamcast_memory.cpp
+    src/runtime/exception.cpp
     src/runtime/memory.cpp
     src/runtime/runtime.cpp
 )
@@ -217,6 +218,18 @@ katana_enable_warnings(katana-reset-tests)
 add_test(
     NAME katana-reset-tests
     COMMAND katana-reset-tests
+)
+
+add_executable(katana-exception-tests
+    tests/runtime/exception_tests.cpp
+)
+
+target_link_libraries(katana-exception-tests PRIVATE katana_runtime)
+katana_enable_warnings(katana-exception-tests)
+
+add_test(
+    NAME katana-exception-tests
+    COMMAND katana-exception-tests
 )
 
 add_executable(katana-decoder-tests

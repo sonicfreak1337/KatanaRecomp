@@ -38,6 +38,7 @@ bool scalar_state_is_zero(const katana::runtime::CpuState& cpu) {
         cpu.sgr == 0u &&
         cpu.dbr == 0u &&
         cpu.tra == 0u &&
+        cpu.tea == 0u &&
         cpu.expevt == 0u &&
         cpu.intevt == 0u &&
         cpu.mach == 0u &&
@@ -50,6 +51,8 @@ bool scalar_state_is_zero(const katana::runtime::CpuState& cpu) {
         !cpu.q &&
         !cpu.m &&
         !cpu.trap_pending &&
+        cpu.last_exception_cause == katana::runtime::ExceptionCause::None &&
+        !cpu.exception_in_delay_slot &&
         !cpu.sleeping;
 }
 
@@ -75,6 +78,7 @@ int main() {
     cpu.sgr = 0xBBBBBBBBu;
     cpu.dbr = 0xCCCCCCCCu;
     cpu.tra = 0xDDDDDDDDu;
+    cpu.tea = 0xABABABABu;
     cpu.expevt = 0xEEEEEEEEu;
     cpu.intevt = 0xFFFFFFFFu;
     cpu.mach = 0x12345678u;
@@ -83,6 +87,8 @@ int main() {
     cpu.fpscr = 0x00040001u;
     cpu.write_sr(0x700083F3u);
     cpu.trap_pending = true;
+    cpu.last_exception_cause = katana::runtime::ExceptionCause::Trap;
+    cpu.exception_in_delay_slot = true;
     cpu.sleeping = true;
     cpu.memory.write_u32(16u, 0x89ABCDEFu);
 
@@ -124,12 +130,15 @@ int main() {
     cpu.sgr = 5u;
     cpu.dbr = 6u;
     cpu.tra = 7u;
+    cpu.tea = 13u;
     cpu.expevt = 8u;
     cpu.intevt = 9u;
     cpu.mach = 10u;
     cpu.macl = 11u;
     cpu.fpul = 12u;
     cpu.trap_pending = true;
+    cpu.last_exception_cause = katana::runtime::ExceptionCause::BusErrorRead;
+    cpu.exception_in_delay_slot = true;
     cpu.sleeping = true;
 
     reset_cpu(cpu, configured);
@@ -174,12 +183,15 @@ int main() {
         cpu.sgr == 0u &&
         cpu.dbr == 0u &&
         cpu.tra == 0u &&
+        cpu.tea == 0u &&
         cpu.expevt == 0u &&
         cpu.intevt == 0u &&
         cpu.mach == 0u &&
         cpu.macl == 0u &&
         cpu.fpul == 0u &&
         !cpu.trap_pending &&
+        cpu.last_exception_cause == katana::runtime::ExceptionCause::None &&
+        !cpu.exception_in_delay_slot &&
         !cpu.sleeping,
         "Der konfigurierte Reset bewahrt unerlaubt alten CPU-Zustand."
     );
