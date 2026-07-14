@@ -1988,6 +1988,7 @@ void emit_terminal(
     const katana::ir::BasicBlock& block,
     const std::size_t control_index,
     const std::unordered_set<std::uint32_t>& known_functions,
+    const std::unordered_set<std::uint32_t>& current_blocks,
     const int indent
 ) {
     using Operation = katana::ir::Operation;
@@ -2143,11 +2144,43 @@ void emit_terminal(
                 );
             }
 
-            emit_indent(output, indent);
-            output << "unresolved_jump(cpu, jump_target);\n";
+            if (instruction.resolved_targets.empty()) {
+                emit_indent(output, indent);
+                output << "unresolved_jump(cpu, jump_target);\n";
+
+                emit_indent(output, indent);
+                output << "return;\n";
+                return;
+            }
 
             emit_indent(output, indent);
-            output << "return;\n";
+            output << "switch (jump_target) {\n";
+            for (const auto target : instruction.resolved_targets) {
+                emit_indent(output, indent + 1);
+                output << "case " << hex32(target) << ":\n";
+                if (current_blocks.contains(target)) {
+                    emit_indent(output, indent + 2);
+                    output << "cpu.pc = " << hex32(target) << ";\n";
+                    emit_indent(output, indent + 2);
+                    output << "continue;\n";
+                } else if (known_functions.contains(target)) {
+                    emit_indent(output, indent + 2);
+                    output << "cpu.pc = " << hex32(target) << ";\n";
+                    emit_indent(output, indent + 2);
+                    output << function_name(target) << "(cpu);\n";
+                    emit_indent(output, indent + 2);
+                    output << "return;\n";
+                } else {
+                    emit_indent(output, indent + 2);
+                    output << "unresolved_jump(cpu, jump_target);\n";
+                }
+            }
+            emit_indent(output, indent + 1);
+            output << "default:\n";
+            emit_indent(output, indent + 2);
+            output << "unresolved_jump(cpu, jump_target);\n";
+            emit_indent(output, indent);
+            output << "}\n";
             return;
 
         case Operation::CallRegister:
@@ -2173,9 +2206,36 @@ void emit_terminal(
                 );
             }
 
-            emit_indent(output, indent);
-            output
-                << "unresolved_call(cpu, call_target);\n";
+            if (instruction.resolved_targets.empty()) {
+                emit_indent(output, indent);
+                output << "unresolved_call(cpu, call_target);\n";
+            } else {
+                emit_indent(output, indent);
+                output << "switch (call_target) {\n";
+                for (const auto target : instruction.resolved_targets) {
+                    emit_indent(output, indent + 1);
+                    output << "case " << hex32(target) << ":\n";
+                    if (known_functions.contains(target)) {
+                        emit_direct_call(
+                            output,
+                            target,
+                            known_functions,
+                            indent + 2
+                        );
+                        emit_indent(output, indent + 2);
+                        output << "break;\n";
+                    } else {
+                        emit_indent(output, indent + 2);
+                        output << "unresolved_call(cpu, call_target);\n";
+                    }
+                }
+                emit_indent(output, indent + 1);
+                output << "default:\n";
+                emit_indent(output, indent + 2);
+                output << "unresolved_call(cpu, call_target);\n";
+                emit_indent(output, indent);
+                output << "}\n";
+            }
 
             emit_indent(output, indent);
             output
@@ -2508,7 +2568,8 @@ bool is_control_flow(
 void emit_block(
     std::ostringstream& output,
     const katana::ir::BasicBlock& block,
-    const std::unordered_set<std::uint32_t>& known_functions
+    const std::unordered_set<std::uint32_t>& known_functions,
+    const std::unordered_set<std::uint32_t>& current_blocks
 ) {
     output
         << "            case "
@@ -2547,6 +2608,7 @@ void emit_block(
             block,
             *control_index,
             known_functions,
+            current_blocks,
             4
         );
     } else if (block.successors.size() == 1u) {
@@ -2772,11 +2834,18 @@ std::string emit_cpp_program(
             << "    for (;;) {\n"
             << "        switch (cpu.pc) {\n";
 
+        std::unordered_set<std::uint32_t> current_blocks;
+        current_blocks.reserve(function.blocks.size());
+        for (const auto& block : function.blocks) {
+            current_blocks.insert(block.start_address);
+        }
+
         for (const auto& block : function.blocks) {
             emit_block(
                 output,
                 block,
-                known_functions
+                known_functions,
+                current_blocks
             );
         }
 

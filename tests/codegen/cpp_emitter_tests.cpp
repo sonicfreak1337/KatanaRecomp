@@ -124,6 +124,92 @@ int main() {
         "Die Ruecksprungsemantik fehlt."
     );
 
+    constexpr std::array<std::uint8_t, 12> indirect_jump_bytes = {
+        0x08u, 0xE1u, // MOV #8,R1
+        0x2Bu, 0x41u, // JMP @R1
+        0x09u, 0x00u, // NOP (Delay Slot)
+        0x09u, 0x00u, // unerreichbarer Abstand
+        0x0Bu, 0x00u, // RTS
+        0x09u, 0x00u  // NOP (Delay Slot)
+    };
+    const auto indirect_jump_lines = katana::sh4::disassemble(
+        indirect_jump_bytes,
+        0u
+    );
+    constexpr std::array<std::uint32_t, 1> indirect_jump_seeds = {0u};
+    const std::array<katana::analysis::ResolvedControlFlowEdge, 1>
+        indirect_jump_edges = {
+            katana::analysis::ResolvedControlFlowEdge{
+                2u,
+                8u,
+                katana::analysis::ResolvedControlFlowKind::Jump
+            }
+        };
+    const auto indirect_jump_functions = katana::analysis::discover_functions(
+        indirect_jump_lines,
+        indirect_jump_seeds,
+        indirect_jump_edges
+    );
+    const auto indirect_jump_program = katana::ir::lower_program(
+        indirect_jump_lines,
+        indirect_jump_functions,
+        indirect_jump_edges
+    );
+    const auto indirect_jump_source = katana::codegen::emit_cpp_program(
+        indirect_jump_program,
+        0u
+    );
+    require(
+        indirect_jump_source.find("switch (jump_target)") != std::string::npos &&
+        indirect_jump_source.find("case 0x00000008u:") != std::string::npos &&
+        indirect_jump_source.find("cpu.pc = 0x00000008u;") != std::string::npos,
+        "Aufgeloestes indirektes JMP wird nicht als nativer Dispatch generiert."
+    );
+
+    constexpr std::array<std::uint8_t, 16> indirect_call_bytes = {
+        0x0Cu, 0xE1u, // MOV #12,R1
+        0x0Bu, 0x41u, // JSR @R1
+        0x09u, 0x00u, // NOP (Delay Slot)
+        0x0Bu, 0x00u, // RTS
+        0x09u, 0x00u, // NOP (Delay Slot)
+        0x09u, 0x00u, // unerreichbarer Abstand
+        0x0Bu, 0x00u, // RTS
+        0x09u, 0x00u  // NOP (Delay Slot)
+    };
+    const auto indirect_call_lines = katana::sh4::disassemble(
+        indirect_call_bytes,
+        0u
+    );
+    constexpr std::array<std::uint32_t, 1> indirect_call_seeds = {0u};
+    const std::array<katana::analysis::ResolvedControlFlowEdge, 1>
+        indirect_call_edges = {
+            katana::analysis::ResolvedControlFlowEdge{
+                2u,
+                12u,
+                katana::analysis::ResolvedControlFlowKind::Call
+            }
+        };
+    const auto indirect_call_functions = katana::analysis::discover_functions(
+        indirect_call_lines,
+        indirect_call_seeds,
+        indirect_call_edges
+    );
+    const auto indirect_call_program = katana::ir::lower_program(
+        indirect_call_lines,
+        indirect_call_functions,
+        indirect_call_edges
+    );
+    const auto indirect_call_source = katana::codegen::emit_cpp_program(
+        indirect_call_program,
+        0u
+    );
+    require(
+        indirect_call_source.find("switch (call_target)") != std::string::npos &&
+        indirect_call_source.find("case 0x0000000Cu:") != std::string::npos &&
+        indirect_call_source.find("fn_0000000C(cpu);") != std::string::npos,
+        "Aufgeloestes indirektes JSR wird nicht als nativer Funktionsdispatch generiert."
+    );
+
     std::cout
         << "Alle C++-Codegenerator-Tests erfolgreich.\n";
 
