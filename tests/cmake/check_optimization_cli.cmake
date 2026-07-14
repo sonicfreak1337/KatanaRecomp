@@ -72,6 +72,7 @@ foreach(variant IN ITEMS optimized unoptimized)
                 /utf-8
                 "/I${KATANA_SOURCE_DIR}/include"
                 "${harness}"
+                "${KATANA_SOURCE_DIR}/src/runtime/exception.cpp"
                 "${KATANA_SOURCE_DIR}/src/runtime/memory.cpp"
                 "${KATANA_SOURCE_DIR}/src/runtime/runtime.cpp"
                 "/Fe${executable}"
@@ -86,6 +87,7 @@ foreach(variant IN ITEMS optimized unoptimized)
                 -std=c++20
                 "-I${KATANA_SOURCE_DIR}/include"
                 "${harness}"
+                "${KATANA_SOURCE_DIR}/src/runtime/exception.cpp"
                 "${KATANA_SOURCE_DIR}/src/runtime/memory.cpp"
                 "${KATANA_SOURCE_DIR}/src/runtime/runtime.cpp"
                 -o

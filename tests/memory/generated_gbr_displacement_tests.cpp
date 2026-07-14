@@ -105,21 +105,18 @@ void run_invalid_access_case() {
     const auto old_gbr = cpu.gbr;
     const auto old_r0 = cpu.r[0];
 
-    bool threw = false;
-    try {
-        cpu.pc = 0x8C010030u;
-        katana_generated::fn_8C010030(cpu);
-    } catch (const katana::runtime::MemoryAccessError& error) {
-        threw =
-            error.reason() ==
-                katana::runtime::MemoryAccessErrorReason::Unmapped &&
-            error.operation() ==
-                katana::runtime::MemoryAccessOperation::Write &&
-            error.width() ==
-                katana::runtime::MemoryAccessWidth::Byte;
-    }
+    cpu.pc = 0x8C010030u;
+    katana_generated::fn_8C010030(cpu);
 
-    require(threw, "Eine ungueltige GBR-Adresse muss fehlschlagen.");
+    require(
+        cpu.trap_pending &&
+        cpu.last_exception_cause ==
+            katana::runtime::ExceptionCause::BusErrorWrite &&
+        cpu.tea == runtime_memory_size + 127u &&
+        cpu.spc == 0x8C010030u,
+        "Eine ungueltige GBR-Adresse erzeugt keine Bus-Exception."
+    );
+    katana::runtime::return_from_exception(cpu);
     require(
         cpu.gbr == old_gbr && cpu.r[0] == old_r0,
         "Ein fehlgeschlagener GBR-Store hat Register veraendert."

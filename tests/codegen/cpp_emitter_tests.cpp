@@ -231,6 +231,42 @@ int main() {
         "Aufgeloestes indirektes JSR wird nicht als nativer Funktionsdispatch generiert."
     );
 
+    constexpr std::array<std::uint8_t, 10> delay_memory_bytes = {
+        0x01u, 0xA0u, // BRA +1
+        0x12u, 0x62u, // MOV.L @R1,R2 (Delay Slot)
+        0x09u, 0x00u, // unerreichbarer Abstand
+        0x0Bu, 0x00u, // RTS
+        0x09u, 0x00u  // NOP (Delay Slot)
+    };
+    const auto delay_memory_lines = katana::sh4::disassemble(
+        delay_memory_bytes,
+        0x8C020000u
+    );
+    constexpr std::array<std::uint32_t, 1> delay_memory_seeds = {
+        0x8C020000u
+    };
+    const auto delay_memory_functions = katana::analysis::discover_functions(
+        delay_memory_lines,
+        delay_memory_seeds
+    );
+    const auto delay_memory_program = katana::ir::lower_program(
+        delay_memory_lines,
+        delay_memory_functions
+    );
+    const auto delay_memory_source = katana::codegen::emit_cpp_program(
+        delay_memory_program,
+        0x8C020000u
+    );
+    require(
+        delay_memory_source.find(
+            "catch (const katana::runtime::MemoryAccessError& error)"
+        ) != std::string::npos &&
+        delay_memory_source.find(
+            "enter_memory_exception(cpu, error, 0x8C020002u, 0x8C020000u);"
+        ) != std::string::npos,
+        "Speicherfehler im Delay Slot verlieren ihren Owner-PC."
+    );
+
     std::cout
         << "Alle C++-Codegenerator-Tests erfolgreich.\n";
 

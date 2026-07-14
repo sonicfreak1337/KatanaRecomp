@@ -191,23 +191,18 @@ void run_invalid_access_cases() {
         cpu.r[2] = 0u;
         cpu.pc = 0x8C010030u;
 
-        bool threw = false;
-        try {
-            katana_generated::fn_8C010030(cpu);
-        } catch (const katana::runtime::MemoryAccessError& error) {
-            threw =
-                error.reason() ==
-                    katana::runtime::MemoryAccessErrorReason::Unmapped &&
-                error.operation() ==
-                    katana::runtime::MemoryAccessOperation::Write &&
-                error.width() ==
-                    katana::runtime::MemoryAccessWidth::Byte;
-        }
+        katana_generated::fn_8C010030(cpu);
 
         require(
-            threw,
-            "Pre-Decrement-Wraparound muss als ungueltige Adresse fehlschlagen."
+            cpu.trap_pending &&
+            cpu.last_exception_cause ==
+                katana::runtime::ExceptionCause::BusErrorWrite &&
+            cpu.expevt == katana::runtime::event_address_error_write &&
+            cpu.tea == 0xFFFFFFFFu &&
+            cpu.spc == 0x8C010030u,
+            "Pre-Decrement-Wraparound erzeugt keine strukturierte Bus-Exception."
         );
+        katana::runtime::return_from_exception(cpu);
         require(
             cpu.r[1] == 0xA1B2C3D4u && cpu.r[2] == 0u,
             "Fehlgeschlagenes Pre-Decrement hat Register vorzeitig veraendert."
@@ -220,23 +215,18 @@ void run_invalid_access_cases() {
         cpu.r[8] = 0xCAFEBABEu;
         cpu.pc = 0x8C010048u;
 
-        bool threw = false;
-        try {
-            katana_generated::fn_8C010048(cpu);
-        } catch (const katana::runtime::MemoryAccessError& error) {
-            threw =
-                error.reason() ==
-                    katana::runtime::MemoryAccessErrorReason::Unmapped &&
-                error.operation() ==
-                    katana::runtime::MemoryAccessOperation::Read &&
-                error.width() ==
-                    katana::runtime::MemoryAccessWidth::Byte;
-        }
+        katana_generated::fn_8C010048(cpu);
 
         require(
-            threw,
-            "Post-Increment ausserhalb des Runtime-Speichers muss fehlschlagen."
+            cpu.trap_pending &&
+            cpu.last_exception_cause ==
+                katana::runtime::ExceptionCause::BusErrorRead &&
+            cpu.expevt == katana::runtime::event_address_error_read &&
+            cpu.tea == 1024u * 1024u &&
+            cpu.spc == 0x8C010048u,
+            "Post-Increment ausserhalb des Speichers erzeugt keine Bus-Exception."
         );
+        katana::runtime::return_from_exception(cpu);
         require(
             cpu.r[7] == 1024u * 1024u &&
             cpu.r[8] == 0xCAFEBABEu,

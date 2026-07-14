@@ -121,23 +121,17 @@ void run_invalid_access_case() {
     const auto old_r0 = cpu.r[0];
     const auto old_r1 = cpu.r[1];
 
-    bool threw = false;
-    try {
-        katana_generated::run(cpu);
-    } catch (const katana::runtime::MemoryAccessError& error) {
-        threw =
-            error.reason() ==
-                katana::runtime::MemoryAccessErrorReason::Unmapped &&
-            error.operation() ==
-                katana::runtime::MemoryAccessOperation::Write &&
-            error.width() ==
-                katana::runtime::MemoryAccessWidth::Byte;
-    }
+    katana_generated::run(cpu);
 
     require(
-        threw,
-        "Eine Displacement-Adresse ausserhalb des Runtime-Speichers muss fehlschlagen."
+        cpu.trap_pending &&
+        cpu.last_exception_cause ==
+            katana::runtime::ExceptionCause::BusErrorWrite &&
+        cpu.tea == runtime_memory_size + 7u &&
+        cpu.spc == 0x8C010000u,
+        "Ungueltiges Displacement erzeugt keine strukturierte Bus-Exception."
     );
+    katana::runtime::return_from_exception(cpu);
     require(
         cpu.r[0] == old_r0 && cpu.r[1] == old_r1,
         "Ein fehlgeschlagener Displacement-Store hat Register veraendert."

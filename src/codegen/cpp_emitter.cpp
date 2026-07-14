@@ -1936,11 +1936,19 @@ void emit_simple_instruction(
                 << "}\n";
             return;
         case Operation::Unknown:
-            output
-                << "throw std::runtime_error("
-                << "\"Unbekannte IR-Instruktion bei "
-                << hex32(instruction.source_address)
-                << "\");\n";
+            output << "raise_illegal_instruction(cpu, "
+                << hex32(instruction.source_address);
+            if (
+                instruction.delay_slot.role ==
+                    katana::ir::DelaySlotRole::Slot &&
+                instruction.delay_slot.counterpart_address.has_value()
+            ) {
+                output << ", "
+                    << hex32(*instruction.delay_slot.counterpart_address);
+            }
+            output << ");\n";
+            emit_indent(output, indent);
+            output << "return;\n";
             return;
 
         case Operation::Branch:
@@ -1960,6 +1968,42 @@ void emit_simple_instruction(
     }
 }
 
+void emit_guarded_simple_instruction(
+    std::ostringstream& output,
+    const katana::ir::Instruction& instruction,
+    const int indent
+) {
+    if (
+        instruction.memory_effects.access ==
+        katana::ir::MemoryAccessKind::None
+    ) {
+        emit_simple_instruction(output, instruction, indent);
+        return;
+    }
+
+    emit_indent(output, indent);
+    output << "try {\n";
+    emit_simple_instruction(output, instruction, indent + 1);
+    emit_indent(output, indent);
+    output
+        << "} catch (const katana::runtime::MemoryAccessError& error) {\n";
+    emit_indent(output, indent + 1);
+    output << "enter_memory_exception(cpu, error, "
+        << hex32(instruction.source_address);
+    if (
+        instruction.delay_slot.role == katana::ir::DelaySlotRole::Slot &&
+        instruction.delay_slot.counterpart_address.has_value()
+    ) {
+        output << ", "
+            << hex32(*instruction.delay_slot.counterpart_address);
+    }
+    output << ");\n";
+    emit_indent(output, indent + 1);
+    output << "return;\n";
+    emit_indent(output, indent);
+    output << "}\n";
+}
+
 void emit_direct_call(
     std::ostringstream& output,
     const std::uint32_t target,
@@ -1975,6 +2019,12 @@ void emit_direct_call(
         output
             << function_name(target)
             << "(cpu);\n";
+        emit_indent(output, indent);
+        output << "if (cpu.trap_pending) {\n";
+        emit_indent(output, indent + 1);
+        output << "return;\n";
+        emit_indent(output, indent);
+        output << "}\n";
     } else {
         output
             << "unresolved_call(cpu, "
@@ -2021,7 +2071,7 @@ void emit_terminal(
             }
 
             if (delay_slot != nullptr) {
-                emit_simple_instruction(
+                emit_guarded_simple_instruction(
                     output,
                     *delay_slot,
                     indent
@@ -2052,7 +2102,7 @@ void emit_terminal(
                 << ";\n";
 
             if (delay_slot != nullptr) {
-                emit_simple_instruction(
+                emit_guarded_simple_instruction(
                     output,
                     *delay_slot,
                     indent
@@ -2097,7 +2147,7 @@ void emit_terminal(
                     << condition
                     << ";\n";
 
-                emit_simple_instruction(
+                emit_guarded_simple_instruction(
                     output,
                     *delay_slot,
                     indent
@@ -2137,7 +2187,7 @@ void emit_terminal(
                 << "];\n";
 
             if (delay_slot != nullptr) {
-                emit_simple_instruction(
+                emit_guarded_simple_instruction(
                     output,
                     *delay_slot,
                     indent
@@ -2199,7 +2249,7 @@ void emit_terminal(
                 << ";\n";
 
             if (delay_slot != nullptr) {
-                emit_simple_instruction(
+                emit_guarded_simple_instruction(
                     output,
                     *delay_slot,
                     indent
@@ -2249,7 +2299,7 @@ void emit_terminal(
 
         case Operation::Return:
             if (delay_slot != nullptr) {
-                emit_simple_instruction(
+                emit_guarded_simple_instruction(
                     output,
                     *delay_slot,
                     indent
@@ -2279,7 +2329,7 @@ void emit_terminal(
             emit_indent(output, indent);
             output << "return_from_exception(cpu);\n";
             if (delay_slot != nullptr) {
-                emit_simple_instruction(output, *delay_slot, indent);
+                emit_guarded_simple_instruction(output, *delay_slot, indent);
             }
             emit_indent(output, indent);
             output << "return;\n";
@@ -2574,7 +2624,7 @@ void emit_block(
             break;
         }
 
-        emit_simple_instruction(
+        emit_guarded_simple_instruction(
             output,
             instruction,
             4
@@ -2654,6 +2704,8 @@ std::string emit_cpp_program(
         << ");\n\n"
         << "using CpuState = katana::runtime::CpuState;\n"
         << "using Memory = katana::runtime::Memory;\n"
+        << "using katana::runtime::enter_memory_exception;\n"
+        << "using katana::runtime::raise_illegal_instruction;\n"
         << "using katana::runtime::raise_trapa;\n"
         << "using katana::runtime::return_from_exception;\n"
         << "using katana::runtime::unresolved_call;\n"

@@ -17,18 +17,16 @@ void require(const bool condition, const std::string& message) {
 void run_invalid_access_case() {
     katana_generated::CpuState cpu;
     cpu.r[3] = 0xA1B2C3D4u;
-    bool threw = false;
-    try {
-        cpu.pc = 0x00000200u;
-        katana_generated::fn_00000200(cpu);
-    } catch (const katana::runtime::MemoryAccessError& error) {
-        threw =
-            error.reason() ==
-                katana::runtime::MemoryAccessErrorReason::Unmapped &&
-            error.operation() ==
-                katana::runtime::MemoryAccessOperation::Read;
-    }
-    require(threw, "Ein PC-relativer Zugriff ausserhalb des Speichers muss fehlschlagen.");
+    cpu.pc = 0x00000200u;
+    katana_generated::fn_00000200(cpu);
+    require(
+        cpu.trap_pending &&
+        cpu.last_exception_cause ==
+            katana::runtime::ExceptionCause::BusErrorRead &&
+        cpu.spc == 0x00000200u,
+        "Ein PC-relativer Zugriff erzeugt keine strukturierte Bus-Exception."
+    );
+    katana::runtime::return_from_exception(cpu);
     require(
         cpu.r[3] == 0xA1B2C3D4u,
         "Ein fehlgeschlagener PC-relativer Load hat das Zielregister veraendert."

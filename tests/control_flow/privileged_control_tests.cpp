@@ -119,8 +119,8 @@ int main(const int argc, char* argv[]) {
 
     const auto source = katana::codegen::emit_cpp_program(program, base_address);
     require(
-        source.find("cpu.expevt = 0x00000160u;") != std::string::npos &&
-        source.find("cpu.write_sr(cpu.ssr);") != std::string::npos &&
+        source.find("raise_trapa(cpu, 127u, 0x00000100u);") != std::string::npos &&
+        source.find("return_from_exception(cpu);") != std::string::npos &&
         source.find("cpu.sleeping = true;") != std::string::npos,
         "Der C++-Emitter bildet die Kontrollpfade nicht sichtbar ab."
     );
