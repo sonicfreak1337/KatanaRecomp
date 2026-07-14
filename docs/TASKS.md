@@ -354,7 +354,7 @@ Abhaengigkeiten: KR-1501 bis KR-1505
 
 ## v0.16.0 - Executable Images und Loader
 
-### [ ] KR-1601 - Image- und Segmentmodell
+### [x] KR-1601 - Image- und Segmentmodell
 
 Abhaengigkeiten: KR-1506
 

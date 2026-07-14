@@ -38,6 +38,7 @@ add_library(katana_core STATIC
     src/decoder/instruction_metadata.cpp
     src/decoder/isa_coverage.cpp
     src/io/binary_reader.cpp
+    src/io/executable_image.cpp
     src/analysis/disassembler.cpp
     src/analysis/basic_blocks.cpp
     src/analysis/function_analysis.cpp
@@ -82,6 +83,18 @@ katana_enable_warnings(katana-decoder-tests)
 add_test(
     NAME katana-decoder-tests
     COMMAND katana-decoder-tests
+)
+
+add_executable(katana-executable-image-tests
+    tests/io/executable_image_tests.cpp
+)
+
+target_link_libraries(katana-executable-image-tests PRIVATE katana_core)
+katana_enable_warnings(katana-executable-image-tests)
+
+add_test(
+    NAME katana-executable-image-tests
+    COMMAND katana-executable-image-tests
 )
 
 add_executable(katana-instruction-metadata-tests
