@@ -1,10 +1,10 @@
 # KatanaRecomp
 
-Aktuelle Pre-Alpha-Version: `0.19.0`
+Aktuelle Pre-Alpha-Version: `0.20.0`
 
 KatanaRecomp ist ein unabhaengiges, in C++20 entwickeltes Framework fuer die statische Rekompilierung von Sega-Dreamcast-SH-4-Code.
 
-Das Projekt befindet sich in einer fruehen Pre-Alpha-Phase. Der aktuelle Stand ist **Version 0.19.0**.
+Das Projekt befindet sich in einer fruehen Pre-Alpha-Phase. Der aktuelle Stand ist **Version 0.20.0**.
 
 KatanaRecomp ist kein Emulator, kein ISO-Loader und kein Paket fuer kommerzielle Spieldaten. BIOS-Dateien, Disc-Images, urheberrechtlich geschuetzte Assets und automatisch erzeugter Code aus kommerziellen Spielen gehoeren nicht in dieses Repository.
 
@@ -40,6 +40,12 @@ v0.17 entdeckt Code rekursiv ab Image-Einstiegspunkten, direkten Calls und Funkt
 v0.18 verfolgt lokale Registerkonstanten und loest einfache indirekte `JMP`-/`JSR`-Ziele nur bei nachgewiesenem ausfuehrbarem Code auf. Bekannte, begrenzte absolute Jump Tables werden vollstaendig validiert. `katana-recomp analyze <Manifest> [Override-Datei]` trennt sichere und offene Stellen und unterstuetzt deterministische, versionierte Nutzerhinweise.
 
 v0.19 fuehrt Katana-IR Version 2 mit expliziten Operandbreiten, Status-, Speicher- und Akkumulatoreffekten sowie normalisierten Delay Slots ein. Ein verpflichtender Verifier lehnt ungueltige Funktionen vor Codegen ab. `katana-recomp ir` und `ir-json` liefern deterministisch sortierte, vollstaendige IR-Dumps.
+
+v0.20 fuehrt eine feste Pipeline fuer konservatives Constant Folding, Copy
+Propagation, Dead-Code-Elimination, CFG- und Load-Store-Vereinfachungen ein.
+Alle Paesse bleiben einzeln schaltbar, verifizieren ihre IR-Grenzen und erhalten
+sichtbare CPU- und Speichereffekte. `emit-cpp --no-opt` deaktiviert die Pipeline;
+`--dump-ir` schreibt deterministische Vorher-/Nachher-Dumps.
 
 ## Implementierte SH-4-Instruktionen
 

@@ -506,7 +506,7 @@ Abhaengigkeiten: KR-1903, KR-2001
 
 Abhaengigkeiten: KR-2001 bis KR-2005
 
-### [ ] KR-2007 - v0.20 Release-Gate
+### [x] KR-2007 - v0.20 Release-Gate
 
 Abhaengigkeiten: KR-2001 bis KR-2006
 

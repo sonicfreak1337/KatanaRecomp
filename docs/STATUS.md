@@ -1,8 +1,8 @@
 # Projektstatus
 
-Version: 0.19.0
+Version: 0.20.0
 Phase: Pre-Alpha
-Aktiver Meilenstein: v0.20.0 - IR-Optimierungen
+Aktiver Meilenstein: v0.21.0 - Runtime und CPU-Zustand
 
 ## Zusammenfassung
 
@@ -75,16 +75,17 @@ KatanaRecomp besitzt einen durchgaengigen Prototyp-Pfad von Raw- und ELF32-SH-Ei
 - [x] KR-1905 - IR-Verifier
 - [x] KR-1906 - Deterministische Text- und JSON-Ausgabe
 - [x] KR-1907 - v0.19.0 Release-Gate
-
-## Naechster Roadmap-Task
-
 - [x] KR-2001 - Constant Folding
 - [x] KR-2002 - Copy Propagation
 - [x] KR-2003 - Dead-Code-Elimination
 - [x] KR-2004 - CFG-Simplifizierung
 - [x] KR-2005 - Load-Store-Vereinfachung
 - [x] KR-2006 - Pass-Pipeline und Debug-Schalter
-- [ ] KR-2007 - v0.20 Release-Gate
+- [x] KR-2007 - v0.20.0 Release-Gate
+
+## Naechster Roadmap-Task
+
+- [ ] KR-2101 - Runtime aus generiertem Code auslagern
 
 ## Aktuelle Einschraenkungen
 
