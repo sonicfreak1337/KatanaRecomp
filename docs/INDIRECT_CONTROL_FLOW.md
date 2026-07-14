@@ -25,3 +25,12 @@ Registerwert gerade ist und auf zwei committed Bytes eines ausfuehrbaren
 Code-Segments zeigt. Der Grund `constant-register` dokumentiert den Beweis.
 Unbekannte Werte und ungueltige Zielbereiche bleiben mit getrennten stabilen
 Gruenden `unresolved`.
+
+## Jump Tables
+
+`analyze_jump_table` wertet eine bekannte, vier Byte ausgerichtete Tabelle mit
+einer expliziten endlichen Eintragszahl aus. Absolute 32-Bit-Ziele werden nur
+akzeptiert, wenn sie gerade sind und auf committed ausfuehrbaren Code zeigen.
+Die Bereichsschranke liegt bei 4096 Eintraegen. Fehlende Eintraege, ungueltige
+Ziele und unbeschraenkte Kandidaten bleiben als abgelehnt sichtbar; eine nur
+teilweise gueltige Tabelle gilt nicht als aufgeloest.

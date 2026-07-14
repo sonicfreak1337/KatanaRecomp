@@ -430,7 +430,7 @@ Abhaengigkeiten: KR-1801
 
 Abhaengigkeiten: KR-1802
 
-### [ ] KR-1804 - Jump Tables
+### [x] KR-1804 - Jump Tables
 
 Abhaengigkeiten: KR-1802
 

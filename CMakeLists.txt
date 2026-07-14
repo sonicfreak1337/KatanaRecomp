@@ -48,6 +48,7 @@ add_library(katana_core STATIC
     src/analysis/function_analysis.cpp
     src/analysis/recursive_analysis.cpp
     src/analysis/value_analysis.cpp
+    src/analysis/jump_table_analysis.cpp
     src/ir/lower.cpp
     src/codegen/cpp_emitter.cpp
 )
@@ -315,6 +316,18 @@ katana_enable_warnings(katana-value-analysis-tests)
 add_test(
     NAME katana-value-analysis-tests
     COMMAND katana-value-analysis-tests
+)
+
+add_executable(katana-jump-table-analysis-tests
+    tests/analysis/jump_table_analysis_tests.cpp
+)
+
+target_link_libraries(katana-jump-table-analysis-tests PRIVATE katana_core)
+katana_enable_warnings(katana-jump-table-analysis-tests)
+
+add_test(
+    NAME katana-jump-table-analysis-tests
+    COMMAND katana-jump-table-analysis-tests
 )
 
 add_executable(katana-ir-lowering-tests
