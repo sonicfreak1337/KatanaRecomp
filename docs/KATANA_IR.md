@@ -24,3 +24,15 @@ Ein Byte-Load besitzt beispielsweise `result=i32`, `memory=i8` und `address=i32`
 Das Basisregister wird dabei nicht als Daten-Input missverstanden. Ein Vergleich
 besitzt ein boolesches `result=i1` und 32-Bit-Eingaben; die Bindung dieses Ergebnisses
 an Statusregister wird getrennt modelliert.
+
+## Statusregistereffekte
+
+`StatusRegisterEffects` trennt gelesene und geschriebene SR-Bestandteile. Die
+Bitmaske unterscheidet T, S, Q und M. `Full` markiert einen Zugriff auf das gesamte
+Statusregister, beispielsweise fuer `STC SR`, `LDC SR`, `TRAPA` und `RTE`.
+
+Die Effekte beschreiben die bereits implementierte Semantik explizit. So liest und
+schreibt `ADDC` das T-Bit, ein Vergleich schreibt T ohne es zu lesen und `DIV1`
+liest T, Q und M, schreibt aber nur T und Q. Statusneutrale Instruktionen tragen
+leere Masken. Bei den generischen Spezialregistertransfers wird der Effekt anhand
+des konkreten Spezialregisteroperanden bestimmt.

@@ -413,6 +413,10 @@ Instruction lower_instruction(
     result.special_register = lower_special_register(
         source.instruction.special_register
     );
+    result.status_effects = instruction_status_effects(
+        result.operation,
+        result.special_register
+    );
 
     const auto displacement = static_cast<std::uint32_t>(
         source.instruction.displacement

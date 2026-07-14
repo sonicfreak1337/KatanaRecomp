@@ -22,13 +22,14 @@ void require(
 }
 
 int main() {
-    constexpr std::array<std::uint8_t, 16> bytes = {
+    constexpr std::array<std::uint8_t, 18> bytes = {
         0x02, 0xB0,
         0x09, 0x00,
         0x0B, 0x00,
         0x09, 0x00,
         0x05, 0xE1,
         0xFF, 0x71,
+        0x08, 0x00,
         0x0B, 0x00,
         0x09, 0x00
     };
@@ -117,7 +118,7 @@ int main() {
     const auto& sub_block = sub_function.blocks[0];
 
     require(
-        sub_block.instructions.size() == 4,
+        sub_block.instructions.size() == 5,
         "Der Unterfunktionsblock besitzt die falsche Groesse."
     );
 
@@ -158,12 +159,21 @@ int main() {
     );
 
     require(
-        sub_block.instructions[2].operation ==
+        sub_block.instructions[2].operation == katana::ir::Operation::ClearT
+            && katana::ir::contains_status_bit(
+                sub_block.instructions[2].status_effects.writes,
+                katana::ir::StatusRegisterBit::T
+            ),
+        "CLRT verlor seinen expliziten T-Schreibeffekt beim Lowering."
+    );
+
+    require(
+        sub_block.instructions[3].operation ==
             katana::ir::Operation::Return,
         "RTS der Unterfunktion wurde falsch abgesenkt."
     );
     require(
-        sub_block.instructions[3].is_delay_slot,
+        sub_block.instructions[4].is_delay_slot,
         "Der RTS-Delay-Slot wurde im IR nicht markiert."
     );
 

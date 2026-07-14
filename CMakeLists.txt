@@ -55,6 +55,7 @@ add_library(katana_core STATIC
     src/analysis/control_flow_analysis.cpp
     src/ir/lower.cpp
     src/ir/operand_width.cpp
+    src/ir/status_effect.cpp
     src/codegen/cpp_emitter.cpp
 )
 
@@ -413,6 +414,18 @@ katana_enable_warnings(katana-ir-operand-width-tests)
 add_test(
     NAME katana-ir-operand-width-tests
     COMMAND katana-ir-operand-width-tests
+)
+
+add_executable(katana-ir-status-effect-tests
+    tests/ir/status_effect_tests.cpp
+)
+
+target_link_libraries(katana-ir-status-effect-tests PRIVATE katana_core)
+katana_enable_warnings(katana-ir-status-effect-tests)
+
+add_test(
+    NAME katana-ir-status-effect-tests
+    COMMAND katana-ir-status-effect-tests
 )
 
 add_executable(katana-cpp-emitter-tests

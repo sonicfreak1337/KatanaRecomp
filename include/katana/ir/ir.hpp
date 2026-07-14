@@ -31,6 +31,20 @@ struct OperandWidths {
     OperandWidth address = OperandWidth::None;
 };
 
+enum class StatusRegisterBit : std::uint8_t {
+    None = 0u,
+    T = 1u << 0u,
+    S = 1u << 1u,
+    Q = 1u << 2u,
+    M = 1u << 3u,
+    Full = 1u << 7u
+};
+
+struct StatusRegisterEffects {
+    StatusRegisterBit reads = StatusRegisterBit::None;
+    StatusRegisterBit writes = StatusRegisterBit::None;
+};
+
 enum class SpecialRegister {
     None,
     Mach,
@@ -181,6 +195,7 @@ struct Instruction {
 
     Operation operation = Operation::Unknown;
     OperandWidths widths;
+    StatusRegisterEffects status_effects;
 
     std::uint8_t destination_register = 0;
     std::uint8_t source_register = 0;
@@ -218,5 +233,13 @@ struct Function {
 
 [[nodiscard]] OperandWidths operation_operand_widths(Operation operation) noexcept;
 [[nodiscard]] std::string_view operand_width_name(OperandWidth width) noexcept;
+[[nodiscard]] StatusRegisterEffects instruction_status_effects(
+    Operation operation,
+    SpecialRegister special_register = SpecialRegister::None
+) noexcept;
+[[nodiscard]] bool contains_status_bit(
+    StatusRegisterBit effects,
+    StatusRegisterBit bit
+) noexcept;
 
 }

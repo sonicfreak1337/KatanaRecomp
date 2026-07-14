@@ -454,7 +454,7 @@ Abhaengigkeiten: KR-1801 bis KR-1806
 
 Abhaengigkeiten: KR-1807
 
-### [ ] KR-1902 - Explizite Statusregistereffekte
+### [x] KR-1902 - Explizite Statusregistereffekte
 
 Abhaengigkeiten: KR-1901
 
