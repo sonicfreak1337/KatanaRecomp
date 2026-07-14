@@ -530,6 +530,13 @@ Abhaengigkeiten: KR-2102
 
 Abhaengigkeiten: KR-2101 bis KR-2103
 
+Konsolidierung gegenueber der frueheren Feinplanung:
+
+- KR-2102 umfasst die frueheren Aufgaben KR-2102 bis KR-2105:
+  Integer-Zustand, banked Register, vorbereiteten FPU-Zustand und Runtime-ABI.
+- KR-2103 entspricht dem frueheren KR-2106 fuer den deterministischen Reset.
+- KR-2104 entspricht dem frueheren KR-2107 als v0.21.0 Release-Gate.
+
 ---
 
 ## v0.22.0 - Speicherbus
@@ -740,7 +747,7 @@ Abhaengigkeiten: KR-3201
 
 ### [ ] KR-3203 - ABI-Faehigkeitspruefung
 
-Abhaengigkeiten: KR-3201, KR-2104
+Abhaengigkeiten: KR-3201, KR-2102
 
 ### [ ] KR-3301 - Translation-Unit-Partitionierung
 
@@ -760,7 +767,7 @@ Abhaengigkeiten: KR-3303
 
 ### [ ] KR-3401 - Laufzeit-Funktionstabelle
 
-Abhaengigkeiten: KR-1807, KR-2104
+Abhaengigkeiten: KR-1807, KR-2102
 
 ### [ ] KR-3402 - Indirekter Call- und Jump-Dispatch
 
@@ -804,7 +811,7 @@ Abhaengigkeiten: KR-3202
 
 ### [ ] KR-3603 - Crashberichte
 
-Abhaengigkeiten: KR-2104
+Abhaengigkeiten: KR-2102
 
 ### [ ] KR-3604 - Tracing und Watchpoints
 
