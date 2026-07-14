@@ -2,11 +2,11 @@
 
 [![CI](https://github.com/sonicfreak1337/KatanaRecomp/actions/workflows/ci.yml/badge.svg)](https://github.com/sonicfreak1337/KatanaRecomp/actions/workflows/ci.yml)
 
-Aktuelle Pre-Alpha-Version: `0.22.0`
+Aktuelle Pre-Alpha-Version: `0.23.0`
 
 KatanaRecomp ist ein unabhaengiges, in C++20 entwickeltes Framework fuer die statische Rekompilierung von Sega-Dreamcast-SH-4-Code.
 
-Das Projekt befindet sich in einer fruehen Pre-Alpha-Phase. Der aktuelle Stand ist **Version 0.22.0**.
+Das Projekt befindet sich in einer fruehen Pre-Alpha-Phase. Der aktuelle Stand ist **Version 0.23.0**.
 
 KatanaRecomp ist kein Emulator, kein ISO-Loader und kein Paket fuer kommerzielle Spieldaten. BIOS-Dateien, Disc-Images, urheberrechtlich geschuetzte Assets und automatisch erzeugter Code aus kommerziellen Spielen gehoeren nicht in dieses Repository.
 
@@ -31,7 +31,7 @@ SH-4-Binaerdaten
     -> semantischer Laufzeittest
 `
 
-Der aktuelle Teststand umfasst **89 automatische Tests**.
+Der aktuelle Teststand umfasst **91 automatische Tests**.
 
 Der v0.15-Decoder verwendet eine zentrale Metadatenquelle fuer alle implementierten Opcode-Masken, Operandenformate, Kontrollfluss- und Privileginformationen. `katana-recomp isa-report` berichtet deterministisch ueber den gesamten 16-Bit-Opcode-Raum; Kollisions-, Spezifikations- und Fuzztests sichern die Regeln ab.
 
@@ -67,6 +67,13 @@ Traces und Watchpoints bilden die Diagnosegrundlage. Das Release-Gate prueft
 die komplette 8-MiB-Offsetabbildung des 32-Bit-VRAM-Pfads und fuehrt Debug-
 sowie Release-Regressionen lokal und per GitHub Actions unter Linux und
 Windows aus.
+
+v0.23 fuehrt einen gemeinsamen SH-4-Exception-Pfad fuer `TRAPA`, illegale
+Instruktionen, Bus- und Adressfehler sowie priorisierte Interrupts ein. Der
+Runtime-Zustand sichert `SSR`, `SPC`, `SGR`, `TEA`, `EXPEVT` und `INTEVT`,
+beruecksichtigt `IMASK`, `BL`, `MD` und `RB` und behaelt bei Fehlern im Delay
+Slot den Owner-PC. Generierter Code ueberfuehrt Speicherfehler in diesen
+CPU-Zustand und prueft Runtime-ABI 6.
 
 ## Implementierte SH-4-Instruktionen
 
@@ -437,12 +444,12 @@ Der Helfer 	ools\release-version.ps1 aktualisiert VERSION und CMake und kann ein
 
 ## Naechste technische Ziele
 
-1. Dreamcast-RAM und Spiegelungen auf dem regionbasierten Bus
-2. VRAM und AICA-RAM-Abstraktionen
-3. BIOS- und Flash-Abstraktionen
-4. MMIO-Handler
-5. Ausrichtungsfehler und Watchpoints
-6. v0.22 Release-Gate
+1. FR- und XF-Bankumschaltung
+2. Single-Precision-Arithmetik
+3. FPU-Vergleiche und Konvertierungen
+4. `FPSCR`-Modi `PR`, `SZ` und `FR`
+5. Double-Precision-Semantik
+6. v0.24 Release-Gate
 
 
 ## Roadmap und Arbeitsuebergabe

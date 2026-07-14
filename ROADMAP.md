@@ -1,7 +1,7 @@
 # KatanaRecomp Roadmap
 
 Status: Pre-Alpha
-Aktuelle Basis: v0.22.0
+Aktuelle Basis: v0.23.0
 Planungsmodell: Semantic Versioning, kleine ueberpruefbare Meilensteine
 
 Diese Roadmap beschreibt die technische Entwicklung von KatanaRecomp vom aktuellen Architektur-Prototyp bis zu einem belastbaren Dreamcast-Recompiler-Framework.
@@ -72,6 +72,16 @@ Sie ist absichtlich in kleine, voneinander abhaengige Releases und Task-IDs zerl
 ### v0.11.0 - ALU und Statussemantik
 
 Ziel: haeufige Integer- und Bitoperationen vollstaendig durch Decoder, IR, Codegenerator und End-to-End-Tests fuehren.
+
+Fortschritt:
+
+- [x] KR-1101 - SUB, NEG und NOT
+- [x] KR-1102 - AND, OR und XOR
+- [x] KR-1103 - CMP-Varianten
+- [x] KR-1104 - Carry und Overflow
+- [x] KR-1105 - Extend, Swap und XTRCT
+- [x] KR-1106 - DT und MOVT
+- [x] KR-1107 - v0.11 Release-Gate
 
 Enthalten:
 
@@ -285,6 +295,16 @@ Release-Gate:
 
 ### v0.19.0 - IR Version 2
 
+Fortschritt:
+
+- [x] KR-1901 - Explizite Operandbreiten
+- [x] KR-1902 - Explizite Statusregistereffekte
+- [x] KR-1903 - Speicher-Seiteneffekte
+- [x] KR-1904 - Delay-Slot-Normalisierung
+- [x] KR-1905 - IR-Verifier
+- [x] KR-1906 - Deterministische Text- und JSON-Ausgabe
+- [x] KR-1907 - v0.19 Release-Gate
+
 Enthalten:
 
 - explizite Operandbreiten
@@ -303,6 +323,16 @@ Release-Gate:
 - IR-Dumps sind deterministisch
 
 ### v0.20.0 - Sichere Basisoptimierungen
+
+Fortschritt:
+
+- [x] KR-2001 - Constant Folding
+- [x] KR-2002 - Copy Propagation
+- [x] KR-2003 - Dead-Code-Elimination
+- [x] KR-2004 - CFG-Simplifizierung
+- [x] KR-2005 - Load-Store-Vereinfachung
+- [x] KR-2006 - Pass-Pipeline und Debug-Schalter
+- [x] KR-2007 - v0.20 Release-Gate
 
 Enthalten:
 
@@ -380,6 +410,15 @@ Release-Gate:
 - Little-Endian-Verhalten ist zentral garantiert
 
 ### v0.23.0 - Ausnahmen und Interrupts
+
+Fortschritt:
+
+- [x] KR-2301 - SR-Felder und Interruptmasken
+- [x] KR-2302 - Exception-Eintritt
+- [x] KR-2303 - Interrupt-Controller
+- [x] KR-2304 - TRAPA und RTE
+- [x] KR-2305 - Delay-Slot-Ausnahmen
+- [x] KR-2306 - v0.23 Release-Gate
 
 Enthalten:
 

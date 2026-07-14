@@ -6,14 +6,16 @@ ungeloesten Kontrollflusspfaden mehr.
 
 ## ABI
 
-Die aktuelle Runtime-ABI ist Version `5`.
+Die aktuelle Runtime-ABI ist Version `6`.
 
 Generierter Code enthaelt eine Compile-Time-Pruefung gegen diese Version. Eine
 abweichende Runtime wird beim Kompilieren sichtbar abgelehnt. ABI-Version 3
 kennzeichnete den Wechsel zum regionbasierten Bus, ABI-Version 4 fuehrte
 breitenbewusste MMIO-Zugriffe ein. ABI-Version 5 erweitert `Memory` um
 Ausrichtungsrichtlinie, strukturierte Zugriffsfehler, Trace-Handler und
-Watchpoint-Zustand.
+Watchpoint-Zustand. ABI-Version 6 ergaenzt den zentralen CPU-Zustand um `TEA`,
+strukturierte Exception-Ursachen und Delay-Slot-Kontext und bindet generierten
+Code an den gemeinsamen Exception-Pfad.
 
 ## CMake
 
@@ -24,8 +26,8 @@ Verfuegung:
 target_link_libraries(mein_programm PRIVATE KatanaRecomp::runtime)
 ```
 
-Der generierte C++-Code bindet automatisch
-`katana/runtime/runtime.hpp` ein.
+Der generierte C++-Code bindet automatisch `katana/runtime/runtime.hpp` und
+`katana/runtime/exception.hpp` ein.
 
 ## Zentraler CPU-Zustand
 
@@ -36,9 +38,9 @@ Stelle:
 - getrennte 16er-Rohbitbaenke `FR` und `XF`
 - `PC`, `SR`, `GBR`, `VBR`, `SSR`, `SPC`, `SGR` und `DBR`
 - `MACH`, `MACL`, `PR`, `FPUL` und `FPSCR`
-- `TRA`, `EXPEVT` und `INTEVT`
+- `TRA`, `TEA`, `EXPEVT` und `INTEVT`
 - explizite T-, S-, Q- und M-Zustandsbits
-- sichtbare Trap- und Schlafzustaende
+- sichtbare Exception-, Delay-Slot- und Schlafzustaende
 - den zentralen regionbasierten Speicherbus
 
 Die FPU-Baenke speichern vorerst ausschliesslich unveraenderte 32-Bit-Rohwerte.
@@ -180,12 +182,12 @@ sind immer gueltig; Halfwords muessen auf zwei und Words auf vier Byte
 ausgerichtet sein. `MemoryAlignmentPolicy::Permissive` bleibt fuer explizite
 Diagnose- und Kompatibilitaetsfaelle verfuegbar.
 
-Der historische lineare 1-MiB-Speicher in `CpuState` wird vorerst explizit
-permissiv initialisiert. Die bestehenden generierten Semantik-Harnesses nutzen
-absichtlich teilweise unaligned Testadressen und besitzen noch keinen
-SH-4-Adressfehlerpfad. Echte oder explizit erzeugte `Memory`-Busse bleiben
-standardmaessig strikt; der Kompatibilitaetsmodus kann nach der Ausnahmephase
-durch eine architekturgerechte Fehlerbehandlung ersetzt werden.
+Der historische lineare 1-MiB-Speicher in `CpuState` wird fuer bestehende
+synthetische Semantik-Harnesses weiterhin explizit permissiv initialisiert.
+Echte oder explizit erzeugte `Memory`-Busse bleiben standardmaessig strikt.
+Der v0.23-Exception-Pfad ueberfuehrt deren `Misaligned`-Fehler in strukturierte
+SH-4-Adressfehler; andere fehlgeschlagene Zugriffe werden als Busfehler
+klassifiziert.
 
 Busfehler werden als `MemoryAccessError` mit maschinenlesbaren Metadaten
 gemeldet:
@@ -207,6 +209,35 @@ aufgeloesten Regionsnamen, sodass auch Aliase unterscheidbar bleiben.
 Fehlgeschlagene Zugriffe erzeugen weder Trace- noch Watchpoint-Ereignisse.
 Observer werden vor dem Aufruf kopiert, damit sie Watchpoints waehrend eines
 Callbacks sicher entfernen oder veraendern koennen.
+
+## Ausnahmen und Interrupts
+
+KR-2301 bis KR-2305 fuehren einen gemeinsamen CPU-Exception-Pfad ein. Relevante
+Statusregisterfelder besitzen zentrale Masken und strukturierte Zugriffe:
+
+- `IMASK` fuer die vierstufige Interruptmaske
+- `BL` zum Blockieren maskierbarer Interrupts
+- `MD` fuer den privilegierten Modus
+- `RB` fuer die aktive Registerbank
+- `FD` fuer die spaetere FPU-Sperrsemantik
+
+`enter_exception` sichert den bisherigen Zustand in `SSR`, `SPC` und `SGR`,
+setzt `MD`, `RB` und `BL`, schreibt das Ereignis nach `EXPEVT` oder `INTEVT`
+und springt ueber `VBR` zum allgemeinen Exception- oder Interruptvektor.
+Speicherfehler hinterlegen die fehlerhafte Adresse zusaetzlich in `TEA`.
+`return_from_exception` restauriert `SR`, Registerbank und `PC` zentral.
+
+Der `InterruptController` verwaltet Pending-Quellen nach Quell-ID, Prioritaet
+und Eventcode. Angenommen wird deterministisch der hoechste Level oberhalb von
+`IMASK`; gleich priorisierte Quellen werden nach kleinerer Quell-ID geordnet.
+Gesetztes `BL` verhindert die Annahme. Ein angenommener Interrupt beendet einen
+sichtbaren Schlafzustand und verwendet den Interruptvektor `VBR + 0x600`.
+
+Generierte Speicherzugriffe fangen `MemoryAccessError` direkt an der
+verursachenden IR-Instruktion ab und rufen `enter_memory_exception` auf. Im
+Delay Slot wird `SPC` auf den Owner-PC gesetzt und der Slotkontext explizit
+markiert. Der Zustand propagiert durch generierte Funktionsaufrufe; CPU-Fehler
+verlassen den Ausfuehrungspfad nicht mehr als generische C++-Exception.
 
 ## Deterministischer CPU-Reset
 

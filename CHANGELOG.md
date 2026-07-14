@@ -2,6 +2,21 @@
 
 ## [Unreleased]
 
+## [0.23.0] - 2026-07-15
+
+### Hinzugefuegt
+
+- KR-2301: Relevante SH-4-Statusregisterfelder besitzen zentrale Masken und strukturierte Zugriffe fuer `IMASK`, `BL`, `MD`, `RB` und `FD`; Interruptmasken werden deterministisch auf vier Bit begrenzt.
+- KR-2302: Ein gemeinsamer Exception-Eintritt sichert `SR`, `PC` und `R15` in `SSR`, `SPC` und `SGR`, setzt `EXPEVT` oder `INTEVT`, wechselt in den privilegierten geblockten Registerbankmodus und springt ueber `VBR` zum passenden Vektor. `TEA`, Ursache und Delay-Slot-Kontext bleiben maschinenlesbar erhalten.
+- KR-2303: Ein testbarer Interrupt-Controller verwaltet Quellen deterministisch, aktualisiert doppelte Anforderungen, priorisiert nach Level und Quell-ID und akzeptiert nur Interrupts oberhalb von `IMASK` bei geloeschtem `BL`.
+- KR-2304: Generiertes `TRAPA` und `RTE` verwenden den zentralen Runtime-Exception-Pfad. Trap- und Rueckkehrzustand, Registerbankwechsel und RTE-Delay-Slot-Reihenfolge werden nicht mehr separat im Emitter dupliziert.
+- KR-2305: Generierte Speicherzugriffe ueberfuehren Ausrichtungs-, Bus- und Adressfehler in den CPU-Exception-Zustand. Fehler im Delay Slot sichern den Owner-PC; Exceptions propagieren durch generierte Funktionsaufrufe, statt als generische C++-Exceptions zu verschwinden.
+
+### Geaendert
+
+- Die Runtime-ABI steigt auf Version 6. `CpuState` enthaelt jetzt `TEA`, die letzte strukturierte Exception-Ursache und den Delay-Slot-Status; generierter Code bindet den zentralen Exception-Pfad ein und prueft ABI 6.
+- Die vollstaendige Regression umfasst 91 Tests in Debug und Release. Historisch abgeschlossene Roadmap-Aufgaben fuer v0.11, v0.19 und v0.20 sind nun auch in `ROADMAP.md` explizit abgehakt.
+
 ## [0.22.0] - 2026-07-14
 
 ### Hinzugefuegt

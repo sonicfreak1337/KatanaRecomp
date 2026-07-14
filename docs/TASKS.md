@@ -702,27 +702,27 @@ Akzeptanz:
 
 ## v0.23.0 - Ausnahmen und Interrupts
 
-### [ ] KR-2301 - SR-Felder und Interruptmasken
+### [x] KR-2301 - SR-Felder und Interruptmasken
 
 Abhaengigkeiten: KR-2104
 
-### [ ] KR-2302 - Exception-Eintritt
+### [x] KR-2302 - Exception-Eintritt
 
 Abhaengigkeiten: KR-2301, KR-2207
 
-### [ ] KR-2303 - Interrupt-Controller
+### [x] KR-2303 - Interrupt-Controller
 
 Abhaengigkeiten: KR-2301
 
-### [ ] KR-2304 - TRAPA und RTE
+### [x] KR-2304 - TRAPA und RTE
 
 Abhaengigkeiten: KR-2302
 
-### [ ] KR-2305 - Delay-Slot-Ausnahmen
+### [x] KR-2305 - Delay-Slot-Ausnahmen
 
 Abhaengigkeiten: KR-2302
 
-### [ ] KR-2306 - v0.23 Release-Gate
+### [x] KR-2306 - v0.23 Release-Gate
 
 Abhaengigkeiten: KR-2301 bis KR-2305
 

@@ -1,8 +1,8 @@
 # Projektstatus
 
-Version: 0.22.0
+Version: 0.23.0
 Phase: Pre-Alpha
-Aktiver Meilenstein: v0.23.0 - Ausnahmen und Interrupts
+Aktiver Meilenstein: v0.24.0 - FPU-Grundoperationen
 
 ## Zusammenfassung
 
@@ -11,7 +11,7 @@ KatanaRecomp besitzt einen durchgaengigen Prototyp-Pfad von Raw- und ELF32-SH-Ei
 ## Teststatus
 
 ```text
-100% tests passed out of 89
+100% tests passed out of 91
 ```
 
 ## Fertiggestellte Roadmap-Tasks
@@ -93,15 +93,21 @@ KatanaRecomp besitzt einen durchgaengigen Prototyp-Pfad von Raw- und ELF32-SH-Ei
 - [x] KR-2205 - MMIO-Handler
 - [x] KR-2206 - Ausrichtung, Fehler und Watchpoints
 - [x] KR-2207 - v0.22 Release-Gate
+- [x] KR-2301 - SR-Felder und Interruptmasken
+- [x] KR-2302 - Exception-Eintritt
+- [x] KR-2303 - Interrupt-Controller
+- [x] KR-2304 - TRAPA und RTE
+- [x] KR-2305 - Delay-Slot-Ausnahmen
+- [x] KR-2306 - v0.23 Release-Gate
 
 ## Naechster Roadmap-Task
 
-- [ ] KR-2301 - SR-Felder und Interruptmasken
+- [ ] KR-2401 - FR- und XF-Baenke
 
 ## Aktuelle Einschraenkungen
 
 - unvollstaendiger SH-4-Befehlssatz
 - keine FPU
-- Dreamcast-Speicherbereiche, generische MMIO-Handler, strikte Ausrichtung, strukturierte Zugriffsfehler und Watchpoints sind vorhanden; konkrete Plattformregister fehlen noch
+- Dreamcast-Speicherbereiche, MMIO-Handler, strukturierte SH-4-Ausnahmen, Interruptprioritaeten und Watchpoints sind vorhanden; konkrete Plattformregister fehlen noch
 - keine Plattformhardware
 - nur einfache konstante indirekte Ziele und bekannte begrenzte Jump Tables werden aufgeloest
