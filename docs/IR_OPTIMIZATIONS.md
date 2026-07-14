@@ -14,3 +14,10 @@ Subtraktion und Bitlogik sowie NEG und NOT. Arithmetik verwendet definierten
 Operationen mit Status- oder Speichereffekten werden nicht gefaltet. Bei einer
 nicht modellierten Registerwirkung verwirft der Pass vorsichtshalber seinen
 gesamten lokalen Konstantenzustand.
+
+## Copy Propagation
+
+`propagate_copies` verfolgt lokale `MOV Rm,Rn`-Aliase und ersetzt Quellen
+modellierter arithmetischer, logischer und vergleichender Operationen. Ein
+Schreibzugriff auf die kopierte Quelle, das Ziel oder eine Alias-Kette invalidiert
+alle betroffenen Beziehungen. Unbekannte Registerwirkungen leeren den Aliaszustand.

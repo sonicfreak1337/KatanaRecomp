@@ -11,5 +11,6 @@ struct OptimizationResult {
 };
 
 [[nodiscard]] OptimizationResult fold_constants(Function& function);
+[[nodiscard]] OptimizationResult propagate_copies(Function& function);
 
 }

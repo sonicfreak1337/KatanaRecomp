@@ -10,6 +10,7 @@ namespace katana::ir {
 namespace {
 
 using Constants = std::array<std::optional<std::uint32_t>, 16>;
+using Aliases = std::array<std::optional<std::uint8_t>, 16>;
 
 void canonicalize(Instruction& instruction) {
     instruction.widths = operation_operand_widths(instruction.operation);
@@ -163,6 +164,130 @@ OptimizationResult fold_block(BasicBlock& block) {
     return result;
 }
 
+std::uint8_t resolve_alias(const Aliases& aliases, std::uint8_t value) {
+    for (std::size_t depth = 0u; depth < aliases.size(); ++depth) {
+        if (!aliases[value] || *aliases[value] == value) break;
+        value = *aliases[value];
+    }
+    return value;
+}
+
+void invalidate_aliases(Aliases& aliases, const std::uint8_t written) {
+    std::array<bool, 16> invalid{};
+    for (std::size_t index = 0u; index < aliases.size(); ++index) {
+        invalid[index] =
+            index == written ||
+            (aliases[index] &&
+                resolve_alias(aliases, static_cast<std::uint8_t>(index)) == written);
+    }
+    for (std::size_t index = 0u; index < aliases.size(); ++index) {
+        if (invalid[index]) aliases[index].reset();
+    }
+}
+
+bool has_propagatable_source(const Operation operation) noexcept {
+    switch (operation) {
+        case Operation::MovRegister:
+        case Operation::AddRegister:
+        case Operation::SubRegister:
+        case Operation::NegateRegister:
+        case Operation::NotRegister:
+        case Operation::AndRegister:
+        case Operation::OrRegister:
+        case Operation::XorRegister:
+        case Operation::CompareEqualRegister:
+        case Operation::CompareHigherOrSame:
+        case Operation::CompareGreaterOrEqual:
+        case Operation::CompareHigher:
+        case Operation::CompareGreaterThan:
+        case Operation::CompareString:
+        case Operation::TestRegister:
+            return true;
+        default:
+            return false;
+    }
+}
+
+bool writes_destination(const Operation operation) noexcept {
+    switch (operation) {
+        case Operation::MovImmediate:
+        case Operation::MovRegister:
+        case Operation::AddImmediate:
+        case Operation::AddRegister:
+        case Operation::SubRegister:
+        case Operation::NegateRegister:
+        case Operation::NotRegister:
+        case Operation::AndRegister:
+        case Operation::OrRegister:
+        case Operation::XorRegister:
+            return true;
+        default:
+            return false;
+    }
+}
+
+OptimizationResult propagate_block_copies(BasicBlock& block) {
+    Aliases aliases{};
+    OptimizationResult result;
+
+    for (auto& instruction : block.instructions) {
+        if (has_propagatable_source(instruction.operation)) {
+            const auto resolved = resolve_alias(aliases, instruction.source_register);
+            if (resolved != instruction.source_register) {
+                instruction.source_register = resolved;
+                canonicalize(instruction);
+                ++result.changes;
+            }
+        }
+
+        if (writes_destination(instruction.operation)) {
+            const auto destination = instruction.destination_register;
+            invalidate_aliases(aliases, destination);
+            if (
+                instruction.operation == Operation::MovRegister &&
+                destination != instruction.source_register
+            ) {
+                aliases[destination] = instruction.source_register;
+            }
+            continue;
+        }
+
+        switch (instruction.operation) {
+            case Operation::Nop:
+            case Operation::ClearS:
+            case Operation::SetS:
+            case Operation::ClearT:
+            case Operation::SetT:
+            case Operation::CompareEqualImmediate:
+            case Operation::CompareEqualRegister:
+            case Operation::CompareHigherOrSame:
+            case Operation::CompareGreaterOrEqual:
+            case Operation::CompareHigher:
+            case Operation::CompareGreaterThan:
+            case Operation::ComparePositiveOrZero:
+            case Operation::ComparePositive:
+            case Operation::CompareString:
+            case Operation::TestImmediate:
+            case Operation::TestRegister:
+            case Operation::Branch:
+            case Operation::Call:
+            case Operation::BranchIfTrue:
+            case Operation::BranchIfFalse:
+            case Operation::JumpRegister:
+            case Operation::CallRegister:
+            case Operation::Return:
+            case Operation::ReturnFromException:
+            case Operation::TrapAlways:
+            case Operation::Sleep:
+                break;
+            default:
+                aliases.fill(std::nullopt);
+                break;
+        }
+    }
+    return result;
+}
+
 }
 
 OptimizationResult fold_constants(Function& function) {
@@ -170,6 +295,16 @@ OptimizationResult fold_constants(Function& function) {
     OptimizationResult result;
     for (auto& block : function.blocks) {
         result.changes += fold_block(block).changes;
+    }
+    require_valid_function(function);
+    return result;
+}
+
+OptimizationResult propagate_copies(Function& function) {
+    require_valid_function(function);
+    OptimizationResult result;
+    for (auto& block : function.blocks) {
+        result.changes += propagate_block_copies(block).changes;
     }
     require_valid_function(function);
     return result;

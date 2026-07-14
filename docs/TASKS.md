@@ -486,7 +486,7 @@ Abhaengigkeiten: KR-1901 bis KR-1906
 
 Abhaengigkeiten: KR-1907
 
-### [ ] KR-2002 - Copy Propagation
+### [x] KR-2002 - Copy Propagation
 
 Abhaengigkeiten: KR-2001
 

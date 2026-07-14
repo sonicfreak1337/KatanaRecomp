@@ -79,7 +79,8 @@ KatanaRecomp besitzt einen durchgaengigen Prototyp-Pfad von Raw- und ELF32-SH-Ei
 ## Naechster Roadmap-Task
 
 - [x] KR-2001 - Constant Folding
-- [ ] KR-2002 - Copy Propagation
+- [x] KR-2002 - Copy Propagation
+- [ ] KR-2003 - Dead-Code-Elimination
 
 ## Aktuelle Einschraenkungen
 
