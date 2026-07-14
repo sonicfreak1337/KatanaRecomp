@@ -47,6 +47,7 @@ add_library(katana_core STATIC
     src/analysis/basic_blocks.cpp
     src/analysis/function_analysis.cpp
     src/analysis/recursive_analysis.cpp
+    src/analysis/value_analysis.cpp
     src/ir/lower.cpp
     src/codegen/cpp_emitter.cpp
 )
@@ -302,6 +303,18 @@ add_test(
 set_tests_properties(
     katana-recursive-analysis-cli-tests
     PROPERTIES PASS_REGULAR_EXPRESSION "Katana rekursive Analyse"
+)
+
+add_executable(katana-value-analysis-tests
+    tests/analysis/value_analysis_tests.cpp
+)
+
+target_link_libraries(katana-value-analysis-tests PRIVATE katana_core)
+katana_enable_warnings(katana-value-analysis-tests)
+
+add_test(
+    NAME katana-value-analysis-tests
+    COMMAND katana-value-analysis-tests
 )
 
 add_executable(katana-ir-lowering-tests

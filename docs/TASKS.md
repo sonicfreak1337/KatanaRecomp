@@ -418,7 +418,7 @@ Abhaengigkeiten: KR-1701 bis KR-1706
 
 ## v0.18.0 - Indirekter Kontrollfluss
 
-### [ ] KR-1801 - Lokale Konstantenpropagation
+### [x] KR-1801 - Lokale Konstantenpropagation
 
 Abhaengigkeiten: KR-1707
 
