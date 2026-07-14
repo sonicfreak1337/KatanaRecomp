@@ -28,7 +28,7 @@ void write_u32(std::vector<std::uint8_t>& bytes, const std::size_t offset, const
 }
 
 std::vector<std::uint8_t> valid_elf() {
-    std::vector<std::uint8_t> bytes(0x86u, 0u);
+    std::vector<std::uint8_t> bytes(0x148u, 0u);
     bytes[0] = 0x7Fu;
     bytes[1] = 'E';
     bytes[2] = 'L';
@@ -41,9 +41,12 @@ std::vector<std::uint8_t> valid_elf() {
     write_u32(bytes, 20u, 1u);
     write_u32(bytes, 24u, 0x8C010000u);
     write_u32(bytes, 28u, 52u);
+    write_u32(bytes, 32u, 0xD0u);
     write_u16(bytes, 40u, 52u);
     write_u16(bytes, 42u, 32u);
     write_u16(bytes, 44u, 2u);
+    write_u16(bytes, 46u, 40u);
+    write_u16(bytes, 48u, 3u);
 
     write_u32(bytes, 52u, 1u);
     write_u32(bytes, 56u, 0x80u);
@@ -64,6 +67,30 @@ std::vector<std::uint8_t> valid_elf() {
     bytes[0x83u] = 0x00u;
     bytes[0x84u] = 0xAAu;
     bytes[0x85u] = 0x55u;
+
+    const std::string names("\0start\0value\0", 13u);
+    for (std::size_t index = 0; index < names.size(); ++index) {
+        bytes[0x90u + index] = static_cast<std::uint8_t>(names[index]);
+    }
+    write_u32(bytes, 0xB0u, 1u);
+    write_u32(bytes, 0xB4u, 0x8C010000u);
+    write_u32(bytes, 0xB8u, 4u);
+    bytes[0xBCu] = 0x12u;
+    write_u16(bytes, 0xBEu, 1u);
+    write_u32(bytes, 0xC0u, 7u);
+    write_u32(bytes, 0xC4u, 0x8C020000u);
+    write_u32(bytes, 0xC8u, 2u);
+    bytes[0xCCu] = 0x11u;
+    write_u16(bytes, 0xCEu, 2u);
+
+    write_u32(bytes, 0xFCu, 3u);
+    write_u32(bytes, 0x108u, 0x90u);
+    write_u32(bytes, 0x10Cu, 13u);
+    write_u32(bytes, 0x124u, 2u);
+    write_u32(bytes, 0x130u, 0xA0u);
+    write_u32(bytes, 0x134u, 48u);
+    write_u32(bytes, 0x138u, 1u);
+    write_u32(bytes, 0x144u, 16u);
     return bytes;
 }
 
@@ -100,6 +127,11 @@ int main() {
     require(text.bytes == std::vector<std::uint8_t>({0x09u, 0x00u, 0x0Bu, 0x00u}), "Textbytes sind falsch.");
     require(data.virtual_address == 0x8C020000u && data.memory_size == 8u && data.bytes.size() == 2u, "Data- oder Zero-Fill-Groesse ist falsch.");
     require(data.kind == SegmentKind::Data && data.permissions.readable && data.permissions.writable && !data.permissions.executable, "PF_R/PF_W wurden falsch abgebildet.");
+    require(image.symbols().size() == 2u, "ELF-Symboltabelle wurde nicht vollstaendig geladen.");
+    const auto* start = image.find_symbol("start");
+    require(start != nullptr && start->address == 0x8C010000u && start->size == 4u, "ELF-Funktionssymbol ist falsch.");
+    require(start->kind == SymbolKind::Function && start->binding == SymbolBinding::Global, "ELF-Symbolinfo wurde falsch dekodiert.");
+    require(image.find_symbol("value")->kind == SymbolKind::Object, "ELF-Objektsymbol ist falsch klassifiziert.");
 
     bytes = valid_elf();
     bytes[0] = 0u;

@@ -40,3 +40,15 @@ KR-1601 fuehrt das neutrale Modell ein, KR-1602 den Raw-Loader. Der ELF-Loader f
 Der Loader prueft ELF-Identifikation, Klasse, Byte-Reihenfolge, Version, Typ, Maschine, Headergroessen, Tabellenbereiche, Segmentbereiche und Groessenrelationen. Fehler nennen Quelldatei, Dateioffset und Ursache.
 
 Grundlage sind die System-V-ABI-Strukturen `Elf32_Ehdr` und `Elf32_Phdr`, `PT_LOAD` sowie die standardisierte Maschinenkennung `EM_SH`.
+
+## Symbole und Map-Dateien
+
+Images speichern benannte Funktions-, Objekt- oder unbekannte Symbole mit 32-Bit-Adresse, optionaler Groesse und Local-/Global-/Weak-Bindung. ELF-Loader lesen definierte Eintraege aus `SHT_SYMTAB` und `SHT_DYNSYM` samt verknuepfter `SHT_STRTAB`.
+
+Optionale Katana-Map-Dateien verwenden pro Zeile das deterministische Format:
+
+```text
+ADDRESS KIND NAME [SIZE]
+```
+
+Adressen und Groessen sind hexadezimal. `KIND` ist `FUNC`, `OBJECT` oder `UNKNOWN`; die Kurzformen `F`, `O` und `U` sind ebenfalls erlaubt. Leerzeilen und mit `#` beginnende Kommentare werden ignoriert. Parserfehler nennen Datei und Zeile, doppelte Namen sind ungueltig.

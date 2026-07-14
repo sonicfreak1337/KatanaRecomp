@@ -366,7 +366,7 @@ Abhaengigkeiten: KR-1601
 
 Abhaengigkeiten: KR-1601
 
-### [ ] KR-1604 - Symbole und Map-Dateien
+### [x] KR-1604 - Symbole und Map-Dateien
 
 Abhaengigkeiten: KR-1603
 

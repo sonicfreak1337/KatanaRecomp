@@ -16,6 +16,27 @@ enum class SegmentKind {
     Data
 };
 
+enum class SymbolKind {
+    Unknown,
+    Function,
+    Object
+};
+
+enum class SymbolBinding {
+    Local,
+    Global,
+    Weak,
+    Unknown
+};
+
+struct ImageSymbol {
+    std::string name;
+    std::uint32_t address = 0;
+    std::uint32_t size = 0;
+    SymbolKind kind = SymbolKind::Unknown;
+    SymbolBinding binding = SymbolBinding::Unknown;
+};
+
 struct SegmentPermissions {
     bool readable = false;
     bool writable = false;
@@ -42,10 +63,13 @@ public:
 
     void add_segment(ImageSegment segment);
     void add_entry_point(std::uint32_t address);
+    void add_symbol(ImageSymbol symbol);
 
     [[nodiscard]] const std::filesystem::path& source_path() const noexcept;
     [[nodiscard]] std::span<const ImageSegment> segments() const noexcept;
     [[nodiscard]] std::span<const std::uint32_t> entry_points() const noexcept;
+    [[nodiscard]] std::span<const ImageSymbol> symbols() const noexcept;
+    [[nodiscard]] const ImageSymbol* find_symbol(std::string_view name) const noexcept;
     [[nodiscard]] const ImageSegment* find_segment(
         std::uint32_t address,
         std::size_t width = 1u
@@ -55,8 +79,10 @@ private:
     std::filesystem::path source_path_;
     std::vector<ImageSegment> segments_;
     std::vector<std::uint32_t> entry_points_;
+    std::vector<ImageSymbol> symbols_;
 };
 
 [[nodiscard]] const char* segment_kind_name(SegmentKind kind) noexcept;
+[[nodiscard]] const char* symbol_kind_name(SymbolKind kind) noexcept;
 
 }

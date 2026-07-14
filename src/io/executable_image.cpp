@@ -101,6 +101,26 @@ void ExecutableImage::add_entry_point(const std::uint32_t address) {
     std::sort(entry_points_.begin(), entry_points_.end());
 }
 
+void ExecutableImage::add_symbol(ImageSymbol symbol) {
+    if (symbol.name.empty()) {
+        throw std::invalid_argument("Ein Image-Symbol braucht einen Namen.");
+    }
+    if (find_symbol(symbol.name) != nullptr) {
+        throw std::invalid_argument("Doppelter Symbolname: " + symbol.name + ".");
+    }
+    symbols_.push_back(std::move(symbol));
+    std::sort(
+        symbols_.begin(),
+        symbols_.end(),
+        [](const ImageSymbol& first, const ImageSymbol& second) {
+            if (first.address != second.address) {
+                return first.address < second.address;
+            }
+            return first.name < second.name;
+        }
+    );
+}
+
 const std::filesystem::path& ExecutableImage::source_path() const noexcept {
     return source_path_;
 }
@@ -111,6 +131,19 @@ std::span<const ImageSegment> ExecutableImage::segments() const noexcept {
 
 std::span<const std::uint32_t> ExecutableImage::entry_points() const noexcept {
     return entry_points_;
+}
+
+std::span<const ImageSymbol> ExecutableImage::symbols() const noexcept {
+    return symbols_;
+}
+
+const ImageSymbol* ExecutableImage::find_symbol(const std::string_view name) const noexcept {
+    for (const auto& symbol : symbols_) {
+        if (symbol.name == name) {
+            return &symbol;
+        }
+    }
+    return nullptr;
 }
 
 const ImageSegment* ExecutableImage::find_segment(
@@ -130,6 +163,15 @@ const char* segment_kind_name(const SegmentKind kind) noexcept {
         case SegmentKind::Unknown: return "unknown";
         case SegmentKind::Code: return "code";
         case SegmentKind::Data: return "data";
+    }
+    return "unknown";
+}
+
+const char* symbol_kind_name(const SymbolKind kind) noexcept {
+    switch (kind) {
+        case SymbolKind::Unknown: return "unknown";
+        case SymbolKind::Function: return "function";
+        case SymbolKind::Object: return "object";
     }
     return "unknown";
 }

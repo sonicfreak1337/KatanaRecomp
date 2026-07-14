@@ -41,6 +41,7 @@ add_library(katana_core STATIC
     src/io/executable_image.cpp
     src/io/elf32_sh_loader.cpp
     src/io/raw_binary_loader.cpp
+    src/io/symbol_map.cpp
     src/analysis/disassembler.cpp
     src/analysis/basic_blocks.cpp
     src/analysis/function_analysis.cpp
@@ -124,6 +125,18 @@ katana_enable_warnings(katana-elf32-sh-loader-tests)
 add_test(
     NAME katana-elf32-sh-loader-tests
     COMMAND katana-elf32-sh-loader-tests
+)
+
+add_executable(katana-symbol-map-tests
+    tests/io/symbol_map_tests.cpp
+)
+
+target_link_libraries(katana-symbol-map-tests PRIVATE katana_core)
+katana_enable_warnings(katana-symbol-map-tests)
+
+add_test(
+    NAME katana-symbol-map-tests
+    COMMAND katana-symbol-map-tests
 )
 
 add_executable(katana-instruction-metadata-tests

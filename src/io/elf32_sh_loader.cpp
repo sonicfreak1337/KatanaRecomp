@@ -13,12 +13,17 @@ namespace {
 
 constexpr std::size_t kElf32HeaderSize = 52u;
 constexpr std::size_t kElf32ProgramHeaderSize = 32u;
+constexpr std::size_t kElf32SectionHeaderSize = 40u;
+constexpr std::size_t kElf32SymbolSize = 16u;
 constexpr std::uint16_t kExecutableType = 2u;
 constexpr std::uint16_t kSuperHMachine = 42u;
 constexpr std::uint32_t kLoadSegment = 1u;
 constexpr std::uint32_t kFlagExecute = 1u;
 constexpr std::uint32_t kFlagWrite = 2u;
 constexpr std::uint32_t kFlagRead = 4u;
+constexpr std::uint32_t kSymbolTableSection = 2u;
+constexpr std::uint32_t kStringTableSection = 3u;
+constexpr std::uint32_t kDynamicSymbolSection = 11u;
 
 [[noreturn]] void fail(
     const std::filesystem::path& path,
@@ -67,6 +72,48 @@ std::uint32_t read_u32(
         (static_cast<std::uint32_t>(bytes[offset + 1u]) << 8u) |
         (static_cast<std::uint32_t>(bytes[offset + 2u]) << 16u) |
         (static_cast<std::uint32_t>(bytes[offset + 3u]) << 24u);
+}
+
+std::string read_string(
+    const std::span<const std::uint8_t> bytes,
+    const std::size_t table_offset,
+    const std::size_t table_size,
+    const std::uint32_t string_offset,
+    const std::filesystem::path& path
+) {
+    if (string_offset >= table_size) {
+        fail(path, table_offset + string_offset, "Symbolname liegt ausserhalb der Stringtabelle.");
+    }
+    const auto begin = table_offset + string_offset;
+    const auto limit = table_offset + table_size;
+    auto end = begin;
+    while (end < limit && bytes[end] != 0u) {
+        ++end;
+    }
+    if (end == limit) {
+        fail(path, begin, "Symbolname ist nicht nullterminiert.");
+    }
+    return std::string(
+        reinterpret_cast<const char*>(bytes.data() + begin),
+        end - begin
+    );
+}
+
+SymbolKind elf_symbol_kind(const std::uint8_t info) noexcept {
+    switch (info & 0x0Fu) {
+        case 1u: return SymbolKind::Object;
+        case 2u: return SymbolKind::Function;
+        default: return SymbolKind::Unknown;
+    }
+}
+
+SymbolBinding elf_symbol_binding(const std::uint8_t info) noexcept {
+    switch (info >> 4u) {
+        case 0u: return SymbolBinding::Local;
+        case 1u: return SymbolBinding::Global;
+        case 2u: return SymbolBinding::Weak;
+        default: return SymbolBinding::Unknown;
+    }
 }
 
 }
@@ -154,6 +201,67 @@ ExecutableImage load_elf32_sh(const std::filesystem::path& path) {
     }
     if (image.segments().empty()) {
         fail(path, program_offset, "keine ladbaren PT_LOAD-Segmente gefunden.");
+    }
+
+    const auto section_offset = read_u32(bytes, 32u, path, "e_shoff");
+    const auto section_entry_size = read_u16(bytes, 46u, path, "e_shentsize");
+    const auto section_count = read_u16(bytes, 48u, path, "e_shnum");
+    if (section_count != 0u) {
+        if (section_entry_size != kElf32SectionHeaderSize) {
+            fail(path, 46u, "unerwartete ELF32-Section-Headergroesse.");
+        }
+        const auto section_table_size = static_cast<std::uint64_t>(section_entry_size) * section_count;
+        if (section_table_size > bytes.size()
+            || section_offset > bytes.size() - static_cast<std::size_t>(section_table_size)) {
+            fail(path, section_offset, "Section-Header-Tabelle liegt ausserhalb der Datei.");
+        }
+
+        for (std::size_t section_index = 0; section_index < section_count; ++section_index) {
+            const auto header = static_cast<std::size_t>(section_offset) + section_index * section_entry_size;
+            const auto type = read_u32(bytes, header + 4u, path, "sh_type");
+            if (type != kSymbolTableSection && type != kDynamicSymbolSection) {
+                continue;
+            }
+            const auto symbol_offset = read_u32(bytes, header + 16u, path, "sh_offset");
+            const auto symbol_size = read_u32(bytes, header + 20u, path, "sh_size");
+            const auto string_index = read_u32(bytes, header + 24u, path, "sh_link");
+            const auto symbol_entry_size = read_u32(bytes, header + 36u, path, "sh_entsize");
+            if (symbol_entry_size != kElf32SymbolSize || symbol_size % symbol_entry_size != 0u) {
+                fail(path, header + 36u, "ungueltige ELF32-Symboltabellengroesse.");
+            }
+            require_range(bytes, symbol_offset, symbol_size, path, "Symboltabelle");
+            if (string_index >= section_count) {
+                fail(path, header + 24u, "sh_link verweist ausserhalb der Section-Tabelle.");
+            }
+            const auto string_header = static_cast<std::size_t>(section_offset) + string_index * section_entry_size;
+            if (read_u32(bytes, string_header + 4u, path, "Stringtabellen-sh_type") != kStringTableSection) {
+                fail(path, string_header + 4u, "Symboltabelle verweist nicht auf SHT_STRTAB.");
+            }
+            const auto string_offset = read_u32(bytes, string_header + 16u, path, "Stringtabellen-sh_offset");
+            const auto string_size = read_u32(bytes, string_header + 20u, path, "Stringtabellen-sh_size");
+            require_range(bytes, string_offset, string_size, path, "Stringtabelle");
+
+            for (std::size_t symbol_index = 0; symbol_index < symbol_size / symbol_entry_size; ++symbol_index) {
+                const auto symbol = static_cast<std::size_t>(symbol_offset) + symbol_index * symbol_entry_size;
+                const auto name_offset = read_u32(bytes, symbol, path, "st_name");
+                const auto section_reference = read_u16(bytes, symbol + 14u, path, "st_shndx");
+                if (name_offset == 0u || section_reference == 0u) {
+                    continue;
+                }
+                auto name = read_string(bytes, string_offset, string_size, name_offset, path);
+                if (name.empty() || image.find_symbol(name) != nullptr) {
+                    continue;
+                }
+                const auto info = bytes[symbol + 12u];
+                image.add_symbol({
+                    std::move(name),
+                    read_u32(bytes, symbol + 4u, path, "st_value"),
+                    read_u32(bytes, symbol + 8u, path, "st_size"),
+                    elf_symbol_kind(info),
+                    elf_symbol_binding(info)
+                });
+            }
+        }
     }
     image.add_entry_point(entry);
     return image;
