@@ -33,6 +33,14 @@ int main() {
             0xFFu, 0xFFu
         }
     });
+    image.add_segment({
+        ".data", 0x8C020000u, 14u, 4u, SegmentKind::Data,
+        {true, true, false}, {1u, 2u, 3u, 4u}
+    });
+    image.add_segment({
+        ".mystery", 0x8C030000u, 18u, 4u, SegmentKind::Unknown,
+        {true, false, false}, {5u, 6u, 7u, 8u}
+    });
     image.add_entry_point(0x8C010000u);
 
     const auto result = katana::analysis::analyze_reachable_code(image);
@@ -45,6 +53,25 @@ int main() {
     for (const auto& line : result.instructions) {
         require(line.address != 0x8C01000Cu, "Nicht erreichbare Bytes wurden linear dekodiert.");
     }
+    require(result.ranges.size() == 4u, "Die Klassifikationsbereiche wurden nicht normalisiert.");
+    require(
+        result.ranges[0].start_address == 0x8C010000u
+            && result.ranges[0].size == 12u
+            && result.ranges[0].kind == katana::analysis::DiscoveredByteKind::Code,
+        "Erreichbarer Code wurde falsch klassifiziert."
+    );
+    require(
+        result.ranges[1].start_address == 0x8C01000Cu
+            && result.ranges[1].size == 2u
+            && result.ranges[1].kind == katana::analysis::DiscoveredByteKind::Unknown,
+        "Nicht erreichbarer Codebereich wurde nicht als unknown erhalten."
+    );
+    require(result.ranges[2].kind == katana::analysis::DiscoveredByteKind::Data, "Datensegment wurde falsch klassifiziert.");
+    require(result.ranges[3].kind == katana::analysis::DiscoveredByteKind::Unknown, "Unknown-Segment wurde falsch klassifiziert.");
+    require(
+        std::string(katana::analysis::discovered_byte_kind_name(result.ranges[2].kind)) == "data",
+        "Klassifikationsname ist instabil."
+    );
 
     ExecutableImage invalid;
     invalid.add_segment({".data", 0x1000u, 0u, 2u, SegmentKind::Data, {true, true, false}, {0u, 0u}});

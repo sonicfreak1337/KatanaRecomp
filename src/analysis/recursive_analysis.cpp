@@ -47,6 +47,58 @@ void enqueue_next(
     }
 }
 
+void add_range(
+    std::vector<ClassifiedRange>& ranges,
+    const std::uint64_t start,
+    const std::uint64_t end,
+    const DiscoveredByteKind kind
+) {
+    if (start >= end) {
+        return;
+    }
+    if (!ranges.empty()) {
+        auto& previous = ranges.back();
+        const auto previous_end = static_cast<std::uint64_t>(previous.start_address) + previous.size;
+        if (previous.kind == kind && previous_end == start) {
+            previous.size += end - start;
+            return;
+        }
+    }
+    ranges.push_back({static_cast<std::uint32_t>(start), end - start, kind});
+}
+
+void classify_image(
+    const katana::io::ExecutableImage& image,
+    const std::map<std::uint32_t, katana::sh4::DisassemblyLine>& discovered,
+    RecursiveAnalysisResult& result
+) {
+    for (const auto& segment : image.segments()) {
+        const auto segment_start = static_cast<std::uint64_t>(segment.virtual_address);
+        const auto segment_end = segment.end_address();
+        if (segment.kind == katana::io::SegmentKind::Data) {
+            add_range(result.ranges, segment_start, segment_end, DiscoveredByteKind::Data);
+            continue;
+        }
+        if (segment.kind != katana::io::SegmentKind::Code || !segment.permissions.executable) {
+            add_range(result.ranges, segment_start, segment_end, DiscoveredByteKind::Unknown);
+            continue;
+        }
+
+        auto cursor = segment_start;
+        for (const auto& [address, line] : discovered) {
+            static_cast<void>(line);
+            if (!segment.contains(address, 2u)) {
+                continue;
+            }
+            const auto instruction_start = static_cast<std::uint64_t>(address);
+            add_range(result.ranges, cursor, instruction_start, DiscoveredByteKind::Unknown);
+            add_range(result.ranges, instruction_start, instruction_start + 2u, DiscoveredByteKind::Code);
+            cursor = instruction_start + 2u;
+        }
+        add_range(result.ranges, cursor, segment_end, DiscoveredByteKind::Unknown);
+    }
+}
+
 }
 
 RecursiveAnalysisResult analyze_reachable_code(const katana::io::ExecutableImage& image) {
@@ -138,7 +190,17 @@ RecursiveAnalysisResult analyze_reachable_code(const katana::io::ExecutableImage
         static_cast<void>(address);
         result.instructions.push_back(std::move(line));
     }
+    classify_image(image, discovered, result);
     return result;
+}
+
+const char* discovered_byte_kind_name(const DiscoveredByteKind kind) noexcept {
+    switch (kind) {
+        case DiscoveredByteKind::Unknown: return "unknown";
+        case DiscoveredByteKind::Code: return "code";
+        case DiscoveredByteKind::Data: return "data";
+    }
+    return "unknown";
 }
 
 }

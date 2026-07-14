@@ -20,3 +20,10 @@ dekodiert, weil sie in einem ausfuehrbaren Segment liegen.
 Die bestehende lineare Disassembly bleibt als Diagnosepfad erhalten. Herkunft,
 Code-/Datenklassifikation, nicht erreichbare Bereiche und Analyseberichte werden
 in den nachfolgenden KR-1702- bis KR-1706-Tasks auf diesem Ergebnis aufgebaut.
+
+## Code-, Daten- und Unknown-Bereiche
+
+Das Analyseergebnis enthaelt normalisierte, adresssortierte Bereiche. Erreichbare
+Instruktionsbytes in ausfuehrbaren Code-Segmenten sind `Code`. Der Inhalt eines
+deklarierten Datensegments ist `Data`. Nicht erreichte Bytes eines Code-Segments,
+Zero-Fill und unbekannte oder nicht ausfuehrbare Segmente bleiben `Unknown`.

@@ -390,7 +390,7 @@ Abhaengigkeiten: KR-1601 bis KR-1606
 
 Abhaengigkeiten: KR-1607
 
-### [ ] KR-1702 - Code-Daten-Klassifikation
+### [x] KR-1702 - Code-Daten-Klassifikation
 
 Abhaengigkeiten: KR-1701
 
