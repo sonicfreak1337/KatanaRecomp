@@ -39,6 +39,12 @@ KR-1601 fuehrt das neutrale Modell ein, KR-1602 den Raw-Loader. Der ELF-Loader f
 
 Der Loader prueft ELF-Identifikation, Klasse, Byte-Reihenfolge, Version, Typ, Maschine, Headergroessen, Tabellenbereiche, Segmentbereiche und Groessenrelationen. Fehler nennen Quelldatei, Dateioffset und Ursache.
 
+Der ELF-Einstiegspunkt muss auf zwei Byte ausgerichtet sein und auf einen
+vollstaendigen Zwei-Byte-Instruktionsanfang innerhalb der committed Dateidaten
+eines ausfuehrbaren Code-Segments zeigen. Ein Bereich zwischen `p_filesz` und
+`p_memsz` ist gueltiger Zero-Fill-Laufzeitspeicher, aber keine gueltige Quelle
+fuer den initialen statischen Analyse-Einstiegspunkt.
+
 Grundlage sind die System-V-ABI-Strukturen `Elf32_Ehdr` und `Elf32_Phdr`, `PT_LOAD` sowie die standardisierte Maschinenkennung `EM_SH`.
 
 ## Symbole und Map-Dateien

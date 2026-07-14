@@ -4,6 +4,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <sstream>
 #include <string>
 #include <vector>
 
@@ -123,6 +124,22 @@ std::string load_failure(const std::filesystem::path& path) {
     return {};
 }
 
+void require_entry_failure(
+    const std::filesystem::path& path,
+    std::vector<std::uint8_t> bytes,
+    const std::uint32_t entry,
+    const std::string& cause
+) {
+    write_u32(bytes, 24u, entry);
+    save(path, bytes);
+    const auto error = load_failure(path);
+    std::ostringstream address;
+    address << "0x" << std::hex << std::uppercase << entry;
+    require(error.find("Offset 24") != std::string::npos, "Einstiegspunktfehler nennt e_entry nicht.");
+    require(error.find(address.str()) != std::string::npos, "Einstiegspunktfehler nennt die Adresse nicht.");
+    require(error.find(cause) != std::string::npos, "Einstiegspunktfehler nennt die Ursache nicht.");
+}
+
 }
 
 int main() {
@@ -157,6 +174,25 @@ int main() {
     const auto& unsupported = image.relocations()[2];
     require(unsupported.kind == RelocationKind::Unsupported && !unsupported.applied_value.has_value(), "Unbekannte Relocation wurde faelschlich angewendet.");
     require(image.read_u32_le(0x8C020008u) == 0x12345678u, "Unbekannte Relocation hat Segmentdaten veraendert.");
+
+    bytes = valid_elf();
+    write_u32(bytes, 24u, 0x8C010002u);
+    save(path, bytes);
+    const auto last_instruction_image = load_elf32_sh(path);
+    require(
+        last_instruction_image.entry_points().size() == 1u
+            && last_instruction_image.entry_points()[0] == 0x8C010002u,
+        "Der letzte gueltige Zwei-Byte-Instruktionsanfang wurde abgelehnt."
+    );
+
+    require_entry_failure(path, valid_elf(), 0x8C030000u, "ausserhalb aller geladenen Segmente");
+    require_entry_failure(path, valid_elf(), 0x8C020000u, "nicht ausfuehrbaren Segment");
+    require_entry_failure(path, valid_elf(), 0x8C010001u, "nicht auf zwei Byte ausgerichtet");
+
+    bytes = valid_elf();
+    write_u32(bytes, 72u, 8u);
+    require_entry_failure(path, bytes, 0x8C010006u, "ausserhalb der committed Segmentdaten");
+    require_entry_failure(path, bytes, 0x8C010004u, "ausserhalb der committed Segmentdaten");
 
     bytes = valid_elf();
     bytes[0] = 0u;

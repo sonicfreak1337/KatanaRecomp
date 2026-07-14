@@ -4,6 +4,8 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <iomanip>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -133,6 +135,45 @@ RelocationKind elf_relocation_kind(const std::uint32_t type) noexcept {
         case kRelocationDirectory32: return RelocationKind::Absolute32;
         case kRelocationRelative32: return RelocationKind::PcRelative32;
         default: return RelocationKind::Unsupported;
+    }
+}
+
+std::string format_address(const std::uint32_t address) {
+    std::ostringstream output;
+    output << "0x" << std::hex << std::uppercase << std::setw(8)
+           << std::setfill('0') << address;
+    return output.str();
+}
+
+void validate_entry_point(
+    const ExecutableImage& image,
+    const std::uint32_t entry,
+    const std::filesystem::path& path
+) {
+    const auto address = format_address(entry);
+    if ((entry & 1u) != 0u) {
+        fail(path, 24u, "Einstiegspunkt " + address + " ist nicht auf zwei Byte ausgerichtet.");
+    }
+
+    const auto* segment = image.find_segment(entry);
+    if (segment == nullptr) {
+        fail(path, 24u, "Einstiegspunkt " + address + " liegt ausserhalb aller geladenen Segmente.");
+    }
+    if (!segment->permissions.executable) {
+        fail(path, 24u, "Einstiegspunkt " + address + " liegt in einem nicht ausfuehrbaren Segment.");
+    }
+    if (segment->kind != SegmentKind::Code) {
+        fail(path, 24u, "Einstiegspunkt " + address + " liegt nicht in einem Code-Segment.");
+    }
+
+    const auto byte_offset = segment->byte_offset(entry);
+    if (!byte_offset.has_value() || segment->bytes.size() < 2u
+        || *byte_offset > segment->bytes.size() - 2u) {
+        fail(
+            path,
+            24u,
+            "Einstiegspunkt " + address + " liegt ausserhalb der committed Segmentdaten."
+        );
     }
 }
 
@@ -351,6 +392,7 @@ ExecutableImage load_elf32_sh(const std::filesystem::path& path) {
             }
         }
     }
+    validate_entry_point(image, entry, path);
     image.add_entry_point(entry);
     return image;
 }
