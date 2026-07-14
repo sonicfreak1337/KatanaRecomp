@@ -458,7 +458,7 @@ Abhaengigkeiten: KR-1807
 
 Abhaengigkeiten: KR-1901
 
-### [ ] KR-1903 - Speicher-Seiteneffekte
+### [x] KR-1903 - Speicher-Seiteneffekte
 
 Abhaengigkeiten: KR-1901
 

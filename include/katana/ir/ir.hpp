@@ -45,6 +45,26 @@ struct StatusRegisterEffects {
     StatusRegisterBit writes = StatusRegisterBit::None;
 };
 
+enum class MemoryAccessKind : std::uint8_t {
+    None,
+    Read,
+    Write
+};
+
+enum class AddressUpdateKind : std::uint8_t {
+    None,
+    PreDecrement,
+    PostIncrement
+};
+
+struct MemoryEffects {
+    MemoryAccessKind access = MemoryAccessKind::None;
+    OperandWidth width = OperandWidth::None;
+    std::uint8_t access_count = 0u;
+    AddressUpdateKind address_update = AddressUpdateKind::None;
+    std::uint8_t updated_register_count = 0u;
+};
+
 enum class SpecialRegister {
     None,
     Mach,
@@ -196,6 +216,7 @@ struct Instruction {
     Operation operation = Operation::Unknown;
     OperandWidths widths;
     StatusRegisterEffects status_effects;
+    MemoryEffects memory_effects;
 
     std::uint8_t destination_register = 0;
     std::uint8_t source_register = 0;
@@ -241,5 +262,6 @@ struct Function {
     StatusRegisterBit effects,
     StatusRegisterBit bit
 ) noexcept;
+[[nodiscard]] MemoryEffects operation_memory_effects(Operation operation) noexcept;
 
 }

@@ -36,3 +36,16 @@ schreibt `ADDC` das T-Bit, ein Vergleich schreibt T ohne es zu lesen und `DIV1`
 liest T, Q und M, schreibt aber nur T und Q. Statusneutrale Instruktionen tragen
 leere Masken. Bei den generischen Spezialregistertransfers wird der Effekt anhand
 des konkreten Spezialregisteroperanden bestimmt.
+
+## Speicher-Seiteneffekte
+
+`MemoryEffects` kennzeichnet Reads und Writes, die Transferbreite und die Anzahl
+der Zugriffe. Zusaetzlich beschreibt `AddressUpdateKind`, ob Adressregister vor dem
+Zugriff dekrementiert oder danach inkrementiert werden und wie viele Registerupdates
+stattfinden.
+
+Ein normaler Load ist damit ein einzelner Read ohne Registerupdate. Ein
+Pre-Decrement-Store schreibt nach vorheriger Adressaenderung. `MAC.W` und `MAC.L`
+besitzen jeweils zwei Reads und zwei Post-Increment-Updates. Die Transferbreite muss
+mit `OperandWidths.memory` uebereinstimmen; diese Beziehung wird vom IR-Verifier
+geprueft.

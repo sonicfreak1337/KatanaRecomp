@@ -73,7 +73,8 @@ KatanaRecomp besitzt einen durchgaengigen Prototyp-Pfad von Raw- und ELF32-SH-Ei
 
 - [x] KR-1901 - Explizite Operandbreiten
 - [x] KR-1902 - Explizite Statusregistereffekte
-- [ ] KR-1903 - Speicher-Seiteneffekte
+- [x] KR-1903 - Speicher-Seiteneffekte
+- [ ] KR-1904 - Delay-Slot-Normalisierung
 
 ## Aktuelle Einschraenkungen
 

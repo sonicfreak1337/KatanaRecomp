@@ -54,6 +54,7 @@ add_library(katana_core STATIC
     src/analysis/control_flow_report.cpp
     src/analysis/control_flow_analysis.cpp
     src/ir/lower.cpp
+    src/ir/memory_effect.cpp
     src/ir/operand_width.cpp
     src/ir/status_effect.cpp
     src/codegen/cpp_emitter.cpp
@@ -426,6 +427,18 @@ katana_enable_warnings(katana-ir-status-effect-tests)
 add_test(
     NAME katana-ir-status-effect-tests
     COMMAND katana-ir-status-effect-tests
+)
+
+add_executable(katana-ir-memory-effect-tests
+    tests/ir/memory_effect_tests.cpp
+)
+
+target_link_libraries(katana-ir-memory-effect-tests PRIVATE katana_core)
+katana_enable_warnings(katana-ir-memory-effect-tests)
+
+add_test(
+    NAME katana-ir-memory-effect-tests
+    COMMAND katana-ir-memory-effect-tests
 )
 
 add_executable(katana-cpp-emitter-tests
