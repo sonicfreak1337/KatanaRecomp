@@ -950,6 +950,42 @@ Abhaengigkeiten: KR-3201
 
 Abhaengigkeiten: KR-3201, KR-2102
 
+### [ ] KR-3204 - Block-ABI und Zustandsuebergaben
+
+Abhaengigkeiten: KR-1907, KR-2306, KR-2504, KR-3101, KR-3201
+
+Umfang:
+
+- Eintritts- und Austrittsvertrag fuer generierte Bloecke definieren
+- Gast-PC, PR, SR, FPSCR, Delay-Slot-, Ausnahme-, Schlaf- und Schedulerzustand explizit uebergeben
+- Blockenden fuer Fallthrough, statischen/dynamischen Sprung, Call, Return, Ausnahme und Interrupt-Safepoint typisieren
+- Synchronisationspunkte zwischen generiertem Code, Runtime und Fallback festlegen
+- virtuelle und kanonische physische Gastadresse getrennt von jedem Hostzeiger halten
+
+Akzeptanz:
+
+- jeder Blockendtyp besitzt einen synthetischen End-to-End-Test
+- ein Backendwechsel erhaelt den vollstaendigen beobachtbaren CPU-Zustand
+- Delay-Slot-Ausnahmen melden den korrekten Gast-PC unabhaengig vom Backend
+- Hostadressen erscheinen weder als persistente Block-ID noch in reproduzierbaren Metadaten
+
+### [ ] KR-3205 - Plattformdienst-Schnittstelle
+
+Abhaengigkeiten: KR-2207, KR-3104, KR-3201, KR-3204
+
+Umfang:
+
+- versionierte Dienste fuer Speicherzugriff, Scheduler, Interruptabfrage, DMA und kontrollierten Fallback definieren
+- generierten Code von konkreten PVR-, AICA-, Maple-, GD-ROM- oder Referenzprojekt-Typen entkoppeln
+- Faehigkeitsabfrage fuer MMU, Watchpoints, ausfuehrbaren RAM, Firmwaremodus und Fallback bereitstellen
+- Fehler fuer fehlende Plattformdienste vor Ausfuehrungsbeginn melden
+
+Akzeptanz:
+
+- ein synthetisches Mock-Backend kann alle Dienstgrenzen ohne Dreamcast-Subsystem implementieren
+- fehlende Pflichtfaehigkeiten werden mit Name, ABI-Version und Ursache abgelehnt
+- kein generiertes Translation Unit inkludiert interne Plattformheader
+
 ### [ ] KR-3301 - Translation-Unit-Partitionierung
 
 Abhaengigkeiten: KR-3202
@@ -966,21 +1002,96 @@ Abhaengigkeiten: KR-3302
 
 Abhaengigkeiten: KR-3303
 
-### [ ] KR-3401 - Laufzeit-Funktionstabelle
+### [ ] KR-3305 - Deterministische Blockmetadaten
+
+Abhaengigkeiten: KR-1706, KR-3204, KR-3301, KR-3304
+
+Umfang:
+
+- Code, Konstantdaten, Symbole und Laufzeitmetadaten getrennt ausgeben
+- pro Block virtuelle Adresse, kanonische physische Adresse, Quellsegment, Bytebereich und Provenienz speichern
+- Gastopcodes, geschaetzte Gastzyklen, Blockendtyp, direkte Nachfolger und Zustandswaechter erfassen
+- Metadatenformat versionieren und unabhaengig von Hostzeigern oder Buildpfaden halten
+- Cache-Schluessel um Eingabehashes, Manifest, Overrides, IR-/Optimierungsversion sowie Runtime-/Backend-ABI erweitern
+
+Akzeptanz:
+
+- identische Eingaben erzeugen bei serieller und paralleler Ausgabe bytegleiche Metadaten
+- eine Aenderung jeder Cache-Schluesselkomponente invalidiert nur die betroffenen Artefakte
+- lokale absolute Pfade und Hostadressen erscheinen nicht in der Ausgabe
+- ein 10.000-Block-Synthetikprojekt wird reproduzierbar partitioniert
+
+### [ ] KR-3401 - Laufzeit-Blocktabelle
 
 Abhaengigkeiten: KR-1807, KR-2102
+
+Umfang:
+
+- Blockeintraege nach kanonischer 32-Bit-Gastadresse verwalten
+- virtuelle Startadresse, physische Herkunft, Blockgroesse, Endtyp und Backendfunktion verbinden
+- mehrere gueltige Varianten fuer relevante MMU-/FPSCR-/Runtime-Zustaende zulassen
+- statisch erzeugte und zur Laufzeit registrierte Bloecke mit derselben Lookup-Schnittstelle behandeln
+
+Akzeptanz:
+
+- Lookup ist fuer identische Tabellen deterministisch und unabhaengig von Hostzeigern
+- Aliase koennen dieselbe physische Herkunft teilen, ohne virtuelle Diagnosen zu verlieren
+- doppelte oder ueberlappende Eintraege schlagen mit beiden Provenienzen sichtbar fehl
 
 ### [ ] KR-3402 - Indirekter Call- und Jump-Dispatch
 
 Abhaengigkeiten: KR-3401
 
+Umfang:
+
+- indirekte Calls, Jumps und Returns getrennt dispatchen
+- Zieladressen ueber den aktiven Adressraumvertrag kanonisieren
+- generischen Tabellenlookup vor jeder Callsite-Spezialisierung bereitstellen
+- Callsite, Ziel, PR, Quellblock und Lookup-Ergebnis fuer Diagnosen erfassen
+
+Akzeptanz:
+
+- P1-/P2-Aliase erreichen nach dokumentierter Kanonisierung denselben physischen Block
+- Call, Tail-Jump und Return erhalten jeweils ihre korrekte PR-/PC-Semantik
+- ein unbekanntes Ziel wird nie als erfolgreicher No-op oder Nullfunktionsaufruf behandelt
+- titelbezogene Zielverschiebungen oder hart kodierte Forced Entries sind nicht Teil der Runtime
+
 ### [ ] KR-3403 - Kontrollierter Fallback
 
 Abhaengigkeiten: KR-3402
 
+Umfang:
+
+- Richtlinien `abort`, `diagnose`, `interpreter` und optionaler expliziter Nutzerhook definieren
+- unbekannte Opcodes, nicht rekonstruierbare Kontrollfluesse und dynamischen Code getrennt klassifizieren
+- vollstaendigen CPU-, Speicher-, Ausnahme- und Schedulerzustand an der Grenze synchronisieren
+- Fallbacknutzung zaehlen und mit stabilen Gruenden berichten
+
+Akzeptanz:
+
+- kein Fallbackpfad setzt Ausfuehrung nach einem Fehler still fort
+- Rueckkehr aus einem Interpreter-Fallback stimmt an einer definierten Blockgrenze mit der Referenzausfuehrung ueberein
+- ein deaktivierter Fallback bricht mit Gast-PC, Opcode/Ziel und Ursache ab
+- BIOS-Bereiche erhalten keine pauschale Sonderregel zum Ignorieren unbekannter Calls
+
 ### [ ] KR-3404 - Selbstmodifizierenden Code erkennen
 
 Abhaengigkeiten: KR-2207, KR-3402
+
+Umfang:
+
+- ausfuehrbare RAM-Seiten und alle sie ueberdeckenden Blockvarianten registrieren
+- CPU-, DMA- und Copy-Pfad-Schreibzugriffe auf ausfuehrbare Bereiche beobachten
+- Seitengenerationen erhoehen, betroffene Bloecke invalidieren und eingehende Links loesen
+- unveraenderte Schreibzugriffe optional erst nach bewiesener Bytegleichheit von einer Invalidierung ausnehmen
+- Invalidierungsstuerme und wiederholt veraenderte Hotspots diagnostizieren
+
+Akzeptanz:
+
+- ein Schreibzugriff invalidiert jeden ueberlappenden Block vor dessen naechster Ausfuehrung
+- Schreibzugriffe ueber P1-/P2-Aliase und DMA treffen dieselbe physische Seitengeneration
+- nicht ueberlappende Bloecke bleiben gueltig
+- keine Betriebssystem-Seitenschutztechnik ist fuer die Korrektheit zwingend erforderlich
 
 ### [ ] KR-3405 - Alias- und kopierbewusster Firmware-Handoff
 
@@ -1001,6 +1112,114 @@ Akzeptanz:
 - unsichere oder veraenderte Kopien werden nicht als statisch bewiesen markiert
 - der Task ist fuer den BIOS-freien Direkteinstieg optional und wird nur fuer einen laut KR-2604 unterstuetzten LLE-Pfad zum Release-Blocker
 
+### [ ] KR-3406 - Kanonischer Block-Dispatch und Blockendklassen
+
+Abhaengigkeiten: KR-3204, KR-3401, KR-3402
+
+Umfang:
+
+- die in KR-3204 definierten statischen, dynamischen, bedingten, Return- und Interrupt-Blockenden implementieren
+- direkte Nachfolger und Fallthrough getrennt speichern
+- virtuelle Diagnoseadresse und physische Lookup-Adresse durchgehend erhalten
+- generische Relink-/Unlink-Hooks fuer spaetere Inline-Caches bereitstellen
+
+Akzeptanz:
+
+- jede Blockendklasse besitzt einen Ausfuehrungs- und Metadatentest
+- bedingte Bloecke waehlen exakt einen von zwei dokumentierten Nachfolgern
+- ein dynamischer Return verwendet PR und wird nicht als normaler Call behandelt
+- das Loesen eines Zielblocks entfernt alle eingehenden Direktlinks sicher
+
+### [ ] KR-3407 - Scheduler-Safepoints und Gastzyklen
+
+Abhaengigkeiten: KR-3101, KR-3104, KR-3204, KR-3406
+
+Umfang:
+
+- pro Block eine konservative, reproduzierbare Gastzyklusschaetzung erfassen
+- Eventbudget an Blockgrenzen und bei langen Schleifen abbauen
+- faellige Schedulerereignisse und Interrupts an expliziten Safepoints zustellen
+- Jitter und Ueberziehung maschinenlesbar berichten
+- Host-Wall-Clock nur fuer Presentation/Pacing, nicht fuer die logische Ereignisreihenfolge verwenden
+
+Akzeptanz:
+
+- identische Eingaben erzeugen dieselbe Reihenfolge von Timer-, DMA- und Interrupt-Ereignissen
+- eine lange Schleife kann ein faelliges Ereignis nicht unbegrenzt verhungern lassen
+- Backend und Fallback verbrauchen kompatible Gastzyklusbudgets
+- Tests decken Event genau am Blockende sowie vor und nach einem Delay Slot ab
+
+### [ ] KR-3408 - MMU- und Zustandswaechter fuer Blockvarianten
+
+Abhaengigkeiten: KR-2207, KR-2306, KR-2504, KR-3401, KR-3404
+
+Umfang:
+
+- Instruktions- und Datenadressuebersetzung als expliziten Runtime-Vertrag modellieren
+- MMUCR, UTLB-/ITLB-Zustand und `LDTLB` mit strukturierten Uebersetzungsfehlern verbinden
+- MMUCR-/TLB-Aenderungen, Seitenrechte und Adressraumgeneration als Blockwaechter erfassen
+- FPSCR-relevante PR-, SZ-, FR- und Rundungsmodi fuer spezialisierte FPU-Bloecke beruecksichtigen
+- Blockgrenzen bei aktiver MMU konservativ an Uebersetzungs- und Seitengrenzen schneiden
+- Aenderungen der Waechter invalidieren oder redispatchen, statt veralteten Code weiterzuverwenden
+
+Akzeptanz:
+
+- dieselbe virtuelle Adresse kann nach TLB-Aenderung einen anderen physischen Block erreichen
+- eine ungueltige Instruktionsuebersetzung erzeugt die strukturierte SH-4-Ausnahme
+- FPSCR-Wechsel fuehren nicht zur Wiederverwendung einer inkompatiblen Blockvariante
+- No-MMU-Fastpaths bleiben getrennt und behaupten keine volle MMU-Genauigkeit
+
+### [ ] KR-3409 - Praezise Fallback- und Interpretergrenze
+
+Abhaengigkeiten: KR-3204, KR-3403, KR-3407, KR-3408
+
+Umfang:
+
+- minimalen Interpretervertrag fuer einzelne Instruktionen oder begrenzte Bloecke definieren
+- Eintritt nur an synchronisiertem Gast-PC und Austritt nur an einer dokumentierten Blockgrenze erlauben
+- Delay Slots, Ausnahmen, Speicherfehler, FPU-Modi und Schedulerbudget mit generiertem Code teilen
+- dynamisch erzeugten Code ueber dieselbe Invalidierungs- und Provenienzschicht fuehren
+
+Akzeptanz:
+
+- Differenztests liefern fuer unterstuetzte Instruktionen identischen CPU- und Speicherzustand
+- eine Ausnahme im Fallback besitzt denselben Ereigniscode und Gast-PC wie generierter Code
+- Fallback kann weder MMIO-Nebenwirkungen noch Watchpoints umgehen
+- jeder Eintritt wird mit stabilem Grund gezaehlt und kann per Manifest verboten werden
+
+### [ ] KR-3410 - Cache-, Store-Queue- und On-Chip-RAM-Vertrag
+
+Abhaengigkeiten: KR-2205, KR-2605, KR-2803, KR-3103, KR-3404, KR-3408
+
+Umfang:
+
+- zwei getrennte 32-Byte-Store-Queues und ihre P4-Schreibfenster modellieren
+- QACR0/QACR1, Queueauswahl, 32-Byte-Ausrichtung und physische Zielbildung definieren
+- `PREF @Rn` zwischen normalem Prefetch und Store-Queue-Transfer unterscheiden
+- `OCBI`, `OCBP`, `OCBWB`, `ICBI`, `MOVCA.L` und CCR-relevante Cacheeffekte fuer das unterstuetzte Profil explizit einstufen
+- Operand-Cache-RAM-Modus und seine Beziehung zu physischem Speicher, Aliasen und Codeinvalidierung dokumentieren
+- nicht modellierte Mikrocacheeffekte als Faehigkeitsgrenze ausweisen, nicht als vollstaendige Emulation behaupten
+
+Akzeptanz:
+
+- SQ0 und SQ1 uebertragen jeweils exakt den gewaehlten 32-Byte-Inhalt an das aus QACR und Adresse gebildete Ziel
+- normales `PREF` ausserhalb des Store-Queue-Bereichs loest keinen Transfer aus
+- RAM- und TA-Ziele durchlaufen ihre jeweiligen Speicher-/MMIO-Nebenwirkungen
+- Cachewartung an ausfuehrbarem RAM kann keinen stale Block hinterlassen
+- CCR-Operand-Cache-RAM wird entweder korrekt modelliert oder der betreffende LLE-Pfad vor Ausfuehrung sichtbar abgelehnt
+
+### [ ] KR-3411 - v0.34 Release-Gate
+
+Abhaengigkeiten: KR-3401 bis KR-3410
+
+Akzeptanz:
+
+- synthetische Tests decken alle Blockendklassen, Aliasdispatch, ROM-RAM-Handoff und Schreibinvalidierung ab
+- unbekannte Ziele und Opcodes besitzen keine stillen Erfolgswege
+- Scheduler-/Interruptreihenfolge ist zwischen generiertem Code und Fallback identisch
+- MMU-/FPSCR-Waechter und ihre Invalidierungswege sind dokumentiert
+- keine proprietaere Firmware und kein Referenzprojektcode wurde aufgenommen
+
 ---
 
 ## v0.35.0 bis v0.37.0 - Werkzeuge und Qualitaet
@@ -1020,6 +1239,43 @@ Abhaengigkeiten: KR-1706, KR-1906
 ### [ ] KR-3504 - Override- und Hint-Dateien
 
 Abhaengigkeiten: KR-1805, KR-3501
+
+### [ ] KR-3505 - Ausfuehrungs- und Firmwareprofil im Manifest
+
+Abhaengigkeiten: KR-2604, KR-3403, KR-3408, KR-3501
+
+Umfang:
+
+- Direkteinstieg, HLE und optionales LLE als explizite Firmwarebetriebsarten beschreiben
+- Aliasgruppen, kanonische physische Bereiche und beschreibbare ausfuehrbare Segmente deklarieren
+- Fallbackrichtlinie, Schedulerprofil, erwartete Einstiegspunkte und dynamische BIOS-ABI-Vektoren konfigurieren
+- erforderliche Backend-Faehigkeiten und erlaubte MMU-/Fastpath-Profile festhalten
+- sichere Defaults fuer fehlende optionale Firmware- oder Flash-Eingaben definieren
+
+Akzeptanz:
+
+- ein Manifest kann keinen LLE-Pfad aktivieren, ohne alle Pflichtsegmente und Faehigkeiten zu deklarieren
+- der Default bleibt BIOS-freier Homebrew-Direkteinstieg mit verbotenem stillem Fallback
+- unbekannte Profile oder widerspruechliche Aliasgruppen werden vor der Analyse abgelehnt
+- dynamische RAM-Vektoren werden nicht als statische ROM-Symbole serialisiert
+
+### [ ] KR-3506 - Eingabeprovenienz und Cache-Identitaet
+
+Abhaengigkeiten: KR-3303, KR-3305, KR-3501
+
+Umfang:
+
+- Groesse und kryptographischen Hash jeder externen Eingabe in einer redigierten Provenienzstruktur erfassen
+- Manifest, Overrides, Tool-, IR-, Runtime- und Backend-Version in die Buildidentitaet aufnehmen
+- lokale Pfade getrennt von portabler Identitaet behandeln
+- veraenderte Eingaben vor Wiederverwendung gecachter Analyse- oder Codegenartefakte erkennen
+
+Akzeptanz:
+
+- gleiche Inhalte an unterschiedlichen lokalen Pfaden besitzen dieselbe portable Identitaet
+- ein einzelnes geaendertes Eingabebyte invalidiert betroffene Caches
+- Berichte enthalten ohne Opt-in weder absolute Pfade noch Firmwarestrings oder Flash-Nutzdaten
+- Provenienzdaten reichen zur Reproduktion der Werkzeugkonfiguration, nicht zur Rekonstruktion geschuetzter Eingaben
 
 ### [ ] KR-3601 - Symbolische Namen
 
@@ -1060,6 +1316,61 @@ Akzeptanz:
 - Tests verwenden ausschliesslich kleine synthetische Abbilder
 - Berichte enthalten keine BIOS-Schriften, PVR-Texturen oder andere urheberrechtlich geschuetzte Nutzdaten
 
+### [ ] KR-3607 - Dispatch- und Fallbackdiagnostik
+
+Abhaengigkeiten: KR-3403, KR-3406, KR-3503
+
+Umfang:
+
+- fuer jeden ungeloesten oder dynamisch behandelten Kontrollfluss Callsite, Ziel, PR und Blockendtyp berichten
+- virtuelle Zieladresse, kanonische physische Adresse und Aliasherkunft getrennt ausgeben
+- statischen Beweis, Override, Tabellenlookup, Inline-Cache und Fallback als Herkunftsklassen unterscheiden
+- Fallbackgrund, ausgefuehrte Gastinstruktionen und Austrittspunkt erfassen
+- wiederholte identische Ereignisse zaehlen, ohne die erste vollstaendige Diagnose zu verlieren
+
+Akzeptanz:
+
+- ein unbekanntes Ziel ist aus einem JSON-Bericht bis zur Quellinstruktion rueckverfolgbar
+- Berichte unterscheiden unbekannten Code, ungemappten Speicher, verbotenen Firmwarepfad und ungueltige Ausrichtung
+- Aliasnormalisierung verdeckt die urspruengliche virtuelle Adresse nicht
+- Diagnostik veraendert Dispatchentscheidung und Gastzustand nicht
+
+### [ ] KR-3608 - Block-, Alias- und Invalidierungsprovenienz
+
+Abhaengigkeiten: KR-3305, KR-3404, KR-3405, KR-3503
+
+Umfang:
+
+- Blockherkunft aus Image-Segment, ROM-RAM-Kopie, Fallbackdecode oder Laufzeitschreibzugriff erfassen
+- Aliasgruppen und kanonische physische Seiten visualisierbar ausgeben
+- Seitengeneration, invalidierte Bloecke, geloeste Links und ausloesenden Schreibpfad berichten
+- dynamisch installierte BIOS-ABI-Vektoren als zeitabhaengige Symbole darstellen
+
+Akzeptanz:
+
+- fuer jeden invalidierten Block sind Quellseite, Generation und Schreibereignis nachvollziehbar
+- CPU- und DMA-Schreibzugriffe besitzen unterscheidbare Provenienz
+- ROM-Quellblock und RAM-Zielblock einer Kopie bleiben miteinander verknuepft
+- Berichte enthalten keine kopierten Firmwarebytes
+
+### [ ] KR-3609 - Deterministische Systemereignis-Replays
+
+Abhaengigkeiten: KR-3105, KR-3407, KR-3604
+
+Umfang:
+
+- CPU-Safepoints, MMIO, DMA, Interrupts, Timer und Schedulercallbacks in einer geordneten Ereignisspur erfassen
+- logische Gastzeit getrennt von Presentation- und Hostzeit speichern
+- externe Eingaben und nichtdeterministische Hostereignisse explizit injizieren
+- Replay bis zu einem Gastzustands- oder Ereignishash verifizieren
+
+Akzeptanz:
+
+- ein Replay reproduziert Ereignisreihenfolge und finalen Gastzustand ohne Zugriff auf die Host-Wall-Clock
+- fehlende, zusaetzliche oder anders sortierte Ereignisse schlagen an der ersten Abweichung fehl
+- Traceformat ist versioniert und enthaelt keine Firmware- oder Flash-Rohdaten
+- Aufzeichnung und Replay funktionieren ueber eine vollstaendige synthetische Frame-Sequenz
+
 ### [ ] KR-3701 - Windows- und Linux-CI
 
 Abhaengigkeiten: keine
@@ -1084,17 +1395,83 @@ Abhaengigkeiten: KR-3701
 
 Abhaengigkeiten: KR-3304, KR-3502, KR-3701
 
+### [ ] KR-3707 - Differenztests der Ausfuehrungswege
+
+Abhaengigkeiten: KR-2504, KR-3204, KR-3409, KR-3410, KR-3701
+
+Umfang:
+
+- IR-Referenzausfuehrung, generiertes C++ und kontrollierten Interpreter-Fallback mit denselben Mikrogrammen speisen
+- CPU-, Speicher-, Ausnahme-, MMIO- und Schedulerzustand an definierten Grenzen vergleichen
+- Seeds und minimale Gegenbeispiele fuer Abweichungen speichern
+- spezielle Korpora fuer Delay Slots, FPU-Modi, MMU-Uebersetzung, Store Queues und Busfehler fuehren
+
+Akzeptanz:
+
+- jede Abweichung nennt ersten Gast-PC, Zustandspfad und betroffenes Feld
+- Tests sind ohne Flycast-, dcrecomp- oder BIOS-Binaerdaten reproduzierbar
+- mindestens ein absichtlich fehlerhaftes Testbackend beweist, dass der Vergleich anschlaegt
+- Debug- und Release-Build verwenden dieselben semantischen Erwartungen
+
+### [ ] KR-3708 - Mehrsegment-, Dispatch- und Invalidierungsfuzzing
+
+Abhaengigkeiten: KR-3404, KR-3406, KR-3408, KR-3703
+
+Umfang:
+
+- zufaellige, aber valide Multi-Segment-Images mit Aliasgruppen und Berechtigungen erzeugen
+- indirekte Ziele, TLB-/FPSCR-Waechter, ROM-RAM-Kopien und Schreibinvalidierungen kombinieren
+- Callsite-Caches und generischen Dispatch gegeneinander pruefen
+- Crasher mit Seed, Manifest und minimalem synthetischem Abbild reproduzierbar reduzieren
+
+Akzeptanz:
+
+- kein Fuzzerfall darf Hostzeiger als Gastadresse akzeptieren
+- stale Bloecke werden nach Seiten- oder Zustandsaenderung nie erneut ausgefuehrt
+- ungueltige Aliaszyklen und ueberlappende Provenienz werden sauber abgelehnt
+- der CI-Kurzlauf besitzt feste Seeds; Langlaeufe koennen extern skaliert werden
+
+### [ ] KR-3709 - Referenz- und Lizenzprovenienz
+
+Abhaengigkeiten: KR-3701
+
+Umfang:
+
+- verwendete Spezifikationen und Referenzprojekte mit Zweck, Version/Commit und geprueften Bereichen dokumentieren
+- unabhaengige Implementierung und Herkunft synthetischer Testvektoren nachvollziehbar machen
+- Lizenzfolgen einer direkten Flycast-Subsystemeinbindung vor jeder solchen Entscheidung gesondert bewerten
+- dcrecomp nur als Architekturvergleich behandeln, solange keine explizit kompatible Codefreigabe vorliegt
+- automatisiert nach versehentlich aufgenommenen Referenzdateien und bekannten Firmwarepfaden suchen
+
+Akzeptanz:
+
+- Releasebericht trennt Spezifikation, beobachtbares Verhalten, Referenzvergleich und uebernommenen Drittcode
+- eine direkte GPL-pflichtige Einbindung kann nicht ohne dokumentierte Projektlizenzentscheidung aktiviert werden
+- CI findet absichtlich platzierte verbotene Referenz- und Firmwarefixtures
+- Copyright- und Lizenzhinweise aller tatsaechlichen Abhaengigkeiten sind vollstaendig
+
+### [ ] KR-3710 - v0.37 Release-Gate
+
+Abhaengigkeiten: KR-3701 bis KR-3709
+
+Akzeptanz:
+
+- Differenztests, Fuzzer, Sanitizer und reproduzierbare Builds laufen in den vorgesehenen CI-Profilen
+- Dispatch-, Fallback-, Invalidierungs- und Schedulerdiagnosen besitzen stabile JSON-Schemata
+- gleiche Eingaben erzeugen bytegleiche Blockmetadaten und Release-Artefakte
+- Datenschutz- und Lizenztests verwenden ausschliesslich synthetische Markerdaten
+
 ---
 
 ## v0.38.0 bis v0.40.0 - Kompatibilitaet und Leistung
 
 ### [ ] KR-3801 - Rechtlich sauberes Homebrew-Testkorpus
 
-Abhaengigkeiten: KR-2602
+Abhaengigkeiten: KR-2602, KR-3709
 
 ### [ ] KR-3802 - CPU-Konformitaetsprogramm
 
-Abhaengigkeiten: KR-1506, KR-2504
+Abhaengigkeiten: KR-1506, KR-2504, KR-3707
 
 ### [ ] KR-3803 - Eingabe-Beispiel
 
@@ -1110,11 +1487,67 @@ Abhaengigkeiten: KR-2903
 
 ### [ ] KR-3806 - Zusammenhaengendes Testspiel
 
-Abhaengigkeiten: KR-3803, KR-3804, KR-3805, KR-3105
+Abhaengigkeiten: KR-3105, KR-3411, KR-3710, KR-3803, KR-3804, KR-3805
+
+### [ ] KR-3807 - Synthetischer Firmware-Handoff-Test
+
+Abhaengigkeiten: KR-2605, KR-3405, KR-3411, KR-3707
+
+Umfang:
+
+- frei erzeugtes Reset-Mikroprogramm mit P2-Start und Wechsel auf den physisch identischen P1-Alias bauen
+- normales `PREF @Rn` und einen getrennten Store-Queue-Fall testen
+- einen kleinen Bootstrap von read-only ROM in ausfuehrbaren RAM kopieren und dorthin springen
+- dynamische System-, Font-, Flash-, GD- und Misc-Vektoren im RAM installieren und symbolisch verfolgen
+- optionalen fruehen MMIO-Zugriff mit synthetischem Registermodell einbeziehen
+
+Akzeptanz:
+
+- der komplette Handoff laeuft ueber Analyse, Codegen, Dispatch, Scheduler und Runtime
+- ROM- und RAM-Block besitzen getrennte Adressen sowie verknuepfte Provenienz
+- ein veraendertes RAM-Byte invalidiert den Zielblock vor erneuter Ausfuehrung
+- Fixture, Generator und erwartete Ergebnisse sind frei verteilbar und enthalten keine BIOSbytes
+
+### [ ] KR-3808 - Scheduler-, DMA- und Interrupt-Vertical-Slice
+
+Abhaengigkeiten: KR-3105, KR-3407, KR-3609, KR-3806
+
+Umfang:
+
+- mindestens einen Frame mit CPU-Bloecken, Timer, DMA-Abschluss und Interruptzustellung ausfuehren
+- MMIO-Start, geplantes Ende, Interrupt und quittierenden Gastzugriff als Ereigniskette pruefen
+- dieselbe Sequenz in normaler Ausfuehrung, Trace und Replay validieren
+- Gastzeit, Presentation und Hostpacing getrennt halten
+
+Akzeptanz:
+
+- Ereignisreihenfolge und finaler Zustand sind auf Windows und Linux deterministisch
+- DMA-Schreibzugriff auf ausfuehrbaren RAM loest die definierte Invalidierung aus
+- ein absichtlich verspaetetes Ereignis meldet reproduzierbaren Schedulerjitter
+- der Test benoetigt keine echte Dreamcast-Disc und kein Firmwareabbild
+
+### [?] KR-3809 - Optionales lokales Firmware-Smoke-Profil
+
+Abhaengigkeiten: KR-2604, KR-3405, KR-3606, KR-3607, KR-3807
+
+Umfang:
+
+- nur bei laut KR-2604 unterstuetztem LLE-Pfad ein explizit lokales Smoke-Profil definieren
+- Nutzerabbilder vor dem Lauf auf deklarierte Groesse und Hash pruefen
+- Fortschritt ausschliesslich als Adressen, Zustandsmeilensteine und redigierte Diagnosen berichten
+- Quell-Flash unveraendert halten und alle Schreibzugriffe in Copy-on-write umleiten
+- niemals als CI-, Release- oder Downloadvoraussetzung verwenden
+
+Akzeptanz:
+
+- ohne Opt-in und lokale Dateien wird der Test als nicht angefordert, nicht als Fehler behandelt
+- Logs enthalten keine Firmwarebytes, Strings, Assets, Serien-, Factory- oder Netzwerkfelder
+- ein Hashkonflikt verhindert die Ausfuehrung vor dem ersten Gastschritt
+- der Test kann vollstaendig aus dem Build- und Releasepaket ausgeschlossen werden
 
 ### [ ] KR-3901 - Benchmark-Suite
 
-Abhaengigkeiten: KR-3806
+Abhaengigkeiten: KR-3806, KR-3807, KR-3808
 
 ### [ ] KR-3902 - Hot-Block-Analyse
 
@@ -1122,15 +1555,80 @@ Abhaengigkeiten: KR-3901
 
 ### [ ] KR-3903 - Dispatch- und Speicher-Fastpaths
 
-Abhaengigkeiten: KR-3902, KR-3402
+Abhaengigkeiten: KR-3402, KR-3404, KR-3408, KR-3902
 
 ### [ ] KR-3904 - Inlining und Codegroessenstrategie
 
-Abhaengigkeiten: KR-3301, KR-3901
+Abhaengigkeiten: KR-3301, KR-3305, KR-3901
 
 ### [ ] KR-3905 - LTO und PGO
 
-Abhaengigkeiten: KR-3901
+Abhaengigkeiten: KR-3901, KR-3903, KR-3904
+
+### [ ] KR-3906 - Block-, Edge- und Dispatch-Profiling
+
+Abhaengigkeiten: KR-3305, KR-3406, KR-3607, KR-3901
+
+Umfang:
+
+- Block-, Kanten-, indirekte Callsite-, Fallback- und Invalidierungszaehler erfassen
+- Gastadresse und stabile Block-ID statt Hostadresse als Profilschluessel verwenden
+- Sampling- und exakten Instrumentierungsmodus anbieten
+- Profile versionieren und auf passende Eingabe-/ABI-Identitaet pruefen
+
+Akzeptanz:
+
+- deaktiviertes Profiling hat keinen semantischen Einfluss
+- ein Profil mit falscher Eingabe- oder ABI-Identitaet wird abgelehnt
+- Hot-Block- und Hot-Edge-Berichte sind deterministisch sortiert
+- Firmware- und Flashinhalte werden nicht in Profilen eingebettet
+
+### [ ] KR-3907 - Fastpath- und Inline-Cache-Waechter
+
+Abhaengigkeiten: KR-3402, KR-3404, KR-3408, KR-3903, KR-3906
+
+Umfang:
+
+- direkte RAM-Zugriffe nur bei bewiesener Region, Ausrichtung, Berechtigung und stabiler Adressraumgeneration zulassen
+- MMU-, Alias-, Watchpoint-, MMIO- und Codeinvalidierungswaechter vor Fastmem definieren
+- monomorphe indirekte Callsites mit Ziel- und Blockgeneration absichern
+- bei jedem Waechterfehler in den generischen Speicher- oder Dispatchpfad wechseln
+
+Akzeptanz:
+
+- aktivierte und deaktivierte Fastpaths liefern in Differenztests denselben Gastzustand
+- ein Watchpoint oder TLB-Wechsel wird nicht durch einen gecachten Hostzeiger umgangen
+- eine Blockinvalidierung leert alle betroffenen Inline-Caches vor Wiederverwendung
+- Waechtertreffer und -fehler sind im Profil getrennt sichtbar
+
+### [ ] KR-3908 - Codegroessen-, Invalidierungs- und Schedulerbudgets
+
+Abhaengigkeiten: KR-3301, KR-3404, KR-3407, KR-3901, KR-3906
+
+Umfang:
+
+- Budgets fuer generierte Quellen, Objektcode, Host-Kompilierzeit und Startzeit definieren
+- Invalidierungen, Relinks, Fallbackrate und Schedulerjitter separat begrenzen
+- Codegen-, Hostbuild- und Laufzeitmessungen getrennt ausgeben
+- Regressionen mit stabilen Schwellen und dokumentierter Hardwareklasse bewerten
+
+Akzeptanz:
+
+- ein absichtlicher Budgetverstoss laesst den Performance-Gate-Test fehlschlagen
+- Bericht nennt absolute Werte, Baseline und prozentuale Aenderung
+- Korrektheitstests laufen unabhaengig von Performancebudgets weiter
+- optionale LLE-Messungen werden nicht mit dem BIOS-freien Pflichtprofil vermischt
+
+### [ ] KR-3909 - v0.39 Release-Gate
+
+Abhaengigkeiten: KR-3901 bis KR-3908
+
+Akzeptanz:
+
+- Pflichtbenchmarks besitzen reproduzierbare Baselines und getrennte Build-/Laufzeitwerte
+- Fastpaths und Inline-Caches bestehen die Differenz- und Invalidierungstests
+- kein Optimierungspfad umgeht MMIO, Watchpoints, Ausnahmen oder Scheduler-Safepoints
+- Codegroesse, Fallbackrate, Invalidierungen und Schedulerjitter liegen innerhalb der dokumentierten Budgets
 
 ### [ ] KR-4001 - Oeffentliche Installationsdokumentation
 
@@ -1138,19 +1636,50 @@ Abhaengigkeiten: KR-3502, KR-3706
 
 ### [ ] KR-4002 - Architektur- und Manifestreferenz
 
-Abhaengigkeiten: KR-3501
+Abhaengigkeiten: KR-3411, KR-3505, KR-3506
 
 ### [ ] KR-4003 - Lizenz- und Rechtspruefung
 
-Abhaengigkeiten: KR-3801
+Abhaengigkeiten: KR-3709, KR-3801
+
+Umfang:
+
+- Projektlizenz, Drittanbieterabhaengigkeiten und Referenzprovenienz gemeinsam pruefen
+- direkte Flycast-Einbindung nur nach ausdruecklicher GPL-Kompatibilitaetsentscheidung zulassen
+- dcrecomp-Code ohne nachgewiesene kompatible Freigabe von jeder Uebernahme ausschliessen
+- Firmware-, Disc-, Font-, PVR- und Flashdaten aus Quellen, Tests und Paketen ausschliessen
+
+Akzeptanz:
+
+- Lizenzbericht nennt jede tatsaechlich gelinkte Abhaengigkeit und deren Pflichten
+- Referenzvergleich und uebernommener Drittcode sind klar getrennt
+- automatisierter Marker-Test erkennt verbotene Firmware- und Referenzdateien im Release-Staging
 
 ### [ ] KR-4004 - Kompatibilitaetsbericht
 
-Abhaengigkeiten: KR-3806
+Abhaengigkeiten: KR-3806, KR-3807, KR-3808, KR-3909
+
+### [ ] KR-4006 - Faehigkeits-, Firmwaremodus- und Datenaudit
+
+Abhaengigkeiten: KR-3505, KR-3606, KR-3710, KR-3809, KR-3909, KR-4003
+
+Umfang:
+
+- Matrix fuer Direkteinstieg, HLE, optionales LLE, MMU, Fallback, SMC und Schedulerpraezision veroeffentlichen
+- Pflicht-, optionale, experimentelle und nicht unterstuetzte Profile unterscheiden
+- Release-Staging auf Firmwarebytes, extrahierte Assets, sensible Flashdaten, lokale Pfade und unredigierte Traces pruefen
+- bekannte semantische und zeitliche Abweichungen pro Profil dokumentieren
+
+Akzeptanz:
+
+- jede oeffentliche Faehigkeitsbehauptung verweist auf einen automatisierten oder klar benannten lokalen Test
+- optionales LLE wird nicht als Voraussetzung fuer Homebrew- oder Release-Tests dargestellt
+- der Datenaudit laeuft vor Paket-Hash und Signierung
+- ein absichtlich eingebrachtes synthetisches Geheimnis und ein Firmware-Marker werden erkannt
 
 ### [ ] KR-4005 - v0.40.0 Pre-Alpha-Release
 
-Abhaengigkeiten: KR-4001 bis KR-4004
+Abhaengigkeiten: KR-4001 bis KR-4004, KR-4006
 
 ---
 
@@ -1158,12 +1687,37 @@ Abhaengigkeiten: KR-4001 bis KR-4004
 
 ### [ ] KR-5000 - v0.50.0 Alpha-Gate
 
-Siehe `ROADMAP.md`.
+Abhaengigkeiten: KR-4005
+
+Akzeptanz:
+
+- der verteilbare Homebrew-Vertical-Slice laeuft ohne proprietaere Eingaben reproduzierbar
+- alle Blockendtypen, Backend-/Fallback-Grenzen und Scheduler-Safepoints besitzen integrierte Tests
+- unbekannte Opcodes, Ziele, BIOS-Aufrufe und MMIO-Zugriffe koennen im unterstuetzten Profil nicht still erfolgreich sein
+- ausfuehrbarer RAM, Aliasdispatch und ROM-RAM-Handoff bestehen Invalidierungs- und Provenienztests
+- Manifest, Runtime-ABI, Diagnoseschemata und Buildartefakte sind versioniert und reproduzierbar
 
 ### [ ] KR-7500 - v0.75.0 Beta-Gate
 
-Siehe `ROADMAP.md`.
+Abhaengigkeiten: KR-5000
+
+Akzeptanz:
+
+- ausgewaehlte, rechtmaessig lokal bereitgestellte Programme erreichen reproduzierbar interaktive Szenen
+- Grafik, Audio, Eingabe, DMA, Timer und Interrupts laufen in einer gemeinsamen deterministischen Ereignisfolge
+- Fallbackrate, Invalidierungen, Schedulerjitter und Performancebudgets werden pro Testprofil berichtet
+- MMU-, FPSCR-, Store-Queue- und selbstmodifizierende Pfade besitzen titelunabhaengige Regressionen
+- optionale lokale Firmwaretests bleiben von CI, Release und verteilbarem Pflichtkorpus getrennt
 
 ### [ ] KR-10000 - v1.0.0 Release-Gate
 
-Siehe `ROADMAP.md`.
+Abhaengigkeiten: KR-7500
+
+Akzeptanz:
+
+- CLI, Manifest, Runtime-ABI, Blockmetadaten und Replayformat besitzen dokumentierte Stabilitaetsvertraege
+- Dispatch, Fallback, Scheduler, MMU-/Fastpath-Waechter und Codeinvalidierung sind als oeffentliche Architektur dokumentiert
+- keine bekannte stille Fehlkompilierung besteht im als unterstuetzt ausgewiesenen Bereich
+- jede Faehigkeitsbehauptung ist durch automatisierte oder ausdruecklich lokale, redigierte Tests gedeckt
+- Releasepaket, Quellarchiv und Berichte enthalten keine BIOS-, Disc-, Spiel-, Asset- oder sensiblen Flashdaten
+- Lizenz-, Referenzprovenienz-, Datenschutz- und Reproduzierbarkeitsaudits sind bestanden

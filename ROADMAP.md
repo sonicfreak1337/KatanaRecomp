@@ -587,7 +587,22 @@ Release-Gate fuer Phase 6:
 
 ## Phase 7: Codegenerator und Dispatch
 
+Planungsgrundlage fuer Phase 7 und spaeter:
+
+- die BIOS-Analyse belegt reale Wechsel zwischen P2- und P1-Alias, ROM-nach-RAM-Codekopien und erst zur Laufzeit installierte BIOS-Vektoren
+- Flycast zeigt als Referenzarchitektur getrennte virtuelle und physische Blockadressen, explizite Blockendklassen, zustandsabhaengige Blockvarianten, seitenweise Codeinvalidierung und einen Gastzyklus-Scheduler
+- dcrecomp bestaetigt den Nutzen aufgeteilter AOT-Ausgabe und einer zentralen Adresstabelle; hart kodierte Forced Entries, titelbezogene Remaps, stille BIOS-No-ops und Wall-Clock-Timing werden nicht als belastbare Architektur uebernommen
+- alle Implementierungen bleiben unabhaengig; Referenzcode, proprietaere Firmware und daraus extrahierte Assets werden nicht uebernommen
+
 ### v0.32.0 - Modulare Backend-Schnittstelle
+
+Fortschritt:
+
+- [ ] KR-3201 - Backend-Interface
+- [ ] KR-3202 - C++-Backend migrieren
+- [ ] KR-3203 - ABI-Faehigkeitspruefung
+- [ ] KR-3204 - Block-ABI und Zustandsuebergaben
+- [ ] KR-3205 - Plattformdienst-Schnittstelle
 
 Enthalten:
 
@@ -596,8 +611,19 @@ Enthalten:
 - Trennung von Deklarationen, Funktionen und Metadaten
 - versionierte Runtime-ABI
 - Backend-Faehigkeitsabfrage
+- expliziter Blockeintritt und -austritt mit Gast-PC, PR, Delay-Slot-, Ausnahme- und FPU-Zustand
+- Plattformdienste fuer Speicher, Scheduler, Interrupts, DMA und kontrollierten Fallback
+- Gastadressen bleiben 32-Bit-Werte und werden nie durch Hostzeiger als Identitaet ersetzt
 
 ### v0.33.0 - Skalierbare Codeausgabe und Build-Cache
+
+Fortschritt:
+
+- [ ] KR-3301 - Translation-Unit-Partitionierung
+- [ ] KR-3302 - Deterministische Dateinamen
+- [ ] KR-3303 - Inkrementeller Codegen-Cache
+- [ ] KR-3304 - Parallele Ausgabe und Buildintegration
+- [ ] KR-3305 - Deterministische Blockmetadaten
 
 Enthalten:
 
@@ -607,51 +633,122 @@ Enthalten:
 - parallele Ausgabe
 - Compile Commands
 - Projektgenerierung fuer Ninja und CMake
+- getrennte Ausgabe von Code, Konstantdaten, Symbolen und Laufzeitmetadaten
+- Blockmetadaten mit virtueller und kanonischer physischer Adresse, Quellsegment, Gastzyklen, Blockendtyp und Zustandswaechtern
+- Cache-Schluessel aus Eingabehashes, Manifest, Overrides, IR-/Optimierungsversion sowie Runtime- und Backend-ABI
 
 ### v0.34.0 - Indirekter Dispatch und Fallback
 
+Fortschritt:
+
+- [ ] KR-3401 - Laufzeit-Blocktabelle
+- [ ] KR-3402 - Indirekter Call- und Jump-Dispatch
+- [ ] KR-3403 - Kontrollierter Fallback
+- [ ] KR-3404 - Selbstmodifizierenden Code erkennen
+- [ ] KR-3405 - Alias- und kopierbewusster Firmware-Handoff
+- [ ] KR-3406 - Kanonischer Block-Dispatch und Blockendklassen
+- [ ] KR-3407 - Scheduler-Safepoints und Gastzyklen
+- [ ] KR-3408 - MMU- und Zustandswaechter fuer Blockvarianten
+- [ ] KR-3409 - Praezise Fallback- und Interpretergrenze
+- [ ] KR-3410 - Cache-, Store-Queue- und On-Chip-RAM-Vertrag
+- [ ] KR-3411 - v0.34 Release-Gate
+
 Enthalten:
 
-- Laufzeit-Funktionstabelle
-- Dispatch fuer aufgeloeste indirekte Calls und Jumps
+- Laufzeit-Blocktabelle nach kanonischer Gastadresse
+- getrennte Blockenden fuer statische, dynamische und bedingte Spruenge, Calls, Returns und Interrupt-Safepoints
+- Dispatch fuer aufgeloeste indirekte Calls, Jumps und Returns
+- monomorphe Callsite-Caches erst nach korrektem generischem Dispatch
 - kontrollierter Fallback fuer ungeloeste Stellen
 - optionaler kleiner Interpreter nur fuer nicht rekonstruierbare Pfade
-- Erkennung selbstmodifizierenden Codes
+- Synchronisation des vollstaendigen CPU-Zustands an jeder Backend-/Fallback-Grenze
+- Erkennung und seitenweise Invalidierung selbstmodifizierenden oder nach RAM kopierten Codes
 - KR-3405: kontrollierte Normalisierung physisch identischer Firmware-Aliase
 - explizite Behandlung nach RAM kopierter oder zur Laufzeit erzeugter Codebereiche
 - optionaler LLE-Firmware-Handoff von ROM nach RAM, falls KR-2604 diesen Betriebsmodus vorsieht
+- Gastzyklusbudgets und deterministische Scheduler-/Interrupt-Safepoints
+- MMU-, FPSCR-, Adressraum- und Watchpoint-Waechter fuer spezialisierte Block- und Speicherpfade
+- zwei Store Queues, QACR-Zielbildung und adressabhaengiges `PREF`-Verhalten
+- expliziter Vertrag fuer Cachewartungsbefehle, CCR-Modi und Operand-Cache-RAM
 - klare Abbruchstrategie, wenn Sicherheit nicht garantiert werden kann
+
+Release-Gate fuer Phase 7:
+
+- jeder Blockaustritt besitzt einen expliziten, getesteten Vertrag
+- unbekannte Dispatchziele werden nie still ignoriert oder titelbezogen umgebogen
+- ein Schreibzugriff auf ausfuehrbaren RAM invalidiert alle betroffenen Blockvarianten vor der naechsten Ausfuehrung
+- Scheduler, Interrupts und Ausnahmen beobachten an Backend- und Fallback-Grenzen denselben CPU-Zustand
+- der synthetische Alias-/ROM-RAM-Handoff funktioniert ohne proprietaeres BIOS
 
 ## Phase 8: Werkzeuge und Qualitaet
 
 ### v0.35.0 - Projektmanifest und stabile CLI
+
+Fortschritt:
+
+- [ ] KR-3501 - Manifest-Schema und Versionierung
+- [ ] KR-3502 - Stabile CLI und Exitcodes
+- [ ] KR-3503 - JSON-Berichte
+- [ ] KR-3504 - Override- und Hint-Dateien
+- [ ] KR-3505 - Ausfuehrungs- und Firmwareprofil im Manifest
+- [ ] KR-3506 - Eingabeprovenienz und Cache-Identitaet
 
 Enthalten:
 
 - versioniertes Manifestformat
 - Eingabedateien
 - Segmentlayout
+- Aliasgruppen, kanonische physische Bereiche und zur Laufzeit beschreibbare ausfuehrbare Segmente
 - Einstiegspunkte
 - Overrides
 - Runtime-Optionen
+- Firmwarebetriebsart, Fallback-Regel, Schedulerprofil und erforderliche Backend-Faehigkeiten
+- deklarierte Groessen und Hashes externer lokaler Eingaben ohne Einbettung ihrer Daten
 - stabile Exitcodes
 - maschinenlesbare CLI-Ausgabe
 
 ### v0.36.0 - Diagnostik und Debugging
 
+Fortschritt:
+
+- [ ] KR-3601 - Symbolische Namen
+- [ ] KR-3602 - Adress-zu-Quelle-Mapping
+- [ ] KR-3603 - Crashberichte
+- [ ] KR-3604 - Tracing und Watchpoints
+- [ ] KR-3605 - CFG- und Callgraph-Export
+- [ ] KR-3606 - Sichere Firmware- und Flash-Diagnostik
+- [ ] KR-3607 - Dispatch- und Fallbackdiagnostik
+- [ ] KR-3608 - Block-, Alias- und Invalidierungsprovenienz
+- [ ] KR-3609 - Deterministische Systemereignis-Replays
+
 Enthalten:
 
 - Symbolnamen
 - Adress-zu-Quelle-Mapping
-- Crashberichte
+- Crashberichte mit virtuellem PC, kanonischer Adresse, Blockvariante, Delay-Slot- und Ausnahmezustand
 - IR- und Runtime-Tracing
 - CFG-Export als DOT und JSON
 - Callgraph-Export
 - Watchpoints
-- deterministische Replays
+- Dispatchberichte mit Callsite, Ziel, PR, Beweisherkunft und gewaehlter Fallbackaktion
+- Provenienz fuer Aliasnormalisierung, ROM-RAM-Kopien, dynamische Vektoren und Codeinvalidierungen
+- deterministische Replays fuer CPU-, MMIO-, DMA-, Interrupt- und Schedulerereignisse
 - KR-3606: read-only Firmware- und Flash-Inspektion mit Groessen-/Hashpruefung, Partitions-/CRC-Diagnose und standardmaessiger Redaktion sensibler Felder
 
 ### v0.37.0 - CI, Fuzzing und reproduzierbare Builds
+
+Fortschritt:
+
+- [ ] KR-3701 - Windows- und Linux-CI
+- [ ] KR-3702 - Sanitizer-Builds
+- [ ] KR-3703 - Fuzzer
+- [ ] KR-3704 - Coverage
+- [ ] KR-3705 - Formatierung und statische Analyse
+- [ ] KR-3706 - Reproduzierbare Release-Artefakte
+- [ ] KR-3707 - Differenztests der Ausfuehrungswege
+- [ ] KR-3708 - Mehrsegment-, Dispatch- und Invalidierungsfuzzing
+- [ ] KR-3709 - Referenz- und Lizenzprovenienz
+- [ ] KR-3710 - v0.37 Release-Gate
 
 Enthalten:
 
@@ -660,14 +757,36 @@ Enthalten:
 - Debug- und Release-Builds
 - AddressSanitizer und UndefinedBehaviorSanitizer
 - Decoder-, Loader- und IR-Fuzzer
+- Differenztests zwischen IR-Referenzausfuehrung, generiertem C++ und kontrolliertem Fallback
+- Fuzzing fuer Aliasgruppen, Multi-Segment-Images, indirekten Dispatch, ROM-RAM-Kopien und Schreibinvalidierung
 - Coverage-Berichte
 - Formatierung und statische Analyse
 - reproduzierbare Release-Artefakte
-- Third-Party- und Lizenzbericht
+- Third-Party-, Referenzprovenienz- und Lizenzbericht
+
+Release-Gate fuer Phase 8:
+
+- jeder nicht aufgeloeste Kontrollflussfall ist maschinenlesbar und reproduzierbar diagnostizierbar
+- Replays enthalten keine Hostzeit als versteckte Wahrheitsquelle
+- Firmware- und Flash-Berichte sind standardmaessig redigiert und veraendern keine Eingabe
+- Flycast und dcrecomp bleiben dokumentierte Referenzen; ihre Implementierungen oder GPL-pflichtigen Subsysteme werden ohne bewusste Lizenzentscheidung nicht eingebunden
+- gleiche Eingaben und Optionen erzeugen bytegleiche Metadaten und Release-Artefakte
 
 ## Phase 9: Kompatibilitaet und Leistung
 
 ### v0.38.0 - Homebrew-Vertical-Slice
+
+Fortschritt:
+
+- [ ] KR-3801 - Rechtlich sauberes Homebrew-Testkorpus
+- [ ] KR-3802 - CPU-Konformitaetsprogramm
+- [ ] KR-3803 - Eingabe-Beispiel
+- [ ] KR-3804 - 2D-Grafik-Beispiel
+- [ ] KR-3805 - Audio-Beispiel
+- [ ] KR-3806 - Zusammenhaengendes Testspiel
+- [ ] KR-3807 - Synthetischer Firmware-Handoff-Test
+- [ ] KR-3808 - Scheduler-, DMA- und Interrupt-Vertical-Slice
+- [?] KR-3809 - Optionales lokales Firmware-Smoke-Profil
 
 Pflichtkorpus:
 
@@ -677,26 +796,59 @@ Pflichtkorpus:
 - 2D-Grafik-Beispiel
 - Audio-Beispiel
 - kleines zusammenhaengendes Testspiel
+- synthetischer Resetpfad mit `PREF`, P2-/P1-Aliaswechsel, ROM-RAM-Kopie und dynamischen RAM-Vektoren
+- deterministische Scheduler-, DMA- und Interruptsequenz ueber mindestens einen Frame
 
 Release-Gate:
 
 - alle Programme werden automatisch gebaut und getestet
 - Screenshots, Audio-Hashes oder semantische Zustandspruefungen sind reproduzierbar
+- der Pflichtkorpus benoetigt weder BIOS noch Flash noch Disc-Image
+- ein optionales lokales Firmware-Smoke-Profil darf nur explizit aktivierte Hash-/Statusresultate, niemals Firmwarebytes oder sensible Flashfelder ausgeben
 
 ### v0.39.0 - Performance-Basis
+
+Fortschritt:
+
+- [ ] KR-3901 - Benchmark-Suite
+- [ ] KR-3902 - Hot-Block-Analyse
+- [ ] KR-3903 - Dispatch- und Speicher-Fastpaths
+- [ ] KR-3904 - Inlining und Codegroessenstrategie
+- [ ] KR-3905 - LTO und PGO
+- [ ] KR-3906 - Block-, Edge- und Dispatch-Profiling
+- [ ] KR-3907 - Fastpath- und Inline-Cache-Waechter
+- [ ] KR-3908 - Codegroessen-, Invalidierungs- und Schedulerbudgets
+- [ ] KR-3909 - v0.39 Release-Gate
 
 Enthalten:
 
 - Benchmark-Suite
 - Hot-Block-Analyse
+- Block-, Kanten-, Dispatch-, Fallback- und Invalidierungszaehler
 - Inlining-Strategie
-- Speicher-Fastpaths
-- Dispatch-Optimierung
+- Speicher-Fastpaths nur fuer bewiesene lineare RAM-Zugriffe mit MMU-, Alias-, Watchpoint- und Ausrichtungswaechtern
+- Dispatch-Optimierung mit messbaren monomorphen Callsite-Caches und sicherem generischem Rueckfall
 - optional LTO und PGO
-- definierte Regressionsbudgets
+- definierte Budgets fuer Laufzeit, Codegroesse, Schedulerjitter, Invalidierungen und Fallbackrate
 - Performance darf Korrektheit nicht verdecken
 
+Release-Gate:
+
+- deaktivierte Fastpaths und Inline-Caches liefern denselben beobachtbaren Gastzustand
+- jede Spezialisierung nennt ihre Waechter und ihre Invalidierungsursachen
+- Benchmarks trennen Codegenzeit, Host-Kompilierzeit, Startzeit und Laufzeit
+- kein Performancepfad umgeht MMIO-Nebenwirkungen, Watchpoints, Ausnahmen oder Codeinvalidierung
+
 ### v0.40.0 - Oeffentlicher Pre-Alpha-Release
+
+Fortschritt:
+
+- [ ] KR-4001 - Oeffentliche Installationsdokumentation
+- [ ] KR-4002 - Architektur- und Manifestreferenz
+- [ ] KR-4003 - Lizenz- und Rechtspruefung
+- [ ] KR-4004 - Kompatibilitaetsbericht
+- [ ] KR-4006 - Faehigkeits-, Firmwaremodus- und Datenaudit
+- [ ] KR-4005 - v0.40.0 Pre-Alpha-Release
 
 Enthalten:
 
@@ -706,6 +858,9 @@ Enthalten:
 - bekannte Einschraenkungen
 - reproduzierbares Releasepaket
 - klarer Rechts- und Datenhinweis
+- Faehigkeitsmatrix fuer Direkteinstieg, HLE, optionales LLE, MMU, Fallback, selbstmodifizierenden Code und Schedulerpraezision
+- Referenzprovenienz fuer Flycast, dcrecomp, Spezifikationen und synthetische Testvektoren
+- automatisierter Audit, dass keine Firmwarebytes, extrahierten Assets, persoenlichen Flashdaten oder lokalen Pfade im Paket liegen
 - veroeffentlichter Homebrew-Kompatibilitaetsbericht
 
 ## Alpha-Gate: v0.50.0
@@ -716,7 +871,12 @@ Voraussetzungen:
 - belastbare FPU-Grundlage
 - Runtime und generierter Code sauber getrennt
 - rekursive Analyse und Jump-Table-Unterstuetzung
+- alle Blockendtypen und Backend-/Fallback-Zustandsuebergaben sind explizit getestet
+- keine stille Behandlung unbekannter Opcodes, Dispatchziele, BIOS-Aufrufe oder MMIO-Zugriffe im unterstuetzten Profil
+- Scheduler und Interruptzustellung sind fuer identische Eingaben deterministisch
+- ausfuehrbarer RAM besitzt getestete Schreibinvalidierung und nachvollziehbare Codeprovenienz
 - mindestens ein zusammenhaengender Homebrew-Vertical-Slice
+- synthetischer Firmware-Handoff ohne proprietaere Daten
 - stabile Manifestversion
 - CI auf Windows und Linux
 - reproduzierbare Builds
@@ -728,9 +888,12 @@ Voraussetzungen:
 - ausgewaehlte reale Programme laufen bis in interaktive Szenen
 - Grafik, Audio und Eingabe funktionieren zusammen
 - ungeloeste Kontrollflussstellen sind diagnostizierbar
+- Fallbackrate, Schedulerjitter und Codeinvalidierungen sind pro Testtitel messbar
+- MMU-, Cache-/Store-Queue- und DMA-relevante Pfade besitzen integrierte Regressionen
 - Abstuerze erzeugen verwertbare Berichte
 - Performance ist fuer Testtitel praktikabel
 - Kompatibilitaetsmatrix und bekannte Fehler sind gepflegt
+- optionale lokale LLE-Tests sind strikt von verteilbaren Pflichttests getrennt
 
 ## Release-Gate: v1.0.0
 
@@ -741,8 +904,10 @@ Voraussetzungen:
 - reproduzierbarer Build
 - keine bekannten stillen Fehlkompilierungen im unterstuetzten Bereich
 - definierte und dokumentierte SH-4- und Dreamcast-Abdeckung
+- dokumentierte Vertrage fuer Dispatch, Fallback, Scheduler, MMU-/Fastpath-Waechter und Codeinvalidierung
 - automatisierte CPU-, IR-, Runtime- und Plattformtests
 - Homebrew-Referenzkorpus laeuft reproduzierbar
+- jede unterstuetzte Firmwarebetriebsart besitzt eine veroeffentlichte Faehigkeits- und Datenschutzbeschreibung
 - Lizenz-, Rechts- und Drittanbieterhinweise sind vollstaendig
 - keine BIOS-, Disc-, Spiel- oder Assetdaten im Repository oder Release
 - Upgrade- und Migrationshinweise fuer kuenftige Versionen
