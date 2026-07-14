@@ -1,12 +1,15 @@
 ﻿#include "katana/sh4/disassembler.hpp"
 
 #include "katana/io/binary_reader.hpp"
+#include "katana/io/executable_image.hpp"
 #include "katana/sh4/decoder.hpp"
 
 #include <cstddef>
 #include <cstdint>
 #include <limits>
+#include <iterator>
 #include <stdexcept>
+#include <string>
 
 namespace katana::sh4 {
 
@@ -57,6 +60,29 @@ std::vector<DisassemblyLine> disassemble(
         lines.push_back(line);
     }
 
+    return lines;
+}
+
+std::vector<DisassemblyLine> disassemble(const katana::io::ExecutableImage& image) {
+    std::vector<DisassemblyLine> lines;
+    for (const auto& segment : image.segments()) {
+        if (segment.kind != katana::io::SegmentKind::Code
+            || !segment.permissions.executable) {
+            continue;
+        }
+        try {
+            auto segment_lines = disassemble(segment.bytes, segment.virtual_address);
+            lines.insert(
+                lines.end(),
+                std::make_move_iterator(segment_lines.begin()),
+                std::make_move_iterator(segment_lines.end())
+            );
+        } catch (const std::exception& error) {
+            throw std::runtime_error(
+                "Disassembly von Segment " + segment.name + " fehlgeschlagen: " + error.what()
+            );
+        }
+    }
     return lines;
 }
 

@@ -7,6 +7,10 @@
 #include <span>
 #include <vector>
 
+namespace katana::io {
+class ExecutableImage;
+}
+
 namespace katana::sh4 {
 
 struct DisassemblyLine {
@@ -21,6 +25,10 @@ struct DisassemblyLine {
 [[nodiscard]] std::vector<DisassemblyLine> disassemble(
     std::span<const std::uint8_t> bytes,
     std::uint32_t base_address = 0
+);
+
+[[nodiscard]] std::vector<DisassemblyLine> disassemble(
+    const katana::io::ExecutableImage& image
 );
 
 }

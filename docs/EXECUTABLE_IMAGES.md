@@ -75,3 +75,11 @@ Ziele ausserhalb committed Segmentdaten schlagen mit Datei, Offset und Ursache f
 Adresslayout an und laedt optional eine Symbol-Map. Relative Eingabe- und
 Map-Pfade beziehen sich immer auf das Manifestverzeichnis. Das vollstaendige
 Format steht in `docs/PROJECT_MANIFEST.md`.
+
+## Analyzer-Eingang
+
+Der normale CLI-Pfad laedt auch Raw-Binaries zuerst als `ExecutableImage`.
+`disassemble(const ExecutableImage&)` verarbeitet jedes als `Code` klassifizierte
+und ausfuehrbare Segment separat. `Data`, `Unknown` und nicht ausfuehrbare
+Segmente werden nicht dekodiert. Die Span-basierte Disassembly bleibt fuer
+kleine Tests und explizite flache Diagnoseeingaben verfuegbar.

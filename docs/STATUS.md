@@ -1,17 +1,17 @@
 # Projektstatus
 
-Version: 0.15.0
+Version: 0.16.0
 Phase: Pre-Alpha
-Aktiver Meilenstein: v0.16.0 - Executable-Image-Modell
+Aktiver Meilenstein: v0.17.0 - Rekursive Codeentdeckung
 
 ## Zusammenfassung
 
-KatanaRecomp besitzt einen durchgaengigen Prototyp-Pfad von SH-4-Binaerdaten bis zu generiertem, kompiliertem und ausgefuehrtem C++.
+KatanaRecomp besitzt einen durchgaengigen Prototyp-Pfad von Raw- und ELF32-SH-Eingaben ueber ein segmentiertes Executable Image bis zu generiertem, kompiliertem und ausgefuehrtem C++.
 
 ## Teststatus
 
 ```text
-100% tests passed out of 58
+100% tests passed out of 63
 ```
 
 ## Fertiggestellte Roadmap-Tasks
@@ -47,10 +47,17 @@ KatanaRecomp besitzt einen durchgaengigen Prototyp-Pfad von SH-4-Binaerdaten bis
 - [x] KR-1504 - Spezifikations-Testvektoren
 - [x] KR-1505 - Decoder-Fuzzer
 - [x] KR-1506 - v0.15.0 Release-Gate
+- [x] KR-1601 - Image- und Segmentmodell
+- [x] KR-1602 - Raw-Binary-Loader
+- [x] KR-1603 - ELF32-SH-Loader
+- [x] KR-1604 - Symbole und Map-Dateien
+- [x] KR-1605 - Relocations
+- [x] KR-1606 - Projektmanifest Version 1
+- [x] KR-1607 - v0.16.0 Release-Gate
 
 ## Naechster Roadmap-Task
 
-- [ ] KR-1601 - Image- und Segmentmodell
+- [ ] KR-1701 - Worklist ab Einstiegspunkten
 
 ## Aktuelle Einschraenkungen
 

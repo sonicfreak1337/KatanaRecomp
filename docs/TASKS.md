@@ -378,7 +378,7 @@ Abhaengigkeiten: KR-1603
 
 Abhaengigkeiten: KR-1602, KR-1603
 
-### [ ] KR-1607 - v0.16 Release-Gate
+### [x] KR-1607 - v0.16 Release-Gate
 
 Abhaengigkeiten: KR-1601 bis KR-1606
 

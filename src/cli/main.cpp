@@ -1,7 +1,7 @@
 #include "katana/analysis/basic_blocks.hpp"
 #include "katana/analysis/function_analysis.hpp"
 #include "katana/codegen/cpp_emitter.hpp"
-#include "katana/io/binary_reader.hpp"
+#include "katana/io/raw_binary_loader.hpp"
 #include "katana/ir/lower.hpp"
 #include "katana/sh4/decoder.hpp"
 #include "katana/sh4/disassembler.hpp"
@@ -509,11 +509,11 @@ std::vector<katana::ir::Function> build_ir_program(
     const std::uint32_t entry_address,
     const std::uint32_t base_address
 ) {
-    const auto bytes = katana::io::read_binary_file(path);
-    const auto lines = katana::sh4::disassemble(
-        bytes,
-        base_address
-    );
+    katana::io::RawBinaryLoadOptions options;
+    options.base_address = base_address;
+    options.entry_point = entry_address;
+    const auto image = katana::io::load_raw_binary(path, options);
+    const auto lines = katana::sh4::disassemble(image);
 
     const std::array<std::uint32_t, 1> seeds = {
         entry_address
@@ -566,11 +566,10 @@ int disassemble_file(
     const std::filesystem::path& path,
     const std::uint32_t base_address
 ) {
-    const auto bytes = katana::io::read_binary_file(path);
-    const auto lines = katana::sh4::disassemble(
-        bytes,
-        base_address
-    );
+    katana::io::RawBinaryLoadOptions options;
+    options.base_address = base_address;
+    const auto image = katana::io::load_raw_binary(path, options);
+    const auto lines = katana::sh4::disassemble(image);
 
     std::size_t unknown_count = 0;
     std::size_t control_flow_count = 0;
@@ -578,7 +577,7 @@ int disassemble_file(
 
     std::cout
         << "Datei:         " << path.string() << '\n'
-        << "Dateigroesse:  " << std::dec << bytes.size() << " Bytes\n"
+        << "Dateigroesse:  " << std::dec << image.segments()[0].bytes.size() << " Bytes\n"
         << "Basisadresse:  0x"
         << std::hex
         << std::uppercase
@@ -630,16 +629,15 @@ int analyze_blocks(
     const std::filesystem::path& path,
     const std::uint32_t base_address
 ) {
-    const auto bytes = katana::io::read_binary_file(path);
-    const auto lines = katana::sh4::disassemble(
-        bytes,
-        base_address
-    );
+    katana::io::RawBinaryLoadOptions options;
+    options.base_address = base_address;
+    const auto image = katana::io::load_raw_binary(path, options);
+    const auto lines = katana::sh4::disassemble(image);
     const auto blocks = katana::analysis::build_basic_blocks(lines);
 
     std::cout
         << "Datei:         " << path.string() << '\n'
-        << "Dateigroesse:  " << std::dec << bytes.size() << " Bytes\n"
+        << "Dateigroesse:  " << std::dec << image.segments()[0].bytes.size() << " Bytes\n"
         << "Basic Blocks:  " << blocks.size()
         << "\n\n";
 
@@ -707,11 +705,11 @@ int analyze_functions(
     const std::uint32_t entry_address,
     const std::uint32_t base_address
 ) {
-    const auto bytes = katana::io::read_binary_file(path);
-    const auto lines = katana::sh4::disassemble(
-        bytes,
-        base_address
-    );
+    katana::io::RawBinaryLoadOptions options;
+    options.base_address = base_address;
+    options.entry_point = entry_address;
+    const auto image = katana::io::load_raw_binary(path, options);
+    const auto lines = katana::sh4::disassemble(image);
 
     const std::array<std::uint32_t, 1> seeds = {
         entry_address
@@ -725,7 +723,7 @@ int analyze_functions(
 
     std::cout
         << "Datei:         " << path.string() << '\n'
-        << "Dateigroesse:  " << std::dec << bytes.size() << " Bytes\n"
+        << "Dateigroesse:  " << std::dec << image.segments()[0].bytes.size() << " Bytes\n"
         << "Einstieg:      ";
 
     print_address(entry_address);
