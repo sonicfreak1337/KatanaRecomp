@@ -67,6 +67,7 @@ AnalysisOverrides parse_analysis_overrides(const std::filesystem::path& path) {
         throw std::runtime_error("Override-Datei konnte nicht geoeffnet werden: " + path.string());
     }
     AnalysisOverrides overrides;
+    overrides.source_path = path;
     bool saw_version = false;
     std::string line_text;
     std::size_t line_number = 0u;
@@ -90,17 +91,21 @@ AnalysisOverrides parse_analysis_overrides(const std::filesystem::path& path) {
             overrides.version = parse_number(fields[0], 10, path, line_number, "version");
             saw_version = true;
         } else if (key == "function" && fields.size() == 1u) {
-            overrides.function_entries.push_back(parse_number(fields[0], 16, path, line_number, "function"));
+            overrides.functions.push_back({
+                parse_number(fields[0], 16, path, line_number, "function"), line_number
+            });
         } else if (key == "jump" && fields.size() == 2u) {
             overrides.jumps.push_back({
                 parse_number(fields[0], 16, path, line_number, "jump-address"),
-                parse_number(fields[1], 16, path, line_number, "jump-target")
+                parse_number(fields[1], 16, path, line_number, "jump-target"),
+                line_number
             });
         } else if (key == "jump_table" && fields.size() == 3u) {
             overrides.jump_tables.push_back({
                 parse_number(fields[0], 16, path, line_number, "dispatch-address"),
                 parse_number(fields[1], 16, path, line_number, "table-address"),
-                parse_number(fields[2], 10, path, line_number, "entry-count")
+                parse_number(fields[2], 10, path, line_number, "entry-count"),
+                line_number
             });
         } else {
             fail(path, line_number, "unbekanntes Feld oder falsche Feldanzahl: " + key + ".");
@@ -116,15 +121,18 @@ AnalysisOverrides parse_analysis_overrides(const std::filesystem::path& path) {
         fail(path, 0u, "nur Override-Version 1 wird unterstuetzt.");
     }
 
-    std::sort(overrides.function_entries.begin(), overrides.function_entries.end());
+    std::sort(overrides.functions.begin(), overrides.functions.end(), [](const auto& left, const auto& right) {
+        return left.address < right.address;
+    });
     std::sort(overrides.jumps.begin(), overrides.jumps.end(), [](const auto& left, const auto& right) {
         return left.instruction_address < right.instruction_address;
     });
     std::sort(overrides.jump_tables.begin(), overrides.jump_tables.end(), [](const auto& left, const auto& right) {
         return left.dispatch_address < right.dispatch_address;
     });
-    if (std::adjacent_find(overrides.function_entries.begin(), overrides.function_entries.end())
-        != overrides.function_entries.end()) {
+    if (std::adjacent_find(overrides.functions.begin(), overrides.functions.end(), [](const auto& left, const auto& right) {
+            return left.address == right.address;
+        }) != overrides.functions.end()) {
         fail(path, 0u, "doppelter function-Eintrag.");
     }
     if (std::adjacent_find(overrides.jumps.begin(), overrides.jumps.end(), [](const auto& left, const auto& right) {

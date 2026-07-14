@@ -17,10 +17,16 @@ struct JumpTableEntry {
     std::string reason;
 };
 
+enum class JumpTableDispatchKind {
+    Jump,
+    Call
+};
+
 struct JumpTableAnalysis {
     std::uint32_t dispatch_address = 0u;
     std::uint32_t table_address = 0u;
     std::size_t requested_entries = 0u;
+    JumpTableDispatchKind dispatch_kind = JumpTableDispatchKind::Jump;
     bool resolved = false;
     std::vector<JumpTableEntry> entries;
     std::string reason;

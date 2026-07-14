@@ -1,4 +1,5 @@
 #include "katana/analysis/recursive_analysis.hpp"
+#include "katana/analysis/code_address.hpp"
 
 #include "katana/io/binary_reader.hpp"
 #include "katana/sh4/decoder.hpp"
@@ -15,23 +16,6 @@
 
 namespace katana::analysis {
 namespace {
-
-const katana::io::ImageSegment* executable_segment(
-    const katana::io::ExecutableImage& image,
-    const std::uint32_t address
-) {
-    const auto* segment = image.find_segment(address, 2u);
-    if (segment == nullptr || segment->kind != katana::io::SegmentKind::Code
-        || !segment->permissions.executable) {
-        return nullptr;
-    }
-    const auto offset = segment->byte_offset(address);
-    if (!offset.has_value() || segment->bytes.size() < 2u
-        || *offset > segment->bytes.size() - 2u) {
-        return nullptr;
-    }
-    return segment;
-}
 
 void enqueue(
     std::deque<std::uint32_t>& pending,
@@ -134,7 +118,10 @@ void add_function_evidence(
 
 }
 
-RecursiveAnalysisResult analyze_reachable_code(const katana::io::ExecutableImage& image) {
+RecursiveAnalysisResult analyze_reachable_code(
+    const katana::io::ExecutableImage& image,
+    const RecursiveAnalysisOptions& options
+) {
     std::deque<std::uint32_t> pending(image.entry_points().begin(), image.entry_points().end());
     std::set<std::uint32_t> processed;
     std::set<std::uint32_t> delay_slots;
@@ -142,8 +129,12 @@ RecursiveAnalysisResult analyze_reachable_code(const katana::io::ExecutableImage
     std::map<std::uint32_t, FunctionCandidate> function_candidates;
 
     for (const auto entry : image.entry_points()) {
-        if ((entry & 1u) != 0u || executable_segment(image, entry) == nullptr) {
-            throw std::invalid_argument("Analyse-Einstiegspunkt liegt nicht in committed ausfuehrbarem Code.");
+        const auto validation = validate_committed_code_address(image, entry);
+        if (!validation.valid()) {
+            throw std::invalid_argument(
+                "Analyse-Einstiegspunkt ist ungueltig: "
+                + std::string(code_address_status_name(validation.status)) + "."
+            );
         }
         add_function_evidence(
             function_candidates,
@@ -154,7 +145,7 @@ RecursiveAnalysisResult analyze_reachable_code(const katana::io::ExecutableImage
     }
     for (const auto& symbol : image.symbols()) {
         if (symbol.kind != katana::io::SymbolKind::Function || (symbol.address & 1u) != 0u
-            || executable_segment(image, symbol.address) == nullptr) {
+            || !validate_committed_code_address(image, symbol.address).valid()) {
             continue;
         }
         enqueue(pending, symbol.address);
@@ -165,6 +156,24 @@ RecursiveAnalysisResult analyze_reachable_code(const katana::io::ExecutableImage
             AnalysisConfidence::High
         );
     }
+    for (const auto& seed : options.additional_seeds) {
+        if (!validate_committed_code_address(image, seed.address).valid()) {
+            continue;
+        }
+        enqueue(pending, seed.address);
+        for (const auto origin : seed.function_origins) {
+            add_function_evidence(
+                function_candidates,
+                seed.address,
+                origin,
+                origin == FunctionOrigin::UserOverride
+                    ? AnalysisConfidence::Certain
+                    : AnalysisConfidence::High
+            );
+        }
+    }
+
+    std::vector<AnalysisDiagnostic> diagnostics;
 
     while (!pending.empty()) {
         const auto address = pending.front();
@@ -173,10 +182,11 @@ RecursiveAnalysisResult analyze_reachable_code(const katana::io::ExecutableImage
             continue;
         }
 
-        const auto* segment = executable_segment(image, address);
-        if (segment == nullptr || (address & 1u) != 0u) {
+        const auto validation = validate_committed_code_address(image, address);
+        if (!validation.valid()) {
             continue;
         }
+        const auto* segment = validation.segment;
         const auto offset = *segment->byte_offset(address);
         const auto opcode = katana::io::read_u16_le(segment->bytes, offset);
 
@@ -187,6 +197,11 @@ RecursiveAnalysisResult analyze_reachable_code(const katana::io::ExecutableImage
         line.is_delay_slot = delay_slots.contains(address);
         line.target_address = katana::sh4::calculate_direct_branch_target(line.instruction, address);
         discovered.emplace(address, line);
+
+        if (!line.instruction.is_known()) {
+            diagnostics.push_back({address, opcode, "unknown-opcode"});
+            continue;
+        }
 
         if (line.is_delay_slot) {
             continue;
@@ -201,6 +216,17 @@ RecursiveAnalysisResult analyze_reachable_code(const katana::io::ExecutableImage
                     iterator->second.is_delay_slot = true;
                 }
                 enqueue(pending, delay_address);
+                const auto delay_validation = validate_committed_code_address(image, delay_address);
+                if (!delay_validation.valid()) {
+                    continue;
+                }
+                const auto delay_offset = *delay_validation.segment->byte_offset(delay_address);
+                const auto delay_opcode = katana::io::read_u16_le(
+                    delay_validation.segment->bytes, delay_offset
+                );
+                if (!katana::sh4::decode(delay_opcode).is_known()) {
+                    continue;
+                }
             }
         }
 
@@ -218,7 +244,7 @@ RecursiveAnalysisResult analyze_reachable_code(const katana::io::ExecutableImage
                 if (line.target_address.has_value()) {
                     enqueue(pending, *line.target_address);
                     if ((*line.target_address & 1u) == 0u
-                        && executable_segment(image, *line.target_address) != nullptr) {
+                        && validate_committed_code_address(image, *line.target_address).valid()) {
                         add_function_evidence(
                             function_candidates,
                             *line.target_address,
@@ -253,6 +279,16 @@ RecursiveAnalysisResult analyze_reachable_code(const katana::io::ExecutableImage
         result.instructions.push_back(std::move(line));
     }
     classify_image(image, discovered, result);
+    result.diagnostics = std::move(diagnostics);
+    std::sort(result.diagnostics.begin(), result.diagnostics.end(), [](const auto& left, const auto& right) {
+        if (left.address != right.address) {
+            return left.address < right.address;
+        }
+        if (left.opcode != right.opcode) {
+            return left.opcode < right.opcode;
+        }
+        return left.reason < right.reason;
+    });
     result.functions.reserve(function_candidates.size());
     for (auto& [address, candidate] : function_candidates) {
         if (delay_slots.contains(address)) {
@@ -280,6 +316,9 @@ const char* function_origin_name(const FunctionOrigin origin) noexcept {
     switch (origin) {
         case FunctionOrigin::EntryPoint: return "entry-point";
         case FunctionOrigin::DirectCall: return "direct-call";
+        case FunctionOrigin::IndirectCall: return "indirect-call";
+        case FunctionOrigin::JumpTableCall: return "jump-table-call";
+        case FunctionOrigin::UserOverride: return "user-override";
         case FunctionOrigin::Symbol: return "symbol";
     }
     return "unknown";
@@ -310,7 +349,8 @@ std::string format_recursive_analysis_report(const RecursiveAnalysisResult& resu
            << "Funktionen: " << result.functions.size() << '\n'
            << "Bereiche: " << result.ranges.size() << '\n'
            << "Unerreichbar: " << result.unreachable_code.size() << '\n'
-           << "Konflikte: " << result.conflicts.size() << "\n\n";
+           << "Konflikte: " << result.conflicts.size() << '\n'
+           << "Diagnosen: " << result.diagnostics.size() << "\n\n";
     const auto address = [&output](const std::uint32_t value) {
         output << "0x" << std::hex << std::uppercase << std::setw(8)
                << std::setfill('0') << value << std::dec << std::setfill(' ');
@@ -343,6 +383,13 @@ std::string format_recursive_analysis_report(const RecursiveAnalysisResult& resu
         address(conflict.address);
         output << " Groesse=" << conflict.size
                << " Grund=" << analysis_conflict_kind_name(conflict.kind) << '\n';
+    }
+    for (const auto& diagnostic : result.diagnostics) {
+        output << "Diagnose ";
+        address(diagnostic.address);
+        output << " Opcode=0x" << std::hex << std::uppercase << std::setw(4)
+               << std::setfill('0') << diagnostic.opcode << std::dec << std::setfill(' ')
+               << " Grund=" << diagnostic.reason << '\n';
     }
     return output.str();
 }

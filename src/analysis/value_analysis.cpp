@@ -1,4 +1,5 @@
 #include "katana/analysis/value_analysis.hpp"
+#include "katana/analysis/code_address.hpp"
 
 #include "katana/sh4/instruction.hpp"
 
@@ -164,14 +165,9 @@ std::vector<IndirectControlFlowResolution> resolve_indirect_control_flow(
             continue;
         }
         const auto target = *observation.value;
-        const auto* segment = image.find_segment(target, 2u);
-        const auto byte_offset = segment == nullptr ? std::optional<std::size_t>{}
-                                                    : segment->byte_offset(target);
-        if ((target & 1u) != 0u || segment == nullptr
-            || segment->kind != katana::io::SegmentKind::Code
-            || !segment->permissions.executable || !byte_offset.has_value()
-            || segment->bytes.size() < 2u || *byte_offset > segment->bytes.size() - 2u) {
-            resolution.reason = "target-not-committed-executable-code";
+        const auto validation = validate_committed_code_address(image, target);
+        if (!validation.valid()) {
+            resolution.reason = code_address_status_name(validation.status);
             resolutions.push_back(std::move(resolution));
             continue;
         }

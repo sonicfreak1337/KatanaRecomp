@@ -24,6 +24,9 @@ struct ClassifiedRange {
 enum class FunctionOrigin {
     EntryPoint,
     DirectCall,
+    IndirectCall,
+    JumpTableCall,
+    UserOverride,
     Symbol
 };
 
@@ -50,16 +53,33 @@ struct AnalysisConflict {
     AnalysisConflictKind kind = AnalysisConflictKind::FunctionEntryInDelaySlot;
 };
 
+struct AnalysisDiagnostic {
+    std::uint32_t address = 0u;
+    std::uint16_t opcode = 0u;
+    std::string reason;
+};
+
+struct AnalysisSeed {
+    std::uint32_t address = 0u;
+    std::vector<FunctionOrigin> function_origins;
+};
+
+struct RecursiveAnalysisOptions {
+    std::vector<AnalysisSeed> additional_seeds;
+};
+
 struct RecursiveAnalysisResult {
     std::vector<katana::sh4::DisassemblyLine> instructions;
     std::vector<ClassifiedRange> ranges;
     std::vector<ClassifiedRange> unreachable_code;
     std::vector<FunctionCandidate> functions;
     std::vector<AnalysisConflict> conflicts;
+    std::vector<AnalysisDiagnostic> diagnostics;
 };
 
 [[nodiscard]] RecursiveAnalysisResult analyze_reachable_code(
-    const katana::io::ExecutableImage& image
+    const katana::io::ExecutableImage& image,
+    const RecursiveAnalysisOptions& options = {}
 );
 
 [[nodiscard]] const char* discovered_byte_kind_name(DiscoveredByteKind kind) noexcept;

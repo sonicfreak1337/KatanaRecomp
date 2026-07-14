@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Behoben
+
+- Sicher aufgeloeste indirekte Spruenge, Calls, Overrides und vollstaendig validierte Jump Tables werden bis zum deterministischen Fixpunkt in die rekursive Codeentdeckung zurueckgefuehrt. Eine gemeinsame committed-Code-Pruefung lehnt Zero-Fill- und Segmentgrenzen einheitlich ab; unbekannte Opcodes beenden ihren Analysepfad mit sichtbarer Diagnose.
+
 ## [0.18.0] - 2026-07-14
 
 ### Hinzugefuegt

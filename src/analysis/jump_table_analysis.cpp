@@ -1,22 +1,12 @@
 #include "katana/analysis/jump_table_analysis.hpp"
+#include "katana/analysis/code_address.hpp"
 
-#include <limits>
 #include <stdexcept>
 
 namespace katana::analysis {
 namespace {
 
 constexpr std::size_t maximum_jump_table_entries = 4096u;
-
-bool is_executable_code_target(
-    const katana::io::ExecutableImage& image,
-    const std::uint32_t target
-) {
-    const auto* segment = image.find_segment(target, 2u);
-    return (target & 1u) == 0u && segment != nullptr
-        && segment->kind == katana::io::SegmentKind::Code
-        && segment->permissions.executable;
-}
 
 }
 
@@ -35,8 +25,9 @@ JumpTableAnalysis analyze_jump_table(
         analysis.reason = "entry-count-out-of-range";
         return analysis;
     }
-    if ((table_address & 3u) != 0u
-        || entry_count > (std::numeric_limits<std::uint32_t>::max() - table_address) / 4u) {
+    const auto table_end = static_cast<std::uint64_t>(table_address)
+        + static_cast<std::uint64_t>(entry_count) * 4u;
+    if ((table_address & 3u) != 0u || table_end > 0x100000000ull) {
         analysis.reason = "table-range-invalid";
         return analysis;
     }
@@ -55,8 +46,9 @@ JumpTableAnalysis analyze_jump_table(
             analysis.reason = "table-entry-rejected";
             continue;
         }
-        if (!is_executable_code_target(image, entry.target)) {
-            entry.reason = "target-not-committed-executable-code";
+        const auto validation = validate_committed_code_address(image, entry.target);
+        if (!validation.valid()) {
+            entry.reason = code_address_status_name(validation.status);
             analysis.entries.push_back(std::move(entry));
             analysis.reason = "table-entry-rejected";
             continue;

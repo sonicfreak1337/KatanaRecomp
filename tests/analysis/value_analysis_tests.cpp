@@ -101,6 +101,22 @@ int main() {
         "Registerkonstante wurde ueber eine nicht zusammenhaengende Codeluecke getragen."
     );
 
+    katana::io::ExecutableImage zero_fill;
+    zero_fill.add_segment({
+        ".text", 0u, 0u, 8u, katana::io::SegmentKind::Code, {true, false, true},
+        {0x04u, 0xE1u, 0x2Bu, 0x41u}
+    });
+    const auto zero_lines = katana::sh4::disassemble(zero_fill.segments()[0].bytes, 0u);
+    const auto zero_resolution = katana::analysis::resolve_indirect_control_flow(
+        zero_lines, zero_fill
+    );
+    require(
+        zero_resolution.size() == 1u
+            && zero_resolution[0].status == katana::analysis::ResolutionStatus::Unresolved
+            && zero_resolution[0].reason == "outside-committed-data",
+        "Konstantes indirektes Ziel im Zero-Fill wurde als sicher markiert."
+    );
+
     std::cout << "KR-1801 Lokale Konstantenpropagation erfolgreich.\n";
     return EXIT_SUCCESS;
 }

@@ -44,6 +44,7 @@ add_library(katana_core STATIC
     src/io/raw_binary_loader.cpp
     src/io/symbol_map.cpp
     src/analysis/disassembler.cpp
+    src/analysis/code_address.cpp
     src/analysis/basic_blocks.cpp
     src/analysis/function_analysis.cpp
     src/analysis/recursive_analysis.cpp
@@ -51,6 +52,7 @@ add_library(katana_core STATIC
     src/analysis/jump_table_analysis.cpp
     src/analysis/analysis_overrides.cpp
     src/analysis/control_flow_report.cpp
+    src/analysis/control_flow_analysis.cpp
     src/ir/lower.cpp
     src/codegen/cpp_emitter.cpp
 )
@@ -354,6 +356,33 @@ katana_enable_warnings(katana-analysis-overrides-tests)
 add_test(
     NAME katana-analysis-overrides-tests
     COMMAND katana-analysis-overrides-tests
+)
+
+add_executable(katana-control-flow-analysis-tests
+    tests/analysis/control_flow_analysis_tests.cpp
+)
+
+target_link_libraries(katana-control-flow-analysis-tests PRIVATE katana_core)
+katana_enable_warnings(katana-control-flow-analysis-tests)
+
+add_test(
+    NAME katana-control-flow-analysis-tests
+    COMMAND katana-control-flow-analysis-tests
+)
+
+add_executable(katana-control-flow-cli-fixture-writer
+    tests/analysis/control_flow_cli_fixture_writer.cpp
+)
+
+katana_enable_warnings(katana-control-flow-cli-fixture-writer)
+
+add_test(
+    NAME katana-control-flow-fixpoint-cli-tests
+    COMMAND ${CMAKE_COMMAND}
+        -DWRITER=$<TARGET_FILE:katana-control-flow-cli-fixture-writer>
+        -DCLI=$<TARGET_FILE:katana-recomp>
+        -DOUTPUT_DIR=${CMAKE_CURRENT_BINARY_DIR}/control-flow-cli-fixture
+        -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/analysis/verify_control_flow_cli.cmake
 )
 
 add_executable(katana-ir-lowering-tests

@@ -1,5 +1,6 @@
 #include "katana/analysis/recursive_analysis.hpp"
 
+#include <algorithm>
 #include <cstdlib>
 #include <iostream>
 #include <stdexcept>
@@ -143,6 +144,68 @@ int main() {
         "Analysebericht erklaert den Call-/Symbolkandidaten nicht."
     );
     require(report.find("Unerreichbar 0x8C01000C Groesse=2") != std::string::npos, "Unerreichbarer Bereich fehlt im Bericht.");
+
+    ExecutableImage unknown;
+    unknown.add_segment({
+        ".text", 0u, 0u, 6u, SegmentKind::Code, {true, false, true},
+        {0x09u, 0x00u, 0xFFu, 0xFFu, 0x09u, 0x00u}
+    });
+    unknown.add_entry_point(0u);
+    const auto unknown_result = katana::analysis::analyze_reachable_code(unknown);
+    require(
+        unknown_result.instructions.size() == 2u
+            && unknown_result.instructions.back().address == 2u,
+        "Unbekannter Opcode hat den linearen Analysepfad nicht beendet."
+    );
+    require(
+        unknown_result.diagnostics.size() == 1u
+            && unknown_result.diagnostics[0].address == 2u
+            && unknown_result.diagnostics[0].opcode == 0xFFFFu
+            && unknown_result.diagnostics[0].reason == "unknown-opcode",
+        "Unbekannter Opcode wurde nicht stabil diagnostiziert."
+    );
+    const auto unknown_report = katana::analysis::format_recursive_analysis_report(unknown_result);
+    require(
+        unknown_report.find("Diagnose 0x00000002 Opcode=0xFFFF Grund=unknown-opcode")
+            != std::string::npos,
+        "Bericht nennt Adresse, Opcode und Abbruchgrund nicht."
+    );
+
+    ExecutableImage alternate;
+    alternate.add_segment({
+        ".text", 0u, 0u, 10u, SegmentKind::Code, {true, false, true},
+        {0x09u, 0x00u, 0xFFu, 0xFFu, 0x0Bu, 0x00u, 0xFDu, 0xAFu, 0x09u, 0x00u}
+    });
+    alternate.add_entry_point(0u);
+    alternate.add_entry_point(6u);
+    const auto alternate_result = katana::analysis::analyze_reachable_code(alternate);
+    require(
+        std::any_of(alternate_result.instructions.begin(), alternate_result.instructions.end(), [](const auto& line) {
+            return line.address == 4u;
+        }),
+        "Ein separates direktes Sprungziel hinter einem unbekannten Opcode wurde nicht analysiert."
+    );
+
+    ExecutableImage unknown_delay;
+    unknown_delay.add_segment({
+        ".text", 0u, 0u, 12u, SegmentKind::Code, {true, false, true},
+        {0x02u, 0xB0u, 0xFFu, 0xFFu, 0x09u, 0x00u, 0x09u, 0x00u,
+         0x0Bu, 0x00u, 0x09u, 0x00u}
+    });
+    unknown_delay.add_entry_point(0u);
+    const auto unknown_delay_result = katana::analysis::analyze_reachable_code(unknown_delay);
+    require(
+        unknown_delay_result.instructions.size() == 2u
+            && unknown_delay_result.instructions[1].is_delay_slot
+            && unknown_delay_result.diagnostics.size() == 1u,
+        "Unbekannter Delay Slot wurde nicht genau einmal diagnostiziert."
+    );
+    require(
+        std::none_of(unknown_delay_result.instructions.begin(), unknown_delay_result.instructions.end(), [](const auto& line) {
+            return line.address == 4u || line.address == 8u;
+        }),
+        "Unbekannter Delay Slot liess unsicheren Call- oder Rueckkehrpfad weiterlaufen."
+    );
 
     std::cout << "KR-1701 Worklist ab Einstiegspunkten erfolgreich.\n";
     return EXIT_SUCCESS;
