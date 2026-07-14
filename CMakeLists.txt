@@ -57,6 +57,7 @@ add_library(katana_core STATIC
     src/ir/accumulator_effect.cpp
     src/ir/memory_effect.cpp
     src/ir/operand_width.cpp
+    src/ir/optimize.cpp
     src/ir/status_effect.cpp
     src/ir/serialize.cpp
     src/ir/verifier.cpp
@@ -474,6 +475,18 @@ add_test(
         -DKATANA_RECOMP=$<TARGET_FILE:katana-recomp>
         -DFIXTURE=${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/codegen_execution.bin
         -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/cmake/check_ir_cli.cmake
+)
+
+add_executable(katana-ir-optimization-tests
+    tests/ir/optimization_tests.cpp
+)
+
+target_link_libraries(katana-ir-optimization-tests PRIVATE katana_core)
+katana_enable_warnings(katana-ir-optimization-tests)
+
+add_test(
+    NAME katana-ir-optimization-tests
+    COMMAND katana-ir-optimization-tests
 )
 
 add_executable(katana-cpp-emitter-tests

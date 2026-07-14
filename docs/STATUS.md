@@ -11,7 +11,7 @@ KatanaRecomp besitzt einen durchgaengigen Prototyp-Pfad von Raw- und ELF32-SH-Ei
 ## Teststatus
 
 ```text
-100% tests passed out of 77
+100% tests passed out of 78
 ```
 
 ## Fertiggestellte Roadmap-Tasks
@@ -78,7 +78,8 @@ KatanaRecomp besitzt einen durchgaengigen Prototyp-Pfad von Raw- und ELF32-SH-Ei
 
 ## Naechster Roadmap-Task
 
-- [ ] KR-2001 - Constant Folding
+- [x] KR-2001 - Constant Folding
+- [ ] KR-2002 - Copy Propagation
 
 ## Aktuelle Einschraenkungen
 

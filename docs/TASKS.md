@@ -482,7 +482,7 @@ Abhaengigkeiten: KR-1901 bis KR-1906
 
 ## v0.20.0 - IR-Optimierungen
 
-### [ ] KR-2001 - Constant Folding
+### [x] KR-2001 - Constant Folding
 
 Abhaengigkeiten: KR-1907
 
