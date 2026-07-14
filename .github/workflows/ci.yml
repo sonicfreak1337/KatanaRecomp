@@ -56,6 +56,9 @@ jobs:
       - name: Repository auschecken
         uses: actions/checkout@v4
 
+      - name: MSVC-Entwicklungsumgebung initialisieren
+        uses: ilammy/msvc-dev-cmd@v1
+
       - name: Visual-Studio-Build konfigurieren
         run: cmake -S . -B build -G "Visual Studio 17 2022" -A x64
 
