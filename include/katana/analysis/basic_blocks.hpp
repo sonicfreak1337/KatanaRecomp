@@ -20,8 +20,23 @@ struct BasicBlock {
     bool has_indirect_successor = false;
 };
 
+enum class ResolvedControlFlowKind {
+    Jump,
+    Call
+};
+
+struct ResolvedControlFlowEdge {
+    std::uint32_t instruction_address = 0u;
+    std::uint32_t target_address = 0u;
+    ResolvedControlFlowKind kind = ResolvedControlFlowKind::Jump;
+
+    bool operator==(const ResolvedControlFlowEdge&) const = default;
+};
+
 [[nodiscard]] std::vector<BasicBlock> build_basic_blocks(
-    std::span<const katana::sh4::DisassemblyLine> lines
+    std::span<const katana::sh4::DisassemblyLine> lines,
+    std::span<const ResolvedControlFlowEdge> resolved_edges = {},
+    std::span<const std::uint32_t> additional_leaders = {}
 );
 
 }

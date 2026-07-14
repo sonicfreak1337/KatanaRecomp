@@ -399,8 +399,15 @@ Instruction lower_instruction(
     result.source_address = source.address;
     result.original_opcode = source.opcode;
     result.operation = lower_operation(source.instruction.kind);
+    result.original_operation = result.operation;
     result.widths = operation_operand_widths(result.operation);
-    result.accumulator_effects = operation_accumulator_effects(result.operation);
+    result.special_register = lower_special_register(
+        source.instruction.special_register
+    );
+    result.accumulator_effects = operation_accumulator_effects(
+        result.operation,
+        result.special_register
+    );
 
     result.destination_register =
         source.instruction.destination_register;
@@ -416,9 +423,6 @@ Instruction lower_instruction(
 
     result.immediate = source.instruction.immediate;
     result.displacement = source.instruction.displacement;
-    result.special_register = lower_special_register(
-        source.instruction.special_register
-    );
     result.status_effects = instruction_status_effects(
         result.operation,
         result.special_register
@@ -479,6 +483,9 @@ std::string_view operation_name(
 
         case Operation::MovImmediate:
             return "mov_imm";
+
+        case Operation::Constant32:
+            return "constant32";
 
         case Operation::AddImmediate:
             return "add_imm";
@@ -812,10 +819,12 @@ std::string_view operation_name(
 
 Function lower_function(
     const std::span<const katana::sh4::DisassemblyLine> lines,
-    const katana::analysis::FunctionInfo& function
+    const katana::analysis::FunctionInfo& function,
+    const std::span<const katana::analysis::ResolvedControlFlowEdge> resolved_edges,
+    const std::span<const std::uint32_t> function_entries
 ) {
     const auto source_blocks =
-        katana::analysis::build_basic_blocks(lines);
+        katana::analysis::build_basic_blocks(lines, resolved_edges, function_entries);
 
     std::unordered_map<std::uint32_t, const katana::analysis::BasicBlock*>
         block_by_address;
@@ -854,6 +863,20 @@ Function lower_function(
             source_block.start_address;
         target_block.successors =
             source_block.successors;
+        target_block.successors.erase(
+            std::remove_if(
+                target_block.successors.begin(),
+                target_block.successors.end(),
+                [&function](const std::uint32_t successor) {
+                    return std::find(
+                        function.block_addresses.begin(),
+                        function.block_addresses.end(),
+                        successor
+                    ) == function.block_addresses.end();
+                }
+            ),
+            target_block.successors.end()
+        );
         target_block.has_indirect_successor =
             source_block.has_indirect_successor;
 
@@ -862,9 +885,24 @@ Function lower_function(
         );
 
         for (const auto& source_line : source_block.lines) {
-            target_block.instructions.push_back(
-                lower_instruction(source_line)
+            auto instruction = lower_instruction(source_line);
+            for (const auto& edge : resolved_edges) {
+                if (edge.instruction_address == source_line.address) {
+                    instruction.resolved_targets.push_back(edge.target_address);
+                }
+            }
+            std::sort(
+                instruction.resolved_targets.begin(),
+                instruction.resolved_targets.end()
             );
+            instruction.resolved_targets.erase(
+                std::unique(
+                    instruction.resolved_targets.begin(),
+                    instruction.resolved_targets.end()
+                ),
+                instruction.resolved_targets.end()
+            );
+            target_block.instructions.push_back(std::move(instruction));
         }
 
         result.blocks.push_back(
@@ -885,14 +923,21 @@ Function lower_function(
 
 std::vector<Function> lower_program(
     const std::span<const katana::sh4::DisassemblyLine> lines,
-    const std::span<const katana::analysis::FunctionInfo> functions
+    const std::span<const katana::analysis::FunctionInfo> functions,
+    const std::span<const katana::analysis::ResolvedControlFlowEdge> resolved_edges
 ) {
     std::vector<Function> result;
     result.reserve(functions.size());
 
+    std::vector<std::uint32_t> function_entries;
+    function_entries.reserve(functions.size());
+    for (const auto& function : functions) {
+        function_entries.push_back(function.entry_address);
+    }
+
     for (const auto& function : functions) {
         result.push_back(
-            lower_function(lines, function)
+            lower_function(lines, function, resolved_edges, function_entries)
         );
     }
 
@@ -905,6 +950,28 @@ std::vector<Function> lower_program(
     );
 
     return result;
+}
+
+std::vector<Function> lower_program(
+    const katana::analysis::ControlFlowAnalysisResult& analysis
+) {
+    std::vector<std::uint32_t> seeds;
+    seeds.reserve(analysis.recursive.functions.size());
+    for (const auto& function : analysis.recursive.functions) {
+        seeds.push_back(function.address);
+    }
+    std::sort(seeds.begin(), seeds.end());
+    seeds.erase(std::unique(seeds.begin(), seeds.end()), seeds.end());
+    const auto functions = katana::analysis::discover_functions(
+        analysis.recursive.instructions,
+        seeds,
+        analysis.resolved_edges
+    );
+    return lower_program(
+        analysis.recursive.instructions,
+        functions,
+        analysis.resolved_edges
+    );
 }
 
 }

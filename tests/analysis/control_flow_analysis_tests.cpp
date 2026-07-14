@@ -1,4 +1,6 @@
 #include "katana/analysis/control_flow_analysis.hpp"
+#include "katana/ir/lower.hpp"
+#include "katana/ir/verifier.hpp"
 
 #include <algorithm>
 #include <cstdlib>
@@ -137,6 +139,12 @@ int main() {
         "Override-Aufloesung ist im Berichtsdatenmodell nicht sichtbar."
     );
     require(
+        overridden.resolved_edges.size() == 1u &&
+        overridden.resolved_edges[0].instruction_address == 0u &&
+        overridden.resolved_edges[0].target_address == 8u,
+        "Override-Ziel wurde nicht als echte CFG-Kante materialisiert."
+    );
+    require(
         find_function(overridden, 8u) != nullptr
             && find_function(overridden, 8u)->origins
                 == std::vector<katana::analysis::FunctionOrigin>{
@@ -194,6 +202,14 @@ int main() {
         find_function(table_jump, 8u) == nullptr && find_function(table_jump, 12u) == nullptr,
         "JMP-Tabelle erzeugte falsche Call-Kandidaten."
     );
+    const auto table_jump_ir = katana::ir::lower_program(table_jump);
+    require(
+        table_jump_ir.size() == 1u &&
+        table_jump_ir.front().blocks.front().successors ==
+            std::vector<std::uint32_t>{8u, 12u} &&
+        katana::ir::verify_program(table_jump_ir).empty(),
+        "Jump-Table-Ziele erreichen CFG oder Lowering nicht konsistent."
+    );
 
     auto partial_table_image = table_jump_image;
     partial_table_image.write_u32_le(0x104u, 0x200u);
@@ -207,19 +223,23 @@ int main() {
         "Teilweise ungueltige Jump Table speiste sichere Teilziele in die Worklist."
     );
 
-    auto table_call_image = table_jump_image;
-    table_call_image = code_image({
-        0x0Bu, 0x41u, 0x09u, 0x00u, 0x09u, 0x00u, 0x0Bu, 0x00u,
-        0x0Bu, 0x00u, 0x09u, 0x00u, 0x0Bu, 0x00u, 0x09u, 0x00u
+    auto table_call_image = code_image({
+        0x0Bu, 0x41u, 0x09u, 0x00u,
+        0x0Bu, 0x00u, 0x09u, 0x00u,
+        0x09u, 0x00u, 0x09u, 0x00u,
+        0x0Bu, 0x00u, 0x09u, 0x00u,
+        0x09u, 0x00u, 0x09u, 0x00u,
+        0x0Bu, 0x00u, 0x09u, 0x00u
     });
     table_call_image.add_segment({
-        ".table", 0x100u, 16u, 8u, katana::io::SegmentKind::Data, {true, false, false},
-        {0x08u, 0x00u, 0x00u, 0x00u, 0x0Cu, 0x00u, 0x00u, 0x00u}
+        ".table", 0x100u, 24u, 8u, katana::io::SegmentKind::Data,
+        {true, false, false},
+        {0x0Cu, 0x00u, 0x00u, 0x00u, 0x14u, 0x00u, 0x00u, 0x00u}
     });
     const auto table_call = katana::analysis::analyze_control_flow(
         table_call_image, &table_override
     );
-    const auto* table_function = find_function(table_call, 8u);
+    const auto* table_function = find_function(table_call, 12u);
     require(table_function != nullptr, "JSR-Tabelle erzeugte keinen Funktionskandidaten.");
     require(
         table_function->origins == std::vector<katana::analysis::FunctionOrigin>{
@@ -227,6 +247,34 @@ int main() {
             katana::analysis::FunctionOrigin::UserOverride
         },
         "Call-Tabellen-Herkunft wurde nicht deterministisch zusammengefuehrt."
+    );
+    const auto table_call_ir = katana::ir::lower_program(table_call);
+    const auto main_ir = std::find_if(
+        table_call_ir.begin(), table_call_ir.end(),
+        [](const auto& function) { return function.entry_address == 0u; }
+    );
+    require(
+        main_ir != table_call_ir.end(),
+        "Call-Tabelle besitzt keine IR-Hauptfunktion."
+    );
+    require(
+        main_ir->direct_callees ==
+            std::vector<std::uint32_t>{12u, 20u},
+        "Call-Tabelle liefert falsche direkte Callee-Metadaten."
+    );
+    require(
+        main_ir->indirect_call_sites ==
+            std::vector<std::uint32_t>{0u},
+        "Call-Tabelle liefert falsche indirekte Callsite-Metadaten."
+    );
+    const auto table_call_issues = katana::ir::verify_program(table_call_ir);
+    for (const auto& issue : table_call_issues) {
+        std::cerr << "IR-VERIFIER: " << issue.address
+            << ": " << issue.message << '\n';
+    }
+    require(
+        table_call_issues.empty(),
+        "Call-Tabellen-IR ist laut Verifier inkonsistent."
     );
 
     katana::analysis::AnalysisOverrides bad_dispatch;

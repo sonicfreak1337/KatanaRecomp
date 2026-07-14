@@ -24,8 +24,8 @@ void require(const bool condition, const std::string& message) {
 
 int main() {
     constexpr std::array<std::uint8_t, 12> bytes = {
-        0x05u, 0xE1u, // MOV #5,R1
-        0xFFu, 0x71u, // ADD #-1,R1
+        0x7Fu, 0xE1u, // MOV #127,R1
+        0x7Fu, 0x71u, // ADD #127,R1
         0x03u, 0xE2u, // MOV #3,R2
         0x2Cu, 0x31u, // ADD R2,R1
         0x0Bu, 0x00u, // RTS
@@ -42,10 +42,12 @@ int main() {
     require(result.changes == 2u,
         "Constant Folding meldet eine falsche Aenderungszahl.");
     require(
-        instructions[1].operation == katana::ir::Operation::MovImmediate &&
-        static_cast<std::uint32_t>(instructions[1].immediate) == 4u &&
-        instructions[3].operation == katana::ir::Operation::MovImmediate &&
-        static_cast<std::uint32_t>(instructions[3].immediate) == 7u,
+        instructions[1].operation == katana::ir::Operation::Constant32 &&
+        instructions[1].widths.immediate == katana::ir::OperandWidth::Bits32 &&
+        static_cast<std::uint32_t>(instructions[1].immediate) == 254u &&
+        instructions[3].operation == katana::ir::Operation::Constant32 &&
+        instructions[3].widths.immediate == katana::ir::OperandWidth::Bits32 &&
+        static_cast<std::uint32_t>(instructions[3].immediate) == 257u,
         "Konstante 32-Bit-Ausdruecke wurden nicht korrekt gefaltet."
     );
     require(katana::ir::verify_function(function).empty(),
@@ -109,6 +111,7 @@ int main() {
     unreachable_nop.source_address = 0x8C03FF00u;
     unreachable_nop.original_opcode = 0x0009u;
     unreachable_nop.operation = katana::ir::Operation::Nop;
+    unreachable_nop.original_operation = katana::ir::Operation::Nop;
     unreachable_nop.widths = katana::ir::operation_operand_widths(
         unreachable_nop.operation
     );
@@ -154,6 +157,19 @@ int main() {
         load_store_discovered
     );
     auto& load_store_function = load_store_program.front();
+    const auto mmio_result = katana::ir::simplify_load_store(
+        load_store_function
+    );
+    require(
+        mmio_result.changes == 0u &&
+        !load_store_function.blocks.front().instructions[1]
+            .forwarded_value_register,
+        "Unklassifizierter oder MMIO-Speicherzugriff wurde weitergeleitet."
+    );
+    load_store_function.blocks.front().instructions[0].memory_effects.region =
+        katana::ir::MemoryRegionKind::NormalRam;
+    load_store_function.blocks.front().instructions[1].memory_effects.region =
+        katana::ir::MemoryRegionKind::NormalRam;
     const auto load_store_result = katana::ir::simplify_load_store(
         load_store_function
     );

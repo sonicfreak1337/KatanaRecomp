@@ -49,6 +49,8 @@ OperandWidths operation_operand_widths(const Operation operation) noexcept {
 
         case Operation::MovImmediate:
             return {longword, none, byte, none, none, none};
+        case Operation::Constant32:
+            return {longword, none, longword, none, none, none};
         case Operation::AddImmediate:
         case Operation::AndImmediate:
         case Operation::OrImmediate:

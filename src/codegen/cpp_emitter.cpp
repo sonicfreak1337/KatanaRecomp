@@ -151,6 +151,15 @@ void emit_simple_instruction(
                 << ");\n";
             return;
 
+        case Operation::Constant32:
+            output
+                << "cpu.r["
+                << static_cast<unsigned>(instruction.destination_register)
+                << "] = "
+                << hex32(static_cast<std::uint32_t>(instruction.immediate))
+                << ";\n";
+            return;
+
         case Operation::AddImmediate:
             output
                 << "cpu.r["
@@ -2251,6 +2260,7 @@ void emit_terminal(
         case Operation::Unknown:
         case Operation::Nop:
         case Operation::MovImmediate:
+        case Operation::Constant32:
         case Operation::AddImmediate:
         case Operation::MovRegister:
         case Operation::AddRegister:
@@ -2384,6 +2394,7 @@ bool is_control_flow(
         case Operation::Unknown:
         case Operation::Nop:
         case Operation::MovImmediate:
+        case Operation::Constant32:
         case Operation::AddImmediate:
         case Operation::MovRegister:
         case Operation::AddRegister:
@@ -2572,9 +2583,7 @@ std::string emit_cpp_program(
         );
     }
 
-    for (const auto& function : functions) {
-        katana::ir::require_valid_function(function);
-    }
+    katana::ir::require_valid_program(functions);
 
     std::unordered_set<std::uint32_t> known_functions;
     known_functions.reserve(functions.size());

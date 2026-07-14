@@ -29,7 +29,8 @@ void canonicalize(Instruction& instruction) {
         instruction.source_register
     );
     instruction.accumulator_effects = operation_accumulator_effects(
-        instruction.operation
+        instruction.operation,
+        instruction.special_register
     );
 }
 
@@ -38,7 +39,7 @@ void replace_with_constant(
     const std::uint8_t destination,
     const std::uint32_t value
 ) {
-    instruction.operation = Operation::MovImmediate;
+    instruction.operation = Operation::Constant32;
     instruction.destination_register = destination;
     instruction.source_register = 0u;
     instruction.branch_register = 0u;
@@ -47,6 +48,7 @@ void replace_with_constant(
     instruction.special_register = SpecialRegister::None;
     instruction.effective_address.reset();
     instruction.target_address.reset();
+    instruction.resolved_targets.clear();
     instruction.forwarded_value_register.reset();
     canonicalize(instruction);
 }
@@ -77,6 +79,7 @@ OptimizationResult fold_block(BasicBlock& block) {
         const auto destination = instruction.destination_register;
         switch (instruction.operation) {
             case Operation::MovImmediate:
+            case Operation::Constant32:
                 constants[destination] = static_cast<std::uint32_t>(instruction.immediate);
                 break;
 
@@ -217,6 +220,7 @@ bool has_propagatable_source(const Operation operation) noexcept {
 bool writes_destination(const Operation operation) noexcept {
     switch (operation) {
         case Operation::MovImmediate:
+        case Operation::Constant32:
         case Operation::MovRegister:
         case Operation::AddImmediate:
         case Operation::AddRegister:
@@ -313,6 +317,7 @@ bool reads_register(
 ) noexcept {
     switch (instruction.operation) {
         case Operation::MovImmediate:
+        case Operation::Constant32:
             return false;
         case Operation::MovRegister:
         case Operation::NegateRegister:
@@ -416,6 +421,41 @@ OptimizationResult simplify_function_cfg(Function& function) {
         [](const BasicBlock& left, const BasicBlock& right) {
             return left.start_address < right.start_address;
         });
+
+    std::vector<std::uint32_t> direct_callees;
+    std::vector<std::uint32_t> indirect_call_sites;
+    for (const auto& block : function.blocks) {
+        for (const auto& instruction : block.instructions) {
+            if (
+                instruction.operation == Operation::Call &&
+                instruction.target_address
+            ) {
+                direct_callees.push_back(*instruction.target_address);
+            }
+            if (instruction.operation == Operation::CallRegister) {
+                indirect_call_sites.push_back(instruction.source_address);
+                direct_callees.insert(
+                    direct_callees.end(),
+                    instruction.resolved_targets.begin(),
+                    instruction.resolved_targets.end()
+                );
+            }
+        }
+    }
+    const auto canonicalize_addresses = [](std::vector<std::uint32_t>& values) {
+        std::sort(values.begin(), values.end());
+        values.erase(std::unique(values.begin(), values.end()), values.end());
+    };
+    canonicalize_addresses(direct_callees);
+    canonicalize_addresses(indirect_call_sites);
+    if (function.direct_callees != direct_callees) {
+        function.direct_callees = std::move(direct_callees);
+        ++result.changes;
+    }
+    if (function.indirect_call_sites != indirect_call_sites) {
+        function.indirect_call_sites = std::move(indirect_call_sites);
+        ++result.changes;
+    }
     return result;
 }
 
@@ -428,6 +468,8 @@ OptimizationResult simplify_block_load_store(BasicBlock& block) {
             store.operation == Operation::StoreLong &&
             load.operation == Operation::LoadLong &&
             store.destination_register == load.source_register &&
+            store.memory_effects.region == MemoryRegionKind::NormalRam &&
+            load.memory_effects.region == MemoryRegionKind::NormalRam &&
             !load.forwarded_value_register.has_value()
         ) {
             load.forwarded_value_register = store.source_register;

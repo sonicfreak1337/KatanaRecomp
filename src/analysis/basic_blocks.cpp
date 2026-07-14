@@ -64,7 +64,9 @@ std::size_t find_controlling_instruction(
 }
 
 std::vector<BasicBlock> build_basic_blocks(
-    const std::span<const katana::sh4::DisassemblyLine> lines
+    const std::span<const katana::sh4::DisassemblyLine> lines,
+    const std::span<const ResolvedControlFlowEdge> resolved_edges,
+    const std::span<const std::uint32_t> additional_leaders
 ) {
     if (lines.empty()) {
         return {};
@@ -79,6 +81,12 @@ std::vector<BasicBlock> build_basic_blocks(
 
     std::set<std::size_t> leaders;
     leaders.insert(0u);
+
+    for (std::size_t index = 1u; index < lines.size(); ++index) {
+        if (lines[index].address != lines[index - 1u].address + 2u) {
+            leaders.insert(index);
+        }
+    }
 
     for (std::size_t index = 0; index < lines.size(); ++index) {
         const auto& line = lines[index];
@@ -102,6 +110,19 @@ std::vector<BasicBlock> build_basic_blocks(
 
         if (next_index < lines.size()) {
             leaders.insert(next_index);
+        }
+    }
+
+    for (const auto& edge : resolved_edges) {
+        if (const auto target = address_to_index.find(edge.target_address);
+            target != address_to_index.end()) {
+            leaders.insert(target->second);
+        }
+    }
+    for (const auto address : additional_leaders) {
+        if (const auto leader = address_to_index.find(address);
+            leader != address_to_index.end()) {
+            leaders.insert(leader->second);
         }
     }
 
@@ -224,6 +245,24 @@ std::vector<BasicBlock> build_basic_blocks(
             block.successors.begin(),
             block.successors.end()
         );
+    }
+
+
+    for (const auto& edge : resolved_edges) {
+        const auto block = std::find_if(
+            blocks.begin(), blocks.end(),
+            [&edge](const BasicBlock& candidate) {
+                return !candidate.lines.empty() &&
+                    candidate.lines[find_controlling_instruction(candidate)].address ==
+                        edge.instruction_address;
+            }
+        );
+        if (block == blocks.end()) continue;
+        if (edge.kind == ResolvedControlFlowKind::Jump) {
+            add_unique_successor(block->successors, edge.target_address);
+        }
+        block->has_indirect_successor = false;
+        std::sort(block->successors.begin(), block->successors.end());
     }
 
     return blocks;
