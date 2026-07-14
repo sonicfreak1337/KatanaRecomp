@@ -11,7 +11,7 @@ KatanaRecomp besitzt einen durchgaengigen Prototyp-Pfad von Raw- und ELF32-SH-Ei
 ## Teststatus
 
 ```text
-100% tests passed out of 84
+100% tests passed out of 85
 ```
 
 ## Fertiggestellte Roadmap-Tasks
@@ -87,15 +87,16 @@ KatanaRecomp besitzt einen durchgaengigen Prototyp-Pfad von Raw- und ELF32-SH-Ei
 - [x] KR-2103 - Deterministischen Reset-Zustand definieren
 - [x] KR-2104 - v0.21.0 Release-Gate
 - [x] KR-2201 - Regionbasierter Bus
+- [x] KR-2202 - RAM und Spiegelungen
 
 ## Naechster Roadmap-Task
 
-- [ ] KR-2202 - RAM und Spiegelungen
+- [ ] KR-2203 - VRAM und AICA-RAM-Abstraktionen
 
 ## Aktuelle Einschraenkungen
 
 - unvollstaendiger SH-4-Befehlssatz
 - keine FPU
-- regionbasierter Speicherbus vorhanden, aber noch keine Dreamcast-RAM-, VRAM-, AICA-, BIOS-, Flash- oder MMIO-Abbildungen
+- Dreamcast-Haupt-RAM und direkte Spiegelungen sind vorhanden; VRAM, AICA-RAM, BIOS, Flash und MMIO fehlen noch
 - keine Plattformhardware
 - nur einfache konstante indirekte Ziele und bekannte begrenzte Jump Tables werden aufgeloest

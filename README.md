@@ -29,7 +29,7 @@ SH-4-Binaerdaten
     -> semantischer Laufzeittest
 `
 
-Der aktuelle Teststand umfasst **84 automatische Tests**.
+Der aktuelle Teststand umfasst **85 automatische Tests**.
 
 Der v0.15-Decoder verwendet eine zentrale Metadatenquelle fuer alle implementierten Opcode-Masken, Operandenformate, Kontrollfluss- und Privileginformationen. `katana-recomp isa-report` berichtet deterministisch ueber den gesamten 16-Bit-Opcode-Raum; Kollisions-, Spezifikations- und Fuzztests sichern die Regeln ab.
 
@@ -59,7 +59,9 @@ reproduzierbar zurueck und bewahrt den Runtime-Speicher. Details stehen in
 Der aktuelle Unreleased-Stand fuer v0.22 fuehrt mit KR-2201 einen
 regionbasierten Speicherbus ein. Speichergeraete werden an benannte,
 nicht ueberlappende 32-Bit-Adressbereiche gebunden; Little-Endian-Zugriffe,
-Read-only-Schutz und ungueltige Adressen werden zentral behandelt.
+Read-only-Schutz und ungueltige Adressen werden zentral behandelt. KR-2202
+erganzt ein gemeinsames 16-MiB-Dreamcast-Haupt-RAM mit den direkten
+Area-3-, U0/P0-, P1-, P2- und P3-No-MMU-Spiegelungen.
 
 ## Implementierte SH-4-Instruktionen
 

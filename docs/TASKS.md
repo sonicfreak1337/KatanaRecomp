@@ -560,9 +560,25 @@ Akzeptanz:
 - nicht zugeordnete Adressen schlagen sichtbar fehl
 - bestehende generierte Programme verwenden weiterhin die Runtime-API
 
-### [ ] KR-2202 - RAM und Spiegelungen
+### [x] KR-2202 - RAM und Spiegelungen
 
 Abhaengigkeiten: KR-2201
+
+Umfang:
+
+- 16 MiB Dreamcast-Haupt-RAM als gemeinsames lineares Backing
+- vier physische Area-3-Fenster pro direktem SH-4-Segment
+- U0/P0-, P1-, P2- und derzeitiger P3-No-MMU-Zugriff
+- keine Haupt-RAM-Abbildung im P4-Bereich
+- atomare Ablehnung kollidierender Buskonfigurationen
+
+Akzeptanz:
+
+- alle 28 direkten Aliasfenster lesen und schreiben dasselbe Backing
+- erstes und letztes RAM-Byte sind ueber Aliase erreichbar
+- Little-Endian-Mehrbytezugriffe bleiben zwischen Aliasen konsistent
+- fehlgeschlagene Konfigurationen hinterlassen keine Teilabbildungen
+- Flycast und dcrecomp wurden nur zum unabhaengigen Abgleich des beobachtbaren Adresslayouts verwendet
 
 ### [ ] KR-2203 - VRAM und AICA-RAM-Abstraktionen
 

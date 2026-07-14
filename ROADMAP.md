@@ -356,7 +356,7 @@ Release-Gate:
 Fortschritt:
 
 - [x] KR-2201 - Regionbasierter Bus
-- [ ] KR-2202 - RAM und Spiegelungen
+- [x] KR-2202 - RAM und Spiegelungen
 - [ ] KR-2203 - VRAM und AICA-RAM-Abstraktionen
 - [ ] KR-2204 - BIOS- und Flash-Abstraktionen
 - [ ] KR-2205 - MMIO-Handler

@@ -33,6 +33,7 @@ function(katana_enable_warnings target)
 endfunction()
 
 add_library(katana_runtime STATIC
+    src/runtime/dreamcast_memory.cpp
     src/runtime/memory.cpp
     src/runtime/runtime.cpp
 )
@@ -123,6 +124,18 @@ katana_enable_warnings(katana-memory-bus-tests)
 add_test(
     NAME katana-memory-bus-tests
     COMMAND katana-memory-bus-tests
+)
+
+add_executable(katana-dreamcast-ram-tests
+    tests/runtime/dreamcast_ram_tests.cpp
+)
+
+target_link_libraries(katana-dreamcast-ram-tests PRIVATE katana_runtime)
+katana_enable_warnings(katana-dreamcast-ram-tests)
+
+add_test(
+    NAME katana-dreamcast-ram-tests
+    COMMAND katana-dreamcast-ram-tests
 )
 
 add_executable(katana-cpu-state-tests

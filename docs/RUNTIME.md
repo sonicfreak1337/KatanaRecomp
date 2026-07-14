@@ -49,9 +49,9 @@ Der Bus bindet benannte `MemoryDevice`-Instanzen an 32-Bit-Adressbereiche.
 
 Eine leere Buskonfiguration entsteht mit `Memory(0u)`. Regionen werden mit
 `map_region` registriert und anhand ihrer Basisadresse deterministisch sortiert.
-Der bisherige Konstruktor bleibt kompatibel: `Memory()` registriert vorerst eine
-lineare 1-MiB-Region ab Adresse null, bis KR-2202 das echte Dreamcast-RAM-Layout
-einfuehrt.
+Der bisherige Konstruktor bleibt kompatibel: `Memory()` registriert eine lineare
+1-MiB-Region ab Adresse null fuer synthetische und generierte Tests. Eine echte
+Dreamcast-Konfiguration beginnt stattdessen mit `Memory(0u)`.
 
 Der Bus garantiert zentral:
 
@@ -64,8 +64,31 @@ Der Bus garantiert zentral:
 - optionalen Schreibschutz pro Region
 - auslesbare Regionsmetadaten fuer Tests und Diagnose
 
-RAM-Spiegelungen, VRAM, AICA-RAM, BIOS, Flash und MMIO bleiben getrennte
-Folgetasks der v0.22-Roadmap.
+## Dreamcast-Haupt-RAM und Spiegelungen
+
+KR-2202 fuehrt `map_dreamcast_main_ram` ein. Die Funktion erzeugt genau ein
+nullinitialisiertes `LinearMemoryDevice` mit 16 MiB und registriert dasselbe
+Backing in 28 direkten Aliasfenstern:
+
+- vier physische Area-3-Fenster von `0x0C000000` bis `0x0FFFFFFF`
+- die entsprechenden Wiederholungen in den U0/P0-Bereichen ab `0x2C000000`,
+  `0x4C000000` und `0x6C000000`
+- gecachte P1-Aliase von `0x8C000000` bis `0x8FFFFFFF`
+- ungecachte P2-Aliase von `0xAC000000` bis `0xAFFFFFFF`
+- den derzeit direkten P3-No-MMU-Pfad von `0xCC000000` bis `0xCFFFFFFF`
+
+Der P4-Bereich ab `0xE0000000` bleibt fuer interne SH-4-Ressourcen reserviert
+und wird nicht als Haupt-RAM abgebildet. Eine Konfiguration prueft zuerst alle
+Aliasfenster gegen vorhandene Regionen. Bei einer Kollision bleibt der Bus
+unveraendert.
+
+Das beobachtbare Adresslayout wurde unabhaengig gegen Flycast
+(`core/hw/sh4/sh4_mem.cpp`, `core/hw/mem/addrspace.cpp`) und dcrecomp
+(`include/recompiler/sh4_cpu.h`, `src/recompiler/sh4_cpu.c`) gegengeprueft.
+Aus den Referenzprojekten wurde kein Code uebernommen.
+
+VRAM, AICA-RAM, BIOS, Flash und MMIO bleiben getrennte Folgetasks der
+v0.22-Roadmap.
 
 ## Deterministischer CPU-Reset
 
@@ -91,4 +114,4 @@ spaetere Plattformkonfiguration.
 ## Weitere Runtime-Grundlage
 
 - sichtbare Fehlerpfade fuer ungeloeste Calls und Spruenge
-- Runtime-Tests fuer CPU-Zustand, Reset und Speicherbus
+- Runtime-Tests fuer CPU-Zustand, Reset, Speicherbus und Dreamcast-RAM-Aliase
