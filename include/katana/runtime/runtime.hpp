@@ -10,6 +10,17 @@ namespace katana::runtime {
 
 inline constexpr std::uint32_t abi_version = 5u;
 
+inline constexpr std::uint32_t sr_t_mask = 0x00000001u;
+inline constexpr std::uint32_t sr_s_mask = 0x00000002u;
+inline constexpr std::uint32_t sr_interrupt_mask = 0x000000F0u;
+inline constexpr std::uint32_t sr_q_mask = 0x00000100u;
+inline constexpr std::uint32_t sr_m_mask = 0x00000200u;
+inline constexpr std::uint32_t sr_fd_mask = 0x00008000u;
+inline constexpr std::uint32_t sr_bl_mask = 0x10000000u;
+inline constexpr std::uint32_t sr_rb_mask = 0x20000000u;
+inline constexpr std::uint32_t sr_md_mask = 0x40000000u;
+inline constexpr std::uint32_t sr_writable_mask = 0x700083F3u;
+
 inline constexpr std::size_t general_register_count = 16u;
 inline constexpr std::size_t banked_register_count = 8u;
 inline constexpr std::size_t fpu_register_count = 16u;
@@ -56,6 +67,12 @@ struct CpuState {
 
     [[nodiscard]] std::uint32_t read_sr() const noexcept;
     void write_sr(std::uint32_t value) noexcept;
+    [[nodiscard]] std::uint8_t interrupt_mask() const noexcept;
+    void set_interrupt_mask(std::uint8_t level) noexcept;
+    [[nodiscard]] bool interrupts_blocked() const noexcept;
+    [[nodiscard]] bool privileged_mode() const noexcept;
+    [[nodiscard]] bool register_bank_selected() const noexcept;
+    [[nodiscard]] bool fpu_disabled() const noexcept;
 };
 
 void reset_cpu(

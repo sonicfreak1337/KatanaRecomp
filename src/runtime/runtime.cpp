@@ -6,27 +6,57 @@
 namespace katana::runtime {
 
 std::uint32_t CpuState::read_sr() const noexcept {
-    return (sr & ~0x00000303u) |
-        (m ? 0x00000200u : 0u) |
-        (q ? 0x00000100u : 0u) |
-        (s ? 0x00000002u : 0u) |
-        (t ? 0x00000001u : 0u);
+    return (sr & ~(sr_m_mask | sr_q_mask | sr_s_mask | sr_t_mask)) |
+        (m ? sr_m_mask : 0u) |
+        (q ? sr_q_mask : 0u) |
+        (s ? sr_s_mask : 0u) |
+        (t ? sr_t_mask : 0u);
 }
 
 void CpuState::write_sr(const std::uint32_t value) noexcept {
-    const std::uint32_t masked = value & 0x700083F3u;
-    const bool old_rb = (sr & 0x20000000u) != 0u;
-    const bool new_rb = (masked & 0x20000000u) != 0u;
+    const std::uint32_t masked = value & sr_writable_mask;
+    const bool old_rb = (sr & sr_rb_mask) != 0u;
+    const bool new_rb = (masked & sr_rb_mask) != 0u;
     if (old_rb != new_rb) {
         for (std::size_t index = 0u; index < r_bank.size(); ++index) {
             std::swap(r[index], r_bank[index]);
         }
     }
     sr = masked;
-    m = (masked & 0x00000200u) != 0u;
-    q = (masked & 0x00000100u) != 0u;
-    s = (masked & 0x00000002u) != 0u;
-    t = (masked & 0x00000001u) != 0u;
+    m = (masked & sr_m_mask) != 0u;
+    q = (masked & sr_q_mask) != 0u;
+    s = (masked & sr_s_mask) != 0u;
+    t = (masked & sr_t_mask) != 0u;
+}
+
+std::uint8_t CpuState::interrupt_mask() const noexcept {
+    return static_cast<std::uint8_t>(
+        (read_sr() & sr_interrupt_mask) >> 4u
+    );
+}
+
+void CpuState::set_interrupt_mask(const std::uint8_t level) noexcept {
+    const std::uint32_t clamped = level > 15u ? 15u : level;
+    write_sr(
+        (read_sr() & ~sr_interrupt_mask) |
+        (clamped << 4u)
+    );
+}
+
+bool CpuState::interrupts_blocked() const noexcept {
+    return (read_sr() & sr_bl_mask) != 0u;
+}
+
+bool CpuState::privileged_mode() const noexcept {
+    return (read_sr() & sr_md_mask) != 0u;
+}
+
+bool CpuState::register_bank_selected() const noexcept {
+    return (read_sr() & sr_rb_mask) != 0u;
+}
+
+bool CpuState::fpu_disabled() const noexcept {
+    return (read_sr() & sr_fd_mask) != 0u;
 }
 
 void reset_cpu(

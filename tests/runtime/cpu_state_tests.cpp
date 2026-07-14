@@ -130,6 +130,28 @@ int main() {
         "Allgemeine und banked Register sind nicht getrennt."
     );
 
+    cpu.write_sr(
+        katana::runtime::sr_md_mask |
+        katana::runtime::sr_rb_mask |
+        katana::runtime::sr_bl_mask |
+        katana::runtime::sr_fd_mask
+    );
+    cpu.set_interrupt_mask(9u);
+    require(
+        cpu.interrupt_mask() == 9u &&
+        cpu.interrupts_blocked() &&
+        cpu.privileged_mode() &&
+        cpu.register_bank_selected() &&
+        cpu.fpu_disabled(),
+        "Relevante SR-Felder werden nicht strukturiert abgebildet."
+    );
+
+    cpu.set_interrupt_mask(0xFFu);
+    require(
+        cpu.interrupt_mask() == 15u,
+        "Die Interruptmaske wird nicht auf vier Bit begrenzt."
+    );
+
     require(
         cpu.memory.size() == 1024u * 1024u,
         "Der vollstaendige CPU-Zustand verlor seinen Runtime-Speicher."
