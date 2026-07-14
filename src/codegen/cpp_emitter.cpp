@@ -1948,7 +1948,11 @@ void emit_simple_instruction(
             }
             output << ");\n";
             emit_indent(output, indent);
+            output << "if (cpu.trap_pending) {\n";
+            emit_indent(output, indent + 1);
             output << "return;\n";
+            emit_indent(output, indent);
+            output << "}\n";
             return;
 
         case Operation::Branch:

@@ -2,6 +2,16 @@
 
 ## [Unreleased]
 
+### Hinzugefuegt
+
+- KR-2307: Generierter C++-Code wird fuer Speicheradressfehler in den Delay Slots von `BRA`, `BSR`, `JMP`, `JSR`, `RTS` und `RTE` kompiliert und tatsaechlich ausgefuehrt. Die Regression prueft Owner-`SPC`, vorbereitete Registereffekte, restaurierten RTE-Status samt Registerbank, illegale Slot-Instruktionen und die Propagation durch verschachtelte generierte Aufrufe.
+- Interrupttests decken gleiche Prioritaetslevel mit Quell-ID-Tie-Break, Level 0, Clamping auf Level 15, Prioritaetsupdates und `trap_pending` ohne gesetztes `BL` ab.
+
+### Geaendert
+
+- Konsistente `Unknown`-IR darf den strukturierten Illegal-Instruction-Pfad des Codegenerators erreichen; widerspruechliche IR-Metadaten werden weiterhin abgelehnt.
+- Die vollstaendige Regression umfasst nun 92 Tests.
+
 ## [0.23.0] - 2026-07-15
 
 ### Hinzugefuegt

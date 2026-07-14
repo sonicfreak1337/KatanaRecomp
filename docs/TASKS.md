@@ -726,6 +726,10 @@ Abhaengigkeiten: KR-2302
 
 Abhaengigkeiten: KR-2301 bis KR-2305
 
+### [x] KR-2307 - Ausfuehrbare Delay-Slot- und Interrupt-Review-Regressionen
+
+Abhaengigkeiten: KR-2303, KR-2305
+
 ---
 
 ## v0.24.0 und v0.25.0 - FPU

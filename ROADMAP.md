@@ -419,6 +419,7 @@ Fortschritt:
 - [x] KR-2304 - TRAPA und RTE
 - [x] KR-2305 - Delay-Slot-Ausnahmen
 - [x] KR-2306 - v0.23 Release-Gate
+- [x] KR-2307 - Ausfuehrbare Delay-Slot- und Interrupt-Review-Regressionen
 
 Enthalten:
 
@@ -436,6 +437,14 @@ Release-Gate:
 - Exceptions speichern und restaurieren den definierten CPU-Zustand
 - Delay-Slot-Ausnahmen besitzen eigene Tests
 - keine Ausnahme verschwindet als generische C++-Exception
+
+Nachgelagerte Review-Absicherung nach v0.23.0:
+
+- Delay-Slot-Ausnahmen werden im kompilierten generierten C++ fuer alle sechs
+  verzoegerten unbedingten Kontrollfluesse ausgefuehrt
+- RTE-Registerbankzustand, illegale Slot-Instruktionen und verschachtelte
+  Exception-Propagation sind regressionsgesichert
+- Interrupt-Prioritaetsgleichstand und Grenzlevel sind regressionsgesichert
 
 ## Phase 5: SH-4 FPU
 

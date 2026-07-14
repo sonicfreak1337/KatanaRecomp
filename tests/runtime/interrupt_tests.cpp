@@ -82,6 +82,75 @@ int main() {
     controller.clear();
     require(controller.pending_count() == 0u, "Interrupt-Controller laesst sich nicht leeren.");
 
+    {
+        InterruptController equal_level;
+        equal_level.request(9u, 8u, 0x900u);
+        equal_level.request(2u, 8u, 0x200u);
+        CpuState tied_cpu;
+        tied_cpu.set_interrupt_mask(0u);
+        require(
+            accept_pending_interrupt(tied_cpu, equal_level) &&
+            tied_cpu.intevt == 0x200u &&
+            equal_level.pending(9u) &&
+            !equal_level.pending(2u),
+            "Gleiche Interruptlevel werden nicht nach kleinerer Quell-ID aufgeloest."
+        );
+    }
+
+    {
+        InterruptController zero_level;
+        zero_level.request(1u, 0u, 0x100u);
+        CpuState zero_cpu;
+        zero_cpu.set_interrupt_mask(0u);
+        require(
+            !accept_pending_interrupt(zero_cpu, zero_level) &&
+            zero_level.pending(1u),
+            "Interruptlevel 0 wurde faelschlich als annehmbar behandelt."
+        );
+    }
+
+    {
+        InterruptController clamped;
+        clamped.request(4u, 0xFFu, 0x400u);
+        CpuState clamped_cpu;
+        clamped_cpu.set_interrupt_mask(14u);
+        require(
+            accept_pending_interrupt(clamped_cpu, clamped) &&
+            clamped_cpu.intevt == 0x400u,
+            "Interruptlevel oberhalb 15 wird nicht auf Level 15 begrenzt."
+        );
+    }
+
+    {
+        InterruptController updated;
+        updated.request(1u, 12u, 0x120u);
+        updated.request(2u, 7u, 0x220u);
+        updated.request(1u, 3u, 0x130u);
+        CpuState updated_cpu;
+        updated_cpu.set_interrupt_mask(0u);
+        require(
+            updated.pending_count() == 2u &&
+            accept_pending_interrupt(updated_cpu, updated) &&
+            updated_cpu.intevt == 0x220u &&
+            updated.pending(1u),
+            "Aktualisierung einer Quelle von hohem auf niedriges Level bleibt wirkungslos."
+        );
+    }
+
+    {
+        InterruptController pending_during_trap;
+        pending_during_trap.request(6u, 5u, 0x600u);
+        CpuState trap_cpu;
+        trap_cpu.trap_pending = true;
+        trap_cpu.set_interrupt_mask(0u);
+        require(
+            !trap_cpu.interrupts_blocked() &&
+            accept_pending_interrupt(trap_cpu, pending_during_trap) &&
+            trap_cpu.intevt == 0x600u,
+            "trap_pending ohne BL sperrt einen ansonsten annehmbaren Interrupt."
+        );
+    }
+
     std::cout << "Priorisierter Interrupt-Controller erfolgreich.\n";
     return EXIT_SUCCESS;
 }

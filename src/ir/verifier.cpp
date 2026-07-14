@@ -234,10 +234,6 @@ std::vector<VerificationIssue> verify_function(const Function& function) {
                 add_issue(issues, instruction.source_address,
                     "Instruktionsadresse ist doppelt vorhanden.");
             }
-            if (instruction.operation == Operation::Unknown) {
-                add_issue(issues, instruction.source_address,
-                    "Unbekannte Operation ist keine gueltige Katana-IR.");
-            }
             if (
                 instruction.original_operation != Operation::Unknown &&
                 instruction.operation != instruction.original_operation &&

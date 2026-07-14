@@ -11,7 +11,7 @@ KatanaRecomp besitzt einen durchgaengigen Prototyp-Pfad von Raw- und ELF32-SH-Ei
 ## Teststatus
 
 ```text
-100% tests passed out of 91
+100% tests passed out of 92
 ```
 
 ## Fertiggestellte Roadmap-Tasks
@@ -99,6 +99,7 @@ KatanaRecomp besitzt einen durchgaengigen Prototyp-Pfad von Raw- und ELF32-SH-Ei
 - [x] KR-2304 - TRAPA und RTE
 - [x] KR-2305 - Delay-Slot-Ausnahmen
 - [x] KR-2306 - v0.23 Release-Gate
+- [x] KR-2307 - Ausfuehrbare Delay-Slot- und Interrupt-Review-Regressionen
 
 ## Naechster Roadmap-Task
 

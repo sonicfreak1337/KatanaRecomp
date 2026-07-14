@@ -202,6 +202,20 @@ int main() {
         "Kontrollflussopcode im Delay Slot wird akzeptiert."
     );
 
+    auto illegal_slot = program.front();
+    auto& illegal = illegal_slot.blocks.front().instructions[2];
+    illegal.original_opcode = 0xFFFFu;
+    illegal.original_operation = katana::ir::Operation::Unknown;
+    illegal.operation = katana::ir::Operation::Unknown;
+    illegal.widths = katana::ir::operation_operand_widths(illegal.operation);
+    illegal.memory_effects = katana::ir::instruction_memory_effects(illegal.operation);
+    illegal.status_effects = katana::ir::instruction_status_effects(illegal.operation);
+    illegal.accumulator_effects = katana::ir::operation_accumulator_effects(illegal.operation);
+    require(
+        katana::ir::verify_function(illegal_slot).empty(),
+        "Strukturierte Illegal-Instruction-Semantik wird vom IR-Verifier blockiert."
+    );
+
     bool codegen_rejected = false;
     try {
         const std::array<katana::ir::Function, 1> invalid_program = {invalid_width};

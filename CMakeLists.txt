@@ -2604,6 +2604,60 @@ add_test(
     NAME katana-generated-privileged-control-tests
     COMMAND katana-generated-privileged-control-tests
 )
+
+add_executable(katana-delay-slot-program-writer
+    tests/codegen/delay_slot_program_writer.cpp
+)
+
+target_link_libraries(katana-delay-slot-program-writer PRIVATE katana_core)
+katana_enable_warnings(katana-delay-slot-program-writer)
+
+set(
+    KATANA_GENERATED_DELAY_SLOT_CPP
+    ${KATANA_GENERATED_TEST_DIR}/generated_delay_slot_program.cpp
+)
+
+add_custom_command(
+    OUTPUT ${KATANA_GENERATED_DELAY_SLOT_CPP}
+    COMMAND ${CMAKE_COMMAND} -E make_directory ${KATANA_GENERATED_TEST_DIR}
+    COMMAND
+        $<TARGET_FILE:katana-delay-slot-program-writer>
+        ${KATANA_GENERATED_DELAY_SLOT_CPP}
+    DEPENDS
+        katana-delay-slot-program-writer
+        tests/codegen/delay_slot_program_writer.cpp
+    COMMENT "Generiere C++-Programm fuer Delay-Slot-Exception-End-to-End-Test"
+    VERBATIM
+)
+
+set_source_files_properties(
+    ${KATANA_GENERATED_DELAY_SLOT_CPP}
+    PROPERTIES GENERATED TRUE HEADER_FILE_ONLY TRUE
+)
+
+set_source_files_properties(
+    tests/codegen/generated_delay_slot_tests.cpp
+    PROPERTIES OBJECT_DEPENDS ${KATANA_GENERATED_DELAY_SLOT_CPP}
+)
+
+add_executable(katana-generated-delay-slot-tests
+    tests/codegen/generated_delay_slot_tests.cpp
+    ${KATANA_GENERATED_DELAY_SLOT_CPP}
+)
+
+target_include_directories(
+    katana-generated-delay-slot-tests
+    PRIVATE ${KATANA_GENERATED_TEST_DIR}
+)
+
+katana_enable_warnings(katana-generated-delay-slot-tests)
+add_dependencies(katana-generated-delay-slot-tests katana-delay-slot-program-writer)
+
+add_test(
+    NAME katana-generated-delay-slot-tests
+    COMMAND katana-generated-delay-slot-tests
+)
+
 get_property(
     KATANA_BUILD_TARGETS
     DIRECTORY
