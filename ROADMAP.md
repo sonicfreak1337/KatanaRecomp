@@ -357,7 +357,7 @@ Fortschritt:
 
 - [x] KR-2201 - Regionbasierter Bus
 - [x] KR-2202 - RAM und Spiegelungen
-- [ ] KR-2203 - VRAM und AICA-RAM-Abstraktionen
+- [x] KR-2203 - VRAM und AICA-RAM-Abstraktionen
 - [ ] KR-2204 - BIOS- und Flash-Abstraktionen
 - [ ] KR-2205 - MMIO-Handler
 - [ ] KR-2206 - Ausrichtung, Fehler und Watchpoints

@@ -580,9 +580,27 @@ Akzeptanz:
 - fehlgeschlagene Konfigurationen hinterlassen keine Teilabbildungen
 - Flycast und dcrecomp wurden nur zum unabhaengigen Abgleich des beobachtbaren Adresslayouts verwendet
 
-### [ ] KR-2203 - VRAM und AICA-RAM-Abstraktionen
+### [x] KR-2203 - VRAM und AICA-RAM-Abstraktionen
 
 Abhaengigkeiten: KR-2201
+
+Umfang:
+
+- 8 MiB Dreamcast-VRAM als gemeinsames lineares Backing
+- 28 lineare 64-Bit-Pfad-Aliase und 28 bankinterleavte 32-Bit-Pfad-Aliase
+- 2 MiB AICA-RAM mit 28 direkten Aliasfenstern
+- U0/P0-, P1-, P2- und derzeitiger P3-No-MMU-Zugriff ohne P4-Abbildung
+- atomare Ablehnung kollidierender Buskonfigurationen
+
+Akzeptanz:
+
+- lineare und interleavte VRAM-Sichten greifen auf dasselbe Backing zu
+- der 32-Bit-Pfad verteilt aufeinanderfolgende Woerter korrekt auf beide VRAM-Baenke
+- alle AICA-RAM-Aliase lesen und schreiben dasselbe Backing
+- erstes und letztes Byte sowie Little-Endian-Mehrbytezugriffe sind abgedeckt
+- Haupt-RAM, VRAM und AICA-RAM lassen sich gemeinsam ohne Ueberlappung abbilden
+- fehlgeschlagene Konfigurationen hinterlassen keine Teilabbildungen
+- Flycast wurde nur zum unabhaengigen Abgleich von Adresslayout und beobachtbarem Bankverhalten verwendet
 
 ### [ ] KR-2204 - BIOS- und Flash-Abstraktionen
 

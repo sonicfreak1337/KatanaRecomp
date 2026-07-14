@@ -87,8 +87,36 @@ Das beobachtbare Adresslayout wurde unabhaengig gegen Flycast
 (`include/recompiler/sh4_cpu.h`, `src/recompiler/sh4_cpu.c`) gegengeprueft.
 Aus den Referenzprojekten wurde kein Code uebernommen.
 
-VRAM, AICA-RAM, BIOS, Flash und MMIO bleiben getrennte Folgetasks der
-v0.22-Roadmap.
+## Dreamcast-VRAM und AICA-RAM
+
+KR-2203 fuehrt `map_dreamcast_vram` und `map_dreamcast_aica_ram` ein.
+Beide Funktionen erzeugen ein eigenes nullinitialisiertes Backing und
+registrieren alle direkten U0/P0-, P1-, P2- und derzeitigen P3-No-MMU-Aliase.
+P4 bleibt ausgespart.
+
+Das 8-MiB-VRAM besitzt zwei Sichten auf dasselbe Backing:
+
+- 28 lineare 64-Bit-Pfad-Aliase auf Basis der physischen Fenster
+  `0x04000000`, `0x04800000`, `0x06000000` und `0x06800000`
+- 28 bankinterleavte 32-Bit-Pfad-Aliase auf Basis der physischen Fenster
+  `0x05000000`, `0x05800000`, `0x07000000` und `0x07800000`
+
+Die 32-Bit-Sicht ordnet aufeinanderfolgende 32-Bit-Woerter abwechselnd den
+beiden 64-Bit-VRAM-Baenken zu. Bytepositionen innerhalb eines Wortes bleiben
+erhalten, sodass die zentrale Little-Endian-Logik des Busses weiterhin gilt.
+
+Das 2-MiB-AICA-RAM wird in den vier physischen Fenstern `0x00800000`,
+`0x00A00000`, `0x00C00000` und `0x00E00000` gespiegelt. Zusammen mit den
+sieben direkten SH-4-Segmenten entstehen 28 Aliase auf dasselbe Backing.
+
+Alle vorgesehenen Fenster werden vor der ersten Registrierung gegen
+bestehende Regionen und gegeneinander geprueft. Eine Kollision hinterlaesst
+den Bus unveraendert. Adresslayout und beobachtbares VRAM-Bankverhalten
+wurden unabhaengig gegen Flycast (`core/hw/sh4/sh4_mem.cpp` und
+`core/hw/pvr/pvr_mem.cpp`) gegengeprueft; es wurde kein Referenzcode
+uebernommen.
+
+BIOS, Flash und MMIO bleiben getrennte Folgetasks der v0.22-Roadmap.
 
 ## Deterministischer CPU-Reset
 
@@ -114,4 +142,4 @@ spaetere Plattformkonfiguration.
 ## Weitere Runtime-Grundlage
 
 - sichtbare Fehlerpfade fuer ungeloeste Calls und Spruenge
-- Runtime-Tests fuer CPU-Zustand, Reset, Speicherbus und Dreamcast-RAM-Aliase
+- Runtime-Tests fuer CPU-Zustand, Reset, Speicherbus sowie Dreamcast-RAM-, VRAM- und AICA-RAM-Aliase

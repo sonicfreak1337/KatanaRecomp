@@ -138,6 +138,21 @@ add_test(
     COMMAND katana-dreamcast-ram-tests
 )
 
+add_executable(katana-dreamcast-video-audio-memory-tests
+    tests/runtime/dreamcast_video_audio_memory_tests.cpp
+)
+
+target_link_libraries(
+    katana-dreamcast-video-audio-memory-tests
+    PRIVATE katana_runtime
+)
+katana_enable_warnings(katana-dreamcast-video-audio-memory-tests)
+
+add_test(
+    NAME katana-dreamcast-video-audio-memory-tests
+    COMMAND katana-dreamcast-video-audio-memory-tests
+)
+
 add_executable(katana-cpu-state-tests
     tests/runtime/cpu_state_tests.cpp
 )

@@ -7,11 +7,69 @@
 #include <sstream>
 #include <stdexcept>
 #include <string>
+#include <utility>
+#include <vector>
 
 namespace katana::runtime {
 namespace {
 
-std::uint32_t alias_base(
+struct PendingMapping {
+    std::string name;
+    std::uint32_t base_address = 0u;
+    std::shared_ptr<MemoryDevice> device;
+};
+
+class Vram32BitMemoryDevice final : public MemoryDevice {
+public:
+    explicit Vram32BitMemoryDevice(
+        std::shared_ptr<LinearMemoryDevice> backing
+    )
+        : backing_(std::move(backing)) {
+        if (!backing_ || backing_->size() != dreamcast_vram_size) {
+            throw std::invalid_argument(
+                "Der 32-Bit-VRAM-Pfad braucht ein 8-MiB-VRAM-Backing."
+            );
+        }
+    }
+
+    [[nodiscard]] std::size_t size() const noexcept override {
+        return backing_->size();
+    }
+
+    [[nodiscard]] std::uint8_t read_u8(
+        const std::uint32_t offset
+    ) const override {
+        return backing_->read_u8(map_offset(offset));
+    }
+
+    void write_u8(
+        const std::uint32_t offset,
+        const std::uint8_t value
+    ) override {
+        backing_->write_u8(map_offset(offset), value);
+    }
+
+private:
+    [[nodiscard]] static std::uint32_t map_offset(
+        const std::uint32_t offset
+    ) noexcept {
+        constexpr std::uint32_t bank_bit = 0x00400000u;
+        constexpr std::uint32_t byte_bits = 0x00000003u;
+        constexpr std::uint32_t word_offset_bits = 0x003FFFFCu;
+
+        const std::uint32_t bank =
+            (offset & bank_bit) == 0u ? 0u : 1u;
+
+        return
+            (offset & byte_bits) |
+            ((offset & word_offset_bits) << 1u) |
+            (bank << 2u);
+    }
+
+    std::shared_ptr<LinearMemoryDevice> backing_;
+};
+
+std::uint32_t main_ram_alias_base(
     const std::uint32_t area_base,
     const std::size_t mirror_index
 ) {
@@ -33,47 +91,73 @@ std::string hex_address(const std::uint32_t address) {
 }
 
 bool overlaps(
-    const MemoryRegionInfo& existing,
-    const std::uint32_t candidate_base
+    const std::uint32_t left_base,
+    const std::size_t left_size,
+    const std::uint32_t right_base,
+    const std::size_t right_size
 ) {
-    const std::uint64_t existing_start = existing.base_address;
-    const std::uint64_t existing_end =
-        existing_start + existing.size;
-    const std::uint64_t candidate_start = candidate_base;
-    const std::uint64_t candidate_end =
-        candidate_start + dreamcast_main_ram_size;
+    const std::uint64_t left_start = left_base;
+    const std::uint64_t left_end = left_start + left_size;
+    const std::uint64_t right_start = right_base;
+    const std::uint64_t right_end = right_start + right_size;
 
-    return
-        candidate_start < existing_end &&
-        existing_start < candidate_end;
+    return left_start < right_end && right_start < left_end;
 }
 
-void require_free_aliases(const Memory& memory) {
-    for (const auto area_base : dreamcast_main_ram_area_bases) {
-        for (
-            std::size_t mirror_index = 0u;
-            mirror_index < dreamcast_main_ram_mirrors_per_area;
-            ++mirror_index
-        ) {
-            const auto candidate_base =
-                alias_base(area_base, mirror_index);
+void require_free_mappings(
+    const Memory& memory,
+    const std::vector<PendingMapping>& mappings
+) {
+    for (std::size_t index = 0u; index < mappings.size(); ++index) {
+        const auto& candidate = mappings[index];
 
-            for (
-                std::size_t region_index = 0u;
-                region_index < memory.region_count();
-                ++region_index
-            ) {
-                const auto& existing = memory.region(region_index);
-                if (overlaps(existing, candidate_base)) {
-                    throw std::invalid_argument(
-                        "Dreamcast-Haupt-RAM-Alias " +
-                        hex_address(candidate_base) +
-                        " kollidiert mit Region '" +
-                        existing.name + "'."
-                    );
-                }
+        for (
+            std::size_t region_index = 0u;
+            region_index < memory.region_count();
+            ++region_index
+        ) {
+            const auto& existing = memory.region(region_index);
+            if (overlaps(
+                candidate.base_address,
+                candidate.device->size(),
+                existing.base_address,
+                existing.size
+            )) {
+                throw std::invalid_argument(
+                    "Dreamcast-Speicherregion '" + candidate.name +
+                    "' bei " + hex_address(candidate.base_address) +
+                    " kollidiert mit Region '" + existing.name + "'."
+                );
             }
         }
+
+        for (std::size_t earlier = 0u; earlier < index; ++earlier) {
+            const auto& previous = mappings[earlier];
+            if (overlaps(
+                candidate.base_address,
+                candidate.device->size(),
+                previous.base_address,
+                previous.device->size()
+            )) {
+                throw std::logic_error(
+                    "Dreamcast-Speicherabbildungen ueberlappen intern."
+                );
+            }
+        }
+    }
+}
+
+void map_all(
+    Memory& memory,
+    std::vector<PendingMapping> mappings
+) {
+    require_free_mappings(memory, mappings);
+    for (auto& mapping : mappings) {
+        memory.map_region(
+            std::move(mapping.name),
+            mapping.base_address,
+            std::move(mapping.device)
+        );
     }
 }
 
@@ -81,10 +165,11 @@ void require_free_aliases(const Memory& memory) {
 
 std::shared_ptr<LinearMemoryDevice>
 map_dreamcast_main_ram(Memory& memory) {
-    require_free_aliases(memory);
-
     auto main_ram =
         std::make_shared<LinearMemoryDevice>(dreamcast_main_ram_size);
+
+    std::vector<PendingMapping> mappings;
+    mappings.reserve(dreamcast_main_ram_alias_count);
 
     for (const auto area_base : dreamcast_main_ram_area_bases) {
         for (
@@ -92,16 +177,71 @@ map_dreamcast_main_ram(Memory& memory) {
             mirror_index < dreamcast_main_ram_mirrors_per_area;
             ++mirror_index
         ) {
-            const auto base = alias_base(area_base, mirror_index);
-            memory.map_region(
+            const auto base = main_ram_alias_base(area_base, mirror_index);
+            mappings.push_back(PendingMapping{
                 "dreamcast-main-ram-" + hex_address(base),
                 base,
                 main_ram
-            );
+            });
         }
     }
 
+    map_all(memory, std::move(mappings));
     return main_ram;
+}
+
+std::shared_ptr<LinearMemoryDevice>
+map_dreamcast_vram(Memory& memory) {
+    auto vram = std::make_shared<LinearMemoryDevice>(dreamcast_vram_size);
+    auto path_32bit = std::make_shared<Vram32BitMemoryDevice>(vram);
+
+    std::vector<PendingMapping> mappings;
+    mappings.reserve(dreamcast_vram_alias_count);
+
+    for (const auto segment_base : dreamcast_direct_segment_bases) {
+        for (const auto physical_base : dreamcast_vram_64bit_physical_bases) {
+            const auto base = segment_base + physical_base;
+            mappings.push_back(PendingMapping{
+                "dreamcast-vram-64bit-" + hex_address(base),
+                base,
+                vram
+            });
+        }
+        for (const auto physical_base : dreamcast_vram_32bit_physical_bases) {
+            const auto base = segment_base + physical_base;
+            mappings.push_back(PendingMapping{
+                "dreamcast-vram-32bit-" + hex_address(base),
+                base,
+                path_32bit
+            });
+        }
+    }
+
+    map_all(memory, std::move(mappings));
+    return vram;
+}
+
+std::shared_ptr<LinearMemoryDevice>
+map_dreamcast_aica_ram(Memory& memory) {
+    auto aica_ram =
+        std::make_shared<LinearMemoryDevice>(dreamcast_aica_ram_size);
+
+    std::vector<PendingMapping> mappings;
+    mappings.reserve(dreamcast_aica_ram_alias_count);
+
+    for (const auto segment_base : dreamcast_direct_segment_bases) {
+        for (const auto physical_base : dreamcast_aica_ram_physical_bases) {
+            const auto base = segment_base + physical_base;
+            mappings.push_back(PendingMapping{
+                "dreamcast-aica-ram-" + hex_address(base),
+                base,
+                aica_ram
+            });
+        }
+    }
+
+    map_all(memory, std::move(mappings));
+    return aica_ram;
 }
 
 } // namespace katana::runtime
