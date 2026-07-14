@@ -11,7 +11,7 @@ KatanaRecomp besitzt einen durchgaengigen Prototyp-Pfad von Raw- und ELF32-SH-Ei
 ## Teststatus
 
 ```text
-100% tests passed out of 82
+100% tests passed out of 83
 ```
 
 ## Fertiggestellte Roadmap-Tasks
@@ -84,10 +84,11 @@ KatanaRecomp besitzt einen durchgaengigen Prototyp-Pfad von Raw- und ELF32-SH-Ei
 - [x] KR-2007 - v0.20.0 Release-Gate
 - [x] KR-2101 - Runtime aus generiertem Code auslagern
 - [x] KR-2102 - Vollstaendigen CPU-Zustand zentralisieren
+- [x] KR-2103 - Deterministischen Reset-Zustand definieren
 
 ## Naechster Roadmap-Task
 
-- [ ] KR-2103 - Deterministischen Reset-Zustand definieren
+- [ ] KR-2104 - v0.21.0 Release-Gate
 
 ## Aktuelle Einschraenkungen
 

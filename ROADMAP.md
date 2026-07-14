@@ -325,6 +325,13 @@ Release-Gate:
 
 ### v0.21.0 - Runtime-Trennung und vollstaendiger CPU-Zustand
 
+Fortschritt:
+
+- [x] KR-2101 - Runtime aus generiertem Code auslagern
+- [x] KR-2102 - Vollstaendigen CPU-Zustand zentralisieren
+- [x] KR-2103 - Deterministischen Reset-Zustand definieren
+- [ ] KR-2104 - v0.21.0 Release-Gate
+
 Enthalten:
 
 - Runtime als eigene Bibliothek

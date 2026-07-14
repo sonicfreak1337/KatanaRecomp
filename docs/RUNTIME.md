@@ -40,6 +40,27 @@ Architektur- und Runtime-Daten an einer Stelle:
 Die FPU-Baenke speichern vorerst ausschliesslich unveraenderte 32-Bit-Rohwerte.
 Arithmetik, Bankumschaltung und `FPSCR`-Modi folgen in der FPU-Phase.
 
+## Deterministischer CPU-Reset
+
+`katana::runtime::reset_cpu` stellt einen wiederholbaren CPU-Zustand her.
+
+Der Standard-Reset setzt alle Registerbaenke, Systemregister, Ereignisregister,
+Akkumulatoren, FPU-Rohregister und Runtime-Flags auf null. Eine optionale
+`ResetState`-Konfiguration kann folgende Startwerte vorgeben:
+
+- Programmzaehler `PC`
+- Stackpointer `R15`
+- Vektorbasis `VBR`
+- Statusregister `SR`
+- FPU-Statusregister `FPSCR`
+
+`SR` wird dabei ueber dieselbe Maskierungs- und Registerbanklogik geschrieben wie
+ein normaler Statusregistertransfer.
+
+Ein CPU-Reset loescht den Runtime-Speicher absichtlich nicht. Speicherabbild,
+Boot-ROM-Layout und Dreamcast-spezifische Startwerte gehoeren in die spaetere
+Plattformkonfiguration.
+
 ## Weitere Runtime-Grundlage
 
 - `katana::runtime::Memory`

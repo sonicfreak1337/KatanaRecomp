@@ -6,6 +6,7 @@
 
 - KR-2101: Speicher, CPU-Zustand, Statusregisterzugriff und ungeloeste Kontrollflusspfade wurden aus dem generierten C++ in die eigene statische Bibliothek `KatanaRecomp::runtime` mit ABI-Version 1 ausgelagert. Generierte Programme pruefen die ABI beim Kompilieren und werden in allen End-to-End-Tests explizit gegen die Runtime gelinkt.
 - KR-2102: Der zentrale CPU-Zustand besitzt jetzt benannte Registeranzahlen, getrennte `FR`-/`XF`-Rohbitbaenke und `INTEVT`. Die Layoutaenderung wird als Runtime-ABI Version 2 ausgewiesen und durch einen eigenen CPU-Zustands-Test abgesichert.
+- KR-2103: `reset_cpu` stellt alle CPU-Register und Runtime-Flags deterministisch wieder her, akzeptiert optionale Startwerte fuer PC, R15, VBR, SR und FPSCR und bewahrt den Runtime-Speicher.
 
 ## [0.20.0] - 2026-07-14
 

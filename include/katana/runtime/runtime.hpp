@@ -13,6 +13,14 @@ inline constexpr std::size_t general_register_count = 16u;
 inline constexpr std::size_t banked_register_count = 8u;
 inline constexpr std::size_t fpu_register_count = 16u;
 
+struct ResetState {
+    std::uint32_t program_counter = 0u;
+    std::uint32_t stack_pointer = 0u;
+    std::uint32_t vector_base = 0u;
+    std::uint32_t status_register = 0u;
+    std::uint32_t fpscr = 0u;
+};
+
 class Memory {
 public:
     explicit Memory(std::size_t size = 1024u * 1024u);
@@ -66,6 +74,11 @@ struct CpuState {
     [[nodiscard]] std::uint32_t read_sr() const noexcept;
     void write_sr(std::uint32_t value) noexcept;
 };
+
+void reset_cpu(
+    CpuState& cpu,
+    const ResetState& state = ResetState{}
+) noexcept;
 
 [[noreturn]] void unresolved_call(CpuState& cpu, std::uint32_t target);
 [[noreturn]] void unresolved_jump(CpuState& cpu, std::uint32_t target);

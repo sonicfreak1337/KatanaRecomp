@@ -29,7 +29,7 @@ SH-4-Binaerdaten
     -> semantischer Laufzeittest
 `
 
-Der aktuelle Teststand umfasst **82 automatische Tests**.
+Der aktuelle Teststand umfasst **83 automatische Tests**.
 
 Der v0.15-Decoder verwendet eine zentrale Metadatenquelle fuer alle implementierten Opcode-Masken, Operandenformate, Kontrollfluss- und Privileginformationen. `katana-recomp isa-report` berichtet deterministisch ueber den gesamten 16-Bit-Opcode-Raum; Kollisions-, Spezifikations- und Fuzztests sichern die Regeln ab.
 
@@ -55,7 +55,11 @@ die Runtime-ABI beim Kompilieren.
 KR-2102 vervollstaendigt den zentralen CPU-Zustand um getrennte 16er-Baenke fuer
 `FR` und `XF`, das Interrupt-Ereignisregister `INTEVT` und benannte
 Registeranzahlen. Die Layoutaenderung hebt die Runtime-ABI auf Version 2.
-Details stehen in `docs/RUNTIME.md`.
+
+KR-2103 fuehrt einen wiederholbaren CPU-Reset ein. Der Standardzustand setzt alle
+CPU-Register und Runtime-Flags auf null; eine Reset-Konfiguration kann PC, R15,
+VBR, SR und FPSCR vorgeben. Der Runtime-Speicher bleibt bei einem CPU-Reset
+erhalten. Details stehen in `docs/RUNTIME.md`.
 
 ## Implementierte SH-4-Instruktionen
 

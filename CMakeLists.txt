@@ -124,6 +124,18 @@ add_test(
     COMMAND katana-cpu-state-tests
 )
 
+add_executable(katana-reset-tests
+    tests/runtime/reset_tests.cpp
+)
+
+target_link_libraries(katana-reset-tests PRIVATE katana_runtime)
+katana_enable_warnings(katana-reset-tests)
+
+add_test(
+    NAME katana-reset-tests
+    COMMAND katana-reset-tests
+)
+
 add_executable(katana-decoder-tests
     tests/decoder/decoder_tests.cpp
 )
