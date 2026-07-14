@@ -514,33 +514,21 @@ Abhaengigkeiten: KR-2001 bis KR-2006
 
 ## v0.21.0 - Runtime und CPU-Zustand
 
-### [ ] KR-2101 - Runtime aus generiertem Code auslagern
+### [x] KR-2101 - Runtime aus generiertem Code auslagern
 
 Abhaengigkeiten: KR-2007
 
-### [ ] KR-2102 - Vollstaendiger Integer-CPU-Zustand
+### [x] KR-2102 - Vollstaendigen CPU-Zustand zentralisieren
 
 Abhaengigkeiten: KR-2101
 
-### [ ] KR-2103 - Banked Register
+### [x] KR-2103 - Deterministischen Reset-Zustand definieren
 
 Abhaengigkeiten: KR-2102
 
-### [ ] KR-2104 - FPU-Zustand vorbereiten
+### [x] KR-2104 - v0.21.0 Release-Gate
 
-Abhaengigkeiten: KR-2102
-
-### [ ] KR-2105 - Versionierte Runtime-ABI
-
-Abhaengigkeiten: KR-2101 bis KR-2104
-
-### [ ] KR-2106 - Deterministischer Reset
-
-Abhaengigkeiten: KR-2102
-
-### [ ] KR-2107 - v0.21 Release-Gate
-
-Abhaengigkeiten: KR-2101 bis KR-2106
+Abhaengigkeiten: KR-2101 bis KR-2103
 
 ---
 
@@ -548,7 +536,7 @@ Abhaengigkeiten: KR-2101 bis KR-2106
 
 ### [ ] KR-2201 - Regionbasierter Bus
 
-Abhaengigkeiten: KR-2107
+Abhaengigkeiten: KR-2104
 
 ### [ ] KR-2202 - RAM und Spiegelungen
 
@@ -580,7 +568,7 @@ Abhaengigkeiten: KR-2201 bis KR-2206
 
 ### [ ] KR-2301 - SR-Felder und Interruptmasken
 
-Abhaengigkeiten: KR-2107
+Abhaengigkeiten: KR-2104
 
 ### [ ] KR-2302 - Exception-Eintritt
 
@@ -744,7 +732,7 @@ Abhaengigkeiten: KR-2802, KR-2903, KR-3101
 
 ### [ ] KR-3201 - Backend-Interface
 
-Abhaengigkeiten: KR-2107
+Abhaengigkeiten: KR-2104
 
 ### [ ] KR-3202 - C++-Backend migrieren
 
@@ -752,7 +740,7 @@ Abhaengigkeiten: KR-3201
 
 ### [ ] KR-3203 - ABI-Faehigkeitspruefung
 
-Abhaengigkeiten: KR-3201, KR-2105
+Abhaengigkeiten: KR-3201, KR-2104
 
 ### [ ] KR-3301 - Translation-Unit-Partitionierung
 
@@ -772,7 +760,7 @@ Abhaengigkeiten: KR-3303
 
 ### [ ] KR-3401 - Laufzeit-Funktionstabelle
 
-Abhaengigkeiten: KR-1807, KR-2105
+Abhaengigkeiten: KR-1807, KR-2104
 
 ### [ ] KR-3402 - Indirekter Call- und Jump-Dispatch
 
@@ -816,7 +804,7 @@ Abhaengigkeiten: KR-3202
 
 ### [ ] KR-3603 - Crashberichte
 
-Abhaengigkeiten: KR-2105
+Abhaengigkeiten: KR-2104
 
 ### [ ] KR-3604 - Tracing und Watchpoints
 

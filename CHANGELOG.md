@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.21.0] - 2026-07-14
+
 ### Hinzugefuegt
 
 - KR-2101: Speicher, CPU-Zustand, Statusregisterzugriff und ungeloeste Kontrollflusspfade wurden aus dem generierten C++ in die eigene statische Bibliothek `KatanaRecomp::runtime` mit ABI-Version 1 ausgelagert. Generierte Programme pruefen die ABI beim Kompilieren und werden in allen End-to-End-Tests explizit gegen die Runtime gelinkt.

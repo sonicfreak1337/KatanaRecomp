@@ -1,10 +1,10 @@
 # KatanaRecomp
 
-Aktuelle Pre-Alpha-Version: `0.20.0`
+Aktuelle Pre-Alpha-Version: `0.21.0`
 
 KatanaRecomp ist ein unabhaengiges, in C++20 entwickeltes Framework fuer die statische Rekompilierung von Sega-Dreamcast-SH-4-Code.
 
-Das Projekt befindet sich in einer fruehen Pre-Alpha-Phase. Der aktuelle Stand ist **Version 0.20.0**.
+Das Projekt befindet sich in einer fruehen Pre-Alpha-Phase. Der aktuelle Stand ist **Version 0.21.0**.
 
 KatanaRecomp ist kein Emulator, kein ISO-Loader und kein Paket fuer kommerzielle Spieldaten. BIOS-Dateien, Disc-Images, urheberrechtlich geschuetzte Assets und automatisch erzeugter Code aus kommerziellen Spielen gehoeren nicht in dieses Repository.
 
@@ -47,19 +47,14 @@ Alle Paesse bleiben einzeln schaltbar, verifizieren ihre IR-Grenzen und erhalten
 sichtbare CPU- und Speichereffekte. `emit-cpp --no-opt` deaktiviert die Pipeline;
 `--dump-ir` schreibt deterministische Vorher-/Nachher-Dumps.
 
-KR-2101 beginnt die v0.21-Runtime-Grundlage: Speicher, CPU-Zustand und sichtbare
-Fehlerpfade liegen in `KatanaRecomp::runtime`. Generierter C++-Code enthaelt nur
-noch die SH-4-Programmlogik, bindet `katana/runtime/runtime.hpp` ein und prueft
-die Runtime-ABI beim Kompilieren.
-
-KR-2102 vervollstaendigt den zentralen CPU-Zustand um getrennte 16er-Baenke fuer
-`FR` und `XF`, das Interrupt-Ereignisregister `INTEVT` und benannte
-Registeranzahlen. Die Layoutaenderung hebt die Runtime-ABI auf Version 2.
-
-KR-2103 fuehrt einen wiederholbaren CPU-Reset ein. Der Standardzustand setzt alle
-CPU-Register und Runtime-Flags auf null; eine Reset-Konfiguration kann PC, R15,
-VBR, SR und FPSCR vorgeben. Der Runtime-Speicher bleibt bei einem CPU-Reset
-erhalten. Details stehen in `docs/RUNTIME.md`.
+v0.21 trennt die Runtime vollstaendig vom generierten C++-Code. Speicher,
+CPU-Zustand und sichtbare Kontrollflussfehler liegen in der statischen Bibliothek
+`KatanaRecomp::runtime`; generierte Programme pruefen die versionierte ABI beim
+Kompilieren. Der zentrale SH-4-Zustand umfasst allgemeine und banked Register,
+System- und Ereignisregister sowie getrennte `FR`-/`XF`-Rohbitbaenke. Ein
+konfigurierbarer, deterministischer CPU-Reset setzt den Architekturzustand
+reproduzierbar zurueck und bewahrt den Runtime-Speicher. Details stehen in
+`docs/RUNTIME.md`.
 
 ## Implementierte SH-4-Instruktionen
 

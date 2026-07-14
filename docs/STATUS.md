@@ -1,8 +1,8 @@
 # Projektstatus
 
-Version: 0.20.0
+Version: 0.21.0
 Phase: Pre-Alpha
-Aktiver Meilenstein: v0.21.0 - Runtime und CPU-Zustand
+Aktiver Meilenstein: v0.22.0 - Dreamcast-Speicherbus
 
 ## Zusammenfassung
 
@@ -85,10 +85,11 @@ KatanaRecomp besitzt einen durchgaengigen Prototyp-Pfad von Raw- und ELF32-SH-Ei
 - [x] KR-2101 - Runtime aus generiertem Code auslagern
 - [x] KR-2102 - Vollstaendigen CPU-Zustand zentralisieren
 - [x] KR-2103 - Deterministischen Reset-Zustand definieren
+- [x] KR-2104 - v0.21.0 Release-Gate
 
 ## Naechster Roadmap-Task
 
-- [ ] KR-2104 - v0.21.0 Release-Gate
+- [ ] KR-2201 - Regionbasierten Dreamcast-Speicherbus einfuehren
 
 ## Aktuelle Einschraenkungen
 
