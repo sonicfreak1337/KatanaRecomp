@@ -402,7 +402,7 @@ Abhaengigkeiten: KR-1701
 
 Abhaengigkeiten: KR-1702
 
-### [ ] KR-1705 - Ueberlappende Bereiche
+### [x] KR-1705 - Ueberlappende Bereiche
 
 Abhaengigkeiten: KR-1702
 

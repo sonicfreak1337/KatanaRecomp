@@ -39,11 +39,22 @@ struct FunctionCandidate {
     std::vector<FunctionOrigin> origins;
 };
 
+enum class AnalysisConflictKind {
+    FunctionEntryInDelaySlot
+};
+
+struct AnalysisConflict {
+    std::uint32_t address = 0u;
+    std::uint64_t size = 0u;
+    AnalysisConflictKind kind = AnalysisConflictKind::FunctionEntryInDelaySlot;
+};
+
 struct RecursiveAnalysisResult {
     std::vector<katana::sh4::DisassemblyLine> instructions;
     std::vector<ClassifiedRange> ranges;
     std::vector<ClassifiedRange> unreachable_code;
     std::vector<FunctionCandidate> functions;
+    std::vector<AnalysisConflict> conflicts;
 };
 
 [[nodiscard]] RecursiveAnalysisResult analyze_reachable_code(
@@ -53,5 +64,6 @@ struct RecursiveAnalysisResult {
 [[nodiscard]] const char* discovered_byte_kind_name(DiscoveredByteKind kind) noexcept;
 [[nodiscard]] const char* function_origin_name(FunctionOrigin origin) noexcept;
 [[nodiscard]] const char* analysis_confidence_name(AnalysisConfidence confidence) noexcept;
+[[nodiscard]] const char* analysis_conflict_kind_name(AnalysisConflictKind kind) noexcept;
 
 }

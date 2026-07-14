@@ -40,3 +40,11 @@ deterministisch zusammengefuehrt und die hoechste Konfidenz bleibt erhalten.
 Committed Bytes eines ausfuehrbaren Code-Segments, die keine entdeckte
 Instruktion abdeckt, werden zusaetzlich als `unreachable_code` ausgegeben.
 Zero-Fill, Datensegmente und unbekannte Segmente gehoeren nicht zu dieser Menge.
+
+## Ueberlappende Rollen
+
+Ein Funktions- oder Image-Einstieg innerhalb eines Delay Slots ist eine
+mehrdeutige Rollenbelegung. Die Analyse verarbeitet die Adresse weiterhin nur
+einmal und gibt einen deterministischen Konfliktbereich mit dem Grund
+`function-entry-in-delay-slot` aus. Physisch ueberlappende Image-Segmente bleiben
+bereits durch das Executable-Image-Modell ungueltig.

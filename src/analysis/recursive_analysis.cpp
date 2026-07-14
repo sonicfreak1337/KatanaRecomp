@@ -253,7 +253,13 @@ RecursiveAnalysisResult analyze_reachable_code(const katana::io::ExecutableImage
     classify_image(image, discovered, result);
     result.functions.reserve(function_candidates.size());
     for (auto& [address, candidate] : function_candidates) {
-        static_cast<void>(address);
+        if (delay_slots.contains(address)) {
+            result.conflicts.push_back({
+                address,
+                2u,
+                AnalysisConflictKind::FunctionEntryInDelaySlot
+            });
+        }
         result.functions.push_back(std::move(candidate));
     }
     return result;
@@ -283,6 +289,14 @@ const char* analysis_confidence_name(const AnalysisConfidence confidence) noexce
         case AnalysisConfidence::Medium: return "medium";
         case AnalysisConfidence::High: return "high";
         case AnalysisConfidence::Certain: return "certain";
+    }
+    return "unknown";
+}
+
+const char* analysis_conflict_kind_name(const AnalysisConflictKind kind) noexcept {
+    switch (kind) {
+        case AnalysisConflictKind::FunctionEntryInDelaySlot:
+            return "function-entry-in-delay-slot";
     }
     return "unknown";
 }

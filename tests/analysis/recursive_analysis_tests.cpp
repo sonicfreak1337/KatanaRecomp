@@ -111,6 +111,28 @@ int main() {
     }
     require(rejected, "Ein Einstiegspunkt in Daten wurde akzeptiert.");
 
+    ExecutableImage overlap;
+    overlap.add_segment({
+        ".text", 0x1000u, 0u, 12u, SegmentKind::Code, {true, false, true},
+        {0x02u, 0xB0u, 0x09u, 0x00u, 0x0Bu, 0x00u, 0x09u, 0x00u, 0x0Bu, 0x00u, 0x09u, 0x00u}
+    });
+    overlap.add_entry_point(0x1002u);
+    overlap.add_symbol({"owner", 0x1000u, 4u, SymbolKind::Function, SymbolBinding::Global});
+    const auto overlap_result = katana::analysis::analyze_reachable_code(overlap);
+    require(
+        overlap_result.conflicts.size() == 1u
+            && overlap_result.conflicts[0].address == 0x1002u
+            && overlap_result.conflicts[0].size == 2u
+            && overlap_result.conflicts[0].kind
+                == katana::analysis::AnalysisConflictKind::FunctionEntryInDelaySlot,
+        "Ueberlappende Funktions- und Delay-Slot-Rollen wurden nicht gemeldet."
+    );
+    require(
+        std::string(katana::analysis::analysis_conflict_kind_name(overlap_result.conflicts[0].kind))
+            == "function-entry-in-delay-slot",
+        "Konfliktname ist instabil."
+    );
+
     std::cout << "KR-1701 Worklist ab Einstiegspunkten erfolgreich.\n";
     return EXIT_SUCCESS;
 }
