@@ -8,7 +8,7 @@ Dieses Dokument zerlegt die Roadmap in issue-taugliche Arbeitspakete.
 - Abhaengigkeiten muessen vor Beginn abgeschlossen sein.
 - Jeder Task braucht Tests.
 - Scope-Erweiterungen werden als neuer Task dokumentiert.
-- Status wird mit `[ ]`, `[~]`, `[x]`, `[!]` gepflegt.
+- Status wird mit `[ ]`, `[~]`, `[x]`, `[!]` oder `[?]` fuer offene Architekturentscheidungen gepflegt.
 
 ## Empfohlene naechste Reihenfolge
 
@@ -786,6 +786,61 @@ Abhaengigkeiten: KR-1607, KR-2601
 
 Abhaengigkeiten: KR-2601
 
+### [?] KR-2604 - Firmware-Betriebsart und BIOS-ABI festlegen
+
+Abhaengigkeiten: KR-2204, KR-2601
+
+Umfang:
+
+- BIOS-freien Homebrew-Direkteinstieg als verpflichtenden Standardpfad festhalten
+- HLE-BIOS-ABI und optionalen LLE-Firmwarepfad anhand Nutzen, Komplexitaet und Testbarkeit bewerten
+- dynamische BIOS-Sprungvektoren im RAM als Bootergebnis statt als statische ROM-Funktionen modellieren
+- benoetigte Reset-, Cache-, MMIO- und Syscall-Vertraege pro unterstuetztem Pfad dokumentieren
+- proprietaere Abbilder ausschliesslich als optionale, lokale Nutzereingaben behandeln
+
+Akzeptanz:
+
+- die gewaehlten Firmware-Betriebsarten und ihre Grenzen sind als Architekturentscheidung dokumentiert
+- der Standardpfad funktioniert ohne BIOS- oder Flash-Datei
+- fuer jeden optionalen Pfad sind konkrete Folgeabhaengigkeiten und eine sichtbare Fehlerstrategie benannt
+- BIOS-, Flash-, Font-, PVR- oder andere Firmwaredaten gelangen weder in Tests noch in Releases
+
+### [ ] KR-2605 - PREF und bootrelevante Cacheeffekte
+
+Abhaengigkeiten: KR-1506, KR-2207, KR-2604
+
+Umfang:
+
+- `PREF @Rn` in Metadaten, Decoder, IR, C++-Codegen und Runtime abbilden
+- normales Prefetch-Verhalten und adressabhaengige Store-Queue-Nebenwirkungen explizit unterscheiden
+- zusaetzliche Cacheoperationen nur aufnehmen, wenn der unterstuetzte Bootpfad sie nachweislich benoetigt
+- Instruktions-, IR-, Runtime- und End-to-End-Tests ausschliesslich mit synthetischen Fixtures
+
+Akzeptanz:
+
+- Opcode-Muster `0000nnnn10000011` wird fuer alle Register korrekt dekodiert
+- `PREF` beendet die rekursive Analyse eines sonst gueltigen Pfades nicht mehr als unbekannte Instruktion
+- beobachtbare Speicher- oder Store-Queue-Effekte sind deterministisch getestet
+- nicht modellierte Cacheeffekte werden dokumentiert und nicht stillschweigend als vollstaendig emuliert ausgegeben
+
+### [ ] KR-2606 - Zustandsbehaftetes Flash-Geraetemodell
+
+Abhaengigkeiten: KR-2204, KR-2205, KR-2604
+
+Umfang:
+
+- das lineare Flash-Backing um die fuer den gewaehlten Plattformpfad erforderlichen Programmier-, Loesch- und Kommandozustaende ergaenzen
+- Lesezugriffe, Schreibschutz, ungueltige Sequenzen und Reset des Geraetezustands sichtbar definieren
+- persistente Aenderungen nur in einer Arbeitskopie oder Copy-on-write-Schicht zulassen
+- synthetische Tests fuer erlaubte Bituebergaenge, Loeschen, fehlerhafte Sequenzen und Neustartverhalten
+
+Akzeptanz:
+
+- normale Bus-Schreibzugriffe umgehen das aktivierte Flash-Protokoll nicht
+- das urspruengliche Nutzerabbild bleibt bytegenau unveraendert
+- deterministische Tests benoetigen keine echte Flash-Datei und keine konsolenspezifischen Daten
+- nicht unterstuetzte Herstellerkommandos schlagen sichtbar und reproduzierbar fehl
+
 ### [ ] KR-2701 - Maple-Bus
 
 Abhaengigkeiten: KR-2601
@@ -914,6 +969,25 @@ Abhaengigkeiten: KR-3402
 
 Abhaengigkeiten: KR-2207, KR-3402
 
+### [ ] KR-3405 - Alias- und kopierbewusster Firmware-Handoff
+
+Abhaengigkeiten: KR-1807, KR-2207, KR-2605, KR-3402, KR-3404
+
+Umfang:
+
+- physisch identische P1-/P2-Firmware-Aliase kontrolliert auf eine kanonische Herkunft abbilden
+- ROM-nach-RAM-Codekopien mit Quellbereich, Zielbereich und Provenienz darstellen
+- Analyse und Dispatch ueber gleichzeitig gemappte ROM-, RAM-, Flash- und MMIO-Segmente verbinden
+- indirekte Spruenge in kopierten Code aufloesen oder mit einem kontrollierten Fallback ausfuehren
+- dynamisch installierte BIOS-ABI-Vektoren im RAM als Laufzeitsymbole kenntlich machen
+
+Akzeptanz:
+
+- ein synthetischer Resetpfad kann zwischen P2- und P1-ROM-Alias wechseln, ohne Funktionen doppelt zu erfinden
+- ein kopierter Bootstrap-Block wird an seiner RAM-Zieladresse ausgefuehrt und behaelt nachvollziehbare ROM-Provenienz
+- unsichere oder veraenderte Kopien werden nicht als statisch bewiesen markiert
+- der Task ist fuer den BIOS-freien Direkteinstieg optional und wird nur fuer einen laut KR-2604 unterstuetzten LLE-Pfad zum Release-Blocker
+
 ---
 
 ## v0.35.0 bis v0.37.0 - Werkzeuge und Qualitaet
@@ -953,6 +1027,25 @@ Abhaengigkeiten: KR-2206, KR-3603
 ### [ ] KR-3605 - CFG- und Callgraph-Export
 
 Abhaengigkeiten: KR-1706
+
+### [ ] KR-3606 - Sichere Firmware- und Flash-Diagnostik
+
+Abhaengigkeiten: KR-2204, KR-3503
+
+Umfang:
+
+- Groesse und optional deklarierte Hashes lokaler BIOS- und Flash-Eingaben pruefen
+- Firmwarebereiche konservativ als Code, Daten oder unbekannt berichten, ohne das gesamte ROM linear zu dekodieren
+- Flash-Header, Partitionen, logische Blockgenerationen und CRCs read-only validieren
+- Serien-, Factory-, Netzwerk- und andere konsolenspezifische Felder standardmaessig redigieren
+- maschinenlesbare Berichte ohne eingebettete Firmwarebytes oder extrahierte Assets erzeugen
+
+Akzeptanz:
+
+- die Diagnose veraendert weder Eingabedatei noch Runtime-Arbeitskopie
+- Rohwerte sensibler Flash-Felder erscheinen nur nach einer ausdruecklichen lokalen Opt-in-Option
+- Tests verwenden ausschliesslich kleine synthetische Abbilder
+- Berichte enthalten keine BIOS-Schriften, PVR-Texturen oder andere urheberrechtlich geschuetzte Nutzdaten
 
 ### [ ] KR-3701 - Windows- und Linux-CI
 

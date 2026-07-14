@@ -486,10 +486,24 @@ Release-Gate:
 
 ### v0.26.0 - Boot und Homebrew-Einstieg
 
+Fortschritt:
+
+- [ ] KR-2601 - Plattformkonfiguration und Bootzustand
+- [ ] KR-2602 - Homebrew-Raw- und ELF-Start
+- [ ] KR-2603 - Minimales Plattformlogging
+- [?] KR-2604 - Firmware-Betriebsart und BIOS-ABI festlegen
+- [ ] KR-2605 - PREF und bootrelevante Cacheeffekte
+- [ ] KR-2606 - Zustandsbehaftetes Flash-Geraetemodell
+
 Enthalten:
 
 - Plattformkonfiguration
 - definierter Bootzustand
+- standardmaessig BIOS-freier Direkteinstieg fuer Homebrew
+- dokumentierte Entscheidung zwischen Direkteinstieg, HLE-BIOS-ABI und optionalem LLE-Firmwarepfad
+- optionale, ausschliesslich vom Nutzer bereitgestellte BIOS- und Flash-Abbilder als externe Eingaben
+- `PREF @Rn` und die fuer den gewaehlten Bootpfad beobachtbaren Cacheeffekte
+- Flash-Programmierung und -Loeschung ueber ein zustandsbehaftetes Geraetemodell mit unveraendertem Quellabbild
 - Start selbst bereitgestellter Raw- und ELF-Homebrew
 - minimales Logging
 - Fehlerberichte fuer fehlende Segmente oder Einstiegspunkte
@@ -557,6 +571,8 @@ Release-Gate fuer Phase 6:
 - ein frei lizenzierter Homebrew-Vertical-Slice zeigt Bild, nimmt Eingabe an und erzeugt Audio
 - alle verwendeten Testprogramme duerfen verteilt werden
 - Plattformmodule koennen einzeln getestet werden
+- der normale Homebrew-Pfad benoetigt kein proprietaeres BIOS- oder Flash-Abbild
+- optionale Firmwarepfade veraendern niemals das vom Nutzer bereitgestellte Quellabbild
 
 ## Phase 7: Codegenerator und Dispatch
 
@@ -590,6 +606,9 @@ Enthalten:
 - kontrollierter Fallback fuer ungeloeste Stellen
 - optionaler kleiner Interpreter nur fuer nicht rekonstruierbare Pfade
 - Erkennung selbstmodifizierenden Codes
+- KR-3405: kontrollierte Normalisierung physisch identischer Firmware-Aliase
+- explizite Behandlung nach RAM kopierter oder zur Laufzeit erzeugter Codebereiche
+- optionaler LLE-Firmware-Handoff von ROM nach RAM, falls KR-2604 diesen Betriebsmodus vorsieht
 - klare Abbruchstrategie, wenn Sicherheit nicht garantiert werden kann
 
 ## Phase 8: Werkzeuge und Qualitaet
@@ -619,6 +638,7 @@ Enthalten:
 - Callgraph-Export
 - Watchpoints
 - deterministische Replays
+- KR-3606: read-only Firmware- und Flash-Inspektion mit Groessen-/Hashpruefung, Partitions-/CRC-Diagnose und standardmaessiger Redaktion sensibler Felder
 
 ### v0.37.0 - CI, Fuzzing und reproduzierbare Builds
 
