@@ -398,7 +398,7 @@ Abhaengigkeiten: KR-1701
 
 Abhaengigkeiten: KR-1701
 
-### [ ] KR-1704 - Nicht erreichbare Bereiche
+### [x] KR-1704 - Nicht erreichbare Bereiche
 
 Abhaengigkeiten: KR-1702
 

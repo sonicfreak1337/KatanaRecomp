@@ -72,6 +72,12 @@ int main() {
     require(result.ranges[2].kind == katana::analysis::DiscoveredByteKind::Data, "Datensegment wurde falsch klassifiziert.");
     require(result.ranges[3].kind == katana::analysis::DiscoveredByteKind::Unknown, "Unknown-Segment wurde falsch klassifiziert.");
     require(
+        result.unreachable_code.size() == 1u
+            && result.unreachable_code[0].start_address == 0x8C01000Cu
+            && result.unreachable_code[0].size == 2u,
+        "Der nicht erreichbare committed Codebereich wurde falsch ermittelt."
+    );
+    require(
         std::string(katana::analysis::discovered_byte_kind_name(result.ranges[2].kind)) == "data",
         "Klassifikationsname ist instabil."
     );

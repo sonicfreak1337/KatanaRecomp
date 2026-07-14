@@ -34,3 +34,9 @@ Funktionskandidaten speichern alle beobachteten Herkunftsgründe. Image-
 Einstiegspunkte sind `certain`; gueltige direkte Callziele und Funktionssymbole
 sind `high`. Treffen mehrere Gruende auf dieselbe Adresse, werden ihre Evidenzen
 deterministisch zusammengefuehrt und die hoechste Konfidenz bleibt erhalten.
+
+## Nicht erreichbare Bereiche
+
+Committed Bytes eines ausfuehrbaren Code-Segments, die keine entdeckte
+Instruktion abdeckt, werden zusaetzlich als `unreachable_code` ausgegeben.
+Zero-Fill, Datensegmente und unbekannte Segmente gehoeren nicht zu dieser Menge.

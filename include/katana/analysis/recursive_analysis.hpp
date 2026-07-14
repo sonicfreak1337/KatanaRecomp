@@ -42,6 +42,7 @@ struct FunctionCandidate {
 struct RecursiveAnalysisResult {
     std::vector<katana::sh4::DisassemblyLine> instructions;
     std::vector<ClassifiedRange> ranges;
+    std::vector<ClassifiedRange> unreachable_code;
     std::vector<FunctionCandidate> functions;
 };
 

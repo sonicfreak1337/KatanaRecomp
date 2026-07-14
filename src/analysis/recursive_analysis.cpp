@@ -86,6 +86,7 @@ void classify_image(
         }
 
         auto cursor = segment_start;
+        const auto committed_end = segment_start + segment.bytes.size();
         for (const auto& [address, line] : discovered) {
             static_cast<void>(line);
             if (!segment.contains(address, 2u)) {
@@ -93,10 +94,22 @@ void classify_image(
             }
             const auto instruction_start = static_cast<std::uint64_t>(address);
             add_range(result.ranges, cursor, instruction_start, DiscoveredByteKind::Unknown);
+            add_range(
+                result.unreachable_code,
+                cursor,
+                std::min(instruction_start, committed_end),
+                DiscoveredByteKind::Unknown
+            );
             add_range(result.ranges, instruction_start, instruction_start + 2u, DiscoveredByteKind::Code);
             cursor = instruction_start + 2u;
         }
         add_range(result.ranges, cursor, segment_end, DiscoveredByteKind::Unknown);
+        add_range(
+            result.unreachable_code,
+            cursor,
+            committed_end,
+            DiscoveredByteKind::Unknown
+        );
     }
 }
 
