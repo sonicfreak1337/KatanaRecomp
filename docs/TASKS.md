@@ -474,7 +474,7 @@ Abhaengigkeiten: KR-1901 bis KR-1904
 
 Abhaengigkeiten: KR-1905
 
-### [ ] KR-1907 - v0.19 Release-Gate
+### [x] KR-1907 - v0.19 Release-Gate
 
 Abhaengigkeiten: KR-1901 bis KR-1906
 

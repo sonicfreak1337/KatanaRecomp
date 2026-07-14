@@ -1,10 +1,10 @@
 # KatanaRecomp
 
-Aktuelle Pre-Alpha-Version: `0.18.0`
+Aktuelle Pre-Alpha-Version: `0.19.0`
 
 KatanaRecomp ist ein unabhaengiges, in C++20 entwickeltes Framework fuer die statische Rekompilierung von Sega-Dreamcast-SH-4-Code.
 
-Das Projekt befindet sich in einer fruehen Pre-Alpha-Phase. Der aktuelle Stand ist **Version 0.18.0**.
+Das Projekt befindet sich in einer fruehen Pre-Alpha-Phase. Der aktuelle Stand ist **Version 0.19.0**.
 
 KatanaRecomp ist kein Emulator, kein ISO-Loader und kein Paket fuer kommerzielle Spieldaten. BIOS-Dateien, Disc-Images, urheberrechtlich geschuetzte Assets und automatisch erzeugter Code aus kommerziellen Spielen gehoeren nicht in dieses Repository.
 
@@ -29,7 +29,7 @@ SH-4-Binaerdaten
     -> semantischer Laufzeittest
 `
 
-Der aktuelle Teststand umfasst **76 automatische Tests**.
+Der aktuelle Teststand umfasst **77 automatische Tests**.
 
 Der v0.15-Decoder verwendet eine zentrale Metadatenquelle fuer alle implementierten Opcode-Masken, Operandenformate, Kontrollfluss- und Privileginformationen. `katana-recomp isa-report` berichtet deterministisch ueber den gesamten 16-Bit-Opcode-Raum; Kollisions-, Spezifikations- und Fuzztests sichern die Regeln ab.
 
@@ -38,6 +38,8 @@ v0.16 fuehrt ein formatneutrales Executable Image mit Code-, Daten- und Unknown-
 v0.17 entdeckt Code rekursiv ab Image-Einstiegspunkten, direkten Calls und Funktionssymbolen. Analyseberichte trennen Code, Daten und unbekannte beziehungsweise unerreichbare Bereiche, begruenden Funktionskandidaten und melden mehrdeutige Delay-Slot-Rollen. `katana-recomp analyze <Manifest>` gibt diesen Bericht aus; `disasm` bleibt der lineare Diagnosemodus.
 
 v0.18 verfolgt lokale Registerkonstanten und loest einfache indirekte `JMP`-/`JSR`-Ziele nur bei nachgewiesenem ausfuehrbarem Code auf. Bekannte, begrenzte absolute Jump Tables werden vollstaendig validiert. `katana-recomp analyze <Manifest> [Override-Datei]` trennt sichere und offene Stellen und unterstuetzt deterministische, versionierte Nutzerhinweise.
+
+v0.19 fuehrt Katana-IR Version 2 mit expliziten Operandbreiten, Status-, Speicher- und Akkumulatoreffekten sowie normalisierten Delay Slots ein. Ein verpflichtender Verifier lehnt ungueltige Funktionen vor Codegen ab. `katana-recomp ir` und `ir-json` liefern deterministisch sortierte, vollstaendige IR-Dumps.
 
 ## Implementierte SH-4-Instruktionen
 

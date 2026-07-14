@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.25)
 
 project(
     KatanaRecomp
-    VERSION 0.18.0
+    VERSION 0.19.0
     DESCRIPTION "Dreamcast SH-4 static recompilation framework"
     LANGUAGES CXX
 )
@@ -466,6 +466,14 @@ katana_enable_warnings(katana-ir-serialization-tests)
 add_test(
     NAME katana-ir-serialization-tests
     COMMAND katana-ir-serialization-tests
+)
+
+add_test(
+    NAME katana-ir-cli-tests
+    COMMAND ${CMAKE_COMMAND}
+        -DKATANA_RECOMP=$<TARGET_FILE:katana-recomp>
+        -DFIXTURE=${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/codegen_execution.bin
+        -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/cmake/check_ir_cli.cmake
 )
 
 add_executable(katana-cpp-emitter-tests
