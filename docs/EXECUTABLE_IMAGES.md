@@ -52,3 +52,18 @@ ADDRESS KIND NAME [SIZE]
 ```
 
 Adressen und Groessen sind hexadezimal. `KIND` ist `FUNC`, `OBJECT` oder `UNKNOWN`; die Kurzformen `F`, `O` und `U` sind ebenfalls erlaubt. Leerzeilen und mit `#` beginnende Kommentare werden ignoriert. Parserfehler nennen Datei und Zeile, doppelte Namen sind ungueltig.
+
+## Relocations
+
+Das Image-Modell speichert Relocation-Adresse, rohen ABI-Typ, normalisierte Art,
+Symbol, impliziten Addend und ein optionales Anwendungsergebnis. Der ELF32-SH-
+Loader liest `SHT_REL` und unterstuetzt zunaechst die beiden 32-Bit-Typen:
+
+- `R_SH_DIR32` (1): `S + A`
+- `R_SH_REL32` (2): `S + A - P`
+
+`S` ist die Symboladresse, `A` der Little-Endian-Addend am Ziel und `P` die
+Relocation-Adresse. Ergebnisse werden mit 32-Bit-Wraparound in die geladenen
+Segmentdaten geschrieben. Unbekannte Typen bleiben als `Unsupported` im Image
+sichtbar und veraendern keine Bytes. Ungeloeste Symbole, ungueltige Tabellen und
+Ziele ausserhalb committed Segmentdaten schlagen mit Datei, Offset und Ursache fehl.

@@ -71,6 +71,16 @@ int main() {
     require(image.find_segment(0x8C0100FFu, 2u) == nullptr, "Ein Zugriff ueber das Segmentende wurde akzeptiert.");
     require(std::string(segment_kind_name(SegmentKind::Unknown)) == "unknown", "Unknown-Name ist instabil.");
 
+    ExecutableImage relocated;
+    relocated.add_segment({".data", 0x1000u, 0u, 4u, SegmentKind::Data, {true, true, false}, {1u, 2u, 3u, 4u}});
+    require(relocated.read_u32_le(0x1000u) == 0x04030201u, "Little-Endian-Lesezugriff ist falsch.");
+    relocated.write_u32_le(0x1000u, 0x89ABCDEFu);
+    require(relocated.read_u32_le(0x1000u) == 0x89ABCDEFu, "Little-Endian-Schreibzugriff ist falsch.");
+    relocated.add_relocation({0x1000u, 1u, RelocationKind::Absolute32, "target", 0x2000u, 4, 0x2004u});
+    require(relocated.relocations().size() == 1u, "Relocation wurde nicht gespeichert.");
+    require(relocated.relocations()[0].applied_value == 0x2004u, "Relocation-Ergebnis ging verloren.");
+    require(std::string(relocation_kind_name(RelocationKind::PcRelative32)) == "pc-relative32", "Relocation-Name ist instabil.");
+
     ExecutableImage top;
     top.add_segment({"top", 0xFFFFFFFFu, 0u, 1u, SegmentKind::Unknown, {}, {0u}});
     require(top.segments()[0].end_address() == 0x100000000ull, "Das obere Adressraumende wurde abgeschnitten.");

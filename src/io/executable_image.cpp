@@ -121,6 +121,20 @@ void ExecutableImage::add_symbol(ImageSymbol symbol) {
     );
 }
 
+void ExecutableImage::add_relocation(ImageRelocation relocation) {
+    relocations_.push_back(std::move(relocation));
+    std::sort(
+        relocations_.begin(),
+        relocations_.end(),
+        [](const ImageRelocation& first, const ImageRelocation& second) {
+            if (first.address != second.address) {
+                return first.address < second.address;
+            }
+            return first.raw_type < second.raw_type;
+        }
+    );
+}
+
 const std::filesystem::path& ExecutableImage::source_path() const noexcept {
     return source_path_;
 }
@@ -135,6 +149,10 @@ std::span<const std::uint32_t> ExecutableImage::entry_points() const noexcept {
 
 std::span<const ImageSymbol> ExecutableImage::symbols() const noexcept {
     return symbols_;
+}
+
+std::span<const ImageRelocation> ExecutableImage::relocations() const noexcept {
+    return relocations_;
 }
 
 const ImageSymbol* ExecutableImage::find_symbol(const std::string_view name) const noexcept {
@@ -158,6 +176,40 @@ const ImageSegment* ExecutableImage::find_segment(
     return nullptr;
 }
 
+std::uint32_t ExecutableImage::read_u32_le(const std::uint32_t address) const {
+    const auto* segment = find_segment(address, 4u);
+    if (segment == nullptr) {
+        throw std::out_of_range("32-Bit-Lesezugriff liegt ausserhalb der Image-Segmente.");
+    }
+    const auto offset = segment->byte_offset(address);
+    if (!offset.has_value() || segment->bytes.size() < 4u
+        || *offset > segment->bytes.size() - 4u) {
+        throw std::out_of_range("32-Bit-Lesezugriff liegt ausserhalb der committed Segmentdaten.");
+    }
+    return static_cast<std::uint32_t>(segment->bytes[*offset])
+        | (static_cast<std::uint32_t>(segment->bytes[*offset + 1u]) << 8u)
+        | (static_cast<std::uint32_t>(segment->bytes[*offset + 2u]) << 16u)
+        | (static_cast<std::uint32_t>(segment->bytes[*offset + 3u]) << 24u);
+}
+
+void ExecutableImage::write_u32_le(const std::uint32_t address, const std::uint32_t value) {
+    for (auto& segment : segments_) {
+        if (!segment.contains(address, 4u)) {
+            continue;
+        }
+        const auto offset = segment.byte_offset(address);
+        if (!offset.has_value() || segment.bytes.size() < 4u
+            || *offset > segment.bytes.size() - 4u) {
+            throw std::out_of_range("32-Bit-Schreibzugriff liegt ausserhalb der committed Segmentdaten.");
+        }
+        for (std::size_t index = 0; index < 4u; ++index) {
+            segment.bytes[*offset + index] = static_cast<std::uint8_t>(value >> (index * 8u));
+        }
+        return;
+    }
+    throw std::out_of_range("32-Bit-Schreibzugriff liegt ausserhalb der Image-Segmente.");
+}
+
 const char* segment_kind_name(const SegmentKind kind) noexcept {
     switch (kind) {
         case SegmentKind::Unknown: return "unknown";
@@ -174,6 +226,16 @@ const char* symbol_kind_name(const SymbolKind kind) noexcept {
         case SymbolKind::Object: return "object";
     }
     return "unknown";
+}
+
+const char* relocation_kind_name(const RelocationKind kind) noexcept {
+    switch (kind) {
+        case RelocationKind::None: return "none";
+        case RelocationKind::Absolute32: return "absolute32";
+        case RelocationKind::PcRelative32: return "pc-relative32";
+        case RelocationKind::Unsupported: return "unsupported";
+    }
+    return "unsupported";
 }
 
 }

@@ -370,7 +370,7 @@ Abhaengigkeiten: KR-1601
 
 Abhaengigkeiten: KR-1603
 
-### [ ] KR-1605 - Relocations
+### [x] KR-1605 - Relocations
 
 Abhaengigkeiten: KR-1603
 

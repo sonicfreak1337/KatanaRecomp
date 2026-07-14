@@ -15,6 +15,7 @@ constexpr std::size_t kElf32HeaderSize = 52u;
 constexpr std::size_t kElf32ProgramHeaderSize = 32u;
 constexpr std::size_t kElf32SectionHeaderSize = 40u;
 constexpr std::size_t kElf32SymbolSize = 16u;
+constexpr std::size_t kElf32RelocationSize = 8u;
 constexpr std::uint16_t kExecutableType = 2u;
 constexpr std::uint16_t kSuperHMachine = 42u;
 constexpr std::uint32_t kLoadSegment = 1u;
@@ -24,6 +25,16 @@ constexpr std::uint32_t kFlagRead = 4u;
 constexpr std::uint32_t kSymbolTableSection = 2u;
 constexpr std::uint32_t kStringTableSection = 3u;
 constexpr std::uint32_t kDynamicSymbolSection = 11u;
+constexpr std::uint32_t kRelocationSection = 9u;
+constexpr std::uint32_t kRelocationNone = 0u;
+constexpr std::uint32_t kRelocationDirectory32 = 1u;
+constexpr std::uint32_t kRelocationRelative32 = 2u;
+
+struct ElfSymbolRecord {
+    std::string name;
+    std::uint32_t value = 0;
+    std::uint16_t section_reference = 0;
+};
 
 [[noreturn]] void fail(
     const std::filesystem::path& path,
@@ -113,6 +124,15 @@ SymbolBinding elf_symbol_binding(const std::uint8_t info) noexcept {
         case 1u: return SymbolBinding::Global;
         case 2u: return SymbolBinding::Weak;
         default: return SymbolBinding::Unknown;
+    }
+}
+
+RelocationKind elf_relocation_kind(const std::uint32_t type) noexcept {
+    switch (type) {
+        case kRelocationNone: return RelocationKind::None;
+        case kRelocationDirectory32: return RelocationKind::Absolute32;
+        case kRelocationRelative32: return RelocationKind::PcRelative32;
+        default: return RelocationKind::Unsupported;
     }
 }
 
@@ -216,6 +236,7 @@ ExecutableImage load_elf32_sh(const std::filesystem::path& path) {
             fail(path, section_offset, "Section-Header-Tabelle liegt ausserhalb der Datei.");
         }
 
+        std::vector<std::vector<ElfSymbolRecord>> symbol_tables(section_count);
         for (std::size_t section_index = 0; section_index < section_count; ++section_index) {
             const auto header = static_cast<std::size_t>(section_offset) + section_index * section_entry_size;
             const auto type = read_u32(bytes, header + 4u, path, "sh_type");
@@ -241,25 +262,92 @@ ExecutableImage load_elf32_sh(const std::filesystem::path& path) {
             const auto string_size = read_u32(bytes, string_header + 20u, path, "Stringtabellen-sh_size");
             require_range(bytes, string_offset, string_size, path, "Stringtabelle");
 
-            for (std::size_t symbol_index = 0; symbol_index < symbol_size / symbol_entry_size; ++symbol_index) {
+            auto& symbol_records = symbol_tables[section_index];
+            symbol_records.resize(symbol_size / symbol_entry_size);
+            for (std::size_t symbol_index = 0; symbol_index < symbol_records.size(); ++symbol_index) {
                 const auto symbol = static_cast<std::size_t>(symbol_offset) + symbol_index * symbol_entry_size;
                 const auto name_offset = read_u32(bytes, symbol, path, "st_name");
                 const auto section_reference = read_u16(bytes, symbol + 14u, path, "st_shndx");
-                if (name_offset == 0u || section_reference == 0u) {
-                    continue;
+                auto& record = symbol_records[symbol_index];
+                record.value = read_u32(bytes, symbol + 4u, path, "st_value");
+                record.section_reference = section_reference;
+                if (name_offset != 0u) {
+                    record.name = read_string(bytes, string_offset, string_size, name_offset, path);
                 }
-                auto name = read_string(bytes, string_offset, string_size, name_offset, path);
-                if (name.empty() || image.find_symbol(name) != nullptr) {
+                if (record.name.empty() || section_reference == 0u
+                    || image.find_symbol(record.name) != nullptr) {
                     continue;
                 }
                 const auto info = bytes[symbol + 12u];
                 image.add_symbol({
-                    std::move(name),
-                    read_u32(bytes, symbol + 4u, path, "st_value"),
+                    record.name,
+                    record.value,
                     read_u32(bytes, symbol + 8u, path, "st_size"),
                     elf_symbol_kind(info),
                     elf_symbol_binding(info)
                 });
+            }
+        }
+
+        for (std::size_t section_index = 0; section_index < section_count; ++section_index) {
+            const auto header = static_cast<std::size_t>(section_offset) + section_index * section_entry_size;
+            if (read_u32(bytes, header + 4u, path, "sh_type") != kRelocationSection) {
+                continue;
+            }
+            const auto relocation_offset = read_u32(bytes, header + 16u, path, "sh_offset");
+            const auto relocation_size = read_u32(bytes, header + 20u, path, "sh_size");
+            const auto symbol_table_index = read_u32(bytes, header + 24u, path, "sh_link");
+            const auto relocation_entry_size = read_u32(bytes, header + 36u, path, "sh_entsize");
+            if (relocation_entry_size != kElf32RelocationSize
+                || relocation_size % relocation_entry_size != 0u) {
+                fail(path, header + 36u, "ungueltige ELF32-Relocationstabellengroesse.");
+            }
+            require_range(bytes, relocation_offset, relocation_size, path, "Relocationstabelle");
+            if (symbol_table_index >= section_count || symbol_tables[symbol_table_index].empty()) {
+                fail(path, header + 24u, "Relocationstabelle verweist nicht auf eine geladene Symboltabelle.");
+            }
+
+            const auto& symbol_records = symbol_tables[symbol_table_index];
+            for (std::size_t relocation_index = 0;
+                 relocation_index < relocation_size / relocation_entry_size;
+                 ++relocation_index) {
+                const auto relocation = static_cast<std::size_t>(relocation_offset)
+                    + relocation_index * relocation_entry_size;
+                const auto address = read_u32(bytes, relocation, path, "r_offset");
+                const auto info = read_u32(bytes, relocation + 4u, path, "r_info");
+                const auto symbol_index = info >> 8u;
+                const auto raw_type = info & 0xFFu;
+                if (symbol_index >= symbol_records.size()) {
+                    fail(path, relocation + 4u, "Relocation verweist ausserhalb der Symboltabelle.");
+                }
+
+                const auto& symbol = symbol_records[symbol_index];
+                const auto kind = elf_relocation_kind(raw_type);
+                ImageRelocation image_relocation{
+                    address,
+                    raw_type,
+                    kind,
+                    symbol.name,
+                    symbol.value
+                };
+                if (kind == RelocationKind::Absolute32 || kind == RelocationKind::PcRelative32) {
+                    if (symbol.section_reference == 0u) {
+                        fail(path, relocation + 4u, "unterstuetzte Relocation besitzt ein ungeloestes Symbol.");
+                    }
+                    try {
+                        const auto raw_addend = image.read_u32_le(address);
+                        image_relocation.addend = static_cast<std::int32_t>(raw_addend);
+                        auto value = symbol.value + raw_addend;
+                        if (kind == RelocationKind::PcRelative32) {
+                            value -= address;
+                        }
+                        image.write_u32_le(address, value);
+                        image_relocation.applied_value = value;
+                    } catch (const std::exception& error) {
+                        fail(path, relocation, error.what());
+                    }
+                }
+                image.add_relocation(std::move(image_relocation));
             }
         }
     }
