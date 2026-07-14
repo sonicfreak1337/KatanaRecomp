@@ -95,6 +95,26 @@ int main() {
         "Busfehler wird nicht strukturiert in den Exception-Pfad ueberfuehrt."
     );
 
+    return_from_exception(cpu);
+    raise_fpu_disabled(cpu, 0x8C040002u, 0x8C040000u);
+    require(
+        cpu.last_exception_cause == ExceptionCause::SlotFpuDisabled &&
+        cpu.expevt == event_slot_fpu_disabled &&
+        cpu.spc == 0x8C040000u &&
+        cpu.exception_in_delay_slot,
+        "FPU-Sperre im Delay Slot verliert Eventcode oder Owner-PC."
+    );
+
+    return_from_exception(cpu);
+    raise_fpu_disabled(cpu, 0x8C050000u);
+    require(
+        cpu.last_exception_cause == ExceptionCause::FpuDisabled &&
+        cpu.expevt == event_fpu_disabled &&
+        cpu.spc == 0x8C050000u &&
+        !cpu.exception_in_delay_slot,
+        "FPU-Sperre ausserhalb eines Delay Slots wird falsch gemeldet."
+    );
+
     std::cout << "Strukturierter Exception-Eintritt erfolgreich.\n";
     return EXIT_SUCCESS;
 }

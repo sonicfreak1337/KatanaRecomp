@@ -70,6 +70,30 @@ void raise_illegal_instruction(
     );
 }
 
+void raise_fpu_disabled(
+    CpuState& cpu,
+    const std::uint32_t instruction_pc,
+    const std::optional<std::uint32_t> delay_slot_owner
+) noexcept {
+    const bool in_delay_slot = delay_slot_owner.has_value();
+    enter_exception(
+        cpu,
+        ExceptionRequest{
+            in_delay_slot
+                ? ExceptionCause::SlotFpuDisabled
+                : ExceptionCause::FpuDisabled,
+            in_delay_slot
+                ? event_slot_fpu_disabled
+                : event_fpu_disabled,
+            general_exception_vector,
+            delay_slot_owner.value_or(instruction_pc),
+            std::nullopt,
+            false,
+            in_delay_slot
+        }
+    );
+}
+
 void enter_memory_exception(
     CpuState& cpu,
     const MemoryAccessError& error,

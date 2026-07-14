@@ -44,6 +44,9 @@ MemoryEffects instruction_memory_effects(
         case Operation::LoadLongGbrDisplacement:
         case Operation::LoadLongPcRelative:
             return read(OperandWidth::Bits32);
+        case Operation::FmovLoad:
+        case Operation::FmovLoadR0Indexed:
+            return {MemoryAccessKind::Read, OperandWidth::Bits64, 2u};
 
         case Operation::StoreByte:
         case Operation::StoreByteDisplacement:
@@ -60,6 +63,9 @@ MemoryEffects instruction_memory_effects(
         case Operation::StoreLongR0Indexed:
         case Operation::StoreLongGbrDisplacement:
             return write(OperandWidth::Bits32);
+        case Operation::FmovStore:
+        case Operation::FmovStoreR0Indexed:
+            return {MemoryAccessKind::Write, OperandWidth::Bits64, 2u};
 
         case Operation::StoreBytePreDecrement:
             return predecrement_write(OperandWidth::Bits8);
@@ -69,6 +75,9 @@ MemoryEffects instruction_memory_effects(
             return predecrement_write(OperandWidth::Bits32);
         case Operation::StoreSpecialRegisterPreDecrement:
             return predecrement_write(OperandWidth::Bits32);
+        case Operation::FmovStorePreDecrement:
+            return {MemoryAccessKind::Write, OperandWidth::Bits64, 2u,
+                AddressUpdateKind::PreDecrement, 1u};
 
         case Operation::LoadByteSignedPostIncrement:
             return destination_register == source_register
@@ -84,6 +93,9 @@ MemoryEffects instruction_memory_effects(
                 : postincrement_read(OperandWidth::Bits32);
         case Operation::LoadSpecialRegisterPostIncrement:
             return postincrement_read(OperandWidth::Bits32);
+        case Operation::FmovLoadPostIncrement:
+            return {MemoryAccessKind::Read, OperandWidth::Bits64, 2u,
+                AddressUpdateKind::PostIncrement, 1u};
 
         case Operation::MultiplyAccumulateWord:
             return {

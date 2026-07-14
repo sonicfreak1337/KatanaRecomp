@@ -115,6 +115,112 @@ bool decode_special_register_transfer(
     return false;
 }
 
+bool decode_fpu_instruction(
+    DecodedInstruction& instruction,
+    const std::uint16_t opcode
+) {
+    constexpr std::array kinds = {
+        InstructionKind::FmovRegister,
+        InstructionKind::FmovLoad,
+        InstructionKind::FmovLoadPostIncrement,
+        InstructionKind::FmovLoadR0Indexed,
+        InstructionKind::FmovStore,
+        InstructionKind::FmovStorePreDecrement,
+        InstructionKind::FmovStoreR0Indexed,
+        InstructionKind::Fldi0,
+        InstructionKind::Fldi1,
+        InstructionKind::Flds,
+        InstructionKind::Fsts,
+        InstructionKind::Fabs,
+        InstructionKind::Fadd,
+        InstructionKind::FcmpEqual,
+        InstructionKind::FcmpGreater,
+        InstructionKind::Fdiv,
+        InstructionKind::FloatFromFpul,
+        InstructionKind::Fmac,
+        InstructionKind::Fmul,
+        InstructionKind::Fneg,
+        InstructionKind::Fsqrt,
+        InstructionKind::Fsub,
+        InstructionKind::Ftrc,
+        InstructionKind::FcnvDoubleToSingle,
+        InstructionKind::FcnvSingleToDouble,
+        InstructionKind::Frchg,
+        InstructionKind::Fschg
+    };
+    for (const auto kind : kinds) {
+        const auto* metadata = metadata_for_kind(kind);
+        if (metadata == nullptr || !metadata->matches(opcode)) {
+            continue;
+        }
+        instruction.kind = kind;
+        const auto n = static_cast<std::uint8_t>((opcode >> 8u) & 0x0Fu);
+        const auto m = static_cast<std::uint8_t>((opcode >> 4u) & 0x0Fu);
+        instruction.destination_register = n;
+        instruction.source_register = m;
+        switch (kind) {
+            case InstructionKind::Flds:
+            case InstructionKind::Ftrc:
+            case InstructionKind::FcnvDoubleToSingle:
+                instruction.destination_register = 0u;
+                instruction.source_register = n;
+                break;
+            case InstructionKind::Fldi0:
+            case InstructionKind::Fldi1:
+            case InstructionKind::Fsts:
+            case InstructionKind::Fabs:
+            case InstructionKind::FloatFromFpul:
+            case InstructionKind::Fneg:
+            case InstructionKind::Fsqrt:
+            case InstructionKind::FcnvSingleToDouble:
+                instruction.source_register = 0u;
+                break;
+            case InstructionKind::Frchg:
+            case InstructionKind::Fschg:
+                instruction.destination_register = 0u;
+                instruction.source_register = 0u;
+                break;
+            default:
+                break;
+        }
+        const auto fr = [](const std::uint8_t index) {
+            return "fr" + std::to_string(index);
+        };
+        switch (kind) {
+            case InstructionKind::FmovRegister: instruction.text = "fmov " + fr(m) + ", " + fr(n); break;
+            case InstructionKind::FmovLoad: instruction.text = "fmov.s @r" + std::to_string(m) + ", " + fr(n); break;
+            case InstructionKind::FmovLoadPostIncrement: instruction.text = "fmov.s @r" + std::to_string(m) + "+, " + fr(n); break;
+            case InstructionKind::FmovLoadR0Indexed: instruction.text = "fmov.s @(r0,r" + std::to_string(m) + "), " + fr(n); break;
+            case InstructionKind::FmovStore: instruction.text = "fmov.s " + fr(m) + ", @r" + std::to_string(n); break;
+            case InstructionKind::FmovStorePreDecrement: instruction.text = "fmov.s " + fr(m) + ", @-r" + std::to_string(n); break;
+            case InstructionKind::FmovStoreR0Indexed: instruction.text = "fmov.s " + fr(m) + ", @(r0,r" + std::to_string(n) + ")"; break;
+            case InstructionKind::Fldi0: instruction.text = "fldi0 " + fr(n); break;
+            case InstructionKind::Fldi1: instruction.text = "fldi1 " + fr(n); break;
+            case InstructionKind::Flds: instruction.text = "flds " + fr(n) + ", fpul"; break;
+            case InstructionKind::Fsts: instruction.text = "fsts fpul, " + fr(n); break;
+            case InstructionKind::Fabs: instruction.text = "fabs " + fr(n); break;
+            case InstructionKind::Fadd: instruction.text = "fadd " + fr(m) + ", " + fr(n); break;
+            case InstructionKind::FcmpEqual: instruction.text = "fcmp/eq " + fr(m) + ", " + fr(n); break;
+            case InstructionKind::FcmpGreater: instruction.text = "fcmp/gt " + fr(m) + ", " + fr(n); break;
+            case InstructionKind::Fdiv: instruction.text = "fdiv " + fr(m) + ", " + fr(n); break;
+            case InstructionKind::FloatFromFpul: instruction.text = "float fpul, " + fr(n); break;
+            case InstructionKind::Fmac: instruction.text = "fmac fr0, " + fr(m) + ", " + fr(n); break;
+            case InstructionKind::Fmul: instruction.text = "fmul " + fr(m) + ", " + fr(n); break;
+            case InstructionKind::Fneg: instruction.text = "fneg " + fr(n); break;
+            case InstructionKind::Fsqrt: instruction.text = "fsqrt " + fr(n); break;
+            case InstructionKind::Fsub: instruction.text = "fsub " + fr(m) + ", " + fr(n); break;
+            case InstructionKind::Ftrc: instruction.text = "ftrc " + fr(n) + ", fpul"; break;
+            case InstructionKind::FcnvDoubleToSingle: instruction.text = "fcnvds dr" + std::to_string(n >> 1u) + ", fpul"; break;
+            case InstructionKind::FcnvSingleToDouble: instruction.text = "fcnvsd fpul, dr" + std::to_string(n >> 1u); break;
+            case InstructionKind::Frchg: instruction.text = "frchg"; break;
+            case InstructionKind::Fschg: instruction.text = "fschg"; break;
+            default: break;
+        }
+        return true;
+    }
+    return false;
+}
+
 }
 
 DecodedInstruction decode(const std::uint16_t opcode) {
@@ -122,6 +228,10 @@ DecodedInstruction decode(const std::uint16_t opcode) {
     instruction.opcode = opcode;
 
     if (decode_special_register_transfer(instruction, opcode)) {
+        return instruction;
+    }
+
+    if (decode_fpu_instruction(instruction, opcode)) {
         return instruction;
     }
 

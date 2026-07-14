@@ -29,6 +29,40 @@ void CpuState::write_sr(const std::uint32_t value) noexcept {
     t = (masked & sr_t_mask) != 0u;
 }
 
+std::uint32_t CpuState::read_fpscr() const noexcept {
+    return fpscr;
+}
+
+void CpuState::write_fpscr(const std::uint32_t value) noexcept {
+    const std::uint32_t masked = value & fpscr_writable_mask;
+    const bool old_fr = (fpscr & fpscr_fr_mask) != 0u;
+    const bool new_fr = (masked & fpscr_fr_mask) != 0u;
+    if (old_fr != new_fr) {
+        fr.swap(xf);
+    }
+    fpscr = masked;
+}
+
+void CpuState::toggle_fpu_register_bank() noexcept {
+    write_fpscr(read_fpscr() ^ fpscr_fr_mask);
+}
+
+bool CpuState::fpu_register_bank_selected() const noexcept {
+    return (read_fpscr() & fpscr_fr_mask) != 0u;
+}
+
+bool CpuState::fpu_double_precision() const noexcept {
+    return (read_fpscr() & fpscr_pr_mask) != 0u;
+}
+
+bool CpuState::fpu_transfer_pair() const noexcept {
+    return (read_fpscr() & fpscr_sz_mask) != 0u;
+}
+
+bool CpuState::fpu_flush_denormals() const noexcept {
+    return (read_fpscr() & fpscr_dn_mask) != 0u;
+}
+
 std::uint8_t CpuState::interrupt_mask() const noexcept {
     return static_cast<std::uint8_t>(
         (read_sr() & sr_interrupt_mask) >> 4u
@@ -83,7 +117,8 @@ void reset_cpu(
     cpu.mach = 0u;
     cpu.macl = 0u;
     cpu.fpul = 0u;
-    cpu.fpscr = state.fpscr;
+    cpu.fpscr = 0u;
+    cpu.write_fpscr(state.fpscr);
 
     cpu.sr = 0u;
     cpu.t = false;

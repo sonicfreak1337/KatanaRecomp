@@ -734,25 +734,38 @@ Abhaengigkeiten: KR-2303, KR-2305
 
 ## v0.24.0 und v0.25.0 - FPU
 
-### [ ] KR-2401 - FR- und XF-Baenke
+### [x] KR-2401 - FR- und XF-Baenke
 
 Abhaengigkeiten: KR-2306
 
-### [ ] KR-2402 - Single-Precision-Arithmetik
+### [x] KR-2402 - Single-Precision-Arithmetik
 
 Abhaengigkeiten: KR-2401
 
-### [ ] KR-2403 - Vergleiche und Konvertierungen
+### [x] KR-2403 - Vergleiche und Konvertierungen
 
 Abhaengigkeiten: KR-2402
 
-### [ ] KR-2404 - FPSCR-Modi
+### [x] KR-2404 - FPSCR-Modi
 
 Abhaengigkeiten: KR-2401
 
-### [ ] KR-2405 - Double-Precision
+### [x] KR-2405 - Double-Precision
 
 Abhaengigkeiten: KR-2404
+
+### [x] KR-2406 - v0.24.0 Release-Gate
+
+Abhaengigkeiten: KR-2401 bis KR-2405
+
+Akzeptanz:
+
+- NaN-, Infinity- und beide unterstuetzten Rundungsmodi sind regressionsgesichert
+- FPU-Sperren und ungueltige Moduskombinationen nehmen den strukturierten Exception-Pfad
+- generierter FPU-Code wird kompiliert und ausgefuehrt, einschliesslich Delay-Slot-Fehlern
+- alle 95 Tests bestehen in frischen lokalen Debug- und Release-Builds
+- Roadmap, Status, Changelog, Versionsdateien und Release-Notiz stimmen ueberein
+- CI wird gemaess Projektentscheidung erst am Alpha-Gate wieder verpflichtend
 
 ### [ ] KR-2501 - FSCA und FSRRA
 

@@ -1,7 +1,7 @@
 # KatanaRecomp Roadmap
 
 Status: Pre-Alpha
-Aktuelle Basis: v0.23.0
+Aktuelle Basis: v0.24.0
 Planungsmodell: Semantic Versioning, kleine ueberpruefbare Meilensteine
 
 Diese Roadmap beschreibt die technische Entwicklung von KatanaRecomp vom aktuellen Architektur-Prototyp bis zu einem belastbaren Dreamcast-Recompiler-Framework.
@@ -450,6 +450,15 @@ Nachgelagerte Review-Absicherung nach v0.23.0:
 
 ### v0.24.0 - FPU-Grundoperationen
 
+Fortschritt:
+
+- [x] KR-2401 - FR- und XF-Baenke
+- [x] KR-2402 - Single-Precision-Arithmetik
+- [x] KR-2403 - Vergleiche und Konvertierungen
+- [x] KR-2404 - FPSCR-Modi
+- [x] KR-2405 - Double-Precision
+- [x] KR-2406 - v0.24.0 Release-Gate
+
 Enthalten:
 
 - FR- und XF-Baenke
@@ -464,6 +473,8 @@ Release-Gate:
 
 - Host-Floating-Point wird nur verwendet, wenn die SH-4-Semantik erhalten bleibt
 - NaN-, Infinity- und Rundungsfaelle sind getestet
+- frische lokale Debug- und Release-Builds bestehen vollstaendig; CI ist erst
+  zum Alpha-Gate wieder verpflichtend
 
 ### v0.25.0 - Dreamcast-relevante FPU-Spezialoperationen
 

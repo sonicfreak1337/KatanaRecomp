@@ -6,7 +6,7 @@ ungeloesten Kontrollflusspfaden mehr.
 
 ## ABI
 
-Die aktuelle Runtime-ABI ist Version `6`.
+Die aktuelle Runtime-ABI ist Version `7`.
 
 Generierter Code enthaelt eine Compile-Time-Pruefung gegen diese Version. Eine
 abweichende Runtime wird beim Kompilieren sichtbar abgelehnt. ABI-Version 3
@@ -15,7 +15,8 @@ breitenbewusste MMIO-Zugriffe ein. ABI-Version 5 erweitert `Memory` um
 Ausrichtungsrichtlinie, strukturierte Zugriffsfehler, Trace-Handler und
 Watchpoint-Zustand. ABI-Version 6 ergaenzt den zentralen CPU-Zustand um `TEA`,
 strukturierte Exception-Ursachen und Delay-Slot-Kontext und bindet generierten
-Code an den gemeinsamen Exception-Pfad.
+Code an den gemeinsamen Exception-Pfad. ABI-Version 7 zentralisiert die
+`FPSCR`-Maskierung und die sichtbare FR-/XF-Bankumschaltung.
 
 ## CMake
 
@@ -26,8 +27,8 @@ Verfuegung:
 target_link_libraries(mein_programm PRIVATE KatanaRecomp::runtime)
 ```
 
-Der generierte C++-Code bindet automatisch `katana/runtime/runtime.hpp` und
-`katana/runtime/exception.hpp` ein.
+Der generierte C++-Code bindet automatisch `katana/runtime/runtime.hpp`,
+`katana/runtime/exception.hpp` und `katana/runtime/fpu.hpp` ein.
 
 ## Zentraler CPU-Zustand
 
@@ -43,8 +44,11 @@ Stelle:
 - sichtbare Exception-, Delay-Slot- und Schlafzustaende
 - den zentralen regionbasierten Speicherbus
 
-Die FPU-Baenke speichern vorerst ausschliesslich unveraenderte 32-Bit-Rohwerte.
-Arithmetik, Bankumschaltung und `FPSCR`-Modi folgen in der FPU-Phase.
+Die FPU-Baenke bewahren 32-Bit-Rohwerte, damit `FMOV` Bitmuster unveraendert
+uebertragen kann. `FPSCR.FR` tauscht die sichtbaren FR- und XF-Baenke zentral.
+Die FPU-Runtime interpretiert dieselben Bits fuer Single- oder gepaarte
+Double-Precision-Operationen; `FPSCR.PR`, `SZ`, `FR` und `RM` steuern
+Rechenpraezision, Transferbreite, Banksicht und Rundung.
 
 ## Regionbasierter Speicherbus
 
@@ -219,7 +223,7 @@ Statusregisterfelder besitzen zentrale Masken und strukturierte Zugriffe:
 - `BL` zum Blockieren maskierbarer Interrupts
 - `MD` fuer den privilegierten Modus
 - `RB` fuer die aktive Registerbank
-- `FD` fuer die spaetere FPU-Sperrsemantik
+- `FD` fuer die FPU-Sperrsemantik
 
 `enter_exception` sichert den bisherigen Zustand in `SSR`, `SPC` und `SGR`,
 setzt `MD`, `RB` und `BL`, schreibt das Ereignis nach `EXPEVT` oder `INTEVT`
@@ -238,6 +242,25 @@ verursachenden IR-Instruktion ab und rufen `enter_memory_exception` auf. Im
 Delay Slot wird `SPC` auf den Owner-PC gesetzt und der Slotkontext explizit
 markiert. Der Zustand propagiert durch generierte Funktionsaufrufe; CPU-Fehler
 verlassen den Ausfuehrungspfad nicht mehr als generische C++-Exception.
+
+Ist `SR.FD` gesetzt, nehmen FPU-Instruktionen sowie FPUL-/FPSCR-Transfers vor
+jeder Zustands- oder Speicheraenderung den strukturierten FPU-Disable-Pfad.
+Dabei werden `EXPEVT = 0x800` beziehungsweise im Delay Slot `0x820`, der
+korrekte Owner-PC in `SPC` und der Slotkontext gesichert.
+
+## FPU-Grundoperationen
+
+KR-2401 bis KR-2405 implementieren `FMOV`-Register- und Speicherformen,
+Konstanten und FPUL-Transfers, `FADD`, `FSUB`, `FMUL`, `FDIV`, `FMAC`,
+`FABS`, `FNEG`, `FSQRT`, `FCMP/EQ`, `FCMP/GT`, `FLOAT`, `FTRC`, `FCNVDS`,
+`FCNVSD`, `FRCHG` und `FSCHG`. Single- und Double-Ergebnisse verwenden eine
+strikte Host-Floating-Point-Umgebung; Round-to-Nearest und Round-to-Zero werden
+aus `FPSCR.RM` abgeleitet. NaN-Ergebnisse werden auf die SH-4-Bitmuster
+kanonisiert. Unzulaessige Register- oder PR/SZ-Kombinationen werden vor einer
+Teilwirkung als strukturierte illegale Instruktion gemeldet.
+
+Denormals, Exception-Flags sowie die Vektor- und Spezialoperationen `FSCA`,
+`FSRRA`, `FIPR` und `FTRV` gehoeren zum folgenden v0.25.0-Meilenstein.
 
 ## Deterministischer CPU-Reset
 

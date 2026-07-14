@@ -361,6 +361,34 @@ Operation lower_operation(
         case Source::Sleep:
             return Operation::Sleep;
 
+        case Source::FmovRegister: return Operation::FmovRegister;
+        case Source::FmovLoad: return Operation::FmovLoad;
+        case Source::FmovLoadPostIncrement: return Operation::FmovLoadPostIncrement;
+        case Source::FmovLoadR0Indexed: return Operation::FmovLoadR0Indexed;
+        case Source::FmovStore: return Operation::FmovStore;
+        case Source::FmovStorePreDecrement: return Operation::FmovStorePreDecrement;
+        case Source::FmovStoreR0Indexed: return Operation::FmovStoreR0Indexed;
+        case Source::Fldi0: return Operation::Fldi0;
+        case Source::Fldi1: return Operation::Fldi1;
+        case Source::Flds: return Operation::Flds;
+        case Source::Fsts: return Operation::Fsts;
+        case Source::Fabs: return Operation::Fabs;
+        case Source::Fadd: return Operation::Fadd;
+        case Source::FcmpEqual: return Operation::FcmpEqual;
+        case Source::FcmpGreater: return Operation::FcmpGreater;
+        case Source::Fdiv: return Operation::Fdiv;
+        case Source::FloatFromFpul: return Operation::FloatFromFpul;
+        case Source::Fmac: return Operation::Fmac;
+        case Source::Fmul: return Operation::Fmul;
+        case Source::Fneg: return Operation::Fneg;
+        case Source::Fsqrt: return Operation::Fsqrt;
+        case Source::Fsub: return Operation::Fsub;
+        case Source::Ftrc: return Operation::Ftrc;
+        case Source::FcnvDoubleToSingle: return Operation::FcnvDoubleToSingle;
+        case Source::FcnvSingleToDouble: return Operation::FcnvSingleToDouble;
+        case Source::Frchg: return Operation::Frchg;
+        case Source::Fschg: return Operation::Fschg;
+
         case Source::Bra:
             return Operation::Branch;
 
@@ -791,6 +819,33 @@ std::string_view operation_name(
 
         case Operation::Sleep:
             return "sleep";
+        case Operation::FmovRegister: return "fmov_reg";
+        case Operation::FmovLoad: return "fmov_load";
+        case Operation::FmovLoadPostIncrement: return "fmov_load_postinc";
+        case Operation::FmovLoadR0Indexed: return "fmov_load_r0";
+        case Operation::FmovStore: return "fmov_store";
+        case Operation::FmovStorePreDecrement: return "fmov_store_predec";
+        case Operation::FmovStoreR0Indexed: return "fmov_store_r0";
+        case Operation::Fldi0: return "fldi0";
+        case Operation::Fldi1: return "fldi1";
+        case Operation::Flds: return "flds";
+        case Operation::Fsts: return "fsts";
+        case Operation::Fabs: return "fabs";
+        case Operation::Fadd: return "fadd";
+        case Operation::FcmpEqual: return "fcmp_eq";
+        case Operation::FcmpGreater: return "fcmp_gt";
+        case Operation::Fdiv: return "fdiv";
+        case Operation::FloatFromFpul: return "float";
+        case Operation::Fmac: return "fmac";
+        case Operation::Fmul: return "fmul";
+        case Operation::Fneg: return "fneg";
+        case Operation::Fsqrt: return "fsqrt";
+        case Operation::Fsub: return "fsub";
+        case Operation::Ftrc: return "ftrc";
+        case Operation::FcnvDoubleToSingle: return "fcnvds";
+        case Operation::FcnvSingleToDouble: return "fcnvsd";
+        case Operation::Frchg: return "frchg";
+        case Operation::Fschg: return "fschg";
 
         case Operation::Branch:
             return "branch";

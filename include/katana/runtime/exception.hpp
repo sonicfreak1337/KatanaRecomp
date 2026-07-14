@@ -15,6 +15,8 @@ inline constexpr std::uint32_t event_address_error_write = 0x00000100u;
 inline constexpr std::uint32_t event_trapa = 0x00000160u;
 inline constexpr std::uint32_t event_illegal_instruction = 0x00000180u;
 inline constexpr std::uint32_t event_slot_illegal_instruction = 0x000001A0u;
+inline constexpr std::uint32_t event_fpu_disabled = 0x00000800u;
+inline constexpr std::uint32_t event_slot_fpu_disabled = 0x00000820u;
 
 struct ExceptionRequest {
     ExceptionCause cause = ExceptionCause::None;
@@ -38,6 +40,12 @@ void raise_trapa(
 ) noexcept;
 
 void raise_illegal_instruction(
+    CpuState& cpu,
+    std::uint32_t instruction_pc,
+    std::optional<std::uint32_t> delay_slot_owner = std::nullopt
+) noexcept;
+
+void raise_fpu_disabled(
     CpuState& cpu,
     std::uint32_t instruction_pc,
     std::optional<std::uint32_t> delay_slot_owner = std::nullopt

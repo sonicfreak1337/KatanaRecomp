@@ -1,8 +1,8 @@
 # Projektstatus
 
-Version: 0.23.0
+Version: 0.24.0
 Phase: Pre-Alpha
-Aktiver Meilenstein: v0.24.0 - FPU-Grundoperationen
+Aktiver Meilenstein: v0.25.0 - Dreamcast-relevante FPU-Spezialoperationen
 
 ## Zusammenfassung
 
@@ -11,7 +11,7 @@ KatanaRecomp besitzt einen durchgaengigen Prototyp-Pfad von Raw- und ELF32-SH-Ei
 ## Teststatus
 
 ```text
-100% tests passed out of 92
+100% tests passed out of 95 (lokal, Debug und Release)
 ```
 
 ## Fertiggestellte Roadmap-Tasks
@@ -100,15 +100,21 @@ KatanaRecomp besitzt einen durchgaengigen Prototyp-Pfad von Raw- und ELF32-SH-Ei
 - [x] KR-2305 - Delay-Slot-Ausnahmen
 - [x] KR-2306 - v0.23 Release-Gate
 - [x] KR-2307 - Ausfuehrbare Delay-Slot- und Interrupt-Review-Regressionen
+- [x] KR-2401 - FR- und XF-Baenke
+- [x] KR-2402 - Single-Precision-Arithmetik
+- [x] KR-2403 - Vergleiche und Konvertierungen
+- [x] KR-2404 - FPSCR-Modi
+- [x] KR-2405 - Double-Precision
+- [x] KR-2406 - v0.24.0 Release-Gate
 
 ## Naechster Roadmap-Task
 
-- [ ] KR-2401 - FR- und XF-Baenke
+- [ ] KR-2501 - FSCA und FSRRA
 
 ## Aktuelle Einschraenkungen
 
 - unvollstaendiger SH-4-Befehlssatz
-- keine FPU
+- FPU-Grundoperationen sind vorhanden; Vektoroperationen, Denormals und FPU-Exception-Flags folgen in v0.25.0
 - Dreamcast-Speicherbereiche, MMIO-Handler, strukturierte SH-4-Ausnahmen, Interruptprioritaeten und Watchpoints sind vorhanden; konkrete Plattformregister fehlen noch
 - keine Plattformhardware
 - nur einfache konstante indirekte Ziele und bekannte begrenzte Jump Tables werden aufgeloest

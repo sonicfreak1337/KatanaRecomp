@@ -61,7 +61,7 @@ std::string special_register_read_expression(
         case Register::Macl: return "cpu.macl";
         case Register::Pr: return "cpu.pr";
         case Register::Fpul: return "cpu.fpul";
-        case Register::Fpscr: return "cpu.fpscr";
+        case Register::Fpscr: return "cpu.read_fpscr()";
         case Register::Sr: return "cpu.read_sr()";
         case Register::Gbr: return "cpu.gbr";
         case Register::Vbr: return "cpu.vbr";
@@ -94,7 +94,7 @@ void emit_special_register_write(
         case Register::Macl: output << "cpu.macl = " << value << ";\n"; return;
         case Register::Pr: output << "cpu.pr = " << value << ";\n"; return;
         case Register::Fpul: output << "cpu.fpul = " << value << ";\n"; return;
-        case Register::Fpscr: output << "cpu.fpscr = " << value << " & 0x003FFFFFu;\n"; return;
+        case Register::Fpscr: output << "cpu.write_fpscr(" << value << ");\n"; return;
         case Register::Sr: output << "cpu.write_sr(" << value << ");\n"; return;
         case Register::Gbr: output << "cpu.gbr = " << value << ";\n"; return;
         case Register::Vbr: output << "cpu.vbr = " << value << ";\n"; return;
@@ -126,6 +126,168 @@ void emit_indent(
     }
 }
 
+bool is_fpu_operation(const katana::ir::Instruction& instruction) {
+    using Operation = katana::ir::Operation;
+    using Register = katana::ir::SpecialRegister;
+
+    switch (instruction.operation) {
+        case Operation::FmovRegister:
+        case Operation::FmovLoad:
+        case Operation::FmovLoadPostIncrement:
+        case Operation::FmovLoadR0Indexed:
+        case Operation::FmovStore:
+        case Operation::FmovStorePreDecrement:
+        case Operation::FmovStoreR0Indexed:
+        case Operation::Fldi0:
+        case Operation::Fldi1:
+        case Operation::Flds:
+        case Operation::Fsts:
+        case Operation::Fabs:
+        case Operation::Fadd:
+        case Operation::FcmpEqual:
+        case Operation::FcmpGreater:
+        case Operation::Fdiv:
+        case Operation::FloatFromFpul:
+        case Operation::Fmac:
+        case Operation::Fmul:
+        case Operation::Fneg:
+        case Operation::Fsqrt:
+        case Operation::Fsub:
+        case Operation::Ftrc:
+        case Operation::FcnvDoubleToSingle:
+        case Operation::FcnvSingleToDouble:
+        case Operation::Frchg:
+        case Operation::Fschg:
+            return true;
+        case Operation::StoreSpecialRegister:
+        case Operation::StoreSpecialRegisterPreDecrement:
+        case Operation::LoadSpecialRegister:
+        case Operation::LoadSpecialRegisterPostIncrement:
+            return instruction.special_register == Register::Fpul ||
+                instruction.special_register == Register::Fpscr;
+        default:
+            return false;
+    }
+}
+
+void emit_fpu_disabled_guard(
+    std::ostringstream& output,
+    const katana::ir::Instruction& instruction,
+    const int indent
+) {
+    if (!is_fpu_operation(instruction)) {
+        return;
+    }
+
+    emit_indent(output, indent);
+    output << "if (cpu.fpu_disabled()) {\n";
+    emit_indent(output, indent + 1);
+    output << "raise_fpu_disabled(cpu, " << hex32(instruction.source_address);
+    if (
+        instruction.delay_slot.role == katana::ir::DelaySlotRole::Slot &&
+        instruction.delay_slot.counterpart_address.has_value()
+    ) {
+        output << ", " << hex32(*instruction.delay_slot.counterpart_address);
+    }
+    output << ");\n";
+    emit_indent(output, indent + 1);
+    output << "return;\n";
+    emit_indent(output, indent);
+    output << "}\n";
+}
+
+void emit_fpu_mode_guard(
+    std::ostringstream& output,
+    const katana::ir::Instruction& instruction,
+    const int indent
+) {
+    using Operation = katana::ir::Operation;
+
+    std::string invalid_condition;
+    const auto append_condition = [&invalid_condition](const std::string& condition) {
+        if (!invalid_condition.empty()) {
+            invalid_condition += " || ";
+        }
+        invalid_condition += condition;
+    };
+
+    switch (instruction.operation) {
+        case Operation::FmovRegister:
+        case Operation::FmovLoad:
+        case Operation::FmovLoadPostIncrement:
+        case Operation::FmovLoadR0Indexed:
+        case Operation::FmovStore:
+        case Operation::FmovStorePreDecrement:
+        case Operation::FmovStoreR0Indexed:
+            append_condition(
+                "(cpu.fpu_double_precision() && cpu.fpu_transfer_pair())"
+            );
+            break;
+        case Operation::Fldi0:
+        case Operation::Fldi1:
+        case Operation::Fmac:
+        case Operation::Frchg:
+        case Operation::Fschg:
+            append_condition("cpu.fpu_double_precision()");
+            break;
+        case Operation::FcnvDoubleToSingle:
+        case Operation::FcnvSingleToDouble:
+            append_condition("!cpu.fpu_double_precision()");
+            break;
+        default:
+            break;
+    }
+
+    const bool checks_source =
+        instruction.operation == Operation::Fadd ||
+        instruction.operation == Operation::Fsub ||
+        instruction.operation == Operation::Fmul ||
+        instruction.operation == Operation::Fdiv ||
+        instruction.operation == Operation::FcmpEqual ||
+        instruction.operation == Operation::FcmpGreater ||
+        instruction.operation == Operation::Ftrc ||
+        instruction.operation == Operation::FcnvDoubleToSingle;
+    const bool checks_destination =
+        instruction.operation == Operation::Fadd ||
+        instruction.operation == Operation::Fsub ||
+        instruction.operation == Operation::Fmul ||
+        instruction.operation == Operation::Fdiv ||
+        instruction.operation == Operation::FcmpEqual ||
+        instruction.operation == Operation::FcmpGreater ||
+        instruction.operation == Operation::Fabs ||
+        instruction.operation == Operation::Fneg ||
+        instruction.operation == Operation::Fsqrt ||
+        instruction.operation == Operation::FloatFromFpul ||
+        instruction.operation == Operation::FcnvSingleToDouble;
+
+    if (checks_source && (instruction.source_register & 1u) != 0u) {
+        append_condition("cpu.fpu_double_precision()");
+    }
+    if (checks_destination && (instruction.destination_register & 1u) != 0u) {
+        append_condition("cpu.fpu_double_precision()");
+    }
+
+    if (invalid_condition.empty()) {
+        return;
+    }
+
+    emit_indent(output, indent);
+    output << "if (" << invalid_condition << ") {\n";
+    emit_indent(output, indent + 1);
+    output << "raise_illegal_instruction(cpu, " << hex32(instruction.source_address);
+    if (
+        instruction.delay_slot.role == katana::ir::DelaySlotRole::Slot &&
+        instruction.delay_slot.counterpart_address.has_value()
+    ) {
+        output << ", " << hex32(*instruction.delay_slot.counterpart_address);
+    }
+    output << ");\n";
+    emit_indent(output, indent + 1);
+    output << "return;\n";
+    emit_indent(output, indent);
+    output << "}\n";
+}
+
 void emit_simple_instruction(
     std::ostringstream& output,
     const katana::ir::Instruction& instruction,
@@ -138,6 +300,155 @@ void emit_simple_instruction(
     switch (instruction.operation) {
         case Operation::Nop:
             output << "/* nop */\n";
+            return;
+
+        case Operation::FmovRegister:
+            output << "if (cpu.fpu_transfer_pair()) {\n"
+                << "    katana::runtime::write_fpu_pair_bits(cpu, "
+                << static_cast<unsigned>(instruction.destination_register) << "u,\n"
+                << "        katana::runtime::read_fpu_pair_bits(cpu, "
+                << static_cast<unsigned>(instruction.source_register) << "u));\n"
+                << "} else {\n"
+                << "    cpu.fr[" << static_cast<unsigned>(instruction.destination_register)
+                << "] = cpu.fr[" << static_cast<unsigned>(instruction.source_register) << "];\n"
+                << "}\n";
+            return;
+        case Operation::FmovLoad:
+        case Operation::FmovLoadPostIncrement:
+        case Operation::FmovLoadR0Indexed: {
+            const unsigned source = instruction.source_register;
+            const unsigned destination = instruction.destination_register;
+            output << "{\n"
+                << "const std::uint32_t address = ";
+            if (instruction.operation == Operation::FmovLoadR0Indexed) {
+                output << "cpu.r[0] + ";
+            }
+            output << "cpu.r[" << source << "];\n"
+                << "if (cpu.fpu_transfer_pair()) {\n"
+                << "    const std::uint32_t low = cpu.memory.read_u32(address);\n"
+                << "    const std::uint32_t high = cpu.memory.read_u32(address + 4u);\n"
+                << "    katana::runtime::write_fpu_pair_bits(cpu, " << destination
+                << "u, (static_cast<std::uint64_t>(high) << 32u) | low);\n"
+                << "} else {\n"
+                << "    cpu.fr[" << destination << "] = cpu.memory.read_u32(address);\n"
+                << "}\n";
+            if (instruction.operation == Operation::FmovLoadPostIncrement) {
+                output << "cpu.r[" << source
+                    << "] = address + (cpu.fpu_transfer_pair() ? 8u : 4u);\n";
+            }
+            output << "}\n";
+            return;
+        }
+        case Operation::FmovStore:
+        case Operation::FmovStorePreDecrement:
+        case Operation::FmovStoreR0Indexed: {
+            const unsigned source = instruction.source_register;
+            const unsigned destination = instruction.destination_register;
+            output << "{\n";
+            if (instruction.operation == Operation::FmovStorePreDecrement) {
+                output << "const std::uint32_t width = cpu.fpu_transfer_pair() ? 8u : 4u;\n";
+            }
+            output << "const std::uint32_t address = ";
+            if (instruction.operation == Operation::FmovStoreR0Indexed) {
+                output << "cpu.r[0] + cpu.r[" << destination << "]";
+            } else if (instruction.operation == Operation::FmovStorePreDecrement) {
+                output << "cpu.r[" << destination << "] - width";
+            } else {
+                output << "cpu.r[" << destination << "]";
+            }
+            output << ";\n"
+                << "if (cpu.fpu_transfer_pair()) {\n"
+                << "    const std::uint64_t bits = katana::runtime::read_fpu_pair_bits(cpu, "
+                << source << "u);\n"
+                << "    cpu.memory.write_u32(address, static_cast<std::uint32_t>(bits));\n"
+                << "    cpu.memory.write_u32(address + 4u, static_cast<std::uint32_t>(bits >> 32u));\n"
+                << "} else {\n"
+                << "    cpu.memory.write_u32(address, cpu.fr[" << source << "]);\n"
+                << "}\n";
+            if (instruction.operation == Operation::FmovStorePreDecrement) {
+                output << "cpu.r[" << destination << "] = address;\n";
+            }
+            output << "}\n";
+            return;
+        }
+        case Operation::Fldi0:
+            output << "cpu.fr[" << static_cast<unsigned>(instruction.destination_register)
+                << "] = 0x00000000u;\n";
+            return;
+        case Operation::Fldi1:
+            output << "cpu.fr[" << static_cast<unsigned>(instruction.destination_register)
+                << "] = 0x3F800000u;\n";
+            return;
+        case Operation::Flds:
+            output << "cpu.fpul = cpu.fr["
+                << static_cast<unsigned>(instruction.source_register) << "];\n";
+            return;
+        case Operation::Fsts:
+            output << "cpu.fr[" << static_cast<unsigned>(instruction.destination_register)
+                << "] = cpu.fpul;\n";
+            return;
+        case Operation::Fabs:
+            output << "katana::runtime::fpu_absolute(cpu, "
+                << static_cast<unsigned>(instruction.destination_register) << "u);\n";
+            return;
+        case Operation::Fadd:
+        case Operation::Fsub:
+        case Operation::Fmul:
+        case Operation::Fdiv: {
+            const char* operation = instruction.operation == Operation::Fadd
+                ? "Add" : instruction.operation == Operation::Fsub
+                ? "Subtract" : instruction.operation == Operation::Fmul
+                ? "Multiply" : "Divide";
+            output << "katana::runtime::fpu_binary(cpu, "
+                << "katana::runtime::FpuBinaryOperation::" << operation << ", "
+                << static_cast<unsigned>(instruction.source_register) << "u, "
+                << static_cast<unsigned>(instruction.destination_register) << "u);\n";
+            return;
+        }
+        case Operation::FcmpEqual:
+            output << "katana::runtime::fpu_compare_equal(cpu, "
+                << static_cast<unsigned>(instruction.source_register) << "u, "
+                << static_cast<unsigned>(instruction.destination_register) << "u);\n";
+            return;
+        case Operation::FcmpGreater:
+            output << "katana::runtime::fpu_compare_greater(cpu, "
+                << static_cast<unsigned>(instruction.source_register) << "u, "
+                << static_cast<unsigned>(instruction.destination_register) << "u);\n";
+            return;
+        case Operation::FloatFromFpul:
+            output << "katana::runtime::fpu_float_from_fpul(cpu, "
+                << static_cast<unsigned>(instruction.destination_register) << "u);\n";
+            return;
+        case Operation::Fmac:
+            output << "katana::runtime::fpu_multiply_accumulate(cpu, "
+                << static_cast<unsigned>(instruction.source_register) << "u, "
+                << static_cast<unsigned>(instruction.destination_register) << "u);\n";
+            return;
+        case Operation::Fneg:
+            output << "katana::runtime::fpu_negate(cpu, "
+                << static_cast<unsigned>(instruction.destination_register) << "u);\n";
+            return;
+        case Operation::Fsqrt:
+            output << "katana::runtime::fpu_square_root(cpu, "
+                << static_cast<unsigned>(instruction.destination_register) << "u);\n";
+            return;
+        case Operation::Ftrc:
+            output << "katana::runtime::fpu_truncate_to_fpul(cpu, "
+                << static_cast<unsigned>(instruction.source_register) << "u);\n";
+            return;
+        case Operation::FcnvDoubleToSingle:
+            output << "katana::runtime::fpu_convert_double_to_single(cpu, "
+                << static_cast<unsigned>(instruction.source_register) << "u);\n";
+            return;
+        case Operation::FcnvSingleToDouble:
+            output << "katana::runtime::fpu_convert_single_to_double(cpu, "
+                << static_cast<unsigned>(instruction.destination_register) << "u);\n";
+            return;
+        case Operation::Frchg:
+            output << "cpu.toggle_fpu_register_bank();\n";
+            return;
+        case Operation::Fschg:
+            output << "cpu.write_fpscr(cpu.read_fpscr() ^ katana::runtime::fpscr_sz_mask);\n";
             return;
 
         case Operation::MovImmediate:
@@ -1977,6 +2288,9 @@ void emit_guarded_simple_instruction(
     const katana::ir::Instruction& instruction,
     const int indent
 ) {
+    emit_fpu_disabled_guard(output, instruction, indent);
+    emit_fpu_mode_guard(output, instruction, indent);
+
     if (
         instruction.memory_effects.access ==
         katana::ir::MemoryAccessKind::None
@@ -2697,11 +3011,12 @@ std::string emit_cpp_program(
 
     output
         << "#include \"katana/runtime/exception.hpp\"\n"
+        << "#include \"katana/runtime/fpu.hpp\"\n"
         << "#include \"katana/runtime/runtime.hpp\"\n"
         << "#include <cstdint>\n"
         << "#include <stdexcept>\n\n"
         << "namespace katana_generated {\n\n"
-        << "inline constexpr std::uint32_t required_runtime_abi = 6u;\n"
+        << "inline constexpr std::uint32_t required_runtime_abi = 7u;\n"
         << "static_assert(\n"
         << "    katana::runtime::abi_version == required_runtime_abi,\n"
         << "    \"Inkompatible Katana-Runtime-ABI\"\n"
@@ -2709,6 +3024,7 @@ std::string emit_cpp_program(
         << "using CpuState = katana::runtime::CpuState;\n"
         << "using Memory = katana::runtime::Memory;\n"
         << "using katana::runtime::enter_memory_exception;\n"
+        << "using katana::runtime::raise_fpu_disabled;\n"
         << "using katana::runtime::raise_illegal_instruction;\n"
         << "using katana::runtime::raise_trapa;\n"
         << "using katana::runtime::return_from_exception;\n"

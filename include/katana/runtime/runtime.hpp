@@ -8,7 +8,7 @@
 
 namespace katana::runtime {
 
-inline constexpr std::uint32_t abi_version = 6u;
+inline constexpr std::uint32_t abi_version = 7u;
 
 inline constexpr std::uint32_t sr_t_mask = 0x00000001u;
 inline constexpr std::uint32_t sr_s_mask = 0x00000002u;
@@ -21,6 +21,13 @@ inline constexpr std::uint32_t sr_rb_mask = 0x20000000u;
 inline constexpr std::uint32_t sr_md_mask = 0x40000000u;
 inline constexpr std::uint32_t sr_writable_mask = 0x700083F3u;
 
+inline constexpr std::uint32_t fpscr_rounding_mode_mask = 0x00000003u;
+inline constexpr std::uint32_t fpscr_dn_mask = 0x00040000u;
+inline constexpr std::uint32_t fpscr_pr_mask = 0x00080000u;
+inline constexpr std::uint32_t fpscr_sz_mask = 0x00100000u;
+inline constexpr std::uint32_t fpscr_fr_mask = 0x00200000u;
+inline constexpr std::uint32_t fpscr_writable_mask = 0x003FFFFFu;
+
 inline constexpr std::size_t general_register_count = 16u;
 inline constexpr std::size_t banked_register_count = 8u;
 inline constexpr std::size_t fpu_register_count = 16u;
@@ -30,6 +37,8 @@ enum class ExceptionCause : std::uint8_t {
     Trap,
     IllegalInstruction,
     SlotIllegalInstruction,
+    FpuDisabled,
+    SlotFpuDisabled,
     AddressErrorRead,
     AddressErrorWrite,
     BusErrorRead,
@@ -82,6 +91,13 @@ struct CpuState {
 
     [[nodiscard]] std::uint32_t read_sr() const noexcept;
     void write_sr(std::uint32_t value) noexcept;
+    [[nodiscard]] std::uint32_t read_fpscr() const noexcept;
+    void write_fpscr(std::uint32_t value) noexcept;
+    void toggle_fpu_register_bank() noexcept;
+    [[nodiscard]] bool fpu_register_bank_selected() const noexcept;
+    [[nodiscard]] bool fpu_double_precision() const noexcept;
+    [[nodiscard]] bool fpu_transfer_pair() const noexcept;
+    [[nodiscard]] bool fpu_flush_denormals() const noexcept;
     [[nodiscard]] std::uint8_t interrupt_mask() const noexcept;
     void set_interrupt_mask(std::uint8_t level) noexcept;
     [[nodiscard]] bool interrupts_blocked() const noexcept;

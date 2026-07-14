@@ -52,7 +52,11 @@ constexpr std::array kSpecificationVectors = {
     SpecificationVector{0x4D1Eu, InstructionKind::LoadSpecialRegister, 0, 13, 0, 0, 0, SpecialRegister::Gbr, ControlFlowKind::None, false, false},
     SpecificationVector{0x40F6u, InstructionKind::LoadSpecialRegisterPostIncrement, 0, 0, 0, 0, 0, SpecialRegister::Dbr, ControlFlowKind::None, false, true},
     SpecificationVector{0xFFFFu, InstructionKind::Unknown, 0, 0, 0, 0, 0, SpecialRegister::None, ControlFlowKind::None, false, false},
-    SpecificationVector{0xF000u, InstructionKind::Unknown, 0, 0, 0, 0, 0, SpecialRegister::None, ControlFlowKind::None, false, false},
+    SpecificationVector{0xF000u, InstructionKind::Fadd, 0, 0, 0, 0, 0, SpecialRegister::None, ControlFlowKind::None, false, false},
+    SpecificationVector{0xF4ADu, InstructionKind::FcnvSingleToDouble, 4, 0, 0, 0, 0, SpecialRegister::None, ControlFlowKind::None, false, false},
+    SpecificationVector{0xF6BDu, InstructionKind::FcnvDoubleToSingle, 0, 6, 0, 0, 0, SpecialRegister::None, ControlFlowKind::None, false, false},
+    SpecificationVector{0xF35Cu, InstructionKind::FmovRegister, 3, 5, 0, 0, 0, SpecialRegister::None, ControlFlowKind::None, false, false},
+    SpecificationVector{0xFBFDu, InstructionKind::Frchg, 0, 0, 0, 0, 0, SpecialRegister::None, ControlFlowKind::None, false, false},
     SpecificationVector{0x407Au, InstructionKind::Unknown, 0, 0, 0, 0, 0, SpecialRegister::None, ControlFlowKind::None, false, false}
 };
 

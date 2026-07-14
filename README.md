@@ -2,11 +2,11 @@
 
 [![CI](https://github.com/sonicfreak1337/KatanaRecomp/actions/workflows/ci.yml/badge.svg)](https://github.com/sonicfreak1337/KatanaRecomp/actions/workflows/ci.yml)
 
-Aktuelle Pre-Alpha-Version: `0.23.0`
+Aktuelle Pre-Alpha-Version: `0.24.0`
 
 KatanaRecomp ist ein unabhaengiges, in C++20 entwickeltes Framework fuer die statische Rekompilierung von Sega-Dreamcast-SH-4-Code.
 
-Das Projekt befindet sich in einer fruehen Pre-Alpha-Phase. Der aktuelle Stand ist **Version 0.23.0**.
+Das Projekt befindet sich in einer fruehen Pre-Alpha-Phase. Der aktuelle Stand ist **Version 0.24.0**.
 
 KatanaRecomp ist kein Emulator, kein ISO-Loader und kein Paket fuer kommerzielle Spieldaten. BIOS-Dateien, Disc-Images, urheberrechtlich geschuetzte Assets und automatisch erzeugter Code aus kommerziellen Spielen gehoeren nicht in dieses Repository.
 
@@ -31,7 +31,7 @@ SH-4-Binaerdaten
     -> semantischer Laufzeittest
 `
 
-Der aktuelle Teststand umfasst **92 automatische Tests**.
+Der aktuelle Teststand umfasst **95 automatische Tests**.
 
 Der v0.15-Decoder verwendet eine zentrale Metadatenquelle fuer alle implementierten Opcode-Masken, Operandenformate, Kontrollfluss- und Privileginformationen. `katana-recomp isa-report` berichtet deterministisch ueber den gesamten 16-Bit-Opcode-Raum; Kollisions-, Spezifikations- und Fuzztests sichern die Regeln ab.
 
@@ -283,6 +283,7 @@ Der C++-Emitter erzeugt aktuell:
 - bedingte und unbedingte Spruenge
 - Returns
 - Delay-Slot-Ausfuehrung
+- FPU-Grundarithmetik, Vergleiche, Konvertierungen und FR-/XF-Bankwechsel
 - Fehlerpfade fuer noch nicht aufgeloeste indirekte Spruenge und Calls
 
 Generierter Code wird in den End-to-End-Tests automatisch kompiliert und ausgefuehrt.
@@ -296,17 +297,15 @@ KatanaRecomp ist noch kein vollstaendiger Dreamcast-Recompiler. Unter anderem fe
 
 - grosse Teile des SH-4-Befehlssatzes
 - weitere Integer- und Systemregister-Flags
-- FPU- und Vektoroperationen
+- FPU-Vektor- und Spezialoperationen sowie Denormal- und Exception-Flag-Semantik
 - vollstaendiges Statusregister
-- Dreamcast-Speicherabbild
-- MMIO und Hardware-Register
-- Ausnahmen und Interrupts
+- konkrete Dreamcast-MMIO- und Hardware-Register
+- noch nicht modellierte SH-4-Exception- und Interruptquellen
 - MMU und Cache-Verhalten
 - PVR, AICA, GD-ROM und weitere Dreamcast-Hardware
 - weitere Executable-Formate und dynamisches Linken
 - Relocation-Typen jenseits der minimalen SH-32-Bit-Unterstuetzung
 - robuste indirekte Sprungzielanalyse
-- Jump Tables
 - Selbstmodifizierender Code
 - Optimierungspasses
 - produktionsreife Runtime
@@ -444,12 +443,11 @@ Der Helfer 	ools\release-version.ps1 aktualisiert VERSION und CMake und kann ein
 
 ## Naechste technische Ziele
 
-1. FR- und XF-Bankumschaltung
-2. Single-Precision-Arithmetik
-3. FPU-Vergleiche und Konvertierungen
-4. `FPSCR`-Modi `PR`, `SZ` und `FR`
-5. Double-Precision-Semantik
-6. v0.24 Release-Gate
+1. `FSCA` und `FSRRA`
+2. `FIPR` und `FTRV`
+3. NaN-, Denormal-, Rundungs- und FPU-Exception-Flags vervollstaendigen
+4. FPU-Konformitaetssuite
+5. v0.25 Release-Gate
 
 
 ## Roadmap und Arbeitsuebergabe

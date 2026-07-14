@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.25)
 
 project(
     KatanaRecomp
-    VERSION 0.23.0
+    VERSION 0.24.0
     DESCRIPTION "Dreamcast SH-4 static recompilation framework"
     LANGUAGES CXX
 )
@@ -35,6 +35,7 @@ endfunction()
 add_library(katana_runtime STATIC
     src/runtime/dreamcast_memory.cpp
     src/runtime/exception.cpp
+    src/runtime/fpu.cpp
     src/runtime/interrupt.cpp
     src/runtime/memory.cpp
     src/runtime/runtime.cpp
@@ -49,6 +50,11 @@ target_include_directories(
 )
 
 katana_enable_warnings(katana_runtime)
+if(MSVC)
+    target_compile_options(katana_runtime PRIVATE /fp:strict)
+else()
+    target_compile_options(katana_runtime PRIVATE -frounding-math)
+endif()
 
 add_library(katana_core STATIC
     src/decoder/decoder.cpp
@@ -245,6 +251,18 @@ add_test(
     COMMAND katana-interrupt-tests
 )
 
+add_executable(katana-fpu-tests
+    tests/runtime/fpu_tests.cpp
+)
+
+target_link_libraries(katana-fpu-tests PRIVATE katana_runtime)
+katana_enable_warnings(katana-fpu-tests)
+
+add_test(
+    NAME katana-fpu-tests
+    COMMAND katana-fpu-tests
+)
+
 add_executable(katana-decoder-tests
     tests/decoder/decoder_tests.cpp
 )
@@ -335,6 +353,18 @@ katana_enable_warnings(katana-instruction-metadata-tests)
 add_test(
     NAME katana-instruction-metadata-tests
     COMMAND katana-instruction-metadata-tests
+)
+
+add_executable(katana-fpu-pipeline-tests
+    tests/fpu/fpu_pipeline_tests.cpp
+)
+
+target_link_libraries(katana-fpu-pipeline-tests PRIVATE katana_core)
+katana_enable_warnings(katana-fpu-pipeline-tests)
+
+add_test(
+    NAME katana-fpu-pipeline-tests
+    COMMAND katana-fpu-pipeline-tests
 )
 
 add_executable(katana-decoder-collision-tests
@@ -2656,6 +2686,51 @@ add_dependencies(katana-generated-delay-slot-tests katana-delay-slot-program-wri
 add_test(
     NAME katana-generated-delay-slot-tests
     COMMAND katana-generated-delay-slot-tests
+)
+
+set(
+    KATANA_GENERATED_FPU_CPP
+    ${KATANA_GENERATED_TEST_DIR}/generated_fpu_program.cpp
+)
+
+add_custom_command(
+    OUTPUT ${KATANA_GENERATED_FPU_CPP}
+    COMMAND ${CMAKE_COMMAND} -E make_directory ${KATANA_GENERATED_TEST_DIR}
+    COMMAND
+        $<TARGET_FILE:katana-fpu-pipeline-tests>
+        --emit-cpp
+        ${KATANA_GENERATED_FPU_CPP}
+    DEPENDS katana-fpu-pipeline-tests tests/fpu/fpu_pipeline_tests.cpp
+    COMMENT "Generiere C++-Programm fuer Phase-5-FPU-End-to-End-Test"
+    VERBATIM
+)
+
+set_source_files_properties(
+    ${KATANA_GENERATED_FPU_CPP}
+    PROPERTIES GENERATED TRUE HEADER_FILE_ONLY TRUE
+)
+
+set_source_files_properties(
+    tests/fpu/generated_fpu_tests.cpp
+    PROPERTIES OBJECT_DEPENDS ${KATANA_GENERATED_FPU_CPP}
+)
+
+add_executable(katana-generated-fpu-tests
+    tests/fpu/generated_fpu_tests.cpp
+    ${KATANA_GENERATED_FPU_CPP}
+)
+
+target_include_directories(
+    katana-generated-fpu-tests
+    PRIVATE ${KATANA_GENERATED_TEST_DIR}
+)
+
+katana_enable_warnings(katana-generated-fpu-tests)
+add_dependencies(katana-generated-fpu-tests katana-fpu-pipeline-tests)
+
+add_test(
+    NAME katana-generated-fpu-tests
+    COMMAND katana-generated-fpu-tests
 )
 
 get_property(

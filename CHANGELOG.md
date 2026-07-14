@@ -2,15 +2,24 @@
 
 ## [Unreleased]
 
+## [0.24.0] - 2026-07-15
+
 ### Hinzugefuegt
 
 - KR-2307: Generierter C++-Code wird fuer Speicheradressfehler in den Delay Slots von `BRA`, `BSR`, `JMP`, `JSR`, `RTS` und `RTE` kompiliert und tatsaechlich ausgefuehrt. Die Regression prueft Owner-`SPC`, vorbereitete Registereffekte, restaurierten RTE-Status samt Registerbank, illegale Slot-Instruktionen und die Propagation durch verschachtelte generierte Aufrufe.
 - Interrupttests decken gleiche Prioritaetslevel mit Quell-ID-Tie-Break, Level 0, Clamping auf Level 15, Prioritaetsupdates und `trap_pending` ohne gesetztes `BL` ab.
+- KR-2401: `FPSCR.FR` schaltet die sichtbaren FR-/XF-Rohbitbaenke zentral und reversibel um; `FMOV` uebertraegt 32-Bit-Einzelwerte oder 64-Bit-Registerpaare gemaess `SZ`.
+- KR-2402: Decoder, Katana-IR, Runtime und C++-Emitter fuehren Single-Precision-`FADD`, `FSUB`, `FMUL`, `FDIV`, `FMAC`, `FABS`, `FNEG`, `FSQRT`, Konstanten und FPUL-Transfers aus.
+- KR-2403: `FCMP/EQ`, `FCMP/GT`, `FLOAT`, `FTRC`, `FCNVDS` und `FCNVSD` besitzen ausgefuehrte Runtime- und generierte End-to-End-Regressionen.
+- KR-2404: Zentrale `FPSCR`-Masken und Zugriffe modellieren `PR`, `SZ`, `FR`, `DN` und `RM`; Round-to-Nearest und Round-to-Zero laufen in einer strikt gesetzten Host-Rundungsumgebung.
+- KR-2405: Gepaarte FR-Register bilden Double Precision ab. Arithmetik, Vergleiche, Quadratwurzel, Konvertierungen und Little-Endian-64-Bit-Transfers sind abgedeckt.
+- KR-2406: FPU-Disable-Ausnahmen sichern `EXPEVT`, Slotkontext und Owner-`SPC`; unzulaessige Moduskombinationen werden vor Teilwirkungen abgewiesen. Der generierte Pfad wird kompiliert und einschliesslich eines BRA-Delay-Slot-Fehlers ausgefuehrt.
 
 ### Geaendert
 
 - Konsistente `Unknown`-IR darf den strukturierten Illegal-Instruction-Pfad des Codegenerators erreichen; widerspruechliche IR-Metadaten werden weiterhin abgelehnt.
-- Die vollstaendige Regression umfasst nun 92 Tests.
+- Die Runtime-ABI steigt auf Version 7 und zentralisiert `FPSCR`-Schreibzugriffe sowie FR-/XF-Bankwechsel.
+- Die vollstaendige Regression umfasst nun 95 Tests und besteht in frischen lokalen Debug- und Release-Builds. CI bleibt gemaess Projektentscheidung bis zum Alpha-Gate optional.
 
 ## [0.23.0] - 2026-07-15
 

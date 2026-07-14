@@ -48,7 +48,12 @@ LDC maskiert SR mit `0x700083F3`. T, S, Q und M bleiben mit den bereits explizit
 
 ## FPSCR
 
-LDS maskiert FPSCR mit `0x003FFFFF`. FPUL wird als unveraendertes 32-Bit-Kommunikationsregister uebertragen. Die eigentliche FPU-Semantik folgt in einem spaeteren Meilenstein.
+LDS maskiert FPSCR mit `0x003FFFFF`. FPUL wird als unveraendertes
+32-Bit-Kommunikationsregister uebertragen. Seit v0.24.0 wechselt `FPSCR.FR`
+zentral die sichtbaren FR-/XF-Baenke; `PR`, `SZ` und `RM` steuern Praezision,
+Transferbreite und Rundung. Bei gesetztem `SR.FD` nehmen auch direkte und
+speicherbasierte FPUL-/FPSCR-Transfers vor einer Teilwirkung die strukturierte
+FPU-Disable-Ausnahme.
 
 ## Privilegstatus
 

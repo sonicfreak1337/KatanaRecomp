@@ -40,6 +40,8 @@ OperandWidths operation_operand_widths(const Operation operation) noexcept {
         case Operation::SetT:
         case Operation::DivideInitializeUnsigned:
         case Operation::Sleep:
+        case Operation::Frchg:
+        case Operation::Fschg:
             return {};
 
         case Operation::DivideInitializeSigned:
@@ -62,6 +64,18 @@ OperandWidths operation_operand_widths(const Operation operation) noexcept {
 
         case Operation::MoveT:
             return {longword, bit, none, none, none, none};
+        case Operation::Fldi0:
+        case Operation::Fldi1:
+            return {longword, none, none, none, none, none};
+        case Operation::Flds:
+        case Operation::Fsts:
+        case Operation::FloatFromFpul:
+        case Operation::Ftrc:
+            return register_unary();
+        case Operation::FcnvDoubleToSingle:
+            return {longword, quadword, none, none, none, none};
+        case Operation::FcnvSingleToDouble:
+            return {quadword, longword, none, none, none, none};
         case Operation::ExtendUnsignedByte:
         case Operation::ExtendSignedByte:
             return {longword, byte, none, none, none, none};
@@ -100,10 +114,18 @@ OperandWidths operation_operand_widths(const Operation operation) noexcept {
         case Operation::StoreLongPreDecrement:
         case Operation::StoreLongR0Indexed:
             return memory_store(longword);
+        case Operation::FmovStore:
+        case Operation::FmovStorePreDecrement:
+        case Operation::FmovStoreR0Indexed:
+            return memory_store(quadword);
         case Operation::LoadLong:
         case Operation::LoadLongPostIncrement:
         case Operation::LoadLongR0Indexed:
             return memory_load(longword);
+        case Operation::FmovLoad:
+        case Operation::FmovLoadPostIncrement:
+        case Operation::FmovLoadR0Indexed:
+            return memory_load(quadword);
 
         case Operation::StoreByteDisplacement:
             return {none, longword, none, nibble, byte, longword};
@@ -168,6 +190,9 @@ OperandWidths operation_operand_widths(const Operation operation) noexcept {
         case Operation::ComparePositiveOrZero:
         case Operation::ComparePositive:
             return {bit, longword, none, none, none, none};
+        case Operation::FcmpEqual:
+        case Operation::FcmpGreater:
+            return {bit, longword, none, none, none, none};
 
         case Operation::MovRegister:
         case Operation::AddRegister:
@@ -189,6 +214,12 @@ OperandWidths operation_operand_widths(const Operation operation) noexcept {
         case Operation::AndRegister:
         case Operation::OrRegister:
         case Operation::XorRegister:
+        case Operation::FmovRegister:
+        case Operation::Fadd:
+        case Operation::Fdiv:
+        case Operation::Fmac:
+        case Operation::Fmul:
+        case Operation::Fsub:
             return register_binary();
         case Operation::DecrementAndTest:
         case Operation::ShiftLogicalLeftOne:
@@ -205,6 +236,9 @@ OperandWidths operation_operand_widths(const Operation operation) noexcept {
         case Operation::RotateRight:
         case Operation::RotateLeftThroughT:
         case Operation::RotateRightThroughT:
+        case Operation::Fabs:
+        case Operation::Fneg:
+        case Operation::Fsqrt:
             return register_unary();
     }
     return {};

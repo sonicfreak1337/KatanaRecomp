@@ -37,8 +37,8 @@ int main() {
     static_assert(katana::runtime::fpu_register_count == 16u);
 
     require(
-        katana::runtime::abi_version == 6u,
-        "Der Exception-Zustand erfordert Runtime-ABI 6."
+        katana::runtime::abi_version == 7u,
+        "Die FPU-Banksemantik erfordert Runtime-ABI 7."
     );
 
     CpuState cpu;
@@ -115,6 +115,32 @@ int main() {
         cpu.fr[0] != cpu.xf[0] &&
         cpu.fr[15] != cpu.xf[15],
         "FR- und XF-Bank sind nicht voneinander getrennt."
+    );
+
+    cpu.write_fpscr(
+        katana::runtime::fpscr_fr_mask |
+        katana::runtime::fpscr_pr_mask |
+        katana::runtime::fpscr_sz_mask |
+        katana::runtime::fpscr_dn_mask |
+        0xFFC00000u
+    );
+    require(
+        cpu.fpu_register_bank_selected() &&
+        cpu.fpu_double_precision() &&
+        cpu.fpu_transfer_pair() &&
+        cpu.fpu_flush_denormals() &&
+        cpu.fr[0] == 0xBF800000u &&
+        cpu.xf[0] == 0x3F800000u &&
+        cpu.read_fpscr() == 0x003C0000u,
+        "FPSCR-Modi oder FR-/XF-Bankumschaltung sind nicht zentral modelliert."
+    );
+
+    cpu.toggle_fpu_register_bank();
+    require(
+        !cpu.fpu_register_bank_selected() &&
+        cpu.fr[0] == 0x3F800000u &&
+        cpu.xf[0] == 0xBF800000u,
+        "FRCHG-Grundsemantik stellt die sichtbaren FPU-Baenke nicht wieder her."
     );
 
     cpu.intevt = 0x00000320u;
