@@ -677,7 +677,7 @@ Fortschritt:
 
 - [x] KR-3101 - Event-Scheduler
 - [x] KR-3102 - TMU und RTC
-- [ ] KR-3103 - DMA
+- [x] KR-3103 - DMA
 - [ ] KR-3104 - Plattform-Interruptintegration
 - [ ] KR-3105 - Frame- und Audio-Taktung
 

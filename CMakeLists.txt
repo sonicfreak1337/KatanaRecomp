@@ -34,6 +34,7 @@ endfunction()
 
 add_library(katana_runtime STATIC
     src/runtime/aica.cpp
+    src/runtime/dma.cpp
     src/runtime/disc.cpp
     src/runtime/dreamcast_memory.cpp
     src/runtime/exception.cpp
@@ -376,6 +377,11 @@ add_executable(katana-tmu-rtc-tests tests/runtime/tmu_rtc_tests.cpp)
 target_link_libraries(katana-tmu-rtc-tests PRIVATE katana_runtime)
 katana_enable_warnings(katana-tmu-rtc-tests)
 add_test(NAME katana-tmu-rtc-tests COMMAND katana-tmu-rtc-tests)
+
+add_executable(katana-dma-tests tests/runtime/dma_tests.cpp)
+target_link_libraries(katana-dma-tests PRIVATE katana_runtime)
+katana_enable_warnings(katana-dma-tests)
+add_test(NAME katana-dma-tests COMMAND katana-dma-tests)
 
 add_executable(katana-decoder-tests
     tests/decoder/decoder_tests.cpp

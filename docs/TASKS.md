@@ -994,9 +994,25 @@ Akzeptanz:
 
 Abhaengigkeiten: KR-3101
 
-### [ ] KR-3103 - DMA
+### [x] KR-3103 - DMA
 
 Abhaengigkeiten: KR-3101, KR-2207
+
+Umfang:
+
+- vier SH-4-DMAC-Kanaele mit SAR, DAR, DMATCR, CHCR und gemeinsamem DMAOR abbilden
+- Transfergroessen und feste, inkrementierende sowie dekrementierende Adressmodi ausfuehren
+- Auto-, externe und Modulrequests ueber den zentralen Gastzyklus-Scheduler ordnen
+- TE-, IE-, AE- und NMIF-Zustaende sowie Kanalprioritaeten sichtbar bereitstellen
+- das 32-Bit-DMAC-Registerfenster ueber P4 und den Area-7-Alias an den Memory-Bus anbinden
+
+Akzeptanz:
+
+- Teilfortschritt, Adressfeedback und Abschluss sind an festen Gastzyklen messbar
+- gleichzeitige Kanaele folgen deterministisch dem gewaehlten DMAOR-Prioritaetsmodus
+- Fehladressierung stoppt alle Kanaele mit AE, ohne TE oder stillen Teilabschluss vorzutaueschen
+- Master-Disable, explizite Requests, Write-zero-to-clear und Registerbreiten sind regressionsgesichert
+- DDT und reale Pinprotokolle werden sichtbar abgewiesen statt als funktionierend vorgetaeuscht
 
 ### [ ] KR-3104 - Plattform-Interruptintegration
 
