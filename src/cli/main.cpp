@@ -14,6 +14,7 @@
 #include "katana/sh4/decoder.hpp"
 #include "katana/sh4/disassembler.hpp"
 #include "katana/sh4/isa_coverage.hpp"
+#include "katana/platform/dreamcast_disc.hpp"
 
 #include <algorithm>
 #include <array>
@@ -974,6 +975,99 @@ int emit_cpp(
     return 0;
 }
 
+int emit_phase6_probe_source(
+    const std::filesystem::path& gdi_path,
+    const std::filesystem::path& output_path
+) {
+    const auto disc = katana::platform::load_dreamcast_gdi_boot(gdi_path);
+    const auto image = katana::platform::make_dreamcast_disc_executable(disc);
+    const auto analysis = katana::analysis::analyze_control_flow(image);
+    if (!analysis.recursive.diagnostics.empty()) {
+        throw std::runtime_error(
+            "Der Phase-6-Bootblock enthaelt eine unbekannte Instruktion."
+        );
+    }
+    const auto program = katana::ir::lower_program(analysis);
+    const auto function = std::find_if(
+        program.begin(),
+        program.end(),
+        [](const katana::ir::Function& value) {
+            return value.entry_address == katana::platform::dreamcast_disc_boot_address;
+        }
+    );
+    if (function == program.end()) {
+        throw std::runtime_error("Der Phase-6-Programmeinstieg wurde nicht analysiert.");
+    }
+    const auto block = std::find_if(
+        function->blocks.begin(),
+        function->blocks.end(),
+        [](const katana::ir::BasicBlock& value) {
+            return value.start_address == katana::platform::dreamcast_disc_boot_address;
+        }
+    );
+    if (block == function->blocks.end() || block->instructions.empty()) {
+        throw std::runtime_error("Der Phase-6-Einstiegsblock ist leer oder fehlt.");
+    }
+    if (!function->direct_callees.empty() || !function->indirect_call_sites.empty()) {
+        throw std::runtime_error(
+            "Der Phase-6-Einstiegsblock braucht fuer diese Probe bereits einen Call-Dispatch."
+        );
+    }
+
+    katana::ir::Function probe;
+    probe.entry_address = function->entry_address;
+    probe.blocks.push_back(*block);
+    probe.blocks.front().successors.clear();
+    const std::array<katana::ir::Function, 1u> probe_program = {std::move(probe)};
+    auto source = katana::codegen::emit_cpp_program(
+        probe_program,
+        katana::platform::dreamcast_disc_boot_address
+    );
+    source += R"cpp(
+
+#include "katana/platform/phase6_gate.hpp"
+#include <exception>
+#include <filesystem>
+#include <iostream>
+
+int main(const int argc, const char* const* argv) {
+    if (argc != 3) {
+        std::cerr << "Phase-6-Probe erwartet GDI-Quelle und Berichtsausgabe.\n";
+        return 2;
+    }
+    try {
+        const auto report = katana::platform::run_phase6_gate(
+            std::filesystem::path(argv[1]),
+            katana_generated::run,
+)cpp";
+    source += std::to_string(block->instructions.size());
+    source += R"cpp(u
+        );
+        katana::platform::write_phase6_gate_report(report, std::filesystem::path(argv[2]));
+        std::cout << report.checkpoint << '\n';
+        return 0;
+    } catch (const std::exception& error) {
+        std::cerr << "Phase-6-Gate fehlgeschlagen: " << error.what() << '\n';
+        return 1;
+    }
+}
+)cpp";
+
+    if (output_path.has_parent_path()) {
+        std::filesystem::create_directories(output_path.parent_path());
+    }
+    std::ofstream output(output_path, std::ios::binary | std::ios::trunc);
+    if (!output) {
+        throw std::runtime_error("Die lokale Phase-6-Probe konnte nicht geoeffnet werden.");
+    }
+    output.write(source.data(), static_cast<std::streamsize>(source.size()));
+    if (!output) {
+        throw std::runtime_error("Die lokale Phase-6-Probe konnte nicht geschrieben werden.");
+    }
+    std::cout << "Lokale, temporaere Phase-6-Blockprobe erzeugt.\n";
+    return 0;
+}
+
 void print_usage() {
     std::cerr
         << "Verwendung:\n"
@@ -987,6 +1081,7 @@ void print_usage() {
         << "  katana-recomp ir <Raw|ELF|Manifest> <Einstieg> [Basisadresse] [--overrides <Datei>]\n"
         << "  katana-recomp ir-json <Raw|ELF|Manifest> <Einstieg> [Basisadresse] [--overrides <Datei>]\n"
         << "  katana-recomp emit-cpp <Raw|ELF|Manifest> <Einstieg> <Ausgabe.cpp> [Basisadresse] [--no-opt] [--dump-ir <Praefix>] [--overrides <Datei>]\n\n"
+        << "  katana-recomp phase6-probe-source <GDI> <Ausgabe.cpp>\n\n"
         << "Beispiel:\n"
         << "  katana-recomp emit-cpp programm.bin 8C010000 generated.cpp 8C010000\n";
 }
@@ -1129,6 +1224,16 @@ int main(const int argc, char* argv[]) {
                 base_address,
                 std::string(argv[1]) == "ir-json",
                 override_path
+            );
+        }
+
+        if (
+            argc == 4 &&
+            std::string(argv[1]) == "phase6-probe-source"
+        ) {
+            return emit_phase6_probe_source(
+                std::filesystem::path(argv[2]),
+                std::filesystem::path(argv[3])
             );
         }
 

@@ -9,10 +9,13 @@
 - KR-3103: Vier schedulergetaktete SH-4-DMAC-Kanaele bilden SAR/DAR/DMATCR/CHCR/DMAOR, Transfergroessen, Adressmodi, Prioritaeten sowie sichtbare TE-/IE-/AE-/NMIF-Zustaende ueber das 32-Bit-MMIO-Registerfenster ab.
 - KR-3104: Ein zentraler Plattformrouter spiegelt TMU-, RTC-, DMTE-, DMAE- und drei feste Dreamcast-IRL-Quellen an deterministischen CPU-Safepoints mit offiziellen INTEVT-Codes, gruppierten Prioritaeten und levelartiger Quittierungssemantik.
 - KR-3105: Eine gemeinsame Medienuhr erzeugt driftfreie rationale Video- und Audiokadenzen auf Gastzyklen, typisierte Backend-Callbacks, stabile Gleichzyklusreihenfolge sowie sichtbaren Budget-, Stop-, Reset- und Fehlerzustand.
+- Das lokale Phase-6-Gate erzeugt aus dem allgemein ermittelten Disc-Bootblock eine temporaere, wirklich kompilierte Einblock-Probe, fuehrt sie mit festem Gastzyklusbudget aus und schreibt einen redigierten, deterministischen JSON-Bericht. Scheduler, echter asynchroner GDI-Read, TMU, DMA, CCR-Invalidierung und Abschlussinterrupt werden messbar erfasst.
+- Ein minimales SH-4-CCR-Modell stellt den fuer den Disc-Boot beobachteten 32-Bit-Registerzugriff bereit, weist reservierte Bits und falsche Breiten sichtbar ab und zaehlt die selbstloeschende Instruktionscache-Invalidierung.
 
 ### Geaendert
 
 - Lokale Buildausgaben werden auf genau ein ignoriertes Multi-Config-Verzeichnis `build-current/` begrenzt; 14 alte task-, versions- und konfigurationsspezifische Buildbaeume wurden entfernt. Debug und Release teilen kuenftig denselben Buildbaum.
+- Mehrsitzige GDI-Quellen verwenden den letzten Datentrack als primaere Disc-Sitzung. ISO9660 kann die Position des Primary Volume Descriptors und die LBA-Basis der Extents getrennt abbilden, sodass sowohl relative synthetische als auch absolute Dreamcast-GD-Extents ohne Trackumbau funktionieren.
 
 ### Behoben
 

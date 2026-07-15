@@ -69,6 +69,7 @@ Ergebnisbericht bereitstellen. Das vorgesehene Ausgangsschema ist:
   "gdrom_completions": 0,
   "dma_events": 0,
   "interrupts_delivered": 0,
+  "cache_invalidations": 0,
   "indirect_dispatches": 0,
   "fallbacks": 0,
   "silent_failures": 0,
@@ -125,6 +126,21 @@ dass der Gast-PC im allgemein bestimmten Bereich des geladenen Hauptprogramms
 liegt und dort Code ausgefuehrt wurde. Eine fest codierte Spieladresse ist
 untersagt. Das Gate laeuft je einmal in einem frischen Debug- und Release-Build;
 beide muessen dieselben Checkpoints und strukturellen Ergebnisse liefern.
+
+Die v0.31.0-Implementierung nutzt ausschliesslich den bereits vorhandenen
+Phase-5-C++-Emitter: Aus dem allgemein analysierten Einstieg wird lokal genau
+ein Block erzeugt, tatsaechlich kompiliert und einmal innerhalb eines
+64-Gastzyklusbudgets ausgefuehrt. Die danach erwartete noch nicht vorhandene
+Phase-7-Zielauflosung endet als gezaehlter kontrollierter Fallback. Sie gilt
+nicht als `indirect_dispatches` und zieht weder Blocktabelle noch modularen
+Backend-Dispatch vor. Temporaere Quelle, Objekt und Programm werden nach dem
+Gate geloescht.
+
+Unter Windows fuehrt `tools/run_phase6_gate.ps1` zwei identische Laeufe der
+gewaehlten Debug- oder Release-Konfiguration aus, vergleicht die redigierten
+Berichte byteweise und prueft die Disc-Dateien vor und nach dem Lauf. Der
+vollstaendige Phasenabschluss verlangt weiterhin je eine frische Debug- und
+Release-Konfiguration; das Skript ist kein Gate pro Einzeltask.
 
 ## Phase 7: Codegenerator und Runtime-Dispatch
 

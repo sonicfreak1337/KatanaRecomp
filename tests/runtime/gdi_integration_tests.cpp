@@ -104,7 +104,7 @@ int main(const int argc, const char* const* argv) {
     if (argc == 2) {
         const auto local = GdiDiscSource::open(argv[1]);
         require(!local->descriptor().tracks.empty(), "Lokale GDI-Quelle besitzt keine Tracks.");
-        Iso9660Filesystem local_filesystem(local, 2048u, local->primary_data_lba());
+        Iso9660Filesystem local_filesystem(local, 2048u, local->primary_data_lba(), 0u);
         static_cast<void>(local_filesystem.list_directory());
         std::cout << "Lokaler read-only GDI-Smoke-Test erfolgreich.\n";
     }

@@ -93,7 +93,8 @@ int main() {
         katana::runtime::unresolved_call(cpu, 0x12345678u);
     } catch (const std::runtime_error& error) {
         call_failed =
-            std::string(error.what()) == "Nicht aufgeloester Aufruf";
+            std::string(error.what()) == "Nicht aufgeloester Aufruf" &&
+            cpu.pc == 0x12345678u;
     }
     require(
         call_failed,
@@ -105,7 +106,8 @@ int main() {
         katana::runtime::unresolved_jump(cpu, 0x12345678u);
     } catch (const std::runtime_error& error) {
         jump_failed =
-            std::string(error.what()) == "Nicht aufgeloester Sprung";
+            std::string(error.what()) == "Nicht aufgeloester Sprung" &&
+            cpu.pc == 0x12345678u;
     }
     require(
         jump_failed,

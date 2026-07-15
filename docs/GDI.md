@@ -19,7 +19,20 @@ direkte 2048-Byte-Sektoren, 2336-Byte-Mode-2-Sektoren sowie Mode 1 und Mode 2
 in 2352- oder 2448-Byte-Raw-Sektoren. Luecken, Audiobereiche und unbekannte
 Raw-Modi koennen nicht still als Datensektoren gelesen werden.
 
+Bei mehreren Datentracks gilt der letzte, hoechstliegende Datentrack als
+primaere Sitzung. Der ISO9660-Mount trennt die Sitzungs-LBA des Primary Volume
+Descriptors von der LBA-Basis der Directory-Extents. Damit bleiben sowohl
+relative synthetische Fixtures als auch absolute Extents realer Dreamcast-GDs
+bereichsgeprueft lesbar, ohne Tracks umzubauen oder umzuschreiben.
+
+Der lokale Phase-6-Runner liest die Bootmetadaten aus dem primaeren
+Dreamcast-Bootsektor, validiert die Hardwarekennung und einen einfachen
+ISO9660-Bootdateinamen und liest die Bootdatei zweimal ueber denselben
+`DiscSource`-Pfad. Die allgemein dokumentierte Dreamcast-Disc-Ladeadresse ist
+`0x8C010000`; titelbezogene Adressen oder Remaps werden nicht verwendet.
+
 Repository und Release enthalten ausschliesslich synthetische GDI-Fixtures.
-Private Disc-Dumps duerfen optional lokal fuer einen read-only Smoke-Test
-verwendet werden; ihre Pfade, Namen, Hashes und Inhalte sind keine
-Releaseartefakte.
+Private Disc-Dumps duerfen optional lokal fuer das jeweilige kumulative
+Phasengate verwendet werden; ihre Pfade, Namen, Hashes, temporaer generierten
+Bootblockquellen und Inhalte sind keine Releaseartefakte. Der Runner prueft die
+Quelldateien vor und nach dem Lauf und behaelt nur den redigierten Bericht.

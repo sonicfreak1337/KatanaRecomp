@@ -216,10 +216,10 @@ const std::string& GdiDiscSource::identity() const noexcept { return identity_; 
 const GdiDescriptor& GdiDiscSource::descriptor() const noexcept { return descriptor_; }
 
 std::uint32_t GdiDiscSource::primary_data_lba() const {
-    const auto track = std::find_if(descriptor_.tracks.begin(), descriptor_.tracks.end(), [](const GdiTrack& value) {
+    const auto track = std::find_if(descriptor_.tracks.rbegin(), descriptor_.tracks.rend(), [](const GdiTrack& value) {
         return value.type == GdiTrackType::Data;
     });
-    if (track == descriptor_.tracks.end()) { throw std::runtime_error("GDI-Quelle besitzt keinen Datentrack."); }
+    if (track == descriptor_.tracks.rend()) { throw std::runtime_error("GDI-Quelle besitzt keinen Datentrack."); }
     return track->lba;
 }
 

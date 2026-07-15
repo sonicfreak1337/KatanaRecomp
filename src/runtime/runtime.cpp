@@ -145,16 +145,18 @@ void prefetch(CpuState& cpu, const std::uint32_t address) noexcept {
 }
 
 [[noreturn]] void unresolved_call(
-    CpuState&,
-    const std::uint32_t
+    CpuState& cpu,
+    const std::uint32_t target
 ) {
+    cpu.pc = target;
     throw std::runtime_error("Nicht aufgeloester Aufruf");
 }
 
 [[noreturn]] void unresolved_jump(
-    CpuState&,
-    const std::uint32_t
+    CpuState& cpu,
+    const std::uint32_t target
 ) {
+    cpu.pc = target;
     throw std::runtime_error("Nicht aufgeloester Sprung");
 }
 

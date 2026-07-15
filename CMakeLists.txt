@@ -34,6 +34,7 @@ endfunction()
 
 add_library(katana_runtime STATIC
     src/runtime/aica.cpp
+    src/runtime/cache_control.cpp
     src/runtime/dma.cpp
     src/runtime/disc.cpp
     src/runtime/dreamcast_memory.cpp
@@ -79,6 +80,8 @@ add_library(katana_core STATIC
     src/io/raw_binary_loader.cpp
     src/io/symbol_map.cpp
     src/platform/dreamcast.cpp
+    src/platform/dreamcast_disc.cpp
+    src/platform/phase6_gate.cpp
     src/analysis/disassembler.cpp
     src/analysis/code_address.cpp
     src/analysis/basic_blocks.cpp
@@ -116,6 +119,7 @@ target_link_libraries(
     katana-recomp
     PRIVATE
         katana_core
+        katana_runtime
 )
 
 katana_enable_warnings(katana-recomp)
@@ -133,6 +137,11 @@ add_test(
     NAME katana-runtime-tests
     COMMAND katana-runtime-tests
 )
+
+add_executable(katana-cache-control-tests tests/runtime/cache_control_tests.cpp)
+target_link_libraries(katana-cache-control-tests PRIVATE katana_runtime)
+katana_enable_warnings(katana-cache-control-tests)
+add_test(NAME katana-cache-control-tests COMMAND katana-cache-control-tests)
 
 add_executable(katana-memory-bus-tests
     tests/runtime/memory_bus_tests.cpp
@@ -284,6 +293,11 @@ add_executable(katana-dreamcast-boot-tests tests/platform/dreamcast_boot_tests.c
 target_link_libraries(katana-dreamcast-boot-tests PRIVATE katana_core katana_runtime)
 katana_enable_warnings(katana-dreamcast-boot-tests)
 add_test(NAME katana-dreamcast-boot-tests COMMAND katana-dreamcast-boot-tests)
+
+add_executable(katana-phase6-gate-tests tests/platform/phase6_gate_tests.cpp)
+target_link_libraries(katana-phase6-gate-tests PRIVATE katana_core katana_runtime)
+katana_enable_warnings(katana-phase6-gate-tests)
+add_test(NAME katana-phase6-gate-tests COMMAND katana-phase6-gate-tests)
 
 add_executable(katana-maple-bus-tests tests/runtime/maple_bus_tests.cpp)
 target_link_libraries(katana-maple-bus-tests PRIVATE katana_runtime)

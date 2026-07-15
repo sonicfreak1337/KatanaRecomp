@@ -76,8 +76,10 @@ std::uint64_t sector_offset(
 Iso9660Filesystem::Iso9660Filesystem(
     std::shared_ptr<const DiscSource> source,
     const std::uint32_t sector_size,
-    const std::uint32_t volume_start_lba
-) : source_(std::move(source)), sector_size_(sector_size), volume_start_lba_(volume_start_lba) {
+    const std::uint32_t volume_start_lba,
+    const std::optional<std::uint32_t> extent_lba_bias
+) : source_(std::move(source)), sector_size_(sector_size), volume_start_lba_(volume_start_lba),
+    extent_lba_bias_(extent_lba_bias.value_or(volume_start_lba)) {
     if (!source_) { throw std::invalid_argument("ISO9660 braucht eine Disc-Quelle."); }
     if (sector_size_ < 2048u) { throw std::invalid_argument("ISO9660-Sektorgroesse ist kleiner als 2048 Byte."); }
     const auto descriptor = source_->read(
@@ -110,7 +112,7 @@ std::vector<std::string> Iso9660Filesystem::split_path(const std::string_view pa
 std::vector<Iso9660Entry> Iso9660Filesystem::read_directory(const Iso9660Entry& directory) const {
     if (!directory.directory) { throw std::invalid_argument("ISO9660-Pfad ist kein Verzeichnis."); }
     const auto bytes = source_->read(
-        sector_offset(volume_start_lba_, directory.lba, sector_size_),
+        sector_offset(extent_lba_bias_, directory.lba, sector_size_),
         directory.size
     );
     std::vector<Iso9660Entry> result;
@@ -153,7 +155,7 @@ std::vector<std::uint8_t> Iso9660Filesystem::read_file(const std::string_view pa
     const auto entry = resolve(path);
     if (entry.directory) { throw std::invalid_argument("ISO9660-Pfad bezeichnet ein Verzeichnis."); }
     return source_->read(
-        sector_offset(volume_start_lba_, entry.lba, sector_size_),
+        sector_offset(extent_lba_bias_, entry.lba, sector_size_),
         entry.size
     );
 }

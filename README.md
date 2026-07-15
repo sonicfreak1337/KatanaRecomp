@@ -31,7 +31,7 @@ SH-4-Binaerdaten
     -> semantischer Laufzeittest
 `
 
-Der aktuelle Teststand umfasst **119 automatische Tests**.
+Der aktuelle Teststand umfasst **121 automatische Tests**.
 
 Der v0.15-Decoder verwendet eine zentrale Metadatenquelle fuer alle implementierten Opcode-Masken, Operandenformate, Kontrollfluss- und Privileginformationen. `katana-recomp isa-report` berichtet deterministisch ueber den gesamten 16-Bit-Opcode-Raum; Kollisions-, Spezifikations- und Fuzztests sichern die Regeln ab.
 
@@ -436,10 +436,10 @@ Die aktuelle Version steht gleichzeitig in:
 
 - VERSION
 - CMakeLists.txt
-- Git-Tag X.Y.Z
+- Git-Tag `vX.Y.Z`
 - CHANGELOG.md
 
-Der Helfer 	ools\release-version.ps1 aktualisiert VERSION und CMake und kann einen Git-Tag erzeugen.
+Der Helfer `tools\release-version.ps1` aktualisiert VERSION und CMake und kann einen Git-Tag erzeugen.
 
 ## Naechste technische Ziele
 
@@ -448,6 +448,16 @@ Der Helfer 	ools\release-version.ps1 aktualisiert VERSION und CMake und kann ein
 3. DMA und Plattform-Interruptintegration
 4. Frame- und Audio-Taktung
 5. kumulatives Phase-6-Gate v0.31.0
+
+Das lokale Windows-Gate fuer eine bereits gebaute Debug- oder
+Release-Konfiguration wird ohne fest codierten Disc-Pfad gestartet:
+
+```powershell
+.\tools\run_phase6_gate.ps1 -GdiPath <lokale-disc.gdi> -Configuration Debug
+```
+
+Die temporaere generierte Blockprobe wird danach entfernt; nur der redigierte
+JSON-Bericht bleibt unter `build-current/phase6-gate/`.
 
 
 ## Roadmap und Arbeitsuebergabe
