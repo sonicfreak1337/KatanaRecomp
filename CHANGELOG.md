@@ -5,6 +5,7 @@
 ### Hinzugefuegt
 
 - KR-3301: Funktionen werden unabhaengig von ihrer Eingabereihenfolge deterministisch nach Gastadresse in groessen- und instruktionsbegrenzte Translation-Unit-Partitionen aufgeteilt.
+- KR-3302: Translation Units erhalten portable Namen aus Partitionsindex, Gastadressbereich und Hash der kanonischen IR-Serialisierung; Hostpfade und Eingabereihenfolge bleiben ohne Einfluss.
 
 ### Behoben
 

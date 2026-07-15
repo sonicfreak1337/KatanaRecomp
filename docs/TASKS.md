@@ -1111,7 +1111,7 @@ Akzeptanz:
 
 Abhaengigkeiten: KR-3202
 
-### [ ] KR-3302 - Deterministische Dateinamen
+### [x] KR-3302 - Deterministische Dateinamen
 
 Abhaengigkeiten: KR-3301
 
