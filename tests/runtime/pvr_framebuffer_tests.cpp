@@ -2,6 +2,7 @@
 
 #include <cstdlib>
 #include <iostream>
+#include <limits>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -35,6 +36,20 @@ int main() {
         "Zu kleiner Framebuffer-Stride wird akzeptiert.");
     require(throws<std::out_of_range>([&] { static_cast<void>(framebuffer.capture(std::vector<std::uint8_t>(5u))); }),
         "Framebuffer ausserhalb des VRAM wird akzeptiert.");
+    require(throws<std::invalid_argument>([] {
+        PvrFramebuffer value;
+        value.configure(0x80000000u, 1u, 0u, PvrFramebufferFormat::Rgb565);
+    }), "Ueberlaufende uint32_t-Zeilenbreite wird als gueltiger Stride akzeptiert.");
+    require(throws<std::out_of_range>([] {
+        PvrFramebuffer value;
+        value.configure(0x40000001u, 0xFFFFFFFFu, 0x80000002u, PvrFramebufferFormat::Rgb565);
+        static_cast<void>(value.capture({}));
+    }), "Ueberlaufende RGBA-Allokationsgroesse wird akzeptiert.");
+    require(throws<std::out_of_range>([] {
+        PvrFramebuffer value;
+        value.configure(1u, 1u, 2u, PvrFramebufferFormat::Rgb565);
+        static_cast<void>(value.capture({}, std::numeric_limits<std::size_t>::max() - 1u));
+    }), "Ueberlaufende VRAM-Endadresse wird akzeptiert.");
 
     std::cout << "KR-2802 Framebuffer-Ausgabe erfolgreich.\n";
 }

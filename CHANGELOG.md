@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+### Behoben
+
+- PVR-Framebuffer-Geometrie, VRAM-Endadresse und RGBA-Allokationsgroesse verwenden nun explizit gepruefte `size_t`-Multiplikationen und -Additionen; kuenstlich grosse Eingaben koennen die Stride- oder Grenzpruefung nicht mehr per Integerueberlauf umgehen.
+- Die im README sichtbare Testsuitenzahl stimmt wieder mit dem v0.29.0-Gate von 108 Tests ueberein.
+
 ## [0.29.0] - 2026-07-15
 
 ### Hinzugefuegt

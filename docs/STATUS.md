@@ -57,6 +57,12 @@ Letztes abgeschlossenes Release-Gate (`v0.29.0`):
 100% tests passed out of 108 (frische lokale Debug- und Release-Builds)
 ```
 
+Aktueller Post-Release-Reviewstand:
+
+```text
+100% tests passed out of 108 (HEAD nach v0.29.0, vollstaendige lokale Debug- und Release-Testlaeufe)
+```
+
 ## Fertiggestellte Roadmap-Tasks
 
 - [x] KR-1101 - SUB, NEG und NOT

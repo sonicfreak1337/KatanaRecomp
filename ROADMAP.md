@@ -586,6 +586,10 @@ Release-Gate:
 - alle Grafikpfade bleiben ohne Host-Grafik-API einzeln und deterministisch pruefbar
 - frische lokale Debug- und Release-Builds bestehen mit 104/104 Tests; CI ist erst zum Alpha-Gate verpflichtend
 
+Post-Release-Nacharbeit:
+
+- [x] Framebuffer-Groessen-, Stride- und VRAM-Endberechnungen sind gegen Integerueberlauf regressionsgesichert
+
 ### [x] v0.29.0 - AICA Minimum Viable Audio
 
 Fortschritt:
