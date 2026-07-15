@@ -44,6 +44,7 @@ int main() {
         require(
             partition.index < first.size() && !partition.function_indices.empty() &&
                 partition.function_indices.size() <= options.maximum_functions &&
+                partition.instruction_count <= options.maximum_instructions &&
                 partition.first_entry_address <= partition.last_entry_address,
             "Partition verletzt Index-, Groessen- oder Adressvertrag."
         );
@@ -67,6 +68,20 @@ int main() {
         "Partitionierung ist nicht reproduzierbar oder verliert/dupliziert Funktionen."
     );
 
+    require(
+        [] {
+            const std::vector oversized = {function(0x8C100000u, 4097u)};
+            try {
+                static_cast<void>(katana::codegen::partition_translation_units(
+                    oversized, {1u, 4096u}
+                ));
+            } catch (const std::length_error&) {
+                return true;
+            }
+            return false;
+        }(),
+        "Einzelfunktion oberhalb des Instruktionslimits wird still akzeptiert."
+    );
     require(
         [] {
             try {

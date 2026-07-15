@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <numeric>
 #include <stdexcept>
+#include <string>
 
 namespace katana::codegen {
 namespace {
@@ -41,6 +42,13 @@ std::vector<TranslationUnitPartition> partition_translation_units(
     std::vector<TranslationUnitPartition> result;
     for (const auto function_index : order) {
         const auto count = instruction_count(functions[function_index]);
+        if (count > options.maximum_instructions) {
+            throw std::length_error(
+                "Funktion an Gastadresse " +
+                std::to_string(functions[function_index].entry_address) +
+                " ueberschreitet das Instruktionslimit einer Translation Unit."
+            );
+        }
         const bool needs_partition = result.empty() ||
             result.back().function_indices.size() >= options.maximum_functions ||
             (result.back().instruction_count != 0u &&

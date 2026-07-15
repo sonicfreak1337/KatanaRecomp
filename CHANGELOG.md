@@ -6,6 +6,10 @@
 
 - KR-3301: Funktionen werden unabhaengig von ihrer Eingabereihenfolge deterministisch nach Gastadresse in groessen- und instruktionsbegrenzte Translation-Unit-Partitionen aufgeteilt.
 
+### Behoben
+
+- KR-3301-Nacharbeit: Eine einzelne Funktion oberhalb des konfigurierten Instruktionslimits wird sichtbar mit `length_error` abgelehnt, statt eine angeblich begrenzte Uebergroessenpartition zu erzeugen.
+
 ## [0.32.0] - 2026-07-16
 
 ### Hinzugefuegt
