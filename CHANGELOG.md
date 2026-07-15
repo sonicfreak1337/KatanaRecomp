@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.32.0] - 2026-07-16
+
 ### Hinzugefuegt
 
 - KR-3201: Eine IR-basierte Backend-Schnittstelle validiert Programme und Einstiegspunkte zentral und trennt Deklarationen, Funktionen sowie Metadaten in deterministisch zusammensetzbare Emissionsabschnitte.
@@ -13,6 +15,10 @@
 ### Behoben
 
 - Phase-6-Gate-Nacharbeit: Ein unveraenderter CPU-Zustand gilt nicht mehr als Blockausfuehrung, die dokumentierte CCR-Invalidierung ist verpflichtend, nur Calls im kopierten Einstiegsblock blockieren die Probe, und GDI-Tracks koennen weder die Descriptorgrenze noch die vollstaendige Hash- und Cleanup-Pruefung umgehen.
+
+### Geaendert
+
+- Das v0.32.0-Gate besteht mit 127/127 Tests in einem frischen lokalen Debug-Build. Als Zwischenrelease innerhalb von Phase 7 fuehrt es gemaess Akzeptanzstrategie keinen vollstaendigen Sonic-Adventure-Test aus.
 
 ## [0.31.0] - 2026-07-16
 

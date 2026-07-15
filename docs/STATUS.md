@@ -1,8 +1,8 @@
 # Projektstatus
 
-Version: 0.31.0
+Version: 0.32.0
 Phase: Pre-Alpha
-Naechster Meilenstein: v0.32.0 - Modulare Backend-Schnittstelle
+Naechster Meilenstein: v0.33.0 - Skalierbare Codeausgabe und Build-Cache
 
 ## Zusammenfassung
 
@@ -33,7 +33,8 @@ Praktische Einordnung:
 
 - [x] Der frei verteilbare synthetische Vertical Slice bootet, verarbeitet Eingabe, rendert ein Bildprimitiv und erzeugt Audio in einem gemeinsamen Lauf
 - [x] Der kumulative lokale Phase-6-Test erreicht `SA_PHASE6_MAIN_EXECUTION_STARTED`
-- [~] Der naechste Engpass ist die modulare Backend-, Block-ABI- und Plattformdienst-Schnittstelle von v0.32.0
+- [x] Modulare Backend-, Block-ABI- und Plattformdienst-Schnittstelle von v0.32.0 abgeschlossen
+- [~] Der naechste Engpass ist die skalierbare, deterministische und inkrementelle Codeausgabe von v0.33.0
 - [ ] Von Alpha sind wir noch deutlich entfernt, weil nach Phase 6 auch Codegen-/Dispatch-Haertung, Tooling, Kompatibilitaet, GUI und `.gdi`-Workflow fehlen
 
 ### Phasenstatus
@@ -52,22 +53,21 @@ Praktische Einordnung:
 
 ## Teststatus
 
-Letztes abgeschlossenes Release-Gate (`v0.31.0`):
+Letztes abgeschlossenes Release-Gate (`v0.32.0`):
 
 ```text
-100% tests passed out of 122 (frischer lokaler Debug-Build)
+100% tests passed out of 127 (frischer lokaler Debug-Build)
 ```
 
 Aktueller Release-Stand:
 
 ```text
-122/122 Tests bestanden
-katana-dreamcast-vertical-slice-tests bestanden
-SA_PHASE6_MAIN_EXECUTION_STARTED in zwei bytegleichen Laeufen erreicht
-Disc-Quelle unveraendert; silent_failures=0
+127/127 Tests bestanden
+modulare Backend-, Block-ABI- und Plattformdiensttests bestanden
+kein Sonic-Adventure-Test am Zwischenrelease v0.32.0 erforderlich oder ausgefuehrt
 ```
 
-Aktueller Entwicklungsstand (`KR-3205`):
+Aktueller Entwicklungsstand (`v0.32.0`):
 
 ```text
 127/127 Debug-Tests bestanden
@@ -227,11 +227,12 @@ Lokale Sonic-Adventure-Akzeptanzstrategie:
 - [x] KR-3203 - ABI-Faehigkeitspruefung
 - [x] KR-3204 - Block-ABI und Zustandsuebergaben
 - [x] KR-3205 - Plattformdienst-Schnittstelle
+- [x] v0.32.0 Release-Gate - 127/127 Debug, kein Phasentest
 
 ## Naechster Arbeitsschritt
 
-- [ ] v0.32.0 Release-Gate
-- [ ] danach KR-3301 - Translation-Unit-Partitionierung
+- [ ] KR-3301 - Translation-Unit-Partitionierung
+- [ ] danach KR-3302 - Deterministische Dateinamen
 
 ## Aktuelle Einschraenkungen
 

@@ -1,7 +1,7 @@
 # KatanaRecomp Roadmap
 
 Status: Pre-Alpha
-Aktuelle Basis: v0.31.0
+Aktuelle Basis: v0.32.0
 Planungsmodell: Semantic Versioning, kleine ueberpruefbare Meilensteine
 
 Diese Roadmap beschreibt die technische Entwicklung von KatanaRecomp vom aktuellen Architektur-Prototyp bis zu einem belastbaren Dreamcast-Recompiler-Framework.
@@ -734,7 +734,7 @@ Planungsgrundlage fuer Phase 7 und spaeter:
 - dcrecomp bestaetigt den Nutzen aufgeteilter AOT-Ausgabe und einer zentralen Adresstabelle; hart kodierte Forced Entries, titelbezogene Remaps, stille BIOS-No-ops und Wall-Clock-Timing werden nicht als belastbare Architektur uebernommen
 - alle Implementierungen bleiben unabhaengig; Referenzcode, proprietaere Firmware und daraus extrahierte Assets werden nicht uebernommen
 
-### v0.32.0 - Modulare Backend-Schnittstelle
+### [x] v0.32.0 - Modulare Backend-Schnittstelle
 
 Fortschritt:
 
@@ -754,6 +754,10 @@ Enthalten:
 - expliziter Blockeintritt und -austritt mit Gast-PC, PR, Delay-Slot-, Ausnahme- und FPU-Zustand
 - Plattformdienste fuer Speicher, Scheduler, Interrupts, DMA und kontrollierten Fallback
 - Gastadressen bleiben 32-Bit-Werte und werden nie durch Hostzeiger als Identitaet ersetzt
+
+Release-Stand: Alle fuenf Tasks sind abgeschlossen. Das lokale Debug-Gate
+bestand mit 127/127 Tests; gemaess Phasenstrategie wurde fuer dieses
+Zwischenrelease kein vollstaendiger Sonic-Adventure-Test ausgefuehrt.
 
 ### v0.33.0 - Skalierbare Codeausgabe und Build-Cache
 
