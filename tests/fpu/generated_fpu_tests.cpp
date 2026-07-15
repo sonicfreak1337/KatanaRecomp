@@ -42,6 +42,21 @@ int main() {
 
     {
         katana_generated::CpuState cpu;
+        cpu.r[3] = 0x8C010000u;
+        cpu.pc = 0x170u;
+        katana_generated::fn_00000170(cpu);
+        require(cpu.prefetch_count == 1u && cpu.last_prefetch_address == 0x8C010000u &&
+            !cpu.last_prefetch_was_store_queue,
+            "Generiertes normales PREF erreicht die Runtime nicht.");
+        cpu.r[3] = 0xE0000020u;
+        cpu.pc = 0x170u;
+        katana_generated::fn_00000170(cpu);
+        require(cpu.prefetch_count == 2u && cpu.last_prefetch_was_store_queue,
+            "Generiertes PREF unterscheidet Store-Queue-Adressen nicht.");
+    }
+
+    {
+        katana_generated::CpuState cpu;
         cpu.fpul = 0x2000u;
         cpu.pc = 0x158u;
         katana_generated::fn_00000158(cpu);

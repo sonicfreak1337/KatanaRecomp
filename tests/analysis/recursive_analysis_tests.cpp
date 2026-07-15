@@ -207,6 +207,21 @@ int main() {
         "Unbekannter Delay Slot liess unsicheren Call- oder Rueckkehrpfad weiterlaufen."
     );
 
+    ExecutableImage prefetch;
+    prefetch.add_segment({
+        ".text", 0u, 0u, 8u, SegmentKind::Code, {true, false, true},
+        {0x83u, 0x03u, 0x09u, 0x00u, 0x0Bu, 0x00u, 0x09u, 0x00u}
+    });
+    prefetch.add_entry_point(0u);
+    const auto prefetch_result = katana::analysis::analyze_reachable_code(prefetch);
+    require(
+        prefetch_result.instructions.size() == 4u &&
+        prefetch_result.instructions[0].instruction.kind == katana::sh4::InstructionKind::Prefetch &&
+        prefetch_result.instructions.back().address == 6u &&
+        prefetch_result.diagnostics.empty(),
+        "PREF beendet die rekursive Analyse faelschlich als unbekannter Opcode."
+    );
+
     std::cout << "KR-1701 Worklist ab Einstiegspunkten erfolgreich.\n";
     return EXIT_SUCCESS;
 }

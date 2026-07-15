@@ -18,6 +18,7 @@ constexpr std::array kInstructionMetadata = {
     KATANA_FLOW(Rts, 0xFFFFu, 0x000Bu, None, Return, true, false),
     KATANA_FLOW(ReturnFromException, 0xFFFFu, 0x002Bu, None, ExceptionReturn, true, true),
     KATANA_FLOW(Sleep, 0xFFFFu, 0x001Bu, None, Halt, false, true),
+    KATANA_RULE(Prefetch, 0xF0FFu, 0x0083u, RegisterIndirectN),
     KATANA_FLOW(TrapAlways, 0xFF00u, 0xC300u, Immediate8Register0, Trap, false, false),
     KATANA_FLOW(Bra, 0xF000u, 0xA000u, Displacement12, UnconditionalBranch, true, false),
     KATANA_FLOW(Bsr, 0xF000u, 0xB000u, Displacement12, Call, true, false),

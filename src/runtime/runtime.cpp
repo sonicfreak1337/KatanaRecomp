@@ -129,9 +129,19 @@ void reset_cpu(
     cpu.last_exception_cause = ExceptionCause::None;
     cpu.exception_in_delay_slot = false;
     cpu.sleeping = false;
+    cpu.last_prefetch_address = 0u;
+    cpu.prefetch_count = 0u;
+    cpu.last_prefetch_was_store_queue = false;
 
     cpu.r[15] = state.stack_pointer;
     cpu.write_sr(state.status_register);
+}
+
+void prefetch(CpuState& cpu, const std::uint32_t address) noexcept {
+    cpu.last_prefetch_address = address;
+    ++cpu.prefetch_count;
+    cpu.last_prefetch_was_store_queue =
+        address >= 0xE0000000u && address <= 0xE3FFFFFFu;
 }
 
 [[noreturn]] void unresolved_call(

@@ -37,8 +37,8 @@ int main() {
     static_assert(katana::runtime::fpu_register_count == 16u);
 
     require(
-        katana::runtime::abi_version == 7u,
-        "Die FPU-Banksemantik erfordert Runtime-ABI 7."
+        katana::runtime::abi_version == 8u,
+        "Die PREF-Beobachtung erfordert Runtime-ABI 8."
     );
 
     CpuState cpu;
@@ -94,7 +94,8 @@ int main() {
         !cpu.trap_pending &&
         cpu.last_exception_cause == katana::runtime::ExceptionCause::None &&
         !cpu.exception_in_delay_slot &&
-        !cpu.sleeping,
+        !cpu.sleeping && cpu.last_prefetch_address == 0u &&
+        cpu.prefetch_count == 0u && !cpu.last_prefetch_was_store_queue,
         "Ein Runtime-Zustandsflag besitzt keinen definierten Grundwert."
     );
 

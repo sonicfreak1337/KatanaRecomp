@@ -799,19 +799,19 @@ Akzeptanz:
 
 ## v0.26.0 bis v0.31.0 - Dreamcast-Plattform
 
-### [ ] KR-2601 - Plattformkonfiguration und Bootzustand
+### [x] KR-2601 - Plattformkonfiguration und Bootzustand
 
 Abhaengigkeiten: KR-2306
 
-### [ ] KR-2602 - Homebrew-Raw- und ELF-Start
+### [x] KR-2602 - Homebrew-Raw- und ELF-Start
 
 Abhaengigkeiten: KR-1607, KR-2601
 
-### [ ] KR-2603 - Minimales Plattformlogging
+### [x] KR-2603 - Minimales Plattformlogging
 
 Abhaengigkeiten: KR-2601
 
-### [?] KR-2604 - Firmware-Betriebsart und BIOS-ABI festlegen
+### [x] KR-2604 - Firmware-Betriebsart und BIOS-ABI festlegen
 
 Abhaengigkeiten: KR-2204, KR-2601
 
@@ -830,7 +830,7 @@ Akzeptanz:
 - fuer jeden optionalen Pfad sind konkrete Folgeabhaengigkeiten und eine sichtbare Fehlerstrategie benannt
 - BIOS-, Flash-, Font-, PVR- oder andere Firmwaredaten gelangen weder in Tests noch in Releases
 
-### [ ] KR-2605 - PREF und bootrelevante Cacheeffekte
+### [x] KR-2605 - PREF und bootrelevante Cacheeffekte
 
 Abhaengigkeiten: KR-1506, KR-2207, KR-2604
 
@@ -848,7 +848,7 @@ Akzeptanz:
 - beobachtbare Speicher- oder Store-Queue-Effekte sind deterministisch getestet
 - nicht modellierte Cacheeffekte werden dokumentiert und nicht stillschweigend als vollstaendig emuliert ausgegeben
 
-### [ ] KR-2606 - Zustandsbehaftetes Flash-Geraetemodell
+### [x] KR-2606 - Zustandsbehaftetes Flash-Geraetemodell
 
 Abhaengigkeiten: KR-2204, KR-2205, KR-2604
 

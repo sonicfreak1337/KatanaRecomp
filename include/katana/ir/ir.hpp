@@ -242,6 +242,7 @@ enum class Operation {
     TrapAlways,
     ReturnFromException,
     Sleep,
+    Prefetch,
     FmovRegister,
     FmovLoad,
     FmovLoadPostIncrement,

@@ -44,6 +44,9 @@ OperandWidths operation_operand_widths(const Operation operation) noexcept {
         case Operation::Fschg:
             return {};
 
+        case Operation::Prefetch:
+            return {none, longword, none, none, none, longword};
+
         case Operation::DivideInitializeSigned:
             return {none, longword, none, none, none, none};
         case Operation::ReturnFromException:

@@ -141,6 +141,7 @@ enum class InstructionKind {
     TrapAlways,
     ReturnFromException,
     Sleep,
+    Prefetch,
     Bra,
     Bsr,
     Bt,

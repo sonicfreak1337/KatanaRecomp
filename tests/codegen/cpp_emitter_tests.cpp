@@ -98,7 +98,7 @@ int main() {
         "Der generierte Code enthaelt weiterhin eine Runtime-Implementierung."
     );
     require(
-        source.find("required_runtime_abi = 7u") != std::string::npos,
+        source.find("required_runtime_abi = 8u") != std::string::npos,
         "Der generierte Code prueft die Runtime-ABI nicht."
     );
 

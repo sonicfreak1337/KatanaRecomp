@@ -2,6 +2,21 @@
 
 ## [Unreleased]
 
+## [0.26.0] - 2026-07-15
+
+### Hinzugefuegt
+
+- KR-2601/2602: Eine Dreamcast-Plattformkonfiguration laedt Raw- und ELF-`ExecutableImage`-Segmente samt BSS in Hauptspeicher, validiert den Einstieg und setzt PC, Stack, VBR, SR und FPSCR deterministisch.
+- KR-2603: Der Boot-Handoff liefert reproduzierbare Eintraege fuer Firmwareart, Einstieg, Segmente und Bereitschaft.
+- KR-2604: Eine Architekturentscheidung macht BIOS-freien Homebrew-Direktboot zum Standard. HLE- und LLE-Modi werden vor Teilwirkungen sichtbar abgewiesen; proprietaere Firmware bleibt eine rein lokale, optionale Zukunftseingabe.
+- KR-2605: `PREF @Rn` besitzt das exakte Opcode-Muster fuer alle Register, IR- und Codegen-Unterstuetzung sowie einen kompilierten Runtime-Pfad, der normale und Store-Queue-Adressen unterscheidet.
+- KR-2606: Ein zustandsbehaftetes 128-KiB-Flashgeraet erzwingt Unlock-, Programmier- und Sektorloeschsequenzen, 1-zu-0-Bituebergaenge, Schreibschutz und Reset. Aenderungen liegen ausschliesslich in einer Arbeitskopie.
+
+### Geaendert
+
+- Die Runtime-ABI steigt auf Version 8 und nimmt deterministische PREF-Beobachtung in den CPU-Zustand auf.
+- Die vollstaendige Regression umfasst 97 Tests. CI bleibt gemaess Projektentscheidung bis zum Alpha-Gate optional.
+
 ## [0.25.0] - 2026-07-15
 
 ### Hinzugefuegt

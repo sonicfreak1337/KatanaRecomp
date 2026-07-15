@@ -530,6 +530,13 @@ Enthalten:
 - Fehlerberichte fuer fehlende Segmente oder Einstiegspunkte
 - reproduzierbare Beispielprojekte ohne kommerzielle Daten
 
+Release-Gate:
+
+- BIOS-freier Raw-/ELF-Boot, PREF und Flashprotokoll sind mit ausschliesslich synthetischen Fixtures getestet
+- HLE-/LLE-Grenzen und nicht modellierte Cacheeffekte sind sichtbar dokumentiert
+- frische lokale Debug- und Release-Builds bestehen mit 97/97 Tests; CI ist erst
+  zum Alpha-Gate wieder verpflichtend
+
 ### v0.27.0 - Maple und Eingabe
 
 Enthalten:

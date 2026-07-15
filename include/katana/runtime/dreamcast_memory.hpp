@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <memory>
 #include <span>
+#include <vector>
 
 namespace katana::runtime {
 
@@ -19,6 +20,32 @@ inline constexpr std::size_t dreamcast_flash_size = 0x00020000u;
 inline constexpr std::uint32_t dreamcast_vram_bank_size = 0x00400000u;
 inline constexpr std::uint32_t dreamcast_bios_physical_base = 0x00000000u;
 inline constexpr std::uint32_t dreamcast_flash_physical_base = 0x00200000u;
+inline constexpr std::size_t dreamcast_flash_sector_size = 0x00001000u;
+inline constexpr std::uint32_t dreamcast_flash_unlock_address_1 = 0x00005555u;
+inline constexpr std::uint32_t dreamcast_flash_unlock_address_2 = 0x00002AAAu;
+
+class FlashMemoryDevice final : public MemoryDevice {
+public:
+    explicit FlashMemoryDevice(std::span<const std::uint8_t> image = {});
+    [[nodiscard]] std::size_t size() const noexcept override;
+    [[nodiscard]] std::uint8_t read_u8(std::uint32_t offset) const override;
+    void write_u8(std::uint32_t offset, std::uint8_t value) override;
+    void reset_command_state() noexcept;
+    void set_write_protected(bool protected_state) noexcept;
+    [[nodiscard]] bool write_protected() const noexcept;
+    [[nodiscard]] std::uint8_t source_byte(std::uint32_t offset) const;
+
+private:
+    enum class CommandState : std::uint8_t {
+        ReadArray, Unlock2, Command, Program, EraseUnlock1, EraseUnlock2, EraseConfirm
+    };
+    void check(std::uint32_t offset) const;
+    [[noreturn]] void fail(const char* message);
+    std::vector<std::uint8_t> source_;
+    std::vector<std::uint8_t> working_;
+    CommandState state_ = CommandState::ReadArray;
+    bool write_protected_ = false;
+};
 
 [[nodiscard]] constexpr std::uint32_t
 dreamcast_vram_32bit_to_linear_offset(
@@ -119,6 +146,12 @@ map_dreamcast_bios(
 
 [[nodiscard]] std::shared_ptr<LinearMemoryDevice>
 map_dreamcast_flash(
+    Memory& memory,
+    std::span<const std::uint8_t> image = {}
+);
+
+[[nodiscard]] std::shared_ptr<FlashMemoryDevice>
+map_dreamcast_command_flash(
     Memory& memory,
     std::span<const std::uint8_t> image = {}
 );

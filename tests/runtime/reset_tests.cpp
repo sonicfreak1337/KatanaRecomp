@@ -53,7 +53,10 @@ bool scalar_state_is_zero(const katana::runtime::CpuState& cpu) {
         !cpu.trap_pending &&
         cpu.last_exception_cause == katana::runtime::ExceptionCause::None &&
         !cpu.exception_in_delay_slot &&
-        !cpu.sleeping;
+        !cpu.sleeping &&
+        cpu.last_prefetch_address == 0u &&
+        cpu.prefetch_count == 0u &&
+        !cpu.last_prefetch_was_store_queue;
 }
 
 }
@@ -90,6 +93,9 @@ int main() {
     cpu.last_exception_cause = katana::runtime::ExceptionCause::Trap;
     cpu.exception_in_delay_slot = true;
     cpu.sleeping = true;
+    cpu.last_prefetch_address = 0xE0000020u;
+    cpu.prefetch_count = 9u;
+    cpu.last_prefetch_was_store_queue = true;
     cpu.memory.write_u32(16u, 0x89ABCDEFu);
 
     reset_cpu(cpu);

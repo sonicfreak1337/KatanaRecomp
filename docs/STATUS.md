@@ -52,7 +52,7 @@ Praktische Einordnung:
 ## Teststatus
 
 ```text
-100% tests passed out of 95 (lokal, Debug und Release)
+100% tests passed out of 97 (lokal, Debug und Release)
 ```
 
 ## Fertiggestellte Roadmap-Tasks
@@ -151,15 +151,21 @@ Praktische Einordnung:
 - [x] KR-2502 - FIPR und FTRV
 - [x] KR-2503 - NaN, Rundung und Sonderwerte
 - [x] KR-2504 - FPU-Konformitaetssuite
+- [x] KR-2601 - Plattformkonfiguration und Bootzustand
+- [x] KR-2602 - Homebrew-Raw- und ELF-Start
+- [x] KR-2603 - Minimales Plattformlogging
+- [x] KR-2604 - Firmware-Betriebsart und BIOS-ABI
+- [x] KR-2605 - PREF und bootrelevante Cacheeffekte
+- [x] KR-2606 - Zustandsbehaftetes Flash-Geraetemodell
 
 ## Naechster Roadmap-Task
 
-- [ ] KR-2601 - Plattformkonfiguration und Bootzustand
+- [ ] KR-2701 - Maple-Bus
 
 ## Aktuelle Einschraenkungen
 
 - unvollstaendiger SH-4-Befehlssatz
 - FPU-Grund- und Vektoroperationen sind vorhanden; vollstaendige FPSCR-Exception-Flags bleiben ausserhalb des aktuellen Konformanzvertrags
 - Dreamcast-Speicherbereiche, MMIO-Handler, strukturierte SH-4-Ausnahmen, Interruptprioritaeten und Watchpoints sind vorhanden; konkrete Plattformregister fehlen noch
-- keine Plattformhardware
+- BIOS-freier Homebrew-Boot, PREF-Beobachtung und protokolliertes Flash sind vorhanden; weitere Plattformhardware folgt ab v0.27
 - nur einfache konstante indirekte Ziele und bekannte begrenzte Jump Tables werden aufgeloest

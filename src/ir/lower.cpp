@@ -360,6 +360,8 @@ Operation lower_operation(
 
         case Source::Sleep:
             return Operation::Sleep;
+        case Source::Prefetch:
+            return Operation::Prefetch;
 
         case Source::FmovRegister: return Operation::FmovRegister;
         case Source::FmovLoad: return Operation::FmovLoad;
@@ -823,6 +825,8 @@ std::string_view operation_name(
 
         case Operation::Sleep:
             return "sleep";
+        case Operation::Prefetch:
+            return "prefetch";
         case Operation::FmovRegister: return "fmov_reg";
         case Operation::FmovLoad: return "fmov_load";
         case Operation::FmovLoadPostIncrement: return "fmov_load_postinc";

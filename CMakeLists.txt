@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.25)
 
 project(
     KatanaRecomp
-    VERSION 0.25.0
+    VERSION 0.26.0
     DESCRIPTION "Dreamcast SH-4 static recompilation framework"
     LANGUAGES CXX
 )
@@ -67,6 +67,7 @@ add_library(katana_core STATIC
     src/io/project_manifest.cpp
     src/io/raw_binary_loader.cpp
     src/io/symbol_map.cpp
+    src/platform/dreamcast.cpp
     src/analysis/disassembler.cpp
     src/analysis/code_address.cpp
     src/analysis/basic_blocks.cpp
@@ -262,6 +263,16 @@ add_test(
     NAME katana-fpu-tests
     COMMAND katana-fpu-tests
 )
+
+add_executable(katana-flash-device-tests tests/runtime/flash_device_tests.cpp)
+target_link_libraries(katana-flash-device-tests PRIVATE katana_runtime)
+katana_enable_warnings(katana-flash-device-tests)
+add_test(NAME katana-flash-device-tests COMMAND katana-flash-device-tests)
+
+add_executable(katana-dreamcast-boot-tests tests/platform/dreamcast_boot_tests.cpp)
+target_link_libraries(katana-dreamcast-boot-tests PRIVATE katana_core katana_runtime)
+katana_enable_warnings(katana-dreamcast-boot-tests)
+add_test(NAME katana-dreamcast-boot-tests COMMAND katana-dreamcast-boot-tests)
 
 add_executable(katana-decoder-tests
     tests/decoder/decoder_tests.cpp

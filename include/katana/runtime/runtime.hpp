@@ -8,7 +8,7 @@
 
 namespace katana::runtime {
 
-inline constexpr std::uint32_t abi_version = 7u;
+inline constexpr std::uint32_t abi_version = 8u;
 
 inline constexpr std::uint32_t sr_t_mask = 0x00000001u;
 inline constexpr std::uint32_t sr_s_mask = 0x00000002u;
@@ -84,6 +84,9 @@ struct CpuState {
     ExceptionCause last_exception_cause = ExceptionCause::None;
     bool exception_in_delay_slot = false;
     bool sleeping = false;
+    std::uint32_t last_prefetch_address = 0u;
+    std::uint64_t prefetch_count = 0u;
+    bool last_prefetch_was_store_queue = false;
     Memory memory{
         1024u * 1024u,
         MemoryAlignmentPolicy::Permissive
@@ -110,6 +113,8 @@ void reset_cpu(
     CpuState& cpu,
     const ResetState& state = ResetState{}
 ) noexcept;
+
+void prefetch(CpuState& cpu, std::uint32_t address) noexcept;
 
 [[noreturn]] void unresolved_call(CpuState& cpu, std::uint32_t target);
 [[noreturn]] void unresolved_jump(CpuState& cpu, std::uint32_t target);

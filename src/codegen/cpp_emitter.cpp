@@ -498,6 +498,10 @@ void emit_simple_instruction(
         case Operation::Fschg:
             output << "cpu.write_fpscr(cpu.read_fpscr() ^ katana::runtime::fpscr_sz_mask);\n";
             return;
+        case Operation::Prefetch:
+            output << "katana::runtime::prefetch(cpu, cpu.r["
+                << static_cast<unsigned>(instruction.source_register) << "]);\n";
+            return;
 
         case Operation::MovImmediate:
             output
@@ -3064,7 +3068,7 @@ std::string emit_cpp_program(
         << "#include <cstdint>\n"
         << "#include <stdexcept>\n\n"
         << "namespace katana_generated {\n\n"
-        << "inline constexpr std::uint32_t required_runtime_abi = 7u;\n"
+        << "inline constexpr std::uint32_t required_runtime_abi = 8u;\n"
         << "static_assert(\n"
         << "    katana::runtime::abi_version == required_runtime_abi,\n"
         << "    \"Inkompatible Katana-Runtime-ABI\"\n"

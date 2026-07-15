@@ -286,6 +286,13 @@ DecodedInstruction decode(const std::uint16_t opcode) {
         return instruction;
     }
 
+    if (matches_metadata(opcode, InstructionKind::Prefetch)) {
+        instruction.kind = InstructionKind::Prefetch;
+        instruction.source_register = static_cast<std::uint8_t>((opcode >> 8u) & 0x0Fu);
+        instruction.text = "pref @" + register_name(instruction.source_register);
+        return instruction;
+    }
+
     if (matches_metadata(opcode, InstructionKind::TrapAlways)) {
         instruction.kind = InstructionKind::TrapAlways;
         instruction.immediate = static_cast<std::int32_t>(opcode & 0x00FFu);
