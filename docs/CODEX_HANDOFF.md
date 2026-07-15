@@ -255,6 +255,19 @@ Generierte Quellen werden nur committed, wenn die Roadmap dies fuer ein reproduz
   alte Backup-Dateien entfernen; ein destruktives Umschreiben bereits
   veroeffentlichter Historie erfordert einen ausdruecklichen separaten Auftrag.
 
+## Build-Verzeichnis-Regel
+
+- Auf der lokalen Festplatte darf fuer KatanaRecomp immer genau ein aktuelles
+  Build-Verzeichnis existieren: `build-current/` im Repository-Arbeitsbaum.
+- Debug und Release werden als Konfigurationen desselben Visual-Studio-
+  Multi-Config-Builds erzeugt. Separate Verzeichnisse pro Task, Version oder
+  Konfiguration sind nicht erlaubt.
+- Vor oder unmittelbar nach dem Anlegen von `build-current/` werden alle alten
+  `build/`-, `build-*`- und `cmake-build-*`-Verzeichnisse nach gepruefter
+  absoluter Pfadauflosung entfernt.
+- Buildartefakte bleiben ignoriert und werden weder in Git noch in das einzelne
+  Quellbackup aufgenommen.
+
 ## Stil
 
 - C++20
@@ -321,11 +334,11 @@ Task: KR-XXXX
 ## Aktuell empfohlener Einstieg
 
 ```text
-KR-3105 - Frame- und Audio-Taktung
+Review/Fixrunde fuer KR-3101 bis KR-3105; kein v0.31.0-Gate und kein Sonic-Adventure-Test ohne neue Freigabe
 ```
 
 Danach:
 
 ```text
-Danach Review und Fixrunde; v0.31.0-Gate und Sonic-Adventure-Test erst nach ausdruecklicher Freigabe
+Nach den Fixes: v0.31.0-Gate und kumulativer Sonic-Adventure-Test erst nach ausdruecklicher Freigabe
 ```

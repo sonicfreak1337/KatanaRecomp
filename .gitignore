@@ -1,4 +1,5 @@
 # Build-Ausgaben
+/build-current/
 /build/
 /build-*/
 /out/

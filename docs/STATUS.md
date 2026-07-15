@@ -13,8 +13,8 @@ KatanaRecomp besitzt einen durchgaengigen Prototyp-Pfad von Raw- und ELF32-SH-Ei
 ### Gesamtprojekt
 
 - [x] Kernunterbau abgeschlossen: Phasen 1 bis 5 sind vollstaendig umgesetzt
-- [~] Gesamtfortschritt nach gepflegten Roadmap-Tasks: 122 von 209 Tasks abgeschlossen = 58.4%
-- [~] Fortschritt auf dem Weg von Dreamcast-Plattform bis Alpha: 28 von 112 Tasks abgeschlossen = 25.0%
+- [~] Gesamtfortschritt nach gepflegten Roadmap-Tasks: 123 von 209 Tasks abgeschlossen = 58.9%
+- [~] Fortschritt auf dem Weg von Dreamcast-Plattform bis Alpha: 29 von 112 Tasks abgeschlossen = 25.9%
 - [ ] Alpha-Gate erreicht: nein
 
 ### Weg zum ersten echten Dreamcast-Test
@@ -22,11 +22,11 @@ KatanaRecomp besitzt einen durchgaengigen Prototyp-Pfad von Raw- und ELF32-SH-Ei
 Definition fuer diesen Status: ein BIOS-freier, frei verteilbarer Homebrew-Vertical-Slice gemaess Phase-6-Release-Gate, der Bild zeigt, Eingabe annimmt und Audio erzeugt.
 
 - [x] Boot- und Homebrew-Einstieg vorhanden: v0.26.0 abgeschlossen
-- [~] Dreamcast-Plattformphase insgesamt: 28 von 29 Tasks abgeschlossen = 96.6%
+- [~] Dreamcast-Plattform-Implementierung: 29 von 29 Tasks umgesetzt = 100%; Review, Fixrunde und Release-Gate stehen aus
 - [x] Eingabeweg fertig: Maple, Controller und deterministische Replays (`KR-2701` bis `KR-2703`) sind abgeschlossen
 - [x] PVR-Minimalbildpfad fertig: Register, Framebuffer, Tile-Accelerator, erste Texturformate und Render-Backend (`KR-2801` bis `KR-2804`) sind abgeschlossen
 - [x] AICA-Minimalaudiopfad fertig: Register, PCM/ADPCM, Mixer, Host-Audio sowie HLE-Timer und Interrupts (`KR-2901` bis `KR-2904`) sind vorhanden
-- [~] Takt- und Ereignispfad fast abgeschlossen: Scheduler, TMU, RTC, DMA und Plattform-Interruptintegration (`KR-3101` bis `KR-3104`) sind vorhanden; nur die gemeinsame Frame-/Audio-Taktung (`KR-3105`) fehlt
+- [x] Takt- und Ereignispfad implementiert: Scheduler, TMU, RTC, DMA, Plattform-Interruptintegration und gemeinsame Frame-/Audio-Taktung (`KR-3101` bis `KR-3105`) sind vorhanden
 - [x] Disc-Pfad fertig: read-only Quellen, GD-ROM, ISO9660, Timing sowie GDI-Trackmodell und -Integration (`KR-3001` bis `KR-3006`) sind vorhanden
 
 Praktische Einordnung:
@@ -42,7 +42,7 @@ Praktische Einordnung:
 - [x] Phase 3 - Katana-IR: 14/14 Tasks = 100%
 - [x] Phase 4 - Runtime-Grundlage: 18/18 Tasks = 100%
 - [x] Phase 5 - SH-4 FPU: 10/10 Tasks = 100%
-- [~] Phase 6 - Dreamcast-Plattform: 28/29 Tasks = 96.6%
+- [~] Phase 6 - Dreamcast-Plattform: 29/29 Tasks implementiert = 100%; Review und v0.31.0-Gate ausstehend
 - [ ] Phase 7 - Codegen und Dispatch: 0/21 Tasks = 0%
 - [ ] Phase 8 - Werkzeuge und Qualitaet: 0/25 Tasks = 0%
 - [ ] Phase 9 - Kompatibilitaet und Leistung: 0/24 Tasks = 0%
@@ -96,6 +96,14 @@ Aktueller Taskstand (`KR-3104`):
 ```text
 1/1 katana-platform-interrupt-tests bestanden
 vollstaendige lokale Debug-Regression: 118/118 Tests
+```
+
+Aktueller Taskstand (`KR-3105`):
+
+```text
+1/1 katana-media-clock-tests bestanden
+vollstaendige lokale Debug-Regression: 119/119 Tests
+Sonic-Adventure-Test: gemaess Review-Stopp nicht ausgefuehrt
 ```
 
 Lokale Sonic-Adventure-Akzeptanzstrategie:
@@ -230,10 +238,12 @@ Lokale Sonic-Adventure-Akzeptanzstrategie:
 - [x] KR-3102 - TMU und RTC
 - [x] KR-3103 - DMA
 - [x] KR-3104 - Plattform-Interruptintegration
+- [x] KR-3105 - Frame- und Audio-Taktung
 
-## Naechster Roadmap-Task
+## Naechster Arbeitsschritt
 
-- [ ] KR-3105 - Frame- und Audio-Taktung
+- [ ] Code-Review und Fixrunde fuer KR-3101 bis KR-3105
+- [ ] erst nach neuer Freigabe: v0.31.0-Gate mit frischem Debug-/Release-Build und kumulativem Sonic-Adventure-Test
 
 ## Aktuelle Einschraenkungen
 

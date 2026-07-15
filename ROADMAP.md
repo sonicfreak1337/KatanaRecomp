@@ -679,7 +679,11 @@ Fortschritt:
 - [x] KR-3102 - TMU und RTC
 - [x] KR-3103 - DMA
 - [x] KR-3104 - Plattform-Interruptintegration
-- [ ] KR-3105 - Frame- und Audio-Taktung
+- [x] KR-3105 - Frame- und Audio-Taktung
+
+Implementierungsstand: Alle fuenf v0.31.0-Tasks sind umgesetzt. Das Release-Gate,
+der Versionssprung, der Tag und der kumulative Sonic-Adventure-Test bleiben bis
+nach der vereinbarten Code-Review und Fixrunde ausdruecklich offen.
 
 Enthalten:
 

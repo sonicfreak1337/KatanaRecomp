@@ -1034,9 +1034,25 @@ Akzeptanz:
 - TMU-, RTC-, DMTE-, DMAE- und externe IRL-Pfade besitzen eine gemeinsame Laufzeitregression
 - externe Geraete werden nicht unter Umgehung des noch fehlenden Dreamcast-System-ASIC direkt verdrahtet
 
-### [ ] KR-3105 - Frame- und Audio-Taktung
+### [x] KR-3105 - Frame- und Audio-Taktung
 
 Abhaengigkeiten: KR-2802, KR-2903, KR-3101
+
+Umfang:
+
+- Video- und Audiokadenzen als unabhaengige Ereignisse auf dem zentralen Scheduler ausfuehren
+- Frame- und Audiopuffer-Callbacks mit Gastzyklus, Sequenz und Samplebereich typisieren
+- nicht ganzzahlige Taktverhaeltnisse ohne dauerhafte Rundungsdrift akkumulieren
+- Stop, Neustart, Reset, Ereignisbudget und Callbackfehler deterministisch behandeln
+- vorhandene PVR- und AICA-Recording-Backends ueber den gemeinsamen Medienpfad treiben
+
+Akzeptanz:
+
+- feste Eingaben erzeugen identische Video-/Audiofristen und stabile Gleichzyklusreihenfolge
+- rationale Kadenzen erreichen ihre exakten Langzeitfristen ohne Hostzeit
+- Budgetstopp ist sichtbar fortsetzbar; Stop und Callbackfehler hinterlassen keine Teilkadenz
+- Neustart ankert am aktuellen Gastzyklus, Reset loescht alle Medienzaehler
+- der lokale Sonic-Adventure-Test bleibt ausschliesslich dem spaeter freigegebenen v0.31.0-Gate vorbehalten
 
 ---
 

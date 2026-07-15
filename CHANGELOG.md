@@ -8,6 +8,11 @@
 - KR-3102: Drei SH-4-TMU-Kanaele liefern gastzyklusgenauen Countdown, Pck-/RTC-Teiler, Auto-Reload und sichtbare UNF-/UNIE-Zustaende; eine hostzeitfreie 256-Hz-RTC zaehlt Kalender, Schaltjahre, Carry- und Periodic-Ereignisse deterministisch.
 - KR-3103: Vier schedulergetaktete SH-4-DMAC-Kanaele bilden SAR/DAR/DMATCR/CHCR/DMAOR, Transfergroessen, Adressmodi, Prioritaeten sowie sichtbare TE-/IE-/AE-/NMIF-Zustaende ueber das 32-Bit-MMIO-Registerfenster ab.
 - KR-3104: Ein zentraler Plattformrouter spiegelt TMU-, RTC-, DMTE-, DMAE- und drei feste Dreamcast-IRL-Quellen an deterministischen CPU-Safepoints mit offiziellen INTEVT-Codes, gruppierten Prioritaeten und levelartiger Quittierungssemantik.
+- KR-3105: Eine gemeinsame Medienuhr erzeugt driftfreie rationale Video- und Audiokadenzen auf Gastzyklen, typisierte Backend-Callbacks, stabile Gleichzyklusreihenfolge sowie sichtbaren Budget-, Stop-, Reset- und Fehlerzustand.
+
+### Geaendert
+
+- Lokale Buildausgaben werden auf genau ein ignoriertes Multi-Config-Verzeichnis `build-current/` begrenzt; 14 alte task-, versions- und konfigurationsspezifische Buildbaeume wurden entfernt. Debug und Release teilen kuenftig denselben Buildbaum.
 
 ### Behoben
 

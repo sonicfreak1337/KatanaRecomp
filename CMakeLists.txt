@@ -43,6 +43,7 @@ add_library(katana_runtime STATIC
     src/runtime/interrupt.cpp
     src/runtime/iso9660.cpp
     src/runtime/maple.cpp
+    src/runtime/media_clock.cpp
     src/runtime/pvr.cpp
     src/runtime/platform_interrupt.cpp
     src/runtime/scheduler.cpp
@@ -388,6 +389,11 @@ add_executable(katana-platform-interrupt-tests tests/runtime/platform_interrupt_
 target_link_libraries(katana-platform-interrupt-tests PRIVATE katana_runtime)
 katana_enable_warnings(katana-platform-interrupt-tests)
 add_test(NAME katana-platform-interrupt-tests COMMAND katana-platform-interrupt-tests)
+
+add_executable(katana-media-clock-tests tests/runtime/media_clock_tests.cpp)
+target_link_libraries(katana-media-clock-tests PRIVATE katana_runtime)
+katana_enable_warnings(katana-media-clock-tests)
+add_test(NAME katana-media-clock-tests COMMAND katana-media-clock-tests)
 
 add_executable(katana-decoder-tests
     tests/decoder/decoder_tests.cpp
