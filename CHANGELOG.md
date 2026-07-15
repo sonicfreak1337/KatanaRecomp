@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Hinzugefuegt
+
+- KR-2901: Ein 32-KiB-AICA-Registerfenster unterstuetzt little-endian Byte-, Halfword- und Word-Zugriffe ueber alle direkten SH-4-Segmentaliase, deterministischen Reset und sichtbare Schreibereignisse.
+
 ## [0.28.0] - 2026-07-15
 
 ### Hinzugefuegt

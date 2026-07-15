@@ -904,7 +904,7 @@ Abhaengigkeiten: KR-2801
 
 Abhaengigkeiten: KR-2803
 
-### [ ] KR-2901 - AICA-Registerminimum
+### [x] KR-2901 - AICA-Registerminimum
 
 Abhaengigkeiten: KR-2207
 

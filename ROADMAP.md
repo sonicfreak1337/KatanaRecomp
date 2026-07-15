@@ -588,6 +588,13 @@ Release-Gate:
 
 ### v0.29.0 - AICA Minimum Viable Audio
 
+Fortschritt:
+
+- [x] KR-2901 - AICA-Registerminimum
+- [ ] KR-2902 - PCM und ADPCM
+- [ ] KR-2903 - Mixer und Host-Audio
+- [ ] KR-2904 - ARM7-Strategie
+
 Enthalten:
 
 - AICA-Registermodell

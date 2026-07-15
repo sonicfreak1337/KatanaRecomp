@@ -33,6 +33,7 @@ function(katana_enable_warnings target)
 endfunction()
 
 add_library(katana_runtime STATIC
+    src/runtime/aica.cpp
     src/runtime/dreamcast_memory.cpp
     src/runtime/exception.cpp
     src/runtime/fpu.cpp
@@ -310,6 +311,11 @@ add_executable(katana-pvr-render-tests tests/runtime/pvr_render_tests.cpp)
 target_link_libraries(katana-pvr-render-tests PRIVATE katana_runtime)
 katana_enable_warnings(katana-pvr-render-tests)
 add_test(NAME katana-pvr-render-tests COMMAND katana-pvr-render-tests)
+
+add_executable(katana-aica-register-tests tests/runtime/aica_register_tests.cpp)
+target_link_libraries(katana-aica-register-tests PRIVATE katana_runtime)
+katana_enable_warnings(katana-aica-register-tests)
+add_test(NAME katana-aica-register-tests COMMAND katana-aica-register-tests)
 
 add_executable(katana-decoder-tests
     tests/decoder/decoder_tests.cpp
