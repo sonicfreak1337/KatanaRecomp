@@ -936,7 +936,7 @@ Abhaengigkeiten: KR-3001
 
 Abhaengigkeiten: KR-3002
 
-### [ ] KR-3005 - GDI-Deskriptoren und Trackmodell
+### [x] KR-3005 - GDI-Deskriptoren und Trackmodell
 
 Abhaengigkeiten: KR-3001
 

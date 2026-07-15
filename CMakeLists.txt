@@ -38,6 +38,7 @@ add_library(katana_runtime STATIC
     src/runtime/dreamcast_memory.cpp
     src/runtime/exception.cpp
     src/runtime/fpu.cpp
+    src/runtime/gdi.cpp
     src/runtime/interrupt.cpp
     src/runtime/iso9660.cpp
     src/runtime/maple.cpp
@@ -353,6 +354,11 @@ add_executable(katana-gdrom-async-tests tests/runtime/gdrom_async_tests.cpp)
 target_link_libraries(katana-gdrom-async-tests PRIVATE katana_runtime)
 katana_enable_warnings(katana-gdrom-async-tests)
 add_test(NAME katana-gdrom-async-tests COMMAND katana-gdrom-async-tests)
+
+add_executable(katana-gdi-parser-tests tests/runtime/gdi_parser_tests.cpp)
+target_link_libraries(katana-gdi-parser-tests PRIVATE katana_runtime)
+katana_enable_warnings(katana-gdi-parser-tests)
+add_test(NAME katana-gdi-parser-tests COMMAND katana-gdi-parser-tests)
 
 add_executable(katana-decoder-tests
     tests/decoder/decoder_tests.cpp

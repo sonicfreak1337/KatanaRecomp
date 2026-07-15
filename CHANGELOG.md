@@ -8,6 +8,7 @@
 - KR-3002: Ein GD-ROM-Laufwerksmodell verarbeitet Ready-, Status-, Kapazitaets- und Sektorlesekommandos mit Big-Endian-Kapazitaetsantworten und expliziten No-Media-, Feld-, Befehls- und Bereichsfehlern.
 - KR-3003: Ein read-only ISO9660-Pfad validiert den Primary Volume Descriptor und Both-Endian-Directory-Records, normalisiert Versionssuffixe und liest Dateien case-insensitive auch aus Unterverzeichnissen.
 - KR-3004: Asynchrone GD-ROM-Requests verwenden ausschliesslich explizite Gastzyklen, Basislatenz und Sektorkosten; Fertigstellungen sind stabil geordnet und Zeitrueckspruenge sowie Zyklusueberlaeufe sichtbar.
+- KR-3005: Der `.gdi`-Parser liest quoted relative Trackpfade, Typ, Sektorformat, Offset und Reihenfolge in ein Modell mit Zeilenprovenienz und weist fehlende Dateien, Trackkonflikte sowie unplausible Dateigroessen read-only ab.
 
 ### Behoben
 
