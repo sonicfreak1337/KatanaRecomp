@@ -1063,7 +1063,7 @@ Akzeptanz:
 
 Abhaengigkeiten: KR-2104
 
-### [ ] KR-3202 - C++-Backend migrieren
+### [x] KR-3202 - C++-Backend migrieren
 
 Abhaengigkeiten: KR-3201
 

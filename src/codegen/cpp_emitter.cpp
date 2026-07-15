@@ -3034,18 +3034,11 @@ void emit_block(
 
 }
 
-std::string emit_cpp_program(
-    const std::span<const katana::ir::Function> functions,
-    const std::uint32_t entry_address
-) {
-    if (functions.empty()) {
-        throw std::invalid_argument(
-            "Es wurden keine IR-Funktionen uebergeben."
-        );
-    }
+std::string_view CppBackend::name() const noexcept { return "cpp"; }
 
-    katana::ir::require_valid_program(functions);
-
+BackendEmission CppBackend::emit(const BackendRequest& request) const {
+    const auto functions = request.functions;
+    const auto entry_address = request.entry_address;
     std::unordered_set<std::uint32_t> known_functions;
     known_functions.reserve(functions.size());
 
@@ -3053,15 +3046,11 @@ std::string emit_cpp_program(
         known_functions.insert(function.entry_address);
     }
 
-    if (!known_functions.contains(entry_address)) {
-        throw std::invalid_argument(
-            "Die Einstiegsfunktion ist im IR-Programm nicht vorhanden."
-        );
-    }
+    std::ostringstream declarations;
+    std::ostringstream function_bodies;
+    std::ostringstream metadata;
 
-    std::ostringstream output;
-
-    output
+    declarations
         << "#include \"katana/runtime/exception.hpp\"\n"
         << "#include \"katana/runtime/fpu.hpp\"\n"
         << "#include \"katana/runtime/runtime.hpp\"\n"
@@ -3084,16 +3073,16 @@ std::string emit_cpp_program(
         << "using katana::runtime::unresolved_jump;\n\n";
 
     for (const auto& function : functions) {
-        output
+        declarations
             << "static void "
             << function_name(function.entry_address)
             << "(CpuState& cpu);\n";
     }
 
-    output << '\n';
+    declarations << '\n';
 
     for (const auto& function : functions) {
-        output
+        function_bodies
             << "static void "
             << function_name(function.entry_address)
             << "(CpuState& cpu) {\n"
@@ -3108,14 +3097,14 @@ std::string emit_cpp_program(
 
         for (const auto& block : function.blocks) {
             emit_block(
-                output,
+                function_bodies,
                 block,
                 known_functions,
                 current_blocks
             );
         }
 
-        output
+        function_bodies
             << "            default:\n"
             << "                throw std::runtime_error("
             << "\"PC liegt ausserhalb der generierten Funktion\");\n"
@@ -3124,7 +3113,7 @@ std::string emit_cpp_program(
             << "}\n\n";
     }
 
-    output
+    function_bodies
         << "void run(CpuState& cpu) {\n"
         << "    cpu.pc = "
         << hex32(entry_address)
@@ -3132,10 +3121,27 @@ std::string emit_cpp_program(
         << "    "
         << function_name(entry_address)
         << "(cpu);\n"
-        << "}\n\n"
+        << "}\n\n";
+
+    metadata
+        << "inline constexpr std::uint32_t generated_entry_address = "
+        << hex32(entry_address)
+        << ";\n\n"
         << "} // namespace katana_generated\n";
 
-    return output.str();
+    return {
+        declarations.str(),
+        function_bodies.str(),
+        metadata.str()
+    };
+}
+
+std::string emit_cpp_program(
+    const std::span<const katana::ir::Function> functions,
+    const std::uint32_t entry_address
+) {
+    const CppBackend backend;
+    return generate_program(backend, {functions, entry_address}).joined_text();
 }
 
 }
