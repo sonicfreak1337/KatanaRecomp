@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <limits>
 #include <span>
 #include <stdexcept>
 #include <utility>
@@ -58,15 +59,31 @@ Iso9660Entry parse_record(const std::span<const std::uint8_t> bytes, const std::
         (bytes[offset + 25u] & 0x02u) != 0u
     };
 }
+
+std::uint64_t sector_offset(
+    const std::uint32_t volume_start_lba,
+    const std::uint32_t relative_lba,
+    const std::uint32_t sector_size
+) {
+    const auto absolute_lba = static_cast<std::uint64_t>(volume_start_lba) + relative_lba;
+    if (absolute_lba > std::numeric_limits<std::uint64_t>::max() / sector_size) {
+        throw std::out_of_range("ISO9660-Sektoroffset laeuft ueber.");
+    }
+    return absolute_lba * sector_size;
+}
 }
 
 Iso9660Filesystem::Iso9660Filesystem(
     std::shared_ptr<const DiscSource> source,
-    const std::uint32_t sector_size
-) : source_(std::move(source)), sector_size_(sector_size) {
+    const std::uint32_t sector_size,
+    const std::uint32_t volume_start_lba
+) : source_(std::move(source)), sector_size_(sector_size), volume_start_lba_(volume_start_lba) {
     if (!source_) { throw std::invalid_argument("ISO9660 braucht eine Disc-Quelle."); }
     if (sector_size_ < 2048u) { throw std::invalid_argument("ISO9660-Sektorgroesse ist kleiner als 2048 Byte."); }
-    const auto descriptor = source_->read(static_cast<std::uint64_t>(16u) * sector_size_, sector_size_);
+    const auto descriptor = source_->read(
+        sector_offset(volume_start_lba_, 16u, sector_size_),
+        sector_size_
+    );
     if (descriptor[0] != 1u || std::string_view(
         reinterpret_cast<const char*>(descriptor.data() + 1u), 5u) != "CD001" || descriptor[6] != 1u) {
         throw std::runtime_error("ISO9660 Primary Volume Descriptor fehlt oder ist ungueltig.");
@@ -93,7 +110,7 @@ std::vector<std::string> Iso9660Filesystem::split_path(const std::string_view pa
 std::vector<Iso9660Entry> Iso9660Filesystem::read_directory(const Iso9660Entry& directory) const {
     if (!directory.directory) { throw std::invalid_argument("ISO9660-Pfad ist kein Verzeichnis."); }
     const auto bytes = source_->read(
-        static_cast<std::uint64_t>(directory.lba) * sector_size_,
+        sector_offset(volume_start_lba_, directory.lba, sector_size_),
         directory.size
     );
     std::vector<Iso9660Entry> result;
@@ -135,7 +152,10 @@ std::vector<Iso9660Entry> Iso9660Filesystem::list_directory(const std::string_vi
 std::vector<std::uint8_t> Iso9660Filesystem::read_file(const std::string_view path) const {
     const auto entry = resolve(path);
     if (entry.directory) { throw std::invalid_argument("ISO9660-Pfad bezeichnet ein Verzeichnis."); }
-    return source_->read(static_cast<std::uint64_t>(entry.lba) * sector_size_, entry.size);
+    return source_->read(
+        sector_offset(volume_start_lba_, entry.lba, sector_size_),
+        entry.size
+    );
 }
 
 } // namespace katana::runtime

@@ -360,6 +360,11 @@ target_link_libraries(katana-gdi-parser-tests PRIVATE katana_runtime)
 katana_enable_warnings(katana-gdi-parser-tests)
 add_test(NAME katana-gdi-parser-tests COMMAND katana-gdi-parser-tests)
 
+add_executable(katana-gdi-integration-tests tests/runtime/gdi_integration_tests.cpp)
+target_link_libraries(katana-gdi-integration-tests PRIVATE katana_runtime)
+katana_enable_warnings(katana-gdi-integration-tests)
+add_test(NAME katana-gdi-integration-tests COMMAND katana-gdi-integration-tests)
+
 add_executable(katana-decoder-tests
     tests/decoder/decoder_tests.cpp
 )

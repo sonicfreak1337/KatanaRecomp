@@ -954,7 +954,7 @@ Akzeptanz:
 - Parser und Modell schreiben nie in Quelldateien oder Trackabbilder
 - synthetische Testdaten genuegen; keine echten Dreamcast-Discs landen im Repository
 
-### [ ] KR-3006 - GDI-Quellenintegration
+### [x] KR-3006 - GDI-Quellenintegration
 
 Abhaengigkeiten: KR-3002, KR-3003, KR-3004, KR-3005
 

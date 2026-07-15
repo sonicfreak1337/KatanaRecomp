@@ -64,6 +64,9 @@ int main() {
         require(message.find("synthetic.gdi") != std::string::npos && message.find("Zeile 3") != std::string::npos,
             "GDI-Diagnose verliert Descriptorname oder Zeilenprovenienz.");
     }
+    write_text(descriptor, "2\n1 0 0 2352 \"track 01.bin\" 0\n2 1 4 2048 track02.bin 0\n");
+    require(throws<std::runtime_error>([&] { static_cast<void>(parse_gdi_descriptor(descriptor)); }),
+        "GDI-Parser akzeptiert ueberlappende Track-LBA-Bereiche.");
 
     std::cout << "KR-3005 GDI-Deskriptoren und Trackmodell erfolgreich.\n";
 }

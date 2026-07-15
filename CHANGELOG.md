@@ -9,6 +9,7 @@
 - KR-3003: Ein read-only ISO9660-Pfad validiert den Primary Volume Descriptor und Both-Endian-Directory-Records, normalisiert Versionssuffixe und liest Dateien case-insensitive auch aus Unterverzeichnissen.
 - KR-3004: Asynchrone GD-ROM-Requests verwenden ausschliesslich explizite Gastzyklen, Basislatenz und Sektorkosten; Fertigstellungen sind stabil geordnet und Zeitrueckspruenge sowie Zyklusueberlaeufe sichtbar.
 - KR-3005: Der `.gdi`-Parser liest quoted relative Trackpfade, Typ, Sektorformat, Offset und Reihenfolge in ein Modell mit Zeilenprovenienz und weist fehlende Dateien, Trackkonflikte sowie unplausible Dateigroessen read-only ab.
+- KR-3006: GDI-Mehrdateiquellen liefern pfadunabhaengige Inhaltsidentitaet, Raw-Audiotracks und normalisierte 2048-Byte-Datensektoren ueber dieselbe DiscSource-, GD-ROM- und ISO9660-Kette; der Read-only-Vertrag ist dokumentiert und getestet.
 
 ### Behoben
 
