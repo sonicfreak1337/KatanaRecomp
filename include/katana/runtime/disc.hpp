@@ -44,4 +44,41 @@ private:
     std::uint64_t size_ = 0u;
 };
 
+enum class GdRomCommand : std::uint8_t {
+    TestUnitReady,
+    GetStatus,
+    GetCapacity,
+    ReadSectors
+};
+
+enum class GdRomStatus : std::uint8_t {
+    Good,
+    NoMedia,
+    InvalidCommand,
+    InvalidField,
+    OutOfRange
+};
+
+struct GdRomRequest {
+    GdRomCommand command = GdRomCommand::TestUnitReady;
+    std::uint32_t lba = 0u;
+    std::uint32_t sector_count = 0u;
+};
+
+struct GdRomResponse {
+    GdRomStatus status = GdRomStatus::Good;
+    std::vector<std::uint8_t> data;
+    std::uint32_t transferred_sectors = 0u;
+};
+
+class GdRomDrive final {
+public:
+    explicit GdRomDrive(std::shared_ptr<const DiscSource> source, std::uint32_t sector_size = 2048u);
+    [[nodiscard]] GdRomResponse execute(const GdRomRequest& request) const;
+    [[nodiscard]] std::uint32_t sector_size() const noexcept;
+private:
+    std::shared_ptr<const DiscSource> source_;
+    std::uint32_t sector_size_ = 2048u;
+};
+
 } // namespace katana::runtime

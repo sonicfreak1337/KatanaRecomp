@@ -338,6 +338,11 @@ target_link_libraries(katana-disc-source-tests PRIVATE katana_runtime)
 katana_enable_warnings(katana-disc-source-tests)
 add_test(NAME katana-disc-source-tests COMMAND katana-disc-source-tests)
 
+add_executable(katana-gdrom-command-tests tests/runtime/gdrom_command_tests.cpp)
+target_link_libraries(katana-gdrom-command-tests PRIVATE katana_runtime)
+katana_enable_warnings(katana-gdrom-command-tests)
+add_test(NAME katana-gdrom-command-tests COMMAND katana-gdrom-command-tests)
+
 add_executable(katana-decoder-tests
     tests/decoder/decoder_tests.cpp
 )

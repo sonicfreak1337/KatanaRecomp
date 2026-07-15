@@ -5,6 +5,7 @@
 ### Hinzugefuegt
 
 - KR-3001: Eine gemeinsame read-only DiscSource-Abstraktion stellt bereichsgepruefte Speicher- und Hostdateiquellen mit expliziter semantischer Identitaet bereit; Hostpfade sind weder Identitaet noch Schreibziel.
+- KR-3002: Ein GD-ROM-Laufwerksmodell verarbeitet Ready-, Status-, Kapazitaets- und Sektorlesekommandos mit Big-Endian-Kapazitaetsantworten und expliziten No-Media-, Feld-, Befehls- und Bereichsfehlern.
 
 ### Behoben
 

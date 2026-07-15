@@ -88,4 +88,71 @@ void FileDiscSource::read(
     }
 }
 
+GdRomDrive::GdRomDrive(
+    std::shared_ptr<const DiscSource> source,
+    const std::uint32_t sector_size
+) : source_(std::move(source)), sector_size_(sector_size) {
+    if (!source_) { throw std::invalid_argument("GD-ROM-Laufwerk braucht eine Disc-Quelle."); }
+    if (sector_size_ == 0u) { throw std::invalid_argument("GD-ROM-Sektorgroesse darf nicht null sein."); }
+}
+
+namespace {
+void append_be32(std::vector<std::uint8_t>& output, const std::uint32_t value) {
+    output.push_back(static_cast<std::uint8_t>(value >> 24u));
+    output.push_back(static_cast<std::uint8_t>(value >> 16u));
+    output.push_back(static_cast<std::uint8_t>(value >> 8u));
+    output.push_back(static_cast<std::uint8_t>(value));
+}
+}
+
+GdRomResponse GdRomDrive::execute(const GdRomRequest& request) const {
+    const auto sectors = source_->size() / sector_size_;
+    if (request.command == GdRomCommand::TestUnitReady) {
+        return {sectors == 0u ? GdRomStatus::NoMedia : GdRomStatus::Good, {}, 0u};
+    }
+    if (request.command == GdRomCommand::GetStatus) {
+        return {GdRomStatus::Good, {
+            static_cast<std::uint8_t>(sectors == 0u ? GdRomStatus::NoMedia : GdRomStatus::Good),
+            0u, 0u, 0u
+        }, 0u};
+    }
+    if (request.command == GdRomCommand::GetCapacity) {
+        if (sectors == 0u) { return {GdRomStatus::NoMedia, {}, 0u}; }
+        if (sectors - 1u > std::numeric_limits<std::uint32_t>::max()) {
+            return {GdRomStatus::OutOfRange, {}, 0u};
+        }
+        GdRomResponse response;
+        append_be32(response.data, static_cast<std::uint32_t>(sectors - 1u));
+        append_be32(response.data, sector_size_);
+        return response;
+    }
+    if (request.command != GdRomCommand::ReadSectors) {
+        return {GdRomStatus::InvalidCommand, {}, 0u};
+    }
+    if (request.sector_count == 0u) {
+        return {GdRomStatus::InvalidField, {}, 0u};
+    }
+    const auto lba = static_cast<std::uint64_t>(request.lba);
+    const auto count = static_cast<std::uint64_t>(request.sector_count);
+    if (lba >= sectors || count > sectors - lba) {
+        return {GdRomStatus::OutOfRange, {}, 0u};
+    }
+    const auto byte_count = count * sector_size_;
+    const auto byte_offset = lba * sector_size_;
+    if (byte_count > std::numeric_limits<std::size_t>::max()) {
+        return {GdRomStatus::OutOfRange, {}, 0u};
+    }
+    try {
+        return {
+            GdRomStatus::Good,
+            source_->read(byte_offset, static_cast<std::size_t>(byte_count)),
+            request.sector_count
+        };
+    } catch (const std::out_of_range&) {
+        return {GdRomStatus::OutOfRange, {}, 0u};
+    }
+}
+
+std::uint32_t GdRomDrive::sector_size() const noexcept { return sector_size_; }
+
 } // namespace katana::runtime

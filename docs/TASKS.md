@@ -924,7 +924,7 @@ Abhaengigkeiten: KR-2901
 
 Abhaengigkeiten: KR-2601
 
-### [ ] KR-3002 - GD-ROM-Kommandos
+### [x] KR-3002 - GD-ROM-Kommandos
 
 Abhaengigkeiten: KR-3001
 

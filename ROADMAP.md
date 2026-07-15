@@ -619,7 +619,7 @@ Release-Gate:
 Fortschritt:
 
 - [x] KR-3001 - Disc- und Dateiquellen-Abstraktion
-- [ ] KR-3002 - GD-ROM-Kommandos
+- [x] KR-3002 - GD-ROM-Kommandos
 - [ ] KR-3003 - ISO9660
 - [ ] KR-3004 - Asynchrone Reads und Timing
 - [ ] KR-3005 - GDI-Deskriptoren und Trackmodell
