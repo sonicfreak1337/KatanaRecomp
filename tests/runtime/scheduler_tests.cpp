@@ -60,6 +60,39 @@ int main() {
         "Scheduler-Zaehler stimmen nach geordnetem Lauf nicht."
     );
 
+    EventScheduler reentrant;
+    bool nested_advance_rejected = false;
+    bool nested_advance_by_rejected = false;
+    bool nested_reset_rejected = false;
+    bool nested_cancel_succeeded = false;
+    std::size_t nested_schedule_callbacks = 0u;
+    const auto cancelled_from_callback = reentrant.schedule_at(
+        15u,
+        [](const auto, const auto) {}
+    );
+    static_cast<void>(reentrant.schedule_at(10u, [&](const auto, const auto) {
+        nested_advance_rejected = throws<std::logic_error>([&] {
+            static_cast<void>(reentrant.advance_to(100u, 1u));
+        });
+        nested_advance_by_rejected = throws<std::logic_error>([&] {
+            static_cast<void>(reentrant.advance_by(90u, 1u));
+        });
+        nested_reset_rejected = throws<std::logic_error>([&] { reentrant.reset(); });
+        nested_cancel_succeeded = reentrant.cancel(cancelled_from_callback);
+        static_cast<void>(reentrant.schedule_at(12u, [&](const auto, const auto) {
+            ++nested_schedule_callbacks;
+        }));
+    }));
+    const auto guarded = reentrant.advance_to(20u, 2u);
+    require(
+        nested_advance_rejected && nested_advance_by_rejected && nested_reset_rejected &&
+            nested_cancel_succeeded && nested_schedule_callbacks == 1u &&
+            guarded.status == SchedulerAdvanceStatus::ReachedTarget &&
+            guarded.processed_events == 2u && guarded.guest_cycle == 20u &&
+            reentrant.current_cycle() == 20u && reentrant.processed_event_count() == 2u,
+        "Scheduler erlaubt rekursive Zeitmutation oder blockiert sichere Callback-Operationen."
+    );
+
     const auto cancelled = scheduler.schedule_after(5u, [](const auto, const auto) {});
     require(
         scheduler.cancel(cancelled) && !scheduler.cancel(cancelled) &&
@@ -124,6 +157,11 @@ int main() {
             scheduler.current_cycle() == 3u && scheduler.pending_event_count() == 0u &&
             scheduler.processed_event_count() == 1u,
         "Callbackfehler wird verschluckt oder hinterlaesst unklaren Schedulerzustand."
+    );
+
+    require(
+        scheduler.advance_to(5u, 0u).guest_cycle == 5u,
+        "Callbackfehler laesst den Scheduler faelschlich im Advance-Zustand."
     );
 
     scheduler.reset();

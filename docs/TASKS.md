@@ -976,6 +976,20 @@ Akzeptanz:
 
 Abhaengigkeiten: KR-2601
 
+Umfang:
+
+- eine zentrale, hostzeitfreie 64-Bit-Gastzyklusuhr und stabile Ereignis-IDs bereitstellen
+- Ereignisse nach Frist und ID deterministisch ordnen, abbrechen und mit explizitem Budget ausfuehren
+- Planung und Cancellation aus Callbacks erlauben, ohne die Zeitmonotonie zu verletzen
+- rekursives Advancing und Reset waehrend eines laufenden Advances sichtbar abweisen
+
+Akzeptanz:
+
+- die Gastzyklusuhr laeuft auch bei Reentrancy-Versuchen niemals rueckwaerts
+- `advance_to()`, `advance_by()` und `reset()` aus Callbacks liefern `std::logic_error`
+- verschachteltes `schedule_at()` und `cancel()` bleiben erlaubt und stabil geordnet
+- Budgetstopp, Callbackfehler, Cancellation, Reset und 64-Bit-Ueberlauf sind regressionsgesichert
+
 ### [x] KR-3102 - TMU und RTC
 
 Abhaengigkeiten: KR-3101

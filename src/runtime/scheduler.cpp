@@ -51,7 +51,12 @@ void EventScheduler::clear() noexcept {
     event_keys_.clear();
 }
 
-void EventScheduler::reset() noexcept {
+void EventScheduler::reset() {
+    if (advance_in_progress_) {
+        throw std::logic_error(
+            "Scheduler-Reset ist waehrend eines laufenden Advances nicht erlaubt."
+        );
+    }
     clear();
     current_cycle_ = 0u;
     next_event_id_ = 1u;
@@ -62,9 +67,20 @@ SchedulerAdvanceResult EventScheduler::advance_to(
     const std::uint64_t guest_cycle,
     const std::size_t event_budget
 ) {
+    if (advance_in_progress_) {
+        throw std::logic_error(
+            "Rekursives Scheduler-Advance ist nicht erlaubt."
+        );
+    }
     if (guest_cycle < current_cycle_) {
         throw std::invalid_argument("Scheduler-Zyklusuhr darf nicht rueckwaerts laufen.");
     }
+
+    struct AdvanceGuard final {
+        explicit AdvanceGuard(bool& state) noexcept : state_(state) { state_ = true; }
+        ~AdvanceGuard() { state_ = false; }
+        bool& state_;
+    } guard(advance_in_progress_);
 
     std::size_t processed = 0u;
     while (!events_.empty() && events_.begin()->first.first <= guest_cycle) {
@@ -97,6 +113,11 @@ SchedulerAdvanceResult EventScheduler::advance_by(
     const std::uint64_t guest_cycles,
     const std::size_t event_budget
 ) {
+    if (advance_in_progress_) {
+        throw std::logic_error(
+            "Rekursives Scheduler-Advance ist nicht erlaubt."
+        );
+    }
     if (guest_cycles > std::numeric_limits<std::uint64_t>::max() - current_cycle_) {
         throw std::overflow_error("Scheduler-Zielzyklus ist uebergelaufen.");
     }

@@ -26,7 +26,7 @@ Definition fuer diesen Status: ein BIOS-freier, frei verteilbarer Homebrew-Verti
 - [x] Eingabeweg fertig: Maple, Controller und deterministische Replays (`KR-2701` bis `KR-2703`) sind abgeschlossen
 - [x] PVR-Minimalbildpfad fertig: Register, Framebuffer, Tile-Accelerator, erste Texturformate und Render-Backend (`KR-2801` bis `KR-2804`) sind abgeschlossen
 - [x] AICA-Minimalaudiopfad fertig: Register, PCM/ADPCM, Mixer, Host-Audio sowie HLE-Timer und Interrupts (`KR-2901` bis `KR-2904`) sind vorhanden
-- [~] Takt- und Ereignispfad fortgeschritten: Scheduler, TMU und RTC (`KR-3101`, `KR-3102`) sind vorhanden; DMA, Interruptintegration und Medien-Taktung (`KR-3103` bis `KR-3105`) fehlen
+- [~] Takt- und Ereignispfad fortgeschritten: Der reentrancy-geschuetzte Scheduler garantiert monotone Gastzeit; TMU und RTC (`KR-3101`, `KR-3102`) sind vorhanden, DMA, Interruptintegration und Medien-Taktung (`KR-3103` bis `KR-3105`) fehlen
 - [x] Disc-Pfad fertig: read-only Quellen, GD-ROM, ISO9660, Timing sowie GDI-Trackmodell und -Integration (`KR-3001` bis `KR-3006`) sind vorhanden
 
 Praktische Einordnung:

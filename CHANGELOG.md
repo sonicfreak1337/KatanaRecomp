@@ -7,6 +7,10 @@
 - KR-3101: Ein zentraler, hostzeitfreier Event-Scheduler ordnet Callbacks deterministisch nach 64-Bit-Gastzyklus und Ereignis-ID, unterstuetzt Cancellation und verschachtelte Planung und stoppt mit sichtbarem Status an einem expliziten Ereignisbudget.
 - KR-3102: Drei SH-4-TMU-Kanaele liefern gastzyklusgenauen Countdown, Pck-/RTC-Teiler, Auto-Reload und sichtbare UNF-/UNIE-Zustaende; eine hostzeitfreie 256-Hz-RTC zaehlt Kalender, Schaltjahre, Carry- und Periodic-Ereignisse deterministisch.
 
+### Behoben
+
+- KR-3101-Nacharbeit: Rekursive `advance_to()`-/`advance_by()`-Aufrufe und `reset()` aus Scheduler-Callbacks werden sichtbar abgewiesen. Die Gastzyklusuhr kann dadurch nicht mehr durch ein verschachteltes Advance zurueckspringen; verschachtelte Planung und Cancellation bleiben erlaubt.
+
 ## [0.30.0] - 2026-07-15
 
 ### Hinzugefuegt

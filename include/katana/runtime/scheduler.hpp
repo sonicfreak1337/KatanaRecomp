@@ -38,7 +38,7 @@ public:
 
     [[nodiscard]] bool cancel(SchedulerEventId event_id) noexcept;
     void clear() noexcept;
-    void reset() noexcept;
+    void reset();
 
     [[nodiscard]] SchedulerAdvanceResult advance_to(
         std::uint64_t guest_cycle,
@@ -60,6 +60,7 @@ private:
     std::uint64_t current_cycle_ = 0u;
     SchedulerEventId next_event_id_ = 1u;
     std::uint64_t processed_event_count_ = 0u;
+    bool advance_in_progress_ = false;
     std::map<EventKey, SchedulerCallback> events_;
     std::unordered_map<SchedulerEventId, EventKey> event_keys_;
 };

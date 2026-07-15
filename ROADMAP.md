@@ -683,7 +683,7 @@ Fortschritt:
 
 Enthalten:
 
-- zentraler Event-Scheduler
+- zentraler, reentrancy-geschuetzter Event-Scheduler mit monotoner Gastzeit
 - TMU
 - RTC
 - DMA-Kanaele
