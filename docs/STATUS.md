@@ -70,6 +70,14 @@ Aktueller Taskstand (`KR-3006`):
 optionaler privater read-only GDI-Smoke-Test bestanden (keine Quelldaten erfasst)
 ```
 
+Lokale Sonic-Adventure-Akzeptanzstrategie:
+
+- [x] verbindliche kumulative Gates fuer Phase 6 bis Phase 10 und v0.50.0 sind in `docs/SONIC_ADVENTURE_ACCEPTANCE.md` definiert
+- [x] einzelne Tasks, Commits und Zwischenreleases benoetigen keinen vollstaendigen Sonic-Adventure-Lauf
+- [ ] der bestehende v0.30.0-GDI-Smoke wird nicht jetzt wiederholt, sondern beim Phase-6-Abschluss v0.31.0 kumulativ nach den neuen messbaren Kriterien revalidiert
+- [ ] der erste verbindliche vollstaendige Lauf ist das Phase-6-Gate v0.31.0 mit `SA_PHASE6_MAIN_EXECUTION_STARTED`
+- [ ] kuenftige Phasen muessen die jeweils benoetigten allgemeinen Zaehler, Checkpoints und redigierten maschinenlesbaren Berichte bereitstellen, ohne spaetere Funktionen vorzuziehen
+
 ## Fertiggestellte Roadmap-Tasks
 
 - [x] KR-1101 - SUB, NEG und NOT

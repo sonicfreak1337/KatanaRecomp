@@ -4,6 +4,8 @@
 
 ### Hinzugefuegt
 
+- Eine zentrale lokale Sonic-Adventure-Akzeptanzstrategie definiert genau ein kumulatives, messbares End-to-End-Gate je abgeschlossener Phase von v0.31.0 bis v0.44.0 sowie das Alpha-Gate v0.50.0. Der v0.30.0-GDI-Smoke wird erst bei v0.31.0 revalidiert; einzelne Tasks und Zwischenreleases behalten ihre bestehenden kleineren Tests.
+
 - KR-3001: Eine gemeinsame read-only DiscSource-Abstraktion stellt bereichsgepruefte Speicher- und Hostdateiquellen mit expliziter semantischer Identitaet bereit; Hostpfade sind weder Identitaet noch Schreibziel.
 - KR-3002: Ein GD-ROM-Laufwerksmodell verarbeitet Ready-, Status-, Kapazitaets- und Sektorlesekommandos mit Big-Endian-Kapazitaetsantworten und expliziten No-Media-, Feld-, Befehls- und Bereichsfehlern.
 - KR-3003: Ein read-only ISO9660-Pfad validiert den Primary Volume Descriptor und Both-Endian-Directory-Records, normalisiert Versionssuffixe und liest Dateien case-insensitive auch aus Unterverzeichnissen.

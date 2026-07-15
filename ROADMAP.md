@@ -503,6 +503,35 @@ Release-Gate:
 - frische lokale Debug- und Release-Builds bestehen vollstaendig; CI ist erst
   zum Alpha-Gate wieder verpflichtend
 
+## Lokale Sonic-Adventure-Akzeptanzstrategie
+
+Sonic Adventure ist ab Phase 6 der massgebliche reale, lokale
+End-to-End-Akzeptanztest. Unit-, Integrations-, Regression-, Fuzzing-,
+Plattform- und Homebrew-Tests bleiben unveraendert der oeffentlich verteilbare
+Pflichtnachweis fuer einzelne Tasks und CI.
+
+Der vollstaendige lokale Test laeuft genau einmal pro abgeschlossener Phase:
+
+- Phase 6 bei v0.31.0
+- Phase 7 bei v0.34.0
+- Phase 8 bei v0.37.0
+- Phase 9 bei v0.40.0
+- Phase 10 bei v0.44.0
+- erneut beim Alpha-Gate v0.50.0
+
+Der bisherige v0.30.0-GDI-Smoke-Test wird nicht separat wiederholt. Seine
+messbaren GDI-, Track- und ISO9660-Kriterien werden beim kumulativen
+Phase-6-Gate v0.31.0 erneut geprueft. Einzelne Tasks und Zwischenreleases
+erhalten keinen vollstaendigen Sonic-Adventure-Test.
+
+Alle Gates verwenden endliche Gastzyklusbudgets, allgemeine Checkpoints,
+Zaehler und redigierte maschinenlesbare Berichte. Spieldaten, Captures,
+Dump-Hashes und lokale Pfade bleiben ausserhalb von Repository und Releases;
+titelbezogene Adressen, Remaps, Patches und Runtime-Sonderfaelle sind untersagt.
+Die vollstaendigen verbindlichen Kriterien stehen in
+`docs/SONIC_ADVENTURE_ACCEPTANCE.md`. Zukuenftige Kriterien werden hier nur
+dokumentiert und nicht vor ihrer Roadmap-Phase implementiert.
+
 ## Phase 6: Dreamcast-Plattform
 
 ### [x] v0.26.0 - Boot und Homebrew-Einstieg
@@ -647,7 +676,7 @@ Enthalten:
 - Frame- und Audio-Taktung
 - deterministische Testuhr
 
-Release-Gate fuer Phase 6:
+Sonic-Adventure-Abschlussgate fuer Phase 6 bei v0.31.0:
 
 - ein frei lizenzierter Homebrew-Vertical-Slice zeigt Bild, nimmt Eingabe an und erzeugt Audio
 - alle verwendeten Testprogramme duerfen verteilt werden
@@ -655,6 +684,11 @@ Release-Gate fuer Phase 6:
 - der normale Homebrew-Pfad benoetigt kein proprietaeres BIOS- oder Flash-Abbild
 - optionale Firmwarepfade veraendern niemals das vom Nutzer bereitgestellte Quellabbild
 - `.gdi`-Quellen koennen ohne manuelle Trackumbauten geladen, validiert und ueber dieselbe Disc-Abstraktion wie andere Dateiquellen genutzt werden
+- der fruehere v0.30.0-GDI-Smoke wird kumulativ erneut geprueft: alle Tracks und Sektorformate sind validiert, ISO9660 und Bootdatei sind ueber den normalen DiscSource-Pfad lesbar und der Dump bleibt unveraendert
+- die Bootdatei ist in den Gastadressraum geladen und mindestens ein Block ihres allgemein bestimmten Programmbereichs wurde innerhalb eines festen Gastzyklusbudgets ausgefuehrt
+- Scheduler, asynchrones GD-ROM sowie zugehoerige Abschluss-, DMA- oder Interruptpfade liefern messbare Ereignisse; `executed_blocks > 0`, `guest_cycles > 0` und `silent_failures == 0`
+- zwei identische Laeufe erreichen `SA_PHASE6_MAIN_EXECUTION_STARTED` mit demselben letzten Gast-PC und denselben deterministischen Scheduler-Kernzustaenden
+- ein frischer Debug- und ein frischer Release-Build erreichen dieselben Checkpoints und strukturellen Ergebnisse
 
 ## Phase 7: Codegenerator und Dispatch
 
@@ -743,13 +777,17 @@ Enthalten:
 - expliziter Vertrag fuer Cachewartungsbefehle, CCR-Modi und Operand-Cache-RAM
 - klare Abbruchstrategie, wenn Sicherheit nicht garantiert werden kann
 
-Release-Gate fuer Phase 7:
+Sonic-Adventure-Abschlussgate fuer Phase 7 bei v0.34.0:
 
 - jeder Blockaustritt besitzt einen expliziten, getesteten Vertrag
 - unbekannte Dispatchziele werden nie still ignoriert oder titelbezogen umgebogen
 - ein Schreibzugriff auf ausfuehrbaren RAM invalidiert alle betroffenen Blockvarianten vor der naechsten Ausfuehrung
 - Scheduler, Interrupts und Ausnahmen beobachten an Backend- und Fallback-Grenzen denselben CPU-Zustand
 - der synthetische Alias-/ROM-RAM-Handoff funktioniert ohne proprietaeres BIOS
+- alle Phase-6-Kriterien und Checkpoints bestehen weiterhin
+- Analyse, IR, deterministisch partitionierter Codegen, Hostbuild und generierter Start laufen ueber die modulare Backend- und Runtime-ABI
+- mindestens ein generierter Block und ein generisch aufgeloestes indirektes Ziel werden ausgefuehrt; `indirect_dispatches > 0` und `silent_failures == 0`
+- identische Laeufe erreichen `SA_PHASE7_GENERATED_RUNTIME_ACTIVE` mit denselben deterministischen Dispatch-Kernmetriken
 
 ## Phase 8: Werkzeuge und Qualitaet
 
@@ -835,13 +873,17 @@ Enthalten:
 - reproduzierbare Release-Artefakte
 - Third-Party-, Referenzprovenienz- und Lizenzbericht
 
-Release-Gate fuer Phase 8:
+Sonic-Adventure-Abschlussgate fuer Phase 8 bei v0.37.0:
 
 - jeder nicht aufgeloeste Kontrollflussfall ist maschinenlesbar und reproduzierbar diagnostizierbar
 - Replays enthalten keine Hostzeit als versteckte Wahrheitsquelle
 - Firmware- und Flash-Berichte sind standardmaessig redigiert und veraendern keine Eingabe
 - Flycast und dcrecomp bleiben dokumentierte Referenzen; ihre Implementierungen oder GPL-pflichtigen Subsysteme werden ohne bewusste Lizenzentscheidung nicht eingebunden
 - gleiche Eingaben und Optionen erzeugen bytegleiche Metadaten und Release-Artefakte
+- alle Phase-7-Kriterien und Checkpoints bestehen weiterhin
+- Manifest und stabile CLI fuehren Analyse, Codegen, Build und begrenzten Lauf mit versionierten, redigierten JSON-Berichten aus
+- ein kontrollierter Abbruch dokumentiert Gast-PC, Block-, Delay-Slot-, Ausnahme-, Scheduler- und Dispatchzustand ohne lokale Pfade oder Spieldaten
+- identische Laeufe erreichen `SA_PHASE8_REPRODUCIBLE_DIAGNOSTIC_RUN` und erzeugen bytegleiche Manifeste und Blockmetadaten
 
 ## Phase 9: Kompatibilitaet und Leistung
 
@@ -934,6 +976,15 @@ Enthalten:
 - automatisierter Audit, dass keine Firmwarebytes, extrahierten Assets, persoenlichen Flashdaten oder lokalen Pfade im Paket liegen
 - veroeffentlichter Homebrew-Kompatibilitaetsbericht
 
+Sonic-Adventure-Abschlussgate fuer Phase 9 bei v0.40.0:
+
+- alle Phase-8-Kriterien und Checkpoints bestehen weiterhin; das Homebrew-Korpus bleibt der oeffentliche Pflichtnachweis
+- mindestens ein Spiel-Frame erreicht den vollstaendigen PVR-Pfad; `pvr_frames >= 1`, plausible Framegeometrie und gueltige VRAM-Grenzen werden berichtet
+- Audio- und Maple-Zaehler werden aus demselben zusammenhaengenden Lauf erfasst, sofern der erreichte Spielpfad diese Subsysteme bereits nutzt
+- der Lauf ist gastzyklusbegrenzt, verarbeitet mindestens zwei Frameintervalle und hat `silent_failures == 0`
+- ein lokales, nicht zu committendes Capture und getrennte Analyse-, Codegen-, Build-, Start- und Laufzeitmetriken belegen `SA_PHASE9_FIRST_GAME_FRAME`
+- aktivierte und deaktivierte Fastpaths liefern denselben beobachtbaren Gastzustand
+
 ## Phase 10: Desktop-GUI und Alpha-Workflow
 
 Die Erkenntnisse aus BIOS-Analyse, Flycast und dcrecomp beeinflussen diese Phase direkt:
@@ -978,12 +1029,17 @@ Enthalten:
 - DPI-, Tastatur-, Fehlerrecovery- und Packaging-Haertung fuer den Alpha-Workflow
 - dokumentierter Standardpfad, bei dem neue Nutzer Alpha-relevante Projekte ohne CLI-Zwang anlegen und ausfuehren koennen
 
-Release-Gate fuer Phase 10:
+Sonic-Adventure-Abschlussgate fuer Phase 10 bei v0.44.0:
 
 - die GUI deckt den Alpha-Hauptworkflow fuer Projektanlage, Quellenwahl, Analyse, Build und Diagnostik vollstaendig ab
 - `.gdi`-Quellen sind in GUI, CLI und Automatisierung dieselbe validierte Quelle und besitzen dieselben Fehlermeldungen und Identitaetsregeln
 - ein fehlerhafter Track, Descriptor oder relativer Pfad erzeugt reproduzierbare, nutzbare Diagnosen statt stiller Ausweichpfade
 - GUI- und CLI-Lauf fuer identische Projekte erzeugen dieselben Manifeste, Jobs und Ergebnisartefakte
+- alle Phase-9-Kriterien und Checkpoints bestehen weiterhin
+- der lokale GDI-Quellenworkflow kann in der GUI angelegt, validiert, gespeichert und wieder geoeffnet werden
+- GUI und CLI starten ueber dieselben Anwendungsdienste Analyse, Codegen, Build und Lauf und erreichen denselben Checkpoint mit denselben Artefakten
+- Abbruch, Fehleranzeige und ein ungueltiger Trackpfad liefern dieselben strukturierten Fehlerklassen; exportierte Berichte bleiben redigiert
+- `SA_PHASE10_GUI_END_TO_END` wird auf den fuer Alpha unterstuetzten Windows- und Linux-Konfigurationen automatisiert erreicht, ohne Dreamcast-Testlogik in der GUI zu duplizieren
 
 ## Alpha-Gate: v0.50.0
 
@@ -1004,6 +1060,17 @@ Voraussetzungen:
 - `.gdi`-Dateien koennen als offizielle Quelle geladen, validiert und reproduzierbar verarbeitet werden
 - CI auf Windows und Linux
 - reproduzierbare Builds
+
+Kumulatives Sonic-Adventure-Alpha-Gate:
+
+- alle Checkpoints von Phase 6 bis Phase 10 werden im vollstaendigen lokalen Lauf erneut erreicht
+- der offizielle Quellenworkflow verarbeitet GDI, Tracks, ISO9660 und Bootdatei und uebergibt das geladene Hauptprogramm an Analyse, IR, Codegen und Hostbuild
+- generierte Anwendung, Scheduler, GD-ROM, DMA, Interrupts und generischer indirekter Dispatch erreichen innerhalb eines festen Gastzyklusbudgets `SA_ALPHA_FIRST_REPRODUCIBLE_FRAME`
+- mindestens ein Spiel-Frame erreicht das Host-Backend; Audio- und Maple-Zustand werden erfasst und `silent_failures == 0`
+- GUI und CLI erreichen denselben Checkpoint; zwei identische Laeufe liefern dieselben deterministischen Kernmetriken
+- ein begrenzt beendeter Fehllauf erzeugt einen verwertbaren redigierten Diagnosebericht
+- Repository und Releasepaket enthalten keine Spieldaten, Captures, Dump-Hashes oder lokalen Dump-Pfade
+- interaktives Sonic-Adventure-Gameplay ist kein Alpha-Pflichtkriterium, sondern gehoert zum Beta-Gate
 
 ## Beta-Gate: v0.75.0
 

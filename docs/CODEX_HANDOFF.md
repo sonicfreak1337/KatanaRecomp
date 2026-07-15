@@ -9,7 +9,8 @@ Dieses Dokument definiert, wie Codex oder ein anderer automatisierter Bearbeiter
 3. `docs/STATUS.md`
 4. `docs/TASKS.md`
 5. `CHANGELOG.md`
-6. relevante Header, Implementierungen und Tests des ausgewaehlten Tasks
+6. ab Phase 6 `docs/SONIC_ADVENTURE_ACCEPTANCE.md`
+7. relevante Header, Implementierungen und Tests des ausgewaehlten Tasks
 
 ## Arbeitsmodell
 
@@ -139,6 +140,29 @@ Jeder Semantik-Task braucht normalerweise:
 
 Tests muessen deterministisch sein.
 
+### Lokaler Sonic-Adventure-Akzeptanztest
+
+Ab Phase 6 gilt zusaetzlich die verbindliche Strategie in
+`docs/SONIC_ADVENTURE_ACCEPTANCE.md`:
+
+- Der vollstaendige lokale Test laeuft nur an den Phasenabschluessen v0.31.0,
+  v0.34.0, v0.37.0, v0.40.0 und v0.44.0 sowie am Alpha-Gate v0.50.0.
+- Der v0.30.0-GDI-Smoke wird nicht separat wiederholt, sondern bei v0.31.0
+  kumulativ nach den neuen messbaren Kriterien geprueft.
+- Einzelne Tasks, Commits und Zwischenreleases erhalten keinen vollstaendigen
+  Sonic-Adventure-Test. Ihre Unit-, Integrations- und Regressionstests bleiben
+  verpflichtend.
+- Fehlt der lokale Dump, wird der optionale lokale Test sauber uebersprungen;
+  oeffentliche CI und verteilbare Tests duerfen ihn nie voraussetzen.
+- Jede kuenftige Phase implementiert nur die dort vorgesehenen allgemeinen
+  Zaehler, Checkpoints und versionierten maschinenlesbaren Berichte.
+- Keine Spieldaten, Captures, Audioinhalte, Dump-Hashes oder lokalen Pfade
+  committen oder in Release-Artefakte aufnehmen.
+- Keine fest codierten Sonic-Adventure-Adressen, Remaps, Patches oder
+  titelbezogenen Runtime-Sonderfaelle implementieren.
+- Vor jedem Gate-Commit Git-Diff und Index ausdruecklich auf geschuetzte Daten,
+  lokale Pfade und generierte Builddateien pruefen.
+
 Bevor ein Task als fertig gilt:
 
 ```powershell
@@ -237,6 +261,9 @@ Generierte Quellen werden nur committed, wenn die Roadmap dies fuer ein reproduz
 10. CHANGELOG unter `Unreleased` aktualisieren
 11. Commit mit Task-ID
 
+Ein vollstaendiger Sonic-Adventure-Lauf wird in diesem Ablauf nur ergaenzt,
+wenn der Task das verbindliche Phasen- oder Alpha-Gate abschliesst.
+
 Commit-Beispiel:
 
 ```text
@@ -274,11 +301,11 @@ Task: KR-XXXX
 ## Aktuell empfohlener Einstieg
 
 ```text
-KR-2301 - SR-Felder und Interruptmasken
+v0.30.0 - Release-Gate fuer GD-ROM und Dateisystem
 ```
 
 Danach:
 
 ```text
-KR-2302 - Exception-Eintritt
+KR-3101 - Event-Scheduler
 ```

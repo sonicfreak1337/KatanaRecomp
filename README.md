@@ -455,6 +455,7 @@ Der Helfer 	ools\release-version.ps1 aktualisiert VERSION und CMake und kann ein
 - `ROADMAP.md`: langfristige technische Phasen und Release-Gates
 - `docs/TASKS.md`: issue-taugliche Task-IDs mit Abhaengigkeiten
 - `docs/CODEX_HANDOFF.md`: verbindliche Arbeitsregeln fuer Codex
+- `docs/SONIC_ADVENTURE_ACCEPTANCE.md`: lokale, kumulative End-to-End-Akzeptanzgates ab Phase 6
 - `docs/TASK_TEMPLATE.md`: Vorlage fuer neue Arbeitspakete
 - `tools/next-roadmap-task.ps1`: zeigt den naechsten offenen Task
 
