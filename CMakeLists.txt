@@ -146,6 +146,11 @@ target_link_libraries(katana-block-abi-tests PRIVATE katana_runtime)
 katana_enable_warnings(katana-block-abi-tests)
 add_test(NAME katana-block-abi-tests COMMAND katana-block-abi-tests)
 
+add_executable(katana-platform-services-tests tests/runtime/platform_services_tests.cpp)
+target_link_libraries(katana-platform-services-tests PRIVATE katana_core katana_runtime)
+katana_enable_warnings(katana-platform-services-tests)
+add_test(NAME katana-platform-services-tests COMMAND katana-platform-services-tests)
+
 add_executable(katana-cache-control-tests tests/runtime/cache_control_tests.cpp)
 target_link_libraries(katana-cache-control-tests PRIVATE katana_runtime)
 katana_enable_warnings(katana-cache-control-tests)

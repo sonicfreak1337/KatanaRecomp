@@ -3051,7 +3051,8 @@ BackendCapabilities CppBackend::capabilities() const noexcept {
         capability(BackendCapability::RuntimeMemory) |
         capability(BackendCapability::StructuredExceptions) |
         capability(BackendCapability::Fpu) |
-        capability(BackendCapability::BlockTransitions);
+        capability(BackendCapability::BlockTransitions) |
+        capability(BackendCapability::PlatformServices);
 }
 
 BackendEmission CppBackend::emit(const BackendRequest& request) const {
@@ -3072,6 +3073,7 @@ BackendEmission CppBackend::emit(const BackendRequest& request) const {
         << "#include \"katana/runtime/block_abi.hpp\"\n"
         << "#include \"katana/runtime/exception.hpp\"\n"
         << "#include \"katana/runtime/fpu.hpp\"\n"
+        << "#include \"katana/runtime/platform_services.hpp\"\n"
         << "#include \"katana/runtime/runtime.hpp\"\n"
         << "#include <cstdint>\n"
         << "#include <stdexcept>\n\n"
@@ -3089,6 +3091,7 @@ BackendEmission CppBackend::emit(const BackendRequest& request) const {
         << ");\n\n"
         << "using CpuState = katana::runtime::CpuState;\n"
         << "using Memory = katana::runtime::Memory;\n"
+        << "using PlatformServices = katana::runtime::PlatformServices;\n"
         << "using katana::runtime::enter_memory_exception;\n"
         << "using katana::runtime::raise_fpu_disabled;\n"
         << "using katana::runtime::raise_illegal_instruction;\n"
@@ -3146,6 +3149,10 @@ BackendEmission CppBackend::emit(const BackendRequest& request) const {
         << "    "
         << function_name(entry_address)
         << "(cpu);\n"
+        << "}\n\n"
+        << "void run(CpuState& cpu, PlatformServices& services) {\n"
+        << "    katana::runtime::validate_platform_services(services);\n"
+        << "    run(cpu);\n"
         << "}\n\n";
 
     metadata

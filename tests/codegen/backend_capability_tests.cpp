@@ -109,9 +109,7 @@ int main() {
     );
 
     auto unsupported = supported;
-    unsupported.capabilities |= katana::codegen::capability(
-        katana::codegen::BackendCapability::PlatformServices
-    );
+    unsupported.capabilities |= 1ull << 63u;
     const auto capability_error = failure_message([&] {
         static_cast<void>(katana::codegen::generate_program(
             backend,
@@ -120,7 +118,7 @@ int main() {
     });
     require(
         capability_error.find("cpp") != std::string::npos &&
-            capability_error.find("fehlende Maske 64") != std::string::npos,
+        capability_error.find("fehlende Maske 9223372036854775808") != std::string::npos,
         "Faehigkeitsfehler nennt Backend oder stabile fehlende Maske nicht."
     );
 

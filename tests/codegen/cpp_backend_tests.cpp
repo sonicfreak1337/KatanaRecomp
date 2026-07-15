@@ -62,14 +62,24 @@ int main() {
     require(
         emission.declarations.find("#include \"katana/runtime/runtime.hpp\"") !=
                 std::string::npos &&
+            emission.declarations.find(
+                "#include \"katana/runtime/platform_services.hpp\""
+            ) != std::string::npos &&
             emission.declarations.find("static void fn_8C010000") != std::string::npos &&
+            emission.declarations.find("katana/platform/") == std::string::npos &&
+            emission.declarations.find("katana/runtime/pvr") == std::string::npos &&
+            emission.declarations.find("katana/runtime/aica") == std::string::npos &&
+            emission.declarations.find("katana/runtime/maple") == std::string::npos &&
+            emission.declarations.find("katana/runtime/gdi") == std::string::npos &&
             emission.declarations.find("void run(CpuState& cpu) {") == std::string::npos,
         "C++-Backend trennt Deklarationen und Funktionskoerper nicht."
     );
     require(
-        emission.functions.find("static void fn_8C010000(CpuState& cpu) {") !=
+            emission.functions.find("static void fn_8C010000(CpuState& cpu) {") !=
                 std::string::npos &&
-            emission.functions.find("void run(CpuState& cpu) {") != std::string::npos,
+            emission.functions.find("void run(CpuState& cpu) {") != std::string::npos &&
+            emission.functions.find("void run(CpuState& cpu, PlatformServices& services)") !=
+                std::string::npos,
         "C++-Backend emittiert die Funktionskoerper nicht im Funktionsabschnitt."
     );
     require(

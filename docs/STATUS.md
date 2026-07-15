@@ -13,8 +13,8 @@ KatanaRecomp besitzt einen durchgaengigen Prototyp-Pfad von Raw- und ELF32-SH-Ei
 ### Gesamtprojekt
 
 - [x] Kernunterbau abgeschlossen: Phasen 1 bis 5 sind vollstaendig umgesetzt
-- [~] Gesamtfortschritt nach gepflegten Roadmap-Tasks: 127 von 209 Tasks abgeschlossen = 60.8%
-- [~] Fortschritt auf dem Weg von Dreamcast-Plattform bis Alpha: 33 von 112 Tasks abgeschlossen = 29.5%
+- [~] Gesamtfortschritt nach gepflegten Roadmap-Tasks: 128 von 209 Tasks abgeschlossen = 61.2%
+- [~] Fortschritt auf dem Weg von Dreamcast-Plattform bis Alpha: 34 von 112 Tasks abgeschlossen = 30.4%
 - [ ] Alpha-Gate erreicht: nein
 
 ### Weg zum ersten echten Dreamcast-Test
@@ -44,7 +44,7 @@ Praktische Einordnung:
 - [x] Phase 4 - Runtime-Grundlage: 18/18 Tasks = 100%
 - [x] Phase 5 - SH-4 FPU: 10/10 Tasks = 100%
 - [x] Phase 6 - Dreamcast-Plattform: 29/29 Tasks und Abschlussgate = 100%
-- [~] Phase 7 - Codegen und Dispatch: 4/21 Tasks = 19.0%
+- [~] Phase 7 - Codegen und Dispatch: 5/21 Tasks = 23.8%
 - [ ] Phase 8 - Werkzeuge und Qualitaet: 0/25 Tasks = 0%
 - [ ] Phase 9 - Kompatibilitaet und Leistung: 0/24 Tasks = 0%
 - [ ] Phase 10 - Desktop-GUI und Quellworkflow: 0/13 Tasks = 0%
@@ -67,11 +67,11 @@ SA_PHASE6_MAIN_EXECUTION_STARTED in zwei bytegleichen Laeufen erreicht
 Disc-Quelle unveraendert; silent_failures=0
 ```
 
-Aktueller Entwicklungsstand (`KR-3204`):
+Aktueller Entwicklungsstand (`KR-3205`):
 
 ```text
-126/126 Debug-Tests bestanden
-katana-block-abi-tests bestanden
+127/127 Debug-Tests bestanden
+katana-platform-services-tests bestanden
 ```
 
 Abgeschlossenes kumulatives Phase-6-Gate:
@@ -226,11 +226,12 @@ Lokale Sonic-Adventure-Akzeptanzstrategie:
 - [x] KR-3202 - C++-Backend migrieren
 - [x] KR-3203 - ABI-Faehigkeitspruefung
 - [x] KR-3204 - Block-ABI und Zustandsuebergaben
+- [x] KR-3205 - Plattformdienst-Schnittstelle
 
 ## Naechster Arbeitsschritt
 
-- [ ] KR-3205 - Plattformdienst-Schnittstelle
-- [ ] danach v0.32.0 Release-Gate
+- [ ] v0.32.0 Release-Gate
+- [ ] danach KR-3301 - Translation-Unit-Partitionierung
 
 ## Aktuelle Einschraenkungen
 

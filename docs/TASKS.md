@@ -1090,7 +1090,7 @@ Akzeptanz:
 - Delay-Slot-Ausnahmen melden den korrekten Gast-PC unabhaengig vom Backend
 - Hostadressen erscheinen weder als persistente Block-ID noch in reproduzierbaren Metadaten
 
-### [ ] KR-3205 - Plattformdienst-Schnittstelle
+### [x] KR-3205 - Plattformdienst-Schnittstelle
 
 Abhaengigkeiten: KR-2207, KR-3104, KR-3201, KR-3204
 

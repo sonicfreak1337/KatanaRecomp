@@ -8,6 +8,7 @@
 - KR-3202: Der bestehende C++-Emitter ist als Referenzbackend hinter die modulare Schnittstelle migriert; die bisherige `emit_cpp_program`-API bleibt als kompatibler, getesteter Einstieg erhalten.
 - KR-3203: Backend-Interface-ABI, Runtime-ABI und explizite Faehigkeitsmasken werden vor der Emission geprueft; Fehler nennen Backend sowie den abweichenden Vertrag, bevor Code erzeugt wird.
 - KR-3204: Eine versionierte Block-ABI trennt virtuelle und kanonische physische Gastadressen, typisiert alle Blockendklassen und synchronisiert CPU-, Delay-Slot-, Ausnahme- sowie Schedulerzustand an Backend- und Fallbackgrenzen.
+- KR-3205: Versionierte Plattformdienste kapseln Speicher, Scheduler, Interrupts, DMA und kontrollierten Fallback mit expliziten MMU-, Watchpoint-, RAM- und Firmwarefaehigkeiten; generierter Code kennt keine konkreten Dreamcast-Subsystemtypen.
 
 ### Behoben
 
