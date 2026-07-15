@@ -876,7 +876,7 @@ Akzeptanz:
 - positive und negative subnormale Ergebnisse werden bei `FPSCR.DN=1` auf `+0` beziehungsweise `-0` gespült
 - der unveroeffentlichte Nacharbeitsstand bleibt im Changelog unter `Unreleased`; bestehende Release-Tags werden nicht verschoben
 
-### [ ] KR-2701 - Maple-Bus
+### [x] KR-2701 - Maple-Bus
 
 Abhaengigkeiten: KR-2601
 

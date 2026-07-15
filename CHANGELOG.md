@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Hinzugefuegt
+
+- KR-2701: Ein deterministischer Maple-Bus adressiert vier Ports mit jeweils sechs Units, transportiert explizite Request-/Response-Frames und protokolliert erfolgreiche Transaktionen mit stabilen Sequenznummern.
+
 ### Behoben
 
 - KR-2607: `FCNVDS` fuehrt nun auch das konvertierte Single-Precision-Ergebnis durch die zentrale `FPSCR.DN`-Behandlung. Positive und negative subnormale Ergebnisse werden bei `DN=1` auf vorzeichenbehaftete Null gespült und sind regressionsgesichert.

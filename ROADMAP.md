@@ -540,6 +540,12 @@ Release-Gate:
 
 ### v0.27.0 - Maple und Eingabe
 
+Fortschritt:
+
+- [x] KR-2701 - Maple-Bus
+- [ ] KR-2702 - Controller und deterministische Host-Eingabe
+- [ ] KR-2703 - VMU-Minimum
+
 Enthalten:
 
 - Maple-Bus-Abstraktion

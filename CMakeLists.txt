@@ -37,6 +37,7 @@ add_library(katana_runtime STATIC
     src/runtime/exception.cpp
     src/runtime/fpu.cpp
     src/runtime/interrupt.cpp
+    src/runtime/maple.cpp
     src/runtime/memory.cpp
     src/runtime/runtime.cpp
 )
@@ -273,6 +274,11 @@ add_executable(katana-dreamcast-boot-tests tests/platform/dreamcast_boot_tests.c
 target_link_libraries(katana-dreamcast-boot-tests PRIVATE katana_core katana_runtime)
 katana_enable_warnings(katana-dreamcast-boot-tests)
 add_test(NAME katana-dreamcast-boot-tests COMMAND katana-dreamcast-boot-tests)
+
+add_executable(katana-maple-bus-tests tests/runtime/maple_bus_tests.cpp)
+target_link_libraries(katana-maple-bus-tests PRIVATE katana_runtime)
+katana_enable_warnings(katana-maple-bus-tests)
+add_test(NAME katana-maple-bus-tests COMMAND katana-maple-bus-tests)
 
 add_executable(katana-decoder-tests
     tests/decoder/decoder_tests.cpp
