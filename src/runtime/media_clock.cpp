@@ -91,6 +91,7 @@ std::uint64_t DreamcastMediaClock::advance_deadline(Cadence& cadence) {
 
 void DreamcastMediaClock::start() {
     if (running_) { return; }
+    ++generation_;
     running_ = true;
     video_cadence_.phase = 0u;
     video_cadence_.deadline = scheduler_.current_cycle();
@@ -106,6 +107,7 @@ void DreamcastMediaClock::start() {
 }
 
 void DreamcastMediaClock::stop() noexcept {
+    ++generation_;
     if (video_event_) { static_cast<void>(scheduler_.cancel(*video_event_)); }
     if (audio_event_) { static_cast<void>(scheduler_.cancel(*audio_event_)); }
     video_event_.reset();
@@ -141,32 +143,36 @@ std::optional<std::uint64_t> DreamcastMediaClock::next_audio_cycle() const noexc
 
 void DreamcastMediaClock::schedule_video() {
     const auto deadline = advance_deadline(video_cadence_);
-    video_event_ = scheduler_.schedule_at(deadline, [this](const auto, const auto) {
-        handle_video();
+    const auto generation = generation_;
+    video_event_ = scheduler_.schedule_at(deadline, [this, generation](const auto, const auto) {
+        handle_video(generation);
     });
 }
 
 void DreamcastMediaClock::schedule_audio() {
     const auto deadline = advance_deadline(audio_cadence_);
-    audio_event_ = scheduler_.schedule_at(deadline, [this](const auto, const auto) {
-        handle_audio();
+    const auto generation = generation_;
+    audio_event_ = scheduler_.schedule_at(deadline, [this, generation](const auto, const auto) {
+        handle_audio(generation);
     });
 }
 
-void DreamcastMediaClock::handle_video() {
+void DreamcastMediaClock::handle_video(const std::uint64_t generation) {
+    if (generation != generation_) { return; }
     video_event_.reset();
     const VideoTick tick{video_ticks_, scheduler_.current_cycle()};
     ++video_ticks_;
     try {
         if (video_callback_) { video_callback_(tick); }
-        if (running_) { schedule_video(); }
+        if (generation == generation_ && running_ && !video_event_) { schedule_video(); }
     } catch (...) {
         stop();
         throw;
     }
 }
 
-void DreamcastMediaClock::handle_audio() {
+void DreamcastMediaClock::handle_audio(const std::uint64_t generation) {
+    if (generation != generation_) { return; }
     audio_event_.reset();
     const AudioTick tick{
         audio_ticks_,
@@ -178,7 +184,7 @@ void DreamcastMediaClock::handle_audio() {
     emitted_audio_frames_ = checked_add(emitted_audio_frames_, config_.audio_frames_per_buffer);
     try {
         if (audio_callback_) { audio_callback_(tick); }
-        if (running_) { schedule_audio(); }
+        if (generation == generation_ && running_ && !audio_event_) { schedule_audio(); }
     } catch (...) {
         stop();
         throw;

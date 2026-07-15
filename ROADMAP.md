@@ -685,6 +685,10 @@ Implementierungsstand: Alle fuenf v0.31.0-Tasks sind umgesetzt. Das Release-Gate
 der Versionssprung, der Tag und der kumulative Sonic-Adventure-Test bleiben bis
 nach der vereinbarten Code-Review und Fixrunde ausdruecklich offen.
 
+Review-Nacharbeit: Die Medienuhr trennt alte und callback-intern neugestartete
+Laeufe per Generation-ID; Stop/Start/Reset in Video- oder Audio-Callbacks kann
+keine doppelten beziehungsweise unkontrollierbaren Scheduler-Ereignisse erzeugen.
+
 Enthalten:
 
 - zentraler, reentrancy-geschuetzter Event-Scheduler mit monotoner Gastzeit

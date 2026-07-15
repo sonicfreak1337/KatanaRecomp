@@ -1052,6 +1052,7 @@ Akzeptanz:
 - rationale Kadenzen erreichen ihre exakten Langzeitfristen ohne Hostzeit
 - Budgetstopp ist sichtbar fortsetzbar; Stop und Callbackfehler hinterlassen keine Teilkadenz
 - Neustart ankert am aktuellen Gastzyklus, Reset loescht alle Medienzaehler
+- callback-internes Stop, Stop/Start und Reset erzeugen weder Doppel- noch Geisterereignisse
 - der lokale Sonic-Adventure-Test bleibt ausschliesslich dem spaeter freigegebenen v0.31.0-Gate vorbehalten
 
 ---

@@ -17,6 +17,7 @@
 ### Behoben
 
 - KR-3101-Nacharbeit: Rekursive `advance_to()`-/`advance_by()`-Aufrufe und `reset()` aus Scheduler-Callbacks werden sichtbar abgewiesen. Die Gastzyklusuhr kann dadurch nicht mehr durch ein verschachteltes Advance zurueckspringen; verschachtelte Planung und Cancellation bleiben erlaubt.
+- KR-3105-Nacharbeit: Laufgenerationen verhindern doppelte oder nicht mehr abbrechbare Video-/Audioereignisse, wenn ein Callback die Medienuhr stoppt, neu startet oder zuruecksetzt.
 
 ## [0.30.0] - 2026-07-15
 

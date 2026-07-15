@@ -70,8 +70,8 @@ private:
     static std::uint64_t advance_deadline(Cadence& cadence);
     void schedule_video();
     void schedule_audio();
-    void handle_video();
-    void handle_audio();
+    void handle_video(std::uint64_t generation);
+    void handle_audio(std::uint64_t generation);
 
     EventScheduler& scheduler_;
     MediaClockConfig config_;
@@ -84,6 +84,7 @@ private:
     std::uint64_t video_ticks_ = 0u;
     std::uint64_t audio_ticks_ = 0u;
     std::uint64_t emitted_audio_frames_ = 0u;
+    std::uint64_t generation_ = 0u;
     bool running_ = false;
 };
 

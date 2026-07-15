@@ -106,6 +106,10 @@ vollstaendige lokale Debug-Regression: 119/119 Tests
 Sonic-Adventure-Test: gemaess Review-Stopp nicht ausgefuehrt
 ```
 
+Review-Nacharbeit (`KR-3105`): callback-internes Video-Stop, Video-Stop/Start,
+Audio-Reset sowie anschliessender Stop/Advance sind gegen Doppel- und
+Geisterereignisse regressionsgesichert.
+
 Lokale Sonic-Adventure-Akzeptanzstrategie:
 
 - [x] verbindliche kumulative Gates fuer Phase 6 bis Phase 10 und v0.50.0 sind in `docs/SONIC_ADVENTURE_ACCEPTANCE.md` definiert

@@ -19,6 +19,9 @@ austauschbare Callbacks; konkrete PVR- und AICA-Backends bleiben davon getrennt.
   am aktuellen Gastzyklus; Reset loescht zusaetzlich alle Medienzaehler.
 - Callbackfehler propagieren und stoppen beide Kadenzen, statt einen halbaktiven
   Medienpfad zu hinterlassen.
+- Jeder Start erhaelt eine neue Laufgeneration. Alte Handler planen nach einem
+  callback-internen `stop()`, `start()` oder `reset()` nichts mehr nach und
+  koennen keine Event-ID eines neuen Laufs ueberschreiben.
 
 Die Regression treibt Recording-PVR- und Recording-Audio-Backends ueber diese
 Callbacks. Ein vollstaendiger Sonic-Adventure-Lauf gehoert weiterhin ausschliesslich

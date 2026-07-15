@@ -132,6 +132,86 @@ int main() {
         "Medienuhr akzeptiert Null- oder Subzykluskonfigurationen."
     );
 
+    EventScheduler callback_stop_scheduler;
+    DreamcastMediaClock* callback_stop_clock = nullptr;
+    DreamcastMediaClock callback_stop(
+        callback_stop_scheduler,
+        MediaClockConfig{60u, 60u, 1u, 100u},
+        [&](const VideoTick&) { callback_stop_clock->stop(); }
+    );
+    callback_stop_clock = &callback_stop;
+    callback_stop.start();
+    static_cast<void>(callback_stop_scheduler.advance_to(1u, 1u));
+    require(
+        !callback_stop.running() && callback_stop.video_tick_count() == 1u &&
+            callback_stop_scheduler.pending_event_count() == 0u,
+        "Video-Callback-stop laesst ein Folgeereignis aktiv."
+    );
+    static_cast<void>(callback_stop_scheduler.advance_to(100u, 0u));
+    require(callback_stop.video_tick_count() == 1u,
+        "Video-Callback-stop erzeugt einen spaeteren Geistertick.");
+
+    EventScheduler callback_restart_scheduler;
+    DreamcastMediaClock* callback_restart_clock = nullptr;
+    std::size_t restart_callbacks = 0u;
+    DreamcastMediaClock callback_restart(
+        callback_restart_scheduler,
+        MediaClockConfig{60u, 60u, 1u, 100u},
+        [&](const VideoTick&) {
+            ++restart_callbacks;
+            if (restart_callbacks == 1u) {
+                callback_restart_clock->stop();
+                callback_restart_clock->start();
+            }
+        }
+    );
+    callback_restart_clock = &callback_restart;
+    callback_restart.start();
+    static_cast<void>(callback_restart_scheduler.advance_to(1u, 1u));
+    require(
+        callback_restart.running() && callback_restart_scheduler.pending_event_count() == 2u &&
+            callback_restart.next_video_cycle() == 2u,
+        "Video-Callback-Neustart plant doppelte oder unkontrollierbare Ereignisse."
+    );
+    static_cast<void>(callback_restart_scheduler.advance_to(2u, 1u));
+    require(restart_callbacks == 2u && callback_restart.video_tick_count() == 2u,
+        "Video-Callback-Neustart erzeugt mehr als einen Tick pro Frist.");
+    callback_restart.stop();
+    require(callback_restart_scheduler.pending_event_count() == 0u,
+        "Stop nach Video-Callback-Neustart kann nicht alle Ereignisse abbrechen.");
+    static_cast<void>(callback_restart_scheduler.advance_to(100u, 0u));
+    require(restart_callbacks == 2u,
+        "Nach Stop des neugestarteten Videopfads bleibt ein Geistertick."
+    );
+
+    EventScheduler audio_reset_scheduler;
+    DreamcastMediaClock* audio_reset_clock = nullptr;
+    std::size_t audio_reset_callbacks = 0u;
+    DreamcastMediaClock audio_reset(
+        audio_reset_scheduler,
+        MediaClockConfig{60u, 1u, 60u, 1u},
+        {},
+        [&](const AudioTick&) {
+            ++audio_reset_callbacks;
+            audio_reset_clock->reset();
+        }
+    );
+    audio_reset_clock = &audio_reset;
+    audio_reset.start();
+    static_cast<void>(audio_reset_scheduler.advance_to(1u, 1u));
+    require(
+        audio_reset_callbacks == 1u && !audio_reset.running() &&
+            audio_reset.audio_tick_count() == 0u &&
+            audio_reset.emitted_audio_frames() == 0u &&
+            audio_reset_scheduler.pending_event_count() == 0u,
+        "Audio-Callback-Reset laesst Zaehler oder Ereignisse aus dem alten Lauf zurueck."
+    );
+    audio_reset.stop();
+    static_cast<void>(audio_reset_scheduler.advance_to(100u, 0u));
+    require(audio_reset_callbacks == 1u,
+        "Audio-Callback-Reset hinterlaesst nach Stop einen Geistertick."
+    );
+
     std::cout << "KR-3105 Frame- und Audio-Taktung erfolgreich.\n";
     return 0;
 }
