@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <memory>
+#include <optional>
 #include <span>
 #include <string>
 #include <vector>
@@ -79,6 +80,39 @@ public:
 private:
     std::shared_ptr<const DiscSource> source_;
     std::uint32_t sector_size_ = 2048u;
+};
+
+struct GdRomTiming {
+    std::uint64_t command_latency = 1000u;
+    std::uint64_t cycles_per_sector = 500u;
+};
+
+struct GdRomAsyncCompletion {
+    std::uint64_t request_id = 0u;
+    std::uint64_t ready_cycle = 0u;
+    GdRomResponse response;
+};
+
+class GdRomAsyncReader final {
+public:
+    explicit GdRomAsyncReader(GdRomDrive drive, GdRomTiming timing = {});
+    [[nodiscard]] std::uint64_t submit(const GdRomRequest& request);
+    void advance_to(std::uint64_t cycle);
+    [[nodiscard]] std::optional<GdRomAsyncCompletion> take_completed();
+    [[nodiscard]] std::size_t pending_count() const noexcept;
+    [[nodiscard]] std::uint64_t current_cycle() const noexcept;
+private:
+    struct Pending {
+        std::uint64_t request_id = 0u;
+        std::uint64_t ready_cycle = 0u;
+        GdRomRequest request;
+    };
+    GdRomDrive drive_;
+    GdRomTiming timing_;
+    std::uint64_t current_cycle_ = 0u;
+    std::uint64_t next_request_id_ = 1u;
+    std::vector<Pending> pending_;
+    std::vector<GdRomAsyncCompletion> completed_;
 };
 
 } // namespace katana::runtime

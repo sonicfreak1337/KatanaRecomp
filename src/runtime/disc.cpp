@@ -155,4 +155,50 @@ GdRomResponse GdRomDrive::execute(const GdRomRequest& request) const {
 
 std::uint32_t GdRomDrive::sector_size() const noexcept { return sector_size_; }
 
+GdRomAsyncReader::GdRomAsyncReader(GdRomDrive drive, const GdRomTiming timing)
+    : drive_(std::move(drive)), timing_(timing) {}
+
+std::uint64_t GdRomAsyncReader::submit(const GdRomRequest& request) {
+    const auto sectors = request.command == GdRomCommand::ReadSectors
+        ? static_cast<std::uint64_t>(request.sector_count)
+        : 0u;
+    if (sectors != 0u && timing_.cycles_per_sector >
+        (std::numeric_limits<std::uint64_t>::max() - timing_.command_latency) / sectors) {
+        throw std::out_of_range("GD-ROM-Requestlatenz laeuft ueber.");
+    }
+    const auto duration = timing_.command_latency + sectors * timing_.cycles_per_sector;
+    if (current_cycle_ > std::numeric_limits<std::uint64_t>::max() - duration) {
+        throw std::out_of_range("GD-ROM-Fertigstellungszyklus laeuft ueber.");
+    }
+    if (next_request_id_ == 0u) { throw std::overflow_error("GD-ROM-Request-ID ist erschoepft."); }
+    const auto id = next_request_id_++;
+    pending_.push_back({id, current_cycle_ + duration, request});
+    return id;
+}
+
+void GdRomAsyncReader::advance_to(const std::uint64_t cycle) {
+    if (cycle < current_cycle_) { throw std::invalid_argument("GD-ROM-Zyklusuhr darf nicht rueckwaerts laufen."); }
+    current_cycle_ = cycle;
+    auto iterator = pending_.begin();
+    while (iterator != pending_.end()) {
+        if (iterator->ready_cycle > cycle) { ++iterator; continue; }
+        completed_.push_back({iterator->request_id, iterator->ready_cycle, drive_.execute(iterator->request)});
+        iterator = pending_.erase(iterator);
+    }
+    std::sort(completed_.begin(), completed_.end(), [](const auto& left, const auto& right) {
+        if (left.ready_cycle != right.ready_cycle) { return left.ready_cycle < right.ready_cycle; }
+        return left.request_id < right.request_id;
+    });
+}
+
+std::optional<GdRomAsyncCompletion> GdRomAsyncReader::take_completed() {
+    if (completed_.empty()) { return std::nullopt; }
+    auto result = std::move(completed_.front());
+    completed_.erase(completed_.begin());
+    return result;
+}
+
+std::size_t GdRomAsyncReader::pending_count() const noexcept { return pending_.size(); }
+std::uint64_t GdRomAsyncReader::current_cycle() const noexcept { return current_cycle_; }
+
 } // namespace katana::runtime

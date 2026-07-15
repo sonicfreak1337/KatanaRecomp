@@ -932,7 +932,7 @@ Abhaengigkeiten: KR-3001
 
 Abhaengigkeiten: KR-3001
 
-### [ ] KR-3004 - Asynchrone Reads und Timing
+### [x] KR-3004 - Asynchrone Reads und Timing
 
 Abhaengigkeiten: KR-3002
 

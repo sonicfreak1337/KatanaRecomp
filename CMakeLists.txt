@@ -349,6 +349,11 @@ target_link_libraries(katana-iso9660-tests PRIVATE katana_runtime)
 katana_enable_warnings(katana-iso9660-tests)
 add_test(NAME katana-iso9660-tests COMMAND katana-iso9660-tests)
 
+add_executable(katana-gdrom-async-tests tests/runtime/gdrom_async_tests.cpp)
+target_link_libraries(katana-gdrom-async-tests PRIVATE katana_runtime)
+katana_enable_warnings(katana-gdrom-async-tests)
+add_test(NAME katana-gdrom-async-tests COMMAND katana-gdrom-async-tests)
+
 add_executable(katana-decoder-tests
     tests/decoder/decoder_tests.cpp
 )
