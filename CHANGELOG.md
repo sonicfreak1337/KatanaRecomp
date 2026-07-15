@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Hinzugefuegt
+
+- KR-3301: Funktionen werden unabhaengig von ihrer Eingabereihenfolge deterministisch nach Gastadresse in groessen- und instruktionsbegrenzte Translation-Unit-Partitionen aufgeteilt.
+
 ## [0.32.0] - 2026-07-16
 
 ### Hinzugefuegt

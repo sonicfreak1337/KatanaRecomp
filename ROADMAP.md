@@ -763,7 +763,7 @@ Zwischenrelease kein vollstaendiger Sonic-Adventure-Test ausgefuehrt.
 
 Fortschritt:
 
-- [ ] KR-3301 - Translation-Unit-Partitionierung
+- [x] KR-3301 - Translation-Unit-Partitionierung
 - [ ] KR-3302 - Deterministische Dateinamen
 - [ ] KR-3303 - Inkrementeller Codegen-Cache
 - [ ] KR-3304 - Parallele Ausgabe und Buildintegration

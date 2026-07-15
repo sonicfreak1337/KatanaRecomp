@@ -13,8 +13,8 @@ KatanaRecomp besitzt einen durchgaengigen Prototyp-Pfad von Raw- und ELF32-SH-Ei
 ### Gesamtprojekt
 
 - [x] Kernunterbau abgeschlossen: Phasen 1 bis 5 sind vollstaendig umgesetzt
-- [~] Gesamtfortschritt nach gepflegten Roadmap-Tasks: 128 von 209 Tasks abgeschlossen = 61.2%
-- [~] Fortschritt auf dem Weg von Dreamcast-Plattform bis Alpha: 34 von 112 Tasks abgeschlossen = 30.4%
+- [~] Gesamtfortschritt nach gepflegten Roadmap-Tasks: 129 von 209 Tasks abgeschlossen = 61.7%
+- [~] Fortschritt auf dem Weg von Dreamcast-Plattform bis Alpha: 35 von 112 Tasks abgeschlossen = 31.3%
 - [ ] Alpha-Gate erreicht: nein
 
 ### Weg zum ersten echten Dreamcast-Test
@@ -45,7 +45,7 @@ Praktische Einordnung:
 - [x] Phase 4 - Runtime-Grundlage: 18/18 Tasks = 100%
 - [x] Phase 5 - SH-4 FPU: 10/10 Tasks = 100%
 - [x] Phase 6 - Dreamcast-Plattform: 29/29 Tasks und Abschlussgate = 100%
-- [~] Phase 7 - Codegen und Dispatch: 5/21 Tasks = 23.8%
+- [~] Phase 7 - Codegen und Dispatch: 6/21 Tasks = 28.6%
 - [ ] Phase 8 - Werkzeuge und Qualitaet: 0/25 Tasks = 0%
 - [ ] Phase 9 - Kompatibilitaet und Leistung: 0/24 Tasks = 0%
 - [ ] Phase 10 - Desktop-GUI und Quellworkflow: 0/13 Tasks = 0%
@@ -67,11 +67,11 @@ modulare Backend-, Block-ABI- und Plattformdiensttests bestanden
 kein Sonic-Adventure-Test am Zwischenrelease v0.32.0 erforderlich oder ausgefuehrt
 ```
 
-Aktueller Entwicklungsstand (`v0.32.0`):
+Aktueller Entwicklungsstand (`KR-3301`):
 
 ```text
-127/127 Debug-Tests bestanden
-katana-platform-services-tests bestanden
+128/128 Debug-Tests bestanden
+katana-codegen-partition-tests bestanden
 ```
 
 Abgeschlossenes kumulatives Phase-6-Gate:
@@ -228,11 +228,12 @@ Lokale Sonic-Adventure-Akzeptanzstrategie:
 - [x] KR-3204 - Block-ABI und Zustandsuebergaben
 - [x] KR-3205 - Plattformdienst-Schnittstelle
 - [x] v0.32.0 Release-Gate - 127/127 Debug, kein Phasentest
+- [x] KR-3301 - Translation-Unit-Partitionierung
 
 ## Naechster Arbeitsschritt
 
-- [ ] KR-3301 - Translation-Unit-Partitionierung
-- [ ] danach KR-3302 - Deterministische Dateinamen
+- [ ] KR-3302 - Deterministische Dateinamen
+- [ ] danach KR-3303 - Inkrementeller Codegen-Cache
 
 ## Aktuelle Einschraenkungen
 

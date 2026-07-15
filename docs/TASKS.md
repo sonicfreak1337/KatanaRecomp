@@ -1107,7 +1107,7 @@ Akzeptanz:
 - fehlende Pflichtfaehigkeiten werden mit Name, ABI-Version und Ursache abgelehnt
 - kein generiertes Translation Unit inkludiert interne Plattformheader
 
-### [ ] KR-3301 - Translation-Unit-Partitionierung
+### [x] KR-3301 - Translation-Unit-Partitionierung
 
 Abhaengigkeiten: KR-3202
 
