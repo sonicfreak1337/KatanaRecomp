@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Behoben
+
+- KR-2607: `FCNVDS` fuehrt nun auch das konvertierte Single-Precision-Ergebnis durch die zentrale `FPSCR.DN`-Behandlung. Positive und negative subnormale Ergebnisse werden bei `DN=1` auf vorzeichenbehaftete Null gespült und sind regressionsgesichert.
+
 ## [0.26.0] - 2026-07-15
 
 ### Hinzugefuegt

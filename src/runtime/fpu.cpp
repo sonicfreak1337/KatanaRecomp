@@ -310,7 +310,10 @@ void fpu_truncate_to_fpul(CpuState& cpu, const std::uint8_t source) noexcept {
 
 void fpu_convert_double_to_single(CpuState& cpu, const std::uint8_t source) noexcept {
     const ScopedHostRounding rounding(cpu);
-    const float result = static_cast<float>(read_double_operand(cpu, source));
+    const float result = flush_denormalized(
+        cpu,
+        static_cast<float>(read_double_operand(cpu, source))
+    );
     cpu.fpul = std::isnan(result)
         ? canonical_single_nan
         : std::bit_cast<std::uint32_t>(result);

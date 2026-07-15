@@ -164,6 +164,20 @@ int main() {
         "FPSCR.RM wirkt nicht auf FCNVDS."
     );
 
+    cpu.write_fpscr(fpscr_pr_mask | fpscr_dn_mask);
+    write_dr_double(cpu, 4u, std::ldexp(1.0, -140));
+    fpu_convert_double_to_single(cpu, 4u);
+    require(
+        cpu.fpul == 0x00000000u,
+        "FCNVDS spuelt ein positives subnormales Ergebnis bei DN=1 nicht auf +0."
+    );
+    write_dr_double(cpu, 4u, -std::ldexp(1.0, -140));
+    fpu_convert_double_to_single(cpu, 4u);
+    require(
+        cpu.fpul == 0x80000000u,
+        "FCNVDS spuelt ein negatives subnormales Ergebnis bei DN=1 nicht auf -0."
+    );
+
     cpu.write_fpscr(0u);
     cpu.fpul = 0x7FFFFFFFu;
     fpu_float_from_fpul(cpu, 8u);

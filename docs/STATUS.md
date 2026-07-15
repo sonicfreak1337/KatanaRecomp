@@ -13,8 +13,8 @@ KatanaRecomp besitzt einen durchgaengigen Prototyp-Pfad von Raw- und ELF32-SH-Ei
 ### Gesamtprojekt
 
 - [x] Kernunterbau abgeschlossen: Phasen 1 bis 5 sind vollstaendig umgesetzt
-- [~] Gesamtfortschritt nach gepflegten Roadmap-Tasks: 100 von 208 Tasks abgeschlossen = 48.1%
-- [~] Fortschritt auf dem Weg von Dreamcast-Plattform bis Alpha: 6 von 111 Tasks abgeschlossen = 5.4%
+- [~] Gesamtfortschritt nach gepflegten Roadmap-Tasks: 101 von 209 Tasks abgeschlossen = 48.3%
+- [~] Fortschritt auf dem Weg von Dreamcast-Plattform bis Alpha: 7 von 112 Tasks abgeschlossen = 6.3%
 - [ ] Alpha-Gate erreicht: nein
 
 ### Weg zum ersten echten Dreamcast-Test
@@ -22,7 +22,7 @@ KatanaRecomp besitzt einen durchgaengigen Prototyp-Pfad von Raw- und ELF32-SH-Ei
 Definition fuer diesen Status: ein BIOS-freier, frei verteilbarer Homebrew-Vertical-Slice gemaess Phase-6-Release-Gate, der Bild zeigt, Eingabe annimmt und Audio erzeugt.
 
 - [x] Boot- und Homebrew-Einstieg vorhanden: v0.26.0 abgeschlossen
-- [~] Dreamcast-Plattformphase insgesamt: 6 von 28 Tasks abgeschlossen = 21.4%
+- [~] Dreamcast-Plattformphase insgesamt: 7 von 29 Tasks abgeschlossen = 24.1%
 - [ ] Eingabeweg fertig: Maple und Controller (`KR-2701`, `KR-2702`) fehlen
 - [ ] Bildpfad fertig: PVR/Framebuffer/Render-Backend (`KR-2801` bis `KR-2804`) fehlen
 - [ ] Audiopfad fertig: AICA/Mixer/Host-Audio (`KR-2901` bis `KR-2903`) fehlen
@@ -42,7 +42,7 @@ Praktische Einordnung:
 - [x] Phase 3 - Katana-IR: 14/14 Tasks = 100%
 - [x] Phase 4 - Runtime-Grundlage: 18/18 Tasks = 100%
 - [x] Phase 5 - SH-4 FPU: 10/10 Tasks = 100%
-- [~] Phase 6 - Dreamcast-Plattform: 6/28 Tasks = 21.4%
+- [~] Phase 6 - Dreamcast-Plattform: 7/29 Tasks = 24.1%
 - [ ] Phase 7 - Codegen und Dispatch: 0/21 Tasks = 0%
 - [ ] Phase 8 - Werkzeuge und Qualitaet: 0/25 Tasks = 0%
 - [ ] Phase 9 - Kompatibilitaet und Leistung: 0/24 Tasks = 0%
@@ -157,6 +157,7 @@ Praktische Einordnung:
 - [x] KR-2604 - Firmware-Betriebsart und BIOS-ABI
 - [x] KR-2605 - PREF und bootrelevante Cacheeffekte
 - [x] KR-2606 - Zustandsbehaftetes Flash-Geraetemodell
+- [x] KR-2607 - FCNVDS-DN-Review-Regression
 
 ## Naechster Roadmap-Task
 

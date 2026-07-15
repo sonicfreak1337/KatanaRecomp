@@ -866,6 +866,16 @@ Akzeptanz:
 - deterministische Tests benoetigen keine echte Flash-Datei und keine konsolenspezifischen Daten
 - nicht unterstuetzte Herstellerkommandos schlagen sichtbar und reproduzierbar fehl
 
+### [x] KR-2607 - FCNVDS-DN-Review-Regression
+
+Abhaengigkeiten: KR-2403, KR-2503
+
+Akzeptanz:
+
+- das zu Single Precision konvertierte `FCNVDS`-Ergebnis durchlaeuft die zentrale DN-Behandlung
+- positive und negative subnormale Ergebnisse werden bei `FPSCR.DN=1` auf `+0` beziehungsweise `-0` gespült
+- der unveroeffentlichte Nacharbeitsstand bleibt im Changelog unter `Unreleased`; bestehende Release-Tags werden nicht verschoben
+
 ### [ ] KR-2701 - Maple-Bus
 
 Abhaengigkeiten: KR-2601

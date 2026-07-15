@@ -515,6 +515,7 @@ Fortschritt:
 - [x] KR-2604 - Firmware-Betriebsart und BIOS-ABI festlegen
 - [x] KR-2605 - PREF und bootrelevante Cacheeffekte
 - [x] KR-2606 - Zustandsbehaftetes Flash-Geraetemodell
+- [x] KR-2607 - FCNVDS-DN-Review-Regression
 
 Enthalten:
 
