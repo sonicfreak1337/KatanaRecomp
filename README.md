@@ -2,11 +2,11 @@
 
 [![CI](https://github.com/sonicfreak1337/KatanaRecomp/actions/workflows/ci.yml/badge.svg)](https://github.com/sonicfreak1337/KatanaRecomp/actions/workflows/ci.yml)
 
-Aktuelle Pre-Alpha-Version: `0.29.0`
+Aktuelle Pre-Alpha-Version: `0.30.0`
 
 KatanaRecomp ist ein unabhaengiges, in C++20 entwickeltes Framework fuer die statische Rekompilierung von Sega-Dreamcast-SH-4-Code.
 
-Das Projekt befindet sich in einer fruehen Pre-Alpha-Phase. Der aktuelle Stand ist **Version 0.29.0**.
+Das Projekt befindet sich in einer fruehen Pre-Alpha-Phase. Der aktuelle Stand ist **Version 0.30.0**.
 
 KatanaRecomp ist kein Emulator, kein ISO-Loader und kein Paket fuer kommerzielle Spieldaten. BIOS-Dateien, Disc-Images, urheberrechtlich geschuetzte Assets und automatisch erzeugter Code aus kommerziellen Spielen gehoeren nicht in dieses Repository.
 
@@ -443,11 +443,11 @@ Der Helfer 	ools\release-version.ps1 aktualisiert VERSION und CMake und kann ein
 
 ## Naechste technische Ziele
 
-1. `FSCA` und `FSRRA`
-2. `FIPR` und `FTRV`
-3. NaN-, Denormal-, Rundungs- und FPU-Exception-Flags vervollstaendigen
-4. FPU-Konformitaetssuite
-5. v0.25 Release-Gate
+1. zentraler Event-Scheduler
+2. TMU und RTC
+3. DMA und Plattform-Interruptintegration
+4. Frame- und Audio-Taktung
+5. kumulatives Phase-6-Gate v0.31.0
 
 
 ## Roadmap und Arbeitsuebergabe

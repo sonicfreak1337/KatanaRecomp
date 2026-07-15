@@ -643,7 +643,7 @@ Release-Gate:
 - drei deterministische Timer erzeugen maskierbare und quittierbare Interrupts; ARM7-LLE wird statt stiller Emulation sichtbar abgewiesen
 - frische lokale Debug- und Release-Builds bestehen mit 108/108 Tests; CI ist erst zum Alpha-Gate verpflichtend
 
-### v0.30.0 - GD-ROM und Dateisystem
+### [x] v0.30.0 - GD-ROM und Dateisystem
 
 Fortschritt:
 
@@ -663,6 +663,13 @@ Enthalten:
 - ISO9660-Lesezugriff
 - asynchrone Reads
 - nachvollziehbare Timing-Strategie
+
+Release-Gate:
+
+- DiscSource, GD-ROM-Kommandos, ISO9660, asynchrone Gastzyklus-Timings sowie GDI-Parser und Mehrdateiquelle sind mit ausschliesslich synthetischen Fixtures getestet
+- GDI-Quellen bleiben read-only; Hostpfade sind keine semantische Identitaet und kein Disc-Image liegt im Repository oder Release
+- frische lokale Debug- und Release-Builds bestehen mit 114/114 Tests; CI ist erst zum Alpha-Gate verpflichtend
+- gemaess lokaler Akzeptanzstrategie erfolgt hier kein vollstaendiger Sonic-Adventure-Test; die GDI-Kriterien werden beim kumulativen Phase-6-Gate v0.31.0 erneut geprueft
 
 ### v0.31.0 - Scheduling, Timer und DMA
 

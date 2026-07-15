@@ -321,11 +321,11 @@ Task: KR-XXXX
 ## Aktuell empfohlener Einstieg
 
 ```text
-v0.30.0 - Release-Gate fuer GD-ROM und Dateisystem
+KR-3101 - Event-Scheduler
 ```
 
 Danach:
 
 ```text
-KR-3101 - Event-Scheduler
+KR-3102 - TMU und RTC
 ```

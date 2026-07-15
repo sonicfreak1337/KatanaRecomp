@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.30.0] - 2026-07-15
+
 ### Hinzugefuegt
 
 - Eine zentrale lokale Sonic-Adventure-Akzeptanzstrategie definiert genau ein kumulatives, messbares End-to-End-Gate je abgeschlossener Phase von v0.31.0 bis v0.44.0 sowie das Alpha-Gate v0.50.0. Der v0.30.0-GDI-Smoke wird erst bei v0.31.0 revalidiert; einzelne Tasks und Zwischenreleases behalten ihre bestehenden kleineren Tests.
@@ -16,6 +18,7 @@
 ### Geaendert
 
 - Alte versionierte `.katana_backup_*`-Migrationssnapshots wurden aus dem aktuellen Repository-Baum entfernt. Die Arbeitsregeln erlauben nur noch genau ein unversioniertes Quellbackup des neuesten committed Stands und schliessen Build-, Referenz- sowie private Spieldaten aus.
+- Die vollstaendige Regression umfasst 114 Tests und besteht in frischen lokalen Debug- und Release-Builds. CI bleibt bis zum Alpha-Gate optional; der vollstaendige lokale Sonic-Adventure-Test ist erst beim kumulativen Phase-6-Gate v0.31.0 verpflichtend.
 
 ### Behoben
 

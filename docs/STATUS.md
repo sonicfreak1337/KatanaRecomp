@@ -1,8 +1,8 @@
 # Projektstatus
 
-Version: 0.29.0
+Version: 0.30.0
 Phase: Pre-Alpha
-Naechster Meilenstein: v0.30.0 - GD-ROM und Dateisystem
+Naechster Meilenstein: v0.31.0 - Scheduling, Timer und DMA
 
 ## Zusammenfassung
 
@@ -31,7 +31,7 @@ Definition fuer diesen Status: ein BIOS-freier, frei verteilbarer Homebrew-Verti
 
 Praktische Einordnung:
 
-- [~] Von einem echten Dreamcast-Smoke-Test sind wir funktional noch zwei Plattform-Meilensteine entfernt: `v0.30.0` und `v0.31.0`
+- [~] Vom kumulativen Phase-6-Dreamcast-Test sind wir noch einen Plattform-Meilenstein entfernt: `v0.31.0`
 - [~] Der CPU-, IR-, Runtime- und FPU-Unterbau steht; der Engpass ist jetzt fast vollstaendig Plattformintegration
 - [ ] Von Alpha sind wir noch deutlich entfernt, weil nach Phase 6 auch Codegen-/Dispatch-Haertung, Tooling, Kompatibilitaet, GUI und `.gdi`-Workflow fehlen
 
@@ -51,23 +51,23 @@ Praktische Einordnung:
 
 ## Teststatus
 
-Letztes abgeschlossenes Release-Gate (`v0.29.0`):
+Letztes abgeschlossenes Release-Gate (`v0.30.0`):
 
 ```text
-100% tests passed out of 108 (frische lokale Debug- und Release-Builds)
+100% tests passed out of 114 (frische lokale Debug- und Release-Builds)
 ```
 
-Aktueller Post-Release-Reviewstand:
+Aktueller Release-Stand:
 
 ```text
-100% tests passed out of 108 (HEAD nach v0.29.0, vollstaendige lokale Debug- und Release-Testlaeufe)
+100% tests passed out of 114 (v0.30.0, vollstaendige lokale Debug- und Release-Testlaeufe)
 ```
 
-Aktueller Taskstand (`KR-3006`):
+Abgeschlossenes v0.30.0-Gate:
 
 ```text
-1/1 katana-gdi-integration-tests bestanden (lokal, Debug)
-optionaler privater read-only GDI-Smoke-Test bestanden (keine Quelldaten erfasst)
+114/114 Tests bestanden (frische lokale Debug- und Release-Builds)
+kein vollstaendiger Sonic-Adventure-Lauf; Revalidierung planmaessig erst bei v0.31.0
 ```
 
 Lokale Sonic-Adventure-Akzeptanzstrategie:
@@ -201,7 +201,7 @@ Lokale Sonic-Adventure-Akzeptanzstrategie:
 
 ## Naechster Roadmap-Task
 
-- [ ] v0.30.0 - Release-Gate fuer GD-ROM und Dateisystem
+- [ ] KR-3101 - Event-Scheduler
 
 ## Aktuelle Einschraenkungen
 
