@@ -586,7 +586,7 @@ Release-Gate:
 - alle Grafikpfade bleiben ohne Host-Grafik-API einzeln und deterministisch pruefbar
 - frische lokale Debug- und Release-Builds bestehen mit 104/104 Tests; CI ist erst zum Alpha-Gate verpflichtend
 
-### v0.29.0 - AICA Minimum Viable Audio
+### [x] v0.29.0 - AICA Minimum Viable Audio
 
 Fortschritt:
 
@@ -603,6 +603,12 @@ Enthalten:
 - Timer und Interrupts
 - Host-Audio-Backend
 - dokumentierte Strategie fuer den AICA-ARM7
+
+Release-Gate:
+
+- AICA-Register, PCM8, PCM16, ADPCM, Stereo-Mixer und Backend-Uebergabe sind mit synthetischen Fixtures getestet
+- drei deterministische Timer erzeugen maskierbare und quittierbare Interrupts; ARM7-LLE wird statt stiller Emulation sichtbar abgewiesen
+- frische lokale Debug- und Release-Builds bestehen mit 108/108 Tests; CI ist erst zum Alpha-Gate verpflichtend
 
 ### v0.30.0 - GD-ROM und Dateisystem
 
