@@ -880,7 +880,7 @@ Akzeptanz:
 
 Abhaengigkeiten: KR-2601
 
-### [ ] KR-2702 - Controller
+### [x] KR-2702 - Controller
 
 Abhaengigkeiten: KR-2701
 

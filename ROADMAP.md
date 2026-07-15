@@ -543,7 +543,7 @@ Release-Gate:
 Fortschritt:
 
 - [x] KR-2701 - Maple-Bus
-- [ ] KR-2702 - Controller und deterministische Host-Eingabe
+- [x] KR-2702 - Controller und deterministische Host-Eingabe
 - [ ] KR-2703 - VMU-Minimum
 
 Enthalten:

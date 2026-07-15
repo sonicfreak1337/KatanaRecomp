@@ -5,6 +5,53 @@
 
 namespace katana::runtime {
 
+ReplayInputBackend::ReplayInputBackend(std::vector<ControllerState> frames)
+    : frames_(std::move(frames)) {
+    if (frames_.empty()) {
+        throw std::invalid_argument("Ein Input-Replay braucht mindestens einen Frame.");
+    }
+}
+
+ControllerState ReplayInputBackend::sample(const std::uint64_t frame) {
+    if (frame >= frames_.size()) {
+        throw std::out_of_range("Input-Replay ist fuer den angeforderten Frame zu kurz.");
+    }
+    return frames_[static_cast<std::size_t>(frame)];
+}
+
+MapleControllerDevice::MapleControllerDevice(std::shared_ptr<HostInputBackend> input)
+    : input_(std::move(input)) {
+    if (!input_) {
+        throw std::invalid_argument("Controller braucht ein Host-Input-Backend.");
+    }
+}
+
+MapleResponse MapleControllerDevice::transact(const MapleRequest& request) {
+    constexpr std::uint32_t controller_function = 0x01000000u;
+    if (request.command == MapleCommand::DeviceRequest) {
+        return {MapleResponseCode::DeviceInfo, {controller_function, 0u, 0u}};
+    }
+    if (request.command != MapleCommand::GetCondition) {
+        return {MapleResponseCode::UnknownCommand, {}};
+    }
+    const auto state = input_->sample(next_frame_++);
+    const auto buttons = static_cast<std::uint16_t>(~state.pressed_buttons);
+    const std::uint32_t condition0 =
+        static_cast<std::uint32_t>(buttons) |
+        (static_cast<std::uint32_t>(state.right_trigger) << 16u) |
+        (static_cast<std::uint32_t>(state.left_trigger) << 24u);
+    const std::uint32_t condition1 =
+        static_cast<std::uint32_t>(state.joystick_x) |
+        (static_cast<std::uint32_t>(state.joystick_y) << 8u) |
+        (static_cast<std::uint32_t>(state.joystick2_x) << 16u) |
+        (static_cast<std::uint32_t>(state.joystick2_y) << 24u);
+    return {MapleResponseCode::DataTransfer, {controller_function, condition0, condition1}};
+}
+
+std::uint64_t MapleControllerDevice::sampled_frames() const noexcept {
+    return next_frame_;
+}
+
 std::size_t MapleBus::slot(const std::uint8_t port, const std::uint8_t unit) {
     if (port >= maple_port_count || unit >= maple_units_per_port) {
         throw std::out_of_range("Maple-Port oder -Unit liegt ausserhalb des Busses.");

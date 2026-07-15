@@ -42,6 +42,48 @@ public:
     [[nodiscard]] virtual MapleResponse transact(const MapleRequest& request) = 0;
 };
 
+enum class ControllerButton : std::uint16_t {
+    C = 1u << 0u, B = 1u << 1u, A = 1u << 2u, Start = 1u << 3u,
+    DpadUp = 1u << 4u, DpadDown = 1u << 5u, DpadLeft = 1u << 6u,
+    DpadRight = 1u << 7u, Z = 1u << 8u, Y = 1u << 9u, X = 1u << 10u,
+    D = 1u << 11u, Dpad2Up = 1u << 12u, Dpad2Down = 1u << 13u,
+    Dpad2Left = 1u << 14u, Dpad2Right = 1u << 15u
+};
+
+struct ControllerState {
+    std::uint16_t pressed_buttons = 0u;
+    std::uint8_t right_trigger = 0u;
+    std::uint8_t left_trigger = 0u;
+    std::uint8_t joystick_x = 0x80u;
+    std::uint8_t joystick_y = 0x80u;
+    std::uint8_t joystick2_x = 0x80u;
+    std::uint8_t joystick2_y = 0x80u;
+};
+
+class HostInputBackend {
+public:
+    virtual ~HostInputBackend() = default;
+    [[nodiscard]] virtual ControllerState sample(std::uint64_t frame) = 0;
+};
+
+class ReplayInputBackend final : public HostInputBackend {
+public:
+    explicit ReplayInputBackend(std::vector<ControllerState> frames);
+    [[nodiscard]] ControllerState sample(std::uint64_t frame) override;
+private:
+    std::vector<ControllerState> frames_;
+};
+
+class MapleControllerDevice final : public MapleDevice {
+public:
+    explicit MapleControllerDevice(std::shared_ptr<HostInputBackend> input);
+    [[nodiscard]] MapleResponse transact(const MapleRequest& request) override;
+    [[nodiscard]] std::uint64_t sampled_frames() const noexcept;
+private:
+    std::shared_ptr<HostInputBackend> input_;
+    std::uint64_t next_frame_ = 0u;
+};
+
 struct MapleTransactionRecord {
     std::uint64_t sequence = 0u;
     std::uint8_t port = 0u;

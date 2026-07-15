@@ -280,6 +280,11 @@ target_link_libraries(katana-maple-bus-tests PRIVATE katana_runtime)
 katana_enable_warnings(katana-maple-bus-tests)
 add_test(NAME katana-maple-bus-tests COMMAND katana-maple-bus-tests)
 
+add_executable(katana-maple-controller-tests tests/runtime/maple_controller_tests.cpp)
+target_link_libraries(katana-maple-controller-tests PRIVATE katana_runtime)
+katana_enable_warnings(katana-maple-controller-tests)
+add_test(NAME katana-maple-controller-tests COMMAND katana-maple-controller-tests)
+
 add_executable(katana-decoder-tests
     tests/decoder/decoder_tests.cpp
 )
