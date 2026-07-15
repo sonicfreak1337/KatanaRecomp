@@ -2,15 +2,21 @@
 
 ## [Unreleased]
 
+## [0.27.0] - 2026-07-15
+
 ### Hinzugefuegt
 
 - KR-2701: Ein deterministischer Maple-Bus adressiert vier Ports mit jeweils sechs Units, transportiert explizite Request-/Response-Frames und protokolliert erfolgreiche Transaktionen mit stabilen Sequenznummern.
 - KR-2702: Ein Controllergeraet kodiert Tasten aktiv-low, Trigger und zwei Analogachsen in Maple-Condition-Frames. Das Host-Input-Interface ist austauschbar; endliche Replays liefern framegenaue Tests und fallen bei Erschoepfung nicht still auf Live-Eingabe zurueck.
 - KR-2703: Ein minimales VMU-Geraet bietet 256 Bloecke zu 512 Byte, Little-Endian-Blocktransfers, Schreibschutz und eine Copy-on-write-Arbeitskopie, ohne das synthetische Quellabbild zu veraendern.
 
+### Geaendert
+
+- Die vollstaendige Regression umfasst 100 Tests und besteht in frischen lokalen Debug- und Release-Builds. CI bleibt gemaess Projektentscheidung bis zum Alpha-Gate optional.
+
 ### Behoben
 
-- KR-2607: `FCNVDS` fuehrt nun auch das konvertierte Single-Precision-Ergebnis durch die zentrale `FPSCR.DN`-Behandlung. Positive und negative subnormale Ergebnisse werden bei `DN=1` auf vorzeichenbehaftete Null gespült und sind regressionsgesichert.
+- KR-2607: `FCNVDS` fuehrt nun auch das konvertierte Single-Precision-Ergebnis durch die zentrale `FPSCR.DN`-Behandlung. Positive und negative subnormale Ergebnisse werden bei `DN=1` auf vorzeichenbehaftete Null gespult und sind regressionsgesichert.
 
 ## [0.26.0] - 2026-07-15
 

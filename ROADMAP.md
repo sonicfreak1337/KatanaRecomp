@@ -555,6 +555,12 @@ Enthalten:
 - Host-Input-Backend
 - deterministische Input-Replays fuer Tests
 
+Release-Gate:
+
+- Maple-Adressierung, Controllerzustand und VMU-Blocktransfers sind ausschliesslich mit synthetischen Fixtures getestet
+- endliche Input-Replays sind reproduzierbar und fallen nicht auf nichtdeterministische Hosteingabe zurueck
+- frische lokale Debug- und Release-Builds bestehen vollstaendig; CI ist erst zum Alpha-Gate verpflichtend
+
 ### v0.28.0 - PVR Minimum Viable Video
 
 Enthalten:

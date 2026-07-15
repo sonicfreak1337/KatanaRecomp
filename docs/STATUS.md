@@ -1,8 +1,8 @@
 # Projektstatus
 
-Version: 0.26.0
+Version: 0.27.0
 Phase: Pre-Alpha
-Naechster Meilenstein: v0.27.0 - Maple und Eingabe
+Naechster Meilenstein: v0.28.0 - PVR Minimum Viable Video
 
 ## Zusammenfassung
 
@@ -52,7 +52,7 @@ Praktische Einordnung:
 ## Teststatus
 
 ```text
-KR-2701 gezielt lokal getestet; vollstaendige Debug-/Release-Gates folgen am v0.27-Gate.
+100% tests passed out of 100 (lokal, Debug und Release)
 ```
 
 ## Fertiggestellte Roadmap-Tasks
