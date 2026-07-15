@@ -892,7 +892,7 @@ Abhaengigkeiten: KR-2701
 
 Abhaengigkeiten: KR-2207, KR-2601
 
-### [ ] KR-2802 - Framebuffer-Ausgabe
+### [x] KR-2802 - Framebuffer-Ausgabe
 
 Abhaengigkeiten: KR-2801
 

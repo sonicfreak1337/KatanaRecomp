@@ -6,6 +6,8 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <span>
+#include <vector>
 
 namespace katana::runtime {
 
@@ -41,6 +43,39 @@ private:
     std::array<std::uint32_t, pvr_register_size / 4u> registers_{};
     std::uint64_t render_requests_ = 0u;
     std::uint64_t resets_ = 0u;
+};
+
+enum class PvrFramebufferFormat : std::uint8_t {
+    Rgb565,
+    Argb1555,
+    Rgb888
+};
+
+struct PvrFrame {
+    std::uint32_t width = 0u;
+    std::uint32_t height = 0u;
+    std::vector<std::uint8_t> rgba;
+};
+
+class PvrFramebuffer final {
+public:
+    void configure(
+        std::uint32_t width,
+        std::uint32_t height,
+        std::uint32_t stride_bytes,
+        PvrFramebufferFormat format
+    );
+    [[nodiscard]] PvrFrame capture(
+        std::span<const std::uint8_t> vram,
+        std::size_t base_offset = 0u
+    );
+    [[nodiscard]] std::uint64_t presented_frames() const noexcept;
+private:
+    std::uint32_t width_ = 0u;
+    std::uint32_t height_ = 0u;
+    std::uint32_t stride_ = 0u;
+    PvrFramebufferFormat format_ = PvrFramebufferFormat::Rgb565;
+    std::uint64_t presented_frames_ = 0u;
 };
 
 [[nodiscard]] std::shared_ptr<PvrRegisterFile> map_pvr_registers(Memory& memory);

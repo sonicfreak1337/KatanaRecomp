@@ -5,6 +5,7 @@
 ### Hinzugefuegt
 
 - KR-2801: Ein busfaehiges PVR-Registerminimum bildet ID, Revision, Framebuffer-, Video- und Rendersteuerregister ueber alle direkten Segmente ab. Breitenfehler, read-only-Register, Softreset und Renderanforderungen sind sichtbar.
+- KR-2802: Ein Framebuffer-Pfad wandelt RGB565, ARGB1555 und RGB888 mit Stride- und VRAM-Grenzpruefung deterministisch in RGBA-Frames um und zaehlt praesentierte Frames.
 
 ## [0.27.0] - 2026-07-15
 
