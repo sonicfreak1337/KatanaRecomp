@@ -738,7 +738,7 @@ Planungsgrundlage fuer Phase 7 und spaeter:
 
 Fortschritt:
 
-- [ ] KR-3201 - Backend-Interface
+- [x] KR-3201 - Backend-Interface
 - [ ] KR-3202 - C++-Backend migrieren
 - [ ] KR-3203 - ABI-Faehigkeitspruefung
 - [ ] KR-3204 - Block-ABI und Zustandsuebergaben

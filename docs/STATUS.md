@@ -13,8 +13,8 @@ KatanaRecomp besitzt einen durchgaengigen Prototyp-Pfad von Raw- und ELF32-SH-Ei
 ### Gesamtprojekt
 
 - [x] Kernunterbau abgeschlossen: Phasen 1 bis 5 sind vollstaendig umgesetzt
-- [~] Gesamtfortschritt nach gepflegten Roadmap-Tasks: 123 von 209 Tasks abgeschlossen = 58.9%
-- [~] Fortschritt auf dem Weg von Dreamcast-Plattform bis Alpha: 29 von 112 Tasks abgeschlossen = 25.9%
+- [~] Gesamtfortschritt nach gepflegten Roadmap-Tasks: 124 von 209 Tasks abgeschlossen = 59.3%
+- [~] Fortschritt auf dem Weg von Dreamcast-Plattform bis Alpha: 30 von 112 Tasks abgeschlossen = 26.8%
 - [ ] Alpha-Gate erreicht: nein
 
 ### Weg zum ersten echten Dreamcast-Test
@@ -44,7 +44,7 @@ Praktische Einordnung:
 - [x] Phase 4 - Runtime-Grundlage: 18/18 Tasks = 100%
 - [x] Phase 5 - SH-4 FPU: 10/10 Tasks = 100%
 - [x] Phase 6 - Dreamcast-Plattform: 29/29 Tasks und Abschlussgate = 100%
-- [ ] Phase 7 - Codegen und Dispatch: 0/21 Tasks = 0%
+- [~] Phase 7 - Codegen und Dispatch: 1/21 Tasks = 4.8%
 - [ ] Phase 8 - Werkzeuge und Qualitaet: 0/25 Tasks = 0%
 - [ ] Phase 9 - Kompatibilitaet und Leistung: 0/24 Tasks = 0%
 - [ ] Phase 10 - Desktop-GUI und Quellworkflow: 0/13 Tasks = 0%
@@ -65,6 +65,13 @@ Aktueller Release-Stand:
 katana-dreamcast-vertical-slice-tests bestanden
 SA_PHASE6_MAIN_EXECUTION_STARTED in zwei bytegleichen Laeufen erreicht
 Disc-Quelle unveraendert; silent_failures=0
+```
+
+Aktueller Entwicklungsstand (`KR-3201`):
+
+```text
+123/123 Debug-Tests bestanden
+katana-backend-tests bestanden
 ```
 
 Abgeschlossenes kumulatives Phase-6-Gate:
@@ -215,11 +222,12 @@ Lokale Sonic-Adventure-Akzeptanzstrategie:
 - [x] KR-3103 - DMA
 - [x] KR-3104 - Plattform-Interruptintegration
 - [x] KR-3105 - Frame- und Audio-Taktung
+- [x] KR-3201 - Backend-Interface
 
 ## Naechster Arbeitsschritt
 
-- [ ] KR-3201 - Backend-Interface
-- [ ] danach KR-3202 - C++-Backend migrieren
+- [ ] KR-3202 - C++-Backend migrieren
+- [ ] danach KR-3203 - ABI-Faehigkeitspruefung
 
 ## Aktuelle Einschraenkungen
 

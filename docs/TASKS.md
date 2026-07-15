@@ -1059,7 +1059,7 @@ Akzeptanz:
 
 ## v0.32.0 bis v0.34.0 - Codegen und Dispatch
 
-### [ ] KR-3201 - Backend-Interface
+### [x] KR-3201 - Backend-Interface
 
 Abhaengigkeiten: KR-2104
 

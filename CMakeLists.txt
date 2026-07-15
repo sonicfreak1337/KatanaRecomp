@@ -100,6 +100,7 @@ add_library(katana_core STATIC
     src/ir/status_effect.cpp
     src/ir/serialize.cpp
     src/ir/verifier.cpp
+    src/codegen/backend.cpp
     src/codegen/cpp_emitter.cpp
 )
 
@@ -866,6 +867,13 @@ add_test(
 add_executable(katana-cpp-emitter-tests
     tests/codegen/cpp_emitter_tests.cpp
 )
+
+add_executable(katana-backend-tests
+    tests/codegen/backend_tests.cpp
+)
+target_link_libraries(katana-backend-tests PRIVATE katana_core)
+katana_enable_warnings(katana-backend-tests)
+add_test(NAME katana-backend-tests COMMAND katana-backend-tests)
 
 target_link_libraries(
     katana-cpp-emitter-tests

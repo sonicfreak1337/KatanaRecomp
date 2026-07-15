@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Hinzugefuegt
+
+- KR-3201: Eine IR-basierte Backend-Schnittstelle validiert Programme und Einstiegspunkte zentral und trennt Deklarationen, Funktionen sowie Metadaten in deterministisch zusammensetzbare Emissionsabschnitte.
+
 ## [0.31.0] - 2026-07-16
 
 ### Hinzugefuegt
