@@ -43,6 +43,7 @@ add_library(katana_runtime STATIC
     src/runtime/iso9660.cpp
     src/runtime/maple.cpp
     src/runtime/pvr.cpp
+    src/runtime/scheduler.cpp
     src/runtime/memory.cpp
     src/runtime/runtime.cpp
 )
@@ -364,6 +365,11 @@ add_executable(katana-gdi-integration-tests tests/runtime/gdi_integration_tests.
 target_link_libraries(katana-gdi-integration-tests PRIVATE katana_runtime)
 katana_enable_warnings(katana-gdi-integration-tests)
 add_test(NAME katana-gdi-integration-tests COMMAND katana-gdi-integration-tests)
+
+add_executable(katana-scheduler-tests tests/runtime/scheduler_tests.cpp)
+target_link_libraries(katana-scheduler-tests PRIVATE katana_runtime)
+katana_enable_warnings(katana-scheduler-tests)
+add_test(NAME katana-scheduler-tests COMMAND katana-scheduler-tests)
 
 add_executable(katana-decoder-tests
     tests/decoder/decoder_tests.cpp

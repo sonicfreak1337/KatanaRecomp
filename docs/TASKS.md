@@ -972,7 +972,7 @@ Akzeptanz:
 - Disc-Operationen verwenden keine Hostpfade als semantische Identitaet
 - synthetische Positiv- und Negativtests decken Descriptor, Trackmapping und Dateisystemzugriffe ab
 
-### [ ] KR-3101 - Event-Scheduler
+### [x] KR-3101 - Event-Scheduler
 
 Abhaengigkeiten: KR-2601
 

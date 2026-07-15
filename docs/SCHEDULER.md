@@ -1,0 +1,26 @@
+# Deterministischer Event-Scheduler
+
+KR-3101 fuehrt eine zentrale Gastzyklusuhr fuer die Dreamcast-Plattform ein.
+Der Scheduler verwendet weder Hostzeit noch Threads. Alle Fristen sind absolute
+64-Bit-Gastzyklen.
+
+## Vertrag
+
+- Ereignisse laufen aufsteigend nach Gastzyklus und bei gleicher Frist stabil
+  nach ihrer monotonen Ereignis-ID.
+- Callbacks sehen den exakten Ereigniszyklus als aktuellen Schedulerzustand und
+  duerfen weitere Ereignisse fuer denselben oder einen spaeteren Zyklus planen.
+- Ereignisse in der Vergangenheit, rueckwaertslaufende Zeit und
+  Zielzyklusueberlauf sind strukturierte Fehler.
+- Cancellation entfernt nur noch ausstehende Ereignisse und meldet sichtbar, ob
+  eine ID tatsaechlich vorhanden war.
+- Jeder Lauf besitzt ein explizites Ereignisbudget. Reicht es nicht aus, stoppt
+  der Scheduler am letzten verarbeiteten Ereignis und meldet
+  `EventBudgetExhausted`, statt unkontrolliert weiterzulaufen.
+- Callback-Ausnahmen werden nicht verschluckt. Das betroffene Ereignis gilt als
+  verarbeitet, die Uhr bleibt an seiner Frist stehen und der Fehler propagiert.
+- `reset()` stellt Uhr, IDs, Zaehler und Ereignismenge deterministisch zurueck.
+
+TMU, RTC, DMA, Interruptintegration sowie Frame- und Audio-Taktung werden in den
+folgenden KR-3102- bis KR-3105-Tasks auf diese Zeitbasis gesetzt. KR-3101 zieht
+diese Geraetesemantik nicht vor.

@@ -673,6 +673,14 @@ Release-Gate:
 
 ### v0.31.0 - Scheduling, Timer und DMA
 
+Fortschritt:
+
+- [x] KR-3101 - Event-Scheduler
+- [ ] KR-3102 - TMU und RTC
+- [ ] KR-3103 - DMA
+- [ ] KR-3104 - Plattform-Interruptintegration
+- [ ] KR-3105 - Frame- und Audio-Taktung
+
 Enthalten:
 
 - zentraler Event-Scheduler

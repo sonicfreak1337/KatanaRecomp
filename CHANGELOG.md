@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Hinzugefuegt
+
+- KR-3101: Ein zentraler, hostzeitfreier Event-Scheduler ordnet Callbacks deterministisch nach 64-Bit-Gastzyklus und Ereignis-ID, unterstuetzt Cancellation und verschachtelte Planung und stoppt mit sichtbarem Status an einem expliziten Ereignisbudget.
+
 ## [0.30.0] - 2026-07-15
 
 ### Hinzugefuegt
