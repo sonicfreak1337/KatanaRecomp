@@ -95,6 +95,52 @@ private:
     std::vector<std::int16_t> last_buffer_;
 };
 
+enum class AicaArm7Mode : std::uint8_t {
+    HighLevelAudio,
+    LowLevelArm7
+};
+
+class AicaTimer final {
+public:
+    void configure(std::uint8_t initial_counter, std::uint8_t divider_scale, bool enabled);
+    [[nodiscard]] std::uint64_t tick(std::uint64_t audio_cycles) noexcept;
+    [[nodiscard]] std::uint8_t counter() const noexcept;
+    [[nodiscard]] bool enabled() const noexcept;
+private:
+    std::uint64_t remainder_ = 0u;
+    std::uint32_t divisor_ = 1u;
+    std::uint8_t counter_ = 0u;
+    bool enabled_ = false;
+};
+
+class AicaInterruptState final {
+public:
+    void set_enabled(std::uint32_t mask) noexcept;
+    void request(std::uint32_t mask) noexcept;
+    void acknowledge(std::uint32_t mask) noexcept;
+    [[nodiscard]] std::uint32_t pending() const noexcept;
+    [[nodiscard]] bool asserted() const noexcept;
+private:
+    std::uint32_t enabled_ = 0u;
+    std::uint32_t pending_ = 0u;
+};
+
+class AicaExecutionController final {
+public:
+    static constexpr std::size_t timer_count = 3u;
+    static constexpr std::uint32_t timer_interrupt_base = 1u;
+    void set_mode(AicaArm7Mode mode);
+    [[nodiscard]] AicaArm7Mode mode() const noexcept;
+    [[nodiscard]] bool arm7_executes_instructions() const noexcept;
+    [[nodiscard]] AicaTimer& timer(std::size_t index);
+    [[nodiscard]] AicaInterruptState& interrupts() noexcept;
+    void tick(std::uint64_t audio_cycles);
+private:
+    AicaArm7Mode mode_ = AicaArm7Mode::HighLevelAudio;
+    std::array<AicaTimer, timer_count> timers_{};
+    AicaInterruptState interrupts_;
+};
+
 [[nodiscard]] std::shared_ptr<AicaRegisterFile> map_aica_registers(Memory& memory);
 
 } // namespace katana::runtime

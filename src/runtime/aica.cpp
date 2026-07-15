@@ -161,6 +161,68 @@ const std::vector<std::int16_t>& RecordingAicaAudioBackend::last_buffer() const 
     return last_buffer_;
 }
 
+void AicaTimer::configure(
+    const std::uint8_t initial_counter,
+    const std::uint8_t divider_scale,
+    const bool enabled
+) {
+    if (divider_scale > 7u) {
+        throw std::invalid_argument("AICA-Timerteiler muss zwischen 1 und 128 liegen.");
+    }
+    counter_ = initial_counter;
+    divisor_ = 1u << divider_scale;
+    remainder_ = 0u;
+    enabled_ = enabled;
+}
+
+std::uint64_t AicaTimer::tick(const std::uint64_t audio_cycles) noexcept {
+    if (!enabled_) { return 0u; }
+    const auto quotient = audio_cycles / divisor_;
+    const auto partial = remainder_ + audio_cycles % divisor_;
+    auto increments = quotient + partial / divisor_;
+    remainder_ = partial % divisor_;
+    auto overflows = increments / 256u;
+    increments %= 256u;
+    const auto counter = static_cast<std::uint64_t>(counter_) + increments;
+    overflows += counter / 256u;
+    counter_ = static_cast<std::uint8_t>(counter % 256u);
+    return overflows;
+}
+
+std::uint8_t AicaTimer::counter() const noexcept { return counter_; }
+bool AicaTimer::enabled() const noexcept { return enabled_; }
+
+void AicaInterruptState::set_enabled(const std::uint32_t mask) noexcept { enabled_ = mask; }
+void AicaInterruptState::request(const std::uint32_t mask) noexcept { pending_ |= mask; }
+void AicaInterruptState::acknowledge(const std::uint32_t mask) noexcept { pending_ &= ~mask; }
+std::uint32_t AicaInterruptState::pending() const noexcept { return pending_; }
+bool AicaInterruptState::asserted() const noexcept { return (pending_ & enabled_) != 0u; }
+
+void AicaExecutionController::set_mode(const AicaArm7Mode mode) {
+    if (mode == AicaArm7Mode::LowLevelArm7) {
+        throw std::runtime_error("AICA-ARM7-LLE ist im v0.29-HLE-Audioprofil nicht implementiert.");
+    }
+    mode_ = mode;
+}
+
+AicaArm7Mode AicaExecutionController::mode() const noexcept { return mode_; }
+bool AicaExecutionController::arm7_executes_instructions() const noexcept { return false; }
+
+AicaTimer& AicaExecutionController::timer(const std::size_t index) {
+    if (index >= timers_.size()) { throw std::out_of_range("Ungueltiger AICA-Timerindex."); }
+    return timers_[index];
+}
+
+AicaInterruptState& AicaExecutionController::interrupts() noexcept { return interrupts_; }
+
+void AicaExecutionController::tick(const std::uint64_t audio_cycles) {
+    for (std::size_t index = 0u; index < timers_.size(); ++index) {
+        if (timers_[index].tick(audio_cycles) != 0u) {
+            interrupts_.request(timer_interrupt_base << index);
+        }
+    }
+}
+
 std::shared_ptr<AicaRegisterFile> map_aica_registers(Memory& memory) {
     auto registers = std::make_shared<AicaRegisterFile>();
     auto device = std::make_shared<MmioMemoryDevice>(

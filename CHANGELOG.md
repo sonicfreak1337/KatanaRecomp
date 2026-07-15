@@ -7,6 +7,7 @@
 - KR-2901: Ein 32-KiB-AICA-Registerfenster unterstuetzt little-endian Byte-, Halfword- und Word-Zugriffe ueber alle direkten SH-4-Segmentaliase, deterministischen Reset und sichtbare Schreibereignisse.
 - KR-2902: Ein zustandsbehafteter Sampledecoder verarbeitet signed PCM8, little-endian PCM16 und AICA-ADPCM mit korrekter Low-/High-Nibblefolge, Predictor-/Step-Clamping, Streaming-Fortsetzung und Reset.
 - KR-2903: Ein ganzzahliger Stereo-Mixer kombiniert Mono-Voices mit Gain, Pan, Nullauffuellung und 16-Bit-Saettigung; eine Host-Audio-Abstraktion uebergibt validierte Stereo-Frames an ein deterministisches Recording-Backend.
+- KR-2904: Das v0.29-Profil implementiert einen ausdruecklichen HLE-Audiovertrag ohne vorgetaeuschte ARM7-Ausfuehrung, drei deterministische AICA-Timer und maskierbare, quittierbare Interrupts; nicht implementiertes ARM7-LLE scheitert sichtbar.
 
 ## [0.28.0] - 2026-07-15
 

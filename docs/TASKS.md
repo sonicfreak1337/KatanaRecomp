@@ -916,7 +916,7 @@ Abhaengigkeiten: KR-2901
 
 Abhaengigkeiten: KR-2902
 
-### [ ] KR-2904 - ARM7-Strategie dokumentieren und implementieren
+### [x] KR-2904 - ARM7-Strategie dokumentieren und implementieren
 
 Abhaengigkeiten: KR-2901
 

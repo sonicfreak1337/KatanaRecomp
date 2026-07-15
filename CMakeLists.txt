@@ -327,6 +327,11 @@ target_link_libraries(katana-aica-mixer-tests PRIVATE katana_runtime)
 katana_enable_warnings(katana-aica-mixer-tests)
 add_test(NAME katana-aica-mixer-tests COMMAND katana-aica-mixer-tests)
 
+add_executable(katana-aica-execution-tests tests/runtime/aica_execution_tests.cpp)
+target_link_libraries(katana-aica-execution-tests PRIVATE katana_runtime)
+katana_enable_warnings(katana-aica-execution-tests)
+add_test(NAME katana-aica-execution-tests COMMAND katana-aica-execution-tests)
+
 add_executable(katana-decoder-tests
     tests/decoder/decoder_tests.cpp
 )
