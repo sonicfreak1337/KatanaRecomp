@@ -888,7 +888,7 @@ Abhaengigkeiten: KR-2701
 
 Abhaengigkeiten: KR-2701
 
-### [ ] KR-2801 - PVR-Registerminimum
+### [x] KR-2801 - PVR-Registerminimum
 
 Abhaengigkeiten: KR-2207, KR-2601
 

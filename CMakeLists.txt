@@ -38,6 +38,7 @@ add_library(katana_runtime STATIC
     src/runtime/fpu.cpp
     src/runtime/interrupt.cpp
     src/runtime/maple.cpp
+    src/runtime/pvr.cpp
     src/runtime/memory.cpp
     src/runtime/runtime.cpp
 )
@@ -289,6 +290,11 @@ add_executable(katana-maple-vmu-tests tests/runtime/maple_vmu_tests.cpp)
 target_link_libraries(katana-maple-vmu-tests PRIVATE katana_runtime)
 katana_enable_warnings(katana-maple-vmu-tests)
 add_test(NAME katana-maple-vmu-tests COMMAND katana-maple-vmu-tests)
+
+add_executable(katana-pvr-register-tests tests/runtime/pvr_register_tests.cpp)
+target_link_libraries(katana-pvr-register-tests PRIVATE katana_runtime)
+katana_enable_warnings(katana-pvr-register-tests)
+add_test(NAME katana-pvr-register-tests COMMAND katana-pvr-register-tests)
 
 add_executable(katana-decoder-tests
     tests/decoder/decoder_tests.cpp

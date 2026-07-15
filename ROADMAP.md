@@ -563,6 +563,13 @@ Release-Gate:
 
 ### v0.28.0 - PVR Minimum Viable Video
 
+Fortschritt:
+
+- [x] KR-2801 - PVR-Registerminimum
+- [ ] KR-2802 - Framebuffer-Ausgabe
+- [ ] KR-2803 - Tile-Accelerator-Grundpfad
+- [ ] KR-2804 - Texturformate und Render-Backend
+
 Enthalten:
 
 - relevante PVR-Register
