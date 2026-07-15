@@ -928,7 +928,7 @@ Abhaengigkeiten: KR-2601
 
 Abhaengigkeiten: KR-3001
 
-### [ ] KR-3003 - ISO9660
+### [x] KR-3003 - ISO9660
 
 Abhaengigkeiten: KR-3001
 

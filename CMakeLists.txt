@@ -39,6 +39,7 @@ add_library(katana_runtime STATIC
     src/runtime/exception.cpp
     src/runtime/fpu.cpp
     src/runtime/interrupt.cpp
+    src/runtime/iso9660.cpp
     src/runtime/maple.cpp
     src/runtime/pvr.cpp
     src/runtime/memory.cpp
@@ -342,6 +343,11 @@ add_executable(katana-gdrom-command-tests tests/runtime/gdrom_command_tests.cpp)
 target_link_libraries(katana-gdrom-command-tests PRIVATE katana_runtime)
 katana_enable_warnings(katana-gdrom-command-tests)
 add_test(NAME katana-gdrom-command-tests COMMAND katana-gdrom-command-tests)
+
+add_executable(katana-iso9660-tests tests/runtime/iso9660_tests.cpp)
+target_link_libraries(katana-iso9660-tests PRIVATE katana_runtime)
+katana_enable_warnings(katana-iso9660-tests)
+add_test(NAME katana-iso9660-tests COMMAND katana-iso9660-tests)
 
 add_executable(katana-decoder-tests
     tests/decoder/decoder_tests.cpp

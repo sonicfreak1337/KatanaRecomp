@@ -620,7 +620,7 @@ Fortschritt:
 
 - [x] KR-3001 - Disc- und Dateiquellen-Abstraktion
 - [x] KR-3002 - GD-ROM-Kommandos
-- [ ] KR-3003 - ISO9660
+- [x] KR-3003 - ISO9660
 - [ ] KR-3004 - Asynchrone Reads und Timing
 - [ ] KR-3005 - GDI-Deskriptoren und Trackmodell
 - [ ] KR-3006 - GDI-Quellenintegration
