@@ -5,6 +5,7 @@
 #include "katana/analysis/control_flow_report.hpp"
 #include "katana/analysis/control_flow_analysis.hpp"
 #include "katana/codegen/cpp_emitter.hpp"
+#include "katana/codegen/probe.hpp"
 #include "katana/io/raw_binary_loader.hpp"
 #include "katana/io/elf32_sh_loader.hpp"
 #include "katana/io/project_manifest.hpp"
@@ -1008,7 +1009,7 @@ int emit_phase6_probe_source(
     if (block == function->blocks.end() || block->instructions.empty()) {
         throw std::runtime_error("Der Phase-6-Einstiegsblock ist leer oder fehlt.");
     }
-    if (!function->direct_callees.empty() || !function->indirect_call_sites.empty()) {
+    if (katana::codegen::block_requires_call_dispatch(*block)) {
         throw std::runtime_error(
             "Der Phase-6-Einstiegsblock braucht fuer diese Probe bereits einen Call-Dispatch."
         );

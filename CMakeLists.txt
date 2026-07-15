@@ -102,6 +102,7 @@ add_library(katana_core STATIC
     src/ir/verifier.cpp
     src/codegen/backend.cpp
     src/codegen/cpp_emitter.cpp
+    src/codegen/probe.cpp
 )
 
 target_include_directories(

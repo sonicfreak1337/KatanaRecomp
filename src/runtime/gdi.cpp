@@ -81,6 +81,15 @@ GdiDescriptor parse_gdi_descriptor(const std::filesystem::path& descriptor_path)
     const auto expected_count = parse_integer<std::uint32_t>(descriptor_name, 1u, "Trackanzahl", count_tokens[0]);
     if (expected_count == 0u) { fail(descriptor_name, 1u, "Trackanzahl darf nicht null sein."); }
 
+    std::error_code canonical_error;
+    const auto descriptor_directory = std::filesystem::weakly_canonical(
+        descriptor_path.parent_path(),
+        canonical_error
+    );
+    if (canonical_error) {
+        throw std::invalid_argument("GDI-Descriptorverzeichnis ist nicht aufloesbar.");
+    }
+
     GdiDescriptor result{descriptor_name, {}};
     result.tracks.reserve(expected_count);
     std::size_t line_number = 1u;
@@ -106,7 +115,20 @@ GdiDescriptor parse_gdi_descriptor(const std::filesystem::path& descriptor_path)
         if (relative.empty() || relative.is_absolute()) {
             fail(descriptor_name, line_number, "Track " + std::to_string(track.number) + " braucht einen relativen Dateipfad.");
         }
-        track.resolved_path = (descriptor_path.parent_path() / relative).lexically_normal();
+        track.resolved_path = std::filesystem::weakly_canonical(
+            descriptor_directory / relative,
+            canonical_error
+        );
+        if (canonical_error) {
+            fail(descriptor_name, line_number, "Track " + std::to_string(track.number) +
+                " besitzt einen nicht aufloesbaren Dateipfad.");
+        }
+        const auto contained_path = track.resolved_path.lexically_relative(descriptor_directory);
+        if (contained_path.empty() || contained_path.is_absolute() ||
+            *contained_path.begin() == "..") {
+            fail(descriptor_name, line_number, "Track " + std::to_string(track.number) +
+                " verlaesst das GDI-Descriptorverzeichnis.");
+        }
         std::error_code error;
         if (!std::filesystem::is_regular_file(track.resolved_path, error) || error) {
             fail(descriptor_name, line_number, "Track " + std::to_string(track.number) + " verweist auf eine fehlende Datei.");

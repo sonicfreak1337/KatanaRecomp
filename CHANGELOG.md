@@ -8,6 +8,10 @@
 - KR-3202: Der bestehende C++-Emitter ist als Referenzbackend hinter die modulare Schnittstelle migriert; die bisherige `emit_cpp_program`-API bleibt als kompatibler, getesteter Einstieg erhalten.
 - KR-3203: Backend-Interface-ABI, Runtime-ABI und explizite Faehigkeitsmasken werden vor der Emission geprueft; Fehler nennen Backend sowie den abweichenden Vertrag, bevor Code erzeugt wird.
 
+### Behoben
+
+- Phase-6-Gate-Nacharbeit: Ein unveraenderter CPU-Zustand gilt nicht mehr als Blockausfuehrung, die dokumentierte CCR-Invalidierung ist verpflichtend, nur Calls im kopierten Einstiegsblock blockieren die Probe, und GDI-Tracks koennen weder die Descriptorgrenze noch die vollstaendige Hash- und Cleanup-Pruefung umgehen.
+
 ## [0.31.0] - 2026-07-16
 
 ### Hinzugefuegt

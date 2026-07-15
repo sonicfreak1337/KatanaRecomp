@@ -68,5 +68,12 @@ int main() {
     require(throws<std::runtime_error>([&] { static_cast<void>(parse_gdi_descriptor(descriptor)); }),
         "GDI-Parser akzeptiert ueberlappende Track-LBA-Bereiche.");
 
+    const auto escaped_track = fixture.path.parent_path() / "katana-gdi-escaped-track.bin";
+    write_bytes(escaped_track, 2048u);
+    write_text(descriptor, "1\n1 0 4 2048 ../katana-gdi-escaped-track.bin 0\n");
+    require(throws<std::runtime_error>([&] { static_cast<void>(parse_gdi_descriptor(descriptor)); }),
+        "GDI-Parser akzeptiert einen Track ausserhalb des Descriptorverzeichnisses.");
+    std::filesystem::remove(escaped_track);
+
     std::cout << "KR-3005 GDI-Deskriptoren und Trackmodell erfolgreich.\n";
 }

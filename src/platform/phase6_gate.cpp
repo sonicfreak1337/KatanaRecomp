@@ -22,6 +22,50 @@ namespace {
 
 constexpr std::uint32_t dma_auto_byte_increment = 0x00000410u;
 
+struct ObservableCpuState {
+    std::array<std::uint32_t, runtime::general_register_count> r;
+    std::array<std::uint32_t, runtime::banked_register_count> r_bank;
+    std::array<std::uint32_t, runtime::fpu_register_count> fr;
+    std::array<std::uint32_t, runtime::fpu_register_count> xf;
+    std::uint32_t pc;
+    std::uint32_t pr;
+    std::uint32_t sr;
+    std::uint32_t fpscr;
+    std::uint32_t ssr;
+    std::uint32_t spc;
+    std::uint32_t expevt;
+    std::uint32_t intevt;
+    bool trap_pending;
+    runtime::ExceptionCause exception_cause;
+    bool exception_in_delay_slot;
+    bool sleeping;
+    std::uint64_t prefetch_count;
+
+    [[nodiscard]] bool operator==(const ObservableCpuState&) const noexcept = default;
+};
+
+ObservableCpuState observable_state(const runtime::CpuState& cpu) {
+    return {
+        cpu.r,
+        cpu.r_bank,
+        cpu.fr,
+        cpu.xf,
+        cpu.pc,
+        cpu.pr,
+        cpu.read_sr(),
+        cpu.read_fpscr(),
+        cpu.ssr,
+        cpu.spc,
+        cpu.expevt,
+        cpu.intevt,
+        cpu.trap_pending,
+        cpu.last_exception_cause,
+        cpu.exception_in_delay_slot,
+        cpu.sleeping,
+        cpu.prefetch_count
+    };
+}
+
 bool inside_boot_program(
     const std::uint32_t address,
     const std::size_t boot_size
@@ -84,6 +128,7 @@ Phase6GateReport run_phase6_gate(
         "Programmeinstieg wurde nicht in den geladenen Hauptprogrammbereich gesetzt."
     );
 
+    const auto state_before_execution = observable_state(cpu);
     try {
         execute_block(cpu);
     } catch (const std::runtime_error& error) {
@@ -96,6 +141,10 @@ Phase6GateReport run_phase6_gate(
         !cpu.trap_pending && cpu.last_exception_cause == runtime::ExceptionCause::None,
         "Bootblock endete mit einer CPU-Ausnahme."
     );
+    require_gate(
+        observable_state(cpu) != state_before_execution,
+        "Block-Executor hat keinen beobachtbaren CPU-Zustand veraendert."
+    );
     report.last_guest_pc = cpu.pc;
     require_gate(
         inside_boot_program(report.last_guest_pc, disc.boot_file.size()),
@@ -105,6 +154,10 @@ Phase6GateReport run_phase6_gate(
     report.executed_blocks = 1u;
     report.guest_cycles = block_instruction_count;
     report.cache_invalidations = cache_control->instruction_invalidation_count();
+    require_gate(
+        report.cache_invalidations != 0u,
+        "verpflichtende CCR-Instruktionscache-Invalidierung fehlt."
+    );
 
     runtime::EventScheduler scheduler;
     runtime::Memory platform_memory(256u, runtime::MemoryAlignmentPolicy::Strict);

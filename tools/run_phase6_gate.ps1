@@ -29,10 +29,37 @@ if ([string]::IsNullOrWhiteSpace($ReportPath)) {
     $ReportPath = [IO.Path]::GetFullPath((Join-Path $repo $ReportPath))
 }
 
+function Get-GdiReferencedFiles {
+    param([string]$Descriptor)
+    $directory = [IO.Path]::GetFullPath((Split-Path -Parent $Descriptor))
+    $files = [Collections.Generic.List[string]]::new()
+    $files.Add([IO.Path]::GetFullPath($Descriptor))
+    $lines = Get-Content -LiteralPath $Descriptor
+    if ($lines.Count -lt 2) { throw 'Der GDI-Descriptor enthaelt keine Trackzeilen.' }
+    foreach ($line in $lines[1..($lines.Count - 1)]) {
+        if ([string]::IsNullOrWhiteSpace($line)) { continue }
+        if ($line -notmatch '^\s*\d+\s+\d+\s+\d+\s+\d+\s+(?:"([^"]+)"|(\S+))\s+\d+\s*$') {
+            throw 'Eine GDI-Trackzeile konnte fuer die Quellschutzpruefung nicht gelesen werden.'
+        }
+        $relative = if ($Matches[1]) { $Matches[1] } else { $Matches[2] }
+        $resolved = [IO.Path]::GetFullPath((Join-Path $directory $relative))
+        $relativeCheck = [IO.Path]::GetRelativePath($directory, $resolved)
+        if ([IO.Path]::IsPathRooted($relativeCheck) -or
+            $relativeCheck -eq '..' -or $relativeCheck.StartsWith("..$([IO.Path]::DirectorySeparatorChar)")) {
+            throw 'Ein GDI-Track verlaesst das Descriptorverzeichnis.'
+        }
+        if (-not (Test-Path -LiteralPath $resolved -PathType Leaf)) {
+            throw 'Eine referenzierte GDI-Trackdatei fehlt.'
+        }
+        $files.Add($resolved)
+    }
+    return $files | Sort-Object -Unique
+}
+
 function Get-DiscSnapshot {
-    param([string]$Directory)
-    $rows = foreach ($file in Get-ChildItem -LiteralPath $Directory -File | Sort-Object Name) {
-        "$($file.Name):$((Get-FileHash -LiteralPath $file.FullName -Algorithm SHA256).Hash)"
+    param([string[]]$Files)
+    $rows = foreach ($file in $Files) {
+        "${file}:$((Get-FileHash -LiteralPath $file -Algorithm SHA256).Hash)"
     }
     return $rows -join '|'
 }
@@ -93,7 +120,8 @@ foreach ($required in @($cli, $coreLibrary, $runtimeLibrary)) {
 }
 
 New-Item -ItemType Directory -Path $gateDirectory -Force | Out-Null
-$before = Get-DiscSnapshot -Directory $discDirectory
+$discFiles = @(Get-GdiReferencedFiles -Descriptor $gdi)
+$before = Get-DiscSnapshot -Files $discFiles
 $temporary = @($probeSource, $probeObject, $probeExe, $firstReport, $secondReport)
 try {
     & $cli phase6-probe-source $gdi $probeSource
@@ -126,14 +154,15 @@ try {
         $report.executed_blocks -lt 1 -or $report.guest_cycles -lt 1 -or
         $report.scheduler_events -lt 1 -or $report.gdrom_completions -lt 1 -or
         $report.tmu_events -lt 1 -or $report.dma_events -lt 1 -or
-        $report.interrupts_delivered -lt 1 -or $report.silent_failures -ne 0) {
+        $report.interrupts_delivered -lt 1 -or $report.cache_invalidations -lt 1 -or
+        $report.silent_failures -ne 0) {
         throw 'Der redigierte Bericht erfuellt die Phase-6-Kriterien nicht.'
     }
     $sensitive = @(
         $gdi,
         $discDirectory,
         (Split-Path -Leaf $gdi)
-    ) + (Get-ChildItem -LiteralPath $discDirectory -File | ForEach-Object Name)
+    ) + ($discFiles | ForEach-Object { @($_, (Split-Path -Leaf $_)) })
     foreach ($value in $sensitive) {
         if (-not [string]::IsNullOrEmpty($value) -and $jsonText.Contains($value)) {
             throw 'Der Gate-Bericht enthaelt einen lokalen Pfad oder Disc-Dateinamen.'
@@ -145,7 +174,7 @@ try {
     }
     Copy-Item -LiteralPath $firstReport -Destination $ReportPath -Force
 
-    $after = Get-DiscSnapshot -Directory $discDirectory
+    $after = Get-DiscSnapshot -Files $discFiles
     if ($before -ne $after) {
         throw 'Die lokale Disc-Quelle wurde waehrend des Gates veraendert.'
     }
@@ -154,9 +183,18 @@ try {
     Write-Output 'disc_unchanged=true'
     Write-Output "report=$ReportPath"
 } finally {
+    $cleanupFailures = [Collections.Generic.List[string]]::new()
     foreach ($path in $temporary) {
-        Remove-Item -LiteralPath $path -Force -ErrorAction SilentlyContinue
+        if (Test-Path -LiteralPath $path) {
+            try { Remove-Item -LiteralPath $path -Force -ErrorAction Stop }
+            catch { $cleanupFailures.Add($path) }
+        }
     }
-    Get-ChildItem -LiteralPath $gateDirectory -File -Filter 'probe-*.pdb' -ErrorAction SilentlyContinue |
-        Remove-Item -Force -ErrorAction SilentlyContinue
+    foreach ($pdb in Get-ChildItem -LiteralPath $gateDirectory -File -Filter 'probe-*.pdb' -ErrorAction Stop) {
+        try { Remove-Item -LiteralPath $pdb.FullName -Force -ErrorAction Stop }
+        catch { $cleanupFailures.Add($pdb.FullName) }
+    }
+    if ($cleanupFailures.Count -ne 0) {
+        throw "Temporaere kommerzielle Probe-Artefakte konnten nicht entfernt werden: $($cleanupFailures -join ', ')"
+    }
 }

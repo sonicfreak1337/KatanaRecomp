@@ -1,5 +1,7 @@
+#include "katana/codegen/probe.hpp"
 #include "katana/platform/dreamcast_disc.hpp"
 #include "katana/platform/phase6_gate.hpp"
+#include "katana/runtime/cache_control.hpp"
 
 #include <algorithm>
 #include <cstdlib>
@@ -148,6 +150,16 @@ void write_fixture(const std::filesystem::path& directory) {
 }
 
 void execute_synthetic_block(katana::runtime::CpuState& cpu) {
+    cpu.memory.write_u32(
+        katana::runtime::sh4_cache_control_address,
+        katana::runtime::Sh4CacheControl::instruction_invalidate
+    );
+    cpu.pc += 2u;
+}
+
+void execute_no_op(katana::runtime::CpuState&) {}
+
+void execute_without_cache_invalidation(katana::runtime::CpuState& cpu) {
     cpu.pc += 2u;
 }
 
@@ -155,6 +167,19 @@ void execute_synthetic_block(katana::runtime::CpuState& cpu) {
 
 int main() {
     using namespace katana::platform;
+
+    katana::ir::BasicBlock entry_block;
+    entry_block.instructions.push_back({});
+    entry_block.instructions.front().operation = katana::ir::Operation::Nop;
+    katana::ir::BasicBlock later_block;
+    later_block.instructions.push_back({});
+    later_block.instructions.front().operation = katana::ir::Operation::Call;
+    require(
+        !katana::codegen::block_requires_call_dispatch(entry_block) &&
+            katana::codegen::block_requires_call_dispatch(later_block),
+        "Phase-6-Probe verwechselt Calls spaeterer Bloecke mit dem kopierten Einstiegsblock."
+    );
+
     FixtureDirectory fixture;
     write_fixture(fixture.path);
 
@@ -182,7 +207,8 @@ int main() {
             first.executed_blocks == 1u && first.guest_cycles == 1u &&
             first.scheduler_events != 0u && first.gdrom_completions == 1u &&
             first.tmu_events != 0u && first.dma_events == 1u &&
-            first.interrupts_delivered == 1u && first.silent_failures == 0u,
+            first.interrupts_delivered == 1u && first.cache_invalidations == 1u &&
+            first.silent_failures == 0u,
         "Phase-6-Gate erreicht die messbaren Plattformkriterien nicht."
     );
     require(
@@ -197,6 +223,26 @@ int main() {
     );
 
     std::vector<std::uint8_t> invalid(0x70u, static_cast<std::uint8_t>(' '));
+    require(
+        throws<std::runtime_error>([&] {
+            static_cast<void>(run_phase6_gate(
+                fixture.path / "disc.gdi",
+                execute_no_op,
+                1u
+            ));
+        }),
+        "Phase-6-Gate akzeptiert einen Executor ohne beobachtbare Blockausfuehrung."
+    );
+    require(
+        throws<std::runtime_error>([&] {
+            static_cast<void>(run_phase6_gate(
+                fixture.path / "disc.gdi",
+                execute_without_cache_invalidation,
+                1u
+            ));
+        }),
+        "Phase-6-Gate akzeptiert eine fehlende CCR-Invalidierung."
+    );
     require(
         throws<std::invalid_argument>([&] {
             static_cast<void>(parse_dreamcast_boot_metadata(invalid));
