@@ -47,6 +47,7 @@ Thumbs.db
 
 # Lokale Migrations- und Sicherungsdateien
 .katana_backup_*/
+/backups/
 KatanaRecomp_Meilenstein*.ps1
 KatanaRecomp_*Fix.ps1
 KatanaRecomp_Encoding_*.ps1

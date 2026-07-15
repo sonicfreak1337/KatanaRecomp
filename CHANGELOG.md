@@ -13,6 +13,10 @@
 - KR-3005: Der `.gdi`-Parser liest quoted relative Trackpfade, Typ, Sektorformat, Offset und Reihenfolge in ein Modell mit Zeilenprovenienz und weist fehlende Dateien, Trackkonflikte sowie unplausible Dateigroessen read-only ab.
 - KR-3006: GDI-Mehrdateiquellen liefern pfadunabhaengige Inhaltsidentitaet, Raw-Audiotracks und normalisierte 2048-Byte-Datensektoren ueber dieselbe DiscSource-, GD-ROM- und ISO9660-Kette; der Read-only-Vertrag ist dokumentiert und getestet.
 
+### Geaendert
+
+- Alte versionierte `.katana_backup_*`-Migrationssnapshots wurden aus dem aktuellen Repository-Baum entfernt. Die Arbeitsregeln erlauben nur noch genau ein unversioniertes Quellbackup des neuesten committed Stands und schliessen Build-, Referenz- sowie private Spieldaten aus.
+
 ### Behoben
 
 - PVR-Framebuffer-Geometrie, VRAM-Endadresse und RGBA-Allokationsgroesse verwenden nun explizit gepruefte `size_t`-Multiplikationen und -Additionen; kuenstlich grosse Eingaben koennen die Stride- oder Grenzpruefung nicht mehr per Integerueberlauf umgehen.

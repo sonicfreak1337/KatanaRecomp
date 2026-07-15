@@ -235,6 +235,26 @@ Nicht committen:
 
 Generierte Quellen werden nur committed, wenn die Roadmap dies fuer ein reproduzierbares Beispiel ausdruecklich verlangt. Normalerweise werden sie waehrend des Builds erzeugt.
 
+## Backup-Regel
+
+- Im Arbeitsbereich darf immer genau ein lokales KatanaRecomp-Quellbackup
+  existieren: ein Snapshot des neuesten committed Stands.
+- Vor dem Erzeugen eines neuen Backups werden alle aelteren KatanaRecomp-Backups
+  im festgelegten Backup-Verzeichnis entfernt. Zielpfad und Dateiliste muessen
+  vorher geprueft werden.
+- Der Dateiname nennt mindestens Projektversion und Commit-ID. Das Backup wird
+  aus `HEAD` erzeugt, damit keine uncommitteten Aenderungen oder lokalen Daten
+  hineingeraten.
+- Backups liegen ausserhalb des Repository-Arbeitsbaums oder in einem ignorierten
+  `backups/`-Verzeichnis. `.katana_backup_*`-Verzeichnisse und andere
+  Sicherungskopien werden niemals versioniert.
+- Ein Quellbackup enthaelt weder `.git`, Build- und Generatorausgaben,
+  Toolchains, Referenz-Repositories noch private BIOS-, Flash-, Disc-, Capture-
+  oder Trace-Daten.
+- Git bleibt die Versionshistorie. Eine Bereinigung des aktuellen Baums darf
+  alte Backup-Dateien entfernen; ein destruktives Umschreiben bereits
+  veroeffentlichter Historie erfordert einen ausdruecklichen separaten Auftrag.
+
 ## Stil
 
 - C++20
