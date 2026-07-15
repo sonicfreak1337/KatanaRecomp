@@ -285,6 +285,11 @@ target_link_libraries(katana-maple-controller-tests PRIVATE katana_runtime)
 katana_enable_warnings(katana-maple-controller-tests)
 add_test(NAME katana-maple-controller-tests COMMAND katana-maple-controller-tests)
 
+add_executable(katana-maple-vmu-tests tests/runtime/maple_vmu_tests.cpp)
+target_link_libraries(katana-maple-vmu-tests PRIVATE katana_runtime)
+katana_enable_warnings(katana-maple-vmu-tests)
+add_test(NAME katana-maple-vmu-tests COMMAND katana-maple-vmu-tests)
+
 add_executable(katana-decoder-tests
     tests/decoder/decoder_tests.cpp
 )

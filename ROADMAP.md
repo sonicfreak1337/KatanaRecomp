@@ -544,7 +544,7 @@ Fortschritt:
 
 - [x] KR-2701 - Maple-Bus
 - [x] KR-2702 - Controller und deterministische Host-Eingabe
-- [ ] KR-2703 - VMU-Minimum
+- [x] KR-2703 - VMU-Minimum
 
 Enthalten:
 

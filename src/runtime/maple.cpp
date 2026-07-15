@@ -52,6 +52,77 @@ std::uint64_t MapleControllerDevice::sampled_frames() const noexcept {
     return next_frame_;
 }
 
+MapleVmuDevice::MapleVmuDevice(const std::span<const std::uint8_t> image) {
+    if (!image.empty() && image.size() != vmu_storage_size) {
+        throw std::invalid_argument("Ein VMU-Abbild muss leer oder exakt 128 KiB gross sein.");
+    }
+    source_.assign(vmu_storage_size, 0xFFu);
+    if (!image.empty()) {
+        source_.assign(image.begin(), image.end());
+    }
+    working_ = source_;
+}
+
+MapleResponse MapleVmuDevice::transact(const MapleRequest& request) {
+    constexpr std::uint32_t memory_function = 0x02000000u;
+    switch (request.command) {
+        case MapleCommand::DeviceRequest:
+            return {MapleResponseCode::DeviceInfo, {memory_function, 0u, 0u}};
+        case MapleCommand::BlockRead:
+            return read_block(request);
+        case MapleCommand::BlockWrite:
+            return write_block(request);
+        default:
+            return {MapleResponseCode::UnknownCommand, {}};
+    }
+}
+
+MapleResponse MapleVmuDevice::read_block(const MapleRequest& request) const {
+    constexpr std::uint32_t memory_function = 0x02000000u;
+    if (request.payload.size() != 1u || request.payload[0] >= vmu_block_count) {
+        throw std::out_of_range("Ungueltige VMU-Blockleseanfrage.");
+    }
+    const auto block = static_cast<std::size_t>(request.payload[0]);
+    const auto start = block * vmu_block_size;
+    std::vector<std::uint32_t> payload;
+    payload.reserve(2u + vmu_block_size / 4u);
+    payload.push_back(memory_function);
+    payload.push_back(static_cast<std::uint32_t>(block));
+    for (std::size_t offset = 0u; offset < vmu_block_size; offset += 4u) {
+        payload.push_back(
+            static_cast<std::uint32_t>(working_[start + offset]) |
+            (static_cast<std::uint32_t>(working_[start + offset + 1u]) << 8u) |
+            (static_cast<std::uint32_t>(working_[start + offset + 2u]) << 16u) |
+            (static_cast<std::uint32_t>(working_[start + offset + 3u]) << 24u)
+        );
+    }
+    return {MapleResponseCode::DataTransfer, std::move(payload)};
+}
+
+MapleResponse MapleVmuDevice::write_block(const MapleRequest& request) {
+    constexpr std::size_t words_per_block = vmu_block_size / 4u;
+    if (request.payload.size() != 1u + words_per_block || request.payload[0] >= vmu_block_count) {
+        throw std::invalid_argument("Ungueltige VMU-Blockschreibanfrage.");
+    }
+    if (write_protected_) {
+        throw std::runtime_error("VMU ist schreibgeschuetzt.");
+    }
+    const auto start = static_cast<std::size_t>(request.payload[0]) * vmu_block_size;
+    for (std::size_t word_index = 0u; word_index < words_per_block; ++word_index) {
+        const auto word = request.payload[word_index + 1u];
+        for (std::size_t byte = 0u; byte < 4u; ++byte) {
+            working_[start + word_index * 4u + byte] =
+                static_cast<std::uint8_t>(word >> (byte * 8u));
+        }
+    }
+    return {MapleResponseCode::Ack, {}};
+}
+
+void MapleVmuDevice::set_write_protected(const bool value) noexcept { write_protected_ = value; }
+bool MapleVmuDevice::write_protected() const noexcept { return write_protected_; }
+std::uint8_t MapleVmuDevice::read_byte(const std::size_t offset) const { return working_.at(offset); }
+std::uint8_t MapleVmuDevice::source_byte(const std::size_t offset) const { return source_.at(offset); }
+
 std::size_t MapleBus::slot(const std::uint8_t port, const std::uint8_t unit) {
     if (port >= maple_port_count || unit >= maple_units_per_port) {
         throw std::out_of_range("Maple-Port oder -Unit liegt ausserhalb des Busses.");

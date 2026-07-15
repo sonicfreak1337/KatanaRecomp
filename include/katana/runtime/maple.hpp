@@ -84,6 +84,26 @@ private:
     std::uint64_t next_frame_ = 0u;
 };
 
+inline constexpr std::size_t vmu_block_size = 512u;
+inline constexpr std::size_t vmu_block_count = 256u;
+inline constexpr std::size_t vmu_storage_size = vmu_block_size * vmu_block_count;
+
+class MapleVmuDevice final : public MapleDevice {
+public:
+    explicit MapleVmuDevice(std::span<const std::uint8_t> image = {});
+    [[nodiscard]] MapleResponse transact(const MapleRequest& request) override;
+    void set_write_protected(bool value) noexcept;
+    [[nodiscard]] bool write_protected() const noexcept;
+    [[nodiscard]] std::uint8_t read_byte(std::size_t offset) const;
+    [[nodiscard]] std::uint8_t source_byte(std::size_t offset) const;
+private:
+    [[nodiscard]] MapleResponse read_block(const MapleRequest& request) const;
+    [[nodiscard]] MapleResponse write_block(const MapleRequest& request);
+    std::vector<std::uint8_t> source_;
+    std::vector<std::uint8_t> working_;
+    bool write_protected_ = false;
+};
+
 struct MapleTransactionRecord {
     std::uint64_t sequence = 0u;
     std::uint8_t port = 0u;

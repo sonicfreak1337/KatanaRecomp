@@ -884,7 +884,7 @@ Abhaengigkeiten: KR-2601
 
 Abhaengigkeiten: KR-2701
 
-### [ ] KR-2703 - VMU-Minimum
+### [x] KR-2703 - VMU-Minimum
 
 Abhaengigkeiten: KR-2701
 
