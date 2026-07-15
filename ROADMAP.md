@@ -63,6 +63,7 @@ Sie ist absichtlich in kleine, voneinander abhaengige Releases und Task-IDs zerl
 | Codegen und Buildsystem | 0.32 bis 0.34 | modulare Backends, Cache, indirekter Dispatch |
 | Werkzeuge und Qualitaet | 0.35 bis 0.37 | Manifest, Diagnostik, CI, Fuzzing und reproduzierbare Builds |
 | Kompatibilitaet und Leistung | 0.38 bis 0.40 | Homebrew-Vertical-Slice und erster oeffentlicher Pre-Alpha-Stand |
+| Desktop-GUI und Quellworkflow | 0.41 bis 0.44 | vollstaendiger Alpha-Workflow fuer Projektanlage, `.gdi`-Quellen und Analyse |
 | Alpha | 0.50.0 | zusammenhaengende Dreamcast-Programme laufen reproduzierbar |
 | Beta | 0.75.0 | ausgewaehlte reale Programme sind spielbar und debuggbar |
 | Stabil | 1.0.0 | dokumentierter, reproduzierbarer und stabiler Framework-Release |
@@ -508,12 +509,12 @@ Release-Gate:
 
 Fortschritt:
 
-- [ ] KR-2601 - Plattformkonfiguration und Bootzustand
-- [ ] KR-2602 - Homebrew-Raw- und ELF-Start
-- [ ] KR-2603 - Minimales Plattformlogging
-- [?] KR-2604 - Firmware-Betriebsart und BIOS-ABI festlegen
-- [ ] KR-2605 - PREF und bootrelevante Cacheeffekte
-- [ ] KR-2606 - Zustandsbehaftetes Flash-Geraetemodell
+- [x] KR-2601 - Plattformkonfiguration und Bootzustand
+- [x] KR-2602 - Homebrew-Raw- und ELF-Start
+- [x] KR-2603 - Minimales Plattformlogging
+- [x] KR-2604 - Firmware-Betriebsart und BIOS-ABI festlegen
+- [x] KR-2605 - PREF und bootrelevante Cacheeffekte
+- [x] KR-2606 - Zustandsbehaftetes Flash-Geraetemodell
 
 Enthalten:
 
@@ -568,6 +569,7 @@ Enthalten:
 Enthalten:
 
 - Image- und Dateiquellen-Abstraktion
+- `.gdi`-Deskriptoren mit relativer Trackauflosung und validierter Mehrdateiquelle
 - kein Disc-Image im Repository
 - relevante GD-ROM-Kommandos
 - ISO9660-Lesezugriff
@@ -593,6 +595,7 @@ Release-Gate fuer Phase 6:
 - Plattformmodule koennen einzeln getestet werden
 - der normale Homebrew-Pfad benoetigt kein proprietaeres BIOS- oder Flash-Abbild
 - optionale Firmwarepfade veraendern niemals das vom Nutzer bereitgestellte Quellabbild
+- `.gdi`-Quellen koennen ohne manuelle Trackumbauten geladen, validiert und ueber dieselbe Disc-Abstraktion wie andere Dateiquellen genutzt werden
 
 ## Phase 7: Codegenerator und Dispatch
 
@@ -872,6 +875,57 @@ Enthalten:
 - automatisierter Audit, dass keine Firmwarebytes, extrahierten Assets, persoenlichen Flashdaten oder lokalen Pfade im Paket liegen
 - veroeffentlichter Homebrew-Kompatibilitaetsbericht
 
+## Phase 10: Desktop-GUI und Alpha-Workflow
+
+Die Erkenntnisse aus BIOS-Analyse, Flycast und dcrecomp beeinflussen diese Phase direkt:
+
+- die GUI darf keine eigene Quell- oder Laufzeitsemantik duplizieren, sondern muss denselben Manifest-, Analyse-, Dispatch- und Firmwareprofilpfad wie CLI und Automatisierung verwenden
+- `.gdi`-Quellen muessen als erstklassiger Mehrdatei-Einstieg mit transparenter Trackprovenienz, klaren Fehlern und Null-Write-Garantie behandelt werden
+- Firmware-, Alias-, ROM-RAM- und Schedulerdiagnosen muessen fuer Alpha auch ohne CLI nutzbar, aber weiterhin datensparsam und read-only bleiben
+
+### v0.41.0 - GUI-Grundlage und Anwendungsdienste
+
+Enthalten:
+
+- Desktop-Framework- und Packaging-Entscheidung fuer den unterstuetzten Alpha-Scope
+- gemeinsamer Anwendungsdienst ueber CLI, GUI und Automatisierung
+- Hauptfenster, Navigation, Projekteinstellungen und persistente Nutzerkonfiguration
+- stabiler Aufrufpfad fuer Analyse-, Codegen-, Build- und Run-Jobs ohne doppelte Geschaeftslogik
+
+### v0.42.0 - Projekt- und Quellenworkflow
+
+Enthalten:
+
+- Projekt anlegen, oeffnen, speichern und wiederherstellen
+- Dateiquellen fuer Raw-, ELF- und `.gdi`-Einstiege
+- `.gdi`-Trackinspektor mit relativer Pfadauflosung, Dateigroessenpruefung, Sektorformatdiagnosen und Vorschau der Quellprovenienz
+- Manifest-, Firmwareprofil- und Override-Bearbeitung ueber denselben Datenvertrag wie die CLI
+
+### v0.43.0 - Analyse-, Build- und Diagnostik-Workflow
+
+Enthalten:
+
+- Jobs fuer Analyse, Codegen, Build und optionalen Lauf aus der GUI starten, abbrechen und wiederaufnehmen
+- Fortschritt, Logs, Fehler, Warnungen und redigierte Firmwarediagnosen sichtbar machen
+- Ansichten fuer Funktionen, Quellen-/Segmentzuordnung, Dispatch-/Fallbackereignisse und Invalidierungsprovenienz
+- keine Hostpfade, Firmwarebytes oder sensiblen Flashfelder in exportierten Berichten oder Standardansichten
+
+### v0.44.0 - Alpha-Readiness fuer GUI und GDI
+
+Enthalten:
+
+- End-to-End-Automatisierung fuer GUI-Hauptpfade unter Windows und Linux
+- synthetische `.gdi`-Fixtures fuer Positiv-, Negativ- und Recovery-Faelle
+- DPI-, Tastatur-, Fehlerrecovery- und Packaging-Haertung fuer den Alpha-Workflow
+- dokumentierter Standardpfad, bei dem neue Nutzer Alpha-relevante Projekte ohne CLI-Zwang anlegen und ausfuehren koennen
+
+Release-Gate fuer Phase 10:
+
+- die GUI deckt den Alpha-Hauptworkflow fuer Projektanlage, Quellenwahl, Analyse, Build und Diagnostik vollstaendig ab
+- `.gdi`-Quellen sind in GUI, CLI und Automatisierung dieselbe validierte Quelle und besitzen dieselben Fehlermeldungen und Identitaetsregeln
+- ein fehlerhafter Track, Descriptor oder relativer Pfad erzeugt reproduzierbare, nutzbare Diagnosen statt stiller Ausweichpfade
+- GUI- und CLI-Lauf fuer identische Projekte erzeugen dieselben Manifeste, Jobs und Ergebnisartefakte
+
 ## Alpha-Gate: v0.50.0
 
 Voraussetzungen:
@@ -887,6 +941,8 @@ Voraussetzungen:
 - mindestens ein zusammenhaengender Homebrew-Vertical-Slice
 - synthetischer Firmware-Handoff ohne proprietaere Daten
 - stabile Manifestversion
+- vollstaendige Desktop-GUI fuer den Alpha-Hauptworkflow ohne CLI-Zwang
+- `.gdi`-Dateien koennen als offizielle Quelle geladen, validiert und reproduzierbar verarbeitet werden
 - CI auf Windows und Linux
 - reproduzierbare Builds
 
@@ -934,7 +990,6 @@ Moegliche Bereiche:
 - Netzwerkhardware
 - Modem und Broadband Adapter
 - Tooling fuer Modding und Forschung
-- optionale grafische Analyseoberflaeche
 
 ## Nicht-Ziele vor v1.0
 
