@@ -2,6 +2,7 @@
 
 #include "katana/runtime/dreamcast_memory.hpp"
 
+#include <limits>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -170,6 +171,66 @@ PvrTaFrame TileAccelerator::finish_frame() {
 }
 
 bool TileAccelerator::list_open() const noexcept { return list_open_; }
+
+PvrTexture decode_pvr_texture(
+    const std::span<const std::uint8_t> source,
+    const std::uint32_t width,
+    const std::uint32_t height,
+    const PvrTextureFormat format
+) {
+    if (width == 0u || height == 0u) {
+        throw std::invalid_argument("PVR-Texturen brauchen eine von null verschiedene Geometrie.");
+    }
+    const auto maximum = std::numeric_limits<std::size_t>::max();
+    if (static_cast<std::size_t>(height) > maximum / width) {
+        throw std::out_of_range("PVR-Texturgeometrie ist zu gross.");
+    }
+    const auto pixels = static_cast<std::size_t>(width) * height;
+    if (pixels > maximum / 4u || source.size() < pixels * 2u) {
+        throw std::out_of_range("PVR-Textur liegt ausserhalb der Quelldaten.");
+    }
+    PvrTexture texture{width, height, std::vector<std::uint8_t>(pixels * 4u)};
+    for (std::size_t index = 0u; index < pixels; ++index) {
+        const auto pixel = static_cast<std::uint16_t>(source[index * 2u]) |
+            static_cast<std::uint16_t>(source[index * 2u + 1u] << 8u);
+        const auto destination = index * 4u;
+        if (format == PvrTextureFormat::Rgb565) {
+            texture.rgba[destination] = expand5(static_cast<std::uint16_t>((pixel >> 11u) & 0x1Fu));
+            texture.rgba[destination + 1u] = expand6(static_cast<std::uint16_t>((pixel >> 5u) & 0x3Fu));
+            texture.rgba[destination + 2u] = expand5(static_cast<std::uint16_t>(pixel & 0x1Fu));
+            texture.rgba[destination + 3u] = 0xFFu;
+        } else if (format == PvrTextureFormat::Argb1555) {
+            texture.rgba[destination] = expand5(static_cast<std::uint16_t>((pixel >> 10u) & 0x1Fu));
+            texture.rgba[destination + 1u] = expand5(static_cast<std::uint16_t>((pixel >> 5u) & 0x1Fu));
+            texture.rgba[destination + 2u] = expand5(static_cast<std::uint16_t>(pixel & 0x1Fu));
+            texture.rgba[destination + 3u] = (pixel & 0x8000u) != 0u ? 0xFFu : 0u;
+        } else {
+            const auto expand4 = [](const std::uint16_t value) {
+                return static_cast<std::uint8_t>((value << 4u) | value);
+            };
+            texture.rgba[destination] = expand4(static_cast<std::uint16_t>((pixel >> 8u) & 0xFu));
+            texture.rgba[destination + 1u] = expand4(static_cast<std::uint16_t>((pixel >> 4u) & 0xFu));
+            texture.rgba[destination + 2u] = expand4(static_cast<std::uint16_t>(pixel & 0xFu));
+            texture.rgba[destination + 3u] = expand4(static_cast<std::uint16_t>((pixel >> 12u) & 0xFu));
+        }
+    }
+    return texture;
+}
+
+void RecordingPvrRenderBackend::render(
+    const PvrTaFrame& frame,
+    const std::span<const PvrTexture> textures
+) {
+    last_frame_ = frame;
+    last_textures_.assign(textures.begin(), textures.end());
+    ++submitted_frames_;
+}
+
+std::uint64_t RecordingPvrRenderBackend::submitted_frames() const noexcept { return submitted_frames_; }
+const PvrTaFrame& RecordingPvrRenderBackend::last_frame() const noexcept { return last_frame_; }
+const std::vector<PvrTexture>& RecordingPvrRenderBackend::last_textures() const noexcept {
+    return last_textures_;
+}
 
 std::shared_ptr<PvrRegisterFile> map_pvr_registers(Memory& memory) {
     auto registers = std::make_shared<PvrRegisterFile>();

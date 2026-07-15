@@ -568,7 +568,7 @@ Fortschritt:
 - [x] KR-2801 - PVR-Registerminimum
 - [x] KR-2802 - Framebuffer-Ausgabe
 - [x] KR-2803 - Tile-Accelerator-Grundpfad
-- [ ] KR-2804 - Texturformate und Render-Backend
+- [x] KR-2804 - Texturformate und Render-Backend
 
 Enthalten:
 

@@ -119,6 +119,43 @@ private:
     bool list_open_ = false;
 };
 
+enum class PvrTextureFormat : std::uint8_t {
+    Rgb565,
+    Argb1555,
+    Argb4444
+};
+
+struct PvrTexture {
+    std::uint32_t width = 0u;
+    std::uint32_t height = 0u;
+    std::vector<std::uint8_t> rgba;
+};
+
+[[nodiscard]] PvrTexture decode_pvr_texture(
+    std::span<const std::uint8_t> source,
+    std::uint32_t width,
+    std::uint32_t height,
+    PvrTextureFormat format
+);
+
+class PvrRenderBackend {
+public:
+    virtual ~PvrRenderBackend() = default;
+    virtual void render(const PvrTaFrame& frame, std::span<const PvrTexture> textures) = 0;
+};
+
+class RecordingPvrRenderBackend final : public PvrRenderBackend {
+public:
+    void render(const PvrTaFrame& frame, std::span<const PvrTexture> textures) override;
+    [[nodiscard]] std::uint64_t submitted_frames() const noexcept;
+    [[nodiscard]] const PvrTaFrame& last_frame() const noexcept;
+    [[nodiscard]] const std::vector<PvrTexture>& last_textures() const noexcept;
+private:
+    std::uint64_t submitted_frames_ = 0u;
+    PvrTaFrame last_frame_;
+    std::vector<PvrTexture> last_textures_;
+};
+
 [[nodiscard]] std::shared_ptr<PvrRegisterFile> map_pvr_registers(Memory& memory);
 
 } // namespace katana::runtime

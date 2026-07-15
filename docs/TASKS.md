@@ -900,7 +900,7 @@ Abhaengigkeiten: KR-2801
 
 Abhaengigkeiten: KR-2801
 
-### [ ] KR-2804 - Texturformate und Render-Backend
+### [x] KR-2804 - Texturformate und Render-Backend
 
 Abhaengigkeiten: KR-2803
 
