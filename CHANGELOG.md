@@ -11,6 +11,7 @@
 - KR-3105: Eine gemeinsame Medienuhr erzeugt driftfreie rationale Video- und Audiokadenzen auf Gastzyklen, typisierte Backend-Callbacks, stabile Gleichzyklusreihenfolge sowie sichtbaren Budget-, Stop-, Reset- und Fehlerzustand.
 - Das lokale Phase-6-Gate erzeugt aus dem allgemein ermittelten Disc-Bootblock eine temporaere, wirklich kompilierte Einblock-Probe, fuehrt sie mit festem Gastzyklusbudget aus und schreibt einen redigierten, deterministischen JSON-Bericht. Scheduler, echter asynchroner GDI-Read, TMU, DMA, CCR-Invalidierung und Abschlussinterrupt werden messbar erfasst.
 - Ein minimales SH-4-CCR-Modell stellt den fuer den Disc-Boot beobachteten 32-Bit-Registerzugriff bereit, weist reservierte Bits und falsche Breiten sichtbar ab und zaehlt die selbstloeschende Instruktionscache-Invalidierung.
+- Ein frei verteilbarer synthetischer Homebrew-Vertical-Slice bootet ueber den normalen Plattformpfad und weist Eingabe, ein farbiges PVR-Primitiv sowie nicht-stummes AICA-Audio in einem gemeinsamen gastzyklusbegrenzten Lauf nach.
 
 ### Geaendert
 

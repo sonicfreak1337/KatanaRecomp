@@ -294,6 +294,16 @@ target_link_libraries(katana-dreamcast-boot-tests PRIVATE katana_core katana_run
 katana_enable_warnings(katana-dreamcast-boot-tests)
 add_test(NAME katana-dreamcast-boot-tests COMMAND katana-dreamcast-boot-tests)
 
+add_executable(katana-dreamcast-vertical-slice-tests
+    tests/platform/dreamcast_vertical_slice_tests.cpp
+)
+target_link_libraries(katana-dreamcast-vertical-slice-tests PRIVATE katana_core katana_runtime)
+katana_enable_warnings(katana-dreamcast-vertical-slice-tests)
+add_test(
+    NAME katana-dreamcast-vertical-slice-tests
+    COMMAND katana-dreamcast-vertical-slice-tests
+)
+
 add_executable(katana-phase6-gate-tests tests/platform/phase6_gate_tests.cpp)
 target_link_libraries(katana-phase6-gate-tests PRIVATE katana_core katana_runtime)
 katana_enable_warnings(katana-phase6-gate-tests)
