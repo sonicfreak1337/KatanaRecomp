@@ -34,6 +34,7 @@ endfunction()
 
 add_library(katana_runtime STATIC
     src/runtime/aica.cpp
+    src/runtime/disc.cpp
     src/runtime/dreamcast_memory.cpp
     src/runtime/exception.cpp
     src/runtime/fpu.cpp
@@ -331,6 +332,11 @@ add_executable(katana-aica-execution-tests tests/runtime/aica_execution_tests.cp
 target_link_libraries(katana-aica-execution-tests PRIVATE katana_runtime)
 katana_enable_warnings(katana-aica-execution-tests)
 add_test(NAME katana-aica-execution-tests COMMAND katana-aica-execution-tests)
+
+add_executable(katana-disc-source-tests tests/runtime/disc_source_tests.cpp)
+target_link_libraries(katana-disc-source-tests PRIVATE katana_runtime)
+katana_enable_warnings(katana-disc-source-tests)
+add_test(NAME katana-disc-source-tests COMMAND katana-disc-source-tests)
 
 add_executable(katana-decoder-tests
     tests/decoder/decoder_tests.cpp

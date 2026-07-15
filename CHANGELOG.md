@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Hinzugefuegt
+
+- KR-3001: Eine gemeinsame read-only DiscSource-Abstraktion stellt bereichsgepruefte Speicher- und Hostdateiquellen mit expliziter semantischer Identitaet bereit; Hostpfade sind weder Identitaet noch Schreibziel.
+
 ### Behoben
 
 - PVR-Framebuffer-Geometrie, VRAM-Endadresse und RGBA-Allokationsgroesse verwenden nun explizit gepruefte `size_t`-Multiplikationen und -Additionen; kuenstlich grosse Eingaben koennen die Stride- oder Grenzpruefung nicht mehr per Integerueberlauf umgehen.

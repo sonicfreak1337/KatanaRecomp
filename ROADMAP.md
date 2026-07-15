@@ -616,6 +616,15 @@ Release-Gate:
 
 ### v0.30.0 - GD-ROM und Dateisystem
 
+Fortschritt:
+
+- [x] KR-3001 - Disc- und Dateiquellen-Abstraktion
+- [ ] KR-3002 - GD-ROM-Kommandos
+- [ ] KR-3003 - ISO9660
+- [ ] KR-3004 - Asynchrone Reads und Timing
+- [ ] KR-3005 - GDI-Deskriptoren und Trackmodell
+- [ ] KR-3006 - GDI-Quellenintegration
+
 Enthalten:
 
 - Image- und Dateiquellen-Abstraktion

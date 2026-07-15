@@ -920,7 +920,7 @@ Abhaengigkeiten: KR-2902
 
 Abhaengigkeiten: KR-2901
 
-### [ ] KR-3001 - Disc- und Dateiquellen-Abstraktion
+### [x] KR-3001 - Disc- und Dateiquellen-Abstraktion
 
 Abhaengigkeiten: KR-2601
 
