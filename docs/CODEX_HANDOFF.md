@@ -321,11 +321,11 @@ Task: KR-XXXX
 ## Aktuell empfohlener Einstieg
 
 ```text
-KR-3102 - TMU und RTC
+KR-3103 - DMA
 ```
 
 Danach:
 
 ```text
-KR-3103 - DMA
+KR-3104 - Plattform-Interruptintegration
 ```

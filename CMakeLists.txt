@@ -44,6 +44,7 @@ add_library(katana_runtime STATIC
     src/runtime/maple.cpp
     src/runtime/pvr.cpp
     src/runtime/scheduler.cpp
+    src/runtime/timers.cpp
     src/runtime/memory.cpp
     src/runtime/runtime.cpp
 )
@@ -370,6 +371,11 @@ add_executable(katana-scheduler-tests tests/runtime/scheduler_tests.cpp)
 target_link_libraries(katana-scheduler-tests PRIVATE katana_runtime)
 katana_enable_warnings(katana-scheduler-tests)
 add_test(NAME katana-scheduler-tests COMMAND katana-scheduler-tests)
+
+add_executable(katana-tmu-rtc-tests tests/runtime/tmu_rtc_tests.cpp)
+target_link_libraries(katana-tmu-rtc-tests PRIVATE katana_runtime)
+katana_enable_warnings(katana-tmu-rtc-tests)
+add_test(NAME katana-tmu-rtc-tests COMMAND katana-tmu-rtc-tests)
 
 add_executable(katana-decoder-tests
     tests/decoder/decoder_tests.cpp

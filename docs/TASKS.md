@@ -976,7 +976,7 @@ Akzeptanz:
 
 Abhaengigkeiten: KR-2601
 
-### [ ] KR-3102 - TMU und RTC
+### [x] KR-3102 - TMU und RTC
 
 Abhaengigkeiten: KR-3101
 
