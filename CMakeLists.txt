@@ -317,6 +317,11 @@ target_link_libraries(katana-aica-register-tests PRIVATE katana_runtime)
 katana_enable_warnings(katana-aica-register-tests)
 add_test(NAME katana-aica-register-tests COMMAND katana-aica-register-tests)
 
+add_executable(katana-aica-sample-tests tests/runtime/aica_sample_tests.cpp)
+target_link_libraries(katana-aica-sample-tests PRIVATE katana_runtime)
+katana_enable_warnings(katana-aica-sample-tests)
+add_test(NAME katana-aica-sample-tests COMMAND katana-aica-sample-tests)
+
 add_executable(katana-decoder-tests
     tests/decoder/decoder_tests.cpp
 )

@@ -6,6 +6,8 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <span>
+#include <vector>
 
 namespace katana::runtime {
 
@@ -26,6 +28,29 @@ private:
     void check(std::uint32_t offset, MemoryAccessWidth width) const;
     std::array<std::uint8_t, aica_register_size> registers_{};
     std::uint64_t writes_ = 0u;
+};
+
+enum class AicaSampleFormat : std::uint8_t {
+    Pcm16,
+    Pcm8,
+    Adpcm4
+};
+
+class AicaSampleDecoder final {
+public:
+    explicit AicaSampleDecoder(AicaSampleFormat format) noexcept;
+    [[nodiscard]] std::vector<std::int16_t> decode(
+        std::span<const std::uint8_t> source,
+        std::size_t sample_count
+    );
+    void reset() noexcept;
+    [[nodiscard]] std::int32_t predictor() const noexcept;
+    [[nodiscard]] std::int32_t step() const noexcept;
+private:
+    [[nodiscard]] std::int16_t decode_adpcm_nibble(std::uint8_t nibble) noexcept;
+    AicaSampleFormat format_ = AicaSampleFormat::Pcm16;
+    std::int32_t predictor_ = 0;
+    std::int32_t step_ = 127;
 };
 
 [[nodiscard]] std::shared_ptr<AicaRegisterFile> map_aica_registers(Memory& memory);

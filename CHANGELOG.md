@@ -5,6 +5,7 @@
 ### Hinzugefuegt
 
 - KR-2901: Ein 32-KiB-AICA-Registerfenster unterstuetzt little-endian Byte-, Halfword- und Word-Zugriffe ueber alle direkten SH-4-Segmentaliase, deterministischen Reset und sichtbare Schreibereignisse.
+- KR-2902: Ein zustandsbehafteter Sampledecoder verarbeitet signed PCM8, little-endian PCM16 und AICA-ADPCM mit korrekter Low-/High-Nibblefolge, Predictor-/Step-Clamping, Streaming-Fortsetzung und Reset.
 
 ## [0.28.0] - 2026-07-15
 

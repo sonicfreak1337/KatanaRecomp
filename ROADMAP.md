@@ -591,7 +591,7 @@ Release-Gate:
 Fortschritt:
 
 - [x] KR-2901 - AICA-Registerminimum
-- [ ] KR-2902 - PCM und ADPCM
+- [x] KR-2902 - PCM und ADPCM
 - [ ] KR-2903 - Mixer und Host-Audio
 - [ ] KR-2904 - ARM7-Strategie
 

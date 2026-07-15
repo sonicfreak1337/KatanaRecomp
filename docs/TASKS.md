@@ -908,7 +908,7 @@ Abhaengigkeiten: KR-2803
 
 Abhaengigkeiten: KR-2207
 
-### [ ] KR-2902 - PCM und ADPCM
+### [x] KR-2902 - PCM und ADPCM
 
 Abhaengigkeiten: KR-2901
 
