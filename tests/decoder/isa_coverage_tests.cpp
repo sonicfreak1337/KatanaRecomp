@@ -20,7 +20,7 @@ int main() {
     using namespace katana::sh4;
     const auto report = build_isa_coverage_report();
 
-    require(report.instructions.size() == 145u, "Nicht jede implementierte Instruktionsart erscheint im Bericht.");
+    require(report.instructions.size() == 149u, "Nicht jede implementierte Instruktionsart erscheint im Bericht.");
     require(report.known_opcode_count + report.unknown_opcode_count == 65536u, "Der Bericht deckt den 16-Bit-Opcode-Raum nicht vollstaendig ab.");
     require(report.known_opcode_count != 0u, "Der Bericht zaehlt keine bekannten Opcodes.");
     require(report.unknown_opcode_count != 0u, "Der Bericht verschweigt unbekannte Opcodes.");

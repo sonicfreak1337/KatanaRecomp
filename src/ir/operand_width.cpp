@@ -239,7 +239,13 @@ OperandWidths operation_operand_widths(const Operation operation) noexcept {
         case Operation::Fabs:
         case Operation::Fneg:
         case Operation::Fsqrt:
+        case Operation::Fsrra:
             return register_unary();
+        case Operation::Fsca:
+            return {quadword, longword, none, none, none, none};
+        case Operation::Fipr:
+        case Operation::Ftrv:
+            return {longword, longword, none, none, none, none};
     }
     return {};
 }

@@ -382,6 +382,10 @@ Operation lower_operation(
         case Source::Fmul: return Operation::Fmul;
         case Source::Fneg: return Operation::Fneg;
         case Source::Fsqrt: return Operation::Fsqrt;
+        case Source::Fsrra: return Operation::Fsrra;
+        case Source::Fsca: return Operation::Fsca;
+        case Source::Fipr: return Operation::Fipr;
+        case Source::Ftrv: return Operation::Ftrv;
         case Source::Fsub: return Operation::Fsub;
         case Source::Ftrc: return Operation::Ftrc;
         case Source::FcnvDoubleToSingle: return Operation::FcnvDoubleToSingle;
@@ -840,6 +844,10 @@ std::string_view operation_name(
         case Operation::Fmul: return "fmul";
         case Operation::Fneg: return "fneg";
         case Operation::Fsqrt: return "fsqrt";
+        case Operation::Fsrra: return "fsrra";
+        case Operation::Fsca: return "fsca";
+        case Operation::Fipr: return "fipr";
+        case Operation::Ftrv: return "ftrv";
         case Operation::Fsub: return "fsub";
         case Operation::Ftrc: return "ftrc";
         case Operation::FcnvDoubleToSingle: return "fcnvds";

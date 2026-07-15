@@ -478,6 +478,13 @@ Release-Gate:
 
 ### v0.25.0 - Dreamcast-relevante FPU-Spezialoperationen
 
+Fortschritt:
+
+- [x] KR-2501 - FSCA und FSRRA
+- [x] KR-2502 - FIPR und FTRV
+- [x] KR-2503 - NaN, Rundung und Sonderwerte
+- [x] KR-2504 - FPU-Konformitaetssuite
+
 Enthalten:
 
 - `FSCA`
@@ -492,6 +499,8 @@ Release-Gate:
 
 - bekannte Grafik- und Mathe-Testvektoren laufen bitnah oder dokumentiert toleranzbasiert
 - Abweichungen zwischen Hostplattformen werden erkannt
+- frische lokale Debug- und Release-Builds bestehen vollstaendig; CI ist erst
+  zum Alpha-Gate wieder verpflichtend
 
 ## Phase 6: Dreamcast-Plattform
 

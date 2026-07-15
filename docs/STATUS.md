@@ -1,6 +1,6 @@
 # Projektstatus
 
-Version: 0.24.0
+Version: 0.25.0
 Phase: Pre-Alpha
 Aktiver Meilenstein: v0.25.0 - Dreamcast-relevante FPU-Spezialoperationen
 
@@ -106,15 +106,19 @@ KatanaRecomp besitzt einen durchgaengigen Prototyp-Pfad von Raw- und ELF32-SH-Ei
 - [x] KR-2404 - FPSCR-Modi
 - [x] KR-2405 - Double-Precision
 - [x] KR-2406 - v0.24.0 Release-Gate
+- [x] KR-2501 - FSCA und FSRRA
+- [x] KR-2502 - FIPR und FTRV
+- [x] KR-2503 - NaN, Rundung und Sonderwerte
+- [x] KR-2504 - FPU-Konformitaetssuite
 
 ## Naechster Roadmap-Task
 
-- [ ] KR-2501 - FSCA und FSRRA
+- [ ] KR-2601 - Plattformkonfiguration und Bootzustand
 
 ## Aktuelle Einschraenkungen
 
 - unvollstaendiger SH-4-Befehlssatz
-- FPU-Grundoperationen und grundlegendes DN-Verhalten sind vorhanden; Vektoroperationen und vollstaendige FPU-Exception-Flags folgen in v0.25.0
+- FPU-Grund- und Vektoroperationen sind vorhanden; vollstaendige FPSCR-Exception-Flags bleiben ausserhalb des aktuellen Konformanzvertrags
 - Dreamcast-Speicherbereiche, MMIO-Handler, strukturierte SH-4-Ausnahmen, Interruptprioritaeten und Watchpoints sind vorhanden; konkrete Plattformregister fehlen noch
 - keine Plattformhardware
 - nur einfache konstante indirekte Ziele und bekannte begrenzte Jump Tables werden aufgeloest

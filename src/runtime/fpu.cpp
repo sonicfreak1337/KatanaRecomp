@@ -191,6 +191,70 @@ void fpu_square_root(CpuState& cpu, const std::uint8_t destination) noexcept {
     }
 }
 
+void fpu_reciprocal_square_root(CpuState& cpu, const std::uint8_t destination) noexcept {
+    const ScopedHostRounding rounding(cpu);
+    write_single_result(cpu, destination, 1.0f / std::sqrt(read_single_operand(cpu, destination)));
+}
+
+void fpu_sine_cosine(CpuState& cpu, const std::uint8_t destination_even) noexcept {
+    const auto angle = static_cast<std::uint16_t>(cpu.fpul);
+    float sine = 0.0f;
+    float cosine = 0.0f;
+    switch (angle) {
+        case 0x0000u: sine = 0.0f; cosine = 1.0f; break;
+        case 0x4000u: sine = 1.0f; cosine = 0.0f; break;
+        case 0x8000u: sine = 0.0f; cosine = -1.0f; break;
+        case 0xC000u: sine = -1.0f; cosine = 0.0f; break;
+        default: {
+            constexpr double tau = 6.283185307179586476925286766559;
+            const double radians = static_cast<double>(angle) * tau / 65536.0;
+            sine = static_cast<float>(std::sin(radians));
+            cosine = static_cast<float>(std::cos(radians));
+            break;
+        }
+    }
+    write_single_result(cpu, destination_even, sine);
+    write_single_result(cpu, static_cast<std::uint8_t>(destination_even + 1u), cosine);
+}
+
+void fpu_inner_product(
+    CpuState& cpu,
+    const std::uint8_t source_vector,
+    const std::uint8_t destination_vector
+) noexcept {
+    const ScopedHostRounding rounding(cpu);
+    float source[4];
+    float destination[4];
+    for (std::uint8_t i = 0; i < 4u; ++i) {
+        source[i] = read_single_operand(cpu, static_cast<std::uint8_t>(source_vector + i));
+        destination[i] = read_single_operand(cpu, static_cast<std::uint8_t>(destination_vector + i));
+    }
+    float result = source[0] * destination[0];
+    for (std::uint8_t i = 1; i < 4u; ++i) {
+        result = std::fma(source[i], destination[i], result);
+    }
+    write_single_result(cpu, static_cast<std::uint8_t>(destination_vector + 3u), result);
+}
+
+void fpu_transform_vector(CpuState& cpu, const std::uint8_t destination_vector) noexcept {
+    const ScopedHostRounding rounding(cpu);
+    float vector[4];
+    float matrix[16];
+    for (std::uint8_t i = 0; i < 4u; ++i) {
+        vector[i] = read_single_operand(cpu, static_cast<std::uint8_t>(destination_vector + i));
+    }
+    for (std::uint8_t i = 0; i < 16u; ++i) {
+        matrix[i] = flush_denormalized(cpu, std::bit_cast<float>(cpu.xf[i]));
+    }
+    for (std::uint8_t row = 0; row < 4u; ++row) {
+        float result = matrix[row] * vector[0];
+        for (std::uint8_t column = 1; column < 4u; ++column) {
+            result = std::fma(matrix[column * 4u + row], vector[column], result);
+        }
+        write_single_result(cpu, static_cast<std::uint8_t>(destination_vector + row), result);
+    }
+}
+
 void fpu_multiply_accumulate(
     CpuState& cpu,
     const std::uint8_t source,

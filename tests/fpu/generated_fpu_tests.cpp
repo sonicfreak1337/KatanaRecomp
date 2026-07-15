@@ -1,6 +1,7 @@
 #include "generated_fpu_program.cpp"
 
 #include <bit>
+#include <cmath>
 #include <cstdint>
 #include <cstdlib>
 #include <iostream>
@@ -36,6 +37,49 @@ int main() {
             cpu.spc == 0x100u && cpu.pc == 0x8100u &&
             cpu.fr[1] == 0x40000000u,
             "SR.FD sperrt einen generierten FPU-Pfad nicht vor Zustandsaenderungen."
+        );
+    }
+
+    {
+        katana_generated::CpuState cpu;
+        cpu.fpul = 0x2000u;
+        cpu.pc = 0x158u;
+        katana_generated::fn_00000158(cpu);
+        require(
+            std::fabs(std::bit_cast<float>(cpu.fr[2]) - 0.70710677f) <= 2.0e-7f &&
+            std::fabs(std::bit_cast<float>(cpu.fr[3]) - 0.70710677f) <= 2.0e-7f,
+            "Generiertes FSCA verlaesst die Konformanztoleranz."
+        );
+
+        cpu.fr[4] = std::bit_cast<std::uint32_t>(4.0f);
+        cpu.pc = 0x15Eu;
+        katana_generated::fn_0000015E(cpu);
+        require(std::bit_cast<float>(cpu.fr[4]) == 0.5f,
+            "Generiertes FSRRA liefert ein falsches Ergebnis.");
+
+        for (std::uint8_t i = 0; i < 4u; ++i) {
+            cpu.fr[i] = std::bit_cast<std::uint32_t>(static_cast<float>(i + 1u));
+            cpu.fr[4u + i] = std::bit_cast<std::uint32_t>(1.0f);
+        }
+        cpu.pc = 0x164u;
+        katana_generated::fn_00000164(cpu);
+        require(std::bit_cast<float>(cpu.fr[3]) == 10.0f,
+            "Generiertes FIPR liest die Vektoransichten falsch.");
+
+        for (std::uint8_t i = 0; i < 16u; ++i) {
+            cpu.xf[i] = std::bit_cast<std::uint32_t>(0.0f);
+        }
+        cpu.xf[0] = cpu.xf[5] = cpu.xf[10] = cpu.xf[15] =
+            std::bit_cast<std::uint32_t>(1.0f);
+        for (std::uint8_t i = 8u; i < 12u; ++i) {
+            cpu.fr[i] = std::bit_cast<std::uint32_t>(static_cast<float>(i));
+        }
+        cpu.pc = 0x16Au;
+        katana_generated::fn_0000016A(cpu);
+        require(
+            std::bit_cast<float>(cpu.fr[8]) == 8.0f &&
+            std::bit_cast<float>(cpu.fr[11]) == 11.0f,
+            "Generiertes FTRV nutzt XMTRX oder FV8 falsch."
         );
     }
 

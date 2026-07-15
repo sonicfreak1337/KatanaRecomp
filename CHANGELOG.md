@@ -2,6 +2,20 @@
 
 ## [Unreleased]
 
+## [0.25.0] - 2026-07-15
+
+### Hinzugefuegt
+
+- KR-2501: `FSCA` und `FSRRA` laufen durch Decoder, IR, Runtime und kompilierten generierten C++-Code. Die vier Quadrantenanker sind exakt; weitere Werte werden mit einer dokumentierten Single-Precision-Toleranz geprueft.
+- KR-2502: `FIPR` bildet alle vier FV-Ansichten ab und bleibt bei ueberlappenden Vektoren deterministisch. `FTRV` liest die 4x4-XMTRX aus der XF-Hintergrundbank und schreibt ein zuvor gesichertes FV-Ergebnis.
+- KR-2503: Die Grafikoperationen verwenden die zentrale NaN-Kanonisierung, DN-Behandlung und Host-Rundungsumgebung; reservierte RM-Werte und PR=1 werden vor Teilwirkungen abgewiesen.
+- KR-2504: Numerische Runtime-Vektoren und ein kompilierter generierter End-to-End-Pfad pruefen Winkel, reziproke Quadratwurzel, Skalarprodukt, Matrixtransformation, Registerueberlappung und Bankzugriffe.
+
+### Geaendert
+
+- Die Instruktionsmetadaten umfassen 145 normale Regeln und der ISA-Bericht 149 implementierte Instruktionsarten.
+- CI bleibt gemaess Projektentscheidung bis zum Alpha-Gate optional; v0.25.0 wird durch frische lokale Debug- und Release-Builds freigegeben.
+
 ## [0.24.0] - 2026-07-15
 
 ### Hinzugefuegt

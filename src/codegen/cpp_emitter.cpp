@@ -152,6 +152,10 @@ bool is_fpu_operation(const katana::ir::Instruction& instruction) {
         case Operation::Fmul:
         case Operation::Fneg:
         case Operation::Fsqrt:
+        case Operation::Fsrra:
+        case Operation::Fsca:
+        case Operation::Fipr:
+        case Operation::Ftrv:
         case Operation::Fsub:
         case Operation::Ftrc:
         case Operation::FcnvDoubleToSingle:
@@ -226,6 +230,10 @@ void emit_fpu_mode_guard(
         case Operation::Fldi0:
         case Operation::Fldi1:
         case Operation::Fmac:
+        case Operation::Fsrra:
+        case Operation::Fsca:
+        case Operation::Fipr:
+        case Operation::Ftrv:
         case Operation::Frchg:
         case Operation::Fschg:
             append_condition("cpu.fpu_double_precision()");
@@ -259,6 +267,11 @@ void emit_fpu_mode_guard(
         instruction.operation == Operation::Fsqrt ||
         instruction.operation == Operation::FloatFromFpul ||
         instruction.operation == Operation::FcnvSingleToDouble;
+    const bool checks_graphics_rounding =
+        instruction.operation == Operation::Fsrra ||
+        instruction.operation == Operation::Fsca ||
+        instruction.operation == Operation::Fipr ||
+        instruction.operation == Operation::Ftrv;
     const bool checks_rounding_mode =
         instruction.operation == Operation::Fadd ||
         instruction.operation == Operation::Fsub ||
@@ -279,7 +292,7 @@ void emit_fpu_mode_guard(
     if (checks_destination && (instruction.destination_register & 1u) != 0u) {
         append_condition("cpu.fpu_double_precision()");
     }
-    if (checks_rounding_mode) {
+    if (checks_rounding_mode || checks_graphics_rounding) {
         append_condition(
             "((cpu.read_fpscr() & katana::runtime::fpscr_rounding_mode_mask) > 1u)"
         );
@@ -448,6 +461,23 @@ void emit_simple_instruction(
             return;
         case Operation::Fsqrt:
             output << "katana::runtime::fpu_square_root(cpu, "
+                << static_cast<unsigned>(instruction.destination_register) << "u);\n";
+            return;
+        case Operation::Fsrra:
+            output << "katana::runtime::fpu_reciprocal_square_root(cpu, "
+                << static_cast<unsigned>(instruction.destination_register) << "u);\n";
+            return;
+        case Operation::Fsca:
+            output << "katana::runtime::fpu_sine_cosine(cpu, "
+                << static_cast<unsigned>(instruction.destination_register) << "u);\n";
+            return;
+        case Operation::Fipr:
+            output << "katana::runtime::fpu_inner_product(cpu, "
+                << static_cast<unsigned>(instruction.source_register) << "u, "
+                << static_cast<unsigned>(instruction.destination_register) << "u);\n";
+            return;
+        case Operation::Ftrv:
+            output << "katana::runtime::fpu_transform_vector(cpu, "
                 << static_cast<unsigned>(instruction.destination_register) << "u);\n";
             return;
         case Operation::Ftrc:

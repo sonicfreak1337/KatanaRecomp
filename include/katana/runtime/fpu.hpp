@@ -36,6 +36,10 @@ void fpu_binary(
 void fpu_absolute(CpuState& cpu, std::uint8_t destination) noexcept;
 void fpu_negate(CpuState& cpu, std::uint8_t destination) noexcept;
 void fpu_square_root(CpuState& cpu, std::uint8_t destination) noexcept;
+void fpu_reciprocal_square_root(CpuState& cpu, std::uint8_t destination) noexcept;
+void fpu_sine_cosine(CpuState& cpu, std::uint8_t destination_even) noexcept;
+void fpu_inner_product(CpuState& cpu, std::uint8_t source_vector, std::uint8_t destination_vector) noexcept;
+void fpu_transform_vector(CpuState& cpu, std::uint8_t destination_vector) noexcept;
 void fpu_multiply_accumulate(
     CpuState& cpu,
     std::uint8_t source,

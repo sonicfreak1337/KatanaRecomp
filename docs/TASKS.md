@@ -771,21 +771,29 @@ Akzeptanz:
 - Roadmap, Status, Changelog, Versionsdateien und Release-Notiz stimmen ueberein
 - CI wird gemaess Projektentscheidung erst am Alpha-Gate wieder verpflichtend
 
-### [ ] KR-2501 - FSCA und FSRRA
+### [x] KR-2501 - FSCA und FSRRA
 
 Abhaengigkeiten: KR-2405
 
-### [ ] KR-2502 - FIPR und FTRV
+### [x] KR-2502 - FIPR und FTRV
 
 Abhaengigkeiten: KR-2401
 
-### [ ] KR-2503 - NaN, Rundung und Sonderwerte
+### [x] KR-2503 - NaN, Rundung und Sonderwerte
 
 Abhaengigkeiten: KR-2402, KR-2405
 
-### [ ] KR-2504 - FPU-Konformitaetssuite
+### [x] KR-2504 - FPU-Konformitaetssuite
 
 Abhaengigkeiten: KR-2401 bis KR-2503
+
+Akzeptanz:
+
+- Decoder, IR, Runtime und generierter C++-Pfad decken `FSCA`, `FSRRA`, `FIPR` und `FTRV` ab
+- generierter Code wird kompiliert und mit sichtbaren Vektor-, Matrix- und Bankergebnissen ausgefuehrt
+- Quadrantenanker sind exakt; weitere FSCA-/FSRRA-Ergebnisse besitzen dokumentierte, plattformuebergreifend gepruefte Toleranzen
+- NaN wird kanonisiert, DN und die unterstuetzten Rundungsmodi wirken auch auf Vektoroperationen deterministisch
+- frische lokale Debug- und Release-Builds bestehen vollstaendig; CI wird erst am Alpha-Gate wieder verpflichtend
 
 ---
 

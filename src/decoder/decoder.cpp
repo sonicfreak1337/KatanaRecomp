@@ -141,6 +141,10 @@ bool decode_fpu_instruction(
         InstructionKind::Fmul,
         InstructionKind::Fneg,
         InstructionKind::Fsqrt,
+        InstructionKind::Fsrra,
+        InstructionKind::Fsca,
+        InstructionKind::Fipr,
+        InstructionKind::Ftrv,
         InstructionKind::Fsub,
         InstructionKind::Ftrc,
         InstructionKind::FcnvDoubleToSingle,
@@ -173,6 +177,18 @@ bool decode_fpu_instruction(
             case InstructionKind::Fneg:
             case InstructionKind::Fsqrt:
             case InstructionKind::FcnvSingleToDouble:
+                instruction.source_register = 0u;
+                break;
+            case InstructionKind::Fsca:
+                instruction.destination_register = static_cast<std::uint8_t>(n & 0x0Eu);
+                instruction.source_register = 0u;
+                break;
+            case InstructionKind::Fipr:
+                instruction.destination_register = static_cast<std::uint8_t>(((n >> 2u) & 3u) * 4u);
+                instruction.source_register = static_cast<std::uint8_t>((n & 3u) * 4u);
+                break;
+            case InstructionKind::Ftrv:
+                instruction.destination_register = static_cast<std::uint8_t>(n & 0x0Cu);
                 instruction.source_register = 0u;
                 break;
             case InstructionKind::Frchg:
@@ -208,6 +224,10 @@ bool decode_fpu_instruction(
             case InstructionKind::Fmul: instruction.text = "fmul " + fr(m) + ", " + fr(n); break;
             case InstructionKind::Fneg: instruction.text = "fneg " + fr(n); break;
             case InstructionKind::Fsqrt: instruction.text = "fsqrt " + fr(n); break;
+            case InstructionKind::Fsrra: instruction.text = "fsrra " + fr(n); break;
+            case InstructionKind::Fsca: instruction.text = "fsca fpul, dr" + std::to_string((n & 0x0Eu) >> 1u); break;
+            case InstructionKind::Fipr: instruction.text = "fipr fv" + std::to_string((n & 3u) * 4u) + ", fv" + std::to_string(((n >> 2u) & 3u) * 4u); break;
+            case InstructionKind::Ftrv: instruction.text = "ftrv xmtrx, fv" + std::to_string(n & 0x0Cu); break;
             case InstructionKind::Fsub: instruction.text = "fsub " + fr(m) + ", " + fr(n); break;
             case InstructionKind::Ftrc: instruction.text = "ftrc " + fr(n) + ", fpul"; break;
             case InstructionKind::FcnvDoubleToSingle: instruction.text = "fcnvds dr" + std::to_string(n >> 1u) + ", fpul"; break;

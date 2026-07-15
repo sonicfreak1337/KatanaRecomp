@@ -219,6 +219,57 @@ int main() {
         "DN=1 spuelt ein denormales Double-Ergebnis nicht auf null."
     );
 
+    cpu.write_fpscr(0u);
+    for (const auto angle : {0x0000u, 0x4000u, 0x8000u, 0xC000u}) {
+        cpu.fpul = angle;
+        fpu_sine_cosine(cpu, 2u);
+        const float sine = read_fr_single(cpu, 2u);
+        const float cosine = read_fr_single(cpu, 3u);
+        require(
+            std::fabs(sine * sine + cosine * cosine - 1.0f) <= 1.0e-6f,
+            "FSCA-Quadrantenanker liegt nicht auf dem Einheitskreis."
+        );
+    }
+    cpu.fpul = 0x2000u;
+    fpu_sine_cosine(cpu, 4u);
+    require(
+        std::fabs(read_fr_single(cpu, 4u) - 0.70710677f) <= 2.0e-7f &&
+        std::fabs(read_fr_single(cpu, 5u) - 0.70710677f) <= 2.0e-7f,
+        "FSCA verlaesst die dokumentierte Single-Toleranz."
+    );
+
+    write_fr_single(cpu, 6u, 4.0f);
+    fpu_reciprocal_square_root(cpu, 6u);
+    require(std::fabs(read_fr_single(cpu, 6u) - 0.5f) <= 2.0e-7f,
+        "FSRRA liefert fuer 4 nicht 1/2.");
+    write_fr_single(cpu, 6u, -1.0f);
+    fpu_reciprocal_square_root(cpu, 6u);
+    require(cpu.fr[6] == 0x7FBFFFFFu, "FSRRA kanonisiert negative Eingaben nicht.");
+
+    for (std::uint8_t i = 0; i < 4u; ++i) {
+        write_fr_single(cpu, i, static_cast<float>(i + 1u));
+    }
+    fpu_inner_product(cpu, 0u, 0u);
+    require(read_fr_single(cpu, 3u) == 30.0f,
+        "FIPR scheitert bei vollstaendig ueberlappenden Vektoren.");
+
+    for (std::uint8_t i = 0; i < 16u; ++i) {
+        cpu.xf[i] = std::bit_cast<std::uint32_t>(0.0f);
+    }
+    cpu.xf[0] = std::bit_cast<std::uint32_t>(2.0f);
+    cpu.xf[5] = std::bit_cast<std::uint32_t>(3.0f);
+    cpu.xf[10] = std::bit_cast<std::uint32_t>(4.0f);
+    cpu.xf[15] = std::bit_cast<std::uint32_t>(5.0f);
+    for (std::uint8_t i = 0; i < 4u; ++i) {
+        write_fr_single(cpu, static_cast<std::uint8_t>(8u + i), 1.0f);
+    }
+    fpu_transform_vector(cpu, 8u);
+    require(
+        read_fr_single(cpu, 8u) == 2.0f && read_fr_single(cpu, 9u) == 3.0f &&
+        read_fr_single(cpu, 10u) == 4.0f && read_fr_single(cpu, 11u) == 5.0f,
+        "FTRV liest XMTRX nicht aus der XF-Hintergrundbank."
+    );
+
     std::cout << "SH-4-FPU-Runtime-Grundoperationen erfolgreich.\n";
     return EXIT_SUCCESS;
 }

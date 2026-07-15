@@ -33,18 +33,22 @@ void require(const bool condition, const std::string& message) {
 
 std::vector<katana::ir::Function> build_program() {
     auto bytes = std::vector<std::uint8_t>(fixture.begin(), fixture.end());
-    const std::array<std::uint8_t, 34> tail = {
+    const std::array<std::uint8_t, 58> tail = {
         0x46u, 0xF9u, 0x97u, 0xF6u, 0x0Bu, 0x00u, 0x09u, 0x00u,
         0x00u, 0xA0u, 0x00u, 0xF1u, 0x0Bu, 0x00u, 0x09u, 0x00u,
         0x10u, 0xF3u, 0x0Bu, 0x00u, 0x09u, 0x00u,
         0x49u, 0xF4u, 0x0Bu, 0x00u, 0x09u, 0x00u,
-        0x4Bu, 0xF4u, 0x0Bu, 0x00u, 0x09u, 0x00u
+        0x4Bu, 0xF4u, 0x0Bu, 0x00u, 0x09u, 0x00u,
+        0xFDu, 0xF2u, 0x0Bu, 0x00u, 0x09u, 0x00u,
+        0x7Du, 0xF4u, 0x0Bu, 0x00u, 0x09u, 0x00u,
+        0xEDu, 0xF1u, 0x0Bu, 0x00u, 0x09u, 0x00u,
+        0xFDu, 0xF9u, 0x0Bu, 0x00u, 0x09u, 0x00u
     };
     bytes.insert(bytes.end(), tail.begin(), tail.end());
     const auto lines = katana::sh4::disassemble(bytes, base_address);
-    constexpr std::array<std::uint32_t, 9> seeds = {
+    constexpr std::array<std::uint32_t, 13> seeds = {
         0x100u, 0x110u, 0x118u, 0x122u, 0x12Cu, 0x13Eu, 0x146u,
-        0x14Cu, 0x152u
+        0x14Cu, 0x152u, 0x158u, 0x15Eu, 0x164u, 0x16Au
     };
     const auto functions = katana::analysis::discover_functions(lines, seeds);
     return katana::ir::lower_program(lines, functions);
@@ -78,6 +82,14 @@ int main(const int argc, char* argv[]) {
         "FCNVSD wird nicht dekodiert.");
     require(katana::sh4::decode(0xFBFDu).kind == InstructionKind::Frchg,
         "FRCHG wird nicht dekodiert.");
+    require(katana::sh4::decode(0xF47Du).kind == InstructionKind::Fsrra,
+        "FSRRA wird nicht dekodiert.");
+    require(katana::sh4::decode(0xF2FDu).kind == InstructionKind::Fsca,
+        "FSCA wird nicht dekodiert.");
+    require(katana::sh4::decode(0xF5EDu).kind == InstructionKind::Fipr,
+        "FIPR wird nicht dekodiert.");
+    require(katana::sh4::decode(0xF9FDu).kind == InstructionKind::Ftrv,
+        "FTRV wird nicht dekodiert.");
 
     const auto program = build_program();
     const auto source = katana::codegen::emit_cpp_program(program, base_address);
