@@ -2,12 +2,18 @@
 
 ## [Unreleased]
 
+## [0.28.0] - 2026-07-15
+
 ### Hinzugefuegt
 
 - KR-2801: Ein busfaehiges PVR-Registerminimum bildet ID, Revision, Framebuffer-, Video- und Rendersteuerregister ueber alle direkten Segmente ab. Breitenfehler, read-only-Register, Softreset und Renderanforderungen sind sichtbar.
 - KR-2802: Ein Framebuffer-Pfad wandelt RGB565, ARGB1555 und RGB888 mit Stride- und VRAM-Grenzpruefung deterministisch in RGBA-Frames um und zaehlt praesentierte Frames.
 - KR-2803: Ein strukturierter Tile-Accelerator-Grundpfad sammelt Triangle-Strips in Opaque-, Punch-through- und Translucent-Listen, erzwingt Listenreihenfolge und Framegrenzen und verwirft keine Primitive still.
 - KR-2804: RGB565-, ARGB1555- und ARGB4444-Texturen werden begrenzt in RGBA dekodiert; eine Render-Backend-Abstraktion mit deterministischem Recording-Backend uebergibt Frames und Texturen ohne Host-Grafikabhaengigkeit.
+
+### Geaendert
+
+- Die vollstaendige Regression umfasst 104 Tests und besteht in frischen lokalen Debug- und Release-Builds. CI bleibt gemaess Projektentscheidung bis zum Alpha-Gate optional.
 
 ## [0.27.0] - 2026-07-15
 

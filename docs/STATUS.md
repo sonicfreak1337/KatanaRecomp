@@ -1,8 +1,8 @@
 # Projektstatus
 
-Version: 0.27.0
+Version: 0.28.0
 Phase: Pre-Alpha
-Naechster Meilenstein: v0.28.0 - PVR Minimum Viable Video
+Naechster Meilenstein: v0.29.0 - AICA Minimum Viable Audio
 
 ## Zusammenfassung
 
@@ -31,7 +31,7 @@ Definition fuer diesen Status: ein BIOS-freier, frei verteilbarer Homebrew-Verti
 
 Praktische Einordnung:
 
-- [~] Von einem echten Dreamcast-Smoke-Test sind wir funktional noch vier Plattform-Meilensteine entfernt: `v0.28.0` bis `v0.31.0`
+- [~] Von einem echten Dreamcast-Smoke-Test sind wir funktional noch drei Plattform-Meilensteine entfernt: `v0.29.0` bis `v0.31.0`
 - [~] Der CPU-, IR-, Runtime- und FPU-Unterbau steht; der Engpass ist jetzt fast vollstaendig Plattformintegration
 - [ ] Von Alpha sind wir noch deutlich entfernt, weil nach Phase 6 auch Codegen-/Dispatch-Haertung, Tooling, Kompatibilitaet, GUI und `.gdi`-Workflow fehlen
 
@@ -51,16 +51,10 @@ Praktische Einordnung:
 
 ## Teststatus
 
-Letztes abgeschlossenes Release-Gate (`v0.27.0`):
+Letztes abgeschlossenes Release-Gate (`v0.28.0`):
 
 ```text
-100% tests passed out of 100 (frische lokale Debug- und Release-Builds)
-```
-
-Aktueller Taskstand (`KR-2804`):
-
-```text
-1/1 katana-pvr-render-tests bestanden (lokal, Debug)
+100% tests passed out of 104 (frische lokale Debug- und Release-Builds)
 ```
 
 ## Fertiggestellte Roadmap-Tasks
@@ -176,7 +170,7 @@ Aktueller Taskstand (`KR-2804`):
 
 ## Naechster Roadmap-Task
 
-- [ ] v0.28.0 - Release-Gate fuer PVR Minimum Viable Video
+- [ ] KR-2901 - AICA-Registerminimum
 
 ## Aktuelle Einschraenkungen
 

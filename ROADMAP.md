@@ -70,7 +70,7 @@ Sie ist absichtlich in kleine, voneinander abhaengige Releases und Task-IDs zerl
 
 ## Phase 1: SH-4 Integer-Kern
 
-### v0.11.0 - ALU und Statussemantik
+### [x] v0.11.0 - ALU und Statussemantik
 
 Ziel: haeufige Integer- und Bitoperationen vollstaendig durch Decoder, IR, Codegenerator und End-to-End-Tests fuehren.
 
@@ -101,7 +101,7 @@ Release-Gate:
 - vorzeichenbehaftete und vorzeichenlose Grenzwerte werden getestet
 - kein bestehender End-to-End-Test veraendert sein Ergebnis
 
-### v0.12.0 - Shifts und Rotationen
+### [x] v0.12.0 - Shifts und Rotationen
 Fortschritt:
 
 - [x] KR-1201 - Ein-Bit-Shifts
@@ -123,7 +123,7 @@ Release-Gate:
 - T-Bit-Aenderungen sind bitgenau getestet
 - dynamische Shift-Werte decken positive, negative und Grenzfaelle ab
 
-### v0.13.0 - Multiplikation, Division und MAC
+### [x] v0.13.0 - Multiplikation, Division und MAC
 Fortschritt:
 
 - [x] KR-1301 - Einfache Multiplikation
@@ -147,7 +147,7 @@ Release-Gate:
 - Q-, M- und T-Bit-Semantik ist explizit modelliert
 - Division besitzt Referenzvektoren fuer Sonderfaelle
 
-### v0.14.0 - Adressierungsarten und Systemregister
+### [x] v0.14.0 - Adressierungsarten und Systemregister
 
 Fortschritt:
 
@@ -179,7 +179,7 @@ Release-Gate:
 - privilegierte Instruktionen sind markiert
 - KR-1402 bis KR-1405 besitzen Binaer-Fixtures und durchlaufen den normalen CLI-Codegen-Pfad
 
-### v0.15.0 - Decoder-Haertung und ISA-Abdeckung
+### [x] v0.15.0 - Decoder-Haertung und ISA-Abdeckung
 
 Fortschritt:
 
@@ -208,7 +208,7 @@ Release-Gate:
 
 ## Phase 2: Loader und Programmanalyse
 
-### v0.16.0 - Executable-Image-Modell
+### [x] v0.16.0 - Executable-Image-Modell
 
 Fortschritt:
 
@@ -237,7 +237,7 @@ Release-Gate:
 - Segmente koennen Code, Daten oder unbekannt sein
 - Loaderfehler nennen Datei, Offset und Ursache
 
-### v0.17.0 - Rekursive Codeentdeckung
+### [x] v0.17.0 - Rekursive Codeentdeckung
 
 Fortschritt:
 
@@ -264,7 +264,7 @@ Release-Gate:
 - jede entdeckte Funktion besitzt eine nachvollziehbare Herkunft
 - lineare Analyse bleibt als Diagnosemodus erhalten
 
-### v0.18.0 - Indirekter Kontrollfluss und Jump Tables
+### [x] v0.18.0 - Indirekter Kontrollfluss und Jump Tables
 
 Fortschritt:
 
@@ -294,7 +294,7 @@ Release-Gate:
 
 ## Phase 3: Katana-IR
 
-### v0.19.0 - IR Version 2
+### [x] v0.19.0 - IR Version 2
 
 Fortschritt:
 
@@ -323,7 +323,7 @@ Release-Gate:
 - jede Funktion kann unabhaengig verifiziert werden
 - IR-Dumps sind deterministisch
 
-### v0.20.0 - Sichere Basisoptimierungen
+### [x] v0.20.0 - Sichere Basisoptimierungen
 
 Fortschritt:
 
@@ -354,7 +354,7 @@ Release-Gate:
 
 ## Phase 4: Runtime-Grundlage
 
-### v0.21.0 - Runtime-Trennung und vollstaendiger CPU-Zustand
+### [x] v0.21.0 - Runtime-Trennung und vollstaendiger CPU-Zustand
 
 Fortschritt:
 
@@ -382,7 +382,7 @@ Release-Gate:
 - CPU-Zustand ist zentral definiert
 - ABI-Inkompatibilitaeten werden erkannt
 
-### v0.22.0 - Dreamcast-Speicherbus
+### [x] v0.22.0 - Dreamcast-Speicherbus
 
 Fortschritt:
 
@@ -410,7 +410,7 @@ Release-Gate:
 - jeder Speicherbereich ist registriert und testbar
 - Little-Endian-Verhalten ist zentral garantiert
 
-### v0.23.0 - Ausnahmen und Interrupts
+### [x] v0.23.0 - Ausnahmen und Interrupts
 
 Fortschritt:
 
@@ -449,7 +449,7 @@ Nachgelagerte Review-Absicherung nach v0.23.0:
 
 ## Phase 5: SH-4 FPU
 
-### v0.24.0 - FPU-Grundoperationen
+### [x] v0.24.0 - FPU-Grundoperationen
 
 Fortschritt:
 
@@ -477,7 +477,7 @@ Release-Gate:
 - frische lokale Debug- und Release-Builds bestehen vollstaendig; CI ist erst
   zum Alpha-Gate wieder verpflichtend
 
-### v0.25.0 - Dreamcast-relevante FPU-Spezialoperationen
+### [x] v0.25.0 - Dreamcast-relevante FPU-Spezialoperationen
 
 Fortschritt:
 
@@ -505,7 +505,7 @@ Release-Gate:
 
 ## Phase 6: Dreamcast-Plattform
 
-### v0.26.0 - Boot und Homebrew-Einstieg
+### [x] v0.26.0 - Boot und Homebrew-Einstieg
 
 Fortschritt:
 
@@ -538,7 +538,7 @@ Release-Gate:
 - frische lokale Debug- und Release-Builds bestehen mit 97/97 Tests; CI ist erst
   zum Alpha-Gate wieder verpflichtend
 
-### v0.27.0 - Maple und Eingabe
+### [x] v0.27.0 - Maple und Eingabe
 
 Fortschritt:
 
@@ -561,7 +561,7 @@ Release-Gate:
 - endliche Input-Replays sind reproduzierbar und fallen nicht auf nichtdeterministische Hosteingabe zurueck
 - frische lokale Debug- und Release-Builds bestehen vollstaendig; CI ist erst zum Alpha-Gate verpflichtend
 
-### v0.28.0 - PVR Minimum Viable Video
+### [x] v0.28.0 - PVR Minimum Viable Video
 
 Fortschritt:
 
@@ -579,6 +579,12 @@ Enthalten:
 - erste Texturformate
 - Render-Backend-Abstraktion
 - Frame-Synchronisation
+
+Release-Gate:
+
+- PVR-Register, Framebuffer, TA-Listen, lineare Texturformate und Backend-Uebergabe sind mit synthetischen Fixtures getestet
+- alle Grafikpfade bleiben ohne Host-Grafik-API einzeln und deterministisch pruefbar
+- frische lokale Debug- und Release-Builds bestehen mit 104/104 Tests; CI ist erst zum Alpha-Gate verpflichtend
 
 ### v0.29.0 - AICA Minimum Viable Audio
 
