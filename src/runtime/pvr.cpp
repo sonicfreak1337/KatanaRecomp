@@ -4,6 +4,7 @@
 
 #include <stdexcept>
 #include <string>
+#include <utility>
 
 namespace katana::runtime {
 
@@ -113,6 +114,62 @@ PvrFrame PvrFramebuffer::capture(
 }
 
 std::uint64_t PvrFramebuffer::presented_frames() const noexcept { return presented_frames_; }
+
+std::uint8_t TileAccelerator::list_rank(const PvrListType type) noexcept {
+    return static_cast<std::uint8_t>(type);
+}
+
+void TileAccelerator::begin_list(const PvrListType type) {
+    if (list_open_) {
+        throw std::logic_error("Eine PVR-Primitivliste ist bereits offen.");
+    }
+    if (frame_has_list_ && list_rank(type) < highest_list_rank_) {
+        throw std::logic_error("PVR-Primitivlisten wurden in rueckwaertiger Reihenfolge begonnen.");
+    }
+    current_list_ = type;
+    highest_list_rank_ = list_rank(type);
+    frame_has_list_ = true;
+    current_strip_.clear();
+    list_open_ = true;
+}
+
+void TileAccelerator::submit_vertex(const PvrVertex& vertex, const bool end_of_strip) {
+    if (!list_open_) {
+        throw std::logic_error("PVR-Vertex ohne offene Primitivliste.");
+    }
+    current_strip_.push_back(vertex);
+    if (!end_of_strip) {
+        return;
+    }
+    if (current_strip_.size() < 3u) {
+        throw std::invalid_argument("Ein PVR-Triangle-Strip braucht mindestens drei Vertices.");
+    }
+    primitives_.push_back(PvrPrimitive{current_list_, std::move(current_strip_)});
+    current_strip_.clear();
+}
+
+void TileAccelerator::end_list() {
+    if (!list_open_) {
+        throw std::logic_error("Keine PVR-Primitivliste ist offen.");
+    }
+    if (!current_strip_.empty()) {
+        throw std::logic_error("PVR-Primitivliste endet mit einem unvollstaendigen Strip.");
+    }
+    list_open_ = false;
+}
+
+PvrTaFrame TileAccelerator::finish_frame() {
+    if (list_open_) {
+        throw std::logic_error("PVR-Frame endet mit einer offenen Primitivliste.");
+    }
+    PvrTaFrame result{std::move(primitives_)};
+    primitives_.clear();
+    highest_list_rank_ = 0u;
+    frame_has_list_ = false;
+    return result;
+}
+
+bool TileAccelerator::list_open() const noexcept { return list_open_; }
 
 std::shared_ptr<PvrRegisterFile> map_pvr_registers(Memory& memory) {
     auto registers = std::make_shared<PvrRegisterFile>();

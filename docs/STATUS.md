@@ -13,8 +13,8 @@ KatanaRecomp besitzt einen durchgaengigen Prototyp-Pfad von Raw- und ELF32-SH-Ei
 ### Gesamtprojekt
 
 - [x] Kernunterbau abgeschlossen: Phasen 1 bis 5 sind vollstaendig umgesetzt
-- [~] Gesamtfortschritt nach gepflegten Roadmap-Tasks: 106 von 209 Tasks abgeschlossen = 50.7%
-- [~] Fortschritt auf dem Weg von Dreamcast-Plattform bis Alpha: 12 von 112 Tasks abgeschlossen = 10.7%
+- [~] Gesamtfortschritt nach gepflegten Roadmap-Tasks: 107 von 209 Tasks abgeschlossen = 51.2%
+- [~] Fortschritt auf dem Weg von Dreamcast-Plattform bis Alpha: 13 von 112 Tasks abgeschlossen = 11.6%
 - [ ] Alpha-Gate erreicht: nein
 
 ### Weg zum ersten echten Dreamcast-Test
@@ -22,16 +22,16 @@ KatanaRecomp besitzt einen durchgaengigen Prototyp-Pfad von Raw- und ELF32-SH-Ei
 Definition fuer diesen Status: ein BIOS-freier, frei verteilbarer Homebrew-Vertical-Slice gemaess Phase-6-Release-Gate, der Bild zeigt, Eingabe annimmt und Audio erzeugt.
 
 - [x] Boot- und Homebrew-Einstieg vorhanden: v0.26.0 abgeschlossen
-- [~] Dreamcast-Plattformphase insgesamt: 12 von 29 Tasks abgeschlossen = 41.4%
-- [ ] Eingabeweg fertig: Maple und Controller (`KR-2701`, `KR-2702`) fehlen
-- [ ] Bildpfad fertig: PVR/Framebuffer/Render-Backend (`KR-2801` bis `KR-2804`) fehlen
+- [~] Dreamcast-Plattformphase insgesamt: 13 von 29 Tasks abgeschlossen = 44.8%
+- [x] Eingabeweg fertig: Maple, Controller und deterministische Replays (`KR-2701` bis `KR-2703`) sind abgeschlossen
+- [~] Bildpfad in Arbeit: Register, Framebuffer und Tile-Accelerator (`KR-2801` bis `KR-2803`) sind abgeschlossen; Texturformate und Render-Backend (`KR-2804`) fehlen
 - [ ] Audiopfad fertig: AICA/Mixer/Host-Audio (`KR-2901` bis `KR-2903`) fehlen
 - [ ] Takt- und Ereignispfad fertig: Scheduler, Timer, DMA und Interruptintegration (`KR-3101` bis `KR-3105`) fehlen
 - [ ] Optional fuer Disc-Quellen, aber nicht noetig fuer den ersten BIOS-freien Vertical Slice: `.gdi`-Pfad (`KR-3001` bis `KR-3006`) fehlt
 
 Praktische Einordnung:
 
-- [~] Von einem echten Dreamcast-Smoke-Test sind wir funktional noch vier Plattform-Meilensteine entfernt: `v0.27.0` bis `v0.31.0`
+- [~] Von einem echten Dreamcast-Smoke-Test sind wir funktional noch vier Plattform-Meilensteine entfernt: `v0.28.0` bis `v0.31.0`
 - [~] Der CPU-, IR-, Runtime- und FPU-Unterbau steht; der Engpass ist jetzt fast vollstaendig Plattformintegration
 - [ ] Von Alpha sind wir noch deutlich entfernt, weil nach Phase 6 auch Codegen-/Dispatch-Haertung, Tooling, Kompatibilitaet, GUI und `.gdi`-Workflow fehlen
 
@@ -42,7 +42,7 @@ Praktische Einordnung:
 - [x] Phase 3 - Katana-IR: 14/14 Tasks = 100%
 - [x] Phase 4 - Runtime-Grundlage: 18/18 Tasks = 100%
 - [x] Phase 5 - SH-4 FPU: 10/10 Tasks = 100%
-- [~] Phase 6 - Dreamcast-Plattform: 12/29 Tasks = 41.4%
+- [~] Phase 6 - Dreamcast-Plattform: 13/29 Tasks = 44.8%
 - [ ] Phase 7 - Codegen und Dispatch: 0/21 Tasks = 0%
 - [ ] Phase 8 - Werkzeuge und Qualitaet: 0/25 Tasks = 0%
 - [ ] Phase 9 - Kompatibilitaet und Leistung: 0/24 Tasks = 0%
@@ -51,8 +51,16 @@ Praktische Einordnung:
 
 ## Teststatus
 
+Letztes abgeschlossenes Release-Gate (`v0.27.0`):
+
 ```text
-100% tests passed out of 100 (lokal, Debug und Release)
+100% tests passed out of 100 (frische lokale Debug- und Release-Builds)
+```
+
+Aktueller Taskstand (`KR-2803`):
+
+```text
+1/1 katana-pvr-ta-tests bestanden (lokal, Debug)
 ```
 
 ## Fertiggestellte Roadmap-Tasks
@@ -163,15 +171,16 @@ Praktische Einordnung:
 - [x] KR-2703 - VMU-Minimum
 - [x] KR-2801 - PVR-Registerminimum
 - [x] KR-2802 - Framebuffer-Ausgabe
+- [x] KR-2803 - Tile-Accelerator-Grundpfad
 
 ## Naechster Roadmap-Task
 
-- [ ] KR-2701 - Maple-Bus
+- [ ] KR-2804 - Texturformate und Render-Backend
 
 ## Aktuelle Einschraenkungen
 
 - unvollstaendiger SH-4-Befehlssatz
 - FPU-Grund- und Vektoroperationen sind vorhanden; vollstaendige FPSCR-Exception-Flags bleiben ausserhalb des aktuellen Konformanzvertrags
-- Dreamcast-Speicherbereiche, MMIO-Handler, strukturierte SH-4-Ausnahmen, Interruptprioritaeten und Watchpoints sind vorhanden; konkrete Plattformregister fehlen noch
-- BIOS-freier Homebrew-Boot, PREF-Beobachtung und protokolliertes Flash sind vorhanden; weitere Plattformhardware folgt ab v0.27
+- Dreamcast-Speicherbereiche, MMIO-Handler, strukturierte SH-4-Ausnahmen, Interruptprioritaeten, Watchpoints und ein erstes PVR-Registermodell sind vorhanden; AICA-, GD-ROM-, Timer- und DMA-Register fehlen noch
+- BIOS-freier Homebrew-Boot, PREF-Beobachtung, protokolliertes Flash und Maple-Eingabe sind vorhanden; der PVR-Bildpfad ist bis auf Texturen und Render-Backend umgesetzt
 - nur einfache konstante indirekte Ziele und bekannte begrenzte Jump Tables werden aufgeloest

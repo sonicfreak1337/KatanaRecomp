@@ -78,6 +78,47 @@ private:
     std::uint64_t presented_frames_ = 0u;
 };
 
+enum class PvrListType : std::uint8_t {
+    Opaque,
+    PunchThrough,
+    Translucent
+};
+
+struct PvrVertex {
+    float x = 0.0f;
+    float y = 0.0f;
+    float z = 0.0f;
+    float u = 0.0f;
+    float v = 0.0f;
+    std::uint32_t argb = 0xFFFFFFFFu;
+};
+
+struct PvrPrimitive {
+    PvrListType list = PvrListType::Opaque;
+    std::vector<PvrVertex> vertices;
+};
+
+struct PvrTaFrame {
+    std::vector<PvrPrimitive> primitives;
+};
+
+class TileAccelerator final {
+public:
+    void begin_list(PvrListType type);
+    void submit_vertex(const PvrVertex& vertex, bool end_of_strip);
+    void end_list();
+    [[nodiscard]] PvrTaFrame finish_frame();
+    [[nodiscard]] bool list_open() const noexcept;
+private:
+    [[nodiscard]] static std::uint8_t list_rank(PvrListType type) noexcept;
+    std::vector<PvrPrimitive> primitives_;
+    std::vector<PvrVertex> current_strip_;
+    PvrListType current_list_ = PvrListType::Opaque;
+    std::uint8_t highest_list_rank_ = 0u;
+    bool frame_has_list_ = false;
+    bool list_open_ = false;
+};
+
 [[nodiscard]] std::shared_ptr<PvrRegisterFile> map_pvr_registers(Memory& memory);
 
 } // namespace katana::runtime

@@ -301,6 +301,11 @@ target_link_libraries(katana-pvr-framebuffer-tests PRIVATE katana_runtime)
 katana_enable_warnings(katana-pvr-framebuffer-tests)
 add_test(NAME katana-pvr-framebuffer-tests COMMAND katana-pvr-framebuffer-tests)
 
+add_executable(katana-pvr-ta-tests tests/runtime/pvr_ta_tests.cpp)
+target_link_libraries(katana-pvr-ta-tests PRIVATE katana_runtime)
+katana_enable_warnings(katana-pvr-ta-tests)
+add_test(NAME katana-pvr-ta-tests COMMAND katana-pvr-ta-tests)
+
 add_executable(katana-decoder-tests
     tests/decoder/decoder_tests.cpp
 )

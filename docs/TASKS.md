@@ -896,7 +896,7 @@ Abhaengigkeiten: KR-2207, KR-2601
 
 Abhaengigkeiten: KR-2801
 
-### [ ] KR-2803 - Tile-Accelerator-Grundpfad
+### [x] KR-2803 - Tile-Accelerator-Grundpfad
 
 Abhaengigkeiten: KR-2801
 
