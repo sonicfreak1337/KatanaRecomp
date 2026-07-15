@@ -34,6 +34,7 @@ endfunction()
 
 add_library(katana_runtime STATIC
     src/runtime/aica.cpp
+    src/runtime/block_abi.cpp
     src/runtime/cache_control.cpp
     src/runtime/dma.cpp
     src/runtime/disc.cpp
@@ -139,6 +140,11 @@ add_test(
     NAME katana-runtime-tests
     COMMAND katana-runtime-tests
 )
+
+add_executable(katana-block-abi-tests tests/runtime/block_abi_tests.cpp)
+target_link_libraries(katana-block-abi-tests PRIVATE katana_runtime)
+katana_enable_warnings(katana-block-abi-tests)
+add_test(NAME katana-block-abi-tests COMMAND katana-block-abi-tests)
 
 add_executable(katana-cache-control-tests tests/runtime/cache_control_tests.cpp)
 target_link_libraries(katana-cache-control-tests PRIVATE katana_runtime)

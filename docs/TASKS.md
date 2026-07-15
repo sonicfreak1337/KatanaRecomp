@@ -1071,7 +1071,7 @@ Abhaengigkeiten: KR-3201
 
 Abhaengigkeiten: KR-3201, KR-2102
 
-### [ ] KR-3204 - Block-ABI und Zustandsuebergaben
+### [x] KR-3204 - Block-ABI und Zustandsuebergaben
 
 Abhaengigkeiten: KR-1907, KR-2306, KR-2504, KR-3101, KR-3201
 

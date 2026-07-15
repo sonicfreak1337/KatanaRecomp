@@ -13,8 +13,8 @@ KatanaRecomp besitzt einen durchgaengigen Prototyp-Pfad von Raw- und ELF32-SH-Ei
 ### Gesamtprojekt
 
 - [x] Kernunterbau abgeschlossen: Phasen 1 bis 5 sind vollstaendig umgesetzt
-- [~] Gesamtfortschritt nach gepflegten Roadmap-Tasks: 126 von 209 Tasks abgeschlossen = 60.3%
-- [~] Fortschritt auf dem Weg von Dreamcast-Plattform bis Alpha: 32 von 112 Tasks abgeschlossen = 28.6%
+- [~] Gesamtfortschritt nach gepflegten Roadmap-Tasks: 127 von 209 Tasks abgeschlossen = 60.8%
+- [~] Fortschritt auf dem Weg von Dreamcast-Plattform bis Alpha: 33 von 112 Tasks abgeschlossen = 29.5%
 - [ ] Alpha-Gate erreicht: nein
 
 ### Weg zum ersten echten Dreamcast-Test
@@ -44,7 +44,7 @@ Praktische Einordnung:
 - [x] Phase 4 - Runtime-Grundlage: 18/18 Tasks = 100%
 - [x] Phase 5 - SH-4 FPU: 10/10 Tasks = 100%
 - [x] Phase 6 - Dreamcast-Plattform: 29/29 Tasks und Abschlussgate = 100%
-- [~] Phase 7 - Codegen und Dispatch: 3/21 Tasks = 14.3%
+- [~] Phase 7 - Codegen und Dispatch: 4/21 Tasks = 19.0%
 - [ ] Phase 8 - Werkzeuge und Qualitaet: 0/25 Tasks = 0%
 - [ ] Phase 9 - Kompatibilitaet und Leistung: 0/24 Tasks = 0%
 - [ ] Phase 10 - Desktop-GUI und Quellworkflow: 0/13 Tasks = 0%
@@ -67,11 +67,11 @@ SA_PHASE6_MAIN_EXECUTION_STARTED in zwei bytegleichen Laeufen erreicht
 Disc-Quelle unveraendert; silent_failures=0
 ```
 
-Aktueller Entwicklungsstand (`KR-3203`):
+Aktueller Entwicklungsstand (`KR-3204`):
 
 ```text
-125/125 Debug-Tests bestanden
-katana-backend-capability-tests bestanden
+126/126 Debug-Tests bestanden
+katana-block-abi-tests bestanden
 ```
 
 Abgeschlossenes kumulatives Phase-6-Gate:
@@ -225,11 +225,12 @@ Lokale Sonic-Adventure-Akzeptanzstrategie:
 - [x] KR-3201 - Backend-Interface
 - [x] KR-3202 - C++-Backend migrieren
 - [x] KR-3203 - ABI-Faehigkeitspruefung
+- [x] KR-3204 - Block-ABI und Zustandsuebergaben
 
 ## Naechster Arbeitsschritt
 
-- [ ] KR-3204 - Block-ABI und Zustandsuebergaben
-- [ ] danach KR-3205 - Plattformdienst-Schnittstelle
+- [ ] KR-3205 - Plattformdienst-Schnittstelle
+- [ ] danach v0.32.0 Release-Gate
 
 ## Aktuelle Einschraenkungen
 

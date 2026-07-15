@@ -3050,7 +3050,8 @@ BackendCapabilities CppBackend::capabilities() const noexcept {
         capability(BackendCapability::RuntimeCpuState) |
         capability(BackendCapability::RuntimeMemory) |
         capability(BackendCapability::StructuredExceptions) |
-        capability(BackendCapability::Fpu);
+        capability(BackendCapability::Fpu) |
+        capability(BackendCapability::BlockTransitions);
 }
 
 BackendEmission CppBackend::emit(const BackendRequest& request) const {
@@ -3068,6 +3069,7 @@ BackendEmission CppBackend::emit(const BackendRequest& request) const {
     std::ostringstream metadata;
 
     declarations
+        << "#include \"katana/runtime/block_abi.hpp\"\n"
         << "#include \"katana/runtime/exception.hpp\"\n"
         << "#include \"katana/runtime/fpu.hpp\"\n"
         << "#include \"katana/runtime/runtime.hpp\"\n"
@@ -3080,6 +3082,10 @@ BackendEmission CppBackend::emit(const BackendRequest& request) const {
         << "static_assert(\n"
         << "    katana::runtime::abi_version == required_runtime_abi,\n"
         << "    \"Inkompatible Katana-Runtime-ABI\"\n"
+        << ");\n"
+        << "static_assert(\n"
+        << "    katana::runtime::block_abi_version == 1u,\n"
+        << "    \"Inkompatible Katana-Block-ABI\"\n"
         << ");\n\n"
         << "using CpuState = katana::runtime::CpuState;\n"
         << "using Memory = katana::runtime::Memory;\n"
