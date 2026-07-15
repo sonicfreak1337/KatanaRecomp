@@ -765,7 +765,7 @@ Fortschritt:
 
 - [x] KR-3301 - Translation-Unit-Partitionierung
 - [x] KR-3302 - Deterministische Dateinamen
-- [ ] KR-3303 - Inkrementeller Codegen-Cache
+- [x] KR-3303 - Inkrementeller Codegen-Cache
 - [ ] KR-3304 - Parallele Ausgabe und Buildintegration
 - [ ] KR-3305 - Deterministische Blockmetadaten
 

@@ -13,8 +13,8 @@ KatanaRecomp besitzt einen durchgaengigen Prototyp-Pfad von Raw- und ELF32-SH-Ei
 ### Gesamtprojekt
 
 - [x] Kernunterbau abgeschlossen: Phasen 1 bis 5 sind vollstaendig umgesetzt
-- [~] Gesamtfortschritt nach gepflegten Roadmap-Tasks: 130 von 209 Tasks abgeschlossen = 62.2%
-- [~] Fortschritt auf dem Weg von Dreamcast-Plattform bis Alpha: 36 von 112 Tasks abgeschlossen = 32.1%
+- [~] Gesamtfortschritt nach gepflegten Roadmap-Tasks: 131 von 209 Tasks abgeschlossen = 62.7%
+- [~] Fortschritt auf dem Weg von Dreamcast-Plattform bis Alpha: 37 von 112 Tasks abgeschlossen = 33.0%
 - [ ] Alpha-Gate erreicht: nein
 
 ### Weg zum ersten echten Dreamcast-Test
@@ -45,7 +45,7 @@ Praktische Einordnung:
 - [x] Phase 4 - Runtime-Grundlage: 18/18 Tasks = 100%
 - [x] Phase 5 - SH-4 FPU: 10/10 Tasks = 100%
 - [x] Phase 6 - Dreamcast-Plattform: 29/29 Tasks und Abschlussgate = 100%
-- [~] Phase 7 - Codegen und Dispatch: 7/21 Tasks = 33.3%
+- [~] Phase 7 - Codegen und Dispatch: 8/21 Tasks = 38.1%
 - [ ] Phase 8 - Werkzeuge und Qualitaet: 0/25 Tasks = 0%
 - [ ] Phase 9 - Kompatibilitaet und Leistung: 0/24 Tasks = 0%
 - [ ] Phase 10 - Desktop-GUI und Quellworkflow: 0/13 Tasks = 0%
@@ -67,11 +67,11 @@ modulare Backend-, Block-ABI- und Plattformdiensttests bestanden
 kein Sonic-Adventure-Test am Zwischenrelease v0.32.0 erforderlich oder ausgefuehrt
 ```
 
-Aktueller Entwicklungsstand (`KR-3302`):
+Aktueller Entwicklungsstand (`KR-3303`):
 
 ```text
-129/129 Debug-Tests bestanden
-katana-codegen-naming-tests bestanden
+130/130 Debug-Tests bestanden
+katana-codegen-cache-tests bestanden
 ```
 
 Abgeschlossenes kumulatives Phase-6-Gate:
@@ -230,11 +230,12 @@ Lokale Sonic-Adventure-Akzeptanzstrategie:
 - [x] v0.32.0 Release-Gate - 127/127 Debug, kein Phasentest
 - [x] KR-3301 - Translation-Unit-Partitionierung
 - [x] KR-3302 - Deterministische Dateinamen
+- [x] KR-3303 - Inkrementeller Codegen-Cache
 
 ## Naechster Arbeitsschritt
 
-- [ ] KR-3303 - Inkrementeller Codegen-Cache
-- [ ] danach KR-3304 - Parallele Ausgabe und Buildintegration
+- [ ] KR-3304 - Parallele Ausgabe und Buildintegration
+- [ ] danach KR-3305 - Deterministische Blockmetadaten
 
 ## Aktuelle Einschraenkungen
 

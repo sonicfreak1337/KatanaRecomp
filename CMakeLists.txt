@@ -102,6 +102,7 @@ add_library(katana_core STATIC
     src/ir/serialize.cpp
     src/ir/verifier.cpp
     src/codegen/backend.cpp
+    src/codegen/cache.cpp
     src/codegen/cpp_emitter.cpp
     src/codegen/naming.cpp
     src/codegen/partition.cpp
@@ -912,6 +913,11 @@ add_executable(katana-codegen-naming-tests tests/codegen/naming_tests.cpp)
 target_link_libraries(katana-codegen-naming-tests PRIVATE katana_core)
 katana_enable_warnings(katana-codegen-naming-tests)
 add_test(NAME katana-codegen-naming-tests COMMAND katana-codegen-naming-tests)
+
+add_executable(katana-codegen-cache-tests tests/codegen/cache_tests.cpp)
+target_link_libraries(katana-codegen-cache-tests PRIVATE katana_core)
+katana_enable_warnings(katana-codegen-cache-tests)
+add_test(NAME katana-codegen-cache-tests COMMAND katana-codegen-cache-tests)
 
 target_link_libraries(
     katana-cpp-emitter-tests

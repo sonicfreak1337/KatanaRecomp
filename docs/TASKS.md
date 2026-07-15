@@ -1115,7 +1115,7 @@ Abhaengigkeiten: KR-3202
 
 Abhaengigkeiten: KR-3301
 
-### [ ] KR-3303 - Inkrementeller Codegen-Cache
+### [x] KR-3303 - Inkrementeller Codegen-Cache
 
 Abhaengigkeiten: KR-3302
 
