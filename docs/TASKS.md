@@ -1492,9 +1492,21 @@ Akzeptanz:
 - Traceformat ist versioniert und enthaelt keine Firmware- oder Flash-Rohdaten
 - Aufzeichnung und Replay funktionieren ueber eine vollstaendige synthetische Frame-Sequenz
 
-### [ ] KR-3701 - Windows- und Linux-CI
+### [ ] KR-3701 - Lokale Debug-Gate-Automatisierung
 
 Abhaengigkeiten: keine
+
+Umfang:
+
+- frische lokale Debug-Konfiguration und vollstaendige Regression mit einem reproduzierbaren Befehl ausfuehren
+- Test-, Sanitizer-, Fuzzing-, Formatierungs- und Auditprofile portabel beschreiben
+- Release-Konfiguration sowie Windows-/Linux-CI erst fuer das Alpha-Gate v0.50.0 aktivieren
+
+Akzeptanz:
+
+- das lokale Debug-Gate scheitert sichtbar bei Build- oder Testfehlern
+- bis einschliesslich v0.44.0 wird weder ein regulaerer Release-Build noch CI als Release-Gate ausgefuehrt
+- die spaetere Alpha-CI kann dieselben Testprofile ohne abweichende Semantik verwenden
 
 ### [ ] KR-3702 - Sanitizer-Builds
 
@@ -1532,7 +1544,7 @@ Akzeptanz:
 - jede Abweichung nennt ersten Gast-PC, Zustandspfad und betroffenes Feld
 - Tests sind ohne Flycast-, dcrecomp- oder BIOS-Binaerdaten reproduzierbar
 - mindestens ein absichtlich fehlerhaftes Testbackend beweist, dass der Vergleich anschlaegt
-- Debug- und Release-Build verwenden dieselben semantischen Erwartungen
+- alle lokal ausgefuehrten Debug- und Sanitizerprofile verwenden dieselben semantischen Erwartungen
 
 ### [ ] KR-3708 - Mehrsegment-, Dispatch- und Invalidierungsfuzzing
 
@@ -1550,7 +1562,7 @@ Akzeptanz:
 - kein Fuzzerfall darf Hostzeiger als Gastadresse akzeptieren
 - stale Bloecke werden nach Seiten- oder Zustandsaenderung nie erneut ausgefuehrt
 - ungueltige Aliaszyklen und ueberlappende Provenienz werden sauber abgelehnt
-- der CI-Kurzlauf besitzt feste Seeds; Langlaeufe koennen extern skaliert werden
+- der automatisierte Kurzlauf besitzt feste Seeds; Langlaeufe koennen extern skaliert werden
 
 ### [ ] KR-3709 - Referenz- und Lizenzprovenienz
 
@@ -1568,7 +1580,7 @@ Akzeptanz:
 
 - Releasebericht trennt Spezifikation, beobachtbares Verhalten, Referenzvergleich und uebernommenen Drittcode
 - eine direkte GPL-pflichtige Einbindung kann nicht ohne dokumentierte Projektlizenzentscheidung aktiviert werden
-- CI findet absichtlich platzierte verbotene Referenz- und Firmwarefixtures
+- der lokale Audit findet absichtlich platzierte verbotene Referenz- und Firmwarefixtures
 - Copyright- und Lizenzhinweise aller tatsaechlichen Abhaengigkeiten sind vollstaendig
 
 ### [ ] KR-3710 - v0.37 Release-Gate
@@ -1577,7 +1589,7 @@ Abhaengigkeiten: KR-3701 bis KR-3709
 
 Akzeptanz:
 
-- Differenztests, Fuzzer, Sanitizer und reproduzierbare Builds laufen in den vorgesehenen CI-Profilen
+- Differenztests, Fuzzer, Sanitizer und reproduzierbare Builds laufen in den vorgesehenen lokalen Debug-Profilen
 - Dispatch-, Fallback-, Invalidierungs- und Schedulerdiagnosen besitzen stabile JSON-Schemata
 - gleiche Eingaben erzeugen bytegleiche Blockmetadaten und Release-Artefakte
 - Datenschutz- und Lizenztests verwenden ausschliesslich synthetische Markerdaten

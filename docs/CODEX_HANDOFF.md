@@ -162,12 +162,17 @@ Ab Phase 6 gilt zusaetzlich die verbindliche Strategie in
   titelbezogenen Runtime-Sonderfaelle implementieren.
 - Vor jedem Gate-Commit Git-Diff und Index ausdruecklich auf geschuetzte Daten,
   lokale Pfade und generierte Builddateien pruefen.
+- Von v0.31.0 bis einschliesslich v0.44.0 besteht ein Release-Gate aus genau
+  einem frischen Debug-Build und der vollstaendigen Debug-Regression. Keine
+  Release-Konfiguration und keine CI werden in diesem Zeitraum ausgefuehrt.
+- Beim Alpha-Gate v0.50.0 werden ein regulaerer Release-Build sowie
+  verpflichtende Windows- und Linux-CI wieder Teil der Freigabe.
 
 Bevor ein Task als fertig gilt:
 
 ```powershell
-cmake --build build
-ctest --test-dir build --output-on-failure
+cmake --build build-current --config Debug
+ctest --test-dir build-current -C Debug --output-on-failure
 ```
 
 Bei Runtime- oder Speicheraenderungen zusaetzlich:
@@ -259,9 +264,9 @@ Generierte Quellen werden nur committed, wenn die Roadmap dies fuer ein reproduz
 
 - Auf der lokalen Festplatte darf fuer KatanaRecomp immer genau ein aktuelles
   Build-Verzeichnis existieren: `build-current/` im Repository-Arbeitsbaum.
-- Debug und Release werden als Konfigurationen desselben Visual-Studio-
-  Multi-Config-Builds erzeugt. Separate Verzeichnisse pro Task, Version oder
-  Konfiguration sind nicht erlaubt.
+- Bis einschliesslich v0.44.0 werden ausschliesslich Debug-Artefakte erzeugt.
+  Erst beim Alpha-Gate v0.50.0 kommt die regulaere Release-Konfiguration hinzu.
+  Separate Verzeichnisse pro Task, Version oder Konfiguration sind nicht erlaubt.
 - Vor oder unmittelbar nach dem Anlegen von `build-current/` werden alle alten
   `build/`-, `build-*`- und `cmake-build-*`-Verzeichnisse nach gepruefter
   absoluter Pfadauflosung entfernt.
@@ -334,11 +339,11 @@ Task: KR-XXXX
 ## Aktuell empfohlener Einstieg
 
 ```text
-Review/Fixrunde fuer KR-3101 bis KR-3105; kein v0.31.0-Gate und kein Sonic-Adventure-Test ohne neue Freigabe
+KR-3201 - Backend-Interface
 ```
 
 Danach:
 
 ```text
-Nach den Fixes: v0.31.0-Gate und kumulativer Sonic-Adventure-Test erst nach ausdruecklicher Freigabe
+Danach: KR-3202 - C++-Backend migrieren
 ```

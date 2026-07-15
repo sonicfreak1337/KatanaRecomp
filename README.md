@@ -2,11 +2,11 @@
 
 [![CI](https://github.com/sonicfreak1337/KatanaRecomp/actions/workflows/ci.yml/badge.svg)](https://github.com/sonicfreak1337/KatanaRecomp/actions/workflows/ci.yml)
 
-Aktuelle Pre-Alpha-Version: `0.30.0`
+Aktuelle Pre-Alpha-Version: `0.31.0`
 
 KatanaRecomp ist ein unabhaengiges, in C++20 entwickeltes Framework fuer die statische Rekompilierung von Sega-Dreamcast-SH-4-Code.
 
-Das Projekt befindet sich in einer fruehen Pre-Alpha-Phase. Der aktuelle Stand ist **Version 0.30.0**.
+Das Projekt befindet sich in einer fruehen Pre-Alpha-Phase. Der aktuelle Stand ist **Version 0.31.0**.
 
 KatanaRecomp ist kein Emulator, kein ISO-Loader und kein Paket fuer kommerzielle Spieldaten. BIOS-Dateien, Disc-Images, urheberrechtlich geschuetzte Assets und automatisch erzeugter Code aus kommerziellen Spielen gehoeren nicht in dieses Repository.
 
@@ -16,7 +16,7 @@ Der aktuelle Prototyp kann kleine SH-4-Binaerprogramme einlesen, analysieren, in
 
 Der End-to-End-Pfad lautet derzeit:
 
-`	ext
+```text
 SH-4-Binaerdaten
     -> Raw- oder ELF32-SH-Loader
     -> Executable Image mit Segmenten
@@ -29,7 +29,7 @@ SH-4-Binaerdaten
     -> C++-Codegenerator
     -> nativer Test-Build
     -> semantischer Laufzeittest
-`
+```
 
 Der aktuelle Teststand umfasst **122 automatische Tests**.
 
@@ -424,7 +424,7 @@ tests/
 
 ## Versionierung
 
-KatanaRecomp verwendet ab Version $version Semantic Versioning:
+KatanaRecomp verwendet Semantic Versioning:
 
 - MAJOR: inkompatible Architektur- oder API-Aenderungen
 - MINOR: neue Decoder-, Analyse-, IR- oder Runtime-Funktionen
@@ -443,14 +443,14 @@ Der Helfer `tools\release-version.ps1` aktualisiert VERSION und CMake und kann e
 
 ## Naechste technische Ziele
 
-1. zentraler Event-Scheduler
-2. TMU und RTC
-3. DMA und Plattform-Interruptintegration
-4. Frame- und Audio-Taktung
-5. kumulatives Phase-6-Gate v0.31.0
+1. modulares Codegen-Backend-Interface
+2. Migration des C++-Backends
+3. ABI-Faehigkeitspruefung
+4. explizite Block-ABI und Zustandsuebergaben
+5. versionierte Plattformdienst-Schnittstelle
 
-Das lokale Windows-Gate fuer eine bereits gebaute Debug- oder
-Release-Konfiguration wird ohne fest codierten Disc-Pfad gestartet:
+Das lokale Windows-Gate wird bis zum Alpha-Gate ausschliesslich fuer einen
+frischen Debug-Build und ohne fest codierten Disc-Pfad gestartet:
 
 ```powershell
 .\tools\run_phase6_gate.ps1 -GdiPath <lokale-disc.gdi> -Configuration Debug

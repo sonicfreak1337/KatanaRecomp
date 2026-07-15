@@ -3,8 +3,9 @@
 Dieses Dokument definiert Sonic Adventure ab Phase 6 als massgeblichen realen,
 lokalen End-to-End-Akzeptanztest. Es ersetzt keine Unit-, Integrations-,
 Regression-, Fuzzing-, Plattform- oder Homebrew-Tests. Diese bleiben der
-oeffentlich verteilbare Nachweis, dienen der Fehlerlokalisierung und laufen
-weiterhin fuer einzelne Tasks und in der oeffentlichen CI.
+oeffentlich verteilbare Nachweis und dienen der Fehlerlokalisierung. Bis
+einschliesslich v0.44.0 laufen sie lokal im Debug-Profil; oeffentliche CI wird
+erst am Alpha-Gate wieder verpflichtend.
 
 ## Grundregeln
 
@@ -124,8 +125,9 @@ Scheduling-, Timer- und DMA-Kriterien:
 Der Checkpoint `SA_PHASE6_MAIN_EXECUTION_STARTED` wird nur daraus abgeleitet,
 dass der Gast-PC im allgemein bestimmten Bereich des geladenen Hauptprogramms
 liegt und dort Code ausgefuehrt wurde. Eine fest codierte Spieladresse ist
-untersagt. Das Gate laeuft je einmal in einem frischen Debug- und Release-Build;
-beide muessen dieselben Checkpoints und strukturellen Ergebnisse liefern.
+untersagt. Bis einschliesslich v0.44.0 laeuft das Phasengate in genau einem
+frischen Debug-Build. Erst das Alpha-Gate v0.50.0 ergaenzt einen regulaeren
+Release-Build sowie verpflichtende Windows- und Linux-CI.
 
 Die v0.31.0-Implementierung nutzt ausschliesslich den bereits vorhandenen
 Phase-5-C++-Emitter: Aus dem allgemein analysierten Einstieg wird lokal genau
@@ -137,10 +139,10 @@ Backend-Dispatch vor. Temporaere Quelle, Objekt und Programm werden nach dem
 Gate geloescht.
 
 Unter Windows fuehrt `tools/run_phase6_gate.ps1` zwei identische Laeufe der
-gewaehlten Debug- oder Release-Konfiguration aus, vergleicht die redigierten
-Berichte byteweise und prueft die Disc-Dateien vor und nach dem Lauf. Der
-vollstaendige Phasenabschluss verlangt weiterhin je eine frische Debug- und
-Release-Konfiguration; das Skript ist kein Gate pro Einzeltask.
+gewaehlten Konfiguration aus, vergleicht die redigierten Berichte byteweise und
+prueft die Disc-Dateien vor und nach dem Lauf. Fuer Pre-Alpha-Gates wird nur
+`Debug` verwendet; die `Release`-Option bleibt fuer das Alpha-Gate erhalten.
+Das Skript ist kein Gate pro Einzeltask.
 
 ## Phase 7: Codegenerator und Runtime-Dispatch
 

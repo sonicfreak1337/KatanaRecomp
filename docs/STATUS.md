@@ -1,8 +1,8 @@
 # Projektstatus
 
-Version: 0.30.0
+Version: 0.31.0
 Phase: Pre-Alpha
-Naechster Meilenstein: v0.31.0 - Scheduling, Timer und DMA
+Naechster Meilenstein: v0.32.0 - Modulare Backend-Schnittstelle
 
 ## Zusammenfassung
 
@@ -22,7 +22,7 @@ KatanaRecomp besitzt einen durchgaengigen Prototyp-Pfad von Raw- und ELF32-SH-Ei
 Definition fuer diesen Status: ein BIOS-freier, frei verteilbarer Homebrew-Vertical-Slice gemaess Phase-6-Release-Gate, der Bild zeigt, Eingabe annimmt und Audio erzeugt.
 
 - [x] Boot- und Homebrew-Einstieg vorhanden: v0.26.0 abgeschlossen
-- [~] Dreamcast-Plattform-Implementierung: 29 von 29 Tasks umgesetzt = 100%; Review, Fixrunde und Release-Gate stehen aus
+- [x] Dreamcast-Plattform-Implementierung: 29 von 29 Tasks und das kumulative Phase-6-Gate sind abgeschlossen
 - [x] Eingabeweg fertig: Maple, Controller und deterministische Replays (`KR-2701` bis `KR-2703`) sind abgeschlossen
 - [x] PVR-Minimalbildpfad fertig: Register, Framebuffer, Tile-Accelerator, erste Texturformate und Render-Backend (`KR-2801` bis `KR-2804`) sind abgeschlossen
 - [x] AICA-Minimalaudiopfad fertig: Register, PCM/ADPCM, Mixer, Host-Audio sowie HLE-Timer und Interrupts (`KR-2901` bis `KR-2904`) sind vorhanden
@@ -31,8 +31,9 @@ Definition fuer diesen Status: ein BIOS-freier, frei verteilbarer Homebrew-Verti
 
 Praktische Einordnung:
 
-- [~] Vom kumulativen Phase-6-Dreamcast-Test sind wir noch einen Plattform-Meilenstein entfernt: `v0.31.0`
-- [~] Der CPU-, IR-, Runtime- und FPU-Unterbau steht; der Engpass ist jetzt fast vollstaendig Plattformintegration
+- [x] Der frei verteilbare synthetische Vertical Slice bootet, verarbeitet Eingabe, rendert ein Bildprimitiv und erzeugt Audio in einem gemeinsamen Lauf
+- [x] Der kumulative lokale Phase-6-Test erreicht `SA_PHASE6_MAIN_EXECUTION_STARTED`
+- [~] Der naechste Engpass ist die modulare Backend-, Block-ABI- und Plattformdienst-Schnittstelle von v0.32.0
 - [ ] Von Alpha sind wir noch deutlich entfernt, weil nach Phase 6 auch Codegen-/Dispatch-Haertung, Tooling, Kompatibilitaet, GUI und `.gdi`-Workflow fehlen
 
 ### Phasenstatus
@@ -42,7 +43,7 @@ Praktische Einordnung:
 - [x] Phase 3 - Katana-IR: 14/14 Tasks = 100%
 - [x] Phase 4 - Runtime-Grundlage: 18/18 Tasks = 100%
 - [x] Phase 5 - SH-4 FPU: 10/10 Tasks = 100%
-- [~] Phase 6 - Dreamcast-Plattform: 29/29 Tasks implementiert = 100%; Review und v0.31.0-Gate ausstehend
+- [x] Phase 6 - Dreamcast-Plattform: 29/29 Tasks und Abschlussgate = 100%
 - [ ] Phase 7 - Codegen und Dispatch: 0/21 Tasks = 0%
 - [ ] Phase 8 - Werkzeuge und Qualitaet: 0/25 Tasks = 0%
 - [ ] Phase 9 - Kompatibilitaet und Leistung: 0/24 Tasks = 0%
@@ -51,71 +52,42 @@ Praktische Einordnung:
 
 ## Teststatus
 
-Letztes abgeschlossenes Release-Gate (`v0.30.0`):
+Letztes abgeschlossenes Release-Gate (`v0.31.0`):
 
 ```text
-100% tests passed out of 114 (frische lokale Debug- und Release-Builds)
+100% tests passed out of 122 (frischer lokaler Debug-Build)
 ```
 
 Aktueller Release-Stand:
 
 ```text
-100% tests passed out of 114 (v0.30.0, vollstaendige lokale Debug- und Release-Testlaeufe)
+122/122 Tests bestanden
+katana-dreamcast-vertical-slice-tests bestanden
+SA_PHASE6_MAIN_EXECUTION_STARTED in zwei bytegleichen Laeufen erreicht
+Disc-Quelle unveraendert; silent_failures=0
 ```
 
-Abgeschlossenes v0.30.0-Gate:
+Abgeschlossenes kumulatives Phase-6-Gate:
 
 ```text
-114/114 Tests bestanden (frische lokale Debug- und Release-Builds)
-kein vollstaendiger Sonic-Adventure-Lauf; Revalidierung planmaessig erst bei v0.31.0
+tracks_validated=3; iso9660_mounted=true; boot_file_loaded=true
+executed_blocks=1; guest_cycles=16; scheduler_events=3
+gdrom_completions=1; tmu_events=1; dma_events=1
+interrupts_delivered=1; cache_invalidations=1; fallbacks=1
+silent_failures=0
 ```
 
-Aktueller Taskstand (`KR-3101`):
-
-```text
-1/1 katana-scheduler-tests bestanden
-vollstaendige lokale Debug-Regression: 115/115 Tests
-```
-
-Aktueller Taskstand (`KR-3102`):
-
-```text
-1/1 katana-tmu-rtc-tests bestanden
-vollstaendige lokale Debug-Regression: 116/116 Tests
-```
-
-Aktueller Taskstand (`KR-3103`):
-
-```text
-1/1 katana-dma-tests bestanden
-vollstaendige lokale Debug-Regression: 117/117 Tests
-```
-
-Aktueller Taskstand (`KR-3104`):
-
-```text
-1/1 katana-platform-interrupt-tests bestanden
-vollstaendige lokale Debug-Regression: 118/118 Tests
-```
-
-Aktueller Taskstand (`KR-3105`):
-
-```text
-1/1 katana-media-clock-tests bestanden
-vollstaendige lokale Debug-Regression: 119/119 Tests
-Sonic-Adventure-Test: gemaess Review-Stopp nicht ausgefuehrt
-```
-
-Review-Nacharbeit (`KR-3105`): callback-internes Video-Stop, Video-Stop/Start,
-Audio-Reset sowie anschliessender Stop/Advance sind gegen Doppel- und
-Geisterereignisse regressionsgesichert.
+Phase-6-Nacharbeit: Scheduler-Advance und Reset sind reentrancy-geschuetzt;
+callback-internes Stop, Stop/Start und Reset der Medienuhr sind gegen Doppel-
+und Geisterereignisse regressionsgesichert. Das Release-Gate verwendet gemaess
+aktueller Pre-Alpha-Regel nur Debug. Release-Build und CI kehren bei v0.50.0 zurueck.
 
 Lokale Sonic-Adventure-Akzeptanzstrategie:
 
 - [x] verbindliche kumulative Gates fuer Phase 6 bis Phase 10 und v0.50.0 sind in `docs/SONIC_ADVENTURE_ACCEPTANCE.md` definiert
 - [x] einzelne Tasks, Commits und Zwischenreleases benoetigen keinen vollstaendigen Sonic-Adventure-Lauf
-- [ ] der bestehende v0.30.0-GDI-Smoke wird nicht jetzt wiederholt, sondern beim Phase-6-Abschluss v0.31.0 kumulativ nach den neuen messbaren Kriterien revalidiert
-- [ ] der erste verbindliche vollstaendige Lauf ist das Phase-6-Gate v0.31.0 mit `SA_PHASE6_MAIN_EXECUTION_STARTED`
+- [x] der bestehende v0.30.0-GDI-Smoke wurde beim Phase-6-Abschluss v0.31.0 kumulativ nach den neuen messbaren Kriterien revalidiert
+- [x] das Phase-6-Gate v0.31.0 erreicht `SA_PHASE6_MAIN_EXECUTION_STARTED`
 - [ ] kuenftige Phasen muessen die jeweils benoetigten allgemeinen Zaehler, Checkpoints und redigierten maschinenlesbaren Berichte bereitstellen, ohne spaetere Funktionen vorzuziehen
 
 ## Fertiggestellte Roadmap-Tasks
@@ -246,14 +218,14 @@ Lokale Sonic-Adventure-Akzeptanzstrategie:
 
 ## Naechster Arbeitsschritt
 
-- [ ] Code-Review und Fixrunde fuer KR-3101 bis KR-3105
-- [ ] erst nach neuer Freigabe: v0.31.0-Gate mit frischem Debug-/Release-Build und kumulativem Sonic-Adventure-Test
+- [ ] KR-3201 - Backend-Interface
+- [ ] danach KR-3202 - C++-Backend migrieren
 
 ## Aktuelle Einschraenkungen
 
 - unvollstaendiger SH-4-Befehlssatz
 - FPU-Grund- und Vektoroperationen sind vorhanden; vollstaendige FPSCR-Exception-Flags bleiben ausserhalb des aktuellen Konformanzvertrags
-- Dreamcast-Speicherbereiche, MMIO-Handler, strukturierte SH-4-Ausnahmen, Interruptprioritaeten, Watchpoints sowie erste PVR-, AICA- und DMA-Registermodelle sind vorhanden; GD-ROM- und Timerregister folgen mit der Plattformintegration
-- BIOS-freier Homebrew-Boot, PREF-Beobachtung, protokolliertes Flash, Maple-Eingabe und der isolierte PVR-Minimalbildpfad sind vorhanden
+- Dreamcast-Speicherbereiche, MMIO, Ausnahmen, Interrupts, PVR, AICA, GD-ROM, Timer, DMA und Medienuhr sind als belastbares Plattformminimum vorhanden, aber noch keine vollstaendige Hardwareemulation
+- BIOS-freier Homebrew-Boot, PREF-Beobachtung, protokolliertes Flash und ein integrierter synthetischer Bild-/Eingabe-/Audio-Vertical-Slice sind vorhanden
 - AICA-Audio laeuft im dokumentierten HLE-Profil; ARM7-LLE ist nicht implementiert und wird sichtbar abgewiesen
 - nur einfache konstante indirekte Ziele und bekannte begrenzte Jump Tables werden aufgeloest

@@ -1,7 +1,7 @@
 # KatanaRecomp Roadmap
 
 Status: Pre-Alpha
-Aktuelle Basis: v0.24.0
+Aktuelle Basis: v0.31.0
 Planungsmodell: Semantic Versioning, kleine ueberpruefbare Meilensteine
 
 Diese Roadmap beschreibt die technische Entwicklung von KatanaRecomp vom aktuellen Architektur-Prototyp bis zu einem belastbaren Dreamcast-Recompiler-Framework.
@@ -61,7 +61,7 @@ Sie ist absichtlich in kleine, voneinander abhaengige Releases und Task-IDs zerl
 | SH-4 FPU | 0.24 bis 0.25 | FPU-Grundlage und Dreamcast-relevante Spezialoperationen |
 | Dreamcast-Plattform | 0.26 bis 0.31 | Boot, Eingabe, Grafik, Audio, GD-ROM und Scheduling |
 | Codegen und Buildsystem | 0.32 bis 0.34 | modulare Backends, Cache, indirekter Dispatch |
-| Werkzeuge und Qualitaet | 0.35 bis 0.37 | Manifest, Diagnostik, CI, Fuzzing und reproduzierbare Builds |
+| Werkzeuge und Qualitaet | 0.35 bis 0.37 | Manifest, Diagnostik, Fuzzing und reproduzierbare Debug-Gates |
 | Kompatibilitaet und Leistung | 0.38 bis 0.40 | Homebrew-Vertical-Slice und erster oeffentlicher Pre-Alpha-Stand |
 | Desktop-GUI und Quellworkflow | 0.41 bis 0.44 | vollstaendiger Alpha-Workflow fuer Projektanlage, `.gdi`-Quellen und Analyse |
 | Alpha | 0.50.0 | zusammenhaengende Dreamcast-Programme laufen reproduzierbar |
@@ -503,12 +503,21 @@ Release-Gate:
 - frische lokale Debug- und Release-Builds bestehen vollstaendig; CI ist erst
   zum Alpha-Gate wieder verpflichtend
 
+## Pre-Alpha-Build- und Gate-Strategie
+
+Von v0.31.0 bis einschliesslich v0.44.0 wird jedes lokale Release-Gate mit
+genau einem frischen Debug-Build und der vollstaendigen Regression bestaetigt.
+Auf der Festplatte bleibt nur `build-current/` mit den aktuellen
+Debug-Artefakten. Regulare Release-Builds sowie verpflichtende Windows- und
+Linux-CI werden erst beim Alpha-Gate v0.50.0 wieder ausgefuehrt.
+
 ## Lokale Sonic-Adventure-Akzeptanzstrategie
 
 Sonic Adventure ist ab Phase 6 der massgebliche reale, lokale
 End-to-End-Akzeptanztest. Unit-, Integrations-, Regression-, Fuzzing-,
 Plattform- und Homebrew-Tests bleiben unveraendert der oeffentlich verteilbare
-Pflichtnachweis fuer einzelne Tasks und CI.
+Pflichtnachweis fuer einzelne Tasks. Oeffentliche CI wird am Alpha-Gate wieder
+verpflichtend.
 
 Der vollstaendige lokale Test laeuft genau einmal pro abgeschlossener Phase:
 
@@ -671,7 +680,7 @@ Release-Gate:
 - frische lokale Debug- und Release-Builds bestehen mit 114/114 Tests; CI ist erst zum Alpha-Gate verpflichtend
 - gemaess lokaler Akzeptanzstrategie erfolgt hier kein vollstaendiger Sonic-Adventure-Test; die GDI-Kriterien werden beim kumulativen Phase-6-Gate v0.31.0 erneut geprueft
 
-### v0.31.0 - Scheduling, Timer und DMA
+### [x] v0.31.0 - Scheduling, Timer und DMA
 
 Fortschritt:
 
@@ -681,9 +690,8 @@ Fortschritt:
 - [x] KR-3104 - Plattform-Interruptintegration
 - [x] KR-3105 - Frame- und Audio-Taktung
 
-Implementierungsstand: Alle fuenf v0.31.0-Tasks sind umgesetzt. Das Release-Gate,
-der Versionssprung, der Tag und der kumulative Sonic-Adventure-Test bleiben bis
-nach der vereinbarten Code-Review und Fixrunde ausdruecklich offen.
+Release-Stand: Alle fuenf v0.31.0-Tasks, die Review-Nacharbeit und das
+kumulative Phase-6-Gate sind abgeschlossen.
 
 Review-Nacharbeit: Die Medienuhr trennt alte und callback-intern neugestartete
 Laeufe per Generation-ID; Stop/Start/Reset in Video- oder Audio-Callbacks kann
@@ -711,7 +719,11 @@ Sonic-Adventure-Abschlussgate fuer Phase 6 bei v0.31.0:
 - die Bootdatei ist in den Gastadressraum geladen und mindestens ein Block ihres allgemein bestimmten Programmbereichs wurde innerhalb eines festen Gastzyklusbudgets ausgefuehrt
 - Scheduler, asynchrones GD-ROM sowie zugehoerige Abschluss-, DMA- oder Interruptpfade liefern messbare Ereignisse; `executed_blocks > 0`, `guest_cycles > 0` und `silent_failures == 0`
 - zwei identische Laeufe erreichen `SA_PHASE6_MAIN_EXECUTION_STARTED` mit demselben letzten Gast-PC und denselben deterministischen Scheduler-Kernzustaenden
-- ein frischer Debug- und ein frischer Release-Build erreichen dieselben Checkpoints und strukturellen Ergebnisse
+- ein frischer Debug-Build besteht mit 122/122 Tests und erreicht in zwei
+  bytegleichen Laeufen denselben Checkpoint sowie dieselben strukturellen Ergebnisse
+- Gate-Ergebnis: `SA_PHASE6_MAIN_EXECUTION_STARTED`, ein ausgefuehrter Block,
+  16 Gastzyklen, drei Scheduler-Ereignisse sowie je ein GD-ROM-, TMU-, DMA-,
+  Interrupt- und Cache-Invalidierungsereignis bei `silent_failures == 0`
 
 ## Phase 7: Codegenerator und Dispatch
 
@@ -867,11 +879,11 @@ Enthalten:
 - deterministische Replays fuer CPU-, MMIO-, DMA-, Interrupt- und Schedulerereignisse
 - KR-3606: read-only Firmware- und Flash-Inspektion mit Groessen-/Hashpruefung, Partitions-/CRC-Diagnose und standardmaessiger Redaktion sensibler Felder
 
-### v0.37.0 - CI, Fuzzing und reproduzierbare Builds
+### v0.37.0 - Fuzzing und reproduzierbare Debug-Gates
 
 Fortschritt:
 
-- [ ] KR-3701 - Windows- und Linux-CI
+- [ ] KR-3701 - Lokale Debug-Gate-Automatisierung
 - [ ] KR-3702 - Sanitizer-Builds
 - [ ] KR-3703 - Fuzzer
 - [ ] KR-3704 - Coverage
@@ -884,16 +896,15 @@ Fortschritt:
 
 Enthalten:
 
-- Windows-CI
-- Linux-CI
-- Debug- und Release-Builds
+- lokaler frischer Debug-Build mit vollstaendiger Regression
+- portable Testprofile als Vorbereitung fuer die Alpha-CI
 - AddressSanitizer und UndefinedBehaviorSanitizer
 - Decoder-, Loader- und IR-Fuzzer
 - Differenztests zwischen IR-Referenzausfuehrung, generiertem C++ und kontrolliertem Fallback
 - Fuzzing fuer Aliasgruppen, Multi-Segment-Images, indirekten Dispatch, ROM-RAM-Kopien und Schreibinvalidierung
 - Coverage-Berichte
 - Formatierung und statische Analyse
-- reproduzierbare Release-Artefakte
+- reproduzierbare Pre-Alpha-Artefakte
 - Third-Party-, Referenzprovenienz- und Lizenzbericht
 
 Sonic-Adventure-Abschlussgate fuer Phase 8 bei v0.37.0:
