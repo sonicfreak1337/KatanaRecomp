@@ -7,6 +7,7 @@
 - KR-3301: Funktionen werden unabhaengig von ihrer Eingabereihenfolge deterministisch nach Gastadresse in groessen- und instruktionsbegrenzte Translation-Unit-Partitionen aufgeteilt.
 - KR-3302: Translation Units erhalten portable Namen aus Partitionsindex, Gastadressbereich und Hash der kanonischen IR-Serialisierung; Hostpfade und Eingabereihenfolge bleiben ohne Einfluss.
 - KR-3303: Ein inhaltsadressierter Codegen-Cache verwendet versionierte, komponentenweise getrennte Schluessel, bewahrt bytegleiche Treffer ohne Neuschreiben und sperrt Pfadausbrueche ueber Artefaktnamen.
+- KR-3304: Eine begrenzt parallele Projektausgabe nutzt Cachetreffer, schreibt Artefakte in stabiler Reihenfolge und erzeugt bytegleiche CMake-, Ninja- und Compile-Commands-Integration.
 
 ### Behoben
 

@@ -107,6 +107,7 @@ add_library(katana_core STATIC
     src/codegen/naming.cpp
     src/codegen/partition.cpp
     src/codegen/probe.cpp
+    src/codegen/project.cpp
 )
 
 target_include_directories(
@@ -918,6 +919,11 @@ add_executable(katana-codegen-cache-tests tests/codegen/cache_tests.cpp)
 target_link_libraries(katana-codegen-cache-tests PRIVATE katana_core)
 katana_enable_warnings(katana-codegen-cache-tests)
 add_test(NAME katana-codegen-cache-tests COMMAND katana-codegen-cache-tests)
+
+add_executable(katana-codegen-project-tests tests/codegen/project_tests.cpp)
+target_link_libraries(katana-codegen-project-tests PRIVATE katana_core)
+katana_enable_warnings(katana-codegen-project-tests)
+add_test(NAME katana-codegen-project-tests COMMAND katana-codegen-project-tests)
 
 target_link_libraries(
     katana-cpp-emitter-tests

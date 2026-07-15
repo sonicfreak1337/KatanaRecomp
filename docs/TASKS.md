@@ -1119,7 +1119,7 @@ Abhaengigkeiten: KR-3301
 
 Abhaengigkeiten: KR-3302
 
-### [ ] KR-3304 - Parallele Ausgabe und Buildintegration
+### [x] KR-3304 - Parallele Ausgabe und Buildintegration
 
 Abhaengigkeiten: KR-3303
 

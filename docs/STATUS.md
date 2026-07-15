@@ -13,8 +13,8 @@ KatanaRecomp besitzt einen durchgaengigen Prototyp-Pfad von Raw- und ELF32-SH-Ei
 ### Gesamtprojekt
 
 - [x] Kernunterbau abgeschlossen: Phasen 1 bis 5 sind vollstaendig umgesetzt
-- [~] Gesamtfortschritt nach gepflegten Roadmap-Tasks: 131 von 209 Tasks abgeschlossen = 62.7%
-- [~] Fortschritt auf dem Weg von Dreamcast-Plattform bis Alpha: 37 von 112 Tasks abgeschlossen = 33.0%
+- [~] Gesamtfortschritt nach gepflegten Roadmap-Tasks: 132 von 209 Tasks abgeschlossen = 63.2%
+- [~] Fortschritt auf dem Weg von Dreamcast-Plattform bis Alpha: 38 von 112 Tasks abgeschlossen = 33.9%
 - [ ] Alpha-Gate erreicht: nein
 
 ### Weg zum ersten echten Dreamcast-Test
@@ -45,7 +45,7 @@ Praktische Einordnung:
 - [x] Phase 4 - Runtime-Grundlage: 18/18 Tasks = 100%
 - [x] Phase 5 - SH-4 FPU: 10/10 Tasks = 100%
 - [x] Phase 6 - Dreamcast-Plattform: 29/29 Tasks und Abschlussgate = 100%
-- [~] Phase 7 - Codegen und Dispatch: 8/21 Tasks = 38.1%
+- [~] Phase 7 - Codegen und Dispatch: 9/21 Tasks = 42.9%
 - [ ] Phase 8 - Werkzeuge und Qualitaet: 0/25 Tasks = 0%
 - [ ] Phase 9 - Kompatibilitaet und Leistung: 0/24 Tasks = 0%
 - [ ] Phase 10 - Desktop-GUI und Quellworkflow: 0/13 Tasks = 0%
@@ -67,11 +67,11 @@ modulare Backend-, Block-ABI- und Plattformdiensttests bestanden
 kein Sonic-Adventure-Test am Zwischenrelease v0.32.0 erforderlich oder ausgefuehrt
 ```
 
-Aktueller Entwicklungsstand (`KR-3303`):
+Aktueller Entwicklungsstand (`KR-3304`):
 
 ```text
-130/130 Debug-Tests bestanden
-katana-codegen-cache-tests bestanden
+131/131 Debug-Tests bestanden
+katana-codegen-project-tests bestanden
 ```
 
 Abgeschlossenes kumulatives Phase-6-Gate:
@@ -231,11 +231,12 @@ Lokale Sonic-Adventure-Akzeptanzstrategie:
 - [x] KR-3301 - Translation-Unit-Partitionierung
 - [x] KR-3302 - Deterministische Dateinamen
 - [x] KR-3303 - Inkrementeller Codegen-Cache
+- [x] KR-3304 - Parallele Ausgabe und Buildintegration
 
 ## Naechster Arbeitsschritt
 
-- [ ] KR-3304 - Parallele Ausgabe und Buildintegration
-- [ ] danach KR-3305 - Deterministische Blockmetadaten
+- [ ] KR-3305 - Deterministische Blockmetadaten
+- [ ] danach v0.33.0 Release-Gate
 
 ## Aktuelle Einschraenkungen
 

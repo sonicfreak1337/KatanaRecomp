@@ -106,10 +106,16 @@ std::filesystem::path CodegenCache::artifact_path(
     const std::string_view key,
     const std::string_view artifact_name
 ) const {
-    if (!safe_component(key) || !safe_component(artifact_name)) {
+    const std::filesystem::path relative(artifact_name);
+    if (!safe_component(key) || relative.empty() || relative.is_absolute()) {
         throw std::invalid_argument("Codegen-Cache-Pfadkomponente ist nicht portabel.");
     }
-    return root_ / std::string(key) / std::string(artifact_name);
+    for (const auto& component : relative) {
+        if (!safe_component(component.string())) {
+            throw std::invalid_argument("Codegen-Cache-Pfadkomponente ist nicht portabel.");
+        }
+    }
+    return root_ / std::string(key) / relative;
 }
 
 } // namespace katana::codegen
