@@ -53,6 +53,48 @@ private:
     std::int32_t step_ = 127;
 };
 
+inline constexpr std::uint32_t aica_unity_gain = 32768u;
+inline constexpr std::int32_t aica_pan_left = -32768;
+inline constexpr std::int32_t aica_pan_center = 0;
+inline constexpr std::int32_t aica_pan_right = 32768;
+
+struct AicaVoice {
+    std::span<const std::int16_t> samples;
+    std::uint32_t gain = aica_unity_gain;
+    std::int32_t pan = aica_pan_center;
+};
+
+class AicaMixer final {
+public:
+    [[nodiscard]] std::vector<std::int16_t> mix(
+        std::span<const AicaVoice> voices,
+        std::size_t frame_count
+    ) const;
+};
+
+class AicaAudioBackend {
+public:
+    virtual ~AicaAudioBackend() = default;
+    virtual void submit(
+        std::span<const std::int16_t> interleaved_stereo,
+        std::uint32_t sample_rate
+    ) = 0;
+};
+
+class RecordingAicaAudioBackend final : public AicaAudioBackend {
+public:
+    void submit(std::span<const std::int16_t> interleaved_stereo, std::uint32_t sample_rate) override;
+    [[nodiscard]] std::uint64_t submitted_buffers() const noexcept;
+    [[nodiscard]] std::uint64_t submitted_frames() const noexcept;
+    [[nodiscard]] std::uint32_t sample_rate() const noexcept;
+    [[nodiscard]] const std::vector<std::int16_t>& last_buffer() const noexcept;
+private:
+    std::uint64_t submitted_buffers_ = 0u;
+    std::uint64_t submitted_frames_ = 0u;
+    std::uint32_t sample_rate_ = 0u;
+    std::vector<std::int16_t> last_buffer_;
+};
+
 [[nodiscard]] std::shared_ptr<AicaRegisterFile> map_aica_registers(Memory& memory);
 
 } // namespace katana::runtime

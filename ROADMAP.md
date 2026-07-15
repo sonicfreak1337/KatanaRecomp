@@ -592,7 +592,7 @@ Fortschritt:
 
 - [x] KR-2901 - AICA-Registerminimum
 - [x] KR-2902 - PCM und ADPCM
-- [ ] KR-2903 - Mixer und Host-Audio
+- [x] KR-2903 - Mixer und Host-Audio
 - [ ] KR-2904 - ARM7-Strategie
 
 Enthalten:

@@ -912,7 +912,7 @@ Abhaengigkeiten: KR-2207
 
 Abhaengigkeiten: KR-2901
 
-### [ ] KR-2903 - Mixer und Host-Audio
+### [x] KR-2903 - Mixer und Host-Audio
 
 Abhaengigkeiten: KR-2902
 

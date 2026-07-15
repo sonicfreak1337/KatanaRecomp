@@ -110,6 +110,57 @@ void AicaSampleDecoder::reset() noexcept {
 std::int32_t AicaSampleDecoder::predictor() const noexcept { return predictor_; }
 std::int32_t AicaSampleDecoder::step() const noexcept { return step_; }
 
+std::vector<std::int16_t> AicaMixer::mix(
+    const std::span<const AicaVoice> voices,
+    const std::size_t frame_count
+) const {
+    if (frame_count > std::numeric_limits<std::size_t>::max() / 2u) {
+        throw std::out_of_range("AICA-Mixpuffer ist zu gross.");
+    }
+    for (const auto& voice : voices) {
+        if (voice.gain > aica_unity_gain || voice.pan < aica_pan_left || voice.pan > aica_pan_right) {
+            throw std::invalid_argument("AICA-Voice besitzt ungueltige Gain- oder Pan-Werte.");
+        }
+    }
+    std::vector<std::int16_t> output(frame_count * 2u, 0);
+    for (std::size_t frame = 0u; frame < frame_count; ++frame) {
+        std::int64_t left = 0;
+        std::int64_t right = 0;
+        for (const auto& voice : voices) {
+            if (frame >= voice.samples.size()) { continue; }
+            const auto left_pan = voice.pan > 0 ? aica_pan_right - voice.pan : aica_pan_right;
+            const auto right_pan = voice.pan < 0 ? aica_pan_right + voice.pan : aica_pan_right;
+            const auto left_gain = static_cast<std::int64_t>(voice.gain) * left_pan / aica_pan_right;
+            const auto right_gain = static_cast<std::int64_t>(voice.gain) * right_pan / aica_pan_right;
+            left += static_cast<std::int64_t>(voice.samples[frame]) * left_gain / aica_unity_gain;
+            right += static_cast<std::int64_t>(voice.samples[frame]) * right_gain / aica_unity_gain;
+        }
+        output[frame * 2u] = static_cast<std::int16_t>(std::clamp<std::int64_t>(left, -32768, 32767));
+        output[frame * 2u + 1u] = static_cast<std::int16_t>(std::clamp<std::int64_t>(right, -32768, 32767));
+    }
+    return output;
+}
+
+void RecordingAicaAudioBackend::submit(
+    const std::span<const std::int16_t> interleaved_stereo,
+    const std::uint32_t sample_rate
+) {
+    if ((interleaved_stereo.size() & 1u) != 0u || sample_rate == 0u) {
+        throw std::invalid_argument("Host-Audio braucht Stereo-Frames und eine gueltige Samplerate.");
+    }
+    last_buffer_.assign(interleaved_stereo.begin(), interleaved_stereo.end());
+    sample_rate_ = sample_rate;
+    ++submitted_buffers_;
+    submitted_frames_ += interleaved_stereo.size() / 2u;
+}
+
+std::uint64_t RecordingAicaAudioBackend::submitted_buffers() const noexcept { return submitted_buffers_; }
+std::uint64_t RecordingAicaAudioBackend::submitted_frames() const noexcept { return submitted_frames_; }
+std::uint32_t RecordingAicaAudioBackend::sample_rate() const noexcept { return sample_rate_; }
+const std::vector<std::int16_t>& RecordingAicaAudioBackend::last_buffer() const noexcept {
+    return last_buffer_;
+}
+
 std::shared_ptr<AicaRegisterFile> map_aica_registers(Memory& memory) {
     auto registers = std::make_shared<AicaRegisterFile>();
     auto device = std::make_shared<MmioMemoryDevice>(

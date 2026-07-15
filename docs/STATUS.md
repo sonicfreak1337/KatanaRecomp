@@ -13,8 +13,8 @@ KatanaRecomp besitzt einen durchgaengigen Prototyp-Pfad von Raw- und ELF32-SH-Ei
 ### Gesamtprojekt
 
 - [x] Kernunterbau abgeschlossen: Phasen 1 bis 5 sind vollstaendig umgesetzt
-- [~] Gesamtfortschritt nach gepflegten Roadmap-Tasks: 110 von 209 Tasks abgeschlossen = 52.6%
-- [~] Fortschritt auf dem Weg von Dreamcast-Plattform bis Alpha: 16 von 112 Tasks abgeschlossen = 14.3%
+- [~] Gesamtfortschritt nach gepflegten Roadmap-Tasks: 111 von 209 Tasks abgeschlossen = 53.1%
+- [~] Fortschritt auf dem Weg von Dreamcast-Plattform bis Alpha: 17 von 112 Tasks abgeschlossen = 15.2%
 - [ ] Alpha-Gate erreicht: nein
 
 ### Weg zum ersten echten Dreamcast-Test
@@ -22,10 +22,10 @@ KatanaRecomp besitzt einen durchgaengigen Prototyp-Pfad von Raw- und ELF32-SH-Ei
 Definition fuer diesen Status: ein BIOS-freier, frei verteilbarer Homebrew-Vertical-Slice gemaess Phase-6-Release-Gate, der Bild zeigt, Eingabe annimmt und Audio erzeugt.
 
 - [x] Boot- und Homebrew-Einstieg vorhanden: v0.26.0 abgeschlossen
-- [~] Dreamcast-Plattformphase insgesamt: 16 von 29 Tasks abgeschlossen = 55.2%
+- [~] Dreamcast-Plattformphase insgesamt: 17 von 29 Tasks abgeschlossen = 58.6%
 - [x] Eingabeweg fertig: Maple, Controller und deterministische Replays (`KR-2701` bis `KR-2703`) sind abgeschlossen
 - [x] PVR-Minimalbildpfad fertig: Register, Framebuffer, Tile-Accelerator, erste Texturformate und Render-Backend (`KR-2801` bis `KR-2804`) sind abgeschlossen
-- [~] Audiopfad in Arbeit: AICA-Register sowie PCM/ADPCM (`KR-2901`, `KR-2902`) sind vorhanden; Mixer und Host-Audio (`KR-2903`) fehlen
+- [x] AICA-Minimalaudiopfad fertig: Register, PCM/ADPCM, Mixer und Host-Audio (`KR-2901` bis `KR-2903`) sind vorhanden
 - [ ] Takt- und Ereignispfad fertig: Scheduler, Timer, DMA und Interruptintegration (`KR-3101` bis `KR-3105`) fehlen
 - [ ] Optional fuer Disc-Quellen, aber nicht noetig fuer den ersten BIOS-freien Vertical Slice: `.gdi`-Pfad (`KR-3001` bis `KR-3006`) fehlt
 
@@ -42,7 +42,7 @@ Praktische Einordnung:
 - [x] Phase 3 - Katana-IR: 14/14 Tasks = 100%
 - [x] Phase 4 - Runtime-Grundlage: 18/18 Tasks = 100%
 - [x] Phase 5 - SH-4 FPU: 10/10 Tasks = 100%
-- [~] Phase 6 - Dreamcast-Plattform: 16/29 Tasks = 55.2%
+- [~] Phase 6 - Dreamcast-Plattform: 17/29 Tasks = 58.6%
 - [ ] Phase 7 - Codegen und Dispatch: 0/21 Tasks = 0%
 - [ ] Phase 8 - Werkzeuge und Qualitaet: 0/25 Tasks = 0%
 - [ ] Phase 9 - Kompatibilitaet und Leistung: 0/24 Tasks = 0%
@@ -57,10 +57,10 @@ Letztes abgeschlossenes Release-Gate (`v0.28.0`):
 100% tests passed out of 104 (frische lokale Debug- und Release-Builds)
 ```
 
-Aktueller Taskstand (`KR-2902`):
+Aktueller Taskstand (`KR-2903`):
 
 ```text
-1/1 katana-aica-sample-tests bestanden (lokal, Debug)
+1/1 katana-aica-mixer-tests bestanden (lokal, Debug)
 ```
 
 ## Fertiggestellte Roadmap-Tasks
@@ -175,10 +175,11 @@ Aktueller Taskstand (`KR-2902`):
 - [x] KR-2804 - Texturformate und Render-Backend
 - [x] KR-2901 - AICA-Registerminimum
 - [x] KR-2902 - PCM und ADPCM
+- [x] KR-2903 - Mixer und Host-Audio
 
 ## Naechster Roadmap-Task
 
-- [ ] KR-2903 - Mixer und Host-Audio
+- [ ] KR-2904 - ARM7-Strategie dokumentieren und implementieren
 
 ## Aktuelle Einschraenkungen
 
