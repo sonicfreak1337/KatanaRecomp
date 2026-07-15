@@ -1,12 +1,53 @@
 # Projektstatus
 
-Version: 0.25.0
+Version: 0.26.0
 Phase: Pre-Alpha
-Aktiver Meilenstein: v0.25.0 - Dreamcast-relevante FPU-Spezialoperationen
+Naechster Meilenstein: v0.27.0 - Maple und Eingabe
 
 ## Zusammenfassung
 
 KatanaRecomp besitzt einen durchgaengigen Prototyp-Pfad von Raw- und ELF32-SH-Eingaben ueber ein segmentiertes Executable Image bis zu generiertem, gegen die zentrale Runtime-Bibliothek gelinktem und ausgefuehrtem C++.
+
+## Fortschrittseinordnung
+
+### Gesamtprojekt
+
+- [x] Kernunterbau abgeschlossen: Phasen 1 bis 5 sind vollstaendig umgesetzt
+- [~] Gesamtfortschritt nach gepflegten Roadmap-Tasks: 100 von 208 Tasks abgeschlossen = 48.1%
+- [~] Fortschritt auf dem Weg von Dreamcast-Plattform bis Alpha: 6 von 111 Tasks abgeschlossen = 5.4%
+- [ ] Alpha-Gate erreicht: nein
+
+### Weg zum ersten echten Dreamcast-Test
+
+Definition fuer diesen Status: ein BIOS-freier, frei verteilbarer Homebrew-Vertical-Slice gemaess Phase-6-Release-Gate, der Bild zeigt, Eingabe annimmt und Audio erzeugt.
+
+- [x] Boot- und Homebrew-Einstieg vorhanden: v0.26.0 abgeschlossen
+- [~] Dreamcast-Plattformphase insgesamt: 6 von 28 Tasks abgeschlossen = 21.4%
+- [ ] Eingabeweg fertig: Maple und Controller (`KR-2701`, `KR-2702`) fehlen
+- [ ] Bildpfad fertig: PVR/Framebuffer/Render-Backend (`KR-2801` bis `KR-2804`) fehlen
+- [ ] Audiopfad fertig: AICA/Mixer/Host-Audio (`KR-2901` bis `KR-2903`) fehlen
+- [ ] Takt- und Ereignispfad fertig: Scheduler, Timer, DMA und Interruptintegration (`KR-3101` bis `KR-3105`) fehlen
+- [ ] Optional fuer Disc-Quellen, aber nicht noetig fuer den ersten BIOS-freien Vertical Slice: `.gdi`-Pfad (`KR-3001` bis `KR-3006`) fehlt
+
+Praktische Einordnung:
+
+- [~] Von einem echten Dreamcast-Smoke-Test sind wir funktional noch vier Plattform-Meilensteine entfernt: `v0.27.0` bis `v0.31.0`
+- [~] Der CPU-, IR-, Runtime- und FPU-Unterbau steht; der Engpass ist jetzt fast vollstaendig Plattformintegration
+- [ ] Von Alpha sind wir noch deutlich entfernt, weil nach Phase 6 auch Codegen-/Dispatch-Haertung, Tooling, Kompatibilitaet, GUI und `.gdi`-Workflow fehlen
+
+### Phasenstatus
+
+- [x] Phase 1 - SH-4 Integer-Kern: 31/31 Tasks = 100%
+- [x] Phase 2 - Loader und Analyse: 21/21 Tasks = 100%
+- [x] Phase 3 - Katana-IR: 14/14 Tasks = 100%
+- [x] Phase 4 - Runtime-Grundlage: 18/18 Tasks = 100%
+- [x] Phase 5 - SH-4 FPU: 10/10 Tasks = 100%
+- [~] Phase 6 - Dreamcast-Plattform: 6/28 Tasks = 21.4%
+- [ ] Phase 7 - Codegen und Dispatch: 0/21 Tasks = 0%
+- [ ] Phase 8 - Werkzeuge und Qualitaet: 0/25 Tasks = 0%
+- [ ] Phase 9 - Kompatibilitaet und Leistung: 0/24 Tasks = 0%
+- [ ] Phase 10 - Desktop-GUI und Quellworkflow: 0/13 Tasks = 0%
+- [ ] Spaetere Release-Gates: 0/3 Tasks = 0%
 
 ## Teststatus
 
