@@ -321,11 +321,11 @@ Task: KR-XXXX
 ## Aktuell empfohlener Einstieg
 
 ```text
-KR-3104 - Plattform-Interruptintegration
+KR-3105 - Frame- und Audio-Taktung
 ```
 
 Danach:
 
 ```text
-KR-3105 - Frame- und Audio-Taktung; danach v0.31.0 als kumulatives Phase-6-Gate
+Danach Review und Fixrunde; v0.31.0-Gate und Sonic-Adventure-Test erst nach ausdruecklicher Freigabe
 ```

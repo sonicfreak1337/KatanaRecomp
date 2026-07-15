@@ -1014,9 +1014,25 @@ Akzeptanz:
 - Master-Disable, explizite Requests, Write-zero-to-clear und Registerbreiten sind regressionsgesichert
 - DDT und reale Pinprotokolle werden sichtbar abgewiesen statt als funktionierend vorgetaeuscht
 
-### [ ] KR-3104 - Plattform-Interruptintegration
+### [x] KR-3104 - Plattform-Interruptintegration
 
 Abhaengigkeiten: KR-2306, KR-3101
+
+Umfang:
+
+- TMU-, RTC-, DMTE- und DMAE-Pending-Zustaende am zentralen Interrupt-Controller spiegeln
+- offizielle SH-4-INTEVT-Codes und die gemeinsamen IPRA-/IPRC-Prioritaetsgruppen abbilden
+- drei feste Dreamcast-IRL-Leitungen fuer spaetere System-ASIC-Quellen bereitstellen
+- Synchronisation und Annahme als expliziten CPU-Safepoint definieren
+- Quittierung am Ursprungsgeraet als einzige Deassert-Bedingung erhalten
+
+Akzeptanz:
+
+- gleichzeitig gesetzte Quellen werden nach Level und stabiler Quellordnung angenommen
+- BL und IMASK bleiben wirksam; SPC, INTEVT und VBR-Vektor stammen aus dem zentralen Exception-Pfad
+- nicht quittierte Levelquellen erscheinen nach Annahme erneut, quittierte Quellen verschwinden
+- TMU-, RTC-, DMTE-, DMAE- und externe IRL-Pfade besitzen eine gemeinsame Laufzeitregression
+- externe Geraete werden nicht unter Umgehung des noch fehlenden Dreamcast-System-ASIC direkt verdrahtet
 
 ### [ ] KR-3105 - Frame- und Audio-Taktung
 

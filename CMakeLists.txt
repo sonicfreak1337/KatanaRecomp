@@ -44,6 +44,7 @@ add_library(katana_runtime STATIC
     src/runtime/iso9660.cpp
     src/runtime/maple.cpp
     src/runtime/pvr.cpp
+    src/runtime/platform_interrupt.cpp
     src/runtime/scheduler.cpp
     src/runtime/timers.cpp
     src/runtime/memory.cpp
@@ -382,6 +383,11 @@ add_executable(katana-dma-tests tests/runtime/dma_tests.cpp)
 target_link_libraries(katana-dma-tests PRIVATE katana_runtime)
 katana_enable_warnings(katana-dma-tests)
 add_test(NAME katana-dma-tests COMMAND katana-dma-tests)
+
+add_executable(katana-platform-interrupt-tests tests/runtime/platform_interrupt_tests.cpp)
+target_link_libraries(katana-platform-interrupt-tests PRIVATE katana_runtime)
+katana_enable_warnings(katana-platform-interrupt-tests)
+add_test(NAME katana-platform-interrupt-tests COMMAND katana-platform-interrupt-tests)
 
 add_executable(katana-decoder-tests
     tests/decoder/decoder_tests.cpp
