@@ -882,6 +882,13 @@ target_link_libraries(katana-cpp-backend-tests PRIVATE katana_core)
 katana_enable_warnings(katana-cpp-backend-tests)
 add_test(NAME katana-cpp-backend-tests COMMAND katana-cpp-backend-tests)
 
+add_executable(katana-backend-capability-tests
+    tests/codegen/backend_capability_tests.cpp
+)
+target_link_libraries(katana-backend-capability-tests PRIVATE katana_core)
+katana_enable_warnings(katana-backend-capability-tests)
+add_test(NAME katana-backend-capability-tests COMMAND katana-backend-capability-tests)
+
 target_link_libraries(
     katana-cpp-emitter-tests
     PRIVATE

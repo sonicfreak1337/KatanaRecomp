@@ -1,6 +1,7 @@
 #pragma once
 
 #include "katana/ir/ir.hpp"
+#include "katana/runtime/abi.hpp"
 
 #include <cstdint>
 #include <span>
@@ -9,9 +10,36 @@
 
 namespace katana::codegen {
 
+inline constexpr std::uint32_t backend_interface_abi_version = 1u;
+
+enum class BackendCapability : std::uint64_t {
+    StructuredSections = 1ull << 0u,
+    RuntimeCpuState = 1ull << 1u,
+    RuntimeMemory = 1ull << 2u,
+    StructuredExceptions = 1ull << 3u,
+    Fpu = 1ull << 4u,
+    BlockTransitions = 1ull << 5u,
+    PlatformServices = 1ull << 6u
+};
+
+using BackendCapabilities = std::uint64_t;
+
+[[nodiscard]] constexpr BackendCapabilities capability(
+    const BackendCapability value
+) noexcept {
+    return static_cast<BackendCapabilities>(value);
+}
+
+struct BackendRequirements {
+    std::uint32_t interface_abi_version = backend_interface_abi_version;
+    std::uint32_t runtime_abi_version = katana::runtime::abi_version;
+    BackendCapabilities capabilities = capability(BackendCapability::StructuredSections);
+};
+
 struct BackendRequest {
     std::span<const katana::ir::Function> functions;
     std::uint32_t entry_address = 0u;
+    BackendRequirements requirements;
 };
 
 struct BackendEmission {
@@ -27,6 +55,9 @@ public:
     virtual ~Backend() = default;
 
     [[nodiscard]] virtual std::string_view name() const noexcept = 0;
+    [[nodiscard]] virtual std::uint32_t interface_abi_version() const noexcept = 0;
+    [[nodiscard]] virtual std::uint32_t runtime_abi_version() const noexcept = 0;
+    [[nodiscard]] virtual BackendCapabilities capabilities() const noexcept = 0;
     [[nodiscard]] virtual BackendEmission emit(const BackendRequest& request) const = 0;
 };
 

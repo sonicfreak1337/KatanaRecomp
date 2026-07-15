@@ -6,6 +6,7 @@
 
 - KR-3201: Eine IR-basierte Backend-Schnittstelle validiert Programme und Einstiegspunkte zentral und trennt Deklarationen, Funktionen sowie Metadaten in deterministisch zusammensetzbare Emissionsabschnitte.
 - KR-3202: Der bestehende C++-Emitter ist als Referenzbackend hinter die modulare Schnittstelle migriert; die bisherige `emit_cpp_program`-API bleibt als kompatibler, getesteter Einstieg erhalten.
+- KR-3203: Backend-Interface-ABI, Runtime-ABI und explizite Faehigkeitsmasken werden vor der Emission geprueft; Fehler nennen Backend sowie den abweichenden Vertrag, bevor Code erzeugt wird.
 
 ## [0.31.0] - 2026-07-16
 

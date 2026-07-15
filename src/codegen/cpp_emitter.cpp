@@ -3036,6 +3036,23 @@ void emit_block(
 
 std::string_view CppBackend::name() const noexcept { return "cpp"; }
 
+std::uint32_t CppBackend::interface_abi_version() const noexcept {
+    return backend_interface_abi_version;
+}
+
+std::uint32_t CppBackend::runtime_abi_version() const noexcept {
+    return katana::runtime::abi_version;
+}
+
+BackendCapabilities CppBackend::capabilities() const noexcept {
+    return
+        capability(BackendCapability::StructuredSections) |
+        capability(BackendCapability::RuntimeCpuState) |
+        capability(BackendCapability::RuntimeMemory) |
+        capability(BackendCapability::StructuredExceptions) |
+        capability(BackendCapability::Fpu);
+}
+
 BackendEmission CppBackend::emit(const BackendRequest& request) const {
     const auto functions = request.functions;
     const auto entry_address = request.entry_address;
@@ -3057,7 +3074,9 @@ BackendEmission CppBackend::emit(const BackendRequest& request) const {
         << "#include <cstdint>\n"
         << "#include <stdexcept>\n\n"
         << "namespace katana_generated {\n\n"
-        << "inline constexpr std::uint32_t required_runtime_abi = 8u;\n"
+        << "inline constexpr std::uint32_t required_runtime_abi = "
+        << request.requirements.runtime_abi_version
+        << "u;\n"
         << "static_assert(\n"
         << "    katana::runtime::abi_version == required_runtime_abi,\n"
         << "    \"Inkompatible Katana-Runtime-ABI\"\n"

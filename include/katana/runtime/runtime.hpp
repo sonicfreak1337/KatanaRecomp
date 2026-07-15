@@ -1,5 +1,6 @@
 #pragma once
 
+#include "katana/runtime/abi.hpp"
 #include "katana/runtime/memory.hpp"
 
 #include <array>
@@ -7,8 +8,6 @@
 #include <cstdint>
 
 namespace katana::runtime {
-
-inline constexpr std::uint32_t abi_version = 8u;
 
 inline constexpr std::uint32_t sr_t_mask = 0x00000001u;
 inline constexpr std::uint32_t sr_s_mask = 0x00000002u;

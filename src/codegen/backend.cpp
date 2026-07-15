@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <stdexcept>
+#include <string>
 
 namespace katana::codegen {
 
@@ -22,6 +23,33 @@ BackendEmission generate_program(
 ) {
     if (backend.name().empty()) {
         throw std::invalid_argument("Codegen-Backend besitzt keinen Namen.");
+    }
+    if (backend.interface_abi_version() != request.requirements.interface_abi_version) {
+        throw std::invalid_argument(
+            "Codegen-Backend " + std::string(backend.name()) +
+            " besitzt Interface-ABI " +
+            std::to_string(backend.interface_abi_version()) +
+            ", erforderlich ist " +
+            std::to_string(request.requirements.interface_abi_version) + "."
+        );
+    }
+    if (backend.runtime_abi_version() != request.requirements.runtime_abi_version) {
+        throw std::invalid_argument(
+            "Codegen-Backend " + std::string(backend.name()) +
+            " erwartet Runtime-ABI " +
+            std::to_string(backend.runtime_abi_version()) +
+            ", angefordert ist " +
+            std::to_string(request.requirements.runtime_abi_version) + "."
+        );
+    }
+    const auto missing_capabilities =
+        request.requirements.capabilities & ~backend.capabilities();
+    if (missing_capabilities != 0u) {
+        throw std::invalid_argument(
+            "Codegen-Backend " + std::string(backend.name()) +
+            " besitzt nicht alle erforderlichen Faehigkeiten; fehlende Maske " +
+            std::to_string(missing_capabilities) + "."
+        );
     }
     if (request.functions.empty()) {
         throw std::invalid_argument("Es wurden keine IR-Funktionen uebergeben.");

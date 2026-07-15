@@ -1067,7 +1067,7 @@ Abhaengigkeiten: KR-2104
 
 Abhaengigkeiten: KR-3201
 
-### [ ] KR-3203 - ABI-Faehigkeitspruefung
+### [x] KR-3203 - ABI-Faehigkeitspruefung
 
 Abhaengigkeiten: KR-3201, KR-2102
 

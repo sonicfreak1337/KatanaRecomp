@@ -67,6 +67,17 @@ public:
     [[nodiscard]] std::string_view name() const noexcept override {
         return "recording";
     }
+    [[nodiscard]] std::uint32_t interface_abi_version() const noexcept override {
+        return katana::codegen::backend_interface_abi_version;
+    }
+    [[nodiscard]] std::uint32_t runtime_abi_version() const noexcept override {
+        return katana::runtime::abi_version;
+    }
+    [[nodiscard]] katana::codegen::BackendCapabilities capabilities() const noexcept override {
+        return katana::codegen::capability(
+            katana::codegen::BackendCapability::StructuredSections
+        );
+    }
 
     [[nodiscard]] katana::codegen::BackendEmission emit(
         const katana::codegen::BackendRequest& request

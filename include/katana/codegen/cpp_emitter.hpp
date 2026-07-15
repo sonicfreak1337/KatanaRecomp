@@ -11,6 +11,9 @@ namespace katana::codegen {
 class CppBackend final : public Backend {
 public:
     [[nodiscard]] std::string_view name() const noexcept override;
+    [[nodiscard]] std::uint32_t interface_abi_version() const noexcept override;
+    [[nodiscard]] std::uint32_t runtime_abi_version() const noexcept override;
+    [[nodiscard]] BackendCapabilities capabilities() const noexcept override;
     [[nodiscard]] BackendEmission emit(const BackendRequest& request) const override;
 };
 

@@ -740,7 +740,7 @@ Fortschritt:
 
 - [x] KR-3201 - Backend-Interface
 - [x] KR-3202 - C++-Backend migrieren
-- [ ] KR-3203 - ABI-Faehigkeitspruefung
+- [x] KR-3203 - ABI-Faehigkeitspruefung
 - [ ] KR-3204 - Block-ABI und Zustandsuebergaben
 - [ ] KR-3205 - Plattformdienst-Schnittstelle
 
