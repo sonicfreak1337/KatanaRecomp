@@ -79,11 +79,11 @@ Release-Commit, Tag oder Veroeffentlichung ausgefuehrt.
 
 ## Aktueller Review-Checkpoint: Phase 10 / KR-4402
 
-Gate-Commit: `024990b0c531287bd5de7c6450d3b2e1247e10f4`
+Gate-Commit: `9e9cdb2587b83e4d2da143f94bc2b04be76d151a`
 
 ```text
-159/159 Tests bestanden
-frischer MSVC-Debug-Build in 82.133 ms
+160/160 Tests bestanden
+frischer MSVC-Debug-Build in 86.294 ms
 KR_PHASE10_GUI_END_TO_END erreicht
 GUI und CLI: identische Projektidentitaet und 8 identische Kernartefakte
 GDI-Positiv-, Fehler- und Recovery-Pfade sowie Tastatur/DPI-Recovery abgedeckt

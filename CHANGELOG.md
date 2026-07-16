@@ -38,7 +38,7 @@
 - KR-4401: Synthetische GDI-Positiv-, Fehler- und Recovery-Pfade sowie der
   GUI-/CLI-Artefaktvergleich erreichen automatisiert
   `KR_PHASE10_GUI_END_TO_END`.
-- KR-4402: Das kumulative Phase-10-Gate besteht 159/159 Tests in einem
+- KR-4402: Das kumulative Phase-10-Gate besteht 160/160 Tests in einem
   frischen MSVC-Debug-Build. GUI und CLI erzeugen dieselbe Projektidentitaet
   und acht byteidentische Kernartefakte; Phase-9-Regression, Coverage,
   reproduzierbares Basisartefakt, standalone GUI-Paket und Datenaudit

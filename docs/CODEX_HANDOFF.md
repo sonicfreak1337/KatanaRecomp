@@ -366,7 +366,7 @@ Danach:
 Erst nach ausdruecklicher Freigabe: KR-4403 - interne GUI-/GDI-Meilenstein-Freigabe
 ```
 
-Phase 10 erreicht im unveraenderten Gate-Commit `024990b` mit 159/159 Tests
+Phase 10 erreicht im unveraenderten Gate-Commit `9e9cdb2` mit 160/160 Tests
 `KR_PHASE10_GUI_END_TO_END`. GUI und CLI erzeugen dieselbe Projektidentitaet
 und dieselben Kernartefakte; das interne GUI-Paket besteht den standalone
 Smoke-Test. Das Logo ist hash- und herkunftsgebunden eingebunden, bleibt aber

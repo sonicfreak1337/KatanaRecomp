@@ -2,12 +2,13 @@
 
 Status: successful preparation, review required before KR-4403
 
-Source commit: `024990b0c531287bd5de7c6450d3b2e1247e10f4`
+Source commit: `9e9cdb2587b83e4d2da143f94bc2b04be76d151a`
 
 ## Evidence
 
-- Fresh `artifact-debug` configuration and build completed in 82,133 ms.
-- 159 of 159 tests passed, including all four deterministic isolated fuzz
+- Fresh `artifact-debug` configuration and build completed in 86,294 ms.
+- 160 of 160 tests passed, including the local MSVC AddressSanitizer runtime
+  deployment check and all four deterministic isolated fuzz
   targets with their unchanged case counts and derived seeds.
 - `KR_PHASE10_GUI_END_TO_END` was reached through the real GUI executable.
 - GUI and CLI reported the same portable project identity and eight identical
@@ -24,7 +25,7 @@ Source commit: `024990b0c531287bd5de7c6450d3b2e1247e10f4`
 ## Internal package
 
 The package manifest SHA-256 is
-`5897e2b9f868dcd41ddfdb4296099cbba0a63a894d9ae2f7ff11b3449fde06be`.
+`d03fa8bed5264de970934793d90b1b58fbc5404264114ad45bbc57bae59ef4a8`.
 The package is internal, has `release: false`, and includes the matching MSVC
 AddressSanitizer runtime for its standalone smoke test. The supplied logo is
 bound to SHA-256
