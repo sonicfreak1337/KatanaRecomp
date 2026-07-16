@@ -12,8 +12,15 @@
     },
     {
       "id": "sanitizers",
-      "active": false,
-      "owner": "KR-3702"
+      "active": true,
+      "owner": "KR-3702",
+      "configure_preset": "sanitizer-debug",
+      "build_preset": "sanitizer-debug",
+      "test_preset": "sanitizer-debug",
+      "implementations": {
+        "msvc": "address",
+        "gcc-clang": "address,undefined"
+      }
     },
     {
       "id": "fuzzing",

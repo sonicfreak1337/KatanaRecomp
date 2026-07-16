@@ -14,12 +14,24 @@
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Debug"
       }
+    },
+    {
+      "name": "sanitizer-debug",
+      "displayName": "KatanaRecomp sanitizer Debug gate",
+      "inherits": "debug-gate",
+      "cacheVariables": {
+        "KATANA_ENABLE_SANITIZERS": "ON"
+      }
     }
   ],
   "buildPresets": [
     {
       "name": "debug-gate",
       "configurePreset": "debug-gate"
+    },
+    {
+      "name": "sanitizer-debug",
+      "configurePreset": "sanitizer-debug"
     }
   ],
   "testPresets": [
@@ -31,6 +43,20 @@
       },
       "execution": {
         "noTestsAction": "error"
+      }
+    },
+    {
+      "name": "sanitizer-debug",
+      "configurePreset": "sanitizer-debug",
+      "output": {
+        "outputOnFailure": true
+      },
+      "execution": {
+        "noTestsAction": "error"
+      },
+      "environment": {
+        "ASAN_OPTIONS": "halt_on_error=1",
+        "UBSAN_OPTIONS": "halt_on_error=1:print_stacktrace=1"
       }
     }
   ],
@@ -50,6 +76,24 @@
         {
           "type": "test",
           "name": "debug-gate"
+        }
+      ]
+    },
+    {
+      "name": "sanitizer-debug",
+      "displayName": "Configure, build and test the sanitizer Debug gate",
+      "steps": [
+        {
+          "type": "configure",
+          "name": "sanitizer-debug"
+        },
+        {
+          "type": "build",
+          "name": "sanitizer-debug"
+        },
+        {
+          "type": "test",
+          "name": "sanitizer-debug"
         }
       ]
     }

@@ -11,6 +11,32 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
+option(
+    KATANA_ENABLE_SANITIZERS
+    "Enable the supported Address/UndefinedBehavior sanitizers for Debug gates"
+    OFF
+)
+
+if(KATANA_ENABLE_SANITIZERS)
+    if(MSVC)
+        string(REPLACE "/RTC1" "" CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG}")
+        add_compile_options(/fsanitize=address /Oy-)
+        add_link_options(/INCREMENTAL:NO)
+    elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+        add_compile_options(
+            -fsanitize=address,undefined
+            -fno-omit-frame-pointer
+            -fno-sanitize-recover=all
+        )
+        add_link_options(
+            -fsanitize=address,undefined
+            -fno-sanitize-recover=all
+        )
+    else()
+        message(FATAL_ERROR "KATANA_ENABLE_SANITIZERS is unsupported by this compiler")
+    endif()
+endif()
+
 function(katana_enable_warnings target)
     if(MSVC)
         target_compile_options(

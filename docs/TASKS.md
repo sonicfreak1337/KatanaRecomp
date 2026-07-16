@@ -1774,9 +1774,23 @@ Akzeptanz:
 - die spaetere Alpha-CI kann dieselben Testprofile ohne abweichende Semantik verwenden
 - das Gate akzeptiert auf der Festplatte nur den frischen `build-current/` und wird vor KR-3709 nicht routinemaessig ausgefuehrt
 
-### [ ] KR-3702 - Sanitizer-Builds
+### [x] KR-3702 - Sanitizer-Builds
 
 Abhaengigkeiten: KR-3701
+
+Umfang:
+
+- AddressSanitizer fuer MSVC, GCC und Clang im Debugprofil aktivieren
+- UndefinedBehaviorSanitizer auf GCC und Clang ohne Recovery ergaenzen
+- inkompatible MSVC-Debugoptionen sichtbar aus dem Sanitizerprofil entfernen
+- dasselbe CTest-Korpus und ausschliesslich `build-current/` verwenden
+
+Akzeptanz:
+
+- Sanitizerfehler beenden den Testlauf sichtbar beim ersten Befund
+- ein nicht unterstuetzter Compiler wird bei aktivem Profil abgelehnt
+- das Profil besitzt keine pauschale Unterdrueckung echter Speicher- oder UB-Fehler
+- die gebuendelte KR-3709-Gatevorbereitung fuehrt das Profil im einzigen frischen Debug-Build aus
 
 ### [ ] KR-3703 - Fuzzer
 

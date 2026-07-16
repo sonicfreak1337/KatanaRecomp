@@ -21,6 +21,7 @@
 - KR-3608: Ein gemeinsamer Runtime-Provenienzbericht verbindet strukturierte Blockherkunft, kanonische Aliasgruppen, ROM-RAM-Codekopien, zeitabhaengige Firmwarevektoren und eine best-effort Invalidierungshistorie. CPU-, DMA- und Copy-Writes behalten virtuelle/physische Adresse, Seitengeneration, invalidierte Bloecke und geloeste Links, ohne Firmware- oder Codebytes auszugeben.
 - KR-3609: Versionierte Systemreplays ordnen CPU-Safepoints, MMIO, DMA, Interrupts, Timer, Schedulercallbacks, Medienereignisse und explizite externe Injektionen ausschliesslich nach Gastzeit. Ereignis- und Gastzustandshash sichern deterministische Wiederholung; fehlende, zusaetzliche oder anders sortierte Ereignisse scheitern am ersten Abweichungsindex.
 - KR-3701: Portable CMake-Presets und `tools/gates/run-debug-gate.ps1` definieren einen frischen lokalen Debug-Build mit vollstaendiger Regression in `build-current/`. Der Profilvertrag haelt Release-Build und Windows-/Linux-CI bis KR-4999 deaktiviert; der zuvor bei jedem Push laufende Debug-/Release-Workflow wurde aus dem aktiven GitHub-Pfad entfernt.
+- KR-3702: Das frische `sanitizer-debug`-Profil aktiviert AddressSanitizer auf MSVC/GCC/Clang und zusaetzlich UndefinedBehaviorSanitizer ohne Recovery auf GCC/Clang. Es verwendet dasselbe CTest-Korpus und ausschliesslich `build-current/`; ausgefuehrt wird es gesammelt in KR-3709 statt pro Task.
 
 ## [0.34.0] - 2026-07-16
 
