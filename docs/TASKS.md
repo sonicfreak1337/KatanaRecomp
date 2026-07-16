@@ -1270,7 +1270,7 @@ Akzeptanz:
 - Backend und Fallback verbrauchen kompatible Gastzyklusbudgets
 - Tests decken Event genau am Blockende sowie vor und nach einem Delay Slot ab
 
-### [ ] KR-3408 - MMU- und Zustandswaechter fuer Blockvarianten
+### [x] KR-3408 - MMU- und Zustandswaechter fuer Blockvarianten
 
 Abhaengigkeiten: KR-2207, KR-2306, KR-2504, KR-3401, KR-3404
 

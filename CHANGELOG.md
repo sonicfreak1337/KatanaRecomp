@@ -15,6 +15,7 @@
 - KR-3405: Ein Firmware-Handoff-Modell verbindet gleichzeitig gemappte ROM-, RAM-, Flash- und MMIO-Segmente, vereinigt physisch identische P1-/P2-ROM-Urspruenge und verfolgt verifizierte ROM-nach-RAM-Codekopien. Veraenderte Kopien verlieren ihren statischen Beweis; dynamisch installierte BIOS-ABI-Vektoren bleiben als Laufzeitsymbole sichtbar.
 - KR-3406: Der kanonische Blockdispatcher implementiert Fallthrough, statische, bedingte und dynamische Spruenge, Calls, Returns, Exceptions sowie Interrupt-Safepoints als getrennte Endklassen. Direkte Nachfolger und Fallthrough bleiben getrennt; virtuelle Diagnose- und physische Lookupadresse werden bewahrt, und generische Relink-/Unlink-Hooks loesen alle eingehenden Direktlinks stabil.
 - KR-3407: Explizite Scheduler-Safepoints verbrauchen reproduzierbare Gastzyklen an Blockenden, Schleifenrueckkanten sowie vor und nach Delay Slots. Ein festes Schleifenquantum verhindert Eventverhungerung; Backend und Fallback teilen denselben Budgetpfad, waehrend Ereignisse, Interruptzustellung, Jitter und Budgetstopps maschinenlesbar bleiben.
+- KR-3408: Ein expliziter Instruktions- und Datenuebersetzungsvertrag trennt No-MMU-Fastpaths von TLB-gestuetzter Ausfuehrung. MMUCR, LDTLB-/TLB-, Adressraum- und Watchpointgenerationen sowie FPSCR PR/SZ/FR/RM werden als Blockwaechter erfasst; Rechtefehler erzeugen strukturierte SH-4-Ausnahmen und aktive MMU-Bloecke enden konservativ an Seitengrenzen.
 
 ## [0.33.0] - 2026-07-16
 
