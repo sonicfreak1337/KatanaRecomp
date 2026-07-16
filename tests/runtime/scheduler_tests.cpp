@@ -171,6 +171,19 @@ int main() {
         "Scheduler-Reset stellt keinen deterministischen Grundzustand her."
     );
 
+    EventScheduler reset_ids;
+    std::size_t reset_notifications = 0u;
+    const auto observer = reset_ids.add_reset_observer([&] { ++reset_notifications; });
+    const auto stale = reset_ids.schedule_at(10u, [](const auto, const auto) {});
+    reset_ids.reset();
+    const auto fresh = reset_ids.schedule_at(10u, [](const auto, const auto) {});
+    require(
+        fresh > stale && !reset_ids.cancel(stale) && reset_ids.pending_event_count() == 1u &&
+            reset_notifications == 1u && reset_ids.reset_generation() == 1u &&
+            reset_ids.remove_reset_observer(observer),
+        "Scheduler-Reset recycelt Ereignis-IDs oder benachrichtigt Zeitgeber nicht sicher."
+    );
+
     std::cout << "KR-3101 Event-Scheduler erfolgreich.\n";
     return 0;
 }

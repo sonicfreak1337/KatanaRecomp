@@ -30,15 +30,27 @@ int main() {
                 return false;
             }, &tracker);
 
-        const auto normal = boundary.execute(cpu, {
+        const InterpreterRequest dynamic_request{
             "unsupported-generated-op", 0x8C001000u, 1u, 0x8C001002u, 2u,
             std::nullopt, true, true, 0x0C001000u, 2u, "runtime-op"
-        });
+        };
+        const auto normal = boundary.execute(cpu, dynamic_request);
         require(normal.resumed && cpu.r[0] == 2u && cpu.memory.read_u8(0x20u) == 0x5Au &&
-                watchpoint && normal.safepoint.delivered_cycle == 2u && tracker.valid("fallback-runtime-op"),
+                watchpoint && normal.safepoint.delivered_cycle == 2u &&
+                tracker.valid("fallback-runtime-op") && tracker.block_count() == 1u,
             "Fallback umgeht CPU-/Speicherzustand, Watchpoint, Scheduler oder Codeprovenienz.");
+        const auto repeated = boundary.execute(cpu, dynamic_request);
+        require(repeated.resumed && cpu.r[0] == 4u && tracker.block_count() == 1u &&
+                tracker.invalidation_count() == 0u &&
+                boundary.count("unsupported-generated-op") == 2u,
+            "Wiederholter dynamischer Fallback dupliziert oder verwirft seine Blockidentitaet.");
         static_cast<void>(tracker.observe_write(0xAC001000u, 1u, CodeWriteSource::Cpu));
         require(!tracker.valid("fallback-runtime-op"), "Dynamischer Fallbackcode umgeht Schreibinvalidierung.");
+        const auto reactivated = boundary.execute(cpu, dynamic_request);
+        require(reactivated.resumed && tracker.valid("fallback-runtime-op") &&
+                tracker.block_count() == 1u && tracker.invalidation_count() == 1u &&
+                boundary.count("unsupported-generated-op") == 3u,
+            "Invalidierter dynamischer Fallback wird nicht ohne Trackerduplikat reaktiviert.");
 
         cpu.last_exception_cause = ExceptionCause::None;
         cpu.vbr = 0x8C000000u;

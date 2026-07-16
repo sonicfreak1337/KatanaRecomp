@@ -12,6 +12,11 @@
 namespace katana::runtime {
 
 enum class CodeWriteSource : std::uint8_t { Cpu, Dma, Copy };
+enum class BlockRegistrationResult : std::uint8_t {
+    Inserted,
+    AlreadyValid,
+    Reactivated,
+};
 
 struct ExecutableBlockRegistration {
     std::string identity;
@@ -33,7 +38,9 @@ class ExecutableCodeTracker {
 public:
     static constexpr std::uint32_t page_size = 4096u;
 
-    void register_block(ExecutableBlockRegistration block);
+    [[nodiscard]] BlockRegistrationResult register_block(
+        ExecutableBlockRegistration block
+    );
     [[nodiscard]] CodeInvalidationResult observe_write(
         std::uint32_t address,
         std::size_t size,
@@ -43,6 +50,8 @@ public:
     [[nodiscard]] bool valid(const std::string& identity) const;
     [[nodiscard]] std::uint64_t page_generation(std::uint32_t address) const noexcept;
     [[nodiscard]] std::uint64_t invalidation_count() const noexcept;
+    [[nodiscard]] std::size_t block_count() const noexcept;
+    [[nodiscard]] std::size_t incoming_link_count(const std::string& identity) const;
     [[nodiscard]] const std::map<std::uint32_t, std::uint64_t>& hotspots() const noexcept;
 
 private:

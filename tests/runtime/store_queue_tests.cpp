@@ -12,7 +12,7 @@ int main() {
         Memory memory(0u);
         memory.map_region("ram", 0x0C000000u, std::make_shared<LinearMemoryDevice>(0x20000u));
         ExecutableCodeTracker tracker;
-        tracker.register_block({"ram-code", 0x0C001000u, 32u, "generated", {}});
+        static_cast<void>(tracker.register_block({"ram-code", 0x0C001000u, 32u, "generated", {}}));
         std::vector<StoreQueueTransfer> transfers;
         Sh4StoreQueues queues(memory, [&](const auto& transfer) { transfers.push_back(transfer); }, &tracker);
         queues.write_qacr(0u, 0x0Cu);
@@ -49,7 +49,7 @@ int main() {
             }
         ));
         ExecutableCodeTracker direct_tracker;
-        direct_tracker.register_block({"sq-code", 0x0C000040u, 32u, "generated", {}});
+        static_cast<void>(direct_tracker.register_block({"sq-code", 0x0C000040u, 32u, "generated", {}}));
         Sh4StoreQueues direct(memory, {}, &direct_tracker, OperandCacheRamProfile::Modeled);
         direct.write_qacr(0u, 0x0Cu);
         direct.write_p4(0xE0000040u, 0x44332211u, MemoryAccessWidth::Word);
@@ -63,7 +63,7 @@ int main() {
             "TA-SQ-Ziel durchlaeuft seine MMIO-Nebenwirkungen nicht exakt.");
 
         ExecutableCodeTracker movca_tracker;
-        movca_tracker.register_block({"movca-code", 0x0C000040u, 4u, "generated", {}});
+        static_cast<void>(movca_tracker.register_block({"movca-code", 0x0C000040u, 4u, "generated", {}}));
         Sh4StoreQueues cache_ops(memory, {}, &movca_tracker, OperandCacheRamProfile::Modeled);
         const auto movca = cache_ops.maintain(CacheMaintenanceOperation::MovcaLong, 0x0C000040u, 0xAABBCCDDu);
         require(movca.wrote_memory && movca.invalidated_code && memory.read_u32(0x0C000040u) == 0xAABBCCDDu,

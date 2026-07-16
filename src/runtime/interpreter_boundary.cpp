@@ -45,10 +45,10 @@ InterpreterResult PreciseInterpreterBoundary::execute(
         if (code_tracker_ == nullptr || request.dynamic_size == 0u || request.provenance.empty()) {
             throw std::runtime_error("Dynamischer Interpretercode braucht Invalidierung und Provenienz.");
         }
-        code_tracker_->register_block({
+        static_cast<void>(code_tracker_->register_block({
             "fallback-" + request.provenance, request.dynamic_physical_address,
             request.dynamic_size, request.provenance, {}
-        });
+        }));
     }
     return {!exception, exception, cpu.pc, cpu.last_exception_cause, safepoint};
 }

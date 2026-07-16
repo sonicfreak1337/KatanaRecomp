@@ -2,6 +2,7 @@
 
 #include <limits>
 #include <stdexcept>
+#include <vector>
 
 namespace katana::runtime {
 
@@ -46,6 +47,27 @@ bool EventScheduler::cancel(const SchedulerEventId event_id) noexcept {
     return true;
 }
 
+SchedulerResetObserverId EventScheduler::add_reset_observer(
+    SchedulerResetCallback callback
+) {
+    if (!callback) {
+        throw std::invalid_argument("Scheduler-Resetbeobachter benoetigt einen Callback.");
+    }
+    if (next_reset_observer_id_ ==
+        std::numeric_limits<SchedulerResetObserverId>::max()) {
+        throw std::overflow_error("Scheduler-Resetbeobachter-ID ist uebergelaufen.");
+    }
+    const auto observer_id = next_reset_observer_id_++;
+    reset_observers_.emplace(observer_id, std::move(callback));
+    return observer_id;
+}
+
+bool EventScheduler::remove_reset_observer(
+    const SchedulerResetObserverId observer_id
+) noexcept {
+    return reset_observers_.erase(observer_id) != 0u;
+}
+
 void EventScheduler::clear() noexcept {
     events_.clear();
     event_keys_.clear();
@@ -59,8 +81,18 @@ void EventScheduler::reset() {
     }
     clear();
     current_cycle_ = 0u;
-    next_event_id_ = 1u;
     processed_event_count_ = 0u;
+    ++reset_generation_;
+
+    std::vector<SchedulerResetCallback> observers;
+    observers.reserve(reset_observers_.size());
+    for (const auto& [id, callback] : reset_observers_) {
+        static_cast<void>(id);
+        observers.push_back(callback);
+    }
+    for (const auto& callback : observers) {
+        callback();
+    }
 }
 
 SchedulerAdvanceResult EventScheduler::advance_to(
@@ -141,6 +173,10 @@ std::size_t EventScheduler::pending_event_count() const noexcept {
 
 std::uint64_t EventScheduler::processed_event_count() const noexcept {
     return processed_event_count_;
+}
+
+std::uint64_t EventScheduler::reset_generation() const noexcept {
+    return reset_generation_;
 }
 
 } // namespace katana::runtime

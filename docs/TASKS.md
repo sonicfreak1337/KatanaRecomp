@@ -997,11 +997,35 @@ Akzeptanz:
 - die Gastzyklusuhr laeuft auch bei Reentrancy-Versuchen niemals rueckwaerts
 - `advance_to()`, `advance_by()` und `reset()` aus Callbacks liefern `std::logic_error`
 - verschachteltes `schedule_at()` und `cancel()` bleiben erlaubt und stabil geordnet
+- Reset recycelt keine Ereignis-ID und informiert registrierte Zeitgeber, sodass
+  veraltete Handles keine spaeteren fremden Ereignisse abbrechen koennen
 - Budgetstopp, Callbackfehler, Cancellation, Reset und 64-Bit-Ueberlauf sind regressionsgesichert
 
 ### [x] KR-3102 - TMU und RTC
 
 Abhaengigkeiten: KR-3101
+
+Umfang:
+
+- drei TMU-Kanaele mit Auto-Reload, `UNF`/`UNIE`, Pck-Teilern und dem
+  on-chip 16,384-kHz-RTCCLK modellieren
+- RTCCLK als rationale, zwischen TMU und RTC geteilte Taktdomaene ohne
+  ganzzahligen Langzeitdrift fuehren
+- R64CNT mit sieben wirksamen Bits sowie RTCEN, Kalender-START, CF und CIE als
+  getrennte Hardwarezustaende abbilden
+- RTC-Dividerreset auf Prescaler, R64CNT, Periodic-Phase und RTC-getaktete
+  TMU-Kanaele koppeln
+
+Akzeptanz:
+
+- der Dreamcast-Standard erreicht nach 16.384 RTCCLK-Flanken exakt
+  200.000.000 Gastzyklen und TPSC `110` laeuft nicht mit dem 64-Hz-Ersatztakt
+- START=0 stoppt nur den Kalender; RTCEN=0 stoppt den Teiler
+- CF wird unabhaengig von CIE gesetzt und `CF && CIE` bestimmt den Carry-Pendingzustand
+- TMU-Pending bleibt gesetzt, solange `UNF && UNIE` gilt, und verschwindet erst
+  nach Quellflag- oder Enable-Aenderung
+- Scheduler- und Divider-Reset erzeugen weder eingefrorene Zeitgeber,
+  Phasenaltlasten, doppelte Ereignisse noch Cancellation fremder Ereignisse
 
 ### [x] KR-3103 - DMA
 
@@ -1318,6 +1342,9 @@ Akzeptanz:
 - eine Ausnahme im Fallback besitzt denselben Ereigniscode und Gast-PC wie generierter Code
 - Fallback kann weder MMIO-Nebenwirkungen noch Watchpoints umgehen
 - jeder Eintritt wird mit stabilem Grund gezaehlt und kann per Manifest verboten werden
+- wiederholter dynamischer Fallback ist tracker-idempotent; ein invalidierter
+  Block wird bei identischer Adresse, Groesse und Provenienz ohne Duplikat
+  reaktiviert, waehrend abweichende Geometrie sichtbar abgelehnt wird
 
 ### [x] KR-3410 - Cache-/Store-Queue-Vertrag und v0.34 Gate-Vorbereitung
 
@@ -1344,6 +1371,9 @@ Akzeptanz:
 - CCR-Operand-Cache-RAM wird entweder korrekt modelliert oder der betreffende LLE-Pfad vor Ausfuehrung sichtbar abgelehnt
 - der Gate-Bericht umfasst alle v0.34-Tests und den frischen Build; danach wird
   vor KR-3411 fuer das Nutzerreview gestoppt
+- Reviewkorrekturen machen den vorherigen Bericht ungueltig; Scheduler-,
+  Timer- und Fallback-Nacharbeit wurde deshalb mit einem erneut frischen
+  `build-current/` und der vollstaendigen 142/142-Regression belegt
 
 ### [ ] KR-3411 - v0.34 Release-Gate
 

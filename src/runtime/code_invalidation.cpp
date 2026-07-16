@@ -15,7 +15,9 @@ bool overlaps(
 }
 }
 
-void ExecutableCodeTracker::register_block(ExecutableBlockRegistration block) {
+BlockRegistrationResult ExecutableCodeTracker::register_block(
+    ExecutableBlockRegistration block
+) {
     if (block.identity.empty() || block.provenance.empty() || block.size == 0u) {
         throw std::invalid_argument("Ausfuehrbarer Block benoetigt Identitaet, Groesse und Provenienz.");
     }
@@ -27,8 +29,26 @@ void ExecutableCodeTracker::register_block(ExecutableBlockRegistration block) {
     const auto duplicate = std::find_if(blocks_.begin(), blocks_.end(), [&](const auto& value) {
         return value.block.identity == block.identity;
     });
-    if (duplicate != blocks_.end()) { throw std::invalid_argument("Doppelte ausfuehrbare Blockidentitaet."); }
+    if (duplicate != blocks_.end()) {
+        if (duplicate->block.physical_start != block.physical_start ||
+            duplicate->block.size != block.size ||
+            duplicate->block.provenance != block.provenance) {
+            throw std::invalid_argument(
+                "Blockidentitaet darf Adresse, Groesse oder Provenienz nicht wechseln."
+            );
+        }
+        duplicate->block.incoming_links.insert(
+            block.incoming_links.begin(),
+            block.incoming_links.end()
+        );
+        if (duplicate->valid) {
+            return BlockRegistrationResult::AlreadyValid;
+        }
+        duplicate->valid = true;
+        return BlockRegistrationResult::Reactivated;
+    }
     blocks_.push_back({std::move(block), true});
+    return BlockRegistrationResult::Inserted;
 }
 
 CodeInvalidationResult ExecutableCodeTracker::observe_write(
@@ -92,6 +112,14 @@ std::uint64_t ExecutableCodeTracker::page_generation(const std::uint32_t address
     return found == generations_.end() ? 0u : found->second;
 }
 std::uint64_t ExecutableCodeTracker::invalidation_count() const noexcept { return invalidation_count_; }
+std::size_t ExecutableCodeTracker::block_count() const noexcept { return blocks_.size(); }
+std::size_t ExecutableCodeTracker::incoming_link_count(const std::string& identity) const {
+    const auto found = std::find_if(blocks_.begin(), blocks_.end(), [&](const auto& value) {
+        return value.block.identity == identity;
+    });
+    if (found == blocks_.end()) { throw std::out_of_range("Unbekannte Blockidentitaet."); }
+    return found->block.incoming_links.size();
+}
 const std::map<std::uint32_t, std::uint64_t>& ExecutableCodeTracker::hotspots() const noexcept { return hotspots_; }
 
 } // namespace katana::runtime

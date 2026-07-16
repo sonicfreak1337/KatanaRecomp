@@ -2,6 +2,7 @@
 #include "katana/runtime/platform_interrupt.hpp"
 
 #include <iostream>
+#include <memory>
 #include <stdexcept>
 #include <string>
 
@@ -18,8 +19,9 @@ int main() {
 
     EventScheduler scheduler;
     Memory memory(256u, MemoryAlignmentPolicy::Strict);
-    Sh4Tmu tmu(scheduler, TmuTiming{1u, 64u});
-    Sh4Rtc rtc(scheduler, 256u);
+    auto rtc_clock = std::make_shared<Sh4RtcClockDomain>(256u);
+    Sh4Tmu tmu(scheduler, TmuTiming{1u, rtc_clock});
+    Sh4Rtc rtc(scheduler, rtc_clock);
     Sh4Dmac dmac(scheduler, memory, DmaTiming{1u});
     InterruptController controller;
     PlatformInterruptRouter router(controller, tmu, rtc, dmac);

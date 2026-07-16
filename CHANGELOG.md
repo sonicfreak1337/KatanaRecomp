@@ -4,6 +4,9 @@
 
 ### Behoben
 
+- KR-3101-Nacharbeit: Scheduler-Resets recyceln keine Ereignis-IDs mehr und benachrichtigen registrierte Laufzeitzeitgeber. Aktive TMU-/RTC-Quellen werden auf Zyklus null neu verankert, ohne spaeter ueber veraltete Handles fremde Ereignisse zu loeschen oder einzufrieren.
+- KR-3102-Nacharbeit: TMU-TPSC `110` verwendet eine gemeinsame rationale 16,384-kHz-RTCCLK-Domaene statt eines 64-Hz-Ersatztakts. R64CNT besitzt sieben wirksame Bits; RTCEN und Kalender-START sowie CF und CIE sind getrennt, Divider-Reset rephasiert periodische Ereignisse und RTC-getaktete TMU-Kanaele, und TMU-Pending bleibt aus `UNF && UNIE` abgeleitet.
+- KR-3409-Nacharbeit: Wiederholte dynamische Interpreter-Fallbacks registrieren identische gueltige Bloecke idempotent und reaktivieren invalidierte Bloecke derselben Adresse, Groesse und Provenienz. Abweichende Geometrie bleibt ein sichtbarer Fehler; Block-, Link- und Invalidierungszaehler werden nicht dupliziert.
 - KR-3407-Nacharbeit: Schleifen-Safepoints ziehen bei erschoepftem Ereignisbudget nur die tatsaechlich erreichte Zyklusdifferenz ab. Wiederholte Stopps erreichen den exakten Zielzyklus; ein Budgetstopp ohne Zyklusfortschritt bricht sichtbar statt endlos ab.
 - KR-3408-Nacharbeit: Die Watchpointgeneration ist nun Bestandteil des echten Laufzeit-`BlockVariantKey`; ein integrierter Tabellenlookup kann eine vor der Watchpointaenderung registrierte Variante nicht wiederverwenden.
 - KR-3304-Nacharbeit: Ein versioniertes Katana-Artefaktmanifest entfernt bei wiederverwendeten Ausgabeordnern ausschliesslich zuvor erzeugte, nun veraltete Units, Metadaten, Symbole und Konstantdateien. Fremde Nutzerdateien bleiben erhalten; fehlgeschlagene Bereinigung nennt den betroffenen Pfad und bricht sichtbar ab.
@@ -30,7 +33,7 @@
 
 ### Geaendert
 
-- Die v0.34-Gate-Vorbereitung besteht in einem vollstaendig neu erzeugten lokalen Debug-Build mit 142/142 Tests. KR-3411, Versionierung, Tag und Sonic-Ausfuehrung bleiben bis zum Nutzerreview gesperrt.
+- Die v0.34-Gate-Vorbereitung wurde nach den Scheduler-/Timer-/Fallback-Reviewkorrekturen vollstaendig wiederholt: ein neu erzeugter lokaler Debug-Build besteht 142/142 Tests. KR-3411, Versionierung, Tag und Sonic-Ausfuehrung bleiben bis zum erneuten Nutzerreview gesperrt.
 - Implementierungs-Tasks werden vor einem Phasen-Gate zuerst ohne
   routinemaessige Builds und Testlaeufe abgearbeitet. Der letzte
   Gate-Vorbereitungstask setzt die gesammelten Tests um und erstellt den

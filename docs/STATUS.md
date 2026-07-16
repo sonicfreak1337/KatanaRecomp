@@ -97,12 +97,15 @@ Gate-Vorbereitung (nach `KR-3409`, Basis `v0.33.0`):
 katana-interpreter-boundary-tests bestanden
 ```
 
-Aktuelle v0.34-Gate-Vorbereitung nach `KR-3410`:
+Aktuelle, nach dem Review vollstaendig wiederholte v0.34-Gate-Vorbereitung
+nach `KR-3410`:
 
 ```text
 frischer Debug-Build in build-current: erfolgreich
 142/142 Tests bestanden
 katana-codegen-project-tests isoliert erneut bestanden
+Scheduler-Reset-/RTCCLK-/R64CNT-/RTCEN-/CF-CIE-Regressionspfade bestanden
+dynamischer Fallback: idempotente Wiederholung und Reaktivierung bestanden
 KR-3411, Versionierung, Tag und Sonic-Test: nicht ausgefuehrt
 ```
 

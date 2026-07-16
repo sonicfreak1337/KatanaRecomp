@@ -13,6 +13,7 @@
 
 #include <fstream>
 #include <iomanip>
+#include <memory>
 #include <sstream>
 #include <stdexcept>
 #include <string_view>
@@ -161,8 +162,9 @@ Phase6GateReport run_phase6_gate(
 
     runtime::EventScheduler scheduler;
     runtime::Memory platform_memory(256u, runtime::MemoryAlignmentPolicy::Strict);
-    runtime::Sh4Tmu tmu(scheduler, runtime::TmuTiming{1u, 64u});
-    runtime::Sh4Rtc rtc(scheduler, 256u);
+    auto rtc_clock = std::make_shared<runtime::Sh4RtcClockDomain>(256u);
+    runtime::Sh4Tmu tmu(scheduler, runtime::TmuTiming{1u, rtc_clock});
+    runtime::Sh4Rtc rtc(scheduler, rtc_clock);
     runtime::Sh4Dmac dmac(scheduler, platform_memory, runtime::DmaTiming{1u});
     runtime::InterruptController interrupts;
     runtime::PlatformInterruptRouter router(interrupts, tmu, rtc, dmac);

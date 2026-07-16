@@ -809,6 +809,15 @@ Fortschritt:
 - [x] KR-3410 - Cache-/Store-Queue-Vertrag und v0.34 Gate-Vorbereitung
 - [ ] KR-3411 - v0.34 Release-Gate
 
+Review-Nacharbeit vor KR-3411: Scheduler-Resets verwenden keine fremd
+wiederverwendbaren Ereignis-IDs und reaktivieren laufende Zeitgeber. TMU und
+RTC teilen den rationalen 16,384-kHz-RTCCLK; R64CNT, RTCEN/START, CF/CIE,
+Divider-Reset und TMU-UNF/UNIE folgen getrennten Hardwarezustaenden.
+Dynamische Interpreterbloecke werden bei identischer Provenienz idempotent
+wiederverwendet beziehungsweise nach Schreibinvalidierung reaktiviert. Die
+vollstaendige KR-3410-Gate-Vorbereitung wurde danach mit 142/142 Tests erneut
+erstellt; KR-3411 bleibt bis zum erneuten Nutzerreview offen.
+
 Enthalten:
 
 - Laufzeit-Blocktabelle nach kanonischer Gastadresse
