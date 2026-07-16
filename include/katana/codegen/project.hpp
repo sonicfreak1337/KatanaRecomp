@@ -22,6 +22,7 @@ struct ProjectWriteOptions {
 
 struct ProjectWriteResult {
     std::vector<std::filesystem::path> written_files;
+    std::vector<std::filesystem::path> removed_files;
     std::size_t cache_hits = 0u;
     std::size_t cache_misses = 0u;
 };

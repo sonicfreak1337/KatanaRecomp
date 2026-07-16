@@ -73,6 +73,46 @@ int main() {
         "CMake-, Ninja- oder Compile-Commands-Integration fehlt."
     );
 
+    const auto reused = fixture.root / "reused";
+    static_cast<void>(write_codegen_project(reused, {
+        {"code/unit-00000.cpp", "first-0\n"},
+        {"code/unit-00001.cpp", "first-1\n"},
+        {"metadata/blocks.json", "blocks\n"},
+        {"symbols/names.json", "symbols\n"}
+    }));
+    {
+        std::ofstream user_file(reused / "user-notes.txt", std::ios::binary);
+        user_file << "keep me\n";
+    }
+    const auto shrunk = write_codegen_project(reused, {
+        {"code/renamed-unit.cpp", "second\n"}
+    });
+    const auto shrunk_snapshot = snapshot(reused);
+    require(
+        !shrunk_snapshot.contains("code/unit-00000.cpp") &&
+            !shrunk_snapshot.contains("code/unit-00001.cpp") &&
+            !shrunk_snapshot.contains("metadata/blocks.json") &&
+            !shrunk_snapshot.contains("symbols/names.json") &&
+            shrunk_snapshot.contains("code/renamed-unit.cpp") &&
+            !std::filesystem::exists(reused / "metadata") &&
+            !std::filesystem::exists(reused / "symbols") &&
+            shrunk_snapshot.at("user-notes.txt") == "keep me\n" &&
+            shrunk.removed_files.size() == 4u,
+        "Zweiter Lauf entfernt alte Units/Metadaten/Symbole nicht selektiv oder loescht Nutzerdateien."
+    );
+
+    const auto failing = fixture.root / "cleanup-failure";
+    static_cast<void>(write_codegen_project(failing, {{"code/stale.cpp", "stale\n"}}));
+    std::filesystem::remove(failing / "code/stale.cpp");
+    std::filesystem::create_directories(failing / "code/stale.cpp/child");
+    bool cleanup_reported = false;
+    try {
+        static_cast<void>(write_codegen_project(failing, {{"code/current.cpp", "current\n"}}));
+    } catch (const std::runtime_error& error) {
+        cleanup_reported = std::string(error.what()).find("code/stale.cpp") != std::string::npos;
+    }
+    require(cleanup_reported, "Fehlgeschlagene Bereinigung wird nicht mit dem betroffenen Pfad gemeldet.");
+
     std::cout << "KR-3304 parallele Ausgabe und Buildintegration erfolgreich.\n";
     return 0;
 }

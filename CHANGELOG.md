@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Behoben
+
+- KR-3304-Nacharbeit: Ein versioniertes Katana-Artefaktmanifest entfernt bei wiederverwendeten Ausgabeordnern ausschliesslich zuvor erzeugte, nun veraltete Units, Metadaten, Symbole und Konstantdateien. Fremde Nutzerdateien bleiben erhalten; fehlgeschlagene Bereinigung nennt den betroffenen Pfad und bricht sichtbar ab.
+
 ### Hinzugefuegt
 
 - KR-3401: Eine deterministisch sortierte Laufzeit-Blocktabelle verbindet virtuelle Diagnoseadressen, kanonische physische Herkunft, Blockgrenzen, Endtypen und Backendfunktionen. Statische sowie dynamische Eintraege teilen den Lookup; MMU-, FPSCR-, Adressraum- und Runtime-Varianten bleiben explizit, waehrend Ueberlappungsfehler beide Provenienzen nennen.
