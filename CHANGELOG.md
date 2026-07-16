@@ -20,6 +20,7 @@
 - KR-3607: Eine ausnahmesichere Dispatchdiagnostik erfasst Callsite, virtuelle und kanonische Ziele, PR, Blockende, Alias- und Beweisherkunft sowie Fallbackgrund, Aktion, Gastinstruktionen, Austritt und stabile Fehlerklasse. Identische Ereignisse erhoehen nur ihren Zaehler; Beobachtungsfehler koennen die Gastentscheidung nicht beeinflussen.
 - KR-3608: Ein gemeinsamer Runtime-Provenienzbericht verbindet strukturierte Blockherkunft, kanonische Aliasgruppen, ROM-RAM-Codekopien, zeitabhaengige Firmwarevektoren und eine best-effort Invalidierungshistorie. CPU-, DMA- und Copy-Writes behalten virtuelle/physische Adresse, Seitengeneration, invalidierte Bloecke und geloeste Links, ohne Firmware- oder Codebytes auszugeben.
 - KR-3609: Versionierte Systemreplays ordnen CPU-Safepoints, MMIO, DMA, Interrupts, Timer, Schedulercallbacks, Medienereignisse und explizite externe Injektionen ausschliesslich nach Gastzeit. Ereignis- und Gastzustandshash sichern deterministische Wiederholung; fehlende, zusaetzliche oder anders sortierte Ereignisse scheitern am ersten Abweichungsindex.
+- KR-3701: Portable CMake-Presets und `tools/gates/run-debug-gate.ps1` definieren einen frischen lokalen Debug-Build mit vollstaendiger Regression in `build-current/`. Der Profilvertrag haelt Release-Build und Windows-/Linux-CI bis KR-4999 deaktiviert; der zuvor bei jedem Push laufende Debug-/Release-Workflow wurde aus dem aktiven GitHub-Pfad entfernt.
 
 ## [0.34.0] - 2026-07-16
 

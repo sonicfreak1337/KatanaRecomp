@@ -1757,7 +1757,7 @@ Akzeptanz:
 - Aufzeichnung und Replay funktionieren ueber eine vollstaendige synthetische Frame-Sequenz
 - die gebuendelte Phase-8-Regression prueft alle Ereignisarten, externe Injektion, erste Abweichung, Ereignis-/Gastzustandshash und eine kumulative synthetische Frame-Sequenz
 
-### [ ] KR-3701 - Lokale Debug-Gate-Automatisierung
+### [x] KR-3701 - Lokale Debug-Gate-Automatisierung
 
 Abhaengigkeiten: keine
 
@@ -1772,6 +1772,7 @@ Akzeptanz:
 - das lokale Debug-Gate scheitert sichtbar bei Build- oder Testfehlern
 - bis einschliesslich v0.44.0 wird weder ein regulaerer Release-Build noch CI als Release-Gate ausgefuehrt
 - die spaetere Alpha-CI kann dieselben Testprofile ohne abweichende Semantik verwenden
+- das Gate akzeptiert auf der Festplatte nur den frischen `build-current/` und wird vor KR-3709 nicht routinemaessig ausgefuehrt
 
 ### [ ] KR-3702 - Sanitizer-Builds
 

@@ -1,0 +1,55 @@
+{
+  "schema": "katana-quality-profiles",
+  "version": 1,
+  "profiles": [
+    {
+      "id": "local-debug-gate",
+      "active": true,
+      "owner": "KR-3701",
+      "configure_preset": "debug-gate",
+      "build_preset": "debug-gate",
+      "test_preset": "debug-gate"
+    },
+    {
+      "id": "sanitizers",
+      "active": false,
+      "owner": "KR-3702"
+    },
+    {
+      "id": "fuzzing",
+      "active": false,
+      "owner": "KR-3703"
+    },
+    {
+      "id": "coverage",
+      "active": false,
+      "owner": "KR-3704"
+    },
+    {
+      "id": "format-static-analysis",
+      "active": false,
+      "owner": "KR-3705"
+    },
+    {
+      "id": "artifact-audit",
+      "active": false,
+      "owner": "KR-3706"
+    },
+    {
+      "id": "reference-license-audit",
+      "active": false,
+      "owner": "KR-3709"
+    },
+    {
+      "id": "release-build",
+      "active": false,
+      "owner": "KR-4999"
+    },
+    {
+      "id": "windows-linux-ci",
+      "active": false,
+      "owner": "KR-4901",
+      "activation_owner": "KR-4999"
+    }
+  ]
+}

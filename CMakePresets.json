@@ -1,0 +1,57 @@
+{
+  "version": 6,
+  "cmakeMinimumRequired": {
+    "major": 3,
+    "minor": 25,
+    "patch": 0
+  },
+  "configurePresets": [
+    {
+      "name": "debug-gate",
+      "displayName": "KatanaRecomp local Debug gate",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build-current",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug"
+      }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "debug-gate",
+      "configurePreset": "debug-gate"
+    }
+  ],
+  "testPresets": [
+    {
+      "name": "debug-gate",
+      "configurePreset": "debug-gate",
+      "output": {
+        "outputOnFailure": true
+      },
+      "execution": {
+        "noTestsAction": "error"
+      }
+    }
+  ],
+  "workflowPresets": [
+    {
+      "name": "debug-gate",
+      "displayName": "Configure, build and test the local Debug gate",
+      "steps": [
+        {
+          "type": "configure",
+          "name": "debug-gate"
+        },
+        {
+          "type": "build",
+          "name": "debug-gate"
+        },
+        {
+          "type": "test",
+          "name": "debug-gate"
+        }
+      ]
+    }
+  ]
+}

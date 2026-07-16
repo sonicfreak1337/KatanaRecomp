@@ -925,7 +925,7 @@ Enthalten:
 
 Fortschritt:
 
-- [ ] KR-3701 - Lokale Debug-Gate-Automatisierung
+- [x] KR-3701 - Lokale Debug-Gate-Automatisierung
 - [ ] KR-3702 - Sanitizer-Builds
 - [ ] KR-3703 - Fuzzer
 - [ ] KR-3704 - Coverage
