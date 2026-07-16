@@ -12,6 +12,7 @@
 - KR-3506: Externe Eingaben erhalten portable SHA-256-/Groessenprovenienz mit strikt getrenntem lokalem Pfad. Ein deterministischer redigierter Buildbericht bindet Manifest, Analyseanweisungen, Werkzeug, IR, Runtime und Backend; der Codegen-Cache-v2-Schluessel bezieht nun auch die Werkzeugversion ein.
 - KR-3507: `katana-recomp port <quelle.gdi> --output <ordner> --target-name <name>` fuehrt die validierte Disc-Bootdatei ueber Analyse, IR, Optimierung und deterministische Partitionierung in ein extern buildbares CMake-/Ninja-Portprojekt. Nur manifestierte Dateien unter `generated/` werden ersetzt; `src/`, Nutzerdateien und private Disc-Inhalte bleiben getrennt, waehrend redigierte Metadaten und eine austauschbare DiscSource-Hostgrenze reproduzierbare Folgeprojekte ermoeglichen.
 - KR-3601: Ein gemeinsamer deterministischer Symbolindex priorisiert ELF- und Map-Namen nach Binding, Art, Groesse und Name. Text- und Kontrollfluss-JSON-Berichte ergaenzen exakte oder groessenbegrenzte `name+offset`-Informationen, ohne die numerische Gastadresse zu ersetzen oder groessenlose Symbole ueber ihren exakten Ort hinaus zu raten.
+- KR-3602: Stabile `katana-guest`-Marker im generierten C++ bilden jede emittierte SH-4-Adresse auf portables Eingabesegment/-offset und relative Generated-Datei/-zeile ab. Die versionierte JSON-Source-Map erhaelt Mehrfachpositionen deterministisch und lehnt absolute Pfade, ausbrechende Komponenten sowie unportable Segmentangaben ab.
 
 ## [0.34.0] - 2026-07-16
 

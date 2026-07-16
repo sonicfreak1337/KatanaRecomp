@@ -5,6 +5,7 @@
 #include "katana/codegen/cpp_emitter.hpp"
 #include "katana/codegen/naming.hpp"
 #include "katana/codegen/project.hpp"
+#include "katana/codegen/source_map.hpp"
 #include "katana/io/input_provenance.hpp"
 #include "katana/io/json_report.hpp"
 #include "katana/ir/lower.hpp"
@@ -203,7 +204,7 @@ PortExportResult export_dreamcast_port_project(
     if (partitions.empty()) throw std::runtime_error("Portcodegen erzeugte keine Partition.");
 
     std::vector<ProjectArtifact> artifacts;
-    artifacts.reserve(partitions.size() + 4u);
+    artifacts.reserve(partitions.size() + 5u);
     for (const auto& partition : partitions) {
         auto functions = select_functions(program, partition);
         const auto contains_program_entry = std::any_of(
@@ -238,6 +239,7 @@ PortExportResult export_dreamcast_port_project(
         throw std::runtime_error("Portcodegen besitzt keine Einstiegspartition.");
     }
     const auto entry_namespace = unit_namespace(entry_partition->index);
+    const auto source_map = build_address_source_map(image, artifacts);
 
     std::vector<katana::io::InputProvenance> inputs;
     inputs.push_back(katana::io::capture_input_provenance("gdi-descriptor", gdi_path));
@@ -269,6 +271,9 @@ PortExportResult export_dreamcast_port_project(
     });
     artifacts.push_back({
         "metadata/provenance.json", katana::io::format_build_provenance_json(provenance)
+    });
+    artifacts.push_back({
+        "metadata/source-map.json", serialize_address_source_map(source_map)
     });
 
     const auto absolute_root = std::filesystem::absolute(output_root).lexically_normal();

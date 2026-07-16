@@ -29,6 +29,7 @@ port/
     include/katana_port.hpp
     metadata/port-project.json
     metadata/provenance.json
+    metadata/source-map.json
 ```
 
 Nur Dateien im Katana-Artefaktmanifest unter `generated/` werden bei einer

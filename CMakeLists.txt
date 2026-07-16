@@ -123,6 +123,7 @@ add_library(katana_core STATIC
     src/codegen/probe.cpp
     src/codegen/project.cpp
     src/codegen/port_export.cpp
+    src/codegen/source_map.cpp
 )
 
 target_include_directories(

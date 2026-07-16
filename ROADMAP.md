@@ -898,7 +898,7 @@ Enthalten:
 Fortschritt:
 
 - [x] KR-3601 - Symbolische Namen
-- [ ] KR-3602 - Adress-zu-Quelle-Mapping
+- [x] KR-3602 - Adress-zu-Quelle-Mapping
 - [ ] KR-3603 - Crashberichte
 - [ ] KR-3604 - Tracing und Watchpoints
 - [ ] KR-3605 - CFG- und Callgraph-Export

@@ -1606,9 +1606,23 @@ Akzeptanz:
 - die gebuendelte Phase-8-Regression prueft ELF-, Map-, Offset-, Mehrfach- und
   Unbekanntfaelle sowie JSON-Escaping
 
-### [ ] KR-3602 - Adress-zu-Quelle-Mapping
+### [x] KR-3602 - Adress-zu-Quelle-Mapping
 
 Abhaengigkeiten: KR-3202
+
+Umfang:
+
+- jede emittierte IR-Instruktion mit einem stabilen Gastadressmarker versehen
+- Gastadresse auf Eingabesegment/-offset und relative generierte Datei/Zeile abbilden
+- Mehrfachpositionen deterministisch erhalten und als versioniertes JSON exportieren
+- absolute Quell-, Build- und Hostpfade aus portablen Source Maps ausschliessen
+
+Akzeptanz:
+
+- normale Instruktionen, Kontrollflussowner und Delay Slots besitzen eine Position
+- mehrere Positionen derselben Gastadresse gehen beim Lookup nicht verloren
+- unportable Pfade, Segmente, Nullzeilen und unsortierte manuelle Maps werden abgelehnt
+- die gebuendelte Phase-8-Regression prueft Markerzeilen und JSON-Roundtrip
 
 ### [ ] KR-3603 - Crashberichte
 

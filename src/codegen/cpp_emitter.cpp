@@ -2353,6 +2353,8 @@ void emit_guarded_simple_instruction(
     const katana::ir::Instruction& instruction,
     const int indent
 ) {
+    emit_indent(output, indent);
+    output << "// katana-guest " << hex32(instruction.source_address) << "\n";
     emit_fpu_disabled_guard(output, instruction, indent);
     emit_fpu_mode_guard(output, instruction, indent);
 
@@ -2428,6 +2430,9 @@ void emit_terminal(
 
     const auto& instruction =
         block.instructions[control_index];
+
+    emit_indent(output, indent);
+    output << "// katana-guest " << hex32(instruction.source_address) << "\n";
 
     const katana::ir::Instruction* delay_slot = nullptr;
 
