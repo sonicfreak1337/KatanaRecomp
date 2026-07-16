@@ -1093,7 +1093,7 @@ Fortschritt:
 - [x] KR-4302 - Fortschritt, Logs und Diagnostikansichten
 - [x] KR-4303 - Ergebnisansichten fuer Funktionen, Quellen und Provenienz
 - [x] KR-4401 - GUI-End-to-End-Automatisierung
-- [ ] KR-4402 - GUI-Haertung, Packaging und v0.44 Gate-Vorbereitung
+- [x] KR-4402 - GUI-Haertung, Packaging und v0.44 Gate-Vorbereitung
 - [ ] KR-4403 - v0.44.0 interne GUI-und-GDI-Meilenstein-Freigabe
 
 ### v0.41.0 - GUI-Grundlage und Anwendungsdienste

@@ -2319,7 +2319,7 @@ Akzeptanz:
 - flackernde oder timingabhaengige UI-Tests werden vor Gate-Freigabe stabilisiert oder entfernt
 - Testartefakte enthalten keine proprietaeren Quellbytes
 
-### [ ] KR-4402 - GUI-Haertung, Packaging und v0.44 Gate-Vorbereitung
+### [x] KR-4402 - GUI-Haertung, Packaging und v0.44 Gate-Vorbereitung
 
 Abhaengigkeiten: KR-4006, KR-4101 bis KR-4103, KR-4201 bis KR-4204, KR-4301 bis KR-4303, KR-4401
 

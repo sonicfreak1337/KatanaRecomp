@@ -357,17 +357,18 @@ Typ: Implementierung | Gate-Vorbereitung | interne Freigabe | Release-Gate
 ## Aktuell empfohlener Einstieg
 
 ```text
-KR-4101 - GUI-Technologie und Architektur festlegen
+Review-Stopp nach KR-4402 - Phase-10-Gate-Bericht mit dem Nutzer pruefen
 ```
 
 Danach:
 
 ```text
-KR-4102 - Gemeinsamer Anwendungsdienst fuer CLI, GUI und Automatisierung
+Erst nach ausdruecklicher Freigabe: KR-4403 - interne GUI-/GDI-Meilenstein-Freigabe
 ```
 
-Phase 9 wurde mit `KR_PHASE9_HOMEBREW_HOST_FRAME`, 156/156 Tests und
-erfolgreichem Daten-Audit abgeschlossen. Fuer Phase 10 liegt das externe
-Logo als dokumentierter Asset-Eingang vor. Vor Kopie oder Packaging sind in
-KR-4101 Herkunft, Nutzungsrechte und die benoetigten GUI-/Iconvarianten zu
-klaeren; die GUI darf keine CLI- oder Runtime-Geschaeftslogik duplizieren.
+Phase 10 erreicht im unveraenderten Gate-Commit `024990b` mit 159/159 Tests
+`KR_PHASE10_GUI_END_TO_END`. GUI und CLI erzeugen dieselbe Projektidentitaet
+und dieselben Kernartefakte; das interne GUI-Paket besteht den standalone
+Smoke-Test. Das Logo ist hash- und herkunftsgebunden eingebunden, bleibt aber
+bis KR-4902 von oeffentlicher Verteilung ausgeschlossen. KR-4403 wurde nicht
+begonnen und darf ohne ausdrueckliche Nutzerfreigabe nicht starten.

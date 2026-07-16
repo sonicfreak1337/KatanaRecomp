@@ -38,6 +38,11 @@
 - KR-4401: Synthetische GDI-Positiv-, Fehler- und Recovery-Pfade sowie der
   GUI-/CLI-Artefaktvergleich erreichen automatisiert
   `KR_PHASE10_GUI_END_TO_END`.
+- KR-4402: Das kumulative Phase-10-Gate besteht 159/159 Tests in einem
+  frischen MSVC-Debug-Build. GUI und CLI erzeugen dieselbe Projektidentitaet
+  und acht byteidentische Kernartefakte; Phase-9-Regression, Coverage,
+  reproduzierbares Basisartefakt, standalone GUI-Paket und Datenaudit
+  bestehen. Vor KR-4403 bleibt der ausdrueckliche Nutzerreview offen.
 - Das fuer Phase 10 bereitgestellte App-Logo ist mit Abmessungen, Transparenz,
   SHA-256 und Herkunft als interner GUI-Asset-Eingang eingebunden. Eine
   oeffentliche Weitergabe bleibt bis zum vollstaendigen KR-4902-Audit gesperrt.

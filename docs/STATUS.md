@@ -4,7 +4,7 @@ Interner Entwicklungsmeilenstein: `0.40.0`
 
 Phase: Pre-Alpha
 
-Naechster Roadmap-Task: `KR-4101` - GUI-Technologie und Architektur festlegen
+Naechster Roadmap-Task: Nutzerreview von `KR-4402`; danach `KR-4403`
 
 Naechstes Phasengate: `v0.44.0` - Abschluss Phase 10
 
@@ -12,11 +12,11 @@ Erster oeffentlicher Produktrelease: `v0.50.0` Alpha
 
 ## Fortschritt
 
-- 186 von 231 gepflegten Roadmap-Tasks abgeschlossen: 80,5 %
-- 92 von 133 Tasks auf dem Weg vom Dreamcast-Plattformstart bis zum Alpha-Gate abgeschlossen: 69,2 %
+- 198 von 231 gepflegten Roadmap-Tasks abgeschlossen: 85,7 %
+- 104 von 133 Tasks auf dem Weg vom Dreamcast-Plattformstart bis zum Alpha-Gate abgeschlossen: 78,2 %
 - Phasen 1 bis 9 abgeschlossen
 - Phase 9: 16/17 Tasks; das optionale lokale Firmware-LLE-Smoke-Profil wurde nicht angefordert
-- Phase 10: 0/13 Tasks
+- Phase 10: 12/13 Tasks; Gate-Vorbereitung bestanden, Freigabereview offen
 - Phase 11: 0/25 Tasks
 - Alpha-Gate noch nicht erreicht
 
@@ -31,7 +31,7 @@ Erster oeffentlicher Produktrelease: `v0.50.0` Alpha
 | 7 | Codegen und Dispatch | 21/21 |
 | 8 | Werkzeuge und Qualitaet | 26/26 |
 | 9 | Kompatibilitaet und Leistung | 16/17 (Pflichtumfang abgeschlossen) |
-| 10 | Desktop-GUI und Quellworkflow | 0/13 |
+| 10 | Desktop-GUI und Quellworkflow | 12/13 (Review vor Freigabe) |
 | 11 | Alpha-Integration und Haertung | 0/25 |
 
 Die Einzelaufgaben und Abhaengigkeiten werden ausschliesslich in
@@ -76,6 +76,24 @@ reproduzierbares Basisartefakt und Phase-9-Datenaudit bestanden
 
 Der Gate-Bericht nennt `next_phase: 10`. Es wurden weder Versionierung noch
 Release-Commit, Tag oder Veroeffentlichung ausgefuehrt.
+
+## Aktueller Review-Checkpoint: Phase 10 / KR-4402
+
+Gate-Commit: `024990b0c531287bd5de7c6450d3b2e1247e10f4`
+
+```text
+159/159 Tests bestanden
+frischer MSVC-Debug-Build in 82.133 ms
+KR_PHASE10_GUI_END_TO_END erreicht
+GUI und CLI: identische Projektidentitaet und 8 identische Kernartefakte
+GDI-Positiv-, Fehler- und Recovery-Pfade sowie Tastatur/DPI-Recovery abgedeckt
+Phase-9-Checkpoint, Coverage, Basisartefakt, GUI-Paket und Datenaudit bestanden
+```
+
+`KR-4403` wurde nicht begonnen. Der unveraenderte Gate-Bericht verlangt vor
+der internen Meilenstein-Freigabe das ausdrueckliche Nutzerreview. Es wurden
+keine Versionierung, kein Release-Commit, kein Tag und keine Veroeffentlichung
+ausgefuehrt.
 
 ## Letztes Release-Gate: v0.37.0
 
