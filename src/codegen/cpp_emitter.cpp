@@ -343,6 +343,25 @@ void emit_fpu_mode_guard(std::ostringstream& output,
     output << "}\n";
 }
 
+void emit_privileged_guard(std::ostringstream& output,
+                           const katana::ir::Instruction& instruction,
+                           const int indent) {
+    if (!instruction.is_privileged) return;
+    emit_indent(output, indent);
+    output << "if (!cpu.privileged_mode()) {\n";
+    emit_indent(output, indent + 1);
+    output << "raise_illegal_instruction(cpu, " << hex32(instruction.source_address);
+    if (instruction.delay_slot.role == katana::ir::DelaySlotRole::Slot &&
+        instruction.delay_slot.counterpart_address.has_value()) {
+        output << ", " << hex32(*instruction.delay_slot.counterpart_address);
+    }
+    output << ");\n";
+    emit_indent(output, indent + 1);
+    output << "return;\n";
+    emit_indent(output, indent);
+    output << "}\n";
+}
+
 void emit_simple_instruction(std::ostringstream& output,
                              const katana::ir::Instruction& instruction,
                              const int indent) {
@@ -1626,6 +1645,7 @@ void emit_guarded_simple_instruction(std::ostringstream& output,
                                      const int indent) {
     emit_indent(output, indent);
     output << "// katana-guest " << hex32(instruction.source_address) << "\n";
+    emit_privileged_guard(output, instruction, indent);
     emit_fpu_disabled_guard(output, instruction, indent);
     emit_fpu_mode_guard(output, instruction, indent);
 
@@ -1686,6 +1706,7 @@ void emit_terminal(std::ostringstream& output,
 
     emit_indent(output, indent);
     output << "// katana-guest " << hex32(instruction.source_address) << "\n";
+    emit_privileged_guard(output, instruction, indent);
 
     const katana::ir::Instruction* delay_slot = nullptr;
 

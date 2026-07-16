@@ -45,6 +45,12 @@
   Unmapped-Grenzen aus. Ein autorisierter privater Retail-Nachlauf fiel von
   vier unbekannten Instruktionen auf null, bleibt wegen dynamischem
   Kontrollfluss aber ehrlich `partial`; dieser Lauf ist kein Bootnachweis.
+- KR-4503: Der generierte Backendpfad prueft jede als privilegiert markierte
+  Instruktion vor ihrer ersten Teilwirkung gegen `SR.MD`. Privilegierte
+  STC/LDC-Systemregistertransfers, `RTE` und `SLEEP` erzeugen im User-Modus
+  eine strukturierte Illegal-Instruction-Ausnahme mit stabilem Gast-PC und
+  Delay-Slot-Kontext; Supervisor-Ausfuehrung, SR-/FPSCR-Maskierung und
+  Registerbankwechsel bleiben durch gemeinsame End-to-End-Tests abgesichert.
 - Der neue inkrementelle Entwicklungszyklus behaelt `build-current/`, setzt teure Gate-Instrumentierung beim Debugprofil sicher zurueck und baut sowie testet mit begrenzter Parallelitaet. Das frische Abschluss-Gate bleibt erhalten; die vier deterministischen Fuzzziele laufen mit unveraenderter Fallzahl und denselben abgeleiteten Seeds als parallele CTest-Eintraege.
 - Der Entwicklungsrunner normalisiert auch eine bereits aktive x86-Developer-PowerShell auf die fuer den Projektbuild erforderliche native x64-MSVC-Umgebung.
 - KR-3801 bis KR-3808: Ein intern provenance-gebundenes, vollstaendig

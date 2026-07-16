@@ -38,6 +38,11 @@ katana::ir::Instruction transfer(const std::uint32_t address,
         katana::ir::instruction_status_effects(operation, special_register);
     instruction.accumulator_effects =
         katana::ir::operation_accumulator_effects(operation, special_register);
+    instruction.is_privileged =
+        special_register == IrRegister::Sr || special_register == IrRegister::Vbr ||
+        special_register == IrRegister::Ssr || special_register == IrRegister::Spc ||
+        special_register == IrRegister::Sgr || special_register == IrRegister::Dbr ||
+        (special_register >= IrRegister::Bank0 && special_register <= IrRegister::Bank7);
     if (operation == Operation::LoadSpecialRegister ||
         operation == Operation::LoadSpecialRegisterPostIncrement) {
         instruction.source_register = general_register;
@@ -285,7 +290,8 @@ int main(const int argc, char* argv[]) {
     const auto source = katana::codegen::emit_cpp_program(build_program(), 0x100u);
     require(source.find("cpu.write_sr(value);") != std::string::npos &&
                 source.find("cpu.r_bank[7] = value;") != std::string::npos &&
-                source.find("cpu.memory.write_u32(address, value);") != std::string::npos,
+                source.find("cpu.memory.write_u32(address, value);") != std::string::npos &&
+                source.find("if (!cpu.privileged_mode())") != std::string::npos,
             "Der C++-Emitter bildet Spezialregistertransfers nicht vollstaendig ab.");
 
     std::cout << "Alle KR-1406 Decoder-, IR- und Codegen-Tests erfolgreich.\n";

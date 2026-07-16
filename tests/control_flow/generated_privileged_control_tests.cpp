@@ -55,11 +55,28 @@ void run_sleep() {
             "SLEEP erhaelt den CPU-Zustand nicht.");
 }
 
+void reject_user_mode_privileged_control() {
+    for (const auto test : {std::pair{0x102u, katana_generated::fn_00000102},
+                            std::pair{0x106u, katana_generated::fn_00000106}}) {
+        katana_generated::CpuState cpu;
+        cpu.vbr = 0x8000u;
+        cpu.pc = test.first;
+        cpu.write_sr(0u);
+        test.second(cpu);
+        require(cpu.trap_pending &&
+                    cpu.last_exception_cause ==
+                        katana::runtime::ExceptionCause::IllegalInstruction &&
+                    cpu.spc == test.first && cpu.pc == 0x8100u,
+                "Privilegierter Kontrollpfad wird im User-Modus nicht sichtbar abgelehnt.");
+    }
+}
+
 } // namespace
 
 int main() {
     run_trapa_and_rte();
     run_sleep();
-    std::cout << "KR-1407 End-to-End-Semantik wurde erfolgreich ausgefuehrt.\n";
+    reject_user_mode_privileged_control();
+    std::cout << "KR-1407/KR-4503 End-to-End-Semantik wurde erfolgreich ausgefuehrt.\n";
     return EXIT_SUCCESS;
 }

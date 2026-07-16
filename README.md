@@ -154,6 +154,12 @@ Die `game.exe` bettet keine Disc-Daten oder privaten Hostpfade ein; die GDI
 bleibt eine explizite read-only Laufzeiteingabe. Ohne gueltige GDI endet der
 Prozess mit einem Nichtnull-Exitcode und redigierter Diagnose.
 
+Der generierte SH-4-Pfad erzwingt den privilegierten Modus fuer markierte
+Systemregister- und Kontrollinstruktionen. Ein Zugriff aus dem User-Modus wird
+vor jeder Teilwirkung als strukturierte Illegal-Instruction-Ausnahme an den
+Runtime-Dispatcher uebergeben; er wird weder still ausgefuehrt noch als Host-
+Exception verloren.
+
 ## Projektstruktur
 
 ```text

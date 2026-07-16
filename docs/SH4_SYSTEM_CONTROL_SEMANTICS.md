@@ -57,7 +57,11 @@ FPU-Disable-Ausnahme.
 
 ## Privilegstatus
 
-Alle laut SH-4-ISA privilegierten STC/LDC-Formen tragen diese Eigenschaft explizit in Decoder und Katana-IR. GBR-Transfers sind nicht privilegiert. Da Ausnahmen und Betriebsmodi noch kein vollstaendiges Runtime-Subsystem besitzen, fuehrt der generierte Code eine markierte privilegierte Instruktion derzeit aus, statt eine Illegal-Instruction-Ausnahme zu dispatchen.
+Alle laut SH-4-ISA privilegierten STC/LDC-Formen tragen diese Eigenschaft
+explizit in Decoder und Katana-IR. GBR-Transfers sind nicht privilegiert. Seit
+KR-4503 prueft der generierte Code `SR.MD` vor der ersten Teilwirkung. Im
+User-Modus wird eine strukturierte Illegal-Instruction-Ausnahme mit dem
+verursachenden Gast-PC dispatcht; Register und Speicher bleiben unveraendert.
 
 ## Getestete Faelle
 
@@ -70,6 +74,7 @@ Alle laut SH-4-ISA privilegierten STC/LDC-Formen tragen diese Eigenschaft expliz
 - Pre-Decrement und Post-Increment
 - unveraenderter Zustand bei ungueltigen Speicheradressen
 - korrekte Privilegmarkierung mit GBR-Ausnahme
+- erfolgreiche Supervisor-Ausfuehrung und Ablehnung im User-Modus
 
 ## Privilegierte Kontrollpfade
 
@@ -98,4 +103,7 @@ Der SR.RB-Wechsel aktiviert dabei die alternative Registerbank. Der generierte F
 
 `SLEEP` setzt `sleeping = true`, setzt PC auf die Folgeinstruktion und kehrt zum Runtime-Dispatcher zurueck. Alle anderen CPU-Felder bleiben erhalten. Ein spaeteres Interrupt- und Scheduler-Subsystem ist fuer das Aufwecken verantwortlich; KR-1407 simuliert keinen Plattforminterrupt.
 
-Die Privilegmarkierung ist in Decoder, IR und CLI sichtbar. Eine Illegal-Instruction-Ausnahme bei Ausfuehrung im User-Modus folgt mit dem spaeteren Ausnahme-Subsystem.
+Die Privilegmarkierung ist in Decoder, IR und CLI sichtbar. `RTE` und `SLEEP`
+pruefen seit KR-4503 vor dem Delay Slot beziehungsweise vor dem Setzen des
+Schlafzustands `SR.MD`. Eine User-Modus-Ausfuehrung nimmt ohne Teilwirkung die
+Illegal-Instruction-Ausnahme; im Delay-Slot-Kontext wird der Owner-PC gesichert.

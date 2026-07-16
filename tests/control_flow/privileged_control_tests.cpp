@@ -101,7 +101,8 @@ int main(const int argc, char* argv[]) {
     const auto source = katana::codegen::emit_cpp_program(program, base_address);
     require(source.find("raise_trapa(cpu, 127u, 0x00000100u);") != std::string::npos &&
                 source.find("return_from_exception(cpu);") != std::string::npos &&
-                source.find("cpu.sleeping = true;") != std::string::npos,
+                source.find("cpu.sleeping = true;") != std::string::npos &&
+                source.find("if (!cpu.privileged_mode())") != std::string::npos,
             "Der C++-Emitter bildet die Kontrollpfade nicht sichtbar ab.");
 
     std::cout << "Alle KR-1407 Decoder-, Analyse-, IR- und Codegen-Tests erfolgreich.\n";

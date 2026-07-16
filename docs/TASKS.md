@@ -2542,7 +2542,7 @@ Akzeptanz:
 - jede neue Instruktion besitzt denselben Vertrag in Decoder, IR und Backend
 - kein unbekannter Opcode wird als erfolgreicher No-op behandelt
 
-### [ ] KR-4503 - Status-, Exception- und Systemsemantik
+### [x] KR-4503 - Status-, Exception- und Systemsemantik
 
 Abhaengigkeiten: KR-4501, KR-4502
 

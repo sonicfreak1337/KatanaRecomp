@@ -40,6 +40,7 @@ void run_direct_cases() {
 
     for (std::size_t index = 0; index < functions.size(); ++index) {
         katana_generated::CpuState cpu;
+        if (index >= 5u && index != 6u) cpu.write_sr(0x40000000u);
         cpu.r[0] = 0xFFFFFFFFu;
         cpu.pc = 0x100u + static_cast<std::uint32_t>(index) * 0x10u;
         functions[index](cpu);
@@ -48,6 +49,7 @@ void run_direct_cases() {
     }
 
     katana_generated::CpuState cpu;
+    cpu.write_sr(0x40000000u);
     cpu.sgr = 0x89ABCDEFu;
     cpu.pc = 0x230u;
     katana_generated::fn_00000230(cpu);
@@ -56,7 +58,8 @@ void run_direct_cases() {
 
 void run_sr_bank_case() {
     katana_generated::CpuState cpu;
-    cpu.r[0] = 0x20000001u;
+    cpu.write_sr(0x40000000u);
+    cpu.r[0] = 0x60000001u;
     cpu.r[2] = 0x11111111u;
     cpu.r_bank[2] = 0x22222222u;
     cpu.pc = 0x150u;
@@ -64,7 +67,20 @@ void run_sr_bank_case() {
 
     require(cpu.r[2] == 0x22222222u && cpu.r_bank[2] == 0x11111111u,
             "LDC SR wechselt die aktive Registerbank nicht.");
-    require(cpu.t && cpu.read_sr() == 0x20000001u, "SR-Bits wurden falsch synchronisiert.");
+    require(cpu.t && cpu.read_sr() == 0x60000001u, "SR-Bits wurden falsch synchronisiert.");
+}
+
+void reject_user_mode_control_register_access() {
+    katana_generated::CpuState cpu;
+    cpu.vbr = 0x8000u;
+    cpu.pc = 0x170u;
+    cpu.write_sr(0u);
+    cpu.r[0] = 0x12345678u;
+    katana_generated::fn_00000170(cpu);
+    require(cpu.trap_pending &&
+                cpu.last_exception_cause == katana::runtime::ExceptionCause::IllegalInstruction &&
+                cpu.spc == 0x170u && cpu.pc == 0x8100u && cpu.vbr == 0x8000u,
+            "Privilegierter Systemregisterzugriff wird im User-Modus nicht abgelehnt.");
 }
 
 void run_memory_cases() {
@@ -121,8 +137,9 @@ void run_invalid_cases() {
 int main() {
     run_direct_cases();
     run_sr_bank_case();
+    reject_user_mode_control_register_access();
     run_memory_cases();
     run_invalid_cases();
-    std::cout << "KR-1406 End-to-End-Semantik wurde erfolgreich ausgefuehrt.\n";
+    std::cout << "KR-1406/KR-4503 End-to-End-Semantik wurde erfolgreich ausgefuehrt.\n";
     return EXIT_SUCCESS;
 }

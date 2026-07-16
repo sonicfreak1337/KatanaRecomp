@@ -33,7 +33,10 @@ Testanforderung.
 
 Die konkreten Grenzen sind derzeit:
 
-- Privilegverletzungen und der vollstaendige `SLEEP`-/Wakeup-Pfad fehlen noch.
+- Der vollstaendige `SLEEP`-/Wakeup-Pfad und nicht modellierte MMU-/Cache-
+  Kontrolloperationen fehlen noch. Markierte privilegierte Instruktionen
+  erzeugen im User-Modus bereits vor jeder Teilwirkung eine strukturierte
+  Illegal-Instruction-Ausnahme.
 - Operand-Cache-RAM und vollstaendige Cachekohaerenz sind nicht aktiviert.
 - Vollstaendige SH-4-FPU-Ursachen-, Enable- und Sticky-Flag-Semantik fehlt.
 
@@ -43,6 +46,11 @@ GBR-byteweisen Immediate-Operationen. `BRAF`/`BSRF` verwenden `PC+4+Rm` und
 lesen `Rm` vor dem Delay Slot; der Aufruf schreibt PR erst nach erfolgreichem
 Slot. Die Byteoperationen besitzen strukturierte Unmapped-/Ausrichtungsfehler
 und `TAS.B` deckt Null- und Nichtnullwerte ausfuehrbar ab.
+
+KR-4503 bindet den Backendpfad an `SR.MD`: privilegierte STC/LDC-Transfers,
+`RTE` und `SLEEP` laufen nur im Supervisor-Modus. Im User-Modus sichern sie
+Gast-PC beziehungsweise Delay-Slot-Owner und dispatchen deterministisch die
+Illegal-Instruction-Ausnahme, ohne Register- oder Speicherteilwirkung.
 
 KR-4502 und KR-4503 duerfen einen Zustand nur zusammen mit Decoder-, IR-,
 Backend-, Runtime- und Erfolg/Grenze/Fehler-Tests anheben. Eine sinkende Zahl
