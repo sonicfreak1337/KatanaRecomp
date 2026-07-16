@@ -182,6 +182,14 @@
 
 ### Behoben
 
+- Reviewkorrektur: Terminale Jobereignisse werden erst nach erfolgreichem
+  Schreiben, atomarem Rename und Stale-Cleanup gesendet; Publikationsfehler
+  bleiben strukturierte `input-output`-Fehler. Die Live-Logposition folgt nach
+  atomarer Redaktion der neuen Dateigroesse und verliert keine fruehe
+  Kompilierausgabe. Linux wiederholt `waitpid` bei `EINTR`, wertet bei anderen
+  Fehlern keinen alten Status aus und eskaliert einen ignorierten `SIGTERM`
+  nach fuenf Sekunden zu `SIGKILL`.
+
 - Lokale MSVC-AddressSanitizer-Builds kopieren ihre passende Laufzeit-DLL in
   `build-current`, sodass CLI und GUI auch ausserhalb einer Developer-
   PowerShell ohne `clang_rt.asan_dynamic-x86_64.dll`-Systemfehler starten.

@@ -271,6 +271,41 @@ int main() {
                 incomplete_plan_text.find("\"tool_version\":\"0.40.0-dev\"") != std::string::npos,
             "Partieller Buildplan verliert Zustand, Hostbuildgrenze oder Werkzeugversion.");
 
+    const auto publication_race = fixture.root / "publication-race";
+    std::vector<app::JobEvent> publication_events;
+    const auto publication_failure = service.execute(
+        {"publication-race",
+         app::JobKind::Build,
+         incomplete_manifest_path,
+         publication_race,
+         "0.40.0-dev"},
+        {},
+        [&](const app::JobEvent& event) {
+            publication_events.push_back(event);
+            if (event.stage == "finalization" && event.state == app::JobState::Running &&
+                event.step_status == app::JobStepStatus::Running) {
+                std::filesystem::create_directories(publication_race);
+                write_text(publication_race / "concurrent-owner.txt", "occupied");
+            }
+        });
+    require(publication_failure.state == app::JobState::Failed &&
+                publication_failure.failure_category == app::JobFailureCategory::InputOutput &&
+                !publication_events.empty() &&
+                publication_events.back().state == app::JobState::Failed &&
+                publication_events.back().step_status == app::JobStepStatus::Failed &&
+                std::none_of(publication_events.begin(),
+                             publication_events.end(),
+                             [](const auto& event) {
+                                 return event.state == app::JobState::Completed ||
+                                        event.state == app::JobState::Partial;
+                             }) &&
+                std::any_of(publication_failure.diagnostics.begin(),
+                            publication_failure.diagnostics.end(),
+                            [](const auto& diagnostic) {
+                                return diagnostic.code == "job-publication-failed";
+                            }),
+            "Fehlgeschlagene atomare Veroeffentlichung sendet vorher ein terminales Erfolgsevent.");
+
     const auto aborted_raw = fixture.root / "aborted-edge.bin";
     write_binary(aborted_raw, {0x09u, 0x00u});
     const auto aborted_manifest_path = fixture.root / "aborted-edge.katana";
@@ -391,6 +426,7 @@ int main() {
             "Hierarchische GDI-Ereignisfolge besitzt keine stabilen Grenzen.");
     bool saw_indeterminate_configuration = false;
     bool saw_live_log = false;
+    bool saw_compilation_log = false;
     for (std::size_t index = 0u; index < gdi_events.size(); ++index) {
         const auto& event = gdi_events[index];
         require(event.sequence == index &&
@@ -406,8 +442,10 @@ int main() {
             event.step_status == app::JobStepStatus::Running && !event.step_total)
             saw_indeterminate_configuration = true;
         if (event.log_chunk && !event.log_chunk->empty()) saw_live_log = true;
+        if (event.stage == "host-compilation" && event.log_chunk && !event.log_chunk->empty())
+            saw_compilation_log = true;
     }
-    require(saw_indeterminate_configuration && saw_live_log &&
+    require(saw_indeterminate_configuration && saw_live_log && saw_compilation_log &&
                 app::format_job_event_json(gdi_events.front()).find("\"step_total\":null") !=
                     std::string::npos,
             "Unbestimmter Hostschritt oder inkrementelles Live-Log fehlt.");

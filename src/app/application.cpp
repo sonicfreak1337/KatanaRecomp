@@ -692,30 +692,52 @@ void run_host_command(const std::string& command,
     }
     static_cast<void>(::setpgid(child, child));
     int wait_status = 0;
+    bool wait_succeeded = false;
     for (;;) {
         const auto waited = ::waitpid(child, &wait_status, WNOHANG);
         emit_log(false);
-        if (waited == child) break;
+        if (waited == child) {
+            wait_succeeded = true;
+            break;
+        }
         if (waited < 0) {
+            if (errno == EINTR) continue;
             status = 1;
             break;
         }
         if (cancellation && cancellation->requested()) {
             static_cast<void>(::kill(-child, SIGTERM));
-            static_cast<void>(::waitpid(child, &wait_status, 0));
+            bool terminated = false;
+            for (std::size_t attempt = 0u; attempt < 100u; ++attempt) {
+                const auto stopped = ::waitpid(child, &wait_status, WNOHANG);
+                if (stopped == child) {
+                    terminated = true;
+                    break;
+                }
+                if (stopped < 0 && errno != EINTR) break;
+                std::this_thread::sleep_for(std::chrono::milliseconds(50));
+            }
+            if (!terminated) {
+                static_cast<void>(::kill(-child, SIGKILL));
+                for (;;) {
+                    const auto stopped = ::waitpid(child, &wait_status, 0);
+                    if (stopped == child || (stopped < 0 && errno != EINTR)) break;
+                }
+            }
             throw JobState::Cancelled;
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(50));
     }
-    if (WIFEXITED(wait_status))
+    if (wait_succeeded && WIFEXITED(wait_status))
         status = WEXITSTATUS(wait_status);
-    else
+    else if (wait_succeeded)
         status = 1;
 #endif
     emit_log(true);
     auto log = std::filesystem::exists(log_path) ? read_text(log_path) : std::string{};
     log = redact_sensitive_text(log);
     write_atomic(log_path, log);
+    log_offset = static_cast<std::uint64_t>(std::filesystem::file_size(log_path));
     if (status != 0) {
         constexpr std::size_t diagnostic_limit = 4'000u;
         const auto tail =
@@ -960,10 +982,9 @@ void require_cpp_profile_capabilities(
 
     std::vector<std::string> unsupported;
     for (const auto& capability_name : profile.required_backend_capabilities) {
-        if (capability_name != "memory") unsupported.push_back(capability_name);
+        if (capability_name != "memory" && capability_name != "firmware-mode")
+            unsupported.push_back(capability_name);
     }
-    if (profile.firmware_mode != io::ProjectFirmwareMode::Direct)
-        unsupported.push_back("firmware-profile");
     if (profile.fallback_policy != io::ProjectFallbackPolicy::Abort)
         unsupported.push_back("fallback-profile");
     if (profile.mmu_profile == io::ProjectMmuProfile::Sh4) unsupported.push_back("mmu");
@@ -1315,7 +1336,9 @@ JobResult ApplicationService::execute(const JobRequest& request,
                              snapshot.inputs,
                              entry,
                              boot_size,
-                             result.project_identity},
+                             result.project_identity,
+                             project.execution_profile.firmware_mode ==
+                                 io::ProjectFirmwareMode::Hle},
                             host_root,
                             {"game", request.tool_version, {}, {}}));
                         require_not_cancelled(cancellation);
@@ -1411,7 +1434,6 @@ JobResult ApplicationService::execute(const JobRequest& request,
                            ? JobState::Partial
                            : JobState::Completed;
         result.failure_category = JobFailureCategory::None;
-        events.emit(result.state, 100u, "finalization", {}, JobStepStatus::Completed, 1u, 1u);
     } catch (const JobState state) {
         result.state = state;
         result.failure_category = JobFailureCategory::None;
@@ -1419,11 +1441,6 @@ JobResult ApplicationService::execute(const JobRequest& request,
             make_error("job-cancelled",
                        "Job wurde kontrolliert abgebrochen.",
                        "Der Job kann mit denselben Eingaben wiederholt werden."));
-        events.emit(state,
-                    100u,
-                    events.active_stage(),
-                    result.diagnostics.back(),
-                    JobStepStatus::Cancelled);
     } catch (const io::InputOutputError& error) {
         result.state = JobState::Failed;
         result.failure_category = JobFailureCategory::InputOutput;
@@ -1431,11 +1448,6 @@ JobResult ApplicationService::execute(const JobRequest& request,
             make_error("job-input-output-failed",
                        error.what(),
                        "Eingabe- und Ausgabepfade sowie Zugriffsrechte pruefen."));
-        events.emit(JobState::Failed,
-                    100u,
-                    events.active_stage(),
-                    result.diagnostics.back(),
-                    JobStepStatus::Failed);
     } catch (const std::filesystem::filesystem_error& error) {
         result.state = JobState::Failed;
         result.failure_category = JobFailureCategory::InputOutput;
@@ -1443,47 +1455,68 @@ JobResult ApplicationService::execute(const JobRequest& request,
             make_error("job-input-output-failed",
                        error.what(),
                        "Eingabe- und Ausgabepfade sowie Zugriffsrechte pruefen."));
-        events.emit(JobState::Failed,
-                    100u,
-                    events.active_stage(),
-                    result.diagnostics.back(),
-                    JobStepStatus::Failed);
     } catch (const std::exception& error) {
         result.state = JobState::Failed;
         result.diagnostics.push_back(
             make_error("job-failed",
                        error.what(),
                        "Quelle und Projekteinstellungen pruefen und Job wiederholen."));
-        events.emit(JobState::Failed,
-                    100u,
-                    events.active_stage(),
-                    result.diagnostics.back(),
-                    JobStepStatus::Failed);
     }
-    if (transactional && result.state != JobState::Completed && result.state != JobState::Partial)
-        result.artifacts.clear();
     auto result_path = work_root / "job-result.json";
-    write_atomic(result_path, format_job_result_json(result));
-    if (transactional) {
-        if (result.state == JobState::Completed || result.state == JobState::Partial) {
-            std::filesystem::rename(work_root, final_root);
-            std::error_code cleanup_error;
-            std::filesystem::remove_all(stale_root, cleanup_error);
-            if (cleanup_error)
-                throw std::runtime_error("Veraltetes Jobergebnis konnte nicht bereinigt werden.");
-        } else {
-            std::error_code cleanup_error;
-            std::filesystem::remove_all(work_root, cleanup_error);
-            if (cleanup_error)
-                throw std::runtime_error(
-                    "Fehlgeschlagenes Job-Staging konnte nicht bereinigt werden.");
-            std::filesystem::create_directories(final_root);
+    try {
+        if (transactional && result.state != JobState::Completed &&
+            result.state != JobState::Partial)
+            result.artifacts.clear();
+        write_atomic(result_path, format_job_result_json(result));
+        if (transactional) {
+            if (result.state == JobState::Completed || result.state == JobState::Partial) {
+                std::filesystem::rename(work_root, final_root);
+                std::error_code cleanup_error;
+                std::filesystem::remove_all(stale_root, cleanup_error);
+                if (cleanup_error)
+                    throw std::runtime_error(
+                        "Veraltetes Jobergebnis konnte nicht bereinigt werden.");
+            } else {
+                std::error_code cleanup_error;
+                std::filesystem::remove_all(work_root, cleanup_error);
+                if (cleanup_error)
+                    throw std::runtime_error(
+                        "Fehlgeschlagenes Job-Staging konnte nicht bereinigt werden.");
+                std::filesystem::create_directories(final_root);
+                result_path = final_root / "job-result.json";
+                write_atomic(result_path, format_job_result_json(result));
+            }
             result_path = final_root / "job-result.json";
-            write_atomic(result_path, format_job_result_json(result));
         }
-        result_path = final_root / "job-result.json";
+        result.artifacts.push_back({"job-result", "job-result.json", artifact_hash(result_path)});
+    } catch (const std::exception& error) {
+        result.state = JobState::Failed;
+        result.failure_category = JobFailureCategory::InputOutput;
+        result.artifacts.clear();
+        result.diagnostics.push_back(
+            make_error("job-publication-failed",
+                       error.what(),
+                       "Ausgabeziel, Zugriffsrechte und freien Speicher pruefen."));
+        if (transactional) {
+            std::error_code ignored;
+            std::filesystem::remove_all(work_root, ignored);
+            if (std::filesystem::exists(final_root)) {
+                result_path = final_root / "job-result.json";
+                try {
+                    write_atomic(result_path, format_job_result_json(result));
+                    result.artifacts.push_back(
+                        {"job-result", "job-result.json", artifact_hash(result_path)});
+                } catch (...) {
+                }
+            }
+        }
     }
-    result.artifacts.push_back({"job-result", "job-result.json", artifact_hash(result_path)});
+    const auto terminal_status = result.state == JobState::Cancelled ? JobStepStatus::Cancelled
+                                 : result.state == JobState::Failed  ? JobStepStatus::Failed
+                                                                     : JobStepStatus::Completed;
+    const auto terminal_diagnostic =
+        result.diagnostics.empty() ? std::optional<Diagnostic>{} : result.diagnostics.back();
+    events.emit(result.state, 100u, "finalization", terminal_diagnostic, terminal_status, 1u, 1u);
     return result;
 }
 

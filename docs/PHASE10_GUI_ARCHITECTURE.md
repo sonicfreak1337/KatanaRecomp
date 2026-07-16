@@ -68,6 +68,15 @@ host process is tailed while running and only newly appended, redacted chunks
 are delivered. The GUI retains a bounded in-memory log and never rereads the
 complete `recompile.log` during refresh.
 
+A terminal `completed` or `partial` event is emitted only after `job-result.json`
+has been written, staging has been atomically renamed and stale cleanup has
+succeeded. Publication failures stay inside the structured job error path and
+end with a terminal `failed` event. Log redaction updates the tail offset to the
+new atomic file size before compilation, so shortening configuration output
+cannot hide later compiler chunks. On Linux, `waitpid` retries `EINTR`; other
+wait errors cannot reuse stale status, and cancellation escalates from bounded
+`SIGTERM` waiting to `SIGKILL`.
+
 Generated output is transactional. Each job writes to a short,
 identity-derived sibling staging directory and publishes it only after its
 terminal result is known. Failed or cancelled staging is removed. When a
