@@ -96,6 +96,7 @@ add_library(katana_core STATIC
     src/io/symbol_map.cpp
     src/platform/dreamcast.cpp
     src/platform/dreamcast_disc.cpp
+    src/platform/firmware_diagnostics.cpp
     src/platform/phase6_gate.cpp
     src/analysis/disassembler.cpp
     src/analysis/code_address.cpp

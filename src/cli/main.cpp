@@ -19,6 +19,7 @@
 #include "katana/sh4/disassembler.hpp"
 #include "katana/sh4/isa_coverage.hpp"
 #include "katana/platform/dreamcast_disc.hpp"
+#include "katana/platform/firmware_diagnostics.hpp"
 
 #include <algorithm>
 #include <array>
@@ -646,6 +647,20 @@ int export_analysis_graph(
     return 0;
 }
 
+int diagnose_firmware(
+    const std::filesystem::path& path,
+    const katana::platform::FirmwareImageKind kind,
+    const katana::platform::FirmwareDiagnosticOptions& options
+) {
+    const auto report = katana::platform::inspect_firmware_file(path, kind, options);
+    std::cout << katana::platform::format_firmware_diagnostic_json(report);
+    return katana::cli::exit_status(
+        report.valid()
+            ? katana::cli::ExitCode::Success
+            : katana::cli::ExitCode::ProcessingFailure
+    );
+}
+
 int disassemble_file(
     const std::filesystem::path& path,
     const std::uint32_t base_address
@@ -1181,6 +1196,7 @@ void print_usage(std::ostream& output) {
         << "  katana-recomp cfg-dot <Projektmanifest> [Override-Datei]\n"
         << "  katana-recomp callgraph-json <Projektmanifest> [Override-Datei]\n"
         << "  katana-recomp callgraph-dot <Projektmanifest> [Override-Datei]\n"
+        << "  katana-recomp firmware-diagnose <bios|flash> <Datei> [--sha256 <Hash>] [--include-sensitive]\n"
         << "  katana-recomp disasm <Datei> [Basisadresse]\n"
         << "  katana-recomp blocks <Datei> [Basisadresse]\n"
         << "  katana-recomp functions <Datei> <Einstieg> [Basisadresse]\n"
@@ -1269,6 +1285,32 @@ int main(const int argc, char* argv[]) {
                     command
                 );
             }
+        }
+
+        if (argc >= 4 && argc <= 7 && std::string_view(argv[1]) == "firmware-diagnose") {
+            const std::string_view kind_name = argv[2];
+            katana::platform::FirmwareImageKind kind;
+            if (kind_name == "bios") {
+                kind = katana::platform::FirmwareImageKind::Bios;
+            } else if (kind_name == "flash") {
+                kind = katana::platform::FirmwareImageKind::Flash;
+            } else {
+                throw std::invalid_argument("firmware-diagnose erwartet bios oder flash.");
+            }
+            katana::platform::FirmwareDiagnosticOptions options;
+            std::size_t argument = 4u;
+            while (argument < static_cast<std::size_t>(argc)) {
+                const std::string_view option = argv[argument++];
+                if (option == "--sha256" && !options.expected_sha256.has_value()
+                    && argument < static_cast<std::size_t>(argc)) {
+                    options.expected_sha256 = argv[argument++];
+                } else if (option == "--include-sensitive" && !options.include_sensitive) {
+                    options.include_sensitive = true;
+                } else {
+                    throw std::invalid_argument("Ungueltige firmware-diagnose-Option.");
+                }
+            }
+            return diagnose_firmware(std::filesystem::path(argv[3]), kind, options);
         }
 
         if (argc == 2) {

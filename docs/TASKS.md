@@ -1679,7 +1679,7 @@ Akzeptanz:
 - Port-Regenerierung verwaltet alle vier Graphartefakte ueber das Katana-Artefaktmanifest
 - die gebuendelte Phase-8-Regression prueft DOT-/JSON-Vertrag, Symbole, indirekte Ziele und Bytegleichheit
 
-### [ ] KR-3606 - Sichere Firmware- und Flash-Diagnostik
+### [x] KR-3606 - Sichere Firmware- und Flash-Diagnostik
 
 Abhaengigkeiten: KR-2204, KR-3503
 
@@ -1697,6 +1697,7 @@ Akzeptanz:
 - Rohwerte sensibler Flash-Felder erscheinen nur nach einer ausdruecklichen lokalen Opt-in-Option
 - Tests verwenden ausschliesslich kleine synthetische Abbilder
 - Berichte enthalten keine BIOS-Schriften, PVR-Texturen oder andere urheberrechtlich geschuetzte Nutzdaten
+- die gebuendelte Phase-8-Regression prueft falsche Groessen/Hashes, Flashheader, Bitmap, Generationen, CRCs, Redaktion und unveraenderte Eingaben mit synthetischen Abbildern
 
 ### [ ] KR-3607 - Dispatch- und Fallbackdiagnostik
 
