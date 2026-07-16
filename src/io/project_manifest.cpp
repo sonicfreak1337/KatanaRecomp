@@ -607,7 +607,10 @@ ProjectManifest parse_project_manifest(const std::filesystem::path& path) {
 }
 
 LoadedProject load_project(const std::filesystem::path& path) {
-    auto manifest = parse_project_manifest(path);
+    return load_project(parse_project_manifest(path));
+}
+
+LoadedProject load_project(ProjectManifest manifest) {
     ExecutableImage image;
     if (manifest.format == ProjectInputFormat::RawBinary) {
         RawBinaryLoadOptions options;

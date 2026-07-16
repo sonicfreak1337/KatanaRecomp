@@ -22,16 +22,19 @@
 5. Use Results for the deterministic function, segment, source and provenance
    index. Use Diagnostics for warnings, errors and recovery instructions.
 
-The three terminal job states are distinct: `completed` means the requested
-work is complete, `partial` means useful analysis exists but unresolved control
-flow or unknown instructions block safe code generation, and `failed` means an
-I/O, validation, tool or host-build error prevented the request.
+The three terminal job states are distinct: `completed` means every committed
+executable byte is analyzed and no unknown instruction, unresolved control-flow
+site or reachable abort edge remains. `partial` keeps useful analysis when any
+of those proofs is missing, and `failed` means an I/O, validation, tool or
+host-build error prevented the request.
 
 Output publication is atomic at job granularity. Cancelled and failed jobs do
 not expose staged `sourcecode/`, `recompile.log` or `game.exe` as current
 results. A failed rebuild moves an older successful result beside the output as
 an explicitly stale recovery copy. A second KatanaRecomp process cannot write
-the same or an overlapping output directory concurrently.
+the same or an overlapping output directory concurrently on Windows or Linux.
+Repeated failures with the stable `cli-workflow` ID preserve the last successful
+stale recovery copy instead of replacing it with an earlier failure report.
 
 The equivalent lower-level CLI command remains available for automation:
 

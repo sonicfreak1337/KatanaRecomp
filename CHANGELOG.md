@@ -20,7 +20,13 @@
   Stagingordner und veroeffentlichen sie erst nach Erfolg; Fehler und Abbrueche
   entfernen Teilresultate, behalten vorhandene Ergebnisse als explizit veraltet
   und beenden unter Windows auch gestartete Hostbuild-Kindprozesse. Prozessweite
-  Ausgabe-Locks verhindern ueberlappende Schreibziele mehrerer Instanzen.
+  Ausgabe-Locks verhindern ueberlappende Schreibziele mehrerer Instanzen. Die
+  korrigierte Vertragsversion 3 verlangt ausserdem vollstaendige Abdeckung aller
+  committed ausfuehrbaren Bytes und null erreichbare Abbruchkanten. Ein vor dem
+  Laden erfasster und direkt danach erneut gepruefter Eingabesnapshot bindet das
+  geladene Image an seine Provenienz. Wiederholte Fehler mit derselben Job-ID
+  behalten den letzten erfolgreichen Stale-Stand; Linux verwendet dafuer und
+  fuer ueberlappende Ziele eine prozessweite `flock`-Registry.
 - KR-4508: Das Portprojekt besitzt mit Vertragsversion 2 einen eigenstaendigen
   GDI-Runtime-Einstieg. `game.exe <disc.gdi>` liest Bootmetadaten und
   ISO9660-Bootdatei erst zur Laufzeit, initialisiert Dreamcast-RAM, VRAM,

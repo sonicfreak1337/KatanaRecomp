@@ -16,7 +16,7 @@
 
 namespace katana::app {
 
-inline constexpr std::uint32_t application_contract_version = 2u;
+inline constexpr std::uint32_t application_contract_version = 3u;
 inline constexpr std::uint32_t settings_schema_version = 1u;
 
 enum class DiagnosticSeverity : std::uint8_t { Information, Warning, Error };
@@ -98,10 +98,12 @@ enum class JobFailureCategory : std::uint8_t {
 struct AnalysisCoverage {
     std::uint64_t committed_executable_bytes = 0u;
     std::uint64_t analyzed_instruction_bytes = 0u;
+    std::uint64_t unanalyzed_executable_bytes = 0u;
     std::size_t instructions = 0u;
     std::size_t functions = 0u;
     std::size_t unresolved_control_flow = 0u;
     std::size_t unknown_instructions = 0u;
+    std::size_t reachable_abort_edges = 0u;
     bool control_flow_complete = false;
 };
 

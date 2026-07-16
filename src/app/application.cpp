@@ -1,5 +1,6 @@
 #include "katana/app/application.hpp"
 
+#include "katana/analysis/code_address.hpp"
 #include "katana/analysis/control_flow_analysis.hpp"
 #include "katana/analysis/control_flow_report.hpp"
 #include "katana/codegen/cpp_emitter.hpp"
@@ -30,6 +31,12 @@
 #include <windows.h>
 
 #include <tlhelp32.h>
+#else
+#include <cerrno>
+#include <csignal>
+#include <fcntl.h>
+#include <sys/file.h>
+#include <unistd.h>
 #endif
 
 namespace katana::app {
@@ -100,12 +107,55 @@ class CrossProcessJobLock final {
         }
         ReleaseMutex(registry_mutex_);
 #else
-        std::scoped_lock lock(registry_mutex_);
-        if (std::any_of(active_outputs_.begin(), active_outputs_.end(), [&](const auto& active) {
-                return outputs_overlap(active, output_);
-            }))
-            throw std::runtime_error("Ein anderer Prozess verwendet ein Ausgabeziel.");
-        active_outputs_.push_back(output_);
+        const auto registry =
+            std::filesystem::temp_directory_path() / "KatanaRecomp-output-locks-v1";
+        std::filesystem::create_directories(registry);
+        const auto registry_path = registry.parent_path() / "KatanaRecomp-output-locks-v1.registry";
+        const auto registry_fd = ::open(registry_path.c_str(), O_CREAT | O_RDWR, 0600);
+        if (registry_fd < 0 || ::flock(registry_fd, LOCK_EX) != 0) {
+            if (registry_fd >= 0) ::close(registry_fd);
+            throw std::runtime_error("Ausgabe-Lockregistry ist nicht erreichbar.");
+        }
+        try {
+            for (const auto& entry : std::filesystem::directory_iterator(registry)) {
+                if (!entry.is_regular_file()) continue;
+                std::ifstream input(entry.path(), std::ios::binary);
+                std::string pid_text;
+                std::string path_text;
+                std::getline(input, pid_text);
+                std::getline(input, path_text);
+                bool live = false;
+                try {
+                    const auto pid = static_cast<pid_t>(std::stol(pid_text));
+                    live = pid > 0 && (::kill(pid, 0) == 0 || errno == EPERM);
+                } catch (const std::exception&) {
+                    live = false;
+                }
+                if (!live) {
+                    std::error_code remove_error;
+                    std::filesystem::remove(entry.path(), remove_error);
+                    continue;
+                }
+                if (outputs_overlap(output_, std::filesystem::path(path_text))) {
+                    throw std::runtime_error(
+                        "Ein anderer Prozess verwendet ein ueberlappendes Ausgabeziel.");
+                }
+            }
+            lock_file_ =
+                registry / (io::sha256_bytes(output_.generic_string()).substr(0u, 24u) + ".lock");
+            std::ofstream output_file(lock_file_, std::ios::binary | std::ios::trunc);
+            if (!output_file)
+                throw std::runtime_error("Ausgabe-Lockdatei konnte nicht erzeugt werden.");
+            output_file << ::getpid() << '\n' << output_.generic_string() << '\n';
+            if (!output_file)
+                throw std::runtime_error("Ausgabe-Lockdatei konnte nicht geschrieben werden.");
+        } catch (...) {
+            static_cast<void>(::flock(registry_fd, LOCK_UN));
+            ::close(registry_fd);
+            throw;
+        }
+        static_cast<void>(::flock(registry_fd, LOCK_UN));
+        ::close(registry_fd);
 #endif
     }
     ~CrossProcessJobLock() {
@@ -120,8 +170,17 @@ class CrossProcessJobLock final {
             CloseHandle(registry_mutex_);
         }
 #else
-        std::scoped_lock lock(registry_mutex_);
-        std::erase(active_outputs_, output_);
+        const auto registry_path =
+            lock_file_.parent_path().parent_path() / "KatanaRecomp-output-locks-v1.registry";
+        const auto registry_fd = ::open(registry_path.c_str(), O_CREAT | O_RDWR, 0600);
+        if (registry_fd >= 0) {
+            if (::flock(registry_fd, LOCK_EX) == 0) {
+                std::error_code remove_error;
+                std::filesystem::remove(lock_file_, remove_error);
+                static_cast<void>(::flock(registry_fd, LOCK_UN));
+            }
+            ::close(registry_fd);
+        }
 #endif
     }
     CrossProcessJobLock(const CrossProcessJobLock&) = delete;
@@ -133,8 +192,7 @@ class CrossProcessJobLock final {
     HANDLE registry_mutex_ = nullptr;
     std::filesystem::path lock_file_;
 #else
-    inline static std::mutex registry_mutex_;
-    inline static std::vector<std::filesystem::path> active_outputs_;
+    std::filesystem::path lock_file_;
 #endif
 };
 
@@ -630,14 +688,54 @@ AnalysisCoverage analysis_coverage(const io::LoadedProject& project,
     }
     coverage.instructions = analysis.recursive.instructions.size();
     coverage.analyzed_instruction_bytes = coverage.instructions * 2u;
+    coverage.unanalyzed_executable_bytes =
+        coverage.committed_executable_bytes > coverage.analyzed_instruction_bytes
+            ? coverage.committed_executable_bytes - coverage.analyzed_instruction_bytes
+            : 0u;
     coverage.functions = analysis.recursive.functions.size();
     coverage.unknown_instructions = analysis.recursive.diagnostics.size();
     for (const auto& resolution : analysis.indirect_control_flow) {
         if (resolution.status == analysis::ResolutionStatus::Unresolved)
             ++coverage.unresolved_control_flow;
     }
+    coverage.reachable_abort_edges =
+        coverage.unknown_instructions + coverage.unresolved_control_flow;
+    std::set<std::pair<std::uint32_t, std::uint32_t>> invalid_edges;
+    const auto add_invalid_edge = [&](const std::uint32_t source, const std::uint32_t target) {
+        if (!analysis::validate_committed_code_address(project.image, target).valid())
+            invalid_edges.emplace(source, target);
+    };
+    for (const auto& line : analysis.recursive.instructions) {
+        if (!line.instruction.is_known() || line.is_delay_slot) continue;
+        const auto distance = line.instruction.has_delay_slot ? 4u : 2u;
+        if (line.instruction.has_delay_slot) add_invalid_edge(line.address, line.address + 2u);
+        switch (line.instruction.control_flow) {
+        case sh4::ControlFlowKind::None:
+            add_invalid_edge(line.address, line.address + 2u);
+            break;
+        case sh4::ControlFlowKind::ConditionalBranch:
+        case sh4::ControlFlowKind::Call:
+            if (line.target_address) add_invalid_edge(line.address, *line.target_address);
+            add_invalid_edge(line.address, line.address + distance);
+            break;
+        case sh4::ControlFlowKind::IndirectCall:
+            add_invalid_edge(line.address, line.address + distance);
+            break;
+        case sh4::ControlFlowKind::UnconditionalBranch:
+            if (line.target_address) add_invalid_edge(line.address, *line.target_address);
+            break;
+        case sh4::ControlFlowKind::IndirectBranch:
+        case sh4::ControlFlowKind::Return:
+        case sh4::ControlFlowKind::Trap:
+        case sh4::ControlFlowKind::ExceptionReturn:
+        case sh4::ControlFlowKind::Halt:
+            break;
+        }
+    }
+    coverage.reachable_abort_edges += invalid_edges.size();
     coverage.control_flow_complete =
-        coverage.unknown_instructions == 0u && coverage.unresolved_control_flow == 0u;
+        coverage.unknown_instructions == 0u && coverage.unresolved_control_flow == 0u &&
+        coverage.unanalyzed_executable_bytes == 0u && coverage.reachable_abort_edges == 0u;
     return coverage;
 }
 
@@ -646,17 +744,19 @@ std::string build_plan_json(const std::string_view status,
                             const AnalysisCoverage& coverage,
                             const bool host_compilation) {
     std::ostringstream output;
-    output << "{\"schema\":\"katana-build-plan\",\"version\":2,\"status\":"
+    output << "{\"schema\":\"katana-build-plan\",\"version\":3,\"status\":"
            << io::quote_json(status) << ",\"tool_version\":" << io::quote_json(tool_version)
            << ",\"native_execution\":false,\"host_compilation\":"
            << (host_compilation ? "true" : "false")
            << ",\"analysis\":{\"committed_executable_bytes\":"
            << coverage.committed_executable_bytes
            << ",\"analyzed_instruction_bytes\":" << coverage.analyzed_instruction_bytes
+           << ",\"unanalyzed_executable_bytes\":" << coverage.unanalyzed_executable_bytes
            << ",\"instructions\":" << coverage.instructions
            << ",\"functions\":" << coverage.functions
            << ",\"unresolved_control_flow\":" << coverage.unresolved_control_flow
            << ",\"unknown_instructions\":" << coverage.unknown_instructions
+           << ",\"reachable_abort_edges\":" << coverage.reachable_abort_edges
            << ",\"control_flow_complete\":" << (coverage.control_flow_complete ? "true" : "false")
            << "}}\n";
     return output.str();
@@ -885,11 +985,15 @@ JobResult ApplicationService::execute(const JobRequest& request,
         std::filesystem::remove_all(work_root, cleanup_error);
         if (cleanup_error)
             throw std::runtime_error("Altes Job-Staging konnte nicht entfernt werden.");
-        std::filesystem::remove_all(stale_root, cleanup_error);
-        if (cleanup_error)
-            throw std::runtime_error("Altes veraltetes Ergebnis konnte nicht entfernt werden.");
         if (std::filesystem::exists(final_root)) {
-            std::filesystem::rename(final_root, stale_root);
+            if (std::filesystem::exists(stale_root)) {
+                std::filesystem::remove_all(final_root, cleanup_error);
+                if (cleanup_error)
+                    throw std::runtime_error(
+                        "Vorheriger Fehlerbericht konnte nicht ersetzt werden.");
+            } else {
+                std::filesystem::rename(final_root, stale_root);
+            }
         }
         std::filesystem::create_directories(work_root);
     }
@@ -897,8 +1001,16 @@ JobResult ApplicationService::execute(const JobRequest& request,
     notify(observer, request, JobState::Running, 5u, "load-project");
     try {
         require_not_cancelled(cancellation);
-        const auto project = io::load_project(request.manifest_path);
-        const auto snapshot = capture_project_snapshot(project.execution_profile, cancellation);
+        auto manifest = io::parse_project_manifest(request.manifest_path);
+        const auto snapshot = capture_project_snapshot(manifest, cancellation);
+        notify(observer, request, JobState::Running, 10u, "source-snapshotted");
+        require_not_cancelled(cancellation);
+        const auto project = io::load_project(std::move(manifest));
+        if (!same_snapshot(snapshot,
+                           capture_project_snapshot(project.execution_profile, cancellation))) {
+            throw std::runtime_error(
+                "Eine wirksame Projekteingabe wurde zwischen Snapshot und Laden veraendert.");
+        }
         const auto& inspection = snapshot.inspection;
         result.project_identity = project_identity(project.execution_profile, snapshot);
         result.failure_category = JobFailureCategory::Processing;
@@ -953,7 +1065,11 @@ JobResult ApplicationService::execute(const JobRequest& request,
                          std::to_string(result.analysis_coverage->unresolved_control_flow) +
                          " ungeloeste Kontrollflussstellen und " +
                          std::to_string(result.analysis_coverage->unknown_instructions) +
-                         " unbekannte Instruktionen.",
+                         " unbekannte Instruktionen; " +
+                         std::to_string(result.analysis_coverage->unanalyzed_executable_bytes) +
+                         " ausfuehrbare Bytes sind nicht analysiert und " +
+                         std::to_string(result.analysis_coverage->reachable_abort_edges) +
+                         " erreichbare Kanten brechen die Analyse ab.",
                      "Analyseblocker beheben; ein Hostbuild wird erst bei vollstaendig "
                      "bewiesenem Kontrollfluss erzeugt.",
                      std::nullopt});
@@ -1323,10 +1439,12 @@ std::string format_job_result_json(const JobResult& result) {
         const auto& coverage = *result.analysis_coverage;
         output << "{\"committed_executable_bytes\":" << coverage.committed_executable_bytes
                << ",\"analyzed_instruction_bytes\":" << coverage.analyzed_instruction_bytes
+               << ",\"unanalyzed_executable_bytes\":" << coverage.unanalyzed_executable_bytes
                << ",\"instructions\":" << coverage.instructions
                << ",\"functions\":" << coverage.functions
                << ",\"unresolved_control_flow\":" << coverage.unresolved_control_flow
                << ",\"unknown_instructions\":" << coverage.unknown_instructions
+               << ",\"reachable_abort_edges\":" << coverage.reachable_abort_edges
                << ",\"control_flow_complete\":"
                << (coverage.control_flow_complete ? "true" : "false") << '}';
     }

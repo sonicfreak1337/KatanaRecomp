@@ -47,6 +47,12 @@ validierte GDI-Eingaben ueber Executable Image, Decoder, Kontrollflussanalyse,
 Katana-IR und partitionierten C++-Codegen bis zu einem extern buildbaren
 Hostprojekt.
 
+Der korrigierte Anwendungsjob-Vertrag Version 3 gibt Codegen und Hostbuild nur
+bei vollstaendiger committed Executable-Byteabdeckung und ohne erreichbare
+Analyse-Abbruchkante frei. Vorher/nachher-Provenienzpruefung, dauerhafter letzter
+Erfolgsstand bei wiederholten Fehlern und echte Windows-/Linux-Prozesslocks
+sichern Eingabe und Ausgabe desselben Jobs.
+
 Die erzeugte Hostanwendung ist kein Platzhalter mehr. `game.exe <disc.gdi>`
 laedt die Bootdatei read-only aus der GDI, initialisiert den definierten
 Dreamcast-Speicher- und CPU-Zustand, Scheduler und Plattformdienste und ruft

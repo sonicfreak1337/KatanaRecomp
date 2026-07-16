@@ -2413,6 +2413,12 @@ Akzeptanz:
   melden
 - synthetische vollstaendige und absichtlich unvollstaendige Programme decken
   alle drei Ergebniszustaende ab
+- `RTS`/Delay-Slot vor einem grossen nicht analysierten Executable-Rest bleibt
+  auch ohne ungeloesten indirekten Sprung `partial`; erreichbare Abbruchkanten
+  werden separat gezaehlt
+- GDI-Trackaenderungen zwischen Snapshot und Laden werden abgelehnt, ein zweiter
+  Fehler mit gleicher CLI-Job-ID erhaelt den letzten erfolgreichen Stale-Stand
+- Ausgabeziel-Locks gelten unter Windows und Linux prozessuebergreifend
 
 ### [x] KR-4508 - Ausfuehrbare `game.exe` mit Bootimage und Runtime-Dispatch
 

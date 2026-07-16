@@ -160,6 +160,13 @@ vor jeder Teilwirkung als strukturierte Illegal-Instruction-Ausnahme an den
 Runtime-Dispatcher uebergeben; er wird weder still ausgefuehrt noch als Host-
 Exception verloren.
 
+Ein Build gilt nur bei vollstaendiger Abdeckung aller committed ausfuehrbaren
+Bytes sowie ohne unbekannte Instruktion, ungeloeste Kontrollflussstelle oder
+erreichbare Abbruchkante als abgeschlossen. Eingaben werden vor dem Laden und
+direkt danach kryptografisch verglichen. Wiederholte Fehler bewahren den letzten
+erfolgreichen Stale-Stand; ueberlappende Ausgabeziele sind unter Windows und
+Linux auch zwischen getrennten Prozessen gesperrt.
+
 ## Projektstruktur
 
 ```text

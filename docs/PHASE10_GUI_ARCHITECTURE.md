@@ -66,8 +66,18 @@ identity-derived sibling staging directory and publishes it only after its
 terminal result is known. Failed or cancelled staging is removed. When a
 rebuild fails, the former successful output is moved to an explicitly stale
 directory instead of remaining indistinguishable from the failed attempt.
+Further failures with the same stable CLI job ID replace only the current
+failure report and preserve that last successful stale directory until a new
+build succeeds.
 This also keeps Visual Studio tracking paths below the classic Windows path
 limit in deeply nested test and user workspaces.
+
+Effective inputs are hashed before the executable image is loaded and checked
+again immediately afterwards and at publication. A changed descriptor, track,
+map, override or firmware input therefore cannot combine loaded bytes from one
+state with provenance from another. Windows uses its named registry mutex;
+Linux serializes the same overlap registry with `flock`, so locks apply across
+processes on both hosts.
 
 `build` now invokes a real generated-code host compilation; GDI builds reuse
 the productive port exporter and build its host target. `run-preflight`

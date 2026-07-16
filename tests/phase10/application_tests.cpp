@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
@@ -10,7 +11,13 @@
 #include <fstream>
 #include <iostream>
 #include <string>
+#include <thread>
 #include <vector>
+
+#ifndef _WIN32
+#include <sys/wait.h>
+#include <unistd.h>
+#endif
 
 namespace {
 
@@ -214,8 +221,8 @@ int main() {
 
     const auto incomplete_raw = fixture.root / "incomplete.bin";
     std::vector<std::uint8_t> incomplete_program(2u * 1024u * 1024u);
-    incomplete_program[0] = 0x2Bu;
-    incomplete_program[1] = 0x41u;
+    incomplete_program[0] = 0x0Bu;
+    incomplete_program[1] = 0x00u;
     incomplete_program[2] = 0x09u;
     incomplete_program[3] = 0x00u;
     write_binary(incomplete_raw, incomplete_program);
@@ -237,14 +244,20 @@ int main() {
     require(incomplete_result.state == app::JobState::Partial &&
                 incomplete_result.failure_category == app::JobFailureCategory::None &&
                 incomplete_result.analysis_coverage.has_value() &&
-                incomplete_result.analysis_coverage->unresolved_control_flow == 1u &&
+                incomplete_result.analysis_coverage->unresolved_control_flow == 0u &&
                 incomplete_result.analysis_coverage->committed_executable_bytes ==
                     incomplete_program.size() &&
                 incomplete_result.analysis_coverage->analyzed_instruction_bytes == 4u &&
+                incomplete_result.analysis_coverage->unanalyzed_executable_bytes ==
+                    incomplete_program.size() - 4u &&
+                incomplete_result.analysis_coverage->reachable_abort_edges == 0u &&
                 !incomplete_result.analysis_coverage->control_flow_complete &&
                 incomplete_events.back().state == app::JobState::Partial &&
+                incomplete_json.find("\"version\":3") != std::string::npos &&
                 incomplete_json.find("\"state\":\"partial\"") != std::string::npos &&
-                incomplete_json.find("\"unresolved_control_flow\":1") != std::string::npos &&
+                incomplete_json.find("\"unresolved_control_flow\":0") != std::string::npos &&
+                incomplete_json.find("\"unanalyzed_executable_bytes\":2097148") !=
+                    std::string::npos &&
                 std::filesystem::exists(incomplete_plan) &&
                 !std::filesystem::exists(fixture.root / "incomplete" / "generated") &&
                 !std::filesystem::exists(fixture.root / "incomplete" / "game.exe"),
@@ -253,9 +266,71 @@ int main() {
     const std::string incomplete_plan_text((std::istreambuf_iterator<char>(incomplete_plan_input)),
                                            std::istreambuf_iterator<char>());
     require(incomplete_plan_text.find("\"status\":\"partial\"") != std::string::npos &&
+                incomplete_plan_text.find("\"version\":3") != std::string::npos &&
                 incomplete_plan_text.find("\"host_compilation\":false") != std::string::npos &&
                 incomplete_plan_text.find("\"tool_version\":\"0.40.0-dev\"") != std::string::npos,
             "Partieller Buildplan verliert Zustand, Hostbuildgrenze oder Werkzeugversion.");
+
+    const auto aborted_raw = fixture.root / "aborted-edge.bin";
+    write_binary(aborted_raw, {0x09u, 0x00u});
+    const auto aborted_manifest_path = fixture.root / "aborted-edge.katana";
+    auto aborted_session =
+        app::ProjectSession::create(aborted_manifest_path, raw_manifest(aborted_raw));
+    aborted_session.save();
+    const auto aborted_result = service.execute({"aborted-edge",
+                                                 app::JobKind::Build,
+                                                 aborted_manifest_path,
+                                                 fixture.root / "aborted-edge",
+                                                 "0.40.0-dev"});
+    require(aborted_result.state == app::JobState::Partial &&
+                aborted_result.analysis_coverage.has_value() &&
+                aborted_result.analysis_coverage->unanalyzed_executable_bytes == 0u &&
+                aborted_result.analysis_coverage->reachable_abort_edges == 1u &&
+                !std::filesystem::exists(fixture.root / "aborted-edge" / "generated"),
+            "Erreichbare Abbruchkante fehlt in Coverage oder gibt den Hostbuild frei.");
+
+#ifndef _WIN32
+    const auto lock_ready = fixture.root / "lock-ready";
+    const auto lock_release = fixture.root / "lock-release";
+    const auto locked_output = fixture.root / "cross-process-output";
+    const auto child = ::fork();
+    require(child >= 0, "Linux-Prozesslocktest konnte keinen Kindprozess starten.");
+    if (child == 0) {
+        const auto child_result =
+            service.execute({"linux-lock-holder",
+                             app::JobKind::Validate,
+                             manifest_path,
+                             locked_output,
+                             "0.40.0-dev"},
+                            {},
+                            [&](const app::JobEvent& event) {
+                                if (event.stage != "queued") return;
+                                write_text(lock_ready, "ready\n");
+                                while (!std::filesystem::exists(lock_release))
+                                    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+                            });
+        ::_exit(child_result.state == app::JobState::Completed ? EXIT_SUCCESS : EXIT_FAILURE);
+    }
+    for (std::size_t attempt = 0u; attempt < 500u && !std::filesystem::exists(lock_ready);
+         ++attempt)
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    require(std::filesystem::exists(lock_ready),
+            "Linux-Prozesslocktest beobachtet den gehaltenen Lock nicht.");
+    require_failure(
+        [&] {
+            static_cast<void>(service.execute({"linux-lock-contender",
+                                               app::JobKind::Validate,
+                                               manifest_path,
+                                               locked_output / "nested",
+                                               "0.40.0-dev"}));
+        },
+        "Getrennte Linux-Prozesse akzeptieren ueberlappende Ausgabeziele.");
+    write_text(lock_release, "release\n");
+    int child_status = 0;
+    require(::waitpid(child, &child_status, 0) == child && WIFEXITED(child_status) &&
+                WEXITSTATUS(child_status) == EXIT_SUCCESS,
+            "Linux-Prozesslockhalter wurde nicht sauber beendet.");
+#endif
 
     auto cancelled = std::make_shared<app::Cancellation>();
     cancelled->request();
@@ -307,6 +382,23 @@ int main() {
         "Synthetische GDI erreicht den gemeinsamen GUI-/CLI-Buildpfad nicht: " +
             (gdi_job.diagnostics.empty() ? std::string("ohne Diagnose")
                                          : gdi_job.diagnostics.back().message));
+    auto changed_track = boot_track();
+    changed_track[payload_offset(21u)] = 0x08u;
+    const auto snapshot_race =
+        service.execute({"snapshot-race",
+                         app::JobKind::Analyze,
+                         gdi_manifest_path,
+                         fixture.root / "snapshot-race",
+                         "0.40.0-dev"},
+                        {},
+                        [&](const app::JobEvent& event) {
+                            if (event.stage == "source-snapshotted")
+                                write_binary(fixture.root / "disc" / "high.bin", changed_track);
+                        });
+    require(snapshot_race.state == app::JobState::Failed && !snapshot_race.diagnostics.empty() &&
+                snapshot_race.diagnostics.back().message.find("Snapshot") != std::string::npos,
+            "Geladenes GDI-Bootimage kann von der ausgewiesenen Provenienz abweichen.");
+    write_binary(fixture.root / "disc" / "high.bin", boot_track());
     const auto port_metadata = read_text(fixture.root / "gdi-build" / "sourcecode" / "generated" /
                                          "metadata" / "port-project.json");
     const auto result_index = read_text(fixture.root / "gdi-build" / "result-index.json");
@@ -390,6 +482,23 @@ int main() {
                                     "game"),
 #endif
         "Fehlgeschlagene Wiederholung laesst alte oder teilweise Resultate aktiv.");
+    const auto stale_root = std::filesystem::path((fixture.root / "gdi-build").string() +
+                                                  ".katana-stale-failed-rebuild");
+#ifdef _WIN32
+    const auto stale_executable = stale_root / "game.exe";
+#else
+    const auto stale_executable = stale_root / "game";
+#endif
+    const auto stale_hash = read_text(stale_executable);
+    const auto second_failed_rebuild = service.execute({"failed-rebuild",
+                                                        app::JobKind::Build,
+                                                        gdi_manifest_path,
+                                                        fixture.root / "gdi-build",
+                                                        "0.40.0-dev"});
+    require(second_failed_rebuild.state == app::JobState::Failed &&
+                std::filesystem::exists(stale_executable) &&
+                read_text(stale_executable) == stale_hash,
+            "Zweiter Fehler mit gleicher CLI-Job-ID loescht den letzten erfolgreichen Build.");
     const auto failed = service.execute({"gdi-error",
                                          app::JobKind::Validate,
                                          gdi_manifest_path,
