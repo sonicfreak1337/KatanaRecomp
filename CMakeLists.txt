@@ -244,6 +244,7 @@ target_include_directories(
         ${CMAKE_CURRENT_SOURCE_DIR}/include
 )
 
+target_link_libraries(katana_core PUBLIC katana_runtime)
 katana_enable_warnings(katana_core)
 
 add_library(katana_phase9 STATIC
@@ -258,6 +259,30 @@ target_include_directories(
 )
 target_link_libraries(katana_phase9 PUBLIC katana_core katana_runtime)
 katana_enable_warnings(katana_phase9)
+
+add_library(katana_app STATIC
+    src/app/application.cpp
+)
+add_library(KatanaRecomp::app ALIAS katana_app)
+target_include_directories(
+    katana_app
+    PUBLIC
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+target_link_libraries(katana_app PUBLIC katana_core katana_runtime)
+katana_enable_warnings(katana_app)
+
+add_library(katana_gui STATIC
+    src/gui/model.cpp
+)
+add_library(KatanaRecomp::gui ALIAS katana_gui)
+target_include_directories(
+    katana_gui
+    PUBLIC
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+target_link_libraries(katana_gui PUBLIC katana_app)
+katana_enable_warnings(katana_gui)
 
 add_library(katana_test_support STATIC
     src/testing/differential_execution.cpp
@@ -313,6 +338,7 @@ target_link_libraries(
     PRIVATE
         katana_core
         katana_runtime
+        katana_app
 )
 
 target_compile_definitions(
@@ -323,6 +349,35 @@ target_compile_definitions(
 )
 
 katana_enable_warnings(katana-recomp)
+
+add_executable(katana-recomp-gui
+    src/gui/main.cpp
+)
+target_link_libraries(katana-recomp-gui PRIVATE katana_gui)
+if(WIN32)
+    target_link_libraries(katana-recomp-gui PRIVATE comdlg32 user32)
+elseif(UNIX AND NOT APPLE)
+    find_package(X11 REQUIRED)
+    target_link_libraries(katana-recomp-gui PRIVATE X11::X11)
+else()
+    message(FATAL_ERROR "The Phase-10 desktop shell supports Windows and Linux only")
+endif()
+target_compile_definitions(
+    katana-recomp-gui
+    PRIVATE
+        KATANA_RECOMP_VERSION="${PROJECT_VERSION}"
+)
+katana_enable_warnings(katana-recomp-gui)
+configure_file(
+    ${CMAKE_CURRENT_SOURCE_DIR}/assets/gui/KatanaLogo.png
+    ${CMAKE_CURRENT_BINARY_DIR}/assets/KatanaLogo.png
+    COPYONLY
+)
+configure_file(
+    ${CMAKE_CURRENT_SOURCE_DIR}/assets/gui/asset-manifest.json
+    ${CMAKE_CURRENT_BINARY_DIR}/assets/asset-manifest.json
+    COPYONLY
+)
 
 enable_testing()
 
@@ -358,6 +413,24 @@ add_executable(
 target_link_libraries(katana-phase9-performance-tests PRIVATE katana_phase9)
 katana_enable_warnings(katana-phase9-performance-tests)
 add_test(NAME katana-phase9-performance-tests COMMAND katana-phase9-performance-tests)
+
+add_executable(
+    katana-phase10-application-tests
+    tests/phase10/application_tests.cpp
+)
+target_link_libraries(katana-phase10-application-tests PRIVATE katana_gui)
+katana_enable_warnings(katana-phase10-application-tests)
+add_test(NAME katana-phase10-application-tests COMMAND katana-phase10-application-tests)
+
+add_executable(
+    katana-phase10-gui-model-tests
+    tests/phase10/gui_model_tests.cpp
+)
+target_link_libraries(katana-phase10-gui-model-tests PRIVATE katana_gui)
+katana_enable_warnings(katana-phase10-gui-model-tests)
+add_test(NAME katana-phase10-gui-model-tests COMMAND katana-phase10-gui-model-tests)
+
+add_test(NAME katana-phase10-gui-minimal-start COMMAND katana-recomp-gui --smoke)
 
 add_executable(
     katana-phase9-benchmark

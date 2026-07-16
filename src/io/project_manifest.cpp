@@ -4,6 +4,7 @@
 #include "katana/io/input_output_error.hpp"
 #include "katana/io/raw_binary_loader.hpp"
 #include "katana/io/symbol_map.hpp"
+#include "katana/platform/dreamcast_disc.hpp"
 
 #include <algorithm>
 #include <charconv>
@@ -91,7 +92,10 @@ ProjectInputFormat parse_input_format(const ManifestValue& value,
     if (value.text == "elf32-sh") {
         return ProjectInputFormat::Elf32Sh;
     }
-    fail(path, value.line, "Eingabeformat muss raw oder elf32-sh sein.");
+    if (value.text == "gdi") {
+        return ProjectInputFormat::DreamcastGdi;
+    }
+    fail(path, value.line, "Eingabeformat muss raw, elf32-sh oder gdi sein.");
 }
 
 std::filesystem::path resolve_path(const std::filesystem::path& manifest_path,
@@ -338,6 +342,9 @@ ProjectManifest parse_project_manifest(const std::filesystem::path& path) {
     std::size_t line_number = 0u;
     while (std::getline(input, line_text)) {
         ++line_number;
+        if (line_number == 1u && line_text.starts_with("\xEF\xBB\xBF")) {
+            line_text.erase(0u, 3u);
+        }
         const auto content = trim(line_text);
         if (content.empty() || content[0] == '#') {
             continue;
@@ -410,6 +417,7 @@ ProjectManifest parse_project_manifest(const std::filesystem::path& path) {
                              "input.format",
                              "input.path",
                              "input.map",
+                             "analysis.overrides",
                              "image.base_address",
                              "image.entry_point",
                              "image.expected_entry_points",
@@ -453,6 +461,9 @@ ProjectManifest parse_project_manifest(const std::filesystem::path& path) {
 
     if (const auto iterator = values.find(map_key); iterator != values.end()) {
         manifest.map_path = resolve_path(path, iterator->second);
+    }
+    if (const auto iterator = values.find("analysis.overrides"); iterator != values.end()) {
+        manifest.analysis_overrides_path = resolve_path(path, iterator->second);
     }
     if (const auto iterator = values.find(entry_key); iterator != values.end()) {
         manifest.entry_point =
@@ -529,10 +540,10 @@ ProjectManifest parse_project_manifest(const std::filesystem::path& path) {
     if (manifest.format == ProjectInputFormat::RawBinary && !manifest.base_address.has_value()) {
         fail(path, 0u, "Raw-Manifeste brauchen " + base_key + ".");
     }
-    if (manifest.format == ProjectInputFormat::Elf32Sh &&
+    if (manifest.format != ProjectInputFormat::RawBinary &&
         (manifest.base_address.has_value() || values.contains(segment_name_key) ||
          values.contains(segment_kind_key) || values.contains(permissions_key))) {
-        fail(path, 0u, "Raw-Adresslayoutfelder sind fuer elf32-sh nicht erlaubt.");
+        fail(path, 0u, "Raw-Adresslayoutfelder sind fuer elf32-sh und gdi nicht erlaubt.");
     }
 
     try {
@@ -606,9 +617,16 @@ LoadedProject load_project(const std::filesystem::path& path) {
         options.permissions = manifest.permissions;
         options.entry_point = manifest.entry_point;
         image = load_raw_binary(manifest.input_path, options);
-    } else {
+    } else if (manifest.format == ProjectInputFormat::Elf32Sh) {
         image = load_elf32_sh(manifest.input_path);
         if (manifest.entry_point.has_value()) {
+            image.add_entry_point(*manifest.entry_point);
+        }
+    } else {
+        const auto disc = katana::platform::load_dreamcast_gdi_boot(manifest.input_path);
+        image = katana::platform::make_dreamcast_disc_executable(disc);
+        if (manifest.entry_point.has_value() &&
+            *manifest.entry_point != katana::platform::dreamcast_disc_boot_address) {
             image.add_entry_point(*manifest.entry_point);
         }
     }
@@ -631,6 +649,8 @@ const char* project_input_format_name(const ProjectInputFormat format) noexcept 
         return "raw";
     case ProjectInputFormat::Elf32Sh:
         return "elf32-sh";
+    case ProjectInputFormat::DreamcastGdi:
+        return "gdi";
     }
     return "unknown";
 }
@@ -724,6 +744,124 @@ std::string format_project_execution_profile_json(const ProjectManifest& profile
         output << '"' << profile.required_backend_capabilities[index] << '"';
     }
     output << "]}";
+    return output.str();
+}
+
+std::string serialize_project_manifest(const ProjectManifest& manifest,
+                                       const std::filesystem::path& manifest_path) {
+    if (manifest.version != project_manifest_current_version ||
+        manifest.schema != project_manifest_schema_name || manifest.project_name.empty() ||
+        manifest.input_path.empty() || manifest_path.empty()) {
+        throw std::invalid_argument("Projektmanifest ist fuer die Serialisierung unvollstaendig.");
+    }
+    const auto require_single_line = [](const std::string_view value, const char* field) {
+        if (value.empty() || value.find_first_of("\r\n") != std::string_view::npos) {
+            throw std::invalid_argument(std::string(field) +
+                                        " muss einzeilig und nicht leer sein.");
+        }
+    };
+    require_single_line(manifest.project_name, "project.name");
+    require_single_line(manifest.segment_name, "segment.name");
+    require_single_line(manifest.scheduler_profile, "execution.scheduler");
+    const auto relative_path = [&manifest_path](const std::filesystem::path& value) {
+        if (value.empty()) return std::string{};
+        std::error_code error;
+        const auto relative = std::filesystem::relative(value, manifest_path.parent_path(), error);
+        const auto selected = error ? value.lexically_normal() : relative.lexically_normal();
+        const auto text = selected.generic_string();
+        if (text.find_first_of("\r\n") != std::string::npos) {
+            throw std::invalid_argument("Manifestpfad muss einzeilig sein.");
+        }
+        return text;
+    };
+    const auto join_addresses = [](const auto& values) {
+        std::ostringstream output;
+        for (std::size_t index = 0u; index < values.size(); ++index) {
+            if (index != 0u) output << ',';
+            output << hex32(values[index]);
+        }
+        return output.str();
+    };
+    const auto join_ranges = [](const auto& values) {
+        std::ostringstream output;
+        for (std::size_t index = 0u; index < values.size(); ++index) {
+            if (index != 0u) output << ',';
+            output << hex32(values[index].start) << ':' << hex32(values[index].size);
+        }
+        return output.str();
+    };
+    std::ostringstream output;
+    output << "# KatanaRecomp project manifest\n"
+           << "schema = " << project_manifest_schema_name << "\n"
+           << "version = " << project_manifest_current_version << "\n"
+           << "project.name = " << manifest.project_name << "\n"
+           << "input.format = " << project_input_format_name(manifest.format) << "\n"
+           << "input.path = " << relative_path(manifest.input_path) << "\n";
+    if (manifest.map_path) output << "input.map = " << relative_path(*manifest.map_path) << "\n";
+    if (manifest.analysis_overrides_path)
+        output << "analysis.overrides = " << relative_path(*manifest.analysis_overrides_path)
+               << "\n";
+    if (manifest.format == ProjectInputFormat::RawBinary) {
+        if (!manifest.base_address) {
+            throw std::invalid_argument("Raw-Projekt braucht eine Basisadresse.");
+        }
+        output << "image.base_address = " << hex32(*manifest.base_address) << "\n"
+               << "segment.name = " << manifest.segment_name << "\n"
+               << "segment.kind = "
+               << (manifest.segment_kind == SegmentKind::Code   ? "code"
+                   : manifest.segment_kind == SegmentKind::Data ? "data"
+                                                                : "unknown")
+               << "\nsegment.permissions = " << (manifest.permissions.readable ? 'r' : '-')
+               << (manifest.permissions.writable ? 'w' : '-')
+               << (manifest.permissions.executable ? 'x' : '-') << "\n";
+    }
+    if (manifest.entry_point)
+        output << "image.entry_point = " << hex32(*manifest.entry_point) << "\n";
+    if (!manifest.expected_entry_points.empty())
+        output << "image.expected_entry_points = " << join_addresses(manifest.expected_entry_points)
+               << "\n";
+    if (!manifest.dynamic_bios_vectors.empty())
+        output << "image.dynamic_bios_vectors = " << join_addresses(manifest.dynamic_bios_vectors)
+               << "\n";
+    output << "execution.firmware = " << project_firmware_mode_name(manifest.firmware_mode) << "\n"
+           << "execution.fallback = " << project_fallback_policy_name(manifest.fallback_policy)
+           << "\n"
+           << "execution.scheduler = " << manifest.scheduler_profile << "\n"
+           << "execution.mmu = "
+           << (manifest.mmu_profile == ProjectMmuProfile::Sh4 ? "sh4" : "disabled") << "\n"
+           << "execution.fastpath = "
+           << (manifest.fastpath_profile == ProjectFastpathProfile::Guarded ? "guarded"
+                                                                            : "conservative")
+           << "\n";
+    if (!manifest.required_backend_capabilities.empty()) {
+        output << "execution.required_capabilities = ";
+        for (std::size_t index = 0u; index < manifest.required_backend_capabilities.size();
+             ++index) {
+            if (index != 0u) output << ',';
+            output << manifest.required_backend_capabilities[index];
+        }
+        output << '\n';
+    }
+    if (manifest.bios_path)
+        output << "firmware.bios = " << relative_path(*manifest.bios_path) << "\n";
+    if (manifest.flash_path)
+        output << "firmware.flash = " << relative_path(*manifest.flash_path) << "\n";
+    if (!manifest.alias_groups.empty()) {
+        output << "memory.alias_groups = ";
+        for (std::size_t index = 0u; index < manifest.alias_groups.size(); ++index) {
+            if (index != 0u) output << ',';
+            const auto& alias = manifest.alias_groups[index];
+            output << hex32(alias.virtual_start) << ':' << hex32(alias.physical_start) << ':'
+                   << hex32(alias.size);
+        }
+        output << '\n';
+    }
+    if (!manifest.canonical_physical_ranges.empty())
+        output << "memory.canonical_ranges = " << join_ranges(manifest.canonical_physical_ranges)
+               << "\n";
+    if (!manifest.writable_executable_ranges.empty())
+        output << "memory.writable_executable = "
+               << join_ranges(manifest.writable_executable_ranges) << "\n";
     return output.str();
 }
 

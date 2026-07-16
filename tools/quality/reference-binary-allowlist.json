@@ -2,6 +2,7 @@
   "schema": "katana-reference-binary-allowlist",
   "version": 1,
   "files": [
+    {"path":"assets/gui/KatanaLogo.png","size":1243114,"sha256":"56edc4240df8d2dff6c2d3b68cd919a320774e21c5395b605d71960c4da31108"},
     {"path":"samples/basic_blocks_demo.bin","size":20,"sha256":"7245ceecc50345497065d43c3f458200e4687752f0315eefe5e0bfd1629ddcec"},
     {"path":"samples/codegen_demo.bin","size":16,"sha256":"b68ab92ca7006621c6deed3d9b856895a82b601b8f0f5ff06f9b2f7207cd5023"},
     {"path":"samples/control_flow_demo.bin","size":16,"sha256":"e8cad72b5bc95405db9b4c29271926276f65e7a2a4a0e7fe4782cc3c4a84521d"},

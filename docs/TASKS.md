@@ -2121,7 +2121,7 @@ Akzeptanz:
 
 ## v0.41.0 bis v0.44.0 - Desktop-GUI und Quellworkflow
 
-### [ ] KR-4101 - GUI-Technologie und Architektur festlegen
+### [x] KR-4101 - GUI-Technologie und Architektur festlegen
 
 Abhaengigkeiten: KR-3502, KR-3505, KR-3706
 
@@ -2139,7 +2139,7 @@ Akzeptanz:
 - ein Minimalstart auf den Alpha-Zielplattformen oeffnet die App mit zentraler Konfiguration
 - Packaging- und Runtime-Annahmen sind in CI oder dokumentierten lokalen Checks nachvollziehbar
 
-### [ ] KR-4102 - Gemeinsamer GUI-Anwendungsdienst
+### [x] KR-4102 - Gemeinsamer GUI-Anwendungsdienst
 
 Abhaengigkeiten: KR-4101
 
@@ -2157,7 +2157,7 @@ Akzeptanz:
 - GUI-spezifische Adapter enthalten keine eigene Analyse- oder Quellsemantik
 - Ereignisse koennen automatisiert fuer spaetere GUI-Tests beobachtet werden
 
-### [ ] KR-4103 - GUI-Shell, Navigation und Einstellungen
+### [x] KR-4103 - GUI-Shell, Navigation und Einstellungen
 
 Abhaengigkeiten: KR-4101, KR-4102
 
@@ -2175,7 +2175,7 @@ Akzeptanz:
 - unerwartete Fehler fuehren zu einer lesbaren Meldung statt zu stiller GUI-Beendigung
 - Shell und Navigation bleiben bei langen Jobs responsiv
 
-### [ ] KR-4201 - Projektworkflow fuer Anlegen, Oeffnen und Speichern
+### [x] KR-4201 - Projektworkflow fuer Anlegen, Oeffnen und Speichern
 
 Abhaengigkeiten: KR-4102, KR-4103
 
@@ -2193,7 +2193,7 @@ Akzeptanz:
 - fehlende oder verschobene Projektressourcen erzeugen gezielte Recovery-Hinweise
 - GUI und CLI lesen dasselbe gespeicherte Projektmodell
 
-### [ ] KR-4202 - Quellenwahl fuer Raw, ELF und GDI
+### [x] KR-4202 - Quellenwahl fuer Raw, ELF und GDI
 
 Abhaengigkeiten: KR-3006, KR-4102, KR-4201
 
@@ -2211,7 +2211,7 @@ Akzeptanz:
 - ein ungueltiger Quellpfad blockiert den Jobstart mit nachvollziehbarer Meldung
 - keine Quellbytes oder lokalen Geheimnisse landen in Manifest oder Logs
 
-### [ ] KR-4203 - GDI-Inspektor und Quellvalidierung
+### [x] KR-4203 - GDI-Inspektor und Quellvalidierung
 
 Abhaengigkeiten: KR-3005, KR-3006, KR-4202
 
@@ -2229,7 +2229,7 @@ Akzeptanz:
 - keine Bearbeitungsfunktion schreibt in `.gdi` oder Trackdateien zurueck
 - Ansichten lassen sich in automatisierten Tests verifizieren
 
-### [ ] KR-4204 - Manifest-, Firmwareprofil- und Override-Editor
+### [x] KR-4204 - Manifest-, Firmwareprofil- und Override-Editor
 
 Abhaengigkeiten: KR-3505, KR-3506, KR-4201, KR-4202
 
@@ -2247,7 +2247,7 @@ Akzeptanz:
 - ungueltige Segment-, Override- oder Profilkombinationen werden vor dem Start abgelehnt
 - redigierte Diagnosen enthalten keine Firmwarebytes oder sensiblen Flashfelder
 
-### [ ] KR-4301 - GUI-Orchestrierung fuer Analyse, Codegen, Build und Run
+### [x] KR-4301 - GUI-Orchestrierung fuer Analyse, Codegen, Build und Run
 
 Abhaengigkeiten: KR-4102, KR-4204
 
@@ -2265,7 +2265,7 @@ Akzeptanz:
 - ein fehlgeschlagener Zwischenschritt blockiert unsichere Folgeaktionen
 - GUI und CLI erzeugen fuer identische Eingaben dieselben Kernartefakte
 
-### [ ] KR-4302 - Fortschritt, Logs und Diagnostikansichten
+### [x] KR-4302 - Fortschritt, Logs und Diagnostikansichten
 
 Abhaengigkeiten: KR-3606, KR-3607, KR-3608, KR-4102, KR-4301
 
@@ -2283,7 +2283,7 @@ Akzeptanz:
 - Export und Kopieren redigieren Hostpfade, Firmwarebytes und sensible Flashfelder
 - grosse Logs lassen die GUI nicht einfrieren
 
-### [ ] KR-4303 - Ergebnisansichten fuer Funktionen, Quellen und Provenienz
+### [x] KR-4303 - Ergebnisansichten fuer Funktionen, Quellen und Provenienz
 
 Abhaengigkeiten: KR-3305, KR-3602, KR-3608, KR-4202, KR-4301
 
@@ -2301,7 +2301,7 @@ Akzeptanz:
 - Exportformate bleiben reproduzierbar sortiert und datensparsam
 - Ergebnisansichten stimmen mit den zugrunde liegenden Analyseberichten ueberein
 
-### [ ] KR-4401 - GUI-End-to-End-Automatisierung
+### [x] KR-4401 - GUI-End-to-End-Automatisierung
 
 Abhaengigkeiten: KR-4203, KR-4204, KR-4301, KR-4302, KR-4303
 

@@ -32,6 +32,24 @@ mit der GUI-Technologie- und Architekturentscheidung `KR-4101` erreicht.
 Der genaue aktuelle Stand steht in [docs/STATUS.md](docs/STATUS.md), die
 langfristige Planung in [ROADMAP.md](ROADMAP.md).
 
+Die Phase-10-Desktopanwendung wird nach dem Build mit folgendem Befehl
+gestartet:
+
+```powershell
+.\build-current\katana-recomp-gui.exe
+```
+
+CLI und GUI verwenden fuer Projektjobs denselben Dienst. Ein automatisierter
+Build-Preflight ist beispielsweise:
+
+```powershell
+.\build-current\katana-recomp.exe workflow build .\project.katana --output .\work-output
+```
+
+Architektur und interner Bedienpfad stehen in
+[docs/PHASE10_GUI_ARCHITECTURE.md](docs/PHASE10_GUI_ARCHITECTURE.md) und
+[docs/PHASE10_GUI_WORKFLOW.md](docs/PHASE10_GUI_WORKFLOW.md).
+
 ## Umgesetzte Bereiche
 
 - SH-4-Integer-, Systemregister-, Delay-Slot- und FPU-Grundsemantik

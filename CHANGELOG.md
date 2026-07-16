@@ -23,9 +23,24 @@
   stillen Fehler und keinen Fallback; Reproduzierbarkeit, Budgets sowie der
   Audit auf Firmwarebytes, Geheimnisse, lokale Pfade und Rohtraces bestehen.
   Der Gate-Bericht wechselt ohne Versionierung oder Release zu Phase 10.
-- Das fuer Phase 10 bereitgestellte App-Logo ist ueber Abmessungen, Transparenz
-  und SHA-256 als externer Asset-Eingang erfasst, wird vor der Rechtepruefung
-  jedoch weder kopiert noch paketiert.
+- KR-4101 bis KR-4103: Eine native Win32-/X11-Desktopshell, ein portables
+  GUI-Modell und der gemeinsame C++-Anwendungsdienst stellen Navigation,
+  Einstellungen, Recovery, beobachtbare Jobs, Abbruch und identische
+  CLI-/GUI-Aufrufe ohne duplizierte Kernsemantik bereit.
+- KR-4201 bis KR-4204: Das bestehende Projektmanifest kann Raw, ELF32-SH und
+  GDI deterministisch speichern. GDI-Tracks bleiben read-only und werden mit
+  Rollen, Sektorformaten, Groessen, Descriptorzeilen und Hashprovenienz
+  inspiziert; Firmwareprofile und Analyse-Overrides verwenden denselben
+  Parservertrag wie die CLI.
+- KR-4301 bis KR-4303: Analyse-, Codegen-, Build- und Run-Preflight-Jobs
+  liefern redigierte Fortschritts-, Diagnose-, Funktions-, Segment-, Quellen-
+  und Provenienzberichte mit stabilen Gastadressen und relativen Artefakten.
+- KR-4401: Synthetische GDI-Positiv-, Fehler- und Recovery-Pfade sowie der
+  GUI-/CLI-Artefaktvergleich erreichen automatisiert
+  `KR_PHASE10_GUI_END_TO_END`.
+- Das fuer Phase 10 bereitgestellte App-Logo ist mit Abmessungen, Transparenz,
+  SHA-256 und Herkunft als interner GUI-Asset-Eingang eingebunden. Eine
+  oeffentliche Weitergabe bleibt bis zum vollstaendigen KR-4902-Audit gesperrt.
 
 ### Geaendert
 

@@ -1080,6 +1080,22 @@ Die Erkenntnisse aus BIOS-Analyse, Flycast und dcrecomp beeinflussen diese Phase
 - `.gdi`-Quellen muessen als erstklassiger Mehrdatei-Einstieg mit transparenter Trackprovenienz, klaren Fehlern und Null-Write-Garantie behandelt werden
 - Firmware-, Alias-, ROM-RAM- und Schedulerdiagnosen muessen fuer Alpha auch ohne CLI nutzbar, aber weiterhin datensparsam und read-only bleiben
 
+Fortschritt:
+
+- [x] KR-4101 - GUI-Technologie und Architektur festlegen
+- [x] KR-4102 - Gemeinsamer GUI-Anwendungsdienst
+- [x] KR-4103 - GUI-Shell, Navigation und Einstellungen
+- [x] KR-4201 - Projektworkflow fuer Anlegen, Oeffnen und Speichern
+- [x] KR-4202 - Quellenwahl fuer Raw, ELF und GDI
+- [x] KR-4203 - GDI-Inspektor und Quellvalidierung
+- [x] KR-4204 - Manifest-, Firmwareprofil- und Override-Editor
+- [x] KR-4301 - GUI-Orchestrierung fuer Analyse, Codegen, Build und Run
+- [x] KR-4302 - Fortschritt, Logs und Diagnostikansichten
+- [x] KR-4303 - Ergebnisansichten fuer Funktionen, Quellen und Provenienz
+- [x] KR-4401 - GUI-End-to-End-Automatisierung
+- [ ] KR-4402 - GUI-Haertung, Packaging und v0.44 Gate-Vorbereitung
+- [ ] KR-4403 - v0.44.0 interne GUI-und-GDI-Meilenstein-Freigabe
+
 ### v0.41.0 - GUI-Grundlage und Anwendungsdienste
 
 Enthalten:

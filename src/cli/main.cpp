@@ -5,6 +5,7 @@
 #include "katana/analysis/function_analysis.hpp"
 #include "katana/analysis/graph_export.hpp"
 #include "katana/analysis/recursive_analysis.hpp"
+#include "katana/app/application.hpp"
 #include "katana/cli/exit_code.hpp"
 #include "katana/codegen/cpp_emitter.hpp"
 #include "katana/codegen/port_export.hpp"
@@ -969,6 +970,8 @@ void print_usage(std::ostream& output) {
               "[--no-opt] [--dump-ir <Praefix>] [--directives <Datei>]\n\n"
            << "  katana-recomp phase6-probe-source <GDI> <Ausgabe.cpp>\n\n"
            << "  katana-recomp port <Quelle.gdi> --output <Ordner> --target-name <Name>\n\n"
+           << "  katana-recomp workflow <validate|analyze|codegen|build|run-preflight> "
+              "<Projektmanifest> --output <Ordner>\n\n"
            << "Beispiel:\n"
            << "  katana-recomp emit-cpp programm.bin 8C010000 generated.cpp 8C010000\n";
 }
@@ -992,6 +995,31 @@ int main(const int argc, char* argv[]) {
             std::cout << katana::sh4::format_isa_coverage_report(
                 katana::sh4::build_isa_coverage_report());
             return 0;
+        }
+
+        if (argc == 6 && std::string_view(argv[1]) == "workflow" &&
+            std::string_view(argv[4]) == "--output") {
+            const std::string_view kind_name = argv[2];
+            katana::app::JobKind kind;
+            if (kind_name == "validate")
+                kind = katana::app::JobKind::Validate;
+            else if (kind_name == "analyze")
+                kind = katana::app::JobKind::Analyze;
+            else if (kind_name == "codegen")
+                kind = katana::app::JobKind::Codegen;
+            else if (kind_name == "build")
+                kind = katana::app::JobKind::Build;
+            else if (kind_name == "run-preflight")
+                kind = katana::app::JobKind::RunPreflight;
+            else
+                throw std::invalid_argument("workflow erhielt einen unbekannten Jobtyp.");
+            katana::app::ApplicationService service;
+            const auto result =
+                service.execute({"cli-workflow", kind, argv[3], argv[5], KATANA_RECOMP_VERSION});
+            std::cout << katana::app::format_job_result_json(result);
+            return result.state == katana::app::JobState::Completed
+                       ? exit_status(ExitCode::Success)
+                       : exit_status(ExitCode::ProcessingFailure);
         }
 
         if (argc == 7 && std::string_view(argv[1]) == "port") {

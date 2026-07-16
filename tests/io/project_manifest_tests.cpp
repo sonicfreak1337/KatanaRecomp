@@ -189,6 +189,13 @@ int main() {
                 error.find("Zeile 8") != std::string::npos,
             "Aliasdiagnose nennt Datei und Zeile nicht.");
 
+    save_text(manifest_path,
+              "\xEF\xBB\xBFschema = katana-project\n"
+              "version = 2\nproject.name = bom\ninput.format = raw\n"
+              "input.path = program.bin\nimage.base_address = 0x8C010000\n");
+    require(parse_project_manifest(manifest_path).project_name == "bom",
+            "UTF-8-BOM eines GUI-gespeicherten Manifests wurde nicht akzeptiert.");
+
     save_text(manifest_path, "version = 1\nformat = raw\ninput = program.bin\n");
     error = require_failure([&] { static_cast<void>(parse_project_manifest(manifest_path)); },
                             "Ein Raw-Manifest ohne Basisadresse wurde akzeptiert.");

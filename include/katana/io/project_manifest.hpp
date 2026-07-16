@@ -15,7 +15,7 @@ namespace katana::io {
 inline constexpr std::uint32_t project_manifest_current_version = 2u;
 inline constexpr std::string_view project_manifest_schema_name = "katana-project";
 
-enum class ProjectInputFormat { RawBinary, Elf32Sh };
+enum class ProjectInputFormat { RawBinary, Elf32Sh, DreamcastGdi };
 
 enum class ProjectFirmwareMode { Direct, Hle, Lle };
 
@@ -43,6 +43,7 @@ struct ProjectManifest {
     ProjectInputFormat format = ProjectInputFormat::RawBinary;
     std::filesystem::path input_path;
     std::optional<std::filesystem::path> map_path;
+    std::optional<std::filesystem::path> analysis_overrides_path;
     std::optional<std::uint32_t> base_address;
     std::optional<std::uint32_t> entry_point;
     std::string segment_name = ".raw";
@@ -78,6 +79,8 @@ struct LoadedProject {
 [[nodiscard]] const char* project_fallback_policy_name(ProjectFallbackPolicy policy) noexcept;
 [[nodiscard]] std::string format_project_execution_profile_text(const ProjectManifest& profile);
 [[nodiscard]] std::string format_project_execution_profile_json(const ProjectManifest& profile);
+[[nodiscard]] std::string serialize_project_manifest(const ProjectManifest& manifest,
+                                                     const std::filesystem::path& manifest_path);
 [[nodiscard]] bool project_manifest_version_supported(std::uint32_t version) noexcept;
 
 void require_valid_project_alias_groups(std::span<const ProjectAliasGroup> aliases,

@@ -1,0 +1,16 @@
+{
+  "schema": "katana-gui-assets",
+  "version": 1,
+  "assets": [
+    {
+      "role": "application-logo",
+      "path": "KatanaLogo.png",
+      "format": "png",
+      "width": 1024,
+      "height": 1024,
+      "alpha": true,
+      "sha256": "56edc4240df8d2dff6c2d3b68cd919a320774e21c5395b605d71960c4da31108",
+      "distribution": "internal-pending-kr-4902"
+    }
+  ]
+}

@@ -1,0 +1,29 @@
+{
+  "schema": "katana-phase10-gui-contract",
+  "version": 1,
+  "targets": ["windows-x64-win32", "linux-x64-x11"],
+  "wayland": "xwayland-alpha",
+  "project_schema": "katana-project-v2",
+  "application_contract": 1,
+  "settings_schema": 1,
+  "jobs": ["validate", "analyze", "codegen", "build", "run-preflight"],
+  "navigation": [
+    "dashboard",
+    "project",
+    "source",
+    "jobs",
+    "diagnostics",
+    "results",
+    "settings"
+  ],
+  "source_formats": ["raw", "elf32-sh", "gdi"],
+  "sensitive_export_fields": [
+    "host-paths",
+    "firmware-bytes",
+    "flash-bytes",
+    "serial-identifiers",
+    "raw-traces"
+  ],
+  "native_run": "deferred-phase11",
+  "review_boundary": "after-kr-4402-before-kr-4403"
+}
