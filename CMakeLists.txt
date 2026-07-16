@@ -140,6 +140,11 @@ target_link_libraries(
         katana_runtime
 )
 
+target_compile_definitions(
+    katana-recomp
+    PRIVATE KATANA_RECOMP_VERSION="${PROJECT_VERSION}"
+)
+
 katana_enable_warnings(katana-recomp)
 
 enable_testing()

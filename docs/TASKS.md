@@ -1429,9 +1429,27 @@ Akzeptanz:
 - die gebuendelte Phase-8-Regression prueft beide Versionen und absichtlich
   vermischte Feldnamen
 
-### [ ] KR-3502 - Stabile CLI und Exitcodes
+### [x] KR-3502 - Stabile CLI und Exitcodes
 
 Abhaengigkeiten: KR-3501
+
+Umfang:
+
+- oeffentliche, numerisch stabile Exitcodes fuer Nutzung, Eingabe, I/O,
+  Verarbeitung, Codegen, Hostbuild und interne Fehler definieren
+- Ausnahmearten an einer zentralen CLI-Grenze klassifizieren und mit stabilem
+  maschinenlesbarem Fehlernamen ausgeben
+- `--help`, `-h` und `--version` als stabile, erfolgreiche Basiskommandos
+  bereitstellen
+
+Akzeptanz:
+
+- ungueltige Syntax, ungueltige Eingaben und Laufzeit-/I/O-Fehler besitzen
+  unterscheidbare Exitcodes und stderr-Klassen
+- Hilfe und Version schreiben nach stdout und enden mit Exitcode null
+- neue Befehle koennen gezielt Codegen- oder Buildfehler melden, ohne magische
+  Zahlen im Dispatcher einzufuehren
+- die gebuendelte Phase-8-Regression prueft alle oeffentlichen Exitcodes
 
 ### [ ] KR-3503 - JSON-Berichte
 

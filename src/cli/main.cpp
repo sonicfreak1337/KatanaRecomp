@@ -6,6 +6,7 @@
 #include "katana/analysis/control_flow_analysis.hpp"
 #include "katana/codegen/cpp_emitter.hpp"
 #include "katana/codegen/probe.hpp"
+#include "katana/cli/exit_code.hpp"
 #include "katana/io/raw_binary_loader.hpp"
 #include "katana/io/elf32_sh_loader.hpp"
 #include "katana/io/project_manifest.hpp"
@@ -1069,8 +1070,8 @@ int main(const int argc, const char* const* argv) {
     return 0;
 }
 
-void print_usage() {
-    std::cerr
+void print_usage(std::ostream& output) {
+    output
         << "Verwendung:\n"
         << "  katana-recomp <Opcode>\n"
         << "  katana-recomp opcode <Opcode>\n"
@@ -1090,7 +1091,20 @@ void print_usage() {
 }
 
 int main(const int argc, char* argv[]) {
+    using katana::cli::ExitCode;
+    using katana::cli::exit_status;
     try {
+        if (
+            argc == 2 &&
+            (std::string_view(argv[1]) == "--help" || std::string_view(argv[1]) == "-h")
+        ) {
+            print_usage(std::cout);
+            return exit_status(ExitCode::Success);
+        }
+        if (argc == 2 && std::string_view(argv[1]) == "--version") {
+            std::cout << "KatanaRecomp " << KATANA_RECOMP_VERSION << '\n';
+            return exit_status(ExitCode::Success);
+        }
         if (argc == 2 && std::string(argv[1]) == "isa-report") {
             std::cout << katana::sh4::format_isa_coverage_report(
                 katana::sh4::build_isa_coverage_report()
@@ -1307,10 +1321,23 @@ int main(const int argc, char* argv[]) {
             );
         }
 
-        print_usage();
-        return 2;
+        print_usage(std::cerr);
+        return exit_status(ExitCode::Usage);
+    } catch (const katana::cli::Error& error) {
+        std::cerr << "Fehler [" << katana::cli::exit_code_name(error.code())
+                  << "]: " << error.what() << '\n';
+        return exit_status(error.code());
+    } catch (const std::invalid_argument& error) {
+        std::cerr << "Fehler [invalid-input]: " << error.what() << '\n';
+        return exit_status(ExitCode::InvalidInput);
+    } catch (const std::filesystem::filesystem_error& error) {
+        std::cerr << "Fehler [input-output]: " << error.what() << '\n';
+        return exit_status(ExitCode::InputOutput);
+    } catch (const std::runtime_error& error) {
+        std::cerr << "Fehler [processing-failure]: " << error.what() << '\n';
+        return exit_status(ExitCode::ProcessingFailure);
     } catch (const std::exception& error) {
-        std::cerr << "Fehler: " << error.what() << '\n';
-        return 2;
+        std::cerr << "Fehler [internal-error]: " << error.what() << '\n';
+        return exit_status(ExitCode::InternalError);
     }
 }
