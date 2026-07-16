@@ -1,5 +1,6 @@
 #include "katana/analysis/basic_blocks.hpp"
 #include "katana/analysis/function_analysis.hpp"
+#include "katana/analysis/graph_export.hpp"
 #include "katana/analysis/recursive_analysis.hpp"
 #include "katana/analysis/analysis_overrides.hpp"
 #include "katana/analysis/control_flow_report.hpp"
@@ -622,6 +623,29 @@ int analyze_manifest(
     return 0;
 }
 
+int export_analysis_graph(
+    const std::filesystem::path& path,
+    const std::optional<std::filesystem::path>& override_path,
+    const std::string_view command
+) {
+    const auto image = katana::io::load_project_manifest(path);
+    std::optional<katana::analysis::AnalysisOverrides> overrides;
+    if (override_path.has_value()) {
+        overrides = katana::analysis::parse_analysis_overrides(*override_path);
+    }
+    const auto analysis = katana::analysis::analyze_control_flow(
+        image, overrides.has_value() ? &*overrides : nullptr
+    );
+    const bool call_graph = command.starts_with("callgraph-");
+    const auto graph = call_graph
+        ? katana::analysis::build_call_graph(analysis)
+        : katana::analysis::build_control_flow_graph(analysis);
+    std::cout << (command.ends_with("-json")
+        ? katana::analysis::serialize_analysis_graph_json(graph)
+        : katana::analysis::serialize_analysis_graph_dot(graph));
+    return 0;
+}
+
 int disassemble_file(
     const std::filesystem::path& path,
     const std::uint32_t base_address
@@ -1153,6 +1177,10 @@ void print_usage(std::ostream& output) {
         << "  katana-recomp isa-report\n"
         << "  katana-recomp analyze <Projektmanifest> [Override-Datei]\n"
         << "  katana-recomp analyze-json <Projektmanifest> [Override-Datei]\n"
+        << "  katana-recomp cfg-json <Projektmanifest> [Override-Datei]\n"
+        << "  katana-recomp cfg-dot <Projektmanifest> [Override-Datei]\n"
+        << "  katana-recomp callgraph-json <Projektmanifest> [Override-Datei]\n"
+        << "  katana-recomp callgraph-dot <Projektmanifest> [Override-Datei]\n"
         << "  katana-recomp disasm <Datei> [Basisadresse]\n"
         << "  katana-recomp blocks <Datei> [Basisadresse]\n"
         << "  katana-recomp functions <Datei> <Einstieg> [Basisadresse]\n"
@@ -1225,6 +1253,22 @@ int main(const int argc, char* argv[]) {
                     : std::nullopt,
                 std::string(argv[1]) == "analyze-json"
             );
+        }
+
+        if (argc == 3 || argc == 4) {
+            const std::string_view command = argv[1];
+            if (command == "cfg-json" || command == "cfg-dot"
+                || command == "callgraph-json" || command == "callgraph-dot") {
+                return export_analysis_graph(
+                    std::filesystem::path(argv[2]),
+                    argc == 4
+                        ? std::optional<std::filesystem::path>{
+                            std::filesystem::path(argv[3])
+                        }
+                        : std::nullopt,
+                    command
+                );
+            }
         }
 
         if (argc == 2) {

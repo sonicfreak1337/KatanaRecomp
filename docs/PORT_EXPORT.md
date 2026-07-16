@@ -30,6 +30,10 @@ port/
     metadata/port-project.json
     metadata/provenance.json
     metadata/source-map.json
+    metadata/cfg.json
+    metadata/cfg.dot
+    metadata/callgraph.json
+    metadata/callgraph.dot
 ```
 
 Nur Dateien im Katana-Artefaktmanifest unter `generated/` werden bei einer

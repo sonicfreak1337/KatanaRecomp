@@ -901,7 +901,7 @@ Fortschritt:
 - [x] KR-3602 - Adress-zu-Quelle-Mapping
 - [x] KR-3603 - Crashberichte
 - [x] KR-3604 - Tracing und Watchpoints
-- [ ] KR-3605 - CFG- und Callgraph-Export
+- [x] KR-3605 - CFG- und Callgraph-Export
 - [ ] KR-3606 - Sichere Firmware- und Flash-Diagnostik
 - [ ] KR-3607 - Dispatch- und Fallbackdiagnostik
 - [ ] KR-3608 - Block-, Alias- und Invalidierungsprovenienz

@@ -1661,9 +1661,23 @@ Akzeptanz:
 - Watchpoint- und globaler Speichertrace unterscheiden ihre Ereignisart
 - die gebuendelte Phase-8-Regression prueft Wert-Opt-in, Redaktion und JSON-Parsing
 
-### [ ] KR-3605 - CFG- und Callgraph-Export
+### [x] KR-3605 - CFG- und Callgraph-Export
 
 Abhaengigkeiten: KR-1706
+
+Umfang:
+
+- Basic-Block-CFG und Funktions-Callgraph aus derselben versionierten Analyse wie IR und Codegen ableiten
+- DOT- und JSON-Ausgabe ueber stabile CLI-Kommandos und im Portprojekt bereitstellen
+- direkte, bedingte, aufgeloeste indirekte und unaufgeloeste Kanten unterscheidbar halten
+- Gastadressen und optionale symbolische Namen ohne Hostpfade exportieren
+
+Akzeptanz:
+
+- Knoten und Kanten werden vor jeder Serialisierung deterministisch sortiert und dedupliziert
+- unaufgeloeste indirekte Ziele bleiben explizit sichtbar und werden nicht als bekannte Adresse ausgegeben
+- Port-Regenerierung verwaltet alle vier Graphartefakte ueber das Katana-Artefaktmanifest
+- die gebuendelte Phase-8-Regression prueft DOT-/JSON-Vertrag, Symbole, indirekte Ziele und Bytegleichheit
 
 ### [ ] KR-3606 - Sichere Firmware- und Flash-Diagnostik
 

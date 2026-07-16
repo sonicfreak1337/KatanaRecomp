@@ -108,6 +108,7 @@ add_library(katana_core STATIC
     src/analysis/control_flow_report.cpp
     src/analysis/control_flow_analysis.cpp
     src/analysis/symbol_names.cpp
+    src/analysis/graph_export.cpp
     src/ir/lower.cpp
     src/ir/accumulator_effect.cpp
     src/ir/memory_effect.cpp

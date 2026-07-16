@@ -15,6 +15,7 @@
 - KR-3602: Stabile `katana-guest`-Marker im generierten C++ bilden jede emittierte SH-4-Adresse auf portables Eingabesegment/-offset und relative Generated-Datei/-zeile ab. Die versionierte JSON-Source-Map erhaelt Mehrfachpositionen deterministisch und lehnt absolute Pfade, ausbrechende Komponenten sowie unportable Segmentangaben ab.
 - KR-3603: Versionierte kontrollierte Crashberichte erfassen virtuelle und kanonische Adresse, Register-, Exception- und Delay-Slot-Zustand, Blockvariante, Schedulerstand sowie letzten Dispatch. Strikte portable Diagnosecodes und gekoppelte Kontextvalidierung verhindern freie Hostmeldungen, Pfade, Hostzeiger oder Speicherdumps im Bericht.
 - KR-3604: Ein kapazitaetsbegrenzter Runtime-Trace vereint IR-, Block-, Speicher-, Watchpoint-, Exception- und Schedulerereignisse unter monotoner Gastzeit. Drops bleiben gezaehlt, Memory- und Watchpointobserver verwenden bestehende Runtime-Hooks, und Speicherwerte bleiben ohne ausdrueckliches lokales Opt-in redigiert.
+- KR-3605: Deterministische CFG- und Callgraph-Exporte stehen als versioniertes JSON und Graphviz-DOT ueber stabile CLI-Kommandos sowie im Portprojekt bereit. Direkte, bedingte, aufgeloeste indirekte und explizit unaufgeloeste Kanten behalten Gastadressen und optionale Symbole, ohne Hostpfade oder Eingabebytes zu serialisieren.
 
 ## [0.34.0] - 2026-07-16
 

@@ -1,6 +1,7 @@
 #include "katana/codegen/port_export.hpp"
 
 #include "katana/analysis/control_flow_analysis.hpp"
+#include "katana/analysis/graph_export.hpp"
 #include "katana/codegen/backend.hpp"
 #include "katana/codegen/cpp_emitter.hpp"
 #include "katana/codegen/naming.hpp"
@@ -204,7 +205,7 @@ PortExportResult export_dreamcast_port_project(
     if (partitions.empty()) throw std::runtime_error("Portcodegen erzeugte keine Partition.");
 
     std::vector<ProjectArtifact> artifacts;
-    artifacts.reserve(partitions.size() + 5u);
+    artifacts.reserve(partitions.size() + 9u);
     for (const auto& partition : partitions) {
         auto functions = select_functions(program, partition);
         const auto contains_program_entry = std::any_of(
@@ -240,6 +241,8 @@ PortExportResult export_dreamcast_port_project(
     }
     const auto entry_namespace = unit_namespace(entry_partition->index);
     const auto source_map = build_address_source_map(image, artifacts);
+    const auto control_flow_graph = katana::analysis::build_control_flow_graph(analysis);
+    const auto call_graph = katana::analysis::build_call_graph(analysis);
 
     std::vector<katana::io::InputProvenance> inputs;
     inputs.push_back(katana::io::capture_input_provenance("gdi-descriptor", gdi_path));
@@ -274,6 +277,22 @@ PortExportResult export_dreamcast_port_project(
     });
     artifacts.push_back({
         "metadata/source-map.json", serialize_address_source_map(source_map)
+    });
+    artifacts.push_back({
+        "metadata/cfg.json",
+        katana::analysis::serialize_analysis_graph_json(control_flow_graph)
+    });
+    artifacts.push_back({
+        "metadata/cfg.dot",
+        katana::analysis::serialize_analysis_graph_dot(control_flow_graph)
+    });
+    artifacts.push_back({
+        "metadata/callgraph.json",
+        katana::analysis::serialize_analysis_graph_json(call_graph)
+    });
+    artifacts.push_back({
+        "metadata/callgraph.dot",
+        katana::analysis::serialize_analysis_graph_dot(call_graph)
     });
 
     const auto absolute_root = std::filesystem::absolute(output_root).lexically_normal();
