@@ -1,6 +1,7 @@
 #include "katana/gui/model.hpp"
 
 #include <algorithm>
+#include <atomic>
 #include <cstdlib>
 #include <cwctype>
 #include <filesystem>
@@ -34,6 +35,7 @@ HWND log_view = nullptr;
 HWND main_window = nullptr;
 std::filesystem::path selected_gdi;
 std::filesystem::path selected_output;
+std::atomic_bool preparing_job = false;
 
 std::filesystem::path settings_path() {
     wchar_t* local_app_data = nullptr;
@@ -63,12 +65,15 @@ std::wstring widen(const std::string& text) {
 void refresh() {
     const auto state = model->snapshot();
     auto summary_text = model->accessible_summary();
+    if (!selected_gdi.empty()) summary_text += " Gewaehlte GDI: " + selected_gdi.string() + ".";
     if (!selected_output.empty()) summary_text += " Ausgabe: " + selected_output.string() + ".";
     const auto summary = widen(summary_text);
     SetWindowTextW(content_label, summary.c_str());
-    const auto progress = widen(state.job_active ? "Aktiver Job: " + state.job_stage + " (" +
-                                                       std::to_string(state.job_progress) + " %)"
-                                                 : "Bereit");
+    const auto busy = preparing_job.load() || state.job_active;
+    const auto progress = widen(preparing_job.load() ? "GDI wird eingelesen und geprueft ..."
+                                : state.job_active   ? "Aktiver Job: " + state.job_stage + " (" +
+                                                         std::to_string(state.job_progress) + " %)"
+                                                   : "Bereit");
     SetWindowTextW(progress_label, progress.c_str());
     std::string log = "Stufe: " + state.job_stage + "\r\n";
     for (const auto& diagnostic : state.diagnostics) {
@@ -87,7 +92,7 @@ void refresh() {
     }
     SetWindowTextW(log_view, widen(log).c_str());
     for (const int control : {1001, 1003, 1006})
-        EnableWindow(GetDlgItem(main_window, control), state.job_active ? FALSE : TRUE);
+        EnableWindow(GetDlgItem(main_window, control), busy ? FALSE : TRUE);
     EnableWindow(GetDlgItem(main_window, 1004), state.job_active ? TRUE : FALSE);
 }
 
@@ -155,13 +160,6 @@ void select_gdi(HWND window) {
     auto extension = source.extension().wstring();
     std::transform(extension.begin(), extension.end(), extension.begin(), ::towlower);
     if (extension != L".gdi") throw std::invalid_argument("Die GUI akzeptiert nur .gdi-Quellen.");
-    const auto session = std::filesystem::temp_directory_path() / "KatanaRecomp" /
-                         ("session-" + std::to_string(GetCurrentProcessId()));
-    std::filesystem::create_directories(session);
-    const auto manifest = session / "input.katana";
-    model->new_project(
-        manifest, source.stem().string(), katana::io::ProjectInputFormat::DreamcastGdi, source);
-    model->save_project();
     selected_gdi = source;
 }
 
@@ -169,11 +167,23 @@ void start_job(HWND window, const katana::app::JobKind kind) {
     if (job_thread.joinable()) return;
     if (selected_gdi.empty()) throw std::logic_error("Zuerst eine .gdi-Quelle waehlen.");
     if (selected_output.empty()) throw std::logic_error("Zuerst einen Ausgabeordner waehlen.");
+    const auto source = selected_gdi;
     const auto output = selected_output;
-    job_thread = std::jthread([window, kind, output] {
+    preparing_job.store(true);
+    job_thread = std::jthread([window, kind, source, output] {
         try {
+            const auto session = std::filesystem::temp_directory_path() / "KatanaRecomp" /
+                                 ("session-" + std::to_string(GetCurrentProcessId()));
+            std::filesystem::create_directories(session);
+            model->new_project(session / "input.katana",
+                               source.stem().string(),
+                               katana::io::ProjectInputFormat::DreamcastGdi,
+                               source);
+            model->save_project();
+            preparing_job.store(false);
             static_cast<void>(model->run_job(kind, output, "gui-job", KATANA_RECOMP_VERSION));
         } catch (const std::exception& error) {
+            preparing_job.store(false);
             show_error(error);
         }
         PostMessageW(window, job_finished_message, 0u, 0);
@@ -348,7 +358,7 @@ LRESULT CALLBACK window_proc(HWND window, const UINT message, WPARAM wparam, LPA
         }
         return 0;
     case WM_CLOSE:
-        if (model->snapshot().job_active &&
+        if ((preparing_job.load() || model->snapshot().job_active) &&
             MessageBoxW(window,
                         L"Aktiven Job abbrechen und KatanaRecomp schliessen?",
                         L"KatanaRecomp",
@@ -506,14 +516,6 @@ int main(const int argc, char* argv[]) {
             selected_output = std::filesystem::absolute(argv[3]).lexically_normal();
             if (selected_gdi.extension() != ".gdi")
                 throw std::invalid_argument("Native GUI-Automatisierung akzeptiert nur .gdi.");
-            const auto session = std::filesystem::temp_directory_path() / "KatanaRecomp" /
-                                 ("native-automation-" + session_suffix());
-            std::filesystem::create_directories(session);
-            model->new_project(session / "input.katana",
-                               selected_gdi.stem().string(),
-                               katana::io::ProjectInputFormat::DreamcastGdi,
-                               selected_gdi);
-            model->save_project();
             native_automation = true;
             const auto result = run_desktop();
             if (!native_automation_failed) std::cout << "KR_PHASE10_NATIVE_GUI_END_TO_END\n";
