@@ -107,8 +107,8 @@ std::filesystem::path run_file_dialog(const std::wstring& mode) {
                       .parent_path() /
                   "katana-file-dialog.exe";
     const auto result_path = std::filesystem::temp_directory_path() /
-                             ("katana-dialog-" + std::to_string(GetCurrentProcessId()) + ".txt");
-    std::filesystem::remove(result_path);
+                             ("katana-dialog-" + std::to_string(GetCurrentProcessId()) + "-" +
+                              std::to_string(GetTickCount64()) + ".txt");
     std::wstring command =
         L"\"" + helper.wstring() + L"\" " + mode + L" \"" + result_path.wstring() + L"\"";
     STARTUPINFOW startup{};
@@ -133,8 +133,11 @@ std::filesystem::path run_file_dialog(const std::wstring& mode) {
     CloseHandle(process.hProcess);
     if (exit_code != 0u) throw std::runtime_error("Nativer Dateidialog ist fehlgeschlagen.");
     std::ifstream input(result_path, std::ios::binary);
+    if (!input) throw std::runtime_error("Dateidialog-Ergebnis konnte nicht gelesen werden.");
     std::string selected((std::istreambuf_iterator<char>(input)), std::istreambuf_iterator<char>());
-    std::filesystem::remove(result_path);
+    input.close();
+    std::error_code cleanup_error;
+    std::filesystem::remove(result_path, cleanup_error);
     return selected.empty() ? std::filesystem::path{} : std::filesystem::path(widen(selected));
 }
 
