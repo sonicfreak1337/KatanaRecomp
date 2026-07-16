@@ -423,6 +423,31 @@ ControlFlowAnalysisResult analyze_control_flow(
             return left.status < right.status;
         }
     );
+    std::set<std::uint32_t> symbolic_candidates;
+    for (const auto& function : analysis.recursive.functions) {
+        symbolic_candidates.insert(function.address);
+    }
+    for (const auto& resolution : analysis.indirect_control_flow) {
+        symbolic_candidates.insert(resolution.instruction_address);
+        if (resolution.target.has_value()) symbolic_candidates.insert(*resolution.target);
+    }
+    for (const auto& table : analysis.jump_tables) {
+        symbolic_candidates.insert(table.dispatch_address);
+        symbolic_candidates.insert(table.table_address);
+        for (const auto& entry : table.entries) symbolic_candidates.insert(entry.target);
+    }
+    for (const auto& diagnostic : analysis.recursive.diagnostics) {
+        symbolic_candidates.insert(diagnostic.address);
+    }
+    for (const auto& diagnostic : analysis.directive_diagnostics) {
+        symbolic_candidates.insert(diagnostic.address);
+    }
+    const SymbolNameIndex symbol_index(image);
+    for (const auto candidate : symbolic_candidates) {
+        if (auto symbol = symbol_index.resolve(candidate); symbol.has_value()) {
+            analysis.symbolic_addresses.push_back(std::move(*symbol));
+        }
+    }
     return analysis;
 }
 

@@ -610,9 +610,13 @@ int analyze_manifest(
     if (json) {
         std::cout << katana::analysis::format_control_flow_analysis_json(analysis);
     } else {
-        std::cout << katana::analysis::format_recursive_analysis_report(analysis.recursive);
+        std::cout << katana::analysis::format_recursive_analysis_report(
+            analysis.recursive, analysis.symbolic_addresses
+        );
         std::cout << katana::analysis::format_indirect_control_flow_report(
-            analysis.indirect_control_flow, analysis.jump_tables
+            analysis.indirect_control_flow,
+            analysis.jump_tables,
+            analysis.symbolic_addresses
         );
     }
     return 0;

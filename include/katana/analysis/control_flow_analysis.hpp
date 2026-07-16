@@ -4,6 +4,7 @@
 #include "katana/analysis/basic_blocks.hpp"
 #include "katana/analysis/jump_table_analysis.hpp"
 #include "katana/analysis/recursive_analysis.hpp"
+#include "katana/analysis/symbol_names.hpp"
 #include "katana/analysis/value_analysis.hpp"
 #include "katana/io/executable_image.hpp"
 
@@ -35,6 +36,7 @@ struct ControlFlowAnalysisResult {
     std::vector<ResolvedControlFlowEdge> resolved_edges;
     std::size_t fixpoint_iterations = 0u;
     std::vector<AnalysisDirectiveDiagnostic> directive_diagnostics;
+    std::vector<SymbolicAddress> symbolic_addresses;
 };
 
 [[nodiscard]] const char* analysis_directive_diagnostic_status_name(

@@ -1,9 +1,11 @@
 #pragma once
 
 #include "katana/io/executable_image.hpp"
+#include "katana/analysis/symbol_names.hpp"
 #include "katana/sh4/disassembler.hpp"
 
 #include <cstdint>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -88,7 +90,8 @@ struct RecursiveAnalysisResult {
 [[nodiscard]] const char* analysis_confidence_name(AnalysisConfidence confidence) noexcept;
 [[nodiscard]] const char* analysis_conflict_kind_name(AnalysisConflictKind kind) noexcept;
 [[nodiscard]] std::string format_recursive_analysis_report(
-    const RecursiveAnalysisResult& result
+    const RecursiveAnalysisResult& result,
+    std::span<const SymbolicAddress> symbols = {}
 );
 
 }

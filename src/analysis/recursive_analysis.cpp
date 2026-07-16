@@ -343,7 +343,10 @@ const char* analysis_conflict_kind_name(const AnalysisConflictKind kind) noexcep
     return "unknown";
 }
 
-std::string format_recursive_analysis_report(const RecursiveAnalysisResult& result) {
+std::string format_recursive_analysis_report(
+    const RecursiveAnalysisResult& result,
+    const std::span<const SymbolicAddress> symbols
+) {
     std::ostringstream output;
     output << "Katana rekursive Analyse\n"
            << "Instruktionen: " << result.instructions.size() << '\n'
@@ -360,6 +363,9 @@ std::string format_recursive_analysis_report(const RecursiveAnalysisResult& resu
     for (const auto& function : result.functions) {
         output << "Funktion ";
         address(function.address);
+        if (const auto* symbol = find_symbolic_address(symbols, function.address)) {
+            output << " Symbol=" << format_symbolic_address(*symbol);
+        }
         output << " Konfidenz=" << analysis_confidence_name(function.confidence) << " Herkunft=";
         for (std::size_t index = 0; index < function.origins.size(); ++index) {
             if (index != 0u) {
@@ -388,6 +394,9 @@ std::string format_recursive_analysis_report(const RecursiveAnalysisResult& resu
     for (const auto& diagnostic : result.diagnostics) {
         output << "Diagnose ";
         address(diagnostic.address);
+        if (const auto* symbol = find_symbolic_address(symbols, diagnostic.address)) {
+            output << " Symbol=" << format_symbolic_address(*symbol);
+        }
         output << " Opcode=0x" << std::hex << std::uppercase << std::setw(4)
                << std::setfill('0') << diagnostic.opcode << std::dec << std::setfill(' ')
                << " Grund=" << diagnostic.reason << '\n';

@@ -1586,9 +1586,25 @@ Akzeptanz:
   Buildfehler enden mit stabilen Exitcodes und verwertbaren Diagnosen statt mit
   einem teilweise als erfolgreich gemeldeten Port
 
-### [ ] KR-3601 - Symbolische Namen
+### [x] KR-3601 - Symbolische Namen
 
 Abhaengigkeiten: KR-1604
+
+Umfang:
+
+- ELF- und Map-Symbole ueber einen gemeinsamen deterministischen Index aufloesen
+- exakte Namen und begrenzte `name+offset`-Darstellung in Text- und JSON-Berichte einbinden
+- Mehrfachsymbole nach Binding, Art, Groesse und Name stabil priorisieren
+- numerische Gastadressen auch bei vorhandenen Symbolen immer erhalten
+
+Akzeptanz:
+
+- ein Symbol ohne Groesse benennt ausschliesslich seine exakte Adresse
+- mehrere Namen an derselben Adresse liefern hostunabhaengig denselben Gewinner
+- unbekannte Adressen bleiben rohe Gastadressen und werden niemals dem vorherigen
+  Symbol zugeschlagen
+- die gebuendelte Phase-8-Regression prueft ELF-, Map-, Offset-, Mehrfach- und
+  Unbekanntfaelle sowie JSON-Escaping
 
 ### [ ] KR-3602 - Adress-zu-Quelle-Mapping
 

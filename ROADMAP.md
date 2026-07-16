@@ -897,7 +897,7 @@ Enthalten:
 
 Fortschritt:
 
-- [ ] KR-3601 - Symbolische Namen
+- [x] KR-3601 - Symbolische Namen
 - [ ] KR-3602 - Adress-zu-Quelle-Mapping
 - [ ] KR-3603 - Crashberichte
 - [ ] KR-3604 - Tracing und Watchpoints
