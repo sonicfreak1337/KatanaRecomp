@@ -1290,7 +1290,7 @@ Akzeptanz:
 - FPSCR-Wechsel fuehren nicht zur Wiederverwendung einer inkompatiblen Blockvariante
 - No-MMU-Fastpaths bleiben getrennt und behaupten keine volle MMU-Genauigkeit
 
-### [ ] KR-3409 - Praezise Fallback- und Interpretergrenze
+### [x] KR-3409 - Praezise Fallback- und Interpretergrenze
 
 Abhaengigkeiten: KR-3204, KR-3403, KR-3407, KR-3408
 

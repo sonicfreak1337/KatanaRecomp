@@ -16,6 +16,7 @@
 - KR-3406: Der kanonische Blockdispatcher implementiert Fallthrough, statische, bedingte und dynamische Spruenge, Calls, Returns, Exceptions sowie Interrupt-Safepoints als getrennte Endklassen. Direkte Nachfolger und Fallthrough bleiben getrennt; virtuelle Diagnose- und physische Lookupadresse werden bewahrt, und generische Relink-/Unlink-Hooks loesen alle eingehenden Direktlinks stabil.
 - KR-3407: Explizite Scheduler-Safepoints verbrauchen reproduzierbare Gastzyklen an Blockenden, Schleifenrueckkanten sowie vor und nach Delay Slots. Ein festes Schleifenquantum verhindert Eventverhungerung; Backend und Fallback teilen denselben Budgetpfad, waehrend Ereignisse, Interruptzustellung, Jitter und Budgetstopps maschinenlesbar bleiben.
 - KR-3408: Ein expliziter Instruktions- und Datenuebersetzungsvertrag trennt No-MMU-Fastpaths von TLB-gestuetzter Ausfuehrung. MMUCR, LDTLB-/TLB-, Adressraum- und Watchpointgenerationen sowie FPSCR PR/SZ/FR/RM werden als Blockwaechter erfasst; Rechtefehler erzeugen strukturierte SH-4-Ausnahmen und aktive MMU-Bloecke enden konservativ an Seitengrenzen.
+- KR-3409: Eine praezise Interpretergrenze erlaubt Eintritt nur am synchronisierten Gast-PC und Austritt nur an der vereinbarten Blockgrenze. Delay-Slot-Owner, Speicherfehler, Watchpoints, Schedulerbudget und strukturierte Ausnahmen werden mit generiertem Code geteilt; dynamischer Code nutzt dieselbe Provenienz- und Invalidierungsschicht, und Manifeste koennen jeden stabil gezaehlten Grund verbieten.
 
 ## [0.33.0] - 2026-07-16
 
