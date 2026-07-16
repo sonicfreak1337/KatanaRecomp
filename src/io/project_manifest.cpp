@@ -312,6 +312,57 @@ std::vector<std::string> parse_capabilities(
 
 }
 
+void require_valid_project_alias_groups(
+    const std::span<const ProjectAliasGroup> aliases,
+    const std::span<const ProjectAddressRange> canonical_ranges
+) {
+    for (std::size_t left = 0u; left < aliases.size(); ++left) {
+        const auto& alias = aliases[left];
+        const auto virtual_end = static_cast<std::uint64_t>(alias.virtual_start) + alias.size;
+        const auto physical_end = static_cast<std::uint64_t>(alias.physical_start) + alias.size;
+        if (alias.size == 0u || virtual_end > std::numeric_limits<std::uint32_t>::max() + 1ull
+            || physical_end > std::numeric_limits<std::uint32_t>::max() + 1ull) {
+            throw std::invalid_argument("Aliasgruppe besitzt einen ungueltigen Bereich.");
+        }
+        for (std::size_t right = left + 1u; right < aliases.size(); ++right) {
+            const auto& candidate = aliases[right];
+            if (ranges_overlap(
+                    alias.virtual_start, alias.size,
+                    candidate.virtual_start, candidate.size
+                )) {
+                throw std::invalid_argument("widerspruechliche ueberlappende Aliasgruppen.");
+            }
+        }
+        if (!std::any_of(
+                canonical_ranges.begin(),
+                canonical_ranges.end(),
+                [&alias](const auto& range) {
+                    return range_contains(range, alias.physical_start, alias.size);
+                }
+            )) {
+            throw std::invalid_argument(
+                "Aliasziel liegt ausserhalb der kanonischen physischen Bereiche."
+            );
+        }
+        if (std::any_of(
+                aliases.begin(),
+                aliases.end(),
+                [&alias](const auto& candidate) {
+                    return ranges_overlap(
+                        alias.physical_start,
+                        alias.size,
+                        candidate.virtual_start,
+                        candidate.size
+                    );
+                }
+            )) {
+            throw std::invalid_argument(
+                "Aliasziel darf keine weitere virtuelle Aliasgruppe referenzieren."
+            );
+        }
+    }
+}
+
 ProjectManifest parse_project_manifest(const std::filesystem::path& path) {
     std::ifstream input(path);
     if (!input) {
@@ -507,27 +558,13 @@ ProjectManifest parse_project_manifest(const std::filesystem::path& path) {
         fail(path, 0u, "Raw-Adresslayoutfelder sind fuer elf32-sh nicht erlaubt.");
     }
 
-    for (std::size_t left = 0u; left < manifest.alias_groups.size(); ++left) {
-        const auto& alias = manifest.alias_groups[left];
-        for (std::size_t right = left + 1u; right < manifest.alias_groups.size(); ++right) {
-            const auto& candidate = manifest.alias_groups[right];
-            if (ranges_overlap(
-                    alias.virtual_start, alias.size, candidate.virtual_start, candidate.size
-                )) {
-                fail(path, values.at("memory.alias_groups").line,
-                    "widerspruechliche ueberlappende Aliasgruppen.");
-            }
-        }
-        if (!std::any_of(
-                manifest.canonical_physical_ranges.begin(),
-                manifest.canonical_physical_ranges.end(),
-                [&alias](const auto& range) {
-                    return range_contains(range, alias.physical_start, alias.size);
-                }
-            )) {
-            fail(path, values.at("memory.alias_groups").line,
-                "Aliasziel liegt ausserhalb der kanonischen physischen Bereiche.");
-        }
+    try {
+        require_valid_project_alias_groups(
+            manifest.alias_groups,
+            manifest.canonical_physical_ranges
+        );
+    } catch (const std::invalid_argument& error) {
+        fail(path, values.at("memory.alias_groups").line, error.what());
     }
 
     const auto has_capability = [&manifest](const std::string_view capability) {

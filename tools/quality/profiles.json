@@ -29,7 +29,7 @@
       "configure_preset": "fuzz-debug",
       "build_preset": "fuzz-debug",
       "test_preset": "fuzz-debug",
-      "targets": ["decoder", "loader", "ir"],
+      "targets": ["decoder", "loader", "ir", "runtime"],
       "synthetic_only": true
     },
     {

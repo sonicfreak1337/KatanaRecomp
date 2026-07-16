@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -91,5 +92,10 @@ struct ProjectManifest {
 [[nodiscard]] const char* project_firmware_mode_name(ProjectFirmwareMode mode) noexcept;
 [[nodiscard]] const char* project_fallback_policy_name(ProjectFallbackPolicy policy) noexcept;
 [[nodiscard]] bool project_manifest_version_supported(std::uint32_t version) noexcept;
+
+void require_valid_project_alias_groups(
+    std::span<const ProjectAliasGroup> aliases,
+    std::span<const ProjectAddressRange> canonical_ranges
+);
 
 }

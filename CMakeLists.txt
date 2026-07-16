@@ -298,7 +298,7 @@ add_test(
 
 if(KATANA_BUILD_FUZZERS)
     add_executable(katana-fuzz tools/fuzz/fuzz_runner.cpp)
-    target_link_libraries(katana-fuzz PRIVATE katana_core)
+    target_link_libraries(katana-fuzz PRIVATE katana_core katana_runtime)
     katana_enable_warnings(katana-fuzz)
     add_test(
         NAME katana-fuzz-smoke

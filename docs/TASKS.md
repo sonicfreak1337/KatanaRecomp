@@ -1882,7 +1882,7 @@ Akzeptanz:
 - mindestens ein absichtlich fehlerhaftes Testbackend beweist, dass der Vergleich anschlaegt
 - alle lokal ausgefuehrten Debug- und Sanitizerprofile verwenden dieselben semantischen Erwartungen
 
-### [ ] KR-3708 - Mehrsegment-, Dispatch- und Invalidierungsfuzzing
+### [x] KR-3708 - Mehrsegment-, Dispatch- und Invalidierungsfuzzing
 
 Abhaengigkeiten: KR-3404, KR-3406, KR-3408, KR-3703
 

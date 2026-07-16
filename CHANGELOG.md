@@ -27,6 +27,7 @@
 - KR-3705: Ein repositoryweiter `.clang-format`-/`.clang-tidy`-Vertrag und ein read-only Formatpruefer decken Include-, Quell-, Test- und Toolcode ab. `quality-debug` fuehrt MSVC-Analyse beziehungsweise `clang-tidy` mit Fehlereskalation im selben kumulativen Debug-Build aus.
 - KR-3706: `artifact-debug` entfernt lokale Quellpfade aus Debuginformationen und aktiviert reproduzierbare Compiler-/Linkoptionen. Ein strikt begrenzter Paketierer erzeugt sortierte, zeitnormalisierte `0.34.0-dev`-ZIPs samt SHA-256-Manifest zweimal und akzeptiert sie nur bei Bytegleichheit; private oder generierte Eingaben sind nicht paketierbar.
 - KR-3707: Ein Differential-Harness speist dieselben synthetischen Mikrogramme in IR-Referenz, generiertes C++ und kontrollierten Interpreter-Fallback. Kanonische Checkpoints vergleichen CPU, Speicher, Ausnahme, MMIO und Scheduler am ersten abweichenden Gast-PC; stabile JSON-Gegenbeispiele enthalten Seed, Korpus und Zustandspfad.
+- KR-3708: Das neue `katana-fuzz --target runtime` kombiniert synthetische Multi-Segment-Images, validierte Aliasgruppen, MMU-/Watchpointvarianten, exakten und kanonischen Dispatch, ROM-RAM-Codekopien sowie CPU-/DMA-/Copy-Invalidierung. Aliasverkettungen und -zyklen werden bereits im Manifestvertrag abgelehnt; Seitengenerationen verhindern stale Blocklookups.
 
 ## [0.34.0] - 2026-07-16
 
