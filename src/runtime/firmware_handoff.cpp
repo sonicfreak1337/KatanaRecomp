@@ -79,11 +79,6 @@ void FirmwareHandoffMap::install_runtime_symbol(RuntimeFirmwareSymbol symbol) {
 
 FirmwareTargetResolution FirmwareHandoffMap::resolve(const std::uint32_t virtual_address) const {
     const auto physical = canonical_physical_address(virtual_address);
-    const auto symbol = std::find_if(symbols_.begin(), symbols_.end(), [&](const auto& value) {
-        return value.virtual_address == virtual_address || value.physical_address == physical;
-    });
-    if (symbol != symbols_.end())
-        return {virtual_address, physical, std::nullopt, true, symbol->provenance};
     for (const auto& copy : copies_) {
         if (contains(copy.destination_physical, copy.size, physical)) {
             return {virtual_address,
@@ -93,6 +88,11 @@ FirmwareTargetResolution FirmwareHandoffMap::resolve(const std::uint32_t virtual
                     copy.provenance};
         }
     }
+    const auto symbol = std::find_if(symbols_.begin(), symbols_.end(), [&](const auto& value) {
+        return value.virtual_address == virtual_address || value.physical_address == physical;
+    });
+    if (symbol != symbols_.end())
+        return {virtual_address, physical, std::nullopt, true, symbol->provenance};
     const auto mapping = std::find_if(mappings_.begin(), mappings_.end(), [&](const auto& value) {
         return contains(value.virtual_start, value.size, virtual_address) ||
                contains(value.physical_start, value.size, physical);

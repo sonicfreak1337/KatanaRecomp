@@ -72,7 +72,9 @@ DreamcastBootResult boot_homebrew(runtime::CpuState& cpu,
     static_cast<void>(runtime::map_dreamcast_main_ram(cpu.memory));
     DreamcastBootResult result;
     result.entry_point = entry;
-    result.log.push_back("firmware=direct-homebrew");
+    result.log.push_back(config.firmware_mode == FirmwareMode::HleBiosAbi
+                             ? "firmware=hle-bios-abi"
+                             : "firmware=direct-homebrew");
     result.log.push_back("entry=" + hex32(entry));
 
     for (const auto& segment : image.segments()) {

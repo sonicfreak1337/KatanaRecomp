@@ -910,6 +910,16 @@ target_link_libraries(katana-system-asic-tests PRIVATE katana_runtime)
 katana_enable_warnings(katana-system-asic-tests)
 add_test(NAME katana-system-asic-tests COMMAND katana-system-asic-tests)
 
+add_executable(katana-phase11-retail-boot-services-tests
+    tests/phase11/retail_boot_services_tests.cpp
+)
+target_link_libraries(katana-phase11-retail-boot-services-tests PRIVATE katana_core katana_runtime)
+katana_enable_warnings(katana-phase11-retail-boot-services-tests)
+add_test(
+    NAME katana-phase11-retail-boot-services-tests
+    COMMAND katana-phase11-retail-boot-services-tests
+)
+
 add_executable(katana-media-clock-tests tests/runtime/media_clock_tests.cpp)
 target_link_libraries(katana-media-clock-tests PRIVATE katana_runtime)
 katana_enable_warnings(katana-media-clock-tests)
