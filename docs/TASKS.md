@@ -1251,7 +1251,7 @@ Akzeptanz:
 - ein dynamischer Return verwendet PR und wird nicht als normaler Call behandelt
 - das Loesen eines Zielblocks entfernt alle eingehenden Direktlinks sicher
 
-### [ ] KR-3407 - Scheduler-Safepoints und Gastzyklen
+### [x] KR-3407 - Scheduler-Safepoints und Gastzyklen
 
 Abhaengigkeiten: KR-3101, KR-3104, KR-3204, KR-3406
 

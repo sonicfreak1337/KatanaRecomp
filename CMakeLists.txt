@@ -41,6 +41,7 @@ add_library(katana_runtime STATIC
     src/runtime/code_invalidation.cpp
     src/runtime/firmware_handoff.cpp
     src/runtime/block_dispatch.cpp
+    src/runtime/scheduler_safepoint.cpp
     src/runtime/cache_control.cpp
     src/runtime/dma.cpp
     src/runtime/disc.cpp
@@ -186,6 +187,11 @@ add_executable(katana-block-dispatch-tests tests/runtime/block_dispatch_tests.cp
 target_link_libraries(katana-block-dispatch-tests PRIVATE katana_runtime)
 katana_enable_warnings(katana-block-dispatch-tests)
 add_test(NAME katana-block-dispatch-tests COMMAND katana-block-dispatch-tests)
+
+add_executable(katana-scheduler-safepoint-tests tests/runtime/scheduler_safepoint_tests.cpp)
+target_link_libraries(katana-scheduler-safepoint-tests PRIVATE katana_runtime)
+katana_enable_warnings(katana-scheduler-safepoint-tests)
+add_test(NAME katana-scheduler-safepoint-tests COMMAND katana-scheduler-safepoint-tests)
 
 add_executable(katana-platform-services-tests tests/runtime/platform_services_tests.cpp)
 target_link_libraries(katana-platform-services-tests PRIVATE katana_core katana_runtime)
