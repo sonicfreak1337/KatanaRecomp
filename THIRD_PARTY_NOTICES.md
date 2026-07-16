@@ -22,4 +22,4 @@ revisions, reference commits, reviewed scope, and synthetic-fixture origins.
 
 KatanaRecomp itself currently has no repository license file. External
 distribution remains blocked until the explicit project-license decision in
-KR-4003.
+KR-4902 before the first public Alpha release.

@@ -28,7 +28,8 @@ Keine benachbarten Roadmap-Punkte werden nebenbei implementiert, ausser sie sind
 
 1. sauberen Git-Status pruefen
 2. aktuellen Branch und Version erfassen
-3. Tasktyp bestimmen: Implementierung, Gate-Vorbereitung oder Release-Gate
+3. Tasktyp bestimmen: Implementierung, Gate-Vorbereitung, interne
+   Meilenstein-Freigabe oder Release-Gate
 4. Abhaengigkeiten, aktuellen Status und vorhandene Gate-Berichte erfassen
 5. erst danach Dateien aendern
 
@@ -258,7 +259,7 @@ Generierte Quellen werden nur committed, wenn die Roadmap dies fuer ein reproduz
   Build-Verzeichnis existieren: `build-current/` im Repository-Arbeitsbaum.
 - Nur der letzte Gate-Vorbereitungstask einer Phase darf `build-current/`
   anlegen, neu konfigurieren oder bauen. Regulaere Implementierungs- und reine
-  Release-Gate-Tasks erzeugen keine Buildartefakte.
+  Freigabe-Tasks erzeugen keine Buildartefakte.
 - Pre-Alpha-Gate-Vorbereitungen erzeugen den jeweils dokumentierten frischen
   Build. Erst KR-4999 ergaenzt regulaere Debug-/Release-Konfigurationen und die
   verpflichtende Windows-/Linux-CI.
@@ -299,11 +300,15 @@ Letzter Gate-Vorbereitungstask:
 4. Gate-Berichte, Dokumentation, CHANGELOG und Status aktualisieren
 5. anschliessend zwingend fuer das Nutzerreview stoppen
 
-Phasen-Release-Gate:
+Interne Meilenstein- oder Release-Freigabe:
 
 1. ausdrueckliche Nutzerfreigabe des unveraenderten Gate-Berichts pruefen
 2. keine neue Semantik, Tests oder Builds hinzufuegen
-3. erst danach Versionierung, Release-Commit, Tag und Veroeffentlichung ausfuehren
+3. bis einschliesslich v0.49.0 nur den naechsten internen Meilenstein
+   freigeben; keine Versionierung, kein Release-Commit, kein Tag und keine
+   Veroeffentlichung ausfuehren
+4. erst bei v0.50.0 und spaeteren oeffentlichen Release-Gates die vorgesehenen
+   Release-Aktionen ausfuehren
 
 Verlangt das Review Aenderungen, endet der Gate-Task und die
 Gate-Vorbereitung wird nach den Korrekturen vollstaendig wiederholt. Der lokale
@@ -334,13 +339,14 @@ Die Abschlussmeldung enthaelt:
 
 ```text
 Task: KR-XXXX
-Typ: Implementierung | Gate-Vorbereitung | Release-Gate
+Typ: Implementierung | Gate-Vorbereitung | interne Freigabe | Release-Gate
 
 - [ ] Scope eingehalten
 - [ ] Testanforderungen dokumentiert
 - [ ] Gate-Vorbereitung: gesammelte Tests umgesetzt
 - [ ] Gate-Vorbereitung: frischer Build und vollstaendige Regression bestanden
-- [ ] Release-Gate: unveraenderter Gate-Bericht vom Nutzer freigegeben
+- [ ] Freigabe: unveraenderter Gate-Bericht vom Nutzer freigegeben
+- [ ] vor v0.50.0: keine Release-Aktionen ausgefuehrt
 - [ ] Dokumentation aktualisiert
 - [ ] CHANGELOG aktualisiert
 - [ ] keine Referenzimplementierung kopiert

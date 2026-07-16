@@ -20,7 +20,13 @@ Sie ist absichtlich in kleine, voneinander abhaengige Releases und Task-IDs zerl
 7. Referenzprojekte dienen nur zum Verstaendnis allgemeiner Ablaeufe. Code wird unabhaengig implementiert.
 8. Synthetische Fixtures und frei lizenzierte Homebrew-Programme bilden die Testbasis.
 9. Keine grosse Refaktorierung ohne eigenen Roadmap-Task und Regressionstests.
-10. Ein Release gilt erst als fertig, wenn Build, Tests und Dokumentation gemeinsam passen.
+10. Ein oeffentlicher Release gilt erst als fertig, wenn Build, Tests und
+    Dokumentation gemeinsam passen.
+
+Die Versionsstaende v0.38.0 bis v0.49.0 sind interne Entwicklungsmeilensteine.
+Sie erhalten weder Release-Commit noch Tag, Download oder Veroeffentlichung.
+Historische Pre-Alpha-Tags bleiben Entwicklungsnachweise; der erste oeffentliche
+Produktrelease ist v0.50.0 Alpha.
 
 ## Statuslegende
 
@@ -63,10 +69,10 @@ Sie ist absichtlich in kleine, voneinander abhaengige Releases und Task-IDs zerl
 | Dreamcast-Plattform | 0.26 bis 0.31 | Boot, Eingabe, Grafik, Audio, GD-ROM und Scheduling |
 | Codegen und Buildsystem | 0.32 bis 0.34 | modulare Backends, Cache, indirekter Dispatch |
 | Werkzeuge und Qualitaet | 0.35 bis 0.37 | Manifest, Port-Projektexport, Diagnostik, Fuzzing und reproduzierbare Debug-Gates |
-| Kompatibilitaet und Leistung | 0.38 bis 0.40 | Homebrew-Vertical-Slice und erster oeffentlicher Pre-Alpha-Stand |
+| Kompatibilitaet und Leistung | 0.38 bis 0.40 | Homebrew-Vertical-Slice und interner Phase-9-Abschluss |
 | Desktop-GUI und Quellworkflow | 0.41 bis 0.44 | vollstaendiger Alpha-Workflow fuer Projektanlage, `.gdi`-Quellen und Analyse |
 | Alpha-Integration und Haertung | 0.45 bis 0.49 | ISA-Abdeckung, Retail-Boot, native Hostruntime, Portintegration und Alpha-CI |
-| Alpha | 0.50.0 | zusammenhaengende Dreamcast-Programme laufen reproduzierbar |
+| Alpha | 0.50.0 | erster oeffentlicher Release; zusammenhaengende Dreamcast-Programme laufen reproduzierbar |
 | Beta | 0.75.0 | ausgewaehlte reale Programme sind spielbar und debuggbar |
 | Stabil | 1.0.0 | dokumentierter, reproduzierbarer und stabiler Framework-Release |
 
@@ -514,10 +520,11 @@ vervollstaendigt anschliessend alle Tests der Phase und fuehrt genau einen
 frischen Build sowie die vollstaendige Regression aus. Auf der Festplatte
 bleibt nur `build-current/` mit den aktuellen Gate-Artefakten.
 
-Vor jedem Phasen-Release-Gate folgt nach erfolgreicher Gate-Vorbereitung ein
-verpflichtender Review-Stop. Das Release-Gate, Versionsaenderungen,
-Release-Commit, Tag und Veroeffentlichung duerfen erst nach ausdruecklicher
-Freigabe durch den Nutzer begonnen werden.
+Vor jeder internen Meilenstein- oder Release-Freigabe folgt nach erfolgreicher
+Gate-Vorbereitung ein verpflichtender Review-Stop. Bis v0.49.0 erlaubt die
+Freigabe nur den Wechsel zum naechsten Entwicklungsmeilenstein; sie erzeugt
+weder Release-Commit noch Tag, Download oder Veroeffentlichung. Release-Aktionen
+beginnen erstmals nach der ausdruecklichen Freigabe von KR-4999 fuer v0.50.0.
 Verlangt das Review Aenderungen, wird die Gate-Vorbereitung nach den Korrekturen
 erneut vollstaendig ausgefuehrt. Regulare Release-Builds sowie verpflichtende
 Windows- und Linux-CI werden erst in der Alpha-Vorbereitung fuer v0.50.0
@@ -995,7 +1002,7 @@ Pflichtkorpus:
 - synthetischer Resetpfad mit `PREF`, P2-/P1-Aliaswechsel, ROM-RAM-Kopie und dynamischen RAM-Vektoren
 - deterministische Scheduler-, DMA- und Interruptsequenz ueber mindestens einen Frame
 
-Release-Gate:
+Interner Nachweis:
 
 - alle Programme werden automatisch gebaut und getestet
 - Screenshots, Audio-Hashes oder semantische Zustandspruefungen sind reproduzierbar
@@ -1010,11 +1017,8 @@ Fortschritt:
 - [ ] KR-3902 - Hot-Block-Analyse
 - [ ] KR-3903 - Dispatch- und Speicher-Fastpaths
 - [ ] KR-3904 - Inlining und Codegroessenstrategie
-- [ ] KR-3905 - LTO und PGO
 - [ ] KR-3906 - Block-, Edge- und Dispatch-Profiling
 - [ ] KR-3907 - Fastpath- und Inline-Cache-Waechter
-- [ ] KR-3908 - Budgets und v0.39 Gate-Vorbereitung
-- [ ] KR-3909 - v0.39 Release-Gate
 
 Enthalten:
 
@@ -1024,49 +1028,49 @@ Enthalten:
 - Inlining-Strategie
 - Speicher-Fastpaths nur fuer bewiesene lineare RAM-Zugriffe mit MMU-, Alias-, Watchpoint- und Ausrichtungswaechtern
 - Dispatch-Optimierung mit messbaren monomorphen Callsite-Caches und sicherem generischem Rueckfall
-- optional LTO und PGO
 - definierte Budgets fuer Laufzeit, Codegroesse, Schedulerjitter, Invalidierungen und Fallbackrate
 - Performance darf Korrektheit nicht verdecken
+- LTO und PGO werden erst nach dem Alpha-Release anhand realer Profile im
+  Beta-Scope bewertet
 
-Release-Gate:
+Interne Akzeptanz fuer das kumulative Phase-9-Gate:
 
 - deaktivierte Fastpaths und Inline-Caches liefern denselben beobachtbaren Gastzustand
 - jede Spezialisierung nennt ihre Waechter und ihre Invalidierungsursachen
 - Benchmarks trennen Codegenzeit, Host-Kompilierzeit, Startzeit und Laufzeit
 - kein Performancepfad umgeht MMIO-Nebenwirkungen, Watchpoints, Ausnahmen oder Codeinvalidierung
 
-### v0.40.0 - Oeffentlicher Pre-Alpha-Release
+### v0.40.0 - Interner Phase-9-Abschluss
 
 Fortschritt:
 
-- [ ] KR-4001 - Oeffentliche Installationsdokumentation
-- [ ] KR-4002 - Architektur- und Manifestreferenz
-- [ ] KR-4003 - Lizenz- und Rechtspruefung
-- [ ] KR-4004 - Kompatibilitaetsbericht
-- [ ] KR-4006 - Faehigkeits-/Datenaudit und v0.40 Gate-Vorbereitung
-- [ ] KR-4005 - v0.40.0 Pre-Alpha-Release
+- [ ] KR-4002 - Interne Architektur- und Manifestreferenz
+- [ ] KR-4006 - Kumulatives Phase-9-Gate
 
 Enthalten:
 
-- Installationsanleitung
-- Architekturuebersicht
-- Manifestreferenz
-- bekannte Einschraenkungen
-- reproduzierbares Releasepaket
-- klarer Rechts- und Datenhinweis
-- Faehigkeitsmatrix fuer Direkteinstieg, HLE, optionales LLE, MMU, Fallback, selbstmodifizierenden Code und Schedulerpraezision
-- Referenzprovenienz fuer Flycast, dcrecomp, Spezifikationen und synthetische Testvektoren
-- automatisierter Audit, dass keine Firmwarebytes, extrahierten Assets, persoenlichen Flashdaten oder lokalen Pfade im Paket liegen
-- veroeffentlichter Homebrew-Kompatibilitaetsbericht
+- knappe interne Architektur- und Manifestreferenz fuer die weitere Entwicklung
+- interne Faehigkeitsmatrix fuer Direkteinstieg, HLE, optionales LLE, MMU,
+  Fallback, selbstmodifizierenden Code und Schedulerpraezision
+- bekannte semantische und zeitliche Einschraenkungen
+- automatisierter Datenaudit der erzeugten Test- und Gate-Artefakte
+- oeffentliche Installationsdokumentation, Kompatibilitaetsbericht,
+  Releasepakete und der vollstaendige Rechts-/Lizenzaudit werden gemeinsam in
+  KR-4902 fuer den ersten oeffentlichen Alpha-Release erstellt
 
 Kumulatives Phase-9-Abschlussgate bei v0.40.0:
 
-- alle Phase-8-Kriterien und Checkpoints bestehen weiterhin; das Homebrew-Korpus bleibt der oeffentliche Pflichtnachweis
+- alle Phase-8-Kriterien und Checkpoints bestehen weiterhin; das Homebrew-Korpus bleibt der verteilbare technische Pflichtnachweis
 - mindestens ein Frame des frei lizenzierten Homebrew-Testspiels erreicht den vollstaendigen PVR-Pfad; `pvr_frames >= 1`, plausible Framegeometrie und gueltige VRAM-Grenzen werden berichtet
 - Audio- und Maple-Zaehler werden aus demselben zusammenhaengenden Lauf erfasst, sofern der erreichte Spielpfad diese Subsysteme bereits nutzt
 - der Lauf ist gastzyklusbegrenzt, verarbeitet mindestens zwei Frameintervalle und hat `silent_failures == 0`
-- ein verteilbares Referenz-Capture und getrennte Analyse-, Codegen-, Build-, Start- und Laufzeitmetriken belegen `KR_PHASE9_HOMEBREW_HOST_FRAME`
+- ein deterministischer Zustandsbericht und getrennte Analyse-, Codegen-,
+  Build-, Start- und Laufzeitmetriken belegen
+  `KR_PHASE9_HOMEBREW_HOST_FRAME`; ein Referenz-Capture ist nicht erforderlich
 - aktivierte und deaktivierte Fastpaths liefern denselben beobachtbaren Gastzustand
+- KR-4006 endet nach genau einem frischen Gate-Build mit Nutzerreview; es
+  folgen keine Versionierung, kein Release-Commit, kein Tag und keine
+  Veroeffentlichung
 
 ## Phase 10: Desktop-GUI und Alpha-Workflow
 
@@ -1103,14 +1107,15 @@ Enthalten:
 - Ansichten fuer Funktionen, Quellen-/Segmentzuordnung, Dispatch-/Fallbackereignisse und Invalidierungsprovenienz
 - keine Hostpfade, Firmwarebytes oder sensiblen Flashfelder in exportierten Berichten oder Standardansichten
 
-### v0.44.0 - Alpha-Readiness fuer GUI und GDI
+### v0.44.0 - Interne Alpha-Readiness fuer GUI und GDI
 
 Enthalten:
 
 - End-to-End-Automatisierung fuer GUI-Hauptpfade unter Windows und Linux
 - synthetische `.gdi`-Fixtures fuer Positiv-, Negativ- und Recovery-Faelle
 - DPI-, Tastatur-, Fehlerrecovery- und Packaging-Haertung fuer den Alpha-Workflow
-- dokumentierter Standardpfad, bei dem neue Nutzer Alpha-relevante Projekte ohne CLI-Zwang anlegen und ausfuehren koennen
+- intern dokumentierter Standardpfad, mit dem der spaetere Alpha-Workflow ohne
+  CLI-Zwang validiert werden kann
 
 Kumulatives Phase-10-Abschlussgate bei v0.44.0:
 
@@ -1128,7 +1133,7 @@ Kumulatives Phase-10-Abschlussgate bei v0.44.0:
 
 Diese Phase schliesst bewusst die Luecke zwischen dem GUI-/Quellworkflow in
 v0.44.0 und dem ersten ausfuehrbaren Sonic-Adventure-Alpha in v0.50.0. Alle
-Gates bis einschliesslich v0.49.0 verwenden nur synthetische Fixtures und frei
+internen Meilensteine bis einschliesslich v0.49.0 verwenden nur synthetische Fixtures und frei
 lizenzierte Homebrew-Programme. Eine lokale Sonic-Adventure-GDI darf bis zum
 Port-Build verarbeitet, aber erst in KR-4999 ausgefuehrt werden.
 
@@ -1140,7 +1145,7 @@ Fortschritt:
 - [ ] KR-4502 - Fehlende Integer- und Kontrollinstruktionen
 - [ ] KR-4503 - Status-, Exception- und Systemsemantik
 - [ ] KR-4504 - v0.45 Gate-Vorbereitung: Tests und Build
-- [ ] KR-4505 - v0.45 Release-Gate
+- [ ] KR-4505 - v0.45 interne Meilenstein-Freigabe
 
 Gate-Ergebnis: Das dokumentierte Alpha-ISA-Profil ist ohne stille Opcode-
 Luecken ueber Decoder, IR, Backend und Runtime abgedeckt; der verteilbare
@@ -1154,7 +1159,7 @@ Fortschritt:
 - [ ] KR-4602 - BIOS-ABI und dynamische Firmwarevektoren
 - [ ] KR-4603 - Dreamcast-System-ASIC sowie MMIO- und Interruptintegration
 - [ ] KR-4604 - v0.46 Gate-Vorbereitung: Tests und Build
-- [ ] KR-4605 - v0.46 Release-Gate
+- [ ] KR-4605 - v0.46 interne Meilenstein-Freigabe
 
 Gate-Ergebnis: Ein synthetischer Retail-Boot-Vertical-Slice nutzt denselben
 Firmware-, ASIC-, MMIO- und Interruptvertrag wie spaetere lokale Ports und
@@ -1168,7 +1173,7 @@ Fortschritt:
 - [ ] KR-4702 - Native Audio-, Eingabe- und Hostlebenszyklusintegration
 - [ ] KR-4703 - Persistente VMU-/Flash-Arbeitskopien und Host-Pacing
 - [ ] KR-4704 - v0.47 Gate-Vorbereitung: Tests und Build
-- [ ] KR-4705 - v0.47 Release-Gate
+- [ ] KR-4705 - v0.47 interne Meilenstein-Freigabe
 
 Gate-Ergebnis: Ein frei lizenzierter Port laeuft als eigenstaendige
 Hostanwendung mit Video, Audio, Eingabe und kontrolliertem Lebenszyklus und
@@ -1182,7 +1187,7 @@ Fortschritt:
 - [ ] KR-4802 - Gemeinsamer CLI-/GUI-Portexport und Buildworkflow
 - [ ] KR-4803 - Out-of-Tree-`game.exe`-Integration
 - [ ] KR-4804 - v0.48 Gate-Vorbereitung: Tests und Build
-- [ ] KR-4805 - v0.48 Release-Gate
+- [ ] KR-4805 - v0.48 interne Meilenstein-Freigabe
 
 Gate-Ergebnis: Eine synthetische oder frei lizenzierte GDI wird ausserhalb des
 KatanaRecomp-Baums reproduzierbar zu einem Port-Projekt und einer startbaren
@@ -1190,7 +1195,7 @@ KatanaRecomp-Baums reproduzierbar zu einem Port-Projekt und einer startbaren
 Anwendungsdienst. Eine lokale Sonic-Adventure-GDI darf denselben Buildpfad
 durchlaufen, ihre `game.exe` wird in diesem Gate jedoch nicht gestartet.
 
-### v0.49.0 - Alpha-Release-Candidate
+### v0.49.0 - Interner Alpha-Release-Candidate
 
 Fortschritt:
 
@@ -1198,14 +1203,17 @@ Fortschritt:
 - [ ] KR-4902 - Reproduzierbare Pakete sowie Daten- und Lizenzaudit
 - [ ] KR-4903 - Alpha-Checkpoint- und Gate-Automatisierung einfrieren
 - [ ] KR-4904 - v0.49 Gate-Vorbereitung: Tests und Build
-- [ ] KR-4905 - v0.49 Release-Gate
+- [ ] KR-4905 - v0.49 interne Kandidaten-Freigabe
 
-Gate-Ergebnis: Der vollstaendige verteilbare Alpha-Kandidat erreicht
-`KR_V049_ALPHA_CANDIDATE_READY`; alle oeffentlichen Tests, Berichte und Pakete
-bleiben frei von proprietaeren Daten. Erst nach dem Review von KR-4904 darf
-KR-4905 beginnen.
+Gate-Ergebnis: Der vollstaendige verteilbare, aber noch nicht veroeffentlichte
+Alpha-Kandidat erreicht `KR_V049_ALPHA_CANDIDATE_READY`; alle Tests, Berichte
+und Pakete bleiben frei von proprietaeren Daten. Erst nach dem Review von
+KR-4904 darf KR-4905 den Kandidaten intern freigeben.
 
 ## Alpha-Gate: v0.50.0
+
+v0.50.0 ist der erste oeffentliche Produktrelease von KatanaRecomp. Erst dieses
+Gate erzeugt Release-Commit, Tag, Downloads und Veroeffentlichung.
 
 Voraussetzungen:
 
@@ -1329,12 +1337,14 @@ Der letzte Gate-Vorbereitungstask einer Phase gilt erst als abgeschlossen, wenn:
    Fehlerfaellen besteht
 4. erforderliche Gate-Berichte und Artefakte reproduzierbar vorliegen
 5. Dokumentation und Taskstatus den tatsaechlichen Gate-Stand wiedergeben
-6. anschliessend vor dem Phasen-Release-Gate fuer das Nutzerreview gestoppt wird
+6. anschliessend vor der internen Meilenstein- oder Release-Freigabe fuer das
+   Nutzerreview gestoppt wird
 
-Ein Phasen-Release-Gate gilt erst als abgeschlossen, wenn die
-Gate-Vorbereitung unveraendert gueltig ist und der Nutzer das Gate ausdruecklich
-freigegeben hat. Verlangt das Review Aenderungen, ist die Gate-Vorbereitung nach
-den Korrekturen vollstaendig zu wiederholen.
+Eine Freigabe gilt erst als abgeschlossen, wenn die Gate-Vorbereitung
+unveraendert gueltig ist und der Nutzer sie ausdruecklich bestaetigt hat.
+Interne Freigaben bis v0.49.0 erzeugen keine Release-Aktionen. Verlangt das
+Review Aenderungen, ist die Gate-Vorbereitung nach den Korrekturen vollstaendig
+zu wiederholen.
 
 Die detaillierte Task-Liste steht in `docs/TASKS.md`.
 Die Arbeitsregeln fuer Codex stehen in `docs/CODEX_HANDOFF.md`.

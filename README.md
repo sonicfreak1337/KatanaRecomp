@@ -59,6 +59,10 @@ KatanaRecomp ist weiterhin Pre-Alpha. Insbesondere fehlen noch:
 
 Diese Arbeiten sind in den Phasen 9 bis 11 der Roadmap aufgeteilt.
 
+Die geplanten Staende v0.38.0 bis v0.49.0 sind interne Meilensteine ohne
+Release-Commit, Tag oder Download. v0.50.0 Alpha wird der erste oeffentliche
+Produktrelease.
+
 ## Voraussetzungen
 
 - Visual Studio 2022 Build Tools mit MSVC x64
@@ -123,6 +127,8 @@ docs/             Vertraege, Status, Tasks und Releaseberichte
 - Der vollstaendige lokale Regressionstest wird gesammelt am Phasenabschluss
   ausgefuehrt, nicht nach jedem einzelnen Task.
 - Release-Builds und GitHub-CI kehren erst am Alpha-Gate `v0.50.0` zurueck.
+- Zwischenstaende bis v0.49.0 werden intern geprueft, aber nicht als Releases
+  veroeffentlicht.
 - Sonic Adventure wird erstmals in `KR-4999` ausgefuehrt. Vorher darf die
   lokale GDI read-only verarbeitet und bis `game.exe` gebaut, aber nicht
   gestartet werden.

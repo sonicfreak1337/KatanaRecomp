@@ -10,6 +10,10 @@ Unit-, Integrations-, Regressions-, Fuzzing-, Plattform- und Homebrew-Tests
 bleiben der oeffentlich verteilbare Nachweis und die Grundlage aller
 Pre-Alpha-Gates.
 
+Die Versionsstaende v0.38.0 bis v0.49.0 sind interne Meilensteine ohne
+Release-Commit, Tag, Download oder Veroeffentlichung. v0.50.0 Alpha ist der
+erste oeffentliche Produktrelease.
+
 ## Abgrenzung des Port-Artefakts
 
 KatanaRecomp erzeugt Code, Metadaten, Builddateien und ein ausfuehrbares
@@ -49,7 +53,7 @@ Assetlayout abhaengen.
 Die folgenden Gates werden ausschliesslich mit synthetischen Fixtures und frei
 lizenzierten Homebrew-Programmen ausgefuehrt:
 
-| Gate | Verteilbarer Checkpoint |
+| Interner Meilenstein | Verteilbarer technischer Checkpoint |
 | --- | --- |
 | Phase 6, v0.31.0 | `KR_PHASE6_PLATFORM_INTEGRATED` |
 | Phase 7, v0.34.0 | `KR_PHASE7_GENERATED_RUNTIME_ACTIVE` |
@@ -61,7 +65,7 @@ lizenzierten Homebrew-Programmen ausgefuehrt:
 | v0.47.0 | `KR_V047_NATIVE_HOST_READY` |
 | v0.48.0 | `KR_V048_PORT_WORKFLOW_READY` |
 | v0.49.0 | `KR_V049_ALPHA_CANDIDATE_READY` |
-| Alpha, v0.50.0 | `SA_ALPHA_BOOTED` |
+| Erster oeffentlicher Release, Alpha v0.50.0 | `SA_ALPHA_BOOTED` |
 
 Keiner der `KR_...`-Checkpoints behauptet eine Sonic-Adventure-Ausfuehrung.
 Die fruehere lokale Phase-6-GDI-Blockprobe bleibt lediglich als historische

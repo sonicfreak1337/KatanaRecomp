@@ -90,6 +90,6 @@ werden nicht in Katana-Artefakten weiterverteilt.
 
 Das Repository besitzt derzeit keine Projektlizenzdatei. Damit wird keine
 pauschale Weiterverbreitungserlaubnis behauptet. Die bewusste
-Projektlizenzentscheidung bleibt KR-4003 vorbehalten und ist vor einem
-externen Release zwingend; das lokale `0.37.0-dev`-Artefakt aus KR-3709 ist nur
-ein reproduzierbarer Gate-Nachweis.
+Projektlizenzentscheidung bleibt KR-4902 vorbehalten und ist vor dem ersten
+oeffentlichen Alpha-Release zwingend; das lokale `0.37.0-dev`-Artefakt aus
+KR-3709 ist nur ein reproduzierbarer Gate-Nachweis.

@@ -8,12 +8,14 @@ Naechster Roadmap-Task: `KR-3801` - rechtlich sauberes Homebrew-Testkorpus
 
 Naechstes Phasengate: `v0.40.0` - Abschluss Phase 9
 
+Erster oeffentlicher Produktrelease: `v0.50.0` Alpha
+
 ## Fortschritt
 
-- 170 von 238 gepflegten Roadmap-Tasks abgeschlossen: 71,4 %
-- 76 von 140 Tasks auf dem Weg vom Dreamcast-Plattformstart bis zum Alpha-Gate abgeschlossen: 54,3 %
+- 170 von 231 gepflegten Roadmap-Tasks abgeschlossen: 73,6 %
+- 76 von 133 Tasks auf dem Weg vom Dreamcast-Plattformstart bis zum Alpha-Gate abgeschlossen: 57,1 %
 - Phasen 1 bis 8 abgeschlossen
-- Phase 9: 0/24 Tasks
+- Phase 9: 0/17 Tasks
 - Phase 10: 0/13 Tasks
 - Phase 11: 0/25 Tasks
 - Alpha-Gate noch nicht erreicht

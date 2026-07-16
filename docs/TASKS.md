@@ -11,9 +11,13 @@ Dieses Dokument zerlegt die Roadmap in issue-taugliche Arbeitspakete.
 - Erst der letzte Gate-Vorbereitungstask einer Phase erstellt oder
   vervollstaendigt die gesammelten Tests und fuehrt genau einen frischen Build
   in `build-current/` sowie die vollstaendige Regression aus.
-- Vor jedem Phasen-Release-Gate wird nach der Gate-Vorbereitung fuer das
-  Nutzerreview gestoppt. Das Gate, Versionsaenderungen, Release-Commit, Tag und
-  Veroeffentlichung brauchen eine ausdrueckliche Nutzerfreigabe.
+- Vor jeder internen Meilenstein- oder Release-Freigabe wird nach der
+  Gate-Vorbereitung fuer das Nutzerreview gestoppt. Bis einschliesslich
+  v0.49.0 bestaetigt die Freigabe nur den internen Entwicklungsstand und
+  erzeugt weder Release-Commit noch Tag, Download oder Veroeffentlichung.
+- v0.50.0 Alpha ist der erste oeffentliche Produktrelease. Versionierung,
+  Release-Commit, Tag und Veroeffentlichung beginnen erst nach der
+  ausdruecklichen Freigabe von KR-4999.
 - Review-Aenderungen machen die bisherige Gate-Freigabe ungueltig und erfordern
   eine vollstaendige Wiederholung der Gate-Vorbereitung.
 - Scope-Erweiterungen werden als neuer Task dokumentiert.
@@ -2036,10 +2040,6 @@ Abhaengigkeiten: KR-3402, KR-3404, KR-3408, KR-3902
 
 Abhaengigkeiten: KR-3301, KR-3305, KR-3901
 
-### [ ] KR-3905 - LTO und PGO
-
-Abhaengigkeiten: KR-3901, KR-3903, KR-3904
-
 ### [ ] KR-3906 - Block-, Edge- und Dispatch-Profiling
 
 Abhaengigkeiten: KR-3305, KR-3406, KR-3607, KR-3901
@@ -2076,102 +2076,46 @@ Akzeptanz:
 - eine Blockinvalidierung leert alle betroffenen Inline-Caches vor Wiederverwendung
 - Waechtertreffer und -fehler sind im Profil getrennt sichtbar
 
-### [ ] KR-3908 - Budgets und v0.39 Gate-Vorbereitung
+LTO und PGO sowie ein separates Performance-Release-Gate sind kein
+Phase-9-Blocker. LTO/PGO werden erst nach dem Alpha-Release anhand realer
+Profile im Beta-Scope bewertet. Budgets und alle Testanforderungen aus v0.38
+und v0.39 werden gesammelt in KR-4006 validiert.
 
-Abhaengigkeiten: KR-3710, KR-3801 bis KR-3809, KR-3901 bis KR-3907
-
-Umfang:
-
-- Budgets fuer generierte Quellen, Objektcode, Host-Kompilierzeit und Startzeit definieren
-- Invalidierungen, Relinks, Fallbackrate und Schedulerjitter separat begrenzen
-- Codegen-, Hostbuild- und Laufzeitmessungen getrennt ausgeben
-- Regressionen mit stabilen Schwellen und dokumentierter Hardwareklasse bewerten
-- alle Testanforderungen aus v0.38 und v0.39 umsetzen und danach genau einen
-  frischen Build in `build-current/` mit vollstaendiger Regression ausfuehren
-
-Akzeptanz:
-
-- ein absichtlicher Budgetverstoss laesst den Performance-Gate-Test fehlschlagen
-- Bericht nennt absolute Werte, Baseline und prozentuale Aenderung
-- Korrektheitstests laufen unabhaengig von Performancebudgets weiter
-- optionale LLE-Messungen werden nicht mit dem BIOS-freien Pflichtprofil vermischt
-- der Gate-Bericht liegt reproduzierbar vor; danach wird vor KR-3909 fuer das
-  Nutzerreview gestoppt
-
-### [ ] KR-3909 - v0.39 Release-Gate
-
-Abhaengigkeiten: KR-3901 bis KR-3908
-
-Akzeptanz:
-
-- Pflichtbenchmarks besitzen reproduzierbare Baselines und getrennte Build-/Laufzeitwerte
-- Fastpaths und Inline-Caches bestehen die Differenz- und Invalidierungstests
-- kein Optimierungspfad umgeht MMIO, Watchpoints, Ausnahmen oder Scheduler-Safepoints
-- Codegroesse, Fallbackrate, Invalidierungen und Schedulerjitter liegen innerhalb der dokumentierten Budgets
-- die unveraenderte KR-3908-Gate-Vorbereitung ist vom Nutzer ausdruecklich
-  freigegeben
-
-### [ ] KR-4001 - Oeffentliche Installationsdokumentation
-
-Abhaengigkeiten: KR-3502, KR-3706
-
-### [ ] KR-4002 - Architektur- und Manifestreferenz
+### [ ] KR-4002 - Interne Architektur- und Manifestreferenz
 
 Abhaengigkeiten: KR-3411, KR-3505, KR-3506
 
-### [ ] KR-4003 - Lizenz- und Rechtspruefung
+Umfang:
 
-Abhaengigkeiten: KR-3709, KR-3801
+- bestehende Architektur-, Manifest- und Profilvertraege knapp fuer die
+  weitere Entwicklung zusammenfuehren
+- keine oeffentliche Installations- oder Nutzerreferenz vorziehen
+
+### [ ] KR-4006 - Kumulatives Phase-9-Gate
+
+Abhaengigkeiten: KR-3505, KR-3606, KR-3710, KR-3801 bis KR-3809, KR-3901 bis KR-3907, KR-4002
 
 Umfang:
 
-- Projektlizenz, Drittanbieterabhaengigkeiten und Referenzprovenienz gemeinsam pruefen
-- direkte Flycast-Einbindung nur nach ausdruecklicher GPL-Kompatibilitaetsentscheidung zulassen
-- dcrecomp-Code ohne nachgewiesene kompatible Freigabe von jeder Uebernahme ausschliessen
-- Firmware-, Disc-, Font-, PVR- und Flashdaten aus Quellen, Tests und Paketen ausschliessen
-
-Akzeptanz:
-
-- Lizenzbericht nennt jede tatsaechlich gelinkte Abhaengigkeit und deren Pflichten
-- Referenzvergleich und uebernommener Drittcode sind klar getrennt
-- automatisierter Marker-Test erkennt verbotene Firmware- und Referenzdateien im Release-Staging
-
-### [ ] KR-4004 - Kompatibilitaetsbericht
-
-Abhaengigkeiten: KR-3806, KR-3807, KR-3808, KR-3909
-
-### [ ] KR-4006 - Faehigkeits-/Datenaudit und v0.40 Gate-Vorbereitung
-
-Abhaengigkeiten: KR-3505, KR-3606, KR-3710, KR-3809, KR-3909, KR-4001 bis KR-4004
-
-Umfang:
-
-- Matrix fuer Direkteinstieg, HLE, optionales LLE, MMU, Fallback, SMC und Schedulerpraezision veroeffentlichen
+- interne Matrix fuer Direkteinstieg, HLE, optionales LLE, MMU, Fallback, SMC und Schedulerpraezision erstellen
 - Pflicht-, optionale, experimentelle und nicht unterstuetzte Profile unterscheiden
-- Release-Staging auf Firmwarebytes, extrahierte Assets, sensible Flashdaten, lokale Pfade und unredigierte Traces pruefen
+- erzeugte Test- und Gate-Artefakte auf Firmwarebytes, extrahierte Assets,
+  sensible Flashdaten, lokale Pfade und unredigierte Traces pruefen
 - bekannte semantische und zeitliche Abweichungen pro Profil dokumentieren
 - alle Testanforderungen der Phase 9 umsetzen und danach genau einen frischen
   Build in `build-current/` mit vollstaendiger Regression ausfuehren
+- Budgets fuer Codegen, Hostbuild, Startzeit, Laufzeit, Codegroesse,
+  Invalidierungen, Fallbackrate und Schedulerjitter im selben Gate bewerten
 
 Akzeptanz:
 
-- jede oeffentliche Faehigkeitsbehauptung verweist auf einen automatisierten oder klar benannten lokalen Test
-- optionales LLE wird nicht als Voraussetzung fuer Homebrew- oder Release-Tests dargestellt
-- der Datenaudit laeuft vor Paket-Hash und Signierung
+- jede interne Faehigkeitsaussage verweist auf einen automatisierten oder klar benannten lokalen Test
+- optionales LLE wird nicht als Voraussetzung fuer Homebrew-Tests dargestellt
 - ein absichtlich eingebrachtes synthetisches Geheimnis und ein Firmware-Marker werden erkannt
-- der Gate-Bericht liegt vor; danach wird vor KR-4005 fuer das Nutzerreview
-  gestoppt
-
-### [ ] KR-4005 - v0.40.0 Pre-Alpha-Release
-
-Abhaengigkeiten: KR-4001 bis KR-4004, KR-4006
-
-Akzeptanz:
-
-- die unveraenderte KR-4006-Gate-Vorbereitung ist vom Nutzer ausdruecklich
-  freigegeben
-- Versionierung, Release-Commit, Tag und Veroeffentlichung beginnen erst nach
-  dieser Freigabe
+- ein deterministischer Zustandsbericht statt eines verteilbaren Captures
+  belegt `KR_PHASE9_HOMEBREW_HOST_FRAME`
+- der Gate-Bericht liegt vor und wird vom Nutzer reviewed; danach beginnt Phase
+  10 ohne Versionierung, Release-Commit, Tag oder Veroeffentlichung
 
 ---
 
@@ -2377,14 +2321,13 @@ Akzeptanz:
 
 ### [ ] KR-4402 - GUI-Haertung, Packaging und v0.44 Gate-Vorbereitung
 
-Abhaengigkeiten: KR-4005, KR-4101 bis KR-4103, KR-4201 bis KR-4204, KR-4301 bis KR-4303, KR-4401
+Abhaengigkeiten: KR-4006, KR-4101 bis KR-4103, KR-4201 bis KR-4204, KR-4301 bis KR-4303, KR-4401
 
 Umfang:
 
 - DPI-Skalierung, Tastaturnavigation, Fokusindikatoren und lesbare Fehlerdarstellung nachziehen
 - Crash-Recovery, Settings-Migration und sichere Standardpfade absichern
-- verteilbare GUI-Pakete fuer den Alpha-Scope bauen und pruefen
-- Installations- und Updatepfade fuer GUI und CLI gemeinsam dokumentieren
+- interne GUI-Paketkandidaten fuer den Alpha-Scope bauen und pruefen
 - alle Testanforderungen der Phase 10 umsetzen und danach genau einen frischen
   Build in `build-current/` mit vollstaendiger Regression ausfuehren
 
@@ -2393,11 +2336,11 @@ Akzeptanz:
 - die GUI bleibt unter typischen Alpha-Fehlerfaellen bedienbar und stellt den Zustand wieder her
 - Packaging und Start funktionieren auf den Zielplattformen mit dokumentierten Voraussetzungen
 - Accessibility-Basis fuer Kernpfade ist vorhanden und getestet
-- GUI-Dokumentation deckt Installation, Projektstart und `.gdi`-Workflow ab
+- interne GUI-Dokumentation deckt Projektstart und `.gdi`-Workflow ab
 - der Gate-Bericht liegt vor; danach wird vor KR-4403 fuer das Nutzerreview
   gestoppt
 
-### [ ] KR-4403 - v0.44.0 GUI-und-GDI-Release-Gate
+### [ ] KR-4403 - v0.44.0 interne GUI-und-GDI-Meilenstein-Freigabe
 
 Abhaengigkeiten: KR-4401, KR-4402
 
@@ -2409,6 +2352,8 @@ Akzeptanz:
 - dokumentierte Blocker fuer GUI oder `.gdi` verhindern den Uebergang ins Alpha-Gate
 - die unveraenderte KR-4402-Gate-Vorbereitung ist vom Nutzer ausdruecklich
   freigegeben
+- es folgen keine Versionierung, kein Release-Commit, kein Tag und keine
+  Veroeffentlichung
 
 ---
 
@@ -2418,11 +2363,12 @@ Bis einschliesslich KR-4905 duerfen nur synthetische Fixtures und frei
 lizenzierte Homebrew-Programme ausgefuehrt werden. Eine lokale
 Sonic-Adventure-GDI darf read-only validiert, analysiert, rekompiliert und bis
 zu `game.exe` gebaut werden; gestartet wird diese Anwendung erstmals in
-KR-4999.
+KR-4999. Alle Freigaben dieses Abschnitts sind interne Meilensteine ohne
+Versionierung, Release-Commit, Tag, Download oder Veroeffentlichung.
 
 ### [ ] KR-4501 - Messbarer SH-4-Alpha-ISA-Vertrag
 
-Abhaengigkeiten: KR-3411, KR-3710, KR-4005, KR-4403
+Abhaengigkeiten: KR-3411, KR-3710, KR-4006, KR-4403
 
 Umfang:
 
@@ -2480,7 +2426,7 @@ Umfang und Akzeptanz:
 - `KR_V045_ISA_ALPHA_PROFILE_READY` reproduzierbar belegen
 - danach vor KR-4505 fuer das Nutzerreview stoppen
 
-### [ ] KR-4505 - v0.45 Release-Gate
+### [ ] KR-4505 - v0.45 interne Meilenstein-Freigabe
 
 Abhaengigkeiten: KR-4504
 
@@ -2488,7 +2434,8 @@ Akzeptanz:
 
 - die unveraenderte KR-4504-Gate-Vorbereitung ist ausdruecklich vom Nutzer
   freigegeben
-- Versionierung, Release-Commit, Tag und Veroeffentlichung beginnen erst danach
+- die Freigabe erlaubt nur den Beginn von v0.46; es folgen keine
+  Release-Aktionen
 
 ### [ ] KR-4601 - Alpha-Firmwaremodus und Retail-Bootvertrag
 
@@ -2552,7 +2499,7 @@ Umfang und Akzeptanz:
 - `KR_V046_RETAIL_BOOT_SERVICES_READY` reproduzierbar belegen
 - danach vor KR-4605 fuer das Nutzerreview stoppen
 
-### [ ] KR-4605 - v0.46 Release-Gate
+### [ ] KR-4605 - v0.46 interne Meilenstein-Freigabe
 
 Abhaengigkeiten: KR-4604
 
@@ -2560,7 +2507,8 @@ Akzeptanz:
 
 - die unveraenderte KR-4604-Gate-Vorbereitung ist ausdruecklich vom Nutzer
   freigegeben
-- das Release beginnt erst nach dieser Freigabe
+- die Freigabe erlaubt nur den Beginn von v0.47; es folgen keine
+  Release-Aktionen
 
 ### [ ] KR-4701 - Native Fenster- und Videoausgabe
 
@@ -2624,7 +2572,7 @@ Umfang und Akzeptanz:
 - eine eigenstaendige Homebrew-Anwendung bis `KR_V047_NATIVE_HOST_READY` starten
 - danach vor KR-4705 fuer das Nutzerreview stoppen
 
-### [ ] KR-4705 - v0.47 Release-Gate
+### [ ] KR-4705 - v0.47 interne Meilenstein-Freigabe
 
 Abhaengigkeiten: KR-4704
 
@@ -2632,7 +2580,8 @@ Akzeptanz:
 
 - die unveraenderte KR-4704-Gate-Vorbereitung ist ausdruecklich vom Nutzer
   freigegeben
-- das Release beginnt erst nach dieser Freigabe
+- die Freigabe erlaubt nur den Beginn von v0.48; es folgen keine
+  Release-Aktionen
 
 ### [ ] KR-4801 - Versioniertes Runtime-SDK fuer externe Port-Projekte
 
@@ -2697,7 +2646,7 @@ Umfang und Akzeptanz:
 - den Out-of-Tree-Port bis `KR_V048_PORT_WORKFLOW_READY` reproduzieren
 - danach vor KR-4805 fuer das Nutzerreview stoppen
 
-### [ ] KR-4805 - v0.48 Release-Gate
+### [ ] KR-4805 - v0.48 interne Meilenstein-Freigabe
 
 Abhaengigkeiten: KR-4804
 
@@ -2705,7 +2654,8 @@ Akzeptanz:
 
 - die unveraenderte KR-4804-Gate-Vorbereitung ist ausdruecklich vom Nutzer
   freigegeben
-- das Release beginnt erst nach dieser Freigabe
+- die Freigabe erlaubt nur den Beginn von v0.49; es folgen keine
+  Release-Aktionen
 
 ### [ ] KR-4901 - Alpha-CI-Konfiguration fuer Windows und Linux
 
@@ -2725,18 +2675,27 @@ Akzeptanz:
 
 ### [ ] KR-4902 - Reproduzierbare Pakete sowie Daten- und Lizenzaudit
 
-Abhaengigkeiten: KR-3706, KR-4006, KR-4805
+Abhaengigkeiten: KR-3706, KR-3801, KR-4002, KR-4006, KR-4805
 
 Umfang:
 
 - Alpha-Pakete, Quellarchive, Runtime-SDK und Portvorlagen reproduzierbar stagen
 - Firmware-, Spiel-, Asset-, Pfad-, Lizenz- und Referenzmarker auditieren
+- oeffentliche Installation, Architektur-/Manifestreferenz, bekannte
+  Einschraenkungen und Homebrew-Kompatibilitaet fuer Alpha dokumentieren
+- Projektlizenz, tatsaechlich gelinkte Abhaengigkeiten,
+  Drittanbieterpflichten und Referenzprovenienz gemeinsam pruefen
 - Testanforderungen fuer absichtlich eingebrachte synthetische Marker sammeln
 
 Akzeptanz:
 
 - Pakete enthalten nur verteilbare Projekt- und Laufzeitbestandteile
 - Auditberichte sind redigiert und ohne lokale Quelle reproduzierbar
+- jede oeffentliche Faehigkeitsbehauptung verweist auf einen automatisierten
+  oder klar benannten lokalen Test
+- direkte Flycast-Einbindung bleibt ohne ausdrueckliche
+  GPL-Kompatibilitaetsentscheidung verboten; dcrecomp-Code bleibt ohne
+  nachgewiesene kompatible Freigabe ausgeschlossen
 
 ### [ ] KR-4903 - Alpha-Checkpoint- und Gate-Automatisierung einfrieren
 
@@ -2767,7 +2726,7 @@ Umfang und Akzeptanz:
 - Sonic Adventure noch nicht ausfuehren und danach vor KR-4905 fuer das
   Nutzerreview stoppen
 
-### [ ] KR-4905 - v0.49 Release-Gate
+### [ ] KR-4905 - v0.49 interne Kandidaten-Freigabe
 
 Abhaengigkeiten: KR-4904
 
@@ -2775,11 +2734,13 @@ Akzeptanz:
 
 - die unveraenderte KR-4904-Gate-Vorbereitung ist ausdruecklich vom Nutzer
   freigegeben
-- das Release beginnt erst nach dieser Freigabe
+- die Freigabe bestaetigt nur den unveroeffentlichten Alpha-Kandidaten; es
+  folgen keine Versionierung, kein Release-Commit, kein Tag und keine
+  Veroeffentlichung
 
 ---
 
-## Spaetere Release-Gates
+## Oeffentliche Release-Gates
 
 ### [ ] KR-4999 - Alpha-Gate-Vorbereitung: Tests, Builds und lokaler Sonic-Boot
 
@@ -2804,7 +2765,7 @@ Akzeptanz:
 - der vollstaendige Alpha-Gate-Bericht liegt vor; danach wird vor KR-5000 fuer
   das Nutzerreview gestoppt
 
-### [ ] KR-5000 - v0.50.0 Alpha-Gate
+### [ ] KR-5000 - v0.50.0 Alpha-Gate und erster oeffentlicher Release
 
 Abhaengigkeiten: KR-4999
 
@@ -2831,6 +2792,8 @@ Akzeptanz:
 
 - alle Beta-Testanforderungen sind umgesetzt; frische Builds, vollstaendige
   Regression und erforderliche CI sind erfolgreich
+- LTO und PGO werden erst hier anhand gemessener Alpha-Profile bewertet und
+  nur bei belegtem Nutzen aktiviert
 - der Beta-Gate-Bericht liegt vor; danach wird vor KR-7500 fuer das
   Nutzerreview gestoppt
 
