@@ -86,7 +86,7 @@ int main() {
 
     require(json.starts_with("{\"schema\":\"katana-ir-v2\",\"functions\":["),
             "JSON-Ausgabe besitzt kein stabiles Schema.");
-    require(json.ends_with("]}\n") &&
+    require(json.ends_with("\"report_type\":\"ir\",\"status\":\"success\"}\n") &&
                 json.find("\"entry_address\":\"0x8C010000\"") != std::string::npos &&
                 json.find("\"memory_effects\":{") != std::string::npos &&
                 json.find("\"accumulator_effects\":{") != std::string::npos &&

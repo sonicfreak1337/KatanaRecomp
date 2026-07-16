@@ -122,6 +122,7 @@ std::string root_cmake() {
            "  add_subdirectory(\"${KATANA_RUNTIME_ROOT}\" \"${CMAKE_BINARY_DIR}/katana-runtime\")\n"
            "endif()\n"
            "add_subdirectory(generated)\n"
+           "target_link_libraries(katana_generated PUBLIC katana_runtime)\n"
            "include(\"${CMAKE_CURRENT_SOURCE_DIR}/generated/katana-port.cmake\")\n";
 }
 

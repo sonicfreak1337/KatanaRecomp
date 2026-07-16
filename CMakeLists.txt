@@ -310,7 +310,8 @@ if(KATANA_BUILD_FUZZERS)
             --iterations 256
             --max-input-size 4096
     )
-    set_tests_properties(katana-fuzz-smoke PROPERTIES TIMEOUT 60)
+    # Dynamic coverage instrumentation adds substantial per-iteration overhead on MSVC.
+    set_tests_properties(katana-fuzz-smoke PROPERTIES TIMEOUT 900)
 endif()
 
 add_executable(katana-runtime-tests
@@ -1195,7 +1196,6 @@ add_test(
     COMMAND ${CMAKE_COMMAND}
         -DKATANA_FIXTURE_WRITER=$<TARGET_FILE:katana-port-export-tests>
         -DKATANA_CLI=$<TARGET_FILE:katana-recomp>
-        -DKATANA_BINARY_ROOT=${CMAKE_BINARY_DIR}
         -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/codegen/verify_port_cli.cmake
 )
 set_tests_properties(katana-port-cli-tests PROPERTIES TIMEOUT 300)

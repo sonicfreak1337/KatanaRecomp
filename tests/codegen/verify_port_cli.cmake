@@ -1,9 +1,11 @@
-if(NOT DEFINED KATANA_FIXTURE_WRITER OR NOT DEFINED KATANA_CLI OR
-   NOT DEFINED KATANA_BINARY_ROOT)
-  message(FATAL_ERROR "Port-CLI-Test braucht Fixture-Writer, CLI und Buildwurzel")
+if(NOT DEFINED KATANA_FIXTURE_WRITER OR NOT DEFINED KATANA_CLI)
+  message(FATAL_ERROR "Port-CLI-Test braucht Fixture-Writer und CLI")
 endif()
 
-set(fixture "${KATANA_BINARY_ROOT}/katana-port-cli-fixture")
+if(NOT DEFINED ENV{TEMP} OR "$ENV{TEMP}" STREQUAL "")
+  message(FATAL_ERROR "Port-CLI-Test braucht ein temporaeres Verzeichnis ausserhalb des Quellbaums")
+endif()
+file(TO_CMAKE_PATH "$ENV{TEMP}/katana-port-cli-fixture" fixture)
 file(REMOVE_RECURSE "${fixture}")
 file(MAKE_DIRECTORY "${fixture}/disc")
 
