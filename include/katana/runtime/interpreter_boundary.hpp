@@ -38,18 +38,16 @@ struct InterpreterResult {
 using InterpreterStep = std::function<bool(CpuState&, const InterpreterRequest&)>;
 
 class PreciseInterpreterBoundary {
-public:
-    PreciseInterpreterBoundary(
-        SchedulerSafepoints& safepoints,
-        InterpreterStep step,
-        ExecutableCodeTracker* code_tracker = nullptr,
-        DispatchDiagnosticRecorder* diagnostics = nullptr
-    );
+  public:
+    PreciseInterpreterBoundary(SchedulerSafepoints& safepoints,
+                               InterpreterStep step,
+                               ExecutableCodeTracker* code_tracker = nullptr,
+                               DispatchDiagnosticRecorder* diagnostics = nullptr);
     [[nodiscard]] InterpreterResult execute(CpuState& cpu, const InterpreterRequest& request);
     [[nodiscard]] std::uint64_t count(const std::string& reason) const noexcept;
     [[nodiscard]] const std::map<std::string, std::uint64_t>& counts() const noexcept;
 
-private:
+  private:
     SchedulerSafepoints& safepoints_;
     InterpreterStep step_;
     ExecutableCodeTracker* code_tracker_;

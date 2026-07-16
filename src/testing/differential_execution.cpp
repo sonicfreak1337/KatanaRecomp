@@ -12,9 +12,12 @@ namespace {
 
 std::size_t path_index(const DifferentialExecutionPath path) {
     switch (path) {
-        case DifferentialExecutionPath::IrReference: return 0u;
-        case DifferentialExecutionPath::GeneratedCpp: return 1u;
-        case DifferentialExecutionPath::InterpreterFallback: return 2u;
+    case DifferentialExecutionPath::IrReference:
+        return 0u;
+    case DifferentialExecutionPath::GeneratedCpp:
+        return 1u;
+    case DifferentialExecutionPath::InterpreterFallback:
+        return 2u;
     }
     throw std::invalid_argument("Unbekannter Differential-Ausfuehrungsweg.");
 }
@@ -25,36 +28,30 @@ std::string indexed_path(const std::string_view prefix, const std::size_t index)
 
 std::string address_path(const std::uint32_t address) {
     std::ostringstream output;
-    output << "memory[0x" << std::hex << std::uppercase << std::setw(8)
-           << std::setfill('0') << address << ']';
+    output << "memory[0x" << std::hex << std::uppercase << std::setw(8) << std::setfill('0')
+           << address << ']';
     return output.str();
 }
 
-void add(
-    DifferentialCheckpoint& checkpoint,
-    std::string path,
-    const std::uint64_t value
-) {
+void add(DifferentialCheckpoint& checkpoint, std::string path, const std::uint64_t value) {
     checkpoint.state.push_back({std::move(path), value});
 }
 
 DifferentialCheckpoint canonicalize(DifferentialCheckpoint checkpoint) {
     for (const auto& value : checkpoint.state) {
         if (value.path.empty()) {
-            throw std::invalid_argument("Differential-Checkpoint besitzt einen leeren Zustandspfad.");
+            throw std::invalid_argument(
+                "Differential-Checkpoint besitzt einen leeren Zustandspfad.");
         }
     }
-    std::sort(
-        checkpoint.state.begin(),
-        checkpoint.state.end(),
-        [](const auto& left, const auto& right) { return left.path < right.path; }
-    );
+    std::sort(checkpoint.state.begin(),
+              checkpoint.state.end(),
+              [](const auto& left, const auto& right) { return left.path < right.path; });
     for (std::size_t index = 1u; index < checkpoint.state.size(); ++index) {
         if (checkpoint.state[index - 1u].path == checkpoint.state[index].path) {
             throw std::invalid_argument(
                 "Differential-Checkpoint besitzt den Zustandspfad doppelt: " +
-                checkpoint.state[index].path
-            );
+                checkpoint.state[index].path);
         }
     }
     return checkpoint;
@@ -66,64 +63,54 @@ std::string value_text(const std::uint64_t value) {
     return output.str();
 }
 
-std::optional<DifferentialDifference> compare_traces(
-    const DifferentialTrace& expected,
-    const DifferentialTrace& actual
-) {
+std::optional<DifferentialDifference> compare_traces(const DifferentialTrace& expected,
+                                                     const DifferentialTrace& actual) {
     const auto common = std::min(expected.checkpoints.size(), actual.checkpoints.size());
     for (std::size_t checkpoint_index = 0u; checkpoint_index < common; ++checkpoint_index) {
         const auto& left = expected.checkpoints[checkpoint_index];
         const auto& right = actual.checkpoints[checkpoint_index];
         const auto guest_pc = left.guest_pc;
         if (left.guest_pc != right.guest_pc) {
-            return DifferentialDifference{
-                checkpoint_index,
-                guest_pc,
-                expected.path,
-                actual.path,
-                "checkpoint.guest_pc",
-                value_text(left.guest_pc),
-                value_text(right.guest_pc)
-            };
+            return DifferentialDifference{checkpoint_index,
+                                          guest_pc,
+                                          expected.path,
+                                          actual.path,
+                                          "checkpoint.guest_pc",
+                                          value_text(left.guest_pc),
+                                          value_text(right.guest_pc)};
         }
         std::size_t left_index = 0u;
         std::size_t right_index = 0u;
         while (left_index < left.state.size() || right_index < right.state.size()) {
             if (right_index == right.state.size() ||
                 (left_index < left.state.size() &&
-                    left.state[left_index].path < right.state[right_index].path)) {
-                return DifferentialDifference{
-                    checkpoint_index,
-                    guest_pc,
-                    expected.path,
-                    actual.path,
-                    left.state[left_index].path,
-                    value_text(left.state[left_index].value),
-                    "<missing>"
-                };
+                 left.state[left_index].path < right.state[right_index].path)) {
+                return DifferentialDifference{checkpoint_index,
+                                              guest_pc,
+                                              expected.path,
+                                              actual.path,
+                                              left.state[left_index].path,
+                                              value_text(left.state[left_index].value),
+                                              "<missing>"};
             }
             if (left_index == left.state.size() ||
                 right.state[right_index].path < left.state[left_index].path) {
-                return DifferentialDifference{
-                    checkpoint_index,
-                    guest_pc,
-                    expected.path,
-                    actual.path,
-                    right.state[right_index].path,
-                    "<missing>",
-                    value_text(right.state[right_index].value)
-                };
+                return DifferentialDifference{checkpoint_index,
+                                              guest_pc,
+                                              expected.path,
+                                              actual.path,
+                                              right.state[right_index].path,
+                                              "<missing>",
+                                              value_text(right.state[right_index].value)};
             }
             if (left.state[left_index].value != right.state[right_index].value) {
-                return DifferentialDifference{
-                    checkpoint_index,
-                    guest_pc,
-                    expected.path,
-                    actual.path,
-                    left.state[left_index].path,
-                    value_text(left.state[left_index].value),
-                    value_text(right.state[right_index].value)
-                };
+                return DifferentialDifference{checkpoint_index,
+                                              guest_pc,
+                                              expected.path,
+                                              actual.path,
+                                              left.state[left_index].path,
+                                              value_text(left.state[left_index].value),
+                                              value_text(right.state[right_index].value)};
             }
             ++left_index;
             ++right_index;
@@ -131,15 +118,13 @@ std::optional<DifferentialDifference> compare_traces(
     }
     if (expected.checkpoints.size() != actual.checkpoints.size()) {
         const auto guest_pc = common == 0u ? 0u : expected.checkpoints[common - 1u].guest_pc;
-        return DifferentialDifference{
-            common,
-            guest_pc,
-            expected.path,
-            actual.path,
-            "checkpoints.count",
-            std::to_string(expected.checkpoints.size()),
-            std::to_string(actual.checkpoints.size())
-        };
+        return DifferentialDifference{common,
+                                      guest_pc,
+                                      expected.path,
+                                      actual.path,
+                                      "checkpoints.count",
+                                      std::to_string(expected.checkpoints.size()),
+                                      std::to_string(actual.checkpoints.size())};
     }
     return std::nullopt;
 }
@@ -148,30 +133,40 @@ std::string json_escape(const std::string_view text) {
     std::ostringstream output;
     for (const auto character : text) {
         switch (character) {
-            case '\\': output << "\\\\"; break;
-            case '"': output << "\\\""; break;
-            case '\n': output << "\\n"; break;
-            case '\r': output << "\\r"; break;
-            case '\t': output << "\\t"; break;
-            default: output << character; break;
+        case '\\':
+            output << "\\\\";
+            break;
+        case '"':
+            output << "\\\"";
+            break;
+        case '\n':
+            output << "\\n";
+            break;
+        case '\r':
+            output << "\\r";
+            break;
+        case '\t':
+            output << "\\t";
+            break;
+        default:
+            output << character;
+            break;
         }
     }
     return output.str();
 }
 
-}
+} // namespace
 
 bool DifferentialReport::matches() const noexcept {
     return !first_difference.has_value();
 }
 
 DifferentialMismatch::DifferentialMismatch(DifferentialDifference difference)
-    : std::runtime_error(
-        "Differentialabweichung bei Gast-PC " + value_text(difference.guest_pc) +
-        " in " + difference.state_path + " zwischen " +
-        differential_execution_path_name(difference.expected_path) + " und " +
-        differential_execution_path_name(difference.actual_path) + "."
-    ),
+    : std::runtime_error("Differentialabweichung bei Gast-PC " + value_text(difference.guest_pc) +
+                         " in " + difference.state_path + " zwischen " +
+                         differential_execution_path_name(difference.expected_path) + " und " +
+                         differential_execution_path_name(difference.actual_path) + "."),
       difference_(std::move(difference)) {}
 
 const DifferentialDifference& DifferentialMismatch::difference() const noexcept {
@@ -180,20 +175,22 @@ const DifferentialDifference& DifferentialMismatch::difference() const noexcept 
 
 const char* differential_execution_path_name(const DifferentialExecutionPath path) noexcept {
     switch (path) {
-        case DifferentialExecutionPath::IrReference: return "ir-reference";
-        case DifferentialExecutionPath::GeneratedCpp: return "generated-cpp";
-        case DifferentialExecutionPath::InterpreterFallback: return "interpreter-fallback";
+    case DifferentialExecutionPath::IrReference:
+        return "ir-reference";
+    case DifferentialExecutionPath::GeneratedCpp:
+        return "generated-cpp";
+    case DifferentialExecutionPath::InterpreterFallback:
+        return "interpreter-fallback";
     }
     return "unknown";
 }
 
-DifferentialCheckpoint make_runtime_checkpoint(
-    const runtime::CpuState& cpu,
-    const std::uint32_t guest_pc,
-    const std::span<const DifferentialMemoryByte> memory,
-    const std::span<const DifferentialMmioObservation> mmio,
-    const runtime::EventScheduler* scheduler
-) {
+DifferentialCheckpoint
+make_runtime_checkpoint(const runtime::CpuState& cpu,
+                        const std::uint32_t guest_pc,
+                        const std::span<const DifferentialMemoryByte> memory,
+                        const std::span<const DifferentialMmioObservation> mmio,
+                        const runtime::EventScheduler* scheduler) {
     DifferentialCheckpoint checkpoint;
     checkpoint.guest_pc = guest_pc;
     for (std::size_t index = 0u; index < cpu.r.size(); ++index) {
@@ -252,19 +249,15 @@ DifferentialCheckpoint make_runtime_checkpoint(
         add(checkpoint, "scheduler.pending_events", scheduler->pending_event_count());
         add(checkpoint, "scheduler.processed_events", scheduler->processed_event_count());
         add(checkpoint, "scheduler.reset_generation", scheduler->reset_generation());
-        add(
-            checkpoint,
+        add(checkpoint,
             "scheduler.next_event_cycle",
-            scheduler->next_event_cycle().value_or(std::numeric_limits<std::uint64_t>::max())
-        );
+            scheduler->next_event_cycle().value_or(std::numeric_limits<std::uint64_t>::max()));
     }
     return canonicalize(std::move(checkpoint));
 }
 
-DifferentialReport run_differential_execution(
-    const DifferentialProgram& program,
-    const std::span<const DifferentialRunner> runners
-) {
+DifferentialReport run_differential_execution(const DifferentialProgram& program,
+                                              const std::span<const DifferentialRunner> runners) {
     if (program.identity.empty() || program.corpus.empty() || program.opcodes.empty()) {
         throw std::invalid_argument("Differentialprogramm braucht Identitaet, Korpus und Opcodes.");
     }
@@ -282,7 +275,8 @@ DifferentialReport run_differential_execution(
         seen[index] = true;
         auto trace = runner.run(program);
         if (trace.path != runner.path || trace.checkpoints.empty()) {
-            throw std::invalid_argument("Differentialrunner liefert Pfadkonflikt oder keine Checkpoints.");
+            throw std::invalid_argument(
+                "Differentialrunner liefert Pfadkonflikt oder keine Checkpoints.");
         }
         for (auto& checkpoint : trace.checkpoints) {
             checkpoint = canonicalize(std::move(checkpoint));
@@ -293,9 +287,8 @@ DifferentialReport run_differential_execution(
     const auto& generated = report.traces[path_index(DifferentialExecutionPath::GeneratedCpp)];
     report.first_difference = compare_traces(reference, generated);
     if (!report.first_difference) {
-        const auto& fallback = report.traces[path_index(
-            DifferentialExecutionPath::InterpreterFallback
-        )];
+        const auto& fallback =
+            report.traces[path_index(DifferentialExecutionPath::InterpreterFallback)];
         report.first_difference = compare_traces(reference, fallback);
     }
     return report;
@@ -341,13 +334,11 @@ std::string format_differential_counterexample_json(const DifferentialReport& re
 }
 
 std::vector<DifferentialProgram> default_differential_corpus() {
-    return {
-        {"delay-slot-owner", "delay-slots", 0x37070001u, 0x8C010000u, {0xA000u, 0x0009u}},
-        {"fpu-mode-boundary", "fpu-modes", 0x37070002u, 0x8C020000u, {0xF000u, 0xF08Du}},
-        {"mmu-translation", "mmu-translation", 0x37070003u, 0x8C030000u, {0x6012u, 0x2122u}},
-        {"store-queue-pref", "store-queues", 0x37070004u, 0x8C040000u, {0x0083u}},
-        {"bus-error-read", "bus-errors", 0x37070005u, 0x8C050000u, {0x6012u}}
-    };
+    return {{"delay-slot-owner", "delay-slots", 0x37070001u, 0x8C010000u, {0xA000u, 0x0009u}},
+            {"fpu-mode-boundary", "fpu-modes", 0x37070002u, 0x8C020000u, {0xF000u, 0xF08Du}},
+            {"mmu-translation", "mmu-translation", 0x37070003u, 0x8C030000u, {0x6012u, 0x2122u}},
+            {"store-queue-pref", "store-queues", 0x37070004u, 0x8C040000u, {0x0083u}},
+            {"bus-error-read", "bus-errors", 0x37070005u, 0x8C050000u, {0x6012u}}};
 }
 
-}
+} // namespace katana::testing

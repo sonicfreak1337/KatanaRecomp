@@ -49,23 +49,11 @@ struct StatusRegisterEffects {
     bool operator==(const StatusRegisterEffects&) const = default;
 };
 
-enum class MemoryAccessKind : std::uint8_t {
-    None,
-    Read,
-    Write
-};
+enum class MemoryAccessKind : std::uint8_t { None, Read, Write };
 
-enum class AddressUpdateKind : std::uint8_t {
-    None,
-    PreDecrement,
-    PostIncrement
-};
+enum class AddressUpdateKind : std::uint8_t { None, PreDecrement, PostIncrement };
 
-enum class MemoryRegionKind : std::uint8_t {
-    Unknown,
-    NormalRam,
-    Volatile
-};
+enum class MemoryRegionKind : std::uint8_t { Unknown, NormalRam, Volatile };
 
 struct MemoryEffects {
     MemoryAccessKind access = MemoryAccessKind::None;
@@ -78,11 +66,7 @@ struct MemoryEffects {
     bool operator==(const MemoryEffects&) const = default;
 };
 
-enum class AccumulatorRegister : std::uint8_t {
-    None = 0u,
-    Mach = 1u << 0u,
-    Macl = 1u << 1u
-};
+enum class AccumulatorRegister : std::uint8_t { None = 0u, Mach = 1u << 0u, Macl = 1u << 1u };
 
 struct AccumulatorEffects {
     AccumulatorRegister reads_if_s_clear = AccumulatorRegister::None;
@@ -93,11 +77,7 @@ struct AccumulatorEffects {
     bool operator==(const AccumulatorEffects&) const = default;
 };
 
-enum class DelaySlotRole : std::uint8_t {
-    None,
-    Owner,
-    Slot
-};
+enum class DelaySlotRole : std::uint8_t { None, Owner, Slot };
 
 struct DelaySlotRelation {
     DelaySlotRole role = DelaySlotRole::None;
@@ -325,32 +305,21 @@ struct Function {
     std::vector<std::uint32_t> indirect_call_sites;
 };
 
-[[nodiscard]] std::string_view operation_name(
-    Operation operation
-) noexcept;
+[[nodiscard]] std::string_view operation_name(Operation operation) noexcept;
 
 [[nodiscard]] OperandWidths operation_operand_widths(Operation operation) noexcept;
 [[nodiscard]] std::string_view operand_width_name(OperandWidth width) noexcept;
-[[nodiscard]] StatusRegisterEffects instruction_status_effects(
-    Operation operation,
-    SpecialRegister special_register = SpecialRegister::None
-) noexcept;
-[[nodiscard]] bool contains_status_bit(
-    StatusRegisterBit effects,
-    StatusRegisterBit bit
-) noexcept;
-[[nodiscard]] MemoryEffects instruction_memory_effects(
-    Operation operation,
-    std::uint8_t destination_register = 0u,
-    std::uint8_t source_register = 0u
-) noexcept;
-[[nodiscard]] AccumulatorEffects operation_accumulator_effects(
-    Operation operation,
-    SpecialRegister special_register = SpecialRegister::None
-) noexcept;
-[[nodiscard]] bool contains_accumulator_register(
-    AccumulatorRegister effects,
-    AccumulatorRegister accumulator
-) noexcept;
+[[nodiscard]] StatusRegisterEffects
+instruction_status_effects(Operation operation,
+                           SpecialRegister special_register = SpecialRegister::None) noexcept;
+[[nodiscard]] bool contains_status_bit(StatusRegisterBit effects, StatusRegisterBit bit) noexcept;
+[[nodiscard]] MemoryEffects instruction_memory_effects(Operation operation,
+                                                       std::uint8_t destination_register = 0u,
+                                                       std::uint8_t source_register = 0u) noexcept;
+[[nodiscard]] AccumulatorEffects
+operation_accumulator_effects(Operation operation,
+                              SpecialRegister special_register = SpecialRegister::None) noexcept;
+[[nodiscard]] bool contains_accumulator_register(AccumulatorRegister effects,
+                                                 AccumulatorRegister accumulator) noexcept;
 
-}
+} // namespace katana::ir

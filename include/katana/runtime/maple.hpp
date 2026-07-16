@@ -37,17 +37,28 @@ struct MapleResponse {
 };
 
 class MapleDevice {
-public:
+  public:
     virtual ~MapleDevice() = default;
     [[nodiscard]] virtual MapleResponse transact(const MapleRequest& request) = 0;
 };
 
 enum class ControllerButton : std::uint16_t {
-    C = 1u << 0u, B = 1u << 1u, A = 1u << 2u, Start = 1u << 3u,
-    DpadUp = 1u << 4u, DpadDown = 1u << 5u, DpadLeft = 1u << 6u,
-    DpadRight = 1u << 7u, Z = 1u << 8u, Y = 1u << 9u, X = 1u << 10u,
-    D = 1u << 11u, Dpad2Up = 1u << 12u, Dpad2Down = 1u << 13u,
-    Dpad2Left = 1u << 14u, Dpad2Right = 1u << 15u
+    C = 1u << 0u,
+    B = 1u << 1u,
+    A = 1u << 2u,
+    Start = 1u << 3u,
+    DpadUp = 1u << 4u,
+    DpadDown = 1u << 5u,
+    DpadLeft = 1u << 6u,
+    DpadRight = 1u << 7u,
+    Z = 1u << 8u,
+    Y = 1u << 9u,
+    X = 1u << 10u,
+    D = 1u << 11u,
+    Dpad2Up = 1u << 12u,
+    Dpad2Down = 1u << 13u,
+    Dpad2Left = 1u << 14u,
+    Dpad2Right = 1u << 15u
 };
 
 struct ControllerState {
@@ -61,25 +72,27 @@ struct ControllerState {
 };
 
 class HostInputBackend {
-public:
+  public:
     virtual ~HostInputBackend() = default;
     [[nodiscard]] virtual ControllerState sample(std::uint64_t frame) = 0;
 };
 
 class ReplayInputBackend final : public HostInputBackend {
-public:
+  public:
     explicit ReplayInputBackend(std::vector<ControllerState> frames);
     [[nodiscard]] ControllerState sample(std::uint64_t frame) override;
-private:
+
+  private:
     std::vector<ControllerState> frames_;
 };
 
 class MapleControllerDevice final : public MapleDevice {
-public:
+  public:
     explicit MapleControllerDevice(std::shared_ptr<HostInputBackend> input);
     [[nodiscard]] MapleResponse transact(const MapleRequest& request) override;
     [[nodiscard]] std::uint64_t sampled_frames() const noexcept;
-private:
+
+  private:
     std::shared_ptr<HostInputBackend> input_;
     std::uint64_t next_frame_ = 0u;
 };
@@ -89,14 +102,15 @@ inline constexpr std::size_t vmu_block_count = 256u;
 inline constexpr std::size_t vmu_storage_size = vmu_block_size * vmu_block_count;
 
 class MapleVmuDevice final : public MapleDevice {
-public:
+  public:
     explicit MapleVmuDevice(std::span<const std::uint8_t> image = {});
     [[nodiscard]] MapleResponse transact(const MapleRequest& request) override;
     void set_write_protected(bool value) noexcept;
     [[nodiscard]] bool write_protected() const noexcept;
     [[nodiscard]] std::uint8_t read_byte(std::size_t offset) const;
     [[nodiscard]] std::uint8_t source_byte(std::size_t offset) const;
-private:
+
+  private:
     [[nodiscard]] MapleResponse read_block(const MapleRequest& request) const;
     [[nodiscard]] MapleResponse write_block(const MapleRequest& request);
     std::vector<std::uint8_t> source_;
@@ -113,17 +127,14 @@ struct MapleTransactionRecord {
 };
 
 class MapleBus final {
-public:
+  public:
     void attach(std::uint8_t port, std::uint8_t unit, std::shared_ptr<MapleDevice> device);
     [[nodiscard]] bool attached(std::uint8_t port, std::uint8_t unit) const;
-    [[nodiscard]] MapleResponse exchange(
-        std::uint8_t port,
-        std::uint8_t unit,
-        const MapleRequest& request
-    );
+    [[nodiscard]] MapleResponse
+    exchange(std::uint8_t port, std::uint8_t unit, const MapleRequest& request);
     [[nodiscard]] std::span<const MapleTransactionRecord> history() const noexcept;
 
-private:
+  private:
     [[nodiscard]] static std::size_t slot(std::uint8_t port, std::uint8_t unit);
     std::array<std::shared_ptr<MapleDevice>, maple_port_count * maple_units_per_port> devices_{};
     std::vector<MapleTransactionRecord> history_;

@@ -17,7 +17,7 @@ void require(const bool condition, const std::string& message) {
     }
 }
 
-}
+} // namespace
 
 int main() {
     using namespace katana::runtime;
@@ -36,7 +36,8 @@ int main() {
 
     cpu.fpul = static_cast<std::uint32_t>(-17);
     fpu_float_from_fpul(cpu, 2u);
-    require(read_fr_single(cpu, 2u) == -17.0f, "FLOAT single interpretiert FPUL nicht vorzeichenbehaftet.");
+    require(read_fr_single(cpu, 2u) == -17.0f,
+            "FLOAT single interpretiert FPUL nicht vorzeichenbehaftet.");
     write_fr_single(cpu, 3u, -12.75f);
     fpu_truncate_to_fpul(cpu, 3u);
     require(cpu.fpul == static_cast<std::uint32_t>(-12), "FTRC rundet nicht gegen null.");
@@ -61,11 +62,8 @@ int main() {
     cpu.write_fpscr(1u);
     write_fr_single(cpu, 0u, 1.0f);
     fpu_binary(cpu, FpuBinaryOperation::Add, 1u, 0u);
-    require(
-        rounded_nearest == std::nextafter(1.0f, 2.0f) &&
-        read_fr_single(cpu, 0u) == 1.0f,
-        "FPSCR.RM unterscheidet Round-to-Nearest und Round-to-Zero nicht."
-    );
+    require(rounded_nearest == std::nextafter(1.0f, 2.0f) && read_fr_single(cpu, 0u) == 1.0f,
+            "FPSCR.RM unterscheidet Round-to-Nearest und Round-to-Zero nicht.");
 
     cpu.write_fpscr(fpscr_pr_mask);
     write_dr_double(cpu, 8u, 1.25);
@@ -147,10 +145,8 @@ int main() {
     cpu.write_fpscr(fpscr_pr_mask | 1u);
     write_dr_double(cpu, 0u, 1.0);
     fpu_binary(cpu, FpuBinaryOperation::Add, 2u, 0u);
-    require(
-        double_nearest == std::nextafter(1.0, 2.0) && read_dr_double(cpu, 0u) == 1.0,
-        "FPSCR.RM wirkt nicht auf Double-Precision-Ergebnisse."
-    );
+    require(double_nearest == std::nextafter(1.0, 2.0) && read_dr_double(cpu, 0u) == 1.0,
+            "FPSCR.RM wirkt nicht auf Double-Precision-Ergebnisse.");
 
     cpu.write_fpscr(fpscr_pr_mask);
     write_dr_double(cpu, 4u, 1.0 + std::ldexp(3.0, -25));
@@ -158,25 +154,19 @@ int main() {
     const float conversion_nearest = std::bit_cast<float>(cpu.fpul);
     cpu.write_fpscr(fpscr_pr_mask | 1u);
     fpu_convert_double_to_single(cpu, 4u);
-    require(
-        conversion_nearest == std::nextafter(1.0f, 2.0f) &&
-        std::bit_cast<float>(cpu.fpul) == 1.0f,
-        "FPSCR.RM wirkt nicht auf FCNVDS."
-    );
+    require(conversion_nearest == std::nextafter(1.0f, 2.0f) &&
+                std::bit_cast<float>(cpu.fpul) == 1.0f,
+            "FPSCR.RM wirkt nicht auf FCNVDS.");
 
     cpu.write_fpscr(fpscr_pr_mask | fpscr_dn_mask);
     write_dr_double(cpu, 4u, std::ldexp(1.0, -140));
     fpu_convert_double_to_single(cpu, 4u);
-    require(
-        cpu.fpul == 0x00000000u,
-        "FCNVDS spuelt ein positives subnormales Ergebnis bei DN=1 nicht auf +0."
-    );
+    require(cpu.fpul == 0x00000000u,
+            "FCNVDS spuelt ein positives subnormales Ergebnis bei DN=1 nicht auf +0.");
     write_dr_double(cpu, 4u, -std::ldexp(1.0, -140));
     fpu_convert_double_to_single(cpu, 4u);
-    require(
-        cpu.fpul == 0x80000000u,
-        "FCNVDS spuelt ein negatives subnormales Ergebnis bei DN=1 nicht auf -0."
-    );
+    require(cpu.fpul == 0x80000000u,
+            "FCNVDS spuelt ein negatives subnormales Ergebnis bei DN=1 nicht auf -0.");
 
     cpu.write_fpscr(0u);
     cpu.fpul = 0x7FFFFFFFu;
@@ -184,10 +174,8 @@ int main() {
     const std::uint32_t float_nearest_bits = cpu.fr[8];
     cpu.write_fpscr(1u);
     fpu_float_from_fpul(cpu, 8u);
-    require(
-        float_nearest_bits == 0x4F000000u && cpu.fr[8] == 0x4EFFFFFFu,
-        "FPSCR.RM wirkt nicht auf FLOAT."
-    );
+    require(float_nearest_bits == 0x4F000000u && cpu.fr[8] == 0x4EFFFFFFu,
+            "FPSCR.RM wirkt nicht auf FLOAT.");
 
     cpu.write_fpscr(0u);
     write_fr_single(cpu, 0u, 2.0f);
@@ -219,19 +207,14 @@ int main() {
     cpu.fr[1] = 1u;
     write_dr_double(cpu, 2u, 1.0);
     fpu_binary(cpu, FpuBinaryOperation::Multiply, 0u, 2u);
-    require(
-        cpu.fr[2] == 0u && cpu.fr[3] == 1u,
-        "DN=0 erhaelt ein Double-Denormalergebnis nicht."
-    );
+    require(cpu.fr[2] == 0u && cpu.fr[3] == 1u, "DN=0 erhaelt ein Double-Denormalergebnis nicht.");
     cpu.write_fpscr(fpscr_pr_mask | fpscr_dn_mask);
     cpu.fr[0] = 0u;
     cpu.fr[1] = 1u;
     write_dr_double(cpu, 2u, 1.0);
     fpu_binary(cpu, FpuBinaryOperation::Multiply, 0u, 2u);
-    require(
-        cpu.fr[2] == 0u && cpu.fr[3] == 0u,
-        "DN=1 spuelt ein denormales Double-Ergebnis nicht auf null."
-    );
+    require(cpu.fr[2] == 0u && cpu.fr[3] == 0u,
+            "DN=1 spuelt ein denormales Double-Ergebnis nicht auf null.");
 
     cpu.write_fpscr(0u);
     for (const auto angle : {0x0000u, 0x4000u, 0x8000u, 0xC000u}) {
@@ -239,23 +222,19 @@ int main() {
         fpu_sine_cosine(cpu, 2u);
         const float sine = read_fr_single(cpu, 2u);
         const float cosine = read_fr_single(cpu, 3u);
-        require(
-            std::fabs(sine * sine + cosine * cosine - 1.0f) <= 1.0e-6f,
-            "FSCA-Quadrantenanker liegt nicht auf dem Einheitskreis."
-        );
+        require(std::fabs(sine * sine + cosine * cosine - 1.0f) <= 1.0e-6f,
+                "FSCA-Quadrantenanker liegt nicht auf dem Einheitskreis.");
     }
     cpu.fpul = 0x2000u;
     fpu_sine_cosine(cpu, 4u);
-    require(
-        std::fabs(read_fr_single(cpu, 4u) - 0.70710677f) <= 2.0e-7f &&
-        std::fabs(read_fr_single(cpu, 5u) - 0.70710677f) <= 2.0e-7f,
-        "FSCA verlaesst die dokumentierte Single-Toleranz."
-    );
+    require(std::fabs(read_fr_single(cpu, 4u) - 0.70710677f) <= 2.0e-7f &&
+                std::fabs(read_fr_single(cpu, 5u) - 0.70710677f) <= 2.0e-7f,
+            "FSCA verlaesst die dokumentierte Single-Toleranz.");
 
     write_fr_single(cpu, 6u, 4.0f);
     fpu_reciprocal_square_root(cpu, 6u);
     require(std::fabs(read_fr_single(cpu, 6u) - 0.5f) <= 2.0e-7f,
-        "FSRRA liefert fuer 4 nicht 1/2.");
+            "FSRRA liefert fuer 4 nicht 1/2.");
     write_fr_single(cpu, 6u, -1.0f);
     fpu_reciprocal_square_root(cpu, 6u);
     require(cpu.fr[6] == 0x7FBFFFFFu, "FSRRA kanonisiert negative Eingaben nicht.");
@@ -265,7 +244,7 @@ int main() {
     }
     fpu_inner_product(cpu, 0u, 0u);
     require(read_fr_single(cpu, 3u) == 30.0f,
-        "FIPR scheitert bei vollstaendig ueberlappenden Vektoren.");
+            "FIPR scheitert bei vollstaendig ueberlappenden Vektoren.");
 
     for (std::uint8_t i = 0; i < 16u; ++i) {
         cpu.xf[i] = std::bit_cast<std::uint32_t>(0.0f);
@@ -278,11 +257,9 @@ int main() {
         write_fr_single(cpu, static_cast<std::uint8_t>(8u + i), 1.0f);
     }
     fpu_transform_vector(cpu, 8u);
-    require(
-        read_fr_single(cpu, 8u) == 2.0f && read_fr_single(cpu, 9u) == 3.0f &&
-        read_fr_single(cpu, 10u) == 4.0f && read_fr_single(cpu, 11u) == 5.0f,
-        "FTRV liest XMTRX nicht aus der XF-Hintergrundbank."
-    );
+    require(read_fr_single(cpu, 8u) == 2.0f && read_fr_single(cpu, 9u) == 3.0f &&
+                read_fr_single(cpu, 10u) == 4.0f && read_fr_single(cpu, 11u) == 5.0f,
+            "FTRV liest XMTRX nicht aus der XF-Hintergrundbank.");
 
     std::cout << "SH-4-FPU-Runtime-Grundoperationen erfolgreich.\n";
     return EXIT_SUCCESS;

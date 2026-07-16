@@ -19,15 +19,20 @@ struct MutableCoverage {
 
 std::string special_kind_name(const InstructionKind kind) {
     switch (kind) {
-        case InstructionKind::StoreSpecialRegister: return "StoreSpecialRegister";
-        case InstructionKind::StoreSpecialRegisterPreDecrement: return "StoreSpecialRegisterPreDecrement";
-        case InstructionKind::LoadSpecialRegister: return "LoadSpecialRegister";
-        case InstructionKind::LoadSpecialRegisterPostIncrement: return "LoadSpecialRegisterPostIncrement";
-        default: return "Unknown";
+    case InstructionKind::StoreSpecialRegister:
+        return "StoreSpecialRegister";
+    case InstructionKind::StoreSpecialRegisterPreDecrement:
+        return "StoreSpecialRegisterPreDecrement";
+    case InstructionKind::LoadSpecialRegister:
+        return "LoadSpecialRegister";
+    case InstructionKind::LoadSpecialRegisterPostIncrement:
+        return "LoadSpecialRegisterPostIncrement";
+    default:
+        return "Unknown";
     }
 }
 
-}
+} // namespace
 
 IsaCoverageReport build_isa_coverage_report() {
     std::map<InstructionKind, MutableCoverage> entries;
@@ -58,13 +63,8 @@ IsaCoverageReport build_isa_coverage_report() {
 
     report.instructions.reserve(entries.size());
     for (const auto& [kind, entry] : entries) {
-        report.instructions.push_back({
-            kind,
-            entry.name,
-            entry.rule_count,
-            entry.opcode_count,
-            entry.privileged
-        });
+        report.instructions.push_back(
+            {kind, entry.name, entry.rule_count, entry.opcode_count, entry.privileged});
     }
     return report;
 }
@@ -74,11 +74,9 @@ std::string format_isa_coverage_report(const IsaCoverageReport& report) {
     output << "KatanaRecomp SH-4 ISA-Abdeckung\n"
            << "Name                                           Regeln  Opcodes  Privilegiert\n";
     for (const auto& entry : report.instructions) {
-        output << std::left << std::setw(46) << entry.name
-               << std::right << std::setw(7) << entry.encoding_rule_count
-               << std::setw(9) << entry.decoded_opcode_count
-               << std::setw(14) << (entry.contains_privileged_encoding ? "ja" : "nein")
-               << '\n';
+        output << std::left << std::setw(46) << entry.name << std::right << std::setw(7)
+               << entry.encoding_rule_count << std::setw(9) << entry.decoded_opcode_count
+               << std::setw(14) << (entry.contains_privileged_encoding ? "ja" : "nein") << '\n';
     }
     output << "Bekannte Opcodes:   " << report.known_opcode_count << '\n'
            << "Unbekannte Opcodes: " << report.unknown_opcode_count << '\n'
@@ -86,4 +84,4 @@ std::string format_isa_coverage_report(const IsaCoverageReport& report) {
     return output.str();
 }
 
-}
+} // namespace katana::sh4

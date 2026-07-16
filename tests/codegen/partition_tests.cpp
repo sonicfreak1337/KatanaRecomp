@@ -41,13 +41,11 @@ int main() {
     const auto first = katana::codegen::partition_translation_units(functions, options);
     std::vector<std::uint32_t> first_entries;
     for (const auto& partition : first) {
-        require(
-            partition.index < first.size() && !partition.function_indices.empty() &&
-                partition.function_indices.size() <= options.maximum_functions &&
-                partition.instruction_count <= options.maximum_instructions &&
-                partition.first_entry_address <= partition.last_entry_address,
-            "Partition verletzt Index-, Groessen- oder Adressvertrag."
-        );
+        require(partition.index < first.size() && !partition.function_indices.empty() &&
+                    partition.function_indices.size() <= options.maximum_functions &&
+                    partition.instruction_count <= options.maximum_instructions &&
+                    partition.first_entry_address <= partition.last_entry_address,
+                "Partition verletzt Index-, Groessen- oder Adressvertrag.");
         for (const auto index : partition.function_indices) {
             first_entries.push_back(functions[index].entry_address);
         }
@@ -61,27 +59,24 @@ int main() {
             second_entries.push_back(functions[index].entry_address);
         }
     }
-    require(
-        first_entries == second_entries && first_entries.size() == functions.size() &&
-            std::is_sorted(first_entries.begin(), first_entries.end()) &&
-            std::adjacent_find(first_entries.begin(), first_entries.end()) == first_entries.end(),
-        "Partitionierung ist nicht reproduzierbar oder verliert/dupliziert Funktionen."
-    );
+    require(first_entries == second_entries && first_entries.size() == functions.size() &&
+                std::is_sorted(first_entries.begin(), first_entries.end()) &&
+                std::adjacent_find(first_entries.begin(), first_entries.end()) ==
+                    first_entries.end(),
+            "Partitionierung ist nicht reproduzierbar oder verliert/dupliziert Funktionen.");
 
     require(
         [] {
             const std::vector oversized = {function(0x8C100000u, 4097u)};
             try {
-                static_cast<void>(katana::codegen::partition_translation_units(
-                    oversized, {1u, 4096u}
-                ));
+                static_cast<void>(
+                    katana::codegen::partition_translation_units(oversized, {1u, 4096u}));
             } catch (const std::length_error&) {
                 return true;
             }
             return false;
         }(),
-        "Einzelfunktion oberhalb des Instruktionslimits wird still akzeptiert."
-    );
+        "Einzelfunktion oberhalb des Instruktionslimits wird still akzeptiert.");
     require(
         [] {
             try {
@@ -91,8 +86,7 @@ int main() {
             }
             return false;
         }(),
-        "Null-Grenze wird akzeptiert."
-    );
+        "Null-Grenze wird akzeptiert.");
 
     std::cout << "KR-3301 Translation-Unit-Partitionierung erfolgreich.\n";
     return 0;

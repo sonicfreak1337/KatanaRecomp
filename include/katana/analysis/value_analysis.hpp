@@ -1,7 +1,7 @@
 #pragma once
 
-#include "katana/sh4/disassembler.hpp"
 #include "katana/io/executable_image.hpp"
+#include "katana/sh4/disassembler.hpp"
 
 #include <array>
 #include <cstdint>
@@ -33,15 +33,9 @@ struct RegisterValueAnalysis {
     std::vector<RegisterValueObservation> indirect_control_flow;
 };
 
-enum class IndirectControlFlowKind {
-    Jump,
-    Call
-};
+enum class IndirectControlFlowKind { Jump, Call };
 
-enum class ResolutionStatus {
-    Resolved,
-    Unresolved
-};
+enum class ResolutionStatus { Resolved, Unresolved };
 
 struct IndirectControlFlowResolution {
     std::uint32_t instruction_address = 0u;
@@ -52,19 +46,16 @@ struct IndirectControlFlowResolution {
     std::string reason;
 };
 
-[[nodiscard]] std::vector<ConstantTraceEntry> propagate_local_constants(
-    std::span<const katana::sh4::DisassemblyLine> lines,
-    const RegisterConstants& initial = {}
-);
+[[nodiscard]] std::vector<ConstantTraceEntry>
+propagate_local_constants(std::span<const katana::sh4::DisassemblyLine> lines,
+                          const RegisterConstants& initial = {});
 
-[[nodiscard]] RegisterValueAnalysis analyze_register_values(
-    std::span<const katana::sh4::DisassemblyLine> lines,
-    const RegisterConstants& initial = {}
-);
+[[nodiscard]] RegisterValueAnalysis
+analyze_register_values(std::span<const katana::sh4::DisassemblyLine> lines,
+                        const RegisterConstants& initial = {});
 
-[[nodiscard]] std::vector<IndirectControlFlowResolution> resolve_indirect_control_flow(
-    std::span<const katana::sh4::DisassemblyLine> lines,
-    const katana::io::ExecutableImage& image
-);
+[[nodiscard]] std::vector<IndirectControlFlowResolution>
+resolve_indirect_control_flow(std::span<const katana::sh4::DisassemblyLine> lines,
+                              const katana::io::ExecutableImage& image);
 
-}
+} // namespace katana::analysis

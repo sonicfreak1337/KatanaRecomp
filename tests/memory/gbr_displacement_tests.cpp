@@ -25,10 +25,7 @@ constexpr auto fixture_bytes = [] {
         bytes[offset + 1u] = 0x00u;
     }
 
-    const auto write_opcode = [&bytes](
-        const std::size_t offset,
-        const std::uint16_t opcode
-    ) {
+    const auto write_opcode = [&bytes](const std::size_t offset, const std::uint16_t opcode) {
         bytes[offset] = static_cast<std::uint8_t>(opcode & 0x00FFu);
         bytes[offset + 1u] = static_cast<std::uint8_t>(opcode >> 8u);
     };
@@ -54,9 +51,7 @@ constexpr auto fixture_bytes = [] {
     return bytes;
 }();
 
-constexpr std::array<std::uint32_t, 1> function_seeds = {
-    base_address
-};
+constexpr std::array<std::uint32_t, 1> function_seeds = {base_address};
 
 void require(const bool condition, const std::string& message) {
     if (!condition) {
@@ -66,21 +61,13 @@ void require(const bool condition, const std::string& message) {
 }
 
 std::vector<katana::ir::Function> build_program() {
-    const auto lines = katana::sh4::disassemble(
-        fixture_bytes,
-        base_address
-    );
-    const auto functions = katana::analysis::discover_functions(
-        lines,
-        function_seeds
-    );
+    const auto lines = katana::sh4::disassemble(fixture_bytes, base_address);
+    const auto functions = katana::analysis::discover_functions(lines, function_seeds);
     return katana::ir::lower_program(lines, functions);
 }
 
-std::size_t count_operation(
-    const std::span<const katana::ir::Function> program,
-    const katana::ir::Operation operation
-) {
+std::size_t count_operation(const std::span<const katana::ir::Function> program,
+                            const katana::ir::Operation operation) {
     std::size_t count = 0;
     for (const auto& function : program) {
         for (const auto& block : function.blocks) {
@@ -95,25 +82,16 @@ std::size_t count_operation(
 }
 
 int emit_fixture(const std::string& output_path) {
-    const auto source = katana::codegen::emit_cpp_program(
-        build_program(),
-        base_address
-    );
-    std::ofstream output(
-        output_path,
-        std::ios::binary | std::ios::trunc
-    );
+    const auto source = katana::codegen::emit_cpp_program(build_program(), base_address);
+    std::ofstream output(output_path, std::ios::binary | std::ios::trunc);
     if (!output) {
         return EXIT_FAILURE;
     }
-    output.write(
-        source.data(),
-        static_cast<std::streamsize>(source.size())
-    );
+    output.write(source.data(), static_cast<std::streamsize>(source.size()));
     return output ? EXIT_SUCCESS : EXIT_FAILURE;
 }
 
-}
+} // namespace
 
 int main(const int argc, char* argv[]) {
     using katana::ir::Operation;
@@ -131,84 +109,50 @@ int main(const int argc, char* argv[]) {
     const auto load_w = katana::sh4::decode(0xC5FFu);
     const auto load_l = katana::sh4::decode(0xC6FFu);
 
-    require(
-        store_b.kind == InstructionKind::MovByteStoreGbrDisplacement &&
-        store_b.source_register == 0u &&
-        store_b.displacement == 255 &&
-        store_b.text == "mov.b r0, @(255, gbr)",
-        "MOV.B GBR-Store wurde falsch dekodiert."
-    );
-    require(
-        store_w.kind == InstructionKind::MovWordStoreGbrDisplacement &&
-        store_w.displacement == 510 &&
-        store_w.text == "mov.w r0, @(510, gbr)",
-        "MOV.W GBR-Store wurde falsch skaliert."
-    );
-    require(
-        store_l.kind == InstructionKind::MovLongStoreGbrDisplacement &&
-        store_l.displacement == 1020 &&
-        store_l.text == "mov.l r0, @(1020, gbr)",
-        "MOV.L GBR-Store wurde falsch skaliert."
-    );
-    require(
-        load_b.kind == InstructionKind::MovByteLoadGbrDisplacement &&
-        load_b.destination_register == 0u &&
-        load_b.displacement == 255 &&
-        load_b.text == "mov.b @(255, gbr), r0",
-        "MOV.B GBR-Load wurde falsch dekodiert."
-    );
-    require(
-        load_w.kind == InstructionKind::MovWordLoadGbrDisplacement &&
-        load_w.displacement == 510,
-        "MOV.W GBR-Load wurde falsch skaliert."
-    );
-    require(
-        load_l.kind == InstructionKind::MovLongLoadGbrDisplacement &&
-        load_l.displacement == 1020,
-        "MOV.L GBR-Load wurde falsch skaliert."
-    );
-    require(
-        katana::sh4::decode(0xC000u).displacement == 0,
-        "Ein GBR-Displacement von null wurde falsch dekodiert."
-    );
+    require(store_b.kind == InstructionKind::MovByteStoreGbrDisplacement &&
+                store_b.source_register == 0u && store_b.displacement == 255 &&
+                store_b.text == "mov.b r0, @(255, gbr)",
+            "MOV.B GBR-Store wurde falsch dekodiert.");
+    require(store_w.kind == InstructionKind::MovWordStoreGbrDisplacement &&
+                store_w.displacement == 510 && store_w.text == "mov.w r0, @(510, gbr)",
+            "MOV.W GBR-Store wurde falsch skaliert.");
+    require(store_l.kind == InstructionKind::MovLongStoreGbrDisplacement &&
+                store_l.displacement == 1020 && store_l.text == "mov.l r0, @(1020, gbr)",
+            "MOV.L GBR-Store wurde falsch skaliert.");
+    require(load_b.kind == InstructionKind::MovByteLoadGbrDisplacement &&
+                load_b.destination_register == 0u && load_b.displacement == 255 &&
+                load_b.text == "mov.b @(255, gbr), r0",
+            "MOV.B GBR-Load wurde falsch dekodiert.");
+    require(load_w.kind == InstructionKind::MovWordLoadGbrDisplacement &&
+                load_w.displacement == 510,
+            "MOV.W GBR-Load wurde falsch skaliert.");
+    require(load_l.kind == InstructionKind::MovLongLoadGbrDisplacement &&
+                load_l.displacement == 1020,
+            "MOV.L GBR-Load wurde falsch skaliert.");
+    require(katana::sh4::decode(0xC000u).displacement == 0,
+            "Ein GBR-Displacement von null wurde falsch dekodiert.");
 
     const auto program = build_program();
-    require(
-        program.size() == 5u,
-        "Der KR-1404-Test muss Einstiegspunkt und vier Funktionen erzeugen."
-    );
-    for (const auto operation : {
-        Operation::StoreByteGbrDisplacement,
-        Operation::StoreWordGbrDisplacement,
-        Operation::StoreLongGbrDisplacement,
-        Operation::LoadByteSignedGbrDisplacement,
-        Operation::LoadWordSignedGbrDisplacement,
-        Operation::LoadLongGbrDisplacement
-    }) {
-        require(
-            count_operation(program, operation) == 1u,
-            "Eine GBR-relative Operation fehlt in der IR."
-        );
+    require(program.size() == 5u,
+            "Der KR-1404-Test muss Einstiegspunkt und vier Funktionen erzeugen.");
+    for (const auto operation : {Operation::StoreByteGbrDisplacement,
+                                 Operation::StoreWordGbrDisplacement,
+                                 Operation::StoreLongGbrDisplacement,
+                                 Operation::LoadByteSignedGbrDisplacement,
+                                 Operation::LoadWordSignedGbrDisplacement,
+                                 Operation::LoadLongGbrDisplacement}) {
+        require(count_operation(program, operation) == 1u,
+                "Eine GBR-relative Operation fehlt in der IR.");
     }
 
-    const auto source = katana::codegen::emit_cpp_program(
-        program,
-        base_address
-    );
-    require(
-        source.find(
-            "using CpuState = katana::runtime::CpuState;"
-        ) != std::string::npos,
-        "Der generierte GBR-Code bindet den zentralen CPU-Zustand nicht ein."
-    );
-    require(
-        source.find("cpu.gbr + 255u") != std::string::npos &&
-        source.find("cpu.gbr + 510u") != std::string::npos &&
-        source.find("cpu.gbr + 1020u") != std::string::npos,
-        "Der Codegenerator verwendet falsche GBR-Adressen."
-    );
+    const auto source = katana::codegen::emit_cpp_program(program, base_address);
+    require(source.find("using CpuState = katana::runtime::CpuState;") != std::string::npos,
+            "Der generierte GBR-Code bindet den zentralen CPU-Zustand nicht ein.");
+    require(source.find("cpu.gbr + 255u") != std::string::npos &&
+                source.find("cpu.gbr + 510u") != std::string::npos &&
+                source.find("cpu.gbr + 1020u") != std::string::npos,
+            "Der Codegenerator verwendet falsche GBR-Adressen.");
 
-    std::cout
-        << "Alle KR-1404 Decoder-, IR- und Codegen-Tests erfolgreich.\n";
+    std::cout << "Alle KR-1404 Decoder-, IR- und Codegen-Tests erfolgreich.\n";
     return EXIT_SUCCESS;
 }

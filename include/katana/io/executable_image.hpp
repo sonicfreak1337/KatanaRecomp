@@ -10,31 +10,13 @@
 
 namespace katana::io {
 
-enum class SegmentKind {
-    Unknown,
-    Code,
-    Data
-};
+enum class SegmentKind { Unknown, Code, Data };
 
-enum class SymbolKind {
-    Unknown,
-    Function,
-    Object
-};
+enum class SymbolKind { Unknown, Function, Object };
 
-enum class SymbolBinding {
-    Local,
-    Global,
-    Weak,
-    Unknown
-};
+enum class SymbolBinding { Local, Global, Weak, Unknown };
 
-enum class RelocationKind {
-    None,
-    Absolute32,
-    PcRelative32,
-    Unsupported
-};
+enum class RelocationKind { None, Absolute32, PcRelative32, Unsupported };
 
 struct ImageSymbol {
     std::string name;
@@ -75,7 +57,7 @@ struct ImageSegment {
 };
 
 class ExecutableImage {
-public:
+  public:
     explicit ExecutableImage(std::filesystem::path source_path = {});
 
     void add_segment(ImageSegment segment);
@@ -89,14 +71,12 @@ public:
     [[nodiscard]] std::span<const ImageSymbol> symbols() const noexcept;
     [[nodiscard]] std::span<const ImageRelocation> relocations() const noexcept;
     [[nodiscard]] const ImageSymbol* find_symbol(std::string_view name) const noexcept;
-    [[nodiscard]] const ImageSegment* find_segment(
-        std::uint32_t address,
-        std::size_t width = 1u
-    ) const noexcept;
+    [[nodiscard]] const ImageSegment* find_segment(std::uint32_t address,
+                                                   std::size_t width = 1u) const noexcept;
     [[nodiscard]] std::uint32_t read_u32_le(std::uint32_t address) const;
     void write_u32_le(std::uint32_t address, std::uint32_t value);
 
-private:
+  private:
     std::filesystem::path source_path_;
     std::vector<ImageSegment> segments_;
     std::vector<std::uint32_t> entry_points_;
@@ -108,4 +88,4 @@ private:
 [[nodiscard]] const char* symbol_kind_name(SymbolKind kind) noexcept;
 [[nodiscard]] const char* relocation_kind_name(RelocationKind kind) noexcept;
 
-}
+} // namespace katana::io

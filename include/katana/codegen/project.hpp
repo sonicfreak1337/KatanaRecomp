@@ -27,10 +27,8 @@ struct ProjectWriteResult {
     std::size_t cache_misses = 0u;
 };
 
-[[nodiscard]] ProjectWriteResult write_codegen_project(
-    const std::filesystem::path& output_root,
-    std::vector<ProjectArtifact> artifacts,
-    const ProjectWriteOptions& options = {}
-);
+[[nodiscard]] ProjectWriteResult write_codegen_project(const std::filesystem::path& output_root,
+                                                       std::vector<ProjectArtifact> artifacts,
+                                                       const ProjectWriteOptions& options = {});
 
 } // namespace katana::codegen

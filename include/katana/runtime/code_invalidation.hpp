@@ -64,18 +64,14 @@ struct TrackedExecutableBlock {
 };
 
 class ExecutableCodeTracker {
-public:
+  public:
     static constexpr std::uint32_t page_size = 4096u;
 
-    [[nodiscard]] BlockRegistrationResult register_block(
-        ExecutableBlockRegistration block
-    );
-    [[nodiscard]] CodeInvalidationResult observe_write(
-        std::uint32_t address,
-        std::size_t size,
-        CodeWriteSource source,
-        bool bytes_changed = true
-    );
+    [[nodiscard]] BlockRegistrationResult register_block(ExecutableBlockRegistration block);
+    [[nodiscard]] CodeInvalidationResult observe_write(std::uint32_t address,
+                                                       std::size_t size,
+                                                       CodeWriteSource source,
+                                                       bool bytes_changed = true);
     [[nodiscard]] bool valid(const std::string& identity) const;
     [[nodiscard]] std::uint64_t page_generation(std::uint32_t address) const noexcept;
     [[nodiscard]] std::uint64_t invalidation_count() const noexcept;
@@ -86,13 +82,11 @@ public:
     [[nodiscard]] const std::vector<CodeInvalidationEvent>& invalidation_events() const noexcept;
     [[nodiscard]] std::uint64_t dropped_provenance_events() const noexcept;
 
-private:
-    void record_invalidation_event(
-        std::uint32_t virtual_address,
-        std::uint32_t physical_address,
-        std::size_t size,
-        const CodeInvalidationResult& result
-    ) noexcept;
+  private:
+    void record_invalidation_event(std::uint32_t virtual_address,
+                                   std::uint32_t physical_address,
+                                   std::size_t size,
+                                   const CodeInvalidationResult& result) noexcept;
     std::vector<TrackedExecutableBlock> blocks_;
     std::map<std::uint32_t, std::uint64_t> generations_;
     std::map<std::uint32_t, std::uint64_t> hotspots_;

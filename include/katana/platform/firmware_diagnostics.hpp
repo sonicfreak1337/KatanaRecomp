@@ -58,18 +58,17 @@ struct FirmwareDiagnosticReport {
     std::vector<FirmwareRangeDiagnostic> ranges;
     std::vector<FlashPartitionDiagnostic> partitions;
 
-    [[nodiscard]] bool valid() const noexcept { return size_valid && hash_valid; }
+    [[nodiscard]] bool valid() const noexcept {
+        return size_valid && hash_valid;
+    }
 };
 
-[[nodiscard]] FirmwareDiagnosticReport inspect_firmware_file(
-    const std::filesystem::path& path,
-    FirmwareImageKind kind,
-    const FirmwareDiagnosticOptions& options = {}
-);
-[[nodiscard]] std::string format_firmware_diagnostic_json(
-    const FirmwareDiagnosticReport& report
-);
+[[nodiscard]] FirmwareDiagnosticReport
+inspect_firmware_file(const std::filesystem::path& path,
+                      FirmwareImageKind kind,
+                      const FirmwareDiagnosticOptions& options = {});
+[[nodiscard]] std::string format_firmware_diagnostic_json(const FirmwareDiagnosticReport& report);
 [[nodiscard]] const char* firmware_image_kind_name(FirmwareImageKind kind) noexcept;
 [[nodiscard]] const char* firmware_range_kind_name(FirmwareRangeKind kind) noexcept;
 
-}
+} // namespace katana::platform

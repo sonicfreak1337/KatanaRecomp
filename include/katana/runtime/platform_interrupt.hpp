@@ -27,15 +27,13 @@ enum class PlatformInterruptSource : std::uint32_t {
 };
 
 class PlatformInterruptRouter final {
-public:
+  public:
     static constexpr std::size_t external_line_count = 3u;
 
-    PlatformInterruptRouter(
-        InterruptController& controller,
-        Sh4Tmu& tmu,
-        Sh4Rtc& rtc,
-        Sh4Dmac& dmac
-    ) noexcept;
+    PlatformInterruptRouter(InterruptController& controller,
+                            Sh4Tmu& tmu,
+                            Sh4Rtc& rtc,
+                            Sh4Dmac& dmac) noexcept;
 
     void set_tmu_level(std::size_t channel, std::uint8_t level);
     void set_rtc_level(std::uint8_t level) noexcept;
@@ -51,7 +49,7 @@ public:
     [[nodiscard]] bool accept(CpuState& cpu);
     void reset() noexcept;
 
-private:
+  private:
     static std::uint8_t clamp_level(std::uint8_t level) noexcept;
     static InterruptSource source_id(PlatformInterruptSource source) noexcept;
     void route(PlatformInterruptSource source, bool asserted, std::uint8_t level);

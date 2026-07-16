@@ -21,21 +21,19 @@ struct SymbolicAddress {
 };
 
 class SymbolNameIndex final {
-public:
+  public:
     explicit SymbolNameIndex(std::span<const katana::io::ImageSymbol> symbols);
     explicit SymbolNameIndex(const katana::io::ExecutableImage& image);
 
     [[nodiscard]] std::optional<SymbolicAddress> resolve(std::uint32_t address) const;
     [[nodiscard]] std::span<const katana::io::ImageSymbol> symbols() const noexcept;
 
-private:
+  private:
     std::vector<katana::io::ImageSymbol> symbols_;
 };
 
-[[nodiscard]] const SymbolicAddress* find_symbolic_address(
-    std::span<const SymbolicAddress> symbols,
-    std::uint32_t address
-) noexcept;
+[[nodiscard]] const SymbolicAddress* find_symbolic_address(std::span<const SymbolicAddress> symbols,
+                                                           std::uint32_t address) noexcept;
 [[nodiscard]] std::string format_symbolic_address(const SymbolicAddress& symbol);
 
-}
+} // namespace katana::analysis

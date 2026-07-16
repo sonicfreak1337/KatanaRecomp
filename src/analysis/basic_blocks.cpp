@@ -13,61 +13,41 @@
 namespace katana::analysis {
 namespace {
 
-std::size_t terminal_index(
-    const std::span<const katana::sh4::DisassemblyLine> lines,
-    const std::size_t control_index
-) {
-    if (
-        lines[control_index].instruction.has_delay_slot &&
-        control_index + 1u < lines.size()
-    ) {
+std::size_t terminal_index(const std::span<const katana::sh4::DisassemblyLine> lines,
+                           const std::size_t control_index) {
+    if (lines[control_index].instruction.has_delay_slot && control_index + 1u < lines.size()) {
         return control_index + 1u;
     }
 
     return control_index;
 }
 
-void add_unique_successor(
-    std::vector<std::uint32_t>& successors,
-    const std::uint32_t address
-) {
-    if (
-        std::find(
-            successors.begin(),
-            successors.end(),
-            address
-        ) == successors.end()
-    ) {
+void add_unique_successor(std::vector<std::uint32_t>& successors, const std::uint32_t address) {
+    if (std::find(successors.begin(), successors.end(), address) == successors.end()) {
         successors.push_back(address);
     }
 }
 
-std::size_t find_controlling_instruction(
-    const BasicBlock& block
-) {
+std::size_t find_controlling_instruction(const BasicBlock& block) {
     if (block.lines.empty()) {
         return 0;
     }
 
     const auto last = block.lines.size() - 1u;
 
-    if (
-        block.lines[last].is_delay_slot &&
-        last > 0u
-    ) {
+    if (block.lines[last].is_delay_slot && last > 0u) {
         return last - 1u;
     }
 
     return last;
 }
 
-}
+} // namespace
 
-std::vector<BasicBlock> build_basic_blocks(
-    const std::span<const katana::sh4::DisassemblyLine> lines,
-    const std::span<const ResolvedControlFlowEdge> resolved_edges,
-    const std::span<const std::uint32_t> additional_leaders
-) {
+std::vector<BasicBlock>
+build_basic_blocks(const std::span<const katana::sh4::DisassemblyLine> lines,
+                   const std::span<const ResolvedControlFlowEdge> resolved_edges,
+                   const std::span<const std::uint32_t> additional_leaders) {
     if (lines.empty()) {
         return {};
     }
@@ -92,9 +72,7 @@ std::vector<BasicBlock> build_basic_blocks(
         const auto& line = lines[index];
 
         if (line.target_address.has_value()) {
-            const auto target = address_to_index.find(
-                *line.target_address
-            );
+            const auto target = address_to_index.find(*line.target_address);
 
             if (target != address_to_index.end()) {
                 leaders.insert(target->second);
@@ -120,42 +98,32 @@ std::vector<BasicBlock> build_basic_blocks(
         }
     }
     for (const auto address : additional_leaders) {
-        if (const auto leader = address_to_index.find(address);
-            leader != address_to_index.end()) {
+        if (const auto leader = address_to_index.find(address); leader != address_to_index.end()) {
             leaders.insert(leader->second);
         }
     }
 
-    const std::vector<std::size_t> ordered_leaders(
-        leaders.begin(),
-        leaders.end()
-    );
+    const std::vector<std::size_t> ordered_leaders(leaders.begin(), leaders.end());
 
     std::vector<BasicBlock> blocks;
     blocks.reserve(ordered_leaders.size());
 
-    for (
-        std::size_t leader_position = 0;
-        leader_position < ordered_leaders.size();
-        ++leader_position
-    ) {
+    for (std::size_t leader_position = 0; leader_position < ordered_leaders.size();
+         ++leader_position) {
         const auto first_index = ordered_leaders[leader_position];
 
-        const auto end_exclusive =
-            leader_position + 1u < ordered_leaders.size()
-                ? ordered_leaders[leader_position + 1u]
-                : lines.size();
+        const auto end_exclusive = leader_position + 1u < ordered_leaders.size()
+                                       ? ordered_leaders[leader_position + 1u]
+                                       : lines.size();
 
         BasicBlock block;
         block.id = blocks.size();
         block.start_address = lines[first_index].address;
         block.end_address = lines[end_exclusive - 1u].address;
 
-        block.lines.insert(
-            block.lines.end(),
-            lines.begin() + static_cast<std::ptrdiff_t>(first_index),
-            lines.begin() + static_cast<std::ptrdiff_t>(end_exclusive)
-        );
+        block.lines.insert(block.lines.end(),
+                           lines.begin() + static_cast<std::ptrdiff_t>(first_index),
+                           lines.begin() + static_cast<std::ptrdiff_t>(end_exclusive));
 
         blocks.push_back(std::move(block));
     }
@@ -172,91 +140,65 @@ std::vector<BasicBlock> build_basic_blocks(
         const auto& instruction = control_line.instruction;
 
         const auto next_block_address =
-            block_index + 1u < blocks.size()
-                ? blocks[block_index + 1u].start_address
-                : 0u;
+            block_index + 1u < blocks.size() ? blocks[block_index + 1u].start_address : 0u;
 
         if (!instruction.changes_control_flow()) {
             if (block_index + 1u < blocks.size()) {
-                add_unique_successor(
-                    block.successors,
-                    next_block_address
-                );
+                add_unique_successor(block.successors, next_block_address);
             }
 
             continue;
         }
 
-        if (
-            control_line.target_address.has_value() &&
-            instruction.control_flow !=
-                katana::sh4::ControlFlowKind::Call
-        ) {
-            add_unique_successor(
-                block.successors,
-                *control_line.target_address
-            );
+        if (control_line.target_address.has_value() &&
+            instruction.control_flow != katana::sh4::ControlFlowKind::Call) {
+            add_unique_successor(block.successors, *control_line.target_address);
         }
 
         switch (instruction.control_flow) {
-            case katana::sh4::ControlFlowKind::ConditionalBranch:
-                if (block_index + 1u < blocks.size()) {
-                    add_unique_successor(
-                        block.successors,
-                        next_block_address
-                    );
-                }
-                break;
+        case katana::sh4::ControlFlowKind::ConditionalBranch:
+            if (block_index + 1u < blocks.size()) {
+                add_unique_successor(block.successors, next_block_address);
+            }
+            break;
 
-            case katana::sh4::ControlFlowKind::Call:
-                if (block_index + 1u < blocks.size()) {
-                    add_unique_successor(
-                        block.successors,
-                        next_block_address
-                    );
-                }
-                break;
+        case katana::sh4::ControlFlowKind::Call:
+            if (block_index + 1u < blocks.size()) {
+                add_unique_successor(block.successors, next_block_address);
+            }
+            break;
 
-            case katana::sh4::ControlFlowKind::IndirectCall:
-                block.has_indirect_successor = true;
+        case katana::sh4::ControlFlowKind::IndirectCall:
+            block.has_indirect_successor = true;
 
-                if (block_index + 1u < blocks.size()) {
-                    add_unique_successor(
-                        block.successors,
-                        next_block_address
-                    );
-                }
-                break;
+            if (block_index + 1u < blocks.size()) {
+                add_unique_successor(block.successors, next_block_address);
+            }
+            break;
 
-            case katana::sh4::ControlFlowKind::IndirectBranch:
-                block.has_indirect_successor = true;
-                break;
+        case katana::sh4::ControlFlowKind::IndirectBranch:
+            block.has_indirect_successor = true;
+            break;
 
-            case katana::sh4::ControlFlowKind::UnconditionalBranch:
-            case katana::sh4::ControlFlowKind::Return:
-            case katana::sh4::ControlFlowKind::Trap:
-            case katana::sh4::ControlFlowKind::ExceptionReturn:
-            case katana::sh4::ControlFlowKind::Halt:
-            case katana::sh4::ControlFlowKind::None:
-                break;
+        case katana::sh4::ControlFlowKind::UnconditionalBranch:
+        case katana::sh4::ControlFlowKind::Return:
+        case katana::sh4::ControlFlowKind::Trap:
+        case katana::sh4::ControlFlowKind::ExceptionReturn:
+        case katana::sh4::ControlFlowKind::Halt:
+        case katana::sh4::ControlFlowKind::None:
+            break;
         }
 
-        std::sort(
-            block.successors.begin(),
-            block.successors.end()
-        );
+        std::sort(block.successors.begin(), block.successors.end());
     }
 
-
     for (const auto& edge : resolved_edges) {
-        const auto block = std::find_if(
-            blocks.begin(), blocks.end(),
-            [&edge](const BasicBlock& candidate) {
+        const auto block =
+            std::find_if(blocks.begin(), blocks.end(), [&edge](const BasicBlock& candidate) {
                 return !candidate.lines.empty() &&
-                    candidate.lines[find_controlling_instruction(candidate)].address ==
-                        edge.instruction_address;
-            }
-        );
+                       candidate.lines[find_controlling_instruction(candidate)].address ==
+                           edge.instruction_address;
+            });
         if (block == blocks.end()) continue;
         if (edge.kind == ResolvedControlFlowKind::Jump) {
             add_unique_successor(block->successors, edge.target_address);
@@ -268,4 +210,4 @@ std::vector<BasicBlock> build_basic_blocks(
     return blocks;
 }
 
-}
+} // namespace katana::analysis

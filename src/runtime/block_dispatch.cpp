@@ -4,47 +4,53 @@
 
 namespace katana::runtime {
 
-CanonicalBlockDispatcher::CanonicalBlockDispatcher(
-    const RuntimeBlockTable& table,
-    DispatchDiagnosticRecorder* diagnostics
-) : table_(table), diagnostics_(diagnostics) {}
+CanonicalBlockDispatcher::CanonicalBlockDispatcher(const RuntimeBlockTable& table,
+                                                   DispatchDiagnosticRecorder* diagnostics)
+    : table_(table), diagnostics_(diagnostics) {}
 
-const RuntimeBlock* CanonicalBlockDispatcher::lookup(
-    const BlockAddress address,
-    const BlockVariantKey& variant
-) const {
-    if (const auto* exact = table_.lookup(address.virtual_address, variant)) { return exact; }
-    if (const auto* physical = table_.lookup_physical(address.physical_address, variant)) { return physical; }
+const RuntimeBlock* CanonicalBlockDispatcher::lookup(const BlockAddress address,
+                                                     const BlockVariantKey& variant) const {
+    if (const auto* exact = table_.lookup(address.virtual_address, variant)) {
+        return exact;
+    }
+    if (const auto* physical = table_.lookup_physical(address.physical_address, variant)) {
+        return physical;
+    }
     throw std::runtime_error("Direktes Blockziel fehlt: " + stable_block_identity(address));
 }
 
-BlockDispatchOutcome CanonicalBlockDispatcher::dispatch(
-    CpuState& cpu,
-    BlockExecutionContext& context,
-    const BlockVariantKey& variant,
-    const BlockEndDefinition& end,
-    const bool condition,
-    const std::optional<std::uint32_t> dynamic_target
-) {
+BlockDispatchOutcome
+CanonicalBlockDispatcher::dispatch(CpuState& cpu,
+                                   BlockExecutionContext& context,
+                                   const BlockVariantKey& variant,
+                                   const BlockEndDefinition& end,
+                                   const bool condition,
+                                   const std::optional<std::uint32_t> dynamic_target) {
     std::optional<BlockAddress> target;
     const RuntimeBlock* target_block = nullptr;
     bool direct = false;
     switch (end.kind) {
     case BlockEndKind::Fallthrough:
-        if (!end.fallthrough) { throw std::invalid_argument("Fallthrough braucht ein getrenntes Folgeziel."); }
+        if (!end.fallthrough) {
+            throw std::invalid_argument("Fallthrough braucht ein getrenntes Folgeziel.");
+        }
         target = end.fallthrough;
         direct = true;
         break;
     case BlockEndKind::StaticBranch:
-        if (end.direct_successors.size() != 1u) { throw std::invalid_argument("Statischer Sprung braucht genau ein Ziel."); }
+        if (end.direct_successors.size() != 1u) {
+            throw std::invalid_argument("Statischer Sprung braucht genau ein Ziel.");
+        }
         target = end.direct_successors[0];
         direct = true;
         break;
     case BlockEndKind::ConditionalBranch:
         if (end.direct_successors.size() != 1u || !end.fallthrough) {
-            throw std::invalid_argument("Bedingter Block braucht Sprungziel und getrennten Fallthrough.");
+            throw std::invalid_argument(
+                "Bedingter Block braucht Sprungziel und getrennten Fallthrough.");
         }
-        target = condition ? std::optional<BlockAddress>{end.direct_successors[0]} : end.fallthrough;
+        target =
+            condition ? std::optional<BlockAddress>{end.direct_successors[0]} : end.fallthrough;
         direct = true;
         break;
     case BlockEndKind::DynamicBranch:
@@ -53,14 +59,20 @@ BlockDispatchOutcome CanonicalBlockDispatcher::dispatch(
         if (end.kind != BlockEndKind::Return && !dynamic_target) {
             throw std::invalid_argument("Dynamischer Block braucht ein Ziel.");
         }
-        const auto kind = end.kind == BlockEndKind::Call ? IndirectDispatchKind::Call :
-            end.kind == BlockEndKind::Return ? IndirectDispatchKind::Return : IndirectDispatchKind::TailJump;
+        const auto kind = end.kind == BlockEndKind::Call     ? IndirectDispatchKind::Call
+                          : end.kind == BlockEndKind::Return ? IndirectDispatchKind::Return
+                                                             : IndirectDispatchKind::TailJump;
         const auto callsite = end.callsite.value_or(end.source.virtual_address);
-        const auto result = dispatch_indirect(cpu, table_, {
-            kind, callsite, dynamic_target.value_or(0u),
-            callsite + 4u, end.source, variant,
-            DispatchResolutionOrigin::TableLookup, diagnostics_
-        });
+        const auto result = dispatch_indirect(cpu,
+                                              table_,
+                                              {kind,
+                                               callsite,
+                                               dynamic_target.value_or(0u),
+                                               callsite + 4u,
+                                               end.source,
+                                               variant,
+                                               DispatchResolutionOrigin::TableLookup,
+                                               diagnostics_});
         target = BlockAddress{result.diagnostic_target, result.physical_target};
         target_block = result.block;
         break;
@@ -77,19 +89,25 @@ BlockDispatchOutcome CanonicalBlockDispatcher::dispatch(
 }
 
 void CanonicalBlockDispatcher::link(std::string source_identity, std::string target_identity) {
-    if (source_identity.empty() || target_identity.empty()) { throw std::invalid_argument("Link braucht Quell- und Zielidentitaet."); }
+    if (source_identity.empty() || target_identity.empty()) {
+        throw std::invalid_argument("Link braucht Quell- und Zielidentitaet.");
+    }
     incoming_[std::move(target_identity)].insert(std::move(source_identity));
 }
 
-std::vector<std::string> CanonicalBlockDispatcher::unlink_target(const std::string& target_identity) {
+std::vector<std::string>
+CanonicalBlockDispatcher::unlink_target(const std::string& target_identity) {
     const auto found = incoming_.find(target_identity);
-    if (found == incoming_.end()) { return {}; }
+    if (found == incoming_.end()) {
+        return {};
+    }
     std::vector<std::string> result(found->second.begin(), found->second.end());
     incoming_.erase(found);
     return result;
 }
 
-std::size_t CanonicalBlockDispatcher::incoming_link_count(const std::string& target_identity) const noexcept {
+std::size_t
+CanonicalBlockDispatcher::incoming_link_count(const std::string& target_identity) const noexcept {
     const auto found = incoming_.find(target_identity);
     return found == incoming_.end() ? 0u : found->second.size();
 }

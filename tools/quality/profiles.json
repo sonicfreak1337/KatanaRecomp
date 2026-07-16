@@ -68,8 +68,21 @@
     },
     {
       "id": "reference-license-audit",
-      "active": false,
-      "owner": "KR-3709"
+      "active": true,
+      "owner": "KR-3709",
+      "audit_script": "tools/quality/audit-reference-provenance.ps1",
+      "fixture_manifest": "tests/fixtures/reference_audit_forbidden_paths.txt",
+      "synthetic_markers_only": true,
+      "project_license_decision": "required-before-external-release"
+    },
+    {
+      "id": "phase8-gate-preparation",
+      "active": true,
+      "owner": "KR-3709",
+      "gate_script": "tools/gates/run-phase8-preparation.ps1",
+      "configure_preset": "artifact-debug",
+      "single_fresh_build": true,
+      "single_coverage_regression": true
     },
     {
       "id": "release-build",

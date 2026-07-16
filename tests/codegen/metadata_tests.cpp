@@ -36,20 +36,15 @@ katana::ir::Function function(const std::uint32_t entry) {
     return value;
 }
 
-std::vector<std::array<std::uint64_t, 4u>> partition_summary(
-    const std::vector<katana::ir::Function>& functions
-) {
-    const auto partitions = katana::codegen::partition_translation_units(
-        functions, {128u, 4096u}
-    );
+std::vector<std::array<std::uint64_t, 4u>>
+partition_summary(const std::vector<katana::ir::Function>& functions) {
+    const auto partitions = katana::codegen::partition_translation_units(functions, {128u, 4096u});
     std::vector<std::array<std::uint64_t, 4u>> result;
     for (const auto& partition : partitions) {
-        result.push_back({
-            partition.first_entry_address,
-            partition.last_entry_address,
-            partition.function_indices.size(),
-            partition.instruction_count
-        });
+        result.push_back({partition.first_entry_address,
+                          partition.last_entry_address,
+                          partition.function_indices.size(),
+                          partition.instruction_count});
     }
     return result;
 }
@@ -57,7 +52,9 @@ std::vector<std::array<std::uint64_t, 4u>> partition_summary(
 std::map<std::string, std::string> snapshot(const std::filesystem::path& root) {
     std::map<std::string, std::string> result;
     for (const auto& entry : std::filesystem::recursive_directory_iterator(root)) {
-        if (!entry.is_regular_file()) { continue; }
+        if (!entry.is_regular_file()) {
+            continue;
+        }
         std::ifstream input(entry.path(), std::ios::binary);
         std::ostringstream content;
         content << input.rdbuf();
@@ -68,8 +65,14 @@ std::map<std::string, std::string> snapshot(const std::filesystem::path& root) {
 
 struct Fixture {
     std::filesystem::path root = std::filesystem::current_path() / "katana-metadata-fixture";
-    Fixture() { std::error_code error; std::filesystem::remove_all(root, error); }
-    ~Fixture() { std::error_code error; std::filesystem::remove_all(root, error); }
+    Fixture() {
+        std::error_code error;
+        std::filesystem::remove_all(root, error);
+    }
+    ~Fixture() {
+        std::error_code error;
+        std::filesystem::remove_all(root, error);
+    }
 };
 
 } // namespace
@@ -87,72 +90,67 @@ int main() {
         const auto virtual_address = 0x8C000000u + index * 2u;
         const auto physical_address = 0x0C000000u + index * 2u;
         functions.push_back(function(virtual_address));
-        blocks.push_back({
-            {virtual_address, physical_address},
-            "main-executable",
-            static_cast<std::uint64_t>(index) * 2u,
-            2u,
-            BlockProvenance::ImageSegment,
-            {0x0009u},
-            1u,
-            index + 1u == 10'000u ? BlockEndKind::Return : BlockEndKind::Fallthrough,
-            index + 1u == 10'000u
-                ? std::vector<BlockAddress>{}
-                : std::vector<BlockAddress>{{virtual_address + 2u, physical_address + 2u}},
-            block_state_guard(BlockStateGuard::Mmu) |
-                block_state_guard(BlockStateGuard::Fpscr)
-        });
+        blocks.push_back(
+            {{virtual_address, physical_address},
+             "main-executable",
+             static_cast<std::uint64_t>(index) * 2u,
+             2u,
+             BlockProvenance::ImageSegment,
+             {0x0009u},
+             1u,
+             index + 1u == 10'000u ? BlockEndKind::Return : BlockEndKind::Fallthrough,
+             index + 1u == 10'000u
+                 ? std::vector<BlockAddress>{}
+                 : std::vector<BlockAddress>{{virtual_address + 2u, physical_address + 2u}},
+             block_state_guard(BlockStateGuard::Mmu) | block_state_guard(BlockStateGuard::Fpscr)});
     }
     const auto first_partitioning = partition_summary(functions);
     std::reverse(functions.begin(), functions.end());
     const auto second_partitioning = partition_summary(functions);
-    require(
-        first_partitioning == second_partitioning && first_partitioning.size() == 79u,
-        "10.000-Block-Projekt wird nicht reproduzierbar partitioniert."
-    );
+    require(first_partitioning == second_partitioning && first_partitioning.size() == 79u,
+            "10.000-Block-Projekt wird nicht reproduzierbar partitioniert.");
 
     const auto metadata = serialize_block_metadata(blocks, "cpp", 1u);
     std::reverse(blocks.begin(), blocks.end());
-    require(
-        metadata == serialize_block_metadata(blocks, "cpp", 1u) &&
-            metadata.find("\"schema_version\":1") != std::string::npos &&
-            metadata.find("\"physical_address\":\"0x0C000000\"") != std::string::npos &&
-            metadata.find("main-executable") != std::string::npos,
-        "Blockmetadaten sind nicht kanonisch, versioniert oder adressvollstaendig."
-    );
+    require(metadata == serialize_block_metadata(blocks, "cpp", 1u) &&
+                metadata.find("\"schema_version\":1") != std::string::npos &&
+                metadata.find("\"physical_address\":\"0x0C000000\"") != std::string::npos &&
+                metadata.find("main-executable") != std::string::npos,
+            "Blockmetadaten sind nicht kanonisch, versioniert oder adressvollstaendig.");
 
     Fixture fixture;
-    auto artifacts = make_separated_codegen_artifacts(
-        {{"unit-a.cpp", "int a() { return 1; }\n"}},
-        std::string("\x01\x02", 2u),
-        "{\"symbols\":[]}\n",
-        metadata
-    );
+    auto artifacts = make_separated_codegen_artifacts({{"unit-a.cpp", "int a() { return 1; }\n"}},
+                                                      std::string("\x01\x02", 2u),
+                                                      "{\"symbols\":[]}\n",
+                                                      metadata);
     static_cast<void>(write_codegen_project(fixture.root / "serial", artifacts, {1u}));
     static_cast<void>(write_codegen_project(fixture.root / "parallel", artifacts, {8u}));
     const auto serial = snapshot(fixture.root / "serial");
-    require(
-        serial == snapshot(fixture.root / "parallel") &&
-            serial.contains("code/unit-a.cpp") && serial.contains("data/constants.bin") &&
-            serial.contains("symbols/symbols.json") && serial.contains("metadata/blocks.json"),
-        "Serielle/parallele Metadaten oder getrennte Artefaktklassen unterscheiden sich."
-    );
+    require(serial == snapshot(fixture.root / "parallel") && serial.contains("code/unit-a.cpp") &&
+                serial.contains("data/constants.bin") && serial.contains("symbols/symbols.json") &&
+                serial.contains("metadata/blocks.json"),
+            "Serielle/parallele Metadaten oder getrennte Artefaktklassen unterscheiden sich.");
     std::ostringstream host_pointer;
     host_pointer << static_cast<const void*>(blocks.data());
-    require(
-        metadata.find(fixture.root.string()) == std::string::npos &&
-            metadata.find(host_pointer.str()) == std::string::npos,
-        "Metadaten enthalten lokalen Pfad oder Hostadresse."
-    );
+    require(metadata.find(fixture.root.string()) == std::string::npos &&
+                metadata.find(host_pointer.str()) == std::string::npos,
+            "Metadaten enthalten lokalen Pfad oder Hostadresse.");
 
     CodegenCache cache(fixture.root / "cache");
-    const CodegenCacheInputs base{
-        "input", "ir", "optimization", "cpp", 1u, 8u,
-        "manifest", "overrides", 2u, 1u
-    };
+    const CodegenCacheInputs base{"input",
+                                  "ir",
+                                  "optimization",
+                                  "cpp",
+                                  1u,
+                                  8u,
+                                  "manifest",
+                                  "overrides",
+                                  2u,
+                                  1u,
+                                  "0.34.0-dev"};
     const auto base_key = make_codegen_cache_key(base);
     cache.store(base_key, "metadata/blocks.json", metadata);
-    std::vector<CodegenCacheInputs> variants(10u, base);
+    std::vector<CodegenCacheInputs> variants(11u, base);
     variants[0].input_hash = "input-2";
     variants[1].ir_hash = "ir-2";
     variants[2].configuration_hash = "optimization-2";
@@ -163,13 +161,12 @@ int main() {
     variants[7].overrides_hash = "overrides-2";
     variants[8].ir_version = 3u;
     variants[9].optimization_version = 2u;
+    variants[10].tool_version = "0.35.0-dev";
     for (const auto& variant : variants) {
         const auto key = make_codegen_cache_key(variant);
-        require(
-            key != base_key && !cache.load(key, "metadata/blocks.json") &&
-                cache.load(base_key, "metadata/blocks.json").has_value(),
-            "Cache-Schluesselkomponente invalidiert nicht gezielt das betroffene Artefakt."
-        );
+        require(key != base_key && !cache.load(key, "metadata/blocks.json") &&
+                    cache.load(base_key, "metadata/blocks.json").has_value(),
+                "Cache-Schluesselkomponente invalidiert nicht gezielt das betroffene Artefakt.");
     }
 
     blocks.front().source_segment = "C:\\private\\disc";

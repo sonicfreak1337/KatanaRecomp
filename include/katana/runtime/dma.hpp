@@ -37,7 +37,7 @@ struct DmaFault {
 };
 
 class Sh4Dmac final {
-public:
+  public:
     static constexpr std::size_t channel_count = 4u;
     static constexpr std::uint32_t channel_enable = 0x00000001u;
     static constexpr std::uint32_t transfer_end = 0x00000002u;
@@ -71,7 +71,7 @@ public:
     [[nodiscard]] std::uint64_t completed_transfer_units(std::size_t channel) const;
     void reset() noexcept;
 
-private:
+  private:
     struct Channel {
         std::uint32_t source = 0u;
         std::uint32_t destination = 0u;
@@ -109,10 +109,7 @@ private:
     mutable std::size_t round_robin_cursor_ = 0u;
 };
 
-[[nodiscard]] std::shared_ptr<Sh4Dmac> map_sh4_dmac_registers(
-    Memory& memory,
-    EventScheduler& scheduler,
-    DmaTiming timing = {}
-);
+[[nodiscard]] std::shared_ptr<Sh4Dmac>
+map_sh4_dmac_registers(Memory& memory, EventScheduler& scheduler, DmaTiming timing = {});
 
 } // namespace katana::runtime

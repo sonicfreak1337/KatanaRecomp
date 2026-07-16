@@ -7,29 +7,16 @@
 
 namespace {
 
-void require(
-    const bool condition,
-    const std::string& message
-) {
+void require(const bool condition, const std::string& message) {
     if (!condition) {
         std::cerr << "TEST FEHLGESCHLAGEN: " << message << '\n';
         std::exit(EXIT_FAILURE);
     }
 }
 
-void print_hex(
-    const char* name,
-    const std::uint32_t value
-) {
-    std::cout
-        << name
-        << " = 0x"
-        << std::hex
-        << std::uppercase
-        << std::setw(8)
-        << std::setfill('0')
-        << value
-        << '\n';
+void print_hex(const char* name, const std::uint32_t value) {
+    std::cout << name << " = 0x" << std::hex << std::uppercase << std::setw(8) << std::setfill('0')
+              << value << '\n';
 }
 
 void run_mul_l_case() {
@@ -44,21 +31,12 @@ void run_mul_l_case() {
 
     katana_generated::fn_8C010010(cpu);
 
-    require(
-        cpu.macl == 0xFFFFFFFEu,
-        "MUL.L muss die unteren 32 Produktbits nach MACL schreiben."
-    );
+    require(cpu.macl == 0xFFFFFFFEu, "MUL.L muss die unteren 32 Produktbits nach MACL schreiben.");
 
-    require(
-        cpu.r[1] == 0xFFFFFFFFu &&
-        cpu.r[2] == 0x00000002u,
-        "MUL.L darf die Quellregister nicht veraendern."
-    );
+    require(cpu.r[1] == 0xFFFFFFFFu && cpu.r[2] == 0x00000002u,
+            "MUL.L darf die Quellregister nicht veraendern.");
 
-    require(
-        cpu.t,
-        "MUL.L darf T nicht veraendern."
-    );
+    require(cpu.t, "MUL.L darf T nicht veraendern.");
 
     print_hex("mul.l macl", cpu.macl);
 }
@@ -76,21 +54,12 @@ void run_muls_w_cases() {
 
         katana_generated::fn_8C010018(cpu);
 
-        require(
-            cpu.macl == 0x00010000u,
-            "MULS.W -2 mal -32768 ist falsch."
-        );
+        require(cpu.macl == 0x00010000u, "MULS.W -2 mal -32768 ist falsch.");
 
-        require(
-            cpu.r[3] == 0xABCDFFFEu &&
-            cpu.r[4] == 0x12348000u,
-            "MULS.W darf die Quellregister nicht veraendern."
-        );
+        require(cpu.r[3] == 0xABCDFFFEu && cpu.r[4] == 0x12348000u,
+                "MULS.W darf die Quellregister nicht veraendern.");
 
-        require(
-            !cpu.t,
-            "MULS.W darf T nicht veraendern."
-        );
+        require(!cpu.t, "MULS.W darf T nicht veraendern.");
 
         print_hex("muls.w positiv", cpu.macl);
     }
@@ -106,15 +75,9 @@ void run_muls_w_cases() {
 
         katana_generated::fn_8C010018(cpu);
 
-        require(
-            cpu.macl == 0xFFFF8001u,
-            "MULS.W 32767 mal -1 ist falsch."
-        );
+        require(cpu.macl == 0xFFFF8001u, "MULS.W 32767 mal -1 ist falsch.");
 
-        require(
-            cpu.t,
-            "MULS.W darf ein gesetztes T nicht veraendern."
-        );
+        require(cpu.t, "MULS.W darf ein gesetztes T nicht veraendern.");
 
         print_hex("muls.w negativ", cpu.macl);
     }
@@ -132,26 +95,17 @@ void run_mulu_w_case() {
 
     katana_generated::fn_8C010020(cpu);
 
-    require(
-        cpu.macl == 0xFFFE0001u,
-        "MULU.W 65535 mal 65535 ist falsch."
-    );
+    require(cpu.macl == 0xFFFE0001u, "MULU.W 65535 mal 65535 ist falsch.");
 
-    require(
-        cpu.r[5] == 0x1234FFFFu &&
-        cpu.r[6] == 0xABCDFFFFu,
-        "MULU.W darf die Quellregister nicht veraendern."
-    );
+    require(cpu.r[5] == 0x1234FFFFu && cpu.r[6] == 0xABCDFFFFu,
+            "MULU.W darf die Quellregister nicht veraendern.");
 
-    require(
-        !cpu.t,
-        "MULU.W darf T nicht veraendern."
-    );
+    require(!cpu.t, "MULU.W darf T nicht veraendern.");
 
     print_hex("mulu.w macl", cpu.macl);
 }
 
-}
+} // namespace
 
 int main() {
     run_mul_l_case();
@@ -170,13 +124,10 @@ int main() {
 
     katana_generated::run(chain);
 
-    require(
-        chain.macl == 0x0001FFFEu,
-        "Der komplette Aufrufspfad muss mit dem MULU.W-Ergebnis enden."
-    );
+    require(chain.macl == 0x0001FFFEu,
+            "Der komplette Aufrufspfad muss mit dem MULU.W-Ergebnis enden.");
 
-    std::cout
-        << "KR-1301 End-to-End-Semantik wurde erfolgreich ausgefuehrt.\n";
+    std::cout << "KR-1301 End-to-End-Semantik wurde erfolgreich ausgefuehrt.\n";
 
     return EXIT_SUCCESS;
 }

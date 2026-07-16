@@ -34,21 +34,16 @@ void run_normal_case() {
     require(cpu.r[1] == 0xFFFF8001u, "PC-relativer MOV.W erweitert falsch.");
     require(cpu.r[2] == 0x76543210u, "PC-relativer MOV.L laedt falsch.");
     require(cpu.r[0] == 0x00000118u, "MOVA berechnet die falsche Adresse.");
-    require(
-        cpu.gbr == 0x13579BDFu &&
-        cpu.mach == 0x2468ACE0u &&
-        cpu.macl == 0x11223344u &&
-        cpu.t && !cpu.s && cpu.q && !cpu.m,
-        "PC-relative Operationen haben fremden CPU-Zustand veraendert."
-    );
+    require(cpu.gbr == 0x13579BDFu && cpu.mach == 0x2468ACE0u && cpu.macl == 0x11223344u && cpu.t &&
+                !cpu.s && cpu.q && !cpu.m,
+            "PC-relative Operationen haben fremden CPU-Zustand veraendert.");
 }
 
-}
+} // namespace
 
 int main() {
     run_normal_case();
 
-    std::cout
-        << "KR-1405 End-to-End-Semantik wurde erfolgreich ausgefuehrt.\n";
+    std::cout << "KR-1405 End-to-End-Semantik wurde erfolgreich ausgefuehrt.\n";
     return EXIT_SUCCESS;
 }

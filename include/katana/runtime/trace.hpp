@@ -24,12 +24,7 @@ enum class RuntimeTraceKind : std::uint8_t {
     Scheduler
 };
 
-enum class RuntimeTraceOrigin : std::uint8_t {
-    Backend,
-    Fallback,
-    Runtime,
-    External
-};
+enum class RuntimeTraceOrigin : std::uint8_t { Backend, Fallback, Runtime, External };
 
 struct RuntimeTraceEvent {
     std::uint64_t sequence = 0u;
@@ -49,7 +44,7 @@ struct RuntimeTraceConfig {
 };
 
 class RuntimeTraceRecorder final {
-public:
+  public:
     explicit RuntimeTraceRecorder(RuntimeTraceConfig config = {});
 
     void record(RuntimeTraceEvent event);
@@ -60,14 +55,12 @@ public:
     [[nodiscard]] std::uint64_t dropped_events() const noexcept;
     [[nodiscard]] std::string serialize_json() const;
 
-    [[nodiscard]] MemoryAccessObserver memory_observer(
-        RuntimeTraceKind kind,
-        RuntimeTraceOrigin origin,
-        std::function<std::uint64_t()> guest_cycle,
-        std::function<std::uint32_t()> guest_pc
-    );
+    [[nodiscard]] MemoryAccessObserver memory_observer(RuntimeTraceKind kind,
+                                                       RuntimeTraceOrigin origin,
+                                                       std::function<std::uint64_t()> guest_cycle,
+                                                       std::function<std::uint32_t()> guest_pc);
 
-private:
+  private:
     RuntimeTraceConfig config_;
     std::vector<RuntimeTraceEvent> events_;
     std::uint64_t total_events_ = 0u;
@@ -79,4 +72,4 @@ private:
 [[nodiscard]] const char* runtime_trace_kind_name(RuntimeTraceKind kind) noexcept;
 [[nodiscard]] const char* runtime_trace_origin_name(RuntimeTraceOrigin origin) noexcept;
 
-}
+} // namespace katana::runtime

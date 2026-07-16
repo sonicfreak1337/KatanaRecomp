@@ -7,37 +7,28 @@
 
 namespace {
 
-void write_u16(
-    std::vector<std::uint8_t>& bytes,
-    const std::size_t offset,
-    const std::uint16_t value
-) {
+void write_u16(std::vector<std::uint8_t>& bytes,
+               const std::size_t offset,
+               const std::uint16_t value) {
     bytes[offset] = static_cast<std::uint8_t>(value);
     bytes[offset + 1u] = static_cast<std::uint8_t>(value >> 8u);
 }
 
-void write_u32(
-    std::vector<std::uint8_t>& bytes,
-    const std::size_t offset,
-    const std::uint32_t value
-) {
+void write_u32(std::vector<std::uint8_t>& bytes,
+               const std::size_t offset,
+               const std::uint32_t value) {
     for (std::size_t index = 0u; index < 4u; ++index) {
         bytes[offset + index] = static_cast<std::uint8_t>(value >> (index * 8u));
     }
 }
 
-void save_binary(
-    const std::filesystem::path& path,
-    const std::vector<std::uint8_t>& bytes
-) {
+void save_binary(const std::filesystem::path& path, const std::vector<std::uint8_t>& bytes) {
     std::ofstream output(path, std::ios::binary);
-    output.write(
-        reinterpret_cast<const char*>(bytes.data()),
-        static_cast<std::streamsize>(bytes.size())
-    );
+    output.write(reinterpret_cast<const char*>(bytes.data()),
+                 static_cast<std::streamsize>(bytes.size()));
 }
 
-}
+} // namespace
 
 int main(const int argc, char* argv[]) {
     if (argc != 2) return 2;
@@ -73,13 +64,12 @@ int main(const int argc, char* argv[]) {
     save_binary(directory / "program.elf", elf);
 
     std::ofstream manifest(directory / "program.katana");
-    manifest
-        << "version = 1\n"
-        << "format = raw\n"
-        << "input = program.bin\n"
-        << "base_address = 0x8C010000\n"
-        << "entry_point = 0x8C010000\n"
-        << "segment_kind = code\n"
-        << "permissions = r-x\n";
+    manifest << "version = 1\n"
+             << "format = raw\n"
+             << "input = program.bin\n"
+             << "base_address = 0x8C010000\n"
+             << "entry_point = 0x8C010000\n"
+             << "segment_kind = code\n"
+             << "permissions = r-x\n";
     return manifest ? 0 : 2;
 }

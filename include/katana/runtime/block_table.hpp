@@ -36,24 +36,18 @@ struct RuntimeBlock {
 [[nodiscard]] std::string stable_runtime_block_identity(const RuntimeBlock& block);
 
 class RuntimeBlockTable {
-public:
+  public:
     void register_static(RuntimeBlock block);
     void register_runtime(RuntimeBlock block);
-    [[nodiscard]] const RuntimeBlock* lookup(
-        std::uint32_t virtual_address,
-        const BlockVariantKey& variant
-    ) const noexcept;
-    [[nodiscard]] const RuntimeBlock* lookup_physical(
-        std::uint32_t physical_address,
-        const BlockVariantKey& variant
-    ) const noexcept;
-    [[nodiscard]] std::vector<const RuntimeBlock*> aliases(
-        std::uint32_t physical_origin
-    ) const;
+    [[nodiscard]] const RuntimeBlock* lookup(std::uint32_t virtual_address,
+                                             const BlockVariantKey& variant) const noexcept;
+    [[nodiscard]] const RuntimeBlock*
+    lookup_physical(std::uint32_t physical_address, const BlockVariantKey& variant) const noexcept;
+    [[nodiscard]] std::vector<const RuntimeBlock*> aliases(std::uint32_t physical_origin) const;
     [[nodiscard]] std::size_t size() const noexcept;
     void clear() noexcept;
 
-private:
+  private:
     void insert(RuntimeBlock block, bool runtime_registered);
     std::vector<RuntimeBlock> blocks_;
 };

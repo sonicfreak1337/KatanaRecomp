@@ -39,25 +39,24 @@ struct BlockStateGuard {
     [[nodiscard]] bool operator==(const BlockStateGuard&) const noexcept = default;
 };
 
-[[nodiscard]] BlockVariantKey block_variant_key(
-    const BlockStateGuard& guard,
-    std::uint64_t runtime_generation = 0u
-) noexcept;
+[[nodiscard]] BlockVariantKey block_variant_key(const BlockStateGuard& guard,
+                                                std::uint64_t runtime_generation = 0u) noexcept;
 
 class TranslationError final : public std::runtime_error {
-public:
+  public:
     TranslationError(TranslationAccess access, std::uint32_t address, ExceptionCause cause);
     [[nodiscard]] ExceptionCause cause() const noexcept;
     [[nodiscard]] TranslationAccess access() const noexcept;
     [[nodiscard]] std::uint32_t address() const noexcept;
-private:
+
+  private:
     ExceptionCause cause_;
     TranslationAccess access_;
     std::uint32_t address_;
 };
 
 class RuntimeAddressSpace {
-public:
+  public:
     static constexpr std::uint32_t page_size = 4096u;
     void set_mode(AddressTranslationMode mode) noexcept;
     void write_mmucr(std::uint32_t value) noexcept;
@@ -65,21 +64,14 @@ public:
     void clear_tlb() noexcept;
     void bump_address_space() noexcept;
     void bump_watchpoints() noexcept;
-    [[nodiscard]] TranslationResult translate(
-        std::uint32_t address,
-        TranslationAccess access,
-        bool privileged = true
-    ) const;
-    [[nodiscard]] BlockStateGuard guard_for(
-        std::uint32_t virtual_address,
-        std::uint32_t fpscr
-    ) const;
-    [[nodiscard]] bool block_fits_translation_page(
-        std::uint32_t virtual_start,
-        std::uint32_t size
-    ) const noexcept;
+    [[nodiscard]] TranslationResult
+    translate(std::uint32_t address, TranslationAccess access, bool privileged = true) const;
+    [[nodiscard]] BlockStateGuard guard_for(std::uint32_t virtual_address,
+                                            std::uint32_t fpscr) const;
+    [[nodiscard]] bool block_fits_translation_page(std::uint32_t virtual_start,
+                                                   std::uint32_t size) const noexcept;
 
-private:
+  private:
     AddressTranslationMode mode_ = AddressTranslationMode::NoMmu;
     std::uint32_t mmucr_ = 0u;
     std::uint64_t address_space_generation_ = 0u;

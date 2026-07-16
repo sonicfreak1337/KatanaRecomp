@@ -9,10 +9,7 @@
 
 namespace katana::runtime {
 
-enum class GdiTrackType : std::uint8_t {
-    Audio = 0u,
-    Data = 4u
-};
+enum class GdiTrackType : std::uint8_t { Audio = 0u, Data = 4u };
 
 struct GdiTrack {
     std::uint32_t number = 0u;
@@ -34,21 +31,19 @@ struct GdiDescriptor {
 [[nodiscard]] GdiDescriptor parse_gdi_descriptor(const std::filesystem::path& descriptor_path);
 
 class GdiDiscSource final : public DiscSource {
-public:
+  public:
     using DiscSource::read;
-    [[nodiscard]] static std::shared_ptr<GdiDiscSource> open(
-        const std::filesystem::path& descriptor_path
-    );
+    [[nodiscard]] static std::shared_ptr<GdiDiscSource>
+    open(const std::filesystem::path& descriptor_path);
     [[nodiscard]] std::uint64_t size() const noexcept override;
     [[nodiscard]] const std::string& identity() const noexcept override;
     void read(std::uint64_t offset, std::span<std::uint8_t> destination) const override;
     [[nodiscard]] const GdiDescriptor& descriptor() const noexcept;
     [[nodiscard]] std::uint32_t primary_data_lba() const;
-    [[nodiscard]] std::vector<std::uint8_t> read_raw_sector(
-        std::uint32_t track_number,
-        std::uint64_t sector_index
-    ) const;
-private:
+    [[nodiscard]] std::vector<std::uint8_t> read_raw_sector(std::uint32_t track_number,
+                                                            std::uint64_t sector_index) const;
+
+  private:
     explicit GdiDiscSource(GdiDescriptor descriptor);
     [[nodiscard]] std::vector<std::uint8_t> read_data_sector(std::uint64_t absolute_lba) const;
     GdiDescriptor descriptor_;

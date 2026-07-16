@@ -39,9 +39,7 @@ struct OptimizationPipelineReport {
 [[nodiscard]] OptimizationResult eliminate_dead_code(Function& function);
 [[nodiscard]] OptimizationResult simplify_cfg(Function& function);
 [[nodiscard]] OptimizationResult simplify_load_store(Function& function);
-[[nodiscard]] OptimizationPipelineReport optimize_program(
-    std::vector<Function>& program,
-    const OptimizationOptions& options = {}
-);
+[[nodiscard]] OptimizationPipelineReport optimize_program(std::vector<Function>& program,
+                                                          const OptimizationOptions& options = {});
 
-}
+} // namespace katana::ir

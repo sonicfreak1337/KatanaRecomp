@@ -26,12 +26,8 @@ void set_preserved_state(katana_generated::CpuState& cpu) {
 }
 
 void require_preserved_state(const katana_generated::CpuState& cpu) {
-    require(
-        cpu.mach == 0x13579BDFu &&
-        cpu.macl == 0x2468ACE0u &&
-        cpu.t && cpu.s && !cpu.q && cpu.m,
-        "GBR-relative Zugriffe haben fremden CPU-Zustand veraendert."
-    );
+    require(cpu.mach == 0x13579BDFu && cpu.macl == 0x2468ACE0u && cpu.t && cpu.s && !cpu.q && cpu.m,
+            "GBR-relative Zugriffe haben fremden CPU-Zustand veraendert.");
 }
 
 void run_normal_cases() {
@@ -43,16 +39,11 @@ void run_normal_cases() {
     cpu.pc = 0x8C010030u;
     katana_generated::fn_8C010030(cpu);
 
-    require(
-        cpu.memory.read_u8(0x000001FFu) == 0xD4u &&
-        cpu.memory.read_u16(0x000002FEu) == 0xC3D4u &&
-        cpu.memory.read_u32(0x000004FCu) == 0xA1B2C3D4u,
-        "GBR-relative Stores oder Little Endian sind falsch."
-    );
-    require(
-        cpu.gbr == 0x00000100u,
-        "GBR wurde durch einen Store veraendert."
-    );
+    require(cpu.memory.read_u8(0x000001FFu) == 0xD4u &&
+                cpu.memory.read_u16(0x000002FEu) == 0xC3D4u &&
+                cpu.memory.read_u32(0x000004FCu) == 0xA1B2C3D4u,
+            "GBR-relative Stores oder Little Endian sind falsch.");
+    require(cpu.gbr == 0x00000100u, "GBR wurde durch einen Store veraendert.");
 
     cpu.memory.write_u8(0x000001FFu, 0x80u);
     cpu.r[0] = 0u;
@@ -85,16 +76,10 @@ void run_wraparound_case() {
     cpu.pc = 0x8C010030u;
     katana_generated::fn_8C010030(cpu);
 
-    require(
-        cpu.memory.read_u8(0u) == 0xD4u &&
-        cpu.memory.read_u16(0x000000FFu) == 0xC3D4u &&
-        cpu.memory.read_u32(0x000002FDu) == 0xA1B2C3D4u,
-        "GBR-relative Adressen verwenden kein 32-Bit-Wraparound."
-    );
-    require(
-        cpu.gbr == 0xFFFFFF01u,
-        "GBR wurde im Wraparound-Fall veraendert."
-    );
+    require(cpu.memory.read_u8(0u) == 0xD4u && cpu.memory.read_u16(0x000000FFu) == 0xC3D4u &&
+                cpu.memory.read_u32(0x000002FDu) == 0xA1B2C3D4u,
+            "GBR-relative Adressen verwenden kein 32-Bit-Wraparound.");
+    require(cpu.gbr == 0xFFFFFF01u, "GBR wurde im Wraparound-Fall veraendert.");
 }
 
 void run_invalid_access_case() {
@@ -108,29 +93,22 @@ void run_invalid_access_case() {
     cpu.pc = 0x8C010030u;
     katana_generated::fn_8C010030(cpu);
 
-    require(
-        cpu.trap_pending &&
-        cpu.last_exception_cause ==
-            katana::runtime::ExceptionCause::BusErrorWrite &&
-        cpu.tea == runtime_memory_size + 127u &&
-        cpu.spc == 0x8C010030u,
-        "Eine ungueltige GBR-Adresse erzeugt keine Bus-Exception."
-    );
+    require(cpu.trap_pending &&
+                cpu.last_exception_cause == katana::runtime::ExceptionCause::BusErrorWrite &&
+                cpu.tea == runtime_memory_size + 127u && cpu.spc == 0x8C010030u,
+            "Eine ungueltige GBR-Adresse erzeugt keine Bus-Exception.");
     katana::runtime::return_from_exception(cpu);
-    require(
-        cpu.gbr == old_gbr && cpu.r[0] == old_r0,
-        "Ein fehlgeschlagener GBR-Store hat Register veraendert."
-    );
+    require(cpu.gbr == old_gbr && cpu.r[0] == old_r0,
+            "Ein fehlgeschlagener GBR-Store hat Register veraendert.");
 }
 
-}
+} // namespace
 
 int main() {
     run_normal_cases();
     run_wraparound_case();
     run_invalid_access_case();
 
-    std::cout
-        << "KR-1404 End-to-End-Semantik wurde erfolgreich ausgefuehrt.\n";
+    std::cout << "KR-1404 End-to-End-Semantik wurde erfolgreich ausgefuehrt.\n";
     return EXIT_SUCCESS;
 }

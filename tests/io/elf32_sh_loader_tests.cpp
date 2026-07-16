@@ -17,12 +17,16 @@ void require(const bool condition, const std::string& message) {
     }
 }
 
-void write_u16(std::vector<std::uint8_t>& bytes, const std::size_t offset, const std::uint16_t value) {
+void write_u16(std::vector<std::uint8_t>& bytes,
+               const std::size_t offset,
+               const std::uint16_t value) {
     bytes[offset] = static_cast<std::uint8_t>(value);
     bytes[offset + 1u] = static_cast<std::uint8_t>(value >> 8u);
 }
 
-void write_u32(std::vector<std::uint8_t>& bytes, const std::size_t offset, const std::uint32_t value) {
+void write_u32(std::vector<std::uint8_t>& bytes,
+               const std::size_t offset,
+               const std::uint32_t value) {
     for (std::size_t index = 0; index < 4u; ++index) {
         bytes[offset + index] = static_cast<std::uint8_t>(value >> (index * 8u));
     }
@@ -111,7 +115,8 @@ std::vector<std::uint8_t> valid_elf() {
 
 void save(const std::filesystem::path& path, const std::vector<std::uint8_t>& bytes) {
     std::ofstream output(path, std::ios::binary);
-    output.write(reinterpret_cast<const char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
+    output.write(reinterpret_cast<const char*>(bytes.data()),
+                 static_cast<std::streamsize>(bytes.size()));
 }
 
 std::string load_failure(const std::filesystem::path& path) {
@@ -124,23 +129,24 @@ std::string load_failure(const std::filesystem::path& path) {
     return {};
 }
 
-void require_entry_failure(
-    const std::filesystem::path& path,
-    std::vector<std::uint8_t> bytes,
-    const std::uint32_t entry,
-    const std::string& cause
-) {
+void require_entry_failure(const std::filesystem::path& path,
+                           std::vector<std::uint8_t> bytes,
+                           const std::uint32_t entry,
+                           const std::string& cause) {
     write_u32(bytes, 24u, entry);
     save(path, bytes);
     const auto error = load_failure(path);
     std::ostringstream address;
     address << "0x" << std::hex << std::uppercase << entry;
-    require(error.find("Offset 24") != std::string::npos, "Einstiegspunktfehler nennt e_entry nicht.");
-    require(error.find(address.str()) != std::string::npos, "Einstiegspunktfehler nennt die Adresse nicht.");
-    require(error.find(cause) != std::string::npos, "Einstiegspunktfehler nennt die Ursache nicht.");
+    require(error.find("Offset 24") != std::string::npos,
+            "Einstiegspunktfehler nennt e_entry nicht.");
+    require(error.find(address.str()) != std::string::npos,
+            "Einstiegspunktfehler nennt die Adresse nicht.");
+    require(error.find(cause) != std::string::npos,
+            "Einstiegspunktfehler nennt die Ursache nicht.");
 }
 
-}
+} // namespace
 
 int main() {
     using namespace katana::io;
@@ -150,40 +156,57 @@ int main() {
 
     const auto image = load_elf32_sh(path);
     require(image.segments().size() == 2u, "PT_LOAD-Segmente wurden nicht vollstaendig geladen.");
-    require(image.entry_points().size() == 1u && image.entry_points()[0] == 0x8C010000u, "ELF-Einstiegspunkt ist falsch.");
+    require(image.entry_points().size() == 1u && image.entry_points()[0] == 0x8C010000u,
+            "ELF-Einstiegspunkt ist falsch.");
     const auto& text = image.segments()[0];
     const auto& data = image.segments()[1];
-    require(text.virtual_address == 0x8C010000u && text.file_offset == 0x80u, "Textlayout ist falsch.");
-    require(text.kind == SegmentKind::Code && text.permissions.readable && text.permissions.executable && !text.permissions.writable, "PF_R/PF_X wurden falsch abgebildet.");
-    require(text.bytes == std::vector<std::uint8_t>({0x09u, 0x00u, 0x0Bu, 0x00u}), "Textbytes sind falsch.");
-    require(data.virtual_address == 0x8C020000u && data.memory_size == 12u && data.bytes.size() == 12u, "Data- oder Zero-Fill-Groesse ist falsch.");
-    require(data.kind == SegmentKind::Data && data.permissions.readable && data.permissions.writable && !data.permissions.executable, "PF_R/PF_W wurden falsch abgebildet.");
+    require(text.virtual_address == 0x8C010000u && text.file_offset == 0x80u,
+            "Textlayout ist falsch.");
+    require(text.kind == SegmentKind::Code && text.permissions.readable &&
+                text.permissions.executable && !text.permissions.writable,
+            "PF_R/PF_X wurden falsch abgebildet.");
+    require(text.bytes == std::vector<std::uint8_t>({0x09u, 0x00u, 0x0Bu, 0x00u}),
+            "Textbytes sind falsch.");
+    require(data.virtual_address == 0x8C020000u && data.memory_size == 12u &&
+                data.bytes.size() == 12u,
+            "Data- oder Zero-Fill-Groesse ist falsch.");
+    require(data.kind == SegmentKind::Data && data.permissions.readable &&
+                data.permissions.writable && !data.permissions.executable,
+            "PF_R/PF_W wurden falsch abgebildet.");
     require(image.symbols().size() == 2u, "ELF-Symboltabelle wurde nicht vollstaendig geladen.");
     const auto* start = image.find_symbol("start");
-    require(start != nullptr && start->address == 0x8C010000u && start->size == 4u, "ELF-Funktionssymbol ist falsch.");
-    require(start->kind == SymbolKind::Function && start->binding == SymbolBinding::Global, "ELF-Symbolinfo wurde falsch dekodiert.");
-    require(image.find_symbol("value")->kind == SymbolKind::Object, "ELF-Objektsymbol ist falsch klassifiziert.");
+    require(start != nullptr && start->address == 0x8C010000u && start->size == 4u,
+            "ELF-Funktionssymbol ist falsch.");
+    require(start->kind == SymbolKind::Function && start->binding == SymbolBinding::Global,
+            "ELF-Symbolinfo wurde falsch dekodiert.");
+    require(image.find_symbol("value")->kind == SymbolKind::Object,
+            "ELF-Objektsymbol ist falsch klassifiziert.");
     require(image.relocations().size() == 3u, "ELF-Relocations wurden nicht vollstaendig geladen.");
     const auto& relocation = image.relocations()[0];
-    require(relocation.address == 0x8C020000u && relocation.kind == RelocationKind::Absolute32, "R_SH_DIR32 wurde falsch klassifiziert.");
-    require(relocation.symbol_name == "value" && relocation.addend == 4, "Relocation-Symbol oder Addend ist falsch.");
+    require(relocation.address == 0x8C020000u && relocation.kind == RelocationKind::Absolute32,
+            "R_SH_DIR32 wurde falsch klassifiziert.");
+    require(relocation.symbol_name == "value" && relocation.addend == 4,
+            "Relocation-Symbol oder Addend ist falsch.");
     require(relocation.applied_value == 0x8C020004u, "R_SH_DIR32 wurde nicht angewendet.");
-    require(image.read_u32_le(0x8C020000u) == 0x8C020004u, "Relocationsergebnis fehlt in den Segmentdaten.");
+    require(image.read_u32_le(0x8C020000u) == 0x8C020004u,
+            "Relocationsergebnis fehlt in den Segmentdaten.");
     const auto& relative = image.relocations()[1];
-    require(relative.kind == RelocationKind::PcRelative32 && relative.applied_value == 0xFFFEFFFCu, "R_SH_REL32 wurde falsch angewendet.");
+    require(relative.kind == RelocationKind::PcRelative32 && relative.applied_value == 0xFFFEFFFCu,
+            "R_SH_REL32 wurde falsch angewendet.");
     const auto& unsupported = image.relocations()[2];
-    require(unsupported.kind == RelocationKind::Unsupported && !unsupported.applied_value.has_value(), "Unbekannte Relocation wurde faelschlich angewendet.");
-    require(image.read_u32_le(0x8C020008u) == 0x12345678u, "Unbekannte Relocation hat Segmentdaten veraendert.");
+    require(unsupported.kind == RelocationKind::Unsupported &&
+                !unsupported.applied_value.has_value(),
+            "Unbekannte Relocation wurde faelschlich angewendet.");
+    require(image.read_u32_le(0x8C020008u) == 0x12345678u,
+            "Unbekannte Relocation hat Segmentdaten veraendert.");
 
     bytes = valid_elf();
     write_u32(bytes, 24u, 0x8C010002u);
     save(path, bytes);
     const auto last_instruction_image = load_elf32_sh(path);
-    require(
-        last_instruction_image.entry_points().size() == 1u
-            && last_instruction_image.entry_points()[0] == 0x8C010002u,
-        "Der letzte gueltige Zwei-Byte-Instruktionsanfang wurde abgelehnt."
-    );
+    require(last_instruction_image.entry_points().size() == 1u &&
+                last_instruction_image.entry_points()[0] == 0x8C010002u,
+            "Der letzte gueltige Zwei-Byte-Instruktionsanfang wurde abgelehnt.");
 
     require_entry_failure(path, valid_elf(), 0x8C030000u, "ausserhalb aller geladenen Segmente");
     require_entry_failure(path, valid_elf(), 0x8C020000u, "nicht ausfuehrbaren Segment");
@@ -198,26 +221,33 @@ int main() {
     bytes[0] = 0u;
     save(path, bytes);
     auto error = load_failure(path);
-    require(error.find(path.string()) != std::string::npos && error.find("Offset 0") != std::string::npos, "Magiefehler nennt Pfad und Offset nicht.");
+    require(error.find(path.string()) != std::string::npos &&
+                error.find("Offset 0") != std::string::npos,
+            "Magiefehler nennt Pfad und Offset nicht.");
 
     bytes = valid_elf();
     write_u16(bytes, 18u, 3u);
     save(path, bytes);
     error = load_failure(path);
-    require(error.find("Offset 18") != std::string::npos && error.find("EM_SH") != std::string::npos, "Maschinenfehler ist nicht diagnostisch.");
+    require(error.find("Offset 18") != std::string::npos &&
+                error.find("EM_SH") != std::string::npos,
+            "Maschinenfehler ist nicht diagnostisch.");
 
     bytes = valid_elf();
     write_u32(bytes, 68u, 5u);
     write_u32(bytes, 72u, 4u);
     save(path, bytes);
     error = load_failure(path);
-    require(error.find("p_filesz") != std::string::npos, "Ungueltige Segmentgroessen wurden nicht erklaert.");
+    require(error.find("p_filesz") != std::string::npos,
+            "Ungueltige Segmentgroessen wurden nicht erklaert.");
 
     bytes = valid_elf();
     write_u32(bytes, 56u, 0x1000u);
     save(path, bytes);
     error = load_failure(path);
-    require(error.find("Offset 4096") != std::string::npos && error.find("PT_LOAD") != std::string::npos, "Dateibereichsfehler nennt Offset und Ursache nicht.");
+    require(error.find("Offset 4096") != std::string::npos &&
+                error.find("PT_LOAD") != std::string::npos,
+            "Dateibereichsfehler nennt Offset und Ursache nicht.");
 
     std::filesystem::remove(path);
     std::cout << "KR-1603 ELF32-SH-Loader erfolgreich.\n";

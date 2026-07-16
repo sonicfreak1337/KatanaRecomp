@@ -2,10 +2,7 @@
 
 namespace katana::runtime {
 
-void enter_exception(
-    CpuState& cpu,
-    const ExceptionRequest& request
-) noexcept {
+void enter_exception(CpuState& cpu, const ExceptionRequest& request) noexcept {
     const std::uint32_t saved_sr = cpu.read_sr();
     cpu.ssr = saved_sr;
     cpu.spc = request.return_pc;
@@ -29,105 +26,70 @@ void enter_exception(
     cpu.pc = cpu.vbr + request.vector_offset;
 }
 
-void raise_trapa(
-    CpuState& cpu,
-    const std::uint8_t immediate,
-    const std::uint32_t instruction_pc
-) noexcept {
+void raise_trapa(CpuState& cpu,
+                 const std::uint8_t immediate,
+                 const std::uint32_t instruction_pc) noexcept {
     cpu.tra = static_cast<std::uint32_t>(immediate) << 2u;
     enter_exception(
         cpu,
         ExceptionRequest{
-            ExceptionCause::Trap,
-            event_trapa,
-            general_exception_vector,
-            instruction_pc + 2u
-        }
-    );
+            ExceptionCause::Trap, event_trapa, general_exception_vector, instruction_pc + 2u});
 }
 
-void raise_illegal_instruction(
-    CpuState& cpu,
-    const std::uint32_t instruction_pc,
-    const std::optional<std::uint32_t> delay_slot_owner
-) noexcept {
+void raise_illegal_instruction(CpuState& cpu,
+                               const std::uint32_t instruction_pc,
+                               const std::optional<std::uint32_t> delay_slot_owner) noexcept {
     const bool in_delay_slot = delay_slot_owner.has_value();
     enter_exception(
         cpu,
-        ExceptionRequest{
-            in_delay_slot
-                ? ExceptionCause::SlotIllegalInstruction
-                : ExceptionCause::IllegalInstruction,
-            in_delay_slot
-                ? event_slot_illegal_instruction
-                : event_illegal_instruction,
-            general_exception_vector,
-            delay_slot_owner.value_or(instruction_pc),
-            std::nullopt,
-            false,
-            in_delay_slot
-        }
-    );
+        ExceptionRequest{in_delay_slot ? ExceptionCause::SlotIllegalInstruction
+                                       : ExceptionCause::IllegalInstruction,
+                         in_delay_slot ? event_slot_illegal_instruction : event_illegal_instruction,
+                         general_exception_vector,
+                         delay_slot_owner.value_or(instruction_pc),
+                         std::nullopt,
+                         false,
+                         in_delay_slot});
 }
 
-void raise_fpu_disabled(
-    CpuState& cpu,
-    const std::uint32_t instruction_pc,
-    const std::optional<std::uint32_t> delay_slot_owner
-) noexcept {
+void raise_fpu_disabled(CpuState& cpu,
+                        const std::uint32_t instruction_pc,
+                        const std::optional<std::uint32_t> delay_slot_owner) noexcept {
     const bool in_delay_slot = delay_slot_owner.has_value();
-    enter_exception(
-        cpu,
-        ExceptionRequest{
-            in_delay_slot
-                ? ExceptionCause::SlotFpuDisabled
-                : ExceptionCause::FpuDisabled,
-            in_delay_slot
-                ? event_slot_fpu_disabled
-                : event_fpu_disabled,
-            general_exception_vector,
-            delay_slot_owner.value_or(instruction_pc),
-            std::nullopt,
-            false,
-            in_delay_slot
-        }
-    );
+    enter_exception(cpu,
+                    ExceptionRequest{in_delay_slot ? ExceptionCause::SlotFpuDisabled
+                                                   : ExceptionCause::FpuDisabled,
+                                     in_delay_slot ? event_slot_fpu_disabled : event_fpu_disabled,
+                                     general_exception_vector,
+                                     delay_slot_owner.value_or(instruction_pc),
+                                     std::nullopt,
+                                     false,
+                                     in_delay_slot});
 }
 
-void enter_memory_exception(
-    CpuState& cpu,
-    const MemoryAccessError& error,
-    const std::uint32_t instruction_pc,
-    const std::optional<std::uint32_t> delay_slot_owner
-) noexcept {
+void enter_memory_exception(CpuState& cpu,
+                            const MemoryAccessError& error,
+                            const std::uint32_t instruction_pc,
+                            const std::optional<std::uint32_t> delay_slot_owner) noexcept {
     const bool write = error.operation() == MemoryAccessOperation::Write;
-    const bool address_error =
-        error.reason() == MemoryAccessErrorReason::Misaligned;
+    const bool address_error = error.reason() == MemoryAccessErrorReason::Misaligned;
     const bool in_delay_slot = delay_slot_owner.has_value();
 
     ExceptionCause cause;
     if (address_error) {
-        cause = write
-            ? ExceptionCause::AddressErrorWrite
-            : ExceptionCause::AddressErrorRead;
+        cause = write ? ExceptionCause::AddressErrorWrite : ExceptionCause::AddressErrorRead;
     } else {
-        cause = write
-            ? ExceptionCause::BusErrorWrite
-            : ExceptionCause::BusErrorRead;
+        cause = write ? ExceptionCause::BusErrorWrite : ExceptionCause::BusErrorRead;
     }
 
-    enter_exception(
-        cpu,
-        ExceptionRequest{
-            cause,
-            write ? event_address_error_write : event_address_error_read,
-            general_exception_vector,
-            delay_slot_owner.value_or(instruction_pc),
-            error.address(),
-            false,
-            in_delay_slot
-        }
-    );
+    enter_exception(cpu,
+                    ExceptionRequest{cause,
+                                     write ? event_address_error_write : event_address_error_read,
+                                     general_exception_vector,
+                                     delay_slot_owner.value_or(instruction_pc),
+                                     error.address(),
+                                     false,
+                                     in_delay_slot});
 }
 
 void return_from_exception(CpuState& cpu) noexcept {

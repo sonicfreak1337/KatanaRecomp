@@ -48,11 +48,8 @@ struct CrashReport {
     bool exception_in_delay_slot = false;
 };
 
-[[nodiscard]] CrashReport capture_crash_report(
-    const CpuState& cpu,
-    CrashReportContext context
-);
+[[nodiscard]] CrashReport capture_crash_report(const CpuState& cpu, CrashReportContext context);
 [[nodiscard]] std::string serialize_crash_report(const CrashReport& report);
 [[nodiscard]] const char* exception_cause_name(ExceptionCause cause) noexcept;
 
-}
+} // namespace katana::runtime

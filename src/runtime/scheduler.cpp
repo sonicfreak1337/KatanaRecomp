@@ -9,13 +9,10 @@
 
 namespace katana::runtime {
 
-EventScheduler::EventScheduler(SystemReplayLog* replay_log) noexcept
-    : replay_log_(replay_log) {}
+EventScheduler::EventScheduler(SystemReplayLog* replay_log) noexcept : replay_log_(replay_log) {}
 
-SchedulerEventId EventScheduler::schedule_at(
-    const std::uint64_t guest_cycle,
-    SchedulerCallback callback
-) {
+SchedulerEventId EventScheduler::schedule_at(const std::uint64_t guest_cycle,
+                                             SchedulerCallback callback) {
     if (!callback) {
         throw std::invalid_argument("Scheduler-Ereignis benoetigt einen Callback.");
     }
@@ -33,10 +30,8 @@ SchedulerEventId EventScheduler::schedule_at(
     return event_id;
 }
 
-SchedulerEventId EventScheduler::schedule_after(
-    const std::uint64_t guest_cycles,
-    SchedulerCallback callback
-) {
+SchedulerEventId EventScheduler::schedule_after(const std::uint64_t guest_cycles,
+                                                SchedulerCallback callback) {
     if (guest_cycles > std::numeric_limits<std::uint64_t>::max() - current_cycle_) {
         throw std::overflow_error("Scheduler-Zielzyklus ist uebergelaufen.");
     }
@@ -53,14 +48,11 @@ bool EventScheduler::cancel(const SchedulerEventId event_id) noexcept {
     return true;
 }
 
-SchedulerResetObserverId EventScheduler::add_reset_observer(
-    SchedulerResetCallback callback
-) {
+SchedulerResetObserverId EventScheduler::add_reset_observer(SchedulerResetCallback callback) {
     if (!callback) {
         throw std::invalid_argument("Scheduler-Resetbeobachter benoetigt einen Callback.");
     }
-    if (next_reset_observer_id_ ==
-        std::numeric_limits<SchedulerResetObserverId>::max()) {
+    if (next_reset_observer_id_ == std::numeric_limits<SchedulerResetObserverId>::max()) {
         throw std::overflow_error("Scheduler-Resetbeobachter-ID ist uebergelaufen.");
     }
     const auto observer_id = next_reset_observer_id_++;
@@ -68,9 +60,7 @@ SchedulerResetObserverId EventScheduler::add_reset_observer(
     return observer_id;
 }
 
-bool EventScheduler::remove_reset_observer(
-    const SchedulerResetObserverId observer_id
-) noexcept {
+bool EventScheduler::remove_reset_observer(const SchedulerResetObserverId observer_id) noexcept {
     return reset_observers_.erase(observer_id) != 0u;
 }
 
@@ -82,8 +72,7 @@ void EventScheduler::clear() noexcept {
 void EventScheduler::reset() {
     if (advance_in_progress_) {
         throw std::logic_error(
-            "Scheduler-Reset ist waehrend eines laufenden Advances nicht erlaubt."
-        );
+            "Scheduler-Reset ist waehrend eines laufenden Advances nicht erlaubt.");
     }
     if (reset_generation_ == std::numeric_limits<std::uint64_t>::max()) {
         throw std::overflow_error("Scheduler-Resetgeneration ist uebergelaufen.");
@@ -94,17 +83,15 @@ void EventScheduler::reset() {
     ++reset_generation_;
     if (replay_log_ != nullptr) {
         try {
-            SystemReplayEvent event{
-                0u,
-                0u,
-                SystemReplayEventKind::SchedulerCallback,
-                "scheduler-reset",
-                std::nullopt,
-                std::nullopt,
-                reset_generation_,
-                0u,
-                false
-            };
+            SystemReplayEvent event{0u,
+                                    0u,
+                                    SystemReplayEventKind::SchedulerCallback,
+                                    "scheduler-reset",
+                                    std::nullopt,
+                                    std::nullopt,
+                                    reset_generation_,
+                                    0u,
+                                    false};
             event.time_epoch = reset_generation_;
             static_cast<void>(replay_log_->try_record(std::move(event)));
         } catch (...) {
@@ -123,22 +110,22 @@ void EventScheduler::reset() {
     }
 }
 
-SchedulerAdvanceResult EventScheduler::advance_to(
-    const std::uint64_t guest_cycle,
-    const std::size_t event_budget
-) {
+SchedulerAdvanceResult EventScheduler::advance_to(const std::uint64_t guest_cycle,
+                                                  const std::size_t event_budget) {
     if (advance_in_progress_) {
-        throw std::logic_error(
-            "Rekursives Scheduler-Advance ist nicht erlaubt."
-        );
+        throw std::logic_error("Rekursives Scheduler-Advance ist nicht erlaubt.");
     }
     if (guest_cycle < current_cycle_) {
         throw std::invalid_argument("Scheduler-Zyklusuhr darf nicht rueckwaerts laufen.");
     }
 
     struct AdvanceGuard final {
-        explicit AdvanceGuard(bool& state) noexcept : state_(state) { state_ = true; }
-        ~AdvanceGuard() { state_ = false; }
+        explicit AdvanceGuard(bool& state) noexcept : state_(state) {
+            state_ = true;
+        }
+        ~AdvanceGuard() {
+            state_ = false;
+        }
         bool& state_;
     } guard(advance_in_progress_);
 
@@ -160,17 +147,15 @@ SchedulerAdvanceResult EventScheduler::advance_to(
         ++processed_event_count_;
         if (replay_log_ != nullptr) {
             try {
-                SystemReplayEvent replay_event{
-                    0u,
-                    deadline,
-                    SystemReplayEventKind::SchedulerCallback,
-                    "scheduled-event",
-                    std::nullopt,
-                    std::nullopt,
-                    event_id,
-                    processed_event_count_,
-                    false
-                };
+                SystemReplayEvent replay_event{0u,
+                                               deadline,
+                                               SystemReplayEventKind::SchedulerCallback,
+                                               "scheduled-event",
+                                               std::nullopt,
+                                               std::nullopt,
+                                               event_id,
+                                               processed_event_count_,
+                                               false};
                 replay_event.time_epoch = reset_generation_;
                 static_cast<void>(replay_log_->try_record(std::move(replay_event)));
             } catch (...) {
@@ -188,14 +173,10 @@ SchedulerAdvanceResult EventScheduler::advance_to(
     };
 }
 
-SchedulerAdvanceResult EventScheduler::advance_by(
-    const std::uint64_t guest_cycles,
-    const std::size_t event_budget
-) {
+SchedulerAdvanceResult EventScheduler::advance_by(const std::uint64_t guest_cycles,
+                                                  const std::size_t event_budget) {
     if (advance_in_progress_) {
-        throw std::logic_error(
-            "Rekursives Scheduler-Advance ist nicht erlaubt."
-        );
+        throw std::logic_error("Rekursives Scheduler-Advance ist nicht erlaubt.");
     }
     if (guest_cycles > std::numeric_limits<std::uint64_t>::max() - current_cycle_) {
         throw std::overflow_error("Scheduler-Zielzyklus ist uebergelaufen.");

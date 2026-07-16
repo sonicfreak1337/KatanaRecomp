@@ -8,29 +8,16 @@
 
 namespace {
 
-void require(
-    const bool condition,
-    const std::string& message
-) {
+void require(const bool condition, const std::string& message) {
     if (!condition) {
         std::cerr << "TEST FEHLGESCHLAGEN: " << message << '\n';
         std::exit(EXIT_FAILURE);
     }
 }
 
-void print_hex(
-    const char* name,
-    const std::uint32_t value
-) {
-    std::cout
-        << name
-        << " = 0x"
-        << std::hex
-        << std::uppercase
-        << std::setw(8)
-        << std::setfill('0')
-        << value
-        << '\n';
+void print_hex(const char* name, const std::uint32_t value) {
+    std::cout << name << " = 0x" << std::hex << std::uppercase << std::setw(8) << std::setfill('0')
+              << value << '\n';
 }
 
 void prepare_cpu(katana_generated::CpuState& cpu) {
@@ -68,71 +55,38 @@ void prepare_cpu(katana_generated::CpuState& cpu) {
     cpu.pr = 0u;
 }
 
-void verify_cpu(
-    const katana_generated::CpuState& cpu,
-    const std::string& context
-) {
-    require(
-        cpu.r[1] == 0xA1B2C3D4u &&
-        cpu.r[2] == 0x00000100u &&
-        cpu.memory.read_u8(0x00000100u) == 0xD4u,
-        context + ": MOV.B Pre-Decrement ist falsch."
-    );
+void verify_cpu(const katana_generated::CpuState& cpu, const std::string& context) {
+    require(cpu.r[1] == 0xA1B2C3D4u && cpu.r[2] == 0x00000100u &&
+                cpu.memory.read_u8(0x00000100u) == 0xD4u,
+            context + ": MOV.B Pre-Decrement ist falsch.");
 
-    require(
-        cpu.r[3] == 0x1122A1B2u &&
-        cpu.r[4] == 0x00000120u &&
-        cpu.memory.read_u16(0x00000120u) == 0xA1B2u,
-        context + ": MOV.W Pre-Decrement ist falsch."
-    );
+    require(cpu.r[3] == 0x1122A1B2u && cpu.r[4] == 0x00000120u &&
+                cpu.memory.read_u16(0x00000120u) == 0xA1B2u,
+            context + ": MOV.W Pre-Decrement ist falsch.");
 
-    require(
-        cpu.r[5] == 0x89ABCDEFu &&
-        cpu.r[6] == 0x00000140u &&
-        cpu.memory.read_u32(0x00000140u) == 0x89ABCDEFu,
-        context + ": MOV.L Pre-Decrement ist falsch."
-    );
+    require(cpu.r[5] == 0x89ABCDEFu && cpu.r[6] == 0x00000140u &&
+                cpu.memory.read_u32(0x00000140u) == 0x89ABCDEFu,
+            context + ": MOV.L Pre-Decrement ist falsch.");
 
-    require(
-        cpu.r[7] == 0x00000161u &&
-        cpu.r[8] == 0xFFFFFF80u,
-        context + ": MOV.B Post-Increment ist falsch."
-    );
+    require(cpu.r[7] == 0x00000161u && cpu.r[8] == 0xFFFFFF80u,
+            context + ": MOV.B Post-Increment ist falsch.");
 
-    require(
-        cpu.r[9] == 0x00000172u &&
-        cpu.r[10] == 0xFFFF8001u,
-        context + ": MOV.W Post-Increment ist falsch."
-    );
+    require(cpu.r[9] == 0x00000172u && cpu.r[10] == 0xFFFF8001u,
+            context + ": MOV.W Post-Increment ist falsch.");
 
-    require(
-        cpu.r[11] == 0x00000184u &&
-        cpu.r[12] == 0x76543210u,
-        context + ": MOV.L Post-Increment ist falsch."
-    );
+    require(cpu.r[11] == 0x00000184u && cpu.r[12] == 0x76543210u,
+            context + ": MOV.L Post-Increment ist falsch.");
 
-    require(
-        cpu.r[13] == 0x00000209u &&
-        cpu.memory.read_u8(0x0000020Fu) == 0x10u &&
-        cpu.memory.read_u16(0x0000020Du) == 0x020Fu &&
-        cpu.memory.read_u32(0x00000209u) == 0x0000020Du,
-        context + ": Identische Pre-Decrement-Register sind falsch."
-    );
+    require(cpu.r[13] == 0x00000209u && cpu.memory.read_u8(0x0000020Fu) == 0x10u &&
+                cpu.memory.read_u16(0x0000020Du) == 0x020Fu &&
+                cpu.memory.read_u32(0x00000209u) == 0x0000020Du,
+            context + ": Identische Pre-Decrement-Register sind falsch.");
 
-    require(
-        cpu.r[14] == 0x12345678u,
-        context + ": Identische Post-Increment-Register sind falsch."
-    );
+    require(cpu.r[14] == 0x12345678u,
+            context + ": Identische Post-Increment-Register sind falsch.");
 
-    require(
-        cpu.mach == 0x13579BDFu &&
-        cpu.macl == 0x2468ACE0u &&
-        cpu.t &&
-        cpu.s &&
-        cpu.q &&
-        !cpu.m,
-        context + ": Die Speicheroperationen haben fremden CPU-Zustand veraendert."
-    );
+    require(cpu.mach == 0x13579BDFu && cpu.macl == 0x2468ACE0u && cpu.t && cpu.s && cpu.q && !cpu.m,
+            context + ": Die Speicheroperationen haben fremden CPU-Zustand veraendert.");
 }
 
 void run_direct_functions() {
@@ -193,20 +147,14 @@ void run_invalid_access_cases() {
 
         katana_generated::fn_8C010030(cpu);
 
-        require(
-            cpu.trap_pending &&
-            cpu.last_exception_cause ==
-                katana::runtime::ExceptionCause::BusErrorWrite &&
-            cpu.expevt == katana::runtime::event_address_error_write &&
-            cpu.tea == 0xFFFFFFFFu &&
-            cpu.spc == 0x8C010030u,
-            "Pre-Decrement-Wraparound erzeugt keine strukturierte Bus-Exception."
-        );
+        require(cpu.trap_pending &&
+                    cpu.last_exception_cause == katana::runtime::ExceptionCause::BusErrorWrite &&
+                    cpu.expevt == katana::runtime::event_address_error_write &&
+                    cpu.tea == 0xFFFFFFFFu && cpu.spc == 0x8C010030u,
+                "Pre-Decrement-Wraparound erzeugt keine strukturierte Bus-Exception.");
         katana::runtime::return_from_exception(cpu);
-        require(
-            cpu.r[1] == 0xA1B2C3D4u && cpu.r[2] == 0u,
-            "Fehlgeschlagenes Pre-Decrement hat Register vorzeitig veraendert."
-        );
+        require(cpu.r[1] == 0xA1B2C3D4u && cpu.r[2] == 0u,
+                "Fehlgeschlagenes Pre-Decrement hat Register vorzeitig veraendert.");
     }
 
     {
@@ -217,33 +165,25 @@ void run_invalid_access_cases() {
 
         katana_generated::fn_8C010048(cpu);
 
-        require(
-            cpu.trap_pending &&
-            cpu.last_exception_cause ==
-                katana::runtime::ExceptionCause::BusErrorRead &&
-            cpu.expevt == katana::runtime::event_address_error_read &&
-            cpu.tea == 1024u * 1024u &&
-            cpu.spc == 0x8C010048u,
-            "Post-Increment ausserhalb des Speichers erzeugt keine Bus-Exception."
-        );
+        require(cpu.trap_pending &&
+                    cpu.last_exception_cause == katana::runtime::ExceptionCause::BusErrorRead &&
+                    cpu.expevt == katana::runtime::event_address_error_read &&
+                    cpu.tea == 1024u * 1024u && cpu.spc == 0x8C010048u,
+                "Post-Increment ausserhalb des Speichers erzeugt keine Bus-Exception.");
         katana::runtime::return_from_exception(cpu);
-        require(
-            cpu.r[7] == 1024u * 1024u &&
-            cpu.r[8] == 0xCAFEBABEu,
-            "Fehlgeschlagenes Post-Increment hat Register vorzeitig veraendert."
-        );
+        require(cpu.r[7] == 1024u * 1024u && cpu.r[8] == 0xCAFEBABEu,
+                "Fehlgeschlagenes Post-Increment hat Register vorzeitig veraendert.");
     }
 }
 
-}
+} // namespace
 
 int main() {
     run_direct_functions();
     run_complete_chain();
     run_invalid_access_cases();
 
-    std::cout
-        << "KR-1401 End-to-End-Semantik wurde erfolgreich ausgefuehrt.\n";
+    std::cout << "KR-1401 End-to-End-Semantik wurde erfolgreich ausgefuehrt.\n";
 
     return EXIT_SUCCESS;
 }

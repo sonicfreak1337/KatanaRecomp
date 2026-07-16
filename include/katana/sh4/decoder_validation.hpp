@@ -19,13 +19,11 @@ struct DecoderCollision {
     std::uint16_t example_opcode;
 };
 
-[[nodiscard]] constexpr bool opcode_rules_overlap(
-    const OpcodeRuleView first,
-    const OpcodeRuleView second
-) noexcept {
+[[nodiscard]] constexpr bool opcode_rules_overlap(const OpcodeRuleView first,
+                                                  const OpcodeRuleView second) noexcept {
     return ((first.pattern ^ second.pattern) & first.mask & second.mask) == 0u;
 }
 
 [[nodiscard]] std::vector<DecoderCollision> find_decoder_collisions();
 
-}
+} // namespace katana::sh4

@@ -42,13 +42,11 @@ struct AnalysisGraph {
     std::vector<AnalysisGraphEdge> edges;
 };
 
-[[nodiscard]] AnalysisGraph build_control_flow_graph(
-    const ControlFlowAnalysisResult& analysis
-);
+[[nodiscard]] AnalysisGraph build_control_flow_graph(const ControlFlowAnalysisResult& analysis);
 [[nodiscard]] AnalysisGraph build_call_graph(const ControlFlowAnalysisResult& analysis);
 [[nodiscard]] std::string serialize_analysis_graph_json(const AnalysisGraph& graph);
 [[nodiscard]] std::string serialize_analysis_graph_dot(const AnalysisGraph& graph);
 [[nodiscard]] const char* analysis_graph_kind_name(AnalysisGraphKind kind) noexcept;
 [[nodiscard]] const char* analysis_graph_edge_kind_name(AnalysisGraphEdgeKind kind) noexcept;
 
-}
+} // namespace katana::analysis

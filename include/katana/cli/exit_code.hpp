@@ -24,20 +24,28 @@ enum class ExitCode : int {
 
 [[nodiscard]] constexpr std::string_view exit_code_name(const ExitCode code) noexcept {
     switch (code) {
-        case ExitCode::Success: return "success";
-        case ExitCode::Usage: return "usage";
-        case ExitCode::InvalidInput: return "invalid-input";
-        case ExitCode::InputOutput: return "input-output";
-        case ExitCode::ProcessingFailure: return "processing-failure";
-        case ExitCode::CodeGenerationFailure: return "codegen-failure";
-        case ExitCode::BuildFailure: return "build-failure";
-        case ExitCode::InternalError: return "internal-error";
+    case ExitCode::Success:
+        return "success";
+    case ExitCode::Usage:
+        return "usage";
+    case ExitCode::InvalidInput:
+        return "invalid-input";
+    case ExitCode::InputOutput:
+        return "input-output";
+    case ExitCode::ProcessingFailure:
+        return "processing-failure";
+    case ExitCode::CodeGenerationFailure:
+        return "codegen-failure";
+    case ExitCode::BuildFailure:
+        return "build-failure";
+    case ExitCode::InternalError:
+        return "internal-error";
     }
     return "internal-error";
 }
 
 class Error final : public std::runtime_error {
-public:
+  public:
     Error(const ExitCode code, std::string message)
         : std::runtime_error(std::move(message)), code_(code) {
         if (code == ExitCode::Success) {
@@ -45,10 +53,12 @@ public:
         }
     }
 
-    [[nodiscard]] ExitCode code() const noexcept { return code_; }
+    [[nodiscard]] ExitCode code() const noexcept {
+        return code_;
+    }
 
-private:
+  private:
     ExitCode code_;
 };
 
-}
+} // namespace katana::cli

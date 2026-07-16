@@ -45,7 +45,7 @@ struct FirmwareTargetResolution {
 };
 
 class FirmwareHandoffMap {
-public:
+  public:
     void map_segment(FirmwareMapping mapping);
     void record_copy(FirmwareCodeCopy copy);
     void mark_copy_changed(std::uint32_t destination_address);
@@ -56,7 +56,7 @@ public:
     [[nodiscard]] const std::vector<FirmwareCodeCopy>& copies() const noexcept;
     [[nodiscard]] std::size_t canonical_origin_count() const noexcept;
 
-private:
+  private:
     std::vector<FirmwareMapping> mappings_;
     std::vector<FirmwareCodeCopy> copies_;
     std::vector<RuntimeFirmwareSymbol> symbols_;

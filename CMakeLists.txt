@@ -85,13 +85,14 @@ endif()
 if(KATANA_ENABLE_STATIC_ANALYSIS)
     set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
     if(MSVC)
-        add_compile_options(/analyze /analyze:external-)
+        add_compile_options(/analyze /analyze:external- /WX)
     elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
         find_program(KATANA_CLANG_TIDY_EXECUTABLE NAMES clang-tidy REQUIRED)
         set(
             CMAKE_CXX_CLANG_TIDY
             "${KATANA_CLANG_TIDY_EXECUTABLE};--warnings-as-errors=*"
         )
+        add_compile_options(-Werror)
     else()
         message(FATAL_ERROR "KATANA_ENABLE_STATIC_ANALYSIS is unsupported by this compiler")
     endif()
@@ -323,6 +324,14 @@ add_test(
     COMMAND katana-runtime-tests
 )
 
+add_executable(
+    katana-phase8-diagnostics-tests
+    tests/runtime/phase8_diagnostics_tests.cpp
+)
+target_link_libraries(katana-phase8-diagnostics-tests PRIVATE katana_runtime)
+katana_enable_warnings(katana-phase8-diagnostics-tests)
+add_test(NAME katana-phase8-diagnostics-tests COMMAND katana-phase8-diagnostics-tests)
+
 add_executable(katana-block-abi-tests tests/runtime/block_abi_tests.cpp)
 target_link_libraries(katana-block-abi-tests PRIVATE katana_runtime)
 katana_enable_warnings(katana-block-abi-tests)
@@ -362,6 +371,11 @@ add_executable(katana-scheduler-safepoint-tests tests/runtime/scheduler_safepoin
 target_link_libraries(katana-scheduler-safepoint-tests PRIVATE katana_runtime)
 katana_enable_warnings(katana-scheduler-safepoint-tests)
 add_test(NAME katana-scheduler-safepoint-tests COMMAND katana-scheduler-safepoint-tests)
+
+add_executable(katana-system-replay-tests tests/runtime/system_replay_tests.cpp)
+target_link_libraries(katana-system-replay-tests PRIVATE katana_runtime)
+katana_enable_warnings(katana-system-replay-tests)
+add_test(NAME katana-system-replay-tests COMMAND katana-system-replay-tests)
 
 add_executable(katana-block-guard-tests tests/runtime/block_guard_tests.cpp)
 target_link_libraries(katana-block-guard-tests PRIVATE katana_runtime)
@@ -554,6 +568,14 @@ target_link_libraries(katana-phase6-gate-tests PRIVATE katana_core katana_runtim
 katana_enable_warnings(katana-phase6-gate-tests)
 add_test(NAME katana-phase6-gate-tests COMMAND katana-phase6-gate-tests)
 
+add_executable(
+    katana-firmware-diagnostics-tests
+    tests/platform/firmware_diagnostics_tests.cpp
+)
+target_link_libraries(katana-firmware-diagnostics-tests PRIVATE katana_core katana_runtime)
+katana_enable_warnings(katana-firmware-diagnostics-tests)
+add_test(NAME katana-firmware-diagnostics-tests COMMAND katana-firmware-diagnostics-tests)
+
 add_executable(katana-maple-bus-tests tests/runtime/maple_bus_tests.cpp)
 target_link_libraries(katana-maple-bus-tests PRIVATE katana_runtime)
 katana_enable_warnings(katana-maple-bus-tests)
@@ -743,6 +765,11 @@ add_test(
     NAME katana-project-manifest-tests
     COMMAND katana-project-manifest-tests
 )
+
+add_executable(katana-tooling-contract-tests tests/io/tooling_contract_tests.cpp)
+target_link_libraries(katana-tooling-contract-tests PRIVATE katana_core katana_runtime)
+katana_enable_warnings(katana-tooling-contract-tests)
+add_test(NAME katana-tooling-contract-tests COMMAND katana-tooling-contract-tests)
 
 add_executable(katana-instruction-metadata-tests
     tests/decoder/instruction_metadata_tests.cpp
@@ -967,6 +994,11 @@ add_test(
     COMMAND katana-control-flow-analysis-tests
 )
 
+add_executable(katana-graph-export-tests tests/analysis/graph_export_tests.cpp)
+target_link_libraries(katana-graph-export-tests PRIVATE katana_core)
+katana_enable_warnings(katana-graph-export-tests)
+add_test(NAME katana-graph-export-tests COMMAND katana-graph-export-tests)
+
 add_executable(katana-control-flow-cli-fixture-writer
     tests/analysis/control_flow_cli_fixture_writer.cpp
 )
@@ -1152,6 +1184,20 @@ add_executable(katana-codegen-project-tests tests/codegen/project_tests.cpp)
 target_link_libraries(katana-codegen-project-tests PRIVATE katana_core)
 katana_enable_warnings(katana-codegen-project-tests)
 add_test(NAME katana-codegen-project-tests COMMAND katana-codegen-project-tests)
+
+add_executable(katana-port-export-tests tests/codegen/port_export_tests.cpp)
+target_link_libraries(katana-port-export-tests PRIVATE katana_core katana_runtime)
+katana_enable_warnings(katana-port-export-tests)
+add_test(NAME katana-port-export-tests COMMAND katana-port-export-tests)
+add_test(
+    NAME katana-port-cli-tests
+    COMMAND ${CMAKE_COMMAND}
+        -DKATANA_FIXTURE_WRITER=$<TARGET_FILE:katana-port-export-tests>
+        -DKATANA_CLI=$<TARGET_FILE:katana-recomp>
+        -DKATANA_BINARY_ROOT=${CMAKE_BINARY_DIR}
+        -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/codegen/verify_port_cli.cmake
+)
+set_tests_properties(katana-port-cli-tests PROPERTIES TIMEOUT 300)
 
 add_executable(katana-codegen-metadata-tests tests/codegen/metadata_tests.cpp)
 target_link_libraries(katana-codegen-metadata-tests PRIVATE katana_core katana_runtime)

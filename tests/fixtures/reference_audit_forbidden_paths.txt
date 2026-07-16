@@ -1,0 +1,8 @@
+# Synthetic path markers. These files do not exist and contain no binary data.
+private/discs/commercial-game.gdi
+bios/dc_boot.bin
+flash/dc_flash.bin
+vendor/flycast/core/hw/sh4/sh4_sched.cpp
+third_party/dcrecomp/src/main.cpp
+track03.bin
+images/commercial-disc.cdi

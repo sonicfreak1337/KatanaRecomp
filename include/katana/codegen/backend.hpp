@@ -24,9 +24,7 @@ enum class BackendCapability : std::uint64_t {
 
 using BackendCapabilities = std::uint64_t;
 
-[[nodiscard]] constexpr BackendCapabilities capability(
-    const BackendCapability value
-) noexcept {
+[[nodiscard]] constexpr BackendCapabilities capability(const BackendCapability value) noexcept {
     return static_cast<BackendCapabilities>(value);
 }
 
@@ -51,7 +49,7 @@ struct BackendEmission {
 };
 
 class Backend {
-public:
+  public:
     virtual ~Backend() = default;
 
     [[nodiscard]] virtual std::string_view name() const noexcept = 0;
@@ -61,9 +59,7 @@ public:
     [[nodiscard]] virtual BackendEmission emit(const BackendRequest& request) const = 0;
 };
 
-[[nodiscard]] BackendEmission generate_program(
-    const Backend& backend,
-    const BackendRequest& request
-);
+[[nodiscard]] BackendEmission generate_program(const Backend& backend,
+                                               const BackendRequest& request);
 
 } // namespace katana::codegen

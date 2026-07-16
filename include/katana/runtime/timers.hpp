@@ -13,29 +13,23 @@
 namespace katana::runtime {
 
 class Sh4RtcClockDomain final {
-public:
+  public:
     static constexpr std::uint64_t source_frequency_hz = 16'384u;
     using PhaseObserverId = std::uint64_t;
     using PhaseObserver = std::function<void(bool before_reset, std::uint64_t guest_cycle)>;
 
-    explicit Sh4RtcClockDomain(
-        std::uint64_t guest_cycles_per_second = 200'000'000u
-    );
+    explicit Sh4RtcClockDomain(std::uint64_t guest_cycles_per_second = 200'000'000u);
 
     [[nodiscard]] std::uint64_t guest_cycles_per_second() const noexcept;
-    [[nodiscard]] std::uint64_t elapsed_ticks(
-        std::uint64_t first_cycle,
-        std::uint64_t last_cycle
-    ) const;
-    [[nodiscard]] std::uint64_t deadline_after(
-        std::uint64_t guest_cycle,
-        std::uint64_t source_ticks
-    ) const;
+    [[nodiscard]] std::uint64_t elapsed_ticks(std::uint64_t first_cycle,
+                                              std::uint64_t last_cycle) const;
+    [[nodiscard]] std::uint64_t deadline_after(std::uint64_t guest_cycle,
+                                               std::uint64_t source_ticks) const;
     [[nodiscard]] PhaseObserverId add_phase_observer(PhaseObserver observer);
     [[nodiscard]] bool remove_phase_observer(PhaseObserverId observer_id) noexcept;
     void reset_phase(std::uint64_t guest_cycle);
 
-private:
+  private:
     [[nodiscard]] std::uint64_t ticks_at(std::uint64_t guest_cycle) const;
     [[nodiscard]] std::uint64_t cycle_at_or_after_tick(std::uint64_t tick) const;
 
@@ -51,7 +45,7 @@ struct TmuTiming {
 };
 
 class Sh4Tmu final {
-public:
+  public:
     static constexpr std::size_t channel_count = 3u;
     static constexpr std::uint16_t underflow_flag = 0x0100u;
     static constexpr std::uint16_t underflow_interrupt_enable = 0x0020u;
@@ -75,7 +69,7 @@ public:
     [[nodiscard]] std::uint64_t underflow_count(std::size_t channel) const;
     void reset() noexcept;
 
-private:
+  private:
     struct Channel {
         std::uint32_t constant = 0xFFFFFFFFu;
         std::uint32_t counter = 0xFFFFFFFFu;
@@ -129,15 +123,10 @@ enum class RtcPeriodicRate : std::uint8_t {
 };
 
 class Sh4Rtc final {
-public:
-    explicit Sh4Rtc(
-        EventScheduler& scheduler,
-        std::uint64_t guest_cycles_per_second = 200'000'000u
-    );
-    Sh4Rtc(
-        EventScheduler& scheduler,
-        std::shared_ptr<Sh4RtcClockDomain> clock
-    );
+  public:
+    explicit Sh4Rtc(EventScheduler& scheduler,
+                    std::uint64_t guest_cycles_per_second = 200'000'000u);
+    Sh4Rtc(EventScheduler& scheduler, std::shared_ptr<Sh4RtcClockDomain> clock);
     ~Sh4Rtc();
     Sh4Rtc(const Sh4Rtc&) = delete;
     Sh4Rtc& operator=(const Sh4Rtc&) = delete;
@@ -163,7 +152,7 @@ public:
     [[nodiscard]] std::uint64_t tick_count() const noexcept;
     [[nodiscard]] std::uint64_t periodic_event_count() const noexcept;
 
-private:
+  private:
     static void validate(const RtcDateTime& value);
     static bool leap_year(std::uint16_t year) noexcept;
     static std::uint8_t days_in_month(std::uint16_t year, std::uint8_t month) noexcept;

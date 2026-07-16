@@ -16,55 +16,28 @@ void require(const bool condition, const std::string& message) {
     }
 }
 
-template <std::size_t Size>
-bool all_zero(const std::array<std::uint32_t, Size>& values) {
+template <std::size_t Size> bool all_zero(const std::array<std::uint32_t, Size>& values) {
     return std::all_of(
-        values.begin(),
-        values.end(),
-        [](const std::uint32_t value) {
-            return value == 0u;
-        }
-    );
+        values.begin(), values.end(), [](const std::uint32_t value) { return value == 0u; });
 }
 
 bool scalar_state_is_zero(const katana::runtime::CpuState& cpu) {
-    return
-        cpu.pc == 0u &&
-        cpu.pr == 0u &&
-        cpu.gbr == 0u &&
-        cpu.vbr == 0u &&
-        cpu.ssr == 0u &&
-        cpu.spc == 0u &&
-        cpu.sgr == 0u &&
-        cpu.dbr == 0u &&
-        cpu.tra == 0u &&
-        cpu.tea == 0u &&
-        cpu.expevt == 0u &&
-        cpu.intevt == 0u &&
-        cpu.mach == 0u &&
-        cpu.macl == 0u &&
-        cpu.fpul == 0u &&
-        cpu.fpscr == 0u &&
-        cpu.read_sr() == 0u &&
-        !cpu.t &&
-        !cpu.s &&
-        !cpu.q &&
-        !cpu.m &&
-        !cpu.trap_pending &&
-        cpu.last_exception_cause == katana::runtime::ExceptionCause::None &&
-        !cpu.exception_in_delay_slot &&
-        !cpu.sleeping &&
-        cpu.last_prefetch_address == 0u &&
-        cpu.prefetch_count == 0u &&
-        !cpu.last_prefetch_was_store_queue;
+    return cpu.pc == 0u && cpu.pr == 0u && cpu.gbr == 0u && cpu.vbr == 0u && cpu.ssr == 0u &&
+           cpu.spc == 0u && cpu.sgr == 0u && cpu.dbr == 0u && cpu.tra == 0u && cpu.tea == 0u &&
+           cpu.expevt == 0u && cpu.intevt == 0u && cpu.mach == 0u && cpu.macl == 0u &&
+           cpu.fpul == 0u && cpu.fpscr == 0u && cpu.read_sr() == 0u && !cpu.t && !cpu.s && !cpu.q &&
+           !cpu.m && !cpu.trap_pending &&
+           cpu.last_exception_cause == katana::runtime::ExceptionCause::None &&
+           !cpu.exception_in_delay_slot && !cpu.sleeping && cpu.last_prefetch_address == 0u &&
+           cpu.prefetch_count == 0u && !cpu.last_prefetch_was_store_queue;
 }
 
-}
+} // namespace
 
 int main() {
     using katana::runtime::CpuState;
-    using katana::runtime::ResetState;
     using katana::runtime::reset_cpu;
+    using katana::runtime::ResetState;
 
     CpuState cpu;
 
@@ -100,23 +73,14 @@ int main() {
 
     reset_cpu(cpu);
 
-    require(
-        all_zero(cpu.r) &&
-        all_zero(cpu.r_bank) &&
-        all_zero(cpu.fr) &&
-        all_zero(cpu.xf),
-        "Der Standard-Reset loescht nicht alle Registerbaenke."
-    );
+    require(all_zero(cpu.r) && all_zero(cpu.r_bank) && all_zero(cpu.fr) && all_zero(cpu.xf),
+            "Der Standard-Reset loescht nicht alle Registerbaenke.");
 
-    require(
-        scalar_state_is_zero(cpu),
-        "Der Standard-Reset erzeugt keinen vollstaendig definierten Nullzustand."
-    );
+    require(scalar_state_is_zero(cpu),
+            "Der Standard-Reset erzeugt keinen vollstaendig definierten Nullzustand.");
 
-    require(
-        cpu.memory.read_u32(16u) == 0x89ABCDEFu,
-        "Ein CPU-Reset darf den Runtime-Speicher nicht loeschen."
-    );
+    require(cpu.memory.read_u32(16u) == 0x89ABCDEFu,
+            "Ein CPU-Reset darf den Runtime-Speicher nicht loeschen.");
 
     ResetState configured;
     configured.program_counter = 0x8C010000u;
@@ -149,63 +113,30 @@ int main() {
 
     reset_cpu(cpu, configured);
 
-    require(
-        cpu.pc == configured.program_counter &&
-        cpu.r[15] == configured.stack_pointer &&
-        cpu.vbr == configured.vector_base &&
-        cpu.fpscr == configured.fpscr,
-        "Konfigurierte Reset-Werte werden nicht uebernommen."
-    );
+    require(cpu.pc == configured.program_counter && cpu.r[15] == configured.stack_pointer &&
+                cpu.vbr == configured.vector_base && cpu.fpscr == configured.fpscr,
+            "Konfigurierte Reset-Werte werden nicht uebernommen.");
 
-    require(
-        cpu.read_sr() == 0x700083F3u &&
-        cpu.sr == 0x700083F3u &&
-        cpu.m &&
-        cpu.q &&
-        cpu.s &&
-        cpu.t,
-        "Der konfigurierte Statusregisterwert wird nicht maskiert uebernommen."
-    );
+    require(cpu.read_sr() == 0x700083F3u && cpu.sr == 0x700083F3u && cpu.m && cpu.q && cpu.s &&
+                cpu.t,
+            "Der konfigurierte Statusregisterwert wird nicht maskiert uebernommen.");
 
-    require(
-        std::all_of(
-            cpu.r.begin(),
-            cpu.r.begin() + 15,
-            [](const std::uint32_t value) {
-                return value == 0u;
-            }
-        ) &&
-        all_zero(cpu.r_bank) &&
-        all_zero(cpu.fr) &&
-        all_zero(cpu.xf),
-        "Der konfigurierte Reset laesst alte Registerwerte zurueck."
-    );
+    require(std::all_of(cpu.r.begin(),
+                        cpu.r.begin() + 15,
+                        [](const std::uint32_t value) { return value == 0u; }) &&
+                all_zero(cpu.r_bank) && all_zero(cpu.fr) && all_zero(cpu.xf),
+            "Der konfigurierte Reset laesst alte Registerwerte zurueck.");
 
-    require(
-        cpu.pr == 0u &&
-        cpu.gbr == 0u &&
-        cpu.ssr == 0u &&
-        cpu.spc == 0u &&
-        cpu.sgr == 0u &&
-        cpu.dbr == 0u &&
-        cpu.tra == 0u &&
-        cpu.tea == 0u &&
-        cpu.expevt == 0u &&
-        cpu.intevt == 0u &&
-        cpu.mach == 0u &&
-        cpu.macl == 0u &&
-        cpu.fpul == 0u &&
-        !cpu.trap_pending &&
-        cpu.last_exception_cause == katana::runtime::ExceptionCause::None &&
-        !cpu.exception_in_delay_slot &&
-        !cpu.sleeping,
-        "Der konfigurierte Reset bewahrt unerlaubt alten CPU-Zustand."
-    );
+    require(cpu.pr == 0u && cpu.gbr == 0u && cpu.ssr == 0u && cpu.spc == 0u && cpu.sgr == 0u &&
+                cpu.dbr == 0u && cpu.tra == 0u && cpu.tea == 0u && cpu.expevt == 0u &&
+                cpu.intevt == 0u && cpu.mach == 0u && cpu.macl == 0u && cpu.fpul == 0u &&
+                !cpu.trap_pending &&
+                cpu.last_exception_cause == katana::runtime::ExceptionCause::None &&
+                !cpu.exception_in_delay_slot && !cpu.sleeping,
+            "Der konfigurierte Reset bewahrt unerlaubt alten CPU-Zustand.");
 
-    require(
-        cpu.memory.read_u32(16u) == 0x89ABCDEFu,
-        "Auch ein konfigurierter CPU-Reset muss den Speicher bewahren."
-    );
+    require(cpu.memory.read_u32(16u) == 0x89ABCDEFu,
+            "Auch ein konfigurierter CPU-Reset muss den Speicher bewahren.");
 
     cpu.pc = 1u;
     cpu.r[15] = 2u;
@@ -215,14 +146,10 @@ int main() {
 
     reset_cpu(cpu, configured);
 
-    require(
-        cpu.pc == configured.program_counter &&
-        cpu.r[15] == configured.stack_pointer &&
-        cpu.vbr == configured.vector_base &&
-        cpu.fpscr == configured.fpscr &&
-        cpu.read_sr() == 0x700083F3u,
-        "Wiederholte Resets mit derselben Konfiguration sind nicht deterministisch."
-    );
+    require(cpu.pc == configured.program_counter && cpu.r[15] == configured.stack_pointer &&
+                cpu.vbr == configured.vector_base && cpu.fpscr == configured.fpscr &&
+                cpu.read_sr() == 0x700083F3u,
+            "Wiederholte Resets mit derselben Konfiguration sind nicht deterministisch.");
 
     std::cout << "Deterministischer Runtime-Reset erfolgreich.\n";
     return EXIT_SUCCESS;

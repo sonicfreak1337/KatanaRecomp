@@ -30,9 +30,7 @@ enum class BlockStateGuard : std::uint32_t {
 
 using BlockStateGuards = std::uint32_t;
 
-[[nodiscard]] constexpr BlockStateGuards block_state_guard(
-    const BlockStateGuard guard
-) noexcept {
+[[nodiscard]] constexpr BlockStateGuards block_state_guard(const BlockStateGuard guard) noexcept {
     return static_cast<BlockStateGuards>(guard);
 }
 
@@ -49,17 +47,14 @@ struct BlockMetadata {
     BlockStateGuards state_guards = block_state_guard(BlockStateGuard::None);
 };
 
-[[nodiscard]] std::string serialize_block_metadata(
-    std::span<const BlockMetadata> blocks,
-    std::string_view backend_name,
-    std::uint32_t backend_abi
-);
+[[nodiscard]] std::string serialize_block_metadata(std::span<const BlockMetadata> blocks,
+                                                   std::string_view backend_name,
+                                                   std::uint32_t backend_abi);
 
-[[nodiscard]] std::vector<ProjectArtifact> make_separated_codegen_artifacts(
-    std::vector<ProjectArtifact> code_units,
-    std::string constants,
-    std::string symbols,
-    std::string runtime_metadata
-);
+[[nodiscard]] std::vector<ProjectArtifact>
+make_separated_codegen_artifacts(std::vector<ProjectArtifact> code_units,
+                                 std::string constants,
+                                 std::string symbols,
+                                 std::string runtime_metadata);
 
 } // namespace katana::codegen

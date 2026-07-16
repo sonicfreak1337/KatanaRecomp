@@ -28,35 +28,23 @@ struct ExceptionRequest {
     bool in_delay_slot = false;
 };
 
-void enter_exception(
-    CpuState& cpu,
-    const ExceptionRequest& request
-) noexcept;
+void enter_exception(CpuState& cpu, const ExceptionRequest& request) noexcept;
 
-void raise_trapa(
-    CpuState& cpu,
-    std::uint8_t immediate,
-    std::uint32_t instruction_pc
-) noexcept;
+void raise_trapa(CpuState& cpu, std::uint8_t immediate, std::uint32_t instruction_pc) noexcept;
 
 void raise_illegal_instruction(
     CpuState& cpu,
     std::uint32_t instruction_pc,
-    std::optional<std::uint32_t> delay_slot_owner = std::nullopt
-) noexcept;
+    std::optional<std::uint32_t> delay_slot_owner = std::nullopt) noexcept;
 
-void raise_fpu_disabled(
-    CpuState& cpu,
-    std::uint32_t instruction_pc,
-    std::optional<std::uint32_t> delay_slot_owner = std::nullopt
-) noexcept;
+void raise_fpu_disabled(CpuState& cpu,
+                        std::uint32_t instruction_pc,
+                        std::optional<std::uint32_t> delay_slot_owner = std::nullopt) noexcept;
 
-void enter_memory_exception(
-    CpuState& cpu,
-    const MemoryAccessError& error,
-    std::uint32_t instruction_pc,
-    std::optional<std::uint32_t> delay_slot_owner = std::nullopt
-) noexcept;
+void enter_memory_exception(CpuState& cpu,
+                            const MemoryAccessError& error,
+                            std::uint32_t instruction_pc,
+                            std::optional<std::uint32_t> delay_slot_owner = std::nullopt) noexcept;
 
 void return_from_exception(CpuState& cpu) noexcept;
 

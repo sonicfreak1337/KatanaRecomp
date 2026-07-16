@@ -27,10 +27,9 @@ struct PortExportResult {
     std::vector<std::string> checkpoints;
 };
 
-[[nodiscard]] PortExportResult export_dreamcast_port_project(
-    const std::filesystem::path& gdi_path,
-    const std::filesystem::path& output_root,
-    const PortExportOptions& options
-);
+[[nodiscard]] PortExportResult
+export_dreamcast_port_project(const std::filesystem::path& gdi_path,
+                              const std::filesystem::path& output_root,
+                              const PortExportOptions& options);
 
-}
+} // namespace katana::codegen

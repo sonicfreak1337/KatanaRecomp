@@ -30,11 +30,9 @@ struct BuildProvenance {
 };
 
 [[nodiscard]] std::string sha256_bytes(std::string_view bytes);
-[[nodiscard]] InputProvenance capture_input_provenance(
-    std::string role,
-    const std::filesystem::path& path
-);
+[[nodiscard]] InputProvenance capture_input_provenance(std::string role,
+                                                       const std::filesystem::path& path);
 [[nodiscard]] std::string make_portable_build_identity(const BuildProvenance& provenance);
 [[nodiscard]] std::string format_build_provenance_json(const BuildProvenance& provenance);
 
-}
+} // namespace katana::io

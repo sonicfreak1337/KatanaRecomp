@@ -1,25 +1,25 @@
+#include "katana/analysis/analysis_overrides.hpp"
 #include "katana/analysis/basic_blocks.hpp"
+#include "katana/analysis/control_flow_analysis.hpp"
+#include "katana/analysis/control_flow_report.hpp"
 #include "katana/analysis/function_analysis.hpp"
 #include "katana/analysis/graph_export.hpp"
 #include "katana/analysis/recursive_analysis.hpp"
-#include "katana/analysis/analysis_overrides.hpp"
-#include "katana/analysis/control_flow_report.hpp"
-#include "katana/analysis/control_flow_analysis.hpp"
-#include "katana/codegen/cpp_emitter.hpp"
-#include "katana/codegen/probe.hpp"
-#include "katana/codegen/port_export.hpp"
 #include "katana/cli/exit_code.hpp"
-#include "katana/io/raw_binary_loader.hpp"
+#include "katana/codegen/cpp_emitter.hpp"
+#include "katana/codegen/port_export.hpp"
+#include "katana/codegen/probe.hpp"
 #include "katana/io/elf32_sh_loader.hpp"
 #include "katana/io/project_manifest.hpp"
+#include "katana/io/raw_binary_loader.hpp"
 #include "katana/ir/lower.hpp"
 #include "katana/ir/optimize.hpp"
 #include "katana/ir/serialize.hpp"
+#include "katana/platform/dreamcast_disc.hpp"
+#include "katana/platform/firmware_diagnostics.hpp"
 #include "katana/sh4/decoder.hpp"
 #include "katana/sh4/disassembler.hpp"
 #include "katana/sh4/isa_coverage.hpp"
-#include "katana/platform/dreamcast_disc.hpp"
-#include "katana/platform/firmware_diagnostics.hpp"
 
 #include <algorithm>
 #include <array>
@@ -39,68 +39,42 @@
 
 namespace {
 
-std::uint32_t parse_hex_value(
-    std::string text,
-    const std::uint32_t maximum,
-    const std::string& description
-) {
+std::uint32_t
+parse_hex_value(std::string text, const std::uint32_t maximum, const std::string& description) {
     if (text.starts_with("0x") || text.starts_with("0X")) {
         text.erase(0, 2);
     }
 
     if (text.empty()) {
-        throw std::invalid_argument(
-            description + " darf nicht leer sein."
-        );
+        throw std::invalid_argument(description + " darf nicht leer sein.");
     }
 
-    const auto is_valid_hex = std::all_of(
-        text.begin(),
-        text.end(),
-        [](const unsigned char character) {
+    const auto is_valid_hex =
+        std::all_of(text.begin(), text.end(), [](const unsigned char character) {
             return std::isxdigit(character) != 0;
-        }
-    );
+        });
 
     if (!is_valid_hex) {
-        throw std::invalid_argument(
-            description + " enthaelt ungueltige Hex-Zeichen."
-        );
+        throw std::invalid_argument(description + " enthaelt ungueltige Hex-Zeichen.");
     }
 
     std::size_t parsed_characters = 0;
-    const auto value = std::stoull(
-        text,
-        &parsed_characters,
-        16
-    );
+    const auto value = std::stoull(text, &parsed_characters, 16);
 
-    if (
-        parsed_characters != text.length() ||
-        value > maximum
-    ) {
-        throw std::invalid_argument(
-            description + " liegt ausserhalb des erlaubten Bereichs."
-        );
+    if (parsed_characters != text.length() || value > maximum) {
+        throw std::invalid_argument(description + " liegt ausserhalb des erlaubten Bereichs.");
     }
 
     return static_cast<std::uint32_t>(value);
 }
 
-std::string format_disassembly_text(
-    const katana::sh4::DisassemblyLine& line
-) {
+std::string format_disassembly_text(const katana::sh4::DisassemblyLine& line) {
     std::ostringstream output;
     output << line.instruction.text;
 
     if (line.target_address.has_value()) {
-        output
-            << " 0x"
-            << std::hex
-            << std::uppercase
-            << std::setw(8)
-            << std::setfill('0')
-            << *line.target_address;
+        output << " 0x" << std::hex << std::uppercase << std::setw(8) << std::setfill('0')
+               << *line.target_address;
     }
 
     if (line.is_delay_slot) {
@@ -111,397 +85,276 @@ std::string format_disassembly_text(
 }
 
 void print_address(const std::uint32_t address) {
-    std::cout
-        << "0x"
-        << std::hex
-        << std::uppercase
-        << std::setw(8)
-        << std::setfill('0')
-        << address;
+    std::cout << "0x" << std::hex << std::uppercase << std::setw(8) << std::setfill('0') << address;
 }
 
-std::string_view special_register_name(
-    const katana::ir::SpecialRegister special_register
-) {
+std::string_view special_register_name(const katana::ir::SpecialRegister special_register) {
     using Register = katana::ir::SpecialRegister;
     switch (special_register) {
-        case Register::None: return "none";
-        case Register::Mach: return "mach";
-        case Register::Macl: return "macl";
-        case Register::Pr: return "pr";
-        case Register::Fpul: return "fpul";
-        case Register::Fpscr: return "fpscr";
-        case Register::Sr: return "sr";
-        case Register::Gbr: return "gbr";
-        case Register::Vbr: return "vbr";
-        case Register::Ssr: return "ssr";
-        case Register::Spc: return "spc";
-        case Register::Sgr: return "sgr";
-        case Register::Dbr: return "dbr";
-        case Register::Bank0: return "r0_bank";
-        case Register::Bank1: return "r1_bank";
-        case Register::Bank2: return "r2_bank";
-        case Register::Bank3: return "r3_bank";
-        case Register::Bank4: return "r4_bank";
-        case Register::Bank5: return "r5_bank";
-        case Register::Bank6: return "r6_bank";
-        case Register::Bank7: return "r7_bank";
+    case Register::None:
+        return "none";
+    case Register::Mach:
+        return "mach";
+    case Register::Macl:
+        return "macl";
+    case Register::Pr:
+        return "pr";
+    case Register::Fpul:
+        return "fpul";
+    case Register::Fpscr:
+        return "fpscr";
+    case Register::Sr:
+        return "sr";
+    case Register::Gbr:
+        return "gbr";
+    case Register::Vbr:
+        return "vbr";
+    case Register::Ssr:
+        return "ssr";
+    case Register::Spc:
+        return "spc";
+    case Register::Sgr:
+        return "sgr";
+    case Register::Dbr:
+        return "dbr";
+    case Register::Bank0:
+        return "r0_bank";
+    case Register::Bank1:
+        return "r1_bank";
+    case Register::Bank2:
+        return "r2_bank";
+    case Register::Bank3:
+        return "r3_bank";
+    case Register::Bank4:
+        return "r4_bank";
+    case Register::Bank5:
+        return "r5_bank";
+    case Register::Bank6:
+        return "r6_bank";
+    case Register::Bank7:
+        return "r7_bank";
     }
     return "none";
 }
 
-void print_ir_instruction(
-    const katana::ir::Instruction& instruction
-) {
+void print_ir_instruction(const katana::ir::Instruction& instruction) {
     print_address(instruction.source_address);
 
-    std::cout
-        << "  "
-        << katana::ir::operation_name(
-            instruction.operation
-        );
+    std::cout << "  " << katana::ir::operation_name(instruction.operation);
 
     switch (instruction.operation) {
-        case katana::ir::Operation::MovImmediate:
-        case katana::ir::Operation::AddImmediate:
-        case katana::ir::Operation::AndImmediate:
-        case katana::ir::Operation::OrImmediate:
-        case katana::ir::Operation::XorImmediate:
-        case katana::ir::Operation::CompareEqualImmediate:
-        case katana::ir::Operation::TestImmediate:
-            std::cout
-                << " r"
-                << std::dec
-                << static_cast<unsigned>(
-                    instruction.destination_register
-                )
-                << ", "
-                << instruction.immediate;
-            break;
+    case katana::ir::Operation::MovImmediate:
+    case katana::ir::Operation::AddImmediate:
+    case katana::ir::Operation::AndImmediate:
+    case katana::ir::Operation::OrImmediate:
+    case katana::ir::Operation::XorImmediate:
+    case katana::ir::Operation::CompareEqualImmediate:
+    case katana::ir::Operation::TestImmediate:
+        std::cout << " r" << std::dec << static_cast<unsigned>(instruction.destination_register)
+                  << ", " << instruction.immediate;
+        break;
 
-        case katana::ir::Operation::MovRegister:
-        case katana::ir::Operation::AddRegister:
-        case katana::ir::Operation::SubRegister:
-        case katana::ir::Operation::NegateRegister:
-        case katana::ir::Operation::NotRegister:
-        case katana::ir::Operation::AddWithCarry:
-        case katana::ir::Operation::AddWithOverflow:
-        case katana::ir::Operation::SubWithCarry:
-        case katana::ir::Operation::SubWithOverflow:
-        case katana::ir::Operation::NegateWithCarry:
-        case katana::ir::Operation::ExtendUnsignedByte:
-        case katana::ir::Operation::ExtendUnsignedWord:
-        case katana::ir::Operation::ExtendSignedByte:
-        case katana::ir::Operation::ExtendSignedWord:
-        case katana::ir::Operation::SwapBytes:
-        case katana::ir::Operation::SwapWords:
-        case katana::ir::Operation::ExtractMiddle:
-        case katana::ir::Operation::ShiftArithmeticDynamic:
-        case katana::ir::Operation::ShiftLogicalDynamic:
-        case katana::ir::Operation::MultiplyLong:
-        case katana::ir::Operation::MultiplySignedWord:
-        case katana::ir::Operation::MultiplyUnsignedWord:
-        case katana::ir::Operation::DoubleMultiplySignedLong:
-        case katana::ir::Operation::DoubleMultiplyUnsignedLong:
-        case katana::ir::Operation::MultiplyAccumulateWord:
-        case katana::ir::Operation::MultiplyAccumulateLong:
-        case katana::ir::Operation::DivideInitializeSigned:
-        case katana::ir::Operation::DivideStep:
-        case katana::ir::Operation::AndRegister:
-        case katana::ir::Operation::OrRegister:
-        case katana::ir::Operation::XorRegister:
-        case katana::ir::Operation::CompareEqualRegister:
-        case katana::ir::Operation::CompareHigherOrSame:
-        case katana::ir::Operation::CompareGreaterOrEqual:
-        case katana::ir::Operation::CompareHigher:
-        case katana::ir::Operation::CompareGreaterThan:
-        case katana::ir::Operation::CompareString:
-        case katana::ir::Operation::TestRegister:
-            std::cout
-                << " r"
-                << std::dec
-                << static_cast<unsigned>(
-                    instruction.destination_register
-                )
-                << ", r"
-                << static_cast<unsigned>(
-                    instruction.source_register
-                );
-            break;
+    case katana::ir::Operation::MovRegister:
+    case katana::ir::Operation::AddRegister:
+    case katana::ir::Operation::SubRegister:
+    case katana::ir::Operation::NegateRegister:
+    case katana::ir::Operation::NotRegister:
+    case katana::ir::Operation::AddWithCarry:
+    case katana::ir::Operation::AddWithOverflow:
+    case katana::ir::Operation::SubWithCarry:
+    case katana::ir::Operation::SubWithOverflow:
+    case katana::ir::Operation::NegateWithCarry:
+    case katana::ir::Operation::ExtendUnsignedByte:
+    case katana::ir::Operation::ExtendUnsignedWord:
+    case katana::ir::Operation::ExtendSignedByte:
+    case katana::ir::Operation::ExtendSignedWord:
+    case katana::ir::Operation::SwapBytes:
+    case katana::ir::Operation::SwapWords:
+    case katana::ir::Operation::ExtractMiddle:
+    case katana::ir::Operation::ShiftArithmeticDynamic:
+    case katana::ir::Operation::ShiftLogicalDynamic:
+    case katana::ir::Operation::MultiplyLong:
+    case katana::ir::Operation::MultiplySignedWord:
+    case katana::ir::Operation::MultiplyUnsignedWord:
+    case katana::ir::Operation::DoubleMultiplySignedLong:
+    case katana::ir::Operation::DoubleMultiplyUnsignedLong:
+    case katana::ir::Operation::MultiplyAccumulateWord:
+    case katana::ir::Operation::MultiplyAccumulateLong:
+    case katana::ir::Operation::DivideInitializeSigned:
+    case katana::ir::Operation::DivideStep:
+    case katana::ir::Operation::AndRegister:
+    case katana::ir::Operation::OrRegister:
+    case katana::ir::Operation::XorRegister:
+    case katana::ir::Operation::CompareEqualRegister:
+    case katana::ir::Operation::CompareHigherOrSame:
+    case katana::ir::Operation::CompareGreaterOrEqual:
+    case katana::ir::Operation::CompareHigher:
+    case katana::ir::Operation::CompareGreaterThan:
+    case katana::ir::Operation::CompareString:
+    case katana::ir::Operation::TestRegister:
+        std::cout << " r" << std::dec << static_cast<unsigned>(instruction.destination_register)
+                  << ", r" << static_cast<unsigned>(instruction.source_register);
+        break;
 
-        case katana::ir::Operation::ComparePositiveOrZero:
-        case katana::ir::Operation::ComparePositive:
-            std::cout
-                << " r"
-                << std::dec
-                << static_cast<unsigned>(
-                    instruction.destination_register
-                );
-            break;
-        case katana::ir::Operation::DecrementAndTest:
-        case katana::ir::Operation::MoveT:
-        case katana::ir::Operation::ShiftLogicalLeftOne:
-        case katana::ir::Operation::ShiftLogicalRightOne:
-        case katana::ir::Operation::ShiftArithmeticLeftOne:
-        case katana::ir::Operation::ShiftArithmeticRightOne:
-        case katana::ir::Operation::ShiftLogicalLeftTwo:
-        case katana::ir::Operation::ShiftLogicalLeftEight:
-        case katana::ir::Operation::ShiftLogicalLeftSixteen:
-        case katana::ir::Operation::ShiftLogicalRightTwo:
-        case katana::ir::Operation::ShiftLogicalRightEight:
-        case katana::ir::Operation::ShiftLogicalRightSixteen:
-        case katana::ir::Operation::RotateLeft:
-        case katana::ir::Operation::RotateRight:
-        case katana::ir::Operation::RotateLeftThroughT:
-        case katana::ir::Operation::RotateRightThroughT:
-            std::cout
-                << " r"
-                << std::dec
-                << static_cast<unsigned>(
-                    instruction.destination_register
-                );
-            break;
-        case katana::ir::Operation::LoadByteSignedPostIncrement:
-        case katana::ir::Operation::LoadWordSignedPostIncrement:
-        case katana::ir::Operation::LoadLongPostIncrement:
-            std::cout
-                << " r"
-                << std::dec
-                << static_cast<unsigned>(
-                    instruction.destination_register
-                )
-                << ", [r"
-                << static_cast<unsigned>(
-                    instruction.source_register
-                )
-                << "+]";
-            break;
+    case katana::ir::Operation::ComparePositiveOrZero:
+    case katana::ir::Operation::ComparePositive:
+        std::cout << " r" << std::dec << static_cast<unsigned>(instruction.destination_register);
+        break;
+    case katana::ir::Operation::DecrementAndTest:
+    case katana::ir::Operation::MoveT:
+    case katana::ir::Operation::ShiftLogicalLeftOne:
+    case katana::ir::Operation::ShiftLogicalRightOne:
+    case katana::ir::Operation::ShiftArithmeticLeftOne:
+    case katana::ir::Operation::ShiftArithmeticRightOne:
+    case katana::ir::Operation::ShiftLogicalLeftTwo:
+    case katana::ir::Operation::ShiftLogicalLeftEight:
+    case katana::ir::Operation::ShiftLogicalLeftSixteen:
+    case katana::ir::Operation::ShiftLogicalRightTwo:
+    case katana::ir::Operation::ShiftLogicalRightEight:
+    case katana::ir::Operation::ShiftLogicalRightSixteen:
+    case katana::ir::Operation::RotateLeft:
+    case katana::ir::Operation::RotateRight:
+    case katana::ir::Operation::RotateLeftThroughT:
+    case katana::ir::Operation::RotateRightThroughT:
+        std::cout << " r" << std::dec << static_cast<unsigned>(instruction.destination_register);
+        break;
+    case katana::ir::Operation::LoadByteSignedPostIncrement:
+    case katana::ir::Operation::LoadWordSignedPostIncrement:
+    case katana::ir::Operation::LoadLongPostIncrement:
+        std::cout << " r" << std::dec << static_cast<unsigned>(instruction.destination_register)
+                  << ", [r" << static_cast<unsigned>(instruction.source_register) << "+]";
+        break;
 
-        case katana::ir::Operation::LoadByteSignedDisplacement:
-        case katana::ir::Operation::LoadWordSignedDisplacement:
-        case katana::ir::Operation::LoadLongDisplacement:
-            std::cout
-                << " r"
-                << std::dec
-                << static_cast<unsigned>(
-                    instruction.destination_register
-                )
-                << ", [r"
-                << static_cast<unsigned>(
-                    instruction.source_register
-                )
-                << " + "
-                << instruction.displacement
-                << "]";
-            break;
+    case katana::ir::Operation::LoadByteSignedDisplacement:
+    case katana::ir::Operation::LoadWordSignedDisplacement:
+    case katana::ir::Operation::LoadLongDisplacement:
+        std::cout << " r" << std::dec << static_cast<unsigned>(instruction.destination_register)
+                  << ", [r" << static_cast<unsigned>(instruction.source_register) << " + "
+                  << instruction.displacement << "]";
+        break;
 
-        case katana::ir::Operation::LoadByteSignedR0Indexed:
-        case katana::ir::Operation::LoadWordSignedR0Indexed:
-        case katana::ir::Operation::LoadLongR0Indexed:
-            std::cout
-                << " r"
-                << std::dec
-                << static_cast<unsigned>(
-                    instruction.destination_register
-                )
-                << ", [r0 + r"
-                << static_cast<unsigned>(
-                    instruction.source_register
-                )
-                << "]";
-            break;
+    case katana::ir::Operation::LoadByteSignedR0Indexed:
+    case katana::ir::Operation::LoadWordSignedR0Indexed:
+    case katana::ir::Operation::LoadLongR0Indexed:
+        std::cout << " r" << std::dec << static_cast<unsigned>(instruction.destination_register)
+                  << ", [r0 + r" << static_cast<unsigned>(instruction.source_register) << "]";
+        break;
 
-        case katana::ir::Operation::LoadByteSignedGbrDisplacement:
-        case katana::ir::Operation::LoadWordSignedGbrDisplacement:
-        case katana::ir::Operation::LoadLongGbrDisplacement:
-            std::cout
-                << " r0, [gbr + "
-                << std::dec
-                << instruction.displacement
-                << "]";
-            break;
+    case katana::ir::Operation::LoadByteSignedGbrDisplacement:
+    case katana::ir::Operation::LoadWordSignedGbrDisplacement:
+    case katana::ir::Operation::LoadLongGbrDisplacement:
+        std::cout << " r0, [gbr + " << std::dec << instruction.displacement << "]";
+        break;
 
-        case katana::ir::Operation::LoadWordSignedPcRelative:
-        case katana::ir::Operation::LoadLongPcRelative:
-            std::cout
-                << " r"
-                << std::dec
-                << static_cast<unsigned>(
-                    instruction.destination_register
-                )
-                << ", [";
-            if (instruction.effective_address.has_value()) {
-                print_address(*instruction.effective_address);
-            }
-            std::cout << "]";
-            break;
+    case katana::ir::Operation::LoadWordSignedPcRelative:
+    case katana::ir::Operation::LoadLongPcRelative:
+        std::cout << " r" << std::dec << static_cast<unsigned>(instruction.destination_register)
+                  << ", [";
+        if (instruction.effective_address.has_value()) {
+            print_address(*instruction.effective_address);
+        }
+        std::cout << "]";
+        break;
 
-        case katana::ir::Operation::MoveAddressPcRelative:
-            std::cout << " r0, ";
-            if (instruction.effective_address.has_value()) {
-                print_address(*instruction.effective_address);
-            }
-            break;
+    case katana::ir::Operation::MoveAddressPcRelative:
+        std::cout << " r0, ";
+        if (instruction.effective_address.has_value()) {
+            print_address(*instruction.effective_address);
+        }
+        break;
 
-        case katana::ir::Operation::StoreSpecialRegister:
-            std::cout
-                << " r"
-                << std::dec
-                << static_cast<unsigned>(instruction.destination_register)
-                << ", "
-                << special_register_name(instruction.special_register);
-            break;
+    case katana::ir::Operation::StoreSpecialRegister:
+        std::cout << " r" << std::dec << static_cast<unsigned>(instruction.destination_register)
+                  << ", " << special_register_name(instruction.special_register);
+        break;
 
-        case katana::ir::Operation::StoreSpecialRegisterPreDecrement:
-            std::cout
-                << " [--r"
-                << std::dec
-                << static_cast<unsigned>(instruction.destination_register)
-                << "], "
-                << special_register_name(instruction.special_register);
-            break;
+    case katana::ir::Operation::StoreSpecialRegisterPreDecrement:
+        std::cout << " [--r" << std::dec << static_cast<unsigned>(instruction.destination_register)
+                  << "], " << special_register_name(instruction.special_register);
+        break;
 
-        case katana::ir::Operation::LoadSpecialRegister:
-            std::cout
-                << " "
-                << special_register_name(instruction.special_register)
-                << ", r"
-                << std::dec
-                << static_cast<unsigned>(instruction.source_register);
-            break;
+    case katana::ir::Operation::LoadSpecialRegister:
+        std::cout << " " << special_register_name(instruction.special_register) << ", r" << std::dec
+                  << static_cast<unsigned>(instruction.source_register);
+        break;
 
-        case katana::ir::Operation::LoadSpecialRegisterPostIncrement:
-            std::cout
-                << " "
-                << special_register_name(instruction.special_register)
-                << ", [r"
-                << std::dec
-                << static_cast<unsigned>(instruction.source_register)
-                << "+]";
-            break;
+    case katana::ir::Operation::LoadSpecialRegisterPostIncrement:
+        std::cout << " " << special_register_name(instruction.special_register) << ", [r"
+                  << std::dec << static_cast<unsigned>(instruction.source_register) << "+]";
+        break;
 
-        case katana::ir::Operation::LoadByteSigned:
-        case katana::ir::Operation::LoadWordSigned:
-        case katana::ir::Operation::LoadLong:
-            std::cout
-                << " r"
-                << std::dec
-                << static_cast<unsigned>(
-                    instruction.destination_register
-                )
-                << ", [r"
-                << static_cast<unsigned>(
-                    instruction.source_register
-                )
-                << "]";
-            break;
+    case katana::ir::Operation::LoadByteSigned:
+    case katana::ir::Operation::LoadWordSigned:
+    case katana::ir::Operation::LoadLong:
+        std::cout << " r" << std::dec << static_cast<unsigned>(instruction.destination_register)
+                  << ", [r" << static_cast<unsigned>(instruction.source_register) << "]";
+        break;
 
-        case katana::ir::Operation::StoreBytePreDecrement:
-        case katana::ir::Operation::StoreWordPreDecrement:
-        case katana::ir::Operation::StoreLongPreDecrement:
-            std::cout
-                << " [--r"
-                << std::dec
-                << static_cast<unsigned>(
-                    instruction.destination_register
-                )
-                << "], r"
-                << static_cast<unsigned>(
-                    instruction.source_register
-                );
-            break;
+    case katana::ir::Operation::StoreBytePreDecrement:
+    case katana::ir::Operation::StoreWordPreDecrement:
+    case katana::ir::Operation::StoreLongPreDecrement:
+        std::cout << " [--r" << std::dec << static_cast<unsigned>(instruction.destination_register)
+                  << "], r" << static_cast<unsigned>(instruction.source_register);
+        break;
 
-        case katana::ir::Operation::StoreByteDisplacement:
-        case katana::ir::Operation::StoreWordDisplacement:
-        case katana::ir::Operation::StoreLongDisplacement:
-            std::cout
-                << " [r"
-                << std::dec
-                << static_cast<unsigned>(
-                    instruction.destination_register
-                )
-                << " + "
-                << instruction.displacement
-                << "], r"
-                << static_cast<unsigned>(
-                    instruction.source_register
-                );
-            break;
+    case katana::ir::Operation::StoreByteDisplacement:
+    case katana::ir::Operation::StoreWordDisplacement:
+    case katana::ir::Operation::StoreLongDisplacement:
+        std::cout << " [r" << std::dec << static_cast<unsigned>(instruction.destination_register)
+                  << " + " << instruction.displacement << "], r"
+                  << static_cast<unsigned>(instruction.source_register);
+        break;
 
-        case katana::ir::Operation::StoreByteR0Indexed:
-        case katana::ir::Operation::StoreWordR0Indexed:
-        case katana::ir::Operation::StoreLongR0Indexed:
-            std::cout
-                << " [r0 + r"
-                << std::dec
-                << static_cast<unsigned>(
-                    instruction.destination_register
-                )
-                << "], r"
-                << static_cast<unsigned>(
-                    instruction.source_register
-                );
-            break;
+    case katana::ir::Operation::StoreByteR0Indexed:
+    case katana::ir::Operation::StoreWordR0Indexed:
+    case katana::ir::Operation::StoreLongR0Indexed:
+        std::cout << " [r0 + r" << std::dec
+                  << static_cast<unsigned>(instruction.destination_register) << "], r"
+                  << static_cast<unsigned>(instruction.source_register);
+        break;
 
-        case katana::ir::Operation::StoreByteGbrDisplacement:
-        case katana::ir::Operation::StoreWordGbrDisplacement:
-        case katana::ir::Operation::StoreLongGbrDisplacement:
-            std::cout
-                << " [gbr + "
-                << std::dec
-                << instruction.displacement
-                << "], r0";
-            break;
+    case katana::ir::Operation::StoreByteGbrDisplacement:
+    case katana::ir::Operation::StoreWordGbrDisplacement:
+    case katana::ir::Operation::StoreLongGbrDisplacement:
+        std::cout << " [gbr + " << std::dec << instruction.displacement << "], r0";
+        break;
 
-        case katana::ir::Operation::StoreByte:
-        case katana::ir::Operation::StoreWord:
-        case katana::ir::Operation::StoreLong:
-            std::cout
-                << " [r"
-                << std::dec
-                << static_cast<unsigned>(
-                    instruction.destination_register
-                )
-                << "], r"
-                << static_cast<unsigned>(
-                    instruction.source_register
-                );
-            break;
-        case katana::ir::Operation::Branch:
-        case katana::ir::Operation::Call:
-        case katana::ir::Operation::BranchIfTrue:
-        case katana::ir::Operation::BranchIfFalse:
-            if (instruction.target_address.has_value()) {
-                std::cout << " ";
-                print_address(*instruction.target_address);
-            }
-            break;
+    case katana::ir::Operation::StoreByte:
+    case katana::ir::Operation::StoreWord:
+    case katana::ir::Operation::StoreLong:
+        std::cout << " [r" << std::dec << static_cast<unsigned>(instruction.destination_register)
+                  << "], r" << static_cast<unsigned>(instruction.source_register);
+        break;
+    case katana::ir::Operation::Branch:
+    case katana::ir::Operation::Call:
+    case katana::ir::Operation::BranchIfTrue:
+    case katana::ir::Operation::BranchIfFalse:
+        if (instruction.target_address.has_value()) {
+            std::cout << " ";
+            print_address(*instruction.target_address);
+        }
+        break;
 
-        case katana::ir::Operation::JumpRegister:
-        case katana::ir::Operation::CallRegister:
-            std::cout
-                << " r"
-                << std::dec
-                << static_cast<unsigned>(
-                    instruction.branch_register
-                );
-            break;
+    case katana::ir::Operation::JumpRegister:
+    case katana::ir::Operation::CallRegister:
+        std::cout << " r" << std::dec << static_cast<unsigned>(instruction.branch_register);
+        break;
 
-        case katana::ir::Operation::TrapAlways:
-            std::cout << " #" << std::dec << instruction.immediate;
-            break;
+    case katana::ir::Operation::TrapAlways:
+        std::cout << " #" << std::dec << instruction.immediate;
+        break;
 
-        case katana::ir::Operation::Unknown:
-        case katana::ir::Operation::Nop:
-        case katana::ir::Operation::DivideInitializeUnsigned:
-        case katana::ir::Operation::ClearS:
-        case katana::ir::Operation::SetS:
-        case katana::ir::Operation::ClearT:
-        case katana::ir::Operation::SetT:
-        case katana::ir::Operation::Return:
-        case katana::ir::Operation::ReturnFromException:
-        case katana::ir::Operation::Sleep:
-            break;
+    case katana::ir::Operation::Unknown:
+    case katana::ir::Operation::Nop:
+    case katana::ir::Operation::DivideInitializeUnsigned:
+    case katana::ir::Operation::ClearS:
+    case katana::ir::Operation::SetS:
+    case katana::ir::Operation::ClearT:
+    case katana::ir::Operation::SetT:
+    case katana::ir::Operation::Return:
+    case katana::ir::Operation::ReturnFromException:
+    case katana::ir::Operation::Sleep:
+        break;
     }
 
     if (instruction.delay_slot.role == katana::ir::DelaySlotRole::Owner) {
@@ -519,15 +372,14 @@ void print_ir_instruction(
     std::cout << '\n';
 }
 
-std::vector<katana::ir::Function> build_ir_program(
-    const std::filesystem::path& path,
-    const std::uint32_t entry_address,
-    const std::uint32_t base_address,
-    const std::optional<std::filesystem::path>& override_path = std::nullopt
-) {
+std::vector<katana::ir::Function>
+build_ir_program(const std::filesystem::path& path,
+                 const std::uint32_t entry_address,
+                 const std::uint32_t base_address,
+                 const std::optional<std::filesystem::path>& override_path = std::nullopt) {
     auto extension = path.extension().string();
-    std::transform(extension.begin(), extension.end(), extension.begin(),
-        [](const unsigned char value) {
+    std::transform(
+        extension.begin(), extension.end(), extension.begin(), [](const unsigned char value) {
             return static_cast<char>(std::tolower(value));
         });
 
@@ -538,11 +390,10 @@ std::vector<katana::ir::Function> build_ir_program(
         std::ifstream input(path, std::ios::binary);
         std::array<unsigned char, 4> magic{};
         input.read(reinterpret_cast<char*>(magic.data()),
-            static_cast<std::streamsize>(magic.size()));
-        const bool is_elf = input.gcount() ==
-                static_cast<std::streamsize>(magic.size()) &&
-            magic[0] == 0x7Fu && magic[1] == 'E' &&
-            magic[2] == 'L' && magic[3] == 'F';
+                   static_cast<std::streamsize>(magic.size()));
+        const bool is_elf = input.gcount() == static_cast<std::streamsize>(magic.size()) &&
+                            magic[0] == 0x7Fu && magic[1] == 'E' && magic[2] == 'L' &&
+                            magic[3] == 'F';
         if (is_elf) {
             image = katana::io::load_elf32_sh(path);
         } else {
@@ -558,113 +409,76 @@ std::vector<katana::ir::Function> build_ir_program(
     if (override_path) {
         overrides = katana::analysis::parse_analysis_overrides(*override_path);
     }
-    const auto analysis = katana::analysis::analyze_control_flow(
-        image,
-        overrides ? &*overrides : nullptr
-    );
+    const auto analysis =
+        katana::analysis::analyze_control_flow(image, overrides ? &*overrides : nullptr);
     return katana::ir::lower_program(analysis);
 }
 
 int decode_single_opcode(const std::string& text) {
-    const auto opcode = static_cast<std::uint16_t>(
-        parse_hex_value(text, 0xFFFFu, "Der Opcode")
-    );
+    const auto opcode = static_cast<std::uint16_t>(parse_hex_value(text, 0xFFFFu, "Der Opcode"));
 
     const auto instruction = katana::sh4::decode(opcode);
 
-    std::cout
-        << "Opcode:        0x"
-        << std::hex
-        << std::uppercase
-        << std::setw(4)
-        << std::setfill('0')
-        << opcode
-        << '\n'
-        << "Instruktion:   "
-        << instruction.text
-        << '\n'
-        << "Status:        "
-        << (instruction.is_known() ? "erkannt" : "unbekannt")
-        << '\n'
-        << "Kontrollfluss: "
-        << (instruction.changes_control_flow() ? "ja" : "nein")
-        << '\n'
-        << "Delay Slot:    "
-        << (instruction.has_delay_slot ? "ja" : "nein")
-        << '\n';
+    std::cout << "Opcode:        0x" << std::hex << std::uppercase << std::setw(4)
+              << std::setfill('0') << opcode << '\n'
+              << "Instruktion:   " << instruction.text << '\n'
+              << "Status:        " << (instruction.is_known() ? "erkannt" : "unbekannt") << '\n'
+              << "Kontrollfluss: " << (instruction.changes_control_flow() ? "ja" : "nein") << '\n'
+              << "Delay Slot:    " << (instruction.has_delay_slot ? "ja" : "nein") << '\n';
 
     return instruction.is_known() ? 0 : 1;
 }
 
-int analyze_manifest(
-    const std::filesystem::path& path,
-    const std::optional<std::filesystem::path>& override_path = std::nullopt,
-    const bool json = false
-) {
+int analyze_manifest(const std::filesystem::path& path,
+                     const std::optional<std::filesystem::path>& override_path = std::nullopt,
+                     const bool json = false) {
     const auto image = katana::io::load_project_manifest(path);
     std::optional<katana::analysis::AnalysisOverrides> overrides;
     if (override_path.has_value()) {
         overrides = katana::analysis::parse_analysis_overrides(*override_path);
     }
     const auto analysis = katana::analysis::analyze_control_flow(
-        image, overrides.has_value() ? &*overrides : nullptr
-    );
+        image, overrides.has_value() ? &*overrides : nullptr);
     if (json) {
         std::cout << katana::analysis::format_control_flow_analysis_json(analysis);
     } else {
         std::cout << katana::analysis::format_recursive_analysis_report(
-            analysis.recursive, analysis.symbolic_addresses
-        );
+            analysis.recursive, analysis.symbolic_addresses);
         std::cout << katana::analysis::format_indirect_control_flow_report(
-            analysis.indirect_control_flow,
-            analysis.jump_tables,
-            analysis.symbolic_addresses
-        );
+            analysis.indirect_control_flow, analysis.jump_tables, analysis.symbolic_addresses);
     }
     return 0;
 }
 
-int export_analysis_graph(
-    const std::filesystem::path& path,
-    const std::optional<std::filesystem::path>& override_path,
-    const std::string_view command
-) {
+int export_analysis_graph(const std::filesystem::path& path,
+                          const std::optional<std::filesystem::path>& override_path,
+                          const std::string_view command) {
     const auto image = katana::io::load_project_manifest(path);
     std::optional<katana::analysis::AnalysisOverrides> overrides;
     if (override_path.has_value()) {
         overrides = katana::analysis::parse_analysis_overrides(*override_path);
     }
     const auto analysis = katana::analysis::analyze_control_flow(
-        image, overrides.has_value() ? &*overrides : nullptr
-    );
+        image, overrides.has_value() ? &*overrides : nullptr);
     const bool call_graph = command.starts_with("callgraph-");
-    const auto graph = call_graph
-        ? katana::analysis::build_call_graph(analysis)
-        : katana::analysis::build_control_flow_graph(analysis);
+    const auto graph = call_graph ? katana::analysis::build_call_graph(analysis)
+                                  : katana::analysis::build_control_flow_graph(analysis);
     std::cout << (command.ends_with("-json")
-        ? katana::analysis::serialize_analysis_graph_json(graph)
-        : katana::analysis::serialize_analysis_graph_dot(graph));
+                      ? katana::analysis::serialize_analysis_graph_json(graph)
+                      : katana::analysis::serialize_analysis_graph_dot(graph));
     return 0;
 }
 
-int diagnose_firmware(
-    const std::filesystem::path& path,
-    const katana::platform::FirmwareImageKind kind,
-    const katana::platform::FirmwareDiagnosticOptions& options
-) {
+int diagnose_firmware(const std::filesystem::path& path,
+                      const katana::platform::FirmwareImageKind kind,
+                      const katana::platform::FirmwareDiagnosticOptions& options) {
     const auto report = katana::platform::inspect_firmware_file(path, kind, options);
     std::cout << katana::platform::format_firmware_diagnostic_json(report);
-    return katana::cli::exit_status(
-        report.valid()
-            ? katana::cli::ExitCode::Success
-            : katana::cli::ExitCode::ProcessingFailure
-    );
+    return katana::cli::exit_status(report.valid() ? katana::cli::ExitCode::Success
+                                                   : katana::cli::ExitCode::ProcessingFailure);
 }
 
-int disassemble_file(
-    const std::filesystem::path& path,
-    const std::uint32_t base_address
-) {
+int disassemble_file(const std::filesystem::path& path, const std::uint32_t base_address) {
     katana::io::RawBinaryLoadOptions options;
     options.base_address = base_address;
     const auto image = katana::io::load_raw_binary(path, options);
@@ -674,16 +488,10 @@ int disassemble_file(
     std::size_t control_flow_count = 0;
     std::size_t delay_slot_count = 0;
 
-    std::cout
-        << "Datei:         " << path.string() << '\n'
-        << "Dateigroesse:  " << std::dec << image.segments()[0].bytes.size() << " Bytes\n"
-        << "Basisadresse:  0x"
-        << std::hex
-        << std::uppercase
-        << std::setw(8)
-        << std::setfill('0')
-        << base_address
-        << "\n\n";
+    std::cout << "Datei:         " << path.string() << '\n'
+              << "Dateigroesse:  " << std::dec << image.segments()[0].bytes.size() << " Bytes\n"
+              << "Basisadresse:  0x" << std::hex << std::uppercase << std::setw(8)
+              << std::setfill('0') << base_address << "\n\n";
 
     for (const auto& line : lines) {
         if (!line.instruction.is_known()) {
@@ -700,34 +508,19 @@ int disassemble_file(
 
         print_address(line.address);
 
-        std::cout
-            << "  "
-            << std::setw(4)
-            << line.opcode
-            << "  "
-            << format_disassembly_text(line)
-            << '\n';
+        std::cout << "  " << std::setw(4) << line.opcode << "  " << format_disassembly_text(line)
+                  << '\n';
     }
 
-    std::cout
-        << "\nInstruktionen:         "
-        << std::dec
-        << lines.size()
-        << "\nKontrollfluss:         "
-        << control_flow_count
-        << "\nMarkierte Delay Slots: "
-        << delay_slot_count
-        << "\nUnbekannte Opcodes:    "
-        << unknown_count
-        << '\n';
+    std::cout << "\nInstruktionen:         " << std::dec << lines.size()
+              << "\nKontrollfluss:         " << control_flow_count
+              << "\nMarkierte Delay Slots: " << delay_slot_count
+              << "\nUnbekannte Opcodes:    " << unknown_count << '\n';
 
     return 0;
 }
 
-int analyze_blocks(
-    const std::filesystem::path& path,
-    const std::uint32_t base_address
-) {
+int analyze_blocks(const std::filesystem::path& path, const std::uint32_t base_address) {
     katana::io::RawBinaryLoadOptions options;
     options.base_address = base_address;
     options.entry_point = base_address;
@@ -735,18 +528,12 @@ int analyze_blocks(
     const auto lines = katana::analysis::analyze_reachable_code(image).instructions;
     const auto blocks = katana::analysis::build_basic_blocks(lines);
 
-    std::cout
-        << "Datei:         " << path.string() << '\n'
-        << "Dateigroesse:  " << std::dec << image.segments()[0].bytes.size() << " Bytes\n"
-        << "Basic Blocks:  " << blocks.size()
-        << "\n\n";
+    std::cout << "Datei:         " << path.string() << '\n'
+              << "Dateigroesse:  " << std::dec << image.segments()[0].bytes.size() << " Bytes\n"
+              << "Basic Blocks:  " << blocks.size() << "\n\n";
 
     for (const auto& block : blocks) {
-        std::cout
-            << "Block "
-            << std::dec
-            << block.id
-            << ": ";
+        std::cout << "Block " << std::dec << block.id << ": ";
 
         print_address(block.start_address);
         std::cout << " - ";
@@ -757,21 +544,13 @@ int analyze_blocks(
             std::cout << "  ";
             print_address(line.address);
 
-            std::cout
-                << "  "
-                << std::setw(4)
-                << line.opcode
-                << "  "
-                << format_disassembly_text(line)
-                << '\n';
+            std::cout << "  " << std::setw(4) << line.opcode << "  "
+                      << format_disassembly_text(line) << '\n';
         }
 
         std::cout << "  Nachfolger: ";
 
-        if (
-            block.successors.empty() &&
-            !block.has_indirect_successor
-        ) {
+        if (block.successors.empty() && !block.has_indirect_successor) {
             std::cout << "keine";
         } else {
             bool first = true;
@@ -800,46 +579,29 @@ int analyze_blocks(
     return 0;
 }
 
-int analyze_functions(
-    const std::filesystem::path& path,
-    const std::uint32_t entry_address,
-    const std::uint32_t base_address
-) {
+int analyze_functions(const std::filesystem::path& path,
+                      const std::uint32_t entry_address,
+                      const std::uint32_t base_address) {
     katana::io::RawBinaryLoadOptions options;
     options.base_address = base_address;
     options.entry_point = entry_address;
     const auto image = katana::io::load_raw_binary(path, options);
     const auto lines = katana::analysis::analyze_reachable_code(image).instructions;
 
-    const std::array<std::uint32_t, 1> seeds = {
-        entry_address
-    };
+    const std::array<std::uint32_t, 1> seeds = {entry_address};
 
-    const auto functions =
-        katana::analysis::discover_functions(
-            lines,
-            seeds
-        );
+    const auto functions = katana::analysis::discover_functions(lines, seeds);
 
-    std::cout
-        << "Datei:         " << path.string() << '\n'
-        << "Dateigroesse:  " << std::dec << image.segments()[0].bytes.size() << " Bytes\n"
-        << "Einstieg:      ";
+    std::cout << "Datei:         " << path.string() << '\n'
+              << "Dateigroesse:  " << std::dec << image.segments()[0].bytes.size() << " Bytes\n"
+              << "Einstieg:      ";
 
     print_address(entry_address);
 
-    std::cout
-        << "\nFunktionen:    "
-        << std::dec
-        << functions.size()
-        << "\n\n";
+    std::cout << "\nFunktionen:    " << std::dec << functions.size() << "\n\n";
 
     for (const auto& function : functions) {
-        std::cout
-            << "Funktion "
-            << std::dec
-            << function.id
-            << ": ";
+        std::cout << "Funktion " << std::dec << function.id << ": ";
 
         print_address(function.entry_address);
         std::cout << '\n';
@@ -849,11 +611,7 @@ int analyze_functions(
         if (function.block_addresses.empty()) {
             std::cout << "keine";
         } else {
-            for (
-                std::size_t index = 0;
-                index < function.block_addresses.size();
-                ++index
-            ) {
+            for (std::size_t index = 0; index < function.block_addresses.size(); ++index) {
                 if (index != 0u) {
                     std::cout << ", ";
                 }
@@ -867,11 +625,7 @@ int analyze_functions(
         if (function.direct_callees.empty()) {
             std::cout << "keine";
         } else {
-            for (
-                std::size_t index = 0;
-                index < function.direct_callees.size();
-                ++index
-            ) {
+            for (std::size_t index = 0; index < function.direct_callees.size(); ++index) {
                 if (index != 0u) {
                     std::cout << ", ";
                 }
@@ -885,11 +639,7 @@ int analyze_functions(
         if (function.indirect_call_sites.empty()) {
             std::cout << "keine";
         } else {
-            for (
-                std::size_t index = 0;
-                index < function.indirect_call_sites.size();
-                ++index
-            ) {
+            for (std::size_t index = 0; index < function.indirect_call_sites.size(); ++index) {
                 if (index != 0u) {
                     std::cout << ", ";
                 }
@@ -904,166 +654,102 @@ int analyze_functions(
     return 0;
 }
 
-int analyze_ir(
-    const std::filesystem::path& path,
-    const std::uint32_t entry_address,
-    const std::uint32_t base_address,
-    const bool json,
-    const std::optional<std::filesystem::path>& override_path
-) {
-    const auto program = build_ir_program(
-        path,
-        entry_address,
-        base_address,
-        override_path
-    );
+int analyze_ir(const std::filesystem::path& path,
+               const std::uint32_t entry_address,
+               const std::uint32_t base_address,
+               const bool json,
+               const std::optional<std::filesystem::path>& override_path) {
+    const auto program = build_ir_program(path, entry_address, base_address, override_path);
 
-    std::cout << (json
-        ? katana::ir::emit_ir_json(program)
-        : katana::ir::emit_ir_text(program));
+    std::cout << (json ? katana::ir::emit_ir_json(program) : katana::ir::emit_ir_text(program));
 
     return 0;
 }
 
-int emit_cpp(
-    const std::filesystem::path& input_path,
-    const std::uint32_t entry_address,
-    const std::filesystem::path& output_path,
-    const std::uint32_t base_address,
-    katana::ir::OptimizationOptions optimization_options,
-    const std::optional<std::filesystem::path>& dump_prefix,
-    const std::optional<std::filesystem::path>& override_path
-) {
-    auto program = build_ir_program(
-        input_path,
-        entry_address,
-        base_address,
-        override_path
-    );
+int emit_cpp(const std::filesystem::path& input_path,
+             const std::uint32_t entry_address,
+             const std::filesystem::path& output_path,
+             const std::uint32_t base_address,
+             katana::ir::OptimizationOptions optimization_options,
+             const std::optional<std::filesystem::path>& dump_prefix,
+             const std::optional<std::filesystem::path>& override_path) {
+    auto program = build_ir_program(input_path, entry_address, base_address, override_path);
 
-    const auto before_optimization = dump_prefix
-        ? katana::ir::emit_ir_text(program)
-        : std::string{};
+    const auto before_optimization =
+        dump_prefix ? katana::ir::emit_ir_text(program) : std::string{};
     optimization_options.capture_dumps = dump_prefix.has_value();
-    const auto optimization_report = katana::ir::optimize_program(
-        program,
-        optimization_options
-    );
+    const auto optimization_report = katana::ir::optimize_program(program, optimization_options);
 
     if (dump_prefix) {
-        const auto write_dump = [](const std::filesystem::path& path,
-                                   const std::string& contents) {
+        const auto write_dump = [](const std::filesystem::path& path, const std::string& contents) {
             if (path.has_parent_path()) {
                 std::filesystem::create_directories(path.parent_path());
             }
             std::ofstream output(path, std::ios::binary);
             if (!output) {
-                throw std::runtime_error(
-                    "Der IR-Dump konnte nicht geoeffnet werden."
-                );
+                throw std::runtime_error("Der IR-Dump konnte nicht geoeffnet werden.");
             }
-            output.write(contents.data(),
-                static_cast<std::streamsize>(contents.size()));
+            output.write(contents.data(), static_cast<std::streamsize>(contents.size()));
             if (!output) {
-                throw std::runtime_error(
-                    "Der IR-Dump konnte nicht gespeichert werden."
-                );
+                throw std::runtime_error("Der IR-Dump konnte nicht gespeichert werden.");
             }
         };
         write_dump(dump_prefix->string() + ".before.ir", before_optimization);
-        write_dump(dump_prefix->string() + ".after.ir",
-            katana::ir::emit_ir_text(program));
+        write_dump(dump_prefix->string() + ".after.ir", katana::ir::emit_ir_text(program));
     }
 
-    const auto source =
-        katana::codegen::emit_cpp_program(
-            program,
-            entry_address
-        );
+    const auto source = katana::codegen::emit_cpp_program(program, entry_address);
 
     if (output_path.has_parent_path()) {
-        std::filesystem::create_directories(
-            output_path.parent_path()
-        );
+        std::filesystem::create_directories(output_path.parent_path());
     }
 
-    std::ofstream output(
-        output_path,
-        std::ios::binary
-    );
+    std::ofstream output(output_path, std::ios::binary);
 
     if (!output) {
-        throw std::runtime_error(
-            "Die Ausgabedatei konnte nicht geoeffnet werden."
-        );
+        throw std::runtime_error("Die Ausgabedatei konnte nicht geoeffnet werden.");
     }
 
-    output.write(
-        source.data(),
-        static_cast<std::streamsize>(source.size())
-    );
+    output.write(source.data(), static_cast<std::streamsize>(source.size()));
 
     if (!output) {
-        throw std::runtime_error(
-            "Der generierte C++-Code konnte nicht gespeichert werden."
-        );
+        throw std::runtime_error("Der generierte C++-Code konnte nicht gespeichert werden.");
     }
 
-    std::cout
-        << "C++-Code erzeugt: "
-        << output_path.string()
-        << '\n'
-        << "Funktionen:       "
-        << std::dec
-        << program.size()
-        << '\n'
-        << "Zeichen:          "
-        << source.size()
-        << '\n'
-        << "Optimierungen:    "
-        << optimization_report.total_changes
-        << '\n';
+    std::cout << "C++-Code erzeugt: " << output_path.string() << '\n'
+              << "Funktionen:       " << std::dec << program.size() << '\n'
+              << "Zeichen:          " << source.size() << '\n'
+              << "Optimierungen:    " << optimization_report.total_changes << '\n';
 
     return 0;
 }
 
-int emit_phase6_probe_source(
-    const std::filesystem::path& gdi_path,
-    const std::filesystem::path& output_path
-) {
+int emit_phase6_probe_source(const std::filesystem::path& gdi_path,
+                             const std::filesystem::path& output_path) {
     const auto disc = katana::platform::load_dreamcast_gdi_boot(gdi_path);
     const auto image = katana::platform::make_dreamcast_disc_executable(disc);
     const auto analysis = katana::analysis::analyze_control_flow(image);
     if (!analysis.recursive.diagnostics.empty()) {
-        throw std::runtime_error(
-            "Der Phase-6-Bootblock enthaelt eine unbekannte Instruktion."
-        );
+        throw std::runtime_error("Der Phase-6-Bootblock enthaelt eine unbekannte Instruktion.");
     }
     const auto program = katana::ir::lower_program(analysis);
-    const auto function = std::find_if(
-        program.begin(),
-        program.end(),
-        [](const katana::ir::Function& value) {
+    const auto function =
+        std::find_if(program.begin(), program.end(), [](const katana::ir::Function& value) {
             return value.entry_address == katana::platform::dreamcast_disc_boot_address;
-        }
-    );
+        });
     if (function == program.end()) {
         throw std::runtime_error("Der Phase-6-Programmeinstieg wurde nicht analysiert.");
     }
     const auto block = std::find_if(
-        function->blocks.begin(),
-        function->blocks.end(),
-        [](const katana::ir::BasicBlock& value) {
+        function->blocks.begin(), function->blocks.end(), [](const katana::ir::BasicBlock& value) {
             return value.start_address == katana::platform::dreamcast_disc_boot_address;
-        }
-    );
+        });
     if (block == function->blocks.end() || block->instructions.empty()) {
         throw std::runtime_error("Der Phase-6-Einstiegsblock ist leer oder fehlt.");
     }
     if (katana::codegen::block_requires_call_dispatch(*block)) {
         throw std::runtime_error(
-            "Der Phase-6-Einstiegsblock braucht fuer diese Probe bereits einen Call-Dispatch."
-        );
+            "Der Phase-6-Einstiegsblock braucht fuer diese Probe bereits einen Call-Dispatch.");
     }
 
     katana::ir::Function probe;
@@ -1071,10 +757,8 @@ int emit_phase6_probe_source(
     probe.blocks.push_back(*block);
     probe.blocks.front().successors.clear();
     const std::array<katana::ir::Function, 1u> probe_program = {std::move(probe)};
-    auto source = katana::codegen::emit_cpp_program(
-        probe_program,
-        katana::platform::dreamcast_disc_boot_address
-    );
+    auto source = katana::codegen::emit_cpp_program(probe_program,
+                                                    katana::platform::dreamcast_disc_boot_address);
     source += R"cpp(
 
 #include "katana/platform/phase6_gate.hpp"
@@ -1120,27 +804,20 @@ int main(const int argc, const char* const* argv) {
     return 0;
 }
 
-int export_port_project(
-    const std::filesystem::path& gdi_path,
-    const std::filesystem::path& output_path,
-    const std::string& target_name
-) {
+int export_port_project(const std::filesystem::path& gdi_path,
+                        const std::filesystem::path& output_path,
+                        const std::string& target_name) {
     const auto source_root = std::filesystem::path(KATANA_RECOMP_SOURCE_ROOT);
     const auto absolute_output = std::filesystem::absolute(output_path).lexically_normal();
     const auto relative_to_source = absolute_output.lexically_relative(
-        std::filesystem::absolute(source_root).lexically_normal()
-    );
-    if (!relative_to_source.empty() && !relative_to_source.is_absolute()
-        && *relative_to_source.begin() != "..") {
+        std::filesystem::absolute(source_root).lexically_normal());
+    if (!relative_to_source.empty() && !relative_to_source.is_absolute() &&
+        *relative_to_source.begin() != "..") {
         throw std::invalid_argument(
-            "Port-Ausgabe muss ausserhalb des KatanaRecomp-Quellbaums liegen."
-        );
+            "Port-Ausgabe muss ausserhalb des KatanaRecomp-Quellbaums liegen.");
     }
     const auto report = katana::codegen::export_dreamcast_port_project(
-        gdi_path,
-        output_path,
-        {target_name, KATANA_RECOMP_VERSION}
-    );
+        gdi_path, output_path, {target_name, KATANA_RECOMP_VERSION});
     const auto shell_quote = [](const std::filesystem::path& path) {
         const auto text = path.string();
 #ifdef _WIN32
@@ -1157,23 +834,19 @@ int export_port_project(
 #endif
     };
     const auto build_path = report.output_root / "build";
-    const auto configure = std::string("cmake -S ") + shell_quote(report.output_root)
-        + " -B " + shell_quote(build_path)
-        + " -G Ninja -DCMAKE_BUILD_TYPE=Debug -DKATANA_RUNTIME_ROOT="
-        + shell_quote(source_root);
+    const auto configure =
+        std::string("cmake -S ") + shell_quote(report.output_root) + " -B " +
+        shell_quote(build_path) +
+        " -G Ninja -DCMAKE_BUILD_TYPE=Debug -DKATANA_RUNTIME_ROOT=" + shell_quote(source_root);
     if (std::system(configure.c_str()) != 0) {
-        throw katana::cli::Error(
-            katana::cli::ExitCode::BuildFailure,
-            "Port-Hostbuild konnte nicht konfiguriert werden."
-        );
+        throw katana::cli::Error(katana::cli::ExitCode::BuildFailure,
+                                 "Port-Hostbuild konnte nicht konfiguriert werden.");
     }
-    const auto build = std::string("cmake --build ") + shell_quote(build_path)
-        + " --target " + target_name;
+    const auto build =
+        std::string("cmake --build ") + shell_quote(build_path) + " --target " + target_name;
     if (std::system(build.c_str()) != 0) {
-        throw katana::cli::Error(
-            katana::cli::ExitCode::BuildFailure,
-            "Port-Hosttarget konnte nicht gebaut werden."
-        );
+        throw katana::cli::Error(katana::cli::ExitCode::BuildFailure,
+                                 "Port-Hosttarget konnte nicht gebaut werden.");
     }
     std::cout << "Portprojekt erzeugt: " << report.output_root.string() << '\n'
               << "Funktionen: " << report.functions << '\n'
@@ -1185,40 +858,41 @@ int export_port_project(
 }
 
 void print_usage(std::ostream& output) {
-    output
-        << "Verwendung:\n"
-        << "  katana-recomp <Opcode>\n"
-        << "  katana-recomp opcode <Opcode>\n"
-        << "  katana-recomp isa-report\n"
-        << "  katana-recomp analyze <Projektmanifest> [Override-Datei]\n"
-        << "  katana-recomp analyze-json <Projektmanifest> [Override-Datei]\n"
-        << "  katana-recomp cfg-json <Projektmanifest> [Override-Datei]\n"
-        << "  katana-recomp cfg-dot <Projektmanifest> [Override-Datei]\n"
-        << "  katana-recomp callgraph-json <Projektmanifest> [Override-Datei]\n"
-        << "  katana-recomp callgraph-dot <Projektmanifest> [Override-Datei]\n"
-        << "  katana-recomp firmware-diagnose <bios|flash> <Datei> [--sha256 <Hash>] [--include-sensitive]\n"
-        << "  katana-recomp disasm <Datei> [Basisadresse]\n"
-        << "  katana-recomp blocks <Datei> [Basisadresse]\n"
-        << "  katana-recomp functions <Datei> <Einstieg> [Basisadresse]\n"
-        << "  katana-recomp ir <Raw|ELF|Manifest> <Einstieg> [Basisadresse] [--directives <Datei>]\n"
-        << "  katana-recomp ir-json <Raw|ELF|Manifest> <Einstieg> [Basisadresse] [--directives <Datei>]\n"
-        << "  katana-recomp emit-cpp <Raw|ELF|Manifest> <Einstieg> <Ausgabe.cpp> [Basisadresse] [--no-opt] [--dump-ir <Praefix>] [--directives <Datei>]\n\n"
-        << "  katana-recomp phase6-probe-source <GDI> <Ausgabe.cpp>\n\n"
-        << "  katana-recomp port <Quelle.gdi> --output <Ordner> --target-name <Name>\n\n"
-        << "Beispiel:\n"
-        << "  katana-recomp emit-cpp programm.bin 8C010000 generated.cpp 8C010000\n";
+    output << "Verwendung:\n"
+           << "  katana-recomp <Opcode>\n"
+           << "  katana-recomp opcode <Opcode>\n"
+           << "  katana-recomp isa-report\n"
+           << "  katana-recomp analyze <Projektmanifest> [Override-Datei]\n"
+           << "  katana-recomp analyze-json <Projektmanifest> [Override-Datei]\n"
+           << "  katana-recomp cfg-json <Projektmanifest> [Override-Datei]\n"
+           << "  katana-recomp cfg-dot <Projektmanifest> [Override-Datei]\n"
+           << "  katana-recomp callgraph-json <Projektmanifest> [Override-Datei]\n"
+           << "  katana-recomp callgraph-dot <Projektmanifest> [Override-Datei]\n"
+           << "  katana-recomp firmware-diagnose <bios|flash> <Datei> [--sha256 <Hash>] "
+              "[--include-sensitive]\n"
+           << "  katana-recomp disasm <Datei> [Basisadresse]\n"
+           << "  katana-recomp blocks <Datei> [Basisadresse]\n"
+           << "  katana-recomp functions <Datei> <Einstieg> [Basisadresse]\n"
+           << "  katana-recomp ir <Raw|ELF|Manifest> <Einstieg> [Basisadresse] [--directives "
+              "<Datei>]\n"
+           << "  katana-recomp ir-json <Raw|ELF|Manifest> <Einstieg> [Basisadresse] [--directives "
+              "<Datei>]\n"
+           << "  katana-recomp emit-cpp <Raw|ELF|Manifest> <Einstieg> <Ausgabe.cpp> [Basisadresse] "
+              "[--no-opt] [--dump-ir <Praefix>] [--directives <Datei>]\n\n"
+           << "  katana-recomp phase6-probe-source <GDI> <Ausgabe.cpp>\n\n"
+           << "  katana-recomp port <Quelle.gdi> --output <Ordner> --target-name <Name>\n\n"
+           << "Beispiel:\n"
+           << "  katana-recomp emit-cpp programm.bin 8C010000 generated.cpp 8C010000\n";
 }
 
-}
+} // namespace
 
 int main(const int argc, char* argv[]) {
-    using katana::cli::ExitCode;
     using katana::cli::exit_status;
+    using katana::cli::ExitCode;
     try {
-        if (
-            argc == 2 &&
-            (std::string_view(argv[1]) == "--help" || std::string_view(argv[1]) == "-h")
-        ) {
+        if (argc == 2 &&
+            (std::string_view(argv[1]) == "--help" || std::string_view(argv[1]) == "-h")) {
             print_usage(std::cout);
             return exit_status(ExitCode::Success);
         }
@@ -1228,8 +902,7 @@ int main(const int argc, char* argv[]) {
         }
         if (argc == 2 && std::string(argv[1]) == "isa-report") {
             std::cout << katana::sh4::format_isa_coverage_report(
-                katana::sh4::build_isa_coverage_report()
-            );
+                katana::sh4::build_isa_coverage_report());
             return 0;
         }
 
@@ -1244,46 +917,34 @@ int main(const int argc, char* argv[]) {
                     target_name = argv[argument + 1u];
                 } else {
                     throw std::invalid_argument(
-                        "port erwartet --output und --target-name jeweils genau einmal."
-                    );
+                        "port erwartet --output und --target-name jeweils genau einmal.");
                 }
             }
             if (!output_path.has_value() || !target_name.has_value()) {
                 throw std::invalid_argument(
-                    "port erwartet --output und --target-name jeweils genau einmal."
-                );
+                    "port erwartet --output und --target-name jeweils genau einmal.");
             }
-            return export_port_project(
-                std::filesystem::path(argv[2]), *output_path, *target_name
-            );
+            return export_port_project(std::filesystem::path(argv[2]), *output_path, *target_name);
         }
 
-        if (
-            (argc == 3 || argc == 4) &&
-            (std::string(argv[1]) == "analyze" || std::string(argv[1]) == "analyze-json")
-        ) {
+        if ((argc == 3 || argc == 4) &&
+            (std::string(argv[1]) == "analyze" || std::string(argv[1]) == "analyze-json")) {
             return analyze_manifest(
                 std::filesystem::path(argv[2]),
-                argc == 4
-                    ? std::optional<std::filesystem::path>{std::filesystem::path(argv[3])}
-                    : std::nullopt,
-                std::string(argv[1]) == "analyze-json"
-            );
+                argc == 4 ? std::optional<std::filesystem::path>{std::filesystem::path(argv[3])}
+                          : std::nullopt,
+                std::string(argv[1]) == "analyze-json");
         }
 
         if (argc == 3 || argc == 4) {
             const std::string_view command = argv[1];
-            if (command == "cfg-json" || command == "cfg-dot"
-                || command == "callgraph-json" || command == "callgraph-dot") {
+            if (command == "cfg-json" || command == "cfg-dot" || command == "callgraph-json" ||
+                command == "callgraph-dot") {
                 return export_analysis_graph(
                     std::filesystem::path(argv[2]),
-                    argc == 4
-                        ? std::optional<std::filesystem::path>{
-                            std::filesystem::path(argv[3])
-                        }
-                        : std::nullopt,
-                    command
-                );
+                    argc == 4 ? std::optional<std::filesystem::path>{std::filesystem::path(argv[3])}
+                              : std::nullopt,
+                    command);
             }
         }
 
@@ -1301,8 +962,8 @@ int main(const int argc, char* argv[]) {
             std::size_t argument = 4u;
             while (argument < static_cast<std::size_t>(argc)) {
                 const std::string_view option = argv[argument++];
-                if (option == "--sha256" && !options.expected_sha256.has_value()
-                    && argument < static_cast<std::size_t>(argc)) {
+                if (option == "--sha256" && !options.expected_sha256.has_value() &&
+                    argument < static_cast<std::size_t>(argc)) {
                     options.expected_sha256 = argv[argument++];
                 } else if (option == "--include-sensitive" && !options.include_sensitive) {
                     options.include_sensitive = true;
@@ -1317,155 +978,90 @@ int main(const int argc, char* argv[]) {
             return decode_single_opcode(argv[1]);
         }
 
-        if (
-            argc == 3 &&
-            std::string(argv[1]) == "opcode"
-        ) {
+        if (argc == 3 && std::string(argv[1]) == "opcode") {
             return decode_single_opcode(argv[2]);
         }
 
-        if (
-            (argc == 3 || argc == 4) &&
-            std::string(argv[1]) == "disasm"
-        ) {
+        if ((argc == 3 || argc == 4) && std::string(argv[1]) == "disasm") {
             const auto base_address =
-                argc == 4
-                    ? parse_hex_value(
-                        argv[3],
-                        std::numeric_limits<std::uint32_t>::max(),
-                        "Die Basisadresse"
-                    )
-                    : 0u;
+                argc == 4 ? parse_hex_value(argv[3],
+                                            std::numeric_limits<std::uint32_t>::max(),
+                                            "Die Basisadresse")
+                          : 0u;
 
-            return disassemble_file(
-                std::filesystem::path(argv[2]),
-                base_address
-            );
+            return disassemble_file(std::filesystem::path(argv[2]), base_address);
         }
 
-        if (
-            (argc == 3 || argc == 4) &&
-            std::string(argv[1]) == "blocks"
-        ) {
+        if ((argc == 3 || argc == 4) && std::string(argv[1]) == "blocks") {
             const auto base_address =
-                argc == 4
-                    ? parse_hex_value(
-                        argv[3],
-                        std::numeric_limits<std::uint32_t>::max(),
-                        "Die Basisadresse"
-                    )
-                    : 0u;
+                argc == 4 ? parse_hex_value(argv[3],
+                                            std::numeric_limits<std::uint32_t>::max(),
+                                            "Die Basisadresse")
+                          : 0u;
 
-            return analyze_blocks(
-                std::filesystem::path(argv[2]),
-                base_address
-            );
+            return analyze_blocks(std::filesystem::path(argv[2]), base_address);
         }
 
-        if (
-            (argc == 4 || argc == 5) &&
-            std::string(argv[1]) == "functions"
-        ) {
-            const auto entry_address =
-                parse_hex_value(
-                    argv[3],
-                    std::numeric_limits<std::uint32_t>::max(),
-                    "Die Einstiegsadresse"
-                );
+        if ((argc == 4 || argc == 5) && std::string(argv[1]) == "functions") {
+            const auto entry_address = parse_hex_value(
+                argv[3], std::numeric_limits<std::uint32_t>::max(), "Die Einstiegsadresse");
 
-            const auto base_address = argc == 5
-                ? parse_hex_value(
-                    argv[4],
-                    std::numeric_limits<std::uint32_t>::max(),
-                    "Die Basisadresse"
-                )
-                : 0u;
+            const auto base_address =
+                argc == 5 ? parse_hex_value(argv[4],
+                                            std::numeric_limits<std::uint32_t>::max(),
+                                            "Die Basisadresse")
+                          : 0u;
 
-            return analyze_functions(
-                std::filesystem::path(argv[2]),
-                entry_address,
-                base_address
-            );
+            return analyze_functions(std::filesystem::path(argv[2]), entry_address, base_address);
         }
 
-        if (
-            (argc >= 4 && argc <= 7) &&
-            (std::string(argv[1]) == "ir" || std::string(argv[1]) == "ir-json")
-        ) {
-            const auto entry_address =
-                parse_hex_value(
-                    argv[3],
-                    std::numeric_limits<std::uint32_t>::max(),
-                    "Die Einstiegsadresse"
-                );
+        if ((argc >= 4 && argc <= 7) &&
+            (std::string(argv[1]) == "ir" || std::string(argv[1]) == "ir-json")) {
+            const auto entry_address = parse_hex_value(
+                argv[3], std::numeric_limits<std::uint32_t>::max(), "Die Einstiegsadresse");
 
             std::size_t argument = 4u;
             std::uint32_t base_address = 0u;
-            if (
-                argument < static_cast<std::size_t>(argc) &&
-                !std::string_view(argv[argument]).starts_with("--")
-            ) {
-                base_address = parse_hex_value(
-                    argv[argument++],
-                    std::numeric_limits<std::uint32_t>::max(),
-                    "Die Basisadresse"
-                );
+            if (argument < static_cast<std::size_t>(argc) &&
+                !std::string_view(argv[argument]).starts_with("--")) {
+                base_address = parse_hex_value(argv[argument++],
+                                               std::numeric_limits<std::uint32_t>::max(),
+                                               "Die Basisadresse");
             }
             std::optional<std::filesystem::path> override_path;
             while (argument < static_cast<std::size_t>(argc)) {
                 const std::string_view option = argv[argument++];
-                if (
-                    (option != "--overrides" && option != "--directives") || override_path ||
-                    argument >= static_cast<std::size_t>(argc)
-                ) {
+                if ((option != "--overrides" && option != "--directives") || override_path ||
+                    argument >= static_cast<std::size_t>(argc)) {
                     throw std::invalid_argument(
-                        "Ungueltige IR-Option; erwartet wird --directives <Datei>."
-                    );
+                        "Ungueltige IR-Option; erwartet wird --directives <Datei>.");
                 }
                 override_path = std::filesystem::path(argv[argument++]);
             }
 
-            return analyze_ir(
-                std::filesystem::path(argv[2]),
-                entry_address,
-                base_address,
-                std::string(argv[1]) == "ir-json",
-                override_path
-            );
+            return analyze_ir(std::filesystem::path(argv[2]),
+                              entry_address,
+                              base_address,
+                              std::string(argv[1]) == "ir-json",
+                              override_path);
         }
 
-        if (
-            argc == 4 &&
-            std::string(argv[1]) == "phase6-probe-source"
-        ) {
-            return emit_phase6_probe_source(
-                std::filesystem::path(argv[2]),
-                std::filesystem::path(argv[3])
-            );
+        if (argc == 4 && std::string(argv[1]) == "phase6-probe-source") {
+            return emit_phase6_probe_source(std::filesystem::path(argv[2]),
+                                            std::filesystem::path(argv[3]));
         }
 
-        if (
-            (argc >= 5 && argc <= 11) &&
-            std::string(argv[1]) == "emit-cpp"
-        ) {
-            const auto entry_address =
-                parse_hex_value(
-                    argv[3],
-                    std::numeric_limits<std::uint32_t>::max(),
-                    "Die Einstiegsadresse"
-                );
+        if ((argc >= 5 && argc <= 11) && std::string(argv[1]) == "emit-cpp") {
+            const auto entry_address = parse_hex_value(
+                argv[3], std::numeric_limits<std::uint32_t>::max(), "Die Einstiegsadresse");
 
             std::size_t argument = 5u;
             std::uint32_t base_address = 0u;
-            if (
-                argument < static_cast<std::size_t>(argc) &&
-                !std::string_view(argv[argument]).starts_with("--")
-            ) {
-                base_address = parse_hex_value(
-                    argv[argument++],
-                    std::numeric_limits<std::uint32_t>::max(),
-                    "Die Basisadresse"
-                );
+            if (argument < static_cast<std::size_t>(argc) &&
+                !std::string_view(argv[argument]).starts_with("--")) {
+                base_address = parse_hex_value(argv[argument++],
+                                               std::numeric_limits<std::uint32_t>::max(),
+                                               "Die Basisadresse");
             }
 
             katana::ir::OptimizationOptions optimization_options;
@@ -1476,41 +1072,28 @@ int main(const int argc, char* argv[]) {
                 if (option == "--no-opt") {
                     optimization_options.enabled = false;
                 } else if (option == "--dump-ir") {
-                    if (
-                        dump_prefix ||
-                        argument >= static_cast<std::size_t>(argc)
-                    ) {
-                        throw std::invalid_argument(
-                            "--dump-ir erwartet genau ein Praefix."
-                        );
+                    if (dump_prefix || argument >= static_cast<std::size_t>(argc)) {
+                        throw std::invalid_argument("--dump-ir erwartet genau ein Praefix.");
                     }
                     dump_prefix = std::filesystem::path(argv[argument++]);
                 } else if (option == "--overrides" || option == "--directives") {
-                    if (
-                        override_path ||
-                        argument >= static_cast<std::size_t>(argc)
-                    ) {
-                        throw std::invalid_argument(
-                            "--directives erwartet genau eine Datei."
-                        );
+                    if (override_path || argument >= static_cast<std::size_t>(argc)) {
+                        throw std::invalid_argument("--directives erwartet genau eine Datei.");
                     }
                     override_path = std::filesystem::path(argv[argument++]);
                 } else {
-                    throw std::invalid_argument(
-                        "Unbekannte emit-cpp-Option: " + std::string(option)
-                    );
+                    throw std::invalid_argument("Unbekannte emit-cpp-Option: " +
+                                                std::string(option));
                 }
             }
 
-            return emit_cpp(
-                std::filesystem::path(argv[2]),
-                entry_address,
-                std::filesystem::path(argv[4]),
-                base_address,
-                optimization_options,
-                dump_prefix,
-                override_path
-            );
+            return emit_cpp(std::filesystem::path(argv[2]),
+                            entry_address,
+                            std::filesystem::path(argv[4]),
+                            base_address,
+                            optimization_options,
+                            dump_prefix,
+                            override_path);
         }
 
         print_usage(std::cerr);

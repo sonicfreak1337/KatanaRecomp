@@ -17,28 +17,21 @@ std::uint32_t next_random(std::uint32_t& state) {
     return state;
 }
 
-bool same_instruction(
-    const katana::sh4::DecodedInstruction& first,
-    const katana::sh4::DecodedInstruction& second
-) {
-    return first.opcode == second.opcode &&
-        first.kind == second.kind &&
-        first.destination_register == second.destination_register &&
-        first.source_register == second.source_register &&
-        first.branch_register == second.branch_register &&
-        first.immediate == second.immediate &&
-        first.displacement == second.displacement &&
-        first.special_register == second.special_register &&
-        first.control_flow == second.control_flow &&
-        first.has_delay_slot == second.has_delay_slot &&
-        first.is_privileged == second.is_privileged &&
-        first.text == second.text;
+bool same_instruction(const katana::sh4::DecodedInstruction& first,
+                      const katana::sh4::DecodedInstruction& second) {
+    return first.opcode == second.opcode && first.kind == second.kind &&
+           first.destination_register == second.destination_register &&
+           first.source_register == second.source_register &&
+           first.branch_register == second.branch_register && first.immediate == second.immediate &&
+           first.displacement == second.displacement &&
+           first.special_register == second.special_register &&
+           first.control_flow == second.control_flow &&
+           first.has_delay_slot == second.has_delay_slot &&
+           first.is_privileged == second.is_privileged && first.text == second.text;
 }
 
-std::size_t matching_rule_count(
-    const std::uint16_t opcode,
-    katana::sh4::InstructionKind& matched_kind
-) {
+std::size_t matching_rule_count(const std::uint16_t opcode,
+                                katana::sh4::InstructionKind& matched_kind) {
     std::size_t count = 0;
     for (const auto& metadata : katana::sh4::instruction_metadata()) {
         if (metadata.matches(opcode)) {
@@ -60,7 +53,7 @@ int fail(const std::uint16_t opcode, const std::string& reason) {
     return EXIT_FAILURE;
 }
 
-}
+} // namespace
 
 int main(const int argc, char* argv[]) {
     try {
@@ -107,7 +100,8 @@ int main(const int argc, char* argv[]) {
             if (first.text.empty()) {
                 return fail(opcode, "Disassembly ist leer.");
             }
-            if (first.destination_register > 15u || first.source_register > 15u || first.branch_register > 15u) {
+            if (first.destination_register > 15u || first.source_register > 15u ||
+                first.branch_register > 15u) {
                 return fail(opcode, "Ein Registeroperand liegt ausserhalb R0 bis R15.");
             }
 
@@ -116,15 +110,20 @@ int main(const int argc, char* argv[]) {
             if (first.is_known()) {
                 ++known;
                 if (matches != 1u) {
-                    return fail(opcode, "Ein bekannter Opcode besitzt nicht genau eine Metadatenregel.");
+                    return fail(opcode,
+                                "Ein bekannter Opcode besitzt nicht genau eine Metadatenregel.");
                 }
                 if (matched_kind != first.kind) {
-                    return fail(opcode, "Metadatenregel und Decoder liefern verschiedene Instruktionsarten.");
+                    return fail(
+                        opcode,
+                        "Metadatenregel und Decoder liefern verschiedene Instruktionsarten.");
                 }
             } else {
                 ++unknown;
                 if (matches != 0u || first.kind != katana::sh4::InstructionKind::Unknown) {
-                    return fail(opcode, "Unknown-Opcode besitzt eine Regel oder einen bekannten Kind-Wert.");
+                    return fail(
+                        opcode,
+                        "Unknown-Opcode besitzt eine Regel oder einen bekannten Kind-Wert.");
                 }
             }
         }
@@ -135,8 +134,7 @@ int main(const int argc, char* argv[]) {
         }
 
         std::cout << "KR-1505 Decoder-Fuzzer erfolgreich: Seed=" << seed
-                  << ", Iterationen=" << iterations
-                  << ", bekannt=" << known
+                  << ", Iterationen=" << iterations << ", bekannt=" << known
                   << ", unbekannt=" << unknown << "\n";
         return EXIT_SUCCESS;
     } catch (const std::exception& error) {

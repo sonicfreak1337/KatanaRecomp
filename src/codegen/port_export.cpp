@@ -32,10 +32,10 @@ bool valid_target_name(const std::string_view value) noexcept {
     const bool valid = std::all_of(value.begin(), value.end(), [](const unsigned char character) {
         return std::isalnum(character) || character == '_' || character == '-';
     });
-    return valid && value != "katana-recomp" && value != "katana_runtime"
-        && value != "katana_core" && value != "katana_generated"
-        && value != "all" && value != "clean" && value != "install"
-        && value != "test" && value != "help" && value != "rebuild_cache";
+    return valid && value != "katana-recomp" && value != "katana_runtime" &&
+           value != "katana_core" && value != "katana_generated" && value != "all" &&
+           value != "clean" && value != "install" && value != "test" && value != "help" &&
+           value != "rebuild_cache";
 }
 
 std::string unit_namespace(const std::size_t index) {
@@ -52,10 +52,9 @@ void replace_all(std::string& value, const std::string_view from, const std::str
     }
 }
 
-std::vector<katana::ir::Function> select_functions(
-    const std::span<const katana::ir::Function> program,
-    const TranslationUnitPartition& partition
-) {
+std::vector<katana::ir::Function>
+select_functions(const std::span<const katana::ir::Function> program,
+                 const TranslationUnitPartition& partition) {
     std::vector<katana::ir::Function> selected;
     selected.reserve(partition.function_indices.size());
     for (const auto index : partition.function_indices) {
@@ -72,77 +71,86 @@ std::vector<katana::ir::Function> select_functions(
 
 std::string generated_header(const std::string& entry_namespace) {
     return "#pragma once\n\n"
-        "#include \"katana/runtime/runtime.hpp\"\n\n"
-        "namespace " + entry_namespace + " {\n"
-        "void run(katana::runtime::CpuState& cpu);\n"
-        "}\n";
+           "#include \"katana/runtime/runtime.hpp\"\n\n"
+           "namespace " +
+           entry_namespace +
+           " {\n"
+           "void run(katana::runtime::CpuState& cpu);\n"
+           "}\n";
 }
 
 std::string handwritten_main(const std::string& entry_namespace) {
     return "#include \"katana_port.hpp\"\n"
-        "#include \"katana/runtime/gdi.hpp\"\n"
-        "#include <exception>\n#include <filesystem>\n#include <iostream>\n#include <string_view>\n\n"
-        "int main(const int argc, const char* const* argv) {\n"
-        "    try {\n"
-        "        if (argc == 3 && std::string_view(argv[1]) == \"--gdi\") {\n"
-        "            const auto disc = katana::runtime::GdiDiscSource::open(std::filesystem::path(argv[2]));\n"
-        "            std::cout << \"DiscSource bereit: \" << disc->identity() << '\\n';\n"
-        "            return 0;\n"
-        "        }\n"
-        "        if (argc == 2 && std::string_view(argv[1]) == \"--run-generated\") {\n"
-        "            katana::runtime::CpuState cpu;\n"
-        "            " + entry_namespace + "::run(cpu);\n"
-        "            std::cout << \"Generierter Einstieg beendet.\\n\";\n"
-        "            return 0;\n"
-        "        }\n"
-        "        std::cout << \"Katana-Port bereit. Optionen: --gdi <Quelle>, --run-generated\\n\";\n"
-        "        return 0;\n"
-        "    } catch (const std::exception& error) {\n"
-        "        std::cerr << \"Portlauf fehlgeschlagen: \" << error.what() << '\\n';\n"
-        "        return 1;\n"
-        "    }\n"
-        "}\n";
+           "#include \"katana/runtime/gdi.hpp\"\n"
+           "#include <exception>\n#include <filesystem>\n#include <iostream>\n#include "
+           "<string_view>\n\n"
+           "int main(const int argc, const char* const* argv) {\n"
+           "    try {\n"
+           "        if (argc == 3 && std::string_view(argv[1]) == \"--gdi\") {\n"
+           "            const auto disc = "
+           "katana::runtime::GdiDiscSource::open(std::filesystem::path(argv[2]));\n"
+           "            std::cout << \"DiscSource bereit: \" << disc->identity() << '\\n';\n"
+           "            return 0;\n"
+           "        }\n"
+           "        if (argc == 2 && std::string_view(argv[1]) == \"--run-generated\") {\n"
+           "            katana::runtime::CpuState cpu;\n"
+           "            " +
+           entry_namespace +
+           "::run(cpu);\n"
+           "            std::cout << \"Generierter Einstieg beendet.\\n\";\n"
+           "            return 0;\n"
+           "        }\n"
+           "        std::cout << \"Katana-Port bereit. Optionen: --gdi <Quelle>, "
+           "--run-generated\\n\";\n"
+           "        return 0;\n"
+           "    } catch (const std::exception& error) {\n"
+           "        std::cerr << \"Portlauf fehlgeschlagen: \" << error.what() << '\\n';\n"
+           "        return 1;\n"
+           "    }\n"
+           "}\n";
 }
 
 std::string root_cmake() {
     return "cmake_minimum_required(VERSION 3.25)\n"
-        "project(KatanaPort LANGUAGES CXX)\n"
-        "set(KATANA_RUNTIME_ROOT \"\" CACHE PATH \"KatanaRecomp source root\")\n"
-        "if(NOT TARGET katana_runtime)\n"
-        "  if(KATANA_RUNTIME_ROOT STREQUAL \"\")\n"
-        "    message(FATAL_ERROR \"Set KATANA_RUNTIME_ROOT to the compatible KatanaRecomp source tree\")\n"
-        "  endif()\n"
-        "  add_subdirectory(\"${KATANA_RUNTIME_ROOT}\" \"${CMAKE_BINARY_DIR}/katana-runtime\")\n"
-        "endif()\n"
-        "add_subdirectory(generated)\n"
-        "include(\"${CMAKE_CURRENT_SOURCE_DIR}/generated/katana-port.cmake\")\n";
+           "project(KatanaPort LANGUAGES CXX)\n"
+           "set(KATANA_RUNTIME_ROOT \"\" CACHE PATH \"KatanaRecomp source root\")\n"
+           "if(NOT TARGET katana_runtime)\n"
+           "  if(KATANA_RUNTIME_ROOT STREQUAL \"\")\n"
+           "    message(FATAL_ERROR \"Set KATANA_RUNTIME_ROOT to the compatible KatanaRecomp "
+           "source tree\")\n"
+           "  endif()\n"
+           "  add_subdirectory(\"${KATANA_RUNTIME_ROOT}\" \"${CMAKE_BINARY_DIR}/katana-runtime\")\n"
+           "endif()\n"
+           "add_subdirectory(generated)\n"
+           "include(\"${CMAKE_CURRENT_SOURCE_DIR}/generated/katana-port.cmake\")\n";
 }
 
 std::string port_cmake(const std::string& target_name) {
-    return "add_executable(" + target_name + " \"${CMAKE_CURRENT_LIST_DIR}/../src/main.cpp\")\n"
-        "target_compile_features(" + target_name + " PRIVATE cxx_std_20)\n"
-        "target_include_directories(" + target_name
-        + " PRIVATE \"${CMAKE_CURRENT_LIST_DIR}/include\")\n"
-        "target_link_libraries(" + target_name + " PRIVATE katana_generated katana_runtime)\n";
+    return "add_executable(" + target_name +
+           " \"${CMAKE_CURRENT_LIST_DIR}/../src/main.cpp\")\n"
+           "target_compile_features(" +
+           target_name +
+           " PRIVATE cxx_std_20)\n"
+           "target_include_directories(" +
+           target_name +
+           " PRIVATE \"${CMAKE_CURRENT_LIST_DIR}/include\")\n"
+           "target_link_libraries(" +
+           target_name + " PRIVATE katana_generated katana_runtime)\n";
 }
 
-std::string port_metadata(
-    const PortExportOptions& options,
-    const std::size_t function_count,
-    const std::span<const TranslationUnitPartition> partitions,
-    const std::uint32_t entry_address,
-    const std::size_t boot_size
-) {
+std::string port_metadata(const PortExportOptions& options,
+                          const std::size_t function_count,
+                          const std::span<const TranslationUnitPartition> partitions,
+                          const std::uint32_t entry_address,
+                          const std::size_t boot_size) {
     std::ostringstream output;
     katana::io::write_json_report_header(output, "katana-port-project", "port-project");
     output << ",\"contract_version\":" << port_project_contract_version
            << ",\"target_name\":" << katana::io::quote_json(options.target_name)
            << ",\"runtime_abi\":" << katana::runtime::abi_version
            << ",\"backend_abi\":" << backend_interface_abi_version
-           << ",\"entry_address\":" << entry_address
-           << ",\"boot_size\":" << boot_size
-           << ",\"function_count\":" << function_count
-           << ",\"partitions\":[";
+           << ",\"entry_address\":" << entry_address << ",\"boot_size\":" << boot_size
+           << ",\"function_count\":" << function_count << ",\"partitions\":[";
     for (std::size_t index = 0u; index < partitions.size(); ++index) {
         if (index != 0u) output << ',';
         const auto& partition = partitions[index];
@@ -156,11 +164,9 @@ std::string port_metadata(
     return output.str();
 }
 
-void write_user_file_once(
-    const std::filesystem::path& root,
-    const std::filesystem::path& relative,
-    const std::string_view content
-) {
+void write_user_file_once(const std::filesystem::path& root,
+                          const std::filesystem::path& relative,
+                          const std::string_view content) {
     auto candidate = root;
     for (const auto& component : relative) {
         candidate /= component;
@@ -182,16 +188,15 @@ void write_user_file_once(
     if (!output) throw std::runtime_error("Port-Bootstrapdatei konnte nicht geschrieben werden.");
 }
 
-}
+} // namespace
 
-PortExportResult export_dreamcast_port_project(
-    const std::filesystem::path& gdi_path,
-    const std::filesystem::path& output_root,
-    const PortExportOptions& options
-) {
-    if (gdi_path.empty() || output_root.empty() || !valid_target_name(options.target_name)
-        || options.tool_version.empty()) {
-        throw std::invalid_argument("Portexport braucht GDI, Ausgabe, portable Zielkennung und Werkzeugversion.");
+PortExportResult export_dreamcast_port_project(const std::filesystem::path& gdi_path,
+                                               const std::filesystem::path& output_root,
+                                               const PortExportOptions& options) {
+    if (gdi_path.empty() || output_root.empty() || !valid_target_name(options.target_name) ||
+        options.tool_version.empty()) {
+        throw std::invalid_argument(
+            "Portexport braucht GDI, Ausgabe, portable Zielkennung und Werkzeugversion.");
     }
     const auto disc = katana::platform::load_dreamcast_gdi_boot(gdi_path);
     auto image = katana::platform::make_dreamcast_disc_executable(disc);
@@ -208,34 +213,29 @@ PortExportResult export_dreamcast_port_project(
     artifacts.reserve(partitions.size() + 9u);
     for (const auto& partition : partitions) {
         auto functions = select_functions(program, partition);
-        const auto contains_program_entry = std::any_of(
-            functions.begin(), functions.end(), [](const auto& function) {
+        const auto contains_program_entry =
+            std::any_of(functions.begin(), functions.end(), [](const auto& function) {
                 return function.entry_address == katana::platform::dreamcast_disc_boot_address;
-            }
-        );
+            });
         const auto unit_entry = contains_program_entry
-            ? katana::platform::dreamcast_disc_boot_address
-            : functions.front().entry_address;
+                                    ? katana::platform::dreamcast_disc_boot_address
+                                    : functions.front().entry_address;
         auto source = emit_cpp_program(functions, unit_entry);
         const auto name_space = unit_namespace(partition.index);
         replace_all(source, "katana_generated", name_space);
-        artifacts.push_back({
-            std::filesystem::path("code") /
-                deterministic_translation_unit_name(partition, program),
-            std::move(source)
-        });
+        artifacts.push_back({std::filesystem::path("code") /
+                                 deterministic_translation_unit_name(partition, program),
+                             std::move(source)});
     }
-    const auto entry_partition = std::find_if(
-        partitions.begin(), partitions.end(), [&program](const auto& partition) {
-            return std::any_of(
-                partition.function_indices.begin(), partition.function_indices.end(),
-                [&program](const auto index) {
-                    return program[index].entry_address
-                        == katana::platform::dreamcast_disc_boot_address;
-                }
-            );
-        }
-    );
+    const auto entry_partition =
+        std::find_if(partitions.begin(), partitions.end(), [&program](const auto& partition) {
+            return std::any_of(partition.function_indices.begin(),
+                               partition.function_indices.end(),
+                               [&program](const auto index) {
+                                   return program[index].entry_address ==
+                                          katana::platform::dreamcast_disc_boot_address;
+                               });
+        });
     if (entry_partition == partitions.end()) {
         throw std::runtime_error("Portcodegen besitzt keine Einstiegspartition.");
     }
@@ -248,15 +248,13 @@ PortExportResult export_dreamcast_port_project(
     inputs.push_back(katana::io::capture_input_provenance("gdi-descriptor", gdi_path));
     for (const auto& track : disc.source->descriptor().tracks) {
         inputs.push_back(katana::io::capture_input_provenance(
-            "gdi-track-" + std::to_string(track.number), track.resolved_path
-        ));
+            "gdi-track-" + std::to_string(track.number), track.resolved_path));
     }
     katana::io::BuildProvenance provenance;
     provenance.tool_version = options.tool_version;
     provenance.manifest_version = port_project_contract_version;
     provenance.manifest_sha256 = katana::io::sha256_bytes(
-        options.target_name + ":" + std::to_string(port_project_contract_version)
-    );
+        options.target_name + ":" + std::to_string(port_project_contract_version));
     provenance.ir_version = 2u;
     provenance.runtime_abi = katana::runtime::abi_version;
     provenance.backend_name = "cpp";
@@ -265,35 +263,23 @@ PortExportResult export_dreamcast_port_project(
 
     artifacts.push_back({"include/katana_port.hpp", generated_header(entry_namespace)});
     artifacts.push_back({"katana-port.cmake", port_cmake(options.target_name)});
-    artifacts.push_back({
-        "metadata/port-project.json",
-        port_metadata(
-            options, program.size(), partitions,
-            katana::platform::dreamcast_disc_boot_address, disc.boot_file.size()
-        )
-    });
-    artifacts.push_back({
-        "metadata/provenance.json", katana::io::format_build_provenance_json(provenance)
-    });
-    artifacts.push_back({
-        "metadata/source-map.json", serialize_address_source_map(source_map)
-    });
-    artifacts.push_back({
-        "metadata/cfg.json",
-        katana::analysis::serialize_analysis_graph_json(control_flow_graph)
-    });
-    artifacts.push_back({
-        "metadata/cfg.dot",
-        katana::analysis::serialize_analysis_graph_dot(control_flow_graph)
-    });
-    artifacts.push_back({
-        "metadata/callgraph.json",
-        katana::analysis::serialize_analysis_graph_json(call_graph)
-    });
-    artifacts.push_back({
-        "metadata/callgraph.dot",
-        katana::analysis::serialize_analysis_graph_dot(call_graph)
-    });
+    artifacts.push_back({"metadata/port-project.json",
+                         port_metadata(options,
+                                       program.size(),
+                                       partitions,
+                                       katana::platform::dreamcast_disc_boot_address,
+                                       disc.boot_file.size())});
+    artifacts.push_back(
+        {"metadata/provenance.json", katana::io::format_build_provenance_json(provenance)});
+    artifacts.push_back({"metadata/source-map.json", serialize_address_source_map(source_map)});
+    artifacts.push_back(
+        {"metadata/cfg.json", katana::analysis::serialize_analysis_graph_json(control_flow_graph)});
+    artifacts.push_back(
+        {"metadata/cfg.dot", katana::analysis::serialize_analysis_graph_dot(control_flow_graph)});
+    artifacts.push_back(
+        {"metadata/callgraph.json", katana::analysis::serialize_analysis_graph_json(call_graph)});
+    artifacts.push_back(
+        {"metadata/callgraph.dot", katana::analysis::serialize_analysis_graph_dot(call_graph)});
 
     const auto absolute_root = std::filesystem::absolute(output_root).lexically_normal();
     std::error_code root_error;
@@ -311,15 +297,17 @@ PortExportResult export_dreamcast_port_project(
     write_user_file_once(canonical_root, ".gitignore", "/build/\n");
     write_user_file_once(canonical_root, "src/main.cpp", handwritten_main(entry_namespace));
 
-    return {
-        canonical_root,
-        program.size(),
-        partitions.size(),
-        write.written_files.size(),
-        write.removed_files.size(),
-        {"gdi-validated", "boot-image-loaded", "analysis-complete", "ir-lowered",
-         "partitioned-codegen-complete", "port-project-written"}
-    };
+    return {canonical_root,
+            program.size(),
+            partitions.size(),
+            write.written_files.size(),
+            write.removed_files.size(),
+            {"gdi-validated",
+             "boot-image-loaded",
+             "analysis-complete",
+             "ir-lowered",
+             "partitioned-codegen-complete",
+             "port-project-written"}};
 }
 
-}
+} // namespace katana::codegen

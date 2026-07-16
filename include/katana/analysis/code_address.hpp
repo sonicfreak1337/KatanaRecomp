@@ -25,12 +25,11 @@ struct CodeAddressValidation {
     }
 };
 
-[[nodiscard]] CodeAddressValidation validate_committed_code_address(
-    const katana::io::ExecutableImage& image,
-    std::uint32_t address,
-    std::size_t width = 2u
-) noexcept;
+[[nodiscard]] CodeAddressValidation
+validate_committed_code_address(const katana::io::ExecutableImage& image,
+                                std::uint32_t address,
+                                std::size_t width = 2u) noexcept;
 
 [[nodiscard]] const char* code_address_status_name(CodeAddressStatus status) noexcept;
 
-}
+} // namespace katana::analysis

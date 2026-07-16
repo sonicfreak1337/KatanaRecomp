@@ -14,8 +14,7 @@ class SystemReplayLog;
 
 using SchedulerEventId = std::uint64_t;
 using SchedulerResetObserverId = std::uint64_t;
-using SchedulerCallback =
-    std::function<void(SchedulerEventId event_id, std::uint64_t guest_cycle)>;
+using SchedulerCallback = std::function<void(SchedulerEventId event_id, std::uint64_t guest_cycle)>;
 using SchedulerResetCallback = std::function<void()>;
 
 enum class SchedulerAdvanceStatus {
@@ -30,35 +29,23 @@ struct SchedulerAdvanceResult {
 };
 
 class EventScheduler {
-public:
+  public:
     explicit EventScheduler(SystemReplayLog* replay_log = nullptr) noexcept;
-    [[nodiscard]] SchedulerEventId schedule_at(
-        std::uint64_t guest_cycle,
-        SchedulerCallback callback
-    );
-    [[nodiscard]] SchedulerEventId schedule_after(
-        std::uint64_t guest_cycles,
-        SchedulerCallback callback
-    );
+    [[nodiscard]] SchedulerEventId schedule_at(std::uint64_t guest_cycle,
+                                               SchedulerCallback callback);
+    [[nodiscard]] SchedulerEventId schedule_after(std::uint64_t guest_cycles,
+                                                  SchedulerCallback callback);
 
     [[nodiscard]] bool cancel(SchedulerEventId event_id) noexcept;
-    [[nodiscard]] SchedulerResetObserverId add_reset_observer(
-        SchedulerResetCallback callback
-    );
-    [[nodiscard]] bool remove_reset_observer(
-        SchedulerResetObserverId observer_id
-    ) noexcept;
+    [[nodiscard]] SchedulerResetObserverId add_reset_observer(SchedulerResetCallback callback);
+    [[nodiscard]] bool remove_reset_observer(SchedulerResetObserverId observer_id) noexcept;
     void clear() noexcept;
     void reset();
 
-    [[nodiscard]] SchedulerAdvanceResult advance_to(
-        std::uint64_t guest_cycle,
-        std::size_t event_budget
-    );
-    [[nodiscard]] SchedulerAdvanceResult advance_by(
-        std::uint64_t guest_cycles,
-        std::size_t event_budget
-    );
+    [[nodiscard]] SchedulerAdvanceResult advance_to(std::uint64_t guest_cycle,
+                                                    std::size_t event_budget);
+    [[nodiscard]] SchedulerAdvanceResult advance_by(std::uint64_t guest_cycles,
+                                                    std::size_t event_budget);
 
     [[nodiscard]] std::uint64_t current_cycle() const noexcept;
     [[nodiscard]] std::optional<std::uint64_t> next_event_cycle() const noexcept;
@@ -66,7 +53,7 @@ public:
     [[nodiscard]] std::uint64_t processed_event_count() const noexcept;
     [[nodiscard]] std::uint64_t reset_generation() const noexcept;
 
-private:
+  private:
     using EventKey = std::pair<std::uint64_t, SchedulerEventId>;
 
     std::uint64_t current_cycle_ = 0u;

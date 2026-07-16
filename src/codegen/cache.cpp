@@ -23,14 +23,17 @@ void hash_field(std::uint64_t& hash, const std::string_view value) noexcept {
 }
 
 bool safe_component(const std::string_view value) noexcept {
-    if (value.empty() || value == "." || value == "..") { return false; }
+    if (value.empty() || value == "." || value == "..") {
+        return false;
+    }
     for (const auto character : value) {
-        const bool accepted =
-            (character >= 'a' && character <= 'z') ||
-            (character >= 'A' && character <= 'Z') ||
-            (character >= '0' && character <= '9') ||
-            character == '-' || character == '_' || character == '.';
-        if (!accepted) { return false; }
+        const bool accepted = (character >= 'a' && character <= 'z') ||
+                              (character >= 'A' && character <= 'Z') ||
+                              (character >= '0' && character <= '9') || character == '-' ||
+                              character == '_' || character == '.';
+        if (!accepted) {
+            return false;
+        }
     }
     return true;
 }
@@ -38,12 +41,10 @@ bool safe_component(const std::string_view value) noexcept {
 } // namespace
 
 std::string make_codegen_cache_key(const CodegenCacheInputs& inputs) {
-    if (inputs.input_hash.empty() || inputs.ir_hash.empty() ||
-        inputs.configuration_hash.empty() || inputs.backend_name.empty() ||
-        inputs.backend_abi == 0u || inputs.runtime_abi == 0u ||
-        inputs.manifest_hash.empty() || inputs.overrides_hash.empty() ||
-        inputs.ir_version == 0u || inputs.optimization_version == 0u ||
-        inputs.tool_version.empty()) {
+    if (inputs.input_hash.empty() || inputs.ir_hash.empty() || inputs.configuration_hash.empty() ||
+        inputs.backend_name.empty() || inputs.backend_abi == 0u || inputs.runtime_abi == 0u ||
+        inputs.manifest_hash.empty() || inputs.overrides_hash.empty() || inputs.ir_version == 0u ||
+        inputs.optimization_version == 0u || inputs.tool_version.empty()) {
         throw std::invalid_argument("Codegen-Cache-Schluessel ist unvollstaendig.");
     }
     std::uint64_t hash = 14695981039346656037ull;
@@ -60,26 +61,25 @@ std::string make_codegen_cache_key(const CodegenCacheInputs& inputs) {
     hash_field(hash, std::to_string(inputs.optimization_version));
     hash_field(hash, inputs.tool_version);
     std::ostringstream output;
-    output << "cg-v" << codegen_cache_schema_version << '-'
-           << std::hex << std::setfill('0') << std::setw(16) << hash;
+    output << "cg-v" << codegen_cache_schema_version << '-' << std::hex << std::setfill('0')
+           << std::setw(16) << hash;
     return output.str();
 }
 
-CodegenCache::CodegenCache(std::filesystem::path root)
-    : root_(std::move(root)) {
+CodegenCache::CodegenCache(std::filesystem::path root) : root_(std::move(root)) {
     if (root_.empty()) {
         throw std::invalid_argument("Codegen-Cache braucht ein Stammverzeichnis.");
     }
     root_ = std::filesystem::absolute(root_).lexically_normal();
 }
 
-std::optional<std::string> CodegenCache::load(
-    const std::string_view key,
-    const std::string_view artifact_name
-) const {
+std::optional<std::string> CodegenCache::load(const std::string_view key,
+                                              const std::string_view artifact_name) const {
     const auto path = artifact_path(key, artifact_name);
     std::ifstream input(path, std::ios::binary);
-    if (!input) { return std::nullopt; }
+    if (!input) {
+        return std::nullopt;
+    }
     std::ostringstream content;
     content << input.rdbuf();
     if (!input.eof() && input.fail()) {
@@ -88,11 +88,9 @@ std::optional<std::string> CodegenCache::load(
     return content.str();
 }
 
-void CodegenCache::store(
-    const std::string_view key,
-    const std::string_view artifact_name,
-    const std::string_view content
-) {
+void CodegenCache::store(const std::string_view key,
+                         const std::string_view artifact_name,
+                         const std::string_view content) {
     const auto path = artifact_path(key, artifact_name);
     if (const auto existing = load(key, artifact_name); existing && *existing == content) {
         return;
@@ -108,12 +106,12 @@ void CodegenCache::store(
     }
 }
 
-const std::filesystem::path& CodegenCache::root() const noexcept { return root_; }
+const std::filesystem::path& CodegenCache::root() const noexcept {
+    return root_;
+}
 
-std::filesystem::path CodegenCache::artifact_path(
-    const std::string_view key,
-    const std::string_view artifact_name
-) const {
+std::filesystem::path CodegenCache::artifact_path(const std::string_view key,
+                                                  const std::string_view artifact_name) const {
     const std::filesystem::path relative(artifact_name);
     if (!safe_component(key) || relative.empty() || relative.is_absolute()) {
         throw std::invalid_argument("Codegen-Cache-Pfadkomponente ist nicht portabel.");

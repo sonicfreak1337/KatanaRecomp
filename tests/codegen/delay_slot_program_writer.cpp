@@ -19,17 +19,38 @@ Instruction instruction(const std::uint32_t address, const Operation operation) 
     result.source_address = address;
     result.operation = operation;
     switch (operation) {
-        case Operation::Branch: result.original_opcode = 0xA000u; break;
-        case Operation::Call: result.original_opcode = 0xB000u; break;
-        case Operation::JumpRegister: result.original_opcode = 0x402Bu; break;
-        case Operation::CallRegister: result.original_opcode = 0x400Bu; break;
-        case Operation::Return: result.original_opcode = 0x000Bu; break;
-        case Operation::ReturnFromException: result.original_opcode = 0x002Bu; break;
-        case Operation::Nop: result.original_opcode = 0x0009u; break;
-        case Operation::Unknown: result.original_opcode = 0xFFFFu; break;
-        case Operation::Fadd: result.original_opcode = 0xF100u; break;
-        case Operation::LoadSpecialRegister: result.original_opcode = 0x4B2Au; break;
-        default: break;
+    case Operation::Branch:
+        result.original_opcode = 0xA000u;
+        break;
+    case Operation::Call:
+        result.original_opcode = 0xB000u;
+        break;
+    case Operation::JumpRegister:
+        result.original_opcode = 0x402Bu;
+        break;
+    case Operation::CallRegister:
+        result.original_opcode = 0x400Bu;
+        break;
+    case Operation::Return:
+        result.original_opcode = 0x000Bu;
+        break;
+    case Operation::ReturnFromException:
+        result.original_opcode = 0x002Bu;
+        break;
+    case Operation::Nop:
+        result.original_opcode = 0x0009u;
+        break;
+    case Operation::Unknown:
+        result.original_opcode = 0xFFFFu;
+        break;
+    case Operation::Fadd:
+        result.original_opcode = 0xF100u;
+        break;
+    case Operation::LoadSpecialRegister:
+        result.original_opcode = 0x4B2Au;
+        break;
+    default:
+        break;
     }
     result.widths = katana::ir::operation_operand_widths(operation);
     result.memory_effects = katana::ir::instruction_memory_effects(operation);
@@ -38,24 +59,26 @@ Instruction instruction(const std::uint32_t address, const Operation operation) 
     return result;
 }
 
-Instruction memory_slot(
-    const std::uint32_t owner,
-    const Operation operation = Operation::LoadLong
-) {
+Instruction memory_slot(const std::uint32_t owner,
+                        const Operation operation = Operation::LoadLong) {
     auto result = instruction(owner + 2u, operation);
     result.source_register = 8u;
     result.destination_register = 9u;
     switch (operation) {
-        case Operation::LoadLong: result.original_opcode = 0x6982u; break;
-        case Operation::LoadLongPostIncrement: result.original_opcode = 0x6986u; break;
-        case Operation::StoreLongPreDecrement: result.original_opcode = 0x2896u; break;
-        default: break;
+    case Operation::LoadLong:
+        result.original_opcode = 0x6982u;
+        break;
+    case Operation::LoadLongPostIncrement:
+        result.original_opcode = 0x6986u;
+        break;
+    case Operation::StoreLongPreDecrement:
+        result.original_opcode = 0x2896u;
+        break;
+    default:
+        break;
     }
     result.memory_effects = katana::ir::instruction_memory_effects(
-        operation,
-        result.destination_register,
-        result.source_register
-    );
+        operation, result.destination_register, result.source_register);
     result.delay_slot = {DelaySlotRole::Slot, owner};
     return result;
 }
@@ -78,35 +101,27 @@ Instruction load_pr_slot(const std::uint32_t owner) {
     auto result = instruction(owner + 2u, Operation::LoadSpecialRegister);
     result.source_register = 11u;
     result.special_register = katana::ir::SpecialRegister::Pr;
-    result.status_effects = katana::ir::instruction_status_effects(
-        result.operation,
-        result.special_register
-    );
-    result.accumulator_effects = katana::ir::operation_accumulator_effects(
-        result.operation,
-        result.special_register
-    );
+    result.status_effects =
+        katana::ir::instruction_status_effects(result.operation, result.special_register);
+    result.accumulator_effects =
+        katana::ir::operation_accumulator_effects(result.operation, result.special_register);
     result.delay_slot = {DelaySlotRole::Slot, owner};
     return result;
 }
 
-void append_function(
-    std::vector<katana::ir::Function>& program,
-    const std::uint32_t entry,
-    Instruction owner,
-    Instruction slot
-) {
+void append_function(std::vector<katana::ir::Function>& program,
+                     const std::uint32_t entry,
+                     Instruction owner,
+                     Instruction slot) {
     owner.delay_slot = {DelaySlotRole::Owner, entry + 2u};
     katana::ir::BasicBlock block;
     block.start_address = entry;
     if (owner.operation == Operation::Branch && owner.target_address == entry) {
         block.successors.push_back(entry);
     }
-    if (
-        (owner.operation == Operation::JumpRegister ||
-            owner.operation == Operation::CallRegister) &&
-        owner.resolved_targets.empty()
-    ) {
+    if ((owner.operation == Operation::JumpRegister ||
+         owner.operation == Operation::CallRegister) &&
+        owner.resolved_targets.empty()) {
         block.has_indirect_successor = true;
     }
     block.instructions = {std::move(owner), std::move(slot)};
@@ -146,39 +161,25 @@ std::vector<katana::ir::Function> build_program() {
     jsr.resolved_targets = {0x1800u};
     append_function(program, 0x1300u, std::move(jsr), memory_slot(0x1300u));
 
-    append_function(
-        program,
-        0x1400u,
-        instruction(0x1400u, Operation::Return),
-        memory_slot(0x1400u, Operation::LoadLongPostIncrement)
-    );
+    append_function(program,
+                    0x1400u,
+                    instruction(0x1400u, Operation::Return),
+                    memory_slot(0x1400u, Operation::LoadLongPostIncrement));
 
     auto rte_slot = memory_slot(0x1500u);
     rte_slot.source_register = 0u;
     rte_slot.memory_effects = katana::ir::instruction_memory_effects(
-        rte_slot.operation,
-        rte_slot.destination_register,
-        rte_slot.source_register
-    );
-    append_function(
-        program,
-        0x1500u,
-        instruction(0x1500u, Operation::ReturnFromException),
-        std::move(rte_slot)
-    );
+        rte_slot.operation, rte_slot.destination_register, rte_slot.source_register);
+    append_function(program,
+                    0x1500u,
+                    instruction(0x1500u, Operation::ReturnFromException),
+                    std::move(rte_slot));
 
     auto illegal_owner = instruction(0x1600u, Operation::Branch);
     illegal_owner.target_address = 0x1600u;
     append_function(
-        program,
-        0x1600u,
-        std::move(illegal_owner),
-        instruction(0x1602u, Operation::Unknown)
-    );
-    program.back().blocks.front().instructions.back().delay_slot = {
-        DelaySlotRole::Slot,
-        0x1600u
-    };
+        program, 0x1600u, std::move(illegal_owner), instruction(0x1602u, Operation::Unknown));
+    program.back().blocks.front().instructions.back().delay_slot = {DelaySlotRole::Slot, 0x1600u};
 
     auto nested_call = instruction(0x1700u, Operation::Call);
     nested_call.target_address = 0x1800u;
@@ -190,27 +191,15 @@ std::vector<katana::ir::Function> build_program() {
     nested_slot.source_register = 9u;
     nested_slot.destination_register = 8u;
     nested_slot.memory_effects = katana::ir::instruction_memory_effects(
-        nested_slot.operation,
-        nested_slot.destination_register,
-        nested_slot.source_register
-    );
-    append_function(
-        program,
-        0x1800u,
-        std::move(nested_fault),
-        std::move(nested_slot)
-    );
+        nested_slot.operation, nested_slot.destination_register, nested_slot.source_register);
+    append_function(program, 0x1800u, std::move(nested_fault), std::move(nested_slot));
 
     auto fpu_call = instruction(0x1900u, Operation::Call);
     fpu_call.target_address = 0x1800u;
     append_function(program, 0x1900u, std::move(fpu_call), fpu_slot(0x1900u));
 
     append_function(
-        program,
-        0x1A00u,
-        instruction(0x1A00u, Operation::Return),
-        load_pr_slot(0x1A00u)
-    );
+        program, 0x1A00u, instruction(0x1A00u, Operation::Return), load_pr_slot(0x1A00u));
 
     return program;
 }

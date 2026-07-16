@@ -9,31 +9,24 @@
 namespace katana::io {
 namespace {
 
-std::uint32_t parse_hex(
-    std::string text,
-    const std::filesystem::path& path,
-    const std::size_t line,
-    const char* field
-) {
+std::uint32_t parse_hex(std::string text,
+                        const std::filesystem::path& path,
+                        const std::size_t line,
+                        const char* field) {
     if (text.starts_with("0x") || text.starts_with("0X")) {
         text.erase(0u, 2u);
     }
     std::uint32_t value = 0;
     const auto result = std::from_chars(text.data(), text.data() + text.size(), value, 16);
     if (text.empty() || result.ec != std::errc{} || result.ptr != text.data() + text.size()) {
-        throw std::runtime_error(
-            "Map-Dateifehler in " + path.string() + " in Zeile " +
-            std::to_string(line) + ": ungueltiges " + field + "."
-        );
+        throw std::runtime_error("Map-Dateifehler in " + path.string() + " in Zeile " +
+                                 std::to_string(line) + ": ungueltiges " + field + ".");
     }
     return value;
 }
 
-SymbolKind parse_kind(
-    const std::string& text,
-    const std::filesystem::path& path,
-    const std::size_t line
-) {
+SymbolKind
+parse_kind(const std::string& text, const std::filesystem::path& path, const std::size_t line) {
     if (text == "F" || text == "FUNC" || text == "FUNCTION") {
         return SymbolKind::Function;
     }
@@ -43,18 +36,13 @@ SymbolKind parse_kind(
     if (text == "U" || text == "UNKNOWN") {
         return SymbolKind::Unknown;
     }
-    throw std::runtime_error(
-        "Map-Dateifehler in " + path.string() + " in Zeile " +
-        std::to_string(line) + ": unbekannte Symbolart."
-    );
+    throw std::runtime_error("Map-Dateifehler in " + path.string() + " in Zeile " +
+                             std::to_string(line) + ": unbekannte Symbolart.");
 }
 
-}
+} // namespace
 
-void load_symbol_map(
-    const std::filesystem::path& path,
-    ExecutableImage& image
-) {
+void load_symbol_map(const std::filesystem::path& path, ExecutableImage& image) {
     std::ifstream input(path);
     if (!input) {
         throw std::runtime_error("Map-Datei konnte nicht geoeffnet werden: " + path.string());
@@ -75,11 +63,11 @@ void load_symbol_map(
         std::string name;
         std::string size_text;
         std::string trailing;
-        if (!(line >> address_text >> kind_text >> name) || (line >> size_text && line >> trailing)) {
-            throw std::runtime_error(
-                "Map-Dateifehler in " + path.string() + " in Zeile " +
-                std::to_string(line_number) + ": erwartet ADDRESS KIND NAME [SIZE]."
-            );
+        if (!(line >> address_text >> kind_text >> name) ||
+            (line >> size_text && line >> trailing)) {
+            throw std::runtime_error("Map-Dateifehler in " + path.string() + " in Zeile " +
+                                     std::to_string(line_number) +
+                                     ": erwartet ADDRESS KIND NAME [SIZE].");
         }
 
         ImageSymbol symbol;
@@ -93,15 +81,14 @@ void load_symbol_map(
         try {
             image.add_symbol(std::move(symbol));
         } catch (const std::exception& error) {
-            throw std::runtime_error(
-                "Map-Dateifehler in " + path.string() + " in Zeile " +
-                std::to_string(line_number) + ": " + error.what()
-            );
+            throw std::runtime_error("Map-Dateifehler in " + path.string() + " in Zeile " +
+                                     std::to_string(line_number) + ": " + error.what());
         }
     }
     if (!input.eof()) {
-        throw std::runtime_error("Map-Datei konnte nicht vollstaendig gelesen werden: " + path.string());
+        throw std::runtime_error("Map-Datei konnte nicht vollstaendig gelesen werden: " +
+                                 path.string());
     }
 }
 
-}
+} // namespace katana::io

@@ -17,8 +17,12 @@ std::size_t PvrRegisterFile::index(const std::uint32_t offset) {
 }
 
 std::uint32_t PvrRegisterFile::read(const std::uint32_t offset) const {
-    if (offset == pvr_register::Id) { return pvr_id; }
-    if (offset == pvr_register::Revision) { return pvr_revision; }
+    if (offset == pvr_register::Id) {
+        return pvr_id;
+    }
+    if (offset == pvr_register::Revision) {
+        return pvr_revision;
+    }
     return registers_[index(offset)];
 }
 
@@ -28,7 +32,9 @@ void PvrRegisterFile::write(const std::uint32_t offset, const std::uint32_t valu
         throw std::runtime_error("PVR-ID und Revision sind read-only.");
     }
     if (offset == pvr_register::SoftReset) {
-        if ((value & 0x7u) != 0u) { reset(); }
+        if ((value & 0x7u) != 0u) {
+            reset();
+        }
         return;
     }
     if (offset == pvr_register::StartRender) {
@@ -43,8 +49,12 @@ void PvrRegisterFile::reset() noexcept {
     ++resets_;
 }
 
-std::uint64_t PvrRegisterFile::render_request_count() const noexcept { return render_requests_; }
-std::uint64_t PvrRegisterFile::reset_count() const noexcept { return resets_; }
+std::uint64_t PvrRegisterFile::render_request_count() const noexcept {
+    return render_requests_;
+}
+std::uint64_t PvrRegisterFile::reset_count() const noexcept {
+    return resets_;
+}
 
 namespace {
 std::uint8_t expand5(const std::uint16_t value) {
@@ -54,44 +64,33 @@ std::uint8_t expand6(const std::uint16_t value) {
     return static_cast<std::uint8_t>((value << 2u) | (value >> 4u));
 }
 
-std::size_t checked_multiply(
-    const std::size_t left,
-    const std::size_t right,
-    const char* description
-) {
+std::size_t
+checked_multiply(const std::size_t left, const std::size_t right, const char* description) {
     if (right != 0u && left > std::numeric_limits<std::size_t>::max() / right) {
         throw std::out_of_range(description);
     }
     return left * right;
 }
 
-std::size_t checked_add(
-    const std::size_t left,
-    const std::size_t right,
-    const char* description
-) {
+std::size_t checked_add(const std::size_t left, const std::size_t right, const char* description) {
     if (left > std::numeric_limits<std::size_t>::max() - right) {
         throw std::out_of_range(description);
     }
     return left + right;
 }
-}
+} // namespace
 
-void PvrFramebuffer::configure(
-    const std::uint32_t width,
-    const std::uint32_t height,
-    const std::uint32_t stride_bytes,
-    const PvrFramebufferFormat format
-) {
+void PvrFramebuffer::configure(const std::uint32_t width,
+                               const std::uint32_t height,
+                               const std::uint32_t stride_bytes,
+                               const PvrFramebufferFormat format) {
     if (width == 0u || height == 0u) {
         throw std::invalid_argument("Ungueltige PVR-Framebuffer-Geometrie oder Stride.");
     }
     const std::size_t bytes_per_pixel = format == PvrFramebufferFormat::Rgb888 ? 3u : 2u;
-    const auto minimum_stride = checked_multiply(
-        static_cast<std::size_t>(width),
-        bytes_per_pixel,
-        "PVR-Framebuffer-Zeilenbreite ist zu gross."
-    );
+    const auto minimum_stride = checked_multiply(static_cast<std::size_t>(width),
+                                                 bytes_per_pixel,
+                                                 "PVR-Framebuffer-Zeilenbreite ist zu gross.");
     if (static_cast<std::size_t>(stride_bytes) < minimum_stride) {
         throw std::invalid_argument("Ungueltige PVR-Framebuffer-Geometrie oder Stride.");
     }
@@ -101,33 +100,21 @@ void PvrFramebuffer::configure(
     format_ = format;
 }
 
-PvrFrame PvrFramebuffer::capture(
-    const std::span<const std::uint8_t> vram,
-    const std::size_t base_offset
-) {
+PvrFrame PvrFramebuffer::capture(const std::span<const std::uint8_t> vram,
+                                 const std::size_t base_offset) {
     if (width_ == 0u || height_ == 0u) {
         throw std::logic_error("PVR-Framebuffer wurde nicht konfiguriert.");
     }
-    const auto pixel_count = checked_multiply(
-        static_cast<std::size_t>(width_),
-        static_cast<std::size_t>(height_),
-        "PVR-Framebuffer-Pixelzahl ist zu gross."
-    );
-    const auto rgba_size = checked_multiply(
-        pixel_count,
-        4u,
-        "PVR-Framebuffer-RGBA-Ausgabe ist zu gross."
-    );
-    const auto image_bytes = checked_multiply(
-        static_cast<std::size_t>(stride_),
-        static_cast<std::size_t>(height_),
-        "PVR-Framebuffer-VRAM-Ausdehnung ist zu gross."
-    );
-    const auto required = checked_add(
-        base_offset,
-        image_bytes,
-        "PVR-Framebuffer-VRAM-Endadresse laeuft ueber."
-    );
+    const auto pixel_count = checked_multiply(static_cast<std::size_t>(width_),
+                                              static_cast<std::size_t>(height_),
+                                              "PVR-Framebuffer-Pixelzahl ist zu gross.");
+    const auto rgba_size =
+        checked_multiply(pixel_count, 4u, "PVR-Framebuffer-RGBA-Ausgabe ist zu gross.");
+    const auto image_bytes = checked_multiply(static_cast<std::size_t>(stride_),
+                                              static_cast<std::size_t>(height_),
+                                              "PVR-Framebuffer-VRAM-Ausdehnung ist zu gross.");
+    const auto required =
+        checked_add(base_offset, image_bytes, "PVR-Framebuffer-VRAM-Endadresse laeuft ueber.");
     if (required > vram.size()) {
         throw std::out_of_range("PVR-Framebuffer liegt ausserhalb des VRAM-Abbilds.");
     }
@@ -135,7 +122,7 @@ PvrFrame PvrFramebuffer::capture(
     for (std::uint32_t y = 0u; y < height_; ++y) {
         for (std::uint32_t x = 0u; x < width_; ++x) {
             const auto source = base_offset + static_cast<std::size_t>(y) * stride_ +
-                x * (format_ == PvrFramebufferFormat::Rgb888 ? 3u : 2u);
+                                x * (format_ == PvrFramebufferFormat::Rgb888 ? 3u : 2u);
             const auto destination = (static_cast<std::size_t>(y) * width_ + x) * 4u;
             if (format_ == PvrFramebufferFormat::Rgb888) {
                 frame.rgba[destination] = vram[source + 2u];
@@ -145,15 +132,19 @@ PvrFrame PvrFramebuffer::capture(
                 continue;
             }
             const auto pixel = static_cast<std::uint16_t>(vram[source]) |
-                static_cast<std::uint16_t>(vram[source + 1u] << 8u);
+                               static_cast<std::uint16_t>(vram[source + 1u] << 8u);
             if (format_ == PvrFramebufferFormat::Rgb565) {
-                frame.rgba[destination] = expand5(static_cast<std::uint16_t>((pixel >> 11u) & 0x1Fu));
-                frame.rgba[destination + 1u] = expand6(static_cast<std::uint16_t>((pixel >> 5u) & 0x3Fu));
+                frame.rgba[destination] =
+                    expand5(static_cast<std::uint16_t>((pixel >> 11u) & 0x1Fu));
+                frame.rgba[destination + 1u] =
+                    expand6(static_cast<std::uint16_t>((pixel >> 5u) & 0x3Fu));
                 frame.rgba[destination + 2u] = expand5(static_cast<std::uint16_t>(pixel & 0x1Fu));
                 frame.rgba[destination + 3u] = 0xFFu;
             } else {
-                frame.rgba[destination] = expand5(static_cast<std::uint16_t>((pixel >> 10u) & 0x1Fu));
-                frame.rgba[destination + 1u] = expand5(static_cast<std::uint16_t>((pixel >> 5u) & 0x1Fu));
+                frame.rgba[destination] =
+                    expand5(static_cast<std::uint16_t>((pixel >> 10u) & 0x1Fu));
+                frame.rgba[destination + 1u] =
+                    expand5(static_cast<std::uint16_t>((pixel >> 5u) & 0x1Fu));
                 frame.rgba[destination + 2u] = expand5(static_cast<std::uint16_t>(pixel & 0x1Fu));
                 frame.rgba[destination + 3u] = (pixel & 0x8000u) != 0u ? 0xFFu : 0u;
             }
@@ -163,7 +154,9 @@ PvrFrame PvrFramebuffer::capture(
     return frame;
 }
 
-std::uint64_t PvrFramebuffer::presented_frames() const noexcept { return presented_frames_; }
+std::uint64_t PvrFramebuffer::presented_frames() const noexcept {
+    return presented_frames_;
+}
 
 std::uint8_t TileAccelerator::list_rank(const PvrListType type) noexcept {
     return static_cast<std::uint8_t>(type);
@@ -219,14 +212,14 @@ PvrTaFrame TileAccelerator::finish_frame() {
     return result;
 }
 
-bool TileAccelerator::list_open() const noexcept { return list_open_; }
+bool TileAccelerator::list_open() const noexcept {
+    return list_open_;
+}
 
-PvrTexture decode_pvr_texture(
-    const std::span<const std::uint8_t> source,
-    const std::uint32_t width,
-    const std::uint32_t height,
-    const PvrTextureFormat format
-) {
+PvrTexture decode_pvr_texture(const std::span<const std::uint8_t> source,
+                              const std::uint32_t width,
+                              const std::uint32_t height,
+                              const PvrTextureFormat format) {
     if (width == 0u || height == 0u) {
         throw std::invalid_argument("PVR-Texturen brauchen eine von null verschiedene Geometrie.");
     }
@@ -241,16 +234,18 @@ PvrTexture decode_pvr_texture(
     PvrTexture texture{width, height, std::vector<std::uint8_t>(pixels * 4u)};
     for (std::size_t index = 0u; index < pixels; ++index) {
         const auto pixel = static_cast<std::uint16_t>(source[index * 2u]) |
-            static_cast<std::uint16_t>(source[index * 2u + 1u] << 8u);
+                           static_cast<std::uint16_t>(source[index * 2u + 1u] << 8u);
         const auto destination = index * 4u;
         if (format == PvrTextureFormat::Rgb565) {
             texture.rgba[destination] = expand5(static_cast<std::uint16_t>((pixel >> 11u) & 0x1Fu));
-            texture.rgba[destination + 1u] = expand6(static_cast<std::uint16_t>((pixel >> 5u) & 0x3Fu));
+            texture.rgba[destination + 1u] =
+                expand6(static_cast<std::uint16_t>((pixel >> 5u) & 0x3Fu));
             texture.rgba[destination + 2u] = expand5(static_cast<std::uint16_t>(pixel & 0x1Fu));
             texture.rgba[destination + 3u] = 0xFFu;
         } else if (format == PvrTextureFormat::Argb1555) {
             texture.rgba[destination] = expand5(static_cast<std::uint16_t>((pixel >> 10u) & 0x1Fu));
-            texture.rgba[destination + 1u] = expand5(static_cast<std::uint16_t>((pixel >> 5u) & 0x1Fu));
+            texture.rgba[destination + 1u] =
+                expand5(static_cast<std::uint16_t>((pixel >> 5u) & 0x1Fu));
             texture.rgba[destination + 2u] = expand5(static_cast<std::uint16_t>(pixel & 0x1Fu));
             texture.rgba[destination + 3u] = (pixel & 0x8000u) != 0u ? 0xFFu : 0u;
         } else {
@@ -258,25 +253,29 @@ PvrTexture decode_pvr_texture(
                 return static_cast<std::uint8_t>((value << 4u) | value);
             };
             texture.rgba[destination] = expand4(static_cast<std::uint16_t>((pixel >> 8u) & 0xFu));
-            texture.rgba[destination + 1u] = expand4(static_cast<std::uint16_t>((pixel >> 4u) & 0xFu));
+            texture.rgba[destination + 1u] =
+                expand4(static_cast<std::uint16_t>((pixel >> 4u) & 0xFu));
             texture.rgba[destination + 2u] = expand4(static_cast<std::uint16_t>(pixel & 0xFu));
-            texture.rgba[destination + 3u] = expand4(static_cast<std::uint16_t>((pixel >> 12u) & 0xFu));
+            texture.rgba[destination + 3u] =
+                expand4(static_cast<std::uint16_t>((pixel >> 12u) & 0xFu));
         }
     }
     return texture;
 }
 
-void RecordingPvrRenderBackend::render(
-    const PvrTaFrame& frame,
-    const std::span<const PvrTexture> textures
-) {
+void RecordingPvrRenderBackend::render(const PvrTaFrame& frame,
+                                       const std::span<const PvrTexture> textures) {
     last_frame_ = frame;
     last_textures_.assign(textures.begin(), textures.end());
     ++submitted_frames_;
 }
 
-std::uint64_t RecordingPvrRenderBackend::submitted_frames() const noexcept { return submitted_frames_; }
-const PvrTaFrame& RecordingPvrRenderBackend::last_frame() const noexcept { return last_frame_; }
+std::uint64_t RecordingPvrRenderBackend::submitted_frames() const noexcept {
+    return submitted_frames_;
+}
+const PvrTaFrame& RecordingPvrRenderBackend::last_frame() const noexcept {
+    return last_frame_;
+}
 const std::vector<PvrTexture>& RecordingPvrRenderBackend::last_textures() const noexcept {
     return last_textures_;
 }
@@ -291,13 +290,13 @@ std::shared_ptr<PvrRegisterFile> map_pvr_registers(Memory& memory) {
             }
             return registers->read(offset);
         },
-        [registers](const std::uint32_t offset, const std::uint32_t value, const MemoryAccessWidth width) {
+        [registers](
+            const std::uint32_t offset, const std::uint32_t value, const MemoryAccessWidth width) {
             if (width != MemoryAccessWidth::Word) {
                 throw std::runtime_error("PVR-Register erfordern 32-Bit-Zugriffe.");
             }
             registers->write(offset, value);
-        }
-    );
+        });
     for (const auto segment : dreamcast_direct_segment_bases) {
         const auto base = segment + pvr_register_physical_base;
         memory.map_region("dreamcast-pvr-registers-" + std::to_string(base), base, device);

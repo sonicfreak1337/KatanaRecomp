@@ -17,9 +17,7 @@ struct RawBinaryLoadOptions {
     std::optional<std::uint32_t> entry_point;
 };
 
-[[nodiscard]] ExecutableImage load_raw_binary(
-    const std::filesystem::path& path,
-    const RawBinaryLoadOptions& options = {}
-);
+[[nodiscard]] ExecutableImage load_raw_binary(const std::filesystem::path& path,
+                                              const RawBinaryLoadOptions& options = {});
 
-}
+} // namespace katana::io

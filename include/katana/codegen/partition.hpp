@@ -24,9 +24,8 @@ struct TranslationUnitPartition {
     [[nodiscard]] bool operator==(const TranslationUnitPartition&) const = default;
 };
 
-[[nodiscard]] std::vector<TranslationUnitPartition> partition_translation_units(
-    std::span<const katana::ir::Function> functions,
-    const PartitionOptions& options = {}
-);
+[[nodiscard]] std::vector<TranslationUnitPartition>
+partition_translation_units(std::span<const katana::ir::Function> functions,
+                            const PartitionOptions& options = {});
 
 } // namespace katana::codegen

@@ -27,28 +27,21 @@ struct SafepointReport {
 };
 
 class SchedulerSafepoints {
-public:
-    SchedulerSafepoints(
-        EventScheduler& scheduler,
-        std::size_t event_budget,
-        std::uint64_t loop_quantum,
-        std::function<bool()> interrupt_delivery = {},
-        SystemReplayLog* replay_log = nullptr
-    );
+  public:
+    SchedulerSafepoints(EventScheduler& scheduler,
+                        std::size_t event_budget,
+                        std::uint64_t loop_quantum,
+                        std::function<bool()> interrupt_delivery = {},
+                        SystemReplayLog* replay_log = nullptr);
 
-    [[nodiscard]] SafepointReport consume(
-        std::uint64_t guest_cycles,
-        SafepointKind kind,
-        ExecutionOrigin origin
-    );
-    [[nodiscard]] std::vector<SafepointReport> consume_loop(
-        std::uint64_t guest_cycles,
-        ExecutionOrigin origin
-    );
+    [[nodiscard]] SafepointReport
+    consume(std::uint64_t guest_cycles, SafepointKind kind, ExecutionOrigin origin);
+    [[nodiscard]] std::vector<SafepointReport> consume_loop(std::uint64_t guest_cycles,
+                                                            ExecutionOrigin origin);
     [[nodiscard]] const std::vector<SafepointReport>& reports() const noexcept;
     [[nodiscard]] std::string machine_report() const;
 
-private:
+  private:
     EventScheduler& scheduler_;
     std::size_t event_budget_;
     std::uint64_t loop_quantum_;

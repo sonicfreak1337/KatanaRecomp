@@ -25,36 +25,31 @@ constexpr std::array<PlatformInterruptSource, PlatformInterruptRouter::external_
         PlatformInterruptSource::ExternalIrl13,
         PlatformInterruptSource::ExternalIrl11,
         PlatformInterruptSource::ExternalIrl9,
-    };
+};
 
-constexpr std::array<std::uint8_t, PlatformInterruptRouter::external_line_count>
-    external_levels = {13u, 11u, 9u};
+constexpr std::array<std::uint8_t, PlatformInterruptRouter::external_line_count> external_levels = {
+    13u, 11u, 9u};
 
 } // namespace
 
-PlatformInterruptRouter::PlatformInterruptRouter(
-    InterruptController& controller,
-    Sh4Tmu& tmu,
-    Sh4Rtc& rtc,
-    Sh4Dmac& dmac
-) noexcept
+PlatformInterruptRouter::PlatformInterruptRouter(InterruptController& controller,
+                                                 Sh4Tmu& tmu,
+                                                 Sh4Rtc& rtc,
+                                                 Sh4Dmac& dmac) noexcept
     : controller_(controller), tmu_(tmu), rtc_(rtc), dmac_(dmac) {}
 
 std::uint8_t PlatformInterruptRouter::clamp_level(const std::uint8_t level) noexcept {
     return static_cast<std::uint8_t>(level > 15u ? 15u : level);
 }
 
-InterruptSource PlatformInterruptRouter::source_id(
-    const PlatformInterruptSource source
-) noexcept {
+InterruptSource PlatformInterruptRouter::source_id(const PlatformInterruptSource source) noexcept {
     return static_cast<InterruptSource>(source);
 }
 
-void PlatformInterruptRouter::set_tmu_level(
-    const std::size_t channel,
-    const std::uint8_t level
-) {
-    if (channel >= tmu_levels_.size()) { throw std::out_of_range("Ungueltiger TMU-Interruptkanal."); }
+void PlatformInterruptRouter::set_tmu_level(const std::size_t channel, const std::uint8_t level) {
+    if (channel >= tmu_levels_.size()) {
+        throw std::out_of_range("Ungueltiger TMU-Interruptkanal.");
+    }
     tmu_levels_[channel] = clamp_level(level);
 }
 
@@ -66,10 +61,7 @@ void PlatformInterruptRouter::set_dma_level(const std::uint8_t level) noexcept {
     dma_level_ = clamp_level(level);
 }
 
-void PlatformInterruptRouter::set_external_pending(
-    const std::size_t line,
-    const bool pending
-) {
+void PlatformInterruptRouter::set_external_pending(const std::size_t line, const bool pending) {
     if (line >= external_pending_.size()) {
         throw std::out_of_range("Ungueltige externe Interruptleitung.");
     }
@@ -77,12 +69,18 @@ void PlatformInterruptRouter::set_external_pending(
 }
 
 std::uint8_t PlatformInterruptRouter::tmu_level(const std::size_t channel) const {
-    if (channel >= tmu_levels_.size()) { throw std::out_of_range("Ungueltiger TMU-Interruptkanal."); }
+    if (channel >= tmu_levels_.size()) {
+        throw std::out_of_range("Ungueltiger TMU-Interruptkanal.");
+    }
     return tmu_levels_[channel];
 }
 
-std::uint8_t PlatformInterruptRouter::rtc_level() const noexcept { return rtc_level_; }
-std::uint8_t PlatformInterruptRouter::dma_level() const noexcept { return dma_level_; }
+std::uint8_t PlatformInterruptRouter::rtc_level() const noexcept {
+    return rtc_level_;
+}
+std::uint8_t PlatformInterruptRouter::dma_level() const noexcept {
+    return dma_level_;
+}
 
 bool PlatformInterruptRouter::external_pending(const std::size_t line) const {
     if (line >= external_pending_.size()) {
@@ -91,11 +89,9 @@ bool PlatformInterruptRouter::external_pending(const std::size_t line) const {
     return external_pending_[line];
 }
 
-void PlatformInterruptRouter::route(
-    const PlatformInterruptSource source,
-    const bool asserted,
-    const std::uint8_t level
-) {
+void PlatformInterruptRouter::route(const PlatformInterruptSource source,
+                                    const bool asserted,
+                                    const std::uint8_t level) {
     const auto id = source_id(source);
     if (asserted) {
         controller_.request(id, level, static_cast<std::uint32_t>(source));

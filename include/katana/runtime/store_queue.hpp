@@ -33,36 +33,33 @@ struct CacheMaintenanceResult {
 using StoreQueueSink = std::function<void(const StoreQueueTransfer&)>;
 
 class Sh4StoreQueues {
-public:
+  public:
     static constexpr std::uint32_t window_start = 0xE0000000u;
     static constexpr std::uint32_t window_end = 0xE3FFFFFFu;
     static constexpr std::uint32_t qacr_mask = 0x0000001Cu;
 
-    explicit Sh4StoreQueues(
-        Memory& memory,
-        StoreQueueSink sink = {},
-        ExecutableCodeTracker* code_tracker = nullptr,
-        OperandCacheRamProfile ocram_profile = OperandCacheRamProfile::Reject
-    );
+    explicit Sh4StoreQueues(Memory& memory,
+                            StoreQueueSink sink = {},
+                            ExecutableCodeTracker* code_tracker = nullptr,
+                            OperandCacheRamProfile ocram_profile = OperandCacheRamProfile::Reject);
     void write_qacr(std::size_t queue, std::uint32_t value);
     [[nodiscard]] std::uint32_t qacr(std::size_t queue) const;
     void write_p4(std::uint32_t address, std::uint32_t value, MemoryAccessWidth width);
     [[nodiscard]] bool prefetch(std::uint32_t address);
     [[nodiscard]] const std::array<std::uint8_t, 32u>& queue(std::size_t index) const;
     [[nodiscard]] std::uint64_t transfer_count() const noexcept;
-    [[nodiscard]] CacheMaintenanceResult maintain(
-        CacheMaintenanceOperation operation,
-        std::uint32_t address,
-        std::uint32_t movca_value = 0u
-    );
+    [[nodiscard]] CacheMaintenanceResult maintain(CacheMaintenanceOperation operation,
+                                                  std::uint32_t address,
+                                                  std::uint32_t movca_value = 0u);
     void set_operand_cache_ram_enabled(bool enabled);
     [[nodiscard]] bool operand_cache_ram_enabled() const noexcept;
     [[nodiscard]] std::uint8_t read_operand_cache_ram(std::uint32_t offset) const;
     void write_operand_cache_ram(std::uint32_t offset, std::uint8_t value);
 
-private:
+  private:
     [[nodiscard]] static std::size_t queue_index(std::uint32_t address) noexcept;
-    [[nodiscard]] std::uint32_t transfer_target(std::uint32_t address, std::size_t queue) const noexcept;
+    [[nodiscard]] std::uint32_t transfer_target(std::uint32_t address,
+                                                std::size_t queue) const noexcept;
     Memory& memory_;
     StoreQueueSink sink_;
     ExecutableCodeTracker* code_tracker_;

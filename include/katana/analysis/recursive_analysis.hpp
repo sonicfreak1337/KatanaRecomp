@@ -1,7 +1,7 @@
 #pragma once
 
-#include "katana/io/executable_image.hpp"
 #include "katana/analysis/symbol_names.hpp"
+#include "katana/io/executable_image.hpp"
 #include "katana/sh4/disassembler.hpp"
 
 #include <cstdint>
@@ -11,11 +11,7 @@
 
 namespace katana::analysis {
 
-enum class DiscoveredByteKind {
-    Unknown,
-    Code,
-    Data
-};
+enum class DiscoveredByteKind { Unknown, Code, Data };
 
 struct ClassifiedRange {
     std::uint32_t start_address = 0u;
@@ -33,12 +29,7 @@ enum class FunctionOrigin {
     Symbol
 };
 
-enum class AnalysisConfidence {
-    Low,
-    Medium,
-    High,
-    Certain
-};
+enum class AnalysisConfidence { Low, Medium, High, Certain };
 
 struct FunctionCandidate {
     std::uint32_t address = 0u;
@@ -46,9 +37,7 @@ struct FunctionCandidate {
     std::vector<FunctionOrigin> origins;
 };
 
-enum class AnalysisConflictKind {
-    FunctionEntryInDelaySlot
-};
+enum class AnalysisConflictKind { FunctionEntryInDelaySlot };
 
 struct AnalysisConflict {
     std::uint32_t address = 0u;
@@ -80,18 +69,16 @@ struct RecursiveAnalysisResult {
     std::vector<AnalysisDiagnostic> diagnostics;
 };
 
-[[nodiscard]] RecursiveAnalysisResult analyze_reachable_code(
-    const katana::io::ExecutableImage& image,
-    const RecursiveAnalysisOptions& options = {}
-);
+[[nodiscard]] RecursiveAnalysisResult
+analyze_reachable_code(const katana::io::ExecutableImage& image,
+                       const RecursiveAnalysisOptions& options = {});
 
 [[nodiscard]] const char* discovered_byte_kind_name(DiscoveredByteKind kind) noexcept;
 [[nodiscard]] const char* function_origin_name(FunctionOrigin origin) noexcept;
 [[nodiscard]] const char* analysis_confidence_name(AnalysisConfidence confidence) noexcept;
 [[nodiscard]] const char* analysis_conflict_kind_name(AnalysisConflictKind kind) noexcept;
-[[nodiscard]] std::string format_recursive_analysis_report(
-    const RecursiveAnalysisResult& result,
-    std::span<const SymbolicAddress> symbols = {}
-);
+[[nodiscard]] std::string
+format_recursive_analysis_report(const RecursiveAnalysisResult& result,
+                                 std::span<const SymbolicAddress> symbols = {});
 
-}
+} // namespace katana::analysis

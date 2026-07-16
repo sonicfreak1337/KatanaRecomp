@@ -13,12 +13,22 @@
 namespace {
 constexpr std::size_t sector_size = 2048u;
 void require(const bool value, const std::string& message) {
-    if (!value) { std::cerr << "TEST FEHLGESCHLAGEN: " << message << '\n'; std::exit(EXIT_FAILURE); }
+    if (!value) {
+        std::cerr << "TEST FEHLGESCHLAGEN: " << message << '\n';
+        std::exit(EXIT_FAILURE);
+    }
 }
 struct FixtureDirectory {
     std::filesystem::path path = std::filesystem::current_path() / "katana-gdi-integration-fixture";
-    FixtureDirectory() { std::error_code error; std::filesystem::remove_all(path, error); std::filesystem::create_directory(path); }
-    ~FixtureDirectory() { std::error_code error; std::filesystem::remove_all(path, error); }
+    FixtureDirectory() {
+        std::error_code error;
+        std::filesystem::remove_all(path, error);
+        std::filesystem::create_directory(path);
+    }
+    ~FixtureDirectory() {
+        std::error_code error;
+        std::filesystem::remove_all(path, error);
+    }
 };
 void both32(std::vector<std::uint8_t>& bytes, const std::size_t offset, const std::uint32_t value) {
     for (std::size_t i = 0u; i < 4u; ++i) {
@@ -26,15 +36,14 @@ void both32(std::vector<std::uint8_t>& bytes, const std::size_t offset, const st
         bytes[offset + 4u + i] = static_cast<std::uint8_t>(value >> ((3u - i) * 8u));
     }
 }
-std::size_t record(
-    std::vector<std::uint8_t>& bytes,
-    const std::size_t offset,
-    const std::uint32_t lba,
-    const std::uint32_t size,
-    const std::string& name,
-    const bool directory
-) {
-    const auto length = static_cast<std::uint8_t>(33u + name.size() + (name.size() % 2u == 0u ? 1u : 0u));
+std::size_t record(std::vector<std::uint8_t>& bytes,
+                   const std::size_t offset,
+                   const std::uint32_t lba,
+                   const std::uint32_t size,
+                   const std::string& name,
+                   const bool directory) {
+    const auto length =
+        static_cast<std::uint8_t>(33u + name.size() + (name.size() % 2u == 0u ? 1u : 0u));
     bytes[offset] = length;
     both32(bytes, offset + 2u, lba);
     both32(bytes, offset + 10u, size);
@@ -64,7 +73,8 @@ std::vector<std::uint8_t> make_data_track() {
 }
 void write_binary(const std::filesystem::path& path, const std::vector<std::uint8_t>& bytes) {
     std::ofstream output(path, std::ios::binary | std::ios::trunc);
-    output.write(reinterpret_cast<const char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
+    output.write(reinterpret_cast<const char*>(bytes.data()),
+                 static_cast<std::streamsize>(bytes.size()));
 }
 void write_fixture(const std::filesystem::path& directory) {
     std::filesystem::create_directory(directory);
@@ -73,7 +83,7 @@ void write_fixture(const std::filesystem::path& directory) {
     std::ofstream descriptor(directory / "disc.gdi", std::ios::trunc);
     descriptor << "2\n1 0 0 2352 audio.bin 0\n2 10 4 2048 data.bin 0\n";
 }
-}
+} // namespace
 
 int main(const int argc, const char* const* argv) {
     using namespace katana::runtime;
@@ -84,22 +94,24 @@ int main(const int argc, const char* const* argv) {
     write_fixture(second_directory);
     const auto first = GdiDiscSource::open(first_directory / "disc.gdi");
     const auto second = GdiDiscSource::open(second_directory / "disc.gdi");
-    require(first->identity().starts_with("gdi-fnv1a64:") && first->identity() == second->identity(),
-        "GDI-Identitaet ist nicht inhaltsstabil oder haengt vom Hostpfad ab.");
+    require(first->identity().starts_with("gdi-fnv1a64:") &&
+                first->identity() == second->identity(),
+            "GDI-Identitaet ist nicht inhaltsstabil oder haengt vom Hostpfad ab.");
     require(first->primary_data_lba() == 10u && first->descriptor().tracks.size() == 2u,
-        "GDI-Datentrack oder Trackzuordnung ist falsch.");
+            "GDI-Datentrack oder Trackzuordnung ist falsch.");
     const auto audio = first->read_raw_sector(1u, 1u);
     require(audio.size() == 2352u && audio.front() == 0x5Au && audio.back() == 0x5Au,
-        "GDI-Audiotrack ist nicht als stabiler Raw-Sektor lesbar.");
+            "GDI-Audiotrack ist nicht als stabiler Raw-Sektor lesbar.");
     GdRomDrive drive(first);
     const auto sector = drive.execute({GdRomCommand::ReadSectors, 10u, 1u});
     require(sector.status == GdRomStatus::Good && sector.data.size() == 2048u,
-        "GDI-Datentrack ist nicht ueber den GD-ROM-Pfad lesbar.");
+            "GDI-Datentrack ist nicht ueber den GD-ROM-Pfad lesbar.");
     Iso9660Filesystem filesystem(first, 2048u, first->primary_data_lba());
-    require(filesystem.read_file("/BOOT.BIN") == std::vector<std::uint8_t>({0x11u,0x22u,0x33u,0x44u}),
-        "GDI-Datentrack erreicht den ISO9660-Pfad nicht.");
+    require(filesystem.read_file("/BOOT.BIN") ==
+                std::vector<std::uint8_t>({0x11u, 0x22u, 0x33u, 0x44u}),
+            "GDI-Datentrack erreicht den ISO9660-Pfad nicht.");
     require(std::filesystem::file_size(first_directory / "data.bin") == 24u * sector_size,
-        "GDI-Integration veraendert eine Trackdatei.");
+            "GDI-Integration veraendert eine Trackdatei.");
 
     if (argc == 2) {
         const auto local = GdiDiscSource::open(argv[1]);

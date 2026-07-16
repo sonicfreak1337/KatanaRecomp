@@ -1,8 +1,8 @@
 #include "katana/analysis/control_flow_report.hpp"
 #include "katana/io/json_report.hpp"
 
-#include <iomanip>
 #include <algorithm>
+#include <iomanip>
 #include <set>
 #include <sstream>
 #include <vector>
@@ -11,15 +11,13 @@ namespace katana::analysis {
 namespace {
 
 void address(std::ostringstream& output, const std::uint32_t value) {
-    output << "0x" << std::hex << std::uppercase << std::setw(8)
-           << std::setfill('0') << value << std::dec;
+    output << "0x" << std::hex << std::uppercase << std::setw(8) << std::setfill('0') << value
+           << std::dec;
 }
 
-void address_with_symbol(
-    std::ostringstream& output,
-    const std::uint32_t value,
-    const std::span<const SymbolicAddress> symbols
-) {
+void address_with_symbol(std::ostringstream& output,
+                         const std::uint32_t value,
+                         const std::span<const SymbolicAddress> symbols) {
     address(output, value);
     if (const auto* symbol = find_symbolic_address(symbols, value)) {
         output << " (" << format_symbolic_address(*symbol) << ')';
@@ -54,34 +52,34 @@ void sort_lines(std::vector<ReportLine>& lines) {
 
 std::string hex32(const std::uint32_t value) {
     std::ostringstream output;
-    output << "0x" << std::hex << std::uppercase << std::setw(8)
-           << std::setfill('0') << value;
+    output << "0x" << std::hex << std::uppercase << std::setw(8) << std::setfill('0') << value;
     return output.str();
 }
 
 std::string hex16(const std::uint16_t value) {
     std::ostringstream output;
-    output << "0x" << std::hex << std::uppercase << std::setw(4)
-           << std::setfill('0') << value;
+    output << "0x" << std::hex << std::uppercase << std::setw(4) << std::setfill('0') << value;
     return output.str();
 }
 
 const char* binding_name(const katana::io::SymbolBinding binding) noexcept {
     switch (binding) {
-        case katana::io::SymbolBinding::Local: return "local";
-        case katana::io::SymbolBinding::Global: return "global";
-        case katana::io::SymbolBinding::Weak: return "weak";
-        case katana::io::SymbolBinding::Unknown: return "unknown";
+    case katana::io::SymbolBinding::Local:
+        return "local";
+    case katana::io::SymbolBinding::Global:
+        return "global";
+    case katana::io::SymbolBinding::Weak:
+        return "weak";
+    case katana::io::SymbolBinding::Unknown:
+        return "unknown";
     }
     return "unknown";
 }
 
-void append_symbol_json(
-    std::ostringstream& output,
-    const std::string_view key,
-    const std::span<const SymbolicAddress> symbols,
-    const std::uint32_t value
-) {
+void append_symbol_json(std::ostringstream& output,
+                        const std::string_view key,
+                        const std::span<const SymbolicAddress> symbols,
+                        const std::uint32_t value) {
     output << ",\"" << key << "\":";
     const auto* symbol = find_symbolic_address(symbols, value);
     if (symbol == nullptr) {
@@ -92,20 +90,16 @@ void append_symbol_json(
            << ",\"symbol_address\":" << katana::io::quote_json(hex32(symbol->symbol_address))
            << ",\"offset\":" << symbol->offset
            << ",\"exact\":" << (symbol->exact ? "true" : "false")
-           << ",\"kind\":" << katana::io::quote_json(
-                katana::io::symbol_kind_name(symbol->kind)
-              )
-           << ",\"binding\":" << katana::io::quote_json(binding_name(symbol->binding))
-           << '}';
+           << ",\"kind\":" << katana::io::quote_json(katana::io::symbol_kind_name(symbol->kind))
+           << ",\"binding\":" << katana::io::quote_json(binding_name(symbol->binding)) << '}';
 }
 
-}
+} // namespace
 
 std::string format_indirect_control_flow_report(
     const std::span<const IndirectControlFlowResolution> resolutions,
     const std::span<const JumpTableAnalysis> jump_tables,
-    const std::span<const SymbolicAddress> symbols
-) {
+    const std::span<const SymbolicAddress> symbols) {
     std::ostringstream output;
     output << "\nIndirekter Kontrollfluss\n";
     std::set<std::uint32_t> table_dispatches;
@@ -125,9 +119,8 @@ std::string format_indirect_control_flow_report(
             line << " [" << resolution.reason << "] Hinweis: jump = ";
             address(line, resolution.instruction_address);
             line << " ZIEL\n";
-            unresolved_lines.push_back({
-                resolution.instruction_address, kind_name(resolution.kind), 0u, line.str()
-            });
+            unresolved_lines.push_back(
+                {resolution.instruction_address, kind_name(resolution.kind), 0u, line.str()});
             continue;
         }
         line << "  " << kind_name(resolution.kind) << ' ';
@@ -135,17 +128,14 @@ std::string format_indirect_control_flow_report(
         line << " -> ";
         address_with_symbol(line, *resolution.target, symbols);
         line << " [" << resolution.reason << "]\n";
-        resolved_lines.push_back({
-            resolution.instruction_address,
-            kind_name(resolution.kind),
-            *resolution.target,
-            line.str()
-        });
+        resolved_lines.push_back({resolution.instruction_address,
+                                  kind_name(resolution.kind),
+                                  *resolution.target,
+                                  line.str()});
     }
     for (const auto& table : jump_tables) {
-        const auto kind = table.dispatch_kind == JumpTableDispatchKind::Call
-            ? "jump-table-call"
-            : "jump-table-jump";
+        const auto kind = table.dispatch_kind == JumpTableDispatchKind::Call ? "jump-table-call"
+                                                                             : "jump-table-jump";
         if (table.resolved) {
             for (const auto& entry : table.entries) {
                 std::ostringstream line;
@@ -154,9 +144,7 @@ std::string format_indirect_control_flow_report(
                 line << " -> ";
                 address_with_symbol(line, entry.target, symbols);
                 line << " [" << entry.reason << "]\n";
-                resolved_lines.push_back({
-                    table.dispatch_address, kind, entry.target, line.str()
-                });
+                resolved_lines.push_back({table.dispatch_address, kind, entry.target, line.str()});
             }
             continue;
         }
@@ -189,15 +177,10 @@ std::string format_indirect_control_flow_report(
     return output.str();
 }
 
-std::string format_control_flow_analysis_json(
-    const ControlFlowAnalysisResult& analysis
-) {
+std::string format_control_flow_analysis_json(const ControlFlowAnalysisResult& analysis) {
     std::ostringstream output;
-    katana::io::write_json_report_header(
-        output, "katana-control-flow-v1", "control-flow"
-    );
-    output << ",\"summary\":{\"instructions\":"
-           << analysis.recursive.instructions.size()
+    katana::io::write_json_report_header(output, "katana-control-flow-v1", "control-flow");
+    output << ",\"summary\":{\"instructions\":" << analysis.recursive.instructions.size()
            << ",\"ranges\":" << analysis.recursive.ranges.size()
            << ",\"functions\":" << analysis.recursive.functions.size()
            << ",\"conflicts\":" << analysis.recursive.conflicts.size()
@@ -218,11 +201,8 @@ std::string format_control_flow_analysis_json(
         std::sort(origins.begin(), origins.end());
         output << "{\"address\":" << katana::io::quote_json(hex32(functions[index].address))
                << ",\"confidence\":"
-               << katana::io::quote_json(analysis_confidence_name(functions[index].confidence))
-               ;
-        append_symbol_json(
-            output, "symbol", analysis.symbolic_addresses, functions[index].address
-        );
+               << katana::io::quote_json(analysis_confidence_name(functions[index].confidence));
+        append_symbol_json(output, "symbol", analysis.symbolic_addresses, functions[index].address);
         output << ",\"origins\":[";
         for (std::size_t origin = 0u; origin < origins.size(); ++origin) {
             if (origin != 0u) output << ',';
@@ -244,24 +224,20 @@ std::string format_control_flow_analysis_json(
         if (index != 0u) output << ',';
         const auto& value = indirect[index];
         output << "{\"instruction_address\":"
-               << katana::io::quote_json(hex32(value.instruction_address))
-               ;
+               << katana::io::quote_json(hex32(value.instruction_address));
         append_symbol_json(
-            output, "instruction_symbol", analysis.symbolic_addresses,
-            value.instruction_address
-        );
+            output, "instruction_symbol", analysis.symbolic_addresses, value.instruction_address);
         output << ",\"kind\":" << katana::io::quote_json(kind_name(value.kind))
-               << ",\"register\":" << static_cast<unsigned>(value.register_index)
-               << ",\"status\":" << katana::io::quote_json(
-                    value.status == ResolutionStatus::Resolved ? "resolved" : "unresolved"
-                  )
+               << ",\"register\":" << static_cast<unsigned>(value.register_index) << ",\"status\":"
+               << katana::io::quote_json(value.status == ResolutionStatus::Resolved ? "resolved"
+                                                                                    : "unresolved")
                << ",\"target\":";
-        if (value.target) output << katana::io::quote_json(hex32(*value.target));
-        else output << "null";
+        if (value.target)
+            output << katana::io::quote_json(hex32(*value.target));
+        else
+            output << "null";
         if (value.target) {
-            append_symbol_json(
-                output, "target_symbol", analysis.symbolic_addresses, *value.target
-            );
+            append_symbol_json(output, "target_symbol", analysis.symbolic_addresses, *value.target);
         } else {
             output << ",\"target_symbol\":null";
         }
@@ -277,12 +253,11 @@ std::string format_control_flow_analysis_json(
     for (std::size_t index = 0u; index < jump_tables.size(); ++index) {
         if (index != 0u) output << ',';
         const auto& table = jump_tables[index];
-        output << "{\"dispatch_address\":"
-               << katana::io::quote_json(hex32(table.dispatch_address))
+        output << "{\"dispatch_address\":" << katana::io::quote_json(hex32(table.dispatch_address))
                << ",\"table_address\":" << katana::io::quote_json(hex32(table.table_address))
-               << ",\"kind\":" << katana::io::quote_json(
-                    table.dispatch_kind == JumpTableDispatchKind::Call ? "call" : "jump"
-                  )
+               << ",\"kind\":"
+               << katana::io::quote_json(
+                      table.dispatch_kind == JumpTableDispatchKind::Call ? "call" : "jump")
                << ",\"resolved\":" << (table.resolved ? "true" : "false")
                << ",\"requested_entries\":" << table.requested_entries
                << ",\"reason\":" << katana::io::quote_json(table.reason) << '}';
@@ -295,9 +270,9 @@ std::string format_control_flow_analysis_json(
         const auto& diagnostic = analysis.directive_diagnostics[index];
         output << "{\"line\":" << diagnostic.line
                << ",\"address\":" << katana::io::quote_json(hex32(diagnostic.address))
-               << ",\"status\":" << katana::io::quote_json(
-                    analysis_directive_diagnostic_status_name(diagnostic.status)
-                  )
+               << ",\"status\":"
+               << katana::io::quote_json(
+                      analysis_directive_diagnostic_status_name(diagnostic.status))
                << ",\"reason\":" << katana::io::quote_json(diagnostic.reason) << '}';
     }
     output << ']';
@@ -313,12 +288,11 @@ std::string format_control_flow_analysis_json(
                << ",\"opcode\":" << katana::io::quote_json(hex16(diagnostics[index].opcode))
                << ",\"reason\":" << katana::io::quote_json(diagnostics[index].reason);
         append_symbol_json(
-            output, "symbol", analysis.symbolic_addresses, diagnostics[index].address
-        );
+            output, "symbol", analysis.symbolic_addresses, diagnostics[index].address);
         output << '}';
     }
     output << "]}\n";
     return output.str();
 }
 
-}
+} // namespace katana::analysis

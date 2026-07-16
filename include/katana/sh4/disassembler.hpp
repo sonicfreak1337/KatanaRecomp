@@ -22,13 +22,9 @@ struct DisassemblyLine {
     std::optional<std::uint32_t> target_address;
 };
 
-[[nodiscard]] std::vector<DisassemblyLine> disassemble(
-    std::span<const std::uint8_t> bytes,
-    std::uint32_t base_address = 0
-);
+[[nodiscard]] std::vector<DisassemblyLine> disassemble(std::span<const std::uint8_t> bytes,
+                                                       std::uint32_t base_address = 0);
 
-[[nodiscard]] std::vector<DisassemblyLine> disassemble(
-    const katana::io::ExecutableImage& image
-);
+[[nodiscard]] std::vector<DisassemblyLine> disassemble(const katana::io::ExecutableImage& image);
 
-}
+} // namespace katana::sh4

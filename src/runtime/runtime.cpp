@@ -6,11 +6,8 @@
 namespace katana::runtime {
 
 std::uint32_t CpuState::read_sr() const noexcept {
-    return (sr & ~(sr_m_mask | sr_q_mask | sr_s_mask | sr_t_mask)) |
-        (m ? sr_m_mask : 0u) |
-        (q ? sr_q_mask : 0u) |
-        (s ? sr_s_mask : 0u) |
-        (t ? sr_t_mask : 0u);
+    return (sr & ~(sr_m_mask | sr_q_mask | sr_s_mask | sr_t_mask)) | (m ? sr_m_mask : 0u) |
+           (q ? sr_q_mask : 0u) | (s ? sr_s_mask : 0u) | (t ? sr_t_mask : 0u);
 }
 
 void CpuState::write_sr(const std::uint32_t value) noexcept {
@@ -64,17 +61,12 @@ bool CpuState::fpu_flush_denormals() const noexcept {
 }
 
 std::uint8_t CpuState::interrupt_mask() const noexcept {
-    return static_cast<std::uint8_t>(
-        (read_sr() & sr_interrupt_mask) >> 4u
-    );
+    return static_cast<std::uint8_t>((read_sr() & sr_interrupt_mask) >> 4u);
 }
 
 void CpuState::set_interrupt_mask(const std::uint8_t level) noexcept {
     const std::uint32_t clamped = level > 15u ? 15u : level;
-    write_sr(
-        (read_sr() & ~sr_interrupt_mask) |
-        (clamped << 4u)
-    );
+    write_sr((read_sr() & ~sr_interrupt_mask) | (clamped << 4u));
 }
 
 bool CpuState::interrupts_blocked() const noexcept {
@@ -93,10 +85,7 @@ bool CpuState::fpu_disabled() const noexcept {
     return (read_sr() & sr_fd_mask) != 0u;
 }
 
-void reset_cpu(
-    CpuState& cpu,
-    const ResetState& state
-) noexcept {
+void reset_cpu(CpuState& cpu, const ResetState& state) noexcept {
     cpu.r.fill(0u);
     cpu.r_bank.fill(0u);
     cpu.fr.fill(0u);
@@ -140,22 +129,15 @@ void reset_cpu(
 void prefetch(CpuState& cpu, const std::uint32_t address) noexcept {
     cpu.last_prefetch_address = address;
     ++cpu.prefetch_count;
-    cpu.last_prefetch_was_store_queue =
-        address >= 0xE0000000u && address <= 0xE3FFFFFFu;
+    cpu.last_prefetch_was_store_queue = address >= 0xE0000000u && address <= 0xE3FFFFFFu;
 }
 
-[[noreturn]] void unresolved_call(
-    CpuState& cpu,
-    const std::uint32_t target
-) {
+[[noreturn]] void unresolved_call(CpuState& cpu, const std::uint32_t target) {
     cpu.pc = target;
     throw std::runtime_error("Nicht aufgeloester Aufruf");
 }
 
-[[noreturn]] void unresolved_jump(
-    CpuState& cpu,
-    const std::uint32_t target
-) {
+[[noreturn]] void unresolved_jump(CpuState& cpu, const std::uint32_t target) {
     cpu.pc = target;
     throw std::runtime_error("Nicht aufgeloester Sprung");
 }

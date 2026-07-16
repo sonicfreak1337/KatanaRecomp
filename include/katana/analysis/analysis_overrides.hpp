@@ -9,10 +9,7 @@ namespace katana::analysis {
 
 inline constexpr std::uint32_t analysis_directives_current_version = 2u;
 
-enum class AnalysisDirectiveMode : std::uint8_t {
-    Override,
-    Hint
-};
+enum class AnalysisDirectiveMode : std::uint8_t { Override, Hint };
 
 struct FunctionOverride {
     std::uint32_t address = 0u;
@@ -41,12 +38,8 @@ struct AnalysisOverrides {
     std::vector<JumpTableOverride> jump_tables;
 };
 
-[[nodiscard]] const char* analysis_directive_mode_name(
-    AnalysisDirectiveMode mode
-) noexcept;
+[[nodiscard]] const char* analysis_directive_mode_name(AnalysisDirectiveMode mode) noexcept;
 
-[[nodiscard]] AnalysisOverrides parse_analysis_overrides(
-    const std::filesystem::path& path
-);
+[[nodiscard]] AnalysisOverrides parse_analysis_overrides(const std::filesystem::path& path);
 
-}
+} // namespace katana::analysis

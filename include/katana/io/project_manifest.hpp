@@ -15,32 +15,15 @@ namespace katana::io {
 inline constexpr std::uint32_t project_manifest_current_version = 2u;
 inline constexpr std::string_view project_manifest_schema_name = "katana-project";
 
-enum class ProjectInputFormat {
-    RawBinary,
-    Elf32Sh
-};
+enum class ProjectInputFormat { RawBinary, Elf32Sh };
 
-enum class ProjectFirmwareMode {
-    Direct,
-    Hle,
-    Lle
-};
+enum class ProjectFirmwareMode { Direct, Hle, Lle };
 
-enum class ProjectFallbackPolicy {
-    Abort,
-    Interpreter,
-    Diagnostic
-};
+enum class ProjectFallbackPolicy { Abort, Interpreter, Diagnostic };
 
-enum class ProjectMmuProfile {
-    Disabled,
-    Sh4
-};
+enum class ProjectMmuProfile { Disabled, Sh4 };
 
-enum class ProjectFastpathProfile {
-    Conservative,
-    Guarded
-};
+enum class ProjectFastpathProfile { Conservative, Guarded };
 
 struct ProjectAddressRange {
     std::uint32_t start = 0u;
@@ -80,22 +63,16 @@ struct ProjectManifest {
     std::vector<std::uint32_t> dynamic_bios_vectors;
 };
 
-[[nodiscard]] ProjectManifest parse_project_manifest(
-    const std::filesystem::path& path
-);
+[[nodiscard]] ProjectManifest parse_project_manifest(const std::filesystem::path& path);
 
-[[nodiscard]] ExecutableImage load_project_manifest(
-    const std::filesystem::path& path
-);
+[[nodiscard]] ExecutableImage load_project_manifest(const std::filesystem::path& path);
 
 [[nodiscard]] const char* project_input_format_name(ProjectInputFormat format) noexcept;
 [[nodiscard]] const char* project_firmware_mode_name(ProjectFirmwareMode mode) noexcept;
 [[nodiscard]] const char* project_fallback_policy_name(ProjectFallbackPolicy policy) noexcept;
 [[nodiscard]] bool project_manifest_version_supported(std::uint32_t version) noexcept;
 
-void require_valid_project_alias_groups(
-    std::span<const ProjectAliasGroup> aliases,
-    std::span<const ProjectAddressRange> canonical_ranges
-);
+void require_valid_project_alias_groups(std::span<const ProjectAliasGroup> aliases,
+                                        std::span<const ProjectAddressRange> canonical_ranges);
 
-}
+} // namespace katana::io

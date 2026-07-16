@@ -29,27 +29,24 @@ inline constexpr std::uint32_t FramebufferWriteControl = 0x048u;
 inline constexpr std::uint32_t FramebufferReadSof1 = 0x050u;
 inline constexpr std::uint32_t FramebufferReadSize = 0x05Cu;
 inline constexpr std::uint32_t VideoControl = 0x0E8u;
-}
+} // namespace pvr_register
 
 class PvrRegisterFile final {
-public:
+  public:
     [[nodiscard]] std::uint32_t read(std::uint32_t offset) const;
     void write(std::uint32_t offset, std::uint32_t value);
     void reset() noexcept;
     [[nodiscard]] std::uint64_t render_request_count() const noexcept;
     [[nodiscard]] std::uint64_t reset_count() const noexcept;
-private:
+
+  private:
     [[nodiscard]] static std::size_t index(std::uint32_t offset);
     std::array<std::uint32_t, pvr_register_size / 4u> registers_{};
     std::uint64_t render_requests_ = 0u;
     std::uint64_t resets_ = 0u;
 };
 
-enum class PvrFramebufferFormat : std::uint8_t {
-    Rgb565,
-    Argb1555,
-    Rgb888
-};
+enum class PvrFramebufferFormat : std::uint8_t { Rgb565, Argb1555, Rgb888 };
 
 struct PvrFrame {
     std::uint32_t width = 0u;
@@ -58,19 +55,16 @@ struct PvrFrame {
 };
 
 class PvrFramebuffer final {
-public:
-    void configure(
-        std::uint32_t width,
-        std::uint32_t height,
-        std::uint32_t stride_bytes,
-        PvrFramebufferFormat format
-    );
-    [[nodiscard]] PvrFrame capture(
-        std::span<const std::uint8_t> vram,
-        std::size_t base_offset = 0u
-    );
+  public:
+    void configure(std::uint32_t width,
+                   std::uint32_t height,
+                   std::uint32_t stride_bytes,
+                   PvrFramebufferFormat format);
+    [[nodiscard]] PvrFrame capture(std::span<const std::uint8_t> vram,
+                                   std::size_t base_offset = 0u);
     [[nodiscard]] std::uint64_t presented_frames() const noexcept;
-private:
+
+  private:
     std::uint32_t width_ = 0u;
     std::uint32_t height_ = 0u;
     std::uint32_t stride_ = 0u;
@@ -78,11 +72,7 @@ private:
     std::uint64_t presented_frames_ = 0u;
 };
 
-enum class PvrListType : std::uint8_t {
-    Opaque,
-    PunchThrough,
-    Translucent
-};
+enum class PvrListType : std::uint8_t { Opaque, PunchThrough, Translucent };
 
 struct PvrVertex {
     float x = 0.0f;
@@ -103,13 +93,14 @@ struct PvrTaFrame {
 };
 
 class TileAccelerator final {
-public:
+  public:
     void begin_list(PvrListType type);
     void submit_vertex(const PvrVertex& vertex, bool end_of_strip);
     void end_list();
     [[nodiscard]] PvrTaFrame finish_frame();
     [[nodiscard]] bool list_open() const noexcept;
-private:
+
+  private:
     [[nodiscard]] static std::uint8_t list_rank(PvrListType type) noexcept;
     std::vector<PvrPrimitive> primitives_;
     std::vector<PvrVertex> current_strip_;
@@ -119,11 +110,7 @@ private:
     bool list_open_ = false;
 };
 
-enum class PvrTextureFormat : std::uint8_t {
-    Rgb565,
-    Argb1555,
-    Argb4444
-};
+enum class PvrTextureFormat : std::uint8_t { Rgb565, Argb1555, Argb4444 };
 
 struct PvrTexture {
     std::uint32_t width = 0u;
@@ -131,26 +118,25 @@ struct PvrTexture {
     std::vector<std::uint8_t> rgba;
 };
 
-[[nodiscard]] PvrTexture decode_pvr_texture(
-    std::span<const std::uint8_t> source,
-    std::uint32_t width,
-    std::uint32_t height,
-    PvrTextureFormat format
-);
+[[nodiscard]] PvrTexture decode_pvr_texture(std::span<const std::uint8_t> source,
+                                            std::uint32_t width,
+                                            std::uint32_t height,
+                                            PvrTextureFormat format);
 
 class PvrRenderBackend {
-public:
+  public:
     virtual ~PvrRenderBackend() = default;
     virtual void render(const PvrTaFrame& frame, std::span<const PvrTexture> textures) = 0;
 };
 
 class RecordingPvrRenderBackend final : public PvrRenderBackend {
-public:
+  public:
     void render(const PvrTaFrame& frame, std::span<const PvrTexture> textures) override;
     [[nodiscard]] std::uint64_t submitted_frames() const noexcept;
     [[nodiscard]] const PvrTaFrame& last_frame() const noexcept;
     [[nodiscard]] const std::vector<PvrTexture>& last_textures() const noexcept;
-private:
+
+  private:
     std::uint64_t submitted_frames_ = 0u;
     PvrTaFrame last_frame_;
     std::vector<PvrTexture> last_textures_;

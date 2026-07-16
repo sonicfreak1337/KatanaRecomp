@@ -8,10 +8,14 @@ namespace {
 using F = OperandFormat;
 using C = ControlFlowKind;
 
-#define KATANA_RULE(kind, mask, pattern, format) \
-    InstructionMetadata{InstructionKind::kind, #kind, mask, pattern, F::format, C::None, false, false}
-#define KATANA_FLOW(kind, mask, pattern, format, flow, delay, privileged) \
-    InstructionMetadata{InstructionKind::kind, #kind, mask, pattern, F::format, C::flow, delay, privileged}
+#define KATANA_RULE(kind, mask, pattern, format)                                                   \
+    InstructionMetadata {                                                                          \
+        InstructionKind::kind, #kind, mask, pattern, F::format, C::None, false, false              \
+    }
+#define KATANA_FLOW(kind, mask, pattern, format, flow, delay, privileged)                          \
+    InstructionMetadata {                                                                          \
+        InstructionKind::kind, #kind, mask, pattern, F::format, C::flow, delay, privileged         \
+    }
 
 constexpr std::array kInstructionMetadata = {
     KATANA_RULE(Nop, 0xFFFFu, 0x0009u, None),
@@ -164,15 +168,16 @@ constexpr std::array kInstructionMetadata = {
     KATANA_RULE(MovImmediate, 0xF000u, 0xE000u, Immediate8RegisterN),
     KATANA_RULE(AddImmediate, 0xF000u, 0x7000u, Immediate8RegisterN),
     KATANA_RULE(MovRegister, 0xF00Fu, 0x6003u, RegisterMRegisterN),
-    KATANA_RULE(AddRegister, 0xF00Fu, 0x300Cu, RegisterMRegisterN)
-};
+    KATANA_RULE(AddRegister, 0xF00Fu, 0x300Cu, RegisterMRegisterN)};
 
 #undef KATANA_FLOW
 #undef KATANA_RULE
 
-#define KATANA_SPECIAL(kind, mnemonic, pattern, reg, reg_name, memory, source, privileged) \
-    SpecialRegisterEncodingMetadata{InstructionKind::kind, mnemonic, 0xF0FFu, pattern, \
-        SpecialRegister::reg, reg_name, memory, source, privileged}
+#define KATANA_SPECIAL(kind, mnemonic, pattern, reg, reg_name, memory, source, privileged)         \
+    SpecialRegisterEncodingMetadata {                                                              \
+        InstructionKind::kind, mnemonic, 0xF0FFu, pattern, SpecialRegister::reg, reg_name, memory, \
+            source, privileged                                                                     \
+    }
 
 constexpr std::array kSpecialRegisterMetadata = {
     KATANA_SPECIAL(StoreSpecialRegister, "sts", 0x000Au, Mach, "mach", false, false, false),
@@ -180,21 +185,30 @@ constexpr std::array kSpecialRegisterMetadata = {
     KATANA_SPECIAL(StoreSpecialRegister, "sts", 0x002Au, Pr, "pr", false, false, false),
     KATANA_SPECIAL(StoreSpecialRegister, "sts", 0x005Au, Fpul, "fpul", false, false, false),
     KATANA_SPECIAL(StoreSpecialRegister, "sts", 0x006Au, Fpscr, "fpscr", false, false, false),
-    KATANA_SPECIAL(StoreSpecialRegisterPreDecrement, "sts.l", 0x4002u, Mach, "mach", true, false, false),
-    KATANA_SPECIAL(StoreSpecialRegisterPreDecrement, "sts.l", 0x4012u, Macl, "macl", true, false, false),
-    KATANA_SPECIAL(StoreSpecialRegisterPreDecrement, "sts.l", 0x4022u, Pr, "pr", true, false, false),
-    KATANA_SPECIAL(StoreSpecialRegisterPreDecrement, "sts.l", 0x4052u, Fpul, "fpul", true, false, false),
-    KATANA_SPECIAL(StoreSpecialRegisterPreDecrement, "sts.l", 0x4062u, Fpscr, "fpscr", true, false, false),
+    KATANA_SPECIAL(
+        StoreSpecialRegisterPreDecrement, "sts.l", 0x4002u, Mach, "mach", true, false, false),
+    KATANA_SPECIAL(
+        StoreSpecialRegisterPreDecrement, "sts.l", 0x4012u, Macl, "macl", true, false, false),
+    KATANA_SPECIAL(
+        StoreSpecialRegisterPreDecrement, "sts.l", 0x4022u, Pr, "pr", true, false, false),
+    KATANA_SPECIAL(
+        StoreSpecialRegisterPreDecrement, "sts.l", 0x4052u, Fpul, "fpul", true, false, false),
+    KATANA_SPECIAL(
+        StoreSpecialRegisterPreDecrement, "sts.l", 0x4062u, Fpscr, "fpscr", true, false, false),
     KATANA_SPECIAL(LoadSpecialRegister, "lds", 0x400Au, Mach, "mach", false, true, false),
     KATANA_SPECIAL(LoadSpecialRegister, "lds", 0x401Au, Macl, "macl", false, true, false),
     KATANA_SPECIAL(LoadSpecialRegister, "lds", 0x402Au, Pr, "pr", false, true, false),
     KATANA_SPECIAL(LoadSpecialRegister, "lds", 0x405Au, Fpul, "fpul", false, true, false),
     KATANA_SPECIAL(LoadSpecialRegister, "lds", 0x406Au, Fpscr, "fpscr", false, true, false),
-    KATANA_SPECIAL(LoadSpecialRegisterPostIncrement, "lds.l", 0x4006u, Mach, "mach", true, true, false),
-    KATANA_SPECIAL(LoadSpecialRegisterPostIncrement, "lds.l", 0x4016u, Macl, "macl", true, true, false),
+    KATANA_SPECIAL(
+        LoadSpecialRegisterPostIncrement, "lds.l", 0x4006u, Mach, "mach", true, true, false),
+    KATANA_SPECIAL(
+        LoadSpecialRegisterPostIncrement, "lds.l", 0x4016u, Macl, "macl", true, true, false),
     KATANA_SPECIAL(LoadSpecialRegisterPostIncrement, "lds.l", 0x4026u, Pr, "pr", true, true, false),
-    KATANA_SPECIAL(LoadSpecialRegisterPostIncrement, "lds.l", 0x4056u, Fpul, "fpul", true, true, false),
-    KATANA_SPECIAL(LoadSpecialRegisterPostIncrement, "lds.l", 0x4066u, Fpscr, "fpscr", true, true, false),
+    KATANA_SPECIAL(
+        LoadSpecialRegisterPostIncrement, "lds.l", 0x4056u, Fpul, "fpul", true, true, false),
+    KATANA_SPECIAL(
+        LoadSpecialRegisterPostIncrement, "lds.l", 0x4066u, Fpscr, "fpscr", true, true, false),
 
     KATANA_SPECIAL(StoreSpecialRegister, "stc", 0x0002u, Sr, "sr", false, false, true),
     KATANA_SPECIAL(StoreSpecialRegister, "stc", 0x0012u, Gbr, "gbr", false, false, false),
@@ -204,12 +218,18 @@ constexpr std::array kSpecialRegisterMetadata = {
     KATANA_SPECIAL(StoreSpecialRegister, "stc", 0x003Au, Sgr, "sgr", false, false, true),
     KATANA_SPECIAL(StoreSpecialRegister, "stc", 0x00FAu, Dbr, "dbr", false, false, true),
     KATANA_SPECIAL(StoreSpecialRegisterPreDecrement, "stc.l", 0x4003u, Sr, "sr", true, false, true),
-    KATANA_SPECIAL(StoreSpecialRegisterPreDecrement, "stc.l", 0x4013u, Gbr, "gbr", true, false, false),
-    KATANA_SPECIAL(StoreSpecialRegisterPreDecrement, "stc.l", 0x4023u, Vbr, "vbr", true, false, true),
-    KATANA_SPECIAL(StoreSpecialRegisterPreDecrement, "stc.l", 0x4033u, Ssr, "ssr", true, false, true),
-    KATANA_SPECIAL(StoreSpecialRegisterPreDecrement, "stc.l", 0x4043u, Spc, "spc", true, false, true),
-    KATANA_SPECIAL(StoreSpecialRegisterPreDecrement, "stc.l", 0x4032u, Sgr, "sgr", true, false, true),
-    KATANA_SPECIAL(StoreSpecialRegisterPreDecrement, "stc.l", 0x40F2u, Dbr, "dbr", true, false, true),
+    KATANA_SPECIAL(
+        StoreSpecialRegisterPreDecrement, "stc.l", 0x4013u, Gbr, "gbr", true, false, false),
+    KATANA_SPECIAL(
+        StoreSpecialRegisterPreDecrement, "stc.l", 0x4023u, Vbr, "vbr", true, false, true),
+    KATANA_SPECIAL(
+        StoreSpecialRegisterPreDecrement, "stc.l", 0x4033u, Ssr, "ssr", true, false, true),
+    KATANA_SPECIAL(
+        StoreSpecialRegisterPreDecrement, "stc.l", 0x4043u, Spc, "spc", true, false, true),
+    KATANA_SPECIAL(
+        StoreSpecialRegisterPreDecrement, "stc.l", 0x4032u, Sgr, "sgr", true, false, true),
+    KATANA_SPECIAL(
+        StoreSpecialRegisterPreDecrement, "stc.l", 0x40F2u, Dbr, "dbr", true, false, true),
     KATANA_SPECIAL(LoadSpecialRegister, "ldc", 0x400Eu, Sr, "sr", false, true, true),
     KATANA_SPECIAL(LoadSpecialRegister, "ldc", 0x401Eu, Gbr, "gbr", false, true, false),
     KATANA_SPECIAL(LoadSpecialRegister, "ldc", 0x402Eu, Vbr, "vbr", false, true, true),
@@ -217,11 +237,16 @@ constexpr std::array kSpecialRegisterMetadata = {
     KATANA_SPECIAL(LoadSpecialRegister, "ldc", 0x404Eu, Spc, "spc", false, true, true),
     KATANA_SPECIAL(LoadSpecialRegister, "ldc", 0x40FAu, Dbr, "dbr", false, true, true),
     KATANA_SPECIAL(LoadSpecialRegisterPostIncrement, "ldc.l", 0x4007u, Sr, "sr", true, true, true),
-    KATANA_SPECIAL(LoadSpecialRegisterPostIncrement, "ldc.l", 0x4017u, Gbr, "gbr", true, true, false),
-    KATANA_SPECIAL(LoadSpecialRegisterPostIncrement, "ldc.l", 0x4027u, Vbr, "vbr", true, true, true),
-    KATANA_SPECIAL(LoadSpecialRegisterPostIncrement, "ldc.l", 0x4037u, Ssr, "ssr", true, true, true),
-    KATANA_SPECIAL(LoadSpecialRegisterPostIncrement, "ldc.l", 0x4047u, Spc, "spc", true, true, true),
-    KATANA_SPECIAL(LoadSpecialRegisterPostIncrement, "ldc.l", 0x40F6u, Dbr, "dbr", true, true, true),
+    KATANA_SPECIAL(
+        LoadSpecialRegisterPostIncrement, "ldc.l", 0x4017u, Gbr, "gbr", true, true, false),
+    KATANA_SPECIAL(
+        LoadSpecialRegisterPostIncrement, "ldc.l", 0x4027u, Vbr, "vbr", true, true, true),
+    KATANA_SPECIAL(
+        LoadSpecialRegisterPostIncrement, "ldc.l", 0x4037u, Ssr, "ssr", true, true, true),
+    KATANA_SPECIAL(
+        LoadSpecialRegisterPostIncrement, "ldc.l", 0x4047u, Spc, "spc", true, true, true),
+    KATANA_SPECIAL(
+        LoadSpecialRegisterPostIncrement, "ldc.l", 0x40F6u, Dbr, "dbr", true, true, true),
 
     KATANA_SPECIAL(StoreSpecialRegister, "stc", 0x0082u, Bank0, "r0_bank", false, false, true),
     KATANA_SPECIAL(StoreSpecialRegister, "stc", 0x0092u, Bank1, "r1_bank", false, false, true),
@@ -231,14 +256,22 @@ constexpr std::array kSpecialRegisterMetadata = {
     KATANA_SPECIAL(StoreSpecialRegister, "stc", 0x00D2u, Bank5, "r5_bank", false, false, true),
     KATANA_SPECIAL(StoreSpecialRegister, "stc", 0x00E2u, Bank6, "r6_bank", false, false, true),
     KATANA_SPECIAL(StoreSpecialRegister, "stc", 0x00F2u, Bank7, "r7_bank", false, false, true),
-    KATANA_SPECIAL(StoreSpecialRegisterPreDecrement, "stc.l", 0x4083u, Bank0, "r0_bank", true, false, true),
-    KATANA_SPECIAL(StoreSpecialRegisterPreDecrement, "stc.l", 0x4093u, Bank1, "r1_bank", true, false, true),
-    KATANA_SPECIAL(StoreSpecialRegisterPreDecrement, "stc.l", 0x40A3u, Bank2, "r2_bank", true, false, true),
-    KATANA_SPECIAL(StoreSpecialRegisterPreDecrement, "stc.l", 0x40B3u, Bank3, "r3_bank", true, false, true),
-    KATANA_SPECIAL(StoreSpecialRegisterPreDecrement, "stc.l", 0x40C3u, Bank4, "r4_bank", true, false, true),
-    KATANA_SPECIAL(StoreSpecialRegisterPreDecrement, "stc.l", 0x40D3u, Bank5, "r5_bank", true, false, true),
-    KATANA_SPECIAL(StoreSpecialRegisterPreDecrement, "stc.l", 0x40E3u, Bank6, "r6_bank", true, false, true),
-    KATANA_SPECIAL(StoreSpecialRegisterPreDecrement, "stc.l", 0x40F3u, Bank7, "r7_bank", true, false, true),
+    KATANA_SPECIAL(
+        StoreSpecialRegisterPreDecrement, "stc.l", 0x4083u, Bank0, "r0_bank", true, false, true),
+    KATANA_SPECIAL(
+        StoreSpecialRegisterPreDecrement, "stc.l", 0x4093u, Bank1, "r1_bank", true, false, true),
+    KATANA_SPECIAL(
+        StoreSpecialRegisterPreDecrement, "stc.l", 0x40A3u, Bank2, "r2_bank", true, false, true),
+    KATANA_SPECIAL(
+        StoreSpecialRegisterPreDecrement, "stc.l", 0x40B3u, Bank3, "r3_bank", true, false, true),
+    KATANA_SPECIAL(
+        StoreSpecialRegisterPreDecrement, "stc.l", 0x40C3u, Bank4, "r4_bank", true, false, true),
+    KATANA_SPECIAL(
+        StoreSpecialRegisterPreDecrement, "stc.l", 0x40D3u, Bank5, "r5_bank", true, false, true),
+    KATANA_SPECIAL(
+        StoreSpecialRegisterPreDecrement, "stc.l", 0x40E3u, Bank6, "r6_bank", true, false, true),
+    KATANA_SPECIAL(
+        StoreSpecialRegisterPreDecrement, "stc.l", 0x40F3u, Bank7, "r7_bank", true, false, true),
     KATANA_SPECIAL(LoadSpecialRegister, "ldc", 0x408Eu, Bank0, "r0_bank", false, true, true),
     KATANA_SPECIAL(LoadSpecialRegister, "ldc", 0x409Eu, Bank1, "r1_bank", false, true, true),
     KATANA_SPECIAL(LoadSpecialRegister, "ldc", 0x40AEu, Bank2, "r2_bank", false, true, true),
@@ -247,26 +280,32 @@ constexpr std::array kSpecialRegisterMetadata = {
     KATANA_SPECIAL(LoadSpecialRegister, "ldc", 0x40DEu, Bank5, "r5_bank", false, true, true),
     KATANA_SPECIAL(LoadSpecialRegister, "ldc", 0x40EEu, Bank6, "r6_bank", false, true, true),
     KATANA_SPECIAL(LoadSpecialRegister, "ldc", 0x40FEu, Bank7, "r7_bank", false, true, true),
-    KATANA_SPECIAL(LoadSpecialRegisterPostIncrement, "ldc.l", 0x4087u, Bank0, "r0_bank", true, true, true),
-    KATANA_SPECIAL(LoadSpecialRegisterPostIncrement, "ldc.l", 0x4097u, Bank1, "r1_bank", true, true, true),
-    KATANA_SPECIAL(LoadSpecialRegisterPostIncrement, "ldc.l", 0x40A7u, Bank2, "r2_bank", true, true, true),
-    KATANA_SPECIAL(LoadSpecialRegisterPostIncrement, "ldc.l", 0x40B7u, Bank3, "r3_bank", true, true, true),
-    KATANA_SPECIAL(LoadSpecialRegisterPostIncrement, "ldc.l", 0x40C7u, Bank4, "r4_bank", true, true, true),
-    KATANA_SPECIAL(LoadSpecialRegisterPostIncrement, "ldc.l", 0x40D7u, Bank5, "r5_bank", true, true, true),
-    KATANA_SPECIAL(LoadSpecialRegisterPostIncrement, "ldc.l", 0x40E7u, Bank6, "r6_bank", true, true, true),
-    KATANA_SPECIAL(LoadSpecialRegisterPostIncrement, "ldc.l", 0x40F7u, Bank7, "r7_bank", true, true, true)
-};
+    KATANA_SPECIAL(
+        LoadSpecialRegisterPostIncrement, "ldc.l", 0x4087u, Bank0, "r0_bank", true, true, true),
+    KATANA_SPECIAL(
+        LoadSpecialRegisterPostIncrement, "ldc.l", 0x4097u, Bank1, "r1_bank", true, true, true),
+    KATANA_SPECIAL(
+        LoadSpecialRegisterPostIncrement, "ldc.l", 0x40A7u, Bank2, "r2_bank", true, true, true),
+    KATANA_SPECIAL(
+        LoadSpecialRegisterPostIncrement, "ldc.l", 0x40B7u, Bank3, "r3_bank", true, true, true),
+    KATANA_SPECIAL(
+        LoadSpecialRegisterPostIncrement, "ldc.l", 0x40C7u, Bank4, "r4_bank", true, true, true),
+    KATANA_SPECIAL(
+        LoadSpecialRegisterPostIncrement, "ldc.l", 0x40D7u, Bank5, "r5_bank", true, true, true),
+    KATANA_SPECIAL(
+        LoadSpecialRegisterPostIncrement, "ldc.l", 0x40E7u, Bank6, "r6_bank", true, true, true),
+    KATANA_SPECIAL(
+        LoadSpecialRegisterPostIncrement, "ldc.l", 0x40F7u, Bank7, "r7_bank", true, true, true)};
 
 #undef KATANA_SPECIAL
 
-}
+} // namespace
 
 std::span<const InstructionMetadata> instruction_metadata() noexcept {
     return kInstructionMetadata;
 }
 
-std::span<const SpecialRegisterEncodingMetadata>
-special_register_encoding_metadata() noexcept {
+std::span<const SpecialRegisterEncodingMetadata> special_register_encoding_metadata() noexcept {
     return kSpecialRegisterMetadata;
 }
 
@@ -279,4 +318,4 @@ const InstructionMetadata* metadata_for_kind(const InstructionKind kind) noexcep
     return nullptr;
 }
 
-}
+} // namespace katana::sh4

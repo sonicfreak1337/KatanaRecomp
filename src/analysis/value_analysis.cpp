@@ -3,101 +3,98 @@
 
 #include "katana/sh4/instruction.hpp"
 
-#include <cstdint>
 #include <algorithm>
+#include <cstdint>
 
 namespace katana::analysis {
 namespace {
 
-void apply_local_transfer(
-    RegisterConstants& state,
-    const katana::sh4::DecodedInstruction& instruction
-) {
+void apply_local_transfer(RegisterConstants& state,
+                          const katana::sh4::DecodedInstruction& instruction) {
     switch (instruction.kind) {
-        case katana::sh4::InstructionKind::Nop:
-            return;
-        case katana::sh4::InstructionKind::MovImmediate:
-            state.registers[instruction.destination_register] =
+    case katana::sh4::InstructionKind::Nop:
+        return;
+    case katana::sh4::InstructionKind::MovImmediate:
+        state.registers[instruction.destination_register] =
+            static_cast<std::uint32_t>(instruction.immediate);
+        return;
+    case katana::sh4::InstructionKind::MovRegister:
+        state.registers[instruction.destination_register] =
+            state.registers[instruction.source_register];
+        return;
+    case katana::sh4::InstructionKind::AddImmediate:
+        if (state.registers[instruction.destination_register].has_value()) {
+            *state.registers[instruction.destination_register] +=
                 static_cast<std::uint32_t>(instruction.immediate);
-            return;
-        case katana::sh4::InstructionKind::MovRegister:
-            state.registers[instruction.destination_register] =
-                state.registers[instruction.source_register];
-            return;
-        case katana::sh4::InstructionKind::AddImmediate:
-            if (state.registers[instruction.destination_register].has_value()) {
-                *state.registers[instruction.destination_register] +=
-                    static_cast<std::uint32_t>(instruction.immediate);
-            }
-            return;
-        case katana::sh4::InstructionKind::AddRegister:
-            if (state.registers[instruction.destination_register].has_value()
-                && state.registers[instruction.source_register].has_value()) {
-                *state.registers[instruction.destination_register] +=
-                    *state.registers[instruction.source_register];
+        }
+        return;
+    case katana::sh4::InstructionKind::AddRegister:
+        if (state.registers[instruction.destination_register].has_value() &&
+            state.registers[instruction.source_register].has_value()) {
+            *state.registers[instruction.destination_register] +=
+                *state.registers[instruction.source_register];
+        } else {
+            state.registers[instruction.destination_register].reset();
+        }
+        return;
+    case katana::sh4::InstructionKind::SubRegister:
+        if (state.registers[instruction.destination_register].has_value() &&
+            state.registers[instruction.source_register].has_value()) {
+            *state.registers[instruction.destination_register] -=
+                *state.registers[instruction.source_register];
+        } else {
+            state.registers[instruction.destination_register].reset();
+        }
+        return;
+    case katana::sh4::InstructionKind::AndRegister:
+    case katana::sh4::InstructionKind::OrRegister:
+    case katana::sh4::InstructionKind::XorRegister:
+        if (state.registers[instruction.destination_register].has_value() &&
+            state.registers[instruction.source_register].has_value()) {
+            auto& destination = *state.registers[instruction.destination_register];
+            const auto source = *state.registers[instruction.source_register];
+            if (instruction.kind == katana::sh4::InstructionKind::AndRegister) {
+                destination &= source;
+            } else if (instruction.kind == katana::sh4::InstructionKind::OrRegister) {
+                destination |= source;
             } else {
-                state.registers[instruction.destination_register].reset();
+                destination ^= source;
             }
-            return;
-        case katana::sh4::InstructionKind::SubRegister:
-            if (state.registers[instruction.destination_register].has_value()
-                && state.registers[instruction.source_register].has_value()) {
-                *state.registers[instruction.destination_register] -=
-                    *state.registers[instruction.source_register];
+        } else {
+            state.registers[instruction.destination_register].reset();
+        }
+        return;
+    case katana::sh4::InstructionKind::AndImmediate:
+    case katana::sh4::InstructionKind::OrImmediate:
+    case katana::sh4::InstructionKind::XorImmediate:
+        if (state.registers[0].has_value()) {
+            auto& destination = *state.registers[0];
+            const auto immediate = static_cast<std::uint32_t>(instruction.immediate);
+            if (instruction.kind == katana::sh4::InstructionKind::AndImmediate) {
+                destination &= immediate;
+            } else if (instruction.kind == katana::sh4::InstructionKind::OrImmediate) {
+                destination |= immediate;
             } else {
-                state.registers[instruction.destination_register].reset();
+                destination ^= immediate;
             }
-            return;
-        case katana::sh4::InstructionKind::AndRegister:
-        case katana::sh4::InstructionKind::OrRegister:
-        case katana::sh4::InstructionKind::XorRegister:
-            if (state.registers[instruction.destination_register].has_value()
-                && state.registers[instruction.source_register].has_value()) {
-                auto& destination = *state.registers[instruction.destination_register];
-                const auto source = *state.registers[instruction.source_register];
-                if (instruction.kind == katana::sh4::InstructionKind::AndRegister) {
-                    destination &= source;
-                } else if (instruction.kind == katana::sh4::InstructionKind::OrRegister) {
-                    destination |= source;
-                } else {
-                    destination ^= source;
-                }
-            } else {
-                state.registers[instruction.destination_register].reset();
-            }
-            return;
-        case katana::sh4::InstructionKind::AndImmediate:
-        case katana::sh4::InstructionKind::OrImmediate:
-        case katana::sh4::InstructionKind::XorImmediate:
-            if (state.registers[0].has_value()) {
-                auto& destination = *state.registers[0];
-                const auto immediate = static_cast<std::uint32_t>(instruction.immediate);
-                if (instruction.kind == katana::sh4::InstructionKind::AndImmediate) {
-                    destination &= immediate;
-                } else if (instruction.kind == katana::sh4::InstructionKind::OrImmediate) {
-                    destination |= immediate;
-                } else {
-                    destination ^= immediate;
-                }
-            }
-            return;
-        case katana::sh4::InstructionKind::Jmp:
-        case katana::sh4::InstructionKind::Jsr:
-        case katana::sh4::InstructionKind::Rts:
-            state.registers.fill(std::nullopt);
-            return;
-        default:
-            state.registers.fill(std::nullopt);
-            return;
+        }
+        return;
+    case katana::sh4::InstructionKind::Jmp:
+    case katana::sh4::InstructionKind::Jsr:
+    case katana::sh4::InstructionKind::Rts:
+        state.registers.fill(std::nullopt);
+        return;
+    default:
+        state.registers.fill(std::nullopt);
+        return;
     }
 }
 
-}
+} // namespace
 
-std::vector<ConstantTraceEntry> propagate_local_constants(
-    const std::span<const katana::sh4::DisassemblyLine> lines,
-    const RegisterConstants& initial
-) {
+std::vector<ConstantTraceEntry>
+propagate_local_constants(const std::span<const katana::sh4::DisassemblyLine> lines,
+                          const RegisterConstants& initial) {
     RegisterConstants state = initial;
     std::vector<ConstantTraceEntry> trace;
     trace.reserve(lines.size());
@@ -116,49 +113,45 @@ std::vector<ConstantTraceEntry> propagate_local_constants(
     return trace;
 }
 
-RegisterValueAnalysis analyze_register_values(
-    const std::span<const katana::sh4::DisassemblyLine> lines,
-    const RegisterConstants& initial
-) {
+RegisterValueAnalysis
+analyze_register_values(const std::span<const katana::sh4::DisassemblyLine> lines,
+                        const RegisterConstants& initial) {
     RegisterValueAnalysis analysis;
     analysis.trace = propagate_local_constants(lines, initial);
     for (std::size_t index = 0; index < lines.size(); ++index) {
-        if (lines[index].instruction.kind != katana::sh4::InstructionKind::Jmp
-            && lines[index].instruction.kind != katana::sh4::InstructionKind::Jsr) {
+        if (lines[index].instruction.kind != katana::sh4::InstructionKind::Jmp &&
+            lines[index].instruction.kind != katana::sh4::InstructionKind::Jsr) {
             continue;
         }
         const auto register_index = lines[index].instruction.branch_register;
-        analysis.indirect_control_flow.push_back({
-            lines[index].address,
-            register_index,
-            analysis.trace[index].before.registers[register_index]
-        });
+        analysis.indirect_control_flow.push_back(
+            {lines[index].address,
+             register_index,
+             analysis.trace[index].before.registers[register_index]});
     }
     return analysis;
 }
 
-std::vector<IndirectControlFlowResolution> resolve_indirect_control_flow(
-    const std::span<const katana::sh4::DisassemblyLine> lines,
-    const katana::io::ExecutableImage& image
-) {
+std::vector<IndirectControlFlowResolution>
+resolve_indirect_control_flow(const std::span<const katana::sh4::DisassemblyLine> lines,
+                              const katana::io::ExecutableImage& image) {
     const auto values = analyze_register_values(lines);
     std::vector<IndirectControlFlowResolution> resolutions;
     resolutions.reserve(values.indirect_control_flow.size());
     for (const auto& observation : values.indirect_control_flow) {
-        const auto line = std::find_if(
-            lines.begin(),
-            lines.end(),
-            [&observation](const katana::sh4::DisassemblyLine& candidate) {
-                return candidate.address == observation.instruction_address;
-            }
-        );
+        const auto line =
+            std::find_if(lines.begin(),
+                         lines.end(),
+                         [&observation](const katana::sh4::DisassemblyLine& candidate) {
+                             return candidate.address == observation.instruction_address;
+                         });
         IndirectControlFlowResolution resolution;
         resolution.instruction_address = observation.instruction_address;
         resolution.register_index = observation.register_index;
-        resolution.kind = line != lines.end()
-                && line->instruction.kind == katana::sh4::InstructionKind::Jsr
-            ? IndirectControlFlowKind::Call
-            : IndirectControlFlowKind::Jump;
+        resolution.kind =
+            line != lines.end() && line->instruction.kind == katana::sh4::InstructionKind::Jsr
+                ? IndirectControlFlowKind::Call
+                : IndirectControlFlowKind::Jump;
         if (!observation.value.has_value()) {
             resolution.reason = "register-value-unknown";
             resolutions.push_back(std::move(resolution));
@@ -179,4 +172,4 @@ std::vector<IndirectControlFlowResolution> resolve_indirect_control_flow(
     return resolutions;
 }
 
-}
+} // namespace katana::analysis

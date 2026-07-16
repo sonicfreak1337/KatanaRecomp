@@ -26,13 +26,7 @@ enum class DispatchFallbackReason : std::uint8_t {
     DynamicCode,
     ManifestDenied
 };
-enum class DispatchFallbackAction : std::uint8_t {
-    None,
-    Abort,
-    Diagnose,
-    Interpreter,
-    UserHook
-};
+enum class DispatchFallbackAction : std::uint8_t { None, Abort, Diagnose, Interpreter, UserHook };
 enum class DispatchDiagnosticError : std::uint8_t {
     None,
     UnknownCode,
@@ -62,7 +56,7 @@ struct DispatchDiagnosticEvent {
 };
 
 class DispatchDiagnosticRecorder final {
-public:
+  public:
     void record(DispatchDiagnosticEvent event);
     [[nodiscard]] bool try_record(DispatchDiagnosticEvent event) noexcept;
     void clear() noexcept;
@@ -70,7 +64,7 @@ public:
     [[nodiscard]] std::uint64_t total_occurrences() const noexcept;
     [[nodiscard]] std::string serialize_json() const;
 
-private:
+  private:
     std::vector<DispatchDiagnosticEvent> events_;
     std::uint64_t total_occurrences_ = 0u;
 };
@@ -81,4 +75,4 @@ private:
 [[nodiscard]] const char* dispatch_fallback_action_name(DispatchFallbackAction value) noexcept;
 [[nodiscard]] const char* dispatch_diagnostic_error_name(DispatchDiagnosticError value) noexcept;
 
-}
+} // namespace katana::runtime

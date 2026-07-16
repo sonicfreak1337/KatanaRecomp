@@ -39,18 +39,14 @@ struct Phase6GateReport {
     std::size_t scheduler_pending_events = 0u;
 };
 
-[[nodiscard]] Phase6GateReport run_phase6_gate(
-    const std::filesystem::path& descriptor_path,
-    Phase6BlockExecutor execute_block,
-    std::size_t block_instruction_count,
-    std::uint64_t guest_cycle_budget = 64u
-);
+[[nodiscard]] Phase6GateReport run_phase6_gate(const std::filesystem::path& descriptor_path,
+                                               Phase6BlockExecutor execute_block,
+                                               std::size_t block_instruction_count,
+                                               std::uint64_t guest_cycle_budget = 64u);
 
 [[nodiscard]] std::string serialize_phase6_gate_report(const Phase6GateReport& report);
 
-void write_phase6_gate_report(
-    const Phase6GateReport& report,
-    const std::filesystem::path& output_path
-);
+void write_phase6_gate_report(const Phase6GateReport& report,
+                              const std::filesystem::path& output_path);
 
 } // namespace katana::platform

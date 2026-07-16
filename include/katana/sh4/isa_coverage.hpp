@@ -26,4 +26,4 @@ struct IsaCoverageReport {
 [[nodiscard]] IsaCoverageReport build_isa_coverage_report();
 [[nodiscard]] std::string format_isa_coverage_report(const IsaCoverageReport& report);
 
-}
+} // namespace katana::sh4

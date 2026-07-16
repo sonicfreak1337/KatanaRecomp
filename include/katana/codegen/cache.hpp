@@ -27,25 +27,17 @@ struct CodegenCacheInputs {
 [[nodiscard]] std::string make_codegen_cache_key(const CodegenCacheInputs& inputs);
 
 class CodegenCache final {
-public:
+  public:
     explicit CodegenCache(std::filesystem::path root);
 
-    [[nodiscard]] std::optional<std::string> load(
-        std::string_view key,
-        std::string_view artifact_name
-    ) const;
-    void store(
-        std::string_view key,
-        std::string_view artifact_name,
-        std::string_view content
-    );
+    [[nodiscard]] std::optional<std::string> load(std::string_view key,
+                                                  std::string_view artifact_name) const;
+    void store(std::string_view key, std::string_view artifact_name, std::string_view content);
     [[nodiscard]] const std::filesystem::path& root() const noexcept;
 
-private:
-    [[nodiscard]] std::filesystem::path artifact_path(
-        std::string_view key,
-        std::string_view artifact_name
-    ) const;
+  private:
+    [[nodiscard]] std::filesystem::path artifact_path(std::string_view key,
+                                                      std::string_view artifact_name) const;
 
     std::filesystem::path root_;
 };

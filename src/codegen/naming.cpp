@@ -22,10 +22,12 @@ std::uint64_t fnv1a64(const std::string_view text) noexcept {
 }
 
 bool safe_suffix(const std::string_view suffix) noexcept {
-    if (suffix.empty() || suffix.front() != '.') { return false; }
+    if (suffix.empty() || suffix.front() != '.') {
+        return false;
+    }
     for (const auto character : suffix.substr(1u)) {
-        if (!std::isalnum(static_cast<unsigned char>(character)) &&
-            character != '-' && character != '_') {
+        if (!std::isalnum(static_cast<unsigned char>(character)) && character != '-' &&
+            character != '_') {
             return false;
         }
     }
@@ -34,11 +36,10 @@ bool safe_suffix(const std::string_view suffix) noexcept {
 
 } // namespace
 
-std::string deterministic_translation_unit_name(
-    const TranslationUnitPartition& partition,
-    const std::span<const katana::ir::Function> functions,
-    const std::string_view suffix
-) {
+std::string
+deterministic_translation_unit_name(const TranslationUnitPartition& partition,
+                                    const std::span<const katana::ir::Function> functions,
+                                    const std::string_view suffix) {
     if (partition.function_indices.empty()) {
         throw std::invalid_argument("Leere Codegen-Partition besitzt keinen Dateinamen.");
     }
@@ -55,12 +56,10 @@ std::string deterministic_translation_unit_name(
     }
     const auto canonical_ir = katana::ir::emit_ir_json(selected);
     std::ostringstream output;
-    output << "unit-" << std::dec << std::setfill('0') << std::setw(5)
-           << partition.index << "-v" << std::uppercase << std::hex
-           << std::setw(8) << partition.first_entry_address << "-"
-           << std::setw(8) << partition.last_entry_address << "-"
-           << std::nouppercase << std::setw(16) << fnv1a64(canonical_ir)
-           << suffix;
+    output << "unit-" << std::dec << std::setfill('0') << std::setw(5) << partition.index << "-v"
+           << std::uppercase << std::hex << std::setw(8) << partition.first_entry_address << "-"
+           << std::setw(8) << partition.last_entry_address << "-" << std::nouppercase
+           << std::setw(16) << fnv1a64(canonical_ir) << suffix;
     return output.str();
 }
 

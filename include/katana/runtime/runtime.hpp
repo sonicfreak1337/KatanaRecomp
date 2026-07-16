@@ -86,10 +86,7 @@ struct CpuState {
     std::uint32_t last_prefetch_address = 0u;
     std::uint64_t prefetch_count = 0u;
     bool last_prefetch_was_store_queue = false;
-    Memory memory{
-        1024u * 1024u,
-        MemoryAlignmentPolicy::Permissive
-    };
+    Memory memory{1024u * 1024u, MemoryAlignmentPolicy::Permissive};
 
     [[nodiscard]] std::uint32_t read_sr() const noexcept;
     void write_sr(std::uint32_t value) noexcept;
@@ -108,10 +105,7 @@ struct CpuState {
     [[nodiscard]] bool fpu_disabled() const noexcept;
 };
 
-void reset_cpu(
-    CpuState& cpu,
-    const ResetState& state = ResetState{}
-) noexcept;
+void reset_cpu(CpuState& cpu, const ResetState& state = ResetState{}) noexcept;
 
 void prefetch(CpuState& cpu, std::uint32_t address) noexcept;
 

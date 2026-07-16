@@ -10,12 +10,10 @@ constexpr std::size_t maximum_jump_table_entries = 4096u;
 
 }
 
-JumpTableAnalysis analyze_jump_table(
-    const katana::io::ExecutableImage& image,
-    const std::uint32_t dispatch_address,
-    const std::uint32_t table_address,
-    const std::size_t entry_count
-) {
+JumpTableAnalysis analyze_jump_table(const katana::io::ExecutableImage& image,
+                                     const std::uint32_t dispatch_address,
+                                     const std::uint32_t table_address,
+                                     const std::size_t entry_count) {
     JumpTableAnalysis analysis;
     analysis.dispatch_address = dispatch_address;
     analysis.table_address = table_address;
@@ -25,8 +23,8 @@ JumpTableAnalysis analyze_jump_table(
         analysis.reason = "entry-count-out-of-range";
         return analysis;
     }
-    const auto table_end = static_cast<std::uint64_t>(table_address)
-        + static_cast<std::uint64_t>(entry_count) * 4u;
+    const auto table_end =
+        static_cast<std::uint64_t>(table_address) + static_cast<std::uint64_t>(entry_count) * 4u;
     if ((table_address & 3u) != 0u || table_end > 0x100000000ull) {
         analysis.reason = "table-range-invalid";
         return analysis;
@@ -70,4 +68,4 @@ JumpTableAnalysis analyze_jump_table(
     return analysis;
 }
 
-}
+} // namespace katana::analysis

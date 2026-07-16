@@ -62,4 +62,4 @@ special_register_encoding_metadata() noexcept;
 
 [[nodiscard]] const InstructionMetadata* metadata_for_kind(InstructionKind kind) noexcept;
 
-}
+} // namespace katana::sh4

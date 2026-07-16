@@ -8,9 +8,12 @@ namespace {
 
 const char* kind_name(const IndirectDispatchKind kind) noexcept {
     switch (kind) {
-    case IndirectDispatchKind::Call: return "call";
-    case IndirectDispatchKind::TailJump: return "tail-jump";
-    case IndirectDispatchKind::Return: return "return";
+    case IndirectDispatchKind::Call:
+        return "call";
+    case IndirectDispatchKind::TailJump:
+        return "tail-jump";
+    case IndirectDispatchKind::Return:
+        return "return";
     }
     return "unknown";
 }
@@ -26,64 +29,59 @@ std::string describe(const IndirectDispatchRequest& request, const std::uint32_t
 
 BlockEndKind block_end(const IndirectDispatchKind kind) noexcept {
     switch (kind) {
-        case IndirectDispatchKind::Call: return BlockEndKind::Call;
-        case IndirectDispatchKind::TailJump: return BlockEndKind::DynamicBranch;
-        case IndirectDispatchKind::Return: return BlockEndKind::Return;
+    case IndirectDispatchKind::Call:
+        return BlockEndKind::Call;
+    case IndirectDispatchKind::TailJump:
+        return BlockEndKind::DynamicBranch;
+    case IndirectDispatchKind::Return:
+        return BlockEndKind::Return;
     }
     return BlockEndKind::DynamicBranch;
 }
 
-void diagnose(
-    const IndirectDispatchRequest& request,
-    const std::uint32_t target,
-    const std::uint32_t pr,
-    const bool alias_lookup,
-    const bool resolved
-) noexcept {
+void diagnose(const IndirectDispatchRequest& request,
+              const std::uint32_t target,
+              const std::uint32_t pr,
+              const bool alias_lookup,
+              const bool resolved) noexcept {
     if (request.diagnostics == nullptr) return;
-    static_cast<void>(request.diagnostics->try_record({
-        request.callsite,
-        request.source.virtual_address,
-        canonical_physical_address(request.source.physical_address),
-        target,
-        canonical_physical_address(target),
-        pr,
-        block_end(request.kind),
-        request.resolution_origin,
-        resolved
-            ? (alias_lookup
-                ? DispatchAliasOrigin::CanonicalPhysical
-                : DispatchAliasOrigin::ExactVirtual)
-            : DispatchAliasOrigin::None,
-        DispatchFallbackReason::None,
-        DispatchFallbackAction::None,
-        0u,
-        resolved ? target : request.callsite,
-        resolved ? DispatchDiagnosticError::None : DispatchDiagnosticError::UnknownTarget
-    }));
+    static_cast<void>(request.diagnostics->try_record(
+        {request.callsite,
+         request.source.virtual_address,
+         canonical_physical_address(request.source.physical_address),
+         target,
+         canonical_physical_address(target),
+         pr,
+         block_end(request.kind),
+         request.resolution_origin,
+         resolved ? (alias_lookup ? DispatchAliasOrigin::CanonicalPhysical
+                                  : DispatchAliasOrigin::ExactVirtual)
+                  : DispatchAliasOrigin::None,
+         DispatchFallbackReason::None,
+         DispatchFallbackAction::None,
+         0u,
+         resolved ? target : request.callsite,
+         resolved ? DispatchDiagnosticError::None : DispatchDiagnosticError::UnknownTarget}));
 }
 
 } // namespace
 
-IndirectDispatchError::IndirectDispatchError(
-    const IndirectDispatchKind kind,
-    const std::uint32_t callsite,
-    const std::uint32_t target,
-    const BlockAddress source
-) : std::runtime_error([&] {
-        IndirectDispatchRequest request;
-        request.kind = kind;
-        request.callsite = callsite;
-        request.return_address = 0u;
-        request.source = source;
-        return "Unbekanntes indirektes Ziel: " + describe(request, target);
-    }()) {}
+IndirectDispatchError::IndirectDispatchError(const IndirectDispatchKind kind,
+                                             const std::uint32_t callsite,
+                                             const std::uint32_t target,
+                                             const BlockAddress source)
+    : std::runtime_error([&] {
+          IndirectDispatchRequest request;
+          request.kind = kind;
+          request.callsite = callsite;
+          request.return_address = 0u;
+          request.source = source;
+          return "Unbekanntes indirektes Ziel: " + describe(request, target);
+      }()) {}
 
-IndirectDispatchResult dispatch_indirect(
-    CpuState& cpu,
-    const RuntimeBlockTable& table,
-    const IndirectDispatchRequest& request
-) {
+IndirectDispatchResult dispatch_indirect(CpuState& cpu,
+                                         const RuntimeBlockTable& table,
+                                         const IndirectDispatchRequest& request) {
     const auto target = request.kind == IndirectDispatchKind::Return ? cpu.pr : request.target;
     const auto physical = canonical_physical_address(target);
     const RuntimeBlock* block = table.lookup(target, request.variant);
@@ -97,18 +95,18 @@ IndirectDispatchResult dispatch_indirect(
         throw IndirectDispatchError(request.kind, request.callsite, target, request.source);
     }
 
-    if (request.kind == IndirectDispatchKind::Call) { cpu.pr = request.return_address; }
+    if (request.kind == IndirectDispatchKind::Call) {
+        cpu.pr = request.return_address;
+    }
     cpu.pc = target;
     diagnose(request, target, cpu.pr, alias_lookup, true);
-    return {
-        block,
-        target,
-        physical,
-        cpu.pc,
-        cpu.pr,
-        alias_lookup,
-        describe(request, target) + (alias_lookup ? " alias=physical" : " alias=exact")
-    };
+    return {block,
+            target,
+            physical,
+            cpu.pc,
+            cpu.pr,
+            alias_lookup,
+            describe(request, target) + (alias_lookup ? " alias=physical" : " alias=exact")};
 }
 
 } // namespace katana::runtime

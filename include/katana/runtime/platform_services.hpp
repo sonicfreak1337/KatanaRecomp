@@ -29,9 +29,8 @@ enum class PlatformCapability : std::uint64_t {
 
 using PlatformCapabilities = std::uint64_t;
 
-[[nodiscard]] constexpr PlatformCapabilities platform_capability(
-    const PlatformCapability capability
-) noexcept {
+[[nodiscard]] constexpr PlatformCapabilities
+platform_capability(const PlatformCapability capability) noexcept {
     return static_cast<PlatformCapabilities>(capability);
 }
 
@@ -81,7 +80,7 @@ struct PlatformFallbackResult {
 };
 
 class PlatformServices {
-public:
+  public:
     virtual ~PlatformServices() = default;
 
     [[nodiscard]] virtual std::string_view name() const noexcept = 0;
@@ -91,36 +90,26 @@ public:
     virtual void read_memory(std::uint32_t address, std::span<std::uint8_t> destination) = 0;
     virtual void write_memory(std::uint32_t address, std::span<const std::uint8_t> source) = 0;
     [[nodiscard]] virtual std::uint64_t scheduler_cycle() const noexcept = 0;
-    [[nodiscard]] virtual PlatformSchedulerResult advance_scheduler(
-        std::uint64_t guest_cycle,
-        std::size_t event_budget
-    ) = 0;
+    [[nodiscard]] virtual PlatformSchedulerResult advance_scheduler(std::uint64_t guest_cycle,
+                                                                    std::size_t event_budget) = 0;
     [[nodiscard]] virtual std::optional<PlatformInterruptRequest> poll_interrupt() = 0;
     [[nodiscard]] virtual PlatformDmaResult start_dma(const PlatformDmaRequest& request) = 0;
-    [[nodiscard]] virtual PlatformFallbackResult controlled_fallback(
-        CpuState& cpu,
-        const PlatformFallbackRequest& request
-    ) = 0;
-    [[nodiscard]] virtual bool prefetch(
-        CpuState& cpu,
-        std::uint32_t address
-    ) = 0;
+    [[nodiscard]] virtual PlatformFallbackResult
+    controlled_fallback(CpuState& cpu, const PlatformFallbackRequest& request) = 0;
+    [[nodiscard]] virtual bool prefetch(CpuState& cpu, std::uint32_t address) = 0;
 };
 
-inline void validate_platform_services(
-    const PlatformServices& services,
-    const PlatformServiceRequirements& requirements = {}
-) {
+inline void validate_platform_services(const PlatformServices& services,
+                                       const PlatformServiceRequirements& requirements = {}) {
     const std::string service_name(services.name());
     if (service_name.empty()) {
         throw std::invalid_argument("Plattformdienst besitzt keinen Namen.");
     }
     if (services.abi_version() != requirements.abi_version) {
-        throw std::invalid_argument(
-            "Plattformdienst '" + service_name + "' meldet ABI " +
-            std::to_string(services.abi_version()) + ", erforderlich ist ABI " +
-            std::to_string(requirements.abi_version) + "."
-        );
+        throw std::invalid_argument("Plattformdienst '" + service_name + "' meldet ABI " +
+                                    std::to_string(services.abi_version()) +
+                                    ", erforderlich ist ABI " +
+                                    std::to_string(requirements.abi_version) + ".");
     }
     const auto missing = requirements.capabilities & ~services.capabilities();
     if (missing != 0u) {
@@ -128,8 +117,7 @@ inline void validate_platform_services(
             "Plattformdienst '" + service_name + "' mit ABI " +
             std::to_string(services.abi_version()) +
             " besitzt nicht die erforderliche Faehigkeitsmaske; fehlende Ursache/Maske " +
-            std::to_string(missing) + "."
-        );
+            std::to_string(missing) + ".");
     }
 }
 

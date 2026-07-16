@@ -33,19 +33,15 @@ struct IndirectDispatchResult {
 };
 
 class IndirectDispatchError final : public std::runtime_error {
-public:
-    IndirectDispatchError(
-        IndirectDispatchKind kind,
-        std::uint32_t callsite,
-        std::uint32_t target,
-        BlockAddress source
-    );
+  public:
+    IndirectDispatchError(IndirectDispatchKind kind,
+                          std::uint32_t callsite,
+                          std::uint32_t target,
+                          BlockAddress source);
 };
 
-[[nodiscard]] IndirectDispatchResult dispatch_indirect(
-    CpuState& cpu,
-    const RuntimeBlockTable& table,
-    const IndirectDispatchRequest& request
-);
+[[nodiscard]] IndirectDispatchResult dispatch_indirect(CpuState& cpu,
+                                                       const RuntimeBlockTable& table,
+                                                       const IndirectDispatchRequest& request);
 
 } // namespace katana::runtime

@@ -20,18 +20,15 @@ struct AddressSourceLocation {
     std::size_t generated_line = 0u;
 };
 
-[[nodiscard]] std::vector<AddressSourceLocation> build_address_source_map(
-    const katana::io::ExecutableImage& image,
-    std::span<const ProjectArtifact> generated_units
-);
+[[nodiscard]] std::vector<AddressSourceLocation>
+build_address_source_map(const katana::io::ExecutableImage& image,
+                         std::span<const ProjectArtifact> generated_units);
 
-[[nodiscard]] std::span<const AddressSourceLocation> find_source_locations(
-    std::span<const AddressSourceLocation> locations,
-    std::uint32_t guest_address
-) noexcept;
+[[nodiscard]] std::span<const AddressSourceLocation>
+find_source_locations(std::span<const AddressSourceLocation> locations,
+                      std::uint32_t guest_address) noexcept;
 
-[[nodiscard]] std::string serialize_address_source_map(
-    std::span<const AddressSourceLocation> locations
-);
+[[nodiscard]] std::string
+serialize_address_source_map(std::span<const AddressSourceLocation> locations);
 
-}
+} // namespace katana::codegen

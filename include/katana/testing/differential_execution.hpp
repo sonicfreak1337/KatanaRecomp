@@ -85,38 +85,32 @@ struct DifferentialReport {
 };
 
 class DifferentialMismatch final : public std::runtime_error {
-public:
+  public:
     explicit DifferentialMismatch(DifferentialDifference difference);
 
     [[nodiscard]] const DifferentialDifference& difference() const noexcept;
 
-private:
+  private:
     DifferentialDifference difference_;
 };
 
-[[nodiscard]] const char* differential_execution_path_name(
-    DifferentialExecutionPath path
-) noexcept;
+[[nodiscard]] const char* differential_execution_path_name(DifferentialExecutionPath path) noexcept;
 
-[[nodiscard]] DifferentialCheckpoint make_runtime_checkpoint(
-    const runtime::CpuState& cpu,
-    std::uint32_t guest_pc,
-    std::span<const DifferentialMemoryByte> memory = {},
-    std::span<const DifferentialMmioObservation> mmio = {},
-    const runtime::EventScheduler* scheduler = nullptr
-);
+[[nodiscard]] DifferentialCheckpoint
+make_runtime_checkpoint(const runtime::CpuState& cpu,
+                        std::uint32_t guest_pc,
+                        std::span<const DifferentialMemoryByte> memory = {},
+                        std::span<const DifferentialMmioObservation> mmio = {},
+                        const runtime::EventScheduler* scheduler = nullptr);
 
-[[nodiscard]] DifferentialReport run_differential_execution(
-    const DifferentialProgram& program,
-    std::span<const DifferentialRunner> runners
-);
+[[nodiscard]] DifferentialReport
+run_differential_execution(const DifferentialProgram& program,
+                           std::span<const DifferentialRunner> runners);
 
 void require_differential_match(const DifferentialReport& report);
 
-[[nodiscard]] std::string format_differential_counterexample_json(
-    const DifferentialReport& report
-);
+[[nodiscard]] std::string format_differential_counterexample_json(const DifferentialReport& report);
 
 [[nodiscard]] std::vector<DifferentialProgram> default_differential_corpus();
 
-}
+} // namespace katana::testing

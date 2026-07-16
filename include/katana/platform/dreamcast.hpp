@@ -13,11 +13,7 @@
 
 namespace katana::platform {
 
-enum class FirmwareMode {
-    DirectHomebrew,
-    HleBiosAbi,
-    LleFirmware
-};
+enum class FirmwareMode { DirectHomebrew, HleBiosAbi, LleFirmware };
 
 struct DreamcastBootConfig {
     FirmwareMode firmware_mode = FirmwareMode::DirectHomebrew;
@@ -35,23 +31,17 @@ struct DreamcastBootResult {
     std::vector<std::string> log;
 };
 
-[[nodiscard]] DreamcastBootResult boot_homebrew(
-    runtime::CpuState& cpu,
-    const io::ExecutableImage& image,
-    const DreamcastBootConfig& config = {}
-);
+[[nodiscard]] DreamcastBootResult boot_homebrew(runtime::CpuState& cpu,
+                                                const io::ExecutableImage& image,
+                                                const DreamcastBootConfig& config = {});
 
-[[nodiscard]] DreamcastBootResult boot_raw_homebrew(
-    runtime::CpuState& cpu,
-    const std::filesystem::path& path,
-    const io::RawBinaryLoadOptions& load_options,
-    const DreamcastBootConfig& config = {}
-);
+[[nodiscard]] DreamcastBootResult boot_raw_homebrew(runtime::CpuState& cpu,
+                                                    const std::filesystem::path& path,
+                                                    const io::RawBinaryLoadOptions& load_options,
+                                                    const DreamcastBootConfig& config = {});
 
-[[nodiscard]] DreamcastBootResult boot_elf_homebrew(
-    runtime::CpuState& cpu,
-    const std::filesystem::path& path,
-    const DreamcastBootConfig& config = {}
-);
+[[nodiscard]] DreamcastBootResult boot_elf_homebrew(runtime::CpuState& cpu,
+                                                    const std::filesystem::path& path,
+                                                    const DreamcastBootConfig& config = {});
 
 } // namespace katana::platform

@@ -223,4 +223,4 @@ struct DecodedInstruction {
     }
 };
 
-}
+} // namespace katana::sh4

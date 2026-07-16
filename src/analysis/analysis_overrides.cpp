@@ -12,15 +12,10 @@
 namespace katana::analysis {
 namespace {
 
-[[noreturn]] void fail(
-    const std::filesystem::path& path,
-    const std::size_t line,
-    const std::string& cause
-) {
-    throw std::runtime_error(
-        "Analyseanweisungsfehler in " + path.string() + " in Zeile "
-        + std::to_string(line) + ": " + cause
-    );
+[[noreturn]] void
+fail(const std::filesystem::path& path, const std::size_t line, const std::string& cause) {
+    throw std::runtime_error("Analyseanweisungsfehler in " + path.string() + " in Zeile " +
+                             std::to_string(line) + ": " + cause);
 }
 
 std::string trim(const std::string_view text) {
@@ -32,13 +27,11 @@ std::string trim(const std::string_view text) {
     return std::string(text.substr(first, last - first + 1u));
 }
 
-std::uint32_t parse_number(
-    std::string text,
-    const int base,
-    const std::filesystem::path& path,
-    const std::size_t line,
-    const char* field
-) {
+std::uint32_t parse_number(std::string text,
+                           const int base,
+                           const std::filesystem::path& path,
+                           const std::size_t line,
+                           const char* field) {
     if (base == 16 && (text.starts_with("0x") || text.starts_with("0X"))) {
         text.erase(0u, 2u);
     }
@@ -62,19 +55,17 @@ std::vector<std::string> words(const std::string& text) {
 
 std::string hex_address(const std::uint32_t address) {
     std::ostringstream output;
-    output << "0x" << std::hex << std::uppercase << std::setw(8)
-           << std::setfill('0') << address;
+    output << "0x" << std::hex << std::uppercase << std::setw(8) << std::setfill('0') << address;
     return output.str();
 }
 
-}
+} // namespace
 
 AnalysisOverrides parse_analysis_overrides(const std::filesystem::path& path) {
     std::ifstream input(path);
     if (!input) {
-        throw std::runtime_error(
-            "Analyseanweisungsdatei konnte nicht geoeffnet werden: " + path.string()
-        );
+        throw std::runtime_error("Analyseanweisungsdatei konnte nicht geoeffnet werden: " +
+                                 path.string());
     }
     AnalysisOverrides overrides;
     overrides.source_path = path;
@@ -104,7 +95,8 @@ AnalysisOverrides parse_analysis_overrides(const std::filesystem::path& path) {
             saw_version = true;
         } else if (key == "schema" && fields.size() == 1u) {
             if (saw_schema || fields[0] != "katana-analysis-directives") {
-                fail(path, line_number, "schema muss genau einmal katana-analysis-directives sein.");
+                fail(
+                    path, line_number, "schema muss genau einmal katana-analysis-directives sein.");
             }
             saw_schema = true;
         } else if (key == "mode" && fields.size() == 1u) {
@@ -120,30 +112,26 @@ AnalysisOverrides parse_analysis_overrides(const std::filesystem::path& path) {
             }
             saw_mode = true;
         } else if (key == "function" && fields.size() == 1u) {
-            overrides.functions.push_back({
-                parse_number(fields[0], 16, path, line_number, "function"), line_number
-            });
+            overrides.functions.push_back(
+                {parse_number(fields[0], 16, path, line_number, "function"), line_number});
         } else if (key == "jump" && fields.size() == 2u) {
-            overrides.jumps.push_back({
-                parse_number(fields[0], 16, path, line_number, "jump-address"),
-                parse_number(fields[1], 16, path, line_number, "jump-target"),
-                line_number
-            });
+            overrides.jumps.push_back(
+                {parse_number(fields[0], 16, path, line_number, "jump-address"),
+                 parse_number(fields[1], 16, path, line_number, "jump-target"),
+                 line_number});
         } else if (key == "jump_table" && fields.size() == 3u) {
-            overrides.jump_tables.push_back({
-                parse_number(fields[0], 16, path, line_number, "dispatch-address"),
-                parse_number(fields[1], 16, path, line_number, "table-address"),
-                parse_number(fields[2], 10, path, line_number, "entry-count"),
-                line_number
-            });
+            overrides.jump_tables.push_back(
+                {parse_number(fields[0], 16, path, line_number, "dispatch-address"),
+                 parse_number(fields[1], 16, path, line_number, "table-address"),
+                 parse_number(fields[2], 10, path, line_number, "entry-count"),
+                 line_number});
         } else {
             fail(path, line_number, "unbekanntes Feld oder falsche Feldanzahl: " + key + ".");
         }
     }
     if (!input.eof()) {
         throw std::runtime_error(
-            "Analyseanweisungsdatei konnte nicht vollstaendig gelesen werden: " + path.string()
-        );
+            "Analyseanweisungsdatei konnte nicht vollstaendig gelesen werden: " + path.string());
     }
     if (!saw_version) {
         fail(path, 0u, "Pflichtfeld version fehlt.");
@@ -160,28 +148,37 @@ AnalysisOverrides parse_analysis_overrides(const std::filesystem::path& path) {
         fail(path, 0u, "Version 2 braucht schema und mode.");
     }
 
-    std::sort(overrides.functions.begin(), overrides.functions.end(), [](const auto& left, const auto& right) {
-        return left.address < right.address;
-    });
-    std::sort(overrides.jumps.begin(), overrides.jumps.end(), [](const auto& left, const auto& right) {
-        return left.instruction_address < right.instruction_address;
-    });
-    std::sort(overrides.jump_tables.begin(), overrides.jump_tables.end(), [](const auto& left, const auto& right) {
-        return left.dispatch_address < right.dispatch_address;
-    });
-    if (std::adjacent_find(overrides.functions.begin(), overrides.functions.end(), [](const auto& left, const auto& right) {
-            return left.address == right.address;
-        }) != overrides.functions.end()) {
+    std::sort(overrides.functions.begin(),
+              overrides.functions.end(),
+              [](const auto& left, const auto& right) { return left.address < right.address; });
+    std::sort(
+        overrides.jumps.begin(), overrides.jumps.end(), [](const auto& left, const auto& right) {
+            return left.instruction_address < right.instruction_address;
+        });
+    std::sort(overrides.jump_tables.begin(),
+              overrides.jump_tables.end(),
+              [](const auto& left, const auto& right) {
+                  return left.dispatch_address < right.dispatch_address;
+              });
+    if (std::adjacent_find(overrides.functions.begin(),
+                           overrides.functions.end(),
+                           [](const auto& left, const auto& right) {
+                               return left.address == right.address;
+                           }) != overrides.functions.end()) {
         fail(path, 0u, "doppelter function-Eintrag.");
     }
-    if (std::adjacent_find(overrides.jumps.begin(), overrides.jumps.end(), [](const auto& left, const auto& right) {
-            return left.instruction_address == right.instruction_address;
-        }) != overrides.jumps.end()) {
+    if (std::adjacent_find(overrides.jumps.begin(),
+                           overrides.jumps.end(),
+                           [](const auto& left, const auto& right) {
+                               return left.instruction_address == right.instruction_address;
+                           }) != overrides.jumps.end()) {
         fail(path, 0u, "doppelter jump-Eintrag.");
     }
-    if (std::adjacent_find(overrides.jump_tables.begin(), overrides.jump_tables.end(), [](const auto& left, const auto& right) {
-            return left.dispatch_address == right.dispatch_address;
-        }) != overrides.jump_tables.end()) {
+    if (std::adjacent_find(overrides.jump_tables.begin(),
+                           overrides.jump_tables.end(),
+                           [](const auto& left, const auto& right) {
+                               return left.dispatch_address == right.dispatch_address;
+                           }) != overrides.jump_tables.end()) {
         fail(path, 0u, "doppelter jump_table-Eintrag.");
     }
     auto jump = overrides.jumps.begin();
@@ -197,22 +194,23 @@ AnalysisOverrides parse_analysis_overrides(const std::filesystem::path& path) {
         }
         const auto first_line = std::min(jump->line, table->line);
         const auto second_line = std::max(jump->line, table->line);
-        throw std::runtime_error(
-            "Analyseanweisungsfehler in " + path.string() + " in Zeilen "
-            + std::to_string(first_line) + " und " + std::to_string(second_line)
-            + ": jump und jump_table verwenden dieselbe Dispatch-Adresse "
-            + hex_address(jump->instruction_address) + "."
-        );
+        throw std::runtime_error("Analyseanweisungsfehler in " + path.string() + " in Zeilen " +
+                                 std::to_string(first_line) + " und " +
+                                 std::to_string(second_line) +
+                                 ": jump und jump_table verwenden dieselbe Dispatch-Adresse " +
+                                 hex_address(jump->instruction_address) + ".");
     }
     return overrides;
 }
 
 const char* analysis_directive_mode_name(const AnalysisDirectiveMode mode) noexcept {
     switch (mode) {
-        case AnalysisDirectiveMode::Override: return "override";
-        case AnalysisDirectiveMode::Hint: return "hint";
+    case AnalysisDirectiveMode::Override:
+        return "override";
+    case AnalysisDirectiveMode::Hint:
+        return "hint";
     }
     return "unknown";
 }
 
-}
+} // namespace katana::analysis

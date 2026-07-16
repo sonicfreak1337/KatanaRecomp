@@ -17,10 +17,7 @@ struct JumpTableEntry {
     std::string reason;
 };
 
-enum class JumpTableDispatchKind {
-    Jump,
-    Call
-};
+enum class JumpTableDispatchKind { Jump, Call };
 
 struct JumpTableAnalysis {
     std::uint32_t dispatch_address = 0u;
@@ -32,11 +29,9 @@ struct JumpTableAnalysis {
     std::string reason;
 };
 
-[[nodiscard]] JumpTableAnalysis analyze_jump_table(
-    const katana::io::ExecutableImage& image,
-    std::uint32_t dispatch_address,
-    std::uint32_t table_address,
-    std::size_t entry_count
-);
+[[nodiscard]] JumpTableAnalysis analyze_jump_table(const katana::io::ExecutableImage& image,
+                                                   std::uint32_t dispatch_address,
+                                                   std::uint32_t table_address,
+                                                   std::size_t entry_count);
 
-}
+} // namespace katana::analysis

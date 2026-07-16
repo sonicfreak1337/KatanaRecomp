@@ -33,33 +33,25 @@ struct ControlledFallbackResult {
 };
 
 using ControlledFallbackHandler = std::function<std::uint32_t(
-    CpuState&,
-    BlockExecutionContext&,
-    const ControlledFallbackRequest&
-)>;
+    CpuState&, BlockExecutionContext&, const ControlledFallbackRequest&)>;
 
 class ControlledFallbackError final : public std::runtime_error {
-public:
+  public:
     explicit ControlledFallbackError(const ControlledFallbackRequest& request);
 };
 
 class ControlledFallback {
-public:
-    explicit ControlledFallback(
-        FallbackPolicy policy,
-        ControlledFallbackHandler handler = {},
-        DispatchDiagnosticRecorder* diagnostics = nullptr
-    );
+  public:
+    explicit ControlledFallback(FallbackPolicy policy,
+                                ControlledFallbackHandler handler = {},
+                                DispatchDiagnosticRecorder* diagnostics = nullptr);
 
-    [[nodiscard]] ControlledFallbackResult enter(
-        CpuState& cpu,
-        BlockExecutionContext& context,
-        const ControlledFallbackRequest& request
-    );
+    [[nodiscard]] ControlledFallbackResult
+    enter(CpuState& cpu, BlockExecutionContext& context, const ControlledFallbackRequest& request);
     [[nodiscard]] std::uint64_t count(FallbackReason reason) const noexcept;
     [[nodiscard]] std::uint64_t total_count() const noexcept;
 
-private:
+  private:
     FallbackPolicy policy_;
     ControlledFallbackHandler handler_;
     DispatchDiagnosticRecorder* diagnostics_ = nullptr;

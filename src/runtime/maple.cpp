@@ -36,15 +36,13 @@ MapleResponse MapleControllerDevice::transact(const MapleRequest& request) {
     }
     const auto state = input_->sample(next_frame_++);
     const auto buttons = static_cast<std::uint16_t>(~state.pressed_buttons);
-    const std::uint32_t condition0 =
-        static_cast<std::uint32_t>(buttons) |
-        (static_cast<std::uint32_t>(state.right_trigger) << 16u) |
-        (static_cast<std::uint32_t>(state.left_trigger) << 24u);
-    const std::uint32_t condition1 =
-        static_cast<std::uint32_t>(state.joystick_x) |
-        (static_cast<std::uint32_t>(state.joystick_y) << 8u) |
-        (static_cast<std::uint32_t>(state.joystick2_x) << 16u) |
-        (static_cast<std::uint32_t>(state.joystick2_y) << 24u);
+    const std::uint32_t condition0 = static_cast<std::uint32_t>(buttons) |
+                                     (static_cast<std::uint32_t>(state.right_trigger) << 16u) |
+                                     (static_cast<std::uint32_t>(state.left_trigger) << 24u);
+    const std::uint32_t condition1 = static_cast<std::uint32_t>(state.joystick_x) |
+                                     (static_cast<std::uint32_t>(state.joystick_y) << 8u) |
+                                     (static_cast<std::uint32_t>(state.joystick2_x) << 16u) |
+                                     (static_cast<std::uint32_t>(state.joystick2_y) << 24u);
     return {MapleResponseCode::DataTransfer, {controller_function, condition0, condition1}};
 }
 
@@ -66,14 +64,14 @@ MapleVmuDevice::MapleVmuDevice(const std::span<const std::uint8_t> image) {
 MapleResponse MapleVmuDevice::transact(const MapleRequest& request) {
     constexpr std::uint32_t memory_function = 0x02000000u;
     switch (request.command) {
-        case MapleCommand::DeviceRequest:
-            return {MapleResponseCode::DeviceInfo, {memory_function, 0u, 0u}};
-        case MapleCommand::BlockRead:
-            return read_block(request);
-        case MapleCommand::BlockWrite:
-            return write_block(request);
-        default:
-            return {MapleResponseCode::UnknownCommand, {}};
+    case MapleCommand::DeviceRequest:
+        return {MapleResponseCode::DeviceInfo, {memory_function, 0u, 0u}};
+    case MapleCommand::BlockRead:
+        return read_block(request);
+    case MapleCommand::BlockWrite:
+        return write_block(request);
+    default:
+        return {MapleResponseCode::UnknownCommand, {}};
     }
 }
 
@@ -89,12 +87,10 @@ MapleResponse MapleVmuDevice::read_block(const MapleRequest& request) const {
     payload.push_back(memory_function);
     payload.push_back(static_cast<std::uint32_t>(block));
     for (std::size_t offset = 0u; offset < vmu_block_size; offset += 4u) {
-        payload.push_back(
-            static_cast<std::uint32_t>(working_[start + offset]) |
-            (static_cast<std::uint32_t>(working_[start + offset + 1u]) << 8u) |
-            (static_cast<std::uint32_t>(working_[start + offset + 2u]) << 16u) |
-            (static_cast<std::uint32_t>(working_[start + offset + 3u]) << 24u)
-        );
+        payload.push_back(static_cast<std::uint32_t>(working_[start + offset]) |
+                          (static_cast<std::uint32_t>(working_[start + offset + 1u]) << 8u) |
+                          (static_cast<std::uint32_t>(working_[start + offset + 2u]) << 16u) |
+                          (static_cast<std::uint32_t>(working_[start + offset + 3u]) << 24u));
     }
     return {MapleResponseCode::DataTransfer, std::move(payload)};
 }
@@ -118,10 +114,18 @@ MapleResponse MapleVmuDevice::write_block(const MapleRequest& request) {
     return {MapleResponseCode::Ack, {}};
 }
 
-void MapleVmuDevice::set_write_protected(const bool value) noexcept { write_protected_ = value; }
-bool MapleVmuDevice::write_protected() const noexcept { return write_protected_; }
-std::uint8_t MapleVmuDevice::read_byte(const std::size_t offset) const { return working_.at(offset); }
-std::uint8_t MapleVmuDevice::source_byte(const std::size_t offset) const { return source_.at(offset); }
+void MapleVmuDevice::set_write_protected(const bool value) noexcept {
+    write_protected_ = value;
+}
+bool MapleVmuDevice::write_protected() const noexcept {
+    return write_protected_;
+}
+std::uint8_t MapleVmuDevice::read_byte(const std::size_t offset) const {
+    return working_.at(offset);
+}
+std::uint8_t MapleVmuDevice::source_byte(const std::size_t offset) const {
+    return source_.at(offset);
+}
 
 std::size_t MapleBus::slot(const std::uint8_t port, const std::uint8_t unit) {
     if (port >= maple_port_count || unit >= maple_units_per_port) {
@@ -130,11 +134,9 @@ std::size_t MapleBus::slot(const std::uint8_t port, const std::uint8_t unit) {
     return static_cast<std::size_t>(port) * maple_units_per_port + unit;
 }
 
-void MapleBus::attach(
-    const std::uint8_t port,
-    const std::uint8_t unit,
-    std::shared_ptr<MapleDevice> device
-) {
+void MapleBus::attach(const std::uint8_t port,
+                      const std::uint8_t unit,
+                      std::shared_ptr<MapleDevice> device) {
     if (!device) {
         throw std::invalid_argument("Ein Maple-Geraet darf nicht null sein.");
     }
@@ -149,19 +151,15 @@ bool MapleBus::attached(const std::uint8_t port, const std::uint8_t unit) const 
     return static_cast<bool>(devices_[slot(port, unit)]);
 }
 
-MapleResponse MapleBus::exchange(
-    const std::uint8_t port,
-    const std::uint8_t unit,
-    const MapleRequest& request
-) {
+MapleResponse
+MapleBus::exchange(const std::uint8_t port, const std::uint8_t unit, const MapleRequest& request) {
     auto& device = devices_[slot(port, unit)];
     if (!device) {
         throw std::runtime_error("Kein Maple-Geraet an der angeforderten Adresse.");
     }
     auto response = device->transact(request);
-    history_.push_back(MapleTransactionRecord{
-        next_sequence_++, port, unit, request.command, response.code
-    });
+    history_.push_back(
+        MapleTransactionRecord{next_sequence_++, port, unit, request.command, response.code});
     return response;
 }
 

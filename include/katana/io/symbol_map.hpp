@@ -6,9 +6,6 @@
 
 namespace katana::io {
 
-void load_symbol_map(
-    const std::filesystem::path& path,
-    ExecutableImage& image
-);
+void load_symbol_map(const std::filesystem::path& path, ExecutableImage& image);
 
 }

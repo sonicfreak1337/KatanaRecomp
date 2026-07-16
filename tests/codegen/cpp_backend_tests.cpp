@@ -14,15 +14,11 @@ void require(const bool condition, const std::string& message) {
     }
 }
 
-katana::ir::Instruction instruction(
-    const std::uint32_t address,
-    const katana::ir::Operation operation
-) {
+katana::ir::Instruction instruction(const std::uint32_t address,
+                                    const katana::ir::Operation operation) {
     katana::ir::Instruction result;
     result.source_address = address;
-    result.original_opcode = operation == katana::ir::Operation::Return
-        ? 0x000Bu
-        : 0x0009u;
+    result.original_opcode = operation == katana::ir::Operation::Return ? 0x000Bu : 0x0009u;
     result.original_operation = operation;
     result.operation = operation;
     result.widths = katana::ir::operation_operand_widths(operation);
@@ -53,47 +49,34 @@ int main() {
     constexpr std::uint32_t entry = 0x8C010000u;
     const std::array functions = {make_function()};
     const katana::codegen::CppBackend backend;
-    const auto emission = katana::codegen::generate_program(
-        backend,
-        {functions, entry}
-    );
+    const auto emission = katana::codegen::generate_program(backend, {functions, entry});
 
     require(backend.name() == "cpp", "C++-Backend besitzt keine stabile Identitaet.");
+    require(emission.declarations.find("#include \"katana/runtime/runtime.hpp\"") !=
+                    std::string::npos &&
+                emission.declarations.find("#include \"katana/runtime/platform_services.hpp\"") !=
+                    std::string::npos &&
+                emission.declarations.find("static void fn_8C010000") != std::string::npos &&
+                emission.declarations.find("katana/platform/") == std::string::npos &&
+                emission.declarations.find("katana/runtime/pvr") == std::string::npos &&
+                emission.declarations.find("katana/runtime/aica") == std::string::npos &&
+                emission.declarations.find("katana/runtime/maple") == std::string::npos &&
+                emission.declarations.find("katana/runtime/gdi") == std::string::npos &&
+                emission.declarations.find("void run(CpuState& cpu) {") == std::string::npos,
+            "C++-Backend trennt Deklarationen und Funktionskoerper nicht.");
     require(
-        emission.declarations.find("#include \"katana/runtime/runtime.hpp\"") !=
-                std::string::npos &&
-            emission.declarations.find(
-                "#include \"katana/runtime/platform_services.hpp\""
-            ) != std::string::npos &&
-            emission.declarations.find("static void fn_8C010000") != std::string::npos &&
-            emission.declarations.find("katana/platform/") == std::string::npos &&
-            emission.declarations.find("katana/runtime/pvr") == std::string::npos &&
-            emission.declarations.find("katana/runtime/aica") == std::string::npos &&
-            emission.declarations.find("katana/runtime/maple") == std::string::npos &&
-            emission.declarations.find("katana/runtime/gdi") == std::string::npos &&
-            emission.declarations.find("void run(CpuState& cpu) {") == std::string::npos,
-        "C++-Backend trennt Deklarationen und Funktionskoerper nicht."
-    );
-    require(
-            emission.functions.find(
-                "static void fn_8C010000_with_services(CpuState& cpu, PlatformServices* services) {"
-            ) !=
+        emission.functions.find(
+            "static void fn_8C010000_with_services(CpuState& cpu, PlatformServices* services) {") !=
                 std::string::npos &&
             emission.functions.find("void run(CpuState& cpu) {") != std::string::npos &&
             emission.functions.find("void run(CpuState& cpu, PlatformServices& services)") !=
                 std::string::npos,
-        "C++-Backend emittiert die Funktionskoerper nicht im Funktionsabschnitt."
-    );
-    require(
-        emission.metadata.find("generated_entry_address = 0x8C010000u") !=
-                std::string::npos &&
-            emission.metadata.find("} // namespace katana_generated") != std::string::npos,
-        "C++-Backend emittiert keine getrennten stabilen Metadaten."
-    );
-    require(
-        emission.joined_text() == katana::codegen::emit_cpp_program(functions, entry),
-        "Kompatibilitaetsfunktion umgeht oder veraendert das C++-Backend."
-    );
+        "C++-Backend emittiert die Funktionskoerper nicht im Funktionsabschnitt.");
+    require(emission.metadata.find("generated_entry_address = 0x8C010000u") != std::string::npos &&
+                emission.metadata.find("} // namespace katana_generated") != std::string::npos,
+            "C++-Backend emittiert keine getrennten stabilen Metadaten.");
+    require(emission.joined_text() == katana::codegen::emit_cpp_program(functions, entry),
+            "Kompatibilitaetsfunktion umgeht oder veraendert das C++-Backend.");
 
     std::cout << "KR-3202 C++-Backend-Migration erfolgreich.\n";
     return 0;

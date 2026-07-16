@@ -10,9 +10,7 @@ namespace katana::sh4 {
 [[nodiscard]] DecodedInstruction decode(std::uint16_t opcode);
 
 [[nodiscard]] std::optional<std::uint32_t>
-calculate_direct_branch_target(
-    const DecodedInstruction& instruction,
-    std::uint32_t instruction_address
-);
+calculate_direct_branch_target(const DecodedInstruction& instruction,
+                               std::uint32_t instruction_address);
 
-}
+} // namespace katana::sh4

@@ -11,24 +11,33 @@
 namespace {
 constexpr std::size_t sector_size = 2048u;
 void require(const bool value, const std::string& message) {
-    if (!value) { std::cerr << "TEST FEHLGESCHLAGEN: " << message << '\n'; std::exit(EXIT_FAILURE); }
+    if (!value) {
+        std::cerr << "TEST FEHLGESCHLAGEN: " << message << '\n';
+        std::exit(EXIT_FAILURE);
+    }
 }
-template<typename E, typename F> bool throws(F&& f) { try { f(); } catch (const E&) { return true; } return false; }
+template <typename E, typename F> bool throws(F&& f) {
+    try {
+        f();
+    } catch (const E&) {
+        return true;
+    }
+    return false;
+}
 void both32(std::vector<std::uint8_t>& image, const std::size_t offset, const std::uint32_t value) {
     for (std::size_t i = 0u; i < 4u; ++i) {
         image[offset + i] = static_cast<std::uint8_t>(value >> (i * 8u));
         image[offset + 4u + i] = static_cast<std::uint8_t>(value >> ((3u - i) * 8u));
     }
 }
-std::size_t record(
-    std::vector<std::uint8_t>& image,
-    const std::size_t offset,
-    const std::uint32_t lba,
-    const std::uint32_t size,
-    const std::string& name,
-    const bool directory
-) {
-    const auto length = static_cast<std::uint8_t>(33u + name.size() + (name.size() % 2u == 0u ? 1u : 0u));
+std::size_t record(std::vector<std::uint8_t>& image,
+                   const std::size_t offset,
+                   const std::uint32_t lba,
+                   const std::uint32_t size,
+                   const std::string& name,
+                   const bool directory) {
+    const auto length =
+        static_cast<std::uint8_t>(33u + name.size() + (name.size() % 2u == 0u ? 1u : 0u));
     image[offset] = length;
     both32(image, offset + 2u, lba);
     both32(image, offset + 10u, size);
@@ -67,7 +76,7 @@ std::vector<std::uint8_t> make_iso() {
     image[23u * sector_size + 3u] = 4u;
     return image;
 }
-}
+} // namespace
 
 int main() {
     using namespace katana::runtime;
@@ -75,19 +84,23 @@ int main() {
     Iso9660Filesystem filesystem(source);
     const auto root = filesystem.list_directory();
     require(root.size() == 2u && root[0].name == "HELLO.TXT" && !root[0].directory &&
-        root[1].name == "SUBDIR" && root[1].directory,
-        "ISO9660-Rootverzeichnis oder Versionssuffix-Normalisierung ist falsch.");
-    require(filesystem.read_file("/hello.txt") == std::vector<std::uint8_t>({'H','E','L','L','O'}),
-        "ISO9660-Datei wird nicht case-insensitive gelesen.");
-    require(filesystem.read_file("/SUBDIR/NEST.BIN") == std::vector<std::uint8_t>({1u,2u,3u,4u}),
-        "ISO9660-Unterverzeichnis wird nicht aufgeloest.");
-    require(throws<std::out_of_range>([&] { static_cast<void>(filesystem.read_file("/MISSING.BIN")); }),
+                root[1].name == "SUBDIR" && root[1].directory,
+            "ISO9660-Rootverzeichnis oder Versionssuffix-Normalisierung ist falsch.");
+    require(filesystem.read_file("/hello.txt") ==
+                std::vector<std::uint8_t>({'H', 'E', 'L', 'L', 'O'}),
+            "ISO9660-Datei wird nicht case-insensitive gelesen.");
+    require(filesystem.read_file("/SUBDIR/NEST.BIN") == std::vector<std::uint8_t>({1u, 2u, 3u, 4u}),
+            "ISO9660-Unterverzeichnis wird nicht aufgeloest.");
+    require(
+        throws<std::out_of_range>([&] { static_cast<void>(filesystem.read_file("/MISSING.BIN")); }),
         "Fehlender ISO9660-Pfad wird akzeptiert.");
     auto broken = make_iso();
     broken[16u * sector_size + 1u] = 'X';
     require(throws<std::runtime_error>([&] {
-        Iso9660Filesystem invalid(std::make_shared<MemoryDiscSource>(broken, "synthetic:broken-iso"));
-    }), "Ungueltiger ISO9660-Descriptor wird akzeptiert.");
+                Iso9660Filesystem invalid(
+                    std::make_shared<MemoryDiscSource>(broken, "synthetic:broken-iso"));
+            }),
+            "Ungueltiger ISO9660-Descriptor wird akzeptiert.");
 
     std::cout << "KR-3003 ISO9660 erfolgreich.\n";
 }

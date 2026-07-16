@@ -32,13 +32,11 @@ using VideoTickCallback = std::function<void(const VideoTick&)>;
 using AudioTickCallback = std::function<void(const AudioTick&)>;
 
 class DreamcastMediaClock final {
-public:
-    DreamcastMediaClock(
-        EventScheduler& scheduler,
-        MediaClockConfig config,
-        VideoTickCallback video_callback = {},
-        AudioTickCallback audio_callback = {}
-    );
+  public:
+    DreamcastMediaClock(EventScheduler& scheduler,
+                        MediaClockConfig config,
+                        VideoTickCallback video_callback = {},
+                        AudioTickCallback audio_callback = {});
     ~DreamcastMediaClock();
     DreamcastMediaClock(const DreamcastMediaClock&) = delete;
     DreamcastMediaClock& operator=(const DreamcastMediaClock&) = delete;
@@ -53,7 +51,7 @@ public:
     [[nodiscard]] std::optional<std::uint64_t> next_video_cycle() const noexcept;
     [[nodiscard]] std::optional<std::uint64_t> next_audio_cycle() const noexcept;
 
-private:
+  private:
     struct Cadence {
         std::uint64_t base_interval = 0u;
         std::uint64_t remainder = 0u;
@@ -62,11 +60,9 @@ private:
         std::uint64_t deadline = 0u;
     };
 
-    static Cadence make_cadence(
-        std::uint64_t cycles_per_second,
-        std::uint64_t units_per_tick,
-        std::uint64_t units_per_second
-    );
+    static Cadence make_cadence(std::uint64_t cycles_per_second,
+                                std::uint64_t units_per_tick,
+                                std::uint64_t units_per_second);
     static std::uint64_t advance_deadline(Cadence& cadence);
     void schedule_video();
     void schedule_audio();

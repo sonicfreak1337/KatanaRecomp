@@ -47,40 +47,34 @@ struct ObservableCpuState {
 };
 
 ObservableCpuState observable_state(const runtime::CpuState& cpu) {
-    return {
-        cpu.r,
-        cpu.r_bank,
-        cpu.fr,
-        cpu.xf,
-        cpu.pc,
-        cpu.pr,
-        cpu.read_sr(),
-        cpu.read_fpscr(),
-        cpu.ssr,
-        cpu.spc,
-        cpu.expevt,
-        cpu.intevt,
-        cpu.trap_pending,
-        cpu.last_exception_cause,
-        cpu.exception_in_delay_slot,
-        cpu.sleeping,
-        cpu.prefetch_count
-    };
+    return {cpu.r,
+            cpu.r_bank,
+            cpu.fr,
+            cpu.xf,
+            cpu.pc,
+            cpu.pr,
+            cpu.read_sr(),
+            cpu.read_fpscr(),
+            cpu.ssr,
+            cpu.spc,
+            cpu.expevt,
+            cpu.intevt,
+            cpu.trap_pending,
+            cpu.last_exception_cause,
+            cpu.exception_in_delay_slot,
+            cpu.sleeping,
+            cpu.prefetch_count};
 }
 
-bool inside_boot_program(
-    const std::uint32_t address,
-    const std::size_t boot_size
-) {
+bool inside_boot_program(const std::uint32_t address, const std::size_t boot_size) {
     const auto start = static_cast<std::uint64_t>(dreamcast_disc_boot_address);
     const auto end = start + boot_size;
     return address >= start && static_cast<std::uint64_t>(address) < end;
 }
 
 bool controlled_probe_stop(const std::string_view message) {
-    return message == "Nicht aufgeloester Sprung" ||
-        message == "Nicht aufgeloester Aufruf" ||
-        message == "PC liegt ausserhalb der generierten Funktion";
+    return message == "Nicht aufgeloester Sprung" || message == "Nicht aufgeloester Aufruf" ||
+           message == "PC liegt ausserhalb der generierten Funktion";
 }
 
 void require_gate(const bool condition, const std::string& message) {
@@ -95,12 +89,10 @@ std::string bool_json(const bool value) {
 
 } // namespace
 
-Phase6GateReport run_phase6_gate(
-    const std::filesystem::path& descriptor_path,
-    const Phase6BlockExecutor execute_block,
-    const std::size_t block_instruction_count,
-    const std::uint64_t guest_cycle_budget
-) {
+Phase6GateReport run_phase6_gate(const std::filesystem::path& descriptor_path,
+                                 const Phase6BlockExecutor execute_block,
+                                 const std::size_t block_instruction_count,
+                                 const std::uint64_t guest_cycle_budget) {
     if (execute_block == nullptr) {
         throw std::invalid_argument("Phase-6-Gate braucht einen Block-Executor.");
     }
@@ -124,11 +116,9 @@ Phase6GateReport run_phase6_gate(
     const auto image = make_dreamcast_disc_executable(disc);
     const auto boot = boot_homebrew(cpu, image);
     const auto cache_control = runtime::map_sh4_cache_control(cpu.memory);
-    require_gate(
-        boot.entry_point == dreamcast_disc_boot_address &&
-            inside_boot_program(cpu.pc, disc.boot_file.size()),
-        "Programmeinstieg wurde nicht in den geladenen Hauptprogrammbereich gesetzt."
-    );
+    require_gate(boot.entry_point == dreamcast_disc_boot_address &&
+                     inside_boot_program(cpu.pc, disc.boot_file.size()),
+                 "Programmeinstieg wurde nicht in den geladenen Hauptprogrammbereich gesetzt.");
 
     const auto state_before_execution = observable_state(cpu);
     try {
@@ -139,27 +129,19 @@ Phase6GateReport run_phase6_gate(
         }
         ++report.fallbacks;
     }
-    require_gate(
-        !cpu.trap_pending && cpu.last_exception_cause == runtime::ExceptionCause::None,
-        "Bootblock endete mit einer CPU-Ausnahme."
-    );
-    require_gate(
-        observable_state(cpu) != state_before_execution,
-        "Block-Executor hat keinen beobachtbaren CPU-Zustand veraendert."
-    );
+    require_gate(!cpu.trap_pending && cpu.last_exception_cause == runtime::ExceptionCause::None,
+                 "Bootblock endete mit einer CPU-Ausnahme.");
+    require_gate(observable_state(cpu) != state_before_execution,
+                 "Block-Executor hat keinen beobachtbaren CPU-Zustand veraendert.");
     report.last_guest_pc = cpu.pc;
-    require_gate(
-        inside_boot_program(report.last_guest_pc, disc.boot_file.size()),
-        "letzter Gast-PC liegt ausserhalb des geladenen Hauptprogramms."
-    );
+    require_gate(inside_boot_program(report.last_guest_pc, disc.boot_file.size()),
+                 "letzter Gast-PC liegt ausserhalb des geladenen Hauptprogramms.");
     report.main_executable_entered = true;
     report.executed_blocks = 1u;
     report.guest_cycles = block_instruction_count;
     report.cache_invalidations = cache_control->instruction_invalidation_count();
-    require_gate(
-        report.cache_invalidations != 0u,
-        "verpflichtende CCR-Instruktionscache-Invalidierung fehlt."
-    );
+    require_gate(report.cache_invalidations != 0u,
+                 "verpflichtende CCR-Instruktionscache-Invalidierung fehlt.");
 
     runtime::EventScheduler scheduler;
     runtime::Memory platform_memory(256u, runtime::MemoryAlignmentPolicy::Strict);
@@ -181,44 +163,28 @@ Phase6GateReport run_phase6_gate(
     dmac.write_source(0u, 0x00u);
     dmac.write_destination(0u, 0x40u);
     dmac.write_count(0u, 1u);
-    dmac.write_control(
-        0u,
-        dma_auto_byte_increment |
-            runtime::Sh4Dmac::interrupt_enable |
-            runtime::Sh4Dmac::channel_enable
-    );
+    dmac.write_control(0u,
+                       dma_auto_byte_increment | runtime::Sh4Dmac::interrupt_enable |
+                           runtime::Sh4Dmac::channel_enable);
     dmac.write_operation(runtime::Sh4Dmac::master_enable);
 
-    runtime::GdRomAsyncReader gdrom(
-        runtime::GdRomDrive(disc.source),
-        runtime::GdRomTiming{2u, 1u}
-    );
-    static_cast<void>(gdrom.submit({
-        runtime::GdRomCommand::ReadSectors,
-        disc.data_track_lba,
-        1u
-    }));
-    static_cast<void>(scheduler.schedule_at(
-        3u,
-        [&](const runtime::SchedulerEventId, const std::uint64_t cycle) {
+    runtime::GdRomAsyncReader gdrom(runtime::GdRomDrive(disc.source), runtime::GdRomTiming{2u, 1u});
+    static_cast<void>(gdrom.submit({runtime::GdRomCommand::ReadSectors, disc.data_track_lba, 1u}));
+    static_cast<void>(
+        scheduler.schedule_at(3u, [&](const runtime::SchedulerEventId, const std::uint64_t cycle) {
             gdrom.advance_to(cycle);
             const auto completion = gdrom.take_completed();
-            require_gate(
-                completion.has_value() &&
-                    completion->response.status == runtime::GdRomStatus::Good &&
-                    completion->response.transferred_sectors == 1u,
-                "asynchroner GD-ROM-Read wurde nicht erfolgreich abgeschlossen."
-            );
+            require_gate(completion.has_value() &&
+                             completion->response.status == runtime::GdRomStatus::Good &&
+                             completion->response.transferred_sectors == 1u,
+                         "asynchroner GD-ROM-Read wurde nicht erfolgreich abgeschlossen.");
             ++report.gdrom_completions;
             router.set_external_pending(0u, true);
-        }
-    ));
+        }));
 
     const auto advance = scheduler.advance_to(4u, 16u);
-    require_gate(
-        advance.status == runtime::SchedulerAdvanceStatus::ReachedTarget,
-        "Scheduler-Ereignisbudget wurde unerwartet erschoepft."
-    );
+    require_gate(advance.status == runtime::SchedulerAdvanceStatus::ReachedTarget,
+                 "Scheduler-Ereignisbudget wurde unerwartet erschoepft.");
     report.scheduler_events = scheduler.processed_event_count();
     report.scheduler_cycle = scheduler.current_cycle();
     report.scheduler_pending_events = scheduler.pending_event_count();
@@ -234,11 +200,10 @@ Phase6GateReport run_phase6_gate(
     if (router.accept(cpu)) {
         ++report.interrupts_delivered;
     }
-    require_gate(
-        report.interrupts_delivered == 1u &&
-            cpu.intevt == static_cast<std::uint32_t>(runtime::PlatformInterruptSource::ExternalIrl13),
-        "GD-ROM-Abschlussinterrupt wurde nicht angenommen."
-    );
+    require_gate(report.interrupts_delivered == 1u &&
+                     cpu.intevt == static_cast<std::uint32_t>(
+                                       runtime::PlatformInterruptSource::ExternalIrl13),
+                 "GD-ROM-Abschlussinterrupt wurde nicht angenommen.");
 
     report.checkpoint = "SA_PHASE6_MAIN_EXECUTION_STARTED";
     return report;
@@ -246,46 +211,42 @@ Phase6GateReport run_phase6_gate(
 
 std::string serialize_phase6_gate_report(const Phase6GateReport& report) {
     std::ostringstream output;
-    katana::io::write_json_report_header(
-        output, "katana-phase6-gate-v1", "phase6-gate"
-    );
+    katana::io::write_json_report_header(output, "katana-phase6-gate-v1", "phase6-gate");
     output << ",\n"
-        << "  \"schema_version\": 1,\n"
-        << "  \"checkpoint\": " << katana::io::quote_json(report.checkpoint) << ",\n"
-        << "  \"gdi_loaded\": " << bool_json(report.gdi_loaded) << ",\n"
-        << "  \"tracks_validated\": " << report.tracks_validated << ",\n"
-        << "  \"iso9660_mounted\": " << bool_json(report.iso9660_mounted) << ",\n"
-        << "  \"boot_metadata_read\": " << bool_json(report.boot_metadata_read) << ",\n"
-        << "  \"boot_file_loaded\": " << bool_json(report.boot_file_loaded) << ",\n"
-        << "  \"repeated_reads_match\": " << bool_json(report.repeated_reads_match) << ",\n"
-        << "  \"main_executable_entered\": " << bool_json(report.main_executable_entered) << ",\n"
-        << "  \"executed_blocks\": " << report.executed_blocks << ",\n"
-        << "  \"guest_cycles\": " << report.guest_cycles << ",\n"
-        << "  \"scheduler_events\": " << report.scheduler_events << ",\n"
-        << "  \"gdrom_completions\": " << report.gdrom_completions << ",\n"
-        << "  \"tmu_events\": " << report.tmu_events << ",\n"
-        << "  \"dma_events\": " << report.dma_events << ",\n"
-        << "  \"interrupts_delivered\": " << report.interrupts_delivered << ",\n"
-        << "  \"cache_invalidations\": " << report.cache_invalidations << ",\n"
-        << "  \"indirect_dispatches\": " << report.indirect_dispatches << ",\n"
-        << "  \"fallbacks\": " << report.fallbacks << ",\n"
-        << "  \"silent_failures\": " << report.silent_failures << ",\n"
-        << "  \"pvr_frames\": " << report.pvr_frames << ",\n"
-        << "  \"audio_sample_frames\": " << report.audio_sample_frames << ",\n"
-        << "  \"maple_transactions\": " << report.maple_transactions << ",\n"
-        << "  \"last_guest_pc\": \"0x" << std::hex << std::uppercase
-        << std::setw(8) << std::setfill('0') << report.last_guest_pc << "\",\n"
-        << std::dec
-        << "  \"scheduler_cycle\": " << report.scheduler_cycle << ",\n"
-        << "  \"scheduler_pending_events\": " << report.scheduler_pending_events << "\n"
-        << "}\n";
+           << "  \"schema_version\": 1,\n"
+           << "  \"checkpoint\": " << katana::io::quote_json(report.checkpoint) << ",\n"
+           << "  \"gdi_loaded\": " << bool_json(report.gdi_loaded) << ",\n"
+           << "  \"tracks_validated\": " << report.tracks_validated << ",\n"
+           << "  \"iso9660_mounted\": " << bool_json(report.iso9660_mounted) << ",\n"
+           << "  \"boot_metadata_read\": " << bool_json(report.boot_metadata_read) << ",\n"
+           << "  \"boot_file_loaded\": " << bool_json(report.boot_file_loaded) << ",\n"
+           << "  \"repeated_reads_match\": " << bool_json(report.repeated_reads_match) << ",\n"
+           << "  \"main_executable_entered\": " << bool_json(report.main_executable_entered)
+           << ",\n"
+           << "  \"executed_blocks\": " << report.executed_blocks << ",\n"
+           << "  \"guest_cycles\": " << report.guest_cycles << ",\n"
+           << "  \"scheduler_events\": " << report.scheduler_events << ",\n"
+           << "  \"gdrom_completions\": " << report.gdrom_completions << ",\n"
+           << "  \"tmu_events\": " << report.tmu_events << ",\n"
+           << "  \"dma_events\": " << report.dma_events << ",\n"
+           << "  \"interrupts_delivered\": " << report.interrupts_delivered << ",\n"
+           << "  \"cache_invalidations\": " << report.cache_invalidations << ",\n"
+           << "  \"indirect_dispatches\": " << report.indirect_dispatches << ",\n"
+           << "  \"fallbacks\": " << report.fallbacks << ",\n"
+           << "  \"silent_failures\": " << report.silent_failures << ",\n"
+           << "  \"pvr_frames\": " << report.pvr_frames << ",\n"
+           << "  \"audio_sample_frames\": " << report.audio_sample_frames << ",\n"
+           << "  \"maple_transactions\": " << report.maple_transactions << ",\n"
+           << "  \"last_guest_pc\": \"0x" << std::hex << std::uppercase << std::setw(8)
+           << std::setfill('0') << report.last_guest_pc << "\",\n"
+           << std::dec << "  \"scheduler_cycle\": " << report.scheduler_cycle << ",\n"
+           << "  \"scheduler_pending_events\": " << report.scheduler_pending_events << "\n"
+           << "}\n";
     return output.str();
 }
 
-void write_phase6_gate_report(
-    const Phase6GateReport& report,
-    const std::filesystem::path& output_path
-) {
+void write_phase6_gate_report(const Phase6GateReport& report,
+                              const std::filesystem::path& output_path) {
     std::ofstream output(output_path, std::ios::binary | std::ios::trunc);
     if (!output) {
         throw std::runtime_error("Phase-6-Bericht konnte nicht geoeffnet werden.");

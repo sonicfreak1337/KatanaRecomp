@@ -15,11 +15,7 @@ namespace {
 
 constexpr std::uint32_t base_address = 0x100u;
 
-constexpr std::array<std::uint8_t, 8> fixture = {
-    0x7F, 0xC3,
-    0x2B, 0x00, 0x01, 0x70,
-    0x1B, 0x00
-};
+constexpr std::array<std::uint8_t, 8> fixture = {0x7F, 0xC3, 0x2B, 0x00, 0x01, 0x70, 0x1B, 0x00};
 
 void require(const bool condition, const std::string& message) {
     if (!condition) {
@@ -35,10 +31,8 @@ std::vector<katana::ir::Function> build_program() {
     return katana::ir::lower_program(lines, functions);
 }
 
-const katana::ir::Instruction* find_instruction(
-    const std::vector<katana::ir::Function>& program,
-    const std::uint32_t address
-) {
+const katana::ir::Instruction* find_instruction(const std::vector<katana::ir::Function>& program,
+                                                const std::uint32_t address) {
     for (const auto& function : program) {
         for (const auto& block : function.blocks) {
             for (const auto& instruction : block.instructions) {
@@ -57,7 +51,7 @@ int emit_fixture(const std::string& output_path) {
     return output ? EXIT_SUCCESS : EXIT_FAILURE;
 }
 
-}
+} // namespace
 
 int main(const int argc, char* argv[]) {
     using katana::ir::Operation;
@@ -72,58 +66,43 @@ int main(const int argc, char* argv[]) {
     const auto trapa = katana::sh4::decode(0xC3FFu);
     const auto rte = katana::sh4::decode(0x002Bu);
     const auto sleep = katana::sh4::decode(0x001Bu);
-    require(
-        trapa.kind == InstructionKind::TrapAlways &&
-        trapa.immediate == 255 && trapa.control_flow == ControlFlowKind::Trap &&
-        !trapa.is_privileged && trapa.text == "trapa #255",
-        "TRAPA wurde falsch dekodiert."
-    );
-    require(
-        rte.kind == InstructionKind::ReturnFromException &&
-        rte.control_flow == ControlFlowKind::ExceptionReturn &&
-        rte.has_delay_slot && rte.is_privileged && rte.text == "rte",
-        "RTE wurde falsch dekodiert oder markiert."
-    );
-    require(
-        sleep.kind == InstructionKind::Sleep &&
-        sleep.control_flow == ControlFlowKind::Halt &&
-        sleep.is_privileged && sleep.text == "sleep",
-        "SLEEP wurde falsch dekodiert oder markiert."
-    );
+    require(trapa.kind == InstructionKind::TrapAlways && trapa.immediate == 255 &&
+                trapa.control_flow == ControlFlowKind::Trap && !trapa.is_privileged &&
+                trapa.text == "trapa #255",
+            "TRAPA wurde falsch dekodiert.");
+    require(rte.kind == InstructionKind::ReturnFromException &&
+                rte.control_flow == ControlFlowKind::ExceptionReturn && rte.has_delay_slot &&
+                rte.is_privileged && rte.text == "rte",
+            "RTE wurde falsch dekodiert oder markiert.");
+    require(sleep.kind == InstructionKind::Sleep && sleep.control_flow == ControlFlowKind::Halt &&
+                sleep.is_privileged && sleep.text == "sleep",
+            "SLEEP wurde falsch dekodiert oder markiert.");
 
     const auto program = build_program();
     const auto* lowered_trapa = find_instruction(program, 0x100u);
     const auto* lowered_rte = find_instruction(program, 0x102u);
     const auto* delay_slot = find_instruction(program, 0x104u);
     const auto* lowered_sleep = find_instruction(program, 0x106u);
-    require(
-        program.size() == 3u && lowered_trapa != nullptr &&
-        lowered_trapa->operation == Operation::TrapAlways &&
-        lowered_trapa->immediate == 127 && !lowered_trapa->is_privileged,
-        "TRAPA wurde falsch analysiert oder abgesenkt."
-    );
-    require(
-        lowered_rte != nullptr && lowered_rte->operation == Operation::ReturnFromException &&
-        lowered_rte->delay_slot.role == katana::ir::DelaySlotRole::Owner &&
-        lowered_rte->is_privileged && delay_slot != nullptr &&
-        delay_slot->delay_slot.role == katana::ir::DelaySlotRole::Slot &&
-        lowered_rte->delay_slot.counterpart_address == delay_slot->source_address &&
-        delay_slot->delay_slot.counterpart_address == lowered_rte->source_address,
-        "RTE-Delay-Slot wurde falsch analysiert oder abgesenkt."
-    );
-    require(
-        lowered_sleep != nullptr && lowered_sleep->operation == Operation::Sleep &&
-        lowered_sleep->is_privileged,
-        "SLEEP wurde falsch abgesenkt."
-    );
+    require(program.size() == 3u && lowered_trapa != nullptr &&
+                lowered_trapa->operation == Operation::TrapAlways &&
+                lowered_trapa->immediate == 127 && !lowered_trapa->is_privileged,
+            "TRAPA wurde falsch analysiert oder abgesenkt.");
+    require(lowered_rte != nullptr && lowered_rte->operation == Operation::ReturnFromException &&
+                lowered_rte->delay_slot.role == katana::ir::DelaySlotRole::Owner &&
+                lowered_rte->is_privileged && delay_slot != nullptr &&
+                delay_slot->delay_slot.role == katana::ir::DelaySlotRole::Slot &&
+                lowered_rte->delay_slot.counterpart_address == delay_slot->source_address &&
+                delay_slot->delay_slot.counterpart_address == lowered_rte->source_address,
+            "RTE-Delay-Slot wurde falsch analysiert oder abgesenkt.");
+    require(lowered_sleep != nullptr && lowered_sleep->operation == Operation::Sleep &&
+                lowered_sleep->is_privileged,
+            "SLEEP wurde falsch abgesenkt.");
 
     const auto source = katana::codegen::emit_cpp_program(program, base_address);
-    require(
-        source.find("raise_trapa(cpu, 127u, 0x00000100u);") != std::string::npos &&
-        source.find("return_from_exception(cpu);") != std::string::npos &&
-        source.find("cpu.sleeping = true;") != std::string::npos,
-        "Der C++-Emitter bildet die Kontrollpfade nicht sichtbar ab."
-    );
+    require(source.find("raise_trapa(cpu, 127u, 0x00000100u);") != std::string::npos &&
+                source.find("return_from_exception(cpu);") != std::string::npos &&
+                source.find("cpu.sleeping = true;") != std::string::npos,
+            "Der C++-Emitter bildet die Kontrollpfade nicht sichtbar ab.");
 
     std::cout << "Alle KR-1407 Decoder-, Analyse-, IR- und Codegen-Tests erfolgreich.\n";
     return EXIT_SUCCESS;

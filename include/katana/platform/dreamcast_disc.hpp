@@ -30,16 +30,12 @@ struct DreamcastDiscBoot {
     bool repeated_reads_match = false;
 };
 
-[[nodiscard]] DreamcastBootMetadata parse_dreamcast_boot_metadata(
-    std::span<const std::uint8_t> bytes
-);
+[[nodiscard]] DreamcastBootMetadata
+parse_dreamcast_boot_metadata(std::span<const std::uint8_t> bytes);
 
-[[nodiscard]] DreamcastDiscBoot load_dreamcast_gdi_boot(
-    const std::filesystem::path& descriptor_path
-);
+[[nodiscard]] DreamcastDiscBoot
+load_dreamcast_gdi_boot(const std::filesystem::path& descriptor_path);
 
-[[nodiscard]] io::ExecutableImage make_dreamcast_disc_executable(
-    const DreamcastDiscBoot& disc
-);
+[[nodiscard]] io::ExecutableImage make_dreamcast_disc_executable(const DreamcastDiscBoot& disc);
 
 } // namespace katana::platform

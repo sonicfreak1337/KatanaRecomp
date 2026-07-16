@@ -4,7 +4,9 @@
 
 namespace katana::runtime {
 
-std::uint32_t Sh4CacheControl::value() const noexcept { return value_; }
+std::uint32_t Sh4CacheControl::value() const noexcept {
+    return value_;
+}
 
 std::uint64_t Sh4CacheControl::instruction_invalidation_count() const noexcept {
     return instruction_invalidations_;
@@ -36,16 +38,12 @@ std::shared_ptr<Sh4CacheControl> map_sh4_cache_control(Memory& memory) {
             return state->value();
         },
         [state](
-            const std::uint32_t offset,
-            const std::uint32_t value,
-            const MemoryAccessWidth width
-        ) {
+            const std::uint32_t offset, const std::uint32_t value, const MemoryAccessWidth width) {
             if (offset != 0u || width != MemoryAccessWidth::Word) {
                 throw std::invalid_argument("SH-4-CCR erlaubt nur 32-Bit-Zugriffe.");
             }
             state->write(value);
-        }
-    );
+        });
     memory.map_region("sh4-cache-control", sh4_cache_control_address, std::move(device));
     return state;
 }

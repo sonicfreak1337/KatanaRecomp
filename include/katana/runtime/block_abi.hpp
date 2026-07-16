@@ -29,12 +29,7 @@ enum class BlockEndKind : std::uint8_t {
     InterruptSafepoint
 };
 
-enum class BlockSyncPoint : std::uint8_t {
-    Entry,
-    Exit,
-    BackendBoundary,
-    FallbackBoundary
-};
+enum class BlockSyncPoint : std::uint8_t { Entry, Exit, BackendBoundary, FallbackBoundary };
 
 struct BlockExecutionContext {
     std::uint64_t scheduler_cycle = 0u;
@@ -60,24 +55,18 @@ struct BlockExit {
     std::uint32_t exception_owner_pc = 0u;
 };
 
-void validate_block_entry(
-    const CpuState& cpu,
-    const BlockExecutionContext& context,
-    const BlockEntry& entry
-);
+void validate_block_entry(const CpuState& cpu,
+                          const BlockExecutionContext& context,
+                          const BlockEntry& entry);
 
-[[nodiscard]] BlockExit make_block_exit(
-    const CpuState& cpu,
-    BlockExecutionContext& context,
-    BlockEndKind kind,
-    BlockAddress source,
-    std::optional<BlockAddress> target = std::nullopt
-);
+[[nodiscard]] BlockExit make_block_exit(const CpuState& cpu,
+                                        BlockExecutionContext& context,
+                                        BlockEndKind kind,
+                                        BlockAddress source,
+                                        std::optional<BlockAddress> target = std::nullopt);
 
-[[nodiscard]] std::uint32_t effective_exception_pc(
-    const CpuState& cpu,
-    const BlockExecutionContext& context
-) noexcept;
+[[nodiscard]] std::uint32_t effective_exception_pc(const CpuState& cpu,
+                                                   const BlockExecutionContext& context) noexcept;
 
 [[nodiscard]] std::string stable_block_identity(const BlockAddress& address);
 

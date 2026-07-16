@@ -39,13 +39,11 @@ struct ControlFlowAnalysisResult {
     std::vector<SymbolicAddress> symbolic_addresses;
 };
 
-[[nodiscard]] const char* analysis_directive_diagnostic_status_name(
-    AnalysisDirectiveDiagnosticStatus status
-) noexcept;
+[[nodiscard]] const char*
+analysis_directive_diagnostic_status_name(AnalysisDirectiveDiagnosticStatus status) noexcept;
 
-[[nodiscard]] ControlFlowAnalysisResult analyze_control_flow(
-    const katana::io::ExecutableImage& image,
-    const AnalysisOverrides* overrides = nullptr
-);
+[[nodiscard]] ControlFlowAnalysisResult
+analyze_control_flow(const katana::io::ExecutableImage& image,
+                     const AnalysisOverrides* overrides = nullptr);
 
-}
+} // namespace katana::analysis

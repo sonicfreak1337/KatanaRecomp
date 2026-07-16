@@ -9,22 +9,19 @@ namespace katana::codegen {
 namespace {
 
 std::size_t instruction_count(const katana::ir::Function& function) {
-    return std::accumulate(
-        function.blocks.begin(),
-        function.blocks.end(),
-        std::size_t{0u},
-        [](const std::size_t total, const katana::ir::BasicBlock& block) {
-            return total + block.instructions.size();
-        }
-    );
+    return std::accumulate(function.blocks.begin(),
+                           function.blocks.end(),
+                           std::size_t{0u},
+                           [](const std::size_t total, const katana::ir::BasicBlock& block) {
+                               return total + block.instructions.size();
+                           });
 }
 
 } // namespace
 
-std::vector<TranslationUnitPartition> partition_translation_units(
-    const std::span<const katana::ir::Function> functions,
-    const PartitionOptions& options
-) {
+std::vector<TranslationUnitPartition>
+partition_translation_units(const std::span<const katana::ir::Function> functions,
+                            const PartitionOptions& options) {
     if (options.maximum_functions == 0u || options.maximum_instructions == 0u) {
         throw std::invalid_argument("Codegen-Partitionsgrenzen duerfen nicht null sein.");
     }
@@ -35,7 +32,8 @@ std::vector<TranslationUnitPartition> partition_translation_units(
     });
     for (std::size_t index = 1u; index < order.size(); ++index) {
         if (functions[order[index - 1u]].entry_address == functions[order[index]].entry_address) {
-            throw std::invalid_argument("Codegen-Partitionierung erhielt doppelte Funktionseinstiege.");
+            throw std::invalid_argument(
+                "Codegen-Partitionierung erhielt doppelte Funktionseinstiege.");
         }
     }
 
@@ -46,14 +44,13 @@ std::vector<TranslationUnitPartition> partition_translation_units(
             throw std::length_error(
                 "Funktion an Gastadresse " +
                 std::to_string(functions[function_index].entry_address) +
-                " ueberschreitet das Instruktionslimit einer Translation Unit."
-            );
+                " ueberschreitet das Instruktionslimit einer Translation Unit.");
         }
-        const bool needs_partition = result.empty() ||
-            result.back().function_indices.size() >= options.maximum_functions ||
+        const bool needs_partition =
+            result.empty() || result.back().function_indices.size() >= options.maximum_functions ||
             (result.back().instruction_count != 0u &&
-                count > options.maximum_instructions -
-                    std::min(result.back().instruction_count, options.maximum_instructions));
+             count > options.maximum_instructions -
+                         std::min(result.back().instruction_count, options.maximum_instructions));
         if (needs_partition) {
             result.push_back({result.size()});
         }

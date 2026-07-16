@@ -46,7 +46,7 @@ struct SystemReplayEvent {
 };
 
 class SystemReplayLog final {
-public:
+  public:
     void record(SystemReplayEvent event);
     [[nodiscard]] bool try_record(SystemReplayEvent event) noexcept;
     void note_dropped_event() noexcept;
@@ -59,7 +59,7 @@ public:
     [[nodiscard]] std::uint64_t final_guest_state_hash() const;
     [[nodiscard]] std::string serialize_json() const;
 
-private:
+  private:
     std::vector<SystemReplayEvent> events_;
     std::optional<std::uint64_t> last_guest_cycle_;
     std::optional<std::uint64_t> last_time_epoch_;
@@ -68,42 +68,35 @@ private:
 };
 
 class SystemReplayMismatch final : public std::runtime_error {
-public:
+  public:
     SystemReplayMismatch(std::size_t event_index, std::string reason);
     [[nodiscard]] std::size_t event_index() const noexcept;
 
-private:
+  private:
     std::size_t event_index_ = 0u;
 };
 
 class DeterministicSystemReplay final {
-public:
+  public:
     explicit DeterministicSystemReplay(const SystemReplayLog& expected);
     void observe(SystemReplayEvent event);
     void finish(std::uint64_t final_guest_state_hash);
     [[nodiscard]] std::size_t position() const noexcept;
     [[nodiscard]] bool complete() const noexcept;
 
-private:
+  private:
     std::vector<SystemReplayEvent> expected_;
     std::uint64_t expected_guest_state_hash_ = 0u;
     std::size_t position_ = 0u;
     bool finished_ = false;
 };
 
-[[nodiscard]] SystemReplayEvent make_safepoint_replay_event(
-    const SafepointReport& report
-);
+[[nodiscard]] SystemReplayEvent make_safepoint_replay_event(const SafepointReport& report);
 [[nodiscard]] MemoryAccessObserver system_replay_mmio_observer(
-    SystemReplayLog& log,
-    std::function<std::uint64_t()> guest_cycle,
-    std::string code
-);
-[[nodiscard]] std::uint64_t hash_replay_guest_state(
-    const CpuState& cpu,
-    std::uint64_t scheduler_cycle,
-    std::uint64_t subsystem_hash = 0u
-) noexcept;
+    SystemReplayLog& log, std::function<std::uint64_t()> guest_cycle, std::string code);
+[[nodiscard]] std::uint64_t hash_replay_guest_state(const CpuState& cpu,
+                                                    std::uint64_t scheduler_cycle,
+                                                    std::uint64_t subsystem_hash = 0u) noexcept;
 [[nodiscard]] const char* system_replay_event_kind_name(SystemReplayEventKind kind) noexcept;
 
-}
+} // namespace katana::runtime
