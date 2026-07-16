@@ -22,6 +22,14 @@
       "cacheVariables": {
         "KATANA_ENABLE_SANITIZERS": "ON"
       }
+    },
+    {
+      "name": "fuzz-debug",
+      "displayName": "KatanaRecomp deterministic fuzz Debug gate",
+      "inherits": "sanitizer-debug",
+      "cacheVariables": {
+        "KATANA_BUILD_FUZZERS": "ON"
+      }
     }
   ],
   "buildPresets": [
@@ -32,6 +40,10 @@
     {
       "name": "sanitizer-debug",
       "configurePreset": "sanitizer-debug"
+    },
+    {
+      "name": "fuzz-debug",
+      "configurePreset": "fuzz-debug"
     }
   ],
   "testPresets": [
@@ -58,6 +70,11 @@
         "ASAN_OPTIONS": "halt_on_error=1",
         "UBSAN_OPTIONS": "halt_on_error=1:print_stacktrace=1"
       }
+    },
+    {
+      "name": "fuzz-debug",
+      "inherits": "sanitizer-debug",
+      "configurePreset": "fuzz-debug"
     }
   ],
   "workflowPresets": [
@@ -94,6 +111,24 @@
         {
           "type": "test",
           "name": "sanitizer-debug"
+        }
+      ]
+    },
+    {
+      "name": "fuzz-debug",
+      "displayName": "Configure, build and test deterministic fuzz Debug gate",
+      "steps": [
+        {
+          "type": "configure",
+          "name": "fuzz-debug"
+        },
+        {
+          "type": "build",
+          "name": "fuzz-debug"
+        },
+        {
+          "type": "test",
+          "name": "fuzz-debug"
         }
       ]
     }

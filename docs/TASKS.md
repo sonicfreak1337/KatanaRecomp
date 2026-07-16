@@ -1792,9 +1792,23 @@ Akzeptanz:
 - das Profil besitzt keine pauschale Unterdrueckung echter Speicher- oder UB-Fehler
 - die gebuendelte KR-3709-Gatevorbereitung fuehrt das Profil im einzigen frischen Debug-Build aus
 
-### [ ] KR-3703 - Fuzzer
+### [x] KR-3703 - Fuzzer
 
 Abhaengigkeiten: KR-1505, KR-1905
+
+Umfang:
+
+- portablen deterministischen Mutationsfuzzer fuer Decoder, ELF32-SH-Loader und IR bereitstellen
+- dateilosen Loader-Einstieg fuer synthetische Bytefolgen anbieten
+- feste Seeds, Iterationsgrenze und maximale Eingabegroesse als CLI-Vertrag offenlegen
+- alle Fehler mit Ziel, Seed, Iteration und reproduzierbarem Aufruf diagnostizieren
+
+Akzeptanz:
+
+- kein Fuzzer benoetigt Firmware-, Disc- oder Drittanbieterbinaerdaten
+- derselbe Seed und dieselben Optionen erzeugen dieselbe Fallfolge
+- erwartete Eingabeablehnungen gelten nicht als Crasher; unerwartete Fehler bleiben sichtbar
+- der feste Kurzlauf ist Teil des gebuendelten KR-3709-Debugprofils, wird aber nicht pro Task ausgefuehrt
 
 ### [ ] KR-3704 - Coverage
 

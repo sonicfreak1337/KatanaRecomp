@@ -24,8 +24,13 @@
     },
     {
       "id": "fuzzing",
-      "active": false,
-      "owner": "KR-3703"
+      "active": true,
+      "owner": "KR-3703",
+      "configure_preset": "fuzz-debug",
+      "build_preset": "fuzz-debug",
+      "test_preset": "fuzz-debug",
+      "targets": ["decoder", "loader", "ir"],
+      "synthetic_only": true
     },
     {
       "id": "coverage",

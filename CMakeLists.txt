@@ -17,6 +17,12 @@ option(
     OFF
 )
 
+option(
+    KATANA_BUILD_FUZZERS
+    "Build the deterministic synthetic decoder, loader and IR fuzz runner"
+    OFF
+)
+
 if(KATANA_ENABLE_SANITIZERS)
     if(MSVC)
         string(REPLACE "/RTC1" "" CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG}")
@@ -188,6 +194,21 @@ target_compile_definitions(
 katana_enable_warnings(katana-recomp)
 
 enable_testing()
+
+if(KATANA_BUILD_FUZZERS)
+    add_executable(katana-fuzz tools/fuzz/fuzz_runner.cpp)
+    target_link_libraries(katana-fuzz PRIVATE katana_core)
+    katana_enable_warnings(katana-fuzz)
+    add_test(
+        NAME katana-fuzz-smoke
+        COMMAND katana-fuzz
+            --target all
+            --seed 0x3703
+            --iterations 256
+            --max-input-size 4096
+    )
+    set_tests_properties(katana-fuzz-smoke PROPERTIES TIMEOUT 60)
+endif()
 
 add_executable(katana-runtime-tests
     tests/runtime/runtime_tests.cpp

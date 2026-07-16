@@ -181,6 +181,13 @@ void validate_entry_point(
 
 ExecutableImage load_elf32_sh(const std::filesystem::path& path) {
     const auto bytes = read_binary_file(path);
+    return load_elf32_sh(std::span<const std::uint8_t>(bytes), path);
+}
+
+ExecutableImage load_elf32_sh(
+    const std::span<const std::uint8_t> bytes,
+    const std::filesystem::path& path
+) {
     require_range(bytes, 0u, kElf32HeaderSize, path, "ELF32-Header");
 
     if (bytes[0] != 0x7Fu || bytes[1] != 'E' || bytes[2] != 'L' || bytes[3] != 'F') {

@@ -22,6 +22,7 @@
 - KR-3609: Versionierte Systemreplays ordnen CPU-Safepoints, MMIO, DMA, Interrupts, Timer, Schedulercallbacks, Medienereignisse und explizite externe Injektionen ausschliesslich nach Gastzeit. Ereignis- und Gastzustandshash sichern deterministische Wiederholung; fehlende, zusaetzliche oder anders sortierte Ereignisse scheitern am ersten Abweichungsindex.
 - KR-3701: Portable CMake-Presets und `tools/gates/run-debug-gate.ps1` definieren einen frischen lokalen Debug-Build mit vollstaendiger Regression in `build-current/`. Der Profilvertrag haelt Release-Build und Windows-/Linux-CI bis KR-4999 deaktiviert; der zuvor bei jedem Push laufende Debug-/Release-Workflow wurde aus dem aktiven GitHub-Pfad entfernt.
 - KR-3702: Das frische `sanitizer-debug`-Profil aktiviert AddressSanitizer auf MSVC/GCC/Clang und zusaetzlich UndefinedBehaviorSanitizer ohne Recovery auf GCC/Clang. Es verwendet dasselbe CTest-Korpus und ausschliesslich `build-current/`; ausgefuehrt wird es gesammelt in KR-3709 statt pro Task.
+- KR-3703: `katana-fuzz` mutiert synthetische Decoder-, ELF32-SH-Loader- und IR-Eingaben mit reproduzierbaren Seeds, festen Groessen-/Iterationsgrenzen und fallgenauer Fehlerdiagnose. Der Loader besitzt dafuer einen dateilosen Byte-Span-Einstieg; `fuzz-debug` kombiniert den portablen Kurzlauf mit dem Sanitizerprofil fuer KR-3709.
 
 ## [0.34.0] - 2026-07-16
 

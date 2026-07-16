@@ -927,7 +927,7 @@ Fortschritt:
 
 - [x] KR-3701 - Lokale Debug-Gate-Automatisierung
 - [x] KR-3702 - Sanitizer-Builds
-- [ ] KR-3703 - Fuzzer
+- [x] KR-3703 - Fuzzer
 - [ ] KR-3704 - Coverage
 - [ ] KR-3705 - Formatierung und statische Analyse
 - [ ] KR-3706 - Reproduzierbare Release-Artefakte
