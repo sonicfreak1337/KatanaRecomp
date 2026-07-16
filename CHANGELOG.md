@@ -120,6 +120,15 @@
   den zentralen externen Interruptrouter signalisiert. ACK, Maskierung,
   physische/P1/P2-Aliase sowie unbekannte, reservierte und falsch breite MMIO-
   Zugriffe besitzen synthetische Erfolgs- und Fehlerregressionen.
+- KR-4604: Das kumulative v0.46-Vorbereitungsgate besteht 168/168 Tests in
+  genau einem frischen MSVC-x64-Debug-Build mit AddressSanitizer, statischer
+  Analyse und Coverage. Der gemeinsame synthetische HLE-/BIOS-ABI-/ASIC-
+  Vertical-Slice erreicht `KR_V046_RETAIL_BOOT_SERVICES_READY`; Homebrew und
+  Audits melden keine stillen Fehler oder privaten Daten. Ein im ersten Lauf
+  gefundener Handoff-Prioritaetsfehler wurde so korrigiert, dass verifizierte
+  ROM-RAM-Codekopien vor dynamischen Symbolen und Segmenten aufgeloest werden;
+  die vollstaendige Regression lief danach auf demselben Fresh-Build gruen.
+  KR-4605 bleibt vor Release, Tag oder Veroeffentlichung im Nutzerreview.
 - Der neue inkrementelle Entwicklungszyklus behaelt `build-current/`, setzt teure Gate-Instrumentierung beim Debugprofil sicher zurueck und baut sowie testet mit begrenzter Parallelitaet. Das frische Abschluss-Gate bleibt erhalten; die vier deterministischen Fuzzziele laufen mit unveraenderter Fallzahl und denselben abgeleiteten Seeds als parallele CTest-Eintraege.
 - Der Entwicklungsrunner normalisiert auch eine bereits aktive x86-Developer-PowerShell auf die fuer den Projektbuild erforderliche native x64-MSVC-Umgebung.
 - KR-3801 bis KR-3808: Ein intern provenance-gebundenes, vollstaendig

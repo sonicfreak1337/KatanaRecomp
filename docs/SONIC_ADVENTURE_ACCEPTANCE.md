@@ -127,6 +127,8 @@ Kein `KR_...`-Checkpoint behauptet fuer sich Sonic-Kompatibilitaet.
 `KR_V045_BOOT_ANALYSIS_READY` belegt ausschliesslich die synthetische/Homebrew-
 Regression der Bootanalyse. Der Checkpoint behauptet weder einen Sonic-Boot
 noch erzeugte Frames, Audio, Eingabe oder Spielbarkeit.
+`KR_V046_RETAIL_BOOT_SERVICES_READY` belegt ausschliesslich den synthetischen
+HLE-BIOS-ABI-/System-ASIC-Vertical-Slice, keinen Sonic-Boot.
 
 ## Alpha-Gate v0.50.0
 
