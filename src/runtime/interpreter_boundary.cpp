@@ -103,7 +103,8 @@ InterpreterResult PreciseInterpreterBoundary::execute(
         }
         static_cast<void>(code_tracker_->register_block({
             "fallback-" + request.provenance, request.dynamic_physical_address,
-            request.dynamic_size, request.provenance, {}
+            request.dynamic_size, request.provenance, {},
+            ExecutableBlockOrigin::FallbackDecode
         }));
     }
     diagnose(diagnostics_, request, cpu, diagnostic_error, cpu.pc, exception);

@@ -76,10 +76,28 @@ FirmwareTargetResolution FirmwareHandoffMap::resolve(const std::uint32_t virtual
 
 const std::vector<RuntimeFirmwareSymbol>& FirmwareHandoffMap::runtime_symbols() const noexcept { return symbols_; }
 
+const std::vector<FirmwareMapping>& FirmwareHandoffMap::mappings() const noexcept {
+    return mappings_;
+}
+
+const std::vector<FirmwareCodeCopy>& FirmwareHandoffMap::copies() const noexcept {
+    return copies_;
+}
+
 std::size_t FirmwareHandoffMap::canonical_origin_count() const noexcept {
     std::set<std::pair<std::uint32_t, std::uint32_t>> origins;
     for (const auto& mapping : mappings_) { origins.emplace(mapping.physical_start, mapping.size); }
     return origins.size();
+}
+
+const char* firmware_segment_kind_name(const FirmwareSegmentKind value) noexcept {
+    switch (value) {
+        case FirmwareSegmentKind::Rom: return "rom";
+        case FirmwareSegmentKind::Ram: return "ram";
+        case FirmwareSegmentKind::Flash: return "flash";
+        case FirmwareSegmentKind::Mmio: return "mmio";
+    }
+    return "unknown";
 }
 
 } // namespace katana::runtime

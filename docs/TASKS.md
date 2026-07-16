@@ -1719,7 +1719,7 @@ Akzeptanz:
 - Diagnostik veraendert Dispatchentscheidung und Gastzustand nicht
 - die gebuendelte Phase-8-Regression prueft exakte und physische Lookups, alle Herkunftsklassen, Fehlerklassen, Fallbackaktionen, Deduplizierung und ausnahmesichere Beobachtung
 
-### [ ] KR-3608 - Block-, Alias- und Invalidierungsprovenienz
+### [x] KR-3608 - Block-, Alias- und Invalidierungsprovenienz
 
 Abhaengigkeiten: KR-3305, KR-3404, KR-3405, KR-3503
 
@@ -1736,6 +1736,7 @@ Akzeptanz:
 - CPU- und DMA-Schreibzugriffe besitzen unterscheidbare Provenienz
 - ROM-Quellblock und RAM-Zielblock einer Kopie bleiben miteinander verknuepft
 - Berichte enthalten keine kopierten Firmwarebytes
+- die gebuendelte Phase-8-Regression prueft alle Blockherkuenfte, Aliasgruppen, ROM-RAM-Verknuepfung, zeitabhaengige Symbole, CPU-/DMA-/Copy-Writes, Generationen, Links, Drops und JSON-Redaktion
 
 ### [ ] KR-3609 - Deterministische Systemereignis-Replays
 

@@ -32,7 +32,8 @@ BlockRegistrationResult ExecutableCodeTracker::register_block(
     if (duplicate != blocks_.end()) {
         if (duplicate->block.physical_start != block.physical_start ||
             duplicate->block.size != block.size ||
-            duplicate->block.provenance != block.provenance) {
+            duplicate->block.provenance != block.provenance ||
+            duplicate->block.origin != block.origin) {
             throw std::invalid_argument(
                 "Blockidentitaet darf Adresse, Groesse oder Provenienz nicht wechseln."
             );
@@ -67,7 +68,10 @@ CodeInvalidationResult ExecutableCodeTracker::observe_write(
     CodeInvalidationResult result;
     result.source = source;
     result.byte_identical = !bytes_changed;
-    if (!bytes_changed) { return result; }
+    if (!bytes_changed) {
+        record_invalidation_event(address, canonical, size, result);
+        return result;
+    }
 
     const auto first_page = canonical / page_size * page_size;
     const auto final_address = static_cast<std::uint32_t>(canonical + size - 1u);
@@ -95,7 +99,43 @@ CodeInvalidationResult ExecutableCodeTracker::observe_write(
         std::unique(result.unlinked_sources.begin(), result.unlinked_sources.end()),
         result.unlinked_sources.end()
     );
+    record_invalidation_event(address, canonical, size, result);
     return result;
+}
+
+void ExecutableCodeTracker::record_invalidation_event(
+    const std::uint32_t virtual_address,
+    const std::uint32_t physical_address,
+    const std::size_t size,
+    const CodeInvalidationResult& result
+) noexcept {
+    if (next_provenance_sequence_ == std::numeric_limits<std::uint64_t>::max()) {
+        if (dropped_provenance_events_ != std::numeric_limits<std::uint64_t>::max()) {
+            ++dropped_provenance_events_;
+        }
+        return;
+    }
+    try {
+        CodeInvalidationEvent event;
+        event.sequence = next_provenance_sequence_;
+        event.virtual_address = virtual_address;
+        event.physical_address = physical_address;
+        event.size = size;
+        event.source = result.source;
+        event.byte_identical = result.byte_identical;
+        event.invalidated_blocks = result.invalidated_blocks;
+        event.unlinked_sources = result.unlinked_sources;
+        event.pages.reserve(result.changed_pages.size());
+        for (const auto page : result.changed_pages) {
+            event.pages.push_back({page, page_generation(page)});
+        }
+        invalidation_events_.push_back(std::move(event));
+    } catch (...) {
+        if (dropped_provenance_events_ != std::numeric_limits<std::uint64_t>::max()) {
+            ++dropped_provenance_events_;
+        }
+    }
+    ++next_provenance_sequence_;
 }
 
 bool ExecutableCodeTracker::valid(const std::string& identity) const {
@@ -121,5 +161,36 @@ std::size_t ExecutableCodeTracker::incoming_link_count(const std::string& identi
     return found->block.incoming_links.size();
 }
 const std::map<std::uint32_t, std::uint64_t>& ExecutableCodeTracker::hotspots() const noexcept { return hotspots_; }
+
+const std::vector<TrackedExecutableBlock>& ExecutableCodeTracker::blocks() const noexcept {
+    return blocks_;
+}
+
+const std::vector<CodeInvalidationEvent>& ExecutableCodeTracker::invalidation_events() const noexcept {
+    return invalidation_events_;
+}
+
+std::uint64_t ExecutableCodeTracker::dropped_provenance_events() const noexcept {
+    return dropped_provenance_events_;
+}
+
+const char* code_write_source_name(const CodeWriteSource value) noexcept {
+    switch (value) {
+        case CodeWriteSource::Cpu: return "cpu";
+        case CodeWriteSource::Dma: return "dma";
+        case CodeWriteSource::Copy: return "copy";
+    }
+    return "unknown";
+}
+
+const char* executable_block_origin_name(const ExecutableBlockOrigin value) noexcept {
+    switch (value) {
+        case ExecutableBlockOrigin::ImageSegment: return "image-segment";
+        case ExecutableBlockOrigin::RomRamCopy: return "rom-ram-copy";
+        case ExecutableBlockOrigin::FallbackDecode: return "fallback-decode";
+        case ExecutableBlockOrigin::RuntimeWrite: return "runtime-write";
+    }
+    return "unknown";
+}
 
 } // namespace katana::runtime

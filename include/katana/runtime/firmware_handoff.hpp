@@ -33,6 +33,7 @@ struct RuntimeFirmwareSymbol {
     std::uint32_t virtual_address = 0u;
     std::uint32_t physical_address = 0u;
     std::string provenance;
+    std::uint64_t guest_cycle = 0u;
 };
 
 struct FirmwareTargetResolution {
@@ -51,6 +52,8 @@ public:
     void install_runtime_symbol(RuntimeFirmwareSymbol symbol);
     [[nodiscard]] FirmwareTargetResolution resolve(std::uint32_t virtual_address) const;
     [[nodiscard]] const std::vector<RuntimeFirmwareSymbol>& runtime_symbols() const noexcept;
+    [[nodiscard]] const std::vector<FirmwareMapping>& mappings() const noexcept;
+    [[nodiscard]] const std::vector<FirmwareCodeCopy>& copies() const noexcept;
     [[nodiscard]] std::size_t canonical_origin_count() const noexcept;
 
 private:
@@ -58,5 +61,7 @@ private:
     std::vector<FirmwareCodeCopy> copies_;
     std::vector<RuntimeFirmwareSymbol> symbols_;
 };
+
+[[nodiscard]] const char* firmware_segment_kind_name(FirmwareSegmentKind value) noexcept;
 
 } // namespace katana::runtime

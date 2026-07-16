@@ -42,6 +42,7 @@ add_library(katana_runtime STATIC
     src/runtime/dispatch_diagnostics.cpp
     src/runtime/code_invalidation.cpp
     src/runtime/firmware_handoff.cpp
+    src/runtime/runtime_provenance.cpp
     src/runtime/block_dispatch.cpp
     src/runtime/scheduler_safepoint.cpp
     src/runtime/block_guards.cpp
