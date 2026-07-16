@@ -81,6 +81,7 @@ if ($backend -eq "msvc-dynamic") {
         "--output", $report,
         "--output-format", "cobertura",
         "--include-files", (Join-Path $resolvedSource "*"),
+        "--timeout", "900000",
         "--nologo",
         "ctest",
         "--test-dir", $resolvedBuild,
