@@ -1846,9 +1846,23 @@ Akzeptanz:
 - Drittanbieter-, generierte und Buildartefakte liegen ausserhalb des Formatscopes
 - Formatpruefung und statische Analyse laufen gebuendelt in KR-3709, nicht pro Task
 
-### [ ] KR-3706 - Reproduzierbare Release-Artefakte
+### [x] KR-3706 - Reproduzierbare Release-Artefakte
 
 Abhaengigkeiten: KR-3304, KR-3502, KR-3701
+
+Umfang:
+
+- Hostquellpfade aus Debug-Compilerinformationen abbilden und reproduzierbare Linkoptionen aktivieren
+- Katana-CLI, synthetischen Fuzzer und oeffentliche Projektdokumente deterministisch paketieren
+- sortiertes unkomprimiertes ZIP mit festen Zeitstempeln und versioniertem SHA-256-Manifest erzeugen
+- jedes Paket zweimal unabhaengig erzeugen und Bytegleichheit vor Erfolg verlangen
+
+Akzeptanz:
+
+- Paket und Begleitdateien liegen ausschliesslich unter `build-current/artifacts/`
+- ein schmutziger Git-Stand, mehrdeutige Binaerdateien oder absolute Pfade brechen sichtbar ab
+- Disc-, Firmware-, Portexport- und andere private/generierte Eingaben koennen nicht in die feste Paketliste gelangen
+- das Artefakt bleibt als `0.34.0-dev` gekennzeichnet und ist kein vorgezogenes v0.37.0-Release
 
 ### [ ] KR-3707 - Differenztests der Ausfuehrungswege
 

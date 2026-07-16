@@ -930,7 +930,7 @@ Fortschritt:
 - [x] KR-3703 - Fuzzer
 - [x] KR-3704 - Coverage
 - [x] KR-3705 - Formatierung und statische Analyse
-- [ ] KR-3706 - Reproduzierbare Release-Artefakte
+- [x] KR-3706 - Reproduzierbare Release-Artefakte
 - [ ] KR-3707 - Differenztests der Ausfuehrungswege
 - [ ] KR-3708 - Mehrsegment-, Dispatch- und Invalidierungsfuzzing
 - [ ] KR-3709 - Referenz-/Lizenzprovenienz und v0.37 Gate-Vorbereitung

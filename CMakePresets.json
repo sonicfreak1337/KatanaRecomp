@@ -46,6 +46,14 @@
       "cacheVariables": {
         "KATANA_ENABLE_STATIC_ANALYSIS": "ON"
       }
+    },
+    {
+      "name": "artifact-debug",
+      "displayName": "KatanaRecomp reproducible pre-alpha artifact Debug gate",
+      "inherits": "quality-debug",
+      "cacheVariables": {
+        "KATANA_REPRODUCIBLE_ARTIFACTS": "ON"
+      }
     }
   ],
   "buildPresets": [
@@ -68,6 +76,10 @@
     {
       "name": "quality-debug",
       "configurePreset": "quality-debug"
+    },
+    {
+      "name": "artifact-debug",
+      "configurePreset": "artifact-debug"
     }
   ],
   "testPresets": [
@@ -109,6 +121,11 @@
       "name": "quality-debug",
       "inherits": "coverage-debug",
       "configurePreset": "quality-debug"
+    },
+    {
+      "name": "artifact-debug",
+      "inherits": "quality-debug",
+      "configurePreset": "artifact-debug"
     }
   ],
   "workflowPresets": [

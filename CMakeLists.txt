@@ -35,6 +35,12 @@ option(
     OFF
 )
 
+option(
+    KATANA_REPRODUCIBLE_ARTIFACTS
+    "Remove host-path and timestamp variance from pre-alpha Debug artifacts"
+    OFF
+)
+
 if(KATANA_ENABLE_SANITIZERS)
     if(MSVC)
         string(REPLACE "/RTC1" "" CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG}")
@@ -88,6 +94,23 @@ if(KATANA_ENABLE_STATIC_ANALYSIS)
         )
     else()
         message(FATAL_ERROR "KATANA_ENABLE_STATIC_ANALYSIS is unsupported by this compiler")
+    endif()
+endif()
+
+if(KATANA_REPRODUCIBLE_ARTIFACTS)
+    if(MSVC)
+        add_compile_options(
+            /Brepro
+            "/pathmap:${CMAKE_SOURCE_DIR}=."
+        )
+        add_link_options(/Brepro)
+    elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+        add_compile_options(
+            "-ffile-prefix-map=${CMAKE_SOURCE_DIR}=."
+            "-fdebug-prefix-map=${CMAKE_SOURCE_DIR}=."
+        )
+    else()
+        message(FATAL_ERROR "KATANA_REPRODUCIBLE_ARTIFACTS is unsupported by this compiler")
     endif()
 endif()
 

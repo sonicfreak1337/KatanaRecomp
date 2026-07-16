@@ -56,8 +56,15 @@
     },
     {
       "id": "artifact-audit",
-      "active": false,
-      "owner": "KR-3706"
+      "active": true,
+      "owner": "KR-3706",
+      "configure_preset": "artifact-debug",
+      "build_preset": "artifact-debug",
+      "test_preset": "artifact-debug",
+      "package_script": "tools/quality/write-reproducible-artifact.ps1",
+      "output": "build-current/artifacts",
+      "double_generation_required": true,
+      "private_inputs_forbidden": true
     },
     {
       "id": "reference-license-audit",
