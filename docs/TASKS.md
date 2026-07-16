@@ -1407,9 +1407,27 @@ Akzeptanz:
 
 ## v0.35.0 bis v0.37.0 - Werkzeuge und Qualitaet
 
-### [ ] KR-3501 - Manifest-Schema und Versionierung
+### [x] KR-3501 - Manifest-Schema und Versionierung
 
 Abhaengigkeiten: KR-1606
+
+Umfang:
+
+- das bisherige v1-Manifest als expliziten Legacy-Vertrag lesbar halten
+- ein namespaced v2-Schema mit festem Schema-Identifier und getrennten
+  Projekt-, Eingabe-, Image- und Segmentfeldern einfuehren
+- unbekannte Versionen, Schema-Identifier und versionsfremde Felder vor jedem
+  Loaderzugriff sichtbar ablehnen
+
+Akzeptanz:
+
+- v1-Projekte bleiben ohne stille Bedeutungsverschiebung ladbar
+- v2 verlangt `schema = katana-project`, `project.name`, `input.format` und
+  `input.path`; Raw- und ELF-spezifische Layoutregeln bleiben strikt getrennt
+- Fehler nennen Manifest, Zeile und das ungueltige Feld beziehungsweise die
+  nicht unterstuetzte Version
+- die gebuendelte Phase-8-Regression prueft beide Versionen und absichtlich
+  vermischte Feldnamen
 
 ### [ ] KR-3502 - Stabile CLI und Exitcodes
 

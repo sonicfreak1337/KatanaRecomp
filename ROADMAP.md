@@ -859,7 +859,7 @@ Kumulatives Phase-7-Abschlussgate bei v0.34.0:
 
 Fortschritt:
 
-- [ ] KR-3501 - Manifest-Schema und Versionierung
+- [x] KR-3501 - Manifest-Schema und Versionierung
 - [ ] KR-3502 - Stabile CLI und Exitcodes
 - [ ] KR-3503 - JSON-Berichte
 - [ ] KR-3504 - Override- und Hint-Dateien

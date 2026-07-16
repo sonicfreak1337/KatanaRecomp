@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Hinzugefuegt
+
+- KR-3501: Projektmanifeste besitzen ein namespaced v2-Schema mit festem `katana-project`-Identifier und getrennten Projekt-, Eingabe-, Image- und Segmentfeldern. Der v1-Vertrag bleibt kompatibel lesbar; unbekannte Versionen, Schemas und versionsfremde Felder scheitern vor dem Loaderzugriff.
+
 ## [0.34.0] - 2026-07-16
 
 ### Behoben

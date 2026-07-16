@@ -7,6 +7,7 @@
 #include <charconv>
 #include <fstream>
 #include <map>
+#include <set>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -69,6 +70,27 @@ const ManifestValue& require_value(
     return iterator->second;
 }
 
+void reject_unknown_keys(
+    const std::map<std::string, ManifestValue>& values,
+    const std::set<std::string>& known_keys,
+    const std::filesystem::path& path
+) {
+    for (const auto& [key, value] : values) {
+        if (!known_keys.contains(key)) {
+            fail(path, value.line, "unbekanntes Feld " + key + ".");
+        }
+    }
+}
+
+ProjectInputFormat parse_input_format(
+    const ManifestValue& value,
+    const std::filesystem::path& path
+) {
+    if (value.text == "raw") { return ProjectInputFormat::RawBinary; }
+    if (value.text == "elf32-sh") { return ProjectInputFormat::Elf32Sh; }
+    fail(path, value.line, "Eingabeformat muss raw oder elf32-sh sein.");
+}
+
 std::filesystem::path resolve_path(
     const std::filesystem::path& manifest_path,
     const ManifestValue& value
@@ -117,11 +139,6 @@ ProjectManifest parse_project_manifest(const std::filesystem::path& path) {
         throw std::runtime_error("Projektmanifest konnte nicht geoeffnet werden: " + path.string());
     }
 
-    const std::map<std::string, bool> known_keys{
-        {"version", true}, {"format", true}, {"input", true}, {"map", true},
-        {"base_address", true}, {"entry_point", true}, {"segment_name", true},
-        {"segment_kind", true}, {"permissions", true}
-    };
     std::map<std::string, ManifestValue> values;
     std::string line_text;
     std::size_t line_number = 0u;
@@ -140,9 +157,6 @@ ProjectManifest parse_project_manifest(const std::filesystem::path& path) {
         if (key.empty() || value.empty()) {
             fail(path, line_number, "Schluessel und Wert duerfen nicht leer sein.");
         }
-        if (!known_keys.contains(key)) {
-            fail(path, line_number, "unbekanntes Feld " + key + ".");
-        }
         if (!values.emplace(key, ManifestValue{value, line_number}).second) {
             fail(path, line_number, "doppeltes Feld " + key + ".");
         }
@@ -151,48 +165,102 @@ ProjectManifest parse_project_manifest(const std::filesystem::path& path) {
         throw std::runtime_error("Projektmanifest konnte nicht vollstaendig gelesen werden: " + path.string());
     }
 
-    ProjectManifest manifest;
     const auto& version = require_value(values, "version", path);
-    manifest.version = parse_unsigned(version.text, 10, path, version.line, "version");
-    if (manifest.version != 1u) {
-        fail(path, version.line, "nur Manifestversion 1 wird unterstuetzt.");
+    const auto parsed_version = parse_unsigned(
+        version.text, 10, path, version.line, "version"
+    );
+    if (!project_manifest_version_supported(parsed_version)) {
+        fail(
+            path,
+            version.line,
+            "Manifestversion " + std::to_string(parsed_version) +
+                " wird nicht unterstuetzt; erwartet 1 oder 2."
+        );
     }
 
-    const auto& format = require_value(values, "format", path);
-    if (format.text == "raw") {
-        manifest.format = ProjectInputFormat::RawBinary;
-    } else if (format.text == "elf32-sh") {
-        manifest.format = ProjectInputFormat::Elf32Sh;
+    ProjectManifest manifest;
+    manifest.version = parsed_version;
+    std::string format_key;
+    std::string input_key;
+    std::string map_key;
+    std::string base_key;
+    std::string entry_key;
+    std::string segment_name_key;
+    std::string segment_kind_key;
+    std::string permissions_key;
+
+    if (parsed_version == 1u) {
+        reject_unknown_keys(
+            values,
+            {"version", "format", "input", "map", "base_address",
+             "entry_point", "segment_name", "segment_kind", "permissions"},
+            path
+        );
+        manifest.schema = "katana-project-legacy-v1";
+        manifest.project_name = path.stem().string();
+        format_key = "format";
+        input_key = "input";
+        map_key = "map";
+        base_key = "base_address";
+        entry_key = "entry_point";
+        segment_name_key = "segment_name";
+        segment_kind_key = "segment_kind";
+        permissions_key = "permissions";
     } else {
-        fail(path, format.line, "format muss raw oder elf32-sh sein.");
+        reject_unknown_keys(
+            values,
+            {"schema", "version", "project.name", "input.format", "input.path",
+             "input.map", "image.base_address", "image.entry_point",
+             "segment.name", "segment.kind", "segment.permissions"},
+            path
+        );
+        const auto& schema = require_value(values, "schema", path);
+        if (schema.text != project_manifest_schema_name) {
+            fail(path, schema.line, "schema muss katana-project sein.");
+        }
+        manifest.schema = schema.text;
+        manifest.project_name = require_value(values, "project.name", path).text;
+        if (manifest.project_name.empty()) {
+            fail(path, values.at("project.name").line, "project.name darf nicht leer sein.");
+        }
+        format_key = "input.format";
+        input_key = "input.path";
+        map_key = "input.map";
+        base_key = "image.base_address";
+        entry_key = "image.entry_point";
+        segment_name_key = "segment.name";
+        segment_kind_key = "segment.kind";
+        permissions_key = "segment.permissions";
     }
-    manifest.input_path = resolve_path(path, require_value(values, "input", path));
 
-    if (const auto iterator = values.find("map"); iterator != values.end()) {
+    manifest.format = parse_input_format(require_value(values, format_key, path), path);
+    manifest.input_path = resolve_path(path, require_value(values, input_key, path));
+
+    if (const auto iterator = values.find(map_key); iterator != values.end()) {
         manifest.map_path = resolve_path(path, iterator->second);
     }
-    if (const auto iterator = values.find("entry_point"); iterator != values.end()) {
+    if (const auto iterator = values.find(entry_key); iterator != values.end()) {
         manifest.entry_point = parse_unsigned(iterator->second.text, 16, path, iterator->second.line, "entry_point");
     }
-    if (const auto iterator = values.find("base_address"); iterator != values.end()) {
+    if (const auto iterator = values.find(base_key); iterator != values.end()) {
         manifest.base_address = parse_unsigned(iterator->second.text, 16, path, iterator->second.line, "base_address");
     }
-    if (const auto iterator = values.find("segment_name"); iterator != values.end()) {
+    if (const auto iterator = values.find(segment_name_key); iterator != values.end()) {
         manifest.segment_name = iterator->second.text;
     }
-    if (const auto iterator = values.find("segment_kind"); iterator != values.end()) {
+    if (const auto iterator = values.find(segment_kind_key); iterator != values.end()) {
         manifest.segment_kind = parse_segment_kind(iterator->second, path);
     }
-    if (const auto iterator = values.find("permissions"); iterator != values.end()) {
+    if (const auto iterator = values.find(permissions_key); iterator != values.end()) {
         manifest.permissions = parse_permissions(iterator->second, path);
     }
 
     if (manifest.format == ProjectInputFormat::RawBinary && !manifest.base_address.has_value()) {
-        fail(path, 0u, "Raw-Manifeste brauchen base_address.");
+        fail(path, 0u, "Raw-Manifeste brauchen " + base_key + ".");
     }
     if (manifest.format == ProjectInputFormat::Elf32Sh
-        && (manifest.base_address.has_value() || values.contains("segment_name")
-            || values.contains("segment_kind") || values.contains("permissions"))) {
+        && (manifest.base_address.has_value() || values.contains(segment_name_key)
+            || values.contains(segment_kind_key) || values.contains(permissions_key))) {
         fail(path, 0u, "Raw-Adresslayoutfelder sind fuer elf32-sh nicht erlaubt.");
     }
     return manifest;
@@ -227,6 +295,10 @@ const char* project_input_format_name(const ProjectInputFormat format) noexcept 
         case ProjectInputFormat::Elf32Sh: return "elf32-sh";
     }
     return "unknown";
+}
+
+bool project_manifest_version_supported(const std::uint32_t version) noexcept {
+    return version == 1u || version == project_manifest_current_version;
 }
 
 }

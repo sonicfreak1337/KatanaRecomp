@@ -6,8 +6,12 @@
 #include <filesystem>
 #include <optional>
 #include <string>
+#include <string_view>
 
 namespace katana::io {
+
+inline constexpr std::uint32_t project_manifest_current_version = 2u;
+inline constexpr std::string_view project_manifest_schema_name = "katana-project";
 
 enum class ProjectInputFormat {
     RawBinary,
@@ -15,7 +19,9 @@ enum class ProjectInputFormat {
 };
 
 struct ProjectManifest {
-    std::uint32_t version = 1u;
+    std::uint32_t version = project_manifest_current_version;
+    std::string schema = std::string(project_manifest_schema_name);
+    std::string project_name;
     ProjectInputFormat format = ProjectInputFormat::RawBinary;
     std::filesystem::path input_path;
     std::optional<std::filesystem::path> map_path;
@@ -35,5 +41,6 @@ struct ProjectManifest {
 );
 
 [[nodiscard]] const char* project_input_format_name(ProjectInputFormat format) noexcept;
+[[nodiscard]] bool project_manifest_version_supported(std::uint32_t version) noexcept;
 
 }
