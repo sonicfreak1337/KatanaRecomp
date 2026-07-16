@@ -794,7 +794,7 @@ Fortschritt:
 - [x] KR-3403 - Kontrollierter Fallback
 - [x] KR-3404 - Selbstmodifizierenden Code erkennen
 - [x] KR-3405 - Alias- und kopierbewusster Firmware-Handoff
-- [ ] KR-3406 - Kanonischer Block-Dispatch und Blockendklassen
+- [x] KR-3406 - Kanonischer Block-Dispatch und Blockendklassen
 - [ ] KR-3407 - Scheduler-Safepoints und Gastzyklen
 - [ ] KR-3408 - MMU- und Zustandswaechter fuer Blockvarianten
 - [ ] KR-3409 - Praezise Fallback- und Interpretergrenze

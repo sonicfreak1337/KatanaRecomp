@@ -1233,7 +1233,7 @@ Akzeptanz:
 - unsichere oder veraenderte Kopien werden nicht als statisch bewiesen markiert
 - der Task ist fuer den BIOS-freien Direkteinstieg optional und wird nur fuer einen laut KR-2604 unterstuetzten LLE-Pfad zum Release-Blocker
 
-### [ ] KR-3406 - Kanonischer Block-Dispatch und Blockendklassen
+### [x] KR-3406 - Kanonischer Block-Dispatch und Blockendklassen
 
 Abhaengigkeiten: KR-3204, KR-3401, KR-3402
 
