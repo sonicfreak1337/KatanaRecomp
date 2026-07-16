@@ -149,6 +149,12 @@ app::JobResult Model::run_job(const app::JobKind kind,
         job_active_ = true;
         job_progress_ = 0u;
         job_stage_ = "queued";
+        job_step_status_ = app::JobStepStatus::Pending;
+        job_step_current_.reset();
+        job_step_total_.reset();
+        job_elapsed_ms_ = 0u;
+        live_log_.clear();
+        job_events_.clear();
         cancellation_ = cancellation;
     }
     try {
@@ -162,6 +168,17 @@ app::JobResult Model::run_job(const app::JobKind kind,
             std::scoped_lock lock(mutex_);
             job_progress_ = event.progress_percent;
             job_stage_ = event.stage;
+            job_step_status_ = event.step_status;
+            job_step_current_ = event.step_current;
+            job_step_total_ = event.step_total;
+            job_elapsed_ms_ = event.elapsed_ms;
+            if (event.log_chunk) {
+                live_log_ += *event.log_chunk;
+                constexpr std::size_t live_log_limit = 256u * 1024u;
+                if (live_log_.size() > live_log_limit)
+                    live_log_.erase(0u, live_log_.size() - live_log_limit);
+            } else
+                job_events_.push_back(event);
             if (event.diagnostic) diagnostics_.push_back(*event.diagnostic);
         });
         {
@@ -201,6 +218,12 @@ ShellSnapshot Model::snapshot() const {
     result.job_active = job_active_;
     result.job_progress = job_progress_;
     result.job_stage = job_stage_;
+    result.job_step_status = job_step_status_;
+    result.job_step_current = job_step_current_;
+    result.job_step_total = job_step_total_;
+    result.job_elapsed_ms = job_elapsed_ms_;
+    result.live_log = live_log_;
+    result.job_events = job_events_;
     result.diagnostics = diagnostics_;
     result.artifacts = artifacts_;
     return result;
@@ -217,7 +240,13 @@ std::string Model::accessible_summary() const {
                << ", Format " << state.source_format << ", " << state.source_track_count
                << " Tracks. ";
     if (state.job_active)
-        output << "Job " << state.job_stage << ", " << state.job_progress << " Prozent. ";
+        output << "Job " << state.job_stage << ", " << state.job_progress << " Prozent gesamt";
+    if (state.job_active && state.job_step_total)
+        output << ", Schritt " << state.job_step_current.value_or(0u) << " von "
+               << *state.job_step_total;
+    else if (state.job_active)
+        output << ", Schrittfortschritt unbestimmt";
+    if (state.job_active) output << ". ";
     output << state.diagnostics.size() << " Diagnosen und " << state.artifacts.size()
            << " Ergebnisartefakte.";
     return output.str();
@@ -234,6 +263,20 @@ std::string Model::automation_snapshot_json() const {
            << ",\"dirty\":" << (state.project_dirty ? "true" : "false")
            << ",\"job_active\":" << (state.job_active ? "true" : "false")
            << ",\"job_progress\":" << state.job_progress
+           << ",\"job_stage\":" << io::quote_json(state.job_stage) << ",\"job_step_status\":"
+           << io::quote_json(app::job_step_status_name(state.job_step_status))
+           << ",\"job_step_current\":";
+    if (state.job_step_current)
+        output << *state.job_step_current;
+    else
+        output << "null";
+    output << ",\"job_step_total\":";
+    if (state.job_step_total)
+        output << *state.job_step_total;
+    else
+        output << "null";
+    output << ",\"job_elapsed_ms\":" << state.job_elapsed_ms
+           << ",\"job_event_count\":" << state.job_events.size()
            << ",\"diagnostic_count\":" << state.diagnostics.size()
            << ",\"artifact_count\":" << state.artifacts.size() << "}\n";
     return output.str();

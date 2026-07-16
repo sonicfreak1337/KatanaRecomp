@@ -1026,7 +1026,12 @@ int main(const int argc, char* argv[]) {
                 throw std::invalid_argument("workflow erhielt einen unbekannten Jobtyp.");
             katana::app::ApplicationService service;
             const auto result =
-                service.execute({"cli-workflow", kind, argv[3], argv[5], KATANA_RECOMP_VERSION});
+                service.execute({"cli-workflow", kind, argv[3], argv[5], KATANA_RECOMP_VERSION},
+                                {},
+                                [](const katana::app::JobEvent& event) {
+                                    std::cerr << katana::app::format_job_event_json(event);
+                                    std::cerr.flush();
+                                });
             std::cout << katana::app::format_job_result_json(result);
             if (result.state == katana::app::JobState::Completed)
                 return exit_status(ExitCode::Success);

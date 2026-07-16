@@ -147,6 +147,12 @@ dokumentiert.
 C:\ports\game\build\game.exe .\disc\game.gdi
 ```
 
+`workflow` schreibt waehrend des Laufs versionierte Fortschrittsereignisse als
+JSON Lines nach `stderr`; das abschliessende Jobergebnis bleibt als einzelnes
+JSON-Dokument auf `stdout`. Gesamtprozente sind monoton. `step_total: null`
+bedeutet einen tatsaechlich unbestimmten Einzelschritt und niemals null Prozent.
+Die GUI verwendet exakt denselben Ereignisstrom fuer Fortschritt und Live-Log.
+
 Der Port-Export liest private Disc-Dateien nur lokal, schreibt ausschliesslich
 verwaltete Dateien unter `generated/` neu und erhaelt handgeschriebenen Code
 unter `src/`. Details: [docs/PORT_EXPORT.md](docs/PORT_EXPORT.md).

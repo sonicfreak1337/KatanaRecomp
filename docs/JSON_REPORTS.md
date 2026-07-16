@@ -32,7 +32,7 @@ Faehigkeitsbehauptung.
 
 ## Anwendungsjob und Buildplan
 
-`katana-application-job` Version 3 unterscheidet die Endzustaende `completed`,
+`katana-application-job` Version 4 unterscheidet die Endzustaende `completed`,
 `partial`, `failed` und `cancelled`. `partial` ist kein erfolgreicher Build:
 Analyseartefakte bleiben nutzbar, Codegen und Hostkompilierung werden jedoch
 unterdrueckt. Das Feld `analysis` enthaelt committed ausfuehrbare Bytes,
@@ -49,7 +49,19 @@ Kategorien auf ihre bestehenden stabilen Exitcodes ab. `partial` und
 `cancelled` sind keine versteckten Exceptions; ihr Feld bleibt `none`, der
 Prozessstatus ist dennoch ungleich null, solange der Job nicht `completed` ist.
 
-`katana-build-plan` Version 3 spiegelt denselben Zustand und dieselben Metriken.
+`katana-build-plan` Version 4 spiegelt denselben Zustand und dieselben Metriken.
 Bei `status=partial` ist `host_compilation=false`; nur `status=built` darf eine
 veroeffentlichte `game.exe` behaupten. Beide Berichte tragen `tool_version` aus
 derselben CMake-Definition wie CLI, GUI und Portprovenienz.
+
+## Live-Jobereignisse
+
+`katana-job-event` Version 1 ist der gemeinsame geordnete Observerstrom von CLI
+und GUI. `sequence` beginnt je Job bei null. `overall_percent` ist monoton;
+`stage` und `step_status` benennen den aktiven Einzelschritt. `step_current` und
+`step_total` sind entweder gemeinsam gesetzt oder gemeinsam `null`. Ein
+unbekannter Umfang bleibt dadurch unbestimmt. `timestamp_ms` und `elapsed_ms`
+geben Ereigniszeit und Joblaufzeit an. `log_chunk` enthaelt ausschliesslich neu
+beobachtete, bereits redigierte Hostausgabe; Diagnosen stehen typisiert in
+`diagnostic`. Fehler und Abbruch verwenden den aktiven Schritt statt eines
+informationsarmen generischen `failed`-Schritts.

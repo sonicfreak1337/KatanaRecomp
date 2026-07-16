@@ -61,6 +61,13 @@ active hostbuild process tree. Output conflicts are rejected both inside
 `JobCoordinator` and across application processes; unrelated output roots may
 run concurrently.
 
+Application contract version 4 exposes one sequenced hierarchical event stream
+to both CLI and GUI. Known work reports current/total counters; configure and
+compile remain indeterminate until their tools expose a trustworthy total. The
+host process is tailed while running and only newly appended, redacted chunks
+are delivered. The GUI retains a bounded in-memory log and never rereads the
+complete `recompile.log` during refresh.
+
 Generated output is transactional. Each job writes to a short,
 identity-derived sibling staging directory and publishes it only after its
 terminal result is known. Failed or cancelled staging is removed. When a

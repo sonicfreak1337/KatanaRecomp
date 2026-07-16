@@ -78,10 +78,35 @@ int main() {
             "GUI-Build erreicht Ergebnisansicht nicht.");
     const auto snapshot = model.snapshot();
     require(snapshot.project_name == "gui-project" && snapshot.source_name == "program.bin" &&
-                !snapshot.artifacts.empty() && !snapshot.job_active,
+                !snapshot.artifacts.empty() && !snapshot.job_active &&
+                !snapshot.job_events.empty() &&
+                snapshot.job_events.back().stage == "finalization" &&
+                snapshot.job_events.back().step_status == app::JobStepStatus::Completed &&
+                !snapshot.live_log.empty(),
             "GUI-Snapshot verliert Projekt, Quelle, Jobabschluss oder Artefakte.");
+    std::vector<app::JobEvent> direct_events;
+    const auto direct = app::ApplicationService{}.execute(
+        {"direct-build",
+         app::JobKind::Build,
+         manifest,
+         fixture.root / "build-direct",
+         "0.40.0-dev"},
+        {},
+        [&](const app::JobEvent& event) { direct_events.push_back(event); });
+    const auto semantic_events = [](const std::vector<app::JobEvent>& events) {
+        std::vector<std::string> result;
+        for (const auto& event : events) {
+            if (!event.log_chunk)
+                result.push_back(event.stage + ':' + app::job_step_status_name(event.step_status));
+        }
+        return result;
+    };
+    require(direct.state == app::JobState::Completed &&
+                semantic_events(snapshot.job_events) == semantic_events(direct_events),
+            "GUI und direkter CLI-Dienst beobachten nicht dieselbe geordnete Ereignisfolge.");
     const auto automation = model.automation_snapshot_json();
     require(automation.find("gui-project") != std::string::npos &&
+                automation.find("\"job_event_count\":") != std::string::npos &&
                 automation.find(fixture.root.generic_string()) == std::string::npos,
             "Automatisierbarer GUI-Snapshot ist unvollstaendig oder enthaelt Hostpfade.");
     require(model.accessible_summary().find("Projekt gui-project") != std::string::npos,

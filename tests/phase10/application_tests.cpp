@@ -253,7 +253,7 @@ int main() {
                 incomplete_result.analysis_coverage->reachable_abort_edges == 0u &&
                 !incomplete_result.analysis_coverage->control_flow_complete &&
                 incomplete_events.back().state == app::JobState::Partial &&
-                incomplete_json.find("\"version\":3") != std::string::npos &&
+                incomplete_json.find("\"version\":4") != std::string::npos &&
                 incomplete_json.find("\"state\":\"partial\"") != std::string::npos &&
                 incomplete_json.find("\"unresolved_control_flow\":0") != std::string::npos &&
                 incomplete_json.find("\"unanalyzed_executable_bytes\":2097148") !=
@@ -266,7 +266,7 @@ int main() {
     const std::string incomplete_plan_text((std::istreambuf_iterator<char>(incomplete_plan_input)),
                                            std::istreambuf_iterator<char>());
     require(incomplete_plan_text.find("\"status\":\"partial\"") != std::string::npos &&
-                incomplete_plan_text.find("\"version\":3") != std::string::npos &&
+                incomplete_plan_text.find("\"version\":4") != std::string::npos &&
                 incomplete_plan_text.find("\"host_compilation\":false") != std::string::npos &&
                 incomplete_plan_text.find("\"tool_version\":\"0.40.0-dev\"") != std::string::npos,
             "Partieller Buildplan verliert Zustand, Hostbuildgrenze oder Werkzeugversion.");
@@ -363,11 +363,15 @@ int main() {
                 gdi_inspection.tracks.size() == 3u && gdi_inspection.tracks[1].role == "audio" &&
                 gdi_inspection.tracks[2].descriptor_line == 4u,
             "GDI-Projekt oder Trackinspektor verliert Rollen, Reihenfolge oder Zeilenprovenienz.");
-    const auto gdi_job = service.execute({"gdi-build",
-                                          app::JobKind::Build,
-                                          gdi_manifest_path,
-                                          fixture.root / "gdi-build",
-                                          "0.40.0-dev"});
+    std::vector<app::JobEvent> gdi_events;
+    const auto gdi_job =
+        service.execute({"gdi-build",
+                         app::JobKind::Build,
+                         gdi_manifest_path,
+                         fixture.root / "gdi-build",
+                         "0.40.0-dev"},
+                        {},
+                        [&](const app::JobEvent& event) { gdi_events.push_back(event); });
     require(
         gdi_job.state == app::JobState::Completed &&
             std::find(gdi_job.checkpoints.begin(),
@@ -382,19 +386,44 @@ int main() {
         "Synthetische GDI erreicht den gemeinsamen GUI-/CLI-Buildpfad nicht: " +
             (gdi_job.diagnostics.empty() ? std::string("ohne Diagnose")
                                          : gdi_job.diagnostics.back().message));
+    require(!gdi_events.empty() && gdi_events.front().sequence == 0u &&
+                gdi_events.back().state == app::JobState::Completed,
+            "Hierarchische GDI-Ereignisfolge besitzt keine stabilen Grenzen.");
+    bool saw_indeterminate_configuration = false;
+    bool saw_live_log = false;
+    for (std::size_t index = 0u; index < gdi_events.size(); ++index) {
+        const auto& event = gdi_events[index];
+        require(event.sequence == index &&
+                    (index == 0u ||
+                     (event.progress_percent >= gdi_events[index - 1u].progress_percent &&
+                      event.timestamp_ms >= gdi_events[index - 1u].timestamp_ms &&
+                      event.elapsed_ms >= gdi_events[index - 1u].elapsed_ms)),
+                "Jobereignisse verlieren Sequenz, Zeitordnung oder monotonen Gesamtfortschritt.");
+        if (event.step_total)
+            require(event.step_current && *event.step_current <= *event.step_total,
+                    "Bekannter Einzelschritt besitzt ungueltige Zaehler.");
+        if (event.stage == "host-configuration" &&
+            event.step_status == app::JobStepStatus::Running && !event.step_total)
+            saw_indeterminate_configuration = true;
+        if (event.log_chunk && !event.log_chunk->empty()) saw_live_log = true;
+    }
+    require(saw_indeterminate_configuration && saw_live_log &&
+                app::format_job_event_json(gdi_events.front()).find("\"step_total\":null") !=
+                    std::string::npos,
+            "Unbestimmter Hostschritt oder inkrementelles Live-Log fehlt.");
     auto changed_track = boot_track();
     changed_track[payload_offset(21u)] = 0x08u;
-    const auto snapshot_race =
-        service.execute({"snapshot-race",
-                         app::JobKind::Analyze,
-                         gdi_manifest_path,
-                         fixture.root / "snapshot-race",
-                         "0.40.0-dev"},
-                        {},
-                        [&](const app::JobEvent& event) {
-                            if (event.stage == "source-snapshotted")
-                                write_binary(fixture.root / "disc" / "high.bin", changed_track);
-                        });
+    const auto snapshot_race = service.execute(
+        {"snapshot-race",
+         app::JobKind::Analyze,
+         gdi_manifest_path,
+         fixture.root / "snapshot-race",
+         "0.40.0-dev"},
+        {},
+        [&](const app::JobEvent& event) {
+            if (event.stage == "hashing" && event.step_status == app::JobStepStatus::Completed)
+                write_binary(fixture.root / "disc" / "high.bin", changed_track);
+        });
     require(snapshot_race.state == app::JobState::Failed && !snapshot_race.diagnostics.empty() &&
                 snapshot_race.diagnostics.back().message.find("Snapshot") != std::string::npos,
             "Geladenes GDI-Bootimage kann von der ausgewiesenen Provenienz abweichen.");
@@ -432,16 +461,18 @@ int main() {
 
     auto host_cancel = std::make_shared<app::Cancellation>();
     const auto cancelled_host_root = fixture.root / "cancelled-host-build";
-    const auto cancelled_host = service.execute({"cancelled-host",
-                                                 app::JobKind::Build,
-                                                 gdi_manifest_path,
-                                                 cancelled_host_root,
-                                                 "0.40.0-dev"},
-                                                host_cancel,
-                                                [&](const app::JobEvent& event) {
-                                                    if (event.stage == "host-build")
-                                                        host_cancel->request();
-                                                });
+    const auto cancelled_host =
+        service.execute({"cancelled-host",
+                         app::JobKind::Build,
+                         gdi_manifest_path,
+                         cancelled_host_root,
+                         "0.40.0-dev"},
+                        host_cancel,
+                        [&](const app::JobEvent& event) {
+                            if (event.stage == "host-configuration" &&
+                                event.step_status == app::JobStepStatus::Running)
+                                host_cancel->request();
+                        });
     require(cancelled_host.state == app::JobState::Cancelled &&
                 std::filesystem::exists(cancelled_host_root / "job-result.json") &&
                 !std::filesystem::exists(cancelled_host_root / "sourcecode") &&
@@ -458,9 +489,11 @@ int main() {
     gui_model.open_project(gdi_manifest_path);
     const auto gui_job = gui_model.run_job(
         app::JobKind::Analyze, fixture.root / "gdi-gui-build", "gdi-gui-build", "0.40.0-dev");
+    const auto gui_snapshot = gui_model.snapshot();
     require(gui_job.state == app::JobState::Completed &&
                 gui_job.project_identity == gdi_job.project_identity &&
-                gui_model.page() == gui::Page::Results,
+                gui_model.page() == gui::Page::Results && !gui_snapshot.job_events.empty() &&
+                gui_snapshot.job_events.back().stage == "finalization",
             "GUI und direkter Anwendungsdienst erzeugen fuer GDI keine identische Identitaet.");
 
     write_text(fixture.root / "disc" / "disc.gdi", "1\n1 0 4 2352 missing.bin 0\n");

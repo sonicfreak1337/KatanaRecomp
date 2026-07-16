@@ -4,7 +4,8 @@
   "targets": ["windows-x64-win32", "linux-x64-x11"],
   "wayland": "xwayland-alpha",
   "project_schema": "katana-project-v2",
-  "application_contract": 3,
+  "application_contract": 4,
+  "job_event_contract": 1,
   "settings_schema": 1,
   "jobs": ["validate", "analyze", "codegen", "build", "run-preflight"],
   "navigation": [

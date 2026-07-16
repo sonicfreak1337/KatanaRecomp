@@ -24,6 +24,12 @@ struct ShellSnapshot {
     bool job_active = false;
     std::uint32_t job_progress = 0u;
     std::string job_stage;
+    app::JobStepStatus job_step_status = app::JobStepStatus::Pending;
+    std::optional<std::uint64_t> job_step_current;
+    std::optional<std::uint64_t> job_step_total;
+    std::uint64_t job_elapsed_ms = 0u;
+    std::string live_log;
+    std::vector<app::JobEvent> job_events;
     std::vector<app::Diagnostic> diagnostics;
     std::vector<app::JobArtifact> artifacts;
 };
@@ -78,6 +84,12 @@ class Model final {
     bool job_active_ = false;
     std::uint32_t job_progress_ = 0u;
     std::string job_stage_;
+    app::JobStepStatus job_step_status_ = app::JobStepStatus::Pending;
+    std::optional<std::uint64_t> job_step_current_;
+    std::optional<std::uint64_t> job_step_total_;
+    std::uint64_t job_elapsed_ms_ = 0u;
+    std::string live_log_;
+    std::vector<app::JobEvent> job_events_;
     std::vector<app::Diagnostic> diagnostics_;
     std::vector<app::JobArtifact> artifacts_;
 };

@@ -2444,7 +2444,7 @@ Akzeptanz:
   Nichtnull-Exitcode und redigierte Diagnose
 - die Anwendung bettet weder GDI-Daten noch absolute private Hostpfade ein
 
-### [ ] KR-4509 - Hierarchischer Jobfortschritt und Live-Diagnostikvertrag
+### [x] KR-4509 - Hierarchischer Jobfortschritt und Live-Diagnostikvertrag
 
 Abhaengigkeiten: KR-4102, KR-4302, KR-4507
 

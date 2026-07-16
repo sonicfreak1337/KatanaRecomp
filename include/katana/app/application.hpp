@@ -16,7 +16,7 @@
 
 namespace katana::app {
 
-inline constexpr std::uint32_t application_contract_version = 3u;
+inline constexpr std::uint32_t application_contract_version = 4u;
 inline constexpr std::uint32_t settings_schema_version = 1u;
 
 enum class DiagnosticSeverity : std::uint8_t { Information, Warning, Error };
@@ -86,6 +86,7 @@ void remember_recent_project(UserSettings& settings, const std::filesystem::path
 
 enum class JobKind : std::uint8_t { Validate, Analyze, Codegen, Build, RunPreflight };
 enum class JobState : std::uint8_t { Queued, Running, Completed, Partial, Failed, Cancelled };
+enum class JobStepStatus : std::uint8_t { Pending, Running, Completed, Failed, Cancelled, Skipped };
 enum class JobFailureCategory : std::uint8_t {
     None,
     InputOutput,
@@ -117,9 +118,16 @@ struct JobRequest {
 
 struct JobEvent {
     std::string job_id;
+    std::uint64_t sequence = 0u;
     JobState state = JobState::Queued;
     std::uint32_t progress_percent = 0u;
     std::string stage;
+    JobStepStatus step_status = JobStepStatus::Pending;
+    std::optional<std::uint64_t> step_current;
+    std::optional<std::uint64_t> step_total;
+    std::uint64_t timestamp_ms = 0u;
+    std::uint64_t elapsed_ms = 0u;
+    std::optional<std::string> log_chunk;
     std::optional<Diagnostic> diagnostic;
 };
 
@@ -182,9 +190,11 @@ class JobCoordinator final {
 
 [[nodiscard]] const char* job_kind_name(JobKind kind) noexcept;
 [[nodiscard]] const char* job_state_name(JobState state) noexcept;
+[[nodiscard]] const char* job_step_status_name(JobStepStatus status) noexcept;
 [[nodiscard]] const char* job_failure_category_name(JobFailureCategory category) noexcept;
 [[nodiscard]] std::string redact_sensitive_text(std::string_view text);
 [[nodiscard]] std::string format_source_inspection_json(const SourceInspection& inspection);
 [[nodiscard]] std::string format_job_result_json(const JobResult& result);
+[[nodiscard]] std::string format_job_event_json(const JobEvent& event);
 
 } // namespace katana::app

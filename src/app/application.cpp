@@ -16,6 +16,7 @@
 
 #include <algorithm>
 #include <charconv>
+#include <chrono>
 #include <cstdlib>
 #include <cwctype>
 #include <fstream>
@@ -24,6 +25,7 @@
 #include <sstream>
 #include <stdexcept>
 #include <system_error>
+#include <thread>
 #include <unordered_set>
 
 #ifdef _WIN32
@@ -36,6 +38,7 @@
 #include <csignal>
 #include <fcntl.h>
 #include <sys/file.h>
+#include <sys/wait.h>
 #include <unistd.h>
 #endif
 
@@ -296,14 +299,55 @@ Diagnostic make_error(std::string code, const std::string_view message, std::str
             std::nullopt};
 }
 
-void notify(const JobObserver& observer,
-            const JobRequest& request,
-            const JobState state,
-            const std::uint32_t progress,
-            std::string stage,
-            std::optional<Diagnostic> diagnostic = std::nullopt) {
-    if (observer) observer({request.id, state, progress, std::move(stage), std::move(diagnostic)});
-}
+class JobEventStream final {
+  public:
+    JobEventStream(const JobRequest& request, const JobObserver& observer)
+        : request_(request), observer_(observer), started_(std::chrono::steady_clock::now()) {}
+
+    void emit(const JobState state,
+              const std::uint32_t progress,
+              std::string stage,
+              std::optional<Diagnostic> diagnostic = std::nullopt,
+              JobStepStatus step_status = JobStepStatus::Running,
+              std::optional<std::uint64_t> current = std::nullopt,
+              std::optional<std::uint64_t> total = std::nullopt,
+              std::optional<std::string> log_chunk = std::nullopt) {
+        if (!observer_) return;
+        if (total && (!current || *current > *total))
+            throw std::logic_error("Jobfortschrittszaehler ist ungueltig.");
+        last_progress_ = std::max(last_progress_, progress);
+        if (state == JobState::Running && step_status == JobStepStatus::Running)
+            active_stage_ = stage;
+        const auto now = std::chrono::system_clock::now().time_since_epoch();
+        const auto elapsed = std::chrono::steady_clock::now() - started_;
+        observer_({request_.id,
+                   sequence_++,
+                   state,
+                   last_progress_,
+                   std::move(stage),
+                   step_status,
+                   current,
+                   total,
+                   static_cast<std::uint64_t>(
+                       std::chrono::duration_cast<std::chrono::milliseconds>(now).count()),
+                   static_cast<std::uint64_t>(
+                       std::chrono::duration_cast<std::chrono::milliseconds>(elapsed).count()),
+                   std::move(log_chunk),
+                   std::move(diagnostic)});
+    }
+
+    [[nodiscard]] const std::string& active_stage() const noexcept {
+        return active_stage_;
+    }
+
+  private:
+    const JobRequest& request_;
+    const JobObserver& observer_;
+    std::chrono::steady_clock::time_point started_;
+    std::uint64_t sequence_ = 0u;
+    std::uint32_t last_progress_ = 0u;
+    std::string active_stage_ = "queued";
+};
 
 void require_not_cancelled(const std::shared_ptr<Cancellation>& cancellation) {
     if (cancellation && cancellation->requested()) throw JobState::Cancelled;
@@ -510,8 +554,55 @@ std::string shell_quote(const std::filesystem::path& path) {
 void run_host_command(const std::string& command,
                       const char* stage,
                       const std::filesystem::path& log_path,
-                      const std::shared_ptr<Cancellation>& cancellation) {
+                      const std::shared_ptr<Cancellation>& cancellation,
+                      JobEventStream& events,
+                      const std::uint32_t overall_progress,
+                      const std::string_view event_stage,
+                      std::uint64_t& log_offset) {
     int status = 0;
+    std::string pending_log;
+    const auto emit_log = [&](const bool flush) {
+        if (!std::filesystem::exists(log_path)) return;
+        std::ifstream input(log_path, std::ios::binary);
+        input.seekg(0, std::ios::end);
+        const auto end = input.tellg();
+        if (end < 0 || static_cast<std::uint64_t>(end) <= log_offset) {
+            if (flush && !pending_log.empty()) {
+                events.emit(JobState::Running,
+                            overall_progress,
+                            std::string(event_stage),
+                            {},
+                            JobStepStatus::Running,
+                            {},
+                            {},
+                            redact_sensitive_text(pending_log));
+                pending_log.clear();
+            }
+            return;
+        }
+        input.seekg(static_cast<std::streamoff>(log_offset));
+        std::string appended((std::istreambuf_iterator<char>(input)),
+                             std::istreambuf_iterator<char>());
+        log_offset = static_cast<std::uint64_t>(end);
+        pending_log += appended;
+        auto emit_size = pending_log.size();
+        if (!flush) {
+            const auto newline = pending_log.find_last_of("\r\n");
+            if (newline == std::string::npos) return;
+            emit_size = newline + 1u;
+        }
+        auto chunk = pending_log.substr(0u, emit_size);
+        pending_log.erase(0u, emit_size);
+        if (!chunk.empty())
+            events.emit(JobState::Running,
+                        overall_progress,
+                        std::string(event_stage),
+                        {},
+                        JobStepStatus::Running,
+                        {},
+                        {},
+                        redact_sensitive_text(chunk));
+    };
 #ifdef _WIN32
     auto command_line = command;
     SECURITY_ATTRIBUTES security{};
@@ -559,6 +650,7 @@ void run_host_command(const std::string& command,
     }
     for (;;) {
         const auto wait = WaitForSingleObject(process.hProcess, 50u);
+        emit_log(false);
         if (wait == WAIT_OBJECT_0) break;
         if (wait == WAIT_FAILED) {
             terminate_process_tree(process.dwProcessId);
@@ -584,9 +676,42 @@ void run_host_command(const std::string& command,
     CloseHandle(log_handle);
 #else
     require_not_cancelled(cancellation);
-    status = std::system((command + " >> " + shell_quote(log_path) + " 2>&1").c_str());
-    require_not_cancelled(cancellation);
+    const auto child = ::fork();
+    if (child < 0) throw std::runtime_error("Hostbuild-Prozess konnte nicht gestartet werden.");
+    if (child == 0) {
+        static_cast<void>(::setpgid(0, 0));
+        const auto descriptor =
+            ::open(log_path.c_str(), O_CREAT | O_WRONLY | O_APPEND, static_cast<mode_t>(0600));
+        if (descriptor < 0) ::_exit(127);
+        static_cast<void>(::dup2(descriptor, STDOUT_FILENO));
+        static_cast<void>(::dup2(descriptor, STDERR_FILENO));
+        ::close(descriptor);
+        ::execl("/bin/sh", "sh", "-c", command.c_str(), static_cast<char*>(nullptr));
+        ::_exit(127);
+    }
+    static_cast<void>(::setpgid(child, child));
+    int wait_status = 0;
+    for (;;) {
+        const auto waited = ::waitpid(child, &wait_status, WNOHANG);
+        emit_log(false);
+        if (waited == child) break;
+        if (waited < 0) {
+            status = 1;
+            break;
+        }
+        if (cancellation && cancellation->requested()) {
+            static_cast<void>(::kill(-child, SIGTERM));
+            static_cast<void>(::waitpid(child, &wait_status, 0));
+            throw JobState::Cancelled;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    }
+    if (WIFEXITED(wait_status))
+        status = WEXITSTATUS(wait_status);
+    else
+        status = 1;
 #endif
+    emit_log(true);
     auto log = std::filesystem::exists(log_path) ? read_text(log_path) : std::string{};
     log = redact_sensitive_text(log);
     write_atomic(log_path, log);
@@ -604,7 +729,9 @@ void configure_and_build(const std::filesystem::path& source,
                          const std::filesystem::path& runtime_root,
                          const std::string_view target,
                          const std::filesystem::path& log_path,
-                         const std::shared_ptr<Cancellation>& cancellation) {
+                         const std::shared_ptr<Cancellation>& cancellation,
+                         JobEventStream& events) {
+    std::uint64_t log_offset = 0u;
     auto configure = std::string("cmake -S ") + shell_quote(source) + " -B " + shell_quote(build);
 #ifdef _WIN32
     configure += " -G \"Visual Studio 17 2022\" -A x64";
@@ -613,7 +740,14 @@ void configure_and_build(const std::filesystem::path& source,
 #endif
     configure += " -DKATANA_RUNTIME_ROOT=" + shell_quote(runtime_root);
     try {
-        run_host_command(configure, "configure", log_path, cancellation);
+        run_host_command(configure,
+                         "configure",
+                         log_path,
+                         cancellation,
+                         events,
+                         78u,
+                         "host-configuration",
+                         log_offset);
     } catch (const std::runtime_error& error) {
         std::string detail;
         for (const auto& name : {"CMakeConfigureLog.yaml", "CMakeError.log", "CMakeOutput.log"}) {
@@ -626,12 +760,15 @@ void configure_and_build(const std::filesystem::path& source,
         throw std::runtime_error(std::string(error.what()) + "\nCMake-Konfigurationsdetail:\n" +
                                  detail);
     }
+    events.emit(JobState::Running, 80u, "host-configuration", {}, JobStepStatus::Completed, 1u, 1u);
+    events.emit(JobState::Running, 80u, "host-compilation", {}, JobStepStatus::Running);
     auto compile =
         std::string("cmake --build ") + shell_quote(build) + " --target " + std::string(target);
 #ifdef _WIN32
     compile += " --config Debug";
 #endif
-    run_host_command(compile, "compile", log_path, cancellation);
+    run_host_command(
+        compile, "compile", log_path, cancellation, events, 90u, "host-compilation", log_offset);
 }
 
 std::string result_index_json(const io::LoadedProject& project,
@@ -744,7 +881,7 @@ std::string build_plan_json(const std::string_view status,
                             const AnalysisCoverage& coverage,
                             const bool host_compilation) {
     std::ostringstream output;
-    output << "{\"schema\":\"katana-build-plan\",\"version\":3,\"status\":"
+    output << "{\"schema\":\"katana-build-plan\",\"version\":4,\"status\":"
            << io::quote_json(status) << ",\"tool_version\":" << io::quote_json(tool_version)
            << ",\"native_execution\":false,\"host_compilation\":"
            << (host_compilation ? "true" : "false")
@@ -997,13 +1134,23 @@ JobResult ApplicationService::execute(const JobRequest& request,
         }
         std::filesystem::create_directories(work_root);
     }
-    notify(observer, request, JobState::Queued, 0u, "queued");
-    notify(observer, request, JobState::Running, 5u, "load-project");
+    JobEventStream events(request, observer);
+    events.emit(JobState::Queued, 0u, "queued", {}, JobStepStatus::Pending);
+    events.emit(JobState::Running, 2u, "validation", {}, JobStepStatus::Running);
     try {
         require_not_cancelled(cancellation);
         auto manifest = io::parse_project_manifest(request.manifest_path);
+        events.emit(JobState::Running, 5u, "validation", {}, JobStepStatus::Completed, 1u, 1u);
+        events.emit(JobState::Running, 5u, "hashing", {}, JobStepStatus::Running);
         const auto snapshot = capture_project_snapshot(manifest, cancellation);
-        notify(observer, request, JobState::Running, 10u, "source-snapshotted");
+        events.emit(JobState::Running,
+                    12u,
+                    "hashing",
+                    {},
+                    JobStepStatus::Completed,
+                    snapshot.inputs.size(),
+                    snapshot.inputs.size());
+        events.emit(JobState::Running, 12u, "boot-image", {}, JobStepStatus::Running);
         require_not_cancelled(cancellation);
         const auto project = io::load_project(std::move(manifest));
         if (!same_snapshot(snapshot,
@@ -1015,7 +1162,7 @@ JobResult ApplicationService::execute(const JobRequest& request,
         result.project_identity = project_identity(project.execution_profile, snapshot);
         result.failure_category = JobFailureCategory::Processing;
         result.checkpoints.push_back("project-validated");
-        notify(observer, request, JobState::Running, 20u, "source-validated");
+        events.emit(JobState::Running, 20u, "boot-image", {}, JobStepStatus::Completed, 1u, 1u);
         require_not_cancelled(cancellation);
         if (request.kind == JobKind::Validate) {
             const auto report_path = work_root / "source-inspection.json";
@@ -1028,11 +1175,18 @@ JobResult ApplicationService::execute(const JobRequest& request,
                 overrides = analysis::parse_analysis_overrides(
                     *project.execution_profile.analysis_overrides_path);
             }
+            events.emit(JobState::Running, 20u, "analysis", {}, JobStepStatus::Running);
             const auto analysis =
                 analysis::analyze_control_flow(project.image, overrides ? &*overrides : nullptr);
             result.analysis_coverage = analysis_coverage(project, analysis);
             result.checkpoints.push_back("analysis-complete");
-            notify(observer, request, JobState::Running, 45u, "analysis-complete");
+            events.emit(JobState::Running,
+                        45u,
+                        "analysis",
+                        {},
+                        JobStepStatus::Completed,
+                        result.analysis_coverage->analyzed_instruction_bytes,
+                        result.analysis_coverage->committed_executable_bytes);
             require_not_cancelled(cancellation);
             const auto analysis_json = analysis::format_control_flow_analysis_json(analysis);
             const auto analysis_path = work_root / "analysis.json";
@@ -1083,17 +1237,27 @@ JobResult ApplicationService::execute(const JobRequest& request,
                         {"build-plan", "build-plan.json", artifact_hash(build_report)});
                 }
             } else if (request.kind != JobKind::Analyze) {
+                events.emit(JobState::Running, 45u, "ir", {}, JobStepStatus::Running);
                 auto program = ir::lower_program(analysis);
                 static_cast<void>(ir::optimize_program(program));
                 ir::require_valid_program(program);
+                events.emit(JobState::Running,
+                            55u,
+                            "ir",
+                            {},
+                            JobStepStatus::Completed,
+                            program.size(),
+                            program.size());
                 const auto entry = project.execution_profile.entry_point.value_or(
                     project.image.entry_points().empty() ? 0u
                                                          : project.image.entry_points().front());
                 if (entry == 0u)
                     throw std::runtime_error("Projekt besitzt keinen Codegen-Einstieg.");
+                events.emit(JobState::Running, 55u, "codegen", {}, JobStepStatus::Running);
                 const auto source = codegen::emit_cpp_program(program, entry);
                 result.checkpoints.push_back("codegen-complete");
-                notify(observer, request, JobState::Running, 70u, "codegen-complete");
+                events.emit(
+                    JobState::Running, 70u, "codegen", {}, JobStepStatus::Completed, 1u, 1u);
                 require_not_cancelled(cancellation);
                 const bool gdi_host_build =
                     (request.kind == JobKind::Build || request.kind == JobKind::RunPreflight) &&
@@ -1130,14 +1294,23 @@ JobResult ApplicationService::execute(const JobRequest& request,
                             {"game", request.tool_version, {}, {}}));
                         require_not_cancelled(cancellation);
                         const auto host_build_root = work_root / ".katana-build";
-                        notify(observer, request, JobState::Running, 80u, "host-build");
+                        events.emit(JobState::Running,
+                                    72u,
+                                    "host-configuration",
+                                    {},
+                                    JobStepStatus::Running);
                         configure_and_build(host_root,
                                             host_build_root,
                                             runtime_root,
                                             "game",
                                             host_log,
-                                            cancellation);
-                        notify(observer, request, JobState::Running, 95u, "host-build-complete");
+                                            cancellation,
+                                            events);
+                        events.emit(JobState::Running,
+                                    95u,
+                                    "host-compilation",
+                                    {},
+                                    JobStepStatus::Completed);
                         const auto executable = host_build_root /
 #ifdef _WIN32
                                                 "Debug" / "game.exe";
@@ -1159,14 +1332,23 @@ JobResult ApplicationService::execute(const JobRequest& request,
                                 "Temporaeres Hostbuildverzeichnis konnte nicht entfernt werden.");
                     } else {
                         const auto generated_root = work_root / "generated";
-                        notify(observer, request, JobState::Running, 80u, "host-build");
+                        events.emit(JobState::Running,
+                                    72u,
+                                    "host-configuration",
+                                    {},
+                                    JobStepStatus::Running);
                         configure_and_build(generated_root,
                                             work_root / "host-build",
                                             runtime_root,
                                             "katana_generated",
                                             host_log,
-                                            cancellation);
-                        notify(observer, request, JobState::Running, 95u, "host-build-complete");
+                                            cancellation,
+                                            events);
+                        events.emit(JobState::Running,
+                                    95u,
+                                    "host-compilation",
+                                    {},
+                                    JobStepStatus::Completed);
                     }
                     result.artifacts.push_back(
                         {"recompile-log", "recompile.log", artifact_hash(host_log)});
@@ -1193,6 +1375,7 @@ JobResult ApplicationService::execute(const JobRequest& request,
         }
         require_not_cancelled(cancellation);
         result.failure_category = JobFailureCategory::Processing;
+        events.emit(JobState::Running, 96u, "finalization", {}, JobStepStatus::Running);
         if (!same_snapshot(snapshot,
                            capture_project_snapshot(project.execution_profile, cancellation))) {
             throw std::runtime_error(
@@ -1202,11 +1385,7 @@ JobResult ApplicationService::execute(const JobRequest& request,
                            ? JobState::Partial
                            : JobState::Completed;
         result.failure_category = JobFailureCategory::None;
-        notify(observer,
-               request,
-               result.state,
-               100u,
-               result.state == JobState::Partial ? "partial" : "completed");
+        events.emit(result.state, 100u, "finalization", {}, JobStepStatus::Completed, 1u, 1u);
     } catch (const JobState state) {
         result.state = state;
         result.failure_category = JobFailureCategory::None;
@@ -1214,7 +1393,11 @@ JobResult ApplicationService::execute(const JobRequest& request,
             make_error("job-cancelled",
                        "Job wurde kontrolliert abgebrochen.",
                        "Der Job kann mit denselben Eingaben wiederholt werden."));
-        notify(observer, request, state, 100u, "cancelled", result.diagnostics.back());
+        events.emit(state,
+                    100u,
+                    events.active_stage(),
+                    result.diagnostics.back(),
+                    JobStepStatus::Cancelled);
     } catch (const io::InputOutputError& error) {
         result.state = JobState::Failed;
         result.failure_category = JobFailureCategory::InputOutput;
@@ -1222,7 +1405,11 @@ JobResult ApplicationService::execute(const JobRequest& request,
             make_error("job-input-output-failed",
                        error.what(),
                        "Eingabe- und Ausgabepfade sowie Zugriffsrechte pruefen."));
-        notify(observer, request, JobState::Failed, 100u, "failed", result.diagnostics.back());
+        events.emit(JobState::Failed,
+                    100u,
+                    events.active_stage(),
+                    result.diagnostics.back(),
+                    JobStepStatus::Failed);
     } catch (const std::filesystem::filesystem_error& error) {
         result.state = JobState::Failed;
         result.failure_category = JobFailureCategory::InputOutput;
@@ -1230,14 +1417,22 @@ JobResult ApplicationService::execute(const JobRequest& request,
             make_error("job-input-output-failed",
                        error.what(),
                        "Eingabe- und Ausgabepfade sowie Zugriffsrechte pruefen."));
-        notify(observer, request, JobState::Failed, 100u, "failed", result.diagnostics.back());
+        events.emit(JobState::Failed,
+                    100u,
+                    events.active_stage(),
+                    result.diagnostics.back(),
+                    JobStepStatus::Failed);
     } catch (const std::exception& error) {
         result.state = JobState::Failed;
         result.diagnostics.push_back(
             make_error("job-failed",
                        error.what(),
                        "Quelle und Projekteinstellungen pruefen und Job wiederholen."));
-        notify(observer, request, JobState::Failed, 100u, "failed", result.diagnostics.back());
+        events.emit(JobState::Failed,
+                    100u,
+                    events.active_stage(),
+                    result.diagnostics.back(),
+                    JobStepStatus::Failed);
     }
     if (transactional && result.state != JobState::Completed && result.state != JobState::Partial)
         result.artifacts.clear();
@@ -1323,6 +1518,24 @@ const char* job_state_name(const JobState state) noexcept {
         return "failed";
     case JobState::Cancelled:
         return "cancelled";
+    }
+    return "unknown";
+}
+
+const char* job_step_status_name(const JobStepStatus status) noexcept {
+    switch (status) {
+    case JobStepStatus::Pending:
+        return "pending";
+    case JobStepStatus::Running:
+        return "running";
+    case JobStepStatus::Completed:
+        return "completed";
+    case JobStepStatus::Failed:
+        return "failed";
+    case JobStepStatus::Cancelled:
+        return "cancelled";
+    case JobStepStatus::Skipped:
+        return "skipped";
     }
     return "unknown";
 }
@@ -1467,6 +1680,39 @@ std::string format_job_result_json(const JobResult& result) {
         output << io::quote_json(result.checkpoints[index]);
     }
     output << "]}\n";
+    return output.str();
+}
+
+std::string format_job_event_json(const JobEvent& event) {
+    std::ostringstream output;
+    output << "{\"schema\":\"katana-job-event\",\"version\":1,\"job_id\":"
+           << io::quote_json(event.job_id) << ",\"sequence\":" << event.sequence
+           << ",\"state\":" << io::quote_json(job_state_name(event.state))
+           << ",\"overall_percent\":" << event.progress_percent
+           << ",\"stage\":" << io::quote_json(event.stage)
+           << ",\"step_status\":" << io::quote_json(job_step_status_name(event.step_status))
+           << ",\"step_current\":";
+    if (event.step_current)
+        output << *event.step_current;
+    else
+        output << "null";
+    output << ",\"step_total\":";
+    if (event.step_total)
+        output << *event.step_total;
+    else
+        output << "null";
+    output << ",\"timestamp_ms\":" << event.timestamp_ms << ",\"elapsed_ms\":" << event.elapsed_ms
+           << ",\"log_chunk\":";
+    if (event.log_chunk)
+        output << io::quote_json(*event.log_chunk);
+    else
+        output << "null";
+    output << ",\"diagnostic\":";
+    if (event.diagnostic)
+        output << diagnostic_json(*event.diagnostic);
+    else
+        output << "null";
+    output << "}\n";
     return output.str();
 }
 

@@ -57,6 +57,14 @@
   eine strukturierte Illegal-Instruction-Ausnahme mit stabilem Gast-PC und
   Delay-Slot-Kontext; Supervisor-Ausfuehrung, SR-/FPSCR-Maskierung und
   Registerbankwechsel bleiben durch gemeinsame End-to-End-Tests abgesichert.
+- KR-4509: Der gemeinsame Anwendungsjob-Vertrag Version 4 liefert geordnete
+  `katana-job-event`-Ereignisse fuer Validierung, Hashing, Bootimage, Analyse,
+  IR, Codegen, Hostkonfiguration, Kompilierung und Abschluss. Ereignisse tragen
+  monotone Gesamtprozente, Schrittstatus, optionale Zaehler, Zeitstempel,
+  Laufzeit und redigierte inkrementelle Log-Chunks. CLI und GUI konsumieren
+  denselben Observerstrom; unbekannte Schrittgroessen bleiben ohne erfundene
+  Prozentzahl. Fehler und Abbruch behalten den aktiven Schrittnamen. Die GUI
+  liest das Buildlog nicht mehr periodisch von der Datei neu ein.
 - Der neue inkrementelle Entwicklungszyklus behaelt `build-current/`, setzt teure Gate-Instrumentierung beim Debugprofil sicher zurueck und baut sowie testet mit begrenzter Parallelitaet. Das frische Abschluss-Gate bleibt erhalten; die vier deterministischen Fuzzziele laufen mit unveraenderter Fallzahl und denselben abgeleiteten Seeds als parallele CTest-Eintraege.
 - Der Entwicklungsrunner normalisiert auch eine bereits aktive x86-Developer-PowerShell auf die fuer den Projektbuild erforderliche native x64-MSVC-Umgebung.
 - KR-3801 bis KR-3808: Ein intern provenance-gebundenes, vollstaendig

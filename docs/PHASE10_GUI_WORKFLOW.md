@@ -42,6 +42,12 @@ The equivalent lower-level CLI command remains available for automation:
 .\build-current\katana-recomp.exe workflow build .\project.katana --output .\work-output
 ```
 
+During this command, `stderr` is a `katana-job-event` JSONL stream shared with
+the GUI, while `stdout` remains the final `katana-application-job` document.
+Validation, hashing, boot image, analysis, IR, codegen, host configuration,
+host compilation and finalization remain ordered. Unknown step totals are
+shown as indeterminate and failure/cancellation names the active step.
+
 The model/application-service automation path is:
 
 ```powershell

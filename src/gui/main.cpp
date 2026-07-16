@@ -71,30 +71,25 @@ void refresh() {
     const auto summary = widen(summary_text);
     SetWindowTextW(content_label, summary.c_str());
     const auto busy = preparing_job.load() || state.job_active;
-    const auto progress = widen(preparing_job.load() ? "GDI wird eingelesen und geprueft ..."
-                                : state.job_active   ? "Aktiver Job: " + state.job_stage + " (" +
-                                                         std::to_string(state.job_progress) + " %)"
-                                                   : "Bereit");
+    auto progress_text = preparing_job.load() ? std::string("GDI wird eingelesen und geprueft ...")
+                         : state.job_active   ? "Aktiver Job: " + state.job_stage + " (gesamt " +
+                                                  std::to_string(state.job_progress) + " %)"
+                                            : std::string("Bereit");
+    if (state.job_active && state.job_step_total)
+        progress_text += " - " + std::to_string(state.job_step_current.value_or(0u)) + "/" +
+                         std::to_string(*state.job_step_total);
+    else if (state.job_active)
+        progress_text += " - Schrittfortschritt unbestimmt";
+    if (state.job_active)
+        progress_text += " - " + std::to_string(state.job_elapsed_ms / 1'000u) + " s";
+    const auto progress = widen(progress_text);
     SetWindowTextW(progress_label, progress.c_str());
     std::string log = "Stufe: " + state.job_stage + "\r\n";
     for (const auto& diagnostic : state.diagnostics) {
         log += diagnostic.code + ": " + diagnostic.message +
                "\r\nNaechster Schritt: " + diagnostic.recovery + "\r\n";
     }
-    const auto build_log = selected_output / "recompile.log";
-    if (!selected_output.empty() && std::filesystem::exists(build_log)) {
-        std::ifstream input(build_log, std::ios::binary);
-        constexpr std::size_t visible_log_limit = 16'000u;
-        input.seekg(0, std::ios::end);
-        const auto size = input.tellg();
-        if (size > static_cast<std::streamoff>(visible_log_limit))
-            input.seekg(size - static_cast<std::streamoff>(visible_log_limit));
-        else
-            input.seekg(0, std::ios::beg);
-        std::string compiler_log((std::istreambuf_iterator<char>(input)),
-                                 std::istreambuf_iterator<char>());
-        log += "\r\nBuildlog:\r\n" + compiler_log;
-    }
+    if (!state.live_log.empty()) log += "\r\nBuildlog:\r\n" + state.live_log;
     SetWindowTextW(log_view, widen(log).c_str());
     for (const int control : {1001, 1003, 1006})
         EnableWindow(GetDlgItem(main_window, control), busy ? FALSE : TRUE);
