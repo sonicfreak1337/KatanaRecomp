@@ -61,6 +61,7 @@ io::ExecutableImage make_dreamcast_disc_executable(const DreamcastDiscBoot& disc
         throw std::invalid_argument("Dreamcast-Bootdatei ist leer.");
     }
     io::ExecutableImage image;
+    image.set_guest_call_abi(io::GuestCallAbi::SuperHC);
     image.add_segment({".text",
                        dreamcast_disc_boot_address,
                        0u,

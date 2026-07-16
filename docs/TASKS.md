@@ -2680,6 +2680,56 @@ Akzeptanz:
 - externe Anwendungen benoetigen keine KatanaRecomp-CLI als Laufzeithuelle
 - Videoausgabe und Lebenszyklus sind vom Gastzyklusvertrag getrennt
 
+### [x] KR-4711 - Registerweise Retail-Wertanalyse und SH-C-Callvertrag
+
+Abhaengigkeiten: KR-4506, KR-4511, KR-4605
+
+Prioritaet: P0 - reduziert den realen Analyseblocker ohne Titelsonderfall
+
+Umfang:
+
+- unbekannte Instruktionen nicht mehr pauschal als Voll-Clobber behandeln,
+  sondern ausschliesslich tatsaechlich geschriebene allgemeine Register
+  invalidieren
+- Call- und Delay-Slot-Grenzen getrennt modellieren und bedingten lokalen
+  Fallthrough nur bis zu einem echten CFG-Join erhalten
+- den dokumentierten SH-C-Vertrag fuer R8 bis R14 explizit an Dreamcast-GDI-
+  Images binden; ABI-lose Raw-/ELF-Eingaben bleiben konservativ
+- jeden ABI-erhaltenen Zielbeweis mit eigener Herkunft ausweisen
+
+Akzeptanz:
+
+- synthetische Gateanforderungen decken unabhaengige Register-/Status-/Stack-
+  Effekte, Pre-/Post-Updates, Call-Delay-Slots, bedingten Fallthrough und
+  mehrdeutige Joins ab
+- ein GDI-Image behaelt R8 bis R14 ueber Calls, ein ABI-loses Image verwirft
+  dieselben Werte; R0 bis R7 bleiben in beiden Faellen Call-Clobber
+- der redigierte private Vergleich entdeckt mehr Code und reduziert die offene
+  Restmenge ohne feste Retailadresse, Override oder Spieldaten im Repository
+
+### [ ] KR-4712 - Begrenzte Speicherziele und relative Sprungtabellen
+
+Abhaengigkeiten: KR-4711
+
+Prioritaet: P0 - naechster statischer Analyseblocker
+
+Umfang:
+
+- endliche Zielmengen aus beweisbar unveraenderlichen Zeigertabellen nur bei
+  statisch belegter Basis, Breite und Grenze ableiten
+- relative SH-4-Sprungtabellen als generisches Muster aus PC-Basis,
+  vorzeichenerweitertem Offset und `BRAF` erkennen
+- veraenderliche Funktionszeiger, VTables und unbeschraenkte Indizes weiterhin
+  explizit als dynamisch ausweisen statt Ziele zu raten
+
+Akzeptanz:
+
+- synthetische positive und negative Faelle sichern absolute und relative
+  Tabellen, Grenzen, Vorzeichenerweiterung und schreibbare Speicherbereiche ab
+- jedes Mehrfachziel besitzt eine nachvollziehbare generische Beweiskette
+- der private read-only Vergleich reduziert die offene Restmenge ohne
+  Retailadresse, Override, Spieldaten oder Titelsonderfall im Repository
+
 ### [ ] KR-4702 - Native Audio-, Eingabe- und Hostlebenszyklusintegration
 
 Abhaengigkeiten: KR-2702, KR-2904, KR-3105, KR-4701
@@ -2716,7 +2766,7 @@ Akzeptanz:
 
 ### [ ] KR-4704 - v0.47 Gate-Vorbereitung: Tests und Build
 
-Abhaengigkeiten: KR-4701 bis KR-4703
+Abhaengigkeiten: KR-4701 bis KR-4703, KR-4711, KR-4712
 
 Umfang und Akzeptanz:
 

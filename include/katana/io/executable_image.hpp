@@ -18,6 +18,8 @@ enum class SymbolBinding { Local, Global, Weak, Unknown };
 
 enum class RelocationKind { None, Absolute32, PcRelative32, Unsupported };
 
+enum class GuestCallAbi { Unknown, SuperHC };
+
 struct ImageSymbol {
     std::string name;
     std::uint32_t address = 0;
@@ -64,12 +66,14 @@ class ExecutableImage {
     void add_entry_point(std::uint32_t address);
     void add_symbol(ImageSymbol symbol);
     void add_relocation(ImageRelocation relocation);
+    void set_guest_call_abi(GuestCallAbi abi) noexcept;
 
     [[nodiscard]] const std::filesystem::path& source_path() const noexcept;
     [[nodiscard]] std::span<const ImageSegment> segments() const noexcept;
     [[nodiscard]] std::span<const std::uint32_t> entry_points() const noexcept;
     [[nodiscard]] std::span<const ImageSymbol> symbols() const noexcept;
     [[nodiscard]] std::span<const ImageRelocation> relocations() const noexcept;
+    [[nodiscard]] GuestCallAbi guest_call_abi() const noexcept;
     [[nodiscard]] const ImageSymbol* find_symbol(std::string_view name) const noexcept;
     [[nodiscard]] const ImageSegment* find_segment(std::uint32_t address,
                                                    std::size_t width = 1u) const noexcept;
@@ -82,6 +86,7 @@ class ExecutableImage {
     std::vector<std::uint32_t> entry_points_;
     std::vector<ImageSymbol> symbols_;
     std::vector<ImageRelocation> relocations_;
+    GuestCallAbi guest_call_abi_ = GuestCallAbi::Unknown;
 };
 
 [[nodiscard]] const char* segment_kind_name(SegmentKind kind) noexcept;

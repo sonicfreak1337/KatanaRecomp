@@ -4,6 +4,15 @@
 
 ### Hinzugefuegt
 
+- KR-4711: Die Wertanalyse invalidiert unbekannte SH-4-Effekte registerweise
+  statt als pauschalen Voll-Clobber, behandelt Call-Delay-Slots und bedingte
+  CFG-Fallthroughs konservativ und bindet den dokumentierten SH-C-Vertrag fuer
+  R8 bis R14 explizit an Dreamcast-GDI-Images. ABI-lose Images sowie R0 bis R7
+  bleiben Call-Clobber; ABI-erhaltene Beweise tragen eine eigene Herkunft. Ein
+  redigierter read-only Retailvergleich erweiterte die Entdeckung auf 40.599
+  Instruktionen, 575 Funktionen und 1.288 indirekte Stellen, davon 1.017
+  bewiesen und 271 weiterhin dynamisch. Es wurde keine Hostanwendung gestartet.
+
 - KR-4701: Ein versionierter nativer Hostvideovertrag stellt externen Ports
   Win32-Fenster, Resize, seitenverhaeltnistreues RGBA-Present, kontrolliertes
   Schliessen und weitergereichte GDI-Fehler ohne CLI-Laufzeithuelle bereit.

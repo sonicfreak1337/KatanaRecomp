@@ -12,12 +12,12 @@ Erster oeffentlicher Produktrelease: `v0.50.0` Alpha
 
 ## Fortschritt
 
-- 207 von 236 gepflegten Roadmap-Tasks abgeschlossen: 87,7 %
+- 208 von 238 gepflegten Roadmap-Tasks abgeschlossen: 87,4 %
 - Phase-9-Reviewkorrekturen sind implementiert; das eigenstaendige
   achtteilige Homebrew-Korpus und Linux-Evidenz bleiben offen
 - Phase 10: 13/13 Tasks im freigegebenen Windows-GDI-Workflow
 - Phase 11: 16/16 Tasks
-- Phase 12: 1/10 Tasks
+- Phase 12: 2/12 Tasks
 - Phase 13: 0/5 Tasks vor dem Alpha-Gate
 - Alpha-Gate noch nicht erreicht
 
@@ -34,7 +34,7 @@ Erster oeffentlicher Produktrelease: `v0.50.0` Alpha
 | 9 | Kompatibilitaet und Leistung | Reviewkorrekturen offen |
 | 10 | Desktop-GUI und Quellworkflow | 13/13 (Windows-GDI-Scope) |
 | 11 | Bootanalyse und Retail-Systemdienste | 16/16 |
-| 12 | Interaktive Retail-Runtime und Portintegration | 1/10 |
+| 12 | Interaktive Retail-Runtime und Portintegration | 2/12 |
 | 13 | Spielbarer Alpha-Kandidat | 0/5 |
 
 Die Einzelaufgaben und Abhaengigkeiten werden ausschliesslich in
@@ -79,6 +79,13 @@ Win32-Fenster, Resize, seitenverhaeltnistreues RGBA-Present, Fehlerweitergabe
 und kontrolliertes Schliessen. Die erzeugte `game.exe` praesentiert produktiv
 einen VRAM-Frame und meldet `frames=1`; nicht implementierte Hosts melden die
 Nichtverfuegbarkeit explizit und behalten den headless CLI/Core-Build.
+
+KR-4711 invalidiert in der lokalen Wertanalyse nur noch tatsaechlich
+geschriebene allgemeine Register. Call-Delay-Slots, bedingter Fallthrough und
+CFG-Join-Grenzen bleiben konservativ getrennt. Dreamcast-GDI-Images tragen den
+expliziten SH-C-Aufrufvertrag: R0 bis R7 sind Call-Clobber, R8 bis R14 werden
+als ABI-garantiert erhalten; ABI-lose Images behalten den alten konservativen
+Voll-Clobber. ABI-erhaltene Zielbeweise besitzen eine eigene Herkunft.
 
 CLI und GUI beobachten denselben sequenzierten hierarchischen Ereignisstrom.
 Gesamtfortschritt ist monoton, Einzelschritte besitzen nur bei bekannter Menge
@@ -226,6 +233,12 @@ Alpha-Gate `v0.50.0` deaktiviert. Der fruehere CI-Badge wurde deshalb entfernt.
   ungeloeste Kontrollflussstellen; Fehlerklasse `analysis-incomplete`, Budget
   nicht erschoepft, keine Hostanwendung gestartet. Private Pfade, Hashes und
   Artefakte bleiben ausserhalb des Repositorys.
+- Der read-only KR-4711-Analyservergleich erschloss 40.599 Instruktionen, 575
+  Funktionen und 1.288 indirekte Stellen. 1.017 Stellen sind bewiesen, 271
+  bleiben dynamisch; gegenueber dem KR-4511-Ausgangspunkt wurden 642 weitere
+  Ziele bewiesen und die offene Restmenge trotz breiterer Codeentdeckung um 79
+  reduziert. Der Lauf startete keine Hostanwendung und uebernahm weder
+  Retailadressen noch Spieldaten, Pfade oder Hashes in das Repository.
 - Das Alpha-Gate verlangt reproduzierbar:
   `GDI -> Port-Projekt -> game.exe -> SA_ALPHA_PLAYABLE`.
 - Alpha erfordert Boot, Video, Eingabe und eine kontrollierbare Spielszene.

@@ -119,6 +119,10 @@ void ExecutableImage::add_relocation(ImageRelocation relocation) {
               });
 }
 
+void ExecutableImage::set_guest_call_abi(const GuestCallAbi abi) noexcept {
+    guest_call_abi_ = abi;
+}
+
 const std::filesystem::path& ExecutableImage::source_path() const noexcept {
     return source_path_;
 }
@@ -137,6 +141,10 @@ std::span<const ImageSymbol> ExecutableImage::symbols() const noexcept {
 
 std::span<const ImageRelocation> ExecutableImage::relocations() const noexcept {
     return relocations_;
+}
+
+GuestCallAbi ExecutableImage::guest_call_abi() const noexcept {
+    return guest_call_abi_;
 }
 
 const ImageSymbol* ExecutableImage::find_symbol(const std::string_view name) const noexcept {

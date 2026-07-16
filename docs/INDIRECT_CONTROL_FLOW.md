@@ -3,16 +3,37 @@
 ## Lokale Konstantenpropagation
 
 `propagate_local_constants` fuehrt einen konservativen Registerzustand durch
-eine bereits geordnete Instruktionsfolge. Version 1 des Transfers unterstuetzt
+eine bereits geordnete Instruktionsfolge. Der Transfer unterstuetzt
 Immediate-Moves, Immediate-Additionen, Registerkopien, NOP sowie
 `MOV.W/MOV.L @(disp,PC)` und `MOVA`. PC-relative Literale werden nur aus
 committed Image-Bytes gelesen; `MOV.W` wird SH-4-konform vorzeichenerweitert
 und `MOV.L` verwendet die vier Byte ausgerichtete PC-Basis. 32-Bit-Arithmetik
 verwendet definiertes unsigned Wraparound.
 
-Sobald eine noch nicht modellierte Instruktion erreicht wird, werden alle
-bekannten Registerwerte verworfen. Diese konservative Schranke verhindert,
-dass spaetere indirekte Ziele aus veralteten Annahmen abgeleitet werden.
+Nicht eigens ausgewertete Instruktionen invalidieren nur die allgemeinen
+Register, die ihre SH-4-Semantik tatsaechlich schreibt. Speicher-, Status-,
+Akkumulator- und FPU-Effekte koennen damit ein unabhaengiges konstantes Ziel
+nicht mehr zerstoeren. Pre-/Post-Adressupdates invalidieren die betroffenen
+Adressregister; unbekannte Opcodes bleiben ein Voll-Clobber.
+
+Kontrollflussgrenzen werden nach ihrem Delay Slot angewendet. Ein bedingter
+Fallthrough darf lokale Werte weitertragen, direkte Sprungziele markieren aber
+einen Join und beginnen konservativ ohne Registerbeweis. Dadurch kann weder ein
+Delay-Slot-Wert ueber einen Call noch ein einseitiger Wert ueber einen
+mehrdeutigen Join durchsickern.
+
+## SH-C-Aufrufvertrag
+
+`ExecutableImage` traegt die explizite Gast-ABI `Unknown` oder `SuperHC`.
+Dreamcast-GDI-Images verwenden `SuperHC`; allgemeine Raw-/ELF-Images bleiben
+ohne gesonderten Vertrag `Unknown`. Im SH-C-Modus werden R0 bis R7 an Calls
+invalidiert und R8 bis R14 gemaess Renesas-Aufrufvertrag erhalten. Ein daraus
+abgeleiteter Zielbeweis traegt die Herkunft `sh-c-abi-preserved-*`.
+
+Die ABI-Regel ist damit eine titelunabhaengige Eingabeeigenschaft, kein
+Sonic-spezifischer Patch. Grundlage ist die Renesas-Dokumentation der
+garantierten Register R8 bis R14:
+<https://www.renesas.com/en/document/apn/sh-compiler-application-note-2-compiler-use-guide-pragma-extension-guide>.
 
 ## Registerwertanalyse
 

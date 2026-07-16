@@ -76,6 +76,7 @@ Der eigenstaendige Port nutzt den nativen Hostvideovertrag aus
 - SH-4-Integer-, Systemregister-, Delay-Slot- und FPU-Grundsemantik
 - Raw- und ELF32-SH-Loader, Symbole, Relocations und Manifest v1/v2
 - rekursive Analyse, indirekte Zielbeweise, Overrides/Hints und Graphen
+- registerweise SH-4-Wertanalyse mit explizitem SH-C-Callvertrag fuer GDI-Images
 - Katana-IR, Verifier, Optimierungspipeline und C++-Backend
 - zentrale CPU-/FPU-Runtime, Speicherbus, Exceptions und Interrupts
 - RAM, VRAM, AICA-RAM, BIOS, Flash, MMIO, Watchpoints und Invalidierung
