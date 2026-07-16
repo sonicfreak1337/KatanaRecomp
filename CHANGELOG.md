@@ -14,6 +14,7 @@
 - KR-3601: Ein gemeinsamer deterministischer Symbolindex priorisiert ELF- und Map-Namen nach Binding, Art, Groesse und Name. Text- und Kontrollfluss-JSON-Berichte ergaenzen exakte oder groessenbegrenzte `name+offset`-Informationen, ohne die numerische Gastadresse zu ersetzen oder groessenlose Symbole ueber ihren exakten Ort hinaus zu raten.
 - KR-3602: Stabile `katana-guest`-Marker im generierten C++ bilden jede emittierte SH-4-Adresse auf portables Eingabesegment/-offset und relative Generated-Datei/-zeile ab. Die versionierte JSON-Source-Map erhaelt Mehrfachpositionen deterministisch und lehnt absolute Pfade, ausbrechende Komponenten sowie unportable Segmentangaben ab.
 - KR-3603: Versionierte kontrollierte Crashberichte erfassen virtuelle und kanonische Adresse, Register-, Exception- und Delay-Slot-Zustand, Blockvariante, Schedulerstand sowie letzten Dispatch. Strikte portable Diagnosecodes und gekoppelte Kontextvalidierung verhindern freie Hostmeldungen, Pfade, Hostzeiger oder Speicherdumps im Bericht.
+- KR-3604: Ein kapazitaetsbegrenzter Runtime-Trace vereint IR-, Block-, Speicher-, Watchpoint-, Exception- und Schedulerereignisse unter monotoner Gastzeit. Drops bleiben gezaehlt, Memory- und Watchpointobserver verwenden bestehende Runtime-Hooks, und Speicherwerte bleiben ohne ausdrueckliches lokales Opt-in redigiert.
 
 ## [0.34.0] - 2026-07-16
 

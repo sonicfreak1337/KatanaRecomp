@@ -1643,9 +1643,23 @@ Akzeptanz:
 - die gebuendelte Phase-8-Regression prueft Exception-, Dispatch-, Scheduler- und
   Redaktionsfelder sowie JSON-Parsing
 
-### [ ] KR-3604 - Tracing und Watchpoints
+### [x] KR-3604 - Tracing und Watchpoints
 
 Abhaengigkeiten: KR-2206, KR-3603
+
+Umfang:
+
+- IR-, Block-, Speicher-, Watchpoint-, Exception- und Schedulerereignisse vereinheitlichen
+- Sequenz und logische Gastzeit ohne Host-Wall-Clock erfassen
+- bestehende Memory-Tracehandler und Watchpoints ueber Provider anbinden
+- Speicherverbrauch begrenzen und Rohwerte standardmaessig redigieren
+
+Akzeptanz:
+
+- rueckwaerts laufende Gastzeit und Zaehlerueberlauf werden sichtbar abgelehnt
+- Kapazitaetsdruck behaelt erste Ereignisse und berichtet Drops deterministisch
+- Watchpoint- und globaler Speichertrace unterscheiden ihre Ereignisart
+- die gebuendelte Phase-8-Regression prueft Wert-Opt-in, Redaktion und JSON-Parsing
 
 ### [ ] KR-3605 - CFG- und Callgraph-Export
 

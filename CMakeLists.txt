@@ -61,6 +61,7 @@ add_library(katana_runtime STATIC
     src/runtime/platform_interrupt.cpp
     src/runtime/scheduler.cpp
     src/runtime/timers.cpp
+    src/runtime/trace.cpp
     src/runtime/memory.cpp
     src/runtime/runtime.cpp
 )
