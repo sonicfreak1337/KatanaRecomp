@@ -8,7 +8,7 @@ Profil kann daher keine Teilwirkung hinterlassen.
 | Profil | Zustand | Retail | Firmwarevertrag |
 | --- | --- | --- | --- |
 | `direct` | `available` | ja | geprueftes Bootimage am deklarierten Einstieg; kein BIOS und kein Flash |
-| `hle` | `contract-only` | vorgesehen | dynamische BIOS-ABI-Vektoren; erst mit KR-4602 ausfuehrbar |
+| `hle` | `available` | ja | dynamische BIOS-ABI-Vektoren; Hardwaredienste bleiben explizit begrenzt |
 | `lle` | `unsupported` | nein | optional, nicht fuer Alpha erforderlich und nicht implementiert |
 
 ## Direkteinstieg
@@ -28,11 +28,12 @@ Firmware-MMIO-Initialisierung werden nicht vorgetaeuscht.
 
 ## HLE-BIOS-ABI
 
-HLE ist fuer den Retail-Alpha-Pfad festgelegt, aber in KR-4601 noch nicht
-ausfuehrbar. KR-4602 muss benoetigte BIOS-Dienste titelunabhaengig modellieren,
-dynamische Sprungvektoren im RAM installieren sowie bekannte und unbekannte
-Aufrufe sichtbar unterscheiden. Es werden keine BIOS-ROM-Bytes benoetigt oder
-statisch in erzeugten Code kopiert.
+HLE ist fuer den Retail-Alpha-Pfad verfuegbar. KR-4602 installiert die sechs
+allgemeinen BIOS-Sprungvektoren dynamisch im RAM und bindet sie an normale
+Runtimeblocks. Bekannte, noch nicht an Plattformdienste angeschlossene Aufrufe
+enden `service-unavailable`; unbekannte Aufrufe sind harte Fehler. Es werden
+keine BIOS-ROM-Bytes benoetigt oder statisch in erzeugten Code kopiert. Details
+stehen in [`../BIOS_ABI.md`](../BIOS_ABI.md).
 
 ## Optionales LLE
 

@@ -2603,7 +2603,7 @@ Akzeptanz:
 - kein Profil behauptet still eine nicht implementierte Firmwarefaehigkeit
 - lokale Firmware- und Flashquellen bleiben read-only und ausserhalb der Ports
 
-### [ ] KR-4602 - BIOS-ABI und dynamische Firmwarevektoren
+### [x] KR-4602 - BIOS-ABI und dynamische Firmwarevektoren
 
 Abhaengigkeiten: KR-3405, KR-4601
 

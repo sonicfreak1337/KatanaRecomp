@@ -171,6 +171,7 @@ add_library(katana_runtime STATIC
     src/runtime/scheduler_safepoint.cpp
     src/runtime/system_replay.cpp
     src/runtime/block_guards.cpp
+    src/runtime/bios_abi.cpp
     src/runtime/interpreter_boundary.cpp
     src/runtime/store_queue.cpp
     src/runtime/cache_control.cpp
@@ -578,6 +579,11 @@ add_executable(katana-firmware-handoff-tests tests/runtime/firmware_handoff_test
 target_link_libraries(katana-firmware-handoff-tests PRIVATE katana_runtime)
 katana_enable_warnings(katana-firmware-handoff-tests)
 add_test(NAME katana-firmware-handoff-tests COMMAND katana-firmware-handoff-tests)
+
+add_executable(katana-bios-abi-tests tests/runtime/bios_abi_tests.cpp)
+target_link_libraries(katana-bios-abi-tests PRIVATE katana_runtime)
+katana_enable_warnings(katana-bios-abi-tests)
+add_test(NAME katana-bios-abi-tests COMMAND katana-bios-abi-tests)
 
 add_executable(katana-block-dispatch-tests tests/runtime/block_dispatch_tests.cpp)
 target_link_libraries(katana-block-dispatch-tests PRIVATE katana_runtime)

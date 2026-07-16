@@ -29,7 +29,7 @@ constexpr std::array kContracts{
     AlphaFirmwareModeContract{
         FirmwareMode::HleBiosAbi,
         "hle",
-        FirmwareProfileStatus::ContractOnly,
+        FirmwareProfileStatus::Available,
         true,
         false,
         true,
@@ -38,7 +38,7 @@ constexpr std::array kContracts{
         false,
         true,
         "direct retail entry with dynamically installed BIOS ABI vectors",
-        "BIOS ABI services and dynamic vectors become executable in KR-4602.",
+        "Hardware-backed Flash, GD-ROM and host lifecycle services remain visibly deferred.",
         "Synthetic ABI vector installation, known/unknown calls and ROM/RAM handoff."},
     AlphaFirmwareModeContract{
         FirmwareMode::LleFirmware,

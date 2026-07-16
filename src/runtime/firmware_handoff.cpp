@@ -69,11 +69,21 @@ void FirmwareHandoffMap::install_runtime_symbol(RuntimeFirmwareSymbol symbol) {
         throw std::invalid_argument("Dynamischer BIOS-ABI-Vektor braucht Name und Provenienz.");
     }
     symbol.physical_address = canonical_physical_address(symbol.physical_address);
+    const auto duplicate = std::find_if(symbols_.begin(), symbols_.end(), [&](const auto& value) {
+        return value.virtual_address == symbol.virtual_address || value.name == symbol.name;
+    });
+    if (duplicate != symbols_.end())
+        throw std::invalid_argument("Doppelter dynamischer BIOS-ABI-Vektor.");
     symbols_.push_back(std::move(symbol));
 }
 
 FirmwareTargetResolution FirmwareHandoffMap::resolve(const std::uint32_t virtual_address) const {
     const auto physical = canonical_physical_address(virtual_address);
+    const auto symbol = std::find_if(symbols_.begin(), symbols_.end(), [&](const auto& value) {
+        return value.virtual_address == virtual_address || value.physical_address == physical;
+    });
+    if (symbol != symbols_.end())
+        return {virtual_address, physical, std::nullopt, true, symbol->provenance};
     for (const auto& copy : copies_) {
         if (contains(copy.destination_physical, copy.size, physical)) {
             return {virtual_address,

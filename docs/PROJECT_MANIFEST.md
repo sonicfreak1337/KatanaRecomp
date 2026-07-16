@@ -94,8 +94,9 @@ firmware.flash = flash.bin
 lokale `firmware.bios`, Aliasgruppen, kanonische physische Bereiche sowie die
 Faehigkeiten `memory` und `firmware-mode`. HLE verlangt ebenfalls
 `firmware-mode`. Der Parser prueft damit die strukturelle Vollstaendigkeit. Der ausfuehrbare
-Alpha-Vertrag ist enger: `direct` ist verfuegbar, HLE bis KR-4602
-`contract-only` und LLE optional `unsupported`. Lokale BIOS-/Flashquellen und
+Alpha-Vertrag ist enger: `direct` und die dynamische HLE-BIOS-ABI sind
+verfuegbar, LLE bleibt optional `unsupported`. Noch nicht angebundene HLE-
+Hardwaredienste enden sichtbar als `service-unavailable`. Lokale BIOS-/Flashquellen und
 veraenderliche Arbeitskopien muessen ausserhalb eines Port-Ausgabeordners
 bleiben; keine Firmwarequelle wird paketiert.
 

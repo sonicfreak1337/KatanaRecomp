@@ -30,13 +30,12 @@ template <typename Function> std::string require_rejection(Function&& function) 
 int main() {
     using namespace katana::platform;
     const auto contracts = alpha_firmware_contracts();
-    require(contracts.size() == 3u && contracts[0].id == "direct" &&
-                contracts[0].status == FirmwareProfileStatus::Available &&
-                contracts[0].retail_boot && contracts[1].id == "hle" &&
-                contracts[1].status == FirmwareProfileStatus::ContractOnly &&
-                contracts[2].id == "lle" &&
-                contracts[2].status == FirmwareProfileStatus::Unsupported,
-            "Alpha-Firmwarematrix behauptet falsche Verfuegbarkeit.");
+    require(
+        contracts.size() == 3u && contracts[0].id == "direct" &&
+            contracts[0].status == FirmwareProfileStatus::Available && contracts[0].retail_boot &&
+            contracts[1].id == "hle" && contracts[1].status == FirmwareProfileStatus::Available &&
+            contracts[2].id == "lle" && contracts[2].status == FirmwareProfileStatus::Unsupported,
+        "Alpha-Firmwarematrix behauptet falsche Verfuegbarkeit.");
     require(contracts[0].source_inputs_read_only && !contracts[0].source_inputs_packaged &&
                 contracts[1].source_inputs_read_only && !contracts[1].source_inputs_packaged &&
                 contracts[1].mutable_flash_uses_working_copy &&
@@ -44,11 +43,8 @@ int main() {
             "Firmwarequellen sind nicht durchgaengig read-only und portextern.");
 
     require_alpha_firmware_profile(FirmwareMode::DirectHomebrew);
-    auto error =
-        require_rejection([] { require_alpha_firmware_profile(FirmwareMode::HleBiosAbi); });
-    require(error.find("contract-only") != std::string::npos &&
-                error.find("KR-4602") != std::string::npos,
-            "HLE-Vorbereitungsgrenze ist nicht konkret diagnostiziert.");
+    require_alpha_firmware_profile(FirmwareMode::HleBiosAbi);
+    auto error = std::string{};
     AlphaFirmwareInputPolicy lle_inputs;
     lle_inputs.bios_source = std::filesystem::temp_directory_path() / "katana-local-bios.bin";
     error = require_rejection(
@@ -74,16 +70,13 @@ int main() {
     require(error.find("Arbeitskopie") != std::string::npos,
             "Veraenderliche Flash-Nutzung ohne kontrollierte Arbeitskopie wurde akzeptiert.");
     flash.mutable_working_directory = root / "private" / "working";
-    error =
-        require_rejection([&] { require_alpha_firmware_profile(FirmwareMode::HleBiosAbi, flash); });
-    require(error.find("contract-only") != std::string::npos,
-            "Gueltig getrenntes HLE-Profil behauptet vor KR-4602 Ausfuehrbarkeit.");
+    require_alpha_firmware_profile(FirmwareMode::HleBiosAbi, flash);
 
     const auto json = format_alpha_firmware_contract_json();
     require(json.find("\"schema\":\"katana-alpha-firmware\"") != std::string::npos &&
                 json.find("\"source_inputs_read_only\":true") != std::string::npos &&
                 json.find("\"source_inputs_packaged\":false") != std::string::npos &&
-                json.find("\"status\":\"contract-only\"") != std::string::npos &&
+                json.find("\"status\":\"available\"") != std::string::npos &&
                 json.find("Synthetic ABI vector installation") != std::string::npos,
             "Maschinenlesbarer Firmwarevertrag ist unvollstaendig.");
 
