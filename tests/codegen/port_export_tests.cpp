@@ -109,11 +109,11 @@ std::vector<std::uint8_t> boot_track() {
         record(bytes, directory, data_lba + 20u, payload_size, std::string(1u, '\1'), true);
     record(bytes, directory, data_lba + 21u, 24u, "BOOT.BIN;1", false);
     constexpr std::array<std::uint8_t, 24u> program = {
-        0x06u, 0xB0u, // bsr 0x8C010010
+        0x0Au, 0xE0u, // mov #10,r0
+        0x03u, 0x00u, // bsrf r0 -> 0x8C010010
         0x07u, 0xE2u, // delay slot: mov #7,r2
         0x0Bu, 0x00u, // caller rts
         0x09u, 0x00u, // delay-slot nop
-        0x09u, 0x00u, // padding nop
         0x09u, 0x00u, // padding nop
         0x09u, 0x00u, // padding nop
         0x09u, 0x00u, // padding nop
@@ -182,7 +182,7 @@ int run_test(const int argc, char* argv[]) {
         katana::runtime::initialize_dreamcast_runtime(runtime_cpu, runtime_boot);
     require(runtime_state.loaded_boot_bytes == 24u && runtime_cpu.pc == 0x8C010000u &&
                 runtime_cpu.r[15] == 0x8D000000u &&
-                runtime_cpu.memory.read_u16(0x8C010000u) == 0xB006u,
+                runtime_cpu.memory.read_u16(0x8C010000u) == 0xE00Au,
             "Eigenstaendiger GDI-Boot initialisiert Bootimage, CPU oder Speicher nicht.");
     const auto output = fixture.root / "port";
     const PortExportOptions options{"synthetic_game", "0.37.0-dev", {1u, 4096u}};
@@ -296,8 +296,8 @@ int run_test(const int argc, char* argv[]) {
     }
 
     auto incomplete_track = boot_track();
-    incomplete_track[payload_offset(21u)] = 0x2Bu;
-    incomplete_track[payload_offset(21u, 1u)] = 0x41u;
+    incomplete_track[payload_offset(21u)] = 0x09u;
+    incomplete_track[payload_offset(21u, 1u)] = 0x00u;
     write_binary(fixture.root / "disc" / "high.bin", incomplete_track);
     const auto incomplete_output = fixture.root / "incomplete-port";
     require_failure<std::runtime_error>(
@@ -306,7 +306,7 @@ int run_test(const int argc, char* argv[]) {
     require(!std::filesystem::exists(incomplete_output),
             "Abgelehnter unvollstaendiger Portexport hinterlaesst Artefakte.");
 
-    std::cout << "KR-3507/KR-4507 reproduzierbarer Port-Projektexport erfolgreich.\n";
+    std::cout << "KR-3507/KR-4502/KR-4507 reproduzierbarer Port-Projektexport erfolgreich.\n";
     return EXIT_SUCCESS;
 }
 

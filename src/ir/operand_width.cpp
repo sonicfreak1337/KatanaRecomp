@@ -39,6 +39,7 @@ OperandWidths operation_operand_widths(const Operation operation) noexcept {
     case Operation::ClearT:
     case Operation::SetT:
     case Operation::DivideInitializeUnsigned:
+    case Operation::ClearMac:
     case Operation::Sleep:
     case Operation::Frchg:
     case Operation::Fschg:
@@ -64,6 +65,14 @@ OperandWidths operation_operand_widths(const Operation operation) noexcept {
     case Operation::CompareEqualImmediate:
     case Operation::TestImmediate:
         return {bit, longword, byte, none, none, none};
+    case Operation::TestByteImmediate:
+        return {bit, byte, byte, none, byte, longword};
+    case Operation::AndByteImmediate:
+    case Operation::XorByteImmediate:
+    case Operation::OrByteImmediate:
+        return {none, byte, byte, none, byte, longword};
+    case Operation::TestAndSetByte:
+        return {bit, byte, none, none, byte, longword};
 
     case Operation::MoveT:
         return {longword, bit, none, none, none, none};

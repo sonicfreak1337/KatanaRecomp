@@ -199,6 +199,8 @@ Operation lower_operation(const katana::sh4::InstructionKind kind) {
 
     case Source::DivideStep:
         return Operation::DivideStep;
+    case Source::ClearMac:
+        return Operation::ClearMac;
     case Source::AndRegister:
         return Operation::AndRegister;
 
@@ -258,6 +260,16 @@ Operation lower_operation(const katana::sh4::InstructionKind kind) {
 
     case Source::TestRegister:
         return Operation::TestRegister;
+    case Source::TestByteImmediate:
+        return Operation::TestByteImmediate;
+    case Source::AndByteImmediate:
+        return Operation::AndByteImmediate;
+    case Source::XorByteImmediate:
+        return Operation::XorByteImmediate;
+    case Source::OrByteImmediate:
+        return Operation::OrByteImmediate;
+    case Source::TestAndSetByte:
+        return Operation::TestAndSetByte;
     case Source::MovByteLoad:
         return Operation::LoadByteSigned;
 
@@ -449,6 +461,12 @@ Operation lower_operation(const katana::sh4::InstructionKind kind) {
     case Source::Bsr:
         return Operation::Call;
 
+    case Source::Braf:
+        return Operation::JumpRegister;
+
+    case Source::Bsrf:
+        return Operation::CallRegister;
+
     case Source::Bt:
     case Source::BtS:
         return Operation::BranchIfTrue;
@@ -519,6 +537,9 @@ Instruction lower_instruction(const katana::sh4::DisassemblyLine& source) {
         result.delay_slot = {DelaySlotRole::Slot, source.address - 2u};
     }
     result.is_privileged = source.instruction.is_privileged;
+    result.branch_register_relative =
+        source.instruction.kind == katana::sh4::InstructionKind::Braf ||
+        source.instruction.kind == katana::sh4::InstructionKind::Bsrf;
 
     return result;
 }
@@ -665,6 +686,8 @@ std::string_view operation_name(const Operation operation) noexcept {
 
     case Operation::DivideStep:
         return "divide_step";
+    case Operation::ClearMac:
+        return "clear_mac";
     case Operation::AndRegister:
         return "and_reg";
 
@@ -724,6 +747,16 @@ std::string_view operation_name(const Operation operation) noexcept {
 
     case Operation::TestRegister:
         return "test_reg";
+    case Operation::TestByteImmediate:
+        return "test_byte_imm";
+    case Operation::AndByteImmediate:
+        return "and_byte_imm";
+    case Operation::XorByteImmediate:
+        return "xor_byte_imm";
+    case Operation::OrByteImmediate:
+        return "or_byte_imm";
+    case Operation::TestAndSetByte:
+        return "test_and_set_byte";
     case Operation::LoadByteSigned:
         return "load_s8";
 

@@ -4,7 +4,7 @@ Interner Entwicklungsmeilenstein: `0.44.0`
 
 Phase: Pre-Alpha
 
-Naechster Roadmap-Task: Phase 11 / KR-4502
+Naechster Roadmap-Task: Phase 11 / KR-4503
 
 Naechstes Phasengate: `v0.46.0` - Abschluss Phase 11
 
@@ -12,11 +12,11 @@ Erster oeffentlicher Produktrelease: `v0.50.0` Alpha
 
 ## Fortschritt
 
-- 194 von 236 gepflegten Roadmap-Tasks abgeschlossen: 82,2 %
+- 195 von 236 gepflegten Roadmap-Tasks abgeschlossen: 82,6 %
 - Phase-9-Reviewkorrekturen sind implementiert; das eigenstaendige
   achtteilige Homebrew-Korpus und Linux-Evidenz bleiben offen
 - Phase 10: 13/13 Tasks im freigegebenen Windows-GDI-Workflow
-- Phase 11: 4/16 Tasks
+- Phase 11: 5/16 Tasks
 - Phase 12: 0/10 Tasks
 - Phase 13: 0/5 Tasks vor dem Alpha-Gate
 - Alpha-Gate noch nicht erreicht
@@ -33,7 +33,7 @@ Erster oeffentlicher Produktrelease: `v0.50.0` Alpha
 | 8 | Werkzeuge und Qualitaet | 26/26 |
 | 9 | Kompatibilitaet und Leistung | Reviewkorrekturen offen |
 | 10 | Desktop-GUI und Quellworkflow | 13/13 (Windows-GDI-Scope) |
-| 11 | Bootanalyse und Retail-Systemdienste | 4/16 |
+| 11 | Bootanalyse und Retail-Systemdienste | 5/16 |
 | 12 | Interaktive Retail-Runtime und Portintegration | 0/10 |
 | 13 | Spielbarer Alpha-Kandidat | 0/5 |
 
@@ -156,6 +156,10 @@ Alpha-Gate `v0.50.0` deaktiviert. Der fruehere CI-Badge wurde deshalb entfernt.
 - Pre-Alpha-Gates verwenden weiterhin synthetische Fixtures und frei
   lizenzierte Homebrew-Programme als oeffentlichen Nachweis.
 - Jeder Retail-Befund wird auf eine allgemeine, verteilbare Regression reduziert.
+- Ein autorisierter read-only Nachlauf nach KR-4502 meldete aggregiert
+  `unknown_instructions=0` und weiterhin `unresolved_control_flow=350`; der
+  Zustand bleibt korrekt `partial`. Keine Retail-Adresse, kein Pfad, Hash oder
+  Artefakt ist Bestandteil des Repositorynachweises.
 - Das Alpha-Gate verlangt reproduzierbar:
   `GDI -> Port-Projekt -> game.exe -> SA_ALPHA_PLAYABLE`.
 - Alpha erfordert Boot, Video, Eingabe und eine kontrollierbare Spielszene.

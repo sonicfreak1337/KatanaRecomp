@@ -1777,6 +1777,43 @@ add_test(
     NAME katana-generated-and-or-xor-tests
     COMMAND katana-generated-and-or-xor-tests
 )
+
+add_executable(katana-alpha-integer-program-writer
+    tests/alu/alpha_integer_program_writer.cpp
+)
+target_link_libraries(katana-alpha-integer-program-writer PRIVATE katana_core)
+katana_enable_warnings(katana-alpha-integer-program-writer)
+
+set(KATANA_GENERATED_ALPHA_INTEGER_CPP
+    ${KATANA_GENERATED_TEST_DIR}/generated_alpha_integer_program.cpp
+)
+add_custom_command(
+    OUTPUT ${KATANA_GENERATED_ALPHA_INTEGER_CPP}
+    COMMAND ${CMAKE_COMMAND} -E make_directory ${KATANA_GENERATED_TEST_DIR}
+    COMMAND $<TARGET_FILE:katana-alpha-integer-program-writer>
+            ${KATANA_GENERATED_ALPHA_INTEGER_CPP}
+    DEPENDS katana-alpha-integer-program-writer tests/alu/alpha_integer_program_writer.cpp
+    COMMENT "Generiere C++-Programm fuer KR-4502 Alpha-Integer-Test"
+    VERBATIM
+)
+set_source_files_properties(
+    ${KATANA_GENERATED_ALPHA_INTEGER_CPP}
+    PROPERTIES GENERATED TRUE HEADER_FILE_ONLY TRUE
+)
+set_source_files_properties(
+    tests/alu/generated_alpha_integer_tests.cpp
+    PROPERTIES OBJECT_DEPENDS ${KATANA_GENERATED_ALPHA_INTEGER_CPP}
+)
+add_executable(katana-generated-alpha-integer-tests
+    tests/alu/generated_alpha_integer_tests.cpp
+    ${KATANA_GENERATED_ALPHA_INTEGER_CPP}
+)
+target_include_directories(katana-generated-alpha-integer-tests
+    PRIVATE ${KATANA_GENERATED_TEST_DIR}
+)
+katana_enable_warnings(katana-generated-alpha-integer-tests)
+add_dependencies(katana-generated-alpha-integer-tests katana-alpha-integer-program-writer)
+add_test(NAME katana-generated-alpha-integer-tests COMMAND katana-generated-alpha-integer-tests)
 add_executable(katana-cmp-variants-tests
     tests/alu/cmp_variants_tests.cpp
 )

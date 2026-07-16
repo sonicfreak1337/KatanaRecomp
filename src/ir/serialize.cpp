@@ -253,6 +253,7 @@ void emit_text_instruction(std::ostringstream& output, const Instruction& value)
                    : "null")
            << " effective=" << (value.effective_address ? hex32(*value.effective_address) : "null")
            << " target=" << (value.target_address ? hex32(*value.target_address) : "null")
+           << " branch_register_relative=" << boolean_name(value.branch_register_relative)
            << " resolved_targets=";
     emit_text_addresses(output, sorted_values(value.resolved_targets));
     output << '\n' << "      status reads=";
@@ -317,7 +318,8 @@ void emit_json_instruction(std::ostringstream& output, const Instruction& value)
         output << '"' << hex32(*value.target_address) << '"';
     else
         output << "null";
-    output << ",\"resolved_targets\":";
+    output << ",\"branch_register_relative\":"
+           << (value.branch_register_relative ? "true" : "false") << ",\"resolved_targets\":";
     emit_json_addresses(output, sorted_values(value.resolved_targets));
     output << "},\"status\":{\"reads\":";
     emit_json_names(output, status_names(value.status_effects.reads));

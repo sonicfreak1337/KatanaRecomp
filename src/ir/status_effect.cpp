@@ -55,6 +55,8 @@ StatusRegisterEffects instruction_status_effects(const Operation operation,
     case Operation::CompareString:
     case Operation::TestImmediate:
     case Operation::TestRegister:
+    case Operation::TestByteImmediate:
+    case Operation::TestAndSetByte:
     case Operation::FcmpEqual:
     case Operation::FcmpGreater:
         return {StatusRegisterBit::None, t};

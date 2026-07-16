@@ -41,6 +41,18 @@ int main() {
     require(calculate_direct_branch_target(bsr, 0x8C010000u) == 0x8C010008u,
             "Das BSR-Sprungziel ist falsch.");
 
+    const auto braf = decode(0x0523u);
+    require(braf.kind == InstructionKind::Braf && braf.branch_register == 5u &&
+                braf.control_flow == ControlFlowKind::IndirectBranch && braf.has_delay_slot &&
+                braf.text == "braf r5",
+            "BRAF verlor Register, PC-relative Zielart oder Delay Slot.");
+
+    const auto bsrf = decode(0x0A03u);
+    require(bsrf.kind == InstructionKind::Bsrf && bsrf.branch_register == 10u &&
+                bsrf.control_flow == ControlFlowKind::IndirectCall && bsrf.has_delay_slot &&
+                bsrf.text == "bsrf r10",
+            "BSRF verlor Register, Aufrufart oder Delay Slot.");
+
     const auto bt = decode(0x8901u);
     require(bt.kind == InstructionKind::Bt, "BT wurde nicht erkannt.");
     require(!bt.has_delay_slot, "Normales BT darf keinen Delay Slot besitzen.");

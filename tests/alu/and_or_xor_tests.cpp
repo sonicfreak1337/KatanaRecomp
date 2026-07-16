@@ -64,6 +64,20 @@ int main() {
     require(or_immediate.immediate == 128,
             "OR Immediate muss ohne Vorzeichenerweiterung dekodiert werden.");
 
+    const auto test_byte = katana::sh4::decode(0xCC80u);
+    const auto and_byte = katana::sh4::decode(0xCD0Fu);
+    const auto xor_byte = katana::sh4::decode(0xCEFFu);
+    const auto or_byte = katana::sh4::decode(0xCF40u);
+    const auto tas_byte = katana::sh4::decode(0x471Bu);
+    const auto clear_mac = katana::sh4::decode(0x0028u);
+    require(test_byte.kind == InstructionKind::TestByteImmediate && test_byte.immediate == 128 &&
+                and_byte.kind == InstructionKind::AndByteImmediate &&
+                xor_byte.kind == InstructionKind::XorByteImmediate &&
+                or_byte.kind == InstructionKind::OrByteImmediate &&
+                tas_byte.kind == InstructionKind::TestAndSetByte &&
+                tas_byte.source_register == 7u && clear_mac.kind == InstructionKind::ClearMac,
+            "Alpha-Byte-Logik, TAS.B oder CLRMAC wurde falsch dekodiert.");
+
     constexpr std::array<std::uint8_t, 26> bytes = {
         0xF0, 0xE1, 0x0F, 0xE2, 0x29, 0x21, 0xF0, 0xE3, 0x2B, 0x23, 0xF0, 0xE4, 0x2A,
         0x24, 0xFF, 0xE0, 0x0F, 0xC9, 0x80, 0xCB, 0xFF, 0xCA, 0x0B, 0x00, 0x09, 0x00};

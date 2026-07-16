@@ -149,6 +149,39 @@ int main() {
                 indirect_jump_source.find("cpu.pc = 0x00000008u;") != std::string::npos,
             "Aufgeloestes indirektes JMP wird nicht als nativer Dispatch generiert.");
 
+    constexpr std::array<std::uint8_t, 18> relative_jump_bytes = {
+        0x08u,
+        0xE0u, // MOV #8,R0
+        0x23u,
+        0x00u, // BRAF R0: PC+4+8 = 0x0000000E
+        0x09u,
+        0x00u, // NOP (Delay Slot)
+        0x09u,
+        0x00u,
+        0x09u,
+        0x00u,
+        0x09u,
+        0x00u,
+        0x09u,
+        0x00u,
+        0x0Bu,
+        0x00u,
+        0x09u,
+        0x00u};
+    const auto relative_jump_lines = katana::sh4::disassemble(relative_jump_bytes, 0u);
+    const std::array<katana::analysis::ResolvedControlFlowEdge, 1> relative_jump_edges = {
+        katana::analysis::ResolvedControlFlowEdge{
+            2u, 14u, katana::analysis::ResolvedControlFlowKind::Jump}};
+    const auto relative_jump_functions = katana::analysis::discover_functions(
+        relative_jump_lines, indirect_jump_seeds, relative_jump_edges);
+    const auto relative_jump_program = katana::ir::lower_program(
+        relative_jump_lines, relative_jump_functions, relative_jump_edges);
+    const auto relative_jump_source = katana::codegen::emit_cpp_program(relative_jump_program, 0u);
+    require(relative_jump_source.find("jump_target = cpu.r[0] + 0x00000006u") !=
+                    std::string::npos &&
+                relative_jump_source.find("case 0x0000000Eu:") != std::string::npos,
+            "BRAF verliert PC+4+Rm-Zielbildung zwischen IR und C++-Backend.");
+
     constexpr std::array<std::uint8_t, 16> indirect_call_bytes = {
         0x0Cu,
         0xE1u, // MOV #12,R1

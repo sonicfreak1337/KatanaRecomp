@@ -533,6 +533,11 @@ void emit_simple_instruction(std::ostringstream& output,
         emit_indent(output, indent);
         output << "}\n";
         return;
+    case Operation::ClearMac:
+        output << "cpu.mach = 0u;\n";
+        emit_indent(output, indent);
+        output << "cpu.macl = 0u;\n";
+        return;
 
     case Operation::MovImmediate:
         output << "cpu.r[" << static_cast<unsigned>(instruction.destination_register)
@@ -1225,6 +1230,44 @@ void emit_simple_instruction(std::ostringstream& output,
                << "] & cpu.r[" << static_cast<unsigned>(instruction.source_register)
                << "]) == 0u;\n";
         return;
+    case Operation::TestByteImmediate:
+    case Operation::AndByteImmediate:
+    case Operation::XorByteImmediate:
+    case Operation::OrByteImmediate: {
+        output << "{\n";
+        emit_indent(output, indent + 1);
+        output << "const std::uint32_t address = cpu.gbr + cpu.r[0];\n";
+        emit_indent(output, indent + 1);
+        output << "const std::uint8_t value = cpu.memory.read_u8(address);\n";
+        emit_indent(output, indent + 1);
+        if (instruction.operation == Operation::TestByteImmediate) {
+            output << "cpu.t = (value & static_cast<std::uint8_t>(" << instruction.immediate
+                   << ")) == 0u;\n";
+        } else {
+            const char* operation = instruction.operation == Operation::AndByteImmediate   ? "&"
+                                    : instruction.operation == Operation::XorByteImmediate ? "^"
+                                                                                           : "|";
+            output << "cpu.memory.write_u8(address, static_cast<std::uint8_t>(value " << operation
+                   << " static_cast<std::uint8_t>(" << instruction.immediate << ")));\n";
+        }
+        emit_indent(output, indent);
+        output << "}\n";
+        return;
+    }
+    case Operation::TestAndSetByte:
+        output << "{\n";
+        emit_indent(output, indent + 1);
+        output << "const std::uint32_t address = cpu.r["
+               << static_cast<unsigned>(instruction.source_register) << "];\n";
+        emit_indent(output, indent + 1);
+        output << "const std::uint8_t value = cpu.memory.read_u8(address);\n";
+        emit_indent(output, indent + 1);
+        output << "cpu.memory.write_u8(address, static_cast<std::uint8_t>(value | 0x80u));\n";
+        emit_indent(output, indent + 1);
+        output << "cpu.t = value == 0u;\n";
+        emit_indent(output, indent);
+        output << "}\n";
+        return;
     case Operation::LoadByteSigned:
         output << "cpu.r[" << static_cast<unsigned>(instruction.destination_register)
                << "] = cpu.memory.read_s8(cpu.r["
@@ -1726,7 +1769,11 @@ void emit_terminal(std::ostringstream& output,
     case Operation::JumpRegister:
         emit_indent(output, indent);
         output << "const std::uint32_t jump_target = cpu.r["
-               << static_cast<unsigned>(instruction.branch_register) << "];\n";
+               << static_cast<unsigned>(instruction.branch_register) << "]";
+        if (instruction.branch_register_relative) {
+            output << " + " << hex32(instruction.source_address + 4u);
+        }
+        output << ";\n";
 
         if (delay_slot != nullptr) {
             emit_guarded_simple_instruction(output, *delay_slot, indent);
@@ -1774,7 +1821,11 @@ void emit_terminal(std::ostringstream& output,
     case Operation::CallRegister:
         emit_indent(output, indent);
         output << "const std::uint32_t call_target = cpu.r["
-               << static_cast<unsigned>(instruction.branch_register) << "];\n";
+               << static_cast<unsigned>(instruction.branch_register) << "]";
+        if (instruction.branch_register_relative) {
+            output << " + " << hex32(instruction.source_address + 4u);
+        }
+        output << ";\n";
 
         if (delay_slot != nullptr) {
             emit_guarded_simple_instruction(output, *delay_slot, indent);
@@ -1908,6 +1959,7 @@ void emit_terminal(std::ostringstream& output,
     case Operation::DivideInitializeUnsigned:
     case Operation::DivideInitializeSigned:
     case Operation::DivideStep:
+    case Operation::ClearMac:
     case Operation::AndRegister:
     case Operation::OrRegister:
     case Operation::XorRegister:
@@ -1929,6 +1981,11 @@ void emit_terminal(std::ostringstream& output,
     case Operation::CompareString:
     case Operation::TestImmediate:
     case Operation::TestRegister:
+    case Operation::TestByteImmediate:
+    case Operation::AndByteImmediate:
+    case Operation::XorByteImmediate:
+    case Operation::OrByteImmediate:
+    case Operation::TestAndSetByte:
     case Operation::LoadByteSigned:
     case Operation::LoadWordSigned:
     case Operation::LoadLong:
@@ -2038,6 +2095,7 @@ bool is_control_flow(const katana::ir::Operation operation) {
     case Operation::DivideInitializeUnsigned:
     case Operation::DivideInitializeSigned:
     case Operation::DivideStep:
+    case Operation::ClearMac:
     case Operation::AndRegister:
     case Operation::OrRegister:
     case Operation::XorRegister:
@@ -2059,6 +2117,11 @@ bool is_control_flow(const katana::ir::Operation operation) {
     case Operation::CompareString:
     case Operation::TestImmediate:
     case Operation::TestRegister:
+    case Operation::TestByteImmediate:
+    case Operation::AndByteImmediate:
+    case Operation::XorByteImmediate:
+    case Operation::OrByteImmediate:
+    case Operation::TestAndSetByte:
     case Operation::LoadByteSigned:
     case Operation::LoadWordSigned:
     case Operation::LoadLong:

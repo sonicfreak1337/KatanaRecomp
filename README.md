@@ -25,7 +25,7 @@ Eingabe
   -> natives Hostprojekt
 ```
 
-Der aktuelle lokale Debug-Lauf umfasst **160 automatische Tests**. Phase 10 ist
+Der aktuelle lokale Debug-Lauf umfasst **161 automatische Tests**. Phase 10 ist
 fuer den freigegebenen Windows-Workflow abgeschlossen: eine `.gdi` waehlen,
 einen Ausgabeordner waehlen und den Analyse-/Buildzustand sichtbar verfolgen.
 `sourcecode/` und `game.exe` entstehen nur bei vollstaendig bewiesenem

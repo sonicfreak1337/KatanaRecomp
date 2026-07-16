@@ -29,6 +29,7 @@ MemoryEffects instruction_memory_effects(const Operation operation,
     case Operation::LoadByteSignedDisplacement:
     case Operation::LoadByteSignedR0Indexed:
     case Operation::LoadByteSignedGbrDisplacement:
+    case Operation::TestByteImmediate:
         return read(OperandWidth::Bits8);
     case Operation::LoadWordSigned:
     case Operation::LoadWordSignedDisplacement:
@@ -64,6 +65,11 @@ MemoryEffects instruction_memory_effects(const Operation operation,
     case Operation::FmovStore:
     case Operation::FmovStoreR0Indexed:
         return {MemoryAccessKind::Write, OperandWidth::Bits64, 2u};
+    case Operation::AndByteImmediate:
+    case Operation::XorByteImmediate:
+    case Operation::OrByteImmediate:
+    case Operation::TestAndSetByte:
+        return {MemoryAccessKind::Write, OperandWidth::Bits8, 2u};
 
     case Operation::StoreBytePreDecrement:
         return predecrement_write(OperandWidth::Bits8);

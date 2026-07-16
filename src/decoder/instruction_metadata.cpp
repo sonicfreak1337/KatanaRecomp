@@ -26,6 +26,8 @@ constexpr std::array kInstructionMetadata = {
     KATANA_FLOW(TrapAlways, 0xFF00u, 0xC300u, Immediate8Register0, Trap, false, false),
     KATANA_FLOW(Bra, 0xF000u, 0xA000u, Displacement12, UnconditionalBranch, true, false),
     KATANA_FLOW(Bsr, 0xF000u, 0xB000u, Displacement12, Call, true, false),
+    KATANA_FLOW(Braf, 0xF0FFu, 0x0023u, RegisterN, IndirectBranch, true, false),
+    KATANA_FLOW(Bsrf, 0xF0FFu, 0x0003u, RegisterN, IndirectCall, true, false),
     KATANA_FLOW(Bt, 0xFF00u, 0x8900u, Displacement8, ConditionalBranch, false, false),
     KATANA_FLOW(Bf, 0xFF00u, 0x8B00u, Displacement8, ConditionalBranch, false, false),
     KATANA_FLOW(BtS, 0xFF00u, 0x8D00u, Displacement8, ConditionalBranch, true, false),
@@ -100,6 +102,7 @@ constexpr std::array kInstructionMetadata = {
     KATANA_RULE(ShiftLogicalDynamic, 0xF00Fu, 0x400Du, RegisterMRegisterN),
 
     KATANA_RULE(DivideInitializeUnsigned, 0xFFFFu, 0x0019u, None),
+    KATANA_RULE(ClearMac, 0xFFFFu, 0x0028u, None),
     KATANA_RULE(DivideInitializeSigned, 0xF00Fu, 0x2007u, RegisterMRegisterN),
     KATANA_RULE(DivideStep, 0xF00Fu, 0x3004u, RegisterMRegisterN),
     KATANA_RULE(MultiplyAccumulateWord, 0xF00Fu, 0x400Fu, RegisterMRegisterN),
@@ -131,6 +134,11 @@ constexpr std::array kInstructionMetadata = {
     KATANA_RULE(CompareString, 0xF00Fu, 0x200Cu, RegisterMRegisterN),
     KATANA_RULE(TestImmediate, 0xFF00u, 0xC800u, Immediate8Register0),
     KATANA_RULE(TestRegister, 0xF00Fu, 0x2008u, RegisterMRegisterN),
+    KATANA_RULE(TestByteImmediate, 0xFF00u, 0xCC00u, Immediate8Register0),
+    KATANA_RULE(AndByteImmediate, 0xFF00u, 0xCD00u, Immediate8Register0),
+    KATANA_RULE(XorByteImmediate, 0xFF00u, 0xCE00u, Immediate8Register0),
+    KATANA_RULE(OrByteImmediate, 0xFF00u, 0xCF00u, Immediate8Register0),
+    KATANA_RULE(TestAndSetByte, 0xF0FFu, 0x401Bu, RegisterIndirectN),
 
     KATANA_RULE(MovByteStorePreDecrement, 0xF00Fu, 0x2004u, RegisterMRegisterN),
     KATANA_RULE(MovWordStorePreDecrement, 0xF00Fu, 0x2005u, RegisterMRegisterN),

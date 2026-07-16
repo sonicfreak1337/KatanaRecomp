@@ -320,6 +320,13 @@ std::vector<VerificationIssue> verify_function(const Function& function) {
                           instruction.source_address,
                           "Aufgeloeste Ziele gehoeren nicht zu indirektem Kontrollfluss.");
             }
+            if (instruction.branch_register_relative &&
+                instruction.operation != Operation::JumpRegister &&
+                instruction.operation != Operation::CallRegister) {
+                add_issue(issues,
+                          instruction.source_address,
+                          "Registerrelativer Basiswert gehoert nicht zu indirektem Kontrollfluss.");
+            }
             if (!std::is_sorted(instruction.resolved_targets.begin(),
                                 instruction.resolved_targets.end()) ||
                 std::adjacent_find(instruction.resolved_targets.begin(),

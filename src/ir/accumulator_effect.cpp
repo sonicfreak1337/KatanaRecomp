@@ -12,6 +12,8 @@ constexpr AccumulatorRegister both =
 AccumulatorEffects operation_accumulator_effects(const Operation operation,
                                                  const SpecialRegister special_register) noexcept {
     switch (operation) {
+    case Operation::ClearMac:
+        return {AccumulatorRegister::None, AccumulatorRegister::None, both, both};
     case Operation::MultiplyLong:
     case Operation::MultiplySignedWord:
     case Operation::MultiplyUnsignedWord:

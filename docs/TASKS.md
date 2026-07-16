@@ -2526,7 +2526,7 @@ Akzeptanz:
 - keine Alpha-Faehigkeitsbehauptung existiert ohne eindeutig benannte Semantik
 - Luecken und Abbruchgruende sind titelunabhaengig und reproduzierbar
 
-### [ ] KR-4502 - Fehlende Integer- und Kontrollinstruktionen
+### [x] KR-4502 - Fehlende Integer- und Kontrollinstruktionen
 
 Abhaengigkeiten: KR-4501
 

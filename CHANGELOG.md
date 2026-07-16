@@ -37,6 +37,14 @@
   Cache-/Store-Queue- und FPU-Semantik bleiben mit konkreten Runtime-Grenzen
   eingeschraenkt, unbekannte oder nicht implementierte Encodings werden
   abgelehnt. `isa-report --json` exportiert Vertragsversion 1 reproduzierbar.
+- KR-4502: `BRAF`/`BSRF` verwenden durch Decoder, Wertanalyse, IR und Backend
+  die exakte vor dem Delay Slot gelesene Zielbildung `PC+4+Rm`; `BSRF` setzt
+  PR wie ein Aufruf. `CLRMAC`, `TAS.B` sowie `TST.B`/`AND.B`/`XOR.B`/`OR.B`
+  auf `@(R0,GBR)` besitzen explizite Akkumulator-, T-Bit-, Speicher- und
+  Fehlersemantik. Eine neue generierte Regression fuehrt Null-/Nichtnull- und
+  Unmapped-Grenzen aus. Ein autorisierter privater Retail-Nachlauf fiel von
+  vier unbekannten Instruktionen auf null, bleibt wegen dynamischem
+  Kontrollfluss aber ehrlich `partial`; dieser Lauf ist kein Bootnachweis.
 - Der neue inkrementelle Entwicklungszyklus behaelt `build-current/`, setzt teure Gate-Instrumentierung beim Debugprofil sicher zurueck und baut sowie testet mit begrenzter Parallelitaet. Das frische Abschluss-Gate bleibt erhalten; die vier deterministischen Fuzzziele laufen mit unveraenderter Fallzahl und denselben abgeleiteten Seeds als parallele CTest-Eintraege.
 - Der Entwicklungsrunner normalisiert auch eine bereits aktive x86-Developer-PowerShell auf die fuer den Projektbuild erforderliche native x64-MSVC-Umgebung.
 - KR-3801 bis KR-3808: Ein intern provenance-gebundenes, vollstaendig

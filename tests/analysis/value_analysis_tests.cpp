@@ -175,6 +175,37 @@ int main() {
                 pc_address_resolution[0].reason == "pc-relative-address",
             "MOVA-Adresse wurde nicht als indirektes Sprungziel aufgeloest.");
 
+    katana::io::ExecutableImage register_relative;
+    register_relative.add_segment({".text",
+                                   0u,
+                                   0u,
+                                   16u,
+                                   katana::io::SegmentKind::Code,
+                                   {true, false, true},
+                                   {0x08u,
+                                    0xE0u, // mov #8,r0
+                                    0x23u,
+                                    0x00u, // braf r0 -> 0x0000000E
+                                    0x09u,
+                                    0x00u,
+                                    0x09u,
+                                    0x00u,
+                                    0x09u,
+                                    0x00u,
+                                    0x09u,
+                                    0x00u,
+                                    0x09u,
+                                    0x00u,
+                                    0x0Bu,
+                                    0x00u}});
+    const auto relative_resolution = katana::analysis::resolve_indirect_control_flow(
+        katana::sh4::disassemble(register_relative.segments()[0].bytes, 0u), register_relative);
+    require(relative_resolution.size() == 1u &&
+                relative_resolution[0].status == katana::analysis::ResolutionStatus::Resolved &&
+                relative_resolution[0].target == 0x0Eu &&
+                relative_resolution[0].reason == "register-relative-constant-register",
+            "BRAF-Ziel verwendet nicht den vor dem Delay Slot gelesenen PC+4+Rm-Wert.");
+
     std::cout << "KR-1801/KR-4506 Lokale Konstantenpropagation erfolgreich.\n";
     return EXIT_SUCCESS;
 }

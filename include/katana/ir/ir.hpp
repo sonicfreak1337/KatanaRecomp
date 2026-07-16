@@ -161,6 +161,7 @@ enum class Operation {
     DivideInitializeUnsigned,
     DivideInitializeSigned,
     DivideStep,
+    ClearMac,
     AndRegister,
     OrRegister,
     XorRegister,
@@ -182,6 +183,11 @@ enum class Operation {
     CompareString,
     TestImmediate,
     TestRegister,
+    TestByteImmediate,
+    AndByteImmediate,
+    XorByteImmediate,
+    OrByteImmediate,
+    TestAndSetByte,
     LoadByteSigned,
     LoadWordSigned,
     LoadLong,
@@ -288,6 +294,7 @@ struct Instruction {
 
     DelaySlotRelation delay_slot;
     bool is_privileged = false;
+    bool branch_register_relative = false;
 };
 
 struct BasicBlock {

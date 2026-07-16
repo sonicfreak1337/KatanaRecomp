@@ -184,7 +184,9 @@ ControlFlowAnalysisResult analyze_control_flow(const katana::io::ExecutableImage
                     continue;
                 }
                 if (dispatch->instruction.kind != katana::sh4::InstructionKind::Jmp &&
-                    dispatch->instruction.kind != katana::sh4::InstructionKind::Jsr) {
+                    dispatch->instruction.kind != katana::sh4::InstructionKind::Jsr &&
+                    dispatch->instruction.kind != katana::sh4::InstructionKind::Braf &&
+                    dispatch->instruction.kind != katana::sh4::InstructionKind::Bsrf) {
                     if (hints) {
                         analysis.directive_diagnostics.push_back(
                             {table.line,
@@ -214,7 +216,8 @@ ControlFlowAnalysisResult analyze_control_flow(const katana::io::ExecutableImage
                 auto jump_table = analyze_jump_table(
                     image, table.dispatch_address, table.table_address, table.entry_count);
                 jump_table.dispatch_kind =
-                    dispatch->instruction.kind == katana::sh4::InstructionKind::Jsr
+                    (dispatch->instruction.kind == katana::sh4::InstructionKind::Jsr ||
+                     dispatch->instruction.kind == katana::sh4::InstructionKind::Bsrf)
                         ? JumpTableDispatchKind::Call
                         : JumpTableDispatchKind::Jump;
                 if (hints) {

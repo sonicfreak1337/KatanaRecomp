@@ -297,6 +297,12 @@ DecodedInstruction decode(const std::uint16_t opcode) {
         return instruction;
     }
 
+    if (matches_metadata(opcode, InstructionKind::ClearMac)) {
+        instruction.kind = InstructionKind::ClearMac;
+        instruction.text = "clrmac";
+        return instruction;
+    }
+
     if (matches_metadata(opcode, InstructionKind::Rts)) {
         instruction.kind = InstructionKind::Rts;
         instruction.control_flow = ControlFlowKind::Return;
@@ -329,6 +335,13 @@ DecodedInstruction decode(const std::uint16_t opcode) {
         return instruction;
     }
 
+    if (matches_metadata(opcode, InstructionKind::TestAndSetByte)) {
+        instruction.kind = InstructionKind::TestAndSetByte;
+        instruction.source_register = static_cast<std::uint8_t>((opcode >> 8u) & 0x0Fu);
+        instruction.text = "tas.b @" + register_name(instruction.source_register);
+        return instruction;
+    }
+
     if (matches_metadata(opcode, InstructionKind::TrapAlways)) {
         instruction.kind = InstructionKind::TrapAlways;
         instruction.immediate = static_cast<std::int32_t>(opcode & 0x00FFu);
@@ -352,6 +365,24 @@ DecodedInstruction decode(const std::uint16_t opcode) {
         instruction.control_flow = ControlFlowKind::Call;
         instruction.has_delay_slot = true;
         instruction.text = "bsr";
+        return instruction;
+    }
+
+    if (matches_metadata(opcode, InstructionKind::Braf)) {
+        instruction.kind = InstructionKind::Braf;
+        instruction.branch_register = static_cast<std::uint8_t>((opcode >> 8u) & 0x0Fu);
+        instruction.control_flow = ControlFlowKind::IndirectBranch;
+        instruction.has_delay_slot = true;
+        instruction.text = "braf " + register_name(instruction.branch_register);
+        return instruction;
+    }
+
+    if (matches_metadata(opcode, InstructionKind::Bsrf)) {
+        instruction.kind = InstructionKind::Bsrf;
+        instruction.branch_register = static_cast<std::uint8_t>((opcode >> 8u) & 0x0Fu);
+        instruction.control_flow = ControlFlowKind::IndirectCall;
+        instruction.has_delay_slot = true;
+        instruction.text = "bsrf " + register_name(instruction.branch_register);
         return instruction;
     }
 
@@ -991,6 +1022,21 @@ DecodedInstruction decode(const std::uint16_t opcode) {
         instruction.text = "tst " + register_name(instruction.source_register) + ", " +
                            register_name(instruction.destination_register);
 
+        return instruction;
+    }
+    for (const auto kind : {InstructionKind::TestByteImmediate,
+                            InstructionKind::AndByteImmediate,
+                            InstructionKind::XorByteImmediate,
+                            InstructionKind::OrByteImmediate}) {
+        if (!matches_metadata(opcode, kind)) continue;
+        instruction.kind = kind;
+        instruction.immediate = static_cast<std::int32_t>(opcode & 0x00FFu);
+        const auto mnemonic = kind == InstructionKind::TestByteImmediate  ? "tst.b"
+                              : kind == InstructionKind::AndByteImmediate ? "and.b"
+                              : kind == InstructionKind::XorByteImmediate ? "xor.b"
+                                                                          : "or.b";
+        instruction.text =
+            std::string(mnemonic) + " #" + std::to_string(instruction.immediate) + ", @(r0,gbr)";
         return instruction;
     }
     if (matches_metadata(opcode, InstructionKind::MovByteStorePreDecrement)) {

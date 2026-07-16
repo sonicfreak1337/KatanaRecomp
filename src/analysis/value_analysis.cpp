@@ -132,6 +132,8 @@ void apply_local_transfer(RegisterConstants& state,
         return;
     case katana::sh4::InstructionKind::Jmp:
     case katana::sh4::InstructionKind::Jsr:
+    case katana::sh4::InstructionKind::Braf:
+    case katana::sh4::InstructionKind::Bsrf:
     case katana::sh4::InstructionKind::Rts:
         clear_constants(state);
         return;
@@ -178,7 +180,9 @@ analyze_register_values(const std::span<const katana::sh4::DisassemblyLine> line
     analysis.trace = propagate_constants(lines, initial, nullptr);
     for (std::size_t index = 0; index < lines.size(); ++index) {
         if (lines[index].instruction.kind != katana::sh4::InstructionKind::Jmp &&
-            lines[index].instruction.kind != katana::sh4::InstructionKind::Jsr) {
+            lines[index].instruction.kind != katana::sh4::InstructionKind::Jsr &&
+            lines[index].instruction.kind != katana::sh4::InstructionKind::Braf &&
+            lines[index].instruction.kind != katana::sh4::InstructionKind::Bsrf) {
             continue;
         }
         const auto register_index = lines[index].instruction.branch_register;
@@ -198,7 +202,9 @@ resolve_indirect_control_flow(const std::span<const katana::sh4::DisassemblyLine
     values.trace = propagate_constants(lines, {}, &image);
     for (std::size_t index = 0u; index < lines.size(); ++index) {
         if (lines[index].instruction.kind != katana::sh4::InstructionKind::Jmp &&
-            lines[index].instruction.kind != katana::sh4::InstructionKind::Jsr)
+            lines[index].instruction.kind != katana::sh4::InstructionKind::Jsr &&
+            lines[index].instruction.kind != katana::sh4::InstructionKind::Braf &&
+            lines[index].instruction.kind != katana::sh4::InstructionKind::Bsrf)
             continue;
         const auto register_index = lines[index].instruction.branch_register;
         values.indirect_control_flow.push_back(
@@ -220,7 +226,8 @@ resolve_indirect_control_flow(const std::span<const katana::sh4::DisassemblyLine
         resolution.instruction_address = observation.instruction_address;
         resolution.register_index = observation.register_index;
         resolution.kind =
-            line != lines.end() && line->instruction.kind == katana::sh4::InstructionKind::Jsr
+            line != lines.end() && (line->instruction.kind == katana::sh4::InstructionKind::Jsr ||
+                                    line->instruction.kind == katana::sh4::InstructionKind::Bsrf)
                 ? IndirectControlFlowKind::Call
                 : IndirectControlFlowKind::Jump;
         if (!observation.value.has_value()) {
@@ -228,7 +235,11 @@ resolve_indirect_control_flow(const std::span<const katana::sh4::DisassemblyLine
             resolutions.push_back(std::move(resolution));
             continue;
         }
-        const auto target = *observation.value;
+        auto target = *observation.value;
+        const bool register_relative =
+            line != lines.end() && (line->instruction.kind == katana::sh4::InstructionKind::Braf ||
+                                    line->instruction.kind == katana::sh4::InstructionKind::Bsrf);
+        if (register_relative) target += observation.instruction_address + 4u;
         const auto validation = validate_committed_code_address(image, target);
         if (!validation.valid()) {
             resolution.reason = code_address_status_name(validation.status);
@@ -238,6 +249,7 @@ resolve_indirect_control_flow(const std::span<const katana::sh4::DisassemblyLine
         resolution.status = ResolutionStatus::Resolved;
         resolution.target = target;
         resolution.reason = observation.source.empty() ? "constant-register" : observation.source;
+        if (register_relative) resolution.reason = "register-relative-" + resolution.reason;
         resolutions.push_back(std::move(resolution));
     }
     return resolutions;

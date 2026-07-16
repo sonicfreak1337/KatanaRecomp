@@ -37,6 +37,13 @@ Die konkreten Grenzen sind derzeit:
 - Operand-Cache-RAM und vollstaendige Cachekohaerenz sind nicht aktiviert.
 - Vollstaendige SH-4-FPU-Ursachen-, Enable- und Sticky-Flag-Semantik fehlt.
 
+KR-4502 schliesst die fuer den ersten Retail-Analysepfad benoetigte allgemeine
+Integer-/Bitgruppe: `BRAF`, `BSRF`, `CLRMAC`, `TAS.B` und die vier
+GBR-byteweisen Immediate-Operationen. `BRAF`/`BSRF` verwenden `PC+4+Rm` und
+lesen `Rm` vor dem Delay Slot; der Aufruf schreibt PR erst nach erfolgreichem
+Slot. Die Byteoperationen besitzen strukturierte Unmapped-/Ausrichtungsfehler
+und `TAS.B` deckt Null- und Nichtnullwerte ausfuehrbar ab.
+
 KR-4502 und KR-4503 duerfen einen Zustand nur zusammen mit Decoder-, IR-,
 Backend-, Runtime- und Erfolg/Grenze/Fehler-Tests anheben. Eine sinkende Zahl
 unbekannter Opcodes allein ist kein Nachweis fuer Alpha-Unterstuetzung.
