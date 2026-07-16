@@ -14,6 +14,10 @@
   Tabellenbreite. Die zuvor vorhandene RWX-Ausnahme wurde entfernt;
   PC-relative Literale im Zero-Fill werden ohne leere Offset-Dereferenz
   konservativ verworfen.
+- Registerarithmetik kombiniert die Herkunft von Ziel und Quelle jetzt fuer
+  `ADD`, `SUB`, `AND`, `OR` und `XOR` deterministisch. Mehrstufige Beweisketten
+  bleiben erhalten; Self-XOR und Self-SUB werden mit eigener Herkunft sicher zu
+  null gefaltet.
 
 ### Hinzugefuegt
 

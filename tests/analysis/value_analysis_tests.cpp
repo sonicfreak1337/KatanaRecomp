@@ -105,6 +105,63 @@ int main() {
             "Registerweises ADD hat unabhaengige Konstanten verworfen oder den Zielwert falsch "
             "berechnet.");
 
+    const auto mixed_lines = katana::sh4::disassemble(
+        std::array<std::uint8_t, 8>{0x00u, 0xC7u, 0x04u, 0xE1u, 0x0Cu, 0x31u, 0x2Bu, 0x41u},
+        0u);
+    const auto mixed_values = katana::analysis::analyze_register_values(mixed_lines);
+    require(mixed_values.indirect_control_flow.size() == 1u &&
+                mixed_values.indirect_control_flow[0].value == 8u &&
+                mixed_values.indirect_control_flow[0].source ==
+                    "add(constant-register,pc-relative-address)",
+            "Konstante plus PC-relative Adresse verlor ihre zusammengesetzte Herkunft.");
+
+    auto arithmetic_line = [](const katana::sh4::InstructionKind kind,
+                              const std::uint8_t source,
+                              const std::uint8_t destination) {
+        katana::sh4::DisassemblyLine result;
+        result.instruction.kind = kind;
+        result.instruction.source_register = source;
+        result.instruction.destination_register = destination;
+        return result;
+    };
+    katana::analysis::RegisterConstants provenance_initial;
+    provenance_initial.registers[1] = 2u;
+    provenance_initial.sources[1] = "immutable-value";
+    provenance_initial.registers[2] = 3u;
+    provenance_initial.sources[2] = "pc-relative-address";
+    provenance_initial.registers[3] = 7u;
+    provenance_initial.sources[3] = "third-source";
+    const std::array provenance_lines{
+        arithmetic_line(katana::sh4::InstructionKind::AddRegister, 2u, 1u),
+        arithmetic_line(katana::sh4::InstructionKind::XorRegister, 3u, 1u)};
+    auto sequenced_lines = provenance_lines;
+    sequenced_lines[1].address = 2u;
+    const auto provenance_trace =
+        katana::analysis::propagate_local_constants(sequenced_lines, provenance_initial);
+    require(provenance_trace[0].after.sources[1] ==
+                "add(immutable-value,pc-relative-address)" &&
+                provenance_trace[1].after.sources[1] ==
+                    "xor(add(immutable-value,pc-relative-address),third-source)",
+            "Mehrstufige oder unterschiedlich hergeleitete Arithmetik verlor ihre Beweiskette.");
+
+    katana::analysis::RegisterConstants self_initial;
+    self_initial.registers[1] = 2u;
+    self_initial.sources[1] = "self-source";
+    const std::array self_add_lines{
+        arithmetic_line(katana::sh4::InstructionKind::AddRegister, 1u, 1u)};
+    const auto self_add =
+        katana::analysis::propagate_local_constants(self_add_lines, self_initial);
+    require(self_add[0].after.registers[1] == 4u &&
+                self_add[0].after.sources[1] == "add(self-source,self-source)",
+            "Identisches ADD-Quell-/Zielregister verlor Wert oder Herkunft.");
+
+    const std::array self_xor_lines{
+        arithmetic_line(katana::sh4::InstructionKind::XorRegister, 5u, 5u)};
+    const auto self_xor = katana::analysis::propagate_local_constants(self_xor_lines);
+    require(self_xor[0].after.registers[5] == 0u &&
+                self_xor[0].after.sources[5] == "xor-self",
+            "XOR Rn,Rn wurde nicht unabhaengig vom Eingang sicher zu null gefaltet.");
+
     constexpr std::array<std::uint8_t, 8> indirect_bytes{
         0x20u, 0xE1u, 0x03u, 0x71u, 0x13u, 0x62u, 0x2Bu, 0x42u};
     const auto indirect_lines = katana::sh4::disassemble(indirect_bytes, 0x1000u);

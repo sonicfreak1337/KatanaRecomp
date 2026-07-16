@@ -52,6 +52,21 @@ void clear_register(RegisterConstants& state, const std::uint8_t index) {
     state.sources[index].clear();
 }
 
+std::string normalized_source(const std::string& source) {
+    return source.empty() ? "constant-register" : source;
+}
+
+std::string combined_source(const std::string_view operation,
+                            const std::string& destination,
+                            const std::string& source) {
+    return std::string(operation) + '(' + normalized_source(destination) + ',' +
+           normalized_source(source) + ')';
+}
+
+std::string immediate_source(const std::string_view operation, const std::string& source) {
+    return std::string(operation) + '(' + normalized_source(source) + ",immediate)";
+}
+
 constexpr std::uint16_t register_bit(const std::uint8_t index) {
     return static_cast<std::uint16_t>(1u << index);
 }
@@ -297,22 +312,38 @@ void apply_local_transfer(RegisterConstants& state,
         if (state.registers[instruction.destination_register].has_value()) {
             *state.registers[instruction.destination_register] +=
                 static_cast<std::uint32_t>(instruction.immediate);
+            state.sources[instruction.destination_register] =
+                immediate_source("add", state.sources[instruction.destination_register]);
         }
         return;
     case katana::sh4::InstructionKind::AddRegister:
         if (state.registers[instruction.destination_register].has_value() &&
             state.registers[instruction.source_register].has_value()) {
+            const auto provenance = combined_source(
+                "add",
+                state.sources[instruction.destination_register],
+                state.sources[instruction.source_register]);
             *state.registers[instruction.destination_register] +=
                 *state.registers[instruction.source_register];
+            state.sources[instruction.destination_register] = provenance;
         } else {
             clear_register(state, instruction.destination_register);
         }
         return;
     case katana::sh4::InstructionKind::SubRegister:
+        if (instruction.destination_register == instruction.source_register) {
+            set_constant(state, instruction.destination_register, 0u, "sub-self");
+            return;
+        }
         if (state.registers[instruction.destination_register].has_value() &&
             state.registers[instruction.source_register].has_value()) {
+            const auto provenance = combined_source(
+                "sub",
+                state.sources[instruction.destination_register],
+                state.sources[instruction.source_register]);
             *state.registers[instruction.destination_register] -=
                 *state.registers[instruction.source_register];
+            state.sources[instruction.destination_register] = provenance;
         } else {
             clear_register(state, instruction.destination_register);
         }
@@ -320,8 +351,22 @@ void apply_local_transfer(RegisterConstants& state,
     case katana::sh4::InstructionKind::AndRegister:
     case katana::sh4::InstructionKind::OrRegister:
     case katana::sh4::InstructionKind::XorRegister:
+        if (instruction.kind == katana::sh4::InstructionKind::XorRegister &&
+            instruction.destination_register == instruction.source_register) {
+            set_constant(state, instruction.destination_register, 0u, "xor-self");
+            return;
+        }
         if (state.registers[instruction.destination_register].has_value() &&
             state.registers[instruction.source_register].has_value()) {
+            const auto operation = instruction.kind == katana::sh4::InstructionKind::AndRegister
+                                       ? "and"
+                                   : instruction.kind == katana::sh4::InstructionKind::OrRegister
+                                       ? "or"
+                                       : "xor";
+            const auto provenance = combined_source(
+                operation,
+                state.sources[instruction.destination_register],
+                state.sources[instruction.source_register]);
             auto& destination = *state.registers[instruction.destination_register];
             const auto source = *state.registers[instruction.source_register];
             if (instruction.kind == katana::sh4::InstructionKind::AndRegister) {
@@ -331,6 +376,7 @@ void apply_local_transfer(RegisterConstants& state,
             } else {
                 destination ^= source;
             }
+            state.sources[instruction.destination_register] = provenance;
         } else {
             clear_register(state, instruction.destination_register);
         }
@@ -339,6 +385,11 @@ void apply_local_transfer(RegisterConstants& state,
     case katana::sh4::InstructionKind::OrImmediate:
     case katana::sh4::InstructionKind::XorImmediate:
         if (state.registers[0].has_value()) {
+            const auto operation = instruction.kind == katana::sh4::InstructionKind::AndImmediate
+                                       ? "and"
+                                   : instruction.kind == katana::sh4::InstructionKind::OrImmediate
+                                       ? "or"
+                                       : "xor";
             auto& destination = *state.registers[0];
             const auto immediate = static_cast<std::uint32_t>(instruction.immediate);
             if (instruction.kind == katana::sh4::InstructionKind::AndImmediate) {
@@ -348,6 +399,7 @@ void apply_local_transfer(RegisterConstants& state,
             } else {
                 destination ^= immediate;
             }
+            state.sources[0] = immediate_source(operation, state.sources[0]);
         }
         return;
     default:

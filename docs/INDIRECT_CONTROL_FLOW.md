@@ -73,6 +73,11 @@ Die Registerwertanalyse erweitert den lokalen Transfer um registerweise Add-,
 Sub- und logische Operationen. Fuer jede indirekte `JMP`-/`JSR`-Stelle zeichnet
 sie den verwendeten Registerindex und den davor beweisbaren Wert auf. Ein
 fehlender Wert bleibt explizit unbekannt und wird nicht geraten.
+Arithmetisch kombinierte Konstanten tragen eine verschachtelte Herkunft aus
+Operation, Ziel- und Quellbeweis; dadurch wird eine PC-relative Basis weder als
+reine Immediate-Konstante ausgegeben noch in umgekehrter Operandenlage
+faelschlich zur alleinigen Herkunft. `XOR Rn,Rn` und `SUB Rn,Rn` besitzen den
+eingangsunabhaengigen Nullbeweis `xor-self` beziehungsweise `sub-self`.
 Adressluecken setzen den lokalen Registerzustand zurueck, sodass Konstanten nicht
 zwischen getrennt entdeckten Codebereichen weitergetragen werden.
 
