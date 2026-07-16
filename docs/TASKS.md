@@ -1864,7 +1864,7 @@ Akzeptanz:
 - Disc-, Firmware-, Portexport- und andere private/generierte Eingaben koennen nicht in die feste Paketliste gelangen
 - das Artefakt bleibt als `0.34.0-dev` gekennzeichnet und ist kein vorgezogenes v0.37.0-Release
 
-### [ ] KR-3707 - Differenztests der Ausfuehrungswege
+### [x] KR-3707 - Differenztests der Ausfuehrungswege
 
 Abhaengigkeiten: KR-2504, KR-3204, KR-3409, KR-3410, KR-3701
 

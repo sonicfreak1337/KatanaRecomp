@@ -244,6 +244,21 @@ target_include_directories(
 
 katana_enable_warnings(katana_core)
 
+add_library(katana_test_support STATIC
+    src/testing/differential_execution.cpp
+)
+
+add_library(KatanaRecomp::test_support ALIAS katana_test_support)
+
+target_include_directories(
+    katana_test_support
+    PUBLIC
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+
+target_link_libraries(katana_test_support PUBLIC katana_runtime)
+katana_enable_warnings(katana_test_support)
+
 add_executable(katana-recomp
     src/cli/main.cpp
 )
@@ -265,6 +280,21 @@ target_compile_definitions(
 katana_enable_warnings(katana-recomp)
 
 enable_testing()
+
+add_executable(
+    katana-differential-execution-tests
+    tests/testing/differential_execution_tests.cpp
+)
+target_link_libraries(
+    katana-differential-execution-tests
+    PRIVATE
+        katana_test_support
+)
+katana_enable_warnings(katana-differential-execution-tests)
+add_test(
+    NAME katana-differential-execution-tests
+    COMMAND katana-differential-execution-tests
+)
 
 if(KATANA_BUILD_FUZZERS)
     add_executable(katana-fuzz tools/fuzz/fuzz_runner.cpp)
