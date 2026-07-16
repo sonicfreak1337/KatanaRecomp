@@ -91,8 +91,10 @@ load_dreamcast_runtime_boot(const std::filesystem::path& descriptor_path) {
             repeated_reads_match};
 }
 
-DreamcastRuntimeState initialize_dreamcast_runtime(CpuState& cpu,
-                                                   const DreamcastRuntimeBootImage& boot) {
+DreamcastRuntimeState
+initialize_dreamcast_runtime(CpuState& cpu,
+                             const DreamcastRuntimeBootImage& boot,
+                             const DreamcastRuntimeFirmwareMode firmware_mode) {
     if (!boot.source || boot.boot_file.empty() || !boot.repeated_reads_match) {
         throw std::invalid_argument("Dreamcast-Runtime-Bootimage ist unvollstaendig.");
     }
@@ -102,6 +104,48 @@ DreamcastRuntimeState initialize_dreamcast_runtime(CpuState& cpu,
     state.vram = map_dreamcast_vram(cpu.memory);
     state.aica_ram = map_dreamcast_aica_ram(cpu.memory);
     state.flash = map_dreamcast_command_flash(cpu.memory);
+    state.scheduler = std::make_shared<EventScheduler>();
+    state.rtc_clock = std::make_shared<Sh4RtcClockDomain>(256u);
+    state.tmu = std::make_shared<Sh4Tmu>(*state.scheduler, TmuTiming{1u, state.rtc_clock});
+    state.rtc = std::make_shared<Sh4Rtc>(*state.scheduler, state.rtc_clock);
+    state.dmac = std::make_shared<Sh4Dmac>(*state.scheduler, cpu.memory, DmaTiming{1u});
+    state.interrupt_controller = std::make_shared<InterruptController>();
+    state.interrupt_router = std::make_shared<PlatformInterruptRouter>(
+        *state.interrupt_controller, *state.tmu, *state.rtc, *state.dmac);
+    state.system_asic = map_dreamcast_system_asic(cpu.memory, *state.interrupt_router);
+    const auto asic = std::weak_ptr<DreamcastSystemAsic>(state.system_asic);
+    const auto scheduler = std::weak_ptr<EventScheduler>(state.scheduler);
+    const auto raise_now = [asic, scheduler](const SystemAsicEvent event) {
+        const auto target = asic.lock();
+        const auto clock = scheduler.lock();
+        if (!target || !clock)
+            throw std::runtime_error("Dreamcast-System-ASIC-Lebenszyklus fehlt.");
+        target->raise(event, clock->current_cycle());
+    };
+    state.pvr_registers =
+        map_pvr_registers(cpu.memory, [raise_now] { raise_now(SystemAsicEvent::PvrRenderDone); });
+    state.aica_registers = map_aica_registers(cpu.memory);
+    state.maple = std::make_shared<MapleBus>([raise_now] { raise_now(SystemAsicEvent::MapleDma); });
+    state.gdrom = std::make_shared<GdRomAsyncReader>(
+        GdRomDrive(boot.source), GdRomTiming{}, [asic, scheduler](const std::uint64_t cycle) {
+            const auto target = asic.lock();
+            const auto clock = scheduler.lock();
+            if (!target || !clock)
+                throw std::runtime_error("Dreamcast-System-ASIC-Lebenszyklus fehlt.");
+            static_cast<void>(target->schedule(*clock, SystemAsicEvent::GdromCommand, cycle));
+        });
+    state.aica = std::make_shared<AicaExecutionController>();
+    state.aica->interrupts().set_observer(
+        [raise_now] { raise_now(SystemAsicEvent::AicaInterrupt); });
+    state.runtime_blocks = std::make_shared<RuntimeBlockTable>();
+    state.firmware_handoff = std::make_shared<FirmwareHandoffMap>();
+    state.firmware_handoff->map_segment({"main-ram",
+                                         FirmwareSegmentKind::Ram,
+                                         0x8C000000u,
+                                         0x0C000000u,
+                                         static_cast<std::uint32_t>(dreamcast_main_ram_size)});
+    if (firmware_mode == DreamcastRuntimeFirmwareMode::HleBiosAbi)
+        install_hle_bios_abi(cpu.memory, *state.runtime_blocks, *state.firmware_handoff);
     std::copy(boot.boot_file.begin(),
               boot.boot_file.end(),
               state.main_ram->writable_bytes().begin() + 0x00010000u);

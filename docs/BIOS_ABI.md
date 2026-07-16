@@ -32,3 +32,10 @@ oder als erfolgreicher No-op behandelt.
 Der maschinenlesbare Vertrag besitzt Schema `katana-bios-abi`, Version 1.
 Synthetische Tests pruefen reproduzierbare Vektorbytes, Runtimeblockdispatch,
 P1/P2-Handoff, bekannte aufgeschobene Dienste und unbekannte Funktionen.
+
+Die Installation gehoert zum produktiven Bootzustand: `boot_homebrew()` gibt
+im HLE-Modus die befuellte `RuntimeBlockTable` und `FirmwareHandoffMap` als
+lebenszyklusgebundene Ressourcen zurueck. Der GDI-/Portpfad waehlt HLE aus
+`execution.firmware`, initialisiert dieselben Ressourcen in
+`DreamcastRuntimeState` und bettet die Moduswahl in die erzeugte `game.exe` ein.
+Der Vertical-Slice ruft keine nachtraegliche Testinstallation mehr auf.

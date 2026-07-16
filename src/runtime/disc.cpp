@@ -167,8 +167,11 @@ std::uint32_t GdRomDrive::sector_size() const noexcept {
     return sector_size_;
 }
 
-GdRomAsyncReader::GdRomAsyncReader(GdRomDrive drive, const GdRomTiming timing)
-    : drive_(std::move(drive)), timing_(timing) {}
+GdRomAsyncReader::GdRomAsyncReader(GdRomDrive drive,
+                                   const GdRomTiming timing,
+                                   std::function<void(std::uint64_t)> completion_observer)
+    : drive_(std::move(drive)), timing_(timing),
+      completion_observer_(std::move(completion_observer)) {}
 
 std::uint64_t GdRomAsyncReader::submit(const GdRomRequest& request) {
     const auto sectors = request.command == GdRomCommand::ReadSectors
@@ -204,6 +207,7 @@ void GdRomAsyncReader::advance_to(const std::uint64_t cycle) {
         }
         completed_.push_back(
             {iterator->request_id, iterator->ready_cycle, drive_.execute(iterator->request)});
+        if (completion_observer_) completion_observer_(iterator->ready_cycle);
         iterator = pending_.erase(iterator);
     }
     std::sort(completed_.begin(), completed_.end(), [](const auto& left, const auto& right) {

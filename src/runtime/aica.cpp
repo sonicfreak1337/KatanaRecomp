@@ -209,8 +209,12 @@ bool AicaTimer::enabled() const noexcept {
 void AicaInterruptState::set_enabled(const std::uint32_t mask) noexcept {
     enabled_ = mask;
 }
-void AicaInterruptState::request(const std::uint32_t mask) noexcept {
+void AicaInterruptState::set_observer(std::function<void()> observer) {
+    observer_ = std::move(observer);
+}
+void AicaInterruptState::request(const std::uint32_t mask) {
     pending_ |= mask;
+    if ((pending_ & enabled_) != 0u && observer_) observer_();
 }
 void AicaInterruptState::acknowledge(const std::uint32_t mask) noexcept {
     pending_ &= ~mask;

@@ -42,6 +42,7 @@ struct PreparedPortProgram {
     std::uint32_t entry_address = 0u;
     std::size_t boot_size = 0u;
     std::string_view project_identity;
+    bool hle_bios_abi = false;
 };
 
 [[nodiscard]] PortExportResult

@@ -3,6 +3,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <span>
 #include <vector>
@@ -128,6 +129,7 @@ struct MapleTransactionRecord {
 
 class MapleBus final {
   public:
+    explicit MapleBus(std::function<void()> completion_observer = {});
     void attach(std::uint8_t port, std::uint8_t unit, std::shared_ptr<MapleDevice> device);
     [[nodiscard]] bool attached(std::uint8_t port, std::uint8_t unit) const;
     [[nodiscard]] MapleResponse
@@ -139,6 +141,7 @@ class MapleBus final {
     std::array<std::shared_ptr<MapleDevice>, maple_port_count * maple_units_per_port> devices_{};
     std::vector<MapleTransactionRecord> history_;
     std::uint64_t next_sequence_ = 1u;
+    std::function<void()> completion_observer_;
 };
 
 } // namespace katana::runtime

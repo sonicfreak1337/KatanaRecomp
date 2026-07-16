@@ -182,8 +182,32 @@ int run_test(const int argc, char* argv[]) {
         katana::runtime::initialize_dreamcast_runtime(runtime_cpu, runtime_boot);
     require(runtime_state.loaded_boot_bytes == 24u && runtime_cpu.pc == 0x8C010000u &&
                 runtime_cpu.r[15] == 0x8D000000u &&
-                runtime_cpu.memory.read_u16(0x8C010000u) == 0xE00Au,
+                runtime_cpu.memory.read_u16(0x8C010000u) == 0xE00Au &&
+                runtime_state.runtime_blocks && runtime_state.runtime_blocks->size() == 0u &&
+                runtime_state.system_asic && runtime_state.interrupt_router,
             "Eigenstaendiger GDI-Boot initialisiert Bootimage, CPU oder Speicher nicht.");
+    katana::runtime::CpuState hle_runtime_cpu;
+    const auto hle_runtime_state = katana::runtime::initialize_dreamcast_runtime(
+        hle_runtime_cpu, runtime_boot, katana::runtime::DreamcastRuntimeFirmwareMode::HleBiosAbi);
+    require(hle_runtime_cpu.memory.read_u32(0x8C0000B0u) == 0x8C000100u &&
+                hle_runtime_state.runtime_blocks->size() == 6u,
+            "Produktiver GDI-HLE-Runtimepfad installiert die BIOS-ABI nicht.");
+    hle_runtime_state.pvr_registers->write(katana::runtime::pvr_register::StartRender, 1u);
+    auto input = std::make_shared<katana::runtime::ReplayInputBackend>(
+        std::vector<katana::runtime::ControllerState>{{}});
+    hle_runtime_state.maple->attach(
+        0u, 0u, std::make_shared<katana::runtime::MapleControllerDevice>(input));
+    static_cast<void>(hle_runtime_state.maple->exchange(
+        0u, 0u, {katana::runtime::MapleCommand::GetCondition, {}}));
+    static_cast<void>(
+        hle_runtime_state.gdrom->submit({katana::runtime::GdRomCommand::TestUnitReady}));
+    hle_runtime_state.gdrom->advance_to(1'000u);
+    static_cast<void>(hle_runtime_state.scheduler->advance_to(1'000u, 1u));
+    hle_runtime_state.aica->interrupts().set_enabled(1u);
+    hle_runtime_state.aica->interrupts().request(1u);
+    require(
+        hle_runtime_state.system_asic->events().size() == 4u,
+        "Produktive PVR-, Maple-, GD-ROM- und AICA-Ereignisse erreichen das System-ASIC nicht.");
     const auto output = fixture.root / "port";
     const PortExportOptions options{"synthetic_game", "0.37.0-dev", {1u, 4096u}};
 

@@ -3,6 +3,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <span>
@@ -88,7 +89,9 @@ struct GdRomAsyncCompletion {
 
 class GdRomAsyncReader final {
   public:
-    explicit GdRomAsyncReader(GdRomDrive drive, GdRomTiming timing = {});
+    explicit GdRomAsyncReader(GdRomDrive drive,
+                              GdRomTiming timing = {},
+                              std::function<void(std::uint64_t)> completion_observer = {});
     [[nodiscard]] std::uint64_t submit(const GdRomRequest& request);
     void advance_to(std::uint64_t cycle);
     [[nodiscard]] std::optional<GdRomAsyncCompletion> take_completed();
@@ -107,6 +110,7 @@ class GdRomAsyncReader final {
     std::uint64_t next_request_id_ = 1u;
     std::vector<Pending> pending_;
     std::vector<GdRomAsyncCompletion> completed_;
+    std::function<void(std::uint64_t)> completion_observer_;
 };
 
 } // namespace katana::runtime

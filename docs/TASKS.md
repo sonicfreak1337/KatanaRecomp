@@ -2637,7 +2637,7 @@ Akzeptanz:
 - Ereignisreihenfolgen sind gastzeitbasiert und reproduzierbar
 - unbekannte MMIO-Zugriffe koennen nicht still erfolgreich sein
 
-### [x] KR-4604 - v0.46 Gate-Vorbereitung: Tests und Build
+### [ ] KR-4604 - v0.46 Gate-Vorbereitung: Tests und Build
 
 Abhaengigkeiten: KR-4601 bis KR-4603
 

@@ -5,6 +5,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <span>
 #include <vector>
@@ -33,6 +34,7 @@ inline constexpr std::uint32_t VideoControl = 0x0E8u;
 
 class PvrRegisterFile final {
   public:
+    explicit PvrRegisterFile(std::function<void()> render_observer = {});
     [[nodiscard]] std::uint32_t read(std::uint32_t offset) const;
     void write(std::uint32_t offset, std::uint32_t value);
     void reset() noexcept;
@@ -44,6 +46,7 @@ class PvrRegisterFile final {
     std::array<std::uint32_t, pvr_register_size / 4u> registers_{};
     std::uint64_t render_requests_ = 0u;
     std::uint64_t resets_ = 0u;
+    std::function<void()> render_observer_;
 };
 
 enum class PvrFramebufferFormat : std::uint8_t { Rgb565, Argb1555, Rgb888 };
@@ -142,6 +145,7 @@ class RecordingPvrRenderBackend final : public PvrRenderBackend {
     std::vector<PvrTexture> last_textures_;
 };
 
-[[nodiscard]] std::shared_ptr<PvrRegisterFile> map_pvr_registers(Memory& memory);
+[[nodiscard]] std::shared_ptr<PvrRegisterFile>
+map_pvr_registers(Memory& memory, std::function<void()> render_observer = {});
 
 } // namespace katana::runtime

@@ -44,17 +44,11 @@ int main() {
     runtime::InterruptController controller;
     runtime::PlatformInterruptRouter router(controller, tmu, rtc, dmac);
     const auto asic = runtime::map_dreamcast_system_asic(cpu.memory, router);
-    runtime::RuntimeBlockTable blocks;
-    runtime::FirmwareHandoffMap handoff;
-    handoff.map_segment(
-        {"main-ram", runtime::FirmwareSegmentKind::Ram, 0x8C000000u, 0x0C000000u, 0x01000000u});
-    runtime::install_hle_bios_abi(cpu.memory, blocks, handoff);
-
     cpu.pc = runtime::hle_bios_abi_vectors()[0].handler_address;
     cpu.r[7] = 0u;
     cpu.pr = 0x8C010000u;
     runtime::BlockExecutionContext context;
-    const auto* bios = blocks.lookup(cpu.pc, {});
+    const auto* bios = boot.runtime_blocks->lookup(cpu.pc, {});
     const auto bios_exit = bios->function(cpu, context);
     require(bios_exit.kind == runtime::BlockEndKind::Return && cpu.pc == 0x8C010000u,
             "HLE-BIOS-ABI erreicht den gemeinsamen Runtimeblock-Handoff nicht.");
@@ -69,7 +63,7 @@ int main() {
     cpu.vbr = 0x8C000000u;
     cpu.set_interrupt_mask(0u);
     require(router.accept(cpu) && cpu.intevt == 0x000003A0u && asic->events().size() == 4u &&
-                handoff.runtime_symbols().size() == 12u,
+                boot.firmware_handoff->runtime_symbols().size() == 12u,
             "Gemeinsamer Retail-Bootpfad erreicht BIOS-Handoff und ASIC-IRL9 nicht.");
 
     std::cout << "KR_V046_RETAIL_BOOT_SERVICES_READY\n";

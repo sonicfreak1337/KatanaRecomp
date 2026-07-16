@@ -182,6 +182,13 @@
 
 ### Behoben
 
+- Reviewkorrektur: Produktiver HLE-Boot installiert und besitzt die sechs
+  BIOS-ABI-Vektoren samt Runtimeblocktabelle und Firmware-Handoff selbst. Der
+  GDI-Portexport uebernimmt `execution.firmware` in die erzeugte `game.exe`.
+  Der produktive Runtimezustand besitzt System-ASIC, Scheduler, Router, PVR,
+  Maple, GD-ROM und AICA gemeinsam; reale Geraeteaktionen signalisieren ihre
+  ASIC-Ereignisse ueber Callbacks. Der bisherige v0.46-Gatelauf ist wegen
+  dieser und weiterer Reviewkorrekturen invalidiert; KR-4604 ist wieder offen.
 - Reviewkorrektur: Der private Retail-Harness trennt Prozessstart von Exitcode
   und Timeout, uebernimmt `silent_failures` ausschliesslich aus genau einem
   validierten Runtimemarker und prueft SA-Checkpoints als lueckenlose,

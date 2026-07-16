@@ -20,6 +20,14 @@ Der Alpha-Vertrag fuehrt folgende Quellen durch dieselbe Matrix:
 - GD-ROM-Befehl, DMA und DMA-Fehler
 - AICA-/G2-DMA und AICA-Interrupt
 
+`initialize_dreamcast_runtime()` besitzt Scheduler, TMU/RTC/DMAC,
+Interruptcontroller/-router und ASIC gemeinsam und mappt PVR- sowie AICA-MMIO.
+Produktive Callbacks verbinden PVR-Renderstart, abgeschlossene Maple-
+Transaktionen, GD-ROM-Fertigstellungen und AICA-Interruptanforderungen mit
+`raise()`/`schedule()`. Der erzeugte Portdienst verwendet denselben Scheduler
+und signalisiert abgeschlossene Plattform-DMA ueber das ASIC; er besitzt keinen
+separaten privaten Scheduler mehr.
+
 Geraete melden Ereignisse mit einem Gastzyklus. Der `EventScheduler` ordnet
 gleiche Zyklen stabil nach Einreihungs-ID; das ASIC protokolliert zusaetzlich
 eine monotone Sequenz. Rueckwaerts laufende Gastzeit wird abgelehnt.

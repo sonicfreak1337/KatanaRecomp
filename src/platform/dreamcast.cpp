@@ -2,6 +2,7 @@
 
 #include "katana/platform/firmware_profile.hpp"
 
+#include "katana/runtime/bios_abi.hpp"
 #include "katana/runtime/dreamcast_memory.hpp"
 
 #include <iomanip>
@@ -94,6 +95,18 @@ DreamcastBootResult boot_homebrew(runtime::CpuState& cpu,
         cpu,
         runtime::ResetState{
             entry, config.stack_pointer, config.vector_base, config.status_register, config.fpscr});
+    if (config.firmware_mode == FirmwareMode::HleBiosAbi) {
+        result.runtime_blocks = std::make_shared<runtime::RuntimeBlockTable>();
+        result.firmware_handoff = std::make_shared<runtime::FirmwareHandoffMap>();
+        result.firmware_handoff->map_segment(
+            {"main-ram",
+             runtime::FirmwareSegmentKind::Ram,
+             0x8C000000u,
+             0x0C000000u,
+             static_cast<std::uint32_t>(runtime::dreamcast_main_ram_size)});
+        runtime::install_hle_bios_abi(cpu.memory, *result.runtime_blocks, *result.firmware_handoff);
+        result.log.push_back("bios-abi=installed");
+    }
     result.log.push_back("boot=ready");
     return result;
 }

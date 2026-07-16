@@ -5,6 +5,9 @@
 
 namespace katana::runtime {
 
+MapleBus::MapleBus(std::function<void()> completion_observer)
+    : completion_observer_(std::move(completion_observer)) {}
+
 ReplayInputBackend::ReplayInputBackend(std::vector<ControllerState> frames)
     : frames_(std::move(frames)) {
     if (frames_.empty()) {
@@ -160,6 +163,7 @@ MapleBus::exchange(const std::uint8_t port, const std::uint8_t unit, const Maple
     auto response = device->transact(request);
     history_.push_back(
         MapleTransactionRecord{next_sequence_++, port, unit, request.command, response.code});
+    if (completion_observer_) completion_observer_();
     return response;
 }
 

@@ -9,6 +9,9 @@
 
 namespace katana::runtime {
 
+PvrRegisterFile::PvrRegisterFile(std::function<void()> render_observer)
+    : render_observer_(std::move(render_observer)) {}
+
 std::size_t PvrRegisterFile::index(const std::uint32_t offset) {
     if (offset >= pvr_register_size || (offset & 3u) != 0u) {
         throw std::out_of_range("Ungueltiger oder nicht ausgerichteter PVR-Registeroffset.");
@@ -39,6 +42,7 @@ void PvrRegisterFile::write(const std::uint32_t offset, const std::uint32_t valu
     }
     if (offset == pvr_register::StartRender) {
         ++render_requests_;
+        if (render_observer_) render_observer_();
         return;
     }
     registers_[index(offset)] = value;
@@ -280,8 +284,9 @@ const std::vector<PvrTexture>& RecordingPvrRenderBackend::last_textures() const 
     return last_textures_;
 }
 
-std::shared_ptr<PvrRegisterFile> map_pvr_registers(Memory& memory) {
-    auto registers = std::make_shared<PvrRegisterFile>();
+std::shared_ptr<PvrRegisterFile> map_pvr_registers(Memory& memory,
+                                                   std::function<void()> render_observer) {
+    auto registers = std::make_shared<PvrRegisterFile>(std::move(render_observer));
     auto device = std::make_shared<MmioMemoryDevice>(
         pvr_register_size,
         [registers](const std::uint32_t offset, const MemoryAccessWidth width) {

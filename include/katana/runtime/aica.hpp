@@ -5,6 +5,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <span>
 #include <vector>
@@ -107,8 +108,9 @@ class AicaTimer final {
 
 class AicaInterruptState final {
   public:
+    void set_observer(std::function<void()> observer);
     void set_enabled(std::uint32_t mask) noexcept;
-    void request(std::uint32_t mask) noexcept;
+    void request(std::uint32_t mask);
     void acknowledge(std::uint32_t mask) noexcept;
     [[nodiscard]] std::uint32_t pending() const noexcept;
     [[nodiscard]] bool asserted() const noexcept;
@@ -116,6 +118,7 @@ class AicaInterruptState final {
   private:
     std::uint32_t enabled_ = 0u;
     std::uint32_t pending_ = 0u;
+    std::function<void()> observer_;
 };
 
 class AicaExecutionController final {

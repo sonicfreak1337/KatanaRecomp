@@ -77,7 +77,7 @@ std::string generated_header(const std::string& entry_namespace) {
            "}\n";
 }
 
-std::string handwritten_main(const std::string& entry_namespace) {
+std::string handwritten_main(const std::string& entry_namespace, const bool hle_bios_abi) {
     return "#include \"katana_port.hpp\"\n"
            "#include \"katana/runtime/dreamcast_boot.hpp\"\n"
            "#include \"katana/runtime/scheduler.hpp\"\n"
@@ -88,7 +88,9 @@ std::string handwritten_main(const std::string& entry_namespace) {
            "namespace {\n"
            "class PortPlatformServices final : public katana::runtime::PlatformServices {\n"
            "  public:\n"
-           "    explicit PortPlatformServices(katana::runtime::CpuState& cpu) : cpu_(cpu) {}\n"
+           "    PortPlatformServices(katana::runtime::CpuState& cpu,\n"
+           "                         const katana::runtime::DreamcastRuntimeState& state)\n"
+           "        : cpu_(cpu), state_(state) {}\n"
            "    std::string_view name() const noexcept override { return \"dreamcast-port\"; }\n"
            "    std::uint32_t abi_version() const noexcept override {\n"
            "        return katana::runtime::platform_services_abi_version;\n"
@@ -105,12 +107,13 @@ std::string handwritten_main(const std::string& entry_namespace) {
            "        for (const auto byte : input) cpu_.memory.write_u8(address++, byte);\n"
            "    }\n"
            "    std::uint64_t scheduler_cycle() const noexcept override {\n"
-           "        return scheduler_.current_cycle();\n"
+           "        return state_.scheduler->current_cycle();\n"
            "    }\n"
            "    katana::runtime::PlatformSchedulerResult\n"
            "    advance_scheduler(std::uint64_t cycle, std::size_t budget) override {\n"
-           "        const auto target = std::max(cycle, scheduler_.current_cycle());\n"
-           "        const auto result = scheduler_.advance_to(target, budget);\n"
+           "        const auto target = std::max(cycle, state_.scheduler->current_cycle());\n"
+           "        const auto result = state_.scheduler->advance_to(target, budget);\n"
+           "        static_cast<void>(state_.interrupt_router->synchronize());\n"
            "        return {result.guest_cycle, result.processed_events,\n"
            "                result.status == "
            "katana::runtime::SchedulerAdvanceStatus::EventBudgetExhausted};\n"
@@ -124,6 +127,8 @@ std::string handwritten_main(const std::string& entry_namespace) {
            "        std::vector<std::uint8_t> bytes(request.length);\n"
            "        read_memory(request.source, bytes);\n"
            "        write_memory(request.destination, bytes);\n"
+           "        state_.system_asic->raise(katana::runtime::SystemAsicEvent::AicaDma,\n"
+           "                                  state_.scheduler->current_cycle());\n"
            "        return {request.length, true};\n"
            "    }\n"
            "    katana::runtime::PlatformFallbackResult controlled_fallback(\n"
@@ -137,7 +142,7 @@ std::string handwritten_main(const std::string& entry_namespace) {
            "    }\n"
            "  private:\n"
            "    katana::runtime::CpuState& cpu_;\n"
-           "    katana::runtime::EventScheduler scheduler_;\n"
+           "    const katana::runtime::DreamcastRuntimeState& state_;\n"
            "};\n\n"
            "std::string redact_source(std::string message, const std::filesystem::path& source) {\n"
            "    std::error_code path_error;\n"
@@ -174,15 +179,26 @@ std::string handwritten_main(const std::string& entry_namespace) {
            "        }\n"
            "        const auto boot = katana::runtime::load_dreamcast_runtime_boot(source);\n"
            "        katana::runtime::CpuState cpu;\n"
-           "        const auto state = katana::runtime::initialize_dreamcast_runtime(cpu, boot);\n"
-           "        PortPlatformServices services(cpu);\n"
+           "        const auto state = katana::runtime::initialize_dreamcast_runtime(\n"
+           "            cpu, boot, katana::runtime::DreamcastRuntimeFirmwareMode::" +
+           std::string(hle_bios_abi ? "HleBiosAbi" : "Direct") +
+           ");\n"
+           "        PortPlatformServices services(cpu, state);\n"
            "        const auto result = " +
            entry_namespace +
            "::run_runtime(cpu, services);\n"
-           "        if (result.indirect_dispatches == 0u || state.loaded_boot_bytes == 0u) {\n"
+           "        const std::uint64_t silent_failures =\n"
+           "            (result.indirect_dispatches == 0u ? 1u : 0u) +\n"
+           "            (state.loaded_boot_bytes == 0u ? 1u : 0u);\n"
+           "        if (silent_failures != 0u) {\n"
            "            throw std::runtime_error(\"Runtime-Einstieg besitzt keinen "
            "Dispatchnachweis.\");\n"
            "        }\n"
+           "        std::cout << \"SA_MAIN_ENTERED\\n\";\n"
+           "        std::cout << \"KATANA_RUNTIME_METRICS silent_failures=\"\n"
+           "                  << silent_failures << \" guest_cycles=\"\n"
+           "                  << result.scheduler_cycle << \" indirect_dispatches=\"\n"
+           "                  << result.indirect_dispatches << '\\n';\n"
            "        std::cout << \"KR_GENERATED_RUNTIME_STARTED boot_bytes=\"\n"
            "                  << state.loaded_boot_bytes << \" indirect_dispatches=\"\n"
            "                  << result.indirect_dispatches << \" final_pc=\" << result.final_pc "
@@ -512,7 +528,8 @@ PortExportResult export_dreamcast_port_project(const PreparedPortProgram& prepar
     const auto write = write_codegen_project(canonical_root / "generated", std::move(artifacts));
     write_user_file_once(canonical_root, "CMakeLists.txt", root_cmake());
     write_user_file_once(canonical_root, ".gitignore", "/build/\n");
-    write_user_file_once(canonical_root, "src/main.cpp", handwritten_main(entry_namespace));
+    write_user_file_once(
+        canonical_root, "src/main.cpp", handwritten_main(entry_namespace, prepared.hle_bios_abi));
 
     return {canonical_root,
             prepared.program.size(),

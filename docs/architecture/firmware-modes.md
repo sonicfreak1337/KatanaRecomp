@@ -34,6 +34,9 @@ Runtimeblocks. Bekannte, noch nicht an Plattformdienste angeschlossene Aufrufe
 enden `service-unavailable`; unbekannte Aufrufe sind harte Fehler. Es werden
 keine BIOS-ROM-Bytes benoetigt oder statisch in erzeugten Code kopiert. Details
 stehen in [`../BIOS_ABI.md`](../BIOS_ABI.md).
+Die Moduswahl wird beim Portexport aus dem Manifest in den produktiven
+GDI-Runtimeaufruf uebernommen; eine HLE-Logzeile ohne installierte Ressourcen
+ist kein zulaessiger Erfolg.
 
 ## Optionales LLE
 

@@ -2,6 +2,8 @@
 
 #include "katana/io/elf32_sh_loader.hpp"
 #include "katana/io/raw_binary_loader.hpp"
+#include "katana/runtime/block_table.hpp"
+#include "katana/runtime/firmware_handoff.hpp"
 #include "katana/runtime/runtime.hpp"
 
 #include <cstddef>
@@ -29,6 +31,8 @@ struct DreamcastBootResult {
     std::size_t loaded_segments = 0u;
     std::size_t loaded_bytes = 0u;
     std::vector<std::string> log;
+    std::shared_ptr<runtime::RuntimeBlockTable> runtime_blocks;
+    std::shared_ptr<runtime::FirmwareHandoffMap> firmware_handoff;
 };
 
 [[nodiscard]] DreamcastBootResult boot_homebrew(runtime::CpuState& cpu,

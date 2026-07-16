@@ -384,6 +384,8 @@ int main() {
     gdi_manifest.base_address.reset();
     gdi_manifest.entry_point = 0x8C010004u;
     gdi_manifest.expected_entry_points = {0x8C010000u};
+    gdi_manifest.firmware_mode = io::ProjectFirmwareMode::Hle;
+    gdi_manifest.required_backend_capabilities = {"memory", "firmware-mode"};
     const auto gdi_overrides = fixture.root / "disc" / "analysis.overrides";
     write_text(gdi_overrides,
                "version = 2\nschema = katana-analysis-directives\nmode = override\n"
@@ -413,6 +415,8 @@ int main() {
                       gdi_job.checkpoints.end(),
                       "host-build-complete") != gdi_job.checkpoints.end() &&
             std::filesystem::exists(fixture.root / "gdi-build" / "sourcecode" / "CMakeLists.txt") &&
+            read_text(fixture.root / "gdi-build" / "sourcecode" / "src" / "main.cpp")
+                    .find("DreamcastRuntimeFirmwareMode::HleBiosAbi") != std::string::npos &&
 #ifdef _WIN32
             std::filesystem::exists(fixture.root / "gdi-build" / "game.exe"),
 #else

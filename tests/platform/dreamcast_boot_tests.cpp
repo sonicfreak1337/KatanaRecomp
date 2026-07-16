@@ -48,6 +48,19 @@ int main() {
                 result.log.back() == "boot=ready",
             "Minimales Plattformlogging ist unvollstaendig.");
 
+    runtime::CpuState hle_cpu;
+    hle_cpu.memory = runtime::Memory(0u);
+    platform::DreamcastBootConfig hle;
+    hle.firmware_mode = platform::FirmwareMode::HleBiosAbi;
+    const auto hle_result = platform::boot_homebrew(hle_cpu, image, hle);
+    require(hle_result.runtime_blocks && hle_result.firmware_handoff &&
+                hle_result.runtime_blocks->size() == 6u &&
+                hle_result.firmware_handoff->runtime_symbols().size() == 12u &&
+                hle_cpu.memory.read_u32(0x8C0000B0u) == 0x8C000100u &&
+                hle_result.log.front() == "firmware=hle-bios-abi" &&
+                hle_result.log[hle_result.log.size() - 2u] == "bios-abi=installed",
+            "Produktiver HLE-Boot installiert BIOS-ABI, Blocktabelle oder Handoff nicht.");
+
     runtime::CpuState unsupported;
     unsupported.memory = runtime::Memory(0u);
     platform::DreamcastBootConfig lle;
