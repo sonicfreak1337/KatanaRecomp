@@ -443,14 +443,14 @@ Der Helfer `tools\release-version.ps1` aktualisiert VERSION und CMake und kann e
 
 ## Naechste technische Ziele
 
-1. modulares Codegen-Backend-Interface
-2. Migration des C++-Backends
-3. ABI-Faehigkeitspruefung
-4. explizite Block-ABI und Zustandsuebergaben
-5. versionierte Plattformdienst-Schnittstelle
+1. Cache-, Store-Queue- und On-Chip-RAM-Vertrag abschliessen
+2. v0.34-Gate-Vorbereitung mit den gesammelten Tests und einem frischen Build
+3. Review-Stopp vor dem v0.34-Release-Gate
+4. stabiler Manifest-/CLI-Vertrag und `.gdi`-zu-Port-Projektexport
+5. schrittweise Alpha-Integration von v0.45 bis v0.49
 
-Das lokale Windows-Gate wird bis zum Alpha-Gate ausschliesslich fuer einen
-frischen Debug-Build und ohne fest codierten Disc-Pfad gestartet:
+Der folgende Phase-6-Aufruf ist ein historischer lokaler Quellen- und
+Bootblock-Diagnosepfad. Er gilt nicht als Sonic-Adventure-Ausfuehrungsnachweis:
 
 ```powershell
 .\tools\run_phase6_gate.ps1 -GdiPath <lokale-disc.gdi> -Configuration Debug
@@ -459,13 +459,34 @@ frischen Debug-Build und ohne fest codierten Disc-Pfad gestartet:
 Die temporaere generierte Blockprobe wird danach entfernt; nur der redigierte
 JSON-Bericht bleibt unter `build-current/phase6-gate/`.
 
+## Arbeits-, Test- und Release-Workflow
+
+Regulaere Implementierungs-Tasks werden zuerst ohne routinemaessige Builds und
+Testlaeufe abgearbeitet. Ihre Testanforderungen werden gesammelt. Erst der
+letzte Gate-Vorbereitungstask einer Phase setzt alle Tests um, erstellt genau
+einen frischen Build in `build-current/` und fuehrt die vollstaendige
+Regression aus.
+
+Danach wird vor jedem Phasen-Release-Gate fuer das Nutzerreview gestoppt. Ohne
+ausdrueckliche Freigabe beginnen weder Gate noch Versionsaenderung,
+Release-Commit, Tag oder Veroeffentlichung. Review-Aenderungen erfordern eine
+vollstaendige Wiederholung der Gate-Vorbereitung.
+
+Sonic Adventure wird erstmals in der Alpha-Gate-Vorbereitung fuer v0.50.0
+ausgefuehrt. Alpha ist erreicht, wenn die lokale GDI zu einem externen
+Port-Projekt mit `game.exe` verarbeitet wurde, `game.exe` startet und
+reproduzierbar `SA_ALPHA_BOOTED` erreicht. Ein erster Frame oder Gameplay ist
+dafuer nicht erforderlich. Eine titelbezogene Assetextraktion, nach der die
+urspruengliche GDI geloescht werden kann, gehoert in das jeweilige
+Spieleport-Folgeprojekt und nicht in KatanaRecomp selbst.
+
 
 ## Roadmap und Arbeitsuebergabe
 
 - `ROADMAP.md`: langfristige technische Phasen und Release-Gates
 - `docs/TASKS.md`: issue-taugliche Task-IDs mit Abhaengigkeiten
 - `docs/CODEX_HANDOFF.md`: verbindliche Arbeitsregeln fuer Codex
-- `docs/SONIC_ADVENTURE_ACCEPTANCE.md`: lokale, kumulative End-to-End-Akzeptanzgates ab Phase 6
+- `docs/SONIC_ADVENTURE_ACCEPTANCE.md`: lokaler Sonic-Adventure-Alpha-Vertrag und verteilbare Pre-Alpha-Checkpoints
 - `docs/TASK_TEMPLATE.md`: Vorlage fuer neue Arbeitspakete
 - `tools/next-roadmap-task.ps1`: zeigt den naechsten offenen Task
 

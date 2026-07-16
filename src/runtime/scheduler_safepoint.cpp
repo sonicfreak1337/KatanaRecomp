@@ -48,8 +48,15 @@ std::vector<SafepointReport> SchedulerSafepoints::consume_loop(
     std::vector<SafepointReport> result;
     while (guest_cycles != 0u) {
         const auto chunk = std::min(guest_cycles, loop_quantum_);
+        const auto before = scheduler_.current_cycle();
         result.push_back(consume(chunk, SafepointKind::LoopBackedge, origin));
-        guest_cycles -= chunk;
+        const auto consumed = result.back().delivered_cycle - before;
+        if (consumed == 0u && result.back().budget_exhausted) {
+            throw std::runtime_error(
+                "Scheduler-Ereignisbudget ist ohne Gastzyklusfortschritt erschoepft."
+            );
+        }
+        guest_cycles -= consumed;
     }
     return result;
 }

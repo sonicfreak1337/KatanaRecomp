@@ -6,7 +6,16 @@ Dieses Dokument zerlegt die Roadmap in issue-taugliche Arbeitspakete.
 
 - Eine Aenderung bearbeitet normalerweise genau eine Task-ID.
 - Abhaengigkeiten muessen vor Beginn abgeschlossen sein.
-- Jeder Task braucht Tests.
+- Jeder Implementierungs-Task dokumentiert konkrete Erfolgs-, Grenz- und
+  Fehlertests, fuehrt sie aber noch nicht aus.
+- Erst der letzte Gate-Vorbereitungstask einer Phase erstellt oder
+  vervollstaendigt die gesammelten Tests und fuehrt genau einen frischen Build
+  in `build-current/` sowie die vollstaendige Regression aus.
+- Vor jedem Phasen-Release-Gate wird nach der Gate-Vorbereitung fuer das
+  Nutzerreview gestoppt. Das Gate, Versionsaenderungen, Release-Commit, Tag und
+  Veroeffentlichung brauchen eine ausdrueckliche Nutzerfreigabe.
+- Review-Aenderungen machen die bisherige Gate-Freigabe ungueltig und erfordern
+  eine vollstaendige Wiederholung der Gate-Vorbereitung.
 - Scope-Erweiterungen werden als neuer Task dokumentiert.
 - Status wird mit `[ ]`, `[~]`, `[x]`, `[!]` oder `[?]` fuer offene Architekturentscheidungen gepflegt.
 
@@ -1053,7 +1062,9 @@ Akzeptanz:
 - Budgetstopp ist sichtbar fortsetzbar; Stop und Callbackfehler hinterlassen keine Teilkadenz
 - Neustart ankert am aktuellen Gastzyklus, Reset loescht alle Medienzaehler
 - callback-internes Stop, Stop/Start und Reset erzeugen weder Doppel- noch Geisterereignisse
-- der lokale Sonic-Adventure-Test bleibt ausschliesslich dem spaeter freigegebenen v0.31.0-Gate vorbehalten
+- die historische lokale GDI-Blockprobe bleibt ausschliesslich dem
+  freigegebenen v0.31.0-Gate vorbehalten und gilt nicht als
+  Sonic-Adventure-Ausfuehrungsnachweis
 
 ---
 
@@ -1308,7 +1319,7 @@ Akzeptanz:
 - Fallback kann weder MMIO-Nebenwirkungen noch Watchpoints umgehen
 - jeder Eintritt wird mit stabilem Grund gezaehlt und kann per Manifest verboten werden
 
-### [ ] KR-3410 - Cache-, Store-Queue- und On-Chip-RAM-Vertrag
+### [x] KR-3410 - Cache-/Store-Queue-Vertrag und v0.34 Gate-Vorbereitung
 
 Abhaengigkeiten: KR-2205, KR-2605, KR-2803, KR-3103, KR-3404, KR-3408
 
@@ -1320,6 +1331,9 @@ Umfang:
 - `OCBI`, `OCBP`, `OCBWB`, `ICBI`, `MOVCA.L` und CCR-relevante Cacheeffekte fuer das unterstuetzte Profil explizit einstufen
 - Operand-Cache-RAM-Modus und seine Beziehung zu physischem Speicher, Aliasen und Codeinvalidierung dokumentieren
 - nicht modellierte Mikrocacheeffekte als Faehigkeitsgrenze ausweisen, nicht als vollstaendige Emulation behaupten
+- alle seit dem letzten Gate gesammelten Testanforderungen umsetzen und danach
+  genau einen frischen Build in `build-current/` mit vollstaendiger Regression
+  ausfuehren
 
 Akzeptanz:
 
@@ -1328,6 +1342,8 @@ Akzeptanz:
 - RAM- und TA-Ziele durchlaufen ihre jeweiligen Speicher-/MMIO-Nebenwirkungen
 - Cachewartung an ausfuehrbarem RAM kann keinen stale Block hinterlassen
 - CCR-Operand-Cache-RAM wird entweder korrekt modelliert oder der betreffende LLE-Pfad vor Ausfuehrung sichtbar abgelehnt
+- der Gate-Bericht umfasst alle v0.34-Tests und den frischen Build; danach wird
+  vor KR-3411 fuer das Nutzerreview gestoppt
 
 ### [ ] KR-3411 - v0.34 Release-Gate
 
@@ -1340,6 +1356,8 @@ Akzeptanz:
 - Scheduler-/Interruptreihenfolge ist zwischen generiertem Code und Fallback identisch
 - MMU-/FPSCR-Waechter und ihre Invalidierungswege sind dokumentiert
 - keine proprietaere Firmware und kein Referenzprojektcode wurde aufgenommen
+- die unveraenderte KR-3410-Gate-Vorbereitung ist vom Nutzer ausdruecklich
+  freigegeben; ohne Freigabe erfolgen weder Versionierung noch Release-Commit
 
 ---
 
@@ -1397,6 +1415,60 @@ Akzeptanz:
 - ein einzelnes geaendertes Eingabebyte invalidiert betroffene Caches
 - Berichte enthalten ohne Opt-in weder absolute Pfade noch Firmwarestrings oder Flash-Nutzdaten
 - Provenienzdaten reichen zur Reproduktion der Werkzeugkonfiguration, nicht zur Rekonstruktion geschuetzter Eingaben
+
+### [ ] KR-3507 - Reproduzierbarer Port-Projektexport
+
+Abhaengigkeiten: KR-3006, KR-3304, KR-3305, KR-3411, KR-3501, KR-3502
+
+Umfang:
+
+- einen offiziellen CLI-Befehl nach dem Vertrag
+  `katana-recomp port <quelle.gdi> --output <ordner> --target-name <name>`
+  bereitstellen
+- die validierte GDI-Quelle ueber Dreamcast-Bootdatei, Executable Image,
+  Analyse, IR und deterministisch partitionierten Codegen bis zum Hostbuild
+  durchreichen
+- ein stabiles Port-Layout mit Katana-verwaltetem `generated/`,
+  handgeschriebenem `src/`, reproduzierbaren Metadaten und getrenntem
+  Buildverzeichnis erzeugen
+- neben der generierten statischen Bibliothek einen minimalen Host-Einstieg und
+  ein ausfuehrbares CMake-/Ninja-Ziel `game` beziehungsweise `game.exe` erzeugen
+- die Katana-Runtime ueber einen expliziten, versionierten Buildvertrag
+  einbinden und der Port-Schicht eine austauschbare `DiscSource`-Anbindung
+  bereitstellen
+- bei erneuter Generierung ausschliesslich im Artefaktmanifest als generiert
+  markierte Dateien ersetzen oder entfernen
+- lokal abgeleiteten Spielcode und notwendige Konstantdaten als private
+  Nutzerartefakte behandeln; GDI-Tracks und allgemeine Spielassets weder in das
+  KatanaRecomp-Repository noch in dessen Releasepakete kopieren
+- titelbezogene Assetextraktion, Installationslayout und den Betrieb nach
+  Loeschen der GDI ausdruecklich dem jeweiligen Folgeprojekt ueberlassen
+
+Akzeptanz:
+
+- eine synthetische GDI erzeugt mit einem einzigen CLI-Aufruf ein vollstaendiges
+  Port-Projekt und einen erfolgreichen Hostbuild
+- der Windows-Build erzeugt `<name>.exe`; der Linux-Build erzeugt das
+  entsprechende ausfuehrbare Ziel ohne plattformspezifische manuelle Quelldatei
+- das erzeugte Projekt kann ausserhalb des KatanaRecomp-Quellbaums ueber seine
+  dokumentierte, versionierte Runtime-Abhaengigkeit konfiguriert und gebaut
+  werden
+- generierter Spielcode, Blockmetadaten, Host-Einstieg und Builddateien besitzen
+  stabile, relative Pfade; absolute GDI-, Track-, Build- oder Hostpfade werden
+  nicht in portable Quellen oder Metadaten eingebettet
+- eine zweite Generierung mit identischen Eingaben liefert bytegleiche
+  generierte Quellen und Metadaten und erhaelt absichtlich angelegte Dateien
+  unter `src/` unveraendert
+- eine geaenderte Eingabe invalidiert die betroffenen generierten Artefakte,
+  ohne veraltete Translation Units oder handgeschriebene Portdateien zu loeschen
+- das erzeugte Hostprogramm kann fuer lokale Validierung dieselbe GDI ueber eine
+  Laufzeitoption oeffnen; ein Folgeprojekt kann diese Quelle ohne Aenderung des
+  generierten Spielcodes durch eine eigene `DiscSource` ersetzen
+- KatanaRecomp verspricht ohne eine solche Folgeprojekt-`DiscSource` nicht,
+  dass die Nutzer-GDI nach dem Port-Build geloescht werden kann
+- fehlende Runtime, ungueltige Zielnamen, nicht beschreibbare Ausgabeordner und
+  Buildfehler enden mit stabilen Exitcodes und verwertbaren Diagnosen statt mit
+  einem teilweise als erfolgreich gemeldeten Port
 
 ### [ ] KR-3601 - Symbolische Namen
 
@@ -1564,7 +1636,7 @@ Akzeptanz:
 - ungueltige Aliaszyklen und ueberlappende Provenienz werden sauber abgelehnt
 - der automatisierte Kurzlauf besitzt feste Seeds; Langlaeufe koennen extern skaliert werden
 
-### [ ] KR-3709 - Referenz- und Lizenzprovenienz
+### [ ] KR-3709 - Referenz-/Lizenzprovenienz und v0.37 Gate-Vorbereitung
 
 Abhaengigkeiten: KR-3701
 
@@ -1575,6 +1647,8 @@ Umfang:
 - Lizenzfolgen einer direkten Flycast-Subsystemeinbindung vor jeder solchen Entscheidung gesondert bewerten
 - dcrecomp nur als Architekturvergleich behandeln, solange keine explizit kompatible Codefreigabe vorliegt
 - automatisiert nach versehentlich aufgenommenen Referenzdateien und bekannten Firmwarepfaden suchen
+- alle Testanforderungen aus v0.35 bis v0.37 umsetzen und danach genau einen
+  frischen Build in `build-current/` mit vollstaendiger Regression ausfuehren
 
 Akzeptanz:
 
@@ -1582,10 +1656,12 @@ Akzeptanz:
 - eine direkte GPL-pflichtige Einbindung kann nicht ohne dokumentierte Projektlizenzentscheidung aktiviert werden
 - der lokale Audit findet absichtlich platzierte verbotene Referenz- und Firmwarefixtures
 - Copyright- und Lizenzhinweise aller tatsaechlichen Abhaengigkeiten sind vollstaendig
+- der reproduzierbare Gate-Bericht liegt vor; danach wird vor KR-3710 fuer das
+  Nutzerreview gestoppt
 
 ### [ ] KR-3710 - v0.37 Release-Gate
 
-Abhaengigkeiten: KR-3701 bis KR-3709
+Abhaengigkeiten: KR-3411, KR-3501 bis KR-3507, KR-3601 bis KR-3609, KR-3701 bis KR-3709
 
 Akzeptanz:
 
@@ -1593,6 +1669,8 @@ Akzeptanz:
 - Dispatch-, Fallback-, Invalidierungs- und Schedulerdiagnosen besitzen stabile JSON-Schemata
 - gleiche Eingaben erzeugen bytegleiche Blockmetadaten und Release-Artefakte
 - Datenschutz- und Lizenztests verwenden ausschliesslich synthetische Markerdaten
+- die unveraenderte KR-3709-Gate-Vorbereitung ist vom Nutzer ausdruecklich
+  freigegeben
 
 ---
 
@@ -1734,9 +1812,9 @@ Akzeptanz:
 - eine Blockinvalidierung leert alle betroffenen Inline-Caches vor Wiederverwendung
 - Waechtertreffer und -fehler sind im Profil getrennt sichtbar
 
-### [ ] KR-3908 - Codegroessen-, Invalidierungs- und Schedulerbudgets
+### [ ] KR-3908 - Budgets und v0.39 Gate-Vorbereitung
 
-Abhaengigkeiten: KR-3301, KR-3404, KR-3407, KR-3901, KR-3906
+Abhaengigkeiten: KR-3710, KR-3801 bis KR-3809, KR-3901 bis KR-3907
 
 Umfang:
 
@@ -1744,6 +1822,8 @@ Umfang:
 - Invalidierungen, Relinks, Fallbackrate und Schedulerjitter separat begrenzen
 - Codegen-, Hostbuild- und Laufzeitmessungen getrennt ausgeben
 - Regressionen mit stabilen Schwellen und dokumentierter Hardwareklasse bewerten
+- alle Testanforderungen aus v0.38 und v0.39 umsetzen und danach genau einen
+  frischen Build in `build-current/` mit vollstaendiger Regression ausfuehren
 
 Akzeptanz:
 
@@ -1751,6 +1831,8 @@ Akzeptanz:
 - Bericht nennt absolute Werte, Baseline und prozentuale Aenderung
 - Korrektheitstests laufen unabhaengig von Performancebudgets weiter
 - optionale LLE-Messungen werden nicht mit dem BIOS-freien Pflichtprofil vermischt
+- der Gate-Bericht liegt reproduzierbar vor; danach wird vor KR-3909 fuer das
+  Nutzerreview gestoppt
 
 ### [ ] KR-3909 - v0.39 Release-Gate
 
@@ -1762,6 +1844,8 @@ Akzeptanz:
 - Fastpaths und Inline-Caches bestehen die Differenz- und Invalidierungstests
 - kein Optimierungspfad umgeht MMIO, Watchpoints, Ausnahmen oder Scheduler-Safepoints
 - Codegroesse, Fallbackrate, Invalidierungen und Schedulerjitter liegen innerhalb der dokumentierten Budgets
+- die unveraenderte KR-3908-Gate-Vorbereitung ist vom Nutzer ausdruecklich
+  freigegeben
 
 ### [ ] KR-4001 - Oeffentliche Installationsdokumentation
 
@@ -1792,9 +1876,9 @@ Akzeptanz:
 
 Abhaengigkeiten: KR-3806, KR-3807, KR-3808, KR-3909
 
-### [ ] KR-4006 - Faehigkeits-, Firmwaremodus- und Datenaudit
+### [ ] KR-4006 - Faehigkeits-/Datenaudit und v0.40 Gate-Vorbereitung
 
-Abhaengigkeiten: KR-3505, KR-3606, KR-3710, KR-3809, KR-3909, KR-4003
+Abhaengigkeiten: KR-3505, KR-3606, KR-3710, KR-3809, KR-3909, KR-4001 bis KR-4004
 
 Umfang:
 
@@ -1802,6 +1886,8 @@ Umfang:
 - Pflicht-, optionale, experimentelle und nicht unterstuetzte Profile unterscheiden
 - Release-Staging auf Firmwarebytes, extrahierte Assets, sensible Flashdaten, lokale Pfade und unredigierte Traces pruefen
 - bekannte semantische und zeitliche Abweichungen pro Profil dokumentieren
+- alle Testanforderungen der Phase 9 umsetzen und danach genau einen frischen
+  Build in `build-current/` mit vollstaendiger Regression ausfuehren
 
 Akzeptanz:
 
@@ -1809,10 +1895,19 @@ Akzeptanz:
 - optionales LLE wird nicht als Voraussetzung fuer Homebrew- oder Release-Tests dargestellt
 - der Datenaudit laeuft vor Paket-Hash und Signierung
 - ein absichtlich eingebrachtes synthetisches Geheimnis und ein Firmware-Marker werden erkannt
+- der Gate-Bericht liegt vor; danach wird vor KR-4005 fuer das Nutzerreview
+  gestoppt
 
 ### [ ] KR-4005 - v0.40.0 Pre-Alpha-Release
 
 Abhaengigkeiten: KR-4001 bis KR-4004, KR-4006
+
+Akzeptanz:
+
+- die unveraenderte KR-4006-Gate-Vorbereitung ist vom Nutzer ausdruecklich
+  freigegeben
+- Versionierung, Release-Commit, Tag und Veroeffentlichung beginnen erst nach
+  dieser Freigabe
 
 ---
 
@@ -2016,9 +2111,9 @@ Akzeptanz:
 - flackernde oder timingabhaengige UI-Tests werden vor Gate-Freigabe stabilisiert oder entfernt
 - Testartefakte enthalten keine proprietaeren Quellbytes
 
-### [ ] KR-4402 - GUI-Haertung, Accessibility und Packaging
+### [ ] KR-4402 - GUI-Haertung, Packaging und v0.44 Gate-Vorbereitung
 
-Abhaengigkeiten: KR-4103, KR-4302, KR-4401
+Abhaengigkeiten: KR-4005, KR-4101 bis KR-4103, KR-4201 bis KR-4204, KR-4301 bis KR-4303, KR-4401
 
 Umfang:
 
@@ -2026,6 +2121,8 @@ Umfang:
 - Crash-Recovery, Settings-Migration und sichere Standardpfade absichern
 - verteilbare GUI-Pakete fuer den Alpha-Scope bauen und pruefen
 - Installations- und Updatepfade fuer GUI und CLI gemeinsam dokumentieren
+- alle Testanforderungen der Phase 10 umsetzen und danach genau einen frischen
+  Build in `build-current/` mit vollstaendiger Regression ausfuehren
 
 Akzeptanz:
 
@@ -2033,6 +2130,8 @@ Akzeptanz:
 - Packaging und Start funktionieren auf den Zielplattformen mit dokumentierten Voraussetzungen
 - Accessibility-Basis fuer Kernpfade ist vorhanden und getestet
 - GUI-Dokumentation deckt Installation, Projektstart und `.gdi`-Workflow ab
+- der Gate-Bericht liegt vor; danach wird vor KR-4403 fuer das Nutzerreview
+  gestoppt
 
 ### [ ] KR-4403 - v0.44.0 GUI-und-GDI-Release-Gate
 
@@ -2044,14 +2143,406 @@ Akzeptanz:
 - `.gdi` ist als offizielle Quelle in GUI, CLI und Tests identisch validiert
 - identische Projekte erzeugen ueber GUI und CLI dieselben Manifeste, Jobs und Ergebnisartefakte
 - dokumentierte Blocker fuer GUI oder `.gdi` verhindern den Uebergang ins Alpha-Gate
+- die unveraenderte KR-4402-Gate-Vorbereitung ist vom Nutzer ausdruecklich
+  freigegeben
+
+---
+
+## v0.45.0 bis v0.49.0 - Alpha-Integration und Haertung
+
+Bis einschliesslich KR-4905 duerfen nur synthetische Fixtures und frei
+lizenzierte Homebrew-Programme ausgefuehrt werden. Eine lokale
+Sonic-Adventure-GDI darf read-only validiert, analysiert, rekompiliert und bis
+zu `game.exe` gebaut werden; gestartet wird diese Anwendung erstmals in
+KR-4999.
+
+### [ ] KR-4501 - Messbarer SH-4-Alpha-ISA-Vertrag
+
+Abhaengigkeiten: KR-3411, KR-3710, KR-4005, KR-4403
+
+Umfang:
+
+- fuer Decoder, IR, Backend und Runtime eine gemeinsame Alpha-ISA-Matrix mit
+  unterstuetzten, eingeschraenkten und abgelehnten Instruktionen definieren
+- unbekannte oder nur teilweise implementierte Semantik maschinenlesbar melden
+- Testanforderungen fuer jede behauptete Instruktionsfamilie sammeln
+
+Akzeptanz:
+
+- keine Alpha-Faehigkeitsbehauptung existiert ohne eindeutig benannte Semantik
+- Luecken und Abbruchgruende sind titelunabhaengig und reproduzierbar
+
+### [ ] KR-4502 - Fehlende Integer- und Kontrollinstruktionen
+
+Abhaengigkeiten: KR-4501
+
+Umfang:
+
+- die in KR-4501 als Alpha-pflichtig eingestuften Integer-, Bit-, Transfer- und
+  Kontrollinstruktionen durch alle Compilerschichten fuehren
+- Delay-Slot-, T-Bit-, PR- und Ausnahmeeffekte explizit halten
+- Erfolgs-, Grenz- und Fehlervektoren fuer KR-4504 dokumentieren
+
+Akzeptanz:
+
+- jede neue Instruktion besitzt denselben Vertrag in Decoder, IR und Backend
+- kein unbekannter Opcode wird als erfolgreicher No-op behandelt
+
+### [ ] KR-4503 - Status-, Exception- und Systemsemantik
+
+Abhaengigkeiten: KR-4501, KR-4502
+
+Umfang:
+
+- SR/FPSCR-Bankwechsel, privilegierte Instruktionen, Exceptions und relevante
+  Systemregister fuer das Alpha-Profil schliessen
+- Backend-, Fallback- und Interruptgrenzen auf denselben Zustand verpflichten
+- Testanforderungen fuer Moduswechsel und Fehlerpfade sammeln
+
+Akzeptanz:
+
+- Status- und Ausnahmeuebergaenge sind ohne Hostzustands-Leaks deterministisch
+- nicht unterstuetzte privilegierte Faelle brechen sichtbar ab
+
+### [ ] KR-4504 - v0.45 Gate-Vorbereitung: Tests und Build
+
+Abhaengigkeiten: KR-4501 bis KR-4503
+
+Umfang und Akzeptanz:
+
+- alle fuer v0.45 gesammelten Tests umsetzen
+- genau einen frischen Build in `build-current/` erstellen und die
+  vollstaendige Regression mit synthetischen/Homebrew-Eingaben ausfuehren
+- `KR_V045_ISA_ALPHA_PROFILE_READY` reproduzierbar belegen
+- danach vor KR-4505 fuer das Nutzerreview stoppen
+
+### [ ] KR-4505 - v0.45 Release-Gate
+
+Abhaengigkeiten: KR-4504
+
+Akzeptanz:
+
+- die unveraenderte KR-4504-Gate-Vorbereitung ist ausdruecklich vom Nutzer
+  freigegeben
+- Versionierung, Release-Commit, Tag und Veroeffentlichung beginnen erst danach
+
+### [ ] KR-4601 - Alpha-Firmwaremodus und Retail-Bootvertrag
+
+Abhaengigkeiten: KR-2604, KR-3505, KR-4505
+
+Umfang:
+
+- den fuer Alpha unterstuetzten Direkteinstiegs-, HLE- und optionalen
+  LLE-Vertrag fuer Retail-Programme festlegen
+- Bootzustand, lokale Firmwareeingaben und kontrollierte Arbeitskopien trennen
+- Testanforderungen mit synthetischem Retail-Bootprofil sammeln
+
+Akzeptanz:
+
+- kein Profil behauptet still eine nicht implementierte Firmwarefaehigkeit
+- lokale Firmware- und Flashquellen bleiben read-only und ausserhalb der Ports
+
+### [ ] KR-4602 - BIOS-ABI und dynamische Firmwarevektoren
+
+Abhaengigkeiten: KR-3405, KR-4601
+
+Umfang:
+
+- benoetigte BIOS-ABI-Dienste und dynamisch installierte Vektoren
+  titelunabhaengig modellieren
+- ROM-/RAM-Aliase, Handoffs und Fehlerdiagnosen in den bestehenden Dispatch
+  integrieren
+- HLE- und optionalen LLE-Pfad auf denselben beobachtbaren Vertrag verpflichten
+
+Akzeptanz:
+
+- unbekannte BIOS-Aufrufe werden weder ignoriert noch titelbezogen umgebogen
+- synthetische Vektorinstallation und ROM-RAM-Handoff sind reproduzierbar
+
+### [ ] KR-4603 - Dreamcast-System-ASIC sowie MMIO- und Interruptintegration
+
+Abhaengigkeiten: KR-3104, KR-3410, KR-4601, KR-4602
+
+Umfang:
+
+- fuer den Alpha-Boot erforderliche System-ASIC-Register, Masken und
+  Interruptquellen in Bus und Scheduler integrieren
+- GD-ROM-, DMA-, Maple-, PVR- und AICA-Ereignisse ueber denselben Vertrag
+  zustellen
+- Testanforderungen fuer Reihenfolge, Maskierung und unbekannte MMIO sammeln
+
+Akzeptanz:
+
+- Ereignisreihenfolgen sind gastzeitbasiert und reproduzierbar
+- unbekannte MMIO-Zugriffe koennen nicht still erfolgreich sein
+
+### [ ] KR-4604 - v0.46 Gate-Vorbereitung: Tests und Build
+
+Abhaengigkeiten: KR-4601 bis KR-4603
+
+Umfang und Akzeptanz:
+
+- alle fuer v0.46 gesammelten Tests umsetzen
+- genau einen frischen Build in `build-current/` und die vollstaendige
+  synthetische/Homebrew-Regression ausfuehren
+- `KR_V046_RETAIL_BOOT_SERVICES_READY` reproduzierbar belegen
+- danach vor KR-4605 fuer das Nutzerreview stoppen
+
+### [ ] KR-4605 - v0.46 Release-Gate
+
+Abhaengigkeiten: KR-4604
+
+Akzeptanz:
+
+- die unveraenderte KR-4604-Gate-Vorbereitung ist ausdruecklich vom Nutzer
+  freigegeben
+- das Release beginnt erst nach dieser Freigabe
+
+### [ ] KR-4701 - Native Fenster- und Videoausgabe
+
+Abhaengigkeiten: KR-2804, KR-3105, KR-4605
+
+Umfang:
+
+- ein natives Hostfenster und eine versionierte Videoausgabe fuer externe
+  Port-Projekte bereitstellen
+- Resize, Present, Fehlerbehandlung und kontrolliertes Beenden definieren
+- Testanforderungen mit frei lizenzierter Framequelle sammeln
+
+Akzeptanz:
+
+- externe Anwendungen benoetigen keine KatanaRecomp-CLI als Laufzeithuelle
+- Videoausgabe und Lebenszyklus sind vom Gastzyklusvertrag getrennt
+
+### [ ] KR-4702 - Native Audio-, Eingabe- und Hostlebenszyklusintegration
+
+Abhaengigkeiten: KR-2702, KR-2904, KR-3105, KR-4701
+
+Umfang:
+
+- Audioausgabe, Controller-/Tastatureingabe und Hostereignisse in die
+  versionierte Runtime integrieren
+- Pause, Fokusverlust, Shutdown und Fehlerpfade kontrolliert abbilden
+- Testanforderungen fuer deterministische Eingabeinjektion und Audiohashes sammeln
+
+Akzeptanz:
+
+- Hostereignisse werden explizit injiziert und nicht aus Wall-Clock-Zufall
+  abgeleitet
+- ein sauberer Shutdown hinterlaesst keine laufenden Schedulerereignisse
+
+### [ ] KR-4703 - Persistente VMU-/Flash-Arbeitskopien und Host-Pacing
+
+Abhaengigkeiten: KR-4601, KR-4702
+
+Umfang:
+
+- beschreibbare Saves und Flashzustaende ausschliesslich als klar getrennte
+  lokale Arbeitskopien verwalten
+- atomisches Speichern, Fehlerrecovery und Pacing zwischen Gast- und Hostzeit
+  definieren
+- Quellabbilder und Portartefakte unveraendert halten
+
+Akzeptanz:
+
+- Loeschen oder Beschaedigen einer Arbeitskopie veraendert nie die Nutzerquelle
+- Persistenz- und Pacingfehler sind reproduzierbar diagnostizierbar
+
+### [ ] KR-4704 - v0.47 Gate-Vorbereitung: Tests und Build
+
+Abhaengigkeiten: KR-4701 bis KR-4703
+
+Umfang und Akzeptanz:
+
+- alle fuer v0.47 gesammelten Tests umsetzen
+- genau einen frischen Build in `build-current/` und die vollstaendige
+  synthetische/Homebrew-Regression ausfuehren
+- eine eigenstaendige Homebrew-Anwendung bis `KR_V047_NATIVE_HOST_READY` starten
+- danach vor KR-4705 fuer das Nutzerreview stoppen
+
+### [ ] KR-4705 - v0.47 Release-Gate
+
+Abhaengigkeiten: KR-4704
+
+Akzeptanz:
+
+- die unveraenderte KR-4704-Gate-Vorbereitung ist ausdruecklich vom Nutzer
+  freigegeben
+- das Release beginnt erst nach dieser Freigabe
+
+### [ ] KR-4801 - Versioniertes Runtime-SDK fuer externe Port-Projekte
+
+Abhaengigkeiten: KR-3507, KR-4705
+
+Umfang:
+
+- Header, Bibliotheken, CMake-Vertrag und ABI-Metadaten fuer externe Ports als
+  versioniertes SDK bereitstellen
+- installierte, eingebettete und explizit referenzierte Runtimevarianten
+  reproduzierbar aufloesen
+- inkompatible ABI-Versionen vor dem Hostbuild sichtbar ablehnen
+
+Akzeptanz:
+
+- ein Port baut ausserhalb des Repositorys ohne Zugriff auf Analyzer-Interna
+- Runtimeversion und Abhaengigkeiten sind im Portmanifest nachvollziehbar
+
+### [ ] KR-4802 - Gemeinsamer CLI-/GUI-Portexport und Buildworkflow
+
+Abhaengigkeiten: KR-4301, KR-4403, KR-4801
+
+Umfang:
+
+- `katana-recomp port <quelle.gdi> --output <ordner> --target-name <name>` ueber
+  denselben Anwendungsdienst in CLI und GUI anbieten
+- Generierung, Regenerierung, Build, Abbruch und Diagnostik vereinheitlichen
+- handgeschriebenen Portcode von Katana-generierten Artefakten trennen
+
+Akzeptanz:
+
+- CLI und GUI erzeugen bytegleiche portable Metadaten und dieselbe Projektstruktur
+- Regenerierung ersetzt nur als generiert markierte Dateien
+
+### [ ] KR-4803 - Out-of-Tree-`game.exe`-Integration
+
+Abhaengigkeiten: KR-4801, KR-4802
+
+Umfang:
+
+- das exportierte Projekt zu einem nativen Ziel `game` beziehungsweise
+  `game.exe` bauen und dessen Runtime-/DiscSource-Vertrag pruefen
+- synthetische und frei lizenzierte GDI-Quellen als ausfuehrbaren Nachweis nutzen
+- eine lokale Sonic-Adventure-GDI optional bis zum Build verarbeiten, deren
+  `game.exe` aber ausdruecklich nicht starten
+
+Akzeptanz:
+
+- der Ausgabeordner enthaelt Code, Metadaten und eine eigenstaendig startbare
+  Homebrew-`game.exe`, aber keine eingebetteten absoluten GDI-Pfade
+- proprietaere Quelldaten werden weder kopiert noch in portable Artefakte gepackt
+
+### [ ] KR-4804 - v0.48 Gate-Vorbereitung: Tests und Build
+
+Abhaengigkeiten: KR-4801 bis KR-4803
+
+Umfang und Akzeptanz:
+
+- alle fuer v0.48 gesammelten Tests umsetzen
+- genau einen frischen Build in `build-current/` und die vollstaendige
+  synthetische/Homebrew-Regression ausfuehren
+- den Out-of-Tree-Port bis `KR_V048_PORT_WORKFLOW_READY` reproduzieren
+- danach vor KR-4805 fuer das Nutzerreview stoppen
+
+### [ ] KR-4805 - v0.48 Release-Gate
+
+Abhaengigkeiten: KR-4804
+
+Akzeptanz:
+
+- die unveraenderte KR-4804-Gate-Vorbereitung ist ausdruecklich vom Nutzer
+  freigegeben
+- das Release beginnt erst nach dieser Freigabe
+
+### [ ] KR-4901 - Alpha-CI-Konfiguration fuer Windows und Linux
+
+Abhaengigkeiten: KR-3701, KR-4805
+
+Umfang:
+
+- Debug-/Release-Matrix, Testprofile, Artefakte und Timeouts fuer Windows und
+  Linux konfigurieren
+- ausschliesslich synthetische und frei lizenzierte Eingaben verwenden
+- die Ausfuehrung der vollstaendigen Matrix bis KR-4904 aufschieben
+
+Akzeptanz:
+
+- CI-Konfiguration benoetigt keine Secrets oder proprietaeren Daten
+- lokale Gateprofile und CI verwenden dieselben semantischen Erwartungen
+
+### [ ] KR-4902 - Reproduzierbare Pakete sowie Daten- und Lizenzaudit
+
+Abhaengigkeiten: KR-3706, KR-4006, KR-4805
+
+Umfang:
+
+- Alpha-Pakete, Quellarchive, Runtime-SDK und Portvorlagen reproduzierbar stagen
+- Firmware-, Spiel-, Asset-, Pfad-, Lizenz- und Referenzmarker auditieren
+- Testanforderungen fuer absichtlich eingebrachte synthetische Marker sammeln
+
+Akzeptanz:
+
+- Pakete enthalten nur verteilbare Projekt- und Laufzeitbestandteile
+- Auditberichte sind redigiert und ohne lokale Quelle reproduzierbar
+
+### [ ] KR-4903 - Alpha-Checkpoint- und Gate-Automatisierung einfrieren
+
+Abhaengigkeiten: KR-4505, KR-4605, KR-4705, KR-4805, KR-4901, KR-4902
+
+Umfang:
+
+- Checkpoints, Zeitbudgets, JSON-Schemata und Abbruchklassen fuer den
+  Alpha-Kandidaten versionieren
+- verteilbare Phasenchecks in einen kumulativen, titelunabhaengigen Lauf fuehren
+- `SA_ALPHA_BOOTED` definieren, aber noch nicht mit Sonic Adventure ausfuehren
+
+Akzeptanz:
+
+- jeder Checkpoint hat eine maschinenlesbare Erfolgs- und Fehlerdefinition
+- Titeladressen, Patches und Sonic-spezifische Runtimeausnahmen bleiben verboten
+
+### [ ] KR-4904 - v0.49 Gate-Vorbereitung: Tests und Build
+
+Abhaengigkeiten: KR-4901 bis KR-4903
+
+Umfang und Akzeptanz:
+
+- alle fuer v0.49 gesammelten Tests umsetzen
+- genau einen frischen Build in `build-current/`, die vollstaendige Regression
+  und die verteilbare Windows-/Linux-CI-Matrix ausfuehren
+- Pakete, Audits und `KR_V049_ALPHA_CANDIDATE_READY` reproduzierbar belegen
+- Sonic Adventure noch nicht ausfuehren und danach vor KR-4905 fuer das
+  Nutzerreview stoppen
+
+### [ ] KR-4905 - v0.49 Release-Gate
+
+Abhaengigkeiten: KR-4904
+
+Akzeptanz:
+
+- die unveraenderte KR-4904-Gate-Vorbereitung ist ausdruecklich vom Nutzer
+  freigegeben
+- das Release beginnt erst nach dieser Freigabe
 
 ---
 
 ## Spaetere Release-Gates
 
+### [ ] KR-4999 - Alpha-Gate-Vorbereitung: Tests, Builds und lokaler Sonic-Boot
+
+Abhaengigkeiten: KR-4905
+
+Umfang:
+
+- alle Alpha-Testanforderungen vervollstaendigen und die frischen Debug- und
+  Release-Builds, vollstaendige Regression sowie Windows-/Linux-CI ausfuehren
+- die lokal bereitgestellte Sonic-Adventure-GDI read-only ueber den offiziellen
+  Portworkflow zu einem externen Projekt und `game.exe` verarbeiten
+- `game.exe` direkt starten und den titelunabhaengig instrumentierten Bootpfad
+  innerhalb eines festen Gastzyklusbudgets beobachten
+- alle Berichte redigieren; weder Quelldaten, Hashes, Captures noch lokale Pfade
+  in Repository oder Release-Staging uebernehmen
+
+Akzeptanz:
+
+- zwei identische Laeufe erreichen `SA_ALPHA_BOOTED` mit denselben
+  deterministischen Kernmetriken und `silent_failures == 0`
+- ein Frame, Menue oder interaktives Gameplay ist fuer Alpha nicht erforderlich
+- der vollstaendige Alpha-Gate-Bericht liegt vor; danach wird vor KR-5000 fuer
+  das Nutzerreview gestoppt
+
 ### [ ] KR-5000 - v0.50.0 Alpha-Gate
 
-Abhaengigkeiten: KR-4005, KR-4403
+Abhaengigkeiten: KR-4999
 
 Akzeptanz:
 
@@ -2062,10 +2553,26 @@ Akzeptanz:
 - die Desktop-GUI deckt Projektanlage, Quellenwahl, Analyse, Build und Diagnostik fuer Alpha vollstaendig ab
 - `.gdi`-Dateien koennen als offizielle Quelle geladen, validiert und reproduzierbar verarbeitet werden
 - Manifest, Runtime-ABI, Diagnoseschemata und Buildartefakte sind versioniert und reproduzierbar
+- die lokale GDI wurde zu einem externen Port und `game.exe` verarbeitet;
+  `game.exe` startet und erreicht reproduzierbar `SA_ALPHA_BOOTED`
+- die unveraenderte KR-4999-Gate-Vorbereitung ist ausdruecklich vom Nutzer
+  freigegeben; erst danach beginnen Versionierung, Release-Commit, Tag und
+  Veroeffentlichung
+
+### [ ] KR-7499 - Beta-Gate-Vorbereitung: Tests und Builds
+
+Abhaengigkeiten: KR-5000
+
+Akzeptanz:
+
+- alle Beta-Testanforderungen sind umgesetzt; frische Builds, vollstaendige
+  Regression und erforderliche CI sind erfolgreich
+- der Beta-Gate-Bericht liegt vor; danach wird vor KR-7500 fuer das
+  Nutzerreview gestoppt
 
 ### [ ] KR-7500 - v0.75.0 Beta-Gate
 
-Abhaengigkeiten: KR-5000
+Abhaengigkeiten: KR-7499
 
 Akzeptanz:
 
@@ -2074,10 +2581,23 @@ Akzeptanz:
 - Fallbackrate, Invalidierungen, Schedulerjitter und Performancebudgets werden pro Testprofil berichtet
 - MMU-, FPSCR-, Store-Queue- und selbstmodifizierende Pfade besitzen titelunabhaengige Regressionen
 - optionale lokale Firmwaretests bleiben von CI, Release und verteilbarem Pflichtkorpus getrennt
+- die unveraenderte KR-7499-Gate-Vorbereitung ist ausdruecklich vom Nutzer
+  freigegeben
+
+### [ ] KR-9999 - v1.0 Gate-Vorbereitung: Tests und Builds
+
+Abhaengigkeiten: KR-7500
+
+Akzeptanz:
+
+- alle v1.0-Testanforderungen, frischen Builds, vollstaendige Regression,
+  erforderliche CI und Audits sind erfolgreich
+- der stabile Gate-Bericht liegt vor; danach wird vor KR-10000 fuer das
+  Nutzerreview gestoppt
 
 ### [ ] KR-10000 - v1.0.0 Release-Gate
 
-Abhaengigkeiten: KR-7500
+Abhaengigkeiten: KR-9999
 
 Akzeptanz:
 
@@ -2087,3 +2607,5 @@ Akzeptanz:
 - jede Faehigkeitsbehauptung ist durch automatisierte oder ausdruecklich lokale, redigierte Tests gedeckt
 - Releasepaket, Quellarchiv und Berichte enthalten keine BIOS-, Disc-, Spiel-, Asset- oder sensiblen Flashdaten
 - Lizenz-, Referenzprovenienz-, Datenschutz- und Reproduzierbarkeitsaudits sind bestanden
+- die unveraenderte KR-9999-Gate-Vorbereitung ist ausdruecklich vom Nutzer
+  freigegeben

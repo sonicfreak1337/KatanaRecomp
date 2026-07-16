@@ -24,6 +24,7 @@ austauschbare Callbacks; konkrete PVR- und AICA-Backends bleiben davon getrennt.
   koennen keine Event-ID eines neuen Laufs ueberschreiben.
 
 Die Regression treibt Recording-PVR- und Recording-Audio-Backends ueber diese
-Callbacks. Ein vollstaendiger Sonic-Adventure-Lauf gehoert weiterhin ausschliesslich
-zum v0.31.0-Phase-Gate und wird erst nach der vereinbarten Review-/Fixrunde
-ausgefuehrt.
+Callbacks. Die historische v0.31.0-GDI-Blockprobe prueft nur Quelle,
+Bootblock und Plattformereignisse und gilt nicht als Sonic-Ausfuehrung. Der
+erste vollstaendige lokale Sonic-Adventure-Lauf gehoert ausschliesslich in die
+Alpha-Gate-Vorbereitung KR-4999.

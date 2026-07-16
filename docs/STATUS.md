@@ -13,9 +13,11 @@ KatanaRecomp besitzt einen durchgaengigen Prototyp-Pfad von Raw- und ELF32-SH-Ei
 ### Gesamtprojekt
 
 - [x] Kernunterbau abgeschlossen: Phasen 1 bis 5 sind vollstaendig umgesetzt
-- [~] Gesamtfortschritt nach gepflegten Roadmap-Tasks: 138 von 209 Tasks abgeschlossen = 66.0%
-- [~] Fortschritt auf dem Weg von Dreamcast-Plattform bis Alpha: 44 von 112 Tasks abgeschlossen = 39.3%
-- [ ] Alpha-Gate erreicht: nein
+- [~] Gesamtfortschritt nach gepflegten Roadmap-Tasks: 143 von 238 Tasks abgeschlossen = 60.1%
+- [~] Fortschritt auf dem Weg von Dreamcast-Plattform bis einschliesslich Alpha-Gate: 49 von 140 Tasks abgeschlossen = 35.0%
+- [ ] Alpha-Gate erreicht: nein; Alpha verlangt eine aus der lokalen
+  Sonic-Adventure-GDI erzeugte und gestartete `game.exe`, die reproduzierbar
+  `SA_ALPHA_BOOTED` erreicht
 
 ### Weg zum ersten echten Dreamcast-Test
 
@@ -32,11 +34,16 @@ Definition fuer diesen Status: ein BIOS-freier, frei verteilbarer Homebrew-Verti
 Praktische Einordnung:
 
 - [x] Der frei verteilbare synthetische Vertical Slice bootet, verarbeitet Eingabe, rendert ein Bildprimitiv und erzeugt Audio in einem gemeinsamen Lauf
-- [x] Der kumulative lokale Phase-6-Test erreicht `SA_PHASE6_MAIN_EXECUTION_STARTED`
+- [x] Der verteilbare kumulative Phase-6-Test erreicht `KR_PHASE6_PLATFORM_INTEGRATED`; die fruehere lokale GDI-Blockprobe gilt nur als historische Quellen-/Bootblockdiagnose
 - [x] Modulare Backend-, Block-ABI- und Plattformdienst-Schnittstelle von v0.32.0 abgeschlossen
 - [x] Skalierbare, deterministische und inkrementelle Codeausgabe von v0.33.0 abgeschlossen
 - [~] Der naechste Engpass ist der indirekte Dispatch, Fallback und die Codeinvalidierung von v0.34.0
-- [ ] Von Alpha sind wir noch deutlich entfernt, weil nach Phase 6 auch Codegen-/Dispatch-Haertung, Tooling, Kompatibilitaet, GUI und `.gdi`-Workflow fehlen
+- [ ] Der offizielle `.gdi`-zu-Port-Projektexport mit getrenntem generiertem und
+  handgeschriebenem Code sowie ausfuehrbarem Host-Target `game.exe` ist als
+  `KR-3507` fuer v0.35.0 geplant
+- [ ] Die Luecke zwischen v0.44 und Alpha wird durch v0.45 bis v0.49 fuer
+  ISA-Abdeckung, Retail-Bootdienste, native Hostruntime, Portintegration und
+  Alpha-CI geschlossen
 
 ### Phasenstatus
 
@@ -46,11 +53,25 @@ Praktische Einordnung:
 - [x] Phase 4 - Runtime-Grundlage: 18/18 Tasks = 100%
 - [x] Phase 5 - SH-4 FPU: 10/10 Tasks = 100%
 - [x] Phase 6 - Dreamcast-Plattform: 29/29 Tasks und Abschlussgate = 100%
-- [~] Phase 7 - Codegen und Dispatch: 15/21 Tasks = 71.4%
-- [ ] Phase 8 - Werkzeuge und Qualitaet: 0/25 Tasks = 0%
+- [~] Phase 7 - Codegen und Dispatch: 20/21 Tasks = 95.2%
+- [ ] Phase 8 - Werkzeuge und Qualitaet: 0/26 Tasks = 0%
 - [ ] Phase 9 - Kompatibilitaet und Leistung: 0/24 Tasks = 0%
 - [ ] Phase 10 - Desktop-GUI und Quellworkflow: 0/13 Tasks = 0%
-- [ ] Spaetere Release-Gates: 0/3 Tasks = 0%
+- [ ] Phase 11 - Alpha-Integration und Haertung: 0/25 Tasks = 0%
+- [ ] Spaetere Gate-Vorbereitungen und Release-Gates: 0/6 Tasks = 0%
+
+## Aktueller Arbeits- und Gate-Workflow
+
+- Implementierungs-Tasks werden zuerst inhaltlich abgearbeitet; ihre
+  Erfolgs-, Grenz- und Fehlerfaelle werden als Testanforderungen gesammelt.
+- Erst der letzte Gate-Vorbereitungstask setzt diese Tests um und fuehrt genau
+  einen frischen Build in `build-current/` sowie die vollstaendige Regression
+  aus.
+- Danach wird vor jedem Phasen-Release-Gate zwingend fuer das Nutzerreview
+  gestoppt. Versionierung, Release-Commit, Tag und Veroeffentlichung beginnen
+  erst nach ausdruecklicher Freigabe.
+- Review-Aenderungen erfordern eine vollstaendige Wiederholung der
+  Gate-Vorbereitung.
 
 ## Teststatus
 
@@ -68,11 +89,21 @@ deterministische Partitionierungs-, Cache-, Projekt- und Metadatentests bestande
 kein Sonic-Adventure-Test am Zwischenrelease v0.33.0 erforderlich oder ausgefuehrt
 ```
 
-Aktueller Entwicklungsstand (nach `KR-3405`, Basis `v0.33.0`):
+Letzter Entwicklungsnachweis vor Einfuehrung der gebuendelten
+Gate-Vorbereitung (nach `KR-3409`, Basis `v0.33.0`):
 
 ```text
-137/137 Debug-Tests bestanden
-katana-firmware-handoff-tests bestanden
+141/141 Debug-Tests bestanden
+katana-interpreter-boundary-tests bestanden
+```
+
+Aktuelle v0.34-Gate-Vorbereitung nach `KR-3410`:
+
+```text
+frischer Debug-Build in build-current: erfolgreich
+142/142 Tests bestanden
+katana-codegen-project-tests isoliert erneut bestanden
+KR-3411, Versionierung, Tag und Sonic-Test: nicht ausgefuehrt
 ```
 
 Abgeschlossenes kumulatives Phase-6-Gate:
@@ -87,16 +118,21 @@ silent_failures=0
 
 Phase-6-Nacharbeit: Scheduler-Advance und Reset sind reentrancy-geschuetzt;
 callback-internes Stop, Stop/Start und Reset der Medienuhr sind gegen Doppel-
-und Geisterereignisse regressionsgesichert. Das Release-Gate verwendet gemaess
-aktueller Pre-Alpha-Regel nur Debug. Release-Build und CI kehren bei v0.50.0 zurueck.
+und Geisterereignisse regressionsgesichert. Dieser historische Gate-Bericht
+behauptet keine Sonic-Adventure-Ausfuehrung.
 
-Lokale Sonic-Adventure-Akzeptanzstrategie:
+Lokale Sonic-Adventure-Alpha-Akzeptanzstrategie:
 
-- [x] verbindliche kumulative Gates fuer Phase 6 bis Phase 10 und v0.50.0 sind in `docs/SONIC_ADVENTURE_ACCEPTANCE.md` definiert
-- [x] einzelne Tasks, Commits und Zwischenreleases benoetigen keinen vollstaendigen Sonic-Adventure-Lauf
-- [x] der bestehende v0.30.0-GDI-Smoke wurde beim Phase-6-Abschluss v0.31.0 kumulativ nach den neuen messbaren Kriterien revalidiert
-- [x] das Phase-6-Gate v0.31.0 erreicht `SA_PHASE6_MAIN_EXECUTION_STARTED`
-- [ ] kuenftige Phasen muessen die jeweils benoetigten allgemeinen Zaehler, Checkpoints und redigierten maschinenlesbaren Berichte bereitstellen, ohne spaetere Funktionen vorzuziehen
+- [x] Sonic Adventure wird vor v0.50.0 nicht ausgefuehrt; alle Pre-Alpha-Gates
+  verwenden synthetische Fixtures und frei lizenzierte Homebrew-Programme
+- [x] eine lokale GDI darf vor Alpha read-only validiert, analysiert,
+  rekompiliert und bis `game.exe` gebaut werden, aber nicht gestartet werden
+- [x] KR-4999 ist der erste Sonic-Ausfuehrungstest und muss den lokalen Pfad
+  GDI -> Port-Projekt -> `game.exe` -> `SA_ALPHA_BOOTED` reproduzieren
+- [x] ein Frame, Menue oder interaktives Gameplay ist kein Alpha-Kriterium,
+  sondern gehoert zum Beta-Gate
+- [x] Assetextraktion und eine Installation ohne spaetere GDI-Nutzung gehoeren
+  in das titelbezogene Folgeprojekt, nicht in den allgemeinen Compilervertrag
 
 ## Fertiggestellte Roadmap-Tasks
 
@@ -243,7 +279,12 @@ Lokale Sonic-Adventure-Akzeptanzstrategie:
 - [x] KR-3403 - Kontrollierter Fallback
 - [x] KR-3404 - Selbstmodifizierenden Code erkennen
 - [x] KR-3405 - Alias- und kopierbewusster Firmware-Handoff
-- [ ] KR-3406 - Kanonischer Block-Dispatch und Blockendklassen
+- [x] KR-3406 - Kanonischer Block-Dispatch und Blockendklassen
+- [x] KR-3407 - Scheduler-Safepoints und Gastzyklen
+- [x] KR-3408 - MMU- und Zustandswaechter fuer Blockvarianten
+- [x] KR-3409 - Praezise Fallback- und Interpretergrenze
+- [x] KR-3410 - Cache-/Store-Queue-Vertrag und v0.34 Gate-Vorbereitung
+- [ ] Verpflichtender Nutzerreview-Stopp vor KR-3411
 
 ## Aktuelle Einschraenkungen
 

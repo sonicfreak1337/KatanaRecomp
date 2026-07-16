@@ -14,7 +14,7 @@ void require(bool value, const char* message) { if (!value) throw std::runtime_e
 int main() {
     try {
         RuntimeBlockTable table;
-        const BlockVariantKey variant{1u, 0u, 0u, 0u};
+        const BlockVariantKey variant{1u, 0u, 0u, 0u, 0u};
         table.register_static({0x8C001000u, 0x0C001000u, 4u, BlockEndKind::Return, variant, block, "compiled", false});
         CpuState cpu;
         cpu.pr = 0xDEADBEEFu;

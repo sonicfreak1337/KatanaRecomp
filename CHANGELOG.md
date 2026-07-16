@@ -4,10 +4,19 @@
 
 ### Behoben
 
+- KR-3407-Nacharbeit: Schleifen-Safepoints ziehen bei erschoepftem Ereignisbudget nur die tatsaechlich erreichte Zyklusdifferenz ab. Wiederholte Stopps erreichen den exakten Zielzyklus; ein Budgetstopp ohne Zyklusfortschritt bricht sichtbar statt endlos ab.
+- KR-3408-Nacharbeit: Die Watchpointgeneration ist nun Bestandteil des echten Laufzeit-`BlockVariantKey`; ein integrierter Tabellenlookup kann eine vor der Watchpointaenderung registrierte Variante nicht wiederverwenden.
 - KR-3304-Nacharbeit: Ein versioniertes Katana-Artefaktmanifest entfernt bei wiederverwendeten Ausgabeordnern ausschliesslich zuvor erzeugte, nun veraltete Units, Metadaten, Symbole und Konstantdateien. Fremde Nutzerdateien bleiben erhalten; fehlgeschlagene Bereinigung nennt den betroffenen Pfad und bricht sichtbar ab.
 
 ### Hinzugefuegt
 
+- Die Roadmap schliesst die bisherige Luecke zwischen v0.44 und v0.50 mit den
+  Alpha-Integrationsstufen v0.45 bis v0.49 fuer ISA-Abdeckung, Retail-Boot,
+  native Hostruntime, Portintegration und Alpha-CI.
+- Der lokale Alpha-Vertrag umfasst den offiziellen Pfad von einer
+  Nutzer-GDI ueber ein externes Port-Projekt zu `game.exe`; Alpha gilt als
+  erreicht, wenn die Anwendung startet und reproduzierbar `SA_ALPHA_BOOTED`
+  erreicht. Ein erster Frame oder Gameplay bleibt Beta-Scope.
 - KR-3401: Eine deterministisch sortierte Laufzeit-Blocktabelle verbindet virtuelle Diagnoseadressen, kanonische physische Herkunft, Blockgrenzen, Endtypen und Backendfunktionen. Statische sowie dynamische Eintraege teilen den Lookup; MMU-, FPSCR-, Adressraum- und Runtime-Varianten bleiben explizit, waehrend Ueberlappungsfehler beide Provenienzen nennen.
 - KR-3402: Der generische indirekte Dispatch trennt Calls, Tail-Jumps und Returns, kanonisiert P1-/P2-Ziele ueber den Adressraumvertrag und protokolliert Callsite, Ziel, PR, Quellblock sowie Lookupart. Unbekannte Ziele brechen sichtbar ab; Calls setzen PR, Returns verwenden PR und Jumps bewahren ihn.
 - KR-3403: Kontrollierte Fallbackrichtlinien fuer Abbruch, reine Diagnose, Interpreter und expliziten Nutzerhook klassifizieren unbekannte Opcodes, ungeloesten Kontrollfluss sowie dynamischen Code getrennt. Jede Nutzung wird stabil gezaehlt; CPU, Speicher, Ausnahme- und Schedulerkontext werden an einer typisierten Grenze synchronisiert, und Fortsetzung ist nur an der vereinbarten Blockgrenze erlaubt.
@@ -17,6 +26,22 @@
 - KR-3407: Explizite Scheduler-Safepoints verbrauchen reproduzierbare Gastzyklen an Blockenden, Schleifenrueckkanten sowie vor und nach Delay Slots. Ein festes Schleifenquantum verhindert Eventverhungerung; Backend und Fallback teilen denselben Budgetpfad, waehrend Ereignisse, Interruptzustellung, Jitter und Budgetstopps maschinenlesbar bleiben.
 - KR-3408: Ein expliziter Instruktions- und Datenuebersetzungsvertrag trennt No-MMU-Fastpaths von TLB-gestuetzter Ausfuehrung. MMUCR, LDTLB-/TLB-, Adressraum- und Watchpointgenerationen sowie FPSCR PR/SZ/FR/RM werden als Blockwaechter erfasst; Rechtefehler erzeugen strukturierte SH-4-Ausnahmen und aktive MMU-Bloecke enden konservativ an Seitengrenzen.
 - KR-3409: Eine praezise Interpretergrenze erlaubt Eintritt nur am synchronisierten Gast-PC und Austritt nur an der vereinbarten Blockgrenze. Delay-Slot-Owner, Speicherfehler, Watchpoints, Schedulerbudget und strukturierte Ausnahmen werden mit generiertem Code geteilt; dynamischer Code nutzt dieselbe Provenienz- und Invalidierungsschicht, und Manifeste koennen jeden stabil gezaehlten Grund verbieten.
+- KR-3410: Zwei getrennte 32-Byte-Store-Queues modellieren ihre P4-Schreibfenster, QACR0/QACR1-Zielbildung, Queueauswahl und exakt ausgerichtete `PREF`-Transfers zu RAM oder Tile Accelerator. `OCBI`, `OCBP`, `OCBWB`, `ICBI` und `MOVCA.L` besitzen explizite Profileffekte; Codewartung und `MOVCA.L` invalidieren ausfuehrbares RAM, waehrend nicht aktiviertes Operand-Cache-RAM vor LLE-Ausfuehrung sichtbar abgelehnt wird.
+
+### Geaendert
+
+- Die v0.34-Gate-Vorbereitung besteht in einem vollstaendig neu erzeugten lokalen Debug-Build mit 142/142 Tests. KR-3411, Versionierung, Tag und Sonic-Ausfuehrung bleiben bis zum Nutzerreview gesperrt.
+- Implementierungs-Tasks werden vor einem Phasen-Gate zuerst ohne
+  routinemaessige Builds und Testlaeufe abgearbeitet. Der letzte
+  Gate-Vorbereitungstask setzt die gesammelten Tests um und erstellt den
+  frischen Build samt vollstaendiger Regression.
+- Vor jedem Phasen-Release-Gate gilt ein verpflichtender Nutzerreview-Stopp.
+  Versionierung, Release-Commit, Tag und Veroeffentlichung beginnen erst nach
+  ausdruecklicher Freigabe; Review-Aenderungen wiederholen die
+  Gate-Vorbereitung.
+- Sonic Adventure wird vor der Alpha-Gate-Vorbereitung KR-4999 nicht
+  ausgefuehrt. Fruehere lokale GDI-Proben bleiben historische Quellen- und
+  Bootblockdiagnosen, nicht Sonic-Ausfuehrungsnachweise.
 
 ## [0.33.0] - 2026-07-16
 
@@ -34,7 +59,7 @@
 
 ### Geaendert
 
-- Das v0.33.0-Gate besteht mit 132/132 Tests in einem frischen lokalen Debug-Build. Der kumulative Sonic-Adventure-Test bleibt dem Phase-7-Abschluss v0.34.0 nach Review vorbehalten.
+- Das v0.33.0-Gate besteht mit 132/132 Tests in einem frischen lokalen Debug-Build. Nach aktueller Gate-Strategie bleibt Sonic Adventure bis zur Alpha-Gate-Vorbereitung KR-4999 unausgefuehrt.
 
 ## [0.32.0] - 2026-07-16
 
@@ -52,7 +77,7 @@
 
 ### Geaendert
 
-- Das v0.32.0-Gate besteht mit 127/127 Tests in einem frischen lokalen Debug-Build. Als Zwischenrelease innerhalb von Phase 7 fuehrt es gemaess Akzeptanzstrategie keinen vollstaendigen Sonic-Adventure-Test aus.
+- Das v0.32.0-Gate besteht mit 127/127 Tests in einem frischen lokalen Debug-Build. Nach aktueller Gate-Strategie bleibt Sonic Adventure bis zur Alpha-Gate-Vorbereitung KR-4999 unausgefuehrt.
 
 ## [0.31.0] - 2026-07-16
 
@@ -72,7 +97,7 @@
 - Lokale Buildausgaben werden auf genau ein ignoriertes Multi-Config-Verzeichnis `build-current/` begrenzt; 14 alte task-, versions- und konfigurationsspezifische Buildbaeume wurden entfernt. Bis Alpha liegen darin nur Debug-Artefakte; die spaetere Release-Konfiguration nutzt keinen zweiten Buildbaum.
 - Mehrsitzige GDI-Quellen verwenden den letzten Datentrack als primaere Disc-Sitzung. ISO9660 kann die Position des Primary Volume Descriptors und die LBA-Basis der Extents getrennt abbilden, sodass sowohl relative synthetische als auch absolute Dreamcast-GD-Extents ohne Trackumbau funktionieren.
 - Bis einschliesslich v0.44.0 verwenden lokale Pre-Alpha-Gates genau einen frischen Debug-Build. Regulare Release-Builds sowie verpflichtende Windows-/Linux-CI kehren erst beim Alpha-Gate v0.50.0 zurueck.
-- Das v0.31.0-Gate besteht mit 122/122 Tests im frischen Debug-Build. Zwei identische lokale Sonic-Adventure-Laeufe erreichen bytegleich und ohne Quellaenderung `SA_PHASE6_MAIN_EXECUTION_STARTED`.
+- Das v0.31.0-Gate besteht mit 122/122 Tests im frischen Debug-Build. Zwei identische lokale GDI-Blockproben erreichen bytegleich und ohne Quellaenderung den historisch benannten Checkpoint `SA_PHASE6_MAIN_EXECUTION_STARTED`; er gilt heute nur als Quellen-/Bootblockdiagnose.
 
 ### Behoben
 
@@ -83,7 +108,7 @@
 
 ### Hinzugefuegt
 
-- Eine zentrale lokale Sonic-Adventure-Akzeptanzstrategie definiert genau ein kumulatives, messbares End-to-End-Gate je abgeschlossener Phase von v0.31.0 bis v0.44.0 sowie das Alpha-Gate v0.50.0. Der v0.30.0-GDI-Smoke wird erst bei v0.31.0 revalidiert; einzelne Tasks und Zwischenreleases behalten ihre bestehenden kleineren Tests.
+- Die zentrale lokale Akzeptanzstrategie definiert verteilbare synthetische/Homebrew-Checkpoints bis v0.49.0 und den ersten Sonic-Adventure-Ausfuehrungstest in der Alpha-Gate-Vorbereitung KR-4999. Der v0.30.0-GDI-Smoke wird nur als Quellen-/Bootblockprobe revalidiert.
 
 - KR-3001: Eine gemeinsame read-only DiscSource-Abstraktion stellt bereichsgepruefte Speicher- und Hostdateiquellen mit expliziter semantischer Identitaet bereit; Hostpfade sind weder Identitaet noch Schreibziel.
 - KR-3002: Ein GD-ROM-Laufwerksmodell verarbeitet Ready-, Status-, Kapazitaets- und Sektorlesekommandos mit Big-Endian-Kapazitaetsantworten und expliziten No-Media-, Feld-, Befehls- und Bereichsfehlern.
@@ -95,7 +120,7 @@
 ### Geaendert
 
 - Alte versionierte `.katana_backup_*`-Migrationssnapshots wurden aus dem aktuellen Repository-Baum entfernt. Die Arbeitsregeln erlauben nur noch genau ein unversioniertes Quellbackup des neuesten committed Stands und schliessen Build-, Referenz- sowie private Spieldaten aus.
-- Die vollstaendige Regression umfasst 114 Tests und besteht in frischen lokalen Debug- und Release-Builds. CI bleibt bis zum Alpha-Gate optional; der vollstaendige lokale Sonic-Adventure-Test ist erst beim kumulativen Phase-6-Gate v0.31.0 verpflichtend.
+- Die vollstaendige Regression umfasst 114 Tests und besteht in frischen lokalen Debug- und Release-Builds. Der damalige lokale GDI-Nachweis wird heute nur als Quellen-/Bootblockprobe gewertet; der erste Sonic-Adventure-Ausfuehrungstest ist KR-4999.
 
 ### Behoben
 

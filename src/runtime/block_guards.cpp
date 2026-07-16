@@ -10,6 +10,19 @@ constexpr std::uint32_t fpscr_guard_mask =
     fpscr_rounding_mode_mask | fpscr_pr_mask | fpscr_sz_mask | fpscr_fr_mask;
 }
 
+BlockVariantKey block_variant_key(
+    const BlockStateGuard& guard,
+    const std::uint64_t runtime_generation
+) noexcept {
+    return {
+        guard.address_space_generation,
+        guard.mmu_generation,
+        guard.watchpoint_generation,
+        guard.fpscr_mode,
+        runtime_generation
+    };
+}
+
 TranslationError::TranslationError(
     const TranslationAccess access,
     const std::uint32_t address,

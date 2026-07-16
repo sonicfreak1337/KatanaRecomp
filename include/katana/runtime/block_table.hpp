@@ -14,6 +14,7 @@ using BackendBlockFunction = BlockExit (*)(CpuState&, BlockExecutionContext&);
 struct BlockVariantKey {
     std::uint64_t address_space_generation = 0u;
     std::uint64_t mmu_generation = 0u;
+    std::uint64_t watchpoint_generation = 0u;
     std::uint32_t fpscr_mode = 0u;
     std::uint64_t runtime_generation = 0u;
 

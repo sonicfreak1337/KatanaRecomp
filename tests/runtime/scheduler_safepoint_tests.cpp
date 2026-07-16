@@ -43,6 +43,36 @@ int main() {
         require(backend.delivered_cycle == interpreted.delivered_cycle &&
                 safepoints.machine_report().find("jitter=") != std::string::npos,
             "Backend und Fallback verbrauchen inkompatible Zyklen oder berichten keinen Jitter.");
+
+        EventScheduler pressure_scheduler;
+        for (const auto cycle : {2u, 4u, 6u}) {
+            static_cast<void>(pressure_scheduler.schedule_at(cycle, [](auto, auto) {}));
+        }
+        SchedulerSafepoints pressure_backend(pressure_scheduler, 1u, 10u);
+        const auto pressured = pressure_backend.consume_loop(10u, ExecutionOrigin::Backend);
+        require(pressured.size() == 3u && pressured[0].budget_exhausted &&
+                pressured[0].delivered_cycle == 2u && pressured[1].delivered_cycle == 4u &&
+                pressured.back().delivered_cycle == 10u && pressure_scheduler.current_cycle() == 10u,
+            "Wiederholte Budgetstopps verlieren Gastzyklen oder erreichen den Zielzyklus nicht exakt.");
+
+        EventScheduler fallback_pressure_scheduler;
+        for (const auto cycle : {2u, 4u, 6u}) {
+            static_cast<void>(fallback_pressure_scheduler.schedule_at(cycle, [](auto, auto) {}));
+        }
+        SchedulerSafepoints pressure_fallback(fallback_pressure_scheduler, 1u, 10u);
+        const auto fallback_pressured = pressure_fallback.consume_loop(10u, ExecutionOrigin::Fallback);
+        require(fallback_pressured.back().delivered_cycle == pressured.back().delivered_cycle,
+            "Backend und Fallback laufen unter Ereignisbudgetdruck zyklisch auseinander.");
+
+        EventScheduler stalled_scheduler;
+        static_cast<void>(stalled_scheduler.schedule_at(0u, [](auto, auto) {}));
+        static_cast<void>(stalled_scheduler.schedule_at(0u, [](auto, auto) {}));
+        SchedulerSafepoints stalled(stalled_scheduler, 1u, 10u);
+        bool no_progress_reported = false;
+        try { static_cast<void>(stalled.consume_loop(10u, ExecutionOrigin::Backend)); }
+        catch (const std::runtime_error&) { no_progress_reported = true; }
+        require(no_progress_reported && stalled_scheduler.current_cycle() == 0u,
+            "Budgetstopp ohne Zyklusfortschritt fuehrt zur Endlosschleife oder bleibt unsichtbar.");
     } catch (const std::exception& error) { std::cerr << error.what() << '\n'; return 1; }
     return 0;
 }

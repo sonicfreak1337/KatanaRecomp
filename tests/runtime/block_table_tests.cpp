@@ -29,7 +29,7 @@ bool throws_with(Function function, const std::string& first, const std::string&
 int main() {
     try {
         RuntimeBlockTable table;
-        const BlockVariantKey base{1u, 2u, 3u, 4u};
+        const BlockVariantKey base{1u, 2u, 3u, 4u, 5u};
         table.register_static({0x8C001000u, 0x0C001000u, 8u, BlockEndKind::StaticBranch, base, block_a, "rom-reset", false});
         table.register_runtime({0xAC001000u, 0x0C001000u, 8u, BlockEndKind::Return, base, block_b, "ram-copy", false});
         require(table.size() == 2u, "Statische und dynamische Eintraege teilen nicht dieselbe Tabelle.");

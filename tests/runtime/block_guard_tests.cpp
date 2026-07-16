@@ -5,6 +5,7 @@
 
 using namespace katana::runtime;
 namespace { void require(bool value, const char* message) { if (!value) throw std::runtime_error(message); } }
+namespace { BlockExit guarded_block(CpuState&, BlockExecutionContext&) { return {}; } }
 
 int main() {
     try {
@@ -39,10 +40,19 @@ int main() {
         require(space.block_fits_translation_page(0x1FF0u, 16u) &&
                 !space.block_fits_translation_page(0x1FF0u, 18u),
             "Aktive MMU schneidet Bloecke nicht konservativ an Seitengrenzen.");
-        const auto old_guard = remapped;
+        const auto old_guard = space.guard_for(0x1234u, fpscr_pr_mask);
+        RuntimeBlockTable table;
+        table.register_static({
+            0x1234u, old_guard.physical_page + 0x234u, 2u, BlockEndKind::Fallthrough,
+            block_variant_key(old_guard), guarded_block, "guarded-old", false
+        });
+        require(table.lookup(0x1234u, block_variant_key(old_guard)) != nullptr,
+            "Ausgangsvariante wurde nicht in der Laufzeittabelle registriert.");
         space.bump_watchpoints();
-        require(!(space.guard_for(0x1234u, fpscr_pr_mask) == old_guard),
-            "Watchpointgeneration erzwingt keinen Redispatch.");
+        const auto changed_guard = space.guard_for(0x1234u, fpscr_pr_mask);
+        require(!(changed_guard == old_guard) &&
+                table.lookup(0x1234u, block_variant_key(changed_guard)) == nullptr,
+            "Watchpointgeneration erreicht den Tabellenlookup nicht; alte Variante wurde wiederverwendet.");
     } catch (const std::exception& error) { std::cerr << error.what() << '\n'; return 1; }
     return 0;
 }

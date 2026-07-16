@@ -15,6 +15,7 @@ auto order_key(const RuntimeBlock& block) {
         block.virtual_start,
         block.variant.address_space_generation,
         block.variant.mmu_generation,
+        block.variant.watchpoint_generation,
         block.variant.fpscr_mode,
         block.variant.runtime_generation,
         block.physical_origin,
@@ -41,6 +42,7 @@ std::string stable_runtime_block_identity(const RuntimeBlock& block) {
         << "-s" << block.size << "-e" << static_cast<unsigned>(block.end_kind)
         << "-a" << block.variant.address_space_generation
         << "-m" << block.variant.mmu_generation
+        << "-w" << block.variant.watchpoint_generation
         << "-f" << block.variant.fpscr_mode
         << "-r" << block.variant.runtime_generation
         << "-" << block.provenance;

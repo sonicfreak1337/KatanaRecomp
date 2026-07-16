@@ -39,6 +39,11 @@ struct BlockStateGuard {
     [[nodiscard]] bool operator==(const BlockStateGuard&) const noexcept = default;
 };
 
+[[nodiscard]] BlockVariantKey block_variant_key(
+    const BlockStateGuard& guard,
+    std::uint64_t runtime_generation = 0u
+) noexcept;
+
 class TranslationError final : public std::runtime_error {
 public:
     TranslationError(TranslationAccess access, std::uint32_t address, ExceptionCause cause);

@@ -11,7 +11,8 @@ Sie ist absichtlich in kleine, voneinander abhaengige Releases und Task-IDs zerl
 ## Leitprinzipien
 
 1. Korrektheit vor Geschwindigkeit.
-2. Jede neue Semantik braucht automatische Tests.
+2. Jede neue Semantik braucht automatische Tests; sie werden gesammelt im
+   letzten Gate-Vorbereitungstask einer Phase erstellt und ausgefuehrt.
 3. Decoder, Analyse, IR, Codegenerator und Runtime bleiben getrennte Schichten.
 4. Generierter Code darf keine versteckten Abhaengigkeiten auf den Analyzer besitzen.
 5. Unbekannte oder nicht sicher aufgeloeste Faelle muessen sichtbar fehlschlagen.
@@ -61,9 +62,10 @@ Sie ist absichtlich in kleine, voneinander abhaengige Releases und Task-IDs zerl
 | SH-4 FPU | 0.24 bis 0.25 | FPU-Grundlage und Dreamcast-relevante Spezialoperationen |
 | Dreamcast-Plattform | 0.26 bis 0.31 | Boot, Eingabe, Grafik, Audio, GD-ROM und Scheduling |
 | Codegen und Buildsystem | 0.32 bis 0.34 | modulare Backends, Cache, indirekter Dispatch |
-| Werkzeuge und Qualitaet | 0.35 bis 0.37 | Manifest, Diagnostik, Fuzzing und reproduzierbare Debug-Gates |
+| Werkzeuge und Qualitaet | 0.35 bis 0.37 | Manifest, Port-Projektexport, Diagnostik, Fuzzing und reproduzierbare Debug-Gates |
 | Kompatibilitaet und Leistung | 0.38 bis 0.40 | Homebrew-Vertical-Slice und erster oeffentlicher Pre-Alpha-Stand |
 | Desktop-GUI und Quellworkflow | 0.41 bis 0.44 | vollstaendiger Alpha-Workflow fuer Projektanlage, `.gdi`-Quellen und Analyse |
+| Alpha-Integration und Haertung | 0.45 bis 0.49 | ISA-Abdeckung, Retail-Boot, native Hostruntime, Portintegration und Alpha-CI |
 | Alpha | 0.50.0 | zusammenhaengende Dreamcast-Programme laufen reproduzierbar |
 | Beta | 0.75.0 | ausgewaehlte reale Programme sind spielbar und debuggbar |
 | Stabil | 1.0.0 | dokumentierter, reproduzierbarer und stabiler Framework-Release |
@@ -503,43 +505,47 @@ Release-Gate:
 - frische lokale Debug- und Release-Builds bestehen vollstaendig; CI ist erst
   zum Alpha-Gate wieder verpflichtend
 
-## Pre-Alpha-Build- und Gate-Strategie
+## Build-, Test- und Gate-Strategie
 
-Von v0.31.0 bis einschliesslich v0.44.0 wird jedes lokale Release-Gate mit
-genau einem frischen Debug-Build und der vollstaendigen Regression bestaetigt.
-Auf der Festplatte bleibt nur `build-current/` mit den aktuellen
-Debug-Artefakten. Regulare Release-Builds sowie verpflichtende Windows- und
-Linux-CI werden erst beim Alpha-Gate v0.50.0 wieder ausgefuehrt.
+Innerhalb einer Phase werden die Fach-Tasks zuerst ohne routinemaessigen Build
+und ohne Testlauf abgearbeitet. Testanforderungen werden dabei nur gesammelt.
+Der ausdruecklich benannte letzte Gate-Vorbereitungstask erstellt oder
+vervollstaendigt anschliessend alle Tests der Phase und fuehrt genau einen
+frischen Build sowie die vollstaendige Regression aus. Auf der Festplatte
+bleibt nur `build-current/` mit den aktuellen Gate-Artefakten.
 
-## Lokale Sonic-Adventure-Akzeptanzstrategie
+Vor jedem Phasen-Release-Gate folgt nach erfolgreicher Gate-Vorbereitung ein
+verpflichtender Review-Stop. Das Release-Gate, Versionsaenderungen,
+Release-Commit, Tag und Veroeffentlichung duerfen erst nach ausdruecklicher
+Freigabe durch den Nutzer begonnen werden.
+Verlangt das Review Aenderungen, wird die Gate-Vorbereitung nach den Korrekturen
+erneut vollstaendig ausgefuehrt. Regulare Release-Builds sowie verpflichtende
+Windows- und Linux-CI werden erst in der Alpha-Vorbereitung fuer v0.50.0
+aktiviert.
 
-Sonic Adventure ist ab Phase 6 der massgebliche reale, lokale
-End-to-End-Akzeptanztest. Unit-, Integrations-, Regression-, Fuzzing-,
-Plattform- und Homebrew-Tests bleiben unveraendert der oeffentlich verteilbare
-Pflichtnachweis fuer einzelne Tasks. Oeffentliche CI wird am Alpha-Gate wieder
-verpflichtend.
+## Sonic-Adventure- und Phasengate-Strategie
 
-Der vollstaendige lokale Test laeuft genau einmal pro abgeschlossener Phase:
+Vor v0.50.0 wird Sonic Adventure nicht ausgefuehrt und ist kein
+Phasenakzeptanztest. Die Gates von Phase 6 bis zur Alpha-Vorbereitung verwenden
+ausschliesslich synthetische Fixtures und frei lizenzierte Homebrew-Programme.
+Eine lokale GDI darf vor Alpha read-only validiert, statisch analysiert und bis
+zum lokalen Port-Build verarbeitet werden; ihr Programm wird dabei nicht als
+Gate ausgefuehrt.
 
-- Phase 6 bei v0.31.0
-- Phase 7 bei v0.34.0
-- Phase 8 bei v0.37.0
-- Phase 9 bei v0.40.0
-- Phase 10 bei v0.44.0
-- erneut beim Alpha-Gate v0.50.0
+Die fruehere lokale Phase-6-GDI-Blockprobe bleibt als historische
+Quellen-/Bootblockdiagnose dokumentiert, gilt aber nicht als Nachweis einer
+Sonic-Adventure-Ausfuehrung. Erst der letzte Alpha-Gate-Vorbereitungstask darf
+die lokal bereitgestellte Sonic-Adventure-GDI ausfuehren. Das Alpha-Gate ist
+erreicht, wenn daraus ein Port-Projekt und `game.exe` entstehen, `game.exe`
+tatsaechlich startet und innerhalb eines endlichen Gastzyklusbudgets den
+reproduzierbaren Checkpoint `SA_ALPHA_BOOTED` ohne stille Fehler erreicht.
 
-Der bisherige v0.30.0-GDI-Smoke-Test wird nicht separat wiederholt. Seine
-messbaren GDI-, Track- und ISO9660-Kriterien werden beim kumulativen
-Phase-6-Gate v0.31.0 erneut geprueft. Einzelne Tasks und Zwischenreleases
-erhalten keinen vollstaendigen Sonic-Adventure-Test.
-
-Alle Gates verwenden endliche Gastzyklusbudgets, allgemeine Checkpoints,
-Zaehler und redigierte maschinenlesbare Berichte. Spieldaten, Captures,
-Dump-Hashes und lokale Pfade bleiben ausserhalb von Repository und Releases;
-titelbezogene Adressen, Remaps, Patches und Runtime-Sonderfaelle sind untersagt.
-Die vollstaendigen verbindlichen Kriterien stehen in
-`docs/SONIC_ADVENTURE_ACCEPTANCE.md`. Zukuenftige Kriterien werden hier nur
-dokumentiert und nicht vor ihrer Roadmap-Phase implementiert.
+Interaktives Gameplay, Hauptmenue, spielbare Szene, vollstaendige Grafik- oder
+Audiokorrektheit und spielbare Performance bleiben Beta-Ziele. Spieldaten,
+Captures, Dump-Hashes und lokale Pfade bleiben ausserhalb von Repository und
+Releases; titelbezogene Adressen, Remaps, Patches und Runtime-Sonderfaelle sind
+untersagt. Die verbindlichen Kriterien stehen in
+`docs/SONIC_ADVENTURE_ACCEPTANCE.md`.
 
 ## Phase 6: Dreamcast-Plattform
 
@@ -678,7 +684,9 @@ Release-Gate:
 - DiscSource, GD-ROM-Kommandos, ISO9660, asynchrone Gastzyklus-Timings sowie GDI-Parser und Mehrdateiquelle sind mit ausschliesslich synthetischen Fixtures getestet
 - GDI-Quellen bleiben read-only; Hostpfade sind keine semantische Identitaet und kein Disc-Image liegt im Repository oder Release
 - frische lokale Debug- und Release-Builds bestehen mit 114/114 Tests; CI ist erst zum Alpha-Gate verpflichtend
-- gemaess lokaler Akzeptanzstrategie erfolgt hier kein vollstaendiger Sonic-Adventure-Test; die GDI-Kriterien werden beim kumulativen Phase-6-Gate v0.31.0 erneut geprueft
+- die GDI-Kriterien werden beim kumulativen Phase-6-Gate v0.31.0 als
+  historische lokale Quellen-/Bootblockprobe erneut geprueft; dies ist kein
+  Sonic-Adventure-Ausfuehrungsnachweis
 
 ### [x] v0.31.0 - Scheduling, Timer und DMA
 
@@ -707,7 +715,7 @@ Enthalten:
 - Frame- und Audio-Taktung
 - deterministische Testuhr
 
-Sonic-Adventure-Abschlussgate fuer Phase 6 bei v0.31.0:
+Kumulatives Phase-6-Abschlussgate bei v0.31.0:
 
 - ein frei lizenzierter Homebrew-Vertical-Slice zeigt Bild, nimmt Eingabe an und erzeugt Audio
 - alle verwendeten Testprogramme duerfen verteilt werden
@@ -716,12 +724,12 @@ Sonic-Adventure-Abschlussgate fuer Phase 6 bei v0.31.0:
 - optionale Firmwarepfade veraendern niemals das vom Nutzer bereitgestellte Quellabbild
 - `.gdi`-Quellen koennen ohne manuelle Trackumbauten geladen, validiert und ueber dieselbe Disc-Abstraktion wie andere Dateiquellen genutzt werden
 - der fruehere v0.30.0-GDI-Smoke wird kumulativ erneut geprueft: alle Tracks und Sektorformate sind validiert, ISO9660 und Bootdatei sind ueber den normalen DiscSource-Pfad lesbar und der Dump bleibt unveraendert
-- die Bootdatei ist in den Gastadressraum geladen und mindestens ein Block ihres allgemein bestimmten Programmbereichs wurde innerhalb eines festen Gastzyklusbudgets ausgefuehrt
+- eine frei verteilbare Homebrew-Bootdatei ist in den Gastadressraum geladen und mindestens ein Block ihres allgemein bestimmten Programmbereichs wurde innerhalb eines festen Gastzyklusbudgets ausgefuehrt
 - Scheduler, asynchrones GD-ROM sowie zugehoerige Abschluss-, DMA- oder Interruptpfade liefern messbare Ereignisse; `executed_blocks > 0`, `guest_cycles > 0` und `silent_failures == 0`
-- zwei identische Laeufe erreichen `SA_PHASE6_MAIN_EXECUTION_STARTED` mit demselben letzten Gast-PC und denselben deterministischen Scheduler-Kernzustaenden
+- zwei identische Homebrew-Laeufe erreichen `KR_PHASE6_PLATFORM_INTEGRATED` mit demselben letzten Gast-PC und denselben deterministischen Scheduler-Kernzustaenden
 - ein frischer Debug-Build besteht mit 122/122 Tests und erreicht in zwei
   bytegleichen Laeufen denselben Checkpoint sowie dieselben strukturellen Ergebnisse
-- Gate-Ergebnis: `SA_PHASE6_MAIN_EXECUTION_STARTED`, ein ausgefuehrter Block,
+- Gate-Ergebnis: `KR_PHASE6_PLATFORM_INTEGRATED`, ein ausgefuehrter Block,
   16 Gastzyklen, drei Scheduler-Ereignisse sowie je ein GD-ROM-, TMU-, DMA-,
   Interrupt- und Cache-Invalidierungsereignis bei `silent_failures == 0`
 
@@ -798,7 +806,7 @@ Fortschritt:
 - [x] KR-3407 - Scheduler-Safepoints und Gastzyklen
 - [x] KR-3408 - MMU- und Zustandswaechter fuer Blockvarianten
 - [x] KR-3409 - Praezise Fallback- und Interpretergrenze
-- [ ] KR-3410 - Cache-, Store-Queue- und On-Chip-RAM-Vertrag
+- [x] KR-3410 - Cache-/Store-Queue-Vertrag und v0.34 Gate-Vorbereitung
 - [ ] KR-3411 - v0.34 Release-Gate
 
 Enthalten:
@@ -820,17 +828,17 @@ Enthalten:
 - expliziter Vertrag fuer Cachewartungsbefehle, CCR-Modi und Operand-Cache-RAM
 - klare Abbruchstrategie, wenn Sicherheit nicht garantiert werden kann
 
-Sonic-Adventure-Abschlussgate fuer Phase 7 bei v0.34.0:
+Kumulatives Phase-7-Abschlussgate bei v0.34.0:
 
 - jeder Blockaustritt besitzt einen expliziten, getesteten Vertrag
 - unbekannte Dispatchziele werden nie still ignoriert oder titelbezogen umgebogen
 - ein Schreibzugriff auf ausfuehrbaren RAM invalidiert alle betroffenen Blockvarianten vor der naechsten Ausfuehrung
 - Scheduler, Interrupts und Ausnahmen beobachten an Backend- und Fallback-Grenzen denselben CPU-Zustand
 - der synthetische Alias-/ROM-RAM-Handoff funktioniert ohne proprietaeres BIOS
-- alle Phase-6-Kriterien und Checkpoints bestehen weiterhin
+- alle verteilbaren Phase-6-Kriterien und Checkpoints bestehen weiterhin
 - Analyse, IR, deterministisch partitionierter Codegen, Hostbuild und generierter Start laufen ueber die modulare Backend- und Runtime-ABI
 - mindestens ein generierter Block und ein generisch aufgeloestes indirektes Ziel werden ausgefuehrt; `indirect_dispatches > 0` und `silent_failures == 0`
-- identische Laeufe erreichen `SA_PHASE7_GENERATED_RUNTIME_ACTIVE` mit denselben deterministischen Dispatch-Kernmetriken
+- identische Homebrew-Laeufe erreichen `KR_PHASE7_GENERATED_RUNTIME_ACTIVE` mit denselben deterministischen Dispatch-Kernmetriken
 
 ## Phase 8: Werkzeuge und Qualitaet
 
@@ -844,6 +852,7 @@ Fortschritt:
 - [ ] KR-3504 - Override- und Hint-Dateien
 - [ ] KR-3505 - Ausfuehrungs- und Firmwareprofil im Manifest
 - [ ] KR-3506 - Eingabeprovenienz und Cache-Identitaet
+- [ ] KR-3507 - Reproduzierbarer Port-Projektexport
 
 Enthalten:
 
@@ -858,6 +867,18 @@ Enthalten:
 - deklarierte Groessen und Hashes externer lokaler Eingaben ohne Einbettung ihrer Daten
 - stabile Exitcodes
 - maschinenlesbare CLI-Ausgabe
+- offizieller CLI-Pfad von einer validierten `.gdi`-Quelle zu einem eigenstaendig
+  buildbaren Port-Projekt in einem frei waehlbaren Ausgabeordner
+- stabiles Port-Layout mit getrennten generierten Quellen, handgeschriebener
+  Integrationsschicht, Metadaten und Buildausgaben
+- ausfuehrbares Host-Target `game` beziehungsweise `game.exe` neben der bereits
+  vorhandenen statischen Ausgabe
+- wiederholbare Generierung, die ausschliesslich als Katana-generiert markierte
+  Artefakte ersetzt und handgeschriebenen Portcode erhaelt
+- explizite, versionierte Runtime-Abhaengigkeit sowie austauschbare
+  `DiscSource`-Anbindung ohne eingebettete absolute Quellpfade
+- titelbezogene Assetextraktion und ein Installer, nach dem die Nutzer-GDI
+  geloescht werden kann, bleiben Aufgabe des jeweiligen Spieleport-Folgeprojekts
 
 ### v0.36.0 - Diagnostik und Debugging
 
@@ -899,7 +920,7 @@ Fortschritt:
 - [ ] KR-3706 - Reproduzierbare Release-Artefakte
 - [ ] KR-3707 - Differenztests der Ausfuehrungswege
 - [ ] KR-3708 - Mehrsegment-, Dispatch- und Invalidierungsfuzzing
-- [ ] KR-3709 - Referenz- und Lizenzprovenienz
+- [ ] KR-3709 - Referenz-/Lizenzprovenienz und v0.37 Gate-Vorbereitung
 - [ ] KR-3710 - v0.37 Release-Gate
 
 Enthalten:
@@ -915,7 +936,7 @@ Enthalten:
 - reproduzierbare Pre-Alpha-Artefakte
 - Third-Party-, Referenzprovenienz- und Lizenzbericht
 
-Sonic-Adventure-Abschlussgate fuer Phase 8 bei v0.37.0:
+Kumulatives Phase-8-Abschlussgate bei v0.37.0:
 
 - jeder nicht aufgeloeste Kontrollflussfall ist maschinenlesbar und reproduzierbar diagnostizierbar
 - Replays enthalten keine Hostzeit als versteckte Wahrheitsquelle
@@ -924,8 +945,15 @@ Sonic-Adventure-Abschlussgate fuer Phase 8 bei v0.37.0:
 - gleiche Eingaben und Optionen erzeugen bytegleiche Metadaten und Release-Artefakte
 - alle Phase-7-Kriterien und Checkpoints bestehen weiterhin
 - Manifest und stabile CLI fuehren Analyse, Codegen, Build und begrenzten Lauf mit versionierten, redigierten JSON-Berichten aus
+- der offizielle Port-Export verarbeitet eine synthetische oder frei lizenzierte `.gdi`-Quelle ueber Bootdatei,
+  Analyse, IR und partitionierten Codegen, erzeugt ausserhalb des
+  KatanaRecomp-Quellbaums ein eigenstaendig buildbares Projekt und baut dort das
+  ausfuehrbare Host-Target `game` beziehungsweise `game.exe`
+- eine erneute Generierung veraendert keine handgeschriebenen Dateien des
+  Port-Projekts; absolute GDI- und Trackpfade sind weder in generierten Quellen
+  noch in portablen Metadaten fest eingebettet
 - ein kontrollierter Abbruch dokumentiert Gast-PC, Block-, Delay-Slot-, Ausnahme-, Scheduler- und Dispatchzustand ohne lokale Pfade oder Spieldaten
-- identische Laeufe erreichen `SA_PHASE8_REPRODUCIBLE_DIAGNOSTIC_RUN` und erzeugen bytegleiche Manifeste und Blockmetadaten
+- identische Laeufe erreichen `KR_PHASE8_REPRODUCIBLE_TOOLCHAIN` und erzeugen bytegleiche Manifeste und Blockmetadaten
 
 ## Phase 9: Kompatibilitaet und Leistung
 
@@ -972,7 +1000,7 @@ Fortschritt:
 - [ ] KR-3905 - LTO und PGO
 - [ ] KR-3906 - Block-, Edge- und Dispatch-Profiling
 - [ ] KR-3907 - Fastpath- und Inline-Cache-Waechter
-- [ ] KR-3908 - Codegroessen-, Invalidierungs- und Schedulerbudgets
+- [ ] KR-3908 - Budgets und v0.39 Gate-Vorbereitung
 - [ ] KR-3909 - v0.39 Release-Gate
 
 Enthalten:
@@ -1002,7 +1030,7 @@ Fortschritt:
 - [ ] KR-4002 - Architektur- und Manifestreferenz
 - [ ] KR-4003 - Lizenz- und Rechtspruefung
 - [ ] KR-4004 - Kompatibilitaetsbericht
-- [ ] KR-4006 - Faehigkeits-, Firmwaremodus- und Datenaudit
+- [ ] KR-4006 - Faehigkeits-/Datenaudit und v0.40 Gate-Vorbereitung
 - [ ] KR-4005 - v0.40.0 Pre-Alpha-Release
 
 Enthalten:
@@ -1018,13 +1046,13 @@ Enthalten:
 - automatisierter Audit, dass keine Firmwarebytes, extrahierten Assets, persoenlichen Flashdaten oder lokalen Pfade im Paket liegen
 - veroeffentlichter Homebrew-Kompatibilitaetsbericht
 
-Sonic-Adventure-Abschlussgate fuer Phase 9 bei v0.40.0:
+Kumulatives Phase-9-Abschlussgate bei v0.40.0:
 
 - alle Phase-8-Kriterien und Checkpoints bestehen weiterhin; das Homebrew-Korpus bleibt der oeffentliche Pflichtnachweis
-- mindestens ein Spiel-Frame erreicht den vollstaendigen PVR-Pfad; `pvr_frames >= 1`, plausible Framegeometrie und gueltige VRAM-Grenzen werden berichtet
+- mindestens ein Frame des frei lizenzierten Homebrew-Testspiels erreicht den vollstaendigen PVR-Pfad; `pvr_frames >= 1`, plausible Framegeometrie und gueltige VRAM-Grenzen werden berichtet
 - Audio- und Maple-Zaehler werden aus demselben zusammenhaengenden Lauf erfasst, sofern der erreichte Spielpfad diese Subsysteme bereits nutzt
 - der Lauf ist gastzyklusbegrenzt, verarbeitet mindestens zwei Frameintervalle und hat `silent_failures == 0`
-- ein lokales, nicht zu committendes Capture und getrennte Analyse-, Codegen-, Build-, Start- und Laufzeitmetriken belegen `SA_PHASE9_FIRST_GAME_FRAME`
+- ein verteilbares Referenz-Capture und getrennte Analyse-, Codegen-, Build-, Start- und Laufzeitmetriken belegen `KR_PHASE9_HOMEBREW_HOST_FRAME`
 - aktivierte und deaktivierte Fastpaths liefern denselben beobachtbaren Gastzustand
 
 ## Phase 10: Desktop-GUI und Alpha-Workflow
@@ -1071,7 +1099,7 @@ Enthalten:
 - DPI-, Tastatur-, Fehlerrecovery- und Packaging-Haertung fuer den Alpha-Workflow
 - dokumentierter Standardpfad, bei dem neue Nutzer Alpha-relevante Projekte ohne CLI-Zwang anlegen und ausfuehren koennen
 
-Sonic-Adventure-Abschlussgate fuer Phase 10 bei v0.44.0:
+Kumulatives Phase-10-Abschlussgate bei v0.44.0:
 
 - die GUI deckt den Alpha-Hauptworkflow fuer Projektanlage, Quellenwahl, Analyse, Build und Diagnostik vollstaendig ab
 - `.gdi`-Quellen sind in GUI, CLI und Automatisierung dieselbe validierte Quelle und besitzen dieselben Fehlermeldungen und Identitaetsregeln
@@ -1079,9 +1107,90 @@ Sonic-Adventure-Abschlussgate fuer Phase 10 bei v0.44.0:
 - GUI- und CLI-Lauf fuer identische Projekte erzeugen dieselben Manifeste, Jobs und Ergebnisartefakte
 - alle Phase-9-Kriterien und Checkpoints bestehen weiterhin
 - der lokale GDI-Quellenworkflow kann in der GUI angelegt, validiert, gespeichert und wieder geoeffnet werden
-- GUI und CLI starten ueber dieselben Anwendungsdienste Analyse, Codegen, Build und Lauf und erreichen denselben Checkpoint mit denselben Artefakten
+- GUI und CLI starten mit synthetischen oder frei lizenzierten Quellen ueber dieselben Anwendungsdienste Analyse, Codegen, Build und Lauf und erreichen denselben Checkpoint mit denselben Artefakten
 - Abbruch, Fehleranzeige und ein ungueltiger Trackpfad liefern dieselben strukturierten Fehlerklassen; exportierte Berichte bleiben redigiert
-- `SA_PHASE10_GUI_END_TO_END` wird auf den fuer Alpha unterstuetzten Windows- und Linux-Konfigurationen automatisiert erreicht, ohne Dreamcast-Testlogik in der GUI zu duplizieren
+- `KR_PHASE10_GUI_END_TO_END` wird auf den fuer Alpha unterstuetzten Windows- und Linux-Konfigurationen automatisiert erreicht, ohne Dreamcast-Testlogik in der GUI zu duplizieren
+
+## Phase 11: Alpha-Integration und Haertung
+
+Diese Phase schliesst bewusst die Luecke zwischen dem GUI-/Quellworkflow in
+v0.44.0 und dem ersten ausfuehrbaren Sonic-Adventure-Alpha in v0.50.0. Alle
+Gates bis einschliesslich v0.49.0 verwenden nur synthetische Fixtures und frei
+lizenzierte Homebrew-Programme. Eine lokale Sonic-Adventure-GDI darf bis zum
+Port-Build verarbeitet, aber erst in KR-4999 ausgefuehrt werden.
+
+### v0.45.0 - SH-4-Alpha-ISA-Abdeckung
+
+Fortschritt:
+
+- [ ] KR-4501 - Messbarer SH-4-Alpha-ISA-Vertrag
+- [ ] KR-4502 - Fehlende Integer- und Kontrollinstruktionen
+- [ ] KR-4503 - Status-, Exception- und Systemsemantik
+- [ ] KR-4504 - v0.45 Gate-Vorbereitung: Tests und Build
+- [ ] KR-4505 - v0.45 Release-Gate
+
+Gate-Ergebnis: Das dokumentierte Alpha-ISA-Profil ist ohne stille Opcode-
+Luecken ueber Decoder, IR, Backend und Runtime abgedeckt; der verteilbare
+Nachweis erreicht `KR_V045_ISA_ALPHA_PROFILE_READY`.
+
+### v0.46.0 - Retail-Boot- und Systemdienste
+
+Fortschritt:
+
+- [ ] KR-4601 - Alpha-Firmwaremodus und Retail-Bootvertrag
+- [ ] KR-4602 - BIOS-ABI und dynamische Firmwarevektoren
+- [ ] KR-4603 - Dreamcast-System-ASIC sowie MMIO- und Interruptintegration
+- [ ] KR-4604 - v0.46 Gate-Vorbereitung: Tests und Build
+- [ ] KR-4605 - v0.46 Release-Gate
+
+Gate-Ergebnis: Ein synthetischer Retail-Boot-Vertical-Slice nutzt denselben
+Firmware-, ASIC-, MMIO- und Interruptvertrag wie spaetere lokale Ports und
+erreicht `KR_V046_RETAIL_BOOT_SERVICES_READY`.
+
+### v0.47.0 - Native Hostruntime
+
+Fortschritt:
+
+- [ ] KR-4701 - Native Fenster- und Videoausgabe
+- [ ] KR-4702 - Native Audio-, Eingabe- und Hostlebenszyklusintegration
+- [ ] KR-4703 - Persistente VMU-/Flash-Arbeitskopien und Host-Pacing
+- [ ] KR-4704 - v0.47 Gate-Vorbereitung: Tests und Build
+- [ ] KR-4705 - v0.47 Release-Gate
+
+Gate-Ergebnis: Ein frei lizenzierter Port laeuft als eigenstaendige
+Hostanwendung mit Video, Audio, Eingabe und kontrolliertem Lebenszyklus und
+erreicht `KR_V047_NATIVE_HOST_READY`.
+
+### v0.48.0 - Port- und GUI-Integration
+
+Fortschritt:
+
+- [ ] KR-4801 - Versioniertes Runtime-SDK fuer externe Port-Projekte
+- [ ] KR-4802 - Gemeinsamer CLI-/GUI-Portexport und Buildworkflow
+- [ ] KR-4803 - Out-of-Tree-`game.exe`-Integration
+- [ ] KR-4804 - v0.48 Gate-Vorbereitung: Tests und Build
+- [ ] KR-4805 - v0.48 Release-Gate
+
+Gate-Ergebnis: Eine synthetische oder frei lizenzierte GDI wird ausserhalb des
+KatanaRecomp-Baums reproduzierbar zu einem Port-Projekt und einer startbaren
+`game.exe`; GUI und CLI erreichen `KR_V048_PORT_WORKFLOW_READY` ueber denselben
+Anwendungsdienst. Eine lokale Sonic-Adventure-GDI darf denselben Buildpfad
+durchlaufen, ihre `game.exe` wird in diesem Gate jedoch nicht gestartet.
+
+### v0.49.0 - Alpha-Release-Candidate
+
+Fortschritt:
+
+- [ ] KR-4901 - Alpha-CI-Konfiguration fuer Windows und Linux
+- [ ] KR-4902 - Reproduzierbare Pakete sowie Daten- und Lizenzaudit
+- [ ] KR-4903 - Alpha-Checkpoint- und Gate-Automatisierung einfrieren
+- [ ] KR-4904 - v0.49 Gate-Vorbereitung: Tests und Build
+- [ ] KR-4905 - v0.49 Release-Gate
+
+Gate-Ergebnis: Der vollstaendige verteilbare Alpha-Kandidat erreicht
+`KR_V049_ALPHA_CANDIDATE_READY`; alle oeffentlichen Tests, Berichte und Pakete
+bleiben frei von proprietaeren Daten. Erst nach dem Review von KR-4904 darf
+KR-4905 beginnen.
 
 ## Alpha-Gate: v0.50.0
 
@@ -1103,18 +1212,29 @@ Voraussetzungen:
 - CI auf Windows und Linux
 - reproduzierbare Builds
 
+Fortschritt:
+
+- [ ] KR-4999 - Alpha-Gate-Vorbereitung: Tests, Builds und lokaler Sonic-Boot
+- [ ] KR-5000 - v0.50.0 Alpha-Gate
+
 Kumulatives Sonic-Adventure-Alpha-Gate:
 
-- alle Checkpoints von Phase 6 bis Phase 10 werden im vollstaendigen lokalen Lauf erneut erreicht
-- der offizielle Quellenworkflow verarbeitet GDI, Tracks, ISO9660 und Bootdatei und uebergibt das geladene Hauptprogramm an Analyse, IR, Codegen und Hostbuild
-- generierte Anwendung, Scheduler, GD-ROM, DMA, Interrupts und generischer indirekter Dispatch erreichen innerhalb eines festen Gastzyklusbudgets `SA_ALPHA_FIRST_REPRODUCIBLE_FRAME`
-- mindestens ein Spiel-Frame erreicht das Host-Backend; Audio- und Maple-Zustand werden erfasst und `silent_failures == 0`
-- GUI und CLI erreichen denselben Checkpoint; zwei identische Laeufe liefern dieselben deterministischen Kernmetriken
+- alle verteilbaren Checkpoints der Phasen 6 bis 11 bestehen in der Alpha-Gate-Vorbereitung erneut
+- der offizielle Quellenworkflow verarbeitet die lokal bereitgestellte GDI, Tracks, ISO9660 und Bootdatei und erzeugt ausserhalb des KatanaRecomp-Quellbaums ein Port-Projekt mit `game.exe`
+- die erzeugte `game.exe` startet tatsaechlich; Hauptprogramm, Scheduler, GD-ROM, DMA, Interrupts und generischer indirekter Dispatch machen innerhalb eines festen Gastzyklusbudgets messbaren Fortschritt
+- zwei identische Laeufe erreichen `SA_ALPHA_BOOTED` mit denselben deterministischen Kernmetriken und `silent_failures == 0`
+- ein Spiel-Frame, Hauptmenue oder eine interaktive Szene ist kein Alpha-Pflichtkriterium; visuelle Ausgabe darf als zusaetzlicher Nachweis erfasst werden
 - ein begrenzt beendeter Fehllauf erzeugt einen verwertbaren redigierten Diagnosebericht
 - Repository und Releasepaket enthalten keine Spieldaten, Captures, Dump-Hashes oder lokalen Dump-Pfade
-- interaktives Sonic-Adventure-Gameplay ist kein Alpha-Pflichtkriterium, sondern gehoert zum Beta-Gate
+- KR-4999 erstellt beziehungsweise vervollstaendigt alle Alpha-Tests, fuehrt die frischen Debug- und Release-Builds, die vollstaendige Regression und die erforderliche Windows-/Linux-CI aus und stoppt danach fuer das Nutzerreview
+- KR-5000 darf erst nach ausdruecklicher Nutzerfreigabe beginnen; Review-Aenderungen erzwingen eine vollstaendige Wiederholung von KR-4999
 
 ## Beta-Gate: v0.75.0
+
+Fortschritt:
+
+- [ ] KR-7499 - Beta-Gate-Vorbereitung: Tests und Builds
+- [ ] KR-7500 - v0.75.0 Beta-Gate
 
 Voraussetzungen:
 
@@ -1127,8 +1247,15 @@ Voraussetzungen:
 - Performance ist fuer Testtitel praktikabel
 - Kompatibilitaetsmatrix und bekannte Fehler sind gepflegt
 - optionale lokale LLE-Tests sind strikt von verteilbaren Pflichttests getrennt
+- KR-7499 stoppt nach Tests, Builds, CI und Gate-Bericht fuer das Nutzerreview;
+  KR-7500 beginnt erst nach ausdruecklicher Freigabe
 
 ## Release-Gate: v1.0.0
+
+Fortschritt:
+
+- [ ] KR-9999 - v1.0 Gate-Vorbereitung: Tests und Builds
+- [ ] KR-10000 - v1.0.0 Release-Gate
 
 Voraussetzungen:
 
@@ -1144,6 +1271,8 @@ Voraussetzungen:
 - Lizenz-, Rechts- und Drittanbieterhinweise sind vollstaendig
 - keine BIOS-, Disc-, Spiel- oder Assetdaten im Repository oder Release
 - Upgrade- und Migrationshinweise fuer kuenftige Versionen
+- KR-9999 stoppt nach Tests, Builds, CI und Audits fuer das Nutzerreview;
+  KR-10000 beginnt erst nach ausdruecklicher Freigabe
 
 ## Nach v1.0
 
@@ -1169,18 +1298,30 @@ Moegliche Bereiche:
 
 ## Definition of Done
 
-Ein Roadmap-Task gilt nur als abgeschlossen, wenn:
+Ein regulaerer Implementierungs-Task gilt als inhaltlich abgeschlossen, wenn:
 
-1. der Code kompiliert
-2. bestehende Tests unveraendert bestehen
-3. neue Semantik passende Tests besitzt
-4. Fehlerfaelle getestet sind
-5. relevante Dokumentation aktualisiert ist
-6. keine generierten Builddateien versehentlich committed wurden
-7. der Scope des Tasks eingehalten wurde
-8. die Aenderung unabhaengig implementiert wurde
-9. der Commit oder PR die Task-ID nennt
-10. ein spaeterer Bearbeiter aus Tests und Dokumentation erkennen kann, was garantiert wird
+1. sein vereinbarter Scope implementiert ist
+2. Erfolgs-, Grenz- und Fehlerfaelle als konkrete Testanforderungen fuer die
+   Gate-Vorbereitung dokumentiert sind
+3. relevante Dokumentation aktualisiert ist
+4. keine generierten Builddateien versehentlich committed wurden
+5. die Aenderung unabhaengig implementiert wurde
+6. Commit oder PR die Task-ID nennt
+
+Der letzte Gate-Vorbereitungstask einer Phase gilt erst als abgeschlossen, wenn:
+
+1. alle gesammelten Testanforderungen als automatische Tests umgesetzt sind
+2. genau ein frischer Build in `build-current/` erfolgreich erstellt wurde
+3. die vollstaendige Regression einschliesslich Erfolgs-, Grenz- und
+   Fehlerfaellen besteht
+4. erforderliche Gate-Berichte und Artefakte reproduzierbar vorliegen
+5. Dokumentation und Taskstatus den tatsaechlichen Gate-Stand wiedergeben
+6. anschliessend vor dem Phasen-Release-Gate fuer das Nutzerreview gestoppt wird
+
+Ein Phasen-Release-Gate gilt erst als abgeschlossen, wenn die
+Gate-Vorbereitung unveraendert gueltig ist und der Nutzer das Gate ausdruecklich
+freigegeben hat. Verlangt das Review Aenderungen, ist die Gate-Vorbereitung nach
+den Korrekturen vollstaendig zu wiederholen.
 
 Die detaillierte Task-Liste steht in `docs/TASKS.md`.
 Die Arbeitsregeln fuer Codex stehen in `docs/CODEX_HANDOFF.md`.
