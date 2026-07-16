@@ -8,7 +8,13 @@ param(
 $ErrorActionPreference = 'Stop'
 
 function Initialize-MsvcEnvironment {
-    if (-not [string]::IsNullOrWhiteSpace($env:INCLUDE)) {
+    $hasMsvcEnvironment =
+        -not [string]::IsNullOrWhiteSpace($env:INCLUDE) -and
+        -not [string]::IsNullOrWhiteSpace($env:LIB)
+    $isNativeX64 =
+        $env:VSCMD_ARG_TGT_ARCH -eq 'x64' -and
+        $env:VSCMD_ARG_HOST_ARCH -eq 'x64'
+    if ($hasMsvcEnvironment -and $isNativeX64) {
         return
     }
 
