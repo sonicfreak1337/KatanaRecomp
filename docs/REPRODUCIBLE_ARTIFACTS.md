@@ -23,9 +23,9 @@ setzt jeden ZIP-Zeitstempel auf 1980-01-01 UTC. Er erzeugt zwei unabhaengige
 Kandidaten und vergleicht ihre SHA-256-Werte. Nur bei Bytegleichheit bleiben
 unter `build-current/artifacts/` zurueck:
 
-- `KatanaRecomp-0.34.0-dev.zip`
+- `KatanaRecomp-0.37.0-dev.zip`
 - `artifact-manifest.json`
-- `KatanaRecomp-0.34.0-dev.zip.sha256`
+- `KatanaRecomp-0.37.0-dev.zip.sha256`
 
 Ein schmutziger Git-Stand, fehlende oder doppelte Werkzeuge, ein abweichender
 Buildpfad und jede Doppelgenerierungsabweichung brechen sichtbar ab. Der Lauf

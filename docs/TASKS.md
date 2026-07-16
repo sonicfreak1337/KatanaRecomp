@@ -1862,7 +1862,7 @@ Akzeptanz:
 - Paket und Begleitdateien liegen ausschliesslich unter `build-current/artifacts/`
 - ein schmutziger Git-Stand, mehrdeutige Binaerdateien oder absolute Pfade brechen sichtbar ab
 - Disc-, Firmware-, Portexport- und andere private/generierte Eingaben koennen nicht in die feste Paketliste gelangen
-- das Artefakt bleibt als `0.34.0-dev` gekennzeichnet und ist kein vorgezogenes v0.37.0-Release
+- das Artefakt bleibt als `0.37.0-dev` gekennzeichnet und ist kein finales v0.37.0-Release
 
 ### [x] KR-3707 - Differenztests der Ausfuehrungswege
 
