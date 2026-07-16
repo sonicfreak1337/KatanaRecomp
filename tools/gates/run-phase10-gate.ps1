@@ -90,6 +90,7 @@ version = 2
 project.name = disc
 input.format = gdi
 input.path = disc/disc.gdi
+image.entry_point = 0x8C010000
 execution.firmware = direct
 execution.fallback = abort
 execution.scheduler = deterministic
