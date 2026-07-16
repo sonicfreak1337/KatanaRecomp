@@ -1532,7 +1532,7 @@ Akzeptanz:
 - Berichte enthalten ohne Opt-in weder absolute Pfade noch Firmwarestrings oder Flash-Nutzdaten
 - Provenienzdaten reichen zur Reproduktion der Werkzeugkonfiguration, nicht zur Rekonstruktion geschuetzter Eingaben
 
-### [ ] KR-3507 - Reproduzierbarer Port-Projektexport
+### [x] KR-3507 - Reproduzierbarer Port-Projektexport
 
 Abhaengigkeiten: KR-3006, KR-3304, KR-3305, KR-3411, KR-3501, KR-3502
 

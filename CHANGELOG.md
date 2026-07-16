@@ -10,6 +10,7 @@
 - KR-3504: Versionierte v2-Analyseanweisungen trennen erzwingende Overrides von unverbindlichen Hints. Statische Beweise werden nie durch abweichende Hints ersetzt; angenommene, bestaetigte, abgelehnte und stale Hinweise erscheinen deterministisch im Kontrollflussbericht. v1-Overrides bleiben kompatibel.
 - KR-3505: Das v2-Projektmanifest beschreibt explizite Direct-/HLE-/LLE-Firmwaremodi, Fallback-, Scheduler-, MMU- und Fastpathprofile, Backend-Faehigkeiten, Alias- und kanonische Speicherbereiche, WX-Segmente, erwartete Einstiege sowie dynamische BIOS-Vektoren. Sichere Direct-/Abort-Defaults und Voranalysevalidierung verhindern stillen Fallback, unvollstaendiges LLE und widerspruechliche Aliase.
 - KR-3506: Externe Eingaben erhalten portable SHA-256-/Groessenprovenienz mit strikt getrenntem lokalem Pfad. Ein deterministischer redigierter Buildbericht bindet Manifest, Analyseanweisungen, Werkzeug, IR, Runtime und Backend; der Codegen-Cache-v2-Schluessel bezieht nun auch die Werkzeugversion ein.
+- KR-3507: `katana-recomp port <quelle.gdi> --output <ordner> --target-name <name>` fuehrt die validierte Disc-Bootdatei ueber Analyse, IR, Optimierung und deterministische Partitionierung in ein extern buildbares CMake-/Ninja-Portprojekt. Nur manifestierte Dateien unter `generated/` werden ersetzt; `src/`, Nutzerdateien und private Disc-Inhalte bleiben getrennt, waehrend redigierte Metadaten und eine austauschbare DiscSource-Hostgrenze reproduzierbare Folgeprojekte ermoeglichen.
 
 ## [0.34.0] - 2026-07-16
 

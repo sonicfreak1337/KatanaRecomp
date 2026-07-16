@@ -375,6 +375,16 @@ Katana-IR als maschinenlesbares JSON anzeigen:
 .\build\katana-recomp.exe ir-json ".\samples\ir_demo.bin" 8C010000 8C010000
 `
 
+Ein extern buildbares Portprojekt aus einer lokalen GDI erzeugen:
+
+```powershell
+.\build-current\katana-recomp.exe port ".\disc\game.gdi" --output ".\port" --target-name game
+```
+
+Der Export behaelt private Disc-Dateien lokal, verwaltet ausschliesslich
+`generated/` und erhaelt handgeschriebene Dateien unter `src/`. Buildvertrag und
+Layout stehen in `docs/PORT_EXPORT.md`.
+
 C++ erzeugen:
 
 `powershell

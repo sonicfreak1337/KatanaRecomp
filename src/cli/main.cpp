@@ -6,6 +6,7 @@
 #include "katana/analysis/control_flow_analysis.hpp"
 #include "katana/codegen/cpp_emitter.hpp"
 #include "katana/codegen/probe.hpp"
+#include "katana/codegen/port_export.hpp"
 #include "katana/cli/exit_code.hpp"
 #include "katana/io/raw_binary_loader.hpp"
 #include "katana/io/elf32_sh_loader.hpp"
@@ -22,6 +23,7 @@
 #include <array>
 #include <cctype>
 #include <cstdint>
+#include <cstdlib>
 #include <exception>
 #include <filesystem>
 #include <fstream>
@@ -1075,6 +1077,70 @@ int main(const int argc, const char* const* argv) {
     return 0;
 }
 
+int export_port_project(
+    const std::filesystem::path& gdi_path,
+    const std::filesystem::path& output_path,
+    const std::string& target_name
+) {
+    const auto source_root = std::filesystem::path(KATANA_RECOMP_SOURCE_ROOT);
+    const auto absolute_output = std::filesystem::absolute(output_path).lexically_normal();
+    const auto relative_to_source = absolute_output.lexically_relative(
+        std::filesystem::absolute(source_root).lexically_normal()
+    );
+    if (!relative_to_source.empty() && !relative_to_source.is_absolute()
+        && *relative_to_source.begin() != "..") {
+        throw std::invalid_argument(
+            "Port-Ausgabe muss ausserhalb des KatanaRecomp-Quellbaums liegen."
+        );
+    }
+    const auto report = katana::codegen::export_dreamcast_port_project(
+        gdi_path,
+        output_path,
+        {target_name, KATANA_RECOMP_VERSION}
+    );
+    const auto shell_quote = [](const std::filesystem::path& path) {
+        const auto text = path.string();
+#ifdef _WIN32
+        if (text.find('"') != std::string::npos) {
+            throw std::invalid_argument("Hostbuildpfad enthaelt ein Anfuehrungszeichen.");
+        }
+        return '"' + text + '"';
+#else
+        std::string quoted = "'";
+        for (const auto character : text) {
+            character == '\'' ? quoted += "'\\''" : quoted += character;
+        }
+        return quoted + "'";
+#endif
+    };
+    const auto build_path = report.output_root / "build";
+    const auto configure = std::string("cmake -S ") + shell_quote(report.output_root)
+        + " -B " + shell_quote(build_path)
+        + " -G Ninja -DCMAKE_BUILD_TYPE=Debug -DKATANA_RUNTIME_ROOT="
+        + shell_quote(source_root);
+    if (std::system(configure.c_str()) != 0) {
+        throw katana::cli::Error(
+            katana::cli::ExitCode::BuildFailure,
+            "Port-Hostbuild konnte nicht konfiguriert werden."
+        );
+    }
+    const auto build = std::string("cmake --build ") + shell_quote(build_path)
+        + " --target " + target_name;
+    if (std::system(build.c_str()) != 0) {
+        throw katana::cli::Error(
+            katana::cli::ExitCode::BuildFailure,
+            "Port-Hosttarget konnte nicht gebaut werden."
+        );
+    }
+    std::cout << "Portprojekt erzeugt: " << report.output_root.string() << '\n'
+              << "Funktionen: " << report.functions << '\n'
+              << "Partitionen: " << report.partitions << '\n'
+              << "Generierte Dateien: " << report.generated_files << '\n'
+              << "Entfernte Altartefakte: " << report.removed_files << '\n'
+              << "Debug-Hostbuild erfolgreich: " << target_name << '\n';
+    return 0;
+}
+
 void print_usage(std::ostream& output) {
     output
         << "Verwendung:\n"
@@ -1090,6 +1156,7 @@ void print_usage(std::ostream& output) {
         << "  katana-recomp ir-json <Raw|ELF|Manifest> <Einstieg> [Basisadresse] [--directives <Datei>]\n"
         << "  katana-recomp emit-cpp <Raw|ELF|Manifest> <Einstieg> <Ausgabe.cpp> [Basisadresse] [--no-opt] [--dump-ir <Praefix>] [--directives <Datei>]\n\n"
         << "  katana-recomp phase6-probe-source <GDI> <Ausgabe.cpp>\n\n"
+        << "  katana-recomp port <Quelle.gdi> --output <Ordner> --target-name <Name>\n\n"
         << "Beispiel:\n"
         << "  katana-recomp emit-cpp programm.bin 8C010000 generated.cpp 8C010000\n";
 }
@@ -1116,6 +1183,31 @@ int main(const int argc, char* argv[]) {
                 katana::sh4::build_isa_coverage_report()
             );
             return 0;
+        }
+
+        if (argc == 7 && std::string_view(argv[1]) == "port") {
+            std::optional<std::filesystem::path> output_path;
+            std::optional<std::string> target_name;
+            for (std::size_t argument = 3u; argument < 7u; argument += 2u) {
+                const std::string_view option = argv[argument];
+                if (option == "--output" && !output_path.has_value()) {
+                    output_path = std::filesystem::path(argv[argument + 1u]);
+                } else if (option == "--target-name" && !target_name.has_value()) {
+                    target_name = argv[argument + 1u];
+                } else {
+                    throw std::invalid_argument(
+                        "port erwartet --output und --target-name jeweils genau einmal."
+                    );
+                }
+            }
+            if (!output_path.has_value() || !target_name.has_value()) {
+                throw std::invalid_argument(
+                    "port erwartet --output und --target-name jeweils genau einmal."
+                );
+            }
+            return export_port_project(
+                std::filesystem::path(argv[2]), *output_path, *target_name
+            );
         }
 
         if (

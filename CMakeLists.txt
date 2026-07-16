@@ -121,6 +121,7 @@ add_library(katana_core STATIC
     src/codegen/partition.cpp
     src/codegen/probe.cpp
     src/codegen/project.cpp
+    src/codegen/port_export.cpp
 )
 
 target_include_directories(
@@ -144,7 +145,9 @@ target_link_libraries(
 
 target_compile_definitions(
     katana-recomp
-    PRIVATE KATANA_RECOMP_VERSION="${PROJECT_VERSION}"
+    PRIVATE
+        KATANA_RECOMP_VERSION="${PROJECT_VERSION}"
+        KATANA_RECOMP_SOURCE_ROOT="${CMAKE_SOURCE_DIR}"
 )
 
 katana_enable_warnings(katana-recomp)

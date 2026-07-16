@@ -865,7 +865,7 @@ Fortschritt:
 - [x] KR-3504 - Override- und Hint-Dateien
 - [x] KR-3505 - Ausfuehrungs- und Firmwareprofil im Manifest
 - [x] KR-3506 - Eingabeprovenienz und Cache-Identitaet
-- [ ] KR-3507 - Reproduzierbarer Port-Projektexport
+- [x] KR-3507 - Reproduzierbarer Port-Projektexport
 
 Enthalten:
 
