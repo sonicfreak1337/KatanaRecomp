@@ -2492,7 +2492,7 @@ Akzeptanz:
   beziehungsweise Control-Test ohne proprietaere Spieldaten
 - ein wachsendes Log blockiert UI-Thread und Fortschrittsanzeige nicht
 
-### [ ] KR-4511 - Privater Sonic-Debugharness und abstrahierte Regressionen
+### [x] KR-4511 - Privater Sonic-Debugharness und abstrahierte Regressionen
 
 Abhaengigkeiten: KR-4507, KR-4508, KR-4509
 

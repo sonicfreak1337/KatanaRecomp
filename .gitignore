@@ -28,6 +28,9 @@ __pycache__/
 
 # Dreamcast-Spieldaten
 /private/
+*.retail-debug.json
+*.retail-debug.log
+/.katana-retail-debug/
 /disc/
 /discs/
 /bios/

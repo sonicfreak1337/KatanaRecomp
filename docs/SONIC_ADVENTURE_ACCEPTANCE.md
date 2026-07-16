@@ -44,6 +44,9 @@ Fuer jeden neuen Blocker gilt:
 Der private Lauf ist damit ein Kompatibilitaets-Orakel, nicht der oeffentliche
 Testbestand.
 
+Der konkrete lokale Aufruf, Konfigurationsvertrag, Budgetpfad und Selbsttest
+sind in [`PRIVATE_RETAIL_DEBUG.md`](PRIVATE_RETAIL_DEBUG.md) beschrieben.
+
 ## Entwicklungscheckpoints
 
 Die Checkpoints sind monoton und titelunabhaengig instrumentiert:
@@ -58,6 +61,12 @@ Die Checkpoints sind monoton und titelunabhaengig instrumentiert:
 
 Zwischenstaende duerfen lokal beobachtet werden. Nur `SA_ALPHA_PLAYABLE` ist
 der finale Alpha-Checkpoint.
+
+Der erste KR-4511-Harnesslauf erreichte innerhalb seines Budgets aggregiert
+`SA_ANALYSIS_CONTINUES`, blieb mit 350 ungeloesten Kontrollflussstellen
+`analysis-incomplete` und startete keine Hostanwendung. Dieser allgemeine
+Blocker ist weder Boot- noch Spielbarkeitsnachweis; private Identitaetsdaten
+sind nicht Bestandteil dieser Dokumentation.
 
 ## Maschinenlesbarer privater Laufbericht
 

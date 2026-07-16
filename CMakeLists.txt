@@ -469,6 +469,11 @@ if(TARGET katana-recomp-gui)
     if(WIN32)
         add_test(NAME katana-phase10-native-shell-lifecycle COMMAND katana-recomp-gui --native-smoke)
         add_test(NAME katana-phase11-native-qol-tests COMMAND katana-recomp-gui --qol-smoke)
+        add_test(
+            NAME katana-phase11-private-retail-harness-tests
+            COMMAND powershell.exe -NoProfile -ExecutionPolicy Bypass -File
+                ${CMAKE_CURRENT_SOURCE_DIR}/tools/phase11/run-private-retail-debug.ps1 -SelfTest
+        )
     endif()
 endif()
 if(MSVC AND KATANA_ENABLE_SANITIZERS)

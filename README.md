@@ -25,7 +25,7 @@ Eingabe
   -> natives Hostprojekt
 ```
 
-Der aktuelle kumulative Debug-Gate-Vertrag umfasst **162 automatische Tests**.
+Der aktuelle kumulative Debug-Gate-Vertrag umfasst **163 automatische Tests**.
 Phase 10 ist
 fuer den freigegebenen Windows-Workflow abgeschlossen: eine `.gdi` waehlen,
 einen Ausgabeordner waehlen und den Analyse-/Buildzustand sichtbar verfolgen.
@@ -159,6 +159,11 @@ Gesamt- und Schrittbalken, sichtbare kopierbare GDI-/Ausgabepfade und das
 KatanaRecomp-App-Icon. Hauptinhalt und Live-Log lassen sich getrennt scrollen;
 Layout, Mindestgroesse und Controls skalieren per Monitor von 100 bis 300
 Prozent DPI. Das Icon bleibt bis zum KR-4902-Audit ein internes Asset.
+
+Private, budgetierte Retail-Debuglaeufe verwenden den strikt externen Harness
+aus [docs/PRIVATE_RETAIL_DEBUG.md](docs/PRIVATE_RETAIL_DEBUG.md). Er committed
+weder GDI noch generierte Quellen, Binaries, Rohlogs, Pfade, Hashes oder
+Captures und ersetzt keinen synthetischen Regressionstest oder Alpha-Nachweis.
 
 Der Port-Export liest private Disc-Dateien nur lokal, schreibt ausschliesslich
 verwaltete Dateien unter `generated/` neu und erhaelt handgeschriebenen Code
