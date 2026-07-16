@@ -108,10 +108,17 @@ cancellation. The portable model provides an accessible textual summary for
 screen-reader adapters and automation. Long jobs execute outside the window
 thread, while the shell refreshes observable progress.
 
-These behaviors are not yet covered by native control-level automation.
 Versioned settings validate theme, scale and recent-project limits. Invalid or
 future settings recover to safe defaults with a visible diagnostic. Closing
 with unsaved changes requires confirmation.
+
+KR-4510 adds native Win32 progress controls for overall and current-step state,
+read-only copyable source/output fields, a per-monitor-DPI layout and a vertical
+main scrollbar independent from the log scrollbar. Dark colors are disabled
+when Windows High Contrast is active. The checked internal multi-size icon is
+embedded into the window class and executable. The native QoL control test
+checks tab stops, progress classes, icon presence, small-window scrolling,
+theme fallback and layout arithmetic at 100, 150, 200 and 300 percent DPI.
 
 ## Packaging and asset policy
 

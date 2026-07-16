@@ -11,6 +11,15 @@
       "alpha": true,
       "sha256": "56edc4240df8d2dff6c2d3b68cd919a320774e21c5395b605d71960c4da31108",
       "distribution": "internal-pending-kr-4902"
+    },
+    {
+      "role": "windows-application-icon",
+      "path": "KatanaLogo.ico",
+      "format": "ico",
+      "sizes": [16, 24, 32, 48, 64, 128, 256],
+      "sha256": "76d62ba3363939b2008ee213b7dbb8c75a43512026714bec0de20271af24fb46",
+      "source_sha256": "56edc4240df8d2dff6c2d3b68cd919a320774e21c5395b605d71960c4da31108",
+      "distribution": "internal-pending-kr-4902"
     }
   ]
 }

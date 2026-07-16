@@ -11,10 +11,11 @@ Gepruefte technische Eigenschaften:
 - quadratische Wort-/Bildmarke mit Katana, orangefarbener Spirale und
   `KATANA RECOMP`-Schriftzug
 
-Das Asset wird in Phase 9 weder kopiert noch paketiert. Vor der Aufnahme in die
-GUI-Ressourcen sind in KR-4101 die Nutzungsrechte beziehungsweise der
-Erstellungsursprung zu bestaetigen und die benoetigten Varianten festzulegen:
-Fenstericon mit transparentem Rand, kleine App-Icons sowie eine Wortmarke fuer
-helle und dunkle Hintergruende. Der Hash dient dabei als Identitaetsnachweis
-des geprueften Originals; private Quellpfade werden nicht in Metadaten oder
-Pakete geschrieben.
+Das identische PNG wurde als interner GUI-Kandidat ins Repository uebernommen.
+KR-4510 erzeugt daraus reproduzierbar `KatanaLogo.ico` mit 16, 24, 32, 48, 64,
+128 und 256 Pixeln und bindet es als Fenster-, Taskleisten- und EXE-Ressource
+ein. Der Ableitathash lautet
+`76d62ba3363939b2008ee213b7dbb8c75a43512026714bec0de20271af24fb46`.
+Private Quellpfade erscheinen weder in Ressource noch Paket. Die interne
+Anwendungsnutzung ist vom Nutzer beauftragt; eine oeffentliche Distribution
+bleibt bis zum vollstaendigen KR-4902-Daten- und Lizenzaudit gesperrt.

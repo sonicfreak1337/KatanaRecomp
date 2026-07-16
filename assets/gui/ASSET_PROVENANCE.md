@@ -11,6 +11,8 @@ asset intake on 2026-07-16 for use by the KatanaRecomp application.
 
 The image is an application asset. It is not Dreamcast firmware, game data,
 an extracted commercial asset, a reference implementation, or a test capture.
-No resized or platform-specific derivatives are committed in Phase 10; those
-may be generated reproducibly by the later packaging pipeline after the public
-distribution status has been cleared.
+KR-4510 derives `KatanaLogo.ico` reproducibly from this exact PNG with Pillow
+and the sizes 16, 24, 32, 48, 64, 128 and 256 pixels. Its SHA-256 is
+`76d62ba3363939b2008ee213b7dbb8c75a43512026714bec0de20271af24fb46`.
+The derivative is embedded into the internal Windows executable; public
+distribution remains blocked until KR-4902 clears the source asset.

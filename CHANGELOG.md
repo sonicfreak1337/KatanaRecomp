@@ -65,6 +65,15 @@
   denselben Observerstrom; unbekannte Schrittgroessen bleiben ohne erfundene
   Prozentzahl. Fehler und Abbruch behalten den aktiven Schrittnamen. Die GUI
   liest das Buildlog nicht mehr periodisch von der Datei neu ein.
+- KR-4510: Die native Windows-GUI zeigt gewaehlte GDI und Ausgabe dauerhaft in
+  kopierbaren Feldern, Gesamt- und Einzelschritt in echten Progressbars sowie
+  Aktion und Laufzeit an. Ein DPI-skaliertes vertikales Hauptlayout und das
+  unabhaengige Mausrad-/Tastatur-Log bleiben bei kleinen Fenstern bedienbar.
+  Dark Theme, High-Contrast-Fallback und ein eingebettetes Mehrgroessen-Icon
+  stammen aus dem geprueften internen Logoableitat. Ein nativer Control-Test
+  prueft Icon, Fokus, Scrollbereich, Theme-Fallback und 100 bis 300 Prozent
+  Layoutskalierung; Read-only-EDIT-Benachrichtigungen koennen keinen rekursiven
+  Refresh oder Callback-Abbruch mehr ausloesen.
 - Der neue inkrementelle Entwicklungszyklus behaelt `build-current/`, setzt teure Gate-Instrumentierung beim Debugprofil sicher zurueck und baut sowie testet mit begrenzter Parallelitaet. Das frische Abschluss-Gate bleibt erhalten; die vier deterministischen Fuzzziele laufen mit unveraenderter Fallzahl und denselben abgeleiteten Seeds als parallele CTest-Eintraege.
 - Der Entwicklungsrunner normalisiert auch eine bereits aktive x86-Developer-PowerShell auf die fuer den Projektbuild erforderliche native x64-MSVC-Umgebung.
 - KR-3801 bis KR-3808: Ein intern provenance-gebundenes, vollstaendig

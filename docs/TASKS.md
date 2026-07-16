@@ -2466,7 +2466,7 @@ Akzeptanz:
   unbestimmt und nicht als falsche Prozentzahl
 - Abbruch und Fehler benennen den aktiven Einzel- und Gesamtschritt
 
-### [ ] KR-4510 - GUI-QoL, Dark Theme, Logo und scrollbares Layout
+### [x] KR-4510 - GUI-QoL, Dark Theme, Logo und scrollbares Layout
 
 Abhaengigkeiten: KR-4101, KR-4103, KR-4509
 

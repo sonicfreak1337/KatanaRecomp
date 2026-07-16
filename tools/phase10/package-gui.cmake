@@ -26,8 +26,9 @@ if(WIN32)
     set(dialog "${build_root}/katana-file-dialog.exe")
 endif()
 set(logo "${source_root}/assets/gui/KatanaLogo.png")
+set(icon "${source_root}/assets/gui/KatanaLogo.ico")
 set(asset_manifest "${source_root}/assets/gui/asset-manifest.json")
-set(required_files "${cli}" "${gui}" "${fixture_writer}" "${logo}" "${asset_manifest}")
+set(required_files "${cli}" "${gui}" "${fixture_writer}" "${logo}" "${icon}" "${asset_manifest}")
 if(WIN32)
     list(APPEND required_files "${dialog}")
 endif()
@@ -52,7 +53,7 @@ if(WIN32)
     endif()
     file(COPY "${ASAN_RUNTIME}" DESTINATION "${output_root}")
 endif()
-file(COPY "${logo}" "${asset_manifest}" DESTINATION "${output_root}/assets")
+file(COPY "${logo}" "${icon}" "${asset_manifest}" DESTINATION "${output_root}/assets")
 file(COPY "${source_root}/include/katana/runtime" DESTINATION
     "${output_root}/runtime-sdk/include/katana")
 file(COPY "${source_root}/src/runtime" DESTINATION "${output_root}/runtime-sdk/src")
@@ -102,6 +103,7 @@ file(WRITE "${relocated_root}/fixture/project.katana"
 "input.format = gdi\n"
 "input.path = disc.gdi\n"
 "image.entry_point = 0x8C010000\n"
+"image.expected_entry_points = 0x8C01000A\n"
 "execution.firmware = direct\n"
 "execution.fallback = abort\n"
 "execution.scheduler = deterministic\n"
@@ -140,6 +142,7 @@ set(entries
     "katana-recomp${executable_suffix}"
     "katana-recomp-gui${executable_suffix}"
     "assets/KatanaLogo.png"
+    "assets/KatanaLogo.ico"
     "assets/asset-manifest.json"
     "docs/PHASE10_GUI_ARCHITECTURE.md"
     "docs/PHASE10_GUI_WORKFLOW.md"

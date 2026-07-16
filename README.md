@@ -25,7 +25,8 @@ Eingabe
   -> natives Hostprojekt
 ```
 
-Der aktuelle lokale Debug-Lauf umfasst **161 automatische Tests**. Phase 10 ist
+Der aktuelle kumulative Debug-Gate-Vertrag umfasst **162 automatische Tests**.
+Phase 10 ist
 fuer den freigegebenen Windows-Workflow abgeschlossen: eine `.gdi` waehlen,
 einen Ausgabeordner waehlen und den Analyse-/Buildzustand sichtbar verfolgen.
 `sourcecode/` und `game.exe` entstehen nur bei vollstaendig bewiesenem
@@ -152,6 +153,12 @@ JSON Lines nach `stderr`; das abschliessende Jobergebnis bleibt als einzelnes
 JSON-Dokument auf `stdout`. Gesamtprozente sind monoton. `step_total: null`
 bedeutet einen tatsaechlich unbestimmten Einzelschritt und niemals null Prozent.
 Die GUI verwendet exakt denselben Ereignisstrom fuer Fortschritt und Live-Log.
+
+Die Windows-GUI besitzt ein dunkles, High-Contrast-kompatibles Design, native
+Gesamt- und Schrittbalken, sichtbare kopierbare GDI-/Ausgabepfade und das
+KatanaRecomp-App-Icon. Hauptinhalt und Live-Log lassen sich getrennt scrollen;
+Layout, Mindestgroesse und Controls skalieren per Monitor von 100 bis 300
+Prozent DPI. Das Icon bleibt bis zum KR-4902-Audit ein internes Asset.
 
 Der Port-Export liest private Disc-Dateien nur lokal, schreibt ausschliesslich
 verwaltete Dateien unter `generated/` neu und erhaelt handgeschriebenen Code

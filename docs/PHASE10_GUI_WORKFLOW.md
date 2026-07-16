@@ -48,6 +48,12 @@ Validation, hashing, boot image, analysis, IR, codegen, host configuration,
 host compilation and finalization remain ordered. Unknown step totals are
 shown as indeterminate and failure/cancellation names the active step.
 
+On Windows the desktop shell presents the same values through separate native
+overall and step progress bars. GDI and output stay visible in read-only,
+keyboard-copyable fields. Mouse wheel over the focused log scrolls the log;
+elsewhere it scrolls the DPI-aware main content. Dark mode falls back to system
+High Contrast colors, and the internal app icon is embedded in the EXE.
+
 The model/application-service automation path is:
 
 ```powershell
