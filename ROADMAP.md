@@ -532,26 +532,25 @@ aktiviert.
 
 ## Sonic-Adventure- und Phasengate-Strategie
 
-Vor v0.50.0 wird Sonic Adventure nicht ausgefuehrt und ist kein
-Phasenakzeptanztest. Die Gates von Phase 6 bis zur Alpha-Vorbereitung verwenden
-ausschliesslich synthetische Fixtures und frei lizenzierte Homebrew-Programme.
-Eine lokale GDI darf vor Alpha read-only validiert, statisch analysiert und bis
-zum lokalen Port-Build verarbeitet werden; ihr Programm wird dabei nicht als
-Gate ausgefuehrt.
+Mit Phase 11 beginnt die lokale, ausdruecklich autorisierte Retail-Debugphase.
+Sonic Adventure darf read-only analysiert, rekompiliert und mit festen Zeit-
+und Gastzyklusbudgets lokal ausgefuehrt werden. Diese privaten Diagnoselaeufe
+sind Entwicklungsinput, aber kein verteilbarer Test und kein Ersatz fuer
+synthetische Fixtures und frei lizenzierte Homebrew-Regressionen.
 
-Die fruehere lokale Phase-6-GDI-Blockprobe bleibt als historische
-Quellen-/Bootblockdiagnose dokumentiert, gilt aber nicht als Nachweis einer
-Sonic-Adventure-Ausfuehrung. Erst der letzte Alpha-Gate-Vorbereitungstask darf
-die lokal bereitgestellte Sonic-Adventure-GDI ausfuehren. Das Alpha-Gate ist
-erreicht, wenn daraus ein Port-Projekt und `game.exe` entstehen, `game.exe`
-tatsaechlich startet und innerhalb eines endlichen Gastzyklusbudgets den
-reproduzierbaren Checkpoint `SA_ALPHA_BOOTED` ohne stille Fehler erreicht.
+Die reale GDI dient zum Entdecken allgemeiner Compiler-, Runtime- und
+Plattformluecken. Jeder gefundene Fehler wird auf eine synthetische oder frei
+verteilbare Regression reduziert, bevor die allgemeine Implementierung als
+abgeschlossen gilt. Spieldaten, generierte Retail-Quellen, Binaries, Captures,
+Hashes und lokale Pfade bleiben ausserhalb von Repository, Tests, Berichten
+und Releases. Titelbezogene Adressen, Remaps, Patches und Runtime-Sonderfaelle
+sind weiterhin untersagt.
 
-Interaktives Gameplay, Hauptmenue, spielbare Szene, vollstaendige Grafik- oder
-Audiokorrektheit und spielbare Performance bleiben Beta-Ziele. Spieldaten,
-Captures, Dump-Hashes und lokale Pfade bleiben ausserhalb von Repository und
-Releases; titelbezogene Adressen, Remaps, Patches und Runtime-Sonderfaelle sind
-untersagt. Die verbindlichen Kriterien stehen in
+Alpha ist erst erreicht, wenn der offizielle Workflow reproduzierbar eine
+`game.exe` erzeugt, Sonic Adventure bis in einen kontrollierbaren Spielzustand
+bootet und Eingabe, Video, Scheduler und Disc-I/O zusammen funktionieren.
+Vollstaendige Grafik-/Audiokorrektheit und Release-Performance bleiben
+nachgelagerte Ziele. Die verbindlichen Kriterien stehen in
 `docs/SONIC_ADVENTURE_ACCEPTANCE.md`.
 
 ## Phase 6: Dreamcast-Plattform
@@ -1147,25 +1146,35 @@ Kumulatives Phase-10-Abschlussgate bei v0.44.0:
 
 ## Phase 11: Alpha-Integration und Haertung
 
-Diese Phase schliesst bewusst die Luecke zwischen dem GUI-/Quellworkflow in
-v0.44.0 und dem ersten ausfuehrbaren Sonic-Adventure-Alpha in v0.50.0. Alle
-internen Meilensteine bis einschliesslich v0.49.0 verwenden nur synthetische Fixtures und frei
-lizenzierte Homebrew-Programme. Eine lokale Sonic-Adventure-GDI darf bis zum
-Port-Build verarbeitet, aber erst in KR-4999 ausgefuehrt werden.
+Diese Phase schliesst die Luecke zwischen dem GUI-/Quellworkflow in v0.44.0
+und einem spielbaren Sonic-Adventure-Alpha in v0.50.0. Verteilbare Gates
+verwenden weiterhin nur synthetische Fixtures und frei lizenzierte
+Homebrew-Programme. Parallel dazu darf die private Sonic-Adventure-GDI lokal
+und budgetiert als Debuginput laufen. Retail-Befunde muessen in allgemeine,
+verteilbare Regressionen uebersetzt werden.
 
 ### v0.45.0 - SH-4-Alpha-ISA-Abdeckung
 
 Fortschritt:
 
+- [ ] KR-4506 - PC-relative Literale und indirekte Bootziele aufloesen
+- [ ] KR-4507 - Ehrliche Analyseabdeckung und Build-Erfolgskriterien
+- [ ] KR-4508 - Ausfuehrbare `game.exe` mit Bootimage und Runtime-Dispatch
 - [ ] KR-4501 - Messbarer SH-4-Alpha-ISA-Vertrag
 - [ ] KR-4502 - Fehlende Integer- und Kontrollinstruktionen
 - [ ] KR-4503 - Status-, Exception- und Systemsemantik
+- [ ] KR-4509 - Hierarchischer Jobfortschritt und Live-Diagnostikvertrag
+- [ ] KR-4510 - GUI-QoL, Dark Theme, Logo und scrollbares Layout
+- [ ] KR-4511 - Privater Sonic-Debugharness und abstrahierte Regressionen
 - [ ] KR-4504 - v0.45 Gate-Vorbereitung: Tests und Build
 - [ ] KR-4505 - v0.45 interne Meilenstein-Freigabe
 
-Gate-Ergebnis: Das dokumentierte Alpha-ISA-Profil ist ohne stille Opcode-
-Luecken ueber Decoder, IR, Backend und Runtime abgedeckt; der verteilbare
-Nachweis erreicht `KR_V045_ISA_ALPHA_PROFILE_READY`.
+Gate-Ergebnis: Der erste reale Boot-Analyseblocker ist allgemein behoben,
+unvollstaendige Retail-Analyse kann nicht mehr als erfolgreicher Build gelten,
+die erzeugte Hostanwendung besitzt einen echten Boot-/Dispatchvertrag und die
+GUI macht jeden Einzelschritt nachvollziehbar. Das dokumentierte Alpha-ISA-
+Profil besitzt keine stillen Opcode-Luecken; der verteilbare Nachweis erreicht
+`KR_V045_BOOT_ANALYSIS_READY`.
 
 ### v0.46.0 - Retail-Boot- und Systemdienste
 
@@ -1180,6 +1189,13 @@ Fortschritt:
 Gate-Ergebnis: Ein synthetischer Retail-Boot-Vertical-Slice nutzt denselben
 Firmware-, ASIC-, MMIO- und Interruptvertrag wie spaetere lokale Ports und
 erreicht `KR_V046_RETAIL_BOOT_SERVICES_READY`.
+
+## Phase 12: Interaktive Retail-Runtime und Portintegration
+
+Phase 12 verbindet die in Phase 11 belastbar analysierte Retail-Anwendung mit
+Video, Audio, Eingabe, persistentem Zustand und einem eigenstaendigen
+Out-of-Tree-Port. Private Sonic-Laeufe treiben das Debugging; jedes Ergebnis
+wird weiterhin durch titelunabhaengige verteilbare Tests abgesichert.
 
 ### v0.47.0 - Native Hostruntime
 
@@ -1210,6 +1226,13 @@ KatanaRecomp-Baums reproduzierbar zu einem Port-Projekt und einer startbaren
 `game.exe`; GUI und CLI erreichen `KR_V048_PORT_WORKFLOW_READY` ueber denselben
 Anwendungsdienst. Eine lokale Sonic-Adventure-GDI darf denselben Buildpfad
 durchlaufen, ihre `game.exe` wird in diesem Gate jedoch nicht gestartet.
+
+## Phase 13: Spielbarer Alpha-Kandidat und Veroeffentlichung
+
+Phase 13 friert den technischen Vertrag ein, fuehrt die plattformuebergreifende
+Regression und Paketaudits aus und qualifiziert den lokal spielbaren Sonic-
+Adventure-Pfad. Erst ihr Abschluss darf einen oeffentlichen Alpha-Release
+freigeben.
 
 ### v0.49.0 - Interner Alpha-Release-Candidate
 
@@ -1256,11 +1279,12 @@ Fortschritt:
 
 Kumulatives Sonic-Adventure-Alpha-Gate:
 
-- alle verteilbaren Checkpoints der Phasen 6 bis 11 bestehen in der Alpha-Gate-Vorbereitung erneut
+- alle verteilbaren Checkpoints der Phasen 6 bis 13 bestehen in der Alpha-Gate-Vorbereitung erneut
 - der offizielle Quellenworkflow verarbeitet die lokal bereitgestellte GDI, Tracks, ISO9660 und Bootdatei und erzeugt ausserhalb des KatanaRecomp-Quellbaums ein Port-Projekt mit `game.exe`
 - die erzeugte `game.exe` startet tatsaechlich; Hauptprogramm, Scheduler, GD-ROM, DMA, Interrupts und generischer indirekter Dispatch machen innerhalb eines festen Gastzyklusbudgets messbaren Fortschritt
-- zwei identische Laeufe erreichen `SA_ALPHA_BOOTED` mit denselben deterministischen Kernmetriken und `silent_failures == 0`
-- ein Spiel-Frame, Hauptmenue oder eine interaktive Szene ist kein Alpha-Pflichtkriterium; visuelle Ausgabe darf als zusaetzlicher Nachweis erfasst werden
+- zwei identische Laeufe erreichen `SA_ALPHA_PLAYABLE` mit denselben deterministischen Kernmetriken und `silent_failures == 0`
+- Boot, Hauptmenue beziehungsweise eine aequivalente Auswahl und mindestens eine kontrollierbare Spielszene funktionieren mit Video und Eingabe
+- Audio darf bekannte, dokumentierte Abweichungen besitzen; stumme Erfolgs- oder Fehlerpfade sind nicht erlaubt
 - ein begrenzt beendeter Fehllauf erzeugt einen verwertbaren redigierten Diagnosebericht
 - Repository und Releasepaket enthalten keine Spieldaten, Captures, Dump-Hashes oder lokalen Dump-Pfade
 - KR-4999 erstellt beziehungsweise vervollstaendigt alle Alpha-Tests, fuehrt die frischen Debug- und Release-Builds, die vollstaendige Regression und die erforderliche Windows-/Linux-CI aus und stoppt danach fuer das Nutzerreview
@@ -1275,7 +1299,7 @@ Fortschritt:
 
 Voraussetzungen:
 
-- ausgewaehlte reale Programme laufen bis in interaktive Szenen
+- mehrere ausgewaehlte reale Programme laufen bis in interaktive Szenen
 - Grafik, Audio und Eingabe funktionieren zusammen
 - ungeloeste Kontrollflussstellen sind diagnostizierbar
 - Fallbackrate, Schedulerjitter und Codeinvalidierungen sind pro Testtitel messbar

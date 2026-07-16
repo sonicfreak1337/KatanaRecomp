@@ -6,17 +6,19 @@ Phase: Pre-Alpha
 
 Naechster Roadmap-Task: Phase 11 / KR-4501
 
-Naechstes Phasengate: `v0.49.0` - Abschluss Phase 11
+Naechstes Phasengate: `v0.46.0` - Abschluss Phase 11
 
 Erster oeffentlicher Produktrelease: `v0.50.0` Alpha
 
 ## Fortschritt
 
-- 190 von 231 gepflegten Roadmap-Tasks abgeschlossen: 82,3 %
+- 190 von 236 gepflegten Roadmap-Tasks abgeschlossen: 80,5 %
 - Phase-9-Reviewkorrekturen sind implementiert; das eigenstaendige
   achtteilige Homebrew-Korpus und Linux-Evidenz bleiben offen
 - Phase 10: 13/13 Tasks im freigegebenen Windows-GDI-Workflow
-- Phase 11: 0/25 Tasks
+- Phase 11: 0/16 Tasks
+- Phase 12: 0/10 Tasks
+- Phase 13: 0/5 Tasks vor dem Alpha-Gate
 - Alpha-Gate noch nicht erreicht
 
 | Phase | Inhalt | Stand |
@@ -31,7 +33,9 @@ Erster oeffentlicher Produktrelease: `v0.50.0` Alpha
 | 8 | Werkzeuge und Qualitaet | 26/26 |
 | 9 | Kompatibilitaet und Leistung | Reviewkorrekturen offen |
 | 10 | Desktop-GUI und Quellworkflow | 13/13 (Windows-GDI-Scope) |
-| 11 | Alpha-Integration und Haertung | 0/25 |
+| 11 | Bootanalyse und Retail-Systemdienste | 0/16 |
+| 12 | Interaktive Retail-Runtime und Portintegration | 0/10 |
+| 13 | Spielbarer Alpha-Kandidat | 0/5 |
 
 Die Einzelaufgaben und Abhaengigkeiten werden ausschliesslich in
 [`docs/TASKS.md`](TASKS.md) gepflegt. `STATUS.md` dupliziert diese Liste nicht.
@@ -134,14 +138,15 @@ Alpha-Gate `v0.50.0` deaktiviert. Der fruehere CI-Badge wurde deshalb entfernt.
 
 ## Sonic-Adventure-Strategie
 
-- Vor `KR-4999` wird Sonic Adventure nicht ausgefuehrt.
-- Pre-Alpha-Gates verwenden synthetische Fixtures und frei lizenzierte
-  Homebrew-Programme.
-- Eine lokale GDI darf read-only validiert, analysiert, rekompiliert und bis
-  `game.exe` gebaut, aber vor `KR-4999` nicht gestartet werden.
-- Das Alpha-Gate verlangt erstmals reproduzierbar:
-  `GDI -> Port-Projekt -> game.exe -> SA_ALPHA_BOOTED`.
-- Ein erster Frame oder Gameplay gehoert nicht zum Alpha-Kriterium.
+- Phase 11 beginnt mit lokalen, read-only und budgetierten Retail-Debuglaeufen.
+- Private GDI-, Ausgabe-, Quell-, Binary-, Pfad-, Hash- und Capture-Daten
+  bleiben ausserhalb von Repository, verteilbaren Tests und Gateberichten.
+- Pre-Alpha-Gates verwenden weiterhin synthetische Fixtures und frei
+  lizenzierte Homebrew-Programme als oeffentlichen Nachweis.
+- Jeder Retail-Befund wird auf eine allgemeine, verteilbare Regression reduziert.
+- Das Alpha-Gate verlangt reproduzierbar:
+  `GDI -> Port-Projekt -> game.exe -> SA_ALPHA_PLAYABLE`.
+- Alpha erfordert Boot, Video, Eingabe und eine kontrollierbare Spielszene.
 
 Der vollstaendige Vertrag steht in
 [`docs/SONIC_ADVENTURE_ACCEPTANCE.md`](SONIC_ADVENTURE_ACCEPTANCE.md).

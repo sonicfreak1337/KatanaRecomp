@@ -77,10 +77,11 @@ KatanaRecomp ist weiterhin Pre-Alpha. Insbesondere fehlen noch:
 - vollstaendige SH-4- und FPU-Exception-Semantik
 - vollstaendige Dreamcast-Hardwaremodelle und ARM7-LLE
 - breitere Retail-Kompatibilitaet und Performanceoptimierung
-- Linux-Desktop-GUI und weitergehende Komfort-/Diagnoseansichten
+- Dark Theme, App-Logo und weitergehende Fortschritts-/Diagnoseansichten
+- Linux-Desktop-GUI
 - native Alpha-Portintegration und Windows-/Linux-Alpha-CI
 
-Diese Arbeiten sind in den Phasen 9 bis 11 der Roadmap aufgeteilt.
+Diese Arbeiten sind in den Phasen 9 bis 13 der Roadmap aufgeteilt.
 
 Die geplanten Staende v0.38.0 bis v0.49.0 sind interne Meilensteine ohne
 Release-Commit, Tag oder Download. v0.50.0 Alpha wird der erste oeffentliche
@@ -152,9 +153,12 @@ docs/             Vertraege, Status, Tasks und Releaseberichte
 - Release-Builds und GitHub-CI kehren erst am Alpha-Gate `v0.50.0` zurueck.
 - Zwischenstaende bis v0.49.0 werden intern geprueft, aber nicht als Releases
   veroeffentlicht.
-- Sonic Adventure wird erstmals in `KR-4999` ausgefuehrt. Vorher darf die
-  lokale GDI read-only verarbeitet und bis `game.exe` gebaut, aber nicht
-  gestartet werden.
+- Mit Phase 11 beginnen autorisierte lokale, budgetierte Sonic-Adventure-
+  Debuglaeufe. Private Ausgaben bleiben ausserhalb des Repositorys; jeder
+  Befund wird als allgemeine synthetische oder frei verteilbare Regression
+  abgesichert.
+- Alpha ist erreicht, wenn der offizielle Port reproduzierbar bootet und bis
+  in eine mit Hosteingabe kontrollierbare Spielszene laeuft.
 - Entwicklung und Pushes erfolgen direkt auf `main`.
 
 ## Dokumentation

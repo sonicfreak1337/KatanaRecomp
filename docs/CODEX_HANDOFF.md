@@ -151,14 +151,15 @@ vollstaendige Regression aus.
 Es gilt die verbindliche Strategie in
 `docs/SONIC_ADVENTURE_ACCEPTANCE.md`:
 
-- Sonic Adventure wird vor v0.50.0 nicht ausgefuehrt. Alle frueheren Gates
-  verwenden ausschliesslich synthetische Fixtures und frei lizenzierte
-  Homebrew-Programme.
-- Eine lokale GDI darf vor Alpha read-only validiert, analysiert, rekompiliert
-  und bis `game.exe` gebaut werden; gestartet wird sie erstmals in KR-4999.
+- Ab Phase 11 sind lokale, budgetierte Sonic-Adventure-Debuglaeufe ausdruecklich
+  erlaubt. Verteilbare Gates verwenden weiterhin ausschliesslich synthetische
+  Fixtures und frei lizenzierte Homebrew-Programme.
+- Jeder Retail-Befund muss in eine allgemeine Fehlerklasse und eine
+  synthetische oder frei verteilbare Regression ueberfuehrt werden.
 - KR-4999 muss den Pfad GDI -> externes Port-Projekt -> `game.exe` ->
-  `SA_ALPHA_BOOTED` reproduzierbar nachweisen.
-- Ein Frame, Menue oder interaktives Gameplay ist kein Alpha-Pflichtkriterium.
+  `SA_ALPHA_PLAYABLE` reproduzierbar nachweisen.
+- Boot, Video, Eingabe und eine kontrollierbare Spielszene sind
+  Alpha-Pflichtkriterien.
 - Assetextraktion fuer eine spaetere Installation ohne GDI gehoert in das
   titelbezogene Folgeprojekt, nicht in KatanaRecomp.
 - Keine Spieldaten, Captures, Audioinhalte, Dump-Hashes oder lokalen Pfade
@@ -312,7 +313,8 @@ Interne Meilenstein- oder Release-Freigabe:
 
 Verlangt das Review Aenderungen, endet der Gate-Task und die
 Gate-Vorbereitung wird nach den Korrekturen vollstaendig wiederholt. Der lokale
-Sonic-Adventure-Lauf findet ausschliesslich in KR-4999 statt.
+Private Sonic-Adventure-Debuglaeufe duerfen ab Phase 11 stattfinden; KR-4999
+bleibt der einzige Lauf, der als Alpha-Gate-Nachweis gewertet wird.
 
 Commit-Beispiel:
 

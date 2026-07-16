@@ -2359,12 +2359,156 @@ Akzeptanz:
 
 ## v0.45.0 bis v0.49.0 - Alpha-Integration und Haertung
 
-Bis einschliesslich KR-4905 duerfen nur synthetische Fixtures und frei
-lizenzierte Homebrew-Programme ausgefuehrt werden. Eine lokale
-Sonic-Adventure-GDI darf read-only validiert, analysiert, rekompiliert und bis
-zu `game.exe` gebaut werden; gestartet wird diese Anwendung erstmals in
-KR-4999. Alle Freigaben dieses Abschnitts sind interne Meilensteine ohne
-Versionierung, Release-Commit, Tag, Download oder Veroeffentlichung.
+Verteilbare Tests und Gates verwenden ausschliesslich synthetische Fixtures
+und frei lizenzierte Homebrew-Programme. Ab Phase 11 darf die private
+Sonic-Adventure-GDI read-only und mit festen Hostzeit-/Gastzyklusbudgets lokal
+analysiert, rekompiliert und ausgefuehrt werden. Private Ausgaben sind nur
+Debuginput. Jeder Befund muss als allgemeiner Fehler beschrieben und mit einer
+synthetischen oder frei verteilbaren Regression abgesichert werden. Alle
+Freigaben dieses Abschnitts sind interne Meilensteine ohne Versionierung,
+Release-Commit, Tag, Download oder Veroeffentlichung.
+
+### [ ] KR-4506 - PC-relative Literale und indirekte Bootziele aufloesen
+
+Abhaengigkeiten: KR-3406, KR-3411, KR-4403
+
+Prioritaet: P0 - blockiert jede sinnvolle Retail-Analyse
+
+Umfang:
+
+- PC-relative Literal-Loads, konstante Registerketten und Delay-Slot-Effekte
+  bis zu indirekten Calls und Spruengen beweisbar propagieren
+- das zuerst beobachtete unbekannte Bootziel als titelunabhaengiges
+  synthetisches Minimalprogramm reproduzieren
+- Zielherkunft und Ablehnungsgrund in CFG, Source Map und Diagnostik ausgeben
+
+Akzeptanz:
+
+- ein synthetischer Bootblock mit demselben Kontrollflussmuster entdeckt das
+  indirekte Ziel und setzt die rekursive Analyse dahinter fort
+- unbekannte oder mehrdeutige Ziele bleiben kontrolliert und sichtbar; es gibt
+  keine Sonic-spezifische Adresse oder Sonderregel
+
+### [ ] KR-4507 - Ehrliche Analyseabdeckung und Build-Erfolgskriterien
+
+Abhaengigkeiten: KR-4506
+
+Prioritaet: P0 - verhindert falsche Erfolgsmeldungen
+
+Umfang:
+
+- analysierte Bytes, Instruktionen, Funktionen, ungelöste Kontrollflussstellen
+  und erreichbare Abbruchkanten als versionierte Metriken erfassen
+- `completed`, `partial` und `failed` fachlich trennen; ein Hostbuild allein
+  darf keinen erfolgreichen Recompile behaupten
+- Schwellen und Abbruchgruende in GUI, CLI, `job-result.json` und
+  `build-plan.json` identisch darstellen
+- Werkzeug-/Provenienzversion aus derselben kanonischen Versionsquelle speisen
+
+Akzeptanz:
+
+- eine Mehr-Megabyte-Bootdatei mit nur einem erzeugten Block wird sichtbar als
+  unvollstaendig abgelehnt
+- `game.exe --run-generated` kann Speicher-/Dispatchfehler nicht als Erfolg
+  melden
+- synthetische vollstaendige und absichtlich unvollstaendige Programme decken
+  alle drei Ergebniszustaende ab
+
+### [ ] KR-4508 - Ausfuehrbare `game.exe` mit Bootimage und Runtime-Dispatch
+
+Abhaengigkeiten: KR-4506, KR-4507, KR-3507
+
+Prioritaet: P0 - macht aus dem Hostbuild erstmals eine laufende Anwendung
+
+Umfang:
+
+- Bootdatei read-only aus der vom Nutzer gewaehlten GDI laden und in den
+  definierten Dreamcast-Speicherzustand uebernehmen
+- CPU, Plattformdienste, Scheduler und generischen Blockdispatcher starten
+- unresolved/noch nicht statisch generierte Ziele ueber einen kontrollierten,
+  diagnostizierten Runtimepfad behandeln
+- normale Programmausfuehrung als Standardverhalten der `game.exe` definieren;
+  Diagnoseoptionen bleiben explizite Schalter
+
+Akzeptanz:
+
+- eine frei verteilbare GDI startet ohne KatanaRecomp-CLI bis in generierten
+  Code und ueber mindestens einen indirekten Dispatch
+- fehlende GDI, Bootdatei, Speicherabbildung oder Dispatchziele liefern einen
+  Nichtnull-Exitcode und redigierte Diagnose
+- die Anwendung bettet weder GDI-Daten noch absolute private Hostpfade ein
+
+### [ ] KR-4509 - Hierarchischer Jobfortschritt und Live-Diagnostikvertrag
+
+Abhaengigkeiten: KR-4102, KR-4302, KR-4507
+
+Prioritaet: P1 - macht lange reale Laeufe beobachtbar
+
+Umfang:
+
+- Gesamtfortschritt und Einzelschritte fuer Validierung, Hashing, Bootdatei,
+  Analyse, IR, Codegen, Hostkonfiguration, Kompilierung und Abschluss modellieren
+- pro Schritt Status, Zaehler, Start-/Endzeit, bekannte Gesamtmenge und
+  unbestimmten Fortschritt ohne erfundene Prozentwerte melden
+- Logereignisse inkrementell an die GUI liefern statt die Datei periodisch
+  vollstaendig neu einzulesen
+
+Akzeptanz:
+
+- GUI und CLI beobachten dieselbe geordnete Ereignisfolge
+- Gesamtfortschritt ist monoton; ein unbekannter Umfang erscheint als
+  unbestimmt und nicht als falsche Prozentzahl
+- Abbruch und Fehler benennen den aktiven Einzel- und Gesamtschritt
+
+### [ ] KR-4510 - GUI-QoL, Dark Theme, Logo und scrollbares Layout
+
+Abhaengigkeiten: KR-4101, KR-4103, KR-4509
+
+Prioritaet: P1 - verbessert den taeglichen Debugworkflow
+
+Umfang:
+
+- Gesamt- und Einzel-Ladebalken, aktuelle Aktion, Zaehler und Laufzeit anzeigen
+- gewaehlte GDI und Ausgabe dauerhaft sichtbar und kopierbar halten
+- dunkles Design mit systemkonformen Kontrasten und High-Contrast-Fallback
+  implementieren
+- das private, dokumentierte App-Logo nach Rechte-/Formatpruefung als Windows-
+  Fenster-, Taskleisten- und EXE-Ressource integrieren; nur die freigegebene
+  abgeleitete Ressource darf committed werden
+- Hauptinhalt bei kleinen Fenstern und DPI-Skalierung vertikal scrollbar
+  machen; das Live-Log bleibt unabhaengig per Mausrad und Tastatur scrollbar
+
+Akzeptanz:
+
+- 100 bis 300 Prozent DPI, Resize, Tastaturfokus und Mausrad verlieren weder
+  Eingaben noch Statusinformationen
+- Dark Theme, Systemfarben und Logo besitzen einen nativen Windows-Screenshot-
+  beziehungsweise Control-Test ohne proprietaere Spieldaten
+- ein wachsendes Log blockiert UI-Thread und Fortschrittsanzeige nicht
+
+### [ ] KR-4511 - Privater Sonic-Debugharness und abstrahierte Regressionen
+
+Abhaengigkeiten: KR-4507, KR-4508, KR-4509
+
+Prioritaet: P1 - beginnt die reale Kompatibilitaetsarbeit
+
+Umfang:
+
+- lokale, nicht versionierte Konfiguration fuer GDI, Ausgabe, Zeitbudget und
+  Gastzyklusbudget bereitstellen
+- Checkpoints `SA_ANALYSIS_CONTINUES`, `SA_MAIN_ENTERED`, `SA_FIRST_FRAME`,
+  `SA_MENU_INTERACTIVE` und `SA_ALPHA_PLAYABLE` redigiert beobachten
+- jeden neuen Retail-Blocker mit allgemeiner Fehlerklasse, letztem stabilen
+  Checkpoint und minimaler synthetischer Regression dokumentieren
+- private Ausgaben, generierte Quellen, Binaries, Pfade, Hashes und Captures
+  technisch vom Git-/Paketpfad ausschliessen
+
+Akzeptanz:
+
+- begrenzte Laeufe enden reproduzierbar mit Checkpoint oder benanntem Fehler,
+  nicht mit Haengen oder stillem Erfolg
+- der Repository-Test fuer jeden behobenen Befund benoetigt keine Sonic-Daten
+- kein privater Inhalt erscheint in Git-Status, Testfixtures oder Gateberichten
 
 ### [ ] KR-4501 - Messbarer SH-4-Alpha-ISA-Vertrag
 
@@ -2416,14 +2560,14 @@ Akzeptanz:
 
 ### [ ] KR-4504 - v0.45 Gate-Vorbereitung: Tests und Build
 
-Abhaengigkeiten: KR-4501 bis KR-4503
+Abhaengigkeiten: KR-4501 bis KR-4503, KR-4506 bis KR-4511
 
 Umfang und Akzeptanz:
 
 - alle fuer v0.45 gesammelten Tests umsetzen
 - genau einen frischen Build in `build-current/` erstellen und die
   vollstaendige Regression mit synthetischen/Homebrew-Eingaben ausfuehren
-- `KR_V045_ISA_ALPHA_PROFILE_READY` reproduzierbar belegen
+- `KR_V045_BOOT_ANALYSIS_READY` reproduzierbar belegen
 - danach vor KR-4505 fuer das Nutzerreview stoppen
 
 ### [ ] KR-4505 - v0.45 interne Meilenstein-Freigabe
@@ -2509,6 +2653,10 @@ Akzeptanz:
   freigegeben
 - die Freigabe erlaubt nur den Beginn von v0.47; es folgen keine
   Release-Aktionen
+
+---
+
+## Phase 12 / v0.47.0 bis v0.48.0 - Interaktive Retail-Runtime und Portintegration
 
 ### [ ] KR-4701 - Native Fenster- und Videoausgabe
 
@@ -2657,6 +2805,10 @@ Akzeptanz:
 - die Freigabe erlaubt nur den Beginn von v0.49; es folgen keine
   Release-Aktionen
 
+---
+
+## Phase 13 / v0.49.0 bis v0.50.0 - Spielbarer Alpha-Kandidat
+
 ### [ ] KR-4901 - Alpha-CI-Konfiguration fuer Windows und Linux
 
 Abhaengigkeiten: KR-3701, KR-4805
@@ -2706,7 +2858,8 @@ Umfang:
 - Checkpoints, Zeitbudgets, JSON-Schemata und Abbruchklassen fuer den
   Alpha-Kandidaten versionieren
 - verteilbare Phasenchecks in einen kumulativen, titelunabhaengigen Lauf fuehren
-- `SA_ALPHA_BOOTED` definieren, aber noch nicht mit Sonic Adventure ausfuehren
+- `SA_ALPHA_PLAYABLE` und seine Vorstufen schemafest einfrieren; private
+  Debuglaeufe duerfen sie beobachten, gelten aber noch nicht als Gate-Nachweis
 
 Akzeptanz:
 
@@ -2723,8 +2876,8 @@ Umfang und Akzeptanz:
 - genau einen frischen Build in `build-current/`, die vollstaendige Regression
   und die verteilbare Windows-/Linux-CI-Matrix ausfuehren
 - Pakete, Audits und `KR_V049_ALPHA_CANDIDATE_READY` reproduzierbar belegen
-- Sonic Adventure noch nicht ausfuehren und danach vor KR-4905 fuer das
-  Nutzerreview stoppen
+- keine privaten Retail-Artefakte in CI, Pakete oder Gateberichte uebernehmen
+  und danach vor KR-4905 fuer das Nutzerreview stoppen
 
 ### [ ] KR-4905 - v0.49 interne Kandidaten-Freigabe
 
@@ -2742,7 +2895,7 @@ Akzeptanz:
 
 ## Oeffentliche Release-Gates
 
-### [ ] KR-4999 - Alpha-Gate-Vorbereitung: Tests, Builds und lokaler Sonic-Boot
+### [ ] KR-4999 - Alpha-Gate-Vorbereitung: Tests, Builds und spielbarer Sonic-Lauf
 
 Abhaengigkeiten: KR-4905
 
@@ -2752,16 +2905,18 @@ Umfang:
   Release-Builds, vollstaendige Regression sowie Windows-/Linux-CI ausfuehren
 - die lokal bereitgestellte Sonic-Adventure-GDI read-only ueber den offiziellen
   Portworkflow zu einem externen Projekt und `game.exe` verarbeiten
-- `game.exe` direkt starten und den titelunabhaengig instrumentierten Bootpfad
-  innerhalb eines festen Gastzyklusbudgets beobachten
+- `game.exe` direkt starten und Boot, Hauptmenue beziehungsweise aequivalente
+  Auswahl sowie eine kontrollierbare Spielszene innerhalb fester Budgets
+  beobachten
 - alle Berichte redigieren; weder Quelldaten, Hashes, Captures noch lokale Pfade
   in Repository oder Release-Staging uebernehmen
 
 Akzeptanz:
 
-- zwei identische Laeufe erreichen `SA_ALPHA_BOOTED` mit denselben
+- zwei identische Laeufe erreichen `SA_ALPHA_PLAYABLE` mit denselben
   deterministischen Kernmetriken und `silent_failures == 0`
-- ein Frame, Menue oder interaktives Gameplay ist fuer Alpha nicht erforderlich
+- Video und Eingabe funktionieren bis in eine spielbare Szene; Audio darf
+  dokumentierte Alpha-Abweichungen besitzen
 - der vollstaendige Alpha-Gate-Bericht liegt vor; danach wird vor KR-5000 fuer
   das Nutzerreview gestoppt
 
@@ -2779,7 +2934,7 @@ Akzeptanz:
 - `.gdi`-Dateien koennen als offizielle Quelle geladen, validiert und reproduzierbar verarbeitet werden
 - Manifest, Runtime-ABI, Diagnoseschemata und Buildartefakte sind versioniert und reproduzierbar
 - die lokale GDI wurde zu einem externen Port und `game.exe` verarbeitet;
-  `game.exe` startet und erreicht reproduzierbar `SA_ALPHA_BOOTED`
+  `game.exe` erreicht reproduzierbar `SA_ALPHA_PLAYABLE`
 - die unveraenderte KR-4999-Gate-Vorbereitung ist ausdruecklich vom Nutzer
   freigegeben; erst danach beginnen Versionierung, Release-Commit, Tag und
   Veroeffentlichung

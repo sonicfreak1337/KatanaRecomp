@@ -1,145 +1,150 @@
-# Lokale Sonic-Adventure-Alpha-Akzeptanzstrategie
+# Lokale Sonic-Adventure-Debug- und Alpha-Akzeptanzstrategie
 
-Dieses Dokument definiert den ersten erlaubten und verpflichtenden lokalen
-Sonic-Adventure-Ausfuehrungstest. Sonic Adventure ist vor v0.50.0 kein
-Phasentest. Alpha ist erreicht, wenn der offizielle Workflow aus der lokal
-bereitgestellten GDI ein externes Port-Projekt und `game.exe` erzeugt,
-`game.exe` tatsaechlich startet und reproduzierbar `SA_ALPHA_BOOTED` erreicht.
+Dieses Dokument trennt zwei Zwecke strikt:
 
-Unit-, Integrations-, Regressions-, Fuzzing-, Plattform- und Homebrew-Tests
-bleiben der oeffentlich verteilbare Nachweis und die Grundlage aller
-Pre-Alpha-Gates.
+1. Ab Phase 11 darf Sonic Adventure lokal als privater, budgetierter Debuginput
+   verwendet werden, um allgemeine Compiler-, Runtime- und Plattformfehler zu
+   finden.
+2. Erst KR-4999 wertet einen solchen Lauf als Alpha-Gate-Nachweis.
 
-Die Versionsstaende v0.38.0 bis v0.49.0 sind interne Meilensteine ohne
-Release-Commit, Tag, Download oder Veroeffentlichung. v0.50.0 Alpha ist der
-erste oeffentliche Produktrelease.
+Alpha ist erreicht, wenn der offizielle Workflow aus der lokal bereitgestellten
+GDI ein externes Port-Projekt und `game.exe` erzeugt und diese Anwendung
+reproduzierbar bis in eine mit Hosteingabe kontrollierbare Spielszene gelangt.
+Eine nur startende EXE, ein betretenes Hauptprogramm oder ein einzelner Frame
+reichen nicht aus.
 
-## Abgrenzung des Port-Artefakts
-
-KatanaRecomp erzeugt Code, Metadaten, Builddateien und ein ausfuehrbares
-Host-Target. Es verteilt oder installiert keine Sonic-Adventure-Assets. Fuer
-die lokale Alpha-Pruefung darf `game.exe` die vom Nutzer bereitgestellte GDI
-ueber die austauschbare `DiscSource` lesen.
-
-Eine spaetere Installation, die benoetigte Assets einmalig aus der Nutzer-GDI
-in ein eigenes Datenverzeichnis extrahiert und danach ohne GDI auskommt, gehoert
-in das titelbezogene Folgeprojekt wie `Sonic Adventure Recompiled`. Dessen
-Assetlayout und Installer sind nicht Teil des allgemeinen KatanaRecomp-
-Compilervertrags. Der generierte Spielcode darf deshalb nicht von einem festen
-Assetlayout abhaengen.
-
-## Grundregeln
+## Datenschutz- und Repositorygrenze
 
 - Verwendet wird ausschliesslich eine rechtmaessig vom Nutzer lokal
   bereitgestellte GDI.
-- Vor KR-4999 darf diese GDI read-only validiert, statisch analysiert,
-  rekompiliert und bis zu einem lokalen Hostbuild verarbeitet werden; ihr
-  Programm beziehungsweise ihre `game.exe` wird nicht gestartet.
-- Spieldaten, extrahierte Dateien, Screenshots, Audioinhalte, Dump-Hashes und
-  lokale Pfade duerfen weder committed noch in KatanaRecomp-Release-Artefakte
-  aufgenommen werden.
-- Fest codierte Sonic-Adventure-Adressen, Remaps, Patches, titelbezogene
-  Runtime-Sonderfaelle und willkuerliche spielspezifische Zaehlerstaende sind
-  unzulaessig.
-- Alle Laeufe besitzen endliche Gastzyklus- und Hostzeitbudgets. Formulierungen
-  wie "laeuft weiter" oder "haengt nicht" sind kein Akzeptanzkriterium.
-- Oeffentliche CI benoetigt niemals proprietaere Daten. Der lokale Sonic-Test
-  laeuft nur auf einem ausdruecklich autorisierten Rechner.
-- Der lokale Test wird nicht nach einzelnen Implementierungs-Tasks ausgefuehrt.
-  Er ist ausschliesslich Bestandteil von KR-4999.
+- GDI, Tracks, extrahierte Dateien, generierte Retail-Quellen, `game.exe`, Logs,
+  Screenshots, Audio, Hashes und lokale Pfade bleiben ausserhalb des
+  KatanaRecomp-Repositorys und aller Releasepakete.
+- Der aktuell autorisierte private Arbeitsbereich liegt ausserhalb des Repos
+  unter `private/`; sein konkreter Hostpfad wird nicht in Berichte uebernommen.
+- Oeffentliche CI und verteilbare Tests benoetigen niemals proprietaere Daten.
+- Fest codierte Sonic-Adressen, Remaps, Patches, titelbezogene Runtime-
+  Sonderfaelle oder willkuerliche Checkpointzaehler sind unzulaessig.
 
-## Pre-Alpha-Checkpoints
+## Retail-getriebener Debugzyklus
 
-Die folgenden Gates werden ausschliesslich mit synthetischen Fixtures und frei
-lizenzierten Homebrew-Programmen ausgefuehrt:
+Jeder lokale Lauf besitzt ein Hostzeit- und Gastzyklusbudget und endet mit
+einem Checkpoint oder einer benannten Fehlerklasse. Ein Haengen, stiller Erfolg
+oder bloss erfolgreicher Hostbuild ist kein Ergebnis.
 
-| Interner Meilenstein | Verteilbarer technischer Checkpoint |
+Fuer jeden neuen Blocker gilt:
+
+1. letzten stabilen allgemeinen Checkpoint und Fehlerklasse redigiert erfassen;
+2. Ursache ohne titelbezogene Annahme bestimmen;
+3. minimales synthetisches oder frei verteilbares Reproduktionsprogramm bauen;
+4. allgemeine Implementierung korrigieren;
+5. Reproduktion als Repository-Regression aufnehmen;
+6. privaten Lauf wiederholen, ohne private Artefakte zu committen.
+
+Der private Lauf ist damit ein Kompatibilitaets-Orakel, nicht der oeffentliche
+Testbestand.
+
+## Entwicklungscheckpoints
+
+Die Checkpoints sind monoton und titelunabhaengig instrumentiert:
+
+| Checkpoint | Bedeutung |
 | --- | --- |
-| Phase 6, v0.31.0 | `KR_PHASE6_PLATFORM_INTEGRATED` |
-| Phase 7, v0.34.0 | `KR_PHASE7_GENERATED_RUNTIME_ACTIVE` |
-| Phase 8, v0.37.0 | `KR_PHASE8_REPRODUCIBLE_TOOLCHAIN` |
-| Phase 9, v0.40.0 | `KR_PHASE9_HOMEBREW_HOST_FRAME` |
-| Phase 10, v0.44.0 | `KR_PHASE10_GUI_END_TO_END` |
-| v0.45.0 | `KR_V045_ISA_ALPHA_PROFILE_READY` |
-| v0.46.0 | `KR_V046_RETAIL_BOOT_SERVICES_READY` |
-| v0.47.0 | `KR_V047_NATIVE_HOST_READY` |
-| v0.48.0 | `KR_V048_PORT_WORKFLOW_READY` |
-| v0.49.0 | `KR_V049_ALPHA_CANDIDATE_READY` |
-| Erster oeffentlicher Release, Alpha v0.50.0 | `SA_ALPHA_BOOTED` |
+| `SA_ANALYSIS_CONTINUES` | Rekursive Analyse passiert den ersten indirekten Bootsprung und entdeckt weiteren erreichbaren Code. |
+| `SA_MAIN_ENTERED` | Das Hauptprogramm laeuft in der eigenstaendigen `game.exe` mit initialisiertem Speicher und Runtime-Dispatch. |
+| `SA_FIRST_FRAME` | Ein aus Gastzustand erzeugter Frame wird im Hostfenster praesentiert. |
+| `SA_MENU_INTERACTIVE` | Eine Menue- oder aequivalente Auswahl reagiert deterministisch auf Hosteingabe. |
+| `SA_ALPHA_PLAYABLE` | Mindestens eine Spielszene ist sichtbar und ueber Hosteingabe kontrollierbar; Disc-I/O und Scheduler machen weiter Fortschritt. |
 
-Keiner der `KR_...`-Checkpoints behauptet eine Sonic-Adventure-Ausfuehrung.
-Die fruehere lokale Phase-6-GDI-Blockprobe bleibt lediglich als historische
-Quellen-, Track-, ISO9660- und Bootblockdiagnose erhalten. Sie wird nicht als
-Sonic-Ausfuehrungs- oder Alpha-Nachweis gewertet.
+Zwischenstaende duerfen lokal beobachtet werden. Nur `SA_ALPHA_PLAYABLE` ist
+der finale Alpha-Checkpoint.
 
-## Maschinenlesbarer Alpha-Bericht
+## Maschinenlesbarer privater Laufbericht
 
-KR-4999 erzeugt einen redigierten, versionierten Bericht nach diesem
-Mindestvertrag:
+Der lokale Harness darf ausserhalb des Repositorys einen Bericht mit mindestens
+folgenden redigierten Feldern erzeugen:
 
 ```json
 {
-  "checkpoint": "SA_ALPHA_BOOTED",
-  "gdi_loaded": false,
-  "tracks_validated": 0,
-  "iso9660_mounted": false,
-  "boot_file_loaded": false,
-  "port_project_generated": false,
-  "host_build_succeeded": false,
-  "game_executable_started": false,
-  "main_executable_entered": false,
-  "executed_blocks": 0,
-  "guest_cycles": 0,
-  "scheduler_events": 0,
-  "gdrom_completions": 0,
-  "dma_events": 0,
-  "interrupts_delivered": 0,
-  "indirect_dispatches": 0,
-  "fallbacks": 0,
-  "silent_failures": 0,
-  "booted": false
+  "schema": "katana-private-retail-debug",
+  "version": 1,
+  "checkpoint": "SA_ANALYSIS_CONTINUES",
+  "analysis": {
+    "boot_bytes": 0,
+    "instructions": 0,
+    "functions": 0,
+    "unresolved_control_flow": 0,
+    "coverage_complete": false
+  },
+  "runtime": {
+    "game_executable_started": false,
+    "main_executable_entered": false,
+    "frames_presented": 0,
+    "input_events_consumed": 0,
+    "guest_cycles": 0,
+    "scheduler_events": 0,
+    "gdrom_completions": 0,
+    "dma_events": 0,
+    "interrupts_delivered": 0,
+    "indirect_dispatches": 0,
+    "fallbacks": 0,
+    "silent_failures": 0
+  },
+  "failure_class": null,
+  "budget_exhausted": false
 }
 ```
 
-Felder und Schwellenwerte duerfen mit einer Schema-Version erweitert werden.
-Berichte duerfen keine unredigierten Hostpfade, Spieldaten, Disc- oder
-Dateihashes enthalten.
+Berichte duerfen keine Disc-/Dateihashes, Spieldaten, Screenshots oder
+unredigierten Hostpfade enthalten. Gateberichte enthalten nur aggregierte,
+freigegebene Metriken.
+
+## Verteilbare Nachweise
+
+Alle allgemeinen Faehigkeiten bleiben durch synthetische Fixtures und frei
+lizenzierte Homebrew-Programme abgesichert. Die internen Meilensteine sind:
+
+| Meilenstein | Verteilbarer Checkpoint |
+| --- | --- |
+| Phase 10, v0.44.0 | `KR_PHASE10_GUI_END_TO_END` |
+| Phase 11, v0.45.0 | `KR_V045_BOOT_ANALYSIS_READY` |
+| Phase 11, v0.46.0 | `KR_V046_RETAIL_BOOT_SERVICES_READY` |
+| Phase 12, v0.47.0 | `KR_V047_NATIVE_HOST_READY` |
+| Phase 12, v0.48.0 | `KR_V048_PORT_WORKFLOW_READY` |
+| Phase 13, v0.49.0 | `KR_V049_ALPHA_CANDIDATE_READY` |
+| Alpha v0.50.0 | `SA_ALPHA_PLAYABLE` |
+
+Kein `KR_...`-Checkpoint behauptet fuer sich Sonic-Kompatibilitaet.
 
 ## Alpha-Gate v0.50.0
 
 KR-4999 muss nachweisen:
 
-1. Die lokale GDI wird read-only ueber den offiziellen Quellenworkflow geladen;
-   Tracks, ISO9660 und Bootdatei werden reproduzierbar validiert.
-2. Analyse, IR, deterministischer Codegen und Hostbuild erzeugen ausserhalb des
-   KatanaRecomp-Quellbaums ein Port-Projekt mit `game.exe`.
-3. `game.exe` wird direkt als eigenstaendige Hostanwendung gestartet, nicht nur
-   als interner KatanaRecomp-Test oder CLI-Simulator.
-4. Das Hauptprogramm wird betreten. Scheduler, GD-ROM, DMA, Interrupts und
-   generischer Dispatch zeigen innerhalb des festen Budgets messbaren,
-   deterministischen Fortschritt.
-5. Zwei identische Laeufe erreichen `SA_ALPHA_BOOTED` mit denselben
+1. Die GDI wird read-only ueber den offiziellen Workflow verarbeitet.
+2. Analyse und Codegen melden keine unvollstaendige Abdeckung als Erfolg.
+3. Ein externes Port-Projekt baut eine eigenstaendige `game.exe` ohne
+   eingebettete private Daten oder absolute private Pfade.
+4. `game.exe` initialisiert Bootimage, CPU, Speicher, Scheduler,
+   Plattformdienste und generischen Dispatch und startet ohne CLI-Huelle.
+5. Boot, Hauptmenue beziehungsweise aequivalente Auswahl und mindestens eine
+   Spielszene werden erreicht.
+6. Video und Hosteingabe funktionieren zusammen; Disc-I/O, Scheduler und
+   Interruptzustellung machen messbaren Fortschritt.
+7. Zwei identische Laeufe erreichen `SA_ALPHA_PLAYABLE` mit denselben
    deterministischen Kernmetriken und `silent_failures == 0`.
-6. Ein budgetbedingt oder kontrolliert beendeter Fehllauf erzeugt einen
-   verwertbaren, redigierten Diagnosebericht.
-7. Die verteilbaren Debug-/Release-Builds, die vollstaendige Regression und die
-   erforderliche Windows-/Linux-CI bestehen ohne proprietaere Eingaben.
-8. Repository, Release-Staging und Berichte enthalten keine Spiel-, Asset-,
-   Capture-, Hash- oder lokalen Pfaddaten.
+8. Fehler- und Budgetpfade liefern redigierte, verwertbare Diagnosen.
+9. Debug-/Release-Builds, vollstaendige Regression und Windows-/Linux-CI
+   bestehen ohne proprietaere Eingaben.
+10. Repository, Staging und Pakete enthalten keine privaten Retail-Artefakte.
 
-Ein erster Frame, Hauptmenue, spielbare Szene, vollstaendige Grafik- oder
-Audiokorrektheit und spielbare Performance sind keine Alpha-Pflichtkriterien.
-Sie gehoeren zum Beta-Gate. Visuelle Ausgabe darf lokal als zusaetzlicher,
-nicht zu committender Diagnosehinweis dienen.
+Audio darf zum Alpha bekannte und klar dokumentierte Genauigkeitsprobleme
+besitzen. Vollstaendige Audio-/Grafikkorrektheit, mehrere Retail-Titel und
+Release-Performance bleiben Beta-Ziele. Ein kompletter Spieldurchlauf ist kein
+Alpha-Kriterium.
 
-## Gate-Workflow und Review-Stop
+## Review und Freigabe
 
-KR-4999 ist der letzte Alpha-Gate-Vorbereitungstask. Erst dort werden die
-gesammelten Alpha-Tests vervollstaendigt, frische Builds und Regression
-ausgefuehrt und Sonic Adventure erstmals gestartet. Nach dem fertigen
-Gate-Bericht wird zwingend fuer das Nutzerreview gestoppt.
-
-KR-5000 darf erst nach ausdruecklicher Nutzerfreigabe beginnen. Ohne diese
-Freigabe erfolgen keine Versionsaenderung, kein Release-Commit, kein Tag und
-keine Veroeffentlichung. Verlangt das Review Aenderungen, wird KR-4999 nach den
-Korrekturen vollstaendig wiederholt.
+KR-4999 ist die Alpha-Gate-Vorbereitung und stoppt nach dem redigierten Bericht
+zwingend fuer das Nutzerreview. KR-5000 darf erst nach ausdruecklicher Freigabe
+beginnen. Ohne Freigabe erfolgen keine Versionsaenderung, kein Tag, kein
+Download und keine Veroeffentlichung.
