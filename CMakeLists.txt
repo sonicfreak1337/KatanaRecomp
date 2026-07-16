@@ -46,6 +46,19 @@ if(KATANA_ENABLE_SANITIZERS)
         string(REPLACE "/RTC1" "" CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG}")
         add_compile_options(/fsanitize=address /Oy-)
         add_link_options(/INCREMENTAL:NO)
+        get_filename_component(KATANA_MSVC_COMPILER_DIRECTORY "${CMAKE_CXX_COMPILER}" DIRECTORY)
+        set(
+            KATANA_MSVC_ASAN_RUNTIME
+            "${KATANA_MSVC_COMPILER_DIRECTORY}/clang_rt.asan_dynamic-x86_64.dll"
+        )
+        if(NOT EXISTS "${KATANA_MSVC_ASAN_RUNTIME}")
+            message(FATAL_ERROR "MSVC AddressSanitizer runtime was not found beside cl.exe")
+        endif()
+        configure_file(
+            "${KATANA_MSVC_ASAN_RUNTIME}"
+            "${CMAKE_BINARY_DIR}/clang_rt.asan_dynamic-x86_64.dll"
+            COPYONLY
+        )
     elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
         add_compile_options(
             -fsanitize=address,undefined
@@ -431,6 +444,14 @@ katana_enable_warnings(katana-phase10-gui-model-tests)
 add_test(NAME katana-phase10-gui-model-tests COMMAND katana-phase10-gui-model-tests)
 
 add_test(NAME katana-phase10-gui-minimal-start COMMAND katana-recomp-gui --smoke)
+if(MSVC AND KATANA_ENABLE_SANITIZERS)
+    add_test(
+        NAME katana-phase10-msvc-asan-runtime
+        COMMAND ${CMAKE_COMMAND} -E compare_files
+            "${KATANA_MSVC_ASAN_RUNTIME}"
+            "${CMAKE_BINARY_DIR}/clang_rt.asan_dynamic-x86_64.dll"
+    )
+endif()
 
 add_executable(
     katana-phase9-benchmark

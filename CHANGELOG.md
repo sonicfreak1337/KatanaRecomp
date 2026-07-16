@@ -57,6 +57,9 @@
 
 ### Behoben
 
+- Lokale MSVC-AddressSanitizer-Builds kopieren ihre passende Laufzeit-DLL in
+  `build-current`, sodass CLI und GUI auch ausserhalb einer Developer-
+  PowerShell ohne `clang_rt.asan_dynamic-x86_64.dll`-Systemfehler starten.
 - Mehrteiliger Port-Codegen verwendet einen partitionsuebergreifend identischen
   Programmeinstieg, validiert externe Callziele als IR-Fragmente und fuehrt den
   erzeugten Hostbuild im Regressionstest tatsaechlich aus.

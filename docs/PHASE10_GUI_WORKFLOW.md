@@ -1,6 +1,8 @@
 # Internal Phase 10 GUI workflow
 
 1. Start `katana-recomp-gui` from the build or internal package directory.
+   MSVC AddressSanitizer Debug builds place their matching runtime DLL beside
+   the executable automatically, so a normal PowerShell is sufficient.
 2. Open an existing version-2 `.katana` project, or create one through the
    project model with a Raw, ELF32-SH or GDI source.
 3. Inspect the portable source name, SHA-256 and size. GDI projects also show
