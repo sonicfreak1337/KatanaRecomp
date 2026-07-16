@@ -104,6 +104,7 @@ add_library(katana_core STATIC
     src/codegen/backend.cpp
     src/codegen/cache.cpp
     src/codegen/cpp_emitter.cpp
+    src/codegen/metadata.cpp
     src/codegen/naming.cpp
     src/codegen/partition.cpp
     src/codegen/probe.cpp
@@ -924,6 +925,11 @@ add_executable(katana-codegen-project-tests tests/codegen/project_tests.cpp)
 target_link_libraries(katana-codegen-project-tests PRIVATE katana_core)
 katana_enable_warnings(katana-codegen-project-tests)
 add_test(NAME katana-codegen-project-tests COMMAND katana-codegen-project-tests)
+
+add_executable(katana-codegen-metadata-tests tests/codegen/metadata_tests.cpp)
+target_link_libraries(katana-codegen-metadata-tests PRIVATE katana_core katana_runtime)
+katana_enable_warnings(katana-codegen-metadata-tests)
+add_test(NAME katana-codegen-metadata-tests COMMAND katana-codegen-metadata-tests)
 
 target_link_libraries(
     katana-cpp-emitter-tests

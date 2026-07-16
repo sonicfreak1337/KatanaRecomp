@@ -767,7 +767,7 @@ Fortschritt:
 - [x] KR-3302 - Deterministische Dateinamen
 - [x] KR-3303 - Inkrementeller Codegen-Cache
 - [x] KR-3304 - Parallele Ausgabe und Buildintegration
-- [ ] KR-3305 - Deterministische Blockmetadaten
+- [x] KR-3305 - Deterministische Blockmetadaten
 
 Enthalten:
 

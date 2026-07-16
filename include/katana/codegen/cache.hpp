@@ -17,6 +17,10 @@ struct CodegenCacheInputs {
     std::string backend_name;
     std::uint32_t backend_abi = 0u;
     std::uint32_t runtime_abi = 0u;
+    std::string manifest_hash;
+    std::string overrides_hash;
+    std::uint32_t ir_version = 0u;
+    std::uint32_t optimization_version = 0u;
 };
 
 [[nodiscard]] std::string make_codegen_cache_key(const CodegenCacheInputs& inputs);

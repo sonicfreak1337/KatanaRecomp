@@ -41,7 +41,10 @@ int main() {
     using namespace katana::codegen;
     Fixture fixture;
     CodegenCache cache(fixture.root / "cache");
-    const auto key = make_codegen_cache_key({"input", "ir", "opt", "cpp", 1u, 8u});
+    const auto key = make_codegen_cache_key({
+        "input", "ir", "opt", "cpp", 1u, 8u,
+        "manifest", "overrides", 2u, 1u
+    });
     const std::vector<ProjectArtifact> artifacts = {
         {"code/unit-00001.cpp", "int unit_1() { return 1; }\n"},
         {"include/constants.hpp", "#pragma once\ninline constexpr int value = 7;\n"},

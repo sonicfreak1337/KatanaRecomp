@@ -1123,7 +1123,7 @@ Abhaengigkeiten: KR-3302
 
 Abhaengigkeiten: KR-3303
 
-### [ ] KR-3305 - Deterministische Blockmetadaten
+### [x] KR-3305 - Deterministische Blockmetadaten
 
 Abhaengigkeiten: KR-1706, KR-3204, KR-3301, KR-3304
 

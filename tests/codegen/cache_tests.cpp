@@ -35,7 +35,8 @@ int main() {
     Fixture fixture;
     CodegenCache cache(fixture.path);
     CodegenCacheInputs inputs{
-        "input-a", "ir-a", "opt-a", "cpp", 1u, 8u
+        "input-a", "ir-a", "opt-a", "cpp", 1u, 8u,
+        "manifest-a", "overrides-a", 2u, 1u
     };
     const auto key = make_codegen_cache_key(inputs);
     require(!cache.load(key, "unit.cpp"), "Leerer Cache meldet einen Treffer.");

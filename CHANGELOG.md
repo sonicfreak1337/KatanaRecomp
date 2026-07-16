@@ -8,6 +8,7 @@
 - KR-3302: Translation Units erhalten portable Namen aus Partitionsindex, Gastadressbereich und Hash der kanonischen IR-Serialisierung; Hostpfade und Eingabereihenfolge bleiben ohne Einfluss.
 - KR-3303: Ein inhaltsadressierter Codegen-Cache verwendet versionierte, komponentenweise getrennte Schluessel, bewahrt bytegleiche Treffer ohne Neuschreiben und sperrt Pfadausbrueche ueber Artefaktnamen.
 - KR-3304: Eine begrenzt parallele Projektausgabe nutzt Cachetreffer, schreibt Artefakte in stabiler Reihenfolge und erzeugt bytegleiche CMake-, Ninja- und Compile-Commands-Integration.
+- KR-3305: Versionierte Blockmetadaten erfassen virtuelle und physische Gastadressen, Segment, Bytebereich, Provenienz, Opcodes, Zyklen, Endtyp, Nachfolger und Zustandswaechter; Code, Konstanten, Symbole und Runtime-Metadaten bleiben getrennt.
 
 ### Behoben
 
