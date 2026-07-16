@@ -292,6 +292,14 @@ void require_valid_project_alias_groups(
                     alias.virtual_start, alias.size, candidate.virtual_start, candidate.size)) {
                 throw std::invalid_argument("widerspruechliche ueberlappende Aliasgruppen.");
             }
+            const bool same_physical_range =
+                alias.physical_start == candidate.physical_start && alias.size == candidate.size;
+            if (!same_physical_range &&
+                ranges_overlap(
+                    alias.physical_start, alias.size, candidate.physical_start, candidate.size)) {
+                throw std::invalid_argument(
+                    "Aliasziele duerfen sich nur als identische physische Bereiche ueberlappen.");
+            }
         }
         if (!std::any_of(
                 canonical_ranges.begin(), canonical_ranges.end(), [&alias](const auto& range) {
@@ -578,8 +586,8 @@ ProjectManifest parse_project_manifest(const std::filesystem::path& path) {
     return manifest;
 }
 
-ExecutableImage load_project_manifest(const std::filesystem::path& path) {
-    const auto manifest = parse_project_manifest(path);
+LoadedProject load_project(const std::filesystem::path& path) {
+    auto manifest = parse_project_manifest(path);
     ExecutableImage image;
     if (manifest.format == ProjectInputFormat::RawBinary) {
         RawBinaryLoadOptions options;
@@ -601,7 +609,11 @@ ExecutableImage load_project_manifest(const std::filesystem::path& path) {
     for (const auto entry : manifest.expected_entry_points) {
         image.add_entry_point(entry);
     }
-    return image;
+    return {std::move(image), std::move(manifest)};
+}
+
+ExecutableImage load_project_manifest(const std::filesystem::path& path) {
+    return load_project(path).image;
 }
 
 const char* project_input_format_name(const ProjectInputFormat format) noexcept {

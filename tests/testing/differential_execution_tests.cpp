@@ -1,3 +1,4 @@
+#include "generated_execution_program.cpp"
 #include "katana/runtime/interpreter_boundary.hpp"
 #include "katana/testing/differential_execution.hpp"
 
@@ -170,6 +171,19 @@ std::array<DifferentialRunner, 3u> runners(const bool corrupt_generated = false)
 
 int main() {
     try {
+        katana_generated::CpuState emitted_cpu;
+        katana_generated::run(emitted_cpu);
+        katana::runtime::CpuState emitted_reference;
+        emitted_reference.r[1] = 4u;
+        emitted_reference.r[2] = 7u;
+        emitted_reference.pc = 0x8C010004u;
+        emitted_reference.pr = 0x8C010004u;
+        require(emitted_cpu.r[1] == emitted_reference.r[1] &&
+                    emitted_cpu.r[2] == emitted_reference.r[2] &&
+                    emitted_cpu.pc == emitted_reference.pc &&
+                    emitted_cpu.pr == emitted_reference.pr,
+                "Echt emittiertes und kompiliertes C++ weicht vom Referenzzustand ab.");
+
         const DifferentialProgram program{"synthetic-three-paths",
                                           "core",
                                           0x12345678u,

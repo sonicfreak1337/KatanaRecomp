@@ -161,6 +161,24 @@ int main() {
                 mmio.events()[0].guest_cycle == 20u,
             "MMIO-Beobachter erzeugt kein geordnetes Systemereignis.");
 
+    SystemReplayLog reset_mmio;
+    EventScheduler reset_scheduler;
+    auto reset_observer = system_replay_mmio_observer(
+        reset_mmio,
+        [&] { return reset_scheduler.current_cycle(); },
+        "reset-mmio",
+        [&] { return reset_scheduler.reset_generation(); });
+    static_cast<void>(reset_scheduler.advance_to(100u, 1u));
+    reset_observer({MemoryAccessOperation::Write, 0xA05F8000u, MemoryAccessWidth::Word, 1u, "pvr"});
+    reset_scheduler.reset();
+    static_cast<void>(reset_scheduler.advance_to(5u, 1u));
+    reset_observer({MemoryAccessOperation::Write, 0xA05F8004u, MemoryAccessWidth::Word, 2u, "pvr"});
+    reset_mmio.seal(0x1234u);
+    const auto reset_copy = reset_mmio.serialize_json();
+    require(reset_mmio.events().size() == 2u && reset_mmio.events()[1].time_epoch == 1u &&
+                reset_mmio.dropped_events() == 0u && reset_copy == reset_mmio.serialize_json(),
+            "MMIO-Replay verliert nach Scheduler-Reset Epoche oder Bytegleichheit.");
+
     const SafepointReport safepoint{
         SafepointKind::AfterDelaySlot, ExecutionOrigin::Fallback, 30u, 29u, 1u, 2u, true, true};
     const auto safepoint_event = make_safepoint_replay_event(safepoint);

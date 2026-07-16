@@ -5,6 +5,9 @@
 #include "katana/runtime/block_dispatch.hpp"
 #include "katana/runtime/block_guards.hpp"
 #include "katana/runtime/code_invalidation.hpp"
+#include "katana/runtime/dma.hpp"
+#include "katana/runtime/firmware_handoff.hpp"
+#include "katana/runtime/scheduler.hpp"
 #include "katana/sh4/decoder.hpp"
 
 #include <algorithm>
@@ -18,6 +21,7 @@
 #include <iomanip>
 #include <iostream>
 #include <limits>
+#include <map>
 #include <optional>
 #include <span>
 #include <sstream>
@@ -27,6 +31,9 @@
 #include <typeinfo>
 #include <utility>
 #include <vector>
+#ifdef _WIN32
+#include <process.h>
+#endif
 
 namespace {
 
@@ -37,7 +44,13 @@ struct Options {
     std::uint64_t seed = 0x3703u;
     std::size_t iterations = 256u;
     std::size_t max_input_size = 4096u;
+    std::optional<std::vector<std::uint8_t>> input;
+    bool isolate = false;
+    bool child = false;
 };
+
+std::filesystem::path executable_path;
+bool isolate_cases = false;
 
 class Random {
   public:
@@ -249,8 +262,11 @@ void exercise_ir(const std::span<const std::uint8_t> bytes) {
 }
 
 katana::runtime::BlockExit fuzz_backend_block(katana::runtime::CpuState&,
-                                              katana::runtime::BlockExecutionContext&) {
-    return {};
+                                              katana::runtime::BlockExecutionContext& context) {
+    ++context.scheduler_cycle;
+    katana::runtime::BlockExit exit;
+    exit.scheduler_cycle = context.scheduler_cycle;
+    return exit;
 }
 
 void require_runtime(const bool condition, const char* message) {
@@ -265,17 +281,18 @@ void exercise_runtime(const std::span<const std::uint8_t> bytes) {
 
     katana::io::ExecutableImage image("synthetic-runtime-fuzz");
     const auto segment_count = 1u + static_cast<std::size_t>(value(0u) % 4u);
+    const auto physical_base = 0x0C000000u + static_cast<std::uint32_t>(value(5u) % 8u) * 0x10000u;
     for (std::size_t index = 0u; index < segment_count; ++index) {
         const auto size = 2u + static_cast<std::size_t>(value(index + 1u) % 31u);
-        const auto address = 0x0C000000u + static_cast<std::uint32_t>(index * 0x1000u);
-        image.add_segment(
-            {"segment-" + std::to_string(index),
-             address,
-             index * 0x1000u,
-             size,
-             (index % 2u) == 0u ? katana::io::SegmentKind::Code : katana::io::SegmentKind::Data,
-             {true, (index % 2u) != 0u, (index % 2u) == 0u},
-             std::vector<std::uint8_t>(size, value(index + 2u))});
+        const auto address = physical_base + static_cast<std::uint32_t>(index * 0x1000u);
+        const bool code = (value(index + 6u) & 1u) == 0u;
+        image.add_segment({"segment-" + std::to_string(index),
+                           address,
+                           index * 0x1000u,
+                           size,
+                           code ? katana::io::SegmentKind::Code : katana::io::SegmentKind::Data,
+                           {true, !code || (value(index + 10u) & 1u) != 0u, code},
+                           std::vector<std::uint8_t>(size, value(index + 2u))});
     }
     require_runtime(image.segments().size() == segment_count,
                     "Multi-Segment-Image verliert ein synthetisches Segment.");
@@ -283,7 +300,7 @@ void exercise_runtime(const std::span<const std::uint8_t> bytes) {
     bool overlap_rejected = false;
     try {
         image.add_segment({"overlap",
-                           0x0C000001u,
+                           physical_base + 1u,
                            0u,
                            2u,
                            katana::io::SegmentKind::Code,
@@ -295,10 +312,14 @@ void exercise_runtime(const std::span<const std::uint8_t> bytes) {
     require_runtime(overlap_rejected,
                     "Ueberlappende Segmentprovenienz wird im Runtime-Fuzzer akzeptiert.");
 
+    const auto alias_offset = static_cast<std::uint32_t>(value(14u) % 8u) * 0x1000u;
     const std::array valid_aliases{
-        katana::io::ProjectAliasGroup{0x8C000000u, 0x0C000000u, 0x1000u},
-        katana::io::ProjectAliasGroup{0xAC001000u, 0x0C001000u, 0x1000u}};
-    const std::array canonical_ranges{katana::io::ProjectAddressRange{0x0C000000u, 0x00010000u}};
+        katana::io::ProjectAliasGroup{
+            0x80000000u + physical_base + alias_offset, physical_base + alias_offset, 0x1000u},
+        katana::io::ProjectAliasGroup{0xA0000000u + physical_base + alias_offset + 0x1000u,
+                                      physical_base + alias_offset + 0x1000u,
+                                      0x1000u}};
+    const std::array canonical_ranges{katana::io::ProjectAddressRange{physical_base, 0x00010000u}};
     katana::io::require_valid_project_alias_groups(valid_aliases, canonical_ranges);
     const std::array cyclic_aliases{
         katana::io::ProjectAliasGroup{0x8C000000u, 0xAC000000u, 0x1000u},
@@ -313,55 +334,81 @@ void exercise_runtime(const std::span<const std::uint8_t> bytes) {
     require_runtime(cycle_rejected, "Aliaszyklus wird im Runtime-Fuzzer akzeptiert.");
 
     RuntimeAddressSpace address_space;
+    const auto virtual_start = 0x80000000u + physical_base;
     if ((value(2u) & 1u) != 0u) {
         address_space.set_mode(AddressTranslationMode::Mmu);
-        address_space.ldtlb({0x8C000000u, 0x0C000000u, true, true, true, true});
+        address_space.ldtlb({virtual_start,
+                             physical_base,
+                             true,
+                             (value(15u) & 1u) != 0u,
+                             true,
+                             (value(16u) & 1u) != 0u});
     }
-    const auto guard = address_space.guard_for(0x8C000000u, value(3u));
+    const auto guard = address_space.guard_for(virtual_start, value(3u));
     const auto variant = block_variant_key(guard, 0u);
     RuntimeBlockTable table;
-    table.register_static({0x8C000000u,
-                           0x0C000000u,
+    table.register_static({virtual_start,
+                           physical_base,
                            2u,
                            BlockEndKind::DynamicBranch,
                            variant,
                            fuzz_backend_block,
                            "image-segment",
                            false});
-    table.register_runtime({0xAC000000u,
-                            0x0C000000u,
+    table.register_runtime({0xA0000000u + physical_base,
+                            physical_base,
                             2u,
                             BlockEndKind::Return,
                             variant,
                             fuzz_backend_block,
                             "rom-ram-alias",
                             true});
-    require_runtime(table.lookup(0x8C000000u, variant) != nullptr &&
-                        table.aliases(0x0C000000u).size() == 2u,
+    require_runtime(table.lookup(virtual_start, variant) != nullptr &&
+                        table.aliases(physical_base).size() == 2u,
                     "Blocktabelle verliert exakten Block oder kanonische Aliasgruppe.");
 
     CpuState cpu;
+    const auto callsite = virtual_start + static_cast<std::uint32_t>(value(17u)) * 2u;
+    const auto target = (value(18u) & 1u) != 0u ? virtual_start : 0xC0000000u + physical_base;
     const auto indirect = dispatch_indirect(cpu,
                                             table,
                                             {IndirectDispatchKind::TailJump,
-                                             0x8C000100u,
-                                             0xCC000000u,
+                                             callsite,
+                                             target,
                                              0u,
-                                             {0x8C000100u, 0x0C000100u},
+                                             {callsite, physical_base + 0x100u},
                                              variant});
-    require_runtime(indirect.alias_lookup && indirect.block != nullptr &&
-                        indirect.physical_target == 0x0C000000u,
+    require_runtime(indirect.block != nullptr && indirect.physical_target == physical_base,
                     "Generischer indirekter Dispatch und Aliaslookup widersprechen sich.");
+    if (indirect.block == nullptr) {
+        throw std::runtime_error("Indirekter Dispatch lieferte keinen ausfuehrbaren Block.");
+    }
+    BlockExecutionContext execution;
+    require_runtime(indirect.block->function(cpu, execution).scheduler_cycle == 1u,
+                    "Registrierter Backendblock wurde nicht ausgefuehrt.");
+    std::map<std::pair<std::uint32_t, std::uint32_t>, const RuntimeBlock*> callsite_cache;
+    callsite_cache[{callsite, target}] = indirect.block;
+    require_runtime(callsite_cache.at({callsite, target}) ==
+                        dispatch_indirect(cpu,
+                                          table,
+                                          {IndirectDispatchKind::TailJump,
+                                           callsite,
+                                           target,
+                                           0u,
+                                           {callsite, physical_base + 0x100u},
+                                           variant})
+                            .block,
+                    "Callsite-Cache und generischer Dispatch widersprechen sich.");
 
     address_space.bump_watchpoints();
     const auto watchpoint_variant =
-        block_variant_key(address_space.guard_for(0x8C000000u, value(3u)), 0u);
-    require_runtime(table.lookup(0x8C000000u, watchpoint_variant) == nullptr,
+        block_variant_key(address_space.guard_for(virtual_start, value(3u)), 0u);
+    require_runtime(table.lookup(virtual_start, watchpoint_variant) == nullptr,
                     "Watchpointgeneration verwendet eine stale Blockvariante erneut.");
 
     ExecutableCodeTracker tracker;
     ExecutableBlockRegistration registration{"fuzz-runtime-block",
-                                             0x0C000000u,
+                                             physical_base,
                                              2u,
                                              "synthetic-rom-ram-copy",
                                              {"callsite-a"},
@@ -371,13 +418,14 @@ void exercise_runtime(const std::span<const std::uint8_t> bytes) {
     require_runtime(tracker.register_block(registration) == BlockRegistrationResult::AlreadyValid,
                     "Identische gueltige Runtimeblockregistrierung ist nicht idempotent.");
     const auto source = static_cast<CodeWriteSource>(value(4u) % 3u);
-    const auto invalidation = tracker.observe_write(0xAC000000u, 2u, source);
+    const auto invalidation = tracker.observe_write(0xA0000000u + physical_base, 2u, source);
     require_runtime(!tracker.valid(registration.identity) &&
                         invalidation.invalidated_blocks ==
                             std::vector<std::string>{registration.identity},
                     "Schreibinvalidierung laesst einen stale Runtimeblock gueltig.");
-    const auto invalidated_variant = block_variant_key(guard, tracker.page_generation(0x0C000000u));
-    require_runtime(table.lookup(0x8C000000u, invalidated_variant) == nullptr,
+    const auto invalidated_variant =
+        block_variant_key(guard, tracker.page_generation(physical_base));
+    require_runtime(table.lookup(virtual_start, invalidated_variant) == nullptr,
                     "Seitengeneration erzwingt nach Schreibinvalidierung keinen neuen Lookup.");
     require_runtime(tracker.register_block(registration) == BlockRegistrationResult::Reactivated,
                     "Invalidierter ROM-RAM-Block wird nicht kontrolliert reaktiviert.");
@@ -392,6 +440,29 @@ void exercise_runtime(const std::span<const std::uint8_t> bytes) {
     }
     require_runtime(changed_rejected,
                     "Gleiche Provenienzidentitaet wechselt unbemerkt ihre physische Adresse.");
+
+    Memory writes(0x400u);
+    writes.write_u32(0x40u, 0x11223344u ^ value(19u));
+    EventScheduler scheduler;
+    Sh4Dmac dmac(scheduler, writes, DmaTiming{1u});
+    dmac.write_source(0u, 0x40u);
+    dmac.write_destination(0u, 0x80u);
+    dmac.write_count(0u, 1u);
+    constexpr std::uint32_t auto_longword_increment =
+        0x00004000u | 0x00001000u | 0x00000400u | 0x00000030u;
+    dmac.write_control(0u, auto_longword_increment | Sh4Dmac::channel_enable);
+    dmac.write_operation(Sh4Dmac::master_enable);
+    static_cast<void>(scheduler.advance_to(8u, 4u));
+    require_runtime(writes.read_u32(0x80u) == writes.read_u32(0x40u),
+                    "Echter DMA-Schreibpfad kopiert die Bytes nicht.");
+    for (std::uint32_t offset = 0u; offset < 4u; ++offset) {
+        writes.write_u8(0xC0u + offset, writes.read_u8(0x40u + offset));
+    }
+    FirmwareHandoffMap handoff;
+    handoff.record_copy({0x40u, 0xC0u, 4u, "synthetic-rom-ram-copy", true, false});
+    require_runtime(writes.read_u32(0xC0u) == writes.read_u32(0x40u) &&
+                        handoff.resolve(0xC0u).statically_proven,
+                    "Echte ROM-RAM-Kopie oder Provenienz ist inkonsistent.");
 
     CanonicalBlockDispatcher dispatcher(table);
     dispatcher.link("caller-a", "fuzz-runtime-block");
@@ -438,8 +509,36 @@ void exercise(const Target target, const std::span<const std::uint8_t> bytes) {
     throw std::invalid_argument("Das kombinierte Fuzzziel kann keinen Einzelfall ausfuehren.");
 }
 
+std::string hex_bytes(std::span<const std::uint8_t> bytes);
+
 std::optional<std::string> crash_signature(const Target target,
                                            const std::span<const std::uint8_t> bytes) {
+    if (isolate_cases) {
+        const auto input = bytes.empty() ? std::string("-") : hex_bytes(bytes);
+#ifdef _WIN32
+        const auto executable = executable_path.string();
+        const auto target_text = std::string(target_name(target));
+        const std::array arguments{executable.c_str(),
+                                   "--target",
+                                   target_text.c_str(),
+                                   "--input-hex",
+                                   input.c_str(),
+                                   "--child",
+                                   static_cast<const char*>(nullptr)};
+        const auto status =
+            static_cast<int>(_spawnv(_P_WAIT, executable.c_str(), arguments.data()));
+#else
+        std::ostringstream command;
+        command << '"' << executable_path.string() << "\" --target " << target_name(target)
+                << " --input-hex '" << input << "' --child";
+        command << " >/dev/null 2>/dev/null";
+        const auto status = std::system(command.str().c_str());
+#endif
+        if (status != 0) {
+            return "child-exit:" + std::to_string(status);
+        }
+        return std::nullopt;
+    }
     try {
         exercise(target, bytes);
     } catch (const std::exception& error) {
@@ -532,23 +631,26 @@ void run_target(const Target target, const Options& options, const std::uint64_t
     Random random(seed);
     std::uint64_t digest = 1469598103934665603ull;
     for (const auto& input : corpus) {
-        exercise(target, input);
+        if (const auto signature = crash_signature(target, input)) {
+            const auto minimized = minimize_crasher(target, input);
+            print_counterexample(target, seed, 0u, options.max_input_size, minimized);
+            throw std::runtime_error("Startkorpus-Crash: " + *signature);
+        }
         digest = hash_bytes(digest, input);
     }
     for (std::size_t iteration = 0u; iteration < options.iterations; ++iteration) {
         auto input = mutate(corpus[random.index(corpus.size())], random, options.max_input_size);
-        try {
-            exercise(target, input);
-        } catch (...) {
+        if (const auto signature = crash_signature(target, input)) {
             const auto minimized = minimize_crasher(target, input);
             std::cerr << "Fuzz-Crasher: target=" << target_name(target) << " seed=0x" << std::hex
                       << std::uppercase << seed << std::dec << " iteration=" << iteration
                       << " reproduce=\"katana-fuzz --target " << target_name(target) << " --seed 0x"
                       << std::hex << std::uppercase << seed << std::dec << " --iterations "
                       << (iteration + 1u) << " --max-input-size " << options.max_input_size
-                      << "\"\n";
+                      << "\" replay=\"katana-fuzz --target " << target_name(target)
+                      << " --input-hex " << hex_bytes(minimized) << "\"\n";
             print_counterexample(target, seed, iteration, options.max_input_size, minimized);
-            throw;
+            throw std::runtime_error("Isolierter Fuzz-Crash: " + *signature);
         }
         digest = hash_bytes(digest, input);
         if (corpus.size() < 64u && (iteration % 4u) == 0u) {
@@ -575,6 +677,27 @@ std::uint64_t parse_unsigned(const std::string_view value, const char* option) {
     return result;
 }
 
+std::vector<std::uint8_t> parse_hex(std::string_view value) {
+    if (value == "-") {
+        return {};
+    }
+    if ((value.size() & 1u) != 0u) {
+        throw std::invalid_argument("--input-hex braucht eine gerade Zahl Hexzeichen.");
+    }
+    std::vector<std::uint8_t> bytes;
+    bytes.reserve(value.size() / 2u);
+    while (!value.empty()) {
+        unsigned parsed = 0u;
+        const auto result = std::from_chars(value.data(), value.data() + 2u, parsed, 16);
+        if (result.ec != std::errc{} || result.ptr != value.data() + 2u) {
+            throw std::invalid_argument("--input-hex enthaelt ungueltige Hexzeichen.");
+        }
+        bytes.push_back(static_cast<std::uint8_t>(parsed));
+        value.remove_prefix(2u);
+    }
+    return bytes;
+}
+
 Target parse_target(const std::string_view value) {
     if (value == "decoder") return Target::Decoder;
     if (value == "loader") return Target::Loader;
@@ -588,6 +711,14 @@ Options parse_options(const int argc, char** argv) {
     Options options;
     for (int index = 1; index < argc; ++index) {
         const std::string_view argument(argv[index]);
+        if (argument == "--isolate") {
+            options.isolate = true;
+            continue;
+        }
+        if (argument == "--child") {
+            options.child = true;
+            continue;
+        }
         if (argument == "--help") {
             std::cout << "katana-fuzz --target decoder|loader|ir|runtime|all --seed N "
                          "--iterations N --max-input-size N\n";
@@ -614,6 +745,8 @@ Options parse_options(const int argc, char** argv) {
                 throw std::out_of_range("--max-input-size muss zwischen 1 und 1048576 liegen.");
             }
             options.max_input_size = static_cast<std::size_t>(parsed);
+        } else if (argument == "--input-hex") {
+            options.input = parse_hex(value);
         } else {
             throw std::invalid_argument("Unbekannte Option: " + std::string(argument));
         }
@@ -625,7 +758,16 @@ Options parse_options(const int argc, char** argv) {
 
 int main(const int argc, char** argv) {
     try {
+        executable_path = std::filesystem::absolute(argv[0]);
         const auto options = parse_options(argc, argv);
+        if (options.input) {
+            if (options.target == Target::All) {
+                throw std::invalid_argument("--input-hex braucht ein einzelnes Ziel.");
+            }
+            exercise(options.target, *options.input);
+            return EXIT_SUCCESS;
+        }
+        isolate_cases = options.isolate && !options.child;
         if (options.target == Target::All) {
             run_target(Target::Decoder, options, options.seed ^ 0xDEC0DE01u);
             run_target(Target::Loader, options, options.seed ^ 0x10ADE002u);

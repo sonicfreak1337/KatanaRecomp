@@ -101,9 +101,15 @@ int main() {
                 version_two.dynamic_bios_vectors ==
                     std::vector<std::uint32_t>{0x8C0000B0u, 0x8C0000B4u},
             "Manifestversion 2 oder ihr sicherer Ausfuehrungsvertrag wurde falsch gelesen.");
-    const auto version_two_image = load_project_manifest(manifest_path);
-    require(version_two_image.find_symbol("bios-vector") == nullptr,
+    const auto loaded_version_two = load_project(manifest_path);
+    require(loaded_version_two.image.find_symbol("bios-vector") == nullptr,
             "Dynamischer BIOS-Vektor wurde als statisches ROM-Symbol serialisiert.");
+    require(loaded_version_two.execution_profile.fallback_policy == ProjectFallbackPolicy::Abort &&
+                loaded_version_two.execution_profile.scheduler_profile == "deterministic" &&
+                loaded_version_two.execution_profile.mmu_profile == ProjectMmuProfile::Disabled &&
+                loaded_version_two.execution_profile.fastpath_profile ==
+                    ProjectFastpathProfile::Conservative,
+            "Geladenes Projekt verlor sein validiertes Ausfuehrungsprofil.");
 
     save_text(manifest_path, "schema = katana-project\nversion = 3\n");
     auto error = require_failure([&] { static_cast<void>(parse_project_manifest(manifest_path)); },
@@ -153,6 +159,35 @@ int main() {
             require_valid_project_alias_groups(cycle, canonical);
         },
         "Aliasziel auf eine weitere virtuelle Aliasgruppe wurde akzeptiert.");
+
+    const std::vector<ProjectAddressRange> shared_canonical{{0x0C000000u, 0x2000u}};
+    require_failure(
+        [&] {
+            const std::vector<ProjectAliasGroup> self{{0x0C000000u, 0x0C000000u, 0x100u}};
+            require_valid_project_alias_groups(self, shared_canonical);
+        },
+        "Selbstalias wurde akzeptiert.");
+    require_failure(
+        [&] {
+            const std::vector<ProjectAliasGroup> overlap{{0x8C000000u, 0x0C000000u, 0x1000u},
+                                                         {0xAC000000u, 0x0C000800u, 0x1000u}};
+            require_valid_project_alias_groups(overlap, shared_canonical);
+        },
+        "Teilweise ueberlappende physische Aliasziele wurden akzeptiert.");
+    const std::vector<ProjectAliasGroup> shared_target{{0x8C000000u, 0x0C000000u, 0x1000u},
+                                                       {0xAC000000u, 0x0C000000u, 0x1000u}};
+    require_valid_project_alias_groups(shared_target, shared_canonical);
+
+    save_text(manifest_path,
+              "schema = katana-project\nversion = 2\nproject.name = alias-error\n"
+              "input.format = raw\ninput.path = program.bin\nimage.base_address = 0x8C010000\n"
+              "memory.canonical_ranges = 0x0C000000:0x2000\n"
+              "memory.alias_groups = 0x0C000000:0x0C000000:0x100\n");
+    error = require_failure([&] { static_cast<void>(parse_project_manifest(manifest_path)); },
+                            "Manifest-Selbstalias wurde akzeptiert.");
+    require(error.find(manifest_path.string()) != std::string::npos &&
+                error.find("Zeile 8") != std::string::npos,
+            "Aliasdiagnose nennt Datei und Zeile nicht.");
 
     save_text(manifest_path, "version = 1\nformat = raw\ninput = program.bin\n");
     error = require_failure([&] { static_cast<void>(parse_project_manifest(manifest_path)); },

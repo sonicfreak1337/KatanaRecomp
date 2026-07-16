@@ -16,6 +16,7 @@ struct PortExportOptions {
     std::string target_name;
     std::string tool_version;
     PartitionOptions partition_options;
+    std::filesystem::path forbidden_source_root;
 };
 
 struct PortExportResult {

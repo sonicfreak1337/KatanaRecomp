@@ -817,7 +817,7 @@ int export_port_project(const std::filesystem::path& gdi_path,
             "Port-Ausgabe muss ausserhalb des KatanaRecomp-Quellbaums liegen.");
     }
     const auto report = katana::codegen::export_dreamcast_port_project(
-        gdi_path, output_path, {target_name, KATANA_RECOMP_VERSION});
+        gdi_path, output_path, {target_name, KATANA_RECOMP_VERSION, {}, source_root});
     const auto shell_quote = [](const std::filesystem::path& path) {
         const auto text = path.string();
 #ifdef _WIN32
@@ -1109,6 +1109,14 @@ int main(const int argc, char* argv[]) {
         std::cerr << "Fehler [input-output]: " << error.what() << '\n';
         return exit_status(ExitCode::InputOutput);
     } catch (const std::runtime_error& error) {
+        const std::string_view message(error.what());
+        if (message.find("konnte nicht geoeffnet") != std::string_view::npos ||
+            message.find("konnte nicht gelesen") != std::string_view::npos ||
+            message.find("konnte nicht geschrieben") != std::string_view::npos ||
+            message.find("Datei fehlt") != std::string_view::npos) {
+            std::cerr << "Fehler [input-output]: " << error.what() << '\n';
+            return exit_status(ExitCode::InputOutput);
+        }
         std::cerr << "Fehler [processing-failure]: " << error.what() << '\n';
         return exit_status(ExitCode::ProcessingFailure);
     } catch (const std::exception& error) {

@@ -268,12 +268,15 @@ SystemReplayEvent make_safepoint_replay_event(const SafepointReport& report) {
 
 MemoryAccessObserver system_replay_mmio_observer(SystemReplayLog& log,
                                                  std::function<std::uint64_t()> guest_cycle,
-                                                 std::string code) {
+                                                 std::string code,
+                                                 std::function<std::uint64_t()> time_epoch) {
     if (!guest_cycle || !stable_code(code)) {
         throw std::invalid_argument("MMIO-Replayobserver braucht Gastzeit und portablen Code.");
     }
-    return [&log, cycle = std::move(guest_cycle), event_code = std::move(code)](
-               const MemoryAccessEvent& access) noexcept {
+    return [&log,
+            cycle = std::move(guest_cycle),
+            epoch = std::move(time_epoch),
+            event_code = std::move(code)](const MemoryAccessEvent& access) noexcept {
         try {
             static_cast<void>(log.try_record({0u,
                                               cycle(),
@@ -285,7 +288,8 @@ MemoryAccessObserver system_replay_mmio_observer(SystemReplayLog& log,
                                               access.value,
                                               static_cast<std::uint64_t>(access.width),
                                               0u,
-                                              false}));
+                                              false,
+                                              epoch ? epoch() : 0u}));
         } catch (...) {
             log.note_dropped_event();
         }

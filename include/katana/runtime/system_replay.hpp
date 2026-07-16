@@ -92,8 +92,11 @@ class DeterministicSystemReplay final {
 };
 
 [[nodiscard]] SystemReplayEvent make_safepoint_replay_event(const SafepointReport& report);
-[[nodiscard]] MemoryAccessObserver system_replay_mmio_observer(
-    SystemReplayLog& log, std::function<std::uint64_t()> guest_cycle, std::string code);
+[[nodiscard]] MemoryAccessObserver
+system_replay_mmio_observer(SystemReplayLog& log,
+                            std::function<std::uint64_t()> guest_cycle,
+                            std::string code,
+                            std::function<std::uint64_t()> time_epoch = {});
 [[nodiscard]] std::uint64_t hash_replay_guest_state(const CpuState& cpu,
                                                     std::uint64_t scheduler_cycle,
                                                     std::uint64_t subsystem_hash = 0u) noexcept;

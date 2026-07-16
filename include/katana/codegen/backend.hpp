@@ -38,6 +38,10 @@ struct BackendRequest {
     std::span<const katana::ir::Function> functions;
     std::uint32_t entry_address = 0u;
     BackendRequirements requirements;
+    std::span<const std::uint32_t> known_function_entries;
+    std::string_view symbol_namespace = "katana_generated";
+    bool emit_run_functions = true;
+    bool external_function_linkage = false;
 };
 
 struct BackendEmission {

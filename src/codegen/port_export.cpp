@@ -11,6 +11,7 @@
 #include "katana/io/json_report.hpp"
 #include "katana/ir/lower.hpp"
 #include "katana/ir/optimize.hpp"
+#include "katana/ir/verifier.hpp"
 #include "katana/platform/dreamcast_disc.hpp"
 #include "katana/runtime/abi.hpp"
 
@@ -38,19 +39,7 @@ bool valid_target_name(const std::string_view value) noexcept {
            value != "rebuild_cache";
 }
 
-std::string unit_namespace(const std::size_t index) {
-    std::ostringstream output;
-    output << "katana_generated_unit_" << std::setfill('0') << std::setw(5) << index;
-    return output.str();
-}
-
-void replace_all(std::string& value, const std::string_view from, const std::string_view to) {
-    std::size_t offset = 0u;
-    while ((offset = value.find(from, offset)) != std::string::npos) {
-        value.replace(offset, from.size(), to);
-        offset += to.size();
-    }
-}
+constexpr std::string_view port_namespace = "katana_port_generated";
 
 std::vector<katana::ir::Function>
 select_functions(const std::span<const katana::ir::Function> program,
@@ -189,6 +178,11 @@ void write_user_file_once(const std::filesystem::path& root,
     if (!output) throw std::runtime_error("Port-Bootstrapdatei konnte nicht geschrieben werden.");
 }
 
+bool path_is_within(const std::filesystem::path& path, const std::filesystem::path& root) {
+    const auto relative = path.lexically_relative(root);
+    return !relative.empty() && !relative.is_absolute() && *relative.begin() != "..";
+}
+
 } // namespace
 
 PortExportResult export_dreamcast_port_project(const std::filesystem::path& gdi_path,
@@ -207,9 +201,15 @@ PortExportResult export_dreamcast_port_project(const std::filesystem::path& gdi_
     }
     auto program = katana::ir::lower_program(analysis);
     static_cast<void>(katana::ir::optimize_program(program));
+    katana::ir::require_valid_program(program);
     const auto partitions = partition_translation_units(program, options.partition_options);
     if (partitions.empty()) throw std::runtime_error("Portcodegen erzeugte keine Partition.");
 
+    std::vector<std::uint32_t> global_entries;
+    global_entries.reserve(program.size());
+    for (const auto& function : program)
+        global_entries.push_back(function.entry_address);
+    const CppBackend backend;
     std::vector<ProjectArtifact> artifacts;
     artifacts.reserve(partitions.size() + 9u);
     for (const auto& partition : partitions) {
@@ -221,9 +221,14 @@ PortExportResult export_dreamcast_port_project(const std::filesystem::path& gdi_
         const auto unit_entry = contains_program_entry
                                     ? katana::platform::dreamcast_disc_boot_address
                                     : functions.front().entry_address;
-        auto source = emit_cpp_program(functions, unit_entry);
-        const auto name_space = unit_namespace(partition.index);
-        replace_all(source, "katana_generated", name_space);
+        const BackendRequest request{functions,
+                                     unit_entry,
+                                     {},
+                                     global_entries,
+                                     port_namespace,
+                                     contains_program_entry,
+                                     true};
+        auto source = backend.emit(request).joined_text();
         artifacts.push_back({std::filesystem::path("code") /
                                  deterministic_translation_unit_name(partition, program),
                              std::move(source)});
@@ -240,7 +245,7 @@ PortExportResult export_dreamcast_port_project(const std::filesystem::path& gdi_
     if (entry_partition == partitions.end()) {
         throw std::runtime_error("Portcodegen besitzt keine Einstiegspartition.");
     }
-    const auto entry_namespace = unit_namespace(entry_partition->index);
+    const auto entry_namespace = std::string(port_namespace);
     const auto source_map = build_address_source_map(image, artifacts);
     const auto control_flow_graph = katana::analysis::build_control_flow_graph(analysis);
     const auto call_graph = katana::analysis::build_call_graph(analysis);
@@ -283,6 +288,14 @@ PortExportResult export_dreamcast_port_project(const std::filesystem::path& gdi_
         {"metadata/callgraph.dot", katana::analysis::serialize_analysis_graph_dot(call_graph)});
 
     const auto absolute_root = std::filesystem::absolute(output_root).lexically_normal();
+    const auto resolved_root = std::filesystem::weakly_canonical(absolute_root);
+    if (!options.forbidden_source_root.empty()) {
+        const auto source_root = std::filesystem::canonical(options.forbidden_source_root);
+        if (path_is_within(resolved_root, source_root)) {
+            throw std::invalid_argument(
+                "Port-Ausgabe muss ausserhalb des KatanaRecomp-Quellbaums liegen.");
+        }
+    }
     std::error_code root_error;
     const auto root_status = std::filesystem::symlink_status(absolute_root, root_error);
     if (!root_error && std::filesystem::is_symlink(root_status)) {
@@ -293,6 +306,10 @@ PortExportResult export_dreamcast_port_project(const std::filesystem::path& gdi_
     }
     std::filesystem::create_directories(absolute_root);
     const auto canonical_root = std::filesystem::canonical(absolute_root);
+    if (!options.forbidden_source_root.empty() &&
+        path_is_within(canonical_root, std::filesystem::canonical(options.forbidden_source_root))) {
+        throw std::invalid_argument("Kanonische Port-Ausgabe liegt im KatanaRecomp-Quellbaum.");
+    }
     const auto write = write_codegen_project(canonical_root / "generated", std::move(artifacts));
     write_user_file_once(canonical_root, "CMakeLists.txt", root_cmake());
     write_user_file_once(canonical_root, ".gitignore", "/build/\n");

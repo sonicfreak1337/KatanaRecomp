@@ -309,6 +309,7 @@ if(KATANA_BUILD_FUZZERS)
             --seed 0x3703
             --iterations 256
             --max-input-size 4096
+            --isolate
     )
     # Dynamic coverage instrumentation adds substantial per-iteration overhead on MSVC.
     set_tests_properties(katana-fuzz-smoke PROPERTIES TIMEOUT 900)
@@ -1263,6 +1264,19 @@ set_source_files_properties(
     PROPERTIES
         OBJECT_DEPENDS ${KATANA_GENERATED_TEST_CPP}
 )
+
+set_source_files_properties(
+    tests/testing/differential_execution_tests.cpp
+    PROPERTIES
+        OBJECT_DEPENDS ${KATANA_GENERATED_TEST_CPP}
+)
+target_sources(katana-differential-execution-tests PRIVATE ${KATANA_GENERATED_TEST_CPP})
+target_include_directories(
+    katana-differential-execution-tests
+    PRIVATE
+        ${KATANA_GENERATED_TEST_DIR}
+)
+add_dependencies(katana-differential-execution-tests katana-recomp)
 
 add_executable(katana-generated-execution-tests
     tests/codegen/generated_execution_tests.cpp

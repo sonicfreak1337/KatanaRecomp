@@ -229,6 +229,29 @@ int main(const int argc, char* argv[]) {
         [&] { static_cast<void>(export_dreamcast_port_project(gdi, output, invalid_options)); },
         "Unportabler Port-Zielname wurde akzeptiert.");
 
+    auto protected_options = options;
+    protected_options.forbidden_source_root = fixture.root;
+    require_failure<std::invalid_argument>(
+        [&] {
+            static_cast<void>(export_dreamcast_port_project(
+                gdi, fixture.root / "generated-commercial-port", protected_options));
+        },
+        "Portausgabe innerhalb des geschuetzten Quellbaums wurde akzeptiert.");
+    const auto link = std::filesystem::temp_directory_path() / "katana-port-parent-link";
+    std::error_code link_error;
+    std::filesystem::remove(link, link_error);
+    link_error.clear();
+    std::filesystem::create_directory_symlink(fixture.root, link, link_error);
+    if (!link_error) {
+        require_failure<std::invalid_argument>(
+            [&] {
+                static_cast<void>(export_dreamcast_port_project(
+                    gdi, link / "through-parent-link", protected_options));
+            },
+            "Symlink-Elternpfad umgeht den geschuetzten Quellbaum.");
+        std::filesystem::remove(link, link_error);
+    }
+
     std::cout << "KR-3507 reproduzierbarer Port-Projektexport erfolgreich.\n";
     return EXIT_SUCCESS;
 }

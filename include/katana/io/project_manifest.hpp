@@ -63,9 +63,15 @@ struct ProjectManifest {
     std::vector<std::uint32_t> dynamic_bios_vectors;
 };
 
+struct LoadedProject {
+    ExecutableImage image;
+    ProjectManifest execution_profile;
+};
+
 [[nodiscard]] ProjectManifest parse_project_manifest(const std::filesystem::path& path);
 
 [[nodiscard]] ExecutableImage load_project_manifest(const std::filesystem::path& path);
+[[nodiscard]] LoadedProject load_project(const std::filesystem::path& path);
 
 [[nodiscard]] const char* project_input_format_name(ProjectInputFormat format) noexcept;
 [[nodiscard]] const char* project_firmware_mode_name(ProjectFirmwareMode mode) noexcept;

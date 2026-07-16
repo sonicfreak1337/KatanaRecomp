@@ -1,4 +1,5 @@
 #include "katana/analysis/function_analysis.hpp"
+#include "katana/codegen/backend.hpp"
 #include "katana/codegen/cpp_emitter.hpp"
 #include "katana/ir/lower.hpp"
 #include "katana/sh4/disassembler.hpp"
@@ -7,6 +8,7 @@
 #include <cstdlib>
 #include <iostream>
 #include <string>
+#include <vector>
 
 namespace {
 
@@ -84,6 +86,32 @@ int main() {
 
     require(delay_position < call_position,
             "Der Delay Slot muss vor dem Funktionsaufruf ausgefuehrt werden.");
+
+    const std::vector<std::uint32_t> global_entries{0x8C010000u, 0x8C010008u};
+    const katana::codegen::CppBackend partition_backend;
+    const std::array caller_partition{program[0]};
+    const auto caller_unit =
+        partition_backend
+            .emit(
+                {caller_partition, 0x8C010000u, {}, global_entries, "partitioned_game", true, true})
+            .joined_text();
+    const std::array callee_partition{program[1]};
+    const auto callee_unit = partition_backend
+                                 .emit({callee_partition,
+                                        0x8C010008u,
+                                        {},
+                                        global_entries,
+                                        "partitioned_game",
+                                        false,
+                                        true})
+                                 .joined_text();
+    require(caller_unit.find("namespace partitioned_game") != std::string::npos &&
+                caller_unit.find("void fn_8C010008_with_services") != std::string::npos &&
+                caller_unit.find("fn_8C010008_with_services(cpu, services);") !=
+                    std::string::npos &&
+                caller_unit.find("unresolved_call(cpu, 0x8C010008u)") == std::string::npos &&
+                callee_unit.find("void fn_8C010008_with_services") != std::string::npos,
+            "Partitionsuebergreifender Call besitzt keinen externen Symbolvertrag.");
 
     require(source.find("cpu.r[1] += static_cast<std::uint32_t>(-1);") != std::string::npos,
             "ADD Immediate wurde nicht generiert.");

@@ -2172,11 +2172,13 @@ BackendEmission CppBackend::emit(const BackendRequest& request) const {
     const auto functions = request.functions;
     const auto entry_address = request.entry_address;
     std::unordered_set<std::uint32_t> known_functions;
-    known_functions.reserve(functions.size());
+    known_functions.reserve(functions.size() + request.known_function_entries.size());
 
     for (const auto& function : functions) {
         known_functions.insert(function.entry_address);
     }
+    known_functions.insert(request.known_function_entries.begin(),
+                           request.known_function_entries.end());
 
     std::ostringstream declarations;
     std::ostringstream function_bodies;
@@ -2189,7 +2191,7 @@ BackendEmission CppBackend::emit(const BackendRequest& request) const {
                  << "#include \"katana/runtime/runtime.hpp\"\n"
                  << "#include <cstdint>\n"
                  << "#include <stdexcept>\n\n"
-                 << "namespace katana_generated {\n\n"
+                 << "namespace " << request.symbol_namespace << " {\n\n"
                  << "inline constexpr std::uint32_t required_runtime_abi = "
                  << request.requirements.runtime_abi_version << "u;\n"
                  << "static_assert(\n"
@@ -2211,10 +2213,16 @@ BackendEmission CppBackend::emit(const BackendRequest& request) const {
                  << "using katana::runtime::unresolved_call;\n"
                  << "using katana::runtime::unresolved_jump;\n\n";
 
+    std::vector<std::uint32_t> ordered_known_functions(known_functions.begin(),
+                                                       known_functions.end());
+    std::sort(ordered_known_functions.begin(), ordered_known_functions.end());
+    for (const auto entry : ordered_known_functions) {
+        declarations << (request.external_function_linkage ? "void " : "static void ")
+                     << service_function_name(entry)
+                     << "(CpuState& cpu, PlatformServices* services);\n";
+    }
     for (const auto& function : functions) {
-        declarations << "static void " << service_function_name(function.entry_address)
-                     << "(CpuState& cpu, PlatformServices* services);\n"
-                     << "[[maybe_unused]] static void " << function_name(function.entry_address)
+        declarations << "[[maybe_unused]] static void " << function_name(function.entry_address)
                      << "(CpuState& cpu) {\n"
                      << "    " << service_function_name(function.entry_address)
                      << "(cpu, nullptr);\n"
@@ -2224,7 +2232,8 @@ BackendEmission CppBackend::emit(const BackendRequest& request) const {
     declarations << '\n';
 
     for (const auto& function : functions) {
-        function_bodies << "static void " << service_function_name(function.entry_address)
+        function_bodies << (request.external_function_linkage ? "void " : "static void ")
+                        << service_function_name(function.entry_address)
                         << "(CpuState& cpu, PlatformServices* services) {\n"
                         << "    static_cast<void>(services);\n"
                         << "    for (;;) {\n"
@@ -2248,19 +2257,21 @@ BackendEmission CppBackend::emit(const BackendRequest& request) const {
                         << "}\n\n";
     }
 
-    function_bodies << "void run(CpuState& cpu) {\n"
-                    << "    cpu.pc = " << hex32(entry_address) << ";\n"
-                    << "    " << function_name(entry_address) << "(cpu);\n"
-                    << "}\n\n"
-                    << "void run(CpuState& cpu, PlatformServices& services) {\n"
-                    << "    katana::runtime::validate_platform_services(services);\n"
-                    << "    cpu.pc = " << hex32(entry_address) << ";\n"
-                    << "    " << service_function_name(entry_address) << "(cpu, &services);\n"
-                    << "}\n\n";
+    if (request.emit_run_functions) {
+        function_bodies << "void run(CpuState& cpu) {\n"
+                        << "    cpu.pc = " << hex32(entry_address) << ";\n"
+                        << "    " << function_name(entry_address) << "(cpu);\n"
+                        << "}\n\n"
+                        << "void run(CpuState& cpu, PlatformServices& services) {\n"
+                        << "    katana::runtime::validate_platform_services(services);\n"
+                        << "    cpu.pc = " << hex32(entry_address) << ";\n"
+                        << "    " << service_function_name(entry_address) << "(cpu, &services);\n"
+                        << "}\n\n";
+    }
 
     metadata << "inline constexpr std::uint32_t generated_entry_address = " << hex32(entry_address)
              << ";\n\n"
-             << "} // namespace katana_generated\n";
+             << "} // namespace " << request.symbol_namespace << "\n";
 
     return {declarations.str(), function_bodies.str(), metadata.str()};
 }
