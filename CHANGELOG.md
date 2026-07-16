@@ -18,6 +18,11 @@
 - KR-4002: Eine interne Architektur-/Manifestreferenz und maschinenlesbare
   Faehigkeitsmatrix trennen erforderliche, unterstuetzte, experimentelle und
   nicht verfuegbare Profile samt automatisiertem Nachweis und Einschraenkung.
+- KR-4006: Das kumulative Phase-9-Gate besteht 156/156 Tests in einem frischen
+  MSVC-Debug-Build. Der deterministische Zwei-Frame-Hostlauf meldet keine
+  stillen Fehler und keinen Fallback; Reproduzierbarkeit, Budgets sowie der
+  Audit auf Firmwarebytes, Geheimnisse, lokale Pfade und Rohtraces bestehen.
+  Der Gate-Bericht wechselt ohne Versionierung oder Release zu Phase 10.
 - Das fuer Phase 10 bereitgestellte App-Logo ist ueber Abmessungen, Transparenz
   und SHA-256 als externer Asset-Eingang erfasst, wird vor der Rechtepruefung
   jedoch weder kopiert noch paketiert.

@@ -2091,7 +2091,7 @@ Umfang:
   weitere Entwicklung zusammenfuehren
 - keine oeffentliche Installations- oder Nutzerreferenz vorziehen
 
-### [ ] KR-4006 - Kumulatives Phase-9-Gate
+### [x] KR-4006 - Kumulatives Phase-9-Gate
 
 Abhaengigkeiten: KR-3505, KR-3606, KR-3710, KR-3801 bis KR-3809, KR-3901 bis KR-3907, KR-4002
 

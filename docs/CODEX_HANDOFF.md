@@ -357,11 +357,17 @@ Typ: Implementierung | Gate-Vorbereitung | interne Freigabe | Release-Gate
 ## Aktuell empfohlener Einstieg
 
 ```text
-KR-3410 - Cache-/Store-Queue-Vertrag und v0.34 Gate-Vorbereitung
+KR-4101 - GUI-Technologie und Architektur festlegen
 ```
 
 Danach:
 
 ```text
-Review-Stopp; nach ausdruecklicher Freigabe KR-3411 - v0.34 Release-Gate
+KR-4102 - Gemeinsamer Anwendungsdienst fuer CLI, GUI und Automatisierung
 ```
+
+Phase 9 wurde mit `KR_PHASE9_HOMEBREW_HOST_FRAME`, 156/156 Tests und
+erfolgreichem Daten-Audit abgeschlossen. Fuer Phase 10 liegt das externe
+Logo als dokumentierter Asset-Eingang vor. Vor Kopie oder Packaging sind in
+KR-4101 Herkunft, Nutzungsrechte und die benoetigten GUI-/Iconvarianten zu
+klaeren; die GUI darf keine CLI- oder Runtime-Geschaeftslogik duplizieren.

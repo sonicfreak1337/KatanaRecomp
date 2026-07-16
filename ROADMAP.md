@@ -1045,7 +1045,7 @@ Interne Akzeptanz fuer das kumulative Phase-9-Gate:
 Fortschritt:
 
 - [x] KR-4002 - Interne Architektur- und Manifestreferenz
-- [ ] KR-4006 - Kumulatives Phase-9-Gate
+- [x] KR-4006 - Kumulatives Phase-9-Gate
 
 Enthalten:
 

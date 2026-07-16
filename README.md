@@ -25,9 +25,9 @@ Eingabe
   -> natives Hostprojekt
 ```
 
-Das v0.37.0-Gate besteht **151/151 automatische Tests** im lokalen
-Debug-/ASan-/Coverage-Profil. Phasen 1 bis 8 sind abgeschlossen; als Naechstes
-folgt Phase 9 mit dem Homebrew-Testkorpus ab `KR-3801`.
+Das kumulative Phase-9-Gate besteht **156/156 automatische Tests** im lokalen
+Debug-/ASan-/Coverage-Profil. Phasen 1 bis 9 sind abgeschlossen; Phase 10 ist
+mit der GUI-Technologie- und Architekturentscheidung `KR-4101` erreicht.
 
 Der genaue aktuelle Stand steht in [docs/STATUS.md](docs/STATUS.md), die
 langfristige Planung in [ROADMAP.md](ROADMAP.md).

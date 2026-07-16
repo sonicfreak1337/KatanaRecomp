@@ -4,18 +4,18 @@ Version: `0.37.0`
 
 Phase: Pre-Alpha
 
-Naechster Roadmap-Task: `KR-3801` - rechtlich sauberes Homebrew-Testkorpus
+Naechster Roadmap-Task: `KR-4101` - GUI-Technologie und Architektur festlegen
 
-Naechstes Phasengate: `v0.40.0` - Abschluss Phase 9
+Naechstes Phasengate: `v0.44.0` - Abschluss Phase 10
 
 Erster oeffentlicher Produktrelease: `v0.50.0` Alpha
 
 ## Fortschritt
 
-- 170 von 231 gepflegten Roadmap-Tasks abgeschlossen: 73,6 %
-- 76 von 133 Tasks auf dem Weg vom Dreamcast-Plattformstart bis zum Alpha-Gate abgeschlossen: 57,1 %
-- Phasen 1 bis 8 abgeschlossen
-- Phase 9: 0/17 Tasks
+- 186 von 231 gepflegten Roadmap-Tasks abgeschlossen: 80,5 %
+- 92 von 133 Tasks auf dem Weg vom Dreamcast-Plattformstart bis zum Alpha-Gate abgeschlossen: 69,2 %
+- Phasen 1 bis 9 abgeschlossen
+- Phase 9: 16/17 Tasks; das optionale lokale Firmware-LLE-Smoke-Profil wurde nicht angefordert
 - Phase 10: 0/13 Tasks
 - Phase 11: 0/25 Tasks
 - Alpha-Gate noch nicht erreicht
@@ -30,7 +30,7 @@ Erster oeffentlicher Produktrelease: `v0.50.0` Alpha
 | 6 | Dreamcast-Plattform | 29/29 |
 | 7 | Codegen und Dispatch | 21/21 |
 | 8 | Werkzeuge und Qualitaet | 26/26 |
-| 9 | Kompatibilitaet und Leistung | 0/24 |
+| 9 | Kompatibilitaet und Leistung | 16/17 (Pflichtumfang abgeschlossen) |
 | 10 | Desktop-GUI und Quellworkflow | 0/13 |
 | 11 | Alpha-Integration und Haertung | 0/25 |
 
@@ -57,6 +57,25 @@ Abgeschlossen sind unter anderem:
   Diagnostik, Systemreplays und reproduzierbarer Port-Projektexport
 - lokale Debugqualitaet mit statischer Analyse, ASan, Coverage, Fuzzing,
   Differentialtests sowie Referenz- und Lizenzaudits
+- synthetisches Homebrew-Pflichtkorpus mit zusammenhaengendem PVR-, AICA-,
+  Maple-, Scheduler-, DMA-, Interrupt- und Firmware-Handoff-Nachweis
+- deterministische Ausfuehrungsprofile, bewachte Speicher-/Dispatch-Fastpaths,
+  Inline-Caches, Benchmarks und maschinenlesbare Faehigkeitsmatrix
+
+## Letztes internes Phasengate: Phase 9
+
+Gate-Commit: `1d7fd7517f160c2327c23dcb9d051a83ccc68ad3`
+
+```text
+156/156 Tests bestanden
+frischer MSVC-Debug-Build in 81.713 ms
+KR_PHASE9_HOMEBREW_HOST_FRAME: 2 Frames, 2 Audio-Puffer, 2 Maple-Transaktionen
+silent_failures=0, fallback_count=0, invalidations=1, scheduler_jitter=1
+reproduzierbares Basisartefakt und Phase-9-Datenaudit bestanden
+```
+
+Der Gate-Bericht nennt `next_phase: 10`. Es wurden weder Versionierung noch
+Release-Commit, Tag oder Veroeffentlichung ausgefuehrt.
 
 ## Letztes Release-Gate: v0.37.0
 
@@ -120,8 +139,8 @@ Der vollstaendige Vertrag steht in
   Hardwareemulation; ARM7-LLE ist nicht implementiert.
 - Indirekte Zielanalyse bleibt konservativ auf beweisbare Ziele und begrenzte
   Jump Tables beschraenkt.
-- Retail-Kompatibilitaet, Performance, Desktop-GUI, native Portintegration und
-  Alpha-CI folgen in den Phasen 9 bis 11.
+- Retail-Kompatibilitaet, Desktop-GUI, native Portintegration und Alpha-CI
+  werden in den Phasen 10 und 11 weitergefuehrt.
 
 ## Massgebliche Dokumente
 
