@@ -1093,7 +1093,7 @@ Fortschritt:
 - [x] KR-4303 - Ergebnisansichten fuer Funktionen, Quellen und Provenienz
 - [x] KR-4401 - GUI-End-to-End-Automatisierung
 - [x] KR-4402 - GUI-Haertung, Packaging und v0.44 Gate-Vorbereitung
-- [ ] KR-4403 - v0.44.0 interne GUI-und-GDI-Meilenstein-Freigabe
+- [x] KR-4403 - v0.44.0 interne GUI-und-GDI-Meilenstein-Freigabe
 
 ### v0.41.0 - GUI-Grundlage und Anwendungsdienste
 
@@ -1167,7 +1167,7 @@ Fortschritt:
 - [x] KR-4510 - GUI-QoL, Dark Theme, Logo und scrollbares Layout
 - [x] KR-4511 - Privater Sonic-Debugharness und abstrahierte Regressionen
 - [x] KR-4504 - v0.45 Gate-Vorbereitung: Tests und Build
-- [ ] KR-4505 - v0.45 interne Meilenstein-Freigabe
+- [x] KR-4505 - v0.45 interne Meilenstein-Freigabe
 
 Gate-Ergebnis: Der erste reale Boot-Analyseblocker ist allgemein behoben,
 unvollstaendige Retail-Analyse kann nicht mehr als erfolgreicher Build gelten,

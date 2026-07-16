@@ -1,10 +1,10 @@
 # Projektstatus
 
-Interner Entwicklungsmeilenstein: `0.44.0`
+Interner Entwicklungsmeilenstein: `0.45.0`
 
 Phase: Pre-Alpha
 
-Naechster Roadmap-Task: Phase 11 / KR-4505 (Nutzerreview erforderlich)
+Naechster Roadmap-Task: Phase 11 / KR-4601
 
 Naechstes Phasengate: `v0.46.0` - Abschluss Phase 11
 
@@ -12,11 +12,11 @@ Erster oeffentlicher Produktrelease: `v0.50.0` Alpha
 
 ## Fortschritt
 
-- 200 von 236 gepflegten Roadmap-Tasks abgeschlossen: 84,7 %
+- 201 von 236 gepflegten Roadmap-Tasks abgeschlossen: 85,2 %
 - Phase-9-Reviewkorrekturen sind implementiert; das eigenstaendige
   achtteilige Homebrew-Korpus und Linux-Evidenz bleiben offen
 - Phase 10: 13/13 Tasks im freigegebenen Windows-GDI-Workflow
-- Phase 11: 10/16 Tasks
+- Phase 11: 11/16 Tasks
 - Phase 12: 0/10 Tasks
 - Phase 13: 0/5 Tasks vor dem Alpha-Gate
 - Alpha-Gate noch nicht erreicht
@@ -33,7 +33,7 @@ Erster oeffentlicher Produktrelease: `v0.50.0` Alpha
 | 8 | Werkzeuge und Qualitaet | 26/26 |
 | 9 | Kompatibilitaet und Leistung | Reviewkorrekturen offen |
 | 10 | Desktop-GUI und Quellworkflow | 13/13 (Windows-GDI-Scope) |
-| 11 | Bootanalyse und Retail-Systemdienste | 10/16 |
+| 11 | Bootanalyse und Retail-Systemdienste | 11/16 |
 | 12 | Interaktive Retail-Runtime und Portintegration | 0/10 |
 | 13 | Spielbarer Alpha-Kandidat | 0/5 |
 
@@ -153,8 +153,9 @@ AddressSanitizer, statische Analyse und Coverage sowie Format-, Qualitaets-,
 Referenz-, Lizenz- und Datenaudits bestanden. Der Lauf verwendete nur
 synthetische und Homebrew-Eingaben. Details und die transparent dokumentierte
 Korrektur eines veralteten Metadaten-Testumfangs stehen in
-[`V045_GATE.md`](V045_GATE.md). KR-4505 bleibt bis zur ausdruecklichen
-Nutzerfreigabe offen; es wurden weder Version, Release, Tag noch Paket erzeugt.
+[`V045_GATE.md`](V045_GATE.md). KR-4505 wurde am 16.07.2026 ausdruecklich
+durch den Nutzer freigegeben. Damit darf v0.46 beginnen; es wurden weder
+Produktversion, Release, Tag noch Paket erzeugt.
 
 ## Letztes Release-Gate: v0.37.0
 

@@ -32,7 +32,9 @@ synthetische und Homebrew-Bootanalyse, nicht Sonic-Adventure-Boot oder
 Spielbarkeit. Es wurden weder Release-Commit noch Tag, Paket oder
 Veroeffentlichung erzeugt.
 
-## Reviewgrenze
+## Reviewfreigabe
 
-KR-4505 bleibt offen. Ohne ausdrueckliche Nutzerfreigabe darf weder der interne
-v0.45-Meilenstein freigegeben noch mit v0.46 begonnen werden.
+Der Nutzer hat die unveraenderte Gate-Vorbereitung am 16.07.2026 ausdruecklich
+freigegeben. KR-4505 schliesst damit nur den internen v0.45-Meilenstein ab und
+erlaubt den Beginn von v0.46. Die Freigabe erzeugt keinen Release, Tag, Download
+oder veroeffentlichtes Paket.

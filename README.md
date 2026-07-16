@@ -1,6 +1,6 @@
 # KatanaRecomp
 
-Aktueller interner Pre-Alpha-Meilenstein: `0.44.0`
+Aktueller interner Pre-Alpha-Meilenstein: `0.45.0`
 
 KatanaRecomp ist ein unabhaengiges C++20-Framework fuer die statische
 Rekompilierung von Sega-Dreamcast-SH-4-Code. Das Projekt ist kein Emulator,
@@ -54,7 +54,7 @@ redigierte Buildlog live an und erzeugt bei vollstaendiger Analyse
 Ergebnisindex und Buildplan als Debuggrundlage erhalten; ein irrefuehrender
 Hostbuild wird nicht erzeugt.
 
-Der sichtbare interne Meilenstein `0.44.0` ist kein Produktrelease. CLI,
+Der sichtbare interne Meilenstein `0.45.0` ist kein Produktrelease. CLI,
 Fenstertitel, Jobberichte, Buildplan und Provenienz verwenden gemeinsam die
 kanonische Werkzeugversion aus `VERSION`/CMake.
 

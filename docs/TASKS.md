@@ -2576,7 +2576,7 @@ Umfang und Akzeptanz:
 - `KR_V045_BOOT_ANALYSIS_READY` reproduzierbar belegen
 - danach vor KR-4505 fuer das Nutzerreview stoppen
 
-### [ ] KR-4505 - v0.45 interne Meilenstein-Freigabe
+### [x] KR-4505 - v0.45 interne Meilenstein-Freigabe
 
 Abhaengigkeiten: KR-4504
 
