@@ -35,6 +35,8 @@ class EventScheduler {
                                                SchedulerCallback callback);
     [[nodiscard]] SchedulerEventId schedule_after(std::uint64_t guest_cycles,
                                                   SchedulerCallback callback);
+    [[nodiscard]] SchedulerEventId schedule_at_or_now(std::uint64_t requested_guest_cycle,
+                                                      SchedulerCallback callback);
 
     [[nodiscard]] bool cancel(SchedulerEventId event_id) noexcept;
     [[nodiscard]] SchedulerResetObserverId add_reset_observer(SchedulerResetCallback callback);

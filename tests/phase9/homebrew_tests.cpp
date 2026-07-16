@@ -32,7 +32,8 @@ int main() {
                     handoff.dynamic_vectors == 5u && handoff.prefetches == 1u &&
                     handoff.store_queue_observed && handoff.invalidations == 1u &&
                     handoff.analysis_complete && handoff.generated_cpp_complete &&
-                    handoff.dispatch_complete,
+                    handoff.dispatch_complete && handoff.stale_dispatch_rejected &&
+                    handoff.executed_blocks == 2u,
                 "Synthetischer Firmware-Handoff erreicht Analyse, Codegen, Aliasdispatch oder "
                 "Invalidierung nicht.");
 
@@ -45,7 +46,8 @@ int main() {
                     first.frame_height == 240u && first.frame_rgba_bytes == 320u * 240u * 4u &&
                     first.audio_buffers >= 1u && first.maple_transactions >= 1u &&
                     first.dma_units == 1u && first.interrupts == 1u && first.invalidations == 1u &&
-                    first.replay_events == 7u && first.guest_cycles >= 4u &&
+                    first.replay_events >= 12u && first.guest_cycles >= 4u &&
+                    first.scheduler_jitter == 1u && first.fallback_count == 0u &&
                     first.silent_failures == 0u && first.console_output == "KATANA-HOMEBREW-OK",
                 "Zusammenhaengendes Homebrew-Testspiel erreicht keinen vollstaendigen Hostframe.");
         require(first_json == second_json && first.state_hash == second.state_hash &&

@@ -2,6 +2,7 @@
 
 #include "katana/runtime/system_replay.hpp"
 
+#include <algorithm>
 #include <limits>
 #include <stdexcept>
 #include <utility>
@@ -36,6 +37,11 @@ SchedulerEventId EventScheduler::schedule_after(const std::uint64_t guest_cycles
         throw std::overflow_error("Scheduler-Zielzyklus ist uebergelaufen.");
     }
     return schedule_at(current_cycle_ + guest_cycles, std::move(callback));
+}
+
+SchedulerEventId EventScheduler::schedule_at_or_now(const std::uint64_t requested_guest_cycle,
+                                                    SchedulerCallback callback) {
+    return schedule_at(std::max(requested_guest_cycle, current_cycle_), std::move(callback));
 }
 
 bool EventScheduler::cancel(const SchedulerEventId event_id) noexcept {

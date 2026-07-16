@@ -43,7 +43,7 @@ int main() {
         profiler.record_edge(0x8C001000u, 0x8C002000u);
         profiler.record_edge(0x8C001000u, 0x8C002000u);
         profiler.record_edge(0x8C002000u, 0x8C003000u);
-        profiler.record_fallback("unknown-code");
+        profiler.record_fallback(ProfileFallbackReason::UnknownInstruction);
         profiler.record_invalidation(0x0C001000u);
         require_profile_identity(profiler.snapshot(), identity);
         const auto blocks = hot_blocks(profiler.snapshot());
@@ -53,7 +53,7 @@ int main() {
                 "Hot-Block- oder Hot-Edge-Sortierung ist nicht deterministisch.");
         const auto profile_json = format_execution_profile_json(profiler.snapshot());
         require(profile_json.find("katana-execution-profile") != std::string::npos &&
-                    profile_json.find("unknown-code") != std::string::npos &&
+                    profile_json.find("unknown-instruction") != std::string::npos &&
                     profile_json.find("C:\\") == std::string::npos,
                 "Profilformat verliert Schema, Zaehler oder Portabilitaet.");
         auto wrong_identity = identity;
@@ -61,6 +61,16 @@ int main() {
         require(
             throws_invalid([&] { require_profile_identity(profiler.snapshot(), wrong_identity); }),
             "Profil mit falscher Eingabeidentitaet wurde akzeptiert.");
+        auto malformed_identity = identity;
+        malformed_identity.input_sha256[0] = 'z';
+        require(throws_invalid(
+                    [&] { require_profile_identity(profiler.snapshot(), malformed_identity); }),
+                "Profil mit nichthexadezimaler Eingabeidentitaet wurde akzeptiert.");
+        auto wrong_backend = identity;
+        ++wrong_backend.backend_abi;
+        require(
+            throws_invalid([&] { require_profile_identity(profiler.snapshot(), wrong_backend); }),
+            "Profil mit fremder Backend-ABI wurde akzeptiert.");
 
         ExecutionProfiler sampled(ProfilingMode::Sampled, identity, 2u);
         sampled.record_block(1u);
@@ -93,7 +103,7 @@ int main() {
         const auto watchpoint = memory.add_watchpoint(
             0x1000u, 4u, MemoryWatchpointAccess::Read, [&](const auto&) { ++watched; });
         auto guarded = valid;
-        guarded.watchpoints_absent = false;
+        guarded.watchpoints_absent = true;
         require(fastpath.read_u32(0x1000u, guarded) == 0x11223344u && watched == 1u &&
                     fastpath.misses() == 1u,
                 "Watchpoint-Waechter faellt nicht in den generischen Speicherpfad zurueck.");
@@ -136,6 +146,23 @@ int main() {
         cache.invalidate(cache.entry()->block_identity);
         require(!cache.entry().has_value(),
                 "Explizite Blockinvalidierung leert den Inline-Cache nicht.");
+
+        CpuState returning_cpu;
+        returning_cpu.pr = 0x8C001000u;
+        const IndirectDispatchRequest return_request{IndirectDispatchKind::Return,
+                                                     0x8C000200u,
+                                                     0xDEADBEEFu,
+                                                     0u,
+                                                     {0x8C000200u, 0x0C000200u},
+                                                     variant};
+        MonomorphicDispatchCache return_cache;
+        const auto first_return = return_cache.dispatch(returning_cpu, table, return_request, 1u);
+        returning_cpu.pr = 0x8C001000u;
+        const auto cached_return = return_cache.dispatch(returning_cpu, table, return_request, 1u);
+        require(first_return.diagnostic_target == 0x8C001000u &&
+                    cached_return.diagnostic_target == 0x8C001000u &&
+                    returning_cpu.pc == 0x8C001000u && return_cache.hits() == 1u,
+                "Monomorpher Return-Cache verwendet nicht das aktuelle PR-Ziel.");
 
         require(decide_inline(16u, 8u, false, 32u).inline_call &&
                     !decide_inline(2u, 8u, false, 32u).inline_call &&

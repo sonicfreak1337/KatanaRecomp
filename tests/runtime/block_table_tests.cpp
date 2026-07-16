@@ -91,6 +91,10 @@ int main() {
                                 false});
         require(table.lookup(0x8C001000u, other_variant)->physical_origin == 0x0D001000u,
                 "Blockvarianten koennen keine geaenderte physische Herkunft tragen.");
+        const auto identity = stable_runtime_block_identity(*table.lookup(0xAC001000u, base));
+        require(table.erase_identity(identity) && table.lookup(0xAC001000u, base) == nullptr &&
+                    table.size() == 2u && !table.erase_identity(identity),
+                "Gezielte Blockinvalidierung entfernt nicht genau die stabile Identitaet.");
     } catch (const std::exception& error) {
         std::cerr << error.what() << '\n';
         return 1;

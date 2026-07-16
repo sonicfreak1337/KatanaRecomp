@@ -53,4 +53,11 @@ semantikfrei; deaktiviertes Profiling darf den Gastzustand nicht aendern.
 - LTO und PGO werden erst nach dem Alpha anhand realer Profile bewertet
 
 Jede Faehigkeitsaussage der Matrix nennt einen automatisierten Test oder den
-expliziten lokalen Nichtverfuegbarkeitscheck.
+expliziten lokalen Nichtverfuegbarkeitscheck. Der aktuelle lokale Nachweis ist
+Windows/MSVC-only; ein Linux-Lauf wurde auf diesem Host mangels Linux-Runner
+nicht ausgefuehrt.
+
+Das derzeitige achtteilige synthetische Korpus qualifiziert kleine SH-4-Probes
+durch Laden, Analyse, Lowering und C++-Emission. Es ist noch kein Satz aus acht
+eigenstaendigen, kompilierten und ausgefuehrten Homebrew-Anwendungen; KR-3801
+bis KR-3806 bleiben deshalb offen.

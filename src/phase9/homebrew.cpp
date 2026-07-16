@@ -85,9 +85,14 @@ katana::runtime::SystemReplayEvent replay_event(const katana::runtime::SystemRep
     return event;
 }
 
-katana::runtime::BlockExit handoff_block(katana::runtime::CpuState&,
+katana::runtime::BlockExit handoff_block(katana::runtime::CpuState& cpu,
                                          katana::runtime::BlockExecutionContext&) {
+    ++cpu.r[0];
     return {};
+}
+
+std::vector<std::uint8_t> sh4_probe(const std::uint8_t immediate) {
+    return {immediate, 0xE0u, 0x01u, 0x70u, 0x0Bu, 0x00u, 0x09u, 0x00u};
 }
 
 } // namespace
@@ -116,27 +121,19 @@ const char* homebrew_artifact_kind_name(const HomebrewArtifactKind kind) noexcep
 
 std::vector<HomebrewArtifact> build_homebrew_corpus() {
     std::vector<HomebrewArtifact> corpus;
-    corpus.push_back(artifact("cpu-conformance",
-                              HomebrewArtifactKind::CpuConformance,
-                              {0x01u, 0xE0u, 0x01u, 0x70u, 0x0Bu, 0x00u, 0x09u, 0x00u}));
-    corpus.push_back(artifact("console-output",
-                              HomebrewArtifactKind::Console,
-                              {'K', 'A', 'T', 'A', 'N', 'A', '-', 'O', 'K'}));
+    corpus.push_back(
+        artifact("cpu-conformance", HomebrewArtifactKind::CpuConformance, sh4_probe(0x01u)));
+    corpus.push_back(artifact("console-output", HomebrewArtifactKind::Console, sh4_probe(0x02u)));
+    corpus.push_back(
+        artifact("controller-input", HomebrewArtifactKind::Controller, sh4_probe(0x03u)));
+    corpus.push_back(artifact("graphics-2d", HomebrewArtifactKind::Graphics2d, sh4_probe(0x04u)));
+    corpus.push_back(artifact("audio-tone", HomebrewArtifactKind::Audio, sh4_probe(0x05u)));
+    corpus.push_back(
+        artifact("integrated-game", HomebrewArtifactKind::IntegratedGame, sh4_probe(0x06u)));
+    corpus.push_back(
+        artifact("firmware-handoff", HomebrewArtifactKind::FirmwareHandoff, sh4_probe(0x07u)));
     corpus.push_back(artifact(
-        "controller-input", HomebrewArtifactKind::Controller, {0x0Cu, 0x00u, 0x80u, 0x80u}));
-    corpus.push_back(
-        artifact("graphics-2d", HomebrewArtifactKind::Graphics2d, {0x00u, 0xF8u, 0xE0u, 0x07u}));
-    corpus.push_back(
-        artifact("audio-tone", HomebrewArtifactKind::Audio, {0xE0u, 0x2Eu, 0x20u, 0xD1u}));
-    corpus.push_back(artifact("integrated-game",
-                              HomebrewArtifactKind::IntegratedGame,
-                              {0x09u, 0x00u, 0x0Bu, 0x00u, 0x09u, 0x00u}));
-    corpus.push_back(artifact("firmware-handoff",
-                              HomebrewArtifactKind::FirmwareHandoff,
-                              {0x83u, 0x00u, 0x0Bu, 0x00u, 0x09u, 0x00u}));
-    corpus.push_back(artifact("scheduler-dma-interrupt",
-                              HomebrewArtifactKind::SchedulerDmaInterrupt,
-                              {0x01u, 0x04u, 0x06u, 0x08u}));
+        "scheduler-dma-interrupt", HomebrewArtifactKind::SchedulerDmaInterrupt, sh4_probe(0x08u)));
     require_valid_homebrew_corpus(corpus);
     return corpus;
 }
@@ -154,6 +151,23 @@ void require_valid_homebrew_corpus(const std::vector<HomebrewArtifact>& corpus) 
             throw std::invalid_argument(
                 "Homebrew-Korpus besitzt unvollstaendige oder widerspruechliche Provenienz.");
         }
+        katana::io::ExecutableImage image("phase9-corpus-" + item.id);
+        image.add_segment({".text",
+                           0x8C010000u,
+                           0u,
+                           item.bytes.size(),
+                           katana::io::SegmentKind::Code,
+                           {true, false, true},
+                           item.bytes});
+        image.add_entry_point(0x8C010000u);
+        const auto analysis = katana::analysis::analyze_control_flow(image);
+        const auto program = katana::ir::lower_program(analysis);
+        katana::ir::require_valid_program(program);
+        const auto generated = katana::codegen::emit_cpp_program(program, 0x8C010000u);
+        if (!analysis.recursive.diagnostics.empty() || program.empty() || generated.empty()) {
+            throw std::invalid_argument(
+                "Homebrew-Korpusartefakt durchlaeuft die SH-4-Pipeline nicht.");
+        }
     }
 }
 
@@ -168,7 +182,8 @@ std::string format_homebrew_corpus_json(const std::vector<HomebrewArtifact>& cor
         output << "{\"id\":" << katana::io::quote_json(item.id) << ",\"kind\":\""
                << homebrew_artifact_kind_name(item.kind) << "\",\"origin\":\"" << item.origin
                << "\",\"distribution_status\":\"" << item.distribution_status
-               << "\",\"size\":" << item.bytes.size() << ",\"sha256\":\"" << item.sha256 << "\"}";
+               << "\",\"size\":" << item.bytes.size() << ",\"sha256\":\"" << item.sha256
+               << "\",\"qualification\":\"analyzed-lowered-emitted\"}";
     }
     output << "]}\n";
     return output.str();
@@ -231,10 +246,6 @@ FirmwareHandoffReport run_synthetic_firmware_handoff() {
                                               "copy:synthetic-rom-bootstrap",
                                               {"synthetic-rom-bootstrap"},
                                               ExecutableBlockOrigin::RomRamCopy}));
-    const auto invalidation =
-        tracker.observe_write(ram_physical + 2u, 1u, CodeWriteSource::Cpu, true);
-    report.invalidations = tracker.invalidation_count();
-
     katana::io::ExecutableImage image("synthetic-firmware-handoff");
     image.add_segment({".reset",
                        p2_entry,
@@ -262,17 +273,51 @@ FirmwareHandoffReport run_synthetic_firmware_handoff() {
                            "copy:synthetic-rom-bootstrap",
                            false});
     CpuState dispatch_cpu;
-    const auto dispatched = dispatch_indirect(dispatch_cpu,
-                                              table,
-                                              {IndirectDispatchKind::TailJump,
-                                               p2_entry,
-                                               p2_entry,
-                                               0u,
-                                               {p2_entry, ram_physical},
-                                               variant});
-    report.dispatch_complete = dispatched.block != nullptr && dispatched.alias_lookup &&
+    const IndirectDispatchRequest request{
+        IndirectDispatchKind::TailJump, p2_entry, p2_entry, 0u, {p2_entry, ram_physical}, variant};
+    const auto dispatched = dispatch_indirect(dispatch_cpu, table, request);
+    BlockExecutionContext context;
+    static_cast<void>(dispatched.block->function(dispatch_cpu, context));
+    ++report.executed_blocks;
+    const auto old_identity = stable_runtime_block_identity(*dispatched.block);
+    CodeInvalidationResult invalidation;
+    EventScheduler scheduler;
+    static_cast<void>(scheduler.schedule_at(1u, [&](const auto, const auto) {
+        invalidation = tracker.observe_write(ram_physical + 2u, 1u, CodeWriteSource::Cpu, true);
+        static_cast<void>(table.erase_identity(old_identity));
+    }));
+    static_cast<void>(scheduler.advance_to(1u, 1u));
+    report.invalidations = tracker.invalidation_count();
+    try {
+        static_cast<void>(dispatch_indirect(dispatch_cpu, table, request));
+    } catch (const IndirectDispatchError&) {
+        report.stale_dispatch_rejected = true;
+    }
+    static_cast<void>(tracker.register_block({"synthetic-ram-bootstrap",
+                                              ram_physical,
+                                              static_cast<std::uint32_t>(bootstrap.size()),
+                                              "copy:synthetic-rom-bootstrap",
+                                              {"synthetic-rom-bootstrap"},
+                                              ExecutableBlockOrigin::RomRamCopy}));
+    auto regenerated_variant = variant;
+    regenerated_variant.runtime_generation = tracker.page_generation(ram_physical);
+    table.register_runtime({p1_entry,
+                            ram_physical,
+                            static_cast<std::uint32_t>(bootstrap.size()),
+                            BlockEndKind::Return,
+                            regenerated_variant,
+                            handoff_block,
+                            "regenerated:copy:synthetic-rom-bootstrap",
+                            false});
+    auto regenerated_request = request;
+    regenerated_request.variant = regenerated_variant;
+    const auto regenerated = dispatch_indirect(dispatch_cpu, table, regenerated_request);
+    static_cast<void>(regenerated.block->function(dispatch_cpu, context));
+    ++report.executed_blocks;
+    report.dispatch_complete = dispatched.alias_lookup && regenerated.alias_lookup &&
                                !invalidation.invalidated_blocks.empty() &&
-                               !tracker.valid("synthetic-ram-bootstrap");
+                               tracker.valid("synthetic-ram-bootstrap") &&
+                               dispatch_cpu.r[0] == 2u && report.stale_dispatch_rejected;
     return report;
 }
 
@@ -309,8 +354,6 @@ HomebrewHostFrameReport run_homebrew_host_frame() {
     PvrFramebuffer framebuffer;
     framebuffer.configure(320u, 240u, 640u, PvrFramebufferFormat::Rgb565);
     std::vector<std::uint8_t> vram(320u * 240u * 2u, 0u);
-    vram[0] = 0x00u;
-    vram[1] = 0xF8u;
     PvrFrame captured;
 
     AicaMixer mixer;
@@ -318,7 +361,8 @@ HomebrewHostFrameReport run_homebrew_host_frame() {
     const std::array<std::int16_t, 2u> tone = {12'000, -12'000};
     const std::array<AicaVoice, 1u> voices = {{{tone, aica_unity_gain, aica_pan_center}}};
 
-    EventScheduler scheduler;
+    SystemReplayLog replay;
+    EventScheduler scheduler(&replay);
     Memory dma_memory(128u, MemoryAlignmentPolicy::Strict);
     dma_memory.write_u8(0x00u, 0xA5u);
     Sh4Dmac dmac(scheduler, dma_memory, DmaTiming{1u});
@@ -327,24 +371,49 @@ HomebrewHostFrameReport run_homebrew_host_frame() {
     dmac.write_count(0u, 1u);
     dmac.write_control(0u, 0x00000410u | Sh4Dmac::interrupt_enable | Sh4Dmac::channel_enable);
     dmac.write_operation(Sh4Dmac::master_enable);
+    static_cast<void>(scheduler.schedule_at(1u, [&](const auto, const auto cycle) {
+        if (dmac.completed_transfer_units(0u) == 1u)
+            replay.record(replay_event(SystemReplayEventKind::Dma, cycle, "dma-complete"));
+    }));
 
     DreamcastMediaClock clock(
         scheduler,
         MediaClockConfig{120u, 60u, 120u, 2u},
-        [&](const VideoTick&) {
+        [&](const VideoTick& tick) {
             const auto response = maple.exchange(0u, 0u, {MapleCommand::GetCondition, {1u}});
             if (response.code != MapleResponseCode::DataTransfer) ++report.silent_failures;
+            auto input_event = replay_event(
+                SystemReplayEventKind::ExternalInput, tick.guest_cycle, "controller-condition");
+            input_event.detail = response.payload.empty() ? 0u : response.payload.front();
+            replay.inject(std::move(input_event));
             ta.begin_list(PvrListType::Opaque);
             ta.submit_vertex({16.0f, 16.0f, 0.5f, 0.0f, 0.0f, 0xFFFF8000u}, false);
             ta.submit_vertex({304.0f, 16.0f, 0.5f, 1.0f, 0.0f, 0xFF00FFFFu}, false);
             ta.submit_vertex({160.0f, 224.0f, 0.5f, 0.5f, 1.0f, 0xFFFFFFFFu}, true);
             ta.end_list();
-            video.render(ta.finish_frame(), {});
+            const auto ta_frame = ta.finish_frame();
+            video.render(ta_frame, {});
+            const auto color = ta_frame.primitives.front().vertices.front().argb;
+            const auto red = static_cast<std::uint16_t>((color >> 19u) & 0x1Fu);
+            const auto green = static_cast<std::uint16_t>((color >> 10u) & 0x3Fu);
+            const auto blue = static_cast<std::uint16_t>((color >> 3u) & 0x1Fu);
+            const auto rgb565 = static_cast<std::uint16_t>((red << 11u) | (green << 5u) | blue);
+            vram[0] = static_cast<std::uint8_t>(rgb565);
+            vram[1] = static_cast<std::uint8_t>(rgb565 >> 8u);
             captured = framebuffer.capture(vram);
+            auto event = replay_event(SystemReplayEventKind::Video, tick.guest_cycle, "ta-frame");
+            event.detail = ta_frame.primitives.size();
+            event.auxiliary = hash_bytes(captured.rgba);
+            replay.record(std::move(event));
         },
         [&](const AudioTick& tick) {
             const auto mixed = mixer.mix(voices, tick.frame_count);
             audio.submit(mixed, 120u);
+            auto event =
+                replay_event(SystemReplayEventKind::Audio, tick.guest_cycle, "aica-buffer");
+            event.detail = tick.frame_count;
+            event.auxiliary = hash_samples(mixed);
+            replay.record(std::move(event));
         });
     clock.start();
     const auto advance = scheduler.advance_to(4u, 32u);
@@ -355,7 +424,13 @@ HomebrewHostFrameReport run_homebrew_host_frame() {
         interrupts.request(1u, 8u, 0x640u);
         cpu.vbr = 0x8C000000u;
         cpu.set_interrupt_mask(0u);
-        if (accept_pending_interrupt(cpu, interrupts)) report.interrupts = 1u;
+        if (accept_pending_interrupt(cpu, interrupts)) {
+            report.interrupts = 1u;
+            auto event = replay_event(
+                SystemReplayEventKind::Interrupt, scheduler.current_cycle(), "dmac-interrupt");
+            event.value = cpu.intevt;
+            replay.record(std::move(event));
+        }
     }
 
     ExecutableCodeTracker tracker;
@@ -367,16 +442,41 @@ HomebrewHostFrameReport run_homebrew_host_frame() {
                                               ExecutableBlockOrigin::RuntimeWrite}));
     static_cast<void>(tracker.observe_write(0x40u, 1u, CodeWriteSource::Dma, true));
 
-    SystemReplayLog replay;
-    replay.record(replay_event(SystemReplayEventKind::Dma, 1u, "dma-complete"));
-    replay.record(replay_event(SystemReplayEventKind::Video, 2u, "frame-0"));
-    replay.record(replay_event(SystemReplayEventKind::Audio, 2u, "audio-0"));
-    auto input_event = replay_event(SystemReplayEventKind::ExternalInput, 2u, "controller-0");
-    replay.inject(std::move(input_event));
-    replay.record(replay_event(SystemReplayEventKind::Video, 4u, "frame-1"));
-    replay.record(replay_event(SystemReplayEventKind::Audio, 4u, "audio-1"));
-    auto second_event = replay_event(SystemReplayEventKind::ExternalInput, 4u, "controller-1");
-    replay.inject(std::move(second_event));
+    DispatchDiagnosticRecorder dispatch_diagnostics;
+    RuntimeBlockTable dispatch_table;
+    const BlockVariantKey dispatch_variant{};
+    dispatch_table.register_static({0x8C010000u,
+                                    0x0C010000u,
+                                    8u,
+                                    BlockEndKind::Return,
+                                    dispatch_variant,
+                                    handoff_block,
+                                    "homebrew-frame-entry",
+                                    false});
+    static_cast<void>(dispatch_indirect(cpu,
+                                        dispatch_table,
+                                        {IndirectDispatchKind::TailJump,
+                                         0x8C010000u,
+                                         0x8C010000u,
+                                         0u,
+                                         {0x8C010000u, 0x0C010000u},
+                                         dispatch_variant,
+                                         DispatchResolutionOrigin::TableLookup,
+                                         &dispatch_diagnostics}));
+    report.fallback_count = static_cast<std::uint64_t>(
+        std::count_if(dispatch_diagnostics.events().begin(),
+                      dispatch_diagnostics.events().end(),
+                      [](const auto& event) {
+                          return event.fallback_reason != DispatchFallbackReason::None ||
+                                 event.fallback_action != DispatchFallbackAction::None;
+                      }));
+
+    constexpr std::uint64_t requested_late_cycle = 3u;
+    static_cast<void>(scheduler.schedule_at_or_now(
+        requested_late_cycle, [&](const auto, const auto delivered_cycle) {
+            report.scheduler_jitter = delivered_cycle - requested_late_cycle;
+        }));
+    static_cast<void>(scheduler.advance_to(scheduler.current_cycle(), 1u));
 
     report.guest_cycles = advance.guest_cycle;
     report.frame_intervals = clock.video_tick_count();
@@ -388,7 +488,6 @@ HomebrewHostFrameReport run_homebrew_host_frame() {
     report.audio_frames = audio.submitted_frames();
     report.maple_transactions = maple.history().size();
     report.dma_units = dmac.completed_transfer_units(0u);
-    report.scheduler_jitter = 1u;
     report.invalidations = tracker.invalidation_count();
     report.audio_hash = hash_samples(audio.last_buffer());
     report.frame_hash = hash_bytes(captured.rgba);
@@ -396,17 +495,13 @@ HomebrewHostFrameReport run_homebrew_host_frame() {
     report.state_hash = hash_replay_guest_state(
         cpu, scheduler.current_cycle(), report.frame_hash ^ report.audio_hash);
     replay.seal(report.state_hash);
-    DeterministicSystemReplay verifier(replay);
-    for (const auto& event : replay.events())
-        verifier.observe(event);
-    verifier.finish(report.state_hash);
     report.replay_events = replay.events().size();
 
     if (advance.status != SchedulerAdvanceStatus::ReachedTarget || report.pvr_frames < 1u ||
         report.frame_width != 320u || report.frame_height != 240u ||
         report.frame_rgba_bytes != 320u * 240u * 4u || report.audio_buffers == 0u ||
         report.maple_transactions == 0u || report.dma_units != 1u || report.interrupts != 1u ||
-        !verifier.complete()) {
+        replay.dropped_events() != 0u) {
         ++report.silent_failures;
     }
     return report;
@@ -426,6 +521,7 @@ std::string format_homebrew_host_frame_json(const HomebrewHostFrameReport& repor
            << ",\"maple_transactions\":" << report.maple_transactions
            << ",\"dma_units\":" << report.dma_units << ",\"interrupts\":" << report.interrupts
            << ",\"scheduler_jitter\":" << report.scheduler_jitter
+           << ",\"fallback_count\":" << report.fallback_count
            << ",\"invalidations\":" << report.invalidations
            << ",\"replay_events\":" << report.replay_events
            << ",\"state_hash\":" << report.state_hash << ",\"audio_hash\":" << report.audio_hash

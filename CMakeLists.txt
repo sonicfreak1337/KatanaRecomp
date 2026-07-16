@@ -41,6 +41,12 @@ option(
     OFF
 )
 
+option(
+    KATANA_BUILD_DESKTOP_GUI
+    "Build the optional native desktop shell"
+    ON
+)
+
 if(KATANA_ENABLE_SANITIZERS)
     if(MSVC)
         string(REPLACE "/RTC1" "" CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG}")
@@ -283,6 +289,10 @@ target_include_directories(
         ${CMAKE_CURRENT_SOURCE_DIR}/include
 )
 target_link_libraries(katana_app PUBLIC katana_core katana_runtime)
+target_compile_definitions(
+    katana_app
+    PRIVATE KATANA_RECOMP_SOURCE_ROOT="${CMAKE_CURRENT_SOURCE_DIR}"
+)
 katana_enable_warnings(katana_app)
 
 add_library(katana_gui STATIC
@@ -363,34 +373,43 @@ target_compile_definitions(
 
 katana_enable_warnings(katana-recomp)
 
-add_executable(katana-recomp-gui
-    src/gui/main.cpp
-)
-target_link_libraries(katana-recomp-gui PRIVATE katana_gui)
-if(WIN32)
-    target_link_libraries(katana-recomp-gui PRIVATE comdlg32 user32)
-elseif(UNIX AND NOT APPLE)
-    find_package(X11 REQUIRED)
-    target_link_libraries(katana-recomp-gui PRIVATE X11::X11)
-else()
-    message(FATAL_ERROR "The Phase-10 desktop shell supports Windows and Linux only")
+set(KATANA_DESKTOP_GUI_AVAILABLE ${KATANA_BUILD_DESKTOP_GUI})
+if(KATANA_DESKTOP_GUI_AVAILABLE AND UNIX AND NOT APPLE)
+    find_package(X11 QUIET)
+    if(NOT X11_FOUND)
+        set(KATANA_DESKTOP_GUI_AVAILABLE OFF)
+        message(STATUS "X11 development files absent: building CLI/core without desktop GUI")
+    endif()
 endif()
-target_compile_definitions(
-    katana-recomp-gui
-    PRIVATE
-        KATANA_RECOMP_VERSION="${PROJECT_VERSION}"
-)
-katana_enable_warnings(katana-recomp-gui)
-configure_file(
-    ${CMAKE_CURRENT_SOURCE_DIR}/assets/gui/KatanaLogo.png
-    ${CMAKE_CURRENT_BINARY_DIR}/assets/KatanaLogo.png
-    COPYONLY
-)
-configure_file(
-    ${CMAKE_CURRENT_SOURCE_DIR}/assets/gui/asset-manifest.json
-    ${CMAKE_CURRENT_BINARY_DIR}/assets/asset-manifest.json
-    COPYONLY
-)
+if(KATANA_DESKTOP_GUI_AVAILABLE)
+    add_executable(katana-recomp-gui src/gui/main.cpp)
+    target_link_libraries(katana-recomp-gui PRIVATE katana_gui)
+    if(WIN32)
+        target_link_libraries(katana-recomp-gui PRIVATE user32)
+        add_subdirectory(src/gui/dialog)
+        add_dependencies(katana-recomp-gui katana-file-dialog)
+    elseif(UNIX AND NOT APPLE)
+        target_link_libraries(katana-recomp-gui PRIVATE X11::X11)
+    else()
+        message(FATAL_ERROR "The Phase-10 desktop shell supports Windows and Linux only")
+    endif()
+    target_compile_definitions(
+        katana-recomp-gui
+        PRIVATE
+            KATANA_RECOMP_VERSION="${PROJECT_VERSION}"
+    )
+    katana_enable_warnings(katana-recomp-gui)
+    configure_file(
+        ${CMAKE_CURRENT_SOURCE_DIR}/assets/gui/KatanaLogo.png
+        ${CMAKE_CURRENT_BINARY_DIR}/assets/KatanaLogo.png
+        COPYONLY
+    )
+    configure_file(
+        ${CMAKE_CURRENT_SOURCE_DIR}/assets/gui/asset-manifest.json
+        ${CMAKE_CURRENT_BINARY_DIR}/assets/asset-manifest.json
+        COPYONLY
+    )
+endif()
 
 enable_testing()
 
@@ -443,7 +462,12 @@ target_link_libraries(katana-phase10-gui-model-tests PRIVATE katana_gui)
 katana_enable_warnings(katana-phase10-gui-model-tests)
 add_test(NAME katana-phase10-gui-model-tests COMMAND katana-phase10-gui-model-tests)
 
-add_test(NAME katana-phase10-gui-minimal-start COMMAND katana-recomp-gui --smoke)
+if(TARGET katana-recomp-gui)
+    add_test(NAME katana-phase10-gui-minimal-start COMMAND katana-recomp-gui --smoke)
+    if(WIN32)
+        add_test(NAME katana-phase10-native-shell-lifecycle COMMAND katana-recomp-gui --native-smoke)
+    endif()
+endif()
 if(MSVC AND KATANA_ENABLE_SANITIZERS)
     add_test(
         NAME katana-phase10-msvc-asan-runtime

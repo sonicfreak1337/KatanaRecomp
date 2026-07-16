@@ -109,6 +109,15 @@ RuntimeBlockTable::aliases(const std::uint32_t physical_origin) const {
 std::size_t RuntimeBlockTable::size() const noexcept {
     return blocks_.size();
 }
+
+bool RuntimeBlockTable::erase_identity(const std::string& block_identity) noexcept {
+    const auto previous_size = blocks_.size();
+    std::erase_if(blocks_, [&](const auto& block) {
+        return stable_runtime_block_identity(block) == block_identity;
+    });
+    return blocks_.size() != previous_size;
+}
+
 void RuntimeBlockTable::clear() noexcept {
     blocks_.clear();
 }

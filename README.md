@@ -1,6 +1,6 @@
 # KatanaRecomp
 
-Aktueller interner Pre-Alpha-Meilenstein: `0.40.0`
+Aktueller interner Pre-Alpha-Meilenstein: `0.44.0`
 
 KatanaRecomp ist ein unabhaengiges C++20-Framework fuer die statische
 Rekompilierung von Sega-Dreamcast-SH-4-Code. Das Projekt ist kein Emulator,
@@ -25,23 +25,27 @@ Eingabe
   -> natives Hostprojekt
 ```
 
-Das kumulative Phase-9-Gate besteht **156/156 automatische Tests** im lokalen
-Debug-/ASan-/Coverage-Profil. Phasen 1 bis 9 sind abgeschlossen; Phase 10 ist
-bis zur erfolgreichen `KR-4402`-Gate-Vorbereitung umgesetzt. Der naechste
-Schritt ist das Nutzerreview vor der internen Freigabe `KR-4403`.
+Der aktuelle lokale Debug-Lauf umfasst **156 automatische Tests**. Phase 10 ist
+fuer den freigegebenen Windows-Workflow abgeschlossen: eine `.gdi` waehlen,
+einen Ausgabeordner waehlen und sichtbar bis `sourcecode/`, `game.exe` und
+`recompile.log` rekompilieren. Breitere Kompatibilitaet und die Linux-GUI sind
+kein Bestandteil dieser internen Windows-Freigabe.
 
 Der genaue aktuelle Stand steht in [docs/STATUS.md](docs/STATUS.md), die
 langfristige Planung in [ROADMAP.md](ROADMAP.md).
 
-Die Phase-10-Desktopanwendung wird nach dem Build mit folgendem Befehl
-gestartet:
+Die lokale, nicht versionierte Desktopanwendung wird direkt gestartet mit:
 
 ```powershell
-.\build-current\katana-recomp-gui.exe
+.\KatanaRecomp-GUI.exe
 ```
 
-CLI und GUI verwenden fuer Projektjobs denselben Dienst. Ein automatisierter
-Build-Preflight ist beispielsweise:
+Die GUI verlangt keine Projektdatei. Sie nimmt nur eine `.gdi` und einen
+Ausgabeordner entgegen, zeigt Analyse, Codegen und Hostbuild sowie das
+redigierte Buildlog live an und erzeugt `sourcecode/` und `game.exe`.
+
+CLI und GUI verwenden intern dieselben Loader-, Analyse-, Codegen- und
+Hostbuildkomponenten. Der entsprechende CLI-Pfad ist beispielsweise:
 
 ```powershell
 .\build-current\katana-recomp.exe workflow build .\project.katana --output .\work-output
@@ -73,7 +77,7 @@ KatanaRecomp ist weiterhin Pre-Alpha. Insbesondere fehlen noch:
 - vollstaendige SH-4- und FPU-Exception-Semantik
 - vollstaendige Dreamcast-Hardwaremodelle und ARM7-LLE
 - breitere Retail-Kompatibilitaet und Performanceoptimierung
-- Desktop-GUI und ausgereifter Quell-/Portworkflow
+- Linux-Desktop-GUI und weitergehende Komfort-/Diagnoseansichten
 - native Alpha-Portintegration und Windows-/Linux-Alpha-CI
 
 Diese Arbeiten sind in den Phasen 9 bis 11 der Roadmap aufgeteilt.

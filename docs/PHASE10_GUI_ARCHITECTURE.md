@@ -2,14 +2,15 @@
 
 ## Decision
 
-KatanaRecomp uses a small native C++20 desktop shell for the internal alpha
-scope. Windows uses Win32; Linux uses X11. Both shells link the same portable
+KatanaRecomp currently has an incomplete native C++20 desktop shell prototype.
+Windows uses Win32; Linux uses X11. Both shells link the same portable
 GUI model and application service. No browser runtime, interpreter, framework
 installer, or second manifest implementation is required.
 
-Supported internal alpha targets are Windows 10/11 x64 and contemporary x64
-Linux desktops with X11 compatibility. Wayland runs through XWayland for the
-alpha scope. Native Wayland and macOS are outside the alpha contract.
+The current Win32 shell exposes only the first project/job controls. The X11
+shell is a placeholder and is not an alpha-complete workflow. Linux CLI/core
+builds skip the desktop target when X11 development files are unavailable, or
+can disable it explicitly with `KATANA_BUILD_DESKTOP_GUI=OFF`.
 
 The decision keeps the package small, preserves the existing C++ ownership
 model, and avoids introducing a large toolkit shortly before the alpha. Its
@@ -38,13 +39,12 @@ Win32 / X11 shell
 - `katana-recomp workflow` and `katana-recomp-gui` call the same application
   service and therefore produce the same project identity and core artifacts.
 
-## Project and source contract
+## Source and output contract
 
-The version-2 `katana-project` manifest is the saved GUI project. Phase 10 adds
-`input.format = gdi` and optional `analysis.overrides` to that existing schema.
-Paths are serialized relative to the project where possible. Source bytes are
-never embedded. Saving first writes and parses a validation candidate before
-replacing the project file.
+The public GUI workflow has two inputs: one `.gdi` descriptor and one output
+directory. A version-2 `katana-project` manifest may be generated inside the
+temporary session to reuse core contracts, but is not a user-facing project
+concept. Source bytes are never embedded.
 
 The GDI inspector calls `parse_gdi_descriptor` directly. It exposes stable
 track number, descriptor line, role, LBA, sector size, offset, size, basename
@@ -59,8 +59,10 @@ stage names. Cancellation is checked before every expensive stage and before
 generated output is committed. Output conflicts are rejected by
 `JobCoordinator`; unrelated output roots may run concurrently.
 
-`run-preflight` intentionally ends after the shared analysis, codegen and
-build-plan checks. Native host execution belongs to the Phase-11 native
+`build` now invokes a real generated-code host compilation; GDI builds reuse
+the productive port exporter and build its host target. `run-preflight`
+intentionally ends after the shared analysis, codegen and host-build checks.
+Native host execution belongs to the Phase-11 native
 runtime scope. The GUI labels this boundary instead of pretending that a game
 was executed.
 
@@ -71,12 +73,15 @@ fields and serial identifiers are redacted.
 
 ## Accessibility, DPI and lifecycle
 
-The Windows shell is system-DPI aware and uses native tab stops. `F6` and
+The Windows shell selects the GDI and output directory, shows every recompilation
+stage, and exposes a read-only scrollable diagnostic log. It is system-DPI aware
+and uses native tab stops. `F6` and
 `Shift+F6` traverse the stable navigation order; `Escape` requests job
 cancellation. The portable model provides an accessible textual summary for
 screen-reader adapters and automation. Long jobs execute outside the window
 thread, while the shell refreshes observable progress.
 
+These behaviors are not yet covered by native control-level automation.
 Versioned settings validate theme, scale and recent-project limits. Invalid or
 future settings recover to safe defaults with a visible diagnostic. Closing
 with unsaved changes requires confirmation.

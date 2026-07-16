@@ -128,6 +128,13 @@ int main() {
     require(scheduler.advance_to(5u, 0u).guest_cycle == 5u,
             "Callbackfehler laesst den Scheduler faelschlich im Advance-Zustand.");
 
+    std::uint64_t late_delivery = 0u;
+    static_cast<void>(scheduler.schedule_at_or_now(
+        4u, [&](const auto, const auto delivered_cycle) { late_delivery = delivered_cycle - 4u; }));
+    static_cast<void>(scheduler.advance_to(5u, 1u));
+    require(late_delivery == 1u,
+            "Explizit verspaetet eingestelltes Ereignis misst nicht die echte Gastzykluslatenz.");
+
     scheduler.reset();
     require(scheduler.current_cycle() == 0u && scheduler.processed_event_count() == 0u &&
                 scheduler.pending_event_count() == 0u,

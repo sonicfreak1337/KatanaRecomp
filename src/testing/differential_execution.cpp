@@ -334,11 +334,12 @@ std::string format_differential_counterexample_json(const DifferentialReport& re
 }
 
 std::vector<DifferentialProgram> default_differential_corpus() {
-    return {{"delay-slot-owner", "delay-slots", 0x37070001u, 0x8C010000u, {0xA000u, 0x0009u}},
-            {"fpu-mode-boundary", "fpu-modes", 0x37070002u, 0x8C020000u, {0xF000u, 0xF08Du}},
-            {"mmu-translation", "mmu-translation", 0x37070003u, 0x8C030000u, {0x6012u, 0x2122u}},
-            {"store-queue-pref", "store-queues", 0x37070004u, 0x8C040000u, {0x0083u}},
-            {"bus-error-read", "bus-errors", 0x37070005u, 0x8C050000u, {0x6012u}}};
+    return {
+        {"delay-slot-owner", "delay-slots", 0x37070001u, 0x8C010000u, {0xA000u, 0x0009u}},
+        {"fpu-mode-boundary", "fpu-modes", 0x37070002u, 0x8C020000u, {0xF000u, 0xF08Du}},
+        {"memory-load-store", "memory-load-store", 0x37070003u, 0x8C030000u, {0x6012u, 0x2122u}},
+        {"store-queue-pref", "store-queues", 0x37070004u, 0x8C040000u, {0x0083u}},
+        {"bus-error-read", "bus-errors", 0x37070005u, 0x8C050000u, {0x6012u}}};
 }
 
 std::vector<DifferentialProgram> differential_regression_programs() {

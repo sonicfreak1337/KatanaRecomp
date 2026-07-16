@@ -1,9 +1,11 @@
 #include "katana/phase9/performance.hpp"
 
+#include "katana/codegen/backend.hpp"
 #include "katana/io/json_report.hpp"
 #include "katana/runtime/abi.hpp"
 
 #include <algorithm>
+#include <cctype>
 #include <iomanip>
 #include <sstream>
 #include <stdexcept>
@@ -20,6 +22,20 @@ const char* profiling_mode_name(const ProfilingMode mode) noexcept {
         return "exact";
     case ProfilingMode::Sampled:
         return "sampled";
+    }
+    return "unknown";
+}
+
+const char* fallback_reason_name(const ProfileFallbackReason reason) noexcept {
+    switch (reason) {
+    case ProfileFallbackReason::UnknownInstruction:
+        return "unknown-instruction";
+    case ProfileFallbackReason::UnknownIndirectTarget:
+        return "unknown-indirect-target";
+    case ProfileFallbackReason::UnsupportedRuntimeState:
+        return "unsupported-runtime-state";
+    case ProfileFallbackReason::InterpreterBoundary:
+        return "interpreter-boundary";
     }
     return "unknown";
 }
@@ -93,9 +109,8 @@ void ExecutionProfiler::record_indirect_call(const std::uint32_t callsite) {
     if (selected()) ++snapshot_.indirect_callsites[callsite];
 }
 
-void ExecutionProfiler::record_fallback(std::string reason) {
-    if (reason.empty()) throw std::invalid_argument("Fallbackprofil braucht einen stabilen Grund.");
-    if (selected()) ++snapshot_.fallbacks[std::move(reason)];
+void ExecutionProfiler::record_fallback(const ProfileFallbackReason reason) {
+    if (selected()) ++snapshot_.fallbacks[fallback_reason_name(reason)];
 }
 
 void ExecutionProfiler::record_invalidation(const std::uint32_t physical_page) {
@@ -112,8 +127,14 @@ const ProfileSnapshot& ExecutionProfiler::snapshot() const noexcept {
 
 void require_profile_identity(const ProfileSnapshot& profile,
                               const ExecutionProfileIdentity& expected) {
-    if (profile.identity != expected || expected.input_sha256.size() != 64u ||
-        expected.runtime_abi != katana::runtime::abi_version) {
+    const auto valid_hash =
+        expected.input_sha256.size() == 64u &&
+        std::all_of(expected.input_sha256.begin(),
+                    expected.input_sha256.end(),
+                    [](const unsigned char character) { return std::isxdigit(character) != 0; });
+    if (profile.identity != expected || !valid_hash ||
+        expected.runtime_abi != katana::runtime::abi_version ||
+        expected.backend_abi != katana::codegen::backend_interface_abi_version) {
         throw std::invalid_argument("Ausfuehrungsprofil passt nicht zu Eingabe oder ABI.");
     }
 }
@@ -229,7 +250,12 @@ std::size_t GuardedMemoryFastpath::offset(const std::uint32_t address) const {
 
 std::uint32_t GuardedMemoryFastpath::read_u32(const std::uint32_t address,
                                               const FastMemoryGuard& guard) {
-    const auto outcome = evaluate_fast_memory_guard(guard, false);
+    auto verified = guard;
+    verified.linear_ram = memory_.maps_device(address, 4u, linear_.get());
+    verified.aligned = (address & 3u) == 0u;
+    verified.watchpoints_absent = memory_.watchpoint_count() == 0u && !memory_.has_trace_handler();
+    verified.mmio_absent = verified.linear_ram;
+    const auto outcome = evaluate_fast_memory_guard(verified, false);
     if (profiler_) profiler_->record_guard(outcome);
     if (outcome != GuardOutcome::Hit) {
         ++misses_;
@@ -247,7 +273,22 @@ std::uint32_t GuardedMemoryFastpath::read_u32(const std::uint32_t address,
 void GuardedMemoryFastpath::write_u32(const std::uint32_t address,
                                       const std::uint32_t value,
                                       const FastMemoryGuard& guard) {
-    const auto outcome = evaluate_fast_memory_guard(guard, true);
+    auto verified = guard;
+    verified.linear_ram = memory_.maps_device(address, 4u, linear_.get());
+    verified.aligned = (address & 3u) == 0u;
+    verified.watchpoints_absent = memory_.watchpoint_count() == 0u && !memory_.has_trace_handler();
+    verified.mmio_absent = verified.linear_ram;
+    verified.writable = false;
+    for (std::size_t index = 0u; index < memory_.region_count(); ++index) {
+        const auto& region = memory_.region(index);
+        const auto end = static_cast<std::uint64_t>(address) + 4u;
+        const auto region_end = static_cast<std::uint64_t>(region.base_address) + region.size;
+        if (address >= region.base_address && end <= region_end) {
+            verified.writable = region.access == runtime::MemoryRegionAccess::ReadWrite;
+            break;
+        }
+    }
+    const auto outcome = evaluate_fast_memory_guard(verified, true);
     if (profiler_) profiler_->record_guard(outcome);
     if (outcome != GuardOutcome::Hit) {
         ++misses_;
@@ -279,21 +320,23 @@ MonomorphicDispatchCache::dispatch(runtime::CpuState& cpu,
                                    const std::uint64_t block_generation,
                                    ExecutionProfiler* profiler) {
     if (profiler) profiler->record_indirect_call(request.callsite);
-    if (entry_ && entry_->callsite == request.callsite && entry_->target == request.target &&
+    const auto target =
+        request.kind == runtime::IndirectDispatchKind::Return ? cpu.pr : request.target;
+    if (entry_ && entry_->callsite == request.callsite && entry_->target == target &&
         entry_->variant == request.variant && entry_->block_generation == block_generation) {
-        const auto* block = table.lookup(request.target, request.variant);
+        const auto* block = table.lookup(target, request.variant);
         if (block != nullptr &&
             runtime::stable_runtime_block_identity(*block) == entry_->block_identity) {
             ++hits_;
-            cpu.pc = request.target;
+            cpu.pc = target;
             if (request.kind == runtime::IndirectDispatchKind::Call)
                 cpu.pr = request.return_address;
             return {block,
-                    request.target,
-                    runtime::canonical_physical_address(request.target),
+                    target,
+                    runtime::canonical_physical_address(target),
                     cpu.pc,
                     cpu.pr,
-                    block->virtual_start != request.target,
+                    block->virtual_start != target,
                     "inline-cache"};
         }
     }
@@ -301,7 +344,7 @@ MonomorphicDispatchCache::dispatch(runtime::CpuState& cpu,
     auto result = runtime::dispatch_indirect(cpu, table, request);
     if (result.block != nullptr) {
         entry_ = InlineCacheEntry{request.callsite,
-                                  request.target,
+                                  result.diagnostic_target,
                                   request.variant,
                                   block_generation,
                                   runtime::stable_runtime_block_identity(*result.block)};

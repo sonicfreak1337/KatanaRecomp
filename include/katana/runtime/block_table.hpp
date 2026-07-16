@@ -45,6 +45,7 @@ class RuntimeBlockTable {
     lookup_physical(std::uint32_t physical_address, const BlockVariantKey& variant) const noexcept;
     [[nodiscard]] std::vector<const RuntimeBlock*> aliases(std::uint32_t physical_origin) const;
     [[nodiscard]] std::size_t size() const noexcept;
+    [[nodiscard]] bool erase_identity(const std::string& block_identity) noexcept;
     void clear() noexcept;
 
   private:

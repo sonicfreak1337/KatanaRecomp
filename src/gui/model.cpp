@@ -31,15 +31,19 @@ Model::Model(std::filesystem::path settings_path) : settings_path_(std::move(set
 }
 
 void Model::navigate(const Page page) {
+    std::scoped_lock lock(mutex_);
     page_ = page;
 }
 void Model::navigate_next() {
+    std::scoped_lock lock(mutex_);
     page_ = pages[(page_index(page_) + 1u) % pages.size()];
 }
 void Model::navigate_previous() {
+    std::scoped_lock lock(mutex_);
     page_ = pages[(page_index(page_) + pages.size() - 1u) % pages.size()];
 }
-Page Model::page() const noexcept {
+Page Model::page() const {
+    std::scoped_lock lock(mutex_);
     return page_;
 }
 
@@ -58,8 +62,12 @@ void Model::new_project(const std::filesystem::path& manifest_path,
     } else if (format == io::ProjectInputFormat::DreamcastGdi) {
         manifest.entry_point = platform::dreamcast_disc_boot_address;
     }
-    project_ = app::ProjectSession::create(manifest_path, std::move(manifest));
-    source_ = app::ApplicationService{}.inspect_source(project_->manifest());
+    auto project = app::ProjectSession::create(manifest_path, std::move(manifest));
+    auto source = app::ApplicationService{}.inspect_source(project.manifest());
+    std::scoped_lock lock(mutex_);
+    if (job_active_) throw std::logic_error("Projektwechsel ist waehrend eines Jobs gesperrt.");
+    project_ = std::move(project);
+    source_ = std::move(source);
     diagnostics_.clear();
     artifacts_.clear();
     page_ = Page::Project;
@@ -69,10 +77,12 @@ void Model::open_project(const std::filesystem::path& manifest_path) {
     try {
         auto project = app::ProjectSession::open(manifest_path);
         auto source = app::ApplicationService{}.inspect_source(project.manifest());
+        std::scoped_lock lock(mutex_);
+        if (job_active_) throw std::logic_error("Projektwechsel ist waehrend eines Jobs gesperrt.");
         project_ = std::move(project);
         source_ = std::move(source);
         app::remember_recent_project(settings_, manifest_path);
-        persist_settings();
+        app::save_user_settings(settings_path_, settings_);
         diagnostics_.clear();
         artifacts_.clear();
         page_ = Page::Project;
@@ -83,26 +93,37 @@ void Model::open_project(const std::filesystem::path& manifest_path) {
 }
 
 void Model::save_project() {
+    std::scoped_lock lock(mutex_);
+    if (job_active_) throw std::logic_error("Projektspeichern ist waehrend eines Jobs gesperrt.");
     if (!project_) throw std::logic_error("Kein Projekt zum Speichern geoeffnet.");
     project_->save();
     app::remember_recent_project(settings_, project_->path());
-    persist_settings();
+    app::save_user_settings(settings_path_, settings_);
 }
 
-io::ProjectManifest& Model::edit_manifest() {
+void Model::update_manifest(const std::function<void(io::ProjectManifest&)>& update) {
+    if (!update) throw std::invalid_argument("Manifestaktualisierung fehlt.");
+    std::scoped_lock lock(mutex_);
+    if (job_active_)
+        throw std::logic_error("Manifestbearbeitung ist waehrend eines Jobs gesperrt.");
     if (!project_) throw std::logic_error("Kein Projekt zur Bearbeitung geoeffnet.");
-    return project_->edit();
+    update(project_->edit());
 }
 
 void Model::refresh_source() {
+    std::scoped_lock lock(mutex_);
+    if (job_active_)
+        throw std::logic_error("Quellaktualisierung ist waehrend eines Jobs gesperrt.");
     if (!project_) throw std::logic_error("Quellpruefung braucht ein geoeffnetes Projekt.");
     source_ = app::ApplicationService{}.inspect_source(project_->manifest());
 }
 
-bool Model::has_project() const noexcept {
+bool Model::has_project() const {
+    std::scoped_lock lock(mutex_);
     return project_.has_value();
 }
-bool Model::has_unsaved_changes() const noexcept {
+bool Model::has_unsaved_changes() const {
+    std::scoped_lock lock(mutex_);
     return project_ && project_->dirty();
 }
 
@@ -110,13 +131,18 @@ app::JobResult Model::run_job(const app::JobKind kind,
                               const std::filesystem::path& output_root,
                               std::string job_id,
                               std::string tool_version) {
-    if (!project_) throw std::logic_error("Jobstart braucht ein geoeffnetes Projekt.");
-    if (project_->dirty()) save_project();
-    const auto manifest_path = project_->path();
     const auto cancellation = std::make_shared<app::Cancellation>();
+    std::filesystem::path manifest_path;
     {
         std::scoped_lock lock(mutex_);
         if (job_active_) throw std::logic_error("Ein GUI-Job ist bereits aktiv.");
+        if (!project_) throw std::logic_error("Jobstart braucht ein geoeffnetes Projekt.");
+        if (project_->dirty()) {
+            project_->save();
+            app::remember_recent_project(settings_, project_->path());
+            app::save_user_settings(settings_path_, settings_);
+        }
+        manifest_path = project_->path();
         job_active_ = true;
         job_progress_ = 0u;
         job_stage_ = "queued";
@@ -210,19 +236,34 @@ std::string Model::automation_snapshot_json() const {
     return output.str();
 }
 
-app::UserSettings& Model::settings() noexcept {
+app::UserSettings Model::settings() const {
+    std::scoped_lock lock(mutex_);
     return settings_;
 }
+void Model::update_settings(const std::function<void(app::UserSettings&)>& update) {
+    if (!update) throw std::invalid_argument("Einstellungsaktualisierung fehlt.");
+    std::scoped_lock lock(mutex_);
+    update(settings_);
+}
 void Model::persist_settings() {
+    std::scoped_lock lock(mutex_);
     app::save_user_settings(settings_path_, settings_);
 }
 
 void Model::recover_settings() {
     try {
-        settings_ = app::load_user_settings(settings_path_);
+        auto settings = app::load_user_settings(settings_path_);
+        std::scoped_lock lock(mutex_);
+        settings_ = std::move(settings);
     } catch (const std::exception& error) {
+        std::scoped_lock lock(mutex_);
         settings_ = {};
-        set_failure(error, "Standardeinstellungen wurden wiederhergestellt.");
+        diagnostics_.push_back({app::DiagnosticSeverity::Error,
+                                "gui-recovery",
+                                app::redact_sensitive_text(error.what()),
+                                "Standardeinstellungen wurden wiederhergestellt.",
+                                std::nullopt});
+        page_ = Page::Diagnostics;
     }
 }
 

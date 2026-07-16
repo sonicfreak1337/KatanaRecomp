@@ -119,12 +119,41 @@ try {
         }).Count -ne 0) {
         throw 'Phase-9-Faehigkeitsmatrix ist unvollstaendig.'
     }
-    $hostbuildMs = [Math]::Ceiling($buildWatch.Elapsed.TotalMilliseconds)
-    $fallbackCount = 0
+    $hostRoot = Join-Path ([IO.Path]::GetTempPath()) "katana-phase9-host-$PID"
+    if (Test-Path -LiteralPath $hostRoot) {
+        Remove-Item -LiteralPath $hostRoot -Recurse -Force
+    }
+    New-Item -ItemType Directory -Path $hostRoot -Force | Out-Null
+    try {
+        $discRoot = Join-Path $hostRoot 'disc'
+        & (Join-Path $build 'katana-port-export-tests.exe') --write-fixture $discRoot
+        if ($LASTEXITCODE -ne 0) { throw 'Synthetische Hostbuild-GDI konnte nicht erzeugt werden.' }
+        $portRoot = Join-Path $hostRoot 'port'
+        $hostBuildWatch = [Diagnostics.Stopwatch]::StartNew()
+        & (Join-Path $build 'katana-recomp.exe') port (Join-Path $discRoot 'disc.gdi') `
+            --output $portRoot --target-name phase9_host | Out-Null
+        $hostBuildWatch.Stop()
+        if ($LASTEXITCODE -ne 0) { throw 'Exportierter synthetischer Hostport wurde nicht gebaut.' }
+        $hostbuildMs = [Math]::Ceiling($hostBuildWatch.Elapsed.TotalMilliseconds)
+        $hostExecutable = Join-Path $portRoot 'build\phase9_host.exe'
+        $startupWatch = [Diagnostics.Stopwatch]::StartNew()
+        $startupOutput = (& $hostExecutable --run-generated | Out-String).Trim()
+        $startupWatch.Stop()
+        if ($LASTEXITCODE -ne 0 -or $startupOutput -ne 'Generierter Einstieg beendet.') {
+            throw 'Exportierter Hostport erreichte den ersten Gastcheckpoint nicht.'
+        }
+        $startupToGuestCheckpointUs = [Math]::Ceiling($startupWatch.Elapsed.TotalMilliseconds * 1000)
+    }
+    finally {
+        if (Test-Path -LiteralPath $hostRoot) {
+            Remove-Item -LiteralPath $hostRoot -Recurse -Force
+        }
+    }
+    $fallbackCount = $homebrew.fallback_count
     if ($benchmark.analysis_us -gt $budgets.analysis_us_max -or
         $benchmark.codegen_us -gt $budgets.codegen_us_max -or
-        $hostbuildMs -gt $budgets.hostbuild_ms_max -or
-        $benchmark.startup_us -gt $budgets.startup_us_max -or
+        $hostbuildMs -gt $budgets.port_export_hostbuild_ms_max -or
+        $startupToGuestCheckpointUs -gt $budgets.startup_to_guest_checkpoint_us_max -or
         $benchmark.runtime_us -gt $budgets.runtime_us_max -or
         $benchmark.generated_cpp_bytes -gt $budgets.generated_cpp_bytes_max -or
         $homebrew.invalidations -gt $budgets.invalidations_max -or
@@ -160,10 +189,10 @@ try {
         configuration = 'Debug'
         test_count = $tests.tests.Count
         configure_ms = [Math]::Ceiling($configureWatch.Elapsed.TotalMilliseconds)
-        hostbuild_ms = $hostbuildMs
+        port_export_hostbuild_ms = $hostbuildMs
         analysis_us = $benchmark.analysis_us
         codegen_us = $benchmark.codegen_us
-        startup_us = $benchmark.startup_us
+        startup_to_guest_checkpoint_us = $startupToGuestCheckpointUs
         runtime_us = $benchmark.runtime_us
         generated_cpp_bytes = $benchmark.generated_cpp_bytes
         pvr_frames = $homebrew.pvr_frames
@@ -180,6 +209,10 @@ try {
         firmware_smoke = 'not-requested-lle-unsupported'
         release = 'none'
         next_phase = 10
+        platform_evidence = [ordered]@{
+            windows_msvc = 'verified-by-this-report'
+            linux = 'not-run-no-local-linux-runner'
+        }
     }
     $gate | ConvertTo-Json -Depth 5 | Set-Content `
         (Join-Path $reportDirectory 'phase9-gate.json') -Encoding utf8

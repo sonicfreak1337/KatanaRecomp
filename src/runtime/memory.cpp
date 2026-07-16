@@ -358,6 +358,21 @@ bool Memory::contains(const std::uint32_t address, const std::size_t width) cons
     return false;
 }
 
+bool Memory::maps_device(const std::uint32_t address,
+                         const std::size_t width,
+                         const MemoryDevice* const device) const noexcept {
+    if (device == nullptr || width == 0u) return false;
+    const auto end = static_cast<std::uint64_t>(address) + width;
+    for (const auto& region : regions_) {
+        const auto region_end =
+            static_cast<std::uint64_t>(region.info.base_address) + region.info.size;
+        if (address >= region.info.base_address && end <= region_end) {
+            return region.device.get() == device;
+        }
+    }
+    return false;
+}
+
 MemoryAlignmentPolicy Memory::alignment_policy() const noexcept {
     return alignment_policy_;
 }

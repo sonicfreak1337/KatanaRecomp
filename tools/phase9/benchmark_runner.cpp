@@ -41,9 +41,6 @@ int main() {
         const auto program = katana::ir::lower_program(analysis);
         const auto source = katana::codegen::emit_cpp_program(program, 0x8C010000u);
         const auto codegen_end = Clock::now();
-        const auto startup_begin = Clock::now();
-        const auto corpus = katana::phase9::build_homebrew_corpus();
-        const auto startup_end = Clock::now();
         const auto runtime_begin = Clock::now();
         const auto report = katana::phase9::run_homebrew_host_frame();
         const auto runtime_end = Clock::now();
@@ -51,13 +48,9 @@ int main() {
         std::cout << "{\"schema\":\"katana-phase9-benchmark\",\"version\":1"
                   << ",\"analysis_us\":" << microseconds(analysis_begin, analysis_end)
                   << ",\"codegen_us\":" << microseconds(codegen_begin, codegen_end)
-                  << ",\"startup_us\":" << microseconds(startup_begin, startup_end)
                   << ",\"runtime_us\":" << microseconds(runtime_begin, runtime_end)
-                  << ",\"generated_cpp_bytes\":" << source.size() << ",\"corpus_bytes\":";
-        std::size_t corpus_bytes = 0u;
-        for (const auto& item : corpus)
-            corpus_bytes += item.bytes.size();
-        std::cout << corpus_bytes << ",\"state_hash\":" << report.state_hash
+                  << ",\"generated_cpp_bytes\":" << source.size()
+                  << ",\"state_hash\":" << report.state_hash
                   << ",\"silent_failures\":" << report.silent_failures << "}\n";
         return report.silent_failures == 0u ? EXIT_SUCCESS : EXIT_FAILURE;
     } catch (const std::exception& error) {

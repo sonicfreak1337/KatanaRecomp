@@ -79,24 +79,17 @@ try {
 
     $reportDirectory = Join-Path $build 'reports'
     New-Item -ItemType Directory -Path $reportDirectory -Force | Out-Null
-    $fixture = Join-Path $reportDirectory 'phase10-automation-fixture'
+    $fixture = Join-Path $build 'phase10-automation-fixture'
     New-Item -ItemType Directory -Path $fixture -Force | Out-Null
-    [IO.File]::WriteAllBytes(
-        (Join-Path $fixture 'program.bin'),
-        [byte[]](0x09, 0x00, 0x0B, 0x00, 0x09, 0x00)
-    )
+    & (Join-Path $build 'katana-port-export-tests.exe') --write-fixture (Join-Path $fixture 'disc')
+    if ($LASTEXITCODE -ne 0) { throw 'Phase-10-GDI-Automationsfixture fehlt.' }
     @'
 # Phase-10 synthetic automation fixture
 schema = katana-project
 version = 2
-project.name = phase10-automation
-input.format = raw
-input.path = program.bin
-image.base_address = 0x8C010000
-image.entry_point = 0x8C010000
-segment.name = .text
-segment.kind = code
-segment.permissions = r-x
+project.name = disc
+input.format = gdi
+input.path = disc/disc.gdi
 execution.firmware = direct
 execution.fallback = abort
 execution.scheduler = deterministic
@@ -105,9 +98,21 @@ execution.fastpath = conservative
 '@ | Set-Content (Join-Path $fixture 'project.katana') -Encoding ascii
 
     $guiOutput = @(& (Join-Path $build 'katana-recomp-gui.exe') `
-        --automation (Join-Path $fixture 'project.katana') (Join-Path $fixture 'gui-output'))
-    if ($LASTEXITCODE -ne 0 -or $guiOutput[0] -ne 'KR_PHASE10_GUI_END_TO_END') {
-        throw 'GUI-End-to-End-Automatisierung fehlgeschlagen.'
+        --automation (Join-Path $fixture 'disc\disc.gdi') (Join-Path $fixture 'gui-output'))
+    if ($LASTEXITCODE -ne 0 -or $guiOutput[0] -ne 'KR_PHASE10_GUI_MODEL_AUTOMATION') {
+        throw 'GUI-Modell-/Anwendungsdienst-Automatisierung fehlgeschlagen.'
+    }
+    $nativeOutput = @(& (Join-Path $build 'katana-recomp-gui.exe') --native-smoke)
+    if ($LASTEXITCODE -ne 0 -or
+        $nativeOutput[0] -ne 'KR_PHASE10_NATIVE_SHELL_LIFECYCLE') {
+        throw 'Nativer Windows-Shell-Lebenszyklus fehlgeschlagen.'
+    }
+    $nativeE2eOutput = @(& (Join-Path $build 'katana-recomp-gui.exe') `
+        --native-automation (Join-Path $fixture 'disc\disc.gdi') `
+        (Join-Path $fixture 'native-gui-output'))
+    if ($LASTEXITCODE -ne 0 -or
+        $nativeE2eOutput[-1] -ne 'KR_PHASE10_NATIVE_GUI_END_TO_END') {
+        throw 'Nativer Windows-GUI-End-to-End-Pfad fehlgeschlagen.'
     }
     $guiJob = $guiOutput[1] | ConvertFrom-Json
     $cliText = (& (Join-Path $build 'katana-recomp.exe') workflow build `
@@ -126,16 +131,18 @@ execution.fastpath = conservative
         throw 'GUI und CLI erzeugen unterschiedliche Kernartefakte.'
     }
     [ordered]@{
-        schema = 'katana-phase10-gui-e2e'
+        schema = 'katana-phase10-model-integration'
         version = 1
-        marker = 'KR_PHASE10_GUI_END_TO_END'
+        marker = 'KR_PHASE10_GUI_MODEL_AUTOMATION'
         status = 'success'
-        source = 'program.bin'
-        source_format = 'raw'
+        source = 'disc.gdi'
+        source_format = 'gdi'
         project_identity = $guiJob.project_identity
         artifact_count = $guiCore.Count
         cli_gui_equal = $true
-        host_paths_exported = 0
+        native_shell_lifecycle = 'covered-windows'
+        native_control_e2e = 'windows-window-job-resize-keyboard-build-covered'
+        project_host_paths_in_reports = 0
         sensitive_fields_exported = 0
     } | ConvertTo-Json | Set-Content `
         (Join-Path $reportDirectory 'phase10-gui-e2e.json') -Encoding utf8
@@ -182,7 +189,7 @@ execution.fastpath = conservative
         schema = 'katana-phase10-gate'
         report_version = 1
         status = 'success'
-        marker = 'KR_PHASE10_GUI_END_TO_END'
+        marker = 'KR_PHASE10_GUI_MODEL_AUTOMATION'
         source_commit = $commit
         configuration = 'Debug'
         test_count = $tests.tests.Count
@@ -192,7 +199,9 @@ execution.fastpath = conservative
         gui_cli_artifact_count = $guiCore.Count
         gui_cli_equal = $true
         gdi_positive_negative_recovery = 'covered'
-        keyboard_dpi_recovery = 'covered'
+        native_shell_lifecycle = 'covered-windows'
+        native_control_e2e = 'windows-window-job-resize-keyboard-build-covered'
+        keyboard_dpi_recovery = 'windows-native-lifecycle-and-model-covered'
         phase9_marker = $homebrew.marker
         silent_failures = $homebrew.silent_failures
         coverage_sha256 = (Get-FileHash $coverage -Algorithm SHA256).Hash.ToLowerInvariant()

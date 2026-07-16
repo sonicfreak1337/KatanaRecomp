@@ -134,6 +134,9 @@ class Memory {
     [[nodiscard]] std::size_t region_count() const noexcept;
     [[nodiscard]] const MemoryRegionInfo& region(std::size_t index) const;
     [[nodiscard]] bool contains(std::uint32_t address, std::size_t width = 1u) const noexcept;
+    [[nodiscard]] bool maps_device(std::uint32_t address,
+                                   std::size_t width,
+                                   const MemoryDevice* device) const noexcept;
 
     [[nodiscard]] MemoryAlignmentPolicy alignment_policy() const noexcept;
     void set_alignment_policy(MemoryAlignmentPolicy policy) noexcept;

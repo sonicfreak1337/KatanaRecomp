@@ -7,8 +7,8 @@
 
 namespace katana::phase9 {
 
-inline constexpr std::uint32_t homebrew_corpus_schema_version = 1u;
-inline constexpr std::uint32_t homebrew_report_schema_version = 1u;
+inline constexpr std::uint32_t homebrew_corpus_schema_version = 2u;
+inline constexpr std::uint32_t homebrew_report_schema_version = 2u;
 
 enum class HomebrewArtifactKind : std::uint8_t {
     CpuConformance,
@@ -43,6 +43,8 @@ struct FirmwareHandoffReport {
     bool analysis_complete = false;
     bool generated_cpp_complete = false;
     bool dispatch_complete = false;
+    bool stale_dispatch_rejected = false;
+    std::uint64_t executed_blocks = 0u;
 };
 
 struct HomebrewHostFrameReport {
@@ -59,6 +61,7 @@ struct HomebrewHostFrameReport {
     std::uint64_t dma_units = 0u;
     std::uint64_t interrupts = 0u;
     std::uint64_t scheduler_jitter = 0u;
+    std::uint64_t fallback_count = 0u;
     std::uint64_t invalidations = 0u;
     std::uint64_t replay_events = 0u;
     std::uint64_t state_hash = 0u;

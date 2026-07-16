@@ -18,6 +18,12 @@ namespace katana::phase9 {
 inline constexpr std::uint32_t execution_profile_schema_version = 1u;
 
 enum class ProfilingMode : std::uint8_t { Disabled, Exact, Sampled };
+enum class ProfileFallbackReason : std::uint8_t {
+    UnknownInstruction,
+    UnknownIndirectTarget,
+    UnsupportedRuntimeState,
+    InterpreterBoundary
+};
 enum class GuardOutcome : std::uint8_t {
     Hit,
     Disabled,
@@ -66,7 +72,7 @@ class ExecutionProfiler final {
     void record_block(std::uint32_t address);
     void record_edge(std::uint32_t source, std::uint32_t target);
     void record_indirect_call(std::uint32_t callsite);
-    void record_fallback(std::string reason);
+    void record_fallback(ProfileFallbackReason reason);
     void record_invalidation(std::uint32_t physical_page);
     void record_guard(GuardOutcome outcome);
     [[nodiscard]] const ProfileSnapshot& snapshot() const noexcept;

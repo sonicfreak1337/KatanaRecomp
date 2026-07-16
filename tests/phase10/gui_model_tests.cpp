@@ -1,10 +1,13 @@
 #include "katana/gui/model.hpp"
 
+#include <chrono>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <optional>
 #include <string>
+#include <thread>
 
 namespace {
 
@@ -55,7 +58,8 @@ int main() {
     model.save_project();
     require(!model.has_unsaved_changes() && std::filesystem::exists(manifest),
             "GUI-Projekt konnte nicht ohne manuellen Dateiedit gespeichert werden.");
-    model.edit_manifest().firmware_mode = io::ProjectFirmwareMode::Hle;
+    model.update_manifest(
+        [](auto& manifest) { manifest.firmware_mode = io::ProjectFirmwareMode::Hle; });
     bool invalid_profile_rejected = false;
     try {
         model.save_project();
@@ -64,7 +68,8 @@ int main() {
     }
     require(invalid_profile_rejected,
             "GUI-Editor akzeptiert ein Firmwareprofil ohne erforderliche Kernfaehigkeit.");
-    model.edit_manifest().firmware_mode = io::ProjectFirmwareMode::Direct;
+    model.update_manifest(
+        [](auto& manifest) { manifest.firmware_mode = io::ProjectFirmwareMode::Direct; });
     model.save_project();
 
     const auto first =
@@ -81,6 +86,31 @@ int main() {
             "Automatisierbarer GUI-Snapshot ist unvollstaendig oder enthaelt Hostpfade.");
     require(model.accessible_summary().find("Projekt gui-project") != std::string::npos,
             "Zugaengliche Shell-Zusammenfassung benennt den Projektzustand nicht.");
+
+    std::optional<app::JobResult> concurrent_result;
+    std::jthread worker([&] {
+        concurrent_result = model.run_job(
+            app::JobKind::Build, fixture.root / "build-concurrent", "gui-concurrent", "0.40.0-dev");
+    });
+    for (std::size_t attempt = 0u; attempt < 2'000u && !model.snapshot().job_active; ++attempt)
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    require(model.snapshot().job_active, "Paralleler GUI-Test beobachtet keinen aktiven Job.");
+    model.navigate_next();
+    static_cast<void>(model.snapshot());
+    bool project_change_rejected = false;
+    try {
+        model.new_project(fixture.root / "forbidden.katana",
+                          "forbidden",
+                          io::ProjectInputFormat::RawBinary,
+                          source);
+    } catch (const std::logic_error&) {
+        project_change_rejected = true;
+    }
+    model.cancel_job();
+    worker.join();
+    require(project_change_rejected && concurrent_result.has_value() &&
+                concurrent_result->state == app::JobState::Cancelled,
+            "Aktiver GUI-Job erlaubt Projektmutation oder ignoriert parallelen Abbruch.");
 
     gui::Model restored(fixture.root / "settings.conf");
     restored.open_project(manifest);

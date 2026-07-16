@@ -129,11 +129,17 @@ std::string cmake_project(const std::vector<std::filesystem::path>& sources) {
     std::ostringstream output;
     output << "cmake_minimum_required(VERSION 3.25)\n"
            << "project(KatanaGenerated LANGUAGES CXX)\n"
+           << "set(KATANA_RUNTIME_ROOT \"\" CACHE PATH \"KatanaRecomp source root\")\n"
+           << "if(KATANA_RUNTIME_ROOT STREQUAL \"\")\n"
+           << "  message(FATAL_ERROR \"Set KATANA_RUNTIME_ROOT\")\n"
+           << "endif()\n"
            << "add_library(katana_generated STATIC\n";
     for (const auto& source : sources) {
         output << "    " << source.generic_string() << '\n';
     }
-    output << ")\ntarget_compile_features(katana_generated PUBLIC cxx_std_20)\n";
+    output << ")\ntarget_compile_features(katana_generated PUBLIC cxx_std_20)\n"
+           << "target_include_directories(katana_generated PRIVATE "
+              "\"${KATANA_RUNTIME_ROOT}/include\")\n";
     return output.str();
 }
 

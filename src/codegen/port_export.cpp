@@ -7,6 +7,7 @@
 #include "katana/codegen/naming.hpp"
 #include "katana/codegen/project.hpp"
 #include "katana/codegen/source_map.hpp"
+#include "katana/io/input_output_error.hpp"
 #include "katana/io/input_provenance.hpp"
 #include "katana/io/json_report.hpp"
 #include "katana/ir/lower.hpp"
@@ -173,9 +174,11 @@ void write_user_file_once(const std::filesystem::path& root,
     if (std::filesystem::exists(path)) return;
     std::filesystem::create_directories(path.parent_path());
     std::ofstream output(path, std::ios::binary | std::ios::trunc);
-    if (!output) throw std::runtime_error("Port-Bootstrapdatei konnte nicht geoeffnet werden.");
+    if (!output)
+        throw katana::io::InputOutputError("Port-Bootstrapdatei konnte nicht geoeffnet werden.");
     output.write(content.data(), static_cast<std::streamsize>(content.size()));
-    if (!output) throw std::runtime_error("Port-Bootstrapdatei konnte nicht geschrieben werden.");
+    if (!output)
+        throw katana::io::InputOutputError("Port-Bootstrapdatei konnte nicht geschrieben werden.");
 }
 
 bool path_is_within(const std::filesystem::path& path, const std::filesystem::path& root) {

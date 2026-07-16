@@ -3,6 +3,7 @@
 #include "katana/app/application.hpp"
 
 #include <filesystem>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -34,7 +35,7 @@ class Model final {
     void navigate(Page page);
     void navigate_next();
     void navigate_previous();
-    [[nodiscard]] Page page() const noexcept;
+    [[nodiscard]] Page page() const;
 
     void new_project(const std::filesystem::path& manifest_path,
                      std::string project_name,
@@ -42,10 +43,10 @@ class Model final {
                      const std::filesystem::path& source_path);
     void open_project(const std::filesystem::path& manifest_path);
     void save_project();
-    [[nodiscard]] io::ProjectManifest& edit_manifest();
+    void update_manifest(const std::function<void(io::ProjectManifest&)>& update);
     void refresh_source();
-    [[nodiscard]] bool has_project() const noexcept;
-    [[nodiscard]] bool has_unsaved_changes() const noexcept;
+    [[nodiscard]] bool has_project() const;
+    [[nodiscard]] bool has_unsaved_changes() const;
 
     [[nodiscard]] app::JobResult run_job(app::JobKind kind,
                                          const std::filesystem::path& output_root,
@@ -56,7 +57,8 @@ class Model final {
     [[nodiscard]] std::string accessible_summary() const;
     [[nodiscard]] std::string automation_snapshot_json() const;
 
-    [[nodiscard]] app::UserSettings& settings() noexcept;
+    [[nodiscard]] app::UserSettings settings() const;
+    void update_settings(const std::function<void(app::UserSettings&)>& update);
     void persist_settings();
     void recover_settings();
 

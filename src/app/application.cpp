@@ -3,6 +3,7 @@
 #include "katana/analysis/control_flow_analysis.hpp"
 #include "katana/analysis/control_flow_report.hpp"
 #include "katana/codegen/cpp_emitter.hpp"
+#include "katana/codegen/port_export.hpp"
 #include "katana/codegen/project.hpp"
 #include "katana/io/input_provenance.hpp"
 #include "katana/io/json_report.hpp"
@@ -13,6 +14,7 @@
 
 #include <algorithm>
 #include <charconv>
+#include <cstdlib>
 #include <fstream>
 #include <iomanip>
 #include <set>
@@ -91,9 +93,21 @@ void require_not_cancelled(const std::shared_ptr<Cancellation>& cancellation) {
 }
 
 std::string project_identity(const io::ProjectManifest& manifest,
-                             const std::filesystem::path& manifest_path,
+                             const std::filesystem::path&,
                              const SourceInspection& source) {
-    const auto portable_manifest = io::serialize_project_manifest(manifest, manifest_path);
+    auto portable_profile = manifest;
+    const auto portable_root = std::filesystem::current_path() / "katana-portable-identity";
+    const auto portable_path = [&](const std::filesystem::path& path) {
+        return portable_root / path.filename();
+    };
+    portable_profile.input_path = portable_path(manifest.input_path);
+    if (manifest.map_path) portable_profile.map_path = portable_path(*manifest.map_path);
+    if (manifest.analysis_overrides_path)
+        portable_profile.analysis_overrides_path = portable_path(*manifest.analysis_overrides_path);
+    if (manifest.bios_path) portable_profile.bios_path = portable_path(*manifest.bios_path);
+    if (manifest.flash_path) portable_profile.flash_path = portable_path(*manifest.flash_path);
+    const auto portable_manifest =
+        io::serialize_project_manifest(portable_profile, portable_root / "project.katana");
     std::ostringstream identity;
     identity << portable_manifest << "\nsource=" << source.sha256 << ':' << source.size;
     for (const auto& track : source.tracks) {
@@ -107,6 +121,57 @@ std::string hex_address(const std::uint32_t value) {
     std::ostringstream output;
     output << "0x" << std::hex << std::uppercase << std::setw(8) << std::setfill('0') << value;
     return output.str();
+}
+
+std::string shell_quote(const std::filesystem::path& path) {
+    const auto text = path.string();
+#ifdef _WIN32
+    if (text.find('"') != std::string::npos)
+        throw std::invalid_argument("Hostbuildpfad enthaelt ein Anfuehrungszeichen.");
+    return '"' + text + '"';
+#else
+    std::string quoted = "'";
+    for (const auto character : text)
+        character == '\'' ? quoted += "'\\''" : quoted += character;
+    return quoted + "'";
+#endif
+}
+
+void run_host_command(const std::string& command,
+                      const char* stage,
+                      const std::filesystem::path& log_path) {
+    const auto status = std::system((command + " >> " + shell_quote(log_path) + " 2>&1").c_str());
+    auto log = std::filesystem::exists(log_path) ? read_text(log_path) : std::string{};
+    log = redact_sensitive_text(log);
+    write_atomic(log_path, log);
+    if (status != 0) {
+        constexpr std::size_t diagnostic_limit = 4'000u;
+        const auto tail =
+            log.size() <= diagnostic_limit ? log : log.substr(log.size() - diagnostic_limit);
+        throw std::runtime_error(std::string("Hostbuild ist fehlgeschlagen: ") + stage + ".\n" +
+                                 tail);
+    }
+}
+
+void configure_and_build(const std::filesystem::path& source,
+                         const std::filesystem::path& build,
+                         const std::filesystem::path& runtime_root,
+                         const std::string_view target,
+                         const std::filesystem::path& log_path) {
+    auto configure = std::string("cmake -S ") + shell_quote(source) + " -B " + shell_quote(build);
+#ifdef _WIN32
+    configure += " -G \"Visual Studio 17 2022\" -A x64";
+#else
+    configure += " -G Ninja -DCMAKE_BUILD_TYPE=Debug";
+#endif
+    configure += " -DKATANA_RUNTIME_ROOT=" + shell_quote(runtime_root);
+    run_host_command(configure, "configure", log_path);
+    auto compile =
+        std::string("cmake --build ") + shell_quote(build) + " --target " + std::string(target);
+#ifdef _WIN32
+    compile += " --config Debug";
+#endif
+    run_host_command(compile, "compile", log_path);
 }
 
 std::string result_index_json(const io::LoadedProject& project,
@@ -411,20 +476,73 @@ JobResult ApplicationService::execute(const JobRequest& request,
                 result.checkpoints.push_back("codegen-complete");
                 notify(observer, request, JobState::Running, 70u, "codegen-complete");
                 require_not_cancelled(cancellation);
-                const auto write = codegen::write_codegen_project(request.output_root / "generated",
-                                                                  {{"program.cpp", source}});
-                for (const auto& relative : write.written_files) {
-                    const auto path = request.output_root / "generated" / relative;
-                    result.artifacts.push_back({"generated",
-                                                std::filesystem::path("generated") / relative,
-                                                artifact_hash(path)});
+                const bool gdi_host_build =
+                    (request.kind == JobKind::Build || request.kind == JobKind::RunPreflight) &&
+                    project.execution_profile.format == io::ProjectInputFormat::DreamcastGdi;
+                if (!gdi_host_build) {
+                    const auto write = codegen::write_codegen_project(
+                        request.output_root / "generated", {{"program.cpp", source}});
+                    for (const auto& relative : write.written_files) {
+                        const auto path = request.output_root / "generated" / relative;
+                        result.artifacts.push_back({"generated",
+                                                    std::filesystem::path("generated") / relative,
+                                                    artifact_hash(path)});
+                    }
                 }
                 if (request.kind == JobKind::Build || request.kind == JobKind::RunPreflight) {
-                    result.checkpoints.push_back("build-project-ready");
+                    const auto runtime_root = std::filesystem::path(KATANA_RECOMP_SOURCE_ROOT);
+                    const auto host_log = request.output_root / "recompile.log";
+                    if (project.execution_profile.format == io::ProjectInputFormat::DreamcastGdi) {
+                        const auto host_root = request.output_root / "sourcecode";
+                        static_cast<void>(codegen::export_dreamcast_port_project(
+                            project.execution_profile.input_path,
+                            host_root,
+                            {"game", request.tool_version, {}, {}}));
+                        require_not_cancelled(cancellation);
+                        const auto host_build_root = request.output_root / ".katana-build";
+                        notify(observer, request, JobState::Running, 80u, "host-build");
+                        configure_and_build(
+                            host_root, host_build_root, runtime_root, "game", host_log);
+                        notify(observer, request, JobState::Running, 95u, "host-build-complete");
+                        const auto executable = host_build_root /
+#ifdef _WIN32
+                                                "Debug" / "game.exe";
+#else
+                                                "game";
+#endif
+                        const auto published_executable =
+                            request.output_root / executable.filename();
+                        std::filesystem::copy_file(
+                            executable,
+                            published_executable,
+                            std::filesystem::copy_options::overwrite_existing);
+                        result.artifacts.push_back({"host-executable",
+                                                    executable.filename(),
+                                                    artifact_hash(published_executable)});
+                        std::error_code cleanup_error;
+                        std::filesystem::remove_all(host_build_root, cleanup_error);
+                        if (cleanup_error)
+                            throw std::runtime_error(
+                                "Temporaeres Hostbuildverzeichnis konnte nicht entfernt werden.");
+                    } else {
+                        const auto generated_root = request.output_root / "generated";
+                        notify(observer, request, JobState::Running, 80u, "host-build");
+                        configure_and_build(generated_root,
+                                            request.output_root / "host-build",
+                                            runtime_root,
+                                            "katana_generated",
+                                            host_log);
+                        notify(observer, request, JobState::Running, 95u, "host-build-complete");
+                    }
+                    result.artifacts.push_back(
+                        {"recompile-log", "recompile.log", artifact_hash(host_log)});
+                    require_not_cancelled(cancellation);
+                    result.checkpoints.push_back("host-build-complete");
                     const auto build_report = request.output_root / "build-plan.json";
                     write_atomic(build_report,
                                  "{\"schema\":\"katana-build-plan\",\"version\":1,"
-                                 "\"status\":\"ready\",\"native_execution\":false}\n");
+                                 "\"status\":\"built\",\"native_execution\":false,"
+                                 "\"host_compilation\":true}\n");
                     result.artifacts.push_back(
                         {"build-plan", "build-plan.json", artifact_hash(build_report)});
                 }
@@ -433,7 +551,7 @@ JobResult ApplicationService::execute(const JobRequest& request,
                     result.diagnostics.push_back(
                         {DiagnosticSeverity::Information,
                          "native-run-deferred",
-                         "Der gemeinsame Run-Job hat Analyse, Codegen und Buildplan validiert.",
+                         "Der gemeinsame Run-Job hat Analyse, Codegen und Hostbuild ausgefuehrt.",
                          "Native Hostausfuehrung wird im Phase-11-Runtime-Scope aktiviert.",
                          std::nullopt});
                 }
@@ -522,24 +640,38 @@ const char* job_state_name(const JobState state) noexcept {
 
 std::string redact_sensitive_text(const std::string_view text) {
     std::string result(text);
-    const std::string posix_home = std::string("/") + "home" + "/";
-    const std::string posix_users = std::string("/") + "Users" + "/";
     for (std::size_t index = 0u; index < result.size();) {
         const bool drive = index + 2u < result.size() &&
                            ((result[index] >= 'A' && result[index] <= 'Z') ||
                             (result[index] >= 'a' && result[index] <= 'z')) &&
                            result[index + 1u] == ':' &&
                            (result[index + 2u] == '\\' || result[index + 2u] == '/');
-        const bool home = result.compare(index, posix_home.size(), posix_home) == 0u ||
-                          result.compare(index, posix_users.size(), posix_users) == 0u;
-        if (!drive && !home) {
+        const bool path_boundary = index == 0u || result[index - 1u] == ' ' ||
+                                   result[index - 1u] == '\t' || result[index - 1u] == '"' ||
+                                   result[index - 1u] == '\'' || result[index - 1u] == '(' ||
+                                   result[index - 1u] == '=' || result[index - 1u] == ':';
+        auto end = index;
+        while (end < result.size() && result[end] != '\n' && result[end] != '\r' &&
+               result[end] != ' ' && result[end] != '\t' && result[end] != '"' &&
+               result[end] != '\'' && result[end] != ')' && result[end] != ',' &&
+               result[end] != ';')
+            ++end;
+        const bool absolute_posix = result[index] == '/' && path_boundary &&
+                                    index + 1u < result.size() && result[index + 1u] != '/' &&
+                                    result.find('/', index + 1u) < end;
+        if (!drive && !absolute_posix) {
             ++index;
             continue;
         }
-        auto end = index;
-        while (end < result.size() && result[end] != '\n' && result[end] != '\r' &&
-               result[end] != '\"' && result[end] != '\'')
-            ++end;
+        const bool quoted =
+            index != 0u && (result[index - 1u] == '"' || result[index - 1u] == '\'');
+        if (drive && quoted) {
+            end = index;
+            const auto quote = result[index - 1u];
+            while (end < result.size() && result[end] != '\n' && result[end] != '\r' &&
+                   result[end] != quote)
+                ++end;
+        }
         result.replace(index, end - index, "<redacted-path>");
         index += 15u;
     }

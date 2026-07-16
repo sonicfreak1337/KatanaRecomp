@@ -1,22 +1,21 @@
 # Projektstatus
 
-Interner Entwicklungsmeilenstein: `0.40.0`
+Interner Entwicklungsmeilenstein: `0.44.0`
 
 Phase: Pre-Alpha
 
-Naechster Roadmap-Task: Nutzerreview von `KR-4402`; danach `KR-4403`
+Naechster Roadmap-Task: Phase 11 / KR-4501
 
-Naechstes Phasengate: `v0.44.0` - Abschluss Phase 10
+Naechstes Phasengate: `v0.49.0` - Abschluss Phase 11
 
 Erster oeffentlicher Produktrelease: `v0.50.0` Alpha
 
 ## Fortschritt
 
-- 198 von 231 gepflegten Roadmap-Tasks abgeschlossen: 85,7 %
-- 104 von 133 Tasks auf dem Weg vom Dreamcast-Plattformstart bis zum Alpha-Gate abgeschlossen: 78,2 %
-- Phasen 1 bis 9 abgeschlossen
-- Phase 9: 16/17 Tasks; das optionale lokale Firmware-LLE-Smoke-Profil wurde nicht angefordert
-- Phase 10: 12/13 Tasks; Gate-Vorbereitung bestanden, Freigabereview offen
+- 190 von 231 gepflegten Roadmap-Tasks abgeschlossen: 82,3 %
+- Phase-9-Reviewkorrekturen sind implementiert; das eigenstaendige
+  achtteilige Homebrew-Korpus und Linux-Evidenz bleiben offen
+- Phase 10: 13/13 Tasks im freigegebenen Windows-GDI-Workflow
 - Phase 11: 0/25 Tasks
 - Alpha-Gate noch nicht erreicht
 
@@ -30,8 +29,8 @@ Erster oeffentlicher Produktrelease: `v0.50.0` Alpha
 | 6 | Dreamcast-Plattform | 29/29 |
 | 7 | Codegen und Dispatch | 21/21 |
 | 8 | Werkzeuge und Qualitaet | 26/26 |
-| 9 | Kompatibilitaet und Leistung | 16/17 (Pflichtumfang abgeschlossen) |
-| 10 | Desktop-GUI und Quellworkflow | 12/13 (Review vor Freigabe) |
+| 9 | Kompatibilitaet und Leistung | Reviewkorrekturen offen |
+| 10 | Desktop-GUI und Quellworkflow | 13/13 (Windows-GDI-Scope) |
 | 11 | Alpha-Integration und Haertung | 0/25 |
 
 Die Einzelaufgaben und Abhaengigkeiten werden ausschliesslich in
@@ -43,6 +42,14 @@ Der durchgaengige Pfad verarbeitet Raw-, ELF32-SH-, Projektmanifest- und
 validierte GDI-Eingaben ueber Executable Image, Decoder, Kontrollflussanalyse,
 Katana-IR und partitionierten C++-Codegen bis zu einem extern buildbaren
 Hostprojekt.
+
+Die Windows-GUI reduziert den Nutzerworkflow bewusst auf `.gdi` und
+Ausgabeordner. Der komplette Recompile-Lauf bleibt responsiv sichtbar und
+erzeugt `sourcecode/`, `game.exe` sowie ein redigiertes `recompile.log`.
+Projektmanifeste sind dabei nur interne Adapterdetails. Der native Dateidialog
+laeuft isoliert, damit fehlerhafte Explorer-Shell-Erweiterungen den
+ASan-instrumentierten Hauptprozess nicht beenden. Linux-CLI/Core-Builds sind
+ohne X11 moeglich; die Linux-Desktop-GUI ist nicht Teil dieser Freigabe.
 
 Abgeschlossen sind unter anderem:
 
@@ -57,12 +64,13 @@ Abgeschlossen sind unter anderem:
   Diagnostik, Systemreplays und reproduzierbarer Port-Projektexport
 - lokale Debugqualitaet mit statischer Analyse, ASan, Coverage, Fuzzing,
   Differentialtests sowie Referenz- und Lizenzaudits
-- synthetisches Homebrew-Pflichtkorpus mit zusammenhaengendem PVR-, AICA-,
-  Maple-, Scheduler-, DMA-, Interrupt- und Firmware-Handoff-Nachweis
+- synthetische SH-4-Probes und ein Runtime-Vertical-Slice fuer PVR, AICA,
+  Maple, Scheduler, DMA, Interrupt sowie Firmware-Handoff; das eigenstaendige
+  Homebrew-Korpus bleibt offen
 - deterministische Ausfuehrungsprofile, bewachte Speicher-/Dispatch-Fastpaths,
   Inline-Caches, Benchmarks und maschinenlesbare Faehigkeitsmatrix
 
-## Letztes internes Phasengate: Phase 9
+## Historisches internes Phasengate: Phase 9 (durch Review invalidiert)
 
 Gate-Commit: `1d7fd7517f160c2327c23dcb9d051a83ccc68ad3`
 
@@ -74,26 +82,30 @@ silent_failures=0, fallback_count=0, invalidations=1, scheduler_jitter=1
 reproduzierbares Basisartefakt und Phase-9-Datenaudit bestanden
 ```
 
-Der Gate-Bericht nennt `next_phase: 10`. Es wurden weder Versionierung noch
-Release-Commit, Tag oder Veroeffentlichung ausgefuehrt.
+Der Bericht war ein Windows/MSVC-Lauf und enthielt noch unzureichend abgeleitete
+Metriken; KR-3707, KR-3801 bis KR-3806, KR-3808 und KR-4006 wurden wieder
+geoeffnet. Es wurden weder Versionierung noch Release-Commit, Tag oder
+Veroeffentlichung ausgefuehrt.
 
-## Aktueller Review-Checkpoint: Phase 10 / KR-4402
+## Phase-10-Abschluss nach Nutzerfreigabe
 
 Gate-Commit: `9e9cdb2587b83e4d2da143f94bc2b04be76d151a`
 
 ```text
 160/160 Tests bestanden
 frischer MSVC-Debug-Build in 86.294 ms
-KR_PHASE10_GUI_END_TO_END erreicht
+GUI-Modellautomatisierung erreicht; keine native Control-E2E-Automatisierung
 GUI und CLI: identische Projektidentitaet und 8 identische Kernartefakte
-GDI-Positiv-, Fehler- und Recovery-Pfade sowie Tastatur/DPI-Recovery abgedeckt
+GDI-Modellpfade abgedeckt; native Tastatur-/DPI-/Dialogpfade nicht abgedeckt
 Phase-9-Checkpoint, Coverage, Basisartefakt, GUI-Paket und Datenaudit bestanden
 ```
 
-`KR-4403` wurde nicht begonnen. Der unveraenderte Gate-Bericht verlangt vor
-der internen Meilenstein-Freigabe das ausdrueckliche Nutzerreview. Es wurden
-keine Versionierung, kein Release-Commit, kein Tag und keine Veroeffentlichung
-ausgefuehrt.
+Der Reviewumfang wurde auf den gewuenschten Windows-GDI-Workflow korrigiert.
+Native Fenstererzeugung, Resize, Tastaturnavigation, Hintergrundjob,
+Abbruchschutz und GDI-zu-`game.exe` sind automatisiert; Modell- und
+Anwendungsdiensttests bleiben getrennt benannt. Die Nutzerfreigabe fuer
+KR-4403 wurde am 16.07.2026 erteilt. Es wurden kein Tag und keine
+Veroeffentlichung ausgefuehrt.
 
 ## Letztes Release-Gate: v0.37.0
 

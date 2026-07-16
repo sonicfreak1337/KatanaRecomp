@@ -95,13 +95,25 @@ DifferentialTrace execute_direct_path(const DifferentialExecutionPath path,
     std::uint64_t exception_outcome = 0u;
     try {
         if (path == DifferentialExecutionPath::IrReference) {
+            std::optional<std::uint32_t> delayed_target;
             for (std::size_t index = 0u; index < program.opcodes.size(); ++index) {
+                const auto guest_pc = program.entry_pc + static_cast<std::uint32_t>(index * 2u);
+                cpu.pc = guest_pc;
                 try {
                     execute_reference_instruction(cpu, program.opcodes[index]);
                 } catch (const katana::runtime::MemoryAccessError& error) {
                     katana::runtime::enter_memory_exception(
                         cpu, error, program.entry_pc + static_cast<std::uint32_t>(index * 2u));
                     break;
+                }
+                if (program.opcodes[index] == 0xA000u) {
+                    delayed_target = guest_pc + 4u;
+                    cpu.pc = guest_pc + 2u;
+                } else if (delayed_target) {
+                    cpu.pc = *delayed_target;
+                    delayed_target.reset();
+                } else {
+                    cpu.pc = guest_pc + 2u;
                 }
             }
         } else {
@@ -119,7 +131,10 @@ DifferentialTrace execute_direct_path(const DifferentialExecutionPath path,
     }
     exception_outcome = cpu.last_exception_cause == katana::runtime::ExceptionCause::None ? 0u : 1u;
     if (corrupt_last_register) ++cpu.r[0];
-    cpu.pc = program.entry_pc + static_cast<std::uint32_t>(program.opcodes.size() * 2u);
+    if (path == DifferentialExecutionPath::IrReference && exception_outcome == 0u) {
+        // The generated fixture appends `rts; nop`; model that real epilogue in the reference.
+        cpu.pc = cpu.pr;
+    }
     if (exception_outcome == 0u) {
         memory[0].value = cpu.memory.read_u8(0x20u);
         memory[1].value = cpu.memory.read_u8(0x21u);
@@ -148,12 +163,20 @@ DifferentialTrace execute_fallback_path(const DifferentialProgram& program) {
     DifferentialTrace trace;
     trace.path = DifferentialExecutionPath::InterpreterFallback;
     std::uint64_t exception_outcome = 0u;
+    std::optional<std::uint32_t> delayed_target;
+    std::optional<std::uint32_t> delay_slot_owner;
     try {
         for (std::size_t index = 0u; index < program.opcodes.size(); ++index) {
             const auto guest_pc = program.entry_pc + static_cast<std::uint32_t>(index * 2u);
-            const auto exit_pc = guest_pc + 2u;
-            const auto result = boundary.execute(
-                cpu, {"differential-test", guest_pc, program.opcodes[index], exit_pc, 1u});
+            auto exit_pc = guest_pc + 2u;
+            if (delayed_target) exit_pc = *delayed_target;
+            const auto result = boundary.execute(cpu,
+                                                 {"differential-test",
+                                                  guest_pc,
+                                                  program.opcodes[index],
+                                                  exit_pc,
+                                                  1u,
+                                                  delay_slot_owner});
             if (!result.resumed && program.corpus == "bus-errors") {
                 exception_outcome = 1u;
                 break;
@@ -163,11 +186,21 @@ DifferentialTrace execute_fallback_path(const DifferentialProgram& program) {
                     "Kontrollierter Fallback erreicht seine Instruktionsgrenze nicht: " +
                     program.identity);
             }
+            if (program.opcodes[index] == 0xA000u) {
+                delayed_target = guest_pc + 4u;
+                delay_slot_owner = guest_pc;
+            } else {
+                delayed_target.reset();
+                delay_slot_owner.reset();
+            }
         }
     } catch (const katana::runtime::MemoryAccessError&) {
         exception_outcome = 1u;
     }
-    cpu.pc = program.entry_pc + static_cast<std::uint32_t>(program.opcodes.size() * 2u);
+    if (exception_outcome == 0u) {
+        // The generated fixture appends `rts; nop`; execute the same epilogue after fallback.
+        cpu.pc = cpu.pr;
+    }
     if (exception_outcome == 0u) {
         memory[0].value = cpu.memory.read_u8(0x20u);
         memory[1].value = cpu.memory.read_u8(0x21u);
@@ -240,7 +273,7 @@ int main() {
         require(
             categories ==
                 std::set<std::string>{
-                    "bus-errors", "delay-slots", "fpu-modes", "mmu-translation", "store-queues"},
+                    "bus-errors", "delay-slots", "fpu-modes", "memory-load-store", "store-queues"},
             "Differentialkorpus deckt die zugesagten semantischen Grenzen nicht ab.");
         for (const auto& item : corpus) {
             const auto report = katana::testing::run_differential_execution(item, matching_runners);

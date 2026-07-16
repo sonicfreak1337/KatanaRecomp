@@ -4,6 +4,7 @@
 #include <cstdlib>
 #include <cwctype>
 #include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <memory>
 #include <stdexcept>
@@ -14,7 +15,10 @@
 
 namespace {
 std::unique_ptr<katana::gui::Model> model;
-}
+bool native_smoke = false;
+bool native_automation = false;
+bool native_automation_failed = false;
+} // namespace
 
 #ifdef _WIN32
 #define NOMINMAX
@@ -26,6 +30,10 @@ constexpr UINT job_finished_message = WM_APP + 1u;
 std::jthread job_thread;
 HWND content_label = nullptr;
 HWND progress_label = nullptr;
+HWND log_view = nullptr;
+HWND main_window = nullptr;
+std::filesystem::path selected_gdi;
+std::filesystem::path selected_output;
 
 std::filesystem::path settings_path() {
     wchar_t* local_app_data = nullptr;
@@ -39,6 +47,10 @@ std::filesystem::path settings_path() {
     return std::filesystem::current_path() / ".katana-settings-v1.conf";
 }
 
+std::string session_suffix() {
+    return std::to_string(GetCurrentProcessId());
+}
+
 std::wstring widen(const std::string& text) {
     if (text.empty()) return {};
     const auto length = MultiByteToWideChar(CP_UTF8, 0, text.c_str(), -1, nullptr, 0);
@@ -50,12 +62,33 @@ std::wstring widen(const std::string& text) {
 
 void refresh() {
     const auto state = model->snapshot();
-    const auto summary = widen(model->accessible_summary());
+    auto summary_text = model->accessible_summary();
+    if (!selected_output.empty()) summary_text += " Ausgabe: " + selected_output.string() + ".";
+    const auto summary = widen(summary_text);
     SetWindowTextW(content_label, summary.c_str());
     const auto progress = widen(state.job_active ? "Aktiver Job: " + state.job_stage + " (" +
                                                        std::to_string(state.job_progress) + " %)"
                                                  : "Bereit");
     SetWindowTextW(progress_label, progress.c_str());
+    std::string log = "Stufe: " + state.job_stage + "\r\n";
+    for (const auto& diagnostic : state.diagnostics) {
+        log += diagnostic.code + ": " + diagnostic.message +
+               "\r\nNaechster Schritt: " + diagnostic.recovery + "\r\n";
+    }
+    const auto build_log = selected_output / "recompile.log";
+    if (!selected_output.empty() && std::filesystem::exists(build_log)) {
+        std::ifstream input(build_log, std::ios::binary);
+        std::string compiler_log((std::istreambuf_iterator<char>(input)),
+                                 std::istreambuf_iterator<char>());
+        constexpr std::size_t visible_log_limit = 16'000u;
+        if (compiler_log.size() > visible_log_limit)
+            compiler_log.erase(0u, compiler_log.size() - visible_log_limit);
+        log += "\r\nBuildlog:\r\n" + compiler_log;
+    }
+    SetWindowTextW(log_view, widen(log).c_str());
+    for (const int control : {1001, 1003, 1006})
+        EnableWindow(GetDlgItem(main_window, control), state.job_active ? FALSE : TRUE);
+    EnableWindow(GetDlgItem(main_window, 1004), state.job_active ? TRUE : FALSE);
 }
 
 void show_error(const std::exception& error) {
@@ -64,64 +97,76 @@ void show_error(const std::exception& error) {
         nullptr, message.c_str(), L"KatanaRecomp - Wiederherstellung", MB_OK | MB_ICONERROR);
 }
 
-std::filesystem::path select_manifest(HWND window) {
-    std::vector<wchar_t> path(32768u);
-    OPENFILENAMEW dialog{};
-    dialog.lStructSize = sizeof(dialog);
-    dialog.hwndOwner = window;
-    dialog.lpstrFilter =
-        L"Katana-Projekte (*.katana;*.manifest)\0*.katana;*.manifest\0Alle Dateien\0*.*\0";
-    dialog.lpstrFile = path.data();
-    dialog.nMaxFile = static_cast<DWORD>(path.size());
-    dialog.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR;
-    return GetOpenFileNameW(&dialog) ? std::filesystem::path(path.data()) : std::filesystem::path{};
+std::filesystem::path run_file_dialog(const std::wstring& mode) {
+    std::vector<wchar_t> executable_path(32768u);
+    const auto executable_length = GetModuleFileNameW(
+        nullptr, executable_path.data(), static_cast<DWORD>(executable_path.size()));
+    if (executable_length == 0u || executable_length == executable_path.size())
+        throw std::runtime_error("GUI-Programmpfad ist nicht bestimmbar.");
+    auto helper = std::filesystem::path(std::wstring(executable_path.data(), executable_length))
+                      .parent_path() /
+                  "katana-file-dialog.exe";
+    const auto result_path = std::filesystem::temp_directory_path() /
+                             ("katana-dialog-" + std::to_string(GetCurrentProcessId()) + ".txt");
+    std::filesystem::remove(result_path);
+    std::wstring command =
+        L"\"" + helper.wstring() + L"\" " + mode + L" \"" + result_path.wstring() + L"\"";
+    STARTUPINFOW startup{};
+    startup.cb = sizeof(startup);
+    PROCESS_INFORMATION process{};
+    if (!CreateProcessW(nullptr,
+                        command.data(),
+                        nullptr,
+                        nullptr,
+                        FALSE,
+                        CREATE_NO_WINDOW,
+                        nullptr,
+                        helper.parent_path().c_str(),
+                        &startup,
+                        &process)) {
+        throw std::runtime_error("Isolierter nativer Dateidialog konnte nicht gestartet werden.");
+    }
+    WaitForSingleObject(process.hProcess, INFINITE);
+    DWORD exit_code = 0u;
+    GetExitCodeProcess(process.hProcess, &exit_code);
+    CloseHandle(process.hThread);
+    CloseHandle(process.hProcess);
+    if (exit_code != 0u) throw std::runtime_error("Nativer Dateidialog ist fehlgeschlagen.");
+    std::ifstream input(result_path, std::ios::binary);
+    std::string selected((std::istreambuf_iterator<char>(input)), std::istreambuf_iterator<char>());
+    std::filesystem::remove(result_path);
+    return selected.empty() ? std::filesystem::path{} : std::filesystem::path(widen(selected));
 }
 
-std::filesystem::path select_source(HWND window) {
-    std::vector<wchar_t> path(32768u);
-    OPENFILENAMEW dialog{};
-    dialog.lStructSize = sizeof(dialog);
-    dialog.hwndOwner = window;
-    dialog.lpstrFilter =
-        L"Katana-Quellen (*.gdi;*.elf;*.bin)\0*.gdi;*.elf;*.bin\0Alle Dateien\0*.*\0";
-    dialog.lpstrFile = path.data();
-    dialog.nMaxFile = static_cast<DWORD>(path.size());
-    dialog.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR;
-    return GetOpenFileNameW(&dialog) ? std::filesystem::path(path.data()) : std::filesystem::path{};
+std::filesystem::path select_source(HWND) {
+    return run_file_dialog(L"open-source");
 }
 
-std::filesystem::path select_new_manifest(HWND window) {
-    std::vector<wchar_t> path(32768u);
-    const std::wstring default_name = L"project.katana";
-    std::copy(default_name.begin(), default_name.end(), path.begin());
-    OPENFILENAMEW dialog{};
-    dialog.lStructSize = sizeof(dialog);
-    dialog.hwndOwner = window;
-    dialog.lpstrFilter = L"Katana-Projekt (*.katana)\0*.katana\0";
-    dialog.lpstrFile = path.data();
-    dialog.nMaxFile = static_cast<DWORD>(path.size());
-    dialog.lpstrDefExt = L"katana";
-    dialog.Flags = OFN_OVERWRITEPROMPT | OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR;
-    return GetSaveFileNameW(&dialog) ? std::filesystem::path(path.data()) : std::filesystem::path{};
+std::filesystem::path select_output(HWND) {
+    return run_file_dialog(L"select-folder");
 }
 
-void create_project(HWND window) {
+void select_gdi(HWND window) {
     const auto source = select_source(window);
     if (source.empty()) return;
-    const auto manifest = select_new_manifest(window);
-    if (manifest.empty()) return;
     auto extension = source.extension().wstring();
     std::transform(extension.begin(), extension.end(), extension.begin(), ::towlower);
-    const auto format = extension == L".gdi"   ? katana::io::ProjectInputFormat::DreamcastGdi
-                        : extension == L".elf" ? katana::io::ProjectInputFormat::Elf32Sh
-                                               : katana::io::ProjectInputFormat::RawBinary;
-    model->new_project(manifest, manifest.stem().string(), format, source);
+    if (extension != L".gdi") throw std::invalid_argument("Die GUI akzeptiert nur .gdi-Quellen.");
+    const auto session = std::filesystem::temp_directory_path() / "KatanaRecomp" /
+                         ("session-" + std::to_string(GetCurrentProcessId()));
+    std::filesystem::create_directories(session);
+    const auto manifest = session / "input.katana";
+    model->new_project(
+        manifest, source.stem().string(), katana::io::ProjectInputFormat::DreamcastGdi, source);
     model->save_project();
+    selected_gdi = source;
 }
 
 void start_job(HWND window, const katana::app::JobKind kind) {
     if (job_thread.joinable()) return;
-    const auto output = std::filesystem::temp_directory_path() / "KatanaRecomp" / "gui-jobs";
+    if (selected_gdi.empty()) throw std::logic_error("Zuerst eine .gdi-Quelle waehlen.");
+    if (selected_output.empty()) throw std::logic_error("Zuerst einen Ausgabeordner waehlen.");
+    const auto output = selected_output;
     job_thread = std::jthread([window, kind, output] {
         try {
             static_cast<void>(model->run_job(kind, output, "gui-job", KATANA_RECOMP_VERSION));
@@ -135,23 +180,13 @@ void start_job(HWND window, const katana::app::JobKind kind) {
 LRESULT CALLBACK window_proc(HWND window, const UINT message, WPARAM wparam, LPARAM lparam) {
     switch (message) {
     case WM_CREATE: {
+        main_window = window;
         const wchar_t* button_class = L"BUTTON";
         const DWORD style = WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON;
         CreateWindowW(button_class,
-                      L"Neues Projekt",
+                      L"GDI waehlen",
                       style,
                       16,
-                      16,
-                      125,
-                      34,
-                      window,
-                      reinterpret_cast<HMENU>(1005),
-                      nullptr,
-                      nullptr);
-        CreateWindowW(button_class,
-                      L"Projekt oeffnen",
-                      style,
-                      151,
                       16,
                       145,
                       34,
@@ -160,20 +195,9 @@ LRESULT CALLBACK window_proc(HWND window, const UINT message, WPARAM wparam, LPA
                       nullptr,
                       nullptr);
         CreateWindowW(button_class,
-                      L"Analysieren",
+                      L"Ausgabeordner",
                       style,
-                      306,
-                      16,
-                      110,
-                      34,
-                      window,
-                      reinterpret_cast<HMENU>(1002),
-                      nullptr,
-                      nullptr);
-        CreateWindowW(button_class,
-                      L"Build vorbereiten",
-                      style,
-                      426,
+                      171,
                       16,
                       145,
                       34,
@@ -182,9 +206,20 @@ LRESULT CALLBACK window_proc(HWND window, const UINT message, WPARAM wparam, LPA
                       nullptr,
                       nullptr);
         CreateWindowW(button_class,
+                      L"Rekompilieren",
+                      style,
+                      326,
+                      16,
+                      110,
+                      34,
+                      window,
+                      reinterpret_cast<HMENU>(1006),
+                      nullptr,
+                      nullptr);
+        CreateWindowW(button_class,
                       L"Abbrechen",
                       style,
-                      581,
+                      466,
                       16,
                       105,
                       34,
@@ -198,7 +233,7 @@ LRESULT CALLBACK window_proc(HWND window, const UINT message, WPARAM wparam, LPA
                                       18,
                                       76,
                                       740,
-                                      180,
+                                      85,
                                       window,
                                       nullptr,
                                       nullptr,
@@ -207,32 +242,47 @@ LRESULT CALLBACK window_proc(HWND window, const UINT message, WPARAM wparam, LPA
                                        L"Bereit",
                                        WS_CHILD | WS_VISIBLE | SS_LEFT,
                                        18,
-                                       280,
+                                       170,
                                        740,
                                        30,
                                        window,
                                        nullptr,
                                        nullptr,
                                        nullptr);
+        log_view = CreateWindowW(L"EDIT",
+                                 L"Stufe: bereit",
+                                 WS_CHILD | WS_VISIBLE | WS_VSCROLL | ES_LEFT | ES_MULTILINE |
+                                     ES_AUTOVSCROLL | ES_READONLY,
+                                 18,
+                                 210,
+                                 760,
+                                 150,
+                                 window,
+                                 nullptr,
+                                 nullptr,
+                                 nullptr);
         SetTimer(window, 1u, 100u, nullptr);
         refresh();
+        if (native_smoke) PostMessageW(window, WM_CLOSE, 0u, 0u);
+        if (native_automation) {
+            SetWindowPos(window, nullptr, 0, 0, 960, 600, SWP_NOMOVE | SWP_NOZORDER);
+            PostMessageW(window, WM_KEYDOWN, VK_F6, 0u);
+            PostMessageW(window, WM_MOUSEWHEEL, MAKEWPARAM(0u, WHEEL_DELTA), 0u);
+            PostMessageW(window, WM_COMMAND, 1006u, 0u);
+        }
         return 0;
     }
     case WM_COMMAND:
         try {
             switch (LOWORD(wparam)) {
-            case 1005:
-                create_project(window);
-                break;
             case 1001: {
-                const auto path = select_manifest(window);
-                if (!path.empty()) model->open_project(path);
+                select_gdi(window);
                 break;
             }
-            case 1002:
-                start_job(window, katana::app::JobKind::Analyze);
-                break;
             case 1003:
+                selected_output = select_output(window);
+                break;
+            case 1006:
                 start_job(window, katana::app::JobKind::Build);
                 break;
             case 1004:
@@ -246,6 +296,19 @@ LRESULT CALLBACK window_proc(HWND window, const UINT message, WPARAM wparam, LPA
             show_error(error);
         }
         return 0;
+    case WM_SIZE: {
+        const auto width = LOWORD(lparam);
+        const auto height = HIWORD(lparam);
+        MoveWindow(content_label, 18, 76, std::max(100, static_cast<int>(width) - 36), 85, TRUE);
+        MoveWindow(progress_label, 18, 170, std::max(100, static_cast<int>(width) - 36), 30, TRUE);
+        MoveWindow(log_view,
+                   18,
+                   210,
+                   std::max(100, static_cast<int>(width) - 36),
+                   std::max(80, static_cast<int>(height) - 230),
+                   TRUE);
+        return 0;
+    }
     case WM_KEYDOWN:
         if (wparam == VK_F6) {
             if ((GetKeyState(VK_SHIFT) & 0x8000) != 0)
@@ -260,14 +323,34 @@ LRESULT CALLBACK window_proc(HWND window, const UINT message, WPARAM wparam, LPA
             return 0;
         }
         break;
+    case WM_MOUSEWHEEL: {
+        const auto lines = GET_WHEEL_DELTA_WPARAM(wparam) / WHEEL_DELTA;
+        SendMessageW(log_view, EM_LINESCROLL, 0u, -lines * 3);
+        return 0;
+    }
     case WM_TIMER:
         refresh();
         return 0;
     case job_finished_message:
         if (job_thread.joinable()) job_thread.join();
         refresh();
+        if (native_automation) {
+            const auto state = model->snapshot();
+            native_automation_failed =
+                state.job_active || !state.diagnostics.empty() ||
+                !std::filesystem::exists(selected_output / "game.exe") ||
+                !std::filesystem::exists(selected_output / "sourcecode" / "CMakeLists.txt") ||
+                !std::filesystem::exists(selected_output / "recompile.log");
+            DestroyWindow(window);
+        }
         return 0;
     case WM_CLOSE:
+        if (model->snapshot().job_active &&
+            MessageBoxW(window,
+                        L"Aktiven Job abbrechen und KatanaRecomp schliessen?",
+                        L"KatanaRecomp",
+                        MB_YESNO | MB_ICONWARNING) != IDYES)
+            return 0;
         if (model->has_unsaved_changes() &&
             MessageBoxW(window,
                         L"Ungespeicherte Projektaenderungen verwerfen?",
@@ -327,6 +410,7 @@ int run_desktop() {
 
 #else
 #include <X11/Xlib.h>
+#include <unistd.h>
 
 namespace {
 std::filesystem::path settings_path() {
@@ -334,6 +418,10 @@ std::filesystem::path settings_path() {
     return home == nullptr
                ? std::filesystem::path(".katana-settings-v1.conf")
                : std::filesystem::path(home) / ".config" / "KatanaRecomp" / "settings-v1.conf";
+}
+
+std::string session_suffix() {
+    return std::to_string(getpid());
 }
 
 int run_desktop() {
@@ -386,13 +474,47 @@ int main(const int argc, char* argv[]) {
             return EXIT_SUCCESS;
         }
         if (argc == 4 && std::string_view(argv[1]) == "--automation") {
-            model->open_project(argv[2]);
+            const auto source = std::filesystem::absolute(argv[2]).lexically_normal();
+            if (source.extension() != ".gdi")
+                throw std::invalid_argument("GUI-Automatisierung akzeptiert nur .gdi-Quellen.");
+            const auto session = std::filesystem::temp_directory_path() / "KatanaRecomp" /
+                                 ("automation-" + session_suffix());
+            std::filesystem::create_directories(session);
+            model->new_project(session / "input.katana",
+                               source.stem().string(),
+                               katana::io::ProjectInputFormat::DreamcastGdi,
+                               source);
+            model->save_project();
             const auto result = model->run_job(
                 katana::app::JobKind::Build, argv[3], "gui-automation", KATANA_RECOMP_VERSION);
-            std::cout << "KR_PHASE10_GUI_END_TO_END\n"
+            std::cout << "KR_PHASE10_GUI_MODEL_AUTOMATION\n"
                       << katana::app::format_job_result_json(result)
                       << model->automation_snapshot_json();
             return result.state == katana::app::JobState::Completed ? EXIT_SUCCESS : EXIT_FAILURE;
+        }
+        if (argc == 2 && std::string_view(argv[1]) == "--native-smoke") {
+            native_smoke = true;
+            const auto result = run_desktop();
+            std::cout << "KR_PHASE10_NATIVE_SHELL_LIFECYCLE\n";
+            return result;
+        }
+        if (argc == 4 && std::string_view(argv[1]) == "--native-automation") {
+            selected_gdi = std::filesystem::absolute(argv[2]).lexically_normal();
+            selected_output = std::filesystem::absolute(argv[3]).lexically_normal();
+            if (selected_gdi.extension() != ".gdi")
+                throw std::invalid_argument("Native GUI-Automatisierung akzeptiert nur .gdi.");
+            const auto session = std::filesystem::temp_directory_path() / "KatanaRecomp" /
+                                 ("native-automation-" + session_suffix());
+            std::filesystem::create_directories(session);
+            model->new_project(session / "input.katana",
+                               selected_gdi.stem().string(),
+                               katana::io::ProjectInputFormat::DreamcastGdi,
+                               selected_gdi);
+            model->save_project();
+            native_automation = true;
+            const auto result = run_desktop();
+            if (!native_automation_failed) std::cout << "KR_PHASE10_NATIVE_GUI_END_TO_END\n";
+            return result == 0 && !native_automation_failed ? EXIT_SUCCESS : EXIT_FAILURE;
         }
         return run_desktop();
     } catch (const std::exception& error) {

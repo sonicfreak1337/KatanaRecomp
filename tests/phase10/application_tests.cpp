@@ -211,15 +211,22 @@ int main() {
                                           gdi_manifest_path,
                                           fixture.root / "gdi-build",
                                           "0.40.0-dev"});
-    require(gdi_job.state == app::JobState::Completed &&
-                std::find(gdi_job.checkpoints.begin(),
-                          gdi_job.checkpoints.end(),
-                          "build-project-ready") != gdi_job.checkpoints.end(),
-            "Synthetische GDI erreicht den gemeinsamen GUI-/CLI-Buildpfad nicht.");
+    require(
+        gdi_job.state == app::JobState::Completed &&
+            std::find(gdi_job.checkpoints.begin(),
+                      gdi_job.checkpoints.end(),
+                      "host-build-complete") != gdi_job.checkpoints.end() &&
+            std::filesystem::exists(fixture.root / "gdi-build" / "sourcecode" / "CMakeLists.txt") &&
+#ifdef _WIN32
+            std::filesystem::exists(fixture.root / "gdi-build" / "game.exe"),
+#else
+            std::filesystem::exists(fixture.root / "gdi-build" / "game"),
+#endif
+        "Synthetische GDI erreicht den gemeinsamen GUI-/CLI-Buildpfad nicht.");
     gui::Model gui_model(fixture.root / "gui-settings.conf");
     gui_model.open_project(gdi_manifest_path);
     const auto gui_job = gui_model.run_job(
-        app::JobKind::Build, fixture.root / "gdi-gui-build", "gdi-gui-build", "0.40.0-dev");
+        app::JobKind::Analyze, fixture.root / "gdi-gui-build", "gdi-gui-build", "0.40.0-dev");
     require(gui_job.state == app::JobState::Completed &&
                 gui_job.project_identity == gdi_job.project_identity &&
                 gui_model.page() == gui::Page::Results,
@@ -238,12 +245,16 @@ int main() {
     const auto windows_path =
         std::string("C:") + '\\' + "Users" + '\\' + "name" + '\\' + "secret.bin";
     const auto posix_path = std::string("/") + "home" + "/name/trace.bin";
-    const auto redacted = app::redact_sensitive_text(windows_path + " firmware_bytes " +
-                                                     posix_path + " serial_number");
+    const auto temporary_path = std::string("/") + "tmp" + "/ci/trace.bin";
+    const auto redacted =
+        app::redact_sensitive_text(windows_path + " firmware_bytes " + posix_path + " " +
+                                   temporary_path + " serial_number /W4");
     require(redacted.find("Users") == std::string::npos &&
                 redacted.find("firmware_bytes") == std::string::npos &&
                 redacted.find(posix_path) == std::string::npos &&
-                redacted.find("serial_number") == std::string::npos,
+                redacted.find(temporary_path) == std::string::npos &&
+                redacted.find("serial_number") == std::string::npos &&
+                redacted.find("/W4") != std::string::npos,
             "Diagnoseredaktion behaelt Hostpfade oder sensible Felder.");
 
     app::UserSettings settings;
@@ -261,6 +272,6 @@ int main() {
                     "Unbekannte Einstellungsversion wurde akzeptiert.");
 
     std::cout << "KR_PHASE10_APPLICATION_SERVICE_SUCCESS\n"
-              << "KR_PHASE10_GUI_END_TO_END\n";
+              << "KR_PHASE10_GUI_MODEL_INTEGRATION\n";
     return EXIT_SUCCESS;
 }

@@ -1868,7 +1868,7 @@ Akzeptanz:
 - Disc-, Firmware-, Portexport- und andere private/generierte Eingaben koennen nicht in die feste Paketliste gelangen
 - das Artefakt bleibt als `0.37.0-dev` gekennzeichnet und ist kein finales v0.37.0-Release
 
-### [x] KR-3707 - Differenztests der Ausfuehrungswege
+### [ ] KR-3707 - Differenztests der Ausfuehrungswege
 
 Abhaengigkeiten: KR-2504, KR-3204, KR-3409, KR-3410, KR-3701
 
@@ -1944,27 +1944,27 @@ Akzeptanz:
 
 ## v0.38.0 bis v0.40.0 - Kompatibilitaet und Leistung
 
-### [x] KR-3801 - Rechtlich sauberes Homebrew-Testkorpus
+### [ ] KR-3801 - Rechtlich sauberes Homebrew-Testkorpus
 
 Abhaengigkeiten: KR-2602, KR-3709
 
-### [x] KR-3802 - CPU-Konformitaetsprogramm
+### [ ] KR-3802 - CPU-Konformitaetsprogramm
 
 Abhaengigkeiten: KR-1506, KR-2504, KR-3707
 
-### [x] KR-3803 - Eingabe-Beispiel
+### [ ] KR-3803 - Eingabe-Beispiel
 
 Abhaengigkeiten: KR-2702
 
-### [x] KR-3804 - 2D-Grafik-Beispiel
+### [ ] KR-3804 - 2D-Grafik-Beispiel
 
 Abhaengigkeiten: KR-2804
 
-### [x] KR-3805 - Audio-Beispiel
+### [ ] KR-3805 - Audio-Beispiel
 
 Abhaengigkeiten: KR-2903
 
-### [x] KR-3806 - Zusammenhaengendes Testspiel
+### [ ] KR-3806 - Zusammenhaengendes Testspiel
 
 Abhaengigkeiten: KR-3105, KR-3411, KR-3710, KR-3803, KR-3804, KR-3805
 
@@ -1987,7 +1987,7 @@ Akzeptanz:
 - ein veraendertes RAM-Byte invalidiert den Zielblock vor erneuter Ausfuehrung
 - Fixture, Generator und erwartete Ergebnisse sind frei verteilbar und enthalten keine BIOSbytes
 
-### [x] KR-3808 - Scheduler-, DMA- und Interrupt-Vertical-Slice
+### [ ] KR-3808 - Scheduler-, DMA- und Interrupt-Vertical-Slice
 
 Abhaengigkeiten: KR-3105, KR-3407, KR-3609, KR-3806
 
@@ -2091,7 +2091,7 @@ Umfang:
   weitere Entwicklung zusammenfuehren
 - keine oeffentliche Installations- oder Nutzerreferenz vorziehen
 
-### [x] KR-4006 - Kumulatives Phase-9-Gate
+### [ ] KR-4006 - Kumulatives Phase-9-Gate
 
 Abhaengigkeiten: KR-3505, KR-3606, KR-3710, KR-3801 bis KR-3809, KR-3901 bis KR-3907, KR-4002
 
@@ -2163,61 +2163,61 @@ Abhaengigkeiten: KR-4101, KR-4102
 
 Umfang:
 
-- Hauptfenster, Projektstart, Navigation und globale Einstellungen implementieren
+- Hauptfenster, GDI-/Ausgabeauswahl, Navigation und globale Einstellungen implementieren
 - klare Statusflaechen fuer aktive Jobs, letzte Ergebnisse und Fehler schaffen
 - Tastaturbedienung, Fokusfuehrung und persistente Layoutgrundlagen anlegen
 - Logging und unerwartete Fehler in eine nutzerlesbare Recovery-Oberflaeche leiten
 
 Akzeptanz:
 
-- Projektwechsel, Neustart und Wiederherstellung fuehren nicht zu verlorenen Einstellungen oder haengenden Jobs
+- Neustart und Wiederherstellung fuehren nicht zu verlorenen Einstellungen oder haengenden Jobs
 - Tastatur- und Mausbedienung decken die Kernnavigation gleichwertig ab
 - unerwartete Fehler fuehren zu einer lesbaren Meldung statt zu stiller GUI-Beendigung
 - Shell und Navigation bleiben bei langen Jobs responsiv
 
-### [x] KR-4201 - Projektworkflow fuer Anlegen, Oeffnen und Speichern
+### [x] KR-4201 - Schlanker GDI- und Ausgabeordner-Workflow
 
 Abhaengigkeiten: KR-4102, KR-4103
 
 Umfang:
 
-- neue Projekte anlegen, bestehende oeffnen, speichern und kuerzlich verwendete Projekte wiederfinden
-- Manifestdateien, Ausgabeordner und Werkzeugpfade ueber gefuehrte GUI-Dialoge verwalten
-- ungespeicherte Aenderungen, Konflikte und Migrationsfaelle sichtbar behandeln
-- Projektdatei als alleinige Quelle fuer den reproduzierbaren GUI-Workflow verwenden
+- `.gdi`-Eingabe und Ausgabeordner ueber gefuehrte GUI-Dialoge waehlen
+- interne Manifeste ausschliesslich als verborgenes Adapterdetail verwenden
+- letzte Auswahl, Konflikte und fehlende Ressourcen sichtbar behandeln
+- `sourcecode/` und `game.exe` im gewaehlten Ausgabeordner erzeugen
 
 Akzeptanz:
 
-- ein Projekt kann ohne manuelle Dateiedits erstellt und spaeter identisch wieder geoeffnet werden
-- Konfigurationsmigrationen sind versioniert und ruinierten keine bestehenden Projekte
+- eine GDI kann ohne Projektanlage oder manuelle Dateiedits rekompiliert werden
+- Konfigurationsmigrationen sind versioniert und verlieren keine Auswahleinstellungen
 - fehlende oder verschobene Projektressourcen erzeugen gezielte Recovery-Hinweise
-- GUI und CLI lesen dasselbe gespeicherte Projektmodell
+- GUI und CLI verwenden intern dieselben Loader-, Analyse-, Codegen- und Hostbuildpfade
 
-### [x] KR-4202 - Quellenwahl fuer Raw, ELF und GDI
+### [x] KR-4202 - GDI-Quellenwahl
 
 Abhaengigkeiten: KR-3006, KR-4102, KR-4201
 
 Umfang:
 
-- Dateiauswahl fuer Raw-, ELF- und `.gdi`-Quellen bereitstellen
+- Dateiauswahl ausschliesslich fuer `.gdi`-Quellen bereitstellen
 - Quelltyp, Hash, Groesse, relativen Ursprung und bekannte Einschraenkungen sichtbar machen
 - Mehrdatei-Quellen auf Projektverschiebungen und relative Pfadauflosung robust behandeln
 - keine Dateiinhalte duplizieren oder in Projektdateien einbetten
 
 Akzeptanz:
 
-- `.gdi` und ihre Tracks bleiben nach Speichern, Verschieben und erneutem Oeffnen korrekt referenziert
+- `.gdi` und ihre Tracks werden read-only und relativ zum Descriptor korrekt referenziert
 - die GUI zeigt dieselben Validierungsfehler wie CLI und Diagnoseberichte
 - ein ungueltiger Quellpfad blockiert den Jobstart mit nachvollziehbarer Meldung
 - keine Quellbytes oder lokalen Geheimnisse landen in Manifest oder Logs
 
-### [x] KR-4203 - GDI-Inspektor und Quellvalidierung
+### [x] KR-4203 - GDI-Quellvalidierung und sichtbarer Status
 
 Abhaengigkeiten: KR-3005, KR-3006, KR-4202
 
 Umfang:
 
-- Trackliste, Formate, Offsets, Dateigroessen und Daten-/Audiotrackrollen visualisieren
+- Trackmodell, Formate, Offsets, Dateigroessen und Daten-/Audiotrackrollen validieren
 - Descriptor- und Trackfehler an konkreten Eintraegen markieren
 - Read-only-Zusicherungen, relative Pfade und Quellprovenienz direkt in der GUI erklaeren
 - Positiv- und Negativbeispiele fuer Support und Dokumentation exportierbar machen
@@ -2225,55 +2225,55 @@ Umfang:
 Akzeptanz:
 
 - jeder `.gdi`-Validierungsfehler ist in der GUI ohne CLI reproduzierbar sichtbar
-- erfolgreiche Quellen zeigen alle Tracks in stabiler Reihenfolge mit nachvollziehbarer Provenienz
+- erfolgreiche Quellen besitzen im Jobbericht alle Tracks in stabiler Reihenfolge mit Provenienz
 - keine Bearbeitungsfunktion schreibt in `.gdi` oder Trackdateien zurueck
 - Ansichten lassen sich in automatisierten Tests verifizieren
 
-### [x] KR-4204 - Manifest-, Firmwareprofil- und Override-Editor
+### [x] KR-4204 - Sicheres internes GDI-Ausfuehrungsprofil
 
 Abhaengigkeiten: KR-3505, KR-3506, KR-4201, KR-4202
 
 Umfang:
 
-- Einstiegspunkte, Segmente, Overrides, Schedulerprofil und Firmwaremodus ueber GUI editieren
-- Pflicht-, optionale und lokale Firmwarepfade klar trennen
-- datensparsame Hinweise fuer BIOS-, Flash- und Alias-bezogene Diagnosen bereitstellen
-- ungueltige Kombinationen vor Jobstart validieren
+- direktes GDI-Ausfuehrungsprofil intern und ohne Nutzer-Manifest erzeugen
+- Firmware- und Override-Editoren aus dem schlanken GUI-Produktvertrag ausschliessen
+- datensparsame Hinweise fuer GDI- und Builddiagnosen bereitstellen
+- ungueltige Eingaben vor Jobstart validieren
 
 Akzeptanz:
 
-- alle GUI-Einstellungen serialisieren in dasselbe versionierte Manifestschema wie die CLI
-- lokale Firmwareoptionen bleiben klar als optional und nicht releasepflichtig markiert
-- ungueltige Segment-, Override- oder Profilkombinationen werden vor dem Start abgelehnt
+- das interne Profil verwendet dasselbe versionierte Manifestschema wie die CLI
+- lokale Firmwareoptionen werden von diesem GUI-Workflow nicht angeboten
+- ungueltige GDI- oder Profilkombinationen werden vor dem Hostbuild abgelehnt
 - redigierte Diagnosen enthalten keine Firmwarebytes oder sensiblen Flashfelder
 
-### [x] KR-4301 - GUI-Orchestrierung fuer Analyse, Codegen, Build und Run
+### [x] KR-4301 - GUI-Orchestrierung fuer Analyse, Codegen und Hostbuild
 
 Abhaengigkeiten: KR-4102, KR-4204
 
 Umfang:
 
-- gefuehrte Startpfade fuer Analyse, Codegen, Build und optionalen Lauf bereitstellen
+- einen gefuehrten GDI-Pfad fuer Analyse, Codegen und Hostbuild bereitstellen
 - Artefakte, Zielordner und Folgeaktionen nach Jobende sichtbar machen
 - Jobabhaengigkeiten und notwendige Vorstufen automatisch aufloesen
 - wiederholbare Startprofile fuer Alpha-relevante Workflows speichern
 
 Akzeptanz:
 
-- ein Nutzer kann den vollstaendigen Alpha-Hauptworkflow ohne CLI durchlaufen
+- ein Nutzer kann GDI bis `sourcecode/` und `game.exe` ohne CLI durchlaufen
 - Folgejobs verwenden die erwarteten Artefakte und veraltete Ergebnisse werden erkannt
 - ein fehlgeschlagener Zwischenschritt blockiert unsichere Folgeaktionen
 - GUI und CLI erzeugen fuer identische Eingaben dieselben Kernartefakte
 
-### [x] KR-4302 - Fortschritt, Logs und Diagnostikansichten
+### [x] KR-4302 - Fortschritt, Buildlog und Diagnostikansicht
 
 Abhaengigkeiten: KR-3606, KR-3607, KR-3608, KR-4102, KR-4301
 
 Umfang:
 
 - Fortschritt, Warnungen, Fehler und strukturierte Diagnosen in der GUI anzeigen
-- Dispatch-, Fallback-, Invalidierungs-, Firmware- und Schedulerereignisse filterbar machen
-- Logs nach Relevanz gruppieren und exportieren, ohne sensible Quelldaten offenzulegen
+- Jobstufen und Compiler-/Linker-Ausgabe waehrend der Rekompilierung sichtbar machen
+- Logs redigiert als `recompile.log` exportieren
 - Fehlerpfade mit konkreten naechsten Schritten fuer Nutzer versehen
 
 Akzeptanz:
@@ -2283,20 +2283,20 @@ Akzeptanz:
 - Export und Kopieren redigieren Hostpfade, Firmwarebytes und sensible Flashfelder
 - grosse Logs lassen die GUI nicht einfrieren
 
-### [x] KR-4303 - Ergebnisansichten fuer Funktionen, Quellen und Provenienz
+### [x] KR-4303 - Ergebnisartefakte und Provenienzberichte
 
 Abhaengigkeiten: KR-3305, KR-3602, KR-3608, KR-4202, KR-4301
 
 Umfang:
 
-- Funktionen, Segmente, Quellenzuordnung und generierte Artefakte durchsuchen und filtern
+- Funktionen, Segmente, Quellenzuordnung und generierte Artefakte maschinenlesbar ausgeben
 - Provenienz fuer Aliasnormalisierung, ROM-RAM-Kopien und Invalidierungen sichtbar machen
 - Unterschiede zwischen direktem Einstieg, Homebrew-Pfad und optionalem Firmwarepfad erklaeren
 - Ergebnisansichten fuer Supportfaelle reproduzierbar exportieren
 
 Akzeptanz:
 
-- zentrale Alpha-Fragen zu Quelle, Segment, Block und Provenienz lassen sich ohne CLI beantworten
+- zentrale Fragen zu Quelle, Segment, Block und Provenienz stehen in Ergebnisberichten
 - GUI-Ansichten referenzieren stabile Gastadressen und IDs statt fluechtiger Hostartefakte
 - Exportformate bleiben reproduzierbar sortiert und datensparsam
 - Ergebnisansichten stimmen mit den zugrunde liegenden Analyseberichten ueberein
@@ -2307,14 +2307,14 @@ Abhaengigkeiten: KR-4203, KR-4204, KR-4301, KR-4302, KR-4303
 
 Umfang:
 
-- automatisierte GUI-Hauptpfade fuer neues Projekt, `.gdi` laden, Analyse und Build erstellen
+- nativen Windows-Hauptpfad fuer `.gdi`, sichtbaren Job und Hostbuild automatisieren
 - synthetische Positiv-, Negativ- und Recovery-Szenarien fuer `.gdi` und Firmwareoptionen integrieren
-- Windows- und Linux-Laeufe fuer den Alpha-Scope absichern
+- Windows-Lauf fuer den freigegebenen internen Scope absichern; Linux-GUI explizit ausnehmen
 - Screenshots, Logs und Artefaktpruefungen fuer fehlschlagende UI-Tests sammeln
 
 Akzeptanz:
 
-- Alpha-relevante GUI-Pfade laufen automatisiert auf allen Zielplattformen
+- der freigegebene Windows-GUI-Pfad laeuft automatisiert
 - mindestens ein gezielter `.gdi`-Fehlerfall und ein Recovery-Fall sind im UI-Testkorpus vorhanden
 - flackernde oder timingabhaengige UI-Tests werden vor Gate-Freigabe stabilisiert oder entfernt
 - Testartefakte enthalten keine proprietaeren Quellbytes
@@ -2334,13 +2334,13 @@ Umfang:
 Akzeptanz:
 
 - die GUI bleibt unter typischen Alpha-Fehlerfaellen bedienbar und stellt den Zustand wieder her
-- Packaging und Start funktionieren auf den Zielplattformen mit dokumentierten Voraussetzungen
+- Packaging und Start funktionieren im freigegebenen Windows-Scope
 - Accessibility-Basis fuer Kernpfade ist vorhanden und getestet
-- interne GUI-Dokumentation deckt Projektstart und `.gdi`-Workflow ab
+- interne GUI-Dokumentation deckt GDI-Auswahl, Ausgabe und Buildlog ab
 - der Gate-Bericht liegt vor; danach wird vor KR-4403 fuer das Nutzerreview
   gestoppt
 
-### [ ] KR-4403 - v0.44.0 interne GUI-und-GDI-Meilenstein-Freigabe
+### [x] KR-4403 - v0.44.0 interne GUI-und-GDI-Meilenstein-Freigabe
 
 Abhaengigkeiten: KR-4401, KR-4402
 
@@ -2348,10 +2348,10 @@ Akzeptanz:
 
 - der Alpha-Hauptworkflow ist in der GUI ohne CLI-Zwang vollstaendig nutzbar
 - `.gdi` ist als offizielle Quelle in GUI, CLI und Tests identisch validiert
-- identische Projekte erzeugen ueber GUI und CLI dieselben Manifeste, Jobs und Ergebnisartefakte
+- identische GDI-Eingaben verwenden ueber GUI und CLI dieselben Kernkomponenten
 - dokumentierte Blocker fuer GUI oder `.gdi` verhindern den Uebergang ins Alpha-Gate
-- die unveraenderte KR-4402-Gate-Vorbereitung ist vom Nutzer ausdruecklich
-  freigegeben
+- die korrigierte KR-4402-Vorbereitung und der schlanke GDI-Workflow sind vom
+  Nutzer am 16.07.2026 ausdruecklich freigegeben
 - es folgen keine Versionierung, kein Release-Commit, kein Tag und keine
   Veroeffentlichung
 
