@@ -35,6 +35,39 @@ Sonic-spezifischer Patch. Grundlage ist die Renesas-Dokumentation der
 garantierten Register R8 bis R14:
 <https://www.renesas.com/en/document/apn/sh-compiler-application-note-2-compiler-use-guide-pragma-extension-guide>.
 
+## Begrenzte Speicherwerte
+
+Direkte, Displacement- und R0-indexierte Integerloads duerfen einen Wert nur
+dann statisch uebernehmen, wenn die effektive Adresse vollstaendig konstant,
+der gesamte Zugriff committed und das Segment lesbar sowie nicht beschreibbar
+ist. Byte- und Wortloads werden vorzeichenerweitert. Beschreibbare Daten,
+Zero-Fill, dynamische Basen und unbeschraenkte Indizes invalidieren nur das
+Zielregister und erzeugen keinen geratenen Kontrollfluss.
+
+## Relative SH-4-Sprungtabellen
+
+Eine relative Tabelle wird automatisch nur fuer ein zusammenhaengendes,
+strukturell eindeutiges Muster akzeptiert:
+
+1. Ein unmittelbar geladenes positives Limit begrenzt den unsigned Index mit
+   `CMP/HS`.
+2. `BT` verlaesst den Tabellenpfad oder `BF` springt ueber einen direkten
+   `BRA`-Fallback genau in den Tabellenpfad.
+3. `SHLL`, Registerkopie und `MOVA` bilden den Zwei-Byte-Index und die
+   PC-relative Tabellenbasis.
+4. `MOV.W @(R0,Rm),Rn` liest einen signed 16-Bit-Offset; `BRAF Rn` verwendet
+   `dispatch + 4` als Zielbasis.
+
+Alle Eintraege muessen committed, gerade und ausfuehrbar sein. Ein einziger
+ungueltiger Eintrag verwirft die gesamte Zielmenge. Das eng erkannte
+Compilerliteral darf aus dem committed ausfuehrbaren Eingangssnapshot gelesen
+werden, auch wenn das Plattformimage zur Laufzeit in RAM liegt; dies erlaubt
+keine allgemeine Dereferenzierung beschreibbarer Pointer, VTables oder
+Executable-RAM-Bereiche. Automatische Tabellen werden als aufgeloeste
+Mehrfachstelle markiert, in den rekursiven Fixpunkt und `resolved_edges`
+uebernommen und im JSON-Bericht mit Kodierung, Zielbasis und jedem Einzelbeweis
+ausgegeben.
+
 ## Registerwertanalyse
 
 Die Registerwertanalyse erweitert den lokalen Transfer um registerweise Add-,

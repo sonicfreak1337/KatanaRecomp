@@ -2707,7 +2707,7 @@ Akzeptanz:
 - der redigierte private Vergleich entdeckt mehr Code und reduziert die offene
   Restmenge ohne feste Retailadresse, Override oder Spieldaten im Repository
 
-### [ ] KR-4712 - Begrenzte Speicherziele und relative Sprungtabellen
+### [x] KR-4712 - Begrenzte Speicherziele und relative Sprungtabellen
 
 Abhaengigkeiten: KR-4711
 
@@ -2715,7 +2715,9 @@ Prioritaet: P0 - naechster statischer Analyseblocker
 
 Umfang:
 
-- endliche Zielmengen aus beweisbar unveraenderlichen Zeigertabellen nur bei
+- einzelne Speicherwerte nur aus lesbaren, nicht beschreibbaren committed
+  Segmenten propagieren
+- endliche Zielmengen aus strukturell gebundenen Zeigertabellen nur bei
   statisch belegter Basis, Breite und Grenze ableiten
 - relative SH-4-Sprungtabellen als generisches Muster aus PC-Basis,
   vorzeichenerweitertem Offset und `BRAF` erkennen
@@ -2724,11 +2726,37 @@ Umfang:
 
 Akzeptanz:
 
-- synthetische positive und negative Faelle sichern absolute und relative
-  Tabellen, Grenzen, Vorzeichenerweiterung und schreibbare Speicherbereiche ab
+- synthetische positive und negative Faelle sichern read-only Speicherloads,
+  absolute und relative Tabellen, `BT`-/`BF`-Grenzen, Vorzeichenerweiterung,
+  Adressraumueberlauf und beschreibbare Datensegmente ab
 - jedes Mehrfachziel besitzt eine nachvollziehbare generische Beweiskette
-- der private read-only Vergleich reduziert die offene Restmenge ohne
-  Retailadresse, Override, Spieldaten oder Titelsonderfall im Repository
+- der private read-only Vergleich weist neue bewiesene Ziele und die durch sie
+  neu entdeckte offene Restmenge getrennt aus, ohne Retailadresse, Override,
+  Spieldaten oder Titelsonderfall im Repository
+
+### [ ] KR-4713 - Interprozedurale SH-C-Zielwertsummaries
+
+Abhaengigkeiten: KR-4712
+
+Prioritaet: P0 - naechster statischer Analyseblocker
+
+Umfang:
+
+- pro Funktion konservative Summaries fuer konstante oder endliche
+  Rueckgabewerte und ABI-erhaltene Zielregister ableiten
+- Summaries am Call-Fixpunkt zusammenfuehren, ohne unbekannte Parameter,
+  veraenderliche VTables oder Stackziele als statisch auszugeben
+- offene indirekte Calls nach Rueckgabewert, Parameter, VTable, Stack und
+  unbeschraenkter Speicherherkunft getrennt berichten
+
+Akzeptanz:
+
+- synthetische Anforderungen decken eindeutige, mehrwertige, rekursive und
+  unbekannte Callees sowie widerspruechliche Rueckgabepfade ab
+- jede interprozedurale Aufloesung besitzt Callee-, Register- und
+  Zusammenfuehrungsevidenz; dynamische Ziele bleiben sichtbar offen
+- der private read-only Vergleich misst neue Beweise und neu entdeckten Code
+  getrennt, ohne Retailadresse oder Titelsonderfall im Repository
 
 ### [ ] KR-4702 - Native Audio-, Eingabe- und Hostlebenszyklusintegration
 
@@ -2766,7 +2794,7 @@ Akzeptanz:
 
 ### [ ] KR-4704 - v0.47 Gate-Vorbereitung: Tests und Build
 
-Abhaengigkeiten: KR-4701 bis KR-4703, KR-4711, KR-4712
+Abhaengigkeiten: KR-4701 bis KR-4703, KR-4711 bis KR-4713
 
 Umfang und Akzeptanz:
 

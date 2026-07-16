@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <optional>
 #include <set>
 #include <string_view>
 #include <utility>
@@ -53,6 +54,54 @@ void clear_register(RegisterConstants& state, const std::uint8_t index) {
 
 constexpr std::uint16_t register_bit(const std::uint8_t index) {
     return static_cast<std::uint16_t>(1u << index);
+}
+
+std::optional<std::uint32_t>
+read_immutable_integer(const katana::io::ExecutableImage* image,
+                       const std::uint32_t address,
+                       const std::size_t width) {
+    if (image == nullptr) return std::nullopt;
+    const auto* segment = image->find_segment(address, width);
+    if (segment == nullptr || !segment->permissions.readable || segment->permissions.writable)
+        return std::nullopt;
+    const auto offset = segment->byte_offset(address);
+    if (!offset.has_value() || *offset > segment->bytes.size() ||
+        width > segment->bytes.size() - *offset)
+        return std::nullopt;
+    switch (width) {
+    case 1u:
+        return static_cast<std::uint32_t>(static_cast<std::int32_t>(
+            static_cast<std::int8_t>(segment->bytes[*offset])));
+    case 2u:
+        return static_cast<std::uint32_t>(static_cast<std::int32_t>(
+            static_cast<std::int16_t>(katana::io::read_u16_le(segment->bytes, *offset))));
+    case 4u:
+        return static_cast<std::uint32_t>(
+                   katana::io::read_u16_le(segment->bytes, *offset)) |
+               (static_cast<std::uint32_t>(
+                    katana::io::read_u16_le(segment->bytes, *offset + 2u))
+                << 16u);
+    default:
+        return std::nullopt;
+    }
+}
+
+void apply_immutable_load(RegisterConstants& state,
+                          const katana::sh4::DecodedInstruction& instruction,
+                          const katana::io::ExecutableImage* image,
+                          const std::optional<std::uint32_t> address,
+                          const std::size_t width) {
+    const auto value = address.has_value()
+                           ? read_immutable_integer(image, *address, width)
+                           : std::nullopt;
+    if (!value.has_value()) {
+        clear_register(state, instruction.destination_register);
+        return;
+    }
+    set_constant(state,
+                 instruction.destination_register,
+                 *value,
+                 width == 4u ? "bounded-immutable-pointer" : "bounded-immutable-value");
 }
 
 std::uint16_t general_register_writes(const katana::sh4::DecodedInstruction& instruction) {
@@ -204,6 +253,52 @@ void apply_local_transfer(RegisterConstants& state,
                          static_cast<std::uint32_t>(instruction.displacement),
                      "pc-relative-address");
         return;
+    case katana::sh4::InstructionKind::MovByteLoad:
+    case katana::sh4::InstructionKind::MovWordLoad:
+    case katana::sh4::InstructionKind::MovLongLoad: {
+        const auto width = instruction.kind == katana::sh4::InstructionKind::MovByteLoad
+                               ? 1u
+                           : instruction.kind == katana::sh4::InstructionKind::MovWordLoad ? 2u
+                                                                                           : 4u;
+        apply_immutable_load(state,
+                             instruction,
+                             image,
+                             state.registers[instruction.source_register],
+                             width);
+        return;
+    }
+    case katana::sh4::InstructionKind::MovByteLoadDisplacement:
+    case katana::sh4::InstructionKind::MovWordLoadDisplacement:
+    case katana::sh4::InstructionKind::MovLongLoadDisplacement: {
+        const auto width =
+            instruction.kind == katana::sh4::InstructionKind::MovByteLoadDisplacement
+                ? 1u
+            : instruction.kind == katana::sh4::InstructionKind::MovWordLoadDisplacement ? 2u
+                                                                                        : 4u;
+        const auto base = state.registers[instruction.source_register];
+        const auto address = base.has_value()
+                                 ? std::optional<std::uint32_t>(
+                                       *base + static_cast<std::uint32_t>(instruction.displacement))
+                                 : std::nullopt;
+        apply_immutable_load(state, instruction, image, address, width);
+        return;
+    }
+    case katana::sh4::InstructionKind::MovByteLoadR0Indexed:
+    case katana::sh4::InstructionKind::MovWordLoadR0Indexed:
+    case katana::sh4::InstructionKind::MovLongLoadR0Indexed: {
+        const auto width = instruction.kind == katana::sh4::InstructionKind::MovByteLoadR0Indexed
+                               ? 1u
+                           : instruction.kind == katana::sh4::InstructionKind::MovWordLoadR0Indexed
+                               ? 2u
+                               : 4u;
+        const auto base = state.registers[0u];
+        const auto index = state.registers[instruction.source_register];
+        const auto address = base.has_value() && index.has_value()
+                                 ? std::optional<std::uint32_t>(*base + *index)
+                                 : std::nullopt;
+        apply_immutable_load(state, instruction, image, address, width);
+        return;
+    }
     case katana::sh4::InstructionKind::AddImmediate:
         if (state.registers[instruction.destination_register].has_value()) {
             *state.registers[instruction.destination_register] +=

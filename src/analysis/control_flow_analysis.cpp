@@ -75,6 +75,19 @@ const katana::sh4::DisassemblyLine* find_instruction(const RecursiveAnalysisResu
                                                                                  : nullptr;
 }
 
+void mark_resolved_table_dispatch(std::vector<IndirectControlFlowResolution>& resolutions,
+                                  const JumpTableAnalysis& table) {
+    if (!table.resolved) return;
+    const auto resolution = std::find_if(
+        resolutions.begin(), resolutions.end(), [&table](const auto& candidate) {
+            return candidate.instruction_address == table.dispatch_address;
+        });
+    if (resolution == resolutions.end()) return;
+    resolution->status = ResolutionStatus::Resolved;
+    resolution->target.reset();
+    resolution->reason = table.reason;
+}
+
 } // namespace
 
 ControlFlowAnalysisResult analyze_control_flow(const katana::io::ExecutableImage& image,
@@ -116,6 +129,34 @@ ControlFlowAnalysisResult analyze_control_flow(const katana::io::ExecutableImage
         analysis.jump_tables.clear();
         analysis.directive_diagnostics = seed_diagnostics;
         bool missing_override_dispatch = false;
+
+        std::set<std::uint32_t> directive_dispatches;
+        if (overrides != nullptr) {
+            for (const auto& jump : overrides->jumps)
+                directive_dispatches.insert(jump.instruction_address);
+            for (const auto& table : overrides->jump_tables)
+                directive_dispatches.insert(table.dispatch_address);
+        }
+        for (std::size_t index = 0u; index < analysis.recursive.instructions.size(); ++index) {
+            const auto& line = analysis.recursive.instructions[index];
+            if (directive_dispatches.contains(line.address) ||
+                line.instruction.kind != katana::sh4::InstructionKind::Braf)
+                continue;
+            const auto resolution = std::find_if(
+                analysis.indirect_control_flow.begin(),
+                analysis.indirect_control_flow.end(),
+                [&line](const auto& candidate) {
+                    return candidate.instruction_address == line.address &&
+                           candidate.status == ResolutionStatus::Unresolved;
+                });
+            if (resolution == analysis.indirect_control_flow.end()) continue;
+            auto table = recognize_bounded_relative_jump_table(
+                image, analysis.recursive.instructions, index);
+            if (!table.has_value()) continue;
+            analysis.jump_tables.push_back(std::move(*table));
+            mark_resolved_table_dispatch(analysis.indirect_control_flow,
+                                         analysis.jump_tables.back());
+        }
 
         if (overrides != nullptr) {
             for (const auto& jump : overrides->jumps) {
@@ -229,6 +270,8 @@ ControlFlowAnalysisResult analyze_control_flow(const katana::io::ExecutableImage
                          jump_table.resolved ? "jump-table-validated" : jump_table.reason});
                 }
                 analysis.jump_tables.push_back(std::move(jump_table));
+                mark_resolved_table_dispatch(analysis.indirect_control_flow,
+                                             analysis.jump_tables.back());
             }
         }
 
@@ -252,22 +295,20 @@ ControlFlowAnalysisResult analyze_control_flow(const katana::io::ExecutableImage
                 changed = add_seed(seeds, *resolution.target) || changed;
             }
         }
-        if (overrides != nullptr) {
-            for (std::size_t index = 0u; index < analysis.jump_tables.size(); ++index) {
-                const auto& table = analysis.jump_tables[index];
-                if (!table.resolved) {
-                    continue;
-                }
-                const bool is_call = table.dispatch_kind == JumpTableDispatchKind::Call;
-                for (const auto& entry : table.entries) {
-                    if (is_call) {
-                        const std::array origins{FunctionOrigin::JumpTableCall,
-                                                 hints ? FunctionOrigin::UserHint
-                                                       : FunctionOrigin::UserOverride};
-                        changed = add_seed(seeds, entry.target, origins) || changed;
-                    } else {
-                        changed = add_seed(seeds, entry.target) || changed;
+        for (const auto& table : analysis.jump_tables) {
+            if (!table.resolved) continue;
+            const bool is_call = table.dispatch_kind == JumpTableDispatchKind::Call;
+            const bool directed = directive_dispatches.contains(table.dispatch_address);
+            for (const auto& entry : table.entries) {
+                if (is_call) {
+                    std::vector<FunctionOrigin> origins{FunctionOrigin::JumpTableCall};
+                    if (directed) {
+                        origins.push_back(hints ? FunctionOrigin::UserHint
+                                                : FunctionOrigin::UserOverride);
                     }
+                    changed = add_seed(seeds, entry.target, origins) || changed;
+                } else {
+                    changed = add_seed(seeds, entry.target) || changed;
                 }
             }
         }

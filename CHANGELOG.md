@@ -4,6 +4,16 @@
 
 ### Hinzugefuegt
 
+- KR-4712: Die Analyse propagiert Speicherwerte nur aus committed read-only
+  Segmenten und erkennt begrenzte SH-4-`CMP/HS`-/`MOVA`-/`MOV.W`-/`BRAF`-
+  Tabellen mit `BT`- oder `BF`-/Fallback-Guard. Vorzeichenbehaftete 16-Bit-
+  Eintraege werden vollstaendig validiert, als Mehrfachkanten in den Fixpunkt
+  gespeist und mit Kodierung, Basis und Einzelevidenz berichtet. Der private
+  read-only Vergleich bewies 3.024 von 3.785 indirekten Stellen, erkannte 12
+  relative Tabellen und erschloss 120.899 Instruktionen sowie 1.231 Funktionen;
+  761 neu klassifizierte Stellen bleiben offen. Die Hostanwendung wurde nicht
+  gestartet und es wurden keine privaten Inhalte uebernommen.
+
 - KR-4711: Die Wertanalyse invalidiert unbekannte SH-4-Effekte registerweise
   statt als pauschalen Voll-Clobber, behandelt Call-Delay-Slots und bedingte
   CFG-Fallthroughs konservativ und bindet den dokumentierten SH-C-Vertrag fuer

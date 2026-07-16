@@ -12,12 +12,12 @@ Erster oeffentlicher Produktrelease: `v0.50.0` Alpha
 
 ## Fortschritt
 
-- 208 von 238 gepflegten Roadmap-Tasks abgeschlossen: 87,4 %
+- 209 von 239 gepflegten Roadmap-Tasks abgeschlossen: 87,4 %
 - Phase-9-Reviewkorrekturen sind implementiert; das eigenstaendige
   achtteilige Homebrew-Korpus und Linux-Evidenz bleiben offen
 - Phase 10: 13/13 Tasks im freigegebenen Windows-GDI-Workflow
 - Phase 11: 16/16 Tasks
-- Phase 12: 2/12 Tasks
+- Phase 12: 3/13 Tasks
 - Phase 13: 0/5 Tasks vor dem Alpha-Gate
 - Alpha-Gate noch nicht erreicht
 
@@ -34,7 +34,7 @@ Erster oeffentlicher Produktrelease: `v0.50.0` Alpha
 | 9 | Kompatibilitaet und Leistung | Reviewkorrekturen offen |
 | 10 | Desktop-GUI und Quellworkflow | 13/13 (Windows-GDI-Scope) |
 | 11 | Bootanalyse und Retail-Systemdienste | 16/16 |
-| 12 | Interaktive Retail-Runtime und Portintegration | 2/12 |
+| 12 | Interaktive Retail-Runtime und Portintegration | 3/13 |
 | 13 | Spielbarer Alpha-Kandidat | 0/5 |
 
 Die Einzelaufgaben und Abhaengigkeiten werden ausschliesslich in
@@ -86,6 +86,15 @@ CFG-Join-Grenzen bleiben konservativ getrennt. Dreamcast-GDI-Images tragen den
 expliziten SH-C-Aufrufvertrag: R0 bis R7 sind Call-Clobber, R8 bis R14 werden
 als ABI-garantiert erhalten; ABI-lose Images behalten den alten konservativen
 Voll-Clobber. ABI-erhaltene Zielbeweise besitzen eine eigene Herkunft.
+
+KR-4712 liest einzelne Speicherwerte nur aus committed read-only Segmenten.
+Der Analyzer erkennt ausserdem das generische SH-4-Switchmuster aus
+unmittelbarer `CMP/HS`-Grenze, `BT` oder `BF` mit direktem Fallback, skaliertem
+Index, `MOVA`, vorzeichenerweitertem `MOV.W` und `BRAF`. Jeder Eintrag wird
+vollstaendig gegen committed ausfuehrbaren Code validiert; erst dann speist die
+gesamte Zielmenge den Analysefixpunkt, die CFG-Kanten und den Bericht. Das eng
+erkannte Compilerliteral darf aus dem committed ausfuehrbaren Eingangssnapshot
+stammen; allgemeine beschreibbare Speicherloads und VTables bleiben dynamisch.
 
 CLI und GUI beobachten denselben sequenzierten hierarchischen Ereignisstrom.
 Gesamtfortschritt ist monoton, Einzelschritte besitzen nur bei bekannter Menge
@@ -239,6 +248,13 @@ Alpha-Gate `v0.50.0` deaktiviert. Der fruehere CI-Badge wurde deshalb entfernt.
   Ziele bewiesen und die offene Restmenge trotz breiterer Codeentdeckung um 79
   reduziert. Der Lauf startete keine Hostanwendung und uebernahm weder
   Retailadressen noch Spieldaten, Pfade oder Hashes in das Repository.
+- Der read-only KR-4712-Vergleich erkannte 12 vollstaendig begrenzte relative
+  Tabellen. Der Fixpunkt erschloss dadurch 120.899 Instruktionen, 1.231
+  Funktionen und 3.785 indirekte Stellen; 3.024 sind bewiesen, 761 bleiben
+  offen. Gegenueber KR-4711 sind 2.007 weitere Stellen bewiesen. Die absolute
+  Restmenge stieg um 490, weil 80.300 weitere Instruktionen und 656 weitere
+  Funktionen erstmals erreichbar wurden; sie wird nicht als Regression oder
+  als Vollstaendigkeit kaschiert. Keine Hostanwendung wurde gestartet.
 - Das Alpha-Gate verlangt reproduzierbar:
   `GDI -> Port-Projekt -> game.exe -> SA_ALPHA_PLAYABLE`.
 - Alpha erfordert Boot, Video, Eingabe und eine kontrollierbare Spielszene.

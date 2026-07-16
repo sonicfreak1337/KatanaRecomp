@@ -255,12 +255,30 @@ std::string format_control_flow_analysis_json(const ControlFlowAnalysisResult& a
         const auto& table = jump_tables[index];
         output << "{\"dispatch_address\":" << katana::io::quote_json(hex32(table.dispatch_address))
                << ",\"table_address\":" << katana::io::quote_json(hex32(table.table_address))
-               << ",\"kind\":"
+               << ",\"encoding\":"
+               << katana::io::quote_json(jump_table_encoding_name(table.encoding))
+               << ",\"target_base\":";
+        if (table.encoding == JumpTableEncoding::SignedRelative16)
+            output << katana::io::quote_json(hex32(table.target_base));
+        else
+            output << "null";
+        output << ",\"kind\":"
                << katana::io::quote_json(
                       table.dispatch_kind == JumpTableDispatchKind::Call ? "call" : "jump")
                << ",\"resolved\":" << (table.resolved ? "true" : "false")
                << ",\"requested_entries\":" << table.requested_entries
-               << ",\"reason\":" << katana::io::quote_json(table.reason) << '}';
+               << ",\"reason\":" << katana::io::quote_json(table.reason)
+               << ",\"entries\":[";
+        for (std::size_t entry_index = 0u; entry_index < table.entries.size(); ++entry_index) {
+            if (entry_index != 0u) output << ',';
+            const auto& entry = table.entries[entry_index];
+            output << "{\"index\":" << entry.index
+                   << ",\"entry_address\":" << katana::io::quote_json(hex32(entry.entry_address))
+                   << ",\"target\":" << katana::io::quote_json(hex32(entry.target))
+                   << ",\"accepted\":" << (entry.accepted ? "true" : "false")
+                   << ",\"reason\":" << katana::io::quote_json(entry.reason) << '}';
+        }
+        output << "]}";
     }
     output << ']';
 

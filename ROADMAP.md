@@ -1203,7 +1203,8 @@ Fortschritt:
 
 - [x] KR-4701 - Native Fenster- und Videoausgabe
 - [x] KR-4711 - Registerweise Retail-Wertanalyse und SH-C-Callvertrag
-- [ ] KR-4712 - Begrenzte Speicherziele und relative Sprungtabellen
+- [x] KR-4712 - Begrenzte Speicherziele und relative Sprungtabellen
+- [ ] KR-4713 - Interprozedurale SH-C-Zielwertsummaries
 - [ ] KR-4702 - Native Audio-, Eingabe- und Hostlebenszyklusintegration
 - [ ] KR-4703 - Persistente VMU-/Flash-Arbeitskopien und Host-Pacing
 - [ ] KR-4704 - v0.47 Gate-Vorbereitung: Tests und Build
