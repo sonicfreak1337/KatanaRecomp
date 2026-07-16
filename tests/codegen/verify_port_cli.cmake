@@ -62,10 +62,12 @@ execute_process(
 )
 if(NOT generated_result EQUAL 0 OR
    NOT generated_output MATCHES "KR_GENERATED_RUNTIME_STARTED" OR
-   NOT generated_output MATCHES "indirect_dispatches=1")
+   NOT generated_output MATCHES "indirect_dispatches=1" OR
+   NOT generated_output MATCHES "frames=1")
   file(REMOVE_RECURSE "${fixture}")
   message(FATAL_ERROR
-    "Eigenstaendiger GDI-/Runtimepfad ist nicht lauffaehig: ${generated_error}")
+    "Eigenstaendiger GDI-/Runtimepfad ist nicht lauffaehig (${generated_result}): "
+    "${generated_output} ${generated_error}")
 endif()
 
 execute_process(

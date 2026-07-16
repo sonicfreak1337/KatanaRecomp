@@ -245,17 +245,20 @@ int run_test(const int argc, char* argv[]) {
         require(generated_before.contains(path),
                 "Portexport verliert Artefakt: " + std::string(path));
     }
-    require(generated_before.at("katana-port.cmake").find("add_executable(synthetic_game") !=
-                    std::string::npos &&
-                generated_before.at("katana-port.cmake").find("katana_runtime") !=
-                    std::string::npos &&
-                generated_before.at("code/runtime-dispatch.cpp").find("dispatch_indirect") !=
-                    std::string::npos &&
-                std::filesystem::exists(output / "CMakeLists.txt") &&
-                std::filesystem::exists(output / "src" / "main.cpp") &&
-                read_text(output / "src" / "main.cpp").find("load_dreamcast_runtime_boot") !=
-                    std::string::npos,
-            "Portprojekt besitzt keinen ausfuehrbaren GDI-/Runtimevertrag.");
+    require(
+        generated_before.at("katana-port.cmake").find("add_executable(synthetic_game") !=
+                std::string::npos &&
+            generated_before.at("katana-port.cmake").find("katana_runtime") != std::string::npos &&
+            generated_before.at("code/runtime-dispatch.cpp").find("dispatch_indirect") !=
+                std::string::npos &&
+            std::filesystem::exists(output / "CMakeLists.txt") &&
+            std::filesystem::exists(output / "src" / "main.cpp") &&
+            read_text(output / "src" / "main.cpp").find("load_dreamcast_runtime_boot") !=
+                std::string::npos &&
+            read_text(output / "src" / "main.cpp").find("create_native_video_output") !=
+                std::string::npos &&
+            read_text(output / "src" / "main.cpp").find("framebuffer.capture") != std::string::npos,
+        "Portprojekt besitzt keinen ausfuehrbaren GDI-/Runtimevertrag.");
     std::string portable_content;
     for (const auto& [path, content] : generated_before) {
         static_cast<void>(path);

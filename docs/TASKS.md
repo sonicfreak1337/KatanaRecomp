@@ -2664,7 +2664,7 @@ Akzeptanz:
 
 ## Phase 12 / v0.47.0 bis v0.48.0 - Interaktive Retail-Runtime und Portintegration
 
-### [ ] KR-4701 - Native Fenster- und Videoausgabe
+### [x] KR-4701 - Native Fenster- und Videoausgabe
 
 Abhaengigkeiten: KR-2804, KR-3105, KR-4605
 

@@ -64,6 +64,9 @@ file(WRITE "${output_root}/runtime-sdk/CMakeLists.txt"
 "add_library(katana_runtime STATIC \${runtime_sources})\n"
 "target_compile_features(katana_runtime PUBLIC cxx_std_20)\n"
 "target_include_directories(katana_runtime PUBLIC \"\${CMAKE_CURRENT_SOURCE_DIR}/include\")\n"
+"if(WIN32)\n"
+"  target_link_libraries(katana_runtime PUBLIC gdi32 user32)\n"
+"endif()\n"
 )
 file(COPY
     "${source_root}/docs/PHASE10_GUI_ARCHITECTURE.md"
@@ -132,7 +135,8 @@ execute_process(
 )
 if(NOT relocated_game_result EQUAL 0 OR
    NOT relocated_game_output MATCHES "KR_GENERATED_RUNTIME_STARTED" OR
-   NOT relocated_game_output MATCHES "indirect_dispatches=1")
+   NOT relocated_game_output MATCHES "indirect_dispatches=1" OR
+   NOT relocated_game_output MATCHES "frames=1")
     message(FATAL_ERROR
         "Relocated game GDI runtime failed: ${relocated_game_output} ${relocated_game_error}")
 endif()

@@ -25,7 +25,7 @@ Eingabe
   -> natives Hostprojekt
 ```
 
-Der aktuelle kumulative Debug-Gate-Vertrag umfasst **168 automatische Tests**.
+Der aktuelle kumulative Debug-Vertrag umfasst **169 automatische Tests**.
 Phase 10 ist
 fuer den freigegebenen Windows-Workflow abgeschlossen: eine `.gdi` waehlen,
 einen Ausgabeordner waehlen und den Analyse-/Buildzustand sichtbar verfolgen.
@@ -68,6 +68,8 @@ Hostbuildkomponenten. Der entsprechende CLI-Pfad ist beispielsweise:
 Architektur und interner Bedienpfad stehen in
 [docs/PHASE10_GUI_ARCHITECTURE.md](docs/PHASE10_GUI_ARCHITECTURE.md) und
 [docs/PHASE10_GUI_WORKFLOW.md](docs/PHASE10_GUI_WORKFLOW.md).
+Der eigenstaendige Port nutzt den nativen Hostvideovertrag aus
+[docs/HOST_VIDEO.md](docs/HOST_VIDEO.md).
 
 ## Umgesetzte Bereiche
 

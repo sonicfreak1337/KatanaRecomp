@@ -4,7 +4,7 @@ Interner Entwicklungsmeilenstein: `0.46.0`
 
 Phase: Pre-Alpha
 
-Naechster Roadmap-Task: Phase 12 / KR-4701
+Naechster Roadmap-Task: Phase 12 / KR-4702
 
 Naechstes Phasengate: `v0.47.0` - Native Hostruntime
 
@@ -12,12 +12,12 @@ Erster oeffentlicher Produktrelease: `v0.50.0` Alpha
 
 ## Fortschritt
 
-- 206 von 236 gepflegten Roadmap-Tasks abgeschlossen: 87,3 %
+- 207 von 236 gepflegten Roadmap-Tasks abgeschlossen: 87,7 %
 - Phase-9-Reviewkorrekturen sind implementiert; das eigenstaendige
   achtteilige Homebrew-Korpus und Linux-Evidenz bleiben offen
 - Phase 10: 13/13 Tasks im freigegebenen Windows-GDI-Workflow
 - Phase 11: 16/16 Tasks
-- Phase 12: 0/10 Tasks
+- Phase 12: 1/10 Tasks
 - Phase 13: 0/5 Tasks vor dem Alpha-Gate
 - Alpha-Gate noch nicht erreicht
 
@@ -34,7 +34,7 @@ Erster oeffentlicher Produktrelease: `v0.50.0` Alpha
 | 9 | Kompatibilitaet und Leistung | Reviewkorrekturen offen |
 | 10 | Desktop-GUI und Quellworkflow | 13/13 (Windows-GDI-Scope) |
 | 11 | Bootanalyse und Retail-Systemdienste | 16/16 |
-| 12 | Interaktive Retail-Runtime und Portintegration | 0/10 |
+| 12 | Interaktive Retail-Runtime und Portintegration | 1/10 |
 | 13 | Spielbarer Alpha-Kandidat | 0/5 |
 
 Die Einzelaufgaben und Abhaengigkeiten werden ausschliesslich in
@@ -72,6 +72,13 @@ synthetische Retail-Boot-Service-Slice erreicht
 Commit `e7b19ba`. KR-4605 ist nach der ausdruecklich bedingten Nutzerfreigabe
 abgeschlossen; Phase 12 darf beginnen, Release-, Tag- oder Paketaktionen
 bleiben untersagt.
+
+KR-4701 stellt externen Portprojekten einen versionierten nativen
+Hostvideovertrag bereit. Die Windows-Implementierung besitzt ein echtes
+Win32-Fenster, Resize, seitenverhaeltnistreues RGBA-Present, Fehlerweitergabe
+und kontrolliertes Schliessen. Die erzeugte `game.exe` praesentiert produktiv
+einen VRAM-Frame und meldet `frames=1`; nicht implementierte Hosts melden die
+Nichtverfuegbarkeit explizit und behalten den headless CLI/Core-Build.
 
 CLI und GUI beobachten denselben sequenzierten hierarchischen Ereignisstrom.
 Gesamtfortschritt ist monoton, Einzelschritte besitzen nur bei bekannter Menge

@@ -1201,7 +1201,7 @@ wird weiterhin durch titelunabhaengige verteilbare Tests abgesichert.
 
 Fortschritt:
 
-- [ ] KR-4701 - Native Fenster- und Videoausgabe
+- [x] KR-4701 - Native Fenster- und Videoausgabe
 - [ ] KR-4702 - Native Audio-, Eingabe- und Hostlebenszyklusintegration
 - [ ] KR-4703 - Persistente VMU-/Flash-Arbeitskopien und Host-Pacing
 - [ ] KR-4704 - v0.47 Gate-Vorbereitung: Tests und Build

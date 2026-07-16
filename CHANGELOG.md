@@ -4,6 +4,12 @@
 
 ### Hinzugefuegt
 
+- KR-4701: Ein versionierter nativer Hostvideovertrag stellt externen Ports
+  Win32-Fenster, Resize, seitenverhaeltnistreues RGBA-Present, kontrolliertes
+  Schliessen und weitergereichte GDI-Fehler ohne CLI-Laufzeithuelle bereit.
+  Die erzeugte `game.exe` praesentiert produktiv einen VRAM-Frame und meldet
+  `frames=1`. Ein selbst erzeugter rechtefreier Farbrahmen prueft den nativen
+  Vertrag; Port-CLI und relocatiertes Runtime-SDK pruefen den Produktpfad.
 - KR-4506: Die allgemeine Wertanalyse loest PC-relative SH-4-Wort-/Langwort-
   Literale und `MOVA` samt Herkunft auf und speist beweisbare indirekte Ziele
   in den rekursiven CFG-Fixpunkt ein.

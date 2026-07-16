@@ -183,6 +183,7 @@ add_library(katana_runtime STATIC
     src/runtime/exception.cpp
     src/runtime/fpu.cpp
     src/runtime/gdi.cpp
+    src/runtime/host_video.cpp
     src/runtime/interrupt.cpp
     src/runtime/iso9660.cpp
     src/runtime/maple.cpp
@@ -209,6 +210,10 @@ if(MSVC)
     target_compile_options(katana_runtime PRIVATE /fp:strict)
 else()
     target_compile_options(katana_runtime PRIVATE -frounding-math)
+endif()
+
+if(WIN32)
+    target_link_libraries(katana_runtime PUBLIC gdi32 user32)
 endif()
 
 add_library(katana_core STATIC
@@ -824,6 +829,11 @@ add_executable(katana-pvr-framebuffer-tests tests/runtime/pvr_framebuffer_tests.
 target_link_libraries(katana-pvr-framebuffer-tests PRIVATE katana_runtime)
 katana_enable_warnings(katana-pvr-framebuffer-tests)
 add_test(NAME katana-pvr-framebuffer-tests COMMAND katana-pvr-framebuffer-tests)
+
+add_executable(katana-host-video-tests tests/runtime/host_video_tests.cpp)
+target_link_libraries(katana-host-video-tests PRIVATE katana_runtime)
+katana_enable_warnings(katana-host-video-tests)
+add_test(NAME katana-host-video-tests COMMAND katana-host-video-tests)
 
 add_executable(katana-pvr-ta-tests tests/runtime/pvr_ta_tests.cpp)
 target_link_libraries(katana-pvr-ta-tests PRIVATE katana_runtime)
