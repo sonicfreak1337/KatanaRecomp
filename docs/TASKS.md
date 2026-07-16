@@ -1624,9 +1624,24 @@ Akzeptanz:
 - unportable Pfade, Segmente, Nullzeilen und unsortierte manuelle Maps werden abgelehnt
 - die gebuendelte Phase-8-Regression prueft Markerzeilen und JSON-Roundtrip
 
-### [ ] KR-3603 - Crashberichte
+### [x] KR-3603 - Crashberichte
 
 Abhaengigkeiten: KR-2102
+
+Umfang:
+
+- CPU-, Exception-, Delay-Slot-, Blockvarianten-, Scheduler- und Dispatchzustand erfassen
+- virtuelle und kanonische physische Adressen getrennt serialisieren
+- freie Hostfehlermeldungen, Pfade, Hostzeiger und Speicherdumps ausschliessen
+- einen versionierten deterministischen JSON-Vertrag bereitstellen
+
+Akzeptanz:
+
+- ein Delay-Slot-Abbruch berichtet SPC beziehungsweise den expliziten Owner statt Slot-PC
+- unvollstaendige Block- oder Dispatchkontexte und unportable Codes werden abgelehnt
+- physische Blockadressen werden vor dem Bericht kanonisiert
+- die gebuendelte Phase-8-Regression prueft Exception-, Dispatch-, Scheduler- und
+  Redaktionsfelder sowie JSON-Parsing
 
 ### [ ] KR-3604 - Tracing und Watchpoints
 
