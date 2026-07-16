@@ -792,7 +792,7 @@ Fortschritt:
 - [x] KR-3401 - Laufzeit-Blocktabelle
 - [x] KR-3402 - Indirekter Call- und Jump-Dispatch
 - [x] KR-3403 - Kontrollierter Fallback
-- [ ] KR-3404 - Selbstmodifizierenden Code erkennen
+- [x] KR-3404 - Selbstmodifizierenden Code erkennen
 - [ ] KR-3405 - Alias- und kopierbewusster Firmware-Handoff
 - [ ] KR-3406 - Kanonischer Block-Dispatch und Blockendklassen
 - [ ] KR-3407 - Scheduler-Safepoints und Gastzyklen

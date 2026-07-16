@@ -1195,7 +1195,7 @@ Akzeptanz:
 - ein deaktivierter Fallback bricht mit Gast-PC, Opcode/Ziel und Ursache ab
 - BIOS-Bereiche erhalten keine pauschale Sonderregel zum Ignorieren unbekannter Calls
 
-### [ ] KR-3404 - Selbstmodifizierenden Code erkennen
+### [x] KR-3404 - Selbstmodifizierenden Code erkennen
 
 Abhaengigkeiten: KR-2207, KR-3402
 

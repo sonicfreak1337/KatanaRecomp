@@ -11,6 +11,7 @@
 - KR-3401: Eine deterministisch sortierte Laufzeit-Blocktabelle verbindet virtuelle Diagnoseadressen, kanonische physische Herkunft, Blockgrenzen, Endtypen und Backendfunktionen. Statische sowie dynamische Eintraege teilen den Lookup; MMU-, FPSCR-, Adressraum- und Runtime-Varianten bleiben explizit, waehrend Ueberlappungsfehler beide Provenienzen nennen.
 - KR-3402: Der generische indirekte Dispatch trennt Calls, Tail-Jumps und Returns, kanonisiert P1-/P2-Ziele ueber den Adressraumvertrag und protokolliert Callsite, Ziel, PR, Quellblock sowie Lookupart. Unbekannte Ziele brechen sichtbar ab; Calls setzen PR, Returns verwenden PR und Jumps bewahren ihn.
 - KR-3403: Kontrollierte Fallbackrichtlinien fuer Abbruch, reine Diagnose, Interpreter und expliziten Nutzerhook klassifizieren unbekannte Opcodes, ungeloesten Kontrollfluss sowie dynamischen Code getrennt. Jede Nutzung wird stabil gezaehlt; CPU, Speicher, Ausnahme- und Schedulerkontext werden an einer typisierten Grenze synchronisiert, und Fortsetzung ist nur an der vereinbarten Blockgrenze erlaubt.
+- KR-3404: Ein hostunabhaengiger Tracker registriert ausfuehrbare RAM-Seiten, vereinheitlicht CPU-, DMA- und Copy-Writes ueber kanonische physische Adressen, erhoeht Seitengenerationen, invalidiert alle ueberdeckenden Blockvarianten und loest eingehende Links. Bytegleiche Writes koennen nur nach explizitem Nachweis ausgenommen werden; Hotspots bleiben messbar.
 
 ## [0.33.0] - 2026-07-16
 
