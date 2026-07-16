@@ -93,8 +93,14 @@ unmittelbarer `CMP/HS`-Grenze, `BT` oder `BF` mit direktem Fallback, skaliertem
 Index, `MOVA`, vorzeichenerweitertem `MOV.W` und `BRAF`. Jeder Eintrag wird
 vollstaendig gegen committed ausfuehrbaren Code validiert; erst dann speist die
 gesamte Zielmenge den Analysefixpunkt, die CFG-Kanten und den Bericht. Das eng
-erkannte Compilerliteral darf aus dem committed ausfuehrbaren Eingangssnapshot
-stammen; allgemeine beschreibbare Speicherloads und VTables bleiben dynamisch.
+erkannte Compilerliteral und jede Absolute32-Tabelle muessen ueber ihre gesamte
+Breite in einem einzelnen committed, lesbaren und nicht beschreibbaren Snapshot
+liegen. Beschreibbare Speicherloads, Tabellen und VTables bleiben dynamisch.
+Die Analyse-Regressionen pruefen den KR-4711-/KR-4712-Vertrag einschliesslich
+Call-Delay-Slots, ABI-Grenzen, CFG-Joins, Zero-Fill, `BT`/`BF`, signed Offsets,
+Adressueberlauf sowie teilweise committed und beschreibbare Tabellen.
+Der inkrementelle Debug-Zyklus besteht nach den Korrekturen vollstaendig mit
+164/164 CTests; die zuvor in der README genannte Zahl 169 war veraltet.
 
 CLI und GUI beobachten denselben sequenzierten hierarchischen Ereignisstrom.
 Gesamtfortschritt ist monoton, Einzelschritte besitzen nur bei bekannter Menge
@@ -248,13 +254,13 @@ Alpha-Gate `v0.50.0` deaktiviert. Der fruehere CI-Badge wurde deshalb entfernt.
   Ziele bewiesen und die offene Restmenge trotz breiterer Codeentdeckung um 79
   reduziert. Der Lauf startete keine Hostanwendung und uebernahm weder
   Retailadressen noch Spieldaten, Pfade oder Hashes in das Repository.
-- Der read-only KR-4712-Vergleich erkannte 12 vollstaendig begrenzte relative
-  Tabellen. Der Fixpunkt erschloss dadurch 120.899 Instruktionen, 1.231
-  Funktionen und 3.785 indirekte Stellen; 3.024 sind bewiesen, 761 bleiben
-  offen. Gegenueber KR-4711 sind 2.007 weitere Stellen bewiesen. Die absolute
-  Restmenge stieg um 490, weil 80.300 weitere Instruktionen und 656 weitere
-  Funktionen erstmals erreichbar wurden; sie wird nicht als Regression oder
-  als Vollstaendigkeit kaschiert. Keine Hostanwendung wurde gestartet.
+- Die zuerst fuer KR-4712 protokollierten Retailzahlen wurden verworfen: Sie
+  beruhten auf einer unzulaessigen RWX-Snapshot-Ausnahme fuer automatisch
+  erkannte relative Tabellen und sind kein Abschlussnachweis. Massgeblich sind
+  die reproduzierbaren synthetischen Regressionen. Eine korrigierte private
+  Neumessung ueberschritt das lokale Fuenf-Minuten-Budget; daraus werden weder
+  Ersatzwerte noch Vollstaendigkeitsaussagen abgeleitet. Keine Hostanwendung
+  wurde gestartet.
 - Das Alpha-Gate verlangt reproduzierbar:
   `GDI -> Port-Projekt -> game.exe -> SA_ALPHA_PLAYABLE`.
 - Alpha erfordert Boot, Video, Eingabe und eine kontrollierbare Spielszene.

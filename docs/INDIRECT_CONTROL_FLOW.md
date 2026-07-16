@@ -58,12 +58,11 @@ strukturell eindeutiges Muster akzeptiert:
 4. `MOV.W @(R0,Rm),Rn` liest einen signed 16-Bit-Offset; `BRAF Rn` verwendet
    `dispatch + 4` als Zielbasis.
 
-Alle Eintraege muessen committed, gerade und ausfuehrbar sein. Ein einziger
-ungueltiger Eintrag verwirft die gesamte Zielmenge. Das eng erkannte
-Compilerliteral darf aus dem committed ausfuehrbaren Eingangssnapshot gelesen
-werden, auch wenn das Plattformimage zur Laufzeit in RAM liegt; dies erlaubt
-keine allgemeine Dereferenzierung beschreibbarer Pointer, VTables oder
-Executable-RAM-Bereiche. Automatische Tabellen werden als aufgeloeste
+Die vollstaendige Tabellenbreite muss in einem einzelnen committed, lesbaren
+und nicht beschreibbaren Snapshot liegen. Alle Ziele muessen gerade und
+ausfuehrbar sein; ein einziger ungueltiger Eintrag verwirft die gesamte
+Zielmenge. Beschreibbare Pointer, Tabellen, VTables und Executable-RAM-Bereiche
+bleiben dynamisch. Automatische Tabellen werden als aufgeloeste
 Mehrfachstelle markiert, in den rekursiven Fixpunkt und `resolved_edges`
 uebernommen und im JSON-Bericht mit Kodierung, Zielbasis und jedem Einzelbeweis
 ausgegeben.
@@ -89,16 +88,19 @@ Gruenden `unresolved`.
 ## Jump Tables
 
 `analyze_jump_table` wertet eine bekannte, vier Byte ausgerichtete Tabelle mit
-einer expliziten endlichen Eintragszahl aus. Absolute 32-Bit-Ziele werden nur
-akzeptiert, wenn sie gerade sind und auf committed ausfuehrbaren Code zeigen.
+einer expliziten endlichen Eintragszahl aus. Die gesamte Absolute32-Tabelle
+muss in einem einzelnen committed, lesbaren und nicht beschreibbaren Snapshot
+liegen. Ziele werden nur akzeptiert, wenn sie gerade sind und auf committed
+ausfuehrbaren Code zeigen.
 Die Bereichsschranke liegt bei 4096 Eintraegen. Fehlende Eintraege, ungueltige
 Ziele und unbeschraenkte Kandidaten bleiben als abgelehnt sichtbar; eine nur
 teilweise gueltige Tabelle gilt nicht als aufgeloest.
 
 Die Tabellenbasis muss vier Byte ausgerichtet sein. Die exklusive Endadresse wird
 mit 64-Bit-Zwischenwerten berechnet, weshalb ein einzelner Eintrag bei
-`0xFFFFFFFC` arithmetisch gueltig bleibt. Jeder Eintrag selbst muss committed
-sein. Die Dispatch-Adresse muss als `JMP @Rn` oder `JSR @Rn` entdeckt worden
+`0xFFFFFFFC` arithmetisch gueltig bleibt. Teilweise committed oder
+beschreibbare Tabellen werden vor dem ersten Eintrag vollstaendig abgelehnt.
+Die Dispatch-Adresse muss als `JMP @Rn` oder `JSR @Rn` entdeckt worden
 sein; Call-Tabellen erzeugen Funktionskandidaten, Jump-Tabellen nicht.
 
 ## Override-Datei Version 1

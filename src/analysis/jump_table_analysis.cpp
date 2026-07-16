@@ -94,20 +94,29 @@ JumpTableAnalysis analyze_jump_table(const katana::io::ExecutableImage& image,
         return analysis;
     }
 
+    const auto byte_count = static_cast<std::size_t>(entry_count * 4u);
+    const auto* segment = image.find_segment(table_address, byte_count);
+    const auto offset = segment != nullptr ? segment->byte_offset(table_address) : std::nullopt;
+    if (segment == nullptr || !segment->permissions.readable || segment->permissions.writable ||
+        !offset.has_value() || *offset > segment->bytes.size() ||
+        byte_count > segment->bytes.size() - *offset) {
+        analysis.reason = segment != nullptr && segment->permissions.writable
+                              ? "table-segment-writable"
+                              : "table-range-not-immutable";
+        return analysis;
+    }
+
     analysis.entries.reserve(entry_count);
     for (std::size_t index = 0u; index < entry_count; ++index) {
         const auto entry_address = table_address + static_cast<std::uint32_t>(index * 4u);
         JumpTableEntry entry;
         entry.index = index;
         entry.entry_address = entry_address;
-        try {
-            entry.target = image.read_u32_le(entry_address);
-        } catch (const std::out_of_range&) {
-            entry.reason = "entry-not-committed";
-            analysis.entries.push_back(std::move(entry));
-            analysis.reason = "table-entry-rejected";
-            continue;
-        }
+        entry.target = static_cast<std::uint32_t>(
+                           katana::io::read_u16_le(segment->bytes, *offset + index * 4u)) |
+                       (static_cast<std::uint32_t>(katana::io::read_u16_le(
+                            segment->bytes, *offset + index * 4u + 2u))
+                        << 16u);
         const auto validation = validate_committed_code_address(image, entry.target);
         if (!validation.valid()) {
             entry.reason = code_address_status_name(validation.status);
@@ -138,8 +147,7 @@ JumpTableAnalysis analyze_relative_jump_table_impl(const katana::io::ExecutableI
                                                    const std::uint32_t dispatch_address,
                                                    const std::uint32_t table_address,
                                                    const std::uint32_t target_base,
-                                                   const std::size_t entry_count,
-                                                   const bool executable_snapshot) {
+                                                   const std::size_t entry_count) {
     JumpTableAnalysis analysis;
     analysis.dispatch_address = dispatch_address;
     analysis.table_address = table_address;
@@ -159,10 +167,8 @@ JumpTableAnalysis analyze_relative_jump_table_impl(const katana::io::ExecutableI
     }
     const auto* segment = image.find_segment(table_address, static_cast<std::size_t>(byte_count));
     const auto offset = segment != nullptr ? segment->byte_offset(table_address) : std::nullopt;
-    const bool writable_snapshot = segment != nullptr && segment->permissions.writable &&
-                                   segment->permissions.executable && executable_snapshot;
     if (segment == nullptr || !segment->permissions.readable ||
-        (segment->permissions.writable && !writable_snapshot) ||
+        segment->permissions.writable ||
         !offset.has_value() || *offset > segment->bytes.size() ||
         byte_count > segment->bytes.size() - *offset) {
         analysis.reason = segment != nullptr && segment->permissions.writable
@@ -178,7 +184,14 @@ JumpTableAnalysis analyze_relative_jump_table_impl(const katana::io::ExecutableI
         entry.entry_address = table_address + static_cast<std::uint32_t>(index * 2u);
         const auto raw = katana::io::read_u16_le(segment->bytes, *offset + index * 2u);
         const auto relative = static_cast<std::int32_t>(static_cast<std::int16_t>(raw));
-        entry.target = target_base + static_cast<std::uint32_t>(relative);
+        const auto target = static_cast<std::int64_t>(target_base) + relative;
+        if (target < 0 || target > std::numeric_limits<std::uint32_t>::max()) {
+            entry.reason = "target-address-overflow";
+            analysis.reason = "table-entry-rejected";
+            analysis.entries.push_back(std::move(entry));
+            continue;
+        }
+        entry.target = static_cast<std::uint32_t>(target);
         const auto validation = validate_committed_code_address(image, entry.target);
         if (!validation.valid()) {
             entry.reason = code_address_status_name(validation.status);
@@ -208,7 +221,7 @@ JumpTableAnalysis analyze_relative_jump_table(const katana::io::ExecutableImage&
                                               const std::uint32_t target_base,
                                               const std::size_t entry_count) {
     return analyze_relative_jump_table_impl(
-        image, dispatch_address, table_address, target_base, entry_count, false);
+        image, dispatch_address, table_address, target_base, entry_count);
 }
 
 std::optional<JumpTableAnalysis> recognize_bounded_relative_jump_table(
@@ -240,7 +253,7 @@ std::optional<JumpTableAnalysis> recognize_bounded_relative_jump_table(
     const auto table_address = ((table_base.address + 4u) & ~3u) +
                                static_cast<std::uint32_t>(table_base.instruction.displacement);
     return analyze_relative_jump_table_impl(
-        image, dispatch.address, table_address, dispatch.address + 4u, *entry_count, true);
+        image, dispatch.address, table_address, dispatch.address + 4u, *entry_count);
 }
 
 const char* jump_table_encoding_name(const JumpTableEncoding encoding) noexcept {

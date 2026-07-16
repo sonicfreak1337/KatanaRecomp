@@ -232,18 +232,12 @@ void apply_local_transfer(RegisterConstants& state,
             instruction.kind == katana::sh4::InstructionKind::MovWordLoadPcRelative ? 2u : 4u;
         const auto base = width == 4u ? (line.address + 4u) & ~3u : line.address + 4u;
         const auto address = base + static_cast<std::uint32_t>(instruction.displacement);
-        const auto* segment = image != nullptr ? image->find_segment(address, width) : nullptr;
-        if (segment == nullptr) {
+        const auto value = read_immutable_integer(image, address, width);
+        if (!value.has_value()) {
             clear_register(state, instruction.destination_register);
             return;
         }
-        const auto offset = *segment->byte_offset(address);
-        const auto value =
-            width == 4u
-                ? image->read_u32_le(address)
-                : static_cast<std::uint32_t>(static_cast<std::int32_t>(
-                      static_cast<std::int16_t>(katana::io::read_u16_le(segment->bytes, offset))));
-        set_constant(state, instruction.destination_register, value, "pc-relative-literal");
+        set_constant(state, instruction.destination_register, *value, "pc-relative-literal");
         return;
     }
     case katana::sh4::InstructionKind::MoveAddressPcRelative:

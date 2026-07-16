@@ -2734,6 +2734,14 @@ Akzeptanz:
   neu entdeckte offene Restmenge getrennt aus, ohne Retailadresse, Override,
   Spieldaten oder Titelsonderfall im Repository
 
+Abschlussnachweis:
+
+- `katana-value-analysis-tests`, `katana-jump-table-analysis-tests` und
+  `katana-control-flow-analysis-tests` sichern den Vertrag synthetisch und
+  reproduzierbar; private Retailstatistiken ersetzen diese Regressionen nicht
+- absolute und relative Tabellen werden nur aus einem vollstaendig committed,
+  lesbaren und nicht beschreibbaren Snapshot akzeptiert
+
 ### [ ] KR-4713 - Interprozedurale SH-C-Zielwertsummaries
 
 Abhaengigkeiten: KR-4712
