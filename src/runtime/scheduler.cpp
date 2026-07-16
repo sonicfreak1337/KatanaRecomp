@@ -1,10 +1,16 @@
 #include "katana/runtime/scheduler.hpp"
 
+#include "katana/runtime/system_replay.hpp"
+
 #include <limits>
 #include <stdexcept>
+#include <utility>
 #include <vector>
 
 namespace katana::runtime {
+
+EventScheduler::EventScheduler(SystemReplayLog* replay_log) noexcept
+    : replay_log_(replay_log) {}
 
 SchedulerEventId EventScheduler::schedule_at(
     const std::uint64_t guest_cycle,
@@ -79,10 +85,32 @@ void EventScheduler::reset() {
             "Scheduler-Reset ist waehrend eines laufenden Advances nicht erlaubt."
         );
     }
+    if (reset_generation_ == std::numeric_limits<std::uint64_t>::max()) {
+        throw std::overflow_error("Scheduler-Resetgeneration ist uebergelaufen.");
+    }
     clear();
     current_cycle_ = 0u;
     processed_event_count_ = 0u;
     ++reset_generation_;
+    if (replay_log_ != nullptr) {
+        try {
+            SystemReplayEvent event{
+                0u,
+                0u,
+                SystemReplayEventKind::SchedulerCallback,
+                "scheduler-reset",
+                std::nullopt,
+                std::nullopt,
+                reset_generation_,
+                0u,
+                false
+            };
+            event.time_epoch = reset_generation_;
+            static_cast<void>(replay_log_->try_record(std::move(event)));
+        } catch (...) {
+            replay_log_->note_dropped_event();
+        }
+    }
 
     std::vector<SchedulerResetCallback> observers;
     observers.reserve(reset_observers_.size());
@@ -130,6 +158,25 @@ SchedulerAdvanceResult EventScheduler::advance_to(
         current_cycle_ = deadline;
         ++processed;
         ++processed_event_count_;
+        if (replay_log_ != nullptr) {
+            try {
+                SystemReplayEvent replay_event{
+                    0u,
+                    deadline,
+                    SystemReplayEventKind::SchedulerCallback,
+                    "scheduled-event",
+                    std::nullopt,
+                    std::nullopt,
+                    event_id,
+                    processed_event_count_,
+                    false
+                };
+                replay_event.time_epoch = reset_generation_;
+                static_cast<void>(replay_log_->try_record(std::move(replay_event)));
+            } catch (...) {
+                replay_log_->note_dropped_event();
+            }
+        }
         event.mapped()(event_id, deadline);
     }
 

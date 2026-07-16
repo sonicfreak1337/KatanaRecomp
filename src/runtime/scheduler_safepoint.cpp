@@ -1,5 +1,7 @@
 #include "katana/runtime/scheduler_safepoint.hpp"
 
+#include "katana/runtime/system_replay.hpp"
+
 #include <algorithm>
 #include <limits>
 #include <sstream>
@@ -12,9 +14,10 @@ SchedulerSafepoints::SchedulerSafepoints(
     EventScheduler& scheduler,
     const std::size_t event_budget,
     const std::uint64_t loop_quantum,
-    std::function<bool()> interrupt_delivery
+    std::function<bool()> interrupt_delivery,
+    SystemReplayLog* replay_log
 ) : scheduler_(scheduler), event_budget_(event_budget), loop_quantum_(loop_quantum),
-    interrupt_delivery_(std::move(interrupt_delivery)) {
+    interrupt_delivery_(std::move(interrupt_delivery)), replay_log_(replay_log) {
     if (event_budget == 0u || loop_quantum == 0u) {
         throw std::invalid_argument("Scheduler-Safepoints brauchen Ereignisbudget und Schleifenquantum.");
     }
@@ -38,6 +41,15 @@ SafepointReport SchedulerSafepoints::consume(
         advanced.status == SchedulerAdvanceStatus::EventBudgetExhausted
     };
     reports_.push_back(report);
+    if (replay_log_ != nullptr) {
+        try {
+            auto event = make_safepoint_replay_event(report);
+            event.time_epoch = scheduler_.reset_generation();
+            static_cast<void>(replay_log_->try_record(std::move(event)));
+        } catch (...) {
+            replay_log_->note_dropped_event();
+        }
+    }
     return report;
 }
 

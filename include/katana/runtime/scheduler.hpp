@@ -10,6 +10,8 @@
 
 namespace katana::runtime {
 
+class SystemReplayLog;
+
 using SchedulerEventId = std::uint64_t;
 using SchedulerResetObserverId = std::uint64_t;
 using SchedulerCallback =
@@ -29,6 +31,7 @@ struct SchedulerAdvanceResult {
 
 class EventScheduler {
 public:
+    explicit EventScheduler(SystemReplayLog* replay_log = nullptr) noexcept;
     [[nodiscard]] SchedulerEventId schedule_at(
         std::uint64_t guest_cycle,
         SchedulerCallback callback
@@ -75,6 +78,7 @@ private:
     std::map<EventKey, SchedulerCallback> events_;
     std::unordered_map<SchedulerEventId, EventKey> event_keys_;
     std::map<SchedulerResetObserverId, SchedulerResetCallback> reset_observers_;
+    SystemReplayLog* replay_log_ = nullptr;
 };
 
 } // namespace katana::runtime

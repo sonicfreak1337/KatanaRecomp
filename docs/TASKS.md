@@ -1738,7 +1738,7 @@ Akzeptanz:
 - Berichte enthalten keine kopierten Firmwarebytes
 - die gebuendelte Phase-8-Regression prueft alle Blockherkuenfte, Aliasgruppen, ROM-RAM-Verknuepfung, zeitabhaengige Symbole, CPU-/DMA-/Copy-Writes, Generationen, Links, Drops und JSON-Redaktion
 
-### [ ] KR-3609 - Deterministische Systemereignis-Replays
+### [x] KR-3609 - Deterministische Systemereignis-Replays
 
 Abhaengigkeiten: KR-3105, KR-3407, KR-3604
 
@@ -1755,6 +1755,7 @@ Akzeptanz:
 - fehlende, zusaetzliche oder anders sortierte Ereignisse schlagen an der ersten Abweichung fehl
 - Traceformat ist versioniert und enthaelt keine Firmware- oder Flash-Rohdaten
 - Aufzeichnung und Replay funktionieren ueber eine vollstaendige synthetische Frame-Sequenz
+- die gebuendelte Phase-8-Regression prueft alle Ereignisarten, externe Injektion, erste Abweichung, Ereignis-/Gastzustandshash und eine kumulative synthetische Frame-Sequenz
 
 ### [ ] KR-3701 - Lokale Debug-Gate-Automatisierung
 

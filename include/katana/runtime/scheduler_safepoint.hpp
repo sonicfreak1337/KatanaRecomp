@@ -10,6 +10,8 @@
 
 namespace katana::runtime {
 
+class SystemReplayLog;
+
 enum class ExecutionOrigin : std::uint8_t { Backend, Fallback };
 enum class SafepointKind : std::uint8_t { BlockEnd, LoopBackedge, BeforeDelaySlot, AfterDelaySlot };
 
@@ -30,7 +32,8 @@ public:
         EventScheduler& scheduler,
         std::size_t event_budget,
         std::uint64_t loop_quantum,
-        std::function<bool()> interrupt_delivery = {}
+        std::function<bool()> interrupt_delivery = {},
+        SystemReplayLog* replay_log = nullptr
     );
 
     [[nodiscard]] SafepointReport consume(
@@ -50,6 +53,7 @@ private:
     std::size_t event_budget_;
     std::uint64_t loop_quantum_;
     std::function<bool()> interrupt_delivery_;
+    SystemReplayLog* replay_log_ = nullptr;
     std::vector<SafepointReport> reports_;
 };
 

@@ -19,6 +19,7 @@
 - KR-3606: `firmware-diagnose` prueft lokale BIOS-/Flashgroessen und optionale SHA-256-Werte read-only. Konservative Bereichsklassen sowie Flashpartitionen, Header, Blockgenerationen und CRCs erscheinen maschinenlesbar; logische IDs und Region bleiben standardmaessig redigiert, waehrend Firmwarebytes und Assets nie extrahiert werden.
 - KR-3607: Eine ausnahmesichere Dispatchdiagnostik erfasst Callsite, virtuelle und kanonische Ziele, PR, Blockende, Alias- und Beweisherkunft sowie Fallbackgrund, Aktion, Gastinstruktionen, Austritt und stabile Fehlerklasse. Identische Ereignisse erhoehen nur ihren Zaehler; Beobachtungsfehler koennen die Gastentscheidung nicht beeinflussen.
 - KR-3608: Ein gemeinsamer Runtime-Provenienzbericht verbindet strukturierte Blockherkunft, kanonische Aliasgruppen, ROM-RAM-Codekopien, zeitabhaengige Firmwarevektoren und eine best-effort Invalidierungshistorie. CPU-, DMA- und Copy-Writes behalten virtuelle/physische Adresse, Seitengeneration, invalidierte Bloecke und geloeste Links, ohne Firmware- oder Codebytes auszugeben.
+- KR-3609: Versionierte Systemreplays ordnen CPU-Safepoints, MMIO, DMA, Interrupts, Timer, Schedulercallbacks, Medienereignisse und explizite externe Injektionen ausschliesslich nach Gastzeit. Ereignis- und Gastzustandshash sichern deterministische Wiederholung; fehlende, zusaetzliche oder anders sortierte Ereignisse scheitern am ersten Abweichungsindex.
 
 ## [0.34.0] - 2026-07-16
 

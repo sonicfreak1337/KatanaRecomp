@@ -45,6 +45,7 @@ add_library(katana_runtime STATIC
     src/runtime/runtime_provenance.cpp
     src/runtime/block_dispatch.cpp
     src/runtime/scheduler_safepoint.cpp
+    src/runtime/system_replay.cpp
     src/runtime/block_guards.cpp
     src/runtime/interpreter_boundary.cpp
     src/runtime/store_queue.cpp
