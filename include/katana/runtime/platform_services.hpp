@@ -12,7 +12,7 @@
 
 namespace katana::runtime {
 
-inline constexpr std::uint32_t platform_services_abi_version = 1u;
+inline constexpr std::uint32_t platform_services_abi_version = 2u;
 
 enum class PlatformCapability : std::uint64_t {
     Memory = 1ull << 0u,
@@ -23,7 +23,8 @@ enum class PlatformCapability : std::uint64_t {
     Mmu = 1ull << 5u,
     Watchpoints = 1ull << 6u,
     ExecutableRam = 1ull << 7u,
-    FirmwareMode = 1ull << 8u
+    FirmwareMode = 1ull << 8u,
+    StoreQueues = 1ull << 9u
 };
 
 using PlatformCapabilities = std::uint64_t;
@@ -38,7 +39,8 @@ inline constexpr PlatformCapabilities core_platform_capabilities =
     platform_capability(PlatformCapability::Memory) |
     platform_capability(PlatformCapability::Scheduler) |
     platform_capability(PlatformCapability::Interrupts) |
-    platform_capability(PlatformCapability::Dma);
+    platform_capability(PlatformCapability::Dma) |
+    platform_capability(PlatformCapability::StoreQueues);
 
 struct PlatformServiceRequirements {
     std::uint32_t abi_version = platform_services_abi_version;
@@ -98,6 +100,10 @@ public:
     [[nodiscard]] virtual PlatformFallbackResult controlled_fallback(
         CpuState& cpu,
         const PlatformFallbackRequest& request
+    ) = 0;
+    [[nodiscard]] virtual bool prefetch(
+        CpuState& cpu,
+        std::uint32_t address
     ) = 0;
 };
 

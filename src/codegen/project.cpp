@@ -8,6 +8,7 @@
 #include <sstream>
 #include <stdexcept>
 #include <string_view>
+#include <system_error>
 
 namespace katana::codegen {
 namespace {
@@ -28,8 +29,64 @@ std::filesystem::path validate_relative_path(const std::filesystem::path& path) 
     return normalized;
 }
 
-void write_file(const std::filesystem::path& path, const std::string_view content) {
+bool contained_by(
+    const std::filesystem::path& root,
+    const std::filesystem::path& candidate
+) {
+    const auto mismatch = std::mismatch(
+        root.begin(), root.end(), candidate.begin(), candidate.end()
+    );
+    return mismatch.first == root.end();
+}
+
+std::filesystem::path secure_artifact_path(
+    const std::filesystem::path& canonical_root,
+    const std::filesystem::path& relative
+) {
+    auto candidate = canonical_root;
+    bool missing_prefix = false;
+    for (const auto& component : relative) {
+        candidate /= component;
+        if (missing_prefix) { continue; }
+        std::error_code status_error;
+        const auto status = std::filesystem::symlink_status(candidate, status_error);
+        if ((!status_error && !std::filesystem::exists(status)) ||
+            status_error == std::errc::no_such_file_or_directory) {
+            missing_prefix = true;
+            continue;
+        }
+        if (!status_error && std::filesystem::is_symlink(status)) {
+            throw std::runtime_error(
+                "Codegen-Projektpfad enthaelt einen symbolischen Link: " +
+                relative.generic_string()
+            );
+        }
+        if (status_error) {
+            throw std::runtime_error(
+                "Codegen-Projektpfad konnte nicht geprueft werden: " +
+                relative.generic_string() + " (" + status_error.message() + ")"
+            );
+        }
+        std::error_code canonical_error;
+        const auto resolved = std::filesystem::canonical(candidate, canonical_error);
+        if (canonical_error || !contained_by(canonical_root, resolved)) {
+            throw std::runtime_error(
+                "Codegen-Projektpfad verlaesst das kanonische Ausgabeziel: " +
+                relative.generic_string()
+            );
+        }
+    }
+    return candidate;
+}
+
+void write_file(
+    const std::filesystem::path& root,
+    const std::filesystem::path& relative,
+    const std::string_view content
+) {
+    auto path = secure_artifact_path(root, relative);
     std::filesystem::create_directories(path.parent_path());
+    path = secure_artifact_path(root, relative);
     std::ofstream output(path, std::ios::binary | std::ios::trunc);
     if (!output) { throw std::runtime_error("Codegen-Projektdatei konnte nicht geoeffnet werden."); }
     output.write(content.data(), static_cast<std::streamsize>(content.size()));
@@ -37,7 +94,8 @@ void write_file(const std::filesystem::path& path, const std::string_view conten
 }
 
 std::vector<std::filesystem::path> read_artifact_manifest(const std::filesystem::path& root) {
-    const auto path = root / artifact_manifest_name;
+    const auto relative = std::filesystem::path(artifact_manifest_name);
+    const auto path = secure_artifact_path(root, relative);
     if (!std::filesystem::exists(path)) { return {}; }
     std::ifstream input(path, std::ios::binary);
     std::string line;
@@ -129,8 +187,24 @@ ProjectWriteResult write_codegen_project(
         }
     }
 
-    const auto root = std::filesystem::absolute(output_root).lexically_normal();
-    std::filesystem::create_directories(root);
+    const auto absolute_root = std::filesystem::absolute(output_root).lexically_normal();
+    std::error_code root_status_error;
+    const auto root_status = std::filesystem::symlink_status(
+        absolute_root,
+        root_status_error
+    );
+    if (!root_status_error && std::filesystem::is_symlink(root_status)) {
+        throw std::runtime_error("Codegen-Ausgabeziel darf kein symbolischer Link sein.");
+    }
+    if (root_status_error &&
+        root_status_error != std::errc::no_such_file_or_directory) {
+        throw std::runtime_error(
+            "Codegen-Ausgabeziel konnte nicht geprueft werden: " +
+            root_status_error.message()
+        );
+    }
+    std::filesystem::create_directories(absolute_root);
+    const auto root = std::filesystem::canonical(absolute_root);
     const auto previous_files = read_artifact_manifest(root);
     struct WriteOutcome { std::filesystem::path path; bool hit; };
     const auto write_artifact = [&](const ProjectArtifact& artifact) {
@@ -146,7 +220,7 @@ ProjectWriteResult write_codegen_project(
                 options.cache->store(options.cache_key, cache_name, content);
             }
         }
-        write_file(root / artifact.relative_path, content);
+        write_file(root, artifact.relative_path, content);
         return WriteOutcome{artifact.relative_path, hit};
     };
 
@@ -190,7 +264,7 @@ ProjectWriteResult write_codegen_project(
         std::back_inserter(stale_files)
     );
     for (const auto& relative : stale_files) {
-        const auto stale = root / relative;
+        const auto stale = secure_artifact_path(root, relative);
         std::error_code error;
         const bool removed = std::filesystem::remove(stale, error);
         if (error) {
@@ -209,8 +283,10 @@ ProjectWriteResult write_codegen_project(
             }
         }
     }
-    for (const auto& build_file : build_files) { write_file(root / build_file.relative_path, build_file.content); }
-    write_file(root / artifact_manifest_name, artifact_manifest(current_files));
+    for (const auto& build_file : build_files) {
+        write_file(root, build_file.relative_path, build_file.content);
+    }
+    write_file(root, artifact_manifest_name, artifact_manifest(current_files));
 
     for (const auto& outcome : outcomes) {
         result.written_files.push_back(outcome.path);

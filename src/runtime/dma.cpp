@@ -101,6 +101,7 @@ void Sh4Dmac::request_transfer(const std::size_t index) {
 void Sh4Dmac::signal_nmi() noexcept {
     operation_ |= nmi_flag;
     cancel_event();
+    discard_external_requests();
 }
 
 bool Sh4Dmac::interrupt_pending(const std::size_t index) const {
@@ -174,6 +175,12 @@ void Sh4Dmac::reevaluate() {
         cancel_event();
     }
     if (const auto next = select_channel()) { schedule(*next); }
+}
+
+void Sh4Dmac::discard_external_requests() noexcept {
+    for (auto& value : channels_) {
+        value.pending_requests = 0u;
+    }
 }
 
 void Sh4Dmac::cancel_event() noexcept {
@@ -290,6 +297,7 @@ void Sh4Dmac::set_fault(
     const auto& value = channels_[index];
     last_fault_ = DmaFault{reason, index, value.source, value.destination, size};
     cancel_event();
+    discard_external_requests();
 }
 
 void Sh4Dmac::reset() noexcept {

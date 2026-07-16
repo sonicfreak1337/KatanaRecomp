@@ -27,6 +27,8 @@ Instruction instruction(const std::uint32_t address, const Operation operation) 
         case Operation::ReturnFromException: result.original_opcode = 0x002Bu; break;
         case Operation::Nop: result.original_opcode = 0x0009u; break;
         case Operation::Unknown: result.original_opcode = 0xFFFFu; break;
+        case Operation::Fadd: result.original_opcode = 0xF100u; break;
+        case Operation::LoadSpecialRegister: result.original_opcode = 0x4B2Au; break;
         default: break;
     }
     result.widths = katana::ir::operation_operand_widths(operation);
@@ -60,6 +62,30 @@ Instruction memory_slot(
 
 Instruction nop_slot(const std::uint32_t owner) {
     auto result = instruction(owner + 2u, Operation::Nop);
+    result.delay_slot = {DelaySlotRole::Slot, owner};
+    return result;
+}
+
+Instruction fpu_slot(const std::uint32_t owner) {
+    auto result = instruction(owner + 2u, Operation::Fadd);
+    result.source_register = 0u;
+    result.destination_register = 1u;
+    result.delay_slot = {DelaySlotRole::Slot, owner};
+    return result;
+}
+
+Instruction load_pr_slot(const std::uint32_t owner) {
+    auto result = instruction(owner + 2u, Operation::LoadSpecialRegister);
+    result.source_register = 11u;
+    result.special_register = katana::ir::SpecialRegister::Pr;
+    result.status_effects = katana::ir::instruction_status_effects(
+        result.operation,
+        result.special_register
+    );
+    result.accumulator_effects = katana::ir::operation_accumulator_effects(
+        result.operation,
+        result.special_register
+    );
     result.delay_slot = {DelaySlotRole::Slot, owner};
     return result;
 }
@@ -173,6 +199,17 @@ std::vector<katana::ir::Function> build_program() {
         0x1800u,
         std::move(nested_fault),
         std::move(nested_slot)
+    );
+
+    auto fpu_call = instruction(0x1900u, Operation::Call);
+    fpu_call.target_address = 0x1800u;
+    append_function(program, 0x1900u, std::move(fpu_call), fpu_slot(0x1900u));
+
+    append_function(
+        program,
+        0x1A00u,
+        instruction(0x1A00u, Operation::Return),
+        load_pr_slot(0x1A00u)
     );
 
     return program;

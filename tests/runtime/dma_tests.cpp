@@ -216,6 +216,74 @@ int main() {
     require(memory.read_u32(0x80u) == 0u && dmac->completed_transfer_units(0u) == 0u,
         "Geloeschtes DMA-Master-Enable laesst ein geplantes Ereignis weiterlaufen.");
 
+    {
+        EventScheduler request_scheduler;
+        Memory request_memory(256u, MemoryAlignmentPolicy::Strict);
+        Sh4Dmac requests(request_scheduler, request_memory, DmaTiming{1u});
+        request_memory.write_u8(0x10u, 0xA1u);
+        requests.write_source(0u, 0x10u);
+        requests.write_destination(0u, 0x40u);
+        requests.write_count(0u, 1u);
+        requests.write_control(0u, 0x00000810u | Sh4Dmac::channel_enable);
+        requests.write_operation(Sh4Dmac::master_enable);
+        requests.request_transfer(0u);
+        requests.signal_nmi();
+        requests.write_operation(Sh4Dmac::master_enable);
+        static_cast<void>(request_scheduler.advance_to(4u, 0u));
+        require(request_memory.read_u8(0x40u) == 0u,
+            "Nach NMI wird ein alter externer DMA-Request ohne Neuanforderung fortgesetzt.");
+        requests.request_transfer(0u);
+        static_cast<void>(request_scheduler.advance_to(5u, 1u));
+        require(request_memory.read_u8(0x40u) == 0xA1u,
+            "Nach NMI startet ein neu ausgegebener externer Request nicht.");
+    }
+
+    {
+        EventScheduler fault_scheduler;
+        Memory fault_memory(256u, MemoryAlignmentPolicy::Strict);
+        Sh4Dmac requests(fault_scheduler, fault_memory, DmaTiming{1u});
+        fault_memory.write_u32(0x04u, 0xAABBCCDDu);
+        requests.write_source(0u, 0x01u);
+        requests.write_destination(0u, 0x40u);
+        requests.write_count(0u, 1u);
+        requests.write_control(0u, 0x00000830u | Sh4Dmac::channel_enable);
+        requests.write_operation(Sh4Dmac::master_enable);
+        requests.request_transfer(0u);
+        requests.request_transfer(0u);
+        static_cast<void>(fault_scheduler.advance_to(4u, 1u));
+        require(requests.address_error(), "Externer DMA-Test erzeugt keinen Adressfehler.");
+        requests.write_source(0u, 0x04u);
+        requests.write_operation(Sh4Dmac::master_enable);
+        static_cast<void>(fault_scheduler.advance_to(8u, 0u));
+        require(fault_memory.read_u32(0x40u) == 0u,
+            "Nach AE wird ein uebrig gebliebener externer DMA-Request fortgesetzt.");
+        requests.request_transfer(0u);
+        static_cast<void>(fault_scheduler.advance_to(12u, 1u));
+        require(fault_memory.read_u32(0x40u) == 0xAABBCCDDu,
+            "Nach AE startet ein neu ausgegebener externer Request nicht.");
+    }
+
+    {
+        EventScheduler pause_scheduler;
+        Memory pause_memory(256u, MemoryAlignmentPolicy::Strict);
+        Sh4Dmac requests(pause_scheduler, pause_memory, DmaTiming{1u});
+        pause_memory.write_u8(0x10u, 0x5Au);
+        requests.write_source(0u, 0x10u);
+        requests.write_destination(0u, 0x40u);
+        requests.write_count(0u, 1u);
+        requests.write_control(0u, 0x00000810u | Sh4Dmac::channel_enable);
+        requests.write_operation(Sh4Dmac::master_enable);
+        requests.request_transfer(0u);
+        requests.write_operation(0u);
+        static_cast<void>(pause_scheduler.advance_to(5u, 0u));
+        require(pause_memory.read_u8(0x40u) == 0u,
+            "DME=0 fuehrt einen pausierten externen Request trotzdem aus.");
+        requests.write_operation(Sh4Dmac::master_enable);
+        static_cast<void>(pause_scheduler.advance_to(6u, 1u));
+        require(pause_memory.read_u8(0x40u) == 0x5Au,
+            "DME=0 verwirft faelschlich den nur pausierten externen Request.");
+    }
+
     require(
         throws<std::invalid_argument>([&] { dmac->write_operation(0x00008001u); }) &&
             throws<std::out_of_range>([&] { dmac->write_count(4u, 1u); }) &&

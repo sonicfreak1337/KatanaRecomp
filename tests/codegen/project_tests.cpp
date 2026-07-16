@@ -113,6 +113,66 @@ int main() {
     }
     require(cleanup_reported, "Fehlgeschlagene Bereinigung wird nicht mit dem betroffenen Pfad gemeldet.");
 
+    const auto outside = fixture.root / "outside-symlink-target";
+    std::filesystem::create_directories(outside);
+    const auto symlink_write = fixture.root / "symlink-write";
+    std::filesystem::create_directories(symlink_write);
+    std::error_code symlink_error;
+    std::filesystem::create_directory_symlink(
+        outside,
+        symlink_write / "code",
+        symlink_error
+    );
+    if (!symlink_error) {
+        bool write_rejected = false;
+        try {
+            static_cast<void>(write_codegen_project(
+                symlink_write,
+                {{"code/unit.cpp", "outside write\n"}}
+            ));
+        } catch (const std::runtime_error& error) {
+            write_rejected = std::string(error.what()).find("symbolischen Link") !=
+                std::string::npos;
+        }
+        require(write_rejected && !std::filesystem::exists(outside / "unit.cpp"),
+            "Artefaktschreiben folgt einem Symlink aus dem Ausgabeziel.");
+
+        const auto symlink_cleanup = fixture.root / "symlink-cleanup";
+        static_cast<void>(write_codegen_project(
+            symlink_cleanup,
+            {{"code/stale.cpp", "owned stale\n"}}
+        ));
+        const auto outside_cleanup = fixture.root / "outside-cleanup-target";
+        std::filesystem::create_directories(outside_cleanup);
+        {
+            std::ofstream external(outside_cleanup / "stale.cpp", std::ios::binary);
+            external << "must survive\n";
+        }
+        std::filesystem::remove_all(symlink_cleanup / "code");
+        std::filesystem::create_directory_symlink(
+            outside_cleanup,
+            symlink_cleanup / "code"
+        );
+        bool cleanup_symlink_rejected = false;
+        try {
+            static_cast<void>(write_codegen_project(
+                symlink_cleanup,
+                {{"safe/current.cpp", "current\n"}}
+            ));
+        } catch (const std::runtime_error& error) {
+            cleanup_symlink_rejected = std::string(error.what()).find("symbolischen Link") !=
+                std::string::npos;
+        }
+        std::ifstream external(outside_cleanup / "stale.cpp", std::ios::binary);
+        std::ostringstream external_content;
+        external_content << external.rdbuf();
+        require(cleanup_symlink_rejected && external_content.str() == "must survive\n",
+            "Artefaktbereinigung folgt einem Symlink aus dem Ausgabeziel.");
+    } else {
+        std::cout << "Symlink-Regression lokal nicht verfuegbar: "
+                  << symlink_error.message() << '\n';
+    }
+
     std::cout << "KR-3304 parallele Ausgabe und Buildintegration erfolgreich.\n";
     return 0;
 }

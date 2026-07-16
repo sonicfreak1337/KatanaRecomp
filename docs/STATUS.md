@@ -106,7 +106,12 @@ frischer Debug-Build in build-current: erfolgreich
 katana-codegen-project-tests isoliert erneut bestanden
 Scheduler-Reset-/RTCCLK-/R64CNT-/RTCEN-/CF-CIE-Regressionspfade bestanden
 dynamischer Fallback: idempotente Wiederholung und Reaktivierung bestanden
-KR-3411, Versionierung, Tag und Sonic-Test: nicht ausgefuehrt
+generiertes PREF: SQ0->RAM und SQ1->TA ueber Plattformdienste bestanden
+DMAC-NMI/AE-Verwerfen und DME-Pause bestanden
+BSR/JSR/RTS-Delay-Slot-PR-Semantik bestanden
+Codegen-Pfadcontainment und selektive Bereinigung bestanden
+KR-3411 vom Nutzer freigegeben; Versionierung und Tag noch nicht ausgefuehrt
+Sonic-Test gemaess Strategie vor KR-4999 nicht ausgefuehrt
 ```
 
 Abgeschlossenes kumulatives Phase-6-Gate:

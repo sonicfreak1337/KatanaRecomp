@@ -1374,6 +1374,16 @@ Akzeptanz:
 - Reviewkorrekturen machen den vorherigen Bericht ungueltig; Scheduler-,
   Timer- und Fallback-Nacharbeit wurde deshalb mit einem erneut frischen
   `build-current/` und der vollstaendigen 142/142-Regression belegt
+- generiertes `PREF` durchlaeuft Decoder, IR, C++-Emitter, kompilierte Ausgabe,
+  Plattformdienste und beide Store Queues bis zu RAM- beziehungsweise TA-Sink
+- Scheduler-Reset in umgekehrter RTC-/TMU-Konstruktionsreihenfolge erzeugt
+  keine doppelten Ereignisse; NMI und DMA-Adressfehler verwerfen externe
+  Anforderungen, waehrend `DME=0` sie nur pausiert
+- `BSR`/`JSR` schreiben `PR` nicht bei Delay-Slot-Ausnahmen und `RTS` haelt das
+  Ruecksprungziel vor einem `LDS Rm,PR`-Slot fest
+- Codegen-Schreiben und Manifestbereinigung folgen keinen Symlink-Komponenten
+  aus dem kanonischen Ausgabeziel; die Regression laeuft auf Hosts mit
+  verfuegbarer Symlink-Erzeugung und meldet lokale Privileggrenzen sichtbar
 
 ### [ ] KR-3411 - v0.34 Release-Gate
 

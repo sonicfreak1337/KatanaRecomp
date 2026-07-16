@@ -810,13 +810,15 @@ Fortschritt:
 - [ ] KR-3411 - v0.34 Release-Gate
 
 Review-Nacharbeit vor KR-3411: Scheduler-Resets verwenden keine fremd
-wiederverwendbaren Ereignis-IDs und reaktivieren laufende Zeitgeber. TMU und
-RTC teilen den rationalen 16,384-kHz-RTCCLK; R64CNT, RTCEN/START, CF/CIE,
-Divider-Reset und TMU-UNF/UNIE folgen getrennten Hardwarezustaenden.
-Dynamische Interpreterbloecke werden bei identischer Provenienz idempotent
-wiederverwendet beziehungsweise nach Schreibinvalidierung reaktiviert. Die
-vollstaendige KR-3410-Gate-Vorbereitung wurde danach mit 142/142 Tests erneut
-erstellt; KR-3411 bleibt bis zum erneuten Nutzerreview offen.
+wiederverwendbaren oder doppelten TMU-Ereignisse; DMAC-NMI und -Adressfehler
+verwerfen externe Anforderungen, waehrend DME-Pausen sie erhalten. Dynamische
+Interpreterbloecke bleiben idempotent. Generiertes `PREF` erreicht beide
+Store Queues ueber Plattformdienste bis zu RAM und TA, Call-/Return-Delay-Slots
+bewahren die architektonische PR-Reihenfolge, und Codegen-Artefakte koennen
+ueber Symlink-Komponenten weder geschrieben noch geloescht werden. Die
+vollstaendige KR-3410-Gate-Vorbereitung wurde danach in einem frischen
+Debug-Build mit 142/142 Tests erneut erstellt und vom Nutzer fuer KR-3411
+freigegeben.
 
 Enthalten:
 

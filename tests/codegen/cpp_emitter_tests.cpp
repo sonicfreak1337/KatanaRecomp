@@ -116,7 +116,7 @@ int main() {
         source.find("cpu.r[2] = static_cast<std::uint32_t>(7);");
 
     const auto call_position =
-        source.find("fn_8C010008(cpu);");
+        source.find("fn_8C010008_with_services(cpu, services);");
 
     require(
         delay_position != std::string::npos,
@@ -141,7 +141,8 @@ int main() {
     );
 
     require(
-        source.find("cpu.pc = cpu.pr;") != std::string::npos,
+        source.find("const std::uint32_t return_target = cpu.pr;") != std::string::npos &&
+            source.find("cpu.pc = return_target;") != std::string::npos,
         "Die Ruecksprungsemantik fehlt."
     );
 
@@ -227,7 +228,7 @@ int main() {
     require(
         indirect_call_source.find("switch (call_target)") != std::string::npos &&
         indirect_call_source.find("case 0x0000000Cu:") != std::string::npos &&
-        indirect_call_source.find("fn_0000000C(cpu);") != std::string::npos,
+        indirect_call_source.find("fn_0000000C_with_services(cpu, services);") != std::string::npos,
         "Aufgeloestes indirektes JSR wird nicht als nativer Funktionsdispatch generiert."
     );
 

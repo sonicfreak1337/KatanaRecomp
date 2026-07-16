@@ -166,6 +166,7 @@ int main() {
     const auto foreign = reset_scheduler.schedule_at(300u, [&](const auto, const auto) {
         foreign_event_ran = true;
     });
+    static_cast<void>(foreign);
     static_cast<void>(reset_scheduler.advance_to(256u, 400u));
     require(reset_rtc.date_time().second == 0u && reset_tmu.underflow_count(0u) != 0u,
         "Scheduler-Reset friert laufende RTC/TMU-Ereignisse ein.");
@@ -176,6 +177,22 @@ int main() {
     static_cast<void>(reset_scheduler.advance_to(300u, 1u));
     require(foreign_event_ran,
         "Scheduler-Reset hinterlaesst eine kollidierende Timer-Ereignis-ID.");
+
+    EventScheduler reverse_scheduler;
+    auto reverse_clock = std::make_shared<Sh4RtcClockDomain>(1'048'576u);
+    Sh4Rtc reverse_rtc(reverse_scheduler, reverse_clock);
+    Sh4Tmu reverse_tmu(reverse_scheduler, TmuTiming{1u, reverse_clock});
+    reverse_tmu.write_counter(0u, 0u);
+    reverse_tmu.write_constant(0u, 0u);
+    reverse_tmu.write_control(0u, 6u);
+    reverse_tmu.write_start(1u);
+    reverse_scheduler.reset();
+    require(reverse_scheduler.pending_event_count() == 1u,
+        "RTC-vor-TMU-Konstruktionsreihenfolge erzeugt beim Reset doppelte Ereignisse.");
+    static_cast<void>(reverse_scheduler.advance_to(64u, 2u));
+    require(reverse_tmu.underflow_count(0u) == 1u &&
+            reverse_scheduler.pending_event_count() == 1u,
+        "Doppeltes geisterhaftes TMU-Ereignis ueberlebt den Scheduler-Reset.");
 
     std::cout << "KR-3102 TMU und RTC erfolgreich.\n";
 }

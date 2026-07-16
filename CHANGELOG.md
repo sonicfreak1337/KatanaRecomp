@@ -10,6 +10,10 @@
 - KR-3407-Nacharbeit: Schleifen-Safepoints ziehen bei erschoepftem Ereignisbudget nur die tatsaechlich erreichte Zyklusdifferenz ab. Wiederholte Stopps erreichen den exakten Zielzyklus; ein Budgetstopp ohne Zyklusfortschritt bricht sichtbar statt endlos ab.
 - KR-3408-Nacharbeit: Die Watchpointgeneration ist nun Bestandteil des echten Laufzeit-`BlockVariantKey`; ein integrierter Tabellenlookup kann eine vor der Watchpointaenderung registrierte Variante nicht wiederverwenden.
 - KR-3304-Nacharbeit: Ein versioniertes Katana-Artefaktmanifest entfernt bei wiederverwendeten Ausgabeordnern ausschliesslich zuvor erzeugte, nun veraltete Units, Metadaten, Symbole und Konstantdateien. Fremde Nutzerdateien bleiben erhalten; fehlgeschlagene Bereinigung nennt den betroffenen Pfad und bricht sichtbar ab.
+- KR-3304-Nacharbeit: Artefaktpfade werden vor Schreiben und selektiver Bereinigung komponentenweise auf symbolische Links und kanonisches Verlassen des Ausgabeziels geprueft. Vorhandene Nutzerdateien bleiben unangetastet; Symlink-Ausbrueche werden sichtbar abgelehnt.
+- KR-3101/3102-Nacharbeit: Ein Scheduler-Reset bei vor der TMU erzeugter RTC storniert alte TMU-Ereignisse vor der Neuverankerung und kann deshalb keine doppelten Unterlaeufe erzeugen.
+- KR-3103-Nacharbeit: Nach NMI oder DMA-Adressfehler werden bereits angenommene externe DMAC-Anforderungen verworfen; `DME=0` pausiert sie dagegen weiterhin ohne Datenverlust.
+- Delay-Slot-Nacharbeit: `BSR` und `JSR` schreiben `PR` erst nach einem erfolgreichen Delay Slot, waehrend `RTS` sein Ruecksprungziel vor dem Slot festhaelt. Ausfuehrbare Speicher- und FPU-Ausnahmeregressionen sichern Owner-PC, Registerzustand und verschachtelte Aufrufe.
 
 ### Hinzugefuegt
 
@@ -30,10 +34,11 @@
 - KR-3408: Ein expliziter Instruktions- und Datenuebersetzungsvertrag trennt No-MMU-Fastpaths von TLB-gestuetzter Ausfuehrung. MMUCR, LDTLB-/TLB-, Adressraum- und Watchpointgenerationen sowie FPSCR PR/SZ/FR/RM werden als Blockwaechter erfasst; Rechtefehler erzeugen strukturierte SH-4-Ausnahmen und aktive MMU-Bloecke enden konservativ an Seitengrenzen.
 - KR-3409: Eine praezise Interpretergrenze erlaubt Eintritt nur am synchronisierten Gast-PC und Austritt nur an der vereinbarten Blockgrenze. Delay-Slot-Owner, Speicherfehler, Watchpoints, Schedulerbudget und strukturierte Ausnahmen werden mit generiertem Code geteilt; dynamischer Code nutzt dieselbe Provenienz- und Invalidierungsschicht, und Manifeste koennen jeden stabil gezaehlten Grund verbieten.
 - KR-3410: Zwei getrennte 32-Byte-Store-Queues modellieren ihre P4-Schreibfenster, QACR0/QACR1-Zielbildung, Queueauswahl und exakt ausgerichtete `PREF`-Transfers zu RAM oder Tile Accelerator. `OCBI`, `OCBP`, `OCBWB`, `ICBI` und `MOVCA.L` besitzen explizite Profileffekte; Codewartung und `MOVCA.L` invalidieren ausfuehrbares RAM, waehrend nicht aktiviertes Operand-Cache-RAM vor LLE-Ausfuehrung sichtbar abgelehnt wird.
+- Generiertes `PREF` erreicht ueber die versionierten Plattformdienste die echten SH-4-Store-Queues. Der kompilierte End-to-End-Pfad prueft SQ0 nach RAM und SQ1 zum Tile-Accelerator-Sink; normales `PREF` bleibt nebenwirkungsfrei.
 
 ### Geaendert
 
-- Die v0.34-Gate-Vorbereitung wurde nach den Scheduler-/Timer-/Fallback-Reviewkorrekturen vollstaendig wiederholt: ein neu erzeugter lokaler Debug-Build besteht 142/142 Tests. KR-3411, Versionierung, Tag und Sonic-Ausfuehrung bleiben bis zum erneuten Nutzerreview gesperrt.
+- Die v0.34-Gate-Vorbereitung wurde nach allen Scheduler-, Timer-, DMAC-, Delay-Slot-, Store-Queue- und Pfadsicherheitskorrekturen vollstaendig wiederholt: ein neu erzeugter lokaler Debug-Build besteht 142/142 Tests. Die Vorbereitung ist vom Nutzer fuer KR-3411 freigegeben; Versionierung und Tag erfolgen erst im getrennten Release-Commit.
 - Implementierungs-Tasks werden vor einem Phasen-Gate zuerst ohne
   routinemaessige Builds und Testlaeufe abgearbeitet. Der letzte
   Gate-Vorbereitungstask setzt die gesammelten Tests um und erstellt den

@@ -298,7 +298,7 @@ void Sh4Tmu::handle_rtc_phase_reset(
 
 void Sh4Tmu::handle_scheduler_reset() {
     for (auto& value : channels_) {
-        value.event.reset();
+        cancel_event(value);
     }
     timing_.rtc_clock->reset_phase(scheduler_.current_cycle());
     for (std::size_t index = 0u; index < channels_.size(); ++index) {

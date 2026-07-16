@@ -90,6 +90,7 @@ private:
     [[nodiscard]] static std::size_t transfer_size(const Channel& value) noexcept;
     [[nodiscard]] static std::uint8_t address_mode(std::uint32_t control, unsigned shift) noexcept;
     void reevaluate();
+    void discard_external_requests() noexcept;
     void cancel_event() noexcept;
     void schedule(std::size_t index);
     void handle_transfer(std::size_t index);

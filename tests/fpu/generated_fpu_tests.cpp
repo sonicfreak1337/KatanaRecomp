@@ -1,5 +1,8 @@
 #include "generated_fpu_program.cpp"
+#include "katana/runtime/store_queue.hpp"
 
+#include <algorithm>
+#include <array>
 #include <bit>
 #include <cmath>
 #include <cstdint>
@@ -7,6 +10,7 @@
 #include <iostream>
 #include <memory>
 #include <string>
+#include <vector>
 
 namespace {
 
@@ -16,6 +20,74 @@ void require(const bool condition, const std::string& message) {
         std::exit(EXIT_FAILURE);
     }
 }
+
+class StoreQueueServices final : public katana::runtime::PlatformServices {
+public:
+    explicit StoreQueueServices(katana::runtime::CpuState& cpu)
+        : cpu_(cpu), queues_(cpu.memory, [this](const auto& transfer) {
+            if (transfer.target == katana::runtime::StoreQueueTarget::Ram) {
+                for (std::size_t index = 0u; index < transfer.bytes.size(); ++index) {
+                    cpu_.memory.write_u8(
+                        transfer.target_address + static_cast<std::uint32_t>(index),
+                        transfer.bytes[index]
+                    );
+                }
+            } else {
+                transfers.push_back(transfer);
+            }
+        }) {}
+
+    [[nodiscard]] std::string_view name() const noexcept override { return "generated-sq"; }
+    [[nodiscard]] std::uint32_t abi_version() const noexcept override {
+        return katana::runtime::platform_services_abi_version;
+    }
+    [[nodiscard]] katana::runtime::PlatformCapabilities capabilities() const noexcept override {
+        return katana::runtime::core_platform_capabilities;
+    }
+    void read_memory(
+        const std::uint32_t address,
+        const std::span<std::uint8_t> destination
+    ) override {
+        for (std::size_t index = 0u; index < destination.size(); ++index) {
+            destination[index] = cpu_.memory.read_u8(address + static_cast<std::uint32_t>(index));
+        }
+    }
+    void write_memory(
+        const std::uint32_t address,
+        const std::span<const std::uint8_t> source
+    ) override {
+        for (std::size_t index = 0u; index < source.size(); ++index) {
+            cpu_.memory.write_u8(address + static_cast<std::uint32_t>(index), source[index]);
+        }
+    }
+    [[nodiscard]] std::uint64_t scheduler_cycle() const noexcept override { return 0u; }
+    [[nodiscard]] katana::runtime::PlatformSchedulerResult advance_scheduler(
+        const std::uint64_t guest_cycle,
+        const std::size_t
+    ) override {
+        return {guest_cycle, 0u, false};
+    }
+    [[nodiscard]] std::optional<katana::runtime::PlatformInterruptRequest>
+    poll_interrupt() override { return std::nullopt; }
+    [[nodiscard]] katana::runtime::PlatformDmaResult start_dma(
+        const katana::runtime::PlatformDmaRequest&
+    ) override { return {}; }
+    [[nodiscard]] katana::runtime::PlatformFallbackResult controlled_fallback(
+        katana::runtime::CpuState&,
+        const katana::runtime::PlatformFallbackRequest&
+    ) override { return {}; }
+    [[nodiscard]] bool prefetch(
+        katana::runtime::CpuState& cpu,
+        const std::uint32_t address
+    ) override {
+        katana::runtime::prefetch(cpu, address);
+        return queues_.prefetch(address);
+    }
+
+    katana::runtime::CpuState& cpu_;
+    katana::runtime::Sh4StoreQueues queues_;
+    std::vector<katana::runtime::StoreQueueTransfer> transfers;
+};
 
 }
 
@@ -42,17 +114,50 @@ int main() {
 
     {
         katana_generated::CpuState cpu;
+        StoreQueueServices services(cpu);
         cpu.r[3] = 0x8C010000u;
         cpu.pc = 0x170u;
-        katana_generated::fn_00000170(cpu);
+        katana_generated::fn_00000170_with_services(cpu, &services);
         require(cpu.prefetch_count == 1u && cpu.last_prefetch_address == 0x8C010000u &&
-            !cpu.last_prefetch_was_store_queue,
+            !cpu.last_prefetch_was_store_queue && services.queues_.transfer_count() == 0u,
             "Generiertes normales PREF erreicht die Runtime nicht.");
+        services.queues_.write_qacr(0u, 0u);
+        for (std::uint32_t offset = 0u; offset < 32u; offset += 4u) {
+            services.queues_.write_p4(
+                0xE0000020u + offset,
+                0xA5000000u + offset,
+                katana::runtime::MemoryAccessWidth::Word
+            );
+        }
         cpu.r[3] = 0xE0000020u;
         cpu.pc = 0x170u;
-        katana_generated::fn_00000170(cpu);
-        require(cpu.prefetch_count == 2u && cpu.last_prefetch_was_store_queue,
-            "Generiertes PREF unterscheidet Store-Queue-Adressen nicht.");
+        katana_generated::fn_00000170_with_services(cpu, &services);
+        require(cpu.prefetch_count == 2u && cpu.last_prefetch_was_store_queue &&
+                services.queues_.transfer_count() == 1u &&
+                cpu.memory.read_u32(0x20u) == 0xA5000000u &&
+                cpu.memory.read_u32(0x3Cu) == 0xA500001Cu,
+            "Generiertes PREF uebertraegt SQ0 nicht ueber Plattformdienste in RAM.");
+
+        services.queues_.write_qacr(1u, 0x10u);
+        for (std::uint32_t offset = 0u; offset < 32u; offset += 4u) {
+            services.queues_.write_p4(
+                0xE2000040u + offset,
+                0x5A000000u + offset,
+                katana::runtime::MemoryAccessWidth::Word
+            );
+        }
+        cpu.r[3] = 0xE2000040u;
+        cpu.pc = 0x170u;
+        katana_generated::fn_00000170_with_services(cpu, &services);
+        require(
+            services.queues_.transfer_count() == 2u && services.transfers.size() == 1u &&
+            services.transfers.front().queue == 1u &&
+            services.transfers.front().target == katana::runtime::StoreQueueTarget::TileAccelerator &&
+            services.transfers.front().target_address == 0x12000040u &&
+            services.transfers.front().bytes[0] == 0x00u &&
+            services.transfers.front().bytes[31] == 0x5Au,
+            "Generiertes PREF uebertraegt SQ1 nicht ueber Plattformdienste zum TA-Sink."
+        );
     }
 
     {

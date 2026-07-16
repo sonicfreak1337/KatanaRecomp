@@ -65,9 +65,43 @@ void test_memory_delay_slots() {
             require(cpu.r[8] == 1u, "RTS inkrementiert den Quellregisterzustand trotz fehlgeschlagenem Load.");
         }
         if (test.owner == 0x1100u || test.owner == 0x1300u) {
-            require(cpu.pr == test.owner + 4u, std::string(test.name) + " bereitet PR nicht vor dem Delay Slot vor.");
+            require(cpu.pr == 0xCAFEBABEu,
+                std::string(test.name) + " schreibt PR trotz fehlgeschlagenem Delay Slot.");
         }
     }
+}
+
+void test_call_fpu_delay_slot_exception() {
+    katana_generated::CpuState cpu;
+    prepare(cpu, 0x1900u);
+    cpu.write_sr(katana::runtime::sr_fd_mask);
+    cpu.fr[0] = 0x3F800000u;
+    cpu.fr[1] = 0x40000000u;
+
+    katana_generated::fn_00001900(cpu);
+
+    require(
+        cpu.trap_pending &&
+        cpu.last_exception_cause == ExceptionCause::SlotFpuDisabled &&
+        cpu.expevt == katana::runtime::event_slot_fpu_disabled &&
+        cpu.exception_in_delay_slot && cpu.spc == 0x1900u &&
+        cpu.pr == 0xCAFEBABEu && cpu.fr[1] == 0x40000000u,
+        "BSR schreibt PR vor einer FPU-Disable-Ausnahme im Delay Slot."
+    );
+}
+
+void test_rts_latches_pr_before_delay_slot() {
+    katana_generated::CpuState cpu;
+    prepare(cpu, 0x1A00u);
+    cpu.pr = 0x12345678u;
+    cpu.r[11] = 0xDEADBEEFu;
+
+    katana_generated::fn_00001A00(cpu);
+
+    require(
+        !cpu.trap_pending && cpu.pc == 0x12345678u && cpu.pr == 0xDEADBEEFu,
+        "RTS liest ein durch LDS im Delay Slot veraendertes PR als Sprungziel."
+    );
 }
 
 void test_illegal_delay_slot() {
@@ -137,6 +171,8 @@ int main() {
     test_illegal_delay_slot();
     test_rte_delay_slot_exception();
     test_nested_exception_propagation();
+    test_call_fpu_delay_slot_exception();
+    test_rts_latches_pr_before_delay_slot();
     std::cout << "Ausfuehrbare Delay-Slot-Exception-Regression erfolgreich.\n";
     return EXIT_SUCCESS;
 }

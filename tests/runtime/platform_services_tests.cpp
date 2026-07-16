@@ -80,6 +80,13 @@ public:
         cpu.pc = request.guest_pc + 2u;
         return {true, cpu.pc};
     }
+    [[nodiscard]] bool prefetch(
+        katana::runtime::CpuState& cpu,
+        const std::uint32_t address
+    ) override {
+        katana::runtime::prefetch(cpu, address);
+        return cpu.last_prefetch_was_store_queue;
+    }
 };
 
 template <typename Function>
@@ -110,12 +117,13 @@ int main() {
     const auto dma = services.start_dma({4u, 16u, 4u});
     CpuState cpu;
     const auto fallback = services.controlled_fallback(cpu, {0x8C010000u, 0xFFFFu});
+    const bool store_queue = services.prefetch(cpu, 0xE0000000u);
     require(
         output == input && scheduler.guest_cycle == 100u &&
             scheduler.processed_events == 2u && !scheduler.budget_exhausted &&
             interrupt && interrupt->level == 11u && interrupt->event_code == 0x320u &&
             dma.completed && dma.transferred == 4u && services.memory[16u] == 0x11u &&
-            fallback.handled && cpu.pc == 0x8C010002u,
+            fallback.handled && cpu.pc == 0x8C010002u && store_queue,
         "Mock-Plattform erreicht nicht alle Speicher-, Scheduler-, Interrupt-, DMA- und Fallbackgrenzen."
     );
 
@@ -126,10 +134,10 @@ int main() {
     const auto capability_error = failure([&] { validate_platform_services(services, all); });
     require(
         abi_error.find("mock") != std::string::npos &&
-            abi_error.find("ABI 2") != std::string::npos &&
-            abi_error.find("erforderlich ist ABI 1") != std::string::npos &&
+            abi_error.find("ABI 3") != std::string::npos &&
+            abi_error.find("erforderlich ist ABI 2") != std::string::npos &&
             capability_error.find("mock") != std::string::npos &&
-            capability_error.find("ABI 1") != std::string::npos &&
+            capability_error.find("ABI 2") != std::string::npos &&
             capability_error.find("Maske 64") != std::string::npos,
         "Fehlende Plattformdienste nennen Name, ABI oder Ursache nicht."
     );

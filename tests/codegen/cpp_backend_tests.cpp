@@ -75,7 +75,9 @@ int main() {
         "C++-Backend trennt Deklarationen und Funktionskoerper nicht."
     );
     require(
-            emission.functions.find("static void fn_8C010000(CpuState& cpu) {") !=
+            emission.functions.find(
+                "static void fn_8C010000_with_services(CpuState& cpu, PlatformServices* services) {"
+            ) !=
                 std::string::npos &&
             emission.functions.find("void run(CpuState& cpu) {") != std::string::npos &&
             emission.functions.find("void run(CpuState& cpu, PlatformServices& services)") !=

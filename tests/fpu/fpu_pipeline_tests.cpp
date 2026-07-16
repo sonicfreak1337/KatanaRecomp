@@ -105,7 +105,8 @@ int main(const int argc, char* argv[]) {
         source.find("katana::runtime::fpu_binary") != std::string::npos &&
         source.find("cpu.toggle_fpu_register_bank()") != std::string::npos &&
         source.find("write_fpu_pair_bits") != std::string::npos &&
-        source.find("raise_fpu_disabled") != std::string::npos,
+        source.find("raise_fpu_disabled") != std::string::npos &&
+        source.find("services->prefetch") != std::string::npos,
         "FPU-IR erreicht den Runtime-basierten C++-Emitter nicht vollstaendig."
     );
 

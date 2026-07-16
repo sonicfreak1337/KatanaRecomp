@@ -45,6 +45,10 @@ std::string function_name(const std::uint32_t address) {
     return output.str();
 }
 
+std::string service_function_name(const std::uint32_t address) {
+    return function_name(address) + "_with_services";
+}
+
 std::uint32_t fallthrough_address(
     const katana::ir::Instruction& instruction
 ) {
@@ -499,8 +503,17 @@ void emit_simple_instruction(
             output << "cpu.write_fpscr(cpu.read_fpscr() ^ katana::runtime::fpscr_sz_mask);\n";
             return;
         case Operation::Prefetch:
+            output << "if (services != nullptr) {\n";
+            emit_indent(output, indent + 1);
+            output << "static_cast<void>(services->prefetch(cpu, cpu.r["
+                << static_cast<unsigned>(instruction.source_register) << "]));\n";
+            emit_indent(output, indent);
+            output << "} else {\n";
+            emit_indent(output, indent + 1);
             output << "katana::runtime::prefetch(cpu, cpu.r["
                 << static_cast<unsigned>(instruction.source_register) << "]);\n";
+            emit_indent(output, indent);
+            output << "}\n";
             return;
 
         case Operation::MovImmediate:
@@ -2387,8 +2400,8 @@ void emit_direct_call(
 
     if (known_functions.contains(target)) {
         output
-            << function_name(target)
-            << "(cpu);\n";
+            << service_function_name(target)
+            << "(cpu, services);\n";
         emit_indent(output, indent);
         output << "if (cpu.trap_pending) {\n";
         emit_indent(output, indent + 1);
@@ -2465,12 +2478,6 @@ void emit_terminal(
                 );
             }
 
-            emit_indent(output, indent);
-            output
-                << "cpu.pr = "
-                << hex32(instruction.source_address + 4u)
-                << ";\n";
-
             if (delay_slot != nullptr) {
                 emit_guarded_simple_instruction(
                     output,
@@ -2478,6 +2485,12 @@ void emit_terminal(
                     indent
                 );
             }
+
+            emit_indent(output, indent);
+            output
+                << "cpu.pr = "
+                << hex32(instruction.source_address + 4u)
+                << ";\n";
 
             emit_direct_call(
                 output,
@@ -2587,7 +2600,7 @@ void emit_terminal(
                     emit_indent(output, indent + 2);
                     output << "cpu.pc = " << hex32(target) << ";\n";
                     emit_indent(output, indent + 2);
-                    output << function_name(target) << "(cpu);\n";
+                    output << service_function_name(target) << "(cpu, services);\n";
                     emit_indent(output, indent + 2);
                     output << "return;\n";
                 } else {
@@ -2612,12 +2625,6 @@ void emit_terminal(
                 )
                 << "];\n";
 
-            emit_indent(output, indent);
-            output
-                << "cpu.pr = "
-                << hex32(instruction.source_address + 4u)
-                << ";\n";
-
             if (delay_slot != nullptr) {
                 emit_guarded_simple_instruction(
                     output,
@@ -2625,6 +2632,12 @@ void emit_terminal(
                     indent
                 );
             }
+
+            emit_indent(output, indent);
+            output
+                << "cpu.pr = "
+                << hex32(instruction.source_address + 4u)
+                << ";\n";
 
             if (instruction.resolved_targets.empty()) {
                 emit_indent(output, indent);
@@ -2668,6 +2681,9 @@ void emit_terminal(
             return;
 
         case Operation::Return:
+            emit_indent(output, indent);
+            output << "const std::uint32_t return_target = cpu.pr;\n";
+
             if (delay_slot != nullptr) {
                 emit_guarded_simple_instruction(
                     output,
@@ -2677,7 +2693,7 @@ void emit_terminal(
             }
 
             emit_indent(output, indent);
-            output << "cpu.pc = cpu.pr;\n";
+            output << "cpu.pc = return_target;\n";
 
             emit_indent(output, indent);
             output << "return;\n";
@@ -3103,8 +3119,15 @@ BackendEmission CppBackend::emit(const BackendRequest& request) const {
     for (const auto& function : functions) {
         declarations
             << "static void "
+            << service_function_name(function.entry_address)
+            << "(CpuState& cpu, PlatformServices* services);\n"
+            << "[[maybe_unused]] static void "
             << function_name(function.entry_address)
-            << "(CpuState& cpu);\n";
+            << "(CpuState& cpu) {\n"
+            << "    "
+            << service_function_name(function.entry_address)
+            << "(cpu, nullptr);\n"
+            << "}\n";
     }
 
     declarations << '\n';
@@ -3112,8 +3135,9 @@ BackendEmission CppBackend::emit(const BackendRequest& request) const {
     for (const auto& function : functions) {
         function_bodies
             << "static void "
-            << function_name(function.entry_address)
-            << "(CpuState& cpu) {\n"
+            << service_function_name(function.entry_address)
+            << "(CpuState& cpu, PlatformServices* services) {\n"
+            << "    static_cast<void>(services);\n"
             << "    for (;;) {\n"
             << "        switch (cpu.pc) {\n";
 
@@ -3152,7 +3176,12 @@ BackendEmission CppBackend::emit(const BackendRequest& request) const {
         << "}\n\n"
         << "void run(CpuState& cpu, PlatformServices& services) {\n"
         << "    katana::runtime::validate_platform_services(services);\n"
-        << "    run(cpu);\n"
+        << "    cpu.pc = "
+        << hex32(entry_address)
+        << ";\n"
+        << "    "
+        << service_function_name(entry_address)
+        << "(cpu, &services);\n"
         << "}\n\n";
 
     metadata
