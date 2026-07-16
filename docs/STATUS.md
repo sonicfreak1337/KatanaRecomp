@@ -1,6 +1,6 @@
 # Projektstatus
 
-Version: `0.37.0`
+Interner Entwicklungsmeilenstein: `0.40.0`
 
 Phase: Pre-Alpha
 
