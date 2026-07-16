@@ -6,6 +6,7 @@
 
 - KR-3501: Projektmanifeste besitzen ein namespaced v2-Schema mit festem `katana-project`-Identifier und getrennten Projekt-, Eingabe-, Image- und Segmentfeldern. Der v1-Vertrag bleibt kompatibel lesbar; unbekannte Versionen, Schemas und versionsfremde Felder scheitern vor dem Loaderzugriff.
 - KR-3502: Die CLI veroeffentlicht stabile Exitcodes fuer Nutzung, Eingabe, I/O, Verarbeitung, Codegen, Hostbuild und interne Fehler. Zentrale Diagnosen tragen eine feste Fehlerklasse; `--help`, `-h` und `--version` sind stabile erfolgreiche Basiskommandos.
+- KR-3503: Ein gemeinsamer versionierter JSON-Reportkopf und zentrale kontrollzeichenfeste String-Escapierung vereinheitlichen IR-, Kontrollfluss- und Gate-Berichte. `analyze-json` liefert Funktionen, indirekte Ziele, Jump Tables und Diagnosen deterministisch und ohne Hostzeitfelder.
 
 ## [0.34.0] - 2026-07-16
 

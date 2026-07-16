@@ -1,4 +1,5 @@
 #include "katana/platform/phase6_gate.hpp"
+#include "katana/io/json_report.hpp"
 
 #include "katana/platform/dreamcast.hpp"
 #include "katana/platform/dreamcast_disc.hpp"
@@ -245,9 +246,12 @@ Phase6GateReport run_phase6_gate(
 
 std::string serialize_phase6_gate_report(const Phase6GateReport& report) {
     std::ostringstream output;
-    output << "{\n"
+    katana::io::write_json_report_header(
+        output, "katana-phase6-gate-v1", "phase6-gate"
+    );
+    output << ",\n"
         << "  \"schema_version\": 1,\n"
-        << "  \"checkpoint\": \"" << report.checkpoint << "\",\n"
+        << "  \"checkpoint\": " << katana::io::quote_json(report.checkpoint) << ",\n"
         << "  \"gdi_loaded\": " << bool_json(report.gdi_loaded) << ",\n"
         << "  \"tracks_validated\": " << report.tracks_validated << ",\n"
         << "  \"iso9660_mounted\": " << bool_json(report.iso9660_mounted) << ",\n"

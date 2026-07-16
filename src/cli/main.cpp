@@ -594,7 +594,8 @@ int decode_single_opcode(const std::string& text) {
 
 int analyze_manifest(
     const std::filesystem::path& path,
-    const std::optional<std::filesystem::path>& override_path = std::nullopt
+    const std::optional<std::filesystem::path>& override_path = std::nullopt,
+    const bool json = false
 ) {
     const auto image = katana::io::load_project_manifest(path);
     std::optional<katana::analysis::AnalysisOverrides> overrides;
@@ -604,10 +605,14 @@ int analyze_manifest(
     const auto analysis = katana::analysis::analyze_control_flow(
         image, overrides.has_value() ? &*overrides : nullptr
     );
-    std::cout << katana::analysis::format_recursive_analysis_report(analysis.recursive);
-    std::cout << katana::analysis::format_indirect_control_flow_report(
-        analysis.indirect_control_flow, analysis.jump_tables
-    );
+    if (json) {
+        std::cout << katana::analysis::format_control_flow_analysis_json(analysis);
+    } else {
+        std::cout << katana::analysis::format_recursive_analysis_report(analysis.recursive);
+        std::cout << katana::analysis::format_indirect_control_flow_report(
+            analysis.indirect_control_flow, analysis.jump_tables
+        );
+    }
     return 0;
 }
 
@@ -1077,6 +1082,7 @@ void print_usage(std::ostream& output) {
         << "  katana-recomp opcode <Opcode>\n"
         << "  katana-recomp isa-report\n"
         << "  katana-recomp analyze <Projektmanifest> [Override-Datei]\n"
+        << "  katana-recomp analyze-json <Projektmanifest> [Override-Datei]\n"
         << "  katana-recomp disasm <Datei> [Basisadresse]\n"
         << "  katana-recomp blocks <Datei> [Basisadresse]\n"
         << "  katana-recomp functions <Datei> <Einstieg> [Basisadresse]\n"
@@ -1112,12 +1118,16 @@ int main(const int argc, char* argv[]) {
             return 0;
         }
 
-        if ((argc == 3 || argc == 4) && std::string(argv[1]) == "analyze") {
+        if (
+            (argc == 3 || argc == 4) &&
+            (std::string(argv[1]) == "analyze" || std::string(argv[1]) == "analyze-json")
+        ) {
             return analyze_manifest(
                 std::filesystem::path(argv[2]),
                 argc == 4
                     ? std::optional<std::filesystem::path>{std::filesystem::path(argv[3])}
-                    : std::nullopt
+                    : std::nullopt,
+                std::string(argv[1]) == "analyze-json"
             );
         }
 

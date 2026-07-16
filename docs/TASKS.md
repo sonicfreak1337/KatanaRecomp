@@ -1451,9 +1451,27 @@ Akzeptanz:
   Zahlen im Dispatcher einzufuehren
 - die gebuendelte Phase-8-Regression prueft alle oeffentlichen Exitcodes
 
-### [ ] KR-3503 - JSON-Berichte
+### [x] KR-3503 - JSON-Berichte
 
 Abhaengigkeiten: KR-1706, KR-1906
+
+Umfang:
+
+- einen gemeinsamen versionierten Reportkopf mit Schema, Berichttyp und Status
+  definieren
+- JSON-Strings zentral und kontrollzeichenfest escapen
+- IR-, Kontrollfluss- und bestehende Gate-Berichte an denselben Vertrag binden
+- `analyze-json` als deterministisch maschinenlesbaren Analysepfad anbieten
+
+Akzeptanz:
+
+- gleiche Analysen erzeugen bytegleiche, gueltige JSON-Berichte
+- Funktionen, indirekte Ziele, Jump Tables und Diagnosen sind nach Gastadresse
+  stabil sortiert und besitzen keine lokalen Zeit- oder Pfadfelder
+- bestehende fachliche Schemata behalten ihre Kennung und erhalten den
+  gemeinsamen `report_version`-/`report_type`-/`status`-Kopf
+- die gebuendelte Phase-8-Regression prueft Escaping und JSON-Parsing aller
+  Berichttypen
 
 ### [ ] KR-3504 - Override- und Hint-Dateien
 

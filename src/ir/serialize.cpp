@@ -1,6 +1,7 @@
 #include "katana/ir/serialize.hpp"
 
 #include "katana/ir/verifier.hpp"
+#include "katana/io/json_report.hpp"
 
 #include <algorithm>
 #include <iomanip>
@@ -386,7 +387,8 @@ std::string emit_ir_json(const std::span<const Function> functions) {
         }
         output << "]}";
     }
-    output << "]}\n";
+    output << "],\"report_version\":" << katana::io::json_report_version
+        << ",\"report_type\":\"ir\",\"status\":\"success\"}\n";
     return output.str();
 }
 

@@ -105,6 +105,9 @@ Funktionseinstiege werden abgelehnt. Instruktionen erscheinen in Adressreihenfol
 Beide Formate enthalten Operandbreiten, konkrete Operanden, Status-, Speicher- und
 Akkumulatoreffekte, Delay-Slot-Beziehungen, Privilegstatus und Kontrollflussdaten.
 Die JSON-Ausgabe verwendet das Schema `katana-ir-v2`, hexadezimale Adressen als
-Strings und feste englische Feld- und Enum-Namen. `katana-recomp ir` gibt das
+Strings und feste englische Feld- und Enum-Namen. Zusaetzlich gilt der
+gemeinsame Katana-Berichtvertrag mit `report_version`, `report_type` und
+`status`. Das bestehende `schema`-/`functions`-Praefix bleibt fuer kompatible
+Leser stabil. Details stehen in `docs/JSON_REPORTS.md`. `katana-recomp ir` gibt das
 Textformat aus; `katana-recomp ir-json` liefert JSON ohne dateipfadabhaengige
 Kopfzeilen.
