@@ -2510,7 +2510,7 @@ Akzeptanz:
 - der Repository-Test fuer jeden behobenen Befund benoetigt keine Sonic-Daten
 - kein privater Inhalt erscheint in Git-Status, Testfixtures oder Gateberichten
 
-### [ ] KR-4501 - Messbarer SH-4-Alpha-ISA-Vertrag
+### [x] KR-4501 - Messbarer SH-4-Alpha-ISA-Vertrag
 
 Abhaengigkeiten: KR-3411, KR-3710, KR-4006, KR-4403
 

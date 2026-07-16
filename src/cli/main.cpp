@@ -954,7 +954,7 @@ void print_usage(std::ostream& output) {
     output << "Verwendung:\n"
            << "  katana-recomp <Opcode>\n"
            << "  katana-recomp opcode <Opcode>\n"
-           << "  katana-recomp isa-report\n"
+           << "  katana-recomp isa-report [--json]\n"
            << "  katana-recomp analyze <Projektmanifest> [Override-Datei]\n"
            << "  katana-recomp analyze-json <Projektmanifest> [Override-Datei]\n"
            << "  katana-recomp cfg-json <Projektmanifest> [Override-Datei]\n"
@@ -998,6 +998,13 @@ int main(const int argc, char* argv[]) {
         if (argc == 2 && std::string(argv[1]) == "isa-report") {
             std::cout << katana::sh4::format_isa_coverage_report(
                 katana::sh4::build_isa_coverage_report());
+            return 0;
+        }
+        if (argc == 3 && std::string_view(argv[1]) == "isa-report" &&
+            std::string_view(argv[2]) == "--json") {
+            std::cout << katana::sh4::format_alpha_isa_json(
+                             katana::sh4::build_isa_coverage_report())
+                      << '\n';
             return 0;
         }
 

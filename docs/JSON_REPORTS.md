@@ -22,6 +22,14 @@ Berichte enthalten keine Hostzeit als Determinismusquelle. Absolute lokale
 Pfade, Firmwarebytes und Flash-Rohdaten sind keine portablen Berichtfelder;
 spaetere Diagnosebefehle muessen solche Inhalte standardmaessig redigieren.
 
+`katana-alpha-isa`/`alpha-isa` Vertragsversion 1 wird mit
+`katana-recomp isa-report --json` erzeugt. Der Bericht zaehlt den gesamten
+16-Bit-Opcoderaum, ordnet jede decodierte Instruktionsart einer Familie zu und
+meldet Decoder, IR, Backend und Runtime getrennt als `supported`, `restricted`
+oder `rejected`. Semantikvertrag, konkrete Einschraenkung und
+Testanforderung sind Pflichtfelder; eine reine Decoderzaehlung ist keine
+Faehigkeitsbehauptung.
+
 ## Anwendungsjob und Buildplan
 
 `katana-application-job` Version 2 unterscheidet die Endzustaende `completed`,

@@ -131,6 +131,7 @@ dokumentiert.
 # Version und ISA-Abdeckung
 .\build-current\katana-recomp.exe --version
 .\build-current\katana-recomp.exe isa-report
+.\build-current\katana-recomp.exe isa-report --json
 
 # Projekt analysieren und Graph exportieren
 .\build-current\katana-recomp.exe analyze-json .\project.katana
@@ -188,6 +189,7 @@ docs/             Vertraege, Status, Tasks und Releaseberichte
 - [CHANGELOG.md](CHANGELOG.md) - Versionshistorie
 - [docs/CODEX_HANDOFF.md](docs/CODEX_HANDOFF.md) - Arbeitsregeln
 - [docs/SONIC_ADVENTURE_ACCEPTANCE.md](docs/SONIC_ADVENTURE_ACCEPTANCE.md) - lokaler Alpha-Vertrag
+- [docs/SH4_ALPHA_ISA.md](docs/SH4_ALPHA_ISA.md) - messbarer Alpha-ISA-Vertrag
 - [docs/REFERENCE_PROVENANCE.md](docs/REFERENCE_PROVENANCE.md) - Referenz- und Lizenzprovenienz
 
 ## Rechtlicher Rahmen

@@ -4,7 +4,7 @@ Interner Entwicklungsmeilenstein: `0.44.0`
 
 Phase: Pre-Alpha
 
-Naechster Roadmap-Task: Phase 11 / KR-4501
+Naechster Roadmap-Task: Phase 11 / KR-4502
 
 Naechstes Phasengate: `v0.46.0` - Abschluss Phase 11
 
@@ -12,11 +12,11 @@ Erster oeffentlicher Produktrelease: `v0.50.0` Alpha
 
 ## Fortschritt
 
-- 193 von 236 gepflegten Roadmap-Tasks abgeschlossen: 81,8 %
+- 194 von 236 gepflegten Roadmap-Tasks abgeschlossen: 82,2 %
 - Phase-9-Reviewkorrekturen sind implementiert; das eigenstaendige
   achtteilige Homebrew-Korpus und Linux-Evidenz bleiben offen
 - Phase 10: 13/13 Tasks im freigegebenen Windows-GDI-Workflow
-- Phase 11: 3/16 Tasks
+- Phase 11: 4/16 Tasks
 - Phase 12: 0/10 Tasks
 - Phase 13: 0/5 Tasks vor dem Alpha-Gate
 - Alpha-Gate noch nicht erreicht
@@ -33,7 +33,7 @@ Erster oeffentlicher Produktrelease: `v0.50.0` Alpha
 | 8 | Werkzeuge und Qualitaet | 26/26 |
 | 9 | Kompatibilitaet und Leistung | Reviewkorrekturen offen |
 | 10 | Desktop-GUI und Quellworkflow | 13/13 (Windows-GDI-Scope) |
-| 11 | Bootanalyse und Retail-Systemdienste | 3/16 |
+| 11 | Bootanalyse und Retail-Systemdienste | 4/16 |
 | 12 | Interaktive Retail-Runtime und Portintegration | 0/10 |
 | 13 | Spielbarer Alpha-Kandidat | 0/5 |
 
@@ -83,6 +83,8 @@ Abgeschlossen sind unter anderem:
   Homebrew-Korpus bleibt offen
 - deterministische Ausfuehrungsprofile, bewachte Speicher-/Dispatch-Fastpaths,
   Inline-Caches, Benchmarks und maschinenlesbare Faehigkeitsmatrix
+- versionierter Alpha-ISA-Vertrag mit getrennten Decoder-, IR-, Backend- und
+  Runtimezustaenden sowie expliziten Semantikgrenzen und Testanforderungen
 
 ## Historisches internes Phasengate: Phase 9 (durch Review invalidiert)
 

@@ -30,6 +30,13 @@
   enden nichtnull mit redigierter Diagnose; GDI-Daten und private Hostpfade
   werden weiterhin nicht eingebettet. Der relocatierte Pakettest fuehrt die
   erzeugte `game.exe` ohne KatanaRecomp-CLI bis zum Runtime-Marker aus.
+- KR-4501: Der SH-4-Alpha-ISA-Vertrag trennt Decoderzaehlung von behaupteter
+  Semantik. Sieben Familien melden Decoder, IR, Backend und Runtime einzeln als
+  `supported`, `restricted` oder `rejected`; jede Behauptung besitzt einen
+  benannten Semantikvertrag und eine Testanforderung. System-/Privileg-,
+  Cache-/Store-Queue- und FPU-Semantik bleiben mit konkreten Runtime-Grenzen
+  eingeschraenkt, unbekannte oder nicht implementierte Encodings werden
+  abgelehnt. `isa-report --json` exportiert Vertragsversion 1 reproduzierbar.
 - Der neue inkrementelle Entwicklungszyklus behaelt `build-current/`, setzt teure Gate-Instrumentierung beim Debugprofil sicher zurueck und baut sowie testet mit begrenzter Parallelitaet. Das frische Abschluss-Gate bleibt erhalten; die vier deterministischen Fuzzziele laufen mit unveraenderter Fallzahl und denselben abgeleiteten Seeds als parallele CTest-Eintraege.
 - Der Entwicklungsrunner normalisiert auch eine bereits aktive x86-Developer-PowerShell auf die fuer den Projektbuild erforderliche native x64-MSVC-Umgebung.
 - KR-3801 bis KR-3808: Ein intern provenance-gebundenes, vollstaendig
