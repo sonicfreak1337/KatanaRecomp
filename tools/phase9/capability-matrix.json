@@ -1,0 +1,15 @@
+{
+  "schema": "katana-phase9-capability-matrix",
+  "version": 1,
+  "capabilities": [
+    {"id":"direct-homebrew","status":"required","test":"katana-phase9-homebrew-tests","limitation":"main RAM executable images only"},
+    {"id":"hle","status":"experimental","test":"katana-aica-execution-tests","limitation":"audio HLE; no ARM7 instruction execution"},
+    {"id":"lle","status":"unsupported","test":"run-local-firmware-smoke.ps1","limitation":"deferred to KR-4601; no firmware file access"},
+    {"id":"mmu","status":"experimental","test":"katana-block-guard-tests","limitation":"guarded translation model, not retail boot qualification"},
+    {"id":"controlled-fallback","status":"supported","test":"katana-controlled-fallback-tests","limitation":"manifest capability required"},
+    {"id":"self-modifying-code","status":"supported","test":"katana-phase9-performance-tests","limitation":"page-granular generation and explicit write observation"},
+    {"id":"scheduler-precision","status":"required","test":"katana-phase9-homebrew-tests","limitation":"guest-cycle deterministic; host pacing remains separate"},
+    {"id":"fast-memory","status":"experimental","test":"katana-phase9-performance-tests","limitation":"linear RAM only with all guards satisfied"},
+    {"id":"inline-cache","status":"experimental","test":"katana-phase9-performance-tests","limitation":"monomorphic callsites with variant and generation match"}
+  ]
+}

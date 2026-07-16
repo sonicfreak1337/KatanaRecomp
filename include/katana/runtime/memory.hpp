@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <span>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -62,6 +63,8 @@ class LinearMemoryDevice final : public MemoryDevice {
     [[nodiscard]] std::size_t size() const noexcept override;
     [[nodiscard]] std::uint8_t read_u8(std::uint32_t offset) const override;
     void write_u8(std::uint32_t offset, std::uint8_t value) override;
+    [[nodiscard]] std::span<const std::uint8_t> bytes() const noexcept;
+    [[nodiscard]] std::span<std::uint8_t> writable_bytes() noexcept;
 
   private:
     void check(std::uint32_t offset) const;

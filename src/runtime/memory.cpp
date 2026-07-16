@@ -195,6 +195,14 @@ void LinearMemoryDevice::write_u8(const std::uint32_t offset, const std::uint8_t
     bytes_[static_cast<std::size_t>(offset)] = value;
 }
 
+std::span<const std::uint8_t> LinearMemoryDevice::bytes() const noexcept {
+    return bytes_;
+}
+
+std::span<std::uint8_t> LinearMemoryDevice::writable_bytes() noexcept {
+    return bytes_;
+}
+
 void LinearMemoryDevice::check(const std::uint32_t offset) const {
     if (static_cast<std::size_t>(offset) >= bytes_.size()) {
         throw std::out_of_range("Speichergeraetezugriff ausserhalb der Region.");

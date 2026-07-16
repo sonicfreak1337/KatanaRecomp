@@ -246,6 +246,19 @@ target_include_directories(
 
 katana_enable_warnings(katana_core)
 
+add_library(katana_phase9 STATIC
+    src/phase9/homebrew.cpp
+    src/phase9/performance.cpp
+)
+add_library(KatanaRecomp::phase9 ALIAS katana_phase9)
+target_include_directories(
+    katana_phase9
+    PUBLIC
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+target_link_libraries(katana_phase9 PUBLIC katana_core katana_runtime)
+katana_enable_warnings(katana_phase9)
+
 add_library(katana_test_support STATIC
     src/testing/differential_execution.cpp
 )
@@ -329,6 +342,36 @@ add_test(
     NAME katana-differential-execution-tests
     COMMAND katana-differential-execution-tests
 )
+
+add_executable(
+    katana-phase9-homebrew-tests
+    tests/phase9/homebrew_tests.cpp
+)
+target_link_libraries(katana-phase9-homebrew-tests PRIVATE katana_phase9)
+katana_enable_warnings(katana-phase9-homebrew-tests)
+add_test(NAME katana-phase9-homebrew-tests COMMAND katana-phase9-homebrew-tests)
+
+add_executable(
+    katana-phase9-performance-tests
+    tests/phase9/performance_tests.cpp
+)
+target_link_libraries(katana-phase9-performance-tests PRIVATE katana_phase9)
+katana_enable_warnings(katana-phase9-performance-tests)
+add_test(NAME katana-phase9-performance-tests COMMAND katana-phase9-performance-tests)
+
+add_executable(
+    katana-phase9-benchmark
+    tools/phase9/benchmark_runner.cpp
+)
+target_link_libraries(katana-phase9-benchmark PRIVATE katana_phase9)
+katana_enable_warnings(katana-phase9-benchmark)
+
+add_executable(
+    katana-phase9-homebrew-report
+    tools/phase9/homebrew_report.cpp
+)
+target_link_libraries(katana-phase9-homebrew-report PRIVATE katana_phase9)
+katana_enable_warnings(katana-phase9-homebrew-report)
 
 if(KATANA_BUILD_FUZZERS)
     add_executable(katana-fuzz tools/fuzz/fuzz_runner.cpp)

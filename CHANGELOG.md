@@ -6,6 +6,21 @@
 
 - Der neue inkrementelle Entwicklungszyklus behaelt `build-current/`, setzt teure Gate-Instrumentierung beim Debugprofil sicher zurueck und baut sowie testet mit begrenzter Parallelitaet. Das frische Abschluss-Gate bleibt erhalten; die vier deterministischen Fuzzziele laufen mit unveraenderter Fallzahl und denselben abgeleiteten Seeds als parallele CTest-Eintraege.
 - Der Entwicklungsrunner normalisiert auch eine bereits aktive x86-Developer-PowerShell auf die fuer den Projektbuild erforderliche native x64-MSVC-Umgebung.
+- KR-3801 bis KR-3808: Ein intern provenance-gebundenes, vollstaendig
+  synthetisches Homebrew-Korpus verbindet CPU-, Konsole-, Maple-, 2D-PVR-,
+  AICA-, Firmware-Handoff-, DMA-, Interrupt- und Replayszenarien in einem
+  deterministischen Zwei-Frame-Bericht ohne BIOS, Flash oder Disc-Image.
+- KR-3901 bis KR-3907: Versionierte exakte und gesampelte Ausfuehrungsprofile,
+  deterministische Hot-Block/-Edge-Berichte, bewachte lineare RAM-Fastpaths,
+  generationengesicherte monomorphe Callsites, eine begrenzte
+  Inliningstrategie und getrennte Phase-9-Benchmarks bilden die
+  Performancebasis.
+- KR-4002: Eine interne Architektur-/Manifestreferenz und maschinenlesbare
+  Faehigkeitsmatrix trennen erforderliche, unterstuetzte, experimentelle und
+  nicht verfuegbare Profile samt automatisiertem Nachweis und Einschraenkung.
+- Das fuer Phase 10 bereitgestellte App-Logo ist ueber Abmessungen, Transparenz
+  und SHA-256 als externer Asset-Eingang erfasst, wird vor der Rechtepruefung
+  jedoch weder kopiert noch paketiert.
 
 ### Geaendert
 
@@ -30,6 +45,10 @@
   selbstbezueglichen ZIP-Hash im Tag zu behaupten. Der Referenzaudit lehnt
   unbekannte Binaerdateien, Git-LFS-Zeiger und generierten Quellcode ausserhalb
   der Testfixtures ab.
+- Performancepfade umgehen weder aktive Watchpoints und MMIO noch MMU-, Alias-,
+  Berechtigungs-, Adressraum- oder Codegenerationswaechter. Direkte RAM-Writes
+  behalten die bestehende Codeinvalidierung; stale Inline-Caches fallen auf
+  den generischen Dispatch zurueck.
 
 ## [0.37.0] - 2026-07-16
 

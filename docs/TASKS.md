@@ -1944,31 +1944,31 @@ Akzeptanz:
 
 ## v0.38.0 bis v0.40.0 - Kompatibilitaet und Leistung
 
-### [ ] KR-3801 - Rechtlich sauberes Homebrew-Testkorpus
+### [x] KR-3801 - Rechtlich sauberes Homebrew-Testkorpus
 
 Abhaengigkeiten: KR-2602, KR-3709
 
-### [ ] KR-3802 - CPU-Konformitaetsprogramm
+### [x] KR-3802 - CPU-Konformitaetsprogramm
 
 Abhaengigkeiten: KR-1506, KR-2504, KR-3707
 
-### [ ] KR-3803 - Eingabe-Beispiel
+### [x] KR-3803 - Eingabe-Beispiel
 
 Abhaengigkeiten: KR-2702
 
-### [ ] KR-3804 - 2D-Grafik-Beispiel
+### [x] KR-3804 - 2D-Grafik-Beispiel
 
 Abhaengigkeiten: KR-2804
 
-### [ ] KR-3805 - Audio-Beispiel
+### [x] KR-3805 - Audio-Beispiel
 
 Abhaengigkeiten: KR-2903
 
-### [ ] KR-3806 - Zusammenhaengendes Testspiel
+### [x] KR-3806 - Zusammenhaengendes Testspiel
 
 Abhaengigkeiten: KR-3105, KR-3411, KR-3710, KR-3803, KR-3804, KR-3805
 
-### [ ] KR-3807 - Synthetischer Firmware-Handoff-Test
+### [x] KR-3807 - Synthetischer Firmware-Handoff-Test
 
 Abhaengigkeiten: KR-2605, KR-3405, KR-3411, KR-3707
 
@@ -1987,7 +1987,7 @@ Akzeptanz:
 - ein veraendertes RAM-Byte invalidiert den Zielblock vor erneuter Ausfuehrung
 - Fixture, Generator und erwartete Ergebnisse sind frei verteilbar und enthalten keine BIOSbytes
 
-### [ ] KR-3808 - Scheduler-, DMA- und Interrupt-Vertical-Slice
+### [x] KR-3808 - Scheduler-, DMA- und Interrupt-Vertical-Slice
 
 Abhaengigkeiten: KR-3105, KR-3407, KR-3609, KR-3806
 
@@ -2024,23 +2024,23 @@ Akzeptanz:
 - ein Hashkonflikt verhindert die Ausfuehrung vor dem ersten Gastschritt
 - der Test kann vollstaendig aus dem Build- und Releasepaket ausgeschlossen werden
 
-### [ ] KR-3901 - Benchmark-Suite
+### [x] KR-3901 - Benchmark-Suite
 
 Abhaengigkeiten: KR-3806, KR-3807, KR-3808
 
-### [ ] KR-3902 - Hot-Block-Analyse
+### [x] KR-3902 - Hot-Block-Analyse
 
 Abhaengigkeiten: KR-3901
 
-### [ ] KR-3903 - Dispatch- und Speicher-Fastpaths
+### [x] KR-3903 - Dispatch- und Speicher-Fastpaths
 
 Abhaengigkeiten: KR-3402, KR-3404, KR-3408, KR-3902
 
-### [ ] KR-3904 - Inlining und Codegroessenstrategie
+### [x] KR-3904 - Inlining und Codegroessenstrategie
 
 Abhaengigkeiten: KR-3301, KR-3305, KR-3901
 
-### [ ] KR-3906 - Block-, Edge- und Dispatch-Profiling
+### [x] KR-3906 - Block-, Edge- und Dispatch-Profiling
 
 Abhaengigkeiten: KR-3305, KR-3406, KR-3607, KR-3901
 
@@ -2058,7 +2058,7 @@ Akzeptanz:
 - Hot-Block- und Hot-Edge-Berichte sind deterministisch sortiert
 - Firmware- und Flashinhalte werden nicht in Profilen eingebettet
 
-### [ ] KR-3907 - Fastpath- und Inline-Cache-Waechter
+### [x] KR-3907 - Fastpath- und Inline-Cache-Waechter
 
 Abhaengigkeiten: KR-3402, KR-3404, KR-3408, KR-3903, KR-3906
 
@@ -2081,7 +2081,7 @@ Phase-9-Blocker. LTO/PGO werden erst nach dem Alpha-Release anhand realer
 Profile im Beta-Scope bewertet. Budgets und alle Testanforderungen aus v0.38
 und v0.39 werden gesammelt in KR-4006 validiert.
 
-### [ ] KR-4002 - Interne Architektur- und Manifestreferenz
+### [x] KR-4002 - Interne Architektur- und Manifestreferenz
 
 Abhaengigkeiten: KR-3411, KR-3505, KR-3506
 

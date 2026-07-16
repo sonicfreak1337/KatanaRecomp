@@ -1,0 +1,13 @@
+{
+  "schema": "katana-phase9-budgets",
+  "version": 1,
+  "analysis_us_max": 1000000,
+  "codegen_us_max": 1000000,
+  "hostbuild_ms_max": 300000,
+  "startup_us_max": 1000000,
+  "runtime_us_max": 1000000,
+  "generated_cpp_bytes_max": 1048576,
+  "invalidations_max": 4,
+  "fallbacks_max": 0,
+  "scheduler_jitter_max": 1
+}

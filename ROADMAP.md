@@ -981,14 +981,14 @@ Kumulatives Phase-8-Abschlussgate bei v0.37.0:
 
 Fortschritt:
 
-- [ ] KR-3801 - Rechtlich sauberes Homebrew-Testkorpus
-- [ ] KR-3802 - CPU-Konformitaetsprogramm
-- [ ] KR-3803 - Eingabe-Beispiel
-- [ ] KR-3804 - 2D-Grafik-Beispiel
-- [ ] KR-3805 - Audio-Beispiel
-- [ ] KR-3806 - Zusammenhaengendes Testspiel
-- [ ] KR-3807 - Synthetischer Firmware-Handoff-Test
-- [ ] KR-3808 - Scheduler-, DMA- und Interrupt-Vertical-Slice
+- [x] KR-3801 - Rechtlich sauberes Homebrew-Testkorpus
+- [x] KR-3802 - CPU-Konformitaetsprogramm
+- [x] KR-3803 - Eingabe-Beispiel
+- [x] KR-3804 - 2D-Grafik-Beispiel
+- [x] KR-3805 - Audio-Beispiel
+- [x] KR-3806 - Zusammenhaengendes Testspiel
+- [x] KR-3807 - Synthetischer Firmware-Handoff-Test
+- [x] KR-3808 - Scheduler-, DMA- und Interrupt-Vertical-Slice
 - [?] KR-3809 - Optionales lokales Firmware-Smoke-Profil
 
 Pflichtkorpus:
@@ -1013,12 +1013,12 @@ Interner Nachweis:
 
 Fortschritt:
 
-- [ ] KR-3901 - Benchmark-Suite
-- [ ] KR-3902 - Hot-Block-Analyse
-- [ ] KR-3903 - Dispatch- und Speicher-Fastpaths
-- [ ] KR-3904 - Inlining und Codegroessenstrategie
-- [ ] KR-3906 - Block-, Edge- und Dispatch-Profiling
-- [ ] KR-3907 - Fastpath- und Inline-Cache-Waechter
+- [x] KR-3901 - Benchmark-Suite
+- [x] KR-3902 - Hot-Block-Analyse
+- [x] KR-3903 - Dispatch- und Speicher-Fastpaths
+- [x] KR-3904 - Inlining und Codegroessenstrategie
+- [x] KR-3906 - Block-, Edge- und Dispatch-Profiling
+- [x] KR-3907 - Fastpath- und Inline-Cache-Waechter
 
 Enthalten:
 
@@ -1044,7 +1044,7 @@ Interne Akzeptanz fuer das kumulative Phase-9-Gate:
 
 Fortschritt:
 
-- [ ] KR-4002 - Interne Architektur- und Manifestreferenz
+- [x] KR-4002 - Interne Architektur- und Manifestreferenz
 - [ ] KR-4006 - Kumulatives Phase-9-Gate
 
 Enthalten:
