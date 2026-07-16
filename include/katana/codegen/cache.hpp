@@ -8,7 +8,7 @@
 
 namespace katana::codegen {
 
-inline constexpr std::uint32_t codegen_cache_schema_version = 1u;
+inline constexpr std::uint32_t codegen_cache_schema_version = 2u;
 
 struct CodegenCacheInputs {
     std::string input_hash;
@@ -21,6 +21,7 @@ struct CodegenCacheInputs {
     std::string overrides_hash;
     std::uint32_t ir_version = 0u;
     std::uint32_t optimization_version = 0u;
+    std::string tool_version;
 };
 
 [[nodiscard]] std::string make_codegen_cache_key(const CodegenCacheInputs& inputs);

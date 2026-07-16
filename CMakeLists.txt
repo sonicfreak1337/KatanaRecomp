@@ -88,6 +88,7 @@ add_library(katana_core STATIC
     src/io/executable_image.cpp
     src/io/elf32_sh_loader.cpp
     src/io/project_manifest.cpp
+    src/io/input_provenance.cpp
     src/io/json_report.cpp
     src/io/raw_binary_loader.cpp
     src/io/symbol_map.cpp

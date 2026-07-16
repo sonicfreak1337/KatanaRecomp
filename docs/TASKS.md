@@ -1514,7 +1514,7 @@ Akzeptanz:
 - unbekannte Profile oder widerspruechliche Aliasgruppen werden vor der Analyse abgelehnt
 - dynamische RAM-Vektoren werden nicht als statische ROM-Symbole serialisiert
 
-### [ ] KR-3506 - Eingabeprovenienz und Cache-Identitaet
+### [x] KR-3506 - Eingabeprovenienz und Cache-Identitaet
 
 Abhaengigkeiten: KR-3303, KR-3305, KR-3501
 

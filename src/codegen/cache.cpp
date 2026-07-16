@@ -42,7 +42,8 @@ std::string make_codegen_cache_key(const CodegenCacheInputs& inputs) {
         inputs.configuration_hash.empty() || inputs.backend_name.empty() ||
         inputs.backend_abi == 0u || inputs.runtime_abi == 0u ||
         inputs.manifest_hash.empty() || inputs.overrides_hash.empty() ||
-        inputs.ir_version == 0u || inputs.optimization_version == 0u) {
+        inputs.ir_version == 0u || inputs.optimization_version == 0u ||
+        inputs.tool_version.empty()) {
         throw std::invalid_argument("Codegen-Cache-Schluessel ist unvollstaendig.");
     }
     std::uint64_t hash = 14695981039346656037ull;
@@ -57,6 +58,7 @@ std::string make_codegen_cache_key(const CodegenCacheInputs& inputs) {
     hash_field(hash, inputs.overrides_hash);
     hash_field(hash, std::to_string(inputs.ir_version));
     hash_field(hash, std::to_string(inputs.optimization_version));
+    hash_field(hash, inputs.tool_version);
     std::ostringstream output;
     output << "cg-v" << codegen_cache_schema_version << '-'
            << std::hex << std::setfill('0') << std::setw(16) << hash;
