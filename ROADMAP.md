@@ -862,7 +862,7 @@ Fortschritt:
 - [x] KR-3501 - Manifest-Schema und Versionierung
 - [x] KR-3502 - Stabile CLI und Exitcodes
 - [x] KR-3503 - JSON-Berichte
-- [ ] KR-3504 - Override- und Hint-Dateien
+- [x] KR-3504 - Override- und Hint-Dateien
 - [ ] KR-3505 - Ausfuehrungs- und Firmwareprofil im Manifest
 - [ ] KR-3506 - Eingabeprovenienz und Cache-Identitaet
 - [ ] KR-3507 - Reproduzierbarer Port-Projektexport

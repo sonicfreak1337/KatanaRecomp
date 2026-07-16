@@ -66,6 +66,28 @@ ungueltig gemeldet. Dadurch bleibt das Ergebnis unabhaengig von der Dateireihenf
 Der Bericht trennt `Aufgeloest` und `Ungeloest` in stabiler Reihenfolge. Sichere
 Ziele nennen ihren Beweisgrund. Jede ungeloeste Stelle nennt ihren Ablehnungsgrund
 und zeigt die passende `jump`- oder `jump_table`-Zeile fuer eine Override-Datei.
+
+## Analyseanweisungen Version 2
+
+Version 2 trennt zwingende Overrides von unverbindlichen Hints:
+
+```text
+schema = katana-analysis-directives
+version = 2
+mode = hint
+function = 0x8C010000
+jump = 0x8C010100 0x8C010200
+```
+
+`mode = override` behaelt die erzwingende v1-Semantik. `mode = hint` darf einen
+bereits statisch bewiesenen, abweichenden Wert nicht ersetzen. Uebereinstimmende
+Hints werden als `confirmed`, nutzbare Hinweise als `accepted`, Konflikte als
+`rejected` und nicht mehr auffindbare Stellen als `stale` berichtet. Ungueltige
+Hint-Adressen brechen die Analyse nicht ab, bleiben aber sichtbar diagnostiziert.
+
+Die CLI-Option `--directives <Datei>` akzeptiert beide Modi; `--overrides`
+bleibt als kompatibler Alias bestehen. Der Modus stammt immer aus der
+versionierten Datei und wird nicht aus dem Optionsnamen geraten.
 Eine teilweise gueltige Jump Table bleibt vollstaendig im ungeloesten Abschnitt.
 Tabellenzeilen nennen fuer jedes Ziel, ob der Dispatch ein Jump oder Call ist.
 Eine durch eine Tabelle erklaerte Dispatch-Stelle wird nicht zusaetzlich als

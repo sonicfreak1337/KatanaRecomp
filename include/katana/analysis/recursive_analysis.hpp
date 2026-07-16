@@ -27,6 +27,7 @@ enum class FunctionOrigin {
     IndirectCall,
     JumpTableCall,
     UserOverride,
+    UserHint,
     Symbol
 };
 

@@ -159,6 +159,7 @@ std::string format_control_flow_analysis_json(
            << ",\"diagnostics\":" << analysis.recursive.diagnostics.size()
            << ",\"indirect_sites\":" << analysis.indirect_control_flow.size()
            << ",\"jump_tables\":" << analysis.jump_tables.size()
+           << ",\"directive_diagnostics\":" << analysis.directive_diagnostics.size()
            << ",\"fixpoint_iterations\":" << analysis.fixpoint_iterations << '}';
 
     auto functions = analysis.recursive.functions;
@@ -224,6 +225,19 @@ std::string format_control_flow_analysis_json(
                << ",\"resolved\":" << (table.resolved ? "true" : "false")
                << ",\"requested_entries\":" << table.requested_entries
                << ",\"reason\":" << katana::io::quote_json(table.reason) << '}';
+    }
+    output << ']';
+
+    output << ",\"directive_diagnostics\":[";
+    for (std::size_t index = 0u; index < analysis.directive_diagnostics.size(); ++index) {
+        if (index != 0u) output << ',';
+        const auto& diagnostic = analysis.directive_diagnostics[index];
+        output << "{\"line\":" << diagnostic.line
+               << ",\"address\":" << katana::io::quote_json(hex32(diagnostic.address))
+               << ",\"status\":" << katana::io::quote_json(
+                    analysis_directive_diagnostic_status_name(diagnostic.status)
+                  )
+               << ",\"reason\":" << katana::io::quote_json(diagnostic.reason) << '}';
     }
     output << ']';
 

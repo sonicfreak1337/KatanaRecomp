@@ -1473,9 +1473,27 @@ Akzeptanz:
 - die gebuendelte Phase-8-Regression prueft Escaping und JSON-Parsing aller
   Berichttypen
 
-### [ ] KR-3504 - Override- und Hint-Dateien
+### [x] KR-3504 - Override- und Hint-Dateien
 
 Abhaengigkeiten: KR-1805, KR-3501
+
+Umfang:
+
+- den erzwingenden v1-Overridevertrag kompatibel erhalten
+- versionierte v2-Analyseanweisungen mit festem Schema und explizitem Modus
+  `override` oder `hint` einfuehren
+- Hints nur fuer unbewiesene Ziele anwenden und Konflikte mit statischen
+  Beweisen niemals ueberschreiben
+- Annahme, Bestaetigung, Ablehnung und stale Hinweise deterministisch berichten
+
+Akzeptanz:
+
+- ein abweichender Hint veraendert kein statisch bewiesenes Sprungziel
+- ungueltige und nicht mehr entdeckte Hints bleiben Diagnose statt stiller
+  Wirkung oder hartem Analyseabbruch
+- v1-Dateien behalten zwingende Override-Semantik; v2 verlangt Schema und Modus
+- `analyze-json` gibt alle Hintentscheidungen mit Zeile, Gastadresse, Status und
+  Grund aus; die gebuendelte Phase-8-Regression prueft alle vier Statusklassen
 
 ### [ ] KR-3505 - Ausfuehrungs- und Firmwareprofil im Manifest
 

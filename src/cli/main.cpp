@@ -1086,9 +1086,9 @@ void print_usage(std::ostream& output) {
         << "  katana-recomp disasm <Datei> [Basisadresse]\n"
         << "  katana-recomp blocks <Datei> [Basisadresse]\n"
         << "  katana-recomp functions <Datei> <Einstieg> [Basisadresse]\n"
-        << "  katana-recomp ir <Raw|ELF|Manifest> <Einstieg> [Basisadresse] [--overrides <Datei>]\n"
-        << "  katana-recomp ir-json <Raw|ELF|Manifest> <Einstieg> [Basisadresse] [--overrides <Datei>]\n"
-        << "  katana-recomp emit-cpp <Raw|ELF|Manifest> <Einstieg> <Ausgabe.cpp> [Basisadresse] [--no-opt] [--dump-ir <Praefix>] [--overrides <Datei>]\n\n"
+        << "  katana-recomp ir <Raw|ELF|Manifest> <Einstieg> [Basisadresse] [--directives <Datei>]\n"
+        << "  katana-recomp ir-json <Raw|ELF|Manifest> <Einstieg> [Basisadresse] [--directives <Datei>]\n"
+        << "  katana-recomp emit-cpp <Raw|ELF|Manifest> <Einstieg> <Ausgabe.cpp> [Basisadresse] [--no-opt] [--dump-ir <Praefix>] [--directives <Datei>]\n\n"
         << "  katana-recomp phase6-probe-source <GDI> <Ausgabe.cpp>\n\n"
         << "Beispiel:\n"
         << "  katana-recomp emit-cpp programm.bin 8C010000 generated.cpp 8C010000\n";
@@ -1233,11 +1233,11 @@ int main(const int argc, char* argv[]) {
             while (argument < static_cast<std::size_t>(argc)) {
                 const std::string_view option = argv[argument++];
                 if (
-                    option != "--overrides" || override_path ||
+                    (option != "--overrides" && option != "--directives") || override_path ||
                     argument >= static_cast<std::size_t>(argc)
                 ) {
                     throw std::invalid_argument(
-                        "Ungueltige IR-Option; erwartet wird --overrides <Datei>."
+                        "Ungueltige IR-Option; erwartet wird --directives <Datei>."
                     );
                 }
                 override_path = std::filesystem::path(argv[argument++]);
@@ -1303,13 +1303,13 @@ int main(const int argc, char* argv[]) {
                         );
                     }
                     dump_prefix = std::filesystem::path(argv[argument++]);
-                } else if (option == "--overrides") {
+                } else if (option == "--overrides" || option == "--directives") {
                     if (
                         override_path ||
                         argument >= static_cast<std::size_t>(argc)
                     ) {
                         throw std::invalid_argument(
-                            "--overrides erwartet genau eine Datei."
+                            "--directives erwartet genau eine Datei."
                         );
                     }
                     override_path = std::filesystem::path(argv[argument++]);

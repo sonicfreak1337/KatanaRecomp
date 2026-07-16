@@ -18,7 +18,7 @@ namespace {
     const std::string& cause
 ) {
     throw std::runtime_error(
-        "Override-Fehler in " + path.string() + " in Zeile "
+        "Analyseanweisungsfehler in " + path.string() + " in Zeile "
         + std::to_string(line) + ": " + cause
     );
 }
@@ -72,11 +72,15 @@ std::string hex_address(const std::uint32_t address) {
 AnalysisOverrides parse_analysis_overrides(const std::filesystem::path& path) {
     std::ifstream input(path);
     if (!input) {
-        throw std::runtime_error("Override-Datei konnte nicht geoeffnet werden: " + path.string());
+        throw std::runtime_error(
+            "Analyseanweisungsdatei konnte nicht geoeffnet werden: " + path.string()
+        );
     }
     AnalysisOverrides overrides;
     overrides.source_path = path;
     bool saw_version = false;
+    bool saw_schema = false;
+    bool saw_mode = false;
     std::string line_text;
     std::size_t line_number = 0u;
     while (std::getline(input, line_text)) {
@@ -98,6 +102,23 @@ AnalysisOverrides parse_analysis_overrides(const std::filesystem::path& path) {
             }
             overrides.version = parse_number(fields[0], 10, path, line_number, "version");
             saw_version = true;
+        } else if (key == "schema" && fields.size() == 1u) {
+            if (saw_schema || fields[0] != "katana-analysis-directives") {
+                fail(path, line_number, "schema muss genau einmal katana-analysis-directives sein.");
+            }
+            saw_schema = true;
+        } else if (key == "mode" && fields.size() == 1u) {
+            if (saw_mode) {
+                fail(path, line_number, "mode muss genau einmal gesetzt werden.");
+            }
+            if (fields[0] == "override") {
+                overrides.mode = AnalysisDirectiveMode::Override;
+            } else if (fields[0] == "hint") {
+                overrides.mode = AnalysisDirectiveMode::Hint;
+            } else {
+                fail(path, line_number, "mode muss override oder hint sein.");
+            }
+            saw_mode = true;
         } else if (key == "function" && fields.size() == 1u) {
             overrides.functions.push_back({
                 parse_number(fields[0], 16, path, line_number, "function"), line_number
@@ -120,13 +141,23 @@ AnalysisOverrides parse_analysis_overrides(const std::filesystem::path& path) {
         }
     }
     if (!input.eof()) {
-        throw std::runtime_error("Override-Datei konnte nicht vollstaendig gelesen werden: " + path.string());
+        throw std::runtime_error(
+            "Analyseanweisungsdatei konnte nicht vollstaendig gelesen werden: " + path.string()
+        );
     }
     if (!saw_version) {
         fail(path, 0u, "Pflichtfeld version fehlt.");
     }
-    if (overrides.version != 1u) {
-        fail(path, 0u, "nur Override-Version 1 wird unterstuetzt.");
+    if (overrides.version != 1u && overrides.version != analysis_directives_current_version) {
+        fail(path, 0u, "nur Analyseanweisungs-Version 1 oder 2 wird unterstuetzt.");
+    }
+    if (overrides.version == 1u) {
+        if (saw_schema || saw_mode) {
+            fail(path, 0u, "Version 1 erlaubt weder schema noch mode.");
+        }
+        overrides.mode = AnalysisDirectiveMode::Override;
+    } else if (!saw_schema || !saw_mode) {
+        fail(path, 0u, "Version 2 braucht schema und mode.");
     }
 
     std::sort(overrides.functions.begin(), overrides.functions.end(), [](const auto& left, const auto& right) {
@@ -167,13 +198,21 @@ AnalysisOverrides parse_analysis_overrides(const std::filesystem::path& path) {
         const auto first_line = std::min(jump->line, table->line);
         const auto second_line = std::max(jump->line, table->line);
         throw std::runtime_error(
-            "Override-Fehler in " + path.string() + " in Zeilen "
+            "Analyseanweisungsfehler in " + path.string() + " in Zeilen "
             + std::to_string(first_line) + " und " + std::to_string(second_line)
             + ": jump und jump_table verwenden dieselbe Dispatch-Adresse "
             + hex_address(jump->instruction_address) + "."
         );
     }
     return overrides;
+}
+
+const char* analysis_directive_mode_name(const AnalysisDirectiveMode mode) noexcept {
+    switch (mode) {
+        case AnalysisDirectiveMode::Override: return "override";
+        case AnalysisDirectiveMode::Hint: return "hint";
+    }
+    return "unknown";
 }
 
 }

@@ -319,6 +319,7 @@ const char* function_origin_name(const FunctionOrigin origin) noexcept {
         case FunctionOrigin::IndirectCall: return "indirect-call";
         case FunctionOrigin::JumpTableCall: return "jump-table-call";
         case FunctionOrigin::UserOverride: return "user-override";
+        case FunctionOrigin::UserHint: return "user-hint";
         case FunctionOrigin::Symbol: return "symbol";
     }
     return "unknown";

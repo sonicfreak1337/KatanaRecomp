@@ -29,7 +29,7 @@ std::string hex_address(const std::uint32_t address) {
     const std::string& cause
 ) {
     throw std::runtime_error(
-        "Override-Fehler in " + overrides.source_path.string() + " in Zeile "
+        "Analyseanweisungsfehler in " + overrides.source_path.string() + " in Zeile "
         + std::to_string(line) + " bei " + hex_address(address) + ": " + cause + "."
     );
 }
@@ -98,13 +98,38 @@ ControlFlowAnalysisResult analyze_control_flow(
     const AnalysisOverrides* overrides
 ) {
     std::map<std::uint32_t, std::set<FunctionOrigin>> seeds;
+    const bool hints = overrides != nullptr &&
+        overrides->mode == AnalysisDirectiveMode::Hint;
+    std::vector<AnalysisDirectiveDiagnostic> seed_diagnostics;
     if (overrides != nullptr) {
         for (const auto& function : overrides->functions) {
-            require_override_code_address(
-                image, *overrides, function.line, function.address
-            );
-            const std::array origins{FunctionOrigin::UserOverride};
+            const auto validation = validate_committed_code_address(image, function.address);
+            if (!validation.valid()) {
+                if (hints) {
+                    seed_diagnostics.push_back({
+                        function.line,
+                        function.address,
+                        AnalysisDirectiveDiagnosticStatus::Rejected,
+                        code_address_status_name(validation.status)
+                    });
+                    continue;
+                }
+                require_override_code_address(
+                    image, *overrides, function.line, function.address
+                );
+            }
+            const std::array origins{
+                hints ? FunctionOrigin::UserHint : FunctionOrigin::UserOverride
+            };
             static_cast<void>(add_seed(seeds, function.address, origins));
+            if (hints) {
+                seed_diagnostics.push_back({
+                    function.line,
+                    function.address,
+                    AnalysisDirectiveDiagnosticStatus::Accepted,
+                    "function-seed"
+                });
+            }
         }
     }
 
@@ -116,6 +141,7 @@ ControlFlowAnalysisResult analyze_control_flow(
             analysis.recursive.instructions, image
         );
         analysis.jump_tables.clear();
+        analysis.directive_diagnostics = seed_diagnostics;
         bool missing_override_dispatch = false;
 
         if (overrides != nullptr) {
@@ -131,18 +157,66 @@ ControlFlowAnalysisResult analyze_control_flow(
                     missing_override_dispatch = true;
                     continue;
                 }
-                require_override_code_address(
-                    image, *overrides, jump.line, jump.target
+                const auto target_validation = validate_committed_code_address(
+                    image, jump.target
                 );
+                if (!target_validation.valid()) {
+                    if (hints) {
+                        analysis.directive_diagnostics.push_back({
+                            jump.line,
+                            jump.instruction_address,
+                            AnalysisDirectiveDiagnosticStatus::Rejected,
+                            code_address_status_name(target_validation.status)
+                        });
+                        continue;
+                    }
+                    require_override_code_address(
+                        image, *overrides, jump.line, jump.target
+                    );
+                }
+                if (hints && resolution->status == ResolutionStatus::Resolved) {
+                    const bool confirmed = resolution->target == jump.target;
+                    analysis.directive_diagnostics.push_back({
+                        jump.line,
+                        jump.instruction_address,
+                        confirmed
+                            ? AnalysisDirectiveDiagnosticStatus::Confirmed
+                            : AnalysisDirectiveDiagnosticStatus::Rejected,
+                        confirmed ? "matches-static-proof" : "conflicts-with-static-proof"
+                    });
+                    continue;
+                }
                 resolution->status = ResolutionStatus::Resolved;
                 resolution->target = jump.target;
-                resolution->reason = "user-override";
+                resolution->reason = hints ? "user-hint" : "user-override";
+                if (hints) {
+                    analysis.directive_diagnostics.push_back({
+                        jump.line,
+                        jump.instruction_address,
+                        AnalysisDirectiveDiagnosticStatus::Accepted,
+                        "resolved-unproven-target"
+                    });
+                }
             }
 
             for (const auto& table : overrides->jump_tables) {
-                require_override_code_address(
-                    image, *overrides, table.line, table.dispatch_address
+                const auto dispatch_validation = validate_committed_code_address(
+                    image, table.dispatch_address
                 );
+                if (!dispatch_validation.valid()) {
+                    if (hints) {
+                        analysis.directive_diagnostics.push_back({
+                            table.line,
+                            table.dispatch_address,
+                            AnalysisDirectiveDiagnosticStatus::Rejected,
+                            code_address_status_name(dispatch_validation.status)
+                        });
+                        continue;
+                    }
+                    require_override_code_address(
+                        image, *overrides, table.line, table.dispatch_address
+                    );
+                }
                 const auto* dispatch = find_instruction(
                     analysis.recursive, table.dispatch_address
                 );
@@ -152,10 +226,36 @@ ControlFlowAnalysisResult analyze_control_flow(
                 }
                 if (dispatch->instruction.kind != katana::sh4::InstructionKind::Jmp
                     && dispatch->instruction.kind != katana::sh4::InstructionKind::Jsr) {
+                    if (hints) {
+                        analysis.directive_diagnostics.push_back({
+                            table.line,
+                            table.dispatch_address,
+                            AnalysisDirectiveDiagnosticStatus::Rejected,
+                            "dispatch-not-jmp-or-jsr"
+                        });
+                        continue;
+                    }
                     override_error(
                         *overrides, table.line, table.dispatch_address,
                         "dispatch-not-jmp-or-jsr"
                     );
+                }
+                const auto proven = std::find_if(
+                    analysis.indirect_control_flow.begin(),
+                    analysis.indirect_control_flow.end(),
+                    [&table](const auto& candidate) {
+                        return candidate.instruction_address == table.dispatch_address &&
+                            candidate.status == ResolutionStatus::Resolved;
+                    }
+                );
+                if (hints && proven != analysis.indirect_control_flow.end()) {
+                    analysis.directive_diagnostics.push_back({
+                        table.line,
+                        table.dispatch_address,
+                        AnalysisDirectiveDiagnosticStatus::Rejected,
+                        "static-target-already-proven"
+                    });
+                    continue;
                 }
                 auto jump_table = analyze_jump_table(
                     image,
@@ -167,6 +267,16 @@ ControlFlowAnalysisResult analyze_control_flow(
                         == katana::sh4::InstructionKind::Jsr
                     ? JumpTableDispatchKind::Call
                     : JumpTableDispatchKind::Jump;
+                if (hints) {
+                    analysis.directive_diagnostics.push_back({
+                        table.line,
+                        table.dispatch_address,
+                        jump_table.resolved
+                            ? AnalysisDirectiveDiagnosticStatus::Accepted
+                            : AnalysisDirectiveDiagnosticStatus::Rejected,
+                        jump_table.resolved ? "jump-table-validated" : jump_table.reason
+                    });
+                }
                 analysis.jump_tables.push_back(std::move(jump_table));
             }
         }
@@ -178,10 +288,12 @@ ControlFlowAnalysisResult analyze_control_flow(
                 continue;
             }
             if (resolution.kind == IndirectControlFlowKind::Call) {
-                if (resolution.reason == "user-override") {
+                if (resolution.reason == "user-override" || resolution.reason == "user-hint") {
                     const std::array origins{
                         FunctionOrigin::IndirectCall,
-                        FunctionOrigin::UserOverride
+                        resolution.reason == "user-hint"
+                            ? FunctionOrigin::UserHint
+                            : FunctionOrigin::UserOverride
                     };
                     changed = add_seed(seeds, *resolution.target, origins) || changed;
                 } else {
@@ -203,7 +315,7 @@ ControlFlowAnalysisResult analyze_control_flow(
                     if (is_call) {
                         const std::array origins{
                             FunctionOrigin::JumpTableCall,
-                            FunctionOrigin::UserOverride
+                            hints ? FunctionOrigin::UserHint : FunctionOrigin::UserOverride
                         };
                         changed = add_seed(seeds, entry.target, origins) || changed;
                     } else {
@@ -222,6 +334,15 @@ ControlFlowAnalysisResult analyze_control_flow(
                     }
                 );
                 if (resolution == analysis.indirect_control_flow.end()) {
+                    if (hints) {
+                        analysis.directive_diagnostics.push_back({
+                            jump.line,
+                            jump.instruction_address,
+                            AnalysisDirectiveDiagnosticStatus::Stale,
+                            "dispatch-not-discovered-indirect-control-flow"
+                        });
+                        continue;
+                    }
                     override_error(
                         *overrides, jump.line, jump.instruction_address,
                         "dispatch-not-discovered-indirect-control-flow"
@@ -230,6 +351,15 @@ ControlFlowAnalysisResult analyze_control_flow(
             }
             for (const auto& table : overrides->jump_tables) {
                 if (find_instruction(analysis.recursive, table.dispatch_address) == nullptr) {
+                    if (hints) {
+                        analysis.directive_diagnostics.push_back({
+                            table.line,
+                            table.dispatch_address,
+                            AnalysisDirectiveDiagnosticStatus::Stale,
+                            "dispatch-not-discovered"
+                        });
+                        continue;
+                    }
                     override_error(
                         *overrides, table.line, table.dispatch_address,
                         "dispatch-not-discovered"
@@ -284,7 +414,28 @@ ControlFlowAnalysisResult analyze_control_flow(
         std::unique(analysis.resolved_edges.begin(), analysis.resolved_edges.end()),
         analysis.resolved_edges.end()
     );
+    std::sort(
+        analysis.directive_diagnostics.begin(),
+        analysis.directive_diagnostics.end(),
+        [](const auto& left, const auto& right) {
+            if (left.address != right.address) return left.address < right.address;
+            if (left.line != right.line) return left.line < right.line;
+            return left.status < right.status;
+        }
+    );
     return analysis;
+}
+
+const char* analysis_directive_diagnostic_status_name(
+    const AnalysisDirectiveDiagnosticStatus status
+) noexcept {
+    switch (status) {
+        case AnalysisDirectiveDiagnosticStatus::Accepted: return "accepted";
+        case AnalysisDirectiveDiagnosticStatus::Confirmed: return "confirmed";
+        case AnalysisDirectiveDiagnosticStatus::Rejected: return "rejected";
+        case AnalysisDirectiveDiagnosticStatus::Stale: return "stale";
+    }
+    return "unknown";
 }
 
 }
