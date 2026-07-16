@@ -2,6 +2,7 @@
 
 #include <cstdlib>
 #include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <stdexcept>
 #include <string>
@@ -61,6 +62,36 @@ int main() {
         [&] { require_alpha_firmware_profile(FirmwareMode::LleFirmware, leaked); });
     require(error.find("ausserhalb") != std::string::npos,
             "Firmwarequelle im Port-Ausgabeordner wurde nicht vor Zugriff abgelehnt.");
+
+    std::error_code filesystem_error;
+    std::filesystem::remove_all(root, filesystem_error);
+    std::filesystem::create_directories(root / "port", filesystem_error);
+    std::filesystem::create_directories(root / "private", filesystem_error);
+    std::ofstream(root / "private" / "bios.bin", std::ios::binary).put('\0');
+    std::filesystem::create_directory_symlink(
+        root / "private", root / "port" / "firmware-link", filesystem_error);
+    if (!filesystem_error) {
+        AlphaFirmwareInputPolicy outward_link;
+        outward_link.bios_source = root / "port" / "firmware-link" / "bios.bin";
+        outward_link.port_output_directory = root / "port";
+        error = require_rejection(
+            [&] { require_alpha_firmware_profile(FirmwareMode::LleFirmware, outward_link); });
+        require(error.find("ausserhalb") != std::string::npos,
+                "Symlink beziehungsweise Reparse Point aus dem Port wurde nicht erkannt.");
+    }
+    filesystem_error.clear();
+    std::filesystem::create_directory_symlink(
+        root / "port", root / "private" / "port-link", filesystem_error);
+    if (!filesystem_error) {
+        AlphaFirmwareInputPolicy inward_link;
+        inward_link.bios_source = root / "private" / "port-link" / "not-yet-created.bin";
+        inward_link.port_output_directory = root / "port";
+        error = require_rejection(
+            [&] { require_alpha_firmware_profile(FirmwareMode::LleFirmware, inward_link); });
+        require(
+            error.find("ausserhalb") != std::string::npos,
+            "Externer Symlink in den Port oder nicht vorhandener Kindpfad wurde nicht erkannt.");
+    }
 
     AlphaFirmwareInputPolicy flash;
     flash.flash_source = root / "private" / "flash.bin";

@@ -21,17 +21,93 @@ function Select-Checkpoint {
         $Job.analysis.analyzed_instruction_bytes -gt 4) {
         $checkpoint = 'SA_ANALYSIS_CONTINUES'
     }
-    foreach ($candidate in $checkpointOrder[2..($checkpointOrder.Count - 1)]) {
-        if ($RuntimeOutput -match "(?m)^$candidate(?:\s|$)") {
-            $checkpoint = $candidate
+    $expectedIndex = if ($checkpoint -eq 'SA_ANALYSIS_CONTINUES') { 2 } else { 1 }
+    $seen = @{}
+    foreach ($line in ($RuntimeOutput -split "`r?`n")) {
+        if ($line -notmatch '^(SA_[A-Z_]+)(?:\s|$)') { continue }
+        $candidate = $Matches[1]
+        $index = [array]::IndexOf($checkpointOrder, $candidate)
+        if ($index -lt 2) { throw "Ungueltiger Runtimecheckpoint: $candidate" }
+        if ($seen.ContainsKey($candidate)) { throw "Doppelter Runtimecheckpoint: $candidate" }
+        if ($index -ne $expectedIndex) {
+            throw "Fehlender oder vertauschter Runtimecheckpoint vor $candidate"
         }
+        $seen[$candidate] = $true
+        $checkpoint = $candidate
+        $expectedIndex++
     }
     return $checkpoint
 }
 
+function Select-SilentFailures {
+    param([string]$RuntimeOutput)
+    $matches = [regex]::Matches($RuntimeOutput, '(?m)^KATANA_RUNTIME_METRICS\s+[^\r\n]*\bsilent_failures=(\d+)\b')
+    if ($matches.Count -eq 0) { return $null }
+    if ($matches.Count -ne 1) { throw 'Runtimemetrikenmarker ist doppelt.' }
+    return [uint64]$matches[0].Groups[1].Value
+}
+
+function Resolve-PhysicalPath {
+    param([string]$Path)
+    $full = [IO.Path]::GetFullPath($Path)
+    $suffix = [Collections.Generic.Stack[string]]::new()
+    $existing = $full
+    while (-not (Test-Path -LiteralPath $existing)) {
+        $leaf = Split-Path -Leaf $existing
+        if ([string]::IsNullOrEmpty($leaf)) { throw "Pfad besitzt keinen aufloesbaren Elternpfad: $Path" }
+        $suffix.Push($leaf)
+        $existing = Split-Path -Parent $existing
+    }
+    if ($IsLinux -or $IsMacOS) {
+        $resolved = (& readlink -f -- $existing).Trim()
+    } else {
+        if (-not ('KatanaPath.Native' -as [type])) {
+            Add-Type -Namespace KatanaPath -Name Native -MemberDefinition @'
+[DllImport("kernel32.dll", CharSet=CharSet.Unicode, SetLastError=true)]
+public static extern Microsoft.Win32.SafeHandles.SafeFileHandle CreateFile(
+    string name, uint access, uint share, IntPtr security, uint creation, uint flags, IntPtr templateFile);
+[DllImport("kernel32.dll", CharSet=CharSet.Unicode, SetLastError=true)]
+public static extern uint GetFinalPathNameByHandle(
+    Microsoft.Win32.SafeHandles.SafeFileHandle handle, StringBuilder path, uint size, uint flags);
+'@
+        }
+        $handle = [KatanaPath.Native]::CreateFile($existing, 0x80, 7, [IntPtr]::Zero, 3, 0x02000000, [IntPtr]::Zero)
+        if ($handle.IsInvalid) { throw "Physischer Pfad konnte nicht geoeffnet werden: $Path" }
+        try {
+            $buffer = [Text.StringBuilder]::new(32768)
+            $length = [KatanaPath.Native]::GetFinalPathNameByHandle($handle, $buffer, $buffer.Capacity, 0)
+            if ($length -eq 0 -or $length -ge $buffer.Capacity) { throw "Physischer Pfad konnte nicht aufgeloest werden: $Path" }
+            $resolved = $buffer.ToString()
+            if ($resolved.StartsWith('\\?\UNC\')) { $resolved = '\\' + $resolved.Substring(8) }
+            elseif ($resolved.StartsWith('\\?\')) { $resolved = $resolved.Substring(4) }
+        } finally { $handle.Dispose() }
+    }
+    while ($suffix.Count -gt 0) { $resolved = Join-Path $resolved $suffix.Pop() }
+    return [IO.Path]::GetFullPath($resolved)
+}
+
+function Assert-OutsideRepository {
+    param([string]$Path, [string]$RepositoryRoot)
+    $lexicalCandidate = [IO.Path]::GetFullPath($Path)
+    $lexicalRoot = [IO.Path]::GetFullPath($RepositoryRoot)
+    $candidate = Resolve-PhysicalPath $Path
+    $root = Resolve-PhysicalPath $RepositoryRoot
+    if ($lexicalCandidate.Equals($lexicalRoot, [StringComparison]::OrdinalIgnoreCase) -or
+        $lexicalCandidate.StartsWith($lexicalRoot + [IO.Path]::DirectorySeparatorChar,
+                                     [StringComparison]::OrdinalIgnoreCase) -or
+        $candidate.Equals($root, [StringComparison]::OrdinalIgnoreCase) -or
+        $candidate.StartsWith($root + [IO.Path]::DirectorySeparatorChar,
+                             [StringComparison]::OrdinalIgnoreCase)) {
+        throw 'Private Retail-Konfiguration und -Ausgaben muessen ausserhalb des Repositorys liegen.'
+    }
+    return $candidate
+}
+
 function Select-FailureClass {
-    param($Job, [bool]$TimedOut, [Nullable[int]]$RuntimeExitCode)
+    param($Job, [bool]$TimedOut, [Nullable[int]]$RuntimeExitCode,
+          [Nullable[uint64]]$SilentFailures = $null)
     if ($TimedOut) { return 'host-time-budget' }
+    if ($null -ne $SilentFailures -and $SilentFailures -ne 0) { return 'silent-failures' }
     if ($Job.state -eq 'partial') { return 'analysis-incomplete' }
     if ($Job.state -eq 'failed') {
         switch ($Job.failure_category) {
@@ -75,6 +151,7 @@ function Invoke-BudgetedProcess {
         $process.WaitForExit()
     }
     return [pscustomobject]@{
+        process_started = $true
         timed_out = -not $finished
         exit_code = if ($finished) { $process.ExitCode } else { $null }
         stdout = $stdout.GetAwaiter().GetResult()
@@ -99,6 +176,38 @@ if ($SelfTest) {
     if ((Select-Checkpoint $partial $runtime) -ne 'SA_FIRST_FRAME') {
         throw 'Checkpointordnung ist nicht monoton.'
     }
+    foreach ($invalid in @(
+        "SA_FIRST_FRAME`n",
+        "SA_MAIN_ENTERED`nSA_MAIN_ENTERED`n",
+        "SA_FIRST_FRAME`nSA_MAIN_ENTERED`n"
+    )) {
+        try { [void](Select-Checkpoint $partial $invalid); throw 'ungueltig-akzeptiert' }
+        catch { if ($_.Exception.Message -eq 'ungueltig-akzeptiert') { throw 'Ungueltige Checkpointfolge wurde akzeptiert.' } }
+    }
+    if ($null -ne (Select-SilentFailures '') -or
+        (Select-SilentFailures 'KATANA_RUNTIME_METRICS silent_failures=2') -ne 2) {
+        throw 'silent_failures wird erfunden oder nicht aus dem Runtimevertrag gelesen.'
+    }
+    $fakeRoot = Join-Path ([IO.Path]::GetTempPath()) ('katana-retail-path-' + [guid]::NewGuid())
+    $fakeRepo = Join-Path $fakeRoot 'repo'
+    $outside = Join-Path $fakeRoot 'outside'
+    New-Item -ItemType Directory -Path $fakeRepo,$outside -Force | Out-Null
+    try {
+        try { [void](Assert-OutsideRepository $fakeRepo $fakeRepo); throw 'root-akzeptiert' }
+        catch { if ($_.Exception.Message -eq 'root-akzeptiert') { throw 'Repositorywurzel wurde als privater Pfad akzeptiert.' } }
+        $insideConfig = Join-Path $fakeRepo 'retail-config.json'
+        Set-Content $insideConfig '{}' -Encoding utf8
+        try { [void](Assert-OutsideRepository $insideConfig $fakeRepo); throw 'config-akzeptiert' }
+        catch { if ($_.Exception.Message -eq 'config-akzeptiert') { throw 'Konfiguration im Repository wurde akzeptiert.' } }
+        $junction = Join-Path $outside 'repo-junction'
+        New-Item -ItemType Junction -Path $junction -Target $fakeRepo | Out-Null
+        try { [void](Assert-OutsideRepository (Join-Path $junction 'future.json') $fakeRepo); throw 'junction-akzeptiert' }
+        catch { if ($_.Exception.Message -eq 'junction-akzeptiert') { throw 'Junction/Reparse Point ins Repository wurde akzeptiert.' } }
+        $outwardJunction = Join-Path $fakeRepo 'outside-junction'
+        New-Item -ItemType Junction -Path $outwardJunction -Target $outside | Out-Null
+        try { [void](Assert-OutsideRepository (Join-Path $outwardJunction 'future.json') $fakeRepo); throw 'outward-akzeptiert' }
+        catch { if ($_.Exception.Message -eq 'outward-akzeptiert') { throw 'Junction/Reparse Point aus dem Repository wurde akzeptiert.' } }
+    } finally { Remove-Item -LiteralPath $fakeRoot -Recurse -Force }
     $serialized = [ordered]@{
         schema = 'katana-private-retail-debug'
         version = 1
@@ -118,7 +227,8 @@ if ([string]::IsNullOrWhiteSpace($Config)) {
     throw 'Config ist erforderlich; alternativ -SelfTest verwenden.'
 }
 $repositoryRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..'))
-$settings = Get-Content -LiteralPath $Config -Raw | ConvertFrom-Json
+$configPath = Assert-OutsideRepository $Config $repositoryRoot
+$settings = Get-Content -LiteralPath $configPath -Raw | ConvertFrom-Json
 if ($settings.schema -ne 'katana-private-retail-debug-config' -or $settings.version -ne 1) {
     throw 'Unbekannter privater Debugkonfigurationsvertrag.'
 }
@@ -126,16 +236,10 @@ foreach ($field in @('manifest_path', 'gdi_path', 'output_root', 'report_path',
                       'host_timeout_seconds', 'guest_cycle_budget')) {
     if ($null -eq $settings.$field) { throw "Konfigurationsfeld fehlt: $field" }
 }
-$manifest = [IO.Path]::GetFullPath([string]$settings.manifest_path)
-$gdi = [IO.Path]::GetFullPath([string]$settings.gdi_path)
-$outputRoot = [IO.Path]::GetFullPath([string]$settings.output_root)
-$reportPath = [IO.Path]::GetFullPath([string]$settings.report_path)
-foreach ($privatePath in @($manifest, $gdi, $outputRoot, $reportPath)) {
-    if ($privatePath.StartsWith($repositoryRoot + [IO.Path]::DirectorySeparatorChar,
-                                [StringComparison]::OrdinalIgnoreCase)) {
-        throw 'Private Retail-Konfiguration und -Ausgaben muessen ausserhalb des Repositorys liegen.'
-    }
-}
+$manifest = Assert-OutsideRepository ([string]$settings.manifest_path) $repositoryRoot
+$gdi = Assert-OutsideRepository ([string]$settings.gdi_path) $repositoryRoot
+$outputRoot = Assert-OutsideRepository ([string]$settings.output_root) $repositoryRoot
+$reportPath = Assert-OutsideRepository ([string]$settings.report_path) $repositoryRoot
 if (-not (Test-Path -LiteralPath $manifest -PathType Leaf) -or
     -not (Test-Path -LiteralPath $gdi -PathType Leaf)) {
     throw 'Privates Manifest oder GDI fehlt.'
@@ -158,17 +262,20 @@ if ($null -eq $job) {
 $runtimeOutput = ''
 $runtimeExit = $null
 $runtimeTimedOut = $false
+$runtimeStarted = $false
 $game = Join-Path $outputRoot 'game.exe'
 if ($job.state -eq 'completed' -and (Test-Path -LiteralPath $game -PathType Leaf)) {
     $runtime = Invoke-BudgetedProcess $game @($gdi) $timeout `
         @{ KATANA_GUEST_CYCLE_BUDGET = $guestBudget }
     $runtimeOutput = $runtime.stdout + $runtime.stderr
+    $runtimeStarted = $runtime.process_started
     $runtimeExit = $runtime.exit_code
     $runtimeTimedOut = $runtime.timed_out
 }
 $timedOut = $workflow.timed_out -or $runtimeTimedOut
 $checkpoint = Select-Checkpoint $job $runtimeOutput
-$failure = Select-FailureClass $job $timedOut $runtimeExit
+$silentFailures = Select-SilentFailures $runtimeOutput
+$failure = Select-FailureClass $job $timedOut $runtimeExit $silentFailures
 $analysis = $job.analysis
 $report = [ordered]@{
     schema = 'katana-private-retail-debug'
@@ -182,7 +289,7 @@ $report = [ordered]@{
         coverage_complete = if ($analysis) { [bool]$analysis.control_flow_complete } else { $false }
     }
     runtime = [ordered]@{
-        game_executable_started = $null -ne $runtimeExit
+        game_executable_started = $runtimeStarted
         main_executable_entered = [array]::IndexOf($checkpointOrder, $checkpoint) -ge 2
         frames_presented = if ($runtimeOutput -match 'frames=(\d+)') { [uint64]$Matches[1] } else { 0 }
         input_events_consumed = if ($runtimeOutput -match 'input_events=(\d+)') { [uint64]$Matches[1] } else { 0 }
@@ -193,7 +300,7 @@ $report = [ordered]@{
         interrupts_delivered = if ($runtimeOutput -match 'interrupts=(\d+)') { [uint64]$Matches[1] } else { 0 }
         indirect_dispatches = if ($runtimeOutput -match 'indirect_dispatches=(\d+)') { [uint64]$Matches[1] } else { 0 }
         fallbacks = if ($runtimeOutput -match 'fallbacks=(\d+)') { [uint64]$Matches[1] } else { 0 }
-        silent_failures = 0
+        silent_failures = $silentFailures
     }
     failure_class = $failure
     budget_exhausted = $timedOut

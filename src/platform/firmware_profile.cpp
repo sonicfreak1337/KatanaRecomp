@@ -69,18 +69,41 @@ std::filesystem::path::string_type normalized_component(std::filesystem::path::s
 }
 
 bool path_contains(const std::filesystem::path& parent, const std::filesystem::path& child) {
-    const auto normalized_parent = parent.lexically_normal();
-    const auto normalized_child = child.lexically_normal();
-    auto parent_part = normalized_parent.begin();
-    auto child_part = normalized_child.begin();
-    for (; parent_part != normalized_parent.end(); ++parent_part, ++child_part) {
-        if (child_part == normalized_child.end() ||
-            normalized_component(parent_part->native()) !=
-                normalized_component(child_part->native())) {
-            return false;
+    const auto component_contains = [](const std::filesystem::path& normalized_parent,
+                                       const std::filesystem::path& normalized_child) {
+        auto parent_part = normalized_parent.begin();
+        auto child_part = normalized_child.begin();
+        for (; parent_part != normalized_parent.end(); ++parent_part, ++child_part) {
+            if (child_part == normalized_child.end() ||
+                normalized_component(parent_part->native()) !=
+                    normalized_component(child_part->native()))
+                return false;
         }
-    }
-    return true;
+        return true;
+    };
+    const auto resolve = [](const std::filesystem::path& path) {
+        std::error_code error;
+        const auto absolute = std::filesystem::absolute(path, error);
+        if (error)
+            throw std::invalid_argument("Firmwarepfad konnte nicht absolut aufgeloest werden.");
+        const auto canonical = std::filesystem::weakly_canonical(absolute, error);
+        if (error)
+            throw std::invalid_argument("Firmwarepfad konnte nicht physisch aufgeloest werden: " +
+                                        error.message());
+        return canonical;
+    };
+    std::error_code absolute_error;
+    const auto lexical_parent =
+        std::filesystem::absolute(parent, absolute_error).lexically_normal();
+    if (absolute_error)
+        throw std::invalid_argument("Firmwarepfad konnte nicht absolut aufgeloest werden.");
+    const auto lexical_child = std::filesystem::absolute(child, absolute_error).lexically_normal();
+    if (absolute_error)
+        throw std::invalid_argument("Firmwarepfad konnte nicht absolut aufgeloest werden.");
+    if (component_contains(lexical_parent, lexical_child)) return true;
+    const auto normalized_parent = resolve(parent);
+    const auto normalized_child = resolve(child);
+    return component_contains(normalized_parent, normalized_child);
 }
 
 void require_external_to_port(const std::optional<std::filesystem::path>& port,

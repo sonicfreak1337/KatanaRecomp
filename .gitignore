@@ -30,6 +30,8 @@ __pycache__/
 /private/
 *.retail-debug.json
 *.retail-debug.log
+*retail-config*.json
+*retail-debug-config*.json
 /.katana-retail-debug/
 /disc/
 /discs/

@@ -97,7 +97,7 @@ folgenden redigierten Feldern erzeugen:
     "interrupts_delivered": 0,
     "indirect_dispatches": 0,
     "fallbacks": 0,
-    "silent_failures": 0
+    "silent_failures": null
   },
   "failure_class": null,
   "budget_exhausted": false
@@ -107,6 +107,8 @@ folgenden redigierten Feldern erzeugen:
 Berichte duerfen keine Disc-/Dateihashes, Spieldaten, Screenshots oder
 unredigierten Hostpfade enthalten. Gateberichte enthalten nur aggregierte,
 freigegebene Metriken.
+`silent_failures: null` bedeutet, dass die Runtime keinen validierten
+Metrikenmarker geliefert hat, nicht dass null Fehler bewiesen wurden.
 
 ## Verteilbare Nachweise
 

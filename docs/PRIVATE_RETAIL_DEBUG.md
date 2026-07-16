@@ -3,7 +3,11 @@
 `tools/phase11/run-private-retail-debug.ps1` fuehrt einen lokalen Retail-Lauf
 mit festem Hostzeit- und vorbereitetem Gastzyklusbudget aus. Konfiguration,
 GDI, Manifest, Ausgabe und Bericht muessen ausserhalb des Repositorys liegen.
-Der Harness lehnt Repositoryziele ab und gibt nur den redigierten Vertrag
+Dies gilt auch fuer die Konfigurationsdatei selbst und fuer den exakten
+Repositorywurzelpfad. Der Harness vergleicht sowohl lexikalische als auch
+physisch aufgeloeste Pfade; Symlinks, Windows-Junctions/Reparse Points und noch
+nicht vorhandene Kinder bestehender Eltern koennen die Grenze nicht umgehen.
+Der Harness gibt nur den redigierten Vertrag
 `katana-private-retail-debug` Version 1 aus.
 
 Beispiel fuer eine ausschliesslich lokale, nicht versionierte Konfiguration:
@@ -37,9 +41,18 @@ Budget aus und behauptet keine verbrauchten Gastzyklen.
 Checkpoints werden niemals aus Dateinamen oder titelbezogenen Adressen
 abgeleitet. `SA_ANALYSIS_CONTINUES` folgt aus nachweisbar fortgesetzter Analyse.
 Hoehere Checkpoints werden nur aus gleichnamigen Runtime-Markern uebernommen.
+Sie bilden eine strikte Zustandsmaschine: jeder Vorgaenger muss genau einmal
+und in Reihenfolge vorkommen. Fehlende, doppelte oder vertauschte Marker sind
+Harnessfehler.
 Partielle Analyse, I/O, Codegen, Hostbuild, Runtime-Exit und Hostzeitbudget
 besitzen allgemeine Fehlerklassen. Rohes stdout/stderr bleibt fluessig und wird
 nicht in den redigierten Bericht kopiert.
+
+`game_executable_started` erfasst den erfolgreichen Prozessstart unabhaengig
+von Exitcode oder Timeout. `silent_failures` ist `null`, solange die Runtime
+keinen einzelnen gueltigen `KATANA_RUNTIME_METRICS ... silent_failures=N`-
+Marker liefert; der Harness setzt diesen Wert niemals selbst auf null. Ein
+gemeldeter Wert groesser null erzeugt die Fehlerklasse `silent-failures`.
 
 Der verteilbare Selbsttest benoetigt keine Retaildaten:
 
@@ -47,6 +60,6 @@ Der verteilbare Selbsttest benoetigt keine Retaildaten:
 .\tools\phase11\run-private-retail-debug.ps1 -SelfTest
 ```
 
-`.gitignore` sperrt `private/`, `*.retail-debug.json`,
-`*.retail-debug.log` und `.katana-retail-debug/`. Pakete beziehen keine dieser
-Pfade ein.
+`.gitignore` sperrt `private/`, Retail-Debugberichte/-logs, frei benannte
+`*retail-config*.json`-/`*retail-debug-config*.json`-Konfigurationen und
+`.katana-retail-debug/`. Pakete beziehen keine dieser Pfade ein.

@@ -182,6 +182,13 @@
 
 ### Behoben
 
+- Reviewkorrektur: Der private Retail-Harness trennt Prozessstart von Exitcode
+  und Timeout, uebernimmt `silent_failures` ausschliesslich aus genau einem
+  validierten Runtimemarker und prueft SA-Checkpoints als lueckenlose,
+  eindeutige Zustandsmaschine. Konfiguration und alle privaten Pfade werden
+  inklusive Repositorywurzel, nicht vorhandener Kinder, Symlinks und Windows-
+  Junctions/Reparse Points lexikalisch sowie physisch vom Repository getrennt;
+  breitere Gitignore-Muster sperren auch frei benannte Retailkonfigurationen.
 - Reviewkorrektur: Terminale Jobereignisse werden erst nach erfolgreichem
   Schreiben, atomarem Rename und Stale-Cleanup gesendet; Publikationsfehler
   bleiben strukturierte `input-output`-Fehler. Die Live-Logposition folgt nach
