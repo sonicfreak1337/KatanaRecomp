@@ -340,6 +340,9 @@ std::vector<VerificationIssue> verify_function(const Function& function) {
     std::vector<std::uint32_t> expected_callees;
     std::vector<std::uint32_t> expected_indirect_sites;
     for (const auto& block : function.blocks) {
+        if (block.instructions.empty()) {
+            continue;
+        }
         std::vector<std::uint32_t> expected_successors;
         const auto& control = controlling_instruction(block);
         const auto add_internal = [&](const std::uint32_t address) {

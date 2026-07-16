@@ -46,6 +46,11 @@ int main() {
     require(katana::ir::verify_function(program.front()).empty(),
             "Gueltige abgesenkte Funktion wird abgelehnt.");
 
+    auto empty_block = program.front();
+    empty_block.blocks.front().instructions.clear();
+    require(has_issue(katana::ir::verify_function(empty_block), "keine Instruktionen"),
+            "Leerer IR-Block wird nicht strukturiert abgelehnt.");
+
     auto descending = program.front();
     std::swap(descending.blocks.front().instructions[0], descending.blocks.front().instructions[1]);
     require(has_issue(katana::ir::verify_function(descending), "nicht streng aufsteigend"),
