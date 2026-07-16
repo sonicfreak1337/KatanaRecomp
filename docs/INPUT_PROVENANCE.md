@@ -21,3 +21,11 @@ Der Codegen-Cachevertrag ist deshalb Version 2. Sein Schluessel bindet nun auch
 die Werkzeugversion ein; Eingabe-, IR-, Konfigurations-, Manifest- und
 Anweisungshash sowie Runtime-/Backend-/Optimierungs-ABIs bleiben getrennte
 Invalidierungskomponenten.
+
+Der Anwendungsjob erfasst GDI-Descriptor, Tracks und optionale Symbol-,
+Analyseanweisungs-, BIOS- und Flashdateien als einen gemeinsamen Snapshot.
+Projektidentitaet, Portprovenienz und Build verwenden exakt diesen Snapshot;
+der Portexport analysiert die Eingabe nicht ein zweites Mal. Vor einem
+erfolgreichen Abschluss werden die Rollen erneut read-only geprueft. Eine
+waehrend des Jobs veraenderte wirksame Eingabe fuehrt zu einem sichtbaren
+Verarbeitungsfehler statt zu gemischten Artefakten.

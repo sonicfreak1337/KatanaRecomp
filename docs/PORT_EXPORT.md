@@ -12,6 +12,17 @@ gelesen. Danach folgen Executable Image, Kontrollflussanalyse, Katana-IR,
 Optimierung und deterministische Translation-Unit-Partitionierung. Der Export
 kopiert weder GDI-Tracks noch allgemeine Spielassets.
 
+Der gemeinsame GUI-/Workflow-Build exportiert nur bei vollstaendig bewiesenem
+Kontrollfluss. Ungeloeste indirekte Ziele oder unbekannte Instruktionen liefern
+`partial`, einen Buildplan mit `host_compilation=false` und keinen Hostbuild.
+Kontrollierte Teilanalysen erfolgen ueber `analyze-json`; sie sind keine
+Kompatibilitaetsaussage.
+
+Im Anwendungsworkflow uebernimmt der Export das bereits validierte Executable
+Image, Analyseergebnis, optimierte IR, Eingabeprovenienz und die portable
+Projektidentitaet. Dadurch koennen eine zweite GDI-Analyse und voneinander
+abweichende Identitaets-/Codegen-Snapshots nicht entstehen.
+
 ## Layout
 
 ```text

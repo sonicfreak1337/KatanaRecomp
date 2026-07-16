@@ -50,7 +50,8 @@ Page Model::page() const {
 void Model::new_project(const std::filesystem::path& manifest_path,
                         std::string project_name,
                         const io::ProjectInputFormat format,
-                        const std::filesystem::path& source_path) {
+                        const std::filesystem::path& source_path,
+                        const bool inspect_source) {
     io::ProjectManifest manifest;
     manifest.project_name = std::move(project_name);
     manifest.format = format;
@@ -63,7 +64,8 @@ void Model::new_project(const std::filesystem::path& manifest_path,
         manifest.entry_point = platform::dreamcast_disc_boot_address;
     }
     auto project = app::ProjectSession::create(manifest_path, std::move(manifest));
-    auto source = app::ApplicationService{}.inspect_source(project.manifest());
+    auto source = inspect_source ? app::ApplicationService{}.inspect_source(project.manifest())
+                                 : app::SourceInspection{};
     std::scoped_lock lock(mutex_);
     if (job_active_) throw std::logic_error("Projektwechsel ist waehrend eines Jobs gesperrt.");
     project_ = std::move(project);
@@ -130,8 +132,9 @@ bool Model::has_unsaved_changes() const {
 app::JobResult Model::run_job(const app::JobKind kind,
                               const std::filesystem::path& output_root,
                               std::string job_id,
-                              std::string tool_version) {
-    const auto cancellation = std::make_shared<app::Cancellation>();
+                              std::string tool_version,
+                              std::shared_ptr<app::Cancellation> cancellation) {
+    if (!cancellation) cancellation = std::make_shared<app::Cancellation>();
     std::filesystem::path manifest_path;
     {
         std::scoped_lock lock(mutex_);

@@ -2,7 +2,9 @@
 
 1. Start `katana-recomp-gui` from the build or internal package directory.
    MSVC AddressSanitizer Debug builds place their matching runtime DLL beside
-   the executable automatically, so a normal PowerShell is sufficient.
+   the executable automatically, so a normal PowerShell is sufficient. Keep
+   the packaged `runtime-sdk/` beside the executable; alternatively set
+   `KATANA_RUNTIME_ROOT` to a compatible KatanaRecomp runtime source/SDK root.
 2. Select exactly one `.gdi` source and an output directory. The GUI creates
    any manifest needed by the shared core internally; users do not open or
    maintain project files.
@@ -10,13 +12,26 @@
    every read-only track in descriptor order with its exact descriptor line,
    role, LBA, sector format, offset and provenance hash.
 4. Start recompilation. The GUI keeps validation, analysis, code generation and
-   the host build visible as stable progress stages and writes `sourcecode/`
-   plus `game.exe` to the selected directory. A scrollable diagnostic log shows
+   the host build visible as stable progress stages. It writes `sourcecode/`
+   plus `game.exe` only after control-flow analysis is complete. A `partial`
+   result writes analysis, result index and build plan but deliberately skips
+   code generation and host compilation. A scrollable diagnostic log shows
    live compiler output, errors and recovery hints for debugging; the redacted
    copy remains as `recompile.log`. `Escape` or **Cancel** requests a
    controlled stop.
-6. Use Results for the deterministic function, segment, source and provenance
+5. Use Results for the deterministic function, segment, source and provenance
    index. Use Diagnostics for warnings, errors and recovery instructions.
+
+The three terminal job states are distinct: `completed` means the requested
+work is complete, `partial` means useful analysis exists but unresolved control
+flow or unknown instructions block safe code generation, and `failed` means an
+I/O, validation, tool or host-build error prevented the request.
+
+Output publication is atomic at job granularity. Cancelled and failed jobs do
+not expose staged `sourcecode/`, `recompile.log` or `game.exe` as current
+results. A failed rebuild moves an older successful result beside the output as
+an explicitly stale recovery copy. A second KatanaRecomp process cannot write
+the same or an overlapping output directory concurrently.
 
 The equivalent lower-level CLI command remains available for automation:
 

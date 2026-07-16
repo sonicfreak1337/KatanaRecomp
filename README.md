@@ -25,11 +25,13 @@ Eingabe
   -> natives Hostprojekt
 ```
 
-Der aktuelle lokale Debug-Lauf umfasst **156 automatische Tests**. Phase 10 ist
+Der aktuelle lokale Debug-Lauf umfasst **160 automatische Tests**. Phase 10 ist
 fuer den freigegebenen Windows-Workflow abgeschlossen: eine `.gdi` waehlen,
-einen Ausgabeordner waehlen und sichtbar bis `sourcecode/`, `game.exe` und
-`recompile.log` rekompilieren. Breitere Kompatibilitaet und die Linux-GUI sind
-kein Bestandteil dieser internen Windows-Freigabe.
+einen Ausgabeordner waehlen und den Analyse-/Buildzustand sichtbar verfolgen.
+`sourcecode/` und `game.exe` entstehen nur bei vollstaendig bewiesenem
+Kontrollfluss; unvollstaendige Analysen enden ehrlich als `partial`. Breitere
+Kompatibilitaet und die Linux-GUI sind kein Bestandteil dieser internen
+Windows-Freigabe.
 
 Der genaue aktuelle Stand steht in [docs/STATUS.md](docs/STATUS.md), die
 langfristige Planung in [ROADMAP.md](ROADMAP.md).
@@ -40,9 +42,20 @@ Die lokale, nicht versionierte Desktopanwendung wird direkt gestartet mit:
 .\KatanaRecomp-GUI.exe
 ```
 
+`katana-file-dialog.exe` und der lokale, nicht versionierte Ordner
+`runtime-sdk/` muessen daneben liegen. Das interne Paket ist relocatable und
+verwendet keinen einkompilierten Entwicklerpfad.
+
 Die GUI verlangt keine Projektdatei. Sie nimmt nur eine `.gdi` und einen
 Ausgabeordner entgegen, zeigt Analyse, Codegen und Hostbuild sowie das
-redigierte Buildlog live an und erzeugt `sourcecode/` und `game.exe`.
+redigierte Buildlog live an und erzeugt bei vollstaendiger Analyse
+`sourcecode/` und `game.exe`. Bei `partial` bleiben Analysebericht,
+Ergebnisindex und Buildplan als Debuggrundlage erhalten; ein irrefuehrender
+Hostbuild wird nicht erzeugt.
+
+Der sichtbare interne Meilenstein `0.44.0` ist kein Produktrelease. CLI,
+Fenstertitel, Jobberichte, Buildplan und Provenienz verwenden gemeinsam die
+kanonische Werkzeugversion aus `VERSION`/CMake.
 
 CLI und GUI verwenden intern dieselben Loader-, Analyse-, Codegen- und
 Hostbuildkomponenten. Der entsprechende CLI-Pfad ist beispielsweise:

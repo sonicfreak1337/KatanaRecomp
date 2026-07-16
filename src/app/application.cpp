@@ -5,6 +5,7 @@
 #include "katana/codegen/cpp_emitter.hpp"
 #include "katana/codegen/port_export.hpp"
 #include "katana/codegen/project.hpp"
+#include "katana/io/input_output_error.hpp"
 #include "katana/io/input_provenance.hpp"
 #include "katana/io/json_report.hpp"
 #include "katana/ir/lower.hpp"
@@ -15,15 +16,162 @@
 #include <algorithm>
 #include <charconv>
 #include <cstdlib>
+#include <cwctype>
 #include <fstream>
 #include <iomanip>
 #include <set>
 #include <sstream>
 #include <stdexcept>
 #include <system_error>
+#include <unordered_set>
+
+#ifdef _WIN32
+#define NOMINMAX
+#include <windows.h>
+
+#include <tlhelp32.h>
+#endif
 
 namespace katana::app {
 namespace {
+
+bool outputs_overlap(const std::filesystem::path& left, const std::filesystem::path& right);
+
+class CrossProcessJobLock final {
+  public:
+    explicit CrossProcessJobLock(std::filesystem::path output) : output_(std::move(output)) {
+#ifdef _WIN32
+        registry_mutex_ =
+            CreateMutexW(nullptr, FALSE, L"Local\\KatanaRecomp-OutputLockRegistry-v1");
+        if (registry_mutex_ == nullptr)
+            throw std::runtime_error("Ausgabe-Lockregistry konnte nicht erzeugt werden.");
+        const auto wait = WaitForSingleObject(registry_mutex_, INFINITE);
+        if (wait != WAIT_OBJECT_0 && wait != WAIT_ABANDONED) {
+            CloseHandle(registry_mutex_);
+            registry_mutex_ = nullptr;
+            throw std::runtime_error("Ausgabe-Lockregistry ist nicht erreichbar.");
+        }
+        try {
+            const auto registry =
+                std::filesystem::temp_directory_path() / "KatanaRecomp-output-locks-v1";
+            std::filesystem::create_directories(registry);
+            for (const auto& entry : std::filesystem::directory_iterator(registry)) {
+                if (!entry.is_regular_file()) continue;
+                std::ifstream input(entry.path(), std::ios::binary);
+                std::string pid_text;
+                std::string path_text;
+                std::getline(input, pid_text);
+                std::getline(input, path_text);
+                bool live = false;
+                try {
+                    const auto pid = static_cast<DWORD>(std::stoul(pid_text));
+                    if (const auto process = OpenProcess(SYNCHRONIZE, FALSE, pid)) {
+                        live = WaitForSingleObject(process, 0u) == WAIT_TIMEOUT;
+                        CloseHandle(process);
+                    } else {
+                        live = GetLastError() == ERROR_ACCESS_DENIED;
+                    }
+                } catch (const std::exception&) {
+                    live = false;
+                }
+                if (!live) {
+                    std::error_code remove_error;
+                    std::filesystem::remove(entry.path(), remove_error);
+                    continue;
+                }
+                if (outputs_overlap(output_, std::filesystem::path(path_text))) {
+                    throw std::runtime_error(
+                        "Ein anderer Prozess verwendet ein ueberlappendes Ausgabeziel.");
+                }
+            }
+            lock_file_ =
+                registry / (io::sha256_bytes(output_.generic_string()).substr(0u, 24u) + ".lock");
+            std::ofstream output_file(lock_file_, std::ios::binary | std::ios::trunc);
+            if (!output_file)
+                throw std::runtime_error("Ausgabe-Lockdatei konnte nicht erzeugt werden.");
+            output_file << GetCurrentProcessId() << '\n' << output_.generic_string() << '\n';
+            if (!output_file)
+                throw std::runtime_error("Ausgabe-Lockdatei konnte nicht geschrieben werden.");
+        } catch (...) {
+            ReleaseMutex(registry_mutex_);
+            CloseHandle(registry_mutex_);
+            registry_mutex_ = nullptr;
+            throw;
+        }
+        ReleaseMutex(registry_mutex_);
+#else
+        std::scoped_lock lock(registry_mutex_);
+        if (std::any_of(active_outputs_.begin(), active_outputs_.end(), [&](const auto& active) {
+                return outputs_overlap(active, output_);
+            }))
+            throw std::runtime_error("Ein anderer Prozess verwendet ein Ausgabeziel.");
+        active_outputs_.push_back(output_);
+#endif
+    }
+    ~CrossProcessJobLock() {
+#ifdef _WIN32
+        if (registry_mutex_ != nullptr) {
+            const auto wait = WaitForSingleObject(registry_mutex_, INFINITE);
+            if (wait == WAIT_OBJECT_0 || wait == WAIT_ABANDONED) {
+                std::error_code remove_error;
+                std::filesystem::remove(lock_file_, remove_error);
+                ReleaseMutex(registry_mutex_);
+            }
+            CloseHandle(registry_mutex_);
+        }
+#else
+        std::scoped_lock lock(registry_mutex_);
+        std::erase(active_outputs_, output_);
+#endif
+    }
+    CrossProcessJobLock(const CrossProcessJobLock&) = delete;
+    CrossProcessJobLock& operator=(const CrossProcessJobLock&) = delete;
+
+  private:
+    std::filesystem::path output_;
+#ifdef _WIN32
+    HANDLE registry_mutex_ = nullptr;
+    std::filesystem::path lock_file_;
+#else
+    inline static std::mutex registry_mutex_;
+    inline static std::vector<std::filesystem::path> active_outputs_;
+#endif
+};
+
+std::filesystem::path normalized_output_path(std::filesystem::path path) {
+    path = std::filesystem::absolute(path).lexically_normal();
+    std::vector<std::filesystem::path> missing;
+    std::error_code error;
+    while (!path.empty() && !std::filesystem::exists(path, error)) {
+        if (error) break;
+        missing.push_back(path.filename());
+        const auto parent = path.parent_path();
+        if (parent == path) break;
+        path = parent;
+    }
+    if (!path.empty()) {
+        auto resolved = std::filesystem::canonical(path, error);
+        if (!error) {
+            for (auto iterator = missing.rbegin(); iterator != missing.rend(); ++iterator)
+                resolved /= *iterator;
+            path = resolved.lexically_normal();
+        }
+    }
+#ifdef _WIN32
+    auto text = path.wstring();
+    std::transform(text.begin(), text.end(), text.begin(), ::towlower);
+    path = std::filesystem::path(text);
+#endif
+    return path;
+}
+
+bool outputs_overlap(const std::filesystem::path& left, const std::filesystem::path& right) {
+    const auto within = [](const auto& path, const auto& root) {
+        const auto relative = path.lexically_relative(root);
+        return relative.empty() || (!relative.is_absolute() && *relative.begin() != "..");
+    };
+    return within(left, right) || within(right, left);
+}
 
 void require_stable_id(const std::string_view value, const char* field) {
     if (value.empty() || !std::all_of(value.begin(), value.end(), [](const unsigned char c) {
@@ -45,17 +193,28 @@ void write_atomic(const std::filesystem::path& path, const std::string_view cont
         output.write(content.data(), static_cast<std::streamsize>(content.size()));
         if (!output) throw std::runtime_error("Temporare Ausgabedatei ist unvollstaendig.");
     }
+#ifdef _WIN32
+    const auto replaced =
+        std::filesystem::exists(path)
+            ? ReplaceFileW(path.c_str(),
+                           temporary.c_str(),
+                           nullptr,
+                           REPLACEFILE_WRITE_THROUGH,
+                           nullptr,
+                           nullptr)
+            : MoveFileExW(temporary.c_str(), path.c_str(), MOVEFILE_WRITE_THROUGH);
+    if (!replaced) {
+        std::filesystem::remove(temporary);
+        throw std::runtime_error("Ausgabedatei konnte nicht atomar ersetzt werden.");
+    }
+#else
     std::error_code error;
     std::filesystem::rename(temporary, path, error);
-    if (error) {
-        std::filesystem::remove(path, error);
-        error.clear();
-        std::filesystem::rename(temporary, path, error);
-    }
     if (error) {
         std::filesystem::remove(temporary);
         throw std::runtime_error("Ausgabedatei konnte nicht atomar ersetzt werden.");
     }
+#endif
 }
 
 std::string read_text(const std::filesystem::path& path) {
@@ -92,9 +251,158 @@ void require_not_cancelled(const std::shared_ptr<Cancellation>& cancellation) {
     if (cancellation && cancellation->requested()) throw JobState::Cancelled;
 }
 
-std::string project_identity(const io::ProjectManifest& manifest,
-                             const std::filesystem::path&,
-                             const SourceInspection& source) {
+#ifdef _WIN32
+void terminate_process_tree(const DWORD root_process) noexcept {
+    std::vector<std::pair<DWORD, DWORD>> processes;
+    const auto snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0u);
+    if (snapshot != INVALID_HANDLE_VALUE) {
+        PROCESSENTRY32W entry{};
+        entry.dwSize = sizeof(entry);
+        if (Process32FirstW(snapshot, &entry)) {
+            do {
+                processes.emplace_back(entry.th32ProcessID, entry.th32ParentProcessID);
+            } while (Process32NextW(snapshot, &entry));
+        }
+        CloseHandle(snapshot);
+    }
+    std::unordered_set<DWORD> descendants{root_process};
+    bool changed = true;
+    while (changed) {
+        changed = false;
+        for (const auto& [process, parent] : processes) {
+            if (descendants.contains(parent) && descendants.insert(process).second) changed = true;
+        }
+    }
+    for (auto iterator = processes.rbegin(); iterator != processes.rend(); ++iterator) {
+        if (!descendants.contains(iterator->first) || iterator->first == root_process) continue;
+        if (const auto child =
+                OpenProcess(PROCESS_TERMINATE | SYNCHRONIZE, FALSE, iterator->first)) {
+            TerminateProcess(child, 1u);
+            WaitForSingleObject(child, 2'000u);
+            CloseHandle(child);
+        }
+    }
+    if (const auto root = OpenProcess(PROCESS_TERMINATE | SYNCHRONIZE, FALSE, root_process)) {
+        TerminateProcess(root, 1u);
+        WaitForSingleObject(root, 2'000u);
+        CloseHandle(root);
+    }
+}
+#endif
+
+std::filesystem::path discover_runtime_root() {
+#ifdef _WIN32
+    char* configured = nullptr;
+    std::size_t configured_size = 0u;
+    if (_dupenv_s(&configured, &configured_size, "KATANA_RUNTIME_ROOT") == 0 &&
+        configured != nullptr) {
+        const auto result = std::filesystem::path(configured);
+        std::free(configured);
+        if (!result.empty()) return result;
+    }
+#else
+    if (const auto* configured = std::getenv("KATANA_RUNTIME_ROOT");
+        configured != nullptr && *configured != '\0')
+        return std::filesystem::path(configured);
+#endif
+    std::filesystem::path executable;
+#ifdef _WIN32
+    std::wstring buffer(32'768u, L'\0');
+    const auto length =
+        GetModuleFileNameW(nullptr, buffer.data(), static_cast<DWORD>(buffer.size()));
+    if (length != 0u && length < buffer.size()) {
+        buffer.resize(length);
+        executable = std::filesystem::path(buffer);
+    }
+#else
+    std::error_code link_error;
+    executable = std::filesystem::read_symlink("/proc/self/exe", link_error);
+#endif
+    if (!executable.empty()) {
+        const auto directory = executable.parent_path();
+        for (const auto& candidate : {directory / "runtime-sdk", directory.parent_path()}) {
+            if (std::filesystem::exists(candidate / "CMakeLists.txt") &&
+                std::filesystem::exists(candidate / "include" / "katana" / "runtime")) {
+                return candidate;
+            }
+        }
+    }
+    throw std::runtime_error(
+        "Katana Runtime-SDK fehlt neben der Anwendung; KATANA_RUNTIME_ROOT kann es explizit "
+        "angeben.");
+}
+
+struct ProjectSnapshot {
+    SourceInspection inspection;
+    std::vector<io::InputProvenance> inputs;
+};
+
+ProjectSnapshot capture_project_snapshot(const io::ProjectManifest& manifest,
+                                         const std::shared_ptr<Cancellation>& cancellation = {}) {
+    ProjectSnapshot snapshot;
+    auto& result = snapshot.inspection;
+    result.format = io::project_input_format_name(manifest.format);
+    result.display_name = portable_name(manifest.input_path);
+    if (manifest.format != io::ProjectInputFormat::DreamcastGdi) {
+        const auto provenance = io::capture_input_provenance(
+            "project-input", manifest.input_path, [&] { require_not_cancelled(cancellation); });
+        result.size = provenance.size;
+        result.sha256 = provenance.sha256;
+        snapshot.inputs.push_back(provenance);
+    } else {
+        const auto descriptor = runtime::parse_gdi_descriptor(manifest.input_path);
+        const auto descriptor_provenance = io::capture_input_provenance(
+            "gdi-descriptor", manifest.input_path, [&] { require_not_cancelled(cancellation); });
+        result.size = descriptor_provenance.size;
+        result.sha256 = descriptor_provenance.sha256;
+        snapshot.inputs.push_back(descriptor_provenance);
+        for (const auto& track : descriptor.tracks) {
+            const auto provenance =
+                io::capture_input_provenance("gdi-track-" + std::to_string(track.number),
+                                             track.resolved_path,
+                                             [&] { require_not_cancelled(cancellation); });
+            snapshot.inputs.push_back(provenance);
+            result.tracks.push_back({track.number,
+                                     track.lba,
+                                     track.type == runtime::GdiTrackType::Data ? "data" : "audio",
+                                     track.sector_size,
+                                     provenance.size,
+                                     track.file_offset,
+                                     track.sector_count,
+                                     track.descriptor_line,
+                                     portable_name(track.resolved_path),
+                                     provenance.sha256});
+        }
+    }
+    const auto capture_optional =
+        [&snapshot, &cancellation](const char* role,
+                                   const std::optional<std::filesystem::path>& path) {
+            if (path)
+                snapshot.inputs.push_back(io::capture_input_provenance(
+                    role, *path, [&] { require_not_cancelled(cancellation); }));
+        };
+    capture_optional("symbol-map", manifest.map_path);
+    capture_optional("analysis-overrides", manifest.analysis_overrides_path);
+    capture_optional("firmware-bios", manifest.bios_path);
+    capture_optional("firmware-flash", manifest.flash_path);
+    return snapshot;
+}
+
+bool same_snapshot(const ProjectSnapshot& left, const ProjectSnapshot& right) {
+    if (left.inputs.size() != right.inputs.size()) return false;
+    const auto portable = [](const ProjectSnapshot& snapshot) {
+        std::vector<std::string> values;
+        values.reserve(snapshot.inputs.size());
+        for (const auto& input : snapshot.inputs) {
+            values.push_back(input.role + ':' + std::to_string(input.size) + ':' + input.sha256);
+        }
+        std::sort(values.begin(), values.end());
+        return values;
+    };
+    return portable(left) == portable(right);
+}
+
+std::string project_identity(const io::ProjectManifest& manifest, const ProjectSnapshot& snapshot) {
     auto portable_profile = manifest;
     const auto portable_root = std::filesystem::current_path() / "katana-portable-identity";
     const auto portable_path = [&](const std::filesystem::path& path) {
@@ -109,11 +417,15 @@ std::string project_identity(const io::ProjectManifest& manifest,
     const auto portable_manifest =
         io::serialize_project_manifest(portable_profile, portable_root / "project.katana");
     std::ostringstream identity;
-    identity << portable_manifest << "\nsource=" << source.sha256 << ':' << source.size;
-    for (const auto& track : source.tracks) {
-        identity << "\ntrack=" << track.number << ':' << track.file_size << ':' << track.sector_size
-                 << ':' << track.sha256;
+    identity << portable_manifest;
+    std::vector<std::string> inputs;
+    inputs.reserve(snapshot.inputs.size());
+    for (const auto& input : snapshot.inputs) {
+        inputs.push_back(input.role + ':' + std::to_string(input.size) + ':' + input.sha256);
     }
+    std::sort(inputs.begin(), inputs.end());
+    for (const auto& input : inputs)
+        identity << "\ninput=" << input;
     return io::sha256_bytes(identity.str());
 }
 
@@ -139,8 +451,84 @@ std::string shell_quote(const std::filesystem::path& path) {
 
 void run_host_command(const std::string& command,
                       const char* stage,
-                      const std::filesystem::path& log_path) {
-    const auto status = std::system((command + " >> " + shell_quote(log_path) + " 2>&1").c_str());
+                      const std::filesystem::path& log_path,
+                      const std::shared_ptr<Cancellation>& cancellation) {
+    int status = 0;
+#ifdef _WIN32
+    auto command_line = command;
+    SECURITY_ATTRIBUTES security{};
+    security.nLength = sizeof(security);
+    security.bInheritHandle = TRUE;
+    const auto log_handle = CreateFileW(log_path.c_str(),
+                                        FILE_APPEND_DATA,
+                                        FILE_SHARE_READ | FILE_SHARE_WRITE,
+                                        &security,
+                                        OPEN_ALWAYS,
+                                        FILE_ATTRIBUTE_NORMAL,
+                                        nullptr);
+    const auto input_handle = CreateFileW(L"NUL",
+                                          GENERIC_READ,
+                                          FILE_SHARE_READ | FILE_SHARE_WRITE,
+                                          &security,
+                                          OPEN_EXISTING,
+                                          FILE_ATTRIBUTE_NORMAL,
+                                          nullptr);
+    if (log_handle == INVALID_HANDLE_VALUE || input_handle == INVALID_HANDLE_VALUE) {
+        if (log_handle != INVALID_HANDLE_VALUE) CloseHandle(log_handle);
+        if (input_handle != INVALID_HANDLE_VALUE) CloseHandle(input_handle);
+        throw std::runtime_error("Hostbuild-Ein-/Ausgabe konnte nicht geoeffnet werden.");
+    }
+    STARTUPINFOA startup{};
+    startup.cb = sizeof(startup);
+    startup.dwFlags = STARTF_USESTDHANDLES;
+    startup.hStdInput = input_handle;
+    startup.hStdOutput = log_handle;
+    startup.hStdError = log_handle;
+    PROCESS_INFORMATION process{};
+    if (!CreateProcessA(nullptr,
+                        command_line.data(),
+                        nullptr,
+                        nullptr,
+                        TRUE,
+                        CREATE_NO_WINDOW,
+                        nullptr,
+                        nullptr,
+                        &startup,
+                        &process)) {
+        CloseHandle(input_handle);
+        CloseHandle(log_handle);
+        throw std::runtime_error("Hostbuild-Prozess konnte nicht gestartet werden.");
+    }
+    for (;;) {
+        const auto wait = WaitForSingleObject(process.hProcess, 50u);
+        if (wait == WAIT_OBJECT_0) break;
+        if (wait == WAIT_FAILED) {
+            terminate_process_tree(process.dwProcessId);
+            status = 1;
+            break;
+        }
+        if (cancellation && cancellation->requested()) {
+            terminate_process_tree(process.dwProcessId);
+            WaitForSingleObject(process.hProcess, 5'000u);
+            CloseHandle(process.hThread);
+            CloseHandle(process.hProcess);
+            CloseHandle(input_handle);
+            CloseHandle(log_handle);
+            throw JobState::Cancelled;
+        }
+    }
+    DWORD exit_code = 1u;
+    GetExitCodeProcess(process.hProcess, &exit_code);
+    status = static_cast<int>(exit_code);
+    CloseHandle(process.hThread);
+    CloseHandle(process.hProcess);
+    CloseHandle(input_handle);
+    CloseHandle(log_handle);
+#else
+    require_not_cancelled(cancellation);
+    status = std::system((command + " >> " + shell_quote(log_path) + " 2>&1").c_str());
+    require_not_cancelled(cancellation);
+#endif
     auto log = std::filesystem::exists(log_path) ? read_text(log_path) : std::string{};
     log = redact_sensitive_text(log);
     write_atomic(log_path, log);
@@ -157,7 +545,8 @@ void configure_and_build(const std::filesystem::path& source,
                          const std::filesystem::path& build,
                          const std::filesystem::path& runtime_root,
                          const std::string_view target,
-                         const std::filesystem::path& log_path) {
+                         const std::filesystem::path& log_path,
+                         const std::shared_ptr<Cancellation>& cancellation) {
     auto configure = std::string("cmake -S ") + shell_quote(source) + " -B " + shell_quote(build);
 #ifdef _WIN32
     configure += " -G \"Visual Studio 17 2022\" -A x64";
@@ -165,13 +554,26 @@ void configure_and_build(const std::filesystem::path& source,
     configure += " -G Ninja -DCMAKE_BUILD_TYPE=Debug";
 #endif
     configure += " -DKATANA_RUNTIME_ROOT=" + shell_quote(runtime_root);
-    run_host_command(configure, "configure", log_path);
+    try {
+        run_host_command(configure, "configure", log_path, cancellation);
+    } catch (const std::runtime_error& error) {
+        std::string detail;
+        for (const auto& name : {"CMakeConfigureLog.yaml", "CMakeError.log", "CMakeOutput.log"}) {
+            const auto configure_log = build / "CMakeFiles" / name;
+            if (std::filesystem::exists(configure_log)) detail += read_text(configure_log);
+        }
+        if (detail.empty()) throw;
+        constexpr std::size_t detail_limit = 8'000u;
+        if (detail.size() > detail_limit) detail.erase(0u, detail.size() - detail_limit);
+        throw std::runtime_error(std::string(error.what()) + "\nCMake-Konfigurationsdetail:\n" +
+                                 detail);
+    }
     auto compile =
         std::string("cmake --build ") + shell_quote(build) + " --target " + std::string(target);
 #ifdef _WIN32
     compile += " --config Debug";
 #endif
-    run_host_command(compile, "compile", log_path);
+    run_host_command(compile, "compile", log_path, cancellation);
 }
 
 std::string result_index_json(const io::LoadedProject& project,
@@ -219,6 +621,47 @@ std::string artifact_hash(const std::filesystem::path& path) {
     return io::capture_input_provenance("job-artifact", path).sha256;
 }
 
+AnalysisCoverage analysis_coverage(const io::LoadedProject& project,
+                                   const analysis::ControlFlowAnalysisResult& analysis) {
+    AnalysisCoverage coverage;
+    for (const auto& segment : project.image.segments()) {
+        if (segment.permissions.executable)
+            coverage.committed_executable_bytes += segment.bytes.size();
+    }
+    coverage.instructions = analysis.recursive.instructions.size();
+    coverage.analyzed_instruction_bytes = coverage.instructions * 2u;
+    coverage.functions = analysis.recursive.functions.size();
+    coverage.unknown_instructions = analysis.recursive.diagnostics.size();
+    for (const auto& resolution : analysis.indirect_control_flow) {
+        if (resolution.status == analysis::ResolutionStatus::Unresolved)
+            ++coverage.unresolved_control_flow;
+    }
+    coverage.control_flow_complete =
+        coverage.unknown_instructions == 0u && coverage.unresolved_control_flow == 0u;
+    return coverage;
+}
+
+std::string build_plan_json(const std::string_view status,
+                            const std::string_view tool_version,
+                            const AnalysisCoverage& coverage,
+                            const bool host_compilation) {
+    std::ostringstream output;
+    output << "{\"schema\":\"katana-build-plan\",\"version\":2,\"status\":"
+           << io::quote_json(status) << ",\"tool_version\":" << io::quote_json(tool_version)
+           << ",\"native_execution\":false,\"host_compilation\":"
+           << (host_compilation ? "true" : "false")
+           << ",\"analysis\":{\"committed_executable_bytes\":"
+           << coverage.committed_executable_bytes
+           << ",\"analyzed_instruction_bytes\":" << coverage.analyzed_instruction_bytes
+           << ",\"instructions\":" << coverage.instructions
+           << ",\"functions\":" << coverage.functions
+           << ",\"unresolved_control_flow\":" << coverage.unresolved_control_flow
+           << ",\"unknown_instructions\":" << coverage.unknown_instructions
+           << ",\"control_flow_complete\":" << (coverage.control_flow_complete ? "true" : "false")
+           << "}}\n";
+    return output.str();
+}
+
 std::string diagnostic_json(const Diagnostic& diagnostic) {
     std::ostringstream output;
     const auto severity = diagnostic.severity == DiagnosticSeverity::Error     ? "error"
@@ -251,6 +694,36 @@ std::uint32_t parse_decimal(const std::string_view text, const char* field) {
 }
 
 } // namespace
+
+void require_cpp_profile_capabilities(const io::ProjectManifest& profile) {
+    std::vector<std::string> unsupported;
+    for (const auto& capability_name : profile.required_backend_capabilities) {
+        if (capability_name != "memory") unsupported.push_back(capability_name);
+    }
+    if (profile.firmware_mode != io::ProjectFirmwareMode::Direct)
+        unsupported.push_back("firmware-profile");
+    if (profile.fallback_policy != io::ProjectFallbackPolicy::Abort)
+        unsupported.push_back("fallback-profile");
+    if (profile.mmu_profile == io::ProjectMmuProfile::Sh4) unsupported.push_back("mmu");
+    if (profile.fastpath_profile != io::ProjectFastpathProfile::Conservative)
+        unsupported.push_back("fastpath-profile");
+    if (!profile.alias_groups.empty() || !profile.canonical_physical_ranges.empty())
+        unsupported.push_back("address-mapping-profile");
+    if (!profile.writable_executable_ranges.empty())
+        unsupported.push_back("executable-ram-profile");
+    if (profile.bios_path || profile.flash_path || !profile.dynamic_bios_vectors.empty())
+        unsupported.push_back("firmware-image-profile");
+    std::sort(unsupported.begin(), unsupported.end());
+    unsupported.erase(std::unique(unsupported.begin(), unsupported.end()), unsupported.end());
+    if (unsupported.empty()) return;
+    std::ostringstream message;
+    message << "Das C++-Backend kann folgende Manifest-Faehigkeiten nicht anwenden: ";
+    for (std::size_t index = 0u; index < unsupported.size(); ++index) {
+        if (index != 0u) message << ", ";
+        message << unsupported[index];
+    }
+    throw std::runtime_error(message.str() + '.');
+}
 
 ProjectSession::ProjectSession(std::filesystem::path path,
                                io::ProjectManifest manifest,
@@ -378,36 +851,11 @@ bool Cancellation::requested() const noexcept {
     return requested_.load();
 }
 
+ApplicationService::ApplicationService(std::filesystem::path runtime_root)
+    : runtime_root_(std::move(runtime_root)) {}
+
 SourceInspection ApplicationService::inspect_source(const io::ProjectManifest& manifest) const {
-    SourceInspection result;
-    result.format = io::project_input_format_name(manifest.format);
-    result.display_name = portable_name(manifest.input_path);
-    if (manifest.format != io::ProjectInputFormat::DreamcastGdi) {
-        const auto provenance = io::capture_input_provenance("project-input", manifest.input_path);
-        result.size = provenance.size;
-        result.sha256 = provenance.sha256;
-        return result;
-    }
-    const auto descriptor = runtime::parse_gdi_descriptor(manifest.input_path);
-    const auto descriptor_provenance =
-        io::capture_input_provenance("gdi-descriptor", manifest.input_path);
-    result.size = descriptor_provenance.size;
-    result.sha256 = descriptor_provenance.sha256;
-    for (const auto& track : descriptor.tracks) {
-        const auto provenance = io::capture_input_provenance(
-            "gdi-track-" + std::to_string(track.number), track.resolved_path);
-        result.tracks.push_back({track.number,
-                                 track.lba,
-                                 track.type == runtime::GdiTrackType::Data ? "data" : "audio",
-                                 track.sector_size,
-                                 std::filesystem::file_size(track.resolved_path),
-                                 track.file_offset,
-                                 track.sector_count,
-                                 track.descriptor_line,
-                                 portable_name(track.resolved_path),
-                                 provenance.sha256});
-    }
-    return result;
+    return capture_project_snapshot(manifest).inspection;
 }
 
 JobResult ApplicationService::execute(const JobRequest& request,
@@ -417,20 +865,48 @@ JobResult ApplicationService::execute(const JobRequest& request,
     require_stable_id(request.tool_version, "Werkzeugversion");
     if (request.manifest_path.empty() || request.output_root.empty())
         throw std::invalid_argument("Job braucht Projektmanifest und Ausgabeziel.");
-    JobResult result{request.id, request.kind, JobState::Running};
+    CrossProcessJobLock process_lock(normalized_output_path(request.output_root));
+    JobResult result;
+    result.job_id = request.id;
+    result.kind = request.kind;
+    result.state = JobState::Running;
+    result.tool_version = request.tool_version;
+    result.failure_category = JobFailureCategory::InputOutput;
+    const bool transactional =
+        request.kind == JobKind::Build || request.kind == JobKind::RunPreflight;
+    const auto final_root = std::filesystem::absolute(request.output_root).lexically_normal();
+    auto work_root = final_root;
+    auto stale_root = final_root;
+    stale_root += ".katana-stale-" + request.id;
+    if (transactional) {
+        const auto staging_key = io::sha256_bytes(final_root.generic_string() + ':' + request.id);
+        work_root = final_root.parent_path() / (".katana-stage-" + staging_key.substr(0u, 12u));
+        std::error_code cleanup_error;
+        std::filesystem::remove_all(work_root, cleanup_error);
+        if (cleanup_error)
+            throw std::runtime_error("Altes Job-Staging konnte nicht entfernt werden.");
+        std::filesystem::remove_all(stale_root, cleanup_error);
+        if (cleanup_error)
+            throw std::runtime_error("Altes veraltetes Ergebnis konnte nicht entfernt werden.");
+        if (std::filesystem::exists(final_root)) {
+            std::filesystem::rename(final_root, stale_root);
+        }
+        std::filesystem::create_directories(work_root);
+    }
     notify(observer, request, JobState::Queued, 0u, "queued");
     notify(observer, request, JobState::Running, 5u, "load-project");
     try {
         require_not_cancelled(cancellation);
         const auto project = io::load_project(request.manifest_path);
-        const auto inspection = inspect_source(project.execution_profile);
-        result.project_identity =
-            project_identity(project.execution_profile, request.manifest_path, inspection);
+        const auto snapshot = capture_project_snapshot(project.execution_profile, cancellation);
+        const auto& inspection = snapshot.inspection;
+        result.project_identity = project_identity(project.execution_profile, snapshot);
+        result.failure_category = JobFailureCategory::Processing;
         result.checkpoints.push_back("project-validated");
         notify(observer, request, JobState::Running, 20u, "source-validated");
         require_not_cancelled(cancellation);
         if (request.kind == JobKind::Validate) {
-            const auto report_path = request.output_root / "source-inspection.json";
+            const auto report_path = work_root / "source-inspection.json";
             write_atomic(report_path, format_source_inspection_json(inspection));
             result.artifacts.push_back(
                 {"source-inspection", "source-inspection.json", artifact_hash(report_path)});
@@ -442,14 +918,15 @@ JobResult ApplicationService::execute(const JobRequest& request,
             }
             const auto analysis =
                 analysis::analyze_control_flow(project.image, overrides ? &*overrides : nullptr);
+            result.analysis_coverage = analysis_coverage(project, analysis);
             result.checkpoints.push_back("analysis-complete");
             notify(observer, request, JobState::Running, 45u, "analysis-complete");
             require_not_cancelled(cancellation);
             const auto analysis_json = analysis::format_control_flow_analysis_json(analysis);
-            const auto analysis_path = request.output_root / "analysis.json";
+            const auto analysis_path = work_root / "analysis.json";
             write_atomic(analysis_path, analysis_json);
             result.artifacts.push_back({"analysis", "analysis.json", artifact_hash(analysis_path)});
-            const auto result_index_path = request.output_root / "result-index.json";
+            const auto result_index_path = work_root / "result-index.json";
             write_atomic(result_index_path,
                          result_index_json(project, analysis, inspection, result.project_identity));
             result.artifacts.push_back(
@@ -463,7 +940,33 @@ JobResult ApplicationService::execute(const JobRequest& request,
                      "Analyseprofil, Override oder unterstuetzte ISA-Abdeckung pruefen.",
                      std::nullopt});
             }
-            if (request.kind != JobKind::Analyze) {
+            if (request.kind == JobKind::Codegen || request.kind == JobKind::Build ||
+                request.kind == JobKind::RunPreflight) {
+                result.failure_category = JobFailureCategory::CodeGeneration;
+                require_cpp_profile_capabilities(project.execution_profile);
+            }
+            if (!result.analysis_coverage->control_flow_complete) {
+                result.diagnostics.push_back(
+                    {DiagnosticSeverity::Warning,
+                     "analysis-incomplete",
+                     "Kontrollflussanalyse ist unvollstaendig: " +
+                         std::to_string(result.analysis_coverage->unresolved_control_flow) +
+                         " ungeloeste Kontrollflussstellen und " +
+                         std::to_string(result.analysis_coverage->unknown_instructions) +
+                         " unbekannte Instruktionen.",
+                     "Analyseblocker beheben; ein Hostbuild wird erst bei vollstaendig "
+                     "bewiesenem Kontrollfluss erzeugt.",
+                     std::nullopt});
+                if (request.kind == JobKind::Build || request.kind == JobKind::RunPreflight) {
+                    const auto build_report = work_root / "build-plan.json";
+                    write_atomic(
+                        build_report,
+                        build_plan_json(
+                            "partial", request.tool_version, *result.analysis_coverage, false));
+                    result.artifacts.push_back(
+                        {"build-plan", "build-plan.json", artifact_hash(build_report)});
+                }
+            } else if (request.kind != JobKind::Analyze) {
                 auto program = ir::lower_program(analysis);
                 static_cast<void>(ir::optimize_program(program));
                 ir::require_valid_program(program);
@@ -480,29 +983,44 @@ JobResult ApplicationService::execute(const JobRequest& request,
                     (request.kind == JobKind::Build || request.kind == JobKind::RunPreflight) &&
                     project.execution_profile.format == io::ProjectInputFormat::DreamcastGdi;
                 if (!gdi_host_build) {
-                    const auto write = codegen::write_codegen_project(
-                        request.output_root / "generated", {{"program.cpp", source}});
+                    const auto write = codegen::write_codegen_project(work_root / "generated",
+                                                                      {{"program.cpp", source}});
                     for (const auto& relative : write.written_files) {
-                        const auto path = request.output_root / "generated" / relative;
+                        const auto path = work_root / "generated" / relative;
                         result.artifacts.push_back({"generated",
                                                     std::filesystem::path("generated") / relative,
                                                     artifact_hash(path)});
                     }
                 }
                 if (request.kind == JobKind::Build || request.kind == JobKind::RunPreflight) {
-                    const auto runtime_root = std::filesystem::path(KATANA_RECOMP_SOURCE_ROOT);
-                    const auto host_log = request.output_root / "recompile.log";
+                    const auto runtime_root =
+                        runtime_root_.empty() ? discover_runtime_root() : runtime_root_;
+                    const auto host_log = work_root / "recompile.log";
+                    result.failure_category = JobFailureCategory::Build;
                     if (project.execution_profile.format == io::ProjectInputFormat::DreamcastGdi) {
-                        const auto host_root = request.output_root / "sourcecode";
+                        const auto host_root = work_root / "sourcecode";
+                        const auto boot_size = project.image.segments().empty()
+                                                   ? 0u
+                                                   : project.image.segments().front().bytes.size();
                         static_cast<void>(codegen::export_dreamcast_port_project(
-                            project.execution_profile.input_path,
+                            {project.image,
+                             analysis,
+                             program,
+                             snapshot.inputs,
+                             entry,
+                             boot_size,
+                             result.project_identity},
                             host_root,
                             {"game", request.tool_version, {}, {}}));
                         require_not_cancelled(cancellation);
-                        const auto host_build_root = request.output_root / ".katana-build";
+                        const auto host_build_root = work_root / ".katana-build";
                         notify(observer, request, JobState::Running, 80u, "host-build");
-                        configure_and_build(
-                            host_root, host_build_root, runtime_root, "game", host_log);
+                        configure_and_build(host_root,
+                                            host_build_root,
+                                            runtime_root,
+                                            "game",
+                                            host_log,
+                                            cancellation);
                         notify(observer, request, JobState::Running, 95u, "host-build-complete");
                         const auto executable = host_build_root /
 #ifdef _WIN32
@@ -510,8 +1028,7 @@ JobResult ApplicationService::execute(const JobRequest& request,
 #else
                                                 "game";
 #endif
-                        const auto published_executable =
-                            request.output_root / executable.filename();
+                        const auto published_executable = work_root / executable.filename();
                         std::filesystem::copy_file(
                             executable,
                             published_executable,
@@ -525,24 +1042,25 @@ JobResult ApplicationService::execute(const JobRequest& request,
                             throw std::runtime_error(
                                 "Temporaeres Hostbuildverzeichnis konnte nicht entfernt werden.");
                     } else {
-                        const auto generated_root = request.output_root / "generated";
+                        const auto generated_root = work_root / "generated";
                         notify(observer, request, JobState::Running, 80u, "host-build");
                         configure_and_build(generated_root,
-                                            request.output_root / "host-build",
+                                            work_root / "host-build",
                                             runtime_root,
                                             "katana_generated",
-                                            host_log);
+                                            host_log,
+                                            cancellation);
                         notify(observer, request, JobState::Running, 95u, "host-build-complete");
                     }
                     result.artifacts.push_back(
                         {"recompile-log", "recompile.log", artifact_hash(host_log)});
                     require_not_cancelled(cancellation);
                     result.checkpoints.push_back("host-build-complete");
-                    const auto build_report = request.output_root / "build-plan.json";
-                    write_atomic(build_report,
-                                 "{\"schema\":\"katana-build-plan\",\"version\":1,"
-                                 "\"status\":\"built\",\"native_execution\":false,"
-                                 "\"host_compilation\":true}\n");
+                    const auto build_report = work_root / "build-plan.json";
+                    write_atomic(
+                        build_report,
+                        build_plan_json(
+                            "built", request.tool_version, *result.analysis_coverage, true));
                     result.artifacts.push_back(
                         {"build-plan", "build-plan.json", artifact_hash(build_report)});
                 }
@@ -558,15 +1076,45 @@ JobResult ApplicationService::execute(const JobRequest& request,
             }
         }
         require_not_cancelled(cancellation);
-        result.state = JobState::Completed;
-        notify(observer, request, JobState::Completed, 100u, "completed");
+        result.failure_category = JobFailureCategory::Processing;
+        if (!same_snapshot(snapshot,
+                           capture_project_snapshot(project.execution_profile, cancellation))) {
+            throw std::runtime_error(
+                "Eine wirksame Projekteingabe wurde waehrend des Jobs veraendert.");
+        }
+        result.state = result.analysis_coverage && !result.analysis_coverage->control_flow_complete
+                           ? JobState::Partial
+                           : JobState::Completed;
+        result.failure_category = JobFailureCategory::None;
+        notify(observer,
+               request,
+               result.state,
+               100u,
+               result.state == JobState::Partial ? "partial" : "completed");
     } catch (const JobState state) {
         result.state = state;
+        result.failure_category = JobFailureCategory::None;
         result.diagnostics.push_back(
             make_error("job-cancelled",
                        "Job wurde kontrolliert abgebrochen.",
                        "Der Job kann mit denselben Eingaben wiederholt werden."));
         notify(observer, request, state, 100u, "cancelled", result.diagnostics.back());
+    } catch (const io::InputOutputError& error) {
+        result.state = JobState::Failed;
+        result.failure_category = JobFailureCategory::InputOutput;
+        result.diagnostics.push_back(
+            make_error("job-input-output-failed",
+                       error.what(),
+                       "Eingabe- und Ausgabepfade sowie Zugriffsrechte pruefen."));
+        notify(observer, request, JobState::Failed, 100u, "failed", result.diagnostics.back());
+    } catch (const std::filesystem::filesystem_error& error) {
+        result.state = JobState::Failed;
+        result.failure_category = JobFailureCategory::InputOutput;
+        result.diagnostics.push_back(
+            make_error("job-input-output-failed",
+                       error.what(),
+                       "Eingabe- und Ausgabepfade sowie Zugriffsrechte pruefen."));
+        notify(observer, request, JobState::Failed, 100u, "failed", result.diagnostics.back());
     } catch (const std::exception& error) {
         result.state = JobState::Failed;
         result.diagnostics.push_back(
@@ -575,8 +1123,29 @@ JobResult ApplicationService::execute(const JobRequest& request,
                        "Quelle und Projekteinstellungen pruefen und Job wiederholen."));
         notify(observer, request, JobState::Failed, 100u, "failed", result.diagnostics.back());
     }
-    const auto result_path = request.output_root / "job-result.json";
+    if (transactional && result.state != JobState::Completed && result.state != JobState::Partial)
+        result.artifacts.clear();
+    auto result_path = work_root / "job-result.json";
     write_atomic(result_path, format_job_result_json(result));
+    if (transactional) {
+        if (result.state == JobState::Completed || result.state == JobState::Partial) {
+            std::filesystem::rename(work_root, final_root);
+            std::error_code cleanup_error;
+            std::filesystem::remove_all(stale_root, cleanup_error);
+            if (cleanup_error)
+                throw std::runtime_error("Veraltetes Jobergebnis konnte nicht bereinigt werden.");
+        } else {
+            std::error_code cleanup_error;
+            std::filesystem::remove_all(work_root, cleanup_error);
+            if (cleanup_error)
+                throw std::runtime_error(
+                    "Fehlgeschlagenes Job-Staging konnte nicht bereinigt werden.");
+            std::filesystem::create_directories(final_root);
+            result_path = final_root / "job-result.json";
+            write_atomic(result_path, format_job_result_json(result));
+        }
+        result_path = final_root / "job-result.json";
+    }
     result.artifacts.push_back({"job-result", "job-result.json", artifact_hash(result_path)});
     return result;
 }
@@ -586,12 +1155,14 @@ JobCoordinator::JobCoordinator(ApplicationService service) : service_(std::move(
 JobResult JobCoordinator::execute(const JobRequest& request,
                                   const std::shared_ptr<Cancellation>& cancellation,
                                   const JobObserver& observer) {
-    const auto output = std::filesystem::absolute(request.output_root).lexically_normal();
+    const auto output = normalized_output_path(request.output_root);
     {
         std::scoped_lock lock(mutex_);
-        if (std::find(active_outputs_.begin(), active_outputs_.end(), output) !=
-            active_outputs_.end())
-            throw std::runtime_error("Ein aktiver Job verwendet bereits dasselbe Ausgabeziel.");
+        if (std::any_of(active_outputs_.begin(), active_outputs_.end(), [&](const auto& active) {
+                return outputs_overlap(active, output);
+            }))
+            throw std::runtime_error(
+                "Ein aktiver Job verwendet bereits ein ueberlappendes Ausgabeziel.");
         active_outputs_.push_back(output);
     }
     try {
@@ -630,12 +1201,32 @@ const char* job_state_name(const JobState state) noexcept {
         return "running";
     case JobState::Completed:
         return "completed";
+    case JobState::Partial:
+        return "partial";
     case JobState::Failed:
         return "failed";
     case JobState::Cancelled:
         return "cancelled";
     }
     return "unknown";
+}
+
+const char* job_failure_category_name(const JobFailureCategory category) noexcept {
+    switch (category) {
+    case JobFailureCategory::None:
+        return "none";
+    case JobFailureCategory::InputOutput:
+        return "input-output";
+    case JobFailureCategory::Processing:
+        return "processing";
+    case JobFailureCategory::CodeGeneration:
+        return "code-generation";
+    case JobFailureCategory::Build:
+        return "build";
+    case JobFailureCategory::Internal:
+        return "internal";
+    }
+    return "internal";
 }
 
 std::string redact_sensitive_text(const std::string_view text) {
@@ -721,8 +1312,25 @@ std::string format_job_result_json(const JobResult& result) {
            << ",\"job_id\":" << io::quote_json(result.job_id)
            << ",\"kind\":" << io::quote_json(job_kind_name(result.kind))
            << ",\"state\":" << io::quote_json(job_state_name(result.state))
+           << ",\"failure_category\":"
+           << io::quote_json(job_failure_category_name(result.failure_category))
+           << ",\"tool_version\":" << io::quote_json(result.tool_version)
            << ",\"project_identity\":" << io::quote_json(result.project_identity)
-           << ",\"artifacts\":[";
+           << ",\"analysis\":";
+    if (!result.analysis_coverage) {
+        output << "null";
+    } else {
+        const auto& coverage = *result.analysis_coverage;
+        output << "{\"committed_executable_bytes\":" << coverage.committed_executable_bytes
+               << ",\"analyzed_instruction_bytes\":" << coverage.analyzed_instruction_bytes
+               << ",\"instructions\":" << coverage.instructions
+               << ",\"functions\":" << coverage.functions
+               << ",\"unresolved_control_flow\":" << coverage.unresolved_control_flow
+               << ",\"unknown_instructions\":" << coverage.unknown_instructions
+               << ",\"control_flow_complete\":"
+               << (coverage.control_flow_complete ? "true" : "false") << '}';
+    }
+    output << ",\"artifacts\":[";
     for (std::size_t index = 0u; index < result.artifacts.size(); ++index) {
         if (index != 0u) output << ',';
         const auto& artifact = result.artifacts[index];

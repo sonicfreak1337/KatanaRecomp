@@ -40,6 +40,7 @@ struct Fixture final {
         std::error_code error;
         std::filesystem::remove_all(root, error);
         std::filesystem::create_directories(root / "disc");
+        std::filesystem::create_directories(root / "forbidden-source-root");
     }
     ~Fixture() {
         std::error_code error;
@@ -56,6 +57,11 @@ void write_binary(const std::filesystem::path& path, const std::vector<std::uint
 void write_text(const std::filesystem::path& path, const std::string& text) {
     std::ofstream output(path, std::ios::binary | std::ios::trunc);
     output << text;
+}
+
+std::string read_text(const std::filesystem::path& path) {
+    std::ifstream input(path, std::ios::binary);
+    return {std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>()};
 }
 
 void both32(std::vector<std::uint8_t>& bytes, const std::size_t offset, const std::uint32_t value) {
@@ -154,7 +160,7 @@ int main() {
     require(!session.dirty() && io::parse_project_manifest(manifest_path).input_path == raw,
             "Projekt wurde nicht atomar und relativ gespeichert.");
 
-    app::ApplicationService service;
+    app::ApplicationService service(std::filesystem::current_path().parent_path());
     const auto inspection = service.inspect_source(session.manifest());
     require(inspection.format == "raw" && inspection.display_name == "program.bin" &&
                 inspection.size == 6u && inspection.sha256.size() == 64u,
@@ -173,6 +179,7 @@ int main() {
                             {},
                             [&](const app::JobEvent& event) { events.push_back(event); });
         require(result.state == app::JobState::Completed && !result.artifacts.empty() &&
+                    result.failure_category == app::JobFailureCategory::None &&
                     events.front().state == app::JobState::Queued &&
                     events.back().state == app::JobState::Completed,
                 "Gemeinsamer Jobdienst verliert Zustand, Ereignisse oder Artefakte fuer " + name +
@@ -180,7 +187,75 @@ int main() {
         if (expected_identity.empty()) expected_identity = result.project_identity;
         require(result.project_identity == expected_identity,
                 "GUI-/CLI-Jobarten verwenden keine gemeinsame Projektidentitaet.");
+        require(result.tool_version == "0.40.0-dev" &&
+                    app::format_job_result_json(result).find("\"tool_version\":\"0.40.0-dev\"") !=
+                        std::string::npos,
+                "Job und JSON verlieren die kanonische Werkzeugversion.");
     }
+
+    auto unsupported_profile = raw_manifest(raw);
+    unsupported_profile.fallback_policy = io::ProjectFallbackPolicy::Interpreter;
+    unsupported_profile.required_backend_capabilities = {"controlled-fallback"};
+    const auto unsupported_manifest = fixture.root / "unsupported-profile.katana";
+    auto unsupported_session =
+        app::ProjectSession::create(unsupported_manifest, unsupported_profile);
+    unsupported_session.save();
+    const auto unsupported_job = service.execute({"unsupported-profile",
+                                                  app::JobKind::Codegen,
+                                                  unsupported_manifest,
+                                                  fixture.root / "unsupported-profile",
+                                                  "0.40.0-dev"});
+    require(unsupported_job.state == app::JobState::Failed &&
+                unsupported_job.failure_category == app::JobFailureCategory::CodeGeneration &&
+                !unsupported_job.diagnostics.empty() &&
+                unsupported_job.diagnostics.back().message.find("controlled-fallback") !=
+                    std::string::npos,
+            "Gemeinsamer Dienst akzeptiert ein vom C++-Backend nicht anwendbares Profil.");
+
+    const auto incomplete_raw = fixture.root / "incomplete.bin";
+    std::vector<std::uint8_t> incomplete_program(2u * 1024u * 1024u);
+    incomplete_program[0] = 0x2Bu;
+    incomplete_program[1] = 0x41u;
+    incomplete_program[2] = 0x09u;
+    incomplete_program[3] = 0x00u;
+    write_binary(incomplete_raw, incomplete_program);
+    const auto incomplete_manifest_path = fixture.root / "incomplete.katana";
+    auto incomplete_session =
+        app::ProjectSession::create(incomplete_manifest_path, raw_manifest(incomplete_raw));
+    incomplete_session.save();
+    std::vector<app::JobEvent> incomplete_events;
+    const auto incomplete_result =
+        service.execute({"incomplete",
+                         app::JobKind::Build,
+                         incomplete_manifest_path,
+                         fixture.root / "incomplete",
+                         "0.40.0-dev"},
+                        {},
+                        [&](const app::JobEvent& event) { incomplete_events.push_back(event); });
+    const auto incomplete_json = app::format_job_result_json(incomplete_result);
+    const auto incomplete_plan = fixture.root / "incomplete" / "build-plan.json";
+    require(incomplete_result.state == app::JobState::Partial &&
+                incomplete_result.failure_category == app::JobFailureCategory::None &&
+                incomplete_result.analysis_coverage.has_value() &&
+                incomplete_result.analysis_coverage->unresolved_control_flow == 1u &&
+                incomplete_result.analysis_coverage->committed_executable_bytes ==
+                    incomplete_program.size() &&
+                incomplete_result.analysis_coverage->analyzed_instruction_bytes == 4u &&
+                !incomplete_result.analysis_coverage->control_flow_complete &&
+                incomplete_events.back().state == app::JobState::Partial &&
+                incomplete_json.find("\"state\":\"partial\"") != std::string::npos &&
+                incomplete_json.find("\"unresolved_control_flow\":1") != std::string::npos &&
+                std::filesystem::exists(incomplete_plan) &&
+                !std::filesystem::exists(fixture.root / "incomplete" / "generated") &&
+                !std::filesystem::exists(fixture.root / "incomplete" / "game.exe"),
+            "Unvollstaendige Analyse wird als erfolgreicher Build behandelt.");
+    std::ifstream incomplete_plan_input(incomplete_plan, std::ios::binary);
+    const std::string incomplete_plan_text((std::istreambuf_iterator<char>(incomplete_plan_input)),
+                                           std::istreambuf_iterator<char>());
+    require(incomplete_plan_text.find("\"status\":\"partial\"") != std::string::npos &&
+                incomplete_plan_text.find("\"host_compilation\":false") != std::string::npos &&
+                incomplete_plan_text.find("\"tool_version\":\"0.40.0-dev\"") != std::string::npos,
+            "Partieller Buildplan verliert Zustand, Hostbuildgrenze oder Werkzeugversion.");
 
     auto cancelled = std::make_shared<app::Cancellation>();
     cancelled->request();
@@ -188,6 +263,7 @@ int main() {
         {"cancelled", app::JobKind::Build, manifest_path, fixture.root / "cancelled", "0.40.0-dev"},
         cancelled);
     require(cancelled_result.state == app::JobState::Cancelled &&
+                cancelled_result.failure_category == app::JobFailureCategory::None &&
                 !std::filesystem::exists(fixture.root / "cancelled" / "generated"),
             "Kontrollierter Abbruch hinterlaesst generierte Teilartefakte.");
 
@@ -196,7 +272,13 @@ int main() {
     gdi_manifest.project_name = "phase10-gdi";
     gdi_manifest.format = io::ProjectInputFormat::DreamcastGdi;
     gdi_manifest.base_address.reset();
-    gdi_manifest.entry_point = 0x8C010000u;
+    gdi_manifest.entry_point = 0x8C010004u;
+    gdi_manifest.expected_entry_points = {0x8C010000u};
+    const auto gdi_overrides = fixture.root / "disc" / "analysis.overrides";
+    write_text(gdi_overrides,
+               "version = 2\nschema = katana-analysis-directives\nmode = override\n"
+               "function = 0x8C010002\n");
+    gdi_manifest.analysis_overrides_path = gdi_overrides;
     const auto gdi_manifest_path = fixture.root / "disc-project.katana";
     auto gdi_session = app::ProjectSession::create(gdi_manifest_path, gdi_manifest);
     gdi_session.save();
@@ -222,7 +304,64 @@ int main() {
 #else
             std::filesystem::exists(fixture.root / "gdi-build" / "game"),
 #endif
-        "Synthetische GDI erreicht den gemeinsamen GUI-/CLI-Buildpfad nicht.");
+        "Synthetische GDI erreicht den gemeinsamen GUI-/CLI-Buildpfad nicht: " +
+            (gdi_job.diagnostics.empty() ? std::string("ohne Diagnose")
+                                         : gdi_job.diagnostics.back().message));
+    const auto port_metadata = read_text(fixture.root / "gdi-build" / "sourcecode" / "generated" /
+                                         "metadata" / "port-project.json");
+    const auto result_index = read_text(fixture.root / "gdi-build" / "result-index.json");
+    std::string generated_code;
+    for (const auto& entry : std::filesystem::directory_iterator(
+             fixture.root / "gdi-build" / "sourcecode" / "generated" / "code")) {
+        generated_code += read_text(entry.path());
+    }
+    require(port_metadata.find("\"entry_address\":2348875780") != std::string::npos &&
+                port_metadata.find(gdi_job.project_identity) != std::string::npos &&
+                result_index.find(gdi_job.project_identity) != std::string::npos &&
+                generated_code.find("generated_entry_address = 0x8C010004u") != std::string::npos,
+            "Analyse, Portmetadaten und generierter Einstieg verlieren die Projektidentitaet.");
+
+    auto without_override = gdi_manifest;
+    without_override.analysis_overrides_path.reset();
+    const auto without_override_manifest = fixture.root / "disc-project-without-override.katana";
+    auto without_override_session =
+        app::ProjectSession::create(without_override_manifest, without_override);
+    without_override_session.save();
+    const auto without_override_job = service.execute({"gdi-without-override",
+                                                       app::JobKind::Analyze,
+                                                       without_override_manifest,
+                                                       fixture.root / "gdi-without-override",
+                                                       "0.40.0-dev"});
+    require(without_override_job.state == app::JobState::Completed &&
+                without_override_job.project_identity != gdi_job.project_identity &&
+                read_text(fixture.root / "gdi-without-override" / "analysis.json") !=
+                    read_text(fixture.root / "gdi-build" / "analysis.json"),
+            "Override-Inhalt aendert weder Projektidentitaet noch Analyseausgabe.");
+
+    auto host_cancel = std::make_shared<app::Cancellation>();
+    const auto cancelled_host_root = fixture.root / "cancelled-host-build";
+    const auto cancelled_host = service.execute({"cancelled-host",
+                                                 app::JobKind::Build,
+                                                 gdi_manifest_path,
+                                                 cancelled_host_root,
+                                                 "0.40.0-dev"},
+                                                host_cancel,
+                                                [&](const app::JobEvent& event) {
+                                                    if (event.stage == "host-build")
+                                                        host_cancel->request();
+                                                });
+    require(cancelled_host.state == app::JobState::Cancelled &&
+                std::filesystem::exists(cancelled_host_root / "job-result.json") &&
+                !std::filesystem::exists(cancelled_host_root / "sourcecode") &&
+                !std::filesystem::exists(cancelled_host_root / "recompile.log") &&
+                !std::filesystem::exists(cancelled_host_root / "game.exe") &&
+                std::none_of(std::filesystem::directory_iterator(fixture.root),
+                             std::filesystem::directory_iterator{},
+                             [](const auto& entry) {
+                                 return entry.path().filename().string().starts_with(
+                                     ".katana-stage-");
+                             }),
+            "Hostbuild-Abbruch hinterlaesst aktive oder gestagte Teilartefakte.");
     gui::Model gui_model(fixture.root / "gui-settings.conf");
     gui_model.open_project(gdi_manifest_path);
     const auto gui_job = gui_model.run_job(
@@ -233,13 +372,32 @@ int main() {
             "GUI und direkter Anwendungsdienst erzeugen fuer GDI keine identische Identitaet.");
 
     write_text(fixture.root / "disc" / "disc.gdi", "1\n1 0 4 2352 missing.bin 0\n");
+    const auto failed_rebuild = service.execute({"failed-rebuild",
+                                                 app::JobKind::Build,
+                                                 gdi_manifest_path,
+                                                 fixture.root / "gdi-build",
+                                                 "0.40.0-dev"});
+    require(
+        failed_rebuild.state == app::JobState::Failed &&
+            std::filesystem::exists(fixture.root / "gdi-build" / "job-result.json") &&
+            !std::filesystem::exists(fixture.root / "gdi-build" / "game.exe") &&
+            !std::filesystem::exists(fixture.root / "gdi-build" / "sourcecode") &&
+            std::filesystem::exists(std::filesystem::path((fixture.root / "gdi-build").string() +
+                                                          ".katana-stale-failed-rebuild") /
+#ifdef _WIN32
+                                    "game.exe"),
+#else
+                                    "game"),
+#endif
+        "Fehlgeschlagene Wiederholung laesst alte oder teilweise Resultate aktiv.");
     const auto failed = service.execute({"gdi-error",
                                          app::JobKind::Validate,
                                          gdi_manifest_path,
                                          fixture.root / "gdi-error",
                                          "0.40.0-dev"});
-    require(failed.state == app::JobState::Failed && failed.diagnostics.size() == 1u &&
-                failed.diagnostics.front().code == "job-failed",
+    require(failed.state == app::JobState::Failed &&
+                failed.failure_category == app::JobFailureCategory::InputOutput &&
+                failed.diagnostics.size() == 1u && failed.diagnostics.front().code == "job-failed",
             "GDI-Fehler wird nicht als strukturierter gemeinsamer Jobfehler gemeldet.");
 
     const auto windows_path =

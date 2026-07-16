@@ -124,7 +124,7 @@ if(KATANA_REPRODUCIBLE_ARTIFACTS)
             /experimental:deterministic
             "/pathmap:${CMAKE_SOURCE_DIR}=."
         )
-        add_link_options(/Brepro)
+        add_link_options(/Brepro "/PDBALTPATH:%_PDB%")
     elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
         add_compile_options(
             "-ffile-prefix-map=${CMAKE_SOURCE_DIR}=."
@@ -289,10 +289,6 @@ target_include_directories(
         ${CMAKE_CURRENT_SOURCE_DIR}/include
 )
 target_link_libraries(katana_app PUBLIC katana_core katana_runtime)
-target_compile_definitions(
-    katana_app
-    PRIVATE KATANA_RECOMP_SOURCE_ROOT="${CMAKE_CURRENT_SOURCE_DIR}"
-)
 katana_enable_warnings(katana_app)
 
 add_library(katana_gui STATIC
@@ -368,7 +364,6 @@ target_compile_definitions(
     katana-recomp
     PRIVATE
         KATANA_RECOMP_VERSION="${PROJECT_VERSION}"
-        KATANA_RECOMP_SOURCE_ROOT="${CMAKE_SOURCE_DIR}"
 )
 
 katana_enable_warnings(katana-recomp)
@@ -453,6 +448,7 @@ add_executable(
 target_link_libraries(katana-phase10-application-tests PRIVATE katana_gui)
 katana_enable_warnings(katana-phase10-application-tests)
 add_test(NAME katana-phase10-application-tests COMMAND katana-phase10-application-tests)
+set_tests_properties(katana-phase10-application-tests PROPERTIES TIMEOUT 180)
 
 add_executable(
     katana-phase10-gui-model-tests

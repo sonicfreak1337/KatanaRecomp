@@ -4,7 +4,7 @@ Interner Entwicklungsmeilenstein: `0.44.0`
 
 Phase: Pre-Alpha
 
-Naechster Roadmap-Task: Phase 11 / KR-4507
+Naechster Roadmap-Task: Phase 11 / KR-4508
 
 Naechstes Phasengate: `v0.46.0` - Abschluss Phase 11
 
@@ -12,11 +12,11 @@ Erster oeffentlicher Produktrelease: `v0.50.0` Alpha
 
 ## Fortschritt
 
-- 191 von 236 gepflegten Roadmap-Tasks abgeschlossen: 80,9 %
+- 192 von 236 gepflegten Roadmap-Tasks abgeschlossen: 81,4 %
 - Phase-9-Reviewkorrekturen sind implementiert; das eigenstaendige
   achtteilige Homebrew-Korpus und Linux-Evidenz bleiben offen
 - Phase 10: 13/13 Tasks im freigegebenen Windows-GDI-Workflow
-- Phase 11: 1/16 Tasks
+- Phase 11: 2/16 Tasks
 - Phase 12: 0/10 Tasks
 - Phase 13: 0/5 Tasks vor dem Alpha-Gate
 - Alpha-Gate noch nicht erreicht
@@ -33,7 +33,7 @@ Erster oeffentlicher Produktrelease: `v0.50.0` Alpha
 | 8 | Werkzeuge und Qualitaet | 26/26 |
 | 9 | Kompatibilitaet und Leistung | Reviewkorrekturen offen |
 | 10 | Desktop-GUI und Quellworkflow | 13/13 (Windows-GDI-Scope) |
-| 11 | Bootanalyse und Retail-Systemdienste | 1/16 |
+| 11 | Bootanalyse und Retail-Systemdienste | 2/16 |
 | 12 | Interaktive Retail-Runtime und Portintegration | 0/10 |
 | 13 | Spielbarer Alpha-Kandidat | 0/5 |
 
@@ -48,8 +48,10 @@ Katana-IR und partitionierten C++-Codegen bis zu einem extern buildbaren
 Hostprojekt.
 
 Die Windows-GUI reduziert den Nutzerworkflow bewusst auf `.gdi` und
-Ausgabeordner. Der komplette Recompile-Lauf bleibt responsiv sichtbar und
-erzeugt `sourcecode/`, `game.exe` sowie ein redigiertes `recompile.log`.
+Ausgabeordner. Der komplette Recompile-Lauf bleibt responsiv sichtbar.
+Vollstaendige Analysen erzeugen `sourcecode/`, `game.exe` und ein redigiertes
+`recompile.log`; unvollstaendige Analysen enden als `partial`, behalten ihre
+Metriken und erzeugen bewusst keinen irrefuehrenden Hostbuild.
 Projektmanifeste sind dabei nur interne Adapterdetails. Der native Dateidialog
 laeuft isoliert, damit fehlerhafte Explorer-Shell-Erweiterungen den
 ASan-instrumentierten Hauptprozess nicht beenden. Linux-CLI/Core-Builds sind

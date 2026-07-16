@@ -40,7 +40,8 @@ class Model final {
     void new_project(const std::filesystem::path& manifest_path,
                      std::string project_name,
                      io::ProjectInputFormat format,
-                     const std::filesystem::path& source_path);
+                     const std::filesystem::path& source_path,
+                     bool inspect_source = true);
     void open_project(const std::filesystem::path& manifest_path);
     void save_project();
     void update_manifest(const std::function<void(io::ProjectManifest&)>& update);
@@ -51,7 +52,8 @@ class Model final {
     [[nodiscard]] app::JobResult run_job(app::JobKind kind,
                                          const std::filesystem::path& output_root,
                                          std::string job_id,
-                                         std::string tool_version);
+                                         std::string tool_version,
+                                         std::shared_ptr<app::Cancellation> cancellation = {});
     void cancel_job();
     [[nodiscard]] ShellSnapshot snapshot() const;
     [[nodiscard]] std::string accessible_summary() const;

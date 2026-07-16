@@ -56,8 +56,18 @@ uses `load_dreamcast_gdi_boot`, exactly like the CLI and port workflow.
 Application jobs are `validate`, `analyze`, `codegen`, `build`, and
 `run-preflight`. A job emits queued, running and terminal events with stable
 stage names. Cancellation is checked before every expensive stage and before
-generated output is committed. Output conflicts are rejected by
-`JobCoordinator`; unrelated output roots may run concurrently.
+generated output is committed. A Windows cancellation also terminates the
+active hostbuild process tree. Output conflicts are rejected both inside
+`JobCoordinator` and across application processes; unrelated output roots may
+run concurrently.
+
+Generated output is transactional. Each job writes to a short,
+identity-derived sibling staging directory and publishes it only after its
+terminal result is known. Failed or cancelled staging is removed. When a
+rebuild fails, the former successful output is moved to an explicitly stale
+directory instead of remaining indistinguishable from the failed attempt.
+This also keeps Visual Studio tracking paths below the classic Windows path
+limit in deeply nested test and user workspaces.
 
 `build` now invokes a real generated-code host compilation; GDI builds reuse
 the productive port exporter and build its host target. `run-preflight`
@@ -90,9 +100,16 @@ with unsaved changes requires confirmation.
 
 The internal package candidate contains `katana-recomp`,
 `katana-recomp-gui`, the application logo, its machine-readable asset manifest
-and internal workflow documentation. Windows Debug candidates also carry the
-matching MSVC AddressSanitizer runtime so the packaged smoke test is standalone.
-The package is not a release. The logo
+and internal workflow documentation. It also contains a minimal source-based
+`runtime-sdk/` with runtime headers, sources and CMake contract. The application
+discovers this directory beside the executable or accepts an explicit
+`KATANA_RUNTIME_ROOT`; no compiled-in developer source path is used.
+
+The packaging test copies the candidate to a different directory and performs
+a complete synthetic GDI workflow through `game.exe`. This proves relocation,
+runtime discovery and host compilation together. Windows Debug candidates also
+carry the matching MSVC AddressSanitizer runtime so the packaged smoke test is
+standalone. The package is not a release. The logo
 was supplied through the private project intake and is committed with its
 hash and provenance record; public distribution remains blocked until
 KR-4902 completes the full data and licence audit.

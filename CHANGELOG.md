@@ -4,6 +4,23 @@
 
 ### Hinzugefuegt
 
+- KR-4506: Die allgemeine Wertanalyse loest PC-relative SH-4-Wort-/Langwort-
+  Literale und `MOVA` samt Herkunft auf und speist beweisbare indirekte Ziele
+  in den rekursiven CFG-Fixpunkt ein.
+- KR-4507: Anwendungsjobs und Buildplaene tragen versionierte
+  Analyseabdeckungsmetriken und unterscheiden `completed`, `partial` und
+  `failed`. Unvollstaendiger Kontrollfluss erzeugt weder Codegen noch
+  Hostbuild; CLI, GUI, Jobbericht und Buildplan verwenden dieselbe kanonische
+  Werkzeugversion. Ein gemeinsamer read-only Eingabesnapshot verhindert
+  gemischte Provenienz, der Portexport uebernimmt das bereits gepruefte
+  Analyse-/IR-Ergebnis, und typisierte Fehlerkategorien erreichen die stabilen
+  CLI-Exitcodes. Das interne GUI-Paket liefert ein relocatables Runtime-SDK mit
+  und beweist den verschobenen synthetischen GDI-Hostbuild ohne einkompilierten
+  Entwicklerpfad. Jobs erzeugen Ergebnisse in einem kurzen, identitaetsgebundenen
+  Stagingordner und veroeffentlichen sie erst nach Erfolg; Fehler und Abbrueche
+  entfernen Teilresultate, behalten vorhandene Ergebnisse als explizit veraltet
+  und beenden unter Windows auch gestartete Hostbuild-Kindprozesse. Prozessweite
+  Ausgabe-Locks verhindern ueberlappende Schreibziele mehrerer Instanzen.
 - Der neue inkrementelle Entwicklungszyklus behaelt `build-current/`, setzt teure Gate-Instrumentierung beim Debugprofil sicher zurueck und baut sowie testet mit begrenzter Parallelitaet. Das frische Abschluss-Gate bleibt erhalten; die vier deterministischen Fuzzziele laufen mit unveraenderter Fallzahl und denselben abgeleiteten Seeds als parallele CTest-Eintraege.
 - Der Entwicklungsrunner normalisiert auch eine bereits aktive x86-Developer-PowerShell auf die fuer den Projektbuild erforderliche native x64-MSVC-Umgebung.
 - KR-3801 bis KR-3808: Ein intern provenance-gebundenes, vollstaendig

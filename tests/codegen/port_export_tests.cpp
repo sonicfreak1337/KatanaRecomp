@@ -276,7 +276,18 @@ int run_test(const int argc, char* argv[]) {
         std::filesystem::remove(link, link_error);
     }
 
-    std::cout << "KR-3507 reproduzierbarer Port-Projektexport erfolgreich.\n";
+    auto incomplete_track = boot_track();
+    incomplete_track[payload_offset(21u)] = 0x2Bu;
+    incomplete_track[payload_offset(21u, 1u)] = 0x41u;
+    write_binary(fixture.root / "disc" / "high.bin", incomplete_track);
+    const auto incomplete_output = fixture.root / "incomplete-port";
+    require_failure<std::runtime_error>(
+        [&] { static_cast<void>(export_dreamcast_port_project(gdi, incomplete_output, options)); },
+        "Portexport akzeptiert ungeloesten indirekten Kontrollfluss.");
+    require(!std::filesystem::exists(incomplete_output),
+            "Abgelehnter unvollstaendiger Portexport hinterlaesst Artefakte.");
+
+    std::cout << "KR-3507/KR-4507 reproduzierbarer Port-Projektexport erfolgreich.\n";
     return EXIT_SUCCESS;
 }
 

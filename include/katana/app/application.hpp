@@ -16,7 +16,7 @@
 
 namespace katana::app {
 
-inline constexpr std::uint32_t application_contract_version = 1u;
+inline constexpr std::uint32_t application_contract_version = 2u;
 inline constexpr std::uint32_t settings_schema_version = 1u;
 
 enum class DiagnosticSeverity : std::uint8_t { Information, Warning, Error };
@@ -85,7 +85,25 @@ void save_user_settings(const std::filesystem::path& path, const UserSettings& s
 void remember_recent_project(UserSettings& settings, const std::filesystem::path& path);
 
 enum class JobKind : std::uint8_t { Validate, Analyze, Codegen, Build, RunPreflight };
-enum class JobState : std::uint8_t { Queued, Running, Completed, Failed, Cancelled };
+enum class JobState : std::uint8_t { Queued, Running, Completed, Partial, Failed, Cancelled };
+enum class JobFailureCategory : std::uint8_t {
+    None,
+    InputOutput,
+    Processing,
+    CodeGeneration,
+    Build,
+    Internal
+};
+
+struct AnalysisCoverage {
+    std::uint64_t committed_executable_bytes = 0u;
+    std::uint64_t analyzed_instruction_bytes = 0u;
+    std::size_t instructions = 0u;
+    std::size_t functions = 0u;
+    std::size_t unresolved_control_flow = 0u;
+    std::size_t unknown_instructions = 0u;
+    bool control_flow_complete = false;
+};
 
 struct JobRequest {
     std::string id;
@@ -113,7 +131,10 @@ struct JobResult {
     std::string job_id;
     JobKind kind = JobKind::Validate;
     JobState state = JobState::Failed;
+    JobFailureCategory failure_category = JobFailureCategory::None;
+    std::string tool_version;
     std::string project_identity;
+    std::optional<AnalysisCoverage> analysis_coverage;
     std::vector<JobArtifact> artifacts;
     std::vector<Diagnostic> diagnostics;
     std::vector<std::string> checkpoints;
@@ -132,11 +153,17 @@ using JobObserver = std::function<void(const JobEvent&)>;
 
 class ApplicationService final {
   public:
+    ApplicationService(std::filesystem::path runtime_root = {});
     [[nodiscard]] SourceInspection inspect_source(const io::ProjectManifest& manifest) const;
     [[nodiscard]] JobResult execute(const JobRequest& request,
                                     const std::shared_ptr<Cancellation>& cancellation = {},
                                     const JobObserver& observer = {}) const;
+
+  private:
+    std::filesystem::path runtime_root_;
 };
+
+void require_cpp_profile_capabilities(const io::ProjectManifest& profile);
 
 class JobCoordinator final {
   public:
@@ -153,6 +180,7 @@ class JobCoordinator final {
 
 [[nodiscard]] const char* job_kind_name(JobKind kind) noexcept;
 [[nodiscard]] const char* job_state_name(JobState state) noexcept;
+[[nodiscard]] const char* job_failure_category_name(JobFailureCategory category) noexcept;
 [[nodiscard]] std::string redact_sensitive_text(std::string_view text);
 [[nodiscard]] std::string format_source_inspection_json(const SourceInspection& inspection);
 [[nodiscard]] std::string format_job_result_json(const JobResult& result);

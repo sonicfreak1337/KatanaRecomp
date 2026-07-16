@@ -2389,7 +2389,7 @@ Akzeptanz:
 - unbekannte oder mehrdeutige Ziele bleiben kontrolliert und sichtbar; es gibt
   keine Sonic-spezifische Adresse oder Sonderregel
 
-### [ ] KR-4507 - Ehrliche Analyseabdeckung und Build-Erfolgskriterien
+### [x] KR-4507 - Ehrliche Analyseabdeckung und Build-Erfolgskriterien
 
 Abhaengigkeiten: KR-4506
 

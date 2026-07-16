@@ -187,7 +187,9 @@ std::string sha256_bytes(const std::string_view bytes) {
     return hash.finish();
 }
 
-InputProvenance capture_input_provenance(std::string role, const std::filesystem::path& path) {
+InputProvenance capture_input_provenance(std::string role,
+                                         const std::filesystem::path& path,
+                                         const std::function<void()>& checkpoint) {
     if (!stable_token(role)) {
         throw std::invalid_argument("Eingabeprovenienz braucht eine portable Rolle.");
     }
@@ -197,6 +199,7 @@ InputProvenance capture_input_provenance(std::string role, const std::filesystem
     std::uint64_t size = 0u;
     std::vector<char> buffer(64u * 1024u);
     while (input) {
+        if (checkpoint) checkpoint();
         input.read(buffer.data(), static_cast<std::streamsize>(buffer.size()));
         const auto count = input.gcount();
         if (count > 0) {
@@ -204,6 +207,7 @@ InputProvenance capture_input_provenance(std::string role, const std::filesystem
             size += static_cast<std::uint64_t>(count);
         }
     }
+    if (checkpoint) checkpoint();
     if (!input.eof()) throw InputOutputError("Provenienzeingabe konnte nicht gelesen werden.");
     return {
         std::move(role), size, hash.finish(), std::filesystem::absolute(path).lexically_normal()};

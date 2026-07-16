@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <filesystem>
+#include <functional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -30,8 +31,10 @@ struct BuildProvenance {
 };
 
 [[nodiscard]] std::string sha256_bytes(std::string_view bytes);
-[[nodiscard]] InputProvenance capture_input_provenance(std::string role,
-                                                       const std::filesystem::path& path);
+[[nodiscard]] InputProvenance
+capture_input_provenance(std::string role,
+                         const std::filesystem::path& path,
+                         const std::function<void()>& checkpoint = {});
 [[nodiscard]] std::string make_portable_build_identity(const BuildProvenance& provenance);
 [[nodiscard]] std::string format_build_provenance_json(const BuildProvenance& provenance);
 

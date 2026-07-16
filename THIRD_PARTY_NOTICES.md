@@ -6,7 +6,9 @@ The project is built with a C++20 compiler and the compiler's standard and
 operating-system libraries. CMake and Ninja orchestrate builds. Optional local
 quality gates use clang-format, clang-tidy, Microsoft.CodeCoverage.Console, or
 gcovr. These tools are invoked from the user's installation and are not copied
-into KatanaRecomp packages.
+into KatanaRecomp packages. Internal Windows Debug GUI packages do include the
+matching Microsoft compiler AddressSanitizer runtime DLL required to start the
+packaged instrumented executables; this internal package is not a release.
 
 Flycast is a GPL-2.0 reference project. KatanaRecomp does not contain or link
 Flycast code. Any future direct integration requires a documented project-wide

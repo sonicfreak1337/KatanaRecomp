@@ -40,6 +40,12 @@
 #include <string_view>
 #include <vector>
 
+#ifdef _WIN32
+#define NOMINMAX
+#include <windows.h>
+#undef CompareString
+#endif
+
 namespace {
 
 std::uint32_t
@@ -104,42 +110,10 @@ std::string attach_execution_profile_json(std::string document,
 }
 
 void require_cpp_profile_capabilities(const katana::io::ProjectManifest& profile) {
-    std::vector<std::string> unsupported;
-    for (const auto& capability : profile.required_backend_capabilities) {
-        if (capability != "memory") unsupported.push_back(capability);
-    }
-    if (profile.firmware_mode != katana::io::ProjectFirmwareMode::Direct) {
-        unsupported.push_back("firmware-profile");
-    }
-    if (profile.fallback_policy != katana::io::ProjectFallbackPolicy::Abort) {
-        unsupported.push_back("fallback-profile");
-    }
-    if (profile.mmu_profile == katana::io::ProjectMmuProfile::Sh4) {
-        unsupported.push_back("mmu");
-    }
-    if (profile.fastpath_profile != katana::io::ProjectFastpathProfile::Conservative) {
-        unsupported.push_back("fastpath-profile");
-    }
-    if (!profile.alias_groups.empty() || !profile.canonical_physical_ranges.empty()) {
-        unsupported.push_back("address-mapping-profile");
-    }
-    if (!profile.writable_executable_ranges.empty()) {
-        unsupported.push_back("executable-ram-profile");
-    }
-    if (profile.bios_path || profile.flash_path || !profile.dynamic_bios_vectors.empty()) {
-        unsupported.push_back("firmware-image-profile");
-    }
-    std::sort(unsupported.begin(), unsupported.end());
-    unsupported.erase(std::unique(unsupported.begin(), unsupported.end()), unsupported.end());
-    if (!unsupported.empty()) {
-        std::ostringstream message;
-        message << "Das C++-Backend kann folgende Manifest-Faehigkeiten nicht anwenden: ";
-        for (std::size_t index = 0u; index < unsupported.size(); ++index) {
-            if (index != 0u) message << ", ";
-            message << unsupported[index];
-        }
-        message << '.';
-        throw katana::cli::Error(katana::cli::ExitCode::CodeGenerationFailure, message.str());
+    try {
+        katana::app::require_cpp_profile_capabilities(profile);
+    } catch (const std::exception& error) {
+        throw katana::cli::Error(katana::cli::ExitCode::CodeGenerationFailure, error.what());
     }
 }
 
@@ -893,17 +867,47 @@ int main(const int argc, const char* const* argv) {
     return 0;
 }
 
+std::filesystem::path discover_source_root_for_protection() {
+    std::vector<std::filesystem::path> starts{std::filesystem::current_path()};
+#ifdef _WIN32
+    std::wstring executable(32'768u, L'\0');
+    const auto length =
+        GetModuleFileNameW(nullptr, executable.data(), static_cast<DWORD>(executable.size()));
+    if (length != 0u && length < executable.size()) {
+        executable.resize(length);
+        starts.push_back(std::filesystem::path(executable).parent_path());
+    }
+#else
+    std::error_code link_error;
+    const auto executable = std::filesystem::read_symlink("/proc/self/exe", link_error);
+    if (!link_error) starts.push_back(executable.parent_path());
+#endif
+    for (auto start : starts) {
+        for (;;) {
+            if (std::filesystem::exists(start / ".git") &&
+                std::filesystem::exists(start / "include" / "katana") &&
+                std::filesystem::exists(start / "CMakeLists.txt"))
+                return std::filesystem::canonical(start);
+            const auto parent = start.parent_path();
+            if (parent.empty() || parent == start) break;
+            start = parent;
+        }
+    }
+    return {};
+}
+
 int export_port_project(const std::filesystem::path& gdi_path,
                         const std::filesystem::path& output_path,
                         const std::string& target_name) {
-    const auto source_root = std::filesystem::path(KATANA_RECOMP_SOURCE_ROOT);
+    const auto source_root = discover_source_root_for_protection();
     const auto absolute_output = std::filesystem::absolute(output_path).lexically_normal();
-    const auto relative_to_source = absolute_output.lexically_relative(
-        std::filesystem::absolute(source_root).lexically_normal());
-    if (!relative_to_source.empty() && !relative_to_source.is_absolute() &&
-        *relative_to_source.begin() != "..") {
-        throw std::invalid_argument(
-            "Port-Ausgabe muss ausserhalb des KatanaRecomp-Quellbaums liegen.");
+    if (!source_root.empty()) {
+        const auto relative_to_source = absolute_output.lexically_relative(source_root);
+        if (!relative_to_source.empty() && !relative_to_source.is_absolute() &&
+            *relative_to_source.begin() != "..") {
+            throw std::invalid_argument(
+                "Port-Ausgabe muss ausserhalb des KatanaRecomp-Quellbaums liegen.");
+        }
     }
     const auto report = katana::codegen::export_dreamcast_port_project(
         gdi_path, output_path, {target_name, KATANA_RECOMP_VERSION, {}, source_root});
@@ -1017,9 +1021,22 @@ int main(const int argc, char* argv[]) {
             const auto result =
                 service.execute({"cli-workflow", kind, argv[3], argv[5], KATANA_RECOMP_VERSION});
             std::cout << katana::app::format_job_result_json(result);
-            return result.state == katana::app::JobState::Completed
-                       ? exit_status(ExitCode::Success)
-                       : exit_status(ExitCode::ProcessingFailure);
+            if (result.state == katana::app::JobState::Completed)
+                return exit_status(ExitCode::Success);
+            switch (result.failure_category) {
+            case katana::app::JobFailureCategory::InputOutput:
+                return exit_status(ExitCode::InputOutput);
+            case katana::app::JobFailureCategory::CodeGeneration:
+                return exit_status(ExitCode::CodeGenerationFailure);
+            case katana::app::JobFailureCategory::Build:
+                return exit_status(ExitCode::BuildFailure);
+            case katana::app::JobFailureCategory::Internal:
+                return exit_status(ExitCode::InternalError);
+            case katana::app::JobFailureCategory::None:
+            case katana::app::JobFailureCategory::Processing:
+                return exit_status(ExitCode::ProcessingFailure);
+            }
+            return exit_status(ExitCode::InternalError);
         }
 
         if (argc == 7 && std::string_view(argv[1]) == "port") {

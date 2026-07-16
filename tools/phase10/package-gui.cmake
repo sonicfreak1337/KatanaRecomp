@@ -21,12 +21,13 @@ else()
 endif()
 set(cli "${build_root}/katana-recomp${executable_suffix}")
 set(gui "${build_root}/katana-recomp-gui${executable_suffix}")
+set(fixture_writer "${build_root}/katana-port-export-tests${executable_suffix}")
 if(WIN32)
     set(dialog "${build_root}/katana-file-dialog.exe")
 endif()
 set(logo "${source_root}/assets/gui/KatanaLogo.png")
 set(asset_manifest "${source_root}/assets/gui/asset-manifest.json")
-set(required_files "${cli}" "${gui}" "${logo}" "${asset_manifest}")
+set(required_files "${cli}" "${gui}" "${fixture_writer}" "${logo}" "${asset_manifest}")
 if(WIN32)
     list(APPEND required_files "${dialog}")
 endif()
@@ -37,7 +38,12 @@ foreach(required_file IN LISTS required_files)
 endforeach()
 
 file(REMOVE_RECURSE "${output_root}")
-file(MAKE_DIRECTORY "${output_root}/assets" "${output_root}/docs")
+file(MAKE_DIRECTORY
+    "${output_root}/assets"
+    "${output_root}/docs"
+    "${output_root}/runtime-sdk/include/katana"
+    "${output_root}/runtime-sdk/src"
+)
 file(COPY "${cli}" "${gui}" DESTINATION "${output_root}")
 if(WIN32)
     file(COPY "${dialog}" DESTINATION "${output_root}")
@@ -47,6 +53,17 @@ if(WIN32)
     file(COPY "${ASAN_RUNTIME}" DESTINATION "${output_root}")
 endif()
 file(COPY "${logo}" "${asset_manifest}" DESTINATION "${output_root}/assets")
+file(COPY "${source_root}/include/katana/runtime" DESTINATION
+    "${output_root}/runtime-sdk/include/katana")
+file(COPY "${source_root}/src/runtime" DESTINATION "${output_root}/runtime-sdk/src")
+file(WRITE "${output_root}/runtime-sdk/CMakeLists.txt"
+"cmake_minimum_required(VERSION 3.25)\n"
+"project(KatanaRuntimeSdk LANGUAGES CXX)\n"
+"file(GLOB runtime_sources CONFIGURE_DEPENDS \"\${CMAKE_CURRENT_SOURCE_DIR}/src/runtime/*.cpp\")\n"
+"add_library(katana_runtime STATIC \${runtime_sources})\n"
+"target_compile_features(katana_runtime PUBLIC cxx_std_20)\n"
+"target_include_directories(katana_runtime PUBLIC \"\${CMAKE_CURRENT_SOURCE_DIR}/include\")\n"
+)
 file(COPY
     "${source_root}/docs/PHASE10_GUI_ARCHITECTURE.md"
     "${source_root}/docs/PHASE10_GUI_WORKFLOW.md"
@@ -63,6 +80,49 @@ if(NOT smoke_result EQUAL 0 OR NOT smoke_output MATCHES "KR_PHASE10_GUI_MINIMAL_
     message(FATAL_ERROR "Packaged GUI smoke failed: ${smoke_error}")
 endif()
 
+string(SHA256 relocated_key "${output_root}")
+string(SUBSTRING "${relocated_key}" 0 12 relocated_key)
+set(relocated_root "${build_root}/.katana-package-${relocated_key}")
+file(REMOVE_RECURSE "${relocated_root}")
+file(MAKE_DIRECTORY "${relocated_root}")
+file(COPY "${output_root}/" DESTINATION "${relocated_root}")
+file(MAKE_DIRECTORY "${relocated_root}/fixture")
+execute_process(
+    COMMAND "${fixture_writer}" --write-fixture "${relocated_root}/fixture"
+    RESULT_VARIABLE fixture_result
+    ERROR_VARIABLE fixture_error
+)
+if(NOT fixture_result EQUAL 0)
+    message(FATAL_ERROR "Relocated package fixture failed: ${fixture_error}")
+endif()
+file(WRITE "${relocated_root}/fixture/project.katana"
+"schema = katana-project\n"
+"version = 2\n"
+"project.name = packaged-relocation\n"
+"input.format = gdi\n"
+"input.path = disc.gdi\n"
+"image.entry_point = 0x8C010000\n"
+"execution.firmware = direct\n"
+"execution.fallback = abort\n"
+"execution.scheduler = deterministic\n"
+"execution.mmu = disabled\n"
+"execution.fastpath = conservative\n"
+)
+execute_process(
+    COMMAND "${relocated_root}/katana-recomp${executable_suffix}"
+            workflow build "${relocated_root}/fixture/project.katana"
+            --output "${relocated_root}/workflow-output"
+    RESULT_VARIABLE relocated_build_result
+    OUTPUT_VARIABLE relocated_build_output
+    ERROR_VARIABLE relocated_build_error
+)
+if(NOT relocated_build_result EQUAL 0 OR
+   NOT EXISTS "${relocated_root}/workflow-output/game${executable_suffix}")
+    message(FATAL_ERROR
+        "Relocated package full GDI build failed: ${relocated_build_output} ${relocated_build_error}")
+endif()
+file(REMOVE_RECURSE "${relocated_root}")
+
 set(entries
     "katana-recomp${executable_suffix}"
     "katana-recomp-gui${executable_suffix}"
@@ -70,7 +130,14 @@ set(entries
     "assets/asset-manifest.json"
     "docs/PHASE10_GUI_ARCHITECTURE.md"
     "docs/PHASE10_GUI_WORKFLOW.md"
+    "runtime-sdk/CMakeLists.txt"
 )
+file(GLOB_RECURSE runtime_entries
+    RELATIVE "${output_root}"
+    "${output_root}/runtime-sdk/include/*"
+    "${output_root}/runtime-sdk/src/*"
+)
+list(APPEND entries ${runtime_entries})
 if(WIN32)
     list(APPEND entries "katana-file-dialog.exe" "clang_rt.asan_dynamic-x86_64.dll")
 endif()

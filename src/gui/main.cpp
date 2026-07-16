@@ -36,6 +36,7 @@ HWND main_window = nullptr;
 std::filesystem::path selected_gdi;
 std::filesystem::path selected_output;
 std::atomic_bool preparing_job = false;
+std::shared_ptr<katana::app::Cancellation> preparation_cancellation;
 
 std::filesystem::path settings_path() {
     wchar_t* local_app_data = nullptr;
@@ -83,17 +84,21 @@ void refresh() {
     const auto build_log = selected_output / "recompile.log";
     if (!selected_output.empty() && std::filesystem::exists(build_log)) {
         std::ifstream input(build_log, std::ios::binary);
+        constexpr std::size_t visible_log_limit = 16'000u;
+        input.seekg(0, std::ios::end);
+        const auto size = input.tellg();
+        if (size > static_cast<std::streamoff>(visible_log_limit))
+            input.seekg(size - static_cast<std::streamoff>(visible_log_limit));
+        else
+            input.seekg(0, std::ios::beg);
         std::string compiler_log((std::istreambuf_iterator<char>(input)),
                                  std::istreambuf_iterator<char>());
-        constexpr std::size_t visible_log_limit = 16'000u;
-        if (compiler_log.size() > visible_log_limit)
-            compiler_log.erase(0u, compiler_log.size() - visible_log_limit);
         log += "\r\nBuildlog:\r\n" + compiler_log;
     }
     SetWindowTextW(log_view, widen(log).c_str());
     for (const int control : {1001, 1003, 1006})
         EnableWindow(GetDlgItem(main_window, control), busy ? FALSE : TRUE);
-    EnableWindow(GetDlgItem(main_window, 1004), state.job_active ? TRUE : FALSE);
+    EnableWindow(GetDlgItem(main_window, 1004), busy ? TRUE : FALSE);
 }
 
 void show_error(const std::exception& error) {
@@ -169,8 +174,10 @@ void start_job(HWND window, const katana::app::JobKind kind) {
     if (selected_output.empty()) throw std::logic_error("Zuerst einen Ausgabeordner waehlen.");
     const auto source = selected_gdi;
     const auto output = selected_output;
+    const auto cancellation = std::make_shared<katana::app::Cancellation>();
+    preparation_cancellation = cancellation;
     preparing_job.store(true);
-    job_thread = std::jthread([window, kind, source, output] {
+    job_thread = std::jthread([window, kind, source, output, cancellation] {
         try {
             const auto session = std::filesystem::temp_directory_path() / "KatanaRecomp" /
                                  ("session-" + std::to_string(GetCurrentProcessId()));
@@ -178,16 +185,23 @@ void start_job(HWND window, const katana::app::JobKind kind) {
             model->new_project(session / "input.katana",
                                source.stem().string(),
                                katana::io::ProjectInputFormat::DreamcastGdi,
-                               source);
+                               source,
+                               false);
             model->save_project();
             preparing_job.store(false);
-            static_cast<void>(model->run_job(kind, output, "gui-job", KATANA_RECOMP_VERSION));
+            static_cast<void>(
+                model->run_job(kind, output, "gui-job", KATANA_RECOMP_VERSION, cancellation));
         } catch (const std::exception& error) {
             preparing_job.store(false);
             show_error(error);
         }
         PostMessageW(window, job_finished_message, 0u, 0);
     });
+}
+
+void cancel_active_job() {
+    if (preparation_cancellation) preparation_cancellation->request();
+    model->cancel_job();
 }
 
 LRESULT CALLBACK window_proc(HWND window, const UINT message, WPARAM wparam, LPARAM lparam) {
@@ -299,7 +313,7 @@ LRESULT CALLBACK window_proc(HWND window, const UINT message, WPARAM wparam, LPA
                 start_job(window, katana::app::JobKind::Build);
                 break;
             case 1004:
-                model->cancel_job();
+                cancel_active_job();
                 break;
             default:
                 break;
@@ -332,7 +346,7 @@ LRESULT CALLBACK window_proc(HWND window, const UINT message, WPARAM wparam, LPA
             return 0;
         }
         if (wparam == VK_ESCAPE) {
-            model->cancel_job();
+            cancel_active_job();
             return 0;
         }
         break;
@@ -346,6 +360,7 @@ LRESULT CALLBACK window_proc(HWND window, const UINT message, WPARAM wparam, LPA
         return 0;
     case job_finished_message:
         if (job_thread.joinable()) job_thread.join();
+        preparation_cancellation.reset();
         refresh();
         if (native_automation) {
             const auto state = model->snapshot();
@@ -370,7 +385,7 @@ LRESULT CALLBACK window_proc(HWND window, const UINT message, WPARAM wparam, LPA
                         L"KatanaRecomp",
                         MB_YESNO | MB_ICONWARNING) != IDYES)
             return 0;
-        model->cancel_job();
+        cancel_active_job();
         DestroyWindow(window);
         return 0;
     case WM_DESTROY:
@@ -393,9 +408,10 @@ int run_desktop() {
     window_class.hbrBackground = reinterpret_cast<HBRUSH>(COLOR_WINDOW + 1);
     if (RegisterClassW(&window_class) == 0u && GetLastError() != ERROR_CLASS_ALREADY_EXISTS)
         throw std::runtime_error("Windows-GUI-Klasse konnte nicht registriert werden.");
+    const auto title = widen(std::string("KatanaRecomp ") + KATANA_RECOMP_VERSION);
     const auto window = CreateWindowExW(0,
                                         window_class.lpszClassName,
-                                        L"KatanaRecomp 0.40 - Phase 10",
+                                        title.c_str(),
                                         WS_OVERLAPPEDWINDOW,
                                         CW_USEDEFAULT,
                                         CW_USEDEFAULT,

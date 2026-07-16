@@ -133,13 +133,15 @@ std::string port_metadata(const PortExportOptions& options,
                           const std::size_t function_count,
                           const std::span<const TranslationUnitPartition> partitions,
                           const std::uint32_t entry_address,
-                          const std::size_t boot_size) {
+                          const std::size_t boot_size,
+                          const std::string_view project_identity) {
     std::ostringstream output;
     katana::io::write_json_report_header(output, "katana-port-project", "port-project");
     output << ",\"contract_version\":" << port_project_contract_version
            << ",\"target_name\":" << katana::io::quote_json(options.target_name)
            << ",\"runtime_abi\":" << katana::runtime::abi_version
            << ",\"backend_abi\":" << backend_interface_abi_version
+           << ",\"project_identity\":" << katana::io::quote_json(project_identity)
            << ",\"entry_address\":" << entry_address << ",\"boot_size\":" << boot_size
            << ",\"function_count\":" << function_count << ",\"partitions\":[";
     for (std::size_t index = 0u; index < partitions.size(); ++index) {
@@ -186,40 +188,63 @@ bool path_is_within(const std::filesystem::path& path, const std::filesystem::pa
     return !relative.empty() && !relative.is_absolute() && *relative.begin() != "..";
 }
 
+std::filesystem::path resolve_existing_parents(std::filesystem::path path) {
+    std::vector<std::filesystem::path> missing;
+    std::error_code error;
+    while (!path.empty() && !std::filesystem::exists(path, error)) {
+        if (error) throw std::runtime_error("Port-Ausgabepfad konnte nicht geprueft werden.");
+        missing.push_back(path.filename());
+        const auto parent = path.parent_path();
+        if (parent == path) break;
+        path = parent;
+    }
+    auto resolved = std::filesystem::canonical(path);
+    for (auto iterator = missing.rbegin(); iterator != missing.rend(); ++iterator)
+        resolved /= *iterator;
+    return resolved.lexically_normal();
+}
+
 } // namespace
 
-PortExportResult export_dreamcast_port_project(const std::filesystem::path& gdi_path,
+PortExportResult export_dreamcast_port_project(const PreparedPortProgram& prepared,
                                                const std::filesystem::path& output_root,
                                                const PortExportOptions& options) {
-    if (gdi_path.empty() || output_root.empty() || !valid_target_name(options.target_name) ||
-        options.tool_version.empty()) {
+    if (output_root.empty() || !valid_target_name(options.target_name) ||
+        options.tool_version.empty() || prepared.entry_address == 0u || prepared.program.empty()) {
         throw std::invalid_argument(
-            "Portexport braucht GDI, Ausgabe, portable Zielkennung und Werkzeugversion.");
+            "Portexport braucht vorbereitetes IR, Einstieg, Ausgabe, Zielkennung und "
+            "Werkzeugversion.");
     }
-    const auto disc = katana::platform::load_dreamcast_gdi_boot(gdi_path);
-    auto image = katana::platform::make_dreamcast_disc_executable(disc);
-    const auto analysis = katana::analysis::analyze_control_flow(image);
-    if (!analysis.recursive.diagnostics.empty()) {
+    if (!prepared.analysis.recursive.diagnostics.empty()) {
         throw std::runtime_error("Portanalyse enthaelt unbekannte Instruktionen.");
     }
-    auto program = katana::ir::lower_program(analysis);
-    static_cast<void>(katana::ir::optimize_program(program));
-    katana::ir::require_valid_program(program);
-    const auto partitions = partition_translation_units(program, options.partition_options);
+    const auto unresolved = std::count_if(prepared.analysis.indirect_control_flow.begin(),
+                                          prepared.analysis.indirect_control_flow.end(),
+                                          [](const auto& resolution) {
+                                              return resolution.status ==
+                                                     katana::analysis::ResolutionStatus::Unresolved;
+                                          });
+    if (unresolved != 0u) {
+        throw std::runtime_error("Portanalyse ist unvollstaendig: " + std::to_string(unresolved) +
+                                 " ungeloeste Kontrollflussstellen.");
+    }
+    katana::ir::require_valid_program(prepared.program);
+    const auto partitions =
+        partition_translation_units(prepared.program, options.partition_options);
     if (partitions.empty()) throw std::runtime_error("Portcodegen erzeugte keine Partition.");
 
     std::vector<std::uint32_t> global_entries;
-    global_entries.reserve(program.size());
-    for (const auto& function : program)
+    global_entries.reserve(prepared.program.size());
+    for (const auto& function : prepared.program)
         global_entries.push_back(function.entry_address);
     const CppBackend backend;
     std::vector<ProjectArtifact> artifacts;
     artifacts.reserve(partitions.size() + 9u);
     for (const auto& partition : partitions) {
-        auto functions = select_functions(program, partition);
+        auto functions = select_functions(prepared.program, partition);
         const auto contains_program_entry =
-            std::any_of(functions.begin(), functions.end(), [](const auto& function) {
-                return function.entry_address == katana::platform::dreamcast_disc_boot_address;
+            std::any_of(functions.begin(), functions.end(), [&prepared](const auto& function) {
+                return function.entry_address == prepared.entry_address;
             });
         const BackendRequest request{functions,
                                      functions.front().entry_address,
@@ -228,35 +253,28 @@ PortExportResult export_dreamcast_port_project(const std::filesystem::path& gdi_
                                      port_namespace,
                                      contains_program_entry,
                                      true,
-                                     katana::platform::dreamcast_disc_boot_address};
+                                     prepared.entry_address};
         auto source = backend.emit(request).joined_text();
         artifacts.push_back({std::filesystem::path("code") /
-                                 deterministic_translation_unit_name(partition, program),
+                                 deterministic_translation_unit_name(partition, prepared.program),
                              std::move(source)});
     }
     const auto entry_partition =
-        std::find_if(partitions.begin(), partitions.end(), [&program](const auto& partition) {
+        std::find_if(partitions.begin(), partitions.end(), [&prepared](const auto& partition) {
             return std::any_of(partition.function_indices.begin(),
                                partition.function_indices.end(),
-                               [&program](const auto index) {
-                                   return program[index].entry_address ==
-                                          katana::platform::dreamcast_disc_boot_address;
+                               [&prepared](const auto index) {
+                                   return prepared.program[index].entry_address ==
+                                          prepared.entry_address;
                                });
         });
     if (entry_partition == partitions.end()) {
         throw std::runtime_error("Portcodegen besitzt keine Einstiegspartition.");
     }
     const auto entry_namespace = std::string(port_namespace);
-    const auto source_map = build_address_source_map(image, artifacts);
-    const auto control_flow_graph = katana::analysis::build_control_flow_graph(analysis);
-    const auto call_graph = katana::analysis::build_call_graph(analysis);
-
-    std::vector<katana::io::InputProvenance> inputs;
-    inputs.push_back(katana::io::capture_input_provenance("gdi-descriptor", gdi_path));
-    for (const auto& track : disc.source->descriptor().tracks) {
-        inputs.push_back(katana::io::capture_input_provenance(
-            "gdi-track-" + std::to_string(track.number), track.resolved_path));
-    }
+    const auto source_map = build_address_source_map(prepared.image, artifacts);
+    const auto control_flow_graph = katana::analysis::build_control_flow_graph(prepared.analysis);
+    const auto call_graph = katana::analysis::build_call_graph(prepared.analysis);
     katana::io::BuildProvenance provenance;
     provenance.tool_version = options.tool_version;
     provenance.manifest_version = port_project_contract_version;
@@ -266,16 +284,17 @@ PortExportResult export_dreamcast_port_project(const std::filesystem::path& gdi_
     provenance.runtime_abi = katana::runtime::abi_version;
     provenance.backend_name = "cpp";
     provenance.backend_abi = backend_interface_abi_version;
-    provenance.inputs = std::move(inputs);
+    provenance.inputs.assign(prepared.inputs.begin(), prepared.inputs.end());
 
     artifacts.push_back({"include/katana_port.hpp", generated_header(entry_namespace)});
     artifacts.push_back({"katana-port.cmake", port_cmake(options.target_name)});
     artifacts.push_back({"metadata/port-project.json",
                          port_metadata(options,
-                                       program.size(),
+                                       prepared.program.size(),
                                        partitions,
-                                       katana::platform::dreamcast_disc_boot_address,
-                                       disc.boot_file.size())});
+                                       prepared.entry_address,
+                                       prepared.boot_size,
+                                       prepared.project_identity)});
     artifacts.push_back(
         {"metadata/provenance.json", katana::io::format_build_provenance_json(provenance)});
     artifacts.push_back({"metadata/source-map.json", serialize_address_source_map(source_map)});
@@ -289,7 +308,7 @@ PortExportResult export_dreamcast_port_project(const std::filesystem::path& gdi_
         {"metadata/callgraph.dot", katana::analysis::serialize_analysis_graph_dot(call_graph)});
 
     const auto absolute_root = std::filesystem::absolute(output_root).lexically_normal();
-    const auto resolved_root = std::filesystem::weakly_canonical(absolute_root);
+    const auto resolved_root = resolve_existing_parents(absolute_root);
     if (!options.forbidden_source_root.empty()) {
         const auto source_root = std::filesystem::canonical(options.forbidden_source_root);
         if (path_is_within(resolved_root, source_root)) {
@@ -317,7 +336,7 @@ PortExportResult export_dreamcast_port_project(const std::filesystem::path& gdi_
     write_user_file_once(canonical_root, "src/main.cpp", handwritten_main(entry_namespace));
 
     return {canonical_root,
-            program.size(),
+            prepared.program.size(),
             partitions.size(),
             write.written_files.size(),
             write.removed_files.size(),
@@ -327,6 +346,34 @@ PortExportResult export_dreamcast_port_project(const std::filesystem::path& gdi_
              "ir-lowered",
              "partitioned-codegen-complete",
              "port-project-written"}};
+}
+
+PortExportResult export_dreamcast_port_project(const std::filesystem::path& gdi_path,
+                                               const std::filesystem::path& output_root,
+                                               const PortExportOptions& options) {
+    if (gdi_path.empty()) {
+        throw std::invalid_argument("Portexport braucht eine GDI-Quelle.");
+    }
+    const auto disc = katana::platform::load_dreamcast_gdi_boot(gdi_path);
+    auto image = katana::platform::make_dreamcast_disc_executable(disc);
+    const auto analysis = katana::analysis::analyze_control_flow(image);
+    auto program = katana::ir::lower_program(analysis);
+    static_cast<void>(katana::ir::optimize_program(program));
+    std::vector<katana::io::InputProvenance> inputs;
+    inputs.push_back(katana::io::capture_input_provenance("gdi-descriptor", gdi_path));
+    for (const auto& track : disc.source->descriptor().tracks) {
+        inputs.push_back(katana::io::capture_input_provenance(
+            "gdi-track-" + std::to_string(track.number), track.resolved_path));
+    }
+    return export_dreamcast_port_project({image,
+                                          analysis,
+                                          program,
+                                          inputs,
+                                          katana::platform::dreamcast_disc_boot_address,
+                                          disc.boot_file.size(),
+                                          {}},
+                                         output_root,
+                                         options);
 }
 
 } // namespace katana::codegen
