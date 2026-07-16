@@ -13,8 +13,8 @@ KatanaRecomp besitzt einen durchgaengigen Prototyp-Pfad von Raw- und ELF32-SH-Ei
 ### Gesamtprojekt
 
 - [x] Kernunterbau abgeschlossen: Phasen 1 bis 5 sind vollstaendig umgesetzt
-- [~] Gesamtfortschritt nach gepflegten Roadmap-Tasks: 135 von 209 Tasks abgeschlossen = 64.6%
-- [~] Fortschritt auf dem Weg von Dreamcast-Plattform bis Alpha: 41 von 112 Tasks abgeschlossen = 36.6%
+- [~] Gesamtfortschritt nach gepflegten Roadmap-Tasks: 136 von 209 Tasks abgeschlossen = 65.1%
+- [~] Fortschritt auf dem Weg von Dreamcast-Plattform bis Alpha: 42 von 112 Tasks abgeschlossen = 37.5%
 - [ ] Alpha-Gate erreicht: nein
 
 ### Weg zum ersten echten Dreamcast-Test
@@ -46,7 +46,7 @@ Praktische Einordnung:
 - [x] Phase 4 - Runtime-Grundlage: 18/18 Tasks = 100%
 - [x] Phase 5 - SH-4 FPU: 10/10 Tasks = 100%
 - [x] Phase 6 - Dreamcast-Plattform: 29/29 Tasks und Abschlussgate = 100%
-- [~] Phase 7 - Codegen und Dispatch: 12/21 Tasks = 57.1%
+- [~] Phase 7 - Codegen und Dispatch: 13/21 Tasks = 61.9%
 - [ ] Phase 8 - Werkzeuge und Qualitaet: 0/25 Tasks = 0%
 - [ ] Phase 9 - Kompatibilitaet und Leistung: 0/24 Tasks = 0%
 - [ ] Phase 10 - Desktop-GUI und Quellworkflow: 0/13 Tasks = 0%
@@ -68,11 +68,11 @@ deterministische Partitionierungs-, Cache-, Projekt- und Metadatentests bestande
 kein Sonic-Adventure-Test am Zwischenrelease v0.33.0 erforderlich oder ausgefuehrt
 ```
 
-Aktueller Entwicklungsstand (nach `KR-3402`, Basis `v0.33.0`):
+Aktueller Entwicklungsstand (nach `KR-3403`, Basis `v0.33.0`):
 
 ```text
-134/134 Debug-Tests bestanden
-katana-indirect-dispatch-tests bestanden
+135/135 Debug-Tests bestanden
+katana-controlled-fallback-tests bestanden
 ```
 
 Abgeschlossenes kumulatives Phase-6-Gate:
@@ -240,7 +240,8 @@ Lokale Sonic-Adventure-Akzeptanzstrategie:
 
 - [x] KR-3401 - Laufzeit-Blocktabelle
 - [x] KR-3402 - Indirekter Call- und Jump-Dispatch
-- [ ] KR-3403 - Kontrollierter Fallback
+- [x] KR-3403 - Kontrollierter Fallback
+- [ ] KR-3404 - Selbstmodifizierenden Code erkennen
 
 ## Aktuelle Einschraenkungen
 

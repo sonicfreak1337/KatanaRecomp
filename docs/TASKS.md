@@ -1177,7 +1177,7 @@ Akzeptanz:
 - ein unbekanntes Ziel wird nie als erfolgreicher No-op oder Nullfunktionsaufruf behandelt
 - titelbezogene Zielverschiebungen oder hart kodierte Forced Entries sind nicht Teil der Runtime
 
-### [ ] KR-3403 - Kontrollierter Fallback
+### [x] KR-3403 - Kontrollierter Fallback
 
 Abhaengigkeiten: KR-3402
 

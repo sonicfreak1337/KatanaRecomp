@@ -37,6 +37,7 @@ add_library(katana_runtime STATIC
     src/runtime/block_abi.cpp
     src/runtime/block_table.cpp
     src/runtime/indirect_dispatch.cpp
+    src/runtime/controlled_fallback.cpp
     src/runtime/cache_control.cpp
     src/runtime/dma.cpp
     src/runtime/disc.cpp
@@ -162,6 +163,11 @@ add_executable(katana-indirect-dispatch-tests tests/runtime/indirect_dispatch_te
 target_link_libraries(katana-indirect-dispatch-tests PRIVATE katana_runtime)
 katana_enable_warnings(katana-indirect-dispatch-tests)
 add_test(NAME katana-indirect-dispatch-tests COMMAND katana-indirect-dispatch-tests)
+
+add_executable(katana-controlled-fallback-tests tests/runtime/controlled_fallback_tests.cpp)
+target_link_libraries(katana-controlled-fallback-tests PRIVATE katana_runtime)
+katana_enable_warnings(katana-controlled-fallback-tests)
+add_test(NAME katana-controlled-fallback-tests COMMAND katana-controlled-fallback-tests)
 
 add_executable(katana-platform-services-tests tests/runtime/platform_services_tests.cpp)
 target_link_libraries(katana-platform-services-tests PRIVATE katana_core katana_runtime)
