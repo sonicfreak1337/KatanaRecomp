@@ -2368,7 +2368,7 @@ synthetischen oder frei verteilbaren Regression abgesichert werden. Alle
 Freigaben dieses Abschnitts sind interne Meilensteine ohne Versionierung,
 Release-Commit, Tag, Download oder Veroeffentlichung.
 
-### [ ] KR-4506 - PC-relative Literale und indirekte Bootziele aufloesen
+### [x] KR-4506 - PC-relative Literale und indirekte Bootziele aufloesen
 
 Abhaengigkeiten: KR-3406, KR-3411, KR-4403
 

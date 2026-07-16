@@ -4,8 +4,11 @@
 
 `propagate_local_constants` fuehrt einen konservativen Registerzustand durch
 eine bereits geordnete Instruktionsfolge. Version 1 des Transfers unterstuetzt
-Immediate-Moves, Immediate-Additionen, Registerkopien und NOP. 32-Bit-
-Arithmetik verwendet definiertes unsigned Wraparound.
+Immediate-Moves, Immediate-Additionen, Registerkopien, NOP sowie
+`MOV.W/MOV.L @(disp,PC)` und `MOVA`. PC-relative Literale werden nur aus
+committed Image-Bytes gelesen; `MOV.W` wird SH-4-konform vorzeichenerweitert
+und `MOV.L` verwendet die vier Byte ausgerichtete PC-Basis. 32-Bit-Arithmetik
+verwendet definiertes unsigned Wraparound.
 
 Sobald eine noch nicht modellierte Instruktion erreicht wird, werden alle
 bekannten Registerwerte verworfen. Diese konservative Schranke verhindert,
@@ -24,7 +27,8 @@ zwischen getrennt entdeckten Codebereichen weitergetragen werden.
 
 Eine indirekte Stelle gilt nur dann als `resolved`, wenn der beobachtete
 Registerwert gerade ist und auf zwei committed Bytes eines ausfuehrbaren
-Code-Segments zeigt. Der Grund `constant-register` dokumentiert den Beweis.
+Code-Segments zeigt. Die Gruende `constant-register`, `pc-relative-literal`
+und `pc-relative-address` dokumentieren den Beweis und seine Herkunft.
 Unbekannte Werte und ungueltige Zielbereiche bleiben mit getrennten stabilen
 Gruenden `unresolved`.
 

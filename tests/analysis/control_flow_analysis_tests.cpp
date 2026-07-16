@@ -68,6 +68,28 @@ int main() {
     require(has_instruction(jump, 4u), "Delay Slot des indirekten JMP fehlt.");
     require(jump.indirect_control_flow.size() == 1u, "Indirektes JMP wurde doppelt aufgeloest.");
 
+    auto pc_literal_jump = code_image({0x01u,
+                                       0xD1u,
+                                       0x2Bu,
+                                       0x41u,
+                                       0x09u,
+                                       0x00u,
+                                       0x09u,
+                                       0x00u,
+                                       0x0Cu,
+                                       0x00u,
+                                       0x00u,
+                                       0x00u,
+                                       0x09u,
+                                       0x00u,
+                                       0x0Bu,
+                                       0x00u});
+    const auto pc_literal_flow = katana::analysis::analyze_control_flow(pc_literal_jump);
+    require(has_instruction(pc_literal_flow, 12u) &&
+                pc_literal_flow.indirect_control_flow.size() == 1u &&
+                pc_literal_flow.indirect_control_flow[0].reason == "pc-relative-literal",
+            "PC-relatives indirektes Ziel setzte die rekursive Analyse nicht fort.");
+
     katana::analysis::AnalysisOverrides hints;
     hints.version = 2u;
     hints.mode = katana::analysis::AnalysisDirectiveMode::Hint;

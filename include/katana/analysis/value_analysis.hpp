@@ -14,6 +14,7 @@ namespace katana::analysis {
 
 struct RegisterConstants {
     std::array<std::optional<std::uint32_t>, 16> registers;
+    std::array<std::string, 16> sources;
 };
 
 struct ConstantTraceEntry {
@@ -26,6 +27,7 @@ struct RegisterValueObservation {
     std::uint32_t instruction_address = 0u;
     std::uint8_t register_index = 0u;
     std::optional<std::uint32_t> value;
+    std::string source;
 };
 
 struct RegisterValueAnalysis {

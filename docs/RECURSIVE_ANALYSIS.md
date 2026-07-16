@@ -24,6 +24,9 @@ behalten ihren Rueckkehrpfad nach dem Delay Slot; Jumps erzeugen keinen solchen
 Fallthrough. Vollstaendig gueltige Jump Tables speisen alle Ziele gemeinsam ein,
 teilweise ungueltige Tabellen keines. Jede Seed-Adresse und jede Instruktion wird
 deterministisch dedupliziert, sodass Selbstspruenge und Zyklen terminieren.
+PC-relative Wort-/Langwortliterale und `MOVA` koennen dabei ein indirektes
+Ziel allgemein beweisen; die Analyse liest sie ausschliesslich aus committed
+Image-Daten und traegt ihre Herkunft bis in Bericht und CFG-Fixpunkt.
 
 Alle Einstiegspunkte und nachtraeglichen Ziele muessen gerade sein und mindestens
 zwei committed Bytes in einem ausfuehrbaren Code-Segment besitzen. Zero-Fill ist

@@ -1144,7 +1144,7 @@ Kumulatives Phase-10-Abschlussgate bei v0.44.0:
 - Abbruch, Fehleranzeige und ein ungueltiger Trackpfad liefern dieselben strukturierten Fehlerklassen; exportierte Berichte bleiben redigiert
 - `KR_PHASE10_GUI_END_TO_END` wird auf den fuer Alpha unterstuetzten Windows- und Linux-Konfigurationen automatisiert erreicht, ohne Dreamcast-Testlogik in der GUI zu duplizieren
 
-## Phase 11: Alpha-Integration und Haertung
+## Phase 11: Bootanalyse und Retail-Systemdienste
 
 Diese Phase schliesst die Luecke zwischen dem GUI-/Quellworkflow in v0.44.0
 und einem spielbaren Sonic-Adventure-Alpha in v0.50.0. Verteilbare Gates
@@ -1157,7 +1157,7 @@ verteilbare Regressionen uebersetzt werden.
 
 Fortschritt:
 
-- [ ] KR-4506 - PC-relative Literale und indirekte Bootziele aufloesen
+- [x] KR-4506 - PC-relative Literale und indirekte Bootziele aufloesen
 - [ ] KR-4507 - Ehrliche Analyseabdeckung und Build-Erfolgskriterien
 - [ ] KR-4508 - Ausfuehrbare `game.exe` mit Bootimage und Runtime-Dispatch
 - [ ] KR-4501 - Messbarer SH-4-Alpha-ISA-Vertrag

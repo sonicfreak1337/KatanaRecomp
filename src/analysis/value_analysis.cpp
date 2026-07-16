@@ -1,26 +1,74 @@
 #include "katana/analysis/value_analysis.hpp"
 #include "katana/analysis/code_address.hpp"
 
+#include "katana/io/binary_reader.hpp"
 #include "katana/sh4/instruction.hpp"
 
 #include <algorithm>
 #include <cstdint>
+#include <utility>
 
 namespace katana::analysis {
 namespace {
 
+void clear_constants(RegisterConstants& state) {
+    state.registers.fill(std::nullopt);
+    state.sources.fill({});
+}
+
+void set_constant(RegisterConstants& state,
+                  const std::uint8_t index,
+                  const std::uint32_t value,
+                  std::string source = "constant-register") {
+    state.registers[index] = value;
+    state.sources[index] = std::move(source);
+}
+
 void apply_local_transfer(RegisterConstants& state,
-                          const katana::sh4::DecodedInstruction& instruction) {
+                          const katana::sh4::DisassemblyLine& line,
+                          const katana::io::ExecutableImage* image) {
+    const auto& instruction = line.instruction;
     switch (instruction.kind) {
     case katana::sh4::InstructionKind::Nop:
         return;
     case katana::sh4::InstructionKind::MovImmediate:
-        state.registers[instruction.destination_register] =
-            static_cast<std::uint32_t>(instruction.immediate);
+        set_constant(state,
+                     instruction.destination_register,
+                     static_cast<std::uint32_t>(instruction.immediate));
         return;
     case katana::sh4::InstructionKind::MovRegister:
         state.registers[instruction.destination_register] =
             state.registers[instruction.source_register];
+        state.sources[instruction.destination_register] =
+            state.sources[instruction.source_register];
+        return;
+    case katana::sh4::InstructionKind::MovWordLoadPcRelative:
+    case katana::sh4::InstructionKind::MovLongLoadPcRelative: {
+        const auto width =
+            instruction.kind == katana::sh4::InstructionKind::MovWordLoadPcRelative ? 2u : 4u;
+        const auto base = width == 4u ? (line.address + 4u) & ~3u : line.address + 4u;
+        const auto address = base + static_cast<std::uint32_t>(instruction.displacement);
+        const auto* segment = image != nullptr ? image->find_segment(address, width) : nullptr;
+        if (segment == nullptr) {
+            state.registers[instruction.destination_register].reset();
+            state.sources[instruction.destination_register].clear();
+            return;
+        }
+        const auto offset = *segment->byte_offset(address);
+        const auto value =
+            width == 4u
+                ? image->read_u32_le(address)
+                : static_cast<std::uint32_t>(static_cast<std::int32_t>(
+                      static_cast<std::int16_t>(katana::io::read_u16_le(segment->bytes, offset))));
+        set_constant(state, instruction.destination_register, value, "pc-relative-literal");
+        return;
+    }
+    case katana::sh4::InstructionKind::MoveAddressPcRelative:
+        set_constant(state,
+                     0u,
+                     ((line.address + 4u) & ~3u) +
+                         static_cast<std::uint32_t>(instruction.displacement),
+                     "pc-relative-address");
         return;
     case katana::sh4::InstructionKind::AddImmediate:
         if (state.registers[instruction.destination_register].has_value()) {
@@ -35,6 +83,7 @@ void apply_local_transfer(RegisterConstants& state,
                 *state.registers[instruction.source_register];
         } else {
             state.registers[instruction.destination_register].reset();
+            state.sources[instruction.destination_register].clear();
         }
         return;
     case katana::sh4::InstructionKind::SubRegister:
@@ -44,6 +93,7 @@ void apply_local_transfer(RegisterConstants& state,
                 *state.registers[instruction.source_register];
         } else {
             state.registers[instruction.destination_register].reset();
+            state.sources[instruction.destination_register].clear();
         }
         return;
     case katana::sh4::InstructionKind::AndRegister:
@@ -62,6 +112,7 @@ void apply_local_transfer(RegisterConstants& state,
             }
         } else {
             state.registers[instruction.destination_register].reset();
+            state.sources[instruction.destination_register].clear();
         }
         return;
     case katana::sh4::InstructionKind::AndImmediate:
@@ -82,12 +133,34 @@ void apply_local_transfer(RegisterConstants& state,
     case katana::sh4::InstructionKind::Jmp:
     case katana::sh4::InstructionKind::Jsr:
     case katana::sh4::InstructionKind::Rts:
-        state.registers.fill(std::nullopt);
+        clear_constants(state);
         return;
     default:
-        state.registers.fill(std::nullopt);
+        clear_constants(state);
         return;
     }
+}
+
+std::vector<ConstantTraceEntry>
+propagate_constants(const std::span<const katana::sh4::DisassemblyLine> lines,
+                    const RegisterConstants& initial,
+                    const katana::io::ExecutableImage* image) {
+    RegisterConstants state = initial;
+    std::vector<ConstantTraceEntry> trace;
+    trace.reserve(lines.size());
+    for (std::size_t index = 0u; index < lines.size(); ++index) {
+        const auto& line = lines[index];
+        if (index != 0u && line.address != lines[index - 1u].address + 2u) {
+            clear_constants(state);
+        }
+        ConstantTraceEntry entry;
+        entry.address = line.address;
+        entry.before = state;
+        apply_local_transfer(state, line, image);
+        entry.after = state;
+        trace.push_back(std::move(entry));
+    }
+    return trace;
 }
 
 } // namespace
@@ -95,29 +168,14 @@ void apply_local_transfer(RegisterConstants& state,
 std::vector<ConstantTraceEntry>
 propagate_local_constants(const std::span<const katana::sh4::DisassemblyLine> lines,
                           const RegisterConstants& initial) {
-    RegisterConstants state = initial;
-    std::vector<ConstantTraceEntry> trace;
-    trace.reserve(lines.size());
-    for (std::size_t index = 0u; index < lines.size(); ++index) {
-        const auto& line = lines[index];
-        if (index != 0u && line.address != lines[index - 1u].address + 2u) {
-            state.registers.fill(std::nullopt);
-        }
-        ConstantTraceEntry entry;
-        entry.address = line.address;
-        entry.before = state;
-        apply_local_transfer(state, line.instruction);
-        entry.after = state;
-        trace.push_back(std::move(entry));
-    }
-    return trace;
+    return propagate_constants(lines, initial, nullptr);
 }
 
 RegisterValueAnalysis
 analyze_register_values(const std::span<const katana::sh4::DisassemblyLine> lines,
                         const RegisterConstants& initial) {
     RegisterValueAnalysis analysis;
-    analysis.trace = propagate_local_constants(lines, initial);
+    analysis.trace = propagate_constants(lines, initial, nullptr);
     for (std::size_t index = 0; index < lines.size(); ++index) {
         if (lines[index].instruction.kind != katana::sh4::InstructionKind::Jmp &&
             lines[index].instruction.kind != katana::sh4::InstructionKind::Jsr) {
@@ -127,7 +185,8 @@ analyze_register_values(const std::span<const katana::sh4::DisassemblyLine> line
         analysis.indirect_control_flow.push_back(
             {lines[index].address,
              register_index,
-             analysis.trace[index].before.registers[register_index]});
+             analysis.trace[index].before.registers[register_index],
+             analysis.trace[index].before.sources[register_index]});
     }
     return analysis;
 }
@@ -135,7 +194,19 @@ analyze_register_values(const std::span<const katana::sh4::DisassemblyLine> line
 std::vector<IndirectControlFlowResolution>
 resolve_indirect_control_flow(const std::span<const katana::sh4::DisassemblyLine> lines,
                               const katana::io::ExecutableImage& image) {
-    const auto values = analyze_register_values(lines);
+    RegisterValueAnalysis values;
+    values.trace = propagate_constants(lines, {}, &image);
+    for (std::size_t index = 0u; index < lines.size(); ++index) {
+        if (lines[index].instruction.kind != katana::sh4::InstructionKind::Jmp &&
+            lines[index].instruction.kind != katana::sh4::InstructionKind::Jsr)
+            continue;
+        const auto register_index = lines[index].instruction.branch_register;
+        values.indirect_control_flow.push_back(
+            {lines[index].address,
+             register_index,
+             values.trace[index].before.registers[register_index],
+             values.trace[index].before.sources[register_index]});
+    }
     std::vector<IndirectControlFlowResolution> resolutions;
     resolutions.reserve(values.indirect_control_flow.size());
     for (const auto& observation : values.indirect_control_flow) {
@@ -166,7 +237,7 @@ resolve_indirect_control_flow(const std::span<const katana::sh4::DisassemblyLine
         }
         resolution.status = ResolutionStatus::Resolved;
         resolution.target = target;
-        resolution.reason = "constant-register";
+        resolution.reason = observation.source.empty() ? "constant-register" : observation.source;
         resolutions.push_back(std::move(resolution));
     }
     return resolutions;

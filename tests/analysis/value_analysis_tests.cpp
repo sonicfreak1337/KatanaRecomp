@@ -97,6 +97,84 @@ int main() {
                 zero_resolution[0].reason == "outside-committed-data",
             "Konstantes indirektes Ziel im Zero-Fill wurde als sicher markiert.");
 
-    std::cout << "KR-1801 Lokale Konstantenpropagation erfolgreich.\n";
+    katana::io::ExecutableImage pc_literal;
+    pc_literal.add_segment({".text",
+                            0u,
+                            0u,
+                            16u,
+                            katana::io::SegmentKind::Code,
+                            {true, false, true},
+                            {// mov.l @(4,pc),r1; jmp @r1; nop; nop
+                             0x01u,
+                             0xD1u,
+                             0x2Bu,
+                             0x41u,
+                             0x09u,
+                             0x00u,
+                             0x09u,
+                             0x00u,
+                             // Literalziel 0x0000000C; Ziel: nop; rts
+                             0x0Cu,
+                             0x00u,
+                             0x00u,
+                             0x00u,
+                             0x09u,
+                             0x00u,
+                             0x0Bu,
+                             0x00u}});
+    const auto pc_literal_lines = katana::sh4::disassemble(pc_literal.segments()[0].bytes, 0u);
+    const auto pc_literal_resolution =
+        katana::analysis::resolve_indirect_control_flow(pc_literal_lines, pc_literal);
+    require(pc_literal_resolution.size() == 1u &&
+                pc_literal_resolution[0].status == katana::analysis::ResolutionStatus::Resolved &&
+                pc_literal_resolution[0].target == 0x0Cu &&
+                pc_literal_resolution[0].reason == "pc-relative-literal",
+            "PC-relatives Literal wurde nicht als indirektes Sprungziel aufgeloest.");
+
+    katana::io::ExecutableImage pc_word;
+    pc_word.add_segment({".text",
+                         0u,
+                         0u,
+                         16u,
+                         katana::io::SegmentKind::Code,
+                         {true, false, true},
+                         {0x01u,
+                          0x91u,
+                          0x2Bu,
+                          0x41u,
+                          0x09u,
+                          0x00u,
+                          0x0Cu,
+                          0x00u,
+                          0x09u,
+                          0x00u,
+                          0x09u,
+                          0x00u,
+                          0x09u,
+                          0x00u,
+                          0x0Bu,
+                          0x00u}});
+    const auto pc_word_resolution = katana::analysis::resolve_indirect_control_flow(
+        katana::sh4::disassemble(pc_word.segments()[0].bytes, 0u), pc_word);
+    require(pc_word_resolution.size() == 1u && pc_word_resolution[0].target == 0x0Cu &&
+                pc_word_resolution[0].reason == "pc-relative-literal",
+            "Vorzeichenbehaftetes PC-relatives Wortliteral wurde nicht aufgeloest.");
+
+    katana::io::ExecutableImage pc_address;
+    pc_address.add_segment(
+        {".text",
+         0u,
+         0u,
+         12u,
+         katana::io::SegmentKind::Code,
+         {true, false, true},
+         {0x01u, 0xC7u, 0x2Bu, 0x40u, 0x09u, 0x00u, 0x09u, 0x00u, 0x0Bu, 0x00u, 0x09u, 0x00u}});
+    const auto pc_address_resolution = katana::analysis::resolve_indirect_control_flow(
+        katana::sh4::disassemble(pc_address.segments()[0].bytes, 0u), pc_address);
+    require(pc_address_resolution.size() == 1u && pc_address_resolution[0].target == 8u &&
+                pc_address_resolution[0].reason == "pc-relative-address",
+            "MOVA-Adresse wurde nicht als indirektes Sprungziel aufgeloest.");
+
+    std::cout << "KR-1801/KR-4506 Lokale Konstantenpropagation erfolgreich.\n";
     return EXIT_SUCCESS;
 }
