@@ -1900,7 +1900,7 @@ Akzeptanz:
 - ungueltige Aliaszyklen und ueberlappende Provenienz werden sauber abgelehnt
 - der automatisierte Kurzlauf besitzt feste Seeds; Langlaeufe koennen extern skaliert werden
 
-### [ ] KR-3709 - Referenz-/Lizenzprovenienz und v0.37 Gate-Vorbereitung
+### [x] KR-3709 - Referenz-/Lizenzprovenienz und v0.37 Gate-Vorbereitung
 
 Abhaengigkeiten: KR-3701
 
@@ -1923,7 +1923,7 @@ Akzeptanz:
 - der reproduzierbare Gate-Bericht liegt vor; danach wird vor KR-3710 fuer das
   Nutzerreview gestoppt
 
-### [ ] KR-3710 - v0.37 Release-Gate
+### [x] KR-3710 - v0.37 Release-Gate
 
 Abhaengigkeiten: KR-3411, KR-3501 bis KR-3507, KR-3601 bis KR-3609, KR-3701 bis KR-3709
 

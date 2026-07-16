@@ -933,8 +933,8 @@ Fortschritt:
 - [x] KR-3706 - Reproduzierbare Release-Artefakte
 - [x] KR-3707 - Differenztests der Ausfuehrungswege
 - [x] KR-3708 - Mehrsegment-, Dispatch- und Invalidierungsfuzzing
-- [ ] KR-3709 - Referenz-/Lizenzprovenienz und v0.37 Gate-Vorbereitung
-- [ ] KR-3710 - v0.37 Release-Gate
+- [x] KR-3709 - Referenz-/Lizenzprovenienz und v0.37 Gate-Vorbereitung
+- [x] KR-3710 - v0.37 Release-Gate
 
 Enthalten:
 

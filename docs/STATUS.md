@@ -1,8 +1,8 @@
 # Projektstatus
 
-Version: 0.34.0
+Version: 0.37.0
 Phase: Pre-Alpha
-Naechster Meilenstein: v0.35.0 - Projektmanifest und stabile CLI
+Naechster Meilenstein: v0.38.0 - rechtlich sauberes Homebrew-Testkorpus
 
 ## Zusammenfassung
 
@@ -13,8 +13,8 @@ KatanaRecomp besitzt einen durchgaengigen Prototyp-Pfad von Raw- und ELF32-SH-Ei
 ### Gesamtprojekt
 
 - [x] Kernunterbau abgeschlossen: Phasen 1 bis 5 sind vollstaendig umgesetzt
-- [~] Gesamtfortschritt nach gepflegten Roadmap-Tasks: 144 von 238 Tasks abgeschlossen = 60.5%
-- [~] Fortschritt auf dem Weg von Dreamcast-Plattform bis einschliesslich Alpha-Gate: 50 von 140 Tasks abgeschlossen = 35.7%
+- [~] Gesamtfortschritt nach gepflegten Roadmap-Tasks: 170 von 238 Tasks abgeschlossen = 71.4%
+- [~] Fortschritt auf dem Weg von Dreamcast-Plattform bis einschliesslich Alpha-Gate: 76 von 140 Tasks abgeschlossen = 54.3%
 - [ ] Alpha-Gate erreicht: nein; Alpha verlangt eine aus der lokalen
   Sonic-Adventure-GDI erzeugte und gestartete `game.exe`, die reproduzierbar
   `SA_ALPHA_BOOTED` erreicht
@@ -38,10 +38,8 @@ Praktische Einordnung:
 - [x] Modulare Backend-, Block-ABI- und Plattformdienst-Schnittstelle von v0.32.0 abgeschlossen
 - [x] Skalierbare, deterministische und inkrementelle Codeausgabe von v0.33.0 abgeschlossen
 - [x] Indirekter Dispatch, Fallback und Codeinvalidierung von v0.34.0 sind abgeschlossen
-- [~] Der naechste Engpass ist das versionierte Projektmanifest und der offizielle Port-Projektexport von v0.35.0
-- [ ] Der offizielle `.gdi`-zu-Port-Projektexport mit getrenntem generiertem und
-  handgeschriebenem Code sowie ausfuehrbarem Host-Target `game.exe` ist als
-  `KR-3507` fuer v0.35.0 geplant
+- [x] Versioniertes Projektmanifest und offizieller `.gdi`-zu-Port-Projektexport mit getrenntem generiertem und handgeschriebenem Code sowie ausfuehrbarem Host-Target sind abgeschlossen
+- [x] Diagnostik, reproduzierbare Debug-Gates, prozessisoliertes Fuzzing und Referenz-/Lizenzprovenienz von Phase 8 sind abgeschlossen
 - [ ] Die Luecke zwischen v0.44 und Alpha wird durch v0.45 bis v0.49 fuer
   ISA-Abdeckung, Retail-Bootdienste, native Hostruntime, Portintegration und
   Alpha-CI geschlossen
@@ -55,7 +53,7 @@ Praktische Einordnung:
 - [x] Phase 5 - SH-4 FPU: 10/10 Tasks = 100%
 - [x] Phase 6 - Dreamcast-Plattform: 29/29 Tasks und Abschlussgate = 100%
 - [x] Phase 7 - Codegen und Dispatch: 21/21 Tasks = 100%
-- [ ] Phase 8 - Werkzeuge und Qualitaet: 0/26 Tasks = 0%
+- [x] Phase 8 - Werkzeuge und Qualitaet: 26/26 Tasks = 100%
 - [ ] Phase 9 - Kompatibilitaet und Leistung: 0/24 Tasks = 0%
 - [ ] Phase 10 - Desktop-GUI und Quellworkflow: 0/13 Tasks = 0%
 - [ ] Phase 11 - Alpha-Integration und Haertung: 0/25 Tasks = 0%
@@ -76,17 +74,17 @@ Praktische Einordnung:
 
 ## Teststatus
 
-Letztes abgeschlossenes Release-Gate (`v0.34.0`):
+Letztes abgeschlossenes Release-Gate (`v0.37.0`):
 
 ```text
-100% tests passed out of 142 (frischer lokaler Debug-Build)
+100% tests passed out of 151 (lokaler Debug-/ASan-/Coverage-Build)
 ```
 
 Aktueller Release-Stand:
 
 ```text
-142/142 Tests bestanden
-Blockdispatch, Fallback, Invalidierung, Scheduler, Store Queues und Delay Slots bestanden
+151/151 Tests bestanden
+Manifest, Port-Hostbuild, Diagnostik, Replay, echter generierter Differentialpfad, prozessisoliertes Fuzzing und reproduzierbares Artefakt bestanden
 kein Sonic-Adventure-Test vor der Alpha-Gate-Vorbereitung KR-4999 ausgefuehrt
 ```
 

@@ -4,6 +4,10 @@
 
 ### Hinzugefuegt
 
+## [0.37.0] - 2026-07-16
+
+### Hinzugefuegt
+
 - KR-3501: Projektmanifeste besitzen ein namespaced v2-Schema mit festem `katana-project`-Identifier und getrennten Projekt-, Eingabe-, Image- und Segmentfeldern. Der v1-Vertrag bleibt kompatibel lesbar; unbekannte Versionen, Schemas und versionsfremde Felder scheitern vor dem Loaderzugriff.
 - KR-3502: Die CLI veroeffentlicht stabile Exitcodes fuer Nutzung, Eingabe, I/O, Verarbeitung, Codegen, Hostbuild und interne Fehler. Zentrale Diagnosen tragen eine feste Fehlerklasse; `--help`, `-h` und `--version` sind stabile erfolgreiche Basiskommandos.
 - KR-3503: Ein gemeinsamer versionierter JSON-Reportkopf und zentrale kontrollzeichenfeste String-Escapierung vereinheitlichen IR-, Kontrollfluss- und Gate-Berichte. `analyze-json` liefert Funktionen, indirekte Ziele, Jump Tables und Diagnosen deterministisch und ohne Hostzeitfelder.
@@ -28,6 +32,15 @@
 - KR-3706: `artifact-debug` entfernt lokale Quellpfade aus Debuginformationen und aktiviert reproduzierbare Compiler-/Linkoptionen. Ein strikt begrenzter Paketierer erzeugt sortierte, zeitnormalisierte `0.34.0-dev`-ZIPs samt SHA-256-Manifest zweimal und akzeptiert sie nur bei Bytegleichheit; private oder generierte Eingaben sind nicht paketierbar.
 - KR-3707: Ein Differential-Harness speist dieselben synthetischen Mikrogramme in IR-Referenz, generiertes C++ und kontrollierten Interpreter-Fallback. Kanonische Checkpoints vergleichen CPU, Speicher, Ausnahme, MMIO und Scheduler am ersten abweichenden Gast-PC; stabile JSON-Gegenbeispiele enthalten Seed, Korpus und Zustandspfad.
 - KR-3708: Das neue `katana-fuzz --target runtime` kombiniert synthetische Multi-Segment-Images, validierte Aliasgruppen, MMU-/Watchpointvarianten, exakten und kanonischen Dispatch, ROM-RAM-Codekopien sowie CPU-/DMA-/Copy-Invalidierung. Aliasverkettungen und -zyklen werden bereits im Manifestvertrag abgelehnt; Seitengenerationen verhindern stale Blocklookups.
+- KR-3709/KR-3710: Das kumulative lokale Debug-Gate besteht 151/151 Tests mit AddressSanitizer, MSVC-Analyse, Coverage, festem prozessisoliertem Fuzz-Kurzlauf, Format-/Provenienzaudits und reproduzierbarem Artefakt. Release- und CI-Builds bleiben wie beschlossen bis zum Alpha-Gate deaktiviert.
+
+### Behoben
+
+- Partitionsuebergreifende direkte Calls verwenden einen global validierten, extern gelinkten Symbolvertrag; Namespacewahl ist eine Emitteroption statt breiter Textersetzung.
+- Port-Zielpfade werden ueber kanonische Elternpfade gegen den Repository-Root geprueft, auch wenn eine Symlink-Komponente auf den Quellbaum zeigt.
+- Geladene v2-Projekte behalten das validierte Ausfuehrungsprofil; MMIO-Replays fuehren die Scheduler-Resetepoche mit.
+- Der Runtime-Fuzzer fuehrt echte Backend-, DMA-, CPU- und ROM-RAM-Copy-Pfade aus, vergleicht Callsite-Cache und generischen Dispatch und reduziert Sanitizer-/Prozesscrashes in Kindprozessen. Minimierte Hex-Inputs sind direkt wiedergebbar.
+- Leere IR-Bloecke werden strukturiert abgelehnt, ohne im zweiten Verifierdurchlauf dereferenziert zu werden.
 
 ## [0.34.0] - 2026-07-16
 
