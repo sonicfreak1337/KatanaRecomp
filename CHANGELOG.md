@@ -24,6 +24,7 @@
 - KR-3702: Das frische `sanitizer-debug`-Profil aktiviert AddressSanitizer auf MSVC/GCC/Clang und zusaetzlich UndefinedBehaviorSanitizer ohne Recovery auf GCC/Clang. Es verwendet dasselbe CTest-Korpus und ausschliesslich `build-current/`; ausgefuehrt wird es gesammelt in KR-3709 statt pro Task.
 - KR-3703: `katana-fuzz` mutiert synthetische Decoder-, ELF32-SH-Loader- und IR-Eingaben mit reproduzierbaren Seeds, festen Groessen-/Iterationsgrenzen und fallgenauer Fehlerdiagnose. Der Loader besitzt dafuer einen dateilosen Byte-Span-Einstieg; `fuzz-debug` kombiniert den portablen Kurzlauf mit dem Sanitizerprofil fuer KR-3709.
 - KR-3704: `coverage-debug` instrumentiert GCC/Clang ueber gcov-kompatible Flags und nutzt unter MSVC das native dynamische Visual-Studio-Coveragewerkzeug. Ein abgesicherter Runner sammelt das vollstaendige CTest-Korpus in einen Cobertura-Bericht ausschliesslich unter `build-current/coverage/`.
+- KR-3705: Ein repositoryweiter `.clang-format`-/`.clang-tidy`-Vertrag und ein read-only Formatpruefer decken Include-, Quell-, Test- und Toolcode ab. `quality-debug` fuehrt MSVC-Analyse beziehungsweise `clang-tidy` mit Fehlereskalation im selben kumulativen Debug-Build aus.
 
 ## [0.34.0] - 2026-07-16
 

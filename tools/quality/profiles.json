@@ -45,8 +45,14 @@
     },
     {
       "id": "format-static-analysis",
-      "active": false,
-      "owner": "KR-3705"
+      "active": true,
+      "owner": "KR-3705",
+      "configure_preset": "quality-debug",
+      "build_preset": "quality-debug",
+      "test_preset": "quality-debug",
+      "format_check_script": "tools/quality/check-format.ps1",
+      "analysis_backends": ["msvc-analyze", "clang-tidy"],
+      "warnings_as_errors": true
     },
     {
       "id": "artifact-audit",

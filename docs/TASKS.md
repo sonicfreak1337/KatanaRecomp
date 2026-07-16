@@ -1828,9 +1828,23 @@ Akzeptanz:
 - der Bericht beschraenkt die betrachteten Quellen auf den KatanaRecomp-Quellbaum
 - das Profil wird erst im gebuendelten KR-3709-Lauf ausgefuehrt und erzeugt kein zweites Buildverzeichnis
 
-### [ ] KR-3705 - Formatierung und statische Analyse
+### [x] KR-3705 - Formatierung und statische Analyse
 
 Abhaengigkeiten: KR-3701
+
+Umfang:
+
+- repositoryweiten C++-Stilvertrag fuer Include-, Quell-, Test- und Toolcode festlegen
+- Formatierung read-only mit `clang-format --dry-run --Werror` pruefen
+- MSVC-Codeanalyse beziehungsweise `clang-tidy` waehrend desselben Debug-Builds aktivieren
+- Compilerwarnungen und statische Analysebefunde als Gatefehler behandeln
+
+Akzeptanz:
+
+- der Formatpruefer veraendert keine Datei und lehnt fremde Quellwurzeln ab
+- fehlende Formatierungs- oder Analysewerkzeuge scheitern sichtbar
+- Drittanbieter-, generierte und Buildartefakte liegen ausserhalb des Formatscopes
+- Formatpruefung und statische Analyse laufen gebuendelt in KR-3709, nicht pro Task
 
 ### [ ] KR-3706 - Reproduzierbare Release-Artefakte
 

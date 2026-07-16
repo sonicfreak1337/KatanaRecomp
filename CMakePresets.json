@@ -38,6 +38,14 @@
       "cacheVariables": {
         "KATANA_ENABLE_COVERAGE": "ON"
       }
+    },
+    {
+      "name": "quality-debug",
+      "displayName": "KatanaRecomp format and static analysis Debug gate",
+      "inherits": "coverage-debug",
+      "cacheVariables": {
+        "KATANA_ENABLE_STATIC_ANALYSIS": "ON"
+      }
     }
   ],
   "buildPresets": [
@@ -56,6 +64,10 @@
     {
       "name": "coverage-debug",
       "configurePreset": "coverage-debug"
+    },
+    {
+      "name": "quality-debug",
+      "configurePreset": "quality-debug"
     }
   ],
   "testPresets": [
@@ -92,6 +104,11 @@
       "name": "coverage-debug",
       "inherits": "fuzz-debug",
       "configurePreset": "coverage-debug"
+    },
+    {
+      "name": "quality-debug",
+      "inherits": "coverage-debug",
+      "configurePreset": "quality-debug"
     }
   ],
   "workflowPresets": [

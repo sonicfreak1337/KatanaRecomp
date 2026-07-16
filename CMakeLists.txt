@@ -29,6 +29,12 @@ option(
     OFF
 )
 
+option(
+    KATANA_ENABLE_STATIC_ANALYSIS
+    "Enable the supported compiler-integrated static analysis profile"
+    OFF
+)
+
 if(KATANA_ENABLE_SANITIZERS)
     if(MSVC)
         string(REPLACE "/RTC1" "" CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG}")
@@ -68,6 +74,21 @@ if(KATANA_ENABLE_COVERAGE)
         OUTPUT "${CMAKE_BINARY_DIR}/katana-coverage-backend.txt"
         CONTENT "${KATANA_COVERAGE_BACKEND}\n"
     )
+endif()
+
+if(KATANA_ENABLE_STATIC_ANALYSIS)
+    set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+    if(MSVC)
+        add_compile_options(/analyze /analyze:external-)
+    elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+        find_program(KATANA_CLANG_TIDY_EXECUTABLE NAMES clang-tidy REQUIRED)
+        set(
+            CMAKE_CXX_CLANG_TIDY
+            "${KATANA_CLANG_TIDY_EXECUTABLE};--warnings-as-errors=*"
+        )
+    else()
+        message(FATAL_ERROR "KATANA_ENABLE_STATIC_ANALYSIS is unsupported by this compiler")
+    endif()
 endif()
 
 function(katana_enable_warnings target)
