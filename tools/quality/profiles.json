@@ -34,8 +34,14 @@
     },
     {
       "id": "coverage",
-      "active": false,
-      "owner": "KR-3704"
+      "active": true,
+      "owner": "KR-3704",
+      "configure_preset": "coverage-debug",
+      "build_preset": "coverage-debug",
+      "test_preset": "coverage-debug",
+      "report_script": "tools/quality/write-coverage-report.ps1",
+      "output": "build-current/coverage/coverage.cobertura.xml",
+      "backends": ["msvc-dynamic", "gcov"]
     },
     {
       "id": "format-static-analysis",

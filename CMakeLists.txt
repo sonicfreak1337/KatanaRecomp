@@ -23,6 +23,12 @@ option(
     OFF
 )
 
+option(
+    KATANA_ENABLE_COVERAGE
+    "Enable source coverage instrumentation or the MSVC dynamic coverage contract"
+    OFF
+)
+
 if(KATANA_ENABLE_SANITIZERS)
     if(MSVC)
         string(REPLACE "/RTC1" "" CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG}")
@@ -41,6 +47,27 @@ if(KATANA_ENABLE_SANITIZERS)
     else()
         message(FATAL_ERROR "KATANA_ENABLE_SANITIZERS is unsupported by this compiler")
     endif()
+endif()
+
+if(KATANA_ENABLE_COVERAGE)
+    if(MSVC)
+        set(KATANA_COVERAGE_BACKEND "msvc-dynamic")
+    elseif(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+        add_compile_options(--coverage -fprofile-abs-path)
+        add_link_options(--coverage)
+        set(KATANA_COVERAGE_BACKEND "gcov")
+    elseif(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+        add_compile_options(--coverage)
+        add_link_options(--coverage)
+        set(KATANA_COVERAGE_BACKEND "gcov")
+    else()
+        message(FATAL_ERROR "KATANA_ENABLE_COVERAGE is unsupported by this compiler")
+    endif()
+    file(
+        GENERATE
+        OUTPUT "${CMAKE_BINARY_DIR}/katana-coverage-backend.txt"
+        CONTENT "${KATANA_COVERAGE_BACKEND}\n"
+    )
 endif()
 
 function(katana_enable_warnings target)

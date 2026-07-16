@@ -1810,9 +1810,23 @@ Akzeptanz:
 - erwartete Eingabeablehnungen gelten nicht als Crasher; unerwartete Fehler bleiben sichtbar
 - der feste Kurzlauf ist Teil des gebuendelten KR-3709-Debugprofils, wird aber nicht pro Task ausgefuehrt
 
-### [ ] KR-3704 - Coverage
+### [x] KR-3704 - Coverage
 
 Abhaengigkeiten: KR-3701
+
+Umfang:
+
+- Source-Coverage fuer GCC/Clang ueber gcov-kompatible Instrumentierung aktivieren
+- native MSVC-Binaerabdeckung ueber das Visual-Studio-Coveragewerkzeug sammeln
+- dasselbe vollstaendige CTest-Korpus einschliesslich des festen Fuzzer-Kurzlaufs ausfuehren
+- Cobertura-Bericht und Werkzeugprotokoll ausschliesslich unter `build-current/coverage/` ablegen
+
+Akzeptanz:
+
+- fehlende oder unpassende Coveragewerkzeuge brechen sichtbar ab
+- Buildpfade ausserhalb des einzigen `build-current/` werden abgelehnt
+- der Bericht beschraenkt die betrachteten Quellen auf den KatanaRecomp-Quellbaum
+- das Profil wird erst im gebuendelten KR-3709-Lauf ausgefuehrt und erzeugt kein zweites Buildverzeichnis
 
 ### [ ] KR-3705 - Formatierung und statische Analyse
 

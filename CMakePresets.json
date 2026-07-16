@@ -30,6 +30,14 @@
       "cacheVariables": {
         "KATANA_BUILD_FUZZERS": "ON"
       }
+    },
+    {
+      "name": "coverage-debug",
+      "displayName": "KatanaRecomp source coverage Debug gate",
+      "inherits": "fuzz-debug",
+      "cacheVariables": {
+        "KATANA_ENABLE_COVERAGE": "ON"
+      }
     }
   ],
   "buildPresets": [
@@ -44,6 +52,10 @@
     {
       "name": "fuzz-debug",
       "configurePreset": "fuzz-debug"
+    },
+    {
+      "name": "coverage-debug",
+      "configurePreset": "coverage-debug"
     }
   ],
   "testPresets": [
@@ -75,6 +87,11 @@
       "name": "fuzz-debug",
       "inherits": "sanitizer-debug",
       "configurePreset": "fuzz-debug"
+    },
+    {
+      "name": "coverage-debug",
+      "inherits": "fuzz-debug",
+      "configurePreset": "coverage-debug"
     }
   ],
   "workflowPresets": [
