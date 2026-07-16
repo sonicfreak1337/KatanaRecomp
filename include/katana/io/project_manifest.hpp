@@ -7,6 +7,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace katana::io {
 
@@ -16,6 +17,39 @@ inline constexpr std::string_view project_manifest_schema_name = "katana-project
 enum class ProjectInputFormat {
     RawBinary,
     Elf32Sh
+};
+
+enum class ProjectFirmwareMode {
+    Direct,
+    Hle,
+    Lle
+};
+
+enum class ProjectFallbackPolicy {
+    Abort,
+    Interpreter,
+    Diagnostic
+};
+
+enum class ProjectMmuProfile {
+    Disabled,
+    Sh4
+};
+
+enum class ProjectFastpathProfile {
+    Conservative,
+    Guarded
+};
+
+struct ProjectAddressRange {
+    std::uint32_t start = 0u;
+    std::uint32_t size = 0u;
+};
+
+struct ProjectAliasGroup {
+    std::uint32_t virtual_start = 0u;
+    std::uint32_t physical_start = 0u;
+    std::uint32_t size = 0u;
 };
 
 struct ProjectManifest {
@@ -30,6 +64,19 @@ struct ProjectManifest {
     std::string segment_name = ".raw";
     SegmentKind segment_kind = SegmentKind::Code;
     SegmentPermissions permissions{true, false, true};
+    ProjectFirmwareMode firmware_mode = ProjectFirmwareMode::Direct;
+    ProjectFallbackPolicy fallback_policy = ProjectFallbackPolicy::Abort;
+    std::string scheduler_profile = "deterministic";
+    ProjectMmuProfile mmu_profile = ProjectMmuProfile::Disabled;
+    ProjectFastpathProfile fastpath_profile = ProjectFastpathProfile::Conservative;
+    std::optional<std::filesystem::path> bios_path;
+    std::optional<std::filesystem::path> flash_path;
+    std::vector<std::string> required_backend_capabilities;
+    std::vector<ProjectAliasGroup> alias_groups;
+    std::vector<ProjectAddressRange> canonical_physical_ranges;
+    std::vector<ProjectAddressRange> writable_executable_ranges;
+    std::vector<std::uint32_t> expected_entry_points;
+    std::vector<std::uint32_t> dynamic_bios_vectors;
 };
 
 [[nodiscard]] ProjectManifest parse_project_manifest(
@@ -41,6 +88,8 @@ struct ProjectManifest {
 );
 
 [[nodiscard]] const char* project_input_format_name(ProjectInputFormat format) noexcept;
+[[nodiscard]] const char* project_firmware_mode_name(ProjectFirmwareMode mode) noexcept;
+[[nodiscard]] const char* project_fallback_policy_name(ProjectFallbackPolicy policy) noexcept;
 [[nodiscard]] bool project_manifest_version_supported(std::uint32_t version) noexcept;
 
 }

@@ -8,6 +8,7 @@
 - KR-3502: Die CLI veroeffentlicht stabile Exitcodes fuer Nutzung, Eingabe, I/O, Verarbeitung, Codegen, Hostbuild und interne Fehler. Zentrale Diagnosen tragen eine feste Fehlerklasse; `--help`, `-h` und `--version` sind stabile erfolgreiche Basiskommandos.
 - KR-3503: Ein gemeinsamer versionierter JSON-Reportkopf und zentrale kontrollzeichenfeste String-Escapierung vereinheitlichen IR-, Kontrollfluss- und Gate-Berichte. `analyze-json` liefert Funktionen, indirekte Ziele, Jump Tables und Diagnosen deterministisch und ohne Hostzeitfelder.
 - KR-3504: Versionierte v2-Analyseanweisungen trennen erzwingende Overrides von unverbindlichen Hints. Statische Beweise werden nie durch abweichende Hints ersetzt; angenommene, bestaetigte, abgelehnte und stale Hinweise erscheinen deterministisch im Kontrollflussbericht. v1-Overrides bleiben kompatibel.
+- KR-3505: Das v2-Projektmanifest beschreibt explizite Direct-/HLE-/LLE-Firmwaremodi, Fallback-, Scheduler-, MMU- und Fastpathprofile, Backend-Faehigkeiten, Alias- und kanonische Speicherbereiche, WX-Segmente, erwartete Einstiege sowie dynamische BIOS-Vektoren. Sichere Direct-/Abort-Defaults und Voranalysevalidierung verhindern stillen Fallback, unvollstaendiges LLE und widerspruechliche Aliase.
 
 ## [0.34.0] - 2026-07-16
 

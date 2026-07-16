@@ -4,13 +4,16 @@
 #include "katana/io/raw_binary_loader.hpp"
 #include "katana/io/symbol_map.hpp"
 
+#include <algorithm>
 #include <charconv>
 #include <fstream>
+#include <limits>
 #include <map>
 #include <set>
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace katana::io {
 namespace {
@@ -131,6 +134,182 @@ SegmentPermissions parse_permissions(
     return {value.text[0] == 'r', value.text[1] == 'w', value.text[2] == 'x'};
 }
 
+std::vector<std::string> split_list(const std::string_view text, const char delimiter) {
+    std::vector<std::string> result;
+    std::size_t start = 0u;
+    for (;;) {
+        const auto end = text.find(delimiter, start);
+        const auto item = trim(text.substr(start, end == std::string_view::npos
+            ? text.size() - start : end - start));
+        if (item.empty()) {
+            return {};
+        }
+        result.push_back(item);
+        if (end == std::string_view::npos) {
+            return result;
+        }
+        start = end + 1u;
+    }
+}
+
+std::vector<ProjectAddressRange> parse_ranges(
+    const ManifestValue& value,
+    const std::filesystem::path& path,
+    const char* field
+) {
+    std::vector<ProjectAddressRange> ranges;
+    const auto items = split_list(value.text, ',');
+    if (items.empty()) {
+        fail(path, value.line, std::string(field) + " enthaelt eine leere Liste.");
+    }
+    for (const auto& item : items) {
+        const auto fields = split_list(item, ':');
+        if (fields.size() != 2u) {
+            fail(path, value.line, std::string(field) + " braucht start:size-Eintraege.");
+        }
+        ProjectAddressRange range{
+            parse_unsigned(fields[0], 16, path, value.line, field),
+            parse_unsigned(fields[1], 16, path, value.line, field)
+        };
+        if (range.size == 0u || static_cast<std::uint64_t>(range.start) + range.size
+                > std::numeric_limits<std::uint32_t>::max() + 1ull) {
+            fail(path, value.line, std::string(field) + " enthaelt einen ungueltigen Bereich.");
+        }
+        ranges.push_back(range);
+    }
+    return ranges;
+}
+
+std::vector<ProjectAliasGroup> parse_aliases(
+    const ManifestValue& value,
+    const std::filesystem::path& path
+) {
+    std::vector<ProjectAliasGroup> aliases;
+    const auto items = split_list(value.text, ',');
+    if (items.empty()) {
+        fail(path, value.line, "memory.alias_groups enthaelt eine leere Liste.");
+    }
+    for (const auto& item : items) {
+        const auto fields = split_list(item, ':');
+        if (fields.size() != 3u) {
+            fail(path, value.line, "memory.alias_groups braucht virtual:physical:size-Eintraege.");
+        }
+        ProjectAliasGroup alias{
+            parse_unsigned(fields[0], 16, path, value.line, "alias-virtual"),
+            parse_unsigned(fields[1], 16, path, value.line, "alias-physical"),
+            parse_unsigned(fields[2], 16, path, value.line, "alias-size")
+        };
+        const auto virtual_end = static_cast<std::uint64_t>(alias.virtual_start) + alias.size;
+        const auto physical_end = static_cast<std::uint64_t>(alias.physical_start) + alias.size;
+        if (alias.size == 0u || virtual_end > std::numeric_limits<std::uint32_t>::max() + 1ull
+            || physical_end > std::numeric_limits<std::uint32_t>::max() + 1ull) {
+            fail(path, value.line, "memory.alias_groups enthaelt einen ungueltigen Bereich.");
+        }
+        aliases.push_back(alias);
+    }
+    return aliases;
+}
+
+std::vector<std::uint32_t> parse_addresses(
+    const ManifestValue& value,
+    const std::filesystem::path& path,
+    const char* field
+) {
+    std::vector<std::uint32_t> result;
+    const auto items = split_list(value.text, ',');
+    if (items.empty()) {
+        fail(path, value.line, std::string(field) + " enthaelt eine leere Liste.");
+    }
+    for (const auto& item : items) {
+        result.push_back(parse_unsigned(item, 16, path, value.line, field));
+    }
+    return result;
+}
+
+bool ranges_overlap(
+    const std::uint32_t left_start,
+    const std::uint32_t left_size,
+    const std::uint32_t right_start,
+    const std::uint32_t right_size
+) noexcept {
+    const auto left_end = static_cast<std::uint64_t>(left_start) + left_size;
+    const auto right_end = static_cast<std::uint64_t>(right_start) + right_size;
+    return static_cast<std::uint64_t>(left_start) < right_end
+        && static_cast<std::uint64_t>(right_start) < left_end;
+}
+
+bool range_contains(
+    const ProjectAddressRange& outer,
+    const std::uint32_t start,
+    const std::uint32_t size
+) noexcept {
+    return start >= outer.start
+        && static_cast<std::uint64_t>(start) + size
+            <= static_cast<std::uint64_t>(outer.start) + outer.size;
+}
+
+ProjectFirmwareMode parse_firmware_mode(
+    const ManifestValue& value,
+    const std::filesystem::path& path
+) {
+    if (value.text == "direct") return ProjectFirmwareMode::Direct;
+    if (value.text == "hle") return ProjectFirmwareMode::Hle;
+    if (value.text == "lle") return ProjectFirmwareMode::Lle;
+    fail(path, value.line, "execution.firmware muss direct, hle oder lle sein.");
+}
+
+ProjectFallbackPolicy parse_fallback_policy(
+    const ManifestValue& value,
+    const std::filesystem::path& path
+) {
+    if (value.text == "abort") return ProjectFallbackPolicy::Abort;
+    if (value.text == "interpreter") return ProjectFallbackPolicy::Interpreter;
+    if (value.text == "diagnostic") return ProjectFallbackPolicy::Diagnostic;
+    fail(path, value.line, "execution.fallback muss abort, interpreter oder diagnostic sein.");
+}
+
+ProjectMmuProfile parse_mmu_profile(
+    const ManifestValue& value,
+    const std::filesystem::path& path
+) {
+    if (value.text == "disabled") return ProjectMmuProfile::Disabled;
+    if (value.text == "sh4") return ProjectMmuProfile::Sh4;
+    fail(path, value.line, "execution.mmu muss disabled oder sh4 sein.");
+}
+
+ProjectFastpathProfile parse_fastpath_profile(
+    const ManifestValue& value,
+    const std::filesystem::path& path
+) {
+    if (value.text == "conservative") return ProjectFastpathProfile::Conservative;
+    if (value.text == "guarded") return ProjectFastpathProfile::Guarded;
+    fail(path, value.line, "execution.fastpath muss conservative oder guarded sein.");
+}
+
+std::vector<std::string> parse_capabilities(
+    const ManifestValue& value,
+    const std::filesystem::path& path
+) {
+    static const std::set<std::string> known{
+        "memory", "scheduler", "interrupts", "dma", "controlled-fallback",
+        "mmu", "watchpoints", "executable-ram", "firmware-mode", "store-queues"
+    };
+    auto capabilities = split_list(value.text, ',');
+    if (capabilities.empty()) {
+        fail(path, value.line, "execution.required_capabilities enthaelt eine leere Liste.");
+    }
+    for (const auto& capability : capabilities) {
+        if (!known.contains(capability)) {
+            fail(path, value.line, "unbekannte Backend-Faehigkeit " + capability + ".");
+        }
+    }
+    std::sort(capabilities.begin(), capabilities.end());
+    if (std::adjacent_find(capabilities.begin(), capabilities.end()) != capabilities.end()) {
+        fail(path, value.line, "doppelte Backend-Faehigkeit.");
+    }
+    return capabilities;
+}
+
 }
 
 ProjectManifest parse_project_manifest(const std::filesystem::path& path) {
@@ -211,7 +390,12 @@ ProjectManifest parse_project_manifest(const std::filesystem::path& path) {
             values,
             {"schema", "version", "project.name", "input.format", "input.path",
              "input.map", "image.base_address", "image.entry_point",
-             "segment.name", "segment.kind", "segment.permissions"},
+             "image.expected_entry_points", "image.dynamic_bios_vectors",
+             "segment.name", "segment.kind", "segment.permissions",
+             "execution.firmware", "execution.fallback", "execution.scheduler",
+             "execution.mmu", "execution.fastpath", "execution.required_capabilities",
+             "firmware.bios", "firmware.flash", "memory.alias_groups",
+             "memory.canonical_ranges", "memory.writable_executable"},
             path
         );
         const auto& schema = require_value(values, "schema", path);
@@ -255,6 +439,65 @@ ProjectManifest parse_project_manifest(const std::filesystem::path& path) {
         manifest.permissions = parse_permissions(iterator->second, path);
     }
 
+    if (parsed_version == project_manifest_current_version) {
+        if (const auto iterator = values.find("execution.firmware"); iterator != values.end()) {
+            manifest.firmware_mode = parse_firmware_mode(iterator->second, path);
+        }
+        if (const auto iterator = values.find("execution.fallback"); iterator != values.end()) {
+            manifest.fallback_policy = parse_fallback_policy(iterator->second, path);
+        }
+        if (const auto iterator = values.find("execution.scheduler"); iterator != values.end()) {
+            if (iterator->second.text != "deterministic") {
+                fail(path, iterator->second.line,
+                    "execution.scheduler muss deterministic sein.");
+            }
+            manifest.scheduler_profile = iterator->second.text;
+        }
+        if (const auto iterator = values.find("execution.mmu"); iterator != values.end()) {
+            manifest.mmu_profile = parse_mmu_profile(iterator->second, path);
+        }
+        if (const auto iterator = values.find("execution.fastpath"); iterator != values.end()) {
+            manifest.fastpath_profile = parse_fastpath_profile(iterator->second, path);
+        }
+        if (const auto iterator = values.find("execution.required_capabilities");
+            iterator != values.end()) {
+            manifest.required_backend_capabilities = parse_capabilities(iterator->second, path);
+        }
+        if (const auto iterator = values.find("firmware.bios"); iterator != values.end()) {
+            manifest.bios_path = resolve_path(path, iterator->second);
+        }
+        if (const auto iterator = values.find("firmware.flash"); iterator != values.end()) {
+            manifest.flash_path = resolve_path(path, iterator->second);
+        }
+        if (const auto iterator = values.find("memory.alias_groups"); iterator != values.end()) {
+            manifest.alias_groups = parse_aliases(iterator->second, path);
+        }
+        if (const auto iterator = values.find("memory.canonical_ranges");
+            iterator != values.end()) {
+            manifest.canonical_physical_ranges = parse_ranges(
+                iterator->second, path, "memory.canonical_ranges"
+            );
+        }
+        if (const auto iterator = values.find("memory.writable_executable");
+            iterator != values.end()) {
+            manifest.writable_executable_ranges = parse_ranges(
+                iterator->second, path, "memory.writable_executable"
+            );
+        }
+        if (const auto iterator = values.find("image.expected_entry_points");
+            iterator != values.end()) {
+            manifest.expected_entry_points = parse_addresses(
+                iterator->second, path, "image.expected_entry_points"
+            );
+        }
+        if (const auto iterator = values.find("image.dynamic_bios_vectors");
+            iterator != values.end()) {
+            manifest.dynamic_bios_vectors = parse_addresses(
+                iterator->second, path, "image.dynamic_bios_vectors"
+            );
+        }
+    }
+
     if (manifest.format == ProjectInputFormat::RawBinary && !manifest.base_address.has_value()) {
         fail(path, 0u, "Raw-Manifeste brauchen " + base_key + ".");
     }
@@ -263,6 +506,91 @@ ProjectManifest parse_project_manifest(const std::filesystem::path& path) {
             || values.contains(segment_kind_key) || values.contains(permissions_key))) {
         fail(path, 0u, "Raw-Adresslayoutfelder sind fuer elf32-sh nicht erlaubt.");
     }
+
+    for (std::size_t left = 0u; left < manifest.alias_groups.size(); ++left) {
+        const auto& alias = manifest.alias_groups[left];
+        for (std::size_t right = left + 1u; right < manifest.alias_groups.size(); ++right) {
+            const auto& candidate = manifest.alias_groups[right];
+            if (ranges_overlap(
+                    alias.virtual_start, alias.size, candidate.virtual_start, candidate.size
+                )) {
+                fail(path, values.at("memory.alias_groups").line,
+                    "widerspruechliche ueberlappende Aliasgruppen.");
+            }
+        }
+        if (!std::any_of(
+                manifest.canonical_physical_ranges.begin(),
+                manifest.canonical_physical_ranges.end(),
+                [&alias](const auto& range) {
+                    return range_contains(range, alias.physical_start, alias.size);
+                }
+            )) {
+            fail(path, values.at("memory.alias_groups").line,
+                "Aliasziel liegt ausserhalb der kanonischen physischen Bereiche.");
+        }
+    }
+
+    const auto has_capability = [&manifest](const std::string_view capability) {
+        return std::binary_search(
+            manifest.required_backend_capabilities.begin(),
+            manifest.required_backend_capabilities.end(),
+            std::string(capability)
+        );
+    };
+    if (manifest.mmu_profile == ProjectMmuProfile::Sh4 && !has_capability("mmu")) {
+        fail(path, 0u, "execution.mmu=sh4 braucht die Backend-Faehigkeit mmu.");
+    }
+    if (!manifest.writable_executable_ranges.empty()
+        && !has_capability("executable-ram")) {
+        fail(path, 0u,
+            "beschreibbare ausfuehrbare Bereiche brauchen executable-ram.");
+    }
+    for (const auto& range : manifest.writable_executable_ranges) {
+        if (!manifest.canonical_physical_ranges.empty()
+            && !std::any_of(
+                manifest.canonical_physical_ranges.begin(),
+                manifest.canonical_physical_ranges.end(),
+                [&range](const auto& canonical) {
+                    return range_contains(canonical, range.start, range.size);
+                }
+            )) {
+            fail(path, values.at("memory.writable_executable").line,
+                "beschreibbarer ausfuehrbarer Bereich ist nicht kanonisch.");
+        }
+    }
+    if (manifest.firmware_mode == ProjectFirmwareMode::Lle) {
+        if (!manifest.bios_path.has_value() || manifest.alias_groups.empty()
+            || manifest.canonical_physical_ranges.empty()
+            || !has_capability("firmware-mode") || !has_capability("memory")) {
+            fail(path, 0u,
+                "LLE braucht BIOS, Aliasgruppen, kanonische Bereiche sowie "
+                "memory und firmware-mode.");
+        }
+    } else if (manifest.bios_path.has_value()) {
+        fail(path, values.at("firmware.bios").line,
+            "firmware.bios ist nur im LLE-Modus erlaubt.");
+    }
+    if (manifest.firmware_mode == ProjectFirmwareMode::Hle
+        && !has_capability("firmware-mode")) {
+        fail(path, 0u, "HLE braucht die Backend-Faehigkeit firmware-mode.");
+    }
+    if (manifest.fallback_policy != ProjectFallbackPolicy::Abort
+        && !has_capability("controlled-fallback")) {
+        fail(path, 0u,
+            "ein aktiver Fallback braucht die Backend-Faehigkeit controlled-fallback.");
+    }
+    std::sort(manifest.expected_entry_points.begin(), manifest.expected_entry_points.end());
+    manifest.expected_entry_points.erase(
+        std::unique(
+            manifest.expected_entry_points.begin(), manifest.expected_entry_points.end()
+        ),
+        manifest.expected_entry_points.end()
+    );
+    std::sort(manifest.dynamic_bios_vectors.begin(), manifest.dynamic_bios_vectors.end());
+    manifest.dynamic_bios_vectors.erase(
+        std::unique(manifest.dynamic_bios_vectors.begin(), manifest.dynamic_bios_vectors.end()),
+        manifest.dynamic_bios_vectors.end()
+    );
     return manifest;
 }
 
@@ -286,6 +614,9 @@ ExecutableImage load_project_manifest(const std::filesystem::path& path) {
     if (manifest.map_path.has_value()) {
         load_symbol_map(*manifest.map_path, image);
     }
+    for (const auto entry : manifest.expected_entry_points) {
+        image.add_entry_point(entry);
+    }
     return image;
 }
 
@@ -293,6 +624,24 @@ const char* project_input_format_name(const ProjectInputFormat format) noexcept 
     switch (format) {
         case ProjectInputFormat::RawBinary: return "raw";
         case ProjectInputFormat::Elf32Sh: return "elf32-sh";
+    }
+    return "unknown";
+}
+
+const char* project_firmware_mode_name(const ProjectFirmwareMode mode) noexcept {
+    switch (mode) {
+        case ProjectFirmwareMode::Direct: return "direct";
+        case ProjectFirmwareMode::Hle: return "hle";
+        case ProjectFirmwareMode::Lle: return "lle";
+    }
+    return "unknown";
+}
+
+const char* project_fallback_policy_name(const ProjectFallbackPolicy policy) noexcept {
+    switch (policy) {
+        case ProjectFallbackPolicy::Abort: return "abort";
+        case ProjectFallbackPolicy::Interpreter: return "interpreter";
+        case ProjectFallbackPolicy::Diagnostic: return "diagnostic";
     }
     return "unknown";
 }

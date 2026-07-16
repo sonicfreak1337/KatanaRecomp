@@ -1495,7 +1495,7 @@ Akzeptanz:
 - `analyze-json` gibt alle Hintentscheidungen mit Zeile, Gastadresse, Status und
   Grund aus; die gebuendelte Phase-8-Regression prueft alle vier Statusklassen
 
-### [ ] KR-3505 - Ausfuehrungs- und Firmwareprofil im Manifest
+### [x] KR-3505 - Ausfuehrungs- und Firmwareprofil im Manifest
 
 Abhaengigkeiten: KR-2604, KR-3403, KR-3408, KR-3501
 
