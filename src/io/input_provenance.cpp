@@ -50,13 +50,15 @@ class Sha256 final {
         const auto bit_count = total_bytes_ * 8u;
         buffer_[buffer_size_++] = 0x80u;
         if (buffer_size_ > 56u) {
-            std::fill(
-                buffer_.begin() + static_cast<std::ptrdiff_t>(buffer_size_), buffer_.end(), 0u);
+            std::fill(buffer_.begin() + static_cast<std::ptrdiff_t>(buffer_size_),
+                      buffer_.end(),
+                      std::uint8_t{0u});
             transform(buffer_);
             buffer_size_ = 0u;
         }
-        std::fill(
-            buffer_.begin() + static_cast<std::ptrdiff_t>(buffer_size_), buffer_.begin() + 56, 0u);
+        std::fill(buffer_.begin() + static_cast<std::ptrdiff_t>(buffer_size_),
+                  buffer_.begin() + 56,
+                  std::uint8_t{0u});
         for (std::size_t index = 0u; index < 8u; ++index) {
             buffer_[63u - index] = static_cast<std::uint8_t>(bit_count >> (index * 8u));
         }
@@ -192,7 +194,7 @@ InputProvenance capture_input_provenance(std::string role, const std::filesystem
     if (!input) throw std::runtime_error("Provenienzeingabe konnte nicht geoeffnet werden.");
     Sha256 hash;
     std::uint64_t size = 0u;
-    std::array<char, 64u * 1024u> buffer{};
+    std::vector<char> buffer(64u * 1024u);
     while (input) {
         input.read(buffer.data(), static_cast<std::streamsize>(buffer.size()));
         const auto count = input.gcount();

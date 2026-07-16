@@ -175,12 +175,17 @@ int main() {
             "PF_R/PF_W wurden falsch abgebildet.");
     require(image.symbols().size() == 2u, "ELF-Symboltabelle wurde nicht vollstaendig geladen.");
     const auto* start = image.find_symbol("start");
-    require(start != nullptr && start->address == 0x8C010000u && start->size == 4u,
-            "ELF-Funktionssymbol ist falsch.");
+    if (start == nullptr) {
+        throw std::runtime_error("ELF-Funktionssymbol fehlt.");
+    }
+    require(start->address == 0x8C010000u && start->size == 4u, "ELF-Funktionssymbol ist falsch.");
     require(start->kind == SymbolKind::Function && start->binding == SymbolBinding::Global,
             "ELF-Symbolinfo wurde falsch dekodiert.");
-    require(image.find_symbol("value")->kind == SymbolKind::Object,
-            "ELF-Objektsymbol ist falsch klassifiziert.");
+    const auto* value = image.find_symbol("value");
+    if (value == nullptr) {
+        throw std::runtime_error("ELF-Objektsymbol fehlt.");
+    }
+    require(value->kind == SymbolKind::Object, "ELF-Objektsymbol ist falsch klassifiziert.");
     require(image.relocations().size() == 3u, "ELF-Relocations wurden nicht vollstaendig geladen.");
     const auto& relocation = image.relocations()[0];
     require(relocation.address == 0x8C020000u && relocation.kind == RelocationKind::Absolute32,

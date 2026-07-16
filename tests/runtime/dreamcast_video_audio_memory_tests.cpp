@@ -196,9 +196,9 @@ int main() {
             "Das Dreamcast-AICA-RAM besitzt nicht genau 2 MiB.");
     require(bus.region_count() == dreamcast_vram_alias_count + dreamcast_aica_ram_alias_count,
             "Nicht alle VRAM- und AICA-RAM-Aliasfenster wurden registriert.");
-    require(dreamcast_vram_64bit_alias_count == 28u && dreamcast_vram_32bit_alias_count == 28u &&
-                dreamcast_aica_ram_alias_count == 28u,
-            "Die erwarteten direkten Dreamcast-Aliaszahlen stimmen nicht.");
+    static_assert(dreamcast_vram_64bit_alias_count == 28u);
+    static_assert(dreamcast_vram_32bit_alias_count == 28u);
+    static_assert(dreamcast_aica_ram_alias_count == 28u);
     require(vram->read_u8(0u) == 0u &&
                 vram->read_u8(static_cast<std::uint32_t>(dreamcast_vram_size - 1u)) == 0u &&
                 aica_ram->read_u8(0u) == 0u &&

@@ -64,9 +64,9 @@ int main() {
 
     require(bios->size() == dreamcast_bios_size && flash->size() == dreamcast_flash_size,
             "BIOS oder Flash besitzt nicht die erwartete Groesse.");
-    require(dreamcast_bios_alias_count == 7u && dreamcast_flash_alias_count == 7u &&
-                bus.region_count() == 14u,
-            "BIOS- oder Flash-Aliaszahl stimmt nicht.");
+    static_assert(dreamcast_bios_alias_count == 7u);
+    static_assert(dreamcast_flash_alias_count == 7u);
+    require(bus.region_count() == 14u, "BIOS- oder Flash-Aliaszahl stimmt nicht.");
 
     for (const auto segment_base : dreamcast_direct_segment_bases) {
         const auto bios_base = direct_alias(segment_base, dreamcast_bios_physical_base);

@@ -243,7 +243,12 @@ void emit_fpu_mode_guard(std::ostringstream& output,
     using Operation = katana::ir::Operation;
 
     std::string invalid_condition;
-    const auto append_condition = [&invalid_condition](const std::string& condition) {
+    std::unordered_set<std::string> invalid_conditions;
+    const auto append_condition = [&invalid_condition,
+                                   &invalid_conditions](const std::string& condition) {
+        if (!invalid_conditions.insert(condition).second) {
+            return;
+        }
         if (!invalid_condition.empty()) {
             invalid_condition += " || ";
         }

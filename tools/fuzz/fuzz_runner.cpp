@@ -166,8 +166,9 @@ mutate(const std::span<const std::uint8_t> source, Random& random, const std::si
 
 void exercise_decoder(const std::span<const std::uint8_t> bytes) {
     for (std::size_t offset = 0u; offset + 1u < bytes.size(); offset += 2u) {
-        const auto opcode = static_cast<std::uint16_t>(bytes[offset]) |
-                            (static_cast<std::uint16_t>(bytes[offset + 1u]) << 8u);
+        const auto opcode =
+            static_cast<std::uint16_t>(static_cast<std::uint16_t>(bytes[offset]) |
+                                       (static_cast<std::uint16_t>(bytes[offset + 1u]) << 8u));
         const auto decoded = katana::sh4::decode(opcode);
         static_cast<void>(katana::sh4::calculate_direct_branch_target(
             decoded, 0x8C000000u + static_cast<std::uint32_t>(offset)));

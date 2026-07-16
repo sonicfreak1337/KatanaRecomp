@@ -58,7 +58,9 @@ int main() {
             "Doppelte Einstiegspunkte wurden nicht normalisiert.");
 
     const auto* code = image.find_segment(0x8C010002u, 2u);
-    require(code != nullptr, "Ein gueltiger Codebereich wurde nicht gefunden.");
+    if (code == nullptr) {
+        throw std::runtime_error("Ein gueltiger Codebereich wurde nicht gefunden.");
+    }
     require(code->kind == SegmentKind::Code, "Die Segmentklassifikation ging verloren.");
     require(code->permissions.readable && code->permissions.executable &&
                 !code->permissions.writable,

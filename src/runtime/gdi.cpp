@@ -253,7 +253,7 @@ GdiDiscSource::GdiDiscSource(GdiDescriptor descriptor) : descriptor_(std::move(d
             throw std::runtime_error("GDI-Track konnte nicht read-only geoeffnet werden.");
         }
         hash_input.seekg(static_cast<std::streamoff>(track.file_offset));
-        std::array<std::uint8_t, 65536u> buffer{};
+        std::vector<std::uint8_t> buffer(65536u);
         std::uint64_t consumed = 0u;
         while (consumed < active_size) {
             const auto length = static_cast<std::size_t>(

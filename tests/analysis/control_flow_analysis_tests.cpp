@@ -119,7 +119,9 @@ int main() {
     require(has_instruction(call, 6u), "Rueckkehrpfad des indirekten JSR fehlt.");
     require(has_instruction(call, 4u), "Delay Slot des indirekten JSR fehlt.");
     const auto* call_function = find_function(call, 12u);
-    require(call_function != nullptr, "Indirektes JSR-Ziel ist kein Funktionskandidat.");
+    if (call_function == nullptr) {
+        throw std::runtime_error("Indirektes JSR-Ziel ist kein Funktionskandidat.");
+    }
     require(call_function->origins ==
                 std::vector<katana::analysis::FunctionOrigin>{
                     katana::analysis::FunctionOrigin::IndirectCall},
@@ -257,7 +259,9 @@ int main() {
     const auto table_call =
         katana::analysis::analyze_control_flow(table_call_image, &table_override);
     const auto* table_function = find_function(table_call, 12u);
-    require(table_function != nullptr, "JSR-Tabelle erzeugte keinen Funktionskandidaten.");
+    if (table_function == nullptr) {
+        throw std::runtime_error("JSR-Tabelle erzeugte keinen Funktionskandidaten.");
+    }
     require(table_function->origins ==
                 std::vector<katana::analysis::FunctionOrigin>{
                     katana::analysis::FunctionOrigin::JumpTableCall,

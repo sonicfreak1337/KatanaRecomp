@@ -102,6 +102,7 @@ if(KATANA_REPRODUCIBLE_ARTIFACTS)
     if(MSVC)
         add_compile_options(
             /Brepro
+            /experimental:deterministic
             "/pathmap:${CMAKE_SOURCE_DIR}=."
         )
         add_link_options(/Brepro)

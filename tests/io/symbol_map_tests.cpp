@@ -46,12 +46,17 @@ int main() {
     require(image.symbols().size() == 3u, "Map-Symbole wurden nicht vollstaendig geladen.");
     require(image.symbols()[0].name == "start", "Symbole sind nicht deterministisch sortiert.");
     const auto* start = image.find_symbol("start");
-    require(start != nullptr && start->address == 0x8C010000u && start->size == 4u,
-            "Funktionssymbol ist falsch.");
+    if (start == nullptr) {
+        throw std::runtime_error("Funktionssymbol fehlt.");
+    }
+    require(start->address == 0x8C010000u && start->size == 4u, "Funktionssymbol ist falsch.");
     require(start->kind == SymbolKind::Function && start->binding == SymbolBinding::Global,
             "Symbolart oder Bindung ist falsch.");
-    require(image.find_symbol("global_data")->kind == SymbolKind::Object,
-            "Datensymbol ist falsch klassifiziert.");
+    const auto* global_data = image.find_symbol("global_data");
+    if (global_data == nullptr) {
+        throw std::runtime_error("Datensymbol fehlt.");
+    }
+    require(global_data->kind == SymbolKind::Object, "Datensymbol ist falsch klassifiziert.");
 
     save(path, "8C010000 WRONG bad\n");
     ExecutableImage invalid;

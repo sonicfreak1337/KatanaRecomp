@@ -30,7 +30,7 @@ int main() {
     static_assert(katana::runtime::banked_register_count == 8u);
     static_assert(katana::runtime::fpu_register_count == 16u);
 
-    require(katana::runtime::abi_version == 8u, "Die PREF-Beobachtung erfordert Runtime-ABI 8.");
+    static_assert(katana::runtime::abi_version == 8u);
 
     CpuState cpu;
 
