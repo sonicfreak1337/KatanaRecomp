@@ -1142,7 +1142,7 @@ Akzeptanz:
 - lokale absolute Pfade und Hostadressen erscheinen nicht in der Ausgabe
 - ein 10.000-Block-Synthetikprojekt wird reproduzierbar partitioniert
 
-### [ ] KR-3401 - Laufzeit-Blocktabelle
+### [x] KR-3401 - Laufzeit-Blocktabelle
 
 Abhaengigkeiten: KR-1807, KR-2102
 
