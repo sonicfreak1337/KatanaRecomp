@@ -1,8 +1,8 @@
 # Projektstatus
 
-Version: 0.33.0
+Version: 0.34.0
 Phase: Pre-Alpha
-Naechster Meilenstein: v0.34.0 - Indirekter Dispatch und Fallback
+Naechster Meilenstein: v0.35.0 - Projektmanifest und stabile CLI
 
 ## Zusammenfassung
 
@@ -13,8 +13,8 @@ KatanaRecomp besitzt einen durchgaengigen Prototyp-Pfad von Raw- und ELF32-SH-Ei
 ### Gesamtprojekt
 
 - [x] Kernunterbau abgeschlossen: Phasen 1 bis 5 sind vollstaendig umgesetzt
-- [~] Gesamtfortschritt nach gepflegten Roadmap-Tasks: 143 von 238 Tasks abgeschlossen = 60.1%
-- [~] Fortschritt auf dem Weg von Dreamcast-Plattform bis einschliesslich Alpha-Gate: 49 von 140 Tasks abgeschlossen = 35.0%
+- [~] Gesamtfortschritt nach gepflegten Roadmap-Tasks: 144 von 238 Tasks abgeschlossen = 60.5%
+- [~] Fortschritt auf dem Weg von Dreamcast-Plattform bis einschliesslich Alpha-Gate: 50 von 140 Tasks abgeschlossen = 35.7%
 - [ ] Alpha-Gate erreicht: nein; Alpha verlangt eine aus der lokalen
   Sonic-Adventure-GDI erzeugte und gestartete `game.exe`, die reproduzierbar
   `SA_ALPHA_BOOTED` erreicht
@@ -37,7 +37,8 @@ Praktische Einordnung:
 - [x] Der verteilbare kumulative Phase-6-Test erreicht `KR_PHASE6_PLATFORM_INTEGRATED`; die fruehere lokale GDI-Blockprobe gilt nur als historische Quellen-/Bootblockdiagnose
 - [x] Modulare Backend-, Block-ABI- und Plattformdienst-Schnittstelle von v0.32.0 abgeschlossen
 - [x] Skalierbare, deterministische und inkrementelle Codeausgabe von v0.33.0 abgeschlossen
-- [~] Der naechste Engpass ist der indirekte Dispatch, Fallback und die Codeinvalidierung von v0.34.0
+- [x] Indirekter Dispatch, Fallback und Codeinvalidierung von v0.34.0 sind abgeschlossen
+- [~] Der naechste Engpass ist das versionierte Projektmanifest und der offizielle Port-Projektexport von v0.35.0
 - [ ] Der offizielle `.gdi`-zu-Port-Projektexport mit getrenntem generiertem und
   handgeschriebenem Code sowie ausfuehrbarem Host-Target `game.exe` ist als
   `KR-3507` fuer v0.35.0 geplant
@@ -53,7 +54,7 @@ Praktische Einordnung:
 - [x] Phase 4 - Runtime-Grundlage: 18/18 Tasks = 100%
 - [x] Phase 5 - SH-4 FPU: 10/10 Tasks = 100%
 - [x] Phase 6 - Dreamcast-Plattform: 29/29 Tasks und Abschlussgate = 100%
-- [~] Phase 7 - Codegen und Dispatch: 20/21 Tasks = 95.2%
+- [x] Phase 7 - Codegen und Dispatch: 21/21 Tasks = 100%
 - [ ] Phase 8 - Werkzeuge und Qualitaet: 0/26 Tasks = 0%
 - [ ] Phase 9 - Kompatibilitaet und Leistung: 0/24 Tasks = 0%
 - [ ] Phase 10 - Desktop-GUI und Quellworkflow: 0/13 Tasks = 0%
@@ -75,18 +76,18 @@ Praktische Einordnung:
 
 ## Teststatus
 
-Letztes abgeschlossenes Release-Gate (`v0.33.0`):
+Letztes abgeschlossenes Release-Gate (`v0.34.0`):
 
 ```text
-100% tests passed out of 132 (frischer lokaler Debug-Build)
+100% tests passed out of 142 (frischer lokaler Debug-Build)
 ```
 
 Aktueller Release-Stand:
 
 ```text
-132/132 Tests bestanden
-deterministische Partitionierungs-, Cache-, Projekt- und Metadatentests bestanden
-kein Sonic-Adventure-Test am Zwischenrelease v0.33.0 erforderlich oder ausgefuehrt
+142/142 Tests bestanden
+Blockdispatch, Fallback, Invalidierung, Scheduler, Store Queues und Delay Slots bestanden
+kein Sonic-Adventure-Test vor der Alpha-Gate-Vorbereitung KR-4999 ausgefuehrt
 ```
 
 Letzter Entwicklungsnachweis vor Einfuehrung der gebuendelten
@@ -110,7 +111,7 @@ generiertes PREF: SQ0->RAM und SQ1->TA ueber Plattformdienste bestanden
 DMAC-NMI/AE-Verwerfen und DME-Pause bestanden
 BSR/JSR/RTS-Delay-Slot-PR-Semantik bestanden
 Codegen-Pfadcontainment und selektive Bereinigung bestanden
-KR-3411 vom Nutzer freigegeben; Versionierung und Tag noch nicht ausgefuehrt
+KR-3411 abgeschlossen; Release-Commit und exakter Tag v0.34.0 erstellt
 Sonic-Test gemaess Strategie vor KR-4999 nicht ausgefuehrt
 ```
 
@@ -292,7 +293,9 @@ Lokale Sonic-Adventure-Alpha-Akzeptanzstrategie:
 - [x] KR-3408 - MMU- und Zustandswaechter fuer Blockvarianten
 - [x] KR-3409 - Praezise Fallback- und Interpretergrenze
 - [x] KR-3410 - Cache-/Store-Queue-Vertrag und v0.34 Gate-Vorbereitung
-- [ ] Verpflichtender Nutzerreview-Stopp vor KR-3411
+- [x] Verpflichtender Nutzerreview-Stopp und Freigabe vor KR-3411
+- [x] KR-3411 - v0.34.0 Release-Gate, 142/142 Debug, kein Sonic-Test vor KR-4999
+- [ ] KR-3501 - Manifest-Schema und Versionierung
 
 ## Aktuelle Einschraenkungen
 

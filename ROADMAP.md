@@ -1,7 +1,7 @@
 # KatanaRecomp Roadmap
 
 Status: Pre-Alpha
-Aktuelle Basis: v0.33.0
+Aktuelle Basis: v0.34.0
 Planungsmodell: Semantic Versioning, kleine ueberpruefbare Meilensteine
 
 Diese Roadmap beschreibt die technische Entwicklung von KatanaRecomp vom aktuellen Architektur-Prototyp bis zu einem belastbaren Dreamcast-Recompiler-Framework.
@@ -793,7 +793,7 @@ Release-Stand: Alle fuenf Tasks sind abgeschlossen. Das lokale Debug-Gate
 bestand mit 132/132 Tests; der 10.000-Block-Synthetiklauf partitioniert
 reproduzierbar. Als Zwischenrelease wurde kein Sonic-Adventure-Test ausgefuehrt.
 
-### v0.34.0 - Indirekter Dispatch und Fallback
+### [x] v0.34.0 - Indirekter Dispatch und Fallback
 
 Fortschritt:
 
@@ -807,7 +807,7 @@ Fortschritt:
 - [x] KR-3408 - MMU- und Zustandswaechter fuer Blockvarianten
 - [x] KR-3409 - Praezise Fallback- und Interpretergrenze
 - [x] KR-3410 - Cache-/Store-Queue-Vertrag und v0.34 Gate-Vorbereitung
-- [ ] KR-3411 - v0.34 Release-Gate
+- [x] KR-3411 - v0.34 Release-Gate
 
 Review-Nacharbeit vor KR-3411: Scheduler-Resets verwenden keine fremd
 wiederverwendbaren oder doppelten TMU-Ereignisse; DMAC-NMI und -Adressfehler
@@ -818,7 +818,9 @@ bewahren die architektonische PR-Reihenfolge, und Codegen-Artefakte koennen
 ueber Symlink-Komponenten weder geschrieben noch geloescht werden. Die
 vollstaendige KR-3410-Gate-Vorbereitung wurde danach in einem frischen
 Debug-Build mit 142/142 Tests erneut erstellt und vom Nutzer fuer KR-3411
-freigegeben.
+freigegeben. Der Release-Commit ist als v0.34.0 versioniert und der Tag zeigt
+exakt auf diesen bestaetigten Stand; Sonic Adventure bleibt bis KR-4999
+bewusst unausgefuehrt.
 
 Enthalten:
 

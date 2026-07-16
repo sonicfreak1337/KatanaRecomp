@@ -1385,7 +1385,7 @@ Akzeptanz:
   aus dem kanonischen Ausgabeziel; die Regression laeuft auf Hosts mit
   verfuegbarer Symlink-Erzeugung und meldet lokale Privileggrenzen sichtbar
 
-### [ ] KR-3411 - v0.34 Release-Gate
+### [x] KR-3411 - v0.34 Release-Gate
 
 Abhaengigkeiten: KR-3401 bis KR-3410
 
@@ -1398,6 +1398,10 @@ Akzeptanz:
 - keine proprietaere Firmware und kein Referenzprojektcode wurde aufgenommen
 - die unveraenderte KR-3410-Gate-Vorbereitung ist vom Nutzer ausdruecklich
   freigegeben; ohne Freigabe erfolgen weder Versionierung noch Release-Commit
+- `VERSION`, CMake, README, Roadmap, Status, Changelog und Release Notes nennen
+  gemeinsam v0.34.0; der Tag `v0.34.0` zeigt exakt auf den Release-Commit
+- das Gate verwendet den bestaetigten frischen Debug-Build mit 142/142 Tests
+  und fuehrt gemaess der geltenden Strategie keinen Sonic-Adventure-Test aus
 
 ---
 

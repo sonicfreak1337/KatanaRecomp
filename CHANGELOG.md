@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.34.0] - 2026-07-16
+
 ### Behoben
 
 - KR-3101-Nacharbeit: Scheduler-Resets recyceln keine Ereignis-IDs mehr und benachrichtigen registrierte Laufzeitzeitgeber. Aktive TMU-/RTC-Quellen werden auf Zyklus null neu verankert, ohne spaeter ueber veraltete Handles fremde Ereignisse zu loeschen oder einzufrieren.
