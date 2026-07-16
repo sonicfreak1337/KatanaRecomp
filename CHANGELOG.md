@@ -182,6 +182,10 @@
 
 ### Behoben
 
+- KR-4604 wurde nach den Reviewkorrekturen auf Commit `e7b19ba` erneut mit
+  genau einem frischen Build ausgefuehrt: 168/168 Tests, ASan, statische
+  Analyse, Coverage, null stille Homebrew-Fehler und
+  `KR_V046_RETAIL_BOOT_SERVICES_READY`.
 - Reviewkorrektur: Produktiver HLE-Boot installiert und besitzt die sechs
   BIOS-ABI-Vektoren samt Runtimeblocktabelle und Firmware-Handoff selbst. Der
   GDI-Portexport uebernimmt `execution.firmware` in die erzeugte `game.exe`.

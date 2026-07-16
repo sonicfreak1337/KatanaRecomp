@@ -4,7 +4,7 @@ Interner Entwicklungsmeilenstein: `0.45.0`
 
 Phase: Pre-Alpha
 
-Naechster Roadmap-Task: Phase 11 / KR-4604 (Gate nach Reviewkorrekturen wiederholen)
+Naechster Roadmap-Task: Phase 11 / KR-4605 (Nutzerfreigabe liegt bedingt vor)
 
 Naechstes Phasengate: `v0.46.0` - Abschluss Phase 11
 
@@ -12,11 +12,11 @@ Erster oeffentlicher Produktrelease: `v0.50.0` Alpha
 
 ## Fortschritt
 
-- 204 von 236 gepflegten Roadmap-Tasks abgeschlossen: 86,4 %
+- 205 von 236 gepflegten Roadmap-Tasks abgeschlossen: 86,9 %
 - Phase-9-Reviewkorrekturen sind implementiert; das eigenstaendige
   achtteilige Homebrew-Korpus und Linux-Evidenz bleiben offen
 - Phase 10: 13/13 Tasks im freigegebenen Windows-GDI-Workflow
-- Phase 11: 14/16 Tasks
+- Phase 11: 15/16 Tasks
 - Phase 12: 0/10 Tasks
 - Phase 13: 0/5 Tasks vor dem Alpha-Gate
 - Alpha-Gate noch nicht erreicht
@@ -33,7 +33,7 @@ Erster oeffentlicher Produktrelease: `v0.50.0` Alpha
 | 8 | Werkzeuge und Qualitaet | 26/26 |
 | 9 | Kompatibilitaet und Leistung | Reviewkorrekturen offen |
 | 10 | Desktop-GUI und Quellworkflow | 13/13 (Windows-GDI-Scope) |
-| 11 | Bootanalyse und Retail-Systemdienste | 14/16 |
+| 11 | Bootanalyse und Retail-Systemdienste | 15/16 |
 | 12 | Interaktive Retail-Runtime und Portintegration | 0/10 |
 | 13 | Spielbarer Alpha-Kandidat | 0/5 |
 
@@ -64,13 +64,13 @@ Ereignisse gastzeitdeterministisch ueber gemeinsame Pending-, ACK- und
 IRL13/11/9-Maskenregister. Reservierte oder falsch breite MMIO-Zugriffe sind
 harte Fehler statt stiller Erfolge.
 
-Die fruehere v0.46-Gate-Vorbereitung bestand 168/168 Tests im damaligen frischen
-MSVC-x64-Debug-Build mit ASan, statischer Analyse und Coverage. Der gemeinsame
+Die korrigierte v0.46-Gate-Vorbereitung besteht 168/168 Tests in genau einem
+frischen MSVC-x64-Debug-Build mit ASan, statischer Analyse und Coverage. Der gemeinsame
 synthetische Retail-Boot-Service-Slice erreicht
 `KR_V046_RETAIL_BOOT_SERVICES_READY`; Homebrew meldet null stille Fehler.
-[`V046_GATE.md`](V046_GATE.md) dokumentiert den inzwischen durch Reviewbefunde
-invalidierten Nachweis. Nach den produktiven HLE-/ASIC-, Publikations-, Harness-
-und Pfadkorrekturen muss KR-4604 frisch wiederholt werden; KR-4605 bleibt offen.
+[`V046_GATE.md`](V046_GATE.md) dokumentiert den Nachweis auf dem korrigierten
+Commit `e7b19ba`. Die bedingte Nutzerfreigabe fuer KR-4605 wurde nach dem
+erfolgreichen Lauf erteilt; Release-, Tag- oder Paketaktionen bleiben untersagt.
 
 CLI und GUI beobachten denselben sequenzierten hierarchischen Ereignisstrom.
 Gesamtfortschritt ist monoton, Einzelschritte besitzen nur bei bekannter Menge

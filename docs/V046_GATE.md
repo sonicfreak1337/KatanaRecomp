@@ -1,13 +1,11 @@
-# v0.46-Gate-Vorbereitung (durch Reviewkorrekturen invalidiert)
+# v0.46-Gate-Vorbereitung
 
-Der folgende historische Lauf bezog sich auf Commit `0e2fb51`. Spaetere
-Reviewbefunde zeigten fehlende produktive HLE-/ASIC-Verdrahtung sowie Fehler in
-Jobveroeffentlichung, Retail-Harness, Pfadisolation, Live-Log und Linux-
-Prozessbehandlung. Diese Punkte sind korrigiert, veraendern aber den geprueften
-Stand. KR-4604 ist deshalb wieder offen und braucht einen neuen einmaligen
-Fresh-Gate-Lauf, bevor KR-4605 reviewfaehig ist.
+Der vorherige Lauf auf Commit `0e2fb51` wurde nach Reviewbefunden invalidiert.
+Nach den Korrekturen an produktiver HLE-/ASIC-Verdrahtung, Jobveroeffentlichung,
+Retail-Harness, Pfadisolation, Live-Log und Linux-Prozessbehandlung wurde das
+Gate auf Commit `e7b19baea3d68b2bc5e7a441c7f419f74c1752c4` vollstaendig neu ausgefuehrt.
 
-KR-4604 wurde mit genau einem frischen MSVC-x64-Debug-Build in
+KR-4604 wurde auf dem korrigierten Commit mit genau einem frischen MSVC-x64-Debug-Build in
 `build-current/` vorbereitet. AddressSanitizer, statische Analyse und Coverage
 waren aktiv.
 
@@ -35,6 +33,6 @@ Retaildaten noch Release-Commit, Tag, Download oder Paket erzeugt.
 
 ## Reviewgrenze
 
-KR-4605 bleibt offen. Zuerst muss KR-4604 auf dem korrigierten Stand wiederholt
-werden; erst danach kann eine ausdrueckliche Nutzerfreigabe den Beginn von
-Phase 12 / v0.47 erlauben.
+Der Nutzer hat vor dem Lauf ausdruecklich festgelegt, dass ein erfolgreiches
+Gate KR-4605 freigibt. Diese Bedingung ist erfuellt. Die Freigabe erlaubt den
+Beginn von Phase 12 / v0.47, jedoch keine Release-, Tag- oder Paketaktion.
