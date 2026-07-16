@@ -1184,7 +1184,7 @@ Fortschritt:
 - [x] KR-4602 - BIOS-ABI und dynamische Firmwarevektoren
 - [x] KR-4603 - Dreamcast-System-ASIC sowie MMIO- und Interruptintegration
 - [x] KR-4604 - v0.46 Gate-Vorbereitung: Tests und Build
-- [ ] KR-4605 - v0.46 interne Meilenstein-Freigabe
+- [x] KR-4605 - v0.46 interne Meilenstein-Freigabe
 
 Gate-Ergebnis: Ein synthetischer Retail-Boot-Vertical-Slice nutzt denselben
 Firmware-, ASIC-, MMIO- und Interruptvertrag wie spaetere lokale Ports und

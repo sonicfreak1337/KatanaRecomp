@@ -124,11 +124,13 @@
   genau einem frischen MSVC-x64-Debug-Build mit AddressSanitizer, statischer
   Analyse und Coverage. Der gemeinsame synthetische HLE-/BIOS-ABI-/ASIC-
   Vertical-Slice erreicht `KR_V046_RETAIL_BOOT_SERVICES_READY`; Homebrew und
-  Audits melden keine stillen Fehler oder privaten Daten. Ein im ersten Lauf
-  gefundener Handoff-Prioritaetsfehler wurde so korrigiert, dass verifizierte
-  ROM-RAM-Codekopien vor dynamischen Symbolen und Segmenten aufgeloest werden;
-  die vollstaendige Regression lief danach auf demselben Fresh-Build gruen.
-  KR-4605 bleibt vor Release, Tag oder Veroeffentlichung im Nutzerreview.
+  Audits melden keine stillen Fehler oder privaten Daten. Nach spaeteren
+  Reviewkorrekturen wurde der alte Nachweis verworfen und das Gate auf Commit
+  `e7b19ba` vollstaendig frisch und erfolgreich wiederholt.
+- KR-4605: Der Nutzer hat vor dem korrigierten Gate ausdruecklich festgelegt,
+  dass ein erfolgreicher Lauf die interne v0.46-Freigabe erteilt. Der interne
+  Pre-Alpha-Meilenstein ist damit `0.46.0`, und Phase 12 darf beginnen. Es
+  wurden weder Release-Commit noch Tag, Download oder Paket erzeugt.
 - Der neue inkrementelle Entwicklungszyklus behaelt `build-current/`, setzt teure Gate-Instrumentierung beim Debugprofil sicher zurueck und baut sowie testet mit begrenzter Parallelitaet. Das frische Abschluss-Gate bleibt erhalten; die vier deterministischen Fuzzziele laufen mit unveraenderter Fallzahl und denselben abgeleiteten Seeds als parallele CTest-Eintraege.
 - Der Entwicklungsrunner normalisiert auch eine bereits aktive x86-Developer-PowerShell auf die fuer den Projektbuild erforderliche native x64-MSVC-Umgebung.
 - KR-3801 bis KR-3808: Ein intern provenance-gebundenes, vollstaendig

@@ -1,22 +1,22 @@
 # Projektstatus
 
-Interner Entwicklungsmeilenstein: `0.45.0`
+Interner Entwicklungsmeilenstein: `0.46.0`
 
 Phase: Pre-Alpha
 
-Naechster Roadmap-Task: Phase 11 / KR-4605 (Nutzerfreigabe liegt bedingt vor)
+Naechster Roadmap-Task: Phase 12 / KR-4701
 
-Naechstes Phasengate: `v0.46.0` - Abschluss Phase 11
+Naechstes Phasengate: `v0.47.0` - Native Hostruntime
 
 Erster oeffentlicher Produktrelease: `v0.50.0` Alpha
 
 ## Fortschritt
 
-- 205 von 236 gepflegten Roadmap-Tasks abgeschlossen: 86,9 %
+- 206 von 236 gepflegten Roadmap-Tasks abgeschlossen: 87,3 %
 - Phase-9-Reviewkorrekturen sind implementiert; das eigenstaendige
   achtteilige Homebrew-Korpus und Linux-Evidenz bleiben offen
 - Phase 10: 13/13 Tasks im freigegebenen Windows-GDI-Workflow
-- Phase 11: 15/16 Tasks
+- Phase 11: 16/16 Tasks
 - Phase 12: 0/10 Tasks
 - Phase 13: 0/5 Tasks vor dem Alpha-Gate
 - Alpha-Gate noch nicht erreicht
@@ -33,7 +33,7 @@ Erster oeffentlicher Produktrelease: `v0.50.0` Alpha
 | 8 | Werkzeuge und Qualitaet | 26/26 |
 | 9 | Kompatibilitaet und Leistung | Reviewkorrekturen offen |
 | 10 | Desktop-GUI und Quellworkflow | 13/13 (Windows-GDI-Scope) |
-| 11 | Bootanalyse und Retail-Systemdienste | 15/16 |
+| 11 | Bootanalyse und Retail-Systemdienste | 16/16 |
 | 12 | Interaktive Retail-Runtime und Portintegration | 0/10 |
 | 13 | Spielbarer Alpha-Kandidat | 0/5 |
 
@@ -65,12 +65,13 @@ IRL13/11/9-Maskenregister. Reservierte oder falsch breite MMIO-Zugriffe sind
 harte Fehler statt stiller Erfolge.
 
 Die korrigierte v0.46-Gate-Vorbereitung besteht 168/168 Tests in genau einem
-frischen MSVC-x64-Debug-Build mit ASan, statischer Analyse und Coverage. Der gemeinsame
+frischen MSVC-x64-Debug-Build mit ASan, statischer Analyse und Coverage. Der
 synthetische Retail-Boot-Service-Slice erreicht
 `KR_V046_RETAIL_BOOT_SERVICES_READY`; Homebrew meldet null stille Fehler.
 [`V046_GATE.md`](V046_GATE.md) dokumentiert den Nachweis auf dem korrigierten
-Commit `e7b19ba`. Die bedingte Nutzerfreigabe fuer KR-4605 wurde nach dem
-erfolgreichen Lauf erteilt; Release-, Tag- oder Paketaktionen bleiben untersagt.
+Commit `e7b19ba`. KR-4605 ist nach der ausdruecklich bedingten Nutzerfreigabe
+abgeschlossen; Phase 12 darf beginnen, Release-, Tag- oder Paketaktionen
+bleiben untersagt.
 
 CLI und GUI beobachten denselben sequenzierten hierarchischen Ereignisstrom.
 Gesamtfortschritt ist monoton, Einzelschritte besitzen nur bei bekannter Menge

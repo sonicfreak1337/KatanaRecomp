@@ -2649,7 +2649,7 @@ Umfang und Akzeptanz:
 - `KR_V046_RETAIL_BOOT_SERVICES_READY` reproduzierbar belegen
 - danach vor KR-4605 fuer das Nutzerreview stoppen
 
-### [ ] KR-4605 - v0.46 interne Meilenstein-Freigabe
+### [x] KR-4605 - v0.46 interne Meilenstein-Freigabe
 
 Abhaengigkeiten: KR-4604
 
