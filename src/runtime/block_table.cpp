@@ -89,6 +89,17 @@ const RuntimeBlock* RuntimeBlockTable::lookup(
     return found == blocks_.end() ? nullptr : &*found;
 }
 
+const RuntimeBlock* RuntimeBlockTable::lookup_physical(
+    const std::uint32_t physical_address,
+    const BlockVariantKey& variant
+) const noexcept {
+    const auto canonical = canonical_physical_address(physical_address);
+    const auto found = std::find_if(blocks_.begin(), blocks_.end(), [&](const auto& block) {
+        return block.physical_origin == canonical && block.variant == variant;
+    });
+    return found == blocks_.end() ? nullptr : &*found;
+}
+
 std::vector<const RuntimeBlock*> RuntimeBlockTable::aliases(
     const std::uint32_t physical_origin
 ) const {

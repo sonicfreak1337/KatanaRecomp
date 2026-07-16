@@ -790,7 +790,7 @@ reproduzierbar. Als Zwischenrelease wurde kein Sonic-Adventure-Test ausgefuehrt.
 Fortschritt:
 
 - [x] KR-3401 - Laufzeit-Blocktabelle
-- [ ] KR-3402 - Indirekter Call- und Jump-Dispatch
+- [x] KR-3402 - Indirekter Call- und Jump-Dispatch
 - [ ] KR-3403 - Kontrollierter Fallback
 - [ ] KR-3404 - Selbstmodifizierenden Code erkennen
 - [ ] KR-3405 - Alias- und kopierbewusster Firmware-Handoff

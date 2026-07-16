@@ -5,6 +5,7 @@
 ### Hinzugefuegt
 
 - KR-3401: Eine deterministisch sortierte Laufzeit-Blocktabelle verbindet virtuelle Diagnoseadressen, kanonische physische Herkunft, Blockgrenzen, Endtypen und Backendfunktionen. Statische sowie dynamische Eintraege teilen den Lookup; MMU-, FPSCR-, Adressraum- und Runtime-Varianten bleiben explizit, waehrend Ueberlappungsfehler beide Provenienzen nennen.
+- KR-3402: Der generische indirekte Dispatch trennt Calls, Tail-Jumps und Returns, kanonisiert P1-/P2-Ziele ueber den Adressraumvertrag und protokolliert Callsite, Ziel, PR, Quellblock sowie Lookupart. Unbekannte Ziele brechen sichtbar ab; Calls setzen PR, Returns verwenden PR und Jumps bewahren ihn.
 
 ## [0.33.0] - 2026-07-16
 

@@ -36,6 +36,7 @@ add_library(katana_runtime STATIC
     src/runtime/aica.cpp
     src/runtime/block_abi.cpp
     src/runtime/block_table.cpp
+    src/runtime/indirect_dispatch.cpp
     src/runtime/cache_control.cpp
     src/runtime/dma.cpp
     src/runtime/disc.cpp
@@ -156,6 +157,11 @@ add_executable(katana-block-table-tests tests/runtime/block_table_tests.cpp)
 target_link_libraries(katana-block-table-tests PRIVATE katana_runtime)
 katana_enable_warnings(katana-block-table-tests)
 add_test(NAME katana-block-table-tests COMMAND katana-block-table-tests)
+
+add_executable(katana-indirect-dispatch-tests tests/runtime/indirect_dispatch_tests.cpp)
+target_link_libraries(katana-indirect-dispatch-tests PRIVATE katana_runtime)
+katana_enable_warnings(katana-indirect-dispatch-tests)
+add_test(NAME katana-indirect-dispatch-tests COMMAND katana-indirect-dispatch-tests)
 
 add_executable(katana-platform-services-tests tests/runtime/platform_services_tests.cpp)
 target_link_libraries(katana-platform-services-tests PRIVATE katana_core katana_runtime)

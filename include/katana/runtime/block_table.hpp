@@ -42,6 +42,10 @@ public:
         std::uint32_t virtual_address,
         const BlockVariantKey& variant
     ) const noexcept;
+    [[nodiscard]] const RuntimeBlock* lookup_physical(
+        std::uint32_t physical_address,
+        const BlockVariantKey& variant
+    ) const noexcept;
     [[nodiscard]] std::vector<const RuntimeBlock*> aliases(
         std::uint32_t physical_origin
     ) const;

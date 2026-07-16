@@ -1159,7 +1159,7 @@ Akzeptanz:
 - Aliase koennen dieselbe physische Herkunft teilen, ohne virtuelle Diagnosen zu verlieren
 - doppelte oder ueberlappende Eintraege schlagen mit beiden Provenienzen sichtbar fehl
 
-### [ ] KR-3402 - Indirekter Call- und Jump-Dispatch
+### [x] KR-3402 - Indirekter Call- und Jump-Dispatch
 
 Abhaengigkeiten: KR-3401
 
