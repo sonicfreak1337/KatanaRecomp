@@ -1159,7 +1159,7 @@ Fortschritt:
 
 - [x] KR-4506 - PC-relative Literale und indirekte Bootziele aufloesen
 - [x] KR-4507 - Ehrliche Analyseabdeckung und Build-Erfolgskriterien
-- [ ] KR-4508 - Ausfuehrbare `game.exe` mit Bootimage und Runtime-Dispatch
+- [x] KR-4508 - Ausfuehrbare `game.exe` mit Bootimage und Runtime-Dispatch
 - [ ] KR-4501 - Messbarer SH-4-Alpha-ISA-Vertrag
 - [ ] KR-4502 - Fehlende Integer- und Kontrollinstruktionen
 - [ ] KR-4503 - Status-, Exception- und Systemsemantik

@@ -61,43 +61,219 @@ select_functions(const std::span<const katana::ir::Function> program,
 
 std::string generated_header(const std::string& entry_namespace) {
     return "#pragma once\n\n"
+           "#include \"katana/runtime/platform_services.hpp\"\n"
            "#include \"katana/runtime/runtime.hpp\"\n\n"
            "namespace " +
            entry_namespace +
            " {\n"
            "void run(katana::runtime::CpuState& cpu);\n"
+           "struct RuntimeRunResult {\n"
+           "    std::uint64_t indirect_dispatches = 0u;\n"
+           "    std::uint32_t final_pc = 0u;\n"
+           "    std::uint64_t scheduler_cycle = 0u;\n"
+           "};\n"
+           "RuntimeRunResult run_runtime(katana::runtime::CpuState& cpu,\n"
+           "                             katana::runtime::PlatformServices& services);\n"
            "}\n";
 }
 
 std::string handwritten_main(const std::string& entry_namespace) {
     return "#include \"katana_port.hpp\"\n"
-           "#include \"katana/runtime/gdi.hpp\"\n"
-           "#include <exception>\n#include <filesystem>\n#include <iostream>\n#include "
-           "<string_view>\n\n"
+           "#include \"katana/runtime/dreamcast_boot.hpp\"\n"
+           "#include \"katana/runtime/scheduler.hpp\"\n"
+           "#include <algorithm>\n#include <exception>\n#include <filesystem>\n#include "
+           "<iostream>\n"
+           "#include <optional>\n#include <span>\n#include <string>\n#include <string_view>\n"
+           "#include <system_error>\n#include <vector>\n\n"
+           "namespace {\n"
+           "class PortPlatformServices final : public katana::runtime::PlatformServices {\n"
+           "  public:\n"
+           "    explicit PortPlatformServices(katana::runtime::CpuState& cpu) : cpu_(cpu) {}\n"
+           "    std::string_view name() const noexcept override { return \"dreamcast-port\"; }\n"
+           "    std::uint32_t abi_version() const noexcept override {\n"
+           "        return katana::runtime::platform_services_abi_version;\n"
+           "    }\n"
+           "    katana::runtime::PlatformCapabilities capabilities() const noexcept override {\n"
+           "        return katana::runtime::core_platform_capabilities;\n"
+           "    }\n"
+           "    void read_memory(std::uint32_t address, std::span<std::uint8_t> output) override "
+           "{\n"
+           "        for (auto& byte : output) byte = cpu_.memory.read_u8(address++);\n"
+           "    }\n"
+           "    void write_memory(std::uint32_t address, std::span<const std::uint8_t> input) "
+           "override {\n"
+           "        for (const auto byte : input) cpu_.memory.write_u8(address++, byte);\n"
+           "    }\n"
+           "    std::uint64_t scheduler_cycle() const noexcept override {\n"
+           "        return scheduler_.current_cycle();\n"
+           "    }\n"
+           "    katana::runtime::PlatformSchedulerResult\n"
+           "    advance_scheduler(std::uint64_t cycle, std::size_t budget) override {\n"
+           "        const auto target = std::max(cycle, scheduler_.current_cycle());\n"
+           "        const auto result = scheduler_.advance_to(target, budget);\n"
+           "        return {result.guest_cycle, result.processed_events,\n"
+           "                result.status == "
+           "katana::runtime::SchedulerAdvanceStatus::EventBudgetExhausted};\n"
+           "    }\n"
+           "    std::optional<katana::runtime::PlatformInterruptRequest> poll_interrupt() override "
+           "{\n"
+           "        return std::nullopt;\n"
+           "    }\n"
+           "    katana::runtime::PlatformDmaResult\n"
+           "    start_dma(const katana::runtime::PlatformDmaRequest& request) override {\n"
+           "        std::vector<std::uint8_t> bytes(request.length);\n"
+           "        read_memory(request.source, bytes);\n"
+           "        write_memory(request.destination, bytes);\n"
+           "        return {request.length, true};\n"
+           "    }\n"
+           "    katana::runtime::PlatformFallbackResult controlled_fallback(\n"
+           "        katana::runtime::CpuState&, const katana::runtime::PlatformFallbackRequest&) "
+           "override {\n"
+           "        return {};\n"
+           "    }\n"
+           "    bool prefetch(katana::runtime::CpuState& cpu, std::uint32_t address) override {\n"
+           "        katana::runtime::prefetch(cpu, address);\n"
+           "        return true;\n"
+           "    }\n"
+           "  private:\n"
+           "    katana::runtime::CpuState& cpu_;\n"
+           "    katana::runtime::EventScheduler scheduler_;\n"
+           "};\n\n"
+           "std::string redact_source(std::string message, const std::filesystem::path& source) {\n"
+           "    std::error_code path_error;\n"
+           "    const auto absolute = std::filesystem::absolute(source, path_error);\n"
+           "    const std::vector<std::string> values{source.string(), "
+           "source.parent_path().string(),\n"
+           "                                          path_error ? std::string{} : "
+           "absolute.string(),\n"
+           "                                          path_error ? std::string{} : "
+           "absolute.parent_path().string()};\n"
+           "    for (const auto& value : values) {\n"
+           "        if (value.empty()) continue;\n"
+           "        for (auto offset = message.find(value); offset != std::string::npos;\n"
+           "             offset = message.find(value, offset + 12u)) {\n"
+           "            message.replace(offset, value.size(), \"<gdi-source>\");\n"
+           "        }\n"
+           "    }\n"
+           "    return message;\n"
+           "}\n"
+           "} // namespace\n\n"
            "int main(const int argc, const char* const* argv) {\n"
+           "    std::filesystem::path source;\n"
            "    try {\n"
-           "        if (argc == 3 && std::string_view(argv[1]) == \"--gdi\") {\n"
-           "            const auto disc = "
-           "katana::runtime::GdiDiscSource::open(std::filesystem::path(argv[2]));\n"
-           "            std::cout << \"DiscSource bereit: \" << disc->identity() << '\\n';\n"
-           "            return 0;\n"
+           "        if (argc == 2 && !std::string_view(argv[1]).empty() &&\n"
+           "            std::string_view(argv[1]).front() != '-') {\n"
+           "            source = argv[1];\n"
+           "        } else if (argc == 3 && (std::string_view(argv[1]) == \"--gdi\" ||\n"
+           "                                      std::string_view(argv[1]) == "
+           "\"--run-generated\")) {\n"
+           "            source = argv[2];\n"
+           "        } else {\n"
+           "            std::cerr << \"Aufruf: game <disc.gdi> oder game --gdi <disc.gdi>\\n\";\n"
+           "            return 2;\n"
            "        }\n"
-           "        if (argc == 2 && std::string_view(argv[1]) == \"--run-generated\") {\n"
-           "            katana::runtime::CpuState cpu;\n"
-           "            " +
+           "        const auto boot = katana::runtime::load_dreamcast_runtime_boot(source);\n"
+           "        katana::runtime::CpuState cpu;\n"
+           "        const auto state = katana::runtime::initialize_dreamcast_runtime(cpu, boot);\n"
+           "        PortPlatformServices services(cpu);\n"
+           "        const auto result = " +
            entry_namespace +
-           "::run(cpu);\n"
-           "            std::cout << \"Generierter Einstieg beendet.\\n\";\n"
-           "            return 0;\n"
+           "::run_runtime(cpu, services);\n"
+           "        if (result.indirect_dispatches == 0u || state.loaded_boot_bytes == 0u) {\n"
+           "            throw std::runtime_error(\"Runtime-Einstieg besitzt keinen "
+           "Dispatchnachweis.\");\n"
            "        }\n"
-           "        std::cout << \"Katana-Port bereit. Optionen: --gdi <Quelle>, "
-           "--run-generated\\n\";\n"
+           "        std::cout << \"KR_GENERATED_RUNTIME_STARTED boot_bytes=\"\n"
+           "                  << state.loaded_boot_bytes << \" indirect_dispatches=\"\n"
+           "                  << result.indirect_dispatches << \" final_pc=\" << result.final_pc "
+           "<< '\\n';\n"
            "        return 0;\n"
            "    } catch (const std::exception& error) {\n"
-           "        std::cerr << \"Portlauf fehlgeschlagen: \" << error.what() << '\\n';\n"
+           "        std::cerr << \"Portlauf fehlgeschlagen: \"\n"
+           "                  << redact_source(error.what(), source) << '\\n';\n"
            "        return 1;\n"
            "    }\n"
            "}\n";
+}
+
+std::string runtime_dispatch_adapter(const std::string& entry_namespace,
+                                     const std::span<const katana::ir::Function> program,
+                                     const std::uint32_t entry_address) {
+    const auto symbol = [](const std::uint32_t address) {
+        std::ostringstream output;
+        output << std::hex << std::uppercase << std::setw(8) << std::setfill('0') << address;
+        return output.str();
+    };
+    std::ostringstream output;
+    output << "#include \"../include/katana_port.hpp\"\n"
+           << "#include \"katana/runtime/block_abi.hpp\"\n"
+           << "#include \"katana/runtime/block_table.hpp\"\n"
+           << "#include \"katana/runtime/dispatch_diagnostics.hpp\"\n"
+           << "#include \"katana/runtime/indirect_dispatch.hpp\"\n"
+           << "#include <stdexcept>\n\n"
+           << "namespace " << entry_namespace << " {\n";
+    for (const auto& function : program) {
+        output << "void fn_" << symbol(function.entry_address)
+               << "_with_services(katana::runtime::CpuState&, "
+                  "katana::runtime::PlatformServices*);\n";
+    }
+    output << "namespace {\n"
+           << "thread_local katana::runtime::PlatformServices* active_services = nullptr;\n"
+           << "class ServiceScope {\n"
+           << "  public:\n"
+           << "    explicit ServiceScope(katana::runtime::PlatformServices& services) {\n"
+           << "        if (active_services != nullptr) throw std::runtime_error(\"Runtime-Dispatch "
+              "ist nicht reentrant.\");\n"
+           << "        active_services = &services;\n"
+           << "    }\n"
+           << "    ~ServiceScope() { active_services = nullptr; }\n"
+           << "};\n";
+    for (const auto& function : program) {
+        const auto address = symbol(function.entry_address);
+        output << "katana::runtime::BlockExit dispatch_" << address
+               << "(katana::runtime::CpuState& cpu, katana::runtime::BlockExecutionContext& "
+                  "context) {\n"
+               << "    if (active_services == nullptr) throw "
+                  "std::runtime_error(\"Runtime-Plattformdienste fehlen.\");\n"
+               << "    fn_" << address << "_with_services(cpu, active_services);\n"
+               << "    return katana::runtime::make_block_exit(cpu, context,\n"
+               << "        katana::runtime::BlockEndKind::Fallthrough, {0x" << address
+               << "u, katana::runtime::canonical_physical_address(0x" << address
+               << "u)}, katana::runtime::BlockAddress{cpu.pc, "
+                  "katana::runtime::canonical_physical_address(cpu.pc)});\n"
+               << "}\n";
+    }
+    output << "} // namespace\n\n"
+           << "RuntimeRunResult run_runtime(katana::runtime::CpuState& cpu,\n"
+           << "                             katana::runtime::PlatformServices& services) {\n"
+           << "    katana::runtime::validate_platform_services(services);\n"
+           << "    katana::runtime::RuntimeBlockTable table;\n";
+    for (const auto& function : program) {
+        const auto address = symbol(function.entry_address);
+        output << "    table.register_static({0x" << address
+               << "u, katana::runtime::canonical_physical_address(0x" << address
+               << "u), 2u, katana::runtime::BlockEndKind::Fallthrough, {}, &dispatch_" << address
+               << ", \"generated-" << address << "\"});\n";
+    }
+    const auto entry = symbol(entry_address);
+    output << "    katana::runtime::DispatchDiagnosticRecorder diagnostics;\n"
+           << "    katana::runtime::BlockExecutionContext context;\n"
+           << "    context.scheduler_cycle = services.scheduler_cycle();\n"
+           << "    context.scheduler_event_budget = 1024u;\n"
+           << "    ServiceScope scope(services);\n"
+           << "    const auto selected = katana::runtime::dispatch_indirect(\n"
+           << "        cpu, table, {katana::runtime::IndirectDispatchKind::TailJump, 0x" << entry
+           << "u, 0x" << entry << "u, 0u, {0x" << entry
+           << "u, katana::runtime::canonical_physical_address(0x" << entry
+           << "u)}, {}, katana::runtime::DispatchResolutionOrigin::TableLookup, &diagnostics});\n"
+           << "    if (selected.block == nullptr || selected.block->function == nullptr)\n"
+           << "        throw std::runtime_error(\"Runtime-Dispatchziel besitzt keinen generierten "
+              "Block.\");\n"
+           << "    static_cast<void>(selected.block->function(cpu, context));\n"
+           << "    return {diagnostics.total_occurrences(), cpu.pc, services.scheduler_cycle()};\n"
+           << "}\n"
+           << "} // namespace " << entry_namespace << "\n";
+    return output.str();
 }
 
 std::string root_cmake() {
@@ -287,6 +463,9 @@ PortExportResult export_dreamcast_port_project(const PreparedPortProgram& prepar
     provenance.inputs.assign(prepared.inputs.begin(), prepared.inputs.end());
 
     artifacts.push_back({"include/katana_port.hpp", generated_header(entry_namespace)});
+    artifacts.push_back(
+        {"code/runtime-dispatch.cpp",
+         runtime_dispatch_adapter(entry_namespace, prepared.program, prepared.entry_address)});
     artifacts.push_back({"katana-port.cmake", port_cmake(options.target_name)});
     artifacts.push_back({"metadata/port-project.json",
                          port_metadata(options,

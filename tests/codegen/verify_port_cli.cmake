@@ -49,22 +49,47 @@ execute_process(
   OUTPUT_VARIABLE game_output
   ERROR_VARIABLE game_error
 )
-if(NOT game_result EQUAL 0 OR NOT game_output MATCHES "Katana-Port bereit")
+if(game_result EQUAL 0 OR NOT game_error MATCHES "Aufruf: game")
   file(REMOVE_RECURSE "${fixture}")
-  message(FATAL_ERROR "Gebautes Porttarget ist nicht lauffaehig: ${game_error}")
+  message(FATAL_ERROR "Porttarget akzeptiert eine fehlende GDI: ${game_output} ${game_error}")
 endif()
 
 execute_process(
-  COMMAND "${game}" --run-generated
+  COMMAND "${game}" "${fixture}/disc/disc.gdi"
   RESULT_VARIABLE generated_result
   OUTPUT_VARIABLE generated_output
   ERROR_VARIABLE generated_error
 )
-if(NOT generated_result EQUAL 0 OR NOT generated_output MATCHES "Generierter Einstieg beendet")
+if(NOT generated_result EQUAL 0 OR
+   NOT generated_output MATCHES "KR_GENERATED_RUNTIME_STARTED" OR
+   NOT generated_output MATCHES "indirect_dispatches=1")
   file(REMOVE_RECURSE "${fixture}")
   message(FATAL_ERROR
-    "Mehrteiliger generierter Zielcode ist nicht lauffaehig: ${generated_error}")
+    "Eigenstaendiger GDI-/Runtimepfad ist nicht lauffaehig: ${generated_error}")
+endif()
+
+execute_process(
+  COMMAND "${game}" --run-generated
+  RESULT_VARIABLE missing_generated_result
+  OUTPUT_VARIABLE missing_generated_output
+  ERROR_VARIABLE missing_generated_error
+)
+if(missing_generated_result EQUAL 0)
+  file(REMOVE_RECURSE "${fixture}")
+  message(FATAL_ERROR "--run-generated akzeptiert einen Lauf ohne Bootimage")
+endif()
+
+execute_process(
+  COMMAND "${game}" --gdi "${fixture}/missing/disc.gdi"
+  RESULT_VARIABLE missing_source_result
+  OUTPUT_VARIABLE missing_source_output
+  ERROR_VARIABLE missing_source_error
+)
+if(missing_source_result EQUAL 0 OR missing_source_error MATCHES "${fixture}")
+  file(REMOVE_RECURSE "${fixture}")
+  message(FATAL_ERROR
+    "Fehlende GDI liefert Erfolg oder einen unredigierten Hostpfad: ${missing_source_error}")
 endif()
 
 file(REMOVE_RECURSE "${fixture}")
-message(STATUS "KR-3507 Port-CLI und synthetischer Hostbuild erfolgreich")
+message(STATUS "KR-3507/KR-4508 Port-CLI, GDI-Runtime und Hostbuild erfolgreich")

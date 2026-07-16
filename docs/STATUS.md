@@ -4,7 +4,7 @@ Interner Entwicklungsmeilenstein: `0.44.0`
 
 Phase: Pre-Alpha
 
-Naechster Roadmap-Task: Phase 11 / KR-4508
+Naechster Roadmap-Task: Phase 11 / KR-4501
 
 Naechstes Phasengate: `v0.46.0` - Abschluss Phase 11
 
@@ -12,11 +12,11 @@ Erster oeffentlicher Produktrelease: `v0.50.0` Alpha
 
 ## Fortschritt
 
-- 192 von 236 gepflegten Roadmap-Tasks abgeschlossen: 81,4 %
+- 193 von 236 gepflegten Roadmap-Tasks abgeschlossen: 81,8 %
 - Phase-9-Reviewkorrekturen sind implementiert; das eigenstaendige
   achtteilige Homebrew-Korpus und Linux-Evidenz bleiben offen
 - Phase 10: 13/13 Tasks im freigegebenen Windows-GDI-Workflow
-- Phase 11: 2/16 Tasks
+- Phase 11: 3/16 Tasks
 - Phase 12: 0/10 Tasks
 - Phase 13: 0/5 Tasks vor dem Alpha-Gate
 - Alpha-Gate noch nicht erreicht
@@ -33,7 +33,7 @@ Erster oeffentlicher Produktrelease: `v0.50.0` Alpha
 | 8 | Werkzeuge und Qualitaet | 26/26 |
 | 9 | Kompatibilitaet und Leistung | Reviewkorrekturen offen |
 | 10 | Desktop-GUI und Quellworkflow | 13/13 (Windows-GDI-Scope) |
-| 11 | Bootanalyse und Retail-Systemdienste | 2/16 |
+| 11 | Bootanalyse und Retail-Systemdienste | 3/16 |
 | 12 | Interaktive Retail-Runtime und Portintegration | 0/10 |
 | 13 | Spielbarer Alpha-Kandidat | 0/5 |
 
@@ -46,6 +46,14 @@ Der durchgaengige Pfad verarbeitet Raw-, ELF32-SH-, Projektmanifest- und
 validierte GDI-Eingaben ueber Executable Image, Decoder, Kontrollflussanalyse,
 Katana-IR und partitionierten C++-Codegen bis zu einem extern buildbaren
 Hostprojekt.
+
+Die erzeugte Hostanwendung ist kein Platzhalter mehr. `game.exe <disc.gdi>`
+laedt die Bootdatei read-only aus der GDI, initialisiert den definierten
+Dreamcast-Speicher- und CPU-Zustand, Scheduler und Plattformdienste und ruft
+den generierten Einstieg ueber die Runtime-Blocktabelle auf. Der verteilbare
+synthetische Nachweis erreicht dabei einen diagnostizierten indirekten
+Dispatch ohne KatanaRecomp-CLI. Das ist noch kein Sonic-Boot- oder
+Spielbarkeitsnachweis.
 
 Die Windows-GUI reduziert den Nutzerworkflow bewusst auf `.gdi` und
 Ausgabeordner. Der komplette Recompile-Lauf bleibt responsiv sichtbar.

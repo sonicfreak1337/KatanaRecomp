@@ -36,6 +36,7 @@ port/
     build.ninja
     compile_commands.json
     katana-port.cmake
+    code/runtime-dispatch.cpp
     code/unit-*.cpp
     include/katana_port.hpp
     metadata/port-project.json
@@ -56,7 +57,9 @@ werden abgelehnt.
 
 Der CLI-Aufruf bindet KatanaRecomp fuer den lokalen Debugbuild ueber den
 expliziten CMake-Parameter
-`KATANA_RUNTIME_ROOT` ein. Die generierten Quellen pruefen Runtime-ABI 8 beim
+`KATANA_RUNTIME_ROOT` ein. Portprojekt-Vertragsversion 2 ergaenzt den
+eigenstaendigen Runtime- und GDI-Einstieg. Die generierten Quellen pruefen
+Runtime-ABI 8 beim
 Kompilieren; portable Dateien enthalten keinen absoluten lokalen Quellpfad. Der
 Build liegt getrennt unter `port/build/`. Konfigurations- oder Buildfehler enden
 mit dem stabilen CLI-Exitcode `7` (`build-failure`). Die folgenden Befehle zeigen
@@ -67,13 +70,23 @@ cmake -S .\port -B .\port\build -G Ninja `
   -DCMAKE_BUILD_TYPE=Debug `
   -DKATANA_RUNTIME_ROOT=<KatanaRecomp-Quellbaum>
 cmake --build .\port\build --target game
+.\port\build\game.exe .\disc\game.gdi
 ```
 
-Das Hostprogramm akzeptiert zur lokalen Validierung `--gdi <Quelle>`. Diese
-Anbindung verwendet die austauschbare `DiscSource`-Grenze. Ein Folgeprojekt kann
-`src/main.cpp` durch eine eigene DiscSource- und Assetintegration ersetzen,
-ohne generierten Spielcode zu aendern. KatanaRecomp verspricht ohne diese
-Folgeintegration nicht, dass die GDI nach dem Export geloescht werden kann.
+Das Hostprogramm fuehrt mit `game.exe <Quelle.gdi>` standardmaessig den
+generierten Code aus; `--gdi <Quelle>` ist ein gleichwertiger expliziter
+Schalter. `--run-generated <Quelle>` bleibt ein Diagnosealias, akzeptiert aber
+bewusst keinen Lauf ohne Bootimage. Die Runtime liest Bootmetadaten und
+ISO9660-Bootdatei ueber die austauschbare `DiscSource`-Grenze, initialisiert
+Dreamcast-Hauptspeicher, VRAM, AICA-RAM, Flash, CPU und Scheduler und waehlt
+den Programmeinstieg ueber die generische Blocktabelle. Der erste indirekte
+Dispatch wird strukturiert diagnostiziert; ein fehlendes Ziel oder ein
+Speicherfehler kann nicht als erfolgreicher Prozess enden.
+
+Ein Folgeprojekt kann `src/main.cpp` durch eine eigene DiscSource- und
+Assetintegration ersetzen, ohne generierten Spielcode zu aendern.
+KatanaRecomp verspricht ohne diese Folgeintegration nicht, dass die GDI nach
+dem Export geloescht werden kann.
 
 Metadaten und Provenienz enthalten nur Zielkennung, ABI-/Partitionsdaten,
 Groessen und SHA-256-Werte. Absolute GDI-, Track-, Build- und Hostpfade werden

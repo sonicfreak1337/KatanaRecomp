@@ -291,3 +291,19 @@ spaetere Plattformkonfiguration.
 
 - sichtbare Fehlerpfade fuer ungeloeste Calls und Spruenge
 - Runtime-Tests fuer CPU-Zustand, Reset, Speicherbus, Ausrichtung, strukturierte Fehler, Traces, Watchpoints, breitenbewusste MMIO-Handler sowie Dreamcast-RAM-, VRAM-, AICA-RAM-, BIOS- und Flash-Aliase
+
+## Eigenstaendiger Disc-Boot fuer Portanwendungen
+
+`load_dreamcast_runtime_boot` oeffnet eine GDI read-only, validiert die
+Dreamcast-Bootmetadaten, liest die benannte ISO9660-Bootdatei zweimal ueber
+dieselbe `DiscSource` und lehnt leere, zu grosse oder instabile Eingaben ab.
+`initialize_dreamcast_runtime` ersetzt den Legacy-Testbus durch die definierten
+Dreamcast-Aliase fuer Hauptspeicher, VRAM, AICA-RAM und Flash, kopiert die
+Bootdatei nach `0x8C010000` und setzt PC und Stack deterministisch.
+
+Das Portprojekt registriert jeden generierten Funktionseinstieg als statischen
+Runtimeblock. Die eigenstaendige Hostanwendung loest den Programmeinstieg ueber
+`dispatch_indirect`, protokolliert die Entscheidung und ruft erst danach die
+registrierte Backendfunktion mit validierten Plattformdiensten auf. Fehlende
+Bloecke, Speicherabbildungen oder Bootquellen propagieren als Nichtnull-Exitcode;
+der Aufruferpfad wird vor der Ausgabe redigiert.

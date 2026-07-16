@@ -105,9 +105,11 @@ and internal workflow documentation. It also contains a minimal source-based
 discovers this directory beside the executable or accepts an explicit
 `KATANA_RUNTIME_ROOT`; no compiled-in developer source path is used.
 
-The packaging test copies the candidate to a different directory and performs
-a complete synthetic GDI workflow through `game.exe`. This proves relocation,
-runtime discovery and host compilation together. Windows Debug candidates also
+The packaging test copies the candidate to a different directory, performs a
+complete synthetic GDI workflow and then runs the resulting `game.exe` with the
+fixture until its boot-image and indirect-dispatch marker. This proves
+relocation, runtime discovery, host compilation and the standalone runtime
+together. Windows Debug candidates also
 carry the matching MSVC AddressSanitizer runtime so the packaged smoke test is
 standalone. The package is not a release. The logo
 was supplied through the private project intake and is committed with its

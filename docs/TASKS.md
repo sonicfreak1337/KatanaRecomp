@@ -2414,7 +2414,7 @@ Akzeptanz:
 - synthetische vollstaendige und absichtlich unvollstaendige Programme decken
   alle drei Ergebniszustaende ab
 
-### [ ] KR-4508 - Ausfuehrbare `game.exe` mit Bootimage und Runtime-Dispatch
+### [x] KR-4508 - Ausfuehrbare `game.exe` mit Bootimage und Runtime-Dispatch
 
 Abhaengigkeiten: KR-4506, KR-4507, KR-3507
 

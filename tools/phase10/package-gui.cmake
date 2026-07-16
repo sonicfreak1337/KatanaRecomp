@@ -121,6 +121,19 @@ if(NOT relocated_build_result EQUAL 0 OR
     message(FATAL_ERROR
         "Relocated package full GDI build failed: ${relocated_build_output} ${relocated_build_error}")
 endif()
+execute_process(
+    COMMAND "${relocated_root}/workflow-output/game${executable_suffix}"
+            "${relocated_root}/fixture/disc.gdi"
+    RESULT_VARIABLE relocated_game_result
+    OUTPUT_VARIABLE relocated_game_output
+    ERROR_VARIABLE relocated_game_error
+)
+if(NOT relocated_game_result EQUAL 0 OR
+   NOT relocated_game_output MATCHES "KR_GENERATED_RUNTIME_STARTED" OR
+   NOT relocated_game_output MATCHES "indirect_dispatches=1")
+    message(FATAL_ERROR
+        "Relocated game GDI runtime failed: ${relocated_game_output} ${relocated_game_error}")
+endif()
 file(REMOVE_RECURSE "${relocated_root}")
 
 set(entries

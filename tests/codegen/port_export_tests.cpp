@@ -1,4 +1,5 @@
 #include "katana/codegen/port_export.hpp"
+#include "katana/runtime/dreamcast_boot.hpp"
 
 #include <algorithm>
 #include <array>
@@ -156,6 +157,11 @@ std::map<std::string, std::string> snapshot(const std::filesystem::path& root) {
     return result;
 }
 
+std::string read_text(const std::filesystem::path& path) {
+    std::ifstream input(path, std::ios::binary);
+    return {std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>()};
+}
+
 } // namespace
 
 int run_test(const int argc, char* argv[]) {
@@ -170,6 +176,14 @@ int run_test(const int argc, char* argv[]) {
     Fixture fixture;
     write_fixture(fixture.root / "disc");
     const auto gdi = fixture.root / "disc" / "disc.gdi";
+    const auto runtime_boot = katana::runtime::load_dreamcast_runtime_boot(gdi);
+    katana::runtime::CpuState runtime_cpu;
+    const auto runtime_state =
+        katana::runtime::initialize_dreamcast_runtime(runtime_cpu, runtime_boot);
+    require(runtime_state.loaded_boot_bytes == 24u && runtime_cpu.pc == 0x8C010000u &&
+                runtime_cpu.r[15] == 0x8D000000u &&
+                runtime_cpu.memory.read_u16(0x8C010000u) == 0xB006u,
+            "Eigenstaendiger GDI-Boot initialisiert Bootimage, CPU oder Speicher nicht.");
     const auto output = fixture.root / "port";
     const PortExportOptions options{"synthetic_game", "0.37.0-dev", {1u, 4096u}};
 
@@ -195,6 +209,7 @@ int run_test(const int argc, char* argv[]) {
     require(entry_metadata_count == 2u,
             "Mehrteiliger Portexport erzeugt nicht exakt zwei Translation Units.");
     for (const auto& path : {"include/katana_port.hpp",
+                             "code/runtime-dispatch.cpp",
                              "metadata/port-project.json",
                              "metadata/provenance.json",
                              "metadata/source-map.json",
@@ -210,9 +225,13 @@ int run_test(const int argc, char* argv[]) {
                     std::string::npos &&
                 generated_before.at("katana-port.cmake").find("katana_runtime") !=
                     std::string::npos &&
+                generated_before.at("code/runtime-dispatch.cpp").find("dispatch_indirect") !=
+                    std::string::npos &&
                 std::filesystem::exists(output / "CMakeLists.txt") &&
-                std::filesystem::exists(output / "src" / "main.cpp"),
-            "Portprojekt besitzt kein ausfuehrbares Hosttarget oder keinen Runtimevertrag.");
+                std::filesystem::exists(output / "src" / "main.cpp") &&
+                read_text(output / "src" / "main.cpp").find("load_dreamcast_runtime_boot") !=
+                    std::string::npos,
+            "Portprojekt besitzt keinen ausfuehrbaren GDI-/Runtimevertrag.");
     std::string portable_content;
     for (const auto& [path, content] : generated_before) {
         static_cast<void>(path);

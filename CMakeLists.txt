@@ -176,6 +176,7 @@ add_library(katana_runtime STATIC
     src/runtime/cache_control.cpp
     src/runtime/dma.cpp
     src/runtime/disc.cpp
+    src/runtime/dreamcast_boot.cpp
     src/runtime/dreamcast_memory.cpp
     src/runtime/exception.cpp
     src/runtime/fpu.cpp

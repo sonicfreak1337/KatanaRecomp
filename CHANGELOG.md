@@ -21,6 +21,15 @@
   entfernen Teilresultate, behalten vorhandene Ergebnisse als explizit veraltet
   und beenden unter Windows auch gestartete Hostbuild-Kindprozesse. Prozessweite
   Ausgabe-Locks verhindern ueberlappende Schreibziele mehrerer Instanzen.
+- KR-4508: Das Portprojekt besitzt mit Vertragsversion 2 einen eigenstaendigen
+  GDI-Runtime-Einstieg. `game.exe <disc.gdi>` liest Bootmetadaten und
+  ISO9660-Bootdatei erst zur Laufzeit, initialisiert Dreamcast-RAM, VRAM,
+  AICA-RAM, Flash, CPU, Stack, Scheduler und Plattformdienste und erreicht den
+  generierten Einstieg ueber die generische Blocktabelle samt diagnostiziertem
+  indirektem Dispatch. Fehlende Quellen und `--run-generated` ohne Bootimage
+  enden nichtnull mit redigierter Diagnose; GDI-Daten und private Hostpfade
+  werden weiterhin nicht eingebettet. Der relocatierte Pakettest fuehrt die
+  erzeugte `game.exe` ohne KatanaRecomp-CLI bis zum Runtime-Marker aus.
 - Der neue inkrementelle Entwicklungszyklus behaelt `build-current/`, setzt teure Gate-Instrumentierung beim Debugprofil sicher zurueck und baut sowie testet mit begrenzter Parallelitaet. Das frische Abschluss-Gate bleibt erhalten; die vier deterministischen Fuzzziele laufen mit unveraenderter Fallzahl und denselben abgeleiteten Seeds als parallele CTest-Eintraege.
 - Der Entwicklungsrunner normalisiert auch eine bereits aktive x86-Developer-PowerShell auf die fuer den Projektbuild erforderliche native x64-MSVC-Umgebung.
 - KR-3801 bis KR-3808: Ein intern provenance-gebundenes, vollstaendig

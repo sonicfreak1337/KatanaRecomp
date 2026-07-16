@@ -141,11 +141,17 @@ dokumentiert.
 
 # Extern buildbares Portprojekt aus einer lokalen GDI erzeugen
 .\build-current\katana-recomp.exe port .\disc\game.gdi --output C:\ports\game --target-name game
+
+# Die erzeugte Anwendung eigenstaendig mit der GDI starten
+C:\ports\game\build\game.exe .\disc\game.gdi
 ```
 
 Der Port-Export liest private Disc-Dateien nur lokal, schreibt ausschliesslich
 verwaltete Dateien unter `generated/` neu und erhaelt handgeschriebenen Code
 unter `src/`. Details: [docs/PORT_EXPORT.md](docs/PORT_EXPORT.md).
+Die `game.exe` bettet keine Disc-Daten oder privaten Hostpfade ein; die GDI
+bleibt eine explizite read-only Laufzeiteingabe. Ohne gueltige GDI endet der
+Prozess mit einem Nichtnull-Exitcode und redigierter Diagnose.
 
 ## Projektstruktur
 

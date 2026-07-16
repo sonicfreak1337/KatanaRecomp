@@ -16,7 +16,7 @@
 
 namespace katana::codegen {
 
-inline constexpr std::uint32_t port_project_contract_version = 1u;
+inline constexpr std::uint32_t port_project_contract_version = 2u;
 
 struct PortExportOptions {
     std::string target_name;
