@@ -39,6 +39,7 @@ add_library(katana_runtime STATIC
     src/runtime/indirect_dispatch.cpp
     src/runtime/controlled_fallback.cpp
     src/runtime/code_invalidation.cpp
+    src/runtime/firmware_handoff.cpp
     src/runtime/cache_control.cpp
     src/runtime/dma.cpp
     src/runtime/disc.cpp
@@ -174,6 +175,11 @@ add_executable(katana-code-invalidation-tests tests/runtime/code_invalidation_te
 target_link_libraries(katana-code-invalidation-tests PRIVATE katana_runtime)
 katana_enable_warnings(katana-code-invalidation-tests)
 add_test(NAME katana-code-invalidation-tests COMMAND katana-code-invalidation-tests)
+
+add_executable(katana-firmware-handoff-tests tests/runtime/firmware_handoff_tests.cpp)
+target_link_libraries(katana-firmware-handoff-tests PRIVATE katana_runtime)
+katana_enable_warnings(katana-firmware-handoff-tests)
+add_test(NAME katana-firmware-handoff-tests COMMAND katana-firmware-handoff-tests)
 
 add_executable(katana-platform-services-tests tests/runtime/platform_services_tests.cpp)
 target_link_libraries(katana-platform-services-tests PRIVATE katana_core katana_runtime)

@@ -1214,7 +1214,7 @@ Akzeptanz:
 - nicht ueberlappende Bloecke bleiben gueltig
 - keine Betriebssystem-Seitenschutztechnik ist fuer die Korrektheit zwingend erforderlich
 
-### [ ] KR-3405 - Alias- und kopierbewusster Firmware-Handoff
+### [x] KR-3405 - Alias- und kopierbewusster Firmware-Handoff
 
 Abhaengigkeiten: KR-1807, KR-2207, KR-2605, KR-3402, KR-3404
 
