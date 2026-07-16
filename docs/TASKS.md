@@ -2620,7 +2620,7 @@ Akzeptanz:
 - unbekannte BIOS-Aufrufe werden weder ignoriert noch titelbezogen umgebogen
 - synthetische Vektorinstallation und ROM-RAM-Handoff sind reproduzierbar
 
-### [ ] KR-4603 - Dreamcast-System-ASIC sowie MMIO- und Interruptintegration
+### [x] KR-4603 - Dreamcast-System-ASIC sowie MMIO- und Interruptintegration
 
 Abhaengigkeiten: KR-3104, KR-3410, KR-4601, KR-4602
 

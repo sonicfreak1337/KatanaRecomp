@@ -4,7 +4,7 @@ Interner Entwicklungsmeilenstein: `0.45.0`
 
 Phase: Pre-Alpha
 
-Naechster Roadmap-Task: Phase 11 / KR-4603
+Naechster Roadmap-Task: Phase 11 / KR-4604
 
 Naechstes Phasengate: `v0.46.0` - Abschluss Phase 11
 
@@ -12,11 +12,11 @@ Erster oeffentlicher Produktrelease: `v0.50.0` Alpha
 
 ## Fortschritt
 
-- 203 von 236 gepflegten Roadmap-Tasks abgeschlossen: 86,0 %
+- 204 von 236 gepflegten Roadmap-Tasks abgeschlossen: 86,4 %
 - Phase-9-Reviewkorrekturen sind implementiert; das eigenstaendige
   achtteilige Homebrew-Korpus und Linux-Evidenz bleiben offen
 - Phase 10: 13/13 Tasks im freigegebenen Windows-GDI-Workflow
-- Phase 11: 13/16 Tasks
+- Phase 11: 14/16 Tasks
 - Phase 12: 0/10 Tasks
 - Phase 13: 0/5 Tasks vor dem Alpha-Gate
 - Alpha-Gate noch nicht erreicht
@@ -33,7 +33,7 @@ Erster oeffentlicher Produktrelease: `v0.50.0` Alpha
 | 8 | Werkzeuge und Qualitaet | 26/26 |
 | 9 | Kompatibilitaet und Leistung | Reviewkorrekturen offen |
 | 10 | Desktop-GUI und Quellworkflow | 13/13 (Windows-GDI-Scope) |
-| 11 | Bootanalyse und Retail-Systemdienste | 13/16 |
+| 11 | Bootanalyse und Retail-Systemdienste | 14/16 |
 | 12 | Interaktive Retail-Runtime und Portintegration | 0/10 |
 | 13 | Spielbarer Alpha-Kandidat | 0/5 |
 
@@ -58,6 +58,11 @@ ABI ehrlich als verfuegbar, optionales LLE als `unsupported`. Sechs RAM-Vektoren
 sind ueber normale Runtimeblocks und physische Aliase dispatchbar. Bekannte noch
 nicht angebundene Hardwaredienste sowie unbekannte Aufrufe brechen sichtbar und
 diagnostisch ab. Lokale Firmwarequellen bleiben read-only und unverpackt.
+
+Das Dreamcast-System-ASIC fuehrt PVR-, Maple-, GD-ROM-, DMA- und AICA-
+Ereignisse gastzeitdeterministisch ueber gemeinsame Pending-, ACK- und
+IRL13/11/9-Maskenregister. Reservierte oder falsch breite MMIO-Zugriffe sind
+harte Fehler statt stiller Erfolge.
 
 CLI und GUI beobachten denselben sequenzierten hierarchischen Ereignisstrom.
 Gesamtfortschritt ist monoton, Einzelschritte besitzen nur bei bekannter Menge

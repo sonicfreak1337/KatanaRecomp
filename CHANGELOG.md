@@ -113,6 +113,13 @@
   abgeschlossen; bekannte noch nicht angebundene Hardwaredienste enden als
   `service-unavailable`, unbekannte Selektoren als stabile harte Diagnose. Der
   Vertrag ist titelunabhaengig und enthaelt keine BIOS- oder Retailbytes.
+- KR-4603: Ein gemeinsames Dreamcast-System-ASIC-MMIO-Geraet bildet drei
+  Pending-/ACK-Baenke und je drei IRL13-/IRL11-/IRL9-Maskenbaenke ab. PVR-,
+  Maple-, GD-ROM-, DMA- und AICA-Ereignisse werden ueber den EventScheduler in
+  stabiler Gastzeit-/Einreihungsreihenfolge zugestellt und ausschliesslich ueber
+  den zentralen externen Interruptrouter signalisiert. ACK, Maskierung,
+  physische/P1/P2-Aliase sowie unbekannte, reservierte und falsch breite MMIO-
+  Zugriffe besitzen synthetische Erfolgs- und Fehlerregressionen.
 - Der neue inkrementelle Entwicklungszyklus behaelt `build-current/`, setzt teure Gate-Instrumentierung beim Debugprofil sicher zurueck und baut sowie testet mit begrenzter Parallelitaet. Das frische Abschluss-Gate bleibt erhalten; die vier deterministischen Fuzzziele laufen mit unveraenderter Fallzahl und denselben abgeleiteten Seeds als parallele CTest-Eintraege.
 - Der Entwicklungsrunner normalisiert auch eine bereits aktive x86-Developer-PowerShell auf die fuer den Projektbuild erforderliche native x64-MSVC-Umgebung.
 - KR-3801 bis KR-3808: Ein intern provenance-gebundenes, vollstaendig

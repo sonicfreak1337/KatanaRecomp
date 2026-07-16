@@ -170,6 +170,7 @@ add_library(katana_runtime STATIC
     src/runtime/block_dispatch.cpp
     src/runtime/scheduler_safepoint.cpp
     src/runtime/system_replay.cpp
+    src/runtime/system_asic.cpp
     src/runtime/block_guards.cpp
     src/runtime/bios_abi.cpp
     src/runtime/interpreter_boundary.cpp
@@ -903,6 +904,11 @@ add_executable(katana-platform-interrupt-tests tests/runtime/platform_interrupt_
 target_link_libraries(katana-platform-interrupt-tests PRIVATE katana_runtime)
 katana_enable_warnings(katana-platform-interrupt-tests)
 add_test(NAME katana-platform-interrupt-tests COMMAND katana-platform-interrupt-tests)
+
+add_executable(katana-system-asic-tests tests/runtime/system_asic_tests.cpp)
+target_link_libraries(katana-system-asic-tests PRIVATE katana_runtime)
+katana_enable_warnings(katana-system-asic-tests)
+add_test(NAME katana-system-asic-tests COMMAND katana-system-asic-tests)
 
 add_executable(katana-media-clock-tests tests/runtime/media_clock_tests.cpp)
 target_link_libraries(katana-media-clock-tests PRIVATE katana_runtime)
