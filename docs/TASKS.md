@@ -2564,7 +2564,7 @@ Akzeptanz:
 - Status- und Ausnahmeuebergaenge sind ohne Hostzustands-Leaks deterministisch
 - nicht unterstuetzte privilegierte Faelle brechen sichtbar ab
 
-### [ ] KR-4504 - v0.45 Gate-Vorbereitung: Tests und Build
+### [x] KR-4504 - v0.45 Gate-Vorbereitung: Tests und Build
 
 Abhaengigkeiten: KR-4501 bis KR-4503, KR-4506 bis KR-4511
 

@@ -4,7 +4,7 @@ Interner Entwicklungsmeilenstein: `0.44.0`
 
 Phase: Pre-Alpha
 
-Naechster Roadmap-Task: Phase 11 / KR-4504
+Naechster Roadmap-Task: Phase 11 / KR-4505 (Nutzerreview erforderlich)
 
 Naechstes Phasengate: `v0.46.0` - Abschluss Phase 11
 
@@ -12,11 +12,11 @@ Erster oeffentlicher Produktrelease: `v0.50.0` Alpha
 
 ## Fortschritt
 
-- 199 von 236 gepflegten Roadmap-Tasks abgeschlossen: 84,3 %
+- 200 von 236 gepflegten Roadmap-Tasks abgeschlossen: 84,7 %
 - Phase-9-Reviewkorrekturen sind implementiert; das eigenstaendige
   achtteilige Homebrew-Korpus und Linux-Evidenz bleiben offen
 - Phase 10: 13/13 Tasks im freigegebenen Windows-GDI-Workflow
-- Phase 11: 9/16 Tasks
+- Phase 11: 10/16 Tasks
 - Phase 12: 0/10 Tasks
 - Phase 13: 0/5 Tasks vor dem Alpha-Gate
 - Alpha-Gate noch nicht erreicht
@@ -33,7 +33,7 @@ Erster oeffentlicher Produktrelease: `v0.50.0` Alpha
 | 8 | Werkzeuge und Qualitaet | 26/26 |
 | 9 | Kompatibilitaet und Leistung | Reviewkorrekturen offen |
 | 10 | Desktop-GUI und Quellworkflow | 13/13 (Windows-GDI-Scope) |
-| 11 | Bootanalyse und Retail-Systemdienste | 9/16 |
+| 11 | Bootanalyse und Retail-Systemdienste | 10/16 |
 | 12 | Interaktive Retail-Runtime und Portintegration | 0/10 |
 | 13 | Spielbarer Alpha-Kandidat | 0/5 |
 
@@ -139,6 +139,22 @@ Abbruchschutz und GDI-zu-`game.exe` sind automatisiert; Modell- und
 Anwendungsdiensttests bleiben getrennt benannt. Die Nutzerfreigabe fuer
 KR-4403 wurde am 16.07.2026 erteilt. Es wurden kein Tag und keine
 Veroeffentlichung ausgefuehrt.
+
+## v0.45-Gate-Vorbereitung (Review offen)
+
+```text
+164/164 Tests bestanden
+ein frischer MSVC-x64-Debug-Build in build-current
+KR_PHASE9_HOMEBREW_HOST_FRAME: 2 Frames, silent_failures=0
+KR_V045_BOOT_ANALYSIS_READY
+```
+
+AddressSanitizer, statische Analyse und Coverage sowie Format-, Qualitaets-,
+Referenz-, Lizenz- und Datenaudits bestanden. Der Lauf verwendete nur
+synthetische und Homebrew-Eingaben. Details und die transparent dokumentierte
+Korrektur eines veralteten Metadaten-Testumfangs stehen in
+[`V045_GATE.md`](V045_GATE.md). KR-4505 bleibt bis zur ausdruecklichen
+Nutzerfreigabe offen; es wurden weder Version, Release, Tag noch Paket erzeugt.
 
 ## Letztes Release-Gate: v0.37.0
 

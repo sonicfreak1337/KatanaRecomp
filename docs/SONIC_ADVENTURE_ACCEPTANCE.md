@@ -124,6 +124,9 @@ lizenzierte Homebrew-Programme abgesichert. Die internen Meilensteine sind:
 | Alpha v0.50.0 | `SA_ALPHA_PLAYABLE` |
 
 Kein `KR_...`-Checkpoint behauptet fuer sich Sonic-Kompatibilitaet.
+`KR_V045_BOOT_ANALYSIS_READY` belegt ausschliesslich die synthetische/Homebrew-
+Regression der Bootanalyse. Der Checkpoint behauptet weder einen Sonic-Boot
+noch erzeugte Frames, Audio, Eingabe oder Spielbarkeit.
 
 ## Alpha-Gate v0.50.0
 

@@ -1162,11 +1162,11 @@ Fortschritt:
 - [x] KR-4508 - Ausfuehrbare `game.exe` mit Bootimage und Runtime-Dispatch
 - [x] KR-4501 - Messbarer SH-4-Alpha-ISA-Vertrag
 - [x] KR-4502 - Fehlende Integer- und Kontrollinstruktionen
-- [ ] KR-4503 - Status-, Exception- und Systemsemantik
-- [ ] KR-4509 - Hierarchischer Jobfortschritt und Live-Diagnostikvertrag
-- [ ] KR-4510 - GUI-QoL, Dark Theme, Logo und scrollbares Layout
-- [ ] KR-4511 - Privater Sonic-Debugharness und abstrahierte Regressionen
-- [ ] KR-4504 - v0.45 Gate-Vorbereitung: Tests und Build
+- [x] KR-4503 - Status-, Exception- und Systemsemantik
+- [x] KR-4509 - Hierarchischer Jobfortschritt und Live-Diagnostikvertrag
+- [x] KR-4510 - GUI-QoL, Dark Theme, Logo und scrollbares Layout
+- [x] KR-4511 - Privater Sonic-Debugharness und abstrahierte Regressionen
+- [x] KR-4504 - v0.45 Gate-Vorbereitung: Tests und Build
 - [ ] KR-4505 - v0.45 interne Meilenstein-Freigabe
 
 Gate-Ergebnis: Der erste reale Boot-Analyseblocker ist allgemein behoben,

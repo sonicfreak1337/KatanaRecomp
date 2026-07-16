@@ -25,7 +25,7 @@ Eingabe
   -> natives Hostprojekt
 ```
 
-Der aktuelle kumulative Debug-Gate-Vertrag umfasst **163 automatische Tests**.
+Der aktuelle kumulative Debug-Gate-Vertrag umfasst **164 automatische Tests**.
 Phase 10 ist
 fuer den freigegebenen Windows-Workflow abgeschlossen: eine `.gdi` waehlen,
 einen Ausgabeordner waehlen und den Analyse-/Buildzustand sichtbar verfolgen.
@@ -91,7 +91,7 @@ KatanaRecomp ist weiterhin Pre-Alpha. Insbesondere fehlen noch:
 - vollstaendige SH-4- und FPU-Exception-Semantik
 - vollstaendige Dreamcast-Hardwaremodelle und ARM7-LLE
 - breitere Retail-Kompatibilitaet und Performanceoptimierung
-- Dark Theme, App-Logo und weitergehende Fortschritts-/Diagnoseansichten
+- weitergehende Fortschritts-/Diagnoseansichten fuer Retail-Debugging
 - Linux-Desktop-GUI
 - native Alpha-Portintegration und Windows-/Linux-Alpha-CI
 
