@@ -84,7 +84,9 @@ int main() {
     require(text.find("Unbekannte Opcodes:") != std::string::npos,
             "Die Unknown-Abdeckung fehlt im Bericht.");
     require(text.find("restricted") != std::string::npos &&
-                text.find("Privilege violations") != std::string::npos,
+                text.find("SLEEP wakeup") != std::string::npos &&
+                text.find("user-mode privilege violations trap") != std::string::npos &&
+                text.find("Privilege violations and complete") == std::string::npos,
             "Textbericht verschweigt Alpha-Einschraenkungen oder ihre Semantik.");
 
     const auto json = format_alpha_isa_json(report);

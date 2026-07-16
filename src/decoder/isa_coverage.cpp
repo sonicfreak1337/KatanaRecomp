@@ -65,7 +65,8 @@ std::vector<AlphaIsaFamilyEntry> alpha_families() {
          Support::Restricted,
          restricted_runtime_layers(),
          "SR/FPSCR transfers, traps and exception return preserve structured CPU state.",
-         "Privilege violations and complete sleep/wakeup behavior remain incomplete.",
+         "Complete SLEEP wakeup and unimplemented privileged MMU/cache-control operations "
+         "remain restricted; user-mode privilege violations trap before side effects.",
          "User/privileged mode, bank switch, exception, delay-slot and rejection vectors."},
         {"cache-store-queue",
          "Cache, prefetch and store queues",
