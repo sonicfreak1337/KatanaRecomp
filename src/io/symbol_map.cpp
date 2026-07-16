@@ -1,5 +1,7 @@
 #include "katana/io/symbol_map.hpp"
 
+#include "katana/io/input_output_error.hpp"
+
 #include <charconv>
 #include <fstream>
 #include <sstream>
@@ -45,7 +47,7 @@ parse_kind(const std::string& text, const std::filesystem::path& path, const std
 void load_symbol_map(const std::filesystem::path& path, ExecutableImage& image) {
     std::ifstream input(path);
     if (!input) {
-        throw std::runtime_error("Map-Datei konnte nicht geoeffnet werden: " + path.string());
+        throw InputOutputError("Map-Datei konnte nicht geoeffnet werden: " + path.string());
     }
 
     std::string line_text;
@@ -86,8 +88,8 @@ void load_symbol_map(const std::filesystem::path& path, ExecutableImage& image) 
         }
     }
     if (!input.eof()) {
-        throw std::runtime_error("Map-Datei konnte nicht vollstaendig gelesen werden: " +
-                                 path.string());
+        throw InputOutputError("Map-Datei konnte nicht vollstaendig gelesen werden: " +
+                               path.string());
     }
 }
 

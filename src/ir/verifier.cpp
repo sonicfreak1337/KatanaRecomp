@@ -443,7 +443,9 @@ void require_valid_function(const Function& function) {
     throw std::invalid_argument(message.str());
 }
 
-std::vector<VerificationIssue> verify_program(const std::span<const Function> functions) {
+std::vector<VerificationIssue>
+verify_program(const std::span<const Function> functions,
+               const std::span<const std::uint32_t> external_function_entries) {
     std::vector<VerificationIssue> issues;
     std::unordered_set<std::uint32_t> entries;
     for (const auto& function : functions) {
@@ -455,6 +457,7 @@ std::vector<VerificationIssue> verify_program(const std::span<const Function> fu
                       "Funktionseintritt ist im Programm doppelt vorhanden.");
         }
     }
+    entries.insert(external_function_entries.begin(), external_function_entries.end());
     for (const auto& function : functions) {
         for (const auto callee : function.direct_callees) {
             if (!entries.contains(callee)) {
@@ -472,12 +475,21 @@ std::vector<VerificationIssue> verify_program(const std::span<const Function> fu
     return issues;
 }
 
-void require_valid_program(const std::span<const Function> functions) {
-    const auto issues = verify_program(functions);
+std::vector<VerificationIssue> verify_program(const std::span<const Function> functions) {
+    return verify_program(functions, {});
+}
+
+void require_valid_program(const std::span<const Function> functions,
+                           const std::span<const std::uint32_t> external_function_entries) {
+    const auto issues = verify_program(functions, external_function_entries);
     if (issues.empty()) return;
     throw std::invalid_argument(
         "Ungueltiges Katana-IR-Programm: " + hex_address(issues.front().address) + ": " +
         issues.front().message);
+}
+
+void require_valid_program(const std::span<const Function> functions) {
+    require_valid_program(functions, {});
 }
 
 } // namespace katana::ir

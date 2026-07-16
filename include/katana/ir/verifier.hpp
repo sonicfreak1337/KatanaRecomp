@@ -20,6 +20,13 @@ void require_valid_function(const Function& function);
 
 [[nodiscard]] std::vector<VerificationIssue> verify_program(std::span<const Function> functions);
 
+[[nodiscard]] std::vector<VerificationIssue>
+verify_program(std::span<const Function> functions,
+               std::span<const std::uint32_t> external_function_entries);
+
 void require_valid_program(std::span<const Function> functions);
+
+void require_valid_program(std::span<const Function> functions,
+                           std::span<const std::uint32_t> external_function_entries);
 
 } // namespace katana::ir

@@ -68,8 +68,12 @@ MSVC Debug + AddressSanitizer + statische Analyse + Coverage
 Format-, Qualitaets-, Referenz- und Lizenzaudit bestanden
 prozessisolierter Fuzz-Kurzlauf bestanden
 reproduzierbares KatanaRecomp-0.37.0-dev.zip erzeugt
-SHA-256: 0124150bd923e35eff75f3c4fff98610e2814654c35e366ecfb59f0886493f04
 ```
+
+Die fruehere Zuordnung eines konkreten ZIP-Hashs zum nachtraeglich erzeugten
+Tag-Commit wurde zurueckgezogen, weil das interne `source_commit` des damaligen
+ZIPs nicht gegen den Tag verifiziert wurde. Tag-Provenienz und externer
+Artefakthash werden kuenftig ohne Selbstbezug getrennt geprueft und publiziert.
 
 Der feste Fuzzlauf verwendet Seed `0x3703` und jeweils 256 Iterationen fuer
 Decoder, Loader, IR und Runtime. Kandidaten laufen in Kindprozessen, sodass

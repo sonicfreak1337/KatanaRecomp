@@ -1,5 +1,7 @@
 ﻿#include "katana/io/binary_reader.hpp"
 
+#include "katana/io/input_output_error.hpp"
+
 #include <fstream>
 #include <stdexcept>
 #include <string>
@@ -10,13 +12,13 @@ std::vector<std::uint8_t> read_binary_file(const std::filesystem::path& path) {
     std::ifstream input(path, std::ios::binary | std::ios::ate);
 
     if (!input) {
-        throw std::runtime_error("Binärdatei konnte nicht geöffnet werden: " + path.string());
+        throw InputOutputError("Binärdatei konnte nicht geöffnet werden: " + path.string());
     }
 
     const auto end_position = input.tellg();
 
     if (end_position < 0) {
-        throw std::runtime_error("Größe der Binärdatei konnte nicht bestimmt werden.");
+        throw InputOutputError("Größe der Binärdatei konnte nicht bestimmt werden.");
     }
 
     const auto size = static_cast<std::size_t>(end_position);
@@ -29,7 +31,7 @@ std::vector<std::uint8_t> read_binary_file(const std::filesystem::path& path) {
         input.read(reinterpret_cast<char*>(bytes.data()), static_cast<std::streamsize>(size));
 
         if (!input) {
-            throw std::runtime_error("Binärdatei konnte nicht vollständig gelesen werden.");
+            throw InputOutputError("Binärdatei konnte nicht vollständig gelesen werden.");
         }
     }
 

@@ -76,6 +76,8 @@ struct LoadedProject {
 [[nodiscard]] const char* project_input_format_name(ProjectInputFormat format) noexcept;
 [[nodiscard]] const char* project_firmware_mode_name(ProjectFirmwareMode mode) noexcept;
 [[nodiscard]] const char* project_fallback_policy_name(ProjectFallbackPolicy policy) noexcept;
+[[nodiscard]] std::string format_project_execution_profile_text(const ProjectManifest& profile);
+[[nodiscard]] std::string format_project_execution_profile_json(const ProjectManifest& profile);
 [[nodiscard]] bool project_manifest_version_supported(std::uint32_t version) noexcept;
 
 void require_valid_project_alias_groups(std::span<const ProjectAliasGroup> aliases,

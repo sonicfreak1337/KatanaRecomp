@@ -1,6 +1,7 @@
 #include "katana/codegen/port_export.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
@@ -105,11 +106,24 @@ std::vector<std::uint8_t> boot_track() {
         record(bytes, directory, data_lba + 20u, payload_size, std::string(1u, '\0'), true);
     directory +=
         record(bytes, directory, data_lba + 20u, payload_size, std::string(1u, '\1'), true);
-    record(bytes, directory, data_lba + 21u, 4u, "BOOT.BIN;1", false);
-    bytes[payload_offset(21u)] = 0x0Bu; // rts
-    bytes[payload_offset(21u, 1u)] = 0x00u;
-    bytes[payload_offset(21u, 2u)] = 0x09u; // delay-slot nop
-    bytes[payload_offset(21u, 3u)] = 0x00u;
+    record(bytes, directory, data_lba + 21u, 24u, "BOOT.BIN;1", false);
+    constexpr std::array<std::uint8_t, 24u> program = {
+        0x06u, 0xB0u, // bsr 0x8C010010
+        0x07u, 0xE2u, // delay slot: mov #7,r2
+        0x0Bu, 0x00u, // caller rts
+        0x09u, 0x00u, // delay-slot nop
+        0x09u, 0x00u, // padding nop
+        0x09u, 0x00u, // padding nop
+        0x09u, 0x00u, // padding nop
+        0x09u, 0x00u, // padding nop
+        0x05u, 0xE1u, // callee: mov #5,r1
+        0xFFu, 0x71u, // add #-1,r1
+        0x0Bu, 0x00u, // callee rts
+        0x09u, 0x00u  // delay-slot nop
+    };
+    std::copy(program.begin(),
+              program.end(),
+              bytes.begin() + static_cast<std::ptrdiff_t>(payload_offset(21u)));
     return bytes;
 }
 
@@ -144,7 +158,7 @@ std::map<std::string, std::string> snapshot(const std::filesystem::path& root) {
 
 } // namespace
 
-int main(const int argc, char* argv[]) {
+int run_test(const int argc, char* argv[]) {
     if (argc == 3 && std::string(argv[1]) == "--write-fixture") {
         const std::filesystem::path directory(argv[2]);
         std::filesystem::create_directories(directory);
@@ -157,7 +171,7 @@ int main(const int argc, char* argv[]) {
     write_fixture(fixture.root / "disc");
     const auto gdi = fixture.root / "disc" / "disc.gdi";
     const auto output = fixture.root / "port";
-    const PortExportOptions options{"synthetic_game", "0.34.0-dev", {128u, 4096u}};
+    const PortExportOptions options{"synthetic_game", "0.37.0-dev", {1u, 4096u}};
 
     const auto first = export_dreamcast_port_project(gdi, output, options);
     const auto generated_before = snapshot(output / "generated");
@@ -165,11 +179,21 @@ int main(const int argc, char* argv[]) {
         std::find_if(generated_before.begin(), generated_before.end(), [](const auto& entry) {
             return entry.first.starts_with("code/unit-00000-") && entry.first.ends_with(".cpp");
         });
-    require(first.functions == 1u && first.partitions == 1u && first.checkpoints.size() == 6u &&
+    require(first.functions == 2u && first.partitions == 2u && first.checkpoints.size() == 6u &&
                 first.checkpoints.back() == "port-project-written",
             "Synthetische GDI durchlaeuft den Portexport nicht vollstaendig.");
     require(unit != generated_before.end(),
             "Portexport besitzt keine deterministische Translation Unit.");
+    std::size_t entry_metadata_count = 0u;
+    for (const auto& [path, content] : generated_before) {
+        if (path.starts_with("code/unit-") && path.ends_with(".cpp")) {
+            require(content.find("generated_entry_address = 0x8C010000u") != std::string::npos,
+                    "Portpartition besitzt einen abweichenden globalen Programmeinstieg.");
+            ++entry_metadata_count;
+        }
+    }
+    require(entry_metadata_count == 2u,
+            "Mehrteiliger Portexport erzeugt nicht exakt zwei Translation Units.");
     for (const auto& path : {"include/katana_port.hpp",
                              "metadata/port-project.json",
                              "metadata/provenance.json",
@@ -254,4 +278,13 @@ int main(const int argc, char* argv[]) {
 
     std::cout << "KR-3507 reproduzierbarer Port-Projektexport erfolgreich.\n";
     return EXIT_SUCCESS;
+}
+
+int main(const int argc, char* argv[]) {
+    try {
+        return run_test(argc, argv);
+    } catch (const std::exception& error) {
+        std::cerr << error.what() << '\n';
+        return EXIT_FAILURE;
+    }
 }

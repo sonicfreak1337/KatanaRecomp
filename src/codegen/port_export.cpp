@@ -218,16 +218,14 @@ PortExportResult export_dreamcast_port_project(const std::filesystem::path& gdi_
             std::any_of(functions.begin(), functions.end(), [](const auto& function) {
                 return function.entry_address == katana::platform::dreamcast_disc_boot_address;
             });
-        const auto unit_entry = contains_program_entry
-                                    ? katana::platform::dreamcast_disc_boot_address
-                                    : functions.front().entry_address;
         const BackendRequest request{functions,
-                                     unit_entry,
+                                     functions.front().entry_address,
                                      {},
                                      global_entries,
                                      port_namespace,
                                      contains_program_entry,
-                                     true};
+                                     true,
+                                     katana::platform::dreamcast_disc_boot_address};
         auto source = backend.emit(request).joined_text();
         artifacts.push_back({std::filesystem::path("code") /
                                  deterministic_translation_unit_name(partition, program),

@@ -44,7 +44,7 @@ BackendEmission generate_program(const Backend& backend, const BackendRequest& r
         throw std::invalid_argument("Es wurden keine IR-Funktionen uebergeben.");
     }
 
-    katana::ir::require_valid_program(request.functions);
+    katana::ir::require_valid_program(request.functions, request.known_function_entries);
     const auto entry = std::ranges::find(
         request.functions, request.entry_address, &katana::ir::Function::entry_address);
     if (entry == request.functions.end()) {

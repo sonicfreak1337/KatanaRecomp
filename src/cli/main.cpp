@@ -10,6 +10,7 @@
 #include "katana/codegen/port_export.hpp"
 #include "katana/codegen/probe.hpp"
 #include "katana/io/elf32_sh_loader.hpp"
+#include "katana/io/input_output_error.hpp"
 #include "katana/io/project_manifest.hpp"
 #include "katana/io/raw_binary_loader.hpp"
 #include "katana/ir/lower.hpp"
@@ -36,6 +37,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace {
 
@@ -86,6 +88,58 @@ std::string format_disassembly_text(const katana::sh4::DisassemblyLine& line) {
 
 void print_address(const std::uint32_t address) {
     std::cout << "0x" << std::hex << std::uppercase << std::setw(8) << std::setfill('0') << address;
+}
+
+std::string attach_execution_profile_json(std::string document,
+                                          const katana::io::ProjectManifest& profile) {
+    const auto object = document.find('{');
+    if (object == std::string::npos) {
+        throw std::runtime_error("JSON-Bericht besitzt kein Wurzelobjekt.");
+    }
+    document.insert(object + 1u,
+                    "\"execution_profile\":" +
+                        katana::io::format_project_execution_profile_json(profile) + ",");
+    return document;
+}
+
+void require_cpp_profile_capabilities(const katana::io::ProjectManifest& profile) {
+    std::vector<std::string> unsupported;
+    for (const auto& capability : profile.required_backend_capabilities) {
+        if (capability != "memory") unsupported.push_back(capability);
+    }
+    if (profile.firmware_mode != katana::io::ProjectFirmwareMode::Direct) {
+        unsupported.push_back("firmware-profile");
+    }
+    if (profile.fallback_policy != katana::io::ProjectFallbackPolicy::Abort) {
+        unsupported.push_back("fallback-profile");
+    }
+    if (profile.mmu_profile == katana::io::ProjectMmuProfile::Sh4) {
+        unsupported.push_back("mmu");
+    }
+    if (profile.fastpath_profile != katana::io::ProjectFastpathProfile::Conservative) {
+        unsupported.push_back("fastpath-profile");
+    }
+    if (!profile.alias_groups.empty() || !profile.canonical_physical_ranges.empty()) {
+        unsupported.push_back("address-mapping-profile");
+    }
+    if (!profile.writable_executable_ranges.empty()) {
+        unsupported.push_back("executable-ram-profile");
+    }
+    if (profile.bios_path || profile.flash_path || !profile.dynamic_bios_vectors.empty()) {
+        unsupported.push_back("firmware-image-profile");
+    }
+    std::sort(unsupported.begin(), unsupported.end());
+    unsupported.erase(std::unique(unsupported.begin(), unsupported.end()), unsupported.end());
+    if (!unsupported.empty()) {
+        std::ostringstream message;
+        message << "Das C++-Backend kann folgende Manifest-Faehigkeiten nicht anwenden: ";
+        for (std::size_t index = 0u; index < unsupported.size(); ++index) {
+            if (index != 0u) message << ", ";
+            message << unsupported[index];
+        }
+        message << '.';
+        throw katana::cli::Error(katana::cli::ExitCode::CodeGenerationFailure, message.str());
+    }
 }
 
 std::string_view special_register_name(const katana::ir::SpecialRegister special_register) {
@@ -376,7 +430,8 @@ std::vector<katana::ir::Function>
 build_ir_program(const std::filesystem::path& path,
                  const std::uint32_t entry_address,
                  const std::uint32_t base_address,
-                 const std::optional<std::filesystem::path>& override_path = std::nullopt) {
+                 const std::optional<std::filesystem::path>& override_path = std::nullopt,
+                 std::optional<katana::io::ProjectManifest>* execution_profile = nullptr) {
     auto extension = path.extension().string();
     std::transform(
         extension.begin(), extension.end(), extension.begin(), [](const unsigned char value) {
@@ -385,7 +440,11 @@ build_ir_program(const std::filesystem::path& path,
 
     katana::io::ExecutableImage image;
     if (extension == ".katana" || extension == ".manifest") {
-        image = katana::io::load_project_manifest(path);
+        auto project = katana::io::load_project(path);
+        if (execution_profile != nullptr) {
+            *execution_profile = project.execution_profile;
+        }
+        image = std::move(project.image);
     } else {
         std::ifstream input(path, std::ios::binary);
         std::array<unsigned char, 4> magic{};
@@ -432,16 +491,20 @@ int decode_single_opcode(const std::string& text) {
 int analyze_manifest(const std::filesystem::path& path,
                      const std::optional<std::filesystem::path>& override_path = std::nullopt,
                      const bool json = false) {
-    const auto image = katana::io::load_project_manifest(path);
+    const auto project = katana::io::load_project(path);
     std::optional<katana::analysis::AnalysisOverrides> overrides;
     if (override_path.has_value()) {
         overrides = katana::analysis::parse_analysis_overrides(*override_path);
     }
     const auto analysis = katana::analysis::analyze_control_flow(
-        image, overrides.has_value() ? &*overrides : nullptr);
+        project.image, overrides.has_value() ? &*overrides : nullptr);
     if (json) {
-        std::cout << katana::analysis::format_control_flow_analysis_json(analysis);
+        std::cout << attach_execution_profile_json(
+            katana::analysis::format_control_flow_analysis_json(analysis),
+            project.execution_profile);
     } else {
+        std::cout << katana::io::format_project_execution_profile_text(project.execution_profile)
+                  << '\n';
         std::cout << katana::analysis::format_recursive_analysis_report(
             analysis.recursive, analysis.symbolic_addresses);
         std::cout << katana::analysis::format_indirect_control_flow_report(
@@ -453,19 +516,25 @@ int analyze_manifest(const std::filesystem::path& path,
 int export_analysis_graph(const std::filesystem::path& path,
                           const std::optional<std::filesystem::path>& override_path,
                           const std::string_view command) {
-    const auto image = katana::io::load_project_manifest(path);
+    const auto project = katana::io::load_project(path);
     std::optional<katana::analysis::AnalysisOverrides> overrides;
     if (override_path.has_value()) {
         overrides = katana::analysis::parse_analysis_overrides(*override_path);
     }
     const auto analysis = katana::analysis::analyze_control_flow(
-        image, overrides.has_value() ? &*overrides : nullptr);
+        project.image, overrides.has_value() ? &*overrides : nullptr);
     const bool call_graph = command.starts_with("callgraph-");
     const auto graph = call_graph ? katana::analysis::build_call_graph(analysis)
                                   : katana::analysis::build_control_flow_graph(analysis);
-    std::cout << (command.ends_with("-json")
-                      ? katana::analysis::serialize_analysis_graph_json(graph)
-                      : katana::analysis::serialize_analysis_graph_dot(graph));
+    if (command.ends_with("-json")) {
+        std::cout << attach_execution_profile_json(
+            katana::analysis::serialize_analysis_graph_json(graph), project.execution_profile);
+    } else {
+        std::cout << "// "
+                  << katana::io::format_project_execution_profile_text(project.execution_profile)
+                  << '\n'
+                  << katana::analysis::serialize_analysis_graph_dot(graph);
+    }
     return 0;
 }
 
@@ -659,9 +728,22 @@ int analyze_ir(const std::filesystem::path& path,
                const std::uint32_t base_address,
                const bool json,
                const std::optional<std::filesystem::path>& override_path) {
-    const auto program = build_ir_program(path, entry_address, base_address, override_path);
+    std::optional<katana::io::ProjectManifest> execution_profile;
+    const auto program =
+        build_ir_program(path, entry_address, base_address, override_path, &execution_profile);
 
-    std::cout << (json ? katana::ir::emit_ir_json(program) : katana::ir::emit_ir_text(program));
+    if (json) {
+        auto report = katana::ir::emit_ir_json(program);
+        std::cout << (execution_profile
+                          ? attach_execution_profile_json(std::move(report), *execution_profile)
+                          : report);
+    } else {
+        std::cout << katana::ir::emit_ir_text(program);
+        if (execution_profile) {
+            std::cout << katana::io::format_project_execution_profile_text(*execution_profile)
+                      << '\n';
+        }
+    }
 
     return 0;
 }
@@ -673,7 +755,10 @@ int emit_cpp(const std::filesystem::path& input_path,
              katana::ir::OptimizationOptions optimization_options,
              const std::optional<std::filesystem::path>& dump_prefix,
              const std::optional<std::filesystem::path>& override_path) {
-    auto program = build_ir_program(input_path, entry_address, base_address, override_path);
+    std::optional<katana::io::ProjectManifest> execution_profile;
+    auto program = build_ir_program(
+        input_path, entry_address, base_address, override_path, &execution_profile);
+    if (execution_profile) require_cpp_profile_capabilities(*execution_profile);
 
     const auto before_optimization =
         dump_prefix ? katana::ir::emit_ir_text(program) : std::string{};
@@ -687,11 +772,11 @@ int emit_cpp(const std::filesystem::path& input_path,
             }
             std::ofstream output(path, std::ios::binary);
             if (!output) {
-                throw std::runtime_error("Der IR-Dump konnte nicht geoeffnet werden.");
+                throw katana::io::InputOutputError("Der IR-Dump konnte nicht geoeffnet werden.");
             }
             output.write(contents.data(), static_cast<std::streamsize>(contents.size()));
             if (!output) {
-                throw std::runtime_error("Der IR-Dump konnte nicht gespeichert werden.");
+                throw katana::io::InputOutputError("Der IR-Dump konnte nicht gespeichert werden.");
             }
         };
         write_dump(dump_prefix->string() + ".before.ir", before_optimization);
@@ -707,13 +792,14 @@ int emit_cpp(const std::filesystem::path& input_path,
     std::ofstream output(output_path, std::ios::binary);
 
     if (!output) {
-        throw std::runtime_error("Die Ausgabedatei konnte nicht geoeffnet werden.");
+        throw katana::io::InputOutputError("Die Ausgabedatei konnte nicht geoeffnet werden.");
     }
 
     output.write(source.data(), static_cast<std::streamsize>(source.size()));
 
     if (!output) {
-        throw std::runtime_error("Der generierte C++-Code konnte nicht gespeichert werden.");
+        throw katana::io::InputOutputError(
+            "Der generierte C++-Code konnte nicht gespeichert werden.");
     }
 
     std::cout << "C++-Code erzeugt: " << output_path.string() << '\n'
@@ -794,11 +880,13 @@ int main(const int argc, const char* const* argv) {
     }
     std::ofstream output(output_path, std::ios::binary | std::ios::trunc);
     if (!output) {
-        throw std::runtime_error("Die lokale Phase-6-Probe konnte nicht geoeffnet werden.");
+        throw katana::io::InputOutputError(
+            "Die lokale Phase-6-Probe konnte nicht geoeffnet werden.");
     }
     output.write(source.data(), static_cast<std::streamsize>(source.size()));
     if (!output) {
-        throw std::runtime_error("Die lokale Phase-6-Probe konnte nicht geschrieben werden.");
+        throw katana::io::InputOutputError(
+            "Die lokale Phase-6-Probe konnte nicht geschrieben werden.");
     }
     std::cout << "Lokale, temporaere Phase-6-Blockprobe erzeugt.\n";
     return 0;
@@ -1108,15 +1196,10 @@ int main(const int argc, char* argv[]) {
     } catch (const std::filesystem::filesystem_error& error) {
         std::cerr << "Fehler [input-output]: " << error.what() << '\n';
         return exit_status(ExitCode::InputOutput);
+    } catch (const katana::io::InputOutputError& error) {
+        std::cerr << "Fehler [input-output]: " << error.what() << '\n';
+        return exit_status(ExitCode::InputOutput);
     } catch (const std::runtime_error& error) {
-        const std::string_view message(error.what());
-        if (message.find("konnte nicht geoeffnet") != std::string_view::npos ||
-            message.find("konnte nicht gelesen") != std::string_view::npos ||
-            message.find("konnte nicht geschrieben") != std::string_view::npos ||
-            message.find("Datei fehlt") != std::string_view::npos) {
-            std::cerr << "Fehler [input-output]: " << error.what() << '\n';
-            return exit_status(ExitCode::InputOutput);
-        }
         std::cerr << "Fehler [processing-failure]: " << error.what() << '\n';
         return exit_status(ExitCode::ProcessingFailure);
     } catch (const std::exception& error) {

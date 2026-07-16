@@ -1,5 +1,6 @@
 #include "katana/io/input_provenance.hpp"
 
+#include "katana/io/input_output_error.hpp"
 #include "katana/io/json_report.hpp"
 
 #include <algorithm>
@@ -191,7 +192,7 @@ InputProvenance capture_input_provenance(std::string role, const std::filesystem
         throw std::invalid_argument("Eingabeprovenienz braucht eine portable Rolle.");
     }
     std::ifstream input(path, std::ios::binary);
-    if (!input) throw std::runtime_error("Provenienzeingabe konnte nicht geoeffnet werden.");
+    if (!input) throw InputOutputError("Provenienzeingabe konnte nicht geoeffnet werden.");
     Sha256 hash;
     std::uint64_t size = 0u;
     std::vector<char> buffer(64u * 1024u);
@@ -203,7 +204,7 @@ InputProvenance capture_input_provenance(std::string role, const std::filesystem
             size += static_cast<std::uint64_t>(count);
         }
     }
-    if (!input.eof()) throw std::runtime_error("Provenienzeingabe konnte nicht gelesen werden.");
+    if (!input.eof()) throw InputOutputError("Provenienzeingabe konnte nicht gelesen werden.");
     return {
         std::move(role), size, hash.finish(), std::filesystem::absolute(path).lexically_normal()};
 }

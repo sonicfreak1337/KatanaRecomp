@@ -12,12 +12,14 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <charconv>
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
 #include <exception>
 #include <filesystem>
+#include <fstream>
 #include <iomanip>
 #include <iostream>
 #include <limits>
@@ -28,11 +30,15 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
-#include <typeinfo>
 #include <utility>
 #include <vector>
 #ifdef _WIN32
 #include <process.h>
+#else
+#include <spawn.h>
+#include <sys/wait.h>
+#include <unistd.h>
+extern char** environ;
 #endif
 
 namespace {
@@ -45,12 +51,14 @@ struct Options {
     std::size_t iterations = 256u;
     std::size_t max_input_size = 4096u;
     std::optional<std::vector<std::uint8_t>> input;
+    std::optional<std::filesystem::path> signature_file;
     bool isolate = false;
     bool child = false;
 };
 
 std::filesystem::path executable_path;
 bool isolate_cases = false;
+std::atomic<std::uint64_t> signature_sequence = 0u;
 
 class Random {
   public:
@@ -511,38 +519,117 @@ void exercise(const Target target, const std::span<const std::uint8_t> bytes) {
 
 std::string hex_bytes(std::span<const std::uint8_t> bytes);
 
+std::string exception_signature(const std::exception& error) {
+    std::string_view category = "std-exception";
+    if (dynamic_cast<const std::invalid_argument*>(&error) != nullptr) {
+        category = "invalid-argument";
+    } else if (dynamic_cast<const std::out_of_range*>(&error) != nullptr) {
+        category = "out-of-range";
+    } else if (dynamic_cast<const std::logic_error*>(&error) != nullptr) {
+        category = "logic-error";
+    } else if (dynamic_cast<const std::runtime_error*>(&error) != nullptr) {
+        category = "runtime-error";
+    }
+    return "exception:" + std::string(category) + ":" + error.what();
+}
+
+void write_signature(const std::filesystem::path& path, const std::string_view signature) {
+    std::ofstream output(path, std::ios::binary | std::ios::trunc);
+    if (!output) return;
+    output.write(signature.data(), static_cast<std::streamsize>(signature.size()));
+}
+
+std::optional<std::string> read_signature(const std::filesystem::path& path) {
+    std::ifstream input(path, std::ios::binary);
+    if (!input) return std::nullopt;
+    std::ostringstream content;
+    content << input.rdbuf();
+    if (content.str().empty()) return std::nullopt;
+    return content.str();
+}
+
+std::filesystem::path next_signature_path() {
+    const auto process_id = static_cast<std::uint64_t>(
+#ifdef _WIN32
+        _getpid()
+#else
+        getpid()
+#endif
+    );
+    return std::filesystem::temp_directory_path() /
+           ("katana-fuzz-signature-" + std::to_string(process_id) + "-" +
+            std::to_string(signature_sequence.fetch_add(1u)) + ".txt");
+}
+
 std::optional<std::string> crash_signature(const Target target,
                                            const std::span<const std::uint8_t> bytes) {
     if (isolate_cases) {
         const auto input = bytes.empty() ? std::string("-") : hex_bytes(bytes);
-#ifdef _WIN32
+        const auto signature_path = next_signature_path();
+        std::error_code cleanup_error;
+        std::filesystem::remove(signature_path, cleanup_error);
         const auto executable = executable_path.string();
         const auto target_text = std::string(target_name(target));
+        const auto signature_text = signature_path.string();
+        std::optional<std::string> process_failure;
+#ifdef _WIN32
         const std::array arguments{executable.c_str(),
                                    "--target",
                                    target_text.c_str(),
                                    "--input-hex",
                                    input.c_str(),
+                                   "--signature-file",
+                                   signature_text.c_str(),
                                    "--child",
                                    static_cast<const char*>(nullptr)};
         const auto status =
             static_cast<int>(_spawnv(_P_WAIT, executable.c_str(), arguments.data()));
-#else
-        std::ostringstream command;
-        command << '"' << executable_path.string() << "\" --target " << target_name(target)
-                << " --input-hex '" << input << "' --child";
-        command << " >/dev/null 2>/dev/null";
-        const auto status = std::system(command.str().c_str());
-#endif
-        if (status != 0) {
-            return "child-exit:" + std::to_string(status);
+        if (status == -1) {
+            process_failure = "process-spawn-error";
+        } else if (status != 0) {
+            std::ostringstream failure;
+            failure << "windows-process-status:0x" << std::hex << std::uppercase
+                    << static_cast<std::uint32_t>(status);
+            process_failure = failure.str();
         }
+#else
+        std::array<char*, 9u> arguments{executable.data(),
+                                        const_cast<char*>("--target"),
+                                        target_text.data(),
+                                        const_cast<char*>("--input-hex"),
+                                        input.data(),
+                                        const_cast<char*>("--signature-file"),
+                                        signature_text.data(),
+                                        const_cast<char*>("--child"),
+                                        nullptr};
+        pid_t child = 0;
+        const auto spawn_status =
+            posix_spawn(&child, executable.c_str(), nullptr, nullptr, arguments.data(), environ);
+        if (spawn_status != 0) {
+            process_failure = "process-spawn-error:" + std::to_string(spawn_status);
+        } else {
+            int wait_status = 0;
+            if (waitpid(child, &wait_status, 0) != child) {
+                process_failure = "process-wait-error";
+            } else if (WIFSIGNALED(wait_status)) {
+                process_failure = "process-signal:" + std::to_string(WTERMSIG(wait_status));
+            } else if (!WIFEXITED(wait_status)) {
+                process_failure = "process-state:" + std::to_string(wait_status);
+            } else if (const auto exit_status = WEXITSTATUS(wait_status); exit_status != 0) {
+                process_failure = "process-exit:" + std::to_string(exit_status);
+            }
+        }
+#endif
+        const auto signature = read_signature(signature_path);
+        std::filesystem::remove(signature_path, cleanup_error);
+        if (signature) return signature;
+        if (process_failure) return process_failure;
         return std::nullopt;
     }
     try {
         exercise(target, bytes);
     } catch (const std::exception& error) {
-        return std::string(typeid(error).name()) + ":" + error.what();
+        return exception_signature(error);
     } catch (...) {
         return "non-standard-exception";
     }
@@ -747,6 +834,8 @@ Options parse_options(const int argc, char** argv) {
             options.max_input_size = static_cast<std::size_t>(parsed);
         } else if (argument == "--input-hex") {
             options.input = parse_hex(value);
+        } else if (argument == "--signature-file") {
+            options.signature_file = std::filesystem::path(value);
         } else {
             throw std::invalid_argument("Unbekannte Option: " + std::string(argument));
         }
@@ -764,8 +853,22 @@ int main(const int argc, char** argv) {
             if (options.target == Target::All) {
                 throw std::invalid_argument("--input-hex braucht ein einzelnes Ziel.");
             }
-            exercise(options.target, *options.input);
-            return EXIT_SUCCESS;
+            try {
+                exercise(options.target, *options.input);
+                return EXIT_SUCCESS;
+            } catch (const std::exception& error) {
+                if (options.signature_file) {
+                    write_signature(*options.signature_file, exception_signature(error));
+                    return EXIT_FAILURE;
+                }
+                throw;
+            } catch (...) {
+                if (options.signature_file) {
+                    write_signature(*options.signature_file, "non-standard-exception");
+                    return EXIT_FAILURE;
+                }
+                throw;
+            }
         }
         isolate_cases = options.isolate && !options.child;
         if (options.target == Target::All) {

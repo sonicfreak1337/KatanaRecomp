@@ -4,6 +4,7 @@
 #include "katana/runtime/abi.hpp"
 
 #include <cstdint>
+#include <optional>
 #include <span>
 #include <string>
 #include <string_view>
@@ -42,6 +43,7 @@ struct BackendRequest {
     std::string_view symbol_namespace = "katana_generated";
     bool emit_run_functions = true;
     bool external_function_linkage = false;
+    std::optional<std::uint32_t> metadata_entry_address;
 };
 
 struct BackendEmission {

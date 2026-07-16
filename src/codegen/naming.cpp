@@ -54,7 +54,11 @@ deterministic_translation_unit_name(const TranslationUnitPartition& partition,
         }
         selected.push_back(functions[index]);
     }
-    const auto canonical_ir = katana::ir::emit_ir_json(selected);
+    std::vector<std::uint32_t> global_entries;
+    global_entries.reserve(functions.size());
+    for (const auto& function : functions)
+        global_entries.push_back(function.entry_address);
+    const auto canonical_ir = katana::ir::emit_ir_fragment_json(selected, global_entries);
     std::ostringstream output;
     output << "unit-" << std::dec << std::setfill('0') << std::setw(5) << partition.index << "-v"
            << std::uppercase << std::hex << std::setw(8) << partition.first_entry_address << "-"

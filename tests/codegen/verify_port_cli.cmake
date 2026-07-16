@@ -54,5 +54,17 @@ if(NOT game_result EQUAL 0 OR NOT game_output MATCHES "Katana-Port bereit")
   message(FATAL_ERROR "Gebautes Porttarget ist nicht lauffaehig: ${game_error}")
 endif()
 
+execute_process(
+  COMMAND "${game}" --run-generated
+  RESULT_VARIABLE generated_result
+  OUTPUT_VARIABLE generated_output
+  ERROR_VARIABLE generated_error
+)
+if(NOT generated_result EQUAL 0 OR NOT generated_output MATCHES "Generierter Einstieg beendet")
+  file(REMOVE_RECURSE "${fixture}")
+  message(FATAL_ERROR
+    "Mehrteiliger generierter Zielcode ist nicht lauffaehig: ${generated_error}")
+endif()
+
 file(REMOVE_RECURSE "${fixture}")
 message(STATUS "KR-3507 Port-CLI und synthetischer Hostbuild erfolgreich")

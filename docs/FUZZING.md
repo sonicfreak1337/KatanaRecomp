@@ -26,6 +26,12 @@ letzten Fall. Es werden weder Eingaben noch Crasher ungefragt auf die Festplatte
 geschrieben; die JSON-Zeile kann bei Bedarf bewusst in ein Korpus uebernommen
 werden.
 
+Im isolierten Modus startet der Reducer Kindprozesse direkt, ohne Shell. Eine
+kurzlebige Signaturdatei uebermittelt Ausnahmekategorie und Fehlermeldung; bei
+abnormalem Prozessende wird stattdessen der Windows-Status beziehungsweise das
+POSIX-Signal verwendet. Eine Verkleinerung gilt nur dann als derselbe Fehler,
+wenn diese strukturierte Signatur unveraendert bleibt.
+
 Das CMake-Profil `fuzz-debug` aktiviert den Runner im einzigen Buildverzeichnis
 `build-current/` und erbt das Sanitizer-Debugprofil. Der feste Kurzlauf ist als
 vier unabhaengige CTest-Eintraege registriert. Ihre Seeds entsprechen exakt den

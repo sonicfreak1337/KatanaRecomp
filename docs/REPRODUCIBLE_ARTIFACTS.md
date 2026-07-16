@@ -30,3 +30,19 @@ unter `build-current/artifacts/` zurueck:
 Ein schmutziger Git-Stand, fehlende oder doppelte Werkzeuge, ein abweichender
 Buildpfad und jede Doppelgenerierungsabweichung brechen sichtbar ab. Der Lauf
 erfolgt erstmals gesammelt in KR-3709.
+
+Ein Artefakt darf nur dann einem Tag zugeordnet werden, wenn sein internes
+`source_commit` exakt auf den vom Tag bezeichneten Commit zeigt. Das wird vor
+der Veroeffentlichung zusammen mit einem optional extern gespeicherten Hash
+geprueft:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File `
+  tools/quality/verify-artifact-provenance.ps1 `
+  -Archive build-current/artifacts/KatanaRecomp-0.37.0-dev.zip `
+  -GitRef v0.37.0 -ExpectedSha256 <hash-aus-release-metadaten>
+```
+
+Der ZIP-Hash gehoert in externe Release-Metadaten und nicht in den Commit, den
+das ZIP selbst als Provenienz enthaelt. Dadurch entsteht kein kryptografischer
+Selbstbezug.

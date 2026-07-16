@@ -155,10 +155,12 @@ template <typename Value> std::vector<Value> sorted_values(const std::vector<Val
     return result;
 }
 
-std::vector<const Function*> sorted_functions(const std::span<const Function> functions) {
+std::vector<const Function*>
+sorted_functions(const std::span<const Function> functions,
+                 const std::span<const std::uint32_t> external_function_entries = {}) {
     std::vector<const Function*> result;
     result.reserve(functions.size());
-    require_valid_program(functions);
+    require_valid_program(functions, external_function_entries);
     for (const auto& function : functions)
         result.push_back(&function);
     std::sort(result.begin(), result.end(), [](const auto* left, const auto* right) {
@@ -373,7 +375,12 @@ std::string emit_ir_text(const std::span<const Function> functions) {
 }
 
 std::string emit_ir_json(const std::span<const Function> functions) {
-    const auto ordered_functions = sorted_functions(functions);
+    return emit_ir_fragment_json(functions, {});
+}
+
+std::string emit_ir_fragment_json(const std::span<const Function> functions,
+                                  const std::span<const std::uint32_t> external_function_entries) {
+    const auto ordered_functions = sorted_functions(functions, external_function_entries);
     std::ostringstream output;
     output << "{\"schema\":\"katana-ir-v2\",\"functions\":[";
     for (std::size_t function_index = 0u; function_index < ordered_functions.size();

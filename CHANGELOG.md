@@ -15,6 +15,22 @@
   Abschlussgate, waehrend oeffentliche Dokumentation, Packaging sowie der
   vollstaendige Daten- und Lizenzaudit im Alpha-Kandidaten gebuendelt werden.
 
+### Behoben
+
+- Mehrteiliger Port-Codegen verwendet einen partitionsuebergreifend identischen
+  Programmeinstieg, validiert externe Callziele als IR-Fragmente und fuehrt den
+  erzeugten Hostbuild im Regressionstest tatsaechlich aus.
+- Differentialtests kompilieren die Spezialkorpora ueber den echten
+  C++-Emitter; Manifestprofile erreichen alle Analyseberichte und nicht
+  anwendbare Runtimeprofile enden kontrolliert als Codegen-Capability-Fehler.
+- Der isolierte Fuzz-Reducer startet Kindprozesse shellfrei und minimiert nur
+  bei gleicher Ausnahme-, Prozessstatus- oder Signalsignatur. CLI-I/O-Fehler
+  verwenden typisierte Ausnahmen statt uebersetzbarer Meldungsfragmente.
+- Release-Provenienz wird gegen den aufgeloesten Tag-Commit geprueft, ohne einen
+  selbstbezueglichen ZIP-Hash im Tag zu behaupten. Der Referenzaudit lehnt
+  unbekannte Binaerdateien, Git-LFS-Zeiger und generierten Quellcode ausserhalb
+  der Testfixtures ab.
+
 ## [0.37.0] - 2026-07-16
 
 ### Hinzugefuegt

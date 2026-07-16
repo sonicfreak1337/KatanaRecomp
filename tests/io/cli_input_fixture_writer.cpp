@@ -71,5 +71,39 @@ int main(const int argc, char* argv[]) {
              << "entry_point = 0x8C010000\n"
              << "segment_kind = code\n"
              << "permissions = r-x\n";
-    return manifest ? 0 : 2;
+    std::ofstream profiled(directory / "program-profile.katana");
+    profiled << "schema = katana-project\n"
+             << "version = 2\n"
+             << "project.name = profiled\n"
+             << "input.format = raw\n"
+             << "input.path = program.bin\n"
+             << "image.base_address = 0x8C010000\n"
+             << "image.entry_point = 0x8C010000\n"
+             << "segment.name = .text\n"
+             << "segment.kind = code\n"
+             << "segment.permissions = r-x\n"
+             << "execution.firmware = direct\n"
+             << "execution.fallback = diagnostic\n"
+             << "execution.scheduler = deterministic\n"
+             << "execution.mmu = disabled\n"
+             << "execution.fastpath = guarded\n"
+             << "execution.required_capabilities = controlled-fallback\n";
+    std::ofstream mmu(directory / "program-mmu.katana");
+    mmu << "schema = katana-project\n"
+        << "version = 2\n"
+        << "project.name = mmu\n"
+        << "input.format = raw\n"
+        << "input.path = program.bin\n"
+        << "image.base_address = 0x8C010000\n"
+        << "image.entry_point = 0x8C010000\n"
+        << "segment.name = .text\n"
+        << "segment.kind = code\n"
+        << "segment.permissions = r-x\n"
+        << "execution.firmware = direct\n"
+        << "execution.fallback = abort\n"
+        << "execution.scheduler = deterministic\n"
+        << "execution.mmu = sh4\n"
+        << "execution.fastpath = conservative\n"
+        << "execution.required_capabilities = mmu\n";
+    return manifest && profiled && mmu ? 0 : 2;
 }

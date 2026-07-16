@@ -112,5 +112,7 @@ void require_differential_match(const DifferentialReport& report);
 [[nodiscard]] std::string format_differential_counterexample_json(const DifferentialReport& report);
 
 [[nodiscard]] std::vector<DifferentialProgram> default_differential_corpus();
+[[nodiscard]] std::vector<DifferentialProgram> differential_regression_programs();
+void run_generated_differential_program(std::size_t index, runtime::CpuState& cpu);
 
 } // namespace katana::testing

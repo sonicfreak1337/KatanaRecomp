@@ -2269,8 +2269,9 @@ BackendEmission CppBackend::emit(const BackendRequest& request) const {
                         << "}\n\n";
     }
 
-    metadata << "inline constexpr std::uint32_t generated_entry_address = " << hex32(entry_address)
-             << ";\n\n"
+    const auto metadata_entry_address = request.metadata_entry_address.value_or(entry_address);
+    metadata << "inline constexpr std::uint32_t generated_entry_address = "
+             << hex32(metadata_entry_address) << ";\n\n"
              << "} // namespace " << request.symbol_namespace << "\n";
 
     return {declarations.str(), function_bodies.str(), metadata.str()};

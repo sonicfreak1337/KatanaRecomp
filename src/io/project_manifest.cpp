@@ -1,15 +1,18 @@
 #include "katana/io/project_manifest.hpp"
 
 #include "katana/io/elf32_sh_loader.hpp"
+#include "katana/io/input_output_error.hpp"
 #include "katana/io/raw_binary_loader.hpp"
 #include "katana/io/symbol_map.hpp"
 
 #include <algorithm>
 #include <charconv>
 #include <fstream>
+#include <iomanip>
 #include <limits>
 #include <map>
 #include <set>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -36,6 +39,12 @@ std::string trim(const std::string_view text) {
     }
     const auto last = text.find_last_not_of(" \t\r");
     return std::string(text.substr(first, last - first + 1u));
+}
+
+std::string hex32(const std::uint32_t value) {
+    std::ostringstream output;
+    output << "0x" << std::hex << std::uppercase << std::setw(8) << std::setfill('0') << value;
+    return output.str();
 }
 
 std::uint32_t parse_unsigned(std::string text,
@@ -321,7 +330,7 @@ void require_valid_project_alias_groups(
 ProjectManifest parse_project_manifest(const std::filesystem::path& path) {
     std::ifstream input(path);
     if (!input) {
-        throw std::runtime_error("Projektmanifest konnte nicht geoeffnet werden: " + path.string());
+        throw InputOutputError("Projektmanifest konnte nicht geoeffnet werden: " + path.string());
     }
 
     std::map<std::string, ManifestValue> values;
@@ -347,8 +356,8 @@ ProjectManifest parse_project_manifest(const std::filesystem::path& path) {
         }
     }
     if (!input.eof()) {
-        throw std::runtime_error("Projektmanifest konnte nicht vollstaendig gelesen werden: " +
-                                 path.string());
+        throw InputOutputError("Projektmanifest konnte nicht vollstaendig gelesen werden: " +
+                               path.string());
     }
 
     const auto& version = require_value(values, "version", path);
@@ -648,6 +657,74 @@ const char* project_fallback_policy_name(const ProjectFallbackPolicy policy) noe
         return "diagnostic";
     }
     return "unknown";
+}
+
+std::string format_project_execution_profile_text(const ProjectManifest& profile) {
+    std::ostringstream output;
+    output << "execution-profile-v1"
+           << " firmware=" << project_firmware_mode_name(profile.firmware_mode)
+           << " fallback=" << project_fallback_policy_name(profile.fallback_policy)
+           << " scheduler=" << profile.scheduler_profile
+           << " mmu=" << (profile.mmu_profile == ProjectMmuProfile::Sh4 ? "sh4" : "disabled")
+           << " fastpath="
+           << (profile.fastpath_profile == ProjectFastpathProfile::Guarded ? "guarded"
+                                                                           : "conservative")
+           << " aliases=" << profile.alias_groups.size()
+           << " writable_executable=" << profile.writable_executable_ranges.size()
+           << " capabilities=";
+    for (std::size_t index = 0u; index < profile.required_backend_capabilities.size(); ++index) {
+        if (index != 0u) output << ',';
+        output << profile.required_backend_capabilities[index];
+    }
+    return output.str();
+}
+
+std::string format_project_execution_profile_json(const ProjectManifest& profile) {
+    std::ostringstream output;
+    output << "{\"firmware\":\"" << project_firmware_mode_name(profile.firmware_mode)
+           << "\",\"fallback\":\"" << project_fallback_policy_name(profile.fallback_policy)
+           << "\",\"scheduler\":\"" << profile.scheduler_profile << "\",\"mmu\":\""
+           << (profile.mmu_profile == ProjectMmuProfile::Sh4 ? "sh4" : "disabled")
+           << "\",\"fastpath\":\""
+           << (profile.fastpath_profile == ProjectFastpathProfile::Guarded ? "guarded"
+                                                                           : "conservative")
+           << "\",\"alias_group_count\":" << profile.alias_groups.size() << ",\"alias_groups\":[";
+    for (std::size_t index = 0u; index < profile.alias_groups.size(); ++index) {
+        if (index != 0u) output << ',';
+        const auto& alias = profile.alias_groups[index];
+        output << "{\"virtual_start\":\"" << hex32(alias.virtual_start)
+               << "\",\"physical_start\":\"" << hex32(alias.physical_start)
+               << "\",\"size\":" << alias.size << '}';
+    }
+    output << "],\"canonical_physical_ranges\":[";
+    for (std::size_t index = 0u; index < profile.canonical_physical_ranges.size(); ++index) {
+        if (index != 0u) output << ',';
+        const auto& range = profile.canonical_physical_ranges[index];
+        output << "{\"start\":\"" << hex32(range.start) << "\",\"size\":" << range.size << '}';
+    }
+    output << "],\"writable_executable_ranges\":[";
+    for (std::size_t index = 0u; index < profile.writable_executable_ranges.size(); ++index) {
+        if (index != 0u) output << ',';
+        const auto& range = profile.writable_executable_ranges[index];
+        output << "{\"start\":\"" << hex32(range.start) << "\",\"size\":" << range.size << '}';
+    }
+    output << "],\"expected_entry_points\":[";
+    for (std::size_t index = 0u; index < profile.expected_entry_points.size(); ++index) {
+        if (index != 0u) output << ',';
+        output << '"' << hex32(profile.expected_entry_points[index]) << '"';
+    }
+    output << "],\"dynamic_bios_vectors\":[";
+    for (std::size_t index = 0u; index < profile.dynamic_bios_vectors.size(); ++index) {
+        if (index != 0u) output << ',';
+        output << '"' << hex32(profile.dynamic_bios_vectors[index]) << '"';
+    }
+    output << "],\"required_capabilities\":[";
+    for (std::size_t index = 0u; index < profile.required_backend_capabilities.size(); ++index) {
+        if (index != 0u) output << ',';
+        output << '"' << profile.required_backend_capabilities[index] << '"';
+    }
+    output << "]}";
+    return output.str();
 }
 
 bool project_manifest_version_supported(const std::uint32_t version) noexcept {

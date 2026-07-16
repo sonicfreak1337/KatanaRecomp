@@ -33,6 +33,19 @@ if(NOT unoptimized_result EQUAL 0)
     message(FATAL_ERROR "Unoptimierter CLI-Lauf fehlgeschlagen: ${unoptimized_error}")
 endif()
 
+execute_process(
+    COMMAND "${KATANA_RECOMP}" emit-cpp "${FIXTURE}" 8C010000
+        "${OUTPUT_DIR}" 8C010000
+    RESULT_VARIABLE io_failure_result
+    ERROR_VARIABLE io_failure_error
+)
+if(NOT io_failure_result EQUAL 4 OR NOT io_failure_error MATCHES "input-output")
+    message(FATAL_ERROR
+        "C++-Ausgabefehler besitzt keinen stabilen I/O-Exitcode: "
+        "${io_failure_result}: ${io_failure_error}"
+    )
+endif()
+
 foreach(required_file IN ITEMS
     "${optimized_cpp}"
     "${unoptimized_cpp}"

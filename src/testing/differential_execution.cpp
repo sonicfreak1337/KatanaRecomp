@@ -341,4 +341,12 @@ std::vector<DifferentialProgram> default_differential_corpus() {
             {"bus-error-read", "bus-errors", 0x37070005u, 0x8C050000u, {0x6012u}}};
 }
 
+std::vector<DifferentialProgram> differential_regression_programs() {
+    std::vector<DifferentialProgram> programs = {
+        {"synthetic-three-paths", "core", 0x12345678u, 0x8C010000u, {0xE001u, 0x7001u, 0x2102u}}};
+    auto special = default_differential_corpus();
+    programs.insert(programs.end(), special.begin(), special.end());
+    return programs;
+}
+
 } // namespace katana::testing

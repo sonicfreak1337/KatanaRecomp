@@ -261,6 +261,36 @@ target_include_directories(
 target_link_libraries(katana_test_support PUBLIC katana_runtime)
 katana_enable_warnings(katana_test_support)
 
+add_executable(
+    katana-differential-program-writer
+    tests/testing/differential_program_writer.cpp
+)
+target_link_libraries(
+    katana-differential-program-writer
+    PRIVATE
+        katana_core
+        katana_test_support
+)
+katana_enable_warnings(katana-differential-program-writer)
+
+set(
+    KATANA_DIFFERENTIAL_GENERATED_CPP
+    ${CMAKE_CURRENT_BINARY_DIR}/generated-tests/differential_programs.cpp
+)
+add_custom_command(
+    OUTPUT ${KATANA_DIFFERENTIAL_GENERATED_CPP}
+    COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_CURRENT_BINARY_DIR}/generated-tests
+    COMMAND $<TARGET_FILE:katana-differential-program-writer>
+            ${KATANA_DIFFERENTIAL_GENERATED_CPP}
+    DEPENDS
+        katana-differential-program-writer
+        tests/testing/differential_program_writer.cpp
+        src/testing/differential_execution.cpp
+    COMMENT "Generiere echte C++-Runner fuer das Differentialkorpus"
+    VERBATIM
+)
+set_source_files_properties(${KATANA_DIFFERENTIAL_GENERATED_CPP} PROPERTIES GENERATED TRUE)
+
 add_executable(katana-recomp
     src/cli/main.cpp
 )
@@ -286,6 +316,7 @@ enable_testing()
 add_executable(
     katana-differential-execution-tests
     tests/testing/differential_execution_tests.cpp
+    ${KATANA_DIFFERENTIAL_GENERATED_CPP}
 )
 target_link_libraries(
     katana-differential-execution-tests
@@ -293,6 +324,7 @@ target_link_libraries(
         katana_test_support
 )
 katana_enable_warnings(katana-differential-execution-tests)
+add_dependencies(katana-differential-execution-tests katana-differential-program-writer)
 add_test(
     NAME katana-differential-execution-tests
     COMMAND katana-differential-execution-tests
@@ -1276,19 +1308,6 @@ set_source_files_properties(
     PROPERTIES
         OBJECT_DEPENDS ${KATANA_GENERATED_TEST_CPP}
 )
-
-set_source_files_properties(
-    tests/testing/differential_execution_tests.cpp
-    PROPERTIES
-        OBJECT_DEPENDS ${KATANA_GENERATED_TEST_CPP}
-)
-target_sources(katana-differential-execution-tests PRIVATE ${KATANA_GENERATED_TEST_CPP})
-target_include_directories(
-    katana-differential-execution-tests
-    PRIVATE
-        ${KATANA_GENERATED_TEST_DIR}
-)
-add_dependencies(katana-differential-execution-tests katana-recomp)
 
 add_executable(katana-generated-execution-tests
     tests/codegen/generated_execution_tests.cpp
