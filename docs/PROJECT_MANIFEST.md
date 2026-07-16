@@ -93,7 +93,13 @@ firmware.flash = flash.bin
 `execution.firmware` akzeptiert `direct`, `hle` und `lle`; LLE verlangt eine
 lokale `firmware.bios`, Aliasgruppen, kanonische physische Bereiche sowie die
 Faehigkeiten `memory` und `firmware-mode`. HLE verlangt ebenfalls
-`firmware-mode`. Ein aktiver `interpreter`- oder `diagnostic`-Fallback verlangt
+`firmware-mode`. Der Parser prueft damit die strukturelle Vollstaendigkeit. Der ausfuehrbare
+Alpha-Vertrag ist enger: `direct` ist verfuegbar, HLE bis KR-4602
+`contract-only` und LLE optional `unsupported`. Lokale BIOS-/Flashquellen und
+veraenderliche Arbeitskopien muessen ausserhalb eines Port-Ausgabeordners
+bleiben; keine Firmwarequelle wird paketiert.
+
+Ein aktiver `interpreter`- oder `diagnostic`-Fallback verlangt
 `controlled-fallback`, `execution.mmu = sh4` verlangt `mmu`, und WX-Bereiche
 verlangen `executable-ram`. Unbekannte Profile und widerspruechliche Aliase
 scheitern beim Parsen vor Loader und Analyse.

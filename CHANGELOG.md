@@ -98,6 +98,14 @@
   damit `0.45.0`, und die Arbeit an v0.46 darf beginnen. Diese Freigabe aendert
   nicht die kanonische Produktversion und erzeugt weder Release-Commit noch
   Tag, Download oder Paket.
+- KR-4601: Ein versionierter Alpha-Firmwarevertrag trennt den verfuegbaren
+  Direct-Retail-Einstieg, den bis KR-4602 nur vertraglich definierten HLE-Pfad
+  und optionales, nicht implementiertes LLE. Jeder Anwendungsjob validiert den
+  Modus vor Snapshot, Loader, Speicherabbildung und CPU-Reset. BIOS- und
+  Flashquellen sind read-only, werden nie paketiert und muessen ebenso wie
+  veraenderliche Flash-Arbeitskopien ausserhalb des Port-Ausgabeordners liegen.
+  Ein synthetischer Vertragstest prueft Statusmatrix, Testanforderungen,
+  Pfadisolation sowie konkrete HLE-/LLE-Ablehnungen ohne Firmwarebytes.
 - Der neue inkrementelle Entwicklungszyklus behaelt `build-current/`, setzt teure Gate-Instrumentierung beim Debugprofil sicher zurueck und baut sowie testet mit begrenzter Parallelitaet. Das frische Abschluss-Gate bleibt erhalten; die vier deterministischen Fuzzziele laufen mit unveraenderter Fallzahl und denselben abgeleiteten Seeds als parallele CTest-Eintraege.
 - Der Entwicklungsrunner normalisiert auch eine bereits aktive x86-Developer-PowerShell auf die fuer den Projektbuild erforderliche native x64-MSVC-Umgebung.
 - KR-3801 bis KR-3808: Ein intern provenance-gebundenes, vollstaendig

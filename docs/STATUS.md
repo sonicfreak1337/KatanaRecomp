@@ -4,7 +4,7 @@ Interner Entwicklungsmeilenstein: `0.45.0`
 
 Phase: Pre-Alpha
 
-Naechster Roadmap-Task: Phase 11 / KR-4601
+Naechster Roadmap-Task: Phase 11 / KR-4602
 
 Naechstes Phasengate: `v0.46.0` - Abschluss Phase 11
 
@@ -12,11 +12,11 @@ Erster oeffentlicher Produktrelease: `v0.50.0` Alpha
 
 ## Fortschritt
 
-- 201 von 236 gepflegten Roadmap-Tasks abgeschlossen: 85,2 %
+- 202 von 236 gepflegten Roadmap-Tasks abgeschlossen: 85,6 %
 - Phase-9-Reviewkorrekturen sind implementiert; das eigenstaendige
   achtteilige Homebrew-Korpus und Linux-Evidenz bleiben offen
 - Phase 10: 13/13 Tasks im freigegebenen Windows-GDI-Workflow
-- Phase 11: 11/16 Tasks
+- Phase 11: 12/16 Tasks
 - Phase 12: 0/10 Tasks
 - Phase 13: 0/5 Tasks vor dem Alpha-Gate
 - Alpha-Gate noch nicht erreicht
@@ -33,7 +33,7 @@ Erster oeffentlicher Produktrelease: `v0.50.0` Alpha
 | 8 | Werkzeuge und Qualitaet | 26/26 |
 | 9 | Kompatibilitaet und Leistung | Reviewkorrekturen offen |
 | 10 | Desktop-GUI und Quellworkflow | 13/13 (Windows-GDI-Scope) |
-| 11 | Bootanalyse und Retail-Systemdienste | 11/16 |
+| 11 | Bootanalyse und Retail-Systemdienste | 12/16 |
 | 12 | Interaktive Retail-Runtime und Portintegration | 0/10 |
 | 13 | Spielbarer Alpha-Kandidat | 0/5 |
 
@@ -52,6 +52,12 @@ bei vollstaendiger committed Executable-Byteabdeckung und ohne erreichbare
 Analyse-Abbruchkante frei. Vorher/nachher-Provenienzpruefung, dauerhafter letzter
 Erfolgsstand bei wiederholten Fehlern und echte Windows-/Linux-Prozesslocks
 sichern Eingabe und Ausgabe desselben Jobs.
+
+Der Alpha-Firmwarevertrag Version 1 meldet Direct ehrlich als verfuegbar, HLE
+bis zur BIOS-ABI-Implementierung in KR-4602 als `contract-only` und optionales
+LLE als `unsupported`. Lokale Firmwarequellen bleiben read-only, ausserhalb von
+Portausgaben und unverpackt; veraenderliche Flashnutzung verlangt eine getrennte
+kontrollierte Arbeitskopie. Die Pruefung erfolgt vor Loader- oder Gastwirkung.
 
 CLI und GUI beobachten denselben sequenzierten hierarchischen Ereignisstrom.
 Gesamtfortschritt ist monoton, Einzelschritte besitzen nur bei bekannter Menge

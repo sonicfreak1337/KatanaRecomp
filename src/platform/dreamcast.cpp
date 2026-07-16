@@ -1,5 +1,7 @@
 #include "katana/platform/dreamcast.hpp"
 
+#include "katana/platform/firmware_profile.hpp"
+
 #include "katana/runtime/dreamcast_memory.hpp"
 
 #include <iomanip>
@@ -37,11 +39,7 @@ bool fits_main_ram_alias(const std::uint32_t address, const std::uint64_t size) 
 DreamcastBootResult boot_homebrew(runtime::CpuState& cpu,
                                   const io::ExecutableImage& image,
                                   const DreamcastBootConfig& config) {
-    if (config.firmware_mode != FirmwareMode::DirectHomebrew) {
-        throw std::invalid_argument(
-            "v0.26 unterstuetzt nur den BIOS-freien Homebrew-Direkteinstieg; HLE/LLE sind bewusst "
-            "nicht aktiviert.");
-    }
+    require_alpha_firmware_profile(config.firmware_mode);
     if (image.segments().empty()) {
         throw std::invalid_argument("Homebrew-Abbild besitzt keine ladbaren Segmente.");
     }

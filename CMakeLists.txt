@@ -225,6 +225,7 @@ add_library(katana_core STATIC
     src/platform/dreamcast.cpp
     src/platform/dreamcast_disc.cpp
     src/platform/firmware_diagnostics.cpp
+    src/platform/firmware_profile.cpp
     src/platform/phase6_gate.cpp
     src/analysis/disassembler.cpp
     src/analysis/code_address.cpp
@@ -980,6 +981,16 @@ katana_enable_warnings(katana-project-manifest-tests)
 add_test(
     NAME katana-project-manifest-tests
     COMMAND katana-project-manifest-tests
+)
+
+add_executable(katana-alpha-firmware-profile-tests
+    tests/platform/alpha_firmware_profile_tests.cpp
+)
+target_link_libraries(katana-alpha-firmware-profile-tests PRIVATE katana_core)
+katana_enable_warnings(katana-alpha-firmware-profile-tests)
+add_test(
+    NAME katana-alpha-firmware-profile-tests
+    COMMAND katana-alpha-firmware-profile-tests
 )
 
 add_executable(katana-tooling-contract-tests tests/io/tooling_contract_tests.cpp)

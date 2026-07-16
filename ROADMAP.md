@@ -1180,7 +1180,7 @@ Profil besitzt keine stillen Opcode-Luecken; der verteilbare Nachweis erreicht
 
 Fortschritt:
 
-- [ ] KR-4601 - Alpha-Firmwaremodus und Retail-Bootvertrag
+- [x] KR-4601 - Alpha-Firmwaremodus und Retail-Bootvertrag
 - [ ] KR-4602 - BIOS-ABI und dynamische Firmwarevektoren
 - [ ] KR-4603 - Dreamcast-System-ASIC sowie MMIO- und Interruptintegration
 - [ ] KR-4604 - v0.46 Gate-Vorbereitung: Tests und Build

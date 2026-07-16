@@ -12,6 +12,7 @@
 #include "katana/ir/lower.hpp"
 #include "katana/ir/optimize.hpp"
 #include "katana/ir/verifier.hpp"
+#include "katana/platform/firmware_profile.hpp"
 #include "katana/runtime/gdi.hpp"
 
 #include <algorithm>
@@ -930,9 +931,33 @@ std::uint32_t parse_decimal(const std::string_view text, const char* field) {
     return value;
 }
 
+void require_firmware_profile(const io::ProjectManifest& profile,
+                              const std::optional<std::filesystem::path>& port_output_directory) {
+    platform::FirmwareMode firmware_mode = platform::FirmwareMode::DirectHomebrew;
+    switch (profile.firmware_mode) {
+    case io::ProjectFirmwareMode::Direct:
+        break;
+    case io::ProjectFirmwareMode::Hle:
+        firmware_mode = platform::FirmwareMode::HleBiosAbi;
+        break;
+    case io::ProjectFirmwareMode::Lle:
+        firmware_mode = platform::FirmwareMode::LleFirmware;
+        break;
+    }
+    platform::AlphaFirmwareInputPolicy firmware_inputs;
+    firmware_inputs.bios_source = profile.bios_path;
+    firmware_inputs.flash_source = profile.flash_path;
+    firmware_inputs.port_output_directory = port_output_directory;
+    platform::require_alpha_firmware_profile(firmware_mode, firmware_inputs);
+}
+
 } // namespace
 
-void require_cpp_profile_capabilities(const io::ProjectManifest& profile) {
+void require_cpp_profile_capabilities(
+    const io::ProjectManifest& profile,
+    const std::optional<std::filesystem::path>& port_output_directory) {
+    require_firmware_profile(profile, port_output_directory);
+
     std::vector<std::string> unsupported;
     for (const auto& capability_name : profile.required_backend_capabilities) {
         if (capability_name != "memory") unsupported.push_back(capability_name);
@@ -1140,6 +1165,7 @@ JobResult ApplicationService::execute(const JobRequest& request,
     try {
         require_not_cancelled(cancellation);
         auto manifest = io::parse_project_manifest(request.manifest_path);
+        require_firmware_profile(manifest, final_root);
         events.emit(JobState::Running, 5u, "validation", {}, JobStepStatus::Completed, 1u, 1u);
         events.emit(JobState::Running, 5u, "hashing", {}, JobStepStatus::Running);
         const auto snapshot = capture_project_snapshot(manifest, cancellation);

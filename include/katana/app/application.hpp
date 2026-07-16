@@ -173,7 +173,9 @@ class ApplicationService final {
     std::filesystem::path runtime_root_;
 };
 
-void require_cpp_profile_capabilities(const io::ProjectManifest& profile);
+void require_cpp_profile_capabilities(
+    const io::ProjectManifest& profile,
+    const std::optional<std::filesystem::path>& port_output_directory = std::nullopt);
 
 class JobCoordinator final {
   public:

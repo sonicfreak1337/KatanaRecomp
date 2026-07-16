@@ -2587,7 +2587,7 @@ Akzeptanz:
 - die Freigabe erlaubt nur den Beginn von v0.46; es folgen keine
   Release-Aktionen
 
-### [ ] KR-4601 - Alpha-Firmwaremodus und Retail-Bootvertrag
+### [x] KR-4601 - Alpha-Firmwaremodus und Retail-Bootvertrag
 
 Abhaengigkeiten: KR-2604, KR-3505, KR-4505
 
