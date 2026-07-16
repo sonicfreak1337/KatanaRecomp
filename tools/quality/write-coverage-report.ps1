@@ -1,7 +1,8 @@
 [CmdletBinding()]
 param(
     [string]$BuildDirectory = "",
-    [string]$SourceDirectory = ""
+    [string]$SourceDirectory = "",
+    [ValidateRange(1, 256)][int]$Parallelism = 8
 )
 
 $ErrorActionPreference = "Stop"
@@ -85,6 +86,7 @@ if ($backend -eq "msvc-dynamic") {
         "--nologo",
         "ctest",
         "--test-dir", $resolvedBuild,
+        "--parallel", $Parallelism,
         "--output-on-failure",
         "--no-tests=error"
     )
@@ -96,6 +98,7 @@ if ($backend -eq "msvc-dynamic") {
     }
     Invoke-Checked -Command "ctest" -Arguments @(
         "--test-dir", $resolvedBuild,
+        "--parallel", $Parallelism,
         "--output-on-failure",
         "--no-tests=error"
     )

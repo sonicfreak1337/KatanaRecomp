@@ -28,6 +28,9 @@ werden.
 
 Das CMake-Profil `fuzz-debug` aktiviert den Runner im einzigen Buildverzeichnis
 `build-current/` und erbt das Sanitizer-Debugprofil. Der feste Kurzlauf ist als
-CTest registriert, wird nach dem Phase-8-Workflow aber erst gesammelt in KR-3709
+vier unabhaengige CTest-Eintraege registriert. Ihre Seeds entsprechen exakt den
+vier vom kanonischen `all`-Lauf abgeleiteten Seeds; Fallzahl, Isolation und
+Reproduzierbarkeit bleiben gleich, waehrend CTest die Ziele parallel ausfuehren
+kann. Der Kurzlauf wird nach dem Phase-8-Workflow erst gesammelt in KR-3709
 gebaut und ausgefuehrt. Externe Langlaeufe skalieren ausschliesslich
 `--iterations` und `--max-input-size`.

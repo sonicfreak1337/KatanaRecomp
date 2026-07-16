@@ -302,17 +302,29 @@ if(KATANA_BUILD_FUZZERS)
     add_executable(katana-fuzz tools/fuzz/fuzz_runner.cpp)
     target_link_libraries(katana-fuzz PRIVATE katana_core katana_runtime)
     katana_enable_warnings(katana-fuzz)
-    add_test(
-        NAME katana-fuzz-smoke
-        COMMAND katana-fuzz
-            --target all
-            --seed 0x3703
-            --iterations 256
-            --max-input-size 4096
-            --isolate
-    )
-    # Dynamic coverage instrumentation adds substantial per-iteration overhead on MSVC.
-    set_tests_properties(katana-fuzz-smoke PROPERTIES TIMEOUT 900)
+
+    function(katana_add_fuzz_smoke target seed)
+        add_test(
+            NAME katana-fuzz-${target}-smoke
+            COMMAND katana-fuzz
+                --target ${target}
+                --seed ${seed}
+                --iterations 256
+                --max-input-size 4096
+                --isolate
+        )
+        # Dynamic coverage adds substantial per-iteration overhead on MSVC.
+        set_tests_properties(katana-fuzz-${target}-smoke PROPERTIES TIMEOUT 900)
+    endfunction()
+
+    # These are the exact per-target seeds previously derived by --target all
+    # from the canonical seed 0x3703. Separate CTest entries preserve every
+    # deterministic case while allowing the four independent targets to overlap.
+    katana_add_fuzz_smoke(decoder 0xDEC0E902)
+    katana_add_fuzz_smoke(loader 0x10ADD701)
+    katana_add_fuzz_smoke(ir 0x1A003700)
+    katana_add_fuzz_smoke(runtime 0x37083707)
+
 endif()
 
 add_executable(katana-runtime-tests

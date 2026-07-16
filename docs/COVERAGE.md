@@ -14,7 +14,8 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File tools/quality/write-cove
 
 Der Runner prueft den kanonischen Buildpfad und den von CMake erzeugten
 Backendvertrag, leert nur den verifizierten Unterordner
-`build-current/coverage/` und fuehrt das vollstaendige CTest-Korpus aus. Unter
+`build-current/coverage/` und fuehrt das vollstaendige CTest-Korpus mit
+begrenzter Parallelitaet aus. Unter
 MSVC entsteht der Bericht direkt als Cobertura-XML. Fuer GCC/Clang muss `gcovr`
 mit einem zum Compiler passenden gcov-Treiber im `PATH` liegen.
 

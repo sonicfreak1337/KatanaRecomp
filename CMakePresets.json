@@ -12,7 +12,12 @@
       "generator": "Ninja",
       "binaryDir": "${sourceDir}/build-current",
       "cacheVariables": {
-        "CMAKE_BUILD_TYPE": "Debug"
+        "CMAKE_BUILD_TYPE": "Debug",
+        "KATANA_ENABLE_SANITIZERS": "OFF",
+        "KATANA_BUILD_FUZZERS": "OFF",
+        "KATANA_ENABLE_COVERAGE": "OFF",
+        "KATANA_ENABLE_STATIC_ANALYSIS": "OFF",
+        "KATANA_REPRODUCIBLE_ARTIFACTS": "OFF"
       }
     },
     {
@@ -90,7 +95,8 @@
         "outputOnFailure": true
       },
       "execution": {
-        "noTestsAction": "error"
+        "noTestsAction": "error",
+        "jobs": 8
       }
     },
     {

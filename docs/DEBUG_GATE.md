@@ -39,3 +39,20 @@ weder Push-/PR-Checks noch einen Release-Build starten.
 Das Gate wird gemaess der Roadmap nicht nach jedem Task ausgefuehrt. KR-3709
 ruft es genau einmal nach Umsetzung aller gesammelten Phase-8-Regressionen auf
 und stoppt danach fuer das Nutzerreview vor KR-3710.
+
+## Inkrementeller Entwicklungszyklus
+
+Fuer die laufende Entwicklung bleibt `build-current/` erhalten. Der folgende
+Befehl konfiguriert das reine Debugprofil, baut nur geaenderte Ziele und fuehrt
+die vollstaendige Regression mit begrenzter Parallelitaet aus:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass `
+  -File .\tools\gates\run-dev-cycle.ps1
+```
+
+Mit `-TestRegex '<ausdruck>'` kann waehrend einer Aenderung zusaetzlich nur das
+betroffene CTest-Teilkorpus ausgefuehrt werden. Vor einem Review oder Gate bleibt
+die vollstaendige Regression erforderlich. Das `debug-gate`-Preset setzt alle
+zusaetzlichen Instrumentierungsprofile explizit zurueck, damit ein vorheriger
+Sanitizer-, Coverage- oder Analysebuild den Entwicklungszyklus nicht verteuert.
