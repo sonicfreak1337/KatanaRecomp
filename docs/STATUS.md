@@ -1,8 +1,8 @@
 # Projektstatus
 
-Version: 0.32.0
+Version: 0.33.0
 Phase: Pre-Alpha
-Naechster Meilenstein: v0.33.0 - Skalierbare Codeausgabe und Build-Cache
+Naechster Meilenstein: v0.34.0 - Indirekter Dispatch und Fallback
 
 ## Zusammenfassung
 
@@ -34,7 +34,8 @@ Praktische Einordnung:
 - [x] Der frei verteilbare synthetische Vertical Slice bootet, verarbeitet Eingabe, rendert ein Bildprimitiv und erzeugt Audio in einem gemeinsamen Lauf
 - [x] Der kumulative lokale Phase-6-Test erreicht `SA_PHASE6_MAIN_EXECUTION_STARTED`
 - [x] Modulare Backend-, Block-ABI- und Plattformdienst-Schnittstelle von v0.32.0 abgeschlossen
-- [~] Der naechste Engpass ist die skalierbare, deterministische und inkrementelle Codeausgabe von v0.33.0
+- [x] Skalierbare, deterministische und inkrementelle Codeausgabe von v0.33.0 abgeschlossen
+- [~] Der naechste Engpass ist der indirekte Dispatch, Fallback und die Codeinvalidierung von v0.34.0
 - [ ] Von Alpha sind wir noch deutlich entfernt, weil nach Phase 6 auch Codegen-/Dispatch-Haertung, Tooling, Kompatibilitaet, GUI und `.gdi`-Workflow fehlen
 
 ### Phasenstatus
@@ -53,21 +54,21 @@ Praktische Einordnung:
 
 ## Teststatus
 
-Letztes abgeschlossenes Release-Gate (`v0.32.0`):
+Letztes abgeschlossenes Release-Gate (`v0.33.0`):
 
 ```text
-100% tests passed out of 127 (frischer lokaler Debug-Build)
+100% tests passed out of 132 (frischer lokaler Debug-Build)
 ```
 
 Aktueller Release-Stand:
 
 ```text
-127/127 Tests bestanden
-modulare Backend-, Block-ABI- und Plattformdiensttests bestanden
-kein Sonic-Adventure-Test am Zwischenrelease v0.32.0 erforderlich oder ausgefuehrt
+132/132 Tests bestanden
+deterministische Partitionierungs-, Cache-, Projekt- und Metadatentests bestanden
+kein Sonic-Adventure-Test am Zwischenrelease v0.33.0 erforderlich oder ausgefuehrt
 ```
 
-Aktueller Entwicklungsstand (`KR-3305`):
+Aktueller Entwicklungsstand (`v0.33.0`):
 
 ```text
 132/132 Debug-Tests bestanden
@@ -233,11 +234,12 @@ Lokale Sonic-Adventure-Akzeptanzstrategie:
 - [x] KR-3303 - Inkrementeller Codegen-Cache
 - [x] KR-3304 - Parallele Ausgabe und Buildintegration
 - [x] KR-3305 - Deterministische Blockmetadaten
+- [x] v0.33.0 Release-Gate - 132/132 Debug, kein Phasentest
 
 ## Naechster Arbeitsschritt
 
-- [ ] v0.33.0 Release-Gate
-- [ ] danach KR-3401 - Laufzeit-Blocktabelle
+- [ ] KR-3401 - Laufzeit-Blocktabelle
+- [ ] danach KR-3402 - Indirekter Call- und Jump-Dispatch
 
 ## Aktuelle Einschraenkungen
 

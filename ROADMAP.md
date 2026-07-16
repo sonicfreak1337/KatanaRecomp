@@ -1,7 +1,7 @@
 # KatanaRecomp Roadmap
 
 Status: Pre-Alpha
-Aktuelle Basis: v0.32.0
+Aktuelle Basis: v0.33.0
 Planungsmodell: Semantic Versioning, kleine ueberpruefbare Meilensteine
 
 Diese Roadmap beschreibt die technische Entwicklung von KatanaRecomp vom aktuellen Architektur-Prototyp bis zu einem belastbaren Dreamcast-Recompiler-Framework.
@@ -759,7 +759,7 @@ Release-Stand: Alle fuenf Tasks sind abgeschlossen. Das lokale Debug-Gate
 bestand mit 127/127 Tests; gemaess Phasenstrategie wurde fuer dieses
 Zwischenrelease kein vollstaendiger Sonic-Adventure-Test ausgefuehrt.
 
-### v0.33.0 - Skalierbare Codeausgabe und Build-Cache
+### [x] v0.33.0 - Skalierbare Codeausgabe und Build-Cache
 
 Fortschritt:
 
@@ -780,6 +780,10 @@ Enthalten:
 - getrennte Ausgabe von Code, Konstantdaten, Symbolen und Laufzeitmetadaten
 - Blockmetadaten mit virtueller und kanonischer physischer Adresse, Quellsegment, Gastzyklen, Blockendtyp und Zustandswaechtern
 - Cache-Schluessel aus Eingabehashes, Manifest, Overrides, IR-/Optimierungsversion sowie Runtime- und Backend-ABI
+
+Release-Stand: Alle fuenf Tasks sind abgeschlossen. Das lokale Debug-Gate
+bestand mit 132/132 Tests; der 10.000-Block-Synthetiklauf partitioniert
+reproduzierbar. Als Zwischenrelease wurde kein Sonic-Adventure-Test ausgefuehrt.
 
 ### v0.34.0 - Indirekter Dispatch und Fallback
 

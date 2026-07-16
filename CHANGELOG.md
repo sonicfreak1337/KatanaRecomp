@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.33.0] - 2026-07-16
+
 ### Hinzugefuegt
 
 - KR-3301: Funktionen werden unabhaengig von ihrer Eingabereihenfolge deterministisch nach Gastadresse in groessen- und instruktionsbegrenzte Translation-Unit-Partitionen aufgeteilt.
@@ -13,6 +15,10 @@
 ### Behoben
 
 - KR-3301-Nacharbeit: Eine einzelne Funktion oberhalb des konfigurierten Instruktionslimits wird sichtbar mit `length_error` abgelehnt, statt eine angeblich begrenzte Uebergroessenpartition zu erzeugen.
+
+### Geaendert
+
+- Das v0.33.0-Gate besteht mit 132/132 Tests in einem frischen lokalen Debug-Build. Der kumulative Sonic-Adventure-Test bleibt dem Phase-7-Abschluss v0.34.0 nach Review vorbehalten.
 
 ## [0.32.0] - 2026-07-16
 
