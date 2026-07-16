@@ -903,7 +903,7 @@ Fortschritt:
 - [x] KR-3604 - Tracing und Watchpoints
 - [x] KR-3605 - CFG- und Callgraph-Export
 - [x] KR-3606 - Sichere Firmware- und Flash-Diagnostik
-- [ ] KR-3607 - Dispatch- und Fallbackdiagnostik
+- [x] KR-3607 - Dispatch- und Fallbackdiagnostik
 - [ ] KR-3608 - Block-, Alias- und Invalidierungsprovenienz
 - [ ] KR-3609 - Deterministische Systemereignis-Replays
 

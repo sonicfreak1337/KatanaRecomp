@@ -1,6 +1,7 @@
 #pragma once
 
 #include "katana/runtime/code_invalidation.hpp"
+#include "katana/runtime/dispatch_diagnostics.hpp"
 #include "katana/runtime/exception.hpp"
 #include "katana/runtime/scheduler_safepoint.hpp"
 
@@ -41,7 +42,8 @@ public:
     PreciseInterpreterBoundary(
         SchedulerSafepoints& safepoints,
         InterpreterStep step,
-        ExecutableCodeTracker* code_tracker = nullptr
+        ExecutableCodeTracker* code_tracker = nullptr,
+        DispatchDiagnosticRecorder* diagnostics = nullptr
     );
     [[nodiscard]] InterpreterResult execute(CpuState& cpu, const InterpreterRequest& request);
     [[nodiscard]] std::uint64_t count(const std::string& reason) const noexcept;
@@ -51,6 +53,7 @@ private:
     SchedulerSafepoints& safepoints_;
     InterpreterStep step_;
     ExecutableCodeTracker* code_tracker_;
+    DispatchDiagnosticRecorder* diagnostics_;
     std::map<std::string, std::uint64_t> counts_;
 };
 

@@ -17,6 +17,7 @@
 - KR-3604: Ein kapazitaetsbegrenzter Runtime-Trace vereint IR-, Block-, Speicher-, Watchpoint-, Exception- und Schedulerereignisse unter monotoner Gastzeit. Drops bleiben gezaehlt, Memory- und Watchpointobserver verwenden bestehende Runtime-Hooks, und Speicherwerte bleiben ohne ausdrueckliches lokales Opt-in redigiert.
 - KR-3605: Deterministische CFG- und Callgraph-Exporte stehen als versioniertes JSON und Graphviz-DOT ueber stabile CLI-Kommandos sowie im Portprojekt bereit. Direkte, bedingte, aufgeloeste indirekte und explizit unaufgeloeste Kanten behalten Gastadressen und optionale Symbole, ohne Hostpfade oder Eingabebytes zu serialisieren.
 - KR-3606: `firmware-diagnose` prueft lokale BIOS-/Flashgroessen und optionale SHA-256-Werte read-only. Konservative Bereichsklassen sowie Flashpartitionen, Header, Blockgenerationen und CRCs erscheinen maschinenlesbar; logische IDs und Region bleiben standardmaessig redigiert, waehrend Firmwarebytes und Assets nie extrahiert werden.
+- KR-3607: Eine ausnahmesichere Dispatchdiagnostik erfasst Callsite, virtuelle und kanonische Ziele, PR, Blockende, Alias- und Beweisherkunft sowie Fallbackgrund, Aktion, Gastinstruktionen, Austritt und stabile Fehlerklasse. Identische Ereignisse erhoehen nur ihren Zaehler; Beobachtungsfehler koennen die Gastentscheidung nicht beeinflussen.
 
 ## [0.34.0] - 2026-07-16
 

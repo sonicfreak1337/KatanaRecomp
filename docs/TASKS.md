@@ -1699,7 +1699,7 @@ Akzeptanz:
 - Berichte enthalten keine BIOS-Schriften, PVR-Texturen oder andere urheberrechtlich geschuetzte Nutzdaten
 - die gebuendelte Phase-8-Regression prueft falsche Groessen/Hashes, Flashheader, Bitmap, Generationen, CRCs, Redaktion und unveraenderte Eingaben mit synthetischen Abbildern
 
-### [ ] KR-3607 - Dispatch- und Fallbackdiagnostik
+### [x] KR-3607 - Dispatch- und Fallbackdiagnostik
 
 Abhaengigkeiten: KR-3403, KR-3406, KR-3503
 
@@ -1717,6 +1717,7 @@ Akzeptanz:
 - Berichte unterscheiden unbekannten Code, ungemappten Speicher, verbotenen Firmwarepfad und ungueltige Ausrichtung
 - Aliasnormalisierung verdeckt die urspruengliche virtuelle Adresse nicht
 - Diagnostik veraendert Dispatchentscheidung und Gastzustand nicht
+- die gebuendelte Phase-8-Regression prueft exakte und physische Lookups, alle Herkunftsklassen, Fehlerklassen, Fallbackaktionen, Deduplizierung und ausnahmesichere Beobachtung
 
 ### [ ] KR-3608 - Block-, Alias- und Invalidierungsprovenienz
 

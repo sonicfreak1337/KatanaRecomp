@@ -24,6 +24,45 @@ std::string describe(const IndirectDispatchRequest& request, const std::uint32_t
     return out.str();
 }
 
+BlockEndKind block_end(const IndirectDispatchKind kind) noexcept {
+    switch (kind) {
+        case IndirectDispatchKind::Call: return BlockEndKind::Call;
+        case IndirectDispatchKind::TailJump: return BlockEndKind::DynamicBranch;
+        case IndirectDispatchKind::Return: return BlockEndKind::Return;
+    }
+    return BlockEndKind::DynamicBranch;
+}
+
+void diagnose(
+    const IndirectDispatchRequest& request,
+    const std::uint32_t target,
+    const std::uint32_t pr,
+    const bool alias_lookup,
+    const bool resolved
+) noexcept {
+    if (request.diagnostics == nullptr) return;
+    static_cast<void>(request.diagnostics->try_record({
+        request.callsite,
+        request.source.virtual_address,
+        canonical_physical_address(request.source.physical_address),
+        target,
+        canonical_physical_address(target),
+        pr,
+        block_end(request.kind),
+        request.resolution_origin,
+        resolved
+            ? (alias_lookup
+                ? DispatchAliasOrigin::CanonicalPhysical
+                : DispatchAliasOrigin::ExactVirtual)
+            : DispatchAliasOrigin::None,
+        DispatchFallbackReason::None,
+        DispatchFallbackAction::None,
+        0u,
+        resolved ? target : request.callsite,
+        resolved ? DispatchDiagnosticError::None : DispatchDiagnosticError::UnknownTarget
+    }));
+}
+
 } // namespace
 
 IndirectDispatchError::IndirectDispatchError(
@@ -54,11 +93,13 @@ IndirectDispatchResult dispatch_indirect(
         alias_lookup = block != nullptr;
     }
     if (block == nullptr) {
+        diagnose(request, target, cpu.pr, false, false);
         throw IndirectDispatchError(request.kind, request.callsite, target, request.source);
     }
 
     if (request.kind == IndirectDispatchKind::Call) { cpu.pr = request.return_address; }
     cpu.pc = target;
+    diagnose(request, target, cpu.pr, alias_lookup, true);
     return {
         block,
         target,

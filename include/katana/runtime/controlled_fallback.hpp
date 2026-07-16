@@ -1,6 +1,7 @@
 #pragma once
 
 #include "katana/runtime/block_abi.hpp"
+#include "katana/runtime/dispatch_diagnostics.hpp"
 
 #include <array>
 #include <cstdint>
@@ -20,6 +21,7 @@ struct ControlledFallbackRequest {
     std::optional<std::uint16_t> opcode;
     std::optional<std::uint32_t> target;
     std::uint32_t block_boundary = 0u;
+    std::uint64_t guest_instructions = 0u;
 };
 
 struct ControlledFallbackResult {
@@ -45,7 +47,8 @@ class ControlledFallback {
 public:
     explicit ControlledFallback(
         FallbackPolicy policy,
-        ControlledFallbackHandler handler = {}
+        ControlledFallbackHandler handler = {},
+        DispatchDiagnosticRecorder* diagnostics = nullptr
     );
 
     [[nodiscard]] ControlledFallbackResult enter(
@@ -59,6 +62,7 @@ public:
 private:
     FallbackPolicy policy_;
     ControlledFallbackHandler handler_;
+    DispatchDiagnosticRecorder* diagnostics_ = nullptr;
     std::array<std::uint64_t, 3u> counts_{};
 };
 

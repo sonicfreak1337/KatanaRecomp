@@ -1,6 +1,7 @@
 #pragma once
 
 #include "katana/runtime/block_table.hpp"
+#include "katana/runtime/dispatch_diagnostics.hpp"
 
 #include <cstdint>
 #include <stdexcept>
@@ -17,6 +18,8 @@ struct IndirectDispatchRequest {
     std::uint32_t return_address = 0u;
     BlockAddress source;
     BlockVariantKey variant;
+    DispatchResolutionOrigin resolution_origin = DispatchResolutionOrigin::TableLookup;
+    DispatchDiagnosticRecorder* diagnostics = nullptr;
 };
 
 struct IndirectDispatchResult {

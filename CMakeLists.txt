@@ -39,6 +39,7 @@ add_library(katana_runtime STATIC
     src/runtime/indirect_dispatch.cpp
     src/runtime/controlled_fallback.cpp
     src/runtime/crash_report.cpp
+    src/runtime/dispatch_diagnostics.cpp
     src/runtime/code_invalidation.cpp
     src/runtime/firmware_handoff.cpp
     src/runtime/block_dispatch.cpp

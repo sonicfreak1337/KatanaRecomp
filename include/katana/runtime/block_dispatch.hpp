@@ -16,6 +16,7 @@ struct BlockEndDefinition {
     BlockAddress source;
     std::vector<BlockAddress> direct_successors;
     std::optional<BlockAddress> fallthrough;
+    std::optional<std::uint32_t> callsite;
 };
 
 struct BlockDispatchOutcome {
@@ -26,7 +27,10 @@ struct BlockDispatchOutcome {
 
 class CanonicalBlockDispatcher {
 public:
-    explicit CanonicalBlockDispatcher(const RuntimeBlockTable& table);
+    explicit CanonicalBlockDispatcher(
+        const RuntimeBlockTable& table,
+        DispatchDiagnosticRecorder* diagnostics = nullptr
+    );
     [[nodiscard]] BlockDispatchOutcome dispatch(
         CpuState& cpu,
         BlockExecutionContext& context,
@@ -42,6 +46,7 @@ public:
 private:
     [[nodiscard]] const RuntimeBlock* lookup(BlockAddress address, const BlockVariantKey& variant) const;
     const RuntimeBlockTable& table_;
+    DispatchDiagnosticRecorder* diagnostics_ = nullptr;
     std::map<std::string, std::set<std::string>> incoming_;
 };
 

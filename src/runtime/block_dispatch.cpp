@@ -4,7 +4,10 @@
 
 namespace katana::runtime {
 
-CanonicalBlockDispatcher::CanonicalBlockDispatcher(const RuntimeBlockTable& table) : table_(table) {}
+CanonicalBlockDispatcher::CanonicalBlockDispatcher(
+    const RuntimeBlockTable& table,
+    DispatchDiagnosticRecorder* diagnostics
+) : table_(table), diagnostics_(diagnostics) {}
 
 const RuntimeBlock* CanonicalBlockDispatcher::lookup(
     const BlockAddress address,
@@ -52,9 +55,11 @@ BlockDispatchOutcome CanonicalBlockDispatcher::dispatch(
         }
         const auto kind = end.kind == BlockEndKind::Call ? IndirectDispatchKind::Call :
             end.kind == BlockEndKind::Return ? IndirectDispatchKind::Return : IndirectDispatchKind::TailJump;
+        const auto callsite = end.callsite.value_or(end.source.virtual_address);
         const auto result = dispatch_indirect(cpu, table_, {
-            kind, end.source.virtual_address, dynamic_target.value_or(0u),
-            end.source.virtual_address + 4u, end.source, variant
+            kind, callsite, dynamic_target.value_or(0u),
+            callsite + 4u, end.source, variant,
+            DispatchResolutionOrigin::TableLookup, diagnostics_
         });
         target = BlockAddress{result.diagnostic_target, result.physical_target};
         target_block = result.block;
