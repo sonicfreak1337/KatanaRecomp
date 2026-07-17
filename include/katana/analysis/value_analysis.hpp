@@ -39,6 +39,9 @@ enum class IndirectControlFlowKind { Jump, Call };
 
 enum class ResolutionStatus { Resolved, Unresolved };
 
+[[nodiscard]] std::uint16_t
+general_register_write_mask(const katana::sh4::DecodedInstruction& instruction) noexcept;
+
 struct IndirectControlFlowResolution {
     std::uint32_t instruction_address = 0u;
     IndirectControlFlowKind kind = IndirectControlFlowKind::Jump;
@@ -46,6 +49,9 @@ struct IndirectControlFlowResolution {
     ResolutionStatus status = ResolutionStatus::Unresolved;
     std::optional<std::uint32_t> target;
     std::string reason;
+    std::vector<std::uint32_t> targets;
+    std::vector<std::uint32_t> evidence_call_sites;
+    std::vector<std::uint32_t> evidence_callees;
 };
 
 [[nodiscard]] std::vector<ConstantTraceEntry>

@@ -21,6 +21,19 @@
 
 ### Hinzugefuegt
 
+- KR-4713: Ein titelunabhaengiger SH-C-Callfixpunkt fasst vollstaendige
+  konstante oder endliche R0-Rueckgabemengen zusammen und speist sie mit
+  Callsite-, Callee-, Register- und Returnevidenz als Einzel- oder
+  Mehrfachkanten in den CFG-Fixpunkt. Rekursive, unbekannte und
+  widerspruechliche Returns bleiben ebenso offen wie Parameter-, Stack-,
+  VTable- und unbeschraenkte Speicherziele. Ein neues synthetisches CTest-
+  Programm sichert alle positiven und negativen Klassen; private Inhalte oder
+  Retailadressen wurden nicht uebernommen und die Hostanwendung blieb aus.
+- Der Analysehotpath vermeidet doppelt geplante rekursive Adressen, ersetzt
+  lineare Block-, Kanten- und Site-Suchen durch Indizes und fuehrt teure
+  Funktionssummaries erst nach dem stabilen lokalen Fixpunkt aus. Sortierte
+  Endergebnisse erhalten den deterministischen Berichtvertrag.
+
 - KR-4712: Die Analyse propagiert Speicherwerte nur aus committed read-only
   Segmenten und erkennt begrenzte SH-4-`CMP/HS`-/`MOVA`-/`MOV.W`-/`BRAF`-
   Tabellen mit `BT`- oder `BF`-/Fallback-Guard. Vorzeichenbehaftete 16-Bit-

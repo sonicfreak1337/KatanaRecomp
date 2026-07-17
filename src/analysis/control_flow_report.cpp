@@ -123,15 +123,31 @@ std::string format_indirect_control_flow_report(
                 {resolution.instruction_address, kind_name(resolution.kind), 0u, line.str()});
             continue;
         }
-        line << "  " << kind_name(resolution.kind) << ' ';
-        address_with_symbol(line, resolution.instruction_address, symbols);
-        line << " -> ";
-        address_with_symbol(line, *resolution.target, symbols);
-        line << " [" << resolution.reason << "]\n";
-        resolved_lines.push_back({resolution.instruction_address,
-                                  kind_name(resolution.kind),
-                                  *resolution.target,
-                                  line.str()});
+        auto targets = resolution.targets;
+        if (resolution.target.has_value()) targets.push_back(*resolution.target);
+        std::sort(targets.begin(), targets.end());
+        targets.erase(std::unique(targets.begin(), targets.end()), targets.end());
+        for (const auto target : targets) {
+            std::ostringstream resolved;
+            resolved << "  " << kind_name(resolution.kind) << ' ';
+            address_with_symbol(resolved, resolution.instruction_address, symbols);
+            resolved << " -> ";
+            address_with_symbol(resolved, target, symbols);
+            resolved << " [" << resolution.reason;
+            if (!resolution.evidence_callees.empty()) {
+                resolved << "; r" << static_cast<unsigned>(resolution.register_index)
+                         << "; callees=";
+                for (std::size_t index = 0u; index < resolution.evidence_callees.size(); ++index) {
+                    if (index != 0u) resolved << ',';
+                    address(resolved, resolution.evidence_callees[index]);
+                }
+            }
+            resolved << "]\n";
+            resolved_lines.push_back({resolution.instruction_address,
+                                      kind_name(resolution.kind),
+                                      target,
+                                      resolved.str()});
+        }
     }
     for (const auto& table : jump_tables) {
         const auto kind = table.dispatch_kind == JumpTableDispatchKind::Call ? "jump-table-call"
@@ -187,6 +203,7 @@ std::string format_control_flow_analysis_json(const ControlFlowAnalysisResult& a
            << ",\"diagnostics\":" << analysis.recursive.diagnostics.size()
            << ",\"indirect_sites\":" << analysis.indirect_control_flow.size()
            << ",\"jump_tables\":" << analysis.jump_tables.size()
+           << ",\"function_value_summaries\":" << analysis.function_value_summaries.size()
            << ",\"directive_diagnostics\":" << analysis.directive_diagnostics.size()
            << ",\"fixpoint_iterations\":" << analysis.fixpoint_iterations << '}';
 
@@ -241,7 +258,55 @@ std::string format_control_flow_analysis_json(const ControlFlowAnalysisResult& a
         } else {
             output << ",\"target_symbol\":null";
         }
-        output << ",\"reason\":" << katana::io::quote_json(value.reason) << '}';
+        output << ",\"targets\":[";
+        for (std::size_t target = 0u; target < value.targets.size(); ++target) {
+            if (target != 0u) output << ',';
+            output << katana::io::quote_json(hex32(value.targets[target]));
+        }
+        output << "],\"evidence_call_sites\":[";
+        for (std::size_t evidence = 0u; evidence < value.evidence_call_sites.size(); ++evidence) {
+            if (evidence != 0u) output << ',';
+            output << katana::io::quote_json(hex32(value.evidence_call_sites[evidence]));
+        }
+        output << "],\"evidence_callees\":[";
+        for (std::size_t evidence = 0u; evidence < value.evidence_callees.size(); ++evidence) {
+            if (evidence != 0u) output << ',';
+            output << katana::io::quote_json(hex32(value.evidence_callees[evidence]));
+        }
+        output << "],\"reason\":" << katana::io::quote_json(value.reason) << '}';
+    }
+    output << ']';
+
+    output << ",\"function_value_summaries\":[";
+    for (std::size_t index = 0u; index < analysis.function_value_summaries.size(); ++index) {
+        if (index != 0u) output << ',';
+        const auto& summary = analysis.function_value_summaries[index];
+        output << "{\"function_address\":"
+               << katana::io::quote_json(hex32(summary.function_address)) << ",\"registers\":[";
+        for (std::size_t reg = 0u; reg < summary.registers.size(); ++reg) {
+            if (reg != 0u) output << ',';
+            const auto& value = summary.registers[reg];
+            output << "{\"register\":" << static_cast<unsigned>(value.register_index)
+                   << ",\"complete\":" << (value.complete ? "true" : "false")
+                   << ",\"abi_preserved\":" << (value.abi_preserved ? "true" : "false")
+                   << ",\"reason\":" << katana::io::quote_json(value.reason) << ",\"values\":[";
+            for (std::size_t item = 0u; item < value.values.size(); ++item) {
+                if (item != 0u) output << ',';
+                output << katana::io::quote_json(hex32(value.values[item]));
+            }
+            output << "],\"return_sites\":[";
+            for (std::size_t item = 0u; item < value.return_sites.size(); ++item) {
+                if (item != 0u) output << ',';
+                output << katana::io::quote_json(hex32(value.return_sites[item]));
+            }
+            output << "],\"evidence_callees\":[";
+            for (std::size_t item = 0u; item < value.evidence_callees.size(); ++item) {
+                if (item != 0u) output << ',';
+                output << katana::io::quote_json(hex32(value.evidence_callees[item]));
+            }
+            output << "]}";
+        }
+        output << "]}";
     }
     output << ']';
 
@@ -267,8 +332,7 @@ std::string format_control_flow_analysis_json(const ControlFlowAnalysisResult& a
                       table.dispatch_kind == JumpTableDispatchKind::Call ? "call" : "jump")
                << ",\"resolved\":" << (table.resolved ? "true" : "false")
                << ",\"requested_entries\":" << table.requested_entries
-               << ",\"reason\":" << katana::io::quote_json(table.reason)
-               << ",\"entries\":[";
+               << ",\"reason\":" << katana::io::quote_json(table.reason) << ",\"entries\":[";
         for (std::size_t entry_index = 0u; entry_index < table.entries.size(); ++entry_index) {
             if (entry_index != 0u) output << ',';
             const auto& entry = table.entries[entry_index];

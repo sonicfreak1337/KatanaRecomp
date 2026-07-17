@@ -2742,7 +2742,7 @@ Abschlussnachweis:
 - absolute und relative Tabellen werden nur aus einem vollstaendig committed,
   lesbaren und nicht beschreibbaren Snapshot akzeptiert
 
-### [ ] KR-4713 - Interprozedurale SH-C-Zielwertsummaries
+### [x] KR-4713 - Interprozedurale SH-C-Zielwertsummaries
 
 Abhaengigkeiten: KR-4712
 
@@ -2765,6 +2765,17 @@ Akzeptanz:
   Zusammenfuehrungsevidenz; dynamische Ziele bleiben sichtbar offen
 - der private read-only Vergleich misst neue Beweise und neu entdeckten Code
   getrennt, ohne Retailadresse oder Titelsonderfall im Repository
+
+Abschlussnachweis:
+
+- `katana-function-value-analysis-tests` prueft eindeutige und endliche
+  Rueckgabemengen, widerspruechliche und rekursive Pfade, fehlende Returns,
+  den ABI-losen Fall sowie die getrennten dynamischen Herkunftsklassen
+- Callsite, Callee, Register, Returnstellen und Zusammenfuehrungsgrund werden
+  im stabilen Text-/JSON-Vertrag ausgegeben; nur vollstaendige Mengen bis acht
+  Werte speisen den CFG-Fixpunkt
+- die read-only Privatprobe blieb ausserhalb des Repository und startete keine
+  Hostanwendung; aus ihr wurde weder eine Retailadresse noch ein Ziel verdrahtet
 
 ### [ ] KR-4702 - Native Audio-, Eingabe- und Hostlebenszyklusintegration
 

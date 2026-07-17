@@ -23,4 +23,9 @@ discover_functions(std::span<const katana::sh4::DisassemblyLine> lines,
                    std::span<const std::uint32_t> seed_entries,
                    std::span<const ResolvedControlFlowEdge> resolved_edges = {});
 
+[[nodiscard]] std::vector<FunctionInfo>
+discover_functions_from_blocks(std::span<const BasicBlock> blocks,
+                               std::span<const std::uint32_t> seed_entries,
+                               std::span<const ResolvedControlFlowEdge> resolved_edges = {});
+
 } // namespace katana::analysis

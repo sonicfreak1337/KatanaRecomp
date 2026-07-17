@@ -36,11 +36,9 @@ void add_sorted_unique(std::vector<std::uint32_t>& values, const std::uint32_t v
 } // namespace
 
 std::vector<FunctionInfo>
-discover_functions(const std::span<const katana::sh4::DisassemblyLine> lines,
-                   const std::span<const std::uint32_t> seed_entries,
-                   const std::span<const ResolvedControlFlowEdge> resolved_edges) {
-    const auto blocks = build_basic_blocks(lines, resolved_edges, seed_entries);
-
+discover_functions_from_blocks(const std::span<const BasicBlock> blocks,
+                               const std::span<const std::uint32_t> seed_entries,
+                               const std::span<const ResolvedControlFlowEdge> resolved_edges) {
     if (blocks.empty()) {
         return {};
     }
@@ -51,6 +49,10 @@ discover_functions(const std::span<const katana::sh4::DisassemblyLine> lines,
     for (std::size_t index = 0; index < blocks.size(); ++index) {
         block_by_start.emplace(blocks[index].start_address, index);
     }
+    std::unordered_multimap<std::uint32_t, const ResolvedControlFlowEdge*> edges_by_instruction;
+    edges_by_instruction.reserve(resolved_edges.size());
+    for (const auto& edge : resolved_edges)
+        edges_by_instruction.emplace(edge.instruction_address, &edge);
 
     std::set<std::uint32_t> known_entries;
 
@@ -153,14 +155,14 @@ discover_functions(const std::span<const katana::sh4::DisassemblyLine> lines,
                 add_sorted_unique(function.indirect_call_sites, control.address);
             }
 
-            for (const auto& edge : resolved_edges) {
-                if (edge.instruction_address != control.address) continue;
-                if (edge.kind == ResolvedControlFlowKind::Call) {
-                    add_sorted_unique(function.direct_callees, edge.target_address);
+            const auto [edge_begin, edge_end] = edges_by_instruction.equal_range(control.address);
+            for (auto edge = edge_begin; edge != edge_end; ++edge) {
+                if (edge->second->kind == ResolvedControlFlowKind::Call) {
+                    add_sorted_unique(function.direct_callees, edge->second->target_address);
                     add_sorted_unique(function.indirect_call_sites, control.address);
-                    if (block_by_start.contains(edge.target_address) &&
-                        !processed_entries.contains(edge.target_address)) {
-                        pending_entries.push_back(edge.target_address);
+                    if (block_by_start.contains(edge->second->target_address) &&
+                        !processed_entries.contains(edge->second->target_address)) {
+                        pending_entries.push_back(edge->second->target_address);
                     }
                 }
             }
@@ -193,6 +195,14 @@ discover_functions(const std::span<const katana::sh4::DisassemblyLine> lines,
     }
 
     return functions;
+}
+
+std::vector<FunctionInfo>
+discover_functions(const std::span<const katana::sh4::DisassemblyLine> lines,
+                   const std::span<const std::uint32_t> seed_entries,
+                   const std::span<const ResolvedControlFlowEdge> resolved_edges) {
+    const auto blocks = build_basic_blocks(lines, resolved_edges, seed_entries);
+    return discover_functions_from_blocks(blocks, seed_entries, resolved_edges);
 }
 
 } // namespace katana::analysis

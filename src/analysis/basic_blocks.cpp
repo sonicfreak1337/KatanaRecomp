@@ -192,19 +192,23 @@ build_basic_blocks(const std::span<const katana::sh4::DisassemblyLine> lines,
         std::sort(block.successors.begin(), block.successors.end());
     }
 
-    for (const auto& edge : resolved_edges) {
-        const auto block =
-            std::find_if(blocks.begin(), blocks.end(), [&edge](const BasicBlock& candidate) {
-                return !candidate.lines.empty() &&
-                       candidate.lines[find_controlling_instruction(candidate)].address ==
-                           edge.instruction_address;
-            });
-        if (block == blocks.end()) continue;
-        if (edge.kind == ResolvedControlFlowKind::Jump) {
-            add_unique_successor(block->successors, edge.target_address);
+    std::unordered_map<std::uint32_t, std::size_t> block_by_control;
+    block_by_control.reserve(blocks.size());
+    for (std::size_t index = 0u; index < blocks.size(); ++index) {
+        if (!blocks[index].lines.empty()) {
+            block_by_control.emplace(
+                blocks[index].lines[find_controlling_instruction(blocks[index])].address, index);
         }
-        block->has_indirect_successor = false;
-        std::sort(block->successors.begin(), block->successors.end());
+    }
+    for (const auto& edge : resolved_edges) {
+        const auto found = block_by_control.find(edge.instruction_address);
+        if (found == block_by_control.end()) continue;
+        auto& block = blocks[found->second];
+        if (edge.kind == ResolvedControlFlowKind::Jump) {
+            add_unique_successor(block.successors, edge.target_address);
+        }
+        block.has_indirect_successor = false;
+        std::sort(block.successors.begin(), block.successors.end());
     }
 
     return blocks;

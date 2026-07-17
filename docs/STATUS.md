@@ -12,12 +12,12 @@ Erster oeffentlicher Produktrelease: `v0.50.0` Alpha
 
 ## Fortschritt
 
-- 209 von 239 gepflegten Roadmap-Tasks abgeschlossen: 87,4 %
+- 210 von 239 gepflegten Roadmap-Tasks abgeschlossen: 87,9 %
 - Phase-9-Reviewkorrekturen sind implementiert; das eigenstaendige
   achtteilige Homebrew-Korpus und Linux-Evidenz bleiben offen
 - Phase 10: 13/13 Tasks im freigegebenen Windows-GDI-Workflow
 - Phase 11: 16/16 Tasks
-- Phase 12: 3/13 Tasks
+- Phase 12: 4/13 Tasks
 - Phase 13: 0/5 Tasks vor dem Alpha-Gate
 - Alpha-Gate noch nicht erreicht
 
@@ -34,7 +34,7 @@ Erster oeffentlicher Produktrelease: `v0.50.0` Alpha
 | 9 | Kompatibilitaet und Leistung | Reviewkorrekturen offen |
 | 10 | Desktop-GUI und Quellworkflow | 13/13 (Windows-GDI-Scope) |
 | 11 | Bootanalyse und Retail-Systemdienste | 16/16 |
-| 12 | Interaktive Retail-Runtime und Portintegration | 3/13 |
+| 12 | Interaktive Retail-Runtime und Portintegration | 4/13 |
 | 13 | Spielbarer Alpha-Kandidat | 0/5 |
 
 Die Einzelaufgaben und Abhaengigkeiten werden ausschliesslich in
@@ -99,8 +99,18 @@ liegen. Beschreibbare Speicherloads, Tabellen und VTables bleiben dynamisch.
 Die Analyse-Regressionen pruefen den KR-4711-/KR-4712-Vertrag einschliesslich
 Call-Delay-Slots, ABI-Grenzen, CFG-Joins, Zero-Fill, `BT`/`BF`, signed Offsets,
 Adressueberlauf sowie teilweise committed und beschreibbare Tabellen.
+KR-4713 berechnet am SH-C-Callfixpunkt konservative Funktionssummaries fuer R0
+und weist R8 bis R14 als ABI-erhaltene Eingaben aus. Nur vollstaendige endliche
+Rueckgabemengen bis acht Werte erzeugen indirekte CFG-Kanten. Rekursion,
+unbekannte oder widerspruechliche Returns bleiben offen; dynamische Returns,
+Parameter, Stackziele, VTables und unbeschraenkte Speicherziele besitzen
+getrennte Diagnosegruende. Callsite-, Callee-, Register- und Returnevidenz ist
+im Text-/JSON-Bericht reproduzierbar. Der Analysehotpath plant Adressen nur
+noch einmal ein, verwendet indizierte Block-, Kanten- und Site-Lookups und
+wertet Funktionssummaries erst am stabilen lokalen Fixpunkt aus.
+
 Der inkrementelle Debug-Zyklus besteht nach den Korrekturen vollstaendig mit
-164/164 CTests; die zuvor in der README genannte Zahl 169 war veraltet.
+165/165 CTests; die zuvor in der README genannte Zahl 169 war veraltet.
 
 CLI und GUI beobachten denselben sequenzierten hierarchischen Ereignisstrom.
 Gesamtfortschritt ist monoton, Einzelschritte besitzen nur bei bekannter Menge

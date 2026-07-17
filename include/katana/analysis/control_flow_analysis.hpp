@@ -2,6 +2,7 @@
 
 #include "katana/analysis/analysis_overrides.hpp"
 #include "katana/analysis/basic_blocks.hpp"
+#include "katana/analysis/function_value_analysis.hpp"
 #include "katana/analysis/jump_table_analysis.hpp"
 #include "katana/analysis/recursive_analysis.hpp"
 #include "katana/analysis/symbol_names.hpp"
@@ -33,6 +34,7 @@ struct ControlFlowAnalysisResult {
     RecursiveAnalysisResult recursive;
     std::vector<IndirectControlFlowResolution> indirect_control_flow;
     std::vector<JumpTableAnalysis> jump_tables;
+    std::vector<FunctionValueSummary> function_value_summaries;
     std::vector<ResolvedControlFlowEdge> resolved_edges;
     std::size_t fixpoint_iterations = 0u;
     std::vector<AnalysisDirectiveDiagnostic> directive_diagnostics;

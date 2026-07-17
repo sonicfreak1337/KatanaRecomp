@@ -90,6 +90,30 @@ und `pc-relative-address` dokumentieren den Beweis und seine Herkunft.
 Unbekannte Werte und ungueltige Zielbereiche bleiben mit getrennten stabilen
 Gruenden `unresolved`.
 
+## Interprozedurale SH-C-Summaries
+
+Nach dem lokalen Kontrollflussfixpunkt bildet die Analyse Basic Blocks und
+Funktionen aus denselben bewiesenen Kanten. Fuer jede Funktion wird R0 an allen
+erreichbaren `RTS`-Stellen zusammengefuehrt. Eine Summary ist nur vollstaendig,
+wenn jeder Returnpfad einen bekannten Wert liefert und die vereinigte Menge
+hoechstens acht Ziele besitzt. R8 bis R14 werden im `SuperHC`-Profil als
+`abi-preserved-input` ausgewiesen; ohne explizite Gast-ABI entstehen keine
+SH-C-Summaries.
+
+Direkte Calls wenden den Callee-Return erst nach einem vorhandenen Delay Slot
+an. Aendert sich eine Callee-Summary, werden nur ihre Caller erneut bewertet.
+Rekursion konvergiert damit konservativ, ohne einen unbekannten Anfangswert als
+Konstante auszugeben. Vollstaendige R0-Mengen duerfen nach derselben committed-
+und executable-Pruefung wie lokale Ziele eine oder mehrere CFG-Kanten erzeugen.
+Der Bericht nennt Register, Callsite, Callee, Returnstellen und den
+Zusammenfuehrungsgrund.
+
+Nicht bewiesene Stellen werden weiterhin sichtbar unterschieden:
+`dynamic-return-value`, `dynamic-parameter`, `dynamic-stack-target`,
+`dynamic-vtable-target` und `dynamic-unbounded-memory`. Diese Klassen sind
+Diagnosen und keine Zielannahmen; veraenderliche VTables, Stackwerte und
+unbeschraenkte Speicherloads werden nicht eingefroren.
+
 ## Jump Tables
 
 `analyze_jump_table` wertet eine bekannte, vier Byte ausgerichtete Tabelle mit

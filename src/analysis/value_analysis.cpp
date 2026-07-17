@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <limits>
 #include <optional>
 #include <set>
 #include <string_view>
@@ -33,9 +34,9 @@ void mark_abi_preserved(RegisterConstants& state, const std::uint16_t preserved_
         if ((preserved_mask & static_cast<std::uint16_t>(1u << index)) == 0u ||
             !state.registers[index].has_value() || state.sources[index].starts_with(prefix))
             continue;
-        state.sources[index] = std::string(prefix) +
-                               (state.sources[index].empty() ? "constant-register"
-                                                             : state.sources[index]);
+        state.sources[index] =
+            std::string(prefix) +
+            (state.sources[index].empty() ? "constant-register" : state.sources[index]);
     }
 }
 
@@ -71,10 +72,9 @@ constexpr std::uint16_t register_bit(const std::uint8_t index) {
     return static_cast<std::uint16_t>(1u << index);
 }
 
-std::optional<std::uint32_t>
-read_immutable_integer(const katana::io::ExecutableImage* image,
-                       const std::uint32_t address,
-                       const std::size_t width) {
+std::optional<std::uint32_t> read_immutable_integer(const katana::io::ExecutableImage* image,
+                                                    const std::uint32_t address,
+                                                    const std::size_t width) {
     if (image == nullptr) return std::nullopt;
     const auto* segment = image->find_segment(address, width);
     if (segment == nullptr || !segment->permissions.readable || segment->permissions.writable)
@@ -85,16 +85,14 @@ read_immutable_integer(const katana::io::ExecutableImage* image,
         return std::nullopt;
     switch (width) {
     case 1u:
-        return static_cast<std::uint32_t>(static_cast<std::int32_t>(
-            static_cast<std::int8_t>(segment->bytes[*offset])));
+        return static_cast<std::uint32_t>(
+            static_cast<std::int32_t>(static_cast<std::int8_t>(segment->bytes[*offset])));
     case 2u:
         return static_cast<std::uint32_t>(static_cast<std::int32_t>(
             static_cast<std::int16_t>(katana::io::read_u16_le(segment->bytes, *offset))));
     case 4u:
-        return static_cast<std::uint32_t>(
-                   katana::io::read_u16_le(segment->bytes, *offset)) |
-               (static_cast<std::uint32_t>(
-                    katana::io::read_u16_le(segment->bytes, *offset + 2u))
+        return static_cast<std::uint32_t>(katana::io::read_u16_le(segment->bytes, *offset)) |
+               (static_cast<std::uint32_t>(katana::io::read_u16_le(segment->bytes, *offset + 2u))
                 << 16u);
     default:
         return std::nullopt;
@@ -106,9 +104,8 @@ void apply_immutable_load(RegisterConstants& state,
                           const katana::io::ExecutableImage* image,
                           const std::optional<std::uint32_t> address,
                           const std::size_t width) {
-    const auto value = address.has_value()
-                           ? read_immutable_integer(image, *address, width)
-                           : std::nullopt;
+    const auto value =
+        address.has_value() ? read_immutable_integer(image, *address, width) : std::nullopt;
     if (!value.has_value()) {
         clear_register(state, instruction.destination_register);
         return;
@@ -265,23 +262,18 @@ void apply_local_transfer(RegisterConstants& state,
     case katana::sh4::InstructionKind::MovByteLoad:
     case katana::sh4::InstructionKind::MovWordLoad:
     case katana::sh4::InstructionKind::MovLongLoad: {
-        const auto width = instruction.kind == katana::sh4::InstructionKind::MovByteLoad
-                               ? 1u
+        const auto width = instruction.kind == katana::sh4::InstructionKind::MovByteLoad   ? 1u
                            : instruction.kind == katana::sh4::InstructionKind::MovWordLoad ? 2u
                                                                                            : 4u;
-        apply_immutable_load(state,
-                             instruction,
-                             image,
-                             state.registers[instruction.source_register],
-                             width);
+        apply_immutable_load(
+            state, instruction, image, state.registers[instruction.source_register], width);
         return;
     }
     case katana::sh4::InstructionKind::MovByteLoadDisplacement:
     case katana::sh4::InstructionKind::MovWordLoadDisplacement:
     case katana::sh4::InstructionKind::MovLongLoadDisplacement: {
         const auto width =
-            instruction.kind == katana::sh4::InstructionKind::MovByteLoadDisplacement
-                ? 1u
+            instruction.kind == katana::sh4::InstructionKind::MovByteLoadDisplacement   ? 1u
             : instruction.kind == katana::sh4::InstructionKind::MovWordLoadDisplacement ? 2u
                                                                                         : 4u;
         const auto base = state.registers[instruction.source_register];
@@ -295,11 +287,10 @@ void apply_local_transfer(RegisterConstants& state,
     case katana::sh4::InstructionKind::MovByteLoadR0Indexed:
     case katana::sh4::InstructionKind::MovWordLoadR0Indexed:
     case katana::sh4::InstructionKind::MovLongLoadR0Indexed: {
-        const auto width = instruction.kind == katana::sh4::InstructionKind::MovByteLoadR0Indexed
-                               ? 1u
-                           : instruction.kind == katana::sh4::InstructionKind::MovWordLoadR0Indexed
-                               ? 2u
-                               : 4u;
+        const auto width =
+            instruction.kind == katana::sh4::InstructionKind::MovByteLoadR0Indexed   ? 1u
+            : instruction.kind == katana::sh4::InstructionKind::MovWordLoadR0Indexed ? 2u
+                                                                                     : 4u;
         const auto base = state.registers[0u];
         const auto index = state.registers[instruction.source_register];
         const auto address = base.has_value() && index.has_value()
@@ -319,10 +310,9 @@ void apply_local_transfer(RegisterConstants& state,
     case katana::sh4::InstructionKind::AddRegister:
         if (state.registers[instruction.destination_register].has_value() &&
             state.registers[instruction.source_register].has_value()) {
-            const auto provenance = combined_source(
-                "add",
-                state.sources[instruction.destination_register],
-                state.sources[instruction.source_register]);
+            const auto provenance = combined_source("add",
+                                                    state.sources[instruction.destination_register],
+                                                    state.sources[instruction.source_register]);
             *state.registers[instruction.destination_register] +=
                 *state.registers[instruction.source_register];
             state.sources[instruction.destination_register] = provenance;
@@ -337,10 +327,9 @@ void apply_local_transfer(RegisterConstants& state,
         }
         if (state.registers[instruction.destination_register].has_value() &&
             state.registers[instruction.source_register].has_value()) {
-            const auto provenance = combined_source(
-                "sub",
-                state.sources[instruction.destination_register],
-                state.sources[instruction.source_register]);
+            const auto provenance = combined_source("sub",
+                                                    state.sources[instruction.destination_register],
+                                                    state.sources[instruction.source_register]);
             *state.registers[instruction.destination_register] -=
                 *state.registers[instruction.source_register];
             state.sources[instruction.destination_register] = provenance;
@@ -358,15 +347,13 @@ void apply_local_transfer(RegisterConstants& state,
         }
         if (state.registers[instruction.destination_register].has_value() &&
             state.registers[instruction.source_register].has_value()) {
-            const auto operation = instruction.kind == katana::sh4::InstructionKind::AndRegister
-                                       ? "and"
-                                   : instruction.kind == katana::sh4::InstructionKind::OrRegister
-                                       ? "or"
-                                       : "xor";
-            const auto provenance = combined_source(
-                operation,
-                state.sources[instruction.destination_register],
-                state.sources[instruction.source_register]);
+            const auto operation =
+                instruction.kind == katana::sh4::InstructionKind::AndRegister  ? "and"
+                : instruction.kind == katana::sh4::InstructionKind::OrRegister ? "or"
+                                                                               : "xor";
+            const auto provenance = combined_source(operation,
+                                                    state.sources[instruction.destination_register],
+                                                    state.sources[instruction.source_register]);
             auto& destination = *state.registers[instruction.destination_register];
             const auto source = *state.registers[instruction.source_register];
             if (instruction.kind == katana::sh4::InstructionKind::AndRegister) {
@@ -385,11 +372,10 @@ void apply_local_transfer(RegisterConstants& state,
     case katana::sh4::InstructionKind::OrImmediate:
     case katana::sh4::InstructionKind::XorImmediate:
         if (state.registers[0].has_value()) {
-            const auto operation = instruction.kind == katana::sh4::InstructionKind::AndImmediate
-                                       ? "and"
-                                   : instruction.kind == katana::sh4::InstructionKind::OrImmediate
-                                       ? "or"
-                                       : "xor";
+            const auto operation =
+                instruction.kind == katana::sh4::InstructionKind::AndImmediate  ? "and"
+                : instruction.kind == katana::sh4::InstructionKind::OrImmediate ? "or"
+                                                                                : "xor";
             auto& destination = *state.registers[0];
             const auto immediate = static_cast<std::uint32_t>(instruction.immediate);
             if (instruction.kind == katana::sh4::InstructionKind::AndImmediate) {
@@ -439,8 +425,7 @@ propagate_constants(const std::span<const katana::sh4::DisassemblyLine> lines,
             clear_after_delay_slot.reset();
         }
         if (line.instruction.changes_control_flow()) {
-            if (line.instruction.control_flow ==
-                katana::sh4::ControlFlowKind::ConditionalBranch)
+            if (line.instruction.control_flow == katana::sh4::ControlFlowKind::ConditionalBranch)
                 continue;
             const bool call =
                 line.instruction.control_flow == katana::sh4::ControlFlowKind::Call ||
@@ -462,6 +447,11 @@ propagate_constants(const std::span<const katana::sh4::DisassemblyLine> lines,
 }
 
 } // namespace
+
+std::uint16_t
+general_register_write_mask(const katana::sh4::DecodedInstruction& instruction) noexcept {
+    return general_register_writes(instruction);
+}
 
 std::vector<ConstantTraceEntry>
 propagate_local_constants(const std::span<const katana::sh4::DisassemblyLine> lines,
@@ -494,59 +484,84 @@ analyze_register_values(const std::span<const katana::sh4::DisassemblyLine> line
 std::vector<IndirectControlFlowResolution>
 resolve_indirect_control_flow(const std::span<const katana::sh4::DisassemblyLine> lines,
                               const katana::io::ExecutableImage& image) {
-    RegisterValueAnalysis values;
-    values.trace = propagate_constants(lines, {}, &image);
-    for (std::size_t index = 0u; index < lines.size(); ++index) {
-        if (lines[index].instruction.kind != katana::sh4::InstructionKind::Jmp &&
-            lines[index].instruction.kind != katana::sh4::InstructionKind::Jsr &&
-            lines[index].instruction.kind != katana::sh4::InstructionKind::Braf &&
-            lines[index].instruction.kind != katana::sh4::InstructionKind::Bsrf)
-            continue;
-        const auto register_index = lines[index].instruction.branch_register;
-        values.indirect_control_flow.push_back(
-            {lines[index].address,
-             register_index,
-             values.trace[index].before.registers[register_index],
-             values.trace[index].before.sources[register_index]});
-    }
     std::vector<IndirectControlFlowResolution> resolutions;
-    resolutions.reserve(values.indirect_control_flow.size());
-    for (const auto& observation : values.indirect_control_flow) {
-        const auto line =
-            std::find_if(lines.begin(),
-                         lines.end(),
-                         [&observation](const katana::sh4::DisassemblyLine& candidate) {
-                             return candidate.address == observation.instruction_address;
-                         });
-        IndirectControlFlowResolution resolution;
-        resolution.instruction_address = observation.instruction_address;
-        resolution.register_index = observation.register_index;
-        resolution.kind =
-            line != lines.end() && (line->instruction.kind == katana::sh4::InstructionKind::Jsr ||
-                                    line->instruction.kind == katana::sh4::InstructionKind::Bsrf)
-                ? IndirectControlFlowKind::Call
-                : IndirectControlFlowKind::Jump;
-        if (!observation.value.has_value()) {
-            resolution.reason = "register-value-unknown";
-            resolutions.push_back(std::move(resolution));
-            continue;
+    RegisterConstants state;
+    std::set<std::uint32_t> control_flow_targets;
+    for (const auto& line : lines) {
+        if (line.target_address.has_value()) control_flow_targets.insert(*line.target_address);
+    }
+    std::optional<std::uint16_t> clear_after_delay_slot;
+    for (std::size_t index = 0u; index < lines.size(); ++index) {
+        const auto& line = lines[index];
+        if (index != 0u && line.address != lines[index - 1u].address + 2u) {
+            clear_constants(state);
+            clear_after_delay_slot.reset();
         }
-        auto target = *observation.value;
-        const bool register_relative =
-            line != lines.end() && (line->instruction.kind == katana::sh4::InstructionKind::Braf ||
-                                    line->instruction.kind == katana::sh4::InstructionKind::Bsrf);
-        if (register_relative) target += observation.instruction_address + 4u;
-        const auto validation = validate_committed_code_address(image, target);
-        if (!validation.valid()) {
-            resolution.reason = code_address_status_name(validation.status);
+        if (control_flow_targets.contains(line.address)) clear_constants(state);
+
+        const bool indirect = line.instruction.kind == katana::sh4::InstructionKind::Jmp ||
+                              line.instruction.kind == katana::sh4::InstructionKind::Jsr ||
+                              line.instruction.kind == katana::sh4::InstructionKind::Braf ||
+                              line.instruction.kind == katana::sh4::InstructionKind::Bsrf;
+        if (indirect) {
+            const auto register_index = line.instruction.branch_register;
+            const auto& value = state.registers[register_index];
+            const auto& source = state.sources[register_index];
+            IndirectControlFlowResolution resolution;
+            resolution.instruction_address = line.address;
+            resolution.register_index = register_index;
+            resolution.kind = line.instruction.kind == katana::sh4::InstructionKind::Jsr ||
+                                      line.instruction.kind == katana::sh4::InstructionKind::Bsrf
+                                  ? IndirectControlFlowKind::Call
+                                  : IndirectControlFlowKind::Jump;
+            if (!value.has_value()) {
+                resolution.reason = "register-value-unknown";
+            } else {
+                std::uint64_t target = *value;
+                const bool register_relative =
+                    line.instruction.kind == katana::sh4::InstructionKind::Braf ||
+                    line.instruction.kind == katana::sh4::InstructionKind::Bsrf;
+                if (register_relative) target += static_cast<std::uint64_t>(line.address) + 4u;
+                if (target > std::numeric_limits<std::uint32_t>::max()) {
+                    resolution.reason = "target-address-overflow";
+                } else {
+                    const auto narrowed_target = static_cast<std::uint32_t>(target);
+                    const auto validation = validate_committed_code_address(image, narrowed_target);
+                    if (!validation.valid()) {
+                        resolution.reason = code_address_status_name(validation.status);
+                    } else {
+                        resolution.status = ResolutionStatus::Resolved;
+                        resolution.target = narrowed_target;
+                        resolution.reason = source.empty() ? "constant-register" : source;
+                        if (register_relative)
+                            resolution.reason = "register-relative-" + resolution.reason;
+                    }
+                }
+            }
             resolutions.push_back(std::move(resolution));
-            continue;
         }
-        resolution.status = ResolutionStatus::Resolved;
-        resolution.target = target;
-        resolution.reason = observation.source.empty() ? "constant-register" : observation.source;
-        if (register_relative) resolution.reason = "register-relative-" + resolution.reason;
-        resolutions.push_back(std::move(resolution));
+
+        apply_local_transfer(state, line, &image);
+        if (clear_after_delay_slot.has_value()) {
+            clear_registers(state, *clear_after_delay_slot);
+            if (*clear_after_delay_slot == 0x80FFu) mark_abi_preserved(state, 0x7F00u);
+            clear_after_delay_slot.reset();
+        }
+        if (!line.instruction.changes_control_flow() ||
+            line.instruction.control_flow == katana::sh4::ControlFlowKind::ConditionalBranch)
+            continue;
+        const bool call =
+            line.instruction.control_flow == katana::sh4::ControlFlowKind::Call ||
+            line.instruction.control_flow == katana::sh4::ControlFlowKind::IndirectCall;
+        const auto clear_mask = call && image.guest_call_abi() == katana::io::GuestCallAbi::SuperHC
+                                    ? static_cast<std::uint16_t>(0x80FFu)
+                                    : static_cast<std::uint16_t>(0xFFFFu);
+        if (line.instruction.has_delay_slot) {
+            clear_after_delay_slot = clear_mask;
+        } else {
+            clear_registers(state, clear_mask);
+            if (clear_mask == 0x80FFu) mark_abi_preserved(state, 0x7F00u);
+        }
     }
     return resolutions;
 }
