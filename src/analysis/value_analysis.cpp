@@ -628,7 +628,7 @@ resolve_indirect_control_flow(const std::span<const katana::sh4::DisassemblyLine
     std::optional<std::uint16_t> clear_after_delay_slot;
     EntrySnapshotState snapshot;
     snapshot.active = image.initial_snapshot_policy() ==
-                          katana::io::InitialSnapshotPolicy::EntryPointStraightLine &&
+                          katana::io::InitialSnapshotPolicy::EntryPointStraightLineQuiescent &&
                       image.entry_points().size() == 1u && !lines.empty() &&
                       lines.front().address == image.entry_points().front();
     for (std::size_t index = 0u; index < lines.size(); ++index) {

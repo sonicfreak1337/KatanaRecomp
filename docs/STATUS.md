@@ -116,12 +116,14 @@ Kontrollfluss zeitlich beweisen. Die funktionsweite Analyse traegt endliche
 Kandidaten durch CFG-Joins, SH-C-Calls, direkte und bewachte indirekte
 Callparameter sowie Logik-, Shift- und Indexoperationen, ohne veraenderliche
 VTables statisch einzufrieren. Die adressfreie read-only Probe erschloss damit
-55.104 Instruktionen, 813 Funktionen und 1.826 indirekte Stellen; 1.708 sind
-bewacht und 117 besitzen noch kein endliches Ziel. Eine Hostanwendung wurde
-nicht gestartet.
+55.104 Instruktionen, 813 Funktionen und 1.826 indirekte Stellen; eine ist
+statisch aufgeloest, 1.708 sind bewacht und 117 besitzen noch kein endliches
+Ziel. Der maschinenlesbare Bericht prueft diese vollstaendige Statussumme und
+trennt bewiesene von nur ueber Guarded-Kandidaten entdeckten Instruktionen.
+Eine Hostanwendung wurde nicht gestartet.
 
 Der inkrementelle Debug-Zyklus besteht nach den Korrekturen vollstaendig mit
-165/165 CTests; die zuvor in der README genannte Zahl 169 war veraltet.
+166/166 CTests im MSVC-Developer-Kontext.
 
 CLI und GUI beobachten denselben sequenzierten hierarchischen Ereignisstrom.
 Gesamtfortschritt ist monoton, Einzelschritte besitzen nur bei bekannter Menge

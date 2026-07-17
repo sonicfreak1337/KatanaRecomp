@@ -55,6 +55,7 @@ struct AnalysisDiagnostic {
 struct AnalysisSeed {
     std::uint32_t address = 0u;
     std::vector<FunctionOrigin> function_origins;
+    bool guarded_candidate = false;
 };
 
 struct RecursiveAnalysisOptions {
@@ -63,6 +64,8 @@ struct RecursiveAnalysisOptions {
 
 struct RecursiveAnalysisResult {
     std::vector<katana::sh4::DisassemblyLine> instructions;
+    std::vector<std::uint32_t> proven_instruction_addresses;
+    std::vector<std::uint32_t> guarded_candidate_instruction_addresses;
     std::vector<ClassifiedRange> ranges;
     std::vector<ClassifiedRange> unreachable_code;
     std::vector<FunctionCandidate> functions;

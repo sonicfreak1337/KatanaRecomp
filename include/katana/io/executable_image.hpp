@@ -20,7 +20,10 @@ enum class RelocationKind { None, Absolute32, PcRelative32, Unsupported };
 
 enum class GuestCallAbi { Unknown, SuperHC };
 
-enum class InitialSnapshotPolicy { ImmutableOnly, EntryPointStraightLine };
+// EntryPointStraightLineQuiescent is an explicit loader contract: until the first
+// guest-visible control-flow boundary, no DMA engine, device callback, interrupt
+// path, host callback, or external runtime injection may mutate guest memory.
+enum class InitialSnapshotPolicy { ImmutableOnly, EntryPointStraightLineQuiescent };
 
 struct ImageSymbol {
     std::string name;

@@ -101,6 +101,8 @@ struct AnalysisCoverage {
     std::uint64_t analyzed_instruction_bytes = 0u;
     std::uint64_t unanalyzed_executable_bytes = 0u;
     std::size_t instructions = 0u;
+    std::size_t proven_instructions = 0u;
+    std::size_t guarded_candidate_instructions = 0u;
     std::size_t functions = 0u;
     std::size_t unresolved_control_flow = 0u;
     std::size_t unknown_instructions = 0u;

@@ -92,12 +92,14 @@ Gruenden `unresolved`.
 
 ## Entry-Snapshot und bewachte Kandidaten
 
-Dreamcast-GDI-Images tragen einen expliziten Anfangssnapshotvertrag. Nur der
+Dreamcast-GDI-Images tragen den expliziten
+`EntryPointStraightLineQuiescent`-Anfangssnapshotvertrag. Nur der
 zusammenhaengende gerade Pfad ab dem einzigen Entry darf ein beschreibbares
 PC-relatives Literal zeitlich beweisen. Ein CFG-Join, eine Adressluecke,
 Kontrollfluss, ein unbekanntes Schreibziel oder ein ueberdeckender bekannter
 Store beendet diesen Beweis. Allgemeine Raw-/ELF-Images bleiben bei
-`ImmutableOnly`.
+`ImmutableOnly`. Der vollstaendige Asynchronitaets- und Berichtsvertrag steht
+in [INITIAL_SNAPSHOT_CONTRACT.md](INITIAL_SNAPSHOT_CONTRACT.md).
 
 Ausserhalb dieses engen Vertrags darf ein committed lesbarer Wert aus
 beschreibbarem Speicher lediglich einen Status `guarded` erzeugen. Das Ziel

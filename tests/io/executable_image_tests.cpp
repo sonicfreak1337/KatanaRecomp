@@ -58,8 +58,9 @@ int main() {
             "Doppelte Einstiegspunkte wurden nicht normalisiert.");
     require(image.initial_snapshot_policy() == InitialSnapshotPolicy::ImmutableOnly,
             "Ein allgemeines Image aktivierte implizit beschreibbare Snapshotliterale.");
-    image.set_initial_snapshot_policy(InitialSnapshotPolicy::EntryPointStraightLine);
-    require(image.initial_snapshot_policy() == InitialSnapshotPolicy::EntryPointStraightLine,
+    image.set_initial_snapshot_policy(InitialSnapshotPolicy::EntryPointStraightLineQuiescent);
+    require(image.initial_snapshot_policy() ==
+                InitialSnapshotPolicy::EntryPointStraightLineQuiescent,
             "Expliziter Anfangssnapshotvertrag ging verloren.");
 
     const auto* code = image.find_segment(0x8C010002u, 2u);

@@ -153,13 +153,7 @@ RecursiveAnalysisResult analyze_reachable_code(const katana::io::ExecutableImage
         if (!validate_committed_code_address(image, seed.address).valid()) {
             continue;
         }
-        const auto proven = seed.function_origins.empty() ||
-                            std::any_of(seed.function_origins.begin(),
-                                        seed.function_origins.end(),
-                                        [](const auto origin) {
-                                            return origin != FunctionOrigin::GuardedSnapshot;
-                                        });
-        enqueue(pending, scheduled, seed.address, proven);
+        enqueue(pending, scheduled, seed.address, !seed.guarded_candidate);
         for (const auto origin : seed.function_origins) {
             const auto confidence =
                 origin == FunctionOrigin::UserOverride      ? AnalysisConfidence::Certain
