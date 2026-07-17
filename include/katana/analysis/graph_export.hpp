@@ -17,8 +17,10 @@ enum class AnalysisGraphEdgeKind : std::uint8_t {
     Branch,
     Conditional,
     ResolvedIndirect,
+    GuardedIndirect,
     DirectCall,
     ResolvedIndirectCall,
+    GuardedIndirectCall,
     UnresolvedJump,
     UnresolvedCall
 };

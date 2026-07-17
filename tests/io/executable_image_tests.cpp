@@ -56,6 +56,11 @@ int main() {
     require(image.segments()[0].name == ".text", "Segmente sind nicht nach Adresse sortiert.");
     require(image.entry_points().size() == 1u,
             "Doppelte Einstiegspunkte wurden nicht normalisiert.");
+    require(image.initial_snapshot_policy() == InitialSnapshotPolicy::ImmutableOnly,
+            "Ein allgemeines Image aktivierte implizit beschreibbare Snapshotliterale.");
+    image.set_initial_snapshot_policy(InitialSnapshotPolicy::EntryPointStraightLine);
+    require(image.initial_snapshot_policy() == InitialSnapshotPolicy::EntryPointStraightLine,
+            "Expliziter Anfangssnapshotvertrag ging verloren.");
 
     const auto* code = image.find_segment(0x8C010002u, 2u);
     if (code == nullptr) {

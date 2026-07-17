@@ -116,7 +116,12 @@ std::string format_indirect_control_flow_report(
         if (resolution.status != ResolutionStatus::Resolved) {
             line << "  " << kind_name(resolution.kind) << ' ';
             address_with_symbol(line, resolution.instruction_address, symbols);
-            line << " [" << resolution.reason << "] Hinweis: jump = ";
+            line << " [" << resolution.reason;
+            if (resolution.status == ResolutionStatus::Guarded && resolution.target.has_value()) {
+                line << "; snapshot-candidate=";
+                address(line, *resolution.target);
+            }
+            line << "] Hinweis: jump = ";
             address(line, resolution.instruction_address);
             line << " ZIEL\n";
             unresolved_lines.push_back(
@@ -246,8 +251,9 @@ std::string format_control_flow_analysis_json(const ControlFlowAnalysisResult& a
             output, "instruction_symbol", analysis.symbolic_addresses, value.instruction_address);
         output << ",\"kind\":" << katana::io::quote_json(kind_name(value.kind))
                << ",\"register\":" << static_cast<unsigned>(value.register_index) << ",\"status\":"
-               << katana::io::quote_json(value.status == ResolutionStatus::Resolved ? "resolved"
-                                                                                    : "unresolved")
+               << katana::io::quote_json(value.status == ResolutionStatus::Resolved  ? "resolved"
+                                         : value.status == ResolutionStatus::Guarded ? "guarded"
+                                                                                     : "unresolved")
                << ",\"target\":";
         if (value.target)
             output << katana::io::quote_json(hex32(*value.target));

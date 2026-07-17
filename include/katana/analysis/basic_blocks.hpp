@@ -26,6 +26,7 @@ struct ResolvedControlFlowEdge {
     std::uint32_t instruction_address = 0u;
     std::uint32_t target_address = 0u;
     ResolvedControlFlowKind kind = ResolvedControlFlowKind::Jump;
+    bool guarded = false;
 
     bool operator==(const ResolvedControlFlowEdge&) const = default;
 };

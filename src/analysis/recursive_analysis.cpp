@@ -146,12 +146,11 @@ RecursiveAnalysisResult analyze_reachable_code(const katana::io::ExecutableImage
         }
         enqueue(pending, scheduled, seed.address);
         for (const auto origin : seed.function_origins) {
-            add_function_evidence(function_candidates,
-                                  seed.address,
-                                  origin,
-                                  origin == FunctionOrigin::UserOverride
-                                      ? AnalysisConfidence::Certain
-                                      : AnalysisConfidence::High);
+            const auto confidence =
+                origin == FunctionOrigin::UserOverride      ? AnalysisConfidence::Certain
+                : origin == FunctionOrigin::GuardedSnapshot ? AnalysisConfidence::Medium
+                                                            : AnalysisConfidence::High;
+            add_function_evidence(function_candidates, seed.address, origin, confidence);
         }
     }
 
@@ -308,6 +307,8 @@ const char* function_origin_name(const FunctionOrigin origin) noexcept {
         return "direct-call";
     case FunctionOrigin::IndirectCall:
         return "indirect-call";
+    case FunctionOrigin::GuardedSnapshot:
+        return "guarded-snapshot";
     case FunctionOrigin::JumpTableCall:
         return "jump-table-call";
     case FunctionOrigin::UserOverride:

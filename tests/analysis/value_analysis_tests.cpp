@@ -1,5 +1,7 @@
 #include "katana/analysis/control_flow_report.hpp"
 #include "katana/analysis/value_analysis.hpp"
+#include "katana/ir/lower.hpp"
+#include "katana/ir/verifier.hpp"
 #include "katana/sh4/disassembler.hpp"
 
 #include <algorithm>
@@ -21,8 +23,8 @@ void require(const bool condition, const std::string& message) {
 const katana::analysis::IndirectControlFlowResolution*
 find_resolution(const std::vector<katana::analysis::IndirectControlFlowResolution>& resolutions,
                 const std::uint32_t address) {
-    const auto found = std::find_if(
-        resolutions.begin(), resolutions.end(), [address](const auto& item) {
+    const auto found =
+        std::find_if(resolutions.begin(), resolutions.end(), [address](const auto& item) {
             return item.instruction_address == address;
         });
     return found == resolutions.end() ? nullptr : &*found;
@@ -106,8 +108,7 @@ int main() {
             "berechnet.");
 
     const auto mixed_lines = katana::sh4::disassemble(
-        std::array<std::uint8_t, 8>{0x00u, 0xC7u, 0x04u, 0xE1u, 0x0Cu, 0x31u, 0x2Bu, 0x41u},
-        0u);
+        std::array<std::uint8_t, 8>{0x00u, 0xC7u, 0x04u, 0xE1u, 0x0Cu, 0x31u, 0x2Bu, 0x41u}, 0u);
     const auto mixed_values = katana::analysis::analyze_register_values(mixed_lines);
     require(mixed_values.indirect_control_flow.size() == 1u &&
                 mixed_values.indirect_control_flow[0].value == 8u &&
@@ -138,8 +139,7 @@ int main() {
     sequenced_lines[1].address = 2u;
     const auto provenance_trace =
         katana::analysis::propagate_local_constants(sequenced_lines, provenance_initial);
-    require(provenance_trace[0].after.sources[1] ==
-                "add(immutable-value,pc-relative-address)" &&
+    require(provenance_trace[0].after.sources[1] == "add(immutable-value,pc-relative-address)" &&
                 provenance_trace[1].after.sources[1] ==
                     "xor(add(immutable-value,pc-relative-address),third-source)",
             "Mehrstufige oder unterschiedlich hergeleitete Arithmetik verlor ihre Beweiskette.");
@@ -149,8 +149,7 @@ int main() {
     self_initial.sources[1] = "self-source";
     const std::array self_add_lines{
         arithmetic_line(katana::sh4::InstructionKind::AddRegister, 1u, 1u)};
-    const auto self_add =
-        katana::analysis::propagate_local_constants(self_add_lines, self_initial);
+    const auto self_add = katana::analysis::propagate_local_constants(self_add_lines, self_initial);
     require(self_add[0].after.registers[1] == 4u &&
                 self_add[0].after.sources[1] == "add(self-source,self-source)",
             "Identisches ADD-Quell-/Zielregister verlor Wert oder Herkunft.");
@@ -158,8 +157,7 @@ int main() {
     const std::array self_xor_lines{
         arithmetic_line(katana::sh4::InstructionKind::XorRegister, 5u, 5u)};
     const auto self_xor = katana::analysis::propagate_local_constants(self_xor_lines);
-    require(self_xor[0].after.registers[5] == 0u &&
-                self_xor[0].after.sources[5] == "xor-self",
+    require(self_xor[0].after.registers[5] == 0u && self_xor[0].after.sources[5] == "xor-self",
             "XOR Rn,Rn wurde nicht unabhaengig vom Eingang sicher zu null gefaltet.");
 
     constexpr std::array<std::uint8_t, 8> indirect_bytes{
@@ -259,6 +257,113 @@ int main() {
                 pc_literal_resolution[0].target == 0x0Cu &&
                 pc_literal_resolution[0].reason == "pc-relative-literal",
             "PC-relatives Literal wurde nicht als indirektes Sprungziel aufgeloest.");
+
+    const auto writable_entry_image = [](const std::uint8_t store_address,
+                                         const bool initialize_store) {
+        std::vector<std::uint8_t> bytes(32u, 0x09u);
+        std::size_t cursor = 0u;
+        if (initialize_store) {
+            bytes[cursor++] = store_address;
+            bytes[cursor++] = 0xE1u; // mov #address,r1
+        }
+        bytes[cursor++] = 0x02u;
+        bytes[cursor++] = 0x21u; // mov.l r0,@r1
+        const auto load_address = cursor;
+        const auto base = (load_address + 4u) & ~3u;
+        const auto literal_address = 12u;
+        bytes[cursor++] = static_cast<std::uint8_t>((literal_address - base) / 4u);
+        bytes[cursor++] = 0xD0u; // mov.l @(disp,pc),r0
+        bytes[cursor++] = 0x2Bu;
+        bytes[cursor++] = 0x40u; // jmp @r0
+        bytes[cursor++] = 0x09u;
+        bytes[cursor++] = 0x00u; // nop (delay)
+        bytes[12u] = 0x10u;
+        bytes[13u] = 0x00u;
+        bytes[14u] = 0x00u;
+        bytes[15u] = 0x00u;
+        bytes[16u] = 0x0Bu;
+        bytes[17u] = 0x00u;
+        bytes[18u] = 0x09u;
+        bytes[19u] = 0x00u;
+        katana::io::ExecutableImage image;
+        image.add_segment({".rwx",
+                           0u,
+                           0u,
+                           bytes.size(),
+                           katana::io::SegmentKind::Code,
+                           {true, true, true},
+                           std::move(bytes)});
+        image.add_entry_point(0u);
+        return image;
+    };
+    auto stable_entry = writable_entry_image(24u, true);
+    const auto stable_without_contract = katana::analysis::resolve_indirect_control_flow(
+        katana::sh4::disassemble(stable_entry.segments()[0].bytes, 0u), stable_entry);
+    require(stable_without_contract[0].status == katana::analysis::ResolutionStatus::Guarded &&
+                stable_without_contract[0].target == 0x10u &&
+                stable_without_contract[0].reason == "guarded-writable-pc-relative-literal",
+            "RWX-Literal wurde ohne Beweis weder dynamisch bewacht noch korrekt klassifiziert.");
+    const auto guarded_flow = katana::analysis::analyze_control_flow(stable_entry);
+    const auto guarded_edge = std::find_if(
+        guarded_flow.resolved_edges.begin(), guarded_flow.resolved_edges.end(), [](const auto& edge) {
+            return edge.instruction_address == 6u && edge.target_address == 0x10u;
+        });
+    require(std::any_of(guarded_flow.recursive.instructions.begin(),
+                        guarded_flow.recursive.instructions.end(),
+                        [](const auto& line) { return line.address == 0x10u; }) &&
+                guarded_flow.indirect_control_flow[0].status ==
+                    katana::analysis::ResolutionStatus::Guarded &&
+                guarded_edge != guarded_flow.resolved_edges.end() && guarded_edge->guarded,
+            "Bewachter Snapshotkandidat wurde nicht als partielle CFG-Kante erhalten.");
+    const auto guarded_ir = katana::ir::lower_program(guarded_flow);
+    require(!guarded_ir.empty(), "Bewachter Snapshotkandidat erzeugte keine IR-Funktion.");
+    const auto guarded_ir_block = std::find_if(
+        guarded_ir.front().blocks.begin(), guarded_ir.front().blocks.end(), [](const auto& block) {
+            return std::any_of(block.instructions.begin(), block.instructions.end(), [](const auto& instruction) {
+                return instruction.source_address == 6u;
+            });
+        });
+    require(guarded_ir_block != guarded_ir.front().blocks.end(),
+            "Bewachter Snapshotkandidat verlor seinen IR-Block.");
+    const auto guarded_ir_control =
+        std::find_if(guarded_ir_block->instructions.begin(),
+                     guarded_ir_block->instructions.end(),
+                     [](const auto& instruction) { return instruction.source_address == 6u; });
+    require(guarded_ir_control != guarded_ir_block->instructions.end() &&
+                guarded_ir_control->resolved_targets == std::vector<std::uint32_t>{0x10u} &&
+                guarded_ir_block->has_indirect_successor &&
+                katana::ir::verify_program(guarded_ir).empty(),
+            "Bewachtes IR verlor Kandidatenziel oder dynamischen Fallback.");
+    const auto guarded_text = katana::analysis::format_indirect_control_flow_report(
+        guarded_flow.indirect_control_flow, guarded_flow.jump_tables);
+    const auto guarded_json = katana::analysis::format_control_flow_analysis_json(guarded_flow);
+    require(guarded_text.find("snapshot-candidate=") != std::string::npos &&
+                guarded_json.find("\"status\":\"guarded\"") != std::string::npos,
+            "Bewachter Kandidat fehlt im stabilen Text-/JSON-Bericht.");
+    stable_entry.set_initial_snapshot_policy(
+        katana::io::InitialSnapshotPolicy::EntryPointStraightLine);
+    const auto stable_with_contract = katana::analysis::resolve_indirect_control_flow(
+        katana::sh4::disassemble(stable_entry.segments()[0].bytes, 0u), stable_entry);
+    require(stable_with_contract[0].status == katana::analysis::ResolutionStatus::Resolved &&
+                stable_with_contract[0].target == 0x10u &&
+                stable_with_contract[0].reason == "entry-snapshot-pc-relative-literal",
+            "Nicht ueberdecktes Entry-Snapshot-Literal wurde nicht zeitlich bewiesen.");
+
+    auto overwritten_entry = writable_entry_image(12u, true);
+    overwritten_entry.set_initial_snapshot_policy(
+        katana::io::InitialSnapshotPolicy::EntryPointStraightLine);
+    const auto overwritten_resolution = katana::analysis::resolve_indirect_control_flow(
+        katana::sh4::disassemble(overwritten_entry.segments()[0].bytes, 0u), overwritten_entry);
+    require(overwritten_resolution[0].status == katana::analysis::ResolutionStatus::Guarded,
+            "Vor dem Load ueberdecktes RWX-Literal wurde als statischer Beweis ausgegeben.");
+
+    auto unknown_store_entry = writable_entry_image(0u, false);
+    unknown_store_entry.set_initial_snapshot_policy(
+        katana::io::InitialSnapshotPolicy::EntryPointStraightLine);
+    const auto unknown_store_resolution = katana::analysis::resolve_indirect_control_flow(
+        katana::sh4::disassemble(unknown_store_entry.segments()[0].bytes, 0u), unknown_store_entry);
+    require(unknown_store_resolution[0].status == katana::analysis::ResolutionStatus::Guarded,
+            "Unbekanntes Schreibziel wurde faelschlich als Entry-Snapshot-Beweis behandelt.");
 
     katana::io::ExecutableImage pc_word;
     pc_word.add_segment({".text",
@@ -401,8 +506,7 @@ int main() {
     post_increment_initial.registers[8] = 0x20u;
     katana::sh4::DisassemblyLine post_increment;
     post_increment.address = 0u;
-    post_increment.instruction.kind =
-        katana::sh4::InstructionKind::MovLongLoadPostIncrement;
+    post_increment.instruction.kind = katana::sh4::InstructionKind::MovLongLoadPostIncrement;
     post_increment.instruction.source_register = 1u;
     post_increment.instruction.destination_register = 1u;
     const std::array post_increment_lines{post_increment};
@@ -417,8 +521,7 @@ int main() {
     pre_decrement_initial.registers[15] = 0x100u;
     katana::sh4::DisassemblyLine pre_decrement;
     pre_decrement.address = 0u;
-    pre_decrement.instruction.kind =
-        katana::sh4::InstructionKind::MovLongStorePreDecrement;
+    pre_decrement.instruction.kind = katana::sh4::InstructionKind::MovLongStorePreDecrement;
     pre_decrement.instruction.source_register = 2u;
     pre_decrement.instruction.destination_register = 15u;
     const std::array pre_decrement_lines{pre_decrement};
@@ -429,8 +532,7 @@ int main() {
             "Pre-Decrement invalidierte nicht ausschliesslich das aktualisierte Basisregister.");
 
     auto join_lines = katana::sh4::disassemble(
-        std::array<std::uint8_t, 8>{0x0Cu, 0xE8u, 0x00u, 0x89u, 0x09u, 0x00u, 0x2Bu, 0x48u},
-        0u);
+        std::array<std::uint8_t, 8>{0x0Cu, 0xE8u, 0x00u, 0x89u, 0x09u, 0x00u, 0x2Bu, 0x48u}, 0u);
     require(join_lines[1].target_address == 6u, "Synthetischer CFG-Join ist falsch kodiert.");
     const auto join_values = katana::analysis::analyze_register_values(join_lines);
     require(join_values.indirect_control_flow.size() == 1u &&
@@ -438,16 +540,16 @@ int main() {
             "Konstante wurde ueber einen mehrdeutigen CFG-Join getragen.");
 
     katana::io::ExecutableImage immutable_load;
-    immutable_load.add_segment({".text",
-                                0u,
-                                0u,
-                                0x20u,
-                                katana::io::SegmentKind::Code,
-                                {true, false, true},
-                                {0x20u, 0xE1u, 0x12u, 0x62u, 0x2Bu, 0x42u, 0x09u, 0x00u,
-                                 0x09u, 0x00u, 0x09u, 0x00u, 0x09u, 0x00u, 0x09u, 0x00u,
-                                 0x0Bu, 0x00u, 0x09u, 0x00u, 0x09u, 0x00u, 0x09u, 0x00u,
-                                 0x09u, 0x00u, 0x09u, 0x00u, 0x09u, 0x00u, 0x09u, 0x00u}});
+    immutable_load.add_segment(
+        {".text",
+         0u,
+         0u,
+         0x20u,
+         katana::io::SegmentKind::Code,
+         {true, false, true},
+         {0x20u, 0xE1u, 0x12u, 0x62u, 0x2Bu, 0x42u, 0x09u, 0x00u, 0x09u, 0x00u, 0x09u,
+          0x00u, 0x09u, 0x00u, 0x09u, 0x00u, 0x0Bu, 0x00u, 0x09u, 0x00u, 0x09u, 0x00u,
+          0x09u, 0x00u, 0x09u, 0x00u, 0x09u, 0x00u, 0x09u, 0x00u, 0x09u, 0x00u}});
     immutable_load.add_segment({".rodata",
                                 0x20u,
                                 0x20u,

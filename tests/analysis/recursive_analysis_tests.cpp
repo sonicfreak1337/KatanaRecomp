@@ -100,6 +100,22 @@ int main() {
                     result.functions[0].confidence)) == "certain",
             "Herkunfts- oder Konfidenzname ist instabil.");
 
+    katana::analysis::RecursiveAnalysisOptions guarded_options;
+    guarded_options.additional_seeds.push_back(
+        {0x8C01000Cu, {katana::analysis::FunctionOrigin::GuardedSnapshot}});
+    const auto guarded_result = katana::analysis::analyze_reachable_code(image, guarded_options);
+    const auto guarded_function =
+        std::find_if(guarded_result.functions.begin(),
+                     guarded_result.functions.end(),
+                     [](const auto& function) { return function.address == 0x8C01000Cu; });
+    require(guarded_function != guarded_result.functions.end() &&
+                guarded_function->confidence == katana::analysis::AnalysisConfidence::Medium &&
+                guarded_function->origins ==
+                    std::vector{katana::analysis::FunctionOrigin::GuardedSnapshot} &&
+                std::string(katana::analysis::function_origin_name(
+                    katana::analysis::FunctionOrigin::GuardedSnapshot)) == "guarded-snapshot",
+            "Bewachte Snapshotfunktion verlor Herkunft oder mittlere Konfidenz.");
+
     ExecutableImage invalid;
     invalid.add_segment(
         {".data", 0x1000u, 0u, 2u, SegmentKind::Data, {true, true, false}, {0u, 0u}});

@@ -32,7 +32,9 @@ int main() {
                    {0x2000u, std::nullopt, 0x2000u, AnalysisGraphEdgeKind::UnresolvedJump},
                    {0x1000u, 0x3000u, 0x1000u, AnalysisGraphEdgeKind::DirectCall},
                    {0x1000u, 0x3000u, 0x1000u, AnalysisGraphEdgeKind::ResolvedIndirectCall},
+                   {0x1000u, 0x3000u, 0x1002u, AnalysisGraphEdgeKind::GuardedIndirectCall},
                    {0x2000u, 0x3000u, 0x2000u, AnalysisGraphEdgeKind::ResolvedIndirect},
+                   {0x2000u, 0x3000u, 0x2000u, AnalysisGraphEdgeKind::GuardedIndirect},
                    {0x2000u, 0x3000u, 0x2002u, AnalysisGraphEdgeKind::Branch},
                    {0x2000u, 0x2002u, 0x2000u, AnalysisGraphEdgeKind::Fallthrough},
                    {0x3000u, std::nullopt, 0x3000u, AnalysisGraphEdgeKind::UnresolvedCall}};
@@ -45,6 +47,8 @@ int main() {
                 json.find("\"symbol\":\"callee\\\"name\"") != std::string::npos &&
                 json.find("\"target\":null") != std::string::npos &&
                 json.find("resolved-indirect-call") != std::string::npos &&
+                json.find("guarded-indirect-call") != std::string::npos &&
+                json.find("guarded-indirect") != std::string::npos &&
                 json.find("unresolved-jump") != std::string::npos &&
                 json.find("unresolved-call") != std::string::npos,
             "Graph-JSON verliert Schema, Symbole, indirekte oder unaufgeloeste Kanten.");

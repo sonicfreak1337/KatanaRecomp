@@ -11,6 +11,7 @@
 #include <set>
 #include <string_view>
 #include <utility>
+#include <vector>
 
 namespace katana::analysis {
 namespace {
@@ -72,13 +73,41 @@ constexpr std::uint16_t register_bit(const std::uint8_t index) {
     return static_cast<std::uint16_t>(1u << index);
 }
 
-std::optional<std::uint32_t> read_immutable_integer(const katana::io::ExecutableImage* image,
+struct SnapshotWrite {
+    std::uint32_t address = 0u;
+    std::size_t width = 0u;
+};
+
+struct EntrySnapshotState {
+    bool active = false;
+    std::vector<SnapshotWrite> writes;
+};
+
+bool ranges_overlap(const std::uint32_t left_address,
+                    const std::size_t left_width,
+                    const std::uint32_t right_address,
+                    const std::size_t right_width) {
+    const auto left_end = static_cast<std::uint64_t>(left_address) + left_width;
+    const auto right_end = static_cast<std::uint64_t>(right_address) + right_width;
+    return static_cast<std::uint64_t>(left_address) < right_end &&
+           static_cast<std::uint64_t>(right_address) < left_end;
+}
+
+bool snapshot_range_unchanged(const EntrySnapshotState* snapshot,
+                              const std::uint32_t address,
+                              const std::size_t width) {
+    return snapshot != nullptr && snapshot->active &&
+           std::none_of(snapshot->writes.begin(), snapshot->writes.end(), [&](const auto& write) {
+               return ranges_overlap(address, width, write.address, write.width);
+           });
+}
+
+std::optional<std::uint32_t> read_committed_integer(const katana::io::ExecutableImage* image,
                                                     const std::uint32_t address,
                                                     const std::size_t width) {
     if (image == nullptr) return std::nullopt;
     const auto* segment = image->find_segment(address, width);
-    if (segment == nullptr || !segment->permissions.readable || segment->permissions.writable)
-        return std::nullopt;
+    if (segment == nullptr || !segment->permissions.readable) return std::nullopt;
     const auto offset = segment->byte_offset(address);
     if (!offset.has_value() || *offset > segment->bytes.size() ||
         width > segment->bytes.size() - *offset)
@@ -97,6 +126,18 @@ std::optional<std::uint32_t> read_immutable_integer(const katana::io::Executable
     default:
         return std::nullopt;
     }
+}
+
+std::optional<std::uint32_t> read_immutable_integer(const katana::io::ExecutableImage* image,
+                                                    const std::uint32_t address,
+                                                    const std::size_t width,
+                                                    const EntrySnapshotState* snapshot = nullptr) {
+    if (image == nullptr) return std::nullopt;
+    const auto* segment = image->find_segment(address, width);
+    if (segment == nullptr ||
+        (segment->permissions.writable && !snapshot_range_unchanged(snapshot, address, width)))
+        return std::nullopt;
+    return read_committed_integer(image, address, width);
 }
 
 void apply_immutable_load(RegisterConstants& state,
@@ -220,9 +261,88 @@ void clear_written_registers(RegisterConstants& state,
     }
 }
 
+std::optional<std::uint32_t> checked_address(const std::optional<std::uint32_t> base,
+                                             const std::uint32_t offset) {
+    if (!base.has_value() || *base > std::numeric_limits<std::uint32_t>::max() - offset)
+        return std::nullopt;
+    return *base + offset;
+}
+
+void record_snapshot_write(EntrySnapshotState& snapshot,
+                           const RegisterConstants& state,
+                           const katana::sh4::DecodedInstruction& instruction) {
+    if (!snapshot.active) return;
+    using K = katana::sh4::InstructionKind;
+    std::optional<std::uint32_t> address;
+    std::size_t width = 0u;
+    switch (instruction.kind) {
+    case K::MovByteStore:
+    case K::MovWordStore:
+    case K::MovLongStore:
+        width = instruction.kind == K::MovByteStore   ? 1u
+                : instruction.kind == K::MovWordStore ? 2u
+                                                      : 4u;
+        address = state.registers[instruction.destination_register];
+        break;
+    case K::MovByteStoreDisplacement:
+    case K::MovWordStoreDisplacement:
+    case K::MovLongStoreDisplacement:
+        width = instruction.kind == K::MovByteStoreDisplacement   ? 1u
+                : instruction.kind == K::MovWordStoreDisplacement ? 2u
+                                                                  : 4u;
+        address = checked_address(state.registers[instruction.destination_register],
+                                  static_cast<std::uint32_t>(instruction.displacement));
+        break;
+    case K::MovByteStoreR0Indexed:
+    case K::MovWordStoreR0Indexed:
+    case K::MovLongStoreR0Indexed:
+        width = instruction.kind == K::MovByteStoreR0Indexed   ? 1u
+                : instruction.kind == K::MovWordStoreR0Indexed ? 2u
+                                                               : 4u;
+        address = checked_address(state.registers[instruction.destination_register],
+                                  state.registers[0u].value_or(0u));
+        if (!state.registers[0u].has_value()) address.reset();
+        break;
+    case K::MovByteStorePreDecrement:
+    case K::MovWordStorePreDecrement:
+    case K::MovLongStorePreDecrement:
+        width = instruction.kind == K::MovByteStorePreDecrement   ? 1u
+                : instruction.kind == K::MovWordStorePreDecrement ? 2u
+                                                                  : 4u;
+        if (const auto base = state.registers[instruction.destination_register];
+            base.has_value() && *base >= width)
+            address = *base - static_cast<std::uint32_t>(width);
+        break;
+    case K::TestByteImmediate:
+    case K::AndByteImmediate:
+    case K::XorByteImmediate:
+    case K::OrByteImmediate:
+    case K::TestAndSetByte:
+    case K::MovByteStoreGbrDisplacement:
+    case K::MovWordStoreGbrDisplacement:
+    case K::MovLongStoreGbrDisplacement:
+    case K::StoreSpecialRegisterPreDecrement:
+    case K::FmovStore:
+    case K::FmovStorePreDecrement:
+    case K::FmovStoreR0Indexed:
+    case K::Prefetch:
+    case K::Unknown:
+        snapshot.active = false;
+        return;
+    default:
+        return;
+    }
+    if (!address.has_value()) {
+        snapshot.active = false;
+        return;
+    }
+    snapshot.writes.push_back({*address, width});
+}
+
 void apply_local_transfer(RegisterConstants& state,
                           const katana::sh4::DisassemblyLine& line,
-                          const katana::io::ExecutableImage* image) {
+                          const katana::io::ExecutableImage* image,
+                          const EntrySnapshotState* snapshot = nullptr) {
     const auto& instruction = line.instruction;
     switch (instruction.kind) {
     case katana::sh4::InstructionKind::Nop:
@@ -244,12 +364,27 @@ void apply_local_transfer(RegisterConstants& state,
             instruction.kind == katana::sh4::InstructionKind::MovWordLoadPcRelative ? 2u : 4u;
         const auto base = width == 4u ? (line.address + 4u) & ~3u : line.address + 4u;
         const auto address = base + static_cast<std::uint32_t>(instruction.displacement);
-        const auto value = read_immutable_integer(image, address, width);
+        auto value = read_immutable_integer(image, address, width, snapshot);
+        bool guarded = false;
+        if (!value.has_value()) {
+            const auto* segment = image == nullptr ? nullptr : image->find_segment(address, width);
+            if (segment != nullptr && segment->permissions.writable) {
+                value = read_committed_integer(image, address, width);
+                guarded = value.has_value();
+            }
+        }
         if (!value.has_value()) {
             clear_register(state, instruction.destination_register);
             return;
         }
-        set_constant(state, instruction.destination_register, *value, "pc-relative-literal");
+        const auto* segment = image == nullptr ? nullptr : image->find_segment(address, width);
+        set_constant(state,
+                     instruction.destination_register,
+                     *value,
+                     guarded ? "guarded-writable-pc-relative-literal"
+                     : segment != nullptr && segment->permissions.writable
+                         ? "entry-snapshot-pc-relative-literal"
+                         : "pc-relative-literal");
         return;
     }
     case katana::sh4::InstructionKind::MoveAddressPcRelative:
@@ -491,13 +626,22 @@ resolve_indirect_control_flow(const std::span<const katana::sh4::DisassemblyLine
         if (line.target_address.has_value()) control_flow_targets.insert(*line.target_address);
     }
     std::optional<std::uint16_t> clear_after_delay_slot;
+    EntrySnapshotState snapshot;
+    snapshot.active = image.initial_snapshot_policy() ==
+                          katana::io::InitialSnapshotPolicy::EntryPointStraightLine &&
+                      image.entry_points().size() == 1u && !lines.empty() &&
+                      lines.front().address == image.entry_points().front();
     for (std::size_t index = 0u; index < lines.size(); ++index) {
         const auto& line = lines[index];
         if (index != 0u && line.address != lines[index - 1u].address + 2u) {
             clear_constants(state);
             clear_after_delay_slot.reset();
+            snapshot.active = false;
         }
-        if (control_flow_targets.contains(line.address)) clear_constants(state);
+        if (control_flow_targets.contains(line.address)) {
+            clear_constants(state);
+            snapshot.active = false;
+        }
 
         const bool indirect = line.instruction.kind == katana::sh4::InstructionKind::Jmp ||
                               line.instruction.kind == katana::sh4::InstructionKind::Jsr ||
@@ -530,7 +674,9 @@ resolve_indirect_control_flow(const std::span<const katana::sh4::DisassemblyLine
                     if (!validation.valid()) {
                         resolution.reason = code_address_status_name(validation.status);
                     } else {
-                        resolution.status = ResolutionStatus::Resolved;
+                        resolution.status = source.find("guarded-writable-") != std::string::npos
+                                                ? ResolutionStatus::Guarded
+                                                : ResolutionStatus::Resolved;
                         resolution.target = narrowed_target;
                         resolution.reason = source.empty() ? "constant-register" : source;
                         if (register_relative)
@@ -541,15 +687,20 @@ resolve_indirect_control_flow(const std::span<const katana::sh4::DisassemblyLine
             resolutions.push_back(std::move(resolution));
         }
 
-        apply_local_transfer(state, line, &image);
+        record_snapshot_write(snapshot, state, line.instruction);
+        apply_local_transfer(state, line, &image, &snapshot);
         if (clear_after_delay_slot.has_value()) {
             clear_registers(state, *clear_after_delay_slot);
             if (*clear_after_delay_slot == 0x80FFu) mark_abi_preserved(state, 0x7F00u);
             clear_after_delay_slot.reset();
         }
         if (!line.instruction.changes_control_flow() ||
-            line.instruction.control_flow == katana::sh4::ControlFlowKind::ConditionalBranch)
+            line.instruction.control_flow == katana::sh4::ControlFlowKind::ConditionalBranch) {
+            if (line.instruction.control_flow == katana::sh4::ControlFlowKind::ConditionalBranch)
+                snapshot.active = false;
             continue;
+        }
+        snapshot.active = false;
         const bool call =
             line.instruction.control_flow == katana::sh4::ControlFlowKind::Call ||
             line.instruction.control_flow == katana::sh4::ControlFlowKind::IndirectCall;

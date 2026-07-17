@@ -104,7 +104,8 @@ AnalysisGraph build_control_flow_graph(const ControlFlowAnalysisResult& analysis
                                         edge.kind == ResolvedControlFlowKind::Jump;
                              });
             if (resolved != analysis.resolved_edges.end()) {
-                kind = AnalysisGraphEdgeKind::ResolvedIndirect;
+                kind = resolved->guarded ? AnalysisGraphEdgeKind::GuardedIndirect
+                                         : AnalysisGraphEdgeKind::ResolvedIndirect;
             }
             graph.edges.push_back({block.start_address, successor, control.address, kind});
         }
@@ -153,9 +154,11 @@ AnalysisGraph build_call_graph(const ControlFlowAnalysisResult& analysis) {
                                    resolved_call == analysis.resolved_edges.end()
                                        ? 0u
                                        : resolved_call->instruction_address,
-                                   resolved_call != analysis.resolved_edges.end()
-                                       ? AnalysisGraphEdgeKind::ResolvedIndirectCall
-                                       : AnalysisGraphEdgeKind::DirectCall});
+                                   resolved_call == analysis.resolved_edges.end()
+                                       ? AnalysisGraphEdgeKind::DirectCall
+                                   : resolved_call->guarded
+                                       ? AnalysisGraphEdgeKind::GuardedIndirectCall
+                                       : AnalysisGraphEdgeKind::ResolvedIndirectCall});
             if (!known_entries.contains(target)) {
                 graph.nodes.push_back({target, target, symbol_for(analysis, target)});
                 known_entries.insert(target);
@@ -167,7 +170,7 @@ AnalysisGraph build_call_graph(const ControlFlowAnalysisResult& analysis) {
                             analysis.resolved_edges.end(),
                             [callsite](const auto& edge) {
                                 return edge.kind == ResolvedControlFlowKind::Call &&
-                                       edge.instruction_address == callsite;
+                                       edge.instruction_address == callsite && !edge.guarded;
                             });
             if (!resolved) {
                 graph.edges.push_back({function.entry_address,
@@ -258,10 +261,14 @@ const char* analysis_graph_edge_kind_name(const AnalysisGraphEdgeKind kind) noex
         return "conditional";
     case AnalysisGraphEdgeKind::ResolvedIndirect:
         return "resolved-indirect";
+    case AnalysisGraphEdgeKind::GuardedIndirect:
+        return "guarded-indirect";
     case AnalysisGraphEdgeKind::DirectCall:
         return "direct-call";
     case AnalysisGraphEdgeKind::ResolvedIndirectCall:
         return "resolved-indirect-call";
+    case AnalysisGraphEdgeKind::GuardedIndirectCall:
+        return "guarded-indirect-call";
     case AnalysisGraphEdgeKind::UnresolvedJump:
         return "unresolved-jump";
     case AnalysisGraphEdgeKind::UnresolvedCall:

@@ -406,10 +406,13 @@ std::vector<VerificationIssue> verify_function(const Function& function) {
             add_issue(
                 issues, block.start_address, "Blocknachfolger passen nicht zur Terminaloperation.");
         }
-        const bool expected_indirect = (control.operation == Operation::JumpRegister ||
-                                        control.operation == Operation::CallRegister) &&
-                                       control.resolved_targets.empty();
-        if (block.has_indirect_successor != expected_indirect) {
+        const bool indirect_operation = control.operation == Operation::JumpRegister ||
+                                        control.operation == Operation::CallRegister;
+        const bool invalid_indirect_marker =
+            (!indirect_operation && block.has_indirect_successor) ||
+            (indirect_operation && control.resolved_targets.empty() &&
+             !block.has_indirect_successor);
+        if (invalid_indirect_marker) {
             add_issue(issues,
                       block.start_address,
                       "Indirekte CFG-Markierung passt nicht zur Terminaloperation.");

@@ -855,7 +855,7 @@ AnalysisCoverage analysis_coverage(const io::LoadedProject& project,
     coverage.functions = analysis.recursive.functions.size();
     coverage.unknown_instructions = analysis.recursive.diagnostics.size();
     for (const auto& resolution : analysis.indirect_control_flow) {
-        if (resolution.status == analysis::ResolutionStatus::Unresolved)
+        if (resolution.status != analysis::ResolutionStatus::Resolved)
             ++coverage.unresolved_control_flow;
     }
     coverage.reachable_abort_edges =

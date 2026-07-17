@@ -23,6 +23,7 @@ enum class FunctionOrigin {
     EntryPoint,
     DirectCall,
     IndirectCall,
+    GuardedSnapshot,
     JumpTableCall,
     UserOverride,
     UserHint,

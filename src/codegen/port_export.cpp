@@ -424,12 +424,12 @@ PortExportResult export_dreamcast_port_project(const PreparedPortProgram& prepar
     if (!prepared.analysis.recursive.diagnostics.empty()) {
         throw std::runtime_error("Portanalyse enthaelt unbekannte Instruktionen.");
     }
-    const auto unresolved = std::count_if(prepared.analysis.indirect_control_flow.begin(),
-                                          prepared.analysis.indirect_control_flow.end(),
-                                          [](const auto& resolution) {
-                                              return resolution.status ==
-                                                     katana::analysis::ResolutionStatus::Unresolved;
-                                          });
+    const auto unresolved =
+        std::count_if(prepared.analysis.indirect_control_flow.begin(),
+                      prepared.analysis.indirect_control_flow.end(),
+                      [](const auto& resolution) {
+                          return resolution.status != katana::analysis::ResolutionStatus::Resolved;
+                      });
     if (unresolved != 0u) {
         throw std::runtime_error("Portanalyse ist unvollstaendig: " + std::to_string(unresolved) +
                                  " ungeloeste Kontrollflussstellen.");

@@ -90,6 +90,24 @@ und `pc-relative-address` dokumentieren den Beweis und seine Herkunft.
 Unbekannte Werte und ungueltige Zielbereiche bleiben mit getrennten stabilen
 Gruenden `unresolved`.
 
+## Entry-Snapshot und bewachte Kandidaten
+
+Dreamcast-GDI-Images tragen einen expliziten Anfangssnapshotvertrag. Nur der
+zusammenhaengende gerade Pfad ab dem einzigen Entry darf ein beschreibbares
+PC-relatives Literal zeitlich beweisen. Ein CFG-Join, eine Adressluecke,
+Kontrollfluss, ein unbekanntes Schreibziel oder ein ueberdeckender bekannter
+Store beendet diesen Beweis. Allgemeine Raw-/ELF-Images bleiben bei
+`ImmutableOnly`.
+
+Ausserhalb dieses engen Vertrags darf ein committed lesbarer Wert aus
+beschreibbarem Speicher lediglich einen Status `guarded` erzeugen. Das Ziel
+wird rekursiv entdeckt und als partielle Kandidatenkante in Basic Blocks, IR,
+CFG und Callgraph uebernommen. Der Block behaelt gleichzeitig seinen
+indirekten Nachfolger; generierter Dispatch prueft den aktuellen Registerwert
+und behaelt fuer jedes andere Laufzeitziel den dynamischen Default. Guarded ist
+damit kein statischer Beweis und wird vom bisherigen Port-Vollstaendigkeitsgate
+weiterhin nicht als `resolved` akzeptiert.
+
 ## Interprozedurale SH-C-Summaries
 
 Nach dem lokalen Kontrollflussfixpunkt bildet die Analyse Basic Blocks und
@@ -113,6 +131,15 @@ Nicht bewiesene Stellen werden weiterhin sichtbar unterschieden:
 `dynamic-vtable-target` und `dynamic-unbounded-memory`. Diese Klassen sind
 Diagnosen und keine Zielannahmen; veraenderliche VTables, Stackwerte und
 unbeschraenkte Speicherloads werden nicht eingefroren.
+
+Die funktionsweite Kandidatenanalyse traegt endliche Werte zusaetzlich durch
+CFG-Joins und SH-C-erhaltene Register. Direkte sowie bereits bewachte indirekte
+Calls liefern partielle Eingabekandidaten an ihre Callees; diese Herkunft bleibt
+bewacht, weil unbekannte weitere Caller nicht ausgeschlossen sind. Direkte,
+Displacement-, R0-indexierte und PC-relative Loads, Add/Sub, logische
+Operationen, feste Shifts, Extensions und `MOVT`-Mengen bis acht Werte werden
+ausgewertet. Ein unbekannter Pfad oder eine groessere Menge verwirft den
+Kandidaten konservativ.
 
 ## Jump Tables
 

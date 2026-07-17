@@ -2777,6 +2777,42 @@ Abschlussnachweis:
 - die read-only Privatprobe blieb ausserhalb des Repository und startete keine
   Hostanwendung; aus ihr wurde weder eine Retailadresse noch ein Ziel verdrahtet
 
+### [x] KR-4714 - Bewachte Snapshot- und Kandidatenziele
+
+Abhaengigkeiten: KR-4713
+
+Prioritaet: P0 - beschreibbare Retailimages sicher weiter erschliessen
+
+Umfang:
+
+- initiale GDI-Bytes nur auf dem geraden Entry-Pfad bis zum ersten Join,
+  unbekannten Store oder Kontrollfluss zeitlich als Snapshot beweisen
+- Werte aus sonst beschreibbarem Speicher ausschliesslich als laufzeitbewachte
+  Kandidaten behandeln und den dynamischen Defaultpfad erhalten
+- endliche Funktionswerte ueber CFG-Joins, SH-C-Calls, direkte und bewachte
+  indirekte Callparameter sowie Integer-, Logik-, Shift- und Indextransfers
+  weitertragen
+- Kandidatenkanten in Rekursion, IR und Graphen sichtbar machen, ohne sie als
+  statisch vollstaendig oder portierbar auszugeben
+
+Akzeptanz:
+
+- synthetische Tests trennen unveraenderten Entry-Snapshot, ueberdeckenden und
+  unbekannten Store, beschreibbaren Pointer, CFG-Join und dynamischen Default
+- Guarded-Kanten behalten `has_indirect_successor`, IR-Zielmenge und
+  Runtime-Default gleichzeitig; Text, JSON, CFG und Callgraph kennzeichnen sie
+- Funktionsanalyse prueft direkte und bewachte indirekte Parameter sowie
+  endliche `MOVT`-/Shift-/Indexpfade; mehr als acht Kandidaten bleiben offen
+- die private read-only Probe bleibt adressfrei, ausserhalb des Repository und
+  startet keine Hostanwendung
+
+Abschlussnachweis:
+
+- die reproduzierbaren Analyse-, IR- und Graphregressionen sind gruen
+- die redigierte Privatprobe erschloss 55.104 Instruktionen, 813 Funktionen und
+  1.826 indirekte Stellen; 1.708 besitzen bewachte Kandidaten, 117 bleiben ohne
+  endliches Ziel
+
 ### [ ] KR-4702 - Native Audio-, Eingabe- und Hostlebenszyklusintegration
 
 Abhaengigkeiten: KR-2702, KR-2904, KR-3105, KR-4701

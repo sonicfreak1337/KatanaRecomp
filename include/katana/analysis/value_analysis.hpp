@@ -37,7 +37,7 @@ struct RegisterValueAnalysis {
 
 enum class IndirectControlFlowKind { Jump, Call };
 
-enum class ResolutionStatus { Resolved, Unresolved };
+enum class ResolutionStatus { Resolved, Guarded, Unresolved };
 
 [[nodiscard]] std::uint16_t
 general_register_write_mask(const katana::sh4::DecodedInstruction& instruction) noexcept;

@@ -37,6 +37,7 @@ struct InterproceduralTargetResolution {
     std::vector<std::uint32_t> targets;
     std::vector<std::uint32_t> call_sites;
     std::vector<std::uint32_t> callees;
+    bool guarded = false;
     std::string reason;
 };
 

@@ -123,6 +123,10 @@ void ExecutableImage::set_guest_call_abi(const GuestCallAbi abi) noexcept {
     guest_call_abi_ = abi;
 }
 
+void ExecutableImage::set_initial_snapshot_policy(const InitialSnapshotPolicy policy) noexcept {
+    initial_snapshot_policy_ = policy;
+}
+
 const std::filesystem::path& ExecutableImage::source_path() const noexcept {
     return source_path_;
 }
@@ -145,6 +149,10 @@ std::span<const ImageRelocation> ExecutableImage::relocations() const noexcept {
 
 GuestCallAbi ExecutableImage::guest_call_abi() const noexcept {
     return guest_call_abi_;
+}
+
+InitialSnapshotPolicy ExecutableImage::initial_snapshot_policy() const noexcept {
+    return initial_snapshot_policy_;
 }
 
 const ImageSymbol* ExecutableImage::find_symbol(const std::string_view name) const noexcept {

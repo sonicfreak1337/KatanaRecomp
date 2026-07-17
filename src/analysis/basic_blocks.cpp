@@ -207,7 +207,7 @@ build_basic_blocks(const std::span<const katana::sh4::DisassemblyLine> lines,
         if (edge.kind == ResolvedControlFlowKind::Jump) {
             add_unique_successor(block.successors, edge.target_address);
         }
-        block.has_indirect_successor = false;
+        if (!edge.guarded) block.has_indirect_successor = false;
         std::sort(block.successors.begin(), block.successors.end());
     }
 

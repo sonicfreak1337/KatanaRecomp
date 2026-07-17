@@ -108,6 +108,17 @@ getrennte Diagnosegruende. Callsite-, Callee-, Register- und Returnevidenz ist
 im Text-/JSON-Bericht reproduzierbar. Der Analysehotpath plant Adressen nur
 noch einmal ein, verwendet indizierte Block-, Kanten- und Site-Lookups und
 wertet Funktionssummaries erst am stabilen lokalen Fixpunkt aus.
+KR-4714 trennt statische Beweise von laufzeitbewachten Snapshotkandidaten.
+Beschreibbare PC-Literale und Pointer speisen nur partielle Kandidatenkanten;
+Basic Blocks und IR behalten parallel den dynamischen Default. Ein enger
+GDI-Entryvertrag darf unveraenderte Literale vor dem ersten Join oder
+Kontrollfluss zeitlich beweisen. Die funktionsweite Analyse traegt endliche
+Kandidaten durch CFG-Joins, SH-C-Calls, direkte und bewachte indirekte
+Callparameter sowie Logik-, Shift- und Indexoperationen, ohne veraenderliche
+VTables statisch einzufrieren. Die adressfreie read-only Probe erschloss damit
+55.104 Instruktionen, 813 Funktionen und 1.826 indirekte Stellen; 1.708 sind
+bewacht und 117 besitzen noch kein endliches Ziel. Eine Hostanwendung wurde
+nicht gestartet.
 
 Der inkrementelle Debug-Zyklus besteht nach den Korrekturen vollstaendig mit
 165/165 CTests; die zuvor in der README genannte Zahl 169 war veraltet.

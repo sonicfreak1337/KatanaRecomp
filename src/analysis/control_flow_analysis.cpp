@@ -54,7 +54,7 @@ bool add_seed(std::map<std::uint32_t, std::set<FunctionOrigin>>& seeds,
 
 bool add_resolution_seeds(std::map<std::uint32_t, std::set<FunctionOrigin>>& seeds,
                           const IndirectControlFlowResolution& resolution) {
-    if (resolution.status != ResolutionStatus::Resolved) return false;
+    if (resolution.status == ResolutionStatus::Unresolved) return false;
     auto targets = resolution.targets;
     if (resolution.target.has_value()) targets.push_back(*resolution.target);
     std::sort(targets.begin(), targets.end());
@@ -63,6 +63,11 @@ bool add_resolution_seeds(std::map<std::uint32_t, std::set<FunctionOrigin>>& see
     for (const auto target : targets) {
         if (resolution.kind != IndirectControlFlowKind::Call) {
             changed = add_seed(seeds, target) || changed;
+            continue;
+        }
+        if (resolution.status == ResolutionStatus::Guarded) {
+            const std::array origins{FunctionOrigin::GuardedSnapshot};
+            changed = add_seed(seeds, target, origins) || changed;
             continue;
         }
         if (resolution.reason == "user-override" || resolution.reason == "user-hint") {
@@ -140,7 +145,7 @@ bool memory_load(const katana::sh4::InstructionKind kind) {
 void classify_dynamic_sites(const std::span<const katana::sh4::DisassemblyLine> lines,
                             std::vector<IndirectControlFlowResolution>& resolutions) {
     for (auto& resolution : resolutions) {
-        if (resolution.status == ResolutionStatus::Resolved) continue;
+        if (resolution.status != ResolutionStatus::Unresolved) continue;
         const auto dispatch = std::lower_bound(
             lines.begin(),
             lines.end(),
@@ -195,7 +200,7 @@ collect_resolved_edges(const std::span<const IndirectControlFlowResolution> reso
                        const std::span<const JumpTableAnalysis> tables) {
     std::vector<ResolvedControlFlowEdge> edges;
     for (const auto& resolution : resolutions) {
-        if (resolution.status != ResolutionStatus::Resolved) continue;
+        if (resolution.status == ResolutionStatus::Unresolved) continue;
         std::vector<std::uint32_t> targets = resolution.targets;
         if (resolution.target.has_value()) targets.push_back(*resolution.target);
         std::sort(targets.begin(), targets.end());
@@ -205,7 +210,8 @@ collect_resolved_edges(const std::span<const IndirectControlFlowResolution> reso
                              target,
                              resolution.kind == IndirectControlFlowKind::Call
                                  ? ResolvedControlFlowKind::Call
-                                 : ResolvedControlFlowKind::Jump});
+                                 : ResolvedControlFlowKind::Jump,
+                             resolution.status == ResolutionStatus::Guarded});
         }
     }
     for (const auto& table : tables) {
@@ -215,7 +221,8 @@ collect_resolved_edges(const std::span<const IndirectControlFlowResolution> reso
                              entry.target,
                              table.dispatch_kind == JumpTableDispatchKind::Call
                                  ? ResolvedControlFlowKind::Call
-                                 : ResolvedControlFlowKind::Jump});
+                                 : ResolvedControlFlowKind::Jump,
+                             false});
         }
     }
     std::sort(edges.begin(), edges.end(), [](const auto& left, const auto& right) {
@@ -223,7 +230,8 @@ collect_resolved_edges(const std::span<const IndirectControlFlowResolution> reso
             return left.instruction_address < right.instruction_address;
         if (left.target_address != right.target_address)
             return left.target_address < right.target_address;
-        return left.kind < right.kind;
+        if (left.kind != right.kind) return left.kind < right.kind;
+        return left.guarded < right.guarded;
     });
     edges.erase(std::unique(edges.begin(), edges.end()), edges.end());
     return edges;
@@ -457,8 +465,9 @@ ControlFlowAnalysisResult analyze_control_flow(const katana::io::ExecutableImage
             if (found == resolution_by_address.end()) continue;
             auto resolution =
                 analysis.indirect_control_flow.begin() + static_cast<std::ptrdiff_t>(found->second);
-            if (resolution->status != ResolutionStatus::Unresolved) continue;
-            resolution->status = ResolutionStatus::Resolved;
+            if (resolution->status == ResolutionStatus::Resolved) continue;
+            resolution->status = proof.guarded ? ResolutionStatus::Guarded
+                                               : ResolutionStatus::Resolved;
             resolution->target = proof.targets.size() == 1u
                                      ? std::optional<std::uint32_t>(proof.targets.front())
                                      : std::nullopt;

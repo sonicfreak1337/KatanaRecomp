@@ -21,6 +21,17 @@
 
 ### Hinzugefuegt
 
+- KR-4714: Ein enger GDI-Entry-Snapshotvertrag beweist beschreibbare Literale
+  nur vor Join, Kontrollfluss oder moeglicher Ueberdeckung. Alle anderen
+  committed Speicherwerte bleiben dynamisch und liefern hoechstens bewachte
+  Kandidatenkanten mit erhaltenem Runtime-Default. Funktionsweite endliche
+  Werte laufen durch CFG-Joins, SH-C-Calls, direkte und bewachte indirekte
+  Parameter sowie Logik-, Shift- und Indextransfers. IR und Graphen markieren
+  partielle Kandidaten getrennt von statischen Beweisen. Die adressfreie
+  read-only Probe erschloss 55.104 Instruktionen, 813 Funktionen und 1.826
+  indirekte Stellen, davon 1.708 bewacht und 117 ohne endliches Ziel; private
+  Inhalte blieben ausserhalb des Repository und die Hostanwendung blieb aus.
+
 - KR-4713: Ein titelunabhaengiger SH-C-Callfixpunkt fasst vollstaendige
   konstante oder endliche R0-Rueckgabemengen zusammen und speist sie mit
   Callsite-, Callee-, Register- und Returnevidenz als Einzel- oder

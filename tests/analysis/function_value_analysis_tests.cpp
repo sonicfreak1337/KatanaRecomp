@@ -3,6 +3,7 @@
 #include "katana/analysis/function_value_analysis.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cstdint>
 #include <cstdlib>
 #include <iostream>
@@ -224,6 +225,199 @@ int main() {
         classification_image({0x42u, 0x61u, 0x12u, 0x62u, 0x2Bu, 0x42u, 0x09u, 0x00u}));
     require(site(vtable, 4u)->reason == "dynamic-vtable-target",
             "Offenes VTable-Ziel wurde nicht getrennt klassifiziert.");
+
+    std::vector<std::uint8_t> guarded_join_bytes(0x40u, 0x09u);
+    const std::array<std::uint8_t, 20u> guarded_join_code{
+        0x05u, 0xDCu, // mov.l @(0x18,pc),r12
+        0x01u, 0x89u, // bt 0x8
+        0x09u, 0x00u, // nop
+        0x09u, 0x00u, // nop
+        0x0Au, 0xB0u, // bsr 0x20
+        0x09u, 0x00u, // nop (delay)
+        0x0Bu, 0x4Cu, // jsr @r12
+        0x09u, 0x00u, // nop (delay)
+        0x0Bu, 0x00u, // rts
+        0x09u, 0x00u  // nop (delay)
+    };
+    std::copy(guarded_join_code.begin(), guarded_join_code.end(), guarded_join_bytes.begin());
+    guarded_join_bytes[0x18u] = 0x30u;
+    guarded_join_bytes[0x19u] = 0x00u;
+    guarded_join_bytes[0x1Au] = 0x00u;
+    guarded_join_bytes[0x1Bu] = 0x00u;
+    guarded_join_bytes[0x20u] = 0x0Bu;
+    guarded_join_bytes[0x22u] = 0x09u;
+    guarded_join_bytes[0x30u] = 0x0Bu;
+    guarded_join_bytes[0x32u] = 0x09u;
+    katana::io::ExecutableImage guarded_join_image;
+    guarded_join_image.set_guest_call_abi(katana::io::GuestCallAbi::SuperHC);
+    guarded_join_image.add_segment({".rwx",
+                                    0u,
+                                    0u,
+                                    guarded_join_bytes.size(),
+                                    katana::io::SegmentKind::Code,
+                                    {true, true, true},
+                                    std::move(guarded_join_bytes)});
+    guarded_join_image.add_entry_point(0u);
+    const auto guarded_join = katana::analysis::analyze_control_flow(guarded_join_image);
+    const auto* guarded_join_site = site(guarded_join, 0x0Cu);
+    const auto guarded_join_edge = std::find_if(
+        guarded_join.resolved_edges.begin(), guarded_join.resolved_edges.end(), [](const auto& edge) {
+            return edge.instruction_address == 0x0Cu && edge.target_address == 0x30u;
+        });
+    require(guarded_join_site != nullptr &&
+                guarded_join_site->status == katana::analysis::ResolutionStatus::Guarded &&
+                guarded_join_site->target == 0x30u &&
+                guarded_join_site->reason == "guarded-function-memory" &&
+                guarded_join_edge != guarded_join.resolved_edges.end() &&
+                guarded_join_edge->guarded,
+            "CFG-Join oder SH-C-Call verlor den dynamisch bewachten Speicherkandidaten.");
+
+    std::vector<std::uint8_t> parameter_candidate_bytes(0x60u, 0x09u);
+    const std::array<std::uint8_t, 10u> parameter_caller{
+        0x40u, 0xE4u, // mov #0x40,r4
+        0x0Du, 0xB0u, // bsr 0x20
+        0x09u, 0x00u, // nop (delay)
+        0x0Bu, 0x00u, // rts
+        0x09u, 0x00u  // nop (delay)
+    };
+    const std::array<std::uint8_t, 10u> parameter_callee{
+        0x42u, 0x61u, // mov.l @r4,r1
+        0x0Bu, 0x41u, // jsr @r1
+        0x09u, 0x00u, // nop (delay)
+        0x0Bu, 0x00u, // rts
+        0x09u, 0x00u  // nop (delay)
+    };
+    std::copy(parameter_caller.begin(), parameter_caller.end(), parameter_candidate_bytes.begin());
+    std::copy(parameter_callee.begin(),
+              parameter_callee.end(),
+              parameter_candidate_bytes.begin() + 0x20u);
+    parameter_candidate_bytes[0x40u] = 0x50u;
+    parameter_candidate_bytes[0x41u] = 0x00u;
+    parameter_candidate_bytes[0x42u] = 0x00u;
+    parameter_candidate_bytes[0x43u] = 0x00u;
+    parameter_candidate_bytes[0x50u] = 0x0Bu;
+    parameter_candidate_bytes[0x51u] = 0x00u;
+    parameter_candidate_bytes[0x52u] = 0x09u;
+    parameter_candidate_bytes[0x53u] = 0x00u;
+    katana::io::ExecutableImage parameter_candidate_image;
+    parameter_candidate_image.set_guest_call_abi(katana::io::GuestCallAbi::SuperHC);
+    parameter_candidate_image.add_segment({".rwx",
+                                           0u,
+                                           0u,
+                                           parameter_candidate_bytes.size(),
+                                           katana::io::SegmentKind::Code,
+                                           {true, true, true},
+                                           std::move(parameter_candidate_bytes)});
+    parameter_candidate_image.add_entry_point(0u);
+    const auto parameter_candidate =
+        katana::analysis::analyze_control_flow(parameter_candidate_image);
+    const auto* parameter_candidate_site = site(parameter_candidate, 0x22u);
+    require(parameter_candidate_site != nullptr &&
+                parameter_candidate_site->status == katana::analysis::ResolutionStatus::Guarded &&
+                parameter_candidate_site->target == 0x50u &&
+                parameter_candidate_site->reason == "guarded-function-memory" &&
+                parameter_candidate_site->evidence_call_sites ==
+                    std::vector<std::uint32_t>{0x02u},
+            "Direkter Call propagierte seinen Parameterkandidaten nicht sicher zum Callee.");
+
+    std::vector<std::uint8_t> indirect_parameter_bytes(0x60u, 0x09u);
+    const std::array<std::uint8_t, 12u> indirect_parameter_caller{
+        0x40u, 0xE4u, // mov #0x40,r4
+        0x03u, 0xDCu, // mov.l @(0x10,pc),r12
+        0x0Bu, 0x4Cu, // jsr @r12
+        0x09u, 0x00u, // nop (delay)
+        0x0Bu, 0x00u, // rts
+        0x09u, 0x00u  // nop (delay)
+    };
+    std::copy(indirect_parameter_caller.begin(),
+              indirect_parameter_caller.end(),
+              indirect_parameter_bytes.begin());
+    std::copy(parameter_callee.begin(),
+              parameter_callee.end(),
+              indirect_parameter_bytes.begin() + 0x20u);
+    indirect_parameter_bytes[0x10u] = 0x20u;
+    indirect_parameter_bytes[0x11u] = 0x00u;
+    indirect_parameter_bytes[0x12u] = 0x00u;
+    indirect_parameter_bytes[0x13u] = 0x00u;
+    indirect_parameter_bytes[0x40u] = 0x50u;
+    indirect_parameter_bytes[0x41u] = 0x00u;
+    indirect_parameter_bytes[0x42u] = 0x00u;
+    indirect_parameter_bytes[0x43u] = 0x00u;
+    indirect_parameter_bytes[0x50u] = 0x0Bu;
+    indirect_parameter_bytes[0x51u] = 0x00u;
+    indirect_parameter_bytes[0x52u] = 0x09u;
+    indirect_parameter_bytes[0x53u] = 0x00u;
+    katana::io::ExecutableImage indirect_parameter_image;
+    indirect_parameter_image.set_guest_call_abi(katana::io::GuestCallAbi::SuperHC);
+    indirect_parameter_image.add_segment({".rwx",
+                                          0u,
+                                          0u,
+                                          indirect_parameter_bytes.size(),
+                                          katana::io::SegmentKind::Code,
+                                          {true, true, true},
+                                          std::move(indirect_parameter_bytes)});
+    indirect_parameter_image.add_entry_point(0u);
+    const auto indirect_parameter =
+        katana::analysis::analyze_control_flow(indirect_parameter_image);
+    const auto* indirect_parameter_site = site(indirect_parameter, 0x22u);
+    require(indirect_parameter_site != nullptr &&
+                indirect_parameter_site->status ==
+                    katana::analysis::ResolutionStatus::Guarded &&
+                indirect_parameter_site->target == 0x50u &&
+                indirect_parameter_site->evidence_call_sites ==
+                    std::vector<std::uint32_t>{0x04u},
+            "Bewachter indirekter Call propagierte seinen Parameterkandidaten nicht zum Callee.");
+
+    std::vector<std::uint8_t> finite_index_bytes(0x38u, 0x09u);
+    const std::array<std::uint8_t, 16u> finite_index_code{
+        0x29u, 0x00u, // movt r0 -> {0,1}
+        0x08u, 0x40u, // shll2 r0 -> {0,4}
+        0x02u, 0xD1u, // mov.l @(0x10,pc),r1
+        0x1Eu, 0x02u, // mov.l @(r0,r1),r2
+        0x0Bu, 0x42u, // jsr @r2
+        0x09u, 0x00u, // nop (delay)
+        0x0Bu, 0x00u, // rts
+        0x09u, 0x00u  // nop (delay)
+    };
+    std::copy(finite_index_code.begin(), finite_index_code.end(), finite_index_bytes.begin());
+    finite_index_bytes[0x10u] = 0x18u;
+    finite_index_bytes[0x11u] = 0x00u;
+    finite_index_bytes[0x12u] = 0x00u;
+    finite_index_bytes[0x13u] = 0x00u;
+    finite_index_bytes[0x18u] = 0x30u;
+    finite_index_bytes[0x19u] = 0x00u;
+    finite_index_bytes[0x1Au] = 0x00u;
+    finite_index_bytes[0x1Bu] = 0x00u;
+    finite_index_bytes[0x1Cu] = 0x34u;
+    finite_index_bytes[0x1Du] = 0x00u;
+    finite_index_bytes[0x1Eu] = 0x00u;
+    finite_index_bytes[0x1Fu] = 0x00u;
+    finite_index_bytes[0x30u] = 0x0Bu;
+    finite_index_bytes[0x31u] = 0x00u;
+    finite_index_bytes[0x32u] = 0x09u;
+    finite_index_bytes[0x33u] = 0x00u;
+    finite_index_bytes[0x34u] = 0x0Bu;
+    finite_index_bytes[0x35u] = 0x00u;
+    finite_index_bytes[0x36u] = 0x09u;
+    finite_index_bytes[0x37u] = 0x00u;
+    katana::io::ExecutableImage finite_index_image;
+    finite_index_image.set_guest_call_abi(katana::io::GuestCallAbi::SuperHC);
+    finite_index_image.add_segment({".rwx",
+                                    0u,
+                                    0u,
+                                    finite_index_bytes.size(),
+                                    katana::io::SegmentKind::Code,
+                                    {true, true, true},
+                                    std::move(finite_index_bytes)});
+    finite_index_image.add_entry_point(0u);
+    const auto finite_index = katana::analysis::analyze_control_flow(finite_index_image);
+    const auto* finite_index_site = site(finite_index, 0x08u);
+    require(finite_index_site != nullptr &&
+                finite_index_site->status == katana::analysis::ResolutionStatus::Guarded &&
+                finite_index_site->targets ==
+                    std::vector<std::uint32_t>({0x30u, 0x34u}) &&
+                finite_index_site->reason == "guarded-function-memory",
+            "Endlicher MOVT-/Shift-/Indexpfad wurde nicht als bewachte Zielmenge erhalten.");
 
     std::cout << "KR-4713 interprozedurale Zielwertsummaries erfolgreich.\n";
     return EXIT_SUCCESS;
