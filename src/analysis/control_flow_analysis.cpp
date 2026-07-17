@@ -41,18 +41,28 @@ void require_override_code_address(const katana::io::ExecutableImage& image,
     }
 }
 
-bool add_seed(std::map<std::uint32_t, std::set<FunctionOrigin>>& seeds,
+struct SeedEvidence {
+    std::set<FunctionOrigin> origins;
+    bool proven = false;
+};
+
+bool add_seed(std::map<std::uint32_t, SeedEvidence>& seeds,
               const std::uint32_t address,
-              const std::span<const FunctionOrigin> origins = {}) {
+              const std::span<const FunctionOrigin> origins = {},
+              const bool proven = true) {
     const auto [iterator, inserted] = seeds.try_emplace(address);
     bool changed = inserted;
+    if (proven && !iterator->second.proven) {
+        iterator->second.proven = true;
+        changed = true;
+    }
     for (const auto origin : origins) {
-        changed = iterator->second.insert(origin).second || changed;
+        changed = iterator->second.origins.insert(origin).second || changed;
     }
     return changed;
 }
 
-bool add_resolution_seeds(std::map<std::uint32_t, std::set<FunctionOrigin>>& seeds,
+bool add_resolution_seeds(std::map<std::uint32_t, SeedEvidence>& seeds,
                           const IndirectControlFlowResolution& resolution) {
     if (resolution.status == ResolutionStatus::Unresolved) return false;
     auto targets = resolution.targets;
@@ -62,12 +72,14 @@ bool add_resolution_seeds(std::map<std::uint32_t, std::set<FunctionOrigin>>& see
     bool changed = false;
     for (const auto target : targets) {
         if (resolution.kind != IndirectControlFlowKind::Call) {
-            changed = add_seed(seeds, target) || changed;
+            changed =
+                add_seed(seeds, target, {}, resolution.status == ResolutionStatus::Resolved) ||
+                changed;
             continue;
         }
         if (resolution.status == ResolutionStatus::Guarded) {
             const std::array origins{FunctionOrigin::GuardedSnapshot};
-            changed = add_seed(seeds, target, origins) || changed;
+            changed = add_seed(seeds, target, origins, false) || changed;
             continue;
         }
         if (resolution.reason == "user-override" || resolution.reason == "user-hint") {
@@ -84,14 +96,14 @@ bool add_resolution_seeds(std::map<std::uint32_t, std::set<FunctionOrigin>>& see
     return changed;
 }
 
-RecursiveAnalysisOptions
-make_options(const std::map<std::uint32_t, std::set<FunctionOrigin>>& seeds) {
+RecursiveAnalysisOptions make_options(const std::map<std::uint32_t, SeedEvidence>& seeds) {
     RecursiveAnalysisOptions options;
     options.additional_seeds.reserve(seeds.size());
-    for (const auto& [address, origins] : seeds) {
+    for (const auto& [address, evidence] : seeds) {
         AnalysisSeed seed;
         seed.address = address;
-        seed.function_origins.assign(origins.begin(), origins.end());
+        seed.function_origins.assign(evidence.origins.begin(), evidence.origins.end());
+        seed.guarded_candidate = !evidence.proven;
         options.additional_seeds.push_back(std::move(seed));
     }
     return options;
@@ -241,7 +253,7 @@ collect_resolved_edges(const std::span<const IndirectControlFlowResolution> reso
 
 ControlFlowAnalysisResult analyze_control_flow(const katana::io::ExecutableImage& image,
                                                const AnalysisOverrides* overrides) {
-    std::map<std::uint32_t, std::set<FunctionOrigin>> seeds;
+    std::map<std::uint32_t, SeedEvidence> seeds;
     const bool hints = overrides != nullptr && overrides->mode == AnalysisDirectiveMode::Hint;
     std::vector<AnalysisDirectiveDiagnostic> seed_diagnostics;
     if (overrides != nullptr) {
