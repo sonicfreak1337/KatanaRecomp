@@ -304,10 +304,12 @@ int main() {
                 stable_without_contract[0].reason == "guarded-writable-pc-relative-literal",
             "RWX-Literal wurde ohne Beweis weder dynamisch bewacht noch korrekt klassifiziert.");
     const auto guarded_flow = katana::analysis::analyze_control_flow(stable_entry);
-    const auto guarded_edge = std::find_if(
-        guarded_flow.resolved_edges.begin(), guarded_flow.resolved_edges.end(), [](const auto& edge) {
-            return edge.instruction_address == 6u && edge.target_address == 0x10u;
-        });
+    const auto guarded_edge =
+        std::find_if(guarded_flow.resolved_edges.begin(),
+                     guarded_flow.resolved_edges.end(),
+                     [](const auto& edge) {
+                         return edge.instruction_address == 6u && edge.target_address == 0x10u;
+                     });
     require(std::any_of(guarded_flow.recursive.instructions.begin(),
                         guarded_flow.recursive.instructions.end(),
                         [](const auto& line) { return line.address == 0x10u; }) &&
@@ -319,9 +321,10 @@ int main() {
     require(!guarded_ir.empty(), "Bewachter Snapshotkandidat erzeugte keine IR-Funktion.");
     const auto guarded_ir_block = std::find_if(
         guarded_ir.front().blocks.begin(), guarded_ir.front().blocks.end(), [](const auto& block) {
-            return std::any_of(block.instructions.begin(), block.instructions.end(), [](const auto& instruction) {
-                return instruction.source_address == 6u;
-            });
+            return std::any_of(
+                block.instructions.begin(), block.instructions.end(), [](const auto& instruction) {
+                    return instruction.source_address == 6u;
+                });
         });
     require(guarded_ir_block != guarded_ir.front().blocks.end(),
             "Bewachter Snapshotkandidat verlor seinen IR-Block.");
@@ -337,11 +340,47 @@ int main() {
     const auto guarded_text = katana::analysis::format_indirect_control_flow_report(
         guarded_flow.indirect_control_flow, guarded_flow.jump_tables);
     const auto guarded_json = katana::analysis::format_control_flow_analysis_json(guarded_flow);
+    const auto guarded_summary = katana::analysis::summarize_control_flow_analysis(guarded_flow);
     require(guarded_text.find("snapshot-candidate=") != std::string::npos &&
-                guarded_json.find("\"status\":\"guarded\"") != std::string::npos,
+                guarded_json.find("\"status\":\"guarded\"") != std::string::npos &&
+                guarded_summary.resolved + guarded_summary.guarded + guarded_summary.unresolved ==
+                    guarded_summary.indirect_total &&
+                guarded_summary.proven_instructions +
+                        guarded_summary.guarded_candidate_instructions ==
+                    guarded_flow.recursive.instructions.size() &&
+                guarded_summary.guarded_candidate_instructions != 0u &&
+                guarded_summary.unresolved_frontier == guarded_summary.unresolved,
             "Bewachter Kandidat fehlt im stabilen Text-/JSON-Bericht.");
+
+    auto complete_status_fixture = guarded_flow;
+    complete_status_fixture.indirect_control_flow = {
+        {0u,
+         katana::analysis::IndirectControlFlowKind::Jump,
+         0u,
+         katana::analysis::ResolutionStatus::Resolved},
+        {2u,
+         katana::analysis::IndirectControlFlowKind::Jump,
+         0u,
+         katana::analysis::ResolutionStatus::Guarded},
+        {4u,
+         katana::analysis::IndirectControlFlowKind::Call,
+         0u,
+         katana::analysis::ResolutionStatus::Unresolved}};
+    const auto complete_status =
+        katana::analysis::summarize_control_flow_analysis(complete_status_fixture);
+    const auto complete_status_json =
+        katana::analysis::format_control_flow_analysis_json(complete_status_fixture);
+    require(complete_status.indirect_total == 3u && complete_status.resolved == 1u &&
+                complete_status.guarded == 1u && complete_status.unresolved == 1u &&
+                complete_status.resolved + complete_status.guarded + complete_status.unresolved ==
+                    complete_status.indirect_total &&
+                complete_status_json.find("\"indirect_total\":3") != std::string::npos &&
+                complete_status_json.find("\"resolved\":1") != std::string::npos &&
+                complete_status_json.find("\"guarded\":1") != std::string::npos &&
+                complete_status_json.find("\"unresolved\":1") != std::string::npos,
+            "Der maschinenlesbare Statusbericht verletzt sein Summeninvariant.");
     stable_entry.set_initial_snapshot_policy(
-        katana::io::InitialSnapshotPolicy::EntryPointStraightLine);
+        katana::io::InitialSnapshotPolicy::EntryPointStraightLineQuiescent);
     const auto stable_with_contract = katana::analysis::resolve_indirect_control_flow(
         katana::sh4::disassemble(stable_entry.segments()[0].bytes, 0u), stable_entry);
     require(stable_with_contract[0].status == katana::analysis::ResolutionStatus::Resolved &&
@@ -351,7 +390,7 @@ int main() {
 
     auto overwritten_entry = writable_entry_image(12u, true);
     overwritten_entry.set_initial_snapshot_policy(
-        katana::io::InitialSnapshotPolicy::EntryPointStraightLine);
+        katana::io::InitialSnapshotPolicy::EntryPointStraightLineQuiescent);
     const auto overwritten_resolution = katana::analysis::resolve_indirect_control_flow(
         katana::sh4::disassemble(overwritten_entry.segments()[0].bytes, 0u), overwritten_entry);
     require(overwritten_resolution[0].status == katana::analysis::ResolutionStatus::Guarded,
@@ -359,7 +398,7 @@ int main() {
 
     auto unknown_store_entry = writable_entry_image(0u, false);
     unknown_store_entry.set_initial_snapshot_policy(
-        katana::io::InitialSnapshotPolicy::EntryPointStraightLine);
+        katana::io::InitialSnapshotPolicy::EntryPointStraightLineQuiescent);
     const auto unknown_store_resolution = katana::analysis::resolve_indirect_control_flow(
         katana::sh4::disassemble(unknown_store_entry.segments()[0].bytes, 0u), unknown_store_entry);
     require(unknown_store_resolution[0].status == katana::analysis::ResolutionStatus::Guarded,

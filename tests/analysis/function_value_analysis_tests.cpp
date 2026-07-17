@@ -260,10 +260,12 @@ int main() {
     guarded_join_image.add_entry_point(0u);
     const auto guarded_join = katana::analysis::analyze_control_flow(guarded_join_image);
     const auto* guarded_join_site = site(guarded_join, 0x0Cu);
-    const auto guarded_join_edge = std::find_if(
-        guarded_join.resolved_edges.begin(), guarded_join.resolved_edges.end(), [](const auto& edge) {
-            return edge.instruction_address == 0x0Cu && edge.target_address == 0x30u;
-        });
+    const auto guarded_join_edge =
+        std::find_if(guarded_join.resolved_edges.begin(),
+                     guarded_join.resolved_edges.end(),
+                     [](const auto& edge) {
+                         return edge.instruction_address == 0x0Cu && edge.target_address == 0x30u;
+                     });
     require(guarded_join_site != nullptr &&
                 guarded_join_site->status == katana::analysis::ResolutionStatus::Guarded &&
                 guarded_join_site->target == 0x30u &&
@@ -274,18 +276,28 @@ int main() {
 
     std::vector<std::uint8_t> parameter_candidate_bytes(0x60u, 0x09u);
     const std::array<std::uint8_t, 10u> parameter_caller{
-        0x40u, 0xE4u, // mov #0x40,r4
-        0x0Du, 0xB0u, // bsr 0x20
-        0x09u, 0x00u, // nop (delay)
-        0x0Bu, 0x00u, // rts
-        0x09u, 0x00u  // nop (delay)
+        0x40u,
+        0xE4u, // mov #0x40,r4
+        0x0Du,
+        0xB0u, // bsr 0x20
+        0x09u,
+        0x00u, // nop (delay)
+        0x0Bu,
+        0x00u, // rts
+        0x09u,
+        0x00u // nop (delay)
     };
     const std::array<std::uint8_t, 10u> parameter_callee{
-        0x42u, 0x61u, // mov.l @r4,r1
-        0x0Bu, 0x41u, // jsr @r1
-        0x09u, 0x00u, // nop (delay)
-        0x0Bu, 0x00u, // rts
-        0x09u, 0x00u  // nop (delay)
+        0x42u,
+        0x61u, // mov.l @r4,r1
+        0x0Bu,
+        0x41u, // jsr @r1
+        0x09u,
+        0x00u, // nop (delay)
+        0x0Bu,
+        0x00u, // rts
+        0x09u,
+        0x00u // nop (delay)
     };
     std::copy(parameter_caller.begin(), parameter_caller.end(), parameter_candidate_bytes.begin());
     std::copy(parameter_callee.begin(),
@@ -316,25 +328,29 @@ int main() {
                 parameter_candidate_site->status == katana::analysis::ResolutionStatus::Guarded &&
                 parameter_candidate_site->target == 0x50u &&
                 parameter_candidate_site->reason == "guarded-function-memory" &&
-                parameter_candidate_site->evidence_call_sites ==
-                    std::vector<std::uint32_t>{0x02u},
+                parameter_candidate_site->evidence_call_sites == std::vector<std::uint32_t>{0x02u},
             "Direkter Call propagierte seinen Parameterkandidaten nicht sicher zum Callee.");
 
     std::vector<std::uint8_t> indirect_parameter_bytes(0x60u, 0x09u);
     const std::array<std::uint8_t, 12u> indirect_parameter_caller{
-        0x40u, 0xE4u, // mov #0x40,r4
-        0x03u, 0xDCu, // mov.l @(0x10,pc),r12
-        0x0Bu, 0x4Cu, // jsr @r12
-        0x09u, 0x00u, // nop (delay)
-        0x0Bu, 0x00u, // rts
-        0x09u, 0x00u  // nop (delay)
+        0x40u,
+        0xE4u, // mov #0x40,r4
+        0x03u,
+        0xDCu, // mov.l @(0x10,pc),r12
+        0x0Bu,
+        0x4Cu, // jsr @r12
+        0x09u,
+        0x00u, // nop (delay)
+        0x0Bu,
+        0x00u, // rts
+        0x09u,
+        0x00u // nop (delay)
     };
     std::copy(indirect_parameter_caller.begin(),
               indirect_parameter_caller.end(),
               indirect_parameter_bytes.begin());
-    std::copy(parameter_callee.begin(),
-              parameter_callee.end(),
-              indirect_parameter_bytes.begin() + 0x20u);
+    std::copy(
+        parameter_callee.begin(), parameter_callee.end(), indirect_parameter_bytes.begin() + 0x20u);
     indirect_parameter_bytes[0x10u] = 0x20u;
     indirect_parameter_bytes[0x11u] = 0x00u;
     indirect_parameter_bytes[0x12u] = 0x00u;
@@ -361,23 +377,29 @@ int main() {
         katana::analysis::analyze_control_flow(indirect_parameter_image);
     const auto* indirect_parameter_site = site(indirect_parameter, 0x22u);
     require(indirect_parameter_site != nullptr &&
-                indirect_parameter_site->status ==
-                    katana::analysis::ResolutionStatus::Guarded &&
+                indirect_parameter_site->status == katana::analysis::ResolutionStatus::Guarded &&
                 indirect_parameter_site->target == 0x50u &&
-                indirect_parameter_site->evidence_call_sites ==
-                    std::vector<std::uint32_t>{0x04u},
+                indirect_parameter_site->evidence_call_sites == std::vector<std::uint32_t>{0x04u},
             "Bewachter indirekter Call propagierte seinen Parameterkandidaten nicht zum Callee.");
 
     std::vector<std::uint8_t> finite_index_bytes(0x38u, 0x09u);
     const std::array<std::uint8_t, 16u> finite_index_code{
-        0x29u, 0x00u, // movt r0 -> {0,1}
-        0x08u, 0x40u, // shll2 r0 -> {0,4}
-        0x02u, 0xD1u, // mov.l @(0x10,pc),r1
-        0x1Eu, 0x02u, // mov.l @(r0,r1),r2
-        0x0Bu, 0x42u, // jsr @r2
-        0x09u, 0x00u, // nop (delay)
-        0x0Bu, 0x00u, // rts
-        0x09u, 0x00u  // nop (delay)
+        0x29u,
+        0x00u, // movt r0 -> {0,1}
+        0x08u,
+        0x40u, // shll2 r0 -> {0,4}
+        0x02u,
+        0xD1u, // mov.l @(0x10,pc),r1
+        0x1Eu,
+        0x02u, // mov.l @(r0,r1),r2
+        0x0Bu,
+        0x42u, // jsr @r2
+        0x09u,
+        0x00u, // nop (delay)
+        0x0Bu,
+        0x00u, // rts
+        0x09u,
+        0x00u // nop (delay)
     };
     std::copy(finite_index_code.begin(), finite_index_code.end(), finite_index_bytes.begin());
     finite_index_bytes[0x10u] = 0x18u;
@@ -414,8 +436,7 @@ int main() {
     const auto* finite_index_site = site(finite_index, 0x08u);
     require(finite_index_site != nullptr &&
                 finite_index_site->status == katana::analysis::ResolutionStatus::Guarded &&
-                finite_index_site->targets ==
-                    std::vector<std::uint32_t>({0x30u, 0x34u}) &&
+                finite_index_site->targets == std::vector<std::uint32_t>({0x30u, 0x34u}) &&
                 finite_index_site->reason == "guarded-function-memory",
             "Endlicher MOVT-/Shift-/Indexpfad wurde nicht als bewachte Zielmenge erhalten.");
 

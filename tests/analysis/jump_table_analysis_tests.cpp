@@ -176,8 +176,7 @@ int main() {
     const auto conflicting =
         katana::analysis::analyze_relative_jump_table(relative, 0x20u, 0x104u, 0x20u, 2u);
     require(!conflicting.resolved && conflicting.entries.size() == 2u &&
-                conflicting.entries[0].reason == "odd-address" &&
-                conflicting.entries[1].accepted,
+                conflicting.entries[0].reason == "odd-address" && conflicting.entries[1].accepted,
             "Widerspruechliche Mehrfachziele wurden nicht als ganze Tabelle abgelehnt.");
     const auto duplicate =
         katana::analysis::analyze_relative_jump_table(relative, 0x20u, 0x106u, 0x20u, 1u);
@@ -236,8 +235,8 @@ int main() {
                                   katana::io::SegmentKind::Code,
                                   {true, true, true},
                                   std::vector<std::uint8_t>(0x108u, 0u)});
-    const auto mutable_auto = katana::analysis::recognize_bounded_relative_jump_table(
-        mutable_relative, bt_lines, 7u);
+    const auto mutable_auto =
+        katana::analysis::recognize_bounded_relative_jump_table(mutable_relative, bt_lines, 7u);
     require(mutable_auto.has_value() && !mutable_auto->resolved &&
                 mutable_auto->reason == "table-segment-writable",
             "Automatisch erkannte RWX-Relative16-Tabelle wurde statisch eingefroren.");
