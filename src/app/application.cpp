@@ -847,6 +847,9 @@ AnalysisCoverage analysis_coverage(const io::LoadedProject& project,
             coverage.committed_executable_bytes += segment.bytes.size();
     }
     coverage.instructions = analysis.recursive.instructions.size();
+    coverage.proven_instructions = analysis.recursive.proven_instruction_addresses.size();
+    coverage.guarded_candidate_instructions =
+        analysis.recursive.guarded_candidate_instruction_addresses.size();
     coverage.analyzed_instruction_bytes = coverage.instructions * 2u;
     coverage.unanalyzed_executable_bytes =
         coverage.committed_executable_bytes > coverage.analyzed_instruction_bytes
@@ -913,8 +916,11 @@ std::string build_plan_json(const std::string_view status,
            << ",\"analyzed_instruction_bytes\":" << coverage.analyzed_instruction_bytes
            << ",\"unanalyzed_executable_bytes\":" << coverage.unanalyzed_executable_bytes
            << ",\"instructions\":" << coverage.instructions
+           << ",\"proven_instructions\":" << coverage.proven_instructions
+           << ",\"guarded_candidate_instructions\":" << coverage.guarded_candidate_instructions
            << ",\"functions\":" << coverage.functions
            << ",\"unresolved_control_flow\":" << coverage.unresolved_control_flow
+           << ",\"unresolved_frontier\":" << coverage.unresolved_control_flow
            << ",\"unknown_instructions\":" << coverage.unknown_instructions
            << ",\"reachable_abort_edges\":" << coverage.reachable_abort_edges
            << ",\"control_flow_complete\":" << (coverage.control_flow_complete ? "true" : "false")
@@ -1713,8 +1719,11 @@ std::string format_job_result_json(const JobResult& result) {
                << ",\"analyzed_instruction_bytes\":" << coverage.analyzed_instruction_bytes
                << ",\"unanalyzed_executable_bytes\":" << coverage.unanalyzed_executable_bytes
                << ",\"instructions\":" << coverage.instructions
+               << ",\"proven_instructions\":" << coverage.proven_instructions
+               << ",\"guarded_candidate_instructions\":" << coverage.guarded_candidate_instructions
                << ",\"functions\":" << coverage.functions
                << ",\"unresolved_control_flow\":" << coverage.unresolved_control_flow
+               << ",\"unresolved_frontier\":" << coverage.unresolved_control_flow
                << ",\"unknown_instructions\":" << coverage.unknown_instructions
                << ",\"reachable_abort_edges\":" << coverage.reachable_abort_edges
                << ",\"control_flow_complete\":"

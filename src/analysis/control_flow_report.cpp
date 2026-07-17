@@ -96,6 +96,30 @@ void append_symbol_json(std::ostringstream& output,
 
 } // namespace
 
+ControlFlowReportSummary
+summarize_control_flow_analysis(const ControlFlowAnalysisResult& analysis) noexcept {
+    ControlFlowReportSummary summary;
+    summary.indirect_total = analysis.indirect_control_flow.size();
+    summary.proven_instructions = analysis.recursive.proven_instruction_addresses.size();
+    summary.guarded_candidate_instructions =
+        analysis.recursive.guarded_candidate_instruction_addresses.size();
+    for (const auto& resolution : analysis.indirect_control_flow) {
+        switch (resolution.status) {
+        case ResolutionStatus::Resolved:
+            ++summary.resolved;
+            break;
+        case ResolutionStatus::Guarded:
+            ++summary.guarded;
+            break;
+        case ResolutionStatus::Unresolved:
+            ++summary.unresolved;
+            break;
+        }
+    }
+    summary.unresolved_frontier = summary.unresolved;
+    return summary;
+}
+
 std::string format_indirect_control_flow_report(
     const std::span<const IndirectControlFlowResolution> resolutions,
     const std::span<const JumpTableAnalysis> jump_tables,
@@ -200,13 +224,20 @@ std::string format_indirect_control_flow_report(
 
 std::string format_control_flow_analysis_json(const ControlFlowAnalysisResult& analysis) {
     std::ostringstream output;
+    const auto summary = summarize_control_flow_analysis(analysis);
     katana::io::write_json_report_header(output, "katana-control-flow-v1", "control-flow");
     output << ",\"summary\":{\"instructions\":" << analysis.recursive.instructions.size()
            << ",\"ranges\":" << analysis.recursive.ranges.size()
            << ",\"functions\":" << analysis.recursive.functions.size()
            << ",\"conflicts\":" << analysis.recursive.conflicts.size()
            << ",\"diagnostics\":" << analysis.recursive.diagnostics.size()
-           << ",\"indirect_sites\":" << analysis.indirect_control_flow.size()
+           << ",\"indirect_sites\":" << summary.indirect_total
+           << ",\"indirect_total\":" << summary.indirect_total
+           << ",\"resolved\":" << summary.resolved << ",\"guarded\":" << summary.guarded
+           << ",\"unresolved\":" << summary.unresolved
+           << ",\"proven_instructions\":" << summary.proven_instructions
+           << ",\"guarded_candidate_instructions\":" << summary.guarded_candidate_instructions
+           << ",\"unresolved_frontier\":" << summary.unresolved_frontier
            << ",\"jump_tables\":" << analysis.jump_tables.size()
            << ",\"function_value_summaries\":" << analysis.function_value_summaries.size()
            << ",\"directive_diagnostics\":" << analysis.directive_diagnostics.size()
@@ -286,12 +317,13 @@ std::string format_control_flow_analysis_json(const ControlFlowAnalysisResult& a
     output << ",\"function_value_summaries\":[";
     for (std::size_t index = 0u; index < analysis.function_value_summaries.size(); ++index) {
         if (index != 0u) output << ',';
-        const auto& summary = analysis.function_value_summaries[index];
+        const auto& function_summary = analysis.function_value_summaries[index];
         output << "{\"function_address\":"
-               << katana::io::quote_json(hex32(summary.function_address)) << ",\"registers\":[";
-        for (std::size_t reg = 0u; reg < summary.registers.size(); ++reg) {
+               << katana::io::quote_json(hex32(function_summary.function_address))
+               << ",\"registers\":[";
+        for (std::size_t reg = 0u; reg < function_summary.registers.size(); ++reg) {
             if (reg != 0u) output << ',';
-            const auto& value = summary.registers[reg];
+            const auto& value = function_summary.registers[reg];
             output << "{\"register\":" << static_cast<unsigned>(value.register_index)
                    << ",\"complete\":" << (value.complete ? "true" : "false")
                    << ",\"abi_preserved\":" << (value.abi_preserved ? "true" : "false")
