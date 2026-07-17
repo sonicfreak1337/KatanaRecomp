@@ -2,6 +2,20 @@
 
 ## [Unreleased]
 
+### Geaendert
+
+- Die Roadmap wurde ab v0.47 auf vier echte Produktmeilensteine verdichtet:
+  generische Runtime, Sonic-Alpha, Beta und Stable. Die ungestarteten v0.48- und
+  v0.49-Zwischenphasen wurden in das Alpha-Bring-up und die Alpha-Haertung
+  ueberfuehrt.
+- Eine private Sonic-`game.exe` darf in v0.47 vollstaendig gebaut, aber nicht
+  gestartet werden. Der erste Runtimelauf und `SA_MAIN_ENTERED` gehoeren zur
+  Alpha-Entwicklung; der oeffentliche Alpha-Release verlangt weiterhin
+  `SA_ALPHA_PLAYABLE`.
+- Zuvor nicht ausreichend geplante Arbeit fuer Runtime-Replay, dynamische
+  Codebereiche und Overlays, echten Gast-PVR-Output, Langzeitspielbarkeit,
+  Mehrtitel-Kompatibilitaet und stabile v1.0-Vertraege ist nun explizit
+  dokumentiert.
 ### Korrigiert
 
 - Der erzeugte GDI-Port meldet `SA_MAIN_ENTERED` und `silent_failures=0` nur
