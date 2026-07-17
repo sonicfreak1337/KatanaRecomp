@@ -2813,7 +2813,7 @@ Abschlussnachweis:
   1.826 indirekte Stellen; 1.708 besitzen bewachte Kandidaten, 117 bleiben ohne
   endliches Ziel
 
-### [ ] KR-4702 - Native Audio-, Eingabe- und Hostlebenszyklusintegration
+### [x] KR-4702 - Native Audio-, Eingabe- und Hostlebenszyklusintegration
 
 Abhaengigkeiten: KR-2702, KR-2904, KR-3105, KR-4701
 

@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <memory>
 #include <string>
+#include <vector>
 
 namespace katana::runtime {
 
@@ -18,11 +19,21 @@ struct NativeVideoConfig {
     bool initially_visible = true;
 };
 
+enum class NativeHostEventKind : std::uint8_t { FocusGained, FocusLost, KeyDown, KeyUp, Close };
+enum class NativeHostKey : std::uint8_t { Unknown, Start, A, B, X, Y, Up, Down, Left, Right };
+
+struct NativeHostEvent {
+    std::uint64_t sequence = 0u;
+    NativeHostEventKind kind = NativeHostEventKind::FocusGained;
+    NativeHostKey key = NativeHostKey::Unknown;
+};
+
 class NativeVideoOutput {
   public:
     virtual ~NativeVideoOutput() = default;
     virtual void show() = 0;
     virtual void poll_events() = 0;
+    [[nodiscard]] virtual std::vector<NativeHostEvent> drain_events() = 0;
     virtual void resize(std::uint32_t client_width, std::uint32_t client_height) = 0;
     virtual void present(const PvrFrame& frame) = 0;
     virtual void request_close() noexcept = 0;

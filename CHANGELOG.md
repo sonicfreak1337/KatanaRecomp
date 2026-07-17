@@ -21,6 +21,12 @@
 
 ### Hinzugefuegt
 
+- KR-4702: Die versionierte Hostruntime verbindet WinMM-PCM16-Audio,
+  reproduzierbare Audiohashes, explizit sequenzierte Win32-Fokus-/Tastatur-/
+  Close-Ereignisse und injizierbare Maple-Controllerzustaende. Pause und
+  Fokusverlust stoppen Media-Clock und Audio; Shutdown sowie Fehlerpfade
+  hinterlassen null Schedulerereignisse. Die erzeugte `game.exe` verwendet
+  den Vertrag produktiv und meldet Audio-, Frame- und Eingabemetriken.
 - KR-4714: Ein enger GDI-Entry-Snapshotvertrag beweist beschreibbare Literale
   nur vor Join, Kontrollfluss oder moeglicher Ueberdeckung. Alle anderen
   committed Speicherwerte bleiben dynamisch und liefern hoechstens bewachte

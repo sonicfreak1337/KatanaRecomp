@@ -106,6 +106,12 @@ class Win32VideoOutput final : public NativeVideoOutput {
         }
     }
 
+    std::vector<NativeHostEvent> drain_events() override {
+        auto result = std::move(events_);
+        events_.clear();
+        return result;
+    }
+
     void resize(const std::uint32_t width, const std::uint32_t height) override {
         if (width == 0u || height == 0u ||
             width > static_cast<std::uint32_t>(std::numeric_limits<int>::max()) ||
@@ -148,6 +154,7 @@ class Win32VideoOutput final : public NativeVideoOutput {
     }
 
     void request_close() noexcept override {
+        if (!close_requested_) push_event(NativeHostEventKind::Close);
         close_requested_ = true;
     }
     [[nodiscard]] bool close_requested() const noexcept override {
@@ -184,6 +191,23 @@ class Win32VideoOutput final : public NativeVideoOutput {
                            const LPARAM lparam) {
         if (message == WM_CLOSE) {
             close_requested_ = true;
+            push_event(NativeHostEventKind::Close);
+            return 0;
+        }
+        if (message == WM_SETFOCUS) {
+            push_event(NativeHostEventKind::FocusGained);
+            return 0;
+        }
+        if (message == WM_KILLFOCUS) {
+            push_event(NativeHostEventKind::FocusLost);
+            return 0;
+        }
+        if (message == WM_KEYDOWN || message == WM_KEYUP) {
+            if ((lparam & (1ll << 30ll)) == 0ll || message == WM_KEYUP) {
+                push_event(message == WM_KEYDOWN ? NativeHostEventKind::KeyDown
+                                                 : NativeHostEventKind::KeyUp,
+                           map_key(wparam));
+            }
             return 0;
         }
         if (message == WM_SIZE && wparam != SIZE_MINIMIZED) {
@@ -239,14 +263,46 @@ class Win32VideoOutput final : public NativeVideoOutput {
         return DefWindowProcW(window, message, wparam, lparam);
     }
 
+    static NativeHostKey map_key(const WPARAM key) noexcept {
+        switch (key) {
+        case VK_RETURN:
+            return NativeHostKey::Start;
+        case 'Z':
+            return NativeHostKey::A;
+        case 'X':
+            return NativeHostKey::B;
+        case 'A':
+            return NativeHostKey::X;
+        case 'S':
+            return NativeHostKey::Y;
+        case VK_UP:
+            return NativeHostKey::Up;
+        case VK_DOWN:
+            return NativeHostKey::Down;
+        case VK_LEFT:
+            return NativeHostKey::Left;
+        case VK_RIGHT:
+            return NativeHostKey::Right;
+        default:
+            return NativeHostKey::Unknown;
+        }
+    }
+
+    void push_event(const NativeHostEventKind kind,
+                    const NativeHostKey key = NativeHostKey::Unknown) {
+        events_.push_back({next_event_sequence_++, kind, key});
+    }
+
     HWND window_ = nullptr;
     std::vector<std::uint8_t> bgra_;
+    std::vector<NativeHostEvent> events_;
     std::string pending_error_;
     std::uint32_t frame_width_ = 0u;
     std::uint32_t frame_height_ = 0u;
     std::uint32_t client_width_ = 0u;
     std::uint32_t client_height_ = 0u;
     std::uint64_t presented_frames_ = 0u;
+    std::uint64_t next_event_sequence_ = 1u;
     bool visible_ = false;
     bool close_requested_ = false;
 };

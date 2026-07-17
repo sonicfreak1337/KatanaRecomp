@@ -1206,7 +1206,7 @@ Fortschritt:
 - [x] KR-4712 - Begrenzte Speicherziele und relative Sprungtabellen
 - [x] KR-4713 - Interprozedurale SH-C-Zielwertsummaries
 - [x] KR-4714 - Bewachte Snapshot- und Kandidatenziele
-- [ ] KR-4702 - Native Audio-, Eingabe- und Hostlebenszyklusintegration
+- [x] KR-4702 - Native Audio-, Eingabe- und Hostlebenszyklusintegration
 - [ ] KR-4703 - Persistente VMU-/Flash-Arbeitskopien und Host-Pacing
 - [ ] KR-4704 - v0.47 Gate-Vorbereitung: Tests und Build
 - [ ] KR-4705 - v0.47 interne Meilenstein-Freigabe

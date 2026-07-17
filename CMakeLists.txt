@@ -184,6 +184,7 @@ add_library(katana_runtime STATIC
     src/runtime/fpu.cpp
     src/runtime/gdi.cpp
     src/runtime/host_video.cpp
+    src/runtime/host_runtime.cpp
     src/runtime/interrupt.cpp
     src/runtime/iso9660.cpp
     src/runtime/maple.cpp
@@ -213,7 +214,7 @@ else()
 endif()
 
 if(WIN32)
-    target_link_libraries(katana_runtime PUBLIC gdi32 user32)
+    target_link_libraries(katana_runtime PUBLIC gdi32 user32 winmm)
 endif()
 
 add_library(katana_core STATIC
@@ -835,6 +836,11 @@ add_executable(katana-host-video-tests tests/runtime/host_video_tests.cpp)
 target_link_libraries(katana-host-video-tests PRIVATE katana_runtime)
 katana_enable_warnings(katana-host-video-tests)
 add_test(NAME katana-host-video-tests COMMAND katana-host-video-tests)
+
+add_executable(katana-host-runtime-tests tests/runtime/host_runtime_tests.cpp)
+target_link_libraries(katana-host-runtime-tests PRIVATE katana_runtime)
+katana_enable_warnings(katana-host-runtime-tests)
+add_test(NAME katana-host-runtime-tests COMMAND katana-host-runtime-tests)
 
 add_executable(katana-pvr-ta-tests tests/runtime/pvr_ta_tests.cpp)
 target_link_libraries(katana-pvr-ta-tests PRIVATE katana_runtime)

@@ -60,6 +60,9 @@ int main() {
             "Win32-Hostvideo akzeptiert einen abgeschnittenen RGBA-Frame.");
     video->request_close();
     require(video->close_requested(), "Kontrollierte Close-Anforderung geht verloren.");
+    const auto events = video->drain_events();
+    require(!events.empty() && events.back().kind == NativeHostEventKind::Close,
+            "Kontrolliertes Schliessen erzeugt kein explizites Hostereignis.");
     require(throws<std::invalid_argument>([] {
                 static_cast<void>(create_native_video_output({999u, "invalid", 1u, 1u, false}));
             }),

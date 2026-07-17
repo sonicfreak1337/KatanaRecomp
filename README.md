@@ -25,7 +25,7 @@ Eingabe
   -> natives Hostprojekt
 ```
 
-Der aktuelle kumulative Debug-Vertrag umfasst **165 automatische Tests**.
+Der aktuelle kumulative Debug-Vertrag umfasst **166 automatische Tests**.
 Phase 10 ist
 fuer den freigegebenen Windows-Workflow abgeschlossen: eine `.gdi` waehlen,
 einen Ausgabeordner waehlen und den Analyse-/Buildzustand sichtbar verfolgen.
@@ -70,6 +70,8 @@ Architektur und interner Bedienpfad stehen in
 [docs/PHASE10_GUI_WORKFLOW.md](docs/PHASE10_GUI_WORKFLOW.md).
 Der eigenstaendige Port nutzt den nativen Hostvideovertrag aus
 [docs/HOST_VIDEO.md](docs/HOST_VIDEO.md).
+Audio, Eingabe, Fokus und Shutdown folgen dem Vertrag in
+[docs/HOST_RUNTIME.md](docs/HOST_RUNTIME.md).
 
 ## Umgesetzte Bereiche
 

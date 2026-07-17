@@ -4,7 +4,7 @@ Interner Entwicklungsmeilenstein: `0.46.0`
 
 Phase: Pre-Alpha
 
-Naechster Roadmap-Task: Phase 12 / KR-4702
+Naechster Roadmap-Task: Phase 12 / KR-4703
 
 Naechstes Phasengate: `v0.47.0` - Native Hostruntime
 
@@ -12,12 +12,12 @@ Erster oeffentlicher Produktrelease: `v0.50.0` Alpha
 
 ## Fortschritt
 
-- 210 von 239 gepflegten Roadmap-Tasks abgeschlossen: 87,9 %
+- 211 von 239 gepflegten Roadmap-Tasks abgeschlossen: 88,3 %
 - Phase-9-Reviewkorrekturen sind implementiert; das eigenstaendige
   achtteilige Homebrew-Korpus und Linux-Evidenz bleiben offen
 - Phase 10: 13/13 Tasks im freigegebenen Windows-GDI-Workflow
 - Phase 11: 16/16 Tasks
-- Phase 12: 4/13 Tasks
+- Phase 12: 5/13 Tasks
 - Phase 13: 0/5 Tasks vor dem Alpha-Gate
 - Alpha-Gate noch nicht erreicht
 
@@ -34,7 +34,7 @@ Erster oeffentlicher Produktrelease: `v0.50.0` Alpha
 | 9 | Kompatibilitaet und Leistung | Reviewkorrekturen offen |
 | 10 | Desktop-GUI und Quellworkflow | 13/13 (Windows-GDI-Scope) |
 | 11 | Bootanalyse und Retail-Systemdienste | 16/16 |
-| 12 | Interaktive Retail-Runtime und Portintegration | 4/13 |
+| 12 | Interaktive Retail-Runtime und Portintegration | 5/13 |
 | 13 | Spielbarer Alpha-Kandidat | 0/5 |
 
 Die Einzelaufgaben und Abhaengigkeiten werden ausschliesslich in
