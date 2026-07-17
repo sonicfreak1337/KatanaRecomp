@@ -466,8 +466,8 @@ ControlFlowAnalysisResult analyze_control_flow(const katana::io::ExecutableImage
             auto resolution =
                 analysis.indirect_control_flow.begin() + static_cast<std::ptrdiff_t>(found->second);
             if (resolution->status == ResolutionStatus::Resolved) continue;
-            resolution->status = proof.guarded ? ResolutionStatus::Guarded
-                                               : ResolutionStatus::Resolved;
+            resolution->status =
+                proof.guarded ? ResolutionStatus::Guarded : ResolutionStatus::Resolved;
             resolution->target = proof.targets.size() == 1u
                                      ? std::optional<std::uint32_t>(proof.targets.front())
                                      : std::nullopt;

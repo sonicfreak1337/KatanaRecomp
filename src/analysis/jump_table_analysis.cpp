@@ -72,7 +72,7 @@ bounded_entry_count(const std::span<const katana::sh4::DisassemblyLine> lines,
     return std::nullopt;
 }
 
-}
+} // namespace
 
 JumpTableAnalysis analyze_jump_table(const katana::io::ExecutableImage& image,
                                      const std::uint32_t dispatch_address,
@@ -114,8 +114,8 @@ JumpTableAnalysis analyze_jump_table(const katana::io::ExecutableImage& image,
         entry.entry_address = entry_address;
         entry.target = static_cast<std::uint32_t>(
                            katana::io::read_u16_le(segment->bytes, *offset + index * 4u)) |
-                       (static_cast<std::uint32_t>(katana::io::read_u16_le(
-                            segment->bytes, *offset + index * 4u + 2u))
+                       (static_cast<std::uint32_t>(
+                            katana::io::read_u16_le(segment->bytes, *offset + index * 4u + 2u))
                         << 16u);
         const auto validation = validate_committed_code_address(image, entry.target);
         if (!validation.valid()) {
@@ -167,8 +167,7 @@ JumpTableAnalysis analyze_relative_jump_table_impl(const katana::io::ExecutableI
     }
     const auto* segment = image.find_segment(table_address, static_cast<std::size_t>(byte_count));
     const auto offset = segment != nullptr ? segment->byte_offset(table_address) : std::nullopt;
-    if (segment == nullptr || !segment->permissions.readable ||
-        segment->permissions.writable ||
+    if (segment == nullptr || !segment->permissions.readable || segment->permissions.writable ||
         !offset.has_value() || *offset > segment->bytes.size() ||
         byte_count > segment->bytes.size() - *offset) {
         analysis.reason = segment != nullptr && segment->permissions.writable
@@ -224,10 +223,10 @@ JumpTableAnalysis analyze_relative_jump_table(const katana::io::ExecutableImage&
         image, dispatch_address, table_address, target_base, entry_count);
 }
 
-std::optional<JumpTableAnalysis> recognize_bounded_relative_jump_table(
-    const katana::io::ExecutableImage& image,
-    const std::span<const katana::sh4::DisassemblyLine> lines,
-    const std::size_t dispatch_index) {
+std::optional<JumpTableAnalysis>
+recognize_bounded_relative_jump_table(const katana::io::ExecutableImage& image,
+                                      const std::span<const katana::sh4::DisassemblyLine> lines,
+                                      const std::size_t dispatch_index) {
     if (dispatch_index < 4u || dispatch_index >= lines.size()) return std::nullopt;
     const auto& dispatch = lines[dispatch_index];
     const auto& load = lines[dispatch_index - 1u];

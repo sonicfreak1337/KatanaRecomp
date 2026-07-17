@@ -149,16 +149,15 @@ AnalysisGraph build_call_graph(const ControlFlowAnalysisResult& analysis) {
                                                            function.indirect_call_sites.end(),
                                                            edge.instruction_address);
                              });
-            graph.edges.push_back({function.entry_address,
-                                   target,
-                                   resolved_call == analysis.resolved_edges.end()
-                                       ? 0u
-                                       : resolved_call->instruction_address,
-                                   resolved_call == analysis.resolved_edges.end()
-                                       ? AnalysisGraphEdgeKind::DirectCall
-                                   : resolved_call->guarded
-                                       ? AnalysisGraphEdgeKind::GuardedIndirectCall
-                                       : AnalysisGraphEdgeKind::ResolvedIndirectCall});
+            graph.edges.push_back(
+                {function.entry_address,
+                 target,
+                 resolved_call == analysis.resolved_edges.end()
+                     ? 0u
+                     : resolved_call->instruction_address,
+                 resolved_call == analysis.resolved_edges.end() ? AnalysisGraphEdgeKind::DirectCall
+                 : resolved_call->guarded ? AnalysisGraphEdgeKind::GuardedIndirectCall
+                                          : AnalysisGraphEdgeKind::ResolvedIndirectCall});
             if (!known_entries.contains(target)) {
                 graph.nodes.push_back({target, target, symbol_for(analysis, target)});
                 known_entries.insert(target);

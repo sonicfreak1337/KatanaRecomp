@@ -86,8 +86,8 @@ bool merge_value(AbstractValue& destination, const AbstractValue& source) {
         if (destination.values.size() > maximum_summary_values) make_unknown(destination);
     }
     return destination.known != before.known || destination.guarded != before.guarded ||
-           destination.values != before.values ||
-           destination.call_sites != before.call_sites || destination.callees != before.callees;
+           destination.values != before.values || destination.call_sites != before.call_sites ||
+           destination.callees != before.callees;
 }
 
 bool merge_state(AbstractState& destination, const AbstractState& source) {
@@ -151,8 +151,7 @@ void apply_binary(AbstractValue& destination,
     destination.callees.insert(source.callees.begin(), source.callees.end());
 }
 
-template <typename Operation>
-void apply_unary(AbstractValue& value, Operation operation) {
+template <typename Operation> void apply_unary(AbstractValue& value, Operation operation) {
     if (!value.known) return;
     for (auto& candidate : value.values)
         candidate = operation(candidate);
@@ -176,8 +175,8 @@ std::optional<ImageValue> read_image_value(const katana::io::ExecutableImage& im
     std::uint32_t value = 0u;
     switch (width) {
     case 1u:
-        value = static_cast<std::uint32_t>(static_cast<std::int32_t>(
-            static_cast<std::int8_t>(segment->bytes[*offset])));
+        value = static_cast<std::uint32_t>(
+            static_cast<std::int32_t>(static_cast<std::int8_t>(segment->bytes[*offset])));
         break;
     case 2u:
         value = static_cast<std::uint32_t>(static_cast<std::int32_t>(
@@ -286,7 +285,8 @@ void apply_transfer(AbstractState& state,
     case katana::sh4::InstructionKind::XorImmediate: {
         const auto immediate = static_cast<std::uint32_t>(instruction.immediate);
         apply_unary(state[0u], [&](const std::uint32_t value) {
-            return instruction.kind == katana::sh4::InstructionKind::AndImmediate ? value & immediate
+            return instruction.kind == katana::sh4::InstructionKind::AndImmediate
+                       ? value & immediate
                    : instruction.kind == katana::sh4::InstructionKind::OrImmediate
                        ? value | immediate
                        : value ^ immediate;
@@ -397,24 +397,21 @@ void apply_transfer(AbstractState& state,
             instruction.kind == katana::sh4::InstructionKind::MovByteLoadDisplacement   ? 1u
             : instruction.kind == katana::sh4::InstructionKind::MovWordLoadDisplacement ? 2u
                                                                                         : 4u;
-        load_image_values(
-            state[instruction.destination_register],
-            displaced_addresses(state[instruction.source_register],
-                                static_cast<std::uint32_t>(instruction.displacement)),
-            width,
-            image,
-            &state[instruction.source_register]);
+        load_image_values(state[instruction.destination_register],
+                          displaced_addresses(state[instruction.source_register],
+                                              static_cast<std::uint32_t>(instruction.displacement)),
+                          width,
+                          image,
+                          &state[instruction.source_register]);
         return;
     }
     case katana::sh4::InstructionKind::MovByteLoadR0Indexed:
     case katana::sh4::InstructionKind::MovWordLoadR0Indexed:
     case katana::sh4::InstructionKind::MovLongLoadR0Indexed: {
-        const auto width = instruction.kind == katana::sh4::InstructionKind::MovByteLoadR0Indexed
-                               ? 1u
-                           : instruction.kind ==
-                                 katana::sh4::InstructionKind::MovWordLoadR0Indexed
-                               ? 2u
-                               : 4u;
+        const auto width =
+            instruction.kind == katana::sh4::InstructionKind::MovByteLoadR0Indexed   ? 1u
+            : instruction.kind == katana::sh4::InstructionKind::MovWordLoadR0Indexed ? 2u
+                                                                                     : 4u;
         auto evidence = state[0u];
         evidence.guarded = evidence.guarded || state[instruction.source_register].guarded;
         evidence.call_sites.insert(state[instruction.source_register].call_sites.begin(),
@@ -501,15 +498,14 @@ std::vector<std::uint32_t> checked_targets(const katana::io::ExecutableImage& im
     return targets;
 }
 
-FunctionEvaluation
-evaluate_function(const katana::io::ExecutableImage& image,
-                  const FunctionInfo& function,
-                  const std::unordered_map<std::uint32_t, const BasicBlock*>& blocks,
-                  const std::unordered_map<std::uint32_t, std::vector<std::uint32_t>>&
-                      indirect_callees,
-                  const std::map<std::uint32_t, FunctionValueSummary>& summaries,
-                  const AbstractState& initial_state,
-                  const bool collect_resolutions) {
+FunctionEvaluation evaluate_function(
+    const katana::io::ExecutableImage& image,
+    const FunctionInfo& function,
+    const std::unordered_map<std::uint32_t, const BasicBlock*>& blocks,
+    const std::unordered_map<std::uint32_t, std::vector<std::uint32_t>>& indirect_callees,
+    const std::map<std::uint32_t, FunctionValueSummary>& summaries,
+    const AbstractState& initial_state,
+    const bool collect_resolutions) {
     FunctionEvaluation evaluation;
     evaluation.summary.function_address = function.entry_address;
     std::unordered_set<std::uint32_t> members(function.block_addresses.begin(),
@@ -554,14 +550,13 @@ evaluate_function(const katana::io::ExecutableImage& image,
                         resolution.callees.assign(value.callees.begin(), value.callees.end());
                         resolution.guarded = value.guarded;
                         resolution.reason =
-                            value.guarded
-                                ? "guarded-function-memory"
+                            value.guarded ? "guarded-function-memory"
                             : !value.callees.empty()
                                 ? (resolution.targets.size() == 1u
                                        ? "interprocedural-return-constant"
                                        : "interprocedural-return-set")
                                 : (resolution.targets.size() == 1u ? "function-cfg-constant"
-                                                                  : "function-cfg-set");
+                                                                   : "function-cfg-set");
                         evaluation.resolutions.push_back(std::move(resolution));
                     }
                 }
@@ -680,10 +675,9 @@ bool merge_candidate_input(CandidateInput& destination,
             make_unknown(target);
             destination.saturated[index] = true;
         }
-        changed = changed || target.known != before.known ||
-                  target.guarded != before.guarded || target.values != before.values ||
-                  target.call_sites != before.call_sites || target.callees != before.callees ||
-                  destination.saturated[index];
+        changed = changed || target.known != before.known || target.guarded != before.guarded ||
+                  target.values != before.values || target.call_sites != before.call_sites ||
+                  target.callees != before.callees || destination.saturated[index];
     }
     return changed;
 }
