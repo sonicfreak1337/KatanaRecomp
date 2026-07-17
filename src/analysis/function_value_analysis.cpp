@@ -484,15 +484,13 @@ std::vector<std::uint32_t> checked_targets(const katana::io::ExecutableImage& im
                                            const AbstractValue& value) {
     std::vector<std::uint32_t> targets;
     for (const auto candidate : value.values) {
-        std::uint64_t target = candidate;
+        std::uint32_t target = candidate;
         if (line.instruction.kind == katana::sh4::InstructionKind::Braf ||
             line.instruction.kind == katana::sh4::InstructionKind::Bsrf) {
-            target += static_cast<std::uint64_t>(line.address) + 4u;
+            target += line.address + 4u;
         }
-        if (target > 0xFFFFFFFFull) return {};
-        const auto narrowed = static_cast<std::uint32_t>(target);
-        if (!validate_committed_code_address(image, narrowed).valid()) return {};
-        targets.push_back(narrowed);
+        if (!validate_committed_code_address(image, target).valid()) return {};
+        targets.push_back(target);
     }
     normalize(targets);
     return targets;

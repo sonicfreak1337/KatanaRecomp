@@ -1699,7 +1699,8 @@ void emit_terminal(std::ostringstream& output,
                    const std::size_t control_index,
                    const std::unordered_set<std::uint32_t>& known_functions,
                    const std::unordered_set<std::uint32_t>& current_blocks,
-                   const int indent) {
+                   const int indent,
+                   const bool single_block) {
     using Operation = katana::ir::Operation;
 
     const auto& instruction = block.instructions[control_index];
@@ -1734,7 +1735,7 @@ void emit_terminal(std::ostringstream& output,
         output << "cpu.pc = " << hex32(*instruction.target_address) << ";\n";
 
         emit_indent(output, indent);
-        output << "continue;\n";
+        output << (single_block ? "return;\n" : "continue;\n");
         return;
 
     case Operation::Call:
@@ -1749,13 +1750,18 @@ void emit_terminal(std::ostringstream& output,
         emit_indent(output, indent);
         output << "cpu.pr = " << hex32(instruction.source_address + 4u) << ";\n";
 
-        emit_direct_call(output, *instruction.target_address, known_functions, indent);
+        if (single_block) {
+            emit_indent(output, indent);
+            output << "unresolved_call(cpu, " << hex32(*instruction.target_address) << ");\n";
+        } else {
+            emit_direct_call(output, *instruction.target_address, known_functions, indent);
+        }
 
         emit_indent(output, indent);
         output << "cpu.pc = " << hex32(fallthrough_address(instruction)) << ";\n";
 
         emit_indent(output, indent);
-        output << "continue;\n";
+        output << (single_block ? "return;\n" : "continue;\n");
         return;
 
     case Operation::BranchIfTrue:
@@ -1783,7 +1789,7 @@ void emit_terminal(std::ostringstream& output,
         }
 
         emit_indent(output, indent);
-        output << "continue;\n";
+        output << (single_block ? "return;\n" : "continue;\n");
         return;
     }
 
@@ -1818,7 +1824,7 @@ void emit_terminal(std::ostringstream& output,
                 emit_indent(output, indent + 2);
                 output << "cpu.pc = " << hex32(target) << ";\n";
                 emit_indent(output, indent + 2);
-                output << "continue;\n";
+                output << (single_block ? "return;\n" : "continue;\n");
             } else if (known_functions.contains(target)) {
                 emit_indent(output, indent + 2);
                 output << "cpu.pc = " << hex32(target) << ";\n";
@@ -1864,13 +1870,15 @@ void emit_terminal(std::ostringstream& output,
             for (const auto target : instruction.resolved_targets) {
                 emit_indent(output, indent + 1);
                 output << "case " << hex32(target) << ":\n";
-                if (known_functions.contains(target)) {
+                if (known_functions.contains(target) && !single_block) {
                     emit_direct_call(output, target, known_functions, indent + 2);
                     emit_indent(output, indent + 2);
                     output << "break;\n";
                 } else {
                     emit_indent(output, indent + 2);
                     output << "unresolved_call(cpu, call_target);\n";
+                    emit_indent(output, indent + 2);
+                    output << "break;\n";
                 }
             }
             emit_indent(output, indent + 1);
@@ -1885,7 +1893,7 @@ void emit_terminal(std::ostringstream& output,
         output << "cpu.pc = " << hex32(fallthrough_address(instruction)) << ";\n";
 
         emit_indent(output, indent);
-        output << "continue;\n";
+        output << (single_block ? "return;\n" : "continue;\n");
         return;
 
     case Operation::Return:
@@ -2189,8 +2197,19 @@ bool is_control_flow(const katana::ir::Operation operation) {
 void emit_block(std::ostringstream& output,
                 const katana::ir::BasicBlock& block,
                 const std::unordered_set<std::uint32_t>& known_functions,
-                const std::unordered_set<std::uint32_t>& current_blocks) {
+                const std::unordered_set<std::uint32_t>& current_blocks,
+                const bool single_block) {
     output << "            case " << hex32(block.start_address) << ": {\n";
+    output << "                if (services != nullptr) {\n"
+           << "                    const auto scheduler = services->advance_scheduler(\n"
+           << "                        services->scheduler_cycle() + "
+           << std::max<std::size_t>(1u, block.instructions.size()) << "u, 1024u);\n"
+           << "                    if (scheduler.budget_exhausted)\n"
+           << "                        throw std::runtime_error(\"Schedulerbudget erschoepft\");\n"
+           << "                    services->observe_guest_checkpoint(" << hex32(block.start_address)
+           << ");\n"
+           << "                    if (services->poll_interrupt().has_value()) return;\n"
+           << "                }\n";
 
     std::optional<std::size_t> control_index;
 
@@ -2210,13 +2229,14 @@ void emit_block(std::ostringstream& output,
     }
 
     if (control_index.has_value()) {
-        emit_terminal(output, block, *control_index, known_functions, current_blocks, 4);
+        emit_terminal(
+            output, block, *control_index, known_functions, current_blocks, 4, single_block);
     } else if (block.successors.size() == 1u) {
         emit_indent(output, 4);
         output << "cpu.pc = " << hex32(block.successors.front()) << ";\n";
 
         emit_indent(output, 4);
-        output << "continue;\n";
+        output << (single_block ? "return;\n" : "continue;\n");
     } else if (block.successors.empty()) {
         emit_indent(output, 4);
         output << "return;\n";
@@ -2230,6 +2250,35 @@ void emit_block(std::ostringstream& output,
 }
 
 } // namespace
+
+bool cpp_backend_supports_operation(const katana::ir::Operation operation) noexcept {
+    if (operation == katana::ir::Operation::Unknown) return false;
+    if (is_control_flow(operation)) return true;
+    try {
+        katana::ir::Instruction instruction;
+        instruction.operation = operation;
+        switch (operation) {
+        case katana::ir::Operation::StoreSpecialRegister:
+        case katana::ir::Operation::StoreSpecialRegisterPreDecrement:
+        case katana::ir::Operation::LoadSpecialRegister:
+        case katana::ir::Operation::LoadSpecialRegisterPostIncrement:
+            instruction.special_register = katana::ir::SpecialRegister::Pr;
+            break;
+        case katana::ir::Operation::LoadWordSignedPcRelative:
+        case katana::ir::Operation::LoadLongPcRelative:
+        case katana::ir::Operation::MoveAddressPcRelative:
+            instruction.effective_address = 0u;
+            break;
+        default:
+            break;
+        }
+        std::ostringstream output;
+        emit_guarded_simple_instruction(output, instruction, 0);
+        return !output.str().empty();
+    } catch (...) {
+        return false;
+    }
+}
 
 std::string_view CppBackend::name() const noexcept {
     return "cpp";
@@ -2293,9 +2342,18 @@ BackendEmission CppBackend::emit(const BackendRequest& request) const {
                  << "using katana::runtime::raise_fpu_disabled;\n"
                  << "using katana::runtime::raise_illegal_instruction;\n"
                  << "using katana::runtime::raise_trapa;\n"
-                 << "using katana::runtime::return_from_exception;\n"
-                 << "using katana::runtime::unresolved_call;\n"
-                 << "using katana::runtime::unresolved_jump;\n\n";
+                 << "using katana::runtime::return_from_exception;\n";
+    if (request.external_dynamic_dispatch) {
+        declarations << "void unresolved_call(CpuState& cpu, std::uint32_t target);\n"
+                     << "void unresolved_jump(CpuState& cpu, std::uint32_t target);\n"
+                     << "#define unresolved_call(...) ::" << request.symbol_namespace
+                     << "::unresolved_call(__VA_ARGS__)\n"
+                     << "#define unresolved_jump(...) ::" << request.symbol_namespace
+                     << "::unresolved_jump(__VA_ARGS__)\n\n";
+    } else {
+        declarations << "using katana::runtime::unresolved_call;\n"
+                     << "using katana::runtime::unresolved_jump;\n\n";
+    }
 
     std::vector<std::uint32_t> ordered_known_functions(known_functions.begin(),
                                                        known_functions.end());
@@ -2330,7 +2388,11 @@ BackendEmission CppBackend::emit(const BackendRequest& request) const {
         }
 
         for (const auto& block : function.blocks) {
-            emit_block(function_bodies, block, known_functions, current_blocks);
+            emit_block(function_bodies,
+                       block,
+                       known_functions,
+                       current_blocks,
+                       request.single_block_execution);
         }
 
         function_bodies << "            default:\n"

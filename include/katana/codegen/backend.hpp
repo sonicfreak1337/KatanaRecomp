@@ -44,6 +44,8 @@ struct BackendRequest {
     bool emit_run_functions = true;
     bool external_function_linkage = false;
     std::optional<std::uint32_t> metadata_entry_address;
+    bool single_block_execution = false;
+    bool external_dynamic_dispatch = false;
 };
 
 struct BackendEmission {

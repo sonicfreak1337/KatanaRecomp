@@ -12,7 +12,7 @@
 
 namespace katana::runtime {
 
-inline constexpr std::uint32_t platform_services_abi_version = 2u;
+inline constexpr std::uint32_t platform_services_abi_version = 3u;
 
 enum class PlatformCapability : std::uint64_t {
     Memory = 1ull << 0u,
@@ -97,6 +97,10 @@ class PlatformServices {
     [[nodiscard]] virtual PlatformFallbackResult
     controlled_fallback(CpuState& cpu, const PlatformFallbackRequest& request) = 0;
     [[nodiscard]] virtual bool prefetch(CpuState& cpu, std::uint32_t address) = 0;
+    virtual void observe_guest_checkpoint(std::uint32_t) noexcept {}
+    virtual void register_executable_block(std::uint32_t,
+                                           std::uint32_t,
+                                           std::string_view) {}
 };
 
 inline void validate_platform_services(const PlatformServices& services,

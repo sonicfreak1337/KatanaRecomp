@@ -73,6 +73,16 @@ int main() {
                                    entry.test_requirement == contract.test_requirement;
                         }),
             "Instruktionsart widerspricht ihrem gemeinsamen Alpha-Familienvertrag.");
+    require(alpha_isa_intersection({AlphaIsaSupport::Supported,
+                                    AlphaIsaSupport::Supported,
+                                    AlphaIsaSupport::Rejected,
+                                    AlphaIsaSupport::Supported}) == AlphaIsaSupport::Rejected &&
+                std::all_of(report.instructions.begin(),
+                            report.instructions.end(),
+                            [](const auto& entry) {
+                                return entry.support == alpha_isa_intersection(entry.layers);
+                            }),
+            "Ein fehlender Backendlayer wird nicht unabhaengig als rejected gemeldet.");
 
     const auto text = format_isa_coverage_report(report);
     require(text.find("ReturnFromException") != std::string::npos,
@@ -93,6 +103,7 @@ int main() {
     require(json.find("\"schema\":\"katana-alpha-isa\"") != std::string::npos &&
                 json.find("\"contract_version\":1") != std::string::npos &&
                 json.find("\"runtime\":\"restricted\"") != std::string::npos &&
+                json.find("\"backend\":\"supported\"") != std::string::npos &&
                 json.find("\"id\":\"unknown-opcode\"") != std::string::npos &&
                 json.find("\"status\":\"rejected\"") != std::string::npos &&
                 json.find("\"test_requirement\"") != std::string::npos,

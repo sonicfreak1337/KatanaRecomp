@@ -2,10 +2,13 @@
 
 #include "katana/sh4/decoder.hpp"
 #include "katana/sh4/instruction_metadata.hpp"
+#include "katana/codegen/cpp_emitter.hpp"
+#include "katana/ir/lower.hpp"
 
 #include "katana/io/json_report.hpp"
 
 #include <algorithm>
+#include <array>
 #include <iomanip>
 #include <map>
 #include <sstream>
@@ -152,6 +155,15 @@ std::string special_kind_name(const InstructionKind kind) {
 
 } // namespace
 
+AlphaIsaSupport alpha_isa_intersection(const AlphaIsaLayerSupport layers) noexcept {
+    const std::array values{layers.decoder, layers.ir, layers.backend, layers.runtime};
+    if (std::find(values.begin(), values.end(), AlphaIsaSupport::Rejected) != values.end())
+        return AlphaIsaSupport::Rejected;
+    if (std::find(values.begin(), values.end(), AlphaIsaSupport::Restricted) != values.end())
+        return AlphaIsaSupport::Restricted;
+    return AlphaIsaSupport::Supported;
+}
+
 IsaCoverageReport build_isa_coverage_report() {
     std::map<InstructionKind, MutableCoverage> entries;
 
@@ -186,13 +198,24 @@ IsaCoverageReport build_isa_coverage_report() {
     for (const auto& [kind, entry] : entries) {
         const auto id = family_id(kind, entry.privileged, entry.control_flow);
         const auto& contract = family(report.families, id);
+        const auto operation = katana::ir::lowering_operation_for_instruction(kind);
+        const AlphaIsaLayerSupport layers{
+            entry.rule_count != 0u && entry.opcode_count != 0u ? AlphaIsaSupport::Supported
+                                                               : AlphaIsaSupport::Rejected,
+            operation != katana::ir::Operation::Unknown ? AlphaIsaSupport::Supported
+                                                        : AlphaIsaSupport::Rejected,
+            katana::codegen::cpp_backend_supports_operation(operation)
+                ? AlphaIsaSupport::Supported
+                : AlphaIsaSupport::Rejected,
+            contract.layers.runtime};
         report.instructions.push_back({kind,
                                        entry.name,
                                        entry.rule_count,
                                        entry.opcode_count,
                                        entry.privileged,
                                        id,
-                                       contract.support,
+                                       layers,
+                                       alpha_isa_intersection(layers),
                                        contract.limitation,
                                        contract.test_requirement});
     }
@@ -266,6 +289,13 @@ std::string format_alpha_isa_json(const IsaCoverageReport& report) {
         output << "{\"name\":" << katana::io::quote_json(entry.name)
                << ",\"family\":" << katana::io::quote_json(entry.family_id)
                << ",\"status\":" << katana::io::quote_json(alpha_isa_support_name(entry.support))
+               << ",\"layers\":{\"decoder\":"
+               << katana::io::quote_json(alpha_isa_support_name(entry.layers.decoder))
+               << ",\"ir\":" << katana::io::quote_json(alpha_isa_support_name(entry.layers.ir))
+               << ",\"backend\":"
+               << katana::io::quote_json(alpha_isa_support_name(entry.layers.backend))
+               << ",\"runtime\":"
+               << katana::io::quote_json(alpha_isa_support_name(entry.layers.runtime)) << '}'
                << ",\"encoding_rules\":" << entry.encoding_rule_count
                << ",\"decoded_opcodes\":" << entry.decoded_opcode_count
                << ",\"privileged\":" << (entry.contains_privileged_encoding ? "true" : "false")

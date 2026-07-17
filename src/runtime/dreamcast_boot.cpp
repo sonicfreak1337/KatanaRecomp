@@ -138,6 +138,49 @@ initialize_dreamcast_runtime(CpuState& cpu,
     state.aica->interrupts().set_observer(
         [raise_now] { raise_now(SystemAsicEvent::AicaInterrupt); });
     state.runtime_blocks = std::make_shared<RuntimeBlockTable>();
+    state.code_tracker = std::make_shared<ExecutableCodeTracker>();
+    state.store_queue_transfers = std::make_shared<std::vector<StoreQueueTransfer>>();
+    const auto transfers = state.store_queue_transfers;
+    auto* const memory = &cpu.memory;
+    state.store_queues = std::make_shared<Sh4StoreQueues>(
+        cpu.memory,
+        [transfers, memory](const StoreQueueTransfer& transfer) {
+            transfers->push_back(transfer);
+            if (transfer.target != StoreQueueTarget::Ram) return;
+            for (std::size_t index = 0u; index < transfer.bytes.size(); ++index)
+                memory->write_u8(transfer.target_address + static_cast<std::uint32_t>(index),
+                                 transfer.bytes[index]);
+        },
+        state.code_tracker.get());
+    const auto queues = state.store_queues;
+    auto queue_window = std::make_shared<MmioMemoryDevice>(
+        0x04000000u,
+        [queues](const std::uint32_t offset, const MemoryAccessWidth width) {
+            const auto& bytes = queues->queue((offset >> 25u) & 1u);
+            std::uint32_t value = 0u;
+            for (std::size_t index = 0u; index < static_cast<std::size_t>(width); ++index)
+                value |= static_cast<std::uint32_t>(bytes[(offset + index) & 31u]) << (index * 8u);
+            return value;
+        },
+        [queues](const std::uint32_t offset,
+                 const std::uint32_t value,
+                 const MemoryAccessWidth width) {
+            queues->write_p4(Sh4StoreQueues::window_start + offset, value, width);
+        });
+    cpu.memory.map_region("sh4-store-queue-window", Sh4StoreQueues::window_start, queue_window);
+    auto qacr = std::make_shared<MmioMemoryDevice>(
+        8u,
+        [queues](const std::uint32_t offset, const MemoryAccessWidth) {
+            return queues->qacr(offset >= 4u ? 1u : 0u);
+        },
+        [queues](const std::uint32_t offset,
+                 const std::uint32_t value,
+                 const MemoryAccessWidth width) {
+            if (width != MemoryAccessWidth::Word || (offset != 0u && offset != 4u))
+                throw std::invalid_argument("QACR verlangt ausgerichtete 32-Bit-Zugriffe.");
+            queues->write_qacr(offset / 4u, value);
+        });
+    cpu.memory.map_region("sh4-qacr", 0xFF000038u, qacr);
     state.firmware_handoff = std::make_shared<FirmwareHandoffMap>();
     state.firmware_handoff->map_segment({"main-ram",
                                          FirmwareSegmentKind::Ram,

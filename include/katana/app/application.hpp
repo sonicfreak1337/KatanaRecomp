@@ -104,6 +104,8 @@ struct AnalysisCoverage {
     std::size_t proven_instructions = 0u;
     std::size_t guarded_candidate_instructions = 0u;
     std::size_t functions = 0u;
+    std::size_t resolved_control_flow = 0u;
+    std::size_t guarded_control_flow = 0u;
     std::size_t unresolved_control_flow = 0u;
     std::size_t unknown_instructions = 0u;
     std::size_t reachable_abort_edges = 0u;

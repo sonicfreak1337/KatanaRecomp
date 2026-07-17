@@ -107,8 +107,10 @@ wird rekursiv entdeckt und als partielle Kandidatenkante in Basic Blocks, IR,
 CFG und Callgraph uebernommen. Der Block behaelt gleichzeitig seinen
 indirekten Nachfolger; generierter Dispatch prueft den aktuellen Registerwert
 und behaelt fuer jedes andere Laufzeitziel den dynamischen Default. Guarded ist
-damit kein statischer Beweis und wird vom bisherigen Port-Vollstaendigkeitsgate
-weiterhin nicht als `resolved` akzeptiert.
+damit kein statischer Beweis und wird im Portbericht getrennt ausgewiesen. Es
+blockiert den Export nicht: Der erzeugte Basic-Block-Dispatcher prueft die
+Kandidaten zur Laufzeit und behaelt den dynamischen Default. Nur `unresolved`
+ohne endlichen Kandidaten bleibt ein Vollstaendigkeitsblocker.
 
 ## Interprozedurale SH-C-Summaries
 

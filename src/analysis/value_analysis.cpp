@@ -661,15 +661,14 @@ resolve_indirect_control_flow(const std::span<const katana::sh4::DisassemblyLine
             if (!value.has_value()) {
                 resolution.reason = "register-value-unknown";
             } else {
-                std::uint64_t target = *value;
                 const bool register_relative =
                     line.instruction.kind == katana::sh4::InstructionKind::Braf ||
                     line.instruction.kind == katana::sh4::InstructionKind::Bsrf;
-                if (register_relative) target += static_cast<std::uint64_t>(line.address) + 4u;
-                if (target > std::numeric_limits<std::uint32_t>::max()) {
-                    resolution.reason = "target-address-overflow";
-                } else {
-                    const auto narrowed_target = static_cast<std::uint32_t>(target);
+                const auto narrowed_target = register_relative
+                                                 ? static_cast<std::uint32_t>(
+                                                       *value + line.address + 4u)
+                                                 : *value;
+                {
                     const auto validation = validate_committed_code_address(image, narrowed_target);
                     if (!validation.valid()) {
                         resolution.reason = code_address_status_name(validation.status);

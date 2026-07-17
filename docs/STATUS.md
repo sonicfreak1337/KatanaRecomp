@@ -120,7 +120,15 @@ VTables statisch einzufrieren. Die adressfreie read-only Probe erschloss damit
 statisch aufgeloest, 1.708 sind bewacht und 117 besitzen noch kein endliches
 Ziel. Der maschinenlesbare Bericht prueft diese vollstaendige Statussumme und
 trennt bewiesene von nur ueber Guarded-Kandidaten entdeckten Instruktionen.
-Eine Hostanwendung wurde nicht gestartet.
+Der Portvertrag Version 3 bindet Descriptor, Tracks und Bootdatei vor der
+ersten Gastinstruktion kryptographisch an die analysierte Eingabe. Er fuehrt
+IR-Basic-Blocks mit exakten Grenzen und Abschlussarten aus, dispatcht bewachte
+Kandidaten dynamisch und erkennt einen erfolgreichen Gasteinstieg erst nach
+einem Nicht-Entry-Checkpoint. Die produktiven Plattformdienste sind an
+Interrupt-Router, DMAC, Store Queues und Executable-Code-Invalidierung der
+Runtime angebunden. Der vollstaendige Vertrag steht in
+[`PORT_RUNTIME_TRUST_CONTRACT.md`](PORT_RUNTIME_TRUST_CONTRACT.md). Eine
+Hostanwendung wurde nicht gestartet.
 
 Der inkrementelle Debug-Zyklus besteht nach den Korrekturen vollstaendig mit
 166/166 CTests im MSVC-Developer-Kontext.

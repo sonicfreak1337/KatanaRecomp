@@ -12,6 +12,7 @@
 #include "katana/ir/lower.hpp"
 #include "katana/ir/optimize.hpp"
 #include "katana/ir/verifier.hpp"
+#include "katana/platform/dreamcast_disc.hpp"
 #include "katana/platform/firmware_profile.hpp"
 #include "katana/runtime/gdi.hpp"
 
@@ -858,7 +859,11 @@ AnalysisCoverage analysis_coverage(const io::LoadedProject& project,
     coverage.functions = analysis.recursive.functions.size();
     coverage.unknown_instructions = analysis.recursive.diagnostics.size();
     for (const auto& resolution : analysis.indirect_control_flow) {
-        if (resolution.status != analysis::ResolutionStatus::Resolved)
+        if (resolution.status == analysis::ResolutionStatus::Resolved)
+            ++coverage.resolved_control_flow;
+        else if (resolution.status == analysis::ResolutionStatus::Guarded)
+            ++coverage.guarded_control_flow;
+        else if (resolution.status == analysis::ResolutionStatus::Unresolved)
             ++coverage.unresolved_control_flow;
     }
     coverage.reachable_abort_edges =
@@ -919,6 +924,8 @@ std::string build_plan_json(const std::string_view status,
            << ",\"proven_instructions\":" << coverage.proven_instructions
            << ",\"guarded_candidate_instructions\":" << coverage.guarded_candidate_instructions
            << ",\"functions\":" << coverage.functions
+           << ",\"resolved_control_flow\":" << coverage.resolved_control_flow
+           << ",\"guarded_control_flow\":" << coverage.guarded_control_flow
            << ",\"unresolved_control_flow\":" << coverage.unresolved_control_flow
            << ",\"unresolved_frontier\":" << coverage.unresolved_control_flow
            << ",\"unknown_instructions\":" << coverage.unknown_instructions
@@ -1341,6 +1348,7 @@ JobResult ApplicationService::execute(const JobRequest& request,
                              program,
                              snapshot.inputs,
                              entry,
+                             platform::dreamcast_disc_boot_address,
                              boot_size,
                              result.project_identity,
                              project.execution_profile.firmware_mode ==
@@ -1722,6 +1730,8 @@ std::string format_job_result_json(const JobResult& result) {
                << ",\"proven_instructions\":" << coverage.proven_instructions
                << ",\"guarded_candidate_instructions\":" << coverage.guarded_candidate_instructions
                << ",\"functions\":" << coverage.functions
+               << ",\"resolved_control_flow\":" << coverage.resolved_control_flow
+               << ",\"guarded_control_flow\":" << coverage.guarded_control_flow
                << ",\"unresolved_control_flow\":" << coverage.unresolved_control_flow
                << ",\"unresolved_frontier\":" << coverage.unresolved_control_flow
                << ",\"unknown_instructions\":" << coverage.unknown_instructions

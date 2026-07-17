@@ -123,9 +123,9 @@ int main() {
     const auto capability_error = failure([&] { validate_platform_services(services, all); });
     require(abi_error.find("mock") != std::string::npos &&
                 abi_error.find("ABI 3") != std::string::npos &&
-                abi_error.find("erforderlich ist ABI 2") != std::string::npos &&
+                abi_error.find("erforderlich ist ABI 3") != std::string::npos &&
                 capability_error.find("mock") != std::string::npos &&
-                capability_error.find("ABI 2") != std::string::npos &&
+                capability_error.find("ABI 3") != std::string::npos &&
                 capability_error.find("Maske 64") != std::string::npos,
             "Fehlende Plattformdienste nennen Name, ABI oder Ursache nicht.");
 

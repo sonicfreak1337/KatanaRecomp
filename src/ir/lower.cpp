@@ -546,6 +546,10 @@ Instruction lower_instruction(const katana::sh4::DisassemblyLine& source) {
 
 } // namespace
 
+Operation lowering_operation_for_instruction(const katana::sh4::InstructionKind kind) noexcept {
+    return lower_operation(kind);
+}
+
 std::string_view operation_name(const Operation operation) noexcept {
     switch (operation) {
     case Operation::Unknown:

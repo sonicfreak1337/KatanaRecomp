@@ -1,4 +1,6 @@
 #include "katana/codegen/port_export.hpp"
+#include "katana/ir/lower.hpp"
+#include "katana/platform/dreamcast_disc.hpp"
 #include "katana/runtime/dreamcast_boot.hpp"
 
 #include <algorithm>
@@ -83,7 +85,7 @@ std::size_t payload_offset(const std::size_t sector, const std::size_t byte = 0u
     return sector * raw_sector_size + 16u + byte;
 }
 
-std::vector<std::uint8_t> boot_track() {
+std::vector<std::uint8_t> boot_track(const bool immediate_trap = false) {
     std::vector<std::uint8_t> bytes(22u * raw_sector_size);
     for (std::size_t sector = 0u; sector < 22u; ++sector) {
         bytes[sector * raw_sector_size + 15u] = 1u;
@@ -108,7 +110,7 @@ std::vector<std::uint8_t> boot_track() {
     directory +=
         record(bytes, directory, data_lba + 20u, payload_size, std::string(1u, '\1'), true);
     record(bytes, directory, data_lba + 21u, 24u, "BOOT.BIN;1", false);
-    constexpr std::array<std::uint8_t, 24u> program = {
+    constexpr std::array<std::uint8_t, 24u> normal_program = {
         0x0Au, 0xE0u, // mov #10,r0
         0x03u, 0x00u, // bsrf r0 -> 0x8C010010
         0x07u, 0xE2u, // delay slot: mov #7,r2
@@ -122,6 +124,13 @@ std::vector<std::uint8_t> boot_track() {
         0x0Bu, 0x00u, // callee rts
         0x09u, 0x00u  // delay-slot nop
     };
+    constexpr std::array<std::uint8_t, 24u> trap_program = {
+        0x00u, 0xC3u, // trapa #0
+        0x0Bu, 0x00u, // unreachable rts
+        0x09u, 0x00u, 0x09u, 0x00u, 0x09u, 0x00u, 0x09u, 0x00u,
+        0x09u, 0x00u, 0x09u, 0x00u, 0x09u, 0x00u, 0x09u, 0x00u,
+        0x09u, 0x00u, 0x09u, 0x00u};
+    const auto& program = immediate_trap ? trap_program : normal_program;
     std::copy(program.begin(),
               program.end(),
               bytes.begin() + static_cast<std::ptrdiff_t>(payload_offset(21u)));
@@ -134,10 +143,10 @@ void write_binary(const std::filesystem::path& path, const std::vector<std::uint
                  static_cast<std::streamsize>(bytes.size()));
 }
 
-void write_fixture(const std::filesystem::path& directory) {
+void write_fixture(const std::filesystem::path& directory, const bool immediate_trap = false) {
     write_binary(directory / "low.bin", std::vector<std::uint8_t>(24u * raw_sector_size));
     write_binary(directory / "audio.raw", std::vector<std::uint8_t>(raw_sector_size));
-    write_binary(directory / "high.bin", boot_track());
+    write_binary(directory / "high.bin", boot_track(immediate_trap));
     std::ofstream descriptor(directory / "disc.gdi", std::ios::trunc);
     descriptor << "3\n"
                << "1 0 4 2352 low.bin 0\n"
@@ -165,10 +174,11 @@ std::string read_text(const std::filesystem::path& path) {
 } // namespace
 
 int run_test(const int argc, char* argv[]) {
-    if (argc == 3 && std::string(argv[1]) == "--write-fixture") {
+    if (argc == 3 && (std::string(argv[1]) == "--write-fixture" ||
+                      std::string(argv[1]) == "--write-trap-fixture")) {
         const std::filesystem::path directory(argv[2]);
         std::filesystem::create_directories(directory);
-        write_fixture(directory);
+        write_fixture(directory, std::string(argv[1]) == "--write-trap-fixture");
         return EXIT_SUCCESS;
     }
     require(argc == 1, "Unerwartete Argumente fuer den Portexporttest.");
@@ -186,6 +196,23 @@ int run_test(const int argc, char* argv[]) {
                 runtime_state.runtime_blocks && runtime_state.runtime_blocks->size() == 0u &&
                 runtime_state.system_asic && runtime_state.interrupt_router,
             "Eigenstaendiger GDI-Boot initialisiert Bootimage, CPU oder Speicher nicht.");
+    static_cast<void>(runtime_state.code_tracker->register_block(
+        {"sq-code", 0x0C000000u, 32u, "synthetic", {},
+         katana::runtime::ExecutableBlockOrigin::ImageSegment}));
+    runtime_cpu.memory.write_u32(0xFF000038u, 0x0Cu);
+    for (std::uint32_t offset = 0u; offset < 32u; offset += 4u)
+        runtime_cpu.memory.write_u32(0xE0000000u + offset, 0x03020100u + offset * 0x01010101u);
+    require(runtime_state.store_queues->prefetch(0xE0000000u) &&
+                runtime_cpu.memory.read_u32(0x0C000000u) == 0x03020100u &&
+                runtime_state.code_tracker->invalidation_count() == 1u,
+            "Produktive Store Queue uebertraegt keine 32 Byte nach RAM oder invalidiert Code.");
+    runtime_cpu.memory.write_u32(0xFF00003Cu, 0x10u);
+    runtime_cpu.memory.write_u32(0xE2000020u, 0x88776655u);
+    require(runtime_state.store_queues->prefetch(0xE2000020u) &&
+                runtime_state.store_queue_transfers->back().target ==
+                    katana::runtime::StoreQueueTarget::TileAccelerator &&
+                runtime_state.store_queue_transfers->back().bytes[0] == 0x55u,
+            "Produktive Store Queue verliert QACR-basierten TA-Transfer.");
     katana::runtime::CpuState hle_runtime_cpu;
     const auto hle_runtime_state = katana::runtime::initialize_dreamcast_runtime(
         hle_runtime_cpu, runtime_boot, katana::runtime::DreamcastRuntimeFirmwareMode::HleBiosAbi);
@@ -251,6 +278,10 @@ int run_test(const int argc, char* argv[]) {
                     std::string::npos &&
                 generated_before.at("code/runtime-dispatch.cpp").find("dispatch_indirect") !=
                     std::string::npos &&
+                generated_before.at("code/runtime-dispatch.cpp")
+                        .find("generated-block-8C010000") != std::string::npos &&
+                generated_before.at("code/runtime-dispatch.cpp")
+                        .find("6u, katana::runtime::BlockEndKind::Call") != std::string::npos &&
                 std::filesystem::exists(output / "CMakeLists.txt") &&
                 std::filesystem::exists(output / "src" / "main.cpp") &&
                 read_text(output / "src" / "main.cpp").find("load_dreamcast_runtime_boot") !=
@@ -261,7 +292,13 @@ int run_test(const int argc, char* argv[]) {
                     std::string::npos &&
                 read_text(output / "src" / "main.cpp").find("HostRuntimeSession") !=
                     std::string::npos &&
-                read_text(output / "src" / "main.cpp").find("audio_hash") != std::string::npos,
+                read_text(output / "src" / "main.cpp").find("audio_hash") != std::string::npos &&
+                read_text(output / "src" / "main.cpp").find("source-identity-mismatch") !=
+                    std::string::npos &&
+                read_text(output / "src" / "main.cpp").find("weakly_canonical") !=
+                    std::string::npos &&
+                read_text(output / "src" / "main.cpp")
+                        .find("source.parent_path().string()") == std::string::npos,
             "Portprojekt besitzt keinen ausfuehrbaren GDI-/Runtimevertrag.");
     std::string portable_content;
     for (const auto& [path, content] : generated_before) {
@@ -272,6 +309,46 @@ int run_test(const int argc, char* argv[]) {
                 portable_content.find("disc.gdi") == std::string::npos &&
                 portable_content.find("high.bin") == std::string::npos,
             "Portartefakte enthalten absolute oder private Disc-/Trackpfade.");
+
+    const auto guarded_disc = katana::platform::load_dreamcast_gdi_boot(gdi);
+    auto guarded_image = katana::platform::make_dreamcast_disc_executable(guarded_disc);
+    auto guarded_analysis = katana::analysis::analyze_control_flow(guarded_image);
+    require(!guarded_analysis.indirect_control_flow.empty() &&
+                !guarded_analysis.resolved_edges.empty(),
+            "Guarded-Portfixture besitzt keine indirekte Kandidatenkante.");
+    guarded_analysis.indirect_control_flow.front().status =
+        katana::analysis::ResolutionStatus::Guarded;
+    guarded_analysis.resolved_edges.front().guarded = true;
+    auto guarded_program = katana::ir::lower_program(guarded_analysis);
+    std::vector<katana::io::InputProvenance> guarded_inputs;
+    guarded_inputs.push_back(katana::io::capture_input_provenance("gdi-descriptor", gdi));
+    for (const auto& track : guarded_disc.source->descriptor().tracks)
+        guarded_inputs.push_back(katana::io::capture_input_provenance(
+            "gdi-track-" + std::to_string(track.number), track.resolved_path));
+    const auto guarded_output = fixture.root / "guarded-port";
+    const auto guarded_export = export_dreamcast_port_project(
+        {guarded_image,
+         guarded_analysis,
+         guarded_program,
+         guarded_inputs,
+         katana::platform::dreamcast_disc_boot_address,
+         katana::platform::dreamcast_disc_boot_address,
+         guarded_disc.boot_file.size(),
+         "guarded-fixture"},
+        guarded_output,
+        options);
+    const auto guarded_sources = snapshot(guarded_output / "generated");
+    std::string guarded_text;
+    for (const auto& [path, content] : guarded_sources) {
+        if (path.starts_with("code/unit-")) guarded_text += content;
+    }
+    const auto& guarded_metadata = guarded_sources.at("metadata/port-project.json");
+    require(guarded_export.functions != 0u &&
+                guarded_text.find("default:") != std::string::npos &&
+                guarded_text.find("unresolved_call") != std::string::npos &&
+                guarded_metadata.find("\"guarded_control_flow\":1") != std::string::npos &&
+                guarded_metadata.find("\"unresolved_control_flow\":0") != std::string::npos,
+            "Guarded-Kandidaten erreichen Portcodegen oder dynamischen Default nicht.");
 
     {
         std::ofstream user(output / "src" / "notes.txt", std::ios::trunc);

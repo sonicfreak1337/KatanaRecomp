@@ -10,6 +10,9 @@
 
 namespace katana::ir {
 
+[[nodiscard]] Operation
+lowering_operation_for_instruction(katana::sh4::InstructionKind kind) noexcept;
+
 [[nodiscard]] Function
 lower_function(std::span<const katana::sh4::DisassemblyLine> lines,
                const katana::analysis::FunctionInfo& function,

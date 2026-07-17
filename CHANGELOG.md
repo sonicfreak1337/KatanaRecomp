@@ -4,6 +4,20 @@
 
 ### Korrigiert
 
+- Der erzeugte GDI-Port meldet `SA_MAIN_ENTERED` und `silent_failures=0` nur
+  nach einem echten Gast-Checkpoint. Sofortige Traps, Exceptions oder
+  Fallbacks scheitern vorher sichtbar. Descriptor, alle Tracks und die
+  extrahierte Bootdatei werden per SHA-256 vor der ersten Gastinstruktion an
+  die analysierte Eingabe gebunden.
+- Der Portadapter registriert und dispatcht echte IR-Basic-Blocks mit exakter
+  Groesse und Abschlussart. Interrupt-, DMA-, Store-Queue- und
+  Codeinvalidierungsdienste verwenden die bestehenden Runtimekomponenten;
+  `guarded` Kandidaten bleiben dynamisch dispatchbar und blockieren den Export
+  nicht mehr.
+- `BRAF`/`BSRF` verwenden in Analyse und Codegen dasselbe SH-4-konforme
+  32-Bit-Wraparound. Quellpfade werden nur noch ueber belastbare absolute
+  Varianten redigiert. ISA-Status ist die gemessene Schnittmenge aus Decoder,
+  IR-Lowering, C++-Backend und Runtimegrenze statt einer festen Konstanten.
 - KR-4711/KR-4712: Reproduzierbare Analyse-Regressionen sichern jetzt
   SH-C-Call-Clobber und R8-bis-R14-Erhalt ueber direkte/indirekte Calls samt
   Delay Slot, ABI-lose Raw-/ELF-Eingaben, Pre-/Post-Updates, CFG-Joins,

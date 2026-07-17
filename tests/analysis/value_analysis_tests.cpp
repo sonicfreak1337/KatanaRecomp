@@ -479,6 +479,45 @@ int main() {
                 relative_resolution[0].reason == "register-relative-constant-register",
             "BRAF-Ziel verwendet nicht den vor dem Delay Slot gelesenen PC+4+Rm-Wert.");
 
+    katana::io::ExecutableImage wrapped_relative;
+    wrapped_relative.add_segment({".target",
+                                  0x8C010000u,
+                                  0u,
+                                  6u,
+                                  katana::io::SegmentKind::Code,
+                                  {true, false, true},
+                                  {0xFCu, 0xE1u, 0x23u, 0x01u, 0x09u, 0x00u}});
+    const auto wrapped_resolution = katana::analysis::resolve_indirect_control_flow(
+        katana::sh4::disassemble(wrapped_relative.segments()[0].bytes, 0x8C010000u),
+        wrapped_relative);
+    require(wrapped_resolution.size() == 1u &&
+                wrapped_resolution[0].status == katana::analysis::ResolutionStatus::Resolved &&
+                wrapped_resolution[0].target == 0x8C010002u,
+            "BRAF mit Rn=-4 verwendet nicht die 32-Bit-PC-Wraparound-Semantik.");
+
+    katana::io::ExecutableImage address_wrap;
+    address_wrap.add_segment({".zero",
+                              0u,
+                              0u,
+                              2u,
+                              katana::io::SegmentKind::Code,
+                              {true, false, true},
+                              {0x09u, 0x00u}});
+    address_wrap.add_segment({".top",
+                              0xFFFFFFF8u,
+                              0u,
+                              8u,
+                              katana::io::SegmentKind::Code,
+                              {true, false, true},
+                              {0x02u, 0xE1u, 0x23u, 0x01u, 0x09u, 0x00u, 0x09u, 0x00u}});
+    const auto address_wrap_resolution = katana::analysis::resolve_indirect_control_flow(
+        katana::sh4::disassemble(address_wrap.segments()[1].bytes, 0xFFFFFFF8u), address_wrap);
+    require(address_wrap_resolution.size() == 1u &&
+                address_wrap_resolution[0].status ==
+                    katana::analysis::ResolutionStatus::Resolved &&
+                address_wrap_resolution[0].target == 0u,
+            "BRAF ueber 0xFFFFFFFF wurde nicht modulo 2^32 aufgeloest.");
+
     katana::io::ExecutableImage pc_zero_fill;
     pc_zero_fill.add_segment({".text",
                               0u,

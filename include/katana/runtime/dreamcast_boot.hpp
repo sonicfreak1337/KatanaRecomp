@@ -10,6 +10,7 @@
 #include "katana/runtime/pvr.hpp"
 #include "katana/runtime/runtime.hpp"
 #include "katana/runtime/system_asic.hpp"
+#include "katana/runtime/store_queue.hpp"
 
 #include <cstddef>
 #include <cstdint>
@@ -54,6 +55,9 @@ struct DreamcastRuntimeState {
     std::shared_ptr<GdRomAsyncReader> gdrom;
     std::shared_ptr<AicaExecutionController> aica;
     std::shared_ptr<RuntimeBlockTable> runtime_blocks;
+    std::shared_ptr<ExecutableCodeTracker> code_tracker;
+    std::shared_ptr<Sh4StoreQueues> store_queues;
+    std::shared_ptr<std::vector<StoreQueueTransfer>> store_queue_transfers;
     std::shared_ptr<FirmwareHandoffMap> firmware_handoff;
     std::size_t loaded_boot_bytes = 0u;
 };

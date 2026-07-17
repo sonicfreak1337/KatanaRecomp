@@ -16,7 +16,7 @@
 
 namespace katana::codegen {
 
-inline constexpr std::uint32_t port_project_contract_version = 2u;
+inline constexpr std::uint32_t port_project_contract_version = 3u;
 
 struct PortExportOptions {
     std::string target_name;
@@ -40,6 +40,7 @@ struct PreparedPortProgram {
     std::span<const katana::ir::Function> program;
     std::span<const katana::io::InputProvenance> inputs;
     std::uint32_t entry_address = 0u;
+    std::uint32_t boot_address = 0u;
     std::size_t boot_size = 0u;
     std::string_view project_identity;
     bool hle_bios_abi = false;

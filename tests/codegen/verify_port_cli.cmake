@@ -71,6 +71,60 @@ if(NOT generated_result EQUAL 0 OR
     "${generated_output} ${generated_error}")
 endif()
 
+file(APPEND "${fixture}/disc/high.bin" "identity-change")
+execute_process(
+  COMMAND "${game}" "./disc.gdi"
+  WORKING_DIRECTORY "${fixture}/disc"
+  RESULT_VARIABLE mismatch_result
+  OUTPUT_VARIABLE mismatch_output
+  ERROR_VARIABLE mismatch_error
+)
+if(mismatch_result EQUAL 0 OR
+   NOT mismatch_error MATCHES "source-identity-mismatch" OR
+   mismatch_output MATCHES "SA_MAIN_ENTERED|silent_failures=0")
+  file(REMOVE_RECURSE "${fixture}")
+  message(FATAL_ERROR
+    "Geaenderte Laufzeit-GDI wurde nicht vor Gastcode abgelehnt: ${mismatch_output} ${mismatch_error}")
+endif()
+
+file(MAKE_DIRECTORY "${fixture}/trap-disc")
+execute_process(
+  COMMAND "${KATANA_FIXTURE_WRITER}" --write-trap-fixture "${fixture}/trap-disc"
+  RESULT_VARIABLE trap_writer_result
+  ERROR_VARIABLE trap_writer_error
+)
+if(NOT trap_writer_result EQUAL 0)
+  file(REMOVE_RECURSE "${fixture}")
+  message(FATAL_ERROR "Trap-Portfixture fehlgeschlagen: ${trap_writer_error}")
+endif()
+execute_process(
+  COMMAND "${KATANA_CLI}" port "${fixture}/trap-disc/disc.gdi"
+          --output "${fixture}/trap-port" --target-name trap_game
+  RESULT_VARIABLE trap_port_result
+  OUTPUT_VARIABLE trap_port_output
+  ERROR_VARIABLE trap_port_error
+)
+if(NOT trap_port_result EQUAL 0)
+  file(REMOVE_RECURSE "${fixture}")
+  message(FATAL_ERROR "Trap-Port konnte nicht gebaut werden: ${trap_port_output} ${trap_port_error}")
+endif()
+if(WIN32)
+  set(trap_game "${fixture}/trap-port/build/trap_game.exe")
+else()
+  set(trap_game "${fixture}/trap-port/build/trap_game")
+endif()
+execute_process(
+  COMMAND "${trap_game}" "${fixture}/trap-disc/disc.gdi"
+  RESULT_VARIABLE trap_result
+  OUTPUT_VARIABLE trap_output
+  ERROR_VARIABLE trap_error
+)
+if(trap_result EQUAL 0 OR trap_output MATCHES "SA_MAIN_ENTERED|silent_failures=0")
+  file(REMOVE_RECURSE "${fixture}")
+  message(FATAL_ERROR
+    "Trap-Einstieg erzeugte einen falschen Hauptprogrammnachweis: ${trap_output} ${trap_error}")
+endif()
+
 execute_process(
   COMMAND "${game}" --run-generated
   RESULT_VARIABLE missing_generated_result

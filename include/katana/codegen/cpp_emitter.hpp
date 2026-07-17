@@ -8,6 +8,8 @@
 
 namespace katana::codegen {
 
+[[nodiscard]] bool cpp_backend_supports_operation(katana::ir::Operation operation) noexcept;
+
 class CppBackend final : public Backend {
   public:
     [[nodiscard]] std::string_view name() const noexcept override;

@@ -37,10 +37,13 @@ struct IsaCoverageEntry {
     std::uint32_t decoded_opcode_count;
     bool contains_privileged_encoding;
     std::string family_id;
+    AlphaIsaLayerSupport layers;
     AlphaIsaSupport support = AlphaIsaSupport::Rejected;
     std::string limitation;
     std::string test_requirement;
 };
+
+[[nodiscard]] AlphaIsaSupport alpha_isa_intersection(AlphaIsaLayerSupport layers) noexcept;
 
 struct IsaCoverageReport {
     std::vector<AlphaIsaFamilyEntry> families;
