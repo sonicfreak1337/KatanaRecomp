@@ -62,7 +62,7 @@ io::ExecutableImage make_dreamcast_disc_executable(const DreamcastDiscBoot& disc
     }
     io::ExecutableImage image;
     image.set_guest_call_abi(io::GuestCallAbi::SuperHC);
-    image.set_initial_snapshot_policy(io::InitialSnapshotPolicy::EntryPointStraightLine);
+    image.set_initial_snapshot_policy(io::InitialSnapshotPolicy::EntryPointStraightLineQuiescent);
     image.add_segment({".text",
                        dreamcast_disc_boot_address,
                        0u,
