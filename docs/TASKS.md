@@ -25,23 +25,19 @@ Dieses Dokument zerlegt die Roadmap in issue-taugliche Arbeitspakete.
 
 ## Empfohlene naechste Reihenfolge
 
-1. KR-1101
-2. KR-1102
-3. KR-1103
-4. KR-1104
-5. KR-1105
-6. KR-1106
-7. KR-1107
-8. KR-1201
-9. KR-1202
-10. KR-1203
-11. KR-1204
-12. KR-1205
-13. KR-1301
-14. KR-1302
-15. KR-1303
-16. KR-1304
-17. KR-1305
+1. KR-4715 - offene Kontrollflussfront inventarisieren
+2. KR-4716 - ABI-erhaltene Callbacks, Parameter und Stackwerte
+3. KR-4717 - Objekt-, Feld- und VTable-Points-to
+4. KR-4718 - Runtime-only-Dispatchvertrag
+5. KR-4719 - privater Sonic-Lauf bis `SA_MAIN_ENTERED`
+6. KR-4703 - VMU-/Flash-Persistenz und Host-Pacing
+7. KR-4704 - v0.47 Gate-Vorbereitung
+8. KR-4705 - v0.47 interne Freigabe
+
+KR-4716 und KR-4717 duerfen nach Abschluss von KR-4715 parallel bearbeitet
+werden. Persistenz und Pacing sind absichtlich nach dem ersten belastbaren
+Retail-Runtimepfad eingeordnet, weil sie den aktuellen Buildblocker nicht
+reduzieren.
 
 ---
 
@@ -2810,8 +2806,191 @@ Abschlussnachweis:
 
 - die reproduzierbaren Analyse-, IR- und Graphregressionen sind gruen
 - die redigierte Privatprobe erschloss 55.104 Instruktionen, 813 Funktionen und
-  1.826 indirekte Stellen; 1.708 besitzen bewachte Kandidaten, 117 bleiben ohne
-  endliches Ziel
+  1.826 indirekte Stellen; eine ist statisch aufgeloest, 1.708 besitzen
+  bewachte Kandidaten und 117 bleiben ohne endliches Ziel
+
+### [ ] KR-4715 - Ungeloeste Kontrollflussfront inventarisieren und klassifizieren
+
+Abhaengigkeiten: KR-4714
+
+Prioritaet: P0 - aktuelle blockierende Voraussetzung fuer jeden Retail-Build
+
+Ausgangslage:
+
+- die aktuelle adressfreie Privatprobe meldet 1.826 indirekte Stellen
+- eine Stelle ist statisch `resolved`
+- 1.708 Stellen besitzen endliche `guarded` Kandidaten
+- 117 Stellen besitzen noch keine endliche Zielmenge und blockieren deshalb
+  Codegen, Hostbuild und Runtime-Start
+
+Umfang:
+
+- fuer jede `unresolved` Stelle genau einen stabilen allgemeinen Herkunftsgrund
+  erzeugen
+- mindestens folgende Klassen getrennt ausweisen:
+  - ABI-erhaltener Registercallback
+  - direkter oder indirekter Callparameter
+  - Stack-/Spill-/Reload-Ziel
+  - Objekt- oder VTable-Feld
+  - begrenzbare Tabelle oder Indexkette
+  - unbeschraenkter Speicherwert
+  - echter Laufzeitzeiger
+  - noch nicht klassifiziert
+- Text-, JSON-, CFG- und Callgraph-Berichte um eine aggregierte
+  `unresolved_frontier`-Aufschluesselung erweitern
+- private Adressen duerfen nur im externen Debugbericht stehen; Repository und
+  Gateberichte enthalten ausschliesslich aggregierte Klassen und Zaehler
+
+Akzeptanz:
+
+- `resolved + guarded + unresolved == indirect_total`
+- jede offene Stelle besitzt genau eine Klasse und eine Beweisherkunft
+- die Summe der Klassen ist exakt `unresolved_frontier`
+- identische Eingaben erzeugen bytegleiche aggregierte Berichte
+- fuer jede Klasse existiert mindestens eine synthetische positive oder
+  negative Fixture
+- keine Retailadresse, kein Pfad, Hash oder Spieldatum gelangt in Repository,
+  CTest-Ausgabe oder Gatebericht
+
+Abschlussnachweis:
+
+- eine neue adressfreie Privatprobe liefert eine stabile Baseline fuer alle
+  folgenden Tasks
+- der Task behauptet noch keinen Build- oder Bootfortschritt
+
+### [ ] KR-4716 - ABI-erhaltene Callback-, Parameter- und Stackwerte analysieren
+
+Abhaengigkeiten: KR-4715
+
+Prioritaet: P0 - schliesst endliche Register- und Callkontexte vor Runtime-only
+
+Umfang:
+
+- ABI-erhaltene R8-bis-R14-Werte kontextsensitiv ueber direkte und bereits
+  bewachte indirekte Calls weitertragen
+- insbesondere R13-basierte Callbackpfade als allgemeine SH-C-Klasse
+  modellieren; keine Retailadresse oder titelbezogene Registerannahme
+  festschreiben
+- Callparameter, Stackspills, Reloads und feste Frame-Offsets in eine begrenzte
+  rueckwaertige Slice aufnehmen
+- Caller-Summaries nur fuer endliche Callkontexte und stabil konvergierende SCCs
+  bilden
+- unbekannte Caller, Aliasverletzungen, Rekursion ohne Fixpunkt und zu grosse
+  Zielmengen konservativ offen oder `runtime-only` lassen
+- Callsite-, Callee-, Register-, Stackoffset- und Join-Evidenz im Bericht
+  ausgeben
+
+Akzeptanz:
+
+- synthetische Tests decken direkte Calls, guarded Calls, mehrere Caller,
+  R13-Erhalt, Stackspill/-reload, Rekursion und widerspruechliche Parameter ab
+- nur vollstaendige endliche Mengen werden `guarded`; kein unbekannter Caller
+  wird weggerechnet
+- die Analyse terminiert mit festen Budgets und deterministischer Reihenfolge
+- die private Vergleichsprobe weist reduzierte Callback-/Parameter-/Stackklassen
+  getrennt von neu entdecktem Code aus
+
+### [ ] KR-4717 - Objekt-, Feld- und VTable-Points-to-Analyse
+
+Abhaengigkeiten: KR-4715
+
+Prioritaet: P0 - groesste verbleibende allgemeine Retailklasse
+
+Umfang:
+
+- Objektzeiger als endliche abstrakte Points-to-Mengen durch Register,
+  Stackspills und feste Feldoffsets verfolgen
+- Konstruktor-/Initialisierungspfade erkennen, die VTable- oder Callbackzeiger
+  in bekannte Objektfelder schreiben
+- Loads aus `object + constant_offset` mit Storeevidenz, Aliasstatus und
+  Lebenszeitgrenzen verbinden
+- endliche VTable-Slots als `guarded` Kandidaten ausgeben; beschreibbare
+  Tabellen niemals statisch einfrieren
+- unbekannte Stores, Aliaszusammenfuehrungen, Objektwechsel und externe
+  Mutationen invalidieren die jeweilige Points-to-Menge
+- mehrere moegliche konkrete Typen als begrenzte Kandidatenmenge erhalten
+
+Akzeptanz:
+
+- synthetische Fixtures decken Konstruktorstore, mehrere Typen, Feldoffset,
+  Alias, ueberschreibbare VTable, unbekannten Store und Objektlebensende ab
+- ein VTable-Ziel wird nur mit vollstaendiger Objekt-/Feld-/Storeevidenz
+  `guarded`
+- der Runtime-Default bleibt fuer jeden guarded Slot erhalten
+- mehrdeutige oder unbeschraenkte Objektmengen bleiben sichtbar dynamisch
+- die private Probe reduziert die VTable-/Objektklasse ohne Titelsonderfall
+
+### [ ] KR-4718 - Expliziter Runtime-only-Dispatch fuer echte Laufzeitziele
+
+Abhaengigkeiten: KR-4716, KR-4717
+
+Prioritaet: P0 - sicherer Laufzeitvertrag ohne geratene Ziele
+
+Architekturentscheidung:
+
+- `ResolutionStatus` erhaelt neben `resolved`, `guarded` und `unresolved` den
+  Zustand `runtime-only`
+- `runtime-only` ist nur fuer klassifizierte echte Laufzeitquellen erlaubt;
+  `unresolved` bleibt ein harter Buildblocker
+- das Buildgate darf nur fortfahren, wenn `unresolved == 0`
+
+Umfang:
+
+- Laufzeitziel gegen Gastadressraum, Ausrichtung, Executable-Image und
+  Codegeneration validieren
+- zuerst die Runtime-Blocktabelle und ihre kanonischen Aliase pruefen
+- bei vorhandenem generiertem Block normal dispatchen
+- bei fehlendem Block ausschliesslich den kontrollierten bestehenden Fallback
+  verwenden oder mit `runtime-target-missing` sichtbar stoppen
+- niemals eine Hostadresse, einen No-op oder einen geratenen Spielblock
+  einsetzen
+- Hits, Blocktabellen-Misses, Fallbacks und ersten Fehler als
+  maschinenlesbare Metriken erfassen
+- `silent_failures == 0` nur aus genau einem gueltigen Runtimemarker ableiten
+
+Akzeptanz:
+
+- synthetische Tests unterscheiden Blockhit, Alias, committed aber nicht
+  generiertes Ziel, nicht ausfuehrbare Adresse, ungemapptes Ziel und
+  Codeinvalidierung
+- ein Runtime-only-Miss erzeugt keinen Sonic-Checkpoint und keinen Exitcode 0
+- `resolved + guarded + runtime_only + unresolved == indirect_total`
+- `unresolved == 0` ist Voraussetzung fuer einen privaten Runtimebuild
+- der normale oeffentliche Buildvertrag bleibt ohne explizite Runtime-only-
+  Faehigkeit streng
+
+### [ ] KR-4719 - Privaten Sonic-Runtimepfad bis `SA_MAIN_ENTERED` schliessen
+
+Abhaengigkeiten: KR-4718
+
+Prioritaet: P0 - erster belastbarer Retail-Runtime-Nachweis
+
+Umfang:
+
+- den privaten Retail-Harness auf den vierteiligen Kontrollflussstatus und die
+  Runtime-only-Metriken anheben
+- den offiziellen Workflow nur bei `unresolved == 0`, vollstaendiger
+  Executable-Byteabdeckung und ohne erreichbare Analyse-Abbruchkante bauen
+- die erzeugte `game.exe` mit derselben read-only GDI, festem Hostzeit- und
+  Gastzyklusbudget starten
+- Checkpointfolge, Blockdispatch, Runtime-only-Hits, Fallbacks, Exceptions,
+  Scheduler, GD-ROM, DMA und Interrupts aggregiert erfassen
+- jeden real gefundenen Blocker vor Abschluss als titelunabhaengige
+  synthetische oder frei lizenzierte Regression absichern
+- keine private Adresse, kein Pfad, Hash, Rohlog, generierter Retailcode oder
+  Capture committen
+
+Akzeptanz:
+
+- zwei identische Laeufe erreichen in derselben Reihenfolge
+  `SA_ANALYSIS_CONTINUES` und `SA_MAIN_ENTERED`
+- beide Laeufe besitzen dieselben deterministischen Kernmetriken
+- `silent_failures == 0`
+- kein Runtime-only-Miss, Fallback, Trap oder Exception wird als
+  `SA_MAIN_ENTERED` ausgegeben
+- ein absichtlich begrenzter oder fehlerhafter Lauf erzeugt einen redigierten,
+  maschinenlesbaren Bericht mit eindeutiger Fehlerklasse
+- der Abschluss behauptet weder Frame, Menue noch Spielbarkeit
 
 ### [x] KR-4702 - Native Audio-, Eingabe- und Hostlebenszyklusintegration
 
@@ -2832,7 +3011,9 @@ Akzeptanz:
 
 ### [ ] KR-4703 - Persistente VMU-/Flash-Arbeitskopien und Host-Pacing
 
-Abhaengigkeiten: KR-4601, KR-4702
+Abhaengigkeiten: KR-4601, KR-4702, KR-4719
+
+Prioritaet: P1 - folgt erst nach dem ersten belastbaren Retail-Runtimepfad
 
 Umfang:
 
@@ -2849,14 +3030,21 @@ Akzeptanz:
 
 ### [ ] KR-4704 - v0.47 Gate-Vorbereitung: Tests und Build
 
-Abhaengigkeiten: KR-4701 bis KR-4703, KR-4711 bis KR-4713
+Abhaengigkeiten: KR-4701 bis KR-4703, KR-4711 bis KR-4719
 
 Umfang und Akzeptanz:
 
 - alle fuer v0.47 gesammelten Tests umsetzen
+- kontrollieren, dass jede indirekte Stelle genau einen Status besitzt und
+  `unresolved == 0` gilt
+- Runtime-only-Hits, Misses, Fallbacks und Fehlerpfade in der synthetischen
+  Regression pruefen
 - genau einen frischen Build in `build-current/` und die vollstaendige
   synthetische/Homebrew-Regression ausfuehren
 - eine eigenstaendige Homebrew-Anwendung bis `KR_V047_NATIVE_HOST_READY` starten
+- den privaten Sonic-Lauf aus KR-4719 genau fuer das Phasengate wiederholen und
+  `SA_MAIN_ENTERED` reproduzierbar bestaetigen
+- nur aggregierte freigegebene Retailmetriken in den Gatebericht uebernehmen
 - danach vor KR-4705 fuer das Nutzerreview stoppen
 
 ### [ ] KR-4705 - v0.47 interne Meilenstein-Freigabe

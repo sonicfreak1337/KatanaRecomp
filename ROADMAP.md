@@ -1,7 +1,7 @@
 # KatanaRecomp Roadmap
 
 Status: Pre-Alpha
-Aktuelle Basis: v0.34.0
+Aktuelle Basis: v0.46.0
 Planungsmodell: Semantic Versioning, kleine ueberpruefbare Meilensteine
 
 Diese Roadmap beschreibt die technische Entwicklung von KatanaRecomp vom aktuellen Architektur-Prototyp bis zu einem belastbaren Dreamcast-Recompiler-Framework.
@@ -1197,7 +1197,12 @@ Video, Audio, Eingabe, persistentem Zustand und einem eigenstaendigen
 Out-of-Tree-Port. Private Sonic-Laeufe treiben das Debugging; jedes Ergebnis
 wird weiterhin durch titelunabhaengige verteilbare Tests abgesichert.
 
-### v0.47.0 - Native Hostruntime
+Die offene Kontrollflussfront ist die blockierende Abhaengigkeit dieser Phase.
+Persistenz, Host-Pacing und weiterer Portkomfort folgen erst, wenn jede
+indirekte Stelle entweder statisch bewiesen, ueber eine endliche Kandidatenmenge
+bewacht oder durch einen expliziten Runtime-only-Vertrag behandelbar ist.
+
+### v0.47.0 - Kontrollflussabschluss und native Hostruntime
 
 Fortschritt:
 
@@ -1207,13 +1212,45 @@ Fortschritt:
 - [x] KR-4713 - Interprozedurale SH-C-Zielwertsummaries
 - [x] KR-4714 - Bewachte Snapshot- und Kandidatenziele
 - [x] KR-4702 - Native Audio-, Eingabe- und Hostlebenszyklusintegration
+- [ ] KR-4715 - Ungeloeste Kontrollflussfront inventarisieren und klassifizieren
+- [ ] KR-4716 - ABI-erhaltene Callback-, Parameter- und Stackwerte analysieren
+- [ ] KR-4717 - Objekt-, Feld- und VTable-Points-to-Analyse
+- [ ] KR-4718 - Expliziter Runtime-only-Dispatch fuer echte Laufzeitziele
+- [ ] KR-4719 - Privaten Sonic-Runtimepfad bis `SA_MAIN_ENTERED` schliessen
 - [ ] KR-4703 - Persistente VMU-/Flash-Arbeitskopien und Host-Pacing
 - [ ] KR-4704 - v0.47 Gate-Vorbereitung: Tests und Build
 - [ ] KR-4705 - v0.47 interne Meilenstein-Freigabe
 
-Gate-Ergebnis: Ein frei lizenzierter Port laeuft als eigenstaendige
-Hostanwendung mit Video, Audio, Eingabe und kontrolliertem Lebenszyklus und
-erreicht `KR_V047_NATIVE_HOST_READY`.
+Verbindliche Reihenfolge:
+
+```text
+KR-4715
+  -> KR-4716 und KR-4717
+  -> KR-4718
+  -> KR-4719
+  -> KR-4703
+  -> KR-4704
+  -> KR-4705
+```
+
+KR-4716 und KR-4717 duerfen nach der gemeinsamen KR-4715-Baseline parallel
+entwickelt werden, muessen aber beide vor KR-4718 abgeschlossen sein.
+
+Gate-Ergebnis:
+
+- jede bisher offene indirekte Stelle besitzt genau einen stabilen allgemeinen
+  Herkunftsgrund
+- `unresolved == 0`; alle Stellen sind `resolved`, `guarded` oder
+  `runtime-only`
+- `runtime-only` besitzt Zielvalidierung, Blocklookup, kontrollierten Fallback
+  und maschinenlesbare Fehlermetriken; es ist kein stiller Erfolgsweg
+- ein frei lizenzierter Port laeuft als eigenstaendige Hostanwendung mit Video,
+  Audio, Eingabe und kontrolliertem Lebenszyklus und erreicht
+  `KR_V047_NATIVE_HOST_READY`
+- ein privater, budgetierter Sonic-Lauf baut und startet die erzeugte
+  `game.exe` und erreicht zweimal reproduzierbar `SA_MAIN_ENTERED`
+- der private Lauf bleibt Entwicklungsinput; der verteilbare Gate-Nachweis
+  verwendet weiterhin nur synthetische und frei lizenzierte Eingaben
 
 ### v0.48.0 - Port- und GUI-Integration
 
@@ -1228,8 +1265,10 @@ Fortschritt:
 Gate-Ergebnis: Eine synthetische oder frei lizenzierte GDI wird ausserhalb des
 KatanaRecomp-Baums reproduzierbar zu einem Port-Projekt und einer startbaren
 `game.exe`; GUI und CLI erreichen `KR_V048_PORT_WORKFLOW_READY` ueber denselben
-Anwendungsdienst. Eine lokale Sonic-Adventure-GDI darf denselben Buildpfad
-durchlaufen, ihre `game.exe` wird in diesem Gate jedoch nicht gestartet.
+Anwendungsdienst. Ein privater Sonic-Nachlauf darf den bei v0.47 erreichten
+Checkpoint budgetiert wiederholen. Das v0.48-Gate behauptet daraus weder einen
+Frame, ein Menue noch Spielbarkeit und bleibt durch synthetische oder frei
+lizenzierte Eingaben verteilbar.
 
 ## Phase 13: Spielbarer Alpha-Kandidat und Veroeffentlichung
 

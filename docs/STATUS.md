@@ -4,20 +4,20 @@ Interner Entwicklungsmeilenstein: `0.46.0`
 
 Phase: Pre-Alpha
 
-Naechster Roadmap-Task: Phase 12 / KR-4703
+Naechster Roadmap-Task: Phase 12 / KR-4715
 
-Naechstes Phasengate: `v0.47.0` - Native Hostruntime
+Naechstes Phasengate: `v0.47.0` - Kontrollflussabschluss und native Hostruntime
 
 Erster oeffentlicher Produktrelease: `v0.50.0` Alpha
 
 ## Fortschritt
 
-- 211 von 239 gepflegten Roadmap-Tasks abgeschlossen: 88,3 %
+- 211 von 244 gepflegten Roadmap-Tasks abgeschlossen: 86,5 %
 - Phase-9-Reviewkorrekturen sind implementiert; das eigenstaendige
   achtteilige Homebrew-Korpus und Linux-Evidenz bleiben offen
 - Phase 10: 13/13 Tasks im freigegebenen Windows-GDI-Workflow
 - Phase 11: 16/16 Tasks
-- Phase 12: 5/13 Tasks
+- Phase 12: 6/19 Tasks
 - Phase 13: 0/5 Tasks vor dem Alpha-Gate
 - Alpha-Gate noch nicht erreicht
 
@@ -34,7 +34,7 @@ Erster oeffentlicher Produktrelease: `v0.50.0` Alpha
 | 9 | Kompatibilitaet und Leistung | Reviewkorrekturen offen |
 | 10 | Desktop-GUI und Quellworkflow | 13/13 (Windows-GDI-Scope) |
 | 11 | Bootanalyse und Retail-Systemdienste | 16/16 |
-| 12 | Interaktive Retail-Runtime und Portintegration | 5/13 |
+| 12 | Interaktive Retail-Runtime und Portintegration | 6/19 |
 | 13 | Spielbarer Alpha-Kandidat | 0/5 |
 
 Die Einzelaufgaben und Abhaengigkeiten werden ausschliesslich in
@@ -120,6 +120,25 @@ VTables statisch einzufrieren. Die adressfreie read-only Probe erschloss damit
 statisch aufgeloest, 1.708 sind bewacht und 117 besitzen noch kein endliches
 Ziel. Der maschinenlesbare Bericht prueft diese vollstaendige Statussumme und
 trennt bewiesene von nur ueber Guarded-Kandidaten entdeckten Instruktionen.
+
+Die 1.708 guarded Stellen blockieren den Portexport nicht mehr. Der erzeugte
+Dispatcher prueft ihre endlichen Kandidaten zur Laufzeit und behaelt den
+dynamischen Default. Ausschliesslich die 117 Stellen ohne endliche Zielmenge
+halten den Sonic-Workflow im Zustand `partial` und verhindern damit Codegen,
+Hostbuild und Runtime-Start.
+
+Die naechste verbindliche Reihenfolge lautet:
+
+```text
+KR-4715  Front inventarisieren und klassifizieren
+KR-4716  ABI-erhaltene Callbacks, Parameter und Stackwerte
+KR-4717  Objekt-, Feld- und VTable-Points-to
+KR-4718  Runtime-only-Dispatchvertrag
+KR-4719  privater Sonic-Lauf bis SA_MAIN_ENTERED
+KR-4703  Persistenz und Pacing
+KR-4704  v0.47 Gate
+```
+
 Der Portvertrag Version 3 bindet Descriptor, Tracks und Bootdatei vor der
 ersten Gastinstruktion kryptographisch an die analysierte Eingabe. Er fuehrt
 IR-Basic-Blocks mit exakten Grenzen und Abschlussarten aus, dispatcht bewachte
@@ -128,7 +147,7 @@ einem Nicht-Entry-Checkpoint. Die produktiven Plattformdienste sind an
 Interrupt-Router, DMAC, Store Queues und Executable-Code-Invalidierung der
 Runtime angebunden. Der vollstaendige Vertrag steht in
 [`PORT_RUNTIME_TRUST_CONTRACT.md`](PORT_RUNTIME_TRUST_CONTRACT.md). Eine
-Hostanwendung wurde nicht gestartet.
+Sonic-Hostanwendung wurde noch nicht gestartet.
 
 Der inkrementelle Debug-Zyklus besteht nach den Korrekturen vollstaendig mit
 166/166 CTests im MSVC-Developer-Kontext.
