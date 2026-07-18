@@ -50,6 +50,13 @@
   dokumentiert.
 ### Korrigiert
 
+- KR-4625: Gebuendelte Speicherwrites pruefen den gesamten Zielbereich und die
+  vorhandenen Bytes vor dem Commit; Regions- und Schreibschutzfehler koennen
+  kein nicht invalidiertes Schreibpraefix mehr hinterlassen. Ein frisches
+  Quality-Debug-/RelWithDebInfo-Gate besteht 168/168 beziehungsweise 167/167
+  Tests mit 167 gemeinsamen Core-Regressionen. GitHub Actions fuehrt dasselbe
+  Windows-Buildgate aus und veroeffentlicht den maschinenlesbaren JSON-Bericht
+  sowie CTest-/JUnit-Protokolle als Artifacts.
 - KR-4618: Das frische Core-Korrektheitsgate besteht mit 171 Quality-Debug-
   Tests unter MSVC-ASan und statischer Analyse sowie 170 RelWithDebInfo-Tests.
   Beide Profile teilen exakt 170 Core-Regressionen; der zusaetzliche

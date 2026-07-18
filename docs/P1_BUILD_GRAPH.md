@@ -1,6 +1,6 @@
 # P1-Buildgraph, Pakete und Testmatrix
 
-Stand: KR-4624
+Stand: KR-4625
 
 ## Zielgraph
 
@@ -75,3 +75,14 @@ werden gegen folgende Regeln bewertet:
 - Cache an/aus darf Artefakte und Testergebnisse nicht veraendern;
 - eine Optimierung bleibt nur aktiv, wenn ihr instrumentierter Vergleichstest
   identische Resultate und weniger Hotpath-Arbeit nachweist.
+
+## KR-4625-Gateergebnis
+
+Das frische Windows-Gate bestand 168 Quality-Debug- und 167
+RelWithDebInfo-Tests. Der zusaetzliche Debugtest prueft die ausgelieferte
+MSVC-ASan-Runtime; beide Profile teilen damit exakt 167 Core-Regressionen.
+Buildparallelitaet 8 vermeidet ungebremste Windows-Linkkonkurrenz und behaelt
+fuer transiente Dateisperren begrenzte Wiederholungen bei. Format-,
+Qualitaetsvertrags-, Referenz- und Lizenzaudit bestanden; private Retaildaten
+wurden nicht verwendet. Die exakten Laufzeiten und der Quellcommit stehen im
+maschinenlesbaren Gatebericht.

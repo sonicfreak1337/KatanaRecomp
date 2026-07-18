@@ -2,7 +2,7 @@
 
 Interner Entwicklungsmeilenstein: `v0.46.0`
 Phase: Core-Stabilisierung vor v0.47
-Naechster Task: `KR-4625`
+Naechster Task: `KR-4715`
 Naechstes Gate: `v0.47.0` - Core-Stabilisierung und generische Retail-Runtime
 Weitere interne Gates: `v0.48.0` Integration und `v0.49.0` Alpha-Candidate
 Erster oeffentlicher Release: `v0.50.0` Alpha
@@ -63,6 +63,24 @@ installierbare `KatanaRecomp::runtime`-Paket bleibt von Analyzerquellen frei;
 `KatanaRecomp::analyzer` ist ein getrennter Zusatz. Ein echter Out-of-Tree-
 Consumer prueft diese Grenze. Vertrag und Ausgangsbaseline stehen in
 [`P1_BUILD_GRAPH.md`](P1_BUILD_GRAPH.md).
+
+## KR-4625 umgesetzt
+
+Das Performance-/Buildgate erstellt Quality-Debug und RelWithDebInfo jeweils
+frisch mit fester Linkparallelitaet. Quality-Debug bestand 168 von 168 Tests
+mit MSVC-ASan und statischer Analyse; RelWithDebInfo bestand 167 von 167 Tests.
+Beide Profile besitzen dasselbe Inventar aus 167 Core-Regressionen. Format-,
+Qualitaetsvertrags- und Referenz-/Lizenzaudit sind erfolgreich, alle
+instrumentierten Performancevertraege halten ihre Budgets und private
+Retaildaten wurden nicht verwendet.
+
+`Memory::write_bytes()` prueft gebuendelte Zielbereiche und vorhandene Bytes
+vollstaendig vor dem Commit. Ein Fehler an einer Regions- oder
+Schreibschutzgrenze veraendert kein Praefix; ein spaeter Geraetefehler meldet
+jeden bereits geschriebenen Bereich noch vor dem Weiterwerfen zur
+Codeinvalidierung. Der lokale JSON-Bericht wird durch einen identischen
+Windows-CI-Buildgate als GitHub-Actions-Artifact unabhaengig nachvollziehbar.
+Damit ist Stufe B abgeschlossen und KR-4715 beginnt.
 
 ## Historischer Reviewbefund vor KR-4611 bis KR-4618
 

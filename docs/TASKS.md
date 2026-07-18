@@ -364,7 +364,7 @@ Out-of-Tree-Vertragstest stellt sicher, dass die Runtime keine Analyzerquelle
 benoetigt. Baseline und Bedienung stehen in `P1_BUILD_GRAPH.md`; die frischen
 Messwerte folgen gesammelt im Gate KR-4625.
 
-### [ ] KR-4625 - Performance-/Buildgate
+### [x] KR-4625 - Performance-/Buildgate
 
 Abhaengigkeiten: KR-4621 bis KR-4624
 Prioritaet: P1
@@ -376,6 +376,14 @@ Akzeptanz:
 - Speicher, Dispatch, Analyse, Codegen, Disc-I/O und Build halten Budgets
 - keine Optimierung wird ohne gemessenen Nutzen aktiviert
 - danach darf KR-4715 beginnen
+
+Das frische Gate bestand 168 Quality-Debug- und 167 RelWithDebInfo-Tests mit
+identischem Inventar aus 167 gemeinsamen
+Core-Regressionen. MSVC-ASan, statische Analyse, exakte Referenzvektoren,
+Format-, Qualitaetsvertrags- und Referenz-/Lizenzaudit sind gruen. Die
+instrumentierten Hotpath-, Deltaanalyse-, 10k/50k/100k-Codegen-, Disc-I/O-
+und Paket-/Buildvertraege halten ihre Budgets. Der maschinenlesbare Bericht
+wird lokal und durch den Windows-CI-Buildgate als Artifact erzeugt.
 
 ## Stufe C: Retail-Kontrollfluss und Build
 
