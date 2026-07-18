@@ -84,18 +84,18 @@ int main() {
             cpu, context, variant, {BlockEndKind::Return, source, {}, std::nullopt});
         require(returned.exit.kind == BlockEndKind::Return && cpu.pc == 0x8C002000u,
                 "Return verwendet PR nicht als eigenen dynamischen Endtyp.");
-        require(
-            !dispatcher
-                    .dispatch(
-                        cpu, context, variant, {BlockEndKind::Exception, source, {}, std::nullopt})
-                    .target_block &&
-                !dispatcher
-                     .dispatch(cpu,
-                               context,
-                               variant,
-                               {BlockEndKind::InterruptSafepoint, source, {}, std::nullopt})
-                     .target_block,
-            "Exception oder Interrupt-Safepoint erfindet ein Ziel.");
+        cpu.pc = 0x8C003000u;
+        const auto exception = dispatcher.dispatch(
+            cpu, context, variant, {BlockEndKind::Exception, source, {}, std::nullopt});
+        const auto interrupt = dispatcher.dispatch(
+            cpu, context, variant, {BlockEndKind::InterruptSafepoint, source, {}, std::nullopt});
+        const auto exception_return = dispatcher.dispatch(
+            cpu, context, variant, {BlockEndKind::ExceptionReturn, source, {}, std::nullopt});
+        require(exception.target_block && interrupt.target_block && exception_return.target_block &&
+                    exception.exit.target->virtual_address == 0x8C003000u &&
+                    interrupt.exit.target->virtual_address == 0x8C003000u &&
+                    exception_return.exit.target->virtual_address == 0x8C003000u,
+                "Exception, Interrupt und Exception-Return umgehen den zentralen Zielvertrag.");
 
         dispatcher.link("caller-b", "target");
         dispatcher.link("caller-a", "target");

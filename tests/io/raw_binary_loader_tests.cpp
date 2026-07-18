@@ -49,6 +49,10 @@ int main() {
     require(segment.memory_size == segment.bytes.size() && !segment.bytes.empty(),
             "Raw-Datei- und Speichergroesse stimmen nicht ueberein.");
     require(segment.kind == SegmentKind::Code, "Raw-Code wurde falsch klassifiziert.");
+    require(segment.source_kind == ImageSourceKind::RawBinary &&
+                segment.load_phase == ImageLoadPhase::Initial &&
+                segment.local_source_name == fixture.filename().string(),
+            "Raw-Loader verliert Quelle oder Ladephase.");
     require(segment.permissions.readable && segment.permissions.executable &&
                 !segment.permissions.writable,
             "Raw-Standardberechtigungen sind falsch.");

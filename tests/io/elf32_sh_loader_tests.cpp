@@ -165,6 +165,10 @@ int main() {
     require(text.kind == SegmentKind::Code && text.permissions.readable &&
                 text.permissions.executable && !text.permissions.writable,
             "PF_R/PF_X wurden falsch abgebildet.");
+    require(text.source_kind == ImageSourceKind::ElfLoadSegment &&
+                data.source_kind == ImageSourceKind::ElfLoadSegment &&
+                text.load_phase == ImageLoadPhase::Initial,
+            "ELF-Loader verliert Segmentquelle oder Ladephase.");
     require(text.bytes == std::vector<std::uint8_t>({0x09u, 0x00u, 0x0Bu, 0x00u}),
             "Textbytes sind falsch.");
     require(data.virtual_address == 0x8C020000u && data.memory_size == 12u &&

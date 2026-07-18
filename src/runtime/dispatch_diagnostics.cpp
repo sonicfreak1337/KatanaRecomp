@@ -245,6 +245,20 @@ const char* dispatch_diagnostic_error_name(const DispatchDiagnosticError value) 
         return "misaligned";
     case DispatchDiagnosticError::InvalidBoundary:
         return "invalid-boundary";
+    case DispatchDiagnosticError::PermissionDenied:
+        return "permission-denied";
+    case DispatchDiagnosticError::ProvenNonCode:
+        return "proven-non-code";
+    case DispatchDiagnosticError::MaterializationBudget:
+        return "materialization-budget";
+    case DispatchDiagnosticError::ByteIdentityMismatch:
+        return "byte-identity-mismatch";
+    case DispatchDiagnosticError::GenerationMismatch:
+        return "generation-mismatch";
+    case DispatchDiagnosticError::RelocationMismatch:
+        return "relocation-mismatch";
+    case DispatchDiagnosticError::StaleBlock:
+        return "stale-block";
     }
     return "unknown";
 }

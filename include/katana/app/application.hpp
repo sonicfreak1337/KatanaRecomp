@@ -2,6 +2,7 @@
 
 #include "katana/io/project_manifest.hpp"
 
+#include <array>
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
@@ -16,7 +17,7 @@
 
 namespace katana::app {
 
-inline constexpr std::uint32_t application_contract_version = 5u;
+inline constexpr std::uint32_t application_contract_version = 7u;
 inline constexpr std::uint32_t settings_schema_version = 1u;
 
 enum class DiagnosticSeverity : std::uint8_t { Information, Warning, Error };
@@ -97,9 +98,30 @@ enum class JobFailureCategory : std::uint8_t {
 };
 
 struct AnalysisCoverage {
+    std::uint64_t committed_executable_permission_bytes = 0u;
+    std::uint64_t static_precompiled_bytes = 0u;
+    std::uint64_t initially_required_bytes = 0u;
+    std::uint64_t runtime_materializable_bytes = 0u;
+    std::uint64_t unknown_storage_bytes = 0u;
+    std::uint64_t currently_dispatchable_bytes = 0u;
+    std::uint64_t uncovered_control_targets = 0u;
+    std::uint64_t dispatch_paths_without_validation = 0u;
+    std::uint64_t materialization_attempts = 0u;
+    std::uint64_t materialization_successes = 0u;
+    std::uint64_t materialization_rejections = 0u;
+    std::uint64_t materialization_budget_failures = 0u;
+    std::uint64_t generation_revalidation_failures = 0u;
+    std::uint64_t byte_identity_failures = 0u;
+    std::uint64_t dispatch_validation_failures = 0u;
     std::uint64_t committed_executable_bytes = 0u;
     std::uint64_t analyzed_instruction_bytes = 0u;
     std::uint64_t unanalyzed_executable_bytes = 0u;
+    std::uint64_t runtime_deferred_executable_bytes = 0u;
+    std::uint64_t never_executed_data_bytes = 0u;
+    std::uint64_t unknown_executable_bytes = 0u;
+    std::uint64_t unproven_padding_bytes = 0u;
+    std::uint64_t incomplete_initial_required_code_bytes = 0u;
+    std::uint64_t uncovered_runtime_materializable_bytes = 0u;
     std::size_t instructions = 0u;
     std::size_t proven_instructions = 0u;
     std::size_t guarded_candidate_instructions = 0u;
@@ -112,6 +134,10 @@ struct AnalysisCoverage {
     std::size_t unresolved_control_flow = 0u;
     std::size_t unknown_instructions = 0u;
     std::size_t reachable_abort_edges = 0u;
+    std::array<std::uint64_t, 12u> executable_byte_classes{};
+    std::array<std::uint64_t, 6u> precompile_classes{};
+    std::array<std::uint64_t, 12u> mixed_range_roles{};
+    std::array<std::uint64_t, 4u> range_proof_classes{};
     bool control_flow_complete = false;
 };
 

@@ -43,7 +43,7 @@ nicht mehr einzeln wiederholt.
 | Speicherbus, Exceptions, Interrupts, Scheduler und DMA | umgesetzt |
 | BIOS-HLE, System-ASIC, Maple, PVR-Minimalpfad, AICA-HLE und GD-ROM | umgesetzt, Genauigkeit noch begrenzt |
 | Windows-GUI, GDI-Workflow, Portexport und native Hostruntime | umgesetzt |
-| Private Retailanalyse | 55.202 Instruktionen, 813 Funktionen; `unknown=0`, `guarded_partial=0`, `unresolved=0`, `runtime_only=1.826` |
+| Private Retailanalyse | 55.202 Instruktionen, 813 Funktionen; Kontrollflussfront geschlossen, 6.608.338 offene Bytes |
 
 ## v0.47.0 - Core-Stabilisierung und generische Retail-Runtime
 
@@ -85,27 +85,20 @@ nicht gestartet werden.
 - [x] `KR-4718` - expliziter Runtime-only-Dispatch
 - [x] `KR-4719` - privater Retail-Buildnachweis mit erzwungenem Build-only-Modus
 - [x] `KR-4703` - VMU-/Flash-Arbeitskopien und Host-Pacing
-- [ ] `KR-4704` - v0.47 Gate-Vorbereitung
+- [x] `KR-4704` - v0.47 Gate-Vorbereitung
 - [ ] `KR-4705` - v0.47 interne Freigabe
 
-`KR-4704`-Zwischenstand: Die bekannten unbekannten Instruktionen sowie die
-vollstaendig ungeloesten und partiell bewachten indirekten Stellen sind durch
-allgemeine Decoder-, Analyse-, IR-, Backend- und Runtimevertraege geschlossen.
-Der private Build-only-Lauf meldet keine unbekannte Instruktion, keine
-`guarded_partial`-/`unresolved`-Site und keine erreichbare Abbruchkante. Der
-strikte Gatebuild bleibt dennoch offen, weil 6.624.892 committed executable
-Bytes noch nicht analysiert sind. Eine `game.exe` wurde nicht gestartet.
-
-Naechster KR-4704-Arbeitsblock: Zuerst entsteht ein adressfreies oeffentliches
-und lokal detailliertes Inventar der offenen Bytes nach Inhalt, Segment,
-Discdatei, Ladephase und Schreibbarkeit. Danach werden Loaderberechtigungen und
-Zero-Fill gegen reale Ladegroessen korrigiert. Reachability und die Pflicht zur
-Vorabkompilierung werden in `initially_reachable`, `statically_discoverable`,
-`loadable_module`, `runtime_materializable` und `never_executed_data` getrennt.
-Nur ein allgemeiner validierender Vertrag darf Bytes aus dem statischen Gate
-nehmen. Darauf folgen synthetisch getestete Module/Overlays, deterministische
-Demand-driven-Blockmaterialisierung und ein Runtime-only-Profil fuer die
-spaetere sichere Spezialisierung stabiler Ziele.
+`KR-4704` ist technisch bestanden. Das Gate trennt ausfuehrbare
+Speicherberechtigung von statischer, materialisierbarer und aktuell
+dispatchbarer Abdeckung. Unbekannte Speicherbytes bleiben unbekannt und nicht
+implizit ausfuehrbar; jeder Kontrolltransfer erreicht einen gueltigen Block,
+den validierten Demand-Pfad oder bricht vor Gastwirkung strukturiert ab.
+Der private doppelte Build-only-Nachweis meldet `unknown_instructions=0`,
+`guarded_partial=0`, `unresolved=0`, `reachable_abort_edges=0`,
+`uncovered_control_targets=0` und `dispatch_paths_without_validation=0`.
+Beide frischen Hostbuilds besitzen identische portable Metadaten und Quellen;
+kein Runtimeprozess wurde gestartet. Naechster Task ist das Nutzerreview vor
+`KR-4705`.
 
 ### Verbindliche Reihenfolge
 

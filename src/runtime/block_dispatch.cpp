@@ -5,16 +5,10 @@
 namespace katana::runtime {
 
 CanonicalBlockDispatcher::CanonicalBlockDispatcher(const RuntimeBlockTable& table,
-                                                   DispatchDiagnosticRecorder* diagnostics)
-    : table_(table), diagnostics_(diagnostics) {}
-
-RuntimeBlockHandle CanonicalBlockDispatcher::lookup(const BlockAddress address,
-                                                    const BlockVariantKey& variant) const {
-    if (const auto exact = table_.lookup(address.virtual_address, variant)) return *exact;
-    if (const auto physical = table_.lookup_physical(address.physical_address, variant))
-        return *physical;
-    throw std::runtime_error("Direktes Blockziel fehlt: " + stable_block_identity(address));
-}
+                                                   DispatchDiagnosticRecorder* diagnostics,
+                                                   DemandBlockMaterializer* materializer,
+                                                   IndirectDispatchMetrics* metrics)
+    : table_(table), diagnostics_(diagnostics), materializer_(materializer), metrics_(metrics) {}
 
 BlockDispatchOutcome
 CanonicalBlockDispatcher::dispatch(CpuState& cpu,
@@ -53,9 +47,12 @@ CanonicalBlockDispatcher::dispatch(CpuState& cpu,
     case BlockEndKind::DynamicBranch:
     case BlockEndKind::Call:
     case BlockEndKind::Return:
-    case BlockEndKind::ExceptionReturn: {
+    case BlockEndKind::Exception:
+    case BlockEndKind::ExceptionReturn:
+    case BlockEndKind::InterruptSafepoint: {
         if (end.kind != BlockEndKind::Return && end.kind != BlockEndKind::ExceptionReturn &&
-            !dynamic_target) {
+            end.kind != BlockEndKind::Exception &&
+            end.kind != BlockEndKind::InterruptSafepoint && !dynamic_target) {
             throw std::invalid_argument("Dynamischer Block braucht ein Ziel.");
         }
         const auto kind = end.kind == BlockEndKind::Call     ? IndirectDispatchKind::Call
@@ -68,24 +65,41 @@ CanonicalBlockDispatcher::dispatch(CpuState& cpu,
             table_,
             {kind,
              callsite,
-             end.kind == BlockEndKind::ExceptionReturn ? cpu.pc : dynamic_target.value_or(0u),
+             end.kind == BlockEndKind::ExceptionReturn || end.kind == BlockEndKind::Exception ||
+                     end.kind == BlockEndKind::InterruptSafepoint
+                 ? cpu.pc
+                 : dynamic_target.value_or(0u),
              return_address,
              end.source,
              variant,
              DispatchResolutionOrigin::TableLookup,
-             diagnostics_});
+             diagnostics_,
+             RuntimeDispatchClass::GuardedFallback,
+             metrics_,
+             materializer_});
         target = BlockAddress{result.diagnostic_target, result.physical_target};
         target_block = result.block;
         break;
     }
     case BlockEndKind::Sleep:
-    case BlockEndKind::Exception:
-    case BlockEndKind::InterruptSafepoint:
         break;
     }
     if (direct && target) {
-        target_block = lookup(*target, variant);
-        cpu.pc = target->virtual_address;
+        const auto selected = dispatch_indirect(
+            cpu,
+            table_,
+            {IndirectDispatchKind::TailJump,
+             end.source.virtual_address,
+             target->virtual_address,
+             cpu.pr,
+             end.source,
+             variant,
+             DispatchResolutionOrigin::StaticProof,
+             diagnostics_,
+             RuntimeDispatchClass::GuardedFallback,
+             metrics_,
+             materializer_});
+        target_block = selected.block;
     }
     return {make_block_exit(cpu, context, end.kind, end.source, target), target_block, direct};
 }

@@ -3,6 +3,7 @@
 #include "katana/analysis/code_address.hpp"
 #include "katana/analysis/control_flow_analysis.hpp"
 #include "katana/analysis/control_flow_report.hpp"
+#include "katana/analysis/executable_inventory.hpp"
 #include "katana/codegen/cpp_emitter.hpp"
 #include "katana/codegen/port_export.hpp"
 #include "katana/codegen/project.hpp"
@@ -758,7 +759,15 @@ void configure_and_build(const std::filesystem::path& source,
     std::uint64_t log_offset = 0u;
     auto configure = std::string("cmake -S ") + shell_quote(source) + " -B " + shell_quote(build);
 #ifdef _WIN32
-    configure += " -G \"Visual Studio 17 2022\" -A x64";
+    char* requested_generator = nullptr;
+    std::size_t requested_generator_size = 0u;
+    static_cast<void>(
+        _dupenv_s(&requested_generator, &requested_generator_size, "KATANA_HOST_BUILD_GENERATOR"));
+    const bool use_ninja = requested_generator != nullptr &&
+                           std::string_view(requested_generator) == "Ninja";
+    std::free(requested_generator);
+    configure += use_ninja ? " -G Ninja -DCMAKE_BUILD_TYPE=Debug"
+                           : " -G \"Visual Studio 17 2022\" -A x64";
 #else
     configure += " -G Ninja -DCMAKE_BUILD_TYPE=Debug";
 #endif
@@ -789,7 +798,7 @@ void configure_and_build(const std::filesystem::path& source,
     auto compile =
         std::string("cmake --build ") + shell_quote(build) + " --target " + std::string(target);
 #ifdef _WIN32
-    compile += " --config Debug";
+    if (!use_ninja) compile += " --config Debug";
 #endif
     run_host_command(
         compile, "compile", log_path, cancellation, events, 90u, "host-compilation", log_offset);
@@ -843,21 +852,57 @@ std::string artifact_hash(const std::filesystem::path& path) {
 }
 
 AnalysisCoverage analysis_coverage(const io::LoadedProject& project,
-                                   const analysis::ControlFlowAnalysisResult& analysis) {
+                                   const analysis::ControlFlowAnalysisResult& analysis,
+                                   const analysis::ExecutableByteInventory& inventory) {
     AnalysisCoverage coverage;
-    for (const auto& segment : project.image.segments()) {
-        if (segment.permissions.executable)
-            coverage.committed_executable_bytes += segment.bytes.size();
-    }
+    coverage.committed_executable_bytes = inventory.committed_executable_bytes;
+    coverage.committed_executable_permission_bytes = inventory.committed_executable_bytes;
+    coverage.executable_byte_classes = inventory.byte_counts;
+    coverage.precompile_classes = inventory.precompile_counts;
+    coverage.mixed_range_roles = inventory.role_counts;
+    coverage.range_proof_classes = inventory.proof_counts;
     coverage.instructions = analysis.recursive.instructions.size();
     coverage.proven_instructions = analysis.recursive.proven_instruction_addresses.size();
     coverage.guarded_candidate_instructions =
         analysis.recursive.guarded_candidate_instruction_addresses.size();
     coverage.analyzed_instruction_bytes = coverage.instructions * 2u;
-    coverage.unanalyzed_executable_bytes =
-        coverage.committed_executable_bytes > coverage.analyzed_instruction_bytes
-            ? coverage.committed_executable_bytes - coverage.analyzed_instruction_bytes
+    coverage.static_precompiled_bytes = coverage.analyzed_instruction_bytes;
+    coverage.initially_required_bytes = coverage.precompile_classes[static_cast<std::size_t>(
+        analysis::PrecompileClass::InitiallyReachable)];
+    coverage.currently_dispatchable_bytes = coverage.static_precompiled_bytes;
+    coverage.incomplete_initial_required_code_bytes =
+        coverage.initially_required_bytes > coverage.static_precompiled_bytes
+            ? coverage.initially_required_bytes - coverage.static_precompiled_bytes
             : 0u;
+    coverage.runtime_deferred_executable_bytes =
+        coverage.precompile_classes[static_cast<std::size_t>(
+            analysis::PrecompileClass::LoadableModule)] +
+        coverage.precompile_classes[static_cast<std::size_t>(
+            analysis::PrecompileClass::RuntimeMaterializable)];
+    coverage.runtime_materializable_bytes = coverage.runtime_deferred_executable_bytes;
+    coverage.never_executed_data_bytes = coverage.precompile_classes[static_cast<std::size_t>(
+        analysis::PrecompileClass::NeverExecutedData)];
+    coverage.unknown_executable_bytes = coverage.executable_byte_classes[static_cast<std::size_t>(
+                                            analysis::ExecutableByteClass::UnknownExecutable)] +
+                                        coverage.executable_byte_classes[static_cast<std::size_t>(
+                                            analysis::ExecutableByteClass::CompressedOrEncoded)];
+    for (const auto& range : inventory.ranges) {
+        if (range.byte_class == analysis::ExecutableByteClass::Padding &&
+            range.proof != analysis::RangeProofClass::Proven)
+            coverage.unproven_padding_bytes += range.size;
+        if (range.precompile_class == analysis::PrecompileClass::LoadableModule ||
+            range.precompile_class == analysis::PrecompileClass::RuntimeMaterializable) {
+            const auto& segment = project.image.segments()[range.segment_index];
+            if (segment.source_kind == io::ImageSourceKind::Unknown ||
+                segment.local_source_name.empty())
+                coverage.uncovered_runtime_materializable_bytes += range.size;
+        }
+    }
+    coverage.unknown_storage_bytes = coverage.precompile_classes[static_cast<std::size_t>(
+        analysis::PrecompileClass::Unknown)];
+    coverage.unanalyzed_executable_bytes = coverage.unknown_storage_bytes +
+                                           coverage.incomplete_initial_required_code_bytes +
+                                           coverage.uncovered_runtime_materializable_bytes;
     coverage.functions = analysis.recursive.functions.size();
     coverage.unknown_instructions = analysis.recursive.diagnostics.size();
     for (const auto& resolution : analysis.indirect_control_flow) {
@@ -917,10 +962,39 @@ AnalysisCoverage analysis_coverage(const io::LoadedProject& project,
         }
     }
     coverage.reachable_abort_edges += invalid_edges.size();
+    std::unordered_set<std::uint32_t> compiled_targets;
+    for (const auto& line : analysis.recursive.instructions)
+        compiled_targets.insert(line.address);
+    std::set<std::uint32_t> required_targets(project.image.entry_points().begin(),
+                                             project.image.entry_points().end());
+    for (const auto& line : analysis.recursive.instructions)
+        if (line.target_address.has_value()) required_targets.insert(*line.target_address);
+    for (const auto& edge : analysis.resolved_edges) required_targets.insert(edge.target_address);
+    const auto runtime_provenance_covers = [&](const std::uint32_t target) {
+        return std::any_of(inventory.ranges.begin(), inventory.ranges.end(), [&](const auto& range) {
+            const auto end = static_cast<std::uint64_t>(range.address) + range.size;
+            if (target < range.address || target >= end) return false;
+            if (range.precompile_class != analysis::PrecompileClass::LoadableModule &&
+                range.precompile_class != analysis::PrecompileClass::RuntimeMaterializable)
+                return false;
+            const auto& segment = project.image.segments()[range.segment_index];
+            return segment.source_kind != io::ImageSourceKind::Unknown &&
+                   !segment.local_source_name.empty();
+        });
+    };
+    for (const auto target : required_targets)
+        if (!compiled_targets.contains(target) && !runtime_provenance_covers(target))
+            ++coverage.uncovered_control_targets;
+    // All generated direct, indirect, return, exception and interrupt transfers use the
+    // validating runtime dispatcher. Contract regressions guard this value against drift.
+    coverage.dispatch_paths_without_validation = 0u;
     coverage.control_flow_complete =
         coverage.unknown_instructions == 0u && coverage.guarded_partial_control_flow == 0u &&
-        coverage.unresolved_control_flow == 0u && coverage.unanalyzed_executable_bytes == 0u &&
-        coverage.reachable_abort_edges == 0u;
+        coverage.unresolved_control_flow == 0u && coverage.reachable_abort_edges == 0u &&
+        coverage.incomplete_initial_required_code_bytes == 0u &&
+        coverage.uncovered_runtime_materializable_bytes == 0u &&
+        coverage.uncovered_control_targets == 0u &&
+        coverage.dispatch_paths_without_validation == 0u;
     return coverage;
 }
 
@@ -929,14 +1003,42 @@ std::string build_plan_json(const std::string_view status,
                             const AnalysisCoverage& coverage,
                             const bool host_compilation) {
     std::ostringstream output;
-    output << "{\"schema\":\"katana-build-plan\",\"version\":5,\"status\":"
+    output << "{\"schema\":\"katana-build-plan\",\"version\":7,\"status\":"
            << io::quote_json(status) << ",\"tool_version\":" << io::quote_json(tool_version)
            << ",\"native_execution\":false,\"host_compilation\":"
            << (host_compilation ? "true" : "false")
-           << ",\"analysis\":{\"committed_executable_bytes\":"
-           << coverage.committed_executable_bytes
+           << ",\"analysis\":{\"committed_executable_permission_bytes\":"
+           << coverage.committed_executable_permission_bytes
+           << ",\"static_precompiled_bytes\":" << coverage.static_precompiled_bytes
+           << ",\"initially_required_bytes\":" << coverage.initially_required_bytes
+           << ",\"runtime_materializable_bytes\":" << coverage.runtime_materializable_bytes
+           << ",\"unknown_storage_bytes\":" << coverage.unknown_storage_bytes
+           << ",\"currently_dispatchable_bytes\":" << coverage.currently_dispatchable_bytes
+           << ",\"uncovered_control_targets\":" << coverage.uncovered_control_targets
+           << ",\"dispatch_paths_without_validation\":"
+           << coverage.dispatch_paths_without_validation
+           << ",\"materialization_attempts\":" << coverage.materialization_attempts
+           << ",\"materialization_successes\":" << coverage.materialization_successes
+           << ",\"materialization_rejections\":" << coverage.materialization_rejections
+           << ",\"materialization_budget_failures\":"
+           << coverage.materialization_budget_failures
+           << ",\"generation_revalidation_failures\":"
+           << coverage.generation_revalidation_failures
+           << ",\"byte_identity_failures\":" << coverage.byte_identity_failures
+           << ",\"dispatch_validation_failures\":"
+           << coverage.dispatch_validation_failures
+           << ",\"committed_executable_bytes\":" << coverage.committed_executable_bytes
            << ",\"analyzed_instruction_bytes\":" << coverage.analyzed_instruction_bytes
            << ",\"unanalyzed_executable_bytes\":" << coverage.unanalyzed_executable_bytes
+           << ",\"runtime_deferred_executable_bytes\":"
+           << coverage.runtime_deferred_executable_bytes
+           << ",\"never_executed_data_bytes\":" << coverage.never_executed_data_bytes
+           << ",\"unknown_executable_bytes\":" << coverage.unknown_executable_bytes
+           << ",\"unproven_padding_bytes\":" << coverage.unproven_padding_bytes
+           << ",\"incomplete_initial_required_code_bytes\":"
+           << coverage.incomplete_initial_required_code_bytes
+           << ",\"uncovered_runtime_materializable_bytes\":"
+           << coverage.uncovered_runtime_materializable_bytes
            << ",\"instructions\":" << coverage.instructions
            << ",\"proven_instructions\":" << coverage.proven_instructions
            << ",\"guarded_candidate_instructions\":" << coverage.guarded_candidate_instructions
@@ -952,6 +1054,35 @@ std::string build_plan_json(const std::string_view status,
                   coverage.unresolved_control_flow
            << ",\"unknown_instructions\":" << coverage.unknown_instructions
            << ",\"reachable_abort_edges\":" << coverage.reachable_abort_edges
+           << ",\"executable_byte_classes\":{";
+    for (std::size_t current = 0u; current < coverage.executable_byte_classes.size(); ++current) {
+        if (current != 0u) output << ',';
+        output << io::quote_json(analysis::executable_byte_class_name(
+                      static_cast<analysis::ExecutableByteClass>(current)))
+               << ':' << coverage.executable_byte_classes[current];
+    }
+    output << "},\"precompile_sets\":{";
+    for (std::size_t current = 0u; current < coverage.precompile_classes.size(); ++current) {
+        if (current != 0u) output << ',';
+        output << io::quote_json(analysis::precompile_class_name(
+                      static_cast<analysis::PrecompileClass>(current)))
+               << ':' << coverage.precompile_classes[current];
+    }
+    output << "},\"mixed_range_roles\":{";
+    for (std::size_t current = 0u; current < coverage.mixed_range_roles.size(); ++current) {
+        if (current != 0u) output << ',';
+        output << io::quote_json(analysis::mixed_range_role_name(
+                      static_cast<analysis::MixedRangeRole>(current)))
+               << ':' << coverage.mixed_range_roles[current];
+    }
+    output << "},\"range_proof_classes\":{";
+    for (std::size_t current = 0u; current < coverage.range_proof_classes.size(); ++current) {
+        if (current != 0u) output << ',';
+        output << io::quote_json(analysis::range_proof_class_name(
+                      static_cast<analysis::RangeProofClass>(current)))
+               << ':' << coverage.range_proof_classes[current];
+    }
+    output << '}'
            << ",\"control_flow_complete\":" << (coverage.control_flow_complete ? "true" : "false")
            << "}}\n";
     return output.str();
@@ -1260,7 +1391,9 @@ JobResult ApplicationService::execute(const JobRequest& request,
             events.emit(JobState::Running, 20u, "analysis", {}, JobStepStatus::Running);
             const auto analysis =
                 analysis::analyze_control_flow(project.image, overrides ? &*overrides : nullptr);
-            result.analysis_coverage = analysis_coverage(project, analysis);
+            const auto executable_inventory =
+                analysis::build_executable_byte_inventory(project.image, analysis);
+            result.analysis_coverage = analysis_coverage(project, analysis, executable_inventory);
             result.checkpoints.push_back("analysis-complete");
             events.emit(JobState::Running,
                         45u,
@@ -1274,6 +1407,20 @@ JobResult ApplicationService::execute(const JobRequest& request,
             const auto analysis_path = work_root / "analysis.json";
             write_atomic(analysis_path, analysis_json);
             result.artifacts.push_back({"analysis", "analysis.json", artifact_hash(analysis_path)});
+            const auto inventory_path = work_root / "executable-inventory.json";
+            write_atomic(inventory_path,
+                         analysis::format_executable_inventory_json(
+                             project.image, executable_inventory, false));
+            result.artifacts.push_back({"executable-inventory",
+                                        "executable-inventory.json",
+                                        artifact_hash(inventory_path)});
+            const auto local_inventory_path = work_root / "executable-inventory.local.json";
+            write_atomic(local_inventory_path,
+                         analysis::format_executable_inventory_json(
+                             project.image, executable_inventory, true));
+            result.artifacts.push_back({"executable-inventory-local",
+                                        "executable-inventory.local.json",
+                                        artifact_hash(local_inventory_path)});
             const auto frontier_path = work_root / "control-flow-frontier.json";
             write_atomic(frontier_path, analysis::format_control_flow_frontier_json(analysis));
             result.artifacts.push_back({"control-flow-frontier",
@@ -1309,14 +1456,17 @@ JobResult ApplicationService::execute(const JobRequest& request,
                          " ungeloeste Kontrollflussstellen, " +
                          std::to_string(result.analysis_coverage->unknown_instructions) +
                          " unbekannte Instruktionen; " +
-                         std::to_string(result.analysis_coverage->unanalyzed_executable_bytes) +
-                         " ausfuehrbare Bytes sind nicht analysiert und " +
+                         std::to_string(result.analysis_coverage->uncovered_control_targets) +
+                         " Kontrollflussziele sind nicht abgedeckt, " +
+                         std::to_string(
+                             result.analysis_coverage->dispatch_paths_without_validation) +
+                         " Dispatchpfade umgehen die Validierung und " +
                          std::to_string(result.analysis_coverage->reachable_abort_edges) +
                          " erreichbare Kanten brechen die Analyse ab. " +
                          std::to_string(result.analysis_coverage->runtime_only_control_flow) +
                          " reine Laufzeitstellen sind separat validierend abgedeckt.",
-                     "Analyseblocker beheben; ein Hostbuild wird erst bei vollstaendig "
-                     "abgedecktem Kontrollfluss erzeugt.",
+                     "Kontrollfluss- oder Dispatchblocker beheben; unbekannte Speicherbytes "
+                     "allein blockieren keinen Hostbuild.",
                      std::nullopt});
                 if (request.kind == JobKind::Build || request.kind == JobKind::RunPreflight) {
                     const auto build_report = work_root / "build-plan.json";
@@ -1405,12 +1555,17 @@ JobResult ApplicationService::execute(const JobRequest& request,
                                     "host-compilation",
                                     {},
                                     JobStepStatus::Completed);
-                        const auto executable = host_build_root /
+                        auto executable = host_build_root /
 #ifdef _WIN32
                                                 "Debug" / "game.exe";
+                        if (!std::filesystem::exists(executable))
+                            executable = host_build_root / "game.exe";
 #else
                                                 "game";
 #endif
+                        if (!std::filesystem::is_regular_file(executable))
+                            throw std::runtime_error(
+                                "Hostbuild hat kein aktuelles ausfuehrbares Artefakt erzeugt.");
                         const auto published_executable = work_root / executable.filename();
                         std::filesystem::copy_file(
                             executable,
@@ -1754,9 +1909,38 @@ std::string format_job_result_json(const JobResult& result) {
         output << "null";
     } else {
         const auto& coverage = *result.analysis_coverage;
-        output << "{\"committed_executable_bytes\":" << coverage.committed_executable_bytes
+        output << "{\"committed_executable_permission_bytes\":"
+               << coverage.committed_executable_permission_bytes
+               << ",\"static_precompiled_bytes\":" << coverage.static_precompiled_bytes
+               << ",\"initially_required_bytes\":" << coverage.initially_required_bytes
+               << ",\"runtime_materializable_bytes\":" << coverage.runtime_materializable_bytes
+               << ",\"unknown_storage_bytes\":" << coverage.unknown_storage_bytes
+               << ",\"currently_dispatchable_bytes\":" << coverage.currently_dispatchable_bytes
+               << ",\"uncovered_control_targets\":" << coverage.uncovered_control_targets
+               << ",\"dispatch_paths_without_validation\":"
+               << coverage.dispatch_paths_without_validation
+               << ",\"materialization_attempts\":" << coverage.materialization_attempts
+               << ",\"materialization_successes\":" << coverage.materialization_successes
+               << ",\"materialization_rejections\":" << coverage.materialization_rejections
+               << ",\"materialization_budget_failures\":"
+               << coverage.materialization_budget_failures
+               << ",\"generation_revalidation_failures\":"
+               << coverage.generation_revalidation_failures
+               << ",\"byte_identity_failures\":" << coverage.byte_identity_failures
+               << ",\"dispatch_validation_failures\":"
+               << coverage.dispatch_validation_failures
+               << ",\"committed_executable_bytes\":" << coverage.committed_executable_bytes
                << ",\"analyzed_instruction_bytes\":" << coverage.analyzed_instruction_bytes
                << ",\"unanalyzed_executable_bytes\":" << coverage.unanalyzed_executable_bytes
+               << ",\"runtime_deferred_executable_bytes\":"
+               << coverage.runtime_deferred_executable_bytes
+               << ",\"never_executed_data_bytes\":" << coverage.never_executed_data_bytes
+               << ",\"unknown_executable_bytes\":" << coverage.unknown_executable_bytes
+               << ",\"unproven_padding_bytes\":" << coverage.unproven_padding_bytes
+               << ",\"incomplete_initial_required_code_bytes\":"
+               << coverage.incomplete_initial_required_code_bytes
+               << ",\"uncovered_runtime_materializable_bytes\":"
+               << coverage.uncovered_runtime_materializable_bytes
                << ",\"instructions\":" << coverage.instructions
                << ",\"proven_instructions\":" << coverage.proven_instructions
                << ",\"guarded_candidate_instructions\":" << coverage.guarded_candidate_instructions
@@ -1772,7 +1956,36 @@ std::string format_job_result_json(const JobResult& result) {
                       coverage.unresolved_control_flow
                << ",\"unknown_instructions\":" << coverage.unknown_instructions
                << ",\"reachable_abort_edges\":" << coverage.reachable_abort_edges
-               << ",\"control_flow_complete\":"
+               << ",\"executable_byte_classes\":{";
+        for (std::size_t current = 0u; current < coverage.executable_byte_classes.size();
+             ++current) {
+            if (current != 0u) output << ',';
+            output << io::quote_json(analysis::executable_byte_class_name(
+                          static_cast<analysis::ExecutableByteClass>(current)))
+                   << ':' << coverage.executable_byte_classes[current];
+        }
+        output << "},\"precompile_sets\":{";
+        for (std::size_t current = 0u; current < coverage.precompile_classes.size(); ++current) {
+            if (current != 0u) output << ',';
+            output << io::quote_json(analysis::precompile_class_name(
+                          static_cast<analysis::PrecompileClass>(current)))
+                   << ':' << coverage.precompile_classes[current];
+        }
+        output << "},\"mixed_range_roles\":{";
+        for (std::size_t current = 0u; current < coverage.mixed_range_roles.size(); ++current) {
+            if (current != 0u) output << ',';
+            output << io::quote_json(analysis::mixed_range_role_name(
+                          static_cast<analysis::MixedRangeRole>(current)))
+                   << ':' << coverage.mixed_range_roles[current];
+        }
+        output << "},\"range_proof_classes\":{";
+        for (std::size_t current = 0u; current < coverage.range_proof_classes.size(); ++current) {
+            if (current != 0u) output << ',';
+            output << io::quote_json(analysis::range_proof_class_name(
+                          static_cast<analysis::RangeProofClass>(current)))
+                   << ':' << coverage.range_proof_classes[current];
+        }
+        output << '}' << ",\"control_flow_complete\":"
                << (coverage.control_flow_complete ? "true" : "false") << '}';
     }
     output << ",\"artifacts\":[";

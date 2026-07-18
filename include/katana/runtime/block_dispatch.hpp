@@ -28,7 +28,9 @@ struct BlockDispatchOutcome {
 class CanonicalBlockDispatcher {
   public:
     explicit CanonicalBlockDispatcher(const RuntimeBlockTable& table,
-                                      DispatchDiagnosticRecorder* diagnostics = nullptr);
+                                      DispatchDiagnosticRecorder* diagnostics = nullptr,
+                                      DemandBlockMaterializer* materializer = nullptr,
+                                      IndirectDispatchMetrics* metrics = nullptr);
     [[nodiscard]] BlockDispatchOutcome
     dispatch(CpuState& cpu,
              BlockExecutionContext& context,
@@ -42,10 +44,10 @@ class CanonicalBlockDispatcher {
     incoming_link_count(const std::string& target_identity) const noexcept;
 
   private:
-    [[nodiscard]] RuntimeBlockHandle lookup(BlockAddress address,
-                                            const BlockVariantKey& variant) const;
     const RuntimeBlockTable& table_;
     DispatchDiagnosticRecorder* diagnostics_ = nullptr;
+    DemandBlockMaterializer* materializer_ = nullptr;
+    IndirectDispatchMetrics* metrics_ = nullptr;
     std::map<std::string, std::set<std::string>> incoming_;
 };
 

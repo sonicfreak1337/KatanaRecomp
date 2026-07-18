@@ -216,6 +216,7 @@ add_library(katana_runtime STATIC
     src/runtime/disc.cpp
     src/runtime/dreamcast_boot.cpp
     src/runtime/dreamcast_memory.cpp
+    src/runtime/executable_modules.cpp
     src/runtime/exception.cpp
     src/runtime/fpu.cpp
     src/runtime/gdi.cpp
@@ -280,6 +281,7 @@ add_library(katana_core STATIC
     src/analysis/basic_blocks.cpp
     src/analysis/function_analysis.cpp
     src/analysis/function_value_analysis.cpp
+    src/analysis/executable_inventory.cpp
     src/analysis/recursive_analysis.cpp
     src/analysis/value_analysis.cpp
     src/analysis/jump_table_analysis.cpp
@@ -890,6 +892,16 @@ target_link_libraries(katana-persistent-storage-tests PRIVATE katana_runtime)
 katana_enable_warnings(katana-persistent-storage-tests)
 add_test(NAME katana-persistent-storage-tests COMMAND katana-persistent-storage-tests)
 
+add_executable(katana-executable-modules-tests tests/runtime/executable_modules_tests.cpp)
+target_link_libraries(katana-executable-modules-tests PRIVATE katana_runtime)
+katana_enable_warnings(katana-executable-modules-tests)
+add_test(NAME katana-executable-modules-tests COMMAND katana-executable-modules-tests)
+
+add_executable(katana-execution-coverage-tests tests/runtime/execution_coverage_tests.cpp)
+target_link_libraries(katana-execution-coverage-tests PRIVATE katana_runtime)
+katana_enable_warnings(katana-execution-coverage-tests)
+add_test(NAME katana-execution-coverage-tests COMMAND katana-execution-coverage-tests)
+
 add_executable(katana-pvr-ta-tests tests/runtime/pvr_ta_tests.cpp)
 target_link_libraries(katana-pvr-ta-tests PRIVATE katana_runtime)
 katana_enable_warnings(katana-pvr-ta-tests)
@@ -1228,6 +1240,13 @@ add_test(
 add_executable(katana-recursive-analysis-tests
     tests/analysis/recursive_analysis_tests.cpp
 )
+
+add_executable(katana-executable-inventory-tests
+    tests/analysis/executable_inventory_tests.cpp
+)
+target_link_libraries(katana-executable-inventory-tests PRIVATE katana_core)
+katana_enable_warnings(katana-executable-inventory-tests)
+add_test(NAME katana-executable-inventory-tests COMMAND katana-executable-inventory-tests)
 
 target_link_libraries(katana-recursive-analysis-tests PRIVATE katana_core)
 katana_enable_warnings(katana-recursive-analysis-tests)

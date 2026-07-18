@@ -4,14 +4,36 @@
 #include "katana/runtime/dispatch_diagnostics.hpp"
 
 #include <cstdint>
+#include <map>
 #include <optional>
 #include <stdexcept>
 #include <string>
 
 namespace katana::runtime {
 
+class DemandBlockMaterializer;
+
 enum class IndirectDispatchKind : std::uint8_t { Call, TailJump, Return };
 enum class RuntimeDispatchClass : std::uint8_t { GuardedFallback, RuntimeOnly };
+
+enum class RuntimeTargetStability : std::uint8_t {
+    NeverHit,
+    Monomorphic,
+    SmallPolymorphic,
+    Dynamic
+};
+
+struct RuntimeOnlySiteMetrics {
+    std::uint32_t callsite = 0u;
+    std::uint64_t calls = 0u;
+    std::uint64_t hits = 0u;
+    std::uint64_t misses = 0u;
+    std::uint64_t materializations = 0u;
+    std::uint64_t invalidations = 0u;
+    std::vector<std::uint32_t> targets;
+    bool targets_truncated = false;
+    [[nodiscard]] RuntimeTargetStability stability() const noexcept;
+};
 
 struct IndirectDispatchFirstError {
     DispatchDiagnosticError error = DispatchDiagnosticError::None;
@@ -22,20 +44,28 @@ struct IndirectDispatchFirstError {
 
 class IndirectDispatchMetrics final {
   public:
-    void record_hit(RuntimeDispatchClass dispatch_class) noexcept;
+    void record_hit(RuntimeDispatchClass dispatch_class,
+                    std::uint32_t callsite = 0u,
+                    std::uint32_t target = 0u,
+                    bool materialized = false) noexcept;
     void record_miss(RuntimeDispatchClass dispatch_class,
                      DispatchDiagnosticError error,
                      std::uint32_t callsite,
                      std::uint32_t target) noexcept;
     void record_fallback(RuntimeDispatchClass dispatch_class) noexcept;
+    void record_invalidation(std::uint32_t callsite) noexcept;
     [[nodiscard]] std::uint64_t hits() const noexcept;
     [[nodiscard]] std::uint64_t misses() const noexcept;
     [[nodiscard]] std::uint64_t fallbacks() const noexcept;
     [[nodiscard]] std::uint64_t runtime_only_hits() const noexcept;
     [[nodiscard]] std::uint64_t runtime_only_misses() const noexcept;
     [[nodiscard]] std::uint64_t runtime_only_fallbacks() const noexcept;
+    [[nodiscard]] std::size_t runtime_only_site_count() const noexcept;
+    [[nodiscard]] std::uint64_t runtime_only_dispatch_share_ppm() const noexcept;
     [[nodiscard]] const std::optional<IndirectDispatchFirstError>& first_error() const noexcept;
-    [[nodiscard]] std::string serialize_json() const;
+    [[nodiscard]] const std::map<std::uint32_t, RuntimeOnlySiteMetrics>&
+    runtime_only_sites() const noexcept;
+    [[nodiscard]] std::string serialize_json(bool include_site_details = false) const;
 
   private:
     std::uint64_t hits_ = 0u;
@@ -45,6 +75,7 @@ class IndirectDispatchMetrics final {
     std::uint64_t runtime_only_misses_ = 0u;
     std::uint64_t runtime_only_fallbacks_ = 0u;
     std::optional<IndirectDispatchFirstError> first_error_;
+    std::map<std::uint32_t, RuntimeOnlySiteMetrics> runtime_only_sites_;
 };
 
 struct IndirectDispatchRequest {
@@ -58,6 +89,7 @@ struct IndirectDispatchRequest {
     DispatchDiagnosticRecorder* diagnostics = nullptr;
     RuntimeDispatchClass dispatch_class = RuntimeDispatchClass::GuardedFallback;
     IndirectDispatchMetrics* metrics = nullptr;
+    DemandBlockMaterializer* materializer = nullptr;
 };
 
 struct IndirectDispatchResult {
@@ -87,6 +119,7 @@ class IndirectDispatchError final : public std::runtime_error {
 };
 
 [[nodiscard]] const char* runtime_dispatch_class_name(RuntimeDispatchClass value) noexcept;
+[[nodiscard]] const char* runtime_target_stability_name(RuntimeTargetStability value) noexcept;
 
 [[nodiscard]] IndirectDispatchResult dispatch_indirect(CpuState& cpu,
                                                        const RuntimeBlockTable& table,

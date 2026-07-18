@@ -36,7 +36,14 @@ enum class DispatchDiagnosticError : std::uint8_t {
     UnmappedMemory,
     FirmwareDenied,
     Misaligned,
-    InvalidBoundary
+    InvalidBoundary,
+    PermissionDenied,
+    ProvenNonCode,
+    MaterializationBudget,
+    ByteIdentityMismatch,
+    GenerationMismatch,
+    RelocationMismatch,
+    StaleBlock
 };
 
 struct DispatchDiagnosticEvent {

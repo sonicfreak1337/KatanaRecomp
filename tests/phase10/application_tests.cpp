@@ -185,12 +185,15 @@ int main() {
             service.execute({name, kind, manifest_path, fixture.root / name, "0.40.0-dev"},
                             {},
                             [&](const app::JobEvent& event) { events.push_back(event); });
+        const auto failure_detail = result.diagnostics.empty()
+                                        ? std::string{}
+                                        : " Diagnose: " + result.diagnostics.back().message;
         require(result.state == app::JobState::Completed && !result.artifacts.empty() &&
                     result.failure_category == app::JobFailureCategory::None &&
                     events.front().state == app::JobState::Queued &&
                     events.back().state == app::JobState::Completed,
                 "Gemeinsamer Jobdienst verliert Zustand, Ereignisse oder Artefakte fuer " + name +
-                    '.');
+                    '.' + failure_detail);
         if (expected_identity.empty()) expected_identity = result.project_identity;
         require(result.project_identity == expected_identity,
                 "GUI-/CLI-Jobarten verwenden keine gemeinsame Projektidentitaet.");
@@ -241,7 +244,7 @@ int main() {
                         [&](const app::JobEvent& event) { incomplete_events.push_back(event); });
     const auto incomplete_json = app::format_job_result_json(incomplete_result);
     const auto incomplete_plan = fixture.root / "incomplete" / "build-plan.json";
-    require(incomplete_result.state == app::JobState::Partial &&
+    require(incomplete_result.state == app::JobState::Completed &&
                 incomplete_result.failure_category == app::JobFailureCategory::None &&
                 incomplete_result.analysis_coverage.has_value() &&
                 incomplete_result.analysis_coverage->unresolved_control_flow == 0u &&
@@ -250,26 +253,40 @@ int main() {
                 incomplete_result.analysis_coverage->analyzed_instruction_bytes == 4u &&
                 incomplete_result.analysis_coverage->unanalyzed_executable_bytes ==
                     incomplete_program.size() - 4u &&
+                incomplete_result.analysis_coverage->unknown_storage_bytes ==
+                    incomplete_program.size() - 4u &&
+                incomplete_result.analysis_coverage->static_precompiled_bytes == 4u &&
+                incomplete_result.analysis_coverage->initially_required_bytes == 4u &&
+                incomplete_result.analysis_coverage->runtime_materializable_bytes == 0u &&
+                incomplete_result.analysis_coverage->uncovered_control_targets == 0u &&
+                incomplete_result.analysis_coverage->dispatch_paths_without_validation == 0u &&
                 incomplete_result.analysis_coverage->reachable_abort_edges == 0u &&
-                !incomplete_result.analysis_coverage->control_flow_complete &&
-                incomplete_events.back().state == app::JobState::Partial &&
-                incomplete_json.find("\"version\":5") != std::string::npos &&
-                incomplete_json.find("\"state\":\"partial\"") != std::string::npos &&
+                incomplete_result.analysis_coverage->control_flow_complete &&
+                incomplete_events.back().state == app::JobState::Completed &&
+                incomplete_json.find("\"version\":7") != std::string::npos &&
+                incomplete_json.find("\"executable_byte_classes\"") != std::string::npos &&
+                incomplete_json.find("\"precompile_sets\"") != std::string::npos &&
+                incomplete_json.find("\"state\":\"completed\"") != std::string::npos &&
                 incomplete_json.find("\"unresolved_control_flow\":0") != std::string::npos &&
                 incomplete_json.find("\"unanalyzed_executable_bytes\":2097148") !=
                     std::string::npos &&
                 std::filesystem::exists(incomplete_plan) &&
-                !std::filesystem::exists(fixture.root / "incomplete" / "generated") &&
-                !std::filesystem::exists(fixture.root / "incomplete" / "game.exe"),
-            "Unvollstaendige Analyse wird als erfolgreicher Build behandelt.");
+                std::filesystem::exists(fixture.root / "incomplete" / "generated"),
+            "Sicheres Mixed-Segment mit unbekannten Speicherbytes baut nicht vollstaendig.");
     std::ifstream incomplete_plan_input(incomplete_plan, std::ios::binary);
     const std::string incomplete_plan_text((std::istreambuf_iterator<char>(incomplete_plan_input)),
                                            std::istreambuf_iterator<char>());
-    require(incomplete_plan_text.find("\"status\":\"partial\"") != std::string::npos &&
-                incomplete_plan_text.find("\"version\":5") != std::string::npos &&
-                incomplete_plan_text.find("\"host_compilation\":false") != std::string::npos &&
+    require(incomplete_plan_text.find("\"status\":\"built\"") != std::string::npos &&
+                incomplete_plan_text.find("\"version\":7") != std::string::npos &&
+                incomplete_plan_text.find("\"host_compilation\":true") != std::string::npos &&
+                incomplete_plan_text.find("\"unknown_storage_bytes\":2097148") !=
+                    std::string::npos &&
+                incomplete_plan_text.find("\"uncovered_control_targets\":0") !=
+                    std::string::npos &&
+                incomplete_plan_text.find("\"dispatch_paths_without_validation\":0") !=
+                    std::string::npos &&
                 incomplete_plan_text.find("\"tool_version\":\"0.40.0-dev\"") != std::string::npos,
-            "Partieller Buildplan verliert Zustand, Hostbuildgrenze oder Werkzeugversion.");
+            "Mixed-Segment-Buildplan verliert den sicheren Ausfuehrungsabdeckungsvertrag.");
 
     const auto publication_race = fixture.root / "publication-race";
     std::vector<app::JobEvent> publication_events;

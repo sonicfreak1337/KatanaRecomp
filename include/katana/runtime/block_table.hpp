@@ -50,6 +50,17 @@ struct RuntimeBlockHandle {
 };
 
 enum class RuntimeBlockLookupMode : std::uint8_t { Direct, ReferenceTree };
+enum class RuntimeBlockDispatchState : std::uint8_t {
+    StaticCompiled,
+    RuntimeMaterialized,
+    Rejected
+};
+
+struct RuntimeBlockDispatchStatus {
+    RuntimeBlockDispatchState state = RuntimeBlockDispatchState::Rejected;
+    std::uint64_t generation = 0u;
+    std::optional<RuntimeBlockHandle> handle;
+};
 
 struct RuntimeBlockLookupCounters {
     std::uint64_t direct_probes = 0u;
@@ -74,6 +85,10 @@ class RuntimeBlockTable {
     [[nodiscard]] std::optional<std::reference_wrapper<const RuntimeBlock>>
     resolve(RuntimeBlockHandle handle) const noexcept;
     [[nodiscard]] bool active(RuntimeBlockHandle handle) const noexcept;
+    [[nodiscard]] RuntimeBlockDispatchStatus
+    dispatch_status(std::uint32_t virtual_address, const BlockVariantKey& variant) const noexcept;
+    void mark_rejected(std::uint32_t virtual_address,
+                       const BlockVariantKey& variant) const noexcept;
     [[nodiscard]] std::size_t size() const noexcept;
     [[nodiscard]] RuntimeBlockLookupMode lookup_mode() const noexcept;
     void set_lookup_mode(RuntimeBlockLookupMode mode) noexcept;
@@ -152,6 +167,7 @@ class RuntimeBlockTable {
     const ExecutableCodeTracker* code_tracker_ = nullptr;
     RuntimeBlockLookupMode lookup_mode_ = RuntimeBlockLookupMode::Direct;
     mutable RuntimeBlockLookupCounters lookup_counters_;
+    mutable std::map<VariantAddressKey, std::uint64_t> rejected_generations_;
 };
 
 } // namespace katana::runtime

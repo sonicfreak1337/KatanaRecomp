@@ -280,6 +280,11 @@ int run_test(const int argc, char* argv[]) {
             generated_before.at("katana-port.cmake").find("katana_runtime") != std::string::npos &&
             generated_before.at("code/runtime-dispatch.cpp").find("dispatch_indirect") !=
                 std::string::npos &&
+            generated_before.at("metadata/port-project.json")
+                    .find("\"execution_coverage_contract\":\"validated-demand-v1\"") !=
+                std::string::npos &&
+            generated_before.at("metadata/port-project.json")
+                    .find("\"dispatch_paths_without_validation\":0") != std::string::npos &&
             generated_before.at("code/runtime-dispatch.cpp").find("generated-block-8C010000") !=
                 std::string::npos &&
             generated_before.at("code/runtime-dispatch.cpp")
@@ -292,6 +297,12 @@ int run_test(const int argc, char* argv[]) {
                 std::string::npos &&
             generated_before.at("code/runtime-dispatch.cpp")
                     .find("Runtime-Blockbudget erschoepft") != std::string::npos &&
+            generated_before.at("include/katana_port.hpp").find("runtime_only_profile_json") !=
+                std::string::npos &&
+            generated_before.at("code/runtime-dispatch.cpp")
+                    .find("runtime_only_dispatch_share_ppm") != std::string::npos &&
+            generated_before.at("code/runtime-dispatch.cpp").find("serialize_json(true)") !=
+                std::string::npos &&
             std::filesystem::exists(output / "CMakeLists.txt") &&
             read_text(output / "CMakeLists.txt").find("katana_core") == std::string::npos &&
             std::filesystem::exists(output / "src" / "main.cpp") &&
@@ -329,6 +340,12 @@ int run_test(const int argc, char* argv[]) {
 
     const auto guarded_disc = katana::platform::load_dreamcast_gdi_boot(gdi);
     auto guarded_image = katana::platform::make_dreamcast_disc_executable(guarded_disc);
+    require(guarded_image.segments().size() == 1u &&
+                guarded_image.segments()[0].kind == katana::io::SegmentKind::Mixed &&
+                guarded_image.segments()[0].source_kind ==
+                    katana::io::ImageSourceKind::DiscBootFile &&
+                guarded_image.segments()[0].bytes.size() == guarded_image.segments()[0].memory_size,
+            "GDI-Loader markiert die Bootdatei pauschal als Code oder erfindet Zero-Fill.");
     auto guarded_analysis = katana::analysis::analyze_control_flow(guarded_image);
     require(!guarded_analysis.indirect_control_flow.empty() &&
                 !guarded_analysis.resolved_edges.empty(),
@@ -369,6 +386,38 @@ int run_test(const int argc, char* argv[]) {
                 guarded_metadata.find("\"guarded_partial_control_flow\":0") != std::string::npos &&
                 guarded_metadata.find("\"unresolved_control_flow\":0") != std::string::npos,
             "Guarded-Kandidaten erreichen Portcodegen oder dynamischen Default nicht.");
+
+    auto runtime_only_analysis = guarded_analysis;
+    auto& runtime_only_resolution = runtime_only_analysis.indirect_control_flow.front();
+    runtime_only_resolution.status = katana::analysis::ResolutionStatus::Unresolved;
+    runtime_only_resolution.evidence = katana::analysis::ControlFlowEvidence::RuntimeOnly;
+    runtime_only_resolution.target.reset();
+    runtime_only_resolution.targets.clear();
+    runtime_only_resolution.analysis_candidates.clear();
+    runtime_only_resolution.reason = "synthetic-runtime-contract";
+    runtime_only_analysis.resolved_edges.clear();
+    const auto runtime_only_program = katana::ir::lower_program(runtime_only_analysis);
+    const auto runtime_only_output = fixture.root / "runtime-only-port";
+    static_cast<void>(export_dreamcast_port_project({guarded_image,
+                                                     runtime_only_analysis,
+                                                     runtime_only_program,
+                                                     guarded_inputs,
+                                                     katana::platform::dreamcast_disc_boot_address,
+                                                     katana::platform::dreamcast_disc_boot_address,
+                                                     guarded_disc.boot_file.size(),
+                                                     "runtime-only-fixture"},
+                                                    runtime_only_output,
+                                                    options));
+    const auto runtime_only_sources = snapshot(runtime_only_output / "generated");
+    std::string runtime_only_text;
+    for (const auto& [path, content] : runtime_only_sources)
+        if (path.starts_with("code/unit-")) runtime_only_text += content;
+    require(runtime_only_text.find("runtime_only_jump") != std::string::npos &&
+                runtime_only_sources.at("metadata/port-project.json")
+                        .find("\"runtime_only_control_flow\":1") != std::string::npos &&
+                runtime_only_sources.at("metadata/port-project.json")
+                        .find("\"unresolved_control_flow\":0") != std::string::npos,
+            "Portexport verliert den validierenden Runtime-only-Vertrag.");
 
     {
         std::ofstream user(output / "src" / "notes.txt", std::ios::trunc);
@@ -429,16 +478,16 @@ int run_test(const int argc, char* argv[]) {
     write_binary(fixture.root / "disc" / "high.bin", incomplete_track);
     const auto incomplete_output = fixture.root / "incomplete-port";
     static_cast<void>(export_dreamcast_port_project(gdi, incomplete_output, options));
-    const auto runtime_only_sources = snapshot(incomplete_output / "generated");
-    std::string runtime_only_text;
-    for (const auto& [path, content] : runtime_only_sources)
-        if (path.starts_with("code/unit-")) runtime_only_text += content;
-    require(runtime_only_text.find("runtime_only_jump") != std::string::npos &&
-                runtime_only_sources.at("metadata/port-project.json")
+    const auto inferred_runtime_sources = snapshot(incomplete_output / "generated");
+    std::string inferred_runtime_text;
+    for (const auto& [path, content] : inferred_runtime_sources)
+        if (path.starts_with("code/unit-")) inferred_runtime_text += content;
+    require(inferred_runtime_text.find("runtime_only_jump") != std::string::npos &&
+                inferred_runtime_sources.at("metadata/port-project.json")
                         .find("\"runtime_only_control_flow\":1") != std::string::npos &&
-                runtime_only_sources.at("metadata/port-project.json")
+                inferred_runtime_sources.at("metadata/port-project.json")
                         .find("\"unresolved_control_flow\":0") != std::string::npos,
-            "Portexport verliert den validierenden Runtime-only-Vertrag.");
+            "Allgemeiner Runtimezeiger erreicht den validierenden Portvertrag nicht.");
 
     std::cout << "KR-3507/KR-4502/KR-4507 reproduzierbarer Port-Projektexport erfolgreich.\n";
     return EXIT_SUCCESS;

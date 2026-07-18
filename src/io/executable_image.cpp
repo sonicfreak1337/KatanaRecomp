@@ -216,8 +216,40 @@ const char* segment_kind_name(const SegmentKind kind) noexcept {
         return "code";
     case SegmentKind::Data:
         return "data";
+    case SegmentKind::Mixed:
+        return "mixed";
     }
     return "unknown";
+}
+
+const char* image_source_kind_name(const ImageSourceKind kind) noexcept {
+    switch (kind) {
+    case ImageSourceKind::Unknown:
+        return "unknown";
+    case ImageSourceKind::RawBinary:
+        return "raw_binary";
+    case ImageSourceKind::ElfLoadSegment:
+        return "elf_load_segment";
+    case ImageSourceKind::DiscBootFile:
+        return "disc_boot_file";
+    case ImageSourceKind::DiscModule:
+        return "disc_module";
+    case ImageSourceKind::RuntimeMemory:
+        return "runtime_memory";
+    }
+    return "unknown";
+}
+
+const char* image_load_phase_name(const ImageLoadPhase phase) noexcept {
+    switch (phase) {
+    case ImageLoadPhase::Initial:
+        return "initial";
+    case ImageLoadPhase::RuntimeModule:
+        return "runtime_module";
+    case ImageLoadPhase::Overlay:
+        return "overlay";
+    }
+    return "initial";
 }
 
 const char* symbol_kind_name(const SymbolKind kind) noexcept {

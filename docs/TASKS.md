@@ -574,7 +574,7 @@ Runtime-ABI 13 und Portprojektvertrag 5 versionieren die Integration. Vertrag
 und die bei KR-4704 umzusetzenden Regressionen stehen in
 `MUTABLE_STORAGE_AND_PACING.md`.
 
-### [ ] KR-4704 - v0.47 Gate-Vorbereitung
+### [x] KR-4704 - v0.47 Gate-Vorbereitung
 
 Abhaengigkeiten: KR-4703, KR-4715 bis KR-4719, KR-4625
 Prioritaet: P0
@@ -591,7 +591,7 @@ Akzeptanz:
   Root-Version bereitgestellt
 - danach fuer Nutzerreview stoppen
 
-Zwischenstand:
+Abschluss:
 
 - Decoder, IR, Backend und Runtime decken die zuvor unbekannten OCBP-/OCBWB-
   Instruktionen mit einem expliziten kohaerenten Cachevertrag ab
@@ -602,25 +602,35 @@ Zwischenstand:
   `runtime_only=1.826`, `reachable_abort_edges=0`
 - aktuelles Root-GUI-Paket, Dialoghelfer und Runtime-SDK sind gebaut und der
   relocatable synthetische GDI-Portbuild ist verifiziert
-- offen bleiben 6.624.892 nicht analysierte committed executable Bytes; daher
-  sind strikter privater Doppelbuild, finales Gate und Taskabschluss noch offen
-- keine private `game.exe` wurde gestartet
+- der neue Gatevertrag blockiert unbekannte Speicherbytes nicht allein wegen
+  einer ausfuehrbaren Segmentberechtigung; sie bleiben unbekannt und besitzen
+  keinen impliziten Dispatchstatus
+- alle direkten, indirekten, Return-, Exception- und Interrupttransfers laufen
+  durch die zentrale Ziel- und Generationsvalidierung
+- der private doppelte Build-only-Nachweis baut zwei frische Hostartefakte mit
+  identischen portablen Metadaten und Quellen
+- `uncovered_control_targets=0`, `dispatch_paths_without_validation=0` und alle
+  bisherigen Kontrollflussblocker sind null
+- das aktuelle Hostartefakt ist an Jobidentitaet und neu ermittelten Hash
+  gebunden; kein Runtimeprozess wurde gestartet
 
-Naechster Arbeitsblock:
-
-- 6.624.892 offene Bytes adressfrei und lokal detailliert nach Inhalt,
-  Segment, Discdatei, Ladephase und Schreibbarkeit inventarisieren
-- Loaderberechtigungen gegen reale Ladegroesse, Reservierung, Zero-Fill,
-  Code-/Datensegmente, Nachladerollen, Alignment und Padding pruefen
-- `initially_reachable`, `statically_discoverable`, `loadable_module`,
-  `runtime_materializable` und `never_executed_data` getrennt modellieren
-- dynamische Module und Overlays mit Herkunft, Relocation, Lebenszeit,
-  Invalidierung und synthetischen Fixtures absichern
-- deterministische, budgetierte und abschaltbare Demand-driven-
-  Blockmaterialisierung mit sichtbarem Miss implementieren
-- Runtime-only-Sites nach Aufrufen, Zielen, Stabilitaet, Misses,
-  Materialisierungen und Invalidierungen profilieren und nur beweisbar stabile
-  Sites spezialisieren
+Umgesetzt als allgemeiner Vertrag mit adressfreiem und lokalem Inventar,
+`mixed`-Bootsegmenten, getrennten Precompile-Mengen, versioniertem
+Modul-/Overlaykatalog, Byteidentitaetspruefung, budgetierter optionaler
+Materialisierung und begrenzten Siteprofilen. Der private reine Analyselauf
+klassifiziert 110.404 Bytes als initial erforderlich und statisch vorkompiliert.
+16.554 Bytes sind bewiesene
+Literalpools. MOVA ist dabei eine Adressreferenz, kein Literalbeweis. 408.019
+Padding-Kandidaten und 6.200.319 `unknown_executable`-Bytes bleiben unbekannter
+Speicher, blockieren den sicheren Export aber nicht ohne erreichbaren
+Kontrolltransfer.
+Rollen, Beweisklassen, Dateiprovenienz, Referenzen, Laufzeitwrites,
+Relocationen, potenzielle Kontrollflussziele und Klassifikationsgruende stehen
+im lokalen Bericht. Der adressfreie Bericht gruppiert 1.603 dominant
+unbekannte Seiten in 14 Ursachenklassen nach Quelle, Ladephase,
+Schreibbarkeit, Evidenz, Entropie, Decodedichte und Naehe zu bewiesenem Code.
+Decode-Dichte allein kann niemals Code beweisen. Vertrag:
+`EXECUTABLE_INVENTORY_AND_MODULES.md`.
 
 ### [ ] KR-4705 - v0.47 interne Freigabe
 

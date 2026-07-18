@@ -2,12 +2,12 @@
 
 Interner Entwicklungsmeilenstein: `v0.46.0`
 Phase: Core-Stabilisierung vor v0.47
-Naechster Task: `KR-4704`
+Naechster Task: Nutzerreview, danach `KR-4705`
 Naechstes Gate: `v0.47.0` - Core-Stabilisierung und generische Retail-Runtime
 Weitere interne Gates: `v0.48.0` Integration und `v0.49.0` Alpha-Candidate
 Erster oeffentlicher Release: `v0.50.0` Alpha
 
-## KR-4704 Gate-Vorbereitung in Arbeit
+## KR-4704 technisch bestanden
 
 Die aktuelle Kontrollflussfront umfasst in der privaten Build-only-Analyse
 55.202 Instruktionen und 813 Funktionen. Die drei zuvor unbekannten
@@ -28,12 +28,14 @@ aktive Codegeneration gueltige Bloecke; ein Miss bricht strukturiert ab.
 Der aktuelle private Aggregatstand ist `resolved=1`,
 `guarded_complete=0`, `guarded_partial=0`, `runtime_only=1.826`,
 `unresolved=0`, `unknown_instructions=0` und
-`reachable_abort_edges=0`. Der strikte Gatebuild ist noch nicht erfolgreich:
-6.624.892 committed executable Bytes sind weiterhin nicht analysiert. Deshalb
-wurde kein Erfolg erfunden, keine private `game.exe` gestartet und KR-4704
-nicht abgeschlossen. Der diagnostische `probe-port`-Export darf einen
-unvollstaendigen Analysebericht materialisieren, gilt aber ausdruecklich nicht
-als Gateevidenz.
+`reachable_abort_edges=0`, `uncovered_control_targets=0` und
+`dispatch_paths_without_validation=0`. Der neue Gatevertrag verlangt nicht
+mehr die statische Klassifikation aller Bytes mit ausfuehrbarer
+Speicherberechtigung. Unbekannter Speicher bleibt unbekannt und nicht
+dispatchbar, bis ein validierter Kontrolltransfer ihn erreicht. Der private
+doppelte Build-only-Nachweis ist erfolgreich; beide frischen Hostbuilds
+besitzen identische portable Metadaten und generierte Quellen. Das aktuelle
+Executable wurde als Jobartefakt neu gehasht, aber nicht gestartet.
 
 Persistenz und Host-Pacing besitzen nun eigene Regressionen. Windows liest
 Nutzerdatenpfade ohne unsicheren `getenv`-Pfad, Firmwarefehler werden in der
@@ -49,16 +51,19 @@ Datenaudit und atomische Root-GUI-Verteilung. Der Rootstand enthaelt eine
 aktuelle verifizierte `KatanaRecomp-GUI.exe`, den Dialoghelfer und das
 zugehoerige Runtime-SDK. Die fokussierten Decoder-, Analyse-, IR-, Backend-,
 Runtime-, Portexport- und GUI-Regressionen sowie der relocatable synthetische
-GDI-Paketbuild bestehen. Das vollstaendige KR-4704-Gate bleibt bis zur
-Schliessung der nicht analysierten committed Bytes ausstehend.
+GDI-Paketbuild bestehen. KR-4704 ist damit technisch bestanden und wartet auf
+das Nutzerreview vor KR-4705.
 
-Die naechste Arbeit beginnt mit einem exakten Inventar der 6.624.892 Bytes:
+Das neue exakte Inventar klassifiziert die zuvor pauschal betrachteten Bytes:
 `proven_reachable_code`, `runtime_discovered_code`,
 `unreachable_decodable_code`, `embedded_data`, `literal_pool`, `jump_table`,
-`padding`, `overlay_candidate`, `module_candidate`,
+`pointer_table`, `padding`, `overlay_candidate`, `module_candidate`,
 `compressed_or_encoded` und `unknown_executable`. Oeffentliche Aggregate sind
 adressfrei; lokale Details werden zusaetzlich nach Segment, Discdatei,
-Ladephase und Schreibbarkeit gruppiert. Anschliessend werden reale Ladegroesse,
+Ladephase und Schreibbarkeit gruppiert. 4-KiB-Seiten werden nach Rolle,
+Beweisklasse, Referenz-, Relocation- und Zielevidenz, Entropie, Decodedichte
+und Abstand zu bewiesenem Code gruppiert. Eine gueltige SH-4-Decodierung allein
+ist kein Codebeweis. Anschliessend werden reale Ladegroesse,
 Reservierung, Zero-Fill, Code-/Datensegmente, Boot-/Nachladerollen,
 Berechtigungen, Alignment und Padding im Loadervertrag geprueft.
 
@@ -71,9 +76,32 @@ verlassen. Neue Module und Overlays erhalten synthetische Fixtures. Die
 Demand-driven-Materialisierung validiert Ziel und Herkunft, findet oder baut
 einen budgetierten Block, registriert ihn und dispatcht erst danach. Sie bleibt
 deterministisch und abschaltbar; ein Interpreter ist nur Referenzpfad.
-Runtime-only-Sites werden spaeter nach Aufrufen, Zielvielfalt, Stabilitaet,
-Misses, Materialisierungen und Invalidierungen profiliert, damit nachweislich
-mono- oder klein polymorphe Sites sicher spezialisiert werden koennen.
+Runtime-only-Sites werden nach Aufrufen, Zielvielfalt, Stabilitaet, Misses,
+Materialisierungen und Invalidierungen profiliert, damit nachweislich mono-
+oder klein polymorphe Sites spaeter sicher spezialisiert werden koennen.
+
+Die allgemeine Grundlage ist nun umgesetzt. Der GDI-Loader beschreibt die
+rohe Bootdatei als `mixed` statt pauschal als Code; ihre 6.735.296 Dateibytes
+sind exakt committed, ohne reservierten Zero-Fill. Der private reine
+Analyselauf fand 110.404 initial erreichbare Instruktionsbytes und 16.554
+bewiesene Literalpoolbytes. MOVA liefert nur eine Adressreferenz und wird nicht
+mehr faelschlich als Literalpool gerechnet. 408.019 gleichfoermige Bytes
+bleiben als unbewiesene Padding-Kandidaten unbekannt; 6.200.319 Bytes bleiben
+`unknown_executable`. Insgesamt bleiben 6.608.338 unbekannte Speicherbytes,
+die ohne validierten Kontrolltransfer weder statisch analysiert noch
+dispatchbar sind.
+Bewiesenes Padding ist nur fuer streng quellgebundenes, ausgerichtetes
+Dateiend-Fill ohne Referenz-, Relocation-, Modul- oder Kontrollflussevidenz
+zulaessig; im privaten Abbild erfuellt aktuell kein Kandidat diesen Vertrag.
+Module, Overlays, Lebenszeit, Relocationen, Byteidentitaet,
+Invalidierung, budgetierte Materialisierung und Runtime-only-Siteprofile sind
+synthetisch abgesichert. Runtime-ABI 14, Portprojektvertrag 6 und
+Anwendungsvertrag 7 versionieren die Erweiterung. Die 1.603 dominant
+unbekannten Seiten sind adressfrei in 14 Ursachengruppen zerlegt; die groessten
+Gruppen besitzen keine Referenz, Relocation oder Kontrollflussevidenz und
+werden nach Entropie und Decodedichte statt einzeln nach Adresse priorisiert.
+Der Gesamtvertrag steht in
+[`EXECUTABLE_INVENTORY_AND_MODULES.md`](EXECUTABLE_INVENTORY_AND_MODULES.md).
 
 ## KR-4703 umgesetzt
 

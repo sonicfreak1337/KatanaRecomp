@@ -309,14 +309,14 @@ int main() {
     require(site(runtime_pointer, 0u)->origin_class ==
                     katana::analysis::IndirectControlFlowOriginClass::RuntimePointer &&
                 site(runtime_pointer, 0u)->evidence ==
-                    katana::analysis::ControlFlowEvidence::Unresolved &&
+                    katana::analysis::ControlFlowEvidence::RuntimeOnly &&
                 katana::analysis::control_flow_report_status(*site(runtime_pointer, 0u)) ==
-                    katana::analysis::ControlFlowReportStatus::Unresolved &&
+                    katana::analysis::ControlFlowReportStatus::RuntimeOnly &&
                 site(runtime_pointer, 0u)->reason ==
                     "dynamic-runtime-pointer-register-value-unknown" &&
                 site(runtime_pointer, 0u)->evidence_origins ==
                     std::vector{katana::analysis::AnalysisEvidenceOrigin::RuntimeClassification},
-            "Allgemeiner unbekannter Zeiger wurde faelschlich als Runtime-only freigegeben: " +
+            "Allgemeiner unbekannter Zeiger besitzt keinen validierten Runtimevertrag: " +
                 std::to_string(static_cast<int>(site(runtime_pointer, 0u)->origin_class)) + "/" +
                 std::to_string(static_cast<int>(site(runtime_pointer, 0u)->evidence)) + "/" +
                 std::to_string(static_cast<int>(katana::analysis::control_flow_report_status(

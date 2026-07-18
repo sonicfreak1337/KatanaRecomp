@@ -240,15 +240,19 @@ ExecutableImage load_elf32_sh(const std::span<const std::uint8_t> bytes,
             bytes.begin() + static_cast<std::ptrdiff_t>(file_offset),
             bytes.begin() + static_cast<std::ptrdiff_t>(file_offset + file_size));
         try {
-            image.add_segment({"LOAD" + std::to_string(load_index++),
-                               virtual_address,
-                               file_offset,
-                               memory_size,
-                               (flags & kFlagExecute) != 0u ? SegmentKind::Code : SegmentKind::Data,
-                               {(flags & kFlagRead) != 0u,
-                                (flags & kFlagWrite) != 0u,
-                                (flags & kFlagExecute) != 0u},
-                               std::move(segment_bytes)});
+            ImageSegment segment{"LOAD" + std::to_string(load_index++),
+                                 virtual_address,
+                                 file_offset,
+                                 memory_size,
+                                 (flags & kFlagExecute) != 0u ? SegmentKind::Code
+                                                              : SegmentKind::Data,
+                                 {(flags & kFlagRead) != 0u,
+                                  (flags & kFlagWrite) != 0u,
+                                  (flags & kFlagExecute) != 0u},
+                                 std::move(segment_bytes)};
+            segment.source_kind = ImageSourceKind::ElfLoadSegment;
+            segment.local_source_name = path.filename().string();
+            image.add_segment(std::move(segment));
         } catch (const std::exception& error) {
             fail(path, header_offset, error.what());
         }

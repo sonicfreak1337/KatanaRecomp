@@ -116,6 +116,7 @@ RuntimeBlockHandle RuntimeBlockTable::insert(RuntimeBlock block, const bool runt
                                 block.provenance);
     }
     block.runtime_registered = runtime_registered;
+    rejected_generations_.erase({block.variant, block.virtual_start});
     const auto identity = stable_runtime_block_identity(block);
 
     if (const auto known = identities_.find(identity); known != identities_.end()) {
@@ -316,6 +317,29 @@ bool RuntimeBlockTable::active(const RuntimeBlockHandle handle) const noexcept {
     return resolve(handle).has_value();
 }
 
+RuntimeBlockDispatchStatus RuntimeBlockTable::dispatch_status(
+    const std::uint32_t virtual_address,
+    const BlockVariantKey& variant) const noexcept {
+    if (const auto handle = lookup(virtual_address, variant)) {
+        const auto record = records_.find(handle->id);
+        if (record != records_.end())
+            return {record->second.static_block ? RuntimeBlockDispatchState::StaticCompiled
+                                                : RuntimeBlockDispatchState::RuntimeMaterialized,
+                    record->second.generation,
+                    handle};
+    }
+    const auto rejected = rejected_generations_.find({variant, virtual_address});
+    return {RuntimeBlockDispatchState::Rejected,
+            rejected == rejected_generations_.end() ? 0u : rejected->second,
+            std::nullopt};
+}
+
+void RuntimeBlockTable::mark_rejected(const std::uint32_t virtual_address,
+                                      const BlockVariantKey& variant) const noexcept {
+    auto& generation = rejected_generations_[{variant, virtual_address}];
+    if (generation != std::numeric_limits<std::uint64_t>::max()) ++generation;
+}
+
 std::size_t RuntimeBlockTable::size() const noexcept {
     return active_count_;
 }
@@ -429,6 +453,7 @@ void RuntimeBlockTable::clear() noexcept {
     active_count_ = 0u;
     static_sealed_ = false;
     lookup_counters_ = {};
+    rejected_generations_.clear();
 }
 
 } // namespace katana::runtime

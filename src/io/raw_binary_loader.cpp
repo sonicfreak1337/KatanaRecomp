@@ -15,13 +15,16 @@ ExecutableImage load_raw_binary(const std::filesystem::path& path,
     }
 
     ExecutableImage image(path);
-    image.add_segment({options.segment_name,
-                       options.base_address,
-                       0u,
-                       bytes.size(),
-                       options.segment_kind,
-                       options.permissions,
-                       std::move(bytes)});
+    ImageSegment segment{options.segment_name,
+                         options.base_address,
+                         0u,
+                         bytes.size(),
+                         options.segment_kind,
+                         options.permissions,
+                         std::move(bytes)};
+    segment.source_kind = ImageSourceKind::RawBinary;
+    segment.local_source_name = path.filename().string();
+    image.add_segment(std::move(segment));
     if (options.entry_point.has_value()) {
         image.add_entry_point(*options.entry_point);
     }

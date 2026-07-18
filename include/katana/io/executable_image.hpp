@@ -10,7 +10,7 @@
 
 namespace katana::io {
 
-enum class SegmentKind { Unknown, Code, Data };
+enum class SegmentKind { Unknown, Code, Data, Mixed };
 
 enum class SymbolKind { Unknown, Function, Object };
 
@@ -19,6 +19,17 @@ enum class SymbolBinding { Local, Global, Weak, Unknown };
 enum class RelocationKind { None, Absolute32, PcRelative32, Unsupported };
 
 enum class GuestCallAbi { Unknown, SuperHC };
+
+enum class ImageSourceKind {
+    Unknown,
+    RawBinary,
+    ElfLoadSegment,
+    DiscBootFile,
+    DiscModule,
+    RuntimeMemory
+};
+
+enum class ImageLoadPhase { Initial, RuntimeModule, Overlay };
 
 // EntryPointStraightLineQuiescent is an explicit loader contract: until the first
 // guest-visible control-flow boundary, no DMA engine, device callback, interrupt
@@ -57,6 +68,9 @@ struct ImageSegment {
     SegmentKind kind = SegmentKind::Unknown;
     SegmentPermissions permissions;
     std::vector<std::uint8_t> bytes;
+    ImageSourceKind source_kind = ImageSourceKind::Unknown;
+    ImageLoadPhase load_phase = ImageLoadPhase::Initial;
+    std::string local_source_name;
 
     [[nodiscard]] std::uint64_t end_address() const noexcept;
     [[nodiscard]] bool contains(std::uint32_t address, std::size_t width = 1u) const noexcept;
@@ -100,5 +114,7 @@ class ExecutableImage {
 [[nodiscard]] const char* segment_kind_name(SegmentKind kind) noexcept;
 [[nodiscard]] const char* symbol_kind_name(SymbolKind kind) noexcept;
 [[nodiscard]] const char* relocation_kind_name(RelocationKind kind) noexcept;
+[[nodiscard]] const char* image_source_kind_name(ImageSourceKind kind) noexcept;
+[[nodiscard]] const char* image_load_phase_name(ImageLoadPhase phase) noexcept;
 
 } // namespace katana::io

@@ -81,7 +81,9 @@ void classify_image(const katana::io::ExecutableImage& image,
             add_range(result.ranges, segment_start, segment_end, DiscoveredByteKind::Data);
             continue;
         }
-        if (segment.kind != katana::io::SegmentKind::Code || !segment.permissions.executable) {
+        if ((segment.kind != katana::io::SegmentKind::Code &&
+             segment.kind != katana::io::SegmentKind::Mixed) ||
+            !segment.permissions.executable) {
             add_range(result.ranges, segment_start, segment_end, DiscoveredByteKind::Unknown);
             continue;
         }

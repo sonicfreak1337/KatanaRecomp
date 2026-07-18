@@ -63,13 +63,17 @@ io::ExecutableImage make_dreamcast_disc_executable(const DreamcastDiscBoot& disc
     io::ExecutableImage image;
     image.set_guest_call_abi(io::GuestCallAbi::SuperHC);
     image.set_initial_snapshot_policy(io::InitialSnapshotPolicy::EntryPointStraightLineQuiescent);
-    image.add_segment({".text",
-                       dreamcast_disc_boot_address,
-                       0u,
-                       disc.boot_file.size(),
-                       io::SegmentKind::Code,
-                       {true, true, true},
-                       disc.boot_file});
+    io::ImageSegment boot_segment{".text",
+                                  dreamcast_disc_boot_address,
+                                  0u,
+                                  disc.boot_file.size(),
+                                  io::SegmentKind::Mixed,
+                                  {true, true, true},
+                                  disc.boot_file};
+    boot_segment.source_kind = io::ImageSourceKind::DiscBootFile;
+    boot_segment.load_phase = io::ImageLoadPhase::Initial;
+    boot_segment.local_source_name = disc.metadata.boot_file_name;
+    image.add_segment(std::move(boot_segment));
     image.add_entry_point(dreamcast_disc_boot_address);
     return image;
 }

@@ -22,7 +22,8 @@ CodeAddressValidation validate_decode_candidate(const katana::io::ExecutableImag
     if (containing == nullptr || !containing->contains(address, width)) {
         return {CodeAddressStatus::OutsideSegments, containing};
     }
-    if (containing->kind != katana::io::SegmentKind::Code) {
+    if (containing->kind != katana::io::SegmentKind::Code &&
+        containing->kind != katana::io::SegmentKind::Mixed) {
         return {CodeAddressStatus::NotCodeSegment, containing};
     }
     if (!containing->permissions.executable) {

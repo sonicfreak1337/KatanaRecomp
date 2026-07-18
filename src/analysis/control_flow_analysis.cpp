@@ -396,6 +396,7 @@ void classify_dynamic_sites(const std::span<const katana::sh4::DisassemblyLine> 
                 } else if (!resolution.reason.starts_with("dynamic-runtime-pointer")) {
                     resolution.reason = "dynamic-runtime-pointer-" + resolution.reason;
                 }
+                runtime_contract = true;
                 break;
             case IndirectControlFlowOriginClass::NotApplicable:
             case IndirectControlFlowOriginClass::Table:

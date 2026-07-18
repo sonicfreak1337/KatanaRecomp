@@ -64,7 +64,8 @@ select_functions(const std::span<const katana::ir::Function> program,
 std::string generated_header(const std::string& entry_namespace) {
     return "#pragma once\n\n"
            "#include \"katana/runtime/platform_services.hpp\"\n"
-           "#include \"katana/runtime/runtime.hpp\"\n\n"
+           "#include \"katana/runtime/runtime.hpp\"\n"
+           "#include <string>\n\n"
            "namespace " +
            entry_namespace +
            " {\n"
@@ -77,6 +78,9 @@ std::string generated_header(const std::string& entry_namespace) {
            "    std::uint64_t runtime_only_dispatch_hits = 0u;\n"
            "    std::uint64_t runtime_only_dispatch_misses = 0u;\n"
            "    std::uint64_t runtime_only_dispatch_fallbacks = 0u;\n"
+           "    std::uint64_t runtime_only_sites = 0u;\n"
+           "    std::uint64_t runtime_only_dispatch_share_ppm = 0u;\n"
+           "    std::string runtime_only_profile_json;\n"
            "    std::uint32_t runtime_dispatch_first_error = 0u;\n"
            "    std::uint32_t final_pc = 0u;\n"
            "    std::uint64_t scheduler_cycle = 0u;\n"
@@ -409,6 +413,9 @@ std::string handwritten_main(const std::string& entry_namespace,
            "                  << result.runtime_only_dispatch_misses\n"
            "                  << \" runtime_only_dispatch_fallbacks=\"\n"
            "                  << result.runtime_only_dispatch_fallbacks\n"
+           "                  << \" runtime_only_sites=\" << result.runtime_only_sites\n"
+           "                  << \" runtime_only_dispatch_share_ppm=\"\n"
+           "                  << result.runtime_only_dispatch_share_ppm\n"
            "                  << \" runtime_dispatch_first_error=\"\n"
            "                  << result.runtime_dispatch_first_error << \" frames=\"\n"
            "                  << presented_frames << \" audio_buffers=\" << audio_buffers\n"
@@ -702,6 +709,9 @@ std::string runtime_dispatch_adapter(const std::string& entry_namespace,
            << "        dispatch_metrics.runtime_only_hits(),\n"
            << "        dispatch_metrics.runtime_only_misses(),\n"
            << "        dispatch_metrics.runtime_only_fallbacks(),\n"
+           << "        dispatch_metrics.runtime_only_site_count(),\n"
+           << "        dispatch_metrics.runtime_only_dispatch_share_ppm(),\n"
+           << "        dispatch_metrics.serialize_json(true),\n"
            << "        static_cast<std::uint32_t>(first_error ? first_error->error\n"
            << "            : katana::runtime::DispatchDiagnosticError::None),\n"
            << "        cpu.pc, services.scheduler_cycle()};\n"
@@ -758,6 +768,8 @@ port_metadata(const PortExportOptions& options,
            << ",\"diagnostic_partial\":" << (options.diagnostic_partial ? "true" : "false")
            << ",\"runtime_abi\":" << katana::runtime::abi_version
            << ",\"backend_abi\":" << backend_interface_abi_version
+           << ",\"execution_coverage_contract\":\"validated-demand-v1\""
+           << ",\"dispatch_paths_without_validation\":0"
            << ",\"project_identity\":" << katana::io::quote_json(project_identity)
            << ",\"entry_address\":" << entry_address << ",\"boot_size\":" << boot_size
            << ",\"function_count\":" << function_count << ",\"resolved_control_flow\":"

@@ -6,6 +6,9 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $buildOnlyMode = 'build-only'
+$requiredRuntimeAbi = 14
+$requiredPortContract = 6
+$requiredApplicationContract = 7
 $checkpointOrder = @('SA_NOT_REACHED', 'SA_ANALYSIS_CONTINUES')
 $script:RuntimeProcessStarts = 0
 
@@ -98,15 +101,49 @@ function Invoke-BudgetedProcess {
     )
     Assert-BuildOnlyProcessAllowed $ExecutionMode $Role
     $start = [Diagnostics.ProcessStartInfo]::new()
-    $start.FileName = $Executable
     $start.UseShellExecute = $false
     $start.CreateNoWindow = $true
     $start.RedirectStandardOutput = $true
     $start.RedirectStandardError = $true
-    $start.Arguments = ($Arguments | ForEach-Object {
-        '"' + ([string]$_).Replace('"', '\"') + '"'
-    }) -join ' '
-    $process = [Diagnostics.Process]::Start($start)
+    $restorePayloadEnvironment = $false
+    $previousPayloadEnvironment = $null
+    if ($start.PSObject.Properties.Name -contains 'ArgumentList') {
+        $start.FileName = $Executable
+        foreach ($argument in $Arguments) {
+            [void]$start.ArgumentList.Add([string]$argument)
+        }
+    } else {
+        $payload = [ordered]@{
+            executable = $Executable
+            arguments = @($Arguments)
+        } | ConvertTo-Json -Compress
+        $previousPayloadEnvironment =
+            [Environment]::GetEnvironmentVariable('KATANA_PROCESS_PAYLOAD', 'Process')
+        [Environment]::SetEnvironmentVariable(
+            'KATANA_PROCESS_PAYLOAD',
+            [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($payload)),
+            'Process')
+        $restorePayloadEnvironment = $true
+        $wrapper = @'
+$payload = [Text.Encoding]::UTF8.GetString(
+    [Convert]::FromBase64String($env:KATANA_PROCESS_PAYLOAD)) | ConvertFrom-Json
+$arguments = @($payload.arguments | ForEach-Object { [string]$_ })
+& ([string]$payload.executable) @arguments
+exit $LASTEXITCODE
+'@
+        $encodedWrapper =
+            [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($wrapper))
+        $start.FileName = [Diagnostics.Process]::GetCurrentProcess().MainModule.FileName
+        $start.Arguments = '-NoProfile -NonInteractive -EncodedCommand ' + $encodedWrapper
+    }
+    try {
+        $process = [Diagnostics.Process]::Start($start)
+    } finally {
+        if ($restorePayloadEnvironment) {
+            [Environment]::SetEnvironmentVariable(
+                'KATANA_PROCESS_PAYLOAD', $previousPayloadEnvironment, 'Process')
+        }
+    }
     if ($Role -eq 'runtime') { $script:RuntimeProcessStarts++ }
     $stdout = $process.StandardOutput.ReadToEndAsync()
     $stderr = $process.StandardError.ReadToEndAsync()
@@ -233,16 +270,20 @@ function Assert-BuildEvidence {
     $failure = Get-WorkflowFailureClass $Run
     if ($failure) { throw "Build-only-Workflow fehlgeschlagen: $failure" }
     $job = $Run.job
-    if ($job.kind -ne 'build' -or $job.state -ne 'completed' -or
+    if ([int]$job.version -ne $requiredApplicationContract -or
+        $job.kind -ne 'build' -or $job.state -ne 'completed' -or
         $job.project_identity -notmatch '^[0-9a-fA-F]{64}$') {
-        throw 'Buildjob besitzt keinen gueltigen Abschluss oder keine portable Identitaet.'
+        throw 'Buildjob besitzt keinen kompatiblen Vertrag, Abschluss oder portable Identitaet.'
     }
     if ($null -eq $job.analysis -or -not [bool]$job.analysis.control_flow_complete -or
         [uint64]$job.analysis.unresolved_control_flow -ne 0 -or
         [uint64]$job.analysis.guarded_partial_control_flow -ne 0 -or
         [uint64]$job.analysis.unknown_instructions -ne 0 -or
-        [uint64]$job.analysis.unanalyzed_executable_bytes -ne 0 -or
-        [uint64]$job.analysis.reachable_abort_edges -ne 0) {
+        [uint64]$job.analysis.reachable_abort_edges -ne 0 -or
+        [uint64]$job.analysis.incomplete_initial_required_code_bytes -ne 0 -or
+        [uint64]$job.analysis.uncovered_runtime_materializable_bytes -ne 0 -or
+        [uint64]$job.analysis.uncovered_control_targets -ne 0 -or
+        [uint64]$job.analysis.dispatch_paths_without_validation -ne 0) {
         throw 'Buildjob besitzt keine vollstaendige Kontrollflussabdeckung.'
     }
     foreach ($checkpoint in @('analysis-complete', 'codegen-complete', 'host-build-complete')) {
@@ -286,6 +327,12 @@ function Assert-BuildEvidence {
         $resultIndex.project_identity -cne $job.project_identity) {
         throw 'Manifest, GDI, Portmetadaten und aktueller Job verlieren ihre Identitaetsbindung.'
     }
+    if ([int]$jobResult.version -ne $requiredApplicationContract -or
+        [int]$buildPlan.version -ne $requiredApplicationContract -or
+        [int]$portMetadata.contract_version -ne $requiredPortContract -or
+        [int]$portMetadata.runtime_abi -ne $requiredRuntimeAbi) {
+        throw 'Runtime-, Port- oder Anwendungsvertrag des aktuellen Jobs ist inkompatibel.'
+    }
     if ($buildPlan.status -ne 'built' -or -not [bool]$buildPlan.host_compilation -or
         [bool]$buildPlan.native_execution) {
         throw 'Buildplan verletzt den Build-only-Vertrag.'
@@ -306,6 +353,15 @@ function Assert-RedactedReport {
     if ($Json -match $privatePattern) {
         throw 'Build-only-Bericht enthaelt private Pfade, Hashes oder Eingabeidentitaeten.'
     }
+}
+
+function ConvertTo-PrivateSafeText {
+    param([string]$Text)
+    if ([string]::IsNullOrWhiteSpace($Text)) { return $null }
+    $safe = $Text -replace '(?i)[A-Z]:\\[^\r\n"'']+', '<redacted-path>'
+    $safe = $safe -replace '(?i)[0-9a-f]{64}', '<redacted-hash>'
+    $safe = $safe -replace '(?i)[^\s"'']+\.gdi', '<redacted-gdi>'
+    return $safe
 }
 
 function Write-AtomicReport {
@@ -339,6 +395,12 @@ function Write-AtomicReport {
 
 if ($SelfTest) {
     Assert-BuildOnlyProcessAllowed 'build-only' 'tool'
+    $toolProbe = Invoke-BudgetedProcess 'build-only' 'tool' `
+        ([Diagnostics.Process]::GetCurrentProcess().MainModule.FileName) `
+        @('-NoProfile', '-NonInteractive', '-Command', 'exit 0') 10
+    if ($toolProbe.timed_out -or $toolProbe.exit_code -ne 0) {
+        throw 'Strukturierter Build-only-Werkzeugstart ist fehlgeschlagen.'
+    }
     try {
         Assert-BuildOnlyProcessAllowed 'build-only' 'runtime'
         throw 'runtime-akzeptiert'
@@ -472,6 +534,7 @@ $secondRun = $null
 $firstEvidence = $null
 $secondEvidence = $null
 $failure = $null
+$failureDetail = $null
 $completedBuilds = 0
 $identityConsistent = $false
 $portableMetadataEqual = $false
@@ -511,6 +574,7 @@ try {
                                   $secondEvidence.executable_verified)
 } catch {
     if (-not $failure) { $failure = 'build-evidence-failed' }
+    $failureDetail = ConvertTo-PrivateSafeText $_.Exception.Message
 }
 if ($script:RuntimeProcessStarts -ne 0 -and -not $failure) {
     $failure = 'runtime-process-started'
@@ -529,7 +593,57 @@ $report = [ordered]@{
     status = if ($success) { 'success' } else { 'failed' }
     checkpoint = if ($analysis) { 'SA_ANALYSIS_CONTINUES' } else { 'SA_NOT_REACHED' }
     identity_consistent = $identityConsistent
+    contracts = [ordered]@{
+        runtime_abi = $requiredRuntimeAbi
+        port_project = $requiredPortContract
+        application = $requiredApplicationContract
+    }
     analysis = [ordered]@{
+        committed_executable_permission_bytes = if ($analysis) {
+            [uint64]$analysis.committed_executable_permission_bytes
+        } else { 0 }
+        initially_required_bytes = if ($analysis) {
+            [uint64]$analysis.initially_required_bytes
+        } else { 0 }
+        static_precompiled_bytes = if ($analysis) {
+            [uint64]$analysis.static_precompiled_bytes
+        } else { 0 }
+        runtime_materializable_bytes = if ($analysis) {
+            [uint64]$analysis.runtime_materializable_bytes
+        } else { 0 }
+        unknown_storage_bytes = if ($analysis) {
+            [uint64]$analysis.unknown_storage_bytes
+        } else { 0 }
+        currently_dispatchable_bytes = if ($analysis) {
+            [uint64]$analysis.currently_dispatchable_bytes
+        } else { 0 }
+        uncovered_control_targets = if ($analysis) {
+            [uint64]$analysis.uncovered_control_targets
+        } else { 0 }
+        dispatch_paths_without_validation = if ($analysis) {
+            [uint64]$analysis.dispatch_paths_without_validation
+        } else { 0 }
+        materialization_attempts = if ($analysis) {
+            [uint64]$analysis.materialization_attempts
+        } else { 0 }
+        materialization_successes = if ($analysis) {
+            [uint64]$analysis.materialization_successes
+        } else { 0 }
+        materialization_rejections = if ($analysis) {
+            [uint64]$analysis.materialization_rejections
+        } else { 0 }
+        materialization_budget_failures = if ($analysis) {
+            [uint64]$analysis.materialization_budget_failures
+        } else { 0 }
+        generation_revalidation_failures = if ($analysis) {
+            [uint64]$analysis.generation_revalidation_failures
+        } else { 0 }
+        byte_identity_failures = if ($analysis) {
+            [uint64]$analysis.byte_identity_failures
+        } else { 0 }
+        dispatch_validation_failures = if ($analysis) {
+            [uint64]$analysis.dispatch_validation_failures
+        } else { 0 }
         committed_executable_bytes = if ($analysis) {
             [uint64]$analysis.committed_executable_bytes
         } else { 0 }
@@ -556,6 +670,24 @@ $report = [ordered]@{
         unanalyzed_executable_bytes = if ($analysis) {
             [uint64]$analysis.unanalyzed_executable_bytes
         } else { 0 }
+        runtime_deferred_executable_bytes = if ($analysis) {
+            [uint64]$analysis.runtime_deferred_executable_bytes
+        } else { 0 }
+        never_executed_data_bytes = if ($analysis) {
+            [uint64]$analysis.never_executed_data_bytes
+        } else { 0 }
+        unknown_executable_bytes = if ($analysis) {
+            [uint64]$analysis.unknown_executable_bytes
+        } else { 0 }
+        unproven_padding_bytes = if ($analysis) {
+            [uint64]$analysis.unproven_padding_bytes
+        } else { 0 }
+        incomplete_initial_required_code_bytes = if ($analysis) {
+            [uint64]$analysis.incomplete_initial_required_code_bytes
+        } else { 0 }
+        uncovered_runtime_materializable_bytes = if ($analysis) {
+            [uint64]$analysis.uncovered_runtime_materializable_bytes
+        } else { 0 }
         reachable_abort_edges = if ($analysis) {
             [uint64]$analysis.reachable_abort_edges
         } else { 0 }
@@ -574,6 +706,7 @@ $report = [ordered]@{
         runtime_processes_started = $script:RuntimeProcessStarts
     }
     failure_class = $failure
+    failure_detail = $failureDetail
 }
 $serialized = Write-AtomicReport $reportPath $report
 Write-Output $serialized
