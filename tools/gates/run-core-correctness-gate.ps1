@@ -48,6 +48,7 @@ function Initialize-MsvcEnvironment {
 $root = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..'))
 $build = [IO.Path]::GetFullPath((Join-Path $root 'build-current'))
 $parallelism = 8
+$maximumBuildAttempts = 8
 if (-not $build.StartsWith(
         $root + [IO.Path]::DirectorySeparatorChar,
         [StringComparison]::OrdinalIgnoreCase
@@ -85,14 +86,15 @@ function Require-NativeSuccess([string]$description) {
 
 function Invoke-GateBuild([string]$preset, [string]$description) {
     $exitCode = 0
-    for ($attempt = 1; $attempt -le 3; ++$attempt) {
+    for ($attempt = 1; $attempt -le $maximumBuildAttempts; ++$attempt) {
         & cmake --build --preset $preset --parallel $parallelism
         $exitCode = $LASTEXITCODE
         if ($exitCode -eq 0) {
             return
         }
-        if ($attempt -lt 3) {
-            Write-Warning "$description wird nach transientem Buildfehler erneut versucht ($attempt/3)."
+        if ($attempt -lt $maximumBuildAttempts) {
+            Write-Warning ("$description wird nach transientem Buildfehler erneut versucht " +
+                "($attempt/$maximumBuildAttempts).")
             Start-Sleep -Milliseconds 750
         }
     }
@@ -157,6 +159,7 @@ try {
         debug_static_analysis = 'active'
         relwithdebinfo_profile = 'relwithdebinfo-gate'
         build_parallelism = $parallelism
+        maximum_build_attempts = $maximumBuildAttempts
         debug_test_count = $debugTests.Count
         relwithdebinfo_test_count = $relTests.Count
         shared_core_test_count = $relCoreTests.Count
