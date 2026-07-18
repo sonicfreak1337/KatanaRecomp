@@ -118,9 +118,12 @@ try {
     & cmake --build --preset relwithdebinfo-gate --parallel
     Require-NativeSuccess 'RelWithDebInfo-Build'
     $relTests = Get-TestNames
-    $testDifference = @(Compare-Object $debugTests $relTests)
+    $configurationSpecificTests = @('katana-phase10-msvc-asan-runtime')
+    $debugCoreTests = @($debugTests | Where-Object { $_ -notin $configurationSpecificTests })
+    $relCoreTests = @($relTests | Where-Object { $_ -notin $configurationSpecificTests })
+    $testDifference = @(Compare-Object $debugCoreTests $relCoreTests)
     if ($testDifference.Count -ne 0) {
-        throw 'Debug und RelWithDebInfo besitzen unterschiedliche Testinventare.'
+        throw 'Debug und RelWithDebInfo besitzen unterschiedliche Core-Testinventare.'
     }
     & ctest --preset relwithdebinfo-gate --parallel 8
     Require-NativeSuccess 'RelWithDebInfo-Regression'
@@ -138,8 +141,15 @@ try {
         debug_sanitizer = 'msvc-address-or-clang-address-undefined'
         debug_static_analysis = 'active'
         relwithdebinfo_profile = 'relwithdebinfo-gate'
-        test_count = $relTests.Count
-        identical_test_inventory = $true
+        debug_test_count = $debugTests.Count
+        relwithdebinfo_test_count = $relTests.Count
+        shared_core_test_count = $relCoreTests.Count
+        identical_core_test_inventory = $true
+        configuration_specific_tests = @(
+            $debugTests + $relTests |
+                Where-Object { $_ -in $configurationSpecificTests } |
+                Sort-Object -Unique
+        )
         exact_reference_vectors = 'passed-in-both-configurations'
         format_check = 'success'
         quality_contract_audit = 'success'
