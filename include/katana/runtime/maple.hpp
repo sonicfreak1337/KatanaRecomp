@@ -1,5 +1,7 @@
 #pragma once
 
+#include "katana/runtime/persistent_storage.hpp"
+
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -105,17 +107,22 @@ inline constexpr std::size_t vmu_storage_size = vmu_block_size * vmu_block_count
 class MapleVmuDevice final : public MapleDevice {
   public:
     explicit MapleVmuDevice(std::span<const std::uint8_t> image = {});
+    explicit MapleVmuDevice(std::shared_ptr<PersistentImage> image);
     [[nodiscard]] MapleResponse transact(const MapleRequest& request) override;
     void set_write_protected(bool value) noexcept;
     [[nodiscard]] bool write_protected() const noexcept;
     [[nodiscard]] std::uint8_t read_byte(std::size_t offset) const;
     [[nodiscard]] std::uint8_t source_byte(std::size_t offset) const;
+    void save_working_copy();
+    [[nodiscard]] bool working_copy_dirty() const noexcept;
+    [[nodiscard]] bool persistent_working_copy() const noexcept;
 
   private:
     [[nodiscard]] MapleResponse read_block(const MapleRequest& request) const;
     [[nodiscard]] MapleResponse write_block(const MapleRequest& request);
     std::vector<std::uint8_t> source_;
     std::vector<std::uint8_t> working_;
+    std::shared_ptr<PersistentImage> persistent_image_;
     bool write_protected_ = false;
 };
 

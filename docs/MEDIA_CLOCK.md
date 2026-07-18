@@ -23,6 +23,12 @@ austauschbare Callbacks; konkrete PVR- und AICA-Backends bleiben davon getrennt.
   callback-internen `stop()`, `start()` oder `reset()` nichts mehr nach und
   koennen keine Event-ID eines neuen Laufs ueberschreiben.
 
+KR-4703 koppelt den Video-Callback zusaetzlich an `HostPacer`. Diese Kopplung
+wartet den Host bis zu einer aus Gastzyklen berechneten Deadline, veraendert
+aber weder Schedulerreihenfolge noch Audio-/Videozaehler oder Gastresultate.
+Pause/Resume verankert nur die Hostabbildung neu. Details stehen in
+[`MUTABLE_STORAGE_AND_PACING.md`](MUTABLE_STORAGE_AND_PACING.md).
+
 Die Regression treibt Recording-PVR- und Recording-Audio-Backends ueber diese
 Callbacks. Die historische v0.31.0-GDI-Blockprobe prueft nur Quelle,
 Bootblock und Plattformereignisse und gilt nicht als Sonic-Ausfuehrung. Der

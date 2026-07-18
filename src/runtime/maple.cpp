@@ -64,6 +64,12 @@ MapleVmuDevice::MapleVmuDevice(const std::span<const std::uint8_t> image) {
     working_ = source_;
 }
 
+MapleVmuDevice::MapleVmuDevice(std::shared_ptr<PersistentImage> image)
+    : persistent_image_(std::move(image)) {
+    if (!persistent_image_ || persistent_image_->size() != vmu_storage_size)
+        throw std::invalid_argument("Persistente VMU-Arbeitskopie besitzt nicht exakt 128 KiB.");
+}
+
 MapleResponse MapleVmuDevice::transact(const MapleRequest& request) {
     constexpr std::uint32_t memory_function = 0x02000000u;
     switch (request.command) {
@@ -89,11 +95,13 @@ MapleResponse MapleVmuDevice::read_block(const MapleRequest& request) const {
     payload.reserve(2u + vmu_block_size / 4u);
     payload.push_back(memory_function);
     payload.push_back(static_cast<std::uint32_t>(block));
+    const auto bytes =
+        persistent_image_ ? persistent_image_->bytes() : std::span<const std::uint8_t>(working_);
     for (std::size_t offset = 0u; offset < vmu_block_size; offset += 4u) {
-        payload.push_back(static_cast<std::uint32_t>(working_[start + offset]) |
-                          (static_cast<std::uint32_t>(working_[start + offset + 1u]) << 8u) |
-                          (static_cast<std::uint32_t>(working_[start + offset + 2u]) << 16u) |
-                          (static_cast<std::uint32_t>(working_[start + offset + 3u]) << 24u));
+        payload.push_back(static_cast<std::uint32_t>(bytes[start + offset]) |
+                          (static_cast<std::uint32_t>(bytes[start + offset + 1u]) << 8u) |
+                          (static_cast<std::uint32_t>(bytes[start + offset + 2u]) << 16u) |
+                          (static_cast<std::uint32_t>(bytes[start + offset + 3u]) << 24u));
     }
     return {MapleResponseCode::DataTransfer, std::move(payload)};
 }
@@ -110,8 +118,12 @@ MapleResponse MapleVmuDevice::write_block(const MapleRequest& request) {
     for (std::size_t word_index = 0u; word_index < words_per_block; ++word_index) {
         const auto word = request.payload[word_index + 1u];
         for (std::size_t byte = 0u; byte < 4u; ++byte) {
-            working_[start + word_index * 4u + byte] =
-                static_cast<std::uint8_t>(word >> (byte * 8u));
+            const auto offset = start + word_index * 4u + byte;
+            const auto value = static_cast<std::uint8_t>(word >> (byte * 8u));
+            if (persistent_image_)
+                persistent_image_->write_byte(offset, value);
+            else
+                working_[offset] = value;
         }
     }
     return {MapleResponseCode::Ack, {}};
@@ -124,10 +136,20 @@ bool MapleVmuDevice::write_protected() const noexcept {
     return write_protected_;
 }
 std::uint8_t MapleVmuDevice::read_byte(const std::size_t offset) const {
-    return working_.at(offset);
+    return persistent_image_ ? persistent_image_->read_byte(offset) : working_.at(offset);
 }
 std::uint8_t MapleVmuDevice::source_byte(const std::size_t offset) const {
-    return source_.at(offset);
+    return persistent_image_ ? persistent_image_->source_byte(offset) : source_.at(offset);
+}
+void MapleVmuDevice::save_working_copy() {
+    if (!persistent_image_) throw std::logic_error("VMU besitzt keine persistente Arbeitskopie.");
+    persistent_image_->save();
+}
+bool MapleVmuDevice::working_copy_dirty() const noexcept {
+    return persistent_image_ && persistent_image_->dirty();
+}
+bool MapleVmuDevice::persistent_working_copy() const noexcept {
+    return persistent_image_ != nullptr;
 }
 
 std::size_t MapleBus::slot(const std::uint8_t port, const std::uint8_t unit) {

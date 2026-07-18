@@ -58,9 +58,10 @@ werden abgelehnt.
 
 Der CLI-Aufruf bindet KatanaRecomp fuer den lokalen Debugbuild ueber den
 expliziten CMake-Parameter
-`KATANA_RUNTIME_ROOT` ein. Portprojekt-Vertragsversion 4 umfasst den
-eigenstaendigen Runtime-/GDI-Einstieg und die Runtime-only-Dispatchmetriken.
-Die generierten Quellen pruefen Runtime-ABI 12 und PlatformServices-ABI 5 beim
+`KATANA_RUNTIME_ROOT` ein. Portprojekt-Vertragsversion 5 umfasst den
+eigenstaendigen Runtime-/GDI-Einstieg, die Runtime-only-Dispatchmetriken sowie
+projektgebundene Flash-/VMU-Arbeitskopien und Host-Pacing. Die generierten
+Quellen pruefen Runtime-ABI 13 und PlatformServices-ABI 5 beim
 Kompilieren; portable Dateien enthalten keinen absoluten lokalen Quellpfad. Der
 Build liegt getrennt unter `port/build/`. Konfigurations- oder Buildfehler enden
 mit dem stabilen CLI-Exitcode `7` (`build-failure`). Die folgenden Befehle zeigen
@@ -83,6 +84,13 @@ Dreamcast-Hauptspeicher, VRAM, AICA-RAM, Flash, CPU und Scheduler und waehlt
 den Programmeinstieg ueber die generische Blocktabelle. Der erste indirekte
 Dispatch wird strukturiert diagnostiziert; ein fehlendes Ziel oder ein
 Speicherfehler kann nicht als erfolgreicher Prozess enden.
+
+Der Standardadapter oeffnet vor dem Runtime-Start lokale Arbeitskopien unter
+der portablen Projektidentitaet, bindet Flash und VMU ein, taktet den Host am
+Videoereignis und speichert beim geordneten Shutdown. `KATANA_USER_DATA_ROOT`
+kann die lokale Wurzel festlegen. Weder GDI noch exportierte Quellen werden
+veraendert. Details stehen in
+[`MUTABLE_STORAGE_AND_PACING.md`](MUTABLE_STORAGE_AND_PACING.md).
 
 Eine explizit als `runtime_only` klassifizierte Stelle darf exportiert werden.
 Ihr Ziel muss zur Laufzeit ein ausgerichteter exakter Anfang eines aktiven,

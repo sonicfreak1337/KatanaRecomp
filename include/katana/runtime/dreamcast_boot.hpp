@@ -16,6 +16,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -24,6 +25,31 @@ namespace katana::runtime {
 inline constexpr std::uint32_t dreamcast_disc_boot_address = 0x8C010000u;
 inline constexpr std::uint32_t dreamcast_direct_boot_stack = 0x8D000000u;
 enum class DreamcastRuntimeFirmwareMode : std::uint8_t { Direct, HleBiosAbi };
+
+struct DreamcastMutableStorageConfig {
+    std::string project_identity;
+    std::filesystem::path storage_root;
+    std::optional<std::filesystem::path> flash_source;
+    std::optional<std::filesystem::path> vmu_source;
+};
+
+class DreamcastMutableStorage final {
+  public:
+    [[nodiscard]] static std::shared_ptr<DreamcastMutableStorage>
+    open(DreamcastMutableStorageConfig config);
+    [[nodiscard]] const std::shared_ptr<PersistentImage>& flash_image() const noexcept;
+    [[nodiscard]] const std::shared_ptr<PersistentImage>& vmu_image() const noexcept;
+    void save();
+    [[nodiscard]] std::string serialize_status_json() const;
+
+  private:
+    DreamcastMutableStorage(std::shared_ptr<PersistentImage> flash,
+                            std::shared_ptr<PersistentImage> vmu);
+    std::shared_ptr<PersistentImage> flash_;
+    std::shared_ptr<PersistentImage> vmu_;
+};
+
+[[nodiscard]] std::filesystem::path default_dreamcast_user_data_root();
 
 struct DreamcastRuntimeBootImage {
     std::shared_ptr<GdiDiscSource> source;
@@ -41,6 +67,8 @@ struct DreamcastRuntimeState {
     std::shared_ptr<LinearMemoryDevice> vram;
     std::shared_ptr<LinearMemoryDevice> aica_ram;
     std::shared_ptr<FlashMemoryDevice> flash;
+    std::shared_ptr<MapleVmuDevice> vmu;
+    std::shared_ptr<DreamcastMutableStorage> mutable_storage;
     std::shared_ptr<EventScheduler> scheduler;
     std::shared_ptr<Sh4RtcClockDomain> rtc_clock;
     std::shared_ptr<Sh4Tmu> tmu;
@@ -69,6 +97,7 @@ load_dreamcast_runtime_boot(const std::filesystem::path& descriptor_path);
 [[nodiscard]] DreamcastRuntimeState initialize_dreamcast_runtime(
     CpuState& cpu,
     const DreamcastRuntimeBootImage& boot,
-    DreamcastRuntimeFirmwareMode firmware_mode = DreamcastRuntimeFirmwareMode::Direct);
+    DreamcastRuntimeFirmwareMode firmware_mode = DreamcastRuntimeFirmwareMode::Direct,
+    std::shared_ptr<DreamcastMutableStorage> mutable_storage = {});
 
 } // namespace katana::runtime

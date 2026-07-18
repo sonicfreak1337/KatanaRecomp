@@ -86,6 +86,13 @@ Fehlerklasse. Projektidentitaet, Datei- oder Eingabehashes, Gastadressen,
 Tracknamen, private Pfade und Rohlogs sind verboten. Der Bericht wird neben dem
 Ziel vorbereitet, allowlist-geprueft und atomar ersetzt.
 
+`katana-persistent-image-v1` und `katana-dreamcast-storage-v1` berichten den
+lokalen Arbeitskopienzustand ohne Pfade, Hashes oder Nutzdaten.
+`katana-host-pacing-v1` berichtet Wait-/Late-Zaehler und hoechstens den ersten
+typisierten Fehler. `HostPacingException` verwendet fuer den Portexit dasselbe
+Schema mit Fehlerklasse und Gastzyklus. Diese lokalen Diagnosen sind keine
+Gastfortschritts- oder Kompatibilitaetsaussage.
+
 ## Live-Jobereignisse
 
 `katana-job-event` Version 1 ist der gemeinsame geordnete Observerstrom von CLI

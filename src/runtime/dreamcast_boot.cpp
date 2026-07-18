@@ -1,10 +1,13 @@
 #include "katana/runtime/dreamcast_boot.hpp"
 
+#include "katana/io/json_report.hpp"
 #include "katana/runtime/iso9660.hpp"
 
 #include <algorithm>
+#include <cstdlib>
 #include <limits>
 #include <span>
+#include <sstream>
 #include <stdexcept>
 #include <string_view>
 
@@ -35,7 +38,85 @@ std::vector<std::uint32_t> extent_bias_candidates(const std::uint32_t data_track
                                 : std::vector<std::uint32_t>{0u, data_track_lba};
 }
 
+bool project_identity_name(const std::string_view value) noexcept {
+    return value.size() == 64u &&
+           std::all_of(value.begin(), value.end(), [](const unsigned char character) {
+               return (character >= '0' && character <= '9') ||
+                      (character >= 'a' && character <= 'f');
+           });
+}
+
+std::optional<std::filesystem::path> environment_path(const char* name) {
+    const auto* value = std::getenv(name);
+    if (value == nullptr || *value == '\0') return std::nullopt;
+    return std::filesystem::path(value);
+}
+
 } // namespace
+
+std::filesystem::path default_dreamcast_user_data_root() {
+    if (const auto configured = environment_path("KATANA_USER_DATA_ROOT"))
+        return std::filesystem::absolute(*configured).lexically_normal();
+#ifdef _WIN32
+    if (const auto local = environment_path("LOCALAPPDATA"))
+        return std::filesystem::absolute(*local / "KatanaRecomp").lexically_normal();
+#else
+    if (const auto data = environment_path("XDG_DATA_HOME"))
+        return std::filesystem::absolute(*data / "katana-recomp").lexically_normal();
+    if (const auto home = environment_path("HOME"))
+        return std::filesystem::absolute(*home / ".local" / "share" / "katana-recomp")
+            .lexically_normal();
+#endif
+    throw std::runtime_error("Nutzerdatenwurzel fuer Flash und VMU ist nicht konfiguriert.");
+}
+
+std::shared_ptr<DreamcastMutableStorage>
+DreamcastMutableStorage::open(DreamcastMutableStorageConfig config) {
+    if (!project_identity_name(config.project_identity))
+        throw std::invalid_argument("Persistente Dreamcast-Projektidentitaet ist ungueltig.");
+    const auto root =
+        (config.storage_root.empty() ? default_dreamcast_user_data_root()
+                                     : std::filesystem::absolute(config.storage_root)) /
+        "saves" / config.project_identity;
+    auto flash = PersistentImage::open({"dreamcast-flash",
+                                        std::move(config.flash_source),
+                                        root / "flash.katana-work",
+                                        dreamcast_flash_size,
+                                        0xFFu});
+    auto vmu = PersistentImage::open({"dreamcast-vmu",
+                                      std::move(config.vmu_source),
+                                      root / "vmu-a1.katana-work",
+                                      vmu_storage_size,
+                                      0xFFu});
+    return std::shared_ptr<DreamcastMutableStorage>(
+        new DreamcastMutableStorage(std::move(flash), std::move(vmu)));
+}
+
+DreamcastMutableStorage::DreamcastMutableStorage(std::shared_ptr<PersistentImage> flash,
+                                                 std::shared_ptr<PersistentImage> vmu)
+    : flash_(std::move(flash)), vmu_(std::move(vmu)) {
+    if (!flash_ || !vmu_) throw std::invalid_argument("Dreamcast-Arbeitskopien fehlen.");
+}
+
+const std::shared_ptr<PersistentImage>& DreamcastMutableStorage::flash_image() const noexcept {
+    return flash_;
+}
+const std::shared_ptr<PersistentImage>& DreamcastMutableStorage::vmu_image() const noexcept {
+    return vmu_;
+}
+void DreamcastMutableStorage::save() {
+    flash_->save();
+    vmu_->save();
+}
+
+std::string DreamcastMutableStorage::serialize_status_json() const {
+    std::ostringstream output;
+    katana::io::write_json_report_header(
+        output, "katana-dreamcast-storage-v1", "dreamcast-storage");
+    output << ",\"flash\":" << flash_->serialize_status_json()
+           << ",\"vmu\":" << vmu_->serialize_status_json() << '}';
+    return output.str();
+}
 
 DreamcastRuntimeBootImage
 load_dreamcast_runtime_boot(const std::filesystem::path& descriptor_path) {
@@ -94,7 +175,8 @@ load_dreamcast_runtime_boot(const std::filesystem::path& descriptor_path) {
 DreamcastRuntimeState
 initialize_dreamcast_runtime(CpuState& cpu,
                              const DreamcastRuntimeBootImage& boot,
-                             const DreamcastRuntimeFirmwareMode firmware_mode) {
+                             const DreamcastRuntimeFirmwareMode firmware_mode,
+                             std::shared_ptr<DreamcastMutableStorage> mutable_storage) {
     if (!boot.source || boot.boot_file.empty() || !boot.repeated_reads_match) {
         throw std::invalid_argument("Dreamcast-Runtime-Bootimage ist unvollstaendig.");
     }
@@ -103,7 +185,11 @@ initialize_dreamcast_runtime(CpuState& cpu,
     state.main_ram = map_dreamcast_main_ram(cpu.memory);
     state.vram = map_dreamcast_vram(cpu.memory);
     state.aica_ram = map_dreamcast_aica_ram(cpu.memory);
-    state.flash = map_dreamcast_command_flash(cpu.memory);
+    state.mutable_storage = std::move(mutable_storage);
+    state.flash =
+        state.mutable_storage
+            ? map_dreamcast_command_flash(cpu.memory, state.mutable_storage->flash_image())
+            : map_dreamcast_command_flash(cpu.memory);
     state.scheduler = std::make_shared<EventScheduler>();
     state.rtc_clock = std::make_shared<Sh4RtcClockDomain>();
     state.tmu = std::make_shared<Sh4Tmu>(*state.scheduler, TmuTiming{4u, state.rtc_clock});
@@ -127,6 +213,10 @@ initialize_dreamcast_runtime(CpuState& cpu,
         cpu.memory, *state.scheduler, [raise_now] { raise_now(SystemAsicEvent::PvrRenderDone); });
     state.aica_registers = map_aica_registers(cpu.memory);
     state.maple = std::make_shared<MapleBus>([raise_now] { raise_now(SystemAsicEvent::MapleDma); });
+    if (state.mutable_storage) {
+        state.vmu = std::make_shared<MapleVmuDevice>(state.mutable_storage->vmu_image());
+        state.maple->attach(0u, 1u, state.vmu);
+    }
     state.gdrom = std::make_shared<GdRomAsyncReader>(
         *state.scheduler,
         GdRomDrive(boot.source),

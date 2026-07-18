@@ -1,6 +1,7 @@
 #pragma once
 
 #include "katana/runtime/memory.hpp"
+#include "katana/runtime/persistent_storage.hpp"
 
 #include <array>
 #include <cstddef>
@@ -27,6 +28,7 @@ inline constexpr std::uint32_t dreamcast_flash_unlock_address_2 = 0x00002AAAu;
 class FlashMemoryDevice final : public MemoryDevice {
   public:
     explicit FlashMemoryDevice(std::span<const std::uint8_t> image = {});
+    explicit FlashMemoryDevice(std::shared_ptr<PersistentImage> image);
     [[nodiscard]] std::size_t size() const noexcept override;
     [[nodiscard]] std::uint8_t read_u8(std::uint32_t offset) const override;
     void write_u8(std::uint32_t offset, std::uint8_t value) override;
@@ -34,6 +36,9 @@ class FlashMemoryDevice final : public MemoryDevice {
     void set_write_protected(bool protected_state) noexcept;
     [[nodiscard]] bool write_protected() const noexcept;
     [[nodiscard]] std::uint8_t source_byte(std::uint32_t offset) const;
+    void save_working_copy();
+    [[nodiscard]] bool working_copy_dirty() const noexcept;
+    [[nodiscard]] bool persistent_working_copy() const noexcept;
 
   private:
     enum class CommandState : std::uint8_t {
@@ -46,9 +51,12 @@ class FlashMemoryDevice final : public MemoryDevice {
         EraseConfirm
     };
     void check(std::uint32_t offset) const;
+    [[nodiscard]] std::uint8_t working_byte(std::uint32_t offset) const;
+    void set_working_byte(std::uint32_t offset, std::uint8_t value);
     [[noreturn]] void fail(const char* message);
     std::vector<std::uint8_t> source_;
     std::vector<std::uint8_t> working_;
+    std::shared_ptr<PersistentImage> persistent_image_;
     CommandState state_ = CommandState::ReadArray;
     bool write_protected_ = false;
 };
@@ -107,5 +115,8 @@ map_dreamcast_flash(Memory& memory, std::span<const std::uint8_t> image = {});
 
 [[nodiscard]] std::shared_ptr<FlashMemoryDevice>
 map_dreamcast_command_flash(Memory& memory, std::span<const std::uint8_t> image = {});
+
+[[nodiscard]] std::shared_ptr<FlashMemoryDevice>
+map_dreamcast_command_flash(Memory& memory, std::shared_ptr<PersistentImage> image);
 
 } // namespace katana::runtime

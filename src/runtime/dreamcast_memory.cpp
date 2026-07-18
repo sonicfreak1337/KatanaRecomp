@@ -153,19 +153,36 @@ FlashMemoryDevice::FlashMemoryDevice(const std::span<const std::uint8_t> image) 
     working_ = source_;
 }
 
+FlashMemoryDevice::FlashMemoryDevice(std::shared_ptr<PersistentImage> image)
+    : persistent_image_(std::move(image)) {
+    if (!persistent_image_ || persistent_image_->size() != dreamcast_flash_size)
+        throw std::invalid_argument("Persistente Flash-Arbeitskopie besitzt nicht exakt 128 KiB.");
+}
+
 std::size_t FlashMemoryDevice::size() const noexcept {
-    return working_.size();
+    return persistent_image_ ? persistent_image_->size() : working_.size();
 }
 
 void FlashMemoryDevice::check(const std::uint32_t offset) const {
-    if (offset >= working_.size()) {
+    if (offset >= size()) {
         throw std::out_of_range("Flash-Zugriff ausserhalb des Abbilds.");
     }
 }
 
 std::uint8_t FlashMemoryDevice::read_u8(const std::uint32_t offset) const {
     check(offset);
-    return working_[offset];
+    return working_byte(offset);
+}
+
+std::uint8_t FlashMemoryDevice::working_byte(const std::uint32_t offset) const {
+    return persistent_image_ ? persistent_image_->read_byte(offset) : working_[offset];
+}
+
+void FlashMemoryDevice::set_working_byte(const std::uint32_t offset, const std::uint8_t value) {
+    if (persistent_image_)
+        persistent_image_->write_byte(offset, value);
+    else
+        working_[offset] = value;
 }
 
 [[noreturn]] void FlashMemoryDevice::fail(const char* message) {
@@ -209,7 +226,7 @@ void FlashMemoryDevice::write_u8(const std::uint32_t offset, const std::uint8_t 
         if (write_protected_) {
             fail("Flash ist schreibgeschuetzt.");
         }
-        working_[offset] &= value;
+        set_working_byte(offset, static_cast<std::uint8_t>(working_byte(offset) & value));
         state_ = CommandState::ReadArray;
         return;
     case CommandState::EraseUnlock1:
@@ -234,9 +251,14 @@ void FlashMemoryDevice::write_u8(const std::uint32_t offset, const std::uint8_t 
         {
             const auto start =
                 static_cast<std::size_t>(offset) & ~(dreamcast_flash_sector_size - 1u);
-            std::fill_n(working_.begin() + static_cast<std::ptrdiff_t>(start),
-                        dreamcast_flash_sector_size,
-                        static_cast<std::uint8_t>(0xFFu));
+            if (persistent_image_) {
+                const std::vector<std::uint8_t> erased(dreamcast_flash_sector_size, 0xFFu);
+                persistent_image_->write(start, erased);
+            } else {
+                std::fill_n(working_.begin() + static_cast<std::ptrdiff_t>(start),
+                            dreamcast_flash_sector_size,
+                            static_cast<std::uint8_t>(0xFFu));
+            }
         }
         state_ = CommandState::ReadArray;
         return;
@@ -255,7 +277,17 @@ bool FlashMemoryDevice::write_protected() const noexcept {
 }
 std::uint8_t FlashMemoryDevice::source_byte(const std::uint32_t offset) const {
     check(offset);
-    return source_[offset];
+    return persistent_image_ ? persistent_image_->source_byte(offset) : source_[offset];
+}
+void FlashMemoryDevice::save_working_copy() {
+    if (!persistent_image_) throw std::logic_error("Flash besitzt keine persistente Arbeitskopie.");
+    persistent_image_->save();
+}
+bool FlashMemoryDevice::working_copy_dirty() const noexcept {
+    return persistent_image_ && persistent_image_->dirty();
+}
+bool FlashMemoryDevice::persistent_working_copy() const noexcept {
+    return persistent_image_ != nullptr;
 }
 
 std::shared_ptr<LinearMemoryDevice> map_dreamcast_main_ram(Memory& memory) {
@@ -344,6 +376,17 @@ std::shared_ptr<LinearMemoryDevice> map_dreamcast_flash(Memory& memory,
 std::shared_ptr<FlashMemoryDevice>
 map_dreamcast_command_flash(Memory& memory, const std::span<const std::uint8_t> image) {
     auto flash = std::make_shared<FlashMemoryDevice>(image);
+    auto mappings = make_direct_mappings("dreamcast-command-flash-",
+                                         dreamcast_flash_physical_base,
+                                         flash,
+                                         MemoryRegionAccess::ReadWrite);
+    map_all(memory, std::move(mappings));
+    return flash;
+}
+
+std::shared_ptr<FlashMemoryDevice>
+map_dreamcast_command_flash(Memory& memory, std::shared_ptr<PersistentImage> image) {
+    auto flash = std::make_shared<FlashMemoryDevice>(std::move(image));
     auto mappings = make_direct_mappings("dreamcast-command-flash-",
                                          dreamcast_flash_physical_base,
                                          flash,

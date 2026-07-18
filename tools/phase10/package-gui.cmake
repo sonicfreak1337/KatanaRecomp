@@ -42,7 +42,10 @@ file(REMOVE_RECURSE "${output_root}")
 file(MAKE_DIRECTORY
     "${output_root}/assets"
     "${output_root}/docs"
+    "${output_root}/runtime-sdk/cmake"
+    "${output_root}/runtime-sdk/include/katana/io"
     "${output_root}/runtime-sdk/include/katana"
+    "${output_root}/runtime-sdk/src/io"
     "${output_root}/runtime-sdk/src"
 )
 file(COPY "${cli}" "${gui}" DESTINATION "${output_root}")
@@ -57,13 +60,33 @@ file(COPY "${logo}" "${icon}" "${asset_manifest}" DESTINATION "${output_root}/as
 file(COPY "${source_root}/include/katana/runtime" DESTINATION
     "${output_root}/runtime-sdk/include/katana")
 file(COPY "${source_root}/src/runtime" DESTINATION "${output_root}/runtime-sdk/src")
+file(COPY "${source_root}/include/katana/build_contract.hpp.in" DESTINATION
+    "${output_root}/runtime-sdk/include/katana")
+file(COPY "${source_root}/cmake/KatanaVersions.cmake" DESTINATION
+    "${output_root}/runtime-sdk/cmake")
+file(COPY "${source_root}/VERSION" DESTINATION "${output_root}/runtime-sdk")
+file(COPY
+    "${source_root}/include/katana/io/input_output_error.hpp"
+    "${source_root}/include/katana/io/input_provenance.hpp"
+    "${source_root}/include/katana/io/json_report.hpp"
+    DESTINATION "${output_root}/runtime-sdk/include/katana/io"
+)
+file(COPY
+    "${source_root}/src/io/input_provenance.cpp"
+    "${source_root}/src/io/json_report.cpp"
+    DESTINATION "${output_root}/runtime-sdk/src/io"
+)
 file(WRITE "${output_root}/runtime-sdk/CMakeLists.txt"
 "cmake_minimum_required(VERSION 3.25)\n"
 "project(KatanaRuntimeSdk LANGUAGES CXX)\n"
+"include(\"\${CMAKE_CURRENT_SOURCE_DIR}/cmake/KatanaVersions.cmake\")\n"
+"file(MAKE_DIRECTORY \"\${CMAKE_CURRENT_BINARY_DIR}/generated/include/katana\")\n"
+"configure_file(\"\${CMAKE_CURRENT_SOURCE_DIR}/include/katana/build_contract.hpp.in\" \"\${CMAKE_CURRENT_BINARY_DIR}/generated/include/katana/build_contract.hpp\" @ONLY)\n"
 "file(GLOB runtime_sources CONFIGURE_DEPENDS \"\${CMAKE_CURRENT_SOURCE_DIR}/src/runtime/*.cpp\")\n"
-"add_library(katana_runtime STATIC \${runtime_sources})\n"
+"file(GLOB io_sources CONFIGURE_DEPENDS \"\${CMAKE_CURRENT_SOURCE_DIR}/src/io/*.cpp\")\n"
+"add_library(katana_runtime STATIC \${runtime_sources} \${io_sources})\n"
 "target_compile_features(katana_runtime PUBLIC cxx_std_20)\n"
-"target_include_directories(katana_runtime PUBLIC \"\${CMAKE_CURRENT_SOURCE_DIR}/include\")\n"
+"target_include_directories(katana_runtime PUBLIC \"\${CMAKE_CURRENT_SOURCE_DIR}/include\" \"\${CMAKE_CURRENT_BINARY_DIR}/generated/include\")\n"
 "if(WIN32)\n"
 "  target_link_libraries(katana_runtime PUBLIC gdi32 user32 winmm)\n"
 "endif()\n"
@@ -152,6 +175,8 @@ set(entries
     "docs/PHASE10_GUI_ARCHITECTURE.md"
     "docs/PHASE10_GUI_WORKFLOW.md"
     "runtime-sdk/CMakeLists.txt"
+    "runtime-sdk/VERSION"
+    "runtime-sdk/cmake/KatanaVersions.cmake"
 )
 file(GLOB_RECURSE runtime_entries
     RELATIVE "${output_root}"

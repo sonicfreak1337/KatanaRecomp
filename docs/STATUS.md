@@ -2,10 +2,32 @@
 
 Interner Entwicklungsmeilenstein: `v0.46.0`
 Phase: Core-Stabilisierung vor v0.47
-Naechster Task: `KR-4703`
+Naechster Task: `KR-4704`
 Naechstes Gate: `v0.47.0` - Core-Stabilisierung und generische Retail-Runtime
 Weitere interne Gates: `v0.48.0` Integration und `v0.49.0` Alpha-Candidate
 Erster oeffentlicher Release: `v0.50.0` Alpha
+
+## KR-4703 umgesetzt
+
+Flash und VMU verwenden getrennte lokale Arbeitskopien in einem versionierten,
+SHA-256-gebundenen Primaer-/Recoverycontainer. Nutzerquellen werden nur gelesen
+und vor jedem atomischen Save erneut verifiziert. Defekte Primaerkopien werden
+nur aus einer vollstaendig validierten Recovery wiederhergestellt; keine
+Fehlerbehandlung beschreibt oder ersetzt die Quelle. Die portable
+Projektidentitaet trennt die Nutzerdaten verschiedener Ports.
+
+Der generierte Port bindet persistentes Command-Flash und eine VMU ein. Ein
+ganzzahliger Hostpacer wartet an Video-Gastzyklen auf monotone Hostdeadlines,
+ohne Scheduler-, Audio-, Video- oder Eingabesemantik aus Hostzeit abzuleiten.
+Pause und Resume ankern neu; Shutdown stoppt Ausgabe und Scheduler und speichert
+beide Abbilder genau einmal. Pacing- und Persistenzstatus sind strukturiert und
+ohne lokale Pfade oder Nutzdaten diagnostizierbar. Runtime-ABI 13,
+Hostruntimevertrag 2 und Portprojektvertrag 5 versionieren die Erweiterung.
+
+Vertrag und gesammelte Regressionen stehen in
+[`MUTABLE_STORAGE_AND_PACING.md`](MUTABLE_STORAGE_AND_PACING.md). Gemaess
+Handoff werden sie erst im frischen Gatebuild von KR-4704 umgesetzt und
+ausgefuehrt. KR-4704 ist der naechste Task.
 
 ## KR-4621 umgesetzt
 

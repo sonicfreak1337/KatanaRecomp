@@ -4,6 +4,12 @@
 
 ### Geaendert
 
+- KR-4703: Flash und VMU verwenden projektgebundene, atomisch gespeicherte
+  Primaer-/Recovery-Arbeitskopien; Nutzerquellen bleiben read-only und werden
+  vor Save erneut identitaetsgeprueft. Der generierte Port koppelt Video-
+  Gastzyklen an einen ganzzahligen, diagnostizierbaren Hostpacer und speichert
+  beim geordneten Shutdown genau einmal. Runtime-ABI 13,
+  Hostruntimevertrag 2 und Portprojektvertrag 5 versionieren die Integration.
 - KR-4719: Der private Retail-Harness verlangt Configversion 2 und
   `execution_mode=build-only`. Runtimeprozesse werden vor `Process.Start`
   technisch abgewiesen. Zwei frische offizielle Buildjobs muessen Identitaet,

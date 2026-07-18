@@ -91,6 +91,7 @@ std::string generated_header(const std::string& entry_namespace) {
 std::string handwritten_main(const std::string& entry_namespace,
                              const bool hle_bios_abi,
                              const std::span<const katana::io::InputProvenance> inputs,
+                             const std::string_view project_identity,
                              const std::string_view expected_boot_sha256,
                              const std::uint32_t entry_address) {
     std::ostringstream identity_contract;
@@ -103,6 +104,8 @@ std::string handwritten_main(const std::string& entry_namespace,
                           << katana::io::quote_json(input.sha256) << "},\n";
     }
     identity_contract << "};\n"
+                      << "constexpr std::string_view expected_project_identity = "
+                      << katana::io::quote_json(project_identity) << ";\n"
                       << "constexpr std::string_view expected_boot_sha256 = "
                       << katana::io::quote_json(expected_boot_sha256) << ";\n";
     return "#include \"katana_port.hpp\"\n"
@@ -282,21 +285,29 @@ std::string handwritten_main(const std::string& entry_namespace,
            "        catch (const std::exception&) { throw "
            "std::runtime_error(\"source-identity-mismatch\"); }\n"
            "        verify_source_identity(source, boot);\n"
+           "        auto mutable_storage = katana::runtime::DreamcastMutableStorage::open(\n"
+           "            {std::string(expected_project_identity)});\n"
            "        katana::runtime::CpuState cpu;\n"
            "        const auto state = katana::runtime::initialize_dreamcast_runtime(\n"
            "            cpu, boot, katana::runtime::DreamcastRuntimeFirmwareMode::" +
            std::string(hle_bios_abi ? "HleBiosAbi" : "Direct") +
-           ");\n"
+           ", mutable_storage);\n"
            "        auto input = std::make_shared<katana::runtime::InjectedHostInput>();\n"
            "        state.maple->attach(0u, 0u,\n"
            "            std::make_shared<katana::runtime::MapleControllerDevice>(input));\n"
-           "        katana::runtime::DreamcastMediaClock media_clock(*state.scheduler, {});\n"
+           "        katana::runtime::HostPacer pacer;\n"
+           "        katana::runtime::DreamcastMediaClock media_clock(\n"
+           "            *state.scheduler, {},\n"
+           "            [&](const katana::runtime::VideoTick& tick) {\n"
+           "                pacer.pace(tick.guest_cycle);\n"
+           "            });\n"
            "        std::unique_ptr<katana::runtime::HostAudioOutput> audio =\n"
            "            katana::runtime::native_audio_available()\n"
            "                ? katana::runtime::create_native_audio_output()\n"
            "                : std::make_unique<katana::runtime::RecordingHostAudioOutput>();\n"
            "        katana::runtime::HostRuntimeSession host(\n"
-           "            *state.scheduler, media_clock, input, *audio);\n"
+           "            *state.scheduler, media_clock, input, *audio, &pacer,\n"
+           "            [mutable_storage] { mutable_storage->save(); });\n"
            "        std::uint64_t host_sequence = 1u;\n"
            "        host.inject({host_sequence++, state.scheduler->current_cycle(),\n"
            "                     katana::runtime::HostRuntimeEventKind::Resume, {}});\n"
@@ -367,6 +378,7 @@ std::string handwritten_main(const std::string& entry_namespace,
            "        const auto audio_hash = audio->deterministic_hash();\n"
            "        const auto input_events = input->injected_events();\n"
            "        host.shutdown();\n"
+           "        host.require_clean_shutdown();\n"
            "        if (state.scheduler->pending_event_count() != 0u)\n"
            "            throw std::runtime_error(\"Host-Shutdown hinterliess "
            "Schedulerereignisse.\");\n"
@@ -401,6 +413,10 @@ std::string handwritten_main(const std::string& entry_namespace,
            "                  << result.indirect_dispatches << \" final_pc=\" << result.final_pc "
            "<< '\\n';\n"
            "        return 0;\n"
+           "    } catch (const katana::runtime::HostPacingException& error) {\n"
+           "        std::cerr << \"KATANA_HOST_PACING_ERROR \" << error.serialize_json() << "
+           "'\\n';\n"
+           "        return 1;\n"
            "    } catch (const katana::runtime::IndirectDispatchError& error) {\n"
            "        std::cerr << \"KATANA_RUNTIME_DISPATCH_ERROR \"\n"
            "                  << error.metrics_json() << '\\n';\n"
@@ -953,6 +969,7 @@ PortExportResult export_dreamcast_port_project(const PreparedPortProgram& prepar
                     handwritten_main(entry_namespace,
                                      prepared.hle_bios_abi,
                                      prepared.inputs,
+                                     prepared.project_identity,
                                      katana::io::sha256_bytes(boot_bytes),
                                      prepared.entry_address),
                     true);

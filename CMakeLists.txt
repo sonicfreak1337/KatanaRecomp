@@ -225,6 +225,7 @@ add_library(katana_runtime STATIC
     src/runtime/iso9660.cpp
     src/runtime/maple.cpp
     src/runtime/media_clock.cpp
+    src/runtime/persistent_storage.cpp
     src/runtime/pvr.cpp
     src/runtime/platform_interrupt.cpp
     src/runtime/scheduler.cpp

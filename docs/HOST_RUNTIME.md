@@ -1,6 +1,6 @@
 # Native Audio-, Eingabe- und Hostruntime
 
-KR-4702 definiert `katana-native-host-runtime` Version 1. Der Vertrag verbindet
+KR-4703 erweitert `katana-native-host-runtime` auf Version 2. Der Vertrag verbindet
 Hostaudio, explizite Fenster-/Tastaturereignisse und Maple-Eingabe mit dem
 gastzeitdeterministischen Scheduler, ohne Entscheidungen aus der Host-Wall-
 Clock abzuleiten.
@@ -28,6 +28,13 @@ liest nur diesen Zustand; Pollingzeit und Wall-Clock erzeugen keinen Gastinput.
 Gastzyklen. Fokusverlust/Pause stoppen Media-Clock und Audio. Resume setzt sie
 fort. Close, Shutdown und jeder Fehlerpfad stoppen Audio und Media-Clock und
 leeren alle Schedulerereignisse.
+
+Version 2 fuegt den optionalen `HostPacer` und einen genau einmal ausgefuehrten
+Persistenz-Callback hinzu. Der Pacer wird zusammen mit Media-Clock und Audio
+pausiert beziehungsweise neu verankert. Shutdown leert zuerst den Scheduler,
+stoppt die Hostausgabe und speichert danach Flash/VMU. Ein Savefehler ist ueber
+`require_clean_shutdown()` sichtbar. Der vollstaendige Vertrag steht in
+[`MUTABLE_STORAGE_AND_PACING.md`](MUTABLE_STORAGE_AND_PACING.md).
 
 ## Nachweis
 

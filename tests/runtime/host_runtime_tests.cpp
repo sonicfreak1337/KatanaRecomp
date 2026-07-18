@@ -25,7 +25,7 @@ template <typename Exception, typename Callback> bool throws(Callback&& callback
 
 int main() {
     using namespace katana::runtime;
-    static_assert(native_host_runtime_contract_version == 1u);
+    static_assert(native_host_runtime_contract_version == 2u);
     EventScheduler scheduler;
     DreamcastMediaClock clock(scheduler, {600u, 60u, 60u, 2u});
     auto input = std::make_shared<InjectedHostInput>();

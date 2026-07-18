@@ -548,7 +548,7 @@ weist Prozessstart sowie maximale Checkpointstufe explizit aus. Vertrag,
 Selbsttest und die bei KR-4704 auszufuehrende private Gatewiederholung stehen
 in `PRIVATE_RETAIL_DEBUG.md`.
 
-### [ ] KR-4703 - VMU-/Flash-Arbeitskopien und Host-Pacing
+### [x] KR-4703 - VMU-/Flash-Arbeitskopien und Host-Pacing
 
 Abhaengigkeiten: KR-4616, KR-4625, KR-4719
 Prioritaet: P1
@@ -565,6 +565,14 @@ Akzeptanz:
 - defekte oder geloeschte Arbeitskopien veraendern nie die Quelle
 - Pause, Resume und Shutdown bleiben deterministisch
 - Persistenz- und Pacingfehler sind reproduzierbar diagnostizierbar
+
+Umgesetzt mit versionierten, SHA-256-gebundenen Primaer-/Recoverycontainern,
+read-only Quellen, projektgebundenem Nutzerdatenpfad sowie persistenten
+Flash-/VMU-Geraeten. Hostruntimevertrag 2 verankert einen ganzzahligen Pacer an
+Video-Gastzyklen und speichert beide Arbeitskopien beim geordneten Shutdown.
+Runtime-ABI 13 und Portprojektvertrag 5 versionieren die Integration. Vertrag
+und die bei KR-4704 umzusetzenden Regressionen stehen in
+`MUTABLE_STORAGE_AND_PACING.md`.
 
 ### [ ] KR-4704 - v0.47 Gate-Vorbereitung
 
