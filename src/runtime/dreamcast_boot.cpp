@@ -108,10 +108,8 @@ initialize_dreamcast_runtime(CpuState& cpu,
     state.rtc_clock = std::make_shared<Sh4RtcClockDomain>();
     state.tmu = std::make_shared<Sh4Tmu>(*state.scheduler, TmuTiming{4u, state.rtc_clock});
     state.rtc = std::make_shared<Sh4Rtc>(*state.scheduler, state.rtc_clock);
-    state.dmac = std::make_shared<Sh4Dmac>(*state.scheduler,
-                                          cpu.memory,
-                                          DmaTiming{},
-                                          DmaExecutionMode::DeterministicBatch);
+    state.dmac = std::make_shared<Sh4Dmac>(
+        *state.scheduler, cpu.memory, DmaTiming{}, DmaExecutionMode::DeterministicBatch);
     state.interrupt_controller = std::make_shared<InterruptController>();
     state.interrupt_router = std::make_shared<PlatformInterruptRouter>(
         *state.interrupt_controller, *state.tmu, *state.rtc, *state.dmac);

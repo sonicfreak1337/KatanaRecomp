@@ -20,10 +20,10 @@ std::string snapshot_key(const katana::io::ExecutableImage& image,
                          const std::uint32_t target_base,
                          const std::size_t entry_count) {
     const auto entry_size = encoding == JumpTableEncoding::Absolute32 ? 4u : 2u;
-    const auto byte_count = entry_count <= maximum_jump_table_entries
-                                ? entry_count * entry_size
-                                : 0u;
-    const auto* segment = byte_count != 0u ? image.find_segment(table_address, byte_count) : nullptr;
+    const auto byte_count =
+        entry_count <= maximum_jump_table_entries ? entry_count * entry_size : 0u;
+    const auto* segment =
+        byte_count != 0u ? image.find_segment(table_address, byte_count) : nullptr;
     std::string digest = "invalid";
     if (segment != nullptr) {
         const auto offset = segment->byte_offset(table_address);
@@ -142,12 +142,8 @@ JumpTableAnalysis analyze_jump_table(const katana::io::ExecutableImage& image,
                                      const std::uint32_t table_address,
                                      const std::size_t entry_count,
                                      JumpTableSnapshotCache* const cache) {
-    const auto key = snapshot_key(image,
-                                  JumpTableEncoding::Absolute32,
-                                  dispatch_address,
-                                  table_address,
-                                  0u,
-                                  entry_count);
+    const auto key = snapshot_key(
+        image, JumpTableEncoding::Absolute32, dispatch_address, table_address, 0u, entry_count);
     if (cache != nullptr) {
         if (auto hit = cache->load(key)) return *hit;
     }
@@ -338,12 +334,8 @@ recognize_bounded_relative_jump_table(const katana::io::ExecutableImage& image,
     if (!entry_count.has_value()) return std::nullopt;
     const auto table_address = ((table_base.address + 4u) & ~3u) +
                                static_cast<std::uint32_t>(table_base.instruction.displacement);
-    return analyze_relative_jump_table(image,
-                                       dispatch.address,
-                                       table_address,
-                                       dispatch.address + 4u,
-                                       *entry_count,
-                                       cache);
+    return analyze_relative_jump_table(
+        image, dispatch.address, table_address, dispatch.address + 4u, *entry_count, cache);
 }
 
 const char* jump_table_encoding_name(const JumpTableEncoding encoding) noexcept {

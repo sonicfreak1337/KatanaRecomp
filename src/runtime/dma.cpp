@@ -280,9 +280,12 @@ std::size_t Sh4Dmac::batch_units(const std::size_t index, const std::size_t size
     const auto unit_cycles = timing_.guest_cycles_per_byte * size;
     if (const auto foreign_cycle = scheduler_.next_event_cycle();
         foreign_cycle && *foreign_cycle > scheduler_.current_cycle()) {
-        const auto before_foreign = (*foreign_cycle - scheduler_.current_cycle() - 1u) / unit_cycles;
-        if (before_foreign != 0u) units = std::min(units, static_cast<std::size_t>(before_foreign));
-        else units = 1u;
+        const auto before_foreign =
+            (*foreign_cycle - scheduler_.current_cycle() - 1u) / unit_cycles;
+        if (before_foreign != 0u)
+            units = std::min(units, static_cast<std::size_t>(before_foreign));
+        else
+            units = 1u;
     }
     return std::max<std::size_t>(1u, units);
 }

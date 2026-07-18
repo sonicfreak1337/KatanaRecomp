@@ -286,9 +286,8 @@ int main() {
         static_cast<void>(batch_scheduler.advance_to(256u, 1u));
         bool identical = true;
         for (std::uint32_t index = 0u; index < 64u; ++index) {
-            identical = identical &&
-                        reference_memory.read_u32(512u + index * 4u) ==
-                            batch_memory.read_u32(512u + index * 4u);
+            identical = identical && reference_memory.read_u32(512u + index * 4u) ==
+                                         batch_memory.read_u32(512u + index * 4u);
         }
         require(identical && reference.completed_transfer_units(0u) == 64u &&
                     batch.completed_transfer_units(0u) == 64u &&

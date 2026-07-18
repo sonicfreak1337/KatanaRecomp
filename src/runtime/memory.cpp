@@ -527,12 +527,15 @@ bool Memory::has_guest_write_observer() const noexcept {
 std::uint8_t Memory::read_u8(const std::uint32_t address) const {
     const auto& mapped = resolve(address, MemoryAccessWidth::Byte, MemoryAccessOperation::Read);
     const auto offset = region_offset(mapped.info, address);
-    const auto value = mapped.linear != nullptr ? mapped.linear->read_u8(offset)
-                                                : mapped.device->read_u8(offset);
+    const auto value =
+        mapped.linear != nullptr ? mapped.linear->read_u8(offset) : mapped.device->read_u8(offset);
     if (access_observers_active()) {
         ++performance_counters_.observed_accesses;
-        notify_access(MemoryAccessEvent{
-            MemoryAccessOperation::Read, address, MemoryAccessWidth::Byte, value, mapped.info.name});
+        notify_access(MemoryAccessEvent{MemoryAccessOperation::Read,
+                                        address,
+                                        MemoryAccessWidth::Byte,
+                                        value,
+                                        mapped.info.name});
     } else {
         ++performance_counters_.unobserved_accesses;
     }
@@ -564,8 +567,11 @@ std::uint32_t Memory::read_u32(const std::uint32_t address) const {
                                                 : mapped.device->read_u32(offset);
     if (access_observers_active()) {
         ++performance_counters_.observed_accesses;
-        notify_access(MemoryAccessEvent{
-            MemoryAccessOperation::Read, address, MemoryAccessWidth::Word, value, mapped.info.name});
+        notify_access(MemoryAccessEvent{MemoryAccessOperation::Read,
+                                        address,
+                                        MemoryAccessWidth::Word,
+                                        value,
+                                        mapped.info.name});
     } else {
         ++performance_counters_.unobserved_accesses;
     }
@@ -591,12 +597,17 @@ void Memory::write_u8(const std::uint32_t address,
     const auto offset = region_offset(mapped.info, address);
     const bool changed = !guest_write_observer_ || mapped.linear == nullptr ||
                          mapped.linear->read_u8(offset) != value;
-    if (mapped.linear != nullptr) mapped.linear->write_u8(offset, value);
-    else mapped.device->write_u8(offset, value);
+    if (mapped.linear != nullptr)
+        mapped.linear->write_u8(offset, value);
+    else
+        mapped.device->write_u8(offset, value);
     if (access_observers_active()) {
         ++performance_counters_.observed_accesses;
-        notify_access(MemoryAccessEvent{
-            MemoryAccessOperation::Write, address, MemoryAccessWidth::Byte, value, mapped.info.name});
+        notify_access(MemoryAccessEvent{MemoryAccessOperation::Write,
+                                        address,
+                                        MemoryAccessWidth::Byte,
+                                        value,
+                                        mapped.info.name});
     } else {
         ++performance_counters_.unobserved_accesses;
     }
@@ -610,8 +621,10 @@ void Memory::write_u16(const std::uint32_t address,
     const auto offset = region_offset(mapped.info, address);
     const bool changed = !guest_write_observer_ || mapped.linear == nullptr ||
                          mapped.linear->read_u16(offset) != value;
-    if (mapped.linear != nullptr) mapped.linear->write_u16(offset, value);
-    else mapped.device->write_u16(offset, value);
+    if (mapped.linear != nullptr)
+        mapped.linear->write_u16(offset, value);
+    else
+        mapped.device->write_u16(offset, value);
     if (access_observers_active()) {
         ++performance_counters_.observed_accesses;
         notify_access(MemoryAccessEvent{MemoryAccessOperation::Write,
@@ -632,12 +645,17 @@ void Memory::write_u32(const std::uint32_t address,
     const auto offset = region_offset(mapped.info, address);
     const bool changed = !guest_write_observer_ || mapped.linear == nullptr ||
                          mapped.linear->read_u32(offset) != value;
-    if (mapped.linear != nullptr) mapped.linear->write_u32(offset, value);
-    else mapped.device->write_u32(offset, value);
+    if (mapped.linear != nullptr)
+        mapped.linear->write_u32(offset, value);
+    else
+        mapped.device->write_u32(offset, value);
     if (access_observers_active()) {
         ++performance_counters_.observed_accesses;
-        notify_access(MemoryAccessEvent{
-            MemoryAccessOperation::Write, address, MemoryAccessWidth::Word, value, mapped.info.name});
+        notify_access(MemoryAccessEvent{MemoryAccessOperation::Write,
+                                        address,
+                                        MemoryAccessWidth::Word,
+                                        value,
+                                        mapped.info.name});
     } else {
         ++performance_counters_.unobserved_accesses;
     }
@@ -661,8 +679,10 @@ void Memory::write_bytes(const std::uint32_t address,
         const auto offset = region_offset(mapped.info, current);
         changed = changed || !guest_write_observer_ || mapped.linear == nullptr ||
                   mapped.linear->read_u8(offset) != bytes[index];
-        if (mapped.linear != nullptr) mapped.linear->write_u8(offset, bytes[index]);
-        else mapped.device->write_u8(offset, bytes[index]);
+        if (mapped.linear != nullptr)
+            mapped.linear->write_u8(offset, bytes[index]);
+        else
+            mapped.device->write_u8(offset, bytes[index]);
         if (access_observers_active()) {
             ++performance_counters_.observed_accesses;
             notify_access(MemoryAccessEvent{MemoryAccessOperation::Write,
@@ -735,8 +755,10 @@ void Memory::rebuild_region_index() {
         const auto last_page = static_cast<std::uint32_t>(last_address) >> region_page_shift;
         for (auto page = first_page;; ++page) {
             auto& slot = region_page_index_[page];
-            if (slot == unmapped_region) slot = static_cast<std::int32_t>(index);
-            else if (slot != static_cast<std::int32_t>(index)) slot = ambiguous_region;
+            if (slot == unmapped_region)
+                slot = static_cast<std::int32_t>(index);
+            else if (slot != static_cast<std::int32_t>(index))
+                slot = ambiguous_region;
             if (page == last_page) break;
         }
     }

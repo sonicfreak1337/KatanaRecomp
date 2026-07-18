@@ -448,13 +448,12 @@ int main() {
                 finite_index_site->targets == std::vector<std::uint32_t>({0x30u, 0x34u}) &&
                 finite_index_site->reason == "guarded-function-memory",
             "Endlicher MOVT-/Shift-/Indexpfad wurde nicht als bewachte Zielmenge erhalten.");
-    require(finite_index.function_scc_count != 0u &&
-                finite_index.function_summary_iterations != 0u &&
-                finite_index.instruction_arena != nullptr &&
-                finite_index.instruction_arena->size() ==
-                    finite_index.recursive.instructions.size() &&
-                !finite_index.block_spans.empty() && finite_index.evidence_ids.size() != 0u,
-            "SCC-Summaries, immutable Arena, Blockspans oder Evidence-Interning fehlen.");
+    require(
+        finite_index.function_scc_count != 0u && finite_index.function_summary_iterations != 0u &&
+            finite_index.instruction_arena != nullptr &&
+            finite_index.instruction_arena->size() == finite_index.recursive.instructions.size() &&
+            !finite_index.block_spans.empty() && finite_index.evidence_ids.size() != 0u,
+        "SCC-Summaries, immutable Arena, Blockspans oder Evidence-Interning fehlen.");
 
     std::cout << "KR-4713 interprozedurale Zielwertsummaries erfolgreich.\n";
     return EXIT_SUCCESS;

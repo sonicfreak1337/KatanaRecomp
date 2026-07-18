@@ -900,10 +900,8 @@ PortExportResult export_dreamcast_port_project(const std::filesystem::path& gdi_
     static_cast<void>(katana::ir::optimize_program(program));
     std::vector<katana::io::InputProvenance> inputs;
     const auto& descriptor = disc.source->descriptor();
-    inputs.push_back({"gdi-descriptor",
-                      descriptor.size,
-                      descriptor.sha256,
-                      descriptor.resolved_path});
+    inputs.push_back(
+        {"gdi-descriptor", descriptor.size, descriptor.sha256, descriptor.resolved_path});
     for (const auto& track : disc.source->descriptor().tracks) {
         inputs.push_back({"gdi-track-" + std::to_string(track.number),
                           track.file_offset + track.sector_count * track.sector_size,

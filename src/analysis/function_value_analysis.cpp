@@ -27,7 +27,8 @@ constexpr std::size_t maximum_summary_values = 8u;
 std::vector<std::vector<std::uint32_t>>
 strong_components(const std::span<const FunctionInfo> functions) {
     std::unordered_map<std::uint32_t, const FunctionInfo*> by_address;
-    for (const auto& function : functions) by_address.emplace(function.entry_address, &function);
+    for (const auto& function : functions)
+        by_address.emplace(function.entry_address, &function);
     std::unordered_map<std::uint32_t, std::size_t> index;
     std::unordered_map<std::uint32_t, std::size_t> lowlink;
     std::unordered_set<std::uint32_t> on_stack;

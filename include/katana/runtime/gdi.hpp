@@ -73,10 +73,9 @@ class GdiDiscSource final : public DiscSource {
     [[nodiscard]] std::vector<std::uint8_t> read_data_sectors(std::uint64_t absolute_lba,
                                                               std::size_t count) const;
     [[nodiscard]] std::size_t track_index_for_lba(std::uint64_t absolute_lba) const;
-    [[nodiscard]] std::vector<std::uint8_t>
-    decode_track_sectors(std::size_t track_index,
-                         std::uint64_t first_sector,
-                         std::size_t count) const;
+    [[nodiscard]] std::vector<std::uint8_t> decode_track_sectors(std::size_t track_index,
+                                                                 std::uint64_t first_sector,
+                                                                 std::size_t count) const;
     GdiDescriptor descriptor_;
     std::vector<std::shared_ptr<FileDiscSource>> track_sources_;
     std::unordered_map<std::uint32_t, std::size_t> track_number_index_;

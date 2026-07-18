@@ -91,10 +91,7 @@ int main() {
                 indexed.performance_counters().reference_region_probes != 0u,
             "Deaktivierter Speicherfastpath liefert nicht dieselben Gastbytes.");
     const auto watchpoint = indexed.add_watchpoint(
-        0x00110000u,
-        4u,
-        katana::runtime::MemoryWatchpointAccess::Read,
-        [](const auto&) {});
+        0x00110000u, 4u, katana::runtime::MemoryWatchpointAccess::Read, [](const auto&) {});
     static_cast<void>(indexed.read_u32(0x00110000u));
     require(indexed.performance_counters().observed_accesses == 1u,
             "Watchpoint umgeht den beobachteten Speicherpfad.");

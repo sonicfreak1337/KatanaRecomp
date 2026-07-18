@@ -63,7 +63,8 @@ FileDiscSource::FileDiscSource(std::filesystem::path path, std::string identity)
     }
     stream_.open(path_, std::ios::binary);
     if (!stream_) {
-        throw std::runtime_error("Disc-Dateiquelle konnte nicht dauerhaft read-only geoeffnet werden.");
+        throw std::runtime_error(
+            "Disc-Dateiquelle konnte nicht dauerhaft read-only geoeffnet werden.");
     }
 }
 

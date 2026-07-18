@@ -59,8 +59,7 @@ int main() {
         katana::analysis::analyze_jump_table(image, 0x1010u, 0x2000u, 2u, &snapshot_cache);
     require(cached_first.resolved == cached_second.resolved &&
                 cached_first.entries.size() == cached_second.entries.size() &&
-                snapshot_cache.counters().misses == 1u &&
-                snapshot_cache.counters().hits == 1u,
+                snapshot_cache.counters().misses == 1u && snapshot_cache.counters().hits == 1u,
             "Begrenzter Jump-Table-Snapshotcache verliert Ergebnis oder Hitstatus.");
 
     const auto rejected = katana::analysis::analyze_jump_table(image, 0x1010u, 0x2000u, 3u);

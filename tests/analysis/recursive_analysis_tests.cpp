@@ -1,6 +1,6 @@
-#include "katana/analysis/recursive_analysis.hpp"
 #include "katana/analysis/analysis_index.hpp"
 #include "katana/analysis/basic_blocks.hpp"
+#include "katana/analysis/recursive_analysis.hpp"
 
 #include <algorithm>
 #include <cstdlib>

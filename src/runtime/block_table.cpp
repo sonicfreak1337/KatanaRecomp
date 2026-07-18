@@ -36,8 +36,8 @@ bool ranges_overlap(const std::uint32_t left_start,
 
 } // namespace
 
-std::size_t RuntimeBlockTable::VariantAddressHash::operator()(
-    const VariantAddressKey& key) const noexcept {
+std::size_t
+RuntimeBlockTable::VariantAddressHash::operator()(const VariantAddressKey& key) const noexcept {
     auto seed = static_cast<std::size_t>(key.address);
     const auto mix = [&seed](auto value) {
         seed ^= std::hash<decltype(value)>{}(value) + static_cast<std::size_t>(0x9E3779B9u) +

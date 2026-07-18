@@ -85,9 +85,9 @@ int main() {
     for (std::size_t index = 0u; index < 8u; ++index) {
         publishers.emplace_back([&] { cache.store(key, "concurrent.cpp", "stable-content\n"); });
     }
-    for (auto& publisher : publishers) publisher.join();
-    require(cache.load(key, "concurrent.cpp") ==
-                    std::optional<std::string>("stable-content\n") &&
+    for (auto& publisher : publishers)
+        publisher.join();
+    require(cache.load(key, "concurrent.cpp") == std::optional<std::string>("stable-content\n") &&
                 std::none_of(std::filesystem::directory_iterator(cache.root() / key),
                              std::filesystem::directory_iterator{},
                              [](const auto& entry) {

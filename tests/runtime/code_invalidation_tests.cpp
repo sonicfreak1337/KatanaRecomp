@@ -128,14 +128,13 @@ int main() {
         ExecutableCodeTracker indexed(2u);
         ExecutableCodeTracker reference(2u);
         for (auto* candidate : {&indexed, &reference}) {
-            static_cast<void>(candidate->register_block(
-                {"near", 0x0C010000u, 8u, "benchmark", {"near-caller"}}));
-            static_cast<void>(candidate->register_block(
-                {"far", 0x0C100000u, 8u, "benchmark", {"far-caller"}}));
+            static_cast<void>(
+                candidate->register_block({"near", 0x0C010000u, 8u, "benchmark", {"near-caller"}}));
+            static_cast<void>(
+                candidate->register_block({"far", 0x0C100000u, 8u, "benchmark", {"far-caller"}}));
         }
         reference.set_lookup_mode(CodeInvalidationLookupMode::ReferenceScan);
-        const auto indexed_result =
-            indexed.observe_write(0x8C010004u, 1u, CodeWriteSource::Cpu);
+        const auto indexed_result = indexed.observe_write(0x8C010004u, 1u, CodeWriteSource::Cpu);
         const auto reference_result =
             reference.observe_write(0x8C010004u, 1u, CodeWriteSource::Cpu);
         require(indexed_result.invalidated_blocks == reference_result.invalidated_blocks &&

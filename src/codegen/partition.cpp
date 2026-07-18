@@ -78,9 +78,9 @@ partition_translation_units(const std::span<const katana::ir::Function> function
     return result;
 }
 
-std::vector<std::size_t> changed_translation_unit_partitions(
-    const std::span<const TranslationUnitPartition> current,
-    const std::span<const TranslationUnitPartition> previous) {
+std::vector<std::size_t>
+changed_translation_unit_partitions(const std::span<const TranslationUnitPartition> current,
+                                    const std::span<const TranslationUnitPartition> previous) {
     std::vector<std::size_t> changed;
     for (std::size_t index = 0u; index < current.size(); ++index) {
         if (index >= previous.size() ||

@@ -69,25 +69,24 @@ InstructionSpan::view(const InstructionArena& arena) const {
     return instructions.subspan(first, count);
 }
 
-std::vector<InstructionSpan>
-build_block_spans(const InstructionArena& arena, const std::span<const BasicBlock> blocks) {
+std::vector<InstructionSpan> build_block_spans(const InstructionArena& arena,
+                                               const std::span<const BasicBlock> blocks) {
     const auto instructions = arena.instructions();
     std::vector<InstructionSpan> spans;
     spans.reserve(blocks.size());
     for (const auto& block : blocks) {
-        const auto first = std::lower_bound(instructions.begin(),
-                                            instructions.end(),
-                                            block.start_address,
-                                            [](const auto& line, const auto address) {
-                                                return line.address < address;
-                                            });
-        const auto after = std::upper_bound(instructions.begin(),
-                                            instructions.end(),
-                                            block.end_address,
-                                            [](const auto address, const auto& line) {
-                                                return address < line.address;
-                                            });
-        if (first == instructions.end() || first == after || first->address != block.start_address) {
+        const auto first = std::lower_bound(
+            instructions.begin(),
+            instructions.end(),
+            block.start_address,
+            [](const auto& line, const auto address) { return line.address < address; });
+        const auto after = std::upper_bound(
+            instructions.begin(),
+            instructions.end(),
+            block.end_address,
+            [](const auto address, const auto& line) { return address < line.address; });
+        if (first == instructions.end() || first == after ||
+            first->address != block.start_address) {
             throw std::invalid_argument("Basic Block besitzt keinen zusammenhaengenden Arenaspan.");
         }
         spans.push_back({static_cast<std::size_t>(first - instructions.begin()),

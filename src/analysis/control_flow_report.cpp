@@ -247,8 +247,7 @@ std::string format_control_flow_analysis_json(const ControlFlowAnalysisResult& a
            << ",\"function_value_summaries\":" << analysis.function_value_summaries.size()
            << ",\"directive_diagnostics\":" << analysis.directive_diagnostics.size()
            << ",\"fixpoint_iterations\":" << analysis.fixpoint_iterations
-           << ",\"recursive_processed_work_items\":"
-           << analysis.recursive.processed_work_items
+           << ",\"recursive_processed_work_items\":" << analysis.recursive.processed_work_items
            << ",\"recursive_reused_contexts\":" << analysis.recursive.reused_contexts
            << ",\"function_summary_iterations\":" << analysis.function_summary_iterations
            << ",\"function_scc_count\":" << analysis.function_scc_count

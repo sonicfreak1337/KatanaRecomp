@@ -56,8 +56,7 @@ int main() {
             "Datei-Discquelle liest nicht deterministisch oder leakt den Hostpfad als Identitaet.");
     static_cast<void>(file.read(0u, 1u));
     static_cast<void>(file.read(1u, 1u));
-    require(file.open_operations() == 1u && file.read_operations() == 3u &&
-                file.bytes_read() == 4u,
+    require(file.open_operations() == 1u && file.read_operations() == 3u && file.bytes_read() == 4u,
             "Wiederholte Dateireads oeffnen die read-only Quelle erneut.");
     require(std::filesystem::file_size(fixture.path) == bytes.size(),
             "Read-only-Discquelle hat die Quelldatei veraendert.");

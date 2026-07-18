@@ -577,12 +577,11 @@ ControlFlowAnalysisResult analyze_control_flow(const katana::io::ExecutableImage
                          "static-target-already-proven"});
                     continue;
                 }
-                auto jump_table = analyze_jump_table(
-                    image,
-                    table.dispatch_address,
-                    table.table_address,
-                    table.entry_count,
-                    &jump_table_cache);
+                auto jump_table = analyze_jump_table(image,
+                                                     table.dispatch_address,
+                                                     table.table_address,
+                                                     table.entry_count,
+                                                     &jump_table_cache);
                 jump_table.dispatch_kind =
                     (dispatch->instruction.kind == katana::sh4::InstructionKind::Jsr ||
                      dispatch->instruction.kind == katana::sh4::InstructionKind::Bsrf)

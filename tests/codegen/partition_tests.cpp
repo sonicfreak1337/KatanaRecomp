@@ -67,16 +67,17 @@ int main() {
                     first_entries.end(),
             "Partitionierung ist nicht reproduzierbar oder verliert/dupliziert Funktionen.");
     require(first.size() == second.size() &&
-                std::equal(first.begin(), first.end(), second.begin(), [](const auto& left,
-                                                                         const auto& right) {
-                    return left.content_sha256 == right.content_sha256;
-                }) &&
+                std::equal(first.begin(),
+                           first.end(),
+                           second.begin(),
+                           [](const auto& left, const auto& right) {
+                               return left.content_sha256 == right.content_sha256;
+                           }) &&
                 katana::codegen::changed_translation_unit_partitions(second, first).empty(),
             "Stabile Partitionen verlieren ihren inhaltsadressierten Bulk-Codegenstatus.");
     auto changed_functions = functions;
     changed_functions.front().blocks.front().instructions.front().original_opcode = 0x0009u;
-    const auto changed =
-        katana::codegen::partition_translation_units(changed_functions, options);
+    const auto changed = katana::codegen::partition_translation_units(changed_functions, options);
     require(katana::codegen::changed_translation_unit_partitions(changed, second).size() == 1u,
             "Lokale IR-Aenderung invalidiert mehr als die betroffene Codegenpartition.");
 
@@ -114,13 +115,12 @@ int main() {
             scale.push_back(function(0x1000u + index * 4u, 1u));
         }
         const auto started = std::chrono::steady_clock::now();
-        const auto partitions =
-            katana::codegen::partition_translation_units(scale, {256u, 4096u});
+        const auto partitions = katana::codegen::partition_translation_units(scale, {256u, 4096u});
         const auto elapsed = std::chrono::steady_clock::now() - started;
         std::size_t covered = 0u;
-        for (const auto& partition : partitions) covered += partition.function_indices.size();
-        require(covered == count && elapsed < budget &&
-                    partitions.size() <= (count + 255u) / 256u,
+        for (const auto& partition : partitions)
+            covered += partition.function_indices.size();
+        require(covered == count && elapsed < budget && partitions.size() <= (count + 255u) / 256u,
                 "10k/50k/100k-Bulk-Codegenfixture sprengt Zeit- oder Partitionsbudget.");
     }
 

@@ -18,7 +18,8 @@ bool overlaps(const std::uint32_t left,
 ExecutableCodeTracker::ExecutableCodeTracker(const std::size_t provenance_capacity)
     : provenance_capacity_(provenance_capacity) {
     if (provenance_capacity_ == 0u) {
-        throw std::invalid_argument("Codeinvalidierungsprovenienz braucht eine positive Kapazitaet.");
+        throw std::invalid_argument(
+            "Codeinvalidierungsprovenienz braucht eine positive Kapazitaet.");
     }
     invalidation_events_.reserve(provenance_capacity_);
 }
@@ -37,8 +38,7 @@ BlockRegistrationResult ExecutableCodeTracker::register_block(ExecutableBlockReg
     if (known != identity_index_.end()) {
         auto& duplicate = blocks_[known->second];
         if (duplicate.block.physical_start != block.physical_start ||
-            duplicate.block.size != block.size ||
-            duplicate.block.provenance != block.provenance ||
+            duplicate.block.size != block.size || duplicate.block.provenance != block.provenance ||
             duplicate.block.origin != block.origin) {
             throw std::invalid_argument(
                 "Blockidentitaet darf Adresse, Groesse oder Provenienz nicht wechseln.");
@@ -55,9 +55,9 @@ BlockRegistrationResult ExecutableCodeTracker::register_block(ExecutableBlockReg
     const auto index = blocks_.size() - 1u;
     identity_index_.emplace(blocks_[index].block.identity, index);
     const auto first_page = blocks_[index].block.physical_start / page_size * page_size;
-    const auto final_address = static_cast<std::uint32_t>(
-        static_cast<std::uint64_t>(blocks_[index].block.physical_start) +
-        blocks_[index].block.size - 1u);
+    const auto final_address =
+        static_cast<std::uint32_t>(static_cast<std::uint64_t>(blocks_[index].block.physical_start) +
+                                   blocks_[index].block.size - 1u);
     const auto last_page = final_address / page_size * page_size;
     for (auto page = first_page;; page += page_size) {
         page_blocks_[page].push_back(index);
@@ -111,7 +111,8 @@ CodeInvalidationResult ExecutableCodeTracker::observe_write(const std::uint32_t 
         performance_counters_.indexed_candidates += candidates.size();
     } else {
         candidates.resize(blocks_.size());
-        for (std::size_t index = 0u; index < candidates.size(); ++index) candidates[index] = index;
+        for (std::size_t index = 0u; index < candidates.size(); ++index)
+            candidates[index] = index;
         performance_counters_.reference_candidates += candidates.size();
     }
     for (const auto index : candidates) {

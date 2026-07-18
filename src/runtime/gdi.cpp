@@ -286,11 +286,11 @@ std::vector<std::uint8_t> GdiDiscSource::read_raw_sector(const std::uint32_t tra
 
 std::size_t GdiDiscSource::track_index_for_lba(const std::uint64_t absolute_lba) const {
     ++io_counters_.track_lookups;
-    const auto next = std::upper_bound(
-        descriptor_.tracks.begin(),
-        descriptor_.tracks.end(),
-        absolute_lba,
-        [](const auto lba, const GdiTrack& track) { return lba < track.lba; });
+    const auto next =
+        std::upper_bound(descriptor_.tracks.begin(),
+                         descriptor_.tracks.end(),
+                         absolute_lba,
+                         [](const auto lba, const GdiTrack& track) { return lba < track.lba; });
     if (next == descriptor_.tracks.begin()) {
         throw std::out_of_range("GDI-LBA liegt in keinem Track.");
     }
@@ -302,10 +302,9 @@ std::size_t GdiDiscSource::track_index_for_lba(const std::uint64_t absolute_lba)
     return index;
 }
 
-std::vector<std::uint8_t> GdiDiscSource::decode_track_sectors(
-    const std::size_t track_index,
-    const std::uint64_t first_sector,
-    const std::size_t count) const {
+std::vector<std::uint8_t> GdiDiscSource::decode_track_sectors(const std::size_t track_index,
+                                                              const std::uint64_t first_sector,
+                                                              const std::size_t count) const {
     const auto& track = descriptor_.tracks[track_index];
     if (track.type != GdiTrackType::Data) {
         throw std::runtime_error("GDI-Audiotrack besitzt keine 2048-Byte-Datensicht.");
@@ -359,8 +358,8 @@ std::vector<std::uint8_t> GdiDiscSource::read_data_sectors(const std::uint64_t a
         const auto track_index = track_index_for_lba(lba);
         const auto& track = descriptor_.tracks[track_index];
         const auto within_track = lba - track.lba;
-        const auto chunk = static_cast<std::size_t>(std::min<std::uint64_t>(
-            remaining, track.sector_count - within_track));
+        const auto chunk = static_cast<std::size_t>(
+            std::min<std::uint64_t>(remaining, track.sector_count - within_track));
         bool all_cached = cache_mode_ == DiscCacheMode::Enabled;
         if (all_cached) {
             const std::lock_guard lock(cache_mutex_);
@@ -424,8 +423,7 @@ void GdiDiscSource::read(const std::uint64_t offset,
     const auto in_sector = static_cast<std::size_t>(offset % 2048u);
     const auto full_sectors = destination.size() / 2048u;
     const auto remainder = destination.size() % 2048u;
-    const auto sector_count =
-        full_sectors + (in_sector + remainder + 2047u) / 2048u;
+    const auto sector_count = full_sectors + (in_sector + remainder + 2047u) / 2048u;
     const auto data = read_data_sectors(first_sector, sector_count);
     std::copy_n(data.begin() + static_cast<std::ptrdiff_t>(in_sector),
                 destination.size(),
