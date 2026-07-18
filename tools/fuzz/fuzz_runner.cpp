@@ -355,22 +355,22 @@ void exercise_runtime(const std::span<const std::uint8_t> bytes) {
     const auto guard = address_space.guard_for(virtual_start, value(3u));
     const auto variant = block_variant_key(guard, 0u);
     RuntimeBlockTable table;
-    table.register_static({virtual_start,
-                           physical_base,
-                           2u,
-                           BlockEndKind::DynamicBranch,
-                           variant,
-                           fuzz_backend_block,
-                           "image-segment",
-                           false});
-    table.register_runtime({0xA0000000u + physical_base,
-                            physical_base,
-                            2u,
-                            BlockEndKind::Return,
-                            variant,
-                            fuzz_backend_block,
-                            "rom-ram-alias",
-                            true});
+    static_cast<void>(table.register_static({virtual_start,
+                                             physical_base,
+                                             2u,
+                                             BlockEndKind::DynamicBranch,
+                                             variant,
+                                             fuzz_backend_block,
+                                             "image-segment",
+                                             false}));
+    static_cast<void>(table.register_runtime({0xA0000000u + physical_base,
+                                              physical_base,
+                                              2u,
+                                              BlockEndKind::Return,
+                                              variant,
+                                              fuzz_backend_block,
+                                              "rom-ram-alias",
+                                              true}));
     require_runtime(table.lookup(virtual_start, variant).has_value() &&
                         table.aliases(physical_base).size() == 2u,
                     "Blocktabelle verliert exakten Block oder kanonische Aliasgruppe.");
@@ -386,15 +386,17 @@ void exercise_runtime(const std::span<const std::uint8_t> bytes) {
                                              0u,
                                              {callsite, physical_base + 0x100u},
                                              variant});
-    require_runtime(indirect.block != nullptr && indirect.physical_target == physical_base,
+    const auto indirect_block = table.resolve(indirect.block);
+    require_runtime(indirect.block && indirect_block.has_value() &&
+                        indirect.physical_target == physical_base,
                     "Generischer indirekter Dispatch und Aliaslookup widersprechen sich.");
-    if (indirect.block == nullptr) {
+    if (!indirect_block) {
         throw std::runtime_error("Indirekter Dispatch lieferte keinen ausfuehrbaren Block.");
     }
     BlockExecutionContext execution;
-    require_runtime(indirect.block->function(cpu, execution).scheduler_cycle == 1u,
+    require_runtime(indirect_block->get().function(cpu, execution).scheduler_cycle == 1u,
                     "Registrierter Backendblock wurde nicht ausgefuehrt.");
-    std::map<std::pair<std::uint32_t, std::uint32_t>, const RuntimeBlock*> callsite_cache;
+    std::map<std::pair<std::uint32_t, std::uint32_t>, RuntimeBlockHandle> callsite_cache;
     callsite_cache[{callsite, target}] = indirect.block;
     require_runtime(callsite_cache.at({callsite, target}) ==
                         dispatch_indirect(cpu,
