@@ -6,6 +6,10 @@
 #include <vector>
 
 #ifdef _WIN32
+#ifdef _MSC_VER
+// Windows SDK 10.0.26100 annotates waveOutOpen callback parameters as value types.
+#pragma warning(disable : 6553)
+#endif
 #define NOMINMAX
 #include <windows.h>
 

@@ -6,6 +6,7 @@
 #include <charconv>
 #include <cstdlib>
 #include <limits>
+#include <memory>
 #include <stdexcept>
 #include <system_error>
 #include <utility>
@@ -256,9 +257,18 @@ std::uint64_t parse_guest_cycle_budget(const std::string_view text) {
 }
 
 std::optional<std::uint64_t> guest_cycle_budget_from_environment() {
+#ifdef _WIN32
+    char* configured = nullptr;
+    std::size_t configured_size = 0u;
+    const auto error = _dupenv_s(&configured, &configured_size, "KATANA_GUEST_CYCLE_BUDGET");
+    const std::unique_ptr<char, decltype(&std::free)> owned(configured, &std::free);
+    if (error != 0 || !owned) return std::nullopt;
+    return parse_guest_cycle_budget(owned.get());
+#else
     const auto* const configured = std::getenv("KATANA_GUEST_CYCLE_BUDGET");
     if (configured == nullptr) return std::nullopt;
     return parse_guest_cycle_budget(configured);
+#endif
 }
 
 } // namespace katana::runtime
