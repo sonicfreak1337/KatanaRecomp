@@ -2,7 +2,7 @@
 
 Interner Entwicklungsmeilenstein: `v0.46.0`
 Phase: Core-Stabilisierung vor v0.47
-Naechster Task: `KR-4615`
+Naechster Task: `KR-4616`
 Naechstes Gate: `v0.47.0` - Core-Stabilisierung und generische Retail-Runtime
 Weitere interne Gates: `v0.48.0` Integration und `v0.49.0` Alpha-Candidate
 Erster oeffentlicher Release: `v0.50.0` Alpha
@@ -107,6 +107,26 @@ statt eines linearen Acht-Instruktions-Fensters.
 
 Der genaue Vertrag und die bei KR-4617/KR-4618 nachzuholenden Regressionen
 stehen in [`CONTROL_FLOW_SOUNDNESS.md`](CONTROL_FLOW_SOUNDNESS.md).
+
+## KR-4615 umgesetzt
+
+Die Runtime-Blocktabelle gibt keine Adressen verschiebbarer Vektorelemente
+mehr heraus. Dispatch, Inline-Cache und generierter Port verwenden stabile
+`RuntimeBlockHandle` aus Record-ID und Generation und loesen sie unmittelbar
+vor dem Zugriff erneut auf. Erase und physische Invalidierung markieren
+Records stale; eine dynamische Reaktivierung derselben Identitaet behaelt die
+ID und liefert eine neue Generation.
+
+Statische Bloecke werden vom Port sortiert in einem Bulk registriert und
+danach versiegelt. Statische und dynamische virtuelle, physische und
+Aliasindizes bleiben getrennt; aktive virtuelle Bereiche und physische Seiten
+bilden die Mutationsindizes. Exakte Lookups sind logarithmisch und physische
+Invalidierungen untersuchen nur beruehrte Seiten. Runtime-ABI 10 versioniert
+die Handle- und Bulk-Registry-Schnittstelle.
+
+Der genaue Vertrag und die bei KR-4617/KR-4618 nachzuholenden Last-, Alias-
+und Mutationsregressionen stehen in
+[`RUNTIME_BLOCK_REGISTRY.md`](RUNTIME_BLOCK_REGISTRY.md).
 
 ## Naechste Reihenfolge
 

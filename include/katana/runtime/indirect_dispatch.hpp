@@ -23,7 +23,7 @@ struct IndirectDispatchRequest {
 };
 
 struct IndirectDispatchResult {
-    const RuntimeBlock* block = nullptr;
+    RuntimeBlockHandle block;
     std::uint32_t diagnostic_target = 0u;
     std::uint32_t physical_target = 0u;
     std::uint32_t resulting_pc = 0u;

@@ -335,30 +335,31 @@ MonomorphicDispatchCache::dispatch(runtime::CpuState& cpu,
         request.kind == runtime::IndirectDispatchKind::Return ? cpu.pr : request.target;
     if (entry_ && entry_->callsite == request.callsite && entry_->target == target &&
         entry_->variant == request.variant && entry_->block_generation == block_generation) {
-        const auto* block = table.lookup(target, request.variant);
-        if (block != nullptr &&
-            runtime::stable_runtime_block_identity(*block) == entry_->block_identity) {
+        const auto handle = table.lookup(target, request.variant);
+        const auto block = handle ? table.resolve(*handle) : std::nullopt;
+        if (block && runtime::stable_runtime_block_identity(block->get()) ==
+                         entry_->block_identity) {
             ++hits_;
             cpu.pc = target;
             if (request.kind == runtime::IndirectDispatchKind::Call)
                 cpu.pr = request.return_address;
-            return {block,
+            return {*handle,
                     target,
                     runtime::canonical_physical_address(target),
                     cpu.pc,
                     cpu.pr,
-                    block->virtual_start != target,
+                    block->get().virtual_start != target,
                     "inline-cache"};
         }
     }
     ++misses_;
     auto result = runtime::dispatch_indirect(cpu, table, request);
-    if (result.block != nullptr) {
+    if (const auto block = table.resolve(result.block)) {
         entry_ = InlineCacheEntry{request.callsite,
                                   result.diagnostic_target,
                                   request.variant,
                                   block_generation,
-                                  runtime::stable_runtime_block_identity(*result.block)};
+                                  runtime::stable_runtime_block_identity(block->get())};
     }
     return result;
 }

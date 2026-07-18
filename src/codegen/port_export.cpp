@@ -411,7 +411,7 @@ std::string runtime_dispatch_adapter(const std::string& entry_namespace,
            << "#include \"katana/runtime/block_table.hpp\"\n"
            << "#include \"katana/runtime/dispatch_diagnostics.hpp\"\n"
            << "#include \"katana/runtime/indirect_dispatch.hpp\"\n"
-           << "#include <stdexcept>\n#include <utility>\n\n"
+           << "#include <stdexcept>\n#include <utility>\n#include <vector>\n\n"
            << "namespace " << entry_namespace << " {\n";
     for (const auto& function : program) {
         output << "void fn_" << symbol(function.entry_address)
@@ -485,9 +485,10 @@ std::string runtime_dispatch_adapter(const std::string& entry_namespace,
               "katana::runtime::canonical_physical_address(cpu.pc)}, {},\n"
               "             katana::runtime::DispatchResolutionOrigin::TableLookup,\n"
               "             diagnostic ? active_diagnostics : nullptr});\n"
-              "        if (selected.block == nullptr || selected.block->function == nullptr)\n"
+              "        const auto selected_block = active_table->resolve(selected.block);\n"
+              "        if (!selected_block || selected_block->get().function == nullptr)\n"
               "            throw std::runtime_error(\"Runtime-Dispatchziel besitzt keinen generierten Block.\");\n"
-              "        const auto exit = selected.block->function(cpu, *active_context);\n"
+              "        const auto exit = selected_block->get().function(cpu, *active_context);\n"
                "        if (exit.kind == katana::runtime::BlockEndKind::Return) return;\n"
                "        if (exit.kind == katana::runtime::BlockEndKind::Exception ||\n"
                "            exit.kind == katana::runtime::BlockEndKind::ExceptionReturn ||\n"
@@ -516,24 +517,37 @@ std::string runtime_dispatch_adapter(const std::string& entry_namespace,
            << "    katana::runtime::validate_platform_services(services);\n"
            << "    katana::runtime::RuntimeBlockTable table;\n";
     output << "    table.bind_code_tracker(services.executable_code_tracker());\n";
+    output << "    std::vector<katana::runtime::RuntimeBlock> static_blocks;\n";
+    output << "    static_blocks.reserve(" << block_addresses.size() << "u);\n";
     for (const auto& function : program) {
         for (const auto& block : function.blocks) {
             const auto address = symbol(block.start_address);
             std::uint32_t end = block.start_address + 2u;
             for (const auto& instruction : block.instructions)
                 end = std::max(end, instruction.source_address + 2u);
-            output << "    table.register_static({0x" << address
+            output << "    static_blocks.push_back({0x" << address
                    << "u, katana::runtime::canonical_physical_address(0x" << address
                    << "u), " << (end - block.start_address)
                    << "u, katana::runtime::BlockEndKind::" << end_kind(block)
                    << ", {}, &dispatch_" << address << ", \"generated-block-" << address
                    << "\"});\n";
-            output << "    if (const auto* registered = table.lookup(0x" << address
-                   << "u, {}))\n"
+        }
+    }
+    output << "    static_cast<void>(table.register_static_bulk(std::move(static_blocks)));\n";
+    for (const auto& function : program) {
+        for (const auto& block : function.blocks) {
+            const auto address = symbol(block.start_address);
+            std::uint32_t end = block.start_address + 2u;
+            for (const auto& instruction : block.instructions)
+                end = std::max(end, instruction.source_address + 2u);
+            output << "    if (const auto registered_handle = table.lookup(0x" << address
+                   << "u, {}); registered_handle) {\n"
+                   << "        const auto registered = table.resolve(*registered_handle);\n"
+                   << "        if (!registered) throw std::runtime_error(\"Registrierter Block ist stale.\");\n"
                    << "        services.register_executable_block(0x" << address << "u, "
                    << (end - block.start_address)
-                   << "u, katana::runtime::stable_runtime_block_identity(*registered));\n"
-                   << "    else throw std::runtime_error(\"Registrierter Block fehlt.\");\n";
+                   << "u, katana::runtime::stable_runtime_block_identity(registered->get()));\n"
+                   << "    } else throw std::runtime_error(\"Registrierter Block fehlt.\");\n";
         }
     }
     const auto entry = symbol(entry_address);

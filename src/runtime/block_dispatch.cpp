@@ -8,14 +8,11 @@ CanonicalBlockDispatcher::CanonicalBlockDispatcher(const RuntimeBlockTable& tabl
                                                    DispatchDiagnosticRecorder* diagnostics)
     : table_(table), diagnostics_(diagnostics) {}
 
-const RuntimeBlock* CanonicalBlockDispatcher::lookup(const BlockAddress address,
-                                                     const BlockVariantKey& variant) const {
-    if (const auto* exact = table_.lookup(address.virtual_address, variant)) {
-        return exact;
-    }
-    if (const auto* physical = table_.lookup_physical(address.physical_address, variant)) {
-        return physical;
-    }
+RuntimeBlockHandle CanonicalBlockDispatcher::lookup(const BlockAddress address,
+                                                    const BlockVariantKey& variant) const {
+    if (const auto exact = table_.lookup(address.virtual_address, variant)) return *exact;
+    if (const auto physical = table_.lookup_physical(address.physical_address, variant))
+        return *physical;
     throw std::runtime_error("Direktes Blockziel fehlt: " + stable_block_identity(address));
 }
 
@@ -27,7 +24,7 @@ CanonicalBlockDispatcher::dispatch(CpuState& cpu,
                                    const bool condition,
                                    const std::optional<std::uint32_t> dynamic_target) {
     std::optional<BlockAddress> target;
-    const RuntimeBlock* target_block = nullptr;
+    std::optional<RuntimeBlockHandle> target_block;
     bool direct = false;
     switch (end.kind) {
     case BlockEndKind::Fallthrough:

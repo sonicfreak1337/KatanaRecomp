@@ -25,6 +25,12 @@
   dokumentiert.
 ### Korrigiert
 
+- KR-4615: Die Runtime-Blockregistry verwendet stabile, generationsgesicherte
+  Handles statt Adressen verschiebbarer Vektorelemente. Statische Bloecke
+  werden bulk-registriert und versiegelt; statische und dynamische virtuelle,
+  physische und Aliasindizes sind getrennt. Logarithmische Lookups,
+  seitenindizierte physische Invalidierung sowie sichere dynamische
+  Reaktivierung bilden Runtime-ABI 10.
 - KR-4614: Kontrollfluss- und Wertanalyse verwenden typisierte Evidenz und
   Site-Vollstaendigkeit. Hints bleiben ungeloest, Overrides behalten den
   Runtime-Default, Workitems unterscheiden Delay-Slot-Owner und eingehenden

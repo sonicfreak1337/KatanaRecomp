@@ -84,13 +84,13 @@ IndirectDispatchResult dispatch_indirect(CpuState& cpu,
                                          const IndirectDispatchRequest& request) {
     const auto target = request.kind == IndirectDispatchKind::Return ? cpu.pr : request.target;
     const auto physical = canonical_physical_address(target);
-    const RuntimeBlock* block = table.lookup(target, request.variant);
+    auto block = table.lookup(target, request.variant);
     bool alias_lookup = false;
-    if (block == nullptr) {
+    if (!block) {
         block = table.lookup_physical(physical, request.variant);
-        alias_lookup = block != nullptr;
+        alias_lookup = block.has_value();
     }
-    if (block == nullptr) {
+    if (!block) {
         diagnose(request, target, cpu.pr, false, false);
         throw IndirectDispatchError(request.kind, request.callsite, target, request.source);
     }
@@ -100,7 +100,7 @@ IndirectDispatchResult dispatch_indirect(CpuState& cpu,
     }
     cpu.pc = target;
     diagnose(request, target, cpu.pr, alias_lookup, true);
-    return {block,
+    return {*block,
             target,
             physical,
             cpu.pc,

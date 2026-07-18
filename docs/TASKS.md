@@ -172,7 +172,7 @@ Akzeptanz:
 - kleine synthetische Programme werden gegen exhaustive Ausfuehrung verglichen
 - dieselbe Eingabe erzeugt bytegleiche Berichte und Zielmengen
 
-### [ ] KR-4615 - Stabile und skalierbare Runtime-Blockregistry
+### [x] KR-4615 - Stabile und skalierbare Runtime-Blockregistry
 
 Abhaengigkeiten: KR-4613
 Prioritaet: P0

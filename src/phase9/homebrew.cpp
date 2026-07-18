@@ -264,22 +264,24 @@ FirmwareHandoffReport run_synthetic_firmware_handoff() {
 
     RuntimeBlockTable table;
     const BlockVariantKey variant{};
-    table.register_static({p1_entry,
+    static_cast<void>(table.register_static({p1_entry,
                            ram_physical,
                            static_cast<std::uint32_t>(bootstrap.size()),
                            BlockEndKind::Return,
                            variant,
                            handoff_block,
                            "copy:synthetic-rom-bootstrap",
-                           false});
+                           false}));
     CpuState dispatch_cpu;
     const IndirectDispatchRequest request{
         IndirectDispatchKind::TailJump, p2_entry, p2_entry, 0u, {p2_entry, ram_physical}, variant};
     const auto dispatched = dispatch_indirect(dispatch_cpu, table, request);
     BlockExecutionContext context;
-    static_cast<void>(dispatched.block->function(dispatch_cpu, context));
+    const auto dispatched_block = table.resolve(dispatched.block);
+    if (!dispatched_block) throw std::runtime_error("Statischer Runtimeblock wurde stale.");
+    static_cast<void>(dispatched_block->get().function(dispatch_cpu, context));
     ++report.executed_blocks;
-    const auto old_identity = stable_runtime_block_identity(*dispatched.block);
+    const auto old_identity = stable_runtime_block_identity(dispatched_block->get());
     CodeInvalidationResult invalidation;
     EventScheduler scheduler;
     static_cast<void>(scheduler.schedule_at(1u, [&](const auto, const auto) {
@@ -301,18 +303,20 @@ FirmwareHandoffReport run_synthetic_firmware_handoff() {
                                               ExecutableBlockOrigin::RomRamCopy}));
     auto regenerated_variant = variant;
     regenerated_variant.runtime_generation = tracker.page_generation(ram_physical);
-    table.register_runtime({p1_entry,
+    static_cast<void>(table.register_runtime({p1_entry,
                             ram_physical,
                             static_cast<std::uint32_t>(bootstrap.size()),
                             BlockEndKind::Return,
                             regenerated_variant,
                             handoff_block,
                             "regenerated:copy:synthetic-rom-bootstrap",
-                            false});
+                            false}));
     auto regenerated_request = request;
     regenerated_request.variant = regenerated_variant;
     const auto regenerated = dispatch_indirect(dispatch_cpu, table, regenerated_request);
-    static_cast<void>(regenerated.block->function(dispatch_cpu, context));
+    const auto regenerated_block = table.resolve(regenerated.block);
+    if (!regenerated_block) throw std::runtime_error("Regenerierter Runtimeblock wurde stale.");
+    static_cast<void>(regenerated_block->get().function(dispatch_cpu, context));
     ++report.executed_blocks;
     report.dispatch_complete = dispatched.alias_lookup && regenerated.alias_lookup &&
                                !invalidation.invalidated_blocks.empty() &&
@@ -445,14 +449,14 @@ HomebrewHostFrameReport run_homebrew_host_frame() {
     DispatchDiagnosticRecorder dispatch_diagnostics;
     RuntimeBlockTable dispatch_table;
     const BlockVariantKey dispatch_variant{};
-    dispatch_table.register_static({0x8C010000u,
+    static_cast<void>(dispatch_table.register_static({0x8C010000u,
                                     0x0C010000u,
                                     8u,
                                     BlockEndKind::Return,
                                     dispatch_variant,
                                     handoff_block,
                                     "homebrew-frame-entry",
-                                    false});
+                                    false}));
     static_cast<void>(dispatch_indirect(cpu,
                                         dispatch_table,
                                         {IndirectDispatchKind::TailJump,

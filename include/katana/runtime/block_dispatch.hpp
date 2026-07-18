@@ -21,7 +21,7 @@ struct BlockEndDefinition {
 
 struct BlockDispatchOutcome {
     BlockExit exit;
-    const RuntimeBlock* target_block = nullptr;
+    std::optional<RuntimeBlockHandle> target_block;
     bool direct_link = false;
 };
 
@@ -42,8 +42,8 @@ class CanonicalBlockDispatcher {
     incoming_link_count(const std::string& target_identity) const noexcept;
 
   private:
-    [[nodiscard]] const RuntimeBlock* lookup(BlockAddress address,
-                                             const BlockVariantKey& variant) const;
+    [[nodiscard]] RuntimeBlockHandle lookup(BlockAddress address,
+                                            const BlockVariantKey& variant) const;
     const RuntimeBlockTable& table_;
     DispatchDiagnosticRecorder* diagnostics_ = nullptr;
     std::map<std::string, std::set<std::string>> incoming_;
