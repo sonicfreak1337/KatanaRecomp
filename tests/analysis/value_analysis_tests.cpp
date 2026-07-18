@@ -196,7 +196,8 @@ int main() {
                 report.find("0x00000008 [constant-register; evidence=proven-complete]") !=
                     std::string::npos,
             "Aufgeloester Kontrollfluss fehlt im getrennten Bericht.");
-    require(report.find("[register-value-unknown; evidence=unresolved]") != std::string::npos &&
+    require(report.find("register-value-unknown; evidence=unresolved; status=unresolved; "
+                        "class=runtime-pointer") != std::string::npos &&
                 report.find("Hinweis: jump = 0x00000006 ZIEL") != std::string::npos,
             "Ungelesene Kontrollflussstelle besitzt keinen Grund oder Nutzerhinweis.");
 
@@ -343,42 +344,81 @@ int main() {
     const auto guarded_json = katana::analysis::format_control_flow_analysis_json(guarded_flow);
     const auto guarded_summary = katana::analysis::summarize_control_flow_analysis(guarded_flow);
     require(guarded_text.find("candidate=") != std::string::npos &&
-                guarded_json.find("\"status\":\"guarded\"") != std::string::npos &&
-                guarded_summary.resolved + guarded_summary.guarded + guarded_summary.unresolved ==
+                guarded_json.find("\"status\":\"guarded_partial\"") != std::string::npos &&
+                guarded_summary.resolved + guarded_summary.guarded_complete +
+                        guarded_summary.guarded_partial + guarded_summary.runtime_only +
+                        guarded_summary.unresolved ==
                     guarded_summary.indirect_total &&
                 guarded_summary.proven_instructions +
                         guarded_summary.guarded_candidate_instructions ==
                     guarded_flow.recursive.instructions.size() &&
                 guarded_summary.guarded_candidate_instructions != 0u &&
-                guarded_summary.unresolved_frontier == guarded_summary.unresolved,
+                guarded_summary.unresolved_frontier == guarded_summary.guarded_partial +
+                                                           guarded_summary.runtime_only +
+                                                           guarded_summary.unresolved,
             "Bewachter Kandidat fehlt im stabilen Text-/JSON-Bericht.");
 
     auto complete_status_fixture = guarded_flow;
+    const auto status_fixture = [](const std::uint32_t address,
+                                   const katana::analysis::ResolutionStatus status,
+                                   const katana::analysis::ControlFlowEvidence evidence,
+                                   const katana::analysis::IndirectControlFlowOriginClass origin) {
+        katana::analysis::IndirectControlFlowResolution resolution;
+        resolution.instruction_address = address;
+        resolution.status = status;
+        resolution.evidence = evidence;
+        resolution.origin_class = origin;
+        resolution.evidence_origins = {
+            katana::analysis::AnalysisEvidenceOrigin::RuntimeClassification};
+        return resolution;
+    };
     complete_status_fixture.indirect_control_flow = {
-        {0u,
-         katana::analysis::IndirectControlFlowKind::Jump,
-         0u,
-         katana::analysis::ResolutionStatus::Resolved},
-        {2u,
-         katana::analysis::IndirectControlFlowKind::Jump,
-         0u,
-         katana::analysis::ResolutionStatus::Guarded},
-        {4u,
-         katana::analysis::IndirectControlFlowKind::Call,
-         0u,
-         katana::analysis::ResolutionStatus::Unresolved}};
+        status_fixture(0u,
+                       katana::analysis::ResolutionStatus::Resolved,
+                       katana::analysis::ControlFlowEvidence::ProvenComplete,
+                       katana::analysis::IndirectControlFlowOriginClass::NotApplicable),
+        status_fixture(2u,
+                       katana::analysis::ResolutionStatus::Guarded,
+                       katana::analysis::ControlFlowEvidence::GuardedComplete,
+                       katana::analysis::IndirectControlFlowOriginClass::NotApplicable),
+        status_fixture(4u,
+                       katana::analysis::ResolutionStatus::Guarded,
+                       katana::analysis::ControlFlowEvidence::GuardedPartial,
+                       katana::analysis::IndirectControlFlowOriginClass::Parameter),
+        status_fixture(6u,
+                       katana::analysis::ResolutionStatus::Unresolved,
+                       katana::analysis::ControlFlowEvidence::RuntimeOnly,
+                       katana::analysis::IndirectControlFlowOriginClass::Callback),
+        status_fixture(8u,
+                       katana::analysis::ResolutionStatus::Unresolved,
+                       katana::analysis::ControlFlowEvidence::Unresolved,
+                       katana::analysis::IndirectControlFlowOriginClass::RuntimePointer)};
     const auto complete_status =
         katana::analysis::summarize_control_flow_analysis(complete_status_fixture);
     const auto complete_status_json =
         katana::analysis::format_control_flow_analysis_json(complete_status_fixture);
-    require(complete_status.indirect_total == 3u && complete_status.resolved == 1u &&
-                complete_status.guarded == 1u && complete_status.unresolved == 1u &&
-                complete_status.resolved + complete_status.guarded + complete_status.unresolved ==
+    const auto aggregate_status_json =
+        katana::analysis::format_control_flow_frontier_json(complete_status_fixture);
+    require(complete_status.indirect_total == 5u && complete_status.resolved == 1u &&
+                complete_status.guarded_complete == 1u && complete_status.guarded_partial == 1u &&
+                complete_status.runtime_only == 1u && complete_status.unresolved == 1u &&
+                complete_status.resolved + complete_status.guarded_complete +
+                        complete_status.guarded_partial + complete_status.runtime_only +
+                        complete_status.unresolved ==
                     complete_status.indirect_total &&
-                complete_status_json.find("\"indirect_total\":3") != std::string::npos &&
+                complete_status.unresolved_frontier == 3u &&
+                complete_status.frontier_classes.parameter == 1u &&
+                complete_status.frontier_classes.callback == 1u &&
+                complete_status.frontier_classes.runtime_pointer == 1u &&
+                complete_status_json.find("\"indirect_total\":5") != std::string::npos &&
                 complete_status_json.find("\"resolved\":1") != std::string::npos &&
-                complete_status_json.find("\"guarded\":1") != std::string::npos &&
-                complete_status_json.find("\"unresolved\":1") != std::string::npos,
+                complete_status_json.find("\"guarded_complete\":1") != std::string::npos &&
+                complete_status_json.find("\"guarded_partial\":1") != std::string::npos &&
+                complete_status_json.find("\"runtime_only\":1") != std::string::npos &&
+                complete_status_json.find("\"unresolved\":1") != std::string::npos &&
+                aggregate_status_json.find("\"privacy\":\"aggregate\"") != std::string::npos &&
+                aggregate_status_json.find("instruction_address") == std::string::npos &&
+                aggregate_status_json.find("0x000000") == std::string::npos,
             "Der maschinenlesbare Statusbericht verletzt sein Summeninvariant.");
     stable_entry.set_initial_snapshot_policy(
         katana::io::InitialSnapshotPolicy::EntryPointStraightLineQuiescent);

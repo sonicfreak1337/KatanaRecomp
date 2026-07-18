@@ -1,6 +1,7 @@
 #include "katana/codegen/port_export.hpp"
 
 #include "katana/analysis/control_flow_analysis.hpp"
+#include "katana/analysis/control_flow_report.hpp"
 #include "katana/analysis/graph_export.hpp"
 #include "katana/codegen/backend.hpp"
 #include "katana/codegen/cpp_emitter.hpp"
@@ -642,7 +643,7 @@ port_metadata(const PortExportOptions& options,
               const std::span<const katana::analysis::IndirectControlFlowResolution> indirect) {
     const auto count = [indirect](const auto status) {
         return std::count_if(indirect.begin(), indirect.end(), [status](const auto& resolution) {
-            return resolution.status == status;
+            return katana::analysis::control_flow_report_status(resolution) == status;
         });
     };
     std::ostringstream output;
@@ -653,11 +654,19 @@ port_metadata(const PortExportOptions& options,
            << ",\"backend_abi\":" << backend_interface_abi_version
            << ",\"project_identity\":" << katana::io::quote_json(project_identity)
            << ",\"entry_address\":" << entry_address << ",\"boot_size\":" << boot_size
-           << ",\"function_count\":" << function_count
-           << ",\"resolved_control_flow\":" << count(katana::analysis::ResolutionStatus::Resolved)
-           << ",\"guarded_control_flow\":" << count(katana::analysis::ResolutionStatus::Guarded)
+           << ",\"function_count\":" << function_count << ",\"resolved_control_flow\":"
+           << count(katana::analysis::ControlFlowReportStatus::Resolved)
+           << ",\"guarded_control_flow\":"
+           << count(katana::analysis::ControlFlowReportStatus::GuardedComplete) +
+                  count(katana::analysis::ControlFlowReportStatus::GuardedPartial)
+           << ",\"guarded_complete_control_flow\":"
+           << count(katana::analysis::ControlFlowReportStatus::GuardedComplete)
+           << ",\"guarded_partial_control_flow\":"
+           << count(katana::analysis::ControlFlowReportStatus::GuardedPartial)
+           << ",\"runtime_only_control_flow\":"
+           << count(katana::analysis::ControlFlowReportStatus::RuntimeOnly)
            << ",\"unresolved_control_flow\":"
-           << count(katana::analysis::ResolutionStatus::Unresolved) << ",\"partitions\":[";
+           << count(katana::analysis::ControlFlowReportStatus::Unresolved) << ",\"partitions\":[";
     for (std::size_t index = 0u; index < partitions.size(); ++index) {
         if (index != 0u) output << ',';
         const auto& partition = partitions[index];

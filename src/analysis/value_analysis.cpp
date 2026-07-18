@@ -722,4 +722,27 @@ resolve_indirect_control_flow(const std::span<const katana::sh4::DisassemblyLine
     return resolutions;
 }
 
+const char*
+indirect_control_flow_origin_class_name(const IndirectControlFlowOriginClass origin) noexcept {
+    switch (origin) {
+    case IndirectControlFlowOriginClass::NotApplicable:
+        return "not-applicable";
+    case IndirectControlFlowOriginClass::Callback:
+        return "callback";
+    case IndirectControlFlowOriginClass::Parameter:
+        return "parameter";
+    case IndirectControlFlowOriginClass::Stack:
+        return "stack";
+    case IndirectControlFlowOriginClass::ObjectVTable:
+        return "object-vtable";
+    case IndirectControlFlowOriginClass::Table:
+        return "table";
+    case IndirectControlFlowOriginClass::UnboundedMemory:
+        return "unbounded-memory";
+    case IndirectControlFlowOriginClass::RuntimePointer:
+        return "runtime-pointer";
+    }
+    return "runtime-pointer";
+}
+
 } // namespace katana::analysis

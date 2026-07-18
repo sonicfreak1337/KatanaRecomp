@@ -191,7 +191,9 @@ int main() {
     const auto* recursive_site = site(recursive, 4u);
     require(recursive_site != nullptr &&
                 recursive_site->status == katana::analysis::ResolutionStatus::Unresolved &&
-                recursive_site->reason == "dynamic-return-value",
+                recursive_site->reason == "dynamic-return-value" &&
+                recursive_site->origin_class ==
+                    katana::analysis::IndirectControlFlowOriginClass::Callback,
             "Rekursive Summary ohne stabilen Return wurde als Zielbeweis verwendet.");
 
     const auto missing_return_image = image_with_callee({0x09u, 0x00u});
@@ -212,20 +214,35 @@ int main() {
 
     const auto parameter =
         katana::analysis::analyze_control_flow(classification_image({0x2Bu, 0x44u, 0x09u, 0x00u}));
-    require(site(parameter, 0u)->reason == "dynamic-parameter",
+    require(site(parameter, 0u)->reason == "dynamic-parameter" &&
+                site(parameter, 0u)->origin_class ==
+                    katana::analysis::IndirectControlFlowOriginClass::Parameter,
             "Offener Parameter-Call wurde nicht getrennt klassifiziert.");
     const auto stack = katana::analysis::analyze_control_flow(
         classification_image({0xF2u, 0x61u, 0x2Bu, 0x41u, 0x09u, 0x00u}));
-    require(site(stack, 2u)->reason == "dynamic-stack-target",
+    require(site(stack, 2u)->reason == "dynamic-stack-target" &&
+                site(stack, 2u)->origin_class ==
+                    katana::analysis::IndirectControlFlowOriginClass::Stack,
             "Offenes Stackziel wurde nicht getrennt klassifiziert.");
     const auto unbounded = katana::analysis::analyze_control_flow(
         classification_image({0x22u, 0x61u, 0x2Bu, 0x41u, 0x09u, 0x00u}));
-    require(site(unbounded, 2u)->reason == "dynamic-unbounded-memory",
+    require(site(unbounded, 2u)->reason == "dynamic-unbounded-memory" &&
+                site(unbounded, 2u)->origin_class ==
+                    katana::analysis::IndirectControlFlowOriginClass::UnboundedMemory,
             "Unbeschraenkter Speicherzeiger wurde nicht getrennt klassifiziert.");
     const auto vtable = katana::analysis::analyze_control_flow(
         classification_image({0x42u, 0x61u, 0x12u, 0x62u, 0x2Bu, 0x42u, 0x09u, 0x00u}));
-    require(site(vtable, 4u)->reason == "dynamic-vtable-target",
+    require(site(vtable, 4u)->reason == "dynamic-vtable-target" &&
+                site(vtable, 4u)->origin_class ==
+                    katana::analysis::IndirectControlFlowOriginClass::ObjectVTable,
             "Offenes VTable-Ziel wurde nicht getrennt klassifiziert.");
+    const auto runtime_pointer =
+        katana::analysis::analyze_control_flow(classification_image({0x2Bu, 0x41u, 0x09u, 0x00u}));
+    require(site(runtime_pointer, 0u)->origin_class ==
+                    katana::analysis::IndirectControlFlowOriginClass::RuntimePointer &&
+                site(runtime_pointer, 0u)->evidence_origins ==
+                    std::vector{katana::analysis::AnalysisEvidenceOrigin::RuntimeClassification},
+            "Echter Laufzeitzeiger besitzt keine stabile Restklasse und Beweisherkunft.");
 
     std::vector<std::uint8_t> guarded_join_bytes(0x40u, 0x09u);
     const std::array<std::uint8_t, 20u> guarded_join_code{

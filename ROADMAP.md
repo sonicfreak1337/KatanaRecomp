@@ -78,7 +78,7 @@ nicht gestartet werden.
 
 ### Stufe C: Retail-Kontrollfluss und Build
 
-- [ ] `KR-4715` - ungeloeste Kontrollflussfront inventarisieren
+- [x] `KR-4715` - ungeloeste Kontrollflussfront inventarisieren
 - [ ] `KR-4716` - ABI-erhaltene Callbacks, Parameter und Stackwerte
 - [ ] `KR-4717` - Objekt-, Feld- und VTable-Points-to
 - [ ] `KR-4718` - expliziter Runtime-only-Dispatch

@@ -36,6 +36,7 @@ struct ControlFlowSite {
     std::uint32_t instruction_address = 0u;
     IndirectControlFlowKind kind = IndirectControlFlowKind::Jump;
     ControlFlowEvidence evidence = ControlFlowEvidence::Unresolved;
+    IndirectControlFlowOriginClass origin_class = IndirectControlFlowOriginClass::NotApplicable;
     std::vector<AnalysisEvidenceOrigin> evidence_origins;
     std::vector<std::uint32_t> targets;
     std::vector<std::uint32_t> evidence_call_sites;

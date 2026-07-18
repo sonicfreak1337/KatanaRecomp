@@ -137,19 +137,23 @@ const katana::sh4::DisassemblyLine* find_instruction(const RecursiveAnalysisResu
 
 void mark_resolved_table_dispatch(std::vector<IndirectControlFlowResolution>& resolutions,
                                   const JumpTableAnalysis& table) {
-    if (!table.resolved) return;
     const auto resolution =
         std::find_if(resolutions.begin(), resolutions.end(), [&table](const auto& candidate) {
             return candidate.instruction_address == table.dispatch_address;
         });
     if (resolution == resolutions.end()) return;
-    resolution->status = ResolutionStatus::Resolved;
-    resolution->evidence = table.evidence;
+    resolution->origin_class = IndirectControlFlowOriginClass::Table;
     resolution->evidence_origins = {table.evidence == ControlFlowEvidence::HintCandidate
                                         ? AnalysisEvidenceOrigin::UserHint
                                     : table.evidence == ControlFlowEvidence::ForcedOverride
                                         ? AnalysisEvidenceOrigin::UserOverride
                                         : AnalysisEvidenceOrigin::JumpTable};
+    if (!table.resolved) {
+        resolution->reason = table.reason;
+        return;
+    }
+    resolution->status = ResolutionStatus::Resolved;
+    resolution->evidence = table.evidence;
     if (table.evidence == ControlFlowEvidence::HintCandidate)
         resolution->status = ResolutionStatus::Unresolved;
     else if (!control_flow_evidence_complete(table.evidence))
@@ -274,16 +278,22 @@ void classify_dynamic_sites(const std::span<const katana::sh4::DisassemblyLine> 
                             std::vector<IndirectControlFlowResolution>& resolutions) {
     const auto blocks = build_basic_blocks(lines);
     for (auto& resolution : resolutions) {
-        if (resolution.status != ResolutionStatus::Unresolved ||
-            resolution.evidence == ControlFlowEvidence::HintCandidate)
+        if (resolution.origin_class == IndirectControlFlowOriginClass::Table ||
+            (resolution.status == ResolutionStatus::Resolved &&
+             control_flow_evidence_complete(resolution.evidence)))
             continue;
         const auto dispatch = std::lower_bound(
             lines.begin(),
             lines.end(),
             resolution.instruction_address,
             [](const auto& line, const auto address) { return line.address < address; });
-        if (dispatch == lines.end() || dispatch->address != resolution.instruction_address)
+        if (dispatch == lines.end() || dispatch->address != resolution.instruction_address) {
+            resolution.origin_class = IndirectControlFlowOriginClass::RuntimePointer;
+            if (resolution.evidence_origins.empty()) {
+                resolution.evidence_origins = {AnalysisEvidenceOrigin::RuntimeClassification};
+            }
             continue;
+        }
         const auto slice =
             bounded_writer_slice(blocks, resolution.instruction_address, resolution.register_index);
         const katana::sh4::DisassemblyLine* writer = nullptr;
@@ -303,19 +313,47 @@ void classify_dynamic_sites(const std::span<const katana::sh4::DisassemblyLine> 
             vtable_base = base.writers.size() == 1u && !base.incomplete;
         }
         if (resolution.register_index == 0u && slice.preceding_call) {
-            resolution.reason = "dynamic-return-value";
+            resolution.origin_class = IndirectControlFlowOriginClass::Callback;
         } else if (resolution.register_index == 15u ||
                    (writer != nullptr && writer->instruction.source_register == 15u)) {
-            resolution.reason = "dynamic-stack-target";
+            resolution.origin_class = IndirectControlFlowOriginClass::Stack;
         } else if (writer != nullptr && vtable_base) {
-            resolution.reason = "dynamic-vtable-target";
+            resolution.origin_class = IndirectControlFlowOriginClass::ObjectVTable;
         } else if (writer != nullptr) {
-            resolution.reason = "dynamic-unbounded-memory";
+            resolution.origin_class = IndirectControlFlowOriginClass::UnboundedMemory;
         } else if (resolution.register_index >= 4u && resolution.register_index <= 7u) {
-            resolution.reason = "dynamic-parameter";
+            resolution.origin_class = IndirectControlFlowOriginClass::Parameter;
+        } else {
+            resolution.origin_class = IndirectControlFlowOriginClass::RuntimePointer;
         }
-        if (resolution.reason.starts_with("dynamic-")) {
+
+        if (resolution.status == ResolutionStatus::Unresolved &&
+            resolution.evidence != ControlFlowEvidence::HintCandidate &&
+            resolution.origin_class != IndirectControlFlowOriginClass::RuntimePointer) {
+            switch (resolution.origin_class) {
+            case IndirectControlFlowOriginClass::Callback:
+                resolution.reason = "dynamic-return-value";
+                break;
+            case IndirectControlFlowOriginClass::Parameter:
+                resolution.reason = "dynamic-parameter";
+                break;
+            case IndirectControlFlowOriginClass::Stack:
+                resolution.reason = "dynamic-stack-target";
+                break;
+            case IndirectControlFlowOriginClass::ObjectVTable:
+                resolution.reason = "dynamic-vtable-target";
+                break;
+            case IndirectControlFlowOriginClass::UnboundedMemory:
+                resolution.reason = "dynamic-unbounded-memory";
+                break;
+            case IndirectControlFlowOriginClass::NotApplicable:
+            case IndirectControlFlowOriginClass::Table:
+            case IndirectControlFlowOriginClass::RuntimePointer:
+                break;
+            }
             resolution.evidence = ControlFlowEvidence::RuntimeOnly;
+            resolution.evidence_origins = {AnalysisEvidenceOrigin::RuntimeClassification};
+        } else if (resolution.evidence_origins.empty()) {
             resolution.evidence_origins = {AnalysisEvidenceOrigin::RuntimeClassification};
         }
     }
@@ -749,8 +787,22 @@ ControlFlowAnalysisResult analyze_control_flow(const katana::io::ExecutableImage
                 return proven_instruction_boundary(analysis.recursive.proven_instruction_addresses,
                                                    entry.target);
             });
-        if (!boundaries) table.evidence = ControlFlowEvidence::GuardedPartial;
+        if (!boundaries) {
+            table.evidence = ControlFlowEvidence::GuardedPartial;
+            const auto resolution =
+                std::find_if(analysis.indirect_control_flow.begin(),
+                             analysis.indirect_control_flow.end(),
+                             [&table](const auto& candidate) {
+                                 return candidate.instruction_address == table.dispatch_address;
+                             });
+            if (resolution != analysis.indirect_control_flow.end()) {
+                resolution->status = ResolutionStatus::Guarded;
+                resolution->evidence = ControlFlowEvidence::GuardedPartial;
+                resolution->origin_class = IndirectControlFlowOriginClass::Table;
+            }
+        }
     }
+    classify_dynamic_sites(analysis.recursive.instructions, analysis.indirect_control_flow);
     analysis.resolved_edges =
         collect_resolved_edges(analysis.indirect_control_flow, analysis.jump_tables);
     analysis.sites.reserve(analysis.indirect_control_flow.size());
@@ -759,6 +811,7 @@ ControlFlowAnalysisResult analyze_control_flow(const katana::io::ExecutableImage
         site.instruction_address = resolution.instruction_address;
         site.kind = resolution.kind;
         site.evidence = resolution.evidence;
+        site.origin_class = resolution.origin_class;
         site.evidence_origins = resolution.evidence_origins;
         site.targets = resolution.targets;
         if (resolution.target.has_value()) site.targets.push_back(*resolution.target);

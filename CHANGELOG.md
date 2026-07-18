@@ -4,6 +4,11 @@
 
 ### Geaendert
 
+- KR-4715: Kontrollflussberichte unterscheiden `resolved`,
+  `guarded_complete`, `guarded_partial`, `runtime_only` und `unresolved` sowie
+  sieben typisierte Herkunftsklassen. Ein adressfreier Aggregatbericht ist von
+  der lokalen Detailanalyse getrennt; partielle Kandidaten blockieren die
+  Anwendungs-Vollstaendigkeit.
 - KR-4624: Core/CLI ist der GUI-freie Standardbuild. MSVC, GCC und Clang
   besitzen Debug-/RelWithDebInfo-Presets und eine dauerhafte CI-Matrix mit
   Compiler-Cachemessung; Tests sind in stabile Subsystemshards gelabelt.

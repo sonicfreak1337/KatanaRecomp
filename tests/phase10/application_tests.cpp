@@ -253,7 +253,7 @@ int main() {
                 incomplete_result.analysis_coverage->reachable_abort_edges == 0u &&
                 !incomplete_result.analysis_coverage->control_flow_complete &&
                 incomplete_events.back().state == app::JobState::Partial &&
-                incomplete_json.find("\"version\":4") != std::string::npos &&
+                incomplete_json.find("\"version\":5") != std::string::npos &&
                 incomplete_json.find("\"state\":\"partial\"") != std::string::npos &&
                 incomplete_json.find("\"unresolved_control_flow\":0") != std::string::npos &&
                 incomplete_json.find("\"unanalyzed_executable_bytes\":2097148") !=
@@ -266,7 +266,7 @@ int main() {
     const std::string incomplete_plan_text((std::istreambuf_iterator<char>(incomplete_plan_input)),
                                            std::istreambuf_iterator<char>());
     require(incomplete_plan_text.find("\"status\":\"partial\"") != std::string::npos &&
-                incomplete_plan_text.find("\"version\":4") != std::string::npos &&
+                incomplete_plan_text.find("\"version\":5") != std::string::npos &&
                 incomplete_plan_text.find("\"host_compilation\":false") != std::string::npos &&
                 incomplete_plan_text.find("\"tool_version\":\"0.40.0-dev\"") != std::string::npos,
             "Partieller Buildplan verliert Zustand, Hostbuildgrenze oder Werkzeugversion.");

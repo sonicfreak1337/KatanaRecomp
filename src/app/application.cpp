@@ -861,15 +861,29 @@ AnalysisCoverage analysis_coverage(const io::LoadedProject& project,
     coverage.functions = analysis.recursive.functions.size();
     coverage.unknown_instructions = analysis.recursive.diagnostics.size();
     for (const auto& resolution : analysis.indirect_control_flow) {
-        if (resolution.status == analysis::ResolutionStatus::Resolved)
+        switch (analysis::control_flow_report_status(resolution)) {
+        case analysis::ControlFlowReportStatus::Resolved:
             ++coverage.resolved_control_flow;
-        else if (resolution.status == analysis::ResolutionStatus::Guarded)
+            break;
+        case analysis::ControlFlowReportStatus::GuardedComplete:
+            ++coverage.guarded_complete_control_flow;
             ++coverage.guarded_control_flow;
-        else if (resolution.status == analysis::ResolutionStatus::Unresolved)
+            break;
+        case analysis::ControlFlowReportStatus::GuardedPartial:
+            ++coverage.guarded_partial_control_flow;
+            ++coverage.guarded_control_flow;
+            break;
+        case analysis::ControlFlowReportStatus::RuntimeOnly:
+            ++coverage.runtime_only_control_flow;
+            break;
+        case analysis::ControlFlowReportStatus::Unresolved:
             ++coverage.unresolved_control_flow;
+            break;
+        }
     }
     coverage.reachable_abort_edges =
-        coverage.unknown_instructions + coverage.unresolved_control_flow;
+        coverage.unknown_instructions + coverage.guarded_partial_control_flow +
+        coverage.runtime_only_control_flow + coverage.unresolved_control_flow;
     std::set<std::pair<std::uint32_t, std::uint32_t>> invalid_edges;
     const auto add_invalid_edge = [&](const std::uint32_t source, const std::uint32_t target) {
         if (!analysis::validate_committed_code_address(project.image, target).valid())
@@ -904,7 +918,8 @@ AnalysisCoverage analysis_coverage(const io::LoadedProject& project,
     }
     coverage.reachable_abort_edges += invalid_edges.size();
     coverage.control_flow_complete =
-        coverage.unknown_instructions == 0u && coverage.unresolved_control_flow == 0u &&
+        coverage.unknown_instructions == 0u && coverage.guarded_partial_control_flow == 0u &&
+        coverage.runtime_only_control_flow == 0u && coverage.unresolved_control_flow == 0u &&
         coverage.unanalyzed_executable_bytes == 0u && coverage.reachable_abort_edges == 0u;
     return coverage;
 }
@@ -914,7 +929,7 @@ std::string build_plan_json(const std::string_view status,
                             const AnalysisCoverage& coverage,
                             const bool host_compilation) {
     std::ostringstream output;
-    output << "{\"schema\":\"katana-build-plan\",\"version\":4,\"status\":"
+    output << "{\"schema\":\"katana-build-plan\",\"version\":5,\"status\":"
            << io::quote_json(status) << ",\"tool_version\":" << io::quote_json(tool_version)
            << ",\"native_execution\":false,\"host_compilation\":"
            << (host_compilation ? "true" : "false")
@@ -928,8 +943,13 @@ std::string build_plan_json(const std::string_view status,
            << ",\"functions\":" << coverage.functions
            << ",\"resolved_control_flow\":" << coverage.resolved_control_flow
            << ",\"guarded_control_flow\":" << coverage.guarded_control_flow
+           << ",\"guarded_complete_control_flow\":" << coverage.guarded_complete_control_flow
+           << ",\"guarded_partial_control_flow\":" << coverage.guarded_partial_control_flow
+           << ",\"runtime_only_control_flow\":" << coverage.runtime_only_control_flow
            << ",\"unresolved_control_flow\":" << coverage.unresolved_control_flow
-           << ",\"unresolved_frontier\":" << coverage.unresolved_control_flow
+           << ",\"unresolved_frontier\":"
+           << coverage.guarded_partial_control_flow + coverage.runtime_only_control_flow +
+                  coverage.unresolved_control_flow
            << ",\"unknown_instructions\":" << coverage.unknown_instructions
            << ",\"reachable_abort_edges\":" << coverage.reachable_abort_edges
            << ",\"control_flow_complete\":" << (coverage.control_flow_complete ? "true" : "false")
@@ -1254,6 +1274,11 @@ JobResult ApplicationService::execute(const JobRequest& request,
             const auto analysis_path = work_root / "analysis.json";
             write_atomic(analysis_path, analysis_json);
             result.artifacts.push_back({"analysis", "analysis.json", artifact_hash(analysis_path)});
+            const auto frontier_path = work_root / "control-flow-frontier.json";
+            write_atomic(frontier_path, analysis::format_control_flow_frontier_json(analysis));
+            result.artifacts.push_back({"control-flow-frontier",
+                                        "control-flow-frontier.json",
+                                        artifact_hash(frontier_path)});
             const auto result_index_path = work_root / "result-index.json";
             write_atomic(result_index_path,
                          result_index_json(project, analysis, inspection, result.project_identity));
@@ -1278,6 +1303,10 @@ JobResult ApplicationService::execute(const JobRequest& request,
                     {DiagnosticSeverity::Warning,
                      "analysis-incomplete",
                      "Kontrollflussanalyse ist unvollstaendig: " +
+                         std::to_string(result.analysis_coverage->guarded_partial_control_flow) +
+                         " partielle, " +
+                         std::to_string(result.analysis_coverage->runtime_only_control_flow) +
+                         " reine Laufzeit- und " +
                          std::to_string(result.analysis_coverage->unresolved_control_flow) +
                          " ungeloeste Kontrollflussstellen und " +
                          std::to_string(result.analysis_coverage->unknown_instructions) +
@@ -1734,8 +1763,13 @@ std::string format_job_result_json(const JobResult& result) {
                << ",\"functions\":" << coverage.functions
                << ",\"resolved_control_flow\":" << coverage.resolved_control_flow
                << ",\"guarded_control_flow\":" << coverage.guarded_control_flow
+               << ",\"guarded_complete_control_flow\":" << coverage.guarded_complete_control_flow
+               << ",\"guarded_partial_control_flow\":" << coverage.guarded_partial_control_flow
+               << ",\"runtime_only_control_flow\":" << coverage.runtime_only_control_flow
                << ",\"unresolved_control_flow\":" << coverage.unresolved_control_flow
-               << ",\"unresolved_frontier\":" << coverage.unresolved_control_flow
+               << ",\"unresolved_frontier\":"
+               << coverage.guarded_partial_control_flow + coverage.runtime_only_control_flow +
+                      coverage.unresolved_control_flow
                << ",\"unknown_instructions\":" << coverage.unknown_instructions
                << ",\"reachable_abort_edges\":" << coverage.reachable_abort_edges
                << ",\"control_flow_complete\":"

@@ -13,10 +13,11 @@ duerfen hinzugefuegt werden; eine inkompatible Bedeutungs- oder Typaenderung
 braucht eine neue fachliche Schema-Kennung. Listen, deren Reihenfolge keine
 Gastsemantik traegt, werden vor der Ausgabe nach Gastadresse und Typ sortiert.
 
-`katana-recomp analyze-json <manifest> [overrides]` erzeugt
-`katana-control-flow-v2`. Version 2 fuehrt typisierte Evidenz fuer Funktionen,
-indirekte Sites und Jump Tables sowie die Zahl kontextueller
-Instruktionsvarianten ein. `katana-recomp ir-json ...` behaelt
+`katana-recomp analyze-json <manifest> [overrides]` erzeugt den lokalen
+Detailbericht `katana-control-flow-v3`. Version 3 fuehrt disjunkte
+Vollstaendigkeitszustaende und typisierte Herkunftsklassen ein. Der
+Anwendungsworkflow erzeugt daneben `katana-control-flow-frontier-v1` ohne
+Gastadressen, Symbole oder Hostpfade. `katana-recomp ir-json ...` behaelt
 `katana-ir-v2`. Historische Phase-6-Berichte verwenden
 `katana-phase6-gate-v1` und behalten ihre Messfelder auf der obersten Ebene.
 
@@ -34,16 +35,17 @@ Faehigkeitsbehauptung.
 
 ## Anwendungsjob und Buildplan
 
-`katana-application-job` Version 4 unterscheidet die Endzustaende `completed`,
+`katana-application-job` Version 5 unterscheidet die Endzustaende `completed`,
 `partial`, `failed` und `cancelled`. `partial` ist kein erfolgreicher Build:
 Analyseartefakte bleiben nutzbar, Codegen und Hostkompilierung werden jedoch
 unterdrueckt. Das Feld `analysis` enthaelt committed ausfuehrbare Bytes,
 analysierte und nicht analysierte ausfuehrbare Bytes, Instruktions-/
-Funktionszahlen, ungeloeste Kontrollflussstellen, unbekannte Instruktionen,
-erreichbare Abbruchkanten und `control_flow_complete`. Vollstaendig bedeutet
-exakt: null unbekannte Instruktionen, null ungeloeste Kontrollflussstellen,
-null nicht analysierte committed ausfuehrbare Bytes und null erreichbare
-Abbruchkanten. Es gibt keine heuristische Prozentgrenze.
+Funktionszahlen, vollstaendige und partielle Guards, reine Laufzeit- und
+ungeloeste Kontrollflussstellen, unbekannte Instruktionen, erreichbare
+Abbruchkanten und `control_flow_complete`. Vollstaendig bedeutet exakt: null
+unbekannte Instruktionen, null partielle, reine Laufzeit- und ungeloeste
+Kontrollflussstellen, null nicht analysierte committed ausfuehrbare Bytes und
+null erreichbare Abbruchkanten. Es gibt keine heuristische Prozentgrenze.
 
 `failure_category` trennt `none`, `input-output`, `processing`,
 `code-generation`, `build` und `internal`. Die Workflow-CLI bildet diese
@@ -51,7 +53,7 @@ Kategorien auf ihre bestehenden stabilen Exitcodes ab. `partial` und
 `cancelled` sind keine versteckten Exceptions; ihr Feld bleibt `none`, der
 Prozessstatus ist dennoch ungleich null, solange der Job nicht `completed` ist.
 
-`katana-build-plan` Version 4 spiegelt denselben Zustand und dieselben Metriken.
+`katana-build-plan` Version 5 spiegelt denselben Zustand und dieselben Metriken.
 Bei `status=partial` ist `host_compilation=false`; nur `status=built` darf eine
 veroeffentlichte `game.exe` behaupten. Beide Berichte tragen `tool_version` aus
 derselben CMake-Definition wie CLI, GUI und Portprovenienz.

@@ -19,12 +19,13 @@ das Fenster. Loader ohne dieses explizite Versprechen verwenden
 Der maschinenlesbare Kontrollflussbericht besitzt zwei Summenvertraege:
 
 ```text
-resolved + guarded + unresolved == indirect_total
+resolved + guarded_complete + guarded_partial + runtime_only + unresolved
+    == indirect_total
 proven_instructions + guarded_candidate_instructions == instructions
 ```
 
-`unresolved_frontier` ist die Zahl der indirekten Stellen ohne endliche
-Zielmenge. Guarded entdeckte Instruktionen sind analysier- und kompilierbare
-Laufzeitkandidaten, aber kein Nachweis, dass sie in jeder Ausfuehrung erreichbar
-sind. Deshalb duerfen sie nicht als statisch bewiesener Portfortschritt
-ausgegeben werden.
+`unresolved_frontier` ist `guarded_partial + runtime_only + unresolved`.
+Guarded entdeckte Instruktionen sind analysier- und kompilierbare
+Laufzeitkandidaten, aber nur `guarded_complete` ist eine vollstaendige
+Zielmenge. Deshalb duerfen partielle Kandidaten nicht als statisch bewiesener
+Portfortschritt ausgegeben werden.

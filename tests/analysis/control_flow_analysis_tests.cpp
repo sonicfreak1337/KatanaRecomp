@@ -296,7 +296,11 @@ int main() {
     const auto partial_table =
         katana::analysis::analyze_control_flow(partial_table_image, &table_override);
     require(partial_table.jump_tables.size() == 1u && !partial_table.jump_tables[0].resolved &&
-                !has_instruction(partial_table, 8u),
+                !has_instruction(partial_table, 8u) &&
+                partial_table.indirect_control_flow[0].origin_class ==
+                    katana::analysis::IndirectControlFlowOriginClass::Table &&
+                partial_table.indirect_control_flow[0].evidence_origins ==
+                    std::vector{katana::analysis::AnalysisEvidenceOrigin::UserOverride},
             "Teilweise ungueltige Jump Table speiste sichere Teilziele in die Worklist.");
 
     auto table_call_image = code_image({0x0Bu, 0x41u, 0x09u, 0x00u, 0x0Bu, 0x00u, 0x09u, 0x00u,

@@ -355,6 +355,7 @@ int run_test(const int argc, char* argv[]) {
     require(guarded_export.functions != 0u && guarded_text.find("default:") != std::string::npos &&
                 guarded_text.find("unresolved_call") != std::string::npos &&
                 guarded_metadata.find("\"guarded_control_flow\":1") != std::string::npos &&
+                guarded_metadata.find("\"guarded_partial_control_flow\":1") != std::string::npos &&
                 guarded_metadata.find("\"unresolved_control_flow\":0") != std::string::npos,
             "Guarded-Kandidaten erreichen Portcodegen oder dynamischen Default nicht.");
 

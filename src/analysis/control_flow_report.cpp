@@ -94,29 +94,128 @@ void append_symbol_json(std::ostringstream& output,
            << ",\"binding\":" << katana::io::quote_json(binding_name(symbol->binding)) << '}';
 }
 
-} // namespace
+IndirectControlFlowOriginClass
+effective_origin_class(const IndirectControlFlowResolution& resolution) noexcept {
+    return resolution.origin_class == IndirectControlFlowOriginClass::NotApplicable
+               ? IndirectControlFlowOriginClass::RuntimePointer
+               : resolution.origin_class;
+}
+
+void count_frontier_class(ControlFlowFrontierClassSummary& summary,
+                          const IndirectControlFlowResolution& resolution) noexcept {
+    switch (effective_origin_class(resolution)) {
+    case IndirectControlFlowOriginClass::Callback:
+        ++summary.callback;
+        break;
+    case IndirectControlFlowOriginClass::Parameter:
+        ++summary.parameter;
+        break;
+    case IndirectControlFlowOriginClass::Stack:
+        ++summary.stack;
+        break;
+    case IndirectControlFlowOriginClass::ObjectVTable:
+        ++summary.object_vtable;
+        break;
+    case IndirectControlFlowOriginClass::Table:
+        ++summary.table;
+        break;
+    case IndirectControlFlowOriginClass::UnboundedMemory:
+        ++summary.unbounded_memory;
+        break;
+    case IndirectControlFlowOriginClass::NotApplicable:
+    case IndirectControlFlowOriginClass::RuntimePointer:
+        ++summary.runtime_pointer;
+        break;
+    }
+}
+
+void append_frontier_summary_json(std::ostringstream& output,
+                                  const ControlFlowReportSummary& summary) {
+    output << "\"indirect_total\":" << summary.indirect_total
+           << ",\"resolved\":" << summary.resolved
+           << ",\"guarded_complete\":" << summary.guarded_complete
+           << ",\"guarded_partial\":" << summary.guarded_partial
+           << ",\"runtime_only\":" << summary.runtime_only
+           << ",\"unresolved\":" << summary.unresolved
+           << ",\"frontier_classes\":{\"callback\":" << summary.frontier_classes.callback
+           << ",\"parameter\":" << summary.frontier_classes.parameter
+           << ",\"stack\":" << summary.frontier_classes.stack
+           << ",\"object_vtable\":" << summary.frontier_classes.object_vtable
+           << ",\"table\":" << summary.frontier_classes.table
+           << ",\"unbounded_memory\":" << summary.frontier_classes.unbounded_memory
+           << ",\"runtime_pointer\":" << summary.frontier_classes.runtime_pointer << '}';
+}
 
 ControlFlowReportSummary
-summarize_control_flow_analysis(const ControlFlowAnalysisResult& analysis) noexcept {
+summarize_resolutions(const std::span<const IndirectControlFlowResolution> resolutions) noexcept {
     ControlFlowReportSummary summary;
-    summary.indirect_total = analysis.indirect_control_flow.size();
-    summary.proven_instructions = analysis.recursive.proven_instruction_addresses.size();
-    summary.guarded_candidate_instructions =
-        analysis.recursive.guarded_candidate_instruction_addresses.size();
-    for (const auto& resolution : analysis.indirect_control_flow) {
-        switch (resolution.status) {
-        case ResolutionStatus::Resolved:
+    summary.indirect_total = resolutions.size();
+    for (const auto& resolution : resolutions) {
+        const auto status = control_flow_report_status(resolution);
+        switch (status) {
+        case ControlFlowReportStatus::Resolved:
             ++summary.resolved;
             break;
-        case ResolutionStatus::Guarded:
+        case ControlFlowReportStatus::GuardedComplete:
+            ++summary.guarded_complete;
             ++summary.guarded;
             break;
-        case ResolutionStatus::Unresolved:
+        case ControlFlowReportStatus::GuardedPartial:
+            ++summary.guarded_partial;
+            ++summary.guarded;
+            count_frontier_class(summary.frontier_classes, resolution);
+            break;
+        case ControlFlowReportStatus::RuntimeOnly:
+            ++summary.runtime_only;
+            count_frontier_class(summary.frontier_classes, resolution);
+            break;
+        case ControlFlowReportStatus::Unresolved:
             ++summary.unresolved;
+            count_frontier_class(summary.frontier_classes, resolution);
             break;
         }
     }
-    summary.unresolved_frontier = summary.unresolved;
+    summary.unresolved_frontier =
+        summary.guarded_partial + summary.runtime_only + summary.unresolved;
+    return summary;
+}
+
+} // namespace
+
+ControlFlowReportStatus
+control_flow_report_status(const IndirectControlFlowResolution& resolution) noexcept {
+    if (resolution.evidence == ControlFlowEvidence::RuntimeOnly)
+        return ControlFlowReportStatus::RuntimeOnly;
+    if (resolution.evidence == ControlFlowEvidence::GuardedComplete)
+        return ControlFlowReportStatus::GuardedComplete;
+    if (resolution.status == ResolutionStatus::Resolved) return ControlFlowReportStatus::Resolved;
+    if (resolution.status == ResolutionStatus::Guarded)
+        return ControlFlowReportStatus::GuardedPartial;
+    return ControlFlowReportStatus::Unresolved;
+}
+
+const char* control_flow_report_status_name(const ControlFlowReportStatus status) noexcept {
+    switch (status) {
+    case ControlFlowReportStatus::Resolved:
+        return "resolved";
+    case ControlFlowReportStatus::GuardedComplete:
+        return "guarded_complete";
+    case ControlFlowReportStatus::GuardedPartial:
+        return "guarded_partial";
+    case ControlFlowReportStatus::RuntimeOnly:
+        return "runtime_only";
+    case ControlFlowReportStatus::Unresolved:
+        return "unresolved";
+    }
+    return "unresolved";
+}
+
+ControlFlowReportSummary
+summarize_control_flow_analysis(const ControlFlowAnalysisResult& analysis) noexcept {
+    auto summary = summarize_resolutions(analysis.indirect_control_flow);
+    summary.proven_instructions = analysis.recursive.proven_instruction_addresses.size();
+    summary.guarded_candidate_instructions =
+        analysis.recursive.guarded_candidate_instruction_addresses.size();
     return summary;
 }
 
@@ -126,6 +225,19 @@ std::string format_indirect_control_flow_report(
     const std::span<const SymbolicAddress> symbols) {
     std::ostringstream output;
     output << "\nIndirekter Kontrollfluss\n";
+    const auto summary = summarize_resolutions(resolutions);
+    output << "Status: total=" << summary.indirect_total << "; resolved=" << summary.resolved
+           << "; guarded_complete=" << summary.guarded_complete
+           << "; guarded_partial=" << summary.guarded_partial
+           << "; runtime_only=" << summary.runtime_only << "; unresolved=" << summary.unresolved
+           << '\n'
+           << "Frontklassen: callback=" << summary.frontier_classes.callback
+           << "; parameter=" << summary.frontier_classes.parameter
+           << "; stack=" << summary.frontier_classes.stack
+           << "; object_vtable=" << summary.frontier_classes.object_vtable
+           << "; table=" << summary.frontier_classes.table
+           << "; unbounded_memory=" << summary.frontier_classes.unbounded_memory
+           << "; runtime_pointer=" << summary.frontier_classes.runtime_pointer << '\n';
     std::set<std::uint32_t> table_dispatches;
     for (const auto& table : jump_tables) {
         table_dispatches.insert(table.dispatch_address);
@@ -142,6 +254,10 @@ std::string format_indirect_control_flow_report(
             address_with_symbol(line, resolution.instruction_address, symbols);
             line << " [" << resolution.reason;
             line << "; evidence=" << control_flow_evidence_name(resolution.evidence);
+            line << "; status="
+                 << control_flow_report_status_name(control_flow_report_status(resolution));
+            line << "; class="
+                 << indirect_control_flow_origin_class_name(effective_origin_class(resolution));
             if (resolution.target.has_value()) {
                 line << "; candidate=";
                 address(line, *resolution.target);
@@ -229,17 +345,17 @@ std::string format_indirect_control_flow_report(
 std::string format_control_flow_analysis_json(const ControlFlowAnalysisResult& analysis) {
     std::ostringstream output;
     const auto summary = summarize_control_flow_analysis(analysis);
-    katana::io::write_json_report_header(output, "katana-control-flow-v2", "control-flow");
-    output << ",\"summary\":{\"instructions\":" << analysis.recursive.instructions.size()
+    katana::io::write_json_report_header(output, "katana-control-flow-v3", "control-flow");
+    output << ",\"privacy\":\"local-detailed\""
+           << ",\"summary\":{\"instructions\":" << analysis.recursive.instructions.size()
            << ",\"instruction_contexts\":" << analysis.recursive.contextual_instructions.size()
            << ",\"ranges\":" << analysis.recursive.ranges.size()
            << ",\"functions\":" << analysis.recursive.functions.size()
            << ",\"conflicts\":" << analysis.recursive.conflicts.size()
            << ",\"diagnostics\":" << analysis.recursive.diagnostics.size()
-           << ",\"indirect_sites\":" << summary.indirect_total
-           << ",\"indirect_total\":" << summary.indirect_total
-           << ",\"resolved\":" << summary.resolved << ",\"guarded\":" << summary.guarded
-           << ",\"unresolved\":" << summary.unresolved
+           << ",\"indirect_sites\":" << summary.indirect_total << ',';
+    append_frontier_summary_json(output, summary);
+    output << ",\"guarded\":" << summary.guarded
            << ",\"proven_instructions\":" << summary.proven_instructions
            << ",\"guarded_candidate_instructions\":" << summary.guarded_candidate_instructions
            << ",\"unresolved_frontier\":" << summary.unresolved_frontier
@@ -297,16 +413,28 @@ std::string format_control_flow_analysis_json(const ControlFlowAnalysisResult& a
             output, "instruction_symbol", analysis.symbolic_addresses, value.instruction_address);
         output << ",\"kind\":" << katana::io::quote_json(kind_name(value.kind))
                << ",\"register\":" << static_cast<unsigned>(value.register_index) << ",\"status\":"
-               << katana::io::quote_json(value.status == ResolutionStatus::Resolved  ? "resolved"
-                                         : value.status == ResolutionStatus::Guarded ? "guarded"
-                                                                                     : "unresolved")
-               << ",\"evidence\":"
+               << katana::io::quote_json(
+                      control_flow_report_status_name(control_flow_report_status(value)))
+               << ",\"origin_class\":";
+        if (value.origin_class == IndirectControlFlowOriginClass::NotApplicable &&
+            (control_flow_report_status(value) == ControlFlowReportStatus::Resolved ||
+             control_flow_report_status(value) == ControlFlowReportStatus::GuardedComplete)) {
+            output << "null";
+        } else {
+            output << katana::io::quote_json(
+                indirect_control_flow_origin_class_name(effective_origin_class(value)));
+        }
+        output << ",\"evidence\":"
                << katana::io::quote_json(control_flow_evidence_name(value.evidence))
                << ",\"evidence_origins\":[";
-        for (std::size_t origin = 0u; origin < value.evidence_origins.size(); ++origin) {
+        auto evidence_origins = value.evidence_origins;
+        std::sort(evidence_origins.begin(), evidence_origins.end());
+        evidence_origins.erase(std::unique(evidence_origins.begin(), evidence_origins.end()),
+                               evidence_origins.end());
+        for (std::size_t origin = 0u; origin < evidence_origins.size(); ++origin) {
             if (origin != 0u) output << ',';
             output << katana::io::quote_json(
-                analysis_evidence_origin_name(value.evidence_origins[origin]));
+                analysis_evidence_origin_name(evidence_origins[origin]));
         }
         output << "],\"target\":";
         if (value.target)
@@ -436,6 +564,19 @@ std::string format_control_flow_analysis_json(const ControlFlowAnalysisResult& a
         output << '}';
     }
     output << "]}\n";
+    return output.str();
+}
+
+std::string format_control_flow_frontier_json(const ControlFlowAnalysisResult& analysis) {
+    std::ostringstream output;
+    const auto summary = summarize_control_flow_analysis(analysis);
+    katana::io::write_json_report_header(
+        output, "katana-control-flow-frontier-v1", "control-flow-frontier");
+    output << ",\"privacy\":\"aggregate\",\"summary\":{\"instructions\":"
+           << analysis.recursive.instructions.size()
+           << ",\"functions\":" << analysis.recursive.functions.size() << ',';
+    append_frontier_summary_json(output, summary);
+    output << "}}\n";
     return output.str();
 }
 

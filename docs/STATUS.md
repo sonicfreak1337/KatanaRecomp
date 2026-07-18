@@ -2,7 +2,7 @@
 
 Interner Entwicklungsmeilenstein: `v0.46.0`
 Phase: Core-Stabilisierung vor v0.47
-Naechster Task: `KR-4715`
+Naechster Task: `KR-4716`
 Naechstes Gate: `v0.47.0` - Core-Stabilisierung und generische Retail-Runtime
 Weitere interne Gates: `v0.48.0` Integration und `v0.49.0` Alpha-Candidate
 Erster oeffentlicher Release: `v0.50.0` Alpha
@@ -81,6 +81,22 @@ jeden bereits geschriebenen Bereich noch vor dem Weiterwerfen zur
 Codeinvalidierung. Der lokale JSON-Bericht wird durch einen identischen
 Windows-CI-Buildgate als GitHub-Actions-Artifact unabhaengig nachvollziehbar.
 Damit ist Stufe B abgeschlossen und KR-4715 beginnt.
+
+## KR-4715 umgesetzt
+
+Indirekte Stellen werden als `resolved`, `guarded_complete`,
+`guarded_partial`, `runtime_only` oder `unresolved` disjunkt gezaehlt. Jede
+offene Stelle traegt genau eine typisierte Callback-, Parameter-, Stack-,
+Objekt/VTable-, Tabellen-, unbeschraenkte Speicher- oder Laufzeitzeigerklasse
+und eine maschinenlesbare Evidenzherkunft. Partielle Kandidaten bleiben im
+dynamischen Default und koennen Anwendungs-Vollstaendigkeit nicht herstellen.
+
+Der lokale Bericht `katana-control-flow-v3` behaelt Adressen und Einzeldetails;
+`katana-control-flow-frontier-v1` enthaelt ausschliesslich adressfreie
+Aggregatzaehler. Anwendungsworkflow, Buildplan und Portmetadaten geben die
+Klassen getrennt aus. Der Vertrag steht in
+[`CONTROL_FLOW_FRONTIER.md`](CONTROL_FLOW_FRONTIER.md). KR-4716 ist der naechste
+Task.
 
 ## Historischer Reviewbefund vor KR-4611 bis KR-4618
 

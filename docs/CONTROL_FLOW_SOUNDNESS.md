@@ -36,9 +36,10 @@ Beweise. Overrides werden als `ForcedOverride` berichtet und behalten den
 dynamischen Dispatch fuer eine Runtimevalidierung. Statisch staerkere Evidenz
 verdraengt Hint-Evidenz deterministisch.
 
-Der JSON-Kontrollflussbericht verwendet deshalb Schema
-`katana-control-flow-v2` und fuehrt Evidenz fuer Funktionen, indirekte Sites
-und Jump Tables explizit auf.
+Der lokale JSON-Kontrollflussbericht verwendet deshalb Schema
+`katana-control-flow-v3` und fuehrt Evidenz sowie Herkunftsklassen fuer
+Funktionen, indirekte Sites und Jump Tables explizit auf. Der getrennte
+`katana-control-flow-frontier-v1`-Bericht enthaelt nur adressfreie Aggregate.
 
 ## Instruktions- und Delay-Slot-Kontext
 

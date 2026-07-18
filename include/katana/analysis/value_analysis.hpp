@@ -40,6 +40,20 @@ enum class IndirectControlFlowKind { Jump, Call };
 
 enum class ResolutionStatus { Resolved, Guarded, Unresolved };
 
+enum class IndirectControlFlowOriginClass : std::uint8_t {
+    NotApplicable,
+    Callback,
+    Parameter,
+    Stack,
+    ObjectVTable,
+    Table,
+    UnboundedMemory,
+    RuntimePointer
+};
+
+[[nodiscard]] const char*
+indirect_control_flow_origin_class_name(IndirectControlFlowOriginClass origin) noexcept;
+
 [[nodiscard]] std::uint16_t
 general_register_write_mask(const katana::sh4::DecodedInstruction& instruction) noexcept;
 
@@ -49,6 +63,7 @@ struct IndirectControlFlowResolution {
     std::uint8_t register_index = 0u;
     ResolutionStatus status = ResolutionStatus::Unresolved;
     ControlFlowEvidence evidence = ControlFlowEvidence::Unresolved;
+    IndirectControlFlowOriginClass origin_class = IndirectControlFlowOriginClass::NotApplicable;
     std::vector<AnalysisEvidenceOrigin> evidence_origins;
     std::optional<std::uint32_t> target;
     std::string reason;

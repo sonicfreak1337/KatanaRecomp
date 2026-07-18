@@ -387,7 +387,7 @@ wird lokal und durch den Windows-CI-Buildgate als Artifact erzeugt.
 
 ## Stufe C: Retail-Kontrollfluss und Build
 
-### [ ] KR-4715 - Ungeloeste Kontrollflussfront inventarisieren
+### [x] KR-4715 - Ungeloeste Kontrollflussfront inventarisieren
 
 Abhaengigkeiten: KR-4618, KR-4625
 Prioritaet: P0
@@ -407,6 +407,13 @@ Akzeptanz:
 - jede offene Stelle besitzt genau eine Klasse und eine Beweisherkunft
 - partielle Kandidaten koennen Vollstaendigkeit nicht vortaeuschen
 - jede Klasse besitzt eine synthetische positive oder negative Regression
+
+Umgesetzt mit fuenf disjunkten Berichtszustaenden, sieben typisierten
+Herkunftsklassen und getrennten lokalen Detail- beziehungsweise adressfreien
+Aggregatberichten. Anwendungsjob, Buildplan und Portmetadaten fuehren
+vollstaendige, partielle, Runtime-only- und ungeloeste Stellen getrennt;
+partielle Kandidaten blockieren Anwendungs-Vollstaendigkeit. Vertrag und
+spaetere Gate-Regressionen stehen in `CONTROL_FLOW_FRONTIER.md`.
 
 ### [ ] KR-4716 - ABI-erhaltene Callback-, Parameter- und Stackwerte
 
