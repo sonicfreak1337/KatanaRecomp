@@ -1,6 +1,6 @@
 # Kontrollflussfront und Datenschutz
 
-Stand: KR-4715
+Stand: KR-4716
 
 Jede indirekte Kontrollflussstelle besitzt genau einen der fuenf disjunkten
 Berichtszustaende:
@@ -33,6 +33,11 @@ Die Klasse ist von der Beweisstaerke getrennt. `evidence` und die sortierten
 `evidence_origins` bleiben die maschinenlesbare Herkunft; `reason` ist nur eine
 menschenlesbare Diagnose. Fehlt fuer einen offenen Alt- oder Testdatensatz eine
 explizite Klasse, wird er konservativ als `runtime-pointer` gezaehlt.
+
+KR-4716 kann vollstaendige bewachte Zielmengen aus geschlossenen Caller-
+Kontexten, R13-Callbacks, festen Stackspills und vollstaendigen indirekten
+Callee-Summaries ableiten. Unbekannte Caller oder Aliase bleiben Teil der
+offenen Front. Der genaue Vertrag steht in `ABI_VALUE_ANALYSIS.md`.
 
 ## Berichte und Datenschutz
 

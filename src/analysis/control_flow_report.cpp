@@ -368,6 +368,9 @@ std::string format_control_flow_analysis_json(const ControlFlowAnalysisResult& a
            << ",\"function_summary_iterations\":" << analysis.function_summary_iterations
            << ",\"function_scc_count\":" << analysis.function_scc_count
            << ",\"unchanged_ingress_skips\":" << analysis.unchanged_ingress_skips
+           << ",\"function_iteration_budget\":" << analysis.function_iteration_budget
+           << ",\"function_budget_exhausted\":"
+           << (analysis.function_budget_exhausted ? "true" : "false")
            << ",\"jump_table_cache_hits\":" << analysis.jump_table_cache.hits
            << ",\"jump_table_cache_misses\":" << analysis.jump_table_cache.misses
            << ",\"interned_evidence\":" << analysis.evidence_ids.size() << '}';
@@ -477,6 +480,7 @@ std::string format_control_flow_analysis_json(const ControlFlowAnalysisResult& a
             const auto& value = function_summary.registers[reg];
             output << "{\"register\":" << static_cast<unsigned>(value.register_index)
                    << ",\"complete\":" << (value.complete ? "true" : "false")
+                   << ",\"guarded\":" << (value.guarded ? "true" : "false")
                    << ",\"abi_preserved\":" << (value.abi_preserved ? "true" : "false")
                    << ",\"reason\":" << katana::io::quote_json(value.reason) << ",\"values\":[";
             for (std::size_t item = 0u; item < value.values.size(); ++item) {

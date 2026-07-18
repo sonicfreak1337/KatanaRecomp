@@ -307,15 +307,32 @@ void classify_dynamic_sites(const std::span<const katana::sh4::DisassemblyLine> 
                 writer = &*found_writer;
         }
         bool vtable_base = false;
+        bool stack_base = false;
+        bool callback_source = resolution.register_index == 13u;
         if (writer != nullptr) {
             const auto base =
                 bounded_writer_slice(blocks, writer->address, writer->instruction.source_register);
             vtable_base = base.writers.size() == 1u && !base.incomplete;
+            callback_source = callback_source || (writer->instruction.kind ==
+                                                      katana::sh4::InstructionKind::MovRegister &&
+                                                  writer->instruction.source_register == 13u);
+            if (vtable_base) {
+                const auto base_writer = std::lower_bound(
+                    lines.begin(),
+                    lines.end(),
+                    *base.writers.begin(),
+                    [](const auto& line, const auto address) { return line.address < address; });
+                stack_base =
+                    base_writer != lines.end() && base_writer->address == *base.writers.begin() &&
+                    base_writer->instruction.kind == katana::sh4::InstructionKind::MovRegister &&
+                    base_writer->instruction.source_register == 15u;
+            }
         }
-        if (resolution.register_index == 0u && slice.preceding_call) {
+        if ((resolution.register_index == 0u && slice.preceding_call) || callback_source) {
             resolution.origin_class = IndirectControlFlowOriginClass::Callback;
         } else if (resolution.register_index == 15u ||
-                   (writer != nullptr && writer->instruction.source_register == 15u)) {
+                   (writer != nullptr && writer->instruction.source_register == 15u) ||
+                   stack_base) {
             resolution.origin_class = IndirectControlFlowOriginClass::Stack;
         } else if (writer != nullptr && vtable_base) {
             resolution.origin_class = IndirectControlFlowOriginClass::ObjectVTable;
@@ -332,7 +349,8 @@ void classify_dynamic_sites(const std::span<const katana::sh4::DisassemblyLine> 
             resolution.origin_class != IndirectControlFlowOriginClass::RuntimePointer) {
             switch (resolution.origin_class) {
             case IndirectControlFlowOriginClass::Callback:
-                resolution.reason = "dynamic-return-value";
+                resolution.reason =
+                    resolution.register_index == 13u ? "dynamic-callback" : "dynamic-return-value";
                 break;
             case IndirectControlFlowOriginClass::Parameter:
                 resolution.reason = "dynamic-parameter";
@@ -695,6 +713,8 @@ ControlFlowAnalysisResult analyze_control_flow(const katana::io::ExecutableImage
         analysis.function_summary_iterations = function_values.fixpoint_iterations;
         analysis.function_scc_count = function_values.strongly_connected_components;
         analysis.unchanged_ingress_skips = function_values.unchanged_ingress_skips;
+        analysis.function_iteration_budget = function_values.iteration_budget;
+        analysis.function_budget_exhausted = function_values.budget_exhausted;
         analysis.function_value_summaries = std::move(function_values.summaries);
         for (auto& proof : function_values.resolutions) {
             if (proof.targets.empty()) continue;

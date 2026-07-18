@@ -14,6 +14,7 @@ namespace katana::analysis {
 struct FunctionRegisterValueSummary {
     std::uint8_t register_index = 0u;
     bool complete = false;
+    bool guarded = false;
     bool abi_preserved = false;
     std::vector<std::uint32_t> values;
     std::vector<std::uint32_t> return_sites;
@@ -49,6 +50,8 @@ struct FunctionValueAnalysisResult {
     std::size_t fixpoint_iterations = 0u;
     std::size_t strongly_connected_components = 0u;
     std::size_t unchanged_ingress_skips = 0u;
+    std::size_t iteration_budget = 0u;
+    bool budget_exhausted = false;
 };
 
 [[nodiscard]] FunctionValueAnalysisResult

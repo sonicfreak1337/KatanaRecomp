@@ -58,6 +58,8 @@ struct ControlFlowAnalysisResult {
     std::size_t function_summary_iterations = 0u;
     std::size_t function_scc_count = 0u;
     std::size_t unchanged_ingress_skips = 0u;
+    std::size_t function_iteration_budget = 0u;
+    bool function_budget_exhausted = false;
     std::vector<AnalysisDirectiveDiagnostic> directive_diagnostics;
     std::vector<SymbolicAddress> symbolic_addresses;
 };

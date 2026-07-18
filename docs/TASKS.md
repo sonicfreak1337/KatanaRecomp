@@ -421,7 +421,7 @@ vollstaendige, partielle, Runtime-only- und ungeloeste Stellen getrennt;
 partielle Kandidaten blockieren Anwendungs-Vollstaendigkeit. Vertrag und
 spaetere Gate-Regressionen stehen in `CONTROL_FLOW_FRONTIER.md`.
 
-### [ ] KR-4716 - ABI-erhaltene Callback-, Parameter- und Stackwerte
+### [x] KR-4716 - ABI-erhaltene Callback-, Parameter- und Stackwerte
 
 Abhaengigkeiten: KR-4715
 Prioritaet: P0
@@ -440,6 +440,14 @@ Akzeptanz:
   sind synthetisch getestet
 - nur vollstaendige endliche Mengen werden `guarded_complete`
 - die Analyse terminiert deterministisch unter festen Budgets
+
+Umgesetzt mit geschlossenen Caller-Ingressmengen, getrennten
+Vollstaendigkeits-/Guardbits und der Vereinigung vollstaendiger indirekter
+Callee-/R0-Summaries. R13-Callbacks und R8 bis R14 werden kontextsensitiv
+propagiert. Ein auf 4096 Bytes begrenztes symbolisches Stackmodell erhaelt
+Longword-Spills ueber feste SP-/Framepointeroffsets; unbekannte Caller,
+Aliase und Budgeterschoepfung stufen Ergebnisse konservativ herab. Vertrag
+und Gatefaelle stehen in `ABI_VALUE_ANALYSIS.md`.
 
 ### [ ] KR-4717 - Objekt-, Feld- und VTable-Points-to
 

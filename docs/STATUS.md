@@ -2,7 +2,7 @@
 
 Interner Entwicklungsmeilenstein: `v0.46.0`
 Phase: Core-Stabilisierung vor v0.47
-Naechster Task: `KR-4716`
+Naechster Task: `KR-4717`
 Naechstes Gate: `v0.47.0` - Core-Stabilisierung und generische Retail-Runtime
 Weitere interne Gates: `v0.48.0` Integration und `v0.49.0` Alpha-Candidate
 Erster oeffentlicher Release: `v0.50.0` Alpha
@@ -102,6 +102,22 @@ Aggregatzaehler. Anwendungsworkflow, Buildplan und Portmetadaten geben die
 Klassen getrennt aus. Der Vertrag steht in
 [`CONTROL_FLOW_FRONTIER.md`](CONTROL_FLOW_FRONTIER.md). KR-4716 ist der naechste
 Task.
+
+## KR-4716 umgesetzt
+
+Die SH-C-Funktionswertanalyse vereinigt R8 bis R14 erst nach Beobachtung aller
+bekannten direkten beziehungsweise vollstaendig bewachten Callstellen.
+Unbekannte Caller und partielle indirekte Calleemengen bleiben unbekannter
+Ingress. Endliche indirekte Calleemengen duerfen vollstaendige R0-Summaries
+vereinigen; Guard und Vollstaendigkeit bleiben dabei getrennte Fakten.
+
+R13-Callbacks behalten ihre eigene Herkunft. Feste Longword-Spills und
+Reloads ueber symbolische SP-/Framepointeroffsets werden innerhalb eines
+4096-Byte-Fensters erhalten. Unbekannte oder entkommene Aliase invalidieren
+Stackfakten konservativ. Ein hartes Fixpunktbudget verhindert unbestimmte
+Analysezeiten und stuft bei Erschoepfung alle betroffenen Beweise herab. Der
+Vertrag steht in [`ABI_VALUE_ANALYSIS.md`](ABI_VALUE_ANALYSIS.md). KR-4717 ist
+der naechste Task.
 
 ## Historischer Reviewbefund vor KR-4611 bis KR-4618
 

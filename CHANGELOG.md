@@ -4,6 +4,11 @@
 
 ### Geaendert
 
+- KR-4716: Geschlossene direkte und vollstaendig bewachte Callermengen
+  propagieren R8 bis R14 kontextsensitiv. Endliche indirekte Calleemengen
+  vereinigen nur vollstaendige Return-Summaries. R13-Callbacks sowie begrenzte
+  Stack-/Framepointer-Spills bleiben erhalten; unbekannte Caller, Aliase,
+  Rekursion und Budgeterschoepfung werden konservativ herabgestuft.
 - KR-4625-Nacharbeit: Gebuendelte Writes lesen Write-only-MMIO nicht vorab und
   invalidieren nichtlineare Geraete pessimistisch. Das erzeugte Ninja-Projekt
   baut Runtime-Includes und den generierten Buildvertrag mit der von CMake

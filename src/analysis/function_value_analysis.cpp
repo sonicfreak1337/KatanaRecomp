@@ -23,6 +23,8 @@ namespace katana::analysis {
 namespace {
 
 constexpr std::size_t maximum_summary_values = 8u;
+constexpr std::size_t maximum_fixpoint_iterations = 65'536u;
+constexpr std::int32_t maximum_stack_distance = 4'096;
 
 std::vector<std::vector<std::uint32_t>>
 strong_components(const std::span<const FunctionInfo> functions) {
@@ -73,12 +75,43 @@ strong_components(const std::span<const FunctionInfo> functions) {
 struct AbstractValue {
     bool known = false;
     bool guarded = false;
+    bool complete = false;
     std::vector<std::uint32_t> values;
     std::set<std::uint32_t> call_sites;
     std::set<std::uint32_t> callees;
+
+    bool operator==(const AbstractValue&) const = default;
 };
 
-using AbstractState = std::array<AbstractValue, 16u>;
+struct AbstractState {
+    std::array<AbstractValue, 16u> registers;
+    std::array<std::optional<std::int32_t>, 16u> stack_offsets;
+    std::map<std::int32_t, AbstractValue> stack_values;
+
+    AbstractValue& operator[](const std::size_t index) {
+        return registers[index];
+    }
+    const AbstractValue& operator[](const std::size_t index) const {
+        return registers[index];
+    }
+    auto begin() noexcept {
+        return registers.begin();
+    }
+    auto end() noexcept {
+        return registers.end();
+    }
+    auto begin() const noexcept {
+        return registers.begin();
+    }
+    auto end() const noexcept {
+        return registers.end();
+    }
+    constexpr std::size_t size() const noexcept {
+        return registers.size();
+    }
+
+    bool operator==(const AbstractState&) const = default;
+};
 
 struct FunctionEvaluation {
     FunctionValueSummary summary;
@@ -94,13 +127,14 @@ struct FunctionEvaluation {
 struct IndirectCalleeCandidates {
     std::vector<std::uint32_t> targets;
     bool guarded = false;
+    bool complete = true;
 };
 
 struct CandidateInput {
     AbstractState state;
-    std::array<bool, 16u> saturated{};
-    std::array<bool, 16u> incomplete{};
-    bool observed = false;
+    std::set<std::uint32_t> expected_call_sites;
+    std::map<std::uint32_t, AbstractState> observations;
+    bool unknown_ingress = false;
 };
 
 void normalize(std::vector<std::uint32_t>& values) {
@@ -111,6 +145,7 @@ void normalize(std::vector<std::uint32_t>& values) {
 void make_unknown(AbstractValue& value) {
     value.known = false;
     value.guarded = false;
+    value.complete = false;
     value.values.clear();
     value.call_sites.clear();
     value.callees.clear();
@@ -119,6 +154,7 @@ void make_unknown(AbstractValue& value) {
 void set_value(AbstractValue& value, const std::uint32_t constant) {
     value.known = true;
     value.guarded = false;
+    value.complete = true;
     value.values = {constant};
     value.call_sites.clear();
     value.callees.clear();
@@ -131,23 +167,38 @@ bool merge_value(AbstractValue& destination, const AbstractValue& source) {
     if (!destination.known || !source.known) {
         destination.known = false;
         destination.guarded = false;
+        destination.complete = false;
         destination.values.clear();
     } else {
         destination.guarded = destination.guarded || source.guarded;
+        destination.complete = destination.complete && source.complete;
         destination.values.insert(
             destination.values.end(), source.values.begin(), source.values.end());
         normalize(destination.values);
         if (destination.values.size() > maximum_summary_values) make_unknown(destination);
     }
-    return destination.known != before.known || destination.guarded != before.guarded ||
-           destination.values != before.values || destination.call_sites != before.call_sites ||
-           destination.callees != before.callees;
+    return destination != before;
 }
 
 bool merge_state(AbstractState& destination, const AbstractState& source) {
     bool changed = false;
     for (std::size_t index = 0u; index < destination.size(); ++index)
         changed = merge_value(destination[index], source[index]) || changed;
+    for (std::size_t index = 0u; index < destination.stack_offsets.size(); ++index) {
+        if (destination.stack_offsets[index] == source.stack_offsets[index]) continue;
+        if (destination.stack_offsets[index].has_value()) changed = true;
+        destination.stack_offsets[index].reset();
+    }
+    for (auto slot = destination.stack_values.begin(); slot != destination.stack_values.end();) {
+        const auto source_slot = source.stack_values.find(slot->first);
+        if (source_slot == source.stack_values.end()) {
+            slot = destination.stack_values.erase(slot);
+            changed = true;
+            continue;
+        }
+        changed = merge_value(slot->second, source_slot->second) || changed;
+        ++slot;
+    }
     return changed;
 }
 
@@ -158,7 +209,10 @@ constexpr std::uint16_t register_bit(const std::uint8_t index) {
 void clear_written(AbstractState& state, const katana::sh4::DecodedInstruction& instruction) {
     const auto mask = general_register_write_mask(instruction);
     for (std::uint8_t index = 0u; index < state.size(); ++index) {
-        if ((mask & register_bit(index)) != 0u) make_unknown(state[index]);
+        if ((mask & register_bit(index)) != 0u) {
+            make_unknown(state[index]);
+            state.stack_offsets[index].reset();
+        }
     }
 }
 
@@ -201,6 +255,7 @@ void apply_binary(AbstractValue& destination,
     normalize(values);
     destination.values = std::move(values);
     destination.guarded = destination.guarded || source.guarded;
+    destination.complete = destination.complete && source.complete;
     destination.call_sites.insert(source.call_sites.begin(), source.call_sites.end());
     destination.callees.insert(source.callees.begin(), source.callees.end());
 }
@@ -256,6 +311,7 @@ void load_image_values(AbstractValue& destination,
     }
     AbstractValue loaded;
     loaded.known = true;
+    loaded.complete = true;
     for (const auto address : addresses) {
         const auto value = read_image_value(image, address, width);
         if (!value.has_value()) {
@@ -264,6 +320,7 @@ void load_image_values(AbstractValue& destination,
         }
         loaded.values.push_back(value->value);
         loaded.guarded = loaded.guarded || value->guarded;
+        loaded.complete = loaded.complete && !value->guarded;
         normalize(loaded.values);
         if (loaded.values.size() > maximum_summary_values) {
             make_unknown(destination);
@@ -272,11 +329,83 @@ void load_image_values(AbstractValue& destination,
     }
     if (address_evidence != nullptr) {
         loaded.guarded = loaded.guarded || address_evidence->guarded;
+        loaded.complete = loaded.complete && address_evidence->complete;
         loaded.call_sites.insert(address_evidence->call_sites.begin(),
                                  address_evidence->call_sites.end());
         loaded.callees.insert(address_evidence->callees.begin(), address_evidence->callees.end());
     }
     destination = std::move(loaded);
+}
+
+std::optional<std::int32_t> stack_slot(const AbstractState& state,
+                                       const std::uint8_t base_register,
+                                       const std::int32_t displacement = 0) {
+    if (!state.stack_offsets[base_register].has_value()) return std::nullopt;
+    const auto base = static_cast<std::int64_t>(*state.stack_offsets[base_register]);
+    const auto offset = base + displacement;
+    if (offset < -maximum_stack_distance || offset > maximum_stack_distance) return std::nullopt;
+    return static_cast<std::int32_t>(offset);
+}
+
+void invalidate_stack_range(AbstractState& state,
+                            const std::optional<std::int32_t> offset,
+                            const std::size_t width) {
+    if (!offset.has_value()) {
+        state.stack_values.clear();
+        return;
+    }
+    const auto begin = static_cast<std::int64_t>(*offset);
+    const auto end = begin + static_cast<std::int64_t>(width);
+    for (auto slot = state.stack_values.begin(); slot != state.stack_values.end();) {
+        const auto slot_begin = static_cast<std::int64_t>(slot->first);
+        const auto slot_end = slot_begin + 4;
+        if (slot_begin < end && begin < slot_end)
+            slot = state.stack_values.erase(slot);
+        else
+            ++slot;
+    }
+}
+
+void store_stack_value(AbstractState& state,
+                       const std::optional<std::int32_t> offset,
+                       const std::size_t width,
+                       const AbstractValue& value) {
+    invalidate_stack_range(state, offset, width);
+    if (offset.has_value() && width == 4u && value.known) state.stack_values[*offset] = value;
+}
+
+void load_stack_value(AbstractValue& destination,
+                      const AbstractState& state,
+                      const std::optional<std::int32_t> offset,
+                      const std::size_t width) {
+    if (!offset.has_value() || width != 4u) {
+        make_unknown(destination);
+        return;
+    }
+    const auto value = state.stack_values.find(*offset);
+    if (value == state.stack_values.end()) {
+        make_unknown(destination);
+        return;
+    }
+    destination = value->second;
+}
+
+void adjust_stack_offset(AbstractState& state,
+                         const std::uint8_t register_index,
+                         const std::int32_t delta) {
+    if (state.stack_offsets[register_index].has_value()) {
+        const auto adjusted =
+            static_cast<std::int64_t>(*state.stack_offsets[register_index]) + delta;
+        if (adjusted < -maximum_stack_distance || adjusted > maximum_stack_distance)
+            state.stack_offsets[register_index].reset();
+        else
+            state.stack_offsets[register_index] = static_cast<std::int32_t>(adjusted);
+    }
+    if (state[register_index].known) {
+        for (auto& value : state[register_index].values)
+            value += static_cast<std::uint32_t>(delta);
+        normalize(state[register_index].values);
+    }
 }
 
 std::vector<std::uint32_t> displaced_addresses(const AbstractValue& base,
@@ -315,15 +444,15 @@ void apply_transfer(AbstractState& state,
     case katana::sh4::InstructionKind::MovImmediate:
         set_value(state[instruction.destination_register],
                   static_cast<std::uint32_t>(instruction.immediate));
+        state.stack_offsets[instruction.destination_register].reset();
         return;
     case katana::sh4::InstructionKind::MovRegister:
         state[instruction.destination_register] = state[instruction.source_register];
+        state.stack_offsets[instruction.destination_register] =
+            state.stack_offsets[instruction.source_register];
         return;
     case katana::sh4::InstructionKind::AddImmediate:
-        if (!state[instruction.destination_register].known) return;
-        for (auto& value : state[instruction.destination_register].values)
-            value += static_cast<std::uint32_t>(instruction.immediate);
-        normalize(state[instruction.destination_register].values);
+        adjust_stack_offset(state, instruction.destination_register, instruction.immediate);
         return;
     case katana::sh4::InstructionKind::AddRegister:
     case katana::sh4::InstructionKind::SubRegister:
@@ -333,6 +462,7 @@ void apply_transfer(AbstractState& state,
         apply_binary(state[instruction.destination_register],
                      state[instruction.source_register],
                      instruction.kind);
+        state.stack_offsets[instruction.destination_register].reset();
         return;
     case katana::sh4::InstructionKind::AndImmediate:
     case katana::sh4::InstructionKind::OrImmediate:
@@ -345,80 +475,98 @@ void apply_transfer(AbstractState& state,
                        ? value | immediate
                        : value ^ immediate;
         });
+        state.stack_offsets[0u].reset();
         return;
     }
     case katana::sh4::InstructionKind::ShiftLogicalLeftOne:
         apply_unary(state[instruction.destination_register],
                     [](const std::uint32_t value) { return value << 1u; });
+        state.stack_offsets[instruction.destination_register].reset();
         return;
     case katana::sh4::InstructionKind::ShiftLogicalLeftTwo:
         apply_unary(state[instruction.destination_register],
                     [](const std::uint32_t value) { return value << 2u; });
+        state.stack_offsets[instruction.destination_register].reset();
         return;
     case katana::sh4::InstructionKind::ShiftLogicalLeftEight:
         apply_unary(state[instruction.destination_register],
                     [](const std::uint32_t value) { return value << 8u; });
+        state.stack_offsets[instruction.destination_register].reset();
         return;
     case katana::sh4::InstructionKind::ShiftLogicalLeftSixteen:
         apply_unary(state[instruction.destination_register],
                     [](const std::uint32_t value) { return value << 16u; });
+        state.stack_offsets[instruction.destination_register].reset();
         return;
     case katana::sh4::InstructionKind::ShiftLogicalRightOne:
         apply_unary(state[instruction.destination_register],
                     [](const std::uint32_t value) { return value >> 1u; });
+        state.stack_offsets[instruction.destination_register].reset();
         return;
     case katana::sh4::InstructionKind::ShiftLogicalRightTwo:
         apply_unary(state[instruction.destination_register],
                     [](const std::uint32_t value) { return value >> 2u; });
+        state.stack_offsets[instruction.destination_register].reset();
         return;
     case katana::sh4::InstructionKind::ShiftLogicalRightEight:
         apply_unary(state[instruction.destination_register],
                     [](const std::uint32_t value) { return value >> 8u; });
+        state.stack_offsets[instruction.destination_register].reset();
         return;
     case katana::sh4::InstructionKind::ShiftLogicalRightSixteen:
         apply_unary(state[instruction.destination_register],
                     [](const std::uint32_t value) { return value >> 16u; });
+        state.stack_offsets[instruction.destination_register].reset();
         return;
     case katana::sh4::InstructionKind::ShiftArithmeticLeftOne:
         apply_unary(state[instruction.destination_register],
                     [](const std::uint32_t value) { return value << 1u; });
+        state.stack_offsets[instruction.destination_register].reset();
         return;
     case katana::sh4::InstructionKind::ShiftArithmeticRightOne:
         apply_unary(state[instruction.destination_register], [](const std::uint32_t value) {
             return static_cast<std::uint32_t>(static_cast<std::int32_t>(value) >> 1);
         });
+        state.stack_offsets[instruction.destination_register].reset();
         return;
     case katana::sh4::InstructionKind::ExtendUnsignedByte:
         apply_unary(state[instruction.destination_register],
                     [](const std::uint32_t value) { return value & 0xFFu; });
+        state.stack_offsets[instruction.destination_register].reset();
         return;
     case katana::sh4::InstructionKind::ExtendUnsignedWord:
         apply_unary(state[instruction.destination_register],
                     [](const std::uint32_t value) { return value & 0xFFFFu; });
+        state.stack_offsets[instruction.destination_register].reset();
         return;
     case katana::sh4::InstructionKind::ExtendSignedByte:
         apply_unary(state[instruction.destination_register], [](const std::uint32_t value) {
             return static_cast<std::uint32_t>(
                 static_cast<std::int32_t>(static_cast<std::int8_t>(value)));
         });
+        state.stack_offsets[instruction.destination_register].reset();
         return;
     case katana::sh4::InstructionKind::ExtendSignedWord:
         apply_unary(state[instruction.destination_register], [](const std::uint32_t value) {
             return static_cast<std::uint32_t>(
                 static_cast<std::int32_t>(static_cast<std::int16_t>(value)));
         });
+        state.stack_offsets[instruction.destination_register].reset();
         return;
     case katana::sh4::InstructionKind::MoveT:
         state[instruction.destination_register].known = true;
         state[instruction.destination_register].guarded = false;
+        state[instruction.destination_register].complete = true;
         state[instruction.destination_register].values = {0u, 1u};
         state[instruction.destination_register].call_sites.clear();
         state[instruction.destination_register].callees.clear();
+        state.stack_offsets[instruction.destination_register].reset();
         return;
     case katana::sh4::InstructionKind::MoveAddressPcRelative:
         set_value(state[0u],
                   ((line.address + 4u) & ~3u) +
                       static_cast<std::uint32_t>(instruction.displacement));
+        state.stack_offsets[0u].reset();
         return;
     case katana::sh4::InstructionKind::MovWordLoadPcRelative:
     case katana::sh4::InstructionKind::MovLongLoadPcRelative: {
@@ -429,6 +577,48 @@ void apply_transfer(AbstractState& state,
                           {base + static_cast<std::uint32_t>(instruction.displacement)},
                           width,
                           image);
+        state.stack_offsets[instruction.destination_register].reset();
+        return;
+    }
+    case katana::sh4::InstructionKind::MovByteStore:
+    case katana::sh4::InstructionKind::MovWordStore:
+    case katana::sh4::InstructionKind::MovLongStore: {
+        const auto width = instruction.kind == katana::sh4::InstructionKind::MovByteStore   ? 1u
+                           : instruction.kind == katana::sh4::InstructionKind::MovWordStore ? 2u
+                                                                                            : 4u;
+        store_stack_value(state,
+                          stack_slot(state, instruction.destination_register),
+                          width,
+                          state[instruction.source_register]);
+        return;
+    }
+    case katana::sh4::InstructionKind::MovByteStorePreDecrement:
+    case katana::sh4::InstructionKind::MovWordStorePreDecrement:
+    case katana::sh4::InstructionKind::MovLongStorePreDecrement: {
+        const auto width =
+            instruction.kind == katana::sh4::InstructionKind::MovByteStorePreDecrement   ? 1u
+            : instruction.kind == katana::sh4::InstructionKind::MovWordStorePreDecrement ? 2u
+                                                                                         : 4u;
+        adjust_stack_offset(
+            state, instruction.destination_register, -static_cast<std::int32_t>(width));
+        store_stack_value(state,
+                          stack_slot(state, instruction.destination_register),
+                          width,
+                          state[instruction.source_register]);
+        return;
+    }
+    case katana::sh4::InstructionKind::MovByteStoreDisplacement:
+    case katana::sh4::InstructionKind::MovWordStoreDisplacement:
+    case katana::sh4::InstructionKind::MovLongStoreDisplacement: {
+        const auto width =
+            instruction.kind == katana::sh4::InstructionKind::MovByteStoreDisplacement   ? 1u
+            : instruction.kind == katana::sh4::InstructionKind::MovWordStoreDisplacement ? 2u
+                                                                                         : 4u;
+        store_stack_value(
+            state,
+            stack_slot(state, instruction.destination_register, instruction.displacement),
+            width,
+            state[instruction.source_register]);
         return;
     }
     case katana::sh4::InstructionKind::MovByteLoad:
@@ -437,11 +627,45 @@ void apply_transfer(AbstractState& state,
         const auto width = instruction.kind == katana::sh4::InstructionKind::MovByteLoad   ? 1u
                            : instruction.kind == katana::sh4::InstructionKind::MovWordLoad ? 2u
                                                                                            : 4u;
-        load_image_values(state[instruction.destination_register],
-                          displaced_addresses(state[instruction.source_register], 0u),
-                          width,
-                          image,
-                          &state[instruction.source_register]);
+        if (state.stack_offsets[instruction.source_register].has_value()) {
+            load_stack_value(state[instruction.destination_register],
+                             state,
+                             stack_slot(state, instruction.source_register),
+                             width);
+        } else {
+            load_image_values(state[instruction.destination_register],
+                              displaced_addresses(state[instruction.source_register], 0u),
+                              width,
+                              image,
+                              &state[instruction.source_register]);
+        }
+        state.stack_offsets[instruction.destination_register].reset();
+        return;
+    }
+    case katana::sh4::InstructionKind::MovByteLoadPostIncrement:
+    case katana::sh4::InstructionKind::MovWordLoadPostIncrement:
+    case katana::sh4::InstructionKind::MovLongLoadPostIncrement: {
+        const auto width =
+            instruction.kind == katana::sh4::InstructionKind::MovByteLoadPostIncrement   ? 1u
+            : instruction.kind == katana::sh4::InstructionKind::MovWordLoadPostIncrement ? 2u
+                                                                                         : 4u;
+        if (state.stack_offsets[instruction.source_register].has_value()) {
+            load_stack_value(state[instruction.destination_register],
+                             state,
+                             stack_slot(state, instruction.source_register),
+                             width);
+        } else {
+            load_image_values(state[instruction.destination_register],
+                              displaced_addresses(state[instruction.source_register], 0u),
+                              width,
+                              image,
+                              &state[instruction.source_register]);
+        }
+        state.stack_offsets[instruction.destination_register].reset();
+        if (instruction.source_register != instruction.destination_register) {
+            adjust_stack_offset(
+                state, instruction.source_register, static_cast<std::int32_t>(width));
+        }
         return;
     }
     case katana::sh4::InstructionKind::MovByteLoadDisplacement:
@@ -451,14 +675,36 @@ void apply_transfer(AbstractState& state,
             instruction.kind == katana::sh4::InstructionKind::MovByteLoadDisplacement   ? 1u
             : instruction.kind == katana::sh4::InstructionKind::MovWordLoadDisplacement ? 2u
                                                                                         : 4u;
-        load_image_values(state[instruction.destination_register],
-                          displaced_addresses(state[instruction.source_register],
-                                              static_cast<std::uint32_t>(instruction.displacement)),
-                          width,
-                          image,
-                          &state[instruction.source_register]);
+        if (state.stack_offsets[instruction.source_register].has_value()) {
+            load_stack_value(
+                state[instruction.destination_register],
+                state,
+                stack_slot(state, instruction.source_register, instruction.displacement),
+                width);
+        } else {
+            load_image_values(
+                state[instruction.destination_register],
+                displaced_addresses(state[instruction.source_register],
+                                    static_cast<std::uint32_t>(instruction.displacement)),
+                width,
+                image,
+                &state[instruction.source_register]);
+        }
+        state.stack_offsets[instruction.destination_register].reset();
         return;
     }
+    case katana::sh4::InstructionKind::MovByteStoreR0Indexed:
+    case katana::sh4::InstructionKind::MovWordStoreR0Indexed:
+    case katana::sh4::InstructionKind::MovLongStoreR0Indexed:
+        state.stack_values.clear();
+        return;
+    case katana::sh4::InstructionKind::StoreSpecialRegisterPreDecrement:
+        adjust_stack_offset(state, instruction.destination_register, -4);
+        invalidate_stack_range(state, stack_slot(state, instruction.destination_register), 4u);
+        return;
+    case katana::sh4::InstructionKind::LoadSpecialRegisterPostIncrement:
+        adjust_stack_offset(state, instruction.source_register, 4);
+        return;
     case katana::sh4::InstructionKind::MovByteLoadR0Indexed:
     case katana::sh4::InstructionKind::MovWordLoadR0Indexed:
     case katana::sh4::InstructionKind::MovLongLoadR0Indexed: {
@@ -468,6 +714,7 @@ void apply_transfer(AbstractState& state,
                                                                                      : 4u;
         auto evidence = state[0u];
         evidence.guarded = evidence.guarded || state[instruction.source_register].guarded;
+        evidence.complete = evidence.complete && state[instruction.source_register].complete;
         evidence.call_sites.insert(state[instruction.source_register].call_sites.begin(),
                                    state[instruction.source_register].call_sites.end());
         evidence.callees.insert(state[instruction.source_register].callees.begin(),
@@ -477,6 +724,7 @@ void apply_transfer(AbstractState& state,
                           width,
                           image,
                           &evidence);
+        state.stack_offsets[instruction.destination_register].reset();
         return;
     }
     default:
@@ -501,6 +749,7 @@ void apply_call(AbstractState& state,
                 const std::optional<std::uint32_t> callee,
                 const std::span<const std::uint32_t> candidate_callees,
                 const bool candidate_callees_guarded,
+                const bool candidate_callees_complete,
                 const std::map<std::uint32_t, FunctionValueSummary>& summaries,
                 std::vector<FunctionEvaluation::CallArguments>* call_arguments) {
     if (call_arguments != nullptr) {
@@ -517,8 +766,15 @@ void apply_call(AbstractState& state,
             make_unknown(value);
         return;
     }
+    const bool escaped_stack_alias =
+        std::any_of(state.stack_offsets.begin(),
+                    state.stack_offsets.begin() + 8,
+                    [](const auto offset) { return offset.has_value(); });
+    if (escaped_stack_alias) state.stack_values.clear();
     for (std::uint8_t index = 0u; index <= 7u; ++index)
         make_unknown(state[index]);
+    for (std::uint8_t index = 0u; index <= 7u; ++index)
+        state.stack_offsets[index].reset();
     make_unknown(state[15u]);
     std::vector<std::uint32_t> callees;
     if (callee.has_value())
@@ -529,21 +785,31 @@ void apply_call(AbstractState& state,
     normalize(callees);
     std::vector<std::uint32_t> returned_values;
     std::set<std::uint32_t> evidence_callees;
+    bool returned_guarded = candidate_callees_guarded;
+    bool returned_complete = candidate_callees_complete;
     for (const auto candidate : callees) {
         const auto summary = summaries.find(candidate);
-        if (summary == summaries.end()) return;
+        if (summary == summaries.end()) {
+            returned_complete = false;
+            continue;
+        }
         const auto* returned = register_summary(summary->second, 0u);
-        if (returned == nullptr || !returned->complete || returned->values.empty()) return;
+        if (returned == nullptr || !returned->complete || returned->values.empty()) {
+            returned_complete = false;
+            continue;
+        }
         returned_values.insert(
             returned_values.end(), returned->values.begin(), returned->values.end());
+        returned_guarded = returned_guarded || returned->guarded;
         evidence_callees.insert(candidate);
         evidence_callees.insert(returned->evidence_callees.begin(),
                                 returned->evidence_callees.end());
     }
     normalize(returned_values);
-    if (returned_values.size() > maximum_summary_values) return;
+    if (returned_values.empty() || returned_values.size() > maximum_summary_values) return;
     state[0u].known = true;
-    state[0u].guarded = candidate_callees_guarded;
+    state[0u].guarded = returned_guarded || !returned_complete;
+    state[0u].complete = returned_complete;
     state[0u].values = std::move(returned_values);
     state[0u].call_sites = {call_site};
     state[0u].callees = std::move(evidence_callees);
@@ -604,6 +870,7 @@ FunctionEvaluation evaluate_function(
             std::optional<std::uint32_t> direct_callee;
             std::vector<std::uint32_t> candidate_callees;
             bool candidate_callees_guarded = false;
+            bool candidate_callees_complete = false;
         };
         std::optional<DelayedCall> delayed_call;
         for (const auto& line : block->second->lines) {
@@ -625,10 +892,12 @@ FunctionEvaluation evaluate_function(
                         resolution.call_sites.assign(value.call_sites.begin(),
                                                      value.call_sites.end());
                         resolution.callees.assign(value.callees.begin(), value.callees.end());
-                        resolution.guarded = value.guarded;
-                        resolution.complete = !value.guarded;
-                        resolution.evidence = value.guarded ? ControlFlowEvidence::GuardedPartial
-                                                            : ControlFlowEvidence::ProvenComplete;
+                        resolution.guarded = value.guarded || !value.complete;
+                        resolution.complete = value.complete;
+                        resolution.evidence =
+                            value.complete ? (value.guarded ? ControlFlowEvidence::GuardedComplete
+                                                            : ControlFlowEvidence::ProvenComplete)
+                                           : ControlFlowEvidence::GuardedPartial;
                         resolution.reason =
                             value.guarded ? "guarded-function-memory"
                             : !value.callees.empty()
@@ -659,6 +928,7 @@ FunctionEvaluation evaluate_function(
                            delayed_call->direct_callee,
                            delayed_call->candidate_callees,
                            delayed_call->candidate_callees_guarded,
+                           delayed_call->candidate_callees_complete,
                            summaries,
                            &evaluation.call_arguments);
                 delayed_call.reset();
@@ -670,18 +940,22 @@ FunctionEvaluation evaluate_function(
                         : std::nullopt;
                 std::vector<std::uint32_t> candidate_callees;
                 bool candidate_callees_guarded = false;
+                bool candidate_callees_complete = false;
                 if (callee.has_value()) {
                     candidate_callees.push_back(*callee);
+                    candidate_callees_complete = true;
                 } else if (const auto found = indirect_callees.find(line.address);
                            found != indirect_callees.end()) {
                     candidate_callees = found->second.targets;
                     candidate_callees_guarded = found->second.guarded;
+                    candidate_callees_complete = found->second.complete;
                 }
                 if (line.instruction.has_delay_slot)
                     delayed_call = DelayedCall{line.address,
                                                callee,
                                                std::move(candidate_callees),
-                                               candidate_callees_guarded};
+                                               candidate_callees_guarded,
+                                               candidate_callees_complete};
                 else
                     apply_call(state,
                                image,
@@ -689,6 +963,7 @@ FunctionEvaluation evaluate_function(
                                callee,
                                candidate_callees,
                                candidate_callees_guarded,
+                               candidate_callees_complete,
                                summaries,
                                &evaluation.call_arguments);
             }
@@ -725,12 +1000,13 @@ FunctionEvaluation evaluate_function(
         for (const auto& [return_site, state] : returns) {
             static_cast<void>(return_site);
             const auto& value = state[register_index];
-            if (!value.known || value.guarded || value.values.empty()) {
+            if (!value.known || !value.complete || value.values.empty()) {
                 complete = false;
                 continue;
             }
             values.insert(value.values.begin(), value.values.end());
             evidence.insert(value.callees.begin(), value.callees.end());
+            summary.guarded = summary.guarded || value.guarded;
         }
         if (values.size() > maximum_summary_values) complete = false;
         summary.complete = complete;
@@ -746,40 +1022,49 @@ FunctionEvaluation evaluate_function(
 
 bool merge_candidate_input(CandidateInput& destination,
                            const FunctionEvaluation::CallArguments& observation) {
-    bool changed = !destination.observed;
-    destination.observed = true;
-    for (std::uint8_t index = 0u; index < 15u; ++index) {
-        if (destination.saturated[index] || destination.incomplete[index]) continue;
-        const auto& source = observation.state[index];
-        if (!source.known || source.values.empty()) {
-            const bool was_incomplete = destination.incomplete[index];
-            destination.incomplete[index] = true;
-            make_unknown(destination.state[index]);
-            changed = changed || !was_incomplete;
-            continue;
-        }
-        auto& target = destination.state[index];
-        const auto before = target;
-        if (!target.known) {
-            target = source;
-        } else {
-            target.values.insert(target.values.end(), source.values.begin(), source.values.end());
-            normalize(target.values);
-            target.call_sites.insert(source.call_sites.begin(), source.call_sites.end());
-            target.callees.insert(source.callees.begin(), source.callees.end());
-        }
-        target.known = true;
-        target.guarded = true;
-        target.call_sites.insert(observation.call_site);
-        if (target.values.size() > maximum_summary_values) {
-            make_unknown(target);
-            destination.saturated[index] = true;
-        }
-        changed = changed || target.known != before.known || target.guarded != before.guarded ||
-                  target.values != before.values || target.call_sites != before.call_sites ||
-                  target.callees != before.callees || destination.saturated[index];
+    const auto previous = destination.state;
+    destination.observations[observation.call_site] = observation.state;
+    AbstractState merged;
+    merged.stack_offsets[15u] = 0;
+    if (destination.unknown_ingress || destination.expected_call_sites.empty() ||
+        !std::all_of(
+            destination.expected_call_sites.begin(),
+            destination.expected_call_sites.end(),
+            [&](const auto call_site) { return destination.observations.contains(call_site); })) {
+        destination.state = std::move(merged);
+        return destination.state != previous;
     }
-    return changed;
+    for (std::uint8_t index = 0u; index < 15u; ++index) {
+        auto& target = merged[index];
+        bool first = true;
+        for (const auto call_site : destination.expected_call_sites) {
+            const auto& source = destination.observations.at(call_site)[index];
+            if (!source.known || source.values.empty()) {
+                make_unknown(target);
+                first = false;
+                break;
+            }
+            if (first) {
+                target = source;
+                first = false;
+            } else {
+                target.values.insert(
+                    target.values.end(), source.values.begin(), source.values.end());
+                normalize(target.values);
+                target.call_sites.insert(source.call_sites.begin(), source.call_sites.end());
+                target.callees.insert(source.callees.begin(), source.callees.end());
+                target.complete = target.complete && source.complete;
+            }
+            target.guarded = true;
+            target.call_sites.insert(call_site);
+            if (target.values.size() > maximum_summary_values) {
+                make_unknown(target);
+                break;
+            }
+        }
+    }
+    destination.state = std::move(merged);
+    return destination.state != previous;
 }
 
 } // namespace
@@ -790,6 +1075,7 @@ analyze_function_values(const katana::io::ExecutableImage& image,
                         const std::span<const std::uint32_t> function_entries,
                         const std::span<const ResolvedControlFlowEdge> resolved_edges) {
     FunctionValueAnalysisResult result;
+    result.iteration_budget = maximum_fixpoint_iterations;
     if (lines.empty() || function_entries.empty() ||
         image.guest_call_abi() != katana::io::GuestCallAbi::SuperHC)
         return result;
@@ -805,8 +1091,9 @@ analyze_function_values(const katana::io::ExecutableImage& image,
         if (edge.kind != ResolvedControlFlowKind::Call) continue;
         auto& candidates = indirect_callees[edge.instruction_address];
         candidates.targets.push_back(edge.target_address);
-        candidates.guarded =
-            candidates.guarded || !control_flow_evidence_complete(resolved_edge_evidence(edge));
+        const auto evidence = resolved_edge_evidence(edge);
+        candidates.guarded = candidates.guarded || evidence != ControlFlowEvidence::ProvenComplete;
+        candidates.complete = candidates.complete && control_flow_evidence_complete(evidence);
     }
     for (auto& [call_site, candidates] : indirect_callees) {
         static_cast<void>(call_site);
@@ -825,11 +1112,37 @@ analyze_function_values(const katana::io::ExecutableImage& image,
         for (const auto callee : function.direct_callees)
             callers_by_callee[callee].push_back(function.entry_address);
     }
+    for (const auto& line : lines) {
+        if (line.instruction.control_flow != katana::sh4::ControlFlowKind::Call ||
+            !line.target_address.has_value())
+            continue;
+        if (const auto input = candidate_inputs.find(*line.target_address);
+            input != candidate_inputs.end())
+            input->second.expected_call_sites.insert(line.address);
+    }
+    std::map<std::uint32_t, bool> indirect_site_complete;
+    for (const auto& edge : resolved_edges) {
+        if (edge.kind != ResolvedControlFlowKind::Call) continue;
+        const auto evidence_complete = control_flow_evidence_complete(resolved_edge_evidence(edge));
+        const auto [site, inserted] =
+            indirect_site_complete.emplace(edge.instruction_address, evidence_complete);
+        if (!inserted) site->second = site->second && evidence_complete;
+    }
+    for (const auto& edge : resolved_edges) {
+        if (edge.kind != ResolvedControlFlowKind::Call) continue;
+        const auto input = candidate_inputs.find(edge.target_address);
+        if (input == candidate_inputs.end()) continue;
+        if (indirect_site_complete[edge.instruction_address])
+            input->second.expected_call_sites.insert(edge.instruction_address);
+        else
+            input->second.unknown_ingress = true;
+    }
     for (auto& [address, input] : candidate_inputs) {
-        input.observed =
-            callers_by_callee.find(address) == callers_by_callee.end() ||
+        input.state.stack_offsets[15u] = 0;
+        if (input.expected_call_sites.empty() ||
             std::find(image.entry_points().begin(), image.entry_points().end(), address) !=
-                image.entry_points().end();
+                image.entry_points().end())
+            input.unknown_ingress = true;
     }
     std::deque<std::uint32_t> pending;
     std::unordered_set<std::uint32_t> queued;
@@ -840,6 +1153,10 @@ analyze_function_values(const katana::io::ExecutableImage& image,
         }
     }
     while (!pending.empty()) {
+        if (result.fixpoint_iterations >= maximum_fixpoint_iterations) {
+            result.budget_exhausted = true;
+            break;
+        }
         const auto address = pending.front();
         pending.pop_front();
         queued.erase(address);
@@ -863,7 +1180,6 @@ analyze_function_values(const katana::io::ExecutableImage& image,
                 }
             }
         }
-        if (!candidate_inputs[address].observed) continue;
         for (const auto& observation : evaluation.call_arguments) {
             const auto input = candidate_inputs.find(observation.callee);
             if (input == candidate_inputs.end()) continue;
@@ -874,6 +1190,23 @@ analyze_function_values(const katana::io::ExecutableImage& image,
             } else {
                 ++result.unchanged_ingress_skips;
             }
+        }
+    }
+
+    if (result.budget_exhausted) {
+        for (auto& [address, summary] : summaries) {
+            static_cast<void>(address);
+            for (auto& value : summary.registers) {
+                value.complete = false;
+                value.guarded = true;
+                value.values.clear();
+                value.reason = "analysis-budget-exhausted";
+            }
+        }
+        for (auto& [address, input] : candidate_inputs) {
+            static_cast<void>(address);
+            input.state = {};
+            input.state.stack_offsets[15u] = 0;
         }
     }
 
@@ -922,9 +1255,10 @@ analyze_function_values(const katana::io::ExecutableImage& image,
     }
     for (auto& site : merged) {
         if (!merged_context_sites.contains(site.instruction_address)) continue;
-        site.evidence = site.targets.empty()             ? ControlFlowEvidence::Unresolved
-                        : site.complete && !site.guarded ? ControlFlowEvidence::ProvenComplete
-                                                         : ControlFlowEvidence::GuardedPartial;
+        site.evidence = site.targets.empty() ? ControlFlowEvidence::Unresolved
+                        : site.complete      ? (site.guarded ? ControlFlowEvidence::GuardedComplete
+                                                             : ControlFlowEvidence::ProvenComplete)
+                                             : ControlFlowEvidence::GuardedPartial;
         site.reason = site.targets.empty() ? "all-contexts-unknown"
                       : site.complete      ? "all-contexts-complete"
                                            : "merged-contexts-partial";

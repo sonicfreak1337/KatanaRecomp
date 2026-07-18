@@ -21,6 +21,11 @@ Gastadressen, Symbole oder Hostpfade. `katana-recomp ir-json ...` behaelt
 `katana-ir-v2`. Historische Phase-6-Berichte verwenden
 `katana-phase6-gate-v1` und behalten ihre Messfelder auf der obersten Ebene.
 
+Die Funktionswertanalyse berichtet in der Kontrollfluss-Summary
+`function_iteration_budget` und `function_budget_exhausted`. Jede
+Registersummary trennt `complete` von `guarded`; nur `complete=true` darf eine
+vollstaendige endliche Zielmenge begruenden.
+
 Berichte enthalten keine Hostzeit als Determinismusquelle. Absolute lokale
 Pfade, Firmwarebytes und Flash-Rohdaten sind keine portablen Berichtfelder;
 spaetere Diagnosebefehle muessen solche Inhalte standardmaessig redigieren.
