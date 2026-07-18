@@ -47,6 +47,7 @@ function Initialize-MsvcEnvironment {
 
 $root = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..'))
 $build = [IO.Path]::GetFullPath((Join-Path $root 'build-current'))
+$parallelism = 8
 if (-not $build.StartsWith(
         $root + [IO.Path]::DirectorySeparatorChar,
         [StringComparison]::OrdinalIgnoreCase
@@ -82,6 +83,22 @@ function Require-NativeSuccess([string]$description) {
     }
 }
 
+function Invoke-GateBuild([string]$preset, [string]$description) {
+    $exitCode = 0
+    for ($attempt = 1; $attempt -le 3; ++$attempt) {
+        & cmake --build --preset $preset --parallel $parallelism
+        $exitCode = $LASTEXITCODE
+        if ($exitCode -eq 0) {
+            return
+        }
+        if ($attempt -lt 3) {
+            Write-Warning "$description wird nach transientem Buildfehler erneut versucht ($attempt/3)."
+            Start-Sleep -Milliseconds 750
+        }
+    }
+    throw "$description fehlgeschlagen: $exitCode"
+}
+
 function Get-TestNames {
     $json = (& ctest --test-dir $build --show-only=json-v1 | Out-String) | ConvertFrom-Json
     Require-NativeSuccess 'CTest-Inventar'
@@ -94,8 +111,7 @@ try {
     $debugWatch = [Diagnostics.Stopwatch]::StartNew()
     & cmake --preset quality-debug --fresh
     Require-NativeSuccess 'Instrumentierte Debug-Konfiguration'
-    & cmake --build --preset quality-debug --parallel
-    Require-NativeSuccess 'Instrumentierter Debug-Build'
+    Invoke-GateBuild 'quality-debug' 'Instrumentierter Debug-Build'
 
     & powershell.exe -NoProfile -ExecutionPolicy Bypass -File tools\quality\check-format.ps1
     Require-NativeSuccess 'Formatpruefung'
@@ -115,8 +131,7 @@ try {
     $relWatch = [Diagnostics.Stopwatch]::StartNew()
     & cmake --preset relwithdebinfo-gate --fresh
     Require-NativeSuccess 'RelWithDebInfo-Konfiguration'
-    & cmake --build --preset relwithdebinfo-gate --parallel
-    Require-NativeSuccess 'RelWithDebInfo-Build'
+    Invoke-GateBuild 'relwithdebinfo-gate' 'RelWithDebInfo-Build'
     $relTests = Get-TestNames
     $configurationSpecificTests = @('katana-phase10-msvc-asan-runtime')
     $debugCoreTests = @($debugTests | Where-Object { $_ -notin $configurationSpecificTests })
@@ -141,6 +156,7 @@ try {
         debug_sanitizer = 'msvc-address-or-clang-address-undefined'
         debug_static_analysis = 'active'
         relwithdebinfo_profile = 'relwithdebinfo-gate'
+        build_parallelism = $parallelism
         debug_test_count = $debugTests.Count
         relwithdebinfo_test_count = $relTests.Count
         shared_core_test_count = $relCoreTests.Count
