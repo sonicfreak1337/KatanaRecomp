@@ -898,7 +898,8 @@ std::filesystem::path discover_source_root_for_protection() {
 
 int export_port_project(const std::filesystem::path& gdi_path,
                         const std::filesystem::path& output_path,
-                        const std::string& target_name) {
+                        const std::string& target_name,
+                        const bool diagnostic_partial = false) {
     const auto source_root = discover_source_root_for_protection();
     const auto absolute_output = std::filesystem::absolute(output_path).lexically_normal();
     if (!source_root.empty()) {
@@ -910,7 +911,9 @@ int export_port_project(const std::filesystem::path& gdi_path,
         }
     }
     const auto report = katana::codegen::export_dreamcast_port_project(
-        gdi_path, output_path, {target_name, KATANA_RECOMP_VERSION, {}, source_root});
+        gdi_path,
+        output_path,
+        {target_name, KATANA_RECOMP_VERSION, {}, source_root, diagnostic_partial});
     const auto shell_quote = [](const std::filesystem::path& path) {
         const auto text = path.string();
 #ifdef _WIN32
@@ -927,10 +930,14 @@ int export_port_project(const std::filesystem::path& gdi_path,
 #endif
     };
     const auto build_path = report.output_root / "build";
-    const auto configure =
-        std::string("cmake -S ") + shell_quote(report.output_root) + " -B " +
-        shell_quote(build_path) +
-        " -G Ninja -DCMAKE_BUILD_TYPE=Debug -DKATANA_RUNTIME_ROOT=" + shell_quote(source_root);
+    auto configure = std::string("cmake -S ") + shell_quote(report.output_root) + " -B " +
+                     shell_quote(build_path);
+#ifdef _WIN32
+    configure += " -DCMAKE_RUNTIME_OUTPUT_DIRECTORY_DEBUG=" + shell_quote(build_path);
+#else
+    configure += " -G Ninja";
+#endif
+    configure += " -DCMAKE_BUILD_TYPE=Debug -DKATANA_RUNTIME_ROOT=" + shell_quote(source_root);
     if (std::system(configure.c_str()) != 0) {
         throw katana::cli::Error(katana::cli::ExitCode::BuildFailure,
                                  "Port-Hostbuild konnte nicht konfiguriert werden.");
@@ -973,7 +980,8 @@ void print_usage(std::ostream& output) {
            << "  katana-recomp emit-cpp <Raw|ELF|Manifest> <Einstieg> <Ausgabe.cpp> [Basisadresse] "
               "[--no-opt] [--dump-ir <Praefix>] [--directives <Datei>]\n\n"
            << "  katana-recomp phase6-probe-source <GDI> <Ausgabe.cpp>\n\n"
-           << "  katana-recomp port <Quelle.gdi> --output <Ordner> --target-name <Name>\n\n"
+           << "  katana-recomp port <Quelle.gdi> --output <Ordner> --target-name <Name>\n"
+           << "  katana-recomp probe-port <Quelle.gdi> --output <Ordner> --target-name <Name>\n\n"
            << "  katana-recomp workflow <validate|analyze|codegen|build|run-preflight> "
               "<Projektmanifest> --output <Ordner>\n\n"
            << "Beispiel:\n"
@@ -1051,7 +1059,9 @@ int main(const int argc, char* argv[]) {
             return exit_status(ExitCode::InternalError);
         }
 
-        if (argc == 7 && std::string_view(argv[1]) == "port") {
+        if (argc == 7 &&
+            (std::string_view(argv[1]) == "port" || std::string_view(argv[1]) == "probe-port")) {
+            const bool diagnostic_partial = std::string_view(argv[1]) == "probe-port";
             std::optional<std::filesystem::path> output_path;
             std::optional<std::string> target_name;
             for (std::size_t argument = 3u; argument < 7u; argument += 2u) {
@@ -1069,7 +1079,8 @@ int main(const int argc, char* argv[]) {
                 throw std::invalid_argument(
                     "port erwartet --output und --target-name jeweils genau einmal.");
             }
-            return export_port_project(std::filesystem::path(argv[2]), *output_path, *target_name);
+            return export_port_project(
+                std::filesystem::path(argv[2]), *output_path, *target_name, diagnostic_partial);
         }
 
         if ((argc == 3 || argc == 4) &&

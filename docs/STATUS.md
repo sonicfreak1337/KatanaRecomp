@@ -7,6 +7,74 @@ Naechstes Gate: `v0.47.0` - Core-Stabilisierung und generische Retail-Runtime
 Weitere interne Gates: `v0.48.0` Integration und `v0.49.0` Alpha-Candidate
 Erster oeffentlicher Release: `v0.50.0` Alpha
 
+## KR-4704 Gate-Vorbereitung in Arbeit
+
+Die aktuelle Kontrollflussfront umfasst in der privaten Build-only-Analyse
+55.202 Instruktionen und 813 Funktionen. Die drei zuvor unbekannten
+Cacheinstruktionen sind als allgemeine SH-4-Decoder-, IR-, Backend- und
+Runtimepfade umgesetzt. OCBP und OCBWB verwenden einen expliziten kohaerenten
+Operand-Cache-Vertrag: Der aktuelle Referenzspeicher besitzt keine verborgene
+Dirty-Line und meldet deshalb weder erfundenen Write-back noch Speicherwrite.
+
+Die sieben vollstaendig ungeloesten Sites und die 1.708 zuvor partiell
+bewachten Sites wurden nach Herkunft und Vollstaendigkeit neu klassifiziert.
+Beschreibbare Tabellen, zusammengefuehrte unvollstaendige Kontexte und echte
+Laufzeitzeiger verwenden den validierenden Runtime-only-Dispatcher. Fruehere
+Kandidaten bleiben nur als `analysis_candidates` fuer die monotone Analyse
+erhalten und werden nicht als vollstaendige Laufzeitzielmenge exportiert. Der
+Dispatcher akzeptiert ausschliesslich registrierte, ausgerichtete und fuer die
+aktive Codegeneration gueltige Bloecke; ein Miss bricht strukturiert ab.
+
+Der aktuelle private Aggregatstand ist `resolved=1`,
+`guarded_complete=0`, `guarded_partial=0`, `runtime_only=1.826`,
+`unresolved=0`, `unknown_instructions=0` und
+`reachable_abort_edges=0`. Der strikte Gatebuild ist noch nicht erfolgreich:
+6.624.892 committed executable Bytes sind weiterhin nicht analysiert. Deshalb
+wurde kein Erfolg erfunden, keine private `game.exe` gestartet und KR-4704
+nicht abgeschlossen. Der diagnostische `probe-port`-Export darf einen
+unvollstaendigen Analysebericht materialisieren, gilt aber ausdruecklich nicht
+als Gateevidenz.
+
+Persistenz und Host-Pacing besitzen nun eigene Regressionen. Windows liest
+Nutzerdatenpfade ohne unsicheren `getenv`-Pfad, Firmwarefehler werden in der
+vertraglich richtigen Reihenfolge diagnostiziert, und der generierte Port
+bindet persistente Flash-/VMU-Arbeitskopien sowie den ganzzahligen Hostpacer
+ein. Gate und Paketierung erkennen die Visual-Studio-/Ninja-Werkzeuge robust,
+vermeiden doppelte `PATH`-/`Path`-Eintraege, behandeln ASan im Releasepaket als
+optional und testen den relocatable Port mit getrenntem Nutzerdatenpfad.
+
+Der neue v0.47-Gate-Runner verbindet frische Debug-/RelWithDebInfo-Builds,
+GUI-Paket, Harness-Selbsttest, privaten doppelten Build-only-Nachweis,
+Datenaudit und atomische Root-GUI-Verteilung. Der Rootstand enthaelt eine
+aktuelle verifizierte `KatanaRecomp-GUI.exe`, den Dialoghelfer und das
+zugehoerige Runtime-SDK. Die fokussierten Decoder-, Analyse-, IR-, Backend-,
+Runtime-, Portexport- und GUI-Regressionen sowie der relocatable synthetische
+GDI-Paketbuild bestehen. Das vollstaendige KR-4704-Gate bleibt bis zur
+Schliessung der nicht analysierten committed Bytes ausstehend.
+
+Die naechste Arbeit beginnt mit einem exakten Inventar der 6.624.892 Bytes:
+`proven_reachable_code`, `runtime_discovered_code`,
+`unreachable_decodable_code`, `embedded_data`, `literal_pool`, `jump_table`,
+`padding`, `overlay_candidate`, `module_candidate`,
+`compressed_or_encoded` und `unknown_executable`. Oeffentliche Aggregate sind
+adressfrei; lokale Details werden zusaetzlich nach Segment, Discdatei,
+Ladephase und Schreibbarkeit gruppiert. Anschliessend werden reale Ladegroesse,
+Reservierung, Zero-Fill, Code-/Datensegmente, Boot-/Nachladerollen,
+Berechtigungen, Alignment und Padding im Loadervertrag geprueft.
+
+Reachability wird von der Pflicht zur Vorabkompilierung getrennt. Nur
+`initially_reachable` und `statically_discoverable` gehoeren ohne weiteren
+Vertrag zwingend in den statischen Bestand; `loadable_module` und
+`runtime_materializable` duerfen das Gate nur mit sicherer Herkunfts-,
+Byteidentitaets-, Lebenszeit-, Invalidierungs- und Materialisierungskette
+verlassen. Neue Module und Overlays erhalten synthetische Fixtures. Die
+Demand-driven-Materialisierung validiert Ziel und Herkunft, findet oder baut
+einen budgetierten Block, registriert ihn und dispatcht erst danach. Sie bleibt
+deterministisch und abschaltbar; ein Interpreter ist nur Referenzpfad.
+Runtime-only-Sites werden spaeter nach Aufrufen, Zielvielfalt, Stabilitaet,
+Misses, Materialisierungen und Invalidierungen profiliert, damit nachweislich
+mono- oder klein polymorphe Sites sicher spezialisiert werden koennen.
+
 ## KR-4703 umgesetzt
 
 Flash und VMU verwenden getrennte lokale Arbeitskopien in einem versionierten,
@@ -25,9 +93,9 @@ ohne lokale Pfade oder Nutzdaten diagnostizierbar. Runtime-ABI 13,
 Hostruntimevertrag 2 und Portprojektvertrag 5 versionieren die Erweiterung.
 
 Vertrag und gesammelte Regressionen stehen in
-[`MUTABLE_STORAGE_AND_PACING.md`](MUTABLE_STORAGE_AND_PACING.md). Gemaess
-Handoff werden sie erst im frischen Gatebuild von KR-4704 umgesetzt und
-ausgefuehrt. KR-4704 ist der naechste Task.
+[`MUTABLE_STORAGE_AND_PACING.md`](MUTABLE_STORAGE_AND_PACING.md). Die
+Regressionen sind umgesetzt und fokussiert ausgefuehrt; ihre Wiederholung in
+beiden frischen Gateprofilen bleibt Bestandteil von KR-4704.
 
 ## KR-4621 umgesetzt
 
@@ -270,9 +338,11 @@ QACR-Zugriffe pruefen Fenster, Breite, Ausrichtung und Queuegrenzen zentral.
 
 Operand-Cache-RAM unterstuetzt explizite Byte-, Word- und
 Longword-Little-Endian-Zugriffe mit Ausrichtungs- und Bereichspruefung. ICBI
-invalidiert die ausgerichtete 32-Byte-Codezeile. OCBI, OCBP und OCBWB schlagen
-sichtbar fehl, solange Cachetags, Dirty-Zustand und Write-back nicht modelliert
-sind. Vertrag und gesammelte Gate-Testanforderungen stehen in
+invalidiert die ausgerichtete 32-Byte-Codezeile. OCBI bleibt ohne
+Cachetagmodell sichtbar nicht unterstuetzt. OCBP und OCBWB durchlaufen einen
+expliziten kohaerenten Runtimevertrag, der im aktuellen direkten Speichermodell
+korrekt keine verborgene Dirty-Line und keinen Write-back meldet. Vertrag und
+gesammelte Gate-Testanforderungen stehen in
 [`STORE_QUEUE_CACHE.md`](STORE_QUEUE_CACHE.md).
 
 ## KR-4613 umgesetzt

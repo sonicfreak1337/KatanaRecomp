@@ -26,7 +26,8 @@ das Repository noch in verteilbare Pakete.
 6. Der erste echte Sonic-Runtimelauf gehoert zur Alpha-Entwicklung.
 7. Gate-Vorbereitung und Freigabe bleiben getrennte Tasks.
 8. Ein globaler Projektprozentsatz wird nicht mehr gepflegt. Neue zukuenftige
-   Arbeit darf den scheinbaren Fortschritt nicht rueckwaerts rechnen.9. Task-IDs sind ab dem ersten Merge unveraenderlich. Entfallene oder ersetzte
+   Arbeit darf den scheinbaren Fortschritt nicht rueckwaerts rechnen.
+9. Task-IDs sind ab dem ersten Merge unveraenderlich. Entfallene oder ersetzte
    Aufgaben bleiben in `docs/TASK_ID_REGISTRY.md` registriert.
 
 ## Fertiggestellte Grundlage
@@ -42,7 +43,7 @@ nicht mehr einzeln wiederholt.
 | Speicherbus, Exceptions, Interrupts, Scheduler und DMA | umgesetzt |
 | BIOS-HLE, System-ASIC, Maple, PVR-Minimalpfad, AICA-HLE und GD-ROM | umgesetzt, Genauigkeit noch begrenzt |
 | Windows-GUI, GDI-Workflow, Portexport und native Hostruntime | umgesetzt |
-| Private Retailanalyse | 55.104 Instruktionen, 813 Funktionen, 117 Stellen ohne endliche Zielmenge |
+| Private Retailanalyse | 55.202 Instruktionen, 813 Funktionen; `unknown=0`, `guarded_partial=0`, `unresolved=0`, `runtime_only=1.826` |
 
 ## v0.47.0 - Core-Stabilisierung und generische Retail-Runtime
 
@@ -86,6 +87,25 @@ nicht gestartet werden.
 - [x] `KR-4703` - VMU-/Flash-Arbeitskopien und Host-Pacing
 - [ ] `KR-4704` - v0.47 Gate-Vorbereitung
 - [ ] `KR-4705` - v0.47 interne Freigabe
+
+`KR-4704`-Zwischenstand: Die bekannten unbekannten Instruktionen sowie die
+vollstaendig ungeloesten und partiell bewachten indirekten Stellen sind durch
+allgemeine Decoder-, Analyse-, IR-, Backend- und Runtimevertraege geschlossen.
+Der private Build-only-Lauf meldet keine unbekannte Instruktion, keine
+`guarded_partial`-/`unresolved`-Site und keine erreichbare Abbruchkante. Der
+strikte Gatebuild bleibt dennoch offen, weil 6.624.892 committed executable
+Bytes noch nicht analysiert sind. Eine `game.exe` wurde nicht gestartet.
+
+Naechster KR-4704-Arbeitsblock: Zuerst entsteht ein adressfreies oeffentliches
+und lokal detailliertes Inventar der offenen Bytes nach Inhalt, Segment,
+Discdatei, Ladephase und Schreibbarkeit. Danach werden Loaderberechtigungen und
+Zero-Fill gegen reale Ladegroessen korrigiert. Reachability und die Pflicht zur
+Vorabkompilierung werden in `initially_reachable`, `statically_discoverable`,
+`loadable_module`, `runtime_materializable` und `never_executed_data` getrennt.
+Nur ein allgemeiner validierender Vertrag darf Bytes aus dem statischen Gate
+nehmen. Darauf folgen synthetisch getestete Module/Overlays, deterministische
+Demand-driven-Blockmaterialisierung und ein Runtime-only-Profil fuer die
+spaetere sichere Spezialisierung stabiler Ziele.
 
 ### Verbindliche Reihenfolge
 

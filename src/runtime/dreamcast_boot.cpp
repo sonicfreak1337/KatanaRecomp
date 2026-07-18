@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <cstdlib>
 #include <limits>
+#include <memory>
 #include <span>
 #include <sstream>
 #include <stdexcept>
@@ -47,9 +48,19 @@ bool project_identity_name(const std::string_view value) noexcept {
 }
 
 std::optional<std::filesystem::path> environment_path(const char* name) {
+#ifdef _WIN32
+    char* raw_value = nullptr;
+    std::size_t value_size = 0;
+    if (_dupenv_s(&raw_value, &value_size, name) != 0)
+        throw std::runtime_error("Umgebungsvariable konnte nicht gelesen werden.");
+    const std::unique_ptr<char, decltype(&std::free)> value(raw_value, &std::free);
+    if (value == nullptr || value_size <= 1u) return std::nullopt;
+    return std::filesystem::path(value.get());
+#else
     const auto* value = std::getenv(name);
     if (value == nullptr || *value == '\0') return std::nullopt;
     return std::filesystem::path(value);
+#endif
 }
 
 } // namespace

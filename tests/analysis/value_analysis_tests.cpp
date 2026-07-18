@@ -316,9 +316,13 @@ int main() {
                         guarded_flow.recursive.instructions.end(),
                         [](const auto& line) { return line.address == 0x10u; }) &&
                 guarded_flow.indirect_control_flow[0].status ==
-                    katana::analysis::ResolutionStatus::Guarded &&
-                guarded_edge != guarded_flow.resolved_edges.end() && guarded_edge->guarded,
-            "Bewachter Snapshotkandidat wurde nicht als partielle CFG-Kante erhalten.");
+                    katana::analysis::ResolutionStatus::Unresolved &&
+                guarded_flow.indirect_control_flow[0].evidence ==
+                    katana::analysis::ControlFlowEvidence::RuntimeOnly &&
+                guarded_flow.indirect_control_flow[0].analysis_candidates ==
+                    std::vector<std::uint32_t>{0x10u} &&
+                guarded_edge == guarded_flow.resolved_edges.end(),
+            "Beschreibbares Literal wurde als vollstaendige CFG-Kante eingefroren.");
     const auto guarded_ir = katana::ir::lower_program(guarded_flow);
     require(!guarded_ir.empty(), "Bewachter Snapshotkandidat erzeugte keine IR-Funktion.");
     const auto guarded_ir_block = std::find_if(
@@ -335,28 +339,31 @@ int main() {
                      guarded_ir_block->instructions.end(),
                      [](const auto& instruction) { return instruction.source_address == 6u; });
     require(guarded_ir_control != guarded_ir_block->instructions.end() &&
-                guarded_ir_control->resolved_targets == std::vector<std::uint32_t>{0x10u} &&
+                guarded_ir_control->dynamic_target_class ==
+                    katana::ir::DynamicTargetClass::RuntimeOnly &&
+                guarded_ir_control->resolved_targets.empty() &&
                 guarded_ir_block->has_indirect_successor &&
                 katana::ir::verify_program(guarded_ir).empty(),
-            "Bewachtes IR verlor Kandidatenziel oder dynamischen Fallback.");
+            "Runtime-only-IR uebernahm einen Snapshotkandidaten in den statischen Vertrag.");
     const auto guarded_text = katana::analysis::format_indirect_control_flow_report(
         guarded_flow.indirect_control_flow, guarded_flow.jump_tables);
     const auto guarded_json = katana::analysis::format_control_flow_analysis_json(guarded_flow);
     const auto guarded_summary = katana::analysis::summarize_control_flow_analysis(guarded_flow);
-    require(guarded_text.find("candidate=") != std::string::npos &&
-                guarded_json.find("\"status\":\"guarded_partial\"") != std::string::npos &&
-                guarded_summary.resolved + guarded_summary.guarded_complete +
-                        guarded_summary.guarded_partial + guarded_summary.runtime_only +
-                        guarded_summary.unresolved ==
-                    guarded_summary.indirect_total &&
-                guarded_summary.proven_instructions +
-                        guarded_summary.guarded_candidate_instructions ==
-                    guarded_flow.recursive.instructions.size() &&
-                guarded_summary.guarded_candidate_instructions != 0u &&
-                guarded_summary.unresolved_frontier == guarded_summary.guarded_partial +
-                                                           guarded_summary.runtime_only +
-                                                           guarded_summary.unresolved,
-            "Bewachter Kandidat fehlt im stabilen Text-/JSON-Bericht.");
+    require(
+        guarded_text.find("status=runtime_only") != std::string::npos &&
+            guarded_json.find("\"status\":\"runtime_only\"") != std::string::npos &&
+            guarded_json.find("\"analysis_candidates\":[\"0x00000010\"]") != std::string::npos &&
+            guarded_summary.resolved + guarded_summary.guarded_complete +
+                    guarded_summary.guarded_partial + guarded_summary.runtime_only +
+                    guarded_summary.unresolved ==
+                guarded_summary.indirect_total &&
+            guarded_summary.proven_instructions + guarded_summary.guarded_candidate_instructions ==
+                guarded_flow.recursive.instructions.size() &&
+            guarded_summary.guarded_candidate_instructions != 0u &&
+            guarded_summary.unresolved_frontier == guarded_summary.guarded_partial +
+                                                       guarded_summary.runtime_only +
+                                                       guarded_summary.unresolved,
+        "Bewachter Kandidat fehlt im stabilen Text-/JSON-Bericht.");
 
     auto complete_status_fixture = guarded_flow;
     const auto status_fixture = [](const std::uint32_t address,

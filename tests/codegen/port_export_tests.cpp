@@ -293,6 +293,7 @@ int run_test(const int argc, char* argv[]) {
             generated_before.at("code/runtime-dispatch.cpp")
                     .find("Runtime-Blockbudget erschoepft") != std::string::npos &&
             std::filesystem::exists(output / "CMakeLists.txt") &&
+            read_text(output / "CMakeLists.txt").find("katana_core") == std::string::npos &&
             std::filesystem::exists(output / "src" / "main.cpp") &&
             read_text(output / "src" / "main.cpp").find("load_dreamcast_runtime_boot") !=
                 std::string::npos &&
@@ -301,6 +302,13 @@ int run_test(const int argc, char* argv[]) {
             read_text(output / "src" / "main.cpp").find("framebuffer.capture") !=
                 std::string::npos &&
             read_text(output / "src" / "main.cpp").find("HostRuntimeSession") !=
+                std::string::npos &&
+            read_text(output / "src" / "main.cpp").find("DreamcastMutableStorage::open") !=
+                std::string::npos &&
+            read_text(output / "src" / "main.cpp").find("HostPacer") != std::string::npos &&
+            read_text(output / "src" / "main.cpp").find("mutable_storage->save") !=
+                std::string::npos &&
+            read_text(output / "src" / "main.cpp").find("KATANA_HOST_PACING_ERROR") !=
                 std::string::npos &&
             read_text(output / "src" / "main.cpp").find("audio_hash") != std::string::npos &&
             read_text(output / "src" / "main.cpp").find("source-identity-mismatch") !=
@@ -327,6 +335,8 @@ int run_test(const int argc, char* argv[]) {
             "Guarded-Portfixture besitzt keine indirekte Kandidatenkante.");
     guarded_analysis.indirect_control_flow.front().status =
         katana::analysis::ResolutionStatus::Guarded;
+    guarded_analysis.indirect_control_flow.front().evidence =
+        katana::analysis::ControlFlowEvidence::GuardedComplete;
     guarded_analysis.resolved_edges.front().guarded = true;
     auto guarded_program = katana::ir::lower_program(guarded_analysis);
     std::vector<katana::io::InputProvenance> guarded_inputs;
@@ -355,7 +365,8 @@ int run_test(const int argc, char* argv[]) {
     require(guarded_export.functions != 0u && guarded_text.find("default:") != std::string::npos &&
                 guarded_text.find("unresolved_call") != std::string::npos &&
                 guarded_metadata.find("\"guarded_control_flow\":1") != std::string::npos &&
-                guarded_metadata.find("\"guarded_partial_control_flow\":1") != std::string::npos &&
+                guarded_metadata.find("\"guarded_complete_control_flow\":1") != std::string::npos &&
+                guarded_metadata.find("\"guarded_partial_control_flow\":0") != std::string::npos &&
                 guarded_metadata.find("\"unresolved_control_flow\":0") != std::string::npos,
             "Guarded-Kandidaten erreichen Portcodegen oder dynamischen Default nicht.");
 
@@ -417,11 +428,17 @@ int run_test(const int argc, char* argv[]) {
     incomplete_track[payload_offset(21u, 1u)] = 0x00u;
     write_binary(fixture.root / "disc" / "high.bin", incomplete_track);
     const auto incomplete_output = fixture.root / "incomplete-port";
-    require_failure<std::runtime_error>(
-        [&] { static_cast<void>(export_dreamcast_port_project(gdi, incomplete_output, options)); },
-        "Portexport akzeptiert ungeloesten indirekten Kontrollfluss.");
-    require(!std::filesystem::exists(incomplete_output),
-            "Abgelehnter unvollstaendiger Portexport hinterlaesst Artefakte.");
+    static_cast<void>(export_dreamcast_port_project(gdi, incomplete_output, options));
+    const auto runtime_only_sources = snapshot(incomplete_output / "generated");
+    std::string runtime_only_text;
+    for (const auto& [path, content] : runtime_only_sources)
+        if (path.starts_with("code/unit-")) runtime_only_text += content;
+    require(runtime_only_text.find("runtime_only_jump") != std::string::npos &&
+                runtime_only_sources.at("metadata/port-project.json")
+                        .find("\"runtime_only_control_flow\":1") != std::string::npos &&
+                runtime_only_sources.at("metadata/port-project.json")
+                        .find("\"unresolved_control_flow\":0") != std::string::npos,
+            "Portexport verliert den validierenden Runtime-only-Vertrag.");
 
     std::cout << "KR-3507/KR-4502/KR-4507 reproduzierbarer Port-Projektexport erfolgreich.\n";
     return EXIT_SUCCESS;

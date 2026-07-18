@@ -90,6 +90,7 @@ std::string generated_header(const std::string& entry_namespace) {
 
 std::string handwritten_main(const std::string& entry_namespace,
                              const bool hle_bios_abi,
+                             const bool diagnostic_partial,
                              const std::span<const katana::io::InputProvenance> inputs,
                              const std::string_view project_identity,
                              const std::string_view expected_boot_sha256,
@@ -104,6 +105,8 @@ std::string handwritten_main(const std::string& entry_namespace,
                           << katana::io::quote_json(input.sha256) << "},\n";
     }
     identity_contract << "};\n"
+                      << "constexpr bool diagnostic_partial_port = "
+                      << (diagnostic_partial ? "true" : "false") << ";\n"
                       << "constexpr std::string_view expected_project_identity = "
                       << katana::io::quote_json(project_identity) << ";\n"
                       << "constexpr std::string_view expected_boot_sha256 = "
@@ -112,6 +115,7 @@ std::string handwritten_main(const std::string& entry_namespace,
            "#include \"katana/runtime/dreamcast_boot.hpp\"\n"
            "#include \"katana/runtime/host_runtime.hpp\"\n"
            "#include \"katana/runtime/host_video.hpp\"\n"
+           "#include \"katana/runtime/indirect_dispatch.hpp\"\n"
            "#include \"katana/runtime/scheduler.hpp\"\n"
            "#include \"katana/io/input_provenance.hpp\"\n"
            "#include <algorithm>\n#include <exception>\n#include <filesystem>\n#include "
@@ -382,6 +386,12 @@ std::string handwritten_main(const std::string& entry_namespace,
            "        if (state.scheduler->pending_event_count() != 0u)\n"
            "            throw std::runtime_error(\"Host-Shutdown hinterliess "
            "Schedulerereignisse.\");\n"
+           "        if (diagnostic_partial_port) {\n"
+           "            std::cout << \"KR_DIAGNOSTIC_PARTIAL_RUNTIME_REACHED guest_cycles=\"\n"
+           "                      << result.scheduler_cycle << \" executed_blocks=\"\n"
+           "                      << services.executed_blocks() << '\\n';\n"
+           "            return 3;\n"
+           "        }\n"
            "        std::cout << \"SA_MAIN_ENTERED\\n\";\n"
            "        std::cout << \"KATANA_RUNTIME_METRICS silent_failures=\"\n"
            "                  << silent_failures << \" guest_cycles=\"\n"
@@ -606,7 +616,15 @@ std::string runtime_dispatch_adapter(const std::string& entry_namespace,
            "    throw std::runtime_error(\"Runtime-Blockbudget erschoepft.\");\n"
            "}\n"
            "} // namespace\n\n"
-        << "void guarded_call(katana::runtime::CpuState& cpu, std::uint32_t target) {\n"
+        << "void static_call(katana::runtime::CpuState& cpu, std::uint32_t target) {\n"
+           "    dispatch_chain(cpu, target, katana::runtime::IndirectDispatchKind::Call,\n"
+           "        katana::runtime::RuntimeDispatchClass::GuardedFallback, false);\n"
+           "}\n"
+           "void resolved_call(katana::runtime::CpuState& cpu, std::uint32_t target) {\n"
+           "    dispatch_chain(cpu, target, katana::runtime::IndirectDispatchKind::Call,\n"
+           "        katana::runtime::RuntimeDispatchClass::GuardedFallback, true);\n"
+           "}\n"
+           "void guarded_call(katana::runtime::CpuState& cpu, std::uint32_t target) {\n"
            "    dispatch_chain(cpu, target, katana::runtime::IndirectDispatchKind::Call,\n"
            "        katana::runtime::RuntimeDispatchClass::GuardedFallback, true);\n"
            "}\n"
@@ -704,7 +722,6 @@ std::string root_cmake() {
            "  add_subdirectory(\"${KATANA_RUNTIME_ROOT}\" \"${CMAKE_BINARY_DIR}/katana-runtime\")\n"
            "endif()\n"
            "add_subdirectory(generated)\n"
-           "target_link_libraries(katana_generated PUBLIC katana_core)\n"
            "include(\"${CMAKE_CURRENT_SOURCE_DIR}/generated/katana-port.cmake\")\n";
 }
 
@@ -738,6 +755,7 @@ port_metadata(const PortExportOptions& options,
     katana::io::write_json_report_header(output, "katana-port-project", "port-project");
     output << ",\"contract_version\":" << port_project_contract_version
            << ",\"target_name\":" << katana::io::quote_json(options.target_name)
+           << ",\"diagnostic_partial\":" << (options.diagnostic_partial ? "true" : "false")
            << ",\"runtime_abi\":" << katana::runtime::abi_version
            << ",\"backend_abi\":" << backend_interface_abi_version
            << ",\"project_identity\":" << katana::io::quote_json(project_identity)
@@ -827,7 +845,7 @@ PortExportResult export_dreamcast_port_project(const PreparedPortProgram& prepar
             "Portexport braucht vorbereitetes IR, Einstieg, Ausgabe, Zielkennung und "
             "Werkzeugversion.");
     }
-    if (!prepared.analysis.recursive.diagnostics.empty()) {
+    if (!options.diagnostic_partial && !prepared.analysis.recursive.diagnostics.empty()) {
         throw std::runtime_error("Portanalyse enthaelt unbekannte Instruktionen.");
     }
     const auto incomplete = std::count_if(
@@ -838,7 +856,7 @@ PortExportResult export_dreamcast_port_project(const PreparedPortProgram& prepar
             return status == katana::analysis::ControlFlowReportStatus::GuardedPartial ||
                    status == katana::analysis::ControlFlowReportStatus::Unresolved;
         });
-    if (incomplete != 0u) {
+    if (!options.diagnostic_partial && incomplete != 0u) {
         throw std::runtime_error("Portanalyse ist unvollstaendig: " + std::to_string(incomplete) +
                                  " partielle oder ungeloeste Kontrollflussstellen.");
     }
@@ -968,6 +986,7 @@ PortExportResult export_dreamcast_port_project(const PreparedPortProgram& prepar
                     "src/main.cpp",
                     handwritten_main(entry_namespace,
                                      prepared.hle_bios_abi,
+                                     options.diagnostic_partial,
                                      prepared.inputs,
                                      prepared.project_identity,
                                      katana::io::sha256_bytes(boot_bytes),
@@ -1008,6 +1027,11 @@ PortExportResult export_dreamcast_port_project(const std::filesystem::path& gdi_
                           track.sha256,
                           track.resolved_path});
     }
+    std::ostringstream identity_material;
+    for (const auto& input : inputs) {
+        identity_material << input.role << ':' << input.size << ':' << input.sha256 << '\n';
+    }
+    const auto project_identity = katana::io::sha256_bytes(identity_material.str());
     return export_dreamcast_port_project({image,
                                           analysis,
                                           program,
@@ -1015,7 +1039,7 @@ PortExportResult export_dreamcast_port_project(const std::filesystem::path& gdi_
                                           katana::platform::dreamcast_disc_boot_address,
                                           katana::platform::dreamcast_disc_boot_address,
                                           disc.boot_file.size(),
-                                          {}},
+                                          project_identity},
                                          output_root,
                                          options);
 }

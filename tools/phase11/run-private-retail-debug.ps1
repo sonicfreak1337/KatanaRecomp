@@ -32,7 +32,7 @@ public static extern Microsoft.Win32.SafeHandles.SafeFileHandle CreateFile(
     string name, uint access, uint share, IntPtr security, uint creation, uint flags, IntPtr templateFile);
 [DllImport("kernel32.dll", CharSet=CharSet.Unicode, SetLastError=true)]
 public static extern uint GetFinalPathNameByHandle(
-    Microsoft.Win32.SafeHandles.SafeFileHandle handle, StringBuilder path, uint size, uint flags);
+    Microsoft.Win32.SafeHandles.SafeFileHandle handle, System.Text.StringBuilder path, uint size, uint flags);
 '@
         }
         $handle = [KatanaPath.Native]::CreateFile(
@@ -240,7 +240,9 @@ function Assert-BuildEvidence {
     if ($null -eq $job.analysis -or -not [bool]$job.analysis.control_flow_complete -or
         [uint64]$job.analysis.unresolved_control_flow -ne 0 -or
         [uint64]$job.analysis.guarded_partial_control_flow -ne 0 -or
-        [uint64]$job.analysis.unknown_instructions -ne 0) {
+        [uint64]$job.analysis.unknown_instructions -ne 0 -or
+        [uint64]$job.analysis.unanalyzed_executable_bytes -ne 0 -or
+        [uint64]$job.analysis.reachable_abort_edges -ne 0) {
         throw 'Buildjob besitzt keine vollstaendige Kontrollflussabdeckung.'
     }
     foreach ($checkpoint in @('analysis-complete', 'codegen-complete', 'host-build-complete')) {
@@ -299,7 +301,8 @@ function Assert-BuildEvidence {
 
 function Assert-RedactedReport {
     param([string]$Json)
-    $privatePattern = '(?i)([A-Z]:\\|/home/|/tmp/|\.gdi|sha256|project_identity\s*":\s*")'
+    $privatePattern = '(?i)([A-Z]:\\|/' + 'home/|/tmp/|\.gdi|sha256|' +
+        'project_identity\s*":\s*")'
     if ($Json -match $privatePattern) {
         throw 'Build-only-Bericht enthaelt private Pfade, Hashes oder Eingabeidentitaeten.'
     }
@@ -313,16 +316,22 @@ function Write-AtomicReport {
     Assert-RedactedReport $json
     $temporary = Join-Path $directory ('.' + (Split-Path -Leaf $Path) + '.' +
         [guid]::NewGuid().ToString('N') + '.tmp')
+    $backup = Join-Path $directory ('.' + (Split-Path -Leaf $Path) + '.' +
+        [guid]::NewGuid().ToString('N') + '.bak')
     try {
         Set-Content -LiteralPath $temporary -Value $json -Encoding utf8
         if (Test-Path -LiteralPath $Path -PathType Leaf) {
-            [IO.File]::Replace($temporary, $Path, $null)
+            [IO.File]::Replace($temporary, $Path, $backup)
+            Remove-Item -LiteralPath $backup -Force
         } else {
             [IO.File]::Move($temporary, $Path)
         }
     } finally {
         if (Test-Path -LiteralPath $temporary) {
             Remove-Item -LiteralPath $temporary -Force
+        }
+        if (Test-Path -LiteralPath $backup) {
+            Remove-Item -LiteralPath $backup -Force
         }
     }
     return ($Report | ConvertTo-Json -Depth 6 -Compress)
@@ -422,11 +431,14 @@ if ([string]::IsNullOrWhiteSpace($Config)) {
 $repositoryRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..'))
 $configPath = Assert-OutsideRepository $Config $repositoryRoot
 $settings = Get-Content -LiteralPath $configPath -Raw | ConvertFrom-Json
-$allowedFields = @(
+$requiredFields = @(
     'execution_mode', 'gdi_path', 'host_timeout_seconds', 'manifest_path',
     'output_root', 'report_path', 'schema', 'version')
+$allowedFields = @($requiredFields + 'guest_cycle_budget')
 $actualFields = @($settings.PSObject.Properties.Name | Sort-Object)
-if (($actualFields -join ',') -cne (($allowedFields | Sort-Object) -join ',')) {
+$unknownFields = @($actualFields | Where-Object { $_ -notin $allowedFields })
+$missingFields = @($requiredFields | Where-Object { $_ -notin $actualFields })
+if ($unknownFields.Count -ne 0 -or $missingFields.Count -ne 0) {
     throw 'Private Build-only-Konfiguration besitzt fehlende oder unbekannte Felder.'
 }
 if ($settings.schema -ne 'katana-private-retail-debug-config' -or
@@ -443,6 +455,9 @@ if (-not (Test-Path -LiteralPath $manifest -PathType Leaf) -or
 }
 $timeout = [int]$settings.host_timeout_seconds
 if ($timeout -le 0) { throw 'host_timeout_seconds muss positiv sein.' }
+if ($null -ne $settings.guest_cycle_budget -and [uint64]$settings.guest_cycle_budget -eq 0) {
+    throw 'guest_cycle_budget muss positiv sein, wird in build-only aber nicht verbraucht.'
+}
 Assert-ManifestGdiBinding $manifest $gdi
 $cli = Join-Path $repositoryRoot 'build-current\katana-recomp.exe'
 if (-not (Test-Path -LiteralPath $cli -PathType Leaf)) {
@@ -520,6 +535,12 @@ $report = [ordered]@{
         } else { 0 }
         instructions = if ($analysis) { [uint64]$analysis.instructions } else { 0 }
         functions = if ($analysis) { [uint64]$analysis.functions } else { 0 }
+        resolved_control_flow = if ($analysis) {
+            [uint64]$analysis.resolved_control_flow
+        } else { 0 }
+        guarded_complete_control_flow = if ($analysis) {
+            [uint64]$analysis.guarded_complete_control_flow
+        } else { 0 }
         guarded_partial_control_flow = if ($analysis) {
             [uint64]$analysis.guarded_partial_control_flow
         } else { 0 }
@@ -528,6 +549,15 @@ $report = [ordered]@{
         } else { 0 }
         unresolved_control_flow = if ($analysis) {
             [uint64]$analysis.unresolved_control_flow
+        } else { 0 }
+        unknown_instructions = if ($analysis) {
+            [uint64]$analysis.unknown_instructions
+        } else { 0 }
+        unanalyzed_executable_bytes = if ($analysis) {
+            [uint64]$analysis.unanalyzed_executable_bytes
+        } else { 0 }
+        reachable_abort_edges = if ($analysis) {
+            [uint64]$analysis.reachable_abort_edges
         } else { 0 }
         coverage_complete = if ($analysis) { [bool]$analysis.control_flow_complete } else { $false }
     }

@@ -23,11 +23,10 @@
 namespace katana::runtime {
 namespace {
 
-constexpr std::array<std::uint8_t, 8u> container_magic{
-    'K', 'A', 'T', 'W', 'C', 'P', '1', '\n'};
+constexpr std::array<std::uint8_t, 8u> container_magic{'K', 'A', 'T', 'W', 'C', 'P', '1', '\n'};
 constexpr std::size_t sha256_text_size = 64u;
-constexpr std::size_t fixed_header_size = container_magic.size() + 4u + 4u + 8u +
-                                          sha256_text_size + sha256_text_size;
+constexpr std::size_t fixed_header_size =
+    container_magic.size() + 4u + 4u + 8u + sha256_text_size + sha256_text_size;
 
 bool stable_kind(const std::string_view value) noexcept {
     return !value.empty() && value.size() <= 32u &&
@@ -38,8 +37,8 @@ bool stable_kind(const std::string_view value) noexcept {
 }
 
 std::string hash_bytes(const std::span<const std::uint8_t> bytes) {
-    return katana::io::sha256_bytes(std::string_view(
-        reinterpret_cast<const char*>(bytes.data()), bytes.size()));
+    return katana::io::sha256_bytes(
+        std::string_view(reinterpret_cast<const char*>(bytes.data()), bytes.size()));
 }
 
 void append_u32(std::vector<std::uint8_t>& output, const std::uint32_t value) {
@@ -80,7 +79,8 @@ std::vector<std::uint8_t> read_file(const std::filesystem::path& path,
     std::vector<std::uint8_t> bytes(static_cast<std::size_t>(end));
     input.seekg(0, std::ios::beg);
     if (!bytes.empty())
-        input.read(reinterpret_cast<char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
+        input.read(reinterpret_cast<char*>(bytes.data()),
+                   static_cast<std::streamsize>(bytes.size()));
     if (!input) throw std::runtime_error("Arbeitskopie konnte nicht gelesen werden.");
     return bytes;
 }
@@ -127,8 +127,8 @@ std::vector<std::uint8_t> decode_container(const PersistentImageConfig& config,
         reinterpret_cast<const char*>(bytes.data() + source_hash_offset), sha256_text_size);
     const std::string_view stored_payload(
         reinterpret_cast<const char*>(bytes.data() + payload_hash_offset), sha256_text_size);
-    const std::string_view stored_kind(
-        reinterpret_cast<const char*>(bytes.data() + kind_offset), kind_size);
+    const std::string_view stored_kind(reinterpret_cast<const char*>(bytes.data() + kind_offset),
+                                       kind_size);
     const auto payload = std::span<const std::uint8_t>(bytes).subspan(payload_offset);
     if (stored_source != source_sha256 || stored_kind != config.kind ||
         stored_payload != hash_bytes(payload))
@@ -136,14 +136,15 @@ std::vector<std::uint8_t> decode_container(const PersistentImageConfig& config,
     return std::vector<std::uint8_t>(payload.begin(), payload.end());
 }
 
-void durable_write(const std::filesystem::path& path,
-                   const std::span<const std::uint8_t> bytes) {
+void durable_write(const std::filesystem::path& path, const std::span<const std::uint8_t> bytes) {
 #ifdef _WIN32
-    auto* file = ::_wfopen(path.c_str(), L"wb");
+    std::FILE* file = nullptr;
+    if (::_wfopen_s(&file, path.c_str(), L"wb") != 0) file = nullptr;
 #else
     auto* file = std::fopen(path.c_str(), "wb");
 #endif
-    if (file == nullptr) throw std::runtime_error("Temporaere Arbeitskopie konnte nicht angelegt werden.");
+    if (file == nullptr)
+        throw std::runtime_error("Temporaere Arbeitskopie konnte nicht angelegt werden.");
     bool success = false;
     try {
         const auto written = bytes.empty() ? 0u : std::fwrite(bytes.data(), 1u, bytes.size(), file);
@@ -206,8 +207,7 @@ std::shared_ptr<PersistentImage> PersistentImage::open(PersistentImageConfig con
 }
 
 PersistentImage::PersistentImage(PersistentImageConfig config) : config_(std::move(config)) {
-    if (!stable_kind(config_.kind) || config_.working_path.empty() ||
-        config_.expected_size == 0u)
+    if (!stable_kind(config_.kind) || config_.working_path.empty() || config_.expected_size == 0u)
         throw std::invalid_argument("Persistente Arbeitskopienkonfiguration ist unvollstaendig.");
     config_.working_path = std::filesystem::absolute(config_.working_path).lexically_normal();
     recovery_path_ = config_.working_path;
@@ -254,27 +254,32 @@ void PersistentImage::load() {
     publish(false);
 }
 
-std::size_t PersistentImage::size() const noexcept { return working_.size(); }
+std::size_t PersistentImage::size() const noexcept {
+    return working_.size();
+}
 std::uint8_t PersistentImage::read_byte(const std::size_t offset) const {
     return working_.at(offset);
 }
 std::uint8_t PersistentImage::source_byte(const std::size_t offset) const {
     return source_.at(offset);
 }
-std::span<const std::uint8_t> PersistentImage::bytes() const noexcept { return working_; }
+std::span<const std::uint8_t> PersistentImage::bytes() const noexcept {
+    return working_;
+}
 
 void PersistentImage::write_byte(const std::size_t offset, const std::uint8_t value) {
-    if (offset >= working_.size()) throw std::out_of_range("Arbeitskopienwrite ausserhalb des Abbilds.");
+    if (offset >= working_.size())
+        throw std::out_of_range("Arbeitskopienwrite ausserhalb des Abbilds.");
     if (working_[offset] == value) return;
     working_[offset] = value;
     dirty_ = true;
 }
 
-void PersistentImage::write(const std::size_t offset,
-                            const std::span<const std::uint8_t> bytes) {
+void PersistentImage::write(const std::size_t offset, const std::span<const std::uint8_t> bytes) {
     if (offset > working_.size() || bytes.size() > working_.size() - offset)
         throw std::out_of_range("Arbeitskopienwrite ausserhalb des Abbilds.");
-    if (std::equal(bytes.begin(), bytes.end(), working_.begin() + static_cast<std::ptrdiff_t>(offset)))
+    if (std::equal(
+            bytes.begin(), bytes.end(), working_.begin() + static_cast<std::ptrdiff_t>(offset)))
         return;
     std::copy(bytes.begin(), bytes.end(), working_.begin() + static_cast<std::ptrdiff_t>(offset));
     dirty_ = true;
@@ -298,7 +303,8 @@ void PersistentImage::publish(const bool preserve_primary) {
             std::error_code remove_error;
             std::filesystem::remove(recovery_path_, remove_error);
             if (remove_error)
-                throw std::runtime_error("Alte Recovery-Arbeitskopie konnte nicht entfernt werden.");
+                throw std::runtime_error(
+                    "Alte Recovery-Arbeitskopie konnte nicht entfernt werden.");
             std::filesystem::rename(config_.working_path, recovery_path_);
             moved_primary = true;
         } else if (std::filesystem::exists(config_.working_path)) {
@@ -328,9 +334,15 @@ void PersistentImage::save() {
     if (save_count_ != std::numeric_limits<std::uint64_t>::max()) ++save_count_;
 }
 
-bool PersistentImage::dirty() const noexcept { return dirty_; }
-PersistentImageRecovery PersistentImage::recovery() const noexcept { return recovery_; }
-std::uint64_t PersistentImage::save_count() const noexcept { return save_count_; }
+bool PersistentImage::dirty() const noexcept {
+    return dirty_;
+}
+PersistentImageRecovery PersistentImage::recovery() const noexcept {
+    return recovery_;
+}
+std::uint64_t PersistentImage::save_count() const noexcept {
+    return save_count_;
+}
 
 std::string PersistentImage::serialize_status_json() const {
     std::ostringstream output;

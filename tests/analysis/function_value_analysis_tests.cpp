@@ -1,6 +1,8 @@
 #include "katana/analysis/control_flow_analysis.hpp"
 #include "katana/analysis/control_flow_report.hpp"
 #include "katana/analysis/function_value_analysis.hpp"
+#include "katana/ir/lower.hpp"
+#include "katana/ir/verifier.hpp"
 
 #include <algorithm>
 #include <array>
@@ -240,9 +242,21 @@ int main() {
         katana::analysis::analyze_control_flow(classification_image({0x2Bu, 0x41u, 0x09u, 0x00u}));
     require(site(runtime_pointer, 0u)->origin_class ==
                     katana::analysis::IndirectControlFlowOriginClass::RuntimePointer &&
+                site(runtime_pointer, 0u)->evidence ==
+                    katana::analysis::ControlFlowEvidence::RuntimeOnly &&
+                katana::analysis::control_flow_report_status(*site(runtime_pointer, 0u)) ==
+                    katana::analysis::ControlFlowReportStatus::RuntimeOnly &&
+                site(runtime_pointer, 0u)->reason ==
+                    "dynamic-runtime-pointer-register-value-unknown" &&
                 site(runtime_pointer, 0u)->evidence_origins ==
                     std::vector{katana::analysis::AnalysisEvidenceOrigin::RuntimeClassification},
-            "Echter Laufzeitzeiger besitzt keine stabile Restklasse und Beweisherkunft.");
+            "Echter Laufzeitzeiger erreicht den validierenden Runtime-only-Vertrag nicht.");
+    const auto runtime_pointer_json =
+        katana::analysis::format_control_flow_analysis_json(runtime_pointer);
+    require(runtime_pointer_json.find("\"instruction_form\":\"Jmp\"") != std::string::npos &&
+                runtime_pointer_json.find("\"definition_complete\":false") != std::string::npos &&
+                runtime_pointer_json.find("\"preceding_call\":false") != std::string::npos,
+            "Der Sitebericht verliert Instruktionsform oder Definitionsprovenienz.");
 
     std::vector<std::uint8_t> guarded_join_bytes(0x40u, 0x09u);
     const std::array<std::uint8_t, 20u> guarded_join_code{
@@ -285,12 +299,24 @@ int main() {
                          return edge.instruction_address == 0x0Cu && edge.target_address == 0x30u;
                      });
     require(guarded_join_site != nullptr &&
-                guarded_join_site->status == katana::analysis::ResolutionStatus::Guarded &&
-                guarded_join_site->target == 0x30u &&
-                guarded_join_site->reason == "guarded-function-memory" &&
-                guarded_join_edge != guarded_join.resolved_edges.end() &&
-                guarded_join_edge->guarded,
-            "CFG-Join oder SH-C-Call verlor den dynamisch bewachten Speicherkandidaten.");
+                guarded_join_site->evidence == katana::analysis::ControlFlowEvidence::RuntimeOnly &&
+                !guarded_join_site->target.has_value() && guarded_join_site->targets.empty() &&
+                guarded_join_site->analysis_candidates == std::vector<std::uint32_t>{0x30u} &&
+                guarded_join_site->reason == "runtime-contract-function-memory" &&
+                guarded_join_edge == guarded_join.resolved_edges.end(),
+            "CFG-Join fror einen veraenderlichen Speicherkandidaten statisch ein.");
+    const auto guarded_join_ir = katana::ir::lower_program(guarded_join);
+    const katana::ir::Instruction* guarded_join_ir_site = nullptr;
+    for (const auto& function : guarded_join_ir)
+        for (const auto& block : function.blocks)
+            for (const auto& instruction : block.instructions)
+                if (instruction.source_address == 0x0Cu) guarded_join_ir_site = &instruction;
+    require(guarded_join_ir_site != nullptr &&
+                guarded_join_ir_site->dynamic_target_class ==
+                    katana::ir::DynamicTargetClass::RuntimeOnly &&
+                guarded_join_ir_site->resolved_targets.empty() &&
+                katana::ir::verify_program(guarded_join_ir).empty(),
+            "Veraenderlicher Funktionsspeicher erreicht nicht kandidatenfrei den Runtimevertrag.");
 
     std::vector<std::uint8_t> parameter_candidate_bytes(0x60u, 0x09u);
     const std::array<std::uint8_t, 10u> parameter_caller{
@@ -343,9 +369,11 @@ int main() {
         katana::analysis::analyze_control_flow(parameter_candidate_image);
     const auto* parameter_candidate_site = site(parameter_candidate, 0x22u);
     require(parameter_candidate_site != nullptr &&
-                parameter_candidate_site->status == katana::analysis::ResolutionStatus::Guarded &&
-                parameter_candidate_site->target == 0x50u &&
-                parameter_candidate_site->reason == "guarded-function-memory" &&
+                parameter_candidate_site->evidence ==
+                    katana::analysis::ControlFlowEvidence::RuntimeOnly &&
+                parameter_candidate_site->analysis_candidates ==
+                    std::vector<std::uint32_t>{0x50u} &&
+                parameter_candidate_site->reason == "runtime-contract-function-memory" &&
                 parameter_candidate_site->evidence_call_sites == std::vector<std::uint32_t>{0x02u},
             "Direkter Call propagierte seinen Parameterkandidaten nicht sicher zum Callee.");
 
@@ -353,9 +381,12 @@ int main() {
     unknown_caller_image.add_entry_point(0x20u);
     const auto unknown_caller = katana::analysis::analyze_control_flow(unknown_caller_image);
     const auto* unknown_caller_site = site(unknown_caller, 0x22u);
-    require(unknown_caller_site != nullptr &&
-                !katana::analysis::control_flow_evidence_complete(unknown_caller_site->evidence),
-            "Ein unbekannter zusaetzlicher Caller wurde durch einen bekannten Caller geheilt.");
+    require(
+        unknown_caller_site != nullptr &&
+            !katana::analysis::control_flow_evidence_complete(unknown_caller_site->evidence) &&
+            (unknown_caller_site->evidence == katana::analysis::ControlFlowEvidence::RuntimeOnly ||
+             unknown_caller_site->evidence == katana::analysis::ControlFlowEvidence::Unresolved),
+        "Ein unbekannter zusaetzlicher Caller wurde durch einen bekannten Caller geheilt.");
 
     std::vector<std::uint8_t> indirect_parameter_bytes(0x60u, 0x09u);
     const std::array<std::uint8_t, 12u> indirect_parameter_caller{
@@ -403,8 +434,9 @@ int main() {
         katana::analysis::analyze_control_flow(indirect_parameter_image);
     const auto* indirect_parameter_site = site(indirect_parameter, 0x22u);
     require(indirect_parameter_site != nullptr &&
-                indirect_parameter_site->status == katana::analysis::ResolutionStatus::Guarded &&
-                indirect_parameter_site->target == 0x50u &&
+                indirect_parameter_site->evidence ==
+                    katana::analysis::ControlFlowEvidence::RuntimeOnly &&
+                indirect_parameter_site->analysis_candidates == std::vector<std::uint32_t>{0x50u} &&
                 indirect_parameter_site->evidence_call_sites == std::vector<std::uint32_t>{0x04u},
             "Bewachter indirekter Call propagierte seinen Parameterkandidaten nicht zum Callee.");
 
@@ -461,16 +493,151 @@ int main() {
     const auto finite_index = katana::analysis::analyze_control_flow(finite_index_image);
     const auto* finite_index_site = site(finite_index, 0x08u);
     require(finite_index_site != nullptr &&
-                finite_index_site->status == katana::analysis::ResolutionStatus::Guarded &&
-                finite_index_site->targets == std::vector<std::uint32_t>({0x30u, 0x34u}) &&
-                finite_index_site->reason == "guarded-function-memory",
-            "Endlicher MOVT-/Shift-/Indexpfad wurde nicht als bewachte Zielmenge erhalten.");
+                finite_index_site->evidence == katana::analysis::ControlFlowEvidence::RuntimeOnly &&
+                finite_index_site->targets.empty() &&
+                finite_index_site->analysis_candidates ==
+                    std::vector<std::uint32_t>({0x30u, 0x34u}) &&
+                finite_index_site->reason == "runtime-contract-function-memory",
+            "Endlicher, veraenderlicher Indexpfad wurde als vollstaendige Zielmenge eingefroren.");
     require(
         finite_index.function_scc_count != 0u && finite_index.function_summary_iterations != 0u &&
             finite_index.instruction_arena != nullptr &&
             finite_index.instruction_arena->size() == finite_index.recursive.instructions.size() &&
             !finite_index.block_spans.empty() && finite_index.evidence_ids.size() != 0u,
         "SCC-Summaries, immutable Arena, Blockspans oder Evidence-Interning fehlen.");
+
+    [] {
+        std::vector<std::uint8_t> stack_spill_bytes(0x24u, 0x09u);
+        const std::array<std::uint8_t, 14u> stack_spill_code{
+            0x03u,
+            0xD8u, // mov.l @(0x10,pc),r8
+            0x86u,
+            0x2Fu, // mov.l r8,@-r15
+            0xF6u,
+            0x6Du, // mov.l @r15+,r13
+            0x0Bu,
+            0x4Du, // jsr @r13
+            0x09u,
+            0x00u, // nop (delay)
+            0x0Bu,
+            0x00u, // rts
+            0x09u,
+            0x00u // nop (delay)
+        };
+        std::copy(stack_spill_code.begin(), stack_spill_code.end(), stack_spill_bytes.begin());
+        stack_spill_bytes[0x10u] = 0x20u;
+        stack_spill_bytes[0x11u] = 0x00u;
+        stack_spill_bytes[0x12u] = 0x00u;
+        stack_spill_bytes[0x13u] = 0x00u;
+        stack_spill_bytes[0x20u] = 0x0Bu;
+        stack_spill_bytes[0x21u] = 0x00u;
+        stack_spill_bytes[0x22u] = 0x09u;
+        stack_spill_bytes[0x23u] = 0x00u;
+        const auto stack_spill = katana::analysis::analyze_control_flow(
+            classification_image(std::move(stack_spill_bytes)));
+        const auto* stack_spill_site = site(stack_spill, 0x06u);
+        if (stack_spill_site == nullptr) {
+            require(false, "Stackspill/Reload-Callsite fehlt.");
+            return;
+        }
+        require(stack_spill_site->target == 0x20u,
+                "Fester Stackspill/Reload verliert sein R13-Ziel.");
+        require(stack_spill_site->status == katana::analysis::ResolutionStatus::Resolved,
+                "Fester Stackspill/Reload verliert seinen vollstaendigen Beweis: Status " +
+                    std::to_string(static_cast<int>(stack_spill_site->status)) + ", Evidenz " +
+                    std::to_string(static_cast<int>(stack_spill_site->evidence)) + ", Grund " +
+                    stack_spill_site->reason + ".");
+    }();
+
+    [] {
+        const auto object_image = [](const bool invalidate_with_byte,
+                                     const bool invalidate_with_prefetch) {
+            std::vector<std::uint8_t> text(0x34u, 0x09u);
+            text[0x00u] = 0x07u;
+            text[0x01u] = 0xD4u; // mov.l @(0x20,pc),r4 -> Objekt 0x40
+            text[0x02u] = 0x08u;
+            text[0x03u] = 0xD1u; // mov.l @(0x24,pc),r1 -> Callback 0x30
+            text[0x04u] = 0x12u;
+            text[0x05u] = 0x24u; // mov.l r1,@r4
+            std::size_t cursor = 0x06u;
+            if (invalidate_with_byte) {
+                text[cursor++] = 0x00u;
+                text[cursor++] = 0x24u; // mov.b r0,@r4 ueberlappt das Feld
+            } else if (invalidate_with_prefetch) {
+                text[cursor++] = 0x83u;
+                text[cursor++] = 0x04u; // pref @r4 invalidiert unbekannte Mutation
+            }
+            const auto load_address = cursor;
+            text[cursor++] = 0x42u;
+            text[cursor++] = 0x62u; // mov.l @r4,r2
+            const auto call_address = cursor;
+            text[cursor++] = 0x0Bu;
+            text[cursor++] = 0x42u; // jsr @r2
+            text[cursor++] = 0x09u;
+            text[cursor++] = 0x00u;
+            text[cursor++] = 0x0Bu;
+            text[cursor++] = 0x00u;
+            text[cursor++] = 0x09u;
+            text[cursor++] = 0x00u;
+            text[0x20u] = 0x40u;
+            text[0x21u] = 0x00u;
+            text[0x22u] = 0x00u;
+            text[0x23u] = 0x00u;
+            text[0x24u] = 0x30u;
+            text[0x25u] = 0x00u;
+            text[0x26u] = 0x00u;
+            text[0x27u] = 0x00u;
+            text[0x30u] = 0x0Bu;
+            text[0x31u] = 0x00u;
+            text[0x32u] = 0x09u;
+            text[0x33u] = 0x00u;
+            katana::io::ExecutableImage image;
+            image.set_guest_call_abi(katana::io::GuestCallAbi::SuperHC);
+            image.add_segment({".text",
+                               0u,
+                               0u,
+                               text.size(),
+                               katana::io::SegmentKind::Code,
+                               {true, false, true},
+                               std::move(text)});
+            image.add_segment({".object",
+                               0x40u,
+                               0x34u,
+                               4u,
+                               katana::io::SegmentKind::Data,
+                               {true, true, false},
+                               std::vector<std::uint8_t>(4u)});
+            image.add_entry_point(0u);
+            return std::pair{std::move(image),
+                             std::pair{static_cast<std::uint32_t>(load_address),
+                                       static_cast<std::uint32_t>(call_address)}};
+        };
+        auto [dominant_object_image, dominant_addresses] = object_image(false, false);
+        const auto dominant_object = katana::analysis::analyze_control_flow(dominant_object_image);
+        const auto* dominant_site = site(dominant_object, dominant_addresses.second);
+        require(dominant_site != nullptr && dominant_site->target == 0x30u &&
+                    dominant_site->status == katana::analysis::ResolutionStatus::Guarded &&
+                    dominant_site->evidence ==
+                        katana::analysis::ControlFlowEvidence::GuardedComplete &&
+                    dominant_site->origin_class ==
+                        katana::analysis::IndirectControlFlowOriginClass::ObjectVTable &&
+                    dominant_object.function_summary_iterations <=
+                        dominant_object.function_iteration_budget &&
+                    !dominant_object.function_budget_exhausted,
+                "Dominanter Objektfeldstore erzeugt keine begrenzte vollstaendige Zielmenge.");
+        auto [overlap_image, overlap_addresses] = object_image(true, false);
+        const auto overlap = katana::analysis::analyze_control_flow(overlap_image);
+        require(site(overlap, overlap_addresses.second) != nullptr &&
+                    !katana::analysis::control_flow_evidence_complete(
+                        site(overlap, overlap_addresses.second)->evidence),
+                "Ueberlappender Teilstore laesst einen stale Objektfeldbeweis bestehen.");
+        auto [prefetch_image, prefetch_addresses] = object_image(false, true);
+        const auto prefetch = katana::analysis::analyze_control_flow(prefetch_image);
+        require(site(prefetch, prefetch_addresses.second) != nullptr &&
+                    !katana::analysis::control_flow_evidence_complete(
+                        site(prefetch, prefetch_addresses.second)->evidence),
+                "PREF laesst einen stale Objektfeldbeweis bestehen.");
+    }();
 
     std::cout << "KR-4713 interprozedurale Zielwertsummaries erfolgreich.\n";
     return EXIT_SUCCESS;

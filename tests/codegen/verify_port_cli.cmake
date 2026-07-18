@@ -8,6 +8,7 @@ endif()
 file(TO_CMAKE_PATH "$ENV{TEMP}/katana-port-cli-fixture" fixture)
 file(REMOVE_RECURSE "${fixture}")
 file(MAKE_DIRECTORY "${fixture}/disc")
+set(ENV{KATANA_USER_DATA_ROOT} "${fixture}/user-data")
 
 execute_process(
   COMMAND "${KATANA_FIXTURE_WRITER}" --write-fixture "${fixture}/disc"

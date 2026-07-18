@@ -346,6 +346,8 @@ void apply_local_transfer(RegisterConstants& state,
     const auto& instruction = line.instruction;
     switch (instruction.kind) {
     case katana::sh4::InstructionKind::Nop:
+    case katana::sh4::InstructionKind::Ocbp:
+    case katana::sh4::InstructionKind::Ocbwb:
         return;
     case katana::sh4::InstructionKind::MovImmediate:
         set_constant(state,
@@ -653,7 +655,9 @@ resolve_indirect_control_flow(const std::span<const katana::sh4::DisassemblyLine
             const auto& source = state.sources[register_index];
             IndirectControlFlowResolution resolution;
             resolution.instruction_address = line.address;
+            resolution.instruction_kind = line.instruction.kind;
             resolution.register_index = register_index;
+            resolution.value_source = source;
             resolution.kind = line.instruction.kind == katana::sh4::InstructionKind::Jsr ||
                                       line.instruction.kind == katana::sh4::InstructionKind::Bsrf
                                   ? IndirectControlFlowKind::Call

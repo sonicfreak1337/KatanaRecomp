@@ -70,6 +70,12 @@ struct IndirectControlFlowResolution {
     std::vector<std::uint32_t> targets;
     std::vector<std::uint32_t> evidence_call_sites;
     std::vector<std::uint32_t> evidence_callees;
+    std::string value_source;
+    std::vector<std::uint32_t> definition_sites;
+    bool definition_complete = false;
+    bool preceding_call = false;
+    katana::sh4::InstructionKind instruction_kind = katana::sh4::InstructionKind::Unknown;
+    std::vector<std::uint32_t> analysis_candidates;
 };
 
 [[nodiscard]] std::vector<ConstantTraceEntry>

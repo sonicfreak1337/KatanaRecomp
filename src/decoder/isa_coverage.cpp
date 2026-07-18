@@ -122,7 +122,9 @@ bool memory_kind(const InstructionKind kind) {
 std::string
 family_id(const InstructionKind kind, const bool privileged, const ControlFlowKind control_flow) {
     if (fpu_kind(kind)) return "fpu";
-    if (kind == InstructionKind::Prefetch) return "cache-store-queue";
+    if (kind == InstructionKind::Prefetch || kind == InstructionKind::Ocbp ||
+        kind == InstructionKind::Ocbwb)
+        return "cache-store-queue";
     if (privileged || system_kind(kind)) return "system-control";
     if (control_flow != ControlFlowKind::None || kind == InstructionKind::Rts)
         return "control-flow";

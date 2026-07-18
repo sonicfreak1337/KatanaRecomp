@@ -591,6 +591,37 @@ Akzeptanz:
   Root-Version bereitgestellt
 - danach fuer Nutzerreview stoppen
 
+Zwischenstand:
+
+- Decoder, IR, Backend und Runtime decken die zuvor unbekannten OCBP-/OCBWB-
+  Instruktionen mit einem expliziten kohaerenten Cachevertrag ab
+- Kontrollflussberichte enthalten Definitionen, Caller-, Owner- und
+  Kontextprovenienz sowie getrennte `analysis_candidates`
+- private Aggregation: 55.202 Instruktionen, 813 Funktionen,
+  `guarded_partial=0`, `unresolved=0`, `unknown_instructions=0`,
+  `runtime_only=1.826`, `reachable_abort_edges=0`
+- aktuelles Root-GUI-Paket, Dialoghelfer und Runtime-SDK sind gebaut und der
+  relocatable synthetische GDI-Portbuild ist verifiziert
+- offen bleiben 6.624.892 nicht analysierte committed executable Bytes; daher
+  sind strikter privater Doppelbuild, finales Gate und Taskabschluss noch offen
+- keine private `game.exe` wurde gestartet
+
+Naechster Arbeitsblock:
+
+- 6.624.892 offene Bytes adressfrei und lokal detailliert nach Inhalt,
+  Segment, Discdatei, Ladephase und Schreibbarkeit inventarisieren
+- Loaderberechtigungen gegen reale Ladegroesse, Reservierung, Zero-Fill,
+  Code-/Datensegmente, Nachladerollen, Alignment und Padding pruefen
+- `initially_reachable`, `statically_discoverable`, `loadable_module`,
+  `runtime_materializable` und `never_executed_data` getrennt modellieren
+- dynamische Module und Overlays mit Herkunft, Relocation, Lebenszeit,
+  Invalidierung und synthetischen Fixtures absichern
+- deterministische, budgetierte und abschaltbare Demand-driven-
+  Blockmaterialisierung mit sichtbarem Miss implementieren
+- Runtime-only-Sites nach Aufrufen, Zielen, Stabilitaet, Misses,
+  Materialisierungen und Invalidierungen profilieren und nur beweisbar stabile
+  Sites spezialisieren
+
 ### [ ] KR-4705 - v0.47 interne Freigabe
 
 Abhaengigkeiten: KR-4704

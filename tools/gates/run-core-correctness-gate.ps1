@@ -1,5 +1,5 @@
 [CmdletBinding()]
-param()
+param([switch]$BuildGuiPackage, [switch]$AllowDirtyWorktree)
 
 $ErrorActionPreference = 'Stop'
 
@@ -33,11 +33,29 @@ function Initialize-MsvcEnvironment {
     if ($LASTEXITCODE -ne 0) {
         throw 'Die Visual-Studio-Buildumgebung konnte nicht geladen werden.'
     }
+    $pathEntry = $environment | Where-Object {
+        $_.StartsWith('PATH=', [StringComparison]::Ordinal)
+    } | Select-Object -First 1
+    if ([string]::IsNullOrWhiteSpace($pathEntry)) {
+        throw 'Die Visual-Studio-Buildumgebung besitzt keinen PATH.'
+    }
+    # Windows environment blocks may legally contain PATH and Path at once.
+    # MSBuild rejects that block before CL starts, so remove both exact entries
+    # before publishing the single VsDevCmd value.
+    [Environment]::SetEnvironmentVariable('PATH', $null, 'Process')
+    [Environment]::SetEnvironmentVariable('Path', $null, 'Process')
+    [Environment]::SetEnvironmentVariable('PATH', $pathEntry.Substring(5), 'Process')
     foreach ($entry in $environment) {
         $separator = $entry.IndexOf('=')
         if ($separator -gt 0) {
+            $name = $entry.Substring(0, $separator)
+            # Some hosts expose both PATH and Path. VsDevCmd updates PATH, while
+            # the stale mixed-case duplicate would otherwise overwrite it here.
+            if ($name -ieq 'Path') {
+                continue
+            }
             [Environment]::SetEnvironmentVariable(
-                $entry.Substring(0, $separator),
+                $name,
                 $entry.Substring($separator + 1),
                 'Process'
             )
@@ -66,11 +84,41 @@ if ($unexpected.Count -ne 0) {
 
 $git = Get-Command git.exe -ErrorAction Stop | Select-Object -First 1 -ExpandProperty Source
 $dirty = @(& $git -C $root status --porcelain=v1 --untracked-files=all)
-if ($LASTEXITCODE -ne 0 -or $dirty.Count -ne 0) {
+if ($LASTEXITCODE -ne 0 -or ($dirty.Count -ne 0 -and -not $AllowDirtyWorktree)) {
     throw 'KR-4618 verlangt vor dem Gate einen sauberen vorbereiteten Commit.'
 }
 
 Initialize-MsvcEnvironment
+
+function Find-CMakeNinja {
+    $vswhere = Join-Path ${env:ProgramFiles(x86)} `
+        'Microsoft Visual Studio\Installer\vswhere.exe'
+    if (Test-Path -LiteralPath $vswhere -PathType Leaf) {
+        $installation = & $vswhere -latest -products * `
+            -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 `
+            -property installationPath | Select-Object -First 1
+        if (-not [string]::IsNullOrWhiteSpace($installation)) {
+            $bundledNinja = Join-Path $installation `
+                'Common7\IDE\CommonExtensions\Microsoft\CMake\Ninja\ninja.exe'
+            if (Test-Path -LiteralPath $bundledNinja -PathType Leaf) {
+                return $bundledNinja
+            }
+        }
+    }
+
+    return Get-Command ninja.exe -ErrorAction Stop |
+        Select-Object -First 1 -ExpandProperty Source
+}
+
+$ninja = Find-CMakeNinja
+& $ninja --version | Out-Null
+if ($LASTEXITCODE -ne 0) {
+    throw "Ninja-Werkzeugpruefung fehlgeschlagen: $LASTEXITCODE"
+}
+$ninjaDirectory = Split-Path -Parent $ninja
+if (($env:PATH -split ';') -notcontains $ninjaDirectory) {
+    $env:PATH = $ninjaDirectory + ';' + $env:PATH
+}
 
 function Reset-BuildDirectory {
     if (Test-Path -LiteralPath $build) {
@@ -141,7 +189,7 @@ Push-Location $root
 try {
     Reset-BuildDirectory
     $debugWatch = [Diagnostics.Stopwatch]::StartNew()
-    & cmake --preset quality-debug --fresh
+    & cmake --preset quality-debug --fresh "-DCMAKE_MAKE_PROGRAM=$ninja"
     Require-NativeSuccess 'Instrumentierte Debug-Konfiguration'
     $debugBuildAttempts = @(Invoke-GateBuild 'quality-debug' 'Instrumentierter Debug-Build')
 
@@ -161,7 +209,7 @@ try {
 
     Reset-BuildDirectory
     $relWatch = [Diagnostics.Stopwatch]::StartNew()
-    & cmake --preset relwithdebinfo-gate --fresh
+    & cmake --preset relwithdebinfo-gate --fresh "-DCMAKE_MAKE_PROGRAM=$ninja"
     Require-NativeSuccess 'RelWithDebInfo-Konfiguration'
     $relBuildAttempts = @(Invoke-GateBuild 'relwithdebinfo-gate' 'RelWithDebInfo-Build')
     $relTests = Get-TestNames
@@ -174,6 +222,27 @@ try {
     }
     & ctest --preset relwithdebinfo-gate --parallel 8
     Require-NativeSuccess 'RelWithDebInfo-Regression'
+    $guiPackage = $null
+    $guiPackageManifestSha256 = $null
+    if ($BuildGuiPackage) {
+        & cmake -S $root -B $build -DKATANA_BUILD_DESKTOP_GUI=ON `
+            "-DCMAKE_MAKE_PROGRAM=$ninja"
+        Require-NativeSuccess 'RelWithDebInfo-GUI-Konfiguration'
+        $guiBuildOutput = @(& cmake --build $build --parallel $parallelism 2>&1)
+        foreach ($line in $guiBuildOutput) { Write-Host $line }
+        Require-NativeSuccess 'RelWithDebInfo-GUI-Build'
+        $guiSmoke = @(& (Join-Path $build 'katana-recomp-gui.exe') --smoke)
+        Require-NativeSuccess 'RelWithDebInfo-GUI-Smoke'
+        if ($guiSmoke -notcontains 'KR_PHASE10_GUI_MINIMAL_START') {
+            throw 'RelWithDebInfo-GUI besitzt keinen stabilen Smoke-Marker.'
+        }
+        $guiPackage = Join-Path $build 'artifacts\v047-gui-current'
+        & cmake "-DSOURCE_DIR=$root" "-DBUILD_DIR=$build" "-DOUTPUT_DIR=$guiPackage" `
+            -P tools\phase10\package-gui.cmake
+        Require-NativeSuccess 'Relocatable v0.47-GUI-Paket'
+        $guiPackageManifestSha256 = (Get-FileHash `
+            (Join-Path $guiPackage 'package-manifest.json') -Algorithm SHA256).Hash.ToLowerInvariant()
+    }
     $relWatch.Stop()
 
     $reportDirectory = Join-Path $build 'reports'
@@ -183,6 +252,7 @@ try {
         report_version = 1
         status = 'success'
         source_commit = (& $git -C $root rev-parse HEAD).Trim()
+        source_worktree = if ($dirty.Count -eq 0) { 'clean' } else { 'uncommitted-local-state' }
         configurations = @('Debug', 'RelWithDebInfo')
         debug_profile = 'quality-debug'
         debug_sanitizer = 'msvc-address-or-clang-address-undefined'
@@ -211,6 +281,8 @@ try {
         relwithdebinfo_elapsed_seconds = [Math]::Round($relWatch.Elapsed.TotalSeconds, 3)
         fresh_build_directory = 'build-current'
         private_retail_data = 'not-used'
+        gui_package = if ($BuildGuiPackage) { 'verified-relocatable' } else { 'not-requested' }
+        gui_package_manifest_sha256 = $guiPackageManifestSha256
     }
     $report | ConvertTo-Json -Depth 4 | Set-Content `
         (Join-Path $reportDirectory 'core-correctness-gate.json') -Encoding utf8

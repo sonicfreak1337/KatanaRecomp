@@ -148,6 +148,8 @@ enum class InstructionKind {
     ReturnFromException,
     Sleep,
     Prefetch,
+    Ocbp,
+    Ocbwb,
     Bra,
     Bsr,
     Braf,

@@ -61,7 +61,6 @@ class PersistentImage final {
     bool dirty_ = false;
 };
 
-[[nodiscard]] const char*
-persistent_image_recovery_name(PersistentImageRecovery value) noexcept;
+[[nodiscard]] const char* persistent_image_recovery_name(PersistentImageRecovery value) noexcept;
 
 } // namespace katana::runtime

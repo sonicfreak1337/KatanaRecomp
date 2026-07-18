@@ -555,6 +555,16 @@ void emit_simple_instruction(std::ostringstream& output,
         emit_indent(output, indent);
         output << "}\n";
         return;
+    case Operation::Ocbp:
+        output << "static_cast<void>(katana::runtime::maintain_coherent_operand_cache("
+                  "katana::runtime::OperandCacheOperation::Purge, cpu.r["
+               << static_cast<unsigned>(instruction.source_register) << "]));\n";
+        return;
+    case Operation::Ocbwb:
+        output << "static_cast<void>(katana::runtime::maintain_coherent_operand_cache("
+                  "katana::runtime::OperandCacheOperation::WriteBack, cpu.r["
+               << static_cast<unsigned>(instruction.source_register) << "]));\n";
+        return;
     case Operation::ClearMac:
         output << "cpu.mach = 0u;\n";
         emit_indent(output, indent);
@@ -1768,7 +1778,10 @@ void emit_terminal(std::ostringstream& output,
             emit_guarded_simple_instruction(output, *delay_slot, indent);
         }
 
-        if (single_block) {
+        if (single_block && known_functions.contains(*instruction.target_address)) {
+            emit_indent(output, indent);
+            output << "static_call(cpu, " << hex32(*instruction.target_address) << ");\n";
+        } else if (single_block) {
             emit_indent(output, indent);
             output << "unresolved_call(cpu, " << hex32(*instruction.target_address) << ");\n";
         } else {
@@ -1887,6 +1900,11 @@ void emit_terminal(std::ostringstream& output,
                 output << "case " << hex32(target) << ":\n";
                 if (known_functions.contains(target) && !single_block) {
                     emit_direct_call(output, target, known_functions, indent + 2);
+                    emit_indent(output, indent + 2);
+                    output << "break;\n";
+                } else if (known_functions.contains(target)) {
+                    emit_indent(output, indent + 2);
+                    output << "resolved_call(cpu, call_target);\n";
                     emit_indent(output, indent + 2);
                     output << "break;\n";
                 } else {
@@ -2365,12 +2383,18 @@ BackendEmission CppBackend::emit(const BackendRequest& request) const {
                  << "using katana::runtime::raise_trapa;\n"
                  << "using katana::runtime::return_from_exception;\n";
     if (request.external_dynamic_dispatch) {
-        declarations << "void guarded_call(CpuState& cpu, std::uint32_t target);\n"
+        declarations << "void static_call(CpuState& cpu, std::uint32_t target);\n"
+                     << "void resolved_call(CpuState& cpu, std::uint32_t target);\n"
+                     << "void guarded_call(CpuState& cpu, std::uint32_t target);\n"
                      << "void guarded_jump(CpuState& cpu, std::uint32_t target);\n"
                      << "void runtime_only_call(CpuState& cpu, std::uint32_t target);\n"
                      << "void runtime_only_jump(CpuState& cpu, std::uint32_t target);\n"
                      << "void unresolved_call(CpuState& cpu, std::uint32_t target);\n"
                      << "void unresolved_jump(CpuState& cpu, std::uint32_t target);\n"
+                     << "#define static_call(...) ::" << request.symbol_namespace
+                     << "::static_call(__VA_ARGS__)\n"
+                     << "#define resolved_call(...) ::" << request.symbol_namespace
+                     << "::resolved_call(__VA_ARGS__)\n"
                      << "#define guarded_call(...) ::" << request.symbol_namespace
                      << "::guarded_call(__VA_ARGS__)\n"
                      << "#define guarded_jump(...) ::" << request.symbol_namespace
@@ -2386,6 +2410,8 @@ BackendEmission CppBackend::emit(const BackendRequest& request) const {
     } else {
         declarations << "using katana::runtime::unresolved_call;\n"
                      << "using katana::runtime::unresolved_jump;\n"
+                     << "#define static_call(...) unresolved_call(__VA_ARGS__)\n"
+                     << "#define resolved_call(...) unresolved_call(__VA_ARGS__)\n"
                      << "#define guarded_call(...) unresolved_call(__VA_ARGS__)\n"
                      << "#define guarded_jump(...) unresolved_jump(__VA_ARGS__)\n"
                      << "#define runtime_only_call(...) unresolved_call(__VA_ARGS__)\n"

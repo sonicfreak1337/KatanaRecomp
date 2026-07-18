@@ -229,6 +229,8 @@ enum class Operation {
     ReturnFromException,
     Sleep,
     Prefetch,
+    Ocbp,
+    Ocbwb,
     FmovRegister,
     FmovLoad,
     FmovLoadPostIncrement,

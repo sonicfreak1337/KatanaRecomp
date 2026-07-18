@@ -44,6 +44,17 @@ int main() {
     require(cpu.pc == 0u && cpu.pr == 0u && cpu.memory.size() == 1024u * 1024u,
             "Der zentrale CPU-Zustand besitzt keinen deterministischen Grundzustand.");
 
+    const auto purge = katana::runtime::maintain_coherent_operand_cache(
+        katana::runtime::OperandCacheOperation::Purge, 0x1000u);
+    const auto write_back = katana::runtime::maintain_coherent_operand_cache(
+        katana::runtime::OperandCacheOperation::WriteBack, 0x2000u);
+    require(purge.operation == katana::runtime::OperandCacheOperation::Purge &&
+                purge.address == 0x1000u && !purge.dirty_line_present && !purge.wrote_memory &&
+                write_back.operation == katana::runtime::OperandCacheOperation::WriteBack &&
+                write_back.address == 0x2000u && !write_back.dirty_line_present &&
+                !write_back.wrote_memory,
+            "Der kohaerente Operand-Cache-Vertrag meldet erfundene Dirty-Lines oder Writes.");
+
     cpu.r[0] = 0x11111111u;
     cpu.r_bank[0] = 0x22222222u;
     cpu.write_sr(0x60000303u);

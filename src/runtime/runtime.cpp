@@ -132,6 +132,12 @@ void prefetch(CpuState& cpu, const std::uint32_t address) noexcept {
     cpu.last_prefetch_was_store_queue = address >= 0xE0000000u && address <= 0xE3FFFFFFu;
 }
 
+OperandCacheMaintenanceResult
+maintain_coherent_operand_cache(const OperandCacheOperation operation,
+                                const std::uint32_t address) noexcept {
+    return OperandCacheMaintenanceResult{operation, address, false, false};
+}
+
 [[noreturn]] void unresolved_call(CpuState& cpu, const std::uint32_t target) {
     cpu.pc = target;
     throw std::runtime_error("Nicht aufgeloester Aufruf");

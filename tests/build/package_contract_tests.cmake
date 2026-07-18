@@ -26,12 +26,20 @@ if(EXISTS "${KATANA_INSTALL_DIR}/include/katana/analysis")
     message(FATAL_ERROR "runtime-sdk unexpectedly contains analyzer headers")
 endif()
 
+set(KATANA_CONSUMER_GENERATOR_ARGS)
+if(NOT WIN32)
+    list(APPEND KATANA_CONSUMER_GENERATOR_ARGS
+        -G "${KATANA_GENERATOR}"
+        "-DCMAKE_MAKE_PROGRAM=${KATANA_MAKE_PROGRAM}"
+        "-DCMAKE_CXX_COMPILER=${KATANA_CXX_COMPILER}"
+    )
+endif()
 execute_process(
     COMMAND
         "${CMAKE_COMMAND}"
         -S "${KATANA_SOURCE_DIR}/tests/build/runtime_consumer"
         -B "${KATANA_CONSUMER_BUILD_DIR}"
-        -G "${KATANA_GENERATOR}"
+        ${KATANA_CONSUMER_GENERATOR_ARGS}
         "-DCMAKE_PREFIX_PATH=${KATANA_INSTALL_DIR}"
         "-DKATANA_EXPECTED_VERSION=${KATANA_EXPECTED_VERSION}"
         "-DKATANA_EXPECTED_RUNTIME_ABI=${KATANA_EXPECTED_RUNTIME_ABI}"

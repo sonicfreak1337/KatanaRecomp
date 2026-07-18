@@ -94,12 +94,16 @@ int main() {
     }
 
     AlphaFirmwareInputPolicy flash;
+    std::ofstream(root / "private" / "flash.bin", std::ios::binary).put('\0');
+    std::filesystem::create_directories(root / "private" / "working", filesystem_error);
     flash.flash_source = root / "private" / "flash.bin";
     flash.port_output_directory = root / "port";
     error =
         require_rejection([&] { require_alpha_firmware_profile(FirmwareMode::HleBiosAbi, flash); });
     require(error.find("Arbeitskopie") != std::string::npos,
-            "Veraenderliche Flash-Nutzung ohne kontrollierte Arbeitskopie wurde akzeptiert.");
+            "Veraenderliche Flash-Nutzung ohne kontrollierte Arbeitskopie lieferte eine falsche "
+            "Diagnose: " +
+                error);
     flash.mutable_working_directory = root / "private" / "working";
     require_alpha_firmware_profile(FirmwareMode::HleBiosAbi, flash);
 

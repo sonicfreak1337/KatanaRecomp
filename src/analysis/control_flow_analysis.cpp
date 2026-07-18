@@ -74,6 +74,9 @@ bool add_resolution_seeds(std::map<std::uint32_t, SeedEvidence>& seeds,
                           const IndirectControlFlowResolution& resolution) {
     auto targets = resolution.targets;
     if (resolution.target.has_value()) targets.push_back(*resolution.target);
+    targets.insert(targets.end(),
+                   resolution.analysis_candidates.begin(),
+                   resolution.analysis_candidates.end());
     std::sort(targets.begin(), targets.end());
     targets.erase(std::unique(targets.begin(), targets.end()), targets.end());
     if (targets.empty()) return false;
@@ -149,7 +152,15 @@ void mark_resolved_table_dispatch(std::vector<IndirectControlFlowResolution>& re
                                         ? AnalysisEvidenceOrigin::UserOverride
                                         : AnalysisEvidenceOrigin::JumpTable};
     if (!table.resolved) {
-        resolution->reason = table.reason;
+        if (table.reason == "table-segment-writable") {
+            resolution->status = ResolutionStatus::Unresolved;
+            resolution->evidence = ControlFlowEvidence::RuntimeOnly;
+            resolution->target.reset();
+            resolution->targets.clear();
+            resolution->reason = "dynamic-writable-table";
+        } else {
+            resolution->reason = table.reason;
+        }
         return;
     }
     resolution->status = ResolutionStatus::Resolved;
@@ -252,10 +263,9 @@ BackwardSlice bounded_writer_slice(const std::span<const BasicBlock> blocks,
                  static_cast<std::uint16_t>(1u << register_index)) == 0u)
                 continue;
             writer_found = true;
-            if (line.instruction.destination_register == register_index &&
-                memory_load(line.instruction.kind))
-                result.writers.insert(line.address);
-            else
+            result.writers.insert(line.address);
+            if (line.instruction.destination_register != register_index ||
+                !memory_load(line.instruction.kind))
                 result.incomplete = true;
             break;
         }
@@ -278,9 +288,9 @@ void classify_dynamic_sites(const std::span<const katana::sh4::DisassemblyLine> 
                             std::vector<IndirectControlFlowResolution>& resolutions) {
     const auto blocks = build_basic_blocks(lines);
     for (auto& resolution : resolutions) {
-        if (resolution.origin_class == IndirectControlFlowOriginClass::Table ||
-            (resolution.status == ResolutionStatus::Resolved &&
-             control_flow_evidence_complete(resolution.evidence)))
+        if (resolution.origin_class != IndirectControlFlowOriginClass::Table &&
+            resolution.status == ResolutionStatus::Resolved &&
+            control_flow_evidence_complete(resolution.evidence))
             continue;
         const auto dispatch = std::lower_bound(
             lines.begin(),
@@ -296,6 +306,9 @@ void classify_dynamic_sites(const std::span<const katana::sh4::DisassemblyLine> 
         }
         const auto slice =
             bounded_writer_slice(blocks, resolution.instruction_address, resolution.register_index);
+        resolution.definition_sites.assign(slice.writers.begin(), slice.writers.end());
+        resolution.definition_complete = !slice.incomplete && !slice.writers.empty();
+        resolution.preceding_call = slice.preceding_call;
         const katana::sh4::DisassemblyLine* writer = nullptr;
         if (slice.writers.size() == 1u && !slice.incomplete) {
             const auto found_writer = std::lower_bound(
@@ -306,6 +319,7 @@ void classify_dynamic_sites(const std::span<const katana::sh4::DisassemblyLine> 
             if (found_writer != lines.end() && found_writer->address == *slice.writers.begin())
                 writer = &*found_writer;
         }
+        if (resolution.origin_class == IndirectControlFlowOriginClass::Table) continue;
         bool vtable_base = false;
         bool stack_base = false;
         bool object_field = false;
@@ -352,7 +366,8 @@ void classify_dynamic_sites(const std::span<const katana::sh4::DisassemblyLine> 
 
         if (resolution.status == ResolutionStatus::Unresolved &&
             resolution.evidence != ControlFlowEvidence::HintCandidate &&
-            resolution.origin_class != IndirectControlFlowOriginClass::RuntimePointer) {
+            resolution.evidence != ControlFlowEvidence::RuntimeOnly) {
+            bool runtime_contract = true;
             switch (resolution.origin_class) {
             case IndirectControlFlowOriginClass::Callback:
                 resolution.reason =
@@ -370,16 +385,54 @@ void classify_dynamic_sites(const std::span<const katana::sh4::DisassemblyLine> 
             case IndirectControlFlowOriginClass::UnboundedMemory:
                 resolution.reason = "dynamic-unbounded-memory";
                 break;
+            case IndirectControlFlowOriginClass::RuntimePointer:
+                resolution.reason = resolution.reason.empty()
+                                        ? "dynamic-runtime-pointer"
+                                        : "dynamic-runtime-pointer-" + resolution.reason;
+                break;
             case IndirectControlFlowOriginClass::NotApplicable:
             case IndirectControlFlowOriginClass::Table:
-            case IndirectControlFlowOriginClass::RuntimePointer:
+                runtime_contract = false;
                 break;
             }
-            resolution.evidence = ControlFlowEvidence::RuntimeOnly;
-            resolution.evidence_origins = {AnalysisEvidenceOrigin::RuntimeClassification};
+            if (runtime_contract) {
+                resolution.evidence = ControlFlowEvidence::RuntimeOnly;
+                resolution.evidence_origins = {AnalysisEvidenceOrigin::RuntimeClassification};
+            }
         } else if (resolution.evidence_origins.empty()) {
             resolution.evidence_origins = {AnalysisEvidenceOrigin::RuntimeClassification};
         }
+    }
+}
+
+void bind_partial_runtime_contracts(std::vector<IndirectControlFlowResolution>& resolutions) {
+    for (auto& resolution : resolutions) {
+        if (resolution.evidence != ControlFlowEvidence::GuardedPartial) continue;
+        const bool guarded_memory = resolution.reason == "guarded-function-memory";
+        const bool merged_contexts = resolution.reason == "merged-contexts-partial";
+        const bool writable_literal = resolution.reason == "guarded-writable-pc-relative-literal";
+        if (!guarded_memory && !merged_contexts && !writable_literal) continue;
+        if (resolution.target.has_value())
+            resolution.analysis_candidates.push_back(*resolution.target);
+        resolution.analysis_candidates.insert(resolution.analysis_candidates.end(),
+                                              resolution.targets.begin(),
+                                              resolution.targets.end());
+        std::sort(resolution.analysis_candidates.begin(), resolution.analysis_candidates.end());
+        resolution.analysis_candidates.erase(std::unique(resolution.analysis_candidates.begin(),
+                                                         resolution.analysis_candidates.end()),
+                                             resolution.analysis_candidates.end());
+        resolution.target.reset();
+        resolution.targets.clear();
+        resolution.status = ResolutionStatus::Unresolved;
+        resolution.evidence = ControlFlowEvidence::RuntimeOnly;
+        if (std::find(resolution.evidence_origins.begin(),
+                      resolution.evidence_origins.end(),
+                      AnalysisEvidenceOrigin::RuntimeClassification) ==
+            resolution.evidence_origins.end())
+            resolution.evidence_origins.push_back(AnalysisEvidenceOrigin::RuntimeClassification);
+        resolution.reason = guarded_memory    ? "runtime-contract-function-memory"
+                            : merged_contexts ? "runtime-contract-merged-contexts"
+                                              : "runtime-contract-writable-literal";
     }
 }
 
@@ -731,6 +784,9 @@ ControlFlowAnalysisResult analyze_control_flow(const katana::io::ExecutableImage
             if (resolution->status == ResolutionStatus::Resolved ||
                 resolution->evidence == ControlFlowEvidence::ForcedOverride)
                 continue;
+            if (control_flow_evidence_strength(proof.evidence) <
+                control_flow_evidence_strength(resolution->evidence))
+                continue;
             resolution->status =
                 proof.guarded ? ResolutionStatus::Guarded : ResolutionStatus::Resolved;
             resolution->evidence = proof.complete && !proof.guarded
@@ -746,6 +802,7 @@ ControlFlowAnalysisResult analyze_control_flow(const katana::io::ExecutableImage
             resolution->evidence_callees = std::move(proof.callees);
         }
         classify_dynamic_sites(analysis.recursive.instructions, analysis.indirect_control_flow);
+        bind_partial_runtime_contracts(analysis.indirect_control_flow);
         for (const auto& resolution : analysis.indirect_control_flow) {
             if (is_jump_table_dispatch(resolution.instruction_address)) continue;
             changed = add_resolution_seeds(seeds, resolution) || changed;
@@ -829,6 +886,7 @@ ControlFlowAnalysisResult analyze_control_flow(const katana::io::ExecutableImage
         }
     }
     classify_dynamic_sites(analysis.recursive.instructions, analysis.indirect_control_flow);
+    bind_partial_runtime_contracts(analysis.indirect_control_flow);
     analysis.resolved_edges =
         collect_resolved_edges(analysis.indirect_control_flow, analysis.jump_tables);
     analysis.sites.reserve(analysis.indirect_control_flow.size());

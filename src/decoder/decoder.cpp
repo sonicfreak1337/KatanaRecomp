@@ -335,6 +335,16 @@ DecodedInstruction decode(const std::uint16_t opcode) {
         return instruction;
     }
 
+    if (matches_metadata(opcode, InstructionKind::Ocbp) ||
+        matches_metadata(opcode, InstructionKind::Ocbwb)) {
+        instruction.kind = matches_metadata(opcode, InstructionKind::Ocbp) ? InstructionKind::Ocbp
+                                                                           : InstructionKind::Ocbwb;
+        instruction.source_register = static_cast<std::uint8_t>((opcode >> 8u) & 0x0Fu);
+        instruction.text = (instruction.kind == InstructionKind::Ocbp ? "ocbp @" : "ocbwb @") +
+                           register_name(instruction.source_register);
+        return instruction;
+    }
+
     if (matches_metadata(opcode, InstructionKind::TestAndSetByte)) {
         instruction.kind = InstructionKind::TestAndSetByte;
         instruction.source_register = static_cast<std::uint8_t>((opcode >> 8u) & 0x0Fu);

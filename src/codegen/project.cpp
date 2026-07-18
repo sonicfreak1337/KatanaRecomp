@@ -156,6 +156,10 @@ std::string cmake_project(const std::vector<std::filesystem::path>& sources) {
            << "if(KATANA_NINJA_STANDALONE)\n"
            << "  set_target_properties(katana_generated PROPERTIES\n"
            << "    ARCHIVE_OUTPUT_DIRECTORY \"${CMAKE_CURRENT_SOURCE_DIR}\"\n"
+           << "    ARCHIVE_OUTPUT_DIRECTORY_DEBUG \"${CMAKE_CURRENT_SOURCE_DIR}\"\n"
+           << "    ARCHIVE_OUTPUT_DIRECTORY_RELEASE \"${CMAKE_CURRENT_SOURCE_DIR}\"\n"
+           << "    ARCHIVE_OUTPUT_DIRECTORY_RELWITHDEBINFO \"${CMAKE_CURRENT_SOURCE_DIR}\"\n"
+           << "    ARCHIVE_OUTPUT_DIRECTORY_MINSIZEREL \"${CMAKE_CURRENT_SOURCE_DIR}\"\n"
            << "    PREFIX \"lib\"\n"
            << "    SUFFIX \".a\"\n"
            << "  )\n"
@@ -167,19 +171,18 @@ std::string ninja_project(const std::vector<std::filesystem::path>& sources) {
     std::ostringstream output;
     output << "ninja_required_version = 1.10\n"
            << "rule configure\n"
-           << "  command = cmake -S . -B .ninja-build -G Ninja "
-              "-DKATANA_NINJA_STANDALONE=ON\n"
+           << "  command = cmake -S . -B .ninja-build -DKATANA_NINJA_STANDALONE=ON\n"
            << "  description = Configure Katana generated archive\n"
            << "  generator = 1\n"
            << "rule archive\n"
            << "  command = cmake --build .ninja-build --target katana_generated\n"
            << "  description = Build Katana generated archive\n"
-           << "build .ninja-build/build.ninja: configure CMakeLists.txt\n"
+           << "build .ninja-build/CMakeCache.txt: configure CMakeLists.txt\n"
            << "build force: phony\n"
            << "build libkatana_generated.a: archive force";
     for (const auto& source : sources)
         output << ' ' << source.generic_string();
-    output << " | .ninja-build/build.ninja\ndefault libkatana_generated.a\n";
+    output << " | .ninja-build/CMakeCache.txt\ndefault libkatana_generated.a\n";
     return output.str();
 }
 

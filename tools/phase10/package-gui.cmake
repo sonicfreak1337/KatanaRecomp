@@ -51,10 +51,12 @@ file(MAKE_DIRECTORY
 file(COPY "${cli}" "${gui}" DESTINATION "${output_root}")
 if(WIN32)
     file(COPY "${dialog}" DESTINATION "${output_root}")
-    if(NOT DEFINED ASAN_RUNTIME OR NOT EXISTS "${ASAN_RUNTIME}")
-        message(FATAL_ERROR "Windows internal Debug package requires ASAN_RUNTIME")
+    if(DEFINED ASAN_RUNTIME AND NOT "${ASAN_RUNTIME}" STREQUAL "")
+        if(NOT EXISTS "${ASAN_RUNTIME}")
+            message(FATAL_ERROR "Configured ASAN runtime does not exist")
+        endif()
+        file(COPY "${ASAN_RUNTIME}" DESTINATION "${output_root}")
     endif()
-    file(COPY "${ASAN_RUNTIME}" DESTINATION "${output_root}")
 endif()
 file(COPY "${logo}" "${icon}" "${asset_manifest}" DESTINATION "${output_root}/assets")
 file(COPY "${source_root}/include/katana/runtime" DESTINATION
@@ -150,7 +152,9 @@ if(NOT relocated_build_result EQUAL 0 OR
         "Relocated package full GDI build failed: ${relocated_build_output} ${relocated_build_error}")
 endif()
 execute_process(
-    COMMAND "${relocated_root}/workflow-output/game${executable_suffix}"
+    COMMAND "${CMAKE_COMMAND}" -E env
+            "KATANA_USER_DATA_ROOT=${relocated_root}/user-data"
+            "${relocated_root}/workflow-output/game${executable_suffix}"
             "${relocated_root}/fixture/disc.gdi"
     RESULT_VARIABLE relocated_game_result
     OUTPUT_VARIABLE relocated_game_output
@@ -185,7 +189,10 @@ file(GLOB_RECURSE runtime_entries
 )
 list(APPEND entries ${runtime_entries})
 if(WIN32)
-    list(APPEND entries "katana-file-dialog.exe" "clang_rt.asan_dynamic-x86_64.dll")
+    list(APPEND entries "katana-file-dialog.exe")
+    if(DEFINED ASAN_RUNTIME AND NOT "${ASAN_RUNTIME}" STREQUAL "")
+        list(APPEND entries "clang_rt.asan_dynamic-x86_64.dll")
+    endif()
 endif()
 set(manifest "{\n  \"schema\": \"katana-phase10-internal-package\",\n  \"version\": 1,\n  \"release\": false,\n  \"files\": [\n")
 list(LENGTH entries entry_count)

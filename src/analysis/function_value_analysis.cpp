@@ -512,6 +512,8 @@ void apply_transfer(AbstractState& state,
     const auto& instruction = line.instruction;
     switch (instruction.kind) {
     case katana::sh4::InstructionKind::Nop:
+    case katana::sh4::InstructionKind::Ocbp:
+    case katana::sh4::InstructionKind::Ocbwb:
     case katana::sh4::InstructionKind::Rts:
         return;
     case katana::sh4::InstructionKind::MovImmediate:
@@ -1356,22 +1358,11 @@ analyze_function_values(const katana::io::ExecutableImage& image,
             input != candidate_inputs.end())
             input->second.expected_call_sites.insert(line.address);
     }
-    std::map<std::uint32_t, bool> indirect_site_complete;
-    for (const auto& edge : resolved_edges) {
-        if (edge.kind != ResolvedControlFlowKind::Call) continue;
-        const auto evidence_complete = control_flow_evidence_complete(resolved_edge_evidence(edge));
-        const auto [site, inserted] =
-            indirect_site_complete.emplace(edge.instruction_address, evidence_complete);
-        if (!inserted) site->second = site->second && evidence_complete;
-    }
     for (const auto& edge : resolved_edges) {
         if (edge.kind != ResolvedControlFlowKind::Call) continue;
         const auto input = candidate_inputs.find(edge.target_address);
         if (input == candidate_inputs.end()) continue;
-        if (indirect_site_complete[edge.instruction_address])
-            input->second.expected_call_sites.insert(edge.instruction_address);
-        else
-            input->second.unknown_ingress = true;
+        input->second.expected_call_sites.insert(edge.instruction_address);
     }
     for (auto& [address, input] : candidate_inputs) {
         input.state.stack_offsets[15u] = 0;

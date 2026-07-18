@@ -885,6 +885,11 @@ target_link_libraries(katana-host-runtime-tests PRIVATE katana_runtime)
 katana_enable_warnings(katana-host-runtime-tests)
 add_test(NAME katana-host-runtime-tests COMMAND katana-host-runtime-tests)
 
+add_executable(katana-persistent-storage-tests tests/runtime/persistent_storage_tests.cpp)
+target_link_libraries(katana-persistent-storage-tests PRIVATE katana_runtime)
+katana_enable_warnings(katana-persistent-storage-tests)
+add_test(NAME katana-persistent-storage-tests COMMAND katana-persistent-storage-tests)
+
 add_executable(katana-pvr-ta-tests tests/runtime/pvr_ta_tests.cpp)
 target_link_libraries(katana-pvr-ta-tests PRIVATE katana_runtime)
 katana_enable_warnings(katana-pvr-ta-tests)
@@ -3627,6 +3632,8 @@ add_test(
         -DKATANA_BUILD_DIR=${CMAKE_BINARY_DIR}
         -DKATANA_SOURCE_DIR=${CMAKE_SOURCE_DIR}
         -DKATANA_GENERATOR=${CMAKE_GENERATOR}
+        -DKATANA_MAKE_PROGRAM=${CMAKE_MAKE_PROGRAM}
+        -DKATANA_CXX_COMPILER=${CMAKE_CXX_COMPILER}
         -DKATANA_CONFIG=$<CONFIG>
         -DKATANA_EXPECTED_VERSION=${PROJECT_VERSION}
         -DKATANA_EXPECTED_RUNTIME_ABI=${KATANA_RUNTIME_ABI_VERSION}

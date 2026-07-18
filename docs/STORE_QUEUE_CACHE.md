@@ -31,9 +31,14 @@ Tags, Valid-, Dirty- und Write-back-Zustand. Deshalb gilt:
   generierten Code-Tracker.
 - MOVCA.L schreibt das Longword ueber den normalen Speicherpfad und meldet eine
   tatsaechliche Codeinvalidierung nur bei einem ueberdeckten Block.
-- OCBI, OCBP und OCBWB werden sichtbar als nicht modelliert abgelehnt. Ein
-  stiller No-op duerfte faelschlich Cachemiss, saubere Zeile oder erfolgreichen
-  Write-back behaupten.
+- OCBI wird ohne Cachetagmodell weiterhin sichtbar als nicht modelliert
+  abgelehnt.
+- OCBP und OCBWB laufen ueber einen expliziten kohaerenten
+  Operand-Cache-Vertrag. Da der Referenzpfad Stores direkt ueber `Memory`
+  sichtbar macht und keine verborgenen Dirty-Lines besitzt, melden beide
+  Operationen deterministisch `dirty_line_present=false` und
+  `wrote_memory=false`. Das ist ein versionierbarer Cachevertrag und kein
+  fehlender Backendpfad; ein spaeteres Cachemodell kann ihn ersetzen.
 - Der explizit aktivierte Operand-Cache-RAM-Modus besitzt Byte-, Word- und
   Longwordzugriffe mit Little-Endian-, Ausrichtungs- und Grenzvertrag. Ein
   Profil ohne dieses Modell lehnt die Aktivierung ab.
@@ -54,8 +59,9 @@ und ausgefuehrt.
 5. ICBI prueft nicht ausgerichtete Eingaben gegen dieselbe 32-Byte-Codezeile;
    MOVCA.L prueft Speicherbytes und nur tatsaechliche Ueberdeckung als
    Invalidierung.
-6. OCBI, OCBP und OCBWB muessen ohne Cachetag-/Dirty-Modell stabil und sichtbar
-   fehlschlagen.
+6. OCBI muss ohne Cachetag-/Dirty-Modell stabil und sichtbar fehlschlagen;
+   OCBP und OCBWB muessen Decoder, IR, Backend und den expliziten kohaerenten
+   Runtimevertrag erreichen, ohne Dirty-Lines oder Writes zu erfinden.
 7. Operand-Cache-RAM prueft alle drei Breiten, beide Enden des 8-KiB-Bereichs,
    Fehlausrichtung, Ueberlauf und deaktivierte Profile.
 

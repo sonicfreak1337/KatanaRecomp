@@ -197,6 +197,22 @@ int main() {
     require(hinted_jump_ir.size() == 1u &&
                 hinted_jump_ir.front().blocks.front().has_indirect_successor,
             "Hint erzeugt eine harte Funktionsgrenze oder entfernt den Runtime-Default.");
+    const auto hinted_detail = katana::analysis::format_control_flow_analysis_json(hinted_jump);
+    const auto hinted_frontier = katana::analysis::format_control_flow_frontier_json(hinted_jump);
+    const auto hinted_summary = katana::analysis::summarize_control_flow_analysis(hinted_jump);
+    require(hinted_summary.indirect_total == 1u && hinted_summary.guarded_partial == 1u &&
+                hinted_summary.unresolved == 0u &&
+                hinted_summary.resolved + hinted_summary.guarded_complete +
+                        hinted_summary.guarded_partial + hinted_summary.runtime_only +
+                        hinted_summary.unresolved ==
+                    hinted_summary.indirect_total &&
+                hinted_detail.find("\"status\":\"guarded_partial\"") != std::string::npos &&
+                hinted_detail.find("\"evidence\":\"hint-candidate\"") != std::string::npos &&
+                hinted_detail.find("\"targets\":[\"0x00000008\"]") != std::string::npos &&
+                hinted_frontier.find("\"guarded_partial\":1") != std::string::npos &&
+                hinted_frontier.find("0x00000008") == std::string::npos &&
+                hinted_frontier.find("jump-hint.txt") == std::string::npos,
+            "Validierter Hint verletzt Detail-, Aggregat- oder Summenvertrag.");
 
     katana::analysis::AnalysisOverrides jump_override;
     jump_override.source_path = "override-test.txt";
@@ -302,6 +318,62 @@ int main() {
                 partial_table.indirect_control_flow[0].evidence_origins ==
                     std::vector{katana::analysis::AnalysisEvidenceOrigin::UserOverride},
             "Teilweise ungueltige Jump Table speiste sichere Teilziele in die Worklist.");
+
+    katana::io::ExecutableImage writable_table_image;
+    writable_table_image.add_segment({".text",
+                                      0u,
+                                      0u,
+                                      16u,
+                                      katana::io::SegmentKind::Code,
+                                      {true, false, true},
+                                      {0x2Bu,
+                                       0x41u,
+                                       0x09u,
+                                       0x00u,
+                                       0x09u,
+                                       0x00u,
+                                       0x09u,
+                                       0x00u,
+                                       0x0Bu,
+                                       0x00u,
+                                       0x09u,
+                                       0x00u,
+                                       0x0Bu,
+                                       0x00u,
+                                       0x09u,
+                                       0x00u}});
+    writable_table_image.add_segment({".ram-table",
+                                      0x100u,
+                                      16u,
+                                      8u,
+                                      katana::io::SegmentKind::Data,
+                                      {true, true, false},
+                                      {0x08u, 0x00u, 0x00u, 0x00u, 0x0Cu, 0x00u, 0x00u, 0x00u}});
+    writable_table_image.add_entry_point(0u);
+    const auto writable_table =
+        katana::analysis::analyze_control_flow(writable_table_image, &table_override);
+    require(
+        writable_table.indirect_control_flow.size() == 1u &&
+            writable_table.indirect_control_flow[0].origin_class ==
+                katana::analysis::IndirectControlFlowOriginClass::Table &&
+            writable_table.indirect_control_flow[0].evidence ==
+                katana::analysis::ControlFlowEvidence::RuntimeOnly &&
+            writable_table.indirect_control_flow[0].reason == "dynamic-writable-table" &&
+            writable_table.indirect_control_flow[0].targets.empty() &&
+            katana::analysis::control_flow_report_status(writable_table.indirect_control_flow[0]) ==
+                katana::analysis::ControlFlowReportStatus::RuntimeOnly,
+        "Beschreibbare Jump Table wurde eingefroren oder blieb ohne sicheren Runtimevertrag.");
+    const auto writable_table_ir = katana::ir::lower_program(writable_table);
+    require(
+        writable_table_ir.size() == 1u &&
+            writable_table_ir.front().blocks.front().instructions.front().dynamic_target_class ==
+                katana::ir::DynamicTargetClass::RuntimeOnly &&
+            writable_table_ir.front()
+                .blocks.front()
+                .instructions.front()
+                .resolved_targets.empty() &&
+            katana::ir::verify_program(writable_table_ir).empty(),
+        "Beschreibbare Jump Table erreicht nicht kandidatenfrei den Runtime-only-Dispatcher.");
 
     auto table_call_image = code_image({0x0Bu, 0x41u, 0x09u, 0x00u, 0x0Bu, 0x00u, 0x09u, 0x00u,
                                         0x09u, 0x00u, 0x09u, 0x00u, 0x0Bu, 0x00u, 0x09u, 0x00u,

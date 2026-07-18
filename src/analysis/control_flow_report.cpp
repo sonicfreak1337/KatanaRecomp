@@ -1,5 +1,8 @@
 #include "katana/analysis/control_flow_report.hpp"
+
+#include "katana/analysis/function_analysis.hpp"
 #include "katana/io/json_report.hpp"
+#include "katana/sh4/instruction_metadata.hpp"
 
 #include <algorithm>
 #include <iomanip>
@@ -409,15 +412,74 @@ std::string format_control_flow_analysis_json(const ControlFlowAnalysisResult& a
         }
         return left.kind < right.kind;
     });
+    std::vector<std::uint32_t> function_entries;
+    function_entries.reserve(analysis.recursive.functions.size());
+    for (const auto& function : analysis.recursive.functions)
+        function_entries.push_back(function.address);
+    std::sort(function_entries.begin(), function_entries.end());
+    function_entries.erase(std::unique(function_entries.begin(), function_entries.end()),
+                           function_entries.end());
+    const auto discovered_functions = discover_functions(
+        analysis.recursive.instructions, function_entries, analysis.resolved_edges);
+    const auto basic_blocks = build_basic_blocks(analysis.recursive.instructions);
     output << ",\"indirect_control_flow\":[";
     for (std::size_t index = 0u; index < indirect.size(); ++index) {
         if (index != 0u) output << ',';
         const auto& value = indirect[index];
+        const auto* instruction_metadata = katana::sh4::metadata_for_kind(value.instruction_kind);
+        std::optional<std::uint32_t> dispatch_block;
+        for (const auto& block : basic_blocks) {
+            if (std::any_of(block.lines.begin(), block.lines.end(), [&](const auto& line) {
+                    return line.address == value.instruction_address;
+                })) {
+                dispatch_block = block.start_address;
+                break;
+            }
+        }
+        std::vector<std::uint32_t> owner_functions;
+        if (dispatch_block.has_value()) {
+            for (const auto& function : discovered_functions) {
+                if (std::find(function.block_addresses.begin(),
+                              function.block_addresses.end(),
+                              *dispatch_block) != function.block_addresses.end())
+                    owner_functions.push_back(function.entry_address);
+            }
+        }
+        std::sort(owner_functions.begin(), owner_functions.end());
+        owner_functions.erase(std::unique(owner_functions.begin(), owner_functions.end()),
+                              owner_functions.end());
+        std::vector<std::uint32_t> incoming_callers;
+        for (const auto& function : discovered_functions) {
+            if (std::any_of(owner_functions.begin(), owner_functions.end(), [&](const auto owner) {
+                    return std::find(function.direct_callees.begin(),
+                                     function.direct_callees.end(),
+                                     owner) != function.direct_callees.end();
+                }))
+                incoming_callers.push_back(function.entry_address);
+        }
+        std::sort(incoming_callers.begin(), incoming_callers.end());
+        incoming_callers.erase(std::unique(incoming_callers.begin(), incoming_callers.end()),
+                               incoming_callers.end());
+        std::vector<std::uint32_t> incoming_indirect_call_sites;
+        for (const auto& edge : analysis.resolved_edges) {
+            if (edge.kind != ResolvedControlFlowKind::Call ||
+                std::find(owner_functions.begin(), owner_functions.end(), edge.target_address) ==
+                    owner_functions.end())
+                continue;
+            incoming_indirect_call_sites.push_back(edge.instruction_address);
+        }
+        std::sort(incoming_indirect_call_sites.begin(), incoming_indirect_call_sites.end());
+        incoming_indirect_call_sites.erase(
+            std::unique(incoming_indirect_call_sites.begin(), incoming_indirect_call_sites.end()),
+            incoming_indirect_call_sites.end());
         output << "{\"instruction_address\":"
                << katana::io::quote_json(hex32(value.instruction_address));
         append_symbol_json(
             output, "instruction_symbol", analysis.symbolic_addresses, value.instruction_address);
-        output << ",\"kind\":" << katana::io::quote_json(kind_name(value.kind))
+        output << ",\"instruction_form\":"
+               << katana::io::quote_json(
+                      instruction_metadata != nullptr ? instruction_metadata->name : "Unknown")
+               << ",\"kind\":" << katana::io::quote_json(kind_name(value.kind))
                << ",\"register\":" << static_cast<unsigned>(value.register_index) << ",\"status\":"
                << katana::io::quote_json(
                       control_flow_report_status_name(control_flow_report_status(value)))
@@ -467,7 +529,71 @@ std::string format_control_flow_analysis_json(const ControlFlowAnalysisResult& a
             if (evidence != 0u) output << ',';
             output << katana::io::quote_json(hex32(value.evidence_callees[evidence]));
         }
-        output << "],\"reason\":" << katana::io::quote_json(value.reason) << '}';
+        output << "],\"owner_functions\":[";
+        for (std::size_t owner = 0u; owner < owner_functions.size(); ++owner) {
+            if (owner != 0u) output << ',';
+            output << katana::io::quote_json(hex32(owner_functions[owner]));
+        }
+        output << "],\"incoming_callers\":[";
+        for (std::size_t caller = 0u; caller < incoming_callers.size(); ++caller) {
+            if (caller != 0u) output << ',';
+            output << katana::io::quote_json(hex32(incoming_callers[caller]));
+        }
+        output << "],\"incoming_indirect_call_sites\":[";
+        for (std::size_t call_site = 0u; call_site < incoming_indirect_call_sites.size();
+             ++call_site) {
+            if (call_site != 0u) output << ',';
+            output << katana::io::quote_json(hex32(incoming_indirect_call_sites[call_site]));
+        }
+        output << "],\"entry_context\":"
+               << (std::any_of(
+                       owner_functions.begin(),
+                       owner_functions.end(),
+                       [&](const auto owner) {
+                           const auto candidate = std::find_if(
+                               functions.begin(), functions.end(), [&](const auto& function) {
+                                   return function.address == owner;
+                               });
+                           return candidate != functions.end() &&
+                                  std::find(candidate->origins.begin(),
+                                            candidate->origins.end(),
+                                            FunctionOrigin::EntryPoint) != candidate->origins.end();
+                       })
+                       ? "true"
+                       : "false")
+               << ",\"value_source\":" << katana::io::quote_json(value.value_source)
+               << ",\"definition_sites\":[";
+        for (std::size_t definition = 0u; definition < value.definition_sites.size();
+             ++definition) {
+            if (definition != 0u) output << ',';
+            output << katana::io::quote_json(hex32(value.definition_sites[definition]));
+        }
+        output << "],\"definition_forms\":[";
+        for (std::size_t definition = 0u; definition < value.definition_sites.size();
+             ++definition) {
+            if (definition != 0u) output << ',';
+            const auto line =
+                std::lower_bound(analysis.recursive.instructions.begin(),
+                                 analysis.recursive.instructions.end(),
+                                 value.definition_sites[definition],
+                                 [](const auto& candidate, const std::uint32_t address) {
+                                     return candidate.address < address;
+                                 });
+            const auto* metadata = line != analysis.recursive.instructions.end() &&
+                                           line->address == value.definition_sites[definition]
+                                       ? katana::sh4::metadata_for_kind(line->instruction.kind)
+                                       : nullptr;
+            output << katana::io::quote_json(metadata != nullptr ? metadata->name : "Unknown");
+        }
+        output << "],\"analysis_candidates\":[";
+        for (std::size_t candidate = 0u; candidate < value.analysis_candidates.size();
+             ++candidate) {
+            if (candidate != 0u) output << ',';
+            output << katana::io::quote_json(hex32(value.analysis_candidates[candidate]));
+        }
+        output << "],\"definition_complete\":" << (value.definition_complete ? "true" : "false")
+               << ",\"preceding_call\":" << (value.preceding_call ? "true" : "false")
+               << ",\"reason\":" << katana::io::quote_json(value.reason) << '}';
     }
     output << ']';
 

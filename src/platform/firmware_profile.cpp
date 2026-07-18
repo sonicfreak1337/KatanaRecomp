@@ -142,11 +142,6 @@ const char* firmware_profile_status_name(const FirmwareProfileStatus status) noe
 
 void require_alpha_firmware_profile(const FirmwareMode mode,
                                     const AlphaFirmwareInputPolicy& inputs) {
-    require_external_to_port(inputs.port_output_directory, inputs.bios_source, "BIOS-Quelle");
-    require_external_to_port(inputs.port_output_directory, inputs.flash_source, "Flash-Quelle");
-    require_external_to_port(
-        inputs.port_output_directory, inputs.mutable_working_directory, "Firmware-Arbeitskopie");
-
     const auto& contract = alpha_firmware_contract(mode);
     if (!contract.accepts_bios_source && inputs.bios_source) {
         throw std::invalid_argument("Firmwareprofil '" + std::string(contract.id) +
@@ -165,6 +160,12 @@ void require_alpha_firmware_profile(const FirmwareMode mode,
         throw std::invalid_argument(
             "Eine lokale Flash-Quelle braucht eine getrennte kontrollierte Arbeitskopie.");
     }
+
+    require_external_to_port(inputs.port_output_directory, inputs.bios_source, "BIOS-Quelle");
+    require_external_to_port(inputs.port_output_directory, inputs.flash_source, "Flash-Quelle");
+    require_external_to_port(
+        inputs.port_output_directory, inputs.mutable_working_directory, "Firmware-Arbeitskopie");
+
     if (contract.status != FirmwareProfileStatus::Available) {
         throw std::invalid_argument("Firmwareprofil '" + std::string(contract.id) + "' ist " +
                                     firmware_profile_status_name(contract.status) + ": " +

@@ -45,6 +45,15 @@ enum class ExceptionCause : std::uint8_t {
     Interrupt
 };
 
+enum class OperandCacheOperation : std::uint8_t { Purge, WriteBack };
+
+struct OperandCacheMaintenanceResult {
+    OperandCacheOperation operation = OperandCacheOperation::Purge;
+    std::uint32_t address = 0u;
+    bool dirty_line_present = false;
+    bool wrote_memory = false;
+};
+
 struct ResetState {
     std::uint32_t program_counter = 0u;
     std::uint32_t stack_pointer = 0u;
@@ -108,6 +117,12 @@ struct CpuState {
 void reset_cpu(CpuState& cpu, const ResetState& state = ResetState{}) noexcept;
 
 void prefetch(CpuState& cpu, std::uint32_t address) noexcept;
+
+// The reference runtime exposes stores directly through Memory and therefore has no hidden dirty
+// operand-cache line. OCBP/OCBWB still pass through this explicit contract so a future cache model
+// can replace it without treating either instruction as an unknown or silent backend omission.
+[[nodiscard]] OperandCacheMaintenanceResult
+maintain_coherent_operand_cache(OperandCacheOperation operation, std::uint32_t address) noexcept;
 
 [[noreturn]] void unresolved_call(CpuState& cpu, std::uint32_t target);
 [[noreturn]] void unresolved_jump(CpuState& cpu, std::uint32_t target);

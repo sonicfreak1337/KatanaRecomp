@@ -2,6 +2,9 @@
 #include "katana/codegen/backend.hpp"
 #include "katana/codegen/cpp_emitter.hpp"
 #include "katana/ir/lower.hpp"
+#include "katana/ir/serialize.hpp"
+#include "katana/ir/verifier.hpp"
+#include "katana/runtime/abi.hpp"
 #include "katana/sh4/disassembler.hpp"
 
 #include <array>
@@ -67,7 +70,8 @@ int main() {
     require(source.find("struct CpuState") == std::string::npos &&
                 source.find("class Memory") == std::string::npos,
             "Der generierte Code enthaelt weiterhin eine Runtime-Implementierung.");
-    require(source.find("required_runtime_abi = 11u") != std::string::npos,
+    require(source.find("required_runtime_abi = " + std::to_string(katana::runtime::abi_version) +
+                        "u") != std::string::npos,
             "Der generierte Code prueft die Runtime-ABI nicht.");
     require(source.find("base_guest_cycles_per_instruction * 2u") != std::string::npos,
             "Owner und Delay Slot werden nicht als zwei Gastinstruktionen berechnet.");
@@ -219,6 +223,56 @@ int main() {
                     std::string::npos,
             "Aufgeloestes indirektes JSR wird nicht als nativer Funktionsdispatch generiert.");
 
+    auto dynamic_program = indirect_call_program;
+    const auto make_dynamic =
+        [](auto& candidate,
+           const katana::ir::DynamicTargetClass target_class) -> katana::ir::Instruction* {
+        for (auto& function : candidate)
+            for (auto& block : function.blocks) {
+                for (auto& instruction : block.instructions)
+                    if (instruction.source_address == 2u) {
+                        instruction.resolved_targets.clear();
+                        instruction.dynamic_target_class = target_class;
+                        block.has_indirect_successor = true;
+                        function.direct_callees.erase(std::remove(function.direct_callees.begin(),
+                                                                  function.direct_callees.end(),
+                                                                  12u),
+                                                      function.direct_callees.end());
+                        return &instruction;
+                    }
+            }
+        return nullptr;
+    };
+    auto* dynamic_call = make_dynamic(dynamic_program, katana::ir::DynamicTargetClass::RuntimeOnly);
+    if (dynamic_call == nullptr) {
+        std::cerr << "TEST FEHLGESCHLAGEN: Indirekte IR-Testcallsite fehlt.\n";
+        return EXIT_FAILURE;
+    }
+    const auto runtime_only_source = katana::codegen::emit_cpp_program(dynamic_program, 0u);
+    const auto runtime_only_text = katana::ir::emit_ir_text(dynamic_program);
+    const auto runtime_only_json = katana::ir::emit_ir_json(dynamic_program);
+    require(runtime_only_source.find("runtime_only_call(cpu, call_target)") != std::string::npos &&
+                runtime_only_text.find("dynamic_target_class=runtime-only") != std::string::npos &&
+                runtime_only_json.find("\"dynamic_target_class\":\"runtime-only\"") !=
+                    std::string::npos,
+            "Runtime-only-Klasse erreicht IR-Text, JSON oder validierenden Dispatcher nicht.");
+    auto unresolved_program = dynamic_program;
+    static_cast<void>(make_dynamic(unresolved_program, katana::ir::DynamicTargetClass::Unresolved));
+    const auto unresolved_source = katana::codegen::emit_cpp_program(unresolved_program, 0u);
+    require(unresolved_source.find("unresolved_call(cpu, call_target)") != std::string::npos &&
+                unresolved_source.find("runtime_only_call(cpu, call_target)") == std::string::npos,
+            "Unresolved-IR erhaelt einen Runtime-only- oder stillen Fallback.");
+    auto invalid_runtime_only = dynamic_program;
+    auto* invalid_call =
+        make_dynamic(invalid_runtime_only, katana::ir::DynamicTargetClass::RuntimeOnly);
+    if (invalid_call == nullptr) {
+        std::cerr << "TEST FEHLGESCHLAGEN: Runtime-only-IR-Testcallsite fehlt.\n";
+        return EXIT_FAILURE;
+    }
+    invalid_call->resolved_targets = {12u};
+    require(!katana::ir::verify_program(invalid_runtime_only).empty(),
+            "Runtime-only-IR akzeptiert geratene statische Zielkandidaten.");
+
     constexpr std::array<std::uint8_t, 10> delay_memory_bytes = {
         0x01u,
         0xA0u, // BRA +1
@@ -262,6 +316,23 @@ int main() {
     require(timing_source.find("base_guest_cycles_per_instruction * 2u") != std::string::npos &&
                 timing_source.find("base_guest_cycles_per_instruction * 3u") == std::string::npos,
             "Zwei Gastinstruktionen werden nicht als genau zwei Zyklen gezaehlt.");
+
+    require(katana::ir::lowering_operation_for_instruction(katana::sh4::InstructionKind::Ocbp) ==
+                    katana::ir::Operation::Ocbp &&
+                katana::ir::lowering_operation_for_instruction(
+                    katana::sh4::InstructionKind::Ocbwb) == katana::ir::Operation::Ocbwb,
+            "OCBP/OCBWB werden nicht in eigenstaendige IR-Operationen abgesenkt.");
+    constexpr std::array<std::uint8_t, 8> cache_bytes = {
+        0xA3u, 0x05u, 0xB3u, 0x0Cu, 0x0Bu, 0x00u, 0x09u, 0x00u};
+    const auto cache_lines = katana::sh4::disassemble(cache_bytes, 0x4000u);
+    constexpr std::array<std::uint32_t, 1> cache_seeds = {0x4000u};
+    const auto cache_functions = katana::analysis::discover_functions(cache_lines, cache_seeds);
+    const auto cache_program = katana::ir::lower_program(cache_lines, cache_functions);
+    const auto cache_source = katana::codegen::emit_cpp_program(cache_program, 0x4000u);
+    require(cache_source.find("OperandCacheOperation::Purge, cpu.r[5]") != std::string::npos &&
+                cache_source.find("OperandCacheOperation::WriteBack, cpu.r[12]") !=
+                    std::string::npos,
+            "Der C++-Emitter laesst OCBP/OCBWB aus oder verwechselt das Adressregister.");
 
     std::cout << "Alle C++-Codegenerator-Tests erfolgreich.\n";
 
