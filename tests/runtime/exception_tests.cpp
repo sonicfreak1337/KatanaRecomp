@@ -159,7 +159,7 @@ int main() {
                                0xDEADBEEFu,
                                MemoryAccessWidth::Halfword);
     enter_memory_exception(cpu, unmapped, 0x8C030000u);
-    require(cpu.last_exception_cause == ExceptionCause::BusErrorWrite &&
+    require(cpu.last_exception_cause == ExceptionCause::AddressErrorWrite &&
                 cpu.expevt == event_address_error_write && cpu.tea == 0xDEADBEEFu &&
                 cpu.spc == 0x8C030000u && !cpu.exception_in_delay_slot,
             "Busfehler wird nicht strukturiert in den Exception-Pfad ueberfuehrt.");

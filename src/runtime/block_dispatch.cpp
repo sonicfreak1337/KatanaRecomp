@@ -62,13 +62,14 @@ CanonicalBlockDispatcher::dispatch(CpuState& cpu,
                           : end.kind == BlockEndKind::Return ? IndirectDispatchKind::Return
                                                              : IndirectDispatchKind::TailJump;
         const auto callsite = end.callsite.value_or(end.source.virtual_address);
+        const auto return_address = end.kind == BlockEndKind::Call ? callsite + 4u : cpu.pr;
         const auto result = dispatch_indirect(
             cpu,
             table_,
             {kind,
              callsite,
              end.kind == BlockEndKind::ExceptionReturn ? cpu.pc : dynamic_target.value_or(0u),
-             cpu.pr,
+             return_address,
              end.source,
              variant,
              DispatchResolutionOrigin::TableLookup,

@@ -48,7 +48,7 @@ int main() {
     invalid.memory.write_u8(0x104u, 0xF0u);
     katana_generated::run(invalid);
     require(invalid.trap_pending &&
-                invalid.last_exception_cause == katana::runtime::ExceptionCause::BusErrorRead &&
+                invalid.last_exception_cause == katana::runtime::ExceptionCause::AddressErrorRead &&
                 invalid.tea == 0x00100000u,
             "TAS.B-Fehlerpfad meldet keinen strukturierten Speicherfehler.");
 

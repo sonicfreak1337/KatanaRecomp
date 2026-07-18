@@ -94,7 +94,7 @@ void run_invalid_access_case() {
     katana_generated::run(cpu);
 
     require(cpu.trap_pending &&
-                cpu.last_exception_cause == katana::runtime::ExceptionCause::BusErrorWrite &&
+                cpu.last_exception_cause == katana::runtime::ExceptionCause::AddressErrorWrite &&
                 cpu.tea == runtime_memory_size + 7u && cpu.spc == 0x8C010000u,
             "Ungueltiges Displacement erzeugt keine strukturierte Bus-Exception.");
     katana::runtime::return_from_exception(cpu);

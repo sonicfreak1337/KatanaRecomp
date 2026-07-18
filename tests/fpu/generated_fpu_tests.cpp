@@ -355,7 +355,7 @@ int main() {
         cpu.fr[5] = 0xBBBBBBBBu;
         cpu.pc = 0x14Cu;
         katana_generated::fn_0000014C(cpu);
-        require(cpu.last_exception_cause == katana::runtime::ExceptionCause::BusErrorRead &&
+        require(cpu.last_exception_cause == katana::runtime::ExceptionCause::AddressErrorRead &&
                     cpu.spc == 0x14Cu && cpu.r_bank[4] == 0x101Cu && cpu.fr[4] == 0xAAAAAAAAu &&
                     cpu.fr[5] == 0xBBBBBBBBu,
                 "Fehlgeschlagenes 64-Bit-FMOV an der Speichergrenze hinterlaesst Teilzustand.");

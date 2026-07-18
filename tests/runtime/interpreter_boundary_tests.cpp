@@ -72,7 +72,7 @@ int main() {
         const auto fault =
             boundary.execute(cpu, {"memory-fault", 0x8C002002u, 2u, 0x8C002004u, 1u, 0x8C002000u});
         require(
-            fault.exception && cpu.last_exception_cause == ExceptionCause::BusErrorRead &&
+            fault.exception && cpu.last_exception_cause == ExceptionCause::AddressErrorRead &&
                 cpu.spc == 0x8C002000u && cpu.expevt == event_address_error_read,
             "Fallback-Speicherfehler besitzt nicht Ursache und Owner-PC des generierten Pfads.");
 

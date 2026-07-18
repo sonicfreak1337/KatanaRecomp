@@ -94,7 +94,7 @@ void run_invalid_access_case() {
     katana_generated::fn_8C010030(cpu);
 
     require(cpu.trap_pending &&
-                cpu.last_exception_cause == katana::runtime::ExceptionCause::BusErrorWrite &&
+                cpu.last_exception_cause == katana::runtime::ExceptionCause::AddressErrorWrite &&
                 cpu.tea == runtime_memory_size + 127u && cpu.spc == 0x8C010030u,
             "Eine ungueltige GBR-Adresse erzeugt keine Bus-Exception.");
     katana::runtime::return_from_exception(cpu);

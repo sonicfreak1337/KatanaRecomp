@@ -20,7 +20,7 @@ void run_invalid_access_case() {
     cpu.pc = 0x00000200u;
     katana_generated::fn_00000200(cpu);
     require(cpu.trap_pending &&
-                cpu.last_exception_cause == katana::runtime::ExceptionCause::BusErrorRead &&
+                cpu.last_exception_cause == katana::runtime::ExceptionCause::AddressErrorRead &&
                 cpu.spc == 0x00000200u,
             "Ein PC-relativer Zugriff erzeugt keine strukturierte Bus-Exception.");
     katana::runtime::return_from_exception(cpu);

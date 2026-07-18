@@ -93,6 +93,10 @@ int main() {
         ExecutableCodeTracker direct_tracker;
         static_cast<void>(
             direct_tracker.register_block({"sq-code", 0x0C000040u, 32u, "generated", {}}));
+        memory.set_guest_write_observer([&](const auto& event) {
+            static_cast<void>(direct_tracker.observe_write(
+                event.address, event.size, event.source, event.bytes_changed));
+        });
         auto direct = std::make_unique<Sh4StoreQueues>(
             memory, StoreQueueSink{}, &direct_tracker, OperandCacheRamProfile::Modeled);
         direct->write_qacr(0u, 0x0Cu);
@@ -109,6 +113,10 @@ int main() {
         ExecutableCodeTracker movca_tracker;
         static_cast<void>(
             movca_tracker.register_block({"movca-code", 0x0C000040u, 4u, "generated", {}}));
+        memory.set_guest_write_observer([&](const auto& event) {
+            static_cast<void>(movca_tracker.observe_write(
+                event.address, event.size, event.source, event.bytes_changed));
+        });
         auto cache_ops = std::make_unique<Sh4StoreQueues>(
             memory, StoreQueueSink{}, &movca_tracker, OperandCacheRamProfile::Modeled);
         const auto movca =

@@ -79,8 +79,9 @@ void RuntimeBlockTable::seal_static() noexcept {
 }
 
 RuntimeBlockHandle RuntimeBlockTable::register_runtime(RuntimeBlock block) {
+    const auto handle = insert(std::move(block), true);
     static_sealed_ = true;
-    return insert(std::move(block), true);
+    return handle;
 }
 
 RuntimeBlockHandle RuntimeBlockTable::insert(RuntimeBlock block, const bool runtime_registered) {

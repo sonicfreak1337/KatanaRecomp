@@ -46,9 +46,9 @@ int main() {
 
     cpu.r[0] = 0x11111111u;
     cpu.r_bank[0] = 0x22222222u;
-    cpu.write_sr(0x20000303u);
+    cpu.write_sr(0x60000303u);
     require(cpu.r[0] == 0x22222222u && cpu.r_bank[0] == 0x11111111u && cpu.m && cpu.q && cpu.s &&
-                cpu.t && (cpu.read_sr() & 0x20000303u) == 0x20000303u,
+                cpu.t && (cpu.read_sr() & 0x60000303u) == 0x60000303u,
             "SR-Schreiben schaltet Flags oder Registerbank falsch.");
 
     cpu.write_sr(0u);

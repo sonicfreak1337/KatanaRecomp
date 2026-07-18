@@ -148,7 +148,8 @@ void run_invalid_access_cases() {
         katana_generated::fn_8C010030(cpu);
 
         require(cpu.trap_pending &&
-                    cpu.last_exception_cause == katana::runtime::ExceptionCause::BusErrorWrite &&
+                    cpu.last_exception_cause ==
+                        katana::runtime::ExceptionCause::AddressErrorWrite &&
                     cpu.expevt == katana::runtime::event_address_error_write &&
                     cpu.tea == 0xFFFFFFFFu && cpu.spc == 0x8C010030u,
                 "Pre-Decrement-Wraparound erzeugt keine strukturierte Bus-Exception.");
@@ -166,7 +167,7 @@ void run_invalid_access_cases() {
         katana_generated::fn_8C010048(cpu);
 
         require(cpu.trap_pending &&
-                    cpu.last_exception_cause == katana::runtime::ExceptionCause::BusErrorRead &&
+                    cpu.last_exception_cause == katana::runtime::ExceptionCause::AddressErrorRead &&
                     cpu.expevt == katana::runtime::event_address_error_read &&
                     cpu.tea == 1024u * 1024u && cpu.spc == 0x8C010048u,
                 "Post-Increment ausserhalb des Speichers erzeugt keine Bus-Exception.");

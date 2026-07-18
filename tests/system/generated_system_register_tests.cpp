@@ -110,7 +110,8 @@ void run_invalid_cases() {
         cpu.pc = 0x260u;
         katana_generated::fn_00000260(cpu);
         require(cpu.trap_pending &&
-                    cpu.last_exception_cause == katana::runtime::ExceptionCause::BusErrorWrite &&
+                    cpu.last_exception_cause ==
+                        katana::runtime::ExceptionCause::AddressErrorWrite &&
                     cpu.tea == 0xFFFFFFFCu && cpu.spc == 0x00000260u,
                 "Fehlgeschlagenes STS.L erzeugt keine Bus-Exception.");
         katana::runtime::return_from_exception(cpu);
@@ -123,7 +124,7 @@ void run_invalid_cases() {
         cpu.pc = 0x270u;
         katana_generated::fn_00000270(cpu);
         require(cpu.trap_pending &&
-                    cpu.last_exception_cause == katana::runtime::ExceptionCause::BusErrorRead &&
+                    cpu.last_exception_cause == katana::runtime::ExceptionCause::AddressErrorRead &&
                     cpu.tea == 1024u * 1024u - 2u && cpu.spc == 0x00000270u,
                 "Fehlgeschlagenes LDS.L erzeugt keine Bus-Exception.");
         katana::runtime::return_from_exception(cpu);
