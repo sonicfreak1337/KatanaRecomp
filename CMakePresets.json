@@ -1,18 +1,13 @@
 {
   "version": 6,
-  "cmakeMinimumRequired": {
-    "major": 3,
-    "minor": 25,
-    "patch": 0
-  },
+  "cmakeMinimumRequired": { "major": 3, "minor": 25, "patch": 0 },
   "configurePresets": [
     {
-      "name": "debug-gate",
-      "displayName": "KatanaRecomp local Debug gate",
+      "name": "core-base",
+      "hidden": true,
       "generator": "Ninja",
-      "binaryDir": "${sourceDir}/build-current",
       "cacheVariables": {
-        "CMAKE_BUILD_TYPE": "Debug",
+        "KATANA_BUILD_DESKTOP_GUI": "OFF",
         "KATANA_ENABLE_SANITIZERS": "OFF",
         "KATANA_BUILD_FUZZERS": "OFF",
         "KATANA_ENABLE_COVERAGE": "OFF",
@@ -21,146 +16,190 @@
       }
     },
     {
+      "name": "core-debug",
+      "displayName": "Core/CLI Debug (host compiler)",
+      "inherits": "core-base",
+      "binaryDir": "${sourceDir}/build-current",
+      "cacheVariables": { "CMAKE_BUILD_TYPE": "Debug" }
+    },
+    {
+      "name": "core-relwithdebinfo",
+      "displayName": "Core/CLI RelWithDebInfo (host compiler)",
+      "inherits": "core-base",
+      "binaryDir": "${sourceDir}/build-current",
+      "cacheVariables": { "CMAKE_BUILD_TYPE": "RelWithDebInfo" }
+    },
+    {
+      "name": "gcc-debug",
+      "displayName": "Core/CLI GCC Debug",
+      "inherits": "core-debug",
+      "binaryDir": "${sourceDir}/build-current",
+      "cacheVariables": { "CMAKE_CXX_COMPILER": "g++" }
+    },
+    {
+      "name": "gcc-relwithdebinfo",
+      "displayName": "Core/CLI GCC RelWithDebInfo",
+      "inherits": "core-relwithdebinfo",
+      "binaryDir": "${sourceDir}/build-current",
+      "cacheVariables": { "CMAKE_CXX_COMPILER": "g++" }
+    },
+    {
+      "name": "clang-debug",
+      "displayName": "Core/CLI Clang Debug",
+      "inherits": "core-debug",
+      "binaryDir": "${sourceDir}/build-current",
+      "cacheVariables": { "CMAKE_CXX_COMPILER": "clang++" }
+    },
+    {
+      "name": "clang-relwithdebinfo",
+      "displayName": "Core/CLI Clang RelWithDebInfo",
+      "inherits": "core-relwithdebinfo",
+      "binaryDir": "${sourceDir}/build-current",
+      "cacheVariables": { "CMAKE_CXX_COMPILER": "clang++" }
+    },
+    {
+      "name": "msvc-debug",
+      "displayName": "Core/CLI MSVC Debug",
+      "generator": "Visual Studio 17 2022",
+      "architecture": "x64",
+      "binaryDir": "${sourceDir}/build-current",
+      "cacheVariables": { "KATANA_BUILD_DESKTOP_GUI": "OFF" }
+    },
+    {
+      "name": "msvc-relwithdebinfo",
+      "displayName": "Core/CLI MSVC RelWithDebInfo",
+      "generator": "Visual Studio 17 2022",
+      "architecture": "x64",
+      "binaryDir": "${sourceDir}/build-current",
+      "cacheVariables": { "KATANA_BUILD_DESKTOP_GUI": "OFF" }
+    },
+    {
+      "name": "gui-debug",
+      "displayName": "Desktop GUI Debug (explicit opt-in)",
+      "inherits": "core-debug",
+      "binaryDir": "${sourceDir}/build-current",
+      "cacheVariables": { "KATANA_BUILD_DESKTOP_GUI": "ON" }
+    },
+    {
+      "name": "debug-gate",
+      "displayName": "KatanaRecomp local Debug gate",
+      "inherits": "core-base",
+      "binaryDir": "${sourceDir}/build-current",
+      "cacheVariables": { "CMAKE_BUILD_TYPE": "Debug" }
+    },
+    {
       "name": "sanitizer-debug",
       "displayName": "KatanaRecomp sanitizer Debug gate",
       "inherits": "debug-gate",
-      "cacheVariables": {
-        "KATANA_ENABLE_SANITIZERS": "ON"
-      }
+      "cacheVariables": { "KATANA_ENABLE_SANITIZERS": "ON" }
     },
     {
       "name": "fuzz-debug",
       "displayName": "KatanaRecomp deterministic fuzz Debug gate",
       "inherits": "sanitizer-debug",
-      "cacheVariables": {
-        "KATANA_BUILD_FUZZERS": "ON"
-      }
+      "cacheVariables": { "KATANA_BUILD_FUZZERS": "ON" }
     },
     {
       "name": "coverage-debug",
       "displayName": "KatanaRecomp source coverage Debug gate",
       "inherits": "fuzz-debug",
-      "cacheVariables": {
-        "KATANA_ENABLE_COVERAGE": "ON"
-      }
+      "cacheVariables": { "KATANA_ENABLE_COVERAGE": "ON" }
     },
     {
       "name": "quality-debug",
       "displayName": "KatanaRecomp format and static analysis Debug gate",
       "inherits": "coverage-debug",
-      "cacheVariables": {
-        "KATANA_ENABLE_STATIC_ANALYSIS": "ON"
-      }
+      "cacheVariables": { "KATANA_ENABLE_STATIC_ANALYSIS": "ON" }
     },
     {
       "name": "artifact-debug",
       "displayName": "KatanaRecomp reproducible pre-alpha artifact Debug gate",
       "inherits": "quality-debug",
-      "cacheVariables": {
-        "KATANA_REPRODUCIBLE_ARTIFACTS": "ON"
-      }
+      "cacheVariables": { "KATANA_REPRODUCIBLE_ARTIFACTS": "ON" }
     },
     {
       "name": "relwithdebinfo-gate",
       "displayName": "KatanaRecomp RelWithDebInfo correctness gate",
-      "generator": "Ninja",
+      "inherits": "core-base",
       "binaryDir": "${sourceDir}/build-current",
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "RelWithDebInfo",
-        "KATANA_ENABLE_SANITIZERS": "OFF",
-        "KATANA_BUILD_FUZZERS": "ON",
-        "KATANA_ENABLE_COVERAGE": "OFF",
-        "KATANA_ENABLE_STATIC_ANALYSIS": "OFF",
-        "KATANA_REPRODUCIBLE_ARTIFACTS": "OFF"
+        "KATANA_BUILD_FUZZERS": "ON"
       }
     }
   ],
   "buildPresets": [
-    {
-      "name": "debug-gate",
-      "configurePreset": "debug-gate"
-    },
-    {
-      "name": "sanitizer-debug",
-      "configurePreset": "sanitizer-debug"
-    },
-    {
-      "name": "fuzz-debug",
-      "configurePreset": "fuzz-debug"
-    },
-    {
-      "name": "coverage-debug",
-      "configurePreset": "coverage-debug"
-    },
-    {
-      "name": "quality-debug",
-      "configurePreset": "quality-debug"
-    },
-    {
-      "name": "artifact-debug",
-      "configurePreset": "artifact-debug"
-    },
-    {
-      "name": "relwithdebinfo-gate",
-      "configurePreset": "relwithdebinfo-gate"
-    }
+    { "name": "core-debug", "configurePreset": "core-debug" },
+    { "name": "core-relwithdebinfo", "configurePreset": "core-relwithdebinfo" },
+    { "name": "gcc-debug", "configurePreset": "gcc-debug" },
+    { "name": "gcc-relwithdebinfo", "configurePreset": "gcc-relwithdebinfo" },
+    { "name": "clang-debug", "configurePreset": "clang-debug" },
+    { "name": "clang-relwithdebinfo", "configurePreset": "clang-relwithdebinfo" },
+    { "name": "msvc-debug", "configurePreset": "msvc-debug", "configuration": "Debug" },
+    { "name": "msvc-relwithdebinfo", "configurePreset": "msvc-relwithdebinfo", "configuration": "RelWithDebInfo" },
+    { "name": "gui-debug", "configurePreset": "gui-debug" },
+    { "name": "debug-gate", "configurePreset": "debug-gate" },
+    { "name": "sanitizer-debug", "configurePreset": "sanitizer-debug" },
+    { "name": "fuzz-debug", "configurePreset": "fuzz-debug" },
+    { "name": "coverage-debug", "configurePreset": "coverage-debug" },
+    { "name": "quality-debug", "configurePreset": "quality-debug" },
+    { "name": "artifact-debug", "configurePreset": "artifact-debug" },
+    { "name": "relwithdebinfo-gate", "configurePreset": "relwithdebinfo-gate" }
   ],
   "testPresets": [
     {
       "name": "debug-gate",
       "configurePreset": "debug-gate",
-      "output": {
-        "outputOnFailure": true
-      },
-      "execution": {
-        "noTestsAction": "error",
-        "jobs": 8
-      }
+      "output": { "outputOnFailure": true },
+      "execution": { "noTestsAction": "error", "jobs": 8 }
     },
     {
       "name": "sanitizer-debug",
       "configurePreset": "sanitizer-debug",
-      "output": {
-        "outputOnFailure": true
-      },
-      "execution": {
-        "noTestsAction": "error"
-      },
+      "output": { "outputOnFailure": true },
+      "execution": { "noTestsAction": "error" },
       "environment": {
         "ASAN_OPTIONS": "halt_on_error=1",
         "UBSAN_OPTIONS": "halt_on_error=1:print_stacktrace=1"
       }
     },
-    {
-      "name": "fuzz-debug",
-      "inherits": "sanitizer-debug",
-      "configurePreset": "fuzz-debug"
-    },
-    {
-      "name": "coverage-debug",
-      "inherits": "fuzz-debug",
-      "configurePreset": "coverage-debug"
-    },
-    {
-      "name": "quality-debug",
-      "inherits": "coverage-debug",
-      "configurePreset": "quality-debug"
-    },
-    {
-      "name": "artifact-debug",
-      "inherits": "quality-debug",
-      "configurePreset": "artifact-debug"
-    },
+    { "name": "fuzz-debug", "inherits": "sanitizer-debug", "configurePreset": "fuzz-debug" },
+    { "name": "coverage-debug", "inherits": "fuzz-debug", "configurePreset": "coverage-debug" },
+    { "name": "quality-debug", "inherits": "coverage-debug", "configurePreset": "quality-debug" },
+    { "name": "artifact-debug", "inherits": "quality-debug", "configurePreset": "artifact-debug" },
     {
       "name": "relwithdebinfo-gate",
       "configurePreset": "relwithdebinfo-gate",
-      "output": {
-        "outputOnFailure": true
-      },
-      "execution": {
-        "noTestsAction": "error",
-        "jobs": 8
-      }
+      "output": { "outputOnFailure": true },
+      "execution": { "noTestsAction": "error", "jobs": 8 }
+    },
+    {
+      "name": "runtime-shard",
+      "configurePreset": "core-debug",
+      "filter": { "include": { "label": "runtime" } },
+      "output": { "outputOnFailure": true },
+      "execution": { "noTestsAction": "error", "jobs": 8 }
+    },
+    {
+      "name": "analysis-shard",
+      "configurePreset": "core-debug",
+      "filter": { "include": { "label": "analysis" } },
+      "output": { "outputOnFailure": true },
+      "execution": { "noTestsAction": "error", "jobs": 8 }
+    },
+    {
+      "name": "codegen-shard",
+      "configurePreset": "core-debug",
+      "filter": { "include": { "label": "codegen" } },
+      "output": { "outputOnFailure": true },
+      "execution": { "noTestsAction": "error", "jobs": 8 }
+    },
+    {
+      "name": "performance-shard",
+      "configurePreset": "core-debug",
+      "filter": { "include": { "label": "performance" } },
+      "output": { "outputOnFailure": true },
+      "execution": { "noTestsAction": "error", "jobs": 4 }
     }
   ],
   "workflowPresets": [
@@ -168,72 +207,36 @@
       "name": "debug-gate",
       "displayName": "Configure, build and test the local Debug gate",
       "steps": [
-        {
-          "type": "configure",
-          "name": "debug-gate"
-        },
-        {
-          "type": "build",
-          "name": "debug-gate"
-        },
-        {
-          "type": "test",
-          "name": "debug-gate"
-        }
+        { "type": "configure", "name": "debug-gate" },
+        { "type": "build", "name": "debug-gate" },
+        { "type": "test", "name": "debug-gate" }
       ]
     },
     {
       "name": "sanitizer-debug",
       "displayName": "Configure, build and test the sanitizer Debug gate",
       "steps": [
-        {
-          "type": "configure",
-          "name": "sanitizer-debug"
-        },
-        {
-          "type": "build",
-          "name": "sanitizer-debug"
-        },
-        {
-          "type": "test",
-          "name": "sanitizer-debug"
-        }
+        { "type": "configure", "name": "sanitizer-debug" },
+        { "type": "build", "name": "sanitizer-debug" },
+        { "type": "test", "name": "sanitizer-debug" }
       ]
     },
     {
       "name": "fuzz-debug",
       "displayName": "Configure, build and test deterministic fuzz Debug gate",
       "steps": [
-        {
-          "type": "configure",
-          "name": "fuzz-debug"
-        },
-        {
-          "type": "build",
-          "name": "fuzz-debug"
-        },
-        {
-          "type": "test",
-          "name": "fuzz-debug"
-        }
+        { "type": "configure", "name": "fuzz-debug" },
+        { "type": "build", "name": "fuzz-debug" },
+        { "type": "test", "name": "fuzz-debug" }
       ]
     },
     {
       "name": "relwithdebinfo-gate",
       "displayName": "Configure, build and test the RelWithDebInfo correctness gate",
       "steps": [
-        {
-          "type": "configure",
-          "name": "relwithdebinfo-gate"
-        },
-        {
-          "type": "build",
-          "name": "relwithdebinfo-gate"
-        },
-        {
-          "type": "test",
-          "name": "relwithdebinfo-gate"
-        }
+        { "type": "configure", "name": "relwithdebinfo-gate" },
+        { "type": "build", "name": "relwithdebinfo-gate" },
+        { "type": "test", "name": "relwithdebinfo-gate" }
       ]
     }
   ]

@@ -1,5 +1,6 @@
 #pragma once
 
+#include "katana/build_contract.hpp"
 #include "katana/analysis/control_flow_analysis.hpp"
 #include "katana/codegen/partition.hpp"
 #include "katana/io/executable_image.hpp"
@@ -16,7 +17,8 @@
 
 namespace katana::codegen {
 
-inline constexpr std::uint32_t port_project_contract_version = 3u;
+inline constexpr std::uint32_t port_project_contract_version =
+    build_contract::port_project_contract_version;
 
 struct PortExportOptions {
     std::string target_name;

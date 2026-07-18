@@ -4,6 +4,12 @@
 
 ### Geaendert
 
+- KR-4624: Core/CLI ist der GUI-freie Standardbuild. MSVC, GCC und Clang
+  besitzen Debug-/RelWithDebInfo-Presets und eine dauerhafte CI-Matrix mit
+  Compiler-Cachemessung; Tests sind in stabile Subsystemshards gelabelt.
+  Projekt-, Package- und ABI-Versionen werden kanonisch generiert. Getrennte
+  Runtime-/Analyzer-CMake-Pakete und ein Out-of-Tree-Consumer sichern die
+  Runtimegrenze ohne Analyzerquellen ab.
 - KR-4623: GDI-Tracks verwenden persistente read-only Handles, indizierte
   Track-/LBA-Aufloesung, gebuendelte Hostreads und einen abschaltbaren
   256-Sektorcache. ISO9660 besitzt begrenzte Verzeichnis- und Extentcaches.

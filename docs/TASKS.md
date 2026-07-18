@@ -334,7 +334,7 @@ und zwischen Runtime/Portexport wiederverwendeten SHA-256-Provenienzen. Der
 GD-ROM-Pfad bleibt ausschliesslich gastzyklusgesteuert. Details und Messpunkte
 stehen in `P1_DISC_IO.md`.
 
-### [ ] KR-4624 - Buildgraph, Cache und Testmatrix
+### [x] KR-4624 - Buildgraph, Cache und Testmatrix
 
 Abhaengigkeiten: KR-4618
 Prioritaet: P1
@@ -354,6 +354,15 @@ Akzeptanz:
 - Test- und Portbuildzeiten besitzen dokumentierte Baselines
 - keine Analyzerquelle wird unbeabsichtigt Runtimepflicht
 - KR-4801 kann auf einem klaren Paketvertrag aufbauen
+
+Umgesetzt mit GUI-freiem Core-/CLI-Standard, expliziten MSVC-, GCC- und
+Clang-Presets fuer Debug/RelWithDebInfo, einer dauerhaften CI-Matrix,
+Compiler-Cachevertrag und gelabelten Testshards. Projekt-, Package- und
+ABI-Versionen werden aus `VERSION` und `cmake/KatanaVersions.cmake` generiert.
+`runtime-sdk` und `analyzer-sdk` besitzen getrennte Exportziele; ein
+Out-of-Tree-Vertragstest stellt sicher, dass die Runtime keine Analyzerquelle
+benoetigt. Baseline und Bedienung stehen in `P1_BUILD_GRAPH.md`; die frischen
+Messwerte folgen gesammelt im Gate KR-4625.
 
 ### [ ] KR-4625 - Performance-/Buildgate
 

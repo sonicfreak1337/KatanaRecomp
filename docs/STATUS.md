@@ -2,7 +2,7 @@
 
 Interner Entwicklungsmeilenstein: `v0.46.0`
 Phase: Core-Stabilisierung vor v0.47
-Naechster Task: `KR-4624`
+Naechster Task: `KR-4625`
 Naechstes Gate: `v0.47.0` - Core-Stabilisierung und generische Retail-Runtime
 Weitere interne Gates: `v0.48.0` Integration und `v0.49.0` Alpha-Candidate
 Erster oeffentlicher Release: `v0.50.0` Alpha
@@ -50,6 +50,19 @@ Descriptor- und Track-SHA-256 werden beim Oeffnen erfasst und vom Portexport
 wiederverwendet. Die portable GDI-Identitaet ist jetzt SHA-256-basiert.
 GD-ROM-Completions bleiben ohne Hostuhr auf dem zentralen Gastscheduler. Der
 Vertrag steht in [`P1_DISC_IO.md`](P1_DISC_IO.md).
+
+## KR-4624 umgesetzt
+
+Core und CLI sind der GUI-freie Standardbuild. MSVC, GCC und Clang besitzen
+Debug-/RelWithDebInfo-Presets und werden in derselben sechsfachen CI-Matrix
+regressionsgeprueft. Ein optionaler Compilerlauncher bindet ccache oder sccache
+ein; alle Tests tragen stabile Subsystemlabels fuer getrennte Shards.
+
+Projekt-, Paket- und ABI-Versionen entstehen aus kanonischen CMake-Werten. Das
+installierbare `KatanaRecomp::runtime`-Paket bleibt von Analyzerquellen frei;
+`KatanaRecomp::analyzer` ist ein getrennter Zusatz. Ein echter Out-of-Tree-
+Consumer prueft diese Grenze. Vertrag und Ausgangsbaseline stehen in
+[`P1_BUILD_GRAPH.md`](P1_BUILD_GRAPH.md).
 
 ## Aktuelles Reviewurteil
 

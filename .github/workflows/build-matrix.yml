@@ -1,0 +1,49 @@
+name: Core build matrix
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  core:
+    strategy:
+      fail-fast: false
+      matrix:
+        build_type: [Debug, RelWithDebInfo]
+        toolchain:
+          - { name: gcc, os: ubuntu-latest, cxx: g++ }
+          - { name: clang, os: ubuntu-latest, cxx: clang++ }
+          - { name: msvc, os: windows-latest, cxx: cl }
+    runs-on: ${{ matrix.toolchain.os }}
+    name: ${{ matrix.toolchain.name }}-${{ matrix.build_type }}
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ilammy/msvc-dev-cmd@v1
+        if: matrix.toolchain.name == 'msvc'
+      - uses: hendrikmuhs/ccache-action@v1.2
+        with:
+          key: ${{ matrix.toolchain.name }}-${{ matrix.build_type }}
+      - name: Configure Core/CLI
+        shell: pwsh
+        run: >-
+          cmake -S . -B build/ci -G Ninja
+          -DCMAKE_BUILD_TYPE=${{ matrix.build_type }}
+          -DCMAKE_CXX_COMPILER=${{ matrix.toolchain.cxx }}
+          -DKATANA_BUILD_DESKTOP_GUI=OFF
+          -DKATANA_COMPILER_CACHE=ccache
+      - name: Build and record elapsed time
+        shell: pwsh
+        run: |
+          $elapsed = Measure-Command { cmake --build build/ci --parallel 2 }
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          "Build seconds: $([math]::Round($elapsed.TotalSeconds, 2))" >> $env:GITHUB_STEP_SUMMARY
+      - name: Test subsystem shards
+        shell: pwsh
+        run: |
+          $elapsed = Measure-Command { ctest --test-dir build/ci --output-on-failure --parallel 2 }
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          "Test seconds: $([math]::Round($elapsed.TotalSeconds, 2))" >> $env:GITHUB_STEP_SUMMARY
+      - name: Cache statistics
+        run: ccache --show-stats

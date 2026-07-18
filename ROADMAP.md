@@ -73,7 +73,7 @@ nicht gestartet werden.
 - [x] `KR-4621` - Speicher-, Dispatch- und Invalidierungs-Hotpaths
 - [x] `KR-4622` - inkrementelle Kontrollflussanalyse, IR und Codegen
 - [x] `KR-4623` - Disc-, GDI-, ISO- und GD-ROM-I/O
-- [ ] `KR-4624` - Buildgraph, Cache und Testmatrix
+- [x] `KR-4624` - Buildgraph, Cache und Testmatrix
 - [ ] `KR-4625` - Performance-/Buildgate
 
 ### Stufe C: Retail-Kontrollfluss und Build

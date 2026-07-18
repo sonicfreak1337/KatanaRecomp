@@ -1,5 +1,6 @@
 #pragma once
 
+#include "katana/build_contract.hpp"
 #include "katana/runtime/runtime.hpp"
 #include "katana/runtime/scheduler.hpp"
 
@@ -15,7 +16,8 @@ namespace katana::runtime {
 
 class ExecutableCodeTracker;
 
-inline constexpr std::uint32_t platform_services_abi_version = 5u;
+inline constexpr std::uint32_t platform_services_abi_version =
+    build_contract::platform_services_abi_version;
 inline constexpr std::uint64_t base_guest_cycles_per_instruction = 1u;
 
 enum class PlatformCapability : std::uint64_t {

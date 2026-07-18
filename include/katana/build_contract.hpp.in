@@ -1,0 +1,18 @@
+#pragma once
+
+#include <cstdint>
+#include <string_view>
+
+namespace katana::build_contract {
+
+inline constexpr std::string_view project_version = "@KATANA_PROJECT_VERSION@";
+inline constexpr std::uint32_t runtime_abi_version = @KATANA_RUNTIME_ABI_VERSION@u;
+inline constexpr std::uint32_t block_abi_version = @KATANA_BLOCK_ABI_VERSION@u;
+inline constexpr std::uint32_t platform_services_abi_version =
+    @KATANA_PLATFORM_SERVICES_ABI_VERSION@u;
+inline constexpr std::uint32_t backend_interface_abi_version =
+    @KATANA_BACKEND_INTERFACE_ABI_VERSION@u;
+inline constexpr std::uint32_t port_project_contract_version =
+    @KATANA_PORT_PROJECT_CONTRACT_VERSION@u;
+
+} // namespace katana::build_contract

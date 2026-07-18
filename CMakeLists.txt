@@ -1,13 +1,23 @@
 cmake_minimum_required(VERSION 3.25)
 
+include(${CMAKE_CURRENT_LIST_DIR}/cmake/KatanaVersions.cmake)
+
 project(
     KatanaRecomp
-    VERSION 0.37.0
+    VERSION ${KATANA_PROJECT_VERSION}
     DESCRIPTION "Dreamcast SH-4 static recompilation framework"
     LANGUAGES CXX
 )
 
 find_package(Threads REQUIRED)
+include(CMakePackageConfigHelpers)
+include(GNUInstallDirs)
+
+configure_file(
+    ${CMAKE_CURRENT_SOURCE_DIR}/include/katana/build_contract.hpp.in
+    ${CMAKE_CURRENT_BINARY_DIR}/generated/include/katana/build_contract.hpp
+    @ONLY
+)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -46,8 +56,30 @@ option(
 option(
     KATANA_BUILD_DESKTOP_GUI
     "Build the optional native desktop shell"
-    ON
+    OFF
 )
+
+set(
+    KATANA_COMPILER_CACHE
+    ""
+    CACHE FILEPATH
+    "Optional compiler-cache executable (for example ccache or sccache)"
+)
+if(KATANA_COMPILER_CACHE)
+    if(IS_ABSOLUTE "${KATANA_COMPILER_CACHE}")
+        set(KATANA_COMPILER_CACHE_EXECUTABLE "${KATANA_COMPILER_CACHE}")
+    else()
+        find_program(
+            KATANA_COMPILER_CACHE_EXECUTABLE
+            NAMES "${KATANA_COMPILER_CACHE}"
+            REQUIRED
+        )
+    endif()
+    if(NOT EXISTS "${KATANA_COMPILER_CACHE_EXECUTABLE}")
+        message(FATAL_ERROR "KATANA_COMPILER_CACHE does not exist: ${KATANA_COMPILER_CACHE}")
+    endif()
+    set(CMAKE_CXX_COMPILER_LAUNCHER "${KATANA_COMPILER_CACHE_EXECUTABLE}")
+endif()
 
 if(KATANA_ENABLE_SANITIZERS)
     if(MSVC)
@@ -201,11 +233,14 @@ add_library(katana_runtime STATIC
 )
 
 add_library(KatanaRecomp::runtime ALIAS katana_runtime)
+set_target_properties(katana_runtime PROPERTIES EXPORT_NAME runtime)
 
 target_include_directories(
     katana_runtime
     PUBLIC
-        ${CMAKE_CURRENT_SOURCE_DIR}/include
+        $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+        $<BUILD_INTERFACE:${CMAKE_CURRENT_BINARY_DIR}/generated/include>
+        $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
 )
 
 katana_enable_warnings(katana_runtime)
@@ -275,10 +310,13 @@ add_library(katana_core STATIC
 target_include_directories(
     katana_core
     PUBLIC
-        ${CMAKE_CURRENT_SOURCE_DIR}/include
+        $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+        $<BUILD_INTERFACE:${CMAKE_CURRENT_BINARY_DIR}/generated/include>
+        $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
 )
 
 target_link_libraries(katana_core PUBLIC katana_runtime)
+set_target_properties(katana_core PROPERTIES EXPORT_NAME analyzer)
 katana_enable_warnings(katana_core)
 
 add_library(katana_phase9 STATIC
@@ -3559,3 +3597,109 @@ foreach(KATANA_BUILD_TARGET IN LISTS KATANA_BUILD_TARGETS)
         )
     endif()
 endforeach()
+
+# Stable subsystem labels keep local and CI shards independent of executable order.
+get_property(KATANA_TESTS DIRECTORY PROPERTY TESTS)
+foreach(KATANA_TEST IN LISTS KATANA_TESTS)
+    set(KATANA_TEST_LABEL "core")
+    if(KATANA_TEST MATCHES "(codegen|generated|backend|cpp-emitter|port-|source-map)")
+        set(KATANA_TEST_LABEL "codegen")
+    elseif(KATANA_TEST MATCHES "(analysis|control-flow|basic-block|function-|value-|jump-table|graph-export|disassembler|decoder|instruction|isa-|ir-|symbol-|executable-image|raw-binary|elf32|project-manifest)")
+        set(KATANA_TEST_LABEL "analysis")
+    elseif(KATANA_TEST MATCHES "(runtime|memory|cpu-|reset|exception|interrupt|fpu|flash|dreamcast|firmware|maple|pvr|host-|aica|disc|gdrom|gdi|iso9660|scheduler|tmu|dma|system-|media-clock|cache-control|store-queue|block-|bios-|platform-)")
+        set(KATANA_TEST_LABEL "runtime")
+    elseif(KATANA_TEST MATCHES "(phase9|performance|homebrew)")
+        set(KATANA_TEST_LABEL "performance")
+    endif()
+    set_tests_properties(${KATANA_TEST} PROPERTIES LABELS "gate;${KATANA_TEST_LABEL}")
+endforeach()
+
+add_test(
+    NAME katana-package-contract-tests
+    COMMAND
+        ${CMAKE_COMMAND}
+        -DKATANA_BUILD_DIR=${CMAKE_BINARY_DIR}
+        -DKATANA_SOURCE_DIR=${CMAKE_SOURCE_DIR}
+        -DKATANA_GENERATOR=${CMAKE_GENERATOR}
+        -DKATANA_CONFIG=$<CONFIG>
+        -DKATANA_EXPECTED_VERSION=${PROJECT_VERSION}
+        -DKATANA_EXPECTED_RUNTIME_ABI=${KATANA_RUNTIME_ABI_VERSION}
+        -P ${CMAKE_SOURCE_DIR}/tests/build/package_contract_tests.cmake
+)
+set_tests_properties(katana-package-contract-tests PROPERTIES LABELS "build;gate" TIMEOUT 180)
+
+configure_package_config_file(
+    ${CMAKE_CURRENT_SOURCE_DIR}/cmake/KatanaRecompConfig.cmake.in
+    ${CMAKE_CURRENT_BINARY_DIR}/KatanaRecompConfig.cmake
+    INSTALL_DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/KatanaRecomp
+)
+write_basic_package_version_file(
+    ${CMAKE_CURRENT_BINARY_DIR}/KatanaRecompConfigVersion.cmake
+    VERSION ${PROJECT_VERSION}
+    COMPATIBILITY SameMajorVersion
+)
+
+install(
+    TARGETS katana_runtime
+    EXPORT KatanaRuntimeTargets
+    ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR} COMPONENT runtime-sdk
+    LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR} COMPONENT runtime-sdk
+    RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR} COMPONENT runtime-sdk
+    INCLUDES DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
+)
+install(
+    TARGETS katana_core
+    EXPORT KatanaAnalyzerTargets
+    ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR} COMPONENT analyzer-sdk
+    LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR} COMPONENT analyzer-sdk
+    RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR} COMPONENT analyzer-sdk
+    INCLUDES DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
+)
+install(
+    TARGETS katana-recomp
+    RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+    COMPONENT tools
+)
+install(
+    DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/include/katana/runtime
+    DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/katana
+    COMPONENT runtime-sdk
+    FILES_MATCHING PATTERN "*.hpp"
+)
+install(
+    FILES ${CMAKE_CURRENT_BINARY_DIR}/generated/include/katana/build_contract.hpp
+    DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/katana
+    COMPONENT runtime-sdk
+)
+install(
+    DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/include/katana/
+    DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/katana
+    COMPONENT analyzer-sdk
+    FILES_MATCHING PATTERN "*.hpp" PATTERN "*.in" EXCLUDE
+)
+install(
+    FILES ${CMAKE_CURRENT_BINARY_DIR}/generated/include/katana/build_contract.hpp
+    DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/katana
+    COMPONENT analyzer-sdk
+)
+install(
+    EXPORT KatanaRuntimeTargets
+    FILE KatanaRuntimeTargets.cmake
+    NAMESPACE KatanaRecomp::
+    DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/KatanaRecomp
+    COMPONENT runtime-sdk
+)
+install(
+    EXPORT KatanaAnalyzerTargets
+    FILE KatanaAnalyzerTargets.cmake
+    NAMESPACE KatanaRecomp::
+    DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/KatanaRecomp
+    COMPONENT analyzer-sdk
+)
+install(
+    FILES
+        ${CMAKE_CURRENT_BINARY_DIR}/KatanaRecompConfig.cmake
+        ${CMAKE_CURRENT_BINARY_DIR}/KatanaRecompConfigVersion.cmake
+    DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/KatanaRecomp
+    COMPONENT runtime-sdk
+)
