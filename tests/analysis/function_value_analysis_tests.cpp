@@ -3,6 +3,7 @@
 #include "katana/analysis/function_value_analysis.hpp"
 #include "katana/ir/lower.hpp"
 #include "katana/ir/verifier.hpp"
+#include "katana/sh4/disassembler.hpp"
 
 #include <algorithm>
 #include <array>
@@ -117,6 +118,71 @@ int main() {
     const auto* preserved = summary(unique, 0x20u, 8u);
     require(preserved != nullptr && preserved->abi_preserved,
             "SH-C-Erhalt von R8 wurde in der Funktionssummary nicht ausgewiesen.");
+
+    std::vector<std::uint8_t> guarded_callee_bytes(0x26u, 0x09u);
+    const std::array<std::uint8_t, 10u> guarded_caller{
+        0x10u, 0xE4u, // mov #0x10,r4
+        0x0Bu, 0x41u, // jsr @r1
+        0x09u, 0x00u, // nop (delay)
+        0x2Bu, 0x40u, // jmp @r0
+        0x09u, 0x00u  // nop (delay)
+    };
+    const std::array<std::uint8_t, 6u> guarded_callee{
+        0x43u, 0x60u, // mov r4,r0
+        0x0Bu, 0x00u, // rts
+        0x09u, 0x00u  // nop (delay)
+    };
+    std::copy(guarded_caller.begin(), guarded_caller.end(), guarded_callee_bytes.begin());
+    std::copy(guarded_callee.begin(),
+              guarded_callee.end(),
+              guarded_callee_bytes.begin() + 0x20u);
+    katana::io::ExecutableImage guarded_callee_image;
+    guarded_callee_image.set_guest_call_abi(katana::io::GuestCallAbi::SuperHC);
+    guarded_callee_image.add_segment({".text",
+                                      0u,
+                                      0u,
+                                      guarded_callee_bytes.size(),
+                                      katana::io::SegmentKind::Code,
+                                      {true, false, true},
+                                      guarded_callee_bytes});
+    guarded_callee_image.add_entry_point(0u);
+    const auto guarded_callee_lines = katana::sh4::disassemble(guarded_callee_bytes, 0u);
+    const std::array<std::uint32_t, 1u> guarded_function_entries{0u};
+    const std::array<katana::analysis::ResolvedControlFlowEdge, 1u> guarded_call_edges{{
+        {2u,
+         0x20u,
+         katana::analysis::ResolvedControlFlowKind::Call,
+         true,
+         katana::analysis::ControlFlowEvidence::GuardedComplete,
+         {katana::analysis::AnalysisEvidenceOrigin::EntrySnapshot}},
+    }};
+    const auto guarded_values = katana::analysis::analyze_function_values(
+        guarded_callee_image, guarded_callee_lines, guarded_function_entries, guarded_call_edges);
+    const auto guarded_callee_summary =
+        std::find_if(guarded_values.summaries.begin(),
+                     guarded_values.summaries.end(),
+                     [](const auto& candidate) { return candidate.function_address == 0x20u; });
+    require(guarded_callee_summary != guarded_values.summaries.end(),
+            "Guarded-complete-Callkante legte ihren exklusiv erreichbaren Callee nicht an.");
+    const auto guarded_r0 = std::find_if(
+        guarded_callee_summary->registers.begin(),
+        guarded_callee_summary->registers.end(),
+        [](const auto& candidate) { return candidate.register_index == 0u; });
+    const auto guarded_return = std::find_if(
+        guarded_values.resolutions.begin(),
+        guarded_values.resolutions.end(),
+        [](const auto& candidate) { return candidate.instruction_address == 6u; });
+    require(guarded_r0 != guarded_callee_summary->registers.end() && guarded_r0->complete &&
+                guarded_r0->guarded &&
+                guarded_r0->values == std::vector<std::uint32_t>{0x10u} &&
+                guarded_return != guarded_values.resolutions.end() && guarded_return->complete &&
+                guarded_return->guarded &&
+                guarded_return->evidence ==
+                    katana::analysis::ControlFlowEvidence::GuardedComplete &&
+                guarded_return->targets == std::vector<std::uint32_t>{0x10u} &&
+                guarded_return->call_sites == std::vector<std::uint32_t>{2u} &&
+                guarded_return->callees == std::vector<std::uint32_t>{0x20u},
+            "Guarded-complete-Callee verlor Ingressguard oder R0-Return-Summary.");
 
     const auto multi_image =
         image_with_callee({// bt 0x28; mov #0x10,r0; rts; nop; mov #0x14,r0; rts; nop
@@ -243,14 +309,20 @@ int main() {
     require(site(runtime_pointer, 0u)->origin_class ==
                     katana::analysis::IndirectControlFlowOriginClass::RuntimePointer &&
                 site(runtime_pointer, 0u)->evidence ==
-                    katana::analysis::ControlFlowEvidence::RuntimeOnly &&
+                    katana::analysis::ControlFlowEvidence::Unresolved &&
                 katana::analysis::control_flow_report_status(*site(runtime_pointer, 0u)) ==
-                    katana::analysis::ControlFlowReportStatus::RuntimeOnly &&
+                    katana::analysis::ControlFlowReportStatus::Unresolved &&
                 site(runtime_pointer, 0u)->reason ==
                     "dynamic-runtime-pointer-register-value-unknown" &&
                 site(runtime_pointer, 0u)->evidence_origins ==
                     std::vector{katana::analysis::AnalysisEvidenceOrigin::RuntimeClassification},
-            "Echter Laufzeitzeiger erreicht den validierenden Runtime-only-Vertrag nicht.");
+            "Allgemeiner unbekannter Zeiger wurde faelschlich als Runtime-only freigegeben: " +
+                std::to_string(static_cast<int>(site(runtime_pointer, 0u)->origin_class)) + "/" +
+                std::to_string(static_cast<int>(site(runtime_pointer, 0u)->evidence)) + "/" +
+                std::to_string(static_cast<int>(katana::analysis::control_flow_report_status(
+                    *site(runtime_pointer, 0u)))) + "/" +
+                site(runtime_pointer, 0u)->reason + "/" +
+                std::to_string(site(runtime_pointer, 0u)->evidence_origins.size()));
     const auto runtime_pointer_json =
         katana::analysis::format_control_flow_analysis_json(runtime_pointer);
     require(runtime_pointer_json.find("\"instruction_form\":\"Jmp\"") != std::string::npos &&

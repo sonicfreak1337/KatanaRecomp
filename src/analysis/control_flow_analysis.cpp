@@ -367,28 +367,35 @@ void classify_dynamic_sites(const std::span<const katana::sh4::DisassemblyLine> 
         if (resolution.status == ResolutionStatus::Unresolved &&
             resolution.evidence != ControlFlowEvidence::HintCandidate &&
             resolution.evidence != ControlFlowEvidence::RuntimeOnly) {
-            bool runtime_contract = true;
+            bool runtime_contract = false;
             switch (resolution.origin_class) {
             case IndirectControlFlowOriginClass::Callback:
                 resolution.reason =
                     resolution.register_index == 13u ? "dynamic-callback" : "dynamic-return-value";
+                runtime_contract = true;
                 break;
             case IndirectControlFlowOriginClass::Parameter:
                 resolution.reason = "dynamic-parameter";
+                runtime_contract = true;
                 break;
             case IndirectControlFlowOriginClass::Stack:
                 resolution.reason = "dynamic-stack-target";
+                runtime_contract = true;
                 break;
             case IndirectControlFlowOriginClass::ObjectVTable:
                 resolution.reason = "dynamic-vtable-target";
+                runtime_contract = true;
                 break;
             case IndirectControlFlowOriginClass::UnboundedMemory:
                 resolution.reason = "dynamic-unbounded-memory";
+                runtime_contract = true;
                 break;
             case IndirectControlFlowOriginClass::RuntimePointer:
-                resolution.reason = resolution.reason.empty()
-                                        ? "dynamic-runtime-pointer"
-                                        : "dynamic-runtime-pointer-" + resolution.reason;
+                if (resolution.reason.empty()) {
+                    resolution.reason = "dynamic-runtime-pointer";
+                } else if (!resolution.reason.starts_with("dynamic-runtime-pointer")) {
+                    resolution.reason = "dynamic-runtime-pointer-" + resolution.reason;
+                }
                 break;
             case IndirectControlFlowOriginClass::NotApplicable:
             case IndirectControlFlowOriginClass::Table:
@@ -397,6 +404,10 @@ void classify_dynamic_sites(const std::span<const katana::sh4::DisassemblyLine> 
             }
             if (runtime_contract) {
                 resolution.evidence = ControlFlowEvidence::RuntimeOnly;
+                resolution.evidence_origins = {AnalysisEvidenceOrigin::RuntimeClassification};
+            } else if (resolution.origin_class ==
+                           IndirectControlFlowOriginClass::RuntimePointer &&
+                       resolution.evidence_origins.empty()) {
                 resolution.evidence_origins = {AnalysisEvidenceOrigin::RuntimeClassification};
             }
         } else if (resolution.evidence_origins.empty()) {
