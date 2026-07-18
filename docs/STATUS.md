@@ -2,7 +2,7 @@
 
 Interner Entwicklungsmeilenstein: `v0.46.0`
 Phase: Core-Stabilisierung vor v0.47
-Naechster Task: `KR-4717`
+Naechster Task: `KR-4718`
 Naechstes Gate: `v0.47.0` - Core-Stabilisierung und generische Retail-Runtime
 Weitere interne Gates: `v0.48.0` Integration und `v0.49.0` Alpha-Candidate
 Erster oeffentlicher Release: `v0.50.0` Alpha
@@ -122,6 +122,21 @@ Stackfakten konservativ. Ein hartes Fixpunktbudget verhindert unbestimmte
 Analysezeiten und stuft bei Erschoepfung alle betroffenen Beweise herab. Der
 Vertrag steht in [`ABI_VALUE_ANALYSIS.md`](ABI_VALUE_ANALYSIS.md). KR-4717 ist
 der naechste Task.
+
+## KR-4717 umgesetzt
+
+Eine begrenzte abstrakte Objektfeldtabelle verfolgt dominante Longword-
+Initialisierungsstores und Loads ueber Register, feste Stackspills sowie
+konstante Feld- und VTable-Slotoffsets. Vollstaendige Memory-Return-Summaries
+erhalten Konstruktorwirkungen ueber bekannte Calls. Mehrere vollstaendige
+Typwerte bleiben eine endliche bewachte Menge. Framepointer- und Objektpfade
+besitzen getrennte Herkunftsklassen.
+
+Unbekannte, partielle oder ueberlappende Stores sowie Calls und nicht
+modellierte Speicherseiteneffekte invalidieren Objektfakten konservativ.
+Beschreibbare statische VTables werden niemals allein aus dem Imageinhalt
+eingefroren. Der Vertrag steht in
+[`OBJECT_POINTS_TO.md`](OBJECT_POINTS_TO.md). KR-4718 ist der naechste Task.
 
 ## Historischer Reviewbefund vor KR-4611 bis KR-4618
 

@@ -24,9 +24,20 @@ struct FunctionRegisterValueSummary {
     bool operator==(const FunctionRegisterValueSummary&) const = default;
 };
 
+struct FunctionMemoryValueSummary {
+    std::uint32_t address = 0u;
+    bool complete = false;
+    bool guarded = false;
+    std::vector<std::uint32_t> values;
+
+    bool operator==(const FunctionMemoryValueSummary&) const = default;
+};
+
 struct FunctionValueSummary {
     std::uint32_t function_address = 0u;
     std::vector<FunctionRegisterValueSummary> registers;
+    bool memory_complete = false;
+    std::vector<FunctionMemoryValueSummary> memory_values;
 
     bool operator==(const FunctionValueSummary&) const = default;
 };

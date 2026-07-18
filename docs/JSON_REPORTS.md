@@ -26,6 +26,11 @@ Die Funktionswertanalyse berichtet in der Kontrollfluss-Summary
 Registersummary trennt `complete` von `guarded`; nur `complete=true` darf eine
 vollstaendige endliche Zielmenge begruenden.
 
+Funktionssummaries tragen zusaetzlich `memory_complete` und die sortierte Liste
+`memory_values`. Jeder Eintrag nennt Adresse, `complete`, `guarded` und seine
+endliche Wertemenge. Diese lokalen Detailfelder duerfen Gastadressen enthalten
+und werden deshalb nicht in den adressfreien Frontierbericht uebernommen.
+
 Berichte enthalten keine Hostzeit als Determinismusquelle. Absolute lokale
 Pfade, Firmwarebytes und Flash-Rohdaten sind keine portablen Berichtfelder;
 spaetere Diagnosebefehle muessen solche Inhalte standardmaessig redigieren.

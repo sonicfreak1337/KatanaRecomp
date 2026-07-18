@@ -4,6 +4,12 @@
 
 ### Geaendert
 
+- KR-4717: Eine begrenzte Objektfeldanalyse leitet dominante Konstruktor- und
+  Initialisierungsstores ueber Register, Stack, feste Offsets und
+  vollstaendige Memory-Return-Summaries zu Callback- und VTable-Slots weiter.
+  Mehrere vollstaendige Typen bleiben endliche bewachte Mengen; unbekannte
+  Stores, Aliase, Calls und externe Mutation invalidieren konservativ,
+  beschreibbare VTables bleiben partiell.
 - KR-4716: Geschlossene direkte und vollstaendig bewachte Callermengen
   propagieren R8 bis R14 kontextsensitiv. Endliche indirekte Calleemengen
   vereinigen nur vollstaendige Return-Summaries. R13-Callbacks sowie begrenzte

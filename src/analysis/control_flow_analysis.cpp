@@ -308,6 +308,7 @@ void classify_dynamic_sites(const std::span<const katana::sh4::DisassemblyLine> 
         }
         bool vtable_base = false;
         bool stack_base = false;
+        bool object_field = false;
         bool callback_source = resolution.register_index == 13u;
         if (writer != nullptr) {
             const auto base =
@@ -316,6 +317,11 @@ void classify_dynamic_sites(const std::span<const katana::sh4::DisassemblyLine> 
             callback_source = callback_source || (writer->instruction.kind ==
                                                       katana::sh4::InstructionKind::MovRegister &&
                                                   writer->instruction.source_register == 13u);
+            const auto writer_kind = writer->instruction.kind;
+            object_field = writer->instruction.source_register >= 4u &&
+                           writer->instruction.source_register <= 14u &&
+                           (writer_kind == katana::sh4::InstructionKind::MovLongLoad ||
+                            writer_kind == katana::sh4::InstructionKind::MovLongLoadDisplacement);
             if (vtable_base) {
                 const auto base_writer = std::lower_bound(
                     lines.begin(),
@@ -334,7 +340,7 @@ void classify_dynamic_sites(const std::span<const katana::sh4::DisassemblyLine> 
                    (writer != nullptr && writer->instruction.source_register == 15u) ||
                    stack_base) {
             resolution.origin_class = IndirectControlFlowOriginClass::Stack;
-        } else if (writer != nullptr && vtable_base) {
+        } else if (writer != nullptr && (vtable_base || object_field)) {
             resolution.origin_class = IndirectControlFlowOriginClass::ObjectVTable;
         } else if (writer != nullptr) {
             resolution.origin_class = IndirectControlFlowOriginClass::UnboundedMemory;

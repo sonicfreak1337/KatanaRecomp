@@ -12,6 +12,7 @@
 #include <cstdint>
 #include <deque>
 #include <functional>
+#include <limits>
 #include <map>
 #include <optional>
 #include <set>
@@ -23,6 +24,7 @@ namespace katana::analysis {
 namespace {
 
 constexpr std::size_t maximum_summary_values = 8u;
+constexpr std::size_t maximum_memory_values = 256u;
 constexpr std::size_t maximum_fixpoint_iterations = 65'536u;
 constexpr std::int32_t maximum_stack_distance = 4'096;
 
@@ -87,6 +89,7 @@ struct AbstractState {
     std::array<AbstractValue, 16u> registers;
     std::array<std::optional<std::int32_t>, 16u> stack_offsets;
     std::map<std::int32_t, AbstractValue> stack_values;
+    std::map<std::uint32_t, AbstractValue> memory_values;
 
     AbstractValue& operator[](const std::size_t index) {
         return registers[index];
@@ -199,6 +202,17 @@ bool merge_state(AbstractState& destination, const AbstractState& source) {
         changed = merge_value(slot->second, source_slot->second) || changed;
         ++slot;
     }
+    for (auto value = destination.memory_values.begin();
+         value != destination.memory_values.end();) {
+        const auto source_value = source.memory_values.find(value->first);
+        if (source_value == source.memory_values.end()) {
+            value = destination.memory_values.erase(value);
+            changed = true;
+            continue;
+        }
+        changed = merge_value(value->second, source_value->second) || changed;
+        ++value;
+    }
     return changed;
 }
 
@@ -300,29 +314,41 @@ std::optional<ImageValue> read_image_value(const katana::io::ExecutableImage& im
     return ImageValue{value, segment->permissions.writable};
 }
 
-void load_image_values(AbstractValue& destination,
-                       const std::vector<std::uint32_t>& addresses,
-                       const std::size_t width,
-                       const katana::io::ExecutableImage& image,
-                       const AbstractValue* address_evidence = nullptr) {
+void load_memory_values(AbstractValue& destination,
+                        const AbstractState& state,
+                        const std::vector<std::uint32_t>& addresses,
+                        const std::size_t width,
+                        const katana::io::ExecutableImage& image,
+                        const AbstractValue* address_evidence = nullptr) {
     if (addresses.empty()) {
         make_unknown(destination);
         return;
     }
     AbstractValue loaded;
-    loaded.known = true;
-    loaded.complete = true;
+    bool first = true;
     for (const auto address : addresses) {
-        const auto value = read_image_value(image, address, width);
-        if (!value.has_value()) {
-            make_unknown(destination);
-            return;
+        AbstractValue value;
+        if (width == 4u) {
+            const auto forwarded = state.memory_values.find(address);
+            if (forwarded != state.memory_values.end()) {
+                value = forwarded->second;
+                value.guarded = true;
+            }
         }
-        loaded.values.push_back(value->value);
-        loaded.guarded = loaded.guarded || value->guarded;
-        loaded.complete = loaded.complete && !value->guarded;
-        normalize(loaded.values);
-        if (loaded.values.size() > maximum_summary_values) {
+        if (!value.known) {
+            const auto image_value = read_image_value(image, address, width);
+            if (!image_value.has_value()) {
+                make_unknown(destination);
+                return;
+            }
+            set_value(value, image_value->value);
+            value.guarded = image_value->guarded;
+            value.complete = !image_value->guarded;
+        }
+        if (first) {
+            loaded = std::move(value);
+            first = false;
+        } else if (merge_value(loaded, value) && !loaded.known) {
             make_unknown(destination);
             return;
         }
@@ -335,6 +361,53 @@ void load_image_values(AbstractValue& destination,
         loaded.callees.insert(address_evidence->callees.begin(), address_evidence->callees.end());
     }
     destination = std::move(loaded);
+}
+
+bool memory_ranges_overlap(const std::uint32_t left,
+                           const std::size_t left_width,
+                           const std::uint32_t right,
+                           const std::size_t right_width) {
+    const auto left_begin = static_cast<std::uint64_t>(left);
+    const auto left_end = left_begin + left_width;
+    const auto right_begin = static_cast<std::uint64_t>(right);
+    const auto right_end = right_begin + right_width;
+    return left_begin < right_end && right_begin < left_end;
+}
+
+void store_memory_values(AbstractState& state,
+                         const std::vector<std::uint32_t>& addresses,
+                         const std::size_t width,
+                         const AbstractValue& value,
+                         const AbstractValue& address_evidence) {
+    if (!address_evidence.known || !address_evidence.complete || addresses.empty()) {
+        state.memory_values.clear();
+        return;
+    }
+    if (std::any_of(addresses.begin(), addresses.end(), [width](const auto address) {
+            return width == 0u ||
+                   address > std::numeric_limits<std::uint32_t>::max() - (width - 1u);
+        })) {
+        state.memory_values.clear();
+        return;
+    }
+    for (const auto address : addresses) {
+        for (auto existing = state.memory_values.begin(); existing != state.memory_values.end();) {
+            if (memory_ranges_overlap(existing->first, 4u, address, width))
+                existing = state.memory_values.erase(existing);
+            else
+                ++existing;
+        }
+    }
+    if (width != 4u || !value.known) return;
+    auto stored = value;
+    stored.guarded = true;
+    stored.complete = stored.complete && address_evidence.complete;
+    stored.call_sites.insert(address_evidence.call_sites.begin(),
+                             address_evidence.call_sites.end());
+    stored.callees.insert(address_evidence.callees.begin(), address_evidence.callees.end());
+    for (const auto address : addresses)
+        state.memory_values[address] = stored;
+    if (state.memory_values.size() > maximum_memory_values) state.memory_values.clear();
 }
 
 std::optional<std::int32_t> stack_slot(const AbstractState& state,
@@ -573,10 +646,11 @@ void apply_transfer(AbstractState& state,
         const auto width =
             instruction.kind == katana::sh4::InstructionKind::MovWordLoadPcRelative ? 2u : 4u;
         const auto base = width == 4u ? (line.address + 4u) & ~3u : line.address + 4u;
-        load_image_values(state[instruction.destination_register],
-                          {base + static_cast<std::uint32_t>(instruction.displacement)},
-                          width,
-                          image);
+        load_memory_values(state[instruction.destination_register],
+                           state,
+                           {base + static_cast<std::uint32_t>(instruction.displacement)},
+                           width,
+                           image);
         state.stack_offsets[instruction.destination_register].reset();
         return;
     }
@@ -586,10 +660,15 @@ void apply_transfer(AbstractState& state,
         const auto width = instruction.kind == katana::sh4::InstructionKind::MovByteStore   ? 1u
                            : instruction.kind == katana::sh4::InstructionKind::MovWordStore ? 2u
                                                                                             : 4u;
-        store_stack_value(state,
-                          stack_slot(state, instruction.destination_register),
-                          width,
-                          state[instruction.source_register]);
+        const auto offset = stack_slot(state, instruction.destination_register);
+        store_stack_value(state, offset, width, state[instruction.source_register]);
+        if (!offset.has_value()) {
+            store_memory_values(state,
+                                displaced_addresses(state[instruction.destination_register], 0u),
+                                width,
+                                state[instruction.source_register],
+                                state[instruction.destination_register]);
+        }
         return;
     }
     case katana::sh4::InstructionKind::MovByteStorePreDecrement:
@@ -601,10 +680,15 @@ void apply_transfer(AbstractState& state,
                                                                                          : 4u;
         adjust_stack_offset(
             state, instruction.destination_register, -static_cast<std::int32_t>(width));
-        store_stack_value(state,
-                          stack_slot(state, instruction.destination_register),
-                          width,
-                          state[instruction.source_register]);
+        const auto offset = stack_slot(state, instruction.destination_register);
+        store_stack_value(state, offset, width, state[instruction.source_register]);
+        if (!offset.has_value()) {
+            store_memory_values(state,
+                                displaced_addresses(state[instruction.destination_register], 0u),
+                                width,
+                                state[instruction.source_register],
+                                state[instruction.destination_register]);
+        }
         return;
     }
     case katana::sh4::InstructionKind::MovByteStoreDisplacement:
@@ -614,11 +698,18 @@ void apply_transfer(AbstractState& state,
             instruction.kind == katana::sh4::InstructionKind::MovByteStoreDisplacement   ? 1u
             : instruction.kind == katana::sh4::InstructionKind::MovWordStoreDisplacement ? 2u
                                                                                          : 4u;
-        store_stack_value(
-            state,
-            stack_slot(state, instruction.destination_register, instruction.displacement),
-            width,
-            state[instruction.source_register]);
+        const auto offset =
+            stack_slot(state, instruction.destination_register, instruction.displacement);
+        store_stack_value(state, offset, width, state[instruction.source_register]);
+        if (!offset.has_value()) {
+            store_memory_values(
+                state,
+                displaced_addresses(state[instruction.destination_register],
+                                    static_cast<std::uint32_t>(instruction.displacement)),
+                width,
+                state[instruction.source_register],
+                state[instruction.destination_register]);
+        }
         return;
     }
     case katana::sh4::InstructionKind::MovByteLoad:
@@ -633,11 +724,12 @@ void apply_transfer(AbstractState& state,
                              stack_slot(state, instruction.source_register),
                              width);
         } else {
-            load_image_values(state[instruction.destination_register],
-                              displaced_addresses(state[instruction.source_register], 0u),
-                              width,
-                              image,
-                              &state[instruction.source_register]);
+            load_memory_values(state[instruction.destination_register],
+                               state,
+                               displaced_addresses(state[instruction.source_register], 0u),
+                               width,
+                               image,
+                               &state[instruction.source_register]);
         }
         state.stack_offsets[instruction.destination_register].reset();
         return;
@@ -655,11 +747,12 @@ void apply_transfer(AbstractState& state,
                              stack_slot(state, instruction.source_register),
                              width);
         } else {
-            load_image_values(state[instruction.destination_register],
-                              displaced_addresses(state[instruction.source_register], 0u),
-                              width,
-                              image,
-                              &state[instruction.source_register]);
+            load_memory_values(state[instruction.destination_register],
+                               state,
+                               displaced_addresses(state[instruction.source_register], 0u),
+                               width,
+                               image,
+                               &state[instruction.source_register]);
         }
         state.stack_offsets[instruction.destination_register].reset();
         if (instruction.source_register != instruction.destination_register) {
@@ -682,8 +775,9 @@ void apply_transfer(AbstractState& state,
                 stack_slot(state, instruction.source_register, instruction.displacement),
                 width);
         } else {
-            load_image_values(
+            load_memory_values(
                 state[instruction.destination_register],
+                state,
                 displaced_addresses(state[instruction.source_register],
                                     static_cast<std::uint32_t>(instruction.displacement)),
                 width,
@@ -695,13 +789,53 @@ void apply_transfer(AbstractState& state,
     }
     case katana::sh4::InstructionKind::MovByteStoreR0Indexed:
     case katana::sh4::InstructionKind::MovWordStoreR0Indexed:
-    case katana::sh4::InstructionKind::MovLongStoreR0Indexed:
+    case katana::sh4::InstructionKind::MovLongStoreR0Indexed: {
+        const auto width =
+            instruction.kind == katana::sh4::InstructionKind::MovByteStoreR0Indexed   ? 1u
+            : instruction.kind == katana::sh4::InstructionKind::MovWordStoreR0Indexed ? 2u
+                                                                                      : 4u;
         state.stack_values.clear();
+        auto evidence = state[0u];
+        apply_binary(evidence,
+                     state[instruction.destination_register],
+                     katana::sh4::InstructionKind::AddRegister);
+        store_memory_values(state,
+                            indexed_addresses(state[0u], state[instruction.destination_register]),
+                            width,
+                            state[instruction.source_register],
+                            evidence);
         return;
-    case katana::sh4::InstructionKind::StoreSpecialRegisterPreDecrement:
+    }
+    case katana::sh4::InstructionKind::MovByteStoreGbrDisplacement:
+    case katana::sh4::InstructionKind::MovWordStoreGbrDisplacement:
+    case katana::sh4::InstructionKind::MovLongStoreGbrDisplacement:
+    case katana::sh4::InstructionKind::AndByteImmediate:
+    case katana::sh4::InstructionKind::XorByteImmediate:
+    case katana::sh4::InstructionKind::OrByteImmediate:
+    case katana::sh4::InstructionKind::TestAndSetByte:
+    case katana::sh4::InstructionKind::FmovStore:
+    case katana::sh4::InstructionKind::FmovStorePreDecrement:
+    case katana::sh4::InstructionKind::FmovStoreR0Indexed:
+    case katana::sh4::InstructionKind::Prefetch:
+    case katana::sh4::InstructionKind::TrapAlways:
+        state.stack_values.clear();
+        state.memory_values.clear();
+        clear_written(state, instruction);
+        return;
+    case katana::sh4::InstructionKind::StoreSpecialRegisterPreDecrement: {
         adjust_stack_offset(state, instruction.destination_register, -4);
-        invalidate_stack_range(state, stack_slot(state, instruction.destination_register), 4u);
+        const auto offset = stack_slot(state, instruction.destination_register);
+        invalidate_stack_range(state, offset, 4u);
+        if (!offset.has_value()) {
+            AbstractValue unknown;
+            store_memory_values(state,
+                                displaced_addresses(state[instruction.destination_register], 0u),
+                                4u,
+                                unknown,
+                                state[instruction.destination_register]);
+        }
         return;
+    }
     case katana::sh4::InstructionKind::LoadSpecialRegisterPostIncrement:
         adjust_stack_offset(state, instruction.source_register, 4);
         return;
@@ -719,15 +853,20 @@ void apply_transfer(AbstractState& state,
                                    state[instruction.source_register].call_sites.end());
         evidence.callees.insert(state[instruction.source_register].callees.begin(),
                                 state[instruction.source_register].callees.end());
-        load_image_values(state[instruction.destination_register],
-                          indexed_addresses(state[0u], state[instruction.source_register]),
-                          width,
-                          image,
-                          &evidence);
+        load_memory_values(state[instruction.destination_register],
+                           state,
+                           indexed_addresses(state[0u], state[instruction.source_register]),
+                           width,
+                           image,
+                           &evidence);
         state.stack_offsets[instruction.destination_register].reset();
         return;
     }
     default:
+        if (instruction.kind == katana::sh4::InstructionKind::Unknown) {
+            state.stack_values.clear();
+            state.memory_values.clear();
+        }
         clear_written(state, instruction);
         return;
     }
@@ -757,6 +896,10 @@ void apply_call(AbstractState& state,
         if (candidate_callees_guarded) {
             for (auto& value : observation)
                 value.guarded = true;
+            for (auto& [address, value] : observation.memory_values) {
+                static_cast<void>(address);
+                value.guarded = true;
+            }
         }
         for (const auto candidate : candidate_callees)
             call_arguments->push_back({call_site, candidate, observation});
@@ -764,6 +907,8 @@ void apply_call(AbstractState& state,
     if (image.guest_call_abi() != katana::io::GuestCallAbi::SuperHC) {
         for (auto& value : state)
             make_unknown(value);
+        state.stack_values.clear();
+        state.memory_values.clear();
         return;
     }
     const bool escaped_stack_alias =
@@ -771,6 +916,7 @@ void apply_call(AbstractState& state,
                     state.stack_offsets.begin() + 8,
                     [](const auto offset) { return offset.has_value(); });
     if (escaped_stack_alias) state.stack_values.clear();
+    state.memory_values.clear();
     for (std::uint8_t index = 0u; index <= 7u; ++index)
         make_unknown(state[index]);
     for (std::uint8_t index = 0u; index <= 7u; ++index)
@@ -787,11 +933,47 @@ void apply_call(AbstractState& state,
     std::set<std::uint32_t> evidence_callees;
     bool returned_guarded = candidate_callees_guarded;
     bool returned_complete = candidate_callees_complete;
+    bool returned_memory_complete = candidate_callees_complete;
+    bool returned_memory_initialized = false;
+    std::map<std::uint32_t, AbstractValue> returned_memory;
     for (const auto candidate : callees) {
         const auto summary = summaries.find(candidate);
         if (summary == summaries.end()) {
             returned_complete = false;
+            returned_memory_complete = false;
             continue;
+        }
+        if (!summary->second.memory_complete) {
+            returned_memory_complete = false;
+        } else {
+            std::map<std::uint32_t, AbstractValue> candidate_memory;
+            for (const auto& memory : summary->second.memory_values) {
+                AbstractValue value;
+                value.known = !memory.values.empty();
+                value.guarded = memory.guarded || candidate_callees_guarded;
+                value.complete = memory.complete;
+                value.values = memory.values;
+                value.call_sites = {call_site};
+                value.callees = {candidate};
+                if (value.known) candidate_memory.emplace(memory.address, std::move(value));
+            }
+            if (!returned_memory_initialized) {
+                returned_memory = std::move(candidate_memory);
+                returned_memory_initialized = true;
+            } else {
+                for (auto value = returned_memory.begin(); value != returned_memory.end();) {
+                    const auto candidate_value = candidate_memory.find(value->first);
+                    if (candidate_value == candidate_memory.end()) {
+                        value = returned_memory.erase(value);
+                        continue;
+                    }
+                    merge_value(value->second, candidate_value->second);
+                    if (!value->second.known)
+                        value = returned_memory.erase(value);
+                    else
+                        ++value;
+                }
+            }
         }
         const auto* returned = register_summary(summary->second, 0u);
         if (returned == nullptr || !returned->complete || returned->values.empty()) {
@@ -805,6 +987,8 @@ void apply_call(AbstractState& state,
         evidence_callees.insert(returned->evidence_callees.begin(),
                                 returned->evidence_callees.end());
     }
+    if (returned_memory_complete && returned_memory_initialized)
+        state.memory_values = std::move(returned_memory);
     normalize(returned_values);
     if (returned_values.empty() || returned_values.size() > maximum_summary_values) return;
     state[0u].known = true;
@@ -1017,6 +1201,33 @@ FunctionEvaluation evaluate_function(
                      : (returns.empty() ? "no-return" : "return-path-unknown");
         evaluation.summary.registers.push_back(std::move(summary));
     }
+    evaluation.summary.memory_complete = !returns.empty();
+    if (!returns.empty()) {
+        auto returned_memory = returns.front().second.memory_values;
+        for (auto return_state = returns.begin() + 1; return_state != returns.end();
+             ++return_state) {
+            for (auto value = returned_memory.begin(); value != returned_memory.end();) {
+                const auto candidate = return_state->second.memory_values.find(value->first);
+                if (candidate == return_state->second.memory_values.end()) {
+                    value = returned_memory.erase(value);
+                    continue;
+                }
+                merge_value(value->second, candidate->second);
+                if (!value->second.known)
+                    value = returned_memory.erase(value);
+                else
+                    ++value;
+            }
+        }
+        for (auto& [address, value] : returned_memory) {
+            FunctionMemoryValueSummary memory;
+            memory.address = address;
+            memory.complete = value.complete;
+            memory.guarded = value.guarded;
+            memory.values = std::move(value.values);
+            evaluation.summary.memory_values.push_back(std::move(memory));
+        }
+    }
     return evaluation;
 }
 
@@ -1061,6 +1272,31 @@ bool merge_candidate_input(CandidateInput& destination,
                 make_unknown(target);
                 break;
             }
+        }
+    }
+    const auto first_call_site = *destination.expected_call_sites.begin();
+    merged.memory_values = destination.observations.at(first_call_site).memory_values;
+    for (auto value = merged.memory_values.begin(); value != merged.memory_values.end();) {
+        bool retained = true;
+        for (const auto call_site : destination.expected_call_sites) {
+            if (call_site == first_call_site) continue;
+            const auto& source_values = destination.observations.at(call_site).memory_values;
+            const auto source = source_values.find(value->first);
+            if (source == source_values.end()) {
+                retained = false;
+                break;
+            }
+            merge_value(value->second, source->second);
+            if (!value->second.known) {
+                retained = false;
+                break;
+            }
+        }
+        if (!retained)
+            value = merged.memory_values.erase(value);
+        else {
+            value->second.guarded = true;
+            ++value;
         }
     }
     destination.state = std::move(merged);
@@ -1196,6 +1432,8 @@ analyze_function_values(const katana::io::ExecutableImage& image,
     if (result.budget_exhausted) {
         for (auto& [address, summary] : summaries) {
             static_cast<void>(address);
+            summary.memory_complete = false;
+            summary.memory_values.clear();
             for (auto& value : summary.registers) {
                 value.complete = false;
                 value.guarded = true;

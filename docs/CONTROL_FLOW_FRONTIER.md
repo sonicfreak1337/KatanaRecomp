@@ -1,6 +1,6 @@
 # Kontrollflussfront und Datenschutz
 
-Stand: KR-4716
+Stand: KR-4717
 
 Jede indirekte Kontrollflussstelle besitzt genau einen der fuenf disjunkten
 Berichtszustaende:
@@ -43,6 +43,11 @@ KR-4716 kann vollstaendige bewachte Zielmengen aus geschlossenen Caller-
 Kontexten, R13-Callbacks, festen Stackspills und vollstaendigen indirekten
 Callee-Summaries ableiten. Unbekannte Caller oder Aliase bleiben Teil der
 offenen Front. Der genaue Vertrag steht in `ABI_VALUE_ANALYSIS.md`.
+
+KR-4717 ergaenzt dominante Objektfeld- und VTable-Initialisierungen. Nur
+vollstaendige endliche Adress-/Wertmengen koennen `guarded_complete` werden;
+beschreibbare statische Tabellen und invalidierte Objektfakten bleiben
+`guarded_partial` oder dynamisch. Der Vertrag steht in `OBJECT_POINTS_TO.md`.
 
 ## Berichte und Datenschutz
 

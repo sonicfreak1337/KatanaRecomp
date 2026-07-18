@@ -454,7 +454,7 @@ Longword-Spills ueber feste SP-/Framepointeroffsets; unbekannte Caller,
 Aliase und Budgeterschoepfung stufen Ergebnisse konservativ herab. Vertrag
 und Gatefaelle stehen in `ABI_VALUE_ANALYSIS.md`.
 
-### [ ] KR-4717 - Objekt-, Feld- und VTable-Points-to
+### [x] KR-4717 - Objekt-, Feld- und VTable-Points-to
 
 Abhaengigkeiten: KR-4715
 Prioritaet: P0
@@ -473,6 +473,15 @@ Akzeptanz:
   synthetisch getestet
 - endliche VTable-Slots werden nur mit vollstaendiger Evidenz bewacht
 - der dynamische Runtime-Default bleibt bei partieller Evidenz erhalten
+
+Umgesetzt mit einer auf 256 Longword-Fakten begrenzten Objektfeldtabelle im
+kontextsensitiven Funktionszustand und vollstaendigen Memory-Return-Summaries.
+Dominante Initialisierungsstores, Register-/Stackzeiger und feste
+Feld-/VTable-Slotloads werden weitergeleitet.
+Unbekannte oder ueberlappende Stores, Aliasverletzungen, Calls und sonstige
+Speicherseiteneffekte invalidieren konservativ. Beschreibbare statische
+VTables bleiben ohne dominierenden Store partiell. Vertrag und Gatefaelle
+stehen in `OBJECT_POINTS_TO.md`.
 
 ### [ ] KR-4718 - Expliziter Runtime-only-Dispatch
 

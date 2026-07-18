@@ -502,6 +502,20 @@ std::string format_control_flow_analysis_json(const ControlFlowAnalysisResult& a
             }
             output << "]}";
         }
+        output << "],\"memory_complete\":" << (function_summary.memory_complete ? "true" : "false")
+               << ",\"memory_values\":[";
+        for (std::size_t memory = 0u; memory < function_summary.memory_values.size(); ++memory) {
+            if (memory != 0u) output << ',';
+            const auto& value = function_summary.memory_values[memory];
+            output << "{\"address\":" << katana::io::quote_json(hex32(value.address))
+                   << ",\"complete\":" << (value.complete ? "true" : "false")
+                   << ",\"guarded\":" << (value.guarded ? "true" : "false") << ",\"values\":[";
+            for (std::size_t item = 0u; item < value.values.size(); ++item) {
+                if (item != 0u) output << ',';
+                output << katana::io::quote_json(hex32(value.values[item]));
+            }
+            output << "]}";
+        }
         output << "]}";
     }
     output << ']';

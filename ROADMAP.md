@@ -80,7 +80,7 @@ nicht gestartet werden.
 
 - [x] `KR-4715` - ungeloeste Kontrollflussfront inventarisieren
 - [x] `KR-4716` - ABI-erhaltene Callbacks, Parameter und Stackwerte
-- [ ] `KR-4717` - Objekt-, Feld- und VTable-Points-to
+- [x] `KR-4717` - Objekt-, Feld- und VTable-Points-to
 - [ ] `KR-4718` - expliziter Runtime-only-Dispatch
 - [ ] `KR-4719` - privater Retail-Buildnachweis mit erzwungenem Build-only-Modus
 - [ ] `KR-4703` - VMU-/Flash-Arbeitskopien und Host-Pacing
