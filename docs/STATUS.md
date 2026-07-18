@@ -2,7 +2,7 @@
 
 Interner Entwicklungsmeilenstein: `v0.46.0`
 Phase: Core-Stabilisierung vor v0.47
-Naechster Task: `KR-4612`
+Naechster Task: `KR-4613`
 Naechstes Gate: `v0.47.0` - Core-Stabilisierung und generische Retail-Runtime
 Weitere interne Gates: `v0.48.0` Integration und `v0.49.0` Alpha-Candidate
 Erster oeffentlicher Release: `v0.50.0` Alpha
@@ -60,6 +60,20 @@ Exceptionursache, Gast-Eventcode und Vektor werden aus einer gemeinsamen
 Metadatentabelle abgeleitet. Die spaeter bei KR-4617 und KR-4618 umzusetzenden
 und auszufuehrenden Testanforderungen stehen in
 [`SH4_CONTROL_STATE.md`](SH4_CONTROL_STATE.md).
+
+## KR-4612 umgesetzt
+
+SQ0 und SQ1 werden jetzt durch Adressbit 5 gewaehlt. Das Schreibfenster
+`0xE0000000` bis `0xE3FFFFFF`, das getrennte Longword-Lesefenster ab
+`0xFF001000`, QACR0/QACR1 und PREF verwenden denselben Queuevertrag. P4- und
+QACR-Zugriffe pruefen Fenster, Breite, Ausrichtung und Queuegrenzen zentral.
+
+Operand-Cache-RAM unterstuetzt explizite Byte-, Word- und
+Longword-Little-Endian-Zugriffe mit Ausrichtungs- und Bereichspruefung. ICBI
+invalidiert die ausgerichtete 32-Byte-Codezeile. OCBI, OCBP und OCBWB schlagen
+sichtbar fehl, solange Cachetags, Dirty-Zustand und Write-back nicht modelliert
+sind. Vertrag und gesammelte Gate-Testanforderungen stehen in
+[`STORE_QUEUE_CACHE.md`](STORE_QUEUE_CACHE.md).
 
 ## Naechste Reihenfolge
 

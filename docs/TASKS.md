@@ -95,7 +95,7 @@ Akzeptanz:
   identisch im Referenz- und generierten Pfad
 - keine bestehende korrekte CPU-Regression wird abgeschwaecht
 
-### [ ] KR-4612 - Store Queue und Cacheadressierung
+### [x] KR-4612 - Store Queue und Cacheadressierung
 
 Abhaengigkeiten: KR-4611
 Prioritaet: P0

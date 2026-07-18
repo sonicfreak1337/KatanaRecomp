@@ -13,7 +13,7 @@ Sh4StoreQueues::Sh4StoreQueues(Memory& memory,
       ocram_profile_(ocram_profile) {}
 
 std::size_t Sh4StoreQueues::queue_index(const std::uint32_t address) noexcept {
-    return (address >> 25u) & 1u;
+    return (address >> 5u) & 1u;
 }
 
 void Sh4StoreQueues::write_qacr(const std::size_t queue, const std::uint32_t value) {
@@ -27,6 +27,22 @@ std::uint32_t Sh4StoreQueues::qacr(const std::size_t queue) const {
         throw std::out_of_range("Ungueltige Store Queue.");
     }
     return qacr_[queue];
+}
+
+std::uint32_t Sh4StoreQueues::read_p4(const std::uint32_t address,
+                                      const MemoryAccessWidth width) const {
+    if (address < read_window_start || address > read_window_end ||
+        width != MemoryAccessWidth::Word || (address & 3u) != 0u) {
+        throw std::invalid_argument(
+            "Store-Queue-Lesezugriff braucht ein ausgerichtetes Longword im P4-Lesefenster.");
+    }
+    const auto& queue_bytes = queues_[queue_index(address)];
+    const auto offset = static_cast<std::size_t>(address & 31u);
+    std::uint32_t value = 0u;
+    for (std::size_t index = 0u; index < sizeof(value); ++index) {
+        value |= static_cast<std::uint32_t>(queue_bytes[offset + index]) << (index * 8u);
+    }
+    return value;
 }
 
 void Sh4StoreQueues::write_p4(const std::uint32_t address,
@@ -100,12 +116,19 @@ CacheMaintenanceResult Sh4StoreQueues::maintain(const CacheMaintenanceOperation 
         memory_.write_u32(address, movca_value);
         result.wrote_memory = true;
         if (code_tracker_) {
-            static_cast<void>(code_tracker_->observe_write(address, 4u, CodeWriteSource::Cpu));
-            result.invalidated_code = true;
+            const auto invalidation =
+                code_tracker_->observe_write(address, 4u, CodeWriteSource::Cpu);
+            result.invalidated_code = !invalidation.invalidated_blocks.empty();
         }
     } else if (operation == CacheMaintenanceOperation::Icbi && code_tracker_) {
-        static_cast<void>(code_tracker_->observe_write(address, 32u, CodeWriteSource::Cpu));
-        result.invalidated_code = true;
+        const auto invalidation =
+            code_tracker_->observe_write(address & ~31u, 32u, CodeWriteSource::Cpu);
+        result.invalidated_code = !invalidation.invalidated_blocks.empty();
+    } else if (operation == CacheMaintenanceOperation::Ocbi ||
+               operation == CacheMaintenanceOperation::Ocbp ||
+               operation == CacheMaintenanceOperation::Ocbwb) {
+        throw std::runtime_error(
+            "Operand-Cache-Tags, Dirty-Zustand und Write-back sind nicht modelliert.");
     }
     return result;
 }
@@ -120,17 +143,30 @@ void Sh4StoreQueues::set_operand_cache_ram_enabled(const bool enabled) {
 bool Sh4StoreQueues::operand_cache_ram_enabled() const noexcept {
     return operand_cache_ram_enabled_;
 }
-std::uint8_t Sh4StoreQueues::read_operand_cache_ram(const std::uint32_t offset) const {
-    if (!operand_cache_ram_enabled_ || offset >= operand_cache_ram_.size()) {
+std::uint32_t Sh4StoreQueues::read_operand_cache_ram(const std::uint32_t offset,
+                                                     const MemoryAccessWidth width) const {
+    const auto bytes = static_cast<std::size_t>(width);
+    if (!operand_cache_ram_enabled_ || offset > operand_cache_ram_.size() ||
+        bytes > operand_cache_ram_.size() - offset || (offset & (bytes - 1u)) != 0u) {
         throw std::out_of_range("Operand-Cache-RAM ist inaktiv oder der Offset ist ungueltig.");
     }
-    return operand_cache_ram_[offset];
+    std::uint32_t value = 0u;
+    for (std::size_t index = 0u; index < bytes; ++index) {
+        value |= static_cast<std::uint32_t>(operand_cache_ram_[offset + index]) << (index * 8u);
+    }
+    return value;
 }
-void Sh4StoreQueues::write_operand_cache_ram(const std::uint32_t offset, const std::uint8_t value) {
-    if (!operand_cache_ram_enabled_ || offset >= operand_cache_ram_.size()) {
+void Sh4StoreQueues::write_operand_cache_ram(const std::uint32_t offset,
+                                             const std::uint32_t value,
+                                             const MemoryAccessWidth width) {
+    const auto bytes = static_cast<std::size_t>(width);
+    if (!operand_cache_ram_enabled_ || offset > operand_cache_ram_.size() ||
+        bytes > operand_cache_ram_.size() - offset || (offset & (bytes - 1u)) != 0u) {
         throw std::out_of_range("Operand-Cache-RAM ist inaktiv oder der Offset ist ungueltig.");
     }
-    operand_cache_ram_[offset] = value;
+    for (std::size_t index = 0u; index < bytes; ++index) {
+        operand_cache_ram_[offset + index] = static_cast<std::uint8_t>(value >> (index * 8u));
+    }
 }
 
 } // namespace katana::runtime

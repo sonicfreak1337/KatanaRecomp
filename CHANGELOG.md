@@ -25,6 +25,11 @@
   dokumentiert.
 ### Korrigiert
 
+- KR-4612: Store Queues verwenden Adressbit 5 statt Bit 25. Schreib- und
+  Longword-Lesefenster, QACR und PREF teilen eine zentrale SQ0/SQ1-Auswahl und
+  pruefen Breite, Ausrichtung sowie Queuegrenzen. Operand-Cache-RAM behandelt
+  Byte, Word und Longword little-endian; ICBI richtet auf die 32-Byte-Codezeile
+  aus. Nicht modellierte OCBI-/OCBP-/OCBWB-Zustaende schlagen sichtbar fehl.
 - KR-4611: Die sichtbare R0-R7-Bank folgt jetzt `SR.MD && SR.RB`. BSR, BSRF
   und JSR aktualisieren PR vor dem Delay Slot, ohne einen dort geschriebenen
   Wert nachtraeglich zu ueberschreiben. Block-ABI 2 unterscheidet RTE und SLEEP

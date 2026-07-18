@@ -155,12 +155,9 @@ initialize_dreamcast_runtime(CpuState& cpu,
     const auto queues = state.store_queues;
     auto queue_window = std::make_shared<MmioMemoryDevice>(
         0x04000000u,
-        [queues](const std::uint32_t offset, const MemoryAccessWidth width) {
-            const auto& bytes = queues->queue((offset >> 25u) & 1u);
-            std::uint32_t value = 0u;
-            for (std::size_t index = 0u; index < static_cast<std::size_t>(width); ++index)
-                value |= static_cast<std::uint32_t>(bytes[(offset + index) & 31u]) << (index * 8u);
-            return value;
+        [](const std::uint32_t, const MemoryAccessWidth) -> std::uint32_t {
+            throw std::invalid_argument(
+                "Das Store-Queue-Schreibfenster unterstuetzt keine Lesezugriffe.");
         },
         [queues](const std::uint32_t offset,
                  const std::uint32_t value,
@@ -168,10 +165,21 @@ initialize_dreamcast_runtime(CpuState& cpu,
             queues->write_p4(Sh4StoreQueues::window_start + offset, value, width);
         });
     cpu.memory.map_region("sh4-store-queue-window", Sh4StoreQueues::window_start, queue_window);
+    auto queue_read_window = std::make_shared<MmioMemoryDevice>(
+        64u,
+        [queues](const std::uint32_t offset, const MemoryAccessWidth width) {
+            return queues->read_p4(Sh4StoreQueues::read_window_start + offset, width);
+        },
+        MmioWriteHandler{});
+    cpu.memory.map_region(
+        "sh4-store-queue-read-window", Sh4StoreQueues::read_window_start, queue_read_window);
     auto qacr = std::make_shared<MmioMemoryDevice>(
         8u,
-        [queues](const std::uint32_t offset, const MemoryAccessWidth) {
-            return queues->qacr(offset >= 4u ? 1u : 0u);
+        [queues](const std::uint32_t offset, const MemoryAccessWidth width) {
+            if (width != MemoryAccessWidth::Word || (offset != 0u && offset != 4u)) {
+                throw std::invalid_argument("QACR verlangt ausgerichtete 32-Bit-Zugriffe.");
+            }
+            return queues->qacr(offset / 4u);
         },
         [queues](const std::uint32_t offset,
                  const std::uint32_t value,
