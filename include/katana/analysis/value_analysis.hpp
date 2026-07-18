@@ -1,5 +1,6 @@
 #pragma once
 
+#include "katana/analysis/evidence.hpp"
 #include "katana/io/executable_image.hpp"
 #include "katana/sh4/disassembler.hpp"
 
@@ -47,6 +48,8 @@ struct IndirectControlFlowResolution {
     IndirectControlFlowKind kind = IndirectControlFlowKind::Jump;
     std::uint8_t register_index = 0u;
     ResolutionStatus status = ResolutionStatus::Unresolved;
+    ControlFlowEvidence evidence = ControlFlowEvidence::Unresolved;
+    std::vector<AnalysisEvidenceOrigin> evidence_origins;
     std::optional<std::uint32_t> target;
     std::string reason;
     std::vector<std::uint32_t> targets;

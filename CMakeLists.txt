@@ -237,6 +237,7 @@ add_library(katana_core STATIC
     src/platform/phase6_gate.cpp
     src/analysis/disassembler.cpp
     src/analysis/code_address.cpp
+    src/analysis/evidence.cpp
     src/analysis/basic_blocks.cpp
     src/analysis/function_analysis.cpp
     src/analysis/function_value_analysis.cpp

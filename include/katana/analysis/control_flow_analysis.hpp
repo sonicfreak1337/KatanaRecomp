@@ -30,12 +30,23 @@ struct AnalysisDirectiveDiagnostic {
     std::string reason;
 };
 
+struct ControlFlowSite {
+    std::uint32_t instruction_address = 0u;
+    IndirectControlFlowKind kind = IndirectControlFlowKind::Jump;
+    ControlFlowEvidence evidence = ControlFlowEvidence::Unresolved;
+    std::vector<AnalysisEvidenceOrigin> evidence_origins;
+    std::vector<std::uint32_t> targets;
+    std::vector<std::uint32_t> evidence_call_sites;
+    std::vector<std::uint32_t> evidence_callees;
+};
+
 struct ControlFlowAnalysisResult {
     RecursiveAnalysisResult recursive;
     std::vector<IndirectControlFlowResolution> indirect_control_flow;
     std::vector<JumpTableAnalysis> jump_tables;
     std::vector<FunctionValueSummary> function_value_summaries;
     std::vector<ResolvedControlFlowEdge> resolved_edges;
+    std::vector<ControlFlowSite> sites;
     std::size_t fixpoint_iterations = 0u;
     std::vector<AnalysisDirectiveDiagnostic> directive_diagnostics;
     std::vector<SymbolicAddress> symbolic_addresses;

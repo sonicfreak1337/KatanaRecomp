@@ -669,13 +669,21 @@ resolve_indirect_control_flow(const std::span<const katana::sh4::DisassemblyLine
                                                        *value + line.address + 4u)
                                                  : *value;
                 {
-                    const auto validation = validate_committed_code_address(image, narrowed_target);
+                    const auto validation = validate_decode_candidate(image, narrowed_target);
                     if (!validation.valid()) {
                         resolution.reason = code_address_status_name(validation.status);
                     } else {
                         resolution.status = source.find("guarded-writable-") != std::string::npos
                                                 ? ResolutionStatus::Guarded
                                                 : ResolutionStatus::Resolved;
+                        resolution.evidence =
+                            resolution.status == ResolutionStatus::Resolved
+                                ? ControlFlowEvidence::ProvenComplete
+                                : ControlFlowEvidence::GuardedPartial;
+                        resolution.evidence_origins = {
+                            resolution.status == ResolutionStatus::Resolved
+                                ? AnalysisEvidenceOrigin::LocalValue
+                                : AnalysisEvidenceOrigin::EntrySnapshot};
                         resolution.target = narrowed_target;
                         resolution.reason = source.empty() ? "constant-register" : source;
                         if (register_relative)

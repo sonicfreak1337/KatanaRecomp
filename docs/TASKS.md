@@ -135,7 +135,7 @@ Akzeptanz:
 - physische Aliase und ueberlappende Writes sind getestet
 - sicherer Referenzpfad und optimierter Writepfad sind differenziell identisch
 
-### [ ] KR-4614 - Kontexttreue, sounde Kontrollfluss- und Wertanalyse
+### [x] KR-4614 - Kontexttreue, sounde Kontrollfluss- und Wertanalyse
 
 Abhaengigkeiten: KR-4611
 Prioritaet: P0

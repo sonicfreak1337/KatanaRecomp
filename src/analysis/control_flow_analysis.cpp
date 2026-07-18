@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <array>
+#include <deque>
 #include <iomanip>
 #include <map>
 #include <set>
@@ -44,17 +45,24 @@ void require_override_code_address(const katana::io::ExecutableImage& image,
 struct SeedEvidence {
     std::set<FunctionOrigin> origins;
     bool proven = false;
+    ControlFlowEvidence evidence = ControlFlowEvidence::Unresolved;
 };
 
 bool add_seed(std::map<std::uint32_t, SeedEvidence>& seeds,
               const std::uint32_t address,
               const std::span<const FunctionOrigin> origins = {},
-              const bool proven = true) {
+              const bool proven = true,
+              const ControlFlowEvidence evidence = ControlFlowEvidence::ProvenComplete) {
     const auto [iterator, inserted] = seeds.try_emplace(address);
     bool changed = inserted;
     if (proven && !iterator->second.proven) {
         iterator->second.proven = true;
         changed = true;
+    }
+    if (control_flow_evidence_strength(evidence) >
+        control_flow_evidence_strength(iterator->second.evidence)) {
+        changed = iterator->second.evidence != evidence || changed;
+        iterator->second.evidence = evidence;
     }
     for (const auto origin : origins) {
         changed = iterator->second.origins.insert(origin).second || changed;
@@ -64,22 +72,21 @@ bool add_seed(std::map<std::uint32_t, SeedEvidence>& seeds,
 
 bool add_resolution_seeds(std::map<std::uint32_t, SeedEvidence>& seeds,
                           const IndirectControlFlowResolution& resolution) {
-    if (resolution.status == ResolutionStatus::Unresolved) return false;
     auto targets = resolution.targets;
     if (resolution.target.has_value()) targets.push_back(*resolution.target);
     std::sort(targets.begin(), targets.end());
     targets.erase(std::unique(targets.begin(), targets.end()), targets.end());
+    if (targets.empty()) return false;
     bool changed = false;
     for (const auto target : targets) {
         if (resolution.kind != IndirectControlFlowKind::Call) {
             changed =
-                add_seed(seeds, target, {}, resolution.status == ResolutionStatus::Resolved) ||
+                add_seed(seeds,
+                         target,
+                         {},
+                         control_flow_evidence_proven(resolution.evidence),
+                         resolution.evidence) ||
                 changed;
-            continue;
-        }
-        if (resolution.status == ResolutionStatus::Guarded) {
-            const std::array origins{FunctionOrigin::GuardedSnapshot};
-            changed = add_seed(seeds, target, origins, false) || changed;
             continue;
         }
         if (resolution.reason == "user-override" || resolution.reason == "user-hint") {
@@ -87,10 +94,18 @@ bool add_resolution_seeds(std::map<std::uint32_t, SeedEvidence>& seeds,
                                      resolution.reason == "user-hint"
                                          ? FunctionOrigin::UserHint
                                          : FunctionOrigin::UserOverride};
-            changed = add_seed(seeds, target, origins) || changed;
+            changed = add_seed(seeds, target, origins, false, resolution.evidence) || changed;
+        } else if (resolution.status == ResolutionStatus::Guarded) {
+            const std::array origins{FunctionOrigin::GuardedSnapshot};
+            changed = add_seed(seeds, target, origins, false, resolution.evidence) || changed;
         } else {
             const std::array origins{FunctionOrigin::IndirectCall};
-            changed = add_seed(seeds, target, origins) || changed;
+            changed = add_seed(seeds,
+                               target,
+                               origins,
+                               control_flow_evidence_proven(resolution.evidence),
+                               resolution.evidence) ||
+                      changed;
         }
     }
     return changed;
@@ -104,6 +119,7 @@ RecursiveAnalysisOptions make_options(const std::map<std::uint32_t, SeedEvidence
         seed.address = address;
         seed.function_origins.assign(evidence.origins.begin(), evidence.origins.end());
         seed.guarded_candidate = !evidence.proven;
+        seed.evidence = evidence.evidence;
         options.additional_seeds.push_back(std::move(seed));
     }
     return options;
@@ -129,7 +145,24 @@ void mark_resolved_table_dispatch(std::vector<IndirectControlFlowResolution>& re
         });
     if (resolution == resolutions.end()) return;
     resolution->status = ResolutionStatus::Resolved;
+    resolution->evidence = table.evidence;
+    resolution->evidence_origins = {
+        table.evidence == ControlFlowEvidence::HintCandidate
+            ? AnalysisEvidenceOrigin::UserHint
+        : table.evidence == ControlFlowEvidence::ForcedOverride
+            ? AnalysisEvidenceOrigin::UserOverride
+            : AnalysisEvidenceOrigin::JumpTable};
+    if (table.evidence == ControlFlowEvidence::HintCandidate)
+        resolution->status = ResolutionStatus::Unresolved;
+    else if (!control_flow_evidence_complete(table.evidence))
+        resolution->status = ResolutionStatus::Guarded;
     resolution->target.reset();
+    resolution->targets.clear();
+    for (const auto& entry : table.entries) resolution->targets.push_back(entry.target);
+    std::sort(resolution->targets.begin(), resolution->targets.end());
+    resolution->targets.erase(
+        std::unique(resolution->targets.begin(), resolution->targets.end()),
+        resolution->targets.end());
     resolution->reason = table.reason;
 }
 
@@ -154,10 +187,99 @@ bool memory_load(const katana::sh4::InstructionKind kind) {
     }
 }
 
+struct BackwardSlice {
+    std::set<std::uint32_t> writers;
+    bool incomplete = false;
+    bool preceding_call = false;
+};
+
+BackwardSlice bounded_writer_slice(const std::span<const BasicBlock> blocks,
+                                   const std::uint32_t before_address,
+                                   const std::uint8_t register_index) {
+    std::unordered_map<std::uint32_t, const BasicBlock*> by_start;
+    std::unordered_map<std::uint32_t, std::vector<std::uint32_t>> predecessors;
+    const BasicBlock* initial = nullptr;
+    std::size_t initial_index = 0u;
+    for (const auto& block : blocks) {
+        by_start.emplace(block.start_address, &block);
+        for (const auto successor : block.successors)
+            predecessors[successor].push_back(block.start_address);
+        for (std::size_t index = 0u; index < block.lines.size(); ++index) {
+            if (block.lines[index].address == before_address) {
+                initial = &block;
+                initial_index = index;
+            }
+        }
+    }
+    BackwardSlice result;
+    if (initial == nullptr) {
+        result.incomplete = true;
+        return result;
+    }
+    struct Work {
+        std::uint32_t block = 0u;
+        std::size_t before_index = 0u;
+        std::size_t depth = 0u;
+    };
+    std::deque<Work> pending{{initial->start_address, initial_index, 0u}};
+    std::set<std::pair<std::uint32_t, std::size_t>> visited;
+    constexpr std::size_t instruction_budget = 64u;
+    while (!pending.empty()) {
+        const auto work = pending.front();
+        pending.pop_front();
+        if (!visited.emplace(work.block, work.before_index).second) continue;
+        const auto found = by_start.find(work.block);
+        if (found == by_start.end()) {
+            result.incomplete = true;
+            continue;
+        }
+        const auto& block = *found->second;
+        bool writer_found = false;
+        auto depth = work.depth;
+        for (std::size_t index = work.before_index; index-- > 0u;) {
+            if (++depth > instruction_budget) {
+                result.incomplete = true;
+                writer_found = true;
+                break;
+            }
+            const auto& line = block.lines[index];
+            if (line.instruction.control_flow == katana::sh4::ControlFlowKind::Call ||
+                line.instruction.control_flow == katana::sh4::ControlFlowKind::IndirectCall)
+                result.preceding_call = true;
+            if ((general_register_write_mask(line.instruction) &
+                 static_cast<std::uint16_t>(1u << register_index)) == 0u)
+                continue;
+            writer_found = true;
+            if (line.instruction.destination_register == register_index &&
+                memory_load(line.instruction.kind))
+                result.writers.insert(line.address);
+            else
+                result.incomplete = true;
+            break;
+        }
+        if (writer_found) continue;
+        const auto incoming = predecessors.find(block.start_address);
+        if (incoming == predecessors.end() || incoming->second.empty()) {
+            result.incomplete = true;
+            continue;
+        }
+        for (const auto predecessor : incoming->second) {
+            const auto predecessor_block = by_start.find(predecessor);
+            if (predecessor_block != by_start.end())
+                pending.push_back(
+                    {predecessor, predecessor_block->second->lines.size(), depth});
+        }
+    }
+    return result;
+}
+
 void classify_dynamic_sites(const std::span<const katana::sh4::DisassemblyLine> lines,
                             std::vector<IndirectControlFlowResolution>& resolutions) {
+    const auto blocks = build_basic_blocks(lines);
     for (auto& resolution : resolutions) {
-        if (resolution.status != ResolutionStatus::Unresolved) continue;
+        if (resolution.status != ResolutionStatus::Unresolved ||
+            resolution.evidence == ControlFlowEvidence::HintCandidate)
+            continue;
         const auto dispatch = std::lower_bound(
             lines.begin(),
             lines.end(),
@@ -165,44 +287,39 @@ void classify_dynamic_sites(const std::span<const katana::sh4::DisassemblyLine> 
             [](const auto& line, const auto address) { return line.address < address; });
         if (dispatch == lines.end() || dispatch->address != resolution.instruction_address)
             continue;
-        const auto index = static_cast<std::size_t>(dispatch - lines.begin());
-        const auto first = index > 8u ? index - 8u : 0u;
+        const auto slice =
+            bounded_writer_slice(blocks, resolution.instruction_address, resolution.register_index);
         const katana::sh4::DisassemblyLine* writer = nullptr;
-        const katana::sh4::DisassemblyLine* base_writer = nullptr;
-        bool preceding_call = false;
-        for (std::size_t current = index; current-- > first;) {
-            if (lines[current].address + 2u != lines[current + 1u].address) break;
-            const auto& instruction = lines[current].instruction;
-            if (instruction.control_flow == katana::sh4::ControlFlowKind::Call ||
-                instruction.control_flow == katana::sh4::ControlFlowKind::IndirectCall)
-                preceding_call = true;
-            if (writer == nullptr &&
-                (general_register_write_mask(instruction) &
-                 static_cast<std::uint16_t>(1u << resolution.register_index)) != 0u) {
-                if (instruction.destination_register == resolution.register_index &&
-                    memory_load(instruction.kind)) {
-                    writer = &lines[current];
-                    continue;
-                }
-                break;
-            }
-            if (writer != nullptr && memory_load(instruction.kind) &&
-                instruction.destination_register == writer->instruction.source_register) {
-                base_writer = &lines[current];
-                break;
-            }
+        if (slice.writers.size() == 1u && !slice.incomplete) {
+            const auto found_writer =
+                std::lower_bound(lines.begin(), lines.end(), *slice.writers.begin(),
+                                 [](const auto& line, const auto address) {
+                                     return line.address < address;
+                                 });
+            if (found_writer != lines.end() && found_writer->address == *slice.writers.begin())
+                writer = &*found_writer;
         }
-        if (resolution.register_index == 0u && preceding_call) {
+        bool vtable_base = false;
+        if (writer != nullptr) {
+            const auto base = bounded_writer_slice(
+                blocks, writer->address, writer->instruction.source_register);
+            vtable_base = base.writers.size() == 1u && !base.incomplete;
+        }
+        if (resolution.register_index == 0u && slice.preceding_call) {
             resolution.reason = "dynamic-return-value";
         } else if (resolution.register_index == 15u ||
                    (writer != nullptr && writer->instruction.source_register == 15u)) {
             resolution.reason = "dynamic-stack-target";
-        } else if (writer != nullptr && base_writer != nullptr) {
+        } else if (writer != nullptr && vtable_base) {
             resolution.reason = "dynamic-vtable-target";
         } else if (writer != nullptr) {
             resolution.reason = "dynamic-unbounded-memory";
         } else if (resolution.register_index >= 4u && resolution.register_index <= 7u) {
             resolution.reason = "dynamic-parameter";
+        }
+        if (resolution.reason.starts_with("dynamic-")) {
+            resolution.evidence = ControlFlowEvidence::RuntimeOnly;
+            resolution.evidence_origins = {AnalysisEvidenceOrigin::RuntimeClassification};
         }
     }
 }
@@ -212,18 +329,20 @@ collect_resolved_edges(const std::span<const IndirectControlFlowResolution> reso
                        const std::span<const JumpTableAnalysis> tables) {
     std::vector<ResolvedControlFlowEdge> edges;
     for (const auto& resolution : resolutions) {
-        if (resolution.status == ResolutionStatus::Unresolved) continue;
         std::vector<std::uint32_t> targets = resolution.targets;
         if (resolution.target.has_value()) targets.push_back(*resolution.target);
         std::sort(targets.begin(), targets.end());
         targets.erase(std::unique(targets.begin(), targets.end()), targets.end());
+        if (targets.empty()) continue;
         for (const auto target : targets) {
             edges.push_back({resolution.instruction_address,
                              target,
                              resolution.kind == IndirectControlFlowKind::Call
                                  ? ResolvedControlFlowKind::Call
                                  : ResolvedControlFlowKind::Jump,
-                             resolution.status == ResolutionStatus::Guarded});
+                             resolution.evidence != ControlFlowEvidence::ProvenComplete,
+                             resolution.evidence,
+                             resolution.evidence_origins});
         }
     }
     for (const auto& table : tables) {
@@ -234,7 +353,13 @@ collect_resolved_edges(const std::span<const IndirectControlFlowResolution> reso
                              table.dispatch_kind == JumpTableDispatchKind::Call
                                  ? ResolvedControlFlowKind::Call
                                  : ResolvedControlFlowKind::Jump,
-                             false});
+                             false,
+                             table.evidence,
+                             {table.evidence == ControlFlowEvidence::HintCandidate
+                                  ? AnalysisEvidenceOrigin::UserHint
+                              : table.evidence == ControlFlowEvidence::ForcedOverride
+                                  ? AnalysisEvidenceOrigin::UserOverride
+                                  : AnalysisEvidenceOrigin::JumpTable}});
         }
     }
     std::sort(edges.begin(), edges.end(), [](const auto& left, const auto& right) {
@@ -243,7 +368,9 @@ collect_resolved_edges(const std::span<const IndirectControlFlowResolution> reso
         if (left.target_address != right.target_address)
             return left.target_address < right.target_address;
         if (left.kind != right.kind) return left.kind < right.kind;
-        return left.guarded < right.guarded;
+        if (left.guarded != right.guarded) return left.guarded < right.guarded;
+        if (left.evidence != right.evidence) return left.evidence < right.evidence;
+        return left.evidence_origins < right.evidence_origins;
     });
     edges.erase(std::unique(edges.begin(), edges.end()), edges.end());
     return edges;
@@ -271,7 +398,12 @@ ControlFlowAnalysisResult analyze_control_flow(const katana::io::ExecutableImage
             }
             const std::array origins{hints ? FunctionOrigin::UserHint
                                            : FunctionOrigin::UserOverride};
-            static_cast<void>(add_seed(seeds, function.address, origins));
+            static_cast<void>(add_seed(seeds,
+                                       function.address,
+                                       origins,
+                                       false,
+                                       hints ? ControlFlowEvidence::HintCandidate
+                                             : ControlFlowEvidence::ForcedOverride));
             if (hints) {
                 seed_diagnostics.push_back({function.line,
                                             function.address,
@@ -305,7 +437,7 @@ ControlFlowAnalysisResult analyze_control_flow(const katana::io::ExecutableImage
         }
         for (std::size_t index = 0u; index < analysis.recursive.instructions.size(); ++index) {
             const auto& line = analysis.recursive.instructions[index];
-            if (directive_dispatches.contains(line.address) ||
+            if ((!hints && directive_dispatches.contains(line.address)) ||
                 line.instruction.kind != katana::sh4::InstructionKind::Braf)
                 continue;
             const auto found = resolution_by_address.find(line.address);
@@ -316,6 +448,7 @@ ControlFlowAnalysisResult analyze_control_flow(const katana::io::ExecutableImage
             auto table = recognize_bounded_relative_jump_table(
                 image, analysis.recursive.instructions, index);
             if (!table.has_value()) continue;
+            table->evidence = ControlFlowEvidence::ProvenComplete;
             analysis.jump_tables.push_back(std::move(*table));
             mark_resolved_table_dispatch(analysis.indirect_control_flow,
                                          analysis.jump_tables.back());
@@ -346,7 +479,10 @@ ControlFlowAnalysisResult analyze_control_flow(const katana::io::ExecutableImage
                     require_override_code_address(image, *overrides, jump.line, jump.target);
                 }
                 if (hints && resolution->status == ResolutionStatus::Resolved) {
-                    const bool confirmed = resolution->target == jump.target;
+                    const bool confirmed = resolution->target == jump.target ||
+                                           std::find(resolution->targets.begin(),
+                                                     resolution->targets.end(),
+                                                     jump.target) != resolution->targets.end();
                     analysis.directive_diagnostics.push_back(
                         {jump.line,
                          jump.instruction_address,
@@ -355,8 +491,32 @@ ControlFlowAnalysisResult analyze_control_flow(const katana::io::ExecutableImage
                          confirmed ? "matches-static-proof" : "conflicts-with-static-proof"});
                     continue;
                 }
-                resolution->status = ResolutionStatus::Resolved;
-                resolution->target = jump.target;
+                if (hints) {
+                    if (resolution->target.has_value())
+                        resolution->targets.push_back(*resolution->target);
+                    resolution->targets.push_back(jump.target);
+                    std::sort(resolution->targets.begin(), resolution->targets.end());
+                    resolution->targets.erase(
+                        std::unique(resolution->targets.begin(), resolution->targets.end()),
+                        resolution->targets.end());
+                    resolution->target = jump.target;
+                    if (control_flow_evidence_strength(ControlFlowEvidence::HintCandidate) >
+                        control_flow_evidence_strength(resolution->evidence))
+                        resolution->evidence = ControlFlowEvidence::HintCandidate;
+                    resolution->evidence_origins.push_back(AnalysisEvidenceOrigin::UserHint);
+                } else {
+                    resolution->status = ResolutionStatus::Guarded;
+                    resolution->evidence = ControlFlowEvidence::ForcedOverride;
+                    resolution->targets.clear();
+                    resolution->target = jump.target;
+                    resolution->evidence_origins = {AnalysisEvidenceOrigin::UserOverride};
+                }
+                std::sort(resolution->evidence_origins.begin(),
+                          resolution->evidence_origins.end());
+                resolution->evidence_origins.erase(
+                    std::unique(resolution->evidence_origins.begin(),
+                                resolution->evidence_origins.end()),
+                    resolution->evidence_origins.end());
                 resolution->reason = hints ? "user-hint" : "user-override";
                 if (hints) {
                     analysis.directive_diagnostics.push_back(
@@ -432,6 +592,8 @@ ControlFlowAnalysisResult analyze_control_flow(const katana::io::ExecutableImage
                                              : AnalysisDirectiveDiagnosticStatus::Rejected,
                          jump_table.resolved ? "jump-table-validated" : jump_table.reason});
                 }
+                jump_table.evidence = hints ? ControlFlowEvidence::HintCandidate
+                                            : ControlFlowEvidence::ForcedOverride;
                 analysis.jump_tables.push_back(std::move(jump_table));
                 mark_resolved_table_dispatch(analysis.indirect_control_flow,
                                              analysis.jump_tables.back());
@@ -453,9 +615,19 @@ ControlFlowAnalysisResult analyze_control_flow(const katana::io::ExecutableImage
                         origins.push_back(hints ? FunctionOrigin::UserHint
                                                 : FunctionOrigin::UserOverride);
                     }
-                    changed = add_seed(seeds, entry.target, origins) || changed;
+                    changed = add_seed(seeds,
+                                       entry.target,
+                                       origins,
+                                       control_flow_evidence_proven(table.evidence),
+                                       table.evidence) ||
+                              changed;
                 } else {
-                    changed = add_seed(seeds, entry.target) || changed;
+                    changed = add_seed(seeds,
+                                       entry.target,
+                                       {},
+                                       control_flow_evidence_proven(table.evidence),
+                                       table.evidence) ||
+                              changed;
                 }
             }
         }
@@ -465,21 +637,30 @@ ControlFlowAnalysisResult analyze_control_flow(const katana::io::ExecutableImage
 
         std::vector<std::uint32_t> function_entries;
         function_entries.reserve(analysis.recursive.functions.size());
-        for (const auto& function : analysis.recursive.functions)
-            function_entries.push_back(function.address);
+        for (const auto& function : analysis.recursive.functions) {
+            if (control_flow_evidence_proven(function.evidence))
+                function_entries.push_back(function.address);
+        }
         const auto provisional_edges =
             collect_resolved_edges(analysis.indirect_control_flow, analysis.jump_tables);
         auto function_values = analyze_function_values(
             image, analysis.recursive.instructions, function_entries, provisional_edges);
         analysis.function_value_summaries = std::move(function_values.summaries);
         for (auto& proof : function_values.resolutions) {
+            if (proof.targets.empty()) continue;
             const auto found = resolution_by_address.find(proof.instruction_address);
             if (found == resolution_by_address.end()) continue;
             auto resolution =
                 analysis.indirect_control_flow.begin() + static_cast<std::ptrdiff_t>(found->second);
-            if (resolution->status == ResolutionStatus::Resolved) continue;
+            if (resolution->status == ResolutionStatus::Resolved ||
+                resolution->evidence == ControlFlowEvidence::ForcedOverride)
+                continue;
             resolution->status =
                 proof.guarded ? ResolutionStatus::Guarded : ResolutionStatus::Resolved;
+            resolution->evidence = proof.complete && !proof.guarded
+                                       ? ControlFlowEvidence::ProvenComplete
+                                       : proof.evidence;
+            resolution->evidence_origins = {AnalysisEvidenceOrigin::FunctionSummary};
             resolution->target = proof.targets.size() == 1u
                                      ? std::optional<std::uint32_t>(proof.targets.front())
                                      : std::nullopt;
@@ -533,8 +714,51 @@ ControlFlowAnalysisResult analyze_control_flow(const katana::io::ExecutableImage
             break;
         }
     }
+    for (auto& resolution : analysis.indirect_control_flow) {
+        if (!control_flow_evidence_proven(resolution.evidence)) continue;
+        auto targets = resolution.targets;
+        if (resolution.target.has_value()) targets.push_back(*resolution.target);
+        const bool boundaries = std::all_of(targets.begin(), targets.end(), [&](const auto target) {
+            return proven_instruction_boundary(
+                analysis.recursive.proven_instruction_addresses, target);
+        });
+        if (!boundaries) {
+            resolution.status = ResolutionStatus::Guarded;
+            resolution.evidence = ControlFlowEvidence::GuardedPartial;
+            resolution.reason += "-decode-candidate-only";
+        }
+    }
+    for (auto& table : analysis.jump_tables) {
+        if (!table.resolved || !control_flow_evidence_proven(table.evidence)) continue;
+        const bool boundaries = std::all_of(table.entries.begin(), table.entries.end(),
+                                            [&](const auto& entry) {
+            return proven_instruction_boundary(
+                analysis.recursive.proven_instruction_addresses, entry.target);
+        });
+        if (!boundaries) table.evidence = ControlFlowEvidence::GuardedPartial;
+    }
     analysis.resolved_edges =
         collect_resolved_edges(analysis.indirect_control_flow, analysis.jump_tables);
+    analysis.sites.reserve(analysis.indirect_control_flow.size());
+    for (const auto& resolution : analysis.indirect_control_flow) {
+        ControlFlowSite site;
+        site.instruction_address = resolution.instruction_address;
+        site.kind = resolution.kind;
+        site.evidence = resolution.evidence;
+        site.evidence_origins = resolution.evidence_origins;
+        site.targets = resolution.targets;
+        if (resolution.target.has_value()) site.targets.push_back(*resolution.target);
+        std::sort(site.targets.begin(), site.targets.end());
+        site.targets.erase(std::unique(site.targets.begin(), site.targets.end()),
+                           site.targets.end());
+        site.evidence_call_sites = resolution.evidence_call_sites;
+        site.evidence_callees = resolution.evidence_callees;
+        analysis.sites.push_back(std::move(site));
+    }
+    std::sort(analysis.sites.begin(), analysis.sites.end(), [](const auto& left,
+                                                               const auto& right) {
+        return left.instruction_address < right.instruction_address;
+    });
     std::sort(analysis.directive_diagnostics.begin(),
               analysis.directive_diagnostics.end(),
               [](const auto& left, const auto& right) {

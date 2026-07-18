@@ -1,12 +1,13 @@
 #include "katana/analysis/code_address.hpp"
 
+#include <algorithm>
 #include <cstdint>
 
 namespace katana::analysis {
 
-CodeAddressValidation validate_committed_code_address(const katana::io::ExecutableImage& image,
-                                                      const std::uint32_t address,
-                                                      const std::size_t width) noexcept {
+CodeAddressValidation validate_decode_candidate(const katana::io::ExecutableImage& image,
+                                                const std::uint32_t address,
+                                                const std::size_t width) noexcept {
     if ((address & 1u) != 0u) {
         return {CodeAddressStatus::OddAddress, nullptr};
     }
@@ -33,6 +34,17 @@ CodeAddressValidation validate_committed_code_address(const katana::io::Executab
         return {CodeAddressStatus::OutsideCommittedData, containing};
     }
     return {CodeAddressStatus::Valid, containing};
+}
+
+bool proven_instruction_boundary(const std::span<const std::uint32_t> proven_addresses,
+                                 const std::uint32_t address) noexcept {
+    return std::binary_search(proven_addresses.begin(), proven_addresses.end(), address);
+}
+
+CodeAddressValidation validate_committed_code_address(const katana::io::ExecutableImage& image,
+                                                      const std::uint32_t address,
+                                                      const std::size_t width) noexcept {
+    return validate_decode_candidate(image, address, width);
 }
 
 const char* code_address_status_name(const CodeAddressStatus status) noexcept {

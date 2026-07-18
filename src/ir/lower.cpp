@@ -1072,7 +1072,8 @@ std::vector<Function> lower_program(const katana::analysis::ControlFlowAnalysisR
     std::vector<std::uint32_t> seeds;
     seeds.reserve(analysis.recursive.functions.size());
     for (const auto& function : analysis.recursive.functions) {
-        seeds.push_back(function.address);
+        if (katana::analysis::control_flow_evidence_proven(function.evidence))
+            seeds.push_back(function.address);
     }
     std::sort(seeds.begin(), seeds.end());
     seeds.erase(std::unique(seeds.begin(), seeds.end()), seeds.end());

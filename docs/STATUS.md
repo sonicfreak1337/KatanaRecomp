@@ -2,7 +2,7 @@
 
 Interner Entwicklungsmeilenstein: `v0.46.0`
 Phase: Core-Stabilisierung vor v0.47
-Naechster Task: `KR-4614`
+Naechster Task: `KR-4615`
 Naechstes Gate: `v0.47.0` - Core-Stabilisierung und generische Retail-Runtime
 Weitere interne Gates: `v0.48.0` Integration und `v0.49.0` Alpha-Candidate
 Erster oeffentlicher Release: `v0.50.0` Alpha
@@ -89,6 +89,24 @@ Runtime-Blocktabelle. Zusaetzlich verweigern trackergebundene Tabellen stale
 virtuelle, physische und Alias-Lookups, sodass Direktdispatch und Inline-Cache
 kein invalidiertes Ziel ausfuehren koennen. Vertrag und die bei KR-4617/KR-4618
 nachzuholenden Tests stehen in [`GUEST_WRITES.md`](GUEST_WRITES.md).
+
+## KR-4614 umgesetzt
+
+Kontrollfluss-Sites, CFG-Kanten, Funktionskandidaten und Jump Tables verwenden
+die sieben typisierten Evidenzklassen von `ProvenComplete` bis `Unresolved`.
+Hints bleiben unverbindliche Kandidaten und koennen die ungeloeste Front oder
+den Export nicht verkleinern. Forced Overrides behalten den Runtime-Default.
+
+Die rekursive Worklist unterscheidet Adresse, eingehenden Kontext,
+Delay-Slot-Owner und Evidenz. Basic Blocks erzeugen Fallthrough nur an der
+exakten Folgeadresse und paaren Owner/Slot nur gegenseitig bei `PC + 2`.
+Unbekannte Caller tainten Kandidateneingaenge; Zielmengen aller Callkontexte
+und vollstaendige Summaries endlicher indirekter Callees werden konservativ
+vereinigt. Dynamische Herkunft verwendet einen begrenzten CFG-Backward-Slice
+statt eines linearen Acht-Instruktions-Fensters.
+
+Der genaue Vertrag und die bei KR-4617/KR-4618 nachzuholenden Regressionen
+stehen in [`CONTROL_FLOW_SOUNDNESS.md`](CONTROL_FLOW_SOUNDNESS.md).
 
 ## Naechste Reihenfolge
 

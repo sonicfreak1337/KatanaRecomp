@@ -141,8 +141,9 @@ std::string format_indirect_control_flow_report(
             line << "  " << kind_name(resolution.kind) << ' ';
             address_with_symbol(line, resolution.instruction_address, symbols);
             line << " [" << resolution.reason;
-            if (resolution.status == ResolutionStatus::Guarded && resolution.target.has_value()) {
-                line << "; snapshot-candidate=";
+            line << "; evidence=" << control_flow_evidence_name(resolution.evidence);
+            if (resolution.target.has_value()) {
+                line << "; candidate=";
                 address(line, *resolution.target);
             }
             line << "] Hinweis: jump = ";
@@ -162,7 +163,8 @@ std::string format_indirect_control_flow_report(
             address_with_symbol(resolved, resolution.instruction_address, symbols);
             resolved << " -> ";
             address_with_symbol(resolved, target, symbols);
-            resolved << " [" << resolution.reason;
+            resolved << " [" << resolution.reason
+                     << "; evidence=" << control_flow_evidence_name(resolution.evidence);
             if (!resolution.evidence_callees.empty()) {
                 resolved << "; r" << static_cast<unsigned>(resolution.register_index)
                          << "; callees=";
@@ -181,14 +183,15 @@ std::string format_indirect_control_flow_report(
     for (const auto& table : jump_tables) {
         const auto kind = table.dispatch_kind == JumpTableDispatchKind::Call ? "jump-table-call"
                                                                              : "jump-table-jump";
-        if (table.resolved) {
+        if (table.resolved && control_flow_evidence_complete(table.evidence)) {
             for (const auto& entry : table.entries) {
                 std::ostringstream line;
                 line << "  " << kind << ' ';
                 address_with_symbol(line, table.dispatch_address, symbols);
                 line << " -> ";
                 address_with_symbol(line, entry.target, symbols);
-                line << " [" << entry.reason << "]\n";
+                line << " [" << entry.reason
+                     << "; evidence=" << control_flow_evidence_name(table.evidence) << "]\n";
                 resolved_lines.push_back({table.dispatch_address, kind, entry.target, line.str()});
             }
             continue;
@@ -196,7 +199,9 @@ std::string format_indirect_control_flow_report(
         std::ostringstream line;
         line << "  " << kind << ' ';
         address_with_symbol(line, table.dispatch_address, symbols);
-        line << " [" << table.reason << "] Hinweis: jump_table = ";
+        line << " [" << table.reason
+             << "; evidence=" << control_flow_evidence_name(table.evidence)
+             << "] Hinweis: jump_table = ";
         address(line, table.dispatch_address);
         line << " TABELLE ANZAHL\n";
         unresolved_lines.push_back({table.dispatch_address, kind, 0u, line.str()});
@@ -225,8 +230,10 @@ std::string format_indirect_control_flow_report(
 std::string format_control_flow_analysis_json(const ControlFlowAnalysisResult& analysis) {
     std::ostringstream output;
     const auto summary = summarize_control_flow_analysis(analysis);
-    katana::io::write_json_report_header(output, "katana-control-flow-v1", "control-flow");
+    katana::io::write_json_report_header(output, "katana-control-flow-v2", "control-flow");
     output << ",\"summary\":{\"instructions\":" << analysis.recursive.instructions.size()
+           << ",\"instruction_contexts\":"
+           << analysis.recursive.contextual_instructions.size()
            << ",\"ranges\":" << analysis.recursive.ranges.size()
            << ",\"functions\":" << analysis.recursive.functions.size()
            << ",\"conflicts\":" << analysis.recursive.conflicts.size()
@@ -254,7 +261,9 @@ std::string format_control_flow_analysis_json(const ControlFlowAnalysisResult& a
         std::sort(origins.begin(), origins.end());
         output << "{\"address\":" << katana::io::quote_json(hex32(functions[index].address))
                << ",\"confidence\":"
-               << katana::io::quote_json(analysis_confidence_name(functions[index].confidence));
+               << katana::io::quote_json(analysis_confidence_name(functions[index].confidence))
+               << ",\"evidence\":"
+               << katana::io::quote_json(control_flow_evidence_name(functions[index].evidence));
         append_symbol_json(output, "symbol", analysis.symbolic_addresses, functions[index].address);
         output << ",\"origins\":[";
         for (std::size_t origin = 0u; origin < origins.size(); ++origin) {
@@ -285,7 +294,15 @@ std::string format_control_flow_analysis_json(const ControlFlowAnalysisResult& a
                << katana::io::quote_json(value.status == ResolutionStatus::Resolved  ? "resolved"
                                          : value.status == ResolutionStatus::Guarded ? "guarded"
                                                                                      : "unresolved")
-               << ",\"target\":";
+               << ",\"evidence\":"
+               << katana::io::quote_json(control_flow_evidence_name(value.evidence))
+               << ",\"evidence_origins\":[";
+        for (std::size_t origin = 0u; origin < value.evidence_origins.size(); ++origin) {
+            if (origin != 0u) output << ',';
+            output << katana::io::quote_json(
+                analysis_evidence_origin_name(value.evidence_origins[origin]));
+        }
+        output << "],\"target\":";
         if (value.target)
             output << katana::io::quote_json(hex32(*value.target));
         else
@@ -369,6 +386,8 @@ std::string format_control_flow_analysis_json(const ControlFlowAnalysisResult& a
                << katana::io::quote_json(
                       table.dispatch_kind == JumpTableDispatchKind::Call ? "call" : "jump")
                << ",\"resolved\":" << (table.resolved ? "true" : "false")
+               << ",\"evidence\":"
+               << katana::io::quote_json(control_flow_evidence_name(table.evidence))
                << ",\"requested_entries\":" << table.requested_entries
                << ",\"reason\":" << katana::io::quote_json(table.reason) << ",\"entries\":[";
         for (std::size_t entry_index = 0u; entry_index < table.entries.size(); ++entry_index) {

@@ -19,7 +19,9 @@ namespace {
 const katana::sh4::DisassemblyLine& controlling_line(const BasicBlock& block) {
     const auto last_index = block.lines.size() - 1u;
 
-    if (block.lines[last_index].is_delay_slot && last_index > 0u) {
+    if (block.lines[last_index].is_delay_slot && last_index > 0u &&
+        block.lines[last_index - 1u].instruction.has_delay_slot &&
+        block.lines[last_index].address == block.lines[last_index - 1u].address + 2u) {
         return block.lines[last_index - 1u];
     }
 
@@ -77,6 +79,7 @@ discover_functions_from_blocks(const std::span<const BasicBlock> blocks,
     }
     for (const auto& edge : resolved_edges) {
         if (edge.kind == ResolvedControlFlowKind::Call &&
+            resolved_edge_evidence(edge) == ControlFlowEvidence::ProvenComplete &&
             block_by_start.contains(edge.target_address)) {
             known_entries.insert(edge.target_address);
         }
@@ -160,7 +163,9 @@ discover_functions_from_blocks(const std::span<const BasicBlock> blocks,
                 if (edge->second->kind == ResolvedControlFlowKind::Call) {
                     add_sorted_unique(function.direct_callees, edge->second->target_address);
                     add_sorted_unique(function.indirect_call_sites, control.address);
-                    if (block_by_start.contains(edge->second->target_address) &&
+                    if (resolved_edge_evidence(*edge->second) ==
+                            ControlFlowEvidence::ProvenComplete &&
+                        block_by_start.contains(edge->second->target_address) &&
                         !processed_entries.contains(edge->second->target_address)) {
                         pending_entries.push_back(edge->second->target_address);
                     }
@@ -174,6 +179,9 @@ discover_functions_from_blocks(const std::span<const BasicBlock> blocks,
                 }
 
                 if (successor != entry && known_entries.contains(successor)) {
+                    if (flow == katana::sh4::ControlFlowKind::UnconditionalBranch ||
+                        flow == katana::sh4::ControlFlowKind::IndirectBranch)
+                        add_sorted_unique(function.tail_jump_targets, successor);
                     continue;
                 }
 
@@ -192,6 +200,15 @@ discover_functions_from_blocks(const std::span<const BasicBlock> blocks,
 
     for (std::size_t index = 0; index < functions.size(); ++index) {
         functions[index].id = index;
+    }
+    std::unordered_map<std::uint32_t, std::size_t> owners;
+    for (const auto& function : functions) {
+        for (const auto block : function.block_addresses) ++owners[block];
+    }
+    for (auto& function : functions) {
+        for (const auto block : function.block_addresses) {
+            if (owners[block] > 1u) function.shared_block_addresses.push_back(block);
+        }
     }
 
     return functions;

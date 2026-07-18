@@ -62,7 +62,7 @@ nicht gestartet werden.
 - [x] `KR-4611` - SH-4-Kontrollzustand, Delay Slots, RTE, SLEEP und Interrupts
 - [x] `KR-4612` - Store Queue und Cacheadressierung
 - [x] `KR-4613` - einheitliche Gastwrites und Codeinvalidierung
-- [ ] `KR-4614` - kontexttreue, sounde Kontrollfluss- und Wertanalyse
+- [x] `KR-4614` - kontexttreue, sounde Kontrollfluss- und Wertanalyse
 - [ ] `KR-4615` - stabile und skalierbare Runtime-Blockregistry
 - [ ] `KR-4616` - einheitliches Gasttiming und Scheduler-/Geraeteintegration
 - [ ] `KR-4617` - unabhaengige Cross-Engine- und CFG-Konformitaetstests

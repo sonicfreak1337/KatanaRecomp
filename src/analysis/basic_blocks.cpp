@@ -15,7 +15,9 @@ namespace {
 
 std::size_t terminal_index(const std::span<const katana::sh4::DisassemblyLine> lines,
                            const std::size_t control_index) {
-    if (lines[control_index].instruction.has_delay_slot && control_index + 1u < lines.size()) {
+    if (lines[control_index].instruction.has_delay_slot && control_index + 1u < lines.size() &&
+        lines[control_index + 1u].address == lines[control_index].address + 2u &&
+        lines[control_index + 1u].is_delay_slot) {
         return control_index + 1u;
     }
 
@@ -35,7 +37,9 @@ std::size_t find_controlling_instruction(const BasicBlock& block) {
 
     const auto last = block.lines.size() - 1u;
 
-    if (block.lines[last].is_delay_slot && last > 0u) {
+    if (block.lines[last].is_delay_slot && last > 0u &&
+        block.lines[last - 1u].instruction.has_delay_slot &&
+        block.lines[last].address == block.lines[last - 1u].address + 2u) {
         return last - 1u;
     }
 
@@ -138,14 +142,29 @@ build_basic_blocks(const std::span<const katana::sh4::DisassemblyLine> lines,
         const auto control_index = find_controlling_instruction(block);
         const auto& control_line = block.lines[control_index];
         const auto& instruction = control_line.instruction;
+        const bool paired_delay_slot =
+            !instruction.has_delay_slot ||
+            (control_index + 1u < block.lines.size() &&
+             block.lines[control_index + 1u].is_delay_slot &&
+             block.lines[control_index + 1u].address == control_line.address + 2u);
 
-        const auto next_block_address =
-            block_index + 1u < blocks.size() ? blocks[block_index + 1u].start_address : 0u;
+        const auto fallthrough_address =
+            control_line.address + (instruction.has_delay_slot ? 4u : 2u);
+        const auto has_fallthrough = std::any_of(
+            blocks.begin(), blocks.end(), [fallthrough_address](const auto& candidate) {
+                return candidate.start_address == fallthrough_address;
+            }) && paired_delay_slot;
+
+        if (!paired_delay_slot) {
+            block.has_indirect_successor = instruction.control_flow ==
+                                               katana::sh4::ControlFlowKind::IndirectCall ||
+                                           instruction.control_flow ==
+                                               katana::sh4::ControlFlowKind::IndirectBranch;
+            continue;
+        }
 
         if (!instruction.changes_control_flow()) {
-            if (block_index + 1u < blocks.size()) {
-                add_unique_successor(block.successors, next_block_address);
-            }
+            if (has_fallthrough) add_unique_successor(block.successors, fallthrough_address);
 
             continue;
         }
@@ -157,23 +176,17 @@ build_basic_blocks(const std::span<const katana::sh4::DisassemblyLine> lines,
 
         switch (instruction.control_flow) {
         case katana::sh4::ControlFlowKind::ConditionalBranch:
-            if (block_index + 1u < blocks.size()) {
-                add_unique_successor(block.successors, next_block_address);
-            }
+            if (has_fallthrough) add_unique_successor(block.successors, fallthrough_address);
             break;
 
         case katana::sh4::ControlFlowKind::Call:
-            if (block_index + 1u < blocks.size()) {
-                add_unique_successor(block.successors, next_block_address);
-            }
+            if (has_fallthrough) add_unique_successor(block.successors, fallthrough_address);
             break;
 
         case katana::sh4::ControlFlowKind::IndirectCall:
             block.has_indirect_successor = true;
 
-            if (block_index + 1u < blocks.size()) {
-                add_unique_successor(block.successors, next_block_address);
-            }
+            if (has_fallthrough) add_unique_successor(block.successors, fallthrough_address);
             break;
 
         case katana::sh4::ControlFlowKind::IndirectBranch:
@@ -200,15 +213,35 @@ build_basic_blocks(const std::span<const katana::sh4::DisassemblyLine> lines,
                 blocks[index].lines[find_controlling_instruction(blocks[index])].address, index);
         }
     }
+    std::unordered_map<std::uint32_t, bool> complete_sites;
     for (const auto& edge : resolved_edges) {
         const auto found = block_by_control.find(edge.instruction_address);
         if (found == block_by_control.end()) continue;
         auto& block = blocks[found->second];
+        const auto control_index = find_controlling_instruction(block);
+        const auto& instruction = block.lines[control_index].instruction;
+        if (instruction.has_delay_slot &&
+            (control_index + 1u >= block.lines.size() ||
+             !block.lines[control_index + 1u].is_delay_slot ||
+             block.lines[control_index + 1u].address !=
+                 block.lines[control_index].address + 2u))
+            continue;
         if (edge.kind == ResolvedControlFlowKind::Jump) {
             add_unique_successor(block.successors, edge.target_address);
         }
-        if (!edge.guarded) block.has_indirect_successor = false;
+        const auto evidence = resolved_edge_evidence(edge);
+        const auto [site, inserted] =
+            complete_sites.emplace(edge.instruction_address,
+                                   control_flow_evidence_complete(evidence));
+        if (!inserted)
+            site->second = site->second && control_flow_evidence_complete(evidence);
         std::sort(block.successors.begin(), block.successors.end());
+    }
+    for (const auto& [instruction_address, complete] : complete_sites) {
+        if (!complete) continue;
+        if (const auto found = block_by_control.find(instruction_address);
+            found != block_by_control.end())
+            blocks[found->second].has_indirect_successor = false;
     }
 
     return blocks;

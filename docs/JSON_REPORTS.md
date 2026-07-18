@@ -14,7 +14,9 @@ braucht eine neue fachliche Schema-Kennung. Listen, deren Reihenfolge keine
 Gastsemantik traegt, werden vor der Ausgabe nach Gastadresse und Typ sortiert.
 
 `katana-recomp analyze-json <manifest> [overrides]` erzeugt
-`katana-control-flow-v1`. `katana-recomp ir-json ...` behaelt
+`katana-control-flow-v2`. Version 2 fuehrt typisierte Evidenz fuer Funktionen,
+indirekte Sites und Jump Tables sowie die Zahl kontextueller
+Instruktionsvarianten ein. `katana-recomp ir-json ...` behaelt
 `katana-ir-v2`. Historische Phase-6-Berichte verwenden
 `katana-phase6-gate-v1` und behalten ihre Messfelder auf der obersten Ebene.
 

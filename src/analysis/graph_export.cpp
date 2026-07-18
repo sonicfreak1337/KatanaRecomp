@@ -21,8 +21,11 @@ std::string hex32(const std::uint32_t value) {
 
 const katana::sh4::DisassemblyLine& control_line(const BasicBlock& block) {
     const auto last = block.lines.size() - 1u;
-    return block.lines[last].is_delay_slot && last != 0u ? block.lines[last - 1u]
-                                                         : block.lines[last];
+    return block.lines[last].is_delay_slot && last != 0u &&
+                   block.lines[last - 1u].instruction.has_delay_slot &&
+                   block.lines[last].address == block.lines[last - 1u].address + 2u
+               ? block.lines[last - 1u]
+               : block.lines[last];
 }
 
 std::string symbol_for(const ControlFlowAnalysisResult& analysis, const std::uint32_t address) {
@@ -124,8 +127,10 @@ AnalysisGraph build_control_flow_graph(const ControlFlowAnalysisResult& analysis
 AnalysisGraph build_call_graph(const ControlFlowAnalysisResult& analysis) {
     std::vector<std::uint32_t> entries;
     entries.reserve(analysis.recursive.functions.size());
-    for (const auto& function : analysis.recursive.functions)
-        entries.push_back(function.address);
+    for (const auto& function : analysis.recursive.functions) {
+        if (control_flow_evidence_proven(function.evidence))
+            entries.push_back(function.address);
+    }
     const auto functions =
         discover_functions(analysis.recursive.instructions, entries, analysis.resolved_edges);
     AnalysisGraph graph{AnalysisGraphKind::CallGraph};

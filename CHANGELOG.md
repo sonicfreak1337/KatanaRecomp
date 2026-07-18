@@ -25,6 +25,14 @@
   dokumentiert.
 ### Korrigiert
 
+- KR-4614: Kontrollfluss- und Wertanalyse verwenden typisierte Evidenz und
+  Site-Vollstaendigkeit. Hints bleiben ungeloest, Overrides behalten den
+  Runtime-Default, Workitems unterscheiden Delay-Slot-Owner und eingehenden
+  Kontext, und CFG-Fallthroughs verlangen die exakte Folgeadresse. Unbekannte
+  Caller, abweichende Callkontexte und endliche indirekte Callee-Summaries
+  werden konservativ vereinigt; dynamische Herkunft folgt einem begrenzten
+  CFG-Backward-Slice. Der JSON-Bericht ist als `katana-control-flow-v2`
+  versioniert.
 - KR-4613: CPU-, FPU-, DMA-, Store-Queue-, Copy- und Fallbackwrites verwenden
   eine gemeinsame beobachtbare `Memory`-Commitgrenze. Lineares RAM wird vor
   einer Generationsaenderung byteweise verglichen. Geaenderte physische

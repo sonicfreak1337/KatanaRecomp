@@ -117,7 +117,7 @@ JumpTableAnalysis analyze_jump_table(const katana::io::ExecutableImage& image,
                        (static_cast<std::uint32_t>(
                             katana::io::read_u16_le(segment->bytes, *offset + index * 4u + 2u))
                         << 16u);
-        const auto validation = validate_committed_code_address(image, entry.target);
+        const auto validation = validate_decode_candidate(image, entry.target);
         if (!validation.valid()) {
             entry.reason = code_address_status_name(validation.status);
             analysis.entries.push_back(std::move(entry));
@@ -191,7 +191,7 @@ JumpTableAnalysis analyze_relative_jump_table_impl(const katana::io::ExecutableI
             continue;
         }
         entry.target = static_cast<std::uint32_t>(target);
-        const auto validation = validate_committed_code_address(image, entry.target);
+        const auto validation = validate_decode_candidate(image, entry.target);
         if (!validation.valid()) {
             entry.reason = code_address_status_name(validation.status);
             analysis.reason = "table-entry-rejected";

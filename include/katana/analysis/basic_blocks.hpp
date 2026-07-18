@@ -1,5 +1,6 @@
 #pragma once
 
+#include "katana/analysis/evidence.hpp"
 #include "katana/sh4/disassembler.hpp"
 
 #include <cstddef>
@@ -27,9 +28,19 @@ struct ResolvedControlFlowEdge {
     std::uint32_t target_address = 0u;
     ResolvedControlFlowKind kind = ResolvedControlFlowKind::Jump;
     bool guarded = false;
+    ControlFlowEvidence evidence = ControlFlowEvidence::Unresolved;
+    std::vector<AnalysisEvidenceOrigin> evidence_origins;
 
     bool operator==(const ResolvedControlFlowEdge&) const = default;
 };
+
+[[nodiscard]] constexpr ControlFlowEvidence
+resolved_edge_evidence(const ResolvedControlFlowEdge& edge) noexcept {
+    return edge.evidence == ControlFlowEvidence::Unresolved
+               ? (edge.guarded ? ControlFlowEvidence::GuardedPartial
+                               : ControlFlowEvidence::ProvenComplete)
+               : edge.evidence;
+}
 
 [[nodiscard]] std::vector<BasicBlock>
 build_basic_blocks(std::span<const katana::sh4::DisassemblyLine> lines,

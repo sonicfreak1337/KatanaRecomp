@@ -38,6 +38,8 @@ struct InterproceduralTargetResolution {
     std::vector<std::uint32_t> call_sites;
     std::vector<std::uint32_t> callees;
     bool guarded = false;
+    bool complete = false;
+    ControlFlowEvidence evidence = ControlFlowEvidence::Unresolved;
     std::string reason;
 };
 

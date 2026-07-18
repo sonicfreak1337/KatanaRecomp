@@ -16,6 +16,9 @@ struct FunctionInfo {
     std::vector<std::uint32_t> block_addresses;
     std::vector<std::uint32_t> direct_callees;
     std::vector<std::uint32_t> indirect_call_sites;
+    std::vector<std::uint32_t> shared_block_addresses;
+    std::vector<std::uint32_t> tail_jump_targets;
+    ControlFlowEvidence evidence = ControlFlowEvidence::ProvenComplete;
 };
 
 [[nodiscard]] std::vector<FunctionInfo>

@@ -1,5 +1,6 @@
 #pragma once
 
+#include "katana/analysis/evidence.hpp"
 #include "katana/io/executable_image.hpp"
 #include "katana/sh4/disassembler.hpp"
 
@@ -32,6 +33,7 @@ struct JumpTableAnalysis {
     JumpTableDispatchKind dispatch_kind = JumpTableDispatchKind::Jump;
     JumpTableEncoding encoding = JumpTableEncoding::Absolute32;
     bool resolved = false;
+    ControlFlowEvidence evidence = ControlFlowEvidence::Unresolved;
     std::vector<JumpTableEntry> entries;
     std::string reason;
 };

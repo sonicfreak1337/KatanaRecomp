@@ -1,10 +1,12 @@
 #pragma once
 
+#include "katana/analysis/evidence.hpp"
 #include "katana/analysis/symbol_names.hpp"
 #include "katana/io/executable_image.hpp"
 #include "katana/sh4/disassembler.hpp"
 
 #include <cstdint>
+#include <optional>
 #include <span>
 #include <string>
 #include <vector>
@@ -35,6 +37,7 @@ enum class AnalysisConfidence { Low, Medium, High, Certain };
 struct FunctionCandidate {
     std::uint32_t address = 0u;
     AnalysisConfidence confidence = AnalysisConfidence::Low;
+    ControlFlowEvidence evidence = ControlFlowEvidence::Unresolved;
     std::vector<FunctionOrigin> origins;
 };
 
@@ -56,6 +59,14 @@ struct AnalysisSeed {
     std::uint32_t address = 0u;
     std::vector<FunctionOrigin> function_origins;
     bool guarded_candidate = false;
+    ControlFlowEvidence evidence = ControlFlowEvidence::ProvenComplete;
+};
+
+struct ContextualInstruction {
+    katana::sh4::DisassemblyLine line;
+    std::uint32_t incoming_address = 0u;
+    std::optional<std::uint32_t> delay_slot_owner;
+    ControlFlowEvidence evidence = ControlFlowEvidence::Unresolved;
 };
 
 struct RecursiveAnalysisOptions {
@@ -64,6 +75,7 @@ struct RecursiveAnalysisOptions {
 
 struct RecursiveAnalysisResult {
     std::vector<katana::sh4::DisassemblyLine> instructions;
+    std::vector<ContextualInstruction> contextual_instructions;
     std::vector<std::uint32_t> proven_instruction_addresses;
     std::vector<std::uint32_t> guarded_candidate_instruction_addresses;
     std::vector<ClassifiedRange> ranges;

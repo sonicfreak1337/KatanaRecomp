@@ -47,6 +47,8 @@ struct FunctionEvaluation {
 struct CandidateInput {
     AbstractState state;
     std::array<bool, 16u> saturated{};
+    std::array<bool, 16u> incomplete{};
+    bool observed = false;
 };
 
 void normalize(std::vector<std::uint32_t>& values) {
@@ -460,23 +462,42 @@ void apply_call(AbstractState& state,
     for (std::uint8_t index = 0u; index <= 7u; ++index)
         make_unknown(state[index]);
     make_unknown(state[15u]);
-    if (!callee.has_value()) return;
-    const auto summary = summaries.find(*callee);
-    if (summary == summaries.end()) return;
-    const auto* returned = register_summary(summary->second, 0u);
-    if (returned == nullptr || !returned->complete || returned->values.empty()) return;
+    std::vector<std::uint32_t> callees;
+    if (callee.has_value())
+        callees.push_back(*callee);
+    else
+        callees.assign(candidate_callees.begin(), candidate_callees.end());
+    if (callees.empty()) return;
+    normalize(callees);
+    std::vector<std::uint32_t> returned_values;
+    std::set<std::uint32_t> evidence_callees;
+    for (const auto candidate : callees) {
+        const auto summary = summaries.find(candidate);
+        if (summary == summaries.end()) return;
+        const auto* returned = register_summary(summary->second, 0u);
+        if (returned == nullptr || !returned->complete || returned->values.empty()) return;
+        returned_values.insert(
+            returned_values.end(), returned->values.begin(), returned->values.end());
+        evidence_callees.insert(candidate);
+        evidence_callees.insert(returned->evidence_callees.begin(),
+                                returned->evidence_callees.end());
+    }
+    normalize(returned_values);
+    if (returned_values.size() > maximum_summary_values) return;
     state[0u].known = true;
     state[0u].guarded = false;
-    state[0u].values = returned->values;
+    state[0u].values = std::move(returned_values);
     state[0u].call_sites = {call_site};
-    state[0u].callees = {*callee};
-    state[0u].callees.insert(returned->evidence_callees.begin(), returned->evidence_callees.end());
+    state[0u].callees = std::move(evidence_callees);
 }
 
 const katana::sh4::DisassemblyLine& controlling_line(const BasicBlock& block) {
     const auto last = block.lines.size() - 1u;
-    return block.lines[last].is_delay_slot && last > 0u ? block.lines[last - 1u]
-                                                        : block.lines[last];
+    return block.lines[last].is_delay_slot && last > 0u &&
+                   block.lines[last - 1u].instruction.has_delay_slot &&
+                   block.lines[last].address == block.lines[last - 1u].address + 2u
+               ? block.lines[last - 1u]
+               : block.lines[last];
 }
 
 std::vector<std::uint32_t> checked_targets(const katana::io::ExecutableImage& image,
@@ -489,7 +510,7 @@ std::vector<std::uint32_t> checked_targets(const katana::io::ExecutableImage& im
             line.instruction.kind == katana::sh4::InstructionKind::Bsrf) {
             target += line.address + 4u;
         }
-        if (!validate_committed_code_address(image, target).valid()) return {};
+        if (!validate_decode_candidate(image, target).valid()) return {};
         targets.push_back(target);
     }
     normalize(targets);
@@ -533,20 +554,23 @@ FunctionEvaluation evaluate_function(
                                   line.instruction.kind == katana::sh4::InstructionKind::Bsrf;
             if (collect_resolutions && indirect) {
                 const auto& value = state[line.instruction.branch_register];
+                InterproceduralTargetResolution resolution;
+                resolution.instruction_address = line.address;
+                resolution.register_index = line.instruction.branch_register;
+                resolution.call = line.instruction.kind == katana::sh4::InstructionKind::Jsr ||
+                                  line.instruction.kind == katana::sh4::InstructionKind::Bsrf;
                 if (value.known && !value.values.empty()) {
                     auto targets = checked_targets(image, line, value);
                     if (!targets.empty()) {
-                        InterproceduralTargetResolution resolution;
-                        resolution.instruction_address = line.address;
-                        resolution.register_index = line.instruction.branch_register;
-                        resolution.call =
-                            line.instruction.kind == katana::sh4::InstructionKind::Jsr ||
-                            line.instruction.kind == katana::sh4::InstructionKind::Bsrf;
                         resolution.targets = std::move(targets);
                         resolution.call_sites.assign(value.call_sites.begin(),
                                                      value.call_sites.end());
                         resolution.callees.assign(value.callees.begin(), value.callees.end());
                         resolution.guarded = value.guarded;
+                        resolution.complete = !value.guarded;
+                        resolution.evidence = value.guarded
+                                                  ? ControlFlowEvidence::GuardedPartial
+                                                  : ControlFlowEvidence::ProvenComplete;
                         resolution.reason =
                             value.guarded ? "guarded-function-memory"
                             : !value.callees.empty()
@@ -555,9 +579,15 @@ FunctionEvaluation evaluate_function(
                                        : "interprocedural-return-set")
                                 : (resolution.targets.size() == 1u ? "function-cfg-constant"
                                                                    : "function-cfg-set");
-                        evaluation.resolutions.push_back(std::move(resolution));
                     }
                 }
+                if (resolution.targets.empty()) {
+                    resolution.guarded = true;
+                    resolution.complete = false;
+                    resolution.evidence = ControlFlowEvidence::Unresolved;
+                    resolution.reason = "context-target-unknown";
+                }
+                evaluation.resolutions.push_back(std::move(resolution));
             }
 
             const bool call =
@@ -651,11 +681,18 @@ FunctionEvaluation evaluate_function(
 
 bool merge_candidate_input(CandidateInput& destination,
                            const FunctionEvaluation::CallArguments& observation) {
-    bool changed = false;
+    bool changed = !destination.observed;
+    destination.observed = true;
     for (std::uint8_t index = 0u; index < 15u; ++index) {
-        if (destination.saturated[index]) continue;
+        if (destination.saturated[index] || destination.incomplete[index]) continue;
         const auto& source = observation.state[index];
-        if (!source.known || source.values.empty()) continue;
+        if (!source.known || source.values.empty()) {
+            const bool was_incomplete = destination.incomplete[index];
+            destination.incomplete[index] = true;
+            make_unknown(destination.state[index]);
+            changed = changed || !was_incomplete;
+            continue;
+        }
         auto& target = destination.state[index];
         const auto before = target;
         if (!target.known) {
@@ -698,7 +735,9 @@ analyze_function_values(const katana::io::ExecutableImage& image,
     const auto functions = discover_functions_from_blocks(blocks, function_entries, resolved_edges);
     std::unordered_map<std::uint32_t, std::vector<std::uint32_t>> indirect_callees;
     for (const auto& edge : resolved_edges) {
-        if (edge.kind != ResolvedControlFlowKind::Call) continue;
+        if (edge.kind != ResolvedControlFlowKind::Call ||
+            !control_flow_evidence_complete(resolved_edge_evidence(edge)))
+            continue;
         indirect_callees[edge.instruction_address].push_back(edge.target_address);
     }
     for (auto& [call_site, callees] : indirect_callees) {
@@ -717,6 +756,11 @@ analyze_function_values(const katana::io::ExecutableImage& image,
         function_by_address.emplace(function.entry_address, &function);
         for (const auto callee : function.direct_callees)
             callers_by_callee[callee].push_back(function.entry_address);
+    }
+    for (auto& [address, input] : candidate_inputs) {
+        input.observed = callers_by_callee.find(address) == callers_by_callee.end() ||
+                         std::find(image.entry_points().begin(), image.entry_points().end(),
+                                   address) != image.entry_points().end();
     }
     std::deque<std::uint32_t> pending;
     std::unordered_set<std::uint32_t> queued;
@@ -748,6 +792,7 @@ analyze_function_values(const katana::io::ExecutableImage& image,
                 }
             }
         }
+        if (!candidate_inputs[address].observed) continue;
         for (const auto& observation : evaluation.call_arguments) {
             const auto input = candidate_inputs.find(observation.callee);
             if (input != candidate_inputs.end() &&
@@ -772,18 +817,41 @@ analyze_function_values(const katana::io::ExecutableImage& image,
                                   std::make_move_iterator(evaluation.resolutions.begin()),
                                   std::make_move_iterator(evaluation.resolutions.end()));
     }
-    std::sort(result.resolutions.begin(),
-              result.resolutions.end(),
-              [](const auto& left, const auto& right) {
-                  return left.instruction_address < right.instruction_address;
-              });
-    result.resolutions.erase(std::unique(result.resolutions.begin(),
-                                         result.resolutions.end(),
-                                         [](const auto& left, const auto& right) {
-                                             return left.instruction_address ==
-                                                    right.instruction_address;
-                                         }),
-                             result.resolutions.end());
+    std::sort(result.resolutions.begin(), result.resolutions.end(), [](const auto& left,
+                                                                      const auto& right) {
+        if (left.instruction_address != right.instruction_address)
+            return left.instruction_address < right.instruction_address;
+        if (left.call != right.call) return left.call < right.call;
+        return left.targets < right.targets;
+    });
+    std::vector<InterproceduralTargetResolution> merged;
+    for (auto& resolution : result.resolutions) {
+        if (merged.empty() || merged.back().instruction_address != resolution.instruction_address) {
+            merged.push_back(std::move(resolution));
+            continue;
+        }
+        auto& site = merged.back();
+        site.targets.insert(site.targets.end(), resolution.targets.begin(), resolution.targets.end());
+        normalize(site.targets);
+        site.call_sites.insert(
+            site.call_sites.end(), resolution.call_sites.begin(), resolution.call_sites.end());
+        normalize(site.call_sites);
+        site.callees.insert(site.callees.end(), resolution.callees.begin(), resolution.callees.end());
+        normalize(site.callees);
+        site.complete = site.complete && resolution.complete;
+        site.guarded = site.guarded || resolution.guarded || !resolution.complete;
+    }
+    for (auto& site : merged) {
+        site.evidence = site.targets.empty()
+                            ? ControlFlowEvidence::Unresolved
+                            : site.complete && !site.guarded
+                                ? ControlFlowEvidence::ProvenComplete
+                                : ControlFlowEvidence::GuardedPartial;
+        site.reason = site.targets.empty() ? "all-contexts-unknown"
+                      : site.complete      ? "all-contexts-complete"
+                                           : "merged-contexts-partial";
+    }
+    result.resolutions = std::move(merged);
     return result;
 }
 
