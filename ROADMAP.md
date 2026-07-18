@@ -66,7 +66,7 @@ nicht gestartet werden.
 - [x] `KR-4615` - stabile und skalierbare Runtime-Blockregistry
 - [x] `KR-4616` - einheitliches Gasttiming und Scheduler-/Geraeteintegration
 - [x] `KR-4617` - unabhaengige Cross-Engine- und CFG-Konformitaetstests
-- [ ] `KR-4618` - Core-Korrektheitsgate
+- [x] `KR-4618` - Core-Korrektheitsgate
 
 ### Stufe B: P1-Performance und Build
 

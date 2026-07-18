@@ -2,7 +2,7 @@
 
 Interner Entwicklungsmeilenstein: `v0.46.0`
 Phase: Core-Stabilisierung vor v0.47
-Naechster Task: `KR-4618`
+Naechster Task: `KR-4621`
 Naechstes Gate: `v0.47.0` - Core-Stabilisierung und generische Retail-Runtime
 Weitere interne Gates: `v0.48.0` Integration und `v0.49.0` Alpha-Candidate
 Erster oeffentlicher Release: `v0.50.0` Alpha
@@ -170,11 +170,26 @@ Blockhandle-API. Gemaess Gate-Arbeitsmodell wurden bei KR-4617 weder
 Konfiguration noch Build oder Tests gestartet. Die Debug-/RelWithDebInfo-
 Ausfuehrung und der Konfigurationsvergleich folgen gesammelt in KR-4618.
 
+## KR-4618 umgesetzt
+
+Das Core-Korrektheitsgate erstellt `build-current` fuer Quality-Debug und
+RelWithDebInfo jeweils frisch. Quality-Debug bestand 171 von 171 Tests mit
+MSVC-ASan und statischer Analyse; RelWithDebInfo bestand 170 von 170 Tests.
+Beide Profile besitzen dasselbe Inventar aus 170 Core-Regressionen. Der
+zusaetzliche Debug-Test prueft gezielt die ausgelieferte MSVC-ASan-Runtime.
+
+Format-, Qualitaetsvertrags- und Referenz-/Lizenzaudit sind erfolgreich. Die
+exakten Referenzvektoren bestanden in beiden Konfigurationen; private
+Retaildaten wurden nicht verwendet. Der maschinenlesbare Gatebericht wurde
+unter `build-current/reports/core-correctness-gate.json` erzeugt. Damit ist die
+P0-Core-Korrektheitsstufe abgeschlossen und KR-4621 beginnt die Performance-
+und Buildstufe.
+
 ## Naechste Reihenfolge
 
 ```text
 v0.47:
-KR-4611 bis KR-4617 -> KR-4618
+KR-4611 bis KR-4618
 -> KR-4621 bis KR-4624 -> KR-4625
 -> KR-4715 -> KR-4716 und KR-4717 -> KR-4718
 -> KR-4719 -> KR-4703 -> KR-4704 -> KR-4705

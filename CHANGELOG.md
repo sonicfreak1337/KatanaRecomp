@@ -25,6 +25,12 @@
   dokumentiert.
 ### Korrigiert
 
+- KR-4618: Das frische Core-Korrektheitsgate besteht mit 171 Quality-Debug-
+  Tests unter MSVC-ASan und statischer Analyse sowie 170 RelWithDebInfo-Tests.
+  Beide Profile teilen exakt 170 Core-Regressionen; der zusaetzliche
+  Debug-Profiltest prueft die MSVC-ASan-Runtime. Format-, Qualitaetsvertrags-
+  und Referenz-/Lizenzaudit sind erfolgreich, und es wurden keine privaten
+  Retaildaten verwendet.
 - KR-4617: Unabhaengige SH-4-, Store-Queue-, Gastwrite-, Registry-, Timing-
   und CFG-Referenzvektoren decken die P0-Vertraege mit Erfolgs-, Grenz- und
   Fehlerfaellen ab. Hints, Overrides, Luecken, partielle Sites, Delay-Slot-

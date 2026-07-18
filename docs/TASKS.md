@@ -236,7 +236,7 @@ Akzeptanz:
 - Terminierung wird ueber ein oberes Budget statt eine exakte Iterationszahl
   geprueft
 
-### [ ] KR-4618 - Core-Korrektheitsgate
+### [x] KR-4618 - Core-Korrektheitsgate
 
 Abhaengigkeiten: KR-4611 bis KR-4617
 Prioritaet: P0
