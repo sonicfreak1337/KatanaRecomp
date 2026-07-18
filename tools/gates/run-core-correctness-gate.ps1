@@ -2,6 +2,49 @@
 param()
 
 $ErrorActionPreference = 'Stop'
+
+function Initialize-MsvcEnvironment {
+    $ready = -not [string]::IsNullOrWhiteSpace($env:INCLUDE) -and
+        -not [string]::IsNullOrWhiteSpace($env:LIB) -and
+        $env:VSCMD_ARG_TGT_ARCH -eq 'x64' -and
+        $env:VSCMD_ARG_HOST_ARCH -eq 'x64'
+    if ($ready) {
+        return
+    }
+
+    $vswhere = Join-Path ${env:ProgramFiles(x86)} `
+        'Microsoft Visual Studio\Installer\vswhere.exe'
+    if (-not (Test-Path -LiteralPath $vswhere -PathType Leaf)) {
+        return
+    }
+    $installation = & $vswhere -latest -products * `
+        -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 `
+        -property installationPath | Select-Object -First 1
+    if ([string]::IsNullOrWhiteSpace($installation)) {
+        return
+    }
+    $devCmd = Join-Path $installation 'Common7\Tools\VsDevCmd.bat'
+    if (-not (Test-Path -LiteralPath $devCmd -PathType Leaf)) {
+        return
+    }
+
+    $command = "call `"$devCmd`" -no_logo -arch=x64 -host_arch=x64 >nul && set"
+    $environment = & $env:ComSpec /d /s /c $command
+    if ($LASTEXITCODE -ne 0) {
+        throw 'Die Visual-Studio-Buildumgebung konnte nicht geladen werden.'
+    }
+    foreach ($entry in $environment) {
+        $separator = $entry.IndexOf('=')
+        if ($separator -gt 0) {
+            [Environment]::SetEnvironmentVariable(
+                $entry.Substring(0, $separator),
+                $entry.Substring($separator + 1),
+                'Process'
+            )
+        }
+    }
+}
+
 $root = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..'))
 $build = [IO.Path]::GetFullPath((Join-Path $root 'build-current'))
 if (-not $build.StartsWith(
@@ -24,6 +67,8 @@ $dirty = @(& $git -C $root status --porcelain=v1 --untracked-files=all)
 if ($LASTEXITCODE -ne 0 -or $dirty.Count -ne 0) {
     throw 'KR-4618 verlangt vor dem Gate einen sauberen vorbereiteten Commit.'
 }
+
+Initialize-MsvcEnvironment
 
 function Reset-BuildDirectory {
     if (Test-Path -LiteralPath $build) {
