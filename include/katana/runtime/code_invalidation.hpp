@@ -76,8 +76,7 @@ class ExecutableCodeTracker {
     static constexpr std::uint32_t page_size = 4096u;
     static constexpr std::size_t default_provenance_capacity = 1024u;
 
-    explicit ExecutableCodeTracker(
-        std::size_t provenance_capacity = default_provenance_capacity);
+    explicit ExecutableCodeTracker(std::size_t provenance_capacity = default_provenance_capacity);
 
     [[nodiscard]] BlockRegistrationResult register_block(ExecutableBlockRegistration block);
     [[nodiscard]] CodeInvalidationResult observe_write(std::uint32_t address,

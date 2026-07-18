@@ -53,8 +53,8 @@ struct InstructionSpan {
     [[nodiscard]] bool operator==(const InstructionSpan&) const = default;
 };
 
-[[nodiscard]] std::vector<InstructionSpan>
-build_block_spans(const InstructionArena& arena, std::span<const BasicBlock> blocks);
+[[nodiscard]] std::vector<InstructionSpan> build_block_spans(const InstructionArena& arena,
+                                                             std::span<const BasicBlock> blocks);
 
 class AnalysisIndex final {
   public:

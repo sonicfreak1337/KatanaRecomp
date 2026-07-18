@@ -1,7 +1,7 @@
 #pragma once
 
-#include "katana/build_contract.hpp"
 #include "katana/analysis/control_flow_analysis.hpp"
+#include "katana/build_contract.hpp"
 #include "katana/codegen/partition.hpp"
 #include "katana/io/executable_image.hpp"
 #include "katana/io/input_provenance.hpp"
