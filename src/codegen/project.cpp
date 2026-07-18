@@ -133,13 +133,22 @@ std::string cmake_project(const std::vector<std::filesystem::path>& sources) {
            << "if(KATANA_RUNTIME_ROOT STREQUAL \"\")\n"
            << "  message(FATAL_ERROR \"Set KATANA_RUNTIME_ROOT\")\n"
            << "endif()\n"
+           << "include(\"${KATANA_RUNTIME_ROOT}/cmake/KatanaVersions.cmake\")\n"
+           << "file(MAKE_DIRECTORY \"${CMAKE_CURRENT_BINARY_DIR}/generated/include/katana\")\n"
+           << "configure_file(\n"
+           << "  \"${KATANA_RUNTIME_ROOT}/include/katana/build_contract.hpp.in\"\n"
+           << "  \"${CMAKE_CURRENT_BINARY_DIR}/generated/include/katana/build_contract.hpp\"\n"
+           << "  @ONLY\n"
+           << ")\n"
            << "add_library(katana_generated STATIC\n";
     for (const auto& source : sources) {
         output << "    " << source.generic_string() << '\n';
     }
     output << ")\ntarget_compile_features(katana_generated PUBLIC cxx_std_20)\n"
-           << "target_include_directories(katana_generated PRIVATE "
-              "\"${KATANA_RUNTIME_ROOT}/include\")\n";
+           << "target_include_directories(katana_generated PRIVATE\n"
+           << "  \"${KATANA_RUNTIME_ROOT}/include\"\n"
+           << "  \"${CMAKE_CURRENT_BINARY_DIR}/generated/include\"\n"
+           << ")\n";
     return output.str();
 }
 

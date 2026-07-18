@@ -1,6 +1,6 @@
 if(NOT DEFINED KATANA_RECOMP OR NOT DEFINED FIXTURE OR NOT DEFINED OUTPUT_DIR
     OR NOT DEFINED CXX_COMPILER OR NOT DEFINED CXX_COMPILER_ID
-    OR NOT DEFINED KATANA_SOURCE_DIR)
+    OR NOT DEFINED KATANA_SOURCE_DIR OR NOT DEFINED KATANA_GENERATED_INCLUDE)
     message(FATAL_ERROR
         "KatanaRecomp, Fixture, Compiler, Quellpfad oder Ausgabeverzeichnis fehlt."
     )
@@ -84,6 +84,7 @@ foreach(variant IN ITEMS optimized unoptimized)
                 /EHsc
                 /utf-8
                 "/I${KATANA_SOURCE_DIR}/include"
+                "/I${KATANA_GENERATED_INCLUDE}"
                 "${harness}"
                 "${KATANA_SOURCE_DIR}/src/runtime/exception.cpp"
                 "${KATANA_SOURCE_DIR}/src/runtime/memory.cpp"
@@ -99,6 +100,7 @@ foreach(variant IN ITEMS optimized unoptimized)
                 "${CXX_COMPILER}"
                 -std=c++20
                 "-I${KATANA_SOURCE_DIR}/include"
+                "-I${KATANA_GENERATED_INCLUDE}"
                 "${harness}"
                 "${KATANA_SOURCE_DIR}/src/runtime/exception.cpp"
                 "${KATANA_SOURCE_DIR}/src/runtime/memory.cpp"

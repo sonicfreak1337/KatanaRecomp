@@ -1075,6 +1075,13 @@ std::vector<Function> lower_program(const katana::analysis::ControlFlowAnalysisR
         if (katana::analysis::control_flow_evidence_proven(function.evidence))
             seeds.push_back(function.address);
     }
+    for (const auto& edge : analysis.resolved_edges) {
+        if (edge.kind == katana::analysis::ResolvedControlFlowKind::Call &&
+            katana::analysis::control_flow_evidence_proven(
+                katana::analysis::resolved_edge_evidence(edge))) {
+            seeds.push_back(edge.target_address);
+        }
+    }
     std::sort(seeds.begin(), seeds.end());
     seeds.erase(std::unique(seeds.begin(), seeds.end()), seeds.end());
     const auto functions = katana::analysis::discover_functions(

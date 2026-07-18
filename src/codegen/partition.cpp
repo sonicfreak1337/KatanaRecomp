@@ -66,14 +66,18 @@ partition_translation_units(const std::span<const katana::ir::Function> function
         }
         partition.last_entry_address = entry;
     }
+    std::vector<std::uint32_t> function_entries;
+    function_entries.reserve(functions.size());
+    for (const auto function_index : order)
+        function_entries.push_back(functions[function_index].entry_address);
     for (auto& partition : result) {
-        std::string content;
+        std::vector<katana::ir::Function> partition_functions;
+        partition_functions.reserve(partition.function_indices.size());
         for (const auto function_index : partition.function_indices) {
-            const auto fragment = katana::ir::emit_ir_json(
-                std::span<const katana::ir::Function>(&functions[function_index], 1u));
-            content += std::to_string(fragment.size()) + ':' + fragment;
+            partition_functions.push_back(functions[function_index]);
         }
-        partition.content_sha256 = katana::io::sha256_bytes(content);
+        partition.content_sha256 = katana::io::sha256_bytes(
+            katana::ir::emit_ir_fragment_json(partition_functions, function_entries));
     }
     return result;
 }
