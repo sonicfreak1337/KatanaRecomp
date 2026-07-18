@@ -25,6 +25,11 @@
   dokumentiert.
 ### Korrigiert
 
+- KR-4616: Gastzeitvertrag 1 vereinheitlicht Instruktionskosten, TMU, RTC, DMA,
+  GD-ROM, PVR, SLEEP und Laufbudget auf dem zentralen Scheduler. GD-ROM besitzt
+  keine manuell fortgeschaltete Uhr mehr, PVR-Abschluesse sind terminiert und
+  `KATANA_GUEST_CYCLE_BUDGET` wird von der Runtime tatsaechlich durchgesetzt.
+  Runtime-ABI 11 und PlatformServices-ABI 5 versionieren den Vertrag.
 - KR-4615: Die Runtime-Blockregistry verwendet stabile, generationsgesicherte
   Handles statt Adressen verschiebbarer Vektorelemente. Statische Bloecke
   werden bulk-registriert und versiegelt; statische und dynamische virtuelle,

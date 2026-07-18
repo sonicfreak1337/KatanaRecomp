@@ -1,5 +1,7 @@
 #pragma once
 
+#include "katana/runtime/scheduler.hpp"
+
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
@@ -89,11 +91,14 @@ struct GdRomAsyncCompletion {
 
 class GdRomAsyncReader final {
   public:
-    explicit GdRomAsyncReader(GdRomDrive drive,
+    explicit GdRomAsyncReader(EventScheduler& scheduler,
+                              GdRomDrive drive,
                               GdRomTiming timing = {},
                               std::function<void(std::uint64_t)> completion_observer = {});
+    ~GdRomAsyncReader();
+    GdRomAsyncReader(const GdRomAsyncReader&) = delete;
+    GdRomAsyncReader& operator=(const GdRomAsyncReader&) = delete;
     [[nodiscard]] std::uint64_t submit(const GdRomRequest& request);
-    void advance_to(std::uint64_t cycle);
     [[nodiscard]] std::optional<GdRomAsyncCompletion> take_completed();
     [[nodiscard]] std::size_t pending_count() const noexcept;
     [[nodiscard]] std::uint64_t current_cycle() const noexcept;
@@ -103,11 +108,15 @@ class GdRomAsyncReader final {
         std::uint64_t request_id = 0u;
         std::uint64_t ready_cycle = 0u;
         GdRomRequest request;
+        SchedulerEventId event_id = 0u;
     };
+    void complete(std::uint64_t request_id, std::uint64_t cycle);
+    void handle_scheduler_reset() noexcept;
+    EventScheduler& scheduler_;
     GdRomDrive drive_;
     GdRomTiming timing_;
-    std::uint64_t current_cycle_ = 0u;
     std::uint64_t next_request_id_ = 1u;
+    SchedulerResetObserverId reset_observer_ = 0u;
     std::vector<Pending> pending_;
     std::vector<GdRomAsyncCompletion> completed_;
     std::function<void(std::uint64_t)> completion_observer_;

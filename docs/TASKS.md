@@ -191,7 +191,7 @@ Akzeptanz:
 - Mutation bei wiederholtem Dispatch erzeugt keine ungueltigen Handles
 - deterministische Blockidentitaeten bleiben erhalten
 
-### [ ] KR-4616 - Einheitliches Gasttiming und Scheduler-/Geraeteintegration
+### [x] KR-4616 - Einheitliches Gasttiming und Scheduler-/Geraeteintegration
 
 Abhaengigkeiten: KR-4611, KR-4613
 Prioritaet: P0

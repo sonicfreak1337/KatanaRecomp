@@ -3,8 +3,11 @@
 #include "katana/runtime/system_replay.hpp"
 
 #include <algorithm>
+#include <charconv>
+#include <cstdlib>
 #include <limits>
 #include <stdexcept>
+#include <system_error>
 #include <utility>
 #include <vector>
 
@@ -85,6 +88,7 @@ void EventScheduler::reset() {
     }
     clear();
     current_cycle_ = 0u;
+    next_event_id_ = 1u;
     processed_event_count_ = 0u;
     ++reset_generation_;
     if (replay_log_ != nullptr) {
@@ -135,8 +139,11 @@ SchedulerAdvanceResult EventScheduler::advance_to(const std::uint64_t guest_cycl
         bool& state_;
     } guard(advance_in_progress_);
 
+    const auto effective_target = guest_cycle_budget_
+                                      ? std::min(guest_cycle, *guest_cycle_budget_)
+                                      : guest_cycle;
     std::size_t processed = 0u;
-    while (!events_.empty() && events_.begin()->first.first <= guest_cycle) {
+    while (!events_.empty() && events_.begin()->first.first <= effective_target) {
         if (processed == event_budget) {
             return {
                 SchedulerAdvanceStatus::EventBudgetExhausted,
@@ -171,9 +178,10 @@ SchedulerAdvanceResult EventScheduler::advance_to(const std::uint64_t guest_cycl
         event.mapped()(event_id, deadline);
     }
 
-    current_cycle_ = guest_cycle;
+    current_cycle_ = effective_target;
     return {
-        SchedulerAdvanceStatus::ReachedTarget,
+        effective_target == guest_cycle ? SchedulerAdvanceStatus::ReachedTarget
+                                        : SchedulerAdvanceStatus::GuestCycleBudgetExhausted,
         processed,
         current_cycle_,
     };
@@ -211,6 +219,49 @@ std::uint64_t EventScheduler::processed_event_count() const noexcept {
 
 std::uint64_t EventScheduler::reset_generation() const noexcept {
     return reset_generation_;
+}
+
+void EventScheduler::set_guest_cycle_budget(
+    const std::optional<std::uint64_t> maximum_cycle) {
+    if (maximum_cycle && *maximum_cycle == 0u) {
+        throw std::invalid_argument("Gastzyklusbudget muss groesser null sein.");
+    }
+    if (guest_cycle_budget_ && maximum_cycle != guest_cycle_budget_) {
+        throw std::logic_error("Gastzyklusbudget eines Laufs ist unveraenderlich.");
+    }
+    if (!guest_cycle_budget_ && maximum_cycle && current_cycle_ != 0u) {
+        throw std::logic_error("Gastzyklusbudget muss vor dem ersten Advance gesetzt werden.");
+    }
+    if (maximum_cycle && *maximum_cycle < current_cycle_) {
+        throw std::invalid_argument(
+            "Gastzyklusbudget darf nicht vor dem aktuellen Schedulerzyklus liegen.");
+    }
+    guest_cycle_budget_ = maximum_cycle;
+}
+
+std::optional<std::uint64_t> EventScheduler::guest_cycle_budget() const noexcept {
+    return guest_cycle_budget_;
+}
+
+std::optional<std::uint64_t> EventScheduler::remaining_guest_cycles() const noexcept {
+    if (!guest_cycle_budget_) return std::nullopt;
+    return *guest_cycle_budget_ - current_cycle_;
+}
+
+std::uint64_t parse_guest_cycle_budget(const std::string_view text) {
+    std::uint64_t value = 0u;
+    const auto [end, error] = std::from_chars(text.data(), text.data() + text.size(), value);
+    if (text.empty() || error != std::errc{} || end != text.data() + text.size() || value == 0u) {
+        throw std::invalid_argument(
+            "KATANA_GUEST_CYCLE_BUDGET muss eine positive 64-Bit-Ganzzahl sein.");
+    }
+    return value;
+}
+
+std::optional<std::uint64_t> guest_cycle_budget_from_environment() {
+    const auto* const configured = std::getenv("KATANA_GUEST_CYCLE_BUDGET");
+    if (configured == nullptr) return std::nullopt;
+    return parse_guest_cycle_budget(configured);
 }
 
 } // namespace katana::runtime

@@ -168,19 +168,15 @@ Phase6GateReport run_phase6_gate(const std::filesystem::path& descriptor_path,
                            runtime::Sh4Dmac::channel_enable);
     dmac.write_operation(runtime::Sh4Dmac::master_enable);
 
-    runtime::GdRomAsyncReader gdrom(runtime::GdRomDrive(disc.source), runtime::GdRomTiming{2u, 1u});
-    static_cast<void>(gdrom.submit({runtime::GdRomCommand::ReadSectors, disc.data_track_lba, 1u}));
-    static_cast<void>(
-        scheduler.schedule_at(3u, [&](const runtime::SchedulerEventId, const std::uint64_t cycle) {
-            gdrom.advance_to(cycle);
-            const auto completion = gdrom.take_completed();
-            require_gate(completion.has_value() &&
-                             completion->response.status == runtime::GdRomStatus::Good &&
-                             completion->response.transferred_sectors == 1u,
-                         "asynchroner GD-ROM-Read wurde nicht erfolgreich abgeschlossen.");
+    runtime::GdRomAsyncReader gdrom(
+        scheduler,
+        runtime::GdRomDrive(disc.source),
+        runtime::GdRomTiming{2u, 1u},
+        [&](const std::uint64_t) {
             ++report.gdrom_completions;
             router.set_external_pending(0u, true);
-        }));
+        });
+    static_cast<void>(gdrom.submit({runtime::GdRomCommand::ReadSectors, disc.data_track_lba, 1u}));
 
     const auto advance = scheduler.advance_to(4u, 16u);
     require_gate(advance.status == runtime::SchedulerAdvanceStatus::ReachedTarget,
@@ -190,6 +186,11 @@ Phase6GateReport run_phase6_gate(const std::filesystem::path& descriptor_path,
     report.scheduler_pending_events = scheduler.pending_event_count();
     report.tmu_events = tmu.underflow_count(0u);
     report.dma_events = dmac.completed_transfer_units(0u);
+    const auto gdrom_completion = gdrom.take_completed();
+    require_gate(gdrom_completion.has_value() &&
+                     gdrom_completion->response.status == runtime::GdRomStatus::Good &&
+                     gdrom_completion->response.transferred_sectors == 1u,
+                 "asynchroner GD-ROM-Read wurde nicht erfolgreich abgeschlossen.");
     require_gate(report.gdrom_completions == 1u, "GD-ROM-Completion fehlt.");
     require_gate(report.tmu_events != 0u, "TMU-Ereignis fehlt.");
     require_gate(report.dma_events != 0u, "DMA-Ereignis fehlt.");

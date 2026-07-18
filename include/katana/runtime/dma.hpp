@@ -93,6 +93,7 @@ class Sh4Dmac final {
     void discard_external_requests() noexcept;
     void cancel_event() noexcept;
     void schedule(std::size_t index);
+    void handle_scheduler_reset();
     void handle_transfer(std::size_t index);
     bool transfer_one(std::size_t index, std::size_t size) noexcept;
     void update_addresses(Channel& value, std::size_t size) noexcept;
@@ -101,6 +102,7 @@ class Sh4Dmac final {
     EventScheduler& scheduler_;
     Memory& memory_;
     DmaTiming timing_;
+    SchedulerResetObserverId scheduler_reset_observer_ = 0u;
     std::array<Channel, channel_count> channels_{};
     std::uint32_t operation_ = 0u;
     std::optional<SchedulerEventId> event_;

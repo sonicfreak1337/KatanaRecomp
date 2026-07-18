@@ -2197,13 +2197,21 @@ void emit_block(std::ostringstream& output,
                 const std::unordered_set<std::uint32_t>& known_functions,
                 const std::unordered_set<std::uint32_t>& current_blocks,
                 const bool single_block) {
+    std::unordered_set<std::uint32_t> guest_instruction_addresses;
+    guest_instruction_addresses.reserve(block.instructions.size());
+    for (const auto& instruction : block.instructions)
+        guest_instruction_addresses.insert(instruction.source_address);
+    const auto guest_instruction_count =
+        std::max<std::size_t>(1u, guest_instruction_addresses.size());
     output << "            case " << hex32(block.start_address) << ": {\n";
     output << "                if (services != nullptr) {\n"
-           << "                    const auto scheduler = services->advance_scheduler(\n"
-           << "                        services->scheduler_cycle() + "
-           << std::max<std::size_t>(1u, block.instructions.size()) << "u, 1024u);\n"
+           << "                    const auto scheduler = services->consume_guest_cycles(\n"
+           << "                        katana::runtime::base_guest_cycles_per_instruction * "
+           << guest_instruction_count << "u, 1024u);\n"
            << "                    if (scheduler.budget_exhausted)\n"
            << "                        throw std::runtime_error(\"Schedulerbudget erschoepft\");\n"
+           << "                    if (scheduler.guest_cycle_budget_exhausted)\n"
+           << "                        throw std::runtime_error(\"Gastzyklusbudget erschoepft\");\n"
            << "                    services->observe_guest_checkpoint(" << hex32(block.start_address)
            << ");\n"
            << "                    if (services->poll_interrupt().has_value()) return;\n"

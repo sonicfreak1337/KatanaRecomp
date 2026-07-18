@@ -10,7 +10,7 @@
 namespace katana::runtime {
 
 struct MediaClockConfig {
-    std::uint64_t guest_cycles_per_second = 200'000'000u;
+    std::uint64_t guest_cycles_per_second = dreamcast_guest_cycles_per_second;
     std::uint32_t frame_rate = 60u;
     std::uint32_t audio_sample_rate = 44'100u;
     std::uint32_t audio_frames_per_buffer = 735u;

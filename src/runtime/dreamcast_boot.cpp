@@ -105,10 +105,10 @@ initialize_dreamcast_runtime(CpuState& cpu,
     state.aica_ram = map_dreamcast_aica_ram(cpu.memory);
     state.flash = map_dreamcast_command_flash(cpu.memory);
     state.scheduler = std::make_shared<EventScheduler>();
-    state.rtc_clock = std::make_shared<Sh4RtcClockDomain>(256u);
-    state.tmu = std::make_shared<Sh4Tmu>(*state.scheduler, TmuTiming{1u, state.rtc_clock});
+    state.rtc_clock = std::make_shared<Sh4RtcClockDomain>();
+    state.tmu = std::make_shared<Sh4Tmu>(*state.scheduler, TmuTiming{4u, state.rtc_clock});
     state.rtc = std::make_shared<Sh4Rtc>(*state.scheduler, state.rtc_clock);
-    state.dmac = std::make_shared<Sh4Dmac>(*state.scheduler, cpu.memory, DmaTiming{1u});
+    state.dmac = std::make_shared<Sh4Dmac>(*state.scheduler, cpu.memory, DmaTiming{});
     state.interrupt_controller = std::make_shared<InterruptController>();
     state.interrupt_router = std::make_shared<PlatformInterruptRouter>(
         *state.interrupt_controller, *state.tmu, *state.rtc, *state.dmac);
@@ -122,12 +122,17 @@ initialize_dreamcast_runtime(CpuState& cpu,
             throw std::runtime_error("Dreamcast-System-ASIC-Lebenszyklus fehlt.");
         target->raise(event, clock->current_cycle());
     };
-    state.pvr_registers =
-        map_pvr_registers(cpu.memory, [raise_now] { raise_now(SystemAsicEvent::PvrRenderDone); });
+    state.pvr_registers = map_pvr_registers(
+        cpu.memory,
+        *state.scheduler,
+        [raise_now] { raise_now(SystemAsicEvent::PvrRenderDone); });
     state.aica_registers = map_aica_registers(cpu.memory);
     state.maple = std::make_shared<MapleBus>([raise_now] { raise_now(SystemAsicEvent::MapleDma); });
     state.gdrom = std::make_shared<GdRomAsyncReader>(
-        GdRomDrive(boot.source), GdRomTiming{}, [asic, scheduler](const std::uint64_t cycle) {
+        *state.scheduler,
+        GdRomDrive(boot.source),
+        GdRomTiming{},
+        [asic, scheduler](const std::uint64_t cycle) {
             const auto target = asic.lock();
             const auto clock = scheduler.lock();
             if (!target || !clock)

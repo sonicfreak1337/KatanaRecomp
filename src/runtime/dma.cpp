@@ -33,9 +33,12 @@ Sh4Dmac::Sh4Dmac(EventScheduler& scheduler, Memory& memory, const DmaTiming timi
     if (timing_.guest_cycles_per_byte == 0u) {
         throw std::invalid_argument("DMA-Takt muss groesser null sein.");
     }
+    scheduler_reset_observer_ =
+        scheduler_.add_reset_observer([this] { handle_scheduler_reset(); });
 }
 
 Sh4Dmac::~Sh4Dmac() {
+    static_cast<void>(scheduler_.remove_reset_observer(scheduler_reset_observer_));
     cancel_event();
 }
 
@@ -235,6 +238,12 @@ void Sh4Dmac::schedule(const std::size_t index) {
     event_ = scheduler_.schedule_after(
         checked_delay(timing_.guest_cycles_per_byte, size),
         [this, index](const auto, const auto) { handle_transfer(index); });
+}
+
+void Sh4Dmac::handle_scheduler_reset() {
+    event_.reset();
+    scheduled_channel_.reset();
+    reevaluate();
 }
 
 void Sh4Dmac::handle_transfer(const std::size_t index) {

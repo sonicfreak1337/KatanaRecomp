@@ -18,7 +18,8 @@ class Sh4RtcClockDomain final {
     using PhaseObserverId = std::uint64_t;
     using PhaseObserver = std::function<void(bool before_reset, std::uint64_t guest_cycle)>;
 
-    explicit Sh4RtcClockDomain(std::uint64_t guest_cycles_per_second = 200'000'000u);
+    explicit Sh4RtcClockDomain(
+        std::uint64_t guest_cycles_per_second = dreamcast_guest_cycles_per_second);
 
     [[nodiscard]] std::uint64_t guest_cycles_per_second() const noexcept;
     [[nodiscard]] std::uint64_t elapsed_ticks(std::uint64_t first_cycle,
@@ -125,7 +126,7 @@ enum class RtcPeriodicRate : std::uint8_t {
 class Sh4Rtc final {
   public:
     explicit Sh4Rtc(EventScheduler& scheduler,
-                    std::uint64_t guest_cycles_per_second = 200'000'000u);
+                    std::uint64_t guest_cycles_per_second = dreamcast_guest_cycles_per_second);
     Sh4Rtc(EventScheduler& scheduler, std::shared_ptr<Sh4RtcClockDomain> clock);
     ~Sh4Rtc();
     Sh4Rtc(const Sh4Rtc&) = delete;

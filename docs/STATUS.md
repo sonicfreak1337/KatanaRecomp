@@ -2,7 +2,7 @@
 
 Interner Entwicklungsmeilenstein: `v0.46.0`
 Phase: Core-Stabilisierung vor v0.47
-Naechster Task: `KR-4616`
+Naechster Task: `KR-4617`
 Naechstes Gate: `v0.47.0` - Core-Stabilisierung und generische Retail-Runtime
 Weitere interne Gates: `v0.48.0` Integration und `v0.49.0` Alpha-Candidate
 Erster oeffentlicher Release: `v0.50.0` Alpha
@@ -127,6 +127,29 @@ die Handle- und Bulk-Registry-Schnittstelle.
 Der genaue Vertrag und die bei KR-4617/KR-4618 nachzuholenden Last-, Alias-
 und Mutationsregressionen stehen in
 [`RUNTIME_BLOCK_REGISTRY.md`](RUNTIME_BLOCK_REGISTRY.md).
+
+## KR-4616 umgesetzt
+
+Gastzeitvertrag 1 verwendet den `EventScheduler` als einzige monotone
+64-Bit-Zyklusuhr. Generierte Bloecke verbrauchen relative Instruktionskosten
+ueber PlatformServices-ABI 5; Fallback-Safepoints, Blockaustritte und
+Runtimemetriken lesen denselben Schedulerstand. Runtime-ABI 11 versioniert
+diese Schnittstelle.
+
+TMU, RTC und DMA verwenden ihre Hardwarefristen weiterhin auf diesem
+Scheduler. GD-ROM besitzt keine eigene fortzuschaltende Uhr mehr: `submit`
+plant seine Completion direkt. PVR-Renderstarts erhalten ebenfalls eine
+Schedulerfrist, bevor der System-ASIC-Abschluss sichtbar wird. Resets
+reaktivieren laufende Timer-/DMA-Fristen deterministisch und entfernen stale
+GD-ROM-/PVR-Completions.
+
+`KATANA_GUEST_CYCLE_BUDGET` wird von `game.exe` als positive 64-Bit-Zahl
+validiert und direkt im Scheduler durchgesetzt. SLEEP prueft zuerst bereits
+annehmbare Interrupts, springt andernfalls zum naechsten Ereignis und kann
+weder ohne Wakeupquelle noch ueber das Gastbudget hinaus still weiterlaufen.
+Der genaue Vertrag und die bei KR-4617/KR-4618 nachzuholenden
+Reihenfolge-, Budget- und Cross-Engine-Regressionen stehen in
+[`GUEST_TIMING.md`](GUEST_TIMING.md).
 
 ## Naechste Reihenfolge
 

@@ -24,6 +24,7 @@ struct SafepointReport {
     std::size_t processed_events = 0u;
     bool interrupt_delivered = false;
     bool budget_exhausted = false;
+    bool guest_cycle_budget_exhausted = false;
 };
 
 class SchedulerSafepoints {

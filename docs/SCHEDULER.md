@@ -30,3 +30,15 @@ Der Scheduler verwendet weder Hostzeit noch Threads. Alle Fristen sind absolute
 TMU, RTC, DMA, Interruptintegration sowie Frame- und Audio-Taktung werden in den
 folgenden KR-3102- bis KR-3105-Tasks auf diese Zeitbasis gesetzt. KR-3101 zieht
 diese Geraetesemantik nicht vor.
+
+## Gastzeitvertrag 1
+
+`KR-4616` schliesst die verbliebenen Zeitquellen an diese Basis an. Der
+Scheduler besitzt nun neben dem Ereignisbudget ein absolutes optionales
+Gastzyklusbudget. Ein Advance wird am Budget gekappt und meldet
+`GuestCycleBudgetExhausted`; alle Metriken lesen `current_cycle()`.
+
+Der erzeugte Port reicht relative, ueberlaufgepruefte Instruktionskosten ueber
+PlatformServices-ABI 5 ein. GD-ROM-Completions und PVR-Renderabschluesse sind
+Schedulerereignisse. SLEEP verwendet die naechste Schedulerfrist als Wakeup-
+Kandidat. Vertrag und Gatevektoren stehen in [`GUEST_TIMING.md`](GUEST_TIMING.md).

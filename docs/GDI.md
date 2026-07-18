@@ -31,6 +31,11 @@ ISO9660-Bootdateinamen und liest die Bootdatei zweimal ueber denselben
 `DiscSource`-Pfad. Die allgemein dokumentierte Dreamcast-Disc-Ladeadresse ist
 `0x8C010000`; titelbezogene Adressen oder Remaps werden nicht verwendet.
 
+Seit Gastzeitvertrag 1 plant `GdRomAsyncReader` jede Completion direkt auf dem
+zentralen `EventScheduler`. Ein Request wird allein durch das Fortschalten der
+gemeinsamen Gastuhr fertig; eine getrennte GD-ROM-Uhr und ein manueller zweiter
+`advance_to`-Aufruf existieren nicht mehr.
+
 Repository und Release enthalten ausschliesslich synthetische GDI-Fixtures.
 Private Disc-Dumps duerfen optional lokal fuer das jeweilige kumulative
 Phasengate verwendet werden; ihre Pfade, Namen, Hashes, temporaer generierten

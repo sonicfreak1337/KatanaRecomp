@@ -64,7 +64,7 @@ nicht gestartet werden.
 - [x] `KR-4613` - einheitliche Gastwrites und Codeinvalidierung
 - [x] `KR-4614` - kontexttreue, sounde Kontrollfluss- und Wertanalyse
 - [x] `KR-4615` - stabile und skalierbare Runtime-Blockregistry
-- [ ] `KR-4616` - einheitliches Gasttiming und Scheduler-/Geraeteintegration
+- [x] `KR-4616` - einheitliches Gasttiming und Scheduler-/Geraeteintegration
 - [ ] `KR-4617` - unabhaengige Cross-Engine- und CFG-Konformitaetstests
 - [ ] `KR-4618` - Core-Korrektheitsgate
 

@@ -167,11 +167,20 @@ std::uint32_t GdRomDrive::sector_size() const noexcept {
     return sector_size_;
 }
 
-GdRomAsyncReader::GdRomAsyncReader(GdRomDrive drive,
+GdRomAsyncReader::GdRomAsyncReader(EventScheduler& scheduler,
+                                   GdRomDrive drive,
                                    const GdRomTiming timing,
                                    std::function<void(std::uint64_t)> completion_observer)
-    : drive_(std::move(drive)), timing_(timing),
-      completion_observer_(std::move(completion_observer)) {}
+    : scheduler_(scheduler), drive_(std::move(drive)), timing_(timing),
+      completion_observer_(std::move(completion_observer)) {
+    reset_observer_ = scheduler_.add_reset_observer([this] { handle_scheduler_reset(); });
+}
+
+GdRomAsyncReader::~GdRomAsyncReader() {
+    for (const auto& request : pending_)
+        static_cast<void>(scheduler_.cancel(request.event_id));
+    static_cast<void>(scheduler_.remove_reset_observer(reset_observer_));
+}
 
 std::uint64_t GdRomAsyncReader::submit(const GdRomRequest& request) {
     const auto sectors = request.command == GdRomCommand::ReadSectors
@@ -183,39 +192,42 @@ std::uint64_t GdRomAsyncReader::submit(const GdRomRequest& request) {
         throw std::out_of_range("GD-ROM-Requestlatenz laeuft ueber.");
     }
     const auto duration = timing_.command_latency + sectors * timing_.cycles_per_sector;
-    if (current_cycle_ > std::numeric_limits<std::uint64_t>::max() - duration) {
+    if (scheduler_.current_cycle() > std::numeric_limits<std::uint64_t>::max() - duration) {
         throw std::out_of_range("GD-ROM-Fertigstellungszyklus laeuft ueber.");
     }
     if (next_request_id_ == 0u) {
         throw std::overflow_error("GD-ROM-Request-ID ist erschoepft.");
     }
     const auto id = next_request_id_++;
-    pending_.push_back({id, current_cycle_ + duration, request});
+    const auto ready_cycle = scheduler_.current_cycle() + duration;
+    const auto event_id = scheduler_.schedule_at(
+        ready_cycle, [this, id](const auto, const auto cycle) { complete(id, cycle); });
+    pending_.push_back({id, ready_cycle, request, event_id});
     return id;
 }
 
-void GdRomAsyncReader::advance_to(const std::uint64_t cycle) {
-    if (cycle < current_cycle_) {
-        throw std::invalid_argument("GD-ROM-Zyklusuhr darf nicht rueckwaerts laufen.");
+void GdRomAsyncReader::complete(const std::uint64_t request_id, const std::uint64_t cycle) {
+    const auto request = std::find_if(pending_.begin(), pending_.end(), [&](const auto& value) {
+        return value.request_id == request_id;
+    });
+    if (request == pending_.end() || request->ready_cycle != cycle) {
+        throw std::logic_error("GD-ROM-Schedulercompletion besitzt keinen Request.");
     }
-    current_cycle_ = cycle;
-    auto iterator = pending_.begin();
-    while (iterator != pending_.end()) {
-        if (iterator->ready_cycle > cycle) {
-            ++iterator;
-            continue;
-        }
-        completed_.push_back(
-            {iterator->request_id, iterator->ready_cycle, drive_.execute(iterator->request)});
-        if (completion_observer_) completion_observer_(iterator->ready_cycle);
-        iterator = pending_.erase(iterator);
-    }
+    completed_.push_back({request->request_id, cycle, drive_.execute(request->request)});
+    pending_.erase(request);
     std::sort(completed_.begin(), completed_.end(), [](const auto& left, const auto& right) {
         if (left.ready_cycle != right.ready_cycle) {
             return left.ready_cycle < right.ready_cycle;
         }
         return left.request_id < right.request_id;
     });
+    if (completion_observer_) completion_observer_(cycle);
+}
+
+void GdRomAsyncReader::handle_scheduler_reset() noexcept {
+    pending_.clear();
+    completed_.clear();
+    next_request_id_ = 1u;
 }
 
 std::optional<GdRomAsyncCompletion> GdRomAsyncReader::take_completed() {
@@ -231,7 +243,7 @@ std::size_t GdRomAsyncReader::pending_count() const noexcept {
     return pending_.size();
 }
 std::uint64_t GdRomAsyncReader::current_cycle() const noexcept {
-    return current_cycle_;
+    return scheduler_.current_cycle();
 }
 
 } // namespace katana::runtime

@@ -9,8 +9,17 @@
 
 namespace katana::runtime {
 
-PvrRegisterFile::PvrRegisterFile(std::function<void()> render_observer)
-    : render_observer_(std::move(render_observer)) {}
+PvrRegisterFile::PvrRegisterFile(EventScheduler& scheduler,
+                                 const PvrTiming timing,
+                                 std::function<void()> render_observer)
+    : scheduler_(scheduler), timing_(timing), render_observer_(std::move(render_observer)) {
+    reset_observer_ = scheduler_.add_reset_observer([this] { handle_scheduler_reset(); });
+}
+
+PvrRegisterFile::~PvrRegisterFile() {
+    for (const auto event : render_events_) static_cast<void>(scheduler_.cancel(event));
+    static_cast<void>(scheduler_.remove_reset_observer(reset_observer_));
+}
 
 std::size_t PvrRegisterFile::index(const std::uint32_t offset) {
     if (offset >= pvr_register_size || (offset & 3u) != 0u) {
@@ -42,19 +51,38 @@ void PvrRegisterFile::write(const std::uint32_t offset, const std::uint32_t valu
     }
     if (offset == pvr_register::StartRender) {
         ++render_requests_;
-        if (render_observer_) render_observer_();
+        const auto event = scheduler_.schedule_after(
+            timing_.render_latency,
+            [this](const auto event_id, const auto) { complete_render(event_id); });
+        render_events_.insert(event);
         return;
     }
     registers_[index(offset)] = value;
 }
 
 void PvrRegisterFile::reset() noexcept {
+    for (const auto event : render_events_) static_cast<void>(scheduler_.cancel(event));
+    render_events_.clear();
     registers_.fill(0u);
     ++resets_;
 }
 
+void PvrRegisterFile::complete_render(const SchedulerEventId event_id) {
+    if (render_events_.erase(event_id) == 0u)
+        throw std::logic_error("PVR-Rendercompletion besitzt keinen Request.");
+    ++render_completions_;
+    if (render_observer_) render_observer_();
+}
+
+void PvrRegisterFile::handle_scheduler_reset() noexcept {
+    render_events_.clear();
+}
+
 std::uint64_t PvrRegisterFile::render_request_count() const noexcept {
     return render_requests_;
+}
+std::uint64_t PvrRegisterFile::render_completion_count() const noexcept {
+    return render_completions_;
 }
 std::uint64_t PvrRegisterFile::reset_count() const noexcept {
     return resets_;
@@ -285,8 +313,11 @@ const std::vector<PvrTexture>& RecordingPvrRenderBackend::last_textures() const 
 }
 
 std::shared_ptr<PvrRegisterFile> map_pvr_registers(Memory& memory,
-                                                   std::function<void()> render_observer) {
-    auto registers = std::make_shared<PvrRegisterFile>(std::move(render_observer));
+                                                   EventScheduler& scheduler,
+                                                   std::function<void()> render_observer,
+                                                   const PvrTiming timing) {
+    auto registers =
+        std::make_shared<PvrRegisterFile>(scheduler, timing, std::move(render_observer));
     auto device = std::make_shared<MmioMemoryDevice>(
         pvr_register_size,
         [registers](const std::uint32_t offset, const MemoryAccessWidth width) {

@@ -1,12 +1,14 @@
 #pragma once
 
 #include "katana/runtime/memory.hpp"
+#include "katana/runtime/scheduler.hpp"
 
 #include <array>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <set>
 #include <span>
 #include <vector>
 
@@ -32,20 +34,37 @@ inline constexpr std::uint32_t FramebufferReadSize = 0x05Cu;
 inline constexpr std::uint32_t VideoControl = 0x0E8u;
 } // namespace pvr_register
 
+struct PvrTiming {
+    std::uint64_t render_latency = 2'000u;
+};
+
 class PvrRegisterFile final {
   public:
-    explicit PvrRegisterFile(std::function<void()> render_observer = {});
+    explicit PvrRegisterFile(EventScheduler& scheduler,
+                             PvrTiming timing = {},
+                             std::function<void()> render_observer = {});
+    ~PvrRegisterFile();
+    PvrRegisterFile(const PvrRegisterFile&) = delete;
+    PvrRegisterFile& operator=(const PvrRegisterFile&) = delete;
     [[nodiscard]] std::uint32_t read(std::uint32_t offset) const;
     void write(std::uint32_t offset, std::uint32_t value);
     void reset() noexcept;
     [[nodiscard]] std::uint64_t render_request_count() const noexcept;
+    [[nodiscard]] std::uint64_t render_completion_count() const noexcept;
     [[nodiscard]] std::uint64_t reset_count() const noexcept;
 
   private:
     [[nodiscard]] static std::size_t index(std::uint32_t offset);
+    void complete_render(SchedulerEventId event_id);
+    void handle_scheduler_reset() noexcept;
+    EventScheduler& scheduler_;
+    PvrTiming timing_;
     std::array<std::uint32_t, pvr_register_size / 4u> registers_{};
     std::uint64_t render_requests_ = 0u;
+    std::uint64_t render_completions_ = 0u;
     std::uint64_t resets_ = 0u;
+    SchedulerResetObserverId reset_observer_ = 0u;
+    std::set<SchedulerEventId> render_events_;
     std::function<void()> render_observer_;
 };
 
@@ -146,6 +165,9 @@ class RecordingPvrRenderBackend final : public PvrRenderBackend {
 };
 
 [[nodiscard]] std::shared_ptr<PvrRegisterFile>
-map_pvr_registers(Memory& memory, std::function<void()> render_observer = {});
+map_pvr_registers(Memory& memory,
+                  EventScheduler& scheduler,
+                  std::function<void()> render_observer = {},
+                  PvrTiming timing = {});
 
 } // namespace katana::runtime

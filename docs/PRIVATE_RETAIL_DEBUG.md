@@ -34,9 +34,11 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File `
 ```
 
 Der Hostprozess und seine Kinder werden bei Zeitueberschreitung beendet.
-`KATANA_GUEST_CYCLE_BUDGET` wird an eine gestartete `game.exe` uebergeben; bis
-die Runtime den Verbrauch selbst meldet, weist der Bericht nur das konfigurierte
-Budget aus und behauptet keine verbrauchten Gastzyklen.
+`KATANA_GUEST_CYCLE_BUDGET` wird an eine gestartete `game.exe` uebergeben und
+von Gastzeitvertrag 1 direkt im zentralen Scheduler durchgesetzt. Ungueltige,
+leere oder nullwertige Angaben werden abgewiesen. Die Runtime meldet den
+tatsaechlich erreichten Schedulerzyklus als `guest_cycles`; der Harness darf
+diesen Verbrauch weiterhin nicht aus dem konfigurierten Budget ableiten.
 
 Checkpoints werden niemals aus Dateinamen oder titelbezogenen Adressen
 abgeleitet. `SA_ANALYSIS_CONTINUES` folgt aus nachweisbar fortgesetzter Analyse.

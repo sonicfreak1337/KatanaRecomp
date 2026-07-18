@@ -41,7 +41,8 @@ SafepointReport SchedulerSafepoints::consume(const std::uint64_t guest_cycles,
                            jitter,
                            advanced.processed_events,
                            interrupt,
-                           advanced.status == SchedulerAdvanceStatus::EventBudgetExhausted};
+                           advanced.status == SchedulerAdvanceStatus::EventBudgetExhausted,
+                           advanced.status == SchedulerAdvanceStatus::GuestCycleBudgetExhausted};
     reports_.push_back(report);
     if (replay_log_ != nullptr) {
         try {
@@ -62,6 +63,9 @@ std::vector<SafepointReport> SchedulerSafepoints::consume_loop(std::uint64_t gue
         const auto chunk = std::min(guest_cycles, loop_quantum_);
         const auto before = scheduler_.current_cycle();
         result.push_back(consume(chunk, SafepointKind::LoopBackedge, origin));
+        if (result.back().guest_cycle_budget_exhausted) {
+            throw std::runtime_error("Gastzyklusbudget ist am Scheduler-Safepoint erschoepft.");
+        }
         const auto consumed = result.back().delivered_cycle - before;
         if (consumed == 0u && result.back().budget_exhausted) {
             throw std::runtime_error(
@@ -84,7 +88,8 @@ std::string SchedulerSafepoints::machine_report() const {
             << ";requested=" << report.requested_cycle << ";delivered=" << report.delivered_cycle
             << ";jitter=" << report.jitter << ";events=" << report.processed_events
             << ";interrupt=" << (report.interrupt_delivered ? 1 : 0)
-            << ";budget=" << (report.budget_exhausted ? 1 : 0) << '\n';
+            << ";budget=" << (report.budget_exhausted ? 1 : 0)
+            << ";guest-budget=" << (report.guest_cycle_budget_exhausted ? 1 : 0) << '\n';
     }
     return out.str();
 }
