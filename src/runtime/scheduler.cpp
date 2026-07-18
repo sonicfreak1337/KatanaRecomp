@@ -138,9 +138,8 @@ SchedulerAdvanceResult EventScheduler::advance_to(const std::uint64_t guest_cycl
         bool& state_;
     } guard(advance_in_progress_);
 
-    const auto effective_target = guest_cycle_budget_
-                                      ? std::min(guest_cycle, *guest_cycle_budget_)
-                                      : guest_cycle;
+    const auto effective_target =
+        guest_cycle_budget_ ? std::min(guest_cycle, *guest_cycle_budget_) : guest_cycle;
     std::size_t processed = 0u;
     while (!events_.empty() && events_.begin()->first.first <= effective_target) {
         if (processed == event_budget) {
@@ -220,8 +219,7 @@ std::uint64_t EventScheduler::reset_generation() const noexcept {
     return reset_generation_;
 }
 
-void EventScheduler::set_guest_cycle_budget(
-    const std::optional<std::uint64_t> maximum_cycle) {
+void EventScheduler::set_guest_cycle_budget(const std::optional<std::uint64_t> maximum_cycle) {
     if (maximum_cycle && *maximum_cycle == 0u) {
         throw std::invalid_argument("Gastzyklusbudget muss groesser null sein.");
     }

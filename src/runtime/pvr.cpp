@@ -17,7 +17,8 @@ PvrRegisterFile::PvrRegisterFile(EventScheduler& scheduler,
 }
 
 PvrRegisterFile::~PvrRegisterFile() {
-    for (const auto event : render_events_) static_cast<void>(scheduler_.cancel(event));
+    for (const auto event : render_events_)
+        static_cast<void>(scheduler_.cancel(event));
     static_cast<void>(scheduler_.remove_reset_observer(reset_observer_));
 }
 
@@ -61,7 +62,8 @@ void PvrRegisterFile::write(const std::uint32_t offset, const std::uint32_t valu
 }
 
 void PvrRegisterFile::reset() noexcept {
-    for (const auto event : render_events_) static_cast<void>(scheduler_.cancel(event));
+    for (const auto event : render_events_)
+        static_cast<void>(scheduler_.cancel(event));
     render_events_.clear();
     registers_.fill(0u);
     ++resets_;

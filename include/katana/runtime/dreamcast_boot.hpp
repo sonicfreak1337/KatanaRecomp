@@ -9,8 +9,8 @@
 #include "katana/runtime/platform_interrupt.hpp"
 #include "katana/runtime/pvr.hpp"
 #include "katana/runtime/runtime.hpp"
-#include "katana/runtime/system_asic.hpp"
 #include "katana/runtime/store_queue.hpp"
+#include "katana/runtime/system_asic.hpp"
 
 #include <cstddef>
 #include <cstdint>

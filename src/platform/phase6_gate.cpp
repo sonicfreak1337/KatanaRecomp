@@ -168,14 +168,13 @@ Phase6GateReport run_phase6_gate(const std::filesystem::path& descriptor_path,
                            runtime::Sh4Dmac::channel_enable);
     dmac.write_operation(runtime::Sh4Dmac::master_enable);
 
-    runtime::GdRomAsyncReader gdrom(
-        scheduler,
-        runtime::GdRomDrive(disc.source),
-        runtime::GdRomTiming{2u, 1u},
-        [&](const std::uint64_t) {
-            ++report.gdrom_completions;
-            router.set_external_pending(0u, true);
-        });
+    runtime::GdRomAsyncReader gdrom(scheduler,
+                                    runtime::GdRomDrive(disc.source),
+                                    runtime::GdRomTiming{2u, 1u},
+                                    [&](const std::uint64_t) {
+                                        ++report.gdrom_completions;
+                                        router.set_external_pending(0u, true);
+                                    });
     static_cast<void>(gdrom.submit({runtime::GdRomCommand::ReadSectors, disc.data_track_lba, 1u}));
 
     const auto advance = scheduler.advance_to(4u, 16u);

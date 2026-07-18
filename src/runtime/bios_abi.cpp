@@ -172,13 +172,14 @@ void install_hle_bios_abi(Memory& memory,
         memory.write_u32(vector.slot_address, vector.handler_address, CodeWriteSource::Copy);
         memory.write_u16(vector.handler_address, 0x000Bu, CodeWriteSource::Copy);
         memory.write_u16(vector.handler_address + 2u, 0x0009u, CodeWriteSource::Copy);
-        static_cast<void>(blocks.register_runtime({vector.handler_address,
-                                 canonical_physical_address(vector.handler_address),
-                                 4u,
-                                 BlockEndKind::Return,
-                                 variant,
-                                 &bios_abi_block,
-                                 "hle-bios-abi:" + std::string(vector.name)}));
+        static_cast<void>(
+            blocks.register_runtime({vector.handler_address,
+                                     canonical_physical_address(vector.handler_address),
+                                     4u,
+                                     BlockEndKind::Return,
+                                     variant,
+                                     &bios_abi_block,
+                                     "hle-bios-abi:" + std::string(vector.name)}));
         handoff.install_runtime_symbol({"bios-vector-" + std::string(vector.name),
                                         vector.slot_address,
                                         canonical_physical_address(vector.slot_address),

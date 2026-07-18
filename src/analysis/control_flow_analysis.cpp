@@ -80,13 +80,12 @@ bool add_resolution_seeds(std::map<std::uint32_t, SeedEvidence>& seeds,
     bool changed = false;
     for (const auto target : targets) {
         if (resolution.kind != IndirectControlFlowKind::Call) {
-            changed =
-                add_seed(seeds,
-                         target,
-                         {},
-                         control_flow_evidence_proven(resolution.evidence),
-                         resolution.evidence) ||
-                changed;
+            changed = add_seed(seeds,
+                               target,
+                               {},
+                               control_flow_evidence_proven(resolution.evidence),
+                               resolution.evidence) ||
+                      changed;
             continue;
         }
         if (resolution.reason == "user-override" || resolution.reason == "user-hint") {
@@ -146,23 +145,22 @@ void mark_resolved_table_dispatch(std::vector<IndirectControlFlowResolution>& re
     if (resolution == resolutions.end()) return;
     resolution->status = ResolutionStatus::Resolved;
     resolution->evidence = table.evidence;
-    resolution->evidence_origins = {
-        table.evidence == ControlFlowEvidence::HintCandidate
-            ? AnalysisEvidenceOrigin::UserHint
-        : table.evidence == ControlFlowEvidence::ForcedOverride
-            ? AnalysisEvidenceOrigin::UserOverride
-            : AnalysisEvidenceOrigin::JumpTable};
+    resolution->evidence_origins = {table.evidence == ControlFlowEvidence::HintCandidate
+                                        ? AnalysisEvidenceOrigin::UserHint
+                                    : table.evidence == ControlFlowEvidence::ForcedOverride
+                                        ? AnalysisEvidenceOrigin::UserOverride
+                                        : AnalysisEvidenceOrigin::JumpTable};
     if (table.evidence == ControlFlowEvidence::HintCandidate)
         resolution->status = ResolutionStatus::Unresolved;
     else if (!control_flow_evidence_complete(table.evidence))
         resolution->status = ResolutionStatus::Guarded;
     resolution->target.reset();
     resolution->targets.clear();
-    for (const auto& entry : table.entries) resolution->targets.push_back(entry.target);
+    for (const auto& entry : table.entries)
+        resolution->targets.push_back(entry.target);
     std::sort(resolution->targets.begin(), resolution->targets.end());
-    resolution->targets.erase(
-        std::unique(resolution->targets.begin(), resolution->targets.end()),
-        resolution->targets.end());
+    resolution->targets.erase(std::unique(resolution->targets.begin(), resolution->targets.end()),
+                              resolution->targets.end());
     resolution->reason = table.reason;
 }
 
@@ -266,8 +264,7 @@ BackwardSlice bounded_writer_slice(const std::span<const BasicBlock> blocks,
         for (const auto predecessor : incoming->second) {
             const auto predecessor_block = by_start.find(predecessor);
             if (predecessor_block != by_start.end())
-                pending.push_back(
-                    {predecessor, predecessor_block->second->lines.size(), depth});
+                pending.push_back({predecessor, predecessor_block->second->lines.size(), depth});
         }
     }
     return result;
@@ -291,18 +288,18 @@ void classify_dynamic_sites(const std::span<const katana::sh4::DisassemblyLine> 
             bounded_writer_slice(blocks, resolution.instruction_address, resolution.register_index);
         const katana::sh4::DisassemblyLine* writer = nullptr;
         if (slice.writers.size() == 1u && !slice.incomplete) {
-            const auto found_writer =
-                std::lower_bound(lines.begin(), lines.end(), *slice.writers.begin(),
-                                 [](const auto& line, const auto address) {
-                                     return line.address < address;
-                                 });
+            const auto found_writer = std::lower_bound(
+                lines.begin(),
+                lines.end(),
+                *slice.writers.begin(),
+                [](const auto& line, const auto address) { return line.address < address; });
             if (found_writer != lines.end() && found_writer->address == *slice.writers.begin())
                 writer = &*found_writer;
         }
         bool vtable_base = false;
         if (writer != nullptr) {
-            const auto base = bounded_writer_slice(
-                blocks, writer->address, writer->instruction.source_register);
+            const auto base =
+                bounded_writer_slice(blocks, writer->address, writer->instruction.source_register);
             vtable_base = base.writers.size() == 1u && !base.incomplete;
         }
         if (resolution.register_index == 0u && slice.preceding_call) {
@@ -511,12 +508,10 @@ ControlFlowAnalysisResult analyze_control_flow(const katana::io::ExecutableImage
                     resolution->target = jump.target;
                     resolution->evidence_origins = {AnalysisEvidenceOrigin::UserOverride};
                 }
-                std::sort(resolution->evidence_origins.begin(),
-                          resolution->evidence_origins.end());
-                resolution->evidence_origins.erase(
-                    std::unique(resolution->evidence_origins.begin(),
-                                resolution->evidence_origins.end()),
-                    resolution->evidence_origins.end());
+                std::sort(resolution->evidence_origins.begin(), resolution->evidence_origins.end());
+                resolution->evidence_origins.erase(std::unique(resolution->evidence_origins.begin(),
+                                                               resolution->evidence_origins.end()),
+                                                   resolution->evidence_origins.end());
                 resolution->reason = hints ? "user-hint" : "user-override";
                 if (hints) {
                     analysis.directive_diagnostics.push_back(
@@ -719,8 +714,8 @@ ControlFlowAnalysisResult analyze_control_flow(const katana::io::ExecutableImage
         auto targets = resolution.targets;
         if (resolution.target.has_value()) targets.push_back(*resolution.target);
         const bool boundaries = std::all_of(targets.begin(), targets.end(), [&](const auto target) {
-            return proven_instruction_boundary(
-                analysis.recursive.proven_instruction_addresses, target);
+            return proven_instruction_boundary(analysis.recursive.proven_instruction_addresses,
+                                               target);
         });
         if (!boundaries) {
             resolution.status = ResolutionStatus::Guarded;
@@ -730,11 +725,11 @@ ControlFlowAnalysisResult analyze_control_flow(const katana::io::ExecutableImage
     }
     for (auto& table : analysis.jump_tables) {
         if (!table.resolved || !control_flow_evidence_proven(table.evidence)) continue;
-        const bool boundaries = std::all_of(table.entries.begin(), table.entries.end(),
-                                            [&](const auto& entry) {
-            return proven_instruction_boundary(
-                analysis.recursive.proven_instruction_addresses, entry.target);
-        });
+        const bool boundaries =
+            std::all_of(table.entries.begin(), table.entries.end(), [&](const auto& entry) {
+                return proven_instruction_boundary(analysis.recursive.proven_instruction_addresses,
+                                                   entry.target);
+            });
         if (!boundaries) table.evidence = ControlFlowEvidence::GuardedPartial;
     }
     analysis.resolved_edges =
@@ -755,10 +750,10 @@ ControlFlowAnalysisResult analyze_control_flow(const katana::io::ExecutableImage
         site.evidence_callees = resolution.evidence_callees;
         analysis.sites.push_back(std::move(site));
     }
-    std::sort(analysis.sites.begin(), analysis.sites.end(), [](const auto& left,
-                                                               const auto& right) {
-        return left.instruction_address < right.instruction_address;
-    });
+    std::sort(
+        analysis.sites.begin(), analysis.sites.end(), [](const auto& left, const auto& right) {
+            return left.instruction_address < right.instruction_address;
+        });
     std::sort(analysis.directive_diagnostics.begin(),
               analysis.directive_diagnostics.end(),
               [](const auto& left, const auto& right) {

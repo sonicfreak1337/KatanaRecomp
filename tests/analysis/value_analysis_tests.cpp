@@ -496,13 +496,8 @@ int main() {
             "BRAF mit Rn=-4 verwendet nicht die 32-Bit-PC-Wraparound-Semantik.");
 
     katana::io::ExecutableImage address_wrap;
-    address_wrap.add_segment({".zero",
-                              0u,
-                              0u,
-                              2u,
-                              katana::io::SegmentKind::Code,
-                              {true, false, true},
-                              {0x09u, 0x00u}});
+    address_wrap.add_segment(
+        {".zero", 0u, 0u, 2u, katana::io::SegmentKind::Code, {true, false, true}, {0x09u, 0x00u}});
     address_wrap.add_segment({".top",
                               0xFFFFFFF8u,
                               0u,
@@ -513,8 +508,7 @@ int main() {
     const auto address_wrap_resolution = katana::analysis::resolve_indirect_control_flow(
         katana::sh4::disassemble(address_wrap.segments()[1].bytes, 0xFFFFFFF8u), address_wrap);
     require(address_wrap_resolution.size() == 1u &&
-                address_wrap_resolution[0].status ==
-                    katana::analysis::ResolutionStatus::Resolved &&
+                address_wrap_resolution[0].status == katana::analysis::ResolutionStatus::Resolved &&
                 address_wrap_resolution[0].target == 0u,
             "BRAF ueber 0xFFFFFFFF wurde nicht modulo 2^32 aufgeloest.");
 

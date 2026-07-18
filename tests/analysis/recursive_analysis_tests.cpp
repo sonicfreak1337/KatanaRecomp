@@ -149,22 +149,21 @@ int main() {
     require(std::string(katana::analysis::analysis_conflict_kind_name(
                 overlap_result.conflicts[0].kind)) == "function-entry-in-delay-slot",
             "Konfliktname ist instabil.");
-    const auto normal_context =
-        std::count_if(overlap_result.contextual_instructions.begin(),
-                      overlap_result.contextual_instructions.end(),
-                      [](const auto& contextual) {
-                          return contextual.line.address == 0x1002u &&
-                                 !contextual.delay_slot_owner.has_value();
-                      });
-    const auto slot_context =
-        std::count_if(overlap_result.contextual_instructions.begin(),
-                      overlap_result.contextual_instructions.end(),
-                      [](const auto& contextual) {
-                          return contextual.line.address == 0x1002u &&
-                                 contextual.delay_slot_owner == 0x1000u;
-                      });
-    require(normal_context == 1 && slot_context == 1,
-            "Dieselbe Adresse wurde nicht getrennt als normale Instruktion und Delay Slot erfasst.");
+    const auto normal_context = std::count_if(overlap_result.contextual_instructions.begin(),
+                                              overlap_result.contextual_instructions.end(),
+                                              [](const auto& contextual) {
+                                                  return contextual.line.address == 0x1002u &&
+                                                         !contextual.delay_slot_owner.has_value();
+                                              });
+    const auto slot_context = std::count_if(overlap_result.contextual_instructions.begin(),
+                                            overlap_result.contextual_instructions.end(),
+                                            [](const auto& contextual) {
+                                                return contextual.line.address == 0x1002u &&
+                                                       contextual.delay_slot_owner == 0x1000u;
+                                            });
+    require(
+        normal_context == 1 && slot_context == 1,
+        "Dieselbe Adresse wurde nicht getrennt als normale Instruktion und Delay Slot erfasst.");
     const auto report = katana::analysis::format_recursive_analysis_report(result);
     require(report == katana::analysis::format_recursive_analysis_report(result),
             "Analysebericht ist nicht deterministisch.");
@@ -238,17 +237,15 @@ int main() {
             "Unbekannter Delay Slot liess unsicheren Call- oder Rueckkehrpfad weiterlaufen.");
 
     ExecutableImage control_in_delay;
-    control_in_delay.add_segment(
-        {".text",
-         0u,
-         0u,
-         8u,
-         SegmentKind::Code,
-         {true, false, true},
-         {0x00u, 0xB0u, 0xFDu, 0xAFu, 0x09u, 0x00u, 0x09u, 0x00u}});
+    control_in_delay.add_segment({".text",
+                                  0u,
+                                  0u,
+                                  8u,
+                                  SegmentKind::Code,
+                                  {true, false, true},
+                                  {0x00u, 0xB0u, 0xFDu, 0xAFu, 0x09u, 0x00u, 0x09u, 0x00u}});
     control_in_delay.add_entry_point(0u);
-    const auto control_in_delay_result =
-        katana::analysis::analyze_reachable_code(control_in_delay);
+    const auto control_in_delay_result = katana::analysis::analyze_reachable_code(control_in_delay);
     require(std::any_of(control_in_delay_result.diagnostics.begin(),
                         control_in_delay_result.diagnostics.end(),
                         [](const auto& diagnostic) {
@@ -258,13 +255,8 @@ int main() {
             "Kontrollfluss im Delay Slot wurde nicht kontexttreu diagnostiziert.");
 
     ExecutableImage missing_delay;
-    missing_delay.add_segment({".text",
-                               0u,
-                               0u,
-                               2u,
-                               SegmentKind::Code,
-                               {true, false, true},
-                               {0x00u, 0xB0u}});
+    missing_delay.add_segment(
+        {".text", 0u, 0u, 2u, SegmentKind::Code, {true, false, true}, {0x00u, 0xB0u}});
     missing_delay.add_entry_point(0u);
     const auto missing_delay_result = katana::analysis::analyze_reachable_code(missing_delay);
     require(missing_delay_result.diagnostics.size() == 1u &&

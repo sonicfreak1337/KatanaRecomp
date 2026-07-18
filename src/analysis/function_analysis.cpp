@@ -203,7 +203,8 @@ discover_functions_from_blocks(const std::span<const BasicBlock> blocks,
     }
     std::unordered_map<std::uint32_t, std::size_t> owners;
     for (const auto& function : functions) {
-        for (const auto block : function.block_addresses) ++owners[block];
+        for (const auto block : function.block_addresses)
+            ++owners[block];
     }
     for (auto& function : functions) {
         for (const auto block : function.block_addresses) {

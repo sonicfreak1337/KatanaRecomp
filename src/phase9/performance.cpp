@@ -304,15 +304,15 @@ void GuardedMemoryFastpath::write_u32(const std::uint32_t address,
         ++misses_;
         memory_.write_u32(address, value);
         if (code_tracker_ != nullptr && !memory_.has_guest_write_observer())
-            static_cast<void>(code_tracker_->observe_write(
-                address, 4u, runtime::CodeWriteSource::Cpu, changed));
+            static_cast<void>(
+                code_tracker_->observe_write(address, 4u, runtime::CodeWriteSource::Cpu, changed));
         return;
     }
     static_cast<void>(offset(address));
     memory_.write_u32(address, value);
     if (code_tracker_ != nullptr && !memory_.has_guest_write_observer())
-        static_cast<void>(code_tracker_->observe_write(
-            address, 4u, runtime::CodeWriteSource::Cpu, changed));
+        static_cast<void>(
+            code_tracker_->observe_write(address, 4u, runtime::CodeWriteSource::Cpu, changed));
     ++hits_;
 }
 
@@ -337,8 +337,8 @@ MonomorphicDispatchCache::dispatch(runtime::CpuState& cpu,
         entry_->variant == request.variant && entry_->block_generation == block_generation) {
         const auto handle = table.lookup(target, request.variant);
         const auto block = handle ? table.resolve(*handle) : std::nullopt;
-        if (block && runtime::stable_runtime_block_identity(block->get()) ==
-                         entry_->block_identity) {
+        if (block &&
+            runtime::stable_runtime_block_identity(block->get()) == entry_->block_identity) {
             ++hits_;
             cpu.pc = target;
             if (request.kind == runtime::IndirectDispatchKind::Call)

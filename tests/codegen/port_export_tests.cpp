@@ -127,9 +127,8 @@ std::vector<std::uint8_t> boot_track(const bool immediate_trap = false) {
     constexpr std::array<std::uint8_t, 24u> trap_program = {
         0x00u, 0xC3u, // trapa #0
         0x0Bu, 0x00u, // unreachable rts
-        0x09u, 0x00u, 0x09u, 0x00u, 0x09u, 0x00u, 0x09u, 0x00u,
-        0x09u, 0x00u, 0x09u, 0x00u, 0x09u, 0x00u, 0x09u, 0x00u,
-        0x09u, 0x00u, 0x09u, 0x00u};
+        0x09u, 0x00u, 0x09u, 0x00u, 0x09u, 0x00u, 0x09u, 0x00u, 0x09u, 0x00u,
+        0x09u, 0x00u, 0x09u, 0x00u, 0x09u, 0x00u, 0x09u, 0x00u, 0x09u, 0x00u};
     const auto& program = immediate_trap ? trap_program : normal_program;
     std::copy(program.begin(),
               program.end(),
@@ -197,7 +196,11 @@ int run_test(const int argc, char* argv[]) {
                 runtime_state.system_asic && runtime_state.interrupt_router,
             "Eigenstaendiger GDI-Boot initialisiert Bootimage, CPU oder Speicher nicht.");
     static_cast<void>(runtime_state.code_tracker->register_block(
-        {"sq-code", 0x0C000000u, 32u, "synthetic", {},
+        {"sq-code",
+         0x0C000000u,
+         32u,
+         "synthetic",
+         {},
          katana::runtime::ExecutableBlockOrigin::ImageSegment}));
     runtime_cpu.memory.write_u32(0xFF000038u, 0x0Cu);
     for (std::uint32_t offset = 0u; offset < 32u; offset += 4u)
@@ -271,42 +274,41 @@ int run_test(const int argc, char* argv[]) {
         require(generated_before.contains(path),
                 "Portexport verliert Artefakt: " + std::string(path));
     }
-    require(generated_before.at("katana-port.cmake").find("add_executable(synthetic_game") !=
-                    std::string::npos &&
-                generated_before.at("katana-port.cmake").find("katana_runtime") !=
-                    std::string::npos &&
-                generated_before.at("code/runtime-dispatch.cpp").find("dispatch_indirect") !=
-                    std::string::npos &&
-                generated_before.at("code/runtime-dispatch.cpp")
-                        .find("generated-block-8C010000") != std::string::npos &&
-                generated_before.at("code/runtime-dispatch.cpp")
-                        .find("6u, katana::runtime::BlockEndKind::Call") != std::string::npos &&
-                generated_before.at("code/runtime-dispatch.cpp")
-                        .find("SLEEP besitzt kein Wakeup-Ereignis") != std::string::npos &&
-                generated_before.at("code/runtime-dispatch.cpp")
-                        .find("Schedulerbudget erschoepft") != std::string::npos &&
-                generated_before.at("code/runtime-dispatch.cpp")
-                        .find("Gastzyklusbudget erschoepft") != std::string::npos &&
-                generated_before.at("code/runtime-dispatch.cpp")
-                        .find("Runtime-Blockbudget erschoepft") != std::string::npos &&
-                std::filesystem::exists(output / "CMakeLists.txt") &&
-                std::filesystem::exists(output / "src" / "main.cpp") &&
-                read_text(output / "src" / "main.cpp").find("load_dreamcast_runtime_boot") !=
-                    std::string::npos &&
-                read_text(output / "src" / "main.cpp").find("create_native_video_output") !=
-                    std::string::npos &&
-                read_text(output / "src" / "main.cpp").find("framebuffer.capture") !=
-                    std::string::npos &&
-                read_text(output / "src" / "main.cpp").find("HostRuntimeSession") !=
-                    std::string::npos &&
-                read_text(output / "src" / "main.cpp").find("audio_hash") != std::string::npos &&
-                read_text(output / "src" / "main.cpp").find("source-identity-mismatch") !=
-                    std::string::npos &&
-                read_text(output / "src" / "main.cpp").find("weakly_canonical") !=
-                    std::string::npos &&
-                read_text(output / "src" / "main.cpp")
-                        .find("source.parent_path().string()") == std::string::npos,
-            "Portprojekt besitzt keinen ausfuehrbaren GDI-/Runtimevertrag.");
+    require(
+        generated_before.at("katana-port.cmake").find("add_executable(synthetic_game") !=
+                std::string::npos &&
+            generated_before.at("katana-port.cmake").find("katana_runtime") != std::string::npos &&
+            generated_before.at("code/runtime-dispatch.cpp").find("dispatch_indirect") !=
+                std::string::npos &&
+            generated_before.at("code/runtime-dispatch.cpp").find("generated-block-8C010000") !=
+                std::string::npos &&
+            generated_before.at("code/runtime-dispatch.cpp")
+                    .find("6u, katana::runtime::BlockEndKind::Call") != std::string::npos &&
+            generated_before.at("code/runtime-dispatch.cpp")
+                    .find("SLEEP besitzt kein Wakeup-Ereignis") != std::string::npos &&
+            generated_before.at("code/runtime-dispatch.cpp").find("Schedulerbudget erschoepft") !=
+                std::string::npos &&
+            generated_before.at("code/runtime-dispatch.cpp").find("Gastzyklusbudget erschoepft") !=
+                std::string::npos &&
+            generated_before.at("code/runtime-dispatch.cpp")
+                    .find("Runtime-Blockbudget erschoepft") != std::string::npos &&
+            std::filesystem::exists(output / "CMakeLists.txt") &&
+            std::filesystem::exists(output / "src" / "main.cpp") &&
+            read_text(output / "src" / "main.cpp").find("load_dreamcast_runtime_boot") !=
+                std::string::npos &&
+            read_text(output / "src" / "main.cpp").find("create_native_video_output") !=
+                std::string::npos &&
+            read_text(output / "src" / "main.cpp").find("framebuffer.capture") !=
+                std::string::npos &&
+            read_text(output / "src" / "main.cpp").find("HostRuntimeSession") !=
+                std::string::npos &&
+            read_text(output / "src" / "main.cpp").find("audio_hash") != std::string::npos &&
+            read_text(output / "src" / "main.cpp").find("source-identity-mismatch") !=
+                std::string::npos &&
+            read_text(output / "src" / "main.cpp").find("weakly_canonical") != std::string::npos &&
+            read_text(output / "src" / "main.cpp").find("source.parent_path().string()") ==
+                std::string::npos,
+        "Portprojekt besitzt keinen ausfuehrbaren GDI-/Runtimevertrag.");
     std::string portable_content;
     for (const auto& [path, content] : generated_before) {
         static_cast<void>(path);
@@ -333,25 +335,24 @@ int run_test(const int argc, char* argv[]) {
         guarded_inputs.push_back(katana::io::capture_input_provenance(
             "gdi-track-" + std::to_string(track.number), track.resolved_path));
     const auto guarded_output = fixture.root / "guarded-port";
-    const auto guarded_export = export_dreamcast_port_project(
-        {guarded_image,
-         guarded_analysis,
-         guarded_program,
-         guarded_inputs,
-         katana::platform::dreamcast_disc_boot_address,
-         katana::platform::dreamcast_disc_boot_address,
-         guarded_disc.boot_file.size(),
-         "guarded-fixture"},
-        guarded_output,
-        options);
+    const auto guarded_export =
+        export_dreamcast_port_project({guarded_image,
+                                       guarded_analysis,
+                                       guarded_program,
+                                       guarded_inputs,
+                                       katana::platform::dreamcast_disc_boot_address,
+                                       katana::platform::dreamcast_disc_boot_address,
+                                       guarded_disc.boot_file.size(),
+                                       "guarded-fixture"},
+                                      guarded_output,
+                                      options);
     const auto guarded_sources = snapshot(guarded_output / "generated");
     std::string guarded_text;
     for (const auto& [path, content] : guarded_sources) {
         if (path.starts_with("code/unit-")) guarded_text += content;
     }
     const auto& guarded_metadata = guarded_sources.at("metadata/port-project.json");
-    require(guarded_export.functions != 0u &&
-                guarded_text.find("default:") != std::string::npos &&
+    require(guarded_export.functions != 0u && guarded_text.find("default:") != std::string::npos &&
                 guarded_text.find("unresolved_call") != std::string::npos &&
                 guarded_metadata.find("\"guarded_control_flow\":1") != std::string::npos &&
                 guarded_metadata.find("\"unresolved_control_flow\":0") != std::string::npos,

@@ -336,8 +336,7 @@ int main() {
     const auto unknown_caller = katana::analysis::analyze_control_flow(unknown_caller_image);
     const auto* unknown_caller_site = site(unknown_caller, 0x22u);
     require(unknown_caller_site != nullptr &&
-                !katana::analysis::control_flow_evidence_complete(
-                    unknown_caller_site->evidence),
+                !katana::analysis::control_flow_evidence_complete(unknown_caller_site->evidence),
             "Ein unbekannter zusaetzlicher Caller wurde durch einen bekannten Caller geheilt.");
 
     std::vector<std::uint8_t> indirect_parameter_bytes(0x60u, 0x09u);

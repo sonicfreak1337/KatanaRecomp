@@ -91,12 +91,9 @@ void test_calls_write_pr_before_delay_slot() {
         bool pc_relative;
     };
     const std::array cases{
-        Case{"BSR", 0x1B00u, katana_generated::fn_00001B00,
-             katana_generated::fn_00001C00, false},
-        Case{"BSRF", 0x1D00u, katana_generated::fn_00001D00,
-             katana_generated::fn_00001E00, true},
-        Case{"JSR", 0x1F00u, katana_generated::fn_00001F00,
-             katana_generated::fn_00002000, false},
+        Case{"BSR", 0x1B00u, katana_generated::fn_00001B00, katana_generated::fn_00001C00, false},
+        Case{"BSRF", 0x1D00u, katana_generated::fn_00001D00, katana_generated::fn_00001E00, true},
+        Case{"JSR", 0x1F00u, katana_generated::fn_00001F00, katana_generated::fn_00002000, false},
     };
 
     for (const auto& test : cases) {
@@ -105,8 +102,8 @@ void test_calls_write_pr_before_delay_slot() {
         cpu.r[10] = test.pc_relative ? 0x3000u - (test.owner + 4u) : 0x3000u;
         cpu.r[12] = 0u;
         test.store_pr(cpu);
-        require(!cpu.trap_pending && cpu.r[12] == test.owner + 4u &&
-                    cpu.pr == test.owner + 4u && cpu.pc == test.owner + 4u,
+        require(!cpu.trap_pending && cpu.r[12] == test.owner + 4u && cpu.pr == test.owner + 4u &&
+                    cpu.pc == test.owner + 4u,
                 std::string(test.name) + " macht den neuen PR-Wert im Delay Slot nicht sichtbar.");
 
         const auto load_owner = test.owner + 0x100u;

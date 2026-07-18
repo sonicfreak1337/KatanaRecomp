@@ -128,8 +128,7 @@ AnalysisGraph build_call_graph(const ControlFlowAnalysisResult& analysis) {
     std::vector<std::uint32_t> entries;
     entries.reserve(analysis.recursive.functions.size());
     for (const auto& function : analysis.recursive.functions) {
-        if (control_flow_evidence_proven(function.evidence))
-            entries.push_back(function.address);
+        if (control_flow_evidence_proven(function.evidence)) entries.push_back(function.address);
     }
     const auto functions =
         discover_functions(analysis.recursive.instructions, entries, analysis.resolved_edges);

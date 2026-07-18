@@ -265,13 +265,13 @@ FirmwareHandoffReport run_synthetic_firmware_handoff() {
     RuntimeBlockTable table;
     const BlockVariantKey variant{};
     static_cast<void>(table.register_static({p1_entry,
-                           ram_physical,
-                           static_cast<std::uint32_t>(bootstrap.size()),
-                           BlockEndKind::Return,
-                           variant,
-                           handoff_block,
-                           "copy:synthetic-rom-bootstrap",
-                           false}));
+                                             ram_physical,
+                                             static_cast<std::uint32_t>(bootstrap.size()),
+                                             BlockEndKind::Return,
+                                             variant,
+                                             handoff_block,
+                                             "copy:synthetic-rom-bootstrap",
+                                             false}));
     CpuState dispatch_cpu;
     const IndirectDispatchRequest request{
         IndirectDispatchKind::TailJump, p2_entry, p2_entry, 0u, {p2_entry, ram_physical}, variant};
@@ -304,13 +304,13 @@ FirmwareHandoffReport run_synthetic_firmware_handoff() {
     auto regenerated_variant = variant;
     regenerated_variant.runtime_generation = tracker.page_generation(ram_physical);
     static_cast<void>(table.register_runtime({p1_entry,
-                            ram_physical,
-                            static_cast<std::uint32_t>(bootstrap.size()),
-                            BlockEndKind::Return,
-                            regenerated_variant,
-                            handoff_block,
-                            "regenerated:copy:synthetic-rom-bootstrap",
-                            false}));
+                                              ram_physical,
+                                              static_cast<std::uint32_t>(bootstrap.size()),
+                                              BlockEndKind::Return,
+                                              regenerated_variant,
+                                              handoff_block,
+                                              "regenerated:copy:synthetic-rom-bootstrap",
+                                              false}));
     auto regenerated_request = request;
     regenerated_request.variant = regenerated_variant;
     const auto regenerated = dispatch_indirect(dispatch_cpu, table, regenerated_request);
@@ -450,13 +450,13 @@ HomebrewHostFrameReport run_homebrew_host_frame() {
     RuntimeBlockTable dispatch_table;
     const BlockVariantKey dispatch_variant{};
     static_cast<void>(dispatch_table.register_static({0x8C010000u,
-                                    0x0C010000u,
-                                    8u,
-                                    BlockEndKind::Return,
-                                    dispatch_variant,
-                                    handoff_block,
-                                    "homebrew-frame-entry",
-                                    false}));
+                                                      0x0C010000u,
+                                                      8u,
+                                                      BlockEndKind::Return,
+                                                      dispatch_variant,
+                                                      handoff_block,
+                                                      "homebrew-frame-entry",
+                                                      false}));
     static_cast<void>(dispatch_indirect(cpu,
                                         dispatch_table,
                                         {IndirectDispatchKind::TailJump,

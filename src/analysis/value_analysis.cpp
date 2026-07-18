@@ -664,10 +664,9 @@ resolve_indirect_control_flow(const std::span<const katana::sh4::DisassemblyLine
                 const bool register_relative =
                     line.instruction.kind == katana::sh4::InstructionKind::Braf ||
                     line.instruction.kind == katana::sh4::InstructionKind::Bsrf;
-                const auto narrowed_target = register_relative
-                                                 ? static_cast<std::uint32_t>(
-                                                       *value + line.address + 4u)
-                                                 : *value;
+                const auto narrowed_target =
+                    register_relative ? static_cast<std::uint32_t>(*value + line.address + 4u)
+                                      : *value;
                 {
                     const auto validation = validate_decode_candidate(image, narrowed_target);
                     if (!validation.valid()) {
@@ -676,14 +675,13 @@ resolve_indirect_control_flow(const std::span<const katana::sh4::DisassemblyLine
                         resolution.status = source.find("guarded-writable-") != std::string::npos
                                                 ? ResolutionStatus::Guarded
                                                 : ResolutionStatus::Resolved;
-                        resolution.evidence =
-                            resolution.status == ResolutionStatus::Resolved
-                                ? ControlFlowEvidence::ProvenComplete
-                                : ControlFlowEvidence::GuardedPartial;
-                        resolution.evidence_origins = {
-                            resolution.status == ResolutionStatus::Resolved
-                                ? AnalysisEvidenceOrigin::LocalValue
-                                : AnalysisEvidenceOrigin::EntrySnapshot};
+                        resolution.evidence = resolution.status == ResolutionStatus::Resolved
+                                                  ? ControlFlowEvidence::ProvenComplete
+                                                  : ControlFlowEvidence::GuardedPartial;
+                        resolution.evidence_origins = {resolution.status ==
+                                                               ResolutionStatus::Resolved
+                                                           ? AnalysisEvidenceOrigin::LocalValue
+                                                           : AnalysisEvidenceOrigin::EntrySnapshot};
                         resolution.target = narrowed_target;
                         resolution.reason = source.empty() ? "constant-register" : source;
                         if (register_relative)

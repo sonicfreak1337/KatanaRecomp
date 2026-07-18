@@ -31,11 +31,9 @@ int main() {
     auto source = std::make_shared<MemoryDiscSource>(image, "synthetic:async-gdrom");
     EventScheduler scheduler;
     std::vector<std::uint64_t> completion_cycles;
-    GdRomAsyncReader reader(
-        scheduler,
-        GdRomDrive(source),
-        {10u, 5u},
-        [&](const auto cycle) { completion_cycles.push_back(cycle); });
+    GdRomAsyncReader reader(scheduler, GdRomDrive(source), {10u, 5u}, [&](const auto cycle) {
+        completion_cycles.push_back(cycle);
+    });
     const auto read_id = reader.submit({GdRomCommand::ReadSectors, 1u, 2u});
     const auto status_id = reader.submit({GdRomCommand::GetStatus});
     require(reader.pending_count() == 2u && read_id == 1u && status_id == 2u,
@@ -68,9 +66,8 @@ int main() {
             "GD-ROM reaktiviert nach Schedulerreset ID oder Frist nicht deterministisch.");
     EventScheduler overflow_scheduler;
     static_cast<void>(overflow_scheduler.advance_to(1u, 0u));
-    GdRomAsyncReader overflow(overflow_scheduler,
-                              GdRomDrive(source),
-                              {std::numeric_limits<std::uint64_t>::max(), 1u});
+    GdRomAsyncReader overflow(
+        overflow_scheduler, GdRomDrive(source), {std::numeric_limits<std::uint64_t>::max(), 1u});
     require(throws<std::out_of_range>(
                 [&] { static_cast<void>(overflow.submit({GdRomCommand::GetStatus})); }),
             "Ueberlaufender GD-ROM-Fertigstellungszyklus wird akzeptiert.");

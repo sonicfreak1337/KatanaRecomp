@@ -126,10 +126,10 @@ int main() {
         fast_memory.map_region("fast", 0x2000u, fast_linear);
         ExecutableCodeTracker safe_tracker;
         ExecutableCodeTracker fast_tracker;
-        static_cast<void>(safe_tracker.register_block(
-            {"equivalent", 0x2000u, 16u, "reference", {"caller"}}));
-        static_cast<void>(fast_tracker.register_block(
-            {"equivalent", 0x2000u, 16u, "reference", {"caller"}}));
+        static_cast<void>(
+            safe_tracker.register_block({"equivalent", 0x2000u, 16u, "reference", {"caller"}}));
+        static_cast<void>(
+            fast_tracker.register_block({"equivalent", 0x2000u, 16u, "reference", {"caller"}}));
         safe_memory.set_guest_write_observer([&](const auto& event) {
             static_cast<void>(safe_tracker.observe_write(
                 event.address, event.size, event.source, event.bytes_changed));
@@ -138,8 +138,7 @@ int main() {
             static_cast<void>(fast_tracker.observe_write(
                 event.address, event.size, event.source, event.bytes_changed));
         });
-        GuardedMemoryFastpath equivalent_fastpath(
-            fast_memory, fast_linear, 0x2000u, &fast_tracker);
+        GuardedMemoryFastpath equivalent_fastpath(fast_memory, fast_linear, 0x2000u, &fast_tracker);
         safe_memory.write_u32(0x2004u, 0xDEADBEEFu);
         equivalent_fastpath.write_u32(0x2004u, 0xDEADBEEFu, valid);
         safe_memory.write_u32(0x2004u, 0xDEADBEEFu);
@@ -157,13 +156,13 @@ int main() {
         RuntimeBlockTable table;
         const BlockVariantKey variant{1u, 0u, 0u, 0u, 0u};
         static_cast<void>(table.register_static({0x8C001000u,
-                               0x0C001000u,
-                               4u,
-                               BlockEndKind::Return,
-                               variant,
-                               block,
-                               "phase9-target",
-                               false}));
+                                                 0x0C001000u,
+                                                 4u,
+                                                 BlockEndKind::Return,
+                                                 variant,
+                                                 block,
+                                                 "phase9-target",
+                                                 false}));
         CpuState cpu;
         const IndirectDispatchRequest request{IndirectDispatchKind::Call,
                                               0x8C000100u,

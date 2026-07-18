@@ -178,8 +178,7 @@ int main() {
         EventScheduler test;
         test.set_guest_cycle_budget(budget);
         std::size_t callbacks = 0u;
-        static_cast<void>(
-            test.schedule_at(10u, [&](const auto, const auto) { ++callbacks; }));
+        static_cast<void>(test.schedule_at(10u, [&](const auto, const auto) { ++callbacks; }));
         return std::pair{test.advance_to(20u, 1u), callbacks};
     };
     const auto [below_deadline, below_callbacks] = budget_case(9u);

@@ -815,8 +815,7 @@ std::string result_index_json(const io::LoadedProject& project,
                << ",\"confidence\":"
                << io::quote_json(analysis::analysis_confidence_name(functions[index].confidence))
                << ",\"evidence\":"
-               << io::quote_json(
-                      analysis::control_flow_evidence_name(functions[index].evidence))
+               << io::quote_json(analysis::control_flow_evidence_name(functions[index].evidence))
                << '}';
     }
     output << "],\"segments\":[";

@@ -57,13 +57,13 @@ int main() {
         const auto old_guard = space.guard_for(0x1234u, fpscr_pr_mask);
         RuntimeBlockTable table;
         static_cast<void>(table.register_static({0x1234u,
-                               old_guard.physical_page + 0x234u,
-                               2u,
-                               BlockEndKind::Fallthrough,
-                               block_variant_key(old_guard),
-                               guarded_block,
-                               "guarded-old",
-                               false}));
+                                                 old_guard.physical_page + 0x234u,
+                                                 2u,
+                                                 BlockEndKind::Fallthrough,
+                                                 block_variant_key(old_guard),
+                                                 guarded_block,
+                                                 "guarded-old",
+                                                 false}));
         require(table.lookup(0x1234u, block_variant_key(old_guard)).has_value(),
                 "Ausgangsvariante wurde nicht in der Laufzeittabelle registriert.");
         space.bump_watchpoints();

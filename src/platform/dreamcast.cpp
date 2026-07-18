@@ -81,10 +81,11 @@ DreamcastBootResult boot_homebrew(runtime::CpuState& cpu,
     result.log.push_back("entry=" + hex32(entry));
 
     for (const auto& segment : image.segments()) {
-        std::vector<std::uint8_t> image_bytes(
-            static_cast<std::size_t>(segment.memory_size), std::uint8_t{0u});
+        std::vector<std::uint8_t> image_bytes(static_cast<std::size_t>(segment.memory_size),
+                                              std::uint8_t{0u});
         std::copy(segment.bytes.begin(), segment.bytes.end(), image_bytes.begin());
-        cpu.memory.write_bytes(segment.virtual_address, image_bytes, runtime::CodeWriteSource::Copy);
+        cpu.memory.write_bytes(
+            segment.virtual_address, image_bytes, runtime::CodeWriteSource::Copy);
         ++result.loaded_segments;
         result.loaded_bytes += static_cast<std::size_t>(segment.memory_size);
         result.log.push_back("segment=" + segment.name + "@" + hex32(segment.virtual_address));

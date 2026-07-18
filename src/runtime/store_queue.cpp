@@ -85,8 +85,7 @@ bool Sh4StoreQueues::prefetch(const std::uint32_t address) {
     if (sink_) {
         sink_(transfer);
     } else {
-        memory_.write_bytes(
-            transfer.target_address, transfer.bytes, CodeWriteSource::StoreQueue);
+        memory_.write_bytes(transfer.target_address, transfer.bytes, CodeWriteSource::StoreQueue);
     }
     ++transfer_count_;
     return true;

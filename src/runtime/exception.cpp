@@ -16,14 +16,10 @@ constexpr std::array exception_table = {
                       event_slot_illegal_instruction,
                       general_exception_vector,
                       false},
-    ExceptionMetadata{ExceptionCause::FpuDisabled,
-                      event_fpu_disabled,
-                      general_exception_vector,
-                      false},
-    ExceptionMetadata{ExceptionCause::SlotFpuDisabled,
-                      event_slot_fpu_disabled,
-                      general_exception_vector,
-                      false},
+    ExceptionMetadata{
+        ExceptionCause::FpuDisabled, event_fpu_disabled, general_exception_vector, false},
+    ExceptionMetadata{
+        ExceptionCause::SlotFpuDisabled, event_slot_fpu_disabled, general_exception_vector, false},
     ExceptionMetadata{ExceptionCause::AddressErrorRead,
                       event_address_error_read,
                       general_exception_vector,
@@ -44,8 +40,7 @@ constexpr std::array exception_table = {
     ExceptionMetadata{ExceptionCause::Interrupt, 0u, interrupt_vector, true},
 };
 
-static_assert(exception_table.size() ==
-              static_cast<std::size_t>(ExceptionCause::Interrupt) + 1u);
+static_assert(exception_table.size() == static_cast<std::size_t>(ExceptionCause::Interrupt) + 1u);
 
 } // namespace
 
@@ -131,8 +126,7 @@ void enter_memory_exception(CpuState& cpu,
                             const std::optional<std::uint32_t> delay_slot_owner) noexcept {
     const bool write = error.operation() == MemoryAccessOperation::Write;
     const bool in_delay_slot = delay_slot_owner.has_value();
-    const auto cause =
-        write ? ExceptionCause::AddressErrorWrite : ExceptionCause::AddressErrorRead;
+    const auto cause = write ? ExceptionCause::AddressErrorWrite : ExceptionCause::AddressErrorRead;
 
     enter_exception(cpu,
                     ExceptionRequest{cause,

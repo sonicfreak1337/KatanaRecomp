@@ -59,6 +59,20 @@
       "cacheVariables": {
         "KATANA_REPRODUCIBLE_ARTIFACTS": "ON"
       }
+    },
+    {
+      "name": "relwithdebinfo-gate",
+      "displayName": "KatanaRecomp RelWithDebInfo correctness gate",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build-current",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "RelWithDebInfo",
+        "KATANA_ENABLE_SANITIZERS": "OFF",
+        "KATANA_BUILD_FUZZERS": "OFF",
+        "KATANA_ENABLE_COVERAGE": "OFF",
+        "KATANA_ENABLE_STATIC_ANALYSIS": "OFF",
+        "KATANA_REPRODUCIBLE_ARTIFACTS": "OFF"
+      }
     }
   ],
   "buildPresets": [
@@ -85,6 +99,10 @@
     {
       "name": "artifact-debug",
       "configurePreset": "artifact-debug"
+    },
+    {
+      "name": "relwithdebinfo-gate",
+      "configurePreset": "relwithdebinfo-gate"
     }
   ],
   "testPresets": [
@@ -132,6 +150,17 @@
       "name": "artifact-debug",
       "inherits": "quality-debug",
       "configurePreset": "artifact-debug"
+    },
+    {
+      "name": "relwithdebinfo-gate",
+      "configurePreset": "relwithdebinfo-gate",
+      "output": {
+        "outputOnFailure": true
+      },
+      "execution": {
+        "noTestsAction": "error",
+        "jobs": 8
+      }
     }
   ],
   "workflowPresets": [
@@ -186,6 +215,24 @@
         {
           "type": "test",
           "name": "fuzz-debug"
+        }
+      ]
+    },
+    {
+      "name": "relwithdebinfo-gate",
+      "displayName": "Configure, build and test the RelWithDebInfo correctness gate",
+      "steps": [
+        {
+          "type": "configure",
+          "name": "relwithdebinfo-gate"
+        },
+        {
+          "type": "build",
+          "name": "relwithdebinfo-gate"
+        },
+        {
+          "type": "test",
+          "name": "relwithdebinfo-gate"
         }
       ]
     }

@@ -33,8 +33,7 @@ Sh4Dmac::Sh4Dmac(EventScheduler& scheduler, Memory& memory, const DmaTiming timi
     if (timing_.guest_cycles_per_byte == 0u) {
         throw std::invalid_argument("DMA-Takt muss groesser null sein.");
     }
-    scheduler_reset_observer_ =
-        scheduler_.add_reset_observer([this] { handle_scheduler_reset(); });
+    scheduler_reset_observer_ = scheduler_.add_reset_observer([this] { handle_scheduler_reset(); });
 }
 
 Sh4Dmac::~Sh4Dmac() {
@@ -326,8 +325,7 @@ bool Sh4Dmac::transfer_one(const std::size_t index, const std::size_t size) noex
             }
             for (std::size_t word = 0u; word < word_count; ++word) {
                 const auto offset = static_cast<std::uint32_t>(word * 4u);
-                memory_.write_u32(
-                    value.destination + offset, words[word], CodeWriteSource::Dma);
+                memory_.write_u32(value.destination + offset, words[word], CodeWriteSource::Dma);
             }
         }
     } catch (const std::exception&) {

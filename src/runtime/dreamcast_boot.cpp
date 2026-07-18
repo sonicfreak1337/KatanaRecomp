@@ -123,9 +123,7 @@ initialize_dreamcast_runtime(CpuState& cpu,
         target->raise(event, clock->current_cycle());
     };
     state.pvr_registers = map_pvr_registers(
-        cpu.memory,
-        *state.scheduler,
-        [raise_now] { raise_now(SystemAsicEvent::PvrRenderDone); });
+        cpu.memory, *state.scheduler, [raise_now] { raise_now(SystemAsicEvent::PvrRenderDone); });
     state.aica_registers = map_aica_registers(cpu.memory);
     state.maple = std::make_shared<MapleBus>([raise_now] { raise_now(SystemAsicEvent::MapleDma); });
     state.gdrom = std::make_shared<GdRomAsyncReader>(
@@ -147,15 +145,15 @@ initialize_dreamcast_runtime(CpuState& cpu,
     state.runtime_blocks->bind_code_tracker(state.code_tracker.get());
     const auto code_tracker = std::weak_ptr<ExecutableCodeTracker>(state.code_tracker);
     const auto runtime_blocks = std::weak_ptr<RuntimeBlockTable>(state.runtime_blocks);
-    cpu.memory.set_guest_write_observer([code_tracker, runtime_blocks](const GuestWriteEvent& event) {
+    cpu.memory.set_guest_write_observer([code_tracker,
+                                         runtime_blocks](const GuestWriteEvent& event) {
         const auto tracker = code_tracker.lock();
         if (!tracker) return;
         const auto invalidation =
             tracker->observe_write(event.address, event.size, event.source, event.bytes_changed);
         if (!invalidation.byte_identical) {
             if (const auto blocks = runtime_blocks.lock())
-                static_cast<void>(
-                    blocks->erase_overlapping_physical(event.address, event.size));
+                static_cast<void>(blocks->erase_overlapping_physical(event.address, event.size));
         }
     });
     state.store_queue_transfers = std::make_shared<std::vector<StoreQueueTransfer>>();
@@ -177,9 +175,8 @@ initialize_dreamcast_runtime(CpuState& cpu,
             throw std::invalid_argument(
                 "Das Store-Queue-Schreibfenster unterstuetzt keine Lesezugriffe.");
         },
-        [queues](const std::uint32_t offset,
-                 const std::uint32_t value,
-                 const MemoryAccessWidth width) {
+        [queues](
+            const std::uint32_t offset, const std::uint32_t value, const MemoryAccessWidth width) {
             queues->write_p4(Sh4StoreQueues::window_start + offset, value, width);
         });
     cpu.memory.map_region("sh4-store-queue-window", Sh4StoreQueues::window_start, queue_window);
@@ -199,9 +196,8 @@ initialize_dreamcast_runtime(CpuState& cpu,
             }
             return queues->qacr(offset / 4u);
         },
-        [queues](const std::uint32_t offset,
-                 const std::uint32_t value,
-                 const MemoryAccessWidth width) {
+        [queues](
+            const std::uint32_t offset, const std::uint32_t value, const MemoryAccessWidth width) {
             if (width != MemoryAccessWidth::Word || (offset != 0u && offset != 4u))
                 throw std::invalid_argument("QACR verlangt ausgerichtete 32-Bit-Zugriffe.");
             queues->write_qacr(offset / 4u, value);

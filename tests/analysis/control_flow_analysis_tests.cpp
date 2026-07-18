@@ -221,7 +221,7 @@ int main() {
             "Function-Override ist nicht als Nutzerherkunft sichtbar.");
     const auto overridden_ir = katana::ir::lower_program(overridden);
     require(overridden.indirect_control_flow[0].status ==
-                katana::analysis::ResolutionStatus::Guarded &&
+                    katana::analysis::ResolutionStatus::Guarded &&
                 overridden.indirect_control_flow[0].evidence ==
                     katana::analysis::ControlFlowEvidence::ForcedOverride &&
                 overridden_ir.size() == 1u &&

@@ -46,11 +46,11 @@ int main() {
     require(all_zero(cpu.r) && all_zero(cpu.r_bank) && all_zero(cpu.fr) && all_zero(cpu.xf),
             "Die zentralen Registerbaenke sind nicht deterministisch nullinitialisiert.");
 
-    constexpr std::array<std::uint32_t, 4u> bank_states{
-        0u,
-        katana::runtime::sr_rb_mask,
-        katana::runtime::sr_md_mask,
-        katana::runtime::sr_md_mask | katana::runtime::sr_rb_mask};
+    constexpr std::array<std::uint32_t, 4u> bank_states{0u,
+                                                        katana::runtime::sr_rb_mask,
+                                                        katana::runtime::sr_md_mask,
+                                                        katana::runtime::sr_md_mask |
+                                                            katana::runtime::sr_rb_mask};
     for (const auto initial : bank_states) {
         for (const auto target : bank_states) {
             CpuState matrix;

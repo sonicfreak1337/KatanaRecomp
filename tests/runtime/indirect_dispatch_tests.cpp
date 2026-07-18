@@ -20,13 +20,13 @@ int main() {
         RuntimeBlockTable table;
         const BlockVariantKey variant{1u, 0u, 0u, 0u, 0u};
         static_cast<void>(table.register_static({0x8C001000u,
-                               0x0C001000u,
-                               4u,
-                               BlockEndKind::Return,
-                               variant,
-                               block,
-                               "compiled",
-                               false}));
+                                                 0x0C001000u,
+                                                 4u,
+                                                 BlockEndKind::Return,
+                                                 variant,
+                                                 block,
+                                                 "compiled",
+                                                 false}));
         CpuState cpu;
         cpu.pr = 0xDEADBEEFu;
         const BlockAddress source{0x8C000100u, 0x0C000100u};

@@ -107,14 +107,14 @@ int main() {
                          0xAABBCCDDu,
                          vector.interrupt,
                          vector.slot});
-        require(state.last_exception_cause == vector.normalized &&
-                    state.pc == state.vbr + vector.vector && state.spc == 0x8C010000u &&
-                    state.ssr == (sr_t_mask | (3u << 4u)) && state.sgr == 0x8C00FFF0u &&
-                    state.tea == 0xAABBCCDDu && state.exception_in_delay_slot == vector.slot &&
-                    state.trap_pending &&
-                    (vector.interrupt ? state.intevt == vector.event
-                                      : state.expevt == vector.event),
-                "Exception-Eintritt verliert Event, Vektor oder gesicherten Gastzustand.");
+        require(
+            state.last_exception_cause == vector.normalized &&
+                state.pc == state.vbr + vector.vector && state.spc == 0x8C010000u &&
+                state.ssr == (sr_t_mask | (3u << 4u)) && state.sgr == 0x8C00FFF0u &&
+                state.tea == 0xAABBCCDDu && state.exception_in_delay_slot == vector.slot &&
+                state.trap_pending &&
+                (vector.interrupt ? state.intevt == vector.event : state.expevt == vector.event),
+            "Exception-Eintritt verliert Event, Vektor oder gesicherten Gastzustand.");
     }
 
     CpuState cpu;

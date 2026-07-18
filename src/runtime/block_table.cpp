@@ -68,7 +68,8 @@ RuntimeBlockTable::register_static_bulk(std::vector<RuntimeBlock> blocks) {
     });
     std::vector<RuntimeBlockHandle> handles;
     handles.reserve(blocks.size());
-    for (auto& block : blocks) handles.push_back(insert(std::move(block), false));
+    for (auto& block : blocks)
+        handles.push_back(insert(std::move(block), false));
     static_sealed_ = true;
     return handles;
 }
@@ -82,8 +83,7 @@ RuntimeBlockHandle RuntimeBlockTable::register_runtime(RuntimeBlock block) {
     return insert(std::move(block), true);
 }
 
-RuntimeBlockHandle RuntimeBlockTable::insert(RuntimeBlock block,
-                                             const bool runtime_registered) {
+RuntimeBlockHandle RuntimeBlockTable::insert(RuntimeBlock block, const bool runtime_registered) {
     if (block.size == 0u || block.function == nullptr || block.provenance.empty()) {
         throw std::invalid_argument(
             "Blockeintrag benoetigt Groesse, Backendfunktion und Provenienz.");
@@ -129,8 +129,8 @@ RuntimeBlockHandle RuntimeBlockTable::insert(RuntimeBlock block,
                                     block.provenance);
     }
     const auto id = next_id_++;
-    auto [record_it, inserted] = records_.emplace(
-        id, Record{std::move(block), identity, 1u, true, !runtime_registered});
+    auto [record_it, inserted] =
+        records_.emplace(id, Record{std::move(block), identity, 1u, true, !runtime_registered});
     if (!inserted) throw std::logic_error("Runtime-Block-ID konnte nicht angelegt werden.");
     identities_.emplace(identity, id);
     index_active(id, record_it->second);
@@ -146,20 +146,16 @@ RuntimeBlockTable::overlapping_active_virtual(const RuntimeBlock& block,
     if (next != active_virtual_ranges_.end() && next->first.variant == block.variant &&
         next->second != ignored_id) {
         const auto& candidate = records_.at(next->second).block;
-        if (ranges_overlap(block.virtual_start,
-                           block.size,
-                           candidate.virtual_start,
-                           candidate.size))
+        if (ranges_overlap(
+                block.virtual_start, block.size, candidate.virtual_start, candidate.size))
             return next->second;
     }
     if (next != active_virtual_ranges_.begin()) {
         const auto previous = std::prev(next);
         if (previous->first.variant == block.variant && previous->second != ignored_id) {
             const auto& candidate = records_.at(previous->second).block;
-            if (ranges_overlap(block.virtual_start,
-                               block.size,
-                               candidate.virtual_start,
-                               candidate.size))
+            if (ranges_overlap(
+                    block.virtual_start, block.size, candidate.virtual_start, candidate.size))
                 return previous->second;
         }
     }
@@ -179,8 +175,8 @@ void RuntimeBlockTable::index_active(const std::uint64_t id, const Record& recor
     alias_index[record.block.physical_origin].insert(id);
 
     const auto first_page = record.block.physical_origin / physical_page_size;
-    const auto last_byte = static_cast<std::uint64_t>(record.block.physical_origin) +
-                           record.block.size - 1u;
+    const auto last_byte =
+        static_cast<std::uint64_t>(record.block.physical_origin) + record.block.size - 1u;
     const auto last_page = static_cast<std::uint32_t>(last_byte / physical_page_size);
     for (auto page = first_page;; ++page) {
         active_physical_pages_[page].insert(id);
@@ -242,7 +238,7 @@ RuntimeBlockTable::lookup_physical(const std::uint32_t physical_address,
     if (!static_record) return dynamic_block;
     if (!dynamic_record) return static_block;
     return order_key(static_record->get()) < order_key(dynamic_record->get()) ? static_block
-                                                                             : dynamic_block;
+                                                                              : dynamic_block;
 }
 
 std::vector<RuntimeBlockHandle>
@@ -293,9 +289,8 @@ void RuntimeBlockTable::deactivate(const std::uint64_t id) noexcept {
     active_virtual_ranges_.erase({record.block.variant, record.block.virtual_start});
     if (!record.static_block) {
         dynamic_virtual_index_.erase({record.block.variant, record.block.virtual_start});
-        dynamic_physical_index_.erase({record.block.variant,
-                                       record.block.physical_origin,
-                                       record.block.virtual_start});
+        dynamic_physical_index_.erase(
+            {record.block.variant, record.block.physical_origin, record.block.virtual_start});
     }
     if (!record.static_block) {
         if (auto aliases = dynamic_alias_index_.find(record.block.physical_origin);
@@ -305,8 +300,8 @@ void RuntimeBlockTable::deactivate(const std::uint64_t id) noexcept {
         }
     }
     const auto first_page = record.block.physical_origin / physical_page_size;
-    const auto last_byte = static_cast<std::uint64_t>(record.block.physical_origin) +
-                           record.block.size - 1u;
+    const auto last_byte =
+        static_cast<std::uint64_t>(record.block.physical_origin) + record.block.size - 1u;
     const auto last_page = static_cast<std::uint32_t>(last_byte / physical_page_size);
     for (auto page = first_page;; ++page) {
         if (auto entries = active_physical_pages_.find(page);
@@ -352,10 +347,10 @@ std::size_t RuntimeBlockTable::erase_overlapping_physical(const std::uint32_t ph
     for (const auto id : candidates) {
         const auto& block = records_.at(id).block;
         const auto block_end = static_cast<std::uint64_t>(block.physical_origin) + block.size;
-        if (block.physical_origin < write_end && canonical < block_end)
-            invalidated.push_back(id);
+        if (block.physical_origin < write_end && canonical < block_end) invalidated.push_back(id);
     }
-    for (const auto id : invalidated) deactivate(id);
+    for (const auto id : invalidated)
+        deactivate(id);
     return invalidated.size();
 }
 

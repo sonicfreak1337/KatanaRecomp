@@ -42,7 +42,9 @@ struct RuntimeBlockHandle {
     std::uint64_t id = 0u;
     std::uint64_t generation = 0u;
 
-    [[nodiscard]] explicit operator bool() const noexcept { return id != 0u; }
+    [[nodiscard]] explicit operator bool() const noexcept {
+        return id != 0u;
+    }
     [[nodiscard]] auto operator<=>(const RuntimeBlockHandle&) const noexcept = default;
 };
 
@@ -59,10 +61,8 @@ class RuntimeBlockTable {
     [[nodiscard]] std::optional<RuntimeBlockHandle>
     lookup(std::uint32_t virtual_address, const BlockVariantKey& variant) const noexcept;
     [[nodiscard]] std::optional<RuntimeBlockHandle>
-    lookup_physical(std::uint32_t physical_address,
-                    const BlockVariantKey& variant) const noexcept;
-    [[nodiscard]] std::vector<RuntimeBlockHandle>
-    aliases(std::uint32_t physical_origin) const;
+    lookup_physical(std::uint32_t physical_address, const BlockVariantKey& variant) const noexcept;
+    [[nodiscard]] std::vector<RuntimeBlockHandle> aliases(std::uint32_t physical_origin) const;
     [[nodiscard]] std::optional<std::reference_wrapper<const RuntimeBlock>>
     resolve(RuntimeBlockHandle handle) const noexcept;
     [[nodiscard]] bool active(RuntimeBlockHandle handle) const noexcept;

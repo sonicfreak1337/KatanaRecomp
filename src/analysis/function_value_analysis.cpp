@@ -568,9 +568,8 @@ FunctionEvaluation evaluate_function(
                         resolution.callees.assign(value.callees.begin(), value.callees.end());
                         resolution.guarded = value.guarded;
                         resolution.complete = !value.guarded;
-                        resolution.evidence = value.guarded
-                                                  ? ControlFlowEvidence::GuardedPartial
-                                                  : ControlFlowEvidence::ProvenComplete;
+                        resolution.evidence = value.guarded ? ControlFlowEvidence::GuardedPartial
+                                                            : ControlFlowEvidence::ProvenComplete;
                         resolution.reason =
                             value.guarded ? "guarded-function-memory"
                             : !value.callees.empty()
@@ -758,9 +757,10 @@ analyze_function_values(const katana::io::ExecutableImage& image,
             callers_by_callee[callee].push_back(function.entry_address);
     }
     for (auto& [address, input] : candidate_inputs) {
-        input.observed = callers_by_callee.find(address) == callers_by_callee.end() ||
-                         std::find(image.entry_points().begin(), image.entry_points().end(),
-                                   address) != image.entry_points().end();
+        input.observed =
+            callers_by_callee.find(address) == callers_by_callee.end() ||
+            std::find(image.entry_points().begin(), image.entry_points().end(), address) !=
+                image.entry_points().end();
     }
     std::deque<std::uint32_t> pending;
     std::unordered_set<std::uint32_t> queued;
@@ -817,13 +817,14 @@ analyze_function_values(const katana::io::ExecutableImage& image,
                                   std::make_move_iterator(evaluation.resolutions.begin()),
                                   std::make_move_iterator(evaluation.resolutions.end()));
     }
-    std::sort(result.resolutions.begin(), result.resolutions.end(), [](const auto& left,
-                                                                      const auto& right) {
-        if (left.instruction_address != right.instruction_address)
-            return left.instruction_address < right.instruction_address;
-        if (left.call != right.call) return left.call < right.call;
-        return left.targets < right.targets;
-    });
+    std::sort(result.resolutions.begin(),
+              result.resolutions.end(),
+              [](const auto& left, const auto& right) {
+                  if (left.instruction_address != right.instruction_address)
+                      return left.instruction_address < right.instruction_address;
+                  if (left.call != right.call) return left.call < right.call;
+                  return left.targets < right.targets;
+              });
     std::vector<InterproceduralTargetResolution> merged;
     for (auto& resolution : result.resolutions) {
         if (merged.empty() || merged.back().instruction_address != resolution.instruction_address) {
@@ -831,22 +832,22 @@ analyze_function_values(const katana::io::ExecutableImage& image,
             continue;
         }
         auto& site = merged.back();
-        site.targets.insert(site.targets.end(), resolution.targets.begin(), resolution.targets.end());
+        site.targets.insert(
+            site.targets.end(), resolution.targets.begin(), resolution.targets.end());
         normalize(site.targets);
         site.call_sites.insert(
             site.call_sites.end(), resolution.call_sites.begin(), resolution.call_sites.end());
         normalize(site.call_sites);
-        site.callees.insert(site.callees.end(), resolution.callees.begin(), resolution.callees.end());
+        site.callees.insert(
+            site.callees.end(), resolution.callees.begin(), resolution.callees.end());
         normalize(site.callees);
         site.complete = site.complete && resolution.complete;
         site.guarded = site.guarded || resolution.guarded || !resolution.complete;
     }
     for (auto& site : merged) {
-        site.evidence = site.targets.empty()
-                            ? ControlFlowEvidence::Unresolved
-                            : site.complete && !site.guarded
-                                ? ControlFlowEvidence::ProvenComplete
-                                : ControlFlowEvidence::GuardedPartial;
+        site.evidence = site.targets.empty()             ? ControlFlowEvidence::Unresolved
+                        : site.complete && !site.guarded ? ControlFlowEvidence::ProvenComplete
+                                                         : ControlFlowEvidence::GuardedPartial;
         site.reason = site.targets.empty() ? "all-contexts-unknown"
                       : site.complete      ? "all-contexts-complete"
                                            : "merged-contexts-partial";

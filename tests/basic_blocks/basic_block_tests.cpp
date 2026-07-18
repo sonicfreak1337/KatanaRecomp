@@ -1,8 +1,8 @@
 #include "katana/analysis/basic_blocks.hpp"
 #include "katana/sh4/disassembler.hpp"
 
-#include <array>
 #include <algorithm>
+#include <array>
 #include <cstdlib>
 #include <iostream>
 #include <string>
@@ -52,8 +52,8 @@ int main() {
     require(blocks[3].successors.empty(), "Der letzte RTS-Block darf keinen Nachfolger besitzen.");
 
     auto gap_lines = katana::sh4::disassemble(
-        std::array<std::uint8_t, 10u>{0x09u, 0x00u, 0x09u, 0x00u, 0x0Bu,
-                                      0x00u, 0x09u, 0x00u, 0x09u, 0x00u},
+        std::array<std::uint8_t, 10u>{
+            0x09u, 0x00u, 0x09u, 0x00u, 0x0Bu, 0x00u, 0x09u, 0x00u, 0x09u, 0x00u},
         0u);
     gap_lines.erase(gap_lines.begin() + 1);
     const auto gap_blocks = katana::analysis::build_basic_blocks(gap_lines);
@@ -62,8 +62,8 @@ int main() {
             "Eine Adressluecke wurde als normaler Fallthrough interpretiert.");
 
     auto call_gap_lines = katana::sh4::disassemble(
-        std::array<std::uint8_t, 12u>{0x02u, 0xB0u, 0x09u, 0x00u, 0x09u, 0x00u,
-                                      0x09u, 0x00u, 0x0Bu, 0x00u, 0x09u, 0x00u},
+        std::array<std::uint8_t, 12u>{
+            0x02u, 0xB0u, 0x09u, 0x00u, 0x09u, 0x00u, 0x09u, 0x00u, 0x0Bu, 0x00u, 0x09u, 0x00u},
         0u);
     call_gap_lines.erase(call_gap_lines.begin() + 2);
     const auto call_gap_blocks = katana::analysis::build_basic_blocks(call_gap_lines);
@@ -72,8 +72,8 @@ int main() {
             "Ein BSR mit Luecke nach dem Delay Slot erzeugte einen falschen Rueckkehrfallthrough.");
 
     const auto indirect_lines = katana::sh4::disassemble(
-        std::array<std::uint8_t, 12u>{0x2Bu, 0x41u, 0x09u, 0x00u, 0x0Bu, 0x00u,
-                                      0x09u, 0x00u, 0x0Bu, 0x00u, 0x09u, 0x00u},
+        std::array<std::uint8_t, 12u>{
+            0x2Bu, 0x41u, 0x09u, 0x00u, 0x0Bu, 0x00u, 0x09u, 0x00u, 0x0Bu, 0x00u, 0x09u, 0x00u},
         0u);
     const std::array partial_edges{
         katana::analysis::ResolvedControlFlowEdge{
@@ -91,8 +91,7 @@ int main() {
             katana::analysis::ControlFlowEvidence::GuardedPartial,
             {katana::analysis::AnalysisEvidenceOrigin::EntrySnapshot}},
     };
-    const auto partial_blocks =
-        katana::analysis::build_basic_blocks(indirect_lines, partial_edges);
+    const auto partial_blocks = katana::analysis::build_basic_blocks(indirect_lines, partial_edges);
     require(partial_blocks.front().successors == std::vector<std::uint32_t>({4u, 8u}) &&
                 partial_blocks.front().has_indirect_successor,
             "Eine einzelne vollstaendige Kante entfernte den partiellen Site-Default.");
@@ -109,10 +108,9 @@ int main() {
         const auto cfg_lines = katana::sh4::disassemble(cfg_bytes, 0u);
         const auto cfg_blocks = katana::analysis::build_basic_blocks(cfg_lines);
         for (const auto& block : cfg_blocks) {
-            const auto control_address =
-                block.lines.back().is_delay_slot && block.lines.size() > 1u
-                    ? block.lines[block.lines.size() - 2u].address
-                    : block.lines.back().address;
+            const auto control_address = block.lines.back().is_delay_slot && block.lines.size() > 1u
+                                             ? block.lines[block.lines.size() - 2u].address
+                                             : block.lines.back().address;
             std::vector<std::uint32_t> expected;
             if (control_address < 6u) {
                 const auto node = control_address / 2u;

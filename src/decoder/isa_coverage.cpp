@@ -1,9 +1,9 @@
 #include "katana/sh4/isa_coverage.hpp"
 
-#include "katana/sh4/decoder.hpp"
-#include "katana/sh4/instruction_metadata.hpp"
 #include "katana/codegen/cpp_emitter.hpp"
 #include "katana/ir/lower.hpp"
+#include "katana/sh4/decoder.hpp"
+#include "katana/sh4/instruction_metadata.hpp"
 
 #include "katana/io/json_report.hpp"
 
@@ -204,9 +204,8 @@ IsaCoverageReport build_isa_coverage_report() {
                                                                : AlphaIsaSupport::Rejected,
             operation != katana::ir::Operation::Unknown ? AlphaIsaSupport::Supported
                                                         : AlphaIsaSupport::Rejected,
-            katana::codegen::cpp_backend_supports_operation(operation)
-                ? AlphaIsaSupport::Supported
-                : AlphaIsaSupport::Rejected,
+            katana::codegen::cpp_backend_supports_operation(operation) ? AlphaIsaSupport::Supported
+                                                                       : AlphaIsaSupport::Rejected,
             contract.layers.runtime};
         report.instructions.push_back({kind,
                                        entry.name,

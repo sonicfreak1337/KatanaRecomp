@@ -428,19 +428,18 @@ void emit_simple_instruction(std::ostringstream& output,
         } else {
             output << "cpu.r[" << destination << "]";
         }
-        output
-            << ";\n"
-            << "if (cpu.fpu_transfer_pair()) {\n"
-            << "    const std::uint64_t bits = katana::runtime::read_fpu_pair_bits(cpu, " << source
-            << "u);\n"
-            << "    cpu.memory.write_u32(address, static_cast<std::uint32_t>(bits), "
-               "katana::runtime::CodeWriteSource::Fpu);\n"
-            << "    cpu.memory.write_u32(address + 4u, static_cast<std::uint32_t>(bits >> 32u), "
-               "katana::runtime::CodeWriteSource::Fpu);\n"
-            << "} else {\n"
-            << "    cpu.memory.write_u32(address, cpu.fr[" << source
-            << "], katana::runtime::CodeWriteSource::Fpu);\n"
-            << "}\n";
+        output << ";\n"
+               << "if (cpu.fpu_transfer_pair()) {\n"
+               << "    const std::uint64_t bits = katana::runtime::read_fpu_pair_bits(cpu, "
+               << source << "u);\n"
+               << "    cpu.memory.write_u32(address, static_cast<std::uint32_t>(bits), "
+                  "katana::runtime::CodeWriteSource::Fpu);\n"
+               << "    cpu.memory.write_u32(address + 4u, static_cast<std::uint32_t>(bits >> 32u), "
+                  "katana::runtime::CodeWriteSource::Fpu);\n"
+               << "} else {\n"
+               << "    cpu.memory.write_u32(address, cpu.fr[" << source
+               << "], katana::runtime::CodeWriteSource::Fpu);\n"
+               << "}\n";
         if (instruction.operation == Operation::FmovStorePreDecrement) {
             output << "cpu.r[" << destination << "] = address;\n";
         }
@@ -2212,8 +2211,8 @@ void emit_block(std::ostringstream& output,
            << "                        throw std::runtime_error(\"Schedulerbudget erschoepft\");\n"
            << "                    if (scheduler.guest_cycle_budget_exhausted)\n"
            << "                        throw std::runtime_error(\"Gastzyklusbudget erschoepft\");\n"
-           << "                    services->observe_guest_checkpoint(" << hex32(block.start_address)
-           << ");\n"
+           << "                    services->observe_guest_checkpoint("
+           << hex32(block.start_address) << ");\n"
            << "                    if (services->poll_interrupt().has_value()) return;\n"
            << "                }\n";
 

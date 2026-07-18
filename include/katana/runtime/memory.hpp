@@ -17,14 +17,7 @@ enum class MemoryAccessWidth : std::uint8_t { Byte = 1u, Halfword = 2u, Word = 4
 
 enum class MemoryAccessOperation { Read, Write };
 
-enum class CodeWriteSource : std::uint8_t {
-    Cpu,
-    Fpu,
-    Dma,
-    StoreQueue,
-    Copy,
-    Fallback
-};
+enum class CodeWriteSource : std::uint8_t { Cpu, Fpu, Dma, StoreQueue, Copy, Fallback };
 
 enum class MemoryAlignmentPolicy { Strict, Permissive };
 

@@ -99,18 +99,15 @@ class PlatformServices {
     [[nodiscard]] virtual std::uint64_t scheduler_cycle() const noexcept = 0;
     [[nodiscard]] virtual std::optional<std::uint64_t>
     next_scheduler_event_cycle() const noexcept = 0;
-    [[nodiscard]] virtual PlatformSchedulerResult consume_guest_cycles(
-        std::uint64_t guest_cycles,
-        std::size_t event_budget) = 0;
+    [[nodiscard]] virtual PlatformSchedulerResult
+    consume_guest_cycles(std::uint64_t guest_cycles, std::size_t event_budget) = 0;
     [[nodiscard]] virtual std::optional<PlatformInterruptRequest> poll_interrupt() = 0;
     [[nodiscard]] virtual PlatformDmaResult start_dma(const PlatformDmaRequest& request) = 0;
     [[nodiscard]] virtual PlatformFallbackResult
     controlled_fallback(CpuState& cpu, const PlatformFallbackRequest& request) = 0;
     [[nodiscard]] virtual bool prefetch(CpuState& cpu, std::uint32_t address) = 0;
     virtual void observe_guest_checkpoint(std::uint32_t) noexcept {}
-    virtual void register_executable_block(std::uint32_t,
-                                           std::uint32_t,
-                                           std::string_view) {}
+    virtual void register_executable_block(std::uint32_t, std::uint32_t, std::string_view) {}
     [[nodiscard]] virtual ExecutableCodeTracker* executable_code_tracker() noexcept {
         return nullptr;
     }

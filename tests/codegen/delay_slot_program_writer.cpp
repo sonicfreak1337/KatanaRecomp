@@ -155,8 +155,7 @@ void append_function(std::vector<katana::ir::Function>& program,
     program.push_back(std::move(function));
 }
 
-void append_call_observation_blocks(katana::ir::Function& function,
-                                    const std::uint32_t owner) {
+void append_call_observation_blocks(katana::ir::Function& function, const std::uint32_t owner) {
     katana::ir::BasicBlock architectural_return;
     architectural_return.start_address = owner + 4u;
     architectural_return.instructions = {instruction(owner + 4u, Operation::Nop)};
@@ -265,8 +264,7 @@ std::vector<katana::ir::Function> build_program() {
     append_function(program, 0x2000u, std::move(jsr_load_pr), load_pr_slot(0x2000u));
     append_call_observation_blocks(program.back(), 0x2000u);
 
-    append_function(
-        program, 0x3000u, instruction(0x3000u, Operation::Return), nop_slot(0x3000u));
+    append_function(program, 0x3000u, instruction(0x3000u, Operation::Return), nop_slot(0x3000u));
 
     return program;
 }

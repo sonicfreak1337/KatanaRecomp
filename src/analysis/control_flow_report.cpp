@@ -199,8 +199,7 @@ std::string format_indirect_control_flow_report(
         std::ostringstream line;
         line << "  " << kind << ' ';
         address_with_symbol(line, table.dispatch_address, symbols);
-        line << " [" << table.reason
-             << "; evidence=" << control_flow_evidence_name(table.evidence)
+        line << " [" << table.reason << "; evidence=" << control_flow_evidence_name(table.evidence)
              << "] Hinweis: jump_table = ";
         address(line, table.dispatch_address);
         line << " TABELLE ANZAHL\n";
@@ -232,8 +231,7 @@ std::string format_control_flow_analysis_json(const ControlFlowAnalysisResult& a
     const auto summary = summarize_control_flow_analysis(analysis);
     katana::io::write_json_report_header(output, "katana-control-flow-v2", "control-flow");
     output << ",\"summary\":{\"instructions\":" << analysis.recursive.instructions.size()
-           << ",\"instruction_contexts\":"
-           << analysis.recursive.contextual_instructions.size()
+           << ",\"instruction_contexts\":" << analysis.recursive.contextual_instructions.size()
            << ",\"ranges\":" << analysis.recursive.ranges.size()
            << ",\"functions\":" << analysis.recursive.functions.size()
            << ",\"conflicts\":" << analysis.recursive.conflicts.size()
@@ -385,8 +383,7 @@ std::string format_control_flow_analysis_json(const ControlFlowAnalysisResult& a
         output << ",\"kind\":"
                << katana::io::quote_json(
                       table.dispatch_kind == JumpTableDispatchKind::Call ? "call" : "jump")
-               << ",\"resolved\":" << (table.resolved ? "true" : "false")
-               << ",\"evidence\":"
+               << ",\"resolved\":" << (table.resolved ? "true" : "false") << ",\"evidence\":"
                << katana::io::quote_json(control_flow_evidence_name(table.evidence))
                << ",\"requested_entries\":" << table.requested_entries
                << ",\"reason\":" << katana::io::quote_json(table.reason) << ",\"entries\":[";

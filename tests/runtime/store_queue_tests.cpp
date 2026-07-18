@@ -10,8 +10,7 @@ void require(bool value, const char* message) {
     if (!value) throw std::runtime_error(message);
 }
 
-template <typename Action>
-void require_rejected(Action&& action, const char* message) {
+template <typename Action> void require_rejected(Action&& action, const char* message) {
     bool rejected = false;
     try {
         action();
@@ -122,22 +121,20 @@ int main() {
         cache_ops->write_operand_cache_ram(0u, 0x44332211u, MemoryAccessWidth::Word);
         cache_ops->write_operand_cache_ram(8190u, 0xAABBu, MemoryAccessWidth::Halfword);
         require(cache_ops->read_operand_cache_ram(7u) == 0x5Au &&
-                    cache_ops->read_operand_cache_ram(0u, MemoryAccessWidth::Word) ==
-                        0x44332211u &&
+                    cache_ops->read_operand_cache_ram(0u, MemoryAccessWidth::Word) == 0x44332211u &&
                     cache_ops->read_operand_cache_ram(8190u, MemoryAccessWidth::Halfword) ==
                         0xAABBu,
                 "Explizit modellierter Operand-Cache-RAM besitzt keinen getrennten Zustand.");
         require_rejected(
             [&] {
-                cache_ops->write_operand_cache_ram(
-                    8191u, 0xAABBu, MemoryAccessWidth::Halfword);
+                cache_ops->write_operand_cache_ram(8191u, 0xAABBu, MemoryAccessWidth::Halfword);
             },
             "Operand-Cache-RAM akzeptiert Fehlausrichtung oder Bereichsueberlauf.");
+        require_rejected([&] { static_cast<void>(queues->read_operand_cache_ram(0u)); },
+                         "Deaktivierter Operand-Cache-RAM wurde gelesen.");
         require_rejected(
-            [&] { static_cast<void>(queues->read_operand_cache_ram(0u)); },
-            "Deaktivierter Operand-Cache-RAM wurde gelesen.");
-        require_rejected([&] { queues->set_operand_cache_ram_enabled(true); },
-                         "Nicht modellierter CCR-Operand-Cache-RAM-LLE-Pfad wird nicht sichtbar abgelehnt.");
+            [&] { queues->set_operand_cache_ram_enabled(true); },
+            "Nicht modellierter CCR-Operand-Cache-RAM-LLE-Pfad wird nicht sichtbar abgelehnt.");
     } catch (const std::exception& error) {
         std::cerr << error.what() << '\n';
         return 1;

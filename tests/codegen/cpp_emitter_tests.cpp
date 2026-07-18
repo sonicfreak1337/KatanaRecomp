@@ -259,10 +259,8 @@ int main() {
     timing_function.blocks = {std::move(timing_block)};
     const auto timing_source =
         katana::codegen::emit_cpp_program(std::vector{timing_function}, 0x3000u);
-    require(timing_source.find("base_guest_cycles_per_instruction * 2u") !=
-                std::string::npos &&
-                timing_source.find("base_guest_cycles_per_instruction * 3u") ==
-                    std::string::npos,
+    require(timing_source.find("base_guest_cycles_per_instruction * 2u") != std::string::npos &&
+                timing_source.find("base_guest_cycles_per_instruction * 3u") == std::string::npos,
             "Mehrere IR-Operationen derselben Gastadresse werden als mehrere Zyklen gezaehlt.");
 
     std::cout << "Alle C++-Codegenerator-Tests erfolgreich.\n";

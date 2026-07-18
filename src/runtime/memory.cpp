@@ -494,8 +494,8 @@ void Memory::write_u8(const std::uint32_t address,
     const auto& mapped = resolve_writable(address, MemoryAccessWidth::Byte);
     const auto offset = region_offset(mapped.info, address);
     const auto* linear = dynamic_cast<const LinearMemoryDevice*>(mapped.device.get());
-    const bool changed = !guest_write_observer_ || linear == nullptr ||
-                         linear->read_u8(offset) != value;
+    const bool changed =
+        !guest_write_observer_ || linear == nullptr || linear->read_u8(offset) != value;
     mapped.device->write_u8(offset, value);
     notify_access(MemoryAccessEvent{
         MemoryAccessOperation::Write, address, MemoryAccessWidth::Byte, value, mapped.info.name});
@@ -508,8 +508,8 @@ void Memory::write_u16(const std::uint32_t address,
     const auto& mapped = resolve_writable(address, MemoryAccessWidth::Halfword);
     const auto offset = region_offset(mapped.info, address);
     const auto* linear = dynamic_cast<const LinearMemoryDevice*>(mapped.device.get());
-    const bool changed = !guest_write_observer_ || linear == nullptr ||
-                         linear->read_u16(offset) != value;
+    const bool changed =
+        !guest_write_observer_ || linear == nullptr || linear->read_u16(offset) != value;
     mapped.device->write_u16(offset, value);
     notify_access(MemoryAccessEvent{MemoryAccessOperation::Write,
                                     address,
@@ -525,8 +525,8 @@ void Memory::write_u32(const std::uint32_t address,
     const auto& mapped = resolve_writable(address, MemoryAccessWidth::Word);
     const auto offset = region_offset(mapped.info, address);
     const auto* linear = dynamic_cast<const LinearMemoryDevice*>(mapped.device.get());
-    const bool changed = !guest_write_observer_ || linear == nullptr ||
-                         linear->read_u32(offset) != value;
+    const bool changed =
+        !guest_write_observer_ || linear == nullptr || linear->read_u32(offset) != value;
     mapped.device->write_u32(offset, value);
     notify_access(MemoryAccessEvent{
         MemoryAccessOperation::Write, address, MemoryAccessWidth::Word, value, mapped.info.name});

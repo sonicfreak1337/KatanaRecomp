@@ -150,16 +150,18 @@ build_basic_blocks(const std::span<const katana::sh4::DisassemblyLine> lines,
 
         const auto fallthrough_address =
             control_line.address + (instruction.has_delay_slot ? 4u : 2u);
-        const auto has_fallthrough = std::any_of(
-            blocks.begin(), blocks.end(), [fallthrough_address](const auto& candidate) {
-                return candidate.start_address == fallthrough_address;
-            }) && paired_delay_slot;
+        const auto has_fallthrough =
+            std::any_of(blocks.begin(),
+                        blocks.end(),
+                        [fallthrough_address](const auto& candidate) {
+                            return candidate.start_address == fallthrough_address;
+                        }) &&
+            paired_delay_slot;
 
         if (!paired_delay_slot) {
-            block.has_indirect_successor = instruction.control_flow ==
-                                               katana::sh4::ControlFlowKind::IndirectCall ||
-                                           instruction.control_flow ==
-                                               katana::sh4::ControlFlowKind::IndirectBranch;
+            block.has_indirect_successor =
+                instruction.control_flow == katana::sh4::ControlFlowKind::IndirectCall ||
+                instruction.control_flow == katana::sh4::ControlFlowKind::IndirectBranch;
             continue;
         }
 
@@ -223,18 +225,15 @@ build_basic_blocks(const std::span<const katana::sh4::DisassemblyLine> lines,
         if (instruction.has_delay_slot &&
             (control_index + 1u >= block.lines.size() ||
              !block.lines[control_index + 1u].is_delay_slot ||
-             block.lines[control_index + 1u].address !=
-                 block.lines[control_index].address + 2u))
+             block.lines[control_index + 1u].address != block.lines[control_index].address + 2u))
             continue;
         if (edge.kind == ResolvedControlFlowKind::Jump) {
             add_unique_successor(block.successors, edge.target_address);
         }
         const auto evidence = resolved_edge_evidence(edge);
-        const auto [site, inserted] =
-            complete_sites.emplace(edge.instruction_address,
-                                   control_flow_evidence_complete(evidence));
-        if (!inserted)
-            site->second = site->second && control_flow_evidence_complete(evidence);
+        const auto [site, inserted] = complete_sites.emplace(
+            edge.instruction_address, control_flow_evidence_complete(evidence));
+        if (!inserted) site->second = site->second && control_flow_evidence_complete(evidence);
         std::sort(block.successors.begin(), block.successors.end());
     }
     for (const auto& [instruction_address, complete] : complete_sites) {

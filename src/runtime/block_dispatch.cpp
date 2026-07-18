@@ -58,23 +58,21 @@ CanonicalBlockDispatcher::dispatch(CpuState& cpu,
             !dynamic_target) {
             throw std::invalid_argument("Dynamischer Block braucht ein Ziel.");
         }
-        const auto kind = end.kind == BlockEndKind::Call   ? IndirectDispatchKind::Call
-                          : end.kind == BlockEndKind::Return
-                              ? IndirectDispatchKind::Return
-                              : IndirectDispatchKind::TailJump;
+        const auto kind = end.kind == BlockEndKind::Call     ? IndirectDispatchKind::Call
+                          : end.kind == BlockEndKind::Return ? IndirectDispatchKind::Return
+                                                             : IndirectDispatchKind::TailJump;
         const auto callsite = end.callsite.value_or(end.source.virtual_address);
-        const auto result = dispatch_indirect(cpu,
-                                              table_,
-                                              {kind,
-                                               callsite,
-                                               end.kind == BlockEndKind::ExceptionReturn
-                                                   ? cpu.pc
-                                                   : dynamic_target.value_or(0u),
-                                               cpu.pr,
-                                               end.source,
-                                               variant,
-                                               DispatchResolutionOrigin::TableLookup,
-                                               diagnostics_});
+        const auto result = dispatch_indirect(
+            cpu,
+            table_,
+            {kind,
+             callsite,
+             end.kind == BlockEndKind::ExceptionReturn ? cpu.pc : dynamic_target.value_or(0u),
+             cpu.pr,
+             end.source,
+             variant,
+             DispatchResolutionOrigin::TableLookup,
+             diagnostics_});
         target = BlockAddress{result.diagnostic_target, result.physical_target};
         target_block = result.block;
         break;

@@ -46,15 +46,14 @@ int main() {
         observed_memory.map_region("p2", 0xAC000000u, observed_backing);
         observed_backing->write_u16(0x20u, 0x1234u);
         ExecutableCodeTracker observed_tracker;
-        for (const auto [name, address, size] :
-             {std::tuple{"cpu", 0x0C000010u, 1u},
-              std::tuple{"fpu-identical", 0x0C000020u, 2u},
-              std::tuple{"dma", 0x0C000030u, 4u},
-              std::tuple{"sq", 0x0C000040u, 32u},
-              std::tuple{"copy", 0x0C000070u, 4u},
-              std::tuple{"fallback", 0x0C000080u, 1u}}) {
-            static_cast<void>(observed_tracker.register_block(
-                {name, address, size, "write-source", {"caller"}}));
+        for (const auto [name, address, size] : {std::tuple{"cpu", 0x0C000010u, 1u},
+                                                 std::tuple{"fpu-identical", 0x0C000020u, 2u},
+                                                 std::tuple{"dma", 0x0C000030u, 4u},
+                                                 std::tuple{"sq", 0x0C000040u, 32u},
+                                                 std::tuple{"copy", 0x0C000070u, 4u},
+                                                 std::tuple{"fallback", 0x0C000080u, 1u}}) {
+            static_cast<void>(
+                observed_tracker.register_block({name, address, size, "write-source", {"caller"}}));
         }
         std::vector<GuestWriteEvent> write_events;
         observed_memory.set_guest_write_observer([&](const auto& event) {

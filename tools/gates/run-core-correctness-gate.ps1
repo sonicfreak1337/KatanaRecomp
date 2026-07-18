@@ -1,0 +1,114 @@
+[CmdletBinding()]
+param()
+
+$ErrorActionPreference = 'Stop'
+$root = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..'))
+$build = [IO.Path]::GetFullPath((Join-Path $root 'build-current'))
+if (-not $build.StartsWith(
+        $root + [IO.Path]::DirectorySeparatorChar,
+        [StringComparison]::OrdinalIgnoreCase
+    )) {
+    throw 'KR-4618-Buildziel liegt ausserhalb des Repositorys.'
+}
+
+$unexpected = @(Get-ChildItem -LiteralPath $root -Directory -Force | Where-Object {
+    $_.Name -ne 'build-current' -and
+    ($_.Name -eq 'build' -or $_.Name -like 'build-*' -or $_.Name -like 'cmake-build-*')
+})
+if ($unexpected.Count -ne 0) {
+    throw "Unerwartete Buildverzeichnisse: $(($unexpected.Name | Sort-Object) -join ', ')"
+}
+
+$git = Get-Command git.exe -ErrorAction Stop | Select-Object -First 1 -ExpandProperty Source
+$dirty = @(& $git -C $root status --porcelain=v1 --untracked-files=all)
+if ($LASTEXITCODE -ne 0 -or $dirty.Count -ne 0) {
+    throw 'KR-4618 verlangt vor dem Gate einen sauberen vorbereiteten Commit.'
+}
+
+function Reset-BuildDirectory {
+    if (Test-Path -LiteralPath $build) {
+        Remove-Item -LiteralPath $build -Recurse -Force
+    }
+}
+
+function Require-NativeSuccess([string]$description) {
+    if ($LASTEXITCODE -ne 0) {
+        throw "$description fehlgeschlagen: $LASTEXITCODE"
+    }
+}
+
+function Get-TestNames {
+    $json = (& ctest --test-dir $build --show-only=json-v1 | Out-String) | ConvertFrom-Json
+    Require-NativeSuccess 'CTest-Inventar'
+    return @($json.tests.name | Sort-Object)
+}
+
+Push-Location $root
+try {
+    Reset-BuildDirectory
+    $debugWatch = [Diagnostics.Stopwatch]::StartNew()
+    & cmake --preset quality-debug --fresh
+    Require-NativeSuccess 'Instrumentierte Debug-Konfiguration'
+    & cmake --build --preset quality-debug --parallel
+    Require-NativeSuccess 'Instrumentierter Debug-Build'
+
+    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File tools\quality\check-format.ps1
+    Require-NativeSuccess 'Formatpruefung'
+    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File `
+        tools\quality\audit-quality-contract.ps1 -SelfTest
+    Require-NativeSuccess 'Qualitaetsvertragaudit'
+    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File `
+        tools\quality\audit-reference-provenance.ps1 -SelfTest
+    Require-NativeSuccess 'Referenz-/Lizenzaudit'
+
+    $debugTests = Get-TestNames
+    & ctest --preset quality-debug --parallel 8
+    Require-NativeSuccess 'Instrumentierte Debug-Regression'
+    $debugWatch.Stop()
+
+    Reset-BuildDirectory
+    $relWatch = [Diagnostics.Stopwatch]::StartNew()
+    & cmake --preset relwithdebinfo-gate --fresh
+    Require-NativeSuccess 'RelWithDebInfo-Konfiguration'
+    & cmake --build --preset relwithdebinfo-gate --parallel
+    Require-NativeSuccess 'RelWithDebInfo-Build'
+    $relTests = Get-TestNames
+    $testDifference = @(Compare-Object $debugTests $relTests)
+    if ($testDifference.Count -ne 0) {
+        throw 'Debug und RelWithDebInfo besitzen unterschiedliche Testinventare.'
+    }
+    & ctest --preset relwithdebinfo-gate --parallel 8
+    Require-NativeSuccess 'RelWithDebInfo-Regression'
+    $relWatch.Stop()
+
+    $reportDirectory = Join-Path $build 'reports'
+    New-Item -ItemType Directory -Path $reportDirectory -Force | Out-Null
+    $report = [ordered]@{
+        schema = 'katana-core-correctness-gate'
+        report_version = 1
+        status = 'success'
+        source_commit = (& $git -C $root rev-parse HEAD).Trim()
+        configurations = @('Debug', 'RelWithDebInfo')
+        debug_profile = 'quality-debug'
+        debug_sanitizer = 'msvc-address-or-clang-address-undefined'
+        debug_static_analysis = 'active'
+        relwithdebinfo_profile = 'relwithdebinfo-gate'
+        test_count = $relTests.Count
+        identical_test_inventory = $true
+        exact_reference_vectors = 'passed-in-both-configurations'
+        format_check = 'success'
+        quality_contract_audit = 'success'
+        reference_license_audit = 'success'
+        debug_elapsed_seconds = [Math]::Round($debugWatch.Elapsed.TotalSeconds, 3)
+        relwithdebinfo_elapsed_seconds = [Math]::Round($relWatch.Elapsed.TotalSeconds, 3)
+        fresh_build_directory = 'build-current'
+        private_retail_data = 'not-used'
+    }
+    $report | ConvertTo-Json -Depth 4 | Set-Content `
+        (Join-Path $reportDirectory 'core-correctness-gate.json') -Encoding utf8
+}
+finally {
+    Pop-Location
+}
+
+Write-Output 'KR_CORE_CORRECTNESS_GATE_SUCCESS'

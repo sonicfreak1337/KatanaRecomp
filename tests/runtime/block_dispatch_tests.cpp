@@ -20,13 +20,13 @@ int main() {
         const BlockVariantKey variant{};
         for (const auto address : {0x8C001000u, 0x8C002000u, 0x8C003000u}) {
             static_cast<void>(table.register_static({address,
-                                   canonical_physical_address(address),
-                                   4u,
-                                   BlockEndKind::Return,
-                                   variant,
-                                   host_block,
-                                   "block-" + std::to_string(address),
-                                   false}));
+                                                     canonical_physical_address(address),
+                                                     4u,
+                                                     BlockEndKind::Return,
+                                                     variant,
+                                                     host_block,
+                                                     "block-" + std::to_string(address),
+                                                     false}));
         }
         CanonicalBlockDispatcher dispatcher(table);
         CpuState cpu;
@@ -35,12 +35,11 @@ int main() {
         const BlockAddress taken{0x8C001000u, 0x0C001000u};
         const BlockAddress fallthrough{0x8C002000u, 0x0C002000u};
 
-        require(
-            dispatcher
+        require(dispatcher
                     .dispatch(
                         cpu, context, variant, {BlockEndKind::Fallthrough, source, {}, fallthrough})
                     .target_block.has_value(),
-            "Fallthrough besitzt keinen Ausfuehrungspfad.");
+                "Fallthrough besitzt keinen Ausfuehrungspfad.");
         require(dispatcher
                         .dispatch(cpu,
                                   context,
@@ -65,13 +64,13 @@ int main() {
             "Bedingter Block waehlt nicht exakt einen dokumentierten Nachfolger.");
 
         require(dispatcher
-                        .dispatch(cpu,
-                                  context,
-                                  variant,
-                                  {BlockEndKind::DynamicBranch, source, {}, std::nullopt},
-                                  false,
-                                  0x8C003000u)
-                        .target_block.has_value(),
+                    .dispatch(cpu,
+                              context,
+                              variant,
+                              {BlockEndKind::DynamicBranch, source, {}, std::nullopt},
+                              false,
+                              0x8C003000u)
+                    .target_block.has_value(),
                 "Dynamischer Sprung besitzt keinen generischen Lookup.");
         static_cast<void>(dispatcher.dispatch(cpu,
                                               context,
