@@ -17,6 +17,14 @@ inline constexpr std::size_t sh4_dmac_register_size = 0x44u;
 
 struct DmaTiming {
     std::uint64_t guest_cycles_per_byte = 1u;
+    std::size_t maximum_batch_units = 256u;
+};
+
+enum class DmaExecutionMode : std::uint8_t { SingleUnitReference, DeterministicBatch };
+
+struct DmaPerformanceCounters {
+    std::uint64_t scheduler_callbacks = 0u;
+    std::uint64_t completed_batches = 0u;
 };
 
 enum class DmaFaultReason : std::uint8_t {
@@ -46,7 +54,10 @@ class Sh4Dmac final {
     static constexpr std::uint32_t nmi_flag = 0x00000002u;
     static constexpr std::uint32_t address_error_flag = 0x00000004u;
 
-    Sh4Dmac(EventScheduler& scheduler, Memory& memory, DmaTiming timing = {});
+    Sh4Dmac(EventScheduler& scheduler,
+            Memory& memory,
+            DmaTiming timing = {},
+            DmaExecutionMode execution_mode = DmaExecutionMode::SingleUnitReference);
     ~Sh4Dmac();
     Sh4Dmac(const Sh4Dmac&) = delete;
     Sh4Dmac& operator=(const Sh4Dmac&) = delete;
@@ -69,6 +80,10 @@ class Sh4Dmac final {
     [[nodiscard]] bool address_error() const noexcept;
     [[nodiscard]] const std::optional<DmaFault>& last_fault() const noexcept;
     [[nodiscard]] std::uint64_t completed_transfer_units(std::size_t channel) const;
+    [[nodiscard]] DmaExecutionMode execution_mode() const noexcept;
+    void set_execution_mode(DmaExecutionMode mode);
+    [[nodiscard]] const DmaPerformanceCounters& performance_counters() const noexcept;
+    void reset_performance_counters() noexcept;
     void reset() noexcept;
 
   private:
@@ -93,6 +108,7 @@ class Sh4Dmac final {
     void discard_external_requests() noexcept;
     void cancel_event() noexcept;
     void schedule(std::size_t index);
+    [[nodiscard]] std::size_t batch_units(std::size_t index, std::size_t size) const noexcept;
     void handle_scheduler_reset();
     void handle_transfer(std::size_t index);
     bool transfer_one(std::size_t index, std::size_t size) noexcept;
@@ -102,13 +118,16 @@ class Sh4Dmac final {
     EventScheduler& scheduler_;
     Memory& memory_;
     DmaTiming timing_;
+    DmaExecutionMode execution_mode_ = DmaExecutionMode::SingleUnitReference;
     SchedulerResetObserverId scheduler_reset_observer_ = 0u;
     std::array<Channel, channel_count> channels_{};
     std::uint32_t operation_ = 0u;
     std::optional<SchedulerEventId> event_;
     std::optional<std::size_t> scheduled_channel_;
+    std::size_t scheduled_units_ = 0u;
     std::optional<DmaFault> last_fault_;
     mutable std::size_t round_robin_cursor_ = 0u;
+    DmaPerformanceCounters performance_counters_;
 };
 
 [[nodiscard]] std::shared_ptr<Sh4Dmac>

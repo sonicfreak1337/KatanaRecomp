@@ -1,5 +1,6 @@
 #include "katana/runtime/dma.hpp"
 
+#include <algorithm>
 #include <array>
 #include <limits>
 #include <stdexcept>
@@ -28,10 +29,13 @@ std::uint64_t checked_delay(const std::uint64_t cycles_per_byte, const std::size
 
 } // namespace
 
-Sh4Dmac::Sh4Dmac(EventScheduler& scheduler, Memory& memory, const DmaTiming timing)
-    : scheduler_(scheduler), memory_(memory), timing_(timing) {
-    if (timing_.guest_cycles_per_byte == 0u) {
-        throw std::invalid_argument("DMA-Takt muss groesser null sein.");
+Sh4Dmac::Sh4Dmac(EventScheduler& scheduler,
+                 Memory& memory,
+                 const DmaTiming timing,
+                 const DmaExecutionMode execution_mode)
+    : scheduler_(scheduler), memory_(memory), timing_(timing), execution_mode_(execution_mode) {
+    if (timing_.guest_cycles_per_byte == 0u || timing_.maximum_batch_units == 0u) {
+        throw std::invalid_argument("DMA-Takt und Batchgroesse muessen groesser null sein.");
     }
     scheduler_reset_observer_ = scheduler_.add_reset_observer([this] { handle_scheduler_reset(); });
 }
@@ -140,6 +144,25 @@ std::uint64_t Sh4Dmac::completed_transfer_units(const std::size_t index) const {
     return channel(index).completed_units;
 }
 
+DmaExecutionMode Sh4Dmac::execution_mode() const noexcept {
+    return execution_mode_;
+}
+
+void Sh4Dmac::set_execution_mode(const DmaExecutionMode mode) {
+    if (execution_mode_ == mode) return;
+    cancel_event();
+    execution_mode_ = mode;
+    reevaluate();
+}
+
+const DmaPerformanceCounters& Sh4Dmac::performance_counters() const noexcept {
+    return performance_counters_;
+}
+
+void Sh4Dmac::reset_performance_counters() noexcept {
+    performance_counters_ = {};
+}
+
 bool Sh4Dmac::enabled(const std::size_t index) const noexcept {
     const auto& value = channels_[index];
     return (operation_ & master_enable) != 0u &&
@@ -225,6 +248,7 @@ void Sh4Dmac::cancel_event() noexcept {
     }
     event_.reset();
     scheduled_channel_.reset();
+    scheduled_units_ = 0u;
 }
 
 void Sh4Dmac::schedule(const std::size_t index) {
@@ -233,44 +257,70 @@ void Sh4Dmac::schedule(const std::size_t index) {
         set_fault(index, DmaFaultReason::InvalidTransferSize, 0u);
         return;
     }
+    scheduled_units_ = batch_units(index, size);
     scheduled_channel_ = index;
+    const auto unit_delay = checked_delay(timing_.guest_cycles_per_byte, size);
     event_ = scheduler_.schedule_after(
-        checked_delay(timing_.guest_cycles_per_byte, size),
+        checked_delay(unit_delay, scheduled_units_),
         [this, index](const auto, const auto) { handle_transfer(index); });
+}
+
+std::size_t Sh4Dmac::batch_units(const std::size_t index, const std::size_t size) const noexcept {
+    const auto& value = channels_[index];
+    if (execution_mode_ == DmaExecutionMode::SingleUnitReference || !automatic(value) ||
+        ((operation_ >> 8u) & 0x3u) == 3u) {
+        return 1u;
+    }
+    const auto remaining = value.count == 0u ? static_cast<std::size_t>(transfer_count_mask) + 1u
+                                             : static_cast<std::size_t>(value.count);
+    auto units = std::min(remaining, timing_.maximum_batch_units);
+    if (timing_.guest_cycles_per_byte > std::numeric_limits<std::uint64_t>::max() / size) {
+        return 1u;
+    }
+    const auto unit_cycles = timing_.guest_cycles_per_byte * size;
+    if (const auto foreign_cycle = scheduler_.next_event_cycle();
+        foreign_cycle && *foreign_cycle > scheduler_.current_cycle()) {
+        const auto before_foreign = (*foreign_cycle - scheduler_.current_cycle() - 1u) / unit_cycles;
+        if (before_foreign != 0u) units = std::min(units, static_cast<std::size_t>(before_foreign));
+        else units = 1u;
+    }
+    return std::max<std::size_t>(1u, units);
 }
 
 void Sh4Dmac::handle_scheduler_reset() {
     event_.reset();
     scheduled_channel_.reset();
+    scheduled_units_ = 0u;
     reevaluate();
 }
 
 void Sh4Dmac::handle_transfer(const std::size_t index) {
     event_.reset();
     scheduled_channel_.reset();
+    const auto units = std::max<std::size_t>(1u, scheduled_units_);
+    scheduled_units_ = 0u;
+    ++performance_counters_.scheduler_callbacks;
     if (!enabled(index)) {
         reevaluate();
         return;
     }
     auto& value = channel(index);
-    if (!automatic(value)) {
-        if (value.pending_requests == 0u) {
-            reevaluate();
-            return;
+    for (std::size_t unit = 0u; unit < units && enabled(index); ++unit) {
+        if (!automatic(value)) {
+            if (value.pending_requests == 0u) break;
+            --value.pending_requests;
         }
-        --value.pending_requests;
+        const auto size = transfer_size(value);
+        if (!transfer_one(index, size)) return;
+        ++value.completed_units;
+        value.count = (value.count == 0u ? transfer_count_mask : value.count - 1u);
+        update_addresses(value, size);
+        if (value.count == 0u) {
+            value.control |= transfer_end;
+            value.interrupt_pending = (value.control & interrupt_enable) != 0u;
+        }
     }
-    const auto size = transfer_size(value);
-    if (!transfer_one(index, size)) {
-        return;
-    }
-    ++value.completed_units;
-    value.count = (value.count == 0u ? transfer_count_mask : value.count - 1u);
-    update_addresses(value, size);
-    if (value.count == 0u) {
-        value.control |= transfer_end;
-        value.interrupt_pending = (value.control & interrupt_enable) != 0u;
-    }
+    ++performance_counters_.completed_batches;
     if (((operation_ >> 8u) & 0x3u) == 3u) {
         round_robin_cursor_ = (index + 1u) % channel_count;
     }
@@ -363,6 +413,8 @@ void Sh4Dmac::reset() noexcept {
     operation_ = 0u;
     last_fault_.reset();
     round_robin_cursor_ = 0u;
+    scheduled_units_ = 0u;
+    performance_counters_ = {};
 }
 
 std::shared_ptr<Sh4Dmac>

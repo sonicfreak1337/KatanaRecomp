@@ -4,6 +4,12 @@
 
 ### Geaendert
 
+- KR-4621: Memory, exakter Dispatch und Codeinvalidierung besitzen
+  abschaltbare Regions-, Hash- und Page-to-Block-Indizes. Lineare u16/u32-
+  Zugriffe und der unbeobachtete Speicherpfad vermeiden Byte-/Diagnosearbeit;
+  automatische DMA-Transfers koennen deterministisch gebuendelt werden.
+  Invalidierungs-, Dispatch- und Store-Queue-Provenienz ist fest begrenzt und
+  behaelt monotone Drop-/Gesamtzaehler.
 - Die internen v0.48- und v0.49-Meilensteine wurden wiederhergestellt. Damit
   behalten KR-4801 bis KR-4805 und KR-4901 ihre historischen Bedeutungen; die
   zwischenzeitlich damit bezeichneten Alpha-Bring-up-Aufgaben wurden auf

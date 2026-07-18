@@ -108,7 +108,10 @@ initialize_dreamcast_runtime(CpuState& cpu,
     state.rtc_clock = std::make_shared<Sh4RtcClockDomain>();
     state.tmu = std::make_shared<Sh4Tmu>(*state.scheduler, TmuTiming{4u, state.rtc_clock});
     state.rtc = std::make_shared<Sh4Rtc>(*state.scheduler, state.rtc_clock);
-    state.dmac = std::make_shared<Sh4Dmac>(*state.scheduler, cpu.memory, DmaTiming{});
+    state.dmac = std::make_shared<Sh4Dmac>(*state.scheduler,
+                                          cpu.memory,
+                                          DmaTiming{},
+                                          DmaExecutionMode::DeterministicBatch);
     state.interrupt_controller = std::make_shared<InterruptController>();
     state.interrupt_router = std::make_shared<PlatformInterruptRouter>(
         *state.interrupt_controller, *state.tmu, *state.rtc, *state.dmac);
@@ -157,11 +160,20 @@ initialize_dreamcast_runtime(CpuState& cpu,
         }
     });
     state.store_queue_transfers = std::make_shared<std::vector<StoreQueueTransfer>>();
+    state.store_queue_transfers->reserve(1024u);
+    state.dropped_store_queue_transfers = std::make_shared<std::uint64_t>(0u);
     const auto transfers = state.store_queue_transfers;
+    const auto dropped_transfers = state.dropped_store_queue_transfers;
     auto* const memory = &cpu.memory;
     state.store_queues = std::make_shared<Sh4StoreQueues>(
         cpu.memory,
-        [transfers, memory](const StoreQueueTransfer& transfer) {
+        [transfers, dropped_transfers, memory](const StoreQueueTransfer& transfer) {
+            if (transfers->size() == 1024u) {
+                transfers->erase(transfers->begin());
+                if (*dropped_transfers != std::numeric_limits<std::uint64_t>::max()) {
+                    ++*dropped_transfers;
+                }
+            }
             transfers->push_back(transfer);
             if (transfer.target != StoreQueueTarget::Ram) return;
             memory->write_bytes(

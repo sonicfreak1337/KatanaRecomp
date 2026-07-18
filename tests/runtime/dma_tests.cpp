@@ -257,6 +257,46 @@ int main() {
                 "DME=0 verwirft faelschlich den nur pausierten externen Request.");
     }
 
+    {
+        EventScheduler reference_scheduler;
+        EventScheduler batch_scheduler;
+        Memory reference_memory(1024u, MemoryAlignmentPolicy::Strict);
+        Memory batch_memory(1024u, MemoryAlignmentPolicy::Strict);
+        Sh4Dmac reference(reference_scheduler,
+                          reference_memory,
+                          DmaTiming{1u, 256u},
+                          DmaExecutionMode::SingleUnitReference);
+        Sh4Dmac batch(batch_scheduler,
+                      batch_memory,
+                      DmaTiming{1u, 256u},
+                      DmaExecutionMode::DeterministicBatch);
+        for (std::uint32_t index = 0u; index < 64u; ++index) {
+            const auto value = 0xA5000000u | index;
+            reference_memory.write_u32(index * 4u, value);
+            batch_memory.write_u32(index * 4u, value);
+        }
+        for (auto* candidate : {&reference, &batch}) {
+            candidate->write_source(0u, 0u);
+            candidate->write_destination(0u, 512u);
+            candidate->write_count(0u, 64u);
+            candidate->write_control(0u, auto_longword_increment | Sh4Dmac::channel_enable);
+            candidate->write_operation(Sh4Dmac::master_enable);
+        }
+        static_cast<void>(reference_scheduler.advance_to(256u, 64u));
+        static_cast<void>(batch_scheduler.advance_to(256u, 1u));
+        bool identical = true;
+        for (std::uint32_t index = 0u; index < 64u; ++index) {
+            identical = identical &&
+                        reference_memory.read_u32(512u + index * 4u) ==
+                            batch_memory.read_u32(512u + index * 4u);
+        }
+        require(identical && reference.completed_transfer_units(0u) == 64u &&
+                    batch.completed_transfer_units(0u) == 64u &&
+                    batch.performance_counters().scheduler_callbacks <
+                        reference.performance_counters().scheduler_callbacks,
+                "Deterministischer DMA-Batch divergiert oder reduziert Schedulerarbeit nicht.");
+    }
+
     require(throws<std::invalid_argument>([&] { dmac->write_operation(0x00008001u); }) &&
                 throws<std::out_of_range>([&] { dmac->write_count(4u, 1u); }) &&
                 throws<std::runtime_error>(

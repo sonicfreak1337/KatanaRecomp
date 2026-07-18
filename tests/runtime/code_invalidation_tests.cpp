@@ -124,6 +124,31 @@ int main() {
                             {"fallback-op", 0x0C008000u, 8u, "runtime-op", {}}));
                     }),
                 "Gleiche Blockidentitaet darf Adresse oder Groesse nicht still wechseln.");
+
+        ExecutableCodeTracker indexed(2u);
+        ExecutableCodeTracker reference(2u);
+        for (auto* candidate : {&indexed, &reference}) {
+            static_cast<void>(candidate->register_block(
+                {"near", 0x0C010000u, 8u, "benchmark", {"near-caller"}}));
+            static_cast<void>(candidate->register_block(
+                {"far", 0x0C100000u, 8u, "benchmark", {"far-caller"}}));
+        }
+        reference.set_lookup_mode(CodeInvalidationLookupMode::ReferenceScan);
+        const auto indexed_result =
+            indexed.observe_write(0x8C010004u, 1u, CodeWriteSource::Cpu);
+        const auto reference_result =
+            reference.observe_write(0x8C010004u, 1u, CodeWriteSource::Cpu);
+        require(indexed_result.invalidated_blocks == reference_result.invalidated_blocks &&
+                    indexed_result.unlinked_sources == reference_result.unlinked_sources &&
+                    indexed.performance_counters().indexed_candidates == 1u &&
+                    reference.performance_counters().reference_candidates == 2u,
+                "Page-to-Block-Index und Referenzscan divergieren oder sind nicht messbar.");
+        for (std::uint32_t address = 0x0C200000u; address < 0x0C204000u; address += 0x1000u) {
+            static_cast<void>(indexed.observe_write(address, 1u, CodeWriteSource::Dma, false));
+        }
+        require(indexed.invalidation_events().size() == indexed.provenance_capacity() &&
+                    indexed.dropped_provenance_events() >= 3u,
+                "Invalidierungsprovenienz waechst ueber ihre feste Kapazitaet hinaus.");
     } catch (const std::exception& error) {
         std::cerr << error.what() << '\n';
         return 1;

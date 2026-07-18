@@ -80,6 +80,13 @@ int main() {
                 "Deterministischer Lookup schlug fehl.");
         require(resolved(table, table.lookup(0xAC001000u, base)).runtime_registered,
                 "Laufzeitprovenienz ging verloren.");
+        const auto direct_handle = table.lookup(0x8C001000u, base);
+        table.set_lookup_mode(RuntimeBlockLookupMode::ReferenceTree);
+        const auto reference_handle = table.lookup(0x8C001000u, base);
+        require(direct_handle == reference_handle && table.lookup_counters().direct_probes != 0u &&
+                    table.lookup_counters().reference_probes != 0u,
+                "Direkter Dispatchindex und deaktivierbarer Referenzbaum divergieren.");
+        table.set_lookup_mode(RuntimeBlockLookupMode::Direct);
         const auto aliases = table.aliases(0xAC001000u);
         require(aliases.size() == 2u && table.resolve(aliases[0])->get().virtual_start !=
                                             table.resolve(aliases[1])->get().virtual_start,

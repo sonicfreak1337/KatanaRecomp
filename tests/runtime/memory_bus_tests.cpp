@@ -29,6 +29,7 @@ template <typename Exception, typename Function> bool throws(Function&& function
 int main() {
     using katana::runtime::LinearMemoryDevice;
     using katana::runtime::Memory;
+    using katana::runtime::MemoryLookupMode;
     using katana::runtime::MemoryRegionAccess;
 
     Memory bus(0u);
@@ -74,6 +75,30 @@ int main() {
                 bus.map_region("overflow", 0xFFFFFFFFu, std::make_shared<LinearMemoryDevice>(2u));
             }),
             "Regionen duerfen den 32-Bit-Adressraum nicht ueberschreiten.");
+
+    Memory indexed(0u);
+    auto indexed_ram = std::make_shared<LinearMemoryDevice>(0x20000u);
+    indexed.map_region("indexed-ram", 0x00100000u, indexed_ram);
+    indexed.write_u32(0x00110000u, 0xA1B2C3D4u);
+    const auto indexed_value = indexed.read_u32(0x00110000u);
+    require(indexed_value == 0xA1B2C3D4u &&
+                indexed.performance_counters().indexed_region_hits >= 2u &&
+                indexed.performance_counters().unobserved_accesses == 2u,
+            "Regionsindex, nativer Linearzugriff oder Nullbeobachterpfad wurde nicht verwendet.");
+    indexed.set_lookup_mode(MemoryLookupMode::Reference);
+    indexed.reset_performance_counters();
+    require(indexed.read_u32(0x00110000u) == indexed_value &&
+                indexed.performance_counters().reference_region_probes != 0u,
+            "Deaktivierter Speicherfastpath liefert nicht dieselben Gastbytes.");
+    const auto watchpoint = indexed.add_watchpoint(
+        0x00110000u,
+        4u,
+        katana::runtime::MemoryWatchpointAccess::Read,
+        [](const auto&) {});
+    static_cast<void>(indexed.read_u32(0x00110000u));
+    require(indexed.performance_counters().observed_accesses == 1u,
+            "Watchpoint umgeht den beobachteten Speicherpfad.");
+    static_cast<void>(indexed.remove_watchpoint(watchpoint));
 
     std::cout << "Regionbasierter Speicherbus erfolgreich.\n";
     return EXIT_SUCCESS;

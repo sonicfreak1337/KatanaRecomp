@@ -9,6 +9,7 @@
 #include <optional>
 #include <set>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 namespace katana::runtime {
@@ -48,6 +49,13 @@ struct RuntimeBlockHandle {
     [[nodiscard]] auto operator<=>(const RuntimeBlockHandle&) const noexcept = default;
 };
 
+enum class RuntimeBlockLookupMode : std::uint8_t { Direct, ReferenceTree };
+
+struct RuntimeBlockLookupCounters {
+    std::uint64_t direct_probes = 0u;
+    std::uint64_t reference_probes = 0u;
+};
+
 [[nodiscard]] std::uint32_t canonical_physical_address(std::uint32_t address) noexcept;
 [[nodiscard]] std::string stable_runtime_block_identity(const RuntimeBlock& block);
 
@@ -67,6 +75,10 @@ class RuntimeBlockTable {
     resolve(RuntimeBlockHandle handle) const noexcept;
     [[nodiscard]] bool active(RuntimeBlockHandle handle) const noexcept;
     [[nodiscard]] std::size_t size() const noexcept;
+    [[nodiscard]] RuntimeBlockLookupMode lookup_mode() const noexcept;
+    void set_lookup_mode(RuntimeBlockLookupMode mode) noexcept;
+    [[nodiscard]] const RuntimeBlockLookupCounters& lookup_counters() const noexcept;
+    void reset_lookup_counters() const noexcept;
     [[nodiscard]] bool erase_identity(const std::string& block_identity) noexcept;
     [[nodiscard]] std::size_t erase_overlapping_physical(std::uint32_t physical_address,
                                                          std::size_t size) noexcept;
@@ -78,6 +90,9 @@ class RuntimeBlockTable {
         BlockVariantKey variant;
         std::uint32_t address = 0u;
         [[nodiscard]] auto operator<=>(const VariantAddressKey&) const noexcept = default;
+    };
+    struct VariantAddressHash {
+        [[nodiscard]] std::size_t operator()(const VariantAddressKey& key) const noexcept;
     };
     struct PhysicalLookupKey {
         BlockVariantKey variant;
@@ -94,6 +109,8 @@ class RuntimeBlockTable {
     };
 
     using VirtualIndex = std::map<VariantAddressKey, std::uint64_t>;
+    using DirectVirtualIndex =
+        std::unordered_map<VariantAddressKey, std::uint64_t, VariantAddressHash>;
     using PhysicalIndex = std::map<PhysicalLookupKey, std::uint64_t>;
     using AliasIndex = std::map<std::uint32_t, std::set<std::uint64_t>>;
 
@@ -109,6 +126,10 @@ class RuntimeBlockTable {
                  std::uint32_t virtual_address,
                  const BlockVariantKey& variant) const noexcept;
     [[nodiscard]] std::optional<RuntimeBlockHandle>
+    lookup_direct_index(const DirectVirtualIndex& index,
+                        std::uint32_t virtual_address,
+                        const BlockVariantKey& variant) const noexcept;
+    [[nodiscard]] std::optional<RuntimeBlockHandle>
     lookup_physical_index(const PhysicalIndex& index,
                           std::uint32_t physical_address,
                           const BlockVariantKey& variant) const noexcept;
@@ -118,6 +139,8 @@ class RuntimeBlockTable {
     VirtualIndex active_virtual_ranges_;
     VirtualIndex static_virtual_index_;
     VirtualIndex dynamic_virtual_index_;
+    DirectVirtualIndex static_direct_virtual_index_;
+    DirectVirtualIndex dynamic_direct_virtual_index_;
     PhysicalIndex static_physical_index_;
     PhysicalIndex dynamic_physical_index_;
     AliasIndex static_alias_index_;
@@ -127,6 +150,8 @@ class RuntimeBlockTable {
     std::size_t active_count_ = 0u;
     bool static_sealed_ = false;
     const ExecutableCodeTracker* code_tracker_ = nullptr;
+    RuntimeBlockLookupMode lookup_mode_ = RuntimeBlockLookupMode::Direct;
+    mutable RuntimeBlockLookupCounters lookup_counters_;
 };
 
 } // namespace katana::runtime

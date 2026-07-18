@@ -2,10 +2,26 @@
 
 Interner Entwicklungsmeilenstein: `v0.46.0`
 Phase: Core-Stabilisierung vor v0.47
-Naechster Task: `KR-4621`
+Naechster Task: `KR-4622`
 Naechstes Gate: `v0.47.0` - Core-Stabilisierung und generische Retail-Runtime
 Weitere interne Gates: `v0.48.0` Integration und `v0.49.0` Alpha-Candidate
 Erster oeffentlicher Release: `v0.50.0` Alpha
+
+## KR-4621 umgesetzt
+
+Der Speicherbus verwendet einen abschaltbaren 64-KiB-Regionsindex, native
+lineare 16-/32-Bit-Zugriffe und einen ereignisfreien Pfad ohne Trace oder
+Watchpoint. Exakter virtueller Dispatch besitzt einen direkten Hashindex; die
+Codeinvalidierung untersucht ueber einen Page-to-Block-Index nur beruehrte
+Kandidaten. Geordnete beziehungsweise lineare Referenzmodi bleiben fuer
+Differenzlaeufe erhalten.
+
+Invalidierungs-, Dispatch- und Store-Queue-Diagnostik sind fest begrenzt und
+melden verworfene Details ueber Aggregatzaehler. Automatische DMA-Transfers
+koennen deterministisch bis vor das naechste fremde Schedulerereignis
+gebuendelt werden; Einzeltransfer-, externe Request- und Round-Robin-Pfade
+bleiben als Referenz erhalten. Vertrag und Gate-Messpunkte stehen in
+[`P1_HOTPATHS.md`](P1_HOTPATHS.md).
 
 ## Aktuelles Reviewurteil
 

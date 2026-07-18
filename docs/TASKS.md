@@ -251,7 +251,7 @@ Akzeptanz:
 
 ## Stufe B: P1-Performance und Build
 
-### [ ] KR-4621 - Speicher-, Dispatch- und Invalidierungs-Hotpaths
+### [x] KR-4621 - Speicher-, Dispatch- und Invalidierungs-Hotpaths
 
 Abhaengigkeiten: KR-4618
 Prioritaet: P1
@@ -270,6 +270,11 @@ Akzeptanz:
 - Gastresultate bleiben bytegleich
 - Memory-, Dispatch- und Invalidierungsbenchmarks verbessern sich messbar
 - lange Laeufe besitzen keine ungebremst wachsenden Diagnosevektoren
+
+Umgesetzt mit abschaltbaren Memory-, Dispatch-, Invalidierungs- und
+DMA-Referenzmodi, festen Diagnosekapazitaeten und instrumentierten
+Vergleichsregressionen. Vertrag und Messpunkte stehen in `P1_HOTPATHS.md`;
+frische Profilzeiten werden gesammelt im Gate KR-4625 erhoben.
 
 ### [ ] KR-4622 - Inkrementelle Kontrollflussanalyse, IR und Codegen
 

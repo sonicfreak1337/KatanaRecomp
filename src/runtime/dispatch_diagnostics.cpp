@@ -64,6 +64,14 @@ const char* block_end_name(const BlockEndKind kind) noexcept {
 
 } // namespace
 
+DispatchDiagnosticRecorder::DispatchDiagnosticRecorder(const std::size_t capacity)
+    : capacity_(capacity) {
+    if (capacity_ == 0u) {
+        throw std::invalid_argument("Dispatchdiagnostik braucht eine positive Kapazitaet.");
+    }
+    events_.reserve(capacity_);
+}
+
 void DispatchDiagnosticRecorder::record(DispatchDiagnosticEvent event) {
     if (event.occurrences != 1u ||
         canonical_physical_address(event.source_physical) != event.source_physical ||
@@ -87,7 +95,11 @@ void DispatchDiagnosticRecorder::record(DispatchDiagnosticEvent event) {
         ++duplicate->occurrences;
         ++total_occurrences_;
     } else {
-        events_.push_back(std::move(event));
+        if (events_.size() < capacity_) {
+            events_.push_back(std::move(event));
+        } else if (dropped_unique_events_ != std::numeric_limits<std::uint64_t>::max()) {
+            ++dropped_unique_events_;
+        }
         ++total_occurrences_;
     }
 }
@@ -104,6 +116,7 @@ bool DispatchDiagnosticRecorder::try_record(DispatchDiagnosticEvent event) noexc
 void DispatchDiagnosticRecorder::clear() noexcept {
     events_.clear();
     total_occurrences_ = 0u;
+    dropped_unique_events_ = 0u;
 }
 
 const std::vector<DispatchDiagnosticEvent>& DispatchDiagnosticRecorder::events() const noexcept {
@@ -114,12 +127,21 @@ std::uint64_t DispatchDiagnosticRecorder::total_occurrences() const noexcept {
     return total_occurrences_;
 }
 
+std::uint64_t DispatchDiagnosticRecorder::dropped_unique_events() const noexcept {
+    return dropped_unique_events_;
+}
+
+std::size_t DispatchDiagnosticRecorder::capacity() const noexcept {
+    return capacity_;
+}
+
 std::string DispatchDiagnosticRecorder::serialize_json() const {
     std::ostringstream output;
     output << "{\"schema\":\"katana-dispatch-diagnostic\",\"report_version\":1"
            << ",\"diagnostic_version\":" << dispatch_diagnostic_schema_version
            << ",\"status\":\"success\",\"total_occurrences\":" << total_occurrences_
-           << ",\"unique_events\":" << events_.size() << ",\"events\":[";
+           << ",\"unique_events\":" << events_.size()
+           << ",\"dropped_unique_events\":" << dropped_unique_events_ << ",\"events\":[";
     for (std::size_t index = 0u; index < events_.size(); ++index) {
         if (index != 0u) output << ',';
         const auto& event = events_[index];

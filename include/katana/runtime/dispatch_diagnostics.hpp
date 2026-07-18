@@ -2,6 +2,7 @@
 
 #include "katana/runtime/block_abi.hpp"
 
+#include <cstddef>
 #include <cstdint>
 #include <optional>
 #include <string>
@@ -57,16 +58,23 @@ struct DispatchDiagnosticEvent {
 
 class DispatchDiagnosticRecorder final {
   public:
+    static constexpr std::size_t default_capacity = 1024u;
+
+    explicit DispatchDiagnosticRecorder(std::size_t capacity = default_capacity);
     void record(DispatchDiagnosticEvent event);
     [[nodiscard]] bool try_record(DispatchDiagnosticEvent event) noexcept;
     void clear() noexcept;
     [[nodiscard]] const std::vector<DispatchDiagnosticEvent>& events() const noexcept;
     [[nodiscard]] std::uint64_t total_occurrences() const noexcept;
+    [[nodiscard]] std::uint64_t dropped_unique_events() const noexcept;
+    [[nodiscard]] std::size_t capacity() const noexcept;
     [[nodiscard]] std::string serialize_json() const;
 
   private:
     std::vector<DispatchDiagnosticEvent> events_;
+    std::size_t capacity_ = default_capacity;
     std::uint64_t total_occurrences_ = 0u;
+    std::uint64_t dropped_unique_events_ = 0u;
 };
 
 [[nodiscard]] const char* dispatch_resolution_origin_name(DispatchResolutionOrigin value) noexcept;

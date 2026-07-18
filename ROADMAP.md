@@ -70,7 +70,7 @@ nicht gestartet werden.
 
 ### Stufe B: P1-Performance und Build
 
-- [ ] `KR-4621` - Speicher-, Dispatch- und Invalidierungs-Hotpaths
+- [x] `KR-4621` - Speicher-, Dispatch- und Invalidierungs-Hotpaths
 - [ ] `KR-4622` - inkrementelle Kontrollflussanalyse, IR und Codegen
 - [ ] `KR-4623` - Disc-, GDI-, ISO- und GD-ROM-I/O
 - [ ] `KR-4624` - Buildgraph, Cache und Testmatrix

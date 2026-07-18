@@ -58,6 +58,7 @@ struct DreamcastRuntimeState {
     std::shared_ptr<ExecutableCodeTracker> code_tracker;
     std::shared_ptr<Sh4StoreQueues> store_queues;
     std::shared_ptr<std::vector<StoreQueueTransfer>> store_queue_transfers;
+    std::shared_ptr<std::uint64_t> dropped_store_queue_transfers;
     std::shared_ptr<FirmwareHandoffMap> firmware_handoff;
     std::size_t loaded_boot_bytes = 0u;
 };

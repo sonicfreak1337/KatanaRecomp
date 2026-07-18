@@ -15,6 +15,14 @@ bool overlaps(const std::uint32_t left,
 }
 } // namespace
 
+ExecutableCodeTracker::ExecutableCodeTracker(const std::size_t provenance_capacity)
+    : provenance_capacity_(provenance_capacity) {
+    if (provenance_capacity_ == 0u) {
+        throw std::invalid_argument("Codeinvalidierungsprovenienz braucht eine positive Kapazitaet.");
+    }
+    invalidation_events_.reserve(provenance_capacity_);
+}
+
 BlockRegistrationResult ExecutableCodeTracker::register_block(ExecutableBlockRegistration block) {
     if (block.identity.empty() || block.provenance.empty() || block.size == 0u) {
         throw std::invalid_argument(
@@ -25,26 +33,36 @@ BlockRegistrationResult ExecutableCodeTracker::register_block(ExecutableBlockReg
         static_cast<std::uint64_t>(std::numeric_limits<std::uint32_t>::max()) + 1u) {
         throw std::length_error("Ausfuehrbarer Block laeuft ueber den Adressraum hinaus.");
     }
-    const auto duplicate = std::find_if(blocks_.begin(), blocks_.end(), [&](const auto& value) {
-        return value.block.identity == block.identity;
-    });
-    if (duplicate != blocks_.end()) {
-        if (duplicate->block.physical_start != block.physical_start ||
-            duplicate->block.size != block.size ||
-            duplicate->block.provenance != block.provenance ||
-            duplicate->block.origin != block.origin) {
+    const auto known = identity_index_.find(block.identity);
+    if (known != identity_index_.end()) {
+        auto& duplicate = blocks_[known->second];
+        if (duplicate.block.physical_start != block.physical_start ||
+            duplicate.block.size != block.size ||
+            duplicate.block.provenance != block.provenance ||
+            duplicate.block.origin != block.origin) {
             throw std::invalid_argument(
                 "Blockidentitaet darf Adresse, Groesse oder Provenienz nicht wechseln.");
         }
-        duplicate->block.incoming_links.insert(block.incoming_links.begin(),
-                                               block.incoming_links.end());
-        if (duplicate->valid) {
+        duplicate.block.incoming_links.insert(block.incoming_links.begin(),
+                                              block.incoming_links.end());
+        if (duplicate.valid) {
             return BlockRegistrationResult::AlreadyValid;
         }
-        duplicate->valid = true;
+        duplicate.valid = true;
         return BlockRegistrationResult::Reactivated;
     }
     blocks_.push_back({std::move(block), true});
+    const auto index = blocks_.size() - 1u;
+    identity_index_.emplace(blocks_[index].block.identity, index);
+    const auto first_page = blocks_[index].block.physical_start / page_size * page_size;
+    const auto final_address = static_cast<std::uint32_t>(
+        static_cast<std::uint64_t>(blocks_[index].block.physical_start) +
+        blocks_[index].block.size - 1u);
+    const auto last_page = final_address / page_size * page_size;
+    for (auto page = first_page;; page += page_size) {
+        page_blocks_[page].push_back(index);
+        if (page == last_page) break;
+    }
     return BlockRegistrationResult::Inserted;
 }
 
@@ -80,7 +98,24 @@ CodeInvalidationResult ExecutableCodeTracker::observe_write(const std::uint32_t 
             break;
         }
     }
-    for (auto& tracked : blocks_) {
+    std::vector<std::size_t> candidates;
+    if (lookup_mode_ == CodeInvalidationLookupMode::PageIndex) {
+        for (auto page = first_page;; page += page_size) {
+            if (const auto found = page_blocks_.find(page); found != page_blocks_.end()) {
+                candidates.insert(candidates.end(), found->second.begin(), found->second.end());
+            }
+            if (page == last_page) break;
+        }
+        std::sort(candidates.begin(), candidates.end());
+        candidates.erase(std::unique(candidates.begin(), candidates.end()), candidates.end());
+        performance_counters_.indexed_candidates += candidates.size();
+    } else {
+        candidates.resize(blocks_.size());
+        for (std::size_t index = 0u; index < candidates.size(); ++index) candidates[index] = index;
+        performance_counters_.reference_candidates += candidates.size();
+    }
+    for (const auto index : candidates) {
+        auto& tracked = blocks_[index];
         if (tracked.valid &&
             overlaps(tracked.block.physical_start, tracked.block.size, canonical, size)) {
             tracked.valid = false;
@@ -125,6 +160,12 @@ void ExecutableCodeTracker::record_invalidation_event(
         for (const auto page : result.changed_pages) {
             event.pages.push_back({page, page_generation(page)});
         }
+        if (invalidation_events_.size() == provenance_capacity_) {
+            invalidation_events_.erase(invalidation_events_.begin());
+            if (dropped_provenance_events_ != std::numeric_limits<std::uint64_t>::max()) {
+                ++dropped_provenance_events_;
+            }
+        }
         invalidation_events_.push_back(std::move(event));
     } catch (...) {
         if (dropped_provenance_events_ != std::numeric_limits<std::uint64_t>::max()) {
@@ -135,20 +176,16 @@ void ExecutableCodeTracker::record_invalidation_event(
 }
 
 bool ExecutableCodeTracker::valid(const std::string& identity) const {
-    const auto found = std::find_if(blocks_.begin(), blocks_.end(), [&](const auto& value) {
-        return value.block.identity == identity;
-    });
-    if (found == blocks_.end()) {
+    const auto found = identity_index_.find(identity);
+    if (found == identity_index_.end()) {
         throw std::out_of_range("Unbekannte Blockidentitaet.");
     }
-    return found->valid;
+    return blocks_[found->second].valid;
 }
 
 bool ExecutableCodeTracker::dispatchable(const std::string& identity) const noexcept {
-    const auto found = std::find_if(blocks_.begin(), blocks_.end(), [&](const auto& value) {
-        return value.block.identity == identity;
-    });
-    return found == blocks_.end() || found->valid;
+    const auto found = identity_index_.find(identity);
+    return found == identity_index_.end() || blocks_[found->second].valid;
 }
 
 std::uint64_t ExecutableCodeTracker::page_generation(const std::uint32_t address) const noexcept {
@@ -163,13 +200,11 @@ std::size_t ExecutableCodeTracker::block_count() const noexcept {
     return blocks_.size();
 }
 std::size_t ExecutableCodeTracker::incoming_link_count(const std::string& identity) const {
-    const auto found = std::find_if(blocks_.begin(), blocks_.end(), [&](const auto& value) {
-        return value.block.identity == identity;
-    });
-    if (found == blocks_.end()) {
+    const auto found = identity_index_.find(identity);
+    if (found == identity_index_.end()) {
         throw std::out_of_range("Unbekannte Blockidentitaet.");
     }
-    return found->block.incoming_links.size();
+    return blocks_[found->second].block.incoming_links.size();
 }
 const std::map<std::uint32_t, std::uint64_t>& ExecutableCodeTracker::hotspots() const noexcept {
     return hotspots_;
@@ -186,6 +221,27 @@ ExecutableCodeTracker::invalidation_events() const noexcept {
 
 std::uint64_t ExecutableCodeTracker::dropped_provenance_events() const noexcept {
     return dropped_provenance_events_;
+}
+
+std::size_t ExecutableCodeTracker::provenance_capacity() const noexcept {
+    return provenance_capacity_;
+}
+
+CodeInvalidationLookupMode ExecutableCodeTracker::lookup_mode() const noexcept {
+    return lookup_mode_;
+}
+
+void ExecutableCodeTracker::set_lookup_mode(const CodeInvalidationLookupMode mode) noexcept {
+    lookup_mode_ = mode;
+}
+
+const CodeInvalidationPerformanceCounters&
+ExecutableCodeTracker::performance_counters() const noexcept {
+    return performance_counters_;
+}
+
+void ExecutableCodeTracker::reset_performance_counters() noexcept {
+    performance_counters_ = {};
 }
 
 const char* code_write_source_name(const CodeWriteSource value) noexcept {

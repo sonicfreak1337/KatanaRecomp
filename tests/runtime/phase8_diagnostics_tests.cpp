@@ -210,6 +210,19 @@ int main() {
                 dispatch_json.find("0x0C002000") != std::string::npos,
             "Dispatchdiagnose verdeckt virtuelle Adresse oder kanonisches physisches Ziel.");
 
+    DispatchDiagnosticRecorder bounded_dispatch(2u);
+    bounded_dispatch.record(base);
+    auto second_bounded = base;
+    second_bounded.callsite += 4u;
+    bounded_dispatch.record(second_bounded);
+    auto dropped_bounded = base;
+    dropped_bounded.callsite += 8u;
+    bounded_dispatch.record(dropped_bounded);
+    require(bounded_dispatch.events().size() == bounded_dispatch.capacity() &&
+                bounded_dispatch.dropped_unique_events() == 1u &&
+                bounded_dispatch.total_occurrences() == 3u,
+            "Dispatchdiagnostik waechst ungebremst oder verliert den Aggregatzaehler.");
+
     ExecutableCodeTracker tracker;
     const std::array block_origins{ExecutableBlockOrigin::ImageSegment,
                                    ExecutableBlockOrigin::RomRamCopy,

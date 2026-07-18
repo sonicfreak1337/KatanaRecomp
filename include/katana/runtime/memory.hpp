@@ -21,6 +21,8 @@ enum class CodeWriteSource : std::uint8_t { Cpu, Fpu, Dma, StoreQueue, Copy, Fal
 
 enum class MemoryAlignmentPolicy { Strict, Permissive };
 
+enum class MemoryLookupMode { Indexed, Reference };
+
 enum class MemoryAccessErrorReason { Misaligned, Unmapped, CrossRegion, ReadOnly, AddressOverflow };
 
 class MemoryAccessError final : public std::runtime_error {
@@ -64,7 +66,11 @@ class LinearMemoryDevice final : public MemoryDevice {
 
     [[nodiscard]] std::size_t size() const noexcept override;
     [[nodiscard]] std::uint8_t read_u8(std::uint32_t offset) const override;
+    [[nodiscard]] std::uint16_t read_u16(std::uint32_t offset) const override;
+    [[nodiscard]] std::uint32_t read_u32(std::uint32_t offset) const override;
     void write_u8(std::uint32_t offset, std::uint8_t value) override;
+    void write_u16(std::uint32_t offset, std::uint16_t value) override;
+    void write_u32(std::uint32_t offset, std::uint32_t value) override;
     [[nodiscard]] std::span<const std::uint8_t> bytes() const noexcept;
     [[nodiscard]] std::span<std::uint8_t> writable_bytes() noexcept;
 
@@ -131,6 +137,13 @@ struct GuestWriteEvent {
 
 using GuestWriteObserver = std::function<void(const GuestWriteEvent&)>;
 
+struct MemoryPerformanceCounters {
+    std::uint64_t indexed_region_hits = 0u;
+    std::uint64_t reference_region_probes = 0u;
+    std::uint64_t unobserved_accesses = 0u;
+    std::uint64_t observed_accesses = 0u;
+};
+
 class Memory {
   public:
     explicit Memory(std::size_t legacy_size = 1024u * 1024u,
@@ -151,6 +164,10 @@ class Memory {
 
     [[nodiscard]] MemoryAlignmentPolicy alignment_policy() const noexcept;
     void set_alignment_policy(MemoryAlignmentPolicy policy) noexcept;
+    [[nodiscard]] MemoryLookupMode lookup_mode() const noexcept;
+    void set_lookup_mode(MemoryLookupMode mode) noexcept;
+    [[nodiscard]] const MemoryPerformanceCounters& performance_counters() const noexcept;
+    void reset_performance_counters() const noexcept;
 
     [[nodiscard]] MemoryWatchpointId add_watchpoint(std::uint32_t address,
                                                     std::size_t size,
@@ -191,6 +208,7 @@ class Memory {
     struct MappedRegion {
         MemoryRegionInfo info;
         std::shared_ptr<MemoryDevice> device;
+        LinearMemoryDevice* linear = nullptr;
     };
 
     struct Watchpoint {
@@ -205,6 +223,10 @@ class Memory {
     resolve(std::uint32_t address, MemoryAccessWidth width, MemoryAccessOperation operation) const;
     [[nodiscard]] const MappedRegion& resolve_writable(std::uint32_t address,
                                                        MemoryAccessWidth width) const;
+    [[nodiscard]] const MappedRegion* indexed_region(std::uint32_t address,
+                                                     std::size_t width) const noexcept;
+    void rebuild_region_index();
+    [[nodiscard]] bool access_observers_active() const noexcept;
     void require_alignment(std::uint32_t address,
                            MemoryAccessWidth width,
                            MemoryAccessOperation operation) const;
@@ -212,11 +234,14 @@ class Memory {
     void notify_guest_write(const GuestWriteEvent& event) const;
 
     MemoryAlignmentPolicy alignment_policy_ = MemoryAlignmentPolicy::Strict;
+    MemoryLookupMode lookup_mode_ = MemoryLookupMode::Indexed;
     std::vector<MappedRegion> regions_;
+    std::vector<std::int32_t> region_page_index_;
     std::vector<Watchpoint> watchpoints_;
     MemoryAccessObserver trace_handler_;
     GuestWriteObserver guest_write_observer_;
     MemoryWatchpointId next_watchpoint_id_ = 1u;
+    mutable MemoryPerformanceCounters performance_counters_;
 };
 
 } // namespace katana::runtime

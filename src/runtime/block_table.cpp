@@ -36,6 +36,21 @@ bool ranges_overlap(const std::uint32_t left_start,
 
 } // namespace
 
+std::size_t RuntimeBlockTable::VariantAddressHash::operator()(
+    const VariantAddressKey& key) const noexcept {
+    auto seed = static_cast<std::size_t>(key.address);
+    const auto mix = [&seed](auto value) {
+        seed ^= std::hash<decltype(value)>{}(value) + static_cast<std::size_t>(0x9E3779B9u) +
+                (seed << 6u) + (seed >> 2u);
+    };
+    mix(key.variant.address_space_generation);
+    mix(key.variant.mmu_generation);
+    mix(key.variant.watchpoint_generation);
+    mix(key.variant.fpscr_mode);
+    mix(key.variant.runtime_generation);
+    return seed;
+}
+
 std::uint32_t canonical_physical_address(const std::uint32_t address) noexcept {
     return address < 0xE0000000u ? address & 0x1FFFFFFFu : address;
 }
@@ -169,9 +184,12 @@ void RuntimeBlockTable::index_active(const std::uint64_t id, const Record& recor
     const auto physical_key = PhysicalLookupKey{
         record.block.variant, record.block.physical_origin, record.block.virtual_start};
     auto& virtual_index = record.static_block ? static_virtual_index_ : dynamic_virtual_index_;
+    auto& direct_virtual_index =
+        record.static_block ? static_direct_virtual_index_ : dynamic_direct_virtual_index_;
     auto& physical_index = record.static_block ? static_physical_index_ : dynamic_physical_index_;
     auto& alias_index = record.static_block ? static_alias_index_ : dynamic_alias_index_;
     virtual_index.emplace(virtual_key, id);
+    direct_virtual_index.emplace(virtual_key, id);
     physical_index.emplace(physical_key, id);
     alias_index[record.block.physical_origin].insert(id);
 
@@ -202,8 +220,27 @@ RuntimeBlockTable::lookup_index(const VirtualIndex& index,
 }
 
 std::optional<RuntimeBlockHandle>
+RuntimeBlockTable::lookup_direct_index(const DirectVirtualIndex& index,
+                                       const std::uint32_t virtual_address,
+                                       const BlockVariantKey& variant) const noexcept {
+    ++lookup_counters_.direct_probes;
+    const auto found = index.find({variant, virtual_address});
+    if (found == index.end()) return std::nullopt;
+    const auto record = records_.find(found->second);
+    if (record == records_.end() || !dispatchable(record->second)) return std::nullopt;
+    return RuntimeBlockHandle{record->first, record->second.generation};
+}
+
+std::optional<RuntimeBlockHandle>
 RuntimeBlockTable::lookup(const std::uint32_t virtual_address,
                           const BlockVariantKey& variant) const noexcept {
+    if (lookup_mode_ == RuntimeBlockLookupMode::Direct) {
+        if (const auto dynamic =
+                lookup_direct_index(dynamic_direct_virtual_index_, virtual_address, variant))
+            return dynamic;
+        return lookup_direct_index(static_direct_virtual_index_, virtual_address, variant);
+    }
+    lookup_counters_.reference_probes += 2u;
     if (const auto dynamic = lookup_index(dynamic_virtual_index_, virtual_address, variant))
         return dynamic;
     return lookup_index(static_virtual_index_, virtual_address, variant);
@@ -283,6 +320,22 @@ std::size_t RuntimeBlockTable::size() const noexcept {
     return active_count_;
 }
 
+RuntimeBlockLookupMode RuntimeBlockTable::lookup_mode() const noexcept {
+    return lookup_mode_;
+}
+
+void RuntimeBlockTable::set_lookup_mode(const RuntimeBlockLookupMode mode) noexcept {
+    lookup_mode_ = mode;
+}
+
+const RuntimeBlockLookupCounters& RuntimeBlockTable::lookup_counters() const noexcept {
+    return lookup_counters_;
+}
+
+void RuntimeBlockTable::reset_lookup_counters() const noexcept {
+    lookup_counters_ = {};
+}
+
 void RuntimeBlockTable::deactivate(const std::uint64_t id) noexcept {
     const auto found = records_.find(id);
     if (found == records_.end() || !found->second.active) return;
@@ -290,6 +343,7 @@ void RuntimeBlockTable::deactivate(const std::uint64_t id) noexcept {
     active_virtual_ranges_.erase({record.block.variant, record.block.virtual_start});
     if (!record.static_block) {
         dynamic_virtual_index_.erase({record.block.variant, record.block.virtual_start});
+        dynamic_direct_virtual_index_.erase({record.block.variant, record.block.virtual_start});
         dynamic_physical_index_.erase(
             {record.block.variant, record.block.physical_origin, record.block.virtual_start});
     }
@@ -365,6 +419,8 @@ void RuntimeBlockTable::clear() noexcept {
     active_virtual_ranges_.clear();
     static_virtual_index_.clear();
     dynamic_virtual_index_.clear();
+    static_direct_virtual_index_.clear();
+    dynamic_direct_virtual_index_.clear();
     static_physical_index_.clear();
     dynamic_physical_index_.clear();
     static_alias_index_.clear();
@@ -372,6 +428,7 @@ void RuntimeBlockTable::clear() noexcept {
     active_physical_pages_.clear();
     active_count_ = 0u;
     static_sealed_ = false;
+    lookup_counters_ = {};
 }
 
 } // namespace katana::runtime
