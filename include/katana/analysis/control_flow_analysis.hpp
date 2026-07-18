@@ -1,6 +1,7 @@
 #pragma once
 
 #include "katana/analysis/analysis_overrides.hpp"
+#include "katana/analysis/analysis_index.hpp"
 #include "katana/analysis/basic_blocks.hpp"
 #include "katana/analysis/function_value_analysis.hpp"
 #include "katana/analysis/jump_table_analysis.hpp"
@@ -10,6 +11,7 @@
 #include "katana/io/executable_image.hpp"
 
 #include <cstddef>
+#include <memory>
 #include <span>
 #include <string>
 #include <vector>
@@ -47,7 +49,14 @@ struct ControlFlowAnalysisResult {
     std::vector<FunctionValueSummary> function_value_summaries;
     std::vector<ResolvedControlFlowEdge> resolved_edges;
     std::vector<ControlFlowSite> sites;
+    std::shared_ptr<const InstructionArena> instruction_arena;
+    std::vector<InstructionSpan> block_spans;
+    EvidenceInterner evidence_ids;
+    JumpTableCacheCounters jump_table_cache;
     std::size_t fixpoint_iterations = 0u;
+    std::size_t function_summary_iterations = 0u;
+    std::size_t function_scc_count = 0u;
+    std::size_t unchanged_ingress_skips = 0u;
     std::vector<AnalysisDirectiveDiagnostic> directive_diagnostics;
     std::vector<SymbolicAddress> symbolic_addresses;
 };

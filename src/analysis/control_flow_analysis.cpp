@@ -411,9 +411,14 @@ ControlFlowAnalysisResult analyze_control_flow(const katana::io::ExecutableImage
     }
 
     ControlFlowAnalysisResult analysis;
+    JumpTableSnapshotCache jump_table_cache;
     for (;;) {
         ++analysis.fixpoint_iterations;
-        analysis.recursive = analyze_reachable_code(image, make_options(seeds));
+        auto recursive_options = make_options(seeds);
+        if (!analysis.recursive.contextual_instructions.empty()) {
+            recursive_options.baseline = &analysis.recursive;
+        }
+        analysis.recursive = analyze_reachable_code(image, recursive_options);
         analysis.indirect_control_flow =
             resolve_indirect_control_flow(analysis.recursive.instructions, image);
         std::unordered_map<std::uint32_t, std::size_t> resolution_by_address;
@@ -443,7 +448,7 @@ ControlFlowAnalysisResult analyze_control_flow(const katana::io::ExecutableImage
                     ResolutionStatus::Unresolved)
                 continue;
             auto table = recognize_bounded_relative_jump_table(
-                image, analysis.recursive.instructions, index);
+                image, analysis.recursive.instructions, index, &jump_table_cache);
             if (!table.has_value()) continue;
             table->evidence = ControlFlowEvidence::ProvenComplete;
             analysis.jump_tables.push_back(std::move(*table));
@@ -573,7 +578,11 @@ ControlFlowAnalysisResult analyze_control_flow(const katana::io::ExecutableImage
                     continue;
                 }
                 auto jump_table = analyze_jump_table(
-                    image, table.dispatch_address, table.table_address, table.entry_count);
+                    image,
+                    table.dispatch_address,
+                    table.table_address,
+                    table.entry_count,
+                    &jump_table_cache);
                 jump_table.dispatch_kind =
                     (dispatch->instruction.kind == katana::sh4::InstructionKind::Jsr ||
                      dispatch->instruction.kind == katana::sh4::InstructionKind::Bsrf)
@@ -646,6 +655,9 @@ ControlFlowAnalysisResult analyze_control_flow(const katana::io::ExecutableImage
             collect_resolved_edges(analysis.indirect_control_flow, analysis.jump_tables);
         auto function_values = analyze_function_values(
             image, analysis.recursive.instructions, function_entries, provisional_edges);
+        analysis.function_summary_iterations = function_values.fixpoint_iterations;
+        analysis.function_scc_count = function_values.strongly_connected_components;
+        analysis.unchanged_ingress_skips = function_values.unchanged_ingress_skips;
         analysis.function_value_summaries = std::move(function_values.summaries);
         for (auto& proof : function_values.resolutions) {
             if (proof.targets.empty()) continue;
@@ -800,6 +812,34 @@ ControlFlowAnalysisResult analyze_control_flow(const katana::io::ExecutableImage
             analysis.symbolic_addresses.push_back(std::move(*symbol));
         }
     }
+    std::vector<std::uint32_t> final_function_entries;
+    final_function_entries.reserve(analysis.recursive.functions.size());
+    for (const auto& function : analysis.recursive.functions) {
+        final_function_entries.push_back(function.address);
+    }
+    const auto final_blocks = build_basic_blocks(
+        analysis.recursive.instructions, analysis.resolved_edges, final_function_entries);
+    analysis.instruction_arena =
+        std::make_shared<const InstructionArena>(analysis.recursive.instructions);
+    analysis.block_spans = build_block_spans(*analysis.instruction_arena, final_blocks);
+    std::vector<std::string> evidence_strings;
+    for (const auto& diagnostic : analysis.recursive.diagnostics)
+        evidence_strings.push_back(diagnostic.reason);
+    for (const auto& diagnostic : analysis.directive_diagnostics)
+        evidence_strings.push_back(diagnostic.reason);
+    for (const auto& resolution : analysis.indirect_control_flow)
+        evidence_strings.push_back(resolution.reason);
+    for (const auto& table : analysis.jump_tables) {
+        evidence_strings.push_back(table.reason);
+        for (const auto& entry : table.entries)
+            evidence_strings.push_back(entry.reason);
+    }
+    std::sort(evidence_strings.begin(), evidence_strings.end());
+    evidence_strings.erase(std::unique(evidence_strings.begin(), evidence_strings.end()),
+                           evidence_strings.end());
+    for (const auto& evidence : evidence_strings)
+        static_cast<void>(analysis.evidence_ids.intern(evidence));
+    analysis.jump_table_cache = jump_table_cache.counters();
     return analysis;
 }
 

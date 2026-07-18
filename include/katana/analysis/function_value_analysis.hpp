@@ -47,6 +47,8 @@ struct FunctionValueAnalysisResult {
     std::vector<FunctionValueSummary> summaries;
     std::vector<InterproceduralTargetResolution> resolutions;
     std::size_t fixpoint_iterations = 0u;
+    std::size_t strongly_connected_components = 0u;
+    std::size_t unchanged_ingress_skips = 0u;
 };
 
 [[nodiscard]] FunctionValueAnalysisResult

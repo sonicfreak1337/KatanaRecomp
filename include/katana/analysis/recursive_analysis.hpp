@@ -5,6 +5,7 @@
 #include "katana/io/executable_image.hpp"
 #include "katana/sh4/disassembler.hpp"
 
+#include <cstddef>
 #include <cstdint>
 #include <optional>
 #include <span>
@@ -69,8 +70,11 @@ struct ContextualInstruction {
     ControlFlowEvidence evidence = ControlFlowEvidence::Unresolved;
 };
 
+struct RecursiveAnalysisResult;
+
 struct RecursiveAnalysisOptions {
     std::vector<AnalysisSeed> additional_seeds;
+    const RecursiveAnalysisResult* baseline = nullptr;
 };
 
 struct RecursiveAnalysisResult {
@@ -83,6 +87,8 @@ struct RecursiveAnalysisResult {
     std::vector<FunctionCandidate> functions;
     std::vector<AnalysisConflict> conflicts;
     std::vector<AnalysisDiagnostic> diagnostics;
+    std::size_t processed_work_items = 0u;
+    std::size_t reused_contexts = 0u;
 };
 
 [[nodiscard]] RecursiveAnalysisResult

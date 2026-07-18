@@ -1,4 +1,6 @@
 #include "katana/analysis/recursive_analysis.hpp"
+#include "katana/analysis/analysis_index.hpp"
+#include "katana/analysis/basic_blocks.hpp"
 
 #include <algorithm>
 #include <cstdlib>
@@ -104,6 +106,31 @@ int main() {
     guarded_options.additional_seeds.push_back(
         {0x8C01000Cu, {katana::analysis::FunctionOrigin::GuardedSnapshot}});
     const auto guarded_result = katana::analysis::analyze_reachable_code(image, guarded_options);
+    auto incremental_options = guarded_options;
+    incremental_options.baseline = &result;
+    const auto incremental_result =
+        katana::analysis::analyze_reachable_code(image, incremental_options);
+    require(incremental_result.instructions.size() == guarded_result.instructions.size() &&
+                incremental_result.functions.size() == guarded_result.functions.size() &&
+                incremental_result.reused_contexts == result.contextual_instructions.size() &&
+                incremental_result.processed_work_items < guarded_result.processed_work_items,
+            "Delta-Seed analysiert die bekannte Ganzprogrammfront erneut.");
+    const auto blocks = katana::analysis::build_basic_blocks(result.instructions);
+    katana::analysis::InstructionArena arena(result.instructions);
+    const auto spans = katana::analysis::build_block_spans(arena, blocks);
+    const std::vector<katana::analysis::ResolvedControlFlowEdge> no_edges;
+    const std::vector<katana::analysis::FunctionInfo> no_functions;
+    const katana::analysis::AnalysisIndex index(
+        arena, blocks, no_edges, no_functions, image.segments());
+    katana::analysis::EvidenceInterner evidence;
+    const auto first_evidence = evidence.intern("entry-point");
+    require(!spans.empty() && spans.front().view(arena).front().address == 0x8C010000u &&
+                index.instruction(0x8C010000u).has_value() &&
+                index.block(blocks.front().start_address).has_value() &&
+                index.segment(0x8C020000u).has_value() &&
+                evidence.intern("entry-point") == first_evidence &&
+                evidence.resolve(first_evidence) == "entry-point",
+            "Instruktionsarena, Blockspan oder gemeinsamer Analyseindex ist inkonsistent.");
     const auto guarded_function =
         std::find_if(guarded_result.functions.begin(),
                      guarded_result.functions.end(),

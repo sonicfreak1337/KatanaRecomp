@@ -1,5 +1,8 @@
 #include "katana/codegen/partition.hpp"
 
+#include "katana/io/input_provenance.hpp"
+#include "katana/ir/serialize.hpp"
+
 #include <algorithm>
 #include <numeric>
 #include <stdexcept>
@@ -63,7 +66,31 @@ partition_translation_units(const std::span<const katana::ir::Function> function
         }
         partition.last_entry_address = entry;
     }
+    for (auto& partition : result) {
+        std::string content;
+        for (const auto function_index : partition.function_indices) {
+            const auto fragment = katana::ir::emit_ir_json(
+                std::span<const katana::ir::Function>(&functions[function_index], 1u));
+            content += std::to_string(fragment.size()) + ':' + fragment;
+        }
+        partition.content_sha256 = katana::io::sha256_bytes(content);
+    }
     return result;
+}
+
+std::vector<std::size_t> changed_translation_unit_partitions(
+    const std::span<const TranslationUnitPartition> current,
+    const std::span<const TranslationUnitPartition> previous) {
+    std::vector<std::size_t> changed;
+    for (std::size_t index = 0u; index < current.size(); ++index) {
+        if (index >= previous.size() ||
+            current[index].content_sha256 != previous[index].content_sha256 ||
+            current[index].first_entry_address != previous[index].first_entry_address ||
+            current[index].last_entry_address != previous[index].last_entry_address) {
+            changed.push_back(index);
+        }
+    }
+    return changed;
 }
 
 } // namespace katana::codegen

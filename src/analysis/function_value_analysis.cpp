@@ -11,6 +11,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <deque>
+#include <functional>
 #include <map>
 #include <optional>
 #include <set>
@@ -22,6 +23,51 @@ namespace katana::analysis {
 namespace {
 
 constexpr std::size_t maximum_summary_values = 8u;
+
+std::vector<std::vector<std::uint32_t>>
+strong_components(const std::span<const FunctionInfo> functions) {
+    std::unordered_map<std::uint32_t, const FunctionInfo*> by_address;
+    for (const auto& function : functions) by_address.emplace(function.entry_address, &function);
+    std::unordered_map<std::uint32_t, std::size_t> index;
+    std::unordered_map<std::uint32_t, std::size_t> lowlink;
+    std::unordered_set<std::uint32_t> on_stack;
+    std::vector<std::uint32_t> stack;
+    std::vector<std::vector<std::uint32_t>> components;
+    std::size_t next_index = 0u;
+    std::function<void(std::uint32_t)> visit = [&](const std::uint32_t address) {
+        index.emplace(address, next_index);
+        lowlink.emplace(address, next_index++);
+        stack.push_back(address);
+        on_stack.insert(address);
+        const auto found = by_address.find(address);
+        if (found != by_address.end()) {
+            for (const auto callee : found->second->direct_callees) {
+                if (!by_address.contains(callee)) continue;
+                if (!index.contains(callee)) {
+                    visit(callee);
+                    lowlink[address] = std::min(lowlink[address], lowlink[callee]);
+                } else if (on_stack.contains(callee)) {
+                    lowlink[address] = std::min(lowlink[address], index[callee]);
+                }
+            }
+        }
+        if (lowlink[address] != index[address]) return;
+        auto& component = components.emplace_back();
+        for (;;) {
+            const auto member = stack.back();
+            stack.pop_back();
+            on_stack.erase(member);
+            component.push_back(member);
+            if (member == address) break;
+        }
+        std::sort(component.begin(), component.end());
+    };
+    for (const auto& function : functions) {
+        if (!index.contains(function.entry_address)) visit(function.entry_address);
+    }
+    std::reverse(components.begin(), components.end());
+    return components;
+}
 
 struct AbstractValue {
     bool known = false;
@@ -751,6 +797,8 @@ analyze_function_values(const katana::io::ExecutableImage& image,
     for (const auto& block : blocks)
         block_index.emplace(block.start_address, &block);
     const auto functions = discover_functions_from_blocks(blocks, function_entries, resolved_edges);
+    const auto components = strong_components(functions);
+    result.strongly_connected_components = components.size();
     std::unordered_map<std::uint32_t, IndirectCalleeCandidates> indirect_callees;
     for (const auto& edge : resolved_edges) {
         if (edge.kind != ResolvedControlFlowKind::Call) continue;
@@ -784,9 +832,11 @@ analyze_function_values(const katana::io::ExecutableImage& image,
     }
     std::deque<std::uint32_t> pending;
     std::unordered_set<std::uint32_t> queued;
-    for (const auto& function : functions) {
-        pending.push_back(function.entry_address);
-        queued.insert(function.entry_address);
+    for (const auto& component : components) {
+        for (const auto address : component) {
+            pending.push_back(address);
+            queued.insert(address);
+        }
     }
     while (!pending.empty()) {
         const auto address = pending.front();
@@ -815,10 +865,13 @@ analyze_function_values(const katana::io::ExecutableImage& image,
         if (!candidate_inputs[address].observed) continue;
         for (const auto& observation : evaluation.call_arguments) {
             const auto input = candidate_inputs.find(observation.callee);
-            if (input != candidate_inputs.end() &&
-                merge_candidate_input(input->second, observation) &&
-                queued.insert(observation.callee).second) {
-                pending.push_back(observation.callee);
+            if (input == candidate_inputs.end()) continue;
+            if (merge_candidate_input(input->second, observation)) {
+                if (queued.insert(observation.callee).second) {
+                    pending.push_back(observation.callee);
+                }
+            } else {
+                ++result.unchanged_ingress_skips;
             }
         }
     }

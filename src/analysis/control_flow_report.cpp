@@ -246,7 +246,16 @@ std::string format_control_flow_analysis_json(const ControlFlowAnalysisResult& a
            << ",\"jump_tables\":" << analysis.jump_tables.size()
            << ",\"function_value_summaries\":" << analysis.function_value_summaries.size()
            << ",\"directive_diagnostics\":" << analysis.directive_diagnostics.size()
-           << ",\"fixpoint_iterations\":" << analysis.fixpoint_iterations << '}';
+           << ",\"fixpoint_iterations\":" << analysis.fixpoint_iterations
+           << ",\"recursive_processed_work_items\":"
+           << analysis.recursive.processed_work_items
+           << ",\"recursive_reused_contexts\":" << analysis.recursive.reused_contexts
+           << ",\"function_summary_iterations\":" << analysis.function_summary_iterations
+           << ",\"function_scc_count\":" << analysis.function_scc_count
+           << ",\"unchanged_ingress_skips\":" << analysis.unchanged_ingress_skips
+           << ",\"jump_table_cache_hits\":" << analysis.jump_table_cache.hits
+           << ",\"jump_table_cache_misses\":" << analysis.jump_table_cache.misses
+           << ",\"interned_evidence\":" << analysis.evidence_ids.size() << '}';
 
     auto functions = analysis.recursive.functions;
     std::sort(functions.begin(), functions.end(), [](const auto& left, const auto& right) {

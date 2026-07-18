@@ -2,7 +2,7 @@
 
 Interner Entwicklungsmeilenstein: `v0.46.0`
 Phase: Core-Stabilisierung vor v0.47
-Naechster Task: `KR-4622`
+Naechster Task: `KR-4623`
 Naechstes Gate: `v0.47.0` - Core-Stabilisierung und generische Retail-Runtime
 Weitere interne Gates: `v0.48.0` Integration und `v0.49.0` Alpha-Candidate
 Erster oeffentlicher Release: `v0.50.0` Alpha
@@ -22,6 +22,21 @@ koennen deterministisch bis vor das naechste fremde Schedulerereignis
 gebuendelt werden; Einzeltransfer-, externe Request- und Round-Robin-Pfade
 bleiben als Referenz erhalten. Vertrag und Gate-Messpunkte stehen in
 [`P1_HOTPATHS.md`](P1_HOTPATHS.md).
+
+## KR-4622 umgesetzt
+
+Kontrollfluss-Fixpunkte uebernehmen bekannte Kontextschluessel und dekodieren
+bei neuen Seeds nur die Deltafront. Die Funktionswertanalyse ordnet ihre
+monotone Worklist nach Callgraph-SCCs und reiht Caller beziehungsweise Callees
+nur bei geaenderter Summary oder geaendertem Ingress erneut ein. Immutable
+Instruktionsarenen, Blockspans, gemeinsame Adressindizes und internierte
+Evidence-IDs bilden die gemeinsame Analysegrundlage.
+
+Jump-Table-Snapshots sind SHA-256-gebunden und begrenzt. Codegenpartitionen
+tragen einen kanonischen IR-Hash und koennen als Delta ermittelt werden; der
+Codegencache verwendet Schema 3 mit SHA-256-Schluesseln und atomarem,
+konkurrenzsicherem Publish. Vertrag und Budgets stehen in
+[`P1_INCREMENTAL_ANALYSIS.md`](P1_INCREMENTAL_ANALYSIS.md).
 
 ## Aktuelles Reviewurteil
 

@@ -7,6 +7,8 @@ project(
     LANGUAGES CXX
 )
 
+find_package(Threads REQUIRED)
+
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
@@ -236,6 +238,7 @@ add_library(katana_core STATIC
     src/platform/firmware_profile.cpp
     src/platform/phase6_gate.cpp
     src/analysis/disassembler.cpp
+    src/analysis/analysis_index.cpp
     src/analysis/code_address.cpp
     src/analysis/evidence.cpp
     src/analysis/basic_blocks.cpp
@@ -1455,7 +1458,7 @@ katana_enable_warnings(katana-codegen-naming-tests)
 add_test(NAME katana-codegen-naming-tests COMMAND katana-codegen-naming-tests)
 
 add_executable(katana-codegen-cache-tests tests/codegen/cache_tests.cpp)
-target_link_libraries(katana-codegen-cache-tests PRIVATE katana_core)
+target_link_libraries(katana-codegen-cache-tests PRIVATE katana_core Threads::Threads)
 katana_enable_warnings(katana-codegen-cache-tests)
 add_test(NAME katana-codegen-cache-tests COMMAND katana-codegen-cache-tests)
 

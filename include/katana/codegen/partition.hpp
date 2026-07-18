@@ -5,6 +5,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <span>
+#include <string>
 #include <vector>
 
 namespace katana::codegen {
@@ -20,6 +21,7 @@ struct TranslationUnitPartition {
     std::uint32_t last_entry_address = 0u;
     std::size_t instruction_count = 0u;
     std::vector<std::size_t> function_indices;
+    std::string content_sha256;
 
     [[nodiscard]] bool operator==(const TranslationUnitPartition&) const = default;
 };
@@ -27,5 +29,9 @@ struct TranslationUnitPartition {
 [[nodiscard]] std::vector<TranslationUnitPartition>
 partition_translation_units(std::span<const katana::ir::Function> functions,
                             const PartitionOptions& options = {});
+
+[[nodiscard]] std::vector<std::size_t>
+changed_translation_unit_partitions(std::span<const TranslationUnitPartition> current,
+                                    std::span<const TranslationUnitPartition> previous);
 
 } // namespace katana::codegen

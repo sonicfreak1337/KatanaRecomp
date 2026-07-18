@@ -4,6 +4,13 @@
 
 ### Geaendert
 
+- KR-4622: Kontrollfluss-Seeds arbeiten ab dem zweiten Fixpunkt auf einer
+  wiederverwendeten Kontextbaseline; Funktionssummaries werden SCC-geordnet
+  und nur bei geaendertem Ingress propagiert. Immutable Instruktionsarenen,
+  Blockspans, gemeinsame Analyseindizes und internierte Evidenzgruende
+  reduzieren Kopien und Suchlaeufe. Jump-Table-Snapshots sind begrenzt und
+  SHA-256-gebunden; stabile IR-Partitionen sowie Codegencache-Schema 3
+  verwenden SHA-256 und atomaren konkurrenzsicheren Publish.
 - KR-4621: Memory, exakter Dispatch und Codeinvalidierung besitzen
   abschaltbare Regions-, Hash- und Page-to-Block-Indizes. Lineare u16/u32-
   Zugriffe und der unbeobachtete Speicherpfad vermeiden Byte-/Diagnosearbeit;

@@ -8,7 +8,7 @@
 
 namespace katana::codegen {
 
-inline constexpr std::uint32_t codegen_cache_schema_version = 2u;
+inline constexpr std::uint32_t codegen_cache_schema_version = 3u;
 
 struct CodegenCacheInputs {
     std::string input_hash;

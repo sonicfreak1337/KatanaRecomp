@@ -1,10 +1,13 @@
 #include "katana/codegen/cache.hpp"
 
+#include <algorithm>
 #include <cstdlib>
 #include <filesystem>
 #include <iostream>
 #include <stdexcept>
 #include <string>
+#include <thread>
+#include <vector>
 
 namespace {
 
@@ -45,6 +48,8 @@ int main() {
                               1u,
                               "0.34.0-dev"};
     const auto key = make_codegen_cache_key(inputs);
+    require(key.starts_with("cg-v3-") && key.size() == 6u + 64u,
+            "Codegen-Cache verwendet keinen kanonischen SHA-256-Schluessel.");
     require(!cache.load(key, "unit.cpp"), "Leerer Cache meldet einen Treffer.");
     cache.store(key, "unit.cpp", "generated-a\n");
     require(cache.load(key, "unit.cpp") == std::optional<std::string>("generated-a\n"),
@@ -75,6 +80,20 @@ int main() {
         rejected = true;
     }
     require(rejected, "Cache erlaubt Pfadausbruch ueber Artefaktnamen.");
+
+    std::vector<std::thread> publishers;
+    for (std::size_t index = 0u; index < 8u; ++index) {
+        publishers.emplace_back([&] { cache.store(key, "concurrent.cpp", "stable-content\n"); });
+    }
+    for (auto& publisher : publishers) publisher.join();
+    require(cache.load(key, "concurrent.cpp") ==
+                    std::optional<std::string>("stable-content\n") &&
+                std::none_of(std::filesystem::directory_iterator(cache.root() / key),
+                             std::filesystem::directory_iterator{},
+                             [](const auto& entry) {
+                                 return entry.path().filename().string().starts_with(".publish-");
+                             }),
+            "Paralleler atomarer Publish hinterlaesst Teilstand oder Stagingdaten.");
 
     std::cout << "KR-3303 inkrementeller Codegen-Cache erfolgreich.\n";
     return 0;

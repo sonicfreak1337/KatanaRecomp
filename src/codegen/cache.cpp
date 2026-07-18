@@ -1,25 +1,17 @@
 #include "katana/codegen/cache.hpp"
 
+#include "katana/io/input_provenance.hpp"
+
 #include <fstream>
-#include <iomanip>
+#include <random>
 #include <sstream>
 #include <stdexcept>
 
 namespace katana::codegen {
 namespace {
 
-void hash_bytes(std::uint64_t& hash, const std::string_view value) noexcept {
-    for (const auto byte : value) {
-        hash ^= static_cast<std::uint8_t>(byte);
-        hash *= 1099511628211ull;
-    }
-}
-
-void hash_field(std::uint64_t& hash, const std::string_view value) noexcept {
-    hash_bytes(hash, std::to_string(value.size()));
-    hash_bytes(hash, ":");
-    hash_bytes(hash, value);
-    hash_bytes(hash, ";");
+void append_field(std::ostringstream& output, const std::string_view value) {
+    output << value.size() << ':' << value << ';';
 }
 
 bool safe_component(const std::string_view value) noexcept {
@@ -47,23 +39,21 @@ std::string make_codegen_cache_key(const CodegenCacheInputs& inputs) {
         inputs.optimization_version == 0u || inputs.tool_version.empty()) {
         throw std::invalid_argument("Codegen-Cache-Schluessel ist unvollstaendig.");
     }
-    std::uint64_t hash = 14695981039346656037ull;
-    hash_field(hash, std::to_string(codegen_cache_schema_version));
-    hash_field(hash, inputs.input_hash);
-    hash_field(hash, inputs.ir_hash);
-    hash_field(hash, inputs.configuration_hash);
-    hash_field(hash, inputs.backend_name);
-    hash_field(hash, std::to_string(inputs.backend_abi));
-    hash_field(hash, std::to_string(inputs.runtime_abi));
-    hash_field(hash, inputs.manifest_hash);
-    hash_field(hash, inputs.overrides_hash);
-    hash_field(hash, std::to_string(inputs.ir_version));
-    hash_field(hash, std::to_string(inputs.optimization_version));
-    hash_field(hash, inputs.tool_version);
-    std::ostringstream output;
-    output << "cg-v" << codegen_cache_schema_version << '-' << std::hex << std::setfill('0')
-           << std::setw(16) << hash;
-    return output.str();
+    std::ostringstream canonical;
+    append_field(canonical, std::to_string(codegen_cache_schema_version));
+    append_field(canonical, inputs.input_hash);
+    append_field(canonical, inputs.ir_hash);
+    append_field(canonical, inputs.configuration_hash);
+    append_field(canonical, inputs.backend_name);
+    append_field(canonical, std::to_string(inputs.backend_abi));
+    append_field(canonical, std::to_string(inputs.runtime_abi));
+    append_field(canonical, inputs.manifest_hash);
+    append_field(canonical, inputs.overrides_hash);
+    append_field(canonical, std::to_string(inputs.ir_version));
+    append_field(canonical, std::to_string(inputs.optimization_version));
+    append_field(canonical, inputs.tool_version);
+    return "cg-v" + std::to_string(codegen_cache_schema_version) + '-' +
+           katana::io::sha256_bytes(canonical.str());
 }
 
 CodegenCache::CodegenCache(std::filesystem::path root) : root_(std::move(root)) {
@@ -92,17 +82,48 @@ void CodegenCache::store(const std::string_view key,
                          const std::string_view artifact_name,
                          const std::string_view content) {
     const auto path = artifact_path(key, artifact_name);
-    if (const auto existing = load(key, artifact_name); existing && *existing == content) {
-        return;
+    if (const auto existing = load(key, artifact_name); existing) {
+        if (*existing == content) return;
+        throw std::runtime_error("Codegen-Cache-Schluessel kollidiert mit abweichendem Inhalt.");
     }
     std::filesystem::create_directories(path.parent_path());
-    std::ofstream output(path, std::ios::binary | std::ios::trunc);
-    if (!output) {
-        throw std::runtime_error("Codegen-Cache-Artefakt konnte nicht geoeffnet werden.");
+    std::filesystem::path staging;
+    std::random_device random;
+    for (std::size_t attempt = 0u; attempt < 32u; ++attempt) {
+        staging = path.parent_path() /
+                  (".publish-" + std::to_string(random()) + '-' + std::to_string(random()));
+        std::error_code create_error;
+        if (std::filesystem::create_directory(staging, create_error)) break;
+        staging.clear();
     }
-    output.write(content.data(), static_cast<std::streamsize>(content.size()));
-    if (!output) {
-        throw std::runtime_error("Codegen-Cache-Artefakt konnte nicht geschrieben werden.");
+    if (staging.empty()) {
+        throw std::runtime_error("Codegen-Cache-Staging konnte nicht atomar angelegt werden.");
+    }
+    const auto temporary = staging / "artifact.tmp";
+    try {
+        std::ofstream output(temporary, std::ios::binary | std::ios::trunc);
+        if (!output) {
+            throw std::runtime_error("Codegen-Cache-Artefakt konnte nicht geoeffnet werden.");
+        }
+        output.write(content.data(), static_cast<std::streamsize>(content.size()));
+        output.close();
+        if (!output) {
+            throw std::runtime_error("Codegen-Cache-Artefakt konnte nicht geschrieben werden.");
+        }
+        std::error_code publish_error;
+        std::filesystem::create_hard_link(temporary, path, publish_error);
+        if (publish_error) {
+            const auto concurrent = load(key, artifact_name);
+            if (!concurrent || *concurrent != content) {
+                throw std::runtime_error(
+                    "Codegen-Cache-Publish kollidiert mit abweichendem Artefakt.");
+            }
+        }
+        std::filesystem::remove_all(staging);
+    } catch (...) {
+        std::error_code cleanup_error;
+        std::filesystem::remove_all(staging, cleanup_error);
+        throw;
     }
 }
 

@@ -141,6 +141,31 @@ RecursiveAnalysisResult analyze_reachable_code(const katana::io::ExecutableImage
     discovered.reserve(4096u);
     function_candidates.reserve(256u);
 
+    std::vector<AnalysisDiagnostic> diagnostics;
+    std::vector<ContextualInstruction> result_contexts;
+    std::size_t reused_contexts = 0u;
+    std::size_t processed_work_items = 0u;
+    if (options.baseline != nullptr) {
+        diagnostics = options.baseline->diagnostics;
+        result_contexts = options.baseline->contextual_instructions;
+        for (const auto& contextual : options.baseline->contextual_instructions) {
+            scheduled.insert({contextual.line.address,
+                              contextual.incoming_address,
+                              contextual.delay_slot_owner,
+                              contextual.evidence});
+            if (contextual.delay_slot_owner.has_value()) {
+                delay_slots.insert(contextual.line.address);
+            }
+        }
+        reused_contexts = scheduled.size();
+        for (const auto& line : options.baseline->instructions) {
+            discovered.emplace(line.address, line);
+        }
+        for (const auto& function : options.baseline->functions) {
+            function_candidates.emplace(function.address, function);
+        }
+    }
+
     for (const auto entry : image.entry_points()) {
         const auto validation = validate_committed_code_address(image, entry);
         if (!validation.valid()) {
@@ -191,12 +216,10 @@ RecursiveAnalysisResult analyze_reachable_code(const katana::io::ExecutableImage
         }
     }
 
-    std::vector<AnalysisDiagnostic> diagnostics;
-    std::vector<ContextualInstruction> result_contexts;
-
     while (!pending.empty()) {
         const auto work = pending.front();
         pending.pop_front();
+        ++processed_work_items;
         const auto address = work.address;
         const auto evidence = work.evidence;
         const auto validation = validate_decode_candidate(image, address);
@@ -298,6 +321,8 @@ RecursiveAnalysisResult analyze_reachable_code(const katana::io::ExecutableImage
     }
 
     RecursiveAnalysisResult result;
+    result.processed_work_items = processed_work_items;
+    result.reused_contexts = reused_contexts;
     std::sort(
         result_contexts.begin(), result_contexts.end(), [](const auto& left, const auto& right) {
             return std::tie(left.line.address,

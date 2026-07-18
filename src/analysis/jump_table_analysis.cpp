@@ -1,15 +1,43 @@
 #include "katana/analysis/jump_table_analysis.hpp"
 #include "katana/analysis/code_address.hpp"
 #include "katana/io/binary_reader.hpp"
+#include "katana/io/input_provenance.hpp"
 #include "katana/sh4/instruction.hpp"
 
 #include <limits>
+#include <sstream>
 #include <stdexcept>
 
 namespace katana::analysis {
 namespace {
 
 constexpr std::size_t maximum_jump_table_entries = 4096u;
+
+std::string snapshot_key(const katana::io::ExecutableImage& image,
+                         const JumpTableEncoding encoding,
+                         const std::uint32_t dispatch_address,
+                         const std::uint32_t table_address,
+                         const std::uint32_t target_base,
+                         const std::size_t entry_count) {
+    const auto entry_size = encoding == JumpTableEncoding::Absolute32 ? 4u : 2u;
+    const auto byte_count = entry_count <= maximum_jump_table_entries
+                                ? entry_count * entry_size
+                                : 0u;
+    const auto* segment = byte_count != 0u ? image.find_segment(table_address, byte_count) : nullptr;
+    std::string digest = "invalid";
+    if (segment != nullptr) {
+        const auto offset = segment->byte_offset(table_address);
+        if (offset && *offset <= segment->bytes.size() &&
+            byte_count <= segment->bytes.size() - *offset) {
+            digest = katana::io::sha256_bytes(std::string_view(
+                reinterpret_cast<const char*>(segment->bytes.data() + *offset), byte_count));
+        }
+    }
+    std::ostringstream key;
+    key << static_cast<unsigned>(encoding) << ':' << dispatch_address << ':' << table_address << ':'
+        << target_base << ':' << entry_count << ':' << digest;
+    return key.str();
+}
 
 bool contiguous(const katana::sh4::DisassemblyLine& left,
                 const katana::sh4::DisassemblyLine& right) {
@@ -74,10 +102,55 @@ bounded_entry_count(const std::span<const katana::sh4::DisassemblyLine> lines,
 
 } // namespace
 
+JumpTableSnapshotCache::JumpTableSnapshotCache(const std::size_t capacity) : capacity_(capacity) {
+    if (capacity_ == 0u) throw std::invalid_argument("Jump-Table-Cache braucht Kapazitaet.");
+    order_.reserve(capacity_);
+    entries_.reserve(capacity_);
+}
+
+std::optional<JumpTableAnalysis> JumpTableSnapshotCache::load(const std::string_view key) {
+    const auto found = entries_.find(std::string(key));
+    if (found == entries_.end()) {
+        ++counters_.misses;
+        return std::nullopt;
+    }
+    ++counters_.hits;
+    return found->second;
+}
+
+void JumpTableSnapshotCache::store(std::string key, JumpTableAnalysis analysis) {
+    if (entries_.contains(key)) return;
+    if (entries_.size() == capacity_) {
+        entries_.erase(order_.front());
+        order_.erase(order_.begin());
+        ++counters_.evictions;
+    }
+    order_.push_back(key);
+    entries_.emplace(std::move(key), std::move(analysis));
+}
+
+const JumpTableCacheCounters& JumpTableSnapshotCache::counters() const noexcept {
+    return counters_;
+}
+
+std::size_t JumpTableSnapshotCache::size() const noexcept {
+    return entries_.size();
+}
+
 JumpTableAnalysis analyze_jump_table(const katana::io::ExecutableImage& image,
                                      const std::uint32_t dispatch_address,
                                      const std::uint32_t table_address,
-                                     const std::size_t entry_count) {
+                                     const std::size_t entry_count,
+                                     JumpTableSnapshotCache* const cache) {
+    const auto key = snapshot_key(image,
+                                  JumpTableEncoding::Absolute32,
+                                  dispatch_address,
+                                  table_address,
+                                  0u,
+                                  entry_count);
+    if (cache != nullptr) {
+        if (auto hit = cache->load(key)) return *hit;
+    }
     JumpTableAnalysis analysis;
     analysis.dispatch_address = dispatch_address;
     analysis.table_address = table_address;
@@ -138,6 +211,7 @@ JumpTableAnalysis analyze_jump_table(const katana::io::ExecutableImage& image,
     } else if (analysis.reason.empty()) {
         analysis.reason = "table-entry-rejected";
     }
+    if (cache != nullptr) cache->store(key, analysis);
     return analysis;
 }
 
@@ -218,15 +292,28 @@ JumpTableAnalysis analyze_relative_jump_table(const katana::io::ExecutableImage&
                                               const std::uint32_t dispatch_address,
                                               const std::uint32_t table_address,
                                               const std::uint32_t target_base,
-                                              const std::size_t entry_count) {
-    return analyze_relative_jump_table_impl(
+                                              const std::size_t entry_count,
+                                              JumpTableSnapshotCache* const cache) {
+    const auto key = snapshot_key(image,
+                                  JumpTableEncoding::SignedRelative16,
+                                  dispatch_address,
+                                  table_address,
+                                  target_base,
+                                  entry_count);
+    if (cache != nullptr) {
+        if (auto hit = cache->load(key)) return *hit;
+    }
+    auto analysis = analyze_relative_jump_table_impl(
         image, dispatch_address, table_address, target_base, entry_count);
+    if (cache != nullptr) cache->store(key, analysis);
+    return analysis;
 }
 
 std::optional<JumpTableAnalysis>
 recognize_bounded_relative_jump_table(const katana::io::ExecutableImage& image,
                                       const std::span<const katana::sh4::DisassemblyLine> lines,
-                                      const std::size_t dispatch_index) {
+                                      const std::size_t dispatch_index,
+                                      JumpTableSnapshotCache* const cache) {
     if (dispatch_index < 4u || dispatch_index >= lines.size()) return std::nullopt;
     const auto& dispatch = lines[dispatch_index];
     const auto& load = lines[dispatch_index - 1u];
@@ -251,8 +338,12 @@ recognize_bounded_relative_jump_table(const katana::io::ExecutableImage& image,
     if (!entry_count.has_value()) return std::nullopt;
     const auto table_address = ((table_base.address + 4u) & ~3u) +
                                static_cast<std::uint32_t>(table_base.instruction.displacement);
-    return analyze_relative_jump_table_impl(
-        image, dispatch.address, table_address, dispatch.address + 4u, *entry_count);
+    return analyze_relative_jump_table(image,
+                                       dispatch.address,
+                                       table_address,
+                                       dispatch.address + 4u,
+                                       *entry_count,
+                                       cache);
 }
 
 const char* jump_table_encoding_name(const JumpTableEncoding encoding) noexcept {

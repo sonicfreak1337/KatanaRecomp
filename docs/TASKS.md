@@ -276,7 +276,7 @@ DMA-Referenzmodi, festen Diagnosekapazitaeten und instrumentierten
 Vergleichsregressionen. Vertrag und Messpunkte stehen in `P1_HOTPATHS.md`;
 frische Profilzeiten werden gesammelt im Gate KR-4625 erhoben.
 
-### [ ] KR-4622 - Inkrementelle Kontrollflussanalyse, IR und Codegen
+### [x] KR-4622 - Inkrementelle Kontrollflussanalyse, IR und Codegen
 
 Abhaengigkeiten: KR-4618
 Prioritaet: P1
@@ -301,6 +301,12 @@ Akzeptanz:
 - neue Seeds analysieren nur die betroffene Deltafront erneut
 - abgebrochene Cachewrites koennen keinen gueltigen Hit vortaeuschen
 - parallele Laeufe korrumpieren den Cache nicht
+
+Umgesetzt mit immutable Instruktionsarena und Blockspans, gemeinsamen
+Analyseindizes, Baseline-/Delta-Worklists, SCC-geordneter Summarypropagation,
+internierter Evidenztabelle, begrenztem Jump-Table-Snapshotcache, stabilen
+IR-Hashpartitionen sowie SHA-256-/atomarem Codegencache-Publish. Details und
+Gate-Messwerte stehen in `P1_INCREMENTAL_ANALYSIS.md`.
 
 ### [ ] KR-4623 - Disc-, GDI-, ISO- und GD-ROM-I/O
 
