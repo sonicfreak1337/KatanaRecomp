@@ -78,6 +78,14 @@ Bei `status=partial` ist `host_compilation=false`; nur `status=built` darf eine
 veroeffentlichte `game.exe` behaupten. Beide Berichte tragen `tool_version` aus
 derselben CMake-Definition wie CLI, GUI und Portprovenienz.
 
+`katana-private-retail-build` Version 1 ist der externe private
+Build-only-Bericht fuer Configversion 2. Er enthaelt ausschliesslich
+aggregierte Analysezaehler, Buildanzahlen, Boolwerte fuer Identitaet,
+Reproduzierbarkeit, aktuelles Executable und No-run sowie eine allgemeine
+Fehlerklasse. Projektidentitaet, Datei- oder Eingabehashes, Gastadressen,
+Tracknamen, private Pfade und Rohlogs sind verboten. Der Bericht wird neben dem
+Ziel vorbereitet, allowlist-geprueft und atomar ersetzt.
+
 ## Live-Jobereignisse
 
 `katana-job-event` Version 1 ist der gemeinsame geordnete Observerstrom von CLI

@@ -2,7 +2,7 @@
 
 Interner Entwicklungsmeilenstein: `v0.46.0`
 Phase: Core-Stabilisierung vor v0.47
-Naechster Task: `KR-4719`
+Naechster Task: `KR-4703`
 Naechstes Gate: `v0.47.0` - Core-Stabilisierung und generische Retail-Runtime
 Weitere interne Gates: `v0.48.0` Integration und `v0.49.0` Alpha-Candidate
 Erster oeffentlicher Release: `v0.50.0` Alpha
@@ -158,6 +158,28 @@ Der Vertrag und die bei KR-4704 auszufuehrenden Regressionen stehen in
 [`RUNTIME_ONLY_DISPATCH.md`](RUNTIME_ONLY_DISPATCH.md). KR-4719 ist der
 naechste Task.
 
+## KR-4719 umgesetzt
+
+Der private Harness verlangt Configversion 2 und ausschliesslich
+`execution_mode=build-only`. Sein einziger Prozessstarter unterscheidet Tool-
+und Runtimeprozesse und verwirft jede Runtimefunktion vor `Process.Start`.
+Frische zufaellig benannte Jobziele koennen eine vorhandene stale `game.exe`
+nicht als Erfolg wiederverwenden.
+
+Zwei offizielle Buildjobs muessen vollstaendige Kontrollflussabdeckung, die
+Analyse-/Codegen-/Hostbuild-Checkpoints und genau ein hashverifiziertes
+aktuelles Executable liefern. Manifest-GDI, Jobresultat, Resultindex und
+Portmetadaten werden intern an dieselbe Projektidentitaet gebunden; portable
+Metadaten und generierte Quellen muessen zwischen beiden Jobs bytegleich sein.
+Der atomare Bericht gibt nur Aggregate, Boolvertraege und allgemeine
+Fehlerklassen aus. Er kann hoechstens `SA_ANALYSIS_CONTINUES` melden und setzt
+`game_executable_started=false` sowie `runtime_processes_started=0`.
+
+Der ausfuehrbare Vertrag steht in
+[`PRIVATE_RETAIL_DEBUG.md`](PRIVATE_RETAIL_DEBUG.md). Der echte private
+Doppelnachweis wird gemaess Handoff erst mit der frischen Gate-CLI in KR-4704
+ausgefuehrt. KR-4703 ist der naechste Implementierungstask.
+
 ## Historischer Reviewbefund vor KR-4611 bis KR-4618
 
 Der folgende Befund dokumentiert ausschliesslich den damaligen Ausgangspunkt.
@@ -174,7 +196,8 @@ Die damalige Kontrollflusspruefung hatte folgende P0-Soundnessrisiken gefunden:
 - unbekannte Caller und abweichende Callkontexte koennen Zielmengen verkleinern
 - Kontextaufloesungen werden nur nach Instruktionsadresse dedupliziert
 
-Der private Harness startet nach erfolgreichem Build automatisch `game.exe`.
+Der damalige private Harness startete nach erfolgreichem Build automatisch
+`game.exe`.
 Das widerspricht dem aktuellen v0.47-Build-only-Vertrag. Metriken werden noch
 aus Textregexen gelesen, stdout und stderr verlieren ihre Reihenfolge und
 Hostsmokes sind nicht ausreichend von Gastfortschritt getrennt.

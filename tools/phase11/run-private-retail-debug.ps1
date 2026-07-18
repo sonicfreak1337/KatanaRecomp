@@ -5,47 +5,9 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$checkpointOrder = @(
-    'SA_NOT_REACHED',
-    'SA_ANALYSIS_CONTINUES',
-    'SA_MAIN_ENTERED',
-    'SA_FIRST_FRAME',
-    'SA_MENU_INTERACTIVE',
-    'SA_ALPHA_PLAYABLE'
-)
-
-function Select-Checkpoint {
-    param($Job, [string]$RuntimeOutput)
-    $checkpoint = 'SA_NOT_REACHED'
-    if ($Job.analysis -and $Job.analysis.functions -gt 1 -and
-        $Job.analysis.analyzed_instruction_bytes -gt 4) {
-        $checkpoint = 'SA_ANALYSIS_CONTINUES'
-    }
-    $expectedIndex = if ($checkpoint -eq 'SA_ANALYSIS_CONTINUES') { 2 } else { 1 }
-    $seen = @{}
-    foreach ($line in ($RuntimeOutput -split "`r?`n")) {
-        if ($line -notmatch '^(SA_[A-Z_]+)(?:\s|$)') { continue }
-        $candidate = $Matches[1]
-        $index = [array]::IndexOf($checkpointOrder, $candidate)
-        if ($index -lt 2) { throw "Ungueltiger Runtimecheckpoint: $candidate" }
-        if ($seen.ContainsKey($candidate)) { throw "Doppelter Runtimecheckpoint: $candidate" }
-        if ($index -ne $expectedIndex) {
-            throw "Fehlender oder vertauschter Runtimecheckpoint vor $candidate"
-        }
-        $seen[$candidate] = $true
-        $checkpoint = $candidate
-        $expectedIndex++
-    }
-    return $checkpoint
-}
-
-function Select-SilentFailures {
-    param([string]$RuntimeOutput)
-    $matches = [regex]::Matches($RuntimeOutput, '(?m)^KATANA_RUNTIME_METRICS\s+[^\r\n]*\bsilent_failures=(\d+)\b')
-    if ($matches.Count -eq 0) { return $null }
-    if ($matches.Count -ne 1) { throw 'Runtimemetrikenmarker ist doppelt.' }
-    return [uint64]$matches[0].Groups[1].Value
-}
+$buildOnlyMode = 'build-only'
+$checkpointOrder = @('SA_NOT_REACHED', 'SA_ANALYSIS_CONTINUES')
+$script:RuntimeProcessStarts = 0
 
 function Resolve-PhysicalPath {
     param([string]$Path)
@@ -54,7 +16,9 @@ function Resolve-PhysicalPath {
     $existing = $full
     while (-not (Test-Path -LiteralPath $existing)) {
         $leaf = Split-Path -Leaf $existing
-        if ([string]::IsNullOrEmpty($leaf)) { throw "Pfad besitzt keinen aufloesbaren Elternpfad: $Path" }
+        if ([string]::IsNullOrEmpty($leaf)) {
+            throw "Pfad besitzt keinen aufloesbaren Elternpfad: $Path"
+        }
         $suffix.Push($leaf)
         $existing = Split-Path -Parent $existing
     }
@@ -71,16 +35,25 @@ public static extern uint GetFinalPathNameByHandle(
     Microsoft.Win32.SafeHandles.SafeFileHandle handle, StringBuilder path, uint size, uint flags);
 '@
         }
-        $handle = [KatanaPath.Native]::CreateFile($existing, 0x80, 7, [IntPtr]::Zero, 3, 0x02000000, [IntPtr]::Zero)
+        $handle = [KatanaPath.Native]::CreateFile(
+            $existing, 0x80, 7, [IntPtr]::Zero, 3, 0x02000000, [IntPtr]::Zero)
         if ($handle.IsInvalid) { throw "Physischer Pfad konnte nicht geoeffnet werden: $Path" }
         try {
             $buffer = [Text.StringBuilder]::new(32768)
-            $length = [KatanaPath.Native]::GetFinalPathNameByHandle($handle, $buffer, $buffer.Capacity, 0)
-            if ($length -eq 0 -or $length -ge $buffer.Capacity) { throw "Physischer Pfad konnte nicht aufgeloest werden: $Path" }
+            $length = [KatanaPath.Native]::GetFinalPathNameByHandle(
+                $handle, $buffer, $buffer.Capacity, 0)
+            if ($length -eq 0 -or $length -ge $buffer.Capacity) {
+                throw "Physischer Pfad konnte nicht aufgeloest werden: $Path"
+            }
             $resolved = $buffer.ToString()
-            if ($resolved.StartsWith('\\?\UNC\')) { $resolved = '\\' + $resolved.Substring(8) }
-            elseif ($resolved.StartsWith('\\?\')) { $resolved = $resolved.Substring(4) }
-        } finally { $handle.Dispose() }
+            if ($resolved.StartsWith('\\?\UNC\')) {
+                $resolved = '\\' + $resolved.Substring(8)
+            } elseif ($resolved.StartsWith('\\?\')) {
+                $resolved = $resolved.Substring(4)
+            }
+        } finally {
+            $handle.Dispose()
+        }
     }
     while ($suffix.Count -gt 0) { $resolved = Join-Path $resolved $suffix.Pop() }
     return [IO.Path]::GetFullPath($resolved)
@@ -93,43 +66,37 @@ function Assert-OutsideRepository {
     $candidate = Resolve-PhysicalPath $Path
     $root = Resolve-PhysicalPath $RepositoryRoot
     if ($lexicalCandidate.Equals($lexicalRoot, [StringComparison]::OrdinalIgnoreCase) -or
-        $lexicalCandidate.StartsWith($lexicalRoot + [IO.Path]::DirectorySeparatorChar,
-                                     [StringComparison]::OrdinalIgnoreCase) -or
+        $lexicalCandidate.StartsWith(
+            $lexicalRoot + [IO.Path]::DirectorySeparatorChar,
+            [StringComparison]::OrdinalIgnoreCase) -or
         $candidate.Equals($root, [StringComparison]::OrdinalIgnoreCase) -or
-        $candidate.StartsWith($root + [IO.Path]::DirectorySeparatorChar,
-                             [StringComparison]::OrdinalIgnoreCase)) {
+        $candidate.StartsWith(
+            $root + [IO.Path]::DirectorySeparatorChar,
+            [StringComparison]::OrdinalIgnoreCase)) {
         throw 'Private Retail-Konfiguration und -Ausgaben muessen ausserhalb des Repositorys liegen.'
     }
     return $candidate
 }
 
-function Select-FailureClass {
-    param($Job, [bool]$TimedOut, [Nullable[int]]$RuntimeExitCode,
-          [Nullable[uint64]]$SilentFailures = $null)
-    if ($TimedOut) { return 'host-time-budget' }
-    if ($null -ne $SilentFailures -and $SilentFailures -ne 0) { return 'silent-failures' }
-    if ($Job.state -eq 'partial') { return 'analysis-incomplete' }
-    if ($Job.state -eq 'failed') {
-        switch ($Job.failure_category) {
-            'input-output' { return 'input-output' }
-            'build' { return 'host-build' }
-            'code-generation' { return 'code-generation' }
-            default { return 'processing' }
-        }
+function Assert-BuildOnlyProcessAllowed {
+    param([string]$ExecutionMode, [ValidateSet('tool', 'runtime')][string]$Role)
+    if ($ExecutionMode -ne $buildOnlyMode) {
+        throw 'Dieser v0.47-Harness akzeptiert ausschliesslich execution_mode=build-only.'
     }
-    if ($null -ne $RuntimeExitCode -and $RuntimeExitCode -ne 0) {
-        return 'runtime-nonzero'
+    if ($Role -eq 'runtime') {
+        throw 'Build-only verbietet Runtimeprozesse vor Process.Start.'
     }
-    return $null
 }
 
 function Invoke-BudgetedProcess {
     param(
+        [string]$ExecutionMode,
+        [ValidateSet('tool', 'runtime')][string]$Role,
         [string]$Executable,
         [string[]]$Arguments,
-        [int]$TimeoutSeconds,
-        [hashtable]$Environment = @{}
+        [int]$TimeoutSeconds
     )
+    Assert-BuildOnlyProcessAllowed $ExecutionMode $Role
     $start = [Diagnostics.ProcessStartInfo]::new()
     $start.FileName = $Executable
     $start.UseShellExecute = $false
@@ -139,15 +106,17 @@ function Invoke-BudgetedProcess {
     $start.Arguments = ($Arguments | ForEach-Object {
         '"' + ([string]$_).Replace('"', '\"') + '"'
     }) -join ' '
-    foreach ($entry in $Environment.GetEnumerator()) {
-        $start.EnvironmentVariables[$entry.Key] = [string]$entry.Value
-    }
     $process = [Diagnostics.Process]::Start($start)
+    if ($Role -eq 'runtime') { $script:RuntimeProcessStarts++ }
     $stdout = $process.StandardOutput.ReadToEndAsync()
     $stderr = $process.StandardError.ReadToEndAsync()
     $finished = $process.WaitForExit($TimeoutSeconds * 1000)
     if (-not $finished) {
-        & taskkill.exe /PID $process.Id /T /F *> $null
+        if ($IsLinux -or $IsMacOS) {
+            & kill -TERM $process.Id 2>$null
+        } else {
+            & taskkill.exe /PID $process.Id /T /F *> $null
+        }
         $process.WaitForExit()
     }
     return [pscustomobject]@{
@@ -159,65 +128,289 @@ function Invoke-BudgetedProcess {
     }
 }
 
-if ($SelfTest) {
-    $partial = [pscustomobject]@{
-        state = 'partial'
-        failure_category = 'none'
-        analysis = [pscustomobject]@{
-            functions = 12
-            analyzed_instruction_bytes = 128
+function Get-ManifestInputPath {
+    param([string]$ManifestPath)
+    $text = Get-Content -LiteralPath $ManifestPath -Raw
+    $format = [regex]::Matches($text, '(?m)^\s*input\.format\s*=\s*([^\r\n]+?)\s*$')
+    $input = [regex]::Matches($text, '(?m)^\s*input\.path\s*=\s*([^\r\n]+?)\s*$')
+    if ($format.Count -ne 1 -or $format[0].Groups[1].Value.Trim() -ne 'gdi') {
+        throw 'Privates Manifest muss genau ein input.format = gdi enthalten.'
+    }
+    if ($input.Count -ne 1 -or [string]::IsNullOrWhiteSpace($input[0].Groups[1].Value)) {
+        throw 'Privates Manifest muss genau einen GDI-Eingabepfad enthalten.'
+    }
+    $value = $input[0].Groups[1].Value.Trim()
+    if ([IO.Path]::IsPathRooted($value)) { return [IO.Path]::GetFullPath($value) }
+    return [IO.Path]::GetFullPath((Join-Path (Split-Path -Parent $ManifestPath) $value))
+}
+
+function Assert-ManifestGdiBinding {
+    param([string]$ManifestPath, [string]$GdiPath)
+    $manifestInput = Resolve-PhysicalPath (Get-ManifestInputPath $ManifestPath)
+    $configuredGdi = Resolve-PhysicalPath $GdiPath
+    if (-not $manifestInput.Equals($configuredGdi, [StringComparison]::OrdinalIgnoreCase)) {
+        throw 'Harness-GDI und Manifest-GDI sind nicht dieselbe physische Eingabe.'
+    }
+}
+
+function Get-PortableInventory {
+    param([string]$GeneratedRoot)
+    $inventory = @()
+    foreach ($role in @('code', 'include', 'metadata')) {
+        $root = Join-Path $GeneratedRoot $role
+        if (-not (Test-Path -LiteralPath $root -PathType Container)) {
+            throw "Portables Erzeugnisverzeichnis fehlt: $role"
+        }
+        foreach ($file in @(Get-ChildItem -LiteralPath $root -File -Recurse | Sort-Object FullName)) {
+            if (($file.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+                throw 'Portable Erzeugnisse duerfen keine Reparse Points enthalten.'
+            }
+            $relative = $file.FullName.Substring(
+                [IO.Path]::GetFullPath($GeneratedRoot).TrimEnd('\', '/').Length).TrimStart('\', '/')
+            $inventory += [pscustomobject]@{
+                path = $relative.Replace('\', '/')
+                hash = (Get-FileHash -LiteralPath $file.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+            }
         }
     }
-    if ((Select-Checkpoint $partial '') -ne 'SA_ANALYSIS_CONTINUES' -or
-        (Select-FailureClass $partial $false $null) -ne 'analysis-incomplete') {
-        throw 'Synthetische partielle Analyseklassifikation ist falsch.'
+    if ($inventory.Count -eq 0) { throw 'Portables Erzeugnisinventar ist leer.' }
+    return @($inventory | Sort-Object path)
+}
+
+function Test-SameInventory {
+    param([object[]]$Left, [object[]]$Right)
+    if ($Left.Count -ne $Right.Count) { return $false }
+    for ($index = 0; $index -lt $Left.Count; $index++) {
+        if ($Left[$index].path -cne $Right[$index].path -or
+            $Left[$index].hash -cne $Right[$index].hash) {
+            return $false
+        }
     }
-    $runtime = "SA_MAIN_ENTERED`nSA_FIRST_FRAME frames=1`n"
-    if ((Select-Checkpoint $partial $runtime) -ne 'SA_FIRST_FRAME') {
-        throw 'Checkpointordnung ist nicht monoton.'
+    return $true
+}
+
+function Invoke-BuildJob {
+    param(
+        [string]$Cli,
+        [string]$Manifest,
+        [string]$Output,
+        [int]$TimeoutSeconds,
+        [string]$ExecutionMode
+    )
+    if (Test-Path -LiteralPath $Output) {
+        throw 'Frisches Build-only-Jobziel existiert bereits.'
     }
-    foreach ($invalid in @(
-        "SA_FIRST_FRAME`n",
-        "SA_MAIN_ENTERED`nSA_MAIN_ENTERED`n",
-        "SA_FIRST_FRAME`nSA_MAIN_ENTERED`n"
-    )) {
-        try { [void](Select-Checkpoint $partial $invalid); throw 'ungueltig-akzeptiert' }
-        catch { if ($_.Exception.Message -eq 'ungueltig-akzeptiert') { throw 'Ungueltige Checkpointfolge wurde akzeptiert.' } }
+    $process = Invoke-BudgetedProcess $ExecutionMode 'tool' $Cli `
+        @('workflow', 'build', $Manifest, '--output', $Output) $TimeoutSeconds
+    $job = $null
+    if (-not [string]::IsNullOrWhiteSpace($process.stdout)) {
+        try { $job = $process.stdout | ConvertFrom-Json }
+        catch { $job = $null }
     }
-    if ($null -ne (Select-SilentFailures '') -or
-        (Select-SilentFailures 'KATANA_RUNTIME_METRICS silent_failures=2') -ne 2) {
-        throw 'silent_failures wird erfunden oder nicht aus dem Runtimevertrag gelesen.'
+    return [pscustomobject]@{ process = $process; job = $job; output = $Output }
+}
+
+function Get-WorkflowFailureClass {
+    param($Run)
+    if ($null -eq $Run) { return 'not-started' }
+    if ($Run.process.timed_out) { return 'host-time-budget' }
+    if ($null -eq $Run.job) { return 'invalid-job-result' }
+    if ($Run.job.state -eq 'partial') { return 'analysis-incomplete' }
+    if ($Run.job.state -eq 'failed') {
+        switch ($Run.job.failure_category) {
+            'input-output' { return 'input-output' }
+            'build' { return 'host-build' }
+            'code-generation' { return 'code-generation' }
+            default { return 'processing' }
+        }
     }
-    $fakeRoot = Join-Path ([IO.Path]::GetTempPath()) ('katana-retail-path-' + [guid]::NewGuid())
+    if ($Run.process.exit_code -ne 0) { return 'tool-nonzero' }
+    return $null
+}
+
+function Assert-BuildEvidence {
+    param($Run)
+    $failure = Get-WorkflowFailureClass $Run
+    if ($failure) { throw "Build-only-Workflow fehlgeschlagen: $failure" }
+    $job = $Run.job
+    if ($job.kind -ne 'build' -or $job.state -ne 'completed' -or
+        $job.project_identity -notmatch '^[0-9a-fA-F]{64}$') {
+        throw 'Buildjob besitzt keinen gueltigen Abschluss oder keine portable Identitaet.'
+    }
+    if ($null -eq $job.analysis -or -not [bool]$job.analysis.control_flow_complete -or
+        [uint64]$job.analysis.unresolved_control_flow -ne 0 -or
+        [uint64]$job.analysis.guarded_partial_control_flow -ne 0 -or
+        [uint64]$job.analysis.unknown_instructions -ne 0) {
+        throw 'Buildjob besitzt keine vollstaendige Kontrollflussabdeckung.'
+    }
+    foreach ($checkpoint in @('analysis-complete', 'codegen-complete', 'host-build-complete')) {
+        if (@($job.checkpoints | Where-Object { $_ -eq $checkpoint }).Count -ne 1) {
+            throw "Buildjob besitzt keinen eindeutigen Checkpoint: $checkpoint"
+        }
+    }
+    if (@($job.checkpoints | Where-Object { $_ -like 'run-*' }).Count -ne 0) {
+        throw 'Build-only-Job enthaelt einen Runtimecheckpoint.'
+    }
+    $executables = @($job.artifacts | Where-Object { $_.role -eq 'host-executable' })
+    if ($executables.Count -ne 1 -or $executables[0].path -notin @('game.exe', 'game') -or
+        $executables[0].sha256 -notmatch '^[0-9a-fA-F]{64}$') {
+        throw 'Aktuelles Host-Executable-Artefakt fehlt oder ist nicht eindeutig.'
+    }
+    $executable = Join-Path $Run.output ([string]$executables[0].path)
+    if (-not (Test-Path -LiteralPath $executable -PathType Leaf)) {
+        throw 'Gemeldetes Host-Executable fehlt im aktuellen Jobziel.'
+    }
+    $actualExecutableHash =
+        (Get-FileHash -LiteralPath $executable -Algorithm SHA256).Hash.ToLowerInvariant()
+    if ($actualExecutableHash -cne ([string]$executables[0].sha256).ToLowerInvariant()) {
+        throw 'Host-Executable stimmt nicht mit dem aktuellen Jobartefakt ueberein.'
+    }
+    $jobResultPath = Join-Path $Run.output 'job-result.json'
+    $portMetadataPath = Join-Path $Run.output `
+        'sourcecode\generated\metadata\port-project.json'
+    $resultIndexPath = Join-Path $Run.output 'result-index.json'
+    $buildPlanPath = Join-Path $Run.output 'build-plan.json'
+    foreach ($path in @($jobResultPath, $portMetadataPath, $resultIndexPath, $buildPlanPath)) {
+        if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
+            throw 'Identitaets- oder Buildvertragsartefakt fehlt im aktuellen Job.'
+        }
+    }
+    $jobResult = Get-Content -LiteralPath $jobResultPath -Raw | ConvertFrom-Json
+    $portMetadata = Get-Content -LiteralPath $portMetadataPath -Raw | ConvertFrom-Json
+    $resultIndex = Get-Content -LiteralPath $resultIndexPath -Raw | ConvertFrom-Json
+    $buildPlan = Get-Content -LiteralPath $buildPlanPath -Raw | ConvertFrom-Json
+    if ($jobResult.project_identity -cne $job.project_identity -or
+        $portMetadata.project_identity -cne $job.project_identity -or
+        $resultIndex.project_identity -cne $job.project_identity) {
+        throw 'Manifest, GDI, Portmetadaten und aktueller Job verlieren ihre Identitaetsbindung.'
+    }
+    if ($buildPlan.status -ne 'built' -or -not [bool]$buildPlan.host_compilation -or
+        [bool]$buildPlan.native_execution) {
+        throw 'Buildplan verletzt den Build-only-Vertrag.'
+    }
+    $generatedRoot = Join-Path $Run.output 'sourcecode\generated'
+    return [pscustomobject]@{
+        identity = [string]$job.project_identity
+        analysis = $job.analysis
+        executable_verified = $true
+        inventory = @(Get-PortableInventory $generatedRoot)
+    }
+}
+
+function Assert-RedactedReport {
+    param([string]$Json)
+    $privatePattern = '(?i)([A-Z]:\\|/home/|/tmp/|\.gdi|sha256|project_identity\s*":\s*")'
+    if ($Json -match $privatePattern) {
+        throw 'Build-only-Bericht enthaelt private Pfade, Hashes oder Eingabeidentitaeten.'
+    }
+}
+
+function Write-AtomicReport {
+    param([string]$Path, $Report)
+    $directory = Split-Path -Parent $Path
+    New-Item -ItemType Directory -Path $directory -Force | Out-Null
+    $json = $Report | ConvertTo-Json -Depth 6
+    Assert-RedactedReport $json
+    $temporary = Join-Path $directory ('.' + (Split-Path -Leaf $Path) + '.' +
+        [guid]::NewGuid().ToString('N') + '.tmp')
+    try {
+        Set-Content -LiteralPath $temporary -Value $json -Encoding utf8
+        if (Test-Path -LiteralPath $Path -PathType Leaf) {
+            [IO.File]::Replace($temporary, $Path, $null)
+        } else {
+            [IO.File]::Move($temporary, $Path)
+        }
+    } finally {
+        if (Test-Path -LiteralPath $temporary) {
+            Remove-Item -LiteralPath $temporary -Force
+        }
+    }
+    return ($Report | ConvertTo-Json -Depth 6 -Compress)
+}
+
+if ($SelfTest) {
+    Assert-BuildOnlyProcessAllowed 'build-only' 'tool'
+    try {
+        Assert-BuildOnlyProcessAllowed 'build-only' 'runtime'
+        throw 'runtime-akzeptiert'
+    } catch {
+        if ($_.Exception.Message -eq 'runtime-akzeptiert') {
+            throw 'Build-only akzeptiert einen Runtimeprozess.'
+        }
+    }
+    if ($script:RuntimeProcessStarts -ne 0) {
+        throw 'Build-only-Prozesspolicy erfasste einen Runtimeprozess.'
+    }
+    $fakeRoot = Join-Path ([IO.Path]::GetTempPath()) ('katana-build-only-' + [guid]::NewGuid())
     $fakeRepo = Join-Path $fakeRoot 'repo'
     $outside = Join-Path $fakeRoot 'outside'
-    New-Item -ItemType Directory -Path $fakeRepo,$outside -Force | Out-Null
+    New-Item -ItemType Directory -Path $fakeRepo, $outside -Force | Out-Null
     try {
-        try { [void](Assert-OutsideRepository $fakeRepo $fakeRepo); throw 'root-akzeptiert' }
-        catch { if ($_.Exception.Message -eq 'root-akzeptiert') { throw 'Repositorywurzel wurde als privater Pfad akzeptiert.' } }
-        $insideConfig = Join-Path $fakeRepo 'retail-config.json'
-        Set-Content $insideConfig '{}' -Encoding utf8
-        try { [void](Assert-OutsideRepository $insideConfig $fakeRepo); throw 'config-akzeptiert' }
-        catch { if ($_.Exception.Message -eq 'config-akzeptiert') { throw 'Konfiguration im Repository wurde akzeptiert.' } }
+        try {
+            [void](Assert-OutsideRepository $fakeRepo $fakeRepo)
+            throw 'root-akzeptiert'
+        } catch {
+            if ($_.Exception.Message -eq 'root-akzeptiert') {
+                throw 'Repositorywurzel wurde als privater Pfad akzeptiert.'
+            }
+        }
         $junction = Join-Path $outside 'repo-junction'
         New-Item -ItemType Junction -Path $junction -Target $fakeRepo | Out-Null
-        try { [void](Assert-OutsideRepository (Join-Path $junction 'future.json') $fakeRepo); throw 'junction-akzeptiert' }
-        catch { if ($_.Exception.Message -eq 'junction-akzeptiert') { throw 'Junction/Reparse Point ins Repository wurde akzeptiert.' } }
-        $outwardJunction = Join-Path $fakeRepo 'outside-junction'
-        New-Item -ItemType Junction -Path $outwardJunction -Target $outside | Out-Null
-        try { [void](Assert-OutsideRepository (Join-Path $outwardJunction 'future.json') $fakeRepo); throw 'outward-akzeptiert' }
-        catch { if ($_.Exception.Message -eq 'outward-akzeptiert') { throw 'Junction/Reparse Point aus dem Repository wurde akzeptiert.' } }
-    } finally { Remove-Item -LiteralPath $fakeRoot -Recurse -Force }
-    $serialized = [ordered]@{
-        schema = 'katana-private-retail-debug'
-        version = 1
-        checkpoint = 'SA_FIRST_FRAME'
-        failure_class = $null
-    } | ConvertTo-Json -Compress
-    $privatePattern = '(?i)([A-Z]:\\|' + '/' + 'home/|' + '/' +
-                      'tmp/|sha256|\.gdi)'
-    if ($serialized -match $privatePattern) {
-        throw 'Synthetischer Bericht enthaelt private Felder.'
+        try {
+            [void](Assert-OutsideRepository (Join-Path $junction 'future.json') $fakeRepo)
+            throw 'junction-akzeptiert'
+        } catch {
+            if ($_.Exception.Message -eq 'junction-akzeptiert') {
+                throw 'Junction ins Repository wurde akzeptiert.'
+            }
+        }
+        $stale = Join-Path $outside 'game.exe'
+        Set-Content -LiteralPath $stale -Value 'stale executable must not start' -Encoding ascii
+        try {
+            [void](Invoke-BudgetedProcess 'build-only' 'runtime' $stale @() 1)
+            throw 'stale-akzeptiert'
+        } catch {
+            if ($_.Exception.Message -eq 'stale-akzeptiert') {
+                throw 'Stale game.exe konnte den Build-only-Prozessschutz umgehen.'
+            }
+            if ($_.Exception.Message -ne 'Build-only verbietet Runtimeprozesse vor Process.Start.') {
+                throw
+            }
+        }
+        $generatedA = Join-Path $outside 'a'
+        $generatedB = Join-Path $outside 'b'
+        foreach ($generated in @($generatedA, $generatedB)) {
+            foreach ($role in @('code', 'include', 'metadata')) {
+                New-Item -ItemType Directory -Path (Join-Path $generated $role) -Force | Out-Null
+                Set-Content -LiteralPath (Join-Path $generated "$role\fixture.txt") `
+                    -Value "portable-$role" -Encoding ascii
+            }
+        }
+        if (-not (Test-SameInventory (Get-PortableInventory $generatedA) `
+                                     (Get-PortableInventory $generatedB))) {
+            throw 'Bytegleiche portable Inventare werden als verschieden gemeldet.'
+        }
+        Set-Content -LiteralPath (Join-Path $generatedB 'code\fixture.txt') `
+            -Value 'changed' -Encoding ascii
+        if (Test-SameInventory (Get-PortableInventory $generatedA) `
+                               (Get-PortableInventory $generatedB)) {
+            throw 'Abweichendes portables Inventar wurde akzeptiert.'
+        }
+        $reportPath = Join-Path $outside 'report.json'
+        $synthetic = [ordered]@{
+            schema = 'katana-private-retail-build'
+            version = 1
+            execution_mode = 'build-only'
+            checkpoint = 'SA_ANALYSIS_CONTINUES'
+            identity_consistent = $true
+            game_executable_started = $false
+        }
+        [void](Write-AtomicReport $reportPath $synthetic)
+        if (-not (Test-Path -LiteralPath $reportPath -PathType Leaf)) {
+            throw 'Atomarer synthetischer Bericht fehlt.'
+        }
+    } finally {
+        Remove-Item -LiteralPath $fakeRoot -Recurse -Force
     }
     Write-Output 'KR_PHASE11_PRIVATE_RETAIL_HARNESS_SUCCESS'
     exit 0
@@ -229,12 +422,16 @@ if ([string]::IsNullOrWhiteSpace($Config)) {
 $repositoryRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..'))
 $configPath = Assert-OutsideRepository $Config $repositoryRoot
 $settings = Get-Content -LiteralPath $configPath -Raw | ConvertFrom-Json
-if ($settings.schema -ne 'katana-private-retail-debug-config' -or $settings.version -ne 1) {
-    throw 'Unbekannter privater Debugkonfigurationsvertrag.'
+$allowedFields = @(
+    'execution_mode', 'gdi_path', 'host_timeout_seconds', 'manifest_path',
+    'output_root', 'report_path', 'schema', 'version')
+$actualFields = @($settings.PSObject.Properties.Name | Sort-Object)
+if (($actualFields -join ',') -cne (($allowedFields | Sort-Object) -join ',')) {
+    throw 'Private Build-only-Konfiguration besitzt fehlende oder unbekannte Felder.'
 }
-foreach ($field in @('manifest_path', 'gdi_path', 'output_root', 'report_path',
-                      'host_timeout_seconds', 'guest_cycle_budget')) {
-    if ($null -eq $settings.$field) { throw "Konfigurationsfeld fehlt: $field" }
+if ($settings.schema -ne 'katana-private-retail-debug-config' -or
+    [int]$settings.version -ne 2 -or [string]$settings.execution_mode -ne $buildOnlyMode) {
+    throw 'Privater Harness verlangt Configversion 2 und execution_mode=build-only.'
 }
 $manifest = Assert-OutsideRepository ([string]$settings.manifest_path) $repositoryRoot
 $gdi = Assert-OutsideRepository ([string]$settings.gdi_path) $repositoryRoot
@@ -244,70 +441,110 @@ if (-not (Test-Path -LiteralPath $manifest -PathType Leaf) -or
     -not (Test-Path -LiteralPath $gdi -PathType Leaf)) {
     throw 'Privates Manifest oder GDI fehlt.'
 }
-$timeout = [Math]::Max(1, [int]$settings.host_timeout_seconds)
-$guestBudget = [Math]::Max(1, [uint64]$settings.guest_cycle_budget)
+$timeout = [int]$settings.host_timeout_seconds
+if ($timeout -le 0) { throw 'host_timeout_seconds muss positiv sein.' }
+Assert-ManifestGdiBinding $manifest $gdi
 $cli = Join-Path $repositoryRoot 'build-current\katana-recomp.exe'
 if (-not (Test-Path -LiteralPath $cli -PathType Leaf)) {
-    throw 'Debug-CLI fehlt; zuerst build-current erzeugen.'
+    throw 'Gate-CLI fehlt; zuerst build-current erzeugen.'
 }
-$workflow = Invoke-BudgetedProcess $cli @('workflow', 'build', $manifest, '--output', $outputRoot) `
-    $timeout
-$job = $null
-if (-not [string]::IsNullOrWhiteSpace($workflow.stdout)) {
-    $job = $workflow.stdout | ConvertFrom-Json
+New-Item -ItemType Directory -Path $outputRoot -Force | Out-Null
+$runToken = [guid]::NewGuid().ToString('N')
+$firstOutput = Join-Path $outputRoot ("job-$runToken-a")
+$secondOutput = Join-Path $outputRoot ("job-$runToken-b")
+$firstRun = $null
+$secondRun = $null
+$firstEvidence = $null
+$secondEvidence = $null
+$failure = $null
+$completedBuilds = 0
+$identityConsistent = $false
+$portableMetadataEqual = $false
+$generatedSourcesEqual = $false
+$executablesVerified = $false
+try {
+    $firstRun = Invoke-BuildJob $cli $manifest $firstOutput $timeout $buildOnlyMode
+    $failure = Get-WorkflowFailureClass $firstRun
+    if ($failure) { throw 'erster-build-fehlgeschlagen' }
+    $firstEvidence = Assert-BuildEvidence $firstRun
+    $completedBuilds++
+    $secondRun = Invoke-BuildJob $cli $manifest $secondOutput $timeout $buildOnlyMode
+    $failure = Get-WorkflowFailureClass $secondRun
+    if ($failure) { throw 'zweiter-build-fehlgeschlagen' }
+    $secondEvidence = Assert-BuildEvidence $secondRun
+    $completedBuilds++
+    if ($firstEvidence.identity -cne $secondEvidence.identity) {
+        $failure = 'identity-mismatch'
+        throw 'identitaet-abweichend'
+    }
+    $identityConsistent = $true
+    $firstMetadata = @($firstEvidence.inventory | Where-Object { $_.path -like 'metadata/*' })
+    $secondMetadata = @($secondEvidence.inventory | Where-Object { $_.path -like 'metadata/*' })
+    $firstSources = @($firstEvidence.inventory | Where-Object { $_.path -notlike 'metadata/*' })
+    $secondSources = @($secondEvidence.inventory | Where-Object { $_.path -notlike 'metadata/*' })
+    $portableMetadataEqual = Test-SameInventory $firstMetadata $secondMetadata
+    if (-not $portableMetadataEqual) {
+        $failure = 'portable-metadata-mismatch'
+        throw 'portable-metadaten-abweichend'
+    }
+    $generatedSourcesEqual = Test-SameInventory $firstSources $secondSources
+    if (-not $generatedSourcesEqual) {
+        $failure = 'generated-sources-mismatch'
+        throw 'generierte-quellen-abweichend'
+    }
+    $executablesVerified = [bool]($firstEvidence.executable_verified -and
+                                  $secondEvidence.executable_verified)
+} catch {
+    if (-not $failure) { $failure = 'build-evidence-failed' }
 }
-if ($null -eq $job) {
-    $job = [pscustomobject]@{ state = 'failed'; failure_category = 'processing'; analysis = $null }
+if ($script:RuntimeProcessStarts -ne 0 -and -not $failure) {
+    $failure = 'runtime-process-started'
 }
-$runtimeOutput = ''
-$runtimeExit = $null
-$runtimeTimedOut = $false
-$runtimeStarted = $false
-$game = Join-Path $outputRoot 'game.exe'
-if ($job.state -eq 'completed' -and (Test-Path -LiteralPath $game -PathType Leaf)) {
-    $runtime = Invoke-BudgetedProcess $game @($gdi) $timeout `
-        @{ KATANA_GUEST_CYCLE_BUDGET = $guestBudget }
-    $runtimeOutput = $runtime.stdout + $runtime.stderr
-    $runtimeStarted = $runtime.process_started
-    $runtimeExit = $runtime.exit_code
-    $runtimeTimedOut = $runtime.timed_out
-}
-$timedOut = $workflow.timed_out -or $runtimeTimedOut
-$checkpoint = Select-Checkpoint $job $runtimeOutput
-$silentFailures = Select-SilentFailures $runtimeOutput
-$failure = Select-FailureClass $job $timedOut $runtimeExit $silentFailures
-$analysis = $job.analysis
+$success = $null -eq $failure -and $completedBuilds -eq 2 -and $identityConsistent -and
+    $portableMetadataEqual -and $generatedSourcesEqual -and $executablesVerified -and
+    $script:RuntimeProcessStarts -eq 0
+$analysis = if ($secondEvidence) { $secondEvidence.analysis }
+            elseif ($firstEvidence) { $firstEvidence.analysis }
+            else { $null }
 $report = [ordered]@{
-    schema = 'katana-private-retail-debug'
+    schema = 'katana-private-retail-build'
     version = 1
-    checkpoint = $checkpoint
+    config_version = 2
+    execution_mode = $buildOnlyMode
+    status = if ($success) { 'success' } else { 'failed' }
+    checkpoint = if ($analysis) { 'SA_ANALYSIS_CONTINUES' } else { 'SA_NOT_REACHED' }
+    identity_consistent = $identityConsistent
     analysis = [ordered]@{
-        boot_bytes = if ($analysis) { [uint64]$analysis.committed_executable_bytes } else { 0 }
+        committed_executable_bytes = if ($analysis) {
+            [uint64]$analysis.committed_executable_bytes
+        } else { 0 }
         instructions = if ($analysis) { [uint64]$analysis.instructions } else { 0 }
         functions = if ($analysis) { [uint64]$analysis.functions } else { 0 }
-        unresolved_control_flow = if ($analysis) { [uint64]$analysis.unresolved_control_flow } else { 0 }
+        guarded_partial_control_flow = if ($analysis) {
+            [uint64]$analysis.guarded_partial_control_flow
+        } else { 0 }
+        runtime_only_control_flow = if ($analysis) {
+            [uint64]$analysis.runtime_only_control_flow
+        } else { 0 }
+        unresolved_control_flow = if ($analysis) {
+            [uint64]$analysis.unresolved_control_flow
+        } else { 0 }
         coverage_complete = if ($analysis) { [bool]$analysis.control_flow_complete } else { $false }
     }
-    runtime = [ordered]@{
-        game_executable_started = $runtimeStarted
-        main_executable_entered = [array]::IndexOf($checkpointOrder, $checkpoint) -ge 2
-        frames_presented = if ($runtimeOutput -match 'frames=(\d+)') { [uint64]$Matches[1] } else { 0 }
-        input_events_consumed = if ($runtimeOutput -match 'input_events=(\d+)') { [uint64]$Matches[1] } else { 0 }
-        guest_cycles = if ($runtimeOutput -match 'guest_cycles=(\d+)') { [uint64]$Matches[1] } else { 0 }
-        scheduler_events = if ($runtimeOutput -match 'scheduler_events=(\d+)') { [uint64]$Matches[1] } else { 0 }
-        gdrom_completions = if ($runtimeOutput -match 'gdrom_completions=(\d+)') { [uint64]$Matches[1] } else { 0 }
-        dma_events = if ($runtimeOutput -match 'dma_events=(\d+)') { [uint64]$Matches[1] } else { 0 }
-        interrupts_delivered = if ($runtimeOutput -match 'interrupts=(\d+)') { [uint64]$Matches[1] } else { 0 }
-        indirect_dispatches = if ($runtimeOutput -match 'indirect_dispatches=(\d+)') { [uint64]$Matches[1] } else { 0 }
-        fallbacks = if ($runtimeOutput -match 'fallbacks=(\d+)') { [uint64]$Matches[1] } else { 0 }
-        silent_failures = $silentFailures
+    reproducibility = [ordered]@{
+        builds_requested = 2
+        builds_completed = $completedBuilds
+        portable_metadata_equal = $portableMetadataEqual
+        generated_sources_equal = $generatedSourcesEqual
+    }
+    build = [ordered]@{
+        host_compilation_complete = [bool]($completedBuilds -eq 2)
+        current_executable_verified = $executablesVerified
+        game_executable_started = $false
+        runtime_processes_started = $script:RuntimeProcessStarts
     }
     failure_class = $failure
-    budget_exhausted = $timedOut
-    configured_guest_cycle_budget = $guestBudget
 }
-$reportDirectory = Split-Path -Parent $reportPath
-New-Item -ItemType Directory -Path $reportDirectory -Force | Out-Null
-$report | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $reportPath -Encoding utf8
-Write-Output ($report | ConvertTo-Json -Depth 5 -Compress)
-if ($failure) { exit 5 }
+$serialized = Write-AtomicReport $reportPath $report
+Write-Output $serialized
+if (-not $success) { exit 5 }

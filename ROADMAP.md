@@ -82,7 +82,7 @@ nicht gestartet werden.
 - [x] `KR-4716` - ABI-erhaltene Callbacks, Parameter und Stackwerte
 - [x] `KR-4717` - Objekt-, Feld- und VTable-Points-to
 - [x] `KR-4718` - expliziter Runtime-only-Dispatch
-- [ ] `KR-4719` - privater Retail-Buildnachweis mit erzwungenem Build-only-Modus
+- [x] `KR-4719` - privater Retail-Buildnachweis mit erzwungenem Build-only-Modus
 - [ ] `KR-4703` - VMU-/Flash-Arbeitskopien und Host-Pacing
 - [ ] `KR-4704` - v0.47 Gate-Vorbereitung
 - [ ] `KR-4705` - v0.47 interne Freigabe

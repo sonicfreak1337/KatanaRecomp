@@ -512,7 +512,7 @@ und den ersten Fehler. Runtime-ABI 12, Backend-Interface-ABI 2 und
 Portprojektvertrag 4 versionieren die Erweiterung. Vertrag und Gatefaelle
 stehen in `RUNTIME_ONLY_DISPATCH.md`.
 
-### [ ] KR-4719 - Privater Retail-Buildnachweis mit erzwungenem Build-only-Modus
+### [x] KR-4719 - Privater Retail-Buildnachweis mit erzwungenem Build-only-Modus
 
 Abhaengigkeiten: KR-4718
 Prioritaet: P0
@@ -536,6 +536,17 @@ Akzeptanz:
 - `game_executable_started == false`
 - kein Runtimeprozess kann aus diesem Modus erzeugt werden
 - kein Checkpoint hoeher als `SA_ANALYSIS_CONTINUES` wird ausgegeben
+
+Umgesetzt mit Configversion 2 und dem einzigen zugelassenen Modus
+`build-only`. Der rollenbewusste Prozessstarter weist Runtimeprozesse vor
+`Process.Start` ab. Zwei vorher nicht vorhandene Jobziele durchlaufen den
+offiziellen Buildworkflow; Manifest-GDI, Jobresultat, Resultindex,
+Portmetadaten und aktuelles Executable werden intern an dieselbe Identitaet
+gebunden. Portable Metadaten und generierte Quellen muessen bytegleich sein.
+Der atomare `katana-private-retail-build`-Bericht enthaelt nur Aggregate und
+weist Prozessstart sowie maximale Checkpointstufe explizit aus. Vertrag,
+Selbsttest und die bei KR-4704 auszufuehrende private Gatewiederholung stehen
+in `PRIVATE_RETAIL_DEBUG.md`.
 
 ### [ ] KR-4703 - VMU-/Flash-Arbeitskopien und Host-Pacing
 

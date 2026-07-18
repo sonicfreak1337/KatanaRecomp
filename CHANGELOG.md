@@ -4,6 +4,12 @@
 
 ### Geaendert
 
+- KR-4719: Der private Retail-Harness verlangt Configversion 2 und
+  `execution_mode=build-only`. Runtimeprozesse werden vor `Process.Start`
+  technisch abgewiesen. Zwei frische offizielle Buildjobs muessen Identitaet,
+  Kontrollflussabdeckung, aktuelles Executable sowie bytegleiche portable
+  Metadaten und Quellen nachweisen; der atomare Bericht enthaelt nur Aggregate
+  und kann keinen Checkpoint ueber `SA_ANALYSIS_CONTINUES` ausgeben.
 - KR-4718: Kontrollflussklassen werden bis in IR, Codeausgabe und Portadapter
   getragen. Echte Runtime-only-Quellen dispatchen nur auf validierte aktive
   Blockanfaenge; Misses stoppen sichtbar. Gesamt- und Runtime-only-Zaehler fuer
