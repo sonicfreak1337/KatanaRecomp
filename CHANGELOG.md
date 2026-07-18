@@ -4,6 +4,12 @@
 
 ### Geaendert
 
+- KR-4625-Nacharbeit: Gebuendelte Writes lesen Write-only-MMIO nicht vorab und
+  invalidieren nichtlineare Geraete pessimistisch. Das erzeugte Ninja-Projekt
+  baut Runtime-Includes und den generierten Buildvertrag mit der von CMake
+  erkannten Hosttoolchain wirklich. Das Gate wiederholt nur klassifizierte
+  Windows-Linkerausgabesperren und berichtet alle Versuche samt Exitcode und
+  Grund.
 - KR-4715: Kontrollflussberichte unterscheiden `resolved`,
   `guarded_complete`, `guarded_partial`, `runtime_only` und `unresolved` sowie
   sieben typisierte Herkunftsklassen. Ein adressfreier Aggregatbericht ist von

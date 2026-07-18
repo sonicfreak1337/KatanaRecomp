@@ -385,6 +385,12 @@ instrumentierten Hotpath-, Deltaanalyse-, 10k/50k/100k-Codegen-, Disc-I/O-
 und Paket-/Buildvertraege halten ihre Budgets. Der maschinenlesbare Bericht
 wird lokal und durch den Windows-CI-Buildgate als Artifact erzeugt.
 
+Die Gate-Nacharbeit erhaelt Write-only-MMIO im gebuendelten Schreibpfad,
+fuehrt das erzeugte Ninja-Projekt mit Runtime-Includes und Buildvertrag frisch
+aus und beschraenkt Buildwiederholungen auf klassifizierte
+`LNK1104`-/`LNK1168`-Ausgabesperren. Tatsaechliche Versuche, Exitcodes und
+Retrygruende werden im JSON-Bericht gespeichert.
+
 ## Stufe C: Retail-Kontrollfluss und Build
 
 ### [x] KR-4715 - Ungeloeste Kontrollflussfront inventarisieren

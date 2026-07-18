@@ -130,6 +130,10 @@ std::string cmake_project(const std::vector<std::filesystem::path>& sources) {
     output << "cmake_minimum_required(VERSION 3.25)\n"
            << "project(KatanaGenerated LANGUAGES CXX)\n"
            << "set(KATANA_RUNTIME_ROOT \"\" CACHE PATH \"KatanaRecomp source root\")\n"
+           << "if(KATANA_RUNTIME_ROOT STREQUAL \"\" AND NOT \"$ENV{KATANA_RUNTIME_ROOT}\" "
+              "STREQUAL \"\")\n"
+           << "  file(TO_CMAKE_PATH \"$ENV{KATANA_RUNTIME_ROOT}\" KATANA_RUNTIME_ROOT)\n"
+           << "endif()\n"
            << "if(KATANA_RUNTIME_ROOT STREQUAL \"\")\n"
            << "  message(FATAL_ERROR \"Set KATANA_RUNTIME_ROOT\")\n"
            << "endif()\n"
@@ -148,26 +152,34 @@ std::string cmake_project(const std::vector<std::filesystem::path>& sources) {
            << "target_include_directories(katana_generated PRIVATE\n"
            << "  \"${KATANA_RUNTIME_ROOT}/include\"\n"
            << "  \"${CMAKE_CURRENT_BINARY_DIR}/generated/include\"\n"
-           << ")\n";
+           << ")\n"
+           << "if(KATANA_NINJA_STANDALONE)\n"
+           << "  set_target_properties(katana_generated PROPERTIES\n"
+           << "    ARCHIVE_OUTPUT_DIRECTORY \"${CMAKE_CURRENT_SOURCE_DIR}\"\n"
+           << "    PREFIX \"lib\"\n"
+           << "    SUFFIX \".a\"\n"
+           << "  )\n"
+           << "endif()\n";
     return output.str();
 }
 
 std::string ninja_project(const std::vector<std::filesystem::path>& sources) {
     std::ostringstream output;
-    output << "cxx = c++\n"
-           << "rule cxx\n  command = $cxx -std=c++20 -c $in -o $out\n"
-           << "rule archive\n  command = ar rcs $out $in\n";
-    std::vector<std::string> objects;
-    for (std::size_t index = 0u; index < sources.size(); ++index) {
-        const auto object = "obj/unit-" + std::to_string(index) + ".o";
-        objects.push_back(object);
-        output << "build " << object << ": cxx " << sources[index].generic_string() << '\n';
-    }
-    output << "build libkatana_generated.a: archive";
-    for (const auto& object : objects) {
-        output << ' ' << object;
-    }
-    output << "\ndefault libkatana_generated.a\n";
+    output << "ninja_required_version = 1.10\n"
+           << "rule configure\n"
+           << "  command = cmake -S . -B .ninja-build -G Ninja "
+              "-DKATANA_NINJA_STANDALONE=ON\n"
+           << "  description = Configure Katana generated archive\n"
+           << "  generator = 1\n"
+           << "rule archive\n"
+           << "  command = cmake --build .ninja-build --target katana_generated\n"
+           << "  description = Build Katana generated archive\n"
+           << "build .ninja-build/build.ninja: configure CMakeLists.txt\n"
+           << "build force: phony\n"
+           << "build libkatana_generated.a: archive force";
+    for (const auto& source : sources)
+        output << ' ' << source.generic_string();
+    output << " | .ninja-build/build.ninja\ndefault libkatana_generated.a\n";
     return output.str();
 }
 

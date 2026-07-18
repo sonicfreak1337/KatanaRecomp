@@ -21,6 +21,13 @@ Bytevergleich gelten konservativ als geaendert. Ein `write_bytes`-Commit
 erzeugt eine gemeinsame Codebeobachtung fuer den gesamten Bereich statt einer
 Invalidierung pro Byte.
 
+`write_bytes` loest den gesamten Zielbereich vor dem ersten Write auf und
+prueft den Regionsschutz. Nur lineare, nebenwirkungsfreie Backings werden dabei
+vorher gelesen. MMIO, insbesondere Write-only-Register, wird nie zum Vergleich
+gelesen und meldet pessimistisch `bytes_changed=true`. Scheitert ein
+Geraetehandler erst waehrend des Commits, wird jedes bereits geschriebene
+Praefix vor dem Weiterwerfen noch gemeinsam invalidiert.
+
 Direkte Zugriffe auf `MemoryDevice::write_*` und `writable_bytes()` sind keine
 Gastwrite-API. Sie bleiben auf die Initialisierung eines noch nicht
 beobachteten Backings begrenzt.

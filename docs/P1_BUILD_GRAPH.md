@@ -26,6 +26,15 @@ Runtimebibliothek und das CMake-Paket. `analyzer-sdk` ergaenzt
 `KatanaRecomp::analyzer` und alle Analyseheader. Ein Out-of-Tree-Consumer wird
 als `katana-package-contract-tests` installiert, konfiguriert und gebaut.
 
+Der Projektgenerator liefert neben CMake ein eigenstaendig ausfuehrbares
+`build.ninja`. Es konfiguriert einen isolierten inneren Ninja-Build ueber CMake,
+uebernimmt dadurch den erkannten Hostcompiler und Archiver, erzeugt
+`katana/build_contract.hpp`, setzt beide Runtime-Includepfade und schreibt das
+Archiv deterministisch als `libkatana_generated.a`. `KATANA_RUNTIME_ROOT` kann
+wie beim CMake-Pfad ueber die Umgebung gesetzt werden. Die Regression startet
+Ninja in einem frischen Verzeichnis und kompiliert Quellen, die den erzeugten
+Buildvertrag wirklich inkludieren.
+
 ## Versionen
 
 `VERSION` ist die kanonische Projekt- und Paketversion.
@@ -82,7 +91,10 @@ Das frische Windows-Gate bestand 168 Quality-Debug- und 167
 RelWithDebInfo-Tests. Der zusaetzliche Debugtest prueft die ausgelieferte
 MSVC-ASan-Runtime; beide Profile teilen damit exakt 167 Core-Regressionen.
 Buildparallelitaet 8 vermeidet ungebremste Windows-Linkkonkurrenz und behaelt
-fuer transiente Dateisperren begrenzte Wiederholungen bei. Format-,
+fuer erkannte `LNK1104`-/`LNK1168`-Ausgabesperren begrenzte Wiederholungen bei.
+Andere Buildfehler brechen sofort ab. Der Bericht enthaelt pro Profil die
+tatsaechliche Versuchszahl, jeden Exitcode und den klassifizierten Retrygrund.
+Format-,
 Qualitaetsvertrags-, Referenz- und Lizenzaudit bestanden; private Retaildaten
 wurden nicht verwendet. Die exakten Laufzeiten und der Quellcommit stehen im
 maschinenlesbaren Gatebericht.

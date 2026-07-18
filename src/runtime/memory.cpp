@@ -677,6 +677,7 @@ void Memory::write_bytes(const std::uint32_t address,
         const MappedRegion* mapped{};
         std::uint32_t offset{};
         std::uint8_t previous{};
+        bool comparable = false;
     };
 
     std::vector<PendingByteWrite> pending;
@@ -686,10 +687,10 @@ void Memory::write_bytes(const std::uint32_t address,
         const auto current = address + static_cast<std::uint32_t>(index);
         const auto& mapped = resolve_writable(current, MemoryAccessWidth::Byte);
         const auto offset = region_offset(mapped.info, current);
-        const auto previous = mapped.linear != nullptr ? mapped.linear->read_u8(offset)
-                                                       : mapped.device->read_u8(offset);
-        pending.push_back({&mapped, offset, previous});
-        changed = changed || previous != bytes[index];
+        const bool comparable = mapped.linear != nullptr;
+        const auto previous = comparable ? mapped.linear->read_u8(offset) : 0u;
+        pending.push_back({&mapped, offset, previous, comparable});
+        changed = changed || !comparable || previous != bytes[index];
     }
 
     std::size_t committed = 0u;
@@ -716,14 +717,11 @@ void Memory::write_bytes(const std::uint32_t address,
         }
     } catch (...) {
         if (committed != 0u) {
-            const auto committed_changed =
-                std::mismatch(bytes.begin(),
-                              bytes.begin() + committed,
-                              pending.begin(),
-                              [](const auto expected, const auto& write) {
-                                  return expected == write.previous;
-                              })
-                    .first != bytes.begin() + committed;
+            bool committed_changed = false;
+            for (std::size_t index = 0u; index < committed; ++index) {
+                committed_changed = committed_changed || !pending[index].comparable ||
+                                    pending[index].previous != bytes[index];
+            }
             notify_guest_write({address, committed, source, committed_changed});
         }
         throw;

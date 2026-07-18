@@ -1503,6 +1503,10 @@ add_test(NAME katana-codegen-cache-tests COMMAND katana-codegen-cache-tests)
 
 add_executable(katana-codegen-project-tests tests/codegen/project_tests.cpp)
 target_link_libraries(katana-codegen-project-tests PRIVATE katana_core)
+target_compile_definitions(katana-codegen-project-tests PRIVATE
+    KATANA_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}"
+    KATANA_NINJA_EXECUTABLE="${CMAKE_MAKE_PROGRAM}"
+)
 katana_enable_warnings(katana-codegen-project-tests)
 add_test(NAME katana-codegen-project-tests COMMAND katana-codegen-project-tests)
 

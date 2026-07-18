@@ -84,21 +84,51 @@ function Require-NativeSuccess([string]$description) {
     }
 }
 
-function Invoke-GateBuild([string]$preset, [string]$description) {
-    $exitCode = 0
-    for ($attempt = 1; $attempt -le $maximumBuildAttempts; ++$attempt) {
-        & cmake --build --preset $preset --parallel $parallelism
-        $exitCode = $LASTEXITCODE
-        if ($exitCode -eq 0) {
-            return
-        }
-        if ($attempt -lt $maximumBuildAttempts) {
-            Write-Warning ("$description wird nach transientem Buildfehler erneut versucht " +
-                "($attempt/$maximumBuildAttempts).")
-            Start-Sleep -Milliseconds 750
-        }
+function Get-TransientBuildFailureReason([string]$output) {
+    if ($output -match '(?im)LNK1168:') {
+        return 'windows-link-output-locked-lnk1168'
     }
-    throw "$description fehlgeschlagen: $exitCode"
+    if ($output -match '(?im)LNK1104:[^\r\n]*\.exe(?:["'']|\s|$)') {
+        return 'windows-executable-locked-lnk1104'
+    }
+    return $null
+}
+
+function Invoke-GateBuild([string]$preset, [string]$description) {
+    $records = @()
+    for ($attempt = 1; $attempt -le $maximumBuildAttempts; ++$attempt) {
+        $nativeOutput = @(& cmake --build --preset $preset --parallel $parallelism 2>&1)
+        $exitCode = $LASTEXITCODE
+        foreach ($line in $nativeOutput) {
+            Write-Host $line
+        }
+        $outputText = ($nativeOutput | Out-String)
+        if ($exitCode -eq 0) {
+            $records += [ordered]@{
+                attempt = $attempt
+                exit_code = 0
+                outcome = 'success'
+                retry_reason = $null
+            }
+            return $records
+        }
+        $retryReason = Get-TransientBuildFailureReason $outputText
+        $records += [ordered]@{
+            attempt = $attempt
+            exit_code = $exitCode
+            outcome = if ($null -eq $retryReason) { 'non-transient-failure' } else { 'retry' }
+            retry_reason = $retryReason
+        }
+        if ($null -eq $retryReason) {
+            throw "$description nicht transient fehlgeschlagen: $exitCode"
+        }
+        if ($attempt -ge $maximumBuildAttempts) {
+            throw "$description nach $attempt transienten Versuchen fehlgeschlagen: $exitCode"
+        }
+        Write-Warning ("$description wird nach $retryReason erneut versucht " +
+            "($attempt/$maximumBuildAttempts).")
+        Start-Sleep -Milliseconds 750
+    }
 }
 
 function Get-TestNames {
@@ -113,7 +143,7 @@ try {
     $debugWatch = [Diagnostics.Stopwatch]::StartNew()
     & cmake --preset quality-debug --fresh
     Require-NativeSuccess 'Instrumentierte Debug-Konfiguration'
-    Invoke-GateBuild 'quality-debug' 'Instrumentierter Debug-Build'
+    $debugBuildAttempts = @(Invoke-GateBuild 'quality-debug' 'Instrumentierter Debug-Build')
 
     & powershell.exe -NoProfile -ExecutionPolicy Bypass -File tools\quality\check-format.ps1
     Require-NativeSuccess 'Formatpruefung'
@@ -133,7 +163,7 @@ try {
     $relWatch = [Diagnostics.Stopwatch]::StartNew()
     & cmake --preset relwithdebinfo-gate --fresh
     Require-NativeSuccess 'RelWithDebInfo-Konfiguration'
-    Invoke-GateBuild 'relwithdebinfo-gate' 'RelWithDebInfo-Build'
+    $relBuildAttempts = @(Invoke-GateBuild 'relwithdebinfo-gate' 'RelWithDebInfo-Build')
     $relTests = Get-TestNames
     $configurationSpecificTests = @('katana-phase10-msvc-asan-runtime')
     $debugCoreTests = @($debugTests | Where-Object { $_ -notin $configurationSpecificTests })
@@ -160,6 +190,10 @@ try {
         relwithdebinfo_profile = 'relwithdebinfo-gate'
         build_parallelism = $parallelism
         maximum_build_attempts = $maximumBuildAttempts
+        debug_build_attempt_count = $debugBuildAttempts.Count
+        debug_build_attempts = $debugBuildAttempts
+        relwithdebinfo_build_attempt_count = $relBuildAttempts.Count
+        relwithdebinfo_build_attempts = $relBuildAttempts
         debug_test_count = $debugTests.Count
         relwithdebinfo_test_count = $relTests.Count
         shared_core_test_count = $relCoreTests.Count

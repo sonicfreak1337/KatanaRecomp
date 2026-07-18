@@ -78,7 +78,12 @@ Retaildaten wurden nicht verwendet.
 vollstaendig vor dem Commit. Ein Fehler an einer Regions- oder
 Schreibschutzgrenze veraendert kein Praefix; ein spaeter Geraetefehler meldet
 jeden bereits geschriebenen Bereich noch vor dem Weiterwerfen zur
-Codeinvalidierung. Der lokale JSON-Bericht wird durch einen identischen
+Codeinvalidierung. Write-only-MMIO wird dabei nicht vorgelesen und gilt
+pessimistisch als geaendert. Das erzeugte Ninja-Projekt konfiguriert Runtime-
+Includes, Buildvertrag und Hosttoolchain wirklich und wird in einer frischen
+Regression gebaut. Das Gate wiederholt ausschliesslich erkannte Windows-
+Linkerausgabesperren und protokolliert Versuch, Exitcode und Grund. Der lokale
+JSON-Bericht wird durch einen identischen
 Windows-CI-Buildgate als GitHub-Actions-Artifact unabhaengig nachvollziehbar.
 Damit ist Stufe B abgeschlossen und KR-4715 beginnt.
 

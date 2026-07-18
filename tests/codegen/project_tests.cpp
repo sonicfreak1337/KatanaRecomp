@@ -10,6 +10,13 @@
 
 namespace {
 
+#ifndef KATANA_SOURCE_DIR
+#error "KATANA_SOURCE_DIR muss fuer den frischen Ninja-Build gesetzt sein."
+#endif
+#ifndef KATANA_NINJA_EXECUTABLE
+#error "KATANA_NINJA_EXECUTABLE muss fuer den frischen Ninja-Build gesetzt sein."
+#endif
+
 void require(const bool condition, const std::string& message) {
     if (!condition) {
         std::cerr << "TEST FEHLGESCHLAGEN: " << message << '\n';
@@ -43,6 +50,18 @@ struct Fixture {
     }
 };
 
+std::string shell_quote(const std::filesystem::path& path) {
+    const auto text = path.string();
+#ifdef _WIN32
+    return '"' + text + '"';
+#else
+    std::string quoted = "'";
+    for (const auto character : text)
+        character == '\'' ? quoted += "'\\''" : quoted += character;
+    return quoted + "'";
+#endif
+}
+
 } // namespace
 
 int main() {
@@ -52,9 +71,13 @@ int main() {
     const auto key = make_codegen_cache_key(
         {"input", "ir", "opt", "cpp", 1u, 8u, "manifest", "overrides", 2u, 1u, "0.34.0-dev"});
     const std::vector<ProjectArtifact> artifacts = {
-        {"code/unit-00001.cpp", "int unit_1() { return 1; }\n"},
+        {"code/unit-00001.cpp",
+         "#include <katana/build_contract.hpp>\n"
+         "int unit_1() { return katana::build_contract::runtime_abi_version; }\n"},
         {"include/constants.hpp", "#pragma once\ninline constexpr int value = 7;\n"},
-        {"code/unit-00000.cpp", "int unit_0() { return 0; }\n"}};
+        {"code/unit-00000.cpp",
+         "#include <katana/build_contract.hpp>\n"
+         "int unit_0() { return katana::build_contract::block_abi_version; }\n"}};
     const auto serial =
         write_codegen_project(fixture.root / "serial", artifacts, {1u, &cache, key});
     const auto parallel =
@@ -72,6 +95,20 @@ int main() {
                 serial_snapshot.at("compile_commands.json").find("\"directory\":\".\"") !=
                     std::string::npos,
             "CMake-, Ninja- oder Compile-Commands-Integration fehlt.");
+
+#ifdef _WIN32
+    require(_putenv_s("KATANA_RUNTIME_ROOT", KATANA_SOURCE_DIR) == 0,
+            "KATANA_RUNTIME_ROOT konnte fuer Ninja nicht gesetzt werden.");
+#else
+    require(setenv("KATANA_RUNTIME_ROOT", KATANA_SOURCE_DIR, 1) == 0,
+            "KATANA_RUNTIME_ROOT konnte fuer Ninja nicht gesetzt werden.");
+#endif
+    const auto ninja_command =
+        shell_quote(KATANA_NINJA_EXECUTABLE) + " -C " + shell_quote(fixture.root / "serial");
+    require(std::system(ninja_command.c_str()) == 0 &&
+                std::filesystem::is_regular_file(fixture.root / "serial" / "libkatana_generated.a"),
+            "Ein frisches erzeugtes Ninja-Projekt baut Runtime-Includes, Buildvertrag oder "
+            "Archiv nicht eigenstaendig.");
 
     const auto reused = fixture.root / "reused";
     static_cast<void>(write_codegen_project(reused,

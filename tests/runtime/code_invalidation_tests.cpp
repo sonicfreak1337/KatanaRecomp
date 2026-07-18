@@ -122,6 +122,31 @@ int main() {
             "Fehlgeschlagener gebuendelter Write veraendert ein Praefix oder invalidiert "
             "nicht atomar.");
 
+        Memory write_only_memory(0u);
+        std::vector<std::uint8_t> mmio_bytes;
+        auto write_only_mmio = std::make_shared<MmioMemoryDevice>(
+            4u,
+            MmioReadHandler{},
+            [&](const std::uint32_t offset,
+                const std::uint32_t value,
+                const MemoryAccessWidth width) {
+                require(width == MemoryAccessWidth::Byte && offset == mmio_bytes.size(),
+                        "Gebündelter MMIO-Write verlor Bytebreite oder Reihenfolge.");
+                mmio_bytes.push_back(static_cast<std::uint8_t>(value));
+            });
+        write_only_memory.map_region("write-only-mmio", 0x0C020000u, write_only_mmio);
+        std::vector<GuestWriteEvent> mmio_events;
+        write_only_memory.set_guest_write_observer(
+            [&](const auto& event) { mmio_events.push_back(event); });
+        const std::array<std::uint8_t, 4u> mmio_write{0x10u, 0x20u, 0x30u, 0x40u};
+        write_only_memory.write_bytes(0x0C020000u, mmio_write, CodeWriteSource::Fallback);
+        require(mmio_bytes == std::vector<std::uint8_t>(mmio_write.begin(), mmio_write.end()) &&
+                    mmio_events.size() == 1u && mmio_events.front().address == 0x0C020000u &&
+                    mmio_events.front().size == mmio_write.size() &&
+                    mmio_events.front().source == CodeWriteSource::Fallback &&
+                    mmio_events.front().bytes_changed,
+                "Write-only-MMIO wird vorab gelesen oder nicht pessimistisch invalidiert.");
+
         const auto identical = tracker.observe_write(0x8C004000u, 4u, CodeWriteSource::Dma, false);
         require(identical.byte_identical && tracker.valid("c") && identical.changed_pages.empty(),
                 "Nachweislich bytegleicher DMA-Write invalidiert Code.");
