@@ -9,6 +9,8 @@
 
 namespace katana::runtime {
 
+class ExecutableCodeTracker;
+
 using BackendBlockFunction = BlockExit (*)(CpuState&, BlockExecutionContext&);
 
 struct BlockVariantKey {
@@ -46,11 +48,15 @@ class RuntimeBlockTable {
     [[nodiscard]] std::vector<const RuntimeBlock*> aliases(std::uint32_t physical_origin) const;
     [[nodiscard]] std::size_t size() const noexcept;
     [[nodiscard]] bool erase_identity(const std::string& block_identity) noexcept;
+    [[nodiscard]] std::size_t erase_overlapping_physical(std::uint32_t physical_address,
+                                                         std::size_t size) noexcept;
+    void bind_code_tracker(const ExecutableCodeTracker* tracker) noexcept;
     void clear() noexcept;
 
   private:
     void insert(RuntimeBlock block, bool runtime_registered);
     std::vector<RuntimeBlock> blocks_;
+    const ExecutableCodeTracker* code_tracker_ = nullptr;
 };
 
 } // namespace katana::runtime

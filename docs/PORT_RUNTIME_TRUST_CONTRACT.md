@@ -34,7 +34,7 @@ Erfolgsmeldungen ausbleiben.
 
 ## Plattformdienste
 
-Der PlatformServices-ABI Version 3 verwendet die vorhandenen
+Der PlatformServices-ABI Version 4 verwendet die vorhandenen
 Dreamcast-Runtimekomponenten:
 
 - Interrupts werden ueber den Interrupt-Router angenommen.
@@ -43,7 +43,8 @@ Dreamcast-Runtimekomponenten:
 - `PREF` uebertraegt echte Store-Queue-Inhalte unter Beruecksichtigung von
   QACR0/QACR1 und invalidiert ueberdeckten generierten Code.
 - Gastschreibzugriffe und registrierte Codebereiche laufen durch den
-  Executable-Code-Tracker.
+  Executable-Code-Tracker; der Port bindet seine lokale Blocktabelle an dessen
+  Gueltigkeitszustand.
 
 Bewachte Kontrollflusskandidaten sind analysierbar und kompilierbar, aber kein
 statischer Erreichbarkeitsbeweis. Der Bericht weist `resolved`, `guarded` und

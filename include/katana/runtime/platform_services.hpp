@@ -12,7 +12,9 @@
 
 namespace katana::runtime {
 
-inline constexpr std::uint32_t platform_services_abi_version = 3u;
+class ExecutableCodeTracker;
+
+inline constexpr std::uint32_t platform_services_abi_version = 4u;
 
 enum class PlatformCapability : std::uint64_t {
     Memory = 1ull << 0u,
@@ -101,6 +103,9 @@ class PlatformServices {
     virtual void register_executable_block(std::uint32_t,
                                            std::uint32_t,
                                            std::string_view) {}
+    [[nodiscard]] virtual ExecutableCodeTracker* executable_code_tracker() noexcept {
+        return nullptr;
+    }
 };
 
 inline void validate_platform_services(const PlatformServices& services,

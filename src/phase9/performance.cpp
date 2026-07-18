@@ -288,20 +288,31 @@ void GuardedMemoryFastpath::write_u32(const std::uint32_t address,
             break;
         }
     }
+    bool changed = true;
+    if (verified.linear_ram) {
+        const auto position = offset(address);
+        const auto bytes = linear_->bytes();
+        const auto previous = static_cast<std::uint32_t>(bytes[position]) |
+                              (static_cast<std::uint32_t>(bytes[position + 1u]) << 8u) |
+                              (static_cast<std::uint32_t>(bytes[position + 2u]) << 16u) |
+                              (static_cast<std::uint32_t>(bytes[position + 3u]) << 24u);
+        changed = previous != value;
+    }
     const auto outcome = evaluate_fast_memory_guard(verified, true);
     if (profiler_) profiler_->record_guard(outcome);
     if (outcome != GuardOutcome::Hit) {
         ++misses_;
         memory_.write_u32(address, value);
+        if (code_tracker_ != nullptr && !memory_.has_guest_write_observer())
+            static_cast<void>(code_tracker_->observe_write(
+                address, 4u, runtime::CodeWriteSource::Cpu, changed));
         return;
     }
-    const auto position = offset(address);
-    auto bytes = linear_->writable_bytes();
-    for (std::size_t index = 0u; index < 4u; ++index)
-        bytes[position + index] = static_cast<std::uint8_t>(value >> (index * 8u));
-    if (code_tracker_) {
-        static_cast<void>(code_tracker_->observe_write(address, 4u, runtime::CodeWriteSource::Cpu));
-    }
+    static_cast<void>(offset(address));
+    memory_.write_u32(address, value);
+    if (code_tracker_ != nullptr && !memory_.has_guest_write_observer())
+        static_cast<void>(code_tracker_->observe_write(
+            address, 4u, runtime::CodeWriteSource::Cpu, changed));
     ++hits_;
 }
 

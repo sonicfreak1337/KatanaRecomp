@@ -25,6 +25,12 @@
   dokumentiert.
 ### Korrigiert
 
+- KR-4613: CPU-, FPU-, DMA-, Store-Queue-, Copy- und Fallbackwrites verwenden
+  eine gemeinsame beobachtbare `Memory`-Commitgrenze. Lineares RAM wird vor
+  einer Generationsaenderung byteweise verglichen. Geaenderte physische
+  Bereiche invalidieren Aliase, Links und Blocktabelleneintraege; gebundene
+  Dispatch- und Inline-Cache-Lookups koennen stale Bloecke nicht mehr liefern.
+  Runtime-ABI 9 und PlatformServices-ABI 4 versionieren den neuen Vertrag.
 - KR-4612: Store Queues verwenden Adressbit 5 statt Bit 25. Schreib- und
   Longword-Lesefenster, QACR und PREF teilen eine zentrale SQ0/SQ1-Auswahl und
   pruefen Breite, Ausrichtung sowie Queuegrenzen. Operand-Cache-RAM behandelt

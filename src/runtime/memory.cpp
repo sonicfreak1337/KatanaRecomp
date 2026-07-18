@@ -437,6 +437,18 @@ bool Memory::has_trace_handler() const noexcept {
     return static_cast<bool>(trace_handler_);
 }
 
+void Memory::set_guest_write_observer(GuestWriteObserver observer) {
+    guest_write_observer_ = std::move(observer);
+}
+
+void Memory::clear_guest_write_observer() noexcept {
+    guest_write_observer_ = {};
+}
+
+bool Memory::has_guest_write_observer() const noexcept {
+    return static_cast<bool>(guest_write_observer_);
+}
+
 std::uint8_t Memory::read_u8(const std::uint32_t address) const {
     const auto& mapped = resolve(address, MemoryAccessWidth::Byte, MemoryAccessOperation::Read);
     const auto value = mapped.device->read_u8(region_offset(mapped.info, address));
@@ -476,28 +488,77 @@ std::uint32_t Memory::read_s16(const std::uint32_t address) const {
                                    : static_cast<std::uint32_t>(value);
 }
 
-void Memory::write_u8(const std::uint32_t address, const std::uint8_t value) {
+void Memory::write_u8(const std::uint32_t address,
+                      const std::uint8_t value,
+                      const CodeWriteSource source) {
     const auto& mapped = resolve_writable(address, MemoryAccessWidth::Byte);
-    mapped.device->write_u8(region_offset(mapped.info, address), value);
+    const auto offset = region_offset(mapped.info, address);
+    const auto* linear = dynamic_cast<const LinearMemoryDevice*>(mapped.device.get());
+    const bool changed = !guest_write_observer_ || linear == nullptr ||
+                         linear->read_u8(offset) != value;
+    mapped.device->write_u8(offset, value);
     notify_access(MemoryAccessEvent{
         MemoryAccessOperation::Write, address, MemoryAccessWidth::Byte, value, mapped.info.name});
+    notify_guest_write({address, 1u, source, changed});
 }
 
-void Memory::write_u16(const std::uint32_t address, const std::uint16_t value) {
+void Memory::write_u16(const std::uint32_t address,
+                       const std::uint16_t value,
+                       const CodeWriteSource source) {
     const auto& mapped = resolve_writable(address, MemoryAccessWidth::Halfword);
-    mapped.device->write_u16(region_offset(mapped.info, address), value);
+    const auto offset = region_offset(mapped.info, address);
+    const auto* linear = dynamic_cast<const LinearMemoryDevice*>(mapped.device.get());
+    const bool changed = !guest_write_observer_ || linear == nullptr ||
+                         linear->read_u16(offset) != value;
+    mapped.device->write_u16(offset, value);
     notify_access(MemoryAccessEvent{MemoryAccessOperation::Write,
                                     address,
                                     MemoryAccessWidth::Halfword,
                                     value,
                                     mapped.info.name});
+    notify_guest_write({address, 2u, source, changed});
 }
 
-void Memory::write_u32(const std::uint32_t address, const std::uint32_t value) {
+void Memory::write_u32(const std::uint32_t address,
+                       const std::uint32_t value,
+                       const CodeWriteSource source) {
     const auto& mapped = resolve_writable(address, MemoryAccessWidth::Word);
-    mapped.device->write_u32(region_offset(mapped.info, address), value);
+    const auto offset = region_offset(mapped.info, address);
+    const auto* linear = dynamic_cast<const LinearMemoryDevice*>(mapped.device.get());
+    const bool changed = !guest_write_observer_ || linear == nullptr ||
+                         linear->read_u32(offset) != value;
+    mapped.device->write_u32(offset, value);
     notify_access(MemoryAccessEvent{
         MemoryAccessOperation::Write, address, MemoryAccessWidth::Word, value, mapped.info.name});
+    notify_guest_write({address, 4u, source, changed});
+}
+
+void Memory::write_bytes(const std::uint32_t address,
+                         const std::span<const std::uint8_t> bytes,
+                         const CodeWriteSource source) {
+    if (bytes.empty()) return;
+    if (bytes.size() > address_space_size - static_cast<std::uint64_t>(address)) {
+        throw MemoryAccessError(MemoryAccessErrorReason::AddressOverflow,
+                                MemoryAccessOperation::Write,
+                                address,
+                                MemoryAccessWidth::Byte);
+    }
+    bool changed = false;
+    for (std::size_t index = 0u; index < bytes.size(); ++index) {
+        const auto current = address + static_cast<std::uint32_t>(index);
+        const auto& mapped = resolve_writable(current, MemoryAccessWidth::Byte);
+        const auto offset = region_offset(mapped.info, current);
+        const auto* linear = dynamic_cast<const LinearMemoryDevice*>(mapped.device.get());
+        changed = changed || !guest_write_observer_ || linear == nullptr ||
+                  linear->read_u8(offset) != bytes[index];
+        mapped.device->write_u8(offset, bytes[index]);
+        notify_access(MemoryAccessEvent{MemoryAccessOperation::Write,
+                                        current,
+                                        MemoryAccessWidth::Byte,
+                                        bytes[index],
+                                        mapped.info.name});
+    }
+    notify_guest_write({address, bytes.size(), source, changed});
 }
 
 const Memory::MappedRegion& Memory::resolve(const std::uint32_t address,
@@ -573,6 +634,10 @@ void Memory::notify_access(const MemoryAccessEvent& event) const {
     for (const auto& observer : observers) {
         observer(event);
     }
+}
+
+void Memory::notify_guest_write(const GuestWriteEvent& event) const {
+    if (guest_write_observer_) guest_write_observer_(event);
 }
 
 } // namespace katana::runtime

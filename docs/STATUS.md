@@ -2,7 +2,7 @@
 
 Interner Entwicklungsmeilenstein: `v0.46.0`
 Phase: Core-Stabilisierung vor v0.47
-Naechster Task: `KR-4613`
+Naechster Task: `KR-4614`
 Naechstes Gate: `v0.47.0` - Core-Stabilisierung und generische Retail-Runtime
 Weitere interne Gates: `v0.48.0` Integration und `v0.49.0` Alpha-Candidate
 Erster oeffentlicher Release: `v0.50.0` Alpha
@@ -74,6 +74,21 @@ invalidiert die ausgerichtete 32-Byte-Codezeile. OCBI, OCBP und OCBWB schlagen
 sichtbar fehl, solange Cachetags, Dirty-Zustand und Write-back nicht modelliert
 sind. Vertrag und gesammelte Gate-Testanforderungen stehen in
 [`STORE_QUEUE_CACHE.md`](STORE_QUEUE_CACHE.md).
+
+## KR-4613 umgesetzt
+
+`Memory` ist jetzt die gemeinsame beobachtbare Commitgrenze fuer CPU-, FPU-,
+DMA-, Store-Queue-, Copy- und Fallbackwrites. Lineares RAM wird vor der
+Invalidierung auf Byteidentitaet geprueft; gebuendelte Writes melden einen
+gemeinsamen Bereich. Generierte Stores koennen den Tracker dadurch nicht mehr
+umgehen.
+
+Geaenderte physische Bereiche invalidieren Trackerbloecke, Aliase und
+eingehende Links und entfernen ueberlappende Eintraege der zentralen
+Runtime-Blocktabelle. Zusaetzlich verweigern trackergebundene Tabellen stale
+virtuelle, physische und Alias-Lookups, sodass Direktdispatch und Inline-Cache
+kein invalidiertes Ziel ausfuehren koennen. Vertrag und die bei KR-4617/KR-4618
+nachzuholenden Tests stehen in [`GUEST_WRITES.md`](GUEST_WRITES.md).
 
 ## Naechste Reihenfolge
 

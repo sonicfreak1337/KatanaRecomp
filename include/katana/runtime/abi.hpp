@@ -4,6 +4,6 @@
 
 namespace katana::runtime {
 
-inline constexpr std::uint32_t abi_version = 8u;
+inline constexpr std::uint32_t abi_version = 9u;
 
 } // namespace katana::runtime

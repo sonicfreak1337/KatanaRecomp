@@ -5,9 +5,11 @@
 #include "katana/runtime/bios_abi.hpp"
 #include "katana/runtime/dreamcast_memory.hpp"
 
+#include <algorithm>
 #include <iomanip>
 #include <sstream>
 #include <stdexcept>
+#include <vector>
 
 namespace katana::platform {
 namespace {
@@ -79,13 +81,10 @@ DreamcastBootResult boot_homebrew(runtime::CpuState& cpu,
     result.log.push_back("entry=" + hex32(entry));
 
     for (const auto& segment : image.segments()) {
-        for (std::size_t offset = 0u; offset < static_cast<std::size_t>(segment.memory_size);
-             ++offset) {
-            const auto value =
-                offset < segment.bytes.size() ? segment.bytes[offset] : std::uint8_t{0u};
-            cpu.memory.write_u8(segment.virtual_address + static_cast<std::uint32_t>(offset),
-                                value);
-        }
+        std::vector<std::uint8_t> image_bytes(
+            static_cast<std::size_t>(segment.memory_size), std::uint8_t{0u});
+        std::copy(segment.bytes.begin(), segment.bytes.end(), image_bytes.begin());
+        cpu.memory.write_bytes(segment.virtual_address, image_bytes, runtime::CodeWriteSource::Copy);
         ++result.loaded_segments;
         result.loaded_bytes += static_cast<std::size_t>(segment.memory_size);
         result.log.push_back("segment=" + segment.name + "@" + hex32(segment.virtual_address));

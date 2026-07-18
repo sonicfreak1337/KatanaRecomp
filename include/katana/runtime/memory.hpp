@@ -17,6 +17,15 @@ enum class MemoryAccessWidth : std::uint8_t { Byte = 1u, Halfword = 2u, Word = 4
 
 enum class MemoryAccessOperation { Read, Write };
 
+enum class CodeWriteSource : std::uint8_t {
+    Cpu,
+    Fpu,
+    Dma,
+    StoreQueue,
+    Copy,
+    Fallback
+};
+
 enum class MemoryAlignmentPolicy { Strict, Permissive };
 
 enum class MemoryAccessErrorReason { Misaligned, Unmapped, CrossRegion, ReadOnly, AddressOverflow };
@@ -120,6 +129,15 @@ struct MemoryAccessEvent {
 using MemoryAccessObserver = std::function<void(const MemoryAccessEvent&)>;
 using MemoryWatchpointId = std::uint64_t;
 
+struct GuestWriteEvent {
+    std::uint32_t address = 0u;
+    std::size_t size = 0u;
+    CodeWriteSource source = CodeWriteSource::Cpu;
+    bool bytes_changed = true;
+};
+
+using GuestWriteObserver = std::function<void(const GuestWriteEvent&)>;
+
 class Memory {
   public:
     explicit Memory(std::size_t legacy_size = 1024u * 1024u,
@@ -153,15 +171,28 @@ class Memory {
     void clear_trace_handler() noexcept;
     [[nodiscard]] bool has_trace_handler() const noexcept;
 
+    void set_guest_write_observer(GuestWriteObserver observer);
+    void clear_guest_write_observer() noexcept;
+    [[nodiscard]] bool has_guest_write_observer() const noexcept;
+
     [[nodiscard]] std::uint8_t read_u8(std::uint32_t address) const;
     [[nodiscard]] std::uint16_t read_u16(std::uint32_t address) const;
     [[nodiscard]] std::uint32_t read_u32(std::uint32_t address) const;
     [[nodiscard]] std::uint32_t read_s8(std::uint32_t address) const;
     [[nodiscard]] std::uint32_t read_s16(std::uint32_t address) const;
 
-    void write_u8(std::uint32_t address, std::uint8_t value);
-    void write_u16(std::uint32_t address, std::uint16_t value);
-    void write_u32(std::uint32_t address, std::uint32_t value);
+    void write_u8(std::uint32_t address,
+                  std::uint8_t value,
+                  CodeWriteSource source = CodeWriteSource::Cpu);
+    void write_u16(std::uint32_t address,
+                   std::uint16_t value,
+                   CodeWriteSource source = CodeWriteSource::Cpu);
+    void write_u32(std::uint32_t address,
+                   std::uint32_t value,
+                   CodeWriteSource source = CodeWriteSource::Cpu);
+    void write_bytes(std::uint32_t address,
+                     std::span<const std::uint8_t> bytes,
+                     CodeWriteSource source = CodeWriteSource::Copy);
 
   private:
     struct MappedRegion {
@@ -185,11 +216,13 @@ class Memory {
                            MemoryAccessWidth width,
                            MemoryAccessOperation operation) const;
     void notify_access(const MemoryAccessEvent& event) const;
+    void notify_guest_write(const GuestWriteEvent& event) const;
 
     MemoryAlignmentPolicy alignment_policy_ = MemoryAlignmentPolicy::Strict;
     std::vector<MappedRegion> regions_;
     std::vector<Watchpoint> watchpoints_;
     MemoryAccessObserver trace_handler_;
+    GuestWriteObserver guest_write_observer_;
     MemoryWatchpointId next_watchpoint_id_ = 1u;
 };
 

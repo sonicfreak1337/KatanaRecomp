@@ -144,6 +144,13 @@ bool ExecutableCodeTracker::valid(const std::string& identity) const {
     return found->valid;
 }
 
+bool ExecutableCodeTracker::dispatchable(const std::string& identity) const noexcept {
+    const auto found = std::find_if(blocks_.begin(), blocks_.end(), [&](const auto& value) {
+        return value.block.identity == identity;
+    });
+    return found == blocks_.end() || found->valid;
+}
+
 std::uint64_t ExecutableCodeTracker::page_generation(const std::uint32_t address) const noexcept {
     const auto page = canonical_physical_address(address) / page_size * page_size;
     const auto found = generations_.find(page);
@@ -185,10 +192,16 @@ const char* code_write_source_name(const CodeWriteSource value) noexcept {
     switch (value) {
     case CodeWriteSource::Cpu:
         return "cpu";
+    case CodeWriteSource::Fpu:
+        return "fpu";
     case CodeWriteSource::Dma:
         return "dma";
+    case CodeWriteSource::StoreQueue:
+        return "store-queue";
     case CodeWriteSource::Copy:
         return "copy";
+    case CodeWriteSource::Fallback:
+        return "fallback";
     }
     return "unknown";
 }

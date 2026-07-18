@@ -169,9 +169,9 @@ void install_hle_bios_abi(Memory& memory,
         }
     }
     for (const auto& vector : kVectors) {
-        memory.write_u32(vector.slot_address, vector.handler_address);
-        memory.write_u16(vector.handler_address, 0x000Bu);
-        memory.write_u16(vector.handler_address + 2u, 0x0009u);
+        memory.write_u32(vector.slot_address, vector.handler_address, CodeWriteSource::Copy);
+        memory.write_u16(vector.handler_address, 0x000Bu, CodeWriteSource::Copy);
+        memory.write_u16(vector.handler_address + 2u, 0x0009u, CodeWriteSource::Copy);
         blocks.register_runtime({vector.handler_address,
                                  canonical_physical_address(vector.handler_address),
                                  4u,

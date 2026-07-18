@@ -139,6 +139,20 @@ initialize_dreamcast_runtime(CpuState& cpu,
         [raise_now] { raise_now(SystemAsicEvent::AicaInterrupt); });
     state.runtime_blocks = std::make_shared<RuntimeBlockTable>();
     state.code_tracker = std::make_shared<ExecutableCodeTracker>();
+    state.runtime_blocks->bind_code_tracker(state.code_tracker.get());
+    const auto code_tracker = std::weak_ptr<ExecutableCodeTracker>(state.code_tracker);
+    const auto runtime_blocks = std::weak_ptr<RuntimeBlockTable>(state.runtime_blocks);
+    cpu.memory.set_guest_write_observer([code_tracker, runtime_blocks](const GuestWriteEvent& event) {
+        const auto tracker = code_tracker.lock();
+        if (!tracker) return;
+        const auto invalidation =
+            tracker->observe_write(event.address, event.size, event.source, event.bytes_changed);
+        if (!invalidation.byte_identical) {
+            if (const auto blocks = runtime_blocks.lock())
+                static_cast<void>(
+                    blocks->erase_overlapping_physical(event.address, event.size));
+        }
+    });
     state.store_queue_transfers = std::make_shared<std::vector<StoreQueueTransfer>>();
     const auto transfers = state.store_queue_transfers;
     auto* const memory = &cpu.memory;
@@ -147,9 +161,8 @@ initialize_dreamcast_runtime(CpuState& cpu,
         [transfers, memory](const StoreQueueTransfer& transfer) {
             transfers->push_back(transfer);
             if (transfer.target != StoreQueueTarget::Ram) return;
-            for (std::size_t index = 0u; index < transfer.bytes.size(); ++index)
-                memory->write_u8(transfer.target_address + static_cast<std::uint32_t>(index),
-                                 transfer.bytes[index]);
+            memory->write_bytes(
+                transfer.target_address, transfer.bytes, CodeWriteSource::StoreQueue);
         },
         state.code_tracker.get());
     const auto queues = state.store_queues;
@@ -197,9 +210,7 @@ initialize_dreamcast_runtime(CpuState& cpu,
                                          static_cast<std::uint32_t>(dreamcast_main_ram_size)});
     if (firmware_mode == DreamcastRuntimeFirmwareMode::HleBiosAbi)
         install_hle_bios_abi(cpu.memory, *state.runtime_blocks, *state.firmware_handoff);
-    std::copy(boot.boot_file.begin(),
-              boot.boot_file.end(),
-              state.main_ram->writable_bytes().begin() + 0x00010000u);
+    cpu.memory.write_bytes(dreamcast_disc_boot_address, boot.boot_file, CodeWriteSource::Copy);
     state.loaded_boot_bytes = boot.boot_file.size();
     reset_cpu(cpu,
               ResetState{dreamcast_disc_boot_address, dreamcast_direct_boot_stack, 0u, 0u, 0u});

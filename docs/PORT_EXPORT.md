@@ -59,7 +59,7 @@ Der CLI-Aufruf bindet KatanaRecomp fuer den lokalen Debugbuild ueber den
 expliziten CMake-Parameter
 `KATANA_RUNTIME_ROOT` ein. Portprojekt-Vertragsversion 2 ergaenzt den
 eigenstaendigen Runtime- und GDI-Einstieg. Die generierten Quellen pruefen
-Runtime-ABI 8 beim
+Runtime-ABI 9 beim
 Kompilieren; portable Dateien enthalten keinen absoluten lokalen Quellpfad. Der
 Build liegt getrennt unter `port/build/`. Konfigurations- oder Buildfehler enden
 mit dem stabilen CLI-Exitcode `7` (`build-failure`). Die folgenden Befehle zeigen

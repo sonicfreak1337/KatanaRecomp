@@ -1,5 +1,7 @@
 #include "katana/runtime/block_table.hpp"
 
+#include "katana/runtime/code_invalidation.hpp"
+
 #include <algorithm>
 #include <iomanip>
 #include <limits>
@@ -79,7 +81,9 @@ void RuntimeBlockTable::insert(RuntimeBlock block, const bool runtime_registered
 const RuntimeBlock* RuntimeBlockTable::lookup(const std::uint32_t virtual_address,
                                               const BlockVariantKey& variant) const noexcept {
     const auto found = std::find_if(blocks_.begin(), blocks_.end(), [&](const auto& block) {
-        return block.virtual_start == virtual_address && block.variant == variant;
+        return block.virtual_start == virtual_address && block.variant == variant &&
+               (code_tracker_ == nullptr ||
+                code_tracker_->dispatchable(stable_runtime_block_identity(block)));
     });
     return found == blocks_.end() ? nullptr : &*found;
 }
@@ -89,7 +93,9 @@ RuntimeBlockTable::lookup_physical(const std::uint32_t physical_address,
                                    const BlockVariantKey& variant) const noexcept {
     const auto canonical = canonical_physical_address(physical_address);
     const auto found = std::find_if(blocks_.begin(), blocks_.end(), [&](const auto& block) {
-        return block.physical_origin == canonical && block.variant == variant;
+        return block.physical_origin == canonical && block.variant == variant &&
+               (code_tracker_ == nullptr ||
+                code_tracker_->dispatchable(stable_runtime_block_identity(block)));
     });
     return found == blocks_.end() ? nullptr : &*found;
 }
@@ -99,7 +105,9 @@ RuntimeBlockTable::aliases(const std::uint32_t physical_origin) const {
     std::vector<const RuntimeBlock*> result;
     const auto canonical = canonical_physical_address(physical_origin);
     for (const auto& block : blocks_) {
-        if (block.physical_origin == canonical) {
+        if (block.physical_origin == canonical &&
+            (code_tracker_ == nullptr ||
+             code_tracker_->dispatchable(stable_runtime_block_identity(block)))) {
             result.push_back(&block);
         }
     }
@@ -116,6 +124,23 @@ bool RuntimeBlockTable::erase_identity(const std::string& block_identity) noexce
         return stable_runtime_block_identity(block) == block_identity;
     });
     return blocks_.size() != previous_size;
+}
+
+std::size_t RuntimeBlockTable::erase_overlapping_physical(const std::uint32_t physical_address,
+                                                          const std::size_t size) noexcept {
+    if (size == 0u) return 0u;
+    const auto canonical = canonical_physical_address(physical_address);
+    const auto write_end = static_cast<std::uint64_t>(canonical) + size;
+    const auto previous_size = blocks_.size();
+    std::erase_if(blocks_, [&](const auto& block) {
+        const auto block_end = static_cast<std::uint64_t>(block.physical_origin) + block.size;
+        return block.physical_origin < write_end && canonical < block_end;
+    });
+    return previous_size - blocks_.size();
+}
+
+void RuntimeBlockTable::bind_code_tracker(const ExecutableCodeTracker* const tracker) noexcept {
+    code_tracker_ = tracker;
 }
 
 void RuntimeBlockTable::clear() noexcept {

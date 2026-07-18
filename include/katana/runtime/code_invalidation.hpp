@@ -1,6 +1,7 @@
 #pragma once
 
 #include "katana/runtime/block_table.hpp"
+#include "katana/runtime/memory.hpp"
 
 #include <cstddef>
 #include <cstdint>
@@ -11,7 +12,6 @@
 
 namespace katana::runtime {
 
-enum class CodeWriteSource : std::uint8_t { Cpu, Dma, Copy };
 enum class ExecutableBlockOrigin : std::uint8_t {
     ImageSegment,
     RomRamCopy,
@@ -73,6 +73,7 @@ class ExecutableCodeTracker {
                                                        CodeWriteSource source,
                                                        bool bytes_changed = true);
     [[nodiscard]] bool valid(const std::string& identity) const;
+    [[nodiscard]] bool dispatchable(const std::string& identity) const noexcept;
     [[nodiscard]] std::uint64_t page_generation(std::uint32_t address) const noexcept;
     [[nodiscard]] std::uint64_t invalidation_count() const noexcept;
     [[nodiscard]] std::size_t block_count() const noexcept;

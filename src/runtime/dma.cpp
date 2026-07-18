@@ -300,11 +300,14 @@ bool Sh4Dmac::transfer_one(const std::size_t index, const std::size_t size) noex
     }
     try {
         if (size == 1u) {
-            memory_.write_u8(value.destination, memory_.read_u8(value.source));
+            memory_.write_u8(
+                value.destination, memory_.read_u8(value.source), CodeWriteSource::Dma);
         } else if (size == 2u) {
-            memory_.write_u16(value.destination, memory_.read_u16(value.source));
+            memory_.write_u16(
+                value.destination, memory_.read_u16(value.source), CodeWriteSource::Dma);
         } else if (size == 4u) {
-            memory_.write_u32(value.destination, memory_.read_u32(value.source));
+            memory_.write_u32(
+                value.destination, memory_.read_u32(value.source), CodeWriteSource::Dma);
         } else {
             std::array<std::uint32_t, 8u> words{};
             const auto word_count = size / 4u;
@@ -314,7 +317,8 @@ bool Sh4Dmac::transfer_one(const std::size_t index, const std::size_t size) noex
             }
             for (std::size_t word = 0u; word < word_count; ++word) {
                 const auto offset = static_cast<std::uint32_t>(word * 4u);
-                memory_.write_u32(value.destination + offset, words[word]);
+                memory_.write_u32(
+                    value.destination + offset, words[word], CodeWriteSource::Dma);
             }
         }
     } catch (const std::exception&) {

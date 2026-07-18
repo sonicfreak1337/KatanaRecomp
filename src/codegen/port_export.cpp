@@ -141,11 +141,8 @@ std::string handwritten_main(const std::string& entry_namespace,
            "    }\n"
            "    void write_memory(std::uint32_t address, std::span<const std::uint8_t> input) "
            "override {\n"
-           "        const auto start = address;\n"
-           "        for (const auto byte : input) cpu_.memory.write_u8(address++, byte);\n"
-           "        static_cast<void>(state_.code_tracker->observe_write(\n"
-           "            katana::runtime::canonical_physical_address(start), input.size(),\n"
-           "            katana::runtime::CodeWriteSource::Cpu));\n"
+           "        cpu_.memory.write_bytes(\n"
+           "            address, input, katana::runtime::CodeWriteSource::Fallback);\n"
            "    }\n"
            "    std::uint64_t scheduler_cycle() const noexcept override {\n"
            "        return state_.scheduler->current_cycle();\n"
@@ -201,6 +198,10 @@ std::string handwritten_main(const std::string& entry_namespace,
            "            {std::string(identity), katana::runtime::canonical_physical_address(address),\n"
            "             size, \"generated-port\", {},\n"
            "             katana::runtime::ExecutableBlockOrigin::ImageSegment}));\n"
+           "    }\n"
+           "    katana::runtime::ExecutableCodeTracker* executable_code_tracker() noexcept "
+           "override {\n"
+           "        return state_.code_tracker.get();\n"
            "    }\n"
            "  private:\n"
            "    katana::runtime::CpuState& cpu_;\n"
@@ -514,6 +515,7 @@ std::string runtime_dispatch_adapter(const std::string& entry_namespace,
            << "                             katana::runtime::PlatformServices& services) {\n"
            << "    katana::runtime::validate_platform_services(services);\n"
            << "    katana::runtime::RuntimeBlockTable table;\n";
+    output << "    table.bind_code_tracker(services.executable_code_tracker());\n";
     for (const auto& function : program) {
         for (const auto& block : function.blocks) {
             const auto address = symbol(block.start_address);
@@ -526,9 +528,12 @@ std::string runtime_dispatch_adapter(const std::string& entry_namespace,
                    << "u, katana::runtime::BlockEndKind::" << end_kind(block)
                    << ", {}, &dispatch_" << address << ", \"generated-block-" << address
                    << "\"});\n";
-            output << "    services.register_executable_block(0x" << address << "u, "
-                   << (end - block.start_address) << "u, \"generated-block-" << address
-                   << "\");\n";
+            output << "    if (const auto* registered = table.lookup(0x" << address
+                   << "u, {}))\n"
+                   << "        services.register_executable_block(0x" << address << "u, "
+                   << (end - block.start_address)
+                   << "u, katana::runtime::stable_runtime_block_identity(*registered));\n"
+                   << "    else throw std::runtime_error(\"Registrierter Block fehlt.\");\n";
         }
     }
     const auto entry = symbol(entry_address);

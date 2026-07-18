@@ -85,14 +85,8 @@ bool Sh4StoreQueues::prefetch(const std::uint32_t address) {
     if (sink_) {
         sink_(transfer);
     } else {
-        for (std::size_t index = 0u; index < transfer.bytes.size(); ++index) {
-            memory_.write_u8(transfer.target_address + static_cast<std::uint32_t>(index),
-                             transfer.bytes[index]);
-        }
-    }
-    if (code_tracker_ != nullptr && transfer.target == StoreQueueTarget::Ram) {
-        static_cast<void>(code_tracker_->observe_write(
-            transfer.target_address, transfer.bytes.size(), CodeWriteSource::Cpu));
+        memory_.write_bytes(
+            transfer.target_address, transfer.bytes, CodeWriteSource::StoreQueue);
     }
     ++transfer_count_;
     return true;
@@ -113,13 +107,11 @@ CacheMaintenanceResult Sh4StoreQueues::maintain(const CacheMaintenanceOperation 
                                                 const std::uint32_t movca_value) {
     CacheMaintenanceResult result{operation, address, false, false};
     if (operation == CacheMaintenanceOperation::MovcaLong) {
-        memory_.write_u32(address, movca_value);
+        const auto before = code_tracker_ != nullptr ? code_tracker_->invalidation_count() : 0u;
+        memory_.write_u32(address, movca_value, CodeWriteSource::StoreQueue);
         result.wrote_memory = true;
-        if (code_tracker_) {
-            const auto invalidation =
-                code_tracker_->observe_write(address, 4u, CodeWriteSource::Cpu);
-            result.invalidated_code = !invalidation.invalidated_blocks.empty();
-        }
+        result.invalidated_code =
+            code_tracker_ != nullptr && code_tracker_->invalidation_count() != before;
     } else if (operation == CacheMaintenanceOperation::Icbi && code_tracker_) {
         const auto invalidation =
             code_tracker_->observe_write(address & ~31u, 32u, CodeWriteSource::Cpu);

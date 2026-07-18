@@ -6,7 +6,7 @@ ungeloesten Kontrollflusspfaden mehr.
 
 ## ABI
 
-Die aktuelle Runtime-ABI ist Version `8`. Die typisierte Block-ABI ist seit
+Die aktuelle Runtime-ABI ist Version `9`. Die typisierte Block-ABI ist seit
 KR-4611 Version `2`.
 
 Generierter Code enthaelt eine Compile-Time-Pruefung gegen diese Version. Eine
@@ -18,6 +18,9 @@ Watchpoint-Zustand. ABI-Version 6 ergaenzt den zentralen CPU-Zustand um `TEA`,
 strukturierte Exception-Ursachen und Delay-Slot-Kontext und bindet generierten
 Code an den gemeinsamen Exception-Pfad. ABI-Version 7 zentralisiert die
 `FPSCR`-Maskierung und die sichtbare FR-/XF-Bankumschaltung.
+ABI-Version 8 ergaenzte den versionierten Plattform- und Portvertrag.
+ABI-Version 9 macht Gastwrites samt Herkunft, Byteidentitaet und
+Codeinvalidierung zu einem beobachtbaren `Memory`-Vertrag.
 
 ## CMake
 
@@ -77,6 +80,10 @@ Der Bus garantiert zentral:
 - optionalen Schreibschutz pro Region
 - auslesbare Regionsmetadaten fuer Tests und Diagnose
 - optionale globale Traces und gefilterte Watchpoints
+- einen gemeinsamen Gastwrite-Observer mit Byteidentitaet und Herkunft
+
+Der vollstaendige Write- und Invalidierungsvertrag steht in
+[`GUEST_WRITES.md`](GUEST_WRITES.md).
 
 ## Dreamcast-Haupt-RAM und Spiegelungen
 

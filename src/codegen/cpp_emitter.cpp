@@ -433,10 +433,13 @@ void emit_simple_instruction(std::ostringstream& output,
             << "if (cpu.fpu_transfer_pair()) {\n"
             << "    const std::uint64_t bits = katana::runtime::read_fpu_pair_bits(cpu, " << source
             << "u);\n"
-            << "    cpu.memory.write_u32(address, static_cast<std::uint32_t>(bits));\n"
-            << "    cpu.memory.write_u32(address + 4u, static_cast<std::uint32_t>(bits >> 32u));\n"
+            << "    cpu.memory.write_u32(address, static_cast<std::uint32_t>(bits), "
+               "katana::runtime::CodeWriteSource::Fpu);\n"
+            << "    cpu.memory.write_u32(address + 4u, static_cast<std::uint32_t>(bits >> 32u), "
+               "katana::runtime::CodeWriteSource::Fpu);\n"
             << "} else {\n"
-            << "    cpu.memory.write_u32(address, cpu.fr[" << source << "]);\n"
+            << "    cpu.memory.write_u32(address, cpu.fr[" << source
+            << "], katana::runtime::CodeWriteSource::Fpu);\n"
             << "}\n";
         if (instruction.operation == Operation::FmovStorePreDecrement) {
             output << "cpu.r[" << destination << "] = address;\n";

@@ -114,7 +114,7 @@ Akzeptanz:
 - RAM- und TA-Transfers besitzen identische Referenzbytes
 - ICBI, MOVCA, OCBI, OCBP und OCBWB sind korrekt oder sichtbar nicht unterstuetzt
 
-### [ ] KR-4613 - Einheitliche Gastwrites und Codeinvalidierung
+### [x] KR-4613 - Einheitliche Gastwrites und Codeinvalidierung
 
 Abhaengigkeiten: KR-4611, KR-4612
 Prioritaet: P0
