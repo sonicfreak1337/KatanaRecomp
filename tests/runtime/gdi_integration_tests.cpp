@@ -94,11 +94,17 @@ int main(const int argc, const char* const* argv) {
     write_fixture(second_directory);
     const auto first = GdiDiscSource::open(first_directory / "disc.gdi");
     const auto second = GdiDiscSource::open(second_directory / "disc.gdi");
-    require(first->identity().starts_with("gdi-fnv1a64:") &&
+    require(first->identity().starts_with("gdi-sha256:") && first->identity().size() == 75u &&
                 first->identity() == second->identity(),
             "GDI-Identitaet ist nicht inhaltsstabil oder haengt vom Hostpfad ab.");
     require(first->primary_data_lba() == 10u && first->descriptor().tracks.size() == 2u,
             "GDI-Datentrack oder Trackzuordnung ist falsch.");
+    require(first->descriptor().sha256.size() == 64u &&
+                std::all_of(first->descriptor().tracks.begin(),
+                            first->descriptor().tracks.end(),
+                            [](const auto& track) { return track.sha256.size() == 64u; }) &&
+                first->io_counters().persistent_track_opens == 2u,
+            "GDI-Provenienzhashes werden nicht zwischen I/O und Export wiederverwendbar gehalten.");
     const auto audio = first->read_raw_sector(1u, 1u);
     require(audio.size() == 2352u && audio.front() == 0x5Au && audio.back() == 0x5Au,
             "GDI-Audiotrack ist nicht als stabiler Raw-Sektor lesbar.");
@@ -106,6 +112,21 @@ int main(const int argc, const char* const* argv) {
     const auto sector = drive.execute({GdRomCommand::ReadSectors, 10u, 1u});
     require(sector.status == GdRomStatus::Good && sector.data.size() == 2048u,
             "GDI-Datentrack ist nicht ueber den GD-ROM-Pfad lesbar.");
+    first->set_cache_mode(DiscCacheMode::DisabledReference);
+    first->reset_io_counters();
+    const auto reference_batch = first->read(10u * sector_size, 8u * sector_size);
+    require(first->io_counters().raw_read_operations == 1u,
+            "Sequenzieller GDI-Batch wird in einzelne Hostreads zerlegt.");
+    first->set_cache_mode(DiscCacheMode::Enabled);
+    first->reset_io_counters();
+    const auto cached_batch = first->read(10u * sector_size, 8u * sector_size);
+    const auto reads_after_fill = first->io_counters().raw_read_operations;
+    const auto cached_repeat = first->read(10u * sector_size, 8u * sector_size);
+    require(reference_batch == cached_batch && cached_batch == cached_repeat &&
+                first->io_counters().raw_read_operations == reads_after_fill &&
+                first->io_counters().sector_cache_hits == 8u &&
+                first->sector_cache_size() <= first->sector_cache_capacity(),
+            "GDI-Sektorcache veraendert Bytes, liest Hits erneut oder waechst ungebremst.");
     Iso9660Filesystem filesystem(first, 2048u, first->primary_data_lba());
     require(filesystem.read_file("/BOOT.BIN") ==
                 std::vector<std::uint8_t>({0x11u, 0x22u, 0x33u, 0x44u}),

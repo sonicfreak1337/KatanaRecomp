@@ -2,11 +2,14 @@
 
 #include "katana/runtime/scheduler.hpp"
 
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
+#include <fstream>
 #include <functional>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <span>
 #include <string>
@@ -43,11 +46,18 @@ class FileDiscSource final : public DiscSource {
     [[nodiscard]] std::uint64_t size() const noexcept override;
     [[nodiscard]] const std::string& identity() const noexcept override;
     void read(std::uint64_t offset, std::span<std::uint8_t> destination) const override;
+    [[nodiscard]] std::uint64_t read_operations() const noexcept;
+    [[nodiscard]] std::uint64_t bytes_read() const noexcept;
+    [[nodiscard]] std::uint64_t open_operations() const noexcept;
 
   private:
     std::filesystem::path path_;
     std::string identity_;
     std::uint64_t size_ = 0u;
+    mutable std::ifstream stream_;
+    mutable std::mutex stream_mutex_;
+    mutable std::atomic<std::uint64_t> read_operations_{0u};
+    mutable std::atomic<std::uint64_t> bytes_read_{0u};
 };
 
 enum class GdRomCommand : std::uint8_t { TestUnitReady, GetStatus, GetCapacity, ReadSectors };

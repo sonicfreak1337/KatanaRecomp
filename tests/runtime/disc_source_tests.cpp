@@ -54,6 +54,11 @@ int main() {
     require(file.size() == bytes.size() && file.identity() == "synthetic:file-disc" &&
                 file.read(2u, 2u) == std::vector<std::uint8_t>({0x30u, 0x40u}),
             "Datei-Discquelle liest nicht deterministisch oder leakt den Hostpfad als Identitaet.");
+    static_cast<void>(file.read(0u, 1u));
+    static_cast<void>(file.read(1u, 1u));
+    require(file.open_operations() == 1u && file.read_operations() == 3u &&
+                file.bytes_read() == 4u,
+            "Wiederholte Dateireads oeffnen die read-only Quelle erneut.");
     require(std::filesystem::file_size(fixture.path) == bytes.size(),
             "Read-only-Discquelle hat die Quelldatei veraendert.");
     require(throws<std::invalid_argument>([] {

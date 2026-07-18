@@ -90,6 +90,7 @@ Iso9660Filesystem::Iso9660Filesystem(std::shared_ptr<const DiscSource> source,
     if (!root_.directory) {
         throw std::runtime_error("ISO9660-Rootrecord ist kein Verzeichnis.");
     }
+    extent_cache_.emplace("/", root_);
 }
 
 std::vector<std::string> Iso9660Filesystem::split_path(const std::string_view path) {
@@ -114,6 +115,15 @@ std::vector<Iso9660Entry> Iso9660Filesystem::read_directory(const Iso9660Entry& 
     if (!directory.directory) {
         throw std::invalid_argument("ISO9660-Pfad ist kein Verzeichnis.");
     }
+    const auto cache_key = (static_cast<std::uint64_t>(directory.lba) << 32u) | directory.size;
+    if (cache_mode_ == Iso9660CacheMode::Enabled) {
+        const std::lock_guard lock(cache_mutex_);
+        if (const auto found = directory_cache_.find(cache_key); found != directory_cache_.end()) {
+            ++io_counters_.directory_cache_hits;
+            return found->second;
+        }
+        ++io_counters_.directory_cache_misses;
+    }
     const auto bytes =
         source_->read(sector_offset(extent_lba_bias_, directory.lba, sector_size_), directory.size);
     std::vector<Iso9660Entry> result;
@@ -134,12 +144,36 @@ std::vector<Iso9660Entry> Iso9660Filesystem::read_directory(const Iso9660Entry& 
         }
         offset += length;
     }
+    if (cache_mode_ == Iso9660CacheMode::Enabled) {
+        const std::lock_guard lock(cache_mutex_);
+        if (!directory_cache_.contains(cache_key)) {
+            if (directory_cache_.size() == directory_cache_capacity_) {
+                directory_cache_.erase(directory_cache_order_.front());
+                directory_cache_order_.erase(directory_cache_order_.begin());
+                ++io_counters_.cache_evictions;
+            }
+            directory_cache_order_.push_back(cache_key);
+            directory_cache_.emplace(cache_key, result);
+        }
+    }
     return result;
 }
 
 Iso9660Entry Iso9660Filesystem::resolve(const std::string_view path) const {
     auto current = root_;
+    std::string canonical = "/";
     for (const auto& component : split_path(path)) {
+        if (canonical.size() != 1u) canonical += '/';
+        canonical += component;
+        if (cache_mode_ == Iso9660CacheMode::Enabled) {
+            const std::lock_guard lock(cache_mutex_);
+            if (const auto found = extent_cache_.find(canonical); found != extent_cache_.end()) {
+                ++io_counters_.extent_cache_hits;
+                current = found->second;
+                continue;
+            }
+            ++io_counters_.extent_cache_misses;
+        }
         const auto entries = read_directory(current);
         const auto match =
             std::find_if(entries.begin(), entries.end(), [&](const Iso9660Entry& entry) {
@@ -149,6 +183,18 @@ Iso9660Entry Iso9660Filesystem::resolve(const std::string_view path) const {
             throw std::out_of_range("ISO9660-Pfad wurde nicht gefunden.");
         }
         current = *match;
+        if (cache_mode_ == Iso9660CacheMode::Enabled) {
+            const std::lock_guard lock(cache_mutex_);
+            if (!extent_cache_.contains(canonical)) {
+                if (extent_cache_.size() == extent_cache_capacity_) {
+                    extent_cache_.erase(extent_cache_order_.front());
+                    extent_cache_order_.erase(extent_cache_order_.begin());
+                    ++io_counters_.cache_evictions;
+                }
+                extent_cache_order_.push_back(canonical);
+                extent_cache_.emplace(canonical, current);
+            }
+        }
     }
     return current;
 }
@@ -163,6 +209,38 @@ std::vector<std::uint8_t> Iso9660Filesystem::read_file(const std::string_view pa
         throw std::invalid_argument("ISO9660-Pfad bezeichnet ein Verzeichnis.");
     }
     return source_->read(sector_offset(extent_lba_bias_, entry.lba, sector_size_), entry.size);
+}
+
+void Iso9660Filesystem::set_cache_mode(const Iso9660CacheMode mode) noexcept {
+    cache_mode_ = mode;
+    directory_cache_.clear();
+    directory_cache_order_.clear();
+    extent_cache_.clear();
+    extent_cache_order_.clear();
+    if (mode == Iso9660CacheMode::Enabled) {
+        extent_cache_.emplace("/", root_);
+        extent_cache_order_.push_back("/");
+    }
+}
+
+Iso9660CacheMode Iso9660Filesystem::cache_mode() const noexcept {
+    return cache_mode_;
+}
+
+const Iso9660IoCounters& Iso9660Filesystem::io_counters() const noexcept {
+    return io_counters_;
+}
+
+void Iso9660Filesystem::reset_io_counters() const noexcept {
+    io_counters_ = {};
+}
+
+std::size_t Iso9660Filesystem::directory_cache_size() const noexcept {
+    return directory_cache_.size();
+}
+
+std::size_t Iso9660Filesystem::extent_cache_size() const noexcept {
+    return extent_cache_.size();
 }
 
 } // namespace katana::runtime

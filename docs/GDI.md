@@ -7,10 +7,16 @@ und schreiben weder Descriptor noch Tracks zurueck.
 
 Relative Trackpfade werden gegen den Ordner des Descriptors aufgeloest.
 Absolute Hostpfade sind Laufzeitdetails und weder semantische Identitaet noch
-Teil oeffentlicher Diagnosen. Die Quellidentitaet `gdi-fnv1a64:<wert>` entsteht
+Teil oeffentlicher Diagnosen. Die Quellidentitaet `gdi-sha256:<64 hex>` entsteht
 deterministisch aus Tracknummern, LBAs, Typen, Sektorformaten, Offsets,
-Sektorzahlen und den aktiven Trackbytes. Ein unveraendert verschobener
+Sektorzahlen und den wiederverwendbaren Track-SHA-256. Ein unveraendert verschobener
 Mehrdateisatz behaelt deshalb dieselbe Identitaet.
+
+Trackdateien bleiben ueber dauerhafte read-only Handles geoeffnet. Tracknummern
+und LBA-Intervalle sind indiziert, zusammenhaengende Sektoren werden gebuendelt
+gelesen und ein abschaltbarer Cache behaelt hoechstens 256 dekodierte Sektoren.
+ISO9660 besitzt zusaetzlich begrenzte Verzeichnis- und Extentcaches. Der genaue
+P1-Vertrag und seine Messpunkte stehen in [`P1_DISC_IO.md`](P1_DISC_IO.md).
 
 Audiotracks bleiben als Raw-Sektoren in ihrem Descriptorformat erreichbar.
 Datentracks werden fuer den gemeinsamen `DiscSource`-, GD-ROM- und

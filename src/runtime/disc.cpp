@@ -61,6 +61,10 @@ FileDiscSource::FileDiscSource(std::filesystem::path path, std::string identity)
     if (error) {
         throw std::runtime_error("Groesse der Disc-Dateiquelle konnte nicht gelesen werden.");
     }
+    stream_.open(path_, std::ios::binary);
+    if (!stream_) {
+        throw std::runtime_error("Disc-Dateiquelle konnte nicht dauerhaft read-only geoeffnet werden.");
+    }
 }
 
 std::uint64_t FileDiscSource::size() const noexcept {
@@ -81,16 +85,28 @@ void FileDiscSource::read(const std::uint64_t offset,
             static_cast<std::size_t>(std::numeric_limits<std::streamsize>::max())) {
         throw std::out_of_range("Disc-Dateilesebereich ist fuer den Hoststream zu gross.");
     }
-    std::ifstream input(path_, std::ios::binary);
-    if (!input) {
-        throw std::runtime_error("Disc-Dateiquelle konnte nicht read-only geoeffnet werden.");
-    }
-    input.seekg(static_cast<std::streamoff>(offset));
-    input.read(reinterpret_cast<char*>(destination.data()),
-               static_cast<std::streamsize>(destination.size()));
-    if (!input || input.gcount() != static_cast<std::streamsize>(destination.size())) {
+    const std::lock_guard lock(stream_mutex_);
+    stream_.clear();
+    stream_.seekg(static_cast<std::streamoff>(offset));
+    stream_.read(reinterpret_cast<char*>(destination.data()),
+                 static_cast<std::streamsize>(destination.size()));
+    if (!stream_ || stream_.gcount() != static_cast<std::streamsize>(destination.size())) {
         throw std::runtime_error("Disc-Dateiquelle lieferte einen unvollstaendigen Read.");
     }
+    read_operations_.fetch_add(1u, std::memory_order_relaxed);
+    bytes_read_.fetch_add(destination.size(), std::memory_order_relaxed);
+}
+
+std::uint64_t FileDiscSource::read_operations() const noexcept {
+    return read_operations_.load(std::memory_order_relaxed);
+}
+
+std::uint64_t FileDiscSource::bytes_read() const noexcept {
+    return bytes_read_.load(std::memory_order_relaxed);
+}
+
+std::uint64_t FileDiscSource::open_operations() const noexcept {
+    return 1u;
 }
 
 GdRomDrive::GdRomDrive(std::shared_ptr<const DiscSource> source, const std::uint32_t sector_size)

@@ -2,7 +2,7 @@
 
 Interner Entwicklungsmeilenstein: `v0.46.0`
 Phase: Core-Stabilisierung vor v0.47
-Naechster Task: `KR-4623`
+Naechster Task: `KR-4624`
 Naechstes Gate: `v0.47.0` - Core-Stabilisierung und generische Retail-Runtime
 Weitere interne Gates: `v0.48.0` Integration und `v0.49.0` Alpha-Candidate
 Erster oeffentlicher Release: `v0.50.0` Alpha
@@ -37,6 +37,19 @@ tragen einen kanonischen IR-Hash und koennen als Delta ermittelt werden; der
 Codegencache verwendet Schema 3 mit SHA-256-Schluesseln und atomarem,
 konkurrenzsicherem Publish. Vertrag und Budgets stehen in
 [`P1_INCREMENTAL_ANALYSIS.md`](P1_INCREMENTAL_ANALYSIS.md).
+
+## KR-4623 umgesetzt
+
+Trackdateien werden einmal read-only geoeffnet und danach ueber persistente
+Handles gelesen. GDI besitzt Tracknummer- und LBA-Indizes, gebuendelte
+Trackreads sowie einen abschaltbaren, auf 256 Sektoren begrenzten Cache.
+ISO9660 cacht Verzeichnisse und Extents mit festen Obergrenzen; Cache-an und
+Referenzmodus behalten identische Bytes und Pfadfehler.
+
+Descriptor- und Track-SHA-256 werden beim Oeffnen erfasst und vom Portexport
+wiederverwendet. Die portable GDI-Identitaet ist jetzt SHA-256-basiert.
+GD-ROM-Completions bleiben ohne Hostuhr auf dem zentralen Gastscheduler. Der
+Vertrag steht in [`P1_DISC_IO.md`](P1_DISC_IO.md).
 
 ## Aktuelles Reviewurteil
 

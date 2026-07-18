@@ -91,6 +91,18 @@ int main() {
             "ISO9660-Datei wird nicht case-insensitive gelesen.");
     require(filesystem.read_file("/SUBDIR/NEST.BIN") == std::vector<std::uint8_t>({1u, 2u, 3u, 4u}),
             "ISO9660-Unterverzeichnis wird nicht aufgeloest.");
+    const auto cached_nested = filesystem.read_file("/SUBDIR/NEST.BIN");
+    require(filesystem.io_counters().directory_cache_hits != 0u &&
+                filesystem.io_counters().extent_cache_hits != 0u &&
+                filesystem.directory_cache_size() <= 256u &&
+                filesystem.extent_cache_size() <= 4096u,
+            "ISO-Verzeichnis-/Extentcache liefert keine Hits oder ist nicht begrenzt.");
+    filesystem.set_cache_mode(Iso9660CacheMode::DisabledReference);
+    filesystem.reset_io_counters();
+    require(filesystem.read_file("/SUBDIR/NEST.BIN") == cached_nested &&
+                filesystem.io_counters().directory_cache_hits == 0u &&
+                filesystem.io_counters().extent_cache_hits == 0u,
+            "Abgeschalteter ISO-Referenzpfad liefert andere Bytes oder benutzt den Cache.");
     require(
         throws<std::out_of_range>([&] { static_cast<void>(filesystem.read_file("/MISSING.BIN")); }),
         "Fehlender ISO9660-Pfad wird akzeptiert.");

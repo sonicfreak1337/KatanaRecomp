@@ -308,7 +308,7 @@ internierter Evidenztabelle, begrenztem Jump-Table-Snapshotcache, stabilen
 IR-Hashpartitionen sowie SHA-256-/atomarem Codegencache-Publish. Details und
 Gate-Messwerte stehen in `P1_INCREMENTAL_ANALYSIS.md`.
 
-### [ ] KR-4623 - Disc-, GDI-, ISO- und GD-ROM-I/O
+### [x] KR-4623 - Disc-, GDI-, ISO- und GD-ROM-I/O
 
 Abhaengigkeiten: KR-4616, KR-4618
 Prioritaet: P1
@@ -327,6 +327,12 @@ Akzeptanz:
 - Cache an/aus liefert identische Bytes und Ereignisse
 - grosse sequenzielle und zufaellige Reads besitzen Benchmarks
 - Pfad-, Identitaets- und Read-only-Vertraege bleiben unveraendert
+
+Umgesetzt mit persistenten read-only Trackhandles, Tracknummer-/LBA-Index,
+Trackbatches, abschaltbarem begrenztem Sektorcache, ISO-Verzeichnis-/Extentcache
+und zwischen Runtime/Portexport wiederverwendeten SHA-256-Provenienzen. Der
+GD-ROM-Pfad bleibt ausschliesslich gastzyklusgesteuert. Details und Messpunkte
+stehen in `P1_DISC_IO.md`.
 
 ### [ ] KR-4624 - Buildgraph, Cache und Testmatrix
 

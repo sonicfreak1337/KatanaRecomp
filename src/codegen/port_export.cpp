@@ -899,10 +899,16 @@ PortExportResult export_dreamcast_port_project(const std::filesystem::path& gdi_
     auto program = katana::ir::lower_program(analysis);
     static_cast<void>(katana::ir::optimize_program(program));
     std::vector<katana::io::InputProvenance> inputs;
-    inputs.push_back(katana::io::capture_input_provenance("gdi-descriptor", gdi_path));
+    const auto& descriptor = disc.source->descriptor();
+    inputs.push_back({"gdi-descriptor",
+                      descriptor.size,
+                      descriptor.sha256,
+                      descriptor.resolved_path});
     for (const auto& track : disc.source->descriptor().tracks) {
-        inputs.push_back(katana::io::capture_input_provenance(
-            "gdi-track-" + std::to_string(track.number), track.resolved_path));
+        inputs.push_back({"gdi-track-" + std::to_string(track.number),
+                          track.file_offset + track.sector_count * track.sector_size,
+                          track.sha256,
+                          track.resolved_path});
     }
     return export_dreamcast_port_project({image,
                                           analysis,

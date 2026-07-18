@@ -4,6 +4,12 @@
 
 ### Geaendert
 
+- KR-4623: GDI-Tracks verwenden persistente read-only Handles, indizierte
+  Track-/LBA-Aufloesung, gebuendelte Hostreads und einen abschaltbaren
+  256-Sektorcache. ISO9660 besitzt begrenzte Verzeichnis- und Extentcaches.
+  Descriptor-/Track-SHA-256 werden zwischen Runtime und Portexport
+  wiederverwendet; die pfadunabhaengige Discidentitaet ist SHA-256-basiert.
+  GD-ROM-Completions bleiben ausschliesslich an Gastzyklen gebunden.
 - KR-4622: Kontrollfluss-Seeds arbeiten ab dem zweiten Fixpunkt auf einer
   wiederverwendeten Kontextbaseline; Funktionssummaries werden SCC-geordnet
   und nur bei geaendertem Ingress propagiert. Immutable Instruktionsarenen,
