@@ -5,6 +5,7 @@
 #include <limits>
 #include <stdexcept>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -150,6 +151,61 @@ int main() {
                 reset_notifications == 1u && reset_ids.reset_generation() == 1u &&
                 reset_ids.remove_reset_observer(observer),
             "Scheduler-Reset recycelt Ereignis-IDs oder benachrichtigt Zeitgeber nicht sicher.");
+
+    require(katana::runtime::parse_guest_cycle_budget("18446744073709551615") ==
+                    std::numeric_limits<std::uint64_t>::max() &&
+                throws<std::invalid_argument>(
+                    [] { static_cast<void>(katana::runtime::parse_guest_cycle_budget("")); }) &&
+                throws<std::invalid_argument>(
+                    [] { static_cast<void>(katana::runtime::parse_guest_cycle_budget("0")); }) &&
+                throws<std::invalid_argument>(
+                    [] { static_cast<void>(katana::runtime::parse_guest_cycle_budget("-1")); }) &&
+                throws<std::invalid_argument>(
+                    [] { static_cast<void>(katana::runtime::parse_guest_cycle_budget("+1")); }) &&
+                throws<std::invalid_argument>(
+                    [] { static_cast<void>(katana::runtime::parse_guest_cycle_budget(" 10")); }) &&
+                throws<std::invalid_argument>(
+                    [] { static_cast<void>(katana::runtime::parse_guest_cycle_budget("10 ")); }) &&
+                throws<std::invalid_argument>(
+                    [] { static_cast<void>(katana::runtime::parse_guest_cycle_budget("text")); }) &&
+                throws<std::invalid_argument>([] {
+                    static_cast<void>(
+                        katana::runtime::parse_guest_cycle_budget("18446744073709551616"));
+                }),
+            "Gastzyklusbudgetparser akzeptiert Null, Text oder 64-Bit-Ueberlauf.");
+
+    const auto budget_case = [](const std::uint64_t budget) {
+        EventScheduler test;
+        test.set_guest_cycle_budget(budget);
+        std::size_t callbacks = 0u;
+        static_cast<void>(
+            test.schedule_at(10u, [&](const auto, const auto) { ++callbacks; }));
+        return std::pair{test.advance_to(20u, 1u), callbacks};
+    };
+    const auto [below_deadline, below_callbacks] = budget_case(9u);
+    const auto [at_deadline, at_callbacks] = budget_case(10u);
+    const auto [above_deadline, above_callbacks] = budget_case(11u);
+    require(below_deadline.status == SchedulerAdvanceStatus::GuestCycleBudgetExhausted &&
+                below_deadline.guest_cycle == 9u && below_callbacks == 0u &&
+                at_deadline.status == SchedulerAdvanceStatus::GuestCycleBudgetExhausted &&
+                at_deadline.guest_cycle == 10u && at_callbacks == 1u &&
+                above_deadline.status == SchedulerAdvanceStatus::GuestCycleBudgetExhausted &&
+                above_deadline.guest_cycle == 11u && above_callbacks == 1u,
+            "Gastbudget unter, auf oder ueber einer Ereignisfrist kappt falsch.");
+
+    EventScheduler bounded;
+    bounded.set_guest_cycle_budget(10u);
+    std::uint64_t bounded_event_cycle = 0u;
+    static_cast<void>(bounded.schedule_at(
+        10u, [&](const auto, const auto cycle) { bounded_event_cycle = cycle; }));
+    const auto bounded_result = bounded.advance_to(20u, 1u);
+    require(bounded_result.status == SchedulerAdvanceStatus::GuestCycleBudgetExhausted &&
+                bounded_result.guest_cycle == 10u && bounded_event_cycle == 10u &&
+                bounded.remaining_guest_cycles() == 0u &&
+                bounded.advance_by(1u, 0u).status ==
+                    SchedulerAdvanceStatus::GuestCycleBudgetExhausted &&
+                throws<std::logic_error>([&] { bounded.set_guest_cycle_budget(11u); }),
+            "Gastzyklusbudget kappt nicht exakt oder kann waehrend des Laufs mutieren.");
 
     std::cout << "KR-3101 Event-Scheduler erfolgreich.\n";
     return 0;

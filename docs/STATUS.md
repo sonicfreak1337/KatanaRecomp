@@ -2,7 +2,7 @@
 
 Interner Entwicklungsmeilenstein: `v0.46.0`
 Phase: Core-Stabilisierung vor v0.47
-Naechster Task: `KR-4617`
+Naechster Task: `KR-4618`
 Naechstes Gate: `v0.47.0` - Core-Stabilisierung und generische Retail-Runtime
 Weitere interne Gates: `v0.48.0` Integration und `v0.49.0` Alpha-Candidate
 Erster oeffentlicher Release: `v0.50.0` Alpha
@@ -150,6 +150,25 @@ weder ohne Wakeupquelle noch ueber das Gastbudget hinaus still weiterlaufen.
 Der genaue Vertrag und die bei KR-4617/KR-4618 nachzuholenden
 Reihenfolge-, Budget- und Cross-Engine-Regressionen stehen in
 [`GUEST_TIMING.md`](GUEST_TIMING.md).
+
+## KR-4617 umgesetzt
+
+Die synthetische Core-Suite enthaelt nun unabhaengige Referenzvektoren fuer
+alle P0-Vertraege: die Vier-Zustaende-Registerbankmatrix, PR vor Call-Delay
+Slots, RTE-/Exceptionmetadaten, SQ-Bit-5-Adressierung, alle Gastwritequellen,
+Aliasinvalidierung, generationsgesicherte Blockhandles und den gemeinsamen
+Gastzeitvertrag. Erfolgs-, Grenz- und sichtbare Fehlerfaelle sind getrennt.
+
+CFG-Regressionen pruefen Hint- und Forced-Override-Evidenz, erhaltene
+Runtime-Defaults, Adressluecken, partielle Sites, normale und Delay-Slot-
+Kontexte, unbekannte Caller sowie exhaustive kleine Conditional-Graphen.
+Fixpunktterminierung wird nur noch gegen ein oberes Budget geprueft; interne
+Iterationszahlen sind kein Testvertrag mehr.
+
+Die Tests passen zu Runtime-ABI 11, PlatformServices-ABI 5 und dem stabilen
+Blockhandle-API. Gemaess Gate-Arbeitsmodell wurden bei KR-4617 weder
+Konfiguration noch Build oder Tests gestartet. Die Debug-/RelWithDebInfo-
+Ausfuehrung und der Konfigurationsvergleich folgen gesammelt in KR-4618.
 
 ## Naechste Reihenfolge
 

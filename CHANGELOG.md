@@ -25,6 +25,13 @@
   dokumentiert.
 ### Korrigiert
 
+- KR-4617: Unabhaengige SH-4-, Store-Queue-, Gastwrite-, Registry-, Timing-
+  und CFG-Referenzvektoren decken die P0-Vertraege mit Erfolgs-, Grenz- und
+  Fehlerfaellen ab. Hints, Overrides, Luecken, partielle Sites, Delay-Slot-
+  Kontexte und unbekannte Caller behalten konservative Runtime-Defaults;
+  Fixpunkte werden gegen ein oberes Terminierungsbudget statt gegen interne
+  Iterationszahlen geprueft. Die frische Debug-/RelWithDebInfo-Ausfuehrung
+  bleibt dem Core-Gate KR-4618 vorbehalten.
 - KR-4616: Gastzeitvertrag 1 vereinheitlicht Instruktionskosten, TMU, RTC, DMA,
   GD-ROM, PVR, SLEEP und Laufbudget auf dem zentralen Scheduler. GD-ROM besitzt
   keine manuell fortgeschaltete Uhr mehr, PVR-Abschluesse sind terminiert und

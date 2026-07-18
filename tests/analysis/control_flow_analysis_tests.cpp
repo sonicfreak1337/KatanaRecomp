@@ -166,17 +166,38 @@ int main() {
                     0x2Bu, 0x42u, 0x09u, 0x00u, 0x09u, 0x00u, 0x0Bu, 0x00u, 0x09u, 0x00u});
     const auto chain = katana::analysis::analyze_control_flow(chain_image);
     require(has_instruction(chain, 16u), "Kette indirekter Ziele erreichte den Fixpunkt nicht.");
-    require(chain.fixpoint_iterations == 3u, "Fixpunktiteration ist nicht deterministisch.");
+    require(chain.fixpoint_iterations > 0u && chain.fixpoint_iterations <= 16u,
+            "Kontrollflussanalyse terminiert nicht innerhalb des unabhaengigen Budgets.");
     require(chain.indirect_control_flow.size() == 2u,
             "Fixpunkt duplizierte oder verlor Aufloesungen.");
 
     auto cycle_image = code_image({0x00u, 0xE1u, 0x2Bu, 0x41u, 0x09u, 0x00u});
     const auto cycle = katana::analysis::analyze_control_flow(cycle_image);
-    require(cycle.fixpoint_iterations == 2u && cycle.recursive.instructions.size() == 3u,
-            "Identisches indirektes Quell- und Zielgebiet terminierte nicht deterministisch.");
+    require(cycle.fixpoint_iterations > 0u && cycle.fixpoint_iterations <= 16u &&
+                cycle.recursive.instructions.size() == 3u,
+            "Identisches indirektes Quell- und Zielgebiet terminiert nicht im Ergebnisbudget.");
 
     auto override_image = code_image(
         {0x2Bu, 0x41u, 0x09u, 0x00u, 0x09u, 0x00u, 0x09u, 0x00u, 0x0Bu, 0x00u, 0x09u, 0x00u});
+    katana::analysis::AnalysisOverrides jump_hint;
+    jump_hint.version = 2u;
+    jump_hint.mode = katana::analysis::AnalysisDirectiveMode::Hint;
+    jump_hint.source_path = "jump-hint.txt";
+    jump_hint.functions.push_back({8u, 1u});
+    jump_hint.jumps.push_back({0u, 8u, 2u});
+    const auto hinted_jump = katana::analysis::analyze_control_flow(override_image, &jump_hint);
+    require(hinted_jump.indirect_control_flow.size() == 1u &&
+                hinted_jump.indirect_control_flow[0].status ==
+                    katana::analysis::ResolutionStatus::Unresolved &&
+                hinted_jump.indirect_control_flow[0].evidence ==
+                    katana::analysis::ControlFlowEvidence::HintCandidate &&
+                has_instruction(hinted_jump, 8u),
+            "Ein Hint wurde als Beweis behandelt oder nicht als Kandidat decodiert.");
+    const auto hinted_jump_ir = katana::ir::lower_program(hinted_jump);
+    require(hinted_jump_ir.size() == 1u &&
+                hinted_jump_ir.front().blocks.front().has_indirect_successor,
+            "Hint erzeugt eine harte Funktionsgrenze oder entfernt den Runtime-Default.");
+
     katana::analysis::AnalysisOverrides jump_override;
     jump_override.source_path = "override-test.txt";
     jump_override.jumps.push_back({0u, 8u, 7u});
@@ -189,13 +210,23 @@ int main() {
             "Override-Aufloesung ist im Berichtsdatenmodell nicht sichtbar.");
     require(overridden.resolved_edges.size() == 1u &&
                 overridden.resolved_edges[0].instruction_address == 0u &&
-                overridden.resolved_edges[0].target_address == 8u,
+                overridden.resolved_edges[0].target_address == 8u &&
+                overridden.resolved_edges[0].evidence ==
+                    katana::analysis::ControlFlowEvidence::ForcedOverride,
             "Override-Ziel wurde nicht als echte CFG-Kante materialisiert.");
     require(find_function(overridden, 8u) != nullptr &&
                 find_function(overridden, 8u)->origins ==
                     std::vector<katana::analysis::FunctionOrigin>{
                         katana::analysis::FunctionOrigin::UserOverride},
             "Function-Override ist nicht als Nutzerherkunft sichtbar.");
+    const auto overridden_ir = katana::ir::lower_program(overridden);
+    require(overridden.indirect_control_flow[0].status ==
+                katana::analysis::ResolutionStatus::Guarded &&
+                overridden.indirect_control_flow[0].evidence ==
+                    katana::analysis::ControlFlowEvidence::ForcedOverride &&
+                overridden_ir.size() == 1u &&
+                overridden_ir.front().blocks.front().has_indirect_successor,
+            "Forced Override entfernt den dynamischen Runtime-Default.");
 
     auto override_call_image = code_image(
         {0x0Bu, 0x41u, 0x09u, 0x00u, 0x0Bu, 0x00u, 0x09u, 0x00u, 0x0Bu, 0x00u, 0x09u, 0x00u});

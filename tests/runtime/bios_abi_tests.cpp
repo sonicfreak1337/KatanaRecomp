@@ -30,7 +30,7 @@ int main() {
     for (const auto& vector : vectors)
         require(cpu.memory.read_u32(vector.slot_address) == vector.handler_address &&
                     cpu.memory.read_u16(vector.handler_address) == 0x000Bu &&
-                    blocks.lookup_physical(vector.handler_address, {}) != nullptr,
+                    blocks.lookup_physical(vector.handler_address, {}).has_value(),
                 "BIOS-ABI-Vektor, RAM-Stub oder physischer Dispatchalias fehlt.");
     require(handoff.resolve(0xAC000100u).statically_proven &&
                 handoff.resolve(0xAC000100u).provenance == "hle-generated-handler",
@@ -43,8 +43,10 @@ int main() {
             "Titelunabhaengiger SYSINFO-Init-Aufruf wird nicht ausgefuehrt.");
     cpu.pr = 0x8C010000u;
     BlockExecutionContext context;
-    const auto* init_block = blocks.lookup(vectors[0].handler_address, {});
-    const auto init_exit = init_block->function(cpu, context);
+    const auto init_handle = blocks.lookup(vectors[0].handler_address, {});
+    const auto init_block = init_handle ? blocks.resolve(*init_handle) : std::nullopt;
+    require(init_block.has_value(), "Installierter BIOS-ABI-Block ist nicht aufloesbar.");
+    const auto init_exit = init_block->get().function(cpu, context);
     require(init_exit.kind == BlockEndKind::Return && cpu.pc == cpu.pr && cpu.r[0] == 0u,
             "Installierter BIOS-ABI-Runtimeblock kehrt nicht ueber den gemeinsamen Blockvertrag "
             "zurueck.");
@@ -56,8 +58,10 @@ int main() {
                 gdrom.status == BiosAbiServiceStatus::ServiceUnavailable,
             "Bekannter GD-ROM-Aufruf wird still erfolgreich gemeldet.");
     try {
-        const auto* gdrom_block = blocks.lookup(vectors[3].handler_address, {});
-        static_cast<void>(gdrom_block->function(cpu, context));
+        const auto gdrom_handle = blocks.lookup(vectors[3].handler_address, {});
+        const auto gdrom_block = gdrom_handle ? blocks.resolve(*gdrom_handle) : std::nullopt;
+        require(gdrom_block.has_value(), "GD-ROM-BIOS-ABI-Block ist nicht aufloesbar.");
+        static_cast<void>(gdrom_block->get().function(cpu, context));
         require(false, "Nicht angebundener GD-ROM-Dienst lief als Erfolg weiter.");
     } catch (const BiosAbiDispatchError& error) {
         require(std::string(error.what()).find("service-unavailable:gdrom-service") !=

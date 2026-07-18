@@ -111,8 +111,9 @@ RuntimeBlockHandle RuntimeBlockTable::insert(RuntimeBlock block,
             throw std::logic_error("Nur dynamische Runtimebloecke koennen reaktiviert werden: " +
                                    identity);
         }
-        if (overlaps_active_virtual(block, known->second)) {
+        if (const auto overlap = overlapping_active_virtual(block, known->second)) {
             throw std::invalid_argument("Reaktivierter Block ueberlappt einen aktiven Block: " +
+                                        records_.at(*overlap).block.provenance + " <-> " +
                                         block.provenance);
         }
         record.block = std::move(block);
@@ -122,8 +123,9 @@ RuntimeBlockHandle RuntimeBlockTable::insert(RuntimeBlock block,
         return {known->second, record.generation};
     }
 
-    if (overlaps_active_virtual(block)) {
+    if (const auto overlap = overlapping_active_virtual(block)) {
         throw std::invalid_argument("Doppelter oder ueberlappender virtueller Block: " +
+                                    records_.at(*overlap).block.provenance + " <-> " +
                                     block.provenance);
     }
     const auto id = next_id_++;
@@ -136,8 +138,9 @@ RuntimeBlockHandle RuntimeBlockTable::insert(RuntimeBlock block,
     return {id, record_it->second.generation};
 }
 
-bool RuntimeBlockTable::overlaps_active_virtual(const RuntimeBlock& block,
-                                                const std::uint64_t ignored_id) const noexcept {
+std::optional<std::uint64_t>
+RuntimeBlockTable::overlapping_active_virtual(const RuntimeBlock& block,
+                                              const std::uint64_t ignored_id) const noexcept {
     const VariantAddressKey key{block.variant, block.virtual_start};
     const auto next = active_virtual_ranges_.lower_bound(key);
     if (next != active_virtual_ranges_.end() && next->first.variant == block.variant &&
@@ -147,7 +150,7 @@ bool RuntimeBlockTable::overlaps_active_virtual(const RuntimeBlock& block,
                            block.size,
                            candidate.virtual_start,
                            candidate.size))
-            return true;
+            return next->second;
     }
     if (next != active_virtual_ranges_.begin()) {
         const auto previous = std::prev(next);
@@ -157,10 +160,10 @@ bool RuntimeBlockTable::overlaps_active_virtual(const RuntimeBlock& block,
                                block.size,
                                candidate.virtual_start,
                                candidate.size))
-                return true;
+                return previous->second;
         }
     }
-    return false;
+    return std::nullopt;
 }
 
 void RuntimeBlockTable::index_active(const std::uint64_t id, const Record& record) {

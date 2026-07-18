@@ -88,7 +88,6 @@ void EventScheduler::reset() {
     }
     clear();
     current_cycle_ = 0u;
-    next_event_id_ = 1u;
     processed_event_count_ = 0u;
     ++reset_generation_;
     if (replay_log_ != nullptr) {

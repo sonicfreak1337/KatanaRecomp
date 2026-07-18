@@ -1,5 +1,6 @@
 #include "katana/runtime/exception.hpp"
 
+#include <array>
 #include <cstdlib>
 #include <iostream>
 #include <string>
@@ -17,6 +18,104 @@ void require(const bool condition, const std::string& message) {
 
 int main() {
     using namespace katana::runtime;
+
+    struct MetadataVector {
+        ExceptionCause input;
+        ExceptionCause normalized;
+        std::uint32_t event;
+        std::uint32_t vector;
+        bool interrupt;
+        bool slot;
+    };
+    constexpr std::array metadata_vectors{
+        MetadataVector{ExceptionCause::Trap,
+                       ExceptionCause::Trap,
+                       event_trapa,
+                       general_exception_vector,
+                       false,
+                       false},
+        MetadataVector{ExceptionCause::IllegalInstruction,
+                       ExceptionCause::IllegalInstruction,
+                       event_illegal_instruction,
+                       general_exception_vector,
+                       false,
+                       false},
+        MetadataVector{ExceptionCause::SlotIllegalInstruction,
+                       ExceptionCause::SlotIllegalInstruction,
+                       event_slot_illegal_instruction,
+                       general_exception_vector,
+                       false,
+                       true},
+        MetadataVector{ExceptionCause::FpuDisabled,
+                       ExceptionCause::FpuDisabled,
+                       event_fpu_disabled,
+                       general_exception_vector,
+                       false,
+                       false},
+        MetadataVector{ExceptionCause::SlotFpuDisabled,
+                       ExceptionCause::SlotFpuDisabled,
+                       event_slot_fpu_disabled,
+                       general_exception_vector,
+                       false,
+                       true},
+        MetadataVector{ExceptionCause::AddressErrorRead,
+                       ExceptionCause::AddressErrorRead,
+                       event_address_error_read,
+                       general_exception_vector,
+                       false,
+                       false},
+        MetadataVector{ExceptionCause::AddressErrorWrite,
+                       ExceptionCause::AddressErrorWrite,
+                       event_address_error_write,
+                       general_exception_vector,
+                       false,
+                       false},
+        MetadataVector{ExceptionCause::BusErrorRead,
+                       ExceptionCause::AddressErrorRead,
+                       event_address_error_read,
+                       general_exception_vector,
+                       false,
+                       false},
+        MetadataVector{ExceptionCause::BusErrorWrite,
+                       ExceptionCause::AddressErrorWrite,
+                       event_address_error_write,
+                       general_exception_vector,
+                       false,
+                       false},
+        MetadataVector{ExceptionCause::Interrupt,
+                       ExceptionCause::Interrupt,
+                       0x00000320u,
+                       interrupt_vector,
+                       true,
+                       false},
+    };
+    for (const auto& vector : metadata_vectors) {
+        const auto metadata = exception_metadata(vector.input, 0x00000320u);
+        require(metadata.cause == vector.normalized && metadata.event_code == vector.event &&
+                    metadata.vector_offset == vector.vector &&
+                    metadata.interrupt == vector.interrupt,
+                "Exception-Metadatentabelle weicht vom unabhaengigen Referenzvektor ab.");
+        CpuState state;
+        state.vbr = 0x80000000u;
+        state.r[15] = 0x8C00FFF0u;
+        state.write_sr(sr_t_mask | (3u << 4u));
+        enter_exception(state,
+                        {vector.input,
+                         0x00000320u,
+                         0xDEADu,
+                         0x8C010000u,
+                         0xAABBCCDDu,
+                         vector.interrupt,
+                         vector.slot});
+        require(state.last_exception_cause == vector.normalized &&
+                    state.pc == state.vbr + vector.vector && state.spc == 0x8C010000u &&
+                    state.ssr == (sr_t_mask | (3u << 4u)) && state.sgr == 0x8C00FFF0u &&
+                    state.tea == 0xAABBCCDDu && state.exception_in_delay_slot == vector.slot &&
+                    state.trap_pending &&
+                    (vector.interrupt ? state.intevt == vector.event
+                                      : state.expevt == vector.event),
+                "Exception-Eintritt verliert Event, Vektor oder gesicherten Gastzustand.");
+    }
 
     CpuState cpu;
     cpu.vbr = 0x8C000000u;

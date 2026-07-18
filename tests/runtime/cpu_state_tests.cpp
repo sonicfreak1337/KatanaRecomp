@@ -30,7 +30,7 @@ int main() {
     static_assert(katana::runtime::banked_register_count == 8u);
     static_assert(katana::runtime::fpu_register_count == 16u);
 
-    static_assert(katana::runtime::abi_version == 8u);
+    static_assert(katana::runtime::abi_version == 11u);
 
     CpuState cpu;
 
@@ -45,6 +45,37 @@ int main() {
 
     require(all_zero(cpu.r) && all_zero(cpu.r_bank) && all_zero(cpu.fr) && all_zero(cpu.xf),
             "Die zentralen Registerbaenke sind nicht deterministisch nullinitialisiert.");
+
+    constexpr std::array<std::uint32_t, 4u> bank_states{
+        0u,
+        katana::runtime::sr_rb_mask,
+        katana::runtime::sr_md_mask,
+        katana::runtime::sr_md_mask | katana::runtime::sr_rb_mask};
+    for (const auto initial : bank_states) {
+        for (const auto target : bank_states) {
+            CpuState matrix;
+            for (std::size_t index = 0u; index < matrix.r_bank.size(); ++index) {
+                matrix.r[index] = 0x10000000u + static_cast<std::uint32_t>(index);
+                matrix.r_bank[index] = 0x20000000u + static_cast<std::uint32_t>(index);
+            }
+            matrix.write_sr(initial);
+            matrix.write_sr(target);
+            const bool selected = (target & katana::runtime::sr_md_mask) != 0u &&
+                                  (target & katana::runtime::sr_rb_mask) != 0u;
+            bool identities_match = true;
+            for (std::size_t index = 0u; index < matrix.r_bank.size(); ++index) {
+                const auto bank0 = 0x10000000u + static_cast<std::uint32_t>(index);
+                const auto bank1 = 0x20000000u + static_cast<std::uint32_t>(index);
+                identities_match = identities_match &&
+                                   matrix.r[index] == (selected ? bank1 : bank0) &&
+                                   matrix.r_bank[index] == (selected ? bank0 : bank1);
+            }
+            require(identities_match && matrix.register_bank_selected() == selected &&
+                        (matrix.read_sr() &
+                         (katana::runtime::sr_md_mask | katana::runtime::sr_rb_mask)) == target,
+                    "Vier-Zustaende-Matrix vertauscht User/Privileged-RB-Registeridentitaeten.");
+        }
+    }
 
     require(cpu.pc == 0u && cpu.pr == 0u && cpu.gbr == 0u && cpu.vbr == 0u && cpu.ssr == 0u &&
                 cpu.spc == 0u && cpu.sgr == 0u && cpu.dbr == 0u && cpu.tra == 0u && cpu.tea == 0u &&

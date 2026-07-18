@@ -99,8 +99,9 @@ class RuntimeBlockTable {
 
     [[nodiscard]] RuntimeBlockHandle insert(RuntimeBlock block, bool runtime_registered);
     [[nodiscard]] bool dispatchable(const Record& record) const noexcept;
-    [[nodiscard]] bool overlaps_active_virtual(const RuntimeBlock& block,
-                                               std::uint64_t ignored_id = 0u) const noexcept;
+    [[nodiscard]] std::optional<std::uint64_t>
+    overlapping_active_virtual(const RuntimeBlock& block,
+                               std::uint64_t ignored_id = 0u) const noexcept;
     void index_active(std::uint64_t id, const Record& record);
     void deactivate(std::uint64_t id) noexcept;
     [[nodiscard]] std::optional<RuntimeBlockHandle>

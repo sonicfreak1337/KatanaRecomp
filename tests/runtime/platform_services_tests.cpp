@@ -21,6 +21,7 @@ void require(const bool condition, const std::string& message) {
 class MockServices final : public katana::runtime::PlatformServices {
   public:
     std::uint32_t version = katana::runtime::platform_services_abi_version;
+    std::uint32_t timing_contract = katana::runtime::guest_cycle_contract_version;
     katana::runtime::PlatformCapabilities available =
         katana::runtime::core_platform_capabilities |
         katana::runtime::platform_capability(
@@ -38,6 +39,9 @@ class MockServices final : public katana::runtime::PlatformServices {
     [[nodiscard]] std::uint32_t abi_version() const noexcept override {
         return version;
     }
+    [[nodiscard]] std::uint32_t guest_cycle_contract() const noexcept override {
+        return timing_contract;
+    }
     [[nodiscard]] katana::runtime::PlatformCapabilities capabilities() const noexcept override {
         return available;
     }
@@ -52,10 +56,15 @@ class MockServices final : public katana::runtime::PlatformServices {
     [[nodiscard]] std::uint64_t scheduler_cycle() const noexcept override {
         return cycle;
     }
+    [[nodiscard]] std::optional<std::uint64_t>
+    next_scheduler_event_cycle() const noexcept override {
+        return cycle + 10u;
+    }
     [[nodiscard]] katana::runtime::PlatformSchedulerResult
-    advance_scheduler(const std::uint64_t guest_cycle, const std::size_t event_budget) override {
-        cycle = guest_cycle;
-        return {cycle, std::min<std::size_t>(event_budget, 2u), event_budget < 2u};
+    consume_guest_cycles(const std::uint64_t guest_cycles,
+                         const std::size_t event_budget) override {
+        cycle += guest_cycles;
+        return {cycle, std::min<std::size_t>(event_budget, 2u), event_budget < 2u, false};
     }
     [[nodiscard]] std::optional<katana::runtime::PlatformInterruptRequest>
     poll_interrupt() override {
@@ -102,7 +111,7 @@ int main() {
     services.write_memory(4u, input);
     std::array<std::uint8_t, 4u> output{};
     services.read_memory(4u, output);
-    const auto scheduler = services.advance_scheduler(100u, 3u);
+    const auto scheduler = services.consume_guest_cycles(100u, 3u);
     const auto interrupt = services.poll_interrupt();
     const auto dma = services.start_dma({4u, 16u, 4u});
     CpuState cpu;
@@ -119,13 +128,22 @@ int main() {
     ++services.version;
     const auto abi_error = failure([&] { validate_platform_services(services, all); });
     services.version = platform_services_abi_version;
+    ++services.timing_contract;
+    const auto timing_error = failure([&] { validate_platform_services(services, all); });
+    services.timing_contract = guest_cycle_contract_version;
     services.available &= ~platform_capability(PlatformCapability::Watchpoints);
     const auto capability_error = failure([&] { validate_platform_services(services, all); });
     require(abi_error.find("mock") != std::string::npos &&
-                abi_error.find("ABI 3") != std::string::npos &&
-                abi_error.find("erforderlich ist ABI 3") != std::string::npos &&
+                abi_error.find("ABI " + std::to_string(platform_services_abi_version + 1u)) !=
+                    std::string::npos &&
+                abi_error.find("erforderlich ist ABI " +
+                               std::to_string(platform_services_abi_version)) !=
+                    std::string::npos &&
+                timing_error.find("Gastzyklusvertrag 2") != std::string::npos &&
+                timing_error.find("Vertrag 1") != std::string::npos &&
                 capability_error.find("mock") != std::string::npos &&
-                capability_error.find("ABI 3") != std::string::npos &&
+                capability_error.find("ABI " + std::to_string(platform_services_abi_version)) !=
+                    std::string::npos &&
                 capability_error.find("Maske 64") != std::string::npos,
             "Fehlende Plattformdienste nennen Name, ABI oder Ursache nicht.");
 

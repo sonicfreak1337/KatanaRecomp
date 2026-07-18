@@ -59,8 +59,9 @@ void test_memory_delay_slots() {
                     "RTS inkrementiert den Quellregisterzustand trotz fehlgeschlagenem Load.");
         }
         if (test.owner == 0x1100u || test.owner == 0x1300u) {
-            require(cpu.pr == 0xCAFEBABEu,
-                    std::string(test.name) + " schreibt PR trotz fehlgeschlagenem Delay Slot.");
+            require(cpu.pr == test.owner + 4u,
+                    std::string(test.name) +
+                        " schreibt PR nicht vor dem fehlgeschlagenen Delay Slot.");
         }
     }
 }
@@ -76,9 +77,46 @@ void test_call_fpu_delay_slot_exception() {
 
     require(cpu.trap_pending && cpu.last_exception_cause == ExceptionCause::SlotFpuDisabled &&
                 cpu.expevt == katana::runtime::event_slot_fpu_disabled &&
-                cpu.exception_in_delay_slot && cpu.spc == 0x1900u && cpu.pr == 0xCAFEBABEu &&
+                cpu.exception_in_delay_slot && cpu.spc == 0x1900u && cpu.pr == 0x1904u &&
                 cpu.fr[1] == 0x40000000u,
             "BSR schreibt PR vor einer FPU-Disable-Ausnahme im Delay Slot.");
+}
+
+void test_calls_write_pr_before_delay_slot() {
+    struct Case {
+        const char* name;
+        std::uint32_t owner;
+        GeneratedFunction store_pr;
+        GeneratedFunction load_pr;
+        bool pc_relative;
+    };
+    const std::array cases{
+        Case{"BSR", 0x1B00u, katana_generated::fn_00001B00,
+             katana_generated::fn_00001C00, false},
+        Case{"BSRF", 0x1D00u, katana_generated::fn_00001D00,
+             katana_generated::fn_00001E00, true},
+        Case{"JSR", 0x1F00u, katana_generated::fn_00001F00,
+             katana_generated::fn_00002000, false},
+    };
+
+    for (const auto& test : cases) {
+        katana_generated::CpuState cpu;
+        prepare(cpu, test.owner);
+        cpu.r[10] = test.pc_relative ? 0x3000u - (test.owner + 4u) : 0x3000u;
+        cpu.r[12] = 0u;
+        test.store_pr(cpu);
+        require(!cpu.trap_pending && cpu.r[12] == test.owner + 4u &&
+                    cpu.pr == test.owner + 4u && cpu.pc == test.owner + 4u,
+                std::string(test.name) + " macht den neuen PR-Wert im Delay Slot nicht sichtbar.");
+
+        const auto load_owner = test.owner + 0x100u;
+        prepare(cpu, load_owner);
+        cpu.r[10] = test.pc_relative ? 0x3000u - (load_owner + 4u) : 0x3000u;
+        cpu.r[11] = 0xDEADBEEFu;
+        test.load_pr(cpu);
+        require(!cpu.trap_pending && cpu.pr == 0xDEADBEEFu && cpu.pc == 0xDEADBEEFu,
+                std::string(test.name) + " verwirft den LDS-Schreibzugriff aus dem Delay Slot.");
+    }
 }
 
 void test_rts_latches_pr_before_delay_slot() {
@@ -146,6 +184,7 @@ int main() {
     test_rte_delay_slot_exception();
     test_nested_exception_propagation();
     test_call_fpu_delay_slot_exception();
+    test_calls_write_pr_before_delay_slot();
     test_rts_latches_pr_before_delay_slot();
     std::cout << "Ausfuehrbare Delay-Slot-Exception-Regression erfolgreich.\n";
     return EXIT_SUCCESS;

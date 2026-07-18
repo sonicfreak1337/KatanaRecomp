@@ -228,8 +228,7 @@ int run_test(const int argc, char* argv[]) {
         0u, 0u, {katana::runtime::MapleCommand::GetCondition, {}}));
     static_cast<void>(
         hle_runtime_state.gdrom->submit({katana::runtime::GdRomCommand::TestUnitReady}));
-    hle_runtime_state.gdrom->advance_to(1'000u);
-    static_cast<void>(hle_runtime_state.scheduler->advance_to(1'000u, 1u));
+    static_cast<void>(hle_runtime_state.scheduler->advance_to(2'000u, 3u));
     hle_runtime_state.aica->interrupts().set_enabled(1u);
     hle_runtime_state.aica->interrupts().request(1u);
     require(
@@ -282,6 +281,14 @@ int run_test(const int argc, char* argv[]) {
                         .find("generated-block-8C010000") != std::string::npos &&
                 generated_before.at("code/runtime-dispatch.cpp")
                         .find("6u, katana::runtime::BlockEndKind::Call") != std::string::npos &&
+                generated_before.at("code/runtime-dispatch.cpp")
+                        .find("SLEEP besitzt kein Wakeup-Ereignis") != std::string::npos &&
+                generated_before.at("code/runtime-dispatch.cpp")
+                        .find("Schedulerbudget erschoepft") != std::string::npos &&
+                generated_before.at("code/runtime-dispatch.cpp")
+                        .find("Gastzyklusbudget erschoepft") != std::string::npos &&
+                generated_before.at("code/runtime-dispatch.cpp")
+                        .find("Runtime-Blockbudget erschoepft") != std::string::npos &&
                 std::filesystem::exists(output / "CMakeLists.txt") &&
                 std::filesystem::exists(output / "src" / "main.cpp") &&
                 read_text(output / "src" / "main.cpp").find("load_dreamcast_runtime_boot") !=

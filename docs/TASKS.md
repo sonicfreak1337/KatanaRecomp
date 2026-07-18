@@ -212,7 +212,7 @@ Akzeptanz:
 - DMA-/Timer-/Interrupt-Reihenfolge ist gegen Referenzvektoren getestet
 - `KATANA_GUEST_CYCLE_BUDGET` begrenzt tatsaechlich den Gastlauf
 
-### [ ] KR-4617 - Unabhaengige Cross-Engine- und CFG-Konformitaetstests
+### [x] KR-4617 - Unabhaengige Cross-Engine- und CFG-Konformitaetstests
 
 Abhaengigkeiten: KR-4611 bis KR-4616
 Prioritaet: P0

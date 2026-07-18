@@ -8,6 +8,7 @@
 #include <cstdlib>
 #include <iostream>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -66,8 +67,10 @@ int main() {
     require(source.find("struct CpuState") == std::string::npos &&
                 source.find("class Memory") == std::string::npos,
             "Der generierte Code enthaelt weiterhin eine Runtime-Implementierung.");
-    require(source.find("required_runtime_abi = 8u") != std::string::npos,
+    require(source.find("required_runtime_abi = 11u") != std::string::npos,
             "Der generierte Code prueft die Runtime-ABI nicht.");
+    require(source.find("base_guest_cycles_per_instruction * 2u") != std::string::npos,
+            "Owner und Delay Slot werden nicht als zwei Gastinstruktionen berechnet.");
 
     require(source.find("fn_8C010000") != std::string::npos,
             "Die generierte Einstiegsfunktion fehlt.");
@@ -242,6 +245,25 @@ int main() {
                     "enter_memory_exception(cpu, error, 0x8C020002u, 0x8C020000u);") !=
                     std::string::npos,
             "Speicherfehler im Delay Slot verlieren ihren Owner-PC.");
+
+    katana::ir::Instruction first_timing;
+    first_timing.source_address = 0x3000u;
+    first_timing.operation = katana::ir::Operation::Nop;
+    katana::ir::Instruction second_timing = first_timing;
+    second_timing.source_address = 0x3002u;
+    katana::ir::BasicBlock timing_block;
+    timing_block.start_address = 0x3000u;
+    timing_block.instructions = {first_timing, second_timing, second_timing};
+    katana::ir::Function timing_function;
+    timing_function.entry_address = 0x3000u;
+    timing_function.blocks = {std::move(timing_block)};
+    const auto timing_source =
+        katana::codegen::emit_cpp_program(std::vector{timing_function}, 0x3000u);
+    require(timing_source.find("base_guest_cycles_per_instruction * 2u") !=
+                std::string::npos &&
+                timing_source.find("base_guest_cycles_per_instruction * 3u") ==
+                    std::string::npos,
+            "Mehrere IR-Operationen derselben Gastadresse werden als mehrere Zyklen gezaehlt.");
 
     std::cout << "Alle C++-Codegenerator-Tests erfolgreich.\n";
 

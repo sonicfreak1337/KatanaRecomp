@@ -42,6 +42,9 @@ class StoreQueueServices final : public katana::runtime::PlatformServices {
     [[nodiscard]] std::uint32_t abi_version() const noexcept override {
         return katana::runtime::platform_services_abi_version;
     }
+    [[nodiscard]] std::uint32_t guest_cycle_contract() const noexcept override {
+        return katana::runtime::guest_cycle_contract_version;
+    }
     [[nodiscard]] katana::runtime::PlatformCapabilities capabilities() const noexcept override {
         return katana::runtime::core_platform_capabilities;
     }
@@ -58,11 +61,16 @@ class StoreQueueServices final : public katana::runtime::PlatformServices {
         }
     }
     [[nodiscard]] std::uint64_t scheduler_cycle() const noexcept override {
-        return 0u;
+        return scheduler_cycle_;
+    }
+    [[nodiscard]] std::optional<std::uint64_t>
+    next_scheduler_event_cycle() const noexcept override {
+        return std::nullopt;
     }
     [[nodiscard]] katana::runtime::PlatformSchedulerResult
-    advance_scheduler(const std::uint64_t guest_cycle, const std::size_t) override {
-        return {guest_cycle, 0u, false};
+    consume_guest_cycles(const std::uint64_t guest_cycles, const std::size_t) override {
+        scheduler_cycle_ += guest_cycles;
+        return {scheduler_cycle_, 0u, false, false};
     }
     [[nodiscard]] std::optional<katana::runtime::PlatformInterruptRequest>
     poll_interrupt() override {
@@ -86,6 +94,7 @@ class StoreQueueServices final : public katana::runtime::PlatformServices {
     katana::runtime::CpuState& cpu_;
     katana::runtime::Sh4StoreQueues queues_;
     std::vector<katana::runtime::StoreQueueTransfer> transfers;
+    std::uint64_t scheduler_cycle_ = 0u;
 };
 
 } // namespace
@@ -118,11 +127,11 @@ int main() {
                 "Generiertes normales PREF erreicht die Runtime nicht.");
         services.queues_.write_qacr(0u, 0u);
         for (std::uint32_t offset = 0u; offset < 32u; offset += 4u) {
-            services.queues_.write_p4(0xE0000020u + offset,
+            services.queues_.write_p4(0xE0000000u + offset,
                                       0xA5000000u + offset,
                                       katana::runtime::MemoryAccessWidth::Word);
         }
-        cpu.r[3] = 0xE0000020u;
+        cpu.r[3] = 0xE0000000u;
         cpu.pc = 0x170u;
         katana_generated::fn_00000170_with_services(cpu, &services);
         require(cpu.prefetch_count == 2u && cpu.last_prefetch_was_store_queue &&
@@ -133,18 +142,18 @@ int main() {
 
         services.queues_.write_qacr(1u, 0x10u);
         for (std::uint32_t offset = 0u; offset < 32u; offset += 4u) {
-            services.queues_.write_p4(0xE2000040u + offset,
+            services.queues_.write_p4(0xE2000020u + offset,
                                       0x5A000000u + offset,
                                       katana::runtime::MemoryAccessWidth::Word);
         }
-        cpu.r[3] = 0xE2000040u;
+        cpu.r[3] = 0xE2000020u;
         cpu.pc = 0x170u;
         katana_generated::fn_00000170_with_services(cpu, &services);
         require(services.queues_.transfer_count() == 2u && services.transfers.size() == 1u &&
                     services.transfers.front().queue == 1u &&
                     services.transfers.front().target ==
                         katana::runtime::StoreQueueTarget::TileAccelerator &&
-                    services.transfers.front().target_address == 0x12000040u &&
+                    services.transfers.front().target_address == 0x12000020u &&
                     services.transfers.front().bytes[0] == 0x00u &&
                     services.transfers.front().bytes[31] == 0x5Au,
                 "Generiertes PREF uebertraegt SQ1 nicht ueber Plattformdienste zum TA-Sink.");

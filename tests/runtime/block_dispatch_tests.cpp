@@ -19,14 +19,14 @@ int main() {
         RuntimeBlockTable table;
         const BlockVariantKey variant{};
         for (const auto address : {0x8C001000u, 0x8C002000u, 0x8C003000u}) {
-            table.register_static({address,
+            static_cast<void>(table.register_static({address,
                                    canonical_physical_address(address),
                                    4u,
                                    BlockEndKind::Return,
                                    variant,
                                    host_block,
                                    "block-" + std::to_string(address),
-                                   false});
+                                   false}));
         }
         CanonicalBlockDispatcher dispatcher(table);
         CpuState cpu;
@@ -39,7 +39,7 @@ int main() {
             dispatcher
                     .dispatch(
                         cpu, context, variant, {BlockEndKind::Fallthrough, source, {}, fallthrough})
-                    .target_block != nullptr,
+                    .target_block.has_value(),
             "Fallthrough besitzt keinen Ausfuehrungspfad.");
         require(dispatcher
                         .dispatch(cpu,
@@ -71,7 +71,7 @@ int main() {
                                   {BlockEndKind::DynamicBranch, source, {}, std::nullopt},
                                   false,
                                   0x8C003000u)
-                        .target_block != nullptr,
+                        .target_block.has_value(),
                 "Dynamischer Sprung besitzt keinen generischen Lookup.");
         static_cast<void>(dispatcher.dispatch(cpu,
                                               context,

@@ -56,20 +56,20 @@ int main() {
                 "Aktive MMU schneidet Bloecke nicht konservativ an Seitengrenzen.");
         const auto old_guard = space.guard_for(0x1234u, fpscr_pr_mask);
         RuntimeBlockTable table;
-        table.register_static({0x1234u,
+        static_cast<void>(table.register_static({0x1234u,
                                old_guard.physical_page + 0x234u,
                                2u,
                                BlockEndKind::Fallthrough,
                                block_variant_key(old_guard),
                                guarded_block,
                                "guarded-old",
-                               false});
-        require(table.lookup(0x1234u, block_variant_key(old_guard)) != nullptr,
+                               false}));
+        require(table.lookup(0x1234u, block_variant_key(old_guard)).has_value(),
                 "Ausgangsvariante wurde nicht in der Laufzeittabelle registriert.");
         space.bump_watchpoints();
         const auto changed_guard = space.guard_for(0x1234u, fpscr_pr_mask);
         require(!(changed_guard == old_guard) &&
-                    table.lookup(0x1234u, block_variant_key(changed_guard)) == nullptr,
+                    !table.lookup(0x1234u, block_variant_key(changed_guard)).has_value(),
                 "Watchpointgeneration erreicht den Tabellenlookup nicht; alte Variante wurde "
                 "wiederverwendet.");
     } catch (const std::exception& error) {

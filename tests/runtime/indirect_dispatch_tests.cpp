@@ -19,14 +19,14 @@ int main() {
     try {
         RuntimeBlockTable table;
         const BlockVariantKey variant{1u, 0u, 0u, 0u, 0u};
-        table.register_static({0x8C001000u,
+        static_cast<void>(table.register_static({0x8C001000u,
                                0x0C001000u,
                                4u,
                                BlockEndKind::Return,
                                variant,
                                block,
                                "compiled",
-                               false});
+                               false}));
         CpuState cpu;
         cpu.pr = 0xDEADBEEFu;
         const BlockAddress source{0x8C000100u, 0x0C000100u};
@@ -35,7 +35,8 @@ int main() {
             cpu,
             table,
             {IndirectDispatchKind::Call, 0x8C000102u, 0xAC001000u, 0x8C000106u, source, variant});
-        require(call.block != nullptr && call.alias_lookup && call.physical_target == 0x0C001000u,
+        require(call.block && table.resolve(call.block).has_value() && call.alias_lookup &&
+                    call.physical_target == 0x0C001000u,
                 "P2-Alias erreichte den physischen P1-Block nicht.");
         require(cpu.pc == 0xAC001000u && cpu.pr == 0x8C000106u,
                 "Call bewahrt PC-/PR-Semantik nicht.");

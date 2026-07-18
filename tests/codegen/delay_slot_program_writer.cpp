@@ -49,6 +49,9 @@ Instruction instruction(const std::uint32_t address, const Operation operation) 
     case Operation::LoadSpecialRegister:
         result.original_opcode = 0x4B2Au;
         break;
+    case Operation::StoreSpecialRegister:
+        result.original_opcode = 0x0C2Au;
+        break;
     default:
         break;
     }
@@ -109,6 +112,18 @@ Instruction load_pr_slot(const std::uint32_t owner) {
     return result;
 }
 
+Instruction store_pr_slot(const std::uint32_t owner) {
+    auto result = instruction(owner + 2u, Operation::StoreSpecialRegister);
+    result.destination_register = 12u;
+    result.special_register = katana::ir::SpecialRegister::Pr;
+    result.status_effects =
+        katana::ir::instruction_status_effects(result.operation, result.special_register);
+    result.accumulator_effects =
+        katana::ir::operation_accumulator_effects(result.operation, result.special_register);
+    result.delay_slot = {DelaySlotRole::Slot, owner};
+    return result;
+}
+
 void append_function(std::vector<katana::ir::Function>& program,
                      const std::uint32_t entry,
                      Instruction owner,
@@ -138,6 +153,19 @@ void append_function(std::vector<katana::ir::Function>& program,
     }
     function.blocks = {std::move(block)};
     program.push_back(std::move(function));
+}
+
+void append_call_observation_blocks(katana::ir::Function& function,
+                                    const std::uint32_t owner) {
+    katana::ir::BasicBlock architectural_return;
+    architectural_return.start_address = owner + 4u;
+    architectural_return.instructions = {instruction(owner + 4u, Operation::Nop)};
+    function.blocks.push_back(std::move(architectural_return));
+
+    katana::ir::BasicBlock overridden_return;
+    overridden_return.start_address = 0xDEADBEEFu;
+    overridden_return.instructions = {instruction(0xDEADBEEFu, Operation::Nop)};
+    function.blocks.push_back(std::move(overridden_return));
 }
 
 std::vector<katana::ir::Function> build_program() {
@@ -200,6 +228,45 @@ std::vector<katana::ir::Function> build_program() {
 
     append_function(
         program, 0x1A00u, instruction(0x1A00u, Operation::Return), load_pr_slot(0x1A00u));
+
+    auto bsr_store_pr = instruction(0x1B00u, Operation::Call);
+    bsr_store_pr.target_address = 0x3000u;
+    append_function(program, 0x1B00u, std::move(bsr_store_pr), store_pr_slot(0x1B00u));
+    append_call_observation_blocks(program.back(), 0x1B00u);
+
+    auto bsr_load_pr = instruction(0x1C00u, Operation::Call);
+    bsr_load_pr.target_address = 0x3000u;
+    append_function(program, 0x1C00u, std::move(bsr_load_pr), load_pr_slot(0x1C00u));
+    append_call_observation_blocks(program.back(), 0x1C00u);
+
+    auto bsrf_store_pr = instruction(0x1D00u, Operation::CallRegister);
+    bsrf_store_pr.branch_register = 10u;
+    bsrf_store_pr.branch_register_relative = true;
+    bsrf_store_pr.resolved_targets = {0x3000u};
+    append_function(program, 0x1D00u, std::move(bsrf_store_pr), store_pr_slot(0x1D00u));
+    append_call_observation_blocks(program.back(), 0x1D00u);
+
+    auto bsrf_load_pr = instruction(0x1E00u, Operation::CallRegister);
+    bsrf_load_pr.branch_register = 10u;
+    bsrf_load_pr.branch_register_relative = true;
+    bsrf_load_pr.resolved_targets = {0x3000u};
+    append_function(program, 0x1E00u, std::move(bsrf_load_pr), load_pr_slot(0x1E00u));
+    append_call_observation_blocks(program.back(), 0x1E00u);
+
+    auto jsr_store_pr = instruction(0x1F00u, Operation::CallRegister);
+    jsr_store_pr.branch_register = 10u;
+    jsr_store_pr.resolved_targets = {0x3000u};
+    append_function(program, 0x1F00u, std::move(jsr_store_pr), store_pr_slot(0x1F00u));
+    append_call_observation_blocks(program.back(), 0x1F00u);
+
+    auto jsr_load_pr = instruction(0x2000u, Operation::CallRegister);
+    jsr_load_pr.branch_register = 10u;
+    jsr_load_pr.resolved_targets = {0x3000u};
+    append_function(program, 0x2000u, std::move(jsr_load_pr), load_pr_slot(0x2000u));
+    append_call_observation_blocks(program.back(), 0x2000u);
+
+    append_function(
+        program, 0x3000u, instruction(0x3000u, Operation::Return), nop_slot(0x3000u));
 
     return program;
 }

@@ -2,9 +2,11 @@
 #include "katana/sh4/disassembler.hpp"
 
 #include <array>
+#include <algorithm>
 #include <cstdlib>
 #include <iostream>
 #include <string>
+#include <vector>
 
 namespace {
 
@@ -48,6 +50,85 @@ int main() {
     require(blocks[3].start_address == 0x8C01000Eu, "Block 3 besitzt eine falsche Startadresse.");
     require(blocks[3].end_address == 0x8C010012u, "Block 3 muss RTS und Delay Slot enthalten.");
     require(blocks[3].successors.empty(), "Der letzte RTS-Block darf keinen Nachfolger besitzen.");
+
+    auto gap_lines = katana::sh4::disassemble(
+        std::array<std::uint8_t, 10u>{0x09u, 0x00u, 0x09u, 0x00u, 0x0Bu,
+                                      0x00u, 0x09u, 0x00u, 0x09u, 0x00u},
+        0u);
+    gap_lines.erase(gap_lines.begin() + 1);
+    const auto gap_blocks = katana::analysis::build_basic_blocks(gap_lines);
+    require(gap_blocks.size() == 3u && gap_blocks[0].start_address == 0u &&
+                gap_blocks[0].successors.empty(),
+            "Eine Adressluecke wurde als normaler Fallthrough interpretiert.");
+
+    auto call_gap_lines = katana::sh4::disassemble(
+        std::array<std::uint8_t, 12u>{0x02u, 0xB0u, 0x09u, 0x00u, 0x09u, 0x00u,
+                                      0x09u, 0x00u, 0x0Bu, 0x00u, 0x09u, 0x00u},
+        0u);
+    call_gap_lines.erase(call_gap_lines.begin() + 2);
+    const auto call_gap_blocks = katana::analysis::build_basic_blocks(call_gap_lines);
+    require(!call_gap_blocks.empty() && call_gap_blocks.front().end_address == 2u &&
+                call_gap_blocks.front().successors.empty(),
+            "Ein BSR mit Luecke nach dem Delay Slot erzeugte einen falschen Rueckkehrfallthrough.");
+
+    const auto indirect_lines = katana::sh4::disassemble(
+        std::array<std::uint8_t, 12u>{0x2Bu, 0x41u, 0x09u, 0x00u, 0x0Bu, 0x00u,
+                                      0x09u, 0x00u, 0x0Bu, 0x00u, 0x09u, 0x00u},
+        0u);
+    const std::array partial_edges{
+        katana::analysis::ResolvedControlFlowEdge{
+            0u,
+            4u,
+            katana::analysis::ResolvedControlFlowKind::Jump,
+            false,
+            katana::analysis::ControlFlowEvidence::ProvenComplete,
+            {katana::analysis::AnalysisEvidenceOrigin::LocalValue}},
+        katana::analysis::ResolvedControlFlowEdge{
+            0u,
+            8u,
+            katana::analysis::ResolvedControlFlowKind::Jump,
+            true,
+            katana::analysis::ControlFlowEvidence::GuardedPartial,
+            {katana::analysis::AnalysisEvidenceOrigin::EntrySnapshot}},
+    };
+    const auto partial_blocks =
+        katana::analysis::build_basic_blocks(indirect_lines, partial_edges);
+    require(partial_blocks.front().successors == std::vector<std::uint32_t>({4u, 8u}) &&
+                partial_blocks.front().has_indirect_successor,
+            "Eine einzelne vollstaendige Kante entfernte den partiellen Site-Default.");
+
+    for (std::uint32_t mask = 0u; mask < 8u; ++mask) {
+        std::array<std::uint8_t, 10u> cfg_bytes{
+            0x09u, 0x00u, 0x09u, 0x00u, 0x09u, 0x00u, 0x0Bu, 0x00u, 0x09u, 0x00u};
+        constexpr std::array<std::uint8_t, 3u> displacements{1u, 0u, 0xFFu};
+        for (std::size_t node = 0u; node < 3u; ++node) {
+            if ((mask & (1u << node)) == 0u) continue;
+            cfg_bytes[node * 2u] = displacements[node];
+            cfg_bytes[node * 2u + 1u] = 0x89u;
+        }
+        const auto cfg_lines = katana::sh4::disassemble(cfg_bytes, 0u);
+        const auto cfg_blocks = katana::analysis::build_basic_blocks(cfg_lines);
+        for (const auto& block : cfg_blocks) {
+            const auto control_address =
+                block.lines.back().is_delay_slot && block.lines.size() > 1u
+                    ? block.lines[block.lines.size() - 2u].address
+                    : block.lines.back().address;
+            std::vector<std::uint32_t> expected;
+            if (control_address < 6u) {
+                const auto node = control_address / 2u;
+                if ((mask & (1u << node)) != 0u) expected.push_back(6u);
+                const auto fallthrough = control_address + 2u;
+                if (std::any_of(cfg_blocks.begin(), cfg_blocks.end(), [&](const auto& candidate) {
+                        return candidate.start_address == fallthrough;
+                    }))
+                    expected.push_back(fallthrough);
+            }
+            std::sort(expected.begin(), expected.end());
+            expected.erase(std::unique(expected.begin(), expected.end()), expected.end());
+            require(block.successors == expected,
+                    "Exhaustive kleine Conditional-CFG weicht vom Referenzgraphen ab.");
+        }
+    }
 
     std::cout << "Alle Basic-Block- und CFG-Tests erfolgreich.\n";
 

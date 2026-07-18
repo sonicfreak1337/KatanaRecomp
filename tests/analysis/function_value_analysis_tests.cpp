@@ -331,6 +331,15 @@ int main() {
                 parameter_candidate_site->evidence_call_sites == std::vector<std::uint32_t>{0x02u},
             "Direkter Call propagierte seinen Parameterkandidaten nicht sicher zum Callee.");
 
+    auto unknown_caller_image = parameter_candidate_image;
+    unknown_caller_image.add_entry_point(0x20u);
+    const auto unknown_caller = katana::analysis::analyze_control_flow(unknown_caller_image);
+    const auto* unknown_caller_site = site(unknown_caller, 0x22u);
+    require(unknown_caller_site != nullptr &&
+                !katana::analysis::control_flow_evidence_complete(
+                    unknown_caller_site->evidence),
+            "Ein unbekannter zusaetzlicher Caller wurde durch einen bekannten Caller geheilt.");
+
     std::vector<std::uint8_t> indirect_parameter_bytes(0x60u, 0x09u);
     const std::array<std::uint8_t, 12u> indirect_parameter_caller{
         0x40u,

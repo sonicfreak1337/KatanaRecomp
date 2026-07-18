@@ -9,6 +9,17 @@ namespace {
 void require(bool value, const char* message) {
     if (!value) throw std::runtime_error(message);
 }
+
+template <typename Action>
+void require_rejected(Action&& action, const char* message) {
+    bool rejected = false;
+    try {
+        action();
+    } catch (const std::exception&) {
+        rejected = true;
+    }
+    require(rejected, message);
+}
 } // namespace
 
 int main() {
@@ -22,30 +33,52 @@ int main() {
             memory, [&](const auto& transfer) { transfers.push_back(transfer); }, &tracker);
         queues->write_qacr(0u, 0x0Cu);
         queues->write_qacr(1u, 0x10u);
+        queues->write_p4(0xE0000000u, 0x11111111u, MemoryAccessWidth::Word);
+        queues->write_p4(0xE2000000u, 0x22222222u, MemoryAccessWidth::Word);
+        require(queues->queue(0u)[0] == 0x22u && queues->queue(1u)[0] == 0u,
+                "Bit 25 waehlt faelschlich eine andere Store Queue.");
         for (std::uint32_t offset = 0u; offset < 32u; offset += 4u) {
             queues->write_p4(
                 0xE0000000u + offset, 0x03020100u + offset * 0x01010101u, MemoryAccessWidth::Word);
             queues->write_p4(
-                0xE2000000u + offset, 0x83828180u + offset * 0x01010101u, MemoryAccessWidth::Word);
+                0xE0000020u + offset, 0x83828180u + offset * 0x01010101u, MemoryAccessWidth::Word);
         }
-        require(queues->prefetch(0xE0001000u) && queues->prefetch(0xE2002000u) &&
+        require(queues->read_p4(0xFF001000u, MemoryAccessWidth::Word) == 0x03020100u &&
+                    queues->read_p4(0xFF001020u, MemoryAccessWidth::Word) == 0x83828180u,
+                "Das privilegierte SQ-Lesefenster waehlt Queue oder Longword falsch.");
+        require(queues->prefetch(0xE0001000u) && queues->prefetch(0xE2002020u) &&
                     transfers.size() == 2u,
                 "SQ0/SQ1 werden nicht getrennt ueber ihr P4-Fenster transferiert.");
         require(transfers[0].queue == 0u && transfers[0].target_address == 0x0C001000u &&
                     transfers[0].bytes == queues->queue(0u) && transfers[1].queue == 1u &&
-                    transfers[1].target_address == 0x12002000u &&
+                    transfers[1].target_address == 0x12002020u &&
                     transfers[1].target == StoreQueueTarget::TileAccelerator &&
                     transfers[1].bytes == queues->queue(1u),
                 "QACR-Zielbildung oder exakter 32-Byte-Inhalt ist falsch.");
+        require_rejected(
+            [&] { static_cast<void>(queues->read_p4(0xE0000000u, MemoryAccessWidth::Word)); },
+            "Das SQ-Schreibfenster wurde faelschlich als Lesefenster akzeptiert.");
+        require_rejected(
+            [&] { static_cast<void>(queues->read_p4(0xFF001001u, MemoryAccessWidth::Word)); },
+            "Ein fehlausgerichteter SQ-Longword-Read wurde akzeptiert.");
+        require_rejected(
+            [&] { queues->write_p4(0xE000001Fu, 0xAABBu, MemoryAccessWidth::Halfword); },
+            "Ein Store ueber die Queuegrenze wurde nicht atomar abgelehnt.");
+        require_rejected([&] { queues->write_qacr(0u, 0x20u); },
+                         "Reservierte QACR-Bits wurden akzeptiert.");
         require(!queues->prefetch(0x8C001000u) && queues->transfer_count() == 2u,
                 "Normales PREF ausserhalb des SQ-Fensters loest einen Transfer aus.");
 
         const auto icbi = queues->maintain(CacheMaintenanceOperation::Icbi, 0xAC001000u);
         require(icbi.invalidated_code && !tracker.valid("ram-code"),
                 "ICBI an ausfuehrbarem RAM hinterlaesst einen stale Block.");
-        const auto ocbwb = queues->maintain(CacheMaintenanceOperation::Ocbwb, 0x8C001000u);
-        require(!ocbwb.invalidated_code && !ocbwb.wrote_memory,
-                "OCBWB behauptet im Profil nicht modellierte Daten- oder Codeeffekte.");
+        for (const auto operation : {CacheMaintenanceOperation::Ocbi,
+                                     CacheMaintenanceOperation::Ocbp,
+                                     CacheMaintenanceOperation::Ocbwb}) {
+            require_rejected(
+                [&] { static_cast<void>(queues->maintain(operation, 0x8C001000u)); },
+                "Eine nicht modellierte Operand-Cache-Operation wurde still akzeptiert.");
+        }
 
         std::vector<std::uint32_t> ta_offsets;
         memory.map_region("ta",
@@ -86,16 +119,25 @@ int main() {
                 "MOVCA.L umgeht Speichernebenwirkung oder Codeinvalidierung.");
         cache_ops->set_operand_cache_ram_enabled(true);
         cache_ops->write_operand_cache_ram(7u, 0x5Au);
-        require(cache_ops->read_operand_cache_ram(7u) == 0x5Au,
+        cache_ops->write_operand_cache_ram(0u, 0x44332211u, MemoryAccessWidth::Word);
+        cache_ops->write_operand_cache_ram(8190u, 0xAABBu, MemoryAccessWidth::Halfword);
+        require(cache_ops->read_operand_cache_ram(7u) == 0x5Au &&
+                    cache_ops->read_operand_cache_ram(0u, MemoryAccessWidth::Word) ==
+                        0x44332211u &&
+                    cache_ops->read_operand_cache_ram(8190u, MemoryAccessWidth::Halfword) ==
+                        0xAABBu,
                 "Explizit modellierter Operand-Cache-RAM besitzt keinen getrennten Zustand.");
-        bool rejected = false;
-        try {
-            queues->set_operand_cache_ram_enabled(true);
-        } catch (const std::runtime_error&) {
-            rejected = true;
-        }
-        require(rejected,
-                "Nicht modellierter CCR-Operand-Cache-RAM-LLE-Pfad wird nicht sichtbar abgelehnt.");
+        require_rejected(
+            [&] {
+                cache_ops->write_operand_cache_ram(
+                    8191u, 0xAABBu, MemoryAccessWidth::Halfword);
+            },
+            "Operand-Cache-RAM akzeptiert Fehlausrichtung oder Bereichsueberlauf.");
+        require_rejected(
+            [&] { static_cast<void>(queues->read_operand_cache_ram(0u)); },
+            "Deaktivierter Operand-Cache-RAM wurde gelesen.");
+        require_rejected([&] { queues->set_operand_cache_ram_enabled(true); },
+                         "Nicht modellierter CCR-Operand-Cache-RAM-LLE-Pfad wird nicht sichtbar abgelehnt.");
     } catch (const std::exception& error) {
         std::cerr << error.what() << '\n';
         return 1;
