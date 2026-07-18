@@ -5,6 +5,7 @@
 #include <cstdlib>
 #include <iostream>
 #include <memory>
+#include <optional>
 #include <string>
 
 namespace {
@@ -48,8 +49,10 @@ int main() {
     cpu.r[7] = 0u;
     cpu.pr = 0x8C010000u;
     runtime::BlockExecutionContext context;
-    const auto* bios = boot.runtime_blocks->lookup(cpu.pc, {});
-    const auto bios_exit = bios->function(cpu, context);
+    const auto bios_handle = boot.runtime_blocks->lookup(cpu.pc, {});
+    const auto bios = bios_handle ? boot.runtime_blocks->resolve(*bios_handle) : std::nullopt;
+    require(bios.has_value(), "HLE-BIOS-ABI-Blockhandle ist nicht aufloesbar.");
+    const auto bios_exit = bios->get().function(cpu, context);
     require(bios_exit.kind == runtime::BlockEndKind::Return && cpu.pc == 0x8C010000u,
             "HLE-BIOS-ABI erreicht den gemeinsamen Runtimeblock-Handoff nicht.");
 
