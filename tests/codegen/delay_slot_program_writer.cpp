@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <fstream>
+#include <iostream>
 #include <string>
 #include <utility>
 #include <vector>
@@ -156,14 +157,16 @@ void append_function(std::vector<katana::ir::Function>& program,
 }
 
 void append_call_observation_blocks(katana::ir::Function& function, const std::uint32_t owner) {
+    function.blocks.front().successors.push_back(owner + 4u);
+
     katana::ir::BasicBlock architectural_return;
     architectural_return.start_address = owner + 4u;
     architectural_return.instructions = {instruction(owner + 4u, Operation::Nop)};
     function.blocks.push_back(std::move(architectural_return));
 
     katana::ir::BasicBlock overridden_return;
-    overridden_return.start_address = 0xDEADBEEFu;
-    overridden_return.instructions = {instruction(0xDEADBEEFu, Operation::Nop)};
+    overridden_return.start_address = 0xDEADBEE0u;
+    overridden_return.instructions = {instruction(0xDEADBEE0u, Operation::Nop)};
     function.blocks.push_back(std::move(overridden_return));
 }
 
@@ -275,8 +278,13 @@ int main(const int argc, char* argv[]) {
     if (argc != 2) {
         return EXIT_FAILURE;
     }
-    const auto source = katana::codegen::emit_cpp_program(build_program(), 0x1000u);
-    std::ofstream output(argv[1], std::ios::binary | std::ios::trunc);
-    output.write(source.data(), static_cast<std::streamsize>(source.size()));
-    return output ? EXIT_SUCCESS : EXIT_FAILURE;
+    try {
+        const auto source = katana::codegen::emit_cpp_program(build_program(), 0x1000u);
+        std::ofstream output(argv[1], std::ios::binary | std::ios::trunc);
+        output.write(source.data(), static_cast<std::streamsize>(source.size()));
+        return output ? EXIT_SUCCESS : EXIT_FAILURE;
+    } catch (const std::exception& error) {
+        std::cerr << error.what() << '\n';
+        return EXIT_FAILURE;
+    }
 }

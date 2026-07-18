@@ -371,7 +371,7 @@ void exercise_runtime(const std::span<const std::uint8_t> bytes) {
                             fuzz_backend_block,
                             "rom-ram-alias",
                             true});
-    require_runtime(table.lookup(virtual_start, variant) != nullptr &&
+    require_runtime(table.lookup(virtual_start, variant).has_value() &&
                         table.aliases(physical_base).size() == 2u,
                     "Blocktabelle verliert exakten Block oder kanonische Aliasgruppe.");
 
@@ -411,7 +411,7 @@ void exercise_runtime(const std::span<const std::uint8_t> bytes) {
     address_space.bump_watchpoints();
     const auto watchpoint_variant =
         block_variant_key(address_space.guard_for(virtual_start, value(3u)), 0u);
-    require_runtime(table.lookup(virtual_start, watchpoint_variant) == nullptr,
+    require_runtime(!table.lookup(virtual_start, watchpoint_variant).has_value(),
                     "Watchpointgeneration verwendet eine stale Blockvariante erneut.");
 
     ExecutableCodeTracker tracker;
@@ -433,7 +433,7 @@ void exercise_runtime(const std::span<const std::uint8_t> bytes) {
                     "Schreibinvalidierung laesst einen stale Runtimeblock gueltig.");
     const auto invalidated_variant =
         block_variant_key(guard, tracker.page_generation(physical_base));
-    require_runtime(table.lookup(virtual_start, invalidated_variant) == nullptr,
+    require_runtime(!table.lookup(virtual_start, invalidated_variant).has_value(),
                     "Seitengeneration erzwingt nach Schreibinvalidierung keinen neuen Lookup.");
     require_runtime(tracker.register_block(registration) == BlockRegistrationResult::Reactivated,
                     "Invalidierter ROM-RAM-Block wird nicht kontrolliert reaktiviert.");

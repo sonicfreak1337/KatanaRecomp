@@ -109,9 +109,9 @@ void test_calls_write_pr_before_delay_slot() {
         const auto load_owner = test.owner + 0x100u;
         prepare(cpu, load_owner);
         cpu.r[10] = test.pc_relative ? 0x3000u - (load_owner + 4u) : 0x3000u;
-        cpu.r[11] = 0xDEADBEEFu;
+        cpu.r[11] = 0xDEADBEE0u;
         test.load_pr(cpu);
-        require(!cpu.trap_pending && cpu.pr == 0xDEADBEEFu && cpu.pc == 0xDEADBEEFu,
+        require(!cpu.trap_pending && cpu.pr == 0xDEADBEE0u && cpu.pc == 0xDEADBEE0u,
                 std::string(test.name) + " verwirft den LDS-Schreibzugriff aus dem Delay Slot.");
     }
 }
@@ -120,11 +120,11 @@ void test_rts_latches_pr_before_delay_slot() {
     katana_generated::CpuState cpu;
     prepare(cpu, 0x1A00u);
     cpu.pr = 0x12345678u;
-    cpu.r[11] = 0xDEADBEEFu;
+    cpu.r[11] = 0xDEADBEE0u;
 
     katana_generated::fn_00001A00(cpu);
 
-    require(!cpu.trap_pending && cpu.pc == 0x12345678u && cpu.pr == 0xDEADBEEFu,
+    require(!cpu.trap_pending && cpu.pc == 0x12345678u && cpu.pr == 0xDEADBEE0u,
             "RTS liest ein durch LDS im Delay Slot veraendertes PR als Sprungziel.");
 }
 
