@@ -43,18 +43,39 @@ nicht mehr einzeln wiederholt.
 | Windows-GUI, GDI-Workflow, Portexport und native Hostruntime | umgesetzt |
 | Private Retailanalyse | 55.104 Instruktionen, 813 Funktionen, 117 Stellen ohne endliche Zielmenge |
 
-## v0.47.0 - Generische Retail-Runtime
+## v0.47.0 - Core-Stabilisierung und generische Retail-Runtime
 
 ### Ziel
 
-Die generische Pipeline muss jede erreichbare indirekte Stelle entweder
-statisch beweisen, mit einer endlichen Kandidatenmenge bewachen oder durch einen
-expliziten Runtime-only-Vertrag behandeln. Danach darf eine private Retailquelle
-vollstaendig analysiert, rekompiliert und gebaut werden.
+Vor weiterer Retail-Codeentdeckung werden alle bereits vorhandenen CPU-,
+Runtime-, Analyse-, Speicher- und Buildvertraege korrigiert, differenziell
+abgesichert und vermessen. Danach muss die generische Pipeline jede erreichbare
+indirekte Stelle entweder statisch beweisen, mit einer endlichen Zielmenge
+bewachen oder durch einen expliziten Runtime-only-Vertrag behandeln.
 
-Eine Sonic-`game.exe` wird in diesem Meilenstein noch nicht gestartet.
+Eine Sonic-`game.exe` darf am Ende dieses Meilensteins gebaut, aber nicht
+gestartet werden.
 
-### Tasks
+### Stufe A: P0-Core-Korrektheit
+
+- [ ] `KR-4611` - SH-4-Kontrollzustand, Delay Slots, RTE, SLEEP und Interrupts
+- [ ] `KR-4612` - Store Queue und Cacheadressierung
+- [ ] `KR-4613` - einheitliche Gastwrites und Codeinvalidierung
+- [ ] `KR-4614` - sounde Kontrollfluss- und Wertanalyse
+- [ ] `KR-4615` - stabile und skalierbare Runtime-Blockregistry
+- [ ] `KR-4616` - einheitliches Gasttiming und Scheduler-/Geraeteintegration
+- [ ] `KR-4617` - unabhaengige Cross-Engine-Konformitaetstests
+- [ ] `KR-4618` - Core-Korrektheitsgate
+
+### Stufe B: P1-Performance und Build
+
+- [ ] `KR-4621` - Speicher-, Dispatch- und Invalidierungs-Hotpaths
+- [ ] `KR-4622` - inkrementelle Analyse, IR und Codegen
+- [ ] `KR-4623` - Disc-, GDI-, ISO- und GD-ROM-I/O
+- [ ] `KR-4624` - Buildgraph, Runtime-SDK, Cache und Testmatrix
+- [ ] `KR-4625` - Performance-/Buildgate
+
+### Stufe C: Retail-Kontrollfluss und Build
 
 - [ ] `KR-4715` - ungeloeste Kontrollflussfront inventarisieren
 - [ ] `KR-4716` - ABI-erhaltene Callbacks, Parameter und Stackwerte
@@ -65,13 +86,40 @@ Eine Sonic-`game.exe` wird in diesem Meilenstein noch nicht gestartet.
 - [ ] `KR-4704` - v0.47 Gate-Vorbereitung
 - [ ] `KR-4705` - v0.47 interne Freigabe
 
+### Verbindliche Reihenfolge
+
+```text
+KR-4611 bis KR-4617
+  -> KR-4618
+  -> KR-4621 bis KR-4624
+  -> KR-4625
+  -> KR-4715
+  -> KR-4716 und KR-4717
+  -> KR-4718
+  -> KR-4719
+  -> KR-4703
+  -> KR-4704
+  -> KR-4705
+```
+
+Unabhaengige Tasks innerhalb einer Stufe duerfen parallel entwickelt werden.
+Eine spaetere Stufe beginnt erst, wenn das vorherige Gate vollstaendig besteht.
+
 ### Gate
 
+- Debug und RelWithDebInfo liefern dieselben Gastresultate
+- Registerbanken, Call-Delay-Slots, RTE, SLEEP, Exceptions und Interrupts
+  bestehen unabhaengige SH-4-Konformitaetsvektoren
+- Store Queues waehlen SQ0/SQ1 ueber Adressbit 5
+- alle Gastwrites invalidieren ueberdeckten generierten Code korrekt
+- keine Analysezielmenge ignoriert unbekannte Caller oder Callkontexte
+- Blockregistry und Invalidierung besitzen stabile Handles und skalierende Indizes
+- Scheduler, TMU, RTC, DMA und GD-ROM verwenden einen gemeinsamen Gastzyklusvertrag
+- definierte Speicher-, Analyse-, Codegen-, Disc- und Buildbudgets bestehen
 - `unresolved == 0`
-- jede indirekte Stelle ist `resolved`, `guarded` oder `runtime-only`
-- Runtime-only-Ziele werden validiert und koennen nicht still ausfallen
-- ein frei lizenzierter Port erreicht `KR_V047_NATIVE_HOST_READY`
-- der private Sonic-Workflow erzeugt eine `game.exe`, startet sie aber nicht
+- eine frei lizenzierte Anwendung erreicht `KR_V047_NATIVE_HOST_READY`
+- der private Sonic-Workflow erzeugt reproduzierbar eine `game.exe`, startet sie
+  aber nicht
 - keine proprietaeren Daten oder privaten Identitaetsmerkmale gelangen ins Repo
 
 ## v0.50.0 Alpha - Sonic Adventure Bring-up

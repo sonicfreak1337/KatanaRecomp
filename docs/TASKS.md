@@ -17,30 +17,288 @@ tausend Zeilen wiederholt.
 ## Empfohlene Reihenfolge
 
 ```text
-KR-4715
+KR-4611 bis KR-4617
+  -> KR-4618
+  -> KR-4621 bis KR-4624
+  -> KR-4625
+  -> KR-4715
   -> KR-4716 und KR-4717
   -> KR-4718
   -> KR-4719
   -> KR-4703
   -> KR-4704
   -> KR-4705
-  -> KR-4801
-  -> KR-4802
-  -> KR-4803
-  -> KR-4804
-  -> KR-4805
-  -> KR-4901
-  -> KR-4999
-  -> KR-5000
+  -> Alpha-Bring-up
 ```
+
+Korrektheit blockiert Performance, Performance blockiert neue
+Retail-Kontrollflussarbeit. Innerhalb einer Stufe duerfen unabhaengige Tasks
+parallel entwickelt werden.
 
 ---
 
-## v0.47.0 - Generische Retail-Runtime
+## v0.47.0 - Core-Stabilisierung und generische Retail-Runtime
+
+## Stufe A: P0-Core-Korrektheit
+
+### [ ] KR-4611 - SH-4-Kontrollzustand, Delay Slots, RTE, SLEEP und Interrupts
+
+Abhaengigkeiten: KR-4605
+Prioritaet: P0
+
+Umfang:
+
+- effektive R0-R7-Bank aus `SR.MD && SR.RB` ableiten
+- verzoegerte PR-Semantik fuer BSR, BSRF und JSR modellieren
+- RTE als Fortsetzung bei SPC mit restauriertem SR behandeln
+- SLEEP bis zu einem akzeptierten Interrupt anhalten
+- normale Gast-Exceptions und Interrupts zum Handler dispatchen statt den
+  Hostlauf abzubrechen
+- Cause, Eventcode, Vektor, TEA, SPC und Delay-Slot-Zustand tabellengetrieben
+  zusammenhalten
+
+Akzeptanz:
+
+- User-/Privileged- und RB0-/RB1-Uebergaenge sind bitgenau getestet
+- STS/LDS PR im Call-Delay-Slot besitzen unabhaengige Referenzvektoren
+- RTE, SLEEP, Maskierung, Interruptannahme und Handler-Rueckkehr laufen
+  identisch im Referenz- und generierten Pfad
+- keine bestehende korrekte CPU-Regression wird abgeschwaecht
+
+### [ ] KR-4612 - Store Queue und Cacheadressierung
+
+Abhaengigkeiten: KR-4611
+Prioritaet: P0
+
+Umfang:
+
+- SQ0/SQ1 aus Adressbit 5 waehlen
+- P4-Lese-/Schreibfenster, QACR und PREF gemeinsam korrigieren
+- Cachemaintenance und Operand-Cache-RAM-Zugriffsbreiten pruefen
+- bisherige falsche Bit-25-Testannahmen als Bugregression sichern
+
+Akzeptanz:
+
+- `0xE0000000` und `0xE0000020` waehlen getrennte Queues
+- Byte-, Word- und Longwordzugriffe sowie Queuegrenzen sind getestet
+- RAM- und TA-Transfers besitzen identische Referenzbytes
+- ICBI, MOVCA, OCBI, OCBP und OCBWB sind korrekt oder sichtbar nicht unterstuetzt
+
+### [ ] KR-4613 - Einheitliche Gastwrites und Codeinvalidierung
+
+Abhaengigkeiten: KR-4611, KR-4612
+Prioritaet: P0
+
+Umfang:
+
+- CPU-, FPU-, DMA-, Store-Queue-, Copy- und Fallbackwrites ueber einen
+  einheitlichen beobachtbaren Speichervertrag fuehren
+- Byteidentitaet vor Generationserhoehung und Blockinvalidierung pruefen
+- Aliasbloecke, eingehende Links und Dispatch-/Inline-Caches gemeinsam
+  invalidieren
+- generierte Stores duerfen den Tracker nicht umgehen
+
+Akzeptanz:
+
+- selbstmodifizierender synthetischer Code kann keinen stale Block ausfuehren
+- identische Writes invalidieren nicht
+- physische Aliase und ueberlappende Writes sind getestet
+- sicherer Referenzpfad und optimierter Writepfad sind differenziell identisch
+
+### [ ] KR-4614 - Sounde Kontrollfluss- und Wertanalyse
+
+Abhaengigkeiten: KR-4611
+Prioritaet: P0
+
+Umfang:
+
+- Vollstaendigkeit als Teil des abstrakten Wertes modellieren
+- unbekannte Caller und unbekannte Pfade konservativ zusammenfuehren
+- Zielmengen pro Instruktionssite vereinigen statt nach Adresse zu verwerfen
+- CFG-, Join- und Delay-Slot-Kontexte durch einen echten Worklist-Fixpunkt
+  tragen
+- Provenienz typisieren und deterministisch erhalten
+
+Akzeptanz:
+
+- ein unbekannter Caller verhindert eine faelschlich vollstaendige Guardmenge
+- mehrere Callkontexte vereinigen alle Ziele und Unsicherheiten
+- kleine synthetische Programme werden gegen exhaustive Ausfuehrung verglichen
+- dieselbe Eingabe erzeugt bytegleiche Berichte und Zielmengen
+
+### [ ] KR-4615 - Stabile und skalierbare Runtime-Blockregistry
+
+Abhaengigkeiten: KR-4613
+Prioritaet: P0
+
+Umfang:
+
+- rohe Vektorzeiger durch stabile Block-IDs oder Handles ersetzen
+- statische Bloecke bulk-registrieren und unveraenderlich indexieren
+- dynamische Bloecke, Varianten und physische Aliase getrennt indexieren
+- Erase, Invalidierung und Reaktivierung ohne Dangling Pointer implementieren
+
+Akzeptanz:
+
+- Registrierung und Lookup von 100.000 Bloecken bleiben in festen Budgets
+- Lookup ist O(1) oder O(log N)
+- Mutation bei wiederholtem Dispatch erzeugt keine ungueltigen Handles
+- deterministische Blockidentitaeten bleiben erhalten
+
+### [ ] KR-4616 - Einheitliches Gasttiming und Scheduler-/Geraeteintegration
+
+Abhaengigkeiten: KR-4611, KR-4613
+Prioritaet: P0
+
+Umfang:
+
+- einen zentralen versionierten Gastzyklusvertrag definieren
+- Instruktionskosten, TMU, RTC, DMA, GD-ROM und PVR auf denselben Scheduler
+  legen
+- separate GD-ROM-Uhr entfernen
+- SLEEP-Wakeup, Eventreihenfolge und Laufbudget vereinheitlichen
+- Runtime-Metriken aus derselben Quelle ableiten
+
+Akzeptanz:
+
+- identische Laeufe liefern identische Ereignisreihenfolgen
+- GD-ROM-Requests schliessen ohne manuellen zweiten Clock-Aufruf ab
+- DMA-/Timer-/Interrupt-Reihenfolge ist gegen Referenzvektoren getestet
+- `KATANA_GUEST_CYCLE_BUDGET` begrenzt tatsaechlich den Gastlauf
+
+### [ ] KR-4617 - Unabhaengige Cross-Engine-Konformitaetstests
+
+Abhaengigkeiten: KR-4611 bis KR-4616
+Prioritaet: P0
+
+Umfang:
+
+- Referenzvektoren unabhaengig von der aktuellen Implementierung ableiten
+- Decoder, IR, generierten C++-Pfad und Referenz-/Interpreterpfad vergleichen
+- Registerbank, PR-Delay, RTE, SLEEP, Exceptions, SQ, Invalidierung und Timing
+  als Pflichtkorpus aufnehmen
+- falsche historische Erwartungen ausdruecklich markieren
+
+Akzeptanz:
+
+- Debug und RelWithDebInfo liefern dieselben Gastzustaende
+- jede P0-Korrektur besitzt Erfolgs-, Grenz- und Fehlerfall
+- kein Test verwendet dieselbe falsche Produktfunktion als Orakel
+
+### [ ] KR-4618 - Core-Korrektheitsgate
+
+Abhaengigkeiten: KR-4611 bis KR-4617
+Prioritaet: P0
+
+Akzeptanz:
+
+- frischer Debug- und RelWithDebInfo-Build
+- ASan/UBSan beziehungsweise MSVC-ASan, statische Analyse und Differentialtests
+- vollstaendige bestehende Regression plus neues Konformitaetskorpus
+- null bekannte P0-Semantikfehler
+- danach beginnt erst die Performance-Stufe
+
+## Stufe B: P1-Performance und Build
+
+### [ ] KR-4621 - Speicher-, Dispatch- und Invalidierungs-Hotpaths
+
+Abhaengigkeiten: KR-4618
+Prioritaet: P1
+
+Umfang:
+
+- Seiten-/Regionsindex und direkte RAM-/VRAM-/AICA-Fastpaths
+- native u16/u32-Zugriffe fuer lineare Speichergeraete
+- Nullkostenpfad ohne Trace oder Watchpoint
+- Page-to-Block-Invalidierungsindex und begrenzte Diagnosepuffer
+- deterministische DMA-Batches
+
+Akzeptanz:
+
+- jeder Fastpath besitzt einen deaktivierbaren Referenzpfad
+- Gastresultate bleiben bytegleich
+- Memory-, Dispatch- und Invalidierungsbenchmarks verbessern sich messbar
+- lange Laeufe besitzen keine ungebremst wachsenden Diagnosevektoren
+
+### [ ] KR-4622 - Inkrementelle Analyse, IR und Codegen
+
+Abhaengigkeiten: KR-4618
+Prioritaet: P1
+
+Umfang:
+
+- inkrementelle CFG-/SCC-Worklists statt Ganzprogrammlaeufen
+- immutable Arenen, Spans und Indizes statt grosser Kopien
+- Block-, Site-, Edge- und Funktionsindizes gemeinsam verwenden
+- Bulk-Codegen und stabile Partitionen
+- Codegencache auf SHA-256 und atomaren Publish umstellen
+
+Akzeptanz:
+
+- Resultate bleiben bytegleich zum sicheren Referenzmodus
+- 10k-, 50k- und 100k-Block-Fixtures besitzen feste Zeit-/Speicherbudgets
+- abgebrochene Cachewrites koennen keinen gueltigen Hit vortaeuschen
+- parallele Laeufe korrumpieren den Cache nicht
+
+### [ ] KR-4623 - Disc-, GDI-, ISO- und GD-ROM-I/O
+
+Abhaengigkeiten: KR-4616, KR-4618
+Prioritaet: P1
+
+Umfang:
+
+- persistente read-only Dateihandles oder `pread`
+- Track-/LBA-Index, Batchreads und begrenzten Sektorcache
+- ISO-Verzeichnis- und Extentcache
+- Provenienz-Hashes zwischen Analyse, Build und Runtime wiederverwenden
+- GD-ROM-I/O ohne Host-Wall-Clock und doppelte Pufferketten
+
+Akzeptanz:
+
+- wiederholte Reads oeffnen Tracks nicht pro Zugriff neu
+- Cache an/aus liefert identische Bytes und Ereignisse
+- grosse sequenzielle und zufaellige Reads besitzen Benchmarks
+- Pfad-, Identitaets- und Read-only-Vertraege bleiben unveraendert
+
+### [ ] KR-4624 - Buildgraph, Runtime-SDK, Cache und Testmatrix
+
+Abhaengigkeiten: KR-4618
+Prioritaet: P1
+
+Umfang:
+
+- MSVC, GCC und Clang in Debug und RelWithDebInfo pruefen
+- Core-/CLI-Presets ohne Desktop-GUI als Standard
+- minimales installierbares Runtime-SDK und `find_package` fuer Ports
+- Portprojekte duerfen nicht den gesamten Katana-Quellbaum bauen
+- Tests nach Subsystem konsolidieren
+- CMake-, Package- und ABI-Versionen aus einer kanonischen Quelle erzeugen
+
+Akzeptanz:
+
+- Portbuild linkt nur benoetigte Runtimeziele
+- sauberer Out-of-Tree-Build funktioniert ohne Analyzerquellbaum
+- Releaseoptimierung wird dauerhaft regressionsgeprueft
+- Test- und Portbuildzeiten besitzen dokumentierte Baselines
+
+### [ ] KR-4625 - Performance-/Buildgate
+
+Abhaengigkeiten: KR-4621 bis KR-4624
+Prioritaet: P1
+
+Akzeptanz:
+
+- alle Korrektheits- und bestehenden Funktionstests bleiben gruen
+- Debug- und RelWithDebInfo-Gastresultate sind identisch
+- Speicher, Dispatch, Analyse, Codegen, Disc-I/O und Portbuild halten Budgets
+- keine Optimierung wird ohne gemessenen Nutzen aktiviert
+- danach darf KR-4715 beginnen
+
+## Stufe C: Retail-Kontrollfluss und Build
 
 ### [ ] KR-4715 - Ungeloeste Kontrollflussfront inventarisieren
 
-Abhaengigkeiten: KR-4714
+Abhaengigkeiten: KR-4618, KR-4625
 Prioritaet: P0
 
 Umfang:
@@ -139,7 +397,7 @@ Akzeptanz:
 
 ### [ ] KR-4703 - VMU-/Flash-Arbeitskopien und Host-Pacing
 
-Abhaengigkeiten: KR-4601, KR-4702, KR-4719
+Abhaengigkeiten: KR-4616, KR-4625, KR-4719
 Prioritaet: P1
 
 Umfang:
@@ -157,12 +415,13 @@ Akzeptanz:
 
 ### [ ] KR-4704 - v0.47 Gate-Vorbereitung
 
-Abhaengigkeiten: KR-4715 bis KR-4719, KR-4703
+Abhaengigkeiten: KR-4703, KR-4715 bis KR-4719, KR-4625
 Prioritaet: P0
 
 Akzeptanz:
 
-- alle v0.47-Regressionen, ASan, statische Analyse und Coverage bestehen
+- alle Core-, Performance- und v0.47-Regressionen bestehen
+- Debug und RelWithDebInfo liefern identische Gastresultate
 - `unresolved == 0`
 - eine frei lizenzierte Anwendung erreicht `KR_V047_NATIVE_HOST_READY`
 - der private Sonic-Workflow wiederholt den Buildnachweis ohne Prozessstart
