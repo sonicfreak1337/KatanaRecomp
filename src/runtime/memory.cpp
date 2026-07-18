@@ -688,7 +688,8 @@ void Memory::write_bytes(const std::uint32_t address,
         const auto& mapped = resolve_writable(current, MemoryAccessWidth::Byte);
         const auto offset = region_offset(mapped.info, current);
         const bool comparable = mapped.linear != nullptr;
-        const auto previous = comparable ? mapped.linear->read_u8(offset) : 0u;
+        const std::uint8_t previous =
+            comparable ? mapped.linear->read_u8(offset) : std::uint8_t{0u};
         pending.push_back({&mapped, offset, previous, comparable});
         changed = changed || !comparable || previous != bytes[index];
     }
