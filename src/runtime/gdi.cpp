@@ -276,7 +276,7 @@ std::vector<std::uint8_t> GdiDiscSource::read_raw_sector(const std::uint32_t tra
         throw std::out_of_range("GDI-Track wurde nicht gefunden.");
     }
     const auto& track = descriptor_.tracks[found->second];
-    if (sector_index >= track->sector_count) {
+    if (sector_index >= track.sector_count) {
         throw std::out_of_range("GDI-Sektor liegt ausserhalb des Tracks.");
     }
     ++io_counters_.raw_read_operations;
