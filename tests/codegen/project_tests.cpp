@@ -8,6 +8,10 @@
 #include <sstream>
 #include <string>
 
+#ifdef _WIN32
+#include <process.h>
+#endif
+
 namespace {
 
 #ifndef KATANA_SOURCE_DIR
@@ -50,15 +54,28 @@ struct Fixture {
     }
 };
 
+#ifndef _WIN32
 std::string shell_quote(const std::filesystem::path& path) {
     const auto text = path.string();
-#ifdef _WIN32
-    return '"' + text + '"';
-#else
     std::string quoted = "'";
     for (const auto character : text)
         character == '\'' ? quoted += "'\\''" : quoted += character;
     return quoted + "'";
+}
+#endif
+
+int run_ninja(const std::filesystem::path& root) {
+    const auto executable = std::filesystem::path(KATANA_NINJA_EXECUTABLE);
+#ifdef _WIN32
+    return static_cast<int>(_wspawnl(_P_WAIT,
+                                     executable.c_str(),
+                                     executable.filename().c_str(),
+                                     L"-C",
+                                     root.c_str(),
+                                     static_cast<const wchar_t*>(nullptr)));
+#else
+    const auto command = shell_quote(executable) + " -C " + shell_quote(root);
+    return std::system(command.c_str());
 #endif
 }
 
@@ -103,9 +120,7 @@ int main() {
     require(setenv("KATANA_RUNTIME_ROOT", KATANA_SOURCE_DIR, 1) == 0,
             "KATANA_RUNTIME_ROOT konnte fuer Ninja nicht gesetzt werden.");
 #endif
-    const auto ninja_command =
-        shell_quote(KATANA_NINJA_EXECUTABLE) + " -C " + shell_quote(fixture.root / "serial");
-    require(std::system(ninja_command.c_str()) == 0 &&
+    require(run_ninja(fixture.root / "serial") == 0 &&
                 std::filesystem::is_regular_file(fixture.root / "serial" / "libkatana_generated.a"),
             "Ein frisches erzeugtes Ninja-Projekt baut Runtime-Includes, Buildvertrag oder "
             "Archiv nicht eigenstaendig.");

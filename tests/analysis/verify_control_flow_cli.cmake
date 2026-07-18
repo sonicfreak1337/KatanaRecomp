@@ -26,7 +26,7 @@ endif()
 
 set(expected_fragments
     "Funktion 0x0000000C Konfidenz=high Evidenz=proven-complete Herkunft=indirect-call"
-    "jump 0x0000000C [user-override; evidence=forced-override; candidate=0x00000012]"
+    "jump 0x0000000C [user-override; evidence=forced-override; status=guarded_partial; class=runtime-pointer; candidate=0x00000012]"
     "jump-table-jump 0x00000012 [bounded-table; evidence=forced-override]"
     "Bereich 0x00000018"
 )
