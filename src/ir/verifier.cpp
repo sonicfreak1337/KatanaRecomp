@@ -469,7 +469,21 @@ verify_program(const std::span<const Function> functions,
     }
     entries.insert(external_function_entries.begin(), external_function_entries.end());
     for (const auto& function : functions) {
-        for (const auto callee : function.direct_callees) {
+        std::vector<std::uint32_t> required_callees;
+        for (const auto& block : function.blocks) {
+            if (block.instructions.empty()) continue;
+            const auto& control = controlling_instruction(block);
+            if (control.operation == Operation::Call && control.target_address.has_value()) {
+                required_callees.push_back(*control.target_address);
+            } else if (control.operation == Operation::CallRegister &&
+                       !block.has_indirect_successor) {
+                required_callees.insert(required_callees.end(),
+                                        control.resolved_targets.begin(),
+                                        control.resolved_targets.end());
+            }
+        }
+        sort_unique(required_callees);
+        for (const auto callee : required_callees) {
             if (!entries.contains(callee)) {
                 add_issue(issues,
                           function.entry_address,

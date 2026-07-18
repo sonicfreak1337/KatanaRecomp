@@ -25,10 +25,9 @@ if(NOT cli_result EQUAL 0)
 endif()
 
 set(expected_fragments
-    "Funktion 0x0000000C Konfidenz=high Herkunft=indirect-call"
-    "jump 0x0000000C -> 0x00000012 [user-override]"
-    "jump-table-jump 0x00000012 -> 0x00000018 [bounded-absolute-target]"
-    "jump-table-jump 0x00000012 -> 0x0000001C [bounded-absolute-target]"
+    "Funktion 0x0000000C Konfidenz=high Evidenz=proven-complete Herkunft=indirect-call"
+    "jump 0x0000000C [user-override; evidence=forced-override; candidate=0x00000012]"
+    "jump-table-jump 0x00000012 [bounded-table; evidence=forced-override]"
     "Bereich 0x00000018"
 )
 foreach(fragment IN LISTS expected_fragments)

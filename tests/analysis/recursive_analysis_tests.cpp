@@ -167,11 +167,11 @@ int main() {
     const auto report = katana::analysis::format_recursive_analysis_report(result);
     require(report == katana::analysis::format_recursive_analysis_report(result),
             "Analysebericht ist nicht deterministisch.");
-    require(report.find("Funktion 0x8C010000 Konfidenz=certain Herkunft=entry-point") !=
-                std::string::npos,
+    require(report.find("Funktion 0x8C010000 Konfidenz=certain Evidenz=proven-complete "
+                        "Herkunft=entry-point") != std::string::npos,
             "Analysebericht erklaert den Einstiegspunkt nicht.");
-    require(report.find("Funktion 0x8C010008 Konfidenz=high Herkunft=direct-call,symbol") !=
-                std::string::npos,
+    require(report.find("Funktion 0x8C010008 Konfidenz=high Evidenz=proven-complete "
+                        "Herkunft=direct-call,symbol") != std::string::npos,
             "Analysebericht erklaert den Call-/Symbolkandidaten nicht.");
     require(report.find("Unerreichbar 0x8C01000C Groesse=2") != std::string::npos,
             "Unerreichbarer Bereich fehlt im Bericht.");
@@ -229,8 +229,17 @@ int main() {
     const auto unknown_delay_result = katana::analysis::analyze_reachable_code(unknown_delay);
     require(unknown_delay_result.instructions.size() == 2u &&
                 unknown_delay_result.instructions[1].is_delay_slot &&
-                unknown_delay_result.diagnostics.size() == 1u,
-            "Unbekannter Delay Slot wurde nicht genau einmal diagnostiziert.");
+                unknown_delay_result.diagnostics.size() == 2u &&
+                std::any_of(
+                    unknown_delay_result.diagnostics.begin(),
+                    unknown_delay_result.diagnostics.end(),
+                    [](const auto& diagnostic) { return diagnostic.reason == "unknown-opcode"; }) &&
+                std::any_of(unknown_delay_result.diagnostics.begin(),
+                            unknown_delay_result.diagnostics.end(),
+                            [](const auto& diagnostic) {
+                                return diagnostic.reason == "delay-slot-unknown-opcode";
+                            }),
+            "Unbekannter Delay Slot wurde nicht vollstaendig diagnostiziert.");
     require(std::none_of(unknown_delay_result.instructions.begin(),
                          unknown_delay_result.instructions.end(),
                          [](const auto& line) { return line.address == 4u || line.address == 8u; }),

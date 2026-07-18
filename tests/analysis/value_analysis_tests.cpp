@@ -193,9 +193,10 @@ int main() {
             "Ein unbekanntes Registerziel wurde faelschlich aufgeloest.");
     const auto report = katana::analysis::format_indirect_control_flow_report(resolutions);
     require(report.find("Aufgeloest:") < report.find("Ungeloest:") &&
-                report.find("0x00000008 [constant-register]") != std::string::npos,
+                report.find("0x00000008 [constant-register; evidence=proven-complete]") !=
+                    std::string::npos,
             "Aufgeloester Kontrollfluss fehlt im getrennten Bericht.");
-    require(report.find("[register-value-unknown]") != std::string::npos &&
+    require(report.find("[register-value-unknown; evidence=unresolved]") != std::string::npos &&
                 report.find("Hinweis: jump = 0x00000006 ZIEL") != std::string::npos,
             "Ungelesene Kontrollflussstelle besitzt keinen Grund oder Nutzerhinweis.");
 
@@ -341,7 +342,7 @@ int main() {
         guarded_flow.indirect_control_flow, guarded_flow.jump_tables);
     const auto guarded_json = katana::analysis::format_control_flow_analysis_json(guarded_flow);
     const auto guarded_summary = katana::analysis::summarize_control_flow_analysis(guarded_flow);
-    require(guarded_text.find("snapshot-candidate=") != std::string::npos &&
+    require(guarded_text.find("candidate=") != std::string::npos &&
                 guarded_json.find("\"status\":\"guarded\"") != std::string::npos &&
                 guarded_summary.resolved + guarded_summary.guarded + guarded_summary.unresolved ==
                     guarded_summary.indirect_total &&

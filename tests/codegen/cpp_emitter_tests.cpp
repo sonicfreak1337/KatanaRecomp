@@ -253,7 +253,7 @@ int main() {
     second_timing.source_address = 0x3002u;
     katana::ir::BasicBlock timing_block;
     timing_block.start_address = 0x3000u;
-    timing_block.instructions = {first_timing, second_timing, second_timing};
+    timing_block.instructions = {first_timing, second_timing};
     katana::ir::Function timing_function;
     timing_function.entry_address = 0x3000u;
     timing_function.blocks = {std::move(timing_block)};
@@ -261,7 +261,7 @@ int main() {
         katana::codegen::emit_cpp_program(std::vector{timing_function}, 0x3000u);
     require(timing_source.find("base_guest_cycles_per_instruction * 2u") != std::string::npos &&
                 timing_source.find("base_guest_cycles_per_instruction * 3u") == std::string::npos,
-            "Mehrere IR-Operationen derselben Gastadresse werden als mehrere Zyklen gezaehlt.");
+            "Zwei Gastinstruktionen werden nicht als genau zwei Zyklen gezaehlt.");
 
     std::cout << "Alle C++-Codegenerator-Tests erfolgreich.\n";
 

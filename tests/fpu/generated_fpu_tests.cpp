@@ -136,8 +136,8 @@ int main() {
         katana_generated::fn_00000170_with_services(cpu, &services);
         require(cpu.prefetch_count == 2u && cpu.last_prefetch_was_store_queue &&
                     services.queues_.transfer_count() == 1u &&
-                    cpu.memory.read_u32(0x20u) == 0xA5000000u &&
-                    cpu.memory.read_u32(0x3Cu) == 0xA500001Cu,
+                    cpu.memory.read_u32(0x00u) == 0xA5000000u &&
+                    cpu.memory.read_u32(0x1Cu) == 0xA500001Cu,
                 "Generiertes PREF uebertraegt SQ0 nicht ueber Plattformdienste in RAM.");
 
         services.queues_.write_qacr(1u, 0x10u);

@@ -147,7 +147,8 @@ int main() {
     const auto multi_text = katana::analysis::format_indirect_control_flow_report(
         multi.indirect_control_flow, multi.jump_tables, multi.symbolic_addresses);
     const auto multi_json = katana::analysis::format_control_flow_analysis_json(multi);
-    require(multi_text.find("interprocedural-return-set; r0; callees=") != std::string::npos &&
+    require(multi_text.find("interprocedural-return-set; evidence=proven-complete; r0; callees=") !=
+                    std::string::npos &&
                 multi_json.find("\"targets\":[\"0x00000010\",\"0x00000014\"]") !=
                     std::string::npos &&
                 multi_json.find("\"function_value_summaries\":[") != std::string::npos,

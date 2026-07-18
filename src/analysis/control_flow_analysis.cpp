@@ -595,8 +595,14 @@ ControlFlowAnalysisResult analyze_control_flow(const katana::io::ExecutableImage
             }
         }
 
+        const auto is_jump_table_dispatch = [&analysis](const std::uint32_t address) {
+            return std::ranges::any_of(analysis.jump_tables, [address](const auto& table) {
+                return table.dispatch_address == address;
+            });
+        };
         bool changed = false;
         for (const auto& resolution : analysis.indirect_control_flow) {
+            if (is_jump_table_dispatch(resolution.instruction_address)) continue;
             changed = add_resolution_seeds(seeds, resolution) || changed;
         }
         for (const auto& table : analysis.jump_tables) {
@@ -633,7 +639,7 @@ ControlFlowAnalysisResult analyze_control_flow(const katana::io::ExecutableImage
         std::vector<std::uint32_t> function_entries;
         function_entries.reserve(analysis.recursive.functions.size());
         for (const auto& function : analysis.recursive.functions) {
-            if (control_flow_evidence_proven(function.evidence))
+            if (function.evidence != ControlFlowEvidence::Unresolved)
                 function_entries.push_back(function.address);
         }
         const auto provisional_edges =
@@ -665,8 +671,10 @@ ControlFlowAnalysisResult analyze_control_flow(const katana::io::ExecutableImage
             resolution->evidence_callees = std::move(proof.callees);
         }
         classify_dynamic_sites(analysis.recursive.instructions, analysis.indirect_control_flow);
-        for (const auto& resolution : analysis.indirect_control_flow)
+        for (const auto& resolution : analysis.indirect_control_flow) {
+            if (is_jump_table_dispatch(resolution.instruction_address)) continue;
             changed = add_resolution_seeds(seeds, resolution) || changed;
+        }
         if (!changed && missing_override_dispatch && overrides != nullptr) {
             for (const auto& jump : overrides->jumps) {
                 const auto resolution = std::find_if(analysis.indirect_control_flow.begin(),

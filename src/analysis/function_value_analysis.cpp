@@ -44,6 +44,11 @@ struct FunctionEvaluation {
     std::vector<CallArguments> call_arguments;
 };
 
+struct IndirectCalleeCandidates {
+    std::vector<std::uint32_t> targets;
+    bool guarded = false;
+};
+
 struct CandidateInput {
     AbstractState state;
     std::array<bool, 16u> saturated{};
@@ -448,11 +453,17 @@ void apply_call(AbstractState& state,
                 const std::uint32_t call_site,
                 const std::optional<std::uint32_t> callee,
                 const std::span<const std::uint32_t> candidate_callees,
+                const bool candidate_callees_guarded,
                 const std::map<std::uint32_t, FunctionValueSummary>& summaries,
                 std::vector<FunctionEvaluation::CallArguments>* call_arguments) {
     if (call_arguments != nullptr) {
+        auto observation = state;
+        if (candidate_callees_guarded) {
+            for (auto& value : observation)
+                value.guarded = true;
+        }
         for (const auto candidate : candidate_callees)
-            call_arguments->push_back({call_site, candidate, state});
+            call_arguments->push_back({call_site, candidate, observation});
     }
     if (image.guest_call_abi() != katana::io::GuestCallAbi::SuperHC) {
         for (auto& value : state)
@@ -485,7 +496,7 @@ void apply_call(AbstractState& state,
     normalize(returned_values);
     if (returned_values.size() > maximum_summary_values) return;
     state[0u].known = true;
-    state[0u].guarded = false;
+    state[0u].guarded = candidate_callees_guarded;
     state[0u].values = std::move(returned_values);
     state[0u].call_sites = {call_site};
     state[0u].callees = std::move(evidence_callees);
@@ -521,7 +532,7 @@ FunctionEvaluation evaluate_function(
     const katana::io::ExecutableImage& image,
     const FunctionInfo& function,
     const std::unordered_map<std::uint32_t, const BasicBlock*>& blocks,
-    const std::unordered_map<std::uint32_t, std::vector<std::uint32_t>>& indirect_callees,
+    const std::unordered_map<std::uint32_t, IndirectCalleeCandidates>& indirect_callees,
     const std::map<std::uint32_t, FunctionValueSummary>& summaries,
     const AbstractState& initial_state,
     const bool collect_resolutions) {
@@ -545,6 +556,7 @@ FunctionEvaluation evaluate_function(
             std::uint32_t call_site = 0u;
             std::optional<std::uint32_t> direct_callee;
             std::vector<std::uint32_t> candidate_callees;
+            bool candidate_callees_guarded = false;
         };
         std::optional<DelayedCall> delayed_call;
         for (const auto& line : block->second->lines) {
@@ -599,6 +611,7 @@ FunctionEvaluation evaluate_function(
                            delayed_call->call_site,
                            delayed_call->direct_callee,
                            delayed_call->candidate_callees,
+                           delayed_call->candidate_callees_guarded,
                            summaries,
                            &evaluation.call_arguments);
                 delayed_call.reset();
@@ -609,20 +622,26 @@ FunctionEvaluation evaluate_function(
                         ? line.target_address
                         : std::nullopt;
                 std::vector<std::uint32_t> candidate_callees;
+                bool candidate_callees_guarded = false;
                 if (callee.has_value()) {
                     candidate_callees.push_back(*callee);
                 } else if (const auto found = indirect_callees.find(line.address);
                            found != indirect_callees.end()) {
-                    candidate_callees = found->second;
+                    candidate_callees = found->second.targets;
+                    candidate_callees_guarded = found->second.guarded;
                 }
                 if (line.instruction.has_delay_slot)
-                    delayed_call = DelayedCall{line.address, callee, std::move(candidate_callees)};
+                    delayed_call = DelayedCall{line.address,
+                                               callee,
+                                               std::move(candidate_callees),
+                                               candidate_callees_guarded};
                 else
                     apply_call(state,
                                image,
                                line.address,
                                callee,
                                candidate_callees,
+                               candidate_callees_guarded,
                                summaries,
                                &evaluation.call_arguments);
             }
@@ -732,16 +751,17 @@ analyze_function_values(const katana::io::ExecutableImage& image,
     for (const auto& block : blocks)
         block_index.emplace(block.start_address, &block);
     const auto functions = discover_functions_from_blocks(blocks, function_entries, resolved_edges);
-    std::unordered_map<std::uint32_t, std::vector<std::uint32_t>> indirect_callees;
+    std::unordered_map<std::uint32_t, IndirectCalleeCandidates> indirect_callees;
     for (const auto& edge : resolved_edges) {
-        if (edge.kind != ResolvedControlFlowKind::Call ||
-            !control_flow_evidence_complete(resolved_edge_evidence(edge)))
-            continue;
-        indirect_callees[edge.instruction_address].push_back(edge.target_address);
+        if (edge.kind != ResolvedControlFlowKind::Call) continue;
+        auto& candidates = indirect_callees[edge.instruction_address];
+        candidates.targets.push_back(edge.target_address);
+        candidates.guarded =
+            candidates.guarded || !control_flow_evidence_complete(resolved_edge_evidence(edge));
     }
-    for (auto& [call_site, callees] : indirect_callees) {
+    for (auto& [call_site, candidates] : indirect_callees) {
         static_cast<void>(call_site);
-        normalize(callees);
+        normalize(candidates.targets);
     }
     std::map<std::uint32_t, FunctionValueSummary> summaries;
     std::map<std::uint32_t, CandidateInput> candidate_inputs;
@@ -826,12 +846,14 @@ analyze_function_values(const katana::io::ExecutableImage& image,
                   return left.targets < right.targets;
               });
     std::vector<InterproceduralTargetResolution> merged;
+    std::unordered_set<std::uint32_t> merged_context_sites;
     for (auto& resolution : result.resolutions) {
         if (merged.empty() || merged.back().instruction_address != resolution.instruction_address) {
             merged.push_back(std::move(resolution));
             continue;
         }
         auto& site = merged.back();
+        merged_context_sites.insert(site.instruction_address);
         site.targets.insert(
             site.targets.end(), resolution.targets.begin(), resolution.targets.end());
         normalize(site.targets);
@@ -845,6 +867,7 @@ analyze_function_values(const katana::io::ExecutableImage& image,
         site.guarded = site.guarded || resolution.guarded || !resolution.complete;
     }
     for (auto& site : merged) {
+        if (!merged_context_sites.contains(site.instruction_address)) continue;
         site.evidence = site.targets.empty()             ? ControlFlowEvidence::Unresolved
                         : site.complete && !site.guarded ? ControlFlowEvidence::ProvenComplete
                                                          : ControlFlowEvidence::GuardedPartial;
