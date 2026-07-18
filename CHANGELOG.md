@@ -4,10 +4,17 @@
 
 ### Geaendert
 
-- Die Roadmap wurde ab v0.47 auf vier echte Produktmeilensteine verdichtet:
-  generische Runtime, Sonic-Alpha, Beta und Stable. Die ungestarteten v0.48- und
-  v0.49-Zwischenphasen wurden in das Alpha-Bring-up und die Alpha-Haertung
-  ueberfuehrt.
+- Die internen v0.48- und v0.49-Meilensteine wurden wiederhergestellt. Damit
+  behalten KR-4801 bis KR-4805 und KR-4901 ihre historischen Bedeutungen; die
+  zwischenzeitlich damit bezeichneten Alpha-Bring-up-Aufgaben wurden auf
+  KR-4911 bis KR-4916 migriert. Eine Task-ID-Registry verbietet kuenftige
+  semantische Wiederverwendung.
+- Die Roadmap erfasst neue P0-Kontrollflussarbeit fuer Hint-Vertrauen,
+  Delay-Slot-Kontexte, exakte Fallthroughs, Site-Vollstaendigkeit und
+  interprozedurale Zielmengen sowie P1-Arbeit fuer inkrementelle SCC-Fixpunkte.
+- Vor dem Alpha-Bring-up werden private Harnessmodi, strukturierte Metriken,
+  native Controller-/Maple-Eingabe und eine informative, eventgetriebene
+  Desktop-GUI umgesetzt.
 - Eine private Sonic-`game.exe` darf in v0.47 vollstaendig gebaut, aber nicht
   gestartet werden. Der erste Runtimelauf und `SA_MAIN_ENTERED` gehoeren zur
   Alpha-Entwicklung; der oeffentliche Alpha-Release verlangt weiterhin
