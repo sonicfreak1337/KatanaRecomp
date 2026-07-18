@@ -12,9 +12,11 @@ std::uint32_t CpuState::read_sr() const noexcept {
 
 void CpuState::write_sr(const std::uint32_t value) noexcept {
     const std::uint32_t masked = value & sr_writable_mask;
-    const bool old_rb = (sr & sr_rb_mask) != 0u;
-    const bool new_rb = (masked & sr_rb_mask) != 0u;
-    if (old_rb != new_rb) {
+    const bool old_bank_one = (sr & (sr_md_mask | sr_rb_mask)) ==
+                              (sr_md_mask | sr_rb_mask);
+    const bool new_bank_one = (masked & (sr_md_mask | sr_rb_mask)) ==
+                              (sr_md_mask | sr_rb_mask);
+    if (old_bank_one != new_bank_one) {
         for (std::size_t index = 0u; index < r_bank.size(); ++index) {
             std::swap(r[index], r_bank[index]);
         }
@@ -78,7 +80,7 @@ bool CpuState::privileged_mode() const noexcept {
 }
 
 bool CpuState::register_bank_selected() const noexcept {
-    return (read_sr() & sr_rb_mask) != 0u;
+    return (read_sr() & (sr_md_mask | sr_rb_mask)) == (sr_md_mask | sr_rb_mask);
 }
 
 bool CpuState::fpu_disabled() const noexcept {

@@ -2,7 +2,7 @@
 
 Interner Entwicklungsmeilenstein: `v0.46.0`
 Phase: Core-Stabilisierung vor v0.47
-Naechster Task: `KR-4611`
+Naechster Task: `KR-4612`
 Naechstes Gate: `v0.47.0` - Core-Stabilisierung und generische Retail-Runtime
 Weitere interne Gates: `v0.48.0` Integration und `v0.49.0` Alpha-Candidate
 Erster oeffentlicher Release: `v0.50.0` Alpha
@@ -45,6 +45,21 @@ Alpha-Aufgaben erhalten `KR-4911` bis `KR-4916`.
 
 Die kanonische Historie steht in
 [`TASK_ID_REGISTRY.md`](TASK_ID_REGISTRY.md).
+
+## KR-4611 umgesetzt
+
+Der SH-4-Kontrollzustand verwendet fuer R0 bis R7 jetzt die effektive
+Bankauswahl `SR.MD && SR.RB`. BSR, BSRF und JSR schreiben PR vor ihrem Delay
+Slot; ein PR-Schreibzugriff des Slots bleibt dadurch sichtbar. RTE und SLEEP
+besitzen getrennte Blockendtypen in Block-ABI 2. Der Portdispatcher setzt nach
+normalen Gast-Exceptions und Interrupts am jeweiligen Handlervektor fort,
+behandelt RTE als dynamische Fortsetzung bei SPC und fuehrt waehrend SLEEP
+keinen weiteren Block vor der Annahme eines Interrupts aus.
+
+Exceptionursache, Gast-Eventcode und Vektor werden aus einer gemeinsamen
+Metadatentabelle abgeleitet. Die spaeter bei KR-4617 und KR-4618 umzusetzenden
+und auszufuehrenden Testanforderungen stehen in
+[`SH4_CONTROL_STATE.md`](SH4_CONTROL_STATE.md).
 
 ## Naechste Reihenfolge
 

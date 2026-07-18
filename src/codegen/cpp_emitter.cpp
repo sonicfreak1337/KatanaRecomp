@@ -1,5 +1,6 @@
 #include "katana/codegen/cpp_emitter.hpp"
 #include "katana/ir/verifier.hpp"
+#include "katana/runtime/block_abi.hpp"
 
 #include "katana/ir/ir.hpp"
 
@@ -1743,12 +1744,12 @@ void emit_terminal(std::ostringstream& output,
             throw std::runtime_error("Direkter IR-Aufruf besitzt kein Ziel.");
         }
 
+        emit_indent(output, indent);
+        output << "cpu.pr = " << hex32(instruction.source_address + 4u) << ";\n";
+
         if (delay_slot != nullptr) {
             emit_guarded_simple_instruction(output, *delay_slot, indent);
         }
-
-        emit_indent(output, indent);
-        output << "cpu.pr = " << hex32(instruction.source_address + 4u) << ";\n";
 
         if (single_block) {
             emit_indent(output, indent);
@@ -1756,9 +1757,6 @@ void emit_terminal(std::ostringstream& output,
         } else {
             emit_direct_call(output, *instruction.target_address, known_functions, indent);
         }
-
-        emit_indent(output, indent);
-        output << "cpu.pc = " << hex32(fallthrough_address(instruction)) << ";\n";
 
         emit_indent(output, indent);
         output << (single_block ? "return;\n" : "continue;\n");
@@ -1854,12 +1852,12 @@ void emit_terminal(std::ostringstream& output,
         }
         output << ";\n";
 
+        emit_indent(output, indent);
+        output << "cpu.pr = " << hex32(instruction.source_address + 4u) << ";\n";
+
         if (delay_slot != nullptr) {
             emit_guarded_simple_instruction(output, *delay_slot, indent);
         }
-
-        emit_indent(output, indent);
-        output << "cpu.pr = " << hex32(instruction.source_address + 4u) << ";\n";
 
         if (instruction.resolved_targets.empty()) {
             emit_indent(output, indent);
@@ -1888,9 +1886,6 @@ void emit_terminal(std::ostringstream& output,
             emit_indent(output, indent);
             output << "}\n";
         }
-
-        emit_indent(output, indent);
-        output << "cpu.pc = " << hex32(fallthrough_address(instruction)) << ";\n";
 
         emit_indent(output, indent);
         output << (single_block ? "return;\n" : "continue;\n");
@@ -2332,7 +2327,8 @@ BackendEmission CppBackend::emit(const BackendRequest& request) const {
                  << "    \"Inkompatible Katana-Runtime-ABI\"\n"
                  << ");\n"
                  << "static_assert(\n"
-                 << "    katana::runtime::block_abi_version == 1u,\n"
+                 << "    katana::runtime::block_abi_version == "
+                 << katana::runtime::block_abi_version << "u,\n"
                  << "    \"Inkompatible Katana-Block-ABI\"\n"
                  << ");\n\n"
                  << "using CpuState = katana::runtime::CpuState;\n"

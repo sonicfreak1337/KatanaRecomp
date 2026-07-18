@@ -25,6 +25,13 @@
   dokumentiert.
 ### Korrigiert
 
+- KR-4611: Die sichtbare R0-R7-Bank folgt jetzt `SR.MD && SR.RB`. BSR, BSRF
+  und JSR aktualisieren PR vor dem Delay Slot, ohne einen dort geschriebenen
+  Wert nachtraeglich zu ueberschreiben. Block-ABI 2 unterscheidet RTE und SLEEP
+  von normalen Returns und Fallthroughs; der Portdispatcher setzt Gast-
+  Exceptions und Interrupts am Handler fort, kehrt ueber SPC zurueck und
+  haelt SLEEP bis zu einem angenommenen Interrupt an. Ursache, Eventcode und
+  Vektor stammen aus einem gemeinsamen Exceptionvertrag.
 - Der erzeugte GDI-Port meldet `SA_MAIN_ENTERED` und `silent_failures=0` nur
   nach einem echten Gast-Checkpoint. Sofortige Traps, Exceptions oder
   Fallbacks scheitern vorher sichtbar. Descriptor, alle Tracks und die

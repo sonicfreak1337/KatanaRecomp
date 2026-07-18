@@ -28,6 +28,16 @@ struct ExceptionRequest {
     bool in_delay_slot = false;
 };
 
+struct ExceptionMetadata {
+    ExceptionCause cause = ExceptionCause::None;
+    std::uint32_t event_code = 0u;
+    std::uint32_t vector_offset = general_exception_vector;
+    bool interrupt = false;
+};
+
+[[nodiscard]] ExceptionMetadata
+exception_metadata(ExceptionCause cause, std::uint32_t interrupt_event_code = 0u) noexcept;
+
 void enter_exception(CpuState& cpu, const ExceptionRequest& request) noexcept;
 
 void raise_trapa(CpuState& cpu, std::uint8_t immediate, std::uint32_t instruction_pc) noexcept;

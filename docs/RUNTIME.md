@@ -6,7 +6,8 @@ ungeloesten Kontrollflusspfaden mehr.
 
 ## ABI
 
-Die aktuelle Runtime-ABI ist Version `7`.
+Die aktuelle Runtime-ABI ist Version `8`. Die typisierte Block-ABI ist seit
+KR-4611 Version `2`.
 
 Generierter Code enthaelt eine Compile-Time-Pruefung gegen diese Version. Eine
 abweichende Runtime wird beim Kompilieren sichtbar abgelehnt. ABI-Version 3
@@ -48,7 +49,9 @@ Die FPU-Baenke bewahren 32-Bit-Rohwerte, damit `FMOV` Bitmuster unveraendert
 uebertragen kann. `FPSCR.FR` tauscht die sichtbaren FR- und XF-Baenke zentral.
 Die FPU-Runtime interpretiert dieselben Bits fuer Single- oder gepaarte
 Double-Precision-Operationen; `FPSCR.PR`, `SZ`, `FR` und `RM` steuern
-Rechenpraezision, Transferbreite, Banksicht und Rundung.
+Rechenpraezision, Transferbreite, Banksicht und Rundung. R0 bis R7 verwenden
+Bank 1 nur im privilegierten Modus bei gleichzeitig gesetztem `SR.RB`; im
+User-Modus bleibt unabhaengig von RB Bank 0 sichtbar.
 
 ## Regionbasierter Speicherbus
 
@@ -189,9 +192,10 @@ Diagnose- und Kompatibilitaetsfaelle verfuegbar.
 Der historische lineare 1-MiB-Speicher in `CpuState` wird fuer bestehende
 synthetische Semantik-Harnesses weiterhin explizit permissiv initialisiert.
 Echte oder explizit erzeugte `Memory`-Busse bleiben standardmaessig strikt.
-Der v0.23-Exception-Pfad ueberfuehrt deren `Misaligned`-Fehler in strukturierte
-SH-4-Adressfehler; andere fehlgeschlagene Zugriffe werden als Busfehler
-klassifiziert.
+Der Gast-Exception-Pfad ueberfuehrt fehlgeschlagene Operandenzugriffe in den
+passenden SH-4-Lese- oder Schreib-Adressfehler. Die genauere Hostursache bleibt
+im ausloesenden `MemoryAccessError` fuer Bus- und Runtime-Diagnosen erhalten,
+wird aber nicht mehr mit einem widersprechenden EXPEVT kombiniert.
 
 Busfehler werden als `MemoryAccessError` mit maschinenlesbaren Metadaten
 gemeldet:
@@ -230,6 +234,14 @@ setzt `MD`, `RB` und `BL`, schreibt das Ereignis nach `EXPEVT` oder `INTEVT`
 und springt ueber `VBR` zum allgemeinen Exception- oder Interruptvektor.
 Speicherfehler hinterlegen die fehlerhafte Adresse zusaetzlich in `TEA`.
 `return_from_exception` restauriert `SR`, Registerbank und `PC` zentral.
+
+KR-4611 leitet Exceptionursache, Eventcode, Vektor und Interruptklasse aus
+einer gemeinsamen Metadatentabelle ab. `trap_pending` bezeichnet einen aktiven
+Gast-Exceptionhandler und keinen fatalen Hostabbruch. Block-ABI 2 trennt
+`ExceptionReturn` und `Sleep` von normalen Returns: Der Portdispatcher setzt
+Exceptions und Interrupts am durch VBR bestimmten Handler fort, dispatcht RTE
+zum restaurierten SPC und fuehrt waehrend SLEEP erst nach einem akzeptierten
+Interrupt wieder Gastcode aus.
 
 Der `InterruptController` verwaltet Pending-Quellen nach Quell-ID, Prioritaet
 und Eventcode. Angenommen wird deterministisch der hoechste Level oberhalb von

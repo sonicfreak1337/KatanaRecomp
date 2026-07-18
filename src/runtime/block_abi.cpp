@@ -15,7 +15,9 @@ bool requires_target(const BlockEndKind kind) noexcept {
     case BlockEndKind::DynamicBranch:
     case BlockEndKind::Call:
     case BlockEndKind::Return:
+    case BlockEndKind::ExceptionReturn:
         return true;
+    case BlockEndKind::Sleep:
     case BlockEndKind::Exception:
     case BlockEndKind::InterruptSafepoint:
         return false;

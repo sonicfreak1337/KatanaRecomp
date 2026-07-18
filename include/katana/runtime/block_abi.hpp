@@ -9,7 +9,7 @@
 
 namespace katana::runtime {
 
-inline constexpr std::uint32_t block_abi_version = 1u;
+inline constexpr std::uint32_t block_abi_version = 2u;
 
 struct BlockAddress {
     std::uint32_t virtual_address = 0u;
@@ -25,6 +25,8 @@ enum class BlockEndKind : std::uint8_t {
     DynamicBranch,
     Call,
     Return,
+    ExceptionReturn,
+    Sleep,
     Exception,
     InterruptSafepoint
 };

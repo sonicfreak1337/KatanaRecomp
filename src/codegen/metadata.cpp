@@ -62,6 +62,10 @@ std::string_view end_name(const katana::runtime::BlockEndKind value) {
         return "call";
     case BlockEndKind::Return:
         return "return";
+    case BlockEndKind::ExceptionReturn:
+        return "exception-return";
+    case BlockEndKind::Sleep:
+        return "sleep";
     case BlockEndKind::Exception:
         return "exception";
     case BlockEndKind::InterruptSafepoint:

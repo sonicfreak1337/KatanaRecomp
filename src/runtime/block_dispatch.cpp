@@ -55,20 +55,25 @@ CanonicalBlockDispatcher::dispatch(CpuState& cpu,
         break;
     case BlockEndKind::DynamicBranch:
     case BlockEndKind::Call:
-    case BlockEndKind::Return: {
-        if (end.kind != BlockEndKind::Return && !dynamic_target) {
+    case BlockEndKind::Return:
+    case BlockEndKind::ExceptionReturn: {
+        if (end.kind != BlockEndKind::Return && end.kind != BlockEndKind::ExceptionReturn &&
+            !dynamic_target) {
             throw std::invalid_argument("Dynamischer Block braucht ein Ziel.");
         }
-        const auto kind = end.kind == BlockEndKind::Call     ? IndirectDispatchKind::Call
-                          : end.kind == BlockEndKind::Return ? IndirectDispatchKind::Return
-                                                             : IndirectDispatchKind::TailJump;
+        const auto kind = end.kind == BlockEndKind::Call   ? IndirectDispatchKind::Call
+                          : end.kind == BlockEndKind::Return
+                              ? IndirectDispatchKind::Return
+                              : IndirectDispatchKind::TailJump;
         const auto callsite = end.callsite.value_or(end.source.virtual_address);
         const auto result = dispatch_indirect(cpu,
                                               table_,
                                               {kind,
                                                callsite,
-                                               dynamic_target.value_or(0u),
-                                               callsite + 4u,
+                                               end.kind == BlockEndKind::ExceptionReturn
+                                                   ? cpu.pc
+                                                   : dynamic_target.value_or(0u),
+                                               cpu.pr,
                                                end.source,
                                                variant,
                                                DispatchResolutionOrigin::TableLookup,
@@ -77,6 +82,7 @@ CanonicalBlockDispatcher::dispatch(CpuState& cpu,
         target_block = result.block;
         break;
     }
+    case BlockEndKind::Sleep:
     case BlockEndKind::Exception:
     case BlockEndKind::InterruptSafepoint:
         break;

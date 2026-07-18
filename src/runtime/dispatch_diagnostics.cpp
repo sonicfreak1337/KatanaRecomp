@@ -50,6 +50,10 @@ const char* block_end_name(const BlockEndKind kind) noexcept {
         return "call";
     case BlockEndKind::Return:
         return "return";
+    case BlockEndKind::ExceptionReturn:
+        return "exception-return";
+    case BlockEndKind::Sleep:
+        return "sleep";
     case BlockEndKind::Exception:
         return "exception";
     case BlockEndKind::InterruptSafepoint:

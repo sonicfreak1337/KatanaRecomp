@@ -392,8 +392,11 @@ std::string runtime_dispatch_adapter(const std::string& entry_namespace,
         case O::CallRegister:
             return "Call";
         case O::Return:
-        case O::ReturnFromException:
             return "Return";
+        case O::ReturnFromException:
+            return "ExceptionReturn";
+        case O::Sleep:
+            return "Sleep";
         case O::TrapAlways:
             return "Exception";
         default:
@@ -447,11 +450,12 @@ std::string runtime_dispatch_adapter(const std::string& entry_namespace,
                   "context) {\n"
                << "    if (active_services == nullptr) throw "
                   "std::runtime_error(\"Runtime-Plattformdienste fehlen.\");\n"
+               << "    const bool exception_active_on_entry = cpu.trap_pending;\n"
                << "    fn_" << owner << "_with_services(cpu, active_services);\n"
-               << "    auto kind = cpu.trap_pending ? katana::runtime::BlockEndKind::Exception :\n"
-               << "        cpu.last_exception_cause == katana::runtime::ExceptionCause::Interrupt\n"
-               << "            ? katana::runtime::BlockEndKind::InterruptSafepoint\n"
-               << "            : katana::runtime::BlockEndKind::" << end_kind(block) << ";\n"
+               << "    auto kind = !exception_active_on_entry && cpu.trap_pending\n"
+               << "                    ? katana::runtime::BlockEndKind::Exception\n"
+               << "                    : katana::runtime::BlockEndKind::"
+               << end_kind(block) << ";\n"
                << "    if (std::exchange(tail_dispatch_completed, false))\n"
                << "        kind = katana::runtime::BlockEndKind::Return;\n"
                << "    return katana::runtime::make_block_exit(cpu, context,\n"
@@ -463,9 +467,19 @@ std::string runtime_dispatch_adapter(const std::string& entry_namespace,
         }
     }
     output << "void dispatch_chain(katana::runtime::CpuState& cpu, std::uint32_t target,\n"
-              "                    katana::runtime::IndirectDispatchKind kind, bool diagnostic) {\n"
-              "    for (std::size_t blocks = 0u; blocks < 1000000u; ++blocks) {\n"
-              "        const auto selected = katana::runtime::dispatch_indirect(cpu, *active_table,\n"
+               "                    katana::runtime::IndirectDispatchKind kind, bool diagnostic) {\n"
+               "    for (std::size_t blocks = 0u; blocks < 1000000u; ++blocks) {\n"
+               "        if (cpu.sleeping) {\n"
+               "            const auto scheduler = active_services->advance_scheduler(\n"
+               "                active_services->scheduler_cycle() + 1u, 1024u);\n"
+               "            if (scheduler.budget_exhausted)\n"
+               "                throw std::runtime_error(\"Schedulerbudget erschoepft\");\n"
+               "            if (!active_services->poll_interrupt().has_value()) continue;\n"
+               "            target = cpu.pc;\n"
+               "            kind = katana::runtime::IndirectDispatchKind::TailJump;\n"
+               "            diagnostic = false;\n"
+               "        }\n"
+               "        const auto selected = katana::runtime::dispatch_indirect(cpu, *active_table,\n"
               "            {kind, cpu.pc, target, cpu.pr, {cpu.pc, "
               "katana::runtime::canonical_physical_address(cpu.pc)}, {},\n"
               "             katana::runtime::DispatchResolutionOrigin::TableLookup,\n"
@@ -473,10 +487,17 @@ std::string runtime_dispatch_adapter(const std::string& entry_namespace,
               "        if (selected.block == nullptr || selected.block->function == nullptr)\n"
               "            throw std::runtime_error(\"Runtime-Dispatchziel besitzt keinen generierten Block.\");\n"
               "        const auto exit = selected.block->function(cpu, *active_context);\n"
-              "        if (exit.kind == katana::runtime::BlockEndKind::Exception || cpu.trap_pending)\n"
-              "            throw std::runtime_error(\"guest-exception-before-checkpoint\");\n"
-              "        if (exit.kind == katana::runtime::BlockEndKind::Return) return;\n"
-              "        target = cpu.pc; kind = katana::runtime::IndirectDispatchKind::TailJump;\n"
+               "        if (exit.kind == katana::runtime::BlockEndKind::Return) return;\n"
+               "        if (exit.kind == katana::runtime::BlockEndKind::Exception ||\n"
+               "            exit.kind == katana::runtime::BlockEndKind::ExceptionReturn ||\n"
+               "            exit.kind == katana::runtime::BlockEndKind::InterruptSafepoint ||\n"
+               "            exit.kind == katana::runtime::BlockEndKind::Sleep) {\n"
+               "            target = cpu.pc;\n"
+               "            kind = katana::runtime::IndirectDispatchKind::TailJump;\n"
+               "            diagnostic = false;\n"
+               "            continue;\n"
+               "        }\n"
+               "        target = cpu.pc; kind = katana::runtime::IndirectDispatchKind::TailJump;\n"
               "        diagnostic = false;\n"
               "    }\n"
               "    throw std::runtime_error(\"Runtime-Blockbudget erschoepft.\");\n"

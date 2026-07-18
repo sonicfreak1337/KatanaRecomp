@@ -73,7 +73,7 @@ Core-Gate parallel laufen, muss aber vor dem ersten Sonic-Runtimelauf bestehen.
 
 ## Stufe A: P0-Core-Korrektheit
 
-### [ ] KR-4611 - SH-4-Kontrollzustand, Delay Slots, RTE, SLEEP und Interrupts
+### [x] KR-4611 - SH-4-Kontrollzustand, Delay Slots, RTE, SLEEP und Interrupts
 
 Abhaengigkeiten: KR-4605
 Prioritaet: P0
