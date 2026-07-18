@@ -34,6 +34,11 @@ Die Klasse ist von der Beweisstaerke getrennt. `evidence` und die sortierten
 menschenlesbare Diagnose. Fehlt fuer einen offenen Alt- oder Testdatensatz eine
 explizite Klasse, wird er konservativ als `runtime-pointer` gezaehlt.
 
+Ein validierter `HintCandidate` mit mindestens einem Kandidaten wird im Bericht
+als `guarded_partial` gezaehlt. Sein interner `Unresolved`-Status, die schwache
+Hint-Evidenz und der dynamische Default bleiben unveraendert. Ein Hint ohne
+validierten Kandidaten bleibt `unresolved`.
+
 KR-4716 kann vollstaendige bewachte Zielmengen aus geschlossenen Caller-
 Kontexten, R13-Callbacks, festen Stackspills und vollstaendigen indirekten
 Callee-Summaries ableiten. Unbekannte Caller oder Aliase bleiben Teil der
@@ -62,6 +67,9 @@ KR-4704 muss synthetisch pruefen:
   und Laufzeitzeiger werden positiv oder konservativ negativ klassifiziert;
 - jede offene Stelle besitzt eine nichtleere typisierte Beweisherkunft;
 - ein `GuardedPartial` blockiert Anwendungs- und Buildvollstaendigkeit;
+- ein `HintCandidate` mit validiertem Ziel erscheint im Detail- und
+  Aggregatbericht als `guarded_partial`, behaelt aber Evidenz und Fallback;
+- Hint-Zaehler halten das disjunkte Summeninvariant;
 - der Aggregatbericht ist deterministisch und enthaelt weder Adressen noch
   Symbole oder Hostpfade;
 - der lokale Detailbericht behaelt Klasse, Evidenz, Kandidaten und Grund.

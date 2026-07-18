@@ -421,6 +421,11 @@ vollstaendige, partielle, Runtime-only- und ungeloeste Stellen getrennt;
 partielle Kandidaten blockieren Anwendungs-Vollstaendigkeit. Vertrag und
 spaetere Gate-Regressionen stehen in `CONTROL_FLOW_FRONTIER.md`.
 
+Die Review-Nacharbeit bildet einen validierten `HintCandidate` mit erhaltenem
+dynamischem Default in der Berichtstaxonomie als `guarded_partial` ab. Der
+interne `Unresolved`-Status und die schwache Hint-Evidenz bleiben bestehen;
+Hints ohne validiertes Ziel bleiben `unresolved`.
+
 ### [x] KR-4716 - ABI-erhaltene Callback-, Parameter- und Stackwerte
 
 Abhaengigkeiten: KR-4715

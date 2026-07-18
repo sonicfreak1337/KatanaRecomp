@@ -188,6 +188,9 @@ control_flow_report_status(const IndirectControlFlowResolution& resolution) noex
         return ControlFlowReportStatus::RuntimeOnly;
     if (resolution.evidence == ControlFlowEvidence::GuardedComplete)
         return ControlFlowReportStatus::GuardedComplete;
+    if (resolution.evidence == ControlFlowEvidence::HintCandidate &&
+        (resolution.target.has_value() || !resolution.targets.empty()))
+        return ControlFlowReportStatus::GuardedPartial;
     if (resolution.status == ResolutionStatus::Resolved) return ControlFlowReportStatus::Resolved;
     if (resolution.status == ResolutionStatus::Guarded)
         return ControlFlowReportStatus::GuardedPartial;

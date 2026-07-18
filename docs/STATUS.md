@@ -103,6 +103,10 @@ Klassen getrennt aus. Der Vertrag steht in
 [`CONTROL_FLOW_FRONTIER.md`](CONTROL_FLOW_FRONTIER.md). KR-4716 ist der naechste
 Task.
 
+Die Review-Nacharbeit zaehlt validierte Hint-Kandidaten mit erhaltenem
+dynamischem Default als `guarded_partial`, ohne ihren internen
+`Unresolved`-Status oder die schwache `HintCandidate`-Evidenz aufzuwerten.
+
 ## KR-4716 umgesetzt
 
 Die SH-C-Funktionswertanalyse vereinigt R8 bis R14 erst nach Beobachtung aller

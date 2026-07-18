@@ -66,6 +66,10 @@
   dokumentiert.
 ### Korrigiert
 
+- KR-4715-Nacharbeit: Validierte `HintCandidate`-Ziele werden in Detail- und
+  Aggregatberichten als `guarded_partial` gezaehlt, waehrend der interne
+  `Unresolved`-Status, die schwache Evidenz und der dynamische Default erhalten
+  bleiben. Kandidatenlose Hints bleiben `unresolved`.
 - KR-4625: Gebuendelte Speicherwrites pruefen den gesamten Zielbereich und die
   vorhandenen Bytes vor dem Commit; Regions- und Schreibschutzfehler koennen
   kein nicht invalidiertes Schreibpraefix mehr hinterlassen. Ein frisches
