@@ -68,7 +68,7 @@
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "RelWithDebInfo",
         "KATANA_ENABLE_SANITIZERS": "OFF",
-        "KATANA_BUILD_FUZZERS": "OFF",
+        "KATANA_BUILD_FUZZERS": "ON",
         "KATANA_ENABLE_COVERAGE": "OFF",
         "KATANA_ENABLE_STATIC_ANALYSIS": "OFF",
         "KATANA_REPRODUCIBLE_ARTIFACTS": "OFF"
