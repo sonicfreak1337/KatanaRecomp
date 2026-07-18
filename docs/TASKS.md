@@ -483,7 +483,7 @@ Speicherseiteneffekte invalidieren konservativ. Beschreibbare statische
 VTables bleiben ohne dominierenden Store partiell. Vertrag und Gatefaelle
 stehen in `OBJECT_POINTS_TO.md`.
 
-### [ ] KR-4718 - Expliziter Runtime-only-Dispatch
+### [x] KR-4718 - Expliziter Runtime-only-Dispatch
 
 Abhaengigkeiten: KR-4716, KR-4717
 Prioritaet: P0
@@ -502,6 +502,15 @@ Akzeptanz:
 - `unresolved == 0` bleibt Voraussetzung fuer Export und Build
 - Runtime-only-Misses erzeugen weder Erfolg noch Sonic-Checkpoint
 - Hostadressen, No-ops und geratene Ziele sind ausgeschlossen
+
+Umgesetzt mit einer expliziten IR-Zielklasse, getrennten bewachten,
+Runtime-only- und ungeloesten Codegenpfaden sowie einem validierenden
+Blocktabellendispatch. Nur ausgerichtete aktive Blockanfaenge mit gueltiger
+Generation und Backendfunktion werden angenommen; Misses brechen sichtbar ab.
+Gesamt- und Runtime-only-Zaehler erfassen Hits, Misses, kontrollierte Fallbacks
+und den ersten Fehler. Runtime-ABI 12, Backend-Interface-ABI 2 und
+Portprojektvertrag 4 versionieren die Erweiterung. Vertrag und Gatefaelle
+stehen in `RUNTIME_ONLY_DISPATCH.md`.
 
 ### [ ] KR-4719 - Privater Retail-Buildnachweis mit erzwungenem Build-only-Modus
 
@@ -559,6 +568,8 @@ Akzeptanz:
 - eine frei lizenzierte Anwendung erreicht `KR_V047_NATIVE_HOST_READY`
 - der private Sonic-Workflow wiederholt den Buildnachweis ohne Prozessstart
 - keine privaten Retaildaten gelangen in Berichte oder Staging
+- die aktuelle GUI wird erfolgreich gebaut, verifiziert und als neue
+  Root-Version bereitgestellt
 - danach fuer Nutzerreview stoppen
 
 ### [ ] KR-4705 - v0.47 interne Freigabe

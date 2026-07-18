@@ -1697,6 +1697,21 @@ void emit_direct_call(std::ostringstream& output,
     }
 }
 
+const char* dynamic_dispatch_name(const katana::ir::Instruction& instruction,
+                                  const bool call) noexcept {
+    switch (instruction.dynamic_target_class) {
+    case katana::ir::DynamicTargetClass::RuntimeOnly:
+        return call ? "runtime_only_call" : "runtime_only_jump";
+    case katana::ir::DynamicTargetClass::GuardedComplete:
+    case katana::ir::DynamicTargetClass::GuardedPartial:
+        return call ? "guarded_call" : "guarded_jump";
+    case katana::ir::DynamicTargetClass::NotApplicable:
+    case katana::ir::DynamicTargetClass::Unresolved:
+        return call ? "unresolved_call" : "unresolved_jump";
+    }
+    return call ? "unresolved_call" : "unresolved_jump";
+}
+
 void emit_terminal(std::ostringstream& output,
                    const katana::ir::BasicBlock& block,
                    const std::size_t control_index,
@@ -1808,7 +1823,7 @@ void emit_terminal(std::ostringstream& output,
 
         if (instruction.resolved_targets.empty()) {
             emit_indent(output, indent);
-            output << "unresolved_jump(cpu, jump_target);\n";
+            output << dynamic_dispatch_name(instruction, false) << "(cpu, jump_target);\n";
 
             emit_indent(output, indent);
             output << "return;\n";
@@ -1834,13 +1849,13 @@ void emit_terminal(std::ostringstream& output,
                 output << "return;\n";
             } else {
                 emit_indent(output, indent + 2);
-                output << "unresolved_jump(cpu, jump_target);\n";
+                output << dynamic_dispatch_name(instruction, false) << "(cpu, jump_target);\n";
             }
         }
         emit_indent(output, indent + 1);
         output << "default:\n";
         emit_indent(output, indent + 2);
-        output << "unresolved_jump(cpu, jump_target);\n";
+        output << dynamic_dispatch_name(instruction, false) << "(cpu, jump_target);\n";
         emit_indent(output, indent);
         output << "}\n";
         return;
@@ -1863,7 +1878,7 @@ void emit_terminal(std::ostringstream& output,
 
         if (instruction.resolved_targets.empty()) {
             emit_indent(output, indent);
-            output << "unresolved_call(cpu, call_target);\n";
+            output << dynamic_dispatch_name(instruction, true) << "(cpu, call_target);\n";
         } else {
             emit_indent(output, indent);
             output << "switch (call_target) {\n";
@@ -1876,7 +1891,7 @@ void emit_terminal(std::ostringstream& output,
                     output << "break;\n";
                 } else {
                     emit_indent(output, indent + 2);
-                    output << "unresolved_call(cpu, call_target);\n";
+                    output << dynamic_dispatch_name(instruction, true) << "(cpu, call_target);\n";
                     emit_indent(output, indent + 2);
                     output << "break;\n";
                 }
@@ -1884,7 +1899,7 @@ void emit_terminal(std::ostringstream& output,
             emit_indent(output, indent + 1);
             output << "default:\n";
             emit_indent(output, indent + 2);
-            output << "unresolved_call(cpu, call_target);\n";
+            output << dynamic_dispatch_name(instruction, true) << "(cpu, call_target);\n";
             emit_indent(output, indent);
             output << "}\n";
         }
@@ -2350,15 +2365,31 @@ BackendEmission CppBackend::emit(const BackendRequest& request) const {
                  << "using katana::runtime::raise_trapa;\n"
                  << "using katana::runtime::return_from_exception;\n";
     if (request.external_dynamic_dispatch) {
-        declarations << "void unresolved_call(CpuState& cpu, std::uint32_t target);\n"
+        declarations << "void guarded_call(CpuState& cpu, std::uint32_t target);\n"
+                     << "void guarded_jump(CpuState& cpu, std::uint32_t target);\n"
+                     << "void runtime_only_call(CpuState& cpu, std::uint32_t target);\n"
+                     << "void runtime_only_jump(CpuState& cpu, std::uint32_t target);\n"
+                     << "void unresolved_call(CpuState& cpu, std::uint32_t target);\n"
                      << "void unresolved_jump(CpuState& cpu, std::uint32_t target);\n"
+                     << "#define guarded_call(...) ::" << request.symbol_namespace
+                     << "::guarded_call(__VA_ARGS__)\n"
+                     << "#define guarded_jump(...) ::" << request.symbol_namespace
+                     << "::guarded_jump(__VA_ARGS__)\n"
+                     << "#define runtime_only_call(...) ::" << request.symbol_namespace
+                     << "::runtime_only_call(__VA_ARGS__)\n"
+                     << "#define runtime_only_jump(...) ::" << request.symbol_namespace
+                     << "::runtime_only_jump(__VA_ARGS__)\n"
                      << "#define unresolved_call(...) ::" << request.symbol_namespace
                      << "::unresolved_call(__VA_ARGS__)\n"
                      << "#define unresolved_jump(...) ::" << request.symbol_namespace
                      << "::unresolved_jump(__VA_ARGS__)\n\n";
     } else {
         declarations << "using katana::runtime::unresolved_call;\n"
-                     << "using katana::runtime::unresolved_jump;\n\n";
+                     << "using katana::runtime::unresolved_jump;\n"
+                     << "#define guarded_call(...) unresolved_call(__VA_ARGS__)\n"
+                     << "#define guarded_jump(...) unresolved_jump(__VA_ARGS__)\n"
+                     << "#define runtime_only_call(...) unresolved_call(__VA_ARGS__)\n"
+                     << "#define runtime_only_jump(...) unresolved_jump(__VA_ARGS__)\n\n";
     }
 
     std::vector<std::uint32_t> ordered_known_functions(known_functions.begin(),

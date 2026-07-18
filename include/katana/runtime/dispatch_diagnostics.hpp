@@ -16,6 +16,7 @@ enum class DispatchResolutionOrigin : std::uint8_t {
     StaticProof,
     Override,
     TableLookup,
+    RuntimeOnly,
     InlineCache,
     Fallback
 };

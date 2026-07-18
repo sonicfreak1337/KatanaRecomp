@@ -269,6 +269,14 @@ enum class Operation {
     Return
 };
 
+enum class DynamicTargetClass : std::uint8_t {
+    NotApplicable,
+    GuardedComplete,
+    GuardedPartial,
+    RuntimeOnly,
+    Unresolved
+};
+
 struct Instruction {
     std::uint32_t source_address = 0;
     std::uint16_t original_opcode = 0;
@@ -291,6 +299,7 @@ struct Instruction {
     std::optional<std::uint32_t> target_address;
     std::vector<std::uint32_t> resolved_targets;
     std::optional<std::uint8_t> forwarded_value_register;
+    DynamicTargetClass dynamic_target_class = DynamicTargetClass::NotApplicable;
 
     DelaySlotRelation delay_slot;
     bool is_privileged = false;

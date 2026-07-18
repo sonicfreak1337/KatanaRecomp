@@ -1,5 +1,7 @@
 #include "katana/ir/lower.hpp"
 
+#include "katana/analysis/control_flow_report.hpp"
+
 #include "katana/analysis/basic_blocks.hpp"
 #include "katana/sh4/instruction.hpp"
 
@@ -540,6 +542,8 @@ Instruction lower_instruction(const katana::sh4::DisassemblyLine& source) {
     result.branch_register_relative =
         source.instruction.kind == katana::sh4::InstructionKind::Braf ||
         source.instruction.kind == katana::sh4::InstructionKind::Bsrf;
+    if (result.operation == Operation::JumpRegister || result.operation == Operation::CallRegister)
+        result.dynamic_target_class = DynamicTargetClass::Unresolved;
 
     return result;
 }
@@ -1086,7 +1090,40 @@ std::vector<Function> lower_program(const katana::analysis::ControlFlowAnalysisR
     seeds.erase(std::unique(seeds.begin(), seeds.end()), seeds.end());
     const auto functions = katana::analysis::discover_functions(
         analysis.recursive.instructions, seeds, analysis.resolved_edges);
-    return lower_program(analysis.recursive.instructions, functions, analysis.resolved_edges);
+    auto program =
+        lower_program(analysis.recursive.instructions, functions, analysis.resolved_edges);
+    for (auto& function : program) {
+        for (auto& block : function.blocks) {
+            for (auto& instruction : block.instructions) {
+                if (instruction.dynamic_target_class == DynamicTargetClass::NotApplicable) continue;
+                const auto resolution = std::find_if(analysis.indirect_control_flow.begin(),
+                                                     analysis.indirect_control_flow.end(),
+                                                     [&instruction](const auto& candidate) {
+                                                         return candidate.instruction_address ==
+                                                                instruction.source_address;
+                                                     });
+                if (resolution == analysis.indirect_control_flow.end()) continue;
+                switch (katana::analysis::control_flow_report_status(*resolution)) {
+                case katana::analysis::ControlFlowReportStatus::Resolved:
+                    instruction.dynamic_target_class = DynamicTargetClass::NotApplicable;
+                    break;
+                case katana::analysis::ControlFlowReportStatus::GuardedComplete:
+                    instruction.dynamic_target_class = DynamicTargetClass::GuardedComplete;
+                    break;
+                case katana::analysis::ControlFlowReportStatus::GuardedPartial:
+                    instruction.dynamic_target_class = DynamicTargetClass::GuardedPartial;
+                    break;
+                case katana::analysis::ControlFlowReportStatus::RuntimeOnly:
+                    instruction.dynamic_target_class = DynamicTargetClass::RuntimeOnly;
+                    break;
+                case katana::analysis::ControlFlowReportStatus::Unresolved:
+                    instruction.dynamic_target_class = DynamicTargetClass::Unresolved;
+                    break;
+                }
+            }
+        }
+    }
+    return program;
 }
 
 } // namespace katana::ir

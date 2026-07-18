@@ -28,4 +28,7 @@ proven_instructions + guarded_candidate_instructions == instructions
 Guarded entdeckte Instruktionen sind analysier- und kompilierbare
 Laufzeitkandidaten, aber nur `guarded_complete` ist eine vollstaendige
 Zielmenge. Deshalb duerfen partielle Kandidaten nicht als statisch bewiesener
-Portfortschritt ausgegeben werden.
+Portfortschritt ausgegeben werden. `runtime_only` bleibt Teil der offenen
+Analysefront, darf seit KR-4718 aber als explizite Laufzeitabdeckung exportiert
+werden; jedes konkrete Ziel muss dann den separaten Runtime-only-
+Dispatchvertrag erfuellen.

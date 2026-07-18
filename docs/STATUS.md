@@ -2,7 +2,7 @@
 
 Interner Entwicklungsmeilenstein: `v0.46.0`
 Phase: Core-Stabilisierung vor v0.47
-Naechster Task: `KR-4718`
+Naechster Task: `KR-4719`
 Naechstes Gate: `v0.47.0` - Core-Stabilisierung und generische Retail-Runtime
 Weitere interne Gates: `v0.48.0` Integration und `v0.49.0` Alpha-Candidate
 Erster oeffentlicher Release: `v0.50.0` Alpha
@@ -137,6 +137,26 @@ modellierte Speicherseiteneffekte invalidieren Objektfakten konservativ.
 Beschreibbare statische VTables werden niemals allein aus dem Imageinhalt
 eingefroren. Der Vertrag steht in
 [`OBJECT_POINTS_TO.md`](OBJECT_POINTS_TO.md). KR-4718 ist der naechste Task.
+
+## KR-4718 umgesetzt
+
+Die Berichtstaxonomie wird bis in die IR- und Codeausgabe getragen. Nur als
+echte Laufzeitquelle klassifizierte Stellen erhalten `runtime_only`; Hints,
+Overrides und unbekannte Quellen koennen diesen Pfad nicht auswaehlen.
+`guarded_complete` und `guarded_partial` behalten ihren bewachten Default,
+waehrend `unresolved` im generierten Port sichtbar und ohne Tabellendispatch
+abbricht.
+
+Der Runtime-only-Dispatcher akzeptiert ausschliesslich ausgerichtete exakte
+Instruktionsanfaenge aktiver, generationsgueltiger Bloecke mit Backendfunktion.
+Virtuelle und kanonische physische Aliase werden gegen denselben registrierten
+Executable-Image-/Blocktabellenvertrag geprueft. Misses stoppen den Lauf; es
+gibt weder No-op noch geratenes Ziel. Begrenzte Zaehler erfassen Hits, Misses,
+kontrollierte Fallbacks und den ersten Fehler maschinenlesbar. Runtime-ABI 12,
+Backend-Interface-ABI 2 und Portprojektvertrag 4 versionieren die Erweiterung.
+Der Vertrag und die bei KR-4704 auszufuehrenden Regressionen stehen in
+[`RUNTIME_ONLY_DISPATCH.md`](RUNTIME_ONLY_DISPATCH.md). KR-4719 ist der
+naechste Task.
 
 ## Historischer Reviewbefund vor KR-4611 bis KR-4618
 

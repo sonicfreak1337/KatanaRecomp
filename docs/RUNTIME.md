@@ -6,7 +6,7 @@ ungeloesten Kontrollflusspfaden mehr.
 
 ## ABI
 
-Die aktuelle Runtime-ABI ist Version `9`. Die typisierte Block-ABI ist seit
+Die aktuelle Runtime-ABI ist Version `12`. Die typisierte Block-ABI ist seit
 KR-4611 Version `2`.
 
 Generierter Code enthaelt eine Compile-Time-Pruefung gegen diese Version. Eine
@@ -20,7 +20,10 @@ Code an den gemeinsamen Exception-Pfad. ABI-Version 7 zentralisiert die
 `FPSCR`-Maskierung und die sichtbare FR-/XF-Bankumschaltung.
 ABI-Version 8 ergaenzte den versionierten Plattform- und Portvertrag.
 ABI-Version 9 macht Gastwrites samt Herkunft, Byteidentitaet und
-Codeinvalidierung zu einem beobachtbaren `Memory`-Vertrag.
+Codeinvalidierung zu einem beobachtbaren `Memory`-Vertrag. ABI-Version 10
+fuehrt generationsgesicherte Blockhandles und getrennte Registryindizes ein.
+ABI-Version 11 bindet den gemeinsamen Gastzyklusvertrag ein. ABI-Version 12
+versioniert Runtime-only-Dispatchklassen, Zielvalidierung und Maschinenmetriken.
 
 ## CMake
 

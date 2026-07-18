@@ -53,9 +53,19 @@ analysierte und nicht analysierte ausfuehrbare Bytes, Instruktions-/
 Funktionszahlen, vollstaendige und partielle Guards, reine Laufzeit- und
 ungeloeste Kontrollflussstellen, unbekannte Instruktionen, erreichbare
 Abbruchkanten und `control_flow_complete`. Vollstaendig bedeutet exakt: null
-unbekannte Instruktionen, null partielle, reine Laufzeit- und ungeloeste
-Kontrollflussstellen, null nicht analysierte committed ausfuehrbare Bytes und
-null erreichbare Abbruchkanten. Es gibt keine heuristische Prozentgrenze.
+unbekannte Instruktionen, null partielle und ungeloeste Kontrollflussstellen,
+null nicht analysierte committed ausfuehrbare Bytes und null erreichbare
+Abbruchkanten. Reine Laufzeitstellen sind seit KR-4718 vollstaendig abgedeckt,
+wenn ihre IR-Klasse den validierenden Runtime-only-Dispatcher erzwingt. Es gibt
+keine heuristische Prozentgrenze.
+
+`katana-indirect-dispatch-v1` berichtet gesaettigte Gesamt- und Runtime-only-
+Zaehler fuer Hits, Misses und kontrollierte Fallbacks. `first_error` ist `null`
+oder enthaelt Fehlerklasse, Dispatchklasse, Callsite und Ziel des ersten Misses.
+Der aktuelle Port stoppt bei jedem Miss; seine Fallbackzaehler bleiben deshalb
+null. Vor dem Fehlerexit schreibt er den Exception-Snapshot als
+`KATANA_RUNTIME_DISPATCH_ERROR`-JSON-Zeile. Ein spaeterer kontrollierter
+Fallback muss vor dem Fortsetzen explizit gezaehlt werden.
 
 `failure_category` trennt `none`, `input-output`, `processing`,
 `code-generation`, `build` und `internal`. Die Workflow-CLI bildet diese

@@ -41,6 +41,7 @@ void replace_with_constant(Instruction& instruction,
     instruction.target_address.reset();
     instruction.resolved_targets.clear();
     instruction.forwarded_value_register.reset();
+    instruction.dynamic_target_class = DynamicTargetClass::NotApplicable;
     canonicalize(instruction);
 }
 

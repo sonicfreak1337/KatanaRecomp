@@ -175,6 +175,8 @@ const char* dispatch_resolution_origin_name(const DispatchResolutionOrigin value
         return "override";
     case DispatchResolutionOrigin::TableLookup:
         return "table-lookup";
+    case DispatchResolutionOrigin::RuntimeOnly:
+        return "runtime-only";
     case DispatchResolutionOrigin::InlineCache:
         return "inline-cache";
     case DispatchResolutionOrigin::Fallback:

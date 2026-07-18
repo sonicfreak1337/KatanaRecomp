@@ -71,6 +71,13 @@ std::string generated_header(const std::string& entry_namespace) {
            "void run(katana::runtime::CpuState& cpu);\n"
            "struct RuntimeRunResult {\n"
            "    std::uint64_t indirect_dispatches = 0u;\n"
+           "    std::uint64_t runtime_dispatch_hits = 0u;\n"
+           "    std::uint64_t runtime_dispatch_misses = 0u;\n"
+           "    std::uint64_t runtime_dispatch_fallbacks = 0u;\n"
+           "    std::uint64_t runtime_only_dispatch_hits = 0u;\n"
+           "    std::uint64_t runtime_only_dispatch_misses = 0u;\n"
+           "    std::uint64_t runtime_only_dispatch_fallbacks = 0u;\n"
+           "    std::uint32_t runtime_dispatch_first_error = 0u;\n"
            "    std::uint32_t final_pc = 0u;\n"
            "    std::uint64_t scheduler_cycle = 0u;\n"
            "    std::uint32_t guest_cycle_contract = "
@@ -367,7 +374,21 @@ std::string handwritten_main(const std::string& entry_namespace,
            "        std::cout << \"KATANA_RUNTIME_METRICS silent_failures=\"\n"
            "                  << silent_failures << \" guest_cycles=\"\n"
            "                  << result.scheduler_cycle << \" indirect_dispatches=\"\n"
-           "                  << result.indirect_dispatches << \" frames=\"\n"
+           "                  << result.indirect_dispatches\n"
+           "                  << \" runtime_dispatch_hits=\"\n"
+           "                  << result.runtime_dispatch_hits\n"
+           "                  << \" runtime_dispatch_misses=\"\n"
+           "                  << result.runtime_dispatch_misses\n"
+           "                  << \" runtime_dispatch_fallbacks=\"\n"
+           "                  << result.runtime_dispatch_fallbacks\n"
+           "                  << \" runtime_only_dispatch_hits=\"\n"
+           "                  << result.runtime_only_dispatch_hits\n"
+           "                  << \" runtime_only_dispatch_misses=\"\n"
+           "                  << result.runtime_only_dispatch_misses\n"
+           "                  << \" runtime_only_dispatch_fallbacks=\"\n"
+           "                  << result.runtime_only_dispatch_fallbacks\n"
+           "                  << \" runtime_dispatch_first_error=\"\n"
+           "                  << result.runtime_dispatch_first_error << \" frames=\"\n"
            "                  << presented_frames << \" audio_buffers=\" << audio_buffers\n"
            "                  << \" audio_hash=\" << audio_hash\n"
            "                  << \" input_events=\" << input_events\n"
@@ -380,6 +401,12 @@ std::string handwritten_main(const std::string& entry_namespace,
            "                  << result.indirect_dispatches << \" final_pc=\" << result.final_pc "
            "<< '\\n';\n"
            "        return 0;\n"
+           "    } catch (const katana::runtime::IndirectDispatchError& error) {\n"
+           "        std::cerr << \"KATANA_RUNTIME_DISPATCH_ERROR \"\n"
+           "                  << error.metrics_json() << '\\n';\n"
+           "        std::cerr << \"Portlauf fehlgeschlagen: \"\n"
+           "                  << redact_source(error.what(), source) << '\\n';\n"
+           "        return 1;\n"
            "    } catch (const std::exception& error) {\n"
            "        std::cerr << \"Portlauf fehlgeschlagen: \"\n"
            "                  << redact_source(error.what(), source) << '\\n';\n"
@@ -447,22 +474,28 @@ std::string runtime_dispatch_adapter(const std::string& entry_namespace,
            << "thread_local katana::runtime::BlockExecutionContext* active_context = nullptr;\n"
            << "thread_local katana::runtime::DispatchDiagnosticRecorder* active_diagnostics = "
               "nullptr;\n"
+           << "thread_local katana::runtime::IndirectDispatchMetrics* active_dispatch_metrics = "
+              "nullptr;\n"
            << "thread_local bool tail_dispatch_completed = false;\n"
            << "void dispatch_chain(katana::runtime::CpuState&, std::uint32_t, "
-              "katana::runtime::IndirectDispatchKind, bool);\n"
+              "katana::runtime::IndirectDispatchKind, "
+              "katana::runtime::RuntimeDispatchClass, bool);\n"
            << "class ServiceScope {\n"
            << "  public:\n"
            << "    ServiceScope(katana::runtime::PlatformServices& services,\n"
               "                 const katana::runtime::RuntimeBlockTable& table,\n"
               "                 katana::runtime::BlockExecutionContext& context,\n"
-              "                 katana::runtime::DispatchDiagnosticRecorder& diagnostics) {\n"
+              "                 katana::runtime::DispatchDiagnosticRecorder& diagnostics,\n"
+              "                 katana::runtime::IndirectDispatchMetrics& dispatch_metrics) {\n"
            << "        if (active_services != nullptr) throw std::runtime_error(\"Runtime-Dispatch "
               "ist nicht reentrant.\");\n"
            << "        active_services = &services; active_table = &table;\n"
               "        active_context = &context; active_diagnostics = &diagnostics;\n"
+              "        active_dispatch_metrics = &dispatch_metrics;\n"
            << "    }\n"
            << "    ~ServiceScope() { active_services = nullptr; active_table = nullptr;\n"
-              "        active_context = nullptr; active_diagnostics = nullptr; }\n"
+              "        active_context = nullptr; active_diagnostics = nullptr;\n"
+              "        active_dispatch_metrics = nullptr; }\n"
            << "};\n";
     for (const auto& function : program) {
         const auto owner = symbol(function.entry_address);
@@ -494,12 +527,16 @@ std::string runtime_dispatch_adapter(const std::string& entry_namespace,
     }
     output
         << "void dispatch_chain(katana::runtime::CpuState& cpu, std::uint32_t target,\n"
-           "                    katana::runtime::IndirectDispatchKind kind, bool diagnostic) {\n"
+           "                    katana::runtime::IndirectDispatchKind kind,\n"
+           "                    katana::runtime::RuntimeDispatchClass dispatch_class,\n"
+           "                    bool diagnostic) {\n"
            "    for (std::size_t blocks = 0u; blocks < 1000000u; ++blocks) {\n"
            "        if (cpu.sleeping) {\n"
            "            if (active_services->poll_interrupt().has_value()) {\n"
            "                target = cpu.pc;\n"
            "                kind = katana::runtime::IndirectDispatchKind::TailJump;\n"
+           "                dispatch_class = "
+           "katana::runtime::RuntimeDispatchClass::GuardedFallback;\n"
            "                diagnostic = false;\n"
            "            } else {\n"
            "                const auto next_event = "
@@ -515,14 +552,19 @@ std::string runtime_dispatch_adapter(const std::string& entry_namespace,
            "                if (!active_services->poll_interrupt().has_value()) continue;\n"
            "                target = cpu.pc;\n"
            "                kind = katana::runtime::IndirectDispatchKind::TailJump;\n"
+           "                dispatch_class = "
+           "katana::runtime::RuntimeDispatchClass::GuardedFallback;\n"
            "                diagnostic = false;\n"
            "            }\n"
            "        }\n"
            "        const auto selected = katana::runtime::dispatch_indirect(cpu, *active_table,\n"
            "            {kind, cpu.pc, target, cpu.pr, {cpu.pc, "
            "katana::runtime::canonical_physical_address(cpu.pc)}, {},\n"
-           "             katana::runtime::DispatchResolutionOrigin::TableLookup,\n"
-           "             diagnostic ? active_diagnostics : nullptr});\n"
+           "             dispatch_class == katana::runtime::RuntimeDispatchClass::RuntimeOnly\n"
+           "                 ? katana::runtime::DispatchResolutionOrigin::RuntimeOnly\n"
+           "                 : katana::runtime::DispatchResolutionOrigin::TableLookup,\n"
+           "             diagnostic ? active_diagnostics : nullptr, dispatch_class,\n"
+           "             active_dispatch_metrics});\n"
            "        const auto selected_block = active_table->resolve(selected.block);\n"
            "        if (!selected_block || selected_block->get().function == nullptr)\n"
            "            throw std::runtime_error(\"Runtime-Dispatchziel besitzt keinen generierten "
@@ -535,22 +577,42 @@ std::string runtime_dispatch_adapter(const std::string& entry_namespace,
            "            exit.kind == katana::runtime::BlockEndKind::Sleep) {\n"
            "            target = cpu.pc;\n"
            "            kind = katana::runtime::IndirectDispatchKind::TailJump;\n"
+           "            dispatch_class = "
+           "katana::runtime::RuntimeDispatchClass::GuardedFallback;\n"
            "            diagnostic = false;\n"
            "            continue;\n"
            "        }\n"
            "        target = cpu.pc; kind = katana::runtime::IndirectDispatchKind::TailJump;\n"
+           "        dispatch_class = "
+           "katana::runtime::RuntimeDispatchClass::GuardedFallback;\n"
            "        diagnostic = false;\n"
            "    }\n"
            "    throw std::runtime_error(\"Runtime-Blockbudget erschoepft.\");\n"
            "}\n"
            "} // namespace\n\n"
-        << "void unresolved_call(katana::runtime::CpuState& cpu, std::uint32_t target) {\n"
-           "    dispatch_chain(cpu, target, katana::runtime::IndirectDispatchKind::Call, true);\n"
+        << "void guarded_call(katana::runtime::CpuState& cpu, std::uint32_t target) {\n"
+           "    dispatch_chain(cpu, target, katana::runtime::IndirectDispatchKind::Call,\n"
+           "        katana::runtime::RuntimeDispatchClass::GuardedFallback, true);\n"
+           "}\n"
+           "void guarded_jump(katana::runtime::CpuState& cpu, std::uint32_t target) {\n"
+           "    dispatch_chain(cpu, target, katana::runtime::IndirectDispatchKind::TailJump,\n"
+           "        katana::runtime::RuntimeDispatchClass::GuardedFallback, true);\n"
+           "    tail_dispatch_completed = true;\n"
+           "}\n"
+           "void runtime_only_call(katana::runtime::CpuState& cpu, std::uint32_t target) {\n"
+           "    dispatch_chain(cpu, target, katana::runtime::IndirectDispatchKind::Call,\n"
+           "        katana::runtime::RuntimeDispatchClass::RuntimeOnly, true);\n"
+           "}\n"
+           "void runtime_only_jump(katana::runtime::CpuState& cpu, std::uint32_t target) {\n"
+           "    dispatch_chain(cpu, target, katana::runtime::IndirectDispatchKind::TailJump,\n"
+           "        katana::runtime::RuntimeDispatchClass::RuntimeOnly, true);\n"
+           "    tail_dispatch_completed = true;\n"
+           "}\n"
+           "void unresolved_call(katana::runtime::CpuState& cpu, std::uint32_t target) {\n"
+           "    katana::runtime::unresolved_call(cpu, target);\n"
            "}\n"
            "void unresolved_jump(katana::runtime::CpuState& cpu, std::uint32_t target) {\n"
-           "    dispatch_chain(cpu, target, katana::runtime::IndirectDispatchKind::TailJump, "
-           "true);\n"
-           "    tail_dispatch_completed = true;\n"
+           "    katana::runtime::unresolved_jump(cpu, target);\n"
            "}\n\n"
         << "RuntimeRunResult run_runtime(katana::runtime::CpuState& cpu,\n"
         << "                             katana::runtime::PlatformServices& services) {\n"
@@ -592,13 +654,23 @@ std::string runtime_dispatch_adapter(const std::string& entry_namespace,
     }
     const auto entry = symbol(entry_address);
     output << "    katana::runtime::DispatchDiagnosticRecorder diagnostics;\n"
+           << "    katana::runtime::IndirectDispatchMetrics dispatch_metrics;\n"
            << "    katana::runtime::BlockExecutionContext context;\n"
            << "    context.scheduler_cycle = services.scheduler_cycle();\n"
            << "    context.scheduler_event_budget = 1024u;\n"
-           << "    ServiceScope scope(services, table, context, diagnostics);\n"
+           << "    ServiceScope scope(services, table, context, diagnostics, dispatch_metrics);\n"
            << "    dispatch_chain(cpu, 0x" << entry
-           << "u, katana::runtime::IndirectDispatchKind::TailJump, false);\n"
-           << "    return {diagnostics.total_occurrences(), cpu.pc, services.scheduler_cycle()};\n"
+           << "u, katana::runtime::IndirectDispatchKind::TailJump,\n"
+           << "        katana::runtime::RuntimeDispatchClass::GuardedFallback, false);\n"
+           << "    const auto first_error = dispatch_metrics.first_error();\n"
+           << "    return {diagnostics.total_occurrences(), dispatch_metrics.hits(),\n"
+           << "        dispatch_metrics.misses(), dispatch_metrics.fallbacks(),\n"
+           << "        dispatch_metrics.runtime_only_hits(),\n"
+           << "        dispatch_metrics.runtime_only_misses(),\n"
+           << "        dispatch_metrics.runtime_only_fallbacks(),\n"
+           << "        static_cast<std::uint32_t>(first_error ? first_error->error\n"
+           << "            : katana::runtime::DispatchDiagnosticError::None),\n"
+           << "        cpu.pc, services.scheduler_cycle()};\n"
            << "}\n"
            << "} // namespace " << entry_namespace << "\n";
     return output.str();
@@ -742,15 +814,17 @@ PortExportResult export_dreamcast_port_project(const PreparedPortProgram& prepar
     if (!prepared.analysis.recursive.diagnostics.empty()) {
         throw std::runtime_error("Portanalyse enthaelt unbekannte Instruktionen.");
     }
-    const auto unresolved = std::count_if(prepared.analysis.indirect_control_flow.begin(),
-                                          prepared.analysis.indirect_control_flow.end(),
-                                          [](const auto& resolution) {
-                                              return resolution.status ==
-                                                     katana::analysis::ResolutionStatus::Unresolved;
-                                          });
-    if (unresolved != 0u) {
-        throw std::runtime_error("Portanalyse ist unvollstaendig: " + std::to_string(unresolved) +
-                                 " ungeloeste Kontrollflussstellen.");
+    const auto incomplete = std::count_if(
+        prepared.analysis.indirect_control_flow.begin(),
+        prepared.analysis.indirect_control_flow.end(),
+        [](const auto& resolution) {
+            const auto status = katana::analysis::control_flow_report_status(resolution);
+            return status == katana::analysis::ControlFlowReportStatus::GuardedPartial ||
+                   status == katana::analysis::ControlFlowReportStatus::Unresolved;
+        });
+    if (incomplete != 0u) {
+        throw std::runtime_error("Portanalyse ist unvollstaendig: " + std::to_string(incomplete) +
+                                 " partielle oder ungeloeste Kontrollflussstellen.");
     }
     katana::ir::require_valid_program(prepared.program);
     const auto partitions =

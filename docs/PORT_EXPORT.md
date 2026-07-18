@@ -12,8 +12,9 @@ gelesen. Danach folgen Executable Image, Kontrollflussanalyse, Katana-IR,
 Optimierung und deterministische Translation-Unit-Partitionierung. Der Export
 kopiert weder GDI-Tracks noch allgemeine Spielassets.
 
-Der gemeinsame GUI-/Workflow-Build exportiert nur bei vollstaendig bewiesenem
-Kontrollfluss. Ungeloeste indirekte Ziele oder unbekannte Instruktionen liefern
+Der gemeinsame GUI-/Workflow-Build exportiert nur bei vollstaendig abgedecktem
+Kontrollfluss. Ungeloeste oder nur partiell bewachte indirekte Ziele sowie
+unbekannte Instruktionen liefern
 `partial`, einen Buildplan mit `host_compilation=false` und keinen Hostbuild.
 Kontrollierte Teilanalysen erfolgen ueber `analyze-json`; sie sind keine
 Kompatibilitaetsaussage.
@@ -57,9 +58,9 @@ werden abgelehnt.
 
 Der CLI-Aufruf bindet KatanaRecomp fuer den lokalen Debugbuild ueber den
 expliziten CMake-Parameter
-`KATANA_RUNTIME_ROOT` ein. Portprojekt-Vertragsversion 2 ergaenzt den
-eigenstaendigen Runtime- und GDI-Einstieg. Die generierten Quellen pruefen
-Runtime-ABI 11 und PlatformServices-ABI 5 beim
+`KATANA_RUNTIME_ROOT` ein. Portprojekt-Vertragsversion 4 umfasst den
+eigenstaendigen Runtime-/GDI-Einstieg und die Runtime-only-Dispatchmetriken.
+Die generierten Quellen pruefen Runtime-ABI 12 und PlatformServices-ABI 5 beim
 Kompilieren; portable Dateien enthalten keinen absoluten lokalen Quellpfad. Der
 Build liegt getrennt unter `port/build/`. Konfigurations- oder Buildfehler enden
 mit dem stabilen CLI-Exitcode `7` (`build-failure`). Die folgenden Befehle zeigen
@@ -82,6 +83,12 @@ Dreamcast-Hauptspeicher, VRAM, AICA-RAM, Flash, CPU und Scheduler und waehlt
 den Programmeinstieg ueber die generische Blocktabelle. Der erste indirekte
 Dispatch wird strukturiert diagnostiziert; ein fehlendes Ziel oder ein
 Speicherfehler kann nicht als erfolgreicher Prozess enden.
+
+Eine explizit als `runtime_only` klassifizierte Stelle darf exportiert werden.
+Ihr Ziel muss zur Laufzeit ein ausgerichteter exakter Anfang eines aktiven,
+generationsgueltigen Blocks im Executable Image sein. Ein Miss beendet den Lauf
+und kann weder Erfolg noch einen nachfolgenden Checkpoint erzeugen. Details
+stehen in [`RUNTIME_ONLY_DISPATCH.md`](RUNTIME_ONLY_DISPATCH.md).
 
 Ein Folgeprojekt kann `src/main.cpp` durch eine eigene DiscSource- und
 Assetintegration ersetzen, ohne generierten Spielcode zu aendern.

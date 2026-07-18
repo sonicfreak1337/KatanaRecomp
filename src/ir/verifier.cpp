@@ -320,6 +320,20 @@ std::vector<VerificationIssue> verify_function(const Function& function) {
                           instruction.source_address,
                           "Aufgeloeste Ziele gehoeren nicht zu indirektem Kontrollfluss.");
             }
+            const bool indirect_operation = instruction.operation == Operation::JumpRegister ||
+                                            instruction.operation == Operation::CallRegister;
+            if (!indirect_operation &&
+                instruction.dynamic_target_class != DynamicTargetClass::NotApplicable) {
+                add_issue(issues,
+                          instruction.source_address,
+                          "Dynamische Zielklasse gehoert nicht zu indirektem Kontrollfluss.");
+            }
+            if (instruction.dynamic_target_class == DynamicTargetClass::RuntimeOnly &&
+                !instruction.resolved_targets.empty()) {
+                add_issue(issues,
+                          instruction.source_address,
+                          "Runtime-only-Kontrollfluss darf keine geratenen Ziele tragen.");
+            }
             if (instruction.branch_register_relative &&
                 instruction.operation != Operation::JumpRegister &&
                 instruction.operation != Operation::CallRegister) {

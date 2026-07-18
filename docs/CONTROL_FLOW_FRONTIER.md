@@ -1,6 +1,6 @@
 # Kontrollflussfront und Datenschutz
 
-Stand: KR-4717
+Stand: KR-4718
 
 Jede indirekte Kontrollflussstelle besitzt genau einen der fuenf disjunkten
 Berichtszustaende:
@@ -16,6 +16,12 @@ abgeleiteter Kompatibilitaetszaehler fuer `guarded_complete + guarded_partial`
 erhalten. `unresolved_frontier` umfasst `guarded_partial + runtime_only +
 unresolved`; partielle Kandidaten koennen damit keinen vollstaendigen Build
 mehr vortaeuschen.
+
+Seit KR-4718 ist `runtime_only` kein statischer Beweis, aber eine explizite
+exportierbare Laufzeitabdeckung. Sie darf nur den validierenden Runtime-only-
+Dispatcher erreichen. `guarded_partial` und `unresolved` blockieren Export und
+Build weiterhin; `unresolved_frontier` bleibt als Priorisierungsmetrik bewusst
+einschliesslich `runtime_only` definiert.
 
 ## Herkunftsklassen
 
@@ -49,6 +55,10 @@ vollstaendige endliche Adress-/Wertmengen koennen `guarded_complete` werden;
 beschreibbare statische Tabellen und invalidierte Objektfakten bleiben
 `guarded_partial` oder dynamisch. Der Vertrag steht in `OBJECT_POINTS_TO.md`.
 
+KR-4718 traegt jede Berichtsklasse in die IR und die erzeugte Dispatchgrenze.
+Der Runtime-only-Vertrag, seine Zielvalidierung und Maschinenmetriken stehen in
+`RUNTIME_ONLY_DISPATCH.md`.
+
 ## Berichte und Datenschutz
 
 `katana-control-flow-v3` ist der lokale Detailbericht. Er ist ausdruecklich mit
@@ -71,7 +81,8 @@ KR-4704 muss synthetisch pruefen:
 - Callback, Parameter, Stack, Objekt/VTable, Tabelle, unbeschraenkter Speicher
   und Laufzeitzeiger werden positiv oder konservativ negativ klassifiziert;
 - jede offene Stelle besitzt eine nichtleere typisierte Beweisherkunft;
-- ein `GuardedPartial` blockiert Anwendungs- und Buildvollstaendigkeit;
+- ein `GuardedPartial` blockiert Anwendungs- und Buildvollstaendigkeit,
+  `runtime_only` dagegen nur mit aktivem Validierungsvertrag nicht;
 - ein `HintCandidate` mit validiertem Ziel erscheint im Detail- und
   Aggregatbericht als `guarded_partial`, behaelt aber Evidenz und Fallback;
 - Hint-Zaehler halten das disjunkte Summeninvariant;

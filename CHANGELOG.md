@@ -4,6 +4,12 @@
 
 ### Geaendert
 
+- KR-4718: Kontrollflussklassen werden bis in IR, Codeausgabe und Portadapter
+  getragen. Echte Runtime-only-Quellen dispatchen nur auf validierte aktive
+  Blockanfaenge; Misses stoppen sichtbar. Gesamt- und Runtime-only-Zaehler fuer
+  Hits, Misses, Fallbacks und den ersten Fehler sind maschinenlesbar.
+  Runtime-ABI 12, Backend-Interface-ABI 2 und Portprojektvertrag 4
+  versionieren den Vertrag.
 - KR-4717: Eine begrenzte Objektfeldanalyse leitet dominante Konstruktor- und
   Initialisierungsstores ueber Register, Stack, feste Offsets und
   vollstaendige Memory-Return-Summaries zu Callback- und VTable-Slots weiter.

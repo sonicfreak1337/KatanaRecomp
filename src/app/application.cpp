@@ -881,9 +881,9 @@ AnalysisCoverage analysis_coverage(const io::LoadedProject& project,
             break;
         }
     }
-    coverage.reachable_abort_edges =
-        coverage.unknown_instructions + coverage.guarded_partial_control_flow +
-        coverage.runtime_only_control_flow + coverage.unresolved_control_flow;
+    coverage.reachable_abort_edges = coverage.unknown_instructions +
+                                     coverage.guarded_partial_control_flow +
+                                     coverage.unresolved_control_flow;
     std::set<std::pair<std::uint32_t, std::uint32_t>> invalid_edges;
     const auto add_invalid_edge = [&](const std::uint32_t source, const std::uint32_t target) {
         if (!analysis::validate_committed_code_address(project.image, target).valid())
@@ -919,8 +919,8 @@ AnalysisCoverage analysis_coverage(const io::LoadedProject& project,
     coverage.reachable_abort_edges += invalid_edges.size();
     coverage.control_flow_complete =
         coverage.unknown_instructions == 0u && coverage.guarded_partial_control_flow == 0u &&
-        coverage.runtime_only_control_flow == 0u && coverage.unresolved_control_flow == 0u &&
-        coverage.unanalyzed_executable_bytes == 0u && coverage.reachable_abort_edges == 0u;
+        coverage.unresolved_control_flow == 0u && coverage.unanalyzed_executable_bytes == 0u &&
+        coverage.reachable_abort_edges == 0u;
     return coverage;
 }
 
@@ -1305,18 +1305,18 @@ JobResult ApplicationService::execute(const JobRequest& request,
                      "Kontrollflussanalyse ist unvollstaendig: " +
                          std::to_string(result.analysis_coverage->guarded_partial_control_flow) +
                          " partielle, " +
-                         std::to_string(result.analysis_coverage->runtime_only_control_flow) +
-                         " reine Laufzeit- und " +
                          std::to_string(result.analysis_coverage->unresolved_control_flow) +
-                         " ungeloeste Kontrollflussstellen und " +
+                         " ungeloeste Kontrollflussstellen, " +
                          std::to_string(result.analysis_coverage->unknown_instructions) +
                          " unbekannte Instruktionen; " +
                          std::to_string(result.analysis_coverage->unanalyzed_executable_bytes) +
                          " ausfuehrbare Bytes sind nicht analysiert und " +
                          std::to_string(result.analysis_coverage->reachable_abort_edges) +
-                         " erreichbare Kanten brechen die Analyse ab.",
+                         " erreichbare Kanten brechen die Analyse ab. " +
+                         std::to_string(result.analysis_coverage->runtime_only_control_flow) +
+                         " reine Laufzeitstellen sind separat validierend abgedeckt.",
                      "Analyseblocker beheben; ein Hostbuild wird erst bei vollstaendig "
-                     "bewiesenem Kontrollfluss erzeugt.",
+                     "abgedecktem Kontrollfluss erzeugt.",
                      std::nullopt});
                 if (request.kind == JobKind::Build || request.kind == JobKind::RunPreflight) {
                     const auto build_report = work_root / "build-plan.json";
