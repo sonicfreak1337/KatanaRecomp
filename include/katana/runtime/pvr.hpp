@@ -64,6 +64,7 @@ class PvrRegisterFile final {
     std::uint64_t render_completions_ = 0u;
     std::uint64_t resets_ = 0u;
     SchedulerResetObserverId reset_observer_ = 0u;
+    SchedulerLifetimeToken scheduler_lifetime_;
     std::set<SchedulerEventId> render_events_;
     std::function<void()> render_observer_;
 };

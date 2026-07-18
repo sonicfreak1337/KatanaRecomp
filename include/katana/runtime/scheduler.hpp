@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <functional>
 #include <map>
+#include <memory>
 #include <optional>
 #include <string_view>
 #include <unordered_map>
@@ -18,6 +19,7 @@ class SystemReplayLog;
 
 using SchedulerEventId = std::uint64_t;
 using SchedulerResetObserverId = std::uint64_t;
+using SchedulerLifetimeToken = std::weak_ptr<const void>;
 using SchedulerCallback = std::function<void(SchedulerEventId event_id, std::uint64_t guest_cycle)>;
 using SchedulerResetCallback = std::function<void()>;
 
@@ -35,7 +37,8 @@ struct SchedulerAdvanceResult {
 
 class EventScheduler {
   public:
-    explicit EventScheduler(SystemReplayLog* replay_log = nullptr) noexcept;
+    explicit EventScheduler(SystemReplayLog* replay_log = nullptr);
+    ~EventScheduler();
     [[nodiscard]] SchedulerEventId schedule_at(std::uint64_t guest_cycle,
                                                SchedulerCallback callback);
     [[nodiscard]] SchedulerEventId schedule_after(std::uint64_t guest_cycles,
@@ -59,6 +62,7 @@ class EventScheduler {
     [[nodiscard]] std::size_t pending_event_count() const noexcept;
     [[nodiscard]] std::uint64_t processed_event_count() const noexcept;
     [[nodiscard]] std::uint64_t reset_generation() const noexcept;
+    [[nodiscard]] SchedulerLifetimeToken lifetime_token() const noexcept;
     void set_guest_cycle_budget(std::optional<std::uint64_t> maximum_cycle);
     [[nodiscard]] std::optional<std::uint64_t> guest_cycle_budget() const noexcept;
     [[nodiscard]] std::optional<std::uint64_t> remaining_guest_cycles() const noexcept;
@@ -77,6 +81,7 @@ class EventScheduler {
     std::unordered_map<SchedulerEventId, EventKey> event_keys_;
     std::map<SchedulerResetObserverId, SchedulerResetCallback> reset_observers_;
     SystemReplayLog* replay_log_ = nullptr;
+    std::shared_ptr<const void> lifetime_token_ = std::make_shared<std::uint8_t>();
 };
 
 [[nodiscard]] std::uint64_t parse_guest_cycle_budget(std::string_view text);

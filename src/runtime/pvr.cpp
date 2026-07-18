@@ -12,11 +12,13 @@ namespace katana::runtime {
 PvrRegisterFile::PvrRegisterFile(EventScheduler& scheduler,
                                  const PvrTiming timing,
                                  std::function<void()> render_observer)
-    : scheduler_(scheduler), timing_(timing), render_observer_(std::move(render_observer)) {
+    : scheduler_(scheduler), timing_(timing), scheduler_lifetime_(scheduler.lifetime_token()),
+      render_observer_(std::move(render_observer)) {
     reset_observer_ = scheduler_.add_reset_observer([this] { handle_scheduler_reset(); });
 }
 
 PvrRegisterFile::~PvrRegisterFile() {
+    if (scheduler_lifetime_.expired()) return;
     for (const auto event : render_events_)
         static_cast<void>(scheduler_.cancel(event));
     static_cast<void>(scheduler_.remove_reset_observer(reset_observer_));

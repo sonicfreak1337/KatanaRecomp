@@ -14,7 +14,11 @@
 
 namespace katana::runtime {
 
-EventScheduler::EventScheduler(SystemReplayLog* replay_log) noexcept : replay_log_(replay_log) {}
+EventScheduler::EventScheduler(SystemReplayLog* replay_log) : replay_log_(replay_log) {}
+
+EventScheduler::~EventScheduler() {
+    lifetime_token_.reset();
+}
 
 SchedulerEventId EventScheduler::schedule_at(const std::uint64_t guest_cycle,
                                              SchedulerCallback callback) {
@@ -218,6 +222,10 @@ std::uint64_t EventScheduler::processed_event_count() const noexcept {
 
 std::uint64_t EventScheduler::reset_generation() const noexcept {
     return reset_generation_;
+}
+
+SchedulerLifetimeToken EventScheduler::lifetime_token() const noexcept {
+    return lifetime_token_;
 }
 
 void EventScheduler::set_guest_cycle_budget(const std::optional<std::uint64_t> maximum_cycle) {
