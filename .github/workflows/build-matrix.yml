@@ -42,8 +42,39 @@ jobs:
       - name: Test subsystem shards
         shell: pwsh
         run: |
-          $elapsed = Measure-Command { ctest --test-dir build/ci --output-on-failure --parallel 2 }
+          $elapsed = Measure-Command { ctest --test-dir build/ci --output-on-failure --parallel 2 --output-junit build/ci/ctest-results.xml }
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           "Test seconds: $([math]::Round($elapsed.TotalSeconds, 2))" >> $env:GITHUB_STEP_SUMMARY
+      - name: Upload test report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: core-${{ matrix.toolchain.name }}-${{ matrix.build_type }}-test-report
+          path: |
+            build/ci/ctest-results.xml
+            build/ci/Testing/Temporary/LastTest.log
+          if-no-files-found: warn
       - name: Cache statistics
         run: ccache --show-stats
+
+  windows-buildgate:
+    runs-on: windows-latest
+    name: Windows Core correctness buildgate
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+      - name: Run fresh Debug and RelWithDebInfo gate
+        shell: powershell
+        run: tools/gates/run-core-correctness-gate.ps1
+      - name: Upload machine-readable buildgate evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: core-correctness-buildgate
+          path: |
+            build-current/reports/core-correctness-gate.json
+            build-current/Testing/Temporary/LastTest.log
+          if-no-files-found: warn

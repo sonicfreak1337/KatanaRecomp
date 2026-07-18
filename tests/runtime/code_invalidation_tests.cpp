@@ -91,6 +91,37 @@ int main() {
                     !observed_tracker.valid("fallback"),
                 "Breite, Bytevergleich oder Invalidierung einer Gastwrite-Quelle ist falsch.");
 
+        Memory atomic_memory(0u);
+        auto writable_prefix = std::make_shared<LinearMemoryDevice>(4u);
+        auto read_only_suffix = std::make_shared<LinearMemoryDevice>(4u);
+        writable_prefix->write_u8(2u, 0xA1u);
+        writable_prefix->write_u8(3u, 0xB2u);
+        read_only_suffix->write_u8(0u, 0xC3u);
+        read_only_suffix->write_u8(1u, 0xD4u);
+        atomic_memory.map_region("atomic-prefix", 0x0C010000u, writable_prefix);
+        atomic_memory.map_region(
+            "atomic-read-only", 0x0C010004u, read_only_suffix, MemoryRegionAccess::ReadOnly);
+        ExecutableCodeTracker atomic_tracker;
+        static_cast<void>(atomic_tracker.register_block(
+            {"atomic-code", 0x0C010002u, 2u, "write-bytes-preflight", {"caller"}}));
+        std::vector<GuestWriteEvent> atomic_events;
+        atomic_memory.set_guest_write_observer([&](const auto& event) {
+            atomic_events.push_back(event);
+            static_cast<void>(atomic_tracker.observe_write(
+                event.address, event.size, event.source, event.bytes_changed));
+        });
+        const std::array<std::uint8_t, 4u> crossing_write{0x11u, 0x22u, 0x33u, 0x44u};
+        require(
+            throws<MemoryAccessError>([&] {
+                atomic_memory.write_bytes(0x0C010002u, crossing_write, CodeWriteSource::StoreQueue);
+            }) &&
+                writable_prefix->read_u8(2u) == 0xA1u && writable_prefix->read_u8(3u) == 0xB2u &&
+                read_only_suffix->read_u8(0u) == 0xC3u && read_only_suffix->read_u8(1u) == 0xD4u &&
+                atomic_events.empty() && atomic_tracker.valid("atomic-code") &&
+                atomic_tracker.page_generation(0x0C010002u) == 0u,
+            "Fehlgeschlagener gebuendelter Write veraendert ein Praefix oder invalidiert "
+            "nicht atomar.");
+
         const auto identical = tracker.observe_write(0x8C004000u, 4u, CodeWriteSource::Dma, false);
         require(identical.byte_identical && tracker.valid("c") && identical.changed_pages.empty(),
                 "Nachweislich bytegleicher DMA-Write invalidiert Code.");

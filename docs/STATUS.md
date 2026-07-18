@@ -64,10 +64,14 @@ installierbare `KatanaRecomp::runtime`-Paket bleibt von Analyzerquellen frei;
 Consumer prueft diese Grenze. Vertrag und Ausgangsbaseline stehen in
 [`P1_BUILD_GRAPH.md`](P1_BUILD_GRAPH.md).
 
-## Aktuelles Reviewurteil
+## Historischer Reviewbefund vor KR-4611 bis KR-4618
 
-Die Grundarchitektur bleibt sinnvoll. Die Kontrollflusspruefung hat zusaetzlich
-zu den bisherigen Corebefunden weitere P0-Soundnessrisiken gefunden:
+Der folgende Befund dokumentiert ausschliesslich den damaligen Ausgangspunkt.
+Die Kontrollflussrisiken wurden mit KR-4611 bis KR-4614, die Harness- und
+Gatepunkte mit KR-4616 bis KR-4618 abgearbeitet. Der aktuelle Stand steht in
+den jeweiligen Umsetzungsabschnitten weiter unten.
+
+Die damalige Kontrollflusspruefung hatte folgende P0-Soundnessrisiken gefunden:
 
 - Hint-Direktiven werden als `Resolved` und damit als Beweis behandelt
 - Delay-Slot-Kontext wird global nur nach Adresse gespeichert

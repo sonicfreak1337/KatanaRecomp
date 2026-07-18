@@ -672,27 +672,61 @@ void Memory::write_bytes(const std::uint32_t address,
                                 address,
                                 MemoryAccessWidth::Byte);
     }
+
+    struct PendingByteWrite {
+        const MappedRegion* mapped{};
+        std::uint32_t offset{};
+        std::uint8_t previous{};
+    };
+
+    std::vector<PendingByteWrite> pending;
+    pending.reserve(bytes.size());
     bool changed = false;
     for (std::size_t index = 0u; index < bytes.size(); ++index) {
         const auto current = address + static_cast<std::uint32_t>(index);
         const auto& mapped = resolve_writable(current, MemoryAccessWidth::Byte);
         const auto offset = region_offset(mapped.info, current);
-        changed = changed || !guest_write_observer_ || mapped.linear == nullptr ||
-                  mapped.linear->read_u8(offset) != bytes[index];
-        if (mapped.linear != nullptr)
-            mapped.linear->write_u8(offset, bytes[index]);
-        else
-            mapped.device->write_u8(offset, bytes[index]);
-        if (access_observers_active()) {
-            ++performance_counters_.observed_accesses;
-            notify_access(MemoryAccessEvent{MemoryAccessOperation::Write,
-                                            current,
-                                            MemoryAccessWidth::Byte,
-                                            bytes[index],
-                                            mapped.info.name});
-        } else {
-            ++performance_counters_.unobserved_accesses;
+        const auto previous = mapped.linear != nullptr ? mapped.linear->read_u8(offset)
+                                                       : mapped.device->read_u8(offset);
+        pending.push_back({&mapped, offset, previous});
+        changed = changed || previous != bytes[index];
+    }
+
+    std::size_t committed = 0u;
+    try {
+        while (committed < bytes.size()) {
+            const auto index = committed;
+            const auto current = address + static_cast<std::uint32_t>(index);
+            const auto& write = pending[index];
+            if (write.mapped->linear != nullptr)
+                write.mapped->linear->write_u8(write.offset, bytes[index]);
+            else
+                write.mapped->device->write_u8(write.offset, bytes[index]);
+            ++committed;
+            if (access_observers_active()) {
+                ++performance_counters_.observed_accesses;
+                notify_access(MemoryAccessEvent{MemoryAccessOperation::Write,
+                                                current,
+                                                MemoryAccessWidth::Byte,
+                                                bytes[index],
+                                                write.mapped->info.name});
+            } else {
+                ++performance_counters_.unobserved_accesses;
+            }
         }
+    } catch (...) {
+        if (committed != 0u) {
+            const auto committed_changed =
+                std::mismatch(bytes.begin(),
+                              bytes.begin() + committed,
+                              pending.begin(),
+                              [](const auto expected, const auto& write) {
+                                  return expected == write.previous;
+                              })
+                    .first != bytes.begin() + committed;
+            notify_guest_write({address, committed, source, committed_changed});
+        }
+        throw;
     }
     notify_guest_write({address, bytes.size(), source, changed});
 }

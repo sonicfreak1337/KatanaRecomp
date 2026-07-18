@@ -2,11 +2,13 @@
 
 #include "katana/io/input_provenance.hpp"
 #include "katana/ir/serialize.hpp"
+#include "katana/ir/verifier.hpp"
 
 #include <algorithm>
 #include <numeric>
 #include <stdexcept>
 #include <string>
+#include <unordered_set>
 
 namespace katana::codegen {
 namespace {
@@ -18,6 +20,24 @@ std::size_t instruction_count(const katana::ir::Function& function) {
                            [](const std::size_t total, const katana::ir::BasicBlock& block) {
                                return total + block.instructions.size();
                            });
+}
+
+std::vector<std::uint32_t> external_entries(const std::span<const katana::ir::Function> functions,
+                                            const TranslationUnitPartition& partition) {
+    std::unordered_set<std::uint32_t> local_entries;
+    local_entries.reserve(partition.function_indices.size());
+    for (const auto function_index : partition.function_indices)
+        local_entries.insert(functions[function_index].entry_address);
+
+    std::vector<std::uint32_t> result;
+    for (const auto function_index : partition.function_indices) {
+        for (const auto callee : functions[function_index].direct_callees) {
+            if (!local_entries.contains(callee)) result.push_back(callee);
+        }
+    }
+    std::sort(result.begin(), result.end());
+    result.erase(std::unique(result.begin(), result.end()), result.end());
+    return result;
 }
 
 } // namespace
@@ -39,7 +59,6 @@ partition_translation_units(const std::span<const katana::ir::Function> function
                 "Codegen-Partitionierung erhielt doppelte Funktionseinstiege.");
         }
     }
-
     std::vector<TranslationUnitPartition> result;
     for (const auto function_index : order) {
         const auto count = instruction_count(functions[function_index]);
@@ -66,18 +85,15 @@ partition_translation_units(const std::span<const katana::ir::Function> function
         }
         partition.last_entry_address = entry;
     }
-    std::vector<std::uint32_t> function_entries;
-    function_entries.reserve(functions.size());
-    for (const auto function_index : order)
-        function_entries.push_back(functions[function_index].entry_address);
+    katana::ir::require_valid_program(functions);
     for (auto& partition : result) {
         std::vector<katana::ir::Function> partition_functions;
         partition_functions.reserve(partition.function_indices.size());
         for (const auto function_index : partition.function_indices) {
             partition_functions.push_back(functions[function_index]);
         }
-        partition.content_sha256 = katana::io::sha256_bytes(
-            katana::ir::emit_ir_fragment_json(partition_functions, function_entries));
+        partition.content_sha256 = katana::io::sha256_bytes(katana::ir::emit_ir_fragment_json(
+            partition_functions, external_entries(functions, partition)));
     }
     return result;
 }

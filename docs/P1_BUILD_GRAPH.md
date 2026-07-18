@@ -43,6 +43,14 @@ mit ausgeschalteter GUI. Damit bleibt insbesondere die Releaseoptimierung ein
 dauerhafter Regressionspfad. `core-debug` und `core-relwithdebinfo` verwenden den
 jeweiligen Hostcompiler; `gui-debug` ist der explizite GUI-Opt-in.
 
+Ein eigener Windows-Buildgate-Job fuehrt auf jedem Push nach `main` und in jedem
+Pull Request zusaetzlich das lokale Core-Correctness-Gate unveraendert aus. Der
+maschinenlesbare Bericht `core-correctness-gate.json` und die CTest-Protokolle
+werden als GitHub-Actions-Artifact veroeffentlicht. Die sechs Matrixjobs legen
+ihre JUnit- und CTest-Berichte ebenfalls als getrennte Artifacts ab. Damit sind
+Commit, Testinventar und beide frischen Gatekonfigurationen ausserhalb des
+lokalen `build-current/` nachvollziehbar.
+
 ## Cache und Testshards
 
 `KATANA_COMPILER_CACHE` nimmt einen absoluten Pfad oder einen Programmnamen wie

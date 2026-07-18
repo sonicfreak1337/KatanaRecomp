@@ -24,7 +24,15 @@ katana::ir::Function function(const std::uint32_t entry, const std::size_t instr
     value.entry_address = entry;
     katana::ir::BasicBlock block;
     block.start_address = entry;
-    block.instructions.resize(instructions);
+    block.instructions.reserve(instructions);
+    for (std::size_t index = 0u; index < instructions; ++index) {
+        katana::ir::Instruction instruction;
+        instruction.source_address = entry + static_cast<std::uint32_t>(index * 2u);
+        instruction.original_opcode = 0x0009u;
+        instruction.original_operation = katana::ir::Operation::Nop;
+        instruction.operation = katana::ir::Operation::Nop;
+        block.instructions.push_back(instruction);
+    }
     value.blocks.push_back(std::move(block));
     return value;
 }
@@ -76,7 +84,7 @@ int main() {
                 katana::codegen::changed_translation_unit_partitions(second, first).empty(),
             "Stabile Partitionen verlieren ihren inhaltsadressierten Bulk-Codegenstatus.");
     auto changed_functions = functions;
-    changed_functions.front().blocks.front().instructions.front().original_opcode = 0x0009u;
+    changed_functions.front().blocks.front().instructions.front().original_opcode = 0xFFFFu;
     const auto changed = katana::codegen::partition_translation_units(changed_functions, options);
     require(katana::codegen::changed_translation_unit_partitions(changed, second).size() == 1u,
             "Lokale IR-Aenderung invalidiert mehr als die betroffene Codegenpartition.");
