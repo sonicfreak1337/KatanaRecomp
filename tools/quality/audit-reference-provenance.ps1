@@ -131,7 +131,7 @@ if ($LASTEXITCODE -ne 0 -or $tracked.Count -eq 0) {
 $failures = [Collections.Generic.List[string]]::new()
 $textExtensions = @(
     ".c", ".cc", ".cpp", ".cxx", ".h", ".hh", ".hpp", ".hxx",
-    ".cmake", ".rc", ".txt", ".md", ".ps1", ".py", ".json", ".yml", ".yaml",
+    ".cmake", ".in", ".rc", ".txt", ".md", ".ps1", ".py", ".json", ".yml", ".yaml",
     ".katana", ".overrides"
 )
 $textNames = @(".gitignore", ".clang-format", ".clang-tidy", "version", "license")
