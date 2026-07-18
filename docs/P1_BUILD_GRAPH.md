@@ -10,7 +10,7 @@ Build-Vertrag ausschliesslich `build-current/` und werden beim Wechsel von
 Compiler oder Profil frisch konfiguriert.
 
 ```text
-KatanaRecomp::runtime  (nur src/runtime, runtime-sdk)
+KatanaRecomp::runtime  (Runtime plus Provenienzgrundlage, runtime-sdk)
           ^
           |
 KatanaRecomp::analyzer (Decoder, IO, Plattformanalyse, CFG, IR, Codegen)
