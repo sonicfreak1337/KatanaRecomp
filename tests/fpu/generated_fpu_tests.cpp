@@ -103,7 +103,8 @@ int main() {
     using katana::runtime::read_dr_double;
 
     {
-        katana_generated::CpuState cpu;
+        auto cpu_storage = std::make_unique<katana_generated::CpuState>();
+        auto& cpu = *cpu_storage;
         cpu.write_sr(katana::runtime::sr_fd_mask);
         cpu.vbr = 0x8000u;
         cpu.fr[0] = 0x3F800000u;
@@ -117,7 +118,8 @@ int main() {
     }
 
     {
-        katana_generated::CpuState cpu;
+        auto cpu_storage = std::make_unique<katana_generated::CpuState>();
+        auto& cpu = *cpu_storage;
         StoreQueueServices services(cpu);
         cpu.r[3] = 0x8C010000u;
         cpu.pc = 0x170u;
@@ -160,7 +162,8 @@ int main() {
     }
 
     {
-        katana_generated::CpuState cpu;
+        auto cpu_storage = std::make_unique<katana_generated::CpuState>();
+        auto& cpu = *cpu_storage;
         cpu.fpul = 0x2000u;
         cpu.pc = 0x158u;
         katana_generated::fn_00000158(cpu);
@@ -198,7 +201,8 @@ int main() {
     }
 
     {
-        katana_generated::CpuState cpu;
+        auto cpu_storage = std::make_unique<katana_generated::CpuState>();
+        auto& cpu = *cpu_storage;
         cpu.write_sr(katana::runtime::sr_fd_mask);
         cpu.memory.set_alignment_policy(katana::runtime::MemoryAlignmentPolicy::Strict);
         cpu.r[4] = 1u;
@@ -211,7 +215,8 @@ int main() {
     }
 
     {
-        katana_generated::CpuState cpu;
+        auto cpu_storage = std::make_unique<katana_generated::CpuState>();
+        auto& cpu = *cpu_storage;
         cpu.write_sr(katana::runtime::sr_fd_mask);
         cpu.vbr = 0x9000u;
         cpu.fr[0] = 0x3F800000u;
@@ -225,7 +230,8 @@ int main() {
     }
 
     {
-        katana_generated::CpuState cpu;
+        auto cpu_storage = std::make_unique<katana_generated::CpuState>();
+        auto& cpu = *cpu_storage;
         cpu.fpul = 0xA5A5A5A5u;
         cpu.fr[3] = 0x3FC00000u;
         cpu.pc = 0x100u;
@@ -236,7 +242,8 @@ int main() {
     }
 
     {
-        katana_generated::CpuState cpu;
+        auto cpu_storage = std::make_unique<katana_generated::CpuState>();
+        auto& cpu = *cpu_storage;
         cpu.fr[0] = 0x11111111u;
         cpu.xf[0] = 0x22222222u;
         cpu.pc = 0x110u;
@@ -247,7 +254,8 @@ int main() {
     }
 
     {
-        katana_generated::CpuState cpu;
+        auto cpu_storage = std::make_unique<katana_generated::CpuState>();
+        auto& cpu = *cpu_storage;
         cpu.write_fpscr(katana::runtime::fpscr_pr_mask);
         cpu.fr[0] = 0x11111111u;
         cpu.xf[0] = 0x22222222u;
@@ -261,7 +269,8 @@ int main() {
     }
 
     {
-        katana_generated::CpuState cpu;
+        auto cpu_storage = std::make_unique<katana_generated::CpuState>();
+        auto& cpu = *cpu_storage;
         cpu.write_fpscr(katana::runtime::fpscr_pr_mask);
         cpu.fr[2] = 0xAAAAAAAAu;
         cpu.fr[3] = 0xBBBBBBBBu;
@@ -274,7 +283,8 @@ int main() {
     }
 
     for (const std::uint32_t reserved_rm : {2u, 3u}) {
-        katana_generated::CpuState cpu;
+        auto cpu_storage = std::make_unique<katana_generated::CpuState>();
+        auto& cpu = *cpu_storage;
         cpu.write_fpscr(reserved_rm);
         cpu.fr[1] = 0x3F800000u;
         cpu.fr[3] = 0x40000000u;
@@ -287,7 +297,8 @@ int main() {
     }
 
     {
-        katana_generated::CpuState cpu;
+        auto cpu_storage = std::make_unique<katana_generated::CpuState>();
+        auto& cpu = *cpu_storage;
         cpu.fr[0] = std::bit_cast<std::uint32_t>(1.0f);
         cpu.fr[1] = std::bit_cast<std::uint32_t>(2.0f);
         cpu.fpul = 42u;
@@ -297,7 +308,8 @@ int main() {
     }
 
     {
-        katana_generated::CpuState cpu;
+        auto cpu_storage = std::make_unique<katana_generated::CpuState>();
+        auto& cpu = *cpu_storage;
         cpu.write_fpscr(katana::runtime::fpscr_pr_mask);
         katana::runtime::write_dr_double(cpu, 0u, 1.5);
         katana::runtime::write_dr_double(cpu, 2u, 2.25);
@@ -308,7 +320,8 @@ int main() {
     }
 
     {
-        katana_generated::CpuState cpu;
+        auto cpu_storage = std::make_unique<katana_generated::CpuState>();
+        auto& cpu = *cpu_storage;
         cpu.memory.set_alignment_policy(katana::runtime::MemoryAlignmentPolicy::Strict);
         cpu.r[0] = 4u;
         cpu.r[4] = 0x40u;
@@ -326,7 +339,8 @@ int main() {
     }
 
     {
-        katana_generated::CpuState cpu;
+        auto cpu_storage = std::make_unique<katana_generated::CpuState>();
+        auto& cpu = *cpu_storage;
         cpu.memory = katana::runtime::Memory(0u);
         cpu.memory.map_region(
             "left", 0x1000u, std::make_shared<katana::runtime::LinearMemoryDevice>(16u));
