@@ -91,7 +91,7 @@ nicht gestartet werden.
 - [x] `KR-4719` - privater Retail-Buildnachweis mit erzwungenem Build-only-Modus
 - [x] `KR-4703` - VMU-/Flash-Arbeitskopien und Host-Pacing
 - [x] `KR-4704` - v0.47 Gate-Vorbereitung
-- [ ] `KR-4705` - v0.47 interne Freigabe
+- [x] `KR-4705` - v0.47 interne Freigabe
 
 `KR-4704` ist technisch bestanden. Das Gate trennt ausfuehrbare
 Speicherberechtigung von statischer, materialisierbarer und aktuell
@@ -102,8 +102,8 @@ Der private doppelte Build-only-Nachweis meldet `unknown_instructions=0`,
 `guarded_partial=0`, `unresolved=0`, `reachable_abort_edges=0`,
 `uncovered_control_targets=0` und `dispatch_paths_without_validation=0`.
 Beide frischen Hostbuilds besitzen identische portable Metadaten und Quellen;
-kein Runtimeprozess wurde gestartet. Naechster Task ist das Nutzerreview vor
-`KR-4705`.
+kein Runtimeprozess wurde fuer die Gateevidenz gestartet. `KR-4705` ist
+freigegeben und abgeschlossen; die aktive Entwicklung liegt in v0.48.
 
 ### Verbindliche Reihenfolge
 

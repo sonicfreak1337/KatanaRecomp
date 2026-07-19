@@ -633,7 +633,7 @@ Schreibbarkeit, Evidenz, Entropie, Decodedichte und Naehe zu bewiesenem Code.
 Decode-Dichte allein kann niemals Code beweisen. Vertrag:
 `EXECUTABLE_INVENTORY_AND_MODULES.md`.
 
-### [ ] KR-4705 - v0.47 interne Freigabe
+### [x] KR-4705 - v0.47 interne Freigabe
 
 Abhaengigkeiten: KR-4704
 
@@ -642,6 +642,9 @@ Akzeptanz:
 - die unveraenderte Gate-Vorbereitung ist ausdruecklich freigegeben
 - die Freigabe startet v0.48-Integrationsarbeit
 - es erfolgen noch kein Tag, Download oder oeffentlicher Release
+
+Abgeschlossen: 2026-07-19. Die interne Freigabe startet die v0.48-Entwicklung;
+es wurde weder ein Tag noch ein oeffentlicher Release erzeugt.
 
 ---
 

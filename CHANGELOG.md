@@ -2,8 +2,6 @@
 
 ## [Unreleased]
 
-## [0.47.0] - 2026-07-19
-
 ### Geaendert
 
 - Der Portexport kennzeichnet vollstaendige `*.katana-disc`-Dateien als
@@ -23,6 +21,26 @@
   pausierbaren Media-Clock, haelt Gastcode bei Pause an und verlaesst ihn bei
   Shutdown kontrolliert. Synthetische Produktpfadtests decken KeyDown/KeyUp,
   Fokusverlust/-gewinn sowie Close im laufenden und pausierten Zustand ab.
+
+### Korrigiert
+
+- Der Packed-Disc-Parser validiert unbekannte Payload-Enums sowie alle
+  erlaubten Kombinationen aus Tracktyp, Sektorgroesse, Payloadart und Offset,
+  bevor der Lesepfad auf Modusbytes zugreift. Negativtests manipulieren die
+  Metadaten semantisch und berechnen den Metadatenhash neu, sodass zu kleine
+  Sektoren und falsche Offsets nicht durch eine blosse Hashabweichung scheitern.
+- Generierte EXEs pruefen Packed-Disc-`content_identity`, Projektgeneration
+  und Bootdatei-SHA gegen den AOT-Buildvertrag. Ein neu aufgebauter Pack mit
+  lediglich kopierter Jobgeneration wird vor Gastcode abgelehnt.
+- Fokusverlust leert den Controllerzustand, ohne den Host-Eventpump zu
+  verlieren. Close beendet die native Gastdispatchschleife und verhindert,
+  dass nach bereits erfolgtem Host-Shutdown noch Audiopuffer eingereicht
+  werden.
+
+## [0.47.0] - 2026-07-19
+
+### Geaendert
+
 - KR-4703: Flash und VMU verwenden projektgebundene, atomisch gespeicherte
   Primaer-/Recovery-Arbeitskopien; Nutzerquellen bleiben read-only und werden
   vor Save erneut identitaetsgeprueft. Der generierte Port koppelt Video-
@@ -109,18 +127,6 @@
   dokumentiert.
 ### Korrigiert
 
-- Der Packed-Disc-Parser validiert unbekannte Payload-Enums sowie alle
-  erlaubten Kombinationen aus Tracktyp, Sektorgroesse, Payloadart und Offset,
-  bevor der Lesepfad auf Modusbytes zugreift. Negativtests manipulieren die
-  Metadaten semantisch und berechnen den Metadatenhash neu, sodass zu kleine
-  Sektoren und falsche Offsets nicht durch eine blosse Hashabweichung scheitern.
-- Generierte EXEs pruefen Packed-Disc-`content_identity`, Projektgeneration
-  und Bootdatei-SHA gegen den AOT-Buildvertrag. Ein neu aufgebauter Pack mit
-  lediglich kopierter Jobgeneration wird vor Gastcode abgelehnt.
-- Fokusverlust leert den Controllerzustand, ohne den Host-Eventpump zu
-  verlieren. Close beendet die native Gastdispatchschleife und verhindert,
-  dass nach bereits erfolgtem Host-Shutdown noch Audiopuffer eingereicht
-  werden.
 - KR-4715-Nacharbeit: Validierte `HintCandidate`-Ziele werden in Detail- und
   Aggregatberichten als `guarded_partial` gezaehlt, waehrend der interne
   `Unresolved`-Status, die schwache Evidenz und der dynamische Default erhalten

@@ -1,8 +1,8 @@
 # Projektstatus
 
-Interner Entwicklungsmeilenstein: `v0.47.0`
-Phase: v0.47 intern freigegeben; Vorbereitung auf v0.48
-Naechster Task: Nutzerreview, danach `KR-4705`
+Abgeschlossener interner Meilenstein: `v0.47.0`
+Phase: `v0.48.0` - Integration
+Naechster Roadmap-Task: `KR-4801`
 Naechstes Gate: `v0.48.0` - Integration
 Weitere interne Gates: `v0.48.0` Integration und `v0.49.0` Alpha-Candidate
 Erster oeffentlicher Release: `v0.50.0` Alpha
@@ -35,7 +35,7 @@ Speicherberechtigung. Unbekannter Speicher bleibt unbekannt und nicht
 dispatchbar, bis ein validierter Kontrolltransfer ihn erreicht. Der private
 doppelte Build-only-Nachweis ist erfolgreich; beide frischen Hostbuilds
 besitzen identische portable Metadaten und generierte Quellen. Das aktuelle
-Executable wurde als Jobartefakt neu gehasht, aber nicht gestartet.
+Executable wurde als damaliges Gateartefakt neu gehasht, aber nicht gestartet.
 
 Persistenz und Host-Pacing besitzen nun eigene Regressionen. Windows liest
 Nutzerdatenpfade ohne unsicheren `getenv`-Pfad, Firmwarefehler werden in der
@@ -51,8 +51,8 @@ Datenaudit und atomische Root-GUI-Verteilung. Der Rootstand enthaelt eine
 aktuelle verifizierte `KatanaRecomp-GUI.exe`, den Dialoghelfer und das
 zugehoerige Runtime-SDK. Die fokussierten Decoder-, Analyse-, IR-, Backend-,
 Runtime-, Portexport- und GUI-Regressionen sowie der relocatable synthetische
-GDI-Paketbuild bestehen. KR-4704 ist damit technisch bestanden und wartet auf
-das Nutzerreview vor KR-4705.
+GDI-Paketbuild bestehen. KR-4704 und die anschliessende interne Freigabe
+KR-4705 sind abgeschlossen; die aktive Arbeit liegt in v0.48.
 
 Das neue exakte Inventar klassifiziert die zuvor pauschal betrachteten Bytes:
 `proven_reachable_code`, `runtime_discovered_code`,
