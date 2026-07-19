@@ -197,6 +197,9 @@ int run_test(const int argc, char* argv[]) {
                 runtime_state.runtime_blocks && runtime_state.runtime_blocks->size() == 0u &&
                 runtime_state.system_asic && runtime_state.interrupt_router &&
                 runtime_state.cache_control &&
+                runtime_state.io_ports &&
+                runtime_cpu.memory.read_u16(katana::runtime::sh4_port_data_a_address) ==
+                    katana::runtime::dreamcast_composite_port_a_input &&
                 runtime_cpu.memory.read_u32(katana::runtime::sh4_cache_control_address) == 0u,
             "Eigenstaendiger GDI-Boot initialisiert Bootimage, privilegierten CPU-Handoff oder "
             "Speicher nicht.");

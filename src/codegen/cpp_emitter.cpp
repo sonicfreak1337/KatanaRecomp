@@ -555,6 +555,14 @@ void emit_simple_instruction(std::ostringstream& output,
         emit_indent(output, indent);
         output << "}\n";
         return;
+    case Operation::LoadTlb:
+        output << "katana::runtime::load_tlb(cpu);\n";
+        return;
+    case Operation::Ocbi:
+        output << "static_cast<void>(katana::runtime::maintain_coherent_operand_cache("
+                  "katana::runtime::OperandCacheOperation::Invalidate, cpu.r["
+               << static_cast<unsigned>(instruction.source_register) << "]));\n";
+        return;
     case Operation::Ocbp:
         output << "static_cast<void>(katana::runtime::maintain_coherent_operand_cache("
                   "katana::runtime::OperandCacheOperation::Purge, cpu.r["
@@ -564,6 +572,10 @@ void emit_simple_instruction(std::ostringstream& output,
         output << "static_cast<void>(katana::runtime::maintain_coherent_operand_cache("
                   "katana::runtime::OperandCacheOperation::WriteBack, cpu.r["
                << static_cast<unsigned>(instruction.source_register) << "]));\n";
+        return;
+    case Operation::MovcaLong:
+        output << "cpu.memory.write_u32(cpu.r["
+               << static_cast<unsigned>(instruction.destination_register) << "], cpu.r[0]);\n";
         return;
     case Operation::ClearMac:
         output << "cpu.mach = 0u;\n";
@@ -2082,6 +2094,12 @@ void emit_terminal(std::ostringstream& output,
     case Operation::StoreSpecialRegisterPreDecrement:
     case Operation::LoadSpecialRegister:
     case Operation::LoadSpecialRegisterPostIncrement:
+    case Operation::LoadTlb:
+    case Operation::Prefetch:
+    case Operation::Ocbi:
+    case Operation::Ocbp:
+    case Operation::Ocbwb:
+    case Operation::MovcaLong:
         break;
     }
 
@@ -2218,6 +2236,12 @@ bool is_control_flow(const katana::ir::Operation operation) {
     case Operation::StoreSpecialRegisterPreDecrement:
     case Operation::LoadSpecialRegister:
     case Operation::LoadSpecialRegisterPostIncrement:
+    case Operation::LoadTlb:
+    case Operation::Prefetch:
+    case Operation::Ocbi:
+    case Operation::Ocbp:
+    case Operation::Ocbwb:
+    case Operation::MovcaLong:
         return false;
     }
 

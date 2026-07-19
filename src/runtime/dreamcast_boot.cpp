@@ -301,6 +301,7 @@ initialize_dreamcast_runtime(CpuState& cpu,
         state.code_tracker.get());
     const auto queues = state.store_queues;
     state.cache_control = map_sh4_cache_control(cpu.memory);
+    state.io_ports = map_sh4_io_ports(cpu.memory, {dreamcast_composite_port_a_input, 0u});
     auto queue_window = std::make_shared<MmioMemoryDevice>(
         0x04000000u,
         [](const std::uint32_t, const MemoryAccessWidth) -> std::uint32_t {

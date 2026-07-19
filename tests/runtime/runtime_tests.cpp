@@ -17,7 +17,7 @@ void require(const bool condition, const std::string& message) {
 } // namespace
 
 int main() {
-    static_assert(katana::runtime::abi_version == 14u);
+    static_assert(katana::runtime::abi_version == 15u);
 
     katana::runtime::Memory memory(16u);
     require(memory.size() == 16u, "Die Runtime-Speichergroesse ist falsch.");
@@ -44,16 +44,30 @@ int main() {
     require(cpu.pc == 0u && cpu.pr == 0u && cpu.memory.size() == 1024u * 1024u,
             "Der zentrale CPU-Zustand besitzt keinen deterministischen Grundzustand.");
 
+    const auto invalidate = katana::runtime::maintain_coherent_operand_cache(
+        katana::runtime::OperandCacheOperation::Invalidate, 0x0800u);
     const auto purge = katana::runtime::maintain_coherent_operand_cache(
         katana::runtime::OperandCacheOperation::Purge, 0x1000u);
     const auto write_back = katana::runtime::maintain_coherent_operand_cache(
         katana::runtime::OperandCacheOperation::WriteBack, 0x2000u);
-    require(purge.operation == katana::runtime::OperandCacheOperation::Purge &&
+    require(invalidate.operation == katana::runtime::OperandCacheOperation::Invalidate &&
+                invalidate.address == 0x0800u && !invalidate.dirty_line_present &&
+                !invalidate.wrote_memory &&
+                purge.operation == katana::runtime::OperandCacheOperation::Purge &&
                 purge.address == 0x1000u && !purge.dirty_line_present && !purge.wrote_memory &&
                 write_back.operation == katana::runtime::OperandCacheOperation::WriteBack &&
                 write_back.address == 0x2000u && !write_back.dirty_line_present &&
                 !write_back.wrote_memory,
             "Der kohaerente Operand-Cache-Vertrag meldet erfundene Dirty-Lines oder Writes.");
+
+    cpu.pteh = 0x123450AAu;
+    cpu.ptel = 0x0C0011D4u;
+    cpu.ptea = 0x00000005u;
+    cpu.mmucr = 37u << 10u;
+    katana::runtime::load_tlb(cpu);
+    require(cpu.tlb_load_count == 1u && cpu.utlb[37].pteh == cpu.pteh &&
+                cpu.utlb[37].ptel == cpu.ptel && cpu.utlb[37].ptea == cpu.ptea,
+            "LDTLB kopiert PTEH/PTEL/PTEA nicht in den von MMUCR.URC gewaehlten UTLB-Eintrag.");
 
     cpu.r[0] = 0x11111111u;
     cpu.r_bank[0] = 0x22222222u;

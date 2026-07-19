@@ -328,6 +328,13 @@ DecodedInstruction decode(const std::uint16_t opcode) {
         return instruction;
     }
 
+    if (matches_metadata(opcode, InstructionKind::LoadTlb)) {
+        instruction.kind = InstructionKind::LoadTlb;
+        instruction.is_privileged = true;
+        instruction.text = "ldtlb";
+        return instruction;
+    }
+
     if (matches_metadata(opcode, InstructionKind::Prefetch)) {
         instruction.kind = InstructionKind::Prefetch;
         instruction.source_register = static_cast<std::uint8_t>((opcode >> 8u) & 0x0Fu);
@@ -335,13 +342,27 @@ DecodedInstruction decode(const std::uint16_t opcode) {
         return instruction;
     }
 
-    if (matches_metadata(opcode, InstructionKind::Ocbp) ||
+    if (matches_metadata(opcode, InstructionKind::Ocbi) ||
+        matches_metadata(opcode, InstructionKind::Ocbp) ||
         matches_metadata(opcode, InstructionKind::Ocbwb)) {
-        instruction.kind = matches_metadata(opcode, InstructionKind::Ocbp) ? InstructionKind::Ocbp
-                                                                           : InstructionKind::Ocbwb;
+        instruction.kind = matches_metadata(opcode, InstructionKind::Ocbi)
+                               ? InstructionKind::Ocbi
+                               : matches_metadata(opcode, InstructionKind::Ocbp)
+                                     ? InstructionKind::Ocbp
+                                     : InstructionKind::Ocbwb;
         instruction.source_register = static_cast<std::uint8_t>((opcode >> 8u) & 0x0Fu);
-        instruction.text = (instruction.kind == InstructionKind::Ocbp ? "ocbp @" : "ocbwb @") +
-                           register_name(instruction.source_register);
+        const auto mnemonic = instruction.kind == InstructionKind::Ocbi
+                                  ? "ocbi @"
+                                  : instruction.kind == InstructionKind::Ocbp ? "ocbp @" : "ocbwb @";
+        instruction.text = std::string(mnemonic) + register_name(instruction.source_register);
+        return instruction;
+    }
+
+    if (matches_metadata(opcode, InstructionKind::MovcaLong)) {
+        instruction.kind = InstructionKind::MovcaLong;
+        instruction.destination_register = static_cast<std::uint8_t>((opcode >> 8u) & 0x0Fu);
+        instruction.source_register = 0u;
+        instruction.text = "movca.l r0,@" + register_name(instruction.destination_register);
         return instruction;
     }
 

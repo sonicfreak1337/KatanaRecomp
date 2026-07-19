@@ -58,6 +58,7 @@ MemoryEffects instruction_memory_effects(const Operation operation,
     case Operation::StoreWordGbrDisplacement:
         return write(OperandWidth::Bits16);
     case Operation::StoreLong:
+    case Operation::MovcaLong:
     case Operation::StoreLongDisplacement:
     case Operation::StoreLongR0Indexed:
     case Operation::StoreLongGbrDisplacement:

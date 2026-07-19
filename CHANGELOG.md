@@ -4,6 +4,11 @@
 
 ### Geaendert
 
+- Der SH-4-ISA-Audit deckt die zuvor fehlenden offiziellen SH7750-Befehle
+  `LDTLB`, `OCBI` und `MOVCA.L` nun durch Decoder, IR und nativen C++-Backendpfad
+  ab. LDTLB kopiert PTEH/PTEL/PTEA in den per MMUCR.URC gewaehlten UTLB-Eintrag;
+  Cacheinvalidierung und Allocate-Store bleiben als sichtbare eigene Semantik
+  erhalten. Runtime-ABI 15 versioniert den erweiterten CPU-Zustand.
 - Private AOT-Fortschrittsdiagnosen melden neben PC und Schedulerstand nun
   Exceptionursache, EXPEVT, INTEVT, TEA, SPC, SSR und VBR. Ein Sprung auf den
   allgemeinen SH-4-Vektor kann damit auf die ausloesende CPU-/Busursache
@@ -28,6 +33,11 @@
 
 ### Korrigiert
 
+- Die Disc-Runtime modelliert die SH-4-I/O-Ports PCTRA/PDTRA, PCTRB/PDTRB und
+  GPIOIC nun mit registergenauen Zugriffsbreiten, getrennten Eingangs- und
+  Ausgangsbits sowie einem deterministischen Dreamcast-Composite-Kabelprofil.
+  Frueher brach bereits die generische Kabelabfrage bei `PDTRA` als
+  ungemappter P4-Zugriff ab.
 - Der direkte Disc-Handoff startet den SH-4 nun wie vom Bootcode erwartet im
   privilegierten MD-Modus mit maskierten Interrupts. Privilegierte
   Systemregisterzugriffe waehrend der fruehen Retail-Initialisierung loesen

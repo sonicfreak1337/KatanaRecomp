@@ -392,12 +392,18 @@ Operation lower_operation(const katana::sh4::InstructionKind kind) {
 
     case Source::Sleep:
         return Operation::Sleep;
+    case Source::LoadTlb:
+        return Operation::LoadTlb;
     case Source::Prefetch:
         return Operation::Prefetch;
+    case Source::Ocbi:
+        return Operation::Ocbi;
     case Source::Ocbp:
         return Operation::Ocbp;
     case Source::Ocbwb:
         return Operation::Ocbwb;
+    case Source::MovcaLong:
+        return Operation::MovcaLong;
 
     case Source::FmovRegister:
         return Operation::FmovRegister;
@@ -889,12 +895,18 @@ std::string_view operation_name(const Operation operation) noexcept {
 
     case Operation::Sleep:
         return "sleep";
+    case Operation::LoadTlb:
+        return "ldtlb";
     case Operation::Prefetch:
         return "prefetch";
+    case Operation::Ocbi:
+        return "ocbi";
     case Operation::Ocbp:
         return "ocbp";
     case Operation::Ocbwb:
         return "ocbwb";
+    case Operation::MovcaLong:
+        return "movca_long";
     case Operation::FmovRegister:
         return "fmov_reg";
     case Operation::FmovLoad:

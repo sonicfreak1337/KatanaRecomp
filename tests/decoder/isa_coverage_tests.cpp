@@ -20,7 +20,7 @@ int main() {
     using namespace katana::sh4;
     const auto report = build_isa_coverage_report();
 
-    require(report.instructions.size() == 160u,
+    require(report.instructions.size() == 163u,
             "Nicht jede implementierte Instruktionsart erscheint im Bericht.");
     require(report.known_opcode_count + report.unknown_opcode_count == 65536u,
             "Der Bericht deckt den 16-Bit-Opcode-Raum nicht vollstaendig ab.");
@@ -91,6 +91,9 @@ int main() {
             "Systemregistertransfers fehlen im formatierten Bericht.");
     require(text.find("FcnvSingleToDouble") != std::string::npos,
             "FPU-Instruktionen fehlen im formatierten Bericht.");
+    require(text.find("LoadTlb") != std::string::npos && text.find("Ocbi") != std::string::npos &&
+                text.find("MovcaLong") != std::string::npos,
+            "Der ISA-Bericht verschweigt die geschlossenen SH7750-Instruktionsluecken.");
     require(text.find("Unbekannte Opcodes:") != std::string::npos,
             "Die Unknown-Abdeckung fehlt im Bericht.");
     require(text.find("restricted") != std::string::npos &&

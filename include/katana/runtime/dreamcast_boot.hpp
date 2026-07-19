@@ -6,6 +6,7 @@
 #include "katana/runtime/disc.hpp"
 #include "katana/runtime/dreamcast_memory.hpp"
 #include "katana/runtime/gdi.hpp"
+#include "katana/runtime/io_port.hpp"
 #include "katana/runtime/maple.hpp"
 #include "katana/runtime/packed_disc.hpp"
 #include "katana/runtime/platform_interrupt.hpp"
@@ -27,6 +28,7 @@ namespace katana::runtime {
 inline constexpr std::uint32_t dreamcast_disc_boot_address = 0x8C010000u;
 inline constexpr std::uint32_t dreamcast_direct_boot_stack = 0x8D000000u;
 inline constexpr std::uint32_t dreamcast_disc_boot_status = sr_md_mask | sr_interrupt_mask;
+inline constexpr std::uint16_t dreamcast_composite_port_a_input = 0x0300u;
 enum class DreamcastRuntimeFirmwareMode : std::uint8_t { Direct, HleBiosAbi };
 
 struct DreamcastMutableStorageConfig {
@@ -89,6 +91,7 @@ struct DreamcastRuntimeState {
     std::shared_ptr<ExecutableCodeTracker> code_tracker;
     std::shared_ptr<Sh4StoreQueues> store_queues;
     std::shared_ptr<Sh4CacheControl> cache_control;
+    std::shared_ptr<Sh4IoPort> io_ports;
     std::shared_ptr<std::vector<StoreQueueTransfer>> store_queue_transfers;
     std::shared_ptr<std::uint64_t> dropped_store_queue_transfers;
     std::shared_ptr<FirmwareHandoffMap> firmware_handoff;

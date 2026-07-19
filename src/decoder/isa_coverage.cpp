@@ -109,6 +109,7 @@ bool system_kind(const InstructionKind kind) {
     case InstructionKind::TrapAlways:
     case InstructionKind::ReturnFromException:
     case InstructionKind::Sleep:
+    case InstructionKind::LoadTlb:
         return true;
     default:
         return false;
@@ -122,8 +123,9 @@ bool memory_kind(const InstructionKind kind) {
 std::string
 family_id(const InstructionKind kind, const bool privileged, const ControlFlowKind control_flow) {
     if (fpu_kind(kind)) return "fpu";
-    if (kind == InstructionKind::Prefetch || kind == InstructionKind::Ocbp ||
-        kind == InstructionKind::Ocbwb)
+    if (kind == InstructionKind::Prefetch || kind == InstructionKind::Ocbi ||
+        kind == InstructionKind::Ocbp || kind == InstructionKind::Ocbwb ||
+        kind == InstructionKind::MovcaLong)
         return "cache-store-queue";
     if (privileged || system_kind(kind)) return "system-control";
     if (control_flow != ControlFlowKind::None || kind == InstructionKind::Rts)

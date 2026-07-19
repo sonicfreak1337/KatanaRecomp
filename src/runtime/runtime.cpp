@@ -103,6 +103,12 @@ void reset_cpu(CpuState& cpu, const ResetState& state) noexcept {
     cpu.tea = 0u;
     cpu.expevt = 0u;
     cpu.intevt = 0u;
+    cpu.pteh = 0u;
+    cpu.ptel = 0u;
+    cpu.ptea = 0u;
+    cpu.mmucr = 0u;
+    cpu.utlb.fill({});
+    cpu.tlb_load_count = 0u;
     cpu.mach = 0u;
     cpu.macl = 0u;
     cpu.fpul = 0u;
@@ -130,6 +136,14 @@ void prefetch(CpuState& cpu, const std::uint32_t address) noexcept {
     cpu.last_prefetch_address = address;
     ++cpu.prefetch_count;
     cpu.last_prefetch_was_store_queue = address >= 0xE0000000u && address <= 0xE3FFFFFFu;
+}
+
+void load_tlb(CpuState& cpu) noexcept {
+    constexpr std::uint32_t mmucr_urc_shift = 10u;
+    constexpr std::uint32_t mmucr_urc_mask = 0x3Fu;
+    const auto index = static_cast<std::size_t>((cpu.mmucr >> mmucr_urc_shift) & mmucr_urc_mask);
+    cpu.utlb[index] = {cpu.pteh, cpu.ptel, cpu.ptea};
+    ++cpu.tlb_load_count;
 }
 
 OperandCacheMaintenanceResult

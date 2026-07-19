@@ -212,6 +212,7 @@ add_library(katana_runtime STATIC
     src/runtime/interpreter_boundary.cpp
     src/runtime/store_queue.cpp
     src/runtime/cache_control.cpp
+    src/runtime/io_port.cpp
     src/runtime/dma.cpp
     src/runtime/disc.cpp
     src/runtime/dreamcast_boot.cpp
@@ -681,6 +682,11 @@ add_executable(katana-cache-control-tests tests/runtime/cache_control_tests.cpp)
 target_link_libraries(katana-cache-control-tests PRIVATE katana_runtime)
 katana_enable_warnings(katana-cache-control-tests)
 add_test(NAME katana-cache-control-tests COMMAND katana-cache-control-tests)
+
+add_executable(katana-io-port-tests tests/runtime/io_port_tests.cpp)
+target_link_libraries(katana-io-port-tests PRIVATE katana_runtime)
+katana_enable_warnings(katana-io-port-tests)
+add_test(NAME katana-io-port-tests COMMAND katana-io-port-tests)
 
 add_executable(katana-memory-bus-tests
     tests/runtime/memory_bus_tests.cpp

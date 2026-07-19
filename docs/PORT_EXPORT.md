@@ -79,7 +79,7 @@ expliziten CMake-Parameter
 `KATANA_RUNTIME_ROOT` ein. Portprojekt-Vertragsversion 7 umfasst den
 eigenstaendigen Runtime-/GDI-Einstieg, die Runtime-only-Dispatchmetriken sowie
 projektgebundene Flash-/VMU-Arbeitskopien und Host-Pacing. Die generierten
-Quellen pruefen Runtime-ABI 14 und PlatformServices-ABI 6 beim
+Quellen pruefen Runtime-ABI 15 und PlatformServices-ABI 6 beim
 Kompilieren; portable Dateien enthalten keinen absoluten lokalen Quellpfad. Der
 Build liegt getrennt unter `port/build/`. Konfigurations- oder Buildfehler enden
 mit dem stabilen CLI-Exitcode `7` (`build-failure`). Die folgenden Befehle zeigen

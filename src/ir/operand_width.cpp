@@ -41,14 +41,19 @@ OperandWidths operation_operand_widths(const Operation operation) noexcept {
     case Operation::DivideInitializeUnsigned:
     case Operation::ClearMac:
     case Operation::Sleep:
+    case Operation::LoadTlb:
     case Operation::Frchg:
     case Operation::Fschg:
         return {};
 
     case Operation::Prefetch:
+    case Operation::Ocbi:
     case Operation::Ocbp:
     case Operation::Ocbwb:
         return {none, longword, none, none, none, longword};
+
+    case Operation::MovcaLong:
+        return memory_store(longword);
 
     case Operation::DivideInitializeSigned:
         return {none, longword, none, none, none, none};

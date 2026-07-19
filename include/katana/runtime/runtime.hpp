@@ -45,7 +45,13 @@ enum class ExceptionCause : std::uint8_t {
     Interrupt
 };
 
-enum class OperandCacheOperation : std::uint8_t { Purge, WriteBack };
+enum class OperandCacheOperation : std::uint8_t { Invalidate, Purge, WriteBack };
+
+struct Sh4TlbEntry {
+    std::uint32_t pteh = 0u;
+    std::uint32_t ptel = 0u;
+    std::uint32_t ptea = 0u;
+};
 
 struct OperandCacheMaintenanceResult {
     OperandCacheOperation operation = OperandCacheOperation::Purge;
@@ -79,6 +85,12 @@ struct CpuState {
     std::uint32_t tea = 0u;
     std::uint32_t expevt = 0u;
     std::uint32_t intevt = 0u;
+    std::uint32_t pteh = 0u;
+    std::uint32_t ptel = 0u;
+    std::uint32_t ptea = 0u;
+    std::uint32_t mmucr = 0u;
+    std::array<Sh4TlbEntry, 64u> utlb{};
+    std::uint64_t tlb_load_count = 0u;
     std::uint32_t mach = 0u;
     std::uint32_t macl = 0u;
     std::uint32_t fpul = 0u;
@@ -117,10 +129,11 @@ struct CpuState {
 void reset_cpu(CpuState& cpu, const ResetState& state = ResetState{}) noexcept;
 
 void prefetch(CpuState& cpu, std::uint32_t address) noexcept;
+void load_tlb(CpuState& cpu) noexcept;
 
 // The reference runtime exposes stores directly through Memory and therefore has no hidden dirty
-// operand-cache line. OCBP/OCBWB still pass through this explicit contract so a future cache model
-// can replace it without treating either instruction as an unknown or silent backend omission.
+// operand-cache line. OCBI/OCBP/OCBWB still pass through this explicit contract so a future cache
+// model can replace it without treating an instruction as an unknown or silent backend omission.
 [[nodiscard]] OperandCacheMaintenanceResult
 maintain_coherent_operand_cache(OperandCacheOperation operation, std::uint32_t address) noexcept;
 
