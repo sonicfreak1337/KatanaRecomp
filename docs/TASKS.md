@@ -41,7 +41,8 @@ KR-4715
   -> KR-4705
 
 v0.48 Integration:
-KR-4801, KR-4811, KR-4821 und KR-4824
+KR-4831
+  -> KR-4801, KR-4811, KR-4821 und KR-4824
   -> KR-4802
   -> KR-4803
   -> KR-4812, KR-4813 und KR-4814
@@ -649,6 +650,28 @@ es wurde weder ein Tag noch ein oeffentlicher Release erzeugt.
 ---
 
 ## v0.48.0 - Port-, Harness-, Controller- und GUI-Integration
+
+### [ ] KR-4831 - Generischer Originaldisc-Installer ohne Retaildaten im Portpaket
+
+Abhaengigkeiten: KR-4705
+Prioritaet: P0
+
+Umfang:
+
+- verteilbaren AOT-Port ohne Raw-, Audio- oder sonstige Retailsektoren erzeugen
+- versionierte, spielagnostische Recipe aus Hashes und Trackgeometrie ausgeben
+- eigene Original-GDI beim Nutzer vollstaendig und read-only validieren
+- lokalen Disc-Cache atomar ausschliesslich unter `user-data/content/` erzeugen
+- Repository-, CI-, Release- und Paket-Audits auf `*.katana-disc` beibehalten
+- mindestens zwei unterschiedliche PAL-Spiele nur privat als E2E-Fixtures nutzen
+
+Akzeptanz:
+
+- Exportpaket enthaelt null Retailsektoren und keine privaten Quellpfade
+- falscher Descriptor, Trackhash, Tracktyp, LBA, Offset oder Sektorformat scheitert
+- installierter Cache ist zur validierten Quelle sektorweise identisch
+- Original-GDI und Tracks bleiben byteidentisch und werden nie geloescht
+- dieselbe Installer-/Runtimeimplementierung gilt ohne Titelspezialfall fuer alle Spiele
 
 ### [ ] KR-4801 - Versioniertes Runtime-SDK fuer externe Port-Projekte
 

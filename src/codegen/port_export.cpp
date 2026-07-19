@@ -16,6 +16,7 @@
 #include "katana/ir/verifier.hpp"
 #include "katana/platform/dreamcast_disc.hpp"
 #include "katana/runtime/abi.hpp"
+#include "katana/runtime/disc_install.hpp"
 #include "katana/runtime/packed_disc.hpp"
 
 #include <algorithm>
@@ -123,13 +124,15 @@ std::string handwritten_main(const std::string& entry_namespace,
                       << katana::io::quote_json(expected_boot_sha256) << ";\n";
     return "#include \"katana_port.hpp\"\n"
            "#include \"katana/runtime/dreamcast_boot.hpp\"\n"
+           "#include \"katana/runtime/disc_install.hpp\"\n"
            "#include \"katana/runtime/host_runtime.hpp\"\n"
            "#include \"katana/runtime/host_video.hpp\"\n"
            "#include \"katana/runtime/indirect_dispatch.hpp\"\n"
            "#include \"katana/runtime/packed_disc.hpp\"\n"
            "#include \"katana/runtime/scheduler.hpp\"\n"
            "#include \"katana/io/input_provenance.hpp\"\n"
-           "#include <algorithm>\n#include <chrono>\n#include <cstdlib>\n#include <exception>\n#include <filesystem>\n#include <functional>\n#include "
+           "#include <algorithm>\n#include <chrono>\n#include <cstdlib>\n#include "
+           "<exception>\n#include <filesystem>\n#include <functional>\n#include "
            "<iostream>\n"
            "#include <optional>\n#include <span>\n#include <string>\n#include <string_view>\n"
            "#include <system_error>\n#include <thread>\n#include <vector>\n\n"
@@ -163,6 +166,12 @@ std::string handwritten_main(const std::string& entry_namespace,
            "void verify_pack_identity(const katana::runtime::PackedDiscSource& source) {\n"
            "    if (source.info().job_generation != expected_project_identity ||\n"
            "        source.info().content_identity != expected_content_identity)\n"
+           "        throw std::runtime_error(\"source-identity-mismatch\");\n"
+           "}\n"
+           "void verify_recipe_identity(const katana::runtime::DiscInstallRecipe& recipe) {\n"
+           "    if (recipe.job_generation != expected_project_identity ||\n"
+           "        recipe.content_identity != expected_content_identity ||\n"
+           "        recipe.boot_sha256 != expected_boot_sha256)\n"
            "        throw std::runtime_error(\"source-identity-mismatch\");\n"
            "}\n"
            "class PortPlatformServices final : public katana::runtime::PlatformServices {\n"
@@ -316,16 +325,42 @@ std::string handwritten_main(const std::string& entry_namespace,
            "            executable = std::filesystem::absolute(argv[0]);\n"
            "        const auto port_root = executable.parent_path();\n"
            "        bool gdi_debug = false;\n"
+           "        bool install_disc = false;\n"
+           "        const auto recipe_path = port_root / \"content\" / \"game.katana-install\";\n"
            "        if (argc == 1) {\n"
-           "            source = port_root / \"content\" / \"game.katana-disc\";\n"
+           "            source = port_root / \"user-data\" / \"content\" / \"game.katana-disc\";\n"
            "        } else if (argc == 3 && std::string_view(argv[1]) == \"--content\") {\n"
            "            source = argv[2];\n"
+           "        } else if (argc == 3 && std::string_view(argv[1]) == \"--install-disc\") {\n"
+           "            source = argv[2]; install_disc = true;\n"
            "        } else if (argc == 3 && std::string_view(argv[1]) == \"--gdi-debug\") {\n"
            "            source = argv[2]; gdi_debug = true;\n"
            "        } else {\n"
-           "            std::cerr << \"Aufruf: game [--content <game.katana-disc>] "
-           "[--gdi-debug <disc.gdi>]\\n\";\n"
+           "            std::cerr << \"Aufruf: game [--install-disc <eigene.gdi>] "
+           "[--content <lokaler-cache>] [--gdi-debug <disc.gdi>]\\n\";\n"
            "            return 2;\n"
+           "        }\n"
+           "        if (install_disc) {\n"
+           "            try {\n"
+           "                const auto recipe = "
+           "katana::runtime::parse_disc_install_recipe(recipe_path);\n"
+           "                verify_recipe_identity(recipe);\n"
+           "                const auto destination = port_root / \"user-data\" / \"content\" / "
+           "\"game.katana-disc\";\n"
+           "                const auto info = katana::runtime::install_disc_content(recipe, "
+           "source, destination);\n"
+           "                auto packed = katana::runtime::PackedDiscSource::open(destination);\n"
+           "                verify_pack_identity(*packed);\n"
+           "                const auto boot = katana::runtime::load_dreamcast_runtime_boot(\n"
+           "                    packed, packed->primary_data_lba(), "
+           "packed->info().tracks.size());\n"
+           "                verify_boot_identity(boot);\n"
+           "                std::cout << \"KATANA_DISC_INSTALL_OK tracks=\" << info.tracks.size()\n"
+           "                          << \" sectors=\" << info.packed_sectors << '\\n';\n"
+           "                return 0;\n"
+           "            } catch (const std::exception&) {\n"
+           "                throw std::runtime_error(\"source-identity-mismatch\");\n"
+           "            }\n"
            "        }\n"
            "        katana::runtime::DreamcastRuntimeBootImage boot;\n"
            "        try {\n"
@@ -367,7 +402,8 @@ std::string handwritten_main(const std::string& entry_namespace,
            "        std::uint64_t presented_frames = 0u;\n"
            "        std::uint64_t host_sequence = 1u;\n"
            "        katana::runtime::ControllerState controller;\n"
-           "        const auto* lifecycle_test_value = std::getenv(\"KATANA_PORT_LIFECYCLE_TEST\");\n"
+           "        const auto* lifecycle_test_value = "
+           "std::getenv(\"KATANA_PORT_LIFECYCLE_TEST\");\n"
            "        const std::string_view lifecycle_test = lifecycle_test_value == nullptr\n"
            "            ? std::string_view{} : std::string_view(lifecycle_test_value);\n"
            "        std::size_t lifecycle_test_step = 0u;\n"
@@ -416,8 +452,10 @@ std::string handwritten_main(const std::string& entry_namespace,
            "                    } else inject(katana::runtime::HostRuntimeEventKind::Shutdown);\n"
            "                } else if (lifecycle_test == \"focus-resume-close\") {\n"
            "                    const auto step = lifecycle_test_step++;\n"
-           "                    if (step == 0u) inject(katana::runtime::HostRuntimeEventKind::FocusLost);\n"
-           "                    else if (step == 1u) inject(katana::runtime::HostRuntimeEventKind::FocusGained);\n"
+           "                    if (step == 0u) "
+           "inject(katana::runtime::HostRuntimeEventKind::FocusLost);\n"
+           "                    else if (step == 1u) "
+           "inject(katana::runtime::HostRuntimeEventKind::FocusGained);\n"
            "                    else inject(katana::runtime::HostRuntimeEventKind::Shutdown);\n"
            "                } else if (lifecycle_test == \"paused-close\") {\n"
            "                    inject(lifecycle_test_step++ == 0u\n"
@@ -431,18 +469,22 @@ std::string handwritten_main(const std::string& entry_namespace,
            "            if (!video) return;\n"
            "            video->poll_events();\n"
            "            for (const auto& event : video->drain_events()) {\n"
-           "                if (host.state() == katana::runtime::HostRuntimeState::Shutdown) break;\n"
+           "                if (host.state() == katana::runtime::HostRuntimeState::Shutdown) "
+           "break;\n"
            "                auto kind = katana::runtime::HostRuntimeEventKind::Controller;\n"
            "                if (event.kind == katana::runtime::NativeHostEventKind::FocusGained)\n"
            "                    kind = katana::runtime::HostRuntimeEventKind::FocusGained;\n"
-           "                else if (event.kind == katana::runtime::NativeHostEventKind::FocusLost)\n"
-           "                    kind = katana::runtime::HostRuntimeEventKind::FocusLost, controller = {};\n"
+           "                else if (event.kind == "
+           "katana::runtime::NativeHostEventKind::FocusLost)\n"
+           "                    kind = katana::runtime::HostRuntimeEventKind::FocusLost, "
+           "controller = {};\n"
            "                else if (event.kind == katana::runtime::NativeHostEventKind::Close)\n"
            "                    kind = katana::runtime::HostRuntimeEventKind::Shutdown;\n"
            "                else {\n"
            "                    const auto down =\n"
            "                        event.kind == katana::runtime::NativeHostEventKind::KeyDown;\n"
-           "                    const auto bit = event.key == katana::runtime::NativeHostKey::Start ? 0x0008u :\n"
+           "                    const auto bit = event.key == "
+           "katana::runtime::NativeHostKey::Start ? 0x0008u :\n"
            "                        event.key == katana::runtime::NativeHostKey::A ? 0x0004u :\n"
            "                        event.key == katana::runtime::NativeHostKey::B ? 0x0002u :\n"
            "                        event.key == katana::runtime::NativeHostKey::X ? 0x0400u :\n"
@@ -450,11 +492,15 @@ std::string handwritten_main(const std::string& entry_namespace,
            "                        event.key == katana::runtime::NativeHostKey::Up ? 0x0010u :\n"
            "                        event.key == katana::runtime::NativeHostKey::Down ? 0x0020u :\n"
            "                        event.key == katana::runtime::NativeHostKey::Left ? 0x0040u :\n"
-           "                        event.key == katana::runtime::NativeHostKey::Right ? 0x0080u : 0u;\n"
-           "                    if (down) controller.pressed_buttons |= static_cast<std::uint16_t>(bit);\n"
-           "                    else controller.pressed_buttons &= static_cast<std::uint16_t>(~bit);\n"
+           "                        event.key == katana::runtime::NativeHostKey::Right ? 0x0080u : "
+           "0u;\n"
+           "                    if (down) controller.pressed_buttons |= "
+           "static_cast<std::uint16_t>(bit);\n"
+           "                    else controller.pressed_buttons &= "
+           "static_cast<std::uint16_t>(~bit);\n"
            "                }\n"
-           "                host.inject({host_sequence++, state.scheduler->current_cycle(), kind, controller});\n"
+           "                host.inject({host_sequence++, state.scheduler->current_cycle(), kind, "
+           "controller});\n"
            "            }\n"
            "        };\n"
            "        PortPlatformServices services(cpu, state, [&] {\n"
@@ -507,7 +553,8 @@ std::string handwritten_main(const std::string& entry_namespace,
            "        if (host.state() == katana::runtime::HostRuntimeState::Shutdown) {\n"
            "            host.require_clean_shutdown();\n"
            "            if (state.scheduler->pending_event_count() != 0u)\n"
-           "                throw std::runtime_error(\"Host-Shutdown hinterliess Schedulerereignisse.\");\n"
+           "                throw std::runtime_error(\"Host-Shutdown hinterliess "
+           "Schedulerereignisse.\");\n"
            "            std::cout << \"KR_HOST_SHUTDOWN guest_dispatch_stopped=1 host_events=\"\n"
            "                      << host.processed_events() << \" input_events=\"\n"
            "                      << input->injected_events() << '\\n';\n"
@@ -723,8 +770,8 @@ std::string runtime_dispatch_adapter(const std::string& entry_namespace,
            "                    katana::runtime::IndirectDispatchKind kind,\n"
            "                    katana::runtime::RuntimeDispatchClass dispatch_class,\n"
            "                    bool diagnostic) {\n"
-            "    const auto block_budget = configured_block_budget();\n"
-            "    for (std::uint64_t blocks = 0u; blocks < block_budget;) {\n"
+           "    const auto block_budget = configured_block_budget();\n"
+           "    for (std::uint64_t blocks = 0u; blocks < block_budget;) {\n"
            "        const auto lifecycle = active_services->poll_host_lifecycle();\n"
            "        if (lifecycle == katana::runtime::PlatformLifecycleState::Shutdown)\n"
            "            throw katana::runtime::PlatformShutdownRequested();\n"
@@ -833,7 +880,8 @@ std::string runtime_dispatch_adapter(const std::string& entry_namespace,
            "    const auto registered = table.resolve(*registered_handle);\n"
            "    if (!registered) throw std::runtime_error(\"Registrierter Block ist stale.\");\n"
            "    services.register_executable_block(\n"
-           "        address, size, katana::runtime::stable_runtime_block_identity(registered->get()));\n"
+           "        address, size, "
+           "katana::runtime::stable_runtime_block_identity(registered->get()));\n"
            "}\n"
            "void append_static_block(\n"
            "    std::vector<katana::runtime::RuntimeBlock>& blocks,\n"
@@ -850,8 +898,7 @@ std::string runtime_dispatch_adapter(const std::string& entry_namespace,
         << "RuntimeRunResult run_runtime(katana::runtime::CpuState& cpu,\n"
         << "                             katana::runtime::PlatformServices& services,\n"
         << "                             katana::runtime::RuntimeBlockTable& table) {\n"
-        << "    katana::runtime::validate_platform_services(services);\n"
-        ;
+        << "    katana::runtime::validate_platform_services(services);\n";
     output << "    table.bind_code_tracker(services.executable_code_tracker());\n";
     output << "    std::vector<katana::runtime::RuntimeBlock> static_blocks;\n";
     output << "    static_blocks.reserve(" << block_addresses.size() << "u);\n";
@@ -862,9 +909,9 @@ std::string runtime_dispatch_adapter(const std::string& entry_namespace,
             for (const auto& instruction : block.instructions)
                 end = std::max(end, instruction.source_address + 2u);
             output << "    append_static_block(static_blocks, 0x" << address << "u, "
-                   << (end - block.start_address) << "u, katana::runtime::BlockEndKind::"
-                   << end_kind(block) << ", &dispatch_" << address << ", \"generated-block-"
-                   << address << "\");\n";
+                   << (end - block.start_address)
+                   << "u, katana::runtime::BlockEndKind::" << end_kind(block) << ", &dispatch_"
+                   << address << ", \"generated-block-" << address << "\");\n";
         }
     }
     output << "    static_cast<void>(table.register_static_bulk(std::move(static_blocks)));\n";
@@ -1175,48 +1222,19 @@ PortExportResult export_dreamcast_port_project(const PreparedPortProgram& prepar
         });
     if (descriptor_input == prepared.inputs.end() || descriptor_input->local_path.empty())
         throw std::invalid_argument(
-            "Portexport besitzt keine lokale GDI-Eingabe fuer den Disc-Pack.");
+            "Portexport besitzt keine lokale GDI-Eingabe fuer die Installations-Recipe.");
     const auto disc_source = katana::runtime::GdiDiscSource::open(descriptor_input->local_path);
     const auto& disc_descriptor = disc_source->descriptor();
     if (disc_descriptor.sha256 != descriptor_input->sha256)
-        throw std::runtime_error("GDI wurde vor dem Disc-Pack-Export veraendert.");
+        throw std::runtime_error("GDI wurde vor dem Recipe-Export veraendert.");
     for (const auto& track : disc_descriptor.tracks) {
         const auto role = "gdi-track-" + std::to_string(track.number);
         const auto expected = std::find_if(prepared.inputs.begin(),
                                            prepared.inputs.end(),
                                            [&](const auto& input) { return input.role == role; });
         if (expected == prepared.inputs.end() || expected->sha256 != track.sha256)
-            throw std::runtime_error("GDI-Track wurde vor dem Disc-Pack-Export veraendert.");
+            throw std::runtime_error("GDI-Track wurde vor dem Recipe-Export veraendert.");
     }
-    const auto packed_disc_path = canonical_root / "content" / "game.katana-disc";
-    const auto packed_info = katana::runtime::write_packed_disc(
-        *disc_source, packed_disc_path, std::string(prepared.project_identity));
-    const auto packed_sha256 =
-        katana::io::capture_input_provenance("packed-disc", packed_disc_path).sha256;
-    const auto packed_manifest_path = canonical_root / "content" / "game.katana-disc.json";
-    write_port_file(canonical_root,
-                    "content/game.katana-disc.json",
-                    katana::runtime::format_packed_disc_manifest(packed_info, packed_sha256),
-                    true);
-    std::filesystem::create_directories(canonical_root / "runtime");
-    std::filesystem::create_directories(canonical_root / "user-data");
-    const auto write = write_codegen_project(canonical_root / "generated", std::move(artifacts));
-    write_port_file(canonical_root, "CMakeLists.txt", root_cmake());
-    write_port_file(canonical_root,
-                    ".gitignore",
-                    "/build/\n/build-*/\n/content/*.katana-disc\n");
-    write_port_file(
-        canonical_root,
-        "LOCAL_CONTENT_NOTICE.txt",
-        "LOCAL RETAIL CONTENT - DO NOT DISTRIBUTE\n\n"
-        "content/*.katana-disc contains the complete source disc, including raw and audio "
-        "sectors.\nIt may only be created and used locally from a lawfully possessed disc, or "
-        "distributed when you hold all required distribution rights.\n\n"
-        "A distributable port must exclude every *.katana-disc file and use an installer or "
-        "patch workflow that asks each user for their original disc.\n"
-        "Keep the original GDI and track files as the authoritative source; this export never "
-        "modifies or deletes them.\n",
-        true);
     const auto* boot_segment =
         prepared.image.find_segment(prepared.boot_address, prepared.boot_size);
     if (boot_segment == nullptr)
@@ -1228,15 +1246,41 @@ PortExportResult export_dreamcast_port_project(const PreparedPortProgram& prepar
     const auto boot_bytes =
         std::string_view(reinterpret_cast<const char*>(boot_segment->bytes.data() + *boot_offset),
                          prepared.boot_size);
+    const auto boot_sha256 = katana::io::sha256_bytes(boot_bytes);
+    const auto recipe = katana::runtime::make_disc_install_recipe(
+        *disc_source, std::string(prepared.project_identity), boot_sha256);
+    const auto recipe_path = canonical_root / "content" / "game.katana-install";
+    write_port_file(canonical_root,
+                    "content/game.katana-install",
+                    katana::runtime::format_disc_install_recipe(recipe),
+                    true);
+    std::filesystem::create_directories(canonical_root / "runtime");
+    std::filesystem::create_directories(canonical_root / "user-data" / "content");
+    const auto write = write_codegen_project(canonical_root / "generated", std::move(artifacts));
+    write_port_file(canonical_root, "CMakeLists.txt", root_cmake());
+    write_port_file(canonical_root,
+                    ".gitignore",
+                    "/build/\n/build-*/\n/user-data/\n/content/*.katana-disc\n*.katana-disc\n");
+    write_port_file(
+        canonical_root,
+        "INSTALL_ORIGINAL_DISC.txt",
+        "ORIGINAL DISC REQUIRED - DISTRIBUTABLE PORT\n\n"
+        "This package contains native AOT code and a hash/layout recipe, but no retail disc "
+        "sectors.\nRun: game.exe --install-disc <path-to-your-own-disc.gdi>\n\n"
+        "The installer validates descriptor, region-bearing boot data, complete track layout "
+        "and SHA-256 identities before creating user-data/content/game.katana-disc locally.\n"
+        "That local cache contains complete retail data and must never be redistributed.\n"
+        "The original GDI and tracks are opened read-only and are never modified or deleted.\n",
+        true);
     write_port_file(canonical_root,
                     "src/main.cpp",
                     handwritten_main(entry_namespace,
                                      prepared.hle_bios_abi,
                                      options.diagnostic_partial,
                                      prepared.inputs,
-                                     prepared.project_identity,
-                                     packed_info.content_identity,
-                                     katana::io::sha256_bytes(boot_bytes),
+                                     recipe.job_generation,
+                                     recipe.content_identity,
+                                     boot_sha256,
                                      prepared.entry_address),
                     true);
 
@@ -1246,15 +1290,13 @@ PortExportResult export_dreamcast_port_project(const PreparedPortProgram& prepar
     result.partitions = partitions.size();
     result.generated_files = write.written_files.size();
     result.removed_files = write.removed_files.size();
-    result.packed_disc = packed_disc_path;
-    result.packed_disc_manifest = packed_manifest_path;
-    result.packed_disc_identity = packed_info.content_identity;
-    result.packed_sectors = packed_info.packed_sectors;
-    result.packed_disc_bytes = packed_info.pack_size;
-    result.uncompressed_disc_bytes = packed_info.uncompressed_size;
+    result.disc_install_recipe = recipe_path;
+    result.job_generation = recipe.job_generation;
+    result.content_identity = recipe.content_identity;
+    result.disc_tracks = recipe.tracks.size();
     result.checkpoints = {"gdi-validated",
-                          "disc-pack-written",
-                          "disc-pack-verified",
+                          "disc-recipe-written",
+                          "retail-content-excluded",
                           "boot-image-loaded",
                           "analysis-complete",
                           "ir-lowered",

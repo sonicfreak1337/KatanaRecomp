@@ -215,6 +215,7 @@ add_library(katana_runtime STATIC
     src/runtime/io_port.cpp
     src/runtime/dma.cpp
     src/runtime/disc.cpp
+    src/runtime/disc_install.cpp
     src/runtime/dreamcast_boot.cpp
     src/runtime/dreamcast_memory.cpp
     src/runtime/executable_modules.cpp

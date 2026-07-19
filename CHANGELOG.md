@@ -4,6 +4,12 @@
 
 ### Geaendert
 
+- Der spielagnostische Portexport erzeugt fuer verteilbare Pakete keinen
+  vollstaendigen Disc-Pack mehr. `game.katana-install` enthaelt ausschliesslich
+  versionierte Hash-, Boot- und Trackgeometrie; `game.exe --install-disc
+  <eigene.gdi>` prueft die eigene Originaldisc vollstaendig und erzeugt den
+  Retailcache atomar nur unter `user-data/content/`. Die Recipe enthaelt weder
+  Tracknamen noch Hostpfade, und der Exportbaum besitzt null Retailsektoren.
 - Der SH-4-ISA-Audit deckt die zuvor fehlenden offiziellen SH7750-Befehle
   `LDTLB`, `OCBI` und `MOVCA.L` nun durch Decoder, IR und nativen C++-Backendpfad
   ab. LDTLB kopiert PTEH/PTEL/PTEA in den per MMUCR.URC gewaehlten UTLB-Eintrag;

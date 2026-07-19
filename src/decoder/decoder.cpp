@@ -345,15 +345,14 @@ DecodedInstruction decode(const std::uint16_t opcode) {
     if (matches_metadata(opcode, InstructionKind::Ocbi) ||
         matches_metadata(opcode, InstructionKind::Ocbp) ||
         matches_metadata(opcode, InstructionKind::Ocbwb)) {
-        instruction.kind = matches_metadata(opcode, InstructionKind::Ocbi)
-                               ? InstructionKind::Ocbi
-                               : matches_metadata(opcode, InstructionKind::Ocbp)
-                                     ? InstructionKind::Ocbp
-                                     : InstructionKind::Ocbwb;
+        instruction.kind = matches_metadata(opcode, InstructionKind::Ocbi) ? InstructionKind::Ocbi
+                           : matches_metadata(opcode, InstructionKind::Ocbp)
+                               ? InstructionKind::Ocbp
+                               : InstructionKind::Ocbwb;
         instruction.source_register = static_cast<std::uint8_t>((opcode >> 8u) & 0x0Fu);
-        const auto mnemonic = instruction.kind == InstructionKind::Ocbi
-                                  ? "ocbi @"
-                                  : instruction.kind == InstructionKind::Ocbp ? "ocbp @" : "ocbwb @";
+        const auto mnemonic = instruction.kind == InstructionKind::Ocbi   ? "ocbi @"
+                              : instruction.kind == InstructionKind::Ocbp ? "ocbp @"
+                                                                          : "ocbwb @";
         instruction.text = std::string(mnemonic) + register_name(instruction.source_register);
         return instruction;
     }

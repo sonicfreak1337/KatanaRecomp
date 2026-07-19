@@ -317,35 +317,44 @@ int main() {
                 timing_source.find("base_guest_cycles_per_instruction * 3u") == std::string::npos,
             "Zwei Gastinstruktionen werden nicht als genau zwei Zyklen gezaehlt.");
 
-    require(katana::ir::lowering_operation_for_instruction(katana::sh4::InstructionKind::LoadTlb) ==
-                    katana::ir::Operation::LoadTlb &&
-                katana::ir::lowering_operation_for_instruction(
-                    katana::sh4::InstructionKind::Ocbi) == katana::ir::Operation::Ocbi &&
-                katana::ir::lowering_operation_for_instruction(katana::sh4::InstructionKind::Ocbp) ==
-                    katana::ir::Operation::Ocbp &&
-                katana::ir::lowering_operation_for_instruction(
-                    katana::sh4::InstructionKind::Ocbwb) == katana::ir::Operation::Ocbwb &&
-                katana::ir::lowering_operation_for_instruction(
-                    katana::sh4::InstructionKind::MovcaLong) == katana::ir::Operation::MovcaLong,
-            "LDTLB/OCBI/OCBP/OCBWB/MOVCA.L werden nicht in eigene IR-Operationen abgesenkt.");
-    constexpr std::array<std::uint8_t, 14> cache_bytes = {0x38u, 0x00u, 0x93u, 0x07u,
-                                                          0xA3u, 0x05u, 0xB3u, 0x0Cu,
-                                                          0xC3u, 0x09u, 0x0Bu, 0x00u,
-                                                          0x09u, 0x00u};
+    require(
+        katana::ir::lowering_operation_for_instruction(katana::sh4::InstructionKind::LoadTlb) ==
+                katana::ir::Operation::LoadTlb &&
+            katana::ir::lowering_operation_for_instruction(katana::sh4::InstructionKind::Ocbi) ==
+                katana::ir::Operation::Ocbi &&
+            katana::ir::lowering_operation_for_instruction(katana::sh4::InstructionKind::Ocbp) ==
+                katana::ir::Operation::Ocbp &&
+            katana::ir::lowering_operation_for_instruction(katana::sh4::InstructionKind::Ocbwb) ==
+                katana::ir::Operation::Ocbwb &&
+            katana::ir::lowering_operation_for_instruction(
+                katana::sh4::InstructionKind::MovcaLong) == katana::ir::Operation::MovcaLong,
+        "LDTLB/OCBI/OCBP/OCBWB/MOVCA.L werden nicht in eigene IR-Operationen abgesenkt.");
+    constexpr std::array<std::uint8_t, 14> cache_bytes = {0x38u,
+                                                          0x00u,
+                                                          0x93u,
+                                                          0x07u,
+                                                          0xA3u,
+                                                          0x05u,
+                                                          0xB3u,
+                                                          0x0Cu,
+                                                          0xC3u,
+                                                          0x09u,
+                                                          0x0Bu,
+                                                          0x00u,
+                                                          0x09u,
+                                                          0x00u};
     const auto cache_lines = katana::sh4::disassemble(cache_bytes, 0x4000u);
     constexpr std::array<std::uint32_t, 1> cache_seeds = {0x4000u};
     const auto cache_functions = katana::analysis::discover_functions(cache_lines, cache_seeds);
     const auto cache_program = katana::ir::lower_program(cache_lines, cache_functions);
     const auto cache_source = katana::codegen::emit_cpp_program(cache_program, 0x4000u);
-    require(cache_source.find("load_tlb(cpu)") != std::string::npos &&
-                cache_source.find("OperandCacheOperation::Invalidate, cpu.r[7]") !=
-                    std::string::npos &&
-                cache_source.find("OperandCacheOperation::Purge, cpu.r[5]") != std::string::npos &&
-                cache_source.find("OperandCacheOperation::WriteBack, cpu.r[12]") !=
-                    std::string::npos &&
-                cache_source.find("cpu.memory.write_u32(cpu.r[9], cpu.r[0])") !=
-                    std::string::npos,
-            "Der C++-Emitter laesst LDTLB/cache instructions aus oder verwechselt Register.");
+    require(
+        cache_source.find("load_tlb(cpu)") != std::string::npos &&
+            cache_source.find("OperandCacheOperation::Invalidate, cpu.r[7]") != std::string::npos &&
+            cache_source.find("OperandCacheOperation::Purge, cpu.r[5]") != std::string::npos &&
+            cache_source.find("OperandCacheOperation::WriteBack, cpu.r[12]") != std::string::npos &&
+            cache_source.find("cpu.memory.write_u32(cpu.r[9], cpu.r[0])") != std::string::npos,
+        "Der C++-Emitter laesst LDTLB/cache instructions aus oder verwechselt Register.");
 
     std::cout << "Alle C++-Codegenerator-Tests erfolgreich.\n";
 

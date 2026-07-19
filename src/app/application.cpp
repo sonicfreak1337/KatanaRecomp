@@ -15,8 +15,8 @@
 #include "katana/ir/verifier.hpp"
 #include "katana/platform/dreamcast_disc.hpp"
 #include "katana/platform/firmware_profile.hpp"
+#include "katana/runtime/disc_install.hpp"
 #include "katana/runtime/gdi.hpp"
-#include "katana/runtime/packed_disc.hpp"
 
 #include <algorithm>
 #include <charconv>
@@ -1590,25 +1590,31 @@ JobResult ApplicationService::execute(const JobRequest& request,
                         const auto executable_sha256 = artifact_hash(published_executable);
                         const auto content_root = work_root / "content";
                         std::filesystem::create_directories(content_root);
-                        const auto published_pack = content_root / "game.katana-disc";
+                        const auto published_recipe = content_root / "game.katana-install";
                         std::filesystem::copy_file(
-                            port_export.packed_disc,
-                            published_pack,
+                            port_export.disc_install_recipe,
+                            published_recipe,
                             std::filesystem::copy_options::overwrite_existing);
-                        auto packed = runtime::PackedDiscSource::open(published_pack);
-                        packed->verify_all_chunks();
-                        auto packed_info = packed->info();
-                        packed.reset();
-                        const auto packed_sha256 = artifact_hash(published_pack);
-                        const auto published_manifest = content_root / "game.katana-disc.json";
+                        const auto recipe = runtime::parse_disc_install_recipe(published_recipe);
+                        if (recipe.job_generation != result.project_identity ||
+                            recipe.content_identity != port_export.content_identity)
+                            throw std::runtime_error(
+                                "Disc-Installations-Recipe besitzt eine falsche Jobbindung.");
+                        const auto recipe_sha256 = artifact_hash(published_recipe);
+                        const auto published_manifest = content_root / "game.katana-install.json";
                         write_atomic(published_manifest,
-                                     runtime::format_packed_disc_manifest(
-                                         packed_info,
-                                         packed_sha256,
-                                         executable_sha256,
-                                         (std::filesystem::path("..") / executable.filename())
-                                             .generic_string(),
-                                         std::filesystem::file_size(published_executable)));
+                                     "{\"schema\":\"katana-disc-install\",\"version\":1,"
+                                     "\"job_generation\":\"" +
+                                         result.project_identity + "\",\"content_identity\":\"" +
+                                         recipe.content_identity +
+                                         "\",\"artifacts\":[{\"role\":"
+                                         "\"disc_install_recipe\",\"path\":"
+                                         "\"game.katana-install\",\"sha256\":\"" +
+                                         recipe_sha256 +
+                                         "\"},{\"role\":\"host_executable\",\"path\":"
+                                         "\"../" +
+                                         executable.filename().generic_string() +
+                                         "\",\"sha256\":\"" + executable_sha256 + "\"}]}\n");
                         const auto package_runtime_root = work_root / "runtime";
                         std::filesystem::create_directories(package_runtime_root);
                         const auto runtime_manifest =
@@ -1626,15 +1632,15 @@ JobResult ApplicationService::execute(const JobRequest& request,
                              1u,
                              result.project_identity});
                         result.artifacts.push_back(
-                            {"packed_disc",
-                             std::filesystem::path("content") / "game.katana-disc",
-                             packed_sha256,
-                             std::filesystem::file_size(published_pack),
-                             runtime::packed_disc_format_version,
+                            {"disc_install_recipe",
+                             std::filesystem::path("content") / "game.katana-install",
+                             recipe_sha256,
+                             std::filesystem::file_size(published_recipe),
+                             runtime::disc_install_recipe_version,
                              result.project_identity});
                         result.artifacts.push_back(
-                            {"packed_disc_manifest",
-                             std::filesystem::path("content") / "game.katana-disc.json",
+                            {"disc_install_manifest",
+                             std::filesystem::path("content") / "game.katana-install.json",
                              artifact_hash(published_manifest),
                              std::filesystem::file_size(published_manifest),
                              1u,

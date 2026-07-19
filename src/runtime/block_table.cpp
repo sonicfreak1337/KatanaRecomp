@@ -95,7 +95,8 @@ void RuntimeBlockTable::seal_static() noexcept {
 
 RuntimeBlockHandle RuntimeBlockTable::register_bootstrap_static(RuntimeBlock block) {
     if (static_sealed_) {
-        throw std::logic_error("Statischer Bootstrapblock muss vor der statischen Registry installiert werden.");
+        throw std::logic_error(
+            "Statischer Bootstrapblock muss vor der statischen Registry installiert werden.");
     }
     return insert(std::move(block), false);
 }

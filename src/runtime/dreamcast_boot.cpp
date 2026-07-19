@@ -53,9 +53,8 @@ std::uint16_t flash_block_crc(const std::span<const std::uint8_t> block) {
     for (std::size_t index = 0u; index < 62u; ++index) {
         value ^= static_cast<std::uint16_t>(block[index]) << 8u;
         for (unsigned bit = 0u; bit < 8u; ++bit)
-            value = (value & 0x8000u) != 0u
-                        ? static_cast<std::uint16_t>((value << 1u) ^ 0x1021u)
-                        : static_cast<std::uint16_t>(value << 1u);
+            value = (value & 0x8000u) != 0u ? static_cast<std::uint16_t>((value << 1u) ^ 0x1021u)
+                                            : static_cast<std::uint16_t>(value << 1u);
     }
     return static_cast<std::uint16_t>(~value);
 }
@@ -78,11 +77,9 @@ void seed_erased_dreamcast_flash(PersistentImage& image, const DreamcastRegion r
         }))
         return;
 
-    const std::string_view factory = region == DreamcastRegion::Europe
-                                         ? "00211Dreamcast  "
-                                     : region == DreamcastRegion::NorthAmerica
-                                         ? "00110Dreamcast  "
-                                         : "00000Dreamcast  ";
+    const std::string_view factory = region == DreamcastRegion::Europe         ? "00211Dreamcast  "
+                                     : region == DreamcastRegion::NorthAmerica ? "00110Dreamcast  "
+                                                                               : "00000Dreamcast  ";
     const auto factory_bytes = std::span<const std::uint8_t>(
         reinterpret_cast<const std::uint8_t*>(factory.data()), factory.size());
     image.write(0x1A000u, factory_bytes);

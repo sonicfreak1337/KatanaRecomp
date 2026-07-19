@@ -1175,10 +1175,8 @@ std::vector<Function> lower_program(const katana::analysis::ControlFlowAnalysisR
     std::sort(all_entries.begin(), all_entries.end());
     all_entries.erase(std::unique(all_entries.begin(), all_entries.end()), all_entries.end());
     for (const auto& supplemental : supplemental_functions) {
-        auto supplemental_ir = lower_function(analysis.recursive.instructions,
-                                               supplemental,
-                                               analysis.resolved_edges,
-                                               all_entries);
+        auto supplemental_ir = lower_function(
+            analysis.recursive.instructions, supplemental, analysis.resolved_edges, all_entries);
         for (const auto& block : supplemental_ir.blocks) {
             for (const auto& instruction : block.instructions) {
                 if (instruction.operation == Operation::Call && instruction.target_address)
@@ -1192,10 +1190,9 @@ std::vector<Function> lower_program(const katana::analysis::ControlFlowAnalysisR
             }
         }
         std::sort(supplemental_ir.direct_callees.begin(), supplemental_ir.direct_callees.end());
-        supplemental_ir.direct_callees.erase(
-            std::unique(supplemental_ir.direct_callees.begin(),
-                        supplemental_ir.direct_callees.end()),
-            supplemental_ir.direct_callees.end());
+        supplemental_ir.direct_callees.erase(std::unique(supplemental_ir.direct_callees.begin(),
+                                                         supplemental_ir.direct_callees.end()),
+                                             supplemental_ir.direct_callees.end());
         std::sort(supplemental_ir.indirect_call_sites.begin(),
                   supplemental_ir.indirect_call_sites.end());
         supplemental_ir.indirect_call_sites.erase(

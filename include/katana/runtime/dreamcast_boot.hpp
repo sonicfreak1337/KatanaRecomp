@@ -33,7 +33,8 @@ inline constexpr std::uint16_t dreamcast_composite_port_a_input = 0x0300u;
 enum class DreamcastRuntimeFirmwareMode : std::uint8_t { Direct, HleBiosAbi };
 enum class DreamcastRegion : std::uint8_t { Japan, NorthAmerica, Europe };
 
-[[nodiscard]] DreamcastRegion dreamcast_region_from_area_symbols(std::string_view area_symbols) noexcept;
+[[nodiscard]] DreamcastRegion
+dreamcast_region_from_area_symbols(std::string_view area_symbols) noexcept;
 
 struct DreamcastMutableStorageConfig {
     std::string project_identity;

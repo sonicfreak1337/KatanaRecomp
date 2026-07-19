@@ -1,4 +1,5 @@
 #include "katana/io/input_provenance.hpp"
+#include "katana/runtime/disc_install.hpp"
 #include "katana/runtime/dreamcast_boot.hpp"
 #include "katana/runtime/iso9660.hpp"
 #include "katana/runtime/packed_disc.hpp"
@@ -119,15 +120,15 @@ void rewrite_metadata_hash(std::vector<std::uint8_t>& bytes) {
     constexpr std::size_t hash_offset = 144u;
     const auto metadata_size = static_cast<std::size_t>(get_u64(bytes, 48u));
     std::fill_n(bytes.begin() + static_cast<std::ptrdiff_t>(hash_offset), 32u, std::uint8_t{0u});
-    const auto hash_text = katana::io::sha256_bytes(std::string_view(
-        reinterpret_cast<const char*>(bytes.data()), metadata_size));
+    const auto hash_text = katana::io::sha256_bytes(
+        std::string_view(reinterpret_cast<const char*>(bytes.data()), metadata_size));
     for (std::size_t index = 0u; index < 32u; ++index) {
         const auto hex = [](const char value) -> std::uint8_t {
             return value <= '9' ? static_cast<std::uint8_t>(value - '0')
                                 : static_cast<std::uint8_t>(value - 'a' + 10);
         };
-        bytes[hash_offset + index] = static_cast<std::uint8_t>(
-            (hex(hash_text[index * 2u]) << 4u) | hex(hash_text[index * 2u + 1u]));
+        bytes[hash_offset + index] = static_cast<std::uint8_t>((hex(hash_text[index * 2u]) << 4u) |
+                                                               hex(hash_text[index * 2u + 1u]));
     }
 }
 
@@ -208,6 +209,32 @@ int main() {
     require(manifest.find(fixture.root.string()) == std::string::npos &&
                 manifest.find("disc.gdi") == std::string::npos,
             "Disc-Pack-Manifest enthaelt Hostpfade oder Eingabenamen.");
+    const auto recipe = make_disc_install_recipe(*gdi, generation_a, std::string(64u, 'c'));
+    const auto recipe_path = fixture.root / "output" / "game.katana-install";
+    {
+        std::ofstream output(recipe_path, std::ios::binary | std::ios::trunc);
+        output << format_disc_install_recipe(recipe);
+    }
+    const auto parsed_recipe = parse_disc_install_recipe(recipe_path);
+    verify_disc_install_source(parsed_recipe, *gdi);
+    const auto installed_path = fixture.root / "output" / "installed.katana-disc";
+    const auto installed = install_disc_content(parsed_recipe, gdi_path, installed_path);
+    require(installed.content_identity == info.content_identity &&
+                hash(installed_path) == hash(pack_path) && read_bytes(recipe_path).size() < 4096u,
+            "Generische Recipe installiert keinen identischen lokalen Contentcache.");
+    auto wrong_recipe = parsed_recipe;
+    wrong_recipe.tracks[0].lba += 1u;
+    require_failure([&] { verify_disc_install_source(wrong_recipe, *gdi); },
+                    "Semantisch falsche Trackgeometrie wurde vom Installer akzeptiert.");
+    wrong_recipe = parsed_recipe;
+    wrong_recipe.tracks[0].sha256 = std::string(64u, '0');
+    require_failure([&] { verify_disc_install_source(wrong_recipe, *gdi); },
+                    "Falscher Trackhash wurde vom Installer akzeptiert.");
+    const auto recipe_text = format_disc_install_recipe(parsed_recipe);
+    require(recipe_text.find(fixture.root.string()) == std::string::npos &&
+                recipe_text.find("disc.gdi") == std::string::npos &&
+                recipe_text.find("audio.raw") == std::string::npos,
+            "Distributions-Recipe enthaelt Hostpfade oder Quelldateinamen.");
 
     const auto deterministic_path = fixture.root / "output" / "second.katana-disc";
     const auto deterministic = write_packed_disc(*gdi, deterministic_path, generation_a);
@@ -242,12 +269,13 @@ int main() {
     std::filesystem::copy_file(pack_path, missing);
     std::filesystem::resize_file(missing, std::filesystem::file_size(missing) - 1u);
     require_failure([&] { static_cast<void>(PackedDiscSource::open(missing)); },
-                     "Ein fehlender oder abgeschnittener Chunk wurde nicht erkannt.");
+                    "Ein fehlender oder abgeschnittener Chunk wurde nicht erkannt.");
     constexpr std::size_t first_track = 192u;
     const auto unknown_payload = fixture.root / "output" / "unknown-payload.katana-disc";
     write_semantically_mutated_pack(pack_path, unknown_payload, first_track + 16u, 99u);
-    require_failure([&] { static_cast<void>(PackedDiscSource::open(unknown_payload)); },
-                    "Ein unbekannter Payload-Enumwert wurde trotz gueltigem Metadatenhash akzeptiert.");
+    require_failure(
+        [&] { static_cast<void>(PackedDiscSource::open(unknown_payload)); },
+        "Ein unbekannter Payload-Enumwert wurde trotz gueltigem Metadatenhash akzeptiert.");
     const auto tiny_sector = fixture.root / "output" / "tiny-sector.katana-disc";
     write_semantically_mutated_pack(pack_path, tiny_sector, first_track + 12u, 1u);
     require_failure([&] { static_cast<void>(PackedDiscSource::open(tiny_sector)); },

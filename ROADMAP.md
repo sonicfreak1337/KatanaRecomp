@@ -157,6 +157,7 @@ verwenden weiterhin ausschliesslich synthetische oder frei lizenzierte Quellen.
 
 ### Neue Integrationsaufgaben
 
+- [ ] `KR-4831` - generischer Originaldisc-Installer ohne Retaildaten im Portpaket
 - [ ] `KR-4811` - private Harnessmodi und technisch erzwungener No-run-Vertrag
 - [ ] `KR-4812` - strukturierte Runtimeevidenz, Budgets, Replay und Datenschutz
 - [ ] `KR-4813` - content-addressed Harness- und Portbuildbeschleunigung
@@ -170,6 +171,7 @@ verwenden weiterhin ausschliesslich synthetische oder frei lizenzierte Quellen.
 
 ```text
 KR-4705
+  -> KR-4831
   -> KR-4801, KR-4811, KR-4821 und KR-4824
   -> KR-4802
   -> KR-4803
@@ -184,6 +186,8 @@ Unabhaengige Aufgaben derselben Stufe duerfen parallel entwickelt werden.
 
 ### Gate
 
+- verteilbare Ports enthalten nur AOT-Code und eine generische Originaldisc-
+  Recipe; vollstaendige Retaildaten entstehen erst lokal beim Nutzer
 - externe Ports bauen gegen ein versioniertes minimales Runtime-SDK
 - CLI und GUI erzeugen denselben Port- und Buildplan
 - `game.exe` stammt nachweisbar aus dem aktuellen Job und nicht aus einem

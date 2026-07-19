@@ -53,6 +53,7 @@ fuer neue Arbeit. Diese Zuordnung gilt als korrigierter Planungsfehler.
 | KR-4822 | GUI-Informationsarchitektur und responsives Layout |
 | KR-4823 | Diagnostik-, Ergebnis-, Log- und Workflow-QOL |
 | KR-4824 | Unveraenderliche Task-ID-Registry und Roadmaplinter |
+| KR-4831 | Generischer Originaldisc-Installer ohne Retaildaten im Portpaket |
 | KR-4911 | Runtimebeobachtung, Replay und Fehlerpakete |
 | KR-4912 | Dynamische Codebereiche, Module und Overlays |
 | KR-4913 | CPU-/Plattform-Bring-up bis `KR_GUEST_PROGRAM_ENTERED` |

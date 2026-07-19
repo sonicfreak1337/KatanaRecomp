@@ -47,7 +47,7 @@ class Sh4IoPort final {
     std::uint16_t gpio_interrupt_control_ = 0u;
 };
 
-[[nodiscard]] std::shared_ptr<Sh4IoPort>
-map_sh4_io_ports(Memory& memory, Sh4IoPortInputs inputs = {});
+[[nodiscard]] std::shared_ptr<Sh4IoPort> map_sh4_io_ports(Memory& memory,
+                                                          Sh4IoPortInputs inputs = {});
 
 } // namespace katana::runtime

@@ -150,7 +150,10 @@ dokumentiert.
 # Extern buildbares Portprojekt aus einer lokalen GDI erzeugen
 .\build-current\katana-recomp.exe port .\disc\game.gdi --output C:\ports\game --target-name game
 
-# Das atomar veroeffentlichte Portpaket aus seinem lokalen Content starten
+# Einmalig die eigene unveraenderte Originaldisc pruefen und lokalen Content installieren
+C:\ports\game\game.exe --install-disc .\disc\game.gdi
+
+# Danach aus dem lokalen, nicht verteilbaren Nutzercache starten
 C:\ports\game\game.exe
 ```
 
@@ -175,10 +178,14 @@ Der Port-Export liest private Disc-Dateien nur lokal, schreibt ausschliesslich
 verwaltete Dateien unter `generated/` neu und erhaelt handgeschriebenen Code
 unter `src/`. Details: [docs/PORT_EXPORT.md](docs/PORT_EXPORT.md).
 Die `game.exe` bettet keine Disc-Daten oder privaten Hostpfade ein. Der Export
-legt stattdessen ein generisches, portables Disc-Pack unter `content/` an; die
-urspruengliche GDI bleibt read-only und wird fuer den normalen Start des
-erzeugten Pakets nicht mehr benoetigt. Fehlender oder beschaedigter Content
-endet mit einem Nichtnull-Exitcode und redigierter Diagnose.
+legt stattdessen nur eine spielagnostische `game.katana-install`-Recipe mit
+Hashes, Bootbindung und Trackgeometrie unter `content/` an. Sie enthaelt keine
+Retailsektoren, Tracknamen oder Hostpfade. Jeder Nutzer stellt beim einmaligen
+`--install-disc`-Schritt die eigene Original-GDI bereit; erst dann entsteht
+unter `user-data/content/` ein lokaler, nicht verteilbarer Disc-Cache. Quelle
+und Tracks bleiben read-only und werden niemals veraendert oder geloescht.
+Fehlende oder abweichende Originaldaten enden vor Gastcode mit einem
+Nichtnull-Exitcode und redigierter Diagnose.
 
 Der generierte SH-4-Pfad erzwingt den privilegierten Modus fuer markierte
 Systemregister- und Kontrollinstruktionen. Ein Zugriff aus dem User-Modus wird

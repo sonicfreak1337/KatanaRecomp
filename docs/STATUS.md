@@ -2,10 +2,22 @@
 
 Abgeschlossener interner Meilenstein: `v0.47.0`
 Phase: `v0.48.0` - Integration
-Naechster Roadmap-Task: `KR-4801`
+Naechster Roadmap-Task: `KR-4831`
 Naechstes Gate: `v0.48.0` - Integration
 Weitere interne Gates: `v0.48.0` Integration und `v0.49.0` Alpha-Candidate
 Erster oeffentlicher Release: `v0.50.0` Alpha
+
+## KR-4831 P0 in Arbeit
+
+Der verteilbare Portexport schreibt keinen vollstaendigen Retail-Disc-Pack
+mehr. Er veroeffentlicht eine spielagnostische, pfadfreie
+`game.katana-install`-Recipe mit Descriptor-, Boot-, Content- und
+Track-SHA-256 sowie der kanonischen Trackgeometrie. Der generierte native
+AOT-Port verlangt einmalig `game.exe --install-disc <eigene.gdi>`, validiert
+die Originaldisc vollstaendig und erzeugt den lokalen Pack atomar nur unter
+`user-data/content/`. Synthetische Differenz-, Negativ- und CLI-End-to-End-
+Tests sind gruen; Sonic Adventure PAL und Sonic Shuffle PAL bleiben private,
+read-only Kompatibilitaetsfixtures und erhalten keine Sonderlogik.
 
 ## KR-4704 technisch bestanden
 

@@ -122,8 +122,8 @@ std::size_t bytes_per_pixel(const PvrFramebufferFormat format) {
 }
 } // namespace
 
-std::optional<PvrScanoutDescriptor>
-decode_pvr_scanout(const PvrRegisterFile& registers, const std::size_t vram_size) {
+std::optional<PvrScanoutDescriptor> decode_pvr_scanout(const PvrRegisterFile& registers,
+                                                       const std::size_t vram_size) {
     const auto control = registers.read(pvr_register::FramebufferReadControl);
     if ((control & 1u) == 0u) return std::nullopt;
 
@@ -142,16 +142,13 @@ decode_pvr_scanout(const PvrRegisterFile& registers, const std::size_t vram_size
     }
     const auto width = line_bytes / pixel_bytes;
     const auto height = static_cast<std::size_t>((size >> 10u) & 0x3FFu) + 1u;
-    const auto modulus_bytes =
-        checked_multiply(static_cast<std::size_t>((size >> 20u) & 0x3FFu),
-                         4u,
-                         "PVR-Scanout-Modulus ist zu gross.");
-    const auto stride =
-        checked_add(line_bytes, modulus_bytes, "PVR-Scanout-Stride ist zu gross.");
-    const auto base = static_cast<std::size_t>(
-        registers.read(pvr_register::FramebufferReadSof1) & 0x007FFFFCu);
-    const auto image_bytes = checked_multiply(
-        stride, height, "PVR-Scanout-VRAM-Ausdehnung ist zu gross.");
+    const auto modulus_bytes = checked_multiply(
+        static_cast<std::size_t>((size >> 20u) & 0x3FFu), 4u, "PVR-Scanout-Modulus ist zu gross.");
+    const auto stride = checked_add(line_bytes, modulus_bytes, "PVR-Scanout-Stride ist zu gross.");
+    const auto base =
+        static_cast<std::size_t>(registers.read(pvr_register::FramebufferReadSof1) & 0x007FFFFCu);
+    const auto image_bytes =
+        checked_multiply(stride, height, "PVR-Scanout-VRAM-Ausdehnung ist zu gross.");
     if (checked_add(base, image_bytes, "PVR-Scanout-Endadresse laeuft ueber.") > vram_size) {
         throw std::out_of_range("PVR-Scanout liegt ausserhalb des VRAM-Abbilds.");
     }
@@ -171,9 +168,8 @@ void PvrFramebuffer::configure(const std::uint32_t width,
         throw std::invalid_argument("Ungueltige PVR-Framebuffer-Geometrie oder Stride.");
     }
     const auto pixel_bytes = bytes_per_pixel(format);
-    const auto minimum_stride = checked_multiply(static_cast<std::size_t>(width),
-                                                 pixel_bytes,
-                                                 "PVR-Framebuffer-Zeilenbreite ist zu gross.");
+    const auto minimum_stride = checked_multiply(
+        static_cast<std::size_t>(width), pixel_bytes, "PVR-Framebuffer-Zeilenbreite ist zu gross.");
     if (static_cast<std::size_t>(stride_bytes) < minimum_stride) {
         throw std::invalid_argument("Ungueltige PVR-Framebuffer-Geometrie oder Stride.");
     }
@@ -204,8 +200,8 @@ PvrFrame PvrFramebuffer::capture(const std::span<const std::uint8_t> vram,
     PvrFrame frame{width_, height_, std::vector<std::uint8_t>(rgba_size)};
     for (std::uint32_t y = 0u; y < height_; ++y) {
         for (std::uint32_t x = 0u; x < width_; ++x) {
-            const auto source = base_offset + static_cast<std::size_t>(y) * stride_ +
-                                x * bytes_per_pixel(format_);
+            const auto source =
+                base_offset + static_cast<std::size_t>(y) * stride_ + x * bytes_per_pixel(format_);
             const auto destination = (static_cast<std::size_t>(y) * width_ + x) * 4u;
             if (format_ == PvrFramebufferFormat::Rgb888) {
                 frame.rgba[destination] = vram[source + 2u];

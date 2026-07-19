@@ -49,19 +49,42 @@ endif()
 
 execute_process(
   COMMAND "${game}"
+  RESULT_VARIABLE missing_cache_result
+  OUTPUT_VARIABLE missing_cache_output
+  ERROR_VARIABLE missing_cache_error
+)
+if(missing_cache_result EQUAL 0 OR NOT EXISTS "${fixture}/port/content/game.katana-install" OR
+   EXISTS "${fixture}/port/content/game.katana-disc")
+  file(REMOVE_RECURSE "${fixture}")
+  message(FATAL_ERROR "Distributionsport startet ohne Originaldisc-Installation oder enthaelt Retailsektoren")
+endif()
+
+execute_process(
+  COMMAND "${game}" --install-disc "${fixture}/disc/disc.gdi"
+  RESULT_VARIABLE install_result
+  OUTPUT_VARIABLE install_output
+  ERROR_VARIABLE install_error
+)
+if(NOT install_result EQUAL 0 OR NOT install_output MATCHES "KATANA_DISC_INSTALL_OK" OR
+   NOT EXISTS "${fixture}/port/user-data/content/game.katana-disc")
+  file(REMOVE_RECURSE "${fixture}")
+  message(FATAL_ERROR "Originaldisc-Installation fehlgeschlagen: ${install_output} ${install_error}")
+endif()
+
+execute_process(
+  COMMAND "${game}"
   RESULT_VARIABLE game_result
   OUTPUT_VARIABLE game_output
   ERROR_VARIABLE game_error
 )
-if(NOT game_result EQUAL 0 OR
-   NOT game_output MATCHES "KR_GENERATED_RUNTIME_STARTED" OR
+if(NOT game_result EQUAL 0 OR NOT game_output MATCHES "KR_GENERATED_RUNTIME_STARTED" OR
    NOT game_output MATCHES "KR_GUEST_PROGRAM_ENTERED")
   file(REMOVE_RECURSE "${fixture}")
-  message(FATAL_ERROR "Porttarget startet nicht aus dem Standard-Disc-Pack: ${game_output} ${game_error}")
+  message(FATAL_ERROR "Porttarget startet nicht aus dem lokal installierten Cache: ${game_output} ${game_error}")
 endif()
 
 execute_process(
-  COMMAND "${game}" --content "${fixture}/port/content/game.katana-disc"
+  COMMAND "${game}" --content "${fixture}/port/user-data/content/game.katana-disc"
   RESULT_VARIABLE generated_result
   OUTPUT_VARIABLE generated_output
   ERROR_VARIABLE generated_error
@@ -136,6 +159,16 @@ if(WIN32)
   set(trap_game "${fixture}/trap-port/trap_game.exe")
 else()
   set(trap_game "${fixture}/trap-port/trap_game")
+endif()
+execute_process(
+  COMMAND "${trap_game}" --install-disc "${fixture}/trap-disc/disc.gdi"
+  RESULT_VARIABLE trap_install_result
+  OUTPUT_VARIABLE trap_install_output
+  ERROR_VARIABLE trap_install_error
+)
+if(NOT trap_install_result EQUAL 0)
+  file(REMOVE_RECURSE "${fixture}")
+  message(FATAL_ERROR "Trap-Originaldisc-Installation fehlgeschlagen: ${trap_install_output} ${trap_install_error}")
 endif()
 execute_process(
   COMMAND "${trap_game}"

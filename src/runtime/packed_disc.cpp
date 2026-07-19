@@ -123,13 +123,10 @@ bool valid_track_payload(const GdiTrackType type,
                          const PackedDiscPayloadKind kind,
                          const std::uint32_t offset) noexcept {
     if (!supported_sector_size(sector_size)) return false;
-    if (type == GdiTrackType::Audio)
-        return kind == PackedDiscPayloadKind::NotData && offset == 0u;
+    if (type == GdiTrackType::Audio) return kind == PackedDiscPayloadKind::NotData && offset == 0u;
     if (type != GdiTrackType::Data) return false;
-    if (sector_size == 2048u)
-        return kind == PackedDiscPayloadKind::Fixed && offset == 0u;
-    if (sector_size == 2336u)
-        return kind == PackedDiscPayloadKind::Fixed && offset == 8u;
+    if (sector_size == 2048u) return kind == PackedDiscPayloadKind::Fixed && offset == 0u;
+    if (sector_size == 2336u) return kind == PackedDiscPayloadKind::Fixed && offset == 8u;
     return (sector_size == 2352u || sector_size == 2448u) &&
            kind == PackedDiscPayloadKind::SectorMode && offset == 0u;
 }
@@ -466,8 +463,7 @@ std::vector<std::uint8_t> PackedDiscSource::read_data_sectors(const std::uint64_
             if (track.payload_kind == PackedDiscPayloadKind::SectorMode) {
                 if (track.sector_size <= 15u || raw_offset > raw.size() ||
                     track.sector_size > raw.size() - raw_offset)
-                    throw std::runtime_error(
-                        "Katana-Disc-Pack-Raw-Datensektor ist abgeschnitten.");
+                    throw std::runtime_error("Katana-Disc-Pack-Raw-Datensektor ist abgeschnitten.");
                 const auto mode = raw[raw_offset + 15u];
                 if (mode != 1u && mode != 2u)
                     throw std::runtime_error(
@@ -596,8 +592,6 @@ PackedDiscInfo write_packed_disc(const GdiDiscSource& source,
     info.uncompressed_size = uncompressed_size;
     info.chunk_count = chunk_count;
     info.tracks.reserve(source_tracks.size());
-    std::vector<std::string> chunk_hashes;
-    chunk_hashes.reserve(static_cast<std::size_t>(chunk_count));
     std::uint64_t next_data_offset = data_offset;
     std::uint64_t next_chunk = 0u;
     std::uint32_t session = 1u;
@@ -643,7 +637,6 @@ PackedDiscInfo write_packed_disc(const GdiDiscSource& source,
             if (!output)
                 throw std::runtime_error("Disc-Pack-Chunk konnte nicht geschrieben werden.");
             track_integrity << hash << ';';
-            chunk_hashes.push_back(hash);
             next_data_offset += raw.size();
             first_sector += count;
             ++next_chunk;
@@ -664,17 +657,7 @@ PackedDiscInfo write_packed_disc(const GdiDiscSource& source,
         put_sha256(metadata, offset + 64u, track.integrity_sha256);
         info.tracks.push_back(std::move(track));
     }
-    std::ostringstream identity_material;
-    identity_material << "katana-disc-v" << packed_disc_format_version << ';';
-    for (const auto& track : info.tracks)
-        identity_material << track.number << ':' << track.lba << ':'
-                          << static_cast<unsigned>(track.type) << ':' << track.sector_size << ':'
-                          << static_cast<unsigned>(track.payload_kind) << ':'
-                          << track.payload_offset << ':' << track.session << ':'
-                          << track.sector_count << ':' << track.integrity_sha256 << ';';
-    for (const auto& hash : chunk_hashes)
-        identity_material << hash << ';';
-    info.content_identity = katana::io::sha256_bytes(identity_material.str());
+    info.content_identity = gdi_content_identity(source.descriptor());
     put_sha256(metadata, 80u, info.content_identity);
     std::fill_n(metadata.begin() + static_cast<std::ptrdiff_t>(metadata_hash_offset),
                 32u,

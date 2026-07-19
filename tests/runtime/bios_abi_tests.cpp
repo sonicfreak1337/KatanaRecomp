@@ -38,25 +38,25 @@ int main() {
     install_hle_bios_abi(cpu.memory, blocks, handoff, {}, 42u, &tracker);
     const auto vectors = hle_bios_abi_vectors();
     const auto bootstrap_handle = blocks.lookup(vectors[0].handler_address, {});
-    const auto bootstrap_block = bootstrap_handle ? blocks.resolve(*bootstrap_handle) : std::nullopt;
+    const auto bootstrap_block =
+        bootstrap_handle ? blocks.resolve(*bootstrap_handle) : std::nullopt;
     require(bootstrap_block.has_value() && !bootstrap_block->get().runtime_registered,
             "Fester BIOS-Bootstrapblock ist nicht statisch dispatchbar.");
     const auto static_handles = blocks.register_static_bulk({{0x8C010000u,
-                                                               0x0C010000u,
-                                                               4u,
-                                                               BlockEndKind::Return,
-                                                               {},
-                                                               bootstrap_block->get().function,
-                                                               "generated-after-bios-bootstrap"}});
+                                                              0x0C010000u,
+                                                              4u,
+                                                              BlockEndKind::Return,
+                                                              {},
+                                                              bootstrap_block->get().function,
+                                                              "generated-after-bios-bootstrap"}});
     const auto static_block = blocks.resolve(static_handles.front());
     require(static_block.has_value(), "Statischer AOT-Testblock ist nicht aufloesbar.");
-    static_cast<void>(tracker.register_block(
-        {stable_runtime_block_identity(static_block->get()),
-         static_block->get().physical_origin,
-         static_block->get().size,
-         "generated-port",
-         {},
-         ExecutableBlockOrigin::ImageSegment}));
+    static_cast<void>(tracker.register_block({stable_runtime_block_identity(static_block->get()),
+                                              static_block->get().physical_origin,
+                                              static_block->get().size,
+                                              "generated-port",
+                                              {},
+                                              ExecutableBlockOrigin::ImageSegment}));
     blocks.bind_code_tracker(&tracker);
     require(vectors.size() == 6u && blocks.size() == 7u &&
                 blocks.lookup(0x8C010000u, {}).has_value() &&
@@ -85,10 +85,8 @@ int main() {
     require(init_exit.kind == BlockEndKind::Return && cpu.pc == cpu.pr && cpu.r[0] == 0u,
             "Installierter BIOS-ABI-Runtimeblock kehrt nicht ueber den gemeinsamen Blockvertrag "
             "zurueck.");
-    require(cpu.memory.read_u8(0x8C000068u) == 0xA0u &&
-                cpu.memory.read_u8(0x8C00006Fu) == 0xA7u &&
-                cpu.memory.read_u8(0x8C000070u) == '0' &&
-                cpu.memory.read_u8(0x8C000077u) == 0u,
+    require(cpu.memory.read_u8(0x8C000068u) == 0xA0u && cpu.memory.read_u8(0x8C00006Fu) == 0xA7u &&
+                cpu.memory.read_u8(0x8C000070u) == '0' && cpu.memory.read_u8(0x8C000077u) == 0u,
             "SYSINFO_INIT baut den 24-Byte-Systemblock nicht aus Flash und Nullpadding auf.");
     cpu.pc = vectors[0].handler_address;
     cpu.r[7] = 3u;
@@ -135,15 +133,13 @@ int main() {
             "FLASHROM_WRITE programmiert keine Flashbytes mit echter 1->0-Semantik.");
     cpu.r[4] = 0x10000u;
     static_cast<void>(invoke_flash(3u));
-    require(cpu.r[0] == 0u &&
-                cpu.memory.read_u8(dreamcast_flash_physical_base + 0x10000u) == 0xFFu,
+    require(cpu.r[0] == 0u && cpu.memory.read_u8(dreamcast_flash_physical_base + 0x10000u) == 0xFFu,
             "FLASHROM_DELETE loescht eine gueltige Partition nicht sektorweise.");
     cpu.r[4] = static_cast<std::uint32_t>(dreamcast_flash_size - 1u);
     cpu.r[5] = 0x8C002100u;
     cpu.r[6] = 2u;
     static_cast<void>(invoke_flash(1u));
-    require(cpu.r[0] == 0xFFFFFFFFu,
-            "FLASHROM_READ akzeptiert einen ueberlaufenden Flashbereich.");
+    require(cpu.r[0] == 0xFFFFFFFFu, "FLASHROM_READ akzeptiert einen ueberlaufenden Flashbereich.");
 
     cpu.pc = vectors[3].handler_address;
     cpu.r[6] = 0u;

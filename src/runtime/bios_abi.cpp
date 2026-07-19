@@ -49,7 +49,8 @@ std::uint32_t execute_flash_call(CpuState& cpu, const std::uint32_t selector) no
         const auto buffer = cpu.r[5];
         const auto size = cpu.r[6];
         if (selector == 0u) {
-            if (offset >= kFlashPartitions.size() || !cpu.memory.contains(buffer, 8u)) return 0xFFFFFFFFu;
+            if (offset >= kFlashPartitions.size() || !cpu.memory.contains(buffer, 8u))
+                return 0xFFFFFFFFu;
             const auto partition = kFlashPartitions[offset];
             cpu.memory.write_u32(buffer, partition.offset, CodeWriteSource::Copy);
             cpu.memory.write_u32(buffer + 4u, partition.size, CodeWriteSource::Copy);
@@ -79,21 +80,18 @@ std::uint32_t execute_flash_call(CpuState& cpu, const std::uint32_t selector) no
             return size;
         }
         if (selector == 3u) {
-            const auto found = std::find_if(kFlashPartitions.begin(),
-                                            kFlashPartitions.end(),
-                                            [offset](const auto partition) {
-                                                return partition.offset == offset;
-                                            });
+            const auto found =
+                std::find_if(kFlashPartitions.begin(),
+                             kFlashPartitions.end(),
+                             [offset](const auto partition) { return partition.offset == offset; });
             if (found == kFlashPartitions.end()) return 0xFFFFFFFFu;
             for (std::uint32_t sector = 0u; sector < found->size;
                  sector += static_cast<std::uint32_t>(dreamcast_flash_sector_size)) {
                 flash_unlock(cpu, 0x80u);
-                cpu.memory.write_u8(dreamcast_flash_physical_base +
-                                        dreamcast_flash_unlock_address_1,
-                                    0xAAu);
-                cpu.memory.write_u8(dreamcast_flash_physical_base +
-                                        dreamcast_flash_unlock_address_2,
-                                    0x55u);
+                cpu.memory.write_u8(
+                    dreamcast_flash_physical_base + dreamcast_flash_unlock_address_1, 0xAAu);
+                cpu.memory.write_u8(
+                    dreamcast_flash_physical_base + dreamcast_flash_unlock_address_2, 0x55u);
                 cpu.memory.write_u8(dreamcast_flash_physical_base + offset + sector, 0x30u);
             }
             return 0u;
@@ -155,8 +153,7 @@ BlockExit bios_abi_block(CpuState& cpu, BlockExecutionContext& context) {
                                    routed.selector,
                                    routed.super_selector,
                                    "service-unavailable:" + std::string(routed.service));
-    cpu.r[0] = routed.vector == BiosAbiVectorKind::Flash
-                   ? execute_flash_call(cpu, routed.selector)
+    cpu.r[0] = routed.vector == BiosAbiVectorKind::Flash ? execute_flash_call(cpu, routed.selector)
                : routed.vector == BiosAbiVectorKind::SysInfo
                    ? execute_sysinfo_call(cpu, routed.selector)
                    : 0u;
@@ -299,13 +296,13 @@ void install_hle_bios_abi(Memory& memory,
         const auto identity = stable_runtime_block_identity(block);
         static_cast<void>(blocks.register_bootstrap_static(std::move(block)));
         if (code_tracker != nullptr) {
-            static_cast<void>(code_tracker->register_block(
-                {identity,
-                 canonical_physical_address(vector.handler_address),
-                 4u,
-                 "hle-generated-handler",
-                 {},
-                 ExecutableBlockOrigin::RomRamCopy}));
+            static_cast<void>(
+                code_tracker->register_block({identity,
+                                              canonical_physical_address(vector.handler_address),
+                                              4u,
+                                              "hle-generated-handler",
+                                              {},
+                                              ExecutableBlockOrigin::RomRamCopy}));
         }
         handoff.install_runtime_symbol({"bios-vector-" + std::string(vector.name),
                                         vector.slot_address,

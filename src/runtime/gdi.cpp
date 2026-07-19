@@ -213,6 +213,21 @@ GdiDescriptor parse_gdi_descriptor(const std::filesystem::path& descriptor_path)
     return result;
 }
 
+std::string gdi_content_identity(const GdiDescriptor& descriptor) {
+    if (descriptor.tracks.empty())
+        throw std::invalid_argument("GDI-Content-Identitaet braucht mindestens einen Track.");
+    std::ostringstream material;
+    material << "katana-install-content-v1;";
+    for (const auto& track : descriptor.tracks) {
+        if (track.sha256.size() != 64u)
+            throw std::invalid_argument("GDI-Content-Identitaet braucht Track-SHA-256-Werte.");
+        material << track.number << ':' << track.lba << ':' << static_cast<unsigned>(track.type)
+                 << ':' << track.sector_size << ':' << track.file_offset << ':'
+                 << track.sector_count << ':' << track.sha256 << ';';
+    }
+    return katana::io::sha256_bytes(material.str());
+}
+
 std::shared_ptr<GdiDiscSource> GdiDiscSource::open(const std::filesystem::path& descriptor_path) {
     return std::shared_ptr<GdiDiscSource>(new GdiDiscSource(parse_gdi_descriptor(descriptor_path)));
 }

@@ -1,6 +1,7 @@
 #include "katana/codegen/port_export.hpp"
 #include "katana/ir/lower.hpp"
 #include "katana/platform/dreamcast_disc.hpp"
+#include "katana/runtime/disc_install.hpp"
 #include "katana/runtime/dreamcast_boot.hpp"
 
 #include <algorithm>
@@ -196,8 +197,7 @@ int run_test(const int argc, char* argv[]) {
                 runtime_cpu.memory.read_u16(0x8C010000u) == 0xE00Au &&
                 runtime_state.runtime_blocks && runtime_state.runtime_blocks->size() == 0u &&
                 runtime_state.system_asic && runtime_state.interrupt_router &&
-                runtime_state.cache_control &&
-                runtime_state.io_ports &&
+                runtime_state.cache_control && runtime_state.io_ports &&
                 runtime_cpu.memory.read_u16(katana::runtime::sh4_port_data_a_address) ==
                     katana::runtime::dreamcast_composite_port_a_input &&
                 runtime_cpu.memory.read_u32(katana::runtime::sh4_cache_control_address) == 0u,
@@ -262,16 +262,22 @@ int run_test(const int argc, char* argv[]) {
     require(first.functions == 2u && first.partitions == 2u && first.checkpoints.size() == 8u &&
                 first.checkpoints.back() == "port-project-written",
             "Synthetische GDI durchlaeuft den Portexport nicht vollstaendig.");
-    require(std::filesystem::exists(output / "content" / "game.katana-disc") &&
-                std::filesystem::exists(output / "content" / "game.katana-disc.json") &&
-                read_text(output / ".gitignore").find("/content/*.katana-disc") !=
+    require(std::filesystem::exists(output / "content" / "game.katana-install") &&
+                !std::filesystem::exists(output / "content" / "game.katana-disc") &&
+                read_text(output / ".gitignore").find("*.katana-disc") != std::string::npos &&
+                read_text(output / "INSTALL_ORIGINAL_DISC.txt").find("ORIGINAL DISC REQUIRED") !=
                     std::string::npos &&
-                read_text(output / "LOCAL_CONTENT_NOTICE.txt")
-                        .find("DO NOT DISTRIBUTE") != std::string::npos &&
-                read_text(output / "LOCAL_CONTENT_NOTICE.txt")
-                        .find("original disc") != std::string::npos &&
-                first.packed_sectors == 47u && first.packed_disc_bytes != 0u,
-            "Portexport kennzeichnet oder schuetzt den lokalen Disc-Pack nicht vollstaendig.");
+                read_text(output / "INSTALL_ORIGINAL_DISC.txt").find("never modified or deleted") !=
+                    std::string::npos &&
+                first.disc_tracks == 3u,
+            "Portexport trennt distributionsfaehige Recipe und lokalen Retailcache nicht.");
+    const auto recipe = katana::runtime::parse_disc_install_recipe(first.disc_install_recipe);
+    require(recipe.tracks.size() == 3u && recipe.content_identity == first.content_identity &&
+                recipe.job_generation == first.job_generation &&
+                read_text(first.disc_install_recipe).find("low.bin") == std::string::npos &&
+                read_text(first.disc_install_recipe).find(fixture.root.string()) ==
+                    std::string::npos,
+            "Generische Disc-Recipe verliert Bindung oder enthaelt private Quellpfade.");
     require(unit != generated_before.end(),
             "Portexport besitzt keine deterministische Translation Unit.");
     std::size_t entry_metadata_count = 0u;
@@ -314,10 +320,9 @@ int run_test(const int argc, char* argv[]) {
                     .find("register_executable_block(table, services, 0x8C010000u") !=
                 std::string::npos &&
             generated_before.at("code/runtime-dispatch.cpp")
-                    .find("append_static_block(static_blocks, 0x8C010000u") !=
+                    .find("append_static_block(static_blocks, 0x8C010000u") != std::string::npos &&
+            generated_before.at("code/runtime-dispatch.cpp").find("static_blocks.push_back({") ==
                 std::string::npos &&
-            generated_before.at("code/runtime-dispatch.cpp")
-                    .find("static_blocks.push_back({") == std::string::npos &&
             generated_before.at("code/runtime-dispatch.cpp")
                     .find("if (const auto registered_handle = table.lookup(0x8C010000u") ==
                 std::string::npos &&
@@ -331,12 +336,12 @@ int run_test(const int argc, char* argv[]) {
                 std::string::npos &&
             generated_before.at("code/runtime-dispatch.cpp")
                     .find("Runtime-Blockbudget erschoepft") != std::string::npos &&
-            generated_before.at("code/runtime-dispatch.cpp")
-                    .find("KATANA_PORT_BLOCK_LIMIT") != std::string::npos &&
-            generated_before.at("code/runtime-dispatch.cpp")
-                    .find("poll_host_lifecycle") != std::string::npos &&
-            generated_before.at("code/runtime-dispatch.cpp")
-                    .find("PlatformShutdownRequested") != std::string::npos &&
+            generated_before.at("code/runtime-dispatch.cpp").find("KATANA_PORT_BLOCK_LIMIT") !=
+                std::string::npos &&
+            generated_before.at("code/runtime-dispatch.cpp").find("poll_host_lifecycle") !=
+                std::string::npos &&
+            generated_before.at("code/runtime-dispatch.cpp").find("PlatformShutdownRequested") !=
+                std::string::npos &&
             generated_before.at("code/runtime-dispatch.cpp").find("blocks < 1000000u") ==
                 std::string::npos &&
             generated_before.at("include/katana_port.hpp").find("runtime_only_profile_json") !=
@@ -359,20 +364,16 @@ int run_test(const int argc, char* argv[]) {
                 std::string::npos &&
             read_text(output / "src" / "main.cpp").find("create_native_video_output") !=
                 std::string::npos &&
-            read_text(output / "src" / "main.cpp").find("pump_host_events") !=
-                std::string::npos &&
-            read_text(output / "src" / "main.cpp").find("KR_HOST_SHUTDOWN") !=
-                std::string::npos &&
+            read_text(output / "src" / "main.cpp").find("pump_host_events") != std::string::npos &&
+            read_text(output / "src" / "main.cpp").find("KR_HOST_SHUTDOWN") != std::string::npos &&
             read_text(output / "src" / "main.cpp").find("framebuffer.capture") !=
                 std::string::npos &&
             read_text(output / "src" / "main.cpp").find("decode_pvr_scanout") !=
                 std::string::npos &&
             read_text(output / "src" / "main.cpp").find("KATANA_PORT_PROGRESS") !=
                 std::string::npos &&
-            read_text(output / "src" / "main.cpp").find("exception_cause=") !=
-                std::string::npos &&
-            read_text(output / "src" / "main.cpp").find("cpu.expevt") !=
-                std::string::npos &&
+            read_text(output / "src" / "main.cpp").find("exception_cause=") != std::string::npos &&
+            read_text(output / "src" / "main.cpp").find("cpu.expevt") != std::string::npos &&
             read_text(output / "src" / "main.cpp").find("cpu.spc") != std::string::npos &&
             read_text(output / "src" / "main.cpp").find("framebuffer.configure(640u") ==
                 std::string::npos &&

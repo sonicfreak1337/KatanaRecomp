@@ -47,6 +47,7 @@ struct GdiIoCounters {
 };
 
 [[nodiscard]] GdiDescriptor parse_gdi_descriptor(const std::filesystem::path& descriptor_path);
+[[nodiscard]] std::string gdi_content_identity(const GdiDescriptor& descriptor);
 
 class GdiDiscSource final : public DiscSource {
   public:

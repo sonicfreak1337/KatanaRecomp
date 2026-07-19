@@ -20,7 +20,7 @@
 #include "katana/ir/serialize.hpp"
 #include "katana/platform/dreamcast_disc.hpp"
 #include "katana/platform/firmware_diagnostics.hpp"
-#include "katana/runtime/packed_disc.hpp"
+#include "katana/runtime/disc_install.hpp"
 #include "katana/sh4/decoder.hpp"
 #include "katana/sh4/disassembler.hpp"
 #include "katana/sh4/isa_coverage.hpp"
@@ -990,13 +990,12 @@ int export_port_project(const std::filesystem::path& gdi_path,
         auto configure = std::string("cmake -S ") + shell_quote(report.output_root) + " -B " +
                          shell_quote(build_path);
 #ifdef _WIN32
-        configure += " -DCMAKE_RUNTIME_OUTPUT_DIRECTORY_RELWITHDEBINFO=" +
-                     shell_quote(build_path);
+        configure += " -DCMAKE_RUNTIME_OUTPUT_DIRECTORY_RELWITHDEBINFO=" + shell_quote(build_path);
 #else
         configure += " -G Ninja";
 #endif
-        configure += " -DCMAKE_BUILD_TYPE=RelWithDebInfo -DKATANA_RUNTIME_ROOT=" +
-                     shell_quote(runtime_root);
+        configure +=
+            " -DCMAKE_BUILD_TYPE=RelWithDebInfo -DKATANA_RUNTIME_ROOT=" + shell_quote(runtime_root);
         if (std::system(configure.c_str()) != 0) {
             throw katana::cli::Error(katana::cli::ExitCode::BuildFailure,
                                      "Port-Hostbuild konnte nicht konfiguriert werden.");
@@ -1021,30 +1020,35 @@ int export_port_project(const std::filesystem::path& gdi_path,
         std::filesystem::copy_file(built_executable,
                                    published_executable,
                                    std::filesystem::copy_options::overwrite_existing);
-        auto packed = katana::runtime::PackedDiscSource::open(report.packed_disc);
-        packed->verify_all_chunks();
-        const auto packed_info = packed->info();
-        packed.reset();
-        const auto pack_sha256 =
-            katana::io::capture_input_provenance("packed-disc", report.packed_disc).sha256;
+        const auto recipe = katana::runtime::parse_disc_install_recipe(report.disc_install_recipe);
+        if (recipe.job_generation != report.job_generation ||
+            recipe.content_identity != report.content_identity)
+            throw std::runtime_error("Disc-Installations-Recipe besitzt eine falsche Bindung.");
+        const auto recipe_sha256 =
+            katana::io::capture_input_provenance("disc-install-recipe", report.disc_install_recipe)
+                .sha256;
         const auto executable_sha256 =
             katana::io::capture_input_provenance("host-executable", published_executable).sha256;
-        std::ofstream manifest(report.packed_disc_manifest, std::ios::binary | std::ios::trunc);
-        manifest << katana::runtime::format_packed_disc_manifest(
-            packed_info,
-            pack_sha256,
-            executable_sha256,
-            (std::filesystem::path("..") / published_executable.filename()).generic_string(),
-            std::filesystem::file_size(published_executable));
+        const auto install_manifest = report.output_root / "content" / "game.katana-install.json";
+        std::ofstream manifest(install_manifest, std::ios::binary | std::ios::trunc);
+        manifest << "{\"schema\":\"katana-disc-install\",\"version\":1,"
+                    "\"job_generation\":\""
+                 << recipe.job_generation << "\",\"content_identity\":\"" << recipe.content_identity
+                 << "\",\"artifacts\":["
+                 << "{\"role\":\"disc_install_recipe\",\"path\":\"game.katana-install\","
+                    "\"sha256\":\""
+                 << recipe_sha256 << "\"},{\"role\":\"host_executable\",\"path\":\"../"
+                 << published_executable.filename().generic_string() << "\",\"sha256\":\""
+                 << executable_sha256 << "\"}]}\n";
         if (!manifest)
-            throw std::runtime_error("Disc-Pack-Manifest konnte nicht finalisiert werden.");
+            throw std::runtime_error("Disc-Installationsmanifest konnte nicht finalisiert werden.");
         manifest.close();
         std::filesystem::create_directories(report.output_root / "runtime");
         std::ofstream runtime_manifest(report.output_root / "runtime" / "runtime-dependencies.json",
                                        std::ios::binary | std::ios::trunc);
         runtime_manifest << "{\"schema\":\"katana-runtime-dependencies\",\"version\":1,"
                             "\"linkage\":\"static\",\"job_generation\":\""
-                         << packed_info.job_generation << "\",\"files\":[]}\n";
+                         << recipe.job_generation << "\",\"files\":[]}\n";
         if (!runtime_manifest)
             throw std::runtime_error(
                 "Runtime-Abhaengigkeitsmanifest konnte nicht geschrieben werden.");
@@ -1066,8 +1070,8 @@ int export_port_project(const std::filesystem::path& gdi_path,
         std::cout << "Portpaket erzeugt: " << absolute_output.string() << '\n'
                   << "Funktionen: " << report.functions << '\n'
                   << "Partitionen: " << report.partitions << '\n'
-                  << "Disc-Pack-Sektoren: " << report.packed_sectors << '\n'
-                  << "Disc-Pack-Bytes: " << report.packed_disc_bytes << '\n'
+                  << "Installations-Recipe-Tracks: " << report.disc_tracks << '\n'
+                  << "Retail-Sektoren im Portpaket: 0\n"
                   << "Optimierter Hostbuild erfolgreich: " << target_name << '\n';
         return 0;
     } catch (...) {

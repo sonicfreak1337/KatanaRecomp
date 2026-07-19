@@ -161,10 +161,11 @@ bool complete_port_artifacts(const katana::app::JobResult& job, const std::files
                           artifact.job_generation == job.project_identity;
                }) != job.artifacts.end();
     };
-    return required("host_executable") && required("packed_disc") &&
-           required("packed_disc_manifest") && required("runtime_dependencies") &&
-           std::filesystem::exists(root / "content" / "game.katana-disc") &&
-           std::filesystem::exists(root / "content" / "game.katana-disc.json") &&
+    return required("host_executable") && required("disc_install_recipe") &&
+           required("disc_install_manifest") && required("runtime_dependencies") &&
+           std::filesystem::exists(root / "content" / "game.katana-install") &&
+           std::filesystem::exists(root / "content" / "game.katana-install.json") &&
+           !std::filesystem::exists(root / "content" / "game.katana-disc") &&
            std::filesystem::exists(root / "runtime" / "runtime-dependencies.json") &&
            std::filesystem::is_directory(root / "user-data") &&
            !std::filesystem::exists(root / "sourcecode" / "content");

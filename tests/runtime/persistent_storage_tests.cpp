@@ -161,16 +161,11 @@ int main() {
     pal_config.region = DreamcastRegion::Europe;
     auto pal_storage = DreamcastMutableStorage::open(pal_config);
     const auto& pal_flash = pal_storage->flash_image();
-    require(pal_flash->read_byte(0x1A000u) == '0' &&
-                pal_flash->read_byte(0x1A001u) == '0' &&
-                pal_flash->read_byte(0x1A002u) == '2' &&
-                pal_flash->read_byte(0x1A003u) == '1' &&
-                pal_flash->read_byte(0x1A004u) == '1' &&
-                pal_flash->read_byte(0x1A005u) == 'D' &&
-                pal_flash->read_byte(0x1C000u) == 'K' &&
-                pal_flash->read_byte(0x1C010u) == 2u &&
-                pal_flash->read_byte(0x1C040u) == 5u &&
-                pal_flash->read_byte(0x1C047u) == 1u &&
+    require(pal_flash->read_byte(0x1A000u) == '0' && pal_flash->read_byte(0x1A001u) == '0' &&
+                pal_flash->read_byte(0x1A002u) == '2' && pal_flash->read_byte(0x1A003u) == '1' &&
+                pal_flash->read_byte(0x1A004u) == '1' && pal_flash->read_byte(0x1A005u) == 'D' &&
+                pal_flash->read_byte(0x1C000u) == 'K' && pal_flash->read_byte(0x1C010u) == 2u &&
+                pal_flash->read_byte(0x1C040u) == 5u && pal_flash->read_byte(0x1C047u) == 1u &&
                 pal_flash->read_byte(0x1FFC0u) == 0x7Fu &&
                 pal_flash->source_byte(0x1A000u) == 0xFFu,
             "Erstes PAL-Portprofil erzeugt kein gueltiges, quellgetrenntes Europa-Flash.");
