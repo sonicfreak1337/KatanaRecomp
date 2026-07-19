@@ -114,6 +114,26 @@ PackedDiscPayloadKind payload_kind(const GdiTrack& track) {
                : PackedDiscPayloadKind::Fixed;
 }
 
+bool supported_sector_size(const std::uint32_t value) noexcept {
+    return value == 2048u || value == 2336u || value == 2352u || value == 2448u;
+}
+
+bool valid_track_payload(const GdiTrackType type,
+                         const std::uint32_t sector_size,
+                         const PackedDiscPayloadKind kind,
+                         const std::uint32_t offset) noexcept {
+    if (!supported_sector_size(sector_size)) return false;
+    if (type == GdiTrackType::Audio)
+        return kind == PackedDiscPayloadKind::NotData && offset == 0u;
+    if (type != GdiTrackType::Data) return false;
+    if (sector_size == 2048u)
+        return kind == PackedDiscPayloadKind::Fixed && offset == 0u;
+    if (sector_size == 2336u)
+        return kind == PackedDiscPayloadKind::Fixed && offset == 8u;
+    return (sector_size == 2352u || sector_size == 2448u) &&
+           kind == PackedDiscPayloadKind::SectorMode && offset == 0u;
+}
+
 std::uint32_t payload_offset(const GdiTrack& track) {
     if (track.type == GdiTrackType::Audio) return 0u;
     return track.sector_size == 2336u ? 8u : 0u;
@@ -218,7 +238,10 @@ std::shared_ptr<PackedDiscSource> PackedDiscSource::open(const std::filesystem::
         track.lba = get_u32(metadata, offset + 4u);
         const auto type = get_u32(metadata, offset + 8u);
         track.sector_size = get_u32(metadata, offset + 12u);
-        track.payload_kind = static_cast<PackedDiscPayloadKind>(get_u32(metadata, offset + 16u));
+        const auto encoded_payload_kind = get_u32(metadata, offset + 16u);
+        if (encoded_payload_kind > static_cast<std::uint32_t>(PackedDiscPayloadKind::SectorMode))
+            throw std::runtime_error("Katana-Disc-Pack-Payloadtyp ist unbekannt.");
+        track.payload_kind = static_cast<PackedDiscPayloadKind>(encoded_payload_kind);
         track.payload_offset = get_u32(metadata, offset + 20u);
         track.session = get_u32(metadata, offset + 24u);
         track.sector_count = get_u64(metadata, offset + 32u);
@@ -227,10 +250,14 @@ std::shared_ptr<PackedDiscSource> PackedDiscSource::open(const std::filesystem::
         track.integrity_sha256 =
             encode_sha256(std::span<const std::uint8_t>(metadata).subspan(offset + 64u, 32u));
         if ((type != 0u && type != 4u) || track.number != index + 1u || track.sector_count == 0u ||
-            track.sector_size == 0u || track.session == 0u || track.first_chunk > chunk_count ||
+            track.session == 0u || track.first_chunk > chunk_count ||
             track.chunk_count > chunk_count - track.first_chunk)
             throw std::runtime_error("Katana-Disc-Pack-Tracktabelle ist ungueltig.");
         track.type = static_cast<GdiTrackType>(type);
+        if (!valid_track_payload(
+                track.type, track.sector_size, track.payload_kind, track.payload_offset))
+            throw std::runtime_error(
+                "Katana-Disc-Pack-Track besitzt ungueltige Sektor-/Payloadmetadaten.");
         if (index != 0u && track.lba <= info.tracks.back().lba)
             throw std::runtime_error("Katana-Disc-Pack-LBAs sind nicht streng aufsteigend.");
         const auto end_lba = static_cast<std::uint64_t>(track.lba) + track.sector_count;
@@ -437,6 +464,10 @@ std::vector<std::uint8_t> PackedDiscSource::read_data_sectors(const std::uint64_
             const auto raw_offset = sector * track.sector_size;
             std::size_t offset = track.payload_offset;
             if (track.payload_kind == PackedDiscPayloadKind::SectorMode) {
+                if (track.sector_size <= 15u || raw_offset > raw.size() ||
+                    track.sector_size > raw.size() - raw_offset)
+                    throw std::runtime_error(
+                        "Katana-Disc-Pack-Raw-Datensektor ist abgeschnitten.");
                 const auto mode = raw[raw_offset + 15u];
                 if (mode != 1u && mode != 2u)
                     throw std::runtime_error(

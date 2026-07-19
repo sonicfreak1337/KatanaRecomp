@@ -99,6 +99,48 @@ void write_bytes(const std::filesystem::path& path, const std::vector<std::uint8
                  static_cast<std::streamsize>(bytes.size()));
 }
 
+std::vector<std::uint8_t> read_bytes(const std::filesystem::path& path);
+
+void put_u32(std::vector<std::uint8_t>& bytes,
+             const std::size_t offset,
+             const std::uint32_t value) {
+    for (std::size_t index = 0u; index < 4u; ++index)
+        bytes[offset + index] = static_cast<std::uint8_t>(value >> (index * 8u));
+}
+
+std::uint64_t get_u64(const std::vector<std::uint8_t>& bytes, const std::size_t offset) {
+    std::uint64_t value = 0u;
+    for (std::size_t index = 0u; index < 8u; ++index)
+        value |= static_cast<std::uint64_t>(bytes[offset + index]) << (index * 8u);
+    return value;
+}
+
+void rewrite_metadata_hash(std::vector<std::uint8_t>& bytes) {
+    constexpr std::size_t hash_offset = 144u;
+    const auto metadata_size = static_cast<std::size_t>(get_u64(bytes, 48u));
+    std::fill_n(bytes.begin() + static_cast<std::ptrdiff_t>(hash_offset), 32u, std::uint8_t{0u});
+    const auto hash_text = katana::io::sha256_bytes(std::string_view(
+        reinterpret_cast<const char*>(bytes.data()), metadata_size));
+    for (std::size_t index = 0u; index < 32u; ++index) {
+        const auto hex = [](const char value) -> std::uint8_t {
+            return value <= '9' ? static_cast<std::uint8_t>(value - '0')
+                                : static_cast<std::uint8_t>(value - 'a' + 10);
+        };
+        bytes[hash_offset + index] = static_cast<std::uint8_t>(
+            (hex(hash_text[index * 2u]) << 4u) | hex(hash_text[index * 2u + 1u]));
+    }
+}
+
+void write_semantically_mutated_pack(const std::filesystem::path& source,
+                                     const std::filesystem::path& destination,
+                                     const std::size_t field_offset,
+                                     const std::uint32_t value) {
+    auto bytes = read_bytes(source);
+    put_u32(bytes, field_offset, value);
+    rewrite_metadata_hash(bytes);
+    write_bytes(destination, bytes);
+}
+
 std::vector<std::uint8_t> read_bytes(const std::filesystem::path& path) {
     std::ifstream input(path, std::ios::binary);
     return {std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>()};
@@ -200,7 +242,25 @@ int main() {
     std::filesystem::copy_file(pack_path, missing);
     std::filesystem::resize_file(missing, std::filesystem::file_size(missing) - 1u);
     require_failure([&] { static_cast<void>(PackedDiscSource::open(missing)); },
-                    "Ein fehlender oder abgeschnittener Chunk wurde nicht erkannt.");
+                     "Ein fehlender oder abgeschnittener Chunk wurde nicht erkannt.");
+    constexpr std::size_t first_track = 192u;
+    const auto unknown_payload = fixture.root / "output" / "unknown-payload.katana-disc";
+    write_semantically_mutated_pack(pack_path, unknown_payload, first_track + 16u, 99u);
+    require_failure([&] { static_cast<void>(PackedDiscSource::open(unknown_payload)); },
+                    "Ein unbekannter Payload-Enumwert wurde trotz gueltigem Metadatenhash akzeptiert.");
+    const auto tiny_sector = fixture.root / "output" / "tiny-sector.katana-disc";
+    write_semantically_mutated_pack(pack_path, tiny_sector, first_track + 12u, 1u);
+    require_failure([&] { static_cast<void>(PackedDiscSource::open(tiny_sector)); },
+                    "Ein zu kleiner Sektor wurde trotz gueltigem Metadatenhash akzeptiert.");
+    constexpr std::size_t second_track = first_track + 112u;
+    const auto bad_offset = fixture.root / "output" / "bad-offset.katana-disc";
+    write_semantically_mutated_pack(pack_path, bad_offset, second_track + 20u, 1u);
+    require_failure([&] { static_cast<void>(PackedDiscSource::open(bad_offset)); },
+                    "Ein falscher Payload-Offset wurde trotz gueltigem Metadatenhash akzeptiert.");
+    const auto bad_combination = fixture.root / "output" / "bad-combination.katana-disc";
+    write_semantically_mutated_pack(pack_path, bad_combination, second_track + 16u, 2u);
+    require_failure([&] { static_cast<void>(PackedDiscSource::open(bad_combination)); },
+                    "Eine ungueltige Sektorgroessen-/Payloadkombination wurde akzeptiert.");
     const auto blocked = fixture.root / "output" / "blocked.katana-disc";
     std::filesystem::create_directory(blocked);
     require_failure([&] { static_cast<void>(write_packed_disc(*gdi, blocked, generation_a)); },
