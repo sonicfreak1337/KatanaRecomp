@@ -42,6 +42,12 @@
 
 ### Korrigiert
 
+- Private AOT-Diagnoselaeufe wenden `KATANA_PORT_BLOCK_LIMIT` jetzt auf die
+  gesamte verschachtelte Dispatchsitzung statt erneut pro Dispatchkette an und
+  koennen mit `KATANA_PORT_PROGRESS_INTERVAL` belastbare Block-/PC-/Gastzyklus-
+  Zwischenstaende ausgeben. `KATANA_PORT_IGNORE_FOCUS=1` verhindert fuer
+  explizite unbeaufsichtigte Diagnosen eine dauerhafte Fokus-Pause, ohne den
+  normalen Fokusvertrag zu veraendern.
 - Die HLE-BIOS-ABI fuehrt FLASHROM_INFO, READ, WRITE und DELETE nun mit dem
   dokumentierten SH-4-Registervertrag, vollstaendigen Bereichspruefungen,
   echter Flash-Programmiersemantik und sektorweisem Loeschen aus. Neue lokale

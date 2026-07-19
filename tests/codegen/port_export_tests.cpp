@@ -320,6 +320,10 @@ int run_test(const int argc, char* argv[]) {
                     .find("register_executable_block(table, services, 0x8C010000u") !=
                 std::string::npos &&
             generated_before.at("code/runtime-dispatch.cpp")
+                    .find("executed_dispatch_blocks >= block_budget") != std::string::npos &&
+            generated_before.at("code/runtime-dispatch.cpp").find("KATANA_PORT_BLOCK_PROGRESS") !=
+                std::string::npos &&
+            generated_before.at("code/runtime-dispatch.cpp")
                     .find("append_static_block(static_blocks, 0x8C010000u") != std::string::npos &&
             generated_before.at("code/runtime-dispatch.cpp").find("static_blocks.push_back({") ==
                 std::string::npos &&
