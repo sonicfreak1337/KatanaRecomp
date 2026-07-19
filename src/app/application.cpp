@@ -16,6 +16,7 @@
 #include "katana/platform/dreamcast_disc.hpp"
 #include "katana/platform/firmware_profile.hpp"
 #include "katana/runtime/gdi.hpp"
+#include "katana/runtime/packed_disc.hpp"
 
 #include <algorithm>
 #include <charconv>
@@ -763,13 +764,29 @@ void configure_and_build(const std::filesystem::path& source,
     std::size_t requested_generator_size = 0u;
     static_cast<void>(
         _dupenv_s(&requested_generator, &requested_generator_size, "KATANA_HOST_BUILD_GENERATOR"));
-    const bool use_ninja = requested_generator != nullptr &&
-                           std::string_view(requested_generator) == "Ninja";
+    const bool use_ninja =
+        requested_generator != nullptr && std::string_view(requested_generator) == "Ninja";
     std::free(requested_generator);
-    configure += use_ninja ? " -G Ninja -DCMAKE_BUILD_TYPE=Debug"
-                           : " -G \"Visual Studio 17 2022\" -A x64";
+    if (use_ninja) {
+        configure += " -G Ninja -DCMAKE_BUILD_TYPE=Debug";
+        char* requested_make_program = nullptr;
+        std::size_t requested_make_program_size = 0u;
+        static_cast<void>(_dupenv_s(&requested_make_program,
+                                    &requested_make_program_size,
+                                    "KATANA_HOST_BUILD_MAKE_PROGRAM"));
+        if (requested_make_program != nullptr && *requested_make_program != '\0')
+            configure += " -DCMAKE_MAKE_PROGRAM=" +
+                         shell_quote(std::filesystem::path(requested_make_program));
+        std::free(requested_make_program);
+    } else {
+        configure += " -G \"Visual Studio 17 2022\" -A x64";
+    }
 #else
     configure += " -G Ninja -DCMAKE_BUILD_TYPE=Debug";
+    if (const auto* requested_make_program = std::getenv("KATANA_HOST_BUILD_MAKE_PROGRAM");
+        requested_make_program != nullptr && *requested_make_program != '\0')
+        configure +=
+            " -DCMAKE_MAKE_PROGRAM=" + shell_quote(std::filesystem::path(requested_make_program));
 #endif
     configure += " -DKATANA_RUNTIME_ROOT=" + shell_quote(runtime_root);
     try {
@@ -898,8 +915,8 @@ AnalysisCoverage analysis_coverage(const io::LoadedProject& project,
                 coverage.uncovered_runtime_materializable_bytes += range.size;
         }
     }
-    coverage.unknown_storage_bytes = coverage.precompile_classes[static_cast<std::size_t>(
-        analysis::PrecompileClass::Unknown)];
+    coverage.unknown_storage_bytes =
+        coverage.precompile_classes[static_cast<std::size_t>(analysis::PrecompileClass::Unknown)];
     coverage.unanalyzed_executable_bytes = coverage.unknown_storage_bytes +
                                            coverage.incomplete_initial_required_code_bytes +
                                            coverage.uncovered_runtime_materializable_bytes;
@@ -969,18 +986,20 @@ AnalysisCoverage analysis_coverage(const io::LoadedProject& project,
                                              project.image.entry_points().end());
     for (const auto& line : analysis.recursive.instructions)
         if (line.target_address.has_value()) required_targets.insert(*line.target_address);
-    for (const auto& edge : analysis.resolved_edges) required_targets.insert(edge.target_address);
+    for (const auto& edge : analysis.resolved_edges)
+        required_targets.insert(edge.target_address);
     const auto runtime_provenance_covers = [&](const std::uint32_t target) {
-        return std::any_of(inventory.ranges.begin(), inventory.ranges.end(), [&](const auto& range) {
-            const auto end = static_cast<std::uint64_t>(range.address) + range.size;
-            if (target < range.address || target >= end) return false;
-            if (range.precompile_class != analysis::PrecompileClass::LoadableModule &&
-                range.precompile_class != analysis::PrecompileClass::RuntimeMaterializable)
-                return false;
-            const auto& segment = project.image.segments()[range.segment_index];
-            return segment.source_kind != io::ImageSourceKind::Unknown &&
-                   !segment.local_source_name.empty();
-        });
+        return std::any_of(
+            inventory.ranges.begin(), inventory.ranges.end(), [&](const auto& range) {
+                const auto end = static_cast<std::uint64_t>(range.address) + range.size;
+                if (target < range.address || target >= end) return false;
+                if (range.precompile_class != analysis::PrecompileClass::LoadableModule &&
+                    range.precompile_class != analysis::PrecompileClass::RuntimeMaterializable)
+                    return false;
+                const auto& segment = project.image.segments()[range.segment_index];
+                return segment.source_kind != io::ImageSourceKind::Unknown &&
+                       !segment.local_source_name.empty();
+            });
     };
     for (const auto target : required_targets)
         if (!compiled_targets.contains(target) && !runtime_provenance_covers(target))
@@ -1020,13 +1039,10 @@ std::string build_plan_json(const std::string_view status,
            << ",\"materialization_attempts\":" << coverage.materialization_attempts
            << ",\"materialization_successes\":" << coverage.materialization_successes
            << ",\"materialization_rejections\":" << coverage.materialization_rejections
-           << ",\"materialization_budget_failures\":"
-           << coverage.materialization_budget_failures
-           << ",\"generation_revalidation_failures\":"
-           << coverage.generation_revalidation_failures
+           << ",\"materialization_budget_failures\":" << coverage.materialization_budget_failures
+           << ",\"generation_revalidation_failures\":" << coverage.generation_revalidation_failures
            << ",\"byte_identity_failures\":" << coverage.byte_identity_failures
-           << ",\"dispatch_validation_failures\":"
-           << coverage.dispatch_validation_failures
+           << ",\"dispatch_validation_failures\":" << coverage.dispatch_validation_failures
            << ",\"committed_executable_bytes\":" << coverage.committed_executable_bytes
            << ",\"analyzed_instruction_bytes\":" << coverage.analyzed_instruction_bytes
            << ",\"unanalyzed_executable_bytes\":" << coverage.unanalyzed_executable_bytes
@@ -1523,7 +1539,7 @@ JobResult ApplicationService::execute(const JobRequest& request,
                         const auto boot_size = project.image.segments().empty()
                                                    ? 0u
                                                    : project.image.segments().front().bytes.size();
-                        static_cast<void>(codegen::export_dreamcast_port_project(
+                        const auto port_export = codegen::export_dreamcast_port_project(
                             {project.image,
                              analysis,
                              program,
@@ -1535,7 +1551,7 @@ JobResult ApplicationService::execute(const JobRequest& request,
                              project.execution_profile.firmware_mode ==
                                  io::ProjectFirmwareMode::Hle},
                             host_root,
-                            {"game", request.tool_version, {}, {}}));
+                            {"game", request.tool_version, {}, {}});
                         require_not_cancelled(cancellation);
                         const auto host_build_root = work_root / ".katana-build";
                         events.emit(JobState::Running,
@@ -1557,11 +1573,11 @@ JobResult ApplicationService::execute(const JobRequest& request,
                                     JobStepStatus::Completed);
                         auto executable = host_build_root /
 #ifdef _WIN32
-                                                "Debug" / "game.exe";
+                                          "Debug" / "game.exe";
                         if (!std::filesystem::exists(executable))
                             executable = host_build_root / "game.exe";
 #else
-                                                "game";
+                                          "game";
 #endif
                         if (!std::filesystem::is_regular_file(executable))
                             throw std::runtime_error(
@@ -1571,9 +1587,68 @@ JobResult ApplicationService::execute(const JobRequest& request,
                             executable,
                             published_executable,
                             std::filesystem::copy_options::overwrite_existing);
-                        result.artifacts.push_back({"host-executable",
-                                                    executable.filename(),
-                                                    artifact_hash(published_executable)});
+                        const auto executable_sha256 = artifact_hash(published_executable);
+                        const auto content_root = work_root / "content";
+                        std::filesystem::create_directories(content_root);
+                        const auto published_pack = content_root / "game.katana-disc";
+                        std::filesystem::copy_file(
+                            port_export.packed_disc,
+                            published_pack,
+                            std::filesystem::copy_options::overwrite_existing);
+                        auto packed = runtime::PackedDiscSource::open(published_pack);
+                        packed->verify_all_chunks();
+                        auto packed_info = packed->info();
+                        packed.reset();
+                        const auto packed_sha256 = artifact_hash(published_pack);
+                        const auto published_manifest = content_root / "game.katana-disc.json";
+                        write_atomic(published_manifest,
+                                     runtime::format_packed_disc_manifest(
+                                         packed_info,
+                                         packed_sha256,
+                                         executable_sha256,
+                                         (std::filesystem::path("..") / executable.filename())
+                                             .generic_string(),
+                                         std::filesystem::file_size(published_executable)));
+                        const auto package_runtime_root = work_root / "runtime";
+                        std::filesystem::create_directories(package_runtime_root);
+                        const auto runtime_manifest =
+                            package_runtime_root / "runtime-dependencies.json";
+                        write_atomic(runtime_manifest,
+                                     "{\"schema\":\"katana-runtime-dependencies\",\"version\":1,"
+                                     "\"linkage\":\"static\",\"job_generation\":\"" +
+                                         result.project_identity + "\",\"files\":[]}\n");
+                        std::filesystem::create_directories(work_root / "user-data");
+                        result.artifacts.push_back(
+                            {"host_executable",
+                             executable.filename(),
+                             executable_sha256,
+                             std::filesystem::file_size(published_executable),
+                             1u,
+                             result.project_identity});
+                        result.artifacts.push_back(
+                            {"packed_disc",
+                             std::filesystem::path("content") / "game.katana-disc",
+                             packed_sha256,
+                             std::filesystem::file_size(published_pack),
+                             runtime::packed_disc_format_version,
+                             result.project_identity});
+                        result.artifacts.push_back(
+                            {"packed_disc_manifest",
+                             std::filesystem::path("content") / "game.katana-disc.json",
+                             artifact_hash(published_manifest),
+                             std::filesystem::file_size(published_manifest),
+                             1u,
+                             result.project_identity});
+                        result.artifacts.push_back(
+                            {"runtime_dependencies",
+                             std::filesystem::path("runtime") / "runtime-dependencies.json",
+                             artifact_hash(runtime_manifest),
+                             std::filesystem::file_size(runtime_manifest),
+                             1u,
+                             result.project_identity});
+                        std::filesystem::remove_all(host_root / "content");
+                        std::filesystem::remove_all(host_root / "runtime");
+                        std::filesystem::remove_all(host_root / "user-data");
                         std::error_code cleanup_error;
                         std::filesystem::remove_all(host_build_root, cleanup_error);
                         if (cleanup_error)
@@ -1927,8 +2002,7 @@ std::string format_job_result_json(const JobResult& result) {
                << ",\"generation_revalidation_failures\":"
                << coverage.generation_revalidation_failures
                << ",\"byte_identity_failures\":" << coverage.byte_identity_failures
-               << ",\"dispatch_validation_failures\":"
-               << coverage.dispatch_validation_failures
+               << ",\"dispatch_validation_failures\":" << coverage.dispatch_validation_failures
                << ",\"committed_executable_bytes\":" << coverage.committed_executable_bytes
                << ",\"analyzed_instruction_bytes\":" << coverage.analyzed_instruction_bytes
                << ",\"unanalyzed_executable_bytes\":" << coverage.unanalyzed_executable_bytes
@@ -1994,7 +2068,9 @@ std::string format_job_result_json(const JobResult& result) {
         const auto& artifact = result.artifacts[index];
         output << "{\"role\":" << io::quote_json(artifact.role)
                << ",\"path\":" << io::quote_json(artifact.relative_path.generic_string())
-               << ",\"sha256\":" << io::quote_json(artifact.sha256) << '}';
+               << ",\"sha256\":" << io::quote_json(artifact.sha256) << ",\"size\":" << artifact.size
+               << ",\"format_version\":" << artifact.format_version
+               << ",\"job_generation\":" << io::quote_json(artifact.job_generation) << '}';
     }
     output << "],\"diagnostics\":[";
     for (std::size_t index = 0u; index < result.diagnostics.size(); ++index) {

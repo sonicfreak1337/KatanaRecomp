@@ -58,7 +58,7 @@ ausgewaehlt wird.
 Der Selbsttest legt eine stale synthetische `game.exe` an und bestaetigt, dass
 die Runtimeprozessrolle vor dem Start abgewiesen wird. Der Bericht muss immer
 `game_executable_started=false` und `runtime_processes_started=0` enthalten.
-Ein Checkpoint hoeher als `SA_ANALYSIS_CONTINUES` kann nicht entstehen, weil
+Ein Checkpoint hoeher als `KR_RETAIL_ANALYSIS_CONTINUES` kann nicht entstehen, weil
 der Harness weder Runtimeausgabe einliest noch einen Runtimeprozess erzeugt.
 
 ## Zwei frische Buildnachweise

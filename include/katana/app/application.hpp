@@ -168,6 +168,9 @@ struct JobArtifact {
     std::string role;
     std::filesystem::path relative_path;
     std::string sha256;
+    std::uint64_t size = 0u;
+    std::uint32_t format_version = 1u;
+    std::string job_generation;
 };
 
 struct JobResult {

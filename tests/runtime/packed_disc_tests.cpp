@@ -1,0 +1,235 @@
+#include "katana/io/input_provenance.hpp"
+#include "katana/runtime/dreamcast_boot.hpp"
+#include "katana/runtime/iso9660.hpp"
+#include "katana/runtime/packed_disc.hpp"
+
+#include <algorithm>
+#include <cstdlib>
+#include <filesystem>
+#include <fstream>
+#include <iostream>
+#include <iterator>
+#include <string>
+#include <vector>
+
+namespace {
+constexpr std::size_t sector_size = 2048u;
+
+void require(const bool condition, const std::string& message) {
+    if (!condition) {
+        std::cerr << "TEST FEHLGESCHLAGEN: " << message << '\n';
+        std::exit(EXIT_FAILURE);
+    }
+}
+
+template <typename Function> void require_failure(Function&& function, const std::string& message) {
+    try {
+        function();
+    } catch (const std::exception&) {
+        return;
+    }
+    require(false, message);
+}
+
+struct Fixture final {
+    std::filesystem::path root = std::filesystem::current_path() / "katana-packed-disc-fixture";
+    Fixture() {
+        std::error_code error;
+        std::filesystem::remove_all(root, error);
+        std::filesystem::create_directories(root / "input" / "tracks");
+        std::filesystem::create_directories(root / "output");
+    }
+    ~Fixture() {
+        std::error_code error;
+        std::filesystem::remove_all(root, error);
+    }
+};
+
+void both32(std::vector<std::uint8_t>& bytes, const std::size_t offset, const std::uint32_t value) {
+    for (std::size_t index = 0u; index < 4u; ++index) {
+        bytes[offset + index] = static_cast<std::uint8_t>(value >> (index * 8u));
+        bytes[offset + 4u + index] = static_cast<std::uint8_t>(value >> ((3u - index) * 8u));
+    }
+}
+
+std::size_t record(std::vector<std::uint8_t>& bytes,
+                   const std::size_t offset,
+                   const std::uint32_t lba,
+                   const std::uint32_t size,
+                   const std::string& name,
+                   const bool directory) {
+    const auto length =
+        static_cast<std::uint8_t>(33u + name.size() + (name.size() % 2u == 0u ? 1u : 0u));
+    bytes[offset] = length;
+    both32(bytes, offset + 2u, lba);
+    both32(bytes, offset + 10u, size);
+    bytes[offset + 25u] = directory ? 2u : 0u;
+    bytes[offset + 28u] = 1u;
+    bytes[offset + 31u] = 1u;
+    bytes[offset + 32u] = static_cast<std::uint8_t>(name.size());
+    std::copy(name.begin(), name.end(), bytes.begin() + static_cast<std::ptrdiff_t>(offset + 33u));
+    return length;
+}
+
+std::vector<std::uint8_t> data_track() {
+    std::vector<std::uint8_t> bytes(24u * sector_size);
+    const std::string hardware = "SEGA SEGAKATANA ";
+    const std::string boot_file = "BOOT.BIN        ";
+    std::copy(hardware.begin(), hardware.end(), bytes.begin());
+    std::copy(boot_file.begin(), boot_file.end(), bytes.begin() + 0x60u);
+    const auto pvd = 16u * sector_size;
+    bytes[pvd] = 1u;
+    std::copy_n("CD001", 5u, bytes.begin() + static_cast<std::ptrdiff_t>(pvd + 1u));
+    bytes[pvd + 6u] = 1u;
+    record(bytes, pvd + 156u, 20u, sector_size, std::string(1u, '\0'), true);
+    auto directory = 20u * sector_size;
+    directory += record(bytes, directory, 20u, sector_size, std::string(1u, '\0'), true);
+    directory += record(bytes, directory, 20u, sector_size, std::string(1u, '\1'), true);
+    record(bytes, directory, 21u, 4u, "BOOT.BIN;1", false);
+    bytes[21u * sector_size] = 0x0Bu;
+    bytes[21u * sector_size + 1u] = 0x00u;
+    bytes[21u * sector_size + 2u] = 0x09u;
+    bytes[21u * sector_size + 3u] = 0x00u;
+    return bytes;
+}
+
+void write_bytes(const std::filesystem::path& path, const std::vector<std::uint8_t>& bytes) {
+    std::ofstream output(path, std::ios::binary | std::ios::trunc);
+    output.write(reinterpret_cast<const char*>(bytes.data()),
+                 static_cast<std::streamsize>(bytes.size()));
+}
+
+std::vector<std::uint8_t> read_bytes(const std::filesystem::path& path) {
+    std::ifstream input(path, std::ios::binary);
+    return {std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>()};
+}
+
+std::string hash(const std::filesystem::path& path) {
+    return katana::io::capture_input_provenance("synthetic", path).sha256;
+}
+} // namespace
+
+int main() {
+    using namespace katana::runtime;
+    Fixture fixture;
+    const auto input = fixture.root / "input";
+    const auto audio_path = input / "tracks" / "audio.raw";
+    const auto data_path = input / "tracks" / "data.bin";
+    std::vector<std::uint8_t> audio(2u * 2352u);
+    for (std::size_t index = 0u; index < audio.size(); ++index)
+        audio[index] = static_cast<std::uint8_t>((index * 17u) & 0xFFu);
+    write_bytes(audio_path, audio);
+    write_bytes(data_path, data_track());
+    const auto gdi_path = input / "disc.gdi";
+    {
+        std::ofstream descriptor(gdi_path, std::ios::trunc);
+        descriptor << "2\n1 0 0 2352 tracks/audio.raw 0\n"
+                      "2 10 4 2048 tracks/data.bin 0\n";
+    }
+    const auto gdi_hash_before = hash(gdi_path);
+    const auto audio_hash_before = hash(audio_path);
+    const auto data_hash_before = hash(data_path);
+    auto gdi = GdiDiscSource::open(gdi_path);
+    const auto pack_path = fixture.root / "output" / "game.katana-disc";
+    const auto generation_a = std::string(64u, 'a');
+    const auto info = write_packed_disc(*gdi, pack_path, generation_a);
+    auto packed = PackedDiscSource::open(pack_path);
+    packed->verify_all_chunks();
+    require(info.tracks.size() == 2u && info.packed_sectors == 26u &&
+                info.tracks[0].type == GdiTrackType::Audio &&
+                info.tracks[1].type == GdiTrackType::Data && info.tracks[0].session == 1u &&
+                info.tracks[1].session == 2u,
+            "Mehrtrack-, Audio-, Datentrack- oder Sessionmetadaten fehlen im Pack.");
+    require(gdi->read(10u * sector_size, 24u * sector_size) ==
+                packed->read(10u * sector_size, 24u * sector_size),
+            "GDI- und PackedDiscSource-Datensektoren unterscheiden sich.");
+    require(gdi->read_raw_sector(1u, 1u) == packed->read_raw_sector(1u, 1u) &&
+                gdi->read_raw_sectors(2u, 3u, 8u) == packed->read_raw_sectors(2u, 3u, 8u),
+            "Raw-, Audio- oder gebuendelte Sektorreads unterscheiden sich.");
+    require_failure([&] { static_cast<void>(packed->read(2u * sector_size, sector_size)); },
+                    "Eine LBA-Luecke wurde als normaler Datensektor behandelt.");
+    {
+        Iso9660Filesystem gdi_iso(gdi, sector_size, 10u);
+        Iso9660Filesystem packed_iso(packed, sector_size, 10u);
+        require(gdi_iso.read_file("/BOOT.BIN") == packed_iso.read_file("/BOOT.BIN"),
+                "ISO9660 liefert ueber PackedDiscSource abweichende Dateien.");
+    }
+    const auto pack_hash = hash(pack_path);
+    const auto raw_pack = read_bytes(pack_path);
+    const std::string pack_text(raw_pack.begin(), raw_pack.end());
+    require(pack_text.find(fixture.root.string()) == std::string::npos &&
+                pack_text.find("disc.gdi") == std::string::npos &&
+                pack_text.find("audio.raw") == std::string::npos &&
+                pack_text.find("data.bin") == std::string::npos,
+            "Disc-Pack enthaelt Hostpfade oder urspruengliche Dateinamen.");
+    const auto manifest = format_packed_disc_manifest(info, pack_hash);
+    require(manifest.find(fixture.root.string()) == std::string::npos &&
+                manifest.find("disc.gdi") == std::string::npos,
+            "Disc-Pack-Manifest enthaelt Hostpfade oder Eingabenamen.");
+
+    const auto deterministic_path = fixture.root / "output" / "second.katana-disc";
+    const auto deterministic = write_packed_disc(*gdi, deterministic_path, generation_a);
+    require(hash(deterministic_path) == pack_hash &&
+                deterministic.content_identity == info.content_identity,
+            "Deterministischer Doppelbuild erzeugt einen abweichenden Disc-Pack.");
+    const auto generation_b_path = fixture.root / "output" / "new-generation.katana-disc";
+    const auto generation_b = write_packed_disc(*gdi, generation_b_path, std::string(64u, 'b'));
+    require(generation_b.content_identity == info.content_identity &&
+                generation_b.job_generation != info.job_generation &&
+                hash(generation_b_path) != pack_hash,
+            "Jobgeneration bindet alten und neuen Disc-Pack nicht auseinander.");
+
+    const auto corrupted = fixture.root / "output" / "corrupted.katana-disc";
+    std::filesystem::copy_file(pack_path, corrupted);
+    {
+        std::fstream stream(corrupted, std::ios::binary | std::ios::in | std::ios::out);
+        stream.seekg(-1, std::ios::end);
+        char value = 0;
+        stream.read(&value, 1);
+        value ^= 0x5Au;
+        stream.seekp(-1, std::ios::end);
+        stream.write(&value, 1);
+    }
+    require_failure(
+        [&] {
+            const auto source = PackedDiscSource::open(corrupted);
+            source->verify_all_chunks();
+        },
+        "Ein beschaedigter Disc-Pack-Chunk wurde nicht erkannt.");
+    const auto missing = fixture.root / "output" / "missing-chunk.katana-disc";
+    std::filesystem::copy_file(pack_path, missing);
+    std::filesystem::resize_file(missing, std::filesystem::file_size(missing) - 1u);
+    require_failure([&] { static_cast<void>(PackedDiscSource::open(missing)); },
+                    "Ein fehlender oder abgeschnittener Chunk wurde nicht erkannt.");
+    const auto blocked = fixture.root / "output" / "blocked.katana-disc";
+    std::filesystem::create_directory(blocked);
+    require_failure([&] { static_cast<void>(write_packed_disc(*gdi, blocked, generation_a)); },
+                    "Unveroeffentlichbarer Pack wurde als Erfolg gemeldet.");
+    require(std::filesystem::is_directory(blocked) &&
+                !std::filesystem::exists(std::filesystem::path(blocked.string() + ".katana-stage")),
+            "Atomarer Publish ersetzte das alte Ziel oder hinterliess Staging.");
+    require(hash(gdi_path) == gdi_hash_before && hash(audio_path) == audio_hash_before &&
+                hash(data_path) == data_hash_before,
+            "Disc-Pack-Export hat GDI oder Trackdateien veraendert.");
+
+    const auto portable_root = fixture.root / "portable-port";
+    std::filesystem::create_directories(portable_root / "content");
+    const auto portable_pack = portable_root / "content" / "game.katana-disc";
+    std::filesystem::copy_file(pack_path, portable_pack);
+    const auto read_only_hash = hash(portable_pack);
+    packed.reset();
+    gdi.reset();
+    std::filesystem::remove_all(input);
+    auto moved = PackedDiscSource::open(portable_pack);
+    moved->verify_all_chunks();
+    const auto boot =
+        load_dreamcast_runtime_boot(moved, moved->primary_data_lba(), moved->info().tracks.size());
+    require(
+        boot.boot_file == std::vector<std::uint8_t>({0x0Bu, 0x00u, 0x09u, 0x00u}) &&
+            boot.repeated_reads_match && hash(portable_pack) == read_only_hash &&
+            moved->chunk_cache_size() <= moved->chunk_cache_capacity(),
+        "Verschobener synthetischer Port bootet nicht ohne Original-GDI oder veraendert Content.");
+
+    std::cout << "Portable PackedDiscSource-Differenz- und Integritaetstests erfolgreich.\n";
+    return EXIT_SUCCESS;
+}

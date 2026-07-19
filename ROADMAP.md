@@ -1,12 +1,16 @@
 # KatanaRecomp Roadmap
 
 Status: Pre-Alpha
-Aktueller interner Meilenstein: `v0.46.0`
-Aktuelle Phase: `v0.47.0` - generische Retail-Runtime
+Aktueller interner Meilenstein: `v0.47.0`
+Aktuelle Phase: `v0.48.0` - Integration
 Erster oeffentlicher Release: `v0.50.0` Alpha
 Weitere interne Gates: `v0.48.0` und `v0.49.0`; danach `v0.75.0` Beta und `v1.0.0` Stable
 
 ## Produktziel
+
+KatanaRecomp ist ein allgemeines Dreamcast-Recompiler-Framework mit Runtime-SDK
+und generischer Port- und Installer-API. Titelbezogene Installer-, Integrations-
+oder Enhancementlogik ist ausdruecklich kein Produktbestandteil.
 
 KatanaRecomp wandelt rechtmaessig lokal bereitgestellte Dreamcast-Programme in
 eigenstaendige native Portprojekte um. Analyzer, generierter Code und Runtime
@@ -21,9 +25,10 @@ das Repository noch in verteilbare Pakete.
    erfolgreich sein.
 4. Private Retaildaten bleiben ausserhalb von Repository, CI, Paketen und
    oeffentlichen Berichten.
-5. Vor dem Alpha-Bereich darf Sonic Adventure analysiert und bis zu einer
-   privaten `game.exe` gebaut, aber nicht gestartet werden.
-6. Der erste echte Sonic-Runtimelauf gehoert zur Alpha-Entwicklung.
+5. Sonic Adventure dient ausschliesslich als private Retail-Testbench; seine
+   Produktlogik gehoert in ein spaeteres eigenstaendiges Portprojekt.
+6. Private Retail-Laeufe duerfen nur allgemeine Frameworkfehler aufdecken; jeder
+   Fix erhaelt eine synthetische oder frei lizenzierte Regression.
 7. Gate-Vorbereitung und Freigabe bleiben getrennte Tasks.
 8. Ein globaler Projektprozentsatz wird nicht mehr gepflegt. Neue zukuenftige
    Arbeit darf den scheinbaren Fortschritt nicht rueckwaerts rechnen.
@@ -197,22 +202,24 @@ Unabhaengige Aufgaben derselben Stufe duerfen parallel entwickelt werden.
 - private Quellen und Runtimeberichte bleiben ausserhalb des Repositorys
 - `KR_V048_PORT_WORKFLOW_READY` wird reproduzierbar erreicht
 
-## v0.49.0 - Sonic-Alpha-Bring-up und interner Release-Candidate
+## v0.49.0 - Generischer Runtime-Bring-up und interner Release-Candidate
 
 ### Ziel
 
-Nach dem v0.48-Integrationsgate beginnt der erste private Sonic-Runtimelauf.
-Der Produktpfad soll reproduzierbar das Hauptprogramm, einen echten Gastframe,
-interaktive Eingabe und anschliessend eine kontrollierbare Szene erreichen.
+Nach dem v0.48-Integrationsgate beginnt der kontrollierte Runtime-Bring-up unter
+echter Gastlast. Sonic Adventure darf dafuer privat als wichtigste
+End-to-End-Testbench dienen. Implementiert und versioniert werden nur
+allgemeine Mechanismen fuer Programmeinstieg, Gastframes, Eingabe und
+kontrollierbaren Gastfortschritt.
 
 ### Bring-up-Tasks mit neuen, konfliktfreien IDs
 
 - [ ] `KR-4911` - Runtimebeobachtung, Replay und Fehlerpakete
 - [ ] `KR-4912` - dynamische Codebereiche, Module und Overlays
-- [ ] `KR-4913` - CPU-/Plattform-Bring-up bis `SA_MAIN_ENTERED`
+- [ ] `KR-4913` - CPU-/Plattform-Bring-up bis `KR_GUEST_PROGRAM_ENTERED`
 - [ ] `KR-4914` - private interaktive Runtime-Sitzung mit Controller
-- [ ] `KR-4915` - Gast-PVR-Pfad bis `SA_FIRST_FRAME`
-- [ ] `KR-4916` - Menue, Eingabe und spielbare Szene
+- [ ] `KR-4915` - Gast-PVR-Pfad bis `KR_FIRST_GUEST_FRAME`
+- [ ] `KR-4916` - Gastinput und kontrollierter Retail-Fortschritt
 
 ### Urspruengliche, wiederhergestellte Release-Candidate-Tasks
 
@@ -240,12 +247,13 @@ KR-4805
 
 - zwei deterministische Probes erreichen dieselben Checkpoints und Kernmetriken
 - ein separater interaktiver Lauf erlaubt lokale Controllersteuerung
-- `SA_MAIN_ENTERED`, `SA_FIRST_FRAME`, `SA_MENU_INTERACTIVE` und
-  `SA_ALPHA_PLAYABLE` beruhen auf versionierten Gastereignissen
+- `KR_GUEST_PROGRAM_ENTERED`, `KR_FIRST_GUEST_FRAME`,
+  `KR_GUEST_INPUT_INTERACTIVE` und `KR_CONTROLLED_RETAIL_SCENE` beruhen auf
+  versionierten titelunabhaengigen Gastereignissen
 - Hostsmokes werden nicht als Gastframe, Gastaudio oder Gasteingabe gezaehlt
 - dynamische Module und ersetzter RAM-Code koennen nicht still stale Bloecke
   ausfuehren
-- Boot, Menue und mindestens eine Szene funktionieren mit Video und Controller
+- Boot, Gastvideo und Gastinput machen unter echter Gastlast gemeinsam Fortschritt
 - CI, Pakete, Datenschutz-, Lizenz- und Referenzaudits bestehen
 - keine Retaildaten gelangen in Pakete, CI, Repository oder oeffentliche Berichte
 - `KR_V049_ALPHA_CANDIDATE_READY` wird erreicht
@@ -262,7 +270,8 @@ KR-4805
 
 - die unveraenderte v0.49-Kandidatenbasis besteht frische Debug- und
   RelWithDebInfo-/Release-Builds
-- zwei private deterministische Laeufe erreichen `SA_ALPHA_PLAYABLE`
+- private deterministische Testbench-Laeufe erreichen denselben generischen
+  Runtimecheckpoint; oeffentliche Gates verwenden verteilbare Regressionen
 - eine getrennte interaktive Sitzung bestaetigt praktische Controllerbedienung
 - Boot, Auswahl und mindestens eine kontrollierbare Spielszene funktionieren
 - Video, Eingabe, Disc-I/O, Scheduler, DMA und Interrupts machen messbaren
@@ -272,18 +281,18 @@ KR-4805
 - Windows ist Alpha-Zielplattform; Linux baut Core, CLI und Tests
 - Release und Repository enthalten keine Retaildaten
 
-## v0.75.0 Beta - Breite Spielbarkeit
+## v0.75.0 Beta - Breite Frameworkkompatibilitaet
 
 ### Ziel
 
-Sonic Adventure ist nicht nur in einer Szene spielbar, sondern laeuft ueber
-lange Sitzungen mit belastbaren Saves. Mehrere weitere Titel erreichen
-interaktive Szenen. Grafik, Audio und Performance sind fuer reale Nutzung
-brauchbar.
+Mehrere rechtmaessig lokal bereitgestellte Dreamcast-Programme laufen ueber
+lange Sitzungen mit belastbaren persistenten Daten. Private Retail-Testbenches
+decken unterschiedliche Lastprofile ab. Grafik, Audio und Performance sind
+fuer den dokumentierten Frameworkumfang brauchbar.
 
 ### Tasks
 
-- [ ] `KR-6001` - Sonic-Adventure-Abdeckung und Save-Kompatibilitaet
+- [ ] `KR-6001` - Langzeit-Retailabdeckung und Save-Kompatibilitaet
 - [ ] `KR-6002` - PVR- und AICA-Genauigkeit
 - [ ] `KR-6003` - Performance, Pacing und Langzeitstabilitaet
 - [ ] `KR-6004` - Mehrtitel-Kompatibilitaet und Debuggerwerkzeuge
@@ -292,8 +301,9 @@ brauchbar.
 
 ### Beta-Gate
 
-- mindestens eine Sonic-Adventure-Story laeuft von neuem Save bis zu den Credits
-- weitere Storypfade und Sondermodi besitzen eine gepflegte Statusmatrix
+- mindestens ein privates Retail-Testprofil laeuft ueber eine definierte lange
+  Sitzung ohne titelbezogene Frameworkausnahme
+- mehrere Last-, Save- und Modulszenarien besitzen eine adressfreie Statusmatrix
 - Save, Laden, Neustart und VMU-Arbeitskopien sind belastbar
 - mehrere rechtmaessig lokal bereitgestellte Titel erreichen interaktive Szenen
 - Grafik, Audio, Eingabe, DMA, Timer und Interrupts arbeiten zusammen

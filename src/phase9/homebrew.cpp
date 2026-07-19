@@ -303,14 +303,14 @@ FirmwareHandoffReport run_synthetic_firmware_handoff() {
                                               ExecutableBlockOrigin::RomRamCopy}));
     auto regenerated_variant = variant;
     regenerated_variant.runtime_generation = tracker.page_generation(ram_physical);
-    static_cast<void>(table.register_runtime({p1_entry,
-                                              ram_physical,
-                                              static_cast<std::uint32_t>(bootstrap.size()),
-                                              BlockEndKind::Return,
-                                              regenerated_variant,
-                                              handoff_block,
-                                              "regenerated:copy:synthetic-rom-bootstrap",
-                                              false}));
+    static_cast<void>(table.register_static({p1_entry,
+                                             ram_physical,
+                                             static_cast<std::uint32_t>(bootstrap.size()),
+                                             BlockEndKind::Return,
+                                             regenerated_variant,
+                                             handoff_block,
+                                             "regenerated:copy:synthetic-rom-bootstrap",
+                                             false}));
     auto regenerated_request = request;
     regenerated_request.variant = regenerated_variant;
     const auto regenerated = dispatch_indirect(dispatch_cpu, table, regenerated_request);

@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.47.0] - 2026-07-19
+
 ### Geaendert
 
 - KR-4703: Flash und VMU verwenden projektgebundene, atomisch gespeicherte
@@ -15,7 +17,7 @@
   technisch abgewiesen. Zwei frische offizielle Buildjobs muessen Identitaet,
   Kontrollflussabdeckung, aktuelles Executable sowie bytegleiche portable
   Metadaten und Quellen nachweisen; der atomare Bericht enthaelt nur Aggregate
-  und kann keinen Checkpoint ueber `SA_ANALYSIS_CONTINUES` ausgeben.
+  und kann keinen Checkpoint ueber `KR_RETAIL_ANALYSIS_CONTINUES` ausgeben.
 - KR-4718: Kontrollflussklassen werden bis in IR, Codeausgabe und Portadapter
   getragen. Echte Runtime-only-Quellen dispatchen nur auf validierte aktive
   Blockanfaenge; Misses stoppen sichtbar. Gesamt- und Runtime-only-Zaehler fuer
@@ -81,9 +83,9 @@
   native Controller-/Maple-Eingabe und eine informative, eventgetriebene
   Desktop-GUI umgesetzt.
 - Eine private Sonic-`game.exe` darf in v0.47 vollstaendig gebaut, aber nicht
-  gestartet werden. Der erste Runtimelauf und `SA_MAIN_ENTERED` gehoeren zur
+  gestartet werden. Der erste Runtimelauf und `KR_GUEST_PROGRAM_ENTERED` gehoeren zur
   Alpha-Entwicklung; der oeffentliche Alpha-Release verlangt weiterhin
-  `SA_ALPHA_PLAYABLE`.
+  `KR_CONTROLLED_RETAIL_SCENE`.
 - Zuvor nicht ausreichend geplante Arbeit fuer Runtime-Replay, dynamische
   Codebereiche und Overlays, echten Gast-PVR-Output, Langzeitspielbarkeit,
   Mehrtitel-Kompatibilitaet und stabile v1.0-Vertraege ist nun explizit
@@ -151,7 +153,7 @@
   Exceptions und Interrupts am Handler fort, kehrt ueber SPC zurueck und
   haelt SLEEP bis zu einem angenommenen Interrupt an. Ursache, Eventcode und
   Vektor stammen aus einem gemeinsamen Exceptionvertrag.
-- Der erzeugte GDI-Port meldet `SA_MAIN_ENTERED` und `silent_failures=0` nur
+- Der erzeugte GDI-Port meldet `KR_GUEST_PROGRAM_ENTERED` und `silent_failures=0` nur
   nach einem echten Gast-Checkpoint. Sofortige Traps, Exceptions oder
   Fallbacks scheitern vorher sichtbar. Descriptor, alle Tracks und die
   extrahierte Bootdatei werden per SHA-256 vor der ersten Gastinstruktion an
@@ -313,7 +315,7 @@
   Gitignore und Paketpfad schliessen Retailartefakte technisch aus. Ein
   verteilbarer Selbsttest prueft Checkpointordnung, partielle Analyse und
   Datenredaktion ohne Retaildaten. Der autorisierte budgetierte Nachlauf
-  erreichte nur `SA_ANALYSIS_CONTINUES` und endete reproduzierbar als
+  erreichte nur `KR_RETAIL_ANALYSIS_CONTINUES` und endete reproduzierbar als
   `analysis-incomplete`; dies ist kein Bootnachweis.
 - KR-4504: Das kumulative v0.45-Vorbereitungsgate besteht 164/164 Tests unter
   MSVC Debug, AddressSanitizer und Coverage im einzigen frischen
@@ -523,7 +525,7 @@
   native Hostruntime, Portintegration und Alpha-CI.
 - Der lokale Alpha-Vertrag umfasst den offiziellen Pfad von einer
   Nutzer-GDI ueber ein externes Port-Projekt zu `game.exe`; Alpha gilt als
-  erreicht, wenn die Anwendung startet und reproduzierbar `SA_ALPHA_BOOTED`
+  erreicht, wenn die Anwendung startet und reproduzierbar `KR_RETAIL_BOOTED`
   erreicht. Ein erster Frame oder Gameplay bleibt Beta-Scope.
 - KR-3401: Eine deterministisch sortierte Laufzeit-Blocktabelle verbindet virtuelle Diagnoseadressen, kanonische physische Herkunft, Blockgrenzen, Endtypen und Backendfunktionen. Statische sowie dynamische Eintraege teilen den Lookup; MMU-, FPSCR-, Adressraum- und Runtime-Varianten bleiben explizit, waehrend Ueberlappungsfehler beide Provenienzen nennen.
 - KR-3402: Der generische indirekte Dispatch trennt Calls, Tail-Jumps und Returns, kanonisiert P1-/P2-Ziele ueber den Adressraumvertrag und protokolliert Callsite, Ziel, PR, Quellblock sowie Lookupart. Unbekannte Ziele brechen sichtbar ab; Calls setzen PR, Returns verwenden PR und Jumps bewahren ihn.
@@ -606,7 +608,7 @@
 - Lokale Buildausgaben werden auf genau ein ignoriertes Multi-Config-Verzeichnis `build-current/` begrenzt; 14 alte task-, versions- und konfigurationsspezifische Buildbaeume wurden entfernt. Bis Alpha liegen darin nur Debug-Artefakte; die spaetere Release-Konfiguration nutzt keinen zweiten Buildbaum.
 - Mehrsitzige GDI-Quellen verwenden den letzten Datentrack als primaere Disc-Sitzung. ISO9660 kann die Position des Primary Volume Descriptors und die LBA-Basis der Extents getrennt abbilden, sodass sowohl relative synthetische als auch absolute Dreamcast-GD-Extents ohne Trackumbau funktionieren.
 - Bis einschliesslich v0.44.0 verwenden lokale Pre-Alpha-Gates genau einen frischen Debug-Build. Regulare Release-Builds sowie verpflichtende Windows-/Linux-CI kehren erst beim Alpha-Gate v0.50.0 zurueck.
-- Das v0.31.0-Gate besteht mit 122/122 Tests im frischen Debug-Build. Zwei identische lokale GDI-Blockproben erreichen bytegleich und ohne Quellaenderung den historisch benannten Checkpoint `SA_PHASE6_MAIN_EXECUTION_STARTED`; er gilt heute nur als Quellen-/Bootblockdiagnose.
+- Das v0.31.0-Gate besteht mit 122/122 Tests im frischen Debug-Build. Zwei identische lokale GDI-Blockproben erreichen bytegleich und ohne Quellaenderung den Checkpoint `KR_PHASE6_MAIN_EXECUTION_STARTED`; er gilt nur als Quellen-/Bootblockdiagnose.
 
 ### Behoben
 

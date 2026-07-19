@@ -406,8 +406,7 @@ void classify_dynamic_sites(const std::span<const katana::sh4::DisassemblyLine> 
             if (runtime_contract) {
                 resolution.evidence = ControlFlowEvidence::RuntimeOnly;
                 resolution.evidence_origins = {AnalysisEvidenceOrigin::RuntimeClassification};
-            } else if (resolution.origin_class ==
-                           IndirectControlFlowOriginClass::RuntimePointer &&
+            } else if (resolution.origin_class == IndirectControlFlowOriginClass::RuntimePointer &&
                        resolution.evidence_origins.empty()) {
                 resolution.evidence_origins = {AnalysisEvidenceOrigin::RuntimeClassification};
             }

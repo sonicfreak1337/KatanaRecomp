@@ -60,6 +60,9 @@ class GdiDiscSource final : public DiscSource {
     [[nodiscard]] std::uint32_t primary_data_lba() const;
     [[nodiscard]] std::vector<std::uint8_t> read_raw_sector(std::uint32_t track_number,
                                                             std::uint64_t sector_index) const;
+    [[nodiscard]] std::vector<std::uint8_t> read_raw_sectors(std::uint32_t track_number,
+                                                             std::uint64_t first_sector,
+                                                             std::size_t count) const;
     void set_cache_mode(DiscCacheMode mode) noexcept;
     [[nodiscard]] DiscCacheMode cache_mode() const noexcept;
     [[nodiscard]] const GdiIoCounters& io_counters() const noexcept;

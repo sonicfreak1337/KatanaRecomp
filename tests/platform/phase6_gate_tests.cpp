@@ -170,7 +170,7 @@ int main() {
     const auto first = run_phase6_gate(fixture.path / "disc.gdi", execute_synthetic_block, 1u);
     const auto second = run_phase6_gate(fixture.path / "disc.gdi", execute_synthetic_block, 1u);
     const auto serialized = serialize_phase6_gate_report(first);
-    require(first.checkpoint == "SA_PHASE6_MAIN_EXECUTION_STARTED" && first.executed_blocks == 1u &&
+    require(first.checkpoint == "KR_PHASE6_MAIN_EXECUTION_STARTED" && first.executed_blocks == 1u &&
                 first.guest_cycles == 1u && first.scheduler_events != 0u &&
                 first.gdrom_completions == 1u && first.tmu_events != 0u && first.dma_events == 1u &&
                 first.interrupts_delivered == 1u && first.cache_invalidations == 1u &&

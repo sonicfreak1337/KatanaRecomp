@@ -271,17 +271,25 @@ std::uint32_t GdiDiscSource::primary_data_lba() const {
 
 std::vector<std::uint8_t> GdiDiscSource::read_raw_sector(const std::uint32_t track_number,
                                                          const std::uint64_t sector_index) const {
+    return read_raw_sectors(track_number, sector_index, 1u);
+}
+
+std::vector<std::uint8_t> GdiDiscSource::read_raw_sectors(const std::uint32_t track_number,
+                                                          const std::uint64_t first_sector,
+                                                          const std::size_t count) const {
     const auto found = track_number_index_.find(track_number);
     if (found == track_number_index_.end()) {
         throw std::out_of_range("GDI-Track wurde nicht gefunden.");
     }
     const auto& track = descriptor_.tracks[found->second];
-    if (sector_index >= track.sector_count) {
-        throw std::out_of_range("GDI-Sektor liegt ausserhalb des Tracks.");
+    if (count == 0u || first_sector > track.sector_count ||
+        count > track.sector_count - first_sector ||
+        count > std::numeric_limits<std::size_t>::max() / track.sector_size) {
+        throw std::out_of_range("GDI-Sektorbatch liegt ausserhalb des Tracks.");
     }
     ++io_counters_.raw_read_operations;
-    return track_sources_[found->second]->read(track.file_offset + sector_index * track.sector_size,
-                                               track.sector_size);
+    return track_sources_[found->second]->read(track.file_offset + first_sector * track.sector_size,
+                                               count * track.sector_size);
 }
 
 std::size_t GdiDiscSource::track_index_for_lba(const std::uint64_t absolute_lba) const {

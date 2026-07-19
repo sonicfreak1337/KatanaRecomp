@@ -205,7 +205,7 @@ Phase6GateReport run_phase6_gate(const std::filesystem::path& descriptor_path,
                                        runtime::PlatformInterruptSource::ExternalIrl13),
                  "GD-ROM-Abschlussinterrupt wurde nicht angenommen.");
 
-    report.checkpoint = "SA_PHASE6_MAIN_EXECUTION_STARTED";
+    report.checkpoint = "KR_PHASE6_MAIN_EXECUTION_STARTED";
     return report;
 }
 

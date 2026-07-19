@@ -1,16 +1,20 @@
 # Port-Projektexport
 
-Der offizielle Exportpfad erzeugt aus einer validierten GDI ein getrenntes,
-reproduzierbares Portprojekt und baut das Hosttarget unmittelbar im Debugprofil:
+Der generische Exportpfad erzeugt aus einer validierten GDI ein getrenntes,
+reproduzierbares Portprojekt, ein lokales Contentpaket und das Hosttarget im
+Debugprofil:
 
 ```powershell
 katana-recomp port .\disc\game.gdi --output .\port --target-name game
 ```
 
-Die GDI wird ueber Bootmetadaten und ISO9660 bis zur Dreamcast-Bootdatei
-gelesen. Danach folgen Executable Image, Kontrollflussanalyse, Katana-IR,
-Optimierung und deterministische Translation-Unit-Partitionierung. Der Export
-kopiert weder GDI-Tracks noch allgemeine Spielassets.
+Die GDI wird read-only validiert und in einen portablen, pfadfreien
+`game.katana-disc` gepackt. Der Pack erhaelt die kanonische Tracktabelle, den
+logischen LBA-Raum, Raw-Sektoren, Audiosektoren, Sessions, Chunkindex und
+SHA-256-Integritaetswerte. Danach folgen Executable Image,
+Kontrollflussanalyse, Katana-IR, Optimierung und deterministische
+Translation-Unit-Partitionierung. Die Original-GDI und ihre Trackdateien sind
+nur Eingaben und werden weder kopiert noch veraendert.
 
 Der gemeinsame GUI-/Workflow-Build exportiert nur bei vollstaendig abgedecktem
 Kontrollfluss. Ungeloeste oder nur partiell bewachte indirekte Ziele sowie
@@ -28,6 +32,13 @@ abweichende Identitaets-/Codegen-Snapshots nicht entstehen.
 
 ```text
 port/
+  game.exe                    veroeffentlichtes Hostprogramm
+  content/
+    game.katana-disc          vollstaendige read-only Discquelle
+    game.katana-disc.json     Identitaet, Tracks und Artefaktbindung
+  runtime/
+    runtime-dependencies.json Runtimevertrag (derzeit statisch gelinkt)
+  user-data/                  Flash, VMU und weitere veraenderliche Daten
   .gitignore                  ignoriert den getrennten Hostbuild
   CMakeLists.txt              einmalig angelegter Nutzer-Bootstrap
   src/main.cpp                einmalig angelegte Integrationsschicht
@@ -56,9 +67,13 @@ werden abgelehnt.
 
 ## Hostbuild und Runtimevertrag
 
-Der CLI-Aufruf bindet KatanaRecomp fuer den lokalen Debugbuild ueber den
+Der CLI-Aufruf erzeugt zuerst ein Stagingpaket, verifiziert Disc-Pack und
+Hostbuild und veroeffentlicht den Ausgabeordner danach atomar. Ein
+fehlgeschlagener Export ersetzt keinen letzten erfolgreichen Stand.
+
+Der lokale Debugbuild bindet KatanaRecomp ueber den
 expliziten CMake-Parameter
-`KATANA_RUNTIME_ROOT` ein. Portprojekt-Vertragsversion 6 umfasst den
+`KATANA_RUNTIME_ROOT` ein. Portprojekt-Vertragsversion 7 umfasst den
 eigenstaendigen Runtime-/GDI-Einstieg, die Runtime-only-Dispatchmetriken sowie
 projektgebundene Flash-/VMU-Arbeitskopien und Host-Pacing. Die generierten
 Quellen pruefen Runtime-ABI 14 und PlatformServices-ABI 5 beim
@@ -72,21 +87,23 @@ cmake -S .\port -B .\port\build -G Ninja `
   -DCMAKE_BUILD_TYPE=Debug `
   -DKATANA_RUNTIME_ROOT=<KatanaRecomp-Quellbaum>
 cmake --build .\port\build --target game
-.\port\build\game.exe .\disc\game.gdi
+# Der offizielle `katana-recomp port`-Job veroeffentlicht danach atomar:
+.\port\game.exe
 ```
 
-Das Hostprogramm fuehrt mit `game.exe <Quelle.gdi>` standardmaessig den
-generierten Code aus; `--gdi <Quelle>` ist ein gleichwertiger expliziter
-Schalter. `--run-generated <Quelle>` bleibt ein Diagnosealias, akzeptiert aber
-bewusst keinen Lauf ohne Bootimage. Die Runtime liest Bootmetadaten und
-ISO9660-Bootdatei ueber die austauschbare `DiscSource`-Grenze, initialisiert
+Das Hostprogramm oeffnet standardmaessig
+`content/game.katana-disc` relativ zum eigenen Speicherort. Mit
+`--content <Pack>` kann ein anderer Pack explizit gewaehlt werden.
+`--gdi-debug <Quelle.gdi>` ist der einzige direkte GDI-Pfad und ausschliesslich
+fuer lokale Entwicklung vorgesehen. Die Runtime liest Bootmetadaten und
+ISO9660-Bootdatei ueber dieselbe `DiscSource`-Grenze, initialisiert
 Dreamcast-Hauptspeicher, VRAM, AICA-RAM, Flash, CPU und Scheduler und waehlt
 den Programmeinstieg ueber die generische Blocktabelle. Der erste indirekte
 Dispatch wird strukturiert diagnostiziert; ein fehlendes Ziel oder ein
 Speicherfehler kann nicht als erfolgreicher Prozess enden.
 
 Der Standardadapter oeffnet vor dem Runtime-Start lokale Arbeitskopien unter
-der portablen Projektidentitaet, bindet Flash und VMU ein, taktet den Host am
+`user-data/`, bindet Flash und VMU ein, taktet den Host am
 Videoereignis und speichert beim geordneten Shutdown. `KATANA_USER_DATA_ROOT`
 kann die lokale Wurzel festlegen. Weder GDI noch exportierte Quellen werden
 veraendert. Details stehen in
@@ -98,11 +115,24 @@ generationsgueltigen Blocks im Executable Image sein. Ein Miss beendet den Lauf
 und kann weder Erfolg noch einen nachfolgenden Checkpoint erzeugen. Details
 stehen in [`RUNTIME_ONLY_DISPATCH.md`](RUNTIME_ONLY_DISPATCH.md).
 
-Ein Folgeprojekt kann `src/main.cpp` durch eine eigene DiscSource- und
-Assetintegration ersetzen, ohne generierten Spielcode zu aendern.
-KatanaRecomp verspricht ohne diese Folgeintegration nicht, dass die GDI nach
-dem Export geloescht werden kann.
+`PackedDiscSource` prueft Tabellenintegritaet beim Oeffnen und jeden Raw-Chunk
+vor der ersten Nutzung. Ein begrenzter Chunkcache erlaubt zufaelligen
+Sektorzugriff ohne vollstaendiges Laden. Fehlende Chunks, LBA-Luecken,
+Audiotracks in der Datensicht und unbekannte Sektormodi werden explizit
+abgelehnt. Der vollstaendige Pack wird vor der Veroeffentlichung gelesen und
+verifiziert. EXE, Pack, Packmanifest und Runtimevertrag tragen dieselbe
+Jobgeneration und werden nur gemeinsam aus dem Job-Staging veroeffentlicht.
 
-Metadaten und Provenienz enthalten nur Zielkennung, ABI-/Partitionsdaten,
-Groessen und SHA-256-Werte. Absolute GDI-, Track-, Build- und Hostpfade werden
-nicht serialisiert.
+Nach erfolgreichem Export darf der gesamte Portordner verschoben und die
+urspruengliche GDI samt Tracks entfernt werden. Der Standardstart benoetigt
+keinen Zugriff auf den urspruenglichen Quell- oder Exportpfad.
+
+Ein externes Portprojekt darf die allgemeinen DiscSource-, Host- und
+Runtime-SDK-Grenzen integrieren. Titelbezogene Installer-, Patch- und
+Enhancementlogik sowie ein konkretes Produktlayout gehoeren nicht in
+KatanaRecomp.
+
+Metadaten, Contentmanifest und Provenienz enthalten nur Rollen, relative
+Pfade, Format-/ABI-/Partitionsdaten, Groessen, Generationen und SHA-256-Werte.
+Absolute GDI-, Track-, Build- und Hostpfade sowie urspruengliche Tracknamen
+werden nicht serialisiert.

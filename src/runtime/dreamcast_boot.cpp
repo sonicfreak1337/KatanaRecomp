@@ -136,6 +136,27 @@ load_dreamcast_runtime_boot(const std::filesystem::path& descriptor_path) {
     }
     auto source = GdiDiscSource::open(descriptor_path);
     const auto data_track_lba = source->primary_data_lba();
+    const auto validated_tracks = source->descriptor().tracks.size();
+    return load_dreamcast_runtime_boot(std::move(source), data_track_lba, validated_tracks);
+}
+
+DreamcastRuntimeBootImage
+load_dreamcast_runtime_boot_from_pack(const std::filesystem::path& pack_path) {
+    if (pack_path.empty()) {
+        throw std::invalid_argument("Dreamcast-Runtime braucht einen Katana-Disc-Pack.");
+    }
+    auto source = PackedDiscSource::open(pack_path);
+    const auto data_track_lba = source->primary_data_lba();
+    const auto validated_tracks = source->info().tracks.size();
+    return load_dreamcast_runtime_boot(std::move(source), data_track_lba, validated_tracks);
+}
+
+DreamcastRuntimeBootImage load_dreamcast_runtime_boot(std::shared_ptr<DiscSource> source,
+                                                      const std::uint32_t data_track_lba,
+                                                      const std::size_t validated_tracks) {
+    if (!source || validated_tracks == 0u) {
+        throw std::invalid_argument("Dreamcast-Runtime-Discquelle ist unvollstaendig.");
+    }
     if (data_track_lba > std::numeric_limits<std::uint64_t>::max() / 2048u) {
         throw std::out_of_range("Dreamcast-Bootsektoroffset laeuft ueber.");
     }
@@ -172,7 +193,6 @@ load_dreamcast_runtime_boot(const std::filesystem::path& descriptor_path) {
     Iso9660Filesystem repeated_filesystem(source, 2048u, data_track_lba, selected_bias);
     const auto repeated = repeated_filesystem.read_file("/" + boot_file_name);
     const bool repeated_reads_match = repeated == boot_file;
-    const auto validated_tracks = source->descriptor().tracks.size();
     return {std::move(source),
             hardware_id,
             boot_file_name,

@@ -12,7 +12,7 @@ namespace katana::platform {
 using Phase6BlockExecutor = void (*)(runtime::CpuState& cpu);
 
 struct Phase6GateReport {
-    std::string checkpoint = "SA_PHASE6_NOT_REACHED";
+    std::string checkpoint = "KR_PHASE6_NOT_REACHED";
     bool gdi_loaded = false;
     std::size_t tracks_validated = 0u;
     bool iso9660_mounted = false;

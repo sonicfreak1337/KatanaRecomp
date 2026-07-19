@@ -226,6 +226,7 @@ add_library(katana_runtime STATIC
     src/runtime/iso9660.cpp
     src/runtime/maple.cpp
     src/runtime/media_clock.cpp
+    src/runtime/packed_disc.cpp
     src/runtime/persistent_storage.cpp
     src/runtime/pvr.cpp
     src/runtime/platform_interrupt.cpp
@@ -507,6 +508,9 @@ add_executable(
     tests/phase10/application_tests.cpp
 )
 target_link_libraries(katana-phase10-application-tests PRIVATE katana_gui)
+target_compile_definitions(katana-phase10-application-tests PRIVATE
+    KATANA_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}"
+)
 katana_enable_warnings(katana-phase10-application-tests)
 add_test(NAME katana-phase10-application-tests COMMAND katana-phase10-application-tests)
 set_tests_properties(katana-phase10-application-tests PROPERTIES TIMEOUT 180)
@@ -961,6 +965,11 @@ add_executable(katana-gdi-integration-tests tests/runtime/gdi_integration_tests.
 target_link_libraries(katana-gdi-integration-tests PRIVATE katana_runtime)
 katana_enable_warnings(katana-gdi-integration-tests)
 add_test(NAME katana-gdi-integration-tests COMMAND katana-gdi-integration-tests)
+
+add_executable(katana-packed-disc-tests tests/runtime/packed_disc_tests.cpp)
+target_link_libraries(katana-packed-disc-tests PRIVATE katana_runtime)
+katana_enable_warnings(katana-packed-disc-tests)
+add_test(NAME katana-packed-disc-tests COMMAND katana-packed-disc-tests)
 
 add_executable(katana-scheduler-tests tests/runtime/scheduler_tests.cpp)
 target_link_libraries(katana-scheduler-tests PRIVATE katana_runtime)
@@ -1544,6 +1553,7 @@ add_test(
     COMMAND ${CMAKE_COMMAND}
         -DKATANA_FIXTURE_WRITER=$<TARGET_FILE:katana-port-export-tests>
         -DKATANA_CLI=$<TARGET_FILE:katana-recomp>
+        -DKATANA_RUNTIME_ROOT=${CMAKE_CURRENT_SOURCE_DIR}
         -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/codegen/verify_port_cli.cmake
 )
 set_tests_properties(katana-port-cli-tests PROPERTIES TIMEOUT 300)

@@ -34,6 +34,12 @@ struct PortExportResult {
     std::size_t partitions = 0u;
     std::size_t generated_files = 0u;
     std::size_t removed_files = 0u;
+    std::filesystem::path packed_disc;
+    std::filesystem::path packed_disc_manifest;
+    std::string packed_disc_identity;
+    std::uint64_t packed_sectors = 0u;
+    std::uint64_t packed_disc_bytes = 0u;
+    std::uint64_t uncompressed_disc_bytes = 0u;
     std::vector<std::string> checkpoints;
 };
 

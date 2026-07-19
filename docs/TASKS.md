@@ -65,7 +65,8 @@ KR-4911
 
 Korrektheit blockiert Performance. Performance und Soundness blockieren neue
 Retail-Codeentdeckung. GUI-, Controller- und Harnessarbeit darf nach dem
-Core-Gate parallel laufen, muss aber vor dem ersten Sonic-Runtimelauf bestehen.
+Core-Gate parallel laufen, muss aber vor dem ersten privaten Retail-Runtimelauf
+bestehen.
 
 ---
 
@@ -500,7 +501,7 @@ Akzeptanz:
 
 - alle indirekten Sites besitzen genau eine Vollstaendigkeitsklasse
 - `unresolved == 0` bleibt Voraussetzung fuer Export und Build
-- Runtime-only-Misses erzeugen weder Erfolg noch Sonic-Checkpoint
+- Runtime-only-Misses erzeugen weder Erfolg noch nachfolgenden Runtimecheckpoint
 - Hostadressen, No-ops und geratene Ziele sind ausgeschlossen
 
 Umgesetzt mit einer expliziten IR-Zielklasse, getrennten bewachten,
@@ -535,7 +536,7 @@ Akzeptanz:
 - das gemeldete Executable stammt aus dem aktuellen Job
 - `game_executable_started == false`
 - kein Runtimeprozess kann aus diesem Modus erzeugt werden
-- kein Checkpoint hoeher als `SA_ANALYSIS_CONTINUES` wird ausgegeben
+- kein Checkpoint hoeher als `KR_RETAIL_ANALYSIS_CONTINUES` wird ausgegeben
 
 Umgesetzt mit Configversion 2 und dem einzigen zugelassenen Modus
 `build-only`. Der rollenbewusste Prozessstarter weist Runtimeprozesse vor
@@ -778,7 +779,7 @@ Umfang:
 Akzeptanz:
 
 - Regex-Fremdtreffer und doppelte Metrikobjekte werden abgelehnt
-- `SA_ANALYSIS_CONTINUES` wird nicht aus Zaehlerheuristiken erfunden
+- `KR_RETAIL_ANALYSIS_CONTINUES` wird nicht aus Zaehlerheuristiken erfunden
 - interaktive Runs werden nie als deterministische Evidenz akzeptiert
 - kein Bericht enthaelt Rohspeicher, Spielbytes, private Adressen oder Tracknamen
 
@@ -897,12 +898,12 @@ Abhaengigkeiten: KR-4804
 Akzeptanz:
 
 - die unveraenderte Gate-Vorbereitung ist freigegeben
-- die Freigabe erlaubt den ersten privaten Sonic-Runtimelauf in v0.49
+- die Freigabe erlaubt den ersten privaten, budgetierten Retail-Runtimelauf in v0.49
 - es erfolgen noch kein oeffentlicher Release, Tag oder Download
 
 ---
 
-## v0.49.0 - Sonic-Alpha-Bring-up und interner Release-Candidate
+## v0.49.0 - Generischer Runtime-Bring-up und interner Release-Candidate
 
 ### [ ] KR-4911 - Runtimebeobachtung, Replay und Fehlerpakete
 
@@ -943,21 +944,22 @@ Akzeptanz:
 - unkompilierte ausfuehrbare Bytes koennen nicht still ausgefuehrt werden
 - private Modulinhalte bleiben ausserhalb von Repository und Berichten
 
-### [ ] KR-4913 - CPU-/Plattform-Bring-up bis SA_MAIN_ENTERED
+### [ ] KR-4913 - CPU-/Plattform-Bring-up bis KR_GUEST_PROGRAM_ENTERED
 
 Abhaengigkeiten: KR-4912
 Prioritaet: P0
 
 Umfang:
 
-- private Sonic-`game.exe` erstmals im `runtime-probe`-Modus starten
+- eine private Retail-Testbench erstmals im `runtime-probe`-Modus starten;
+  Sonic Adventure ist dabei eine lokale Testquelle, kein Produktprofil
 - SH-4-, FPU-, MMU-/Cache-, BIOS-, GD-ROM-, DMA-, Interrupt- und Timingblocker
   titelunabhaengig beheben
 - jeden Retailbefund als synthetische oder frei lizenzierte Regression sichern
 
 Akzeptanz:
 
-- zwei identische Probes erreichen `SA_MAIN_ENTERED`
+- zwei identische Probes erreichen `KR_GUEST_PROGRAM_ENTERED`
 - kein Fallback, Trap oder stiller Fehler wird als Erfolg ausgegeben
 - deterministische Kernmetriken stimmen ueberein
 - Probe und Bericht enthalten keine Spielbytes oder privaten Adressen
@@ -981,7 +983,7 @@ Akzeptanz:
 - interaktive Sitzung wird in keinem Gate als deterministische Evidenz verwendet
 - Crash, Close und Timeout hinterlassen keine Kindprozesse oder Schedulerreste
 
-### [ ] KR-4915 - Gast-PVR-Pfad bis SA_FIRST_FRAME
+### [ ] KR-4915 - Gast-PVR-Pfad bis KR_FIRST_GUEST_FRAME
 
 Abhaengigkeiten: KR-4913
 Prioritaet: P0
@@ -996,12 +998,12 @@ Umfang:
 
 Akzeptanz:
 
-- `SA_FIRST_FRAME` wird aus einem Gastframe erreicht
+- `KR_FIRST_GUEST_FRAME` wird aus einem Gastframe erreicht
 - ein synthetisch vorgefuellter VRAM-Puffer gilt nicht als Nachweis
 - `guest_pvr_frames` ist von `host_present_calls` getrennt
 - Fehlerpfade bleiben sichtbar und reproduzierbar
 
-### [ ] KR-4916 - Menue, Eingabe und spielbare Szene
+### [ ] KR-4916 - Gastinput und kontrollierter Retail-Fortschritt
 
 Abhaengigkeiten: KR-4914, KR-4915
 Prioritaet: P0
@@ -1009,8 +1011,9 @@ Prioritaet: P0
 Umfang:
 
 - Maple-Eingabe bis in das Gastprogramm verfolgen
-- Menue, Discstreaming, Scheduler, DMA und PVR gemeinsam stabilisieren
-- `SA_MENU_INTERACTIVE` und anschliessend `SA_ALPHA_PLAYABLE` erreichen
+- Gastinput, Discstreaming, Scheduler, DMA und PVR gemeinsam stabilisieren
+- `KR_GUEST_INPUT_INTERACTIVE` und anschliessend
+  `KR_CONTROLLED_RETAIL_SCENE` erreichen
 - bekannte Audioabweichungen messen und dokumentieren
 
 Akzeptanz:
@@ -1084,7 +1087,8 @@ Prioritaet: P0
 Akzeptanz:
 
 - frische Debug- und RelWithDebInfo-/Release-Builds bestehen
-- zwei private Probes erreichen `SA_ALPHA_PLAYABLE`
+- private Probes erreichen denselben generischen Runtimecheckpoint; die
+  oeffentliche Gateevidenz bleibt synthetisch oder frei lizenziert
 - separater interaktiver Lauf ist steuerbar
 - Gatebericht, Pakete, Audits und bekannte Einschraenkungen liegen vor
 - danach zwingend fuer Nutzerreview stoppen
@@ -1111,7 +1115,8 @@ Prioritaet: P0
 Akzeptanz:
 
 - unveraenderte v0.49-Kandidatenbasis besteht frische Builds und Regression
-- zwei private deterministische Laeufe erreichen `SA_ALPHA_PLAYABLE`
+- private deterministische Testbench-Laeufe erreichen denselben generischen
+  Runtimecheckpoint; sie definieren keinen titelbezogenen Produktvertrag
 - eine getrennte interaktive Sitzung bestaetigt Controllerbedienung
 - Pakete, Audits, Diagnosevertraege und bekannte Einschraenkungen liegen vor
 - danach zwingend fuer Nutzerreview stoppen
@@ -1128,21 +1133,22 @@ Akzeptanz:
 
 ---
 
-## v0.75.0 Beta - Breite Spielbarkeit
+## v0.75.0 Beta - Breite Frameworkkompatibilitaet
 
-### [ ] KR-6001 - Sonic-Adventure-Abdeckung und Save-Kompatibilitaet
+### [ ] KR-6001 - Langzeit-Retailabdeckung und Save-Kompatibilitaet
 
 Abhaengigkeiten: KR-5000
 
 Umfang:
 
-- lange Spielabschnitte, Cutscenes, Bosse und Szenenwechsel abdecken
+- lange Lauf-, Streaming-, Modul- und Szenenwechselprofile abdecken
 - Save, Laden, Neustart und VMU-Kompatibilitaet stabilisieren
-- Storypfade und Sondermodi in einer Statusmatrix pflegen
+- Last-, Save- und Modulszenarien in einer adressfreien Statusmatrix pflegen
 
 Akzeptanz:
 
-- mindestens eine Story laeuft von neuem Save bis zu den Credits
+- mindestens ein privates Retail-Testprofil laeuft ueber eine definierte lange
+  Sitzung ohne titelbezogene Frameworkausnahme
 - Saves bleiben ueber Neustarts und neue Builds verwendbar
 - bekannte Blocker sind reproduzierbar diagnostizierbar
 

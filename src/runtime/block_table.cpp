@@ -317,9 +317,9 @@ bool RuntimeBlockTable::active(const RuntimeBlockHandle handle) const noexcept {
     return resolve(handle).has_value();
 }
 
-RuntimeBlockDispatchStatus RuntimeBlockTable::dispatch_status(
-    const std::uint32_t virtual_address,
-    const BlockVariantKey& variant) const noexcept {
+RuntimeBlockDispatchStatus
+RuntimeBlockTable::dispatch_status(const std::uint32_t virtual_address,
+                                   const BlockVariantKey& variant) const noexcept {
     if (const auto handle = lookup(virtual_address, variant)) {
         const auto record = records_.find(handle->id);
         if (record != records_.end())

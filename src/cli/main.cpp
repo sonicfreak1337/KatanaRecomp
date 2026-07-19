@@ -12,6 +12,7 @@
 #include "katana/codegen/probe.hpp"
 #include "katana/io/elf32_sh_loader.hpp"
 #include "katana/io/input_output_error.hpp"
+#include "katana/io/input_provenance.hpp"
 #include "katana/io/project_manifest.hpp"
 #include "katana/io/raw_binary_loader.hpp"
 #include "katana/ir/lower.hpp"
@@ -19,6 +20,7 @@
 #include "katana/ir/serialize.hpp"
 #include "katana/platform/dreamcast_disc.hpp"
 #include "katana/platform/firmware_diagnostics.hpp"
+#include "katana/runtime/packed_disc.hpp"
 #include "katana/sh4/decoder.hpp"
 #include "katana/sh4/disassembler.hpp"
 #include "katana/sh4/isa_coverage.hpp"
@@ -896,11 +898,58 @@ std::filesystem::path discover_source_root_for_protection() {
     return {};
 }
 
+std::filesystem::path discover_runtime_root_for_build(const std::filesystem::path& source_root) {
+#ifdef _WIN32
+    char* configured_value = nullptr;
+    std::size_t configured_size = 0u;
+    const auto configured_result =
+        _dupenv_s(&configured_value, &configured_size, "KATANA_RUNTIME_ROOT");
+    const auto configured = configured_result == 0 && configured_value != nullptr
+                                ? std::filesystem::path(configured_value)
+                                : std::filesystem::path{};
+    std::free(configured_value);
+    if (!configured.empty()) {
+#else
+    if (const auto* configured = std::getenv("KATANA_RUNTIME_ROOT");
+        configured != nullptr && *configured != '\0') {
+#endif
+        const auto root = std::filesystem::absolute(configured).lexically_normal();
+        if (std::filesystem::exists(root / "CMakeLists.txt") &&
+            std::filesystem::exists(root / "include" / "katana" / "runtime"))
+            return root;
+        throw std::invalid_argument("KATANA_RUNTIME_ROOT bezeichnet kein kompatibles Runtime-SDK.");
+    }
+    if (!source_root.empty()) return source_root;
+
+    std::filesystem::path executable;
+#ifdef _WIN32
+    std::wstring buffer(32'768u, L'\0');
+    const auto length =
+        GetModuleFileNameW(nullptr, buffer.data(), static_cast<DWORD>(buffer.size()));
+    if (length != 0u && length < buffer.size()) {
+        buffer.resize(length);
+        executable = std::filesystem::path(buffer);
+    }
+#else
+    std::error_code link_error;
+    executable = std::filesystem::read_symlink("/proc/self/exe", link_error);
+#endif
+    if (!executable.empty()) {
+        const auto packaged_sdk = executable.parent_path() / "runtime-sdk";
+        if (std::filesystem::exists(packaged_sdk / "CMakeLists.txt") &&
+            std::filesystem::exists(packaged_sdk / "include" / "katana" / "runtime"))
+            return packaged_sdk;
+    }
+    throw std::runtime_error(
+        "Runtime-SDK fuer Portbuild fehlt; KATANA_RUNTIME_ROOT kann es explizit angeben.");
+}
+
 int export_port_project(const std::filesystem::path& gdi_path,
                         const std::filesystem::path& output_path,
                         const std::string& target_name,
                         const bool diagnostic_partial = false) {
     const auto source_root = discover_source_root_for_protection();
+    const auto runtime_root = discover_runtime_root_for_build(source_root);
     const auto absolute_output = std::filesystem::absolute(output_path).lexically_normal();
     if (!source_root.empty()) {
         const auto relative_to_source = absolute_output.lexically_relative(source_root);
@@ -910,10 +959,6 @@ int export_port_project(const std::filesystem::path& gdi_path,
                 "Port-Ausgabe muss ausserhalb des KatanaRecomp-Quellbaums liegen.");
         }
     }
-    const auto report = katana::codegen::export_dreamcast_port_project(
-        gdi_path,
-        output_path,
-        {target_name, KATANA_RECOMP_VERSION, {}, source_root, diagnostic_partial});
     const auto shell_quote = [](const std::filesystem::path& path) {
         const auto text = path.string();
 #ifdef _WIN32
@@ -929,32 +974,101 @@ int export_port_project(const std::filesystem::path& gdi_path,
         return quoted + "'";
 #endif
     };
-    const auto build_path = report.output_root / "build";
-    auto configure = std::string("cmake -S ") + shell_quote(report.output_root) + " -B " +
-                     shell_quote(build_path);
+    const auto stage_key =
+        katana::io::sha256_bytes(absolute_output.generic_string() + ':' + target_name);
+    const auto stage =
+        absolute_output.parent_path() / (".katana-port-stage-" + stage_key.substr(0u, 12u));
+    std::error_code cleanup_error;
+    std::filesystem::remove_all(stage, cleanup_error);
+    if (cleanup_error) throw std::runtime_error("Altes Port-Staging konnte nicht entfernt werden.");
+    try {
+        const auto report = katana::codegen::export_dreamcast_port_project(
+            gdi_path,
+            stage,
+            {target_name, KATANA_RECOMP_VERSION, {}, source_root, diagnostic_partial});
+        const auto build_path = report.output_root / "build";
+        auto configure = std::string("cmake -S ") + shell_quote(report.output_root) + " -B " +
+                         shell_quote(build_path);
 #ifdef _WIN32
-    configure += " -DCMAKE_RUNTIME_OUTPUT_DIRECTORY_DEBUG=" + shell_quote(build_path);
+        configure += " -DCMAKE_RUNTIME_OUTPUT_DIRECTORY_DEBUG=" + shell_quote(build_path);
 #else
-    configure += " -G Ninja";
+        configure += " -G Ninja";
 #endif
-    configure += " -DCMAKE_BUILD_TYPE=Debug -DKATANA_RUNTIME_ROOT=" + shell_quote(source_root);
-    if (std::system(configure.c_str()) != 0) {
-        throw katana::cli::Error(katana::cli::ExitCode::BuildFailure,
-                                 "Port-Hostbuild konnte nicht konfiguriert werden.");
+        configure += " -DCMAKE_BUILD_TYPE=Debug -DKATANA_RUNTIME_ROOT=" + shell_quote(runtime_root);
+        if (std::system(configure.c_str()) != 0) {
+            throw katana::cli::Error(katana::cli::ExitCode::BuildFailure,
+                                     "Port-Hostbuild konnte nicht konfiguriert werden.");
+        }
+        const auto build =
+            std::string("cmake --build ") + shell_quote(build_path) + " --target " + target_name;
+        if (std::system(build.c_str()) != 0) {
+            throw katana::cli::Error(katana::cli::ExitCode::BuildFailure,
+                                     "Port-Hosttarget konnte nicht gebaut werden.");
+        }
+        auto built_executable = build_path / target_name;
+#ifdef _WIN32
+        built_executable += ".exe";
+#endif
+        if (!std::filesystem::is_regular_file(built_executable))
+            throw katana::cli::Error(katana::cli::ExitCode::BuildFailure,
+                                     "Port-Hostbuild besitzt kein ausfuehrbares Artefakt.");
+        const auto published_executable = report.output_root / built_executable.filename();
+        std::filesystem::copy_file(built_executable,
+                                   published_executable,
+                                   std::filesystem::copy_options::overwrite_existing);
+        auto packed = katana::runtime::PackedDiscSource::open(report.packed_disc);
+        packed->verify_all_chunks();
+        const auto packed_info = packed->info();
+        packed.reset();
+        const auto pack_sha256 =
+            katana::io::capture_input_provenance("packed-disc", report.packed_disc).sha256;
+        const auto executable_sha256 =
+            katana::io::capture_input_provenance("host-executable", published_executable).sha256;
+        std::ofstream manifest(report.packed_disc_manifest, std::ios::binary | std::ios::trunc);
+        manifest << katana::runtime::format_packed_disc_manifest(
+            packed_info,
+            pack_sha256,
+            executable_sha256,
+            (std::filesystem::path("..") / published_executable.filename()).generic_string(),
+            std::filesystem::file_size(published_executable));
+        if (!manifest)
+            throw std::runtime_error("Disc-Pack-Manifest konnte nicht finalisiert werden.");
+        manifest.close();
+        std::filesystem::create_directories(report.output_root / "runtime");
+        std::ofstream runtime_manifest(report.output_root / "runtime" / "runtime-dependencies.json",
+                                       std::ios::binary | std::ios::trunc);
+        runtime_manifest << "{\"schema\":\"katana-runtime-dependencies\",\"version\":1,"
+                            "\"linkage\":\"static\",\"job_generation\":\""
+                         << packed_info.job_generation << "\",\"files\":[]}\n";
+        if (!runtime_manifest)
+            throw std::runtime_error(
+                "Runtime-Abhaengigkeitsmanifest konnte nicht geschrieben werden.");
+        runtime_manifest.close();
+        std::filesystem::create_directories(report.output_root / "user-data");
+        const auto stale = std::filesystem::path(absolute_output.string() + ".katana-stale-port");
+        std::filesystem::remove_all(stale, cleanup_error);
+        if (cleanup_error)
+            throw std::runtime_error("Altes Port-Backup konnte nicht entfernt werden.");
+        if (std::filesystem::exists(absolute_output))
+            std::filesystem::rename(absolute_output, stale);
+        try {
+            std::filesystem::rename(report.output_root, absolute_output);
+        } catch (...) {
+            if (std::filesystem::exists(stale)) std::filesystem::rename(stale, absolute_output);
+            throw;
+        }
+        std::filesystem::remove_all(stale, cleanup_error);
+        std::cout << "Portpaket erzeugt: " << absolute_output.string() << '\n'
+                  << "Funktionen: " << report.functions << '\n'
+                  << "Partitionen: " << report.partitions << '\n'
+                  << "Disc-Pack-Sektoren: " << report.packed_sectors << '\n'
+                  << "Disc-Pack-Bytes: " << report.packed_disc_bytes << '\n'
+                  << "Debug-Hostbuild erfolgreich: " << target_name << '\n';
+        return 0;
+    } catch (...) {
+        std::filesystem::remove_all(stage, cleanup_error);
+        throw;
     }
-    const auto build =
-        std::string("cmake --build ") + shell_quote(build_path) + " --target " + target_name;
-    if (std::system(build.c_str()) != 0) {
-        throw katana::cli::Error(katana::cli::ExitCode::BuildFailure,
-                                 "Port-Hosttarget konnte nicht gebaut werden.");
-    }
-    std::cout << "Portprojekt erzeugt: " << report.output_root.string() << '\n'
-              << "Funktionen: " << report.functions << '\n'
-              << "Partitionen: " << report.partitions << '\n'
-              << "Generierte Dateien: " << report.generated_files << '\n'
-              << "Entfernte Altartefakte: " << report.removed_files << '\n'
-              << "Debug-Hostbuild erfolgreich: " << target_name << '\n';
-    return 0;
 }
 
 void print_usage(std::ostream& output) {

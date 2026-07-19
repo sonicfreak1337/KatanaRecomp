@@ -51,8 +51,8 @@ CanonicalBlockDispatcher::dispatch(CpuState& cpu,
     case BlockEndKind::ExceptionReturn:
     case BlockEndKind::InterruptSafepoint: {
         if (end.kind != BlockEndKind::Return && end.kind != BlockEndKind::ExceptionReturn &&
-            end.kind != BlockEndKind::Exception &&
-            end.kind != BlockEndKind::InterruptSafepoint && !dynamic_target) {
+            end.kind != BlockEndKind::Exception && end.kind != BlockEndKind::InterruptSafepoint &&
+            !dynamic_target) {
             throw std::invalid_argument("Dynamischer Block braucht ein Ziel.");
         }
         const auto kind = end.kind == BlockEndKind::Call     ? IndirectDispatchKind::Call
@@ -60,23 +60,23 @@ CanonicalBlockDispatcher::dispatch(CpuState& cpu,
                                                              : IndirectDispatchKind::TailJump;
         const auto callsite = end.callsite.value_or(end.source.virtual_address);
         const auto return_address = end.kind == BlockEndKind::Call ? callsite + 4u : cpu.pr;
-        const auto result = dispatch_indirect(
-            cpu,
-            table_,
-            {kind,
-             callsite,
-             end.kind == BlockEndKind::ExceptionReturn || end.kind == BlockEndKind::Exception ||
-                     end.kind == BlockEndKind::InterruptSafepoint
-                 ? cpu.pc
-                 : dynamic_target.value_or(0u),
-             return_address,
-             end.source,
-             variant,
-             DispatchResolutionOrigin::TableLookup,
-             diagnostics_,
-             RuntimeDispatchClass::GuardedFallback,
-             metrics_,
-             materializer_});
+        const auto result = dispatch_indirect(cpu,
+                                              table_,
+                                              {kind,
+                                               callsite,
+                                               end.kind == BlockEndKind::ExceptionReturn ||
+                                                       end.kind == BlockEndKind::Exception ||
+                                                       end.kind == BlockEndKind::InterruptSafepoint
+                                                   ? cpu.pc
+                                                   : dynamic_target.value_or(0u),
+                                               return_address,
+                                               end.source,
+                                               variant,
+                                               DispatchResolutionOrigin::TableLookup,
+                                               diagnostics_,
+                                               RuntimeDispatchClass::GuardedFallback,
+                                               metrics_,
+                                               materializer_});
         target = BlockAddress{result.diagnostic_target, result.physical_target};
         target_block = result.block;
         break;
@@ -85,20 +85,19 @@ CanonicalBlockDispatcher::dispatch(CpuState& cpu,
         break;
     }
     if (direct && target) {
-        const auto selected = dispatch_indirect(
-            cpu,
-            table_,
-            {IndirectDispatchKind::TailJump,
-             end.source.virtual_address,
-             target->virtual_address,
-             cpu.pr,
-             end.source,
-             variant,
-             DispatchResolutionOrigin::StaticProof,
-             diagnostics_,
-             RuntimeDispatchClass::GuardedFallback,
-             metrics_,
-             materializer_});
+        const auto selected = dispatch_indirect(cpu,
+                                                table_,
+                                                {IndirectDispatchKind::TailJump,
+                                                 end.source.virtual_address,
+                                                 target->virtual_address,
+                                                 cpu.pr,
+                                                 end.source,
+                                                 variant,
+                                                 DispatchResolutionOrigin::StaticProof,
+                                                 diagnostics_,
+                                                 RuntimeDispatchClass::GuardedFallback,
+                                                 metrics_,
+                                                 materializer_});
         target_block = selected.block;
     }
     return {make_block_exit(cpu, context, end.kind, end.source, target), target_block, direct};

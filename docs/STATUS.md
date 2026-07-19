@@ -1,9 +1,9 @@
 # Projektstatus
 
-Interner Entwicklungsmeilenstein: `v0.46.0`
-Phase: Core-Stabilisierung vor v0.47
+Interner Entwicklungsmeilenstein: `v0.47.0`
+Phase: v0.47 intern freigegeben; Vorbereitung auf v0.48
 Naechster Task: Nutzerreview, danach `KR-4705`
-Naechstes Gate: `v0.47.0` - Core-Stabilisierung und generische Retail-Runtime
+Naechstes Gate: `v0.48.0` - Integration
 Weitere interne Gates: `v0.48.0` Integration und `v0.49.0` Alpha-Candidate
 Erster oeffentlicher Release: `v0.50.0` Alpha
 
@@ -290,7 +290,7 @@ aktuelles Executable liefern. Manifest-GDI, Jobresultat, Resultindex und
 Portmetadaten werden intern an dieselbe Projektidentitaet gebunden; portable
 Metadaten und generierte Quellen muessen zwischen beiden Jobs bytegleich sein.
 Der atomare Bericht gibt nur Aggregate, Boolvertraege und allgemeine
-Fehlerklassen aus. Er kann hoechstens `SA_ANALYSIS_CONTINUES` melden und setzt
+Fehlerklassen aus. Er kann hoechstens `KR_RETAIL_ANALYSIS_CONTINUES` melden und setzt
 `game_executable_started=false` sowie `runtime_processes_started=0`.
 
 Der ausfuehrbare Vertrag steht in

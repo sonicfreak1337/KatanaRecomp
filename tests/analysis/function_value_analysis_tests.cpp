@@ -121,21 +121,27 @@ int main() {
 
     std::vector<std::uint8_t> guarded_callee_bytes(0x26u, 0x09u);
     const std::array<std::uint8_t, 10u> guarded_caller{
-        0x10u, 0xE4u, // mov #0x10,r4
-        0x0Bu, 0x41u, // jsr @r1
-        0x09u, 0x00u, // nop (delay)
-        0x2Bu, 0x40u, // jmp @r0
-        0x09u, 0x00u  // nop (delay)
+        0x10u,
+        0xE4u, // mov #0x10,r4
+        0x0Bu,
+        0x41u, // jsr @r1
+        0x09u,
+        0x00u, // nop (delay)
+        0x2Bu,
+        0x40u, // jmp @r0
+        0x09u,
+        0x00u // nop (delay)
     };
     const std::array<std::uint8_t, 6u> guarded_callee{
-        0x43u, 0x60u, // mov r4,r0
-        0x0Bu, 0x00u, // rts
-        0x09u, 0x00u  // nop (delay)
+        0x43u,
+        0x60u, // mov r4,r0
+        0x0Bu,
+        0x00u, // rts
+        0x09u,
+        0x00u // nop (delay)
     };
     std::copy(guarded_caller.begin(), guarded_caller.end(), guarded_callee_bytes.begin());
-    std::copy(guarded_callee.begin(),
-              guarded_callee.end(),
-              guarded_callee_bytes.begin() + 0x20u);
+    std::copy(guarded_callee.begin(), guarded_callee.end(), guarded_callee_bytes.begin() + 0x20u);
     katana::io::ExecutableImage guarded_callee_image;
     guarded_callee_image.set_guest_call_abi(katana::io::GuestCallAbi::SuperHC);
     guarded_callee_image.add_segment({".text",
@@ -164,17 +170,16 @@ int main() {
                      [](const auto& candidate) { return candidate.function_address == 0x20u; });
     require(guarded_callee_summary != guarded_values.summaries.end(),
             "Guarded-complete-Callkante legte ihren exklusiv erreichbaren Callee nicht an.");
-    const auto guarded_r0 = std::find_if(
-        guarded_callee_summary->registers.begin(),
-        guarded_callee_summary->registers.end(),
-        [](const auto& candidate) { return candidate.register_index == 0u; });
-    const auto guarded_return = std::find_if(
-        guarded_values.resolutions.begin(),
-        guarded_values.resolutions.end(),
-        [](const auto& candidate) { return candidate.instruction_address == 6u; });
+    const auto guarded_r0 =
+        std::find_if(guarded_callee_summary->registers.begin(),
+                     guarded_callee_summary->registers.end(),
+                     [](const auto& candidate) { return candidate.register_index == 0u; });
+    const auto guarded_return =
+        std::find_if(guarded_values.resolutions.begin(),
+                     guarded_values.resolutions.end(),
+                     [](const auto& candidate) { return candidate.instruction_address == 6u; });
     require(guarded_r0 != guarded_callee_summary->registers.end() && guarded_r0->complete &&
-                guarded_r0->guarded &&
-                guarded_r0->values == std::vector<std::uint32_t>{0x10u} &&
+                guarded_r0->guarded && guarded_r0->values == std::vector<std::uint32_t>{0x10u} &&
                 guarded_return != guarded_values.resolutions.end() && guarded_return->complete &&
                 guarded_return->guarded &&
                 guarded_return->evidence ==
@@ -319,9 +324,9 @@ int main() {
             "Allgemeiner unbekannter Zeiger besitzt keinen validierten Runtimevertrag: " +
                 std::to_string(static_cast<int>(site(runtime_pointer, 0u)->origin_class)) + "/" +
                 std::to_string(static_cast<int>(site(runtime_pointer, 0u)->evidence)) + "/" +
-                std::to_string(static_cast<int>(katana::analysis::control_flow_report_status(
-                    *site(runtime_pointer, 0u)))) + "/" +
-                site(runtime_pointer, 0u)->reason + "/" +
+                std::to_string(static_cast<int>(
+                    katana::analysis::control_flow_report_status(*site(runtime_pointer, 0u)))) +
+                "/" + site(runtime_pointer, 0u)->reason + "/" +
                 std::to_string(site(runtime_pointer, 0u)->evidence_origins.size()));
     const auto runtime_pointer_json =
         katana::analysis::format_control_flow_analysis_json(runtime_pointer);

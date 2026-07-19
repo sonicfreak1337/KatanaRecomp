@@ -135,11 +135,11 @@ try {
         $hostBuildWatch.Stop()
         if ($LASTEXITCODE -ne 0) { throw 'Exportierter synthetischer Hostport wurde nicht gebaut.' }
         $hostbuildMs = [Math]::Ceiling($hostBuildWatch.Elapsed.TotalMilliseconds)
-        $hostExecutable = Join-Path $portRoot 'build\phase9_host.exe'
+        $hostExecutable = Join-Path $portRoot 'phase9_host.exe'
         $startupWatch = [Diagnostics.Stopwatch]::StartNew()
-        $startupOutput = (& $hostExecutable --run-generated | Out-String).Trim()
+        $startupOutput = (& $hostExecutable | Out-String).Trim()
         $startupWatch.Stop()
-        if ($LASTEXITCODE -ne 0 -or $startupOutput -ne 'Generierter Einstieg beendet.') {
+        if ($LASTEXITCODE -ne 0 -or $startupOutput -notmatch 'KR_GUEST_PROGRAM_ENTERED') {
             throw 'Exportierter Hostport erreichte den ersten Gastcheckpoint nicht.'
         }
         $startupToGuestCheckpointUs = [Math]::Ceiling($startupWatch.Elapsed.TotalMilliseconds * 1000)

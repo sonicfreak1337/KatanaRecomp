@@ -99,6 +99,14 @@ werden abgelehnt. Ersatz und Unload entfernen ueberlappende Runtimebloecke und
 invalidieren den Code-Tracker. Ein unbekanntes ausfuehrbares Ziel bleibt ein
 sichtbarer Dispatchfehler.
 
+Der unterstuetzte Relocationtyp `module_base32` interpretiert ein
+32-Bit-Little-Endian-Quellwort als `Quellwort + Gastmodulbasis + Addend` mit
+32-Bit-Ueberlauf. Die Byteidentitaet wird gegen dieses kanonisch relokierte
+Abbild geprueft, nicht gegen die unveraenderten Quellbytes. Unbekannte oder
+ueberlappende Relocationfelder werden bereits beim Publizieren beziehungsweise
+Aktualisieren abgelehnt. Eine Aenderung von Tabelle, Typ oder Addend invalidiert
+alte Bloecke und erhoeht die Relocationgeneration.
+
 ## Demand-driven-Materialisierung
 
 Der optionale Pfad ist standardmaessig deaktiviert. Im aktivierten Modus gilt:

@@ -50,7 +50,7 @@ ausgefuehrt.
 Ein Fehler veraendert weder `PC` noch `PR`, zaehlt den Miss und wirft einen
 `IndirectDispatchError`. Der aktuelle generierte Port besitzt absichtlich
 keinen Interpreter- oder No-op-Fallback. Ein Miss beendet deshalb den Lauf und
-kann keinen Erfolg oder nachfolgenden Sonic-Checkpoint erzeugen.
+kann keinen Erfolg oder nachfolgenden Runtimecheckpoint erzeugen.
 
 ## Maschinenmetriken
 
@@ -91,7 +91,7 @@ Das frische Gate muss ohne private Daten pruefen:
 - Misszaehler und erster Fehler bleiben auch beim Wurf lesbar und das JSON
   enthaelt Gesamt- sowie Runtime-only-Zahlen;
 - der generierte Stop-on-Miss-Pfad meldet weder Erfolg noch einen Checkpoint
-  nach `SA_ANALYSIS_CONTINUES`;
+  nach `KR_RETAIL_ANALYSIS_CONTINUES`;
 - Portexport und Anwendungsbuild akzeptieren `runtime_only`, lehnen aber
   `guarded_partial` und `unresolved` ab;
 - Runtime-ABI 12, Backend-Interface-ABI 2 und Portprojektvertrag 4 werden von

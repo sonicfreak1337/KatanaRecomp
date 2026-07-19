@@ -150,7 +150,7 @@ try {
     }
     $jsonText = Get-Content -LiteralPath $firstReport -Raw
     $report = $jsonText | ConvertFrom-Json
-    if ($report.checkpoint -ne 'SA_PHASE6_MAIN_EXECUTION_STARTED' -or
+    if ($report.checkpoint -ne 'KR_PHASE6_MAIN_EXECUTION_STARTED' -or
         $report.executed_blocks -lt 1 -or $report.guest_cycles -lt 1 -or
         $report.scheduler_events -lt 1 -or $report.gdrom_completions -lt 1 -or
         $report.tmu_events -lt 1 -or $report.dma_events -lt 1 -or

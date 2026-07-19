@@ -50,8 +50,7 @@ struct Fixture {
     BlockVariantKey variant{1u, 2u, 3u, 4u, 5u};
     ExecutableModule module;
 
-    explicit Fixture(const std::uint32_t address = 0x100u,
-                     const bool publish_module = true) {
+    explicit Fixture(const std::uint32_t address = 0x100u, const bool publish_module = true) {
         module.id = "fixture-module";
         module.source_identity = "free-synthetic-fixture-v1";
         module.guest_start = address;
@@ -62,10 +61,10 @@ struct Fixture {
         if (publish_module) modules.publish(module);
     }
 
-    IndirectDispatchRequest request(const std::uint32_t target,
-                                    DemandBlockMaterializer* materializer,
-                                    const DispatchResolutionOrigin origin =
-                                        DispatchResolutionOrigin::RuntimeOnly) {
+    IndirectDispatchRequest
+    request(const std::uint32_t target,
+            DemandBlockMaterializer* materializer,
+            const DispatchResolutionOrigin origin = DispatchResolutionOrigin::RuntimeOnly) {
         return {IndirectDispatchKind::TailJump,
                 0x80u,
                 target,
@@ -89,8 +88,8 @@ MaterializationFailure dispatch_failure(Fixture& fixture,
     const auto pc = fixture.cpu.pc;
     const auto pr = fixture.cpu.pr;
     try {
-        static_cast<void>(dispatch_indirect(
-            fixture.cpu, fixture.blocks, fixture.request(target, &materializer)));
+        static_cast<void>(
+            dispatch_indirect(fixture.cpu, fixture.blocks, fixture.request(target, &materializer)));
     } catch (const IndirectDispatchError&) {
         require(fixture.cpu.pc == pc && fixture.cpu.pr == pr,
                 "Abgelehntes Ziel hatte bereits Gastwirkung.");
@@ -106,11 +105,8 @@ void target_validation_regressions() {
     {
         Fixture fixture;
         bool callback_called = false;
-        const auto failure = dispatch_failure(
-            fixture,
-            0x101u,
-            {true, 4u, 64u},
-            [&](auto, auto, const auto&) {
+        const auto failure =
+            dispatch_failure(fixture, 0x101u, {true, 4u, 64u}, [&](auto, auto, const auto&) {
                 callback_called = true;
                 return valid_candidate(0x101u, fixture.variant);
             });
@@ -119,11 +115,10 @@ void target_validation_regressions() {
     }
     {
         Fixture fixture(0x200000u);
-        const auto failure = dispatch_failure(
-            fixture,
-            0x200000u,
-            {true, 4u, 64u},
-            [&](auto, auto, const auto&) { return valid_candidate(0x200000u, fixture.variant); });
+        const auto failure =
+            dispatch_failure(fixture, 0x200000u, {true, 4u, 64u}, [&](auto, auto, const auto&) {
+                return valid_candidate(0x200000u, fixture.variant);
+            });
         require(failure == MaterializationFailure::Uncommitted,
                 "Ziel ausserhalb committed Gastbytes wurde nicht abgelehnt.");
     }
@@ -135,11 +130,8 @@ void target_validation_regressions() {
         data.range_roles = {{0u, 4u, ExecutableStorageRole::ProvenData}};
         fixture.modules.publish(data);
         bool callback_called = false;
-        const auto failure = dispatch_failure(
-            fixture,
-            0x100u,
-            {true, 4u, 64u},
-            [&](auto, auto, const auto&) {
+        const auto failure =
+            dispatch_failure(fixture, 0x100u, {true, 4u, 64u}, [&](auto, auto, const auto&) {
                 callback_called = true;
                 return valid_candidate(0x100u, fixture.variant);
             });
@@ -153,21 +145,19 @@ void target_validation_regressions() {
         denied.id = "permission-denied";
         denied.executable_permission = false;
         fixture.modules.publish(denied);
-        const auto failure = dispatch_failure(
-            fixture,
-            0x100u,
-            {true, 4u, 64u},
-            [&](auto, auto, const auto&) { return valid_candidate(0x100u, fixture.variant); });
+        const auto failure =
+            dispatch_failure(fixture, 0x100u, {true, 4u, 64u}, [&](auto, auto, const auto&) {
+                return valid_candidate(0x100u, fixture.variant);
+            });
         require(failure == MaterializationFailure::PermissionDenied,
                 "Speicherberechtigung wurde als Ausfuehrungsabdeckung missverstanden.");
     }
     {
         Fixture fixture(0x100u, false);
-        const auto failure = dispatch_failure(
-            fixture,
-            0x100u,
-            {true, 4u, 64u},
-            [&](auto, auto, const auto&) { return valid_candidate(0x100u, fixture.variant); });
+        const auto failure =
+            dispatch_failure(fixture, 0x100u, {true, 4u, 64u}, [&](auto, auto, const auto&) {
+                return valid_candidate(0x100u, fixture.variant);
+            });
         require(failure == MaterializationFailure::UnknownSource,
                 "Unbekannte Speicherbytes wurden pauschal runtime-materialisierbar.");
     }
@@ -176,11 +166,8 @@ void target_validation_regressions() {
 void revalidation_regressions() {
     {
         Fixture fixture;
-        const auto failure = dispatch_failure(
-            fixture,
-            0x100u,
-            {true, 4u, 64u},
-            [&](auto, auto, const auto&) {
+        const auto failure =
+            dispatch_failure(fixture, 0x100u, {true, 4u, 64u}, [&](auto, auto, const auto&) {
                 fixture.cpu.memory.write_u8(0x100u, 0x0Bu);
                 return valid_candidate(0x100u, fixture.variant);
             });
@@ -189,13 +176,9 @@ void revalidation_regressions() {
     }
     {
         Fixture fixture;
-        const auto failure = dispatch_failure(
-            fixture,
-            0x100u,
-            {true, 4u, 64u},
-            [&](auto, auto, const auto&) {
-                fixture.modules.unload(
-                    fixture.module.id, fixture.blocks, fixture.tracker);
+        const auto failure =
+            dispatch_failure(fixture, 0x100u, {true, 4u, 64u}, [&](auto, auto, const auto&) {
+                fixture.modules.unload(fixture.module.id, fixture.blocks, fixture.tracker);
                 return valid_candidate(0x100u, fixture.variant);
             });
         require(failure == MaterializationFailure::ModuleUnloaded,
@@ -203,11 +186,8 @@ void revalidation_regressions() {
     }
     {
         Fixture fixture;
-        const auto failure = dispatch_failure(
-            fixture,
-            0x100u,
-            {true, 4u, 64u},
-            [&](auto, auto, const auto&) {
+        const auto failure =
+            dispatch_failure(fixture, 0x100u, {true, 4u, 64u}, [&](auto, auto, const auto&) {
                 auto replacement = fixture.module;
                 fixture.modules.replace(replacement, fixture.blocks, fixture.tracker);
                 return valid_candidate(0x100u, fixture.variant);
@@ -217,11 +197,8 @@ void revalidation_regressions() {
     }
     {
         Fixture fixture;
-        const auto failure = dispatch_failure(
-            fixture,
-            0x100u,
-            {true, 4u, 64u},
-            [&](auto, auto, const auto&) {
+        const auto failure =
+            dispatch_failure(fixture, 0x100u, {true, 4u, 64u}, [&](auto, auto, const auto&) {
                 fixture.modules.update_relocations(
                     fixture.module.id, {{0u, 1u, 0}}, fixture.blocks, fixture.tracker);
                 return valid_candidate(0x100u, fixture.variant);
@@ -236,11 +213,8 @@ void budget_and_dispatch_regressions() {
         Fixture fixture;
         BlockMaterializationPolicy policy{true, 4u, 64u};
         policy.max_instructions = 1u;
-        const auto failure = dispatch_failure(
-            fixture,
-            0x100u,
-            policy,
-            [&](auto, auto, const auto&) {
+        const auto failure =
+            dispatch_failure(fixture, 0x100u, policy, [&](auto, auto, const auto&) {
                 auto candidate = valid_candidate(0x100u, fixture.variant);
                 candidate.instructions = 2u;
                 return candidate;
@@ -250,16 +224,15 @@ void budget_and_dispatch_regressions() {
     }
     {
         Fixture fixture;
-        DemandBlockMaterializer materializer(
-            fixture.modules,
-            fixture.blocks,
-            &fixture.tracker,
-            {true, 4u, 64u},
-            [&](const auto target, auto, const auto& variant) {
-                return valid_candidate(target, variant);
-            });
-        const auto first = dispatch_indirect(
-            fixture.cpu, fixture.blocks, fixture.request(0x100u, &materializer));
+        DemandBlockMaterializer materializer(fixture.modules,
+                                             fixture.blocks,
+                                             &fixture.tracker,
+                                             {true, 4u, 64u},
+                                             [&](const auto target, auto, const auto& variant) {
+                                                 return valid_candidate(target, variant);
+                                             });
+        const auto first =
+            dispatch_indirect(fixture.cpu, fixture.blocks, fixture.request(0x100u, &materializer));
         require(fixture.blocks.dispatch_status(0x100u, fixture.variant).state ==
                         RuntimeBlockDispatchState::RuntimeMaterialized &&
                     first.block,
@@ -270,8 +243,7 @@ void budget_and_dispatch_regressions() {
             static_cast<void>(dispatch_indirect(
                 fixture.cpu,
                 fixture.blocks,
-                fixture.request(
-                    0x100u, &materializer, DispatchResolutionOrigin::InlineCache)));
+                fixture.request(0x100u, &materializer, DispatchResolutionOrigin::InlineCache)));
             throw std::runtime_error("Inline-Cache dispatchte stale Bytes.");
         } catch (const IndirectDispatchError&) {
             require(fixture.cpu.pc == pc &&
@@ -291,24 +263,24 @@ void budget_and_dispatch_regressions() {
             cpu,
             table,
             {IndirectDispatchKind::TailJump, 0x80u, 0x100u, 0u, {0x80u, 0x80u}, variant});
-        require(result.block == handle &&
-                    table.dispatch_status(0x100u, variant).state ==
-                        RuntimeBlockDispatchState::StaticCompiled,
+        require(result.block == handle && table.dispatch_status(0x100u, variant).state ==
+                                              RuntimeBlockDispatchState::StaticCompiled,
                 "Statisch kompilierter Block wurde erneut materialisiert.");
     }
 }
 
 std::vector<BlockMaterializationEvent> deterministic_events() {
     Fixture fixture;
-    DemandBlockMaterializer materializer(
-        fixture.modules,
-        fixture.blocks,
-        &fixture.tracker,
-        {true, 4u, 64u},
-        [&](const auto target, auto, const auto& variant) { return valid_candidate(target, variant); });
+    DemandBlockMaterializer materializer(fixture.modules,
+                                         fixture.blocks,
+                                         &fixture.tracker,
+                                         {true, 4u, 64u},
+                                         [&](const auto target, auto, const auto& variant) {
+                                             return valid_candidate(target, variant);
+                                         });
     try {
-        static_cast<void>(dispatch_indirect(
-            fixture.cpu, fixture.blocks, fixture.request(0x101u, &materializer)));
+        static_cast<void>(
+            dispatch_indirect(fixture.cpu, fixture.blocks, fixture.request(0x101u, &materializer)));
     } catch (const IndirectDispatchError&) {
     }
     static_cast<void>(

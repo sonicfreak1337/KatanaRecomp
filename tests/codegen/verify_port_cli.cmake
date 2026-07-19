@@ -1,6 +1,9 @@
-if(NOT DEFINED KATANA_FIXTURE_WRITER OR NOT DEFINED KATANA_CLI)
-  message(FATAL_ERROR "Port-CLI-Test braucht Fixture-Writer und CLI")
+if(NOT DEFINED KATANA_FIXTURE_WRITER OR NOT DEFINED KATANA_CLI OR
+   NOT DEFINED KATANA_RUNTIME_ROOT)
+  message(FATAL_ERROR "Port-CLI-Test braucht Fixture-Writer, CLI und Runtime-SDK")
 endif()
+
+set(ENV{KATANA_RUNTIME_ROOT} "${KATANA_RUNTIME_ROOT}")
 
 if(NOT DEFINED ENV{TEMP} OR "$ENV{TEMP}" STREQUAL "")
   message(FATAL_ERROR "Port-CLI-Test braucht ein temporaeres Verzeichnis ausserhalb des Quellbaums")
@@ -35,9 +38,9 @@ if(NOT port_result EQUAL 0)
 endif()
 
 if(WIN32)
-  set(game "${fixture}/port/build/cli_game.exe")
+  set(game "${fixture}/port/cli_game.exe")
 else()
-  set(game "${fixture}/port/build/cli_game")
+  set(game "${fixture}/port/cli_game")
 endif()
 if(NOT EXISTS "${game}")
   file(REMOVE_RECURSE "${fixture}")
@@ -50,13 +53,15 @@ execute_process(
   OUTPUT_VARIABLE game_output
   ERROR_VARIABLE game_error
 )
-if(game_result EQUAL 0 OR NOT game_error MATCHES "Aufruf: game")
+if(NOT game_result EQUAL 0 OR
+   NOT game_output MATCHES "KR_GENERATED_RUNTIME_STARTED" OR
+   NOT game_output MATCHES "KR_GUEST_PROGRAM_ENTERED")
   file(REMOVE_RECURSE "${fixture}")
-  message(FATAL_ERROR "Porttarget akzeptiert eine fehlende GDI: ${game_output} ${game_error}")
+  message(FATAL_ERROR "Porttarget startet nicht aus dem Standard-Disc-Pack: ${game_output} ${game_error}")
 endif()
 
 execute_process(
-  COMMAND "${game}" "${fixture}/disc/disc.gdi"
+  COMMAND "${game}" --content "${fixture}/port/content/game.katana-disc"
   RESULT_VARIABLE generated_result
   OUTPUT_VARIABLE generated_output
   ERROR_VARIABLE generated_error
@@ -68,13 +73,13 @@ if(NOT generated_result EQUAL 0 OR
    NOT generated_output MATCHES "audio_buffers=1")
   file(REMOVE_RECURSE "${fixture}")
   message(FATAL_ERROR
-    "Eigenstaendiger GDI-/Runtimepfad ist nicht lauffaehig (${generated_result}): "
+    "Eigenstaendiger PackedDiscSource-Runtimepfad ist nicht lauffaehig (${generated_result}): "
     "${generated_output} ${generated_error}")
 endif()
 
 file(APPEND "${fixture}/disc/high.bin" "identity-change")
 execute_process(
-  COMMAND "${game}" "./disc.gdi"
+  COMMAND "${game}" --gdi-debug "./disc.gdi"
   WORKING_DIRECTORY "${fixture}/disc"
   RESULT_VARIABLE mismatch_result
   OUTPUT_VARIABLE mismatch_output
@@ -82,7 +87,7 @@ execute_process(
 )
 if(mismatch_result EQUAL 0 OR
    NOT mismatch_error MATCHES "source-identity-mismatch" OR
-   mismatch_output MATCHES "SA_MAIN_ENTERED|silent_failures=0")
+   mismatch_output MATCHES "KR_GUEST_PROGRAM_ENTERED|silent_failures=0")
   file(REMOVE_RECURSE "${fixture}")
   message(FATAL_ERROR
     "Geaenderte Laufzeit-GDI wurde nicht vor Gastcode abgelehnt: ${mismatch_output} ${mismatch_error}")
@@ -110,17 +115,17 @@ if(NOT trap_port_result EQUAL 0)
   message(FATAL_ERROR "Trap-Port konnte nicht gebaut werden: ${trap_port_output} ${trap_port_error}")
 endif()
 if(WIN32)
-  set(trap_game "${fixture}/trap-port/build/trap_game.exe")
+  set(trap_game "${fixture}/trap-port/trap_game.exe")
 else()
-  set(trap_game "${fixture}/trap-port/build/trap_game")
+  set(trap_game "${fixture}/trap-port/trap_game")
 endif()
 execute_process(
-  COMMAND "${trap_game}" "${fixture}/trap-disc/disc.gdi"
+  COMMAND "${trap_game}"
   RESULT_VARIABLE trap_result
   OUTPUT_VARIABLE trap_output
   ERROR_VARIABLE trap_error
 )
-if(trap_result EQUAL 0 OR trap_output MATCHES "SA_MAIN_ENTERED|silent_failures=0")
+if(trap_result EQUAL 0 OR trap_output MATCHES "KR_GUEST_PROGRAM_ENTERED|silent_failures=0")
   file(REMOVE_RECURSE "${fixture}")
   message(FATAL_ERROR
     "Trap-Einstieg erzeugte einen falschen Hauptprogrammnachweis: ${trap_output} ${trap_error}")
@@ -138,7 +143,7 @@ if(missing_generated_result EQUAL 0)
 endif()
 
 execute_process(
-  COMMAND "${game}" --gdi "${fixture}/missing/disc.gdi"
+  COMMAND "${game}" --gdi-debug "${fixture}/missing/disc.gdi"
   RESULT_VARIABLE missing_source_result
   OUTPUT_VARIABLE missing_source_output
   ERROR_VARIABLE missing_source_error
@@ -149,5 +154,24 @@ if(missing_source_result EQUAL 0 OR missing_source_error MATCHES "${fixture}")
     "Fehlende GDI liefert Erfolg oder einen unredigierten Hostpfad: ${missing_source_error}")
 endif()
 
+file(REMOVE_RECURSE "${fixture}/disc")
+file(RENAME "${fixture}/port" "${fixture}/moved-port")
+if(WIN32)
+  set(moved_game "${fixture}/moved-port/cli_game.exe")
+else()
+  set(moved_game "${fixture}/moved-port/cli_game")
+endif()
+execute_process(
+  COMMAND "${moved_game}"
+  RESULT_VARIABLE moved_result
+  OUTPUT_VARIABLE moved_output
+  ERROR_VARIABLE moved_error
+)
+if(NOT moved_result EQUAL 0 OR NOT moved_output MATCHES "KR_GUEST_PROGRAM_ENTERED")
+  file(REMOVE_RECURSE "${fixture}")
+  message(FATAL_ERROR
+    "Verschobener Port startet nach Entfernen der GDI nicht: ${moved_output} ${moved_error}")
+endif()
+
 file(REMOVE_RECURSE "${fixture}")
-message(STATUS "KR-3507/KR-4508 Port-CLI, GDI-Runtime und Hostbuild erfolgreich")
+message(STATUS "Port-CLI, PackedDiscSource und GDI-unabhaengiger Hostbuild erfolgreich")

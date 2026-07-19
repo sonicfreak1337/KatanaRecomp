@@ -16,6 +16,7 @@
 #include "katana/ir/verifier.hpp"
 #include "katana/platform/dreamcast_disc.hpp"
 #include "katana/runtime/abi.hpp"
+#include "katana/runtime/packed_disc.hpp"
 
 #include <algorithm>
 #include <cctype>
@@ -120,6 +121,7 @@ std::string handwritten_main(const std::string& entry_namespace,
            "#include \"katana/runtime/host_runtime.hpp\"\n"
            "#include \"katana/runtime/host_video.hpp\"\n"
            "#include \"katana/runtime/indirect_dispatch.hpp\"\n"
+           "#include \"katana/runtime/packed_disc.hpp\"\n"
            "#include \"katana/runtime/scheduler.hpp\"\n"
            "#include \"katana/io/input_provenance.hpp\"\n"
            "#include <algorithm>\n#include <exception>\n#include <filesystem>\n#include "
@@ -133,7 +135,10 @@ std::string handwritten_main(const std::string& entry_namespace,
            "    std::vector<katana::io::InputProvenance> actual;\n"
            "    actual.push_back(katana::io::capture_input_provenance(\"gdi-descriptor\", "
            "source));\n"
-           "    for (const auto& track : boot.source->descriptor().tracks)\n"
+           "    const auto gdi = std::dynamic_pointer_cast<katana::runtime::GdiDiscSource>(\n"
+           "        boot.source);\n"
+           "    if (!gdi) throw std::runtime_error(\"source-identity-mismatch\");\n"
+           "    for (const auto& track : gdi->descriptor().tracks)\n"
            "        actual.push_back(katana::io::capture_input_provenance(\n"
            "            \"gdi-track-\" + std::to_string(track.number), track.resolved_path));\n"
            "    if (actual.size() != std::size(expected_inputs))\n"
@@ -145,6 +150,10 @@ std::string handwritten_main(const std::string& entry_namespace,
            "    const std::string_view boot_bytes(\n"
            "        reinterpret_cast<const char*>(boot.boot_file.data()), boot.boot_file.size());\n"
            "    if (katana::io::sha256_bytes(boot_bytes) != expected_boot_sha256)\n"
+           "        throw std::runtime_error(\"source-identity-mismatch\");\n"
+           "}\n"
+           "void verify_pack_identity(const katana::runtime::PackedDiscSource& source) {\n"
+           "    if (source.info().job_generation != expected_project_identity)\n"
            "        throw std::runtime_error(\"source-identity-mismatch\");\n"
            "}\n"
            "class PortPlatformServices final : public katana::runtime::PlatformServices {\n"
@@ -277,24 +286,40 @@ std::string handwritten_main(const std::string& entry_namespace,
            "int main(const int argc, const char* const* argv) {\n"
            "    std::filesystem::path source;\n"
            "    try {\n"
-           "        if (argc == 2 && !std::string_view(argv[1]).empty() &&\n"
-           "            std::string_view(argv[1]).front() != '-') {\n"
-           "            source = argv[1];\n"
-           "        } else if (argc == 3 && (std::string_view(argv[1]) == \"--gdi\" ||\n"
-           "                                      std::string_view(argv[1]) == "
-           "\"--run-generated\")) {\n"
+           "        std::error_code executable_error;\n"
+           "        auto executable = std::filesystem::weakly_canonical(argv[0], "
+           "executable_error);\n"
+           "        if (executable_error || executable.empty())\n"
+           "            executable = std::filesystem::absolute(argv[0]);\n"
+           "        const auto port_root = executable.parent_path();\n"
+           "        bool gdi_debug = false;\n"
+           "        if (argc == 1) {\n"
+           "            source = port_root / \"content\" / \"game.katana-disc\";\n"
+           "        } else if (argc == 3 && std::string_view(argv[1]) == \"--content\") {\n"
            "            source = argv[2];\n"
+           "        } else if (argc == 3 && std::string_view(argv[1]) == \"--gdi-debug\") {\n"
+           "            source = argv[2]; gdi_debug = true;\n"
            "        } else {\n"
-           "            std::cerr << \"Aufruf: game <disc.gdi> oder game --gdi <disc.gdi>\\n\";\n"
+           "            std::cerr << \"Aufruf: game [--content <game.katana-disc>] "
+           "[--gdi-debug <disc.gdi>]\\n\";\n"
            "            return 2;\n"
            "        }\n"
            "        katana::runtime::DreamcastRuntimeBootImage boot;\n"
-           "        try { boot = katana::runtime::load_dreamcast_runtime_boot(source); }\n"
-           "        catch (const std::exception&) { throw "
+           "        try {\n"
+           "            if (gdi_debug) {\n"
+           "                boot = katana::runtime::load_dreamcast_runtime_boot(source);\n"
+           "                verify_source_identity(source, boot);\n"
+           "            } else {\n"
+           "                auto packed = katana::runtime::PackedDiscSource::open(source);\n"
+           "                verify_pack_identity(*packed);\n"
+           "                boot = katana::runtime::load_dreamcast_runtime_boot(\n"
+           "                    packed, packed->primary_data_lba(), "
+           "packed->info().tracks.size());\n"
+           "            }\n"
+           "        } catch (const std::exception&) { throw "
            "std::runtime_error(\"source-identity-mismatch\"); }\n"
-           "        verify_source_identity(source, boot);\n"
            "        auto mutable_storage = katana::runtime::DreamcastMutableStorage::open(\n"
-           "            {std::string(expected_project_identity)});\n"
+           "            {std::string(expected_project_identity), port_root / \"user-data\"});\n"
            "        katana::runtime::CpuState cpu;\n"
            "        const auto state = katana::runtime::initialize_dreamcast_runtime(\n"
            "            cpu, boot, katana::runtime::DreamcastRuntimeFirmwareMode::" +
@@ -396,7 +421,7 @@ std::string handwritten_main(const std::string& entry_namespace,
            "                      << services.executed_blocks() << '\\n';\n"
            "            return 3;\n"
            "        }\n"
-           "        std::cout << \"SA_MAIN_ENTERED\\n\";\n"
+           "        std::cout << \"KR_GUEST_PROGRAM_ENTERED\\n\";\n"
            "        std::cout << \"KATANA_RUNTIME_METRICS silent_failures=\"\n"
            "                  << silent_failures << \" guest_cycles=\"\n"
            "                  << result.scheduler_cycle << \" indirect_dispatches=\"\n"
@@ -980,6 +1005,37 @@ PortExportResult export_dreamcast_port_project(const PreparedPortProgram& prepar
         path_is_within(canonical_root, std::filesystem::canonical(options.forbidden_source_root))) {
         throw std::invalid_argument("Kanonische Port-Ausgabe liegt im KatanaRecomp-Quellbaum.");
     }
+    const auto descriptor_input =
+        std::find_if(prepared.inputs.begin(), prepared.inputs.end(), [](const auto& input) {
+            return input.role == "gdi-descriptor";
+        });
+    if (descriptor_input == prepared.inputs.end() || descriptor_input->local_path.empty())
+        throw std::invalid_argument(
+            "Portexport besitzt keine lokale GDI-Eingabe fuer den Disc-Pack.");
+    const auto disc_source = katana::runtime::GdiDiscSource::open(descriptor_input->local_path);
+    const auto& disc_descriptor = disc_source->descriptor();
+    if (disc_descriptor.sha256 != descriptor_input->sha256)
+        throw std::runtime_error("GDI wurde vor dem Disc-Pack-Export veraendert.");
+    for (const auto& track : disc_descriptor.tracks) {
+        const auto role = "gdi-track-" + std::to_string(track.number);
+        const auto expected = std::find_if(prepared.inputs.begin(),
+                                           prepared.inputs.end(),
+                                           [&](const auto& input) { return input.role == role; });
+        if (expected == prepared.inputs.end() || expected->sha256 != track.sha256)
+            throw std::runtime_error("GDI-Track wurde vor dem Disc-Pack-Export veraendert.");
+    }
+    const auto packed_disc_path = canonical_root / "content" / "game.katana-disc";
+    const auto packed_info = katana::runtime::write_packed_disc(
+        *disc_source, packed_disc_path, std::string(prepared.project_identity));
+    const auto packed_sha256 =
+        katana::io::capture_input_provenance("packed-disc", packed_disc_path).sha256;
+    const auto packed_manifest_path = canonical_root / "content" / "game.katana-disc.json";
+    write_port_file(canonical_root,
+                    "content/game.katana-disc.json",
+                    katana::runtime::format_packed_disc_manifest(packed_info, packed_sha256),
+                    true);
+    std::filesystem::create_directories(canonical_root / "runtime");
+    std::filesystem::create_directories(canonical_root / "user-data");
     const auto write = write_codegen_project(canonical_root / "generated", std::move(artifacts));
     write_port_file(canonical_root, "CMakeLists.txt", root_cmake());
     write_port_file(canonical_root, ".gitignore", "/build/\n");
@@ -1005,17 +1061,27 @@ PortExportResult export_dreamcast_port_project(const PreparedPortProgram& prepar
                                      prepared.entry_address),
                     true);
 
-    return {canonical_root,
-            prepared.program.size(),
-            partitions.size(),
-            write.written_files.size(),
-            write.removed_files.size(),
-            {"gdi-validated",
-             "boot-image-loaded",
-             "analysis-complete",
-             "ir-lowered",
-             "partitioned-codegen-complete",
-             "port-project-written"}};
+    PortExportResult result;
+    result.output_root = canonical_root;
+    result.functions = prepared.program.size();
+    result.partitions = partitions.size();
+    result.generated_files = write.written_files.size();
+    result.removed_files = write.removed_files.size();
+    result.packed_disc = packed_disc_path;
+    result.packed_disc_manifest = packed_manifest_path;
+    result.packed_disc_identity = packed_info.content_identity;
+    result.packed_sectors = packed_info.packed_sectors;
+    result.packed_disc_bytes = packed_info.pack_size;
+    result.uncompressed_disc_bytes = packed_info.uncompressed_size;
+    result.checkpoints = {"gdi-validated",
+                          "disc-pack-written",
+                          "disc-pack-verified",
+                          "boot-image-loaded",
+                          "analysis-complete",
+                          "ir-lowered",
+                          "partitioned-codegen-complete",
+                          "port-project-written"};
+    return result;
 }
 
 PortExportResult export_dreamcast_port_project(const std::filesystem::path& gdi_path,

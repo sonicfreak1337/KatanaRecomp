@@ -19,6 +19,8 @@ class IndirectDispatchMetrics;
 
 enum class ExecutableModuleKind : std::uint8_t { Module, Overlay };
 
+inline constexpr std::uint32_t executable_module_relocation_module_base32 = 1u;
+
 enum class ExecutableStorageRole : std::uint8_t {
     RuntimeMaterializable,
     ProvenData,
@@ -53,8 +55,7 @@ struct ExecutableModule {
 
     [[nodiscard]] std::uint64_t end_address() const noexcept;
     [[nodiscard]] bool contains(std::uint32_t address, std::size_t width = 1u) const noexcept;
-    [[nodiscard]] bool materializable(std::uint32_t address,
-                                      std::size_t width = 1u) const noexcept;
+    [[nodiscard]] bool materializable(std::uint32_t address, std::size_t width = 1u) const noexcept;
 };
 
 struct ExecutableModuleMetrics {
@@ -211,9 +212,9 @@ class DemandBlockMaterializer final {
 [[nodiscard]] const char* executable_module_kind_name(ExecutableModuleKind value) noexcept;
 [[nodiscard]] const char* executable_storage_role_name(ExecutableStorageRole value) noexcept;
 [[nodiscard]] const char* materialization_failure_name(MaterializationFailure value) noexcept;
-[[nodiscard]] std::string format_block_materialization_metrics_json(
-    const BlockMaterializationMetrics& metrics,
-    std::span<const BlockMaterializationEvent> events = {},
-    bool include_local_details = false);
+[[nodiscard]] std::string
+format_block_materialization_metrics_json(const BlockMaterializationMetrics& metrics,
+                                          std::span<const BlockMaterializationEvent> events = {},
+                                          bool include_local_details = false);
 
 } // namespace katana::runtime

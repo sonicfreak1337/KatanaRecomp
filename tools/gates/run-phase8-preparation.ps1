@@ -80,7 +80,7 @@ try {
         reference_license_audit = 'success'
         release_build = 'disabled-until-alpha'
         ci = 'disabled-until-alpha'
-        sonic_adventure = 'not-run-before-v0.50.0'
+        private_retail_testbench = 'not-run-before-runtime-bring-up'
     }
     $report | ConvertTo-Json -Depth 4 | Set-Content `
         (Join-Path $reportDirectory 'phase8-gate-preparation.json') -Encoding utf8

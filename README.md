@@ -1,6 +1,6 @@
 # KatanaRecomp
 
-Aktueller interner Pre-Alpha-Meilenstein: `0.46.0`
+Aktueller interner Pre-Alpha-Meilenstein: `0.47.0`
 
 KatanaRecomp ist ein unabhaengiges C++20-Framework fuer die statische
 Rekompilierung von Sega-Dreamcast-SH-4-Code. Das Projekt ist kein Emulator,
@@ -25,7 +25,7 @@ Eingabe
   -> natives Hostprojekt
 ```
 
-Der aktuelle kumulative Debug-Vertrag umfasst **168 automatische Tests**.
+Der aktuelle kumulative Debug-Vertrag umfasst **175 automatische Tests**.
 Phase 10 ist
 fuer den freigegebenen Windows-Workflow abgeschlossen: eine `.gdi` waehlen,
 einen Ausgabeordner waehlen und den Analyse-/Buildzustand sichtbar verfolgen.
@@ -54,7 +54,7 @@ redigierte Buildlog live an und erzeugt bei vollstaendiger Analyse
 Ergebnisindex und Buildplan als Debuggrundlage erhalten; ein irrefuehrender
 Hostbuild wird nicht erzeugt.
 
-Der sichtbare interne Meilenstein `0.46.0` ist kein Produktrelease. CLI,
+Der sichtbare interne Meilenstein `0.47.0` ist kein Produktrelease. CLI,
 Fenstertitel, Jobberichte, Buildplan und Provenienz verwenden gemeinsam die
 kanonische Werkzeugversion aus `VERSION`/CMake.
 
@@ -150,8 +150,8 @@ dokumentiert.
 # Extern buildbares Portprojekt aus einer lokalen GDI erzeugen
 .\build-current\katana-recomp.exe port .\disc\game.gdi --output C:\ports\game --target-name game
 
-# Die erzeugte Anwendung eigenstaendig mit der GDI starten
-C:\ports\game\build\game.exe .\disc\game.gdi
+# Das atomar veroeffentlichte Portpaket aus seinem lokalen Content starten
+C:\ports\game\game.exe
 ```
 
 `workflow` schreibt waehrend des Laufs versionierte Fortschrittsereignisse als
@@ -174,9 +174,11 @@ Captures und ersetzt keinen synthetischen Regressionstest oder Alpha-Nachweis.
 Der Port-Export liest private Disc-Dateien nur lokal, schreibt ausschliesslich
 verwaltete Dateien unter `generated/` neu und erhaelt handgeschriebenen Code
 unter `src/`. Details: [docs/PORT_EXPORT.md](docs/PORT_EXPORT.md).
-Die `game.exe` bettet keine Disc-Daten oder privaten Hostpfade ein; die GDI
-bleibt eine explizite read-only Laufzeiteingabe. Ohne gueltige GDI endet der
-Prozess mit einem Nichtnull-Exitcode und redigierter Diagnose.
+Die `game.exe` bettet keine Disc-Daten oder privaten Hostpfade ein. Der Export
+legt stattdessen ein generisches, portables Disc-Pack unter `content/` an; die
+urspruengliche GDI bleibt read-only und wird fuer den normalen Start des
+erzeugten Pakets nicht mehr benoetigt. Fehlender oder beschaedigter Content
+endet mit einem Nichtnull-Exitcode und redigierter Diagnose.
 
 Der generierte SH-4-Pfad erzwingt den privilegierten Modus fuer markierte
 Systemregister- und Kontrollinstruktionen. Ein Zugriff aus dem User-Modus wird
@@ -214,8 +216,11 @@ docs/             Vertraege, Status, Tasks und Releaseberichte
   Debuglaeufe. Private Ausgaben bleiben ausserhalb des Repositorys; jeder
   Befund wird als allgemeine synthetische oder frei verteilbare Regression
   abgesichert.
-- Alpha ist erreicht, wenn der offizielle Port reproduzierbar bootet und bis
-  in eine mit Hosteingabe kontrollierbare Spielszene laeuft.
+- Sonic Adventure bleibt dabei ausschliesslich private Retail-Testbench. Ein
+  spaeterer Sonic-Port samt Installer und Enhancements ist ein eigenstaendiges
+  Produkt und kein Bestandteil von KatanaRecomp.
+- Framework-Alpha ist erreicht, wenn die allgemeinen Build-, Runtime-, SDK-,
+  Diagnose- und Datenschutzvertraege reproduzierbar bestehen.
 - Entwicklung und Pushes erfolgen direkt auf `main`.
 
 ## Dokumentation
@@ -225,7 +230,7 @@ docs/             Vertraege, Status, Tasks und Releaseberichte
 - [docs/STATUS.md](docs/STATUS.md) - kompakter aktueller Projektstand
 - [CHANGELOG.md](CHANGELOG.md) - Versionshistorie
 - [docs/CODEX_HANDOFF.md](docs/CODEX_HANDOFF.md) - Arbeitsregeln
-- [docs/SONIC_ADVENTURE_ACCEPTANCE.md](docs/SONIC_ADVENTURE_ACCEPTANCE.md) - lokaler Alpha-Vertrag
+- [docs/SONIC_ADVENTURE_ACCEPTANCE.md](docs/SONIC_ADVENTURE_ACCEPTANCE.md) - private Retail-Testbench
 - [docs/SH4_ALPHA_ISA.md](docs/SH4_ALPHA_ISA.md) - messbarer Alpha-ISA-Vertrag
 - [docs/REFERENCE_PROVENANCE.md](docs/REFERENCE_PROVENANCE.md) - Referenz- und Lizenzprovenienz
 

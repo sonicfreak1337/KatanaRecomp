@@ -15,7 +15,105 @@ void require(const bool value, const std::string& message) {
 
 katana::runtime::BlockExit block(katana::runtime::CpuState&,
                                  katana::runtime::BlockExecutionContext&) {
-    return {};
+    katana::runtime::BlockExit exit;
+    exit.kind = katana::runtime::BlockEndKind::Return;
+    return exit;
+}
+
+void relocated_module_regression() {
+    using namespace katana::runtime;
+    CpuState cpu;
+    const std::vector<std::uint8_t> source{0x09u, 0xfeu, 0xffu, 0xffu, 0x0bu, 0x00u};
+    auto relocated = source;
+    relocated[0] = 0x09u;
+    relocated[1] = 0x00u;
+    relocated[2] = 0x00u;
+    relocated[3] = 0x00u;
+    cpu.memory.write_bytes(0x200u, relocated, CodeWriteSource::Copy);
+
+    ExecutableModule module;
+    module.id = "relocated-synthetic-module";
+    module.source_identity = "free-relocation-fixture-v1";
+    module.guest_start = 0x200u;
+    module.bytes = source;
+    module.relocations = {{0u, executable_module_relocation_module_base32, 0}};
+    ExecutableModuleCatalog modules;
+    modules.publish(module);
+
+    RuntimeBlockTable blocks;
+    ExecutableCodeTracker tracker;
+    blocks.bind_code_tracker(&tracker);
+    const BlockVariantKey variant{};
+    bool relocated_snapshot_observed = false;
+    std::size_t callback_calls = 0u;
+    DemandBlockMaterializer materializer(
+        modules,
+        blocks,
+        &tracker,
+        {true, 2u, source.size()},
+        [&](const std::uint32_t target,
+            const std::span<const std::uint8_t> snapshot,
+            const BlockVariantKey& requested_variant) {
+            ++callback_calls;
+            relocated_snapshot_observed = snapshot.size() >= 4u && snapshot[0] == 0x09u &&
+                                          snapshot[1] == 0x00u && snapshot[2] == 0x00u &&
+                                          snapshot[3] == 0x00u;
+            return MaterializedBlockCandidate{{target,
+                                               target,
+                                               2u,
+                                               BlockEndKind::Return,
+                                               requested_variant,
+                                               block,
+                                               "synthetic-relocated-decoder",
+                                               true},
+                                              true,
+                                              true,
+                                              true,
+                                              true,
+                                              1u,
+                                              1u,
+                                              1u,
+                                              1u,
+                                              1u};
+        });
+    IndirectDispatchRequest request;
+    request.kind = IndirectDispatchKind::TailJump;
+    request.callsite = 0x80u;
+    request.target = 0x200u;
+    request.variant = variant;
+    request.dispatch_class = RuntimeDispatchClass::RuntimeOnly;
+    request.materializer = &materializer;
+    const auto dispatched = dispatch_indirect(cpu, blocks, request);
+    const auto registered = blocks.resolve(dispatched.block);
+    require(registered.has_value(), "Relokierter Runtimeblock wurde nicht registriert.");
+    BlockExecutionContext context;
+    const auto exit = registered->get().function(cpu, context);
+    require(dispatched.block && relocated_snapshot_observed && exit.kind == BlockEndKind::Return &&
+                callback_calls == 1u && materializer.metrics().materializations == 1u,
+            "Kanonisch relokierte Modulbytes wurden nicht materialisiert und dispatcht.");
+
+    modules.update_relocations(
+        module.id, {{0u, executable_module_relocation_module_base32, 4}}, blocks, tracker);
+    bool changed_addend_rejected = false;
+    try {
+        static_cast<void>(dispatch_indirect(cpu, blocks, request));
+    } catch (const IndirectDispatchError&) {
+        changed_addend_rejected = true;
+    }
+    require(changed_addend_rejected && callback_calls == 1u &&
+                materializer.last_failure() == MaterializationFailure::ByteIdentityMismatch,
+            "Geaenderter Relocation-Addend akzeptiert stale Gastbytes.");
+
+    const auto relocation_generation = modules.find(module.id)->relocation_generation;
+    bool unknown_type_rejected = false;
+    try {
+        modules.update_relocations(module.id, {{0u, 99u, 0}}, blocks, tracker);
+    } catch (const std::invalid_argument&) {
+        unknown_type_rejected = true;
+    }
+    require(unknown_type_rejected &&
+                modules.find(module.id)->relocation_generation == relocation_generation,
+            "Unbekannter Relocationtyp veraendert den aktiven Modulvertrag.");
 }
 
 } // namespace
@@ -32,7 +130,6 @@ int main() {
     module.source_identity = "free-fixture-v1";
     module.guest_start = 0x100u;
     module.bytes = bytes;
-    module.relocations.push_back({0u, 1u, 0});
     modules.publish(module);
 
     RuntimeBlockTable blocks;
@@ -117,6 +214,8 @@ int main() {
     modules.unload("synthetic-module", blocks, tracker);
     require(modules.resolve(0x100u) == nullptr && modules.metrics().unloads == 2u,
             "Modul-Unload hinterlaesst eine aktive ausfuehrbare Herkunft.");
+
+    relocated_module_regression();
 
     std::cout << "KR-4704 executable module and materialization regression passed.\n";
     return EXIT_SUCCESS;

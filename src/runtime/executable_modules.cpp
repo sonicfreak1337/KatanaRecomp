@@ -15,6 +15,49 @@ void increment(std::uint64_t& value) noexcept {
     if (value != std::numeric_limits<std::uint64_t>::max()) ++value;
 }
 
+std::uint32_t read_u32_le(const std::span<const std::uint8_t> bytes,
+                          const std::size_t offset) noexcept {
+    std::uint32_t value = 0u;
+    for (std::size_t byte = 0u; byte < sizeof(value); ++byte)
+        value |= static_cast<std::uint32_t>(bytes[offset + byte]) << (byte * 8u);
+    return value;
+}
+
+void validate_relocations(const ExecutableModule& module,
+                          const std::span<const ExecutableModuleRelocation> relocations) {
+    std::vector<std::uint32_t> offsets;
+    offsets.reserve(relocations.size());
+    for (const auto& relocation : relocations) {
+        if (relocation.type != executable_module_relocation_module_base32)
+            throw std::invalid_argument("Ausfuehrbares Modul besitzt einen unbekannten "
+                                        "Relocationtyp.");
+        if (relocation.offset > module.bytes.size() ||
+            sizeof(std::uint32_t) > module.bytes.size() - relocation.offset)
+            throw std::invalid_argument("Modulrelocation liegt ausserhalb der Modulbytes.");
+        offsets.push_back(relocation.offset);
+    }
+    std::sort(offsets.begin(), offsets.end());
+    for (std::size_t index = 1u; index < offsets.size(); ++index) {
+        if (static_cast<std::uint64_t>(offsets[index]) <
+            static_cast<std::uint64_t>(offsets[index - 1u]) + sizeof(std::uint32_t))
+            throw std::invalid_argument("Modulrelocationen ueberlappen sich.");
+    }
+}
+
+std::uint8_t relocated_module_byte(const ExecutableModule& module,
+                                   const std::size_t offset) noexcept {
+    for (const auto& relocation : module.relocations) {
+        if (offset < relocation.offset ||
+            offset >= static_cast<std::size_t>(relocation.offset) + sizeof(std::uint32_t))
+            continue;
+        const auto source = read_u32_le(module.bytes, relocation.offset);
+        const auto relocated =
+            source + module.guest_start + static_cast<std::uint32_t>(relocation.addend);
+        return static_cast<std::uint8_t>(relocated >> ((offset - relocation.offset) * 8u));
+    }
+    return module.bytes[offset];
+}
+
 } // namespace
 
 std::uint64_t ExecutableModule::end_address() const noexcept {
@@ -61,11 +104,7 @@ void ExecutableModuleCatalog::publish(ExecutableModule module) {
             existing.guest_start < module.end_address())
             throw std::invalid_argument("Ausfuehrbare Module ueberlappen sich.");
     }
-    for (const auto& relocation : module.relocations) {
-        if (relocation.offset > module.bytes.size() ||
-            sizeof(std::uint32_t) > module.bytes.size() - relocation.offset)
-            throw std::invalid_argument("Modulrelocation liegt ausserhalb der Modulbytes.");
-    }
+    validate_relocations(module, module.relocations);
     for (const auto& range : module.range_roles) {
         if (range.size == 0u || range.offset > module.bytes.size() ||
             range.size > module.bytes.size() - range.offset)
@@ -114,11 +153,7 @@ void ExecutableModuleCatalog::update_relocations(
         return candidate.active && candidate.id == id;
     });
     if (module == modules_.end()) throw std::invalid_argument("Unbekanntes aktives Modul.");
-    for (const auto& relocation : relocations) {
-        if (relocation.offset > module->bytes.size() ||
-            sizeof(std::uint32_t) > module->bytes.size() - relocation.offset)
-            throw std::invalid_argument("Modulrelocation liegt ausserhalb der Modulbytes.");
-    }
+    validate_relocations(*module, relocations);
     const auto invalidated =
         blocks.erase_overlapping_physical(module->guest_start, module->bytes.size());
     const auto tracked = tracker.observe_write(
@@ -152,7 +187,7 @@ bool ExecutableModuleCatalog::validate_bytes(const Memory& memory,
     const auto offset = static_cast<std::size_t>(address - module->guest_start);
     for (std::size_t current = 0u; current < width; ++current)
         if (memory.read_u8(address + static_cast<std::uint32_t>(current)) !=
-            module->bytes[offset + current])
+            relocated_module_byte(*module, offset + current))
             return false;
     return true;
 }
@@ -264,11 +299,16 @@ DemandBlockMaterializer::try_materialize(CpuState& cpu,
     std::vector<std::uint8_t> snapshot(snapshot_size);
     for (std::size_t current = 0u; current < snapshot.size(); ++current)
         snapshot[current] = cpu.memory.read_u8(target + static_cast<std::uint32_t>(current));
+    if (!modules_.validate_bytes(cpu.memory, target, snapshot.size())) {
+        fail(MaterializationFailure::ByteIdentityMismatch, target);
+        return std::nullopt;
+    }
     const auto started = std::chrono::steady_clock::now();
     auto candidate = callback_(target, snapshot, variant);
-    const auto elapsed_ms = static_cast<std::uint64_t>(std::chrono::duration_cast<
-        std::chrono::milliseconds>(std::chrono::steady_clock::now() - started)
-                                                           .count());
+    const auto elapsed_ms =
+        static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
+                                       std::chrono::steady_clock::now() - started)
+                                       .count());
     if (!candidate.decode_candidate_validated) {
         fail(MaterializationFailure::DecodeRejected, target);
         return std::nullopt;
@@ -295,8 +335,8 @@ DemandBlockMaterializer::try_materialize(CpuState& cpu,
     }
     auto block = std::move(candidate.block);
     if (block.virtual_start != target || block.size < 2u || block.variant != variant ||
-        block.size > snapshot.size() || block.function == nullptr ||
-        block.provenance.empty() || block.size > policy_.max_bytes - metrics_.materialized_bytes) {
+        block.size > snapshot.size() || block.function == nullptr || block.provenance.empty() ||
+        block.size > policy_.max_bytes - metrics_.materialized_bytes) {
         fail(MaterializationFailure::InvalidBlock, target);
         return std::nullopt;
     }
@@ -328,24 +368,23 @@ DemandBlockMaterializer::try_materialize(CpuState& cpu,
         return std::nullopt;
     }
     block.physical_origin = canonical_physical_address(block.virtual_start);
-    block.provenance = "runtime-module:" + module_id + ":g" +
-                       std::to_string(module_generation) + ":r" +
-                       std::to_string(relocation_generation) + ":" + block.provenance;
+    block.provenance = "runtime-module:" + module_id + ":g" + std::to_string(module_generation) +
+                       ":r" + std::to_string(relocation_generation) + ":" + block.provenance;
     const auto identity = stable_runtime_block_identity(block);
     const auto physical_origin = block.physical_origin;
     const auto block_size = block.size;
     const auto provenance = block.provenance;
     const auto handle = blocks_.register_runtime(std::move(block));
-    origins_.push_back({target,
-                        block_size,
-                        callsite,
-                        module_id,
-                        source_identity,
-                        module_generation,
-                        relocation_generation,
-                        handle,
-                        std::vector<std::uint8_t>(snapshot.begin(),
-                                                  snapshot.begin() + block_size)});
+    origins_.push_back(
+        {target,
+         block_size,
+         callsite,
+         module_id,
+         source_identity,
+         module_generation,
+         relocation_generation,
+         handle,
+         std::vector<std::uint8_t>(snapshot.begin(), snapshot.begin() + block_size)});
     if (!validate_for_dispatch(cpu, handle, target)) {
         origins_.pop_back();
         static_cast<void>(blocks_.erase_identity(identity));
@@ -425,6 +464,11 @@ bool DemandBlockMaterializer::validate_for_dispatch(const CpuState& cpu,
             fail(MaterializationFailure::ByteIdentityMismatch, target);
             return false;
         }
+    }
+    if (!modules_.validate_bytes(cpu.memory, origin->address, origin->size)) {
+        increment(metrics_.dispatch_validation_failures);
+        fail(MaterializationFailure::ByteIdentityMismatch, target);
+        return false;
     }
     return true;
 }
@@ -506,27 +550,28 @@ const char* materialization_failure_name(const MaterializationFailure value) noe
     return "invalid-block";
 }
 
-std::string format_block_materialization_metrics_json(
-    const BlockMaterializationMetrics& metrics,
-    const std::span<const BlockMaterializationEvent> events,
-    const bool include_local_details) {
+std::string
+format_block_materialization_metrics_json(const BlockMaterializationMetrics& metrics,
+                                          const std::span<const BlockMaterializationEvent> events,
+                                          const bool include_local_details) {
     std::ostringstream output;
     output << "{\"schema\":\"katana-materialization-v1\",\"materialization_attempts\":"
            << metrics.requests << ",\"materialization_successes\":" << metrics.materializations
            << ",\"materialization_rejections\":" << metrics.misses
            << ",\"materialization_budget_failures\":" << metrics.budget_failures
-           << ",\"generation_revalidation_failures\":"
-           << metrics.generation_revalidation_failures << ",\"byte_identity_failures\":"
-           << metrics.byte_identity_failures << ",\"dispatch_validation_failures\":"
-           << metrics.dispatch_validation_failures << ",\"first_failure\":\""
-           << materialization_failure_name(metrics.first_failure) << "\",\"events\":[";
+           << ",\"generation_revalidation_failures\":" << metrics.generation_revalidation_failures
+           << ",\"byte_identity_failures\":" << metrics.byte_identity_failures
+           << ",\"dispatch_validation_failures\":" << metrics.dispatch_validation_failures
+           << ",\"first_failure\":\"" << materialization_failure_name(metrics.first_failure)
+           << "\",\"events\":[";
     if (include_local_details) {
         for (std::size_t index = 0u; index < events.size(); ++index) {
             if (index != 0u) output << ',';
-            output << "{\"sequence\":" << events[index].sequence << ",\"target\":"
-                   << events[index].target << ",\"success\":"
-                   << (events[index].success ? "true" : "false") << ",\"failure\":\""
-                   << materialization_failure_name(events[index].failure) << "\"}";
+            output << "{\"sequence\":" << events[index].sequence
+                   << ",\"target\":" << events[index].target
+                   << ",\"success\":" << (events[index].success ? "true" : "false")
+                   << ",\"failure\":\"" << materialization_failure_name(events[index].failure)
+                   << "\"}";
         }
     }
     output << "]}";

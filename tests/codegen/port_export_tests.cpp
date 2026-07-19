@@ -246,9 +246,13 @@ int run_test(const int argc, char* argv[]) {
         std::find_if(generated_before.begin(), generated_before.end(), [](const auto& entry) {
             return entry.first.starts_with("code/unit-00000-") && entry.first.ends_with(".cpp");
         });
-    require(first.functions == 2u && first.partitions == 2u && first.checkpoints.size() == 6u &&
+    require(first.functions == 2u && first.partitions == 2u && first.checkpoints.size() == 8u &&
                 first.checkpoints.back() == "port-project-written",
             "Synthetische GDI durchlaeuft den Portexport nicht vollstaendig.");
+    require(std::filesystem::exists(output / "content" / "game.katana-disc") &&
+                std::filesystem::exists(output / "content" / "game.katana-disc.json") &&
+                first.packed_sectors == 47u && first.packed_disc_bytes != 0u,
+            "Portexport erzeugt keinen vollstaendigen synthetischen Disc-Pack.");
     require(unit != generated_before.end(),
             "Portexport besitzt keine deterministische Translation Unit.");
     std::size_t entry_metadata_count = 0u;

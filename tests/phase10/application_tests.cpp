@@ -153,8 +153,28 @@ katana::io::ProjectManifest raw_manifest(const std::filesystem::path& input) {
     return manifest;
 }
 
+bool complete_port_artifacts(const katana::app::JobResult& job, const std::filesystem::path& root) {
+    const auto required = [&](const std::string_view role) {
+        return std::find_if(job.artifacts.begin(), job.artifacts.end(), [&](const auto& artifact) {
+                   return artifact.role == role && artifact.size != 0u &&
+                          artifact.format_version != 0u &&
+                          artifact.job_generation == job.project_identity;
+               }) != job.artifacts.end();
+    };
+    return required("host_executable") && required("packed_disc") &&
+           required("packed_disc_manifest") && required("runtime_dependencies") &&
+           std::filesystem::exists(root / "content" / "game.katana-disc") &&
+           std::filesystem::exists(root / "content" / "game.katana-disc.json") &&
+           std::filesystem::exists(root / "runtime" / "runtime-dependencies.json") &&
+           std::filesystem::is_directory(root / "user-data") &&
+           !std::filesystem::exists(root / "sourcecode" / "content");
+}
+
 } // namespace
 
+#ifdef _MSC_VER
+#pragma warning(suppress : 6262) // Deliberately comprehensive integration-test driver.
+#endif
 int main() {
     using namespace katana;
     Fixture fixture;
@@ -167,7 +187,7 @@ int main() {
     require(!session.dirty() && io::parse_project_manifest(manifest_path).input_path == raw,
             "Projekt wurde nicht atomar und relativ gespeichert.");
 
-    app::ApplicationService service(std::filesystem::current_path().parent_path());
+    app::ApplicationService service(std::filesystem::path(KATANA_SOURCE_DIR));
     const auto inspection = service.inspect_source(session.manifest());
     require(inspection.format == "raw" && inspection.display_name == "program.bin" &&
                 inspection.size == 6u && inspection.sha256.size() == 64u,
@@ -281,8 +301,7 @@ int main() {
                 incomplete_plan_text.find("\"host_compilation\":true") != std::string::npos &&
                 incomplete_plan_text.find("\"unknown_storage_bytes\":2097148") !=
                     std::string::npos &&
-                incomplete_plan_text.find("\"uncovered_control_targets\":0") !=
-                    std::string::npos &&
+                incomplete_plan_text.find("\"uncovered_control_targets\":0") != std::string::npos &&
                 incomplete_plan_text.find("\"dispatch_paths_without_validation\":0") !=
                     std::string::npos &&
                 incomplete_plan_text.find("\"tool_version\":\"0.40.0-dev\"") != std::string::npos,
@@ -445,6 +464,8 @@ int main() {
     require(!gdi_events.empty() && gdi_events.front().sequence == 0u &&
                 gdi_events.back().state == app::JobState::Completed,
             "Hierarchische GDI-Ereignisfolge besitzt keine stabilen Grenzen.");
+    require(complete_port_artifacts(gdi_job, fixture.root / "gdi-build"),
+            "Portjob meldet oder veroeffentlicht die vier gebundenen Portartefakte nicht.");
     bool saw_indeterminate_configuration = false;
     bool saw_live_log = false;
     bool saw_compilation_log = false;

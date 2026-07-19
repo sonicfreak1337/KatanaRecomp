@@ -1,30 +1,35 @@
-# Sonic-Adventure-Debug- und Alpha-Akzeptanz
+# Sonic Adventure als private Retail-Testbench
 
-Dieses Dokument trennt Pre-Alpha-Buildnachweise von der eigentlichen
-Sonic-Adventure-Ausfuehrung.
+Dieses Dokument begrenzt die lokale Sonic-Adventure-Nutzung innerhalb der
+KatanaRecomp-Entwicklung. KatanaRecomp ist ein allgemeines Dreamcast-
+Recompiler-Framework, eine Dreamcast-Runtime und ein Runtime-SDK. Es ist weder
+ein Sonic-Adventure-Port noch dessen Installer oder Enhancement-Projekt.
 
 ## Grundregel
 
-- Vor `v0.50.0`-Alpha-Arbeit darf Sonic Adventure privat und read-only
-  analysiert sowie bis zu einer externen `game.exe` gebaut werden.
-- In `v0.47.0` wird diese `game.exe` nicht gestartet.
-- Der erste echte Prozessstart gehoert zur Alpha-Entwicklung.
-- Der oeffentliche Alpha-Release erfolgt erst bei `SA_ALPHA_PLAYABLE`.
+- Sonic Adventure darf privat und read-only als End-to-End-Testbench fuer
+  Analyse, Codegen, Hostbuild, Runtime und Dreamcast-Plattformdienste dienen.
+- Der erste Prozessstart erfolgt erst in einem ausdruecklich freigegebenen,
+  budgetierten `runtime-probe`-Lauf.
+- Private Sonic-Ergebnisse koennen ein internes Alpha-Akzeptanzziel stuetzen,
+  sind aber kein oeffentlicher Katana-Produktvertrag und keine verteilbare
+  Gateevidenz.
+- Ein spaeterer Sonic-Port, Installer und alle titelbezogenen Erweiterungen
+  gehoeren in ein eigenstaendiges Repository.
 
-Eine nur erzeugte EXE, ein betretenes Hauptprogramm oder ein einzelner Frame
-reichen nicht fuer den oeffentlichen Alpha-Release.
-
-## Datenschutz
+## Datenschutz und Implementierungsgrenze
 
 - Verwendet wird nur eine rechtmaessig lokal bereitgestellte GDI.
-- GDI, Tracks, extrahierte Dateien, generierte Retail-Quellen, `game.exe`,
+- GDI, Tracks, extrahierte Dateien, generierte Retail-Quellen, Programme,
   Rohlogs, Screenshots, Audio, Hashes und lokale Pfade bleiben ausserhalb des
   Repositorys und aller Pakete.
 - Oeffentliche CI verwendet nur synthetische und frei lizenzierte Eingaben.
-- Fest codierte Sonic-Adressen, Remaps und titelbezogene Runtimeausnahmen sind
-  unzulaessig.
+- Fest codierte Sonic-Adressen, Symbole, Dateinamen, Bytes, Profile, Remaps,
+  Shader, Assets, Patches und titelbezogene Runtimeausnahmen sind unzulaessig.
+- Sonic-spezifische Auswahl-, Installer- und Enhancementlogik ist kein Teil von
+  KatanaRecomp.
 
-## Pre-Alpha-Nachweis v0.47
+## Build-only-Nachweis
 
 Erlaubt:
 
@@ -32,69 +37,48 @@ Erlaubt:
 GDI
 -> Analyse
 -> Codegen
--> externes Portprojekt
--> game.exe gebaut
+-> externes generisches Portprojekt
+-> Hostprogramm gebaut
 ```
 
-Nicht erlaubt:
+Im `build-only`-Modus ist ein Prozessstart technisch verboten. Der private
+Bericht muss `game_executable_started == false` ausweisen und darf hoechstens
+den generischen Checkpoint `KR_RETAIL_ANALYSIS_CONTINUES` melden.
 
-```text
-game.exe starten
--> SA_MAIN_ENTERED
-```
+## Generische Runtime-Ereignisse
 
-Der private Bericht muss `game_executable_started == false` ausweisen. Ein
-Checkpoint oberhalb von `SA_ANALYSIS_CONTINUES` ist in v0.47 ein Fehler.
+Katana darf nur titelunabhaengige, versionierte Ereignisse ausgeben:
 
-## Alpha-Checkpoints
-
-| Checkpoint | Bedeutung |
+| Ereignis | Bedeutung |
 |---|---|
-| `SA_ANALYSIS_CONTINUES` | Analyse entdeckt nach dem ersten indirekten Bootpfad weiteren Code. |
-| `SA_MAIN_ENTERED` | Die private `game.exe` fuehrt Gastcode jenseits des initialen Einstiegs aus. |
-| `SA_FIRST_FRAME` | Ein aus echtem Gast-PVR-Zustand erzeugter Frame wird praesentiert. |
-| `SA_MENU_INTERACTIVE` | Eine Auswahl reagiert deterministisch auf Hosteingabe. |
-| `SA_ALPHA_PLAYABLE` | Mindestens eine sichtbare Spielszene ist kontrollierbar und die Runtime macht weiter Fortschritt. |
+| `KR_RETAIL_ANALYSIS_CONTINUES` | Analyse entdeckt nach einem indirekten Bootpfad weiteren Code. |
+| `KR_GUEST_PROGRAM_ENTERED` | Das Hostprogramm fuehrt validierten Gastcode jenseits des initialen Einstiegs aus. |
+| `KR_FIRST_GUEST_FRAME` | Ein aus echtem Gast-PVR-Zustand erzeugter Frame wird praesentiert. |
+| `KR_GUEST_INPUT_INTERACTIVE` | Gastzustand reagiert deterministisch auf Hosteingabe. |
+| `KR_CONTROLLED_RETAIL_SCENE` | Video, Eingabe, Disc-I/O und Gastzeit machen gemeinsam kontrollierbaren Fortschritt. |
 
-`SA_MAIN_ENTERED` bis `SA_ALPHA_PLAYABLE` sind Alpha-Bring-up-Checkpoints.
-Nur `SA_ALPHA_PLAYABLE` ist das oeffentliche Alpha-Gate.
+Diese Ereignisse beschreiben Frameworkverhalten. Sie enthalten keine
+Sonic-Adressen, Funktionsnamen, Symbole oder titelbezogenen Kontrollflussziele.
 
 ## Retail-getriebener Debugzyklus
 
-Jeder private Lauf besitzt Hostzeit- und Gastzyklusbudgets.
+Jeder private Lauf besitzt Hostzeit- und Gastzyklusbudgets. Fuer jeden Blocker:
 
-Fuer jeden Blocker:
-
-1. letzten stabilen Checkpoint und Fehlerklasse redigiert erfassen
-2. Ursache ohne Titelsonderfall bestimmen
+1. letzten stabilen generischen Checkpoint und Fehlerklasse redigiert erfassen
+2. allgemeine Ursache ohne Titelsonderfall bestimmen
 3. synthetische oder frei lizenzierte Reproduktion erstellen
 4. allgemeine Implementierung korrigieren
 5. Regression ins Repository aufnehmen
 6. privaten Lauf wiederholen
 
-Der private Lauf ist ein Kompatibilitaets-Orakel, kein oeffentlicher Testbestand.
+Der private Lauf ist eine Testbench fuer Frameworkfehler, kein oeffentlicher
+Testbestand. Ein erfolgreicher Sonic-Lauf darf nicht durch Sonic-spezifische
+Implementierungslogik erkauft werden.
 
-## Alpha-Gate v0.50.0
+## Framework-Alpha
 
-KR-4999 muss nachweisen:
-
-1. Die GDI wird read-only ueber den offiziellen Workflow verarbeitet.
-2. Analyse und Codegen melden keine unvollstaendige Abdeckung als Erfolg.
-3. Das externe Portprojekt baut eine eigenstaendige `game.exe`.
-4. Dynamische Codebereiche und Module koennen nicht still unkompiliert laufen.
-5. Zwei identische Laeufe erreichen `SA_ALPHA_PLAYABLE`.
-6. Video und Eingabe funktionieren gemeinsam.
-7. Disc-I/O, Scheduler, DMA und Interrupts machen messbaren Fortschritt.
-8. `silent_failures == 0`.
-9. Fehler- und Budgetpfade liefern redigierte Diagnoseberichte.
-10. Debug-/Release-Builds, Regression und CI bestehen ohne proprietaere Daten.
-11. Pakete und Repository enthalten keine privaten Retail-Artefakte.
-
-Audio darf klar dokumentierte Alpha-Abweichungen besitzen. Ein kompletter
-Spieldurchlauf, perfekte Grafik-/Audiokorrektheit und mehrere Retail-Titel sind
-Beta-Ziele.
-
-## Review und Release
-
-KR-4999 stoppt fuer das Nutzerreview. Erst nach ausdruecklicher Freigabe darf
-KR-5000 Version, Release-Commit, Tag und Downloads erzeugen.
+Das Katana-Alpha-Gate bewertet versionierte Frameworkvertraege, reproduzierbare
+Builds, synthetische oder frei lizenzierte Regressionen, redigierte Diagnosen
+und die Abwesenheit proprietaerer Daten. Private Sonic-Probes duerfen
+zusaetzliche interne Evidenz liefern, bestimmen aber weder den oeffentlichen
+Releasevertrag noch das Layout eines spaeteren Sonic-Portprodukts.

@@ -6,6 +6,7 @@
 #include "katana/runtime/dreamcast_memory.hpp"
 #include "katana/runtime/gdi.hpp"
 #include "katana/runtime/maple.hpp"
+#include "katana/runtime/packed_disc.hpp"
 #include "katana/runtime/platform_interrupt.hpp"
 #include "katana/runtime/pvr.hpp"
 #include "katana/runtime/runtime.hpp"
@@ -52,7 +53,7 @@ class DreamcastMutableStorage final {
 [[nodiscard]] std::filesystem::path default_dreamcast_user_data_root();
 
 struct DreamcastRuntimeBootImage {
-    std::shared_ptr<GdiDiscSource> source;
+    std::shared_ptr<DiscSource> source;
     std::string hardware_id;
     std::string boot_file_name;
     std::vector<std::uint8_t> boot_file;
@@ -93,6 +94,12 @@ struct DreamcastRuntimeState {
 
 [[nodiscard]] DreamcastRuntimeBootImage
 load_dreamcast_runtime_boot(const std::filesystem::path& descriptor_path);
+
+[[nodiscard]] DreamcastRuntimeBootImage load_dreamcast_runtime_boot(
+    std::shared_ptr<DiscSource> source, std::uint32_t data_track_lba, std::size_t validated_tracks);
+
+[[nodiscard]] DreamcastRuntimeBootImage
+load_dreamcast_runtime_boot_from_pack(const std::filesystem::path& pack_path);
 
 [[nodiscard]] DreamcastRuntimeState initialize_dreamcast_runtime(
     CpuState& cpu,

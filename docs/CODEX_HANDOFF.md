@@ -146,7 +146,7 @@ letzte Gate-Vorbereitungstask einer Phase setzt alle gesammelten Anforderungen
 um, erstellt genau einen frischen Build in `build-current/` und fuehrt die
 vollstaendige Regression aus.
 
-### Lokaler Sonic-Adventure-Akzeptanztest
+### Sonic Adventure als private Retail-Testbench
 
 Es gilt die verbindliche Strategie in
 `docs/SONIC_ADVENTURE_ACCEPTANCE.md`:
@@ -156,10 +156,11 @@ Es gilt die verbindliche Strategie in
   Fixtures und frei lizenzierte Homebrew-Programme.
 - Jeder Retail-Befund muss in eine allgemeine Fehlerklasse und eine
   synthetische oder frei verteilbare Regression ueberfuehrt werden.
-- KR-4999 muss den Pfad GDI -> externes Port-Projekt -> `game.exe` ->
-  `SA_ALPHA_PLAYABLE` reproduzierbar nachweisen.
-- Boot, Video, Eingabe und eine kontrollierbare Spielszene sind
-  Alpha-Pflichtkriterien.
+- Private Probes duerfen den generischen Pfad GDI -> externes Portprojekt ->
+  Hostprogramm -> `KR_CONTROLLED_RETAIL_SCENE` pruefen. Sie definieren keinen
+  titelbezogenen oeffentlichen Produktvertrag.
+- Oeffentliche Gates verwenden ausschliesslich generische Checkpoints und
+  synthetische oder frei lizenzierte Evidenz.
 - Assetextraktion fuer eine spaetere Installation ohne GDI gehoert in das
   titelbezogene Folgeprojekt, nicht in KatanaRecomp.
 - Keine Spieldaten, Captures, Audioinhalte, Dump-Hashes oder lokalen Pfade
@@ -312,9 +313,9 @@ Interne Meilenstein- oder Release-Freigabe:
    Release-Aktionen ausfuehren
 
 Verlangt das Review Aenderungen, endet der Gate-Task und die
-Gate-Vorbereitung wird nach den Korrekturen vollstaendig wiederholt. Der lokale
-Private Sonic-Adventure-Debuglaeufe duerfen ab Phase 11 stattfinden; KR-4999
-bleibt der einzige Lauf, der als Alpha-Gate-Nachweis gewertet wird.
+Gate-Vorbereitung wird nach den Korrekturen vollstaendig wiederholt. Private
+Sonic-Adventure-Debuglaeufe duerfen ab Phase 11 als lokale Testbench
+stattfinden; sie sind keine verteilbare Alpha-Gateevidenz.
 
 Commit-Beispiel:
 

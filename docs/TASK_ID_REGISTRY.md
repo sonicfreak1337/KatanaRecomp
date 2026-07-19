@@ -36,8 +36,8 @@ fuer neue Arbeit. Diese Zuordnung gilt als korrigierter Planungsfehler.
 |---|---:|---:|
 | Runtimebeobachtung, Replay und Fehlerpakete | KR-4801 | KR-4911 |
 | Dynamische Codebereiche, Module und Overlays | KR-4802 | KR-4912 |
-| CPU-/Plattform-Bring-up bis `SA_MAIN_ENTERED` | KR-4803 | KR-4913 |
-| Gast-PVR-Pfad bis `SA_FIRST_FRAME` | KR-4804 | KR-4915 |
+| CPU-/Plattform-Bring-up bis `KR_GUEST_PROGRAM_ENTERED` | KR-4803 | KR-4913 |
+| Gast-PVR-Pfad bis `KR_FIRST_GUEST_FRAME` | KR-4804 | KR-4915 |
 | Menue, Eingabe und spielbare Szene | KR-4805 | KR-4916 |
 | Alpha-Haertung, Paketierung, CI und Audit | KR-4901 | KR-4901, KR-4902 und KR-4903 nach urspruenglichem Scope |
 
@@ -55,9 +55,9 @@ fuer neue Arbeit. Diese Zuordnung gilt als korrigierter Planungsfehler.
 | KR-4824 | Unveraenderliche Task-ID-Registry und Roadmaplinter |
 | KR-4911 | Runtimebeobachtung, Replay und Fehlerpakete |
 | KR-4912 | Dynamische Codebereiche, Module und Overlays |
-| KR-4913 | CPU-/Plattform-Bring-up bis `SA_MAIN_ENTERED` |
+| KR-4913 | CPU-/Plattform-Bring-up bis `KR_GUEST_PROGRAM_ENTERED` |
 | KR-4914 | Private interaktive Runtime-Sitzung mit Controller |
-| KR-4915 | Gast-PVR-Pfad bis `SA_FIRST_FRAME` |
+| KR-4915 | Gast-PVR-Pfad bis `KR_FIRST_GUEST_FRAME` |
 | KR-4916 | Menue, Eingabe und spielbare Szene |
 
 ## Geplanter Lintervertrag

@@ -7,9 +7,9 @@ param(
 $ErrorActionPreference = 'Stop'
 $buildOnlyMode = 'build-only'
 $requiredRuntimeAbi = 14
-$requiredPortContract = 6
+$requiredPortContract = 7
 $requiredApplicationContract = 7
-$checkpointOrder = @('SA_NOT_REACHED', 'SA_ANALYSIS_CONTINUES')
+$checkpointOrder = @('KR_RETAIL_NOT_REACHED', 'KR_RETAIL_ANALYSIS_CONTINUES')
 $script:RuntimeProcessStarts = 0
 
 function Resolve-PhysicalPath {
@@ -472,7 +472,7 @@ if ($SelfTest) {
             schema = 'katana-private-retail-build'
             version = 1
             execution_mode = 'build-only'
-            checkpoint = 'SA_ANALYSIS_CONTINUES'
+            checkpoint = 'KR_RETAIL_ANALYSIS_CONTINUES'
             identity_consistent = $true
             game_executable_started = $false
         }
@@ -591,7 +591,7 @@ $report = [ordered]@{
     config_version = 2
     execution_mode = $buildOnlyMode
     status = if ($success) { 'success' } else { 'failed' }
-    checkpoint = if ($analysis) { 'SA_ANALYSIS_CONTINUES' } else { 'SA_NOT_REACHED' }
+    checkpoint = if ($analysis) { 'KR_RETAIL_ANALYSIS_CONTINUES' } else { 'KR_RETAIL_NOT_REACHED' }
     identity_consistent = $identityConsistent
     contracts = [ordered]@{
         runtime_abi = $requiredRuntimeAbi

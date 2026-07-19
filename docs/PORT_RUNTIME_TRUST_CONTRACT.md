@@ -25,7 +25,7 @@ einen Block aus und liefert `Fallthrough`, statischen oder dynamischen Sprung,
 Call, Return, Exception oder Interrupt-Safepoint an den zentralen Dispatcher
 zurueck.
 
-`SA_MAIN_ENTERED` und `silent_failures=0` sind nur erlaubt, nachdem mindestens
+`KR_GUEST_PROGRAM_ENTERED` und `silent_failures=0` sind nur erlaubt, nachdem mindestens
 ein Block jenseits des initialen Entry-Blocks einen Gast-Checkpoint erreicht
 hat. Ein sofortiges `TRAPA`, eine Exception, ein kontrollierter Fallback, ein
 erschoepftes Schedulerbudget oder fehlender Fortschritt ist ein sichtbarer

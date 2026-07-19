@@ -320,7 +320,7 @@ Die Konfiguration besitzt `manifest_path` und `gdi_path` separat. Vor dem Build
 und Lauf muss bewiesen werden, dass beide dieselbe Source-Snapshotidentitaet
 beschreiben.
 
-### H-04: Checkpoint `SA_ANALYSIS_CONTINUES` wird heuristisch erfunden
+### H-04: Checkpoint `KR_RETAIL_ANALYSIS_CONTINUES` wird heuristisch erfunden
 
 Mehr als eine Funktion und mehr als vier analysierte Bytes sind kein
 semantischer Checkpoint. Checkpoints duerfen nur aus versionierten
@@ -563,8 +563,8 @@ Die faelschlich zugewiesenen neueren Bedeutungen werden migriert:
 |---|---|
 | Runtimebeobachtung, Replay und Fehlerpakete | KR-4911 |
 | Dynamische Codebereiche, Module und Overlays | KR-4912 |
-| CPU-/Plattform-Bring-up bis `SA_MAIN_ENTERED` | KR-4913 |
-| Gast-PVR bis `SA_FIRST_FRAME` | KR-4915 |
+| CPU-/Plattform-Bring-up bis `KR_GUEST_PROGRAM_ENTERED` | KR-4913 |
+| Gast-PVR bis `KR_FIRST_GUEST_FRAME` | KR-4915 |
 | Menue, Eingabe und spielbare Szene | KR-4916 |
 | Breite Alpha-Haertung, Paketierung, CI und Audit | auf KR-4901, KR-4902 und KR-4903 aufgeteilt |
 
@@ -596,7 +596,7 @@ Runtime-SDK und gemeinsamer Export
 v0.49:
 Runtimebeobachtung
 -> dynamische Module
--> SA_MAIN_ENTERED
+-> KR_GUEST_PROGRAM_ENTERED
 -> interaktive private Sitzung und Gast-PVR
 -> Menue und spielbare Szene
 -> CI, Pakete, Audit und Gate-Automatisierung

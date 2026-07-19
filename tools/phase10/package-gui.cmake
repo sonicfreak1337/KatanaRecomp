@@ -151,11 +151,11 @@ if(NOT relocated_build_result EQUAL 0 OR
     message(FATAL_ERROR
         "Relocated package full GDI build failed: ${relocated_build_output} ${relocated_build_error}")
 endif()
+set(detached_port "${relocated_root}/detached-port")
+file(MAKE_DIRECTORY "${detached_port}")
+file(COPY "${relocated_root}/workflow-output/" DESTINATION "${detached_port}")
 execute_process(
-    COMMAND "${CMAKE_COMMAND}" -E env
-            "KATANA_USER_DATA_ROOT=${relocated_root}/user-data"
-            "${relocated_root}/workflow-output/game${executable_suffix}"
-            "${relocated_root}/fixture/disc.gdi"
+    COMMAND "${detached_port}/game${executable_suffix}"
     RESULT_VARIABLE relocated_game_result
     OUTPUT_VARIABLE relocated_game_output
     ERROR_VARIABLE relocated_game_error
@@ -166,7 +166,7 @@ if(NOT relocated_game_result EQUAL 0 OR
    NOT relocated_game_output MATCHES "frames=1" OR
    NOT relocated_game_output MATCHES "audio_buffers=1")
     message(FATAL_ERROR
-        "Relocated game GDI runtime failed: ${relocated_game_output} ${relocated_game_error}")
+        "Relocated packed-disc runtime failed: ${relocated_game_output} ${relocated_game_error}")
 endif()
 file(REMOVE_RECURSE "${relocated_root}")
 
