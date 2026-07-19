@@ -292,6 +292,12 @@ int run_test(const int argc, char* argv[]) {
             generated_before.at("code/runtime-dispatch.cpp").find("generated-block-8C010000") !=
                 std::string::npos &&
             generated_before.at("code/runtime-dispatch.cpp")
+                    .find("register_executable_block(table, services, 0x8C010000u") !=
+                std::string::npos &&
+            generated_before.at("code/runtime-dispatch.cpp")
+                    .find("if (const auto registered_handle = table.lookup(0x8C010000u") ==
+                std::string::npos &&
+            generated_before.at("code/runtime-dispatch.cpp")
                     .find("6u, katana::runtime::BlockEndKind::Call") != std::string::npos &&
             generated_before.at("code/runtime-dispatch.cpp")
                     .find("SLEEP besitzt kein Wakeup-Ereignis") != std::string::npos &&
