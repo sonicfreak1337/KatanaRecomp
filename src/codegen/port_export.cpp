@@ -819,6 +819,18 @@ std::string runtime_dispatch_adapter(const std::string& entry_namespace,
            "    if (!registered) throw std::runtime_error(\"Registrierter Block ist stale.\");\n"
            "    services.register_executable_block(\n"
            "        address, size, katana::runtime::stable_runtime_block_identity(registered->get()));\n"
+           "}\n"
+           "void append_static_block(\n"
+           "    std::vector<katana::runtime::RuntimeBlock>& blocks,\n"
+           "    std::uint32_t address, std::uint32_t size,\n"
+           "    katana::runtime::BlockEndKind end_kind,\n"
+           "    katana::runtime::BackendBlockFunction function, const char* provenance) {\n"
+           "    katana::runtime::RuntimeBlock block;\n"
+           "    block.virtual_start = address;\n"
+           "    block.physical_origin = katana::runtime::canonical_physical_address(address);\n"
+           "    block.size = size; block.end_kind = end_kind; block.function = function;\n"
+           "    block.provenance = provenance;\n"
+           "    blocks.emplace_back(std::move(block));\n"
            "}\n\n"
         << "RuntimeRunResult run_runtime(katana::runtime::CpuState& cpu,\n"
         << "                             katana::runtime::PlatformServices& services) {\n"
@@ -833,11 +845,10 @@ std::string runtime_dispatch_adapter(const std::string& entry_namespace,
             std::uint32_t end = block.start_address + 2u;
             for (const auto& instruction : block.instructions)
                 end = std::max(end, instruction.source_address + 2u);
-            output << "    static_blocks.push_back({0x" << address
-                   << "u, katana::runtime::canonical_physical_address(0x" << address << "u), "
-                   << (end - block.start_address)
-                   << "u, katana::runtime::BlockEndKind::" << end_kind(block) << ", {}, &dispatch_"
-                   << address << ", \"generated-block-" << address << "\"});\n";
+            output << "    append_static_block(static_blocks, 0x" << address << "u, "
+                   << (end - block.start_address) << "u, katana::runtime::BlockEndKind::"
+                   << end_kind(block) << ", &dispatch_" << address << ", \"generated-block-"
+                   << address << "\");\n";
         }
     }
     output << "    static_cast<void>(table.register_static_bulk(std::move(static_blocks)));\n";

@@ -24,6 +24,10 @@
 
 ### Korrigiert
 
+- Die generierte statische AOT-Blockregistrierung konstruiert nicht mehr
+  tausende `RuntimeBlock`-Stringtemporaries in einer einzigen MSVC-Funktion.
+  Ein kompakter Helper beseitigt den dadurch erzeugten gigantischen
+  Exception-Unwind-Frame und den Stack Overflow vor dem ersten Gastblock.
 - Der Packed-Disc-Parser validiert unbekannte Payload-Enums sowie alle
   erlaubten Kombinationen aus Tracktyp, Sektorgroesse, Payloadart und Offset,
   bevor der Lesepfad auf Modusbytes zugreift. Negativtests manipulieren die
