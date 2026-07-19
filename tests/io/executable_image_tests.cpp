@@ -62,6 +62,14 @@ int main() {
     require(image.initial_snapshot_policy() ==
                 InitialSnapshotPolicy::EntryPointStraightLineQuiescent,
             "Expliziter Anfangssnapshotvertrag ging verloren.");
+    require(image.address_model() == ImageAddressModel::Exact &&
+                !image.resolve_segment_address(0xAC010002u, 2u).has_value(),
+            "Allgemeines Image aktivierte implizit SH-4-Direktsegmente.");
+    image.set_address_model(ImageAddressModel::Sh4DirectMapped);
+    require(image.resolve_segment_address(0x0C010002u, 2u) == 0x8C010002u &&
+                image.resolve_segment_address(0xAC010002u, 2u) == 0x8C010002u &&
+                !image.resolve_segment_address(0xE0010002u, 2u).has_value(),
+            "SH-4-P0/P1/P2-Codealiase werden nicht auf das Image normalisiert.");
 
     const auto* code = image.find_segment(0x8C010002u, 2u);
     if (code == nullptr) {

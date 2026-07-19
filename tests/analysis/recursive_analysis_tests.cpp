@@ -155,6 +155,18 @@ int main() {
     }
     require(rejected, "Ein Einstiegspunkt in Daten wurde akzeptiert.");
 
+    ExecutableImage aliased_entry;
+    aliased_entry.set_address_model(ImageAddressModel::Sh4DirectMapped);
+    aliased_entry.add_segment(
+        {".text", 0x8C001000u, 0u, 2u, SegmentKind::Code, {true, false, true}, {0x0Bu, 0x00u}});
+    aliased_entry.add_entry_point(0xAC001000u);
+    const auto aliased_result = katana::analysis::analyze_reachable_code(aliased_entry);
+    require(aliased_result.instructions.size() == 1u &&
+                aliased_result.instructions[0].address == 0x8C001000u &&
+                aliased_result.functions.size() == 1u &&
+                aliased_result.functions[0].address == 0x8C001000u,
+            "Ein P2-Einstiegspunkt wurde nicht auf die kanonische P1-Codeadresse normalisiert.");
+
     ExecutableImage overlap;
     overlap.add_segment(
         {".text",

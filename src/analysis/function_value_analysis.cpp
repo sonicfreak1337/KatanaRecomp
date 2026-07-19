@@ -1020,8 +1020,9 @@ std::vector<std::uint32_t> checked_targets(const katana::io::ExecutableImage& im
             line.instruction.kind == katana::sh4::InstructionKind::Bsrf) {
             target += line.address + 4u;
         }
-        if (!validate_decode_candidate(image, target).valid()) return {};
-        targets.push_back(target);
+        const auto validation = validate_decode_candidate(image, target);
+        if (!validation.valid()) return {};
+        targets.push_back(validation.resolved_address);
     }
     normalize(targets);
     return targets;

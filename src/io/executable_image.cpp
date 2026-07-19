@@ -127,6 +127,10 @@ void ExecutableImage::set_initial_snapshot_policy(const InitialSnapshotPolicy po
     initial_snapshot_policy_ = policy;
 }
 
+void ExecutableImage::set_address_model(const ImageAddressModel model) noexcept {
+    address_model_ = model;
+}
+
 const std::filesystem::path& ExecutableImage::source_path() const noexcept {
     return source_path_;
 }
@@ -153,6 +157,32 @@ GuestCallAbi ExecutableImage::guest_call_abi() const noexcept {
 
 InitialSnapshotPolicy ExecutableImage::initial_snapshot_policy() const noexcept {
     return initial_snapshot_policy_;
+}
+
+ImageAddressModel ExecutableImage::address_model() const noexcept {
+    return address_model_;
+}
+
+std::optional<std::uint32_t>
+ExecutableImage::resolve_segment_address(const std::uint32_t address,
+                                         const std::size_t width) const noexcept {
+    if (find_segment(address, width) != nullptr) return address;
+    if (address_model_ != ImageAddressModel::Sh4DirectMapped || address >= 0xE0000000u ||
+        width == 0u)
+        return std::nullopt;
+    const auto physical = address & 0x1FFFFFFFu;
+    for (const auto& segment : segments_) {
+        if (segment.virtual_address >= 0xE0000000u) continue;
+        const auto segment_physical = segment.virtual_address & 0x1FFFFFFFu;
+        if (physical < segment_physical) continue;
+        const auto offset = static_cast<std::uint64_t>(physical) - segment_physical;
+        if (offset > std::numeric_limits<std::uint32_t>::max()) continue;
+        const auto resolved = static_cast<std::uint64_t>(segment.virtual_address) + offset;
+        if (resolved > std::numeric_limits<std::uint32_t>::max()) continue;
+        const auto candidate = static_cast<std::uint32_t>(resolved);
+        if (segment.contains(candidate, width)) return candidate;
+    }
+    return std::nullopt;
 }
 
 const ImageSymbol* ExecutableImage::find_symbol(const std::string_view name) const noexcept {

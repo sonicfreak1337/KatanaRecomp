@@ -52,6 +52,27 @@ int main() {
             "Gueltige Tabelle wurde nicht aufgeloest.");
     require(resolved.entries[0].target == 0x1000u && resolved.entries[1].target == 0x1004u,
             "Absolute Tabellenziele wurden falsch gelesen.");
+
+    katana::io::ExecutableImage aliased;
+    aliased.set_address_model(katana::io::ImageAddressModel::Sh4DirectMapped);
+    aliased.add_segment({".text",
+                         0x8C001000u,
+                         0u,
+                         4u,
+                         katana::io::SegmentKind::Code,
+                         {true, false, true},
+                         {0x09u, 0x00u, 0x09u, 0x00u}});
+    aliased.add_segment({".jumptable",
+                         0x8C002000u,
+                         4u,
+                         4u,
+                         katana::io::SegmentKind::Data,
+                         {true, false, false},
+                         {0x00u, 0x10u, 0x00u, 0xACu}});
+    const auto aliased_target =
+        katana::analysis::analyze_jump_table(aliased, 0x8C001000u, 0x8C002000u, 1u);
+    require(aliased_target.resolved && aliased_target.entries[0].target == 0x8C001000u,
+            "Ein P2-Jump-Table-Ziel wurde nicht auf die kanonische P1-Codeadresse normalisiert.");
     katana::analysis::JumpTableSnapshotCache snapshot_cache(2u);
     const auto cached_first =
         katana::analysis::analyze_jump_table(image, 0x1010u, 0x2000u, 2u, &snapshot_cache);

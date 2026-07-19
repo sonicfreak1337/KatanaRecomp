@@ -47,6 +47,13 @@ Beliebige Hostadressen, Ziele in der Mitte eines Blocks, stale Handles,
 Nullfunktionen und lediglich plausible oder geratene Adressen werden nicht
 ausgefuehrt.
 
+Bei einem physischen P0/P1/P2-Aliastreffer bleiben das angeforderte Gastziel
+und seine Aliasherkunft in Diagnose und Metriken erhalten. Die native
+Backendfunktion erhaelt dagegen ihren registrierten kompilierten virtuellen
+Blockanfang als Ausfuehrungs-PC; sonst wuerde eine fuer P1 erzeugte
+Switchfunktion einen gueltigen P2-Aufruf trotz identischer physischer Bytes
+abweisen. `PR` behaelt weiterhin die vom Gast erzeugte Rueckkehradresse.
+
 Ein Fehler veraendert weder `PC` noch `PR`, zaehlt den Miss und wirft einen
 `IndirectDispatchError`. Der aktuelle generierte Port besitzt absichtlich
 keinen Interpreter- oder No-op-Fallback. Ein Miss beendet deshalb den Lauf und

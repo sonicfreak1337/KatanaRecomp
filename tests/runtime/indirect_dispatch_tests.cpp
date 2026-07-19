@@ -38,8 +38,9 @@ int main() {
         require(call.block && table.resolve(call.block).has_value() && call.alias_lookup &&
                     call.physical_target == 0x0C001000u,
                 "P2-Alias erreichte den physischen P1-Block nicht.");
-        require(cpu.pc == 0xAC001000u && cpu.pr == 0x8C000106u,
-                "Call bewahrt PC-/PR-Semantik nicht.");
+        require(cpu.pc == 0x8C001000u && call.diagnostic_target == 0xAC001000u &&
+                    call.resulting_pc == 0x8C001000u && cpu.pr == 0x8C000106u,
+                "Alias-Call normalisiert den nativen Ausfuehrungs-PC oder bewahrt PR nicht.");
 
         const auto jump = dispatch_indirect(
             cpu,
@@ -53,8 +54,9 @@ int main() {
             cpu,
             table,
             {IndirectDispatchKind::Return, 0x8C000300u, 0x11111111u, 0u, source, variant});
-        require(returned.alias_lookup && cpu.pc == cpu.pr,
-                "Return verwendet nicht PR als dynamisches Ziel.");
+        require(
+            returned.alias_lookup && returned.diagnostic_target == cpu.pr && cpu.pc == 0x8C001000u,
+            "Alias-Return bewahrt das Diagnoseziel oder normalisiert den Ausfuehrungs-PC nicht.");
 
         bool failed = false;
         try {

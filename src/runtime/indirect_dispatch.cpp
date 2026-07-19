@@ -369,7 +369,7 @@ IndirectDispatchResult dispatch_indirect(CpuState& cpu,
     if (request.kind == IndirectDispatchKind::Call) {
         cpu.pr = request.return_address;
     }
-    cpu.pc = target;
+    cpu.pc = alias_lookup ? resolved->get().virtual_start : target;
     if (request.metrics != nullptr)
         request.metrics->record_hit(request.dispatch_class, request.callsite, target, materialized);
     diagnose(request, target, cpu.pr, alias_lookup, true);

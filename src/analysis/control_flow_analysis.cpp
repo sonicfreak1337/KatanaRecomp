@@ -421,7 +421,8 @@ void bind_partial_runtime_contracts(std::vector<IndirectControlFlowResolution>& 
         if (resolution.evidence != ControlFlowEvidence::GuardedPartial) continue;
         const bool guarded_memory = resolution.reason == "guarded-function-memory";
         const bool merged_contexts = resolution.reason == "merged-contexts-partial";
-        const bool writable_literal = resolution.reason == "guarded-writable-pc-relative-literal";
+        const bool writable_literal =
+            resolution.reason.find("guarded-writable-pc-relative-literal") != std::string::npos;
         if (!guarded_memory && !merged_contexts && !writable_literal) continue;
         if (resolution.target.has_value())
             resolution.analysis_candidates.push_back(*resolution.target);

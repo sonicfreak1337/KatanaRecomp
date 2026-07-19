@@ -365,6 +365,50 @@ int main() {
                                                        guarded_summary.unresolved,
         "Bewachter Kandidat fehlt im stabilen Text-/JSON-Bericht.");
 
+    {
+        std::vector<std::uint8_t> alias_bytes(36u, 0x09u);
+        alias_bytes[0u] = 0x03u;
+        alias_bytes[1u] = 0xD2u; // mov.l @(0x10,pc),r2
+        alias_bytes[2u] = 0x04u;
+        alias_bytes[3u] = 0xD3u; // mov.l @(0x14,pc),r3
+        alias_bytes[4u] = 0x3Bu;
+        alias_bytes[5u] = 0x22u; // or r3,r2
+        alias_bytes[6u] = 0x0Bu;
+        alias_bytes[7u] = 0x42u; // jsr @r2
+        alias_bytes[8u] = 0x09u;
+        alias_bytes[9u] = 0x00u;
+        alias_bytes[0x10u] = 0x20u;
+        alias_bytes[0x11u] = 0x00u;
+        alias_bytes[0x12u] = 0x00u;
+        alias_bytes[0x13u] = 0x8Cu;
+        alias_bytes[0x14u] = 0x00u;
+        alias_bytes[0x15u] = 0x00u;
+        alias_bytes[0x16u] = 0x00u;
+        alias_bytes[0x17u] = 0xA0u;
+        alias_bytes[0x20u] = 0x0Bu;
+        alias_bytes[0x21u] = 0x00u;
+        katana::io::ExecutableImage alias_image;
+        alias_image.set_guest_call_abi(katana::io::GuestCallAbi::SuperHC);
+        alias_image.set_address_model(katana::io::ImageAddressModel::Sh4DirectMapped);
+        alias_image.add_segment({".rwx",
+                                 0x8C000000u,
+                                 0u,
+                                 alias_bytes.size(),
+                                 katana::io::SegmentKind::Mixed,
+                                 {true, true, true},
+                                 std::move(alias_bytes)});
+        alias_image.add_entry_point(0x8C000000u);
+        const auto alias_flow = katana::analysis::analyze_control_flow(alias_image);
+        const auto* alias = find_resolution(alias_flow.indirect_control_flow, 0x8C000006u);
+        require(alias != nullptr &&
+                    alias->evidence == katana::analysis::ControlFlowEvidence::RuntimeOnly &&
+                    alias->analysis_candidates == std::vector<std::uint32_t>{0x8C000020u} &&
+                    std::any_of(alias_flow.recursive.instructions.begin(),
+                                alias_flow.recursive.instructions.end(),
+                                [](const auto& line) { return line.address == 0x8C000020u; }),
+                "Beschreibbarer P2-Funktionszeiger seedet keinen kanonischen nativen P1-Block.");
+    }
+
     auto complete_status_fixture = guarded_flow;
     const auto status_fixture = [](const std::uint32_t address,
                                    const katana::analysis::ResolutionStatus status,

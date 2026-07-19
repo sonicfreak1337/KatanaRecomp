@@ -20,6 +20,7 @@ enum class CodeAddressStatus {
 struct CodeAddressValidation {
     CodeAddressStatus status = CodeAddressStatus::OutsideSegments;
     const katana::io::ImageSegment* segment = nullptr;
+    std::uint32_t resolved_address = 0u;
 
     [[nodiscard]] bool valid() const noexcept {
         return status == CodeAddressStatus::Valid;

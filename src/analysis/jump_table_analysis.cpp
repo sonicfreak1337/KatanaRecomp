@@ -193,6 +193,7 @@ JumpTableAnalysis analyze_jump_table(const katana::io::ExecutableImage& image,
             analysis.reason = "table-entry-rejected";
             continue;
         }
+        entry.target = validation.resolved_address;
         entry.accepted = true;
         entry.reason = "bounded-absolute-target";
         analysis.entries.push_back(std::move(entry));
@@ -266,6 +267,7 @@ JumpTableAnalysis analyze_relative_jump_table_impl(const katana::io::ExecutableI
             entry.reason = code_address_status_name(validation.status);
             analysis.reason = "table-entry-rejected";
         } else {
+            entry.target = validation.resolved_address;
             entry.accepted = true;
             entry.reason = "bounded-signed-relative-target";
         }

@@ -175,46 +175,54 @@ RecursiveAnalysisResult analyze_reachable_code(const katana::io::ExecutableImage
                                         std::string(code_address_status_name(validation.status)) +
                                         ".");
         }
+        const auto resolved_entry = validation.resolved_address;
         add_function_evidence(function_candidates,
-                              entry,
+                              resolved_entry,
                               FunctionOrigin::EntryPoint,
                               AnalysisConfidence::Certain,
                               ControlFlowEvidence::ProvenComplete);
-        enqueue(
-            pending, scheduled, entry, entry, std::nullopt, ControlFlowEvidence::ProvenComplete);
-    }
-    for (const auto& symbol : image.symbols()) {
-        if (symbol.kind != katana::io::SymbolKind::Function || (symbol.address & 1u) != 0u ||
-            !validate_committed_code_address(image, symbol.address).valid()) {
-            continue;
-        }
         enqueue(pending,
                 scheduled,
-                symbol.address,
-                symbol.address,
+                resolved_entry,
+                resolved_entry,
+                std::nullopt,
+                ControlFlowEvidence::ProvenComplete);
+    }
+    for (const auto& symbol : image.symbols()) {
+        if (symbol.kind != katana::io::SymbolKind::Function || (symbol.address & 1u) != 0u) {
+            continue;
+        }
+        const auto validation = validate_committed_code_address(image, symbol.address);
+        if (!validation.valid()) continue;
+        const auto resolved_address = validation.resolved_address;
+        enqueue(pending,
+                scheduled,
+                resolved_address,
+                resolved_address,
                 std::nullopt,
                 ControlFlowEvidence::ProvenComplete);
         add_function_evidence(function_candidates,
-                              symbol.address,
+                              resolved_address,
                               FunctionOrigin::Symbol,
                               AnalysisConfidence::High,
                               ControlFlowEvidence::ProvenComplete);
     }
     for (const auto& seed : options.additional_seeds) {
-        if (!validate_committed_code_address(image, seed.address).valid()) {
-            continue;
-        }
+        const auto validation = validate_committed_code_address(image, seed.address);
+        if (!validation.valid()) continue;
+        const auto resolved_address = validation.resolved_address;
         const auto evidence =
             seed.guarded_candidate && seed.evidence == ControlFlowEvidence::ProvenComplete
                 ? ControlFlowEvidence::GuardedPartial
                 : seed.evidence;
-        enqueue(pending, scheduled, seed.address, seed.address, std::nullopt, evidence);
+        enqueue(pending, scheduled, resolved_address, resolved_address, std::nullopt, evidence);
         for (const auto origin : seed.function_origins) {
             const auto confidence =
                 origin == FunctionOrigin::UserOverride      ? AnalysisConfidence::Certain
                 : origin == FunctionOrigin::GuardedSnapshot ? AnalysisConfidence::Medium
                                                             : AnalysisConfidence::High;
-            add_function_evidence(function_candidates, seed.address, origin, confidence, evidence);
+            add_function_evidence(
+                function_candidates, resolved_address, origin, confidence, evidence);
         }
     }
 
@@ -222,12 +230,12 @@ RecursiveAnalysisResult analyze_reachable_code(const katana::io::ExecutableImage
         const auto work = pending.front();
         pending.pop_front();
         ++processed_work_items;
-        const auto address = work.address;
         const auto evidence = work.evidence;
-        const auto validation = validate_decode_candidate(image, address);
+        const auto validation = validate_decode_candidate(image, work.address);
         if (!validation.valid()) {
             continue;
         }
+        const auto address = validation.resolved_address;
         const auto* segment = validation.segment;
         const auto offset = *segment->byte_offset(address);
         const auto opcode = katana::io::read_u16_le(segment->bytes, offset);

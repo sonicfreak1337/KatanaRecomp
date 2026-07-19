@@ -686,7 +686,7 @@ resolve_indirect_control_flow(const std::span<const katana::sh4::DisassemblyLine
                                                                ResolutionStatus::Resolved
                                                            ? AnalysisEvidenceOrigin::LocalValue
                                                            : AnalysisEvidenceOrigin::EntrySnapshot};
-                        resolution.target = narrowed_target;
+                        resolution.target = validation.resolved_address;
                         resolution.reason = source.empty() ? "constant-register" : source;
                         if (register_relative)
                             resolution.reason = "register-relative-" + resolution.reason;

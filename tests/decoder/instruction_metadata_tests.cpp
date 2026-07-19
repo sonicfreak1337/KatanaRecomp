@@ -22,7 +22,7 @@ int main() {
     const auto instructions = instruction_metadata();
     const auto special_registers = special_register_encoding_metadata();
 
-    require(instructions.size() == 156u, "Die normale Metadatentabelle ist unvollstaendig.");
+    require(instructions.size() == 159u, "Die normale Metadatentabelle ist unvollstaendig.");
     require(special_registers.size() == 78u, "Die Systemregistertabelle ist unvollstaendig.");
 
     for (const auto& metadata : instructions) {

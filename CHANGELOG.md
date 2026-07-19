@@ -4,6 +4,12 @@
 
 ### Geaendert
 
+- Der SH4-Direktsegment-Vertrag normalisiert P0/P1/P2-Codealiase jetzt durchgaengig fuer
+  Imagevalidierung, rekursive Einstiegspunkte, Funktionssymbole, Analyse-Seeds, absolute und
+  relative Sprungtabellen sowie den Runtime-only-Dispatcher. Diagnosen behalten das angeforderte
+  Aliasziel, waehrend nativer Code unter seiner kanonischen Imageadresse ausgefuehrt wird. Der
+  Metadaten-Vollstaendigkeitstest erwartet wieder alle 159 normalen SH4-Regeln statt des alten
+  Standes vor den drei Cache-/TLB-Ergaenzungen.
 - Die zusammenhaengenden Holly-G1-, G2- und PVR-DMA-Steuerbloecke bei
   `0x005F7400`, `0x005F7800` und `0x005F7C00` besitzen geschlossene
   Register-, Masken-, Schutzschluessel- und Aliasvertraege. AICA/G2- und
@@ -60,6 +66,14 @@
 
 ### Korrigiert
 
+- Dreamcast-Discimages tragen jetzt einen expliziten SH-4-Direktsegmentvertrag.
+  P0-, P1- und P2-Funktionszeiger werden bei der Codevalidierung auf denselben
+  committed P1-Block normalisiert, auch wenn der Alias erst durch mehrere
+  beschreibbare PC-relative Literale und Bitoperationen entsteht. Solche
+  Snapshotwerte bleiben Runtime-only statt zu statischen Kanten zu werden,
+  seeden aber den kanonischen nativen AOT-Block. Der Dispatcher bewahrt das
+  angeforderte Aliasziel fuer Diagnose und Metriken und setzt fuer die
+  Backendfunktion den passenden kompilierten Ausfuehrungs-PC.
 - Der direkte Dreamcast-Disc-Handoff setzt `VBR` beim Einstieg in die native
   Bootdatei jetzt auf die reale Haupt-RAM-Vektorbasis `0x8C000000`, statt den
   SH-4-Resetwert `0` durchzureichen. Titel koennen damit ihre allgemeinen

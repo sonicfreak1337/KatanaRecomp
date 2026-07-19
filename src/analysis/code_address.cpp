@@ -9,32 +9,35 @@ CodeAddressValidation validate_decode_candidate(const katana::io::ExecutableImag
                                                 const std::uint32_t address,
                                                 const std::size_t width) noexcept {
     if ((address & 1u) != 0u) {
-        return {CodeAddressStatus::OddAddress, nullptr};
+        return {CodeAddressStatus::OddAddress, nullptr, address};
     }
+    const auto resolved = image.resolve_segment_address(address, width);
+    if (!resolved.has_value()) return {CodeAddressStatus::OutsideSegments, nullptr, address};
+    const auto resolved_address = *resolved;
     const katana::io::ImageSegment* containing = nullptr;
     for (const auto& segment : image.segments()) {
-        const auto begin = static_cast<std::uint64_t>(address);
+        const auto begin = static_cast<std::uint64_t>(resolved_address);
         if (begin >= segment.virtual_address && begin < segment.end_address()) {
             containing = &segment;
             break;
         }
     }
-    if (containing == nullptr || !containing->contains(address, width)) {
-        return {CodeAddressStatus::OutsideSegments, containing};
+    if (containing == nullptr || !containing->contains(resolved_address, width)) {
+        return {CodeAddressStatus::OutsideSegments, containing, resolved_address};
     }
     if (containing->kind != katana::io::SegmentKind::Code &&
         containing->kind != katana::io::SegmentKind::Mixed) {
-        return {CodeAddressStatus::NotCodeSegment, containing};
+        return {CodeAddressStatus::NotCodeSegment, containing, resolved_address};
     }
     if (!containing->permissions.executable) {
-        return {CodeAddressStatus::NotExecutableSegment, containing};
+        return {CodeAddressStatus::NotExecutableSegment, containing, resolved_address};
     }
-    const auto offset = containing->byte_offset(address);
+    const auto offset = containing->byte_offset(resolved_address);
     if (!offset.has_value() || containing->bytes.size() < width ||
         *offset > containing->bytes.size() - width) {
-        return {CodeAddressStatus::OutsideCommittedData, containing};
+        return {CodeAddressStatus::OutsideCommittedData, containing, resolved_address};
     }
-    return {CodeAddressStatus::Valid, containing};
+    return {CodeAddressStatus::Valid, containing, resolved_address};
 }
 
 bool proven_instruction_boundary(const std::span<const std::uint32_t> proven_addresses,

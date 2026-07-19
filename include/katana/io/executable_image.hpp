@@ -36,6 +36,8 @@ enum class ImageLoadPhase { Initial, RuntimeModule, Overlay };
 // path, host callback, or external runtime injection may mutate guest memory.
 enum class InitialSnapshotPolicy { ImmutableOnly, EntryPointStraightLineQuiescent };
 
+enum class ImageAddressModel { Exact, Sh4DirectMapped };
+
 struct ImageSymbol {
     std::string name;
     std::uint32_t address = 0;
@@ -87,6 +89,7 @@ class ExecutableImage {
     void add_relocation(ImageRelocation relocation);
     void set_guest_call_abi(GuestCallAbi abi) noexcept;
     void set_initial_snapshot_policy(InitialSnapshotPolicy policy) noexcept;
+    void set_address_model(ImageAddressModel model) noexcept;
 
     [[nodiscard]] const std::filesystem::path& source_path() const noexcept;
     [[nodiscard]] std::span<const ImageSegment> segments() const noexcept;
@@ -95,6 +98,9 @@ class ExecutableImage {
     [[nodiscard]] std::span<const ImageRelocation> relocations() const noexcept;
     [[nodiscard]] GuestCallAbi guest_call_abi() const noexcept;
     [[nodiscard]] InitialSnapshotPolicy initial_snapshot_policy() const noexcept;
+    [[nodiscard]] ImageAddressModel address_model() const noexcept;
+    [[nodiscard]] std::optional<std::uint32_t>
+    resolve_segment_address(std::uint32_t address, std::size_t width = 1u) const noexcept;
     [[nodiscard]] const ImageSymbol* find_symbol(std::string_view name) const noexcept;
     [[nodiscard]] const ImageSegment* find_segment(std::uint32_t address,
                                                    std::size_t width = 1u) const noexcept;
@@ -109,6 +115,7 @@ class ExecutableImage {
     std::vector<ImageRelocation> relocations_;
     GuestCallAbi guest_call_abi_ = GuestCallAbi::Unknown;
     InitialSnapshotPolicy initial_snapshot_policy_ = InitialSnapshotPolicy::ImmutableOnly;
+    ImageAddressModel address_model_ = ImageAddressModel::Exact;
 };
 
 [[nodiscard]] const char* segment_kind_name(SegmentKind kind) noexcept;

@@ -56,8 +56,22 @@ nicht etwa Low-Memory-Code, sondern kopiert seinen Handler nach `VBR + 0x100`.
 Der direkte Runtime-Handoff hatte faelschlich den SH-4-Resetwert `VBR=0`
 beibehalten. Der allgemeine Dreamcast-Spielhandoff verwendet nun die reale
 Haupt-RAM-Vektorbasis `0x8C000000`; eine synthetische Produktpfadregression
-haelt den Vertrag fest. Ein neuer privater Lauf muss den Fortschritt hinter
-dieser Stelle noch bestaetigen.
+haelt den Vertrag fest. Der folgende private Lauf bestaetigte den Fix und
+erreichte 5.112.471 native Bloecke ohne SH-4-Exception. Er stoppte erst an
+einem Runtime-only-Call auf einen P2-Codealias: Die unveraenderten Zielbytes
+liegen im initialen Bootimage und beginnen an einer gueltigen
+Instruktionsgrenze, waren der Analyse aber nur unter ihrem P1-Namen bekannt.
+Der allgemeine Image-, Analyse- und Dispatchvertrag normalisiert deshalb nun
+P0/P1/P2-Codealiase, kompiliert beschreibbare Snapshotkandidaten unter ihrer
+kanonischen Imageadresse vor und bewahrt das angeforderte Aliasziel getrennt
+vom nativen Ausfuehrungs-PC. Der erneute private Portbuild und Lauf stehen als
+naechster Nachweis aus.
+
+Der angrenzende Analyseaudit bindet auch explizite Einstiegspunkte,
+Funktionssymbole, zusaetzliche Seeds und absolute wie relative Sprungtabellen
+an denselben kanonischen Aliasvertrag. Der Vollstaendigkeitstest deckt wieder
+alle 159 normalen SH-4-Metadatenregeln ab; seine alte 156er-Schranke war nach
+den drei bereits implementierten Cache-/TLB-Befehlen selbst veraltet.
 
 Die PAL-GDI und alle Trackquellen bleiben unveraendert; veraltete
 Portausgaben werden nur nach erfolgreichem Ersatz entfernt.
