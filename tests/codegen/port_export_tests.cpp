@@ -258,8 +258,14 @@ int run_test(const int argc, char* argv[]) {
             "Synthetische GDI durchlaeuft den Portexport nicht vollstaendig.");
     require(std::filesystem::exists(output / "content" / "game.katana-disc") &&
                 std::filesystem::exists(output / "content" / "game.katana-disc.json") &&
+                read_text(output / ".gitignore").find("/content/*.katana-disc") !=
+                    std::string::npos &&
+                read_text(output / "LOCAL_CONTENT_NOTICE.txt")
+                        .find("DO NOT DISTRIBUTE") != std::string::npos &&
+                read_text(output / "LOCAL_CONTENT_NOTICE.txt")
+                        .find("original disc") != std::string::npos &&
                 first.packed_sectors == 47u && first.packed_disc_bytes != 0u,
-            "Portexport erzeugt keinen vollstaendigen synthetischen Disc-Pack.");
+            "Portexport kennzeichnet oder schuetzt den lokalen Disc-Pack nicht vollstaendig.");
     require(unit != generated_before.end(),
             "Portexport besitzt keine deterministische Translation Unit.");
     std::size_t entry_metadata_count = 0u;
@@ -314,6 +320,10 @@ int run_test(const int argc, char* argv[]) {
                 std::string::npos &&
             generated_before.at("code/runtime-dispatch.cpp")
                     .find("Runtime-Blockbudget erschoepft") != std::string::npos &&
+            generated_before.at("code/runtime-dispatch.cpp")
+                    .find("KATANA_PORT_BLOCK_LIMIT") != std::string::npos &&
+            generated_before.at("code/runtime-dispatch.cpp").find("blocks < 1000000u") ==
+                std::string::npos &&
             generated_before.at("include/katana_port.hpp").find("runtime_only_profile_json") !=
                 std::string::npos &&
             generated_before.at("code/runtime-dispatch.cpp")
@@ -328,6 +338,12 @@ int run_test(const int argc, char* argv[]) {
             read_text(output / "src" / "main.cpp").find("create_native_video_output") !=
                 std::string::npos &&
             read_text(output / "src" / "main.cpp").find("framebuffer.capture") !=
+                std::string::npos &&
+            read_text(output / "src" / "main.cpp").find("decode_pvr_scanout") !=
+                std::string::npos &&
+            read_text(output / "src" / "main.cpp").find("KATANA_PORT_PROGRESS") !=
+                std::string::npos &&
+            read_text(output / "src" / "main.cpp").find("framebuffer.configure(640u") ==
                 std::string::npos &&
             read_text(output / "src" / "main.cpp").find("if (pump_video) pump_video(tick)") !=
                 std::string::npos &&

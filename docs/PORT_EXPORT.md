@@ -8,8 +8,10 @@ Debugprofil:
 katana-recomp port .\disc\game.gdi --output .\port --target-name game
 ```
 
-Die GDI wird read-only validiert und in einen portablen, pfadfreien
-`game.katana-disc` gepackt. Der Pack erhaelt die kanonische Tracktabelle, den
+Die GDI wird read-only validiert und fuer den lokalen Entwicklungsbetrieb in
+`game.katana-disc` gepackt. Diese Datei ist eine vollstaendige Discquelle und
+kein Patchformat: Sie enthaelt auch Raw- und Audiosektoren und darf ohne die
+erforderlichen Vertriebsrechte nicht weitergegeben werden. Der Pack erhaelt die kanonische Tracktabelle, den
 logischen LBA-Raum, Raw-Sektoren, Audiosektoren, Sessions, Chunkindex und
 SHA-256-Integritaetswerte. Danach folgen Executable Image,
 Kontrollflussanalyse, Katana-IR, Optimierung und deterministische
@@ -39,7 +41,8 @@ port/
   runtime/
     runtime-dependencies.json Runtimevertrag (derzeit statisch gelinkt)
   user-data/                  Flash, VMU und weitere veraenderliche Daten
-  .gitignore                  ignoriert den getrennten Hostbuild
+  .gitignore                  ignoriert Hostbuilds und lokale Disc-Packs
+  LOCAL_CONTENT_NOTICE.txt    unuebersehbarer Rechte-/Paketierungshinweis
   CMakeLists.txt              einmalig angelegter Nutzer-Bootstrap
   src/main.cpp                einmalig angelegte Integrationsschicht
   generated/
@@ -123,9 +126,12 @@ abgelehnt. Der vollstaendige Pack wird vor der Veroeffentlichung gelesen und
 verifiziert. EXE, Pack, Packmanifest und Runtimevertrag tragen dieselbe
 Jobgeneration und werden nur gemeinsam aus dem Job-Staging veroeffentlicht.
 
-Nach erfolgreichem Export darf der gesamte Portordner verschoben und die
-urspruengliche GDI samt Tracks entfernt werden. Der Standardstart benoetigt
-keinen Zugriff auf den urspruenglichen Quell- oder Exportpfad.
+Die Original-GDI samt Tracks bleibt die autoritative Quelle und darf durch den
+Export weder veraendert noch geloescht werden. `content/*.katana-disc` ist im
+erzeugten Projekt standardmaessig ignoriert. Ein verteilbares Portpaket muss
+diese Datei vollstaendig ausschliessen und stattdessen einen Patch- oder
+Installerablauf verwenden, der beim Nutzer die rechtmaessig vorhandene
+Originaldisc verlangt und nur daraus lokal die benoetigten Daten erzeugt.
 
 Ein externes Portprojekt darf die allgemeinen DiscSource-, Host- und
 Runtime-SDK-Grenzen integrieren. Titelbezogene Installer-, Patch- und

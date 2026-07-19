@@ -334,8 +334,6 @@ std::string handwritten_main(const std::string& entry_namespace,
            "            video = katana::runtime::create_native_video_output(\n"
            "                {katana::runtime::native_video_contract_version,\n"
            "                 \"KatanaRecomp Game\", 640u, 480u, true});\n"
-           "            framebuffer.configure(640u, 480u, 1280u,\n"
-           "                                  katana::runtime::PvrFramebufferFormat::Rgb565);\n"
            "        }\n"
            "        std::uint64_t presented_frames = 0u;\n"
            "        std::uint64_t host_sequence = 1u;\n"
@@ -359,7 +357,13 @@ std::string handwritten_main(const std::string& entry_namespace,
            "                     katana::runtime::HostRuntimeEventKind::Resume, {}});\n"
            "        pump_video = [&](const katana::runtime::VideoTick&) {\n"
            "            if (!video) return;\n"
-           "            video->present(framebuffer.capture(state.vram->bytes()));\n"
+           "            if (const auto scanout = katana::runtime::decode_pvr_scanout(\n"
+           "                    *state.pvr_registers, state.vram->bytes().size())) {\n"
+           "                framebuffer.configure(scanout->width, scanout->height,\n"
+           "                                      scanout->stride_bytes, scanout->format);\n"
+           "                video->present(framebuffer.capture(state.vram->bytes(),\n"
+           "                                                   scanout->base_offset));\n"
+           "            }\n"
            "            video->poll_events();\n"
            "            for (const auto& event : video->drain_events()) {\n"
            "                auto kind = katana::runtime::HostRuntimeEventKind::Controller;\n"
@@ -390,9 +394,37 @@ std::string handwritten_main(const std::string& entry_namespace,
            "            presented_frames = video->presented_frames();\n"
            "        };\n"
            "        PortPlatformServices services(cpu, state);\n"
-           "        const auto result = " +
+           "        auto report_progress = [&] {\n"
+           "            std::cerr << \"KATANA_PORT_PROGRESS pc=\" << cpu.pc\n"
+           "                      << \" hardware_cycles=\" << state.scheduler->current_cycle()\n"
+           "                      << \" executed_blocks=\" << services.executed_blocks()\n"
+           "                      << \" frames=\" << presented_frames\n"
+           "                      << \" ta_transfers=\" << state.store_queue_transfers->size()\n"
+           "                      << \" ta_transfers_dropped=\"\n"
+           "                      << *state.dropped_store_queue_transfers\n"
+           "                      << \" pvr_fb_r_ctrl=\"\n"
+           "                      << state.pvr_registers->read(\n"
+           "                             katana::runtime::pvr_register::FramebufferReadControl)\n"
+           "                      << \" pvr_fb_r_size=\"\n"
+           "                      << state.pvr_registers->read(\n"
+           "                             katana::runtime::pvr_register::FramebufferReadSize)\n"
+           "                      << \" pvr_fb_r_sof1=\"\n"
+           "                      << state.pvr_registers->read(\n"
+           "                             katana::runtime::pvr_register::FramebufferReadSof1)\n"
+           "                      << \" pvr_render_requests=\"\n"
+           "                      << state.pvr_registers->render_request_count() << '\\n';\n"
+           "        };\n"
+           "        " +
+           entry_namespace +
+           "::RuntimeRunResult result;\n"
+           "        try {\n"
+           "            result = " +
            entry_namespace +
            "::run_runtime(cpu, services);\n"
+           "        } catch (...) {\n"
+           "            report_progress();\n"
+           "            throw;\n"
+           "        }\n"
            "        const std::uint64_t silent_failures =\n"
            "            (state.loaded_boot_bytes == 0u ? 1u : 0u) +\n"
            "            (result.scheduler_cycle == 0u ? 1u : 0u) +\n"
@@ -519,7 +551,8 @@ std::string runtime_dispatch_adapter(const std::string& entry_namespace,
            << "#include \"katana/runtime/block_table.hpp\"\n"
            << "#include \"katana/runtime/dispatch_diagnostics.hpp\"\n"
            << "#include \"katana/runtime/indirect_dispatch.hpp\"\n"
-           << "#include <stdexcept>\n#include <utility>\n#include <vector>\n\n"
+           << "#include <cerrno>\n#include <cstdlib>\n#include <limits>\n#include <stdexcept>\n"
+              "#include <utility>\n#include <vector>\n\n"
            << "namespace " << entry_namespace << " {\n";
     for (const auto& function : program) {
         output << "void fn_" << symbol(function.entry_address)
@@ -584,11 +617,26 @@ std::string runtime_dispatch_adapter(const std::string& entry_namespace,
         }
     }
     output
-        << "void dispatch_chain(katana::runtime::CpuState& cpu, std::uint32_t target,\n"
+        << "std::uint64_t configured_block_budget() {\n"
+           "    static const auto budget = [] {\n"
+           "        const auto* text = std::getenv(\"KATANA_PORT_BLOCK_LIMIT\");\n"
+           "        if (text == nullptr || *text == '\\0')\n"
+           "            return std::numeric_limits<std::uint64_t>::max();\n"
+           "        errno = 0;\n"
+           "        char* end = nullptr;\n"
+           "        const auto value = std::strtoull(text, &end, 10);\n"
+           "        if (errno != 0 || end == text || *end != '\\0' || value == 0u)\n"
+           "            throw std::runtime_error(\"KATANA_PORT_BLOCK_LIMIT ist ungueltig.\");\n"
+           "        return static_cast<std::uint64_t>(value);\n"
+           "    }();\n"
+           "    return budget;\n"
+           "}\n\n"
+           "void dispatch_chain(katana::runtime::CpuState& cpu, std::uint32_t target,\n"
            "                    katana::runtime::IndirectDispatchKind kind,\n"
            "                    katana::runtime::RuntimeDispatchClass dispatch_class,\n"
            "                    bool diagnostic) {\n"
-           "    for (std::size_t blocks = 0u; blocks < 1000000u; ++blocks) {\n"
+            "    const auto block_budget = configured_block_budget();\n"
+            "    for (std::uint64_t blocks = 0u; blocks < block_budget; ++blocks) {\n"
            "        if (cpu.sleeping) {\n"
            "            if (active_services->poll_interrupt().has_value()) {\n"
            "                target = cpu.pc;\n"
@@ -1042,7 +1090,21 @@ PortExportResult export_dreamcast_port_project(const PreparedPortProgram& prepar
     std::filesystem::create_directories(canonical_root / "user-data");
     const auto write = write_codegen_project(canonical_root / "generated", std::move(artifacts));
     write_port_file(canonical_root, "CMakeLists.txt", root_cmake());
-    write_port_file(canonical_root, ".gitignore", "/build/\n");
+    write_port_file(canonical_root,
+                    ".gitignore",
+                    "/build/\n/build-*/\n/content/*.katana-disc\n");
+    write_port_file(
+        canonical_root,
+        "LOCAL_CONTENT_NOTICE.txt",
+        "LOCAL RETAIL CONTENT - DO NOT DISTRIBUTE\n\n"
+        "content/*.katana-disc contains the complete source disc, including raw and audio "
+        "sectors.\nIt may only be created and used locally from a lawfully possessed disc, or "
+        "distributed when you hold all required distribution rights.\n\n"
+        "A distributable port must exclude every *.katana-disc file and use an installer or "
+        "patch workflow that asks each user for their original disc.\n"
+        "Keep the original GDI and track files as the authoritative source; this export never "
+        "modifies or deletes them.\n",
+        true);
     const auto* boot_segment =
         prepared.image.find_segment(prepared.boot_address, prepared.boot_size);
     if (boot_segment == nullptr)

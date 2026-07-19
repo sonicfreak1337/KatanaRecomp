@@ -149,6 +149,9 @@ std::string cmake_project(const std::vector<std::filesystem::path>& sources) {
         output << "    " << source.generic_string() << '\n';
     }
     output << ")\ntarget_compile_features(katana_generated PUBLIC cxx_std_20)\n"
+           << "if(MSVC)\n"
+           << "  target_compile_options(katana_generated PRIVATE /bigobj)\n"
+           << "endif()\n"
            << "target_include_directories(katana_generated PRIVATE\n"
            << "  \"${KATANA_RUNTIME_ROOT}/include\"\n"
            << "  \"${CMAKE_CURRENT_BINARY_DIR}/generated/include\"\n"

@@ -1,5 +1,7 @@
 #include "katana/runtime/pvr.hpp"
+#include "katana/runtime/dreamcast_memory.hpp"
 
+#include <array>
 #include <cstdlib>
 #include <iostream>
 #include <limits>
@@ -43,6 +45,28 @@ int main() {
     const auto transparent = alpha.capture(std::vector<std::uint8_t>{0x1Fu, 0x00u});
     require(transparent.rgba[2] == 0xFFu && transparent.rgba[3] == 0u,
             "ARGB1555-Alpha oder Blau ist falsch.");
+
+    PvrFramebuffer rgb0888;
+    rgb0888.configure(1u, 1u, 4u, PvrFramebufferFormat::Rgb0888);
+    const auto rgb0888_frame =
+        rgb0888.capture(std::array<std::uint8_t, 4u>{0x11u, 0x22u, 0x33u, 0x00u});
+    require(rgb0888_frame.rgba ==
+                std::vector<std::uint8_t>({0x33u, 0x22u, 0x11u, 0xFFu}),
+            "RGB0888 wird nicht korrekt in RGBA dekodiert.");
+
+    EventScheduler scheduler;
+    PvrRegisterFile registers(scheduler);
+    require(!decode_pvr_scanout(registers, dreamcast_vram_size).has_value(),
+            "Deaktivierter PVR-Scanout wird als aktiv gemeldet.");
+    registers.write(pvr_register::FramebufferReadControl, 0x5u);
+    registers.write(pvr_register::FramebufferReadSof1, 0x001000u);
+    registers.write(pvr_register::FramebufferReadSize,
+                    (1u << 20u) | (479u << 10u) | 319u);
+    const auto scanout = decode_pvr_scanout(registers, dreamcast_vram_size);
+    require(scanout.has_value() && scanout->width == 640u && scanout->height == 480u &&
+                scanout->stride_bytes == 1284u && scanout->base_offset == 0x1000u &&
+                scanout->format == PvrFramebufferFormat::Rgb565,
+            "PVR-Scanout-Register werden nicht korrekt dekodiert.");
     require(throws<std::invalid_argument>([] {
                 PvrFramebuffer value;
                 value.configure(2u, 1u, 3u, PvrFramebufferFormat::Rgb565);

@@ -114,7 +114,54 @@ std::size_t checked_add(const std::size_t left, const std::size_t right, const c
     }
     return left + right;
 }
+
+std::size_t bytes_per_pixel(const PvrFramebufferFormat format) {
+    if (format == PvrFramebufferFormat::Rgb888) return 3u;
+    if (format == PvrFramebufferFormat::Rgb0888) return 4u;
+    return 2u;
+}
 } // namespace
+
+std::optional<PvrScanoutDescriptor>
+decode_pvr_scanout(const PvrRegisterFile& registers, const std::size_t vram_size) {
+    const auto control = registers.read(pvr_register::FramebufferReadControl);
+    if ((control & 1u) == 0u) return std::nullopt;
+
+    const auto depth = (control >> 2u) & 3u;
+    const auto format = depth == 0u   ? PvrFramebufferFormat::Argb1555
+                        : depth == 1u ? PvrFramebufferFormat::Rgb565
+                        : depth == 2u ? PvrFramebufferFormat::Rgb888
+                                      : PvrFramebufferFormat::Rgb0888;
+    const auto size = registers.read(pvr_register::FramebufferReadSize);
+    const auto line_words = static_cast<std::size_t>(size & 0x3FFu) + 1u;
+    const auto line_bytes =
+        checked_multiply(line_words, 4u, "PVR-Scanout-Zeilenbreite ist zu gross.");
+    const auto pixel_bytes = bytes_per_pixel(format);
+    if ((line_bytes % pixel_bytes) != 0u) {
+        throw std::invalid_argument("PVR-Scanout-Zeilenbreite passt nicht zum Pixelformat.");
+    }
+    const auto width = line_bytes / pixel_bytes;
+    const auto height = static_cast<std::size_t>((size >> 10u) & 0x3FFu) + 1u;
+    const auto modulus_bytes =
+        checked_multiply(static_cast<std::size_t>((size >> 20u) & 0x3FFu),
+                         4u,
+                         "PVR-Scanout-Modulus ist zu gross.");
+    const auto stride =
+        checked_add(line_bytes, modulus_bytes, "PVR-Scanout-Stride ist zu gross.");
+    const auto base = static_cast<std::size_t>(
+        registers.read(pvr_register::FramebufferReadSof1) & 0x007FFFFCu);
+    const auto image_bytes = checked_multiply(
+        stride, height, "PVR-Scanout-VRAM-Ausdehnung ist zu gross.");
+    if (checked_add(base, image_bytes, "PVR-Scanout-Endadresse laeuft ueber.") > vram_size) {
+        throw std::out_of_range("PVR-Scanout liegt ausserhalb des VRAM-Abbilds.");
+    }
+    return PvrScanoutDescriptor{static_cast<std::uint32_t>(width),
+                                static_cast<std::uint32_t>(height),
+                                static_cast<std::uint32_t>(stride),
+                                base,
+                                format,
+                                (control & 2u) != 0u};
+}
 
 void PvrFramebuffer::configure(const std::uint32_t width,
                                const std::uint32_t height,
@@ -123,9 +170,9 @@ void PvrFramebuffer::configure(const std::uint32_t width,
     if (width == 0u || height == 0u) {
         throw std::invalid_argument("Ungueltige PVR-Framebuffer-Geometrie oder Stride.");
     }
-    const std::size_t bytes_per_pixel = format == PvrFramebufferFormat::Rgb888 ? 3u : 2u;
+    const auto pixel_bytes = bytes_per_pixel(format);
     const auto minimum_stride = checked_multiply(static_cast<std::size_t>(width),
-                                                 bytes_per_pixel,
+                                                 pixel_bytes,
                                                  "PVR-Framebuffer-Zeilenbreite ist zu gross.");
     if (static_cast<std::size_t>(stride_bytes) < minimum_stride) {
         throw std::invalid_argument("Ungueltige PVR-Framebuffer-Geometrie oder Stride.");
@@ -158,9 +205,16 @@ PvrFrame PvrFramebuffer::capture(const std::span<const std::uint8_t> vram,
     for (std::uint32_t y = 0u; y < height_; ++y) {
         for (std::uint32_t x = 0u; x < width_; ++x) {
             const auto source = base_offset + static_cast<std::size_t>(y) * stride_ +
-                                x * (format_ == PvrFramebufferFormat::Rgb888 ? 3u : 2u);
+                                x * bytes_per_pixel(format_);
             const auto destination = (static_cast<std::size_t>(y) * width_ + x) * 4u;
             if (format_ == PvrFramebufferFormat::Rgb888) {
+                frame.rgba[destination] = vram[source + 2u];
+                frame.rgba[destination + 1u] = vram[source + 1u];
+                frame.rgba[destination + 2u] = vram[source];
+                frame.rgba[destination + 3u] = 0xFFu;
+                continue;
+            }
+            if (format_ == PvrFramebufferFormat::Rgb0888) {
                 frame.rgba[destination] = vram[source + 2u];
                 frame.rgba[destination + 1u] = vram[source + 1u];
                 frame.rgba[destination + 2u] = vram[source];

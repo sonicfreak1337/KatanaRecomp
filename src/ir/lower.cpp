@@ -7,6 +7,7 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <set>
 #include <stdexcept>
 #include <string_view>
 #include <unordered_map>
@@ -1100,6 +1101,100 @@ std::vector<Function> lower_program(const katana::analysis::ControlFlowAnalysisR
         analysis.recursive.instructions, seeds, analysis.resolved_edges);
     auto program =
         lower_program(analysis.recursive.instructions, functions, analysis.resolved_edges);
+
+    std::set<std::uint32_t> owned_blocks;
+    for (const auto& function : functions)
+        owned_blocks.insert(function.block_addresses.begin(), function.block_addresses.end());
+    const auto source_blocks = katana::analysis::build_basic_blocks(
+        analysis.recursive.instructions, analysis.resolved_edges, seeds);
+    std::unordered_map<std::uint32_t, const katana::analysis::BasicBlock*> missing_blocks;
+    for (const auto& block : source_blocks) {
+        if (!owned_blocks.contains(block.start_address))
+            missing_blocks.emplace(block.start_address, &block);
+    }
+
+    std::set<std::uint32_t> incoming_blocks;
+    for (const auto& [address, block] : missing_blocks) {
+        static_cast<void>(address);
+        for (const auto successor : block->successors) {
+            if (missing_blocks.contains(successor)) incoming_blocks.insert(successor);
+        }
+    }
+    std::vector<std::uint32_t> component_candidates;
+    component_candidates.reserve(missing_blocks.size());
+    for (const auto& [address, block] : missing_blocks) {
+        static_cast<void>(block);
+        if (!incoming_blocks.contains(address)) component_candidates.push_back(address);
+    }
+    for (const auto& [address, block] : missing_blocks) {
+        static_cast<void>(block);
+        component_candidates.push_back(address);
+    }
+    std::sort(component_candidates.begin(), component_candidates.end());
+    component_candidates.erase(
+        std::unique(component_candidates.begin(), component_candidates.end()),
+        component_candidates.end());
+
+    std::set<std::uint32_t> assigned_blocks;
+    std::vector<katana::analysis::FunctionInfo> supplemental_functions;
+    for (const auto candidate : component_candidates) {
+        if (assigned_blocks.contains(candidate)) continue;
+        katana::analysis::FunctionInfo supplemental;
+        supplemental.entry_address = candidate;
+        supplemental.evidence = katana::analysis::ControlFlowEvidence::GuardedPartial;
+        std::vector<std::uint32_t> pending = {candidate};
+        while (!pending.empty()) {
+            const auto address = pending.back();
+            pending.pop_back();
+            if (!assigned_blocks.insert(address).second) continue;
+            supplemental.block_addresses.push_back(address);
+            for (const auto successor : missing_blocks.at(address)->successors) {
+                if (missing_blocks.contains(successor) && !assigned_blocks.contains(successor))
+                    pending.push_back(successor);
+            }
+        }
+        std::sort(supplemental.block_addresses.begin(), supplemental.block_addresses.end());
+        supplemental_functions.push_back(std::move(supplemental));
+    }
+
+    auto all_entries = seeds;
+    for (const auto& supplemental : supplemental_functions)
+        all_entries.push_back(supplemental.entry_address);
+    std::sort(all_entries.begin(), all_entries.end());
+    all_entries.erase(std::unique(all_entries.begin(), all_entries.end()), all_entries.end());
+    for (const auto& supplemental : supplemental_functions) {
+        auto supplemental_ir = lower_function(analysis.recursive.instructions,
+                                               supplemental,
+                                               analysis.resolved_edges,
+                                               all_entries);
+        for (const auto& block : supplemental_ir.blocks) {
+            for (const auto& instruction : block.instructions) {
+                if (instruction.operation == Operation::Call && instruction.target_address)
+                    supplemental_ir.direct_callees.push_back(*instruction.target_address);
+                if (instruction.operation == Operation::CallRegister) {
+                    supplemental_ir.indirect_call_sites.push_back(instruction.source_address);
+                    supplemental_ir.direct_callees.insert(supplemental_ir.direct_callees.end(),
+                                                          instruction.resolved_targets.begin(),
+                                                          instruction.resolved_targets.end());
+                }
+            }
+        }
+        std::sort(supplemental_ir.direct_callees.begin(), supplemental_ir.direct_callees.end());
+        supplemental_ir.direct_callees.erase(
+            std::unique(supplemental_ir.direct_callees.begin(),
+                        supplemental_ir.direct_callees.end()),
+            supplemental_ir.direct_callees.end());
+        std::sort(supplemental_ir.indirect_call_sites.begin(),
+                  supplemental_ir.indirect_call_sites.end());
+        supplemental_ir.indirect_call_sites.erase(
+            std::unique(supplemental_ir.indirect_call_sites.begin(),
+                        supplemental_ir.indirect_call_sites.end()),
+            supplemental_ir.indirect_call_sites.end());
+        program.push_back(std::move(supplemental_ir));
+    }
+    std::sort(program.begin(), program.end(), [](const Function& left, const Function& right) {
+        return left.entry_address < right.entry_address;
+    });
     for (auto& function : program) {
         for (auto& block : function.blocks) {
             for (auto& instruction : block.instructions) {

@@ -201,6 +201,9 @@ try {
     & powershell.exe -NoProfile -ExecutionPolicy Bypass -File `
         tools\quality\audit-reference-provenance.ps1 -SelfTest
     Require-NativeSuccess 'Referenz-/Lizenzaudit'
+    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File `
+        tools\quality\audit-retail-content.ps1 -SelfTest
+    Require-NativeSuccess 'Retail-Content-Audit'
 
     $debugTests = Get-TestNames
     & ctest --preset quality-debug --parallel 8

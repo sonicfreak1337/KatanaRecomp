@@ -1,7 +1,9 @@
 #include "katana/analysis/function_analysis.hpp"
+#include "katana/analysis/control_flow_analysis.hpp"
 #include "katana/ir/lower.hpp"
 #include "katana/sh4/disassembler.hpp"
 
+#include <algorithm>
 #include <array>
 #include <cstdlib>
 #include <iostream>
@@ -114,6 +116,28 @@ int main() {
 
     require(katana::ir::operation_name(katana::ir::Operation::MovImmediate) == "mov_imm",
             "Der IR-Operationsname ist falsch.");
+
+    constexpr std::array<std::uint8_t, 10> guarded_bytes = {
+        0x0Bu, 0x00u, 0x09u, 0x00u, 0x01u, 0xE0u, 0x0Bu, 0x00u, 0x09u, 0x00u};
+    katana::analysis::ControlFlowAnalysisResult guarded_analysis;
+    guarded_analysis.recursive.instructions =
+        katana::sh4::disassemble(guarded_bytes, 0x8C020000u);
+    guarded_analysis.recursive.functions.push_back(
+        {0x8C020000u,
+         katana::analysis::AnalysisConfidence::Certain,
+         katana::analysis::ControlFlowEvidence::ProvenComplete,
+         {katana::analysis::FunctionOrigin::EntryPoint}});
+    guarded_analysis.recursive.proven_instruction_addresses = {0x8C020000u, 0x8C020002u};
+    guarded_analysis.recursive.guarded_candidate_instruction_addresses = {0x8C020004u,
+                                                                           0x8C020006u,
+                                                                           0x8C020008u};
+    const auto guarded_program = katana::ir::lower_program(guarded_analysis);
+    const auto guarded_function =
+        std::find_if(guarded_program.begin(), guarded_program.end(), [](const auto& function) {
+            return function.entry_address == 0x8C020004u;
+        });
+    require(guarded_function != guarded_program.end() && guarded_function->blocks.size() == 1u,
+            "Bekannter dynamischer Codeblock wurde nicht fuer AOT-Rekompilierung materialisiert.");
 
     std::cout << "Alle IR-Lowering-Tests erfolgreich.\n";
 

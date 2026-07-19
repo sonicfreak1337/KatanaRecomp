@@ -42,6 +42,7 @@ __pycache__/
 *.cdi
 *.chd
 *.iso
+*.katana-disc
 track*.bin
 track*.raw
 dc_boot.bin

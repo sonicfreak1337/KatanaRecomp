@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <set>
 #include <span>
 #include <vector>
@@ -69,7 +70,19 @@ class PvrRegisterFile final {
     std::function<void()> render_observer_;
 };
 
-enum class PvrFramebufferFormat : std::uint8_t { Rgb565, Argb1555, Rgb888 };
+enum class PvrFramebufferFormat : std::uint8_t { Rgb565, Argb1555, Rgb888, Rgb0888 };
+
+struct PvrScanoutDescriptor {
+    std::uint32_t width = 0u;
+    std::uint32_t height = 0u;
+    std::uint32_t stride_bytes = 0u;
+    std::size_t base_offset = 0u;
+    PvrFramebufferFormat format = PvrFramebufferFormat::Rgb565;
+    bool line_double = false;
+};
+
+[[nodiscard]] std::optional<PvrScanoutDescriptor>
+decode_pvr_scanout(const PvrRegisterFile& registers, std::size_t vram_size);
 
 struct PvrFrame {
     std::uint32_t width = 0u;

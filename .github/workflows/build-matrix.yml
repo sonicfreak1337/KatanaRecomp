@@ -20,6 +20,9 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+      - name: Audit proprietary retail packs
+        shell: pwsh
+        run: tools/quality/audit-retail-content.ps1 -SelfTest
       - uses: ilammy/msvc-dev-cmd@v1
         if: matrix.toolchain.name == 'msvc'
       - uses: hendrikmuhs/ccache-action@v1.2
@@ -63,6 +66,9 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+      - name: Audit proprietary retail packs
+        shell: powershell
+        run: tools/quality/audit-retail-content.ps1 -SelfTest
       - uses: ilammy/msvc-dev-cmd@v1
         with:
           arch: x64

@@ -25,6 +25,11 @@ if (-not $resolvedSource.Equals($repositoryRoot, [StringComparison]::OrdinalIgno
 if (-not (Test-Path -LiteralPath $resolvedBuild -PathType Container)) {
     throw "build-current/ fehlt. Zuerst artifact-debug konfigurieren und bauen."
 }
+& (Join-Path $repositoryRoot 'tools\quality\audit-retail-content.ps1') `
+    -SourceDirectory $resolvedSource -ArtifactDirectory (Join-Path $resolvedBuild 'artifacts')
+if ($LASTEXITCODE -ne 0) {
+    throw 'Retail-Content-Audit vor Artefakterzeugung fehlgeschlagen.'
+}
 
 $git = Get-Command git.exe -ErrorAction SilentlyContinue |
     Select-Object -First 1 -ExpandProperty Source
