@@ -348,6 +348,8 @@ int run_test(const int argc, char* argv[]) {
             std::filesystem::exists(output / "CMakeLists.txt") &&
             read_text(output / "CMakeLists.txt").find("katana_core") == std::string::npos &&
             std::filesystem::exists(output / "src" / "main.cpp") &&
+            read_text(output / "src" / "main.cpp")
+                    .find("DreamcastRuntimeFirmwareMode::HleBiosAbi") != std::string::npos &&
             read_text(output / "src" / "main.cpp").find("load_dreamcast_runtime_boot") !=
                 std::string::npos &&
             read_text(output / "src" / "main.cpp")
@@ -377,7 +379,8 @@ int run_test(const int argc, char* argv[]) {
             read_text(output / "src" / "main.cpp").find("if (pump_video) pump_video(tick)") !=
                 std::string::npos &&
             read_text(output / "src" / "main.cpp").find("video->present") <
-                read_text(output / "src" / "main.cpp").find("run_runtime(cpu, services)") &&
+                read_text(output / "src" / "main.cpp")
+                    .find("run_runtime(cpu, services, *state.runtime_blocks)") &&
             read_text(output / "src" / "main.cpp").find("HostRuntimeSession") !=
                 std::string::npos &&
             read_text(output / "src" / "main.cpp").find("DreamcastMutableStorage::open") !=

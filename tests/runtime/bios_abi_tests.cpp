@@ -25,8 +25,20 @@ int main() {
         {"main-ram", FirmwareSegmentKind::Ram, 0x8C000000u, 0x0C000000u, 0x01000000u});
     install_hle_bios_abi(cpu.memory, blocks, handoff, {}, 42u);
     const auto vectors = hle_bios_abi_vectors();
-    require(vectors.size() == 6u && blocks.size() == 6u && handoff.runtime_symbols().size() == 12u,
-            "Dynamische BIOS-ABI-Vektorinstallation ist unvollstaendig.");
+    const auto bootstrap_handle = blocks.lookup(vectors[0].handler_address, {});
+    const auto bootstrap_block = bootstrap_handle ? blocks.resolve(*bootstrap_handle) : std::nullopt;
+    require(bootstrap_block.has_value(), "BIOS-Bootstrapblock ist nicht aufloesbar.");
+    static_cast<void>(blocks.register_static_bulk({{0x8C010000u,
+                                                     0x0C010000u,
+                                                     4u,
+                                                     BlockEndKind::Return,
+                                                     {},
+                                                     bootstrap_block->get().function,
+                                                     "generated-after-bios-bootstrap"}}));
+    require(vectors.size() == 6u && blocks.size() == 7u &&
+                blocks.lookup(0x8C010000u, {}).has_value() &&
+                handoff.runtime_symbols().size() == 12u,
+            "BIOS-Bootstrap und nachfolgende statische AOT-Registry sind unvollstaendig.");
     for (const auto& vector : vectors)
         require(cpu.memory.read_u32(vector.slot_address) == vector.handler_address &&
                     cpu.memory.read_u16(vector.handler_address) == 0x000Bu &&

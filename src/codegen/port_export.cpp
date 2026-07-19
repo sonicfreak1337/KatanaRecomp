@@ -64,6 +64,7 @@ select_functions(const std::span<const katana::ir::Function> program,
 
 std::string generated_header(const std::string& entry_namespace) {
     return "#pragma once\n\n"
+           "#include \"katana/runtime/block_table.hpp\"\n"
            "#include \"katana/runtime/platform_services.hpp\"\n"
            "#include \"katana/runtime/runtime.hpp\"\n"
            "#include <string>\n\n"
@@ -89,7 +90,8 @@ std::string generated_header(const std::string& entry_namespace) {
            "katana::runtime::guest_cycle_contract_version;\n"
            "};\n"
            "RuntimeRunResult run_runtime(katana::runtime::CpuState& cpu,\n"
-           "                             katana::runtime::PlatformServices& services);\n"
+           "                             katana::runtime::PlatformServices& services,\n"
+           "                             katana::runtime::RuntimeBlockTable& table);\n"
            "}\n";
 }
 
@@ -492,7 +494,7 @@ std::string handwritten_main(const std::string& entry_namespace,
            "        try {\n"
            "            result = " +
            entry_namespace +
-           "::run_runtime(cpu, services);\n"
+           "::run_runtime(cpu, services, *state.runtime_blocks);\n"
            "        } catch (...) {\n"
            "            report_progress();\n"
            "            throw;\n"
@@ -841,9 +843,10 @@ std::string runtime_dispatch_adapter(const std::string& entry_namespace,
            "    blocks.emplace_back(std::move(block));\n"
            "}\n\n"
         << "RuntimeRunResult run_runtime(katana::runtime::CpuState& cpu,\n"
-        << "                             katana::runtime::PlatformServices& services) {\n"
+        << "                             katana::runtime::PlatformServices& services,\n"
+        << "                             katana::runtime::RuntimeBlockTable& table) {\n"
         << "    katana::runtime::validate_platform_services(services);\n"
-        << "    katana::runtime::RuntimeBlockTable table;\n";
+        ;
     output << "    table.bind_code_tracker(services.executable_code_tracker());\n";
     output << "    std::vector<katana::runtime::RuntimeBlock> static_blocks;\n";
     output << "    static_blocks.reserve(" << block_addresses.size() << "u);\n";
@@ -1288,7 +1291,8 @@ PortExportResult export_dreamcast_port_project(const std::filesystem::path& gdi_
                                           katana::platform::dreamcast_disc_boot_address,
                                           katana::platform::dreamcast_disc_boot_address,
                                           disc.boot_file.size(),
-                                          project_identity},
+                                          project_identity,
+                                          true},
                                          output_root,
                                          options);
 }

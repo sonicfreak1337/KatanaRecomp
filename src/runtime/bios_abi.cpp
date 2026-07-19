@@ -173,7 +173,7 @@ void install_hle_bios_abi(Memory& memory,
         memory.write_u16(vector.handler_address, 0x000Bu, CodeWriteSource::Copy);
         memory.write_u16(vector.handler_address + 2u, 0x0009u, CodeWriteSource::Copy);
         static_cast<void>(
-            blocks.register_runtime({vector.handler_address,
+            blocks.register_bootstrap_runtime({vector.handler_address,
                                      canonical_physical_address(vector.handler_address),
                                      4u,
                                      BlockEndKind::Return,
