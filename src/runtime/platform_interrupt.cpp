@@ -1,6 +1,7 @@
 #include "katana/runtime/platform_interrupt.hpp"
 
 #include <array>
+#include <memory>
 #include <stdexcept>
 
 namespace katana::runtime {
@@ -152,6 +153,111 @@ void PlatformInterruptRouter::reset() noexcept {
     rtc_level_ = 0u;
     dma_level_ = 0u;
     external_pending_ = {};
+}
+
+Sh4InterruptRegisters::Sh4InterruptRegisters(PlatformInterruptRouter& router) noexcept
+    : router_(router) {
+    synchronize_priorities();
+}
+
+std::uint16_t Sh4InterruptRegisters::interrupt_control() const noexcept {
+    return interrupt_control_;
+}
+std::uint16_t Sh4InterruptRegisters::priority_a() const noexcept {
+    return priority_a_;
+}
+std::uint16_t Sh4InterruptRegisters::priority_b() const noexcept {
+    return priority_b_;
+}
+std::uint16_t Sh4InterruptRegisters::priority_c() const noexcept {
+    return priority_c_;
+}
+std::uint16_t Sh4InterruptRegisters::priority_d() const noexcept {
+    return 0u;
+}
+
+void Sh4InterruptRegisters::write_interrupt_control(const std::uint16_t value) noexcept {
+    constexpr std::uint16_t writable_mask = 0x4380u;
+    interrupt_control_ = value & writable_mask;
+}
+
+void Sh4InterruptRegisters::write_priority_a(const std::uint16_t value) noexcept {
+    priority_a_ = value;
+    synchronize_priorities();
+}
+void Sh4InterruptRegisters::write_priority_b(const std::uint16_t value) noexcept {
+    priority_b_ = value;
+}
+void Sh4InterruptRegisters::write_priority_c(const std::uint16_t value) noexcept {
+    priority_c_ = value;
+    synchronize_priorities();
+}
+
+void Sh4InterruptRegisters::synchronize_priorities() noexcept {
+    router_.set_tmu_level(0u, static_cast<std::uint8_t>((priority_a_ >> 12u) & 0xFu));
+    router_.set_tmu_level(1u, static_cast<std::uint8_t>((priority_a_ >> 8u) & 0xFu));
+    router_.set_tmu_level(2u, static_cast<std::uint8_t>((priority_a_ >> 4u) & 0xFu));
+    router_.set_rtc_level(static_cast<std::uint8_t>(priority_a_ & 0xFu));
+    router_.set_dma_level(static_cast<std::uint8_t>((priority_c_ >> 8u) & 0xFu));
+}
+
+void Sh4InterruptRegisters::reset() noexcept {
+    interrupt_control_ = 0u;
+    priority_a_ = 0u;
+    priority_b_ = 0u;
+    priority_c_ = 0u;
+    synchronize_priorities();
+}
+
+std::shared_ptr<Sh4InterruptRegisters>
+map_sh4_interrupt_registers(Memory& memory, PlatformInterruptRouter& router) {
+    auto registers = std::make_shared<Sh4InterruptRegisters>(router);
+    auto device = std::make_shared<MmioMemoryDevice>(
+        sh4_intc_register_size,
+        [registers](const std::uint32_t offset, const MemoryAccessWidth width) {
+            if (width != MemoryAccessWidth::Halfword)
+                throw std::runtime_error("INTC-Register erfordern 16-Bit-Zugriffe.");
+            switch (offset) {
+            case 0x00u:
+                return static_cast<std::uint32_t>(registers->interrupt_control());
+            case 0x04u:
+                return static_cast<std::uint32_t>(registers->priority_a());
+            case 0x08u:
+                return static_cast<std::uint32_t>(registers->priority_b());
+            case 0x0Cu:
+                return static_cast<std::uint32_t>(registers->priority_c());
+            case 0x10u:
+                return static_cast<std::uint32_t>(registers->priority_d());
+            default:
+                throw std::runtime_error("Ungueltiger INTC-Registeroffset.");
+            }
+        },
+        [registers](
+            const std::uint32_t offset, const std::uint32_t value, const MemoryAccessWidth width) {
+            if (width != MemoryAccessWidth::Halfword)
+                throw std::runtime_error("INTC-Register erfordern 16-Bit-Zugriffe.");
+            switch (offset) {
+            case 0x00u:
+                registers->write_interrupt_control(static_cast<std::uint16_t>(value));
+                return;
+            case 0x04u:
+                registers->write_priority_a(static_cast<std::uint16_t>(value));
+                return;
+            case 0x08u:
+                registers->write_priority_b(static_cast<std::uint16_t>(value));
+                return;
+            case 0x0Cu:
+                registers->write_priority_c(static_cast<std::uint16_t>(value));
+                return;
+            case 0x10u:
+                throw std::runtime_error("INTC-IPRD ist auf SH7750 read-only.");
+            default:
+                throw std::runtime_error("Ungueltiger INTC-Registeroffset.");
+            }
+        });
+    memory.map_region("sh4-intc-p4", sh4_intc_p4_base, device);
+    memory.map_region("sh4-intc-area7", sh4_intc_area7_base, device);
+    return registers;
 }
 
 } // namespace katana::runtime

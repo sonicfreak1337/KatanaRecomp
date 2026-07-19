@@ -10,6 +10,10 @@
 
 namespace katana::runtime {
 
+inline constexpr std::uint32_t sh4_intc_p4_base = 0xFFD00000u;
+inline constexpr std::uint32_t sh4_intc_area7_base = 0x1FD00000u;
+inline constexpr std::size_t sh4_intc_register_size = 0x14u;
+
 enum class PlatformInterruptSource : std::uint32_t {
     ExternalIrl13 = 0x00000320u,
     ExternalIrl11 = 0x00000360u,
@@ -63,5 +67,33 @@ class PlatformInterruptRouter final {
     std::uint8_t dma_level_ = 0u;
     std::array<bool, external_line_count> external_pending_{};
 };
+
+class Sh4InterruptRegisters final {
+  public:
+    explicit Sh4InterruptRegisters(PlatformInterruptRouter& router) noexcept;
+
+    [[nodiscard]] std::uint16_t interrupt_control() const noexcept;
+    [[nodiscard]] std::uint16_t priority_a() const noexcept;
+    [[nodiscard]] std::uint16_t priority_b() const noexcept;
+    [[nodiscard]] std::uint16_t priority_c() const noexcept;
+    [[nodiscard]] std::uint16_t priority_d() const noexcept;
+
+    void write_interrupt_control(std::uint16_t value) noexcept;
+    void write_priority_a(std::uint16_t value) noexcept;
+    void write_priority_b(std::uint16_t value) noexcept;
+    void write_priority_c(std::uint16_t value) noexcept;
+    void reset() noexcept;
+
+  private:
+    void synchronize_priorities() noexcept;
+    PlatformInterruptRouter& router_;
+    std::uint16_t interrupt_control_ = 0u;
+    std::uint16_t priority_a_ = 0u;
+    std::uint16_t priority_b_ = 0u;
+    std::uint16_t priority_c_ = 0u;
+};
+
+[[nodiscard]] std::shared_ptr<Sh4InterruptRegisters>
+map_sh4_interrupt_registers(Memory& memory, PlatformInterruptRouter& router);
 
 } // namespace katana::runtime

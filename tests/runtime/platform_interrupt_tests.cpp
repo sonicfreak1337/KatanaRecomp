@@ -14,6 +14,15 @@ void require(const bool condition, const std::string& message) {
     }
 }
 
+template <typename Function> void require_failure(Function&& function, const std::string& message) {
+    try {
+        function();
+    } catch (const std::exception&) {
+        return;
+    }
+    require(false, message);
+}
+
 } // namespace
 
 int main() {
@@ -27,6 +36,29 @@ int main() {
     Sh4Dmac dmac(scheduler, memory, DmaTiming{1u});
     InterruptController controller;
     PlatformInterruptRouter router(controller, tmu, rtc, dmac);
+    const auto intc = map_sh4_interrupt_registers(memory, router);
+
+    memory.write_u16(sh4_intc_p4_base, 0xFFFFu);
+    memory.write_u16(sh4_intc_p4_base + 0x04u, 0xA765u);
+    memory.write_u16(sh4_intc_area7_base + 0x08u, 0x1234u);
+    memory.write_u16(sh4_intc_area7_base + 0x0Cu, 0x0B00u);
+    require(memory.read_u16(sh4_intc_area7_base) == 0x4380u &&
+                memory.read_u16(sh4_intc_p4_base + 0x04u) == 0xA765u &&
+                memory.read_u16(sh4_intc_p4_base + 0x08u) == 0x1234u &&
+                memory.read_u16(sh4_intc_p4_base + 0x0Cu) == 0x0B00u &&
+                memory.read_u16(sh4_intc_p4_base + 0x10u) == 0u && router.tmu_level(0u) == 10u &&
+                router.tmu_level(1u) == 7u && router.tmu_level(2u) == 6u &&
+                router.rtc_level() == 5u && router.dma_level() == 11u,
+            "INTC ICR/IPRA/IPRB/IPRC/IPRD oder Area-7-Alias sind nicht registergenau.");
+    require_failure([&] { memory.write_u16(sh4_intc_p4_base + 0x10u, 1u); },
+                    "Read-only INTC-IPRD akzeptiert Schreibzugriffe.");
+    require_failure([&] { memory.write_u32(sh4_intc_p4_base, 1u); },
+                    "INTC akzeptiert eine falsche Zugriffsbreite.");
+    require_failure([&] { static_cast<void>(memory.read_u16(sh4_intc_p4_base + 0x02u)); },
+                    "INTC akzeptiert einen reservierten Registeroffset.");
+    intc->reset();
+    require(router.tmu_level(0u) == 0u && router.rtc_level() == 0u && router.dma_level() == 0u,
+            "INTC-Reset hinterlaesst Interruptprioritaeten.");
 
     router.set_tmu_level(0u, 6u);
     router.set_rtc_level(5u);

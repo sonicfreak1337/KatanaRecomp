@@ -42,6 +42,12 @@
 
 ### Korrigiert
 
+- Der SH-4-INTC-Block bildet ICR, IPRA, IPRB, IPRC und das auf Dreamcast
+  read-only gelesene IPRD an P4- und Area-7-Adressen mit 16-Bit-Breitenvertrag
+  ab. IPRA routet TMU-/RTC-Prioritaeten und IPRC die DMAC-Prioritaet direkt in
+  den nativen Interruptcontroller; reservierte Offsets, falsche Breiten und
+  IPRD-Schreibversuche besitzen Negativtests. Damit loest die PAL-Initialisierung
+  an `0xFFD00000` keine kuenstliche Adressfehlerausnahme mehr aus.
 - Private AOT-Diagnoselaeufe wenden `KATANA_PORT_BLOCK_LIMIT` jetzt auf die
   gesamte verschachtelte Dispatchsitzung statt erneut pro Dispatchkette an und
   koennen mit `KATANA_PORT_PROGRESS_INTERVAL` belastbare Block-/PC-/Gastzyklus-

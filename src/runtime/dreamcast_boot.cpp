@@ -299,6 +299,7 @@ initialize_dreamcast_runtime(CpuState& cpu,
     state.interrupt_controller = std::make_shared<InterruptController>();
     state.interrupt_router = std::make_shared<PlatformInterruptRouter>(
         *state.interrupt_controller, *state.tmu, *state.rtc, *state.dmac);
+    state.interrupt_registers = map_sh4_interrupt_registers(cpu.memory, *state.interrupt_router);
     state.system_asic = map_dreamcast_system_asic(cpu.memory, *state.interrupt_router);
     const auto asic = std::weak_ptr<DreamcastSystemAsic>(state.system_asic);
     const auto scheduler = std::weak_ptr<EventScheduler>(state.scheduler);
