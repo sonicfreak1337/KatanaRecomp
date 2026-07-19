@@ -361,6 +361,11 @@ int run_test(const int argc, char* argv[]) {
                 std::string::npos &&
             read_text(output / "src" / "main.cpp").find("KATANA_PORT_PROGRESS") !=
                 std::string::npos &&
+            read_text(output / "src" / "main.cpp").find("exception_cause=") !=
+                std::string::npos &&
+            read_text(output / "src" / "main.cpp").find("cpu.expevt") !=
+                std::string::npos &&
+            read_text(output / "src" / "main.cpp").find("cpu.spc") != std::string::npos &&
             read_text(output / "src" / "main.cpp").find("framebuffer.configure(640u") ==
                 std::string::npos &&
             read_text(output / "src" / "main.cpp").find("if (pump_video) pump_video(tick)") !=

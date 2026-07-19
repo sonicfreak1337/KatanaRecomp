@@ -4,6 +4,10 @@
 
 ### Geaendert
 
+- Private AOT-Fortschrittsdiagnosen melden neben PC und Schedulerstand nun
+  Exceptionursache, EXPEVT, INTEVT, TEA, SPC, SSR und VBR. Ein Sprung auf den
+  allgemeinen SH-4-Vektor kann damit auf die ausloesende CPU-/Busursache
+  zurueckgefuehrt werden.
 - Der Portexport kennzeichnet vollstaendige `*.katana-disc`-Dateien als
   ausschliesslich lokalen Retail-Content, ignoriert sie in Root- und erzeugten
   Port-Repositories standardmaessig und erzeugt einen deutlichen Rechte- und
