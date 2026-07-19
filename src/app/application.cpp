@@ -768,7 +768,7 @@ void configure_and_build(const std::filesystem::path& source,
         requested_generator != nullptr && std::string_view(requested_generator) == "Ninja";
     std::free(requested_generator);
     if (use_ninja) {
-        configure += " -G Ninja -DCMAKE_BUILD_TYPE=Debug";
+        configure += " -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo";
         char* requested_make_program = nullptr;
         std::size_t requested_make_program_size = 0u;
         static_cast<void>(_dupenv_s(&requested_make_program,
@@ -782,7 +782,7 @@ void configure_and_build(const std::filesystem::path& source,
         configure += " -G \"Visual Studio 17 2022\" -A x64";
     }
 #else
-    configure += " -G Ninja -DCMAKE_BUILD_TYPE=Debug";
+    configure += " -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo";
     if (const auto* requested_make_program = std::getenv("KATANA_HOST_BUILD_MAKE_PROGRAM");
         requested_make_program != nullptr && *requested_make_program != '\0')
         configure +=
@@ -815,7 +815,7 @@ void configure_and_build(const std::filesystem::path& source,
     auto compile =
         std::string("cmake --build ") + shell_quote(build) + " --target " + std::string(target);
 #ifdef _WIN32
-    if (!use_ninja) compile += " --config Debug";
+    if (!use_ninja) compile += " --config RelWithDebInfo";
 #endif
     run_host_command(
         compile, "compile", log_path, cancellation, events, 90u, "host-compilation", log_offset);
@@ -1573,7 +1573,7 @@ JobResult ApplicationService::execute(const JobRequest& request,
                                     JobStepStatus::Completed);
                         auto executable = host_build_root /
 #ifdef _WIN32
-                                          "Debug" / "game.exe";
+                                          "RelWithDebInfo" / "game.exe";
                         if (!std::filesystem::exists(executable))
                             executable = host_build_root / "game.exe";
 #else

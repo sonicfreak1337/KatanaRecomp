@@ -990,17 +990,22 @@ int export_port_project(const std::filesystem::path& gdi_path,
         auto configure = std::string("cmake -S ") + shell_quote(report.output_root) + " -B " +
                          shell_quote(build_path);
 #ifdef _WIN32
-        configure += " -DCMAKE_RUNTIME_OUTPUT_DIRECTORY_DEBUG=" + shell_quote(build_path);
+        configure += " -DCMAKE_RUNTIME_OUTPUT_DIRECTORY_RELWITHDEBINFO=" +
+                     shell_quote(build_path);
 #else
         configure += " -G Ninja";
 #endif
-        configure += " -DCMAKE_BUILD_TYPE=Debug -DKATANA_RUNTIME_ROOT=" + shell_quote(runtime_root);
+        configure += " -DCMAKE_BUILD_TYPE=RelWithDebInfo -DKATANA_RUNTIME_ROOT=" +
+                     shell_quote(runtime_root);
         if (std::system(configure.c_str()) != 0) {
             throw katana::cli::Error(katana::cli::ExitCode::BuildFailure,
                                      "Port-Hostbuild konnte nicht konfiguriert werden.");
         }
-        const auto build =
+        auto build =
             std::string("cmake --build ") + shell_quote(build_path) + " --target " + target_name;
+#ifdef _WIN32
+        build += " --config RelWithDebInfo";
+#endif
         if (std::system(build.c_str()) != 0) {
             throw katana::cli::Error(katana::cli::ExitCode::BuildFailure,
                                      "Port-Hosttarget konnte nicht gebaut werden.");
@@ -1063,7 +1068,7 @@ int export_port_project(const std::filesystem::path& gdi_path,
                   << "Partitionen: " << report.partitions << '\n'
                   << "Disc-Pack-Sektoren: " << report.packed_sectors << '\n'
                   << "Disc-Pack-Bytes: " << report.packed_disc_bytes << '\n'
-                  << "Debug-Hostbuild erfolgreich: " << target_name << '\n';
+                  << "Optimierter Hostbuild erfolgreich: " << target_name << '\n';
         return 0;
     } catch (...) {
         std::filesystem::remove_all(stage, cleanup_error);
