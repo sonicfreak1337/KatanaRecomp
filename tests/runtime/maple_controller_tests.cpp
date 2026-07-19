@@ -43,8 +43,9 @@ int main() {
     bus.attach(0u, 0u, controller);
 
     const auto info = bus.exchange(0u, 0u, {MapleCommand::DeviceRequest, {}});
-    require(info.code == MapleResponseCode::DeviceInfo && info.payload[0] == 0x01000000u,
-            "Controller meldet seine Maple-Funktion nicht.");
+    require(info.code == MapleResponseCode::DeviceInfo && info.payload.size() == 28u &&
+                info.payload[0] == 0x01000000u && info.payload[1] == 0xFE060F00u,
+            "Controller meldet keinen vollstaendigen 28-Wort-Device-Info-Vertrag.");
     const auto first = bus.exchange(0u, 0u, {MapleCommand::GetCondition, {0x01000000u}});
     require(first.code == MapleResponseCode::DataTransfer && first.payload.size() == 3u,
             "Controller liefert keinen vollstaendigen Condition-Frame.");

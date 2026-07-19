@@ -192,6 +192,8 @@ Konsolenemulation: Discbytes dienen lokal als Nutzerdatenquelle, waehrend der
 SH-4-Code in statische Hostfunktionen rekompiliert wird. Noch nicht gebundene
 Hardwareaktionen, insbesondere DMA-Starts, brechen sichtbar ab; die Runtime
 meldet sie nicht als erfolgreich und erzeugt daraus keinen kuenstlichen Frame.
+Bereits gebundene Einheiten wie Maple verarbeiten dagegen echte Gast-
+Deskriptoren und schreiben ihre Antworten gastzeitgebunden per DMA zurueck.
 
 Der generierte SH-4-Pfad erzwingt den privilegierten Modus fuer markierte
 Systemregister- und Kontrollinstruktionen. Ein Zugriff aus dem User-Modus wird

@@ -31,6 +31,15 @@ geschlossenen Breiten-, Masken- und Zugriffsvertraegen umgesetzt. Echte
 DMA-Starts werden bis zur Anbindung an einen Transferpfad ausdruecklich
 abgewiesen; es gibt keinen emulierten oder vorgetaeuschten Erfolg.
 
+Die folgende Probe erreichte denselben Blockstand und identifizierte
+`SB_MDSTAR` bei `0xA05F6C04` als naechste allgemeine Luecke. Der vollstaendige
+Maple-Steuerblock ist inzwischen an einen echten, gastzeitgebundenen DMA-Pfad
+angeschlossen: begrenzte Kommandotabellen, Schutzfenster, Controller-/VMU-
+Transaktionen, DMA-Antwortwrites und genau eine System-ASIC-Completion sind
+synthetisch sowie unter AddressSanitizer geprueft. Der bestehende High-Level-
+Bus bleibt fuer direkte Plattformtests verfuegbar, waehrend Gastzugriffe den
+MMIO-Pfad verwenden.
+
 Die naechste private Probe wird erst nach einem vollstaendigen neuen Portbuild
 und erneuter Originaldisc-Installation ausgefuehrt. Die PAL-GDI und alle
 Trackquellen bleiben unveraendert; veraltete Portausgaben werden nur nach

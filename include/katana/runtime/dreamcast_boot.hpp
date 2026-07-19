@@ -8,6 +8,7 @@
 #include "katana/runtime/gdi.hpp"
 #include "katana/runtime/io_port.hpp"
 #include "katana/runtime/maple.hpp"
+#include "katana/runtime/maple_mmio.hpp"
 #include "katana/runtime/packed_disc.hpp"
 #include "katana/runtime/platform_interrupt.hpp"
 #include "katana/runtime/pvr.hpp"
@@ -94,6 +95,7 @@ struct DreamcastRuntimeState {
     std::shared_ptr<PvrRegisterFile> pvr_registers;
     std::shared_ptr<AicaRegisterFile> aica_registers;
     std::shared_ptr<MapleBus> maple;
+    std::shared_ptr<DreamcastMapleController> maple_controller;
     std::shared_ptr<GdRomAsyncReader> gdrom;
     std::shared_ptr<AicaExecutionController> aica;
     std::shared_ptr<RuntimeBlockTable> runtime_blocks;

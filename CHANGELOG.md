@@ -4,6 +4,15 @@
 
 ### Geaendert
 
+- Die Maple-Laufzeit besitzt jetzt einen echten MMIO-/DMA-Produktpfad fuer den
+  Registerblock `0x005F6C00..0x005F6CFC`. Kommandotabellen werden begrenzt und
+  schutzfenstergebunden geparst, Frames an den vorhandenen Controller-/VMU-Bus
+  zugestellt und Antworten erst nach deterministischer Gastzeit per DMA in den
+  Gastspeicher geschrieben; genau eine Completion erreicht danach das
+  System-ASIC. Controller und VMU liefern vollstaendige 28-Wort-Device-Info-
+  Frames. Unbekannte Muster, widerspruechliche Laengen, ungueltige Adressen,
+  falsche Zugriffsbreiten und reservierte Register besitzen Negativtests; der
+  Pfad besteht zusaetzlich unter MSVC AddressSanitizer.
 - Der spielagnostische Portexport erzeugt fuer verteilbare Pakete keinen
   vollstaendigen Disc-Pack mehr. `game.katana-install` enthaelt ausschliesslich
   versionierte Hash-, Boot- und Trackgeometrie; `game.exe --install-disc

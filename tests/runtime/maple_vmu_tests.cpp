@@ -33,8 +33,9 @@ int main() {
     bus.attach(0u, 1u, vmu);
 
     const auto info = bus.exchange(0u, 1u, {MapleCommand::DeviceRequest, {}});
-    require(info.code == MapleResponseCode::DeviceInfo && info.payload[0] == 0x02000000u,
-            "VMU meldet die Memory-Function nicht.");
+    require(info.code == MapleResponseCode::DeviceInfo && info.payload.size() == 28u &&
+                info.payload[0] == 0x02000000u && info.payload[1] == 0x00410F00u,
+            "VMU meldet keinen vollstaendigen 28-Wort-Device-Info-Vertrag.");
     const auto initial = bus.exchange(0u, 1u, {MapleCommand::BlockRead, {0u}});
     require(initial.payload.size() == 130u && (initial.payload[2] & 0xFFu) == 0x12u,
             "VMU-Blocklesen ist nicht vollstaendig oder Little Endian.");

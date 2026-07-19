@@ -260,6 +260,8 @@ KR-4805
 - Boot, Gastvideo und Gastinput machen unter echter Gastlast gemeinsam Fortschritt
 - fruehe SH-4-/Holly-Initialisierung verwendet geschlossene Registervertraege;
   ungebundene DMA-Starts duerfen keinen Erfolg simulieren
+- Maple-, PVR- und weitere DMA-Pfade muessen Gastdeskriptoren, Gastzeit,
+  Speicherwrites und ASIC-Completion gemeinsam nachweisen
 - CI, Pakete, Datenschutz-, Lizenz- und Referenzaudits bestehen
 - keine Retaildaten gelangen in Pakete, CI, Repository oder oeffentliche Berichte
 - `KR_V049_ALPHA_CANDIDATE_READY` wird erreicht

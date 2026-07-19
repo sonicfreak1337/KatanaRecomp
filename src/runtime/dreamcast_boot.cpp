@@ -315,6 +315,10 @@ initialize_dreamcast_runtime(CpuState& cpu,
         cpu.memory, *state.scheduler, [raise_now] { raise_now(SystemAsicEvent::PvrRenderDone); });
     state.aica_registers = map_aica_registers(cpu.memory);
     state.maple = std::make_shared<MapleBus>([raise_now] { raise_now(SystemAsicEvent::MapleDma); });
+    state.maple_controller =
+        map_dreamcast_maple_controller(cpu.memory, *state.scheduler, state.maple, {}, [raise_now] {
+            raise_now(SystemAsicEvent::MapleDma);
+        });
     if (state.mutable_storage) {
         state.vmu = std::make_shared<MapleVmuDevice>(state.mutable_storage->vmu_image());
         state.maple->attach(0u, 1u, state.vmu);

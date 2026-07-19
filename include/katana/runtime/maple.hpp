@@ -141,10 +141,16 @@ class MapleBus final {
     [[nodiscard]] bool attached(std::uint8_t port, std::uint8_t unit) const;
     [[nodiscard]] MapleResponse
     exchange(std::uint8_t port, std::uint8_t unit, const MapleRequest& request);
+    [[nodiscard]] MapleResponse
+    exchange_without_completion(std::uint8_t port, std::uint8_t unit, const MapleRequest& request);
     [[nodiscard]] std::span<const MapleTransactionRecord> history() const noexcept;
 
   private:
     [[nodiscard]] static std::size_t slot(std::uint8_t port, std::uint8_t unit);
+    [[nodiscard]] MapleResponse exchange_impl(std::uint8_t port,
+                                              std::uint8_t unit,
+                                              const MapleRequest& request,
+                                              bool notify_completion);
     std::array<std::shared_ptr<MapleDevice>, maple_port_count * maple_units_per_port> devices_{};
     std::vector<MapleTransactionRecord> history_;
     std::uint64_t next_sequence_ = 1u;

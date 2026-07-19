@@ -227,6 +227,7 @@ add_library(katana_runtime STATIC
     src/runtime/interrupt.cpp
     src/runtime/iso9660.cpp
     src/runtime/maple.cpp
+    src/runtime/maple_mmio.cpp
     src/runtime/media_clock.cpp
     src/runtime/packed_disc.cpp
     src/runtime/persistent_storage.cpp
@@ -1002,6 +1003,11 @@ add_executable(katana-system-asic-tests tests/runtime/system_asic_tests.cpp)
 target_link_libraries(katana-system-asic-tests PRIVATE katana_runtime)
 katana_enable_warnings(katana-system-asic-tests)
 add_test(NAME katana-system-asic-tests COMMAND katana-system-asic-tests)
+
+add_executable(katana-maple-mmio-tests tests/runtime/maple_mmio_tests.cpp)
+target_link_libraries(katana-maple-mmio-tests PRIVATE katana_runtime)
+katana_enable_warnings(katana-maple-mmio-tests)
+add_test(NAME katana-maple-mmio-tests COMMAND katana-maple-mmio-tests)
 
 add_executable(katana-phase11-retail-boot-services-tests
     tests/phase11/retail_boot_services_tests.cpp

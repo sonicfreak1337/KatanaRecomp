@@ -1,9 +1,48 @@
 #include "katana/runtime/maple.hpp"
 
+#include <algorithm>
+#include <array>
 #include <stdexcept>
+#include <string_view>
 #include <utility>
 
 namespace katana::runtime {
+namespace {
+std::vector<std::uint32_t> device_info_payload(const std::uint32_t functions,
+                                               const std::uint32_t definition,
+                                               const std::string_view name,
+                                               const std::uint16_t standby_current,
+                                               const std::uint16_t maximum_current) {
+    constexpr std::string_view producer = "Produced By or Under License From SEGA ENTERPRISES,LTD.";
+    std::array<std::uint8_t, 112u> bytes{};
+    bytes.fill(static_cast<std::uint8_t>(' '));
+    const auto put_word = [&bytes](const std::size_t offset, const std::uint32_t value) {
+        for (std::size_t byte = 0u; byte < 4u; ++byte)
+            bytes[offset + byte] = static_cast<std::uint8_t>(value >> (byte * 8u));
+    };
+    put_word(0u, functions);
+    put_word(4u, definition);
+    put_word(8u, 0u);
+    put_word(12u, 0u);
+    bytes[16u] = 0xFFu;
+    bytes[17u] = 0u;
+    std::copy_n(name.begin(), std::min<std::size_t>(name.size(), 30u), bytes.begin() + 18u);
+    std::copy_n(producer.begin(), std::min<std::size_t>(producer.size(), 60u), bytes.begin() + 48u);
+    bytes[108u] = static_cast<std::uint8_t>(standby_current);
+    bytes[109u] = static_cast<std::uint8_t>(standby_current >> 8u);
+    bytes[110u] = static_cast<std::uint8_t>(maximum_current);
+    bytes[111u] = static_cast<std::uint8_t>(maximum_current >> 8u);
+
+    std::vector<std::uint32_t> words(bytes.size() / 4u);
+    for (std::size_t word = 0u; word < words.size(); ++word) {
+        words[word] = static_cast<std::uint32_t>(bytes[word * 4u]) |
+                      (static_cast<std::uint32_t>(bytes[word * 4u + 1u]) << 8u) |
+                      (static_cast<std::uint32_t>(bytes[word * 4u + 2u]) << 16u) |
+                      (static_cast<std::uint32_t>(bytes[word * 4u + 3u]) << 24u);
+    }
+    return words;
+}
+} // namespace
 
 MapleBus::MapleBus(std::function<void()> completion_observer)
     : completion_observer_(std::move(completion_observer)) {}
@@ -32,7 +71,9 @@ MapleControllerDevice::MapleControllerDevice(std::shared_ptr<HostInputBackend> i
 MapleResponse MapleControllerDevice::transact(const MapleRequest& request) {
     constexpr std::uint32_t controller_function = 0x01000000u;
     if (request.command == MapleCommand::DeviceRequest) {
-        return {MapleResponseCode::DeviceInfo, {controller_function, 0u, 0u}};
+        return {MapleResponseCode::DeviceInfo,
+                device_info_payload(
+                    controller_function, 0xFE060F00u, "Dreamcast Controller", 0x01AEu, 0x01F4u)};
     }
     if (request.command != MapleCommand::GetCondition) {
         return {MapleResponseCode::UnknownCommand, {}};
@@ -74,7 +115,9 @@ MapleResponse MapleVmuDevice::transact(const MapleRequest& request) {
     constexpr std::uint32_t memory_function = 0x02000000u;
     switch (request.command) {
     case MapleCommand::DeviceRequest:
-        return {MapleResponseCode::DeviceInfo, {memory_function, 0u, 0u}};
+        return {
+            MapleResponseCode::DeviceInfo,
+            device_info_payload(memory_function, 0x00410F00u, "Visual Memory", 0x007Cu, 0x0082u)};
     case MapleCommand::BlockRead:
         return read_block(request);
     case MapleCommand::BlockWrite:
@@ -178,6 +221,19 @@ bool MapleBus::attached(const std::uint8_t port, const std::uint8_t unit) const 
 
 MapleResponse
 MapleBus::exchange(const std::uint8_t port, const std::uint8_t unit, const MapleRequest& request) {
+    return exchange_impl(port, unit, request, true);
+}
+
+MapleResponse MapleBus::exchange_without_completion(const std::uint8_t port,
+                                                    const std::uint8_t unit,
+                                                    const MapleRequest& request) {
+    return exchange_impl(port, unit, request, false);
+}
+
+MapleResponse MapleBus::exchange_impl(const std::uint8_t port,
+                                      const std::uint8_t unit,
+                                      const MapleRequest& request,
+                                      const bool notify_completion) {
     auto& device = devices_[slot(port, unit)];
     if (!device) {
         throw std::runtime_error("Kein Maple-Geraet an der angeforderten Adresse.");
@@ -185,7 +241,7 @@ MapleBus::exchange(const std::uint8_t port, const std::uint8_t unit, const Maple
     auto response = device->transact(request);
     history_.push_back(
         MapleTransactionRecord{next_sequence_++, port, unit, request.command, response.code});
-    if (completion_observer_) completion_observer_();
+    if (notify_completion && completion_observer_) completion_observer_();
     return response;
 }
 
