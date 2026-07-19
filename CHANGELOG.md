@@ -10,6 +10,9 @@
   <eigene.gdi>` prueft die eigene Originaldisc vollstaendig und erzeugt den
   Retailcache atomar nur unter `user-data/content/`. Die Recipe enthaelt weder
   Tracknamen noch Hostpfade, und der Exportbaum besitzt null Retailsektoren.
+  Der relocatable GUI-Paketcheck installiert seine synthetische Originaldisc
+  ebenfalls erst nach dem Publish und auditiert die Distribution vorher auf
+  einen leeren Retaildatenbestand.
 - Der SH-4-ISA-Audit deckt die zuvor fehlenden offiziellen SH7750-Befehle
   `LDTLB`, `OCBI` und `MOVCA.L` nun durch Decoder, IR und nativen C++-Backendpfad
   ab. LDTLB kopiert PTEH/PTEL/PTEA in den per MMUCR.URC gewaehlten UTLB-Eintrag;

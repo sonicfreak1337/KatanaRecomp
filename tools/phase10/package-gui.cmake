@@ -154,6 +154,23 @@ endif()
 set(detached_port "${relocated_root}/detached-port")
 file(MAKE_DIRECTORY "${detached_port}")
 file(COPY "${relocated_root}/workflow-output/" DESTINATION "${detached_port}")
+if(EXISTS "${detached_port}/content/game.katana-disc" OR
+   NOT EXISTS "${detached_port}/content/game.katana-install")
+    message(FATAL_ERROR "Relocated distribution contains retail data or no install recipe")
+endif()
+execute_process(
+    COMMAND "${detached_port}/game${executable_suffix}" --install-disc
+            "${relocated_root}/fixture/disc.gdi"
+    RESULT_VARIABLE relocated_install_result
+    OUTPUT_VARIABLE relocated_install_output
+    ERROR_VARIABLE relocated_install_error
+)
+if(NOT relocated_install_result EQUAL 0 OR
+   NOT relocated_install_output MATCHES "KATANA_DISC_INSTALL_OK" OR
+   NOT EXISTS "${detached_port}/user-data/content/game.katana-disc")
+    message(FATAL_ERROR
+        "Relocated original-disc install failed: ${relocated_install_output} ${relocated_install_error}")
+endif()
 execute_process(
     COMMAND "${detached_port}/game${executable_suffix}"
     RESULT_VARIABLE relocated_game_result
@@ -163,10 +180,10 @@ execute_process(
 if(NOT relocated_game_result EQUAL 0 OR
    NOT relocated_game_output MATCHES "KR_GENERATED_RUNTIME_STARTED" OR
    NOT relocated_game_output MATCHES "indirect_dispatches=1" OR
-   NOT relocated_game_output MATCHES "frames=1" OR
+   NOT relocated_game_output MATCHES "frames=0" OR
    NOT relocated_game_output MATCHES "audio_buffers=1")
     message(FATAL_ERROR
-        "Relocated packed-disc runtime failed: ${relocated_game_output} ${relocated_game_error}")
+        "Relocated installed-content runtime failed: ${relocated_game_output} ${relocated_game_error}")
 endif()
 file(REMOVE_RECURSE "${relocated_root}")
 
