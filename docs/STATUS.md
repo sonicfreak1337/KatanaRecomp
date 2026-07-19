@@ -49,10 +49,18 @@ Byte-fuer-Byte-Dispatch kopiert. GD-ROM-DMA darf initialisiert und deaktiviert
 werden, verweigert einen aktiven Start aber weiterhin sichtbar, bis Discquelle,
 Laenge und Completion an denselben Vertrag gebunden sind.
 
-Die naechste private Probe wird erst nach einem vollstaendigen neuen Portbuild
-und erneuter Originaldisc-Installation ausgefuehrt. Die PAL-GDI und alle
-Trackquellen bleiben unveraendert; veraltete Portausgaben werden nur nach
-erfolgreichem Ersatz entfernt.
+Der daraufhin frisch exportierte und aus der unveraenderten Originaldisc lokal
+installierte Port erreichte 5.112.299 native Bloecke. Die naechste belegte
+Ausnahme war ein Schreibzugriff auf `0x00000100`: Der Gast installiert dort
+nicht etwa Low-Memory-Code, sondern kopiert seinen Handler nach `VBR + 0x100`.
+Der direkte Runtime-Handoff hatte faelschlich den SH-4-Resetwert `VBR=0`
+beibehalten. Der allgemeine Dreamcast-Spielhandoff verwendet nun die reale
+Haupt-RAM-Vektorbasis `0x8C000000`; eine synthetische Produktpfadregression
+haelt den Vertrag fest. Ein neuer privater Lauf muss den Fortschritt hinter
+dieser Stelle noch bestaetigen.
+
+Die PAL-GDI und alle Trackquellen bleiben unveraendert; veraltete
+Portausgaben werden nur nach erfolgreichem Ersatz entfernt.
 
 ## KR-4704 technisch bestanden
 

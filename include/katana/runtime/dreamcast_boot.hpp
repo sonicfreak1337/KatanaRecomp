@@ -30,6 +30,7 @@ namespace katana::runtime {
 
 inline constexpr std::uint32_t dreamcast_disc_boot_address = 0x8C010000u;
 inline constexpr std::uint32_t dreamcast_direct_boot_stack = 0x8D000000u;
+inline constexpr std::uint32_t dreamcast_direct_boot_vector_base = 0x8C000000u;
 inline constexpr std::uint32_t dreamcast_disc_boot_status = sr_md_mask | sr_interrupt_mask;
 inline constexpr std::uint16_t dreamcast_composite_port_a_input = 0x0300u;
 enum class DreamcastRuntimeFirmwareMode : std::uint8_t { Direct, HleBiosAbi };

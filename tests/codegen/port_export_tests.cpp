@@ -192,6 +192,7 @@ int run_test(const int argc, char* argv[]) {
         katana::runtime::initialize_dreamcast_runtime(runtime_cpu, runtime_boot);
     require(runtime_state.loaded_boot_bytes == 24u && runtime_cpu.pc == 0x8C010000u &&
                 runtime_cpu.r[15] == 0x8D000000u &&
+                runtime_cpu.vbr == katana::runtime::dreamcast_direct_boot_vector_base &&
                 runtime_cpu.read_sr() == katana::runtime::dreamcast_disc_boot_status &&
                 runtime_cpu.privileged_mode() && runtime_cpu.interrupt_mask() == 15u &&
                 runtime_cpu.memory.read_u16(0x8C010000u) == 0xE00Au &&

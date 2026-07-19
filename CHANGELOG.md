@@ -60,6 +60,12 @@
 
 ### Korrigiert
 
+- Der direkte Dreamcast-Disc-Handoff setzt `VBR` beim Einstieg in die native
+  Bootdatei jetzt auf die reale Haupt-RAM-Vektorbasis `0x8C000000`, statt den
+  SH-4-Resetwert `0` durchzureichen. Titel koennen damit ihre allgemeinen
+  Exception-Handler bei `VBR + 0x100` installieren, ohne faelschlich auf die
+  physische Adresse `0x00000100` zu schreiben. Der Vertrag ist spielagnostisch
+  und besitzt eine synthetische Produktpfadregression.
 - Der fruehe Dreamcast-Holly-Systembus bildet den geschlossenen
   Steuerregisterblock `0x005F6800..0x005F68AC` jetzt an allen direkten
   SH-4-Segmentaliasen mit dokumentierten Resetwerten, Bitmasken und

@@ -1,6 +1,7 @@
 # KatanaRecomp
 
-Aktueller interner Pre-Alpha-Meilenstein: `0.47.0`
+Aktuelle Pre-Alpha-Entwicklungsphase: `0.48.0`
+Abgeschlossener interner Meilenstein: `0.47.0`
 
 KatanaRecomp ist ein unabhaengiges C++20-Framework fuer die statische
 Rekompilierung von Sega-Dreamcast-SH-4-Code. Das Projekt ist kein Emulator,
@@ -25,7 +26,7 @@ Eingabe
   -> natives Hostprojekt
 ```
 
-Der aktuelle kumulative Debug-Vertrag umfasst **175 automatische Tests**.
+Der aktuelle kumulative Debug-Vertrag umfasst **179 automatische Tests**.
 Phase 10 ist
 fuer den freigegebenen Windows-Workflow abgeschlossen: eine `.gdi` waehlen,
 einen Ausgabeordner waehlen und den Analyse-/Buildzustand sichtbar verfolgen.

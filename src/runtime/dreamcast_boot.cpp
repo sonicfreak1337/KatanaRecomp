@@ -431,7 +431,7 @@ initialize_dreamcast_runtime(CpuState& cpu,
     reset_cpu(cpu,
               ResetState{dreamcast_disc_boot_address,
                          dreamcast_direct_boot_stack,
-                         0u,
+                         dreamcast_direct_boot_vector_base,
                          dreamcast_disc_boot_status,
                          0u});
     return state;
