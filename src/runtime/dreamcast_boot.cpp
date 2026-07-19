@@ -4,6 +4,7 @@
 #include "katana/runtime/iso9660.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cstdlib>
 #include <limits>
 #include <memory>
@@ -47,6 +48,68 @@ bool project_identity_name(const std::string_view value) noexcept {
            });
 }
 
+std::uint16_t flash_block_crc(const std::span<const std::uint8_t> block) {
+    std::uint16_t value = 0xFFFFu;
+    for (std::size_t index = 0u; index < 62u; ++index) {
+        value ^= static_cast<std::uint16_t>(block[index]) << 8u;
+        for (unsigned bit = 0u; bit < 8u; ++bit)
+            value = (value & 0x8000u) != 0u
+                        ? static_cast<std::uint16_t>((value << 1u) ^ 0x1021u)
+                        : static_cast<std::uint16_t>(value << 1u);
+    }
+    return static_cast<std::uint16_t>(~value);
+}
+
+void seed_flash_partition_header(PersistentImage& image,
+                                 const std::size_t offset,
+                                 const std::uint8_t partition) {
+    std::array<std::uint8_t, 64u> header;
+    header.fill(0xFFu);
+    constexpr std::string_view magic = "KATANA_FLASH____";
+    std::copy(magic.begin(), magic.end(), header.begin());
+    header[16] = partition;
+    header[17] = 0u;
+    image.write(offset, header);
+}
+
+void seed_erased_dreamcast_flash(PersistentImage& image, const DreamcastRegion region) {
+    if (!std::all_of(image.bytes().begin(), image.bytes().end(), [](const auto byte) {
+            return byte == 0xFFu;
+        }))
+        return;
+
+    const std::string_view factory = region == DreamcastRegion::Europe
+                                         ? "00211Dreamcast  "
+                                     : region == DreamcastRegion::NorthAmerica
+                                         ? "00110Dreamcast  "
+                                         : "00000Dreamcast  ";
+    const auto factory_bytes = std::span<const std::uint8_t>(
+        reinterpret_cast<const std::uint8_t*>(factory.data()), factory.size());
+    image.write(0x1A000u, factory_bytes);
+    image.write(0x1A0A0u, factory_bytes);
+    seed_flash_partition_header(image, 0x00000u, 4u);
+    seed_flash_partition_header(image, 0x10000u, 3u);
+    seed_flash_partition_header(image, 0x1C000u, 2u);
+
+    std::array<std::uint8_t, 64u> syscfg;
+    syscfg.fill(0xFFu);
+    syscfg[0] = 0x05u;
+    syscfg[1] = 0x00u;
+    syscfg[2] = syscfg[3] = syscfg[4] = syscfg[5] = 0u;
+    syscfg[6] = 0u;
+    syscfg[7] = 1u;
+    syscfg[8] = 0u;
+    syscfg[9] = 0u;
+    const auto crc = flash_block_crc(syscfg);
+    syscfg[62] = static_cast<std::uint8_t>(crc);
+    syscfg[63] = static_cast<std::uint8_t>(crc >> 8u);
+    image.write(0x1C040u, syscfg);
+    std::array<std::uint8_t, 64u> bitmap;
+    bitmap.fill(0xFFu);
+    bitmap[0] = 0x7Fu;
+    image.write(0x1FFC0u, bitmap);
+}
+
 std::optional<std::filesystem::path> environment_path(const char* name) {
 #ifdef _WIN32
     char* raw_value = nullptr;
@@ -64,6 +127,12 @@ std::optional<std::filesystem::path> environment_path(const char* name) {
 }
 
 } // namespace
+
+DreamcastRegion dreamcast_region_from_area_symbols(const std::string_view area_symbols) noexcept {
+    if (area_symbols.find('E') != std::string_view::npos) return DreamcastRegion::Europe;
+    if (area_symbols.find('U') != std::string_view::npos) return DreamcastRegion::NorthAmerica;
+    return DreamcastRegion::Japan;
+}
 
 std::filesystem::path default_dreamcast_user_data_root() {
     if (const auto configured = environment_path("KATANA_USER_DATA_ROOT"))
@@ -94,6 +163,7 @@ DreamcastMutableStorage::open(DreamcastMutableStorageConfig config) {
                                         root / "flash.katana-work",
                                         dreamcast_flash_size,
                                         0xFFu});
+    seed_erased_dreamcast_flash(*flash, config.region);
     auto vmu = PersistentImage::open({"dreamcast-vmu",
                                       std::move(config.vmu_source),
                                       root / "vmu-a1.katana-work",
@@ -162,6 +232,7 @@ DreamcastRuntimeBootImage load_dreamcast_runtime_boot(std::shared_ptr<DiscSource
     }
     const auto boot_sector = source->read(static_cast<std::uint64_t>(data_track_lba) * 2048u, 256u);
     const auto hardware_id = trimmed_ascii(boot_sector, 0x00u, 16u);
+    const auto area_symbols = trimmed_ascii(boot_sector, 0x30u, 8u);
     const auto boot_file_name = trimmed_ascii(boot_sector, 0x60u, 16u);
     if (hardware_id != "SEGA SEGAKATANA") {
         throw std::invalid_argument("Dreamcast-Hardwarekennung ist ungueltig.");
@@ -195,6 +266,7 @@ DreamcastRuntimeBootImage load_dreamcast_runtime_boot(std::shared_ptr<DiscSource
     const bool repeated_reads_match = repeated == boot_file;
     return {std::move(source),
             hardware_id,
+            area_symbols,
             boot_file_name,
             std::move(boot_file),
             data_track_lba,

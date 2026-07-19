@@ -1,9 +1,12 @@
 #include "katana/runtime/bios_abi.hpp"
 #include "katana/runtime/code_invalidation.hpp"
+#include "katana/runtime/dreamcast_memory.hpp"
 
+#include <algorithm>
 #include <array>
 #include <iomanip>
 #include <sstream>
+#include <vector>
 
 namespace katana::runtime {
 namespace {
@@ -14,6 +17,96 @@ constexpr std::array kVectors{
     BiosAbiVector{BiosAbiVectorKind::MiscGdrom, "misc-gdrom", 0x8C0000BCu, 0x8C000160u},
     BiosAbiVector{BiosAbiVectorKind::Gdrom2, "gdrom2", 0x8C0000C0u, 0x8C000180u},
     BiosAbiVector{BiosAbiVectorKind::System, "system", 0x8C0000E0u, 0x8C0001A0u}};
+
+struct FlashPartition {
+    std::uint32_t offset;
+    std::uint32_t size;
+};
+constexpr std::array kFlashPartitions{
+    FlashPartition{0x0001A000u, 0x00002000u},
+    FlashPartition{0x00018000u, 0x00002000u},
+    FlashPartition{0x0001C000u, 0x00004000u},
+    FlashPartition{0x00010000u, 0x00008000u},
+    FlashPartition{0x00000000u, 0x00010000u},
+};
+
+bool valid_range(const std::uint32_t offset,
+                 const std::uint32_t size,
+                 const std::uint32_t limit) noexcept {
+    return offset <= limit && size <= limit - offset;
+}
+
+void flash_unlock(CpuState& cpu, const std::uint8_t command) {
+    const auto base = dreamcast_flash_physical_base;
+    cpu.memory.write_u8(base + dreamcast_flash_unlock_address_1, 0xAAu);
+    cpu.memory.write_u8(base + dreamcast_flash_unlock_address_2, 0x55u);
+    cpu.memory.write_u8(base + dreamcast_flash_unlock_address_1, command);
+}
+
+std::uint32_t execute_flash_call(CpuState& cpu, const std::uint32_t selector) noexcept {
+    try {
+        const auto offset = cpu.r[4];
+        const auto buffer = cpu.r[5];
+        const auto size = cpu.r[6];
+        if (selector == 0u) {
+            if (offset >= kFlashPartitions.size() || !cpu.memory.contains(buffer, 8u)) return 0xFFFFFFFFu;
+            const auto partition = kFlashPartitions[offset];
+            cpu.memory.write_u32(buffer, partition.offset, CodeWriteSource::Copy);
+            cpu.memory.write_u32(buffer + 4u, partition.size, CodeWriteSource::Copy);
+            return 0u;
+        }
+        if (selector == 1u) {
+            if (!valid_range(offset, size, static_cast<std::uint32_t>(dreamcast_flash_size)) ||
+                (size != 0u && !cpu.memory.contains(buffer, size)))
+                return 0xFFFFFFFFu;
+            std::vector<std::uint8_t> bytes(size);
+            for (std::uint32_t index = 0u; index < size; ++index)
+                bytes[index] = cpu.memory.read_u8(dreamcast_flash_physical_base + offset + index);
+            if (!bytes.empty()) cpu.memory.write_bytes(buffer, bytes, CodeWriteSource::Copy);
+            return 0u;
+        }
+        if (selector == 2u) {
+            if (!valid_range(offset, size, static_cast<std::uint32_t>(dreamcast_flash_size)) ||
+                (size != 0u && !cpu.memory.contains(buffer, size)))
+                return 0xFFFFFFFFu;
+            std::vector<std::uint8_t> bytes(size);
+            for (std::uint32_t index = 0u; index < size; ++index)
+                bytes[index] = cpu.memory.read_u8(buffer + index);
+            for (std::uint32_t index = 0u; index < size; ++index) {
+                flash_unlock(cpu, 0xA0u);
+                cpu.memory.write_u8(dreamcast_flash_physical_base + offset + index, bytes[index]);
+            }
+            return size;
+        }
+        if (selector == 3u) {
+            const auto found = std::find_if(kFlashPartitions.begin(),
+                                            kFlashPartitions.end(),
+                                            [offset](const auto partition) {
+                                                return partition.offset == offset;
+                                            });
+            if (found == kFlashPartitions.end()) return 0xFFFFFFFFu;
+            for (std::uint32_t sector = 0u; sector < found->size;
+                 sector += static_cast<std::uint32_t>(dreamcast_flash_sector_size)) {
+                flash_unlock(cpu, 0x80u);
+                cpu.memory.write_u8(dreamcast_flash_physical_base +
+                                        dreamcast_flash_unlock_address_1,
+                                    0xAAu);
+                cpu.memory.write_u8(dreamcast_flash_physical_base +
+                                        dreamcast_flash_unlock_address_2,
+                                    0x55u);
+                cpu.memory.write_u8(dreamcast_flash_physical_base + offset + sector, 0x30u);
+            }
+            return 0u;
+        }
+    } catch (...) {
+        try {
+            cpu.memory.write_u8(dreamcast_flash_physical_base, 0xF0u);
+        } catch (...) {
+        }
+        return 0xFFFFFFFFu;
+    }
+    return 0xFFFFFFFFu;
+}
 
 std::string hex32(const std::uint32_t value) {
     std::ostringstream output;
@@ -42,7 +135,9 @@ BlockExit bios_abi_block(CpuState& cpu, BlockExecutionContext& context) {
                                    routed.selector,
                                    routed.super_selector,
                                    "service-unavailable:" + std::string(routed.service));
-    cpu.r[0] = 0u;
+    cpu.r[0] = routed.vector == BiosAbiVectorKind::Flash
+                   ? execute_flash_call(cpu, routed.selector)
+                   : 0u;
     cpu.pc = cpu.pr;
     return make_block_exit(cpu,
                            context,
@@ -113,7 +208,7 @@ BiosAbiCall route_hle_bios_abi_call(const CpuState& cpu) {
                         : selector == 1u ? "flash-read"
                         : selector == 2u ? "flash-write"
                                          : "flash-delete",
-                        Status::ServiceUnavailable);
+                        Status::Completed);
         break;
     case BiosAbiVectorKind::MiscGdrom:
         if (super_selector == 0xFFFFFFFFu && selector == 0u)

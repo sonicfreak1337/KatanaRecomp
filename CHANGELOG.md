@@ -33,6 +33,13 @@
 
 ### Korrigiert
 
+- Die HLE-BIOS-ABI fuehrt FLASHROM_INFO, READ, WRITE und DELETE nun mit dem
+  dokumentierten SH-4-Registervertrag, vollstaendigen Bereichspruefungen,
+  echter Flash-Programmiersemantik und sektorweisem Loeschen aus. Neue lokale
+  Arbeitskopien erhalten aus den Disc-Areasymbolen ein minimales gueltiges
+  Japan-/Nordamerika-/Europa-Flashprofil; PAL-Ports starten damit ohne ein
+  proprietaeres Flashabbild, waehrend optionale Originalquellen unveraendert
+  bleiben.
 - Eigenstaendige Disc-Ports installieren die titelunabhaengigen Dreamcast-
   BIOS-ABI-Vektoren nun vor dem ersten Gastblock und dispatchen HLE-Handler im
   selben RuntimeBlockTable wie den nativen AOT-Code. BIOS-Wrapper springen

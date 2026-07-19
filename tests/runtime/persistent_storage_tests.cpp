@@ -1,3 +1,4 @@
+#include "katana/runtime/dreamcast_boot.hpp"
 #include "katana/runtime/dreamcast_memory.hpp"
 #include "katana/runtime/maple.hpp"
 #include "katana/runtime/persistent_storage.hpp"
@@ -153,6 +154,34 @@ int main() {
         {"dreamcast-flash", std::nullopt, flash_working, dreamcast_flash_size, 0xFFu});
     require(flash_reload->read_byte(0x20u) == 0x7Fu,
             "Persistentes Command-Flash wird nach Save nicht wieder geladen.");
+
+    DreamcastMutableStorageConfig pal_config;
+    pal_config.project_identity = std::string(64u, 'a');
+    pal_config.storage_root = root / "pal-port";
+    pal_config.region = DreamcastRegion::Europe;
+    auto pal_storage = DreamcastMutableStorage::open(pal_config);
+    const auto& pal_flash = pal_storage->flash_image();
+    require(pal_flash->read_byte(0x1A000u) == '0' &&
+                pal_flash->read_byte(0x1A001u) == '0' &&
+                pal_flash->read_byte(0x1A002u) == '2' &&
+                pal_flash->read_byte(0x1A003u) == '1' &&
+                pal_flash->read_byte(0x1A004u) == '1' &&
+                pal_flash->read_byte(0x1A005u) == 'D' &&
+                pal_flash->read_byte(0x1C000u) == 'K' &&
+                pal_flash->read_byte(0x1C010u) == 2u &&
+                pal_flash->read_byte(0x1C040u) == 5u &&
+                pal_flash->read_byte(0x1C047u) == 1u &&
+                pal_flash->read_byte(0x1FFC0u) == 0x7Fu &&
+                pal_flash->source_byte(0x1A000u) == 0xFFu,
+            "Erstes PAL-Portprofil erzeugt kein gueltiges, quellgetrenntes Europa-Flash.");
+    require(dreamcast_region_from_area_symbols("JUE") == DreamcastRegion::Europe &&
+                dreamcast_region_from_area_symbols("JU") == DreamcastRegion::NorthAmerica &&
+                dreamcast_region_from_area_symbols("J") == DreamcastRegion::Japan,
+            "Disc-Areasymbole waehlen keine deterministische Dreamcast-Region.");
+    pal_storage->save();
+    pal_storage = DreamcastMutableStorage::open(pal_config);
+    require(pal_storage->flash_image()->read_byte(0x1A002u) == '2',
+            "Gespeichertes PAL-Flashprofil wird beim Neustart nicht erhalten.");
 
     const auto vmu_working = root / "vmu.katana-work";
     auto vmu_image = PersistentImage::open(

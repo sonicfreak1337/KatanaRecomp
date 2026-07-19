@@ -21,6 +21,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace katana::runtime {
@@ -30,12 +31,16 @@ inline constexpr std::uint32_t dreamcast_direct_boot_stack = 0x8D000000u;
 inline constexpr std::uint32_t dreamcast_disc_boot_status = sr_md_mask | sr_interrupt_mask;
 inline constexpr std::uint16_t dreamcast_composite_port_a_input = 0x0300u;
 enum class DreamcastRuntimeFirmwareMode : std::uint8_t { Direct, HleBiosAbi };
+enum class DreamcastRegion : std::uint8_t { Japan, NorthAmerica, Europe };
+
+[[nodiscard]] DreamcastRegion dreamcast_region_from_area_symbols(std::string_view area_symbols) noexcept;
 
 struct DreamcastMutableStorageConfig {
     std::string project_identity;
     std::filesystem::path storage_root;
     std::optional<std::filesystem::path> flash_source;
     std::optional<std::filesystem::path> vmu_source;
+    DreamcastRegion region = DreamcastRegion::Japan;
 };
 
 class DreamcastMutableStorage final {
@@ -59,6 +64,7 @@ class DreamcastMutableStorage final {
 struct DreamcastRuntimeBootImage {
     std::shared_ptr<DiscSource> source;
     std::string hardware_id;
+    std::string area_symbols;
     std::string boot_file_name;
     std::vector<std::uint8_t> boot_file;
     std::uint32_t data_track_lba = 0u;

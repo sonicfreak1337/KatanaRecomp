@@ -5,6 +5,7 @@
 #include <cstdlib>
 #include <iostream>
 #include <string>
+#include <vector>
 
 namespace {
 void require(const bool condition, const std::string& message) {
@@ -20,6 +21,11 @@ int main() {
     CpuState cpu;
     cpu.memory = Memory(0u);
     static_cast<void>(map_dreamcast_main_ram(cpu.memory));
+    std::vector<std::uint8_t> flash_bytes(dreamcast_flash_size, 0xFFu);
+    flash_bytes[0x20u] = 0x12u;
+    flash_bytes[0x21u] = 0x34u;
+    flash_bytes[0x10000u] = 0x00u;
+    static_cast<void>(map_dreamcast_command_flash(cpu.memory, flash_bytes));
     RuntimeBlockTable blocks;
     ExecutableCodeTracker tracker;
     FirmwareHandoffMap handoff;
@@ -75,6 +81,47 @@ int main() {
     require(init_exit.kind == BlockEndKind::Return && cpu.pc == cpu.pr && cpu.r[0] == 0u,
             "Installierter BIOS-ABI-Runtimeblock kehrt nicht ueber den gemeinsamen Blockvertrag "
             "zurueck.");
+
+    const auto flash_handle = blocks.lookup(vectors[2].handler_address, {});
+    const auto flash_block = flash_handle ? blocks.resolve(*flash_handle) : std::nullopt;
+    require(flash_block.has_value(), "Flash-BIOS-ABI-Block ist nicht aufloesbar.");
+    const auto invoke_flash = [&](const std::uint32_t selector) {
+        cpu.pc = vectors[2].handler_address;
+        cpu.pr = 0x8C010000u;
+        cpu.r[7] = selector;
+        return flash_block->get().function(cpu, context);
+    };
+    cpu.r[4] = 3u;
+    cpu.r[5] = 0x8C002000u;
+    static_cast<void>(invoke_flash(0u));
+    require(cpu.r[0] == 0u && cpu.memory.read_u32(0x8C002000u) == 0x10000u &&
+                cpu.memory.read_u32(0x8C002004u) == 0x8000u,
+            "FLASHROM_INFO liefert nicht die Dreamcast-Gamepartition.");
+    cpu.r[4] = 0x20u;
+    cpu.r[5] = 0x8C002100u;
+    cpu.r[6] = 2u;
+    static_cast<void>(invoke_flash(1u));
+    require(cpu.r[0] == 0u && cpu.memory.read_u16(0x8C002100u) == 0x3412u,
+            "FLASHROM_READ kopiert keine Flashbytes in den Gastpuffer.");
+    cpu.memory.write_u8(0x8C002200u, 0x0Fu);
+    cpu.r[4] = 0x30u;
+    cpu.r[5] = 0x8C002200u;
+    cpu.r[6] = 1u;
+    static_cast<void>(invoke_flash(2u));
+    require(cpu.r[0] == 1u && cpu.memory.read_u8(dreamcast_flash_physical_base + 0x30u) == 0x0Fu,
+            "FLASHROM_WRITE programmiert keine Flashbytes mit echter 1->0-Semantik.");
+    cpu.r[4] = 0x10000u;
+    static_cast<void>(invoke_flash(3u));
+    require(cpu.r[0] == 0u &&
+                cpu.memory.read_u8(dreamcast_flash_physical_base + 0x10000u) == 0xFFu,
+            "FLASHROM_DELETE loescht eine gueltige Partition nicht sektorweise.");
+    cpu.r[4] = static_cast<std::uint32_t>(dreamcast_flash_size - 1u);
+    cpu.r[5] = 0x8C002100u;
+    cpu.r[6] = 2u;
+    static_cast<void>(invoke_flash(1u));
+    require(cpu.r[0] == 0xFFFFFFFFu,
+            "FLASHROM_READ akzeptiert einen ueberlaufenden Flashbereich.");
+
     cpu.pc = vectors[3].handler_address;
     cpu.r[6] = 0u;
     cpu.r[7] = 3u;
