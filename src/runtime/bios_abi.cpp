@@ -108,6 +108,26 @@ std::uint32_t execute_flash_call(CpuState& cpu, const std::uint32_t selector) no
     return 0xFFFFFFFFu;
 }
 
+std::uint32_t execute_sysinfo_call(CpuState& cpu, const std::uint32_t selector) noexcept {
+    try {
+        if (selector == 0u) {
+            std::array<std::uint8_t, 24u> data{};
+            for (std::uint32_t index = 0u; index < 8u; ++index)
+                data[index] = cpu.memory.read_u8(dreamcast_flash_physical_base + 0x1A056u + index);
+            for (std::uint32_t index = 0u; index < 5u; ++index)
+                data[8u + index] =
+                    cpu.memory.read_u8(dreamcast_flash_physical_base + 0x1A000u + index);
+            cpu.memory.write_bytes(0x8C000068u, data, CodeWriteSource::Copy);
+            return 0u;
+        }
+        if (selector == 2u) return cpu.r[4] <= 9u ? 704u : 0xFFFFFFFFu;
+        if (selector == 3u) return 0x8C000068u;
+    } catch (...) {
+        return 0xFFFFFFFFu;
+    }
+    return 0xFFFFFFFFu;
+}
+
 std::string hex32(const std::uint32_t value) {
     std::ostringstream output;
     output << "0x" << std::hex << std::uppercase << std::setw(8) << std::setfill('0') << value;
@@ -137,6 +157,8 @@ BlockExit bios_abi_block(CpuState& cpu, BlockExecutionContext& context) {
                                    "service-unavailable:" + std::string(routed.service));
     cpu.r[0] = routed.vector == BiosAbiVectorKind::Flash
                    ? execute_flash_call(cpu, routed.selector)
+               : routed.vector == BiosAbiVectorKind::SysInfo
+                   ? execute_sysinfo_call(cpu, routed.selector)
                    : 0u;
     cpu.pc = cpu.pr;
     return make_block_exit(cpu,
@@ -180,11 +202,9 @@ BiosAbiCall route_hle_bios_abi_call(const CpuState& cpu) {
         if (selector == 0u)
             return call(vector->kind, selector, super_selector, "sysinfo-init", Status::Completed);
         if (selector == 2u)
-            return call(
-                vector->kind, selector, super_selector, "sysinfo-icon", Status::ServiceUnavailable);
+            return call(vector->kind, selector, super_selector, "sysinfo-icon", Status::Completed);
         if (selector == 3u)
-            return call(
-                vector->kind, selector, super_selector, "sysinfo-id", Status::ServiceUnavailable);
+            return call(vector->kind, selector, super_selector, "sysinfo-id", Status::Completed);
         break;
     case BiosAbiVectorKind::RomFont:
         if (selector == 0u)

@@ -40,6 +40,10 @@
   Japan-/Nordamerika-/Europa-Flashprofil; PAL-Ports starten damit ohne ein
   proprietaeres Flashabbild, waehrend optionale Originalquellen unveraendert
   bleiben.
+- SYSINFO_INIT, SYSINFO_ID und der validierte SYSINFO_ICON-Rueckgabevertrag
+  sind vollstaendig an das regionsabhaengige Arbeits-Flash gebunden. Der
+  24-Byte-Systemblock bei `0x8C000068` wird deterministisch aufgebaut, statt
+  dass Titel nach erfolgreichem Init weiterhin uninitialisierte Daten sehen.
 - Eigenstaendige Disc-Ports installieren die titelunabhaengigen Dreamcast-
   BIOS-ABI-Vektoren nun vor dem ersten Gastblock und dispatchen HLE-Handler im
   selben RuntimeBlockTable wie den nativen AOT-Code. BIOS-Wrapper springen

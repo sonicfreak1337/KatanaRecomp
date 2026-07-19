@@ -25,6 +25,10 @@ int main() {
     flash_bytes[0x20u] = 0x12u;
     flash_bytes[0x21u] = 0x34u;
     flash_bytes[0x10000u] = 0x00u;
+    for (std::uint32_t index = 0u; index < 8u; ++index)
+        flash_bytes[0x1A056u + index] = static_cast<std::uint8_t>(0xA0u + index);
+    for (std::uint32_t index = 0u; index < 5u; ++index)
+        flash_bytes[0x1A000u + index] = static_cast<std::uint8_t>('0' + index);
     static_cast<void>(map_dreamcast_command_flash(cpu.memory, flash_bytes));
     RuntimeBlockTable blocks;
     ExecutableCodeTracker tracker;
@@ -81,6 +85,25 @@ int main() {
     require(init_exit.kind == BlockEndKind::Return && cpu.pc == cpu.pr && cpu.r[0] == 0u,
             "Installierter BIOS-ABI-Runtimeblock kehrt nicht ueber den gemeinsamen Blockvertrag "
             "zurueck.");
+    require(cpu.memory.read_u8(0x8C000068u) == 0xA0u &&
+                cpu.memory.read_u8(0x8C00006Fu) == 0xA7u &&
+                cpu.memory.read_u8(0x8C000070u) == '0' &&
+                cpu.memory.read_u8(0x8C000077u) == 0u,
+            "SYSINFO_INIT baut den 24-Byte-Systemblock nicht aus Flash und Nullpadding auf.");
+    cpu.pc = vectors[0].handler_address;
+    cpu.r[7] = 3u;
+    static_cast<void>(init_block->get().function(cpu, context));
+    require(cpu.r[0] == 0x8C000068u, "SYSINFO_ID liefert nicht den initialisierten Systemblock.");
+    cpu.pc = vectors[0].handler_address;
+    cpu.r[7] = 2u;
+    cpu.r[4] = 9u;
+    static_cast<void>(init_block->get().function(cpu, context));
+    require(cpu.r[0] == 704u, "SYSINFO_ICON akzeptiert keinen gueltigen Iconindex.");
+    cpu.pc = vectors[0].handler_address;
+    cpu.r[7] = 2u;
+    cpu.r[4] = 10u;
+    static_cast<void>(init_block->get().function(cpu, context));
+    require(cpu.r[0] == 0xFFFFFFFFu, "SYSINFO_ICON akzeptiert einen ungueltigen Iconindex.");
 
     const auto flash_handle = blocks.lookup(vectors[2].handler_address, {});
     const auto flash_block = flash_handle ? blocks.resolve(*flash_handle) : std::nullopt;
