@@ -182,7 +182,7 @@ void install_hle_bios_abi(Memory& memory,
                            &bios_abi_block,
                            "hle-bios-abi:" + std::string(vector.name)};
         const auto identity = stable_runtime_block_identity(block);
-        static_cast<void>(blocks.register_bootstrap_runtime(std::move(block)));
+        static_cast<void>(blocks.register_bootstrap_static(std::move(block)));
         if (code_tracker != nullptr) {
             static_cast<void>(code_tracker->register_block(
                 {identity,

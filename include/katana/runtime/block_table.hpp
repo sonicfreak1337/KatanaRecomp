@@ -76,7 +76,7 @@ class RuntimeBlockTable {
     [[nodiscard]] std::vector<RuntimeBlockHandle>
     register_static_bulk(std::vector<RuntimeBlock> blocks);
     void seal_static() noexcept;
-    [[nodiscard]] RuntimeBlockHandle register_bootstrap_runtime(RuntimeBlock block);
+    [[nodiscard]] RuntimeBlockHandle register_bootstrap_static(RuntimeBlock block);
     [[nodiscard]] RuntimeBlockHandle register_runtime(RuntimeBlock block);
     [[nodiscard]] std::optional<RuntimeBlockHandle>
     lookup(std::uint32_t virtual_address, const BlockVariantKey& variant) const noexcept;

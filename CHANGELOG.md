@@ -37,8 +37,9 @@
   BIOS-ABI-Vektoren nun vor dem ersten Gastblock und dispatchen HLE-Handler im
   selben RuntimeBlockTable wie den nativen AOT-Code. BIOS-Wrapper springen
   dadurch nicht mehr ueber einen nullinitialisierten Vektor. Die generierten
-  BIOS-RAM-Stubs werden zugleich im ExecutableCodeTracker registriert und nach
-  Bindung des AOT-Trackers nicht mehr faelschlich als veraltet abgewiesen;
+  BIOS-RAM-Stubs werden zugleich als feste statische Bootstrap-Bloecke im
+  ExecutableCodeTracker registriert und weder vom AOT-Tracker noch von der
+  Demand-Materializer-Schranke faelschlich als veraltet abgewiesen;
   Portprojektvertrag 8 versioniert den geaenderten Dispatch-Handoff.
 - Die Disc-Runtime modelliert die SH-4-I/O-Ports PCTRA/PDTRA, PCTRB/PDTRB und
   GPIOIC nun mit registergenauen Zugriffsbreiten, getrennten Eingangs- und

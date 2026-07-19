@@ -29,7 +29,8 @@ int main() {
     const auto vectors = hle_bios_abi_vectors();
     const auto bootstrap_handle = blocks.lookup(vectors[0].handler_address, {});
     const auto bootstrap_block = bootstrap_handle ? blocks.resolve(*bootstrap_handle) : std::nullopt;
-    require(bootstrap_block.has_value(), "BIOS-Bootstrapblock ist nicht aufloesbar.");
+    require(bootstrap_block.has_value() && !bootstrap_block->get().runtime_registered,
+            "Fester BIOS-Bootstrapblock ist nicht statisch dispatchbar.");
     const auto static_handles = blocks.register_static_bulk({{0x8C010000u,
                                                                0x0C010000u,
                                                                4u,
