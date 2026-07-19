@@ -469,6 +469,8 @@ void HostRuntimeSession::inject(const HostRuntimeEvent& event) {
             break;
         case HostRuntimeEventKind::Pause:
         case HostRuntimeEventKind::FocusLost:
+            if (event.kind == HostRuntimeEventKind::FocusLost)
+                input_->inject(event.sequence, event.guest_cycle, {});
             media_clock_.stop();
             if (pacer_ != nullptr) pacer_->pause(scheduler_.current_cycle());
             audio_.pause();

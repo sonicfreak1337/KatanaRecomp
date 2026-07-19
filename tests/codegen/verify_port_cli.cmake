@@ -77,6 +77,24 @@ if(NOT generated_result EQUAL 0 OR
     "${generated_output} ${generated_error}")
 endif()
 
+foreach(lifecycle_case IN ITEMS running-close focus-resume-close paused-close)
+  set(ENV{KATANA_PORT_LIFECYCLE_TEST} "${lifecycle_case}")
+  execute_process(
+    COMMAND "${game}"
+    RESULT_VARIABLE lifecycle_result
+    OUTPUT_VARIABLE lifecycle_output
+    ERROR_VARIABLE lifecycle_error
+  )
+  if(NOT lifecycle_result EQUAL 0 OR
+     NOT lifecycle_output MATCHES "KR_HOST_SHUTDOWN guest_dispatch_stopped=1")
+    file(REMOVE_RECURSE "${fixture}")
+    message(FATAL_ERROR
+      "Lifecycle ${lifecycle_case} beendet nativen Gastdispatch nicht: "
+      "${lifecycle_output} ${lifecycle_error}")
+  endif()
+endforeach()
+unset(ENV{KATANA_PORT_LIFECYCLE_TEST})
+
 file(APPEND "${fixture}/disc/high.bin" "identity-change")
 execute_process(
   COMMAND "${game}" --gdi-debug "./disc.gdi"
@@ -154,7 +172,6 @@ if(missing_source_result EQUAL 0 OR missing_source_error MATCHES "${fixture}")
     "Fehlende GDI liefert Erfolg oder einen unredigierten Hostpfad: ${missing_source_error}")
 endif()
 
-file(REMOVE_RECURSE "${fixture}/disc")
 file(RENAME "${fixture}/port" "${fixture}/moved-port")
 if(WIN32)
   set(moved_game "${fixture}/moved-port/cli_game.exe")
@@ -167,11 +184,13 @@ execute_process(
   OUTPUT_VARIABLE moved_output
   ERROR_VARIABLE moved_error
 )
-if(NOT moved_result EQUAL 0 OR NOT moved_output MATCHES "KR_GUEST_PROGRAM_ENTERED")
+if(NOT moved_result EQUAL 0 OR NOT moved_output MATCHES "KR_GUEST_PROGRAM_ENTERED" OR
+   NOT EXISTS "${fixture}/disc/disc.gdi")
   file(REMOVE_RECURSE "${fixture}")
   message(FATAL_ERROR
-    "Verschobener Port startet nach Entfernen der GDI nicht: ${moved_output} ${moved_error}")
+    "Verschobener lokaler Port startet nicht oder Original-GDI ging verloren: "
+    "${moved_output} ${moved_error}")
 endif()
 
 file(REMOVE_RECURSE "${fixture}")
-message(STATUS "Port-CLI, PackedDiscSource und GDI-unabhaengiger Hostbuild erfolgreich")
+message(STATUS "Port-CLI, PackedDiscSource, Lifecycle und unveraenderte GDI erfolgreich")

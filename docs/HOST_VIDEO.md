@@ -25,9 +25,9 @@ Host-Present veraendern weder Schedulerzeit noch Dreamcast-Zustand.
 ## Produktpfad und Plattformen
 
 Der Windows-Backendpfad verwendet ein echtes Win32-Fenster und GDI-DIB-
-Presentation. Der generierte Port erzeugt nach erfolgreichem Runtimeeinstieg
-einen 640x480-RGBA-Frame aus Dreamcast-VRAM, praesentiert ihn und meldet die
-Framezahl in `KATANA_RUNTIME_METRICS`. Das relocatierte Runtime-SDK linkt die
+Presentation. Der generierte Port dekodiert die aktiven PVR-Scanoutregister,
+erzeugt daraus RGBA-Frames aus Dreamcast-VRAM und meldet die Framezahl in
+`KATANA_RUNTIME_METRICS`. Das relocatierte Runtime-SDK linkt die
 notwendigen Windows-Systembibliotheken selbst.
 
 Auf Hosts ohne implementiertes natives Backend bleibt CLI/Core weiterhin ohne
@@ -41,5 +41,9 @@ ausgegeben.
 `katana-host-video-tests` verwendet einen im Test erzeugten, frei von externen
 Assets und Rechten gehaltenen 2x2-Farbrahmen. Der Test prueft Vertrag, echtes
 Win32-Fenster, Resize, RGBA-Present, abgeschnittene Frames und kontrolliertes
-Schliessen. `katana-port-cli-tests` und der relocatierte GUI-Paketlauf pruefen
-zusaetzlich den produktiven `game.exe`-Pfad bis `frames=1`.
+Schliessen. `katana-port-cli-tests` kompiliert und startet zusaetzlich den
+produktiven `game.exe`-Pfad. Synthetische Lifecycle-Laeufe pruefen
+KeyDown/KeyUp, Fokusverlust/Fokusgewinn, Close im laufenden und pausierten
+Zustand sowie das nachweisliche Ende des nativen Gastdispatchs. Ein Frame wird
+nur gezaehlt, wenn die Gastfixture gueltige PVR-Scanoutregister programmiert;
+der aktuelle CLI-Smoke behauptet daher keine nicht erzeugte Presentation.

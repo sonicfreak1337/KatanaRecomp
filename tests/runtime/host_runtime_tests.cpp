@@ -117,8 +117,9 @@ int main() {
 
     session.inject({3u, 0u, HostRuntimeEventKind::FocusLost, {}});
     require(session.state() == HostRuntimeState::Paused && !clock.running() && audio.paused() &&
-                scheduler.pending_event_count() == 0u && !session_pacer.running(),
-            "Fokusverlust pausiert Hostaudio oder Medienereignisse nicht.");
+                scheduler.pending_event_count() == 0u && !session_pacer.running() &&
+                input->sample(1u).pressed_buttons == 0u && input->injected_events() == 2u,
+            "Fokusverlust pausiert Medien nicht oder laesst Controllerbuttons klemmen.");
     session.inject({4u, 0u, HostRuntimeEventKind::FocusGained, {}});
     require(session.state() == HostRuntimeState::Running && clock.running() && !audio.paused(),
             "Fokusgewinn setzt den pausierten Hostvertrag nicht fort.");

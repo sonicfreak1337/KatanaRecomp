@@ -87,6 +87,15 @@ struct PlatformFallbackResult {
     std::uint32_t next_guest_pc = 0u;
 };
 
+enum class PlatformLifecycleState : std::uint8_t { Running, Paused, Shutdown };
+
+class PlatformShutdownRequested final : public std::exception {
+  public:
+    [[nodiscard]] const char* what() const noexcept override {
+        return "Host requested native guest shutdown";
+    }
+};
+
 class PlatformServices {
   public:
     virtual ~PlatformServices() = default;
@@ -108,6 +117,9 @@ class PlatformServices {
     [[nodiscard]] virtual PlatformFallbackResult
     controlled_fallback(CpuState& cpu, const PlatformFallbackRequest& request) = 0;
     [[nodiscard]] virtual bool prefetch(CpuState& cpu, std::uint32_t address) = 0;
+    [[nodiscard]] virtual PlatformLifecycleState poll_host_lifecycle() {
+        return PlatformLifecycleState::Running;
+    }
     virtual void observe_guest_checkpoint(std::uint32_t) noexcept {}
     virtual void register_executable_block(std::uint32_t, std::uint32_t, std::string_view) {}
     [[nodiscard]] virtual ExecutableCodeTracker* executable_code_tracker() noexcept {

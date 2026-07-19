@@ -322,6 +322,10 @@ int run_test(const int argc, char* argv[]) {
                     .find("Runtime-Blockbudget erschoepft") != std::string::npos &&
             generated_before.at("code/runtime-dispatch.cpp")
                     .find("KATANA_PORT_BLOCK_LIMIT") != std::string::npos &&
+            generated_before.at("code/runtime-dispatch.cpp")
+                    .find("poll_host_lifecycle") != std::string::npos &&
+            generated_before.at("code/runtime-dispatch.cpp")
+                    .find("PlatformShutdownRequested") != std::string::npos &&
             generated_before.at("code/runtime-dispatch.cpp").find("blocks < 1000000u") ==
                 std::string::npos &&
             generated_before.at("include/katana_port.hpp").find("runtime_only_profile_json") !=
@@ -341,6 +345,10 @@ int run_test(const int argc, char* argv[]) {
             read_text(output / "src" / "main.cpp").find("verify_boot_identity(boot)") !=
                 std::string::npos &&
             read_text(output / "src" / "main.cpp").find("create_native_video_output") !=
+                std::string::npos &&
+            read_text(output / "src" / "main.cpp").find("pump_host_events") !=
+                std::string::npos &&
+            read_text(output / "src" / "main.cpp").find("KR_HOST_SHUTDOWN") !=
                 std::string::npos &&
             read_text(output / "src" / "main.cpp").find("framebuffer.capture") !=
                 std::string::npos &&
