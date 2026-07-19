@@ -2,6 +2,7 @@
 
 #include "katana/runtime/aica.hpp"
 #include "katana/runtime/bios_abi.hpp"
+#include "katana/runtime/cache_control.hpp"
 #include "katana/runtime/disc.hpp"
 #include "katana/runtime/dreamcast_memory.hpp"
 #include "katana/runtime/gdi.hpp"
@@ -86,6 +87,7 @@ struct DreamcastRuntimeState {
     std::shared_ptr<RuntimeBlockTable> runtime_blocks;
     std::shared_ptr<ExecutableCodeTracker> code_tracker;
     std::shared_ptr<Sh4StoreQueues> store_queues;
+    std::shared_ptr<Sh4CacheControl> cache_control;
     std::shared_ptr<std::vector<StoreQueueTransfer>> store_queue_transfers;
     std::shared_ptr<std::uint64_t> dropped_store_queue_transfers;
     std::shared_ptr<FirmwareHandoffMap> firmware_handoff;

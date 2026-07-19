@@ -193,8 +193,15 @@ int run_test(const int argc, char* argv[]) {
                 runtime_cpu.r[15] == 0x8D000000u &&
                 runtime_cpu.memory.read_u16(0x8C010000u) == 0xE00Au &&
                 runtime_state.runtime_blocks && runtime_state.runtime_blocks->size() == 0u &&
-                runtime_state.system_asic && runtime_state.interrupt_router,
+                runtime_state.system_asic && runtime_state.interrupt_router &&
+                runtime_state.cache_control &&
+                runtime_cpu.memory.read_u32(katana::runtime::sh4_cache_control_address) == 0u,
             "Eigenstaendiger GDI-Boot initialisiert Bootimage, CPU oder Speicher nicht.");
+    runtime_cpu.memory.write_u32(katana::runtime::sh4_cache_control_address,
+                                 katana::runtime::Sh4CacheControl::instruction_invalidate);
+    require(runtime_state.cache_control->instruction_invalidation_count() == 1u &&
+                runtime_cpu.memory.read_u32(katana::runtime::sh4_cache_control_address) == 0u,
+            "Produktiver GDI-Boot bindet das SH-4-Cache-Control-Register nicht ein.");
     static_cast<void>(runtime_state.code_tracker->register_block(
         {"sq-code",
          0x0C000000u,
