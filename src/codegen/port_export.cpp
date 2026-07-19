@@ -98,6 +98,7 @@ std::string handwritten_main(const std::string& entry_namespace,
                              const bool diagnostic_partial,
                              const std::span<const katana::io::InputProvenance> inputs,
                              const std::string_view project_identity,
+                             const std::string_view expected_content_identity,
                              const std::string_view expected_boot_sha256,
                              const std::uint32_t entry_address) {
     std::ostringstream identity_contract;
@@ -114,6 +115,8 @@ std::string handwritten_main(const std::string& entry_namespace,
                       << (diagnostic_partial ? "true" : "false") << ";\n"
                       << "constexpr std::string_view expected_project_identity = "
                       << katana::io::quote_json(project_identity) << ";\n"
+                      << "constexpr std::string_view expected_content_identity = "
+                      << katana::io::quote_json(expected_content_identity) << ";\n"
                       << "constexpr std::string_view expected_boot_sha256 = "
                       << katana::io::quote_json(expected_boot_sha256) << ";\n";
     return "#include \"katana_port.hpp\"\n"
@@ -130,6 +133,13 @@ std::string handwritten_main(const std::string& entry_namespace,
            "#include <system_error>\n#include <vector>\n\n"
            "namespace {\n" +
            identity_contract.str() +
+           "void verify_boot_identity(\n"
+           "        const katana::runtime::DreamcastRuntimeBootImage& boot) {\n"
+           "    const std::string_view boot_bytes(\n"
+           "        reinterpret_cast<const char*>(boot.boot_file.data()), boot.boot_file.size());\n"
+           "    if (katana::io::sha256_bytes(boot_bytes) != expected_boot_sha256)\n"
+           "        throw std::runtime_error(\"source-identity-mismatch\");\n"
+           "}\n"
            "void verify_source_identity(const std::filesystem::path& source,\n"
            "                            const katana::runtime::DreamcastRuntimeBootImage& boot) {\n"
            "    std::vector<katana::io::InputProvenance> actual;\n"
@@ -147,13 +157,10 @@ std::string handwritten_main(const std::string& entry_namespace,
            "        if (actual[index].role != expected_inputs[index].role ||\n"
            "            actual[index].sha256 != expected_inputs[index].sha256)\n"
            "            throw std::runtime_error(\"source-identity-mismatch\");\n"
-           "    const std::string_view boot_bytes(\n"
-           "        reinterpret_cast<const char*>(boot.boot_file.data()), boot.boot_file.size());\n"
-           "    if (katana::io::sha256_bytes(boot_bytes) != expected_boot_sha256)\n"
-           "        throw std::runtime_error(\"source-identity-mismatch\");\n"
            "}\n"
            "void verify_pack_identity(const katana::runtime::PackedDiscSource& source) {\n"
-           "    if (source.info().job_generation != expected_project_identity)\n"
+           "    if (source.info().job_generation != expected_project_identity ||\n"
+           "        source.info().content_identity != expected_content_identity)\n"
            "        throw std::runtime_error(\"source-identity-mismatch\");\n"
            "}\n"
            "class PortPlatformServices final : public katana::runtime::PlatformServices {\n"
@@ -316,6 +323,7 @@ std::string handwritten_main(const std::string& entry_namespace,
            "                    packed, packed->primary_data_lba(), "
            "packed->info().tracks.size());\n"
            "            }\n"
+           "            verify_boot_identity(boot);\n"
            "        } catch (const std::exception&) { throw "
            "std::runtime_error(\"source-identity-mismatch\"); }\n"
            "        auto mutable_storage = katana::runtime::DreamcastMutableStorage::open(\n"
@@ -1123,6 +1131,7 @@ PortExportResult export_dreamcast_port_project(const PreparedPortProgram& prepar
                                      options.diagnostic_partial,
                                      prepared.inputs,
                                      prepared.project_identity,
+                                     packed_info.content_identity,
                                      katana::io::sha256_bytes(boot_bytes),
                                      prepared.entry_address),
                     true);

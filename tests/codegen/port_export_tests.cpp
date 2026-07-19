@@ -335,6 +335,11 @@ int run_test(const int argc, char* argv[]) {
             std::filesystem::exists(output / "src" / "main.cpp") &&
             read_text(output / "src" / "main.cpp").find("load_dreamcast_runtime_boot") !=
                 std::string::npos &&
+            read_text(output / "src" / "main.cpp")
+                    .find("source.info().content_identity != expected_content_identity") !=
+                std::string::npos &&
+            read_text(output / "src" / "main.cpp").find("verify_boot_identity(boot)") !=
+                std::string::npos &&
             read_text(output / "src" / "main.cpp").find("create_native_video_output") !=
                 std::string::npos &&
             read_text(output / "src" / "main.cpp").find("framebuffer.capture") !=
