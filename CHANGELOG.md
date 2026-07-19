@@ -28,6 +28,10 @@
 
 ### Korrigiert
 
+- Der direkte Disc-Handoff startet den SH-4 nun wie vom Bootcode erwartet im
+  privilegierten MD-Modus mit maskierten Interrupts. Privilegierte
+  Systemregisterzugriffe waehrend der fruehen Retail-Initialisierung loesen
+  dadurch keine kuenstliche Illegal-Instruction mehr aus.
 - Die generierte statische AOT-Blockregistrierung konstruiert nicht mehr
   tausende `RuntimeBlock`-Stringtemporaries in einer einzigen MSVC-Funktion.
   Ein kompakter Helper beseitigt den dadurch erzeugten gigantischen

@@ -191,12 +191,15 @@ int run_test(const int argc, char* argv[]) {
         katana::runtime::initialize_dreamcast_runtime(runtime_cpu, runtime_boot);
     require(runtime_state.loaded_boot_bytes == 24u && runtime_cpu.pc == 0x8C010000u &&
                 runtime_cpu.r[15] == 0x8D000000u &&
+                runtime_cpu.read_sr() == katana::runtime::dreamcast_disc_boot_status &&
+                runtime_cpu.privileged_mode() && runtime_cpu.interrupt_mask() == 15u &&
                 runtime_cpu.memory.read_u16(0x8C010000u) == 0xE00Au &&
                 runtime_state.runtime_blocks && runtime_state.runtime_blocks->size() == 0u &&
                 runtime_state.system_asic && runtime_state.interrupt_router &&
                 runtime_state.cache_control &&
                 runtime_cpu.memory.read_u32(katana::runtime::sh4_cache_control_address) == 0u,
-            "Eigenstaendiger GDI-Boot initialisiert Bootimage, CPU oder Speicher nicht.");
+            "Eigenstaendiger GDI-Boot initialisiert Bootimage, privilegierten CPU-Handoff oder "
+            "Speicher nicht.");
     runtime_cpu.memory.write_u32(katana::runtime::sh4_cache_control_address,
                                  katana::runtime::Sh4CacheControl::instruction_invalidate);
     require(runtime_state.cache_control->instruction_invalidation_count() == 1u &&

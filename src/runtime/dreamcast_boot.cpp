@@ -346,7 +346,11 @@ initialize_dreamcast_runtime(CpuState& cpu,
     cpu.memory.write_bytes(dreamcast_disc_boot_address, boot.boot_file, CodeWriteSource::Copy);
     state.loaded_boot_bytes = boot.boot_file.size();
     reset_cpu(cpu,
-              ResetState{dreamcast_disc_boot_address, dreamcast_direct_boot_stack, 0u, 0u, 0u});
+              ResetState{dreamcast_disc_boot_address,
+                         dreamcast_direct_boot_stack,
+                         0u,
+                         dreamcast_disc_boot_status,
+                         0u});
     return state;
 }
 
