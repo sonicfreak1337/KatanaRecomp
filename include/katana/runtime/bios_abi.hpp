@@ -43,7 +43,8 @@ void install_hle_bios_abi(Memory& memory,
                           RuntimeBlockTable& blocks,
                           FirmwareHandoffMap& handoff,
                           const BlockVariantKey& variant = {},
-                          std::uint64_t guest_cycle = 0u);
+                          std::uint64_t guest_cycle = 0u,
+                          ExecutableCodeTracker* code_tracker = nullptr);
 [[nodiscard]] const char* bios_abi_service_status_name(BiosAbiServiceStatus status) noexcept;
 [[nodiscard]] std::string format_hle_bios_abi_contract_json();
 

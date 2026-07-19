@@ -1,4 +1,5 @@
 #include "katana/runtime/bios_abi.hpp"
+#include "katana/runtime/code_invalidation.hpp"
 
 #include <array>
 #include <iomanip>
@@ -152,7 +153,8 @@ void install_hle_bios_abi(Memory& memory,
                           RuntimeBlockTable& blocks,
                           FirmwareHandoffMap& handoff,
                           const BlockVariantKey& variant,
-                          const std::uint64_t guest_cycle) {
+                          const std::uint64_t guest_cycle,
+                          ExecutableCodeTracker* const code_tracker) {
     for (const auto& vector : kVectors) {
         if (!writable_range(memory, vector.slot_address, 4u) ||
             !writable_range(memory, vector.handler_address, 4u))
@@ -172,14 +174,24 @@ void install_hle_bios_abi(Memory& memory,
         memory.write_u32(vector.slot_address, vector.handler_address, CodeWriteSource::Copy);
         memory.write_u16(vector.handler_address, 0x000Bu, CodeWriteSource::Copy);
         memory.write_u16(vector.handler_address + 2u, 0x0009u, CodeWriteSource::Copy);
-        static_cast<void>(
-            blocks.register_bootstrap_runtime({vector.handler_address,
-                                     canonical_physical_address(vector.handler_address),
-                                     4u,
-                                     BlockEndKind::Return,
-                                     variant,
-                                     &bios_abi_block,
-                                     "hle-bios-abi:" + std::string(vector.name)}));
+        RuntimeBlock block{vector.handler_address,
+                           canonical_physical_address(vector.handler_address),
+                           4u,
+                           BlockEndKind::Return,
+                           variant,
+                           &bios_abi_block,
+                           "hle-bios-abi:" + std::string(vector.name)};
+        const auto identity = stable_runtime_block_identity(block);
+        static_cast<void>(blocks.register_bootstrap_runtime(std::move(block)));
+        if (code_tracker != nullptr) {
+            static_cast<void>(code_tracker->register_block(
+                {identity,
+                 canonical_physical_address(vector.handler_address),
+                 4u,
+                 "hle-generated-handler",
+                 {},
+                 ExecutableBlockOrigin::RomRamCopy}));
+        }
         handoff.install_runtime_symbol({"bios-vector-" + std::string(vector.name),
                                         vector.slot_address,
                                         canonical_physical_address(vector.slot_address),

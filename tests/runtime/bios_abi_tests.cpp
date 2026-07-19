@@ -1,4 +1,5 @@
 #include "katana/runtime/bios_abi.hpp"
+#include "katana/runtime/code_invalidation.hpp"
 #include "katana/runtime/dreamcast_memory.hpp"
 
 #include <cstdlib>
@@ -20,21 +21,32 @@ int main() {
     cpu.memory = Memory(0u);
     static_cast<void>(map_dreamcast_main_ram(cpu.memory));
     RuntimeBlockTable blocks;
+    ExecutableCodeTracker tracker;
     FirmwareHandoffMap handoff;
     handoff.map_segment(
         {"main-ram", FirmwareSegmentKind::Ram, 0x8C000000u, 0x0C000000u, 0x01000000u});
-    install_hle_bios_abi(cpu.memory, blocks, handoff, {}, 42u);
+    install_hle_bios_abi(cpu.memory, blocks, handoff, {}, 42u, &tracker);
     const auto vectors = hle_bios_abi_vectors();
     const auto bootstrap_handle = blocks.lookup(vectors[0].handler_address, {});
     const auto bootstrap_block = bootstrap_handle ? blocks.resolve(*bootstrap_handle) : std::nullopt;
     require(bootstrap_block.has_value(), "BIOS-Bootstrapblock ist nicht aufloesbar.");
-    static_cast<void>(blocks.register_static_bulk({{0x8C010000u,
-                                                     0x0C010000u,
-                                                     4u,
-                                                     BlockEndKind::Return,
-                                                     {},
-                                                     bootstrap_block->get().function,
-                                                     "generated-after-bios-bootstrap"}}));
+    const auto static_handles = blocks.register_static_bulk({{0x8C010000u,
+                                                               0x0C010000u,
+                                                               4u,
+                                                               BlockEndKind::Return,
+                                                               {},
+                                                               bootstrap_block->get().function,
+                                                               "generated-after-bios-bootstrap"}});
+    const auto static_block = blocks.resolve(static_handles.front());
+    require(static_block.has_value(), "Statischer AOT-Testblock ist nicht aufloesbar.");
+    static_cast<void>(tracker.register_block(
+        {stable_runtime_block_identity(static_block->get()),
+         static_block->get().physical_origin,
+         static_block->get().size,
+         "generated-port",
+         {},
+         ExecutableBlockOrigin::ImageSegment}));
+    blocks.bind_code_tracker(&tracker);
     require(vectors.size() == 6u && blocks.size() == 7u &&
                 blocks.lookup(0x8C010000u, {}).has_value() &&
                 handoff.runtime_symbols().size() == 12u,
