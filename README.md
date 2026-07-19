@@ -194,6 +194,9 @@ Hardwareaktionen, insbesondere DMA-Starts, brechen sichtbar ab; die Runtime
 meldet sie nicht als erfolgreich und erzeugt daraus keinen kuenstlichen Frame.
 Bereits gebundene Einheiten wie Maple verarbeiten dagegen echte Gast-
 Deskriptoren und schreiben ihre Antworten gastzeitgebunden per DMA zurueck.
+AICA/G2- und PVR-DMA nutzen fuer lineare Gastregionen einen validierten
+Bulk-Kopierpfad; Beobachter- und MMIO-Situationen behalten den exakten
+referenziellen Einzelzugriffspfad.
 
 Der generierte SH-4-Pfad erzwingt den privilegierten Modus fuer markierte
 Systemregister- und Kontrollinstruktionen. Ein Zugriff aus dem User-Modus wird

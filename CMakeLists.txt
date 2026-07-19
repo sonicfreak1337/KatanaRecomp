@@ -222,6 +222,7 @@ add_library(katana_runtime STATIC
     src/runtime/exception.cpp
     src/runtime/fpu.cpp
     src/runtime/gdi.cpp
+    src/runtime/holly_dma.cpp
     src/runtime/host_video.cpp
     src/runtime/host_runtime.cpp
     src/runtime/interrupt.cpp
@@ -1008,6 +1009,11 @@ add_executable(katana-maple-mmio-tests tests/runtime/maple_mmio_tests.cpp)
 target_link_libraries(katana-maple-mmio-tests PRIVATE katana_runtime)
 katana_enable_warnings(katana-maple-mmio-tests)
 add_test(NAME katana-maple-mmio-tests COMMAND katana-maple-mmio-tests)
+
+add_executable(katana-holly-dma-tests tests/runtime/holly_dma_tests.cpp)
+target_link_libraries(katana-holly-dma-tests PRIVATE katana_runtime)
+katana_enable_warnings(katana-holly-dma-tests)
+add_test(NAME katana-holly-dma-tests COMMAND katana-holly-dma-tests)
 
 add_executable(katana-phase11-retail-boot-services-tests
     tests/phase11/retail_boot_services_tests.cpp

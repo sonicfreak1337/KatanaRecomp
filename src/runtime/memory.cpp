@@ -730,6 +730,61 @@ void Memory::write_bytes(const std::uint32_t address,
     notify_guest_write({address, bytes.size(), source, changed});
 }
 
+void Memory::copy_bytes(const std::uint32_t destination,
+                        const std::uint32_t source_address,
+                        const std::size_t size,
+                        const CodeWriteSource source) {
+    if (size == 0u) return;
+    const auto require_range = [size](const std::uint32_t address,
+                                      const MemoryAccessOperation operation) {
+        if (size > address_space_size - static_cast<std::uint64_t>(address))
+            throw MemoryAccessError(MemoryAccessErrorReason::AddressOverflow,
+                                    operation,
+                                    address,
+                                    MemoryAccessWidth::Byte);
+    };
+    require_range(source_address, MemoryAccessOperation::Read);
+    require_range(destination, MemoryAccessOperation::Write);
+
+    const auto& source_region =
+        resolve(source_address, MemoryAccessWidth::Byte, MemoryAccessOperation::Read);
+    const auto& source_end = resolve(source_address + static_cast<std::uint32_t>(size - 1u),
+                                     MemoryAccessWidth::Byte,
+                                     MemoryAccessOperation::Read);
+    const auto& destination_region = resolve_writable(destination, MemoryAccessWidth::Byte);
+    const auto& destination_end = resolve_writable(
+        destination + static_cast<std::uint32_t>(size - 1u), MemoryAccessWidth::Byte);
+    if (&source_region != &source_end || &destination_region != &destination_end)
+        throw MemoryAccessError(MemoryAccessErrorReason::CrossRegion,
+                                MemoryAccessOperation::Write,
+                                destination,
+                                MemoryAccessWidth::Byte,
+                                destination_region.info.name);
+
+    if (!access_observers_active() && source_region.linear != nullptr &&
+        destination_region.linear != nullptr) {
+        const auto source_offset = region_offset(source_region.info, source_address);
+        const auto destination_offset = region_offset(destination_region.info, destination);
+        const auto source_bytes = source_region.linear->bytes();
+        auto destination_bytes = destination_region.linear->writable_bytes();
+        const bool changed =
+            !guest_write_observer_ || std::memcmp(destination_bytes.data() + destination_offset,
+                                                  source_bytes.data() + source_offset,
+                                                  size) != 0;
+        std::memmove(destination_bytes.data() + destination_offset,
+                     source_bytes.data() + source_offset,
+                     size);
+        performance_counters_.unobserved_accesses += static_cast<std::uint64_t>(size) * 2u;
+        notify_guest_write({destination, size, source, changed});
+        return;
+    }
+
+    std::vector<std::uint8_t> payload(size);
+    for (std::size_t index = 0u; index < size; ++index)
+        payload[index] = read_u8(source_address + static_cast<std::uint32_t>(index));
+    write_bytes(destination, payload, source);
+}
+
 const Memory::MappedRegion& Memory::resolve(const std::uint32_t address,
                                             const MemoryAccessWidth width,
                                             const MemoryAccessOperation operation) const {

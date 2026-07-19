@@ -4,6 +4,15 @@
 
 ### Geaendert
 
+- Die zusammenhaengenden Holly-G1-, G2- und PVR-DMA-Steuerbloecke bei
+  `0x005F7400`, `0x005F7800` und `0x005F7C00` besitzen geschlossene
+  Register-, Masken-, Schutzschluessel- und Aliasvertraege. AICA/G2- und
+  PVR-DMA kopieren reale Gastbytes ueber einen neuen linearen
+  `Memory::copy_bytes`-Fastpath, aktualisieren Zaehler und Status nach
+  deterministischer Gastzeit und melden die passende ASIC-Quelle. Der noch
+  ungebundene GD-ROM-DMA-Start bleibt explizit gesperrt. PAL-Bootwerte,
+  reservierte Nullregister, falsche Breiten und echte Transfers sind in
+  Release und unter AddressSanitizer getestet.
 - Die Maple-Laufzeit besitzt jetzt einen echten MMIO-/DMA-Produktpfad fuer den
   Registerblock `0x005F6C00..0x005F6CFC`. Kommandotabellen werden begrenzt und
   schutzfenstergebunden geparst, Frames an den vorhandenen Controller-/VMU-Bus

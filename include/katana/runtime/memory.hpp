@@ -203,6 +203,10 @@ class Memory {
     void write_bytes(std::uint32_t address,
                      std::span<const std::uint8_t> bytes,
                      CodeWriteSource source = CodeWriteSource::Copy);
+    void copy_bytes(std::uint32_t destination,
+                    std::uint32_t source_address,
+                    std::size_t size,
+                    CodeWriteSource source = CodeWriteSource::Dma);
 
   private:
     struct MappedRegion {

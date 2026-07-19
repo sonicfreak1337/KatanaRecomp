@@ -97,6 +97,17 @@ int main() {
             "Watchpoint umgeht den beobachteten Speicherpfad.");
     static_cast<void>(indexed.remove_watchpoint(watchpoint));
 
+    for (std::uint32_t index = 0u; index < 32u; ++index)
+        indexed_ram->write_u8(0x100u + index, static_cast<std::uint8_t>(0x40u + index));
+    indexed.reset_performance_counters();
+    indexed.copy_bytes(0x00100200u, 0x00100100u, 32u);
+    require(indexed.read_u8(0x00100200u) == 0x40u && indexed.read_u8(0x0010021Fu) == 0x5Fu &&
+                indexed.performance_counters().unobserved_accesses == 66u,
+            "Linearer DMA-Kopierfastpath verliert Bytes oder faellt auf Einzelwrites zurueck.");
+    require(throws<katana::runtime::MemoryAccessError>(
+                [&bus] { bus.copy_bytes(0x00001008u, 0x00001000u, 16u); }),
+            "Regionsuebergreifender DMA-Kopierpfad wurde teilweise ausgefuehrt.");
+
     std::cout << "Regionbasierter Speicherbus erfolgreich.\n";
     return EXIT_SUCCESS;
 }

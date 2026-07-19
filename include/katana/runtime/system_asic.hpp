@@ -57,9 +57,13 @@ class DreamcastSystemBusControl final {
 enum class SystemAsicEvent : std::uint16_t {
     PvrRenderDone = 0x0002u,
     PvrVblank = 0x0003u,
+    PvrDma = 0x000Bu,
     MapleDma = 0x000Cu,
     GdromDma = 0x000Eu,
     AicaDma = 0x000Fu,
+    Ext1Dma = 0x0010u,
+    Ext2Dma = 0x0011u,
+    DeviceDma = 0x0012u,
     GdromCommand = 0x0100u,
     AicaInterrupt = 0x0101u,
     GdromIllegalAddress = 0x020Cu,

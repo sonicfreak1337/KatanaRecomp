@@ -40,6 +40,15 @@ synthetisch sowie unter AddressSanitizer geprueft. Der bestehende High-Level-
 Bus bleibt fuer direkte Plattformtests verfuegbar, waehrend Gastzugriffe den
 MMIO-Pfad verwenden.
 
+Der vollstaendig ausgelesene Rest derselben PAL-Initialisierungstabelle belegt
+anschliessend G2-DMA, PVR-DMA und einen auf Null gesetzten GD-DMA-Start. Die
+G1-/G2-/PVR-Registerfamilien und alle Direktsegmente sind nun geschlossen
+gemappt. AICA/G2 und PVR verwenden echte, gastzeitgebundene DMA-Kopien mit
+Zaehlern und ASIC-Completion; lineare Speicherregionen werden dabei ohne
+Byte-fuer-Byte-Dispatch kopiert. GD-ROM-DMA darf initialisiert und deaktiviert
+werden, verweigert einen aktiven Start aber weiterhin sichtbar, bis Discquelle,
+Laenge und Completion an denselben Vertrag gebunden sind.
+
 Die naechste private Probe wird erst nach einem vollstaendigen neuen Portbuild
 und erneuter Originaldisc-Installation ausgefuehrt. Die PAL-GDI und alle
 Trackquellen bleiben unveraendert; veraltete Portausgaben werden nur nach

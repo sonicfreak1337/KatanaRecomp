@@ -6,6 +6,7 @@
 #include "katana/runtime/disc.hpp"
 #include "katana/runtime/dreamcast_memory.hpp"
 #include "katana/runtime/gdi.hpp"
+#include "katana/runtime/holly_dma.hpp"
 #include "katana/runtime/io_port.hpp"
 #include "katana/runtime/maple.hpp"
 #include "katana/runtime/maple_mmio.hpp"
@@ -96,6 +97,7 @@ struct DreamcastRuntimeState {
     std::shared_ptr<AicaRegisterFile> aica_registers;
     std::shared_ptr<MapleBus> maple;
     std::shared_ptr<DreamcastMapleController> maple_controller;
+    DreamcastHollyDmaControllers holly_dma;
     std::shared_ptr<GdRomAsyncReader> gdrom;
     std::shared_ptr<AicaExecutionController> aica;
     std::shared_ptr<RuntimeBlockTable> runtime_blocks;

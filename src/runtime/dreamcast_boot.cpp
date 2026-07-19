@@ -319,6 +319,8 @@ initialize_dreamcast_runtime(CpuState& cpu,
         map_dreamcast_maple_controller(cpu.memory, *state.scheduler, state.maple, {}, [raise_now] {
             raise_now(SystemAsicEvent::MapleDma);
         });
+    state.holly_dma = map_dreamcast_holly_dma(
+        cpu.memory, *state.scheduler, {}, [raise_now](const auto event) { raise_now(event); });
     if (state.mutable_storage) {
         state.vmu = std::make_shared<MapleVmuDevice>(state.mutable_storage->vmu_image());
         state.maple->attach(0u, 1u, state.vmu);
