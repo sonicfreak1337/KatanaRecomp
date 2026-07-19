@@ -258,6 +258,8 @@ KR-4805
 - dynamische Module und ersetzter RAM-Code koennen nicht still stale Bloecke
   ausfuehren
 - Boot, Gastvideo und Gastinput machen unter echter Gastlast gemeinsam Fortschritt
+- fruehe SH-4-/Holly-Initialisierung verwendet geschlossene Registervertraege;
+  ungebundene DMA-Starts duerfen keinen Erfolg simulieren
 - CI, Pakete, Datenschutz-, Lizenz- und Referenzaudits bestehen
 - keine Retaildaten gelangen in Pakete, CI, Repository oder oeffentliche Berichte
 - `KR_V049_ALPHA_CANDIDATE_READY` wird erreicht

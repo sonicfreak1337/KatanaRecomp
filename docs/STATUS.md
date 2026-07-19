@@ -19,6 +19,23 @@ die Originaldisc vollstaendig und erzeugt den lokalen Pack atomar nur unter
 Tests sind gruen; Sonic Adventure PAL und Sonic Shuffle PAL bleiben private,
 read-only Kompatibilitaetsfixtures und erhalten keine Sonderlogik.
 
+## Privater PAL-Runtime-Bring-up
+
+Sonic Adventure PAL erreicht reproduzierbar mehr als 5,1 Millionen native
+AOT-Bloecke, weiterhin ohne Gastframe. Die erste belegte Ausnahme bei
+`0xFFD00000` wurde durch die vollstaendige SH-4-INTC-Registerfamilie behoben.
+Der anschliessende Halt bei `0xA05F6800` fuehrte zu einem allgemeinen Audit
+des Holly-Systembus-Steuerblocks: `0x005F6800..0x005F68AC`, seine direkten
+Segmentaliase und die angrenzenden PVR-/G2-DMA-Triggermasken sind nun mit
+geschlossenen Breiten-, Masken- und Zugriffsvertraegen umgesetzt. Echte
+DMA-Starts werden bis zur Anbindung an einen Transferpfad ausdruecklich
+abgewiesen; es gibt keinen emulierten oder vorgetaeuschten Erfolg.
+
+Die naechste private Probe wird erst nach einem vollstaendigen neuen Portbuild
+und erneuter Originaldisc-Installation ausgefuehrt. Die PAL-GDI und alle
+Trackquellen bleiben unveraendert; veraltete Portausgaben werden nur nach
+erfolgreichem Ersatz entfernt.
+
 ## KR-4704 technisch bestanden
 
 Die aktuelle Kontrollflussfront umfasst in der privaten Build-only-Analyse

@@ -42,6 +42,15 @@
 
 ### Korrigiert
 
+- Der fruehe Dreamcast-Holly-Systembus bildet den geschlossenen
+  Steuerregisterblock `0x005F6800..0x005F68AC` jetzt an allen direkten
+  SH-4-Segmentaliasen mit dokumentierten Resetwerten, Bitmasken und
+  Lese-/Schreibrechten ab. Channel-2- und Sort-DMA-Start bleiben sichtbar
+  gesperrt, solange kein echter Transferpfad gebunden ist, statt Erfolg zu
+  simulieren. Die benachbarten PVR-/G2-DMA-Triggermasken bis `0x005F6954`
+  sind ebenfalls abgedeckt; unbekannte, reservierte und falsch breite
+  Zugriffe besitzen Negativtests. Damit passiert die allgemeine PAL-
+  Initialisierung den zuvor ungemappten Schreibzugriff auf `0xA05F6800`.
 - Der SH-4-INTC-Block bildet ICR, IPRA, IPRB, IPRC und das auf Dreamcast
   read-only gelesene IPRD an P4- und Area-7-Adressen mit 16-Bit-Breitenvertrag
   ab. IPRA routet TMU-/RTC-Prioritaeten und IPRC die DMAC-Prioritaet direkt in

@@ -89,6 +89,7 @@ struct DreamcastRuntimeState {
     std::shared_ptr<InterruptController> interrupt_controller;
     std::shared_ptr<PlatformInterruptRouter> interrupt_router;
     std::shared_ptr<Sh4InterruptRegisters> interrupt_registers;
+    std::shared_ptr<DreamcastSystemBusControl> system_bus_control;
     std::shared_ptr<DreamcastSystemAsic> system_asic;
     std::shared_ptr<PvrRegisterFile> pvr_registers;
     std::shared_ptr<AicaRegisterFile> aica_registers;

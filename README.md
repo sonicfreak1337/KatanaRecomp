@@ -187,6 +187,12 @@ und Tracks bleiben read-only und werden niemals veraendert oder geloescht.
 Fehlende oder abweichende Originaldaten enden vor Gastcode mit einem
 Nichtnull-Exitcode und redigierter Diagnose.
 
+Der aktuelle private PAL-Bring-up ist echte native AOT-Ausfuehrung und keine
+Konsolenemulation: Discbytes dienen lokal als Nutzerdatenquelle, waehrend der
+SH-4-Code in statische Hostfunktionen rekompiliert wird. Noch nicht gebundene
+Hardwareaktionen, insbesondere DMA-Starts, brechen sichtbar ab; die Runtime
+meldet sie nicht als erfolgreich und erzeugt daraus keinen kuenstlichen Frame.
+
 Der generierte SH-4-Pfad erzwingt den privilegierten Modus fuer markierte
 Systemregister- und Kontrollinstruktionen. Ein Zugriff aus dem User-Modus wird
 vor jeder Teilwirkung als strukturierte Illegal-Instruction-Ausnahme an den
