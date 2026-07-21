@@ -26,7 +26,7 @@ Eingabe
   -> natives Hostprojekt
 ```
 
-Der aktuelle kumulative Debug-Vertrag umfasst **178 automatische Tests**.
+Der aktuelle kumulative Debug-Vertrag umfasst **180 automatische Tests**.
 Phase 10 ist
 fuer den freigegebenen Windows-Workflow abgeschlossen: eine `.gdi` waehlen,
 einen Ausgabeordner waehlen und den Analyse-/Buildzustand sichtbar verfolgen.
@@ -85,6 +85,9 @@ Audio, Eingabe, Fokus und Shutdown folgen dem Vertrag in
 - zentrale CPU-/FPU-Runtime, Speicherbus, Exceptions und Interrupts
 - RAM, VRAM, AICA-RAM, BIOS, Flash, MMIO, Watchpoints und Invalidierung
 - Maple/Controller/VMU, PVR-Minimalpfad, AICA-HLE, GD-ROM/ISO9660/GDI
+- allgemeiner Disc-Hardwareauditor fuer SH-4-, MMIO-, DMA- und TA-Zugriffe
+- gastzeitgebundener PVR-Scanout mit PAL/NTSC, Interlace, Blank/Border und
+  echtem Render-vor-Present-Vertrag
 - Scheduler, TMU, RTC, DMA, Medienuhr und deterministische Systemreplays
 - partitionierter/incrementeller Codegen und externer Port-Projektexport
 - stabile CLI-/JSON-Vertraege, Diagnostik, Provenienz und Source Maps
@@ -98,6 +101,8 @@ KatanaRecomp ist weiterhin Pre-Alpha. Insbesondere fehlen noch:
 - vollstaendige SH-4- und FPU-Exception-Semantik
 - vollstaendige Dreamcast-Hardwaremodelle und ARM7-LLE
 - breitere Retail-Kompatibilitaet und Performanceoptimierung
+- GPU-beschleunigter PVR-Rasterizer; die aktuelle Windows-Presentation ist
+  funktional, der allgemeine PVR-Renderer arbeitet aber noch auf der CPU
 - weitergehende Fortschritts-/Diagnoseansichten fuer Retail-Debugging
 - Linux-Desktop-GUI
 - native Alpha-Portintegration und Windows-/Linux-Alpha-CI

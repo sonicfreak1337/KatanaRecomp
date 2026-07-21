@@ -38,11 +38,20 @@ Fortsetzungspunkt und wird explizit abgewiesen.
 
 ## Produktpfad und Plattformen
 
-Der Windows-Backendpfad verwendet ein echtes Win32-Fenster und GDI-DIB-
-Presentation. Der generierte Port dekodiert die aktiven PVR-Scanoutregister,
-erzeugt daraus RGBA-Frames aus Dreamcast-VRAM und meldet die Framezahl in
-`KATANA_RUNTIME_METRICS`. Das relocatierte Runtime-SDK linkt die
-notwendigen Windows-Systembibliotheken selbst.
+Der Windows-Backendpfad verwendet ein echtes Win32-Fenster und eine
+GDI-DIB-Presentation. Sie ist eine vollstaendige, skalierende RGBA-Ausgabe mit
+Aspect-Ratio-Erhalt und kein No-op; die eigentliche allgemeine PVR-
+Rasterisierung arbeitet derzeit jedoch auf der CPU und nutzt eine vorhandene
+Host-GPU noch nicht. GPU-Rasterisierung bleibt daher eine sichtbare
+Performancegrenze, nicht eine behauptete Capability.
+
+Der generierte Port dekodiert die aktiven PVR-Scanoutregister, einschliesslich
+`VO_CONTROL`-Blanking und `BORDER_COL`, und erzeugt daraus RGBA-Frames aus
+Dreamcast-VRAM. Ein Present wird erst zugelassen, nachdem der TA/PVR-Pfad einen
+Frame erfolgreich gerendert hat. `KR_FIRST_GUEST_FRAME` wird zusaetzlich nicht
+im Blankzustand gemeldet. Renderframes und Host-Presents bleiben getrennt in
+der Diagnostik sichtbar. Das relocatierte Runtime-SDK linkt die notwendigen
+Windows-Systembibliotheken selbst.
 
 Auf Hosts ohne implementiertes natives Backend bleibt CLI/Core weiterhin ohne
 Fenstersystem-Abhaengigkeit buildbar. `native_video_available()` liefert dort
@@ -59,5 +68,6 @@ Schliessen. `katana-port-cli-tests` kompiliert und startet zusaetzlich den
 produktiven `game.exe`-Pfad. Synthetische Lifecycle-Laeufe pruefen
 KeyDown/KeyUp, Fokusverlust/Fokusgewinn, Close im laufenden und pausierten
 Zustand sowie das nachweisliche Ende des nativen Gastdispatchs. Ein Frame wird
-nur gezaehlt, wenn die Gastfixture gueltige PVR-Scanoutregister programmiert;
-der aktuelle CLI-Smoke behauptet daher keine nicht erzeugte Presentation.
+nur gezaehlt, wenn die Gastfixture gueltige PVR-Scanoutregister programmiert und
+zuvor einen erfolgreichen PVR-Renderabschluss erzeugt; der aktuelle CLI-Smoke
+behauptet daher keine nicht erzeugte Presentation.

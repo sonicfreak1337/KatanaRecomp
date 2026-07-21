@@ -871,6 +871,7 @@ add_executable(katana-phase6-gate-tests tests/platform/phase6_gate_tests.cpp)
 target_link_libraries(katana-phase6-gate-tests PRIVATE katana_core katana_runtime)
 katana_enable_warnings(katana-phase6-gate-tests)
 add_test(NAME katana-phase6-gate-tests COMMAND katana-phase6-gate-tests)
+set_tests_properties(katana-phase6-gate-tests PROPERTIES TIMEOUT 60)
 
 add_executable(
     katana-firmware-diagnostics-tests

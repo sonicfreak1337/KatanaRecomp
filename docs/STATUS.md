@@ -7,6 +7,29 @@ Naechstes Gate: `v0.48.0` - Integration
 Weitere interne Gates: `v0.48.0` Integration und `v0.49.0` Alpha-Candidate
 Erster oeffentlicher Release: `v0.50.0` Alpha
 
+## Aktiver P0: Sonic-Adventure-PAL bis zum ersten echten Gastframe
+
+Der allgemeine Disc-Hardwareauditor erfasst fuer den aktuellen privaten
+PAL-Build 55.504 erreichbare SH-4-Instruktionen in 815 Funktionen. Es bleiben
+keine unbekannten SH-4-Instruktionen und keine harte statische Hardwareluecke.
+Der SCIF-Produktpfad, AICA-ARM-Reset, PVR-Blank/Border-Scanout und die komplette
+Store-Queue-/Channel-2-DMAC-/TA-/ASIC-Kette sind allgemein implementiert.
+
+Der generierte Port praesentiert erst nach einem erfolgreich gerenderten
+PVR-Frame und meldet `KR_FIRST_GUEST_FRAME` nicht fuer blosses VBlank oder
+erzwungenes Blank. Eine optional aktivierte, leichtgewichtige Diagnostik
+erfasst letzten MMIO-Zugriff, aktive Interruptquelle, alle relevanten
+DMA-Zustaende, GD-ROM, TA/PVR, AICA und den Demand-Materializer. Der emittierte
+Produktcode wurde mit einer synthetischen High-Density-GDI bis zur nativen EXE
+gebaut. Die zusammenhaengende ASan-/Artifact-Gesamtvalidierung ist mit 180 von
+180 Tests bestanden; der anschliessende fokussierte Produktpfadlauf ist mit 28
+von 28 Tests gruen. Der genau eine danach vorgesehene frische private PAL-Lauf
+steht noch aus; ein erster Gastframe wird bis dahin ausdruecklich nicht
+behauptet.
+
+Runtime-ABI 17 und Portprojektvertrag 10 bilden den kumulativen v0.48-Stand ab.
+PlatformServices-ABI 7 bleibt unveraendert.
+
 Der iterative Portworkflow verwendet jetzt sicheres inkrementelles Staging:
 Vorhandene Buildobjekte werden fuer denselben Ausgabeport wiederverwendet,
 waehrend `user-data` und `*.katana-disc` niemals in Staging oder Paket gelangen.
@@ -32,9 +55,9 @@ Der abschliessende Identitaetsblock verwendet jetzt Disc-Pack-Format 2 und
 Recipe 2. Die Content-Root entsteht aus den wirklich gelesenen Raw-Chunks und
 wird sowohl beim Schreiben gegen die Recipe als auch beim Oeffnen gegen
 Tracktabelle und Chunkindex geprueft; abweichendes Staging wird nicht
-veroeffentlicht. Runtime-ABI 16 und Portprojektvertrag 9 versionieren zugleich
-den echten gastzeitgebundenen AICA-Produktmixer. Das kumulative v0.48-
-Debug-Gate ist mit 178 von 178 Tests bestanden; der anschliessende private
+veroeffentlicht. Der damals eingefuehrte AICA-Vertrag ist im aktuellen
+Runtime-ABI 17 und Portprojektvertrag 10 enthalten. Das kumulative v0.48-
+Debug-Gate ist mit 180 von 180 Tests bestanden; der anschliessende private
 PAL-Nachweis ist erfolgt: Der vollstaendige neue Port entstand mit 12 Workern
 in 126,8 Sekunden, ein inkrementeller Runtime-Neubau in 77,8 Sekunden. Die
 Originaldisc installiert 521.461 Sektoren ausschliesslich lokal. Der echte
@@ -67,7 +90,7 @@ werden vor der G1-Completion nicht sichtbar, normale Paketfehler bleiben im
 ATA-Vertrag, und ein fehlgeschlagener PVR-Render erzeugt kein `RenderDone`.
 Direct- und HLE-Firmwaremodus sind getrennt. Der C++-Emitter routet jeden
 Gastzugriff direkt ueber die MMU-Helfer statt durch globale Textersetzung.
-Die fokussierten P0-Regressionen und der vollstaendige 178er-Debug-Gate sind
+Die fokussierten P0-Regressionen und der vollstaendige 180er-Debug-Gate sind
 gruen. Ein neuer privater PAL-Lauf ist noch nicht erfolgt, daher bleibt der
 erste echte Gastframe offen.
 
@@ -140,10 +163,11 @@ Color aus `0x18`; 64-Byte-Floatparameter erhalten Base- und Offsetfarbe; beide
 Intensity-Modi besitzen korrekte Face-Color- und Vertexvertraege. Der
 Software-Rasterizer fuehrt Tabellen-, Per-Vertex- und Tabellenmodus-2-Fog
 sowie RGB-Color-Clamp nun wirklich aus, statt die TSP-Bits nur zu speichern.
-Texturkoordinaten sind jetzt perspektivisch ueber die reziproke W-Tiefe;
-Trilinear-, Sekundaer-Akkumulations- und Supersamplingbits werden vollstaendig
-dekodiert und bis zu ihrer echten Umsetzung sichtbar abgewiesen, statt als
-falsches Bilinearbild durchzulaufen.
+Texturkoordinaten sind jetzt perspektivisch ueber die reziproke W-Tiefe.
+Vierfach-Supersampling und Sekundaer-Akkumulation laufen im Fragmentpfad.
+Trilinear-Pass A/B bleibt dagegen bis zu einer echten D-basierten
+Mipmap-Levelwahl sichtbar abgewiesen; der vorherige einzelne, nur gewichtete
+Bilinear-Sample wird nicht mehr faelschlich als Trilinearbild ausgegeben.
 Der SA-gestuetzte Gesamtcheck hat danach eine allgemeine TA-Registerluecke
 belegt: Das Spiel programmiert `TA_NEXT_OPB_INIT`, waehrend die Runtime bei
 `TA_LIST_INIT` irrtuemlich `TA_OL_BASE` als Arbeitszeiger verwendete und

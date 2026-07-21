@@ -827,6 +827,9 @@ Rgba8 sample_texture(const LinearMemoryDevice& vram,
                      const PvrMaterial& material,
                      const float u,
                      const float v) {
+    if (material.texture_filter >= 2u)
+        throw std::runtime_error(
+            "PVR-Trilinear-Pass A/B braucht eine echte D-basierte Mipmap-Levelwahl.");
     if (material.texture_supersampling) {
         auto sample_material = material;
         sample_material.texture_supersampling = false;
@@ -2236,24 +2239,6 @@ void PvrSoftwareRenderer::render(const PvrTaFrame& frame,
                         source = clamp_fragment_color(source, registers);
                     if (primitive.material.blend_source_accumulation) {
                         source = secondary_accumulation[pixel_index];
-                    } else if (primitive.material.texture_filter >= 2u &&
-                               primitive.material.texture_mipmapped &&
-                               primitive.list != PvrListType::PunchThrough) {
-                        auto trilinear_weight =
-                            0.25f * static_cast<float>(
-                                        primitive.material.texture_mipmap_bias & 3u);
-                        if (primitive.material.texture_filter == 2u)
-                            trilinear_weight = 1.0f - trilinear_weight;
-                        const auto weight = [trilinear_weight](const std::uint8_t value) {
-                            return static_cast<std::uint8_t>(std::lround(
-                                std::clamp(static_cast<float>(value) * trilinear_weight,
-                                           0.0f,
-                                           255.0f)));
-                        };
-                        source = {weight(source.r),
-                                  weight(source.g),
-                                  weight(source.b),
-                                  weight(source.a)};
                     }
                     if (primitive.list == PvrListType::PunchThrough &&
                         source.a <

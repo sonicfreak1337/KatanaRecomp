@@ -160,12 +160,18 @@ int main() {
             "Nicht modelliertes Trilinear-Filtering wird still als Bilinear ausgegeben.");
     perspective_frame.primitives[0].material.texture_filter = 0u;
     perspective_frame.primitives[0].material.texture_supersampling = true;
-    require(throws<std::runtime_error>([&] { software.render(perspective_frame, registers, vram); }),
-            "Nicht modelliertes Textur-Supersampling wird still ignoriert.");
+    const auto before_supersampling = software.metrics().frames;
+    software.render(perspective_frame, registers, vram);
+    require(software.metrics().frames == before_supersampling + 1u,
+            "Textur-Supersampling erreicht den produktiven Renderer nicht.");
     perspective_frame.primitives[0].material.texture_supersampling = false;
     perspective_frame.primitives[0].material.blend_source_accumulation = true;
-    require(throws<std::runtime_error>([&] { software.render(perspective_frame, registers, vram); }),
-            "Nicht modellierter Sekundaer-Akkumulationspuffer wird still ignoriert.");
+    vram.write_u32(0x2000u, 0xFFFFFFFFu);
+    const auto before_accumulation = software.metrics().frames;
+    software.render(perspective_frame, registers, vram);
+    require(software.metrics().frames == before_accumulation + 1u &&
+                vram.read_u32(0x2000u) == 0u,
+            "Sekundaer-Akkumulationsquelle wird nicht im produktiven Renderer ausgewertet.");
 
     std::cout << "KR-2804 Texturformate, Hintergrundebene und Render-Backend erfolgreich.\n";
 }

@@ -4,6 +4,33 @@
 
 ### Geaendert
 
+- Der spielagnostische Hardwareauditor verfolgt SH-4-Werte jetzt blockweise bis
+  zu konkreten MMIO-, Store-Queue- und Prefetch-Zugriffen, bewertet Breite,
+  Richtung und Registersemantik gegen den produktiven Runtimevertrag und kann
+  ganze Discverzeichnisse parallel und deterministisch pruefen. Der aktuelle
+  private PAL-Build umfasst 55.504 erreichbare Instruktionen in 815 Funktionen,
+  keine unbekannte SH-4-Instruktion und keine harte statische Hardwareluecke;
+  titelbezogene Adressen oder Bytes gelangen nicht in den Berichtscode.
+- Der SH-4-SCIF-Block ist mit Status-, FIFO-, Baudraten-, Scheduler- und
+  ERI/RXI/BRI/TXI-Interruptsemantik im gemeinsamen INTC-Produktpfad verbunden.
+  AICA-ARM-Reset/VREG verwenden denselben ExecutionController wie Timer,
+  Interrupts und der gastzeitgebundene Produktmixer; ARM7-LLE bleibt weiterhin
+  eine sichtbare, nicht als Erfolg ausgegebene Grenze.
+- Der PVR-Produktpfad fuehrt Store Queue und Systembus-Channel-2-DMAC nachweisbar
+  auf dieselbe TA-FIFO-Instanz, quittiert Transferende im DMAC/Systembus und
+  meldet genau ein ASIC-PVR-DMA-Ereignis. `VO_CONTROL`-Blanking und
+  `BORDER_COL` erreichen die native Scanoutausgabe; `SPG_VBLANK` und
+  `SPG_STATUS` verwenden weiterhin die Gastzeit. Ein Host-Present gilt erst
+  nach einem erfolgreich gerenderten PVR-Frame, und `KR_FIRST_GUEST_FRAME`
+  wird weder durch blosses VBlank noch durch erzwungenes Blank vorgetaeuscht.
+- Optionale Portdiagnostik erfasst ohne globalen Trace-Overhead den letzten
+  erfolgreichen MMIO-Zugriff sowie priorisierte IRQ-, SH-4-/Channel-2-, G1-,
+  G2-, PVR-DMA-, GD-ROM-, TA/PVR-, AICA- und Materializerzustaende. Der normale
+  Lauf behaelt den Nullkostenpfad; `KATANA_PORT_DIAGNOSTICS=1` aktiviert die
+  zusaetzliche Erfassung fuer begrenzte Runtimeprobes.
+- Multisession-GDIs waehlen den ersten High-Density-Datentrack ab LBA 45.000
+  als Bootquelle, statt spaetere Daten- oder Zusatztracks mit dem Boottrack zu
+  verwechseln. Synthetische Portfixtures verwenden dieselbe reale Geometrie.
 - Der PVR-Tile-Accelerator bildet `TA_LIST_INIT` und `TA_LIST_CONT` jetzt nach
   dem dokumentierten HOLLY-Vertrag ab. Initialisierung uebernimmt
   `TA_NEXT_OPB_INIT` und `TA_ISP_BASE` in die read-only Arbeitszeiger,
@@ -39,13 +66,15 @@
   MMU-faehigen `guest_read_*`-/`guest_write_*`-Schnittstellen. Die globale
   nachtraegliche Zeichenersetzung des gesamten Funktionstexts ist entfallen.
 - PlatformServices-ABI 7 versioniert den korrigierten linearen und
-  gastzeitgebundenen DMA-Vertrag. Runtime-ABI 16 und Portprojektvertrag 9
+  gastzeitgebundenen DMA-Vertrag. Runtime-ABI 17 und Portprojektvertrag 10
   bleiben die aktuellen v0.48-Vertraege.
-- Der kumulative Debug-Gate umfasst 178 Tests und ist vollstaendig gruen.
+- Der kumulative Debug-Gate umfasst 180 Tests und ist vollstaendig gruen.
   Die beiden Tests, die eigenstaendige Portprojekte mit CMake/MSVC bauen,
   verwenden eine gemeinsame CTest-Ressourcensperre und ein realistisches
   300-Sekunden-Limit; fachliche Assertions und die Parallelitaet der uebrigen
-  176 Tests bleiben unveraendert.
+  178 Tests bleiben unveraendert. Ein anschliessender fokussierter
+  Produktpfadlauf bestaetigt zusaetzlich 28 MMU-, DMA-, Disc-, Lifecycle- und
+  PVR-Tests unter AddressSanitizer.
 - Wiederholte Portexports uebernehmen den vorherigen Buildbaum in ein sicheres
   atomisches Staging, lassen `user-data` und jedes `*.katana-disc` aber
   konsequent zurueck. Bytegleiche generierte Dateien behalten ihre Zeitstempel,
@@ -76,7 +105,7 @@
   der Recipe, verwirft abweichendes Staging und veroeffentlicht dadurch keinen
   unterdessen veraenderten oder semantisch umgebundenen Discinhalt. Der Parser
   rekonstruiert Trackintegritaet und Content-Root aus dem Chunkindex.
-- Runtime-ABI 16 und Portprojektvertrag 9 versionieren den gemeinsamen
+- Runtime-ABI 17 und Portprojektvertrag 10 versionieren kumulativ den gemeinsamen
   AICA-Sound-RAM-/Audiopfad sowie den neuen Disc-Identitaetsvertrag.
 - Der Software-PVR fuehrt die TSP-Fogmodi jetzt im echten Fragmentpfad aus:
   Look-up-Table-Fog dekodiert `FOG_DENSITY` und interpoliert die 128
@@ -180,9 +209,11 @@
 - Texturkoordinaten werden im Software-PVR jetzt perspektivisch ueber die
   interpolierte reziproke W-Tiefe statt affin im Bildschirmraum berechnet.
   TSP-Mipmap-Bias, Supersampling und Primaer-/Sekundaer-Akkumulationsauswahl
-  werden als Materialzustand dekodiert. Solange der echte mehrstufige
-  Trilinear-/Akkumulationspfad und Vierfach-Supersampling noch fehlen, werden
-  diese Modi explizit abgewiesen und nicht mehr still als einfaches Bilinear
+  werden als Materialzustand dekodiert. Vierfach-Supersampling und der
+  sekundaere Akkumulationspuffer erreichen den echten Fragmentpfad. Die zuvor
+  eingebaute scheinbare Trilinear-Ausgabe skalierte dagegen nur einen einzelnen
+  Bilinear-Sample; sie ist entfernt. Pass A/B werden bis zu einer echten
+  D-basierten Mipmap-Levelwahl explizit abgewiesen und nicht als korrektes Bild
   ausgegeben.
 - Der TA-Decoder folgt bei HOLLY2-Vertices jetzt den tatsaechlichen
   32-/64-Byte-Parameterformaten. Untexturierte Packed-Color-Vertices lesen die

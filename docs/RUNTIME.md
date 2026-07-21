@@ -6,7 +6,7 @@ ungeloesten Kontrollflusspfaden mehr.
 
 ## ABI
 
-Die aktuelle Runtime-ABI ist Version `13`. Die typisierte Block-ABI ist seit
+Die aktuelle Runtime-ABI ist Version `17`. Die typisierte Block-ABI ist seit
 KR-4611 Version `2`.
 
 Generierter Code enthaelt eine Compile-Time-Pruefung gegen diese Version. Eine
@@ -25,7 +25,12 @@ fuehrt generationsgesicherte Blockhandles und getrennte Registryindizes ein.
 ABI-Version 11 bindet den gemeinsamen Gastzyklusvertrag ein. ABI-Version 12
 versioniert Runtime-only-Dispatchklassen, Zielvalidierung und Maschinenmetriken.
 ABI-Version 13 bindet projektbezogene Flash-/VMU-Arbeitskopien, geordnetes
-Shutdown-Speichern und Host-Pacing ein.
+Shutdown-Speichern und Host-Pacing ein. ABI-Version 14 fuehrt
+generationsgebundene Runtime-Module und kontrollierte Materialisierung ein.
+ABI-Version 15 erweitert den SH-4-Zustand um LDTLB-, Cache- und MMU-Vertraege.
+ABI-Version 16 bindet den gastzeitgebundenen AICA-/Sound-RAM-Pfad ein.
+ABI-Version 17 versioniert die gemeinsame Produktdiagnostik und den
+erweiterten MMIO-/Runtimezustand.
 
 ## CMake
 
@@ -322,6 +327,8 @@ spaetere Plattformkonfiguration.
 
 - sichtbare Fehlerpfade fuer ungeloeste Calls und Spruenge
 - Runtime-Tests fuer CPU-Zustand, Reset, Speicherbus, Ausrichtung, strukturierte Fehler, Traces, Watchpoints, breitenbewusste MMIO-Handler sowie Dreamcast-RAM-, VRAM-, AICA-RAM-, BIOS- und Flash-Aliase
+- optionales leichtgewichtiges Last-MMIO-Tracking fuer begrenzte Produktprobes;
+  ohne Aktivierung bleibt der normale Speicherhotpath frei von Trace-Callbacks
 
 ## Eigenstaendiger Disc-Boot fuer Portanwendungen
 

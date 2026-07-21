@@ -16,7 +16,7 @@ namespace {
 
 constexpr std::size_t raw_sector_size = 2352u;
 constexpr std::size_t payload_size = 2048u;
-constexpr std::uint32_t data_lba = 100u;
+constexpr std::uint32_t data_lba = 45000u;
 
 void require(const bool condition, const std::string& message) {
     if (!condition) {
@@ -120,14 +120,17 @@ void write_binary(const std::filesystem::path& path, const std::vector<std::uint
 }
 
 void write_fixture(const std::filesystem::path& directory) {
-    write_binary(directory / "low.bin", std::vector<std::uint8_t>(24u * raw_sector_size));
+    std::vector<std::uint8_t> low_track(24u * raw_sector_size);
+    for (std::size_t sector = 0u; sector < 24u; ++sector)
+        low_track[sector * raw_sector_size + 15u] = 1u;
+    write_binary(directory / "low.bin", low_track);
     write_binary(directory / "audio.raw", std::vector<std::uint8_t>(raw_sector_size));
     write_binary(directory / "high.bin", make_boot_track());
     std::ofstream descriptor(directory / "disc.gdi", std::ios::trunc);
     descriptor << "3\n"
                << "1 0 4 2352 low.bin 0\n"
                << "2 30 0 2352 audio.raw 0\n"
-               << "3 100 4 2352 high.bin 0\n";
+               << "3 45000 4 2352 high.bin 0\n";
 }
 
 void execute_synthetic_block(katana::runtime::CpuState& cpu) {

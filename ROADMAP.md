@@ -48,7 +48,7 @@ nicht mehr einzeln wiederholt.
 | Speicherbus, Exceptions, Interrupts, Scheduler und DMA | umgesetzt |
 | BIOS-HLE, System-ASIC, Maple, PVR-Minimalpfad, AICA-HLE und GD-ROM | umgesetzt, Genauigkeit noch begrenzt |
 | Windows-GUI, GDI-Workflow, Portexport und native Hostruntime | umgesetzt |
-| Private Retailanalyse | 55.202 Instruktionen, 813 Funktionen; Kontrollflussfront geschlossen, 6.608.338 offene Bytes |
+| Private Retailanalyse | 55.504 Instruktionen, 815 Funktionen; keine unbekannte SH-4-Instruktion und keine harte statische Hardwareluecke |
 
 ## v0.47.0 - Core-Stabilisierung und generische Retail-Runtime
 

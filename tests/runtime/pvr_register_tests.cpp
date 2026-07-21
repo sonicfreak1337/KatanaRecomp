@@ -30,8 +30,8 @@ int main() {
     const auto pvr = map_pvr_registers(bus, scheduler, [&] { ++completions; }, PvrTiming{5u});
     require(bus.read_u32(0x005F8000u) == pvr_id && bus.read_u32(0x805F8004u) == pvr_revision,
             "PVR-ID oder Revision ist ueber Aliase nicht lesbar.");
-    bus.write_u32(0xA05F8000u + pvr_register::FramebufferReadSof1, 0x04000000u);
-    require(bus.read_u32(0x605F8000u + pvr_register::FramebufferReadSof1) == 0x04000000u,
+    bus.write_u32(0xA05F8000u + pvr_register::FramebufferReadSof1, 0x00400000u);
+    require(bus.read_u32(0x605F8000u + pvr_register::FramebufferReadSof1) == 0x00400000u,
             "PVR-Registerzustand wird nicht zwischen Aliasen geteilt.");
     bus.write_u32(0x005F8000u + pvr_register::StartRender, 1u);
     require(pvr->render_request_count() == 1u && pvr->render_completion_count() == 0u &&
@@ -94,19 +94,22 @@ int main() {
     Memory scan_bus(0u);
     const auto scan_pvr = map_pvr_registers(
         scan_bus, scan_scheduler, {}, PvrTiming{5u, 100u, 100u});
+    scan_bus.write_u32(0x005F8000u + pvr_register::VideoControl, 0u);
+    scan_bus.write_u32(0x005F8000u + pvr_register::SpgControl, 0x10u);
+    scan_bus.write_u32(0x005F8000u + pvr_register::SpgHblank, (9u << 16u) | 8u);
     scan_bus.write_u32(0x005F8000u + pvr_register::SpgVblank, (6u << 16u) | 2u);
     scan_bus.write_u32(0x005F8000u + pvr_register::SpgLoad, (9u << 16u) | 9u);
-    require(scan_pvr->read(pvr_register::SpgStatus) == 0u,
+    require((scan_pvr->read(pvr_register::SpgStatus) & ((1u << 13u) | 0x3FFu)) == 0u,
             "SPG_STATUS meldet Scanline oder Vertical Blank am Frameanfang falsch.");
-    static_cast<void>(scan_scheduler.advance_to(50u, 1u));
+    static_cast<void>(scan_scheduler.advance_to(50u, 32u));
     require((scan_pvr->read(pvr_register::SpgStatus) & 0x3FFu) == 5u &&
                 (scan_pvr->read(pvr_register::SpgStatus) & (1u << 11u)) != 0u,
             "SPG_STATUS folgt der Gastzeit nicht mit einer dynamischen Scanline.");
-    static_cast<void>(scan_scheduler.advance_to(60u, 1u));
+    static_cast<void>(scan_scheduler.advance_to(60u, 32u));
     require((scan_pvr->read(pvr_register::SpgStatus) & 0x3FFu) == 6u &&
                 (scan_pvr->read(pvr_register::SpgStatus) & (1u << 11u)) == 0u,
             "SPG_STATUS setzt das dokumentierte Blank-Bit nicht an der VBlank-Grenze.");
-    static_cast<void>(scan_scheduler.advance_to(100u, 1u));
+    static_cast<void>(scan_scheduler.advance_to(100u, 32u));
     require((scan_pvr->read(pvr_register::SpgStatus) & 0x3FFu) == 0u &&
                 (scan_pvr->read(pvr_register::SpgStatus) & (1u << 10u)) != 0u,
             "SPG_STATUS setzt Feldnummer oder Scanline am Framewechsel falsch.");
