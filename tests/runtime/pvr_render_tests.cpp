@@ -131,5 +131,41 @@ int main() {
     require(vram.read_u32(0x2000u) == 0xFF401000u,
             "PVR-Farbclamp bleibt trotz TSP-Freigabe wirkungslos.");
 
+    PvrTaFrame perspective_frame;
+    PvrPrimitive perspective_triangle;
+    perspective_triangle.list = PvrListType::Opaque;
+    perspective_triangle.material.textured = true;
+    perspective_triangle.material.texture_twiddled = false;
+    perspective_triangle.material.texture_width = 8u;
+    perspective_triangle.material.texture_height = 8u;
+    perspective_triangle.material.texture_base = 0x3000u;
+    perspective_triangle.material.texture_format = 1u;
+    perspective_triangle.material.texture_shading = 0u;
+    perspective_triangle.material.fog_mode = 2u;
+    perspective_triangle.vertices = {
+        {0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0xFFFFFFFFu, 0u},
+        {2.0f, 0.0f, 2.0f, 1.0f, 0.0f, 0xFFFFFFFFu, 0u},
+        {0.0f, 2.0f, 1.0f, 0.0f, 0.0f, 0xFFFFFFFFu, 0u}};
+    perspective_frame.primitives.push_back(perspective_triangle);
+    for (std::uint32_t index = 0u; index < 64u; ++index)
+        vram.write_u16(0x3000u + index * 2u, 0u);
+    vram.write_u16(0x3000u + 2u * 2u, 0xF800u);
+    vram.write_u16(0x3000u + 3u * 2u, 0x001Fu);
+    software.render(perspective_frame, registers, vram);
+    require(vram.read_u32(0x2000u) == 0xFF0000FFu,
+            "Texturkoordinaten werden affin statt perspektivisch ueber 1/W interpoliert.");
+
+    perspective_frame.primitives[0].material.texture_filter = 2u;
+    require(throws<std::runtime_error>([&] { software.render(perspective_frame, registers, vram); }),
+            "Nicht modelliertes Trilinear-Filtering wird still als Bilinear ausgegeben.");
+    perspective_frame.primitives[0].material.texture_filter = 0u;
+    perspective_frame.primitives[0].material.texture_supersampling = true;
+    require(throws<std::runtime_error>([&] { software.render(perspective_frame, registers, vram); }),
+            "Nicht modelliertes Textur-Supersampling wird still ignoriert.");
+    perspective_frame.primitives[0].material.texture_supersampling = false;
+    perspective_frame.primitives[0].material.blend_source_accumulation = true;
+    require(throws<std::runtime_error>([&] { software.render(perspective_frame, registers, vram); }),
+            "Nicht modellierter Sekundaer-Akkumulationspuffer wird still ignoriert.");
+
     std::cout << "KR-2804 Texturformate, Hintergrundebene und Render-Backend erfolgreich.\n";
 }

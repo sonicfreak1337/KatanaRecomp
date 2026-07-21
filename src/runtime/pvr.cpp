@@ -1162,6 +1162,8 @@ void PvrTaFifo::submit(const std::span<const std::uint8_t> packet) {
         active_material_.texture_height = 8u << (mode2 & 7u);
         active_material_.texture_width = 8u << ((mode2 >> 3u) & 7u);
         active_material_.texture_shading = static_cast<std::uint8_t>((mode2 >> 6u) & 3u);
+        active_material_.texture_mipmap_bias = static_cast<std::uint8_t>((mode2 >> 8u) & 0xFu);
+        active_material_.texture_supersampling = (mode2 & 0x00001000u) != 0u;
         active_material_.texture_filter = static_cast<std::uint8_t>((mode2 >> 13u) & 3u);
         active_material_.clamp_v = (mode2 & 0x00008000u) != 0u;
         active_material_.clamp_u = (mode2 & 0x00010000u) != 0u;
@@ -1172,6 +1174,8 @@ void PvrTaFifo::submit(const std::span<const std::uint8_t> packet) {
         active_material_.color_clamp_enabled = (mode2 & 0x00200000u) != 0u;
         active_material_.offset_color_enabled = (pcw & 0x4u) != 0u;
         active_material_.fog_mode = static_cast<std::uint8_t>((mode2 >> 22u) & 3u);
+        active_material_.blend_destination_accumulation = (mode2 & 0x01000000u) != 0u;
+        active_material_.blend_source_accumulation = (mode2 & 0x02000000u) != 0u;
         active_material_.destination_blend = static_cast<std::uint8_t>((mode2 >> 26u) & 7u);
         active_material_.source_blend = static_cast<std::uint8_t>((mode2 >> 29u) & 7u);
         active_material_.texture_format = static_cast<std::uint8_t>((mode3 >> 27u) & 7u);
@@ -1232,6 +1236,8 @@ void PvrTaFifo::submit(const std::span<const std::uint8_t> packet) {
         active_material_.texture_height = 8u << (mode2 & 7u);
         active_material_.texture_width = 8u << ((mode2 >> 3u) & 7u);
         active_material_.texture_shading = static_cast<std::uint8_t>((mode2 >> 6u) & 3u);
+        active_material_.texture_mipmap_bias = static_cast<std::uint8_t>((mode2 >> 8u) & 0xFu);
+        active_material_.texture_supersampling = (mode2 & 0x00001000u) != 0u;
         active_material_.texture_filter = static_cast<std::uint8_t>((mode2 >> 13u) & 3u);
         active_material_.clamp_v = (mode2 & 0x00008000u) != 0u;
         active_material_.clamp_u = (mode2 & 0x00010000u) != 0u;
@@ -1242,6 +1248,8 @@ void PvrTaFifo::submit(const std::span<const std::uint8_t> packet) {
         active_material_.color_clamp_enabled = (mode2 & 0x00200000u) != 0u;
         active_material_.offset_color_enabled = (pcw & 0x4u) != 0u;
         active_material_.fog_mode = static_cast<std::uint8_t>((mode2 >> 22u) & 3u);
+        active_material_.blend_destination_accumulation = (mode2 & 0x01000000u) != 0u;
+        active_material_.blend_source_accumulation = (mode2 & 0x02000000u) != 0u;
         active_material_.destination_blend = static_cast<std::uint8_t>((mode2 >> 26u) & 7u);
         active_material_.source_blend = static_cast<std::uint8_t>((mode2 >> 29u) & 7u);
         active_material_.texture_format = static_cast<std::uint8_t>((mode3 >> 27u) & 7u);
@@ -1593,6 +1601,13 @@ void PvrSoftwareRenderer::render(const PvrTaFrame& frame,
     }
     for (const auto& primitive : frame.primitives) {
         auto texture_material = primitive.material;
+        if (texture_material.texture_filter >= 2u ||
+            texture_material.blend_destination_accumulation ||
+            texture_material.blend_source_accumulation)
+            throw std::runtime_error(
+                "PVR-Trilinear-/Akkumulationspufferpfad ist noch nicht implementiert.");
+        if (texture_material.texture_supersampling)
+            throw std::runtime_error("PVR-Textur-Supersampling ist noch nicht implementiert.");
         if (texture_material.texture_x32_stride) {
             texture_material.texture_stride_width =
                 (registers.read(pvr_register::TextureModulo) & 0x1Fu) * 32u;
@@ -1731,8 +1746,15 @@ void PvrSoftwareRenderer::render(const PvrTaFrame& frame,
                         source = {fog.r, fog.g, fog.b, fog_coefficient};
                     }
                     if (primitive.material.textured) {
-                        const auto u = interpolate_float(a->u, b->u, c->u);
-                        const auto v = interpolate_float(a->v, b->v, c->v);
+                        if (std::fabs(fragment_depth) <= std::numeric_limits<float>::epsilon())
+                            throw std::runtime_error(
+                                "PVR-Perspektivinterpolation besitzt eine Nulltiefe.");
+                        const auto u = interpolate_float(a->u * a->z, b->u * b->z,
+                                                         c->u * c->z) /
+                                       fragment_depth;
+                        const auto v = interpolate_float(a->v * a->z, b->v * b->z,
+                                                         c->v * c->z) /
+                                       fragment_depth;
                         source = shade_texture(sample_texture(vram, registers, texture_material, u, v),
                                                source,
                                                primitive.material.texture_shading);

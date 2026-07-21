@@ -203,6 +203,9 @@ struct PvrMaterial {
     bool vertex_alpha_enabled = false;
     bool offset_color_enabled = false;
     bool color_clamp_enabled = false;
+    bool texture_supersampling = false;
+    bool blend_destination_accumulation = false;
+    bool blend_source_accumulation = false;
     bool clamp_u = false;
     bool clamp_v = false;
     bool flip_u = false;
@@ -213,6 +216,7 @@ struct PvrMaterial {
     std::uint8_t texture_format = 0u;
     std::uint8_t texture_shading = 1u;
     std::uint8_t texture_filter = 0u;
+    std::uint8_t texture_mipmap_bias = 0u;
     std::uint8_t fog_mode = 2u;
     std::uint8_t source_blend = 1u;
     std::uint8_t destination_blend = 0u;

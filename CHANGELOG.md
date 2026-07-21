@@ -78,6 +78,13 @@
 
 ### Korrigiert
 
+- Texturkoordinaten werden im Software-PVR jetzt perspektivisch ueber die
+  interpolierte reziproke W-Tiefe statt affin im Bildschirmraum berechnet.
+  TSP-Mipmap-Bias, Supersampling und Primaer-/Sekundaer-Akkumulationsauswahl
+  werden als Materialzustand dekodiert. Solange der echte mehrstufige
+  Trilinear-/Akkumulationspfad und Vierfach-Supersampling noch fehlen, werden
+  diese Modi explizit abgewiesen und nicht mehr still als einfaches Bilinear
+  ausgegeben.
 - Der TA-Decoder folgt bei HOLLY2-Vertices jetzt den tatsaechlichen
   32-/64-Byte-Parameterformaten. Untexturierte Packed-Color-Vertices lesen die
   Base Color aus Offset `0x18`; texturierte Floating-Color-Vertices uebernehmen

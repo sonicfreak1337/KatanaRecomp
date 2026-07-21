@@ -89,6 +89,10 @@ Color aus `0x18`; 64-Byte-Floatparameter erhalten Base- und Offsetfarbe; beide
 Intensity-Modi besitzen korrekte Face-Color- und Vertexvertraege. Der
 Software-Rasterizer fuehrt Tabellen-, Per-Vertex- und Tabellenmodus-2-Fog
 sowie RGB-Color-Clamp nun wirklich aus, statt die TSP-Bits nur zu speichern.
+Texturkoordinaten sind jetzt perspektivisch ueber die reziproke W-Tiefe;
+Trilinear-, Sekundaer-Akkumulations- und Supersamplingbits werden vollstaendig
+dekodiert und bis zu ihrer echten Umsetzung sichtbar abgewiesen, statt als
+falsches Bilinearbild durchzulaufen.
 Diese Fortschritte sind synthetisch getestet; ein neuer privater PAL-Lauf ist
 noch nicht erfolgt, daher bleibt der erste echte Gastframe offen.
 
