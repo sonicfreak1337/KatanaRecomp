@@ -235,6 +235,37 @@ int run_test(const int argc, char* argv[]) {
                     katana::runtime::StoreQueueTarget::TileAccelerator &&
                 runtime_state.store_queue_transfers->back().bytes[0] == 0x55u,
             "Produktive Store Queue verliert QACR-basierten TA-Transfer.");
+    const auto ta_packets_before_channel2 = runtime_state.pvr_ta_fifo->metrics().packets;
+    const auto pvr_dma_events_before_channel2 = std::count_if(
+        runtime_state.system_asic->events().begin(),
+        runtime_state.system_asic->events().end(),
+        [](const auto& event) { return event.event == katana::runtime::SystemAsicEvent::PvrDma; });
+    for (std::uint32_t offset = 0u; offset < 32u; offset += 4u)
+        runtime_cpu.memory.write_u32(0x8C000800u + offset, 0u);
+    runtime_state.dmac->write_source(2u, 0x8C000800u);
+    runtime_state.dmac->write_control(2u, 0x00001841u);
+    runtime_state.dmac->write_operation(katana::runtime::Sh4Dmac::master_enable);
+    runtime_state.system_bus_control->write(
+        katana::runtime::system_bus_register::Channel2Destination, 0x10000000u);
+    runtime_state.system_bus_control->write(
+        katana::runtime::system_bus_register::Channel2Length, 32u);
+    runtime_state.system_bus_control->write(
+        katana::runtime::system_bus_register::Channel2Start, 1u);
+    static_cast<void>(runtime_state.scheduler->advance_by(32u, 1u));
+    const auto pvr_dma_events_after_channel2 = std::count_if(
+        runtime_state.system_asic->events().begin(),
+        runtime_state.system_asic->events().end(),
+        [](const auto& event) { return event.event == katana::runtime::SystemAsicEvent::PvrDma; });
+    require(runtime_state.pvr_ta_fifo->metrics().packets ==
+                    ta_packets_before_channel2 + 1u &&
+                runtime_state.dmac->completed_transfer_units(2u) == 1u &&
+                (runtime_state.dmac->control(2u) & katana::runtime::Sh4Dmac::transfer_end) != 0u &&
+                runtime_state.system_bus_control->read(
+                    katana::runtime::system_bus_register::Channel2Start) == 0u &&
+                runtime_state.system_bus_control->read(
+                    katana::runtime::system_bus_register::Channel2Length) == 0u &&
+                pvr_dma_events_after_channel2 == pvr_dma_events_before_channel2 + 1u,
+            "Produktiver Channel-2-DMAC erreicht TA-FIFO, Abschlussstatus oder System-ASIC nicht.");
     katana::runtime::CpuState hle_runtime_cpu;
     const auto hle_runtime_state = katana::runtime::initialize_dreamcast_runtime(
         hle_runtime_cpu, runtime_boot, katana::runtime::DreamcastRuntimeFirmwareMode::HleBiosAbi);

@@ -197,6 +197,8 @@ struct PvrScanoutDescriptor {
     bool interlaced = false;
     bool horizontal_scale = false;
     std::uint16_t vertical_scale_factor = 0x0400u;
+    bool video_blank = false;
+    std::array<std::uint8_t, 4u> border_rgba{0u, 0u, 0u, 0xFFu};
 };
 
 [[nodiscard]] std::optional<PvrScanoutDescriptor>
@@ -220,7 +222,9 @@ class PvrFramebuffer final {
                    std::uint32_t source_height = 0u);
     [[nodiscard]] PvrFrame capture(std::span<const std::uint8_t> vram,
                                    std::size_t base_offset = 0u,
-                                   std::optional<std::size_t> second_base_offset = std::nullopt);
+                                   std::optional<std::size_t> second_base_offset = std::nullopt,
+                                   std::optional<std::array<std::uint8_t, 4u>> solid_color =
+                                       std::nullopt);
     [[nodiscard]] std::uint64_t presented_frames() const noexcept;
 
   private:

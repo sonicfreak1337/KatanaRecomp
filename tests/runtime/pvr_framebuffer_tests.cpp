@@ -65,6 +65,25 @@ int main() {
                 scanout->stride_bytes == 1280u && scanout->base_offset == 0x1000u &&
                 scanout->format == PvrFramebufferFormat::Rgb565,
             "PVR-Scanout-Register werden nicht korrekt dekodiert.");
+    registers.write(pvr_register::BorderColor, 0x00123456u);
+    registers.write(pvr_register::VideoControl,
+                    registers.read(pvr_register::VideoControl) | 0x8u);
+    const auto blanked = decode_pvr_scanout(registers, dreamcast_vram_size);
+    PvrFramebuffer blanked_framebuffer;
+    blanked_framebuffer.configure(blanked->width,
+                                  blanked->height,
+                                  blanked->stride_bytes,
+                                  blanked->format,
+                                  blanked->line_double,
+                                  blanked->interlaced,
+                                  blanked->source_width,
+                                  blanked->source_height);
+    const auto blanked_frame = blanked_framebuffer.capture(
+        {}, blanked->base_offset, std::nullopt, blanked->border_rgba);
+    require(blanked->video_blank && blanked->border_rgba ==
+                                        std::array<std::uint8_t, 4u>{0x12u, 0x34u, 0x56u, 0xFFu} &&
+                blanked_frame.rgba.front() == 0x12u && blanked_frame.rgba.back() == 0xFFu,
+            "VO_CONTROL-Blanking oder BORDER_COL erreicht die native Scanoutausgabe nicht.");
     require(throws<std::invalid_argument>([] {
                 PvrFramebuffer value;
                 value.configure(2u, 1u, 3u, PvrFramebufferFormat::Rgb565);

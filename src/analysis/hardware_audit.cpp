@@ -418,6 +418,21 @@ HardwareRuntimeSupport sh4_scif_support(const std::uint32_t address,
                                      : HardwareRuntimeSupport::Rejected;
 }
 
+HardwareRuntimeSupport pvr_support(const std::uint32_t offset,
+                                   const HardwareAccessKind kind,
+                                   const std::uint8_t width) noexcept {
+    if (width != 4u || kind == HardwareAccessKind::Prefetch || (offset & 3u) != 0u)
+        return HardwareRuntimeSupport::Rejected;
+    // These scan-generator and scanout registers have complete product-path
+    // semantics: register masks/state, guest-time status and native blank/border output.
+    if (offset == 0x040u || offset == 0x0DCu || offset == 0x0E8u)
+        return HardwareRuntimeSupport::Implemented;
+    if (offset == 0x10Cu)
+        return kind == HardwareAccessKind::Read ? HardwareRuntimeSupport::Implemented
+                                                : HardwareRuntimeSupport::Rejected;
+    return HardwareRuntimeSupport::Partial;
+}
+
 HardwareRuntimeSupport assess_support(const AddressDescription& description,
                                       const HardwareAccessKind kind,
                                       const std::uint8_t width) noexcept {
@@ -448,9 +463,7 @@ HardwareRuntimeSupport assess_support(const AddressDescription& description,
                                                                                  0x005F7C00u),
                                  kind);
     case Region::Pvr:
-        return width == 4u && kind != HardwareAccessKind::Prefetch && (address & 3u) == 0u
-                   ? HardwareRuntimeSupport::Partial
-                   : HardwareRuntimeSupport::Rejected;
+        return pvr_support(address - 0x005F8000u, kind, width);
     case Region::Aica:
         return kind != HardwareAccessKind::Prefetch && (width == 1u || width == 2u || width == 4u)
                    ? HardwareRuntimeSupport::Partial

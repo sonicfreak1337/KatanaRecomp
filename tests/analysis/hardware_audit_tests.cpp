@@ -36,7 +36,7 @@ int main() {
     append_u32(bytes, 0xA05F6800u);
     append_u32(bytes, 0xA05F6800u);
     append_u32(bytes, 0xA05F6820u);
-    append_u32(bytes, 0xA05F8040u);
+    append_u32(bytes, 0xA05F8048u);
     append_u32(bytes, 0xFFE00000u);
     append_u32(bytes, 0xA05F6900u);
 

@@ -1045,6 +1045,7 @@ std::optional<PvrScanoutDescriptor> decode_pvr_scanout(const PvrRegisterFile& re
              vram_size)) {
         throw std::out_of_range("PVR-Scanout liegt ausserhalb des VRAM-Abbilds.");
     }
+    const auto border = registers.read(pvr_register::BorderColor);
     return PvrScanoutDescriptor{static_cast<std::uint32_t>(width),
                                 static_cast<std::uint32_t>(height),
                                 static_cast<std::uint32_t>(source_width),
@@ -1056,7 +1057,12 @@ std::optional<PvrScanoutDescriptor> decode_pvr_scanout(const PvrRegisterFile& re
                                 line_double,
                                 interlaced,
                                 horizontal_scale,
-                                vertical_scale_factor};
+                                vertical_scale_factor,
+                                (registers.read(pvr_register::VideoControl) & 0x8u) != 0u,
+                                {static_cast<std::uint8_t>(border >> 16u),
+                                 static_cast<std::uint8_t>(border >> 8u),
+                                 static_cast<std::uint8_t>(border),
+                                 0xFFu}};
 }
 
 void PvrFramebuffer::configure(const std::uint32_t width,
@@ -1099,7 +1105,8 @@ void PvrFramebuffer::configure(const std::uint32_t width,
 
 PvrFrame PvrFramebuffer::capture(const std::span<const std::uint8_t> vram,
                                  const std::size_t base_offset,
-                                 const std::optional<std::size_t> second_base_offset) {
+                                 const std::optional<std::size_t> second_base_offset,
+                                 const std::optional<std::array<std::uint8_t, 4u>> solid_color) {
     if (width_ == 0u || height_ == 0u) {
         throw std::logic_error("PVR-Framebuffer wurde nicht konfiguriert.");
     }
@@ -1108,6 +1115,13 @@ PvrFrame PvrFramebuffer::capture(const std::span<const std::uint8_t> vram,
                                               "PVR-Framebuffer-Pixelzahl ist zu gross.");
     const auto rgba_size =
         checked_multiply(pixel_count, 4u, "PVR-Framebuffer-RGBA-Ausgabe ist zu gross.");
+    if (solid_color) {
+        PvrFrame frame{width_, height_, std::vector<std::uint8_t>(rgba_size)};
+        for (std::size_t pixel = 0u; pixel < pixel_count; ++pixel)
+            std::copy(solid_color->begin(), solid_color->end(), frame.rgba.begin() + pixel * 4u);
+        ++presented_frames_;
+        return frame;
+    }
     if (interlaced_ && !second_base_offset)
         throw std::invalid_argument("Interlaced PVR-Scanout braucht beide Feldadressen.");
     const auto field_rows = interlaced_ ? (static_cast<std::size_t>(source_height_) + 1u) / 2u
