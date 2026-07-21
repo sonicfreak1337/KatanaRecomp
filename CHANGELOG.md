@@ -16,6 +16,12 @@
   AICA-ARM-Reset/VREG verwenden denselben ExecutionController wie Timer,
   Interrupts und der gastzeitgebundene Produktmixer; ARM7-LLE bleibt weiterhin
   eine sichtbare, nicht als Erfolg ausgegebene Grenze.
+- Die komplette SH-4-Exceptionregisterfamilie `TRA`, `EXPEVT` und `INTEVT`
+  ist als gemeinsamer 32-Bit-R/W-Vertrag an den zentralen CPU-Zustand gebunden.
+  P4-Adressen `0xFF000020..0xFF000028` und ihre dokumentierten Area-7-Aliase
+  teilen Zustand und reservierte Bitmasken; falsche Breiten werden sichtbar
+  abgewiesen. Der Hardwareauditor erkennt alle drei Register und Aliase jetzt
+  ebenfalls als implementiert.
 - Der PVR-Produktpfad fuehrt Store Queue und Systembus-Channel-2-DMAC nachweisbar
   auf dieselbe TA-FIFO-Instanz, quittiert Transferende im DMAC/Systembus und
   meldet genau ein ASIC-PVR-DMA-Ereignis. `VO_CONTROL`-Blanking und

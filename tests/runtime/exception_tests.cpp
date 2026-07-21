@@ -178,6 +178,28 @@ int main() {
                 !cpu.exception_in_delay_slot,
             "FPU-Sperre ausserhalb eines Delay Slots wird falsch gemeldet.");
 
+    map_sh4_exception_event_registers(cpu.memory, cpu);
+    require(cpu.memory.read_u32(sh4_tra_address) == cpu.tra &&
+                cpu.memory.read_u32(sh4_expevt_address) == event_fpu_disabled &&
+                cpu.memory.read_u32(sh4_intevt_address) == cpu.intevt,
+            "P4-Exceptionregister spiegeln den zentralen CPU-Zustand nicht.");
+    cpu.memory.write_u32(sh4_exception_area7_address, 0xFFFFFFFFu);
+    cpu.memory.write_u32(sh4_exception_area7_address + 4u, 0xFFFFFFFFu);
+    cpu.memory.write_u32(sh4_exception_area7_address + 8u, 0xFFFFFFFFu);
+    require(cpu.tra == 0x000003FCu && cpu.expevt == 0x00000FFFu && cpu.intevt == 0x00000FFFu &&
+                cpu.memory.read_u32(sh4_tra_address) == 0x000003FCu &&
+                cpu.memory.read_u32(sh4_expevt_address) == 0x00000FFFu &&
+                cpu.memory.read_u32(sh4_intevt_address) == 0x00000FFFu,
+            "Area-7-Alias oder reservierte Exceptionregisterbits sind inkonsistent.");
+    bool narrow_access_rejected = false;
+    try {
+        static_cast<void>(cpu.memory.read_u16(sh4_expevt_address));
+    } catch (const MemoryAccessError& error) {
+        narrow_access_rejected = error.reason() == MemoryAccessErrorReason::DeviceRejected;
+    }
+    require(narrow_access_rejected,
+            "Exceptionregister akzeptieren einen nicht dokumentierten 16-Bit-Zugriff.");
+
     std::cout << "Strukturierter Exception-Eintritt erfolgreich.\n";
     return EXIT_SUCCESS;
 }

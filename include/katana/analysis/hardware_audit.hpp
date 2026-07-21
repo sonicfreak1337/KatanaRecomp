@@ -30,6 +30,7 @@ enum class DreamcastHardwareRegion : std::uint8_t {
     StoreQueue,
     Sh4Mmu,
     Sh4Cache,
+    Sh4Exception,
     Sh4Qacr,
     Sh4Io,
     Sh4Dmac,

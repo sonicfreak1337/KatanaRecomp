@@ -1,6 +1,7 @@
 #include "katana/runtime/dreamcast_boot.hpp"
 
 #include "katana/io/json_report.hpp"
+#include "katana/runtime/exception.hpp"
 #include "katana/runtime/iso9660.hpp"
 
 #include <algorithm>
@@ -302,6 +303,7 @@ initialize_dreamcast_runtime(CpuState& cpu,
     state.address_space = std::make_shared<RuntimeAddressSpace>();
     cpu.address_space = state.address_space;
     state.mmu_control = map_sh4_mmu_control(cpu.memory, cpu, *state.address_space);
+    map_sh4_exception_event_registers(cpu.memory, cpu);
     state.interrupt_controller = std::make_shared<InterruptController>();
     state.interrupt_router = std::make_shared<PlatformInterruptRouter>(
         *state.interrupt_controller, *state.tmu, *state.rtc, *state.dmac);

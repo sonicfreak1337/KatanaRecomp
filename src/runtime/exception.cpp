@@ -1,6 +1,8 @@
 #include "katana/runtime/exception.hpp"
 
 #include <array>
+#include <memory>
+#include <stdexcept>
 
 namespace katana::runtime {
 namespace {
@@ -44,10 +46,8 @@ constexpr std::array exception_table = {
                       event_tlb_protection_write,
                       general_exception_vector,
                       false},
-    ExceptionMetadata{ExceptionCause::TlbMultipleHit,
-                      event_tlb_multiple_hit,
-                      general_exception_vector,
-                      false},
+    ExceptionMetadata{
+        ExceptionCause::TlbMultipleHit, event_tlb_multiple_hit, general_exception_vector, false},
     // Host-side bus failures enter the architectural data-address exception class.
     ExceptionMetadata{ExceptionCause::AddressErrorRead,
                       event_address_error_read,
@@ -186,6 +186,35 @@ void return_from_exception(CpuState& cpu) noexcept {
     cpu.trap_pending = false;
     cpu.last_exception_cause = ExceptionCause::None;
     cpu.exception_in_delay_slot = false;
+}
+
+void map_sh4_exception_event_registers(Memory& memory, CpuState& cpu) {
+    constexpr std::uint32_t tra_mask = 0x000003FCu;
+    constexpr std::uint32_t event_mask = 0x00000FFFu;
+    auto device = std::make_shared<MmioMemoryDevice>(
+        3u * sizeof(std::uint32_t),
+        [&cpu](const std::uint32_t offset, const MemoryAccessWidth width) {
+            if (width != MemoryAccessWidth::Word || (offset & 3u) != 0u || offset > 8u)
+                throw std::invalid_argument(
+                    "SH-4-Exceptionregister erlauben nur ausgerichtete 32-Bit-Zugriffe.");
+            if (offset == 0u) return cpu.tra & tra_mask;
+            if (offset == 4u) return cpu.expevt & event_mask;
+            return cpu.intevt & event_mask;
+        },
+        [&cpu](
+            const std::uint32_t offset, const std::uint32_t value, const MemoryAccessWidth width) {
+            if (width != MemoryAccessWidth::Word || (offset & 3u) != 0u || offset > 8u)
+                throw std::invalid_argument(
+                    "SH-4-Exceptionregister erlauben nur ausgerichtete 32-Bit-Zugriffe.");
+            if (offset == 0u)
+                cpu.tra = value & tra_mask;
+            else if (offset == 4u)
+                cpu.expevt = value & event_mask;
+            else
+                cpu.intevt = value & event_mask;
+        });
+    memory.map_region("sh4-exception-events-p4", sh4_tra_address, device);
+    memory.map_region("sh4-exception-events-area7", sh4_exception_area7_address, std::move(device));
 }
 
 } // namespace katana::runtime

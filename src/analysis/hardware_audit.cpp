@@ -177,6 +177,9 @@ std::string sh4_register_name(const std::uint32_t address) {
     case 0xFF00000Cu: return "TEA";
     case 0xFF000010u: return "MMUCR";
     case 0xFF00001Cu: return "CCR";
+    case 0xFF000020u: return "TRA";
+    case 0xFF000024u: return "EXPEVT";
+    case 0xFF000028u: return "INTEVT";
     case 0xFF000034u: return "PTEA";
     case 0xFF000038u: return "QACR0";
     case 0xFF00003Cu: return "QACR1";
@@ -253,6 +256,8 @@ AddressDescription describe(const std::uint32_t address) {
         set(DreamcastHardwareRegion::Sh4Mmu, true, sh4_register_name(canonical));
     else if (canonical == 0xFF00001Cu)
         set(DreamcastHardwareRegion::Sh4Cache, true, sh4_register_name(canonical));
+    else if (in_range(canonical, 0xFF000020u, 0x0Cu))
+        set(DreamcastHardwareRegion::Sh4Exception, true, sh4_register_name(canonical));
     else if (canonical == 0xFF000034u)
         set(DreamcastHardwareRegion::Sh4Mmu, true, sh4_register_name(canonical));
     else if (in_range(canonical, 0xFF000038u, 8u))
@@ -485,6 +490,7 @@ HardwareRuntimeSupport assess_support(const AddressDescription& description,
         return HardwareRuntimeSupport::Implemented;
     case Region::Sh4Mmu:
     case Region::Sh4Cache:
+    case Region::Sh4Exception:
     case Region::Sh4Qacr:
     case Region::Sh4Dmac:
         return width == 4u && kind != HardwareAccessKind::Prefetch
@@ -820,6 +826,7 @@ const char* dreamcast_hardware_region_name(const DreamcastHardwareRegion region)
     case DreamcastHardwareRegion::StoreQueue: return "store_queue";
     case DreamcastHardwareRegion::Sh4Mmu: return "sh4_mmu";
     case DreamcastHardwareRegion::Sh4Cache: return "sh4_cache";
+    case DreamcastHardwareRegion::Sh4Exception: return "sh4_exception";
     case DreamcastHardwareRegion::Sh4Qacr: return "sh4_qacr";
     case DreamcastHardwareRegion::Sh4Io: return "sh4_io";
     case DreamcastHardwareRegion::Sh4Dmac: return "sh4_dmac";

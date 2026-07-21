@@ -261,6 +261,15 @@ und springt ueber `VBR` zum allgemeinen Exception- oder Interruptvektor.
 Speicherfehler hinterlegen die fehlerhafte Adresse zusaetzlich in `TEA`.
 `return_from_exception` restauriert `SR`, Registerbank und `PC` zentral.
 
+Der produktive SH-4-Bus spiegelt `TRA`, `EXPEVT` und `INTEVT` als
+32-Bit-R/W-Register bei `0xFF000020..0xFF000028` sowie unter ihren
+Area-7-Aliasadressen. Beide Sichten verwenden direkt denselben `CpuState` wie
+`TRAPA`, Exception- und Interruptannahme. `TRA` behaelt Bits 9:2, die beiden
+Eventregister ihren 12-Bit-Code; andere Bits lesen null. Schmalere oder
+unausgerichtete Zugriffe werden abgewiesen. Grundlage ist der in
+[REFERENCE_PROVENANCE.md](REFERENCE_PROVENANCE.md) ausgewiesene
+Renesas-SH7750-Hardwarevertrag.
+
 KR-4611 leitet Exceptionursache, Eventcode, Vektor und Interruptklasse aus
 einer gemeinsamen Metadatentabelle ab. `trap_pending` bezeichnet einen aktiven
 Gast-Exceptionhandler und keinen fatalen Hostabbruch. Block-ABI 2 trennt

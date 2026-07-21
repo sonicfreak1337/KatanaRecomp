@@ -37,7 +37,14 @@ erst beim echten Kontrolltransfer einen bytegenauen, auf 128 Bytes begrenzten
 Runtime-Code-Snapshot. Unbeschriebenes RAM bleibt gesperrt; jeder
 ueberlappende Write entwertet Snapshot und Runtimeblock. Die gezielte
 Materializer-Regression besteht unter AddressSanitizer. Der erneute private
-PAL-Nachweis folgt nach dem inkrementellen Produktbuild.
+PAL-Nachweis materialisierte den Handler nachweislich als Interpreterblock und
+erreichte dessen Zugriff auf `EXPEVT` bei `0xFF000024`. Damit wurde die naechste
+allgemeine Luecke sichtbar: `TRA`, `EXPEVT` und `INTEVT` existierten nur als
+interner CPU-Zustand, aber noch nicht im produktiven P4-Bus. Alle drei
+32-Bit-R/W-Register sind nun samt Area-7-Alias, reservierten Bitmasken und
+Hardwareauditorabdeckung implementiert. Exception-, Auditor- und Boottests
+sind unter AddressSanitizer gruen; TA/PVR und der erste Gastframe bleiben bis
+zum naechsten privaten Nachweis offen.
 
 Runtime-ABI 18 und Portprojektvertrag 10 bilden den kumulativen v0.48-Stand ab.
 PlatformServices-ABI 7 bleibt unveraendert.

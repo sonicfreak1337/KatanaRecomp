@@ -9,6 +9,10 @@ namespace katana::runtime {
 
 inline constexpr std::uint32_t general_exception_vector = 0x00000100u;
 inline constexpr std::uint32_t interrupt_vector = 0x00000600u;
+inline constexpr std::uint32_t sh4_tra_address = 0xFF000020u;
+inline constexpr std::uint32_t sh4_expevt_address = 0xFF000024u;
+inline constexpr std::uint32_t sh4_intevt_address = 0xFF000028u;
+inline constexpr std::uint32_t sh4_exception_area7_address = 0x1F000020u;
 
 inline constexpr std::uint32_t event_address_error_read = 0x000000E0u;
 inline constexpr std::uint32_t event_address_error_write = 0x00000100u;
@@ -63,5 +67,7 @@ void enter_memory_exception(CpuState& cpu,
                             std::optional<std::uint32_t> delay_slot_owner = std::nullopt) noexcept;
 
 void return_from_exception(CpuState& cpu) noexcept;
+
+void map_sh4_exception_event_registers(Memory& memory, CpuState& cpu);
 
 } // namespace katana::runtime
