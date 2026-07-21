@@ -109,6 +109,7 @@ int main() {
     require(serial_snapshot.at("CMakeLists.txt").find("code/unit-00000.cpp") != std::string::npos &&
                 serial_snapshot.at("CMakeLists.txt").find("/bigobj") != std::string::npos &&
                 serial_snapshot.at("CMakeLists.txt").find("/FS") != std::string::npos &&
+                serial_snapshot.at("CMakeLists.txt").find("/MP") != std::string::npos &&
                 serial_snapshot.at("build.ninja").find("libkatana_generated.a") !=
                     std::string::npos &&
                 serial_snapshot.at("compile_commands.json").find("\"directory\":\".\"") !=

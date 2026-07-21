@@ -29,6 +29,12 @@
   verwenden eine gemeinsame CTest-Ressourcensperre und ein realistisches
   300-Sekunden-Limit; fachliche Assertions und die Parallelitaet der uebrigen
   176 Tests bleiben unveraendert.
+- Wiederholte Portexports uebernehmen den vorherigen Buildbaum in ein sicheres
+  atomisches Staging, lassen `user-data` und jedes `*.katana-disc` aber
+  konsequent zurueck. Bytegleiche generierte Dateien behalten ihre Zeitstempel,
+  AOT-Partitionen werden bis zu vierfach parallel emittiert und MSVC kompiliert
+  sie mit `/MP` plus `/FS`. Der synthetische End-to-End-Test belegt Cacheerhalt,
+  Retaildatenausschluss und eine nur wenige Sekunden teure zweite Regeneration.
 
 - Der native Produktpfad rendert AICA-Kanaele jetzt direkt aus den vom Gast
   beschriebenen Slotregistern und dem gemeinsam gemappten Sound-RAM. PCM16,

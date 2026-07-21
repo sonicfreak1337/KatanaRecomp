@@ -76,6 +76,13 @@ void write_file(const std::filesystem::path& root,
     auto path = secure_artifact_path(root, relative);
     std::filesystem::create_directories(path.parent_path());
     path = secure_artifact_path(root, relative);
+    if (std::filesystem::is_regular_file(path) &&
+        std::filesystem::file_size(path) == content.size()) {
+        std::ifstream existing(path, std::ios::binary);
+        std::string current(content.size(), '\0');
+        existing.read(current.data(), static_cast<std::streamsize>(current.size()));
+        if (existing && current == content) return;
+    }
     std::ofstream output(path, std::ios::binary | std::ios::trunc);
     if (!output) {
         throw std::runtime_error("Codegen-Projektdatei konnte nicht geoeffnet werden.");
@@ -150,7 +157,7 @@ std::string cmake_project(const std::vector<std::filesystem::path>& sources) {
     }
     output << ")\ntarget_compile_features(katana_generated PUBLIC cxx_std_20)\n"
            << "if(MSVC)\n"
-           << "  target_compile_options(katana_generated PRIVATE /bigobj /FS)\n"
+           << "  target_compile_options(katana_generated PRIVATE /bigobj /FS /MP)\n"
            << "endif()\n"
            << "target_include_directories(katana_generated PRIVATE\n"
            << "  \"${KATANA_RUNTIME_ROOT}/include\"\n"

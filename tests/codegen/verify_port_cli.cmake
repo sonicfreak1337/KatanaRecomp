@@ -100,6 +100,36 @@ if(NOT generated_result EQUAL 0 OR
     "${generated_output} ${generated_error}")
 endif()
 
+file(WRITE "${fixture}/port/build/katana-incremental-marker" "keep-build-cache\n")
+execute_process(
+  COMMAND "${KATANA_CLI}" port "${fixture}/disc/disc.gdi"
+          --output "${fixture}/port" --target-name cli_game
+  RESULT_VARIABLE incremental_port_result
+  OUTPUT_VARIABLE incremental_port_output
+  ERROR_VARIABLE incremental_port_error
+)
+if(NOT incremental_port_result EQUAL 0 OR
+   NOT EXISTS "${fixture}/port/build/katana-incremental-marker" OR
+   EXISTS "${fixture}/port/user-data/content/game.katana-disc")
+  file(REMOVE_RECURSE "${fixture}")
+  message(FATAL_ERROR
+    "Inkrementeller Portbuild verliert Buildcache oder kopiert Retaildaten: "
+    "${incremental_port_output} ${incremental_port_error}")
+endif()
+execute_process(
+  COMMAND "${game}" --install-disc "${fixture}/disc/disc.gdi"
+  RESULT_VARIABLE reinstall_result
+  OUTPUT_VARIABLE reinstall_output
+  ERROR_VARIABLE reinstall_error
+)
+if(NOT reinstall_result EQUAL 0 OR
+   NOT EXISTS "${fixture}/port/user-data/content/game.katana-disc")
+  file(REMOVE_RECURSE "${fixture}")
+  message(FATAL_ERROR
+    "Originaldisc wurde nach inkrementellem Publish nicht lokal reinstalliert: "
+    "${reinstall_output} ${reinstall_error}")
+endif()
+
 foreach(lifecycle_case IN ITEMS running-close focus-resume-close paused-close)
   set(ENV{KATANA_PORT_LIFECYCLE_TEST} "${lifecycle_case}")
   execute_process(

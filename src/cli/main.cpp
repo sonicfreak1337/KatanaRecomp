@@ -944,6 +944,47 @@ std::filesystem::path discover_runtime_root_for_build(const std::filesystem::pat
         "Runtime-SDK fuer Portbuild fehlt; KATANA_RUNTIME_ROOT kann es explizit angeben.");
 }
 
+void seed_incremental_port_stage(const std::filesystem::path& published,
+                                 const std::filesystem::path& stage) {
+    if (!std::filesystem::exists(published)) return;
+    const auto root_status = std::filesystem::symlink_status(published);
+    if (!std::filesystem::is_directory(root_status) || std::filesystem::is_symlink(root_status))
+        throw std::runtime_error("Vorheriger Port ist kein sicherer regulaerer Ordner.");
+    std::filesystem::create_directories(stage);
+    for (std::filesystem::recursive_directory_iterator iterator(published), end;
+         iterator != end;
+         ++iterator) {
+        const auto relative = iterator->path().lexically_relative(published);
+        if (!relative.empty() && *relative.begin() == "user-data") {
+            if (iterator->is_directory()) iterator.disable_recursion_pending();
+            continue;
+        }
+        const auto status = iterator->symlink_status();
+        if (std::filesystem::is_symlink(status))
+            throw std::runtime_error("Vorheriger Port enthaelt einen symbolischen Link.");
+        if (iterator->path().extension() == ".katana-disc") {
+            if (iterator->is_directory()) iterator.disable_recursion_pending();
+            continue;
+        }
+        const auto destination = stage / relative;
+        if (std::filesystem::is_directory(status)) {
+            std::filesystem::create_directories(destination);
+            continue;
+        }
+        if (!std::filesystem::is_regular_file(status))
+            throw std::runtime_error("Vorheriger Port enthaelt einen nicht regulaeren Eintrag.");
+        std::filesystem::create_directories(destination.parent_path());
+        std::filesystem::copy_file(iterator->path(),
+                                   destination,
+                                   std::filesystem::copy_options::overwrite_existing);
+        std::error_code timestamp_error;
+        std::filesystem::last_write_time(
+            destination, std::filesystem::last_write_time(iterator->path()), timestamp_error);
+        if (timestamp_error)
+            throw std::runtime_error("Portcache-Zeitstempel konnte nicht uebernommen werden.");
+    }
+}
+
 int export_port_project(const std::filesystem::path& gdi_path,
                         const std::filesystem::path& output_path,
                         const std::string& target_name,
@@ -982,6 +1023,8 @@ int export_port_project(const std::filesystem::path& gdi_path,
     std::filesystem::remove_all(stage, cleanup_error);
     if (cleanup_error) throw std::runtime_error("Altes Port-Staging konnte nicht entfernt werden.");
     try {
+        seed_incremental_port_stage(absolute_output, stage);
+        std::cout << "KATANA_PORT_PHASE analysis-codegen\n" << std::flush;
         const auto report = katana::codegen::export_dreamcast_port_project(
             gdi_path,
             stage,
@@ -996,15 +1039,18 @@ int export_port_project(const std::filesystem::path& gdi_path,
 #endif
         configure +=
             " -DCMAKE_BUILD_TYPE=RelWithDebInfo -DKATANA_RUNTIME_ROOT=" + shell_quote(runtime_root);
+        std::cout << "KATANA_PORT_PHASE configure\n" << std::flush;
         if (std::system(configure.c_str()) != 0) {
             throw katana::cli::Error(katana::cli::ExitCode::BuildFailure,
                                      "Port-Hostbuild konnte nicht konfiguriert werden.");
         }
         auto build =
             std::string("cmake --build ") + shell_quote(build_path) + " --target " + target_name;
+        build += " --parallel";
 #ifdef _WIN32
         build += " --config RelWithDebInfo";
 #endif
+        std::cout << "KATANA_PORT_PHASE host-build\n" << std::flush;
         if (std::system(build.c_str()) != 0) {
             throw katana::cli::Error(katana::cli::ExitCode::BuildFailure,
                                      "Port-Hosttarget konnte nicht gebaut werden.");

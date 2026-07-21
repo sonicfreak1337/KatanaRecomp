@@ -7,6 +7,14 @@ Naechstes Gate: `v0.48.0` - Integration
 Weitere interne Gates: `v0.48.0` Integration und `v0.49.0` Alpha-Candidate
 Erster oeffentlicher Release: `v0.50.0` Alpha
 
+Der iterative Portworkflow verwendet jetzt sicheres inkrementelles Staging:
+Vorhandene Buildobjekte werden fuer denselben Ausgabeport wiederverwendet,
+waehrend `user-data` und `*.katana-disc` niemals in Staging oder Paket gelangen.
+Bytegleiche Quellen behalten ihre Zeitstempel; AOT-Codegen und MSVC-Kompilierung
+arbeiten parallel. Eine zusaetzliche identische Regeneration erhoehte den
+synthetischen Gesamt-Porttest nur um rund fuenf Sekunden. `KR-4813` bleibt fuer
+den weitergehenden content-addressed Analyse-/IR-Cache offen.
+
 ## KR-4831 technisch abgeschlossen
 
 Der verteilbare Portexport schreibt keinen vollstaendigen Retail-Disc-Pack

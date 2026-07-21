@@ -22,11 +22,13 @@
 #include <algorithm>
 #include <cctype>
 #include <fstream>
+#include <future>
 #include <iomanip>
 #include <set>
 #include <sstream>
 #include <stdexcept>
 #include <system_error>
+#include <thread>
 
 namespace katana::codegen {
 namespace {
@@ -1190,6 +1192,13 @@ void write_port_file(const std::filesystem::path& root,
     const auto path = root / relative;
     if (std::filesystem::exists(path) && !replace_existing) return;
     std::filesystem::create_directories(path.parent_path());
+    if (std::filesystem::is_regular_file(path) &&
+        std::filesystem::file_size(path) == content.size()) {
+        std::ifstream existing(path, std::ios::binary);
+        std::string current(content.size(), '\0');
+        existing.read(current.data(), static_cast<std::streamsize>(current.size()));
+        if (existing && current == content) return;
+    }
     std::ofstream output(path, std::ios::binary | std::ios::trunc);
     if (!output)
         throw katana::io::InputOutputError("Port-Bootstrapdatei konnte nicht geoeffnet werden.");
@@ -1254,10 +1263,9 @@ PortExportResult export_dreamcast_port_project(const PreparedPortProgram& prepar
     global_entries.reserve(prepared.program.size());
     for (const auto& function : prepared.program)
         global_entries.push_back(function.entry_address);
-    const CppBackend backend;
     std::vector<ProjectArtifact> artifacts;
     artifacts.reserve(partitions.size() + 9u);
-    for (const auto& partition : partitions) {
+    const auto emit_partition = [&](const TranslationUnitPartition& partition) {
         auto functions = select_functions(prepared.program, partition);
         const auto contains_program_entry =
             std::any_of(functions.begin(), functions.end(), [&prepared](const auto& function) {
@@ -1273,10 +1281,24 @@ PortExportResult export_dreamcast_port_project(const PreparedPortProgram& prepar
                                      prepared.entry_address,
                                      true,
                                      true};
-        auto source = backend.emit(request).joined_text();
-        artifacts.push_back({std::filesystem::path("code") /
-                                 deterministic_translation_unit_name(partition, prepared.program),
-                             std::move(source)});
+        const CppBackend backend;
+        return ProjectArtifact{
+            std::filesystem::path("code") /
+                deterministic_translation_unit_name(partition, prepared.program),
+            backend.emit(request).joined_text()};
+    };
+    const auto hardware_jobs = std::max(1u, std::thread::hardware_concurrency());
+    const auto codegen_jobs =
+        std::min<std::size_t>({partitions.size(), static_cast<std::size_t>(hardware_jobs), 4u});
+    for (std::size_t begin = 0u; begin < partitions.size(); begin += codegen_jobs) {
+        const auto end = std::min(partitions.size(), begin + codegen_jobs);
+        std::vector<std::future<ProjectArtifact>> pending;
+        pending.reserve(end - begin);
+        for (auto index = begin; index < end; ++index) {
+            pending.push_back(std::async(
+                std::launch::async, emit_partition, std::cref(partitions[index])));
+        }
+        for (auto& future : pending) artifacts.push_back(future.get());
     }
     const auto entry_partition =
         std::find_if(partitions.begin(), partitions.end(), [&prepared](const auto& partition) {
@@ -1394,10 +1416,11 @@ PortExportResult export_dreamcast_port_project(const PreparedPortProgram& prepar
     std::filesystem::create_directories(canonical_root / "runtime");
     std::filesystem::create_directories(canonical_root / "user-data" / "content");
     const auto write = write_codegen_project(canonical_root / "generated", std::move(artifacts));
-    write_port_file(canonical_root, "CMakeLists.txt", root_cmake());
+    write_port_file(canonical_root, "CMakeLists.txt", root_cmake(), true);
     write_port_file(canonical_root,
                     ".gitignore",
-                    "/build/\n/build-*/\n/user-data/\n/content/*.katana-disc\n*.katana-disc\n");
+                    "/build/\n/build-*/\n/user-data/\n/content/*.katana-disc\n*.katana-disc\n",
+                    true);
     write_port_file(
         canonical_root,
         "INSTALL_ORIGINAL_DISC.txt",
