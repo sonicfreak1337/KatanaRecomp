@@ -8,6 +8,7 @@
 #include <functional>
 #include <map>
 #include <memory>
+#include <optional>
 #include <vector>
 
 namespace katana::runtime {
@@ -33,6 +34,7 @@ class DreamcastGdRomController final {
                              GdRomDrive drive,
                              std::function<void(std::uint64_t)> completion_observer = {},
                              ModuleLoadObserver module_load_observer = {});
+    ~DreamcastGdRomController();
     [[nodiscard]] std::uint32_t read(std::uint32_t offset, MemoryAccessWidth width);
     void write(std::uint32_t offset, std::uint32_t value, MemoryAccessWidth width);
     [[nodiscard]] std::uint32_t
@@ -50,6 +52,8 @@ class DreamcastGdRomController final {
         GdRomResponse response;
     };
     void execute_packet();
+    void schedule_packet();
+    void complete_packet(SchedulerEventId event_id, std::uint64_t cycle);
     void publish_data(std::vector<std::uint8_t> data);
     void pump_completions();
     [[nodiscard]] std::vector<std::uint8_t> build_toc(std::uint32_t session) const;
@@ -58,6 +62,7 @@ class DreamcastGdRomController final {
                                                  std::uint32_t parameters);
     [[nodiscard]] static std::uint32_t fad_to_lba(std::uint32_t fad) noexcept;
     Memory& memory_;
+    EventScheduler& scheduler_;
     GdRomDrive drive_;
     GdRomAsyncReader reader_;
     std::vector<std::uint8_t> packet_;
@@ -73,6 +78,9 @@ class DreamcastGdRomController final {
     std::uint64_t completed_commands_ = 0u;
     std::uint64_t completed_dma_ = 0u;
     ModuleLoadObserver module_load_observer_;
+    std::function<void(std::uint64_t)> completion_observer_;
+    std::optional<SchedulerEventId> packet_event_;
+    SchedulerLifetimeToken scheduler_lifetime_;
 };
 
 [[nodiscard]] std::shared_ptr<DreamcastGdRomController>

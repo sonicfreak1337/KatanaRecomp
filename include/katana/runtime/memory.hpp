@@ -32,6 +32,7 @@ enum class MemoryAccessErrorReason {
     AddressOverflow,
     DeviceRejected,
     TlbMiss,
+    TlbMultipleHit,
     InitialPageWrite,
     TlbProtection
 };

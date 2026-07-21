@@ -17,6 +17,7 @@ inline constexpr std::uint32_t event_tlb_miss_write = 0x00000060u;
 inline constexpr std::uint32_t event_initial_page_write = 0x00000080u;
 inline constexpr std::uint32_t event_tlb_protection_read = 0x000000A0u;
 inline constexpr std::uint32_t event_tlb_protection_write = 0x000000C0u;
+inline constexpr std::uint32_t event_tlb_multiple_hit = 0x00000140u;
 inline constexpr std::uint32_t event_trapa = 0x00000160u;
 inline constexpr std::uint32_t event_illegal_instruction = 0x00000180u;
 inline constexpr std::uint32_t event_slot_illegal_instruction = 0x000001A0u;

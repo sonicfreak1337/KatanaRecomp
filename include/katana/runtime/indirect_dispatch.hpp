@@ -122,7 +122,7 @@ class IndirectDispatchError final : public std::runtime_error {
 [[nodiscard]] const char* runtime_target_stability_name(RuntimeTargetStability value) noexcept;
 
 [[nodiscard]] IndirectDispatchResult dispatch_indirect(CpuState& cpu,
-                                                       const RuntimeBlockTable& table,
+                                                       RuntimeBlockTable& table,
                                                        const IndirectDispatchRequest& request);
 
 } // namespace katana::runtime

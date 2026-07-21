@@ -133,9 +133,11 @@ int main() {
     require(source.find("if (!same_register)") != std::string::npos,
             "Post-Increment besitzt keine Schutzbedingung fuer identische Register.");
 
-    require(source.find("cpu.memory.read_s8(address)") != std::string::npos &&
-                source.find("cpu.memory.read_s16(address)") != std::string::npos &&
-                source.find("cpu.memory.read_u32(address)") != std::string::npos,
+    require(source.find("katana::runtime::guest_read_s8(cpu, address)") != std::string::npos &&
+                source.find("katana::runtime::guest_read_s16(cpu, address)") !=
+                    std::string::npos &&
+                source.find("katana::runtime::guest_read_u32(cpu, address)") !=
+                    std::string::npos,
             "Post-Increment-Loads verwenden falsche Speicherbreiten.");
 
     std::cout << "Alle KR-1401 Decoder-, IR- und Codegen-Tests erfolgreich.\n";

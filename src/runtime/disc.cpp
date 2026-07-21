@@ -203,12 +203,14 @@ GdRomAsyncReader::GdRomAsyncReader(EventScheduler& scheduler,
                                    GdRomDrive drive,
                                    const GdRomTiming timing,
                                    std::function<void(std::uint64_t)> completion_observer)
-    : scheduler_(scheduler), drive_(std::move(drive)), timing_(timing),
+    : scheduler_(scheduler), scheduler_lifetime_(scheduler.lifetime_token()),
+      drive_(std::move(drive)), timing_(timing),
       completion_observer_(std::move(completion_observer)) {
     reset_observer_ = scheduler_.add_reset_observer([this] { handle_scheduler_reset(); });
 }
 
 GdRomAsyncReader::~GdRomAsyncReader() {
+    if (scheduler_lifetime_.expired()) return;
     for (const auto& request : pending_)
         static_cast<void>(scheduler_.cancel(request.event_id));
     static_cast<void>(scheduler_.remove_reset_observer(reset_observer_));

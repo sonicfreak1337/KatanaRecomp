@@ -424,13 +424,17 @@ initialize_dreamcast_runtime(CpuState& cpu,
                 return;
             }
             const auto request = registers->render_request_count();
+            bool rendered = false;
             try {
                 auto frame = fifo->finish_frame();
-                if (frame.modifier_volumes_present)
+                if (frame.modifier_volumes_present) {
                     renderer->record_error(PvrRenderError::UnsupportedFeature,
                                            request,
                                            "PVR-Modifier-Volumes wurden erfasst, aber nicht gerastert.");
-                renderer->render(frame, *registers, *target);
+                } else {
+                    renderer->render(frame, *registers, *target);
+                    rendered = true;
+                }
             } catch (const std::out_of_range& error) {
                 renderer->record_error(PvrRenderError::MemoryRange, request, error.what());
             } catch (const std::invalid_argument& error) {
@@ -444,7 +448,7 @@ initialize_dreamcast_runtime(CpuState& cpu,
                                        request,
                                        "Unbekannter Fehler an der PVR-Produktgrenze.");
             }
-            raise_now(SystemAsicEvent::PvrRenderDone);
+            if (rendered) raise_now(SystemAsicEvent::PvrRenderDone);
         });
     state.aica = std::make_shared<AicaExecutionController>(state.scheduler.get());
     state.aica->interrupts().set_observer(
@@ -500,6 +504,12 @@ initialize_dreamcast_runtime(CpuState& cpu,
             module.guest_start = module_address;
             module.bytes.assign(bytes.begin(), bytes.end());
             module.kind = ExecutableModuleKind::Overlay;
+            module.executable_permission = false;
+            module.control_transfer_promotion_allowed = true;
+            module.range_roles.push_back(
+                {0u,
+                 static_cast<std::uint32_t>(module.bytes.size()),
+                 ExecutableStorageRole::ProvenData});
             module_catalog->publish_loaded_range(
                 std::move(module), *module_blocks, *module_tracker);
         });
@@ -614,13 +624,14 @@ initialize_dreamcast_runtime(CpuState& cpu,
                                          0x8C000000u,
                                          0x0C000000u,
                                          static_cast<std::uint32_t>(dreamcast_main_ram_size)});
-    static_cast<void>(firmware_mode);
-    install_hle_bios_abi(cpu.memory,
-                         *state.runtime_blocks,
-                         *state.firmware_handoff,
-                         {},
-                         0u,
-                         state.code_tracker.get());
+    if (firmware_mode == DreamcastRuntimeFirmwareMode::HleBiosAbi) {
+        install_hle_bios_abi(cpu.memory,
+                             *state.runtime_blocks,
+                             *state.firmware_handoff,
+                             {},
+                             0u,
+                             state.code_tracker.get());
+    }
     cpu.memory.write_bytes(dreamcast_disc_boot_address, boot.boot_file, CodeWriteSource::Copy);
     state.loaded_boot_bytes = boot.boot_file.size();
     reset_cpu(cpu,

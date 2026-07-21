@@ -86,8 +86,8 @@ int main() {
     bus.write_u32(0x005F6890u, 0x7611u);
     require(system_bus->system_reset_requests() == 1u && bus.read_u32(0x005F6800u) == 0u,
             "Systemreset-Schluessel setzt den Steuerblock nicht deterministisch zurueck.");
-    require(static_cast<std::uint16_t>(SystemAsicEvent::PvrDma) == 0x0013u,
-            "PVR-DMA verwendet nicht das reale System-ASIC-Ereignis 0x0013.");
+    static_assert(static_cast<std::uint16_t>(SystemAsicEvent::PvrDma) == 0x0013u,
+                  "PVR-DMA verwendet nicht das reale System-ASIC-Ereignis 0x0013.");
 
     bus.write_u32(0xA05F6930u,
                   (1u << 3u) | (1u << 12u) | (1u << 14u) | (1u << 15u) | (1u << 19u));

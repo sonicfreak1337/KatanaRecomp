@@ -34,13 +34,15 @@ int main() {
             "CCR besitzt keinen definierten Resetwert.");
     memory.write_u32(sh4_cache_control_address,
                      Sh4CacheControl::instruction_invalidate | 0x00000001u);
-    require(memory.read_u32(sh4_cache_control_address) == 1u &&
-                cache->instruction_invalidation_count() == 1u,
+    const auto cached_value = memory.read_u32(sh4_cache_control_address);
+    const auto invalidations = cache->instruction_invalidation_count();
+    require(cached_value == 1u && invalidations == 1u,
             "CCR-Invalidierung ist nicht selbstloeschend oder wird nicht gezaehlt.");
-    require(throws<std::invalid_argument>(
-                [&] { memory.write_u32(sh4_cache_control_address, 0x40000000u); }) &&
-                throws<std::invalid_argument>(
-                    [&] { static_cast<void>(memory.read_u16(sh4_cache_control_address)); }),
+    const auto invalid_bits = throws<MemoryAccessError>(
+        [&] { memory.write_u32(sh4_cache_control_address, 0x40000000u); });
+    const auto invalid_width = throws<MemoryAccessError>(
+        [&] { static_cast<void>(memory.read_u16(sh4_cache_control_address)); });
+    require(invalid_bits && invalid_width,
             "CCR akzeptiert reservierte Bits oder falsche Zugriffsbreiten.");
     cache->reset();
     require(cache->value() == 0u && cache->instruction_invalidation_count() == 0u,

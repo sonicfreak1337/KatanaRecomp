@@ -151,6 +151,7 @@ void prefetch(CpuState& cpu, const std::uint32_t address) noexcept {
 void load_tlb(CpuState& cpu) noexcept {
     constexpr std::uint32_t mmucr_urc_shift = 10u;
     constexpr std::uint32_t mmucr_urc_mask = 0x3Fu;
+    constexpr std::uint32_t mmucr_urb_shift = 18u;
     const auto index = static_cast<std::size_t>((cpu.mmucr >> mmucr_urc_shift) & mmucr_urc_mask);
     cpu.utlb[index] = {cpu.pteh, cpu.ptel, cpu.ptea};
     if (cpu.address_space) {
@@ -170,6 +171,12 @@ void load_tlb(CpuState& cpu) noexcept {
                                            (cpu.ptel & 0x00000004u) != 0u,
                                            (cpu.ptel & 0x00000002u) != 0u});
     }
+    const auto urb = static_cast<std::uint32_t>((cpu.mmucr >> mmucr_urb_shift) & mmucr_urc_mask);
+    const auto boundary = urb == 0u ? 64u : urb;
+    const auto next_urc = static_cast<std::uint32_t>((index + 1u) >= boundary ? 0u : index + 1u);
+    cpu.mmucr = (cpu.mmucr & ~(mmucr_urc_mask << mmucr_urc_shift)) |
+                (next_urc << mmucr_urc_shift);
+    if (cpu.address_space) cpu.address_space->write_mmucr(cpu.mmucr);
     ++cpu.tlb_load_count;
 }
 
@@ -180,6 +187,8 @@ MemoryAccessErrorReason translation_reason(const ExceptionCause cause) noexcept 
     case ExceptionCause::TlbMissRead:
     case ExceptionCause::TlbMissWrite:
         return MemoryAccessErrorReason::TlbMiss;
+    case ExceptionCause::TlbMultipleHit:
+        return MemoryAccessErrorReason::TlbMultipleHit;
     case ExceptionCause::InitialPageWrite:
         return MemoryAccessErrorReason::InitialPageWrite;
     case ExceptionCause::TlbProtectionRead:
@@ -197,7 +206,7 @@ std::uint32_t translate_guest_address(CpuState& cpu,
                                       const MemoryAccessOperation operation,
                                       const MemoryAccessWidth width,
                                       const bool instruction) {
-    if (!cpu.address_space) return address;
+    if (!cpu.address_space) return canonical_physical_address(address);
     const auto access = instruction ? TranslationAccess::Instruction
                                     : operation == MemoryAccessOperation::Write
                                           ? TranslationAccess::Write

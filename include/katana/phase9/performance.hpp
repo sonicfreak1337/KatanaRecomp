@@ -145,7 +145,7 @@ class MonomorphicDispatchCache final {
   public:
     [[nodiscard]] runtime::IndirectDispatchResult
     dispatch(runtime::CpuState& cpu,
-             const runtime::RuntimeBlockTable& table,
+             runtime::RuntimeBlockTable& table,
              const runtime::IndirectDispatchRequest& request,
              std::uint64_t block_generation,
              ExecutionProfiler* profiler = nullptr);

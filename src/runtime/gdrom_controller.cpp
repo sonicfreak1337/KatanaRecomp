@@ -41,9 +41,16 @@ DreamcastGdRomController::DreamcastGdRomController(
     GdRomDrive drive,
     std::function<void(std::uint64_t)> completion_observer,
     ModuleLoadObserver module_load_observer)
-    : memory_(memory), drive_(std::move(drive)),
-      reader_(scheduler, drive_, GdRomTiming{}, std::move(completion_observer)),
-      module_load_observer_(std::move(module_load_observer)) {}
+    : memory_(memory), scheduler_(scheduler), drive_(std::move(drive)),
+      reader_(scheduler, drive_, GdRomTiming{}, completion_observer),
+      module_load_observer_(std::move(module_load_observer)),
+      completion_observer_(std::move(completion_observer)),
+      scheduler_lifetime_(scheduler.lifetime_token()) {}
+
+DreamcastGdRomController::~DreamcastGdRomController() {
+    if (packet_event_ && !scheduler_lifetime_.expired())
+        static_cast<void>(scheduler_.cancel(*packet_event_));
+}
 
 std::uint32_t DreamcastGdRomController::read(const std::uint32_t offset,
                                              const MemoryAccessWidth width) {
@@ -86,7 +93,7 @@ void DreamcastGdRomController::write(const std::uint32_t offset,
             throw std::runtime_error("GD-ROM-Datenregister braucht eine 16-Bit-Paketphase.");
         packet_.push_back(static_cast<std::uint8_t>(value));
         packet_.push_back(static_cast<std::uint8_t>(value >> 8u));
-        if (packet_.size() == 12u) execute_packet();
+        if (packet_.size() == 12u) schedule_packet();
         return;
     }
     if (width != MemoryAccessWidth::Byte)
@@ -168,12 +175,35 @@ void DreamcastGdRomController::execute_packet() {
         default:
             throw std::runtime_error("Unbekannter GD-ROM-Paketopcode.");
         }
+    } catch (const std::exception&) {
+        status_ = ata_ready | ata_error;
+        error_ = 0x04u;
+        interrupt_reason_ = 3u;
+    }
+}
+
+void DreamcastGdRomController::schedule_packet() {
+    if (packet_event_) throw std::logic_error("GD-ROM-Paketkommando ist bereits aktiv.");
+    expecting_packet_ = false;
+    status_ = 0x80u;
+    interrupt_reason_ = 0u;
+    packet_event_ = scheduler_.schedule_after(
+        1'000u,
+        [this](const auto event_id, const auto cycle) { complete_packet(event_id, cycle); });
+}
+
+void DreamcastGdRomController::complete_packet(const SchedulerEventId event_id,
+                                               const std::uint64_t cycle) {
+    if (!packet_event_ || *packet_event_ != event_id) return;
+    packet_event_.reset();
+    try {
+        execute_packet();
     } catch (...) {
         status_ = ata_ready | ata_error;
         error_ = 0x04u;
         interrupt_reason_ = 3u;
-        throw;
     }
+    if (completion_observer_) completion_observer_(cycle);
 }
 
 std::uint32_t DreamcastGdRomController::fad_to_lba(const std::uint32_t fad) noexcept {
@@ -327,6 +357,9 @@ GdRomProductStatus DreamcastGdRomController::status() const noexcept {
 }
 
 void DreamcastGdRomController::reset() noexcept {
+    if (packet_event_ && !scheduler_lifetime_.expired())
+        static_cast<void>(scheduler_.cancel(*packet_event_));
+    packet_event_.reset();
     packet_.clear();
     data_.clear();
     data_cursor_ = 0u;

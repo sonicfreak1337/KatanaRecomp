@@ -1,6 +1,8 @@
 if(NOT DEFINED KATANA_RECOMP OR NOT DEFINED FIXTURE OR NOT DEFINED OUTPUT_DIR
     OR NOT DEFINED CXX_COMPILER OR NOT DEFINED CXX_COMPILER_ID
-    OR NOT DEFINED KATANA_SOURCE_DIR OR NOT DEFINED KATANA_GENERATED_INCLUDE)
+    OR NOT DEFINED KATANA_RUNTIME OR NOT DEFINED KATANA_SOURCE_DIR
+    OR NOT DEFINED KATANA_GENERATED_INCLUDE OR NOT DEFINED KATANA_BUILD_TYPE
+    OR NOT DEFINED KATANA_ENABLE_SANITIZERS)
     message(FATAL_ERROR
         "KatanaRecomp, Fixture, Compiler, Quellpfad oder Ausgabeverzeichnis fehlt."
     )
@@ -76,6 +78,14 @@ foreach(variant IN ITEMS optimized unoptimized)
         "std::cout << cpu.r[1] << ' ' << cpu.r[2] << ' ' << cpu.pc << ' ' << cpu.pr << '\\n'; }\n"
     )
     if(CXX_COMPILER_ID STREQUAL "MSVC")
+        if(KATANA_BUILD_TYPE STREQUAL "Debug")
+            set(runtime_compile_flags /MDd /Zi)
+        else()
+            set(runtime_compile_flags /MD)
+        endif()
+        if(KATANA_ENABLE_SANITIZERS)
+            list(APPEND runtime_compile_flags /fsanitize=address /Oy-)
+        endif()
         execute_process(
             COMMAND
                 "${CXX_COMPILER}"
@@ -83,28 +93,35 @@ foreach(variant IN ITEMS optimized unoptimized)
                 /std:c++20
                 /EHsc
                 /utf-8
+                ${runtime_compile_flags}
                 "/I${KATANA_SOURCE_DIR}/include"
                 "/I${KATANA_GENERATED_INCLUDE}"
                 "${harness}"
-                "${KATANA_SOURCE_DIR}/src/runtime/exception.cpp"
-                "${KATANA_SOURCE_DIR}/src/runtime/memory.cpp"
-                "${KATANA_SOURCE_DIR}/src/runtime/runtime.cpp"
+                "${KATANA_RUNTIME}"
+                gdi32.lib
+                user32.lib
+                winmm.lib
                 "/Fe${executable}"
             RESULT_VARIABLE compile_result
             OUTPUT_VARIABLE compile_output
             ERROR_VARIABLE compile_error
         )
     else()
+        set(runtime_compile_flags)
+        if(KATANA_ENABLE_SANITIZERS)
+            list(APPEND runtime_compile_flags
+                -fsanitize=address,undefined
+                -fno-sanitize-recover=all)
+        endif()
         execute_process(
             COMMAND
                 "${CXX_COMPILER}"
                 -std=c++20
+                ${runtime_compile_flags}
                 "-I${KATANA_SOURCE_DIR}/include"
                 "-I${KATANA_GENERATED_INCLUDE}"
                 "${harness}"
-                "${KATANA_SOURCE_DIR}/src/runtime/exception.cpp"
-                "${KATANA_SOURCE_DIR}/src/runtime/memory.cpp"
-                "${KATANA_SOURCE_DIR}/src/runtime/runtime.cpp"
+                "${KATANA_RUNTIME}"
                 -o
                 "${executable}"
             RESULT_VARIABLE compile_result

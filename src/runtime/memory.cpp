@@ -90,6 +90,9 @@ std::string access_error_message(const MemoryAccessErrorReason reason,
     case MemoryAccessErrorReason::TlbMiss:
         output << "keine passende gueltige TLB-Abbildung.";
         break;
+    case MemoryAccessErrorReason::TlbMultipleHit:
+        output << "mehrere gueltige TLB-Abbildungen treffen dieselbe Adresse.";
+        break;
     case MemoryAccessErrorReason::InitialPageWrite:
         output << "TLB-Seite ist noch nicht als dirty markiert.";
         break;

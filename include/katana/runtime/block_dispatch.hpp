@@ -27,7 +27,7 @@ struct BlockDispatchOutcome {
 
 class CanonicalBlockDispatcher {
   public:
-    explicit CanonicalBlockDispatcher(const RuntimeBlockTable& table,
+    explicit CanonicalBlockDispatcher(RuntimeBlockTable& table,
                                       DispatchDiagnosticRecorder* diagnostics = nullptr,
                                       DemandBlockMaterializer* materializer = nullptr,
                                       IndirectDispatchMetrics* metrics = nullptr);
@@ -44,7 +44,7 @@ class CanonicalBlockDispatcher {
     incoming_link_count(const std::string& target_identity) const noexcept;
 
   private:
-    const RuntimeBlockTable& table_;
+    RuntimeBlockTable& table_;
     DispatchDiagnosticRecorder* diagnostics_ = nullptr;
     DemandBlockMaterializer* materializer_ = nullptr;
     IndirectDispatchMetrics* metrics_ = nullptr;

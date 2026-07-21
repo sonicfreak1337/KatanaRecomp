@@ -199,6 +199,51 @@ const ExecutableModule* ExecutableModuleCatalog::find(const std::string_view id)
     return found == modules_.end() ? nullptr : &*found;
 }
 
+bool ExecutableModuleCatalog::authorize_control_transfer(const std::uint32_t address,
+                                                         const std::uint32_t maximum_bytes) {
+    if ((address & 1u) != 0u || maximum_bytes < 2u) return false;
+    auto found = std::find_if(modules_.begin(), modules_.end(), [&](const auto& module) {
+        return module.contains(address, 2u);
+    });
+    if (found == modules_.end()) return false;
+    if (found->executable_permission && found->materializable(address, 2u)) return true;
+    if (!found->active || !found->control_transfer_promotion_allowed) return false;
+    const auto begin = address - found->guest_start;
+    const auto end = static_cast<std::uint32_t>(std::min<std::uint64_t>(
+        found->bytes.size(), static_cast<std::uint64_t>(begin) + maximum_bytes));
+    std::vector<std::pair<std::uint32_t, std::uint32_t>> executable{{begin, end}};
+    for (const auto& range : found->range_roles) {
+        if (range.role == ExecutableStorageRole::RuntimeMaterializable && range.size != 0u)
+            executable.emplace_back(range.offset, range.offset + range.size);
+    }
+    std::sort(executable.begin(), executable.end());
+    std::vector<std::pair<std::uint32_t, std::uint32_t>> merged;
+    for (const auto interval : executable) {
+        if (merged.empty() || interval.first > merged.back().second)
+            merged.push_back(interval);
+        else
+            merged.back().second = std::max(merged.back().second, interval.second);
+    }
+    found->range_roles.clear();
+    std::uint32_t cursor = 0u;
+    for (const auto interval : merged) {
+        if (cursor < interval.first)
+            found->range_roles.push_back(
+                {cursor, interval.first - cursor, ExecutableStorageRole::ProvenData});
+        found->range_roles.push_back({interval.first,
+                                      interval.second - interval.first,
+                                      ExecutableStorageRole::RuntimeMaterializable});
+        cursor = interval.second;
+    }
+    if (cursor < found->bytes.size())
+        found->range_roles.push_back(
+            {cursor,
+             static_cast<std::uint32_t>(found->bytes.size() - cursor),
+             ExecutableStorageRole::ProvenData});
+    found->executable_permission = true;
+    return true;
+}
+
 bool ExecutableModuleCatalog::validate_bytes(const Memory& memory,
                                              const std::uint32_t address,
                                              const std::size_t width) const {
@@ -285,19 +330,25 @@ DemandBlockMaterializer::try_materialize(CpuState& cpu,
         fail(MaterializationFailure::Uncommitted, target);
         return std::nullopt;
     }
-    const auto* module = modules_.resolve(target, 2u);
+    auto* module = modules_.resolve(target, 2u);
     if (module == nullptr) {
         fail(MaterializationFailure::UnknownSource, target);
         return std::nullopt;
     }
     if (!module->executable_permission) {
-        fail(MaterializationFailure::PermissionDenied, target);
-        return std::nullopt;
-    }
-    if (!module->materializable(target, 2u)) {
+        if (!module->control_transfer_promotion_allowed) {
+            fail(MaterializationFailure::PermissionDenied, target);
+            return std::nullopt;
+        }
+        if (!modules_.authorize_control_transfer(target)) {
+            fail(MaterializationFailure::ProvenNonCode, target);
+            return std::nullopt;
+        }
+    } else if (!module->materializable(target, 2u)) {
         fail(MaterializationFailure::ProvenNonCode, target);
         return std::nullopt;
     }
+    module = modules_.resolve(target, 2u);
     if (metrics_.materializations >= policy_.max_blocks ||
         metrics_.materializations >= policy_.max_materializations_per_run ||
         metrics_.materialized_bytes >= policy_.max_bytes) {
@@ -333,15 +384,15 @@ DemandBlockMaterializer::try_materialize(CpuState& cpu,
         fail(MaterializationFailure::DecodeRejected, target);
         return std::nullopt;
     }
-    if (!candidate.bounded_analysis_complete) {
+    if (!candidate.interpreter_backed && !candidate.bounded_analysis_complete) {
         fail(MaterializationFailure::AnalysisIncomplete, target);
         return std::nullopt;
     }
-    if (!candidate.ir_verified) {
+    if (!candidate.interpreter_backed && !candidate.ir_verified) {
         fail(MaterializationFailure::IrVerificationFailed, target);
         return std::nullopt;
     }
-    if (!candidate.code_generated) {
+    if (!candidate.interpreter_backed && !candidate.code_generated) {
         fail(MaterializationFailure::CodeGenerationFailed, target);
         return std::nullopt;
     }
@@ -425,6 +476,7 @@ DemandBlockMaterializer::try_materialize(CpuState& cpu,
         throw;
     }
     increment(metrics_.materializations);
+    if (candidate.interpreter_backed) increment(metrics_.interpreter_materializations);
     const auto materialized_size = block_size;
     metrics_.materialized_bytes += materialized_size;
     record_success(target);
@@ -577,6 +629,7 @@ format_block_materialization_metrics_json(const BlockMaterializationMetrics& met
     std::ostringstream output;
     output << "{\"schema\":\"katana-materialization-v1\",\"materialization_attempts\":"
            << metrics.requests << ",\"materialization_successes\":" << metrics.materializations
+           << ",\"interpreter_materializations\":" << metrics.interpreter_materializations
            << ",\"materialization_rejections\":" << metrics.misses
            << ",\"materialization_budget_failures\":" << metrics.budget_failures
            << ",\"generation_revalidation_failures\":" << metrics.generation_revalidation_failures

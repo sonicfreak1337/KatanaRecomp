@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <iomanip>
+#include <iterator>
 #include <sstream>
 
 namespace katana::runtime {
@@ -110,17 +111,20 @@ TranslationResult RuntimeAddressSpace::translate(const std::uint32_t address,
     if (segment == 6u && !privileged)
         throw TranslationError(access, address, read_cause);
 
-    const auto found = std::find_if(mappings_.begin(), mappings_.end(), [&](const auto& value) {
+    const auto matches = [&](const auto& value) {
         const auto start = static_cast<std::uint64_t>(value.virtual_page);
         const auto end = start + value.page_size;
         return value.valid && address >= start && static_cast<std::uint64_t>(address) < end &&
                (value.shared || value.asid == asid_);
-    });
+    };
+    const auto found = std::find_if(mappings_.begin(), mappings_.end(), matches);
     if (found == mappings_.end())
         throw TranslationError(access,
                                address,
                                access == TranslationAccess::Write ? ExceptionCause::TlbMissWrite
                                                                   : ExceptionCause::TlbMissRead);
+    if (std::find_if(std::next(found), mappings_.end(), matches) != mappings_.end())
+        throw TranslationError(access, address, ExceptionCause::TlbMultipleHit);
     if (!privileged && !found->user_access)
         throw TranslationError(access,
                                address,

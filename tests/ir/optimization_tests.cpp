@@ -167,7 +167,7 @@ int main() {
     const std::array<katana::ir::Function, 1> forwarded_program = {load_store_function};
     const auto forwarded_cpp =
         katana::codegen::emit_cpp_program(forwarded_program, load_store_function.entry_address);
-    require(forwarded_cpp.find("static_cast<void>(cpu.memory.read_u32(cpu.r[1]));") !=
+    require(forwarded_cpp.find("static_cast<void>(katana::runtime::guest_read_u32(cpu, cpu.r[1]));") !=
                     std::string::npos &&
                 forwarded_cpp.find("cpu.r[3] = forwarded_value;") != std::string::npos,
             "Codegen erhaelt den Speicher-Read beim Load-Forwarding nicht.");

@@ -2,12 +2,12 @@
 
 Abgeschlossener interner Meilenstein: `v0.47.0`
 Phase: `v0.48.0` - Integration
-Naechster Roadmap-Task: `KR-4831`
+Naechster Roadmap-Task: `KR-4811`
 Naechstes Gate: `v0.48.0` - Integration
 Weitere interne Gates: `v0.48.0` Integration und `v0.49.0` Alpha-Candidate
 Erster oeffentlicher Release: `v0.50.0` Alpha
 
-## KR-4831 P0 in Arbeit
+## KR-4831 technisch abgeschlossen
 
 Der verteilbare Portexport schreibt keinen vollstaendigen Retail-Disc-Pack
 mehr. Er veroeffentlicht eine spielagnostische, pfadfreie
@@ -24,8 +24,27 @@ Recipe 2. Die Content-Root entsteht aus den wirklich gelesenen Raw-Chunks und
 wird sowohl beim Schreiben gegen die Recipe als auch beim Oeffnen gegen
 Tracktabelle und Chunkindex geprueft; abweichendes Staging wird nicht
 veroeffentlicht. Runtime-ABI 16 und Portprojektvertrag 9 versionieren zugleich
-den echten gastzeitgebundenen AICA-Produktmixer. Das einmalige v0.48-
-Gesamtgate und der anschliessende private PAL-Nachweis stehen noch aus.
+den echten gastzeitgebundenen AICA-Produktmixer. Das kumulative v0.48-
+Debug-Gate ist mit 178 von 178 Tests bestanden; der anschliessende private
+PAL-Nachweis steht noch aus.
+
+Der anschliessende P0-Runtimeblock korrigiert den zweiten SH-4-Ausfuehrungskern
+und seine AOT-Grenze: Pre-Decrement-Fault-Rollback, SHAD/SHLD bei negativen
+32er-Vielfachen, PR-Sichtbarkeit und -Rollback im Delay-Slot sowie die
+Instruktionszaehlung sind durch eine eigene Regression belegt. Jeder native
+AOT-Block kehrt fuer den naechsten Instruction Fetch in den zentralen
+Dispatcher zurueck. MMU-Varianten werden nur bei identischer physischer
+Codeherkunft an vorhandenen AOT-Code gebunden; echte Remaps verwenden keinen
+stale Block. URC/URB und Multiple-Hit sind geschlossen getestet.
+
+GD-ROM-Paketkommandos und G1-DMA schliessen nun erst nach Gastzeit ab. Bytes
+werden vor der G1-Completion nicht sichtbar, normale Paketfehler bleiben im
+ATA-Vertrag, und ein fehlgeschlagener PVR-Render erzeugt kein `RenderDone`.
+Direct- und HLE-Firmwaremodus sind getrennt. Der C++-Emitter routet jeden
+Gastzugriff direkt ueber die MMU-Helfer statt durch globale Textersetzung.
+Die fokussierten P0-Regressionen und der vollstaendige 178er-Debug-Gate sind
+gruen. Ein neuer privater PAL-Lauf ist noch nicht erfolgt, daher bleibt der
+erste echte Gastframe offen.
 
 ## Privater PAL-Runtime-Bring-up
 

@@ -1,5 +1,6 @@
 #include "katana/runtime/indirect_dispatch.hpp"
 
+#include "katana/runtime/block_guards.hpp"
 #include "katana/runtime/exception.hpp"
 #include "katana/runtime/executable_modules.hpp"
 
@@ -311,18 +312,26 @@ const char* runtime_dispatch_class_name(const RuntimeDispatchClass value) noexce
 }
 
 IndirectDispatchResult dispatch_indirect(CpuState& cpu,
-                                         const RuntimeBlockTable& table,
+                                         RuntimeBlockTable& table,
                                          const IndirectDispatchRequest& request) {
     const auto requested_target =
         request.kind == IndirectDispatchKind::Return ? cpu.pr : request.target;
     auto target = requested_target;
     std::uint32_t physical = 0u;
+    auto effective_variant = request.variant;
     try {
         physical = translate_guest_address(cpu,
                                            target,
                                            MemoryAccessOperation::Read,
                                            MemoryAccessWidth::Halfword,
                                            true);
+        if (cpu.address_space) {
+            const auto translation = cpu.address_space->translate(
+                target, TranslationAccess::Instruction, cpu.privileged_mode());
+            if (!translation.no_mmu_fastpath)
+                effective_variant =
+                    block_variant_key(cpu.address_space->guard_for(target, cpu.read_fpscr()));
+        }
     } catch (const MemoryAccessError& error) {
         enter_memory_exception(cpu, error, request.callsite);
         target = cpu.pc;
@@ -333,7 +342,7 @@ IndirectDispatchResult dispatch_indirect(CpuState& cpu,
                                            true);
     }
     const auto reject = [&](const DispatchDiagnosticError error) {
-        table.mark_rejected(target, request.variant);
+        table.mark_rejected(target, effective_variant);
         if (request.metrics != nullptr)
             request.metrics->record_miss(request.dispatch_class, error, request.callsite, target);
         diagnose(request, target, cpu.pr, false, false, error);
@@ -349,21 +358,26 @@ IndirectDispatchResult dispatch_indirect(CpuState& cpu,
     if ((target & 1u) != 0u) {
         if (request.materializer != nullptr) {
             static_cast<void>(request.materializer->try_materialize(
-                cpu, target, request.variant, request.callsite));
+                cpu, target, effective_variant, request.callsite));
             reject(materialization_error(request.materializer->last_failure()));
         }
         reject(DispatchDiagnosticError::Misaligned);
     }
-    auto block = table.lookup(target, request.variant);
+    auto block = table.lookup(target, effective_variant);
     bool alias_lookup = false;
     if (!block) {
-        block = table.lookup_physical(physical, request.variant);
+        block = table.lookup_physical(physical, effective_variant);
         alias_lookup = block.has_value();
+    }
+    if (!block && effective_variant != request.variant) {
+        block = table.register_static_variant(
+            target, physical, request.variant, effective_variant);
+        alias_lookup = false;
     }
     bool materialized = false;
     if (!block && request.materializer != nullptr) {
         block =
-            request.materializer->try_materialize(cpu, target, request.variant, request.callsite);
+            request.materializer->try_materialize(cpu, target, effective_variant, request.callsite);
         alias_lookup = false;
         materialized = block.has_value();
     }

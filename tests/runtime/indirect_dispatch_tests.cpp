@@ -1,4 +1,5 @@
 #include "katana/runtime/indirect_dispatch.hpp"
+#include "katana/runtime/block_guards.hpp"
 
 #include <iostream>
 #include <stdexcept>
@@ -129,6 +130,46 @@ int main() {
                     metrics.serialize_json().find("\"class\":\"runtime-only\"") !=
                         std::string::npos,
                 "Runtime-only-Zaehler oder erster Fehler sind nicht stabil.");
+
+        RuntimeBlockTable mmu_table;
+        static_cast<void>(mmu_table.register_static({0x00001000u,
+                                                     0x0C001000u,
+                                                     4u,
+                                                     BlockEndKind::Return,
+                                                     {},
+                                                     block,
+                                                     "mmu-static",
+                                                     false}));
+        CpuState mmu_cpu;
+        mmu_cpu.write_sr(sr_md_mask);
+        mmu_cpu.address_space = std::make_shared<RuntimeAddressSpace>();
+        mmu_cpu.address_space->set_mode(AddressTranslationMode::Mmu);
+        mmu_cpu.address_space->write_mmucr(1u);
+        mmu_cpu.address_space->ldtlb(
+            {0x00001000u, 0x0C001000u, 4096u, 0u, 0u, true, true, true, true, true, true, false});
+        const auto mmu_dispatch = dispatch_indirect(
+            mmu_cpu,
+            mmu_table,
+            {IndirectDispatchKind::TailJump, 0x00000000u, 0x00001000u, 0u, {}, {}});
+        const auto mmu_block = mmu_table.resolve(mmu_dispatch.block);
+        require(mmu_block && mmu_block->get().variant.mmu_generation != 0u &&
+                    mmu_dispatch.physical_target == 0x0C001000u,
+                "Statischer AOT-Block wird nicht an die aktive MMU-Variante gebunden.");
+
+        mmu_cpu.address_space->ldtlb(
+            {0x00001000u, 0x0D001000u, 4096u, 0u, 0u, true, true, true, true, true, true, false});
+        bool remap_rejected = false;
+        try {
+            static_cast<void>(dispatch_indirect(
+                mmu_cpu,
+                mmu_table,
+                {IndirectDispatchKind::TailJump, 0x00000002u, 0x00001000u, 0u, {}, {}}));
+        } catch (const IndirectDispatchError& error) {
+            remap_rejected =
+                std::string(error.what()).find("unknown-target") != std::string::npos;
+        }
+        require(remap_rejected,
+                "Physisch remappter Code verwendet einen stale statischen AOT-Block wieder.");
 
         RuntimeBlockTable invalid_table;
         static_cast<void>(invalid_table.register_static({0x8C002000u,

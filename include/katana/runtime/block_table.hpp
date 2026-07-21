@@ -73,6 +73,11 @@ struct RuntimeBlockLookupCounters {
 class RuntimeBlockTable {
   public:
     [[nodiscard]] RuntimeBlockHandle register_static(RuntimeBlock block);
+    [[nodiscard]] std::optional<RuntimeBlockHandle>
+    register_static_variant(std::uint32_t virtual_address,
+                            std::uint32_t physical_address,
+                            const BlockVariantKey& source_variant,
+                            const BlockVariantKey& target_variant);
     [[nodiscard]] std::vector<RuntimeBlockHandle>
     register_static_bulk(std::vector<RuntimeBlock> blocks);
     void seal_static() noexcept;

@@ -119,6 +119,7 @@ class Sh4Dmac final {
     void set_fault(std::size_t index, DmaFaultReason reason, std::size_t size) noexcept;
 
     EventScheduler& scheduler_;
+    SchedulerLifetimeToken scheduler_lifetime_;
     Memory& memory_;
     DmaTiming timing_;
     DmaExecutionMode execution_mode_ = DmaExecutionMode::SingleUnitReference;

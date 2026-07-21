@@ -50,6 +50,7 @@ struct ExecutableModule {
     std::uint64_t generation = 1u;
     std::uint64_t relocation_generation = 1u;
     bool executable_permission = true;
+    bool control_transfer_promotion_allowed = false;
     bool writable = true;
     bool active = true;
 
@@ -81,6 +82,8 @@ class ExecutableModuleCatalog final {
     [[nodiscard]] const ExecutableModule* resolve(std::uint32_t address,
                                                   std::size_t width = 1u) const noexcept;
     [[nodiscard]] const ExecutableModule* find(std::string_view id) const noexcept;
+    [[nodiscard]] bool authorize_control_transfer(std::uint32_t address,
+                                                  std::uint32_t maximum_bytes = 128u);
     [[nodiscard]] bool
     validate_bytes(const Memory& memory, std::uint32_t address, std::size_t width) const;
     [[nodiscard]] const ExecutableModuleMetrics& metrics() const noexcept;
@@ -129,6 +132,7 @@ struct BlockMaterializationMetrics {
     std::uint64_t requests = 0u;
     std::uint64_t cache_hits = 0u;
     std::uint64_t materializations = 0u;
+    std::uint64_t interpreter_materializations = 0u;
     std::uint64_t materialized_bytes = 0u;
     std::uint64_t misses = 0u;
     std::uint64_t budget_failures = 0u;
@@ -142,6 +146,7 @@ struct BlockMaterializationMetrics {
 struct MaterializedBlockCandidate {
     RuntimeBlock block;
     bool decode_candidate_validated = false;
+    bool interpreter_backed = false;
     bool bounded_analysis_complete = false;
     bool ir_verified = false;
     bool code_generated = false;

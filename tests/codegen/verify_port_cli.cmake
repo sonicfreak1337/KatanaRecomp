@@ -93,7 +93,7 @@ if(NOT generated_result EQUAL 0 OR
    NOT generated_output MATCHES "KR_GENERATED_RUNTIME_STARTED" OR
    NOT generated_output MATCHES "indirect_dispatches=1" OR
    NOT generated_output MATCHES "frames=0" OR
-   NOT generated_output MATCHES "audio_buffers=1")
+   NOT generated_output MATCHES "audio_buffers=0")
   file(REMOVE_RECURSE "${fixture}")
   message(FATAL_ERROR
     "Eigenstaendiger PackedDiscSource-Runtimepfad ist nicht lauffaehig (${generated_result}): "

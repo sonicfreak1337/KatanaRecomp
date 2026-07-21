@@ -122,7 +122,8 @@ void Sh4RtcClockDomain::reset_phase(const std::uint64_t guest_cycle) {
 }
 
 Sh4Tmu::Sh4Tmu(EventScheduler& scheduler, TmuTiming timing)
-    : scheduler_(scheduler), timing_(std::move(timing)) {
+    : scheduler_(scheduler), scheduler_lifetime_(scheduler.lifetime_token()),
+      timing_(std::move(timing)) {
     if (timing_.guest_cycles_per_peripheral_cycle == 0u) {
         throw std::invalid_argument("TMU-Peripherietakt muss groesser null sein.");
     }
@@ -137,8 +138,9 @@ Sh4Tmu::Sh4Tmu(EventScheduler& scheduler, TmuTiming timing)
 }
 
 Sh4Tmu::~Sh4Tmu() {
-    static_cast<void>(scheduler_.remove_reset_observer(scheduler_reset_observer_));
     static_cast<void>(timing_.rtc_clock->remove_phase_observer(rtc_phase_observer_));
+    if (scheduler_lifetime_.expired()) return;
+    static_cast<void>(scheduler_.remove_reset_observer(scheduler_reset_observer_));
     for (auto& value : channels_) {
         cancel_event(value);
     }
@@ -354,7 +356,8 @@ Sh4Rtc::Sh4Rtc(EventScheduler& scheduler, const std::uint64_t guest_cycles_per_s
     : Sh4Rtc(scheduler, std::make_shared<Sh4RtcClockDomain>(guest_cycles_per_second)) {}
 
 Sh4Rtc::Sh4Rtc(EventScheduler& scheduler, std::shared_ptr<Sh4RtcClockDomain> clock)
-    : scheduler_(scheduler), clock_(std::move(clock)) {
+    : scheduler_(scheduler), scheduler_lifetime_(scheduler.lifetime_token()),
+      clock_(std::move(clock)) {
     if (!clock_) {
         throw std::invalid_argument("RTC benoetigt eine Taktdomaene.");
     }
@@ -362,6 +365,7 @@ Sh4Rtc::Sh4Rtc(EventScheduler& scheduler, std::shared_ptr<Sh4RtcClockDomain> clo
 }
 
 Sh4Rtc::~Sh4Rtc() {
+    if (scheduler_lifetime_.expired()) return;
     static_cast<void>(scheduler_.remove_reset_observer(scheduler_reset_observer_));
     rtc_enabled_ = false;
     cancel_event();

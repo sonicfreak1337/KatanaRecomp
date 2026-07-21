@@ -23,23 +23,25 @@ void require(const bool value, const std::string& message) {
 
 MaterializedBlockCandidate valid_candidate(const std::uint32_t target,
                                            const BlockVariantKey& variant) {
-    return {{target,
-             target,
-             2u,
-             BlockEndKind::Return,
-             variant,
-             block,
-             "bounded-synthetic-codegen",
-             true},
-            true,
-            true,
-            true,
-            true,
-            1u,
-            1u,
-            1u,
-            1u,
-            1024u};
+    MaterializedBlockCandidate candidate;
+    candidate.block = {target,
+                       target,
+                       2u,
+                       BlockEndKind::Return,
+                       variant,
+                       block,
+                       "bounded-synthetic-codegen",
+                       true};
+    candidate.decode_candidate_validated = true;
+    candidate.bounded_analysis_complete = true;
+    candidate.ir_verified = true;
+    candidate.code_generated = true;
+    candidate.guest_cycles = 1u;
+    candidate.instructions = 1u;
+    candidate.recursive_seeds = 1u;
+    candidate.analysis_time_ms = 1u;
+    candidate.peak_memory_bytes = 1024u;
+    return candidate;
 }
 
 struct Fixture {
@@ -209,6 +211,28 @@ void revalidation_regressions() {
 }
 
 void budget_and_dispatch_regressions() {
+    {
+        Fixture fixture;
+        DemandBlockMaterializer materializer(
+            fixture.modules,
+            fixture.blocks,
+            &fixture.tracker,
+            {true, 4u, 64u},
+            [&](const auto target, auto, const auto& variant) {
+                auto candidate = valid_candidate(target, variant);
+                candidate.interpreter_backed = true;
+                candidate.bounded_analysis_complete = false;
+                candidate.ir_verified = false;
+                candidate.code_generated = false;
+                candidate.block.provenance = "bounded-synthetic-interpreter";
+                return candidate;
+            });
+        const auto result = dispatch_indirect(
+            fixture.cpu, fixture.blocks, fixture.request(0x100u, &materializer));
+        require(result.block && materializer.metrics().materializations == 1u &&
+                    materializer.metrics().interpreter_materializations == 1u,
+                "Ehrlich markierter Interpreterblock wird abgelehnt oder als Codegen gezaehlt.");
+    }
     {
         Fixture fixture;
         BlockMaterializationPolicy policy{true, 4u, 64u};

@@ -59,9 +59,9 @@ void test_memory_delay_slots() {
                     "RTS inkrementiert den Quellregisterzustand trotz fehlgeschlagenem Load.");
         }
         if (test.owner == 0x1100u || test.owner == 0x1300u) {
-            require(cpu.pr == test.owner + 4u,
+            require(cpu.pr == 0xCAFEBABEu,
                     std::string(test.name) +
-                        " schreibt PR nicht vor dem fehlgeschlagenen Delay Slot.");
+                        " restauriert PR nach dem fehlgeschlagenen Delay Slot nicht.");
         }
     }
 }
@@ -77,9 +77,9 @@ void test_call_fpu_delay_slot_exception() {
 
     require(cpu.trap_pending && cpu.last_exception_cause == ExceptionCause::SlotFpuDisabled &&
                 cpu.expevt == katana::runtime::event_slot_fpu_disabled &&
-                cpu.exception_in_delay_slot && cpu.spc == 0x1900u && cpu.pr == 0x1904u &&
+                cpu.exception_in_delay_slot && cpu.spc == 0x1900u && cpu.pr == 0xCAFEBABEu &&
                 cpu.fr[1] == 0x40000000u,
-            "BSR schreibt PR vor einer FPU-Disable-Ausnahme im Delay Slot.");
+            "BSR restauriert PR nach einer FPU-Disable-Ausnahme im Delay Slot nicht.");
 }
 
 void test_calls_write_pr_before_delay_slot() {

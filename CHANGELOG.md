@@ -4,6 +4,32 @@
 
 ### Geaendert
 
+- Der produktive AOT-Dispatcher beendet jede generierte Basic-Block-Ausfuehrung
+  wieder an der zentralen Fetchgrenze. Aktive MMU-, Adressraum-, Watchpoint-
+  und FPSCR-Generationen bilden den Variantenschluessel; statischer Code wird
+  fuer eine neue MMU-Variante nur wiederverwendet, wenn virtuelle Adresse und
+  uebersetzte physische Herkunft exakt zum kompilierten Block passen. LDTLB
+  erhoeht URC mit URB-Wrap, und mehrere passende UTLB-Eintraege erzeugen den
+  architektonischen Multiple-Hit statt eines willkuerlichen ersten Treffers.
+- Runtime-materialisierte Interpreterbloecke werden als eigener kontrollierter
+  Blocktyp ausgewiesen. Sie behaupten weder Kontrollflussanalyse noch IR-
+  Verifikation oder nativen Codegen und besitzen eigene Metriken und Budgets.
+  GD-ROM-Loads bleiben zunaechst nachgewiesene Daten; nur explizit dafuer
+  freigegebene Ladebereiche koennen an einem tatsaechlichen Kontrolltransfer
+  in ein kleines, byte- und generationsgebundenes Ausfuehrungsfenster
+  aufgewertet werden.
+- Generierter C++-Code emittiert Gastloads und -stores direkt ueber die
+  MMU-faehigen `guest_read_*`-/`guest_write_*`-Schnittstellen. Die globale
+  nachtraegliche Zeichenersetzung des gesamten Funktionstexts ist entfallen.
+- PlatformServices-ABI 7 versioniert den korrigierten linearen und
+  gastzeitgebundenen DMA-Vertrag. Runtime-ABI 16 und Portprojektvertrag 9
+  bleiben die aktuellen v0.48-Vertraege.
+- Der kumulative Debug-Gate umfasst 178 Tests und ist vollstaendig gruen.
+  Die beiden Tests, die eigenstaendige Portprojekte mit CMake/MSVC bauen,
+  verwenden eine gemeinsame CTest-Ressourcensperre und ein realistisches
+  300-Sekunden-Limit; fachliche Assertions und die Parallelitaet der uebrigen
+  176 Tests bleiben unveraendert.
+
 - Der native Produktpfad rendert AICA-Kanaele jetzt direkt aus den vom Gast
   beschriebenen Slotregistern und dem gemeinsam gemappten Sound-RAM. PCM16,
   PCM8 und AICA-ADPCM, Key-On/-Off, Looping, Pitch, Total Level, Direct Send,
@@ -92,6 +118,25 @@
   Fokusverlust/-gewinn sowie Close im laufenden und pausierten Zustand ab.
 
 ### Korrigiert
+
+- Der dynamische SH-4-Pfad sichert bei identischem Pre-Decrement-Register den
+  alten Quellwert und mutiert Rn erst nach erfolgreichem Speicherzugriff.
+  SHAD/SHLD behandeln negative Vielfache von 32 ohne undefinierten C++-Shift.
+  BSR/BSRF/JSR machen den neuen PR im Delay-Slot sichtbar, restaurieren ihn bei
+  einer Slotexception und zaehlen Owner plus Slot korrekt; derselbe PR-
+  Rollback gilt fuer den nativen AOT-Emitter.
+- G1-DMA macht GD-ROM-Bytes erst im faelligen Schedulercallback sichtbar.
+  Normale GD-ROM-Paketkommandos schliessen asynchron mit ASIC-Observer ab;
+  Kommandofehler bleiben ATA-Fehler und werden nicht zusaetzlich als CPU-
+  Busfehler geworfen. Scheduler-abhaengige GD-ROM-, DMAC-, TMU- und RTC-
+  Objekte pruefen beim Abbau den Lebenszeit-Token und greifen nicht mehr auf
+  einen bereits zerstoerten Scheduler zu.
+- Der PVR-Produktpfad signalisiert `PvrRenderDone` nur nach einem tatsaechlich
+  erfolgreichen Render. Reservierte Framebufferformate, ungueltiger TA-Zustand
+  und nicht unterstuetzte Features bleiben als sichtbarer Rendererfehler ohne
+  vorgetaeuschte Completion erhalten.
+- `DreamcastRuntimeFirmwareMode::Direct` installiert keine HLE-BIOS-Vektoren
+  mehr; nur der explizite HLE-Modus aktiviert die BIOS-ABI.
 
 - Texturkoordinaten werden im Software-PVR jetzt perspektivisch ueber die
   interpolierte reziproke W-Tiefe statt affin im Bildschirmraum berechnet.

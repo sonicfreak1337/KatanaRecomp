@@ -46,6 +46,7 @@ enum class ExceptionCause : std::uint8_t {
     InitialPageWrite,
     TlbProtectionRead,
     TlbProtectionWrite,
+    TlbMultipleHit,
     BusErrorRead,
     BusErrorWrite,
     Interrupt

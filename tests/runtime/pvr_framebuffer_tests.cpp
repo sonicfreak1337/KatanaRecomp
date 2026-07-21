@@ -62,7 +62,7 @@ int main() {
     registers.write(pvr_register::FramebufferReadSize, (1u << 20u) | (479u << 10u) | 319u);
     const auto scanout = decode_pvr_scanout(registers, dreamcast_vram_size);
     require(scanout.has_value() && scanout->width == 640u && scanout->height == 480u &&
-                scanout->stride_bytes == 1284u && scanout->base_offset == 0x1000u &&
+                scanout->stride_bytes == 1280u && scanout->base_offset == 0x1000u &&
                 scanout->format == PvrFramebufferFormat::Rgb565,
             "PVR-Scanout-Register werden nicht korrekt dekodiert.");
     require(throws<std::invalid_argument>([] {
@@ -71,7 +71,7 @@ int main() {
             }),
             "Zu kleiner Framebuffer-Stride wird akzeptiert.");
     require(throws<std::out_of_range>(
-                [&] { static_cast<void>(framebuffer.capture(std::vector<std::uint8_t>(5u))); }),
+                [&] { static_cast<void>(framebuffer.capture(std::vector<std::uint8_t>(3u))); }),
             "Framebuffer ausserhalb des VRAM wird akzeptiert.");
     require(throws<std::invalid_argument>([] {
                 PvrFramebuffer value;

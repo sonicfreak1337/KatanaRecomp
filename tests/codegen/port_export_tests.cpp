@@ -144,7 +144,10 @@ void write_binary(const std::filesystem::path& path, const std::vector<std::uint
 }
 
 void write_fixture(const std::filesystem::path& directory, const bool immediate_trap = false) {
-    write_binary(directory / "low.bin", std::vector<std::uint8_t>(24u * raw_sector_size));
+    std::vector<std::uint8_t> low_track(24u * raw_sector_size);
+    for (std::size_t sector = 0u; sector < 24u; ++sector)
+        low_track[sector * raw_sector_size + 15u] = 1u;
+    write_binary(directory / "low.bin", low_track);
     write_binary(directory / "audio.raw", std::vector<std::uint8_t>(raw_sector_size));
     write_binary(directory / "high.bin", boot_track(immediate_trap));
     std::ofstream descriptor(directory / "disc.gdi", std::ios::trunc);
@@ -236,6 +239,24 @@ int run_test(const int argc, char* argv[]) {
     require(hle_runtime_cpu.memory.read_u32(0x8C0000B0u) == 0x8C000100u &&
                 hle_runtime_state.runtime_blocks->size() == 6u,
             "Produktiver GDI-HLE-Runtimepfad installiert die BIOS-ABI nicht.");
+    const auto render_done_count = [&] {
+        return std::count_if(hle_runtime_state.system_asic->events().begin(),
+                             hle_runtime_state.system_asic->events().end(),
+                             [](const auto& event) {
+                                 return event.event ==
+                                        katana::runtime::SystemAsicEvent::PvrRenderDone;
+                             });
+    };
+    hle_runtime_state.pvr_registers->write(
+        katana::runtime::pvr_register::FramebufferWriteControl, 7u);
+    const auto render_done_before_failure = render_done_count();
+    hle_runtime_state.pvr_registers->write(katana::runtime::pvr_register::StartRender, 1u);
+    static_cast<void>(hle_runtime_state.scheduler->advance_by(2'000u, 1u));
+    require(render_done_count() == render_done_before_failure &&
+                hle_runtime_state.pvr_renderer->first_error().has_value(),
+            "Fehlgeschlagener PVR-Renderpfad signalisiert RenderDone.");
+    hle_runtime_state.pvr_registers->write(
+        katana::runtime::pvr_register::FramebufferWriteControl, 0u);
     hle_runtime_state.pvr_registers->write(katana::runtime::pvr_register::StartRender, 1u);
     auto input = std::make_shared<katana::runtime::ReplayInputBackend>(
         std::vector<katana::runtime::ControllerState>{{}});
@@ -243,13 +264,24 @@ int run_test(const int argc, char* argv[]) {
         0u, 0u, std::make_shared<katana::runtime::MapleControllerDevice>(input));
     static_cast<void>(hle_runtime_state.maple->exchange(
         0u, 0u, {katana::runtime::MapleCommand::GetCondition, {}}));
-    static_cast<void>(
-        hle_runtime_state.gdrom->submit({katana::runtime::GdRomCommand::TestUnitReady}));
-    static_cast<void>(hle_runtime_state.scheduler->advance_to(2'000u, 3u));
+    hle_runtime_cpu.memory.write_u32(0x8C000400u, 150u);
+    hle_runtime_cpu.memory.write_u32(0x8C000404u, 1u);
+    hle_runtime_cpu.memory.write_u32(0x8C000408u, 0x8C001000u);
+    hle_runtime_cpu.r[4] = 16u;
+    hle_runtime_cpu.r[5] = 0x8C000400u;
+    static_cast<void>(hle_runtime_state.gdrom->bios_call(hle_runtime_cpu, 0u, 0u));
+    static_cast<void>(hle_runtime_state.scheduler->advance_by(2'000u, 8u));
     hle_runtime_state.aica->interrupts().set_enabled(1u);
     hle_runtime_state.aica->interrupts().request(1u);
-    require(
-        hle_runtime_state.system_asic->events().size() == 4u,
+    const auto has_asic_event = [&](const katana::runtime::SystemAsicEvent expected) {
+        return std::any_of(hle_runtime_state.system_asic->events().begin(),
+                           hle_runtime_state.system_asic->events().end(),
+                           [&](const auto& event) { return event.event == expected; });
+    };
+    require(has_asic_event(katana::runtime::SystemAsicEvent::PvrRenderDone) &&
+                has_asic_event(katana::runtime::SystemAsicEvent::MapleDma) &&
+                has_asic_event(katana::runtime::SystemAsicEvent::GdromCommand) &&
+                has_asic_event(katana::runtime::SystemAsicEvent::AicaInterrupt),
         "Produktive PVR-, Maple-, GD-ROM- und AICA-Ereignisse erreichen das System-ASIC nicht.");
     const auto output = fixture.root / "port";
     const PortExportOptions options{"synthetic_game", "0.37.0-dev", {1u, 4096u}};
@@ -382,7 +414,7 @@ int run_test(const int argc, char* argv[]) {
             read_text(output / "src" / "main.cpp").find("cpu.spc") != std::string::npos &&
             read_text(output / "src" / "main.cpp").find("framebuffer.configure(640u") ==
                 std::string::npos &&
-            read_text(output / "src" / "main.cpp").find("if (pump_video) pump_video(tick)") !=
+            read_text(output / "src" / "main.cpp").find("pump_guest_frame") !=
                 std::string::npos &&
             read_text(output / "src" / "main.cpp").find("video->present") <
                 read_text(output / "src" / "main.cpp")

@@ -73,6 +73,24 @@ RuntimeBlockHandle RuntimeBlockTable::register_static(RuntimeBlock block) {
     return insert(std::move(block), false);
 }
 
+std::optional<RuntimeBlockHandle> RuntimeBlockTable::register_static_variant(
+    const std::uint32_t virtual_address,
+    const std::uint32_t physical_address,
+    const BlockVariantKey& source_variant,
+    const BlockVariantKey& target_variant) {
+    if (const auto existing = lookup(virtual_address, target_variant)) return existing;
+    const auto source = lookup(virtual_address, source_variant);
+    if (!source) return std::nullopt;
+    const auto resolved = resolve(*source);
+    if (!resolved || resolved->get().runtime_registered ||
+        resolved->get().physical_origin != canonical_physical_address(physical_address))
+        return std::nullopt;
+    auto variant = resolved->get();
+    variant.variant = target_variant;
+    variant.provenance += "-mmu-variant";
+    return insert(std::move(variant), false);
+}
+
 std::vector<RuntimeBlockHandle>
 RuntimeBlockTable::register_static_bulk(std::vector<RuntimeBlock> blocks) {
     if (static_sealed_) {

@@ -4,7 +4,7 @@
 
 namespace katana::runtime {
 
-CanonicalBlockDispatcher::CanonicalBlockDispatcher(const RuntimeBlockTable& table,
+CanonicalBlockDispatcher::CanonicalBlockDispatcher(RuntimeBlockTable& table,
                                                    DispatchDiagnosticRecorder* diagnostics,
                                                    DemandBlockMaterializer* materializer,
                                                    IndirectDispatchMetrics* metrics)

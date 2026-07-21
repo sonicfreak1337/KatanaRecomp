@@ -79,6 +79,33 @@ int main() {
                 events == std::vector<SystemAsicEvent>{SystemAsicEvent::AicaDma},
             "AICA-G2-DMA-Resume/Completion aktualisiert Daten, Status oder ASIC-Ereignis falsch.");
 
+    EventScheduler g1_scheduler;
+    bool g1_bytes_committed = false;
+    bool g1_completed = false;
+    DreamcastG1BusController g1(
+        g1_scheduler,
+        HollyDmaTiming{4u},
+        [&](const std::uint32_t address, const std::uint32_t length, const std::uint32_t direction) {
+            require(address == 0x0C002000u && length == 32u && direction == 0u,
+                    "G1-DMA verliert Transferparameter bis zur Completion.");
+            g1_bytes_committed = true;
+        },
+        [&](const SystemAsicEvent event) {
+            g1_completed = event == SystemAsicEvent::GdromDma;
+        });
+    g1.write(0x04u, 0x0C002000u);
+    g1.write(0x08u, 32u);
+    g1.write(0x0Cu, 0u);
+    g1.write(0x14u, 1u);
+    g1.write(0x18u, 1u);
+    require(!g1_bytes_committed && !g1_completed && g1.read(0x18u) == 1u,
+            "G1-DMA macht Daten bereits beim Start sichtbar.");
+    static_cast<void>(g1_scheduler.advance_by(127u, 1u));
+    require(!g1_bytes_committed, "G1-DMA committed Daten vor dem faelligen Schedulerzyklus.");
+    static_cast<void>(g1_scheduler.advance_by(1u, 1u));
+    require(g1_bytes_committed && g1_completed && g1.read(0x18u) == 0u,
+            "G1-DMA committed Daten oder ASIC-Completion nicht atomar am Zielzyklus.");
+
     memory.write_u32(0x005F7418u, 0u);
     memory.write_u32(0x005F7414u, 1u);
     require(throws([&] { memory.write_u32(0x005F7418u, 1u); }) &&

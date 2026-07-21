@@ -75,6 +75,7 @@ struct StepResult {
     bool control_flow = false;
     BlockEndKind end_kind = BlockEndKind::Fallthrough;
     std::uint64_t cycles = 1u;
+    std::uint64_t instructions = 1u;
 };
 
 bool is_fpu_instruction(const sh4::DecodedInstruction& instruction) noexcept {
@@ -154,10 +155,27 @@ StepResult execute_one(CpuState& cpu,
         return *target;
     };
     const auto delay_then = [&](const std::uint32_t target, const BlockEndKind kind) {
-        const auto slot = execute_one(cpu, services, next, pc);
-        if (slot.end_kind == BlockEndKind::Exception) return slot;
+        StepResult slot;
+        try {
+            slot = execute_one(cpu, services, next, pc);
+        } catch (const MemoryAccessError& error) {
+            enter_memory_exception(cpu, error, next, pc);
+            slot = {true, BlockEndKind::Exception, 1u, 1u};
+        }
+        if (slot.end_kind == BlockEndKind::Exception)
+            return StepResult{true,
+                              BlockEndKind::Exception,
+                              1u + slot.cycles,
+                              1u + slot.instructions};
         cpu.pc = target;
-        return StepResult{true, kind, 1u + slot.cycles};
+        return StepResult{true, kind, 1u + slot.cycles, 1u + slot.instructions};
+    };
+    const auto call_delay_then = [&](const std::uint32_t target) {
+        const auto old_pr = cpu.pr;
+        cpu.pr = pc + 4u;
+        const auto result = delay_then(target, BlockEndKind::Call);
+        if (result.end_kind == BlockEndKind::Exception) cpu.pr = old_pr;
+        return result;
     };
 
     switch (instruction.kind) {
@@ -227,10 +245,20 @@ StepResult execute_one(CpuState& cpu,
     case Kind::ShiftArithmeticDynamic: {
         const auto count = static_cast<std::int32_t>(cpu.r[m]);
         if (count >= 0) cpu.r[n] = (count & 0x1Fu) == 0u ? cpu.r[n] : cpu.r[n] << (count & 0x1Fu);
-        else { const auto shift = ((~static_cast<std::uint32_t>(count)) & 0x1Fu) + 1u;
-            cpu.r[n] = instruction.kind == Kind::ShiftArithmeticDynamic
-                           ? static_cast<std::uint32_t>(static_cast<std::int32_t>(cpu.r[n]) >> shift)
-                           : cpu.r[n] >> shift; }
+        else {
+            const auto shift = ((~static_cast<std::uint32_t>(count)) & 0x1Fu) + 1u;
+            if (shift == 32u) {
+                cpu.r[n] = instruction.kind == Kind::ShiftArithmeticDynamic &&
+                                   static_cast<std::int32_t>(cpu.r[n]) < 0
+                               ? 0xFFFFFFFFu
+                               : 0u;
+            } else {
+                cpu.r[n] = instruction.kind == Kind::ShiftArithmeticDynamic
+                               ? static_cast<std::uint32_t>(
+                                     static_cast<std::int32_t>(cpu.r[n]) >> shift)
+                               : cpu.r[n] >> shift;
+            }
+        }
         return {};
     }
     case Kind::MultiplyLong: cpu.macl = cpu.r[n] * cpu.r[m]; return {};
@@ -343,9 +371,9 @@ StepResult execute_one(CpuState& cpu,
     case Kind::MovByteLoad: cpu.r[n] = static_cast<std::uint32_t>(guest_read_s8(cpu, cpu.r[m])); return {};
     case Kind::MovWordLoad: cpu.r[n] = static_cast<std::uint32_t>(guest_read_s16(cpu, cpu.r[m])); return {};
     case Kind::MovLongLoad: cpu.r[n] = guest_read_u32(cpu, cpu.r[m]); return {};
-    case Kind::MovByteStorePreDecrement: cpu.r[n] -= 1u; guest_write_u8(cpu, cpu.r[n], static_cast<std::uint8_t>(cpu.r[m])); return {};
-    case Kind::MovWordStorePreDecrement: cpu.r[n] -= 2u; guest_write_u16(cpu, cpu.r[n], static_cast<std::uint16_t>(cpu.r[m])); return {};
-    case Kind::MovLongStorePreDecrement: cpu.r[n] -= 4u; guest_write_u32(cpu, cpu.r[n], cpu.r[m]); return {};
+    case Kind::MovByteStorePreDecrement: { const auto value = static_cast<std::uint8_t>(cpu.r[m]); const auto address = cpu.r[n] - 1u; guest_write_u8(cpu, address, value); cpu.r[n] = address; return {}; }
+    case Kind::MovWordStorePreDecrement: { const auto value = static_cast<std::uint16_t>(cpu.r[m]); const auto address = cpu.r[n] - 2u; guest_write_u16(cpu, address, value); cpu.r[n] = address; return {}; }
+    case Kind::MovLongStorePreDecrement: { const auto value = cpu.r[m]; const auto address = cpu.r[n] - 4u; guest_write_u32(cpu, address, value); cpu.r[n] = address; return {}; }
     case Kind::MovByteLoadPostIncrement: { const auto address = cpu.r[m]; cpu.r[n] = static_cast<std::uint32_t>(guest_read_s8(cpu, address)); if (n != m) cpu.r[m] += 1u; return {}; }
     case Kind::MovWordLoadPostIncrement: { const auto address = cpu.r[m]; cpu.r[n] = static_cast<std::uint32_t>(guest_read_s16(cpu, address)); if (n != m) cpu.r[m] += 2u; return {}; }
     case Kind::MovLongLoadPostIncrement: { const auto address = cpu.r[m]; cpu.r[n] = guest_read_u32(cpu, address); if (n != m) cpu.r[m] += 4u; return {}; }
@@ -371,7 +399,7 @@ StepResult execute_one(CpuState& cpu,
     case Kind::MovLongLoadPcRelative: cpu.r[n] = guest_read_u32(cpu, add_displacement((pc + 4u) & ~3u, instruction.displacement)); return {};
     case Kind::MoveAddressPcRelative: cpu.r[0] = add_displacement((pc + 4u) & ~3u, instruction.displacement); return {};
     case Kind::StoreSpecialRegister: cpu.r[n] = special_read(cpu, instruction.special_register); return {};
-    case Kind::StoreSpecialRegisterPreDecrement: cpu.r[n] -= 4u; guest_write_u32(cpu, cpu.r[n], special_read(cpu, instruction.special_register)); return {};
+    case Kind::StoreSpecialRegisterPreDecrement: { const auto value = special_read(cpu, instruction.special_register); const auto address = cpu.r[n] - 4u; guest_write_u32(cpu, address, value); cpu.r[n] = address; return {}; }
     case Kind::LoadSpecialRegister: special_write(cpu, instruction.special_register, cpu.r[m]); return {};
     case Kind::LoadSpecialRegisterPostIncrement: { const auto value = guest_read_u32(cpu, cpu.r[m]); cpu.r[m] += 4u; special_write(cpu, instruction.special_register, value); return {}; }
     case Kind::TrapAlways: raise_trapa(cpu, static_cast<std::uint8_t>(instruction.immediate), pc); return {true, BlockEndKind::Exception, 1u};
@@ -384,22 +412,22 @@ StepResult execute_one(CpuState& cpu,
     case Kind::Ocbwb: static_cast<void>(maintain_coherent_operand_cache(OperandCacheOperation::WriteBack, cpu.r[n])); return {};
     case Kind::MovcaLong: guest_write_u32(cpu, cpu.r[n], cpu.r[0], CodeWriteSource::StoreQueue); return {};
     case Kind::Bra: return delay_then(branch_target(), BlockEndKind::StaticBranch);
-    case Kind::Bsr: cpu.pr = pc + 4u; return delay_then(branch_target(), BlockEndKind::Call);
+    case Kind::Bsr: return call_delay_then(branch_target());
     case Kind::Braf: return delay_then(pc + 4u + cpu.r[instruction.branch_register], BlockEndKind::DynamicBranch);
-    case Kind::Bsrf: cpu.pr = pc + 4u; return delay_then(pc + 4u + cpu.r[instruction.branch_register], BlockEndKind::Call);
+    case Kind::Bsrf: return call_delay_then(pc + 4u + cpu.r[instruction.branch_register]);
     case Kind::Bt: if (cpu.t) { cpu.pc = branch_target(); return {true, BlockEndKind::StaticBranch, 1u}; } return {};
     case Kind::Bf: if (!cpu.t) { cpu.pc = branch_target(); return {true, BlockEndKind::StaticBranch, 1u}; } return {};
     case Kind::BtS: return delay_then(cpu.t ? branch_target() : pc + 4u, BlockEndKind::ConditionalBranch);
     case Kind::BfS: return delay_then(!cpu.t ? branch_target() : pc + 4u, BlockEndKind::ConditionalBranch);
     case Kind::Jmp: return delay_then(cpu.r[instruction.branch_register], BlockEndKind::DynamicBranch);
-    case Kind::Jsr: cpu.pr = pc + 4u; return delay_then(cpu.r[instruction.branch_register], BlockEndKind::Call);
+    case Kind::Jsr: return call_delay_then(cpu.r[instruction.branch_register]);
     case Kind::Rts: return delay_then(cpu.pr, BlockEndKind::Return);
     case Kind::FmovRegister: if (cpu.fpu_transfer_pair()) write_fpu_pair_bits(cpu, n, read_fpu_pair_bits(cpu, m)); else cpu.fr[n] = cpu.fr[m]; return {};
     case Kind::FmovLoad: if (cpu.fpu_transfer_pair()) write_fpu_pair_bits(cpu, n, (static_cast<std::uint64_t>(guest_read_u32(cpu, cpu.r[m] + 4u)) << 32u) | guest_read_u32(cpu, cpu.r[m])); else cpu.fr[n] = guest_read_u32(cpu, cpu.r[m]); return {};
     case Kind::FmovLoadPostIncrement: { const auto address = cpu.r[m]; if (cpu.fpu_transfer_pair()) { write_fpu_pair_bits(cpu, n, (static_cast<std::uint64_t>(guest_read_u32(cpu, address + 4u)) << 32u) | guest_read_u32(cpu, address)); cpu.r[m] += 8u; } else { cpu.fr[n] = guest_read_u32(cpu, address); cpu.r[m] += 4u; } return {}; }
     case Kind::FmovLoadR0Indexed: { const auto address = cpu.r[m] + cpu.r[0]; if (cpu.fpu_transfer_pair()) write_fpu_pair_bits(cpu, n, (static_cast<std::uint64_t>(guest_read_u32(cpu, address + 4u)) << 32u) | guest_read_u32(cpu, address)); else cpu.fr[n] = guest_read_u32(cpu, address); return {}; }
     case Kind::FmovStore: if (cpu.fpu_transfer_pair()) { const auto bits = read_fpu_pair_bits(cpu, m); guest_write_u32(cpu, cpu.r[n], static_cast<std::uint32_t>(bits)); guest_write_u32(cpu, cpu.r[n] + 4u, static_cast<std::uint32_t>(bits >> 32u)); } else guest_write_u32(cpu, cpu.r[n], cpu.fr[m]); return {};
-    case Kind::FmovStorePreDecrement: { const auto size = cpu.fpu_transfer_pair() ? 8u : 4u; cpu.r[n] -= size; if (size == 8u) { const auto bits = read_fpu_pair_bits(cpu, m); guest_write_u32(cpu, cpu.r[n], static_cast<std::uint32_t>(bits)); guest_write_u32(cpu, cpu.r[n] + 4u, static_cast<std::uint32_t>(bits >> 32u)); } else guest_write_u32(cpu, cpu.r[n], cpu.fr[m]); return {}; }
+    case Kind::FmovStorePreDecrement: { const auto size = cpu.fpu_transfer_pair() ? 8u : 4u; const auto address = cpu.r[n] - size; if (size == 8u) { const auto bits = read_fpu_pair_bits(cpu, m); guest_write_u32(cpu, address, static_cast<std::uint32_t>(bits)); guest_write_u32(cpu, address + 4u, static_cast<std::uint32_t>(bits >> 32u)); } else { const auto bits = cpu.fr[m]; guest_write_u32(cpu, address, bits); } cpu.r[n] = address; return {}; }
     case Kind::FmovStoreR0Indexed: { const auto address = cpu.r[n] + cpu.r[0]; if (cpu.fpu_transfer_pair()) { const auto bits = read_fpu_pair_bits(cpu, m); guest_write_u32(cpu, address, static_cast<std::uint32_t>(bits)); guest_write_u32(cpu, address + 4u, static_cast<std::uint32_t>(bits >> 32u)); } else guest_write_u32(cpu, address, cpu.fr[m]); return {}; }
     case Kind::Fldi0: write_fr_single(cpu, n, 0.0f); return {};
     case Kind::Fldi1: write_fr_single(cpu, n, 1.0f); return {};
@@ -450,7 +478,7 @@ DynamicInterpreterResult execute_dynamic_sh4_block(CpuState& cpu,
             enter_memory_exception(cpu, error, instruction_pc);
             step = {true, BlockEndKind::Exception, 1u};
         }
-        ++result.instructions;
+        result.instructions += step.instructions;
         result.guest_cycles += step.cycles;
         const auto bytes = static_cast<std::uint64_t>(instruction_pc - result.start_pc) + 2u;
         result.byte_size = static_cast<std::uint32_t>(std::min<std::uint64_t>(bytes, 0xFFFFFFFFu));

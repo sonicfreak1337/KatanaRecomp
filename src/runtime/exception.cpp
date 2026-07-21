@@ -44,12 +44,16 @@ constexpr std::array exception_table = {
                       event_tlb_protection_write,
                       general_exception_vector,
                       false},
+    ExceptionMetadata{ExceptionCause::TlbMultipleHit,
+                      event_tlb_multiple_hit,
+                      general_exception_vector,
+                      false},
     // Host-side bus failures enter the architectural data-address exception class.
-    ExceptionMetadata{ExceptionCause::BusErrorRead,
+    ExceptionMetadata{ExceptionCause::AddressErrorRead,
                       event_address_error_read,
                       general_exception_vector,
                       false},
-    ExceptionMetadata{ExceptionCause::BusErrorWrite,
+    ExceptionMetadata{ExceptionCause::AddressErrorWrite,
                       event_address_error_write,
                       general_exception_vector,
                       false},
@@ -146,6 +150,9 @@ void enter_memory_exception(CpuState& cpu,
     switch (error.reason()) {
     case MemoryAccessErrorReason::TlbMiss:
         cause = write ? ExceptionCause::TlbMissWrite : ExceptionCause::TlbMissRead;
+        break;
+    case MemoryAccessErrorReason::TlbMultipleHit:
+        cause = ExceptionCause::TlbMultipleHit;
         break;
     case MemoryAccessErrorReason::InitialPageWrite:
         cause = ExceptionCause::InitialPageWrite;

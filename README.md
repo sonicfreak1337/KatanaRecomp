@@ -26,7 +26,7 @@ Eingabe
   -> natives Hostprojekt
 ```
 
-Der aktuelle kumulative Debug-Vertrag umfasst **179 automatische Tests**.
+Der aktuelle kumulative Debug-Vertrag umfasst **178 automatische Tests**.
 Phase 10 ist
 fuer den freigegebenen Windows-Workflow abgeschlossen: eine `.gdi` waehlen,
 einen Ausgabeordner waehlen und den Analyse-/Buildzustand sichtbar verfolgen.

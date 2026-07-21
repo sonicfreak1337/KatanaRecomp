@@ -102,6 +102,7 @@ class Sh4Tmu final {
     void handle_rtc_phase_reset(bool before_reset, std::uint64_t guest_cycle);
 
     EventScheduler& scheduler_;
+    SchedulerLifetimeToken scheduler_lifetime_;
     TmuTiming timing_;
     SchedulerResetObserverId scheduler_reset_observer_ = 0u;
     Sh4RtcClockDomain::PhaseObserverId rtc_phase_observer_ = 0u;
@@ -180,6 +181,7 @@ class Sh4Rtc final {
     void update_alarm() noexcept;
 
     EventScheduler& scheduler_;
+    SchedulerLifetimeToken scheduler_lifetime_;
     std::shared_ptr<Sh4RtcClockDomain> clock_;
     SchedulerResetObserverId scheduler_reset_observer_ = 0u;
     RtcDateTime date_time_{};

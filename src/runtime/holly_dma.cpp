@@ -444,7 +444,6 @@ void DreamcastG1BusController::start() {
     if (!transfer_handler_)
         throw std::runtime_error("G1-DMA besitzt keinen GD-ROM-Transferpfad.");
     if (dma_length_ == 0u) throw std::invalid_argument("G1-DMA braucht eine Laenge.");
-    transfer_handler_(dma_address_, dma_length_, dma_direction_);
     dma_active_ = 1u;
     completion_event_ = scheduler_.schedule_after(
         dma_latency(dma_length_, timing_),
@@ -454,6 +453,7 @@ void DreamcastG1BusController::start() {
 void DreamcastG1BusController::complete(const SchedulerEventId event_id) {
     if (!completion_event_ || *completion_event_ != event_id || dma_active_ == 0u)
         throw std::logic_error("G1-DMA-Completion besitzt keinen aktiven Transfer.");
+    transfer_handler_(dma_address_, dma_length_, dma_direction_);
     dma_address_ += dma_length_;
     dma_length_ = 0u;
     dma_active_ = 0u;

@@ -49,7 +49,7 @@ int main() {
 
     require(throws<MemoryAccessError>(
                 [&] { static_cast<void>(memory.read_u32(sh4_port_data_a_address)); }) &&
-                throws<std::invalid_argument>(
+                throws<MemoryAccessError>(
                     [&] { memory.write_u16(sh4_port_control_a_address, 0u); }),
             "SH-4-I/O-Port akzeptiert eine laut Registervertrag falsche Zugriffsbreite.");
 

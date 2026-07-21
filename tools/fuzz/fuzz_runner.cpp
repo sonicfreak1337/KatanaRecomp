@@ -345,12 +345,15 @@ void exercise_runtime(const std::span<const std::uint8_t> bytes) {
     const auto virtual_start = 0x80000000u + physical_base;
     if ((value(2u) & 1u) != 0u) {
         address_space.set_mode(AddressTranslationMode::Mmu);
-        address_space.ldtlb({virtual_start,
-                             physical_base,
-                             true,
-                             (value(15u) & 1u) != 0u,
-                             true,
-                             (value(16u) & 1u) != 0u});
+        TlbMapping mapping{};
+        mapping.virtual_page = virtual_start;
+        mapping.physical_page = physical_base;
+        mapping.page_size = RuntimeAddressSpace::page_size;
+        mapping.valid = true;
+        mapping.writable = (value(15u) & 1u) != 0u;
+        mapping.executable = true;
+        mapping.user_access = (value(16u) & 1u) != 0u;
+        address_space.ldtlb(mapping);
     }
     const auto guard = address_space.guard_for(virtual_start, value(3u));
     const auto variant = block_variant_key(guard, 0u);

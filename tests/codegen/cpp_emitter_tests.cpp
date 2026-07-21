@@ -353,7 +353,8 @@ int main() {
             cache_source.find("OperandCacheOperation::Invalidate, cpu.r[7]") != std::string::npos &&
             cache_source.find("OperandCacheOperation::Purge, cpu.r[5]") != std::string::npos &&
             cache_source.find("OperandCacheOperation::WriteBack, cpu.r[12]") != std::string::npos &&
-            cache_source.find("cpu.memory.write_u32(cpu.r[9], cpu.r[0])") != std::string::npos,
+            cache_source.find("katana::runtime::guest_write_u32(cpu, cpu.r[9], cpu.r[0])") !=
+                std::string::npos,
         "Der C++-Emitter laesst LDTLB/cache instructions aus oder verwechselt Register.");
 
     std::cout << "Alle C++-Codegenerator-Tests erfolgreich.\n";

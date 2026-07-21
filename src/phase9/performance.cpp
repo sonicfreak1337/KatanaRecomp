@@ -326,7 +326,7 @@ std::uint64_t GuardedMemoryFastpath::misses() const noexcept {
 
 runtime::IndirectDispatchResult
 MonomorphicDispatchCache::dispatch(runtime::CpuState& cpu,
-                                   const runtime::RuntimeBlockTable& table,
+                                   runtime::RuntimeBlockTable& table,
                                    const runtime::IndirectDispatchRequest& request,
                                    const std::uint64_t block_generation,
                                    ExecutionProfiler* profiler) {

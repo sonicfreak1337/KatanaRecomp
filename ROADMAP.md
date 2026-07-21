@@ -157,7 +157,7 @@ verwenden weiterhin ausschliesslich synthetische oder frei lizenzierte Quellen.
 
 ### Neue Integrationsaufgaben
 
-- [ ] `KR-4831` - generischer Originaldisc-Installer ohne Retaildaten im Portpaket
+- [x] `KR-4831` - generischer Originaldisc-Installer ohne Retaildaten im Portpaket
 - [ ] `KR-4811` - private Harnessmodi und technisch erzwungener No-run-Vertrag
 - [ ] `KR-4812` - strukturierte Runtimeevidenz, Budgets, Replay und Datenschutz
 - [ ] `KR-4813` - content-addressed Harness- und Portbuildbeschleunigung

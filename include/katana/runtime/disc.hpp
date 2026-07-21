@@ -138,6 +138,7 @@ class GdRomAsyncReader final {
     void complete(std::uint64_t request_id, std::uint64_t cycle);
     void handle_scheduler_reset() noexcept;
     EventScheduler& scheduler_;
+    SchedulerLifetimeToken scheduler_lifetime_;
     GdRomDrive drive_;
     GdRomTiming timing_;
     std::uint64_t next_request_id_ = 1u;

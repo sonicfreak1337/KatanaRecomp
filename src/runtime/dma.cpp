@@ -33,7 +33,8 @@ Sh4Dmac::Sh4Dmac(EventScheduler& scheduler,
                  Memory& memory,
                  const DmaTiming timing,
                  const DmaExecutionMode execution_mode)
-    : scheduler_(scheduler), memory_(memory), timing_(timing), execution_mode_(execution_mode) {
+    : scheduler_(scheduler), scheduler_lifetime_(scheduler.lifetime_token()), memory_(memory),
+      timing_(timing), execution_mode_(execution_mode) {
     if (timing_.guest_cycles_per_byte == 0u || timing_.maximum_batch_units == 0u) {
         throw std::invalid_argument("DMA-Takt und Batchgroesse muessen groesser null sein.");
     }
@@ -41,6 +42,7 @@ Sh4Dmac::Sh4Dmac(EventScheduler& scheduler,
 }
 
 Sh4Dmac::~Sh4Dmac() {
+    if (scheduler_lifetime_.expired()) return;
     static_cast<void>(scheduler_.remove_reset_observer(scheduler_reset_observer_));
     cancel_event();
 }

@@ -198,6 +198,7 @@ endfunction()
 
 add_library(katana_runtime STATIC
     src/decoder/decoder.cpp
+    src/decoder/instruction_metadata.cpp
     src/io/input_provenance.cpp
     src/io/json_report.cpp
     src/runtime/aica.cpp
@@ -526,7 +527,10 @@ target_compile_definitions(katana-phase10-application-tests PRIVATE
 )
 katana_enable_warnings(katana-phase10-application-tests)
 add_test(NAME katana-phase10-application-tests COMMAND katana-phase10-application-tests)
-set_tests_properties(katana-phase10-application-tests PROPERTIES TIMEOUT 180)
+set_tests_properties(
+    katana-phase10-application-tests
+    PROPERTIES TIMEOUT 300 RESOURCE_LOCK katana-external-port-build
+)
 
 add_executable(
     katana-phase10-gui-model-tests
@@ -994,6 +998,11 @@ target_link_libraries(katana-scheduler-tests PRIVATE katana_runtime)
 katana_enable_warnings(katana-scheduler-tests)
 add_test(NAME katana-scheduler-tests COMMAND katana-scheduler-tests)
 
+add_executable(katana-dynamic-interpreter-tests tests/runtime/dynamic_interpreter_tests.cpp)
+target_link_libraries(katana-dynamic-interpreter-tests PRIVATE katana_runtime)
+katana_enable_warnings(katana-dynamic-interpreter-tests)
+add_test(NAME katana-dynamic-interpreter-tests COMMAND katana-dynamic-interpreter-tests)
+
 add_executable(katana-tmu-rtc-tests tests/runtime/tmu_rtc_tests.cpp)
 target_link_libraries(katana-tmu-rtc-tests PRIVATE katana_runtime)
 katana_enable_warnings(katana-tmu-rtc-tests)
@@ -1023,6 +1032,11 @@ add_executable(katana-holly-dma-tests tests/runtime/holly_dma_tests.cpp)
 target_link_libraries(katana-holly-dma-tests PRIVATE katana_runtime)
 katana_enable_warnings(katana-holly-dma-tests)
 add_test(NAME katana-holly-dma-tests COMMAND katana-holly-dma-tests)
+
+add_executable(katana-gdrom-controller-tests tests/runtime/gdrom_controller_tests.cpp)
+target_link_libraries(katana-gdrom-controller-tests PRIVATE katana_runtime)
+katana_enable_warnings(katana-gdrom-controller-tests)
+add_test(NAME katana-gdrom-controller-tests COMMAND katana-gdrom-controller-tests)
 
 add_executable(katana-phase11-retail-boot-services-tests
     tests/phase11/retail_boot_services_tests.cpp
@@ -1518,6 +1532,9 @@ add_test(
         -DCXX_COMPILER=${CMAKE_CXX_COMPILER}
         -DCXX_COMPILER_ID=${CMAKE_CXX_COMPILER_ID}
         -DEXECUTABLE_SUFFIX=${CMAKE_EXECUTABLE_SUFFIX}
+        -DKATANA_RUNTIME=$<TARGET_FILE:katana_runtime>
+        -DKATANA_BUILD_TYPE=${CMAKE_BUILD_TYPE}
+        -DKATANA_ENABLE_SANITIZERS=${KATANA_ENABLE_SANITIZERS}
         -DKATANA_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}
         -DKATANA_GENERATED_INCLUDE=${CMAKE_CURRENT_BINARY_DIR}/generated/include
         -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/cmake/check_optimization_cli.cmake
@@ -1584,7 +1601,10 @@ add_test(
         -DKATANA_RUNTIME_ROOT=${CMAKE_CURRENT_SOURCE_DIR}
         -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/codegen/verify_port_cli.cmake
 )
-set_tests_properties(katana-port-cli-tests PROPERTIES TIMEOUT 300)
+set_tests_properties(
+    katana-port-cli-tests
+    PROPERTIES TIMEOUT 300 RESOURCE_LOCK katana-external-port-build
+)
 
 add_executable(katana-codegen-metadata-tests tests/codegen/metadata_tests.cpp)
 target_link_libraries(katana-codegen-metadata-tests PRIVATE katana_core katana_runtime)
