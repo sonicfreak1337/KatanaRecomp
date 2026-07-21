@@ -90,5 +90,37 @@ int main() {
                 exception_audit.addresses.front().register_name == "EXPEVT",
             "SH-4-Exceptionregister oder Area-7-Alias bleiben im Auditor ungemappt.");
 
+    const auto audit_rtc_read = [](const std::uint32_t address, const std::uint16_t opcode) {
+        std::vector<std::uint8_t> rtc_bytes{0x01u,
+                                            0xD1u,
+                                            static_cast<std::uint8_t>(opcode),
+                                            static_cast<std::uint8_t>(opcode >> 8u),
+                                            0x0Bu,
+                                            0x00u,
+                                            0x09u,
+                                            0x00u};
+        append_u32(rtc_bytes, address);
+        katana::io::ExecutableImage rtc_image("synthetic-aica-rtc-audit");
+        rtc_image.add_segment({".text",
+                               0u,
+                               0u,
+                               rtc_bytes.size(),
+                               katana::io::SegmentKind::Code,
+                               {true, false, true},
+                               std::move(rtc_bytes)});
+        rtc_image.add_entry_point(0u);
+        const auto rtc_analysis = katana::analysis::analyze_control_flow(rtc_image);
+        return katana::analysis::audit_dreamcast_hardware(rtc_image, rtc_analysis);
+    };
+    const auto valid_rtc = audit_rtc_read(0xA0710000u, 0x6012u);
+    require(valid_rtc.addresses.size() == 1u && valid_rtc.implemented_addresses == 1u &&
+                valid_rtc.addresses.front().canonical_address == 0x00710000u &&
+                valid_rtc.addresses.front().register_name == "RTC_HIGH",
+            "AICA-RTC-Register und direkter Alias werden nicht als implementiert erkannt.");
+    const auto invalid_rtc = audit_rtc_read(0xA0710002u, 0x6011u);
+    require(invalid_rtc.addresses.size() == 1u && invalid_rtc.rejected_addresses == 1u &&
+                invalid_rtc.addresses.front().register_name.empty(),
+            "AICA-RTC-Zwischenadresse wird vom Auditor faelschlich als Register behauptet.");
+
     std::cout << "Allgemeines Dreamcast-Hardware-Audit erfolgreich.\n";
 }

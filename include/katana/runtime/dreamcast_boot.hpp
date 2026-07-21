@@ -107,6 +107,7 @@ struct DreamcastRuntimeState {
     std::shared_ptr<PvrYuvConverterMemoryDevice> pvr_yuv_converter;
     std::shared_ptr<PvrSoftwareRenderer> pvr_renderer;
     std::shared_ptr<AicaRegisterFile> aica_registers;
+    std::shared_ptr<AicaRtc> aica_rtc;
     std::shared_ptr<MapleBus> maple;
     std::shared_ptr<DreamcastMapleController> maple_controller;
     DreamcastHollyDmaControllers holly_dma;

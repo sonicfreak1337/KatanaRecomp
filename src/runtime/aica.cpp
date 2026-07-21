@@ -12,6 +12,92 @@
 
 namespace katana::runtime {
 
+AicaRtc::AicaRtc(EventScheduler* scheduler,
+                 const std::uint64_t guest_clock_hz,
+                 const std::uint32_t initial_seconds)
+    : scheduler_(scheduler), guest_clock_hz_(guest_clock_hz), initial_seconds_(initial_seconds),
+      base_seconds_(initial_seconds) {
+    if (guest_clock_hz_ == 0u) throw std::invalid_argument("AICA-RTC braucht einen Gasttakt.");
+    if (scheduler_ != nullptr) {
+        scheduler_lifetime_ = scheduler_->lifetime_token();
+        base_cycle_ = scheduler_->current_cycle();
+        reset_observer_ =
+            scheduler_->add_reset_observer([this] { handle_scheduler_reset(); });
+    }
+}
+
+AicaRtc::~AicaRtc() {
+    if (scheduler_ != nullptr && !scheduler_lifetime_.expired())
+        static_cast<void>(scheduler_->remove_reset_observer(reset_observer_));
+}
+
+void AicaRtc::check(const std::uint32_t offset, const MemoryAccessWidth width) {
+    if (width != MemoryAccessWidth::Byte && width != MemoryAccessWidth::Halfword &&
+        width != MemoryAccessWidth::Word)
+        throw std::invalid_argument("Ungueltige AICA-RTC-Zugriffsbreite.");
+    if (offset != aica_rtc_high_offset && offset != aica_rtc_low_offset &&
+        offset != aica_rtc_control_offset)
+        throw std::out_of_range("AICA-RTC-Zugriff trifft kein Register.");
+}
+
+std::uint32_t AicaRtc::counter() const noexcept {
+    if (scheduler_ == nullptr || scheduler_lifetime_.expired()) return base_seconds_;
+    const auto current_cycle = scheduler_->current_cycle();
+    const auto elapsed_cycles = current_cycle >= base_cycle_ ? current_cycle - base_cycle_ : 0u;
+    return static_cast<std::uint32_t>(base_seconds_ + elapsed_cycles / guest_clock_hz_);
+}
+
+std::uint32_t AicaRtc::read(const std::uint32_t offset,
+                            const MemoryAccessWidth width) const {
+    check(offset, width);
+    const auto value = counter();
+    if (offset == aica_rtc_high_offset) return value >> 16u;
+    if (offset == aica_rtc_low_offset) return value & 0xFFFFu;
+    return 0u;
+}
+
+void AicaRtc::commit_elapsed() noexcept {
+    base_seconds_ = counter();
+    if (scheduler_ != nullptr && !scheduler_lifetime_.expired())
+        base_cycle_ = scheduler_->current_cycle();
+}
+
+void AicaRtc::write(const std::uint32_t offset,
+                    const std::uint32_t value,
+                    const MemoryAccessWidth width) {
+    check(offset, width);
+    if (offset == aica_rtc_control_offset) {
+        write_enabled_ = (value & 1u) != 0u;
+        return;
+    }
+    if (!write_enabled_) return;
+    commit_elapsed();
+    if (offset == aica_rtc_high_offset) {
+        base_seconds_ = (base_seconds_ & 0x0000FFFFu) | ((value & 0xFFFFu) << 16u);
+        write_enabled_ = false;
+    } else {
+        base_seconds_ = (base_seconds_ & 0xFFFF0000u) | (value & 0xFFFFu);
+    }
+}
+
+void AicaRtc::reset() noexcept {
+    base_seconds_ = initial_seconds_;
+    base_cycle_ = scheduler_ != nullptr && !scheduler_lifetime_.expired()
+                      ? scheduler_->current_cycle()
+                      : 0u;
+    write_enabled_ = false;
+}
+
+bool AicaRtc::write_enabled() const noexcept {
+    return write_enabled_;
+}
+
+void AicaRtc::handle_scheduler_reset() noexcept {
+    base_cycle_ = 0u;
+    base_seconds_ = initial_seconds_;
+    write_enabled_ = false;
+}
+
 AicaRegisterFile::AicaRegisterFile(std::shared_ptr<AicaExecutionController> execution,
                                    std::shared_ptr<LinearMemoryDevice> ram)
     : execution_(std::move(execution)), ram_(std::move(ram)) {}
@@ -541,6 +627,23 @@ map_aica_registers(Memory& memory,
         memory.map_region("dreamcast-aica-registers-" + std::to_string(base), base, device);
     }
     return registers;
+}
+
+std::shared_ptr<AicaRtc> map_aica_rtc(Memory& memory, EventScheduler* scheduler) {
+    auto rtc = std::make_shared<AicaRtc>(scheduler);
+    auto device = std::make_shared<MmioMemoryDevice>(
+        aica_rtc_register_size,
+        [rtc](const std::uint32_t offset, const MemoryAccessWidth width) {
+            return rtc->read(offset, width);
+        },
+        [rtc](const std::uint32_t offset,
+              const std::uint32_t value,
+              const MemoryAccessWidth width) { rtc->write(offset, value, width); });
+    for (const auto segment : dreamcast_direct_segment_bases) {
+        const auto base = segment + aica_rtc_physical_base;
+        memory.map_region("dreamcast-aica-rtc-" + std::to_string(base), base, device);
+    }
+    return rtc;
 }
 
 } // namespace katana::runtime

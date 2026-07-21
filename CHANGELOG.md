@@ -4,6 +4,14 @@
 
 ### Geaendert
 
+- Das zuvor nur vom Auditor behauptete AICA-RTC-Fenster bei `0x00710000`
+  besitzt jetzt einen echten Produktpfad. `RTC_HIGH`, `RTC_LOW` und
+  `RTC_ENABLE` liefern den 32-Bit-Zaehler seit der Dreamcast-Epoche, laufen
+  deterministisch mit der Gastzeit und bilden Schreibfreigabe, Registermasken,
+  Zugriffbreiten, direkte Aliase und Reset ab. Der Hardwareauditor akzeptiert
+  nur noch diese drei Register und weist Zwischenadressen sichtbar zurueck.
+  Runtime-ABI 22 versioniert den neuen Runtimezustand; Portdiagnostik meldet
+  Zaehler und Write-Enable.
 - Der generierte Demand-Interpreter materialisiert jetzt genau eine
   SH-4-Instruktion pro Runtimeblock; nur ein architektonischer Delay-Slot wird
   atomar mit seinem Kontrolltransfer aufgenommen. Damit koennen spaeter
@@ -107,7 +115,7 @@
   MMU-faehigen `guest_read_*`-/`guest_write_*`-Schnittstellen. Die globale
   nachtraegliche Zeichenersetzung des gesamten Funktionstexts ist entfallen.
 - PlatformServices-ABI 7 versioniert den korrigierten linearen und
-  gastzeitgebundenen DMA-Vertrag. Runtime-ABI 21 und Portprojektvertrag 10
+  gastzeitgebundenen DMA-Vertrag. Runtime-ABI 22 und Portprojektvertrag 11
   bleiben die aktuellen v0.48-Vertraege.
 - Der kumulative Debug-Gate umfasst 180 Tests und ist vollstaendig gruen.
   Die beiden Tests, die eigenstaendige Portprojekte mit CMake/MSVC bauen,
@@ -146,7 +154,7 @@
   der Recipe, verwirft abweichendes Staging und veroeffentlicht dadurch keinen
   unterdessen veraenderten oder semantisch umgebundenen Discinhalt. Der Parser
   rekonstruiert Trackintegritaet und Content-Root aus dem Chunkindex.
-- Runtime-ABI 21 und Portprojektvertrag 10 versionieren kumulativ den gemeinsamen
+- Runtime-ABI 22 und Portprojektvertrag 11 versionieren kumulativ den gemeinsamen
   AICA-Sound-RAM-/Audiopfad sowie den neuen Disc-Identitaetsvertrag.
 - Der Software-PVR fuehrt die TSP-Fogmodi jetzt im echten Fragmentpfad aus:
   Look-up-Table-Fog dekodiert `FOG_DENSITY` und interpoliert die 128

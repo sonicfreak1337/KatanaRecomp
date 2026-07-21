@@ -66,9 +66,15 @@ Der generierte Demand-Interpreter materialisiert deshalb genau eine Instruktion
 beziehungsweise einen Kontrolltransfer samt untrennbarem Delay-Slot. Die
 gezielten Export-, Interpreter- und Modulregressionen sind gruen; der private
 Produktlauf erreicht damit rund 51,3 Millionen Gastzyklen ohne Block-Overlap.
-Der erste Gastframe bleibt offen.
+Der dort folgende Address-Error ist auf `0x00710000` eingegrenzt: Der Auditor
+hatte das AICA-RTC-Fenster faelschlich als implementiert bewertet, obwohl die
+Runtime nur die AICA-Register bis `0x00707FFF` mappte. Die drei RTC-Register
+sind nun samt Gastzeit, Write-Enable, Breiten, Aliasen und Reset allgemein
+implementiert; auch der Auditorvertrag besitzt positive und negative
+Registertests. Der erneute private Produktnachweis und der erste Gastframe
+bleiben offen.
 
-Runtime-ABI 21 und Portprojektvertrag 11 bilden den kumulativen v0.48-Stand ab.
+Runtime-ABI 22 und Portprojektvertrag 11 bilden den kumulativen v0.48-Stand ab.
 PlatformServices-ABI 7 bleibt unveraendert.
 
 Der iterative Portworkflow verwendet jetzt sicheres inkrementelles Staging:
@@ -97,7 +103,7 @@ Recipe 2. Die Content-Root entsteht aus den wirklich gelesenen Raw-Chunks und
 wird sowohl beim Schreiben gegen die Recipe als auch beim Oeffnen gegen
 Tracktabelle und Chunkindex geprueft; abweichendes Staging wird nicht
 veroeffentlicht. Der damals eingefuehrte AICA-Vertrag ist im aktuellen
-Runtime-ABI 21 und Portprojektvertrag 10 enthalten. Das kumulative v0.48-
+Runtime-ABI 22 und Portprojektvertrag 11 enthalten. Das kumulative v0.48-
 Debug-Gate ist mit 180 von 180 Tests bestanden; der anschliessende private
 PAL-Nachweis ist erfolgt: Der vollstaendige neue Port entstand mit 12 Workern
 in 126,8 Sekunden, ein inkrementeller Runtime-Neubau in 77,8 Sekunden. Die

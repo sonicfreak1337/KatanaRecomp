@@ -45,5 +45,38 @@ int main() {
     require(aica->read(0u, MemoryAccessWidth::Word) == 0u && aica->write_count() == 0u,
             "AICA-Reset ist nicht deterministisch.");
 
-    std::cout << "KR-2901 AICA-Registerminimum erfolgreich.\n";
+    EventScheduler scheduler;
+    const auto rtc = map_aica_rtc(bus, &scheduler);
+    const auto initial = aica_rtc_default_seconds;
+    require(bus.read_u32(0x00710000u) == (initial >> 16u) &&
+                bus.read_u16(0x80710004u) == (initial & 0xFFFFu) &&
+                bus.read_u8(0xA0710000u) == ((initial >> 16u) & 0xFFu),
+            "AICA-RTC liefert High/Low nicht breiten- oder aliasgetreu.");
+    static_cast<void>(scheduler.advance_by(2u * dreamcast_guest_cycles_per_second, 0u));
+    require(rtc->counter() == initial + 2u &&
+                bus.read_u32(0x60710004u) == ((initial + 2u) & 0xFFFFu),
+            "AICA-RTC folgt nicht deterministisch der Gastzeit.");
+
+    bus.write_u32(0x00710008u, 1u);
+    require(rtc->write_enabled(), "AICA-RTC-Schreibfreigabe wurde nicht gesetzt.");
+    bus.write_u16(0x20710004u, 0x5678u);
+    require(rtc->write_enabled() && (rtc->counter() & 0xFFFFu) == 0x5678u,
+            "AICA-RTC-Low-Schreiben verliert Wert oder Freigabe.");
+    bus.write_u32(0x40710000u, 0x1234u);
+    require(!rtc->write_enabled() && rtc->counter() == 0x12345678u,
+            "AICA-RTC-High-Schreiben setzt Zaehler oder Schreibschutz falsch.");
+    bus.write_u32(0x00710004u, 0x9ABCu);
+    require(rtc->counter() == 0x12345678u,
+            "AICA-RTC akzeptiert einen geschuetzten Zaehlerwrite.");
+    require(bus.read_u32(0x00710008u) == 0u,
+            "AICA-RTC-Control-Readback muss reservierte Bits als null liefern.");
+    require(throws<MemoryAccessError>([&] { static_cast<void>(bus.read_u16(0x00710002u)); }),
+            "AICA-RTC akzeptiert einen Zugriff zwischen den Registern.");
+    require(!bus.contains(0xE0710000u), "P4 wurde faelschlich als direkter RTC-Alias abgebildet.");
+
+    scheduler.reset();
+    require(rtc->counter() == initial && !rtc->write_enabled(),
+            "AICA-RTC-Schedulerreset ist nicht deterministisch.");
+
+    std::cout << "KR-2901 AICA-Register und RTC erfolgreich.\n";
 }

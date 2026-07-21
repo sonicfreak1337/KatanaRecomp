@@ -474,8 +474,13 @@ HardwareRuntimeSupport assess_support(const AddressDescription& description,
                    ? HardwareRuntimeSupport::Partial
                    : HardwareRuntimeSupport::Rejected;
     case Region::AicaRtc:
-        return kind != HardwareAccessKind::Prefetch ? HardwareRuntimeSupport::Implemented
-                                                    : HardwareRuntimeSupport::Rejected;
+        return kind != HardwareAccessKind::Prefetch &&
+                       (width == 1u || width == 2u || width == 4u) &&
+                       ((address - 0x00710000u) == 0u ||
+                        (address - 0x00710000u) == 4u ||
+                        (address - 0x00710000u) == 8u)
+                   ? HardwareRuntimeSupport::Implemented
+                   : HardwareRuntimeSupport::Rejected;
     case Region::AicaRam:
     case Region::Vram64:
     case Region::Vram32:

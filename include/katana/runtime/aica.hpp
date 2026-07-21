@@ -18,6 +18,13 @@ class AicaExecutionController;
 
 inline constexpr std::uint32_t aica_register_physical_base = 0x00700000u;
 inline constexpr std::size_t aica_register_size = 0x00008000u;
+inline constexpr std::uint32_t aica_rtc_physical_base = 0x00710000u;
+inline constexpr std::size_t aica_rtc_register_size = 0x0000000Cu;
+inline constexpr std::uint32_t aica_rtc_high_offset = 0x00u;
+inline constexpr std::uint32_t aica_rtc_low_offset = 0x04u;
+inline constexpr std::uint32_t aica_rtc_control_offset = 0x08u;
+// 2000-01-01 in seconds since the Dreamcast RTC epoch (1950-01-01).
+inline constexpr std::uint32_t aica_rtc_default_seconds = 1'577'836'800u;
 inline constexpr std::size_t aica_channel_count = 64u;
 inline constexpr std::size_t aica_channel_register_stride = 0x80u;
 inline constexpr std::uint32_t aica_common_register_base = 0x2800u;
@@ -53,6 +60,35 @@ class AicaRegisterFile final {
     std::array<ChannelRuntime, aica_channel_count> channels_{};
     std::uint64_t rendered_buffers_ = 0u;
     std::uint64_t rendered_frames_ = 0u;
+};
+
+class AicaRtc final {
+  public:
+    explicit AicaRtc(EventScheduler* scheduler = nullptr,
+                     std::uint64_t guest_clock_hz = dreamcast_guest_cycles_per_second,
+                     std::uint32_t initial_seconds = aica_rtc_default_seconds);
+    ~AicaRtc();
+    AicaRtc(const AicaRtc&) = delete;
+    AicaRtc& operator=(const AicaRtc&) = delete;
+
+    [[nodiscard]] std::uint32_t read(std::uint32_t offset, MemoryAccessWidth width) const;
+    void write(std::uint32_t offset, std::uint32_t value, MemoryAccessWidth width);
+    void reset() noexcept;
+    [[nodiscard]] std::uint32_t counter() const noexcept;
+    [[nodiscard]] bool write_enabled() const noexcept;
+
+  private:
+    static void check(std::uint32_t offset, MemoryAccessWidth width);
+    void commit_elapsed() noexcept;
+    void handle_scheduler_reset() noexcept;
+    EventScheduler* scheduler_ = nullptr;
+    SchedulerLifetimeToken scheduler_lifetime_;
+    SchedulerResetObserverId reset_observer_ = 0u;
+    std::uint64_t guest_clock_hz_ = dreamcast_guest_cycles_per_second;
+    std::uint64_t base_cycle_ = 0u;
+    std::uint32_t initial_seconds_ = aica_rtc_default_seconds;
+    std::uint32_t base_seconds_ = aica_rtc_default_seconds;
+    bool write_enabled_ = false;
 };
 
 enum class AicaSampleFormat : std::uint8_t { Pcm16, Pcm8, Adpcm4 };
@@ -191,5 +227,6 @@ map_aica_registers(Memory& memory, std::shared_ptr<AicaExecutionController> exec
 map_aica_registers(Memory& memory,
                    std::shared_ptr<AicaExecutionController> execution,
                    std::shared_ptr<LinearMemoryDevice> ram);
+[[nodiscard]] std::shared_ptr<AicaRtc> map_aica_rtc(Memory& memory, EventScheduler* scheduler);
 
 } // namespace katana::runtime

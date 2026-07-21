@@ -465,6 +465,7 @@ initialize_dreamcast_runtime(CpuState& cpu,
     state.aica->interrupts().set_observer(
         [raise_now] { raise_now(SystemAsicEvent::AicaInterrupt); });
     state.aica_registers = map_aica_registers(cpu.memory, state.aica, state.aica_ram);
+    state.aica_rtc = map_aica_rtc(cpu.memory, state.scheduler.get());
     state.maple = std::make_shared<MapleBus>([raise_now] { raise_now(SystemAsicEvent::MapleDma); });
     state.maple_controller =
         map_dreamcast_maple_controller(cpu.memory, *state.scheduler, state.maple, {}, [raise_now] {
