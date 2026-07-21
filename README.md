@@ -188,6 +188,12 @@ und Tracks bleiben read-only und werden niemals veraendert oder geloescht.
 Fehlende oder abweichende Originaldaten enden vor Gastcode mit einem
 Nichtnull-Exitcode und redigierter Diagnose.
 
+Recipe 2 und Disc-Pack 2 binden diesen lokalen Cache an die tatsaechlich
+gelesenen Raw-Chunks: Die Content-Root wird beim Installieren neu hergeleitet
+und beim Oeffnen aus Tracktabelle und Chunkindex rekonstruiert. Eine waehrend
+des Installierens veraenderte Quelle kann daher kein gueltiges Paket unter
+einer zuvor erfassten Identitaet erzeugen.
+
 Der aktuelle private PAL-Bring-up ist echte native AOT-Ausfuehrung und keine
 Konsolenemulation: Discbytes dienen lokal als Nutzerdatenquelle, waehrend der
 SH-4-Code in statische Hostfunktionen rekompiliert wird. Noch nicht gebundene
@@ -198,6 +204,9 @@ Deskriptoren und schreiben ihre Antworten gastzeitgebunden per DMA zurueck.
 AICA/G2- und PVR-DMA nutzen fuer lineare Gastregionen einen validierten
 Bulk-Kopierpfad; Beobachter- und MMIO-Situationen behalten den exakten
 referenziellen Einzelzugriffspfad.
+Der AICA-HLE-Produktpfad liest ebenfalls die echten Gast-Slotregister und das
+gemeinsame Sound-RAM und erzeugt pro Media-Clock-Tick PCM16-Stereo; ein
+synthetischer Stummpuffer gilt nicht mehr als Audioerfolg.
 
 Der generierte SH-4-Pfad erzwingt den privilegierten Modus fuer markierte
 Systemregister- und Kontrollinstruktionen. Ein Zugriff aus dem User-Modus wird

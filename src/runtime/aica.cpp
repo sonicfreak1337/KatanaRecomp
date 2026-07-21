@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <bit>
+#include <cmath>
 #include <limits>
 #include <stdexcept>
 #include <string>
@@ -11,8 +12,9 @@
 
 namespace katana::runtime {
 
-AicaRegisterFile::AicaRegisterFile(std::shared_ptr<AicaExecutionController> execution)
-    : execution_(std::move(execution)) {}
+AicaRegisterFile::AicaRegisterFile(std::shared_ptr<AicaExecutionController> execution,
+                                   std::shared_ptr<LinearMemoryDevice> ram)
+    : execution_(std::move(execution)), ram_(std::move(ram)) {}
 
 std::size_t AicaRegisterFile::width_bytes(const MemoryAccessWidth width) noexcept {
     return static_cast<std::size_t>(width);
@@ -51,6 +53,27 @@ void AicaRegisterFile::write(const std::uint32_t offset,
     for (std::size_t index = 0u; index < width_bytes(width); ++index) {
         registers_[offset + index] = static_cast<std::uint8_t>(value >> (index * 8u));
     }
+    if (offset < aica_channel_count * aica_channel_register_stride &&
+        (offset % aica_channel_register_stride) < 4u) {
+        const auto local = offset % aica_channel_register_stride;
+        if (local == 0u || (local < 2u && width != MemoryAccessWidth::Byte)) {
+            const auto control_offset = offset - local;
+            const auto control = static_cast<std::uint16_t>(registers_[control_offset]) |
+                                 static_cast<std::uint16_t>(registers_[control_offset + 1u] << 8u);
+            if ((control & 0x8000u) != 0u) {
+                for (std::size_t channel = 0u; channel < channels_.size(); ++channel) {
+                    const auto base = channel * aica_channel_register_stride;
+                    const auto candidate = static_cast<std::uint16_t>(registers_[base]) |
+                                           static_cast<std::uint16_t>(registers_[base + 1u] << 8u);
+                    auto& runtime = channels_[channel];
+                    const auto enabled = (candidate & 0x4000u) != 0u;
+                    if (enabled && !runtime.active) runtime = ChannelRuntime{0u, 0u, 0, 127, true};
+                    if (!enabled) runtime.active = false;
+                    registers_[base + 1u] &= 0x7Fu;
+                }
+            }
+        }
+    }
     if (execution_ && offset >= 0x2890u && offset <= 0x2898u && (offset & 3u) == 0u) {
         const auto timer = static_cast<std::size_t>((offset - 0x2890u) / 4u);
         execution_->timer(timer).configure(
@@ -65,7 +88,130 @@ void AicaRegisterFile::write(const std::uint32_t offset,
 
 void AicaRegisterFile::reset() noexcept {
     registers_.fill(0u);
+    channels_.fill({});
     writes_ = 0u;
+    rendered_buffers_ = 0u;
+    rendered_frames_ = 0u;
+}
+
+std::vector<std::int16_t> AicaRegisterFile::render_audio(const std::size_t frame_count,
+                                                         const std::uint32_t sample_rate) {
+    if (!ram_) throw std::runtime_error("AICA-Audiopfad besitzt kein gemeinsames Sound-RAM.");
+    if (sample_rate == 0u || frame_count > std::numeric_limits<std::size_t>::max() / 2u)
+        throw std::invalid_argument("AICA-Audioausgabe besitzt eine ungueltige Geometrie.");
+    std::vector<std::int16_t> output(frame_count * 2u, 0);
+    std::vector<std::int64_t> accumulation(frame_count * 2u, 0);
+    const auto read16 = [this](const std::size_t offset) {
+        return static_cast<std::uint16_t>(registers_[offset]) |
+               static_cast<std::uint16_t>(registers_[offset + 1u] << 8u);
+    };
+    const auto master = static_cast<double>(registers_[aica_common_register_base] & 0x0Fu) / 15.0;
+    for (std::size_t channel = 0u; channel < channels_.size(); ++channel) {
+        auto& runtime = channels_[channel];
+        if (!runtime.active) continue;
+        const auto base = channel * aica_channel_register_stride;
+        const auto control = read16(base);
+        const auto format = static_cast<std::uint8_t>((control >> 7u) & 3u);
+        const auto sample_base = (static_cast<std::uint32_t>(control & 0x7Fu) << 16u) |
+                                 read16(base + 4u);
+        const auto loop_start = static_cast<std::uint32_t>(read16(base + 8u));
+        const auto loop_end = static_cast<std::uint32_t>(read16(base + 12u));
+        if (loop_end == 0u || sample_base >= ram_->size()) {
+            runtime.active = false;
+            continue;
+        }
+        const auto pitch = read16(base + 24u);
+        auto octave = static_cast<int>((pitch >> 11u) & 0x0Fu);
+        if ((octave & 8) != 0) octave -= 16;
+        const auto frequency = 44'100.0 * std::ldexp(1.0, octave) *
+                               (1.0 + static_cast<double>(pitch & 0x03FFu) / 1024.0);
+        const auto phase_step = static_cast<std::uint64_t>(
+            std::max(0.0, frequency / sample_rate) * 4294967296.0);
+        const auto total_level = registers_[base + 41u];
+        const auto direct_level = registers_[base + 37u] & 0x0Fu;
+        const auto gain = master * (static_cast<double>(direct_level) / 15.0) *
+                          std::pow(10.0, -0.75 * total_level / 20.0);
+        const auto pan = registers_[base + 36u] & 0x1Fu;
+        const auto pan_attenuation = std::pow(10.0, -3.0 * (pan & 0x0Fu) / 20.0);
+        const auto left_gain = gain * (((pan & 0x10u) != 0u) ? 1.0 : pan_attenuation);
+        const auto right_gain = gain * (((pan & 0x10u) != 0u) ? pan_attenuation : 1.0);
+        const auto reset_adpcm = [&runtime] {
+            runtime.adpcm_position = 0u;
+            runtime.adpcm_predictor = 0;
+            runtime.adpcm_step = 127;
+        };
+        const auto decode_adpcm_until = [&](const std::uint32_t target) {
+            while (runtime.adpcm_position <= target) {
+                const auto byte_offset = static_cast<std::uint64_t>(sample_base) +
+                                         runtime.adpcm_position / 2u;
+                if (byte_offset >= ram_->size()) throw std::out_of_range("AICA-ADPCM verlaesst Sound-RAM.");
+                const auto packed = ram_->read_u8(static_cast<std::uint32_t>(byte_offset));
+                const auto nibble = static_cast<std::uint8_t>(
+                    (runtime.adpcm_position & 1u) == 0u ? packed & 0x0Fu : packed >> 4u);
+                static constexpr std::array<std::int32_t, 8u> scale{230,230,230,230,307,409,512,614};
+                const auto magnitude = static_cast<std::int32_t>(nibble & 7u);
+                const auto delta = ((magnitude * 2 + 1) * runtime.adpcm_step) >> 3;
+                runtime.adpcm_predictor += (nibble & 8u) != 0u ? -delta : delta;
+                runtime.adpcm_predictor = std::clamp(runtime.adpcm_predictor, -32768, 32767);
+                runtime.adpcm_step = std::clamp(
+                    (runtime.adpcm_step * scale[static_cast<std::size_t>(magnitude)]) >> 8,
+                    127,
+                    24576);
+                ++runtime.adpcm_position;
+            }
+            return static_cast<std::int16_t>(runtime.adpcm_predictor);
+        };
+        for (std::size_t frame = 0u; frame < frame_count && runtime.active; ++frame) {
+            auto position = static_cast<std::uint32_t>(runtime.phase >> 32u);
+            if (position >= loop_end) {
+                if ((control & 0x0200u) == 0u) {
+                    runtime.active = false;
+                    break;
+                }
+                position = std::min(loop_start, loop_end - 1u);
+                runtime.phase = static_cast<std::uint64_t>(position) << 32u;
+                if (format >= 2u) reset_adpcm();
+            }
+            std::int16_t sample = 0;
+            if (format == 0u) {
+                const auto address = static_cast<std::uint64_t>(sample_base) + position * 2u;
+                if (address + 2u > ram_->size()) throw std::out_of_range("AICA-PCM16 verlaesst Sound-RAM.");
+                sample = std::bit_cast<std::int16_t>(ram_->read_u16(static_cast<std::uint32_t>(address)));
+            } else if (format == 1u) {
+                const auto address = static_cast<std::uint64_t>(sample_base) + position;
+                if (address >= ram_->size()) throw std::out_of_range("AICA-PCM8 verlaesst Sound-RAM.");
+                sample = static_cast<std::int16_t>(
+                    static_cast<std::int16_t>(std::bit_cast<std::int8_t>(ram_->read_u8(static_cast<std::uint32_t>(address)))) * 256);
+            } else {
+                if (runtime.adpcm_position > position) reset_adpcm();
+                sample = decode_adpcm_until(position);
+            }
+            accumulation[frame * 2u] += static_cast<std::int64_t>(std::lround(sample * left_gain));
+            accumulation[frame * 2u + 1u] += static_cast<std::int64_t>(std::lround(sample * right_gain));
+            runtime.phase += phase_step;
+            if ((control & 0x0200u) == 0u && (runtime.phase >> 32u) >= loop_end)
+                runtime.active = false;
+        }
+    }
+    for (std::size_t index = 0u; index < output.size(); ++index)
+        output[index] = static_cast<std::int16_t>(
+            std::clamp<std::int64_t>(accumulation[index], -32768, 32767));
+    ++rendered_buffers_;
+    rendered_frames_ += frame_count;
+    return output;
+}
+
+std::size_t AicaRegisterFile::active_channel_count() const noexcept {
+    return static_cast<std::size_t>(std::count_if(
+        channels_.begin(), channels_.end(), [](const auto& channel) { return channel.active; }));
+}
+
+std::uint64_t AicaRegisterFile::rendered_buffer_count() const noexcept {
+    return rendered_buffers_;
+}
+
+std::uint64_t AicaRegisterFile::rendered_frame_count() const noexcept {
+    return rendered_frames_;
 }
 
 std::uint64_t AicaRegisterFile::write_count() const noexcept {
@@ -290,6 +436,9 @@ void AicaInterruptState::acknowledge(const std::uint32_t mask) noexcept {
 std::uint32_t AicaInterruptState::pending() const noexcept {
     return pending_;
 }
+std::uint32_t AicaInterruptState::enabled() const noexcept {
+    return enabled_;
+}
 bool AicaInterruptState::asserted() const noexcept {
     return (pending_ & enabled_) != 0u;
 }
@@ -347,7 +496,14 @@ std::shared_ptr<AicaRegisterFile> map_aica_registers(Memory& memory) {
 
 std::shared_ptr<AicaRegisterFile>
 map_aica_registers(Memory& memory, std::shared_ptr<AicaExecutionController> execution) {
-    auto registers = std::make_shared<AicaRegisterFile>(std::move(execution));
+    return map_aica_registers(memory, std::move(execution), {});
+}
+
+std::shared_ptr<AicaRegisterFile>
+map_aica_registers(Memory& memory,
+                   std::shared_ptr<AicaExecutionController> execution,
+                   std::shared_ptr<LinearMemoryDevice> ram) {
+    auto registers = std::make_shared<AicaRegisterFile>(std::move(execution), std::move(ram));
     auto device = std::make_shared<MmioMemoryDevice>(
         aica_register_size,
         [registers](const std::uint32_t offset, const MemoryAccessWidth width) {

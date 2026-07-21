@@ -30,7 +30,7 @@ port/
   .gitignore
 ```
 
-`game.katana-install` enthaelt Formatversion, Jobgeneration,
+`game.katana-install` enthaelt Recipe-Version 2, Jobgeneration,
 Descriptor-SHA-256, Boot-SHA-256, Contentidentitaet und pro Track Nummer, LBA,
 Typ, Sektorgroesse, Offset, Sektoranzahl und SHA-256. Sie enthaelt keine
 Discbytes, Tracknamen, absoluten Pfade oder privaten Hostinformationen.
@@ -52,6 +52,14 @@ Bootdatei. Erst danach wird atomar
 vollstaendigen logischen LBA-Raum einschliesslich Raw- und Audiosektoren und
 darf nicht verteilt werden. Er ist durch `.gitignore` geschuetzt und wird von
 Repository-, CI-, Release- und Paketaudits als Retailinhalt abgelehnt.
+
+Disc-Pack-Format 2 berechnet seine Content-Root nicht aus vorab uebernommenen
+Dateimetadaten, sondern aus kanonischer Trackgeometrie und den SHA-256-Werten
+der tatsaechlich geschriebenen Raw-Chunks. Der Installer vergleicht diese
+waehrend des Schreibens neu hergeleitete Root mit der Recipe; bei einer
+zwischenzeitlich veraenderten Quelle wird nur das Staging verworfen und kein
+Cache publiziert. Beim Oeffnen rekonstruiert die Runtime Trackintegritaet und
+Content-Root erneut aus dem Chunkindex, bevor Gastcode laufen darf.
 
 Der normale Start verwendet ausschliesslich diesen lokalen Cache. Ein fehlender
 oder manipulierter Cache, eine ersetzte Recipe oder eine nicht exakt passende

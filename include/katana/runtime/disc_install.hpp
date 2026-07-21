@@ -11,7 +11,7 @@
 
 namespace katana::runtime {
 
-inline constexpr std::uint32_t disc_install_recipe_version = 1u;
+inline constexpr std::uint32_t disc_install_recipe_version = 2u;
 
 struct DiscInstallTrack {
     std::uint32_t number = 0u;

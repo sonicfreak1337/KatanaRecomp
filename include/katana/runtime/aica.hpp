@@ -24,18 +24,35 @@ inline constexpr std::uint32_t aica_common_register_base = 0x2800u;
 
 class AicaRegisterFile final {
   public:
-    explicit AicaRegisterFile(std::shared_ptr<AicaExecutionController> execution = {});
+    explicit AicaRegisterFile(std::shared_ptr<AicaExecutionController> execution = {},
+                              std::shared_ptr<LinearMemoryDevice> ram = {});
     [[nodiscard]] std::uint32_t read(std::uint32_t offset, MemoryAccessWidth width) const;
     void write(std::uint32_t offset, std::uint32_t value, MemoryAccessWidth width);
     void reset() noexcept;
     [[nodiscard]] std::uint64_t write_count() const noexcept;
+    [[nodiscard]] std::vector<std::int16_t> render_audio(std::size_t frame_count,
+                                                         std::uint32_t sample_rate);
+    [[nodiscard]] std::size_t active_channel_count() const noexcept;
+    [[nodiscard]] std::uint64_t rendered_buffer_count() const noexcept;
+    [[nodiscard]] std::uint64_t rendered_frame_count() const noexcept;
 
   private:
+    struct ChannelRuntime {
+        std::uint64_t phase = 0u;
+        std::uint32_t adpcm_position = 0u;
+        std::int32_t adpcm_predictor = 0;
+        std::int32_t adpcm_step = 127;
+        bool active = false;
+    };
     [[nodiscard]] static std::size_t width_bytes(MemoryAccessWidth width) noexcept;
     void check(std::uint32_t offset, MemoryAccessWidth width) const;
     std::array<std::uint8_t, aica_register_size> registers_{};
     std::uint64_t writes_ = 0u;
     std::shared_ptr<AicaExecutionController> execution_;
+    std::shared_ptr<LinearMemoryDevice> ram_;
+    std::array<ChannelRuntime, aica_channel_count> channels_{};
+    std::uint64_t rendered_buffers_ = 0u;
+    std::uint64_t rendered_frames_ = 0u;
 };
 
 enum class AicaSampleFormat : std::uint8_t { Pcm16, Pcm8, Adpcm4 };
@@ -119,6 +136,7 @@ class AicaInterruptState final {
     void request(std::uint32_t mask);
     void acknowledge(std::uint32_t mask) noexcept;
     [[nodiscard]] std::uint32_t pending() const noexcept;
+    [[nodiscard]] std::uint32_t enabled() const noexcept;
     [[nodiscard]] bool asserted() const noexcept;
 
   private:
@@ -166,5 +184,9 @@ class AicaExecutionController final {
 [[nodiscard]] std::shared_ptr<AicaRegisterFile> map_aica_registers(Memory& memory);
 [[nodiscard]] std::shared_ptr<AicaRegisterFile>
 map_aica_registers(Memory& memory, std::shared_ptr<AicaExecutionController> execution);
+[[nodiscard]] std::shared_ptr<AicaRegisterFile>
+map_aica_registers(Memory& memory,
+                   std::shared_ptr<AicaExecutionController> execution,
+                   std::shared_ptr<LinearMemoryDevice> ram);
 
 } // namespace katana::runtime

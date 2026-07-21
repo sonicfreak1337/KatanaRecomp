@@ -19,6 +19,14 @@ die Originaldisc vollstaendig und erzeugt den lokalen Pack atomar nur unter
 Tests sind gruen; Sonic Adventure PAL und Sonic Shuffle PAL bleiben private,
 read-only Kompatibilitaetsfixtures und erhalten keine Sonderlogik.
 
+Der abschliessende Identitaetsblock verwendet jetzt Disc-Pack-Format 2 und
+Recipe 2. Die Content-Root entsteht aus den wirklich gelesenen Raw-Chunks und
+wird sowohl beim Schreiben gegen die Recipe als auch beim Oeffnen gegen
+Tracktabelle und Chunkindex geprueft; abweichendes Staging wird nicht
+veroeffentlicht. Runtime-ABI 16 und Portprojektvertrag 9 versionieren zugleich
+den echten gastzeitgebundenen AICA-Produktmixer. Das einmalige v0.48-
+Gesamtgate und der anschliessende private PAL-Nachweis stehen noch aus.
+
 ## Privater PAL-Runtime-Bring-up
 
 Ein frischer privater Hostbuild hat eine allgemeine MSVC-Parallelitaetsluecke offengelegt:

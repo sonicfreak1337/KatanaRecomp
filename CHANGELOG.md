@@ -4,6 +4,21 @@
 
 ### Geaendert
 
+- Der native Produktpfad rendert AICA-Kanaele jetzt direkt aus den vom Gast
+  beschriebenen Slotregistern und dem gemeinsam gemappten Sound-RAM. PCM16,
+  PCM8 und AICA-ADPCM, Key-On/-Off, Looping, Pitch, Total Level, Direct Send,
+  Pan und Master Volume werden auf jedem gastzeitgebundenen Audio-Tick in
+  PCM16-Stereo umgesetzt; der bisher nach Runtime-Ende eingereichte
+  synthetische Stummpuffer entfaellt. ARM7-LLE bleibt eine ausdrueckliche,
+  nicht vorgetaeuschte Grenze.
+- Disc-Pack-Format 2 und Installations-Recipe 2 leiten die Content-Root aus
+  Trackgeometrie und den Hashes der tatsaechlich gelesenen Raw-Chunks her.
+  Der Installer vergleicht diese Root waehrend des Packschreibens erneut mit
+  der Recipe, verwirft abweichendes Staging und veroeffentlicht dadurch keinen
+  unterdessen veraenderten oder semantisch umgebundenen Discinhalt. Der Parser
+  rekonstruiert Trackintegritaet und Content-Root aus dem Chunkindex.
+- Runtime-ABI 16 und Portprojektvertrag 9 versionieren den gemeinsamen
+  AICA-Sound-RAM-/Audiopfad sowie den neuen Disc-Identitaetsvertrag.
 - Der Software-PVR fuehrt die TSP-Fogmodi jetzt im echten Fragmentpfad aus:
   Look-up-Table-Fog dekodiert `FOG_DENSITY` und interpoliert die 128
   Koeffizienten, Per-Vertex-Fog verwendet das interpolierte Offset-Alpha und

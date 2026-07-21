@@ -86,7 +86,7 @@ DiscInstallRecipe make_disc_install_recipe(const GdiDiscSource& source,
                                source_track.sha256};
         result.tracks.push_back(std::move(track));
     }
-    result.content_identity = gdi_content_identity(descriptor);
+    result.content_identity = packed_disc_content_identity(source);
     validate_recipe(result);
     return result;
 }
@@ -184,7 +184,8 @@ PackedDiscInfo install_disc_content(const DiscInstallRecipe& recipe,
                                     const std::filesystem::path& destination) {
     const auto source = GdiDiscSource::open(gdi_path);
     verify_disc_install_source(recipe, *source);
-    return write_packed_disc(*source, destination, recipe.job_generation);
+    return write_packed_disc(
+        *source, destination, recipe.job_generation, recipe.content_identity);
 }
 
 } // namespace katana::runtime

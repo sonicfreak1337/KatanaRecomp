@@ -17,6 +17,14 @@ Shutdown setzt Puffer zurueck, loest Header und schliesst das Geraet. Ohne
 verfuegbares Audiogeraet bleibt der Recording-Pfad nutzbar. Nicht implementierte
 Plattformen behaupten keine native Audioausgabe.
 
+Im generierten Port ist dieser Mixer kein Platzhalter: Jeder Audio-Tick liest
+die 64 AICA-Slots aus demselben Registerfile und Sound-RAM, die der native
+Gastcode ueber MMIO beschreibt. Der HLE-Pfad dekodiert PCM16, PCM8 und AICA-
+ADPCM und wendet Keying, Loopgrenzen, Pitch, Lautstaerke, Direct Send, Pan und
+Master Volume an. Nicht implementiertes ARM7-LLE bleibt explizit
+`unsupported`; es wird weder emuliert noch als erfolgreiche Ausfuehrung
+gemeldet.
+
 ## Eingabe und Lebenszyklus
 
 Das Win32-Fenster liefert Fokus, Tastendruck/-freigabe und Close monoton
@@ -39,7 +47,7 @@ stoppt die Hostausgabe und speichert danach Flash/VMU. Ein Savefehler ist ueber
 ## Nachweis
 
 Die erzeugte `game.exe` besitzt Input, Media-Clock, Hostaudio und Lebenszyklus
-selbst. Sie praesentiert einen VRAM-Frame, reicht einen AICA-Puffer ein und
+selbst. Sie praesentiert VRAM-Frames und reicht gastzeitgebundene AICA-Puffer ein; sie
 meldet `audio_buffers`, `audio_hash` und `input_events`. Der Hostruntime-Test
 prueft Eingabeinjektion, Audiohash, Fokus/Pause, WinMM und sauberen Shutdown;
 Port-CLI und relocatiertes SDK pruefen den Produktpfad ohne CLI-Laufzeithuelle.

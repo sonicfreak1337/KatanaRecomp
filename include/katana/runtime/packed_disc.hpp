@@ -16,7 +16,7 @@
 
 namespace katana::runtime {
 
-inline constexpr std::uint32_t packed_disc_format_version = 1u;
+inline constexpr std::uint32_t packed_disc_format_version = 2u;
 inline constexpr std::uint32_t packed_disc_chunk_sectors = 64u;
 
 enum class PackedDiscPayloadKind : std::uint32_t {
@@ -97,7 +97,9 @@ class PackedDiscSource final : public DiscSource {
 
 [[nodiscard]] PackedDiscInfo write_packed_disc(const GdiDiscSource& source,
                                                const std::filesystem::path& destination,
-                                               std::string job_generation);
+                                               std::string job_generation,
+                                               std::string_view expected_content_identity = {});
+[[nodiscard]] std::string packed_disc_content_identity(const GdiDiscSource& source);
 [[nodiscard]] std::string
 format_packed_disc_manifest(const PackedDiscInfo& info,
                             std::string_view pack_sha256,

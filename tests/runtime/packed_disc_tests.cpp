@@ -241,6 +241,17 @@ int main() {
     require(hash(deterministic_path) == pack_hash &&
                 deterministic.content_identity == info.content_identity,
             "Deterministischer Doppelbuild erzeugt einen abweichenden Disc-Pack.");
+    const auto rejected_identity_path = fixture.root / "output" / "wrong-root.katana-disc";
+    require_failure(
+        [&] {
+            static_cast<void>(write_packed_disc(
+                *gdi, rejected_identity_path, generation_a, std::string(64u, '0')));
+        },
+        "Beim Schreiben neu hergeleitete Discbytes wurden nicht gegen die Recipe gebunden.");
+    require(!std::filesystem::exists(rejected_identity_path) &&
+                !std::filesystem::exists(
+                    std::filesystem::path(rejected_identity_path.string() + ".katana-stage")),
+            "Eine abweichende Content-Root wurde teilweise veroeffentlicht.");
     const auto generation_b_path = fixture.root / "output" / "new-generation.katana-disc";
     const auto generation_b = write_packed_disc(*gdi, generation_b_path, std::string(64u, 'b'));
     require(generation_b.content_identity == info.content_identity &&

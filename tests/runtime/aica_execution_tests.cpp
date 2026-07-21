@@ -1,9 +1,14 @@
 #include "katana/runtime/aica.hpp"
+#include "katana/runtime/dreamcast_memory.hpp"
 
+#include <bit>
+#include <cstdint>
 #include <cstdlib>
 #include <iostream>
+#include <memory>
 #include <stdexcept>
 #include <string>
+#include <vector>
 
 namespace {
 void require(const bool value, const std::string& message) {
@@ -55,6 +60,30 @@ int main() {
                 timer.configure(0u, 8u, true);
             }),
             "Ungueltiger AICA-Timerteiler wird akzeptiert.");
+
+    Memory memory(0u);
+    auto sound_ram = map_dreamcast_aica_ram(memory);
+    auto product_execution = std::make_shared<AicaExecutionController>();
+    auto product_registers = map_aica_registers(memory, product_execution, sound_ram);
+    sound_ram->write_u16(0u, 1000u);
+    sound_ram->write_u16(2u, std::bit_cast<std::uint16_t>(std::int16_t{-1000}));
+    memory.write_u32(0x00702800u, 0x0Fu);
+    memory.write_u32(0x00700004u, 0u);
+    memory.write_u32(0x0070000Cu, 2u);
+    memory.write_u32(0x00700018u, 0u);
+    memory.write_u8(0x00700024u, 0u);
+    memory.write_u8(0x00700025u, 0x0Fu);
+    memory.write_u8(0x00700029u, 0u);
+    memory.write_u32(0x00700000u, 0x0000C000u);
+    const auto rendered = product_registers->render_audio(2u, 44'100u);
+    require(rendered == std::vector<std::int16_t>({1000, 1000, -1000, -1000}) &&
+                product_registers->active_channel_count() == 0u &&
+                product_registers->rendered_buffer_count() == 1u,
+            "AICA-Gastregister, gemeinsames Sound-RAM und Produktmixer sind nicht verbunden.");
+    memory.write_u32(0x00700000u, 0x00008000u);
+    require(product_registers->render_audio(1u, 44'100u) ==
+                std::vector<std::int16_t>({0, 0}),
+            "AICA-Key-Off stoppt den ausgefuehrten Produktkanal nicht.");
 
     std::cout << "KR-2904 ARM7-HLE-Strategie, Timer und Interrupts erfolgreich.\n";
 }
