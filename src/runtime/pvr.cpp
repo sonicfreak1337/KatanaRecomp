@@ -427,6 +427,53 @@ Rgba8 decode_yuv_pair(const std::uint16_t first,
             0xFFu};
 }
 
+Rgba8 decode_register_color(const std::uint32_t value) {
+    return {static_cast<std::uint8_t>(value >> 16u),
+            static_cast<std::uint8_t>(value >> 8u),
+            static_cast<std::uint8_t>(value),
+            static_cast<std::uint8_t>(value >> 24u)};
+}
+
+Rgba8 apply_fog(const Rgba8 source, const Rgba8 fog, const std::uint8_t coefficient) {
+    const auto blend = [coefficient](const std::uint8_t from, const std::uint8_t to) {
+        return static_cast<std::uint8_t>(
+            (static_cast<std::uint32_t>(255u - coefficient) * from +
+             static_cast<std::uint32_t>(coefficient) * to + 127u) /
+            255u);
+    };
+    return {blend(source.r, fog.r), blend(source.g, fog.g), blend(source.b, fog.b), source.a};
+}
+
+std::uint8_t table_fog_coefficient(const PvrRegisterFile& registers, const float depth) {
+    const auto encoded_density = registers.read(pvr_register::FogDensity) & 0xFFFFu;
+    const auto mantissa = static_cast<std::uint8_t>(encoded_density >> 8u);
+    if (mantissa == 0u || !std::isfinite(depth) || depth <= 0.0f) return 0u;
+    const auto exponent = static_cast<std::int8_t>(encoded_density & 0xFFu);
+    const auto density = std::ldexp(static_cast<float>(mantissa) / 128.0f, exponent);
+    const auto inverse_w = std::clamp(depth * density, 1.0f, 255.9999f);
+    const auto index_bits = std::clamp(static_cast<int>(std::floor(std::log2(inverse_w))), 0, 7);
+    const auto normalized = std::ldexp(inverse_w, -index_bits);
+    const auto position = std::clamp((normalized - 1.0f) * 16.0f, 0.0f, 15.9999f);
+    const auto mantissa_bits = std::clamp(static_cast<int>(std::floor(position)), 0, 15);
+    const auto fraction = position - static_cast<float>(mantissa_bits);
+    const auto table_index = static_cast<std::uint32_t>(index_bits * 16 + mantissa_bits);
+    const auto entry = registers.read(pvr_register::FogTableBase + table_index * 4u);
+    const auto current = static_cast<float>((entry >> 8u) & 0xFFu);
+    const auto next = static_cast<float>(entry & 0xFFu);
+    return static_cast<std::uint8_t>(std::lround(current + (next - current) * fraction));
+}
+
+Rgba8 clamp_fragment_color(const Rgba8 source, const PvrRegisterFile& registers) {
+    const auto minimum = decode_register_color(registers.read(pvr_register::ColorClampMinimum));
+    const auto maximum = decode_register_color(registers.read(pvr_register::ColorClampMaximum));
+    if (minimum.r > maximum.r || minimum.g > maximum.g || minimum.b > maximum.b)
+        throw std::runtime_error("PVR-Farbclamp besitzt vertauschte RGB-Grenzen.");
+    return {std::clamp(source.r, minimum.r, maximum.r),
+            std::clamp(source.g, minimum.g, maximum.g),
+            std::clamp(source.b, minimum.b, maximum.b),
+            source.a};
+}
+
 Rgba8 sample_texture_nearest(const LinearMemoryDevice& vram,
                              const PvrRegisterFile& registers,
                              const PvrMaterial& material,
@@ -1122,6 +1169,7 @@ void PvrTaFifo::submit(const std::span<const std::uint8_t> packet) {
         active_material_.flip_u = (mode2 & 0x00040000u) != 0u;
         active_material_.texture_alpha_disabled = (mode2 & 0x00080000u) != 0u;
         active_material_.vertex_alpha_enabled = (mode2 & 0x00100000u) != 0u;
+        active_material_.color_clamp_enabled = (mode2 & 0x00200000u) != 0u;
         active_material_.offset_color_enabled = (pcw & 0x4u) != 0u;
         active_material_.fog_mode = static_cast<std::uint8_t>((mode2 >> 22u) & 3u);
         active_material_.destination_blend = static_cast<std::uint8_t>((mode2 >> 26u) & 7u);
@@ -1191,6 +1239,7 @@ void PvrTaFifo::submit(const std::span<const std::uint8_t> packet) {
         active_material_.flip_u = (mode2 & 0x00040000u) != 0u;
         active_material_.texture_alpha_disabled = (mode2 & 0x00080000u) != 0u;
         active_material_.vertex_alpha_enabled = (mode2 & 0x00100000u) != 0u;
+        active_material_.color_clamp_enabled = (mode2 & 0x00200000u) != 0u;
         active_material_.offset_color_enabled = (pcw & 0x4u) != 0u;
         active_material_.fog_mode = static_cast<std::uint8_t>((mode2 >> 22u) & 3u);
         active_material_.destination_blend = static_cast<std::uint8_t>((mode2 >> 26u) & 7u);
@@ -1659,7 +1708,28 @@ void PvrSoftwareRenderer::render(const PvrTaFrame& frame,
                                                             0.0f,
                                                             255.0f))
                                                       : channel(a->oargb, 0u)),
-                        0u};
+                        static_cast<std::uint8_t>(primitive.material.gouraud
+                                                      ? std::lround(std::clamp(
+                                                            (w0 * channel(a->oargb, 24u) +
+                                                             w1 * channel(b->oargb, 24u) +
+                                                             w2 * channel(c->oargb, 24u)) /
+                                                                area,
+                                                            0.0f,
+                                                            255.0f))
+                                                      : channel(a->oargb, 24u))};
+                    std::uint8_t fog_coefficient = 0u;
+                    if (primitive.material.fog_mode == 0u ||
+                        primitive.material.fog_mode == 3u) {
+                        fog_coefficient = table_fog_coefficient(registers, fragment_depth);
+                    } else if (primitive.material.fog_mode == 1u &&
+                               primitive.material.offset_color_enabled) {
+                        fog_coefficient = offset_color.a;
+                    }
+                    if (primitive.material.fog_mode == 3u) {
+                        const auto fog =
+                            decode_register_color(registers.read(pvr_register::FogTableColor));
+                        source = {fog.r, fog.g, fog.b, fog_coefficient};
+                    }
                     if (primitive.material.textured) {
                         const auto u = interpolate_float(a->u, b->u, c->u);
                         const auto v = interpolate_float(a->v, b->v, c->v);
@@ -1669,6 +1739,20 @@ void PvrSoftwareRenderer::render(const PvrTaFrame& frame,
                     }
                     if (primitive.material.offset_color_enabled)
                         source = add_offset_color(source, offset_color);
+                    if (primitive.material.fog_mode == 0u) {
+                        source = apply_fog(
+                            source,
+                            decode_register_color(registers.read(pvr_register::FogTableColor)),
+                            fog_coefficient);
+                    } else if (primitive.material.fog_mode == 1u &&
+                               primitive.material.offset_color_enabled) {
+                        source = apply_fog(
+                            source,
+                            decode_register_color(registers.read(pvr_register::FogVertexColor)),
+                            fog_coefficient);
+                    }
+                    if (primitive.material.color_clamp_enabled)
+                        source = clamp_fragment_color(source, registers);
                     if (primitive.list == PvrListType::PunchThrough && source.a < 0x80u)
                         continue;
                     const auto offset = static_cast<std::uint32_t>(

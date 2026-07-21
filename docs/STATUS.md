@@ -34,9 +34,11 @@ AOT-Bloecke, weiterhin ohne Gastframe. Die erste belegte Ausnahme bei
 Der anschliessende Halt bei `0xA05F6800` fuehrte zu einem allgemeinen Audit
 des Holly-Systembus-Steuerblocks: `0x005F6800..0x005F68AC`, seine direkten
 Segmentaliase und die angrenzenden PVR-/G2-DMA-Triggermasken sind nun mit
-geschlossenen Breiten-, Masken- und Zugriffsvertraegen umgesetzt. Echte
-DMA-Starts werden bis zur Anbindung an einen Transferpfad ausdruecklich
-abgewiesen; es gibt keinen emulierten oder vorgetaeuschten Erfolg.
+geschlossenen Breiten-, Masken- und Zugriffsvertraegen umgesetzt. Channel 2
+fuehrt PVR-DMA ueber den realen Systembusblock und SH-4-DMAC aus; ASIC-
+Triggermasken starten PVR- und G2-DMA gastzeitgebunden. Es gibt keinen
+zweiten erfundenen PVR-DMA-Block bei `0x005F7C00` und keinen vorgetaeuschten
+Transfererfolg.
 
 Die folgende Probe erreichte denselben Blockstand und identifizierte
 `SB_MDSTAR` bei `0xA05F6C04` als naechste allgemeine Luecke. Der vollstaendige
@@ -80,6 +82,15 @@ Funktionssymbole, zusaetzliche Seeds und absolute wie relative Sprungtabellen
 an denselben kanonischen Aliasvertrag. Der Vollstaendigkeitstest deckt wieder
 alle 159 normalen SH-4-Metadatenregeln ab; seine alte 156er-Schranke war nach
 den drei bereits implementierten Cache-/TLB-Befehlen selbst veraltet.
+
+Der anschliessende PVR-Audit hat weitere spielagnostische Produktluecken
+geschlossen: HOLLY2-Packed-Color liest bei untexturierten Vertices die Base
+Color aus `0x18`; 64-Byte-Floatparameter erhalten Base- und Offsetfarbe; beide
+Intensity-Modi besitzen korrekte Face-Color- und Vertexvertraege. Der
+Software-Rasterizer fuehrt Tabellen-, Per-Vertex- und Tabellenmodus-2-Fog
+sowie RGB-Color-Clamp nun wirklich aus, statt die TSP-Bits nur zu speichern.
+Diese Fortschritte sind synthetisch getestet; ein neuer privater PAL-Lauf ist
+noch nicht erfolgt, daher bleibt der erste echte Gastframe offen.
 
 Die PAL-GDI und alle Trackquellen bleiben unveraendert; veraltete
 Portausgaben werden nur nach erfolgreichem Ersatz entfernt.
@@ -582,16 +593,12 @@ v0.50:
 KR-4999 -> KR-5000
 ```
 
-## Unveraenderte Schutzgrenze
+## Private Laufzeitgrenze
 
-Vor Abschluss von v0.47 darf Sonic Adventure lokal analysiert und bis zur
-privaten `game.exe` gebaut werden. Der Build-only-Harness darf sie technisch
-nicht starten.
-
-Der erste Sonic-Prozessstart gehoert zu v0.49. Deterministische Probes und
-interaktive Sitzungen bleiben getrennt. Die interaktive Sitzung darf fuer
-lokales Debugging und Controllererkundung verwendet werden, aber niemals als
-Gateevidenz.
+Sonic Adventure PAL darf fuer den v0.48-Bring-up lokal gebaut und gestartet
+werden. Deterministische Diagnoseproben und interaktive Sitzungen bleiben von
+Release-Gateevidenz getrennt; private Retaildaten, BIOSdaten und lokale
+Installationspacks duerfen weder committed noch verteilt werden.
 
 ## Bestehende Funktionssicherung
 

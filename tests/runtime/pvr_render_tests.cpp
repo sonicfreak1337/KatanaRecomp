@@ -90,5 +90,46 @@ int main() {
     require(throws<std::invalid_argument>([&] { software.render({}, registers, vram); }),
             "Reservierter PVR-Renderpackmodus 4 wird als 24-Bit-Format erfunden.");
 
+    registers.write(pvr_register::FramebufferWriteControl, 6u);
+    registers.write(pvr_register::BackgroundPlaneConfig, 0u);
+    registers.write(pvr_register::FramebufferWriteSof1, 0x2000u);
+    PvrTaFrame fog_frame;
+    PvrPrimitive fog_triangle;
+    fog_triangle.list = PvrListType::Opaque;
+    fog_triangle.material.fog_mode = 1u;
+    fog_triangle.material.offset_color_enabled = true;
+    fog_triangle.vertices = {{0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0xFFFF0000u, 0x80000000u},
+                             {2.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0xFFFF0000u, 0x80000000u},
+                             {0.0f, 2.0f, 1.0f, 0.0f, 0.0f, 0xFFFF0000u, 0x80000000u}};
+    fog_frame.primitives.push_back(fog_triangle);
+    registers.write(pvr_register::FogVertexColor, 0x000000FFu);
+    software.render(fog_frame, registers, vram);
+    require(vram.read_u32(0x2000u) == 0xFF7F0080u,
+            "Per-Vertex-Fog verwendet Offset-Alpha oder Vertex-Fogfarbe nicht.");
+
+    fog_frame.primitives[0].material.fog_mode = 0u;
+    fog_frame.primitives[0].material.offset_color_enabled = false;
+    registers.write(pvr_register::FogDensity, 0x00008000u);
+    registers.write(pvr_register::FogTableBase, 0x0000FF00u);
+    registers.write(pvr_register::FogTableColor, 0x0000FF00u);
+    software.render(fog_frame, registers, vram);
+    require(vram.read_u32(0x2000u) == 0xFF00FF00u,
+            "Tabellen-Fog wertet Density, Tabelle oder Fogfarbe nicht aus.");
+
+    fog_frame.primitives[0].material.fog_mode = 3u;
+    registers.write(pvr_register::FogTableBase, 0x00008000u);
+    registers.write(pvr_register::FogTableColor, 0x000000FFu);
+    software.render(fog_frame, registers, vram);
+    require(vram.read_u32(0x2000u) == 0x800000FFu,
+            "Tabellen-Fog-Mode 2 ersetzt Base-RGB und Base-Alpha nicht.");
+
+    fog_frame.primitives[0].material.fog_mode = 2u;
+    fog_frame.primitives[0].material.color_clamp_enabled = true;
+    registers.write(pvr_register::ColorClampMinimum, 0x00201000u);
+    registers.write(pvr_register::ColorClampMaximum, 0x004080FFu);
+    software.render(fog_frame, registers, vram);
+    require(vram.read_u32(0x2000u) == 0xFF401000u,
+            "PVR-Farbclamp bleibt trotz TSP-Freigabe wirkungslos.");
+
     std::cout << "KR-2804 Texturformate, Hintergrundebene und Render-Backend erfolgreich.\n";
 }

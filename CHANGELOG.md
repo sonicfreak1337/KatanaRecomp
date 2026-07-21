@@ -4,6 +4,13 @@
 
 ### Geaendert
 
+- Der Software-PVR fuehrt die TSP-Fogmodi jetzt im echten Fragmentpfad aus:
+  Look-up-Table-Fog dekodiert `FOG_DENSITY` und interpoliert die 128
+  Koeffizienten, Per-Vertex-Fog verwendet das interpolierte Offset-Alpha und
+  Tabellenmodus 2 ersetzt Base-RGB/-Alpha vor der Texturoperation. Die
+  getrennten Tabellen-/Vertex-Fogfarben sowie die aktivierbare RGB-
+  Farbklammer aus `FOG_CLAMP_MIN/MAX` wirken vor dem Alpha-Blending. Direkte
+  Renderregressionen decken alle vier Fogmodi und Color Clamp ab.
 - MSVC-Hostbuilds serialisieren parallele Programmdatenbank-Schreibzugriffe jetzt mit `/FS` fuer
   Runtime und generierte AOT-Units. Dadurch koennen grosse Multi-Unit-Ports unter Visual-Studio-
   Generatoren nicht mehr sporadisch mit `C1041` an einer gemeinsam genutzten Ziel-PDB scheitern;
