@@ -258,6 +258,53 @@ int main() {
     }
 
     {
+        EventScheduler ddt_scheduler;
+        Memory ddt_memory(256u, MemoryAlignmentPolicy::Strict);
+        auto ddt = map_sh4_dmac_registers(ddt_memory, ddt_scheduler, DmaTiming{1u});
+        ddt_memory.write_u8(0x10u, 0xD1u);
+        ddt->write_source(1u, 0x10u);
+        ddt->write_destination(1u, 0x40u);
+        ddt->write_count(1u, 1u);
+        ddt->write_control(1u, 0x00000810u | Sh4Dmac::channel_enable);
+
+        require(!ddt->request_on_demand_transfer(1u) &&
+                    !ddt->repeat_on_demand_transfer(),
+                "DMAC nimmt DDT-Requests ausserhalb des DDT-Modus an.");
+        ddt_memory.write_u32(sh4_dmac_area7_base + 0x40u,
+                             Sh4Dmac::on_demand_enable | Sh4Dmac::master_enable);
+        require(ddt_memory.read_u32(sh4_dmac_p4_base + 0x40u) ==
+                    (Sh4Dmac::on_demand_enable | Sh4Dmac::master_enable),
+                "DMAOR.DDT teilt Zustand oder Readback nicht ueber beide MMIO-Aliasse.");
+        require(ddt->request_on_demand_transfer(1u) &&
+                    ddt->pending_on_demand_requests(1u) == 1u,
+                "DDT-Request wird im aktiven Modus nicht angenommen.");
+        static_cast<void>(ddt_scheduler.advance_to(1u, 1u));
+        require(ddt_memory.read_u8(0x40u) == 0xD1u &&
+                    ddt->pending_on_demand_requests(1u) == 0u,
+                "DDT-Request startet keinen schedulergebundenen Kanaltransfer.");
+
+        ddt->write_control(1u, 0x00000810u | Sh4Dmac::channel_enable);
+        require(ddt->repeat_on_demand_transfer(),
+                "TR-only wiederholt den zuletzt angenommenen DDT-Kanal nicht.");
+        ddt->write_operation(Sh4Dmac::master_enable);
+        require(ddt->pending_on_demand_requests(1u) == 0u &&
+                    !ddt->repeat_on_demand_transfer(),
+                "Verlassen des DDT-Modus behaelt externe Queue oder Wiederholkanal.");
+
+        ddt->write_operation(Sh4Dmac::on_demand_enable | Sh4Dmac::master_enable);
+        for (std::uint32_t request = 0u; request < 4u; ++request) {
+            require(ddt->request_on_demand_transfer(2u),
+                    "DDT-Queue verwirft einen der vier dokumentierten Slots.");
+        }
+        require(!ddt->request_on_demand_transfer(2u) &&
+                    ddt->pending_on_demand_requests(2u) == 4u,
+                "DDT-Queue akzeptiert einen undokumentierten fuenften Request.");
+        ddt->signal_nmi();
+        require(ddt->pending_on_demand_requests(2u) == 0u,
+                "NMI verwirft angenommene DDT-Requests nicht.");
+    }
+
+    {
         EventScheduler reference_scheduler;
         EventScheduler batch_scheduler;
         Memory reference_memory(1024u, MemoryAlignmentPolicy::Strict);
@@ -296,11 +343,12 @@ int main() {
                 "Deterministischer DMA-Batch divergiert oder reduziert Schedulerarbeit nicht.");
     }
 
-    require(throws<std::invalid_argument>([&] { dmac->write_operation(0x00008001u); }) &&
-                throws<std::out_of_range>([&] { dmac->write_count(4u, 1u); }) &&
+    require(throws<std::out_of_range>([&] { dmac->write_count(4u, 1u); }) &&
+                throws<std::out_of_range>(
+                    [&] { static_cast<void>(dmac->request_on_demand_transfer(4u)); }) &&
                 throws<std::runtime_error>(
                     [&] { static_cast<void>(memory.read_u16(sh4_dmac_p4_base)); }),
-            "DMAC akzeptiert DDT, ungueltige Kanaele oder schmale Registerzugriffe still.");
+            "DMAC akzeptiert ungueltige Kanaele oder schmale Registerzugriffe still.");
 
     std::cout << "KR-3103 DMA erfolgreich.\n";
     return 0;

@@ -6,7 +6,7 @@ ungeloesten Kontrollflusspfaden mehr.
 
 ## ABI
 
-Die aktuelle Runtime-ABI ist Version `18`. Die typisierte Block-ABI ist seit
+Die aktuelle Runtime-ABI ist Version `19`. Die typisierte Block-ABI ist seit
 KR-4611 Version `2`.
 
 Generierter Code enthaelt eine Compile-Time-Pruefung gegen diese Version. Eine
@@ -32,7 +32,8 @@ ABI-Version 16 bindet den gastzeitgebundenen AICA-/Sound-RAM-Pfad ein.
 ABI-Version 17 versioniert die gemeinsame Produktdiagnostik und den
 erweiterten MMIO-/Runtimezustand. ABI-Version 18 bindet die bytegenaue
 Runtime-Write-Provenienz und kontrollierte Haupt-RAM-Codepromotion in den
-Modulkatalog ein.
+Modulkatalog ein. ABI-Version 19 erweitert den oeffentlichen DMAC-Zustand um
+`DMAOR.DDT`, begrenzte On-Demand-Requestqueues und den TR-only-Wiederholpfad.
 
 ## CMake
 

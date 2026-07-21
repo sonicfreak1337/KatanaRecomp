@@ -18,7 +18,8 @@ constexpr std::uint32_t transfer_size_mask = 0x00000070u;
 constexpr std::uint32_t control_writable_mask =
     source_mode_mask | destination_mode_mask | request_source_mask | transfer_size_mask |
     Sh4Dmac::interrupt_enable | Sh4Dmac::channel_enable | 0x00000080u;
-constexpr std::uint32_t operation_writable_mask = 0x00000301u;
+constexpr std::uint32_t operation_writable_mask = 0x00008301u;
+constexpr std::uint32_t on_demand_queue_depth = 4u;
 
 std::uint64_t checked_delay(const std::uint64_t cycles_per_byte, const std::size_t bytes) {
     if (cycles_per_byte > std::numeric_limits<std::uint64_t>::max() / bytes) {
@@ -87,12 +88,13 @@ void Sh4Dmac::write_control(const std::size_t index, const std::uint32_t value) 
 }
 
 void Sh4Dmac::write_operation(const std::uint32_t value) {
-    if ((value & 0x00008000u) != 0u) {
-        throw std::invalid_argument("SH-4-DDT-Modus ist im v0.31-DMA-Profil nicht implementiert.");
-    }
+    const auto was_on_demand = (operation_ & on_demand_enable) != 0u;
     const auto preserved_flags =
         (operation_ & (address_error_flag | nmi_flag)) & (value & (address_error_flag | nmi_flag));
     operation_ = (value & operation_writable_mask) | preserved_flags;
+    if (was_on_demand && (operation_ & on_demand_enable) == 0u) {
+        discard_on_demand_requests();
+    }
     if ((operation_ & address_error_flag) == 0u) {
         last_fault_.reset();
     }
@@ -123,6 +125,30 @@ void Sh4Dmac::request_transfer(const std::size_t index, const std::uint32_t requ
     }
     value.pending_requests += requests;
     reevaluate();
+}
+
+bool Sh4Dmac::request_on_demand_transfer(const std::size_t index) {
+    auto& value = channel(index);
+    if ((operation_ & on_demand_enable) == 0u) return false;
+
+    // Channel 0 has no request queue. Channels 1-3 each retain at most four DDT requests.
+    const auto capacity = index == 0u ? 1u : on_demand_queue_depth;
+    if (value.pending_on_demand_requests >= capacity) return false;
+    if (index == 0u && scheduled_channel_ == index) return false;
+
+    ++value.pending_on_demand_requests;
+    last_on_demand_channel_ = index;
+    reevaluate();
+    return true;
+}
+
+bool Sh4Dmac::repeat_on_demand_transfer() {
+    if (!last_on_demand_channel_) return false;
+    return request_on_demand_transfer(*last_on_demand_channel_);
+}
+
+std::uint32_t Sh4Dmac::pending_on_demand_requests(const std::size_t index) const {
+    return channel(index).pending_on_demand_requests;
 }
 
 std::size_t Sh4Dmac::transfer_unit_size(const std::size_t index) const {
@@ -194,7 +220,9 @@ std::optional<std::size_t> Sh4Dmac::select_channel() const noexcept {
     }};
     const auto eligible = [this](const std::size_t index) {
         return enabled(index) &&
-               (automatic(channels_[index]) || channels_[index].pending_requests != 0u);
+               (automatic(channels_[index]) || channels_[index].pending_requests != 0u ||
+                ((operation_ & on_demand_enable) != 0u &&
+                 channels_[index].pending_on_demand_requests != 0u));
     };
     const auto priority = static_cast<std::size_t>((operation_ >> 8u) & 0x3u);
     if (priority < fixed_orders.size()) {
@@ -251,6 +279,14 @@ void Sh4Dmac::discard_external_requests() noexcept {
     for (auto& value : channels_) {
         value.pending_requests = 0u;
     }
+    discard_on_demand_requests();
+}
+
+void Sh4Dmac::discard_on_demand_requests() noexcept {
+    for (auto& value : channels_) {
+        value.pending_on_demand_requests = 0u;
+    }
+    last_on_demand_channel_.reset();
 }
 
 void Sh4Dmac::cancel_event() noexcept {
@@ -322,8 +358,14 @@ void Sh4Dmac::handle_transfer(const std::size_t index) {
     bool completed = false;
     for (std::size_t unit = 0u; unit < units && enabled(index); ++unit) {
         if (!automatic(value)) {
-            if (value.pending_requests == 0u) break;
-            --value.pending_requests;
+            if (value.pending_requests != 0u) {
+                --value.pending_requests;
+            } else if ((operation_ & on_demand_enable) != 0u &&
+                       value.pending_on_demand_requests != 0u) {
+                --value.pending_on_demand_requests;
+            } else {
+                break;
+            }
         }
         const auto size = transfer_size(value);
         if (!transfer_one(index, size)) return;
@@ -429,6 +471,7 @@ void Sh4Dmac::reset() noexcept {
     channels_ = {};
     operation_ = 0u;
     last_fault_.reset();
+    last_on_demand_channel_.reset();
     round_robin_cursor_ = 0u;
     scheduled_units_ = 0u;
     performance_counters_ = {};

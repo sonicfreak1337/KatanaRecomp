@@ -54,6 +54,7 @@ class Sh4Dmac final {
     static constexpr std::uint32_t master_enable = 0x00000001u;
     static constexpr std::uint32_t nmi_flag = 0x00000002u;
     static constexpr std::uint32_t address_error_flag = 0x00000004u;
+    static constexpr std::uint32_t on_demand_enable = 0x00008000u;
 
     Sh4Dmac(EventScheduler& scheduler,
             Memory& memory,
@@ -76,6 +77,9 @@ class Sh4Dmac final {
     [[nodiscard]] std::uint32_t operation() const noexcept;
 
     void request_transfer(std::size_t channel, std::uint32_t requests = 1u);
+    [[nodiscard]] bool request_on_demand_transfer(std::size_t channel);
+    [[nodiscard]] bool repeat_on_demand_transfer();
+    [[nodiscard]] std::uint32_t pending_on_demand_requests(std::size_t channel) const;
     [[nodiscard]] std::size_t transfer_unit_size(std::size_t channel) const;
     void set_completion_observer(std::function<void(std::size_t)> observer);
     void signal_nmi() noexcept;
@@ -96,6 +100,7 @@ class Sh4Dmac final {
         std::uint32_t count = 0u;
         std::uint32_t control = 0u;
         std::uint32_t pending_requests = 0u;
+        std::uint32_t pending_on_demand_requests = 0u;
         std::uint64_t completed_units = 0u;
         bool interrupt_pending = false;
     };
@@ -109,6 +114,7 @@ class Sh4Dmac final {
     [[nodiscard]] static std::uint8_t address_mode(std::uint32_t control, unsigned shift) noexcept;
     void reevaluate();
     void discard_external_requests() noexcept;
+    void discard_on_demand_requests() noexcept;
     void cancel_event() noexcept;
     void schedule(std::size_t index);
     [[nodiscard]] std::size_t batch_units(std::size_t index, std::size_t size) const noexcept;
@@ -130,6 +136,7 @@ class Sh4Dmac final {
     std::optional<std::size_t> scheduled_channel_;
     std::size_t scheduled_units_ = 0u;
     std::optional<DmaFault> last_fault_;
+    std::optional<std::size_t> last_on_demand_channel_;
     mutable std::size_t round_robin_cursor_ = 0u;
     DmaPerformanceCounters performance_counters_;
     std::function<void(std::size_t)> completion_observer_;

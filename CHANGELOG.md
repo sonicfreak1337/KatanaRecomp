@@ -4,6 +4,12 @@
 
 ### Geaendert
 
+- Der SH-4-DMAC akzeptiert `DMAOR.DDT` jetzt als dokumentiertes R/W-Modusbit,
+  statt daraus eine CPU-Write-Exception zu erzeugen. DDT-Anforderungen sind
+  gastzeitgebunden, besitzen fuer Kanaele 1 bis 3 die dokumentierte
+  Viererqueue und koennen per TR-only fuer den zuletzt angeforderten Kanal
+  wiederholt werden. Moduswechsel, NMI, Adressfehler und Reset bereinigen
+  externe DDT-Zustaende; P4- und Area-7-MMIO teilen denselben Readback.
 - Der spielagnostische Hardwareauditor verfolgt SH-4-Werte jetzt blockweise bis
   zu konkreten MMIO-, Store-Queue- und Prefetch-Zugriffen, bewertet Breite,
   Richtung und Registersemantik gegen den produktiven Runtimevertrag und kann
@@ -81,7 +87,7 @@
   MMU-faehigen `guest_read_*`-/`guest_write_*`-Schnittstellen. Die globale
   nachtraegliche Zeichenersetzung des gesamten Funktionstexts ist entfallen.
 - PlatformServices-ABI 7 versioniert den korrigierten linearen und
-  gastzeitgebundenen DMA-Vertrag. Runtime-ABI 18 und Portprojektvertrag 10
+  gastzeitgebundenen DMA-Vertrag. Runtime-ABI 19 und Portprojektvertrag 10
   bleiben die aktuellen v0.48-Vertraege.
 - Der kumulative Debug-Gate umfasst 180 Tests und ist vollstaendig gruen.
   Die beiden Tests, die eigenstaendige Portprojekte mit CMake/MSVC bauen,
@@ -120,7 +126,7 @@
   der Recipe, verwirft abweichendes Staging und veroeffentlicht dadurch keinen
   unterdessen veraenderten oder semantisch umgebundenen Discinhalt. Der Parser
   rekonstruiert Trackintegritaet und Content-Root aus dem Chunkindex.
-- Runtime-ABI 18 und Portprojektvertrag 10 versionieren kumulativ den gemeinsamen
+- Runtime-ABI 19 und Portprojektvertrag 10 versionieren kumulativ den gemeinsamen
   AICA-Sound-RAM-/Audiopfad sowie den neuen Disc-Identitaetsvertrag.
 - Der Software-PVR fuehrt die TSP-Fogmodi jetzt im echten Fragmentpfad aus:
   Look-up-Table-Fog dekodiert `FOG_DENSITY` und interpoliert die 128

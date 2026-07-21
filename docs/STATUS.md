@@ -42,11 +42,14 @@ erreichte dessen Zugriff auf `EXPEVT` bei `0xFF000024`. Damit wurde die naechste
 allgemeine Luecke sichtbar: `TRA`, `EXPEVT` und `INTEVT` existierten nur als
 interner CPU-Zustand, aber noch nicht im produktiven P4-Bus. Alle drei
 32-Bit-R/W-Register sind nun samt Area-7-Alias, reservierten Bitmasken und
-Hardwareauditorabdeckung implementiert. Exception-, Auditor- und Boottests
-sind unter AddressSanitizer gruen; TA/PVR und der erste Gastframe bleiben bis
-zum naechsten privaten Nachweis offen.
+Hardwareauditorabdeckung implementiert. Der folgende private Nachweis las
+`EXPEVT=0x100` korrekt und materialisierte sieben Handlerbloecke. Als Ursache
+der Exception ist nun die bisher absichtliche Ablehnung von `DMAOR.DDT`
+belegt. Der allgemeine DMAC-Vertrag akzeptiert das R/W-Modusbit jetzt und
+bildet begrenzte DDT-Requestqueues sowie den TR-only-Wiederholpfad ab. TA/PVR
+und der erste Gastframe bleiben bis zum naechsten privaten Nachweis offen.
 
-Runtime-ABI 18 und Portprojektvertrag 10 bilden den kumulativen v0.48-Stand ab.
+Runtime-ABI 19 und Portprojektvertrag 10 bilden den kumulativen v0.48-Stand ab.
 PlatformServices-ABI 7 bleibt unveraendert.
 
 Der iterative Portworkflow verwendet jetzt sicheres inkrementelles Staging:
@@ -75,7 +78,7 @@ Recipe 2. Die Content-Root entsteht aus den wirklich gelesenen Raw-Chunks und
 wird sowohl beim Schreiben gegen die Recipe als auch beim Oeffnen gegen
 Tracktabelle und Chunkindex geprueft; abweichendes Staging wird nicht
 veroeffentlicht. Der damals eingefuehrte AICA-Vertrag ist im aktuellen
-Runtime-ABI 18 und Portprojektvertrag 10 enthalten. Das kumulative v0.48-
+Runtime-ABI 19 und Portprojektvertrag 10 enthalten. Das kumulative v0.48-
 Debug-Gate ist mit 180 von 180 Tests bestanden; der anschliessende private
 PAL-Nachweis ist erfolgt: Der vollstaendige neue Port entstand mit 12 Workern
 in 126,8 Sekunden, ein inkrementeller Runtime-Neubau in 77,8 Sekunden. Die
