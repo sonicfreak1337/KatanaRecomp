@@ -29,6 +29,7 @@ int main() {
     Memory memory(0u);
     memory.map_region("system", 0x0C000000u, std::make_shared<LinearMemoryDevice>(1u << 20u));
     memory.map_region("g2", 0x00800000u, std::make_shared<LinearMemoryDevice>(2u << 20u));
+    memory.map_region("pvr", 0x04000000u, std::make_shared<LinearMemoryDevice>(1u << 20u));
     EventScheduler scheduler;
     std::vector<SystemAsicEvent> events;
     const auto controllers = map_dreamcast_holly_dma(
@@ -79,6 +80,46 @@ int main() {
                 events == std::vector<SystemAsicEvent>{SystemAsicEvent::AicaDma},
             "AICA-G2-DMA-Resume/Completion aktualisiert Daten, Status oder ASIC-Ereignis falsch.");
 
+    for (std::uint32_t index = 0u; index < 32u; ++index)
+        memory.write_u8(0x0C002000u + index, static_cast<std::uint8_t>(0x80u + index));
+    memory.write_u32(0xA05F7C00u, 0x0400101Fu);
+    memory.write_u32(0xA05F7C04u, 0x0C00201Fu);
+    memory.write_u32(0xA05F7C08u, 0x3Fu);
+    memory.write_u32(0xA05F7C0Cu, 0u);
+    memory.write_u32(0xA05F7C10u, 0u);
+    memory.write_u32(0xA05F7C14u, 1u);
+    memory.write_u32(0xA05F7C18u, 1u);
+    require(memory.read_u32(0x005F7C00u) == 0x04001000u &&
+                memory.read_u32(0x805F7C04u) == 0x0C002000u &&
+                memory.read_u32(0x005F7C08u) == 0x20u &&
+                memory.read_u32(0x005F7C18u) == 1u && memory.read_u8(0x0400101Fu) == 0u,
+            "PVR-DMA maskiert Register falsch oder committed vor der Gastzeit.");
+    static_cast<void>(scheduler.advance_by(127u, 1u));
+    require(memory.read_u8(0x0400101Fu) == 0u,
+            "PVR-DMA committed Daten vor dem faelligen Schedulerzyklus.");
+    static_cast<void>(scheduler.advance_by(1u, 1u));
+    require(memory.read_u8(0x0400101Fu) == 0x9Fu && memory.read_u32(0x005F7C18u) == 0u &&
+                memory.read_u32(0x005F7CF0u) == 0x04001020u &&
+                memory.read_u32(0x005F7CF4u) == 0x0C002020u &&
+                memory.read_u32(0x005F7CF8u) == 0u &&
+                events == std::vector<SystemAsicEvent>{SystemAsicEvent::AicaDma,
+                                                       SystemAsicEvent::PvrDma},
+            "PVR-DMA-Completion aktualisiert Daten, Zaehler oder ASIC-Ereignis falsch.");
+
+    for (std::uint32_t index = 0u; index < 32u; ++index)
+        memory.write_u8(0x0C003000u + index, static_cast<std::uint8_t>(0x40u + index));
+    memory.write_u32(0x005F7C00u, 0x04002000u);
+    memory.write_u32(0x005F7C04u, 0x0C003000u);
+    memory.write_u32(0x005F7C08u, 0x20u);
+    memory.write_u32(0x005F7C10u, 1u);
+    memory.write_u32(0x005F7C18u, 1u);
+    require(memory.read_u32(0x005F7C18u) == 0u,
+            "Hardwaregetriggerte PVR-DMA startet durch einen Softwarewrite.");
+    controllers.pvr->hardware_trigger();
+    static_cast<void>(scheduler.advance_by(128u, 1u));
+    require(memory.read_u8(0x0400201Fu) == 0x5Fu && memory.read_u32(0x005F7C14u) == 1u,
+            "Hardwaregetriggerte PVR-DMA behaelt Enable oder Daten nicht korrekt.");
+
     EventScheduler g1_scheduler;
     bool g1_bytes_committed = false;
     bool g1_completed = false;
@@ -112,8 +153,11 @@ int main() {
                 throws([&] { static_cast<void>(memory.read_u32(0x005F7400u)); }) &&
                 throws([&] { static_cast<void>(memory.read_u16(0x005F7800u)); }) &&
                 throws([&] { memory.write_u32(0x005F7880u, 1u); }) &&
-                throws([&] { memory.write_u32(0x005F78A0u, 1u); }),
-            "G1-/G2-DMA-Gates, reservierte Register oder Breitenvertrag sind offen.");
+                throws([&] { memory.write_u32(0x005F78A0u, 1u); }) &&
+                throws([&] { static_cast<void>(memory.read_u16(0x005F7C00u)); }) &&
+                throws([&] { static_cast<void>(memory.read_u32(0x005F7C80u)); }) &&
+                throws([&] { memory.write_u32(0x005F7CF0u, 1u); }),
+            "G1-/G2-/PVR-DMA-Gates, reservierte Register oder Breitenvertrag sind offen.");
 
-    std::cout << "Dreamcast-G1/G2-DMA-Register und echte DMA-Pfade erfolgreich.\n";
+    std::cout << "Dreamcast-G1/G2/PVR-DMA-Register und echte DMA-Pfade erfolgreich.\n";
 }

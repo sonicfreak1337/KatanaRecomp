@@ -78,16 +78,22 @@
   Aliasziel, waehrend nativer Code unter seiner kanonischen Imageadresse ausgefuehrt wird. Der
   Metadaten-Vollstaendigkeitstest erwartet wieder alle 159 normalen SH4-Regeln statt des alten
   Standes vor den drei Cache-/TLB-Ergaenzungen.
-- Die zusammenhaengenden Holly-G1- und G2-DMA-Steuerbloecke bei
-  `0x005F7400` und `0x005F7800` sowie der echte Channel-2-/PVR-DMA-Pfad ueber
-  den Systembusblock ab `0x005F6800` besitzen geschlossene
+- Die zusammenhaengenden Holly-G1-, G2- und PVR-DMA-Steuerbloecke bei
+  `0x005F7400`, `0x005F7800` und `0x005F7C00` sowie der getrennte Channel-2-
+  TA-Pfad ueber den Systembusblock ab `0x005F6800` besitzen geschlossene
   Register-, Masken-, Schutzschluessel- und Aliasvertraege. AICA/G2- und
-  PVR-DMA kopieren reale Gastbytes ueber einen neuen linearen
+  PVR-DMA kopieren reale Gastbytes ueber den linearen
   `Memory::copy_bytes`-Fastpath, aktualisieren Zaehler und Status nach
   deterministischer Gastzeit und melden die passende ASIC-Quelle. Der noch
   ungebundene GD-ROM-DMA-Start bleibt explizit gesperrt. PAL-Bootwerte,
   reservierte Nullregister, falsche Breiten und echte Transfers sind in
   Release und unter AddressSanitizer getestet.
+- Die vollstaendigen SH-4-Cachearray-Aperturen bilden IC-/OC-Adress- und
+  Datenarrays bei `0xF0000000`, `0xF1000000`, `0xF4000000` und `0xF5000000`
+  ab. Nur ausgerichtete Longwords sind erlaubt; Tag-, U- und V-Bits,
+  assoziative Adresswrites und `CCR.ICI` besitzen geschlossene Regressionen.
+  Der PAL-Lauf erreicht damit 17.516.050 native Bloecke in 50 Mio. Gastzyklen
+  ohne SH-4-Exception; ein echter Gastframe bleibt offen.
 - Die Maple-Laufzeit besitzt jetzt einen echten MMIO-/DMA-Produktpfad fuer den
   Registerblock `0x005F6C00..0x005F6CFC`. Kommandotabellen werden begrenzt und
   schutzfenstergebunden geparst, Frames an den vorhandenen Controller-/VMU-Bus

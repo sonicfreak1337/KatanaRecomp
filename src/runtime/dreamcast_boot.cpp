@@ -526,12 +526,10 @@ initialize_dreamcast_runtime(CpuState& cpu,
             controller->dma_to_memory(address, length, direction);
         });
     const auto g2_dma = std::weak_ptr<DreamcastG2DmaController>(state.holly_dma.g2);
-    const auto pvr_dma_control =
-        std::weak_ptr<DreamcastSystemBusControl>(state.system_bus_control);
+    const auto pvr_dma = std::weak_ptr<DreamcastPvrDmaController>(state.holly_dma.pvr);
     state.system_asic->set_dma_trigger_observers(
-        [pvr_dma_control](const SystemAsicEvent) {
-            if (const auto control = pvr_dma_control.lock())
-                static_cast<void>(control->trigger_channel2());
+        [pvr_dma](const SystemAsicEvent) {
+            if (const auto controller = pvr_dma.lock()) controller->hardware_trigger();
         },
         [g2_dma](const SystemAsicEvent event) {
             if (const auto controller = g2_dma.lock()) controller->interrupt_trigger(event);

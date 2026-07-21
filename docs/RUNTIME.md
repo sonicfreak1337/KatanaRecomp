@@ -230,6 +230,13 @@ Fehlgeschlagene Zugriffe erzeugen weder Trace- noch Watchpoint-Ereignisse.
 Observer werden vor dem Aufruf kopiert, damit sie Watchpoints waehrend eines
 Callbacks sicher entfernen oder veraendern koennen.
 
+Die P4-Cachefenster bilden die SH-4-IC-/OC-Adressarrays bei `0xF0000000` und
+`0xF4000000` sowie die Datenarrays bei `0xF1000000` und `0xF5000000` ab.
+Adresswrites verwenden die dokumentierten Entry-, Association-, Tag-, U- und
+V-Felder; Datenzugriffe und alle vier Aperturen akzeptieren ausschliesslich
+ausgerichtete 32-Bit-Zugriffe. `CCR.ICI` loescht die IC-Validbits und bleibt
+selbstloeschend.
+
 ## Ausnahmen und Interrupts
 
 KR-2301 bis KR-2305 fuehren einen gemeinsamen CPU-Exception-Pfad ein. Relevante

@@ -36,10 +36,12 @@ veroeffentlicht. Runtime-ABI 16 und Portprojektvertrag 9 versionieren zugleich
 den echten gastzeitgebundenen AICA-Produktmixer. Das kumulative v0.48-
 Debug-Gate ist mit 178 von 178 Tests bestanden; der anschliessende private
 PAL-Nachweis ist erfolgt: Der vollstaendige neue Port entstand mit 12 Workern
-in 126,8 Sekunden, installierte 521.461 Sektoren ausschliesslich lokal und
-erreichte 11.314.542 native AOT-Bloecke. Der naechste belegte allgemeine
-Hardwarebedarf ist der PVR-DMA-Steuerblock ab `0x005F7C00`; ein Gastframe steht
-weiterhin aus.
+in 126,8 Sekunden, ein inkrementeller Runtime-Neubau in 77,8 Sekunden. Die
+Originaldisc installiert 521.461 Sektoren ausschliesslich lokal. Der echte
+PVR-DMA-Steuerblock ab `0x005F7C00` und alle vier SH-4-Cachearray-Aperturen
+sind nun geschlossen; der Vergleichslauf erreicht 17.516.050 native
+AOT-Bloecke in 50 Mio. Gastzyklen ohne Exception. Ein Gastframe steht weiterhin
+aus.
 
 Der anschliessende P0-Runtimeblock korrigiert den zweiten SH-4-Ausfuehrungskern
 und seine AOT-Grenze: Pre-Decrement-Fault-Rollback, SHAD/SHLD bei negativen
@@ -75,10 +77,9 @@ Der anschliessende Halt bei `0xA05F6800` fuehrte zu einem allgemeinen Audit
 des Holly-Systembus-Steuerblocks: `0x005F6800..0x005F68AC`, seine direkten
 Segmentaliase und die angrenzenden PVR-/G2-DMA-Triggermasken sind nun mit
 geschlossenen Breiten-, Masken- und Zugriffsvertraegen umgesetzt. Channel 2
-fuehrt PVR-DMA ueber den realen Systembusblock und SH-4-DMAC aus; ASIC-
-Triggermasken starten PVR- und G2-DMA gastzeitgebunden. Es gibt keinen
-zweiten erfundenen PVR-DMA-Block bei `0x005F7C00` und keinen vorgetaeuschten
-Transfererfolg.
+fuehrt Channel-2-TA-DMA ueber den realen Systembusblock und SH-4-DMAC aus;
+ASIC-Triggermasken starten den davon getrennten PVR-DMA-Controller bei
+`0x005F7C00` und G2-DMA gastzeitgebunden. Kein Pfad taeuscht Transfererfolg vor.
 
 Die folgende Probe erreichte denselben Blockstand und identifizierte
 `SB_MDSTAR` bei `0xA05F6C04` als naechste allgemeine Luecke. Der vollstaendige
@@ -91,7 +92,7 @@ MMIO-Pfad verwenden.
 
 Der vollstaendig ausgelesene Rest derselben PAL-Initialisierungstabelle belegt
 anschliessend G2-DMA, PVR-DMA und einen auf Null gesetzten GD-DMA-Start. Die
-G1-/G2-/PVR-Registerfamilien und alle Direktsegmente sind nun geschlossen
+G1-/G2-/PVR-DMA-Registerfamilien und alle Direktsegmente sind nun geschlossen
 gemappt. AICA/G2 und PVR verwenden echte, gastzeitgebundene DMA-Kopien mit
 Zaehlern und ASIC-Completion; lineare Speicherregionen werden dabei ohne
 Byte-fuer-Byte-Dispatch kopiert. GD-ROM-DMA darf initialisiert und deaktiviert

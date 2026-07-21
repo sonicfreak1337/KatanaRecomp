@@ -14,6 +14,7 @@ namespace katana::runtime {
 
 inline constexpr std::uint32_t g1_mmio_physical_base = 0x005F7400u;
 inline constexpr std::uint32_t g2_mmio_physical_base = 0x005F7800u;
+inline constexpr std::uint32_t pvr_dma_mmio_physical_base = 0x005F7C00u;
 inline constexpr std::uint32_t holly_dma_register_size = 0x100u;
 
 struct HollyDmaTiming {
@@ -110,9 +111,51 @@ class DreamcastG1BusController final {
     std::uint32_t system_mode_ = 1u;
 };
 
+class DreamcastPvrDmaController final {
+  public:
+    DreamcastPvrDmaController(Memory& memory,
+                              EventScheduler& scheduler,
+                              HollyDmaTiming timing = {},
+                              std::function<void(SystemAsicEvent)> completion_observer = {});
+    ~DreamcastPvrDmaController();
+    DreamcastPvrDmaController(const DreamcastPvrDmaController&) = delete;
+    DreamcastPvrDmaController& operator=(const DreamcastPvrDmaController&) = delete;
+    [[nodiscard]] std::uint32_t read(std::uint32_t offset) const;
+    void write(std::uint32_t offset, std::uint32_t value);
+    void hardware_trigger();
+    void reset() noexcept;
+
+  private:
+    void start();
+    void complete(SchedulerEventId event_id);
+    void cancel() noexcept;
+    void handle_scheduler_reset() noexcept;
+    [[nodiscard]] bool protected_system_range(std::uint32_t address,
+                                              std::size_t size) const noexcept;
+    Memory& memory_;
+    EventScheduler& scheduler_;
+    HollyDmaTiming timing_;
+    std::function<void(SystemAsicEvent)> completion_observer_;
+    SchedulerLifetimeToken scheduler_lifetime_;
+    SchedulerResetObserverId reset_observer_ = 0u;
+    std::optional<SchedulerEventId> completion_event_;
+    std::uint32_t pvr_address_ = 0u;
+    std::uint32_t system_address_ = 0u;
+    std::uint32_t length_ = 0u;
+    std::uint32_t direction_ = 0u;
+    std::uint32_t trigger_select_ = 0u;
+    std::uint32_t enabled_ = 0u;
+    std::uint32_t active_ = 0u;
+    std::uint32_t address_protect_ = 0x00007F00u;
+    std::uint32_t pvr_counter_ = 0u;
+    std::uint32_t system_counter_ = 0u;
+    std::uint32_t remaining_ = 0u;
+};
+
 struct DreamcastHollyDmaControllers {
     std::shared_ptr<DreamcastG1BusController> g1;
     std::shared_ptr<DreamcastG2DmaController> g2;
+    std::shared_ptr<DreamcastPvrDmaController> pvr;
 };
 
 [[nodiscard]] DreamcastHollyDmaControllers
