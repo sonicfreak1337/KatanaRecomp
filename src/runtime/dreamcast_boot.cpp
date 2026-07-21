@@ -550,21 +550,24 @@ initialize_dreamcast_runtime(CpuState& cpu,
     });
     const auto code_tracker = std::weak_ptr<ExecutableCodeTracker>(state.code_tracker);
     const auto runtime_blocks = std::weak_ptr<RuntimeBlockTable>(state.runtime_blocks);
-    cpu.memory.set_guest_write_observer([code_tracker,
-                                         runtime_blocks](const GuestWriteEvent& event) {
-        const auto tracker = code_tracker.lock();
-        if (!tracker) return;
-        const auto invalidation =
-            tracker->observe_write(canonical_physical_address(event.address),
-                                   event.size,
-                                   event.source,
-                                   event.bytes_changed);
-        if (!invalidation.byte_identical) {
-            if (const auto blocks = runtime_blocks.lock())
-                static_cast<void>(blocks->erase_overlapping_physical(
-                    canonical_physical_address(event.address), event.size));
-        }
-    });
+    const auto runtime_modules = std::weak_ptr<ExecutableModuleCatalog>(state.module_catalog);
+    cpu.memory.set_guest_write_observer(
+        [code_tracker, runtime_blocks, runtime_modules](const GuestWriteEvent& event) {
+            const auto physical = canonical_physical_address(event.address);
+            if (physical >= 0x0C000000u && physical < 0x0D000000u &&
+                event.size <= 0x0D000000u - physical) {
+                if (const auto modules = runtime_modules.lock())
+                    modules->record_runtime_write(event.address, event.size, event.bytes_changed);
+            }
+            const auto tracker = code_tracker.lock();
+            if (!tracker) return;
+            const auto invalidation =
+                tracker->observe_write(physical, event.size, event.source, event.bytes_changed);
+            if (!invalidation.byte_identical) {
+                if (const auto blocks = runtime_blocks.lock())
+                    static_cast<void>(blocks->erase_overlapping_physical(physical, event.size));
+            }
+        });
     state.store_queue_transfers = std::make_shared<std::vector<StoreQueueTransfer>>();
     state.store_queue_transfers->reserve(1024u);
     state.dropped_store_queue_transfers = std::make_shared<std::uint64_t>(0u);

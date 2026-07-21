@@ -4,6 +4,7 @@
 #include "katana/runtime/code_invalidation.hpp"
 #include "katana/runtime/memory.hpp"
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
@@ -84,12 +85,23 @@ class ExecutableModuleCatalog final {
     [[nodiscard]] const ExecutableModule* find(std::string_view id) const noexcept;
     [[nodiscard]] bool authorize_control_transfer(std::uint32_t address,
                                                   std::uint32_t maximum_bytes = 128u);
+    void record_runtime_write(std::uint32_t address, std::size_t size, bool bytes_changed = true);
+    [[nodiscard]] bool promote_runtime_write(const Memory& memory,
+                                             std::uint32_t address,
+                                             std::uint32_t maximum_bytes = 128u);
     [[nodiscard]] bool
     validate_bytes(const Memory& memory, std::uint32_t address, std::size_t width) const;
     [[nodiscard]] const ExecutableModuleMetrics& metrics() const noexcept;
 
   private:
+    static constexpr std::uint32_t runtime_write_page_size = 4096u;
+    static constexpr std::size_t runtime_write_words_per_page = runtime_write_page_size / 64u;
+    struct RuntimeWritePage {
+        std::array<std::uint64_t, runtime_write_words_per_page> written{};
+    };
     std::vector<ExecutableModule> modules_;
+    std::map<std::uint32_t, RuntimeWritePage> runtime_write_pages_;
+    std::uint64_t next_runtime_write_module_ = 1u;
     ExecutableModuleMetrics metrics_;
 };
 

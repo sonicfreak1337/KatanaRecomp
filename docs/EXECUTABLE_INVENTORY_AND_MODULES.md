@@ -97,7 +97,11 @@ Gastbereich, unveraenderte Quellbytes, Relocationen, Art, Schreibbarkeit,
 Generation und aktiven Lebenszustand. Ueberlappende oder ungebundene Quellen
 werden abgelehnt. Ersatz und Unload entfernen ueberlappende Runtimebloecke und
 invalidieren den Code-Tracker. Ein unbekanntes ausfuehrbares Ziel bleibt ein
-sichtbarer Dispatchfehler.
+sichtbarer Dispatchfehler. Eine engere Ausnahme gilt fuer nachweislich
+geaenderte Gastbytes im Dreamcast-Haupt-RAM: Der Katalog merkt deren kanonische
+physische Byteposition, ohne den gesamten RAM als Modul oder Code zu
+deklarieren. Erst der tatsaechliche Kontrolltransfer darf daraus einen neuen,
+begrenzten Modulsnapshot erzeugen.
 
 Der unterstuetzte Relocationtyp `module_base32` interpretiert ein
 32-Bit-Little-Endian-Quellwort als `Quellwort + Gastmodulbasis + Addend` mit
@@ -112,7 +116,10 @@ alte Bloecke und erhoeht die Relocationgeneration.
 Der optionale Pfad ist standardmaessig deaktiviert. Im aktivierten Modus gilt:
 
 1. Zielausrichtung, committed Bytes, Ausfuehrungsrecht und aktive
-   Modulherkunft pruefen.
+   Modulherkunft pruefen. Fehlt nur die Modulherkunft, duerfen mindestens zwei
+   tatsaechlich geschriebene Zielbytes einen bytegenauen, hoechstens 128 Byte
+   grossen Runtime-Write-Snapshot erzeugen; unbeschriebenes RAM bleibt
+   `unknown-source`.
 2. Gastzyklus-, Block-, Byte-, Instruktions-, Seed-, Zeit-, Speicher-, Lauf-
    und Wiederholungsbudgets pruefen.
 3. Einen unveraenderlichen Bytesnapshot bilden und den Referenzcallback fuer
@@ -122,6 +129,11 @@ Der optionale Pfad ist standardmaessig deaktiviert. Im aktivierten Modus gilt:
 6. Code-Tracker und Runtime-Blocktabelle registrieren und den Handle nochmals
    validieren.
 7. Erst danach dispatchen.
+
+Jeder spaetere ueberlappende Gastwrite deaktiviert einen solchen Snapshot. Der
+Code-Tracker entfernt den physischen Runtimeblock auch dann, wenn der Write
+ueber einen anderen P0/P1/P2-Alias erfolgt. Ein erneuter Kontrolltransfer muss
+die aktuellen Bytes unter einer neuen Modulidentitaet materialisieren.
 
 Ein Interpreter kann den expliziten Referenzcallback stellen, wird aber nicht
 automatisch oder dauerhaft aktiviert. Deaktivierung, unbekannte Quelle,

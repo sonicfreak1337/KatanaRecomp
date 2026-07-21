@@ -6,7 +6,7 @@ ungeloesten Kontrollflusspfaden mehr.
 
 ## ABI
 
-Die aktuelle Runtime-ABI ist Version `17`. Die typisierte Block-ABI ist seit
+Die aktuelle Runtime-ABI ist Version `18`. Die typisierte Block-ABI ist seit
 KR-4611 Version `2`.
 
 Generierter Code enthaelt eine Compile-Time-Pruefung gegen diese Version. Eine
@@ -30,7 +30,9 @@ generationsgebundene Runtime-Module und kontrollierte Materialisierung ein.
 ABI-Version 15 erweitert den SH-4-Zustand um LDTLB-, Cache- und MMU-Vertraege.
 ABI-Version 16 bindet den gastzeitgebundenen AICA-/Sound-RAM-Pfad ein.
 ABI-Version 17 versioniert die gemeinsame Produktdiagnostik und den
-erweiterten MMIO-/Runtimezustand.
+erweiterten MMIO-/Runtimezustand. ABI-Version 18 bindet die bytegenaue
+Runtime-Write-Provenienz und kontrollierte Haupt-RAM-Codepromotion in den
+Modulkatalog ein.
 
 ## CMake
 

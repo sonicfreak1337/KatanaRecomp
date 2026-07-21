@@ -236,11 +236,88 @@ bool ExecutableModuleCatalog::authorize_control_transfer(const std::uint32_t add
         cursor = interval.second;
     }
     if (cursor < found->bytes.size())
-        found->range_roles.push_back(
-            {cursor,
-             static_cast<std::uint32_t>(found->bytes.size() - cursor),
-             ExecutableStorageRole::ProvenData});
+        found->range_roles.push_back({cursor,
+                                      static_cast<std::uint32_t>(found->bytes.size() - cursor),
+                                      ExecutableStorageRole::ProvenData});
     found->executable_permission = true;
+    return true;
+}
+
+void ExecutableModuleCatalog::record_runtime_write(const std::uint32_t address,
+                                                   const std::size_t size,
+                                                   const bool bytes_changed) {
+    if (!bytes_changed || size == 0u ||
+        size > static_cast<std::uint64_t>(std::numeric_limits<std::uint32_t>::max()) + 1u - address)
+        return;
+    const auto physical_begin = canonical_physical_address(address);
+    const auto physical_end = static_cast<std::uint64_t>(physical_begin) + size;
+    if (physical_end > static_cast<std::uint64_t>(std::numeric_limits<std::uint32_t>::max()) + 1u)
+        return;
+
+    for (auto& module : modules_) {
+        if (!module.active || !module.source_identity.starts_with("guest-runtime-write-v1"))
+            continue;
+        const auto module_begin = canonical_physical_address(module.guest_start);
+        const auto module_end = static_cast<std::uint64_t>(module_begin) + module.bytes.size();
+        if (physical_begin < module_end && module_begin < physical_end) {
+            module.active = false;
+            increment(metrics_.unloads);
+        }
+    }
+
+    std::uint64_t cursor = physical_begin;
+    while (cursor < physical_end) {
+        const auto page = static_cast<std::uint32_t>(cursor) & ~(runtime_write_page_size - 1u);
+        const auto page_end = std::min<std::uint64_t>(
+            physical_end, static_cast<std::uint64_t>(page) + runtime_write_page_size);
+        auto& written = runtime_write_pages_[page].written;
+        auto offset = static_cast<std::uint32_t>(cursor - page);
+        const auto end_offset = static_cast<std::uint32_t>(page_end - page);
+        while (offset < end_offset) {
+            const auto word = offset / 64u;
+            const auto first_bit = offset % 64u;
+            const auto word_end = std::min<std::uint32_t>(end_offset, (word + 1u) * 64u);
+            const auto last_bit = word_end - word * 64u;
+            auto mask = std::numeric_limits<std::uint64_t>::max() << first_bit;
+            if (last_bit < 64u) mask &= (std::uint64_t{1u} << last_bit) - 1u;
+            written[word] |= mask;
+            offset = word_end;
+        }
+        cursor = page_end;
+    }
+}
+
+bool ExecutableModuleCatalog::promote_runtime_write(const Memory& memory,
+                                                    const std::uint32_t address,
+                                                    const std::uint32_t maximum_bytes) {
+    if ((address & 1u) != 0u || maximum_bytes < 2u || resolve(address, 2u) != nullptr) return false;
+    const auto was_written = [this](const std::uint32_t candidate) {
+        const auto physical = canonical_physical_address(candidate);
+        const auto page = physical & ~(runtime_write_page_size - 1u);
+        const auto found = runtime_write_pages_.find(page);
+        if (found == runtime_write_pages_.end()) return false;
+        const auto offset = physical - page;
+        return (found->second.written[offset / 64u] & (std::uint64_t{1u} << (offset % 64u))) != 0u;
+    };
+    if (!was_written(address) || !was_written(address + 1u)) return false;
+
+    std::uint32_t snapshot_size = maximum_bytes;
+    while (snapshot_size >= 2u && !memory.contains(address, snapshot_size))
+        --snapshot_size;
+    if (snapshot_size < 2u) return false;
+
+    ExecutableModule module;
+    module.id = "guest-runtime-write-" + std::to_string(next_runtime_write_module_++);
+    module.source_identity = "guest-runtime-write-v1";
+    module.guest_start = address;
+    module.bytes.resize(snapshot_size);
+    for (std::uint32_t offset = 0u; offset < snapshot_size; ++offset)
+        module.bytes[offset] = memory.read_u8(address + offset);
+    module.kind = ExecutableModuleKind::Overlay;
+    module.executable_permission = false;
+    module.control_transfer_promotion_allowed = true;
+    module.range_roles.push_back({0u, snapshot_size, ExecutableStorageRole::ProvenData});
+    publish(std::move(module));
     return true;
 }
 
@@ -332,8 +409,11 @@ DemandBlockMaterializer::try_materialize(CpuState& cpu,
     }
     auto* module = modules_.resolve(target, 2u);
     if (module == nullptr) {
-        fail(MaterializationFailure::UnknownSource, target);
-        return std::nullopt;
+        if (!modules_.promote_runtime_write(cpu.memory, target)) {
+            fail(MaterializationFailure::UnknownSource, target);
+            return std::nullopt;
+        }
+        module = modules_.resolve(target, 2u);
     }
     if (!module->executable_permission) {
         if (!module->control_transfer_promotion_allowed) {

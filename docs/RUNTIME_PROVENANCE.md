@@ -38,6 +38,14 @@ mit ihrer neuen Generation. Invalidierte Bloecke und geloeste eingehende Links
 werden gemeinsam festgehalten. Nachweislich bytegleiche Schreibvorgaenge
 bleiben als Ereignis sichtbar, erhoehen aber keine Generation.
 
+Fuer Demand-Materialisierung fuehrt der Dreamcast-Produktpfad zusaetzlich eine
+begrenzte Bytebelegung fuer tatsaechlich geaenderte Haupt-RAM-Writes. Sie ist
+kein Codebeweis und verleiht weder einer Seite noch dem RAM Ausfuehrungsrecht.
+Erst ein realer, ausgerichteter Kontrolltransfer auf zwei belegte Bytes darf
+einen maximal 128 Byte grossen Snapshot autorisieren. Dessen Byteidentitaet
+wird vor Registrierung und vor jedem Dispatch erneut geprueft; ein
+ueberlappender Write deaktiviert ihn aliasunabhaengig.
+
 Die Historie wird best-effort nach der eigentlichen Invalidierung angelegt. Ein
 Speichermangel kann deshalb nur `dropped_invalidation_events` erhoehen und weder
 Seitengeneration, Blockgueltigkeit noch Linkaufloesung veraendern. Nicht portable

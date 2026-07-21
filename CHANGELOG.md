@@ -62,11 +62,20 @@
   freigegebene Ladebereiche koennen an einem tatsaechlichen Kontrolltransfer
   in ein kleines, byte- und generationsgebundenes Ausfuehrungsfenster
   aufgewertet werden.
+- Zur Laufzeit in Dreamcast-Haupt-RAM geschriebener Code erhaelt keine
+  pauschale Ausfuehrungsberechtigung. Der Modulkatalog merkt nur nachweislich
+  geaenderte Bytes; erst ein realer Kontrolltransfer auf mindestens eine
+  vollstaendig geschriebene SH-4-Instruktion erzeugt einen auf 128 Bytes
+  begrenzten, bytegenauen Snapshot. Ueberlappende CPU-, DMA- oder Copy-Writes
+  entwerten Modul und Runtimeblock wieder. Unbeschriebenes RAM bleibt
+  `unknown-source`. Damit koennen allgemeine Runtime-Loader und dynamisch
+  installierte Exception-Handler materialisiert werden, ohne Titeladressen
+  oder pauschal ausfuehrbares RAM einzufuehren.
 - Generierter C++-Code emittiert Gastloads und -stores direkt ueber die
   MMU-faehigen `guest_read_*`-/`guest_write_*`-Schnittstellen. Die globale
   nachtraegliche Zeichenersetzung des gesamten Funktionstexts ist entfallen.
 - PlatformServices-ABI 7 versioniert den korrigierten linearen und
-  gastzeitgebundenen DMA-Vertrag. Runtime-ABI 17 und Portprojektvertrag 10
+  gastzeitgebundenen DMA-Vertrag. Runtime-ABI 18 und Portprojektvertrag 10
   bleiben die aktuellen v0.48-Vertraege.
 - Der kumulative Debug-Gate umfasst 180 Tests und ist vollstaendig gruen.
   Die beiden Tests, die eigenstaendige Portprojekte mit CMake/MSVC bauen,
@@ -105,7 +114,7 @@
   der Recipe, verwirft abweichendes Staging und veroeffentlicht dadurch keinen
   unterdessen veraenderten oder semantisch umgebundenen Discinhalt. Der Parser
   rekonstruiert Trackintegritaet und Content-Root aus dem Chunkindex.
-- Runtime-ABI 17 und Portprojektvertrag 10 versionieren kumulativ den gemeinsamen
+- Runtime-ABI 18 und Portprojektvertrag 10 versionieren kumulativ den gemeinsamen
   AICA-Sound-RAM-/Audiopfad sowie den neuen Disc-Identitaetsvertrag.
 - Der Software-PVR fuehrt die TSP-Fogmodi jetzt im echten Fragmentpfad aus:
   Look-up-Table-Fog dekodiert `FOG_DENSITY` und interpoliert die 128

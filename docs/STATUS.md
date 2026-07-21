@@ -23,11 +23,23 @@ DMA-Zustaende, GD-ROM, TA/PVR, AICA und den Demand-Materializer. Der emittierte
 Produktcode wurde mit einer synthetischen High-Density-GDI bis zur nativen EXE
 gebaut. Die zusammenhaengende ASan-/Artifact-Gesamtvalidierung ist mit 180 von
 180 Tests bestanden; der anschliessende fokussierte Produktpfadlauf ist mit 28
-von 28 Tests gruen. Der genau eine danach vorgesehene frische private PAL-Lauf
-steht noch aus; ein erster Gastframe wird bis dahin ausdruecklich nicht
-behauptet.
+von 28 Tests gruen. Der danach frisch exportierte und lokal aus der
+unveraenderten PAL-Disc installierte Port erreichte 17.092.443 beobachtete
+Bloecke beziehungsweise 50.829.325 Gastzyklen. Der naechste allgemeine Blocker
+ist damit belegt: Der Gast erreicht seinen zur Laufzeit installierten
+Exception-Handler bei `VBR+0x100`, dessen Haupt-RAM-Bytes der bisher nur fuer
+vorab katalogisierte Quellen offene Materializer noch als `unknown-source`
+abwies. TA/PVR blieben bis dahin inaktiv; ein erster Gastframe wird weiterhin
+ausdruecklich nicht behauptet.
 
-Runtime-ABI 17 und Portprojektvertrag 10 bilden den kumulativen v0.48-Stand ab.
+Der allgemeine Fix verfolgt geaenderte Haupt-RAM-Bytes kanonisch und autorisiert
+erst beim echten Kontrolltransfer einen bytegenauen, auf 128 Bytes begrenzten
+Runtime-Code-Snapshot. Unbeschriebenes RAM bleibt gesperrt; jeder
+ueberlappende Write entwertet Snapshot und Runtimeblock. Die gezielte
+Materializer-Regression besteht unter AddressSanitizer. Der erneute private
+PAL-Nachweis folgt nach dem inkrementellen Produktbuild.
+
+Runtime-ABI 18 und Portprojektvertrag 10 bilden den kumulativen v0.48-Stand ab.
 PlatformServices-ABI 7 bleibt unveraendert.
 
 Der iterative Portworkflow verwendet jetzt sicheres inkrementelles Staging:
@@ -56,7 +68,7 @@ Recipe 2. Die Content-Root entsteht aus den wirklich gelesenen Raw-Chunks und
 wird sowohl beim Schreiben gegen die Recipe als auch beim Oeffnen gegen
 Tracktabelle und Chunkindex geprueft; abweichendes Staging wird nicht
 veroeffentlicht. Der damals eingefuehrte AICA-Vertrag ist im aktuellen
-Runtime-ABI 17 und Portprojektvertrag 10 enthalten. Das kumulative v0.48-
+Runtime-ABI 18 und Portprojektvertrag 10 enthalten. Das kumulative v0.48-
 Debug-Gate ist mit 180 von 180 Tests bestanden; der anschliessende private
 PAL-Nachweis ist erfolgt: Der vollstaendige neue Port entstand mit 12 Workern
 in 126,8 Sekunden, ein inkrementeller Runtime-Neubau in 77,8 Sekunden. Die

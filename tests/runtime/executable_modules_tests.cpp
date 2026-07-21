@@ -116,6 +116,139 @@ void relocated_module_regression() {
             "Unbekannter Relocationtyp veraendert den aktiven Modulvertrag.");
 }
 
+void runtime_write_provenance_regression() {
+    using namespace katana::runtime;
+    CpuState cpu;
+    ExecutableModuleCatalog modules;
+    RuntimeBlockTable blocks;
+    ExecutableCodeTracker tracker;
+    blocks.bind_code_tracker(&tracker);
+    cpu.memory.set_guest_write_observer([&](const GuestWriteEvent& event) {
+        modules.record_runtime_write(event.address, event.size, event.bytes_changed);
+        const auto invalidation =
+            tracker.observe_write(event.address, event.size, event.source, event.bytes_changed);
+        if (!invalidation.byte_identical)
+            static_cast<void>(blocks.erase_overlapping_physical(event.address, event.size));
+    });
+
+    std::size_t callback_calls = 0u;
+    DemandBlockMaterializer materializer(modules,
+                                         blocks,
+                                         &tracker,
+                                         {true, 4u, 512u},
+                                         [&](const std::uint32_t target,
+                                             const std::span<const std::uint8_t> snapshot,
+                                             const BlockVariantKey& requested_variant) {
+                                             ++callback_calls;
+                                             return MaterializedBlockCandidate{
+                                                 {target,
+                                                  target,
+                                                  2u,
+                                                  BlockEndKind::Return,
+                                                  requested_variant,
+                                                  block,
+                                                  "synthetic-runtime-write-decoder",
+                                                  true},
+                                                 snapshot.size() >= 2u,
+                                                 true,
+                                                 true,
+                                                 true,
+                                                 1u,
+                                                 1u,
+                                                 1u,
+                                                 1u,
+                                                 1u};
+                                         });
+    IndirectDispatchRequest request;
+    request.kind = IndirectDispatchKind::TailJump;
+    request.callsite = 0x80u;
+    request.target = 0x400u;
+    request.dispatch_class = RuntimeDispatchClass::RuntimeOnly;
+    request.materializer = &materializer;
+
+    bool unwritten_rejected = false;
+    try {
+        static_cast<void>(dispatch_indirect(cpu, blocks, request));
+    } catch (const IndirectDispatchError&) {
+        unwritten_rejected = true;
+    }
+    require(unwritten_rejected &&
+                materializer.last_failure() == MaterializationFailure::UnknownSource &&
+                modules.resolve(request.target) == nullptr,
+            "Unbeschriebenes RAM wurde ohne Herkunft als Code autorisiert.");
+
+    request.target = 0x300u;
+    cpu.memory.write_u16(request.target, 0x0009u);
+    cpu.memory.write_u16(request.target + 2u, 0x000Bu);
+    const auto first = dispatch_indirect(cpu, blocks, request);
+    require(first.block && callback_calls == 1u && modules.resolve(request.target) != nullptr &&
+                modules.resolve(request.target)->materializable(request.target, 2u),
+            "Tatsaechlich geschriebener Runtimecode wurde nicht bytegenau autorisiert.");
+
+    const auto first_module_id = modules.resolve(request.target)->id;
+    cpu.memory.write_u16(request.target, 0x000Bu);
+    require(modules.find(first_module_id) == nullptr &&
+                !blocks.lookup(request.target, request.variant).has_value(),
+            "Gastschreibzugriff entwertet Runtimecode-Snapshot nicht.");
+    const auto second = dispatch_indirect(cpu, blocks, request);
+    require(second.block && callback_calls == 2u && modules.resolve(request.target) != nullptr &&
+                modules.resolve(request.target)->id != first_module_id &&
+                materializer.metrics().materializations == 2u,
+            "Geaenderter Runtimecode erhielt keinen neuen Provenienz-Snapshot.");
+
+    CpuState alias_cpu;
+    const auto alias_ram = std::make_shared<LinearMemoryDevice>(0x1000u);
+    alias_cpu.memory.map_region("runtime-write-p0", 0x0C000000u, alias_ram);
+    alias_cpu.memory.map_region("runtime-write-p1", 0x8C000000u, alias_ram);
+    ExecutableModuleCatalog alias_modules;
+    RuntimeBlockTable alias_blocks;
+    ExecutableCodeTracker alias_tracker;
+    alias_blocks.bind_code_tracker(&alias_tracker);
+    alias_cpu.memory.set_guest_write_observer([&](const GuestWriteEvent& event) {
+        const auto physical = canonical_physical_address(event.address);
+        alias_modules.record_runtime_write(event.address, event.size, event.bytes_changed);
+        const auto invalidation =
+            alias_tracker.observe_write(physical, event.size, event.source, event.bytes_changed);
+        if (!invalidation.byte_identical)
+            static_cast<void>(alias_blocks.erase_overlapping_physical(physical, event.size));
+    });
+    DemandBlockMaterializer alias_materializer(alias_modules,
+                                               alias_blocks,
+                                               &alias_tracker,
+                                               {true, 2u, 256u},
+                                               [](const std::uint32_t target,
+                                                  const std::span<const std::uint8_t> snapshot,
+                                                  const BlockVariantKey& requested_variant) {
+                                                   return MaterializedBlockCandidate{
+                                                       {target,
+                                                        canonical_physical_address(target),
+                                                        2u,
+                                                        BlockEndKind::Return,
+                                                        requested_variant,
+                                                        block,
+                                                        "synthetic-runtime-alias-decoder",
+                                                        true},
+                                                       snapshot.size() >= 2u,
+                                                       true,
+                                                       true,
+                                                       true,
+                                                       1u,
+                                                       1u,
+                                                       1u,
+                                                       1u,
+                                                       1u};
+                                               });
+    alias_cpu.memory.write_u16(0x0C000100u, 0x0009u);
+    request.target = 0x8C000100u;
+    request.materializer = &alias_materializer;
+    const auto alias_dispatch = dispatch_indirect(alias_cpu, alias_blocks, request);
+    const auto alias_module_id = alias_modules.resolve(request.target)->id;
+    alias_cpu.memory.write_u16(0x0C000100u, 0x000Bu);
+    require(alias_dispatch.block && alias_modules.find(alias_module_id) == nullptr &&
+                !alias_blocks.lookup(request.target, request.variant).has_value(),
+            "P0-Write entwertet den ueber P1 materialisierten Runtimecode nicht.");
+}
+
 } // namespace
 
 int main() {
@@ -216,6 +349,7 @@ int main() {
             "Modul-Unload hinterlaesst eine aktive ausfuehrbare Herkunft.");
 
     relocated_module_regression();
+    runtime_write_provenance_regression();
 
     std::cout << "KR-4704 executable module and materialization regression passed.\n";
     return EXIT_SUCCESS;
