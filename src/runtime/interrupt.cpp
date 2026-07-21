@@ -45,6 +45,16 @@ std::size_t InterruptController::pending_count() const noexcept {
     return pending_.size();
 }
 
+std::optional<PendingInterrupt> InterruptController::highest_pending() const noexcept {
+    const auto selected = std::max_element(
+        pending_.begin(), pending_.end(), [](const auto& left, const auto& right) {
+            if (left.level != right.level) return left.level < right.level;
+            return left.source > right.source;
+        });
+    if (selected == pending_.end()) return std::nullopt;
+    return *selected;
+}
+
 bool accept_pending_interrupt(CpuState& cpu, InterruptController& controller) noexcept {
     if (cpu.interrupts_blocked()) {
         return false;

@@ -4,6 +4,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <vector>
 
 namespace katana::runtime {
@@ -23,6 +24,7 @@ class InterruptController {
     void clear() noexcept;
     [[nodiscard]] bool pending(InterruptSource source) const noexcept;
     [[nodiscard]] std::size_t pending_count() const noexcept;
+    [[nodiscard]] std::optional<PendingInterrupt> highest_pending() const noexcept;
 
   private:
     friend bool accept_pending_interrupt(CpuState& cpu, InterruptController& controller) noexcept;

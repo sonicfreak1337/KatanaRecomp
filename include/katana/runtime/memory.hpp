@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <span>
 #include <stdexcept>
 #include <string>
@@ -198,6 +199,11 @@ class Memory {
     void clear_trace_handler() noexcept;
     [[nodiscard]] bool has_trace_handler() const noexcept;
 
+    void set_mmio_access_tracking(bool enabled) noexcept;
+    [[nodiscard]] bool mmio_access_tracking_enabled() const noexcept;
+    [[nodiscard]] const std::optional<MemoryAccessEvent>& last_mmio_access() const noexcept;
+    void clear_last_mmio_access() const noexcept;
+
     void set_guest_write_observer(GuestWriteObserver observer);
     void clear_guest_write_observer() noexcept;
     [[nodiscard]] bool has_guest_write_observer() const noexcept;
@@ -230,6 +236,7 @@ class Memory {
         MemoryRegionInfo info;
         std::shared_ptr<MemoryDevice> device;
         LinearMemoryDevice* linear = nullptr;
+        bool mmio = false;
     };
 
     struct Watchpoint {
@@ -252,6 +259,11 @@ class Memory {
                            MemoryAccessWidth width,
                            MemoryAccessOperation operation) const;
     void notify_access(const MemoryAccessEvent& event) const;
+    void record_mmio_access(const MappedRegion& mapped,
+                            MemoryAccessOperation operation,
+                            std::uint32_t address,
+                            MemoryAccessWidth width,
+                            std::uint32_t value) const;
     void notify_guest_write(const GuestWriteEvent& event) const;
 
     MemoryAlignmentPolicy alignment_policy_ = MemoryAlignmentPolicy::Strict;
@@ -261,6 +273,8 @@ class Memory {
     std::vector<Watchpoint> watchpoints_;
     MemoryAccessObserver trace_handler_;
     GuestWriteObserver guest_write_observer_;
+    bool mmio_access_tracking_enabled_ = false;
+    mutable std::optional<MemoryAccessEvent> last_mmio_access_;
     MemoryWatchpointId next_watchpoint_id_ = 1u;
     mutable MemoryPerformanceCounters performance_counters_;
 };

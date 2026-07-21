@@ -25,6 +25,11 @@ int main() {
     controller.request(3u, 10u, 0x00000620u);
     require(controller.pending_count() == 2u && controller.pending(3u) && controller.pending(7u),
             "Interrupt-Anforderungen werden nicht deterministisch aktualisiert.");
+    require(controller.highest_pending().has_value() &&
+                controller.highest_pending()->source == 3u &&
+                controller.highest_pending()->level == 10u &&
+                controller.highest_pending()->event_code == 0x00000620u,
+            "Interrupt-Diagnostik meldet nicht dieselbe priorisierte Quelle wie der Eintritt.");
 
     CpuState cpu;
     cpu.vbr = 0x8C000000u;

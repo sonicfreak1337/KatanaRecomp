@@ -22,7 +22,7 @@ namespace {
 
 constexpr std::size_t raw_sector_size = 2352u;
 constexpr std::size_t payload_size = 2048u;
-constexpr std::uint32_t data_lba = 100u;
+constexpr std::uint32_t data_lba = 45'000u;
 
 void require(const bool condition, const std::string& message) {
     if (!condition) {
@@ -154,7 +154,7 @@ void write_fixture(const std::filesystem::path& directory, const bool immediate_
     descriptor << "3\n"
                << "1 0 4 2352 low.bin 0\n"
                << "2 30 0 2352 audio.raw 0\n"
-               << "3 100 4 2352 high.bin 0\n";
+               << "3 " << data_lba << " 4 2352 high.bin 0\n";
 }
 
 std::map<std::string, std::string> snapshot(const std::filesystem::path& root) {
@@ -229,11 +229,11 @@ int run_test(const int argc, char* argv[]) {
                 runtime_state.code_tracker->invalidation_count() == 1u,
             "Produktive Store Queue uebertraegt keine 32 Byte nach RAM oder invalidiert Code.");
     runtime_cpu.memory.write_u32(0xFF00003Cu, 0x10u);
-    runtime_cpu.memory.write_u32(0xE2000020u, 0x88776655u);
+    runtime_cpu.memory.write_u32(0xE2000020u, 0x80000000u);
     require(runtime_state.store_queues->prefetch(0xE2000020u) &&
                 runtime_state.store_queue_transfers->back().target ==
                     katana::runtime::StoreQueueTarget::TileAccelerator &&
-                runtime_state.store_queue_transfers->back().bytes[0] == 0x55u,
+                runtime_state.store_queue_transfers->back().bytes[0] == 0u,
             "Produktive Store Queue verliert QACR-basierten TA-Transfer.");
     const auto ta_packets_before_channel2 = runtime_state.pvr_ta_fifo->metrics().packets;
     const auto pvr_dma_events_before_channel2 = std::count_if(
@@ -442,12 +442,22 @@ int run_test(const int argc, char* argv[]) {
                 std::string::npos &&
             read_text(output / "src" / "main.cpp").find("KATANA_PORT_PROGRESS") !=
                 std::string::npos &&
+            read_text(output / "src" / "main.cpp").find("set_mmio_access_tracking") !=
+                std::string::npos &&
+            read_text(output / "src" / "main.cpp").find("highest_pending") !=
+                std::string::npos &&
+            read_text(output / "src" / "main.cpp").find("runtime_materialization_status") !=
+                std::string::npos &&
             read_text(output / "src" / "main.cpp").find("exception_cause=") != std::string::npos &&
             read_text(output / "src" / "main.cpp").find("cpu.expevt") != std::string::npos &&
             read_text(output / "src" / "main.cpp").find("cpu.spc") != std::string::npos &&
             read_text(output / "src" / "main.cpp").find("framebuffer.configure(640u") ==
                 std::string::npos &&
             read_text(output / "src" / "main.cpp").find("pump_guest_frame") !=
+                std::string::npos &&
+            read_text(output / "src" / "main.cpp").find("rendered_frames == 0u") !=
+                std::string::npos &&
+            read_text(output / "src" / "main.cpp").find("KR_FIRST_GUEST_FRAME") !=
                 std::string::npos &&
             read_text(output / "src" / "main.cpp").find("video->present") <
                 read_text(output / "src" / "main.cpp")

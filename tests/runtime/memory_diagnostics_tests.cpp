@@ -216,6 +216,33 @@ int main() {
     require(observed_bus.watchpoint_count() == 0u && !observed_bus.has_trace_handler(),
             "Watchpoints oder Trace-Handler lassen sich nicht vollstaendig leeren.");
 
+    Memory mmio_diagnostics(0u);
+    std::uint32_t mmio_value = 0u;
+    auto mmio = std::make_shared<katana::runtime::MmioMemoryDevice>(
+        4u,
+        [&mmio_value](const std::uint32_t, const MemoryAccessWidth) { return mmio_value; },
+        [&mmio_value](const std::uint32_t,
+                      const std::uint32_t value,
+                      const MemoryAccessWidth) { mmio_value = value; });
+    mmio_diagnostics.map_region("diagnostic-mmio", 0x00007000u, mmio);
+    mmio_diagnostics.set_mmio_access_tracking(true);
+    mmio_diagnostics.write_u32(0x00007000u, 0xA5A55A5Au);
+    require(mmio_diagnostics.mmio_access_tracking_enabled() &&
+                mmio_diagnostics.last_mmio_access().has_value() &&
+                mmio_diagnostics.last_mmio_access()->operation == MemoryAccessOperation::Write &&
+                mmio_diagnostics.last_mmio_access()->address == 0x00007000u &&
+                mmio_diagnostics.last_mmio_access()->width == MemoryAccessWidth::Word &&
+                mmio_diagnostics.last_mmio_access()->value == 0xA5A55A5Au &&
+                mmio_diagnostics.last_mmio_access()->region_name == "diagnostic-mmio",
+            "Leichtgewichtige MMIO-Diagnostik verliert den letzten erfolgreichen Zugriff.");
+    static_cast<void>(mmio_diagnostics.read_u32(0x00007000u));
+    require(mmio_diagnostics.last_mmio_access()->operation == MemoryAccessOperation::Read,
+            "MMIO-Diagnostik aktualisiert einen erfolgreichen Read nicht.");
+    mmio_diagnostics.set_mmio_access_tracking(false);
+    require(!mmio_diagnostics.mmio_access_tracking_enabled() &&
+                !mmio_diagnostics.last_mmio_access().has_value(),
+            "Deaktivierte MMIO-Diagnostik behaelt alten Zustand oder bleibt aktiv.");
+
     require(throws<std::invalid_argument>([&observed_bus] {
                 static_cast<void>(observed_bus.add_watchpoint(0x00005000u,
                                                               0u,

@@ -361,6 +361,12 @@ std::uint64_t DreamcastG2DmaController::completed_dma_count() const noexcept {
     return completed_dma_count_;
 }
 
+const HollyDmaChannelState&
+DreamcastG2DmaController::channel_state(const std::size_t channel) const {
+    if (channel >= channels_.size()) throw std::out_of_range("Ungueltiger G2-DMA-Kanal.");
+    return channels_[channel];
+}
+
 DreamcastG1BusController::DreamcastG1BusController(
     EventScheduler& scheduler,
     const HollyDmaTiming timing,
@@ -476,6 +482,18 @@ void DreamcastG1BusController::reset() noexcept {
     dma_enabled_ = 0u;
     dma_active_ = 0u;
     system_mode_ = 1u;
+}
+
+HollyDmaChannelState DreamcastG1BusController::state() const noexcept {
+    HollyDmaChannelState result;
+    result.system_address = dma_address_;
+    result.length = dma_length_;
+    result.direction = dma_direction_;
+    result.enabled = dma_enabled_;
+    result.active = dma_active_;
+    result.remaining = dma_active_ != 0u ? dma_length_ : 0u;
+    result.completion_event = completion_event_;
+    return result;
 }
 
 DreamcastPvrDmaController::DreamcastPvrDmaController(
@@ -629,6 +647,22 @@ void DreamcastPvrDmaController::reset() noexcept {
     pvr_counter_ = 0u;
     system_counter_ = 0u;
     remaining_ = 0u;
+}
+
+HollyDmaChannelState DreamcastPvrDmaController::state() const noexcept {
+    HollyDmaChannelState result;
+    result.peripheral_address = pvr_address_;
+    result.system_address = system_address_;
+    result.length = length_;
+    result.direction = direction_;
+    result.trigger_select = trigger_select_;
+    result.enabled = enabled_;
+    result.active = active_;
+    result.peripheral_counter = pvr_counter_;
+    result.system_counter = system_counter_;
+    result.remaining = remaining_;
+    result.completion_event = completion_event_;
+    return result;
 }
 
 DreamcastHollyDmaControllers

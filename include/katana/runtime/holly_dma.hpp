@@ -51,6 +51,7 @@ class DreamcastG2DmaController final {
     void write(std::uint32_t offset, std::uint32_t value);
     void reset() noexcept;
     [[nodiscard]] std::uint64_t completed_dma_count() const noexcept;
+    [[nodiscard]] const HollyDmaChannelState& channel_state(std::size_t channel) const;
     void hardware_trigger(std::size_t channel);
     void interrupt_trigger(SystemAsicEvent event);
 
@@ -91,6 +92,7 @@ class DreamcastG1BusController final {
     [[nodiscard]] std::uint32_t read(std::uint32_t offset) const;
     void write(std::uint32_t offset, std::uint32_t value);
     void reset() noexcept;
+    [[nodiscard]] HollyDmaChannelState state() const noexcept;
 
   private:
     void start();
@@ -124,6 +126,7 @@ class DreamcastPvrDmaController final {
     void write(std::uint32_t offset, std::uint32_t value);
     void hardware_trigger();
     void reset() noexcept;
+    [[nodiscard]] HollyDmaChannelState state() const noexcept;
 
   private:
     void start();

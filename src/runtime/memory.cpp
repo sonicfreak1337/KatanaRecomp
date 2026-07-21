@@ -398,10 +398,12 @@ void Memory::map_region(std::string name,
     }
 
     auto* linear = dynamic_cast<LinearMemoryDevice*>(device.get());
+    const bool mmio = dynamic_cast<MmioMemoryDevice*>(device.get()) != nullptr;
     regions_.push_back(
         MappedRegion{MemoryRegionInfo{std::move(name), base_address, device->size(), access},
                      std::move(device),
-                     linear});
+                     linear,
+                     mmio});
 
     std::sort(
         regions_.begin(), regions_.end(), [](const MappedRegion& left, const MappedRegion& right) {
@@ -555,6 +557,23 @@ bool Memory::has_trace_handler() const noexcept {
     return static_cast<bool>(trace_handler_);
 }
 
+void Memory::set_mmio_access_tracking(const bool enabled) noexcept {
+    mmio_access_tracking_enabled_ = enabled;
+    if (!enabled) last_mmio_access_.reset();
+}
+
+bool Memory::mmio_access_tracking_enabled() const noexcept {
+    return mmio_access_tracking_enabled_;
+}
+
+const std::optional<MemoryAccessEvent>& Memory::last_mmio_access() const noexcept {
+    return last_mmio_access_;
+}
+
+void Memory::clear_last_mmio_access() const noexcept {
+    last_mmio_access_.reset();
+}
+
 void Memory::set_guest_write_observer(GuestWriteObserver observer) {
     guest_write_observer_ = std::move(observer);
 }
@@ -577,6 +596,8 @@ std::uint8_t Memory::read_u8(const std::uint32_t address) const {
                                            MemoryAccessWidth::Byte,
                                            MemoryAccessOperation::Read,
                                            [&] { return mapped.device->read_u8(offset); });
+    record_mmio_access(
+        mapped, MemoryAccessOperation::Read, address, MemoryAccessWidth::Byte, value);
     if (access_observers_active()) {
         ++performance_counters_.observed_accesses;
         notify_access(MemoryAccessEvent{MemoryAccessOperation::Read,
@@ -600,6 +621,8 @@ std::uint16_t Memory::read_u16(const std::uint32_t address) const {
                                            MemoryAccessWidth::Halfword,
                                            MemoryAccessOperation::Read,
                                            [&] { return mapped.device->read_u16(offset); });
+    record_mmio_access(
+        mapped, MemoryAccessOperation::Read, address, MemoryAccessWidth::Halfword, value);
     if (access_observers_active()) {
         ++performance_counters_.observed_accesses;
         notify_access(MemoryAccessEvent{MemoryAccessOperation::Read,
@@ -623,6 +646,8 @@ std::uint32_t Memory::read_u32(const std::uint32_t address) const {
                                            MemoryAccessWidth::Word,
                                            MemoryAccessOperation::Read,
                                            [&] { return mapped.device->read_u32(offset); });
+    record_mmio_access(
+        mapped, MemoryAccessOperation::Read, address, MemoryAccessWidth::Word, value);
     if (access_observers_active()) {
         ++performance_counters_.observed_accesses;
         notify_access(MemoryAccessEvent{MemoryAccessOperation::Read,
@@ -663,6 +688,8 @@ void Memory::write_u8(const std::uint32_t address,
                       MemoryAccessWidth::Byte,
                       MemoryAccessOperation::Write,
                       [&] { mapped.device->write_u8(offset, value); });
+    record_mmio_access(
+        mapped, MemoryAccessOperation::Write, address, MemoryAccessWidth::Byte, value);
     if (access_observers_active()) {
         ++performance_counters_.observed_accesses;
         notify_access(MemoryAccessEvent{MemoryAccessOperation::Write,
@@ -691,6 +718,8 @@ void Memory::write_u16(const std::uint32_t address,
                       MemoryAccessWidth::Halfword,
                       MemoryAccessOperation::Write,
                       [&] { mapped.device->write_u16(offset, value); });
+    record_mmio_access(
+        mapped, MemoryAccessOperation::Write, address, MemoryAccessWidth::Halfword, value);
     if (access_observers_active()) {
         ++performance_counters_.observed_accesses;
         notify_access(MemoryAccessEvent{MemoryAccessOperation::Write,
@@ -719,6 +748,8 @@ void Memory::write_u32(const std::uint32_t address,
                       MemoryAccessWidth::Word,
                       MemoryAccessOperation::Write,
                       [&] { mapped.device->write_u32(offset, value); });
+    record_mmio_access(
+        mapped, MemoryAccessOperation::Write, address, MemoryAccessWidth::Word, value);
     if (access_observers_active()) {
         ++performance_counters_.observed_accesses;
         notify_access(MemoryAccessEvent{MemoryAccessOperation::Write,
@@ -975,6 +1006,15 @@ void Memory::notify_access(const MemoryAccessEvent& event) const {
     for (const auto& observer : observers) {
         observer(event);
     }
+}
+
+void Memory::record_mmio_access(const MappedRegion& mapped,
+                                const MemoryAccessOperation operation,
+                                const std::uint32_t address,
+                                const MemoryAccessWidth width,
+                                const std::uint32_t value) const {
+    if (!mmio_access_tracking_enabled_ || !mapped.mmio) return;
+    last_mmio_access_ = MemoryAccessEvent{operation, address, width, value, mapped.info.name};
 }
 
 void Memory::notify_guest_write(const GuestWriteEvent& event) const {
