@@ -4,6 +4,13 @@
 
 ### Geaendert
 
+- Der PVR-Tile-Accelerator bildet `TA_LIST_INIT` und `TA_LIST_CONT` jetzt nach
+  dem dokumentierten HOLLY-Vertrag ab. Initialisierung uebernimmt
+  `TA_NEXT_OPB_INIT` und `TA_ISP_BASE` in die read-only Arbeitszeiger,
+  Fortsetzung verwendet `TA_OL_BASE`, erhaelt bereits erzeugte Primitive und
+  setzt nur den Parserzustand zurueck. Basis- und Grenzregister werden auf den
+  gueltigen VRAM-Adressbereich maskiert; offene oder unvollstaendige Listen
+  koennen nicht stillschweigend fortgesetzt werden.
 - `PVR SPG_STATUS` bildet die laufende Scanline jetzt aus der deterministischen
   Gastzeit ab und liefert die dokumentierten Field- und Blank-Bits, statt nach
   dem Firmware-Handoff statisch null zu bleiben. Der Handoff initialisiert

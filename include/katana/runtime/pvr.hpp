@@ -70,6 +70,14 @@ inline constexpr std::uint32_t TaInit = 0x144u;
 inline constexpr std::uint32_t YuvAddress = 0x148u;
 inline constexpr std::uint32_t YuvConfig = 0x14Cu;
 inline constexpr std::uint32_t YuvStatus = 0x150u;
+inline constexpr std::uint32_t TaListContinue = 0x160u;
+inline constexpr std::uint32_t TaNextOpbInit = 0x164u;
+inline constexpr std::uint32_t TaObjectListBase = TaOpbStart;
+inline constexpr std::uint32_t TaIspBase = TaVertexBufferStart;
+inline constexpr std::uint32_t TaObjectListLimit = TaOpbEnd;
+inline constexpr std::uint32_t TaIspLimit = TaVertexBufferEnd;
+inline constexpr std::uint32_t TaNextOpb = TaOpbPosition;
+inline constexpr std::uint32_t TaIspCurrent = TaVertexBufferPosition;
 inline constexpr std::uint32_t FogTableBase = 0x200u;
 inline constexpr std::uint32_t PaletteTableBase = 0x1000u;
 } // namespace pvr_register
@@ -110,6 +118,7 @@ class PvrRegisterFile final {
     void set_render_observer(std::function<void()> observer);
     void set_vblank_observer(std::function<void(bool)> observer);
     void set_ta_reset_observer(std::function<void()> observer);
+    void set_ta_continue_observer(std::function<void()> observer);
     void record_ta_packet(std::uint32_t bytes);
 
   private:
@@ -132,6 +141,7 @@ class PvrRegisterFile final {
     std::function<void()> render_observer_;
     std::function<void(bool)> vblank_observer_;
     std::function<void()> ta_reset_observer_;
+    std::function<void()> ta_continue_observer_;
     std::optional<SchedulerEventId> vblank_in_event_;
     std::optional<SchedulerEventId> vblank_out_event_;
     std::uint64_t vblank_in_count_ = 0u;
@@ -284,6 +294,7 @@ struct PvrTaMetrics {
     std::uint64_t vertices = 0u;
     std::uint64_t list_completions = 0u;
     std::uint64_t frames = 0u;
+    std::uint64_t continuations = 0u;
 };
 
 class PvrTaFifo final {
@@ -292,6 +303,7 @@ class PvrTaFifo final {
     void submit(std::span<const std::uint8_t> packet);
     [[nodiscard]] PvrTaFrame finish_frame();
     [[nodiscard]] const PvrTaMetrics& metrics() const noexcept;
+    void continue_list();
     void reset() noexcept;
 
   private:

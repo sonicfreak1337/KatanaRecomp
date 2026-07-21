@@ -29,6 +29,13 @@ aktiviert; PAL/NTSC non-interlaced und VGA stehen als vollstaendig definierte
 Hardwareprofile fuer spaetere Gastumschaltungen bereit. Die Werte stammen aus
 der Sega-Systemarchitektur und sind nicht an einzelne Spieleadressen gebunden.
 
+Der vorgelagerte Tile-Accelerator uebernimmt bei `TA_LIST_INIT` die
+dokumentierten OPB-/ISP-Initialwerte in seine Arbeitszeiger. `TA_LIST_CONT`
+setzt einen abgeschlossenen Parameterstrom am programmierten Objektlistenanfang
+fort, ohne bereits erzeugte Primitive des aktuellen Frames zu verwerfen. Eine
+offene Liste oder ein unvollstaendiger 64-Byte-Parameter ist kein gueltiger
+Fortsetzungspunkt und wird explizit abgewiesen.
+
 ## Produktpfad und Plattformen
 
 Der Windows-Backendpfad verwendet ein echtes Win32-Fenster und GDI-DIB-

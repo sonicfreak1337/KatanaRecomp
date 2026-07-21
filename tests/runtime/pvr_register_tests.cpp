@@ -67,6 +67,29 @@ int main() {
             "PVR akzeptiert still einen nicht unterstuetzten 16-Bit-Zugriff.");
     require(!bus.contains(0xE05F8000u), "P4 wurde faelschlich als direkter PVR-Alias abgebildet.");
 
+    std::uint64_t ta_resets = 0u;
+    std::uint64_t ta_continuations = 0u;
+    pvr->set_ta_reset_observer([&] { ++ta_resets; });
+    pvr->set_ta_continue_observer([&] { ++ta_continuations; });
+    pvr->write(pvr_register::TaObjectListBase, 0x04801237u);
+    pvr->write(pvr_register::TaIspBase, 0x04802003u);
+    pvr->write(pvr_register::TaNextOpbInit, 0x04803457u);
+    pvr->write(pvr_register::TaInit, 0x80000000u);
+    require(pvr->read(pvr_register::TaObjectListBase) == 0x00001234u &&
+                pvr->read(pvr_register::TaIspBase) == 0x00002000u &&
+                pvr->read(pvr_register::TaNextOpb) == 0x00003454u &&
+                pvr->read(pvr_register::TaIspCurrent) == 0x00002000u && ta_resets == 1u,
+            "TA_LIST_INIT verwendet Basis, NEXT_OPB_INIT, Masken oder Resetcallback falsch.");
+    pvr->write(pvr_register::TaObjectListBase, 0x00005678u);
+    pvr->write(pvr_register::TaListContinue, 0u);
+    require(pvr->read(pvr_register::TaNextOpb) == 0x00005678u && ta_continuations == 1u,
+            "TA_LIST_CONT uebernimmt OL_BASE oder Fortsetzungscallback nicht.");
+    require(throws<std::runtime_error>(
+                [&] { pvr->write(pvr_register::TaNextOpb, 0x1000u); }) &&
+                throws<std::runtime_error>(
+                    [&] { pvr->write(pvr_register::TaIspCurrent, 0x1000u); }),
+            "Read-only-TA-Positionsregister sind beschreibbar.");
+
     EventScheduler scan_scheduler;
     Memory scan_bus(0u);
     const auto scan_pvr = map_pvr_registers(

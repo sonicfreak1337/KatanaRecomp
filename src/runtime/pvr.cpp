@@ -71,7 +71,8 @@ std::uint32_t PvrRegisterFile::read(const std::uint32_t offset) const {
 void PvrRegisterFile::write(const std::uint32_t offset, const std::uint32_t value) {
     static_cast<void>(index(offset));
     if (offset == pvr_register::Id || offset == pvr_register::Revision ||
-        offset == pvr_register::SpgStatus) {
+        offset == pvr_register::SpgStatus || offset == pvr_register::TaNextOpb ||
+        offset == pvr_register::TaIspCurrent) {
         throw std::runtime_error("Read-only-PVR-Register ist nicht beschreibbar.");
     }
     if (offset == pvr_register::SoftReset) {
@@ -89,14 +90,25 @@ void PvrRegisterFile::write(const std::uint32_t offset, const std::uint32_t valu
         return;
     }
     if (offset == pvr_register::TaInit) {
-        registers_[index(offset)] = value;
         if ((value & 0x80000000u) != 0u) {
-            registers_[index(pvr_register::TaOpbPosition)] =
-                registers_[index(pvr_register::TaOpbStart)];
-            registers_[index(pvr_register::TaVertexBufferPosition)] =
-                registers_[index(pvr_register::TaVertexBufferStart)];
+            registers_[index(pvr_register::TaNextOpb)] =
+                registers_[index(pvr_register::TaNextOpbInit)];
+            registers_[index(pvr_register::TaIspCurrent)] =
+                registers_[index(pvr_register::TaIspBase)];
             if (ta_reset_observer_) ta_reset_observer_();
         }
+        return;
+    }
+    if (offset == pvr_register::TaListContinue) {
+        registers_[index(pvr_register::TaNextOpb)] =
+            registers_[index(pvr_register::TaObjectListBase)];
+        if (ta_continue_observer_) ta_continue_observer_();
+        return;
+    }
+    if (offset == pvr_register::TaObjectListBase || offset == pvr_register::TaIspBase ||
+        offset == pvr_register::TaObjectListLimit || offset == pvr_register::TaIspLimit ||
+        offset == pvr_register::TaNextOpbInit) {
+        registers_[index(offset)] = value & 0x007FFFFCu;
         return;
     }
     registers_[index(offset)] = value;
@@ -164,6 +176,9 @@ void PvrRegisterFile::set_vblank_observer(std::function<void(bool)> observer) {
 }
 void PvrRegisterFile::set_ta_reset_observer(std::function<void()> observer) {
     ta_reset_observer_ = std::move(observer);
+}
+void PvrRegisterFile::set_ta_continue_observer(std::function<void()> observer) {
+    ta_continue_observer_ = std::move(observer);
 }
 void PvrRegisterFile::record_ta_packet(const std::uint32_t bytes) {
     auto& position = registers_[index(pvr_register::TaVertexBufferPosition)];
@@ -1401,6 +1416,27 @@ PvrTaFrame PvrTaFifo::finish_frame() {
 
 const PvrTaMetrics& PvrTaFifo::metrics() const noexcept {
     return metrics_;
+}
+
+void PvrTaFifo::continue_list() {
+    if (accelerator_.list_open() || pending_sprite_vertex_ || pending_extended_vertex_ ||
+        pending_intensity_header_ || pending_modifier_vertex_packet_)
+        throw std::logic_error("TA-Listenfortsetzung beginnt innerhalb eines Parameters oder einer Liste.");
+    active_list_ = PvrListType::Opaque;
+    active_textured_ = false;
+    active_uv16_ = false;
+    active_color_type_ = 0u;
+    active_sprite_ = false;
+    active_header_argb_ = 0xFFFFFFFFu;
+    active_header_oargb_ = 0u;
+    intensity_face_color_valid_ = false;
+    active_material_ = {};
+    user_clip_start_x_ = 0u;
+    user_clip_start_y_ = 0u;
+    user_clip_end_x_ = 0u;
+    user_clip_end_y_ = 0u;
+    pending_extended_end_of_strip_ = false;
+    ++metrics_.continuations;
 }
 
 void PvrTaFifo::reset() noexcept {

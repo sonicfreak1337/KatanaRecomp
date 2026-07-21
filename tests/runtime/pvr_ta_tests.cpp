@@ -107,6 +107,32 @@ int main() {
     require(packed_frame.primitives[0].vertices[0].argb == 0xFF102030u,
             "HOLLY2-Farbe eines untexturierten Packed-Vertices wird nicht aus 0x18 gelesen.");
 
+    PvrTaFifo continued_fifo;
+    const auto submit_packed_strip = [&](const float x_base) {
+        continued_fifo.submit(header(0u));
+        for (std::uint32_t index = 0u; index < 3u; ++index) {
+            auto packet = ta_vertex(index == 2u ? 0xF0000000u : 0xE0000000u,
+                                    x_base + static_cast<float>(index));
+            put_u32(packet, 24u, 0xFFFFFFFFu);
+            continued_fifo.submit(packet);
+        }
+        end_fifo_list(continued_fifo);
+    };
+    submit_packed_strip(0.0f);
+    continued_fifo.continue_list();
+    submit_packed_strip(4.0f);
+    const auto continued_frame = continued_fifo.finish_frame();
+    require(continued_frame.primitives.size() == 2u &&
+                continued_frame.primitives[0].vertices[0].x == 0.0f &&
+                continued_frame.primitives[1].vertices[0].x == 4.0f &&
+                continued_fifo.metrics().continuations == 1u,
+            "TA_LIST_CONT verliert bereits erzeugte Primitive oder den Fortsetzungsstatus.");
+
+    PvrTaFifo open_list_fifo;
+    open_list_fifo.submit(header(0u));
+    require(throws<std::logic_error>([&] { open_list_fifo.continue_list(); }),
+            "TA_LIST_CONT akzeptiert eine noch offene Objektliste.");
+
     PvrTaFifo float_fifo;
     float_fifo.submit(header((1u << 4u) | 0x0Cu));
     for (std::uint32_t index = 0u; index < 3u; ++index) {

@@ -144,6 +144,14 @@ Texturkoordinaten sind jetzt perspektivisch ueber die reziproke W-Tiefe;
 Trilinear-, Sekundaer-Akkumulations- und Supersamplingbits werden vollstaendig
 dekodiert und bis zu ihrer echten Umsetzung sichtbar abgewiesen, statt als
 falsches Bilinearbild durchzulaufen.
+Der SA-gestuetzte Gesamtcheck hat danach eine allgemeine TA-Registerluecke
+belegt: Das Spiel programmiert `TA_NEXT_OPB_INIT`, waehrend die Runtime bei
+`TA_LIST_INIT` irrtuemlich `TA_OL_BASE` als Arbeitszeiger verwendete und
+`TA_LIST_CONT` keinen Parserpfad besass. Beide Befehle folgen nun dem
+dokumentierten HOLLY-Vertrag. Fortsetzungen erhalten abgeschlossene Primitive,
+setzen den transienten Parserzustand kontrolliert zurueck und werden waehrend
+offener oder unvollstaendiger Parameter abgewiesen. Adressmasken und read-only
+Arbeitszeiger sind in Register- und FIFO-Regressionen geschlossen.
 Diese Fortschritte sind synthetisch getestet; ein neuer privater PAL-Lauf ist
 noch nicht erfolgt, daher bleibt der erste echte Gastframe offen.
 

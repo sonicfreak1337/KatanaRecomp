@@ -390,6 +390,9 @@ initialize_dreamcast_runtime(CpuState& cpu,
     state.pvr_registers->set_ta_reset_observer([reset_ta_fifo] {
         if (const auto fifo = reset_ta_fifo.lock()) fifo->reset();
     });
+    state.pvr_registers->set_ta_continue_observer([reset_ta_fifo] {
+        if (const auto fifo = reset_ta_fifo.lock()) fifo->continue_list();
+    });
     state.pvr_yuv_converter = std::make_shared<PvrYuvConverterMemoryDevice>(
         state.pvr_registers,
         state.vram,
