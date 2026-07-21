@@ -50,9 +50,13 @@ inline constexpr std::uint32_t FogDensity = 0x0B8u;
 inline constexpr std::uint32_t ColorClampMaximum = 0x0BCu;
 inline constexpr std::uint32_t ColorClampMinimum = 0x0C0u;
 inline constexpr std::uint32_t SpgControl = 0x0D0u;
+inline constexpr std::uint32_t SpgHblank = 0x0D4u;
 inline constexpr std::uint32_t SpgLoad = 0x0D8u;
 inline constexpr std::uint32_t SpgVblank = 0x0DCu;
+inline constexpr std::uint32_t SpgWidth = 0x0E0u;
 inline constexpr std::uint32_t VideoControl = 0x0E8u;
+inline constexpr std::uint32_t VideoStartX = 0x0ECu;
+inline constexpr std::uint32_t VideoStartY = 0x0F0u;
 inline constexpr std::uint32_t TextureModulo = 0x0E4u;
 inline constexpr std::uint32_t PaletteConfig = 0x108u;
 inline constexpr std::uint32_t SpgStatus = 0x10Cu;
@@ -69,6 +73,14 @@ inline constexpr std::uint32_t YuvStatus = 0x150u;
 inline constexpr std::uint32_t FogTableBase = 0x200u;
 inline constexpr std::uint32_t PaletteTableBase = 0x1000u;
 } // namespace pvr_register
+
+enum class DreamcastVideoMode : std::uint8_t {
+    NtscNonInterlaced,
+    NtscInterlaced,
+    PalNonInterlaced,
+    PalInterlaced,
+    Vga,
+};
 
 struct PvrTiming {
     std::uint64_t render_latency = 2'000u;
@@ -125,9 +137,12 @@ class PvrRegisterFile final {
     std::uint64_t vblank_in_count_ = 0u;
     std::uint64_t vblank_out_count_ = 0u;
     std::uint64_t scan_frame_cycles_ = 0u;
+    std::uint64_t scan_epoch_cycle_ = 0u;
     bool in_vblank_ = false;
     std::uint32_t field_ = 0u;
 };
+
+void configure_dreamcast_video(PvrRegisterFile& registers, DreamcastVideoMode mode);
 
 enum class PvrFramebufferFormat : std::uint8_t { Rgb565, Argb1555, Rgb888, Rgb0888 };
 

@@ -43,6 +43,16 @@ sind nun geschlossen; der Vergleichslauf erreicht 17.516.050 native
 AOT-Bloecke in 50 Mio. Gastzyklen ohne Exception. Ein Gastframe steht weiterhin
 aus.
 
+Die danach isolierte permanente Wartestelle las `SPG_STATUS` bei
+`0xA05F810C`, waehrend der HLE-Handoff `SPG_LOAD=0` hinterlassen hatte. Der
+Syncgenerator leitet Scanline, Field und Blank nun aus Gastzeit und
+dokumentierten Registerfeldern ab. Der Firmware-Handoff waehlt fuer Europa das
+PAL-Interlace-Profil und fuer Japan/Nordamerika NTSC-Interlace; zusaetzlich
+sind PAL/NTSC non-interlaced und VGA geschlossen getestet. Der frische private
+PAL-Port verlaesst `0x8C6044DE` nachweislich und erreicht bei 10 Mio.
+Gastzyklen `0x8C0100E2` ohne Exception. TA-/PVR-Aktivitaet und der erste
+Gastframe stehen weiterhin aus.
+
 Der anschliessende P0-Runtimeblock korrigiert den zweiten SH-4-Ausfuehrungskern
 und seine AOT-Grenze: Pre-Decrement-Fault-Rollback, SHAD/SHLD bei negativen
 32er-Vielfachen, PR-Sichtbarkeit und -Rollback im Delay-Slot sowie die

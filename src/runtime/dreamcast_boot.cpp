@@ -379,6 +379,11 @@ initialize_dreamcast_runtime(CpuState& cpu,
         [raise_now](const bool entering) {
             raise_now(entering ? SystemAsicEvent::PvrVblank : SystemAsicEvent::PvrVblankOut);
         });
+    configure_dreamcast_video(
+        *state.pvr_registers,
+        dreamcast_region_from_area_symbols(boot.area_symbols) == DreamcastRegion::Europe
+            ? DreamcastVideoMode::PalInterlaced
+            : DreamcastVideoMode::NtscInterlaced);
     state.pvr_ta_aperture =
         std::make_shared<PvrTaFifoMemoryDevice>(state.pvr_ta_fifo, state.pvr_registers);
     const auto reset_ta_fifo = std::weak_ptr<PvrTaFifo>(state.pvr_ta_fifo);

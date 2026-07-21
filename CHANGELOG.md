@@ -4,6 +4,16 @@
 
 ### Geaendert
 
+- `PVR SPG_STATUS` bildet die laufende Scanline jetzt aus der deterministischen
+  Gastzeit ab und liefert die dokumentierten Field- und Blank-Bits, statt nach
+  dem Firmware-Handoff statisch null zu bleiben. Der Handoff initialisiert
+  anhand der Disc-Region ein PAL- oder NTSC-Profil; die vollstaendigen
+  offiziellen SPG-Registersaetze fuer PAL/NTSC (jeweils interlaced und
+  non-interlaced) sowie VGA sind als spielunabhaengige Profile getestet.
+  `SPG_STATUS` ist read-only, und VBlank-Start/-Ende verwenden ihre korrekte
+  Bitfeldrichtung. Sonic Adventure PAL verlaesst damit die zuvor permanente
+  Warteschleife bei `0x8C6044DE` und erreicht ohne Exception wieder den
+  Bootcode bei `0x8C0100E2`; der erste Gastframe bleibt offen.
 - Der produktive AOT-Dispatcher beendet jede generierte Basic-Block-Ausfuehrung
   wieder an der zentralen Fetchgrenze. Aktive MMU-, Adressraum-, Watchpoint-
   und FPSCR-Generationen bilden den Variantenschluessel; statischer Code wird

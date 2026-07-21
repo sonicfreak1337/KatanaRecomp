@@ -47,13 +47,32 @@ std::uint32_t PvrRegisterFile::read(const std::uint32_t offset) const {
     if (offset == pvr_register::Revision) {
         return pvr_revision;
     }
+    if (offset == pvr_register::SpgStatus) {
+        const auto load = registers_[index(pvr_register::SpgLoad)];
+        const auto vertical = static_cast<std::uint64_t>((load >> 16u) & 0x3FFu) + 1u;
+        if (scan_frame_cycles_ == 0u || vertical <= 1u) return 0u;
+
+        const auto elapsed = scheduler_.current_cycle() - scan_epoch_cycle_;
+        const auto frame_cycle = elapsed % scan_frame_cycles_;
+        const auto scanline = std::min<std::uint64_t>(
+            vertical - 1u, frame_cycle * vertical / scan_frame_cycles_);
+        const auto vblank = registers_[index(pvr_register::SpgVblank)];
+        const auto blank_start = static_cast<std::uint64_t>(vblank & 0x3FFu) % vertical;
+        const auto blank_end = static_cast<std::uint64_t>((vblank >> 16u) & 0x3FFu) % vertical;
+        const auto blank = blank_start <= blank_end
+                               ? scanline >= blank_start && scanline < blank_end
+                               : scanline >= blank_start || scanline < blank_end;
+        return static_cast<std::uint32_t>(scanline) | (field_ << 10u) |
+               (blank ? 1u << 11u : 0u);
+    }
     return registers_[index(offset)];
 }
 
 void PvrRegisterFile::write(const std::uint32_t offset, const std::uint32_t value) {
     static_cast<void>(index(offset));
-    if (offset == pvr_register::Id || offset == pvr_register::Revision) {
-        throw std::runtime_error("PVR-ID und Revision sind read-only.");
+    if (offset == pvr_register::Id || offset == pvr_register::Revision ||
+        offset == pvr_register::SpgStatus) {
+        throw std::runtime_error("Read-only-PVR-Register ist nicht beschreibbar.");
     }
     if (offset == pvr_register::SoftReset) {
         if ((value & 0x7u) != 0u) {
@@ -93,6 +112,7 @@ void PvrRegisterFile::reset() noexcept {
     cancel_scan_events();
     registers_.fill(0u);
     scan_frame_cycles_ = 0u;
+    scan_epoch_cycle_ = 0u;
     in_vblank_ = false;
     field_ = 0u;
     ++resets_;
@@ -110,6 +130,8 @@ void PvrRegisterFile::handle_scheduler_reset() noexcept {
     render_events_.clear();
     vblank_in_event_.reset();
     vblank_out_event_.reset();
+    scan_frame_cycles_ = 0u;
+    scan_epoch_cycle_ = 0u;
     in_vblank_ = false;
 }
 
@@ -162,6 +184,9 @@ void PvrRegisterFile::reschedule_scanout() {
     const auto load = registers_[index(pvr_register::SpgLoad)];
     const auto horizontal = static_cast<std::uint64_t>(load & 0x3FFu) + 1u;
     const auto vertical = static_cast<std::uint64_t>((load >> 16u) & 0x3FFu) + 1u;
+    scan_frame_cycles_ = 0u;
+    scan_epoch_cycle_ = scheduler_.current_cycle();
+    in_vblank_ = false;
     if (horizontal <= 1u || vertical <= 1u) return;
     const auto pixels = horizontal * vertical;
     if (pixels > std::numeric_limits<std::uint64_t>::max() / timing_.guest_clock_hz)
@@ -170,8 +195,8 @@ void PvrRegisterFile::reschedule_scanout() {
         1u, (pixels * timing_.guest_clock_hz + timing_.pixel_clock_hz - 1u) /
                 timing_.pixel_clock_hz);
     const auto vblank = registers_[index(pvr_register::SpgVblank)];
-    const auto start = (vblank >> 16u) & 0x3FFu;
-    const auto end = vblank & 0x3FFu;
+    const auto start = vblank & 0x3FFu;
+    const auto end = (vblank >> 16u) & 0x3FFu;
     schedule_scan_event(start % static_cast<std::uint32_t>(vertical), true);
     schedule_scan_event(end % static_cast<std::uint32_t>(vertical), false);
 }
@@ -197,9 +222,6 @@ void PvrRegisterFile::handle_scan_event(const SchedulerEventId event_id, const b
     } else {
         ++vblank_out_count_;
     }
-    auto& status = registers_[index(pvr_register::SpgStatus)];
-    status = (status & ~0x00002000u) | (in_vblank_ ? 0x00002000u : 0u) |
-             (field_ != 0u ? 0x00000001u : 0u);
     if (vblank_observer_) vblank_observer_(entering);
     if (scan_frame_cycles_ != 0u) {
         const auto next = scheduler_.schedule_after(
@@ -207,6 +229,41 @@ void PvrRegisterFile::handle_scan_event(const SchedulerEventId event_id, const b
             [this, entering](const auto id, const auto) { handle_scan_event(id, entering); });
         slot = next;
     }
+}
+
+void configure_dreamcast_video(PvrRegisterFile& registers, const DreamcastVideoMode mode) {
+    struct Profile {
+        std::uint32_t load;
+        std::uint32_t hblank;
+        std::uint32_t vblank;
+        std::uint32_t width;
+        std::uint32_t control;
+        std::uint32_t start_x;
+        std::uint32_t start_y;
+    };
+    constexpr std::array profiles{
+        Profile{0x01060359u, 0x007E0345u, 0x00120102u, 0x03F1933Fu,
+                0x00000140u, 0x000000A4u, 0x00120011u},
+        Profile{0x020C0359u, 0x007E0345u, 0x00240204u, 0x07D6C63Fu,
+                0x00000150u, 0x000000A4u, 0x00120012u},
+        Profile{0x0138035Fu, 0x008D034Bu, 0x002C026Cu, 0x07F1F53Fu,
+                0x00000180u, 0x000000AEu, 0x002E002Eu},
+        Profile{0x0270035Fu, 0x008D034Bu, 0x002C026Cu, 0x07D6A53Fu,
+                0x00000190u, 0x000000AEu, 0x002E002Du},
+        Profile{0x020C0359u, 0x007E0345u, 0x00280208u, 0x03F1933Fu,
+                0x00000100u, 0x000000A8u, 0x00280028u},
+    };
+    const auto selected = static_cast<std::size_t>(mode);
+    if (selected >= profiles.size()) throw std::invalid_argument("Unbekannter Dreamcast-Videomodus.");
+    const auto& profile = profiles[selected];
+    registers.write(pvr_register::SpgHblank, profile.hblank);
+    registers.write(pvr_register::SpgVblank, profile.vblank);
+    registers.write(pvr_register::SpgWidth, profile.width);
+    registers.write(pvr_register::VideoStartX, profile.start_x);
+    registers.write(pvr_register::VideoStartY, profile.start_y);
+    registers.write(pvr_register::VideoControl, 0x00160000u);
+    registers.write(pvr_register::SpgLoad, profile.load);
+    registers.write(pvr_register::SpgControl, profile.control);
 }
 
 namespace {

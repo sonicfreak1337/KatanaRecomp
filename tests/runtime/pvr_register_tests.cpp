@@ -59,9 +59,63 @@ int main() {
             "PVR plant nach Schedulerreset keine frische Completion.");
     require(throws<std::runtime_error>([&] { bus.write_u32(0x005F8000u, 0u); }),
             "Read-only-PVR-ID ist beschreibbar.");
+    require(throws<std::runtime_error>([&] {
+                bus.write_u32(0x005F8000u + pvr_register::SpgStatus, 0u);
+            }),
+            "Read-only-SPG_STATUS ist beschreibbar.");
     require(throws<std::runtime_error>([&] { static_cast<void>(bus.read_u16(0x005F8000u)); }),
             "PVR akzeptiert still einen nicht unterstuetzten 16-Bit-Zugriff.");
     require(!bus.contains(0xE05F8000u), "P4 wurde faelschlich als direkter PVR-Alias abgebildet.");
+
+    EventScheduler scan_scheduler;
+    Memory scan_bus(0u);
+    const auto scan_pvr = map_pvr_registers(
+        scan_bus, scan_scheduler, {}, PvrTiming{5u, 100u, 100u});
+    scan_bus.write_u32(0x005F8000u + pvr_register::SpgVblank, (6u << 16u) | 2u);
+    scan_bus.write_u32(0x005F8000u + pvr_register::SpgLoad, (9u << 16u) | 9u);
+    require(scan_pvr->read(pvr_register::SpgStatus) == 0u,
+            "SPG_STATUS meldet Scanline oder Vertical Blank am Frameanfang falsch.");
+    static_cast<void>(scan_scheduler.advance_to(50u, 1u));
+    require((scan_pvr->read(pvr_register::SpgStatus) & 0x3FFu) == 5u &&
+                (scan_pvr->read(pvr_register::SpgStatus) & (1u << 11u)) != 0u,
+            "SPG_STATUS folgt der Gastzeit nicht mit einer dynamischen Scanline.");
+    static_cast<void>(scan_scheduler.advance_to(60u, 1u));
+    require((scan_pvr->read(pvr_register::SpgStatus) & 0x3FFu) == 6u &&
+                (scan_pvr->read(pvr_register::SpgStatus) & (1u << 11u)) == 0u,
+            "SPG_STATUS setzt das dokumentierte Blank-Bit nicht an der VBlank-Grenze.");
+    static_cast<void>(scan_scheduler.advance_to(100u, 1u));
+    require((scan_pvr->read(pvr_register::SpgStatus) & 0x3FFu) == 0u &&
+                (scan_pvr->read(pvr_register::SpgStatus) & (1u << 10u)) != 0u,
+            "SPG_STATUS setzt Feldnummer oder Scanline am Framewechsel falsch.");
+
+    const auto require_profile = [&](const DreamcastVideoMode mode,
+                                     const std::uint32_t load,
+                                     const std::uint32_t hblank,
+                                     const std::uint32_t vblank,
+                                     const std::uint32_t width,
+                                     const std::uint32_t control) {
+        configure_dreamcast_video(*scan_pvr, mode);
+        require(scan_pvr->read(pvr_register::SpgLoad) == load &&
+                    scan_pvr->read(pvr_register::SpgHblank) == hblank &&
+                    scan_pvr->read(pvr_register::SpgVblank) == vblank &&
+                    scan_pvr->read(pvr_register::SpgWidth) == width &&
+                    scan_pvr->read(pvr_register::SpgControl) == control,
+                "Dreamcast-Videoprofil verliert einen dokumentierten SPG-Wert.");
+    };
+    require_profile(DreamcastVideoMode::NtscNonInterlaced,
+                    0x01060359u, 0x007E0345u, 0x00120102u, 0x03F1933Fu, 0x00000140u);
+    require_profile(DreamcastVideoMode::NtscInterlaced,
+                    0x020C0359u, 0x007E0345u, 0x00240204u, 0x07D6C63Fu, 0x00000150u);
+    require_profile(DreamcastVideoMode::PalNonInterlaced,
+                    0x0138035Fu, 0x008D034Bu, 0x002C026Cu, 0x07F1F53Fu, 0x00000180u);
+    require_profile(DreamcastVideoMode::PalInterlaced,
+                    0x0270035Fu, 0x008D034Bu, 0x002C026Cu, 0x07D6A53Fu, 0x00000190u);
+    require_profile(DreamcastVideoMode::Vga,
+                    0x020C0359u, 0x007E0345u, 0x00280208u, 0x03F1933Fu, 0x00000100u);
+    require(throws<std::invalid_argument>([&] {
+                configure_dreamcast_video(*scan_pvr, static_cast<DreamcastVideoMode>(0xFFu));
+            }),
+            "Unbekannter Dreamcast-Videomodus wird still akzeptiert.");
 
     std::cout << "KR-2801 PVR-Registerminimum erfolgreich.\n";
 }

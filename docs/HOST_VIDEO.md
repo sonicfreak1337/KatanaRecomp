@@ -22,6 +22,13 @@ Portprojekte erhalten die Schnittstelle ueber `katana_runtime`; die erzeugte
 Gastzyklen und Presentation bleiben getrennt. Resize, Fensternachrichten und
 Host-Present veraendern weder Schedulerzeit noch Dreamcast-Zustand.
 
+Der PVR-Syncgenerator ist Teil derselben Gastzeitdomäne. `SPG_STATUS` liefert
+die aktuelle Scanline sowie Field- und Blank-Status dynamisch. Beim
+Firmware-Handoff wird anhand der Disc-Region PAL-Interlace oder NTSC-Interlace
+aktiviert; PAL/NTSC non-interlaced und VGA stehen als vollstaendig definierte
+Hardwareprofile fuer spaetere Gastumschaltungen bereit. Die Werte stammen aus
+der Sega-Systemarchitektur und sind nicht an einzelne Spieleadressen gebunden.
+
 ## Produktpfad und Plattformen
 
 Der Windows-Backendpfad verwendet ein echtes Win32-Fenster und GDI-DIB-
