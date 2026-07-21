@@ -84,6 +84,18 @@ std::string access_error_message(const MemoryAccessErrorReason reason,
     case MemoryAccessErrorReason::AddressOverflow:
         output << "Zugriff ueberschreitet den 32-Bit-Adressraum.";
         break;
+    case MemoryAccessErrorReason::DeviceRejected:
+        output << "MMIO-Geraet hat den Gastzugriff strukturiert abgewiesen.";
+        break;
+    case MemoryAccessErrorReason::TlbMiss:
+        output << "keine passende gueltige TLB-Abbildung.";
+        break;
+    case MemoryAccessErrorReason::InitialPageWrite:
+        output << "TLB-Seite ist noch nicht als dirty markiert.";
+        break;
+    case MemoryAccessErrorReason::TlbProtection:
+        output << "TLB-Schutzrechte weisen den Gastzugriff ab.";
+        break;
     }
 
     return output.str();
@@ -134,6 +146,22 @@ bool ranges_overlap(const std::uint32_t left_address,
     const std::uint64_t right_end = right_start + right_size;
 
     return left_start < right_end && right_start < left_end;
+}
+
+template <typename Operation>
+decltype(auto) mmio_boundary(const MemoryRegionInfo& region,
+                             const std::uint32_t address,
+                             const MemoryAccessWidth width,
+                             const MemoryAccessOperation access,
+                             Operation&& operation) {
+    try {
+        return std::forward<Operation>(operation)();
+    } catch (const MemoryAccessError&) {
+        throw;
+    } catch (const std::exception&) {
+        throw MemoryAccessError(
+            MemoryAccessErrorReason::DeviceRejected, access, address, width, region.name);
+    }
 }
 
 } // namespace
@@ -306,7 +334,13 @@ std::uint32_t MmioMemoryDevice::read(const std::uint32_t offset,
     if (!read_handler_) {
         throw std::runtime_error("MMIO-Lesezugriff ohne registrierten Lesehandler.");
     }
-    return read_handler_(offset, width) & width_mask(width);
+    try {
+        return read_handler_(offset, width) & width_mask(width);
+    } catch (const MemoryAccessError&) {
+        throw;
+    } catch (const std::exception& error) {
+        throw MmioDeviceError(error.what());
+    }
 }
 
 void MmioMemoryDevice::write(const std::uint32_t offset,
@@ -316,7 +350,13 @@ void MmioMemoryDevice::write(const std::uint32_t offset,
     if (!write_handler_) {
         throw std::runtime_error("MMIO-Schreibzugriff ohne registrierten Schreibhandler.");
     }
-    write_handler_(offset, value & width_mask(width), width);
+    try {
+        write_handler_(offset, value & width_mask(width), width);
+    } catch (const MemoryAccessError&) {
+        throw;
+    } catch (const std::exception& error) {
+        throw MmioDeviceError(error.what());
+    }
 }
 
 Memory::Memory(const std::size_t legacy_size, const MemoryAlignmentPolicy alignment_policy)
@@ -527,8 +567,13 @@ bool Memory::has_guest_write_observer() const noexcept {
 std::uint8_t Memory::read_u8(const std::uint32_t address) const {
     const auto& mapped = resolve(address, MemoryAccessWidth::Byte, MemoryAccessOperation::Read);
     const auto offset = region_offset(mapped.info, address);
-    const auto value =
-        mapped.linear != nullptr ? mapped.linear->read_u8(offset) : mapped.device->read_u8(offset);
+    const auto value = mapped.linear != nullptr
+                           ? mapped.linear->read_u8(offset)
+                           : mmio_boundary(mapped.info,
+                                           address,
+                                           MemoryAccessWidth::Byte,
+                                           MemoryAccessOperation::Read,
+                                           [&] { return mapped.device->read_u8(offset); });
     if (access_observers_active()) {
         ++performance_counters_.observed_accesses;
         notify_access(MemoryAccessEvent{MemoryAccessOperation::Read,
@@ -545,8 +590,13 @@ std::uint8_t Memory::read_u8(const std::uint32_t address) const {
 std::uint16_t Memory::read_u16(const std::uint32_t address) const {
     const auto& mapped = resolve(address, MemoryAccessWidth::Halfword, MemoryAccessOperation::Read);
     const auto offset = region_offset(mapped.info, address);
-    const auto value = mapped.linear != nullptr ? mapped.linear->read_u16(offset)
-                                                : mapped.device->read_u16(offset);
+    const auto value = mapped.linear != nullptr
+                           ? mapped.linear->read_u16(offset)
+                           : mmio_boundary(mapped.info,
+                                           address,
+                                           MemoryAccessWidth::Halfword,
+                                           MemoryAccessOperation::Read,
+                                           [&] { return mapped.device->read_u16(offset); });
     if (access_observers_active()) {
         ++performance_counters_.observed_accesses;
         notify_access(MemoryAccessEvent{MemoryAccessOperation::Read,
@@ -563,8 +613,13 @@ std::uint16_t Memory::read_u16(const std::uint32_t address) const {
 std::uint32_t Memory::read_u32(const std::uint32_t address) const {
     const auto& mapped = resolve(address, MemoryAccessWidth::Word, MemoryAccessOperation::Read);
     const auto offset = region_offset(mapped.info, address);
-    const auto value = mapped.linear != nullptr ? mapped.linear->read_u32(offset)
-                                                : mapped.device->read_u32(offset);
+    const auto value = mapped.linear != nullptr
+                           ? mapped.linear->read_u32(offset)
+                           : mmio_boundary(mapped.info,
+                                           address,
+                                           MemoryAccessWidth::Word,
+                                           MemoryAccessOperation::Read,
+                                           [&] { return mapped.device->read_u32(offset); });
     if (access_observers_active()) {
         ++performance_counters_.observed_accesses;
         notify_access(MemoryAccessEvent{MemoryAccessOperation::Read,
@@ -600,7 +655,11 @@ void Memory::write_u8(const std::uint32_t address,
     if (mapped.linear != nullptr)
         mapped.linear->write_u8(offset, value);
     else
-        mapped.device->write_u8(offset, value);
+        mmio_boundary(mapped.info,
+                      address,
+                      MemoryAccessWidth::Byte,
+                      MemoryAccessOperation::Write,
+                      [&] { mapped.device->write_u8(offset, value); });
     if (access_observers_active()) {
         ++performance_counters_.observed_accesses;
         notify_access(MemoryAccessEvent{MemoryAccessOperation::Write,
@@ -624,7 +683,11 @@ void Memory::write_u16(const std::uint32_t address,
     if (mapped.linear != nullptr)
         mapped.linear->write_u16(offset, value);
     else
-        mapped.device->write_u16(offset, value);
+        mmio_boundary(mapped.info,
+                      address,
+                      MemoryAccessWidth::Halfword,
+                      MemoryAccessOperation::Write,
+                      [&] { mapped.device->write_u16(offset, value); });
     if (access_observers_active()) {
         ++performance_counters_.observed_accesses;
         notify_access(MemoryAccessEvent{MemoryAccessOperation::Write,
@@ -648,7 +711,11 @@ void Memory::write_u32(const std::uint32_t address,
     if (mapped.linear != nullptr)
         mapped.linear->write_u32(offset, value);
     else
-        mapped.device->write_u32(offset, value);
+        mmio_boundary(mapped.info,
+                      address,
+                      MemoryAccessWidth::Word,
+                      MemoryAccessOperation::Write,
+                      [&] { mapped.device->write_u32(offset, value); });
     if (access_observers_active()) {
         ++performance_counters_.observed_accesses;
         notify_access(MemoryAccessEvent{MemoryAccessOperation::Write,
@@ -703,7 +770,11 @@ void Memory::write_bytes(const std::uint32_t address,
             if (write.mapped->linear != nullptr)
                 write.mapped->linear->write_u8(write.offset, bytes[index]);
             else
-                write.mapped->device->write_u8(write.offset, bytes[index]);
+                mmio_boundary(write.mapped->info,
+                              current,
+                              MemoryAccessWidth::Byte,
+                              MemoryAccessOperation::Write,
+                              [&] { write.mapped->device->write_u8(write.offset, bytes[index]); });
             ++committed;
             if (access_observers_active()) {
                 ++performance_counters_.observed_accesses;

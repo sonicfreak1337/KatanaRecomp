@@ -108,10 +108,13 @@ std::size_t PlatformInterruptRouter::synchronize() {
         route(tmu_sources[channel], pending, tmu_levels_[channel]);
         asserted += pending ? 1u : 0u;
     }
+    const bool rtc_alarm = rtc_.alarm_interrupt_pending();
     const bool rtc_periodic = rtc_.periodic_interrupt_pending();
     const bool rtc_carry = rtc_.carry_interrupt_pending();
+    route(PlatformInterruptSource::RtcAlarm, rtc_alarm, rtc_level_);
     route(PlatformInterruptSource::RtcPeriodic, rtc_periodic, rtc_level_);
     route(PlatformInterruptSource::RtcCarry, rtc_carry, rtc_level_);
+    asserted += rtc_alarm ? 1u : 0u;
     asserted += rtc_periodic ? 1u : 0u;
     asserted += rtc_carry ? 1u : 0u;
 
@@ -140,6 +143,7 @@ void PlatformInterruptRouter::reset() noexcept {
     for (const auto source : tmu_sources) {
         static_cast<void>(controller_.cancel(source_id(source)));
     }
+    static_cast<void>(controller_.cancel(source_id(PlatformInterruptSource::RtcAlarm)));
     static_cast<void>(controller_.cancel(source_id(PlatformInterruptSource::RtcPeriodic)));
     static_cast<void>(controller_.cancel(source_id(PlatformInterruptSource::RtcCarry)));
     for (const auto source : dma_sources) {

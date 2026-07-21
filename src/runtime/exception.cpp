@@ -28,12 +28,28 @@ constexpr std::array exception_table = {
                       event_address_error_write,
                       general_exception_vector,
                       false},
+    ExceptionMetadata{
+        ExceptionCause::TlbMissRead, event_tlb_miss_read, general_exception_vector, false},
+    ExceptionMetadata{
+        ExceptionCause::TlbMissWrite, event_tlb_miss_write, general_exception_vector, false},
+    ExceptionMetadata{ExceptionCause::InitialPageWrite,
+                      event_initial_page_write,
+                      general_exception_vector,
+                      false},
+    ExceptionMetadata{ExceptionCause::TlbProtectionRead,
+                      event_tlb_protection_read,
+                      general_exception_vector,
+                      false},
+    ExceptionMetadata{ExceptionCause::TlbProtectionWrite,
+                      event_tlb_protection_write,
+                      general_exception_vector,
+                      false},
     // Host-side bus failures enter the architectural data-address exception class.
-    ExceptionMetadata{ExceptionCause::AddressErrorRead,
+    ExceptionMetadata{ExceptionCause::BusErrorRead,
                       event_address_error_read,
                       general_exception_vector,
                       false},
-    ExceptionMetadata{ExceptionCause::AddressErrorWrite,
+    ExceptionMetadata{ExceptionCause::BusErrorWrite,
                       event_address_error_write,
                       general_exception_vector,
                       false},
@@ -126,11 +142,28 @@ void enter_memory_exception(CpuState& cpu,
                             const std::optional<std::uint32_t> delay_slot_owner) noexcept {
     const bool write = error.operation() == MemoryAccessOperation::Write;
     const bool in_delay_slot = delay_slot_owner.has_value();
-    const auto cause = write ? ExceptionCause::AddressErrorWrite : ExceptionCause::AddressErrorRead;
+    auto cause = write ? ExceptionCause::AddressErrorWrite : ExceptionCause::AddressErrorRead;
+    switch (error.reason()) {
+    case MemoryAccessErrorReason::TlbMiss:
+        cause = write ? ExceptionCause::TlbMissWrite : ExceptionCause::TlbMissRead;
+        break;
+    case MemoryAccessErrorReason::InitialPageWrite:
+        cause = ExceptionCause::InitialPageWrite;
+        break;
+    case MemoryAccessErrorReason::TlbProtection:
+        cause = write ? ExceptionCause::TlbProtectionWrite : ExceptionCause::TlbProtectionRead;
+        break;
+    case MemoryAccessErrorReason::DeviceRejected:
+        cause = write ? ExceptionCause::BusErrorWrite : ExceptionCause::BusErrorRead;
+        break;
+    default:
+        break;
+    }
+    const auto metadata = exception_metadata(cause);
 
     enter_exception(cpu,
                     ExceptionRequest{cause,
-                                     write ? event_address_error_write : event_address_error_read,
+                                     metadata.event_code,
                                      general_exception_vector,
                                      delay_slot_owner.value_or(instruction_pc),
                                      error.address(),

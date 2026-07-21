@@ -6,6 +6,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <optional>
 
@@ -74,7 +75,9 @@ class Sh4Dmac final {
     [[nodiscard]] std::uint32_t control(std::size_t channel) const;
     [[nodiscard]] std::uint32_t operation() const noexcept;
 
-    void request_transfer(std::size_t channel);
+    void request_transfer(std::size_t channel, std::uint32_t requests = 1u);
+    [[nodiscard]] std::size_t transfer_unit_size(std::size_t channel) const;
+    void set_completion_observer(std::function<void(std::size_t)> observer);
     void signal_nmi() noexcept;
     [[nodiscard]] bool interrupt_pending(std::size_t channel) const;
     [[nodiscard]] bool address_error() const noexcept;
@@ -128,9 +131,11 @@ class Sh4Dmac final {
     std::optional<DmaFault> last_fault_;
     mutable std::size_t round_robin_cursor_ = 0u;
     DmaPerformanceCounters performance_counters_;
+    std::function<void(std::size_t)> completion_observer_;
 };
 
 [[nodiscard]] std::shared_ptr<Sh4Dmac>
 map_sh4_dmac_registers(Memory& memory, EventScheduler& scheduler, DmaTiming timing = {});
+void map_sh4_dmac_registers(Memory& memory, const std::shared_ptr<Sh4Dmac>& dmac);
 
 } // namespace katana::runtime

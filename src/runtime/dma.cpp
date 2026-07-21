@@ -113,13 +113,22 @@ std::uint32_t Sh4Dmac::operation() const noexcept {
     return operation_;
 }
 
-void Sh4Dmac::request_transfer(const std::size_t index) {
+void Sh4Dmac::request_transfer(const std::size_t index, const std::uint32_t requests) {
     auto& value = channel(index);
-    if (value.pending_requests == std::numeric_limits<std::uint32_t>::max()) {
+    if (requests == 0u) throw std::invalid_argument("DMA-Anforderung braucht mindestens einen Request.");
+    if (requests > std::numeric_limits<std::uint32_t>::max() - value.pending_requests) {
         throw std::overflow_error("DMA-Anforderungszaehler ist uebergelaufen.");
     }
-    ++value.pending_requests;
+    value.pending_requests += requests;
     reevaluate();
+}
+
+std::size_t Sh4Dmac::transfer_unit_size(const std::size_t index) const {
+    return transfer_size(channel(index));
+}
+
+void Sh4Dmac::set_completion_observer(std::function<void(std::size_t)> observer) {
+    completion_observer_ = std::move(observer);
 }
 
 void Sh4Dmac::signal_nmi() noexcept {
@@ -308,6 +317,7 @@ void Sh4Dmac::handle_transfer(const std::size_t index) {
         return;
     }
     auto& value = channel(index);
+    bool completed = false;
     for (std::size_t unit = 0u; unit < units && enabled(index); ++unit) {
         if (!automatic(value)) {
             if (value.pending_requests == 0u) break;
@@ -321,9 +331,11 @@ void Sh4Dmac::handle_transfer(const std::size_t index) {
         if (value.count == 0u) {
             value.control |= transfer_end;
             value.interrupt_pending = (value.control & interrupt_enable) != 0u;
+            completed = true;
         }
     }
     ++performance_counters_.completed_batches;
+    if (completed && completion_observer_) completion_observer_(index);
     if (((operation_ >> 8u) & 0x3u) == 3u) {
         round_robin_cursor_ = (index + 1u) % channel_count;
     }
@@ -423,6 +435,12 @@ void Sh4Dmac::reset() noexcept {
 std::shared_ptr<Sh4Dmac>
 map_sh4_dmac_registers(Memory& memory, EventScheduler& scheduler, const DmaTiming timing) {
     auto dmac = std::make_shared<Sh4Dmac>(scheduler, memory, timing);
+    map_sh4_dmac_registers(memory, dmac);
+    return dmac;
+}
+
+void map_sh4_dmac_registers(Memory& memory, const std::shared_ptr<Sh4Dmac>& dmac) {
+    if (!dmac) throw std::invalid_argument("DMAC-MMIO braucht eine zustandsfuehrende Instanz.");
     auto device = std::make_shared<MmioMemoryDevice>(
         sh4_dmac_register_size,
         [dmac](const std::uint32_t offset, const MemoryAccessWidth width) {
@@ -475,7 +493,6 @@ map_sh4_dmac_registers(Memory& memory, EventScheduler& scheduler, const DmaTimin
         });
     memory.map_region("sh4-dmac-p4", sh4_dmac_p4_base, device);
     memory.map_region("sh4-dmac-area7", sh4_dmac_area7_base, device);
-    return dmac;
 }
 
 } // namespace katana::runtime

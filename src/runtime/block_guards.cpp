@@ -51,12 +51,22 @@ void RuntimeAddressSpace::write_mmucr(const std::uint32_t value) noexcept {
         ++mmu_generation_;
     }
 }
+void RuntimeAddressSpace::write_pteh(const std::uint32_t value) noexcept {
+    const auto asid = static_cast<std::uint8_t>(value & 0xFFu);
+    if (asid_ != asid) {
+        asid_ = asid;
+        ++mmu_generation_;
+    }
+}
 void RuntimeAddressSpace::ldtlb(TlbMapping mapping) {
-    mapping.virtual_page = mapping.virtual_page / page_size * page_size;
+    if (mapping.page_size != 1024u && mapping.page_size != 4096u &&
+        mapping.page_size != 65536u && mapping.page_size != 1048576u)
+        throw std::invalid_argument("SH-4-TLB-Seitengroesse ist ungueltig.");
+    mapping.virtual_page = mapping.virtual_page / mapping.page_size * mapping.page_size;
     mapping.physical_page =
-        canonical_physical_address(mapping.physical_page) / page_size * page_size;
+        canonical_physical_address(mapping.physical_page) / mapping.page_size * mapping.page_size;
     const auto found = std::find_if(mappings_.begin(), mappings_.end(), [&](const auto& value) {
-        return value.virtual_page == mapping.virtual_page;
+        return value.slot == mapping.slot;
     });
     if (found == mappings_.end()) {
         mappings_.push_back(mapping);
@@ -79,25 +89,56 @@ void RuntimeAddressSpace::bump_watchpoints() noexcept {
 TranslationResult RuntimeAddressSpace::translate(const std::uint32_t address,
                                                  const TranslationAccess access,
                                                  const bool privileged) const {
+    const auto read_cause = access == TranslationAccess::Write ? ExceptionCause::AddressErrorWrite
+                                                               : ExceptionCause::AddressErrorRead;
+    if (!privileged && address >= 0x80000000u)
+        throw TranslationError(access, address, read_cause);
+
+    const auto segment = address >> 29u;
+    if (segment == 4u || segment == 5u) {
+        if (!privileged) throw TranslationError(access, address, read_cause);
+        return {address, canonical_physical_address(address), mmu_generation_, true};
+    }
+    if (segment >= 7u) {
+        if (!privileged || access == TranslationAccess::Instruction)
+            throw TranslationError(access, address, read_cause);
+        return {address, address, mmu_generation_, true};
+    }
     if (mode_ == AddressTranslationMode::NoMmu) {
         return {address, canonical_physical_address(address), mmu_generation_, true};
     }
-    const auto page = address / page_size * page_size;
+    if (segment == 6u && !privileged)
+        throw TranslationError(access, address, read_cause);
+
     const auto found = std::find_if(mappings_.begin(), mappings_.end(), [&](const auto& value) {
-        return value.virtual_page == page;
+        const auto start = static_cast<std::uint64_t>(value.virtual_page);
+        const auto end = start + value.page_size;
+        return value.valid && address >= start && static_cast<std::uint64_t>(address) < end &&
+               (value.shared || value.asid == asid_);
     });
-    const bool permitted = found != mappings_.end() && (privileged || found->user_access) &&
-                           (access != TranslationAccess::Instruction || found->executable) &&
-                           (access != TranslationAccess::Read || found->readable) &&
-                           (access != TranslationAccess::Write || found->writable);
-    if (!permitted) {
+    if (found == mappings_.end())
+        throw TranslationError(access,
+                               address,
+                               access == TranslationAccess::Write ? ExceptionCause::TlbMissWrite
+                                                                  : ExceptionCause::TlbMissRead);
+    if (!privileged && !found->user_access)
         throw TranslationError(access,
                                address,
                                access == TranslationAccess::Write
-                                   ? ExceptionCause::AddressErrorWrite
-                                   : ExceptionCause::AddressErrorRead);
-    }
-    return {address, found->physical_page + (address - page), mmu_generation_, false};
+                                   ? ExceptionCause::TlbProtectionWrite
+                                   : ExceptionCause::TlbProtectionRead);
+    if (access == TranslationAccess::Write && (!found->writable || !found->dirty))
+        throw TranslationError(access,
+                               address,
+                               found->writable ? ExceptionCause::InitialPageWrite
+                                               : ExceptionCause::TlbProtectionWrite);
+    if ((access == TranslationAccess::Instruction && !found->executable) ||
+        (access == TranslationAccess::Read && !found->readable))
+        throw TranslationError(access, address, ExceptionCause::TlbProtectionRead);
+    return {address,
+            found->physical_page + (address - found->virtual_page),
+            mmu_generation_,
+            false};
 }
 
 BlockStateGuard RuntimeAddressSpace::guard_for(const std::uint32_t virtual_address,
@@ -121,7 +162,15 @@ bool RuntimeAddressSpace::block_fits_translation_page(const std::uint32_t virtua
         return true;
     }
     const auto last = static_cast<std::uint64_t>(virtual_start) + size - 1u;
-    return last <= 0xFFFFFFFFull && virtual_start / page_size == last / page_size;
+    if (last > 0xFFFFFFFFull) return false;
+    try {
+        const auto first = translate(virtual_start, TranslationAccess::Instruction);
+        const auto final =
+            translate(static_cast<std::uint32_t>(last), TranslationAccess::Instruction);
+        return final.physical_address - first.physical_address == size - 1u;
+    } catch (const TranslationError&) {
+        return false;
+    }
 }
 
 } // namespace katana::runtime

@@ -7,6 +7,10 @@
 #include <utility>
 
 namespace katana::runtime {
+
+std::vector<DiscTrackLayout> DiscSource::layout() const {
+    return {{1u, 0u, DiscTrackKind::Data, 2048u, size() / 2048u, 1u}};
+}
 namespace {
 void validate_identity(const std::string& identity) {
     if (identity.empty()) {
@@ -118,6 +122,9 @@ GdRomDrive::GdRomDrive(std::shared_ptr<const DiscSource> source, const std::uint
     if (sector_size_ == 0u) {
         throw std::invalid_argument("GD-ROM-Sektorgroesse darf nicht null sein.");
     }
+    layout_ = source_->layout();
+    if (layout_.empty())
+        throw std::invalid_argument("GD-ROM-Laufwerk braucht mindestens einen Disc-Track.");
 }
 
 namespace {
@@ -182,6 +189,14 @@ GdRomResponse GdRomDrive::execute(const GdRomRequest& request) const {
 
 std::uint32_t GdRomDrive::sector_size() const noexcept {
     return sector_size_;
+}
+
+const std::vector<DiscTrackLayout>& GdRomDrive::layout() const noexcept {
+    return layout_;
+}
+
+const std::string& GdRomDrive::identity() const noexcept {
+    return source_->identity();
 }
 
 GdRomAsyncReader::GdRomAsyncReader(EventScheduler& scheduler,

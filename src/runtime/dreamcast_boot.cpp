@@ -294,13 +294,44 @@ initialize_dreamcast_runtime(CpuState& cpu,
     state.rtc_clock = std::make_shared<Sh4RtcClockDomain>();
     state.tmu = std::make_shared<Sh4Tmu>(*state.scheduler, TmuTiming{4u, state.rtc_clock});
     state.rtc = std::make_shared<Sh4Rtc>(*state.scheduler, state.rtc_clock);
+    map_sh4_tmu_registers(cpu.memory, state.tmu);
+    map_sh4_rtc_registers(cpu.memory, state.rtc);
     state.dmac = std::make_shared<Sh4Dmac>(
         *state.scheduler, cpu.memory, DmaTiming{}, DmaExecutionMode::DeterministicBatch);
+    map_sh4_dmac_registers(cpu.memory, state.dmac);
+    state.address_space = std::make_shared<RuntimeAddressSpace>();
+    cpu.address_space = state.address_space;
+    state.mmu_control = map_sh4_mmu_control(cpu.memory, cpu, *state.address_space);
     state.interrupt_controller = std::make_shared<InterruptController>();
     state.interrupt_router = std::make_shared<PlatformInterruptRouter>(
         *state.interrupt_controller, *state.tmu, *state.rtc, *state.dmac);
     state.interrupt_registers = map_sh4_interrupt_registers(cpu.memory, *state.interrupt_router);
-    state.system_bus_control = map_dreamcast_system_bus_control(cpu.memory);
+    const auto channel2_dmac = std::weak_ptr<Sh4Dmac>(state.dmac);
+    state.system_bus_control = map_dreamcast_system_bus_control(
+        cpu.memory, [channel2_dmac](const std::uint32_t destination, const std::uint32_t length) {
+            const auto dmac = channel2_dmac.lock();
+            if (!dmac) throw std::runtime_error("Systembus-Channel-2-DMAC-Lebenszyklus fehlt.");
+            constexpr std::size_t channel = 2u;
+            constexpr std::size_t unit_size = 32u;
+            const auto control = dmac->control(channel);
+            if (dmac->transfer_unit_size(channel) != unit_size ||
+                (control & 0x00000F00u) != 0x00000800u ||
+                (control & 0x00003000u) != 0x00001000u ||
+                (control & 0x0000C000u) != 0u ||
+                (control & Sh4Dmac::channel_enable) == 0u ||
+                (dmac->operation() & Sh4Dmac::master_enable) == 0u) {
+                throw std::runtime_error(
+                    "Systembus-Channel-2 braucht aktivierten externen 32-Byte-DMAC mit "
+                    "inkrementierender Quelle und festem TA-Ziel.");
+            }
+            if ((length % unit_size) != 0u)
+                throw std::invalid_argument(
+                    "Systembus-Channel-2-Laenge muss ein Vielfaches von 32 Byte sein.");
+            const auto units = length / static_cast<std::uint32_t>(unit_size);
+            dmac->write_destination(channel, destination);
+            dmac->write_count(channel, units);
+            dmac->request_transfer(channel, units);
+        });
     state.system_asic = map_dreamcast_system_asic(cpu.memory, *state.interrupt_router);
     const auto asic = std::weak_ptr<DreamcastSystemAsic>(state.system_asic);
     const auto scheduler = std::weak_ptr<EventScheduler>(state.scheduler);
@@ -311,37 +342,193 @@ initialize_dreamcast_runtime(CpuState& cpu,
             throw std::runtime_error("Dreamcast-System-ASIC-Lebenszyklus fehlt.");
         target->raise(event, clock->current_cycle());
     };
+    const auto channel2_control = std::weak_ptr<DreamcastSystemBusControl>(state.system_bus_control);
+    state.dmac->set_completion_observer([channel2_control, raise_now](const std::size_t channel) {
+        if (channel != 2u) return;
+        const auto control = channel2_control.lock();
+        if (!control) throw std::runtime_error("Systembus-Channel-2-Lebenszyklus fehlt.");
+        control->complete_channel2();
+        raise_now(SystemAsicEvent::PvrDma);
+    });
+    state.pvr_ta_fifo = std::make_shared<PvrTaFifo>([raise_now](const PvrListType list) {
+        switch (list) {
+        case PvrListType::Opaque:
+            raise_now(SystemAsicEvent::PvrOpaqueList);
+            return;
+        case PvrListType::OpaqueModifier:
+            raise_now(SystemAsicEvent::PvrOpaqueModifierList);
+            return;
+        case PvrListType::PunchThrough:
+            raise_now(SystemAsicEvent::PvrPunchThroughList);
+            return;
+        case PvrListType::Translucent:
+            raise_now(SystemAsicEvent::PvrTranslucentList);
+            return;
+        case PvrListType::TranslucentModifier:
+            raise_now(SystemAsicEvent::PvrTranslucentModifierList);
+            return;
+        }
+        throw std::logic_error("Ungueltiger TA-Listentyp.");
+    });
+    state.pvr_renderer = std::make_shared<PvrSoftwareRenderer>();
     state.pvr_registers = map_pvr_registers(
-        cpu.memory, *state.scheduler, [raise_now] { raise_now(SystemAsicEvent::PvrRenderDone); });
-    state.aica_registers = map_aica_registers(cpu.memory);
+        cpu.memory,
+        *state.scheduler,
+        {},
+        {},
+        [raise_now](const bool entering) {
+            raise_now(entering ? SystemAsicEvent::PvrVblank : SystemAsicEvent::PvrVblankOut);
+        });
+    state.pvr_ta_aperture =
+        std::make_shared<PvrTaFifoMemoryDevice>(state.pvr_ta_fifo, state.pvr_registers);
+    const auto reset_ta_fifo = std::weak_ptr<PvrTaFifo>(state.pvr_ta_fifo);
+    state.pvr_registers->set_ta_reset_observer([reset_ta_fifo] {
+        if (const auto fifo = reset_ta_fifo.lock()) fifo->reset();
+    });
+    state.pvr_yuv_converter = std::make_shared<PvrYuvConverterMemoryDevice>(
+        state.pvr_registers,
+        state.vram,
+        [raise_now] { raise_now(SystemAsicEvent::PvrYuvDone); });
+    for (const auto segment : dreamcast_direct_segment_bases) {
+        const auto ta_base = segment + 0x10000000u;
+        const auto ta_mirror = segment + 0x12000000u;
+        const auto yuv_base = segment + 0x10800000u;
+        const auto yuv_mirror = segment + 0x12800000u;
+        cpu.memory.map_region(
+            "dreamcast-ta-fifo-" + std::to_string(ta_base), ta_base, state.pvr_ta_aperture);
+        cpu.memory.map_region("dreamcast-ta-fifo-" + std::to_string(ta_mirror),
+                              ta_mirror,
+                              state.pvr_ta_aperture);
+        cpu.memory.map_region(
+            "dreamcast-ta-yuv-" + std::to_string(yuv_base), yuv_base, state.pvr_yuv_converter);
+        cpu.memory.map_region("dreamcast-ta-yuv-" + std::to_string(yuv_mirror),
+                              yuv_mirror,
+                              state.pvr_yuv_converter);
+    }
+    map_dreamcast_ta_vram_aliases(cpu.memory, state.vram);
+    const auto ta_fifo = std::weak_ptr<PvrTaFifo>(state.pvr_ta_fifo);
+    const auto pvr_registers = std::weak_ptr<PvrRegisterFile>(state.pvr_registers);
+    const auto pvr_renderer = std::weak_ptr<PvrSoftwareRenderer>(state.pvr_renderer);
+    const auto vram = std::weak_ptr<LinearMemoryDevice>(state.vram);
+    state.pvr_registers->set_render_observer(
+        [ta_fifo, pvr_registers, pvr_renderer, vram, raise_now] {
+            const auto fifo = ta_fifo.lock();
+            const auto registers = pvr_registers.lock();
+            const auto renderer = pvr_renderer.lock();
+            const auto target = vram.lock();
+            if (!fifo || !registers || !renderer || !target) {
+                if (renderer)
+                    renderer->record_error(PvrRenderError::InternalLifecycle,
+                                           registers ? registers->render_request_count() : 0u,
+                                           "PVR-Renderpfad-Lebenszyklus fehlt.");
+                return;
+            }
+            const auto request = registers->render_request_count();
+            try {
+                auto frame = fifo->finish_frame();
+                if (frame.modifier_volumes_present)
+                    renderer->record_error(PvrRenderError::UnsupportedFeature,
+                                           request,
+                                           "PVR-Modifier-Volumes wurden erfasst, aber nicht gerastert.");
+                renderer->render(frame, *registers, *target);
+            } catch (const std::out_of_range& error) {
+                renderer->record_error(PvrRenderError::MemoryRange, request, error.what());
+            } catch (const std::invalid_argument& error) {
+                renderer->record_error(PvrRenderError::InvalidConfiguration, request, error.what());
+            } catch (const std::logic_error& error) {
+                renderer->record_error(PvrRenderError::InvalidTaState, request, error.what());
+            } catch (const std::runtime_error& error) {
+                renderer->record_error(PvrRenderError::UnsupportedFeature, request, error.what());
+            } catch (...) {
+                renderer->record_error(PvrRenderError::InternalLifecycle,
+                                       request,
+                                       "Unbekannter Fehler an der PVR-Produktgrenze.");
+            }
+            raise_now(SystemAsicEvent::PvrRenderDone);
+        });
+    state.aica = std::make_shared<AicaExecutionController>(state.scheduler.get());
+    state.aica->interrupts().set_observer(
+        [raise_now] { raise_now(SystemAsicEvent::AicaInterrupt); });
+    state.aica_registers = map_aica_registers(cpu.memory, state.aica);
     state.maple = std::make_shared<MapleBus>([raise_now] { raise_now(SystemAsicEvent::MapleDma); });
     state.maple_controller =
         map_dreamcast_maple_controller(cpu.memory, *state.scheduler, state.maple, {}, [raise_now] {
             raise_now(SystemAsicEvent::MapleDma);
         });
-    state.holly_dma = map_dreamcast_holly_dma(
-        cpu.memory, *state.scheduler, {}, [raise_now](const auto event) { raise_now(event); });
+    const auto maple_controller = std::weak_ptr<DreamcastMapleController>(state.maple_controller);
+    state.pvr_registers->set_vblank_observer([raise_now, maple_controller](const bool entering) {
+        raise_now(entering ? SystemAsicEvent::PvrVblank : SystemAsicEvent::PvrVblankOut);
+        if (entering) {
+            if (const auto maple = maple_controller.lock()) maple->hardware_trigger();
+        }
+    });
     if (state.mutable_storage) {
         state.vmu = std::make_shared<MapleVmuDevice>(state.mutable_storage->vmu_image());
         state.maple->attach(0u, 1u, state.vmu);
     }
-    state.gdrom = std::make_shared<GdRomAsyncReader>(
+    state.runtime_blocks = std::make_shared<RuntimeBlockTable>();
+    state.code_tracker = std::make_shared<ExecutableCodeTracker>();
+    state.runtime_blocks->bind_code_tracker(state.code_tracker.get());
+    state.module_catalog = std::make_shared<ExecutableModuleCatalog>();
+    const auto module_sequence = std::make_shared<std::uint64_t>(1u);
+    const auto module_catalog = state.module_catalog;
+    const auto module_blocks = state.runtime_blocks;
+    const auto module_tracker = state.code_tracker;
+    state.gdrom = map_dreamcast_gdrom(
+        cpu.memory,
         *state.scheduler,
         GdRomDrive(boot.source),
-        GdRomTiming{},
         [asic, scheduler](const std::uint64_t cycle) {
             const auto target = asic.lock();
             const auto clock = scheduler.lock();
             if (!target || !clock)
                 throw std::runtime_error("Dreamcast-System-ASIC-Lebenszyklus fehlt.");
             static_cast<void>(target->schedule(*clock, SystemAsicEvent::GdromCommand, cycle));
+        },
+        [module_sequence, module_catalog, module_blocks, module_tracker](
+            const std::uint32_t destination,
+            const std::span<const std::uint8_t> bytes,
+            const std::string_view source_identity) {
+            if (bytes.empty() || (destination & 1u) != 0u) return;
+            const auto physical = canonical_physical_address(destination);
+            const auto module_address =
+                physical >= 0x0C000000u && physical < 0x0D000000u ? physical | 0x80000000u
+                                                                  : destination;
+            ExecutableModule module;
+            module.id = "gdrom-load-" + std::to_string((*module_sequence)++);
+            module.source_identity = std::string(source_identity);
+            module.guest_start = module_address;
+            module.bytes.assign(bytes.begin(), bytes.end());
+            module.kind = ExecutableModuleKind::Overlay;
+            module_catalog->publish_loaded_range(
+                std::move(module), *module_blocks, *module_tracker);
         });
-    state.aica = std::make_shared<AicaExecutionController>();
-    state.aica->interrupts().set_observer(
-        [raise_now] { raise_now(SystemAsicEvent::AicaInterrupt); });
-    state.runtime_blocks = std::make_shared<RuntimeBlockTable>();
-    state.code_tracker = std::make_shared<ExecutableCodeTracker>();
-    state.runtime_blocks->bind_code_tracker(state.code_tracker.get());
+    cpu.gdrom_services = state.gdrom.get();
+    const auto gdrom = std::weak_ptr<DreamcastGdRomController>(state.gdrom);
+    state.holly_dma = map_dreamcast_holly_dma(
+        cpu.memory,
+        *state.scheduler,
+        {},
+        [raise_now](const auto event) { raise_now(event); },
+        [gdrom](const auto address, const auto length, const auto direction) {
+            const auto controller = gdrom.lock();
+            if (!controller) throw std::runtime_error("G1-GD-ROM-Lebenszyklus fehlt.");
+            controller->dma_to_memory(address, length, direction);
+        });
+    const auto g2_dma = std::weak_ptr<DreamcastG2DmaController>(state.holly_dma.g2);
+    const auto pvr_dma_control =
+        std::weak_ptr<DreamcastSystemBusControl>(state.system_bus_control);
+    state.system_asic->set_dma_trigger_observers(
+        [pvr_dma_control](const SystemAsicEvent) {
+            if (const auto control = pvr_dma_control.lock())
+                static_cast<void>(control->trigger_channel2());
+        },
+        [g2_dma](const SystemAsicEvent event) {
+            if (const auto controller = g2_dma.lock()) controller->interrupt_trigger(event);
+        });
+    state.aica->set_dma_request_observer([g2_dma] {
+        if (const auto controller = g2_dma.lock()) controller->hardware_trigger(0u);
+    });
     const auto code_tracker = std::weak_ptr<ExecutableCodeTracker>(state.code_tracker);
     const auto runtime_blocks = std::weak_ptr<RuntimeBlockTable>(state.runtime_blocks);
     cpu.memory.set_guest_write_observer([code_tracker,
@@ -349,10 +536,14 @@ initialize_dreamcast_runtime(CpuState& cpu,
         const auto tracker = code_tracker.lock();
         if (!tracker) return;
         const auto invalidation =
-            tracker->observe_write(event.address, event.size, event.source, event.bytes_changed);
+            tracker->observe_write(canonical_physical_address(event.address),
+                                   event.size,
+                                   event.source,
+                                   event.bytes_changed);
         if (!invalidation.byte_identical) {
             if (const auto blocks = runtime_blocks.lock())
-                static_cast<void>(blocks->erase_overlapping_physical(event.address, event.size));
+                static_cast<void>(blocks->erase_overlapping_physical(
+                    canonical_physical_address(event.address), event.size));
         }
     });
     state.store_queue_transfers = std::make_shared<std::vector<StoreQueueTransfer>>();
@@ -360,10 +551,11 @@ initialize_dreamcast_runtime(CpuState& cpu,
     state.dropped_store_queue_transfers = std::make_shared<std::uint64_t>(0u);
     const auto transfers = state.store_queue_transfers;
     const auto dropped_transfers = state.dropped_store_queue_transfers;
+    const auto store_queue_ta = state.pvr_ta_fifo;
     auto* const memory = &cpu.memory;
     state.store_queues = std::make_shared<Sh4StoreQueues>(
         cpu.memory,
-        [transfers, dropped_transfers, memory](const StoreQueueTransfer& transfer) {
+        [transfers, dropped_transfers, memory, store_queue_ta](const StoreQueueTransfer& transfer) {
             if (transfers->size() == 1024u) {
                 transfers->erase(transfers->begin());
                 if (*dropped_transfers != std::numeric_limits<std::uint64_t>::max()) {
@@ -371,9 +563,12 @@ initialize_dreamcast_runtime(CpuState& cpu,
                 }
             }
             transfers->push_back(transfer);
-            if (transfer.target != StoreQueueTarget::Ram) return;
-            memory->write_bytes(
-                transfer.target_address, transfer.bytes, CodeWriteSource::StoreQueue);
+            if (transfer.target == StoreQueueTarget::TileAccelerator) {
+                store_queue_ta->submit(transfer.bytes);
+            } else {
+                memory->write_bytes(
+                    transfer.target_address, transfer.bytes, CodeWriteSource::StoreQueue);
+            }
         },
         state.code_tracker.get());
     const auto queues = state.store_queues;
@@ -419,13 +614,13 @@ initialize_dreamcast_runtime(CpuState& cpu,
                                          0x8C000000u,
                                          0x0C000000u,
                                          static_cast<std::uint32_t>(dreamcast_main_ram_size)});
-    if (firmware_mode == DreamcastRuntimeFirmwareMode::HleBiosAbi)
-        install_hle_bios_abi(cpu.memory,
-                             *state.runtime_blocks,
-                             *state.firmware_handoff,
-                             {},
-                             0u,
-                             state.code_tracker.get());
+    static_cast<void>(firmware_mode);
+    install_hle_bios_abi(cpu.memory,
+                         *state.runtime_blocks,
+                         *state.firmware_handoff,
+                         {},
+                         0u,
+                         state.code_tracker.get());
     cpu.memory.write_bytes(dreamcast_disc_boot_address, boot.boot_file, CodeWriteSource::Copy);
     state.loaded_boot_bytes = boot.boot_file.size();
     reset_cpu(cpu,

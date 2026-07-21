@@ -6,6 +6,7 @@
 
 #include <array>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <vector>
 
@@ -43,27 +44,40 @@ inline constexpr std::uint32_t BootReservedAc = 0xACu;
 
 class DreamcastSystemBusControl final {
   public:
+    using Channel2StartObserver =
+        std::function<void(std::uint32_t destination, std::uint32_t length)>;
+    explicit DreamcastSystemBusControl(Channel2StartObserver channel2_start_observer = {});
     [[nodiscard]] std::uint32_t read(std::uint32_t offset) const;
     void write(std::uint32_t offset, std::uint32_t value);
     void reset() noexcept;
     [[nodiscard]] std::uint64_t system_reset_requests() const noexcept;
+    void complete_channel2() noexcept;
+    [[nodiscard]] bool trigger_channel2();
 
   private:
     [[nodiscard]] static std::size_t index(std::uint32_t offset);
     std::array<std::uint32_t, system_bus_control_register_size / 4u> registers_{};
     std::uint64_t system_reset_requests_ = 0u;
+    Channel2StartObserver channel2_start_observer_;
 };
 
 enum class SystemAsicEvent : std::uint16_t {
     PvrRenderDone = 0x0002u,
     PvrVblank = 0x0003u,
-    PvrDma = 0x000Bu,
+    PvrVblankOut = 0x0004u,
+    PvrYuvDone = 0x0006u,
+    PvrOpaqueList = 0x0007u,
+    PvrOpaqueModifierList = 0x0008u,
+    PvrTranslucentList = 0x0009u,
+    PvrTranslucentModifierList = 0x000Au,
     MapleDma = 0x000Cu,
     GdromDma = 0x000Eu,
     AicaDma = 0x000Fu,
     Ext1Dma = 0x0010u,
     Ext2Dma = 0x0011u,
     DeviceDma = 0x0012u,
+    PvrDma = 0x0013u,
+    PvrPunchThroughList = 0x0015u,
     GdromCommand = 0x0100u,
     AicaInterrupt = 0x0101u,
     GdromIllegalAddress = 0x020Cu,
@@ -78,6 +92,7 @@ struct SystemAsicEventRecord {
 
 class DreamcastSystemAsic final {
   public:
+    using DmaTriggerObserver = std::function<void(SystemAsicEvent)>;
     explicit DreamcastSystemAsic(PlatformInterruptRouter& router) noexcept;
     void raise(SystemAsicEvent event, std::uint64_t guest_cycle);
     [[nodiscard]] SchedulerEventId
@@ -85,6 +100,7 @@ class DreamcastSystemAsic final {
     [[nodiscard]] std::uint32_t read(std::uint32_t offset) const;
     void write(std::uint32_t offset, std::uint32_t value);
     [[nodiscard]] const std::vector<SystemAsicEventRecord>& events() const noexcept;
+    void set_dma_trigger_observers(DmaTriggerObserver pvr, DmaTriggerObserver g2);
     void reset() noexcept;
 
   private:
@@ -93,6 +109,8 @@ class DreamcastSystemAsic final {
     std::array<std::uint32_t, 3u> pending_{};
     std::array<std::array<std::uint32_t, 3u>, 3u> masks_{};
     std::array<std::array<std::uint32_t, 2u>, 2u> dma_trigger_masks_{};
+    DmaTriggerObserver pvr_dma_trigger_observer_;
+    DmaTriggerObserver g2_dma_trigger_observer_;
     std::vector<SystemAsicEventRecord> events_;
     std::uint64_t next_sequence_ = 1u;
     std::uint64_t last_guest_cycle_ = 0u;
@@ -102,5 +120,8 @@ class DreamcastSystemAsic final {
 map_dreamcast_system_asic(Memory& memory, PlatformInterruptRouter& router);
 [[nodiscard]] std::shared_ptr<DreamcastSystemBusControl>
 map_dreamcast_system_bus_control(Memory& memory);
+[[nodiscard]] std::shared_ptr<DreamcastSystemBusControl>
+map_dreamcast_system_bus_control(
+    Memory& memory, DreamcastSystemBusControl::Channel2StartObserver channel2_start_observer);
 
 } // namespace katana::runtime

@@ -60,7 +60,7 @@ std::uint32_t DreamcastMapleController::read(const std::uint32_t offset) const {
     case SystemControl:
         return system_control_;
     case Status:
-        return 0u;
+        return hard_trigger_failed_ ? 1u : 0u;
     case MsbSelect:
         return msb_select_;
     case TxAddressCounter:
@@ -99,6 +99,7 @@ void DreamcastMapleController::write(const std::uint32_t offset, const std::uint
         system_control_ = value & 0xFFFF130Fu;
         return;
     case HardTriggerClear:
+        if ((value & 1u) != 0u) hard_trigger_failed_ = false;
         return;
     case DmaAddressProtect:
         if ((value >> 16u) == 0x6155u) address_protect_ = value & 0x00007F7Fu;
@@ -126,6 +127,7 @@ void DreamcastMapleController::reset() noexcept {
     tx_address_ = 0u;
     rx_address_ = 0u;
     rx_base_ = 0u;
+    hard_trigger_failed_ = false;
 }
 
 std::uint64_t DreamcastMapleController::completed_dma_count() const noexcept {
@@ -134,6 +136,19 @@ std::uint64_t DreamcastMapleController::completed_dma_count() const noexcept {
 
 std::uint64_t DreamcastMapleController::transferred_word_count() const noexcept {
     return transferred_word_count_;
+}
+
+void DreamcastMapleController::hardware_trigger() noexcept {
+    if (trigger_select_ == 0u || enabled_ == 0u || active_ != 0u) return;
+    try {
+        start_dma();
+    } catch (...) {
+        hard_trigger_failed_ = true;
+    }
+}
+
+bool DreamcastMapleController::hard_trigger_failed() const noexcept {
+    return hard_trigger_failed_;
 }
 
 bool DreamcastMapleController::protected_address(const std::uint32_t address,

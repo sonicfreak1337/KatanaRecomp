@@ -1,5 +1,6 @@
 #include "katana/runtime/pvr.hpp"
 
+#include <bit>
 #include <cstdlib>
 #include <iostream>
 #include <stdexcept>
@@ -57,5 +58,37 @@ int main() {
                 backend.last_textures().size() == 2u && backend.last_textures()[1].rgba[2] == 0xFFu,
             "Render-Backend uebergibt Frame oder Texturen nicht deterministisch.");
 
-    std::cout << "KR-2804 Texturformate und Render-Backend erfolgreich.\n";
+    EventScheduler scheduler;
+    PvrRegisterFile registers(scheduler);
+    LinearMemoryDevice vram(8u << 20u);
+    registers.write(pvr_register::FramebufferXClip, 1u << 16u);
+    registers.write(pvr_register::FramebufferYClip, 1u << 16u);
+    registers.write(pvr_register::FramebufferWriteControl, 6u);
+    registers.write(pvr_register::FramebufferWriteSof1, 0x1000u);
+    registers.write(pvr_register::ParameterBase, 0u);
+    registers.write(pvr_register::BackgroundPlaneConfig, 0x01000000u);
+    const auto put_float = [&](const std::uint32_t offset, const float value) {
+        vram.write_u32(offset, std::bit_cast<std::uint32_t>(value));
+    };
+    put_float(12u, 0.0f);
+    put_float(16u, 2.0f);
+    put_float(20u, 1.0f);
+    vram.write_u32(24u, 0x80402010u);
+    put_float(28u, 0.0f);
+    put_float(32u, 0.0f);
+    put_float(36u, 1.0f);
+    vram.write_u32(40u, 0x80402010u);
+    put_float(44u, 2.0f);
+    put_float(48u, 2.0f);
+    put_float(52u, 1.0f);
+    vram.write_u32(56u, 0x80402010u);
+    PvrSoftwareRenderer software;
+    software.render({}, registers, vram);
+    require(vram.read_u32(0x1000u) == 0x80402010u,
+            "PVR-Hintergrundebene vertauscht ARGB-Kanaele im Renderziel.");
+    registers.write(pvr_register::FramebufferWriteControl, 4u);
+    require(throws<std::invalid_argument>([&] { software.render({}, registers, vram); }),
+            "Reservierter PVR-Renderpackmodus 4 wird als 24-Bit-Format erfunden.");
+
+    std::cout << "KR-2804 Texturformate, Hintergrundebene und Render-Backend erfolgreich.\n";
 }

@@ -4,6 +4,7 @@
 
 #include <array>
 #include <stdexcept>
+#include <utility>
 
 namespace katana::runtime {
 namespace {
@@ -66,7 +67,7 @@ bool is_system_bus_readable(const std::uint32_t offset) {
 std::uint32_t system_bus_write_mask(const std::uint32_t offset) {
     switch (offset) {
     case Channel2Destination:
-        return 0x03FFFFE0u;
+        return 0x1FFFFFE0u;
     case Channel2Length:
         return 0x00FFFFE0u;
     case Channel2Start:
@@ -93,6 +94,10 @@ std::uint32_t system_bus_write_mask(const std::uint32_t offset) {
     }
 }
 } // namespace
+
+DreamcastSystemBusControl::DreamcastSystemBusControl(
+    Channel2StartObserver channel2_start_observer)
+    : channel2_start_observer_(std::move(channel2_start_observer)) {}
 
 std::size_t DreamcastSystemBusControl::index(const std::uint32_t offset) {
     if (offset >= system_bus_control_register_size || (offset & 3u) != 0u)
@@ -121,21 +126,28 @@ void DreamcastSystemBusControl::write(const std::uint32_t offset, const std::uin
         }
         return;
     }
-    if (offset == Channel2Start || offset == SortStart) {
-        if ((value & 1u) != 0u)
-            throw std::runtime_error(
-                "Systembus-DMA-Start ist noch nicht an einen Transferpfad gebunden.");
+    if (offset == Channel2Start && (value & 1u) != 0u) {
+        if (registers_[index(Channel2Start)] != 0u)
+            throw std::logic_error("Systembus-Channel-2-DMA ist bereits aktiv.");
+        if (!channel2_start_observer_)
+            throw std::runtime_error("Systembus-Channel-2-DMA besitzt keinen Transferpfad.");
+        const auto length = registers_[index(Channel2Length)];
+        if (length == 0u)
+            throw std::invalid_argument("Systembus-Channel-2-DMA braucht eine Laenge.");
+        static_cast<void>(trigger_channel2());
+        return;
+    }
+    if (offset == SortStart && (value & 1u) != 0u) {
+        throw std::runtime_error("Systembus-Sort-DMA besitzt noch keinen Transferpfad.");
     }
     const auto mask = system_bus_write_mask(offset);
     auto normalized = value & mask;
-    if (offset == Channel2Destination) normalized |= 0x10000000u;
     if (offset == SortStartAddress || offset == SortBaseAddress) normalized |= 0x08000000u;
     registers_[index(offset)] = normalized;
 }
 
 void DreamcastSystemBusControl::reset() noexcept {
     registers_.fill(0u);
-    registers_[index(Channel2Destination)] = 0x10000000u;
     registers_[index(SortStartAddress)] = 0x08000000u;
     registers_[index(SortBaseAddress)] = 0x08000000u;
     registers_[index(TaFifoRemaining)] = 8u;
@@ -144,6 +156,26 @@ void DreamcastSystemBusControl::reset() noexcept {
 
 std::uint64_t DreamcastSystemBusControl::system_reset_requests() const noexcept {
     return system_reset_requests_;
+}
+
+void DreamcastSystemBusControl::complete_channel2() noexcept {
+    registers_[index(Channel2Start)] = 0u;
+    registers_[index(Channel2Length)] = 0u;
+}
+
+bool DreamcastSystemBusControl::trigger_channel2() {
+    if (registers_[index(Channel2Start)] != 0u ||
+        registers_[index(Channel2Length)] == 0u || !channel2_start_observer_)
+        return false;
+    registers_[index(Channel2Start)] = 1u;
+    try {
+        channel2_start_observer_(registers_[index(Channel2Destination)],
+                                 registers_[index(Channel2Length)]);
+    } catch (...) {
+        registers_[index(Channel2Start)] = 0u;
+        throw;
+    }
+    return true;
 }
 
 DreamcastSystemAsic::DreamcastSystemAsic(PlatformInterruptRouter& router) noexcept
@@ -165,6 +197,12 @@ void DreamcastSystemAsic::raise(const SystemAsicEvent event, const std::uint64_t
     events_.push_back({guest_cycle, next_sequence_++, event});
     last_guest_cycle_ = guest_cycle;
     synchronize_lines();
+    if (bank < 2u) {
+        if ((dma_trigger_masks_[0u][bank] & bit) != 0u && pvr_dma_trigger_observer_)
+            pvr_dma_trigger_observer_(event);
+        if ((dma_trigger_masks_[1u][bank] & bit) != 0u && g2_dma_trigger_observer_)
+            g2_dma_trigger_observer_(event);
+    }
 }
 SchedulerEventId DreamcastSystemAsic::schedule(EventScheduler& scheduler,
                                                const SystemAsicEvent event,
@@ -212,6 +250,11 @@ void DreamcastSystemAsic::write(const std::uint32_t offset, const std::uint32_t 
 const std::vector<SystemAsicEventRecord>& DreamcastSystemAsic::events() const noexcept {
     return events_;
 }
+void DreamcastSystemAsic::set_dma_trigger_observers(DmaTriggerObserver pvr,
+                                                     DmaTriggerObserver g2) {
+    pvr_dma_trigger_observer_ = std::move(pvr);
+    g2_dma_trigger_observer_ = std::move(g2);
+}
 void DreamcastSystemAsic::reset() noexcept {
     pending_ = {};
     masks_ = {};
@@ -223,7 +266,13 @@ void DreamcastSystemAsic::reset() noexcept {
 }
 
 std::shared_ptr<DreamcastSystemBusControl> map_dreamcast_system_bus_control(Memory& memory) {
-    auto control = std::make_shared<DreamcastSystemBusControl>();
+    return map_dreamcast_system_bus_control(memory, {});
+}
+
+std::shared_ptr<DreamcastSystemBusControl> map_dreamcast_system_bus_control(
+    Memory& memory, DreamcastSystemBusControl::Channel2StartObserver channel2_start_observer) {
+    auto control =
+        std::make_shared<DreamcastSystemBusControl>(std::move(channel2_start_observer));
     control->reset();
     auto device = std::make_shared<MmioMemoryDevice>(
         system_bus_control_register_size,

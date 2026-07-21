@@ -39,14 +39,14 @@ int main() {
             "AICA-Timer ignoriert Teiler oder loest zu frueh aus.");
     execution.tick(1u);
     require(execution.timer(0u).counter() == 0u && execution.interrupts().asserted() &&
-                execution.interrupts().pending() == 1u,
+                execution.interrupts().pending() == (1u << 6u),
             "AICA-Timeroverflow erzeugt keinen maskierten Interrupt.");
-    execution.interrupts().acknowledge(1u);
+    execution.interrupts().acknowledge(1u << 6u);
     require(!execution.interrupts().asserted() && execution.interrupts().pending() == 0u,
             "AICA-Timerinterrupt kann nicht quittiert werden.");
     execution.timer(1u).configure(255u, 0u, true);
     execution.tick(1u);
-    require(execution.interrupts().pending() == 2u && !execution.interrupts().asserted(),
+    require(execution.interrupts().pending() == (1u << 7u) && !execution.interrupts().asserted(),
             "Maskierter AICA-Interrupt geht verloren oder wird faelschlich zugestellt.");
     require(throws<std::out_of_range>([&] { static_cast<void>(execution.timer(3u)); }),
             "Ungueltiger AICA-Timerindex wird akzeptiert.");

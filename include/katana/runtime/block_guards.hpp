@@ -14,10 +14,16 @@ enum class TranslationAccess : std::uint8_t { Instruction, Read, Write };
 struct TlbMapping {
     std::uint32_t virtual_page = 0u;
     std::uint32_t physical_page = 0u;
+    std::uint32_t page_size = 4096u;
+    std::uint8_t asid = 0u;
+    std::uint8_t slot = 0u;
+    bool valid = true;
     bool readable = true;
     bool writable = true;
     bool executable = true;
     bool user_access = true;
+    bool dirty = true;
+    bool shared = false;
 };
 
 struct TranslationResult {
@@ -60,6 +66,7 @@ class RuntimeAddressSpace {
     static constexpr std::uint32_t page_size = 4096u;
     void set_mode(AddressTranslationMode mode) noexcept;
     void write_mmucr(std::uint32_t value) noexcept;
+    void write_pteh(std::uint32_t value) noexcept;
     void ldtlb(TlbMapping mapping);
     void clear_tlb() noexcept;
     void bump_address_space() noexcept;
@@ -74,6 +81,7 @@ class RuntimeAddressSpace {
   private:
     AddressTranslationMode mode_ = AddressTranslationMode::NoMmu;
     std::uint32_t mmucr_ = 0u;
+    std::uint8_t asid_ = 0u;
     std::uint64_t address_space_generation_ = 0u;
     std::uint64_t mmu_generation_ = 0u;
     std::uint64_t watchpoint_generation_ = 0u;

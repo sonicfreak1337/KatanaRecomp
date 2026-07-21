@@ -1,6 +1,7 @@
 #include "katana/runtime/bios_abi.hpp"
 #include "katana/runtime/code_invalidation.hpp"
 #include "katana/runtime/dreamcast_memory.hpp"
+#include "katana/runtime/gdrom_controller.hpp"
 
 #include <algorithm>
 #include <array>
@@ -148,12 +149,17 @@ BiosAbiCall call(const BiosAbiVectorKind vector,
 BlockExit bios_abi_block(CpuState& cpu, BlockExecutionContext& context) {
     const auto source = cpu.pc;
     const auto routed = route_hle_bios_abi_call(cpu);
-    if (routed.status != BiosAbiServiceStatus::Completed)
+    const auto is_gdrom = routed.vector == BiosAbiVectorKind::MiscGdrom ||
+                          routed.vector == BiosAbiVectorKind::Gdrom2;
+    if (routed.status != BiosAbiServiceStatus::Completed &&
+        !(is_gdrom && cpu.gdrom_services != nullptr))
         throw BiosAbiDispatchError(source,
                                    routed.selector,
                                    routed.super_selector,
                                    "service-unavailable:" + std::string(routed.service));
-    cpu.r[0] = routed.vector == BiosAbiVectorKind::Flash ? execute_flash_call(cpu, routed.selector)
+    cpu.r[0] = is_gdrom && cpu.gdrom_services != nullptr
+                   ? cpu.gdrom_services->bios_call(cpu, routed.selector, routed.super_selector)
+               : routed.vector == BiosAbiVectorKind::Flash ? execute_flash_call(cpu, routed.selector)
                : routed.vector == BiosAbiVectorKind::SysInfo
                    ? execute_sysinfo_call(cpu, routed.selector)
                    : 0u;

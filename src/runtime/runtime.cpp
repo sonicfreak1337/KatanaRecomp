@@ -1,5 +1,7 @@
 #include "katana/runtime/runtime.hpp"
 
+#include "katana/runtime/block_guards.hpp"
+
 #include <stdexcept>
 #include <utility>
 
@@ -106,6 +108,7 @@ void reset_cpu(CpuState& cpu, const ResetState& state) noexcept {
     cpu.pteh = 0u;
     cpu.ptel = 0u;
     cpu.ptea = 0u;
+    cpu.ttb = 0u;
     cpu.mmucr = 0u;
     cpu.utlb.fill({});
     cpu.tlb_load_count = 0u;
@@ -128,6 +131,13 @@ void reset_cpu(CpuState& cpu, const ResetState& state) noexcept {
     cpu.prefetch_count = 0u;
     cpu.last_prefetch_was_store_queue = false;
 
+    if (cpu.address_space) {
+        cpu.address_space->set_mode(AddressTranslationMode::NoMmu);
+        cpu.address_space->write_mmucr(0u);
+        cpu.address_space->write_pteh(0u);
+        cpu.address_space->clear_tlb();
+    }
+
     cpu.r[15] = state.stack_pointer;
     cpu.write_sr(state.status_register);
 }
@@ -143,7 +153,114 @@ void load_tlb(CpuState& cpu) noexcept {
     constexpr std::uint32_t mmucr_urc_mask = 0x3Fu;
     const auto index = static_cast<std::size_t>((cpu.mmucr >> mmucr_urc_shift) & mmucr_urc_mask);
     cpu.utlb[index] = {cpu.pteh, cpu.ptel, cpu.ptea};
+    if (cpu.address_space) {
+        const auto size_code = ((cpu.ptel >> 6u) & 2u) | ((cpu.ptel >> 4u) & 1u);
+        constexpr std::array<std::uint32_t, 4u> page_sizes{1024u, 4096u, 65536u, 1048576u};
+        const auto protection = static_cast<std::uint8_t>((cpu.ptel >> 5u) & 3u);
+        cpu.address_space->ldtlb(TlbMapping{cpu.pteh & 0xFFFFFC00u,
+                                           cpu.ptel & 0x1FFFFC00u,
+                                           page_sizes[size_code],
+                                           static_cast<std::uint8_t>(cpu.pteh & 0xFFu),
+                                           static_cast<std::uint8_t>(index),
+                                           (cpu.ptel & 0x00000100u) != 0u,
+                                           true,
+                                           (protection & 1u) != 0u,
+                                           true,
+                                           protection >= 2u,
+                                           (cpu.ptel & 0x00000004u) != 0u,
+                                           (cpu.ptel & 0x00000002u) != 0u});
+    }
     ++cpu.tlb_load_count;
+}
+
+namespace {
+
+MemoryAccessErrorReason translation_reason(const ExceptionCause cause) noexcept {
+    switch (cause) {
+    case ExceptionCause::TlbMissRead:
+    case ExceptionCause::TlbMissWrite:
+        return MemoryAccessErrorReason::TlbMiss;
+    case ExceptionCause::InitialPageWrite:
+        return MemoryAccessErrorReason::InitialPageWrite;
+    case ExceptionCause::TlbProtectionRead:
+    case ExceptionCause::TlbProtectionWrite:
+        return MemoryAccessErrorReason::TlbProtection;
+    default:
+        return MemoryAccessErrorReason::Unmapped;
+    }
+}
+
+} // namespace
+
+std::uint32_t translate_guest_address(CpuState& cpu,
+                                      const std::uint32_t address,
+                                      const MemoryAccessOperation operation,
+                                      const MemoryAccessWidth width,
+                                      const bool instruction) {
+    if (!cpu.address_space) return address;
+    const auto access = instruction ? TranslationAccess::Instruction
+                                    : operation == MemoryAccessOperation::Write
+                                          ? TranslationAccess::Write
+                                          : TranslationAccess::Read;
+    try {
+        return cpu.address_space->translate(address, access, cpu.privileged_mode()).physical_address;
+    } catch (const TranslationError& error) {
+        throw MemoryAccessError(
+            translation_reason(error.cause()), operation, address, width, "sh4-address-space");
+    }
+}
+
+std::uint8_t guest_read_u8(CpuState& cpu, const std::uint32_t address) {
+    return cpu.memory.read_u8(translate_guest_address(
+        cpu, address, MemoryAccessOperation::Read, MemoryAccessWidth::Byte));
+}
+
+std::uint16_t guest_read_u16(CpuState& cpu, const std::uint32_t address) {
+    return cpu.memory.read_u16(translate_guest_address(
+        cpu, address, MemoryAccessOperation::Read, MemoryAccessWidth::Halfword));
+}
+
+std::uint32_t guest_read_u32(CpuState& cpu, const std::uint32_t address) {
+    return cpu.memory.read_u32(translate_guest_address(
+        cpu, address, MemoryAccessOperation::Read, MemoryAccessWidth::Word));
+}
+
+std::int32_t guest_read_s8(CpuState& cpu, const std::uint32_t address) {
+    return static_cast<std::int8_t>(guest_read_u8(cpu, address));
+}
+
+std::int32_t guest_read_s16(CpuState& cpu, const std::uint32_t address) {
+    return static_cast<std::int16_t>(guest_read_u16(cpu, address));
+}
+
+void guest_write_u8(CpuState& cpu,
+                    const std::uint32_t address,
+                    const std::uint8_t value,
+                    const CodeWriteSource source) {
+    cpu.memory.write_u8(
+        translate_guest_address(cpu, address, MemoryAccessOperation::Write, MemoryAccessWidth::Byte),
+        value,
+        source);
+}
+
+void guest_write_u16(CpuState& cpu,
+                     const std::uint32_t address,
+                     const std::uint16_t value,
+                     const CodeWriteSource source) {
+    cpu.memory.write_u16(translate_guest_address(
+                             cpu, address, MemoryAccessOperation::Write, MemoryAccessWidth::Halfword),
+                         value,
+                         source);
+}
+
+void guest_write_u32(CpuState& cpu,
+                     const std::uint32_t address,
+                     const std::uint32_t value,
+                     const CodeWriteSource source) {
+    cpu.memory.write_u32(
+        translate_guest_address(cpu, address, MemoryAccessOperation::Write, MemoryAccessWidth::Word),
+        value,
+        source);
 }
 
 OperandCacheMaintenanceResult

@@ -105,6 +105,9 @@ inline constexpr std::size_t dreamcast_flash_alias_count = dreamcast_direct_segm
 
 [[nodiscard]] std::shared_ptr<LinearMemoryDevice> map_dreamcast_vram(Memory& memory);
 
+void map_dreamcast_ta_vram_aliases(Memory& memory,
+                                    const std::shared_ptr<LinearMemoryDevice>& vram);
+
 [[nodiscard]] std::shared_ptr<LinearMemoryDevice> map_dreamcast_aica_ram(Memory& memory);
 
 [[nodiscard]] std::shared_ptr<LinearMemoryDevice>

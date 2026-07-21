@@ -9,6 +9,12 @@ project(
     LANGUAGES CXX
 )
 
+if(MSVC)
+    # Multi-config generators compile many translation units against one target PDB.
+    # Serialize those writes instead of relying on generator-specific scheduling.
+    add_compile_options(/FS)
+endif()
+
 find_package(Threads REQUIRED)
 include(CMakePackageConfigHelpers)
 include(GNUInstallDirs)
@@ -191,6 +197,7 @@ function(katana_enable_warnings target)
 endfunction()
 
 add_library(katana_runtime STATIC
+    src/decoder/decoder.cpp
     src/io/input_provenance.cpp
     src/io/json_report.cpp
     src/runtime/aica.cpp
@@ -218,10 +225,12 @@ add_library(katana_runtime STATIC
     src/runtime/disc_install.cpp
     src/runtime/dreamcast_boot.cpp
     src/runtime/dreamcast_memory.cpp
+    src/runtime/dynamic_interpreter.cpp
     src/runtime/executable_modules.cpp
     src/runtime/exception.cpp
     src/runtime/fpu.cpp
     src/runtime/gdi.cpp
+    src/runtime/gdrom_controller.cpp
     src/runtime/holly_dma.cpp
     src/runtime/host_video.cpp
     src/runtime/host_runtime.cpp
@@ -230,6 +239,7 @@ add_library(katana_runtime STATIC
     src/runtime/maple.cpp
     src/runtime/maple_mmio.cpp
     src/runtime/media_clock.cpp
+    src/runtime/mmu_control.cpp
     src/runtime/packed_disc.cpp
     src/runtime/persistent_storage.cpp
     src/runtime/pvr.cpp
@@ -264,7 +274,6 @@ if(WIN32)
 endif()
 
 add_library(katana_core STATIC
-    src/decoder/decoder.cpp
     src/decoder/decoder_validation.cpp
     src/decoder/instruction_metadata.cpp
     src/decoder/isa_coverage.cpp

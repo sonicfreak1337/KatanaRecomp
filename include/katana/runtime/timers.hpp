@@ -1,5 +1,6 @@
 #pragma once
 
+#include "katana/runtime/memory.hpp"
 #include "katana/runtime/scheduler.hpp"
 
 #include <array>
@@ -11,6 +12,13 @@
 #include <optional>
 
 namespace katana::runtime {
+
+inline constexpr std::uint32_t sh4_rtc_p4_base = 0xFFC80000u;
+inline constexpr std::uint32_t sh4_rtc_area7_base = 0x1FC80000u;
+inline constexpr std::size_t sh4_rtc_register_size = 0x40u;
+inline constexpr std::uint32_t sh4_tmu_p4_base = 0xFFD80000u;
+inline constexpr std::uint32_t sh4_tmu_area7_base = 0x1FD80000u;
+inline constexpr std::size_t sh4_tmu_register_size = 0x30u;
 
 class Sh4RtcClockDomain final {
   public:
@@ -144,12 +152,18 @@ class Sh4Rtc final {
     void set_periodic_rate(RtcPeriodicRate rate) noexcept;
     [[nodiscard]] RtcPeriodicRate periodic_rate() const noexcept;
     void set_carry_interrupt_enabled(bool enabled) noexcept;
+    void set_alarm_interrupt_enabled(bool enabled) noexcept;
+    void write_alarm_register(std::size_t index, std::uint8_t value);
+    [[nodiscard]] std::uint8_t alarm_register(std::size_t index) const;
     [[nodiscard]] bool carry_flag() const noexcept;
     [[nodiscard]] std::uint8_t counter_64hz() const noexcept;
     [[nodiscard]] bool periodic_interrupt_pending() const noexcept;
     [[nodiscard]] bool carry_interrupt_pending() const noexcept;
+    [[nodiscard]] bool alarm_interrupt_pending() const noexcept;
+    [[nodiscard]] bool alarm_flag() const noexcept;
     void acknowledge_periodic_interrupt() noexcept;
     void acknowledge_carry_interrupt() noexcept;
+    void acknowledge_alarm_interrupt() noexcept;
     [[nodiscard]] std::uint64_t tick_count() const noexcept;
     [[nodiscard]] std::uint64_t periodic_event_count() const noexcept;
 
@@ -163,6 +177,7 @@ class Sh4Rtc final {
     void handle_scheduler_reset();
     void tick();
     void increment_second() noexcept;
+    void update_alarm() noexcept;
 
     EventScheduler& scheduler_;
     std::shared_ptr<Sh4RtcClockDomain> clock_;
@@ -180,6 +195,12 @@ class Sh4Rtc final {
     bool periodic_pending_ = false;
     bool carry_flag_ = false;
     bool carry_enabled_ = false;
+    std::array<std::uint8_t, 6u> alarm_registers_{};
+    bool alarm_pending_ = false;
+    bool alarm_enabled_ = false;
 };
+
+void map_sh4_tmu_registers(Memory& memory, const std::shared_ptr<Sh4Tmu>& tmu);
+void map_sh4_rtc_registers(Memory& memory, const std::shared_ptr<Sh4Rtc>& rtc);
 
 } // namespace katana::runtime

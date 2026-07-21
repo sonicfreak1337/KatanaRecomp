@@ -5,11 +5,14 @@
 #include "katana/runtime/cache_control.hpp"
 #include "katana/runtime/disc.hpp"
 #include "katana/runtime/dreamcast_memory.hpp"
+#include "katana/runtime/executable_modules.hpp"
 #include "katana/runtime/gdi.hpp"
+#include "katana/runtime/gdrom_controller.hpp"
 #include "katana/runtime/holly_dma.hpp"
 #include "katana/runtime/io_port.hpp"
 #include "katana/runtime/maple.hpp"
 #include "katana/runtime/maple_mmio.hpp"
+#include "katana/runtime/mmu_control.hpp"
 #include "katana/runtime/packed_disc.hpp"
 #include "katana/runtime/platform_interrupt.hpp"
 #include "katana/runtime/pvr.hpp"
@@ -89,20 +92,27 @@ struct DreamcastRuntimeState {
     std::shared_ptr<Sh4Tmu> tmu;
     std::shared_ptr<Sh4Rtc> rtc;
     std::shared_ptr<Sh4Dmac> dmac;
+    std::shared_ptr<RuntimeAddressSpace> address_space;
+    std::shared_ptr<Sh4MmuControl> mmu_control;
     std::shared_ptr<InterruptController> interrupt_controller;
     std::shared_ptr<PlatformInterruptRouter> interrupt_router;
     std::shared_ptr<Sh4InterruptRegisters> interrupt_registers;
     std::shared_ptr<DreamcastSystemBusControl> system_bus_control;
     std::shared_ptr<DreamcastSystemAsic> system_asic;
     std::shared_ptr<PvrRegisterFile> pvr_registers;
+    std::shared_ptr<PvrTaFifo> pvr_ta_fifo;
+    std::shared_ptr<PvrTaFifoMemoryDevice> pvr_ta_aperture;
+    std::shared_ptr<PvrYuvConverterMemoryDevice> pvr_yuv_converter;
+    std::shared_ptr<PvrSoftwareRenderer> pvr_renderer;
     std::shared_ptr<AicaRegisterFile> aica_registers;
     std::shared_ptr<MapleBus> maple;
     std::shared_ptr<DreamcastMapleController> maple_controller;
     DreamcastHollyDmaControllers holly_dma;
-    std::shared_ptr<GdRomAsyncReader> gdrom;
+    std::shared_ptr<DreamcastGdRomController> gdrom;
     std::shared_ptr<AicaExecutionController> aica;
     std::shared_ptr<RuntimeBlockTable> runtime_blocks;
     std::shared_ptr<ExecutableCodeTracker> code_tracker;
+    std::shared_ptr<ExecutableModuleCatalog> module_catalog;
     std::shared_ptr<Sh4StoreQueues> store_queues;
     std::shared_ptr<Sh4CacheControl> cache_control;
     std::shared_ptr<Sh4IoPort> io_ports;

@@ -14,7 +14,6 @@ namespace katana::runtime {
 
 inline constexpr std::uint32_t g1_mmio_physical_base = 0x005F7400u;
 inline constexpr std::uint32_t g2_mmio_physical_base = 0x005F7800u;
-inline constexpr std::uint32_t pvr_dma_mmio_physical_base = 0x005F7C00u;
 inline constexpr std::uint32_t holly_dma_register_size = 0x100u;
 
 struct HollyDmaTiming {
@@ -33,6 +32,8 @@ struct HollyDmaChannelState {
     std::uint32_t peripheral_counter = 0u;
     std::uint32_t system_counter = 0u;
     std::uint32_t remaining = 0u;
+    std::uint64_t completion_cycle = 0u;
+    std::uint64_t remaining_cycles = 0u;
     std::optional<SchedulerEventId> completion_event;
 };
 
@@ -49,9 +50,14 @@ class DreamcastG2DmaController final {
     void write(std::uint32_t offset, std::uint32_t value);
     void reset() noexcept;
     [[nodiscard]] std::uint64_t completed_dma_count() const noexcept;
+    void hardware_trigger(std::size_t channel);
+    void interrupt_trigger(SystemAsicEvent event);
 
   private:
+    void arm(std::size_t channel);
     void start(std::size_t channel);
+    void schedule_completion(std::size_t channel, std::uint64_t cycles);
+    void set_suspended(std::size_t channel, bool suspended);
     void complete(std::size_t channel, SchedulerEventId event_id);
     void cancel_events() noexcept;
     void handle_scheduler_reset() noexcept;
@@ -72,15 +78,15 @@ class DreamcastG2DmaController final {
     std::uint64_t completed_dma_count_ = 0u;
 };
 
-class DreamcastPvrDmaController final {
+class DreamcastG1BusController final {
   public:
-    DreamcastPvrDmaController(Memory& memory,
-                              EventScheduler& scheduler,
-                              HollyDmaTiming timing = {},
-                              std::function<void(SystemAsicEvent)> completion_observer = {});
-    ~DreamcastPvrDmaController();
-    DreamcastPvrDmaController(const DreamcastPvrDmaController&) = delete;
-    DreamcastPvrDmaController& operator=(const DreamcastPvrDmaController&) = delete;
+    using TransferHandler =
+        std::function<void(std::uint32_t address, std::uint32_t length, std::uint32_t direction)>;
+    DreamcastG1BusController(EventScheduler& scheduler,
+                             HollyDmaTiming timing,
+                             TransferHandler transfer_handler,
+                             std::function<void(SystemAsicEvent)> completion_observer);
+    ~DreamcastG1BusController();
     [[nodiscard]] std::uint32_t read(std::uint32_t offset) const;
     void write(std::uint32_t offset, std::uint32_t value);
     void reset() noexcept;
@@ -89,40 +95,31 @@ class DreamcastPvrDmaController final {
     void start();
     void complete(SchedulerEventId event_id);
     void handle_scheduler_reset() noexcept;
-    Memory& memory_;
     EventScheduler& scheduler_;
     HollyDmaTiming timing_;
+    TransferHandler transfer_handler_;
     std::function<void(SystemAsicEvent)> completion_observer_;
     SchedulerLifetimeToken scheduler_lifetime_;
     SchedulerResetObserverId reset_observer_ = 0u;
-    HollyDmaChannelState channel_{};
-    std::uint32_t address_protect_ = 0x00007F00u;
-};
-
-class DreamcastG1BusController final {
-  public:
-    [[nodiscard]] std::uint32_t read(std::uint32_t offset) const;
-    void write(std::uint32_t offset, std::uint32_t value);
-    void reset() noexcept;
-
-  private:
+    std::optional<SchedulerEventId> completion_event_;
     std::uint32_t dma_address_ = 0u;
     std::uint32_t dma_length_ = 0u;
     std::uint32_t dma_direction_ = 0u;
     std::uint32_t dma_enabled_ = 0u;
+    std::uint32_t dma_active_ = 0u;
     std::uint32_t system_mode_ = 1u;
 };
 
 struct DreamcastHollyDmaControllers {
     std::shared_ptr<DreamcastG1BusController> g1;
     std::shared_ptr<DreamcastG2DmaController> g2;
-    std::shared_ptr<DreamcastPvrDmaController> pvr;
 };
 
 [[nodiscard]] DreamcastHollyDmaControllers
 map_dreamcast_holly_dma(Memory& memory,
                         EventScheduler& scheduler,
                         HollyDmaTiming timing = {},
-                        std::function<void(SystemAsicEvent)> completion_observer = {});
+                        std::function<void(SystemAsicEvent)> completion_observer = {},
+                        DreamcastG1BusController::TransferHandler g1_transfer_handler = {});
 
 } // namespace katana::runtime

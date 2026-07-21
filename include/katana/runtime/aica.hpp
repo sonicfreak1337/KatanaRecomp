@@ -1,16 +1,20 @@
 #pragma once
 
 #include "katana/runtime/memory.hpp"
+#include "katana/runtime/scheduler.hpp"
 
 #include <array>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <span>
 #include <vector>
 
 namespace katana::runtime {
+
+class AicaExecutionController;
 
 inline constexpr std::uint32_t aica_register_physical_base = 0x00700000u;
 inline constexpr std::size_t aica_register_size = 0x00008000u;
@@ -20,6 +24,7 @@ inline constexpr std::uint32_t aica_common_register_base = 0x2800u;
 
 class AicaRegisterFile final {
   public:
+    explicit AicaRegisterFile(std::shared_ptr<AicaExecutionController> execution = {});
     [[nodiscard]] std::uint32_t read(std::uint32_t offset, MemoryAccessWidth width) const;
     void write(std::uint32_t offset, std::uint32_t value, MemoryAccessWidth width);
     void reset() noexcept;
@@ -30,6 +35,7 @@ class AicaRegisterFile final {
     void check(std::uint32_t offset, MemoryAccessWidth width) const;
     std::array<std::uint8_t, aica_register_size> registers_{};
     std::uint64_t writes_ = 0u;
+    std::shared_ptr<AicaExecutionController> execution_;
 };
 
 enum class AicaSampleFormat : std::uint8_t { Pcm16, Pcm8, Adpcm4 };
@@ -109,7 +115,7 @@ class AicaTimer final {
 class AicaInterruptState final {
   public:
     void set_observer(std::function<void()> observer);
-    void set_enabled(std::uint32_t mask) noexcept;
+    void set_enabled(std::uint32_t mask);
     void request(std::uint32_t mask);
     void acknowledge(std::uint32_t mask) noexcept;
     [[nodiscard]] std::uint32_t pending() const noexcept;
@@ -124,20 +130,41 @@ class AicaInterruptState final {
 class AicaExecutionController final {
   public:
     static constexpr std::size_t timer_count = 3u;
-    static constexpr std::uint32_t timer_interrupt_base = 1u;
+    static constexpr std::uint32_t timer_interrupt_base = 1u << 6u;
+    explicit AicaExecutionController(EventScheduler* scheduler = nullptr,
+                                     std::uint64_t guest_clock_hz = 200'000'000u,
+                                     std::uint64_t audio_clock_hz = 44'100u);
+    ~AicaExecutionController();
+    AicaExecutionController(const AicaExecutionController&) = delete;
+    AicaExecutionController& operator=(const AicaExecutionController&) = delete;
     void set_mode(AicaArm7Mode mode);
     [[nodiscard]] AicaArm7Mode mode() const noexcept;
     [[nodiscard]] bool arm7_executes_instructions() const noexcept;
     [[nodiscard]] AicaTimer& timer(std::size_t index);
+    [[nodiscard]] const AicaTimer& timer(std::size_t index) const;
     [[nodiscard]] AicaInterruptState& interrupts() noexcept;
+    [[nodiscard]] const AicaInterruptState& interrupts() const noexcept;
+    void set_dma_request_observer(std::function<void()> observer);
     void tick(std::uint64_t audio_cycles);
 
   private:
+    void schedule_tick();
+    void handle_tick(SchedulerEventId event_id);
+    void handle_scheduler_reset() noexcept;
     AicaArm7Mode mode_ = AicaArm7Mode::HighLevelAudio;
     std::array<AicaTimer, timer_count> timers_{};
     AicaInterruptState interrupts_;
+    EventScheduler* scheduler_ = nullptr;
+    SchedulerLifetimeToken scheduler_lifetime_;
+    SchedulerResetObserverId reset_observer_ = 0u;
+    std::optional<SchedulerEventId> tick_event_;
+    std::function<void()> dma_request_observer_;
+    std::uint64_t guest_cycles_per_tick_ = 0u;
+    static constexpr std::uint64_t audio_cycles_per_tick = 256u;
 };
 
 [[nodiscard]] std::shared_ptr<AicaRegisterFile> map_aica_registers(Memory& memory);
+[[nodiscard]] std::shared_ptr<AicaRegisterFile>
+map_aica_registers(Memory& memory, std::shared_ptr<AicaExecutionController> execution);
 
 } // namespace katana::runtime

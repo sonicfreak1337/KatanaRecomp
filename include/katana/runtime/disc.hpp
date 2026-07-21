@@ -17,11 +17,23 @@
 
 namespace katana::runtime {
 
+enum class DiscTrackKind : std::uint8_t { Audio, Data };
+
+struct DiscTrackLayout {
+    std::uint32_t number = 0u;
+    std::uint32_t lba = 0u;
+    DiscTrackKind kind = DiscTrackKind::Data;
+    std::uint32_t sector_size = 2048u;
+    std::uint64_t sector_count = 0u;
+    std::uint32_t session = 0u;
+};
+
 class DiscSource {
   public:
     virtual ~DiscSource() = default;
     [[nodiscard]] virtual std::uint64_t size() const noexcept = 0;
     [[nodiscard]] virtual const std::string& identity() const noexcept = 0;
+    [[nodiscard]] virtual std::vector<DiscTrackLayout> layout() const;
     virtual void read(std::uint64_t offset, std::span<std::uint8_t> destination) const = 0;
     [[nodiscard]] std::vector<std::uint8_t> read(std::uint64_t offset, std::size_t length) const;
 };
@@ -82,10 +94,13 @@ class GdRomDrive final {
                         std::uint32_t sector_size = 2048u);
     [[nodiscard]] GdRomResponse execute(const GdRomRequest& request) const;
     [[nodiscard]] std::uint32_t sector_size() const noexcept;
+    [[nodiscard]] const std::vector<DiscTrackLayout>& layout() const noexcept;
+    [[nodiscard]] const std::string& identity() const noexcept;
 
   private:
     std::shared_ptr<const DiscSource> source_;
     std::uint32_t sector_size_ = 2048u;
+    std::vector<DiscTrackLayout> layout_;
 };
 
 struct GdRomTiming {

@@ -333,6 +333,31 @@ std::shared_ptr<LinearMemoryDevice> map_dreamcast_vram(Memory& memory) {
     return vram;
 }
 
+void map_dreamcast_ta_vram_aliases(Memory& memory,
+                                    const std::shared_ptr<LinearMemoryDevice>& vram) {
+    if (!vram || vram->size() != dreamcast_vram_size) {
+        throw std::invalid_argument("Die TA-VRAM-Aliase brauchen das gemeinsame 8-MiB-VRAM.");
+    }
+    auto path_32bit = std::make_shared<Vram32BitMemoryDevice>(vram);
+    std::vector<PendingMapping> mappings;
+    mappings.reserve(dreamcast_direct_segment_bases.size() * 4u);
+    for (const auto segment_base : dreamcast_direct_segment_bases) {
+        const auto base_64bit = segment_base + 0x11000000u;
+        const auto mirror_64bit = segment_base + 0x11800000u;
+        const auto base_32bit = segment_base + 0x13000000u;
+        const auto mirror_32bit = segment_base + 0x13800000u;
+        mappings.push_back(PendingMapping{
+            "dreamcast-ta-vram-64bit-" + hex_address(base_64bit), base_64bit, vram});
+        mappings.push_back(PendingMapping{
+            "dreamcast-ta-vram-64bit-" + hex_address(mirror_64bit), mirror_64bit, vram});
+        mappings.push_back(PendingMapping{
+            "dreamcast-ta-vram-32bit-" + hex_address(base_32bit), base_32bit, path_32bit});
+        mappings.push_back(PendingMapping{
+            "dreamcast-ta-vram-32bit-" + hex_address(mirror_32bit), mirror_32bit, path_32bit});
+    }
+    map_all(memory, std::move(mappings));
+}
+
 std::shared_ptr<LinearMemoryDevice> map_dreamcast_aica_ram(Memory& memory) {
     auto aica_ram = std::make_shared<LinearMemoryDevice>(dreamcast_aica_ram_size);
 

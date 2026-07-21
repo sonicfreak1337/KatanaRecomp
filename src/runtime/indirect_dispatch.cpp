@@ -1,4 +1,6 @@
 #include "katana/runtime/indirect_dispatch.hpp"
+
+#include "katana/runtime/exception.hpp"
 #include "katana/runtime/executable_modules.hpp"
 
 #include <algorithm>
@@ -311,8 +313,25 @@ const char* runtime_dispatch_class_name(const RuntimeDispatchClass value) noexce
 IndirectDispatchResult dispatch_indirect(CpuState& cpu,
                                          const RuntimeBlockTable& table,
                                          const IndirectDispatchRequest& request) {
-    const auto target = request.kind == IndirectDispatchKind::Return ? cpu.pr : request.target;
-    const auto physical = canonical_physical_address(target);
+    const auto requested_target =
+        request.kind == IndirectDispatchKind::Return ? cpu.pr : request.target;
+    auto target = requested_target;
+    std::uint32_t physical = 0u;
+    try {
+        physical = translate_guest_address(cpu,
+                                           target,
+                                           MemoryAccessOperation::Read,
+                                           MemoryAccessWidth::Halfword,
+                                           true);
+    } catch (const MemoryAccessError& error) {
+        enter_memory_exception(cpu, error, request.callsite);
+        target = cpu.pc;
+        physical = translate_guest_address(cpu,
+                                           target,
+                                           MemoryAccessOperation::Read,
+                                           MemoryAccessWidth::Halfword,
+                                           true);
+    }
     const auto reject = [&](const DispatchDiagnosticError error) {
         table.mark_rejected(target, request.variant);
         if (request.metrics != nullptr)

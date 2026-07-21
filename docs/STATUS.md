@@ -21,6 +21,13 @@ read-only Kompatibilitaetsfixtures und erhalten keine Sonderlogik.
 
 ## Privater PAL-Runtime-Bring-up
 
+Ein frischer privater Hostbuild hat eine allgemeine MSVC-Parallelitaetsluecke offengelegt:
+mehrere AOT-Uebersetzungseinheiten schrieben gleichzeitig dieselbe Ziel-PDB und konnten mit
+`C1041` abbrechen. Runtime und generierte AOT-Bibliothek verwenden deshalb nun explizit `/FS`;
+der erneute Produktbuild ist erfolgreich. Er veroeffentlichte 896 Funktionen in 14
+AOT-Partitionen und drei Installer-Recipe-Tracks bei weiterhin null Retailsektoren im
+verteilbaren Paket. Der lokale Disc-Installations- und Laufzeitnachweis steht noch aus.
+
 Sonic Adventure PAL erreicht reproduzierbar mehr als 5,1 Millionen native
 AOT-Bloecke, weiterhin ohne Gastframe. Die erste belegte Ausnahme bei
 `0xFFD00000` wurde durch die vollstaendige SH-4-INTC-Registerfamilie behoben.
@@ -64,8 +71,9 @@ Instruktionsgrenze, waren der Analyse aber nur unter ihrem P1-Namen bekannt.
 Der allgemeine Image-, Analyse- und Dispatchvertrag normalisiert deshalb nun
 P0/P1/P2-Codealiase, kompiliert beschreibbare Snapshotkandidaten unter ihrer
 kanonischen Imageadresse vor und bewahrt das angeforderte Aliasziel getrennt
-vom nativen Ausfuehrungs-PC. Der erneute private Portbuild und Lauf stehen als
-naechster Nachweis aus.
+vom nativen Ausfuehrungs-PC. Der erneute private Portbuild ist erfolgreich und
+enthaelt den zuvor fehlenden Block `0x8C5FBFAC` nativ; Installation und Lauf
+ueber die alte Grenze folgen als naechster Nachweis.
 
 Der angrenzende Analyseaudit bindet auch explizite Einstiegspunkte,
 Funktionssymbole, zusaetzliche Seeds und absolute wie relative Sprungtabellen

@@ -7,8 +7,12 @@
 #include <limits>
 #include <stdexcept>
 #include <string>
+#include <utility>
 
 namespace katana::runtime {
+
+AicaRegisterFile::AicaRegisterFile(std::shared_ptr<AicaExecutionController> execution)
+    : execution_(std::move(execution)) {}
 
 std::size_t AicaRegisterFile::width_bytes(const MemoryAccessWidth width) noexcept {
     return static_cast<std::size_t>(width);
@@ -24,6 +28,15 @@ void AicaRegisterFile::check(const std::uint32_t offset, const MemoryAccessWidth
 std::uint32_t AicaRegisterFile::read(const std::uint32_t offset,
                                      const MemoryAccessWidth width) const {
     check(offset, width);
+    if (execution_ && width == MemoryAccessWidth::Word) {
+        if (offset == 0x28B8u) return execution_->interrupts().pending();
+    }
+    if (execution_ && width != MemoryAccessWidth::Byte && offset >= 0x2890u && offset <= 0x2898u &&
+        (offset & 3u) == 0u) {
+        const auto timer = static_cast<std::size_t>((offset - 0x2890u) / 4u);
+        const auto stored = static_cast<std::uint32_t>(registers_[offset + 1u] & 7u) << 8u;
+        return stored | execution_->timer(timer).counter();
+    }
     std::uint32_t result = 0u;
     for (std::size_t index = 0u; index < width_bytes(width); ++index) {
         result |= static_cast<std::uint32_t>(registers_[offset + index]) << (index * 8u);
@@ -37,6 +50,15 @@ void AicaRegisterFile::write(const std::uint32_t offset,
     check(offset, width);
     for (std::size_t index = 0u; index < width_bytes(width); ++index) {
         registers_[offset + index] = static_cast<std::uint8_t>(value >> (index * 8u));
+    }
+    if (execution_ && offset >= 0x2890u && offset <= 0x2898u && (offset & 3u) == 0u) {
+        const auto timer = static_cast<std::size_t>((offset - 0x2890u) / 4u);
+        execution_->timer(timer).configure(
+            static_cast<std::uint8_t>(value), static_cast<std::uint8_t>((value >> 8u) & 7u), true);
+    } else if (execution_ && offset == 0x28B4u) {
+        execution_->interrupts().set_enabled(value);
+    } else if (execution_ && offset == 0x28BCu) {
+        execution_->interrupts().acknowledge(value);
     }
     ++writes_;
 }
@@ -206,15 +228,61 @@ bool AicaTimer::enabled() const noexcept {
     return enabled_;
 }
 
-void AicaInterruptState::set_enabled(const std::uint32_t mask) noexcept {
+void AicaInterruptState::set_enabled(const std::uint32_t mask) {
+    const auto was_asserted = asserted();
     enabled_ = mask;
+    if (!was_asserted && asserted() && observer_) observer_();
+}
+
+AicaExecutionController::AicaExecutionController(EventScheduler* const scheduler,
+                                                 const std::uint64_t guest_clock_hz,
+                                                 const std::uint64_t audio_clock_hz)
+    : scheduler_(scheduler) {
+    if (scheduler_ == nullptr) return;
+    if (guest_clock_hz == 0u || audio_clock_hz == 0u ||
+        guest_clock_hz > std::numeric_limits<std::uint64_t>::max() / audio_cycles_per_tick)
+        throw std::invalid_argument("AICA-Gast- und Audiotakt muessen positiv und darstellbar sein.");
+    guest_cycles_per_tick_ =
+        std::max<std::uint64_t>(1u, (guest_clock_hz * audio_cycles_per_tick) / audio_clock_hz);
+    scheduler_lifetime_ = scheduler_->lifetime_token();
+    reset_observer_ = scheduler_->add_reset_observer([this] { handle_scheduler_reset(); });
+    schedule_tick();
+}
+
+AicaExecutionController::~AicaExecutionController() {
+    if (scheduler_ == nullptr || scheduler_lifetime_.expired()) return;
+    if (tick_event_) static_cast<void>(scheduler_->cancel(*tick_event_));
+    static_cast<void>(scheduler_->remove_reset_observer(reset_observer_));
+}
+
+void AicaExecutionController::schedule_tick() {
+    if (scheduler_ == nullptr || guest_cycles_per_tick_ == 0u) return;
+    tick_event_ = scheduler_->schedule_after(
+        guest_cycles_per_tick_, [this](const auto event_id, const auto) { handle_tick(event_id); });
+}
+
+void AicaExecutionController::handle_tick(const SchedulerEventId event_id) {
+    if (!tick_event_ || *tick_event_ != event_id)
+        throw std::logic_error("AICA-Timercompletion besitzt kein aktives Ereignis.");
+    tick_event_.reset();
+    tick(audio_cycles_per_tick);
+    schedule_tick();
+}
+
+void AicaExecutionController::handle_scheduler_reset() noexcept {
+    tick_event_.reset();
+    try {
+        schedule_tick();
+    } catch (...) {
+    }
 }
 void AicaInterruptState::set_observer(std::function<void()> observer) {
     observer_ = std::move(observer);
 }
 void AicaInterruptState::request(const std::uint32_t mask) {
+    const auto was_asserted = asserted();
     pending_ |= mask;
-    if ((pending_ & enabled_) != 0u && observer_) observer_();
+    if (!was_asserted && asserted() && observer_) observer_();
 }
 void AicaInterruptState::acknowledge(const std::uint32_t mask) noexcept {
     pending_ &= ~mask;
@@ -247,11 +315,25 @@ AicaTimer& AicaExecutionController::timer(const std::size_t index) {
     return timers_[index];
 }
 
+const AicaTimer& AicaExecutionController::timer(const std::size_t index) const {
+    if (index >= timers_.size()) throw std::out_of_range("Ungueltiger AICA-Timerindex.");
+    return timers_[index];
+}
+
 AicaInterruptState& AicaExecutionController::interrupts() noexcept {
     return interrupts_;
 }
 
+const AicaInterruptState& AicaExecutionController::interrupts() const noexcept {
+    return interrupts_;
+}
+
+void AicaExecutionController::set_dma_request_observer(std::function<void()> observer) {
+    dma_request_observer_ = std::move(observer);
+}
+
 void AicaExecutionController::tick(const std::uint64_t audio_cycles) {
+    if (dma_request_observer_) dma_request_observer_();
     for (std::size_t index = 0u; index < timers_.size(); ++index) {
         if (timers_[index].tick(audio_cycles) != 0u) {
             interrupts_.request(timer_interrupt_base << index);
@@ -260,7 +342,12 @@ void AicaExecutionController::tick(const std::uint64_t audio_cycles) {
 }
 
 std::shared_ptr<AicaRegisterFile> map_aica_registers(Memory& memory) {
-    auto registers = std::make_shared<AicaRegisterFile>();
+    return map_aica_registers(memory, {});
+}
+
+std::shared_ptr<AicaRegisterFile>
+map_aica_registers(Memory& memory, std::shared_ptr<AicaExecutionController> execution) {
+    auto registers = std::make_shared<AicaRegisterFile>(std::move(execution));
     auto device = std::make_shared<MmioMemoryDevice>(
         aica_register_size,
         [registers](const std::uint32_t offset, const MemoryAccessWidth width) {

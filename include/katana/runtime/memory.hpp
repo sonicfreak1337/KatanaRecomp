@@ -7,6 +7,7 @@
 #include <span>
 #include <stdexcept>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace katana::runtime {
@@ -23,7 +24,17 @@ enum class MemoryAlignmentPolicy { Strict, Permissive };
 
 enum class MemoryLookupMode { Indexed, Reference };
 
-enum class MemoryAccessErrorReason { Misaligned, Unmapped, CrossRegion, ReadOnly, AddressOverflow };
+enum class MemoryAccessErrorReason {
+    Misaligned,
+    Unmapped,
+    CrossRegion,
+    ReadOnly,
+    AddressOverflow,
+    DeviceRejected,
+    TlbMiss,
+    InitialPageWrite,
+    TlbProtection
+};
 
 class MemoryAccessError final : public std::runtime_error {
   public:
@@ -45,6 +56,11 @@ class MemoryAccessError final : public std::runtime_error {
     std::uint32_t address_ = 0u;
     MemoryAccessWidth width_ = MemoryAccessWidth::Byte;
     std::string region_name_;
+};
+
+class MmioDeviceError final : public std::runtime_error {
+  public:
+    explicit MmioDeviceError(std::string message) : std::runtime_error(std::move(message)) {}
 };
 
 class MemoryDevice {

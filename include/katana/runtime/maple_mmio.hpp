@@ -51,6 +51,8 @@ class DreamcastMapleController final {
     void reset() noexcept;
     [[nodiscard]] std::uint64_t completed_dma_count() const noexcept;
     [[nodiscard]] std::uint64_t transferred_word_count() const noexcept;
+    void hardware_trigger() noexcept;
+    [[nodiscard]] bool hard_trigger_failed() const noexcept;
 
   private:
     struct PendingResponse {
@@ -86,6 +88,7 @@ class DreamcastMapleController final {
     std::uint32_t rx_base_ = 0u;
     std::uint64_t completed_dma_count_ = 0u;
     std::uint64_t transferred_word_count_ = 0u;
+    bool hard_trigger_failed_ = false;
 };
 
 [[nodiscard]] std::shared_ptr<DreamcastMapleController>

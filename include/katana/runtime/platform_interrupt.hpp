@@ -21,6 +21,7 @@ enum class PlatformInterruptSource : std::uint32_t {
     Tmu0 = 0x00000400u,
     Tmu1 = 0x00000420u,
     Tmu2 = 0x00000440u,
+    RtcAlarm = 0x00000480u,
     RtcPeriodic = 0x000004A0u,
     RtcCarry = 0x000004C0u,
     Dma0 = 0x00000640u,

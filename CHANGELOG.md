@@ -4,6 +4,10 @@
 
 ### Geaendert
 
+- MSVC-Hostbuilds serialisieren parallele Programmdatenbank-Schreibzugriffe jetzt mit `/FS` fuer
+  Runtime und generierte AOT-Units. Dadurch koennen grosse Multi-Unit-Ports unter Visual-Studio-
+  Generatoren nicht mehr sporadisch mit `C1041` an einer gemeinsam genutzten Ziel-PDB scheitern;
+  `/bigobj` bleibt fuer die grossen generierten Uebersetzungseinheiten aktiv.
 - Der SH4-Direktsegment-Vertrag normalisiert P0/P1/P2-Codealiase jetzt durchgaengig fuer
   Imagevalidierung, rekursive Einstiegspunkte, Funktionssymbole, Analyse-Seeds, absolute und
   relative Sprungtabellen sowie den Runtime-only-Dispatcher. Diagnosen behalten das angeforderte

@@ -15,6 +15,7 @@
 namespace katana::runtime {
 
 class ExecutableCodeTracker;
+class ExecutableModuleCatalog;
 
 inline constexpr std::uint32_t platform_services_abi_version =
     build_contract::platform_services_abi_version;
@@ -123,6 +124,9 @@ class PlatformServices {
     virtual void observe_guest_checkpoint(std::uint32_t) noexcept {}
     virtual void register_executable_block(std::uint32_t, std::uint32_t, std::string_view) {}
     [[nodiscard]] virtual ExecutableCodeTracker* executable_code_tracker() noexcept {
+        return nullptr;
+    }
+    [[nodiscard]] virtual ExecutableModuleCatalog* executable_module_catalog() noexcept {
         return nullptr;
     }
 };

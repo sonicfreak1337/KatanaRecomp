@@ -68,6 +68,9 @@ struct ExecutableModuleMetrics {
 class ExecutableModuleCatalog final {
   public:
     void publish(ExecutableModule module);
+    void publish_loaded_range(ExecutableModule module,
+                              RuntimeBlockTable& blocks,
+                              ExecutableCodeTracker& tracker);
     void
     replace(ExecutableModule module, RuntimeBlockTable& blocks, ExecutableCodeTracker& tracker);
     void unload(std::string_view id, RuntimeBlockTable& blocks, ExecutableCodeTracker& tracker);

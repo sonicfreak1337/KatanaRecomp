@@ -269,6 +269,23 @@ std::uint64_t GdiDiscSource::size() const noexcept {
 const std::string& GdiDiscSource::identity() const noexcept {
     return identity_;
 }
+
+std::vector<DiscTrackLayout> GdiDiscSource::layout() const {
+    std::vector<DiscTrackLayout> result;
+    result.reserve(descriptor_.tracks.size());
+    std::uint32_t session = 1u;
+    for (const auto& track : descriptor_.tracks) {
+        if (!result.empty() && track.lba >= 45000u && result.back().lba < 45000u) session = 2u;
+        result.push_back({track.number,
+                          track.lba,
+                          track.type == GdiTrackType::Data ? DiscTrackKind::Data
+                                                          : DiscTrackKind::Audio,
+                          track.sector_size,
+                          track.sector_count,
+                          session});
+    }
+    return result;
+}
 const GdiDescriptor& GdiDiscSource::descriptor() const noexcept {
     return descriptor_;
 }

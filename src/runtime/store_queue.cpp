@@ -77,10 +77,10 @@ bool Sh4StoreQueues::prefetch(const std::uint32_t address) {
     transfer.queue = static_cast<std::uint8_t>(selected);
     transfer.source_address = address & ~31u;
     transfer.target_address = transfer_target(address, selected);
-    transfer.target =
-        transfer.target_address >= 0x10000000u && transfer.target_address <= 0x13FFFFFFu
-            ? StoreQueueTarget::TileAccelerator
-            : StoreQueueTarget::Ram;
+    const auto ta_input =
+        (transfer.target_address >= 0x10000000u && transfer.target_address <= 0x107FFFFFu) ||
+        (transfer.target_address >= 0x12000000u && transfer.target_address <= 0x127FFFFFu);
+    transfer.target = ta_input ? StoreQueueTarget::TileAccelerator : StoreQueueTarget::Ram;
     transfer.bytes = queues_[selected];
     if (sink_) {
         sink_(transfer);

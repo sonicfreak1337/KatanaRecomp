@@ -444,6 +444,17 @@ RtcPeriodicRate Sh4Rtc::periodic_rate() const noexcept {
 void Sh4Rtc::set_carry_interrupt_enabled(const bool enabled) noexcept {
     carry_enabled_ = enabled;
 }
+void Sh4Rtc::set_alarm_interrupt_enabled(const bool enabled) noexcept {
+    alarm_enabled_ = enabled;
+}
+void Sh4Rtc::write_alarm_register(const std::size_t index, const std::uint8_t value) {
+    if (index >= alarm_registers_.size()) throw std::out_of_range("RTC-Alarmregister ist ungueltig.");
+    alarm_registers_[index] = value;
+}
+std::uint8_t Sh4Rtc::alarm_register(const std::size_t index) const {
+    if (index >= alarm_registers_.size()) throw std::out_of_range("RTC-Alarmregister ist ungueltig.");
+    return alarm_registers_[index];
+}
 bool Sh4Rtc::carry_flag() const noexcept {
     return carry_flag_;
 }
@@ -456,11 +467,20 @@ bool Sh4Rtc::periodic_interrupt_pending() const noexcept {
 bool Sh4Rtc::carry_interrupt_pending() const noexcept {
     return carry_flag_ && carry_enabled_;
 }
+bool Sh4Rtc::alarm_interrupt_pending() const noexcept {
+    return alarm_pending_ && alarm_enabled_;
+}
+bool Sh4Rtc::alarm_flag() const noexcept {
+    return alarm_pending_;
+}
 void Sh4Rtc::acknowledge_periodic_interrupt() noexcept {
     periodic_pending_ = false;
 }
 void Sh4Rtc::acknowledge_carry_interrupt() noexcept {
     carry_flag_ = false;
+}
+void Sh4Rtc::acknowledge_alarm_interrupt() noexcept {
+    alarm_pending_ = false;
 }
 std::uint64_t Sh4Rtc::tick_count() const noexcept {
     return ticks_;
@@ -528,12 +548,32 @@ void Sh4Rtc::tick() {
             carry_flag_ = true;
             if (calendar_running_) {
                 increment_second();
+                update_alarm();
             }
         }
     }
     if (rtc_enabled_) {
         schedule_tick();
     }
+}
+
+void Sh4Rtc::update_alarm() noexcept {
+    const auto bcd = [](const std::uint8_t value) {
+        return static_cast<std::uint8_t>((value / 10u) << 4u | (value % 10u));
+    };
+    const std::array<std::uint8_t, 6u> current{bcd(date_time_.second),
+                                               bcd(date_time_.minute),
+                                               bcd(date_time_.hour),
+                                               date_time_.day_of_week,
+                                               bcd(date_time_.day),
+                                               bcd(date_time_.month)};
+    bool any_enabled = false;
+    for (std::size_t index = 0u; index < alarm_registers_.size(); ++index) {
+        if ((alarm_registers_[index] & 0x80u) == 0u) continue;
+        any_enabled = true;
+        if ((alarm_registers_[index] & 0x7Fu) != current[index]) return;
+    }
+    if (any_enabled) alarm_pending_ = true;
 }
 
 void Sh4Rtc::increment_second() noexcept {
@@ -559,6 +599,196 @@ void Sh4Rtc::increment_second() noexcept {
     }
     date_time_.month = 1u;
     date_time_.year = static_cast<std::uint16_t>((date_time_.year + 1u) % 10000u);
+}
+
+namespace {
+
+std::uint8_t to_bcd(const std::uint32_t value) {
+    return static_cast<std::uint8_t>(((value / 10u) << 4u) | (value % 10u));
+}
+
+std::uint32_t from_bcd(const std::uint32_t value) {
+    const auto low = value & 0xFu;
+    const auto high = (value >> 4u) & 0xFu;
+    if (low > 9u || high > 9u) throw std::invalid_argument("RTC-BCD-Wert ist ungueltig.");
+    return high * 10u + low;
+}
+
+void map_timer_aliases(Memory& memory,
+                       const std::string& name,
+                       const std::uint32_t p4,
+                       const std::uint32_t area7,
+                       const std::shared_ptr<MemoryDevice>& device) {
+    memory.map_region(name + "-p4", p4, device);
+    memory.map_region(name + "-area7", area7, device);
+}
+
+} // namespace
+
+void map_sh4_tmu_registers(Memory& memory, const std::shared_ptr<Sh4Tmu>& tmu) {
+    if (!tmu) throw std::invalid_argument("TMU-MMIO braucht eine zustandsfuehrende Instanz.");
+    const auto tocr = std::make_shared<std::uint8_t>(std::uint8_t{0u});
+    const auto device = std::make_shared<MmioMemoryDevice>(
+        sh4_tmu_register_size,
+        [tmu, tocr](const auto offset, const auto width) -> std::uint32_t {
+            if (offset == 0x00u && width == MemoryAccessWidth::Byte) return *tocr;
+            if (offset == 0x04u && width == MemoryAccessWidth::Byte) return tmu->start();
+            if (offset >= 0x08u && offset <= 0x28u) {
+                const auto channel = static_cast<std::size_t>((offset - 0x08u) / 0x0Cu);
+                const auto reg = (offset - 0x08u) % 0x0Cu;
+                if (channel >= Sh4Tmu::channel_count)
+                    throw std::out_of_range("TMU-Kanal ist ungueltig.");
+                if (reg == 0u && width == MemoryAccessWidth::Word)
+                    return tmu->constant(channel);
+                if (reg == 4u && width == MemoryAccessWidth::Word)
+                    return tmu->counter(channel);
+                if (reg == 8u && width == MemoryAccessWidth::Halfword)
+                    return tmu->control(channel);
+            }
+            if (offset == 0x2Cu)
+                throw std::runtime_error("TMU-Eingangscapture besitzt keine externe Quelle.");
+            throw std::invalid_argument("Ungueltige TMU-Registerbreite oder Offset.");
+        },
+        [tmu, tocr](const auto offset, const auto value, const auto width) {
+            if (offset == 0x00u && width == MemoryAccessWidth::Byte) {
+                *tocr = static_cast<std::uint8_t>(value & 1u);
+                return;
+            }
+            if (offset == 0x04u && width == MemoryAccessWidth::Byte) {
+                tmu->write_start(static_cast<std::uint8_t>(value & 7u));
+                return;
+            }
+            if (offset >= 0x08u && offset <= 0x28u) {
+                const auto channel = static_cast<std::size_t>((offset - 0x08u) / 0x0Cu);
+                const auto reg = (offset - 0x08u) % 0x0Cu;
+                if (channel >= Sh4Tmu::channel_count)
+                    throw std::out_of_range("TMU-Kanal ist ungueltig.");
+                if (reg == 0u && width == MemoryAccessWidth::Word) {
+                    tmu->write_constant(channel, value);
+                    return;
+                }
+                if (reg == 4u && width == MemoryAccessWidth::Word) {
+                    tmu->write_counter(channel, value);
+                    return;
+                }
+                if (reg == 8u && width == MemoryAccessWidth::Halfword) {
+                    tmu->write_control(channel, static_cast<std::uint16_t>(value));
+                    return;
+                }
+            }
+            throw std::invalid_argument("Ungueltige TMU-Registerbreite oder Offset.");
+        });
+    map_timer_aliases(memory, "sh4-tmu", sh4_tmu_p4_base, sh4_tmu_area7_base, device);
+}
+
+void map_sh4_rtc_registers(Memory& memory, const std::shared_ptr<Sh4Rtc>& rtc) {
+    if (!rtc) throw std::invalid_argument("RTC-MMIO braucht eine zustandsfuehrende Instanz.");
+    const auto rcr1 = std::make_shared<std::uint8_t>(std::uint8_t{0u});
+    const auto rcr2 = std::make_shared<std::uint8_t>(std::uint8_t{0u});
+    const auto device = std::make_shared<MmioMemoryDevice>(
+        sh4_rtc_register_size,
+        [rtc, rcr1, rcr2](const auto offset, const auto width) -> std::uint32_t {
+            const auto& value = rtc->date_time();
+            if (offset == 0x1Cu && width == MemoryAccessWidth::Halfword)
+                return static_cast<std::uint32_t>(to_bcd(value.year / 100u)) << 8u |
+                       to_bcd(value.year % 100u);
+            if (width != MemoryAccessWidth::Byte)
+                throw std::invalid_argument("RTC-Zaehler verlangen 8-Bit-Zugriffe.");
+            switch (offset) {
+            case 0x00u:
+                return rtc->counter_64hz();
+            case 0x04u:
+                return to_bcd(value.second);
+            case 0x08u:
+                return to_bcd(value.minute);
+            case 0x0Cu:
+                return to_bcd(value.hour);
+            case 0x10u:
+                return value.day_of_week;
+            case 0x14u:
+                return to_bcd(value.day);
+            case 0x18u:
+                return to_bcd(value.month);
+            case 0x20u:
+            case 0x24u:
+            case 0x28u:
+            case 0x2Cu:
+            case 0x30u:
+            case 0x34u:
+                return rtc->alarm_register((offset - 0x20u) / 4u);
+            case 0x38u:
+                return (*rcr1 & 0x18u) | (rtc->carry_flag() ? 0x80u : 0u) |
+                       (rtc->alarm_flag() ? 1u : 0u);
+            case 0x3Cu:
+                return (*rcr2 & 0x76u) | (rtc->running() ? 1u : 0u) |
+                       (rtc->rtc_enabled() ? 8u : 0u);
+            default:
+                throw std::runtime_error("Ungueltiger RTC-Registeroffset.");
+            }
+        },
+        [rtc, rcr1, rcr2](const auto offset, const auto raw, const auto width) {
+            if (offset == 0x1Cu && width == MemoryAccessWidth::Halfword) {
+                auto value = rtc->date_time();
+                value.year = static_cast<std::uint16_t>(from_bcd((raw >> 8u) & 0xFFu) * 100u +
+                                                        from_bcd(raw & 0xFFu));
+                rtc->set_date_time(value);
+                return;
+            }
+            if (width != MemoryAccessWidth::Byte)
+                throw std::invalid_argument("RTC-Zaehler verlangen 8-Bit-Zugriffe.");
+            if (offset >= 0x04u && offset <= 0x18u) {
+                auto value = rtc->date_time();
+                switch (offset) {
+                case 0x04u:
+                    value.second = static_cast<std::uint8_t>(from_bcd(raw));
+                    break;
+                case 0x08u:
+                    value.minute = static_cast<std::uint8_t>(from_bcd(raw));
+                    break;
+                case 0x0Cu:
+                    value.hour = static_cast<std::uint8_t>(from_bcd(raw));
+                    break;
+                case 0x10u:
+                    value.day_of_week = static_cast<std::uint8_t>(raw & 7u);
+                    break;
+                case 0x14u:
+                    value.day = static_cast<std::uint8_t>(from_bcd(raw));
+                    break;
+                case 0x18u:
+                    value.month = static_cast<std::uint8_t>(from_bcd(raw));
+                    break;
+                }
+                rtc->set_date_time(value);
+                return;
+            }
+            if (offset >= 0x20u && offset <= 0x34u && (offset & 3u) == 0u) {
+                rtc->write_alarm_register((offset - 0x20u) / 4u,
+                                          static_cast<std::uint8_t>(raw));
+                return;
+            }
+            if (offset == 0x38u) {
+                *rcr1 = static_cast<std::uint8_t>(raw & 0x18u);
+                rtc->set_carry_interrupt_enabled((raw & 0x10u) != 0u);
+                rtc->set_alarm_interrupt_enabled((raw & 0x08u) != 0u);
+                if ((raw & 0x80u) == 0u) rtc->acknowledge_carry_interrupt();
+                if ((raw & 0x01u) == 0u) rtc->acknowledge_alarm_interrupt();
+                return;
+            }
+            if (offset == 0x3Cu) {
+                *rcr2 = static_cast<std::uint8_t>(raw & 0x76u);
+                rtc->set_periodic_rate(static_cast<RtcPeriodicRate>((raw >> 4u) & 7u));
+                if ((raw & 0x80u) == 0u) rtc->acknowledge_periodic_interrupt();
+                rtc->set_rtc_enabled((raw & 8u) != 0u);
+                if ((raw & 2u) != 0u) rtc->reset_divider();
+                if ((raw & 1u) != 0u)
+                    rtc->start();
+                else
+                    rtc->stop();
+                return;
+            }
+            throw std::runtime_error("Ungueltiger RTC-Registeroffset.");
+        });
+    map_timer_aliases(memory, "sh4-rtc", sh4_rtc_p4_base, sh4_rtc_area7_base, device);
 }
 
 } // namespace katana::runtime

@@ -115,6 +115,26 @@ void ExecutableModuleCatalog::publish(ExecutableModule module) {
     increment(metrics_.loads);
 }
 
+void ExecutableModuleCatalog::publish_loaded_range(ExecutableModule module,
+                                                   RuntimeBlockTable& blocks,
+                                                   ExecutableCodeTracker& tracker) {
+    if (module.bytes.empty()) throw std::invalid_argument("Geladener Modulbereich ist leer.");
+    const auto end = module.end_address();
+    for (auto& existing : modules_) {
+        if (!existing.active || module.guest_start >= existing.end_address() ||
+            existing.guest_start >= end)
+            continue;
+        const auto invalidated =
+            blocks.erase_overlapping_physical(existing.guest_start, existing.bytes.size());
+        const auto tracked = tracker.observe_write(
+            existing.guest_start, existing.bytes.size(), CodeWriteSource::Copy, true);
+        metrics_.invalidated_blocks += std::max(invalidated, tracked.invalidated_blocks.size());
+        existing.active = false;
+        increment(metrics_.unloads);
+    }
+    publish(std::move(module));
+}
+
 void ExecutableModuleCatalog::unload(const std::string_view id,
                                      RuntimeBlockTable& blocks,
                                      ExecutableCodeTracker& tracker) {

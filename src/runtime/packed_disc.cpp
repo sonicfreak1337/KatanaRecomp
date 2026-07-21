@@ -331,6 +331,21 @@ std::uint64_t PackedDiscSource::size() const noexcept {
 const std::string& PackedDiscSource::identity() const noexcept {
     return identity_;
 }
+
+std::vector<DiscTrackLayout> PackedDiscSource::layout() const {
+    std::vector<DiscTrackLayout> result;
+    result.reserve(info_.tracks.size());
+    for (const auto& track : info_.tracks) {
+        result.push_back({track.number,
+                          track.lba,
+                          track.type == GdiTrackType::Data ? DiscTrackKind::Data
+                                                          : DiscTrackKind::Audio,
+                          track.sector_size,
+                          track.sector_count,
+                          track.session});
+    }
+    return result;
+}
 const PackedDiscInfo& PackedDiscSource::info() const noexcept {
     return info_;
 }

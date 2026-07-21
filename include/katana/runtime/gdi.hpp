@@ -56,6 +56,7 @@ class GdiDiscSource final : public DiscSource {
     open(const std::filesystem::path& descriptor_path);
     [[nodiscard]] std::uint64_t size() const noexcept override;
     [[nodiscard]] const std::string& identity() const noexcept override;
+    [[nodiscard]] std::vector<DiscTrackLayout> layout() const override;
     void read(std::uint64_t offset, std::span<std::uint8_t> destination) const override;
     [[nodiscard]] const GdiDescriptor& descriptor() const noexcept;
     [[nodiscard]] std::uint32_t primary_data_lba() const;

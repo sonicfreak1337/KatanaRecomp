@@ -5,6 +5,7 @@
 #include "katana/ir/ir.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <iomanip>
@@ -12,10 +13,30 @@
 #include <sstream>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <unordered_set>
 
 namespace katana::codegen {
 namespace {
+
+void replace_all(std::string& text, const std::string_view from, const std::string_view to) {
+    for (std::size_t offset = 0u;; offset += to.size()) {
+        offset = text.find(from, offset);
+        if (offset == std::string::npos) return;
+        text.replace(offset, from.size(), to);
+    }
+}
+
+std::string route_guest_memory_accesses(std::string text) {
+    constexpr std::array methods{"read_u8", "read_u16", "read_u32", "read_s8", "read_s16",
+                                 "write_u8", "write_u16", "write_u32"};
+    for (const auto method : methods) {
+        replace_all(text,
+                    std::string("cpu.memory.") + method + "(",
+                    std::string("katana::runtime::guest_") + method + "(cpu, ");
+    }
+    return text;
+}
 
 std::string hex32(const std::uint32_t value) {
     std::ostringstream output;
@@ -2507,7 +2528,7 @@ BackendEmission CppBackend::emit(const BackendRequest& request) const {
              << hex32(metadata_entry_address) << ";\n\n"
              << "} // namespace " << request.symbol_namespace << "\n";
 
-    return {declarations.str(), function_bodies.str(), metadata.str()};
+    return {declarations.str(), route_guest_memory_accesses(function_bodies.str()), metadata.str()};
 }
 
 std::string emit_cpp_program(const std::span<const katana::ir::Function> functions,
