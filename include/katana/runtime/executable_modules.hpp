@@ -225,6 +225,7 @@ class DemandBlockMaterializer final {
         std::uint64_t relocation_generation = 0u;
         RuntimeBlockHandle handle;
         std::vector<std::uint8_t> snapshot;
+        bool interpreter_backed = false;
     };
     std::vector<MaterializedOrigin> origins_;
 };

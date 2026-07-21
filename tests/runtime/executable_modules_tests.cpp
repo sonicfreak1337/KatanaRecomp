@@ -222,13 +222,13 @@ void runtime_write_provenance_regression() {
                                                    return MaterializedBlockCandidate{
                                                        {target,
                                                         canonical_physical_address(target),
-                                                        2u,
+                                                        4u,
                                                         BlockEndKind::Return,
                                                         requested_variant,
                                                         block,
                                                         "synthetic-runtime-alias-decoder",
                                                         true},
-                                                       snapshot.size() >= 2u,
+                                                       snapshot.size() >= 4u,
                                                        true,
                                                        true,
                                                        true,
@@ -242,11 +242,142 @@ void runtime_write_provenance_regression() {
     request.target = 0x8C000100u;
     request.materializer = &alias_materializer;
     const auto alias_dispatch = dispatch_indirect(alias_cpu, alias_blocks, request);
+    request.target = 0x8C000102u;
+    const auto alias_interior_dispatch = dispatch_indirect(alias_cpu, alias_blocks, request);
     const auto alias_module_id = alias_modules.resolve(request.target)->id;
     alias_cpu.memory.write_u16(0x0C000100u, 0x000Bu);
-    require(alias_dispatch.block && alias_modules.find(alias_module_id) == nullptr &&
-                !alias_blocks.lookup(request.target, request.variant).has_value(),
-            "P0-Write entwertet den ueber P1 materialisierten Runtimecode nicht.");
+    require(alias_dispatch.block == alias_interior_dispatch.block &&
+                alias_materializer.metrics().materializations == 1u &&
+                alias_materializer.metrics().cache_hits == 1u &&
+                alias_modules.find(alias_module_id) == nullptr &&
+                !alias_blocks.active(alias_dispatch.block),
+            "Innerer P1-Einstieg wird nicht wiederverwendet oder durch P0-Write entwertet.");
+}
+
+void interpreter_interior_entry_regression() {
+    using namespace katana::runtime;
+    CpuState cpu;
+    const std::vector<std::uint8_t> bytes{0x09u, 0x00u, 0x09u, 0x00u, 0x0Bu, 0x00u};
+    cpu.memory.write_bytes(0x500u, bytes, CodeWriteSource::Copy);
+    ExecutableModule module;
+    module.id = "interior-entry-module";
+    module.source_identity = "free-interior-entry-fixture-v1";
+    module.guest_start = 0x500u;
+    module.bytes = bytes;
+    ExecutableModuleCatalog modules;
+    modules.publish(module);
+    RuntimeBlockTable blocks;
+    ExecutableCodeTracker tracker;
+    blocks.bind_code_tracker(&tracker);
+    std::size_t callback_calls = 0u;
+    DemandBlockMaterializer materializer(
+        modules,
+        blocks,
+        &tracker,
+        {true, 4u, 64u},
+        [&](const std::uint32_t target,
+            const std::span<const std::uint8_t> snapshot,
+            const BlockVariantKey& requested_variant) {
+            ++callback_calls;
+            return MaterializedBlockCandidate{{target,
+                                               target,
+                                               static_cast<std::uint32_t>(snapshot.size()),
+                                               BlockEndKind::Return,
+                                               requested_variant,
+                                               block,
+                                               "synthetic-interpreter-decoder",
+                                               true},
+                                              snapshot.size() >= 2u,
+                                              true,
+                                              true,
+                                              true,
+                                              true,
+                                              1u,
+                                              1u,
+                                              1u,
+                                              1u,
+                                              1u};
+        });
+    IndirectDispatchMetrics dispatch_metrics;
+    IndirectDispatchRequest request;
+    request.kind = IndirectDispatchKind::TailJump;
+    request.callsite = 0x80u;
+    request.target = 0x500u;
+    request.dispatch_class = RuntimeDispatchClass::RuntimeOnly;
+    request.metrics = &dispatch_metrics;
+    request.materializer = &materializer;
+    const auto first = dispatch_indirect(cpu, blocks, request);
+    request.callsite = 0x82u;
+    request.target = 0x502u;
+    const auto interior = dispatch_indirect(cpu, blocks, request);
+    require(first.block == interior.block && interior.resulting_pc == 0x502u && cpu.pc == 0x502u &&
+                callback_calls == 1u && materializer.metrics().materializations == 1u &&
+                materializer.metrics().cache_hits == 1u && blocks.size() == 1u &&
+                dispatch_metrics.runtime_only_sites().at(0x82u).materializations == 0u,
+            "Interpreter-Inneneinstieg erzeugt einen ueberlappenden zweiten Runtimeblock.");
+
+    auto replacement = module;
+    replacement.bytes[2] = 0x0Bu;
+    cpu.memory.write_bytes(0x500u, replacement.bytes, CodeWriteSource::Copy);
+    modules.replace(replacement, blocks, tracker);
+    materializer.record_invalidation(0x500u, replacement.bytes.size(), dispatch_metrics);
+    const auto rematerialized = dispatch_indirect(cpu, blocks, request);
+    require(rematerialized.block != first.block && callback_calls == 2u &&
+                materializer.metrics().materializations == 2u,
+            "Modulrewrite behaelt einen stale Interpreter-Inneneinstieg aktiv.");
+
+    CpuState native_cpu;
+    native_cpu.memory.write_bytes(0x600u, bytes, CodeWriteSource::Copy);
+    ExecutableModule native_module = module;
+    native_module.id = "native-interior-module";
+    native_module.source_identity = "free-native-interior-fixture-v1";
+    native_module.guest_start = 0x600u;
+    ExecutableModuleCatalog native_modules;
+    native_modules.publish(native_module);
+    RuntimeBlockTable native_blocks;
+    std::size_t native_callbacks = 0u;
+    DemandBlockMaterializer native_materializer(
+        native_modules,
+        native_blocks,
+        nullptr,
+        {true, 4u, 64u},
+        [&](const std::uint32_t target,
+            const std::span<const std::uint8_t> snapshot,
+            const BlockVariantKey& requested_variant) {
+            ++native_callbacks;
+            return MaterializedBlockCandidate{{target,
+                                               target,
+                                               static_cast<std::uint32_t>(snapshot.size()),
+                                               BlockEndKind::Return,
+                                               requested_variant,
+                                               block,
+                                               "synthetic-native-decoder",
+                                               true},
+                                              true,
+                                              false,
+                                              true,
+                                              true,
+                                              true,
+                                              1u,
+                                              1u,
+                                              1u,
+                                              1u,
+                                              1u};
+        });
+    request.metrics = nullptr;
+    request.materializer = &native_materializer;
+    request.target = 0x600u;
+    static_cast<void>(dispatch_indirect(native_cpu, native_blocks, request));
+    request.target = 0x602u;
+    bool native_interior_rejected = false;
+    try {
+        static_cast<void>(dispatch_indirect(native_cpu, native_blocks, request));
+    } catch (const IndirectDispatchError&) {
+        native_interior_rejected = true;
+    }
+    require(native_interior_rejected && native_callbacks == 1u &&
+                native_materializer.last_failure() == MaterializationFailure::InvalidBlock,
+            "Nativer Runtimeblock akzeptiert unbewiesenen Inneneinstieg.");
 }
 
 } // namespace
@@ -350,6 +481,7 @@ int main() {
 
     relocated_module_regression();
     runtime_write_provenance_regression();
+    interpreter_interior_entry_regression();
 
     std::cout << "KR-4704 executable module and materialization regression passed.\n";
     return EXIT_SUCCESS;

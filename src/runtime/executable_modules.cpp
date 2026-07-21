@@ -399,6 +399,27 @@ DemandBlockMaterializer::try_materialize(CpuState& cpu,
         fail(MaterializationFailure::Misaligned, target);
         return std::nullopt;
     }
+    const auto containing_origin =
+        std::find_if(origins_.begin(), origins_.end(), [&](const auto& origin) {
+            const auto begin = static_cast<std::uint64_t>(origin.address);
+            const auto end = begin + origin.size;
+            const auto requested = static_cast<std::uint64_t>(target);
+            if (requested < begin || requested + 2u > end ||
+                !blocks_.active(origin.handle))
+                return false;
+            const auto registered = blocks_.resolve(origin.handle);
+            return registered && registered->get().variant == variant;
+        });
+    if (containing_origin != origins_.end()) {
+        if (!containing_origin->interpreter_backed) {
+            fail(MaterializationFailure::InvalidBlock, target);
+            return std::nullopt;
+        }
+        if (!validate_for_dispatch(cpu, containing_origin->handle, target)) return std::nullopt;
+        increment(metrics_.cache_hits);
+        last_failure_ = MaterializationFailure::None;
+        return containing_origin->handle;
+    }
     if (misses_by_target_[target] >= policy_.max_repeated_misses_per_target) {
         fail(MaterializationFailure::RepeatedMissLimit, target);
         return std::nullopt;
@@ -484,6 +505,7 @@ DemandBlockMaterializer::try_materialize(CpuState& cpu,
         fail(MaterializationFailure::BudgetExhausted, target);
         return std::nullopt;
     }
+    const auto interpreter_backed = candidate.interpreter_backed;
     auto block = std::move(candidate.block);
     if (block.virtual_start != target || block.size < 2u || block.variant != variant ||
         block.size > snapshot.size() || block.function == nullptr || block.provenance.empty() ||
@@ -535,7 +557,8 @@ DemandBlockMaterializer::try_materialize(CpuState& cpu,
          module_generation,
          relocation_generation,
          handle,
-         std::vector<std::uint8_t>(snapshot.begin(), snapshot.begin() + block_size)});
+         std::vector<std::uint8_t>(snapshot.begin(), snapshot.begin() + block_size),
+         interpreter_backed});
     if (!validate_for_dispatch(cpu, handle, target)) {
         origins_.pop_back();
         static_cast<void>(blocks_.erase_identity(identity));
@@ -556,7 +579,7 @@ DemandBlockMaterializer::try_materialize(CpuState& cpu,
         throw;
     }
     increment(metrics_.materializations);
-    if (candidate.interpreter_backed) increment(metrics_.interpreter_materializations);
+    if (interpreter_backed) increment(metrics_.interpreter_materializations);
     const auto materialized_size = block_size;
     metrics_.materialized_bytes += materialized_size;
     record_success(target);
@@ -579,7 +602,12 @@ bool DemandBlockMaterializer::validate_for_dispatch(const CpuState& cpu,
                                                     const RuntimeBlockHandle handle,
                                                     const std::uint32_t target) noexcept {
     const auto origin = std::find_if(origins_.begin(), origins_.end(), [&](const auto& candidate) {
-        return candidate.handle == handle && candidate.address == target;
+        const auto begin = static_cast<std::uint64_t>(candidate.address);
+        const auto end = begin + candidate.size;
+        const auto requested = static_cast<std::uint64_t>(target);
+        return candidate.handle == handle &&
+               (candidate.address == target ||
+                (candidate.interpreter_backed && requested >= begin && requested + 2u <= end));
     });
     if (origin == origins_.end()) {
         increment(metrics_.dispatch_validation_failures);

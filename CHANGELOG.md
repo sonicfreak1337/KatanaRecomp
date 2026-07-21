@@ -4,6 +4,14 @@
 
 ### Geaendert
 
+- Demand-materialisierte, interpretergestuetzte SH-4-Bloecke koennen jetzt
+  nach vollstaendiger Byte-, Modul-, Generation- und Variantenvalidierung auch
+  an einem geraden Instruktionsanfang innerhalb ihres bestehenden Snapshots
+  betreten werden. Derselbe Block wird dabei als Cachetreffer wiederverwendet,
+  statt einen ueberlappenden zweiten Runtimeblock zu registrieren. Native
+  Bloecke erlauben keine unbewiesenen Inneneinstiege; Writes, Modulrewrites
+  und P0/P1-Aliase durchlaufen weiterhin die gemeinsame Invalidierung.
+  Runtime-ABI 21 versioniert die erweiterte Dispatchsemantik.
 - `PVR SOFTRESET` setzt jetzt ausschliesslich die angeforderten TA-, Core- und
   SDRAM-Interface-Eingaenge zurueck. Framebuffer-, SPG- und Regionsregister
   bleiben wie auf Hardware erhalten; TA-Reset stoppt den ISP-Core nicht und
@@ -93,7 +101,7 @@
   MMU-faehigen `guest_read_*`-/`guest_write_*`-Schnittstellen. Die globale
   nachtraegliche Zeichenersetzung des gesamten Funktionstexts ist entfallen.
 - PlatformServices-ABI 7 versioniert den korrigierten linearen und
-  gastzeitgebundenen DMA-Vertrag. Runtime-ABI 20 und Portprojektvertrag 10
+  gastzeitgebundenen DMA-Vertrag. Runtime-ABI 21 und Portprojektvertrag 10
   bleiben die aktuellen v0.48-Vertraege.
 - Der kumulative Debug-Gate umfasst 180 Tests und ist vollstaendig gruen.
   Die beiden Tests, die eigenstaendige Portprojekte mit CMake/MSVC bauen,
@@ -132,7 +140,7 @@
   der Recipe, verwirft abweichendes Staging und veroeffentlicht dadurch keinen
   unterdessen veraenderten oder semantisch umgebundenen Discinhalt. Der Parser
   rekonstruiert Trackintegritaet und Content-Root aus dem Chunkindex.
-- Runtime-ABI 20 und Portprojektvertrag 10 versionieren kumulativ den gemeinsamen
+- Runtime-ABI 21 und Portprojektvertrag 10 versionieren kumulativ den gemeinsamen
   AICA-Sound-RAM-/Audiopfad sowie den neuen Disc-Identitaetsvertrag.
 - Der Software-PVR fuehrt die TSP-Fogmodi jetzt im echten Fragmentpfad aus:
   Look-up-Table-Fog dekodiert `FOG_DENSITY` und interpoliert die 128

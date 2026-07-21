@@ -376,20 +376,28 @@ IndirectDispatchResult dispatch_indirect(CpuState& cpu,
     }
     bool materialized = false;
     if (!block && request.materializer != nullptr) {
+        const auto materializations_before = request.materializer->metrics().materializations;
         block =
             request.materializer->try_materialize(cpu, target, effective_variant, request.callsite);
         alias_lookup = false;
-        materialized = block.has_value();
+        materialized = block.has_value() &&
+                       request.materializer->metrics().materializations !=
+                           materializations_before;
     }
     if (!block)
         reject(request.materializer != nullptr
                    ? materialization_error(request.materializer->last_failure())
                    : DispatchDiagnosticError::UnknownTarget);
     const auto resolved = table.resolve(*block);
+    const auto runtime_interior =
+        resolved && resolved->get().runtime_registered && !alias_lookup &&
+        static_cast<std::uint64_t>(target) >= resolved->get().virtual_start &&
+        static_cast<std::uint64_t>(target) + 2u <=
+            static_cast<std::uint64_t>(resolved->get().virtual_start) + resolved->get().size;
     if (!resolved || resolved->get().function == nullptr || resolved->get().size < 2u ||
         (resolved->get().virtual_start & 1u) != 0u ||
         (alias_lookup ? resolved->get().physical_origin != physical
-                      : resolved->get().virtual_start != target))
+                      : resolved->get().virtual_start != target && !runtime_interior))
         reject(DispatchDiagnosticError::InvalidBoundary);
 
     if (resolved->get().runtime_registered &&
