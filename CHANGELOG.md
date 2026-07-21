@@ -4,6 +4,12 @@
 
 ### Geaendert
 
+- Der generierte Demand-Interpreter materialisiert jetzt genau eine
+  SH-4-Instruktion pro Runtimeblock; nur ein architektonischer Delay-Slot wird
+  atomar mit seinem Kontrolltransfer aufgenommen. Damit koennen spaeter
+  entdeckte Einsprungpunkte keine bereits registrierten Nachbarbloecke mehr
+  ueberbruecken. Portprojektvertrag 11 versioniert die geaenderte generierte
+  Runtime; Export- und Produktpfadregressionen pruefen die feste Blockgrenze.
 - Demand-materialisierte, interpretergestuetzte SH-4-Bloecke koennen jetzt
   nach vollstaendiger Byte-, Modul-, Generation- und Variantenvalidierung auch
   an einem geraden Instruktionsanfang innerhalb ihres bestehenden Snapshots

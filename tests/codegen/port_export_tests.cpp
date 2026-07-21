@@ -375,6 +375,13 @@ int run_test(const int argc, char* argv[]) {
             generated_before.at("katana-port.cmake").find("katana_runtime") != std::string::npos &&
             generated_before.at("code/runtime-dispatch.cpp").find("dispatch_indirect") !=
                 std::string::npos &&
+            generated_before.at("code/runtime-dispatch.cpp")
+                    .find("execute_dynamic_sh4_block(cpu, *active_services, 1u)") !=
+                std::string::npos &&
+            generated_before.at("code/runtime-dispatch.cpp").find("count < 64u") ==
+                std::string::npos &&
+            generated_before.at("code/runtime-dispatch.cpp")
+                    .find("candidate.instructions = 1u") != std::string::npos &&
             generated_before.at("metadata/port-project.json")
                     .find("\"execution_coverage_contract\":\"validated-demand-v1\"") !=
                 std::string::npos &&

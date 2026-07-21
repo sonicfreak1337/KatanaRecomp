@@ -60,10 +60,15 @@ ueberlappendes zweites Modul abgewiesen. Der allgemeine Materializer verwendet
 solche geraden Inneneinstiege nun nur fuer interpretergestuetzte Bloecke und
 nur nach erneuter Byte-, Generation-, Varianten- und Herkunftspruefung. Native
 Inneneinstiege bleiben gesperrt; Rewrite- und Aliasinvalidierung sind durch
-Regressionsfaelle belegt. Der erste Gastframe bleibt bis zum erneuten privaten
-Produktnachweis offen.
+Regressionsfaelle belegt. Der erneute PAL-Nachweis deckte ausserdem einen
+ueberbrueckenden, erst in umgekehrter Reihenfolge entdeckten Nachbarblock auf.
+Der generierte Demand-Interpreter materialisiert deshalb genau eine Instruktion
+beziehungsweise einen Kontrolltransfer samt untrennbarem Delay-Slot. Die
+gezielten Export-, Interpreter- und Modulregressionen sind gruen; der private
+Produktlauf erreicht damit rund 51,3 Millionen Gastzyklen ohne Block-Overlap.
+Der erste Gastframe bleibt offen.
 
-Runtime-ABI 21 und Portprojektvertrag 10 bilden den kumulativen v0.48-Stand ab.
+Runtime-ABI 21 und Portprojektvertrag 11 bilden den kumulativen v0.48-Stand ab.
 PlatformServices-ABI 7 bleibt unveraendert.
 
 Der iterative Portworkflow verwendet jetzt sicheres inkrementelles Staging:
