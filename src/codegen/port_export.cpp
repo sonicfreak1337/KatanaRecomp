@@ -20,15 +20,19 @@
 #include "katana/runtime/packed_disc.hpp"
 
 #include <algorithm>
+#include <array>
+#include <atomic>
 #include <cctype>
+#include <cstdlib>
 #include <fstream>
 #include <future>
 #include <iomanip>
-#include <set>
+#include <optional>
 #include <sstream>
 #include <stdexcept>
 #include <system_error>
 #include <thread>
+#include <unordered_set>
 
 namespace katana::codegen {
 namespace {
@@ -47,6 +51,30 @@ bool valid_target_name(const std::string_view value) noexcept {
 }
 
 constexpr std::string_view port_namespace = "katana_port_generated";
+
+std::size_t port_codegen_jobs(const std::size_t partition_count) {
+    auto requested = static_cast<std::size_t>(std::max(1u, std::thread::hardware_concurrency()));
+    std::optional<std::string> configured;
+#ifdef _WIN32
+    char* value = nullptr;
+    std::size_t value_size = 0u;
+    if (_dupenv_s(&value, &value_size, "KATANA_PORT_CODEGEN_JOBS") == 0 && value != nullptr)
+        configured = value;
+    std::free(value);
+#else
+    if (const auto* value = std::getenv("KATANA_PORT_CODEGEN_JOBS");
+        value != nullptr && *value != '\0')
+        configured = value;
+#endif
+    if (configured && !configured->empty()) {
+        std::size_t parsed = 0u;
+        const auto jobs = std::stoull(*configured, &parsed, 10);
+        if (parsed != configured->size() || jobs == 0u)
+            throw std::invalid_argument("KATANA_PORT_CODEGEN_JOBS ist ungueltig.");
+        requested = static_cast<std::size_t>(jobs);
+    }
+    return std::min(partition_count, requested);
+}
 
 std::vector<katana::ir::Function>
 select_functions(const std::span<const katana::ir::Function> program,
@@ -683,9 +711,12 @@ std::string runtime_dispatch_adapter(const std::string& entry_namespace,
                                      const std::span<const katana::ir::Function> program,
                                      const std::uint32_t entry_address) {
     const auto symbol = [](const std::uint32_t address) {
-        std::ostringstream output;
-        output << std::hex << std::uppercase << std::setw(8) << std::setfill('0') << address;
-        return output.str();
+        constexpr std::array digits{'0', '1', '2', '3', '4', '5', '6', '7',
+                                    '8', '9', 'A', 'B', 'C', 'D', 'E', 'F'};
+        std::string result(8u, '0');
+        for (std::size_t index = 0u; index < result.size(); ++index)
+            result[result.size() - index - 1u] = digits[(address >> (index * 4u)) & 0xFu];
+        return result;
     };
     const auto end_kind = [](const katana::ir::BasicBlock& block) {
         using O = katana::ir::Operation;
@@ -718,7 +749,32 @@ std::string runtime_dispatch_adapter(const std::string& entry_namespace,
             return "Fallthrough";
         }
     };
-    std::set<std::uint32_t> block_addresses;
+    struct DispatchBlock {
+        std::string owner;
+        std::string address;
+        std::uint32_t size;
+        const char* end_kind;
+    };
+    std::size_t block_count = 0u;
+    for (const auto& function : program) block_count += function.blocks.size();
+    std::unordered_set<std::uint32_t> block_addresses;
+    block_addresses.reserve(block_count);
+    std::vector<DispatchBlock> dispatch_blocks;
+    dispatch_blocks.reserve(block_count);
+    for (const auto& function : program) {
+        const auto owner = symbol(function.entry_address);
+        for (const auto& block : function.blocks) {
+            if (!block_addresses.insert(block.start_address).second)
+                throw std::runtime_error("IR-Basic-Block besitzt mehrere Funktionsbesitzer.");
+            std::uint32_t end = block.start_address + 2u;
+            for (const auto& instruction : block.instructions)
+                end = std::max(end, instruction.source_address + 2u);
+            dispatch_blocks.push_back({owner,
+                                       symbol(block.start_address),
+                                       end - block.start_address,
+                                       end_kind(block)});
+        }
+    }
     std::ostringstream output;
     output << "#include \"../include/katana_port.hpp\"\n"
            << "#include \"katana/runtime/block_abi.hpp\"\n"
@@ -772,33 +828,27 @@ std::string runtime_dispatch_adapter(const std::string& entry_namespace,
                "        active_context = nullptr; active_diagnostics = nullptr;\n"
                "        active_dispatch_metrics = nullptr; active_materializer = nullptr; }\n"
            << "};\n";
-    for (const auto& function : program) {
-        const auto owner = symbol(function.entry_address);
-        for (const auto& block : function.blocks) {
-            if (!block_addresses.insert(block.start_address).second)
-                throw std::runtime_error("IR-Basic-Block besitzt mehrere Funktionsbesitzer.");
-            const auto address = symbol(block.start_address);
-            output << "katana::runtime::BlockExit dispatch_" << address
+    for (const auto& block : dispatch_blocks) {
+            output << "katana::runtime::BlockExit dispatch_" << block.address
                    << "(katana::runtime::CpuState& cpu, katana::runtime::BlockExecutionContext& "
                       "context) {\n"
                    << "    if (active_services == nullptr) throw "
                       "std::runtime_error(\"Runtime-Plattformdienste fehlen.\");\n"
                    << "    const bool exception_active_on_entry = cpu.trap_pending;\n"
-                   << "    fn_" << owner << "_with_services(cpu, active_services);\n"
+                   << "    fn_" << block.owner << "_with_services(cpu, active_services);\n"
                    << "    context.scheduler_cycle = active_services->scheduler_cycle();\n"
                    << "    auto kind = !exception_active_on_entry && cpu.trap_pending\n"
                    << "                    ? katana::runtime::BlockEndKind::Exception\n"
-                   << "                    : katana::runtime::BlockEndKind::" << end_kind(block)
+                   << "                    : katana::runtime::BlockEndKind::" << block.end_kind
                    << ";\n"
                    << "    if (std::exchange(tail_dispatch_completed, false))\n"
                    << "        kind = katana::runtime::BlockEndKind::Return;\n"
                    << "    return katana::runtime::make_block_exit(cpu, context,\n"
-                   << "        kind, {0x" << address
-                   << "u, katana::runtime::canonical_physical_address(0x" << address
+                   << "        kind, {0x" << block.address
+                   << "u, katana::runtime::canonical_physical_address(0x" << block.address
                    << "u)}, katana::runtime::BlockAddress{cpu.pc, "
                       "katana::runtime::canonical_physical_address(cpu.pc)});\n"
                    << "}\n";
-        }
     }
     output << "katana::runtime::BlockExit dispatch_dynamic_interpreter(\n"
               "        katana::runtime::CpuState& cpu,\n"
@@ -992,28 +1042,16 @@ std::string runtime_dispatch_adapter(const std::string& entry_namespace,
     output << "    table.bind_code_tracker(services.executable_code_tracker());\n";
     output << "    std::vector<katana::runtime::RuntimeBlock> static_blocks;\n";
     output << "    static_blocks.reserve(" << block_addresses.size() << "u);\n";
-    for (const auto& function : program) {
-        for (const auto& block : function.blocks) {
-            const auto address = symbol(block.start_address);
-            std::uint32_t end = block.start_address + 2u;
-            for (const auto& instruction : block.instructions)
-                end = std::max(end, instruction.source_address + 2u);
-            output << "    append_static_block(static_blocks, 0x" << address << "u, "
-                   << (end - block.start_address)
-                   << "u, katana::runtime::BlockEndKind::" << end_kind(block) << ", &dispatch_"
-                   << address << ", \"generated-block-" << address << "\");\n";
-        }
+    for (const auto& block : dispatch_blocks) {
+            output << "    append_static_block(static_blocks, 0x" << block.address << "u, "
+                   << block.size << "u, katana::runtime::BlockEndKind::" << block.end_kind
+                   << ", &dispatch_" << block.address << ", \"generated-block-" << block.address
+                   << "\");\n";
     }
     output << "    static_cast<void>(table.register_static_bulk(std::move(static_blocks)));\n";
-    for (const auto& function : program) {
-        for (const auto& block : function.blocks) {
-            const auto address = symbol(block.start_address);
-            std::uint32_t end = block.start_address + 2u;
-            for (const auto& instruction : block.instructions)
-                end = std::max(end, instruction.source_address + 2u);
-            output << "    register_executable_block(table, services, 0x" << address << "u, "
-                   << (end - block.start_address) << "u);\n";
-        }
+    for (const auto& block : dispatch_blocks) {
+            output << "    register_executable_block(table, services, 0x" << block.address
+                   << "u, " << block.size << "u);\n";
     }
     const auto entry = symbol(entry_address);
     output << "    katana::runtime::DispatchDiagnosticRecorder diagnostics;\n"
@@ -1287,19 +1325,22 @@ PortExportResult export_dreamcast_port_project(const PreparedPortProgram& prepar
                 deterministic_translation_unit_name(partition, prepared.program),
             backend.emit(request).joined_text()};
     };
-    const auto hardware_jobs = std::max(1u, std::thread::hardware_concurrency());
-    const auto codegen_jobs =
-        std::min<std::size_t>({partitions.size(), static_cast<std::size_t>(hardware_jobs), 4u});
-    for (std::size_t begin = 0u; begin < partitions.size(); begin += codegen_jobs) {
-        const auto end = std::min(partitions.size(), begin + codegen_jobs);
-        std::vector<std::future<ProjectArtifact>> pending;
-        pending.reserve(end - begin);
-        for (auto index = begin; index < end; ++index) {
-            pending.push_back(std::async(
-                std::launch::async, emit_partition, std::cref(partitions[index])));
-        }
-        for (auto& future : pending) artifacts.push_back(future.get());
+    const auto codegen_jobs = port_codegen_jobs(partitions.size());
+    std::vector<std::optional<ProjectArtifact>> generated(partitions.size());
+    std::atomic_size_t next_partition = 0u;
+    std::vector<std::future<void>> workers;
+    workers.reserve(codegen_jobs);
+    for (std::size_t worker = 0u; worker < codegen_jobs; ++worker) {
+        workers.push_back(std::async(std::launch::async, [&] {
+            for (;;) {
+                const auto index = next_partition.fetch_add(1u, std::memory_order_relaxed);
+                if (index >= partitions.size()) return;
+                generated[index] = emit_partition(partitions[index]);
+            }
+        }));
     }
+    for (auto& worker : workers) worker.get();
+    for (auto& artifact : generated) artifacts.push_back(std::move(*artifact));
     const auto entry_partition =
         std::find_if(partitions.begin(), partitions.end(), [&prepared](const auto& partition) {
             return std::any_of(partition.function_indices.begin(),

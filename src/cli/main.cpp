@@ -944,6 +944,18 @@ std::filesystem::path discover_runtime_root_for_build(const std::filesystem::pat
         "Runtime-SDK fuer Portbuild fehlt; KATANA_RUNTIME_ROOT kann es explizit angeben.");
 }
 
+std::string normalized_host_command(const std::string& command) {
+#ifdef _WIN32
+    // Some launchers provide both Path and PATH. MSBuild's case-insensitive
+    // environment import rejects that otherwise valid Windows environment.
+    return "cmd.exe /d /v:on /c \"set KATANA_SAVED_PATH=!PATH!& set Path=& set "
+           "PATH=!KATANA_SAVED_PATH!& " +
+           command + '"';
+#else
+    return command;
+#endif
+}
+
 void seed_incremental_port_stage(const std::filesystem::path& published,
                                  const std::filesystem::path& stage) {
     if (!std::filesystem::exists(published)) return;
@@ -1040,7 +1052,8 @@ int export_port_project(const std::filesystem::path& gdi_path,
         configure +=
             " -DCMAKE_BUILD_TYPE=RelWithDebInfo -DKATANA_RUNTIME_ROOT=" + shell_quote(runtime_root);
         std::cout << "KATANA_PORT_PHASE configure\n" << std::flush;
-        if (std::system(configure.c_str()) != 0) {
+        const auto configure_command = normalized_host_command(configure);
+        if (std::system(configure_command.c_str()) != 0) {
             throw katana::cli::Error(katana::cli::ExitCode::BuildFailure,
                                      "Port-Hostbuild konnte nicht konfiguriert werden.");
         }
@@ -1051,7 +1064,8 @@ int export_port_project(const std::filesystem::path& gdi_path,
         build += " --config RelWithDebInfo";
 #endif
         std::cout << "KATANA_PORT_PHASE host-build\n" << std::flush;
-        if (std::system(build.c_str()) != 0) {
+        const auto build_command = normalized_host_command(build);
+        if (std::system(build_command.c_str()) != 0) {
             throw katana::cli::Error(katana::cli::ExitCode::BuildFailure,
                                      "Port-Hosttarget konnte nicht gebaut werden.");
         }

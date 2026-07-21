@@ -35,6 +35,16 @@
   AOT-Partitionen werden bis zu vierfach parallel emittiert und MSVC kompiliert
   sie mit `/MP` plus `/FS`. Der synthetische End-to-End-Test belegt Cacheerhalt,
   Retaildatenausschluss und eine nur wenige Sekunden teure zweite Regeneration.
+- Der AOT-Portexport waehlt seine Codegen-Worker jetzt dynamisch nach den
+  verfuegbaren CPU-Threads; `KATANA_PORT_CODEGEN_JOBS` erlaubt eine explizite
+  Grenze. Partitionen bleiben deterministisch geordnet. Vorberechnete
+  Dispatchmetadaten, Hash-Adressmengen und eine allocationsarme Hexausgabe
+  beseitigen den dominanten seriellen Nachlauf. Ein frischer Sonic-Adventure-
+  PAL-Produktbuild sank dadurch von mehr als 15 Minuten im Debug-Werkzeug auf
+  126,8 Sekunden mit dem geprueften RelWithDebInfo-Exporter (12 Worker).
+- Windows-Portbuilds normalisieren doppelte `Path`-/`PATH`-Eintraege vor CMake
+  und MSBuild. Damit kann eine gueltige, aber von Launchern doppelt geschriebene
+  Umgebung nicht mehr mit `MSB6001` abbrechen.
 
 - Der native Produktpfad rendert AICA-Kanaele jetzt direkt aus den vom Gast
   beschriebenen Slotregistern und dem gemeinsam gemappten Sound-RAM. PCM16,

@@ -11,7 +11,8 @@ Der iterative Portworkflow verwendet jetzt sicheres inkrementelles Staging:
 Vorhandene Buildobjekte werden fuer denselben Ausgabeport wiederverwendet,
 waehrend `user-data` und `*.katana-disc` niemals in Staging oder Paket gelangen.
 Bytegleiche Quellen behalten ihre Zeitstempel; AOT-Codegen und MSVC-Kompilierung
-arbeiten parallel. Eine zusaetzliche identische Regeneration erhoehte den
+arbeiten parallel. Die Workerzahl folgt der Host-CPU und kann mit
+`KATANA_PORT_CODEGEN_JOBS` begrenzt werden. Eine zusaetzliche identische Regeneration erhoehte den
 synthetischen Gesamt-Porttest nur um rund fuenf Sekunden. `KR-4813` bleibt fuer
 den weitergehenden content-addressed Analyse-/IR-Cache offen.
 
@@ -34,7 +35,11 @@ Tracktabelle und Chunkindex geprueft; abweichendes Staging wird nicht
 veroeffentlicht. Runtime-ABI 16 und Portprojektvertrag 9 versionieren zugleich
 den echten gastzeitgebundenen AICA-Produktmixer. Das kumulative v0.48-
 Debug-Gate ist mit 178 von 178 Tests bestanden; der anschliessende private
-PAL-Nachweis steht noch aus.
+PAL-Nachweis ist erfolgt: Der vollstaendige neue Port entstand mit 12 Workern
+in 126,8 Sekunden, installierte 521.461 Sektoren ausschliesslich lokal und
+erreichte 11.314.542 native AOT-Bloecke. Der naechste belegte allgemeine
+Hardwarebedarf ist der PVR-DMA-Steuerblock ab `0x005F7C00`; ein Gastframe steht
+weiterhin aus.
 
 Der anschliessende P0-Runtimeblock korrigiert den zweiten SH-4-Ausfuehrungskern
 und seine AOT-Grenze: Pre-Decrement-Fault-Rollback, SHAD/SHLD bei negativen
