@@ -42,20 +42,29 @@ int main() {
     static_cast<void>(scheduler.advance_to(5u, 1u));
     require(completions == 1u && pvr->render_completion_count() == 1u,
             "PVR-Rendercompletion fehlt oder wird mehrfach gemeldet.");
+    const auto scan_load_before_soft_reset = pvr->read(pvr_register::SpgLoad);
+    bus.write_u32(0x005F8000u + pvr_register::FramebufferReadSof1, 0x00400000u);
     bus.write_u32(0x005F8000u + pvr_register::StartRender, 1u);
     bus.write_u32(0x005F8000u + pvr_register::SoftReset, 1u);
-    static_cast<void>(scheduler.advance_to(10u, 0u));
-    require(pvr->reset_count() == 1u && pvr->read(pvr_register::FramebufferReadSof1) == 0u &&
-                completions == 1u && !scheduler.next_event_cycle().has_value(),
-            "PVR-Softreset loescht den Registerzustand nicht.");
+    static_cast<void>(scheduler.advance_to(10u, 1u));
+    require(pvr->reset_count() == 1u &&
+                pvr->read(pvr_register::FramebufferReadSof1) == 0x00400000u &&
+                pvr->read(pvr_register::SpgLoad) == scan_load_before_soft_reset &&
+                completions == 2u,
+            "TA-Softreset loescht Register/Scanout oder stoppt faelschlich den ISP-Core.");
     bus.write_u32(0x005F8000u + pvr_register::StartRender, 1u);
+    bus.write_u32(0x005F8000u + pvr_register::SoftReset, 2u);
+    static_cast<void>(scheduler.advance_to(15u, 0u));
+    require(pvr->reset_count() == 2u && completions == 2u,
+            "PVR-Core-Softreset laesst eine stale Rendercompletion weiterlaufen.");
+    bus.write_u32(0x005F8000u + pvr_register::SoftReset, 0u);
     scheduler.reset();
     static_cast<void>(scheduler.advance_to(5u, 0u));
-    require(completions == 1u && pvr->render_completion_count() == 1u,
+    require(completions == 2u && pvr->render_completion_count() == 2u,
             "Schedulerreset fuehrt einen stale PVR-Rendercallback aus.");
     bus.write_u32(0x005F8000u + pvr_register::StartRender, 1u);
     static_cast<void>(scheduler.advance_to(10u, 1u));
-    require(completions == 2u && pvr->render_completion_count() == 2u,
+    require(completions == 3u && pvr->render_completion_count() == 3u,
             "PVR plant nach Schedulerreset keine frische Completion.");
     require(throws<std::runtime_error>([&] { bus.write_u32(0x005F8000u, 0u); }),
             "Read-only-PVR-ID ist beschreibbar.");
@@ -113,6 +122,10 @@ int main() {
     require((scan_pvr->read(pvr_register::SpgStatus) & 0x3FFu) == 0u &&
                 (scan_pvr->read(pvr_register::SpgStatus) & (1u << 10u)) != 0u,
             "SPG_STATUS setzt Feldnummer oder Scanline am Framewechsel falsch.");
+    scan_scheduler.reset();
+    static_cast<void>(scan_scheduler.advance_to(50u, 32u));
+    require((scan_pvr->read(pvr_register::SpgStatus) & 0x3FFu) == 5u,
+            "Schedulerreset stellt das SPG-Scanouttiming nicht wieder her.");
 
     const auto require_profile = [&](const DreamcastVideoMode mode,
                                      const std::uint32_t load,

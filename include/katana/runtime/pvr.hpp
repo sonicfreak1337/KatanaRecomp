@@ -127,7 +127,7 @@ class PvrRegisterFile final {
     PvrRegisterFile& operator=(const PvrRegisterFile&) = delete;
     [[nodiscard]] std::uint32_t read(std::uint32_t offset) const;
     void write(std::uint32_t offset, std::uint32_t value);
-    void reset() noexcept;
+    void reset();
     [[nodiscard]] std::uint64_t render_request_count() const noexcept;
     [[nodiscard]] std::uint64_t render_completion_count() const noexcept;
     [[nodiscard]] std::uint64_t reset_count() const noexcept;
@@ -153,7 +153,7 @@ class PvrRegisterFile final {
     void schedule_hblank_event(std::uint32_t line);
     void handle_hblank_event(SchedulerEventId event_id, std::uint32_t line);
     void cancel_scan_events() noexcept;
-    void handle_scheduler_reset() noexcept;
+    void handle_scheduler_reset();
     EventScheduler& scheduler_;
     PvrTiming timing_;
     std::array<std::uint32_t, pvr_register_size / 4u> registers_{};

@@ -47,9 +47,14 @@ Hardwareauditorabdeckung implementiert. Der folgende private Nachweis las
 der Exception ist nun die bisher absichtliche Ablehnung von `DMAOR.DDT`
 belegt. Der allgemeine DMAC-Vertrag akzeptiert das R/W-Modusbit jetzt und
 bildet begrenzte DDT-Requestqueues sowie den TR-only-Wiederholpfad ab. TA/PVR
-und der erste Gastframe bleiben bis zum naechsten privaten Nachweis offen.
+blieben im folgenden 100-Millionen-Zyklen-Lauf zwar ohne Exception, doch ein
+PVR-Softreset setzte faelschlich den gesamten Registerblock zurueck und liess
+`SPG_STATUS` dauerhaft auf Scanline null stehen. TA-, Core- und
+SDRAM-Interface-Reset sind nun getrennt; SPG-/Framebufferzustand und aktives
+Scanouttiming bleiben erhalten. Der erste Gastframe bleibt bis zum naechsten
+privaten Nachweis offen.
 
-Runtime-ABI 19 und Portprojektvertrag 10 bilden den kumulativen v0.48-Stand ab.
+Runtime-ABI 20 und Portprojektvertrag 10 bilden den kumulativen v0.48-Stand ab.
 PlatformServices-ABI 7 bleibt unveraendert.
 
 Der iterative Portworkflow verwendet jetzt sicheres inkrementelles Staging:
@@ -78,7 +83,7 @@ Recipe 2. Die Content-Root entsteht aus den wirklich gelesenen Raw-Chunks und
 wird sowohl beim Schreiben gegen die Recipe als auch beim Oeffnen gegen
 Tracktabelle und Chunkindex geprueft; abweichendes Staging wird nicht
 veroeffentlicht. Der damals eingefuehrte AICA-Vertrag ist im aktuellen
-Runtime-ABI 19 und Portprojektvertrag 10 enthalten. Das kumulative v0.48-
+Runtime-ABI 20 und Portprojektvertrag 10 enthalten. Das kumulative v0.48-
 Debug-Gate ist mit 180 von 180 Tests bestanden; der anschliessende private
 PAL-Nachweis ist erfolgt: Der vollstaendige neue Port entstand mit 12 Workern
 in 126,8 Sekunden, ein inkrementeller Runtime-Neubau in 77,8 Sekunden. Die

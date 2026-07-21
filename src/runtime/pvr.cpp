@@ -23,6 +23,7 @@ PvrRegisterFile::PvrRegisterFile(EventScheduler& scheduler,
     if (timing_.guest_clock_hz == 0u || timing_.pixel_clock_hz == 0u)
         throw std::invalid_argument("PVR-SPG braucht positive Gast- und Pixeltakte.");
     initialize_register_defaults();
+    reschedule_scanout();
     reset_observer_ = scheduler_.add_reset_observer([this] { handle_scheduler_reset(); });
 }
 
@@ -110,8 +111,22 @@ void PvrRegisterFile::write(const std::uint32_t offset, const std::uint32_t valu
         throw std::runtime_error("Read-only-PVR-Register ist nicht beschreibbar.");
     }
     if (offset == pvr_register::SoftReset) {
-        if ((value & 0x7u) != 0u) {
-            reset();
+        const auto requested = value & 0x7u;
+        registers_[index(pvr_register::SoftReset)] = requested;
+        if (requested == 0u) return;
+        ++resets_;
+
+        // SOFTRESET drives three independent reset inputs. It is not a power-on reset of the
+        // register bank or the scan generator.
+        if ((requested & 0x2u) != 0u) {
+            for (const auto event : render_events_)
+                static_cast<void>(scheduler_.cancel(event));
+            render_events_.clear();
+        }
+        if ((requested & 0x1u) != 0u) {
+            registers_[index(pvr_register::TaNextOpb)] = 0u;
+            registers_[index(pvr_register::TaIspCurrent)] = 0u;
+            if (ta_reset_observer_) ta_reset_observer_();
         }
         return;
     }
@@ -202,18 +217,16 @@ void PvrRegisterFile::initialize_register_defaults() noexcept {
     registers_[index(pvr_register::PunchThroughAlphaReference)] = 0x000000FFu;
 }
 
-void PvrRegisterFile::reset() noexcept {
+void PvrRegisterFile::reset() {
     for (const auto event : render_events_)
         static_cast<void>(scheduler_.cancel(event));
     render_events_.clear();
     cancel_scan_events();
     initialize_register_defaults();
-    scan_frame_cycles_ = 0u;
-    scan_epoch_cycle_ = 0u;
-    in_vblank_ = false;
     field_ = 0u;
     ++resets_;
     if (ta_reset_observer_) ta_reset_observer_();
+    reschedule_scanout();
 }
 
 void PvrRegisterFile::complete_render(const SchedulerEventId event_id) {
@@ -223,14 +236,12 @@ void PvrRegisterFile::complete_render(const SchedulerEventId event_id) {
     if (render_observer_) render_observer_();
 }
 
-void PvrRegisterFile::handle_scheduler_reset() noexcept {
+void PvrRegisterFile::handle_scheduler_reset() {
     render_events_.clear();
     vblank_in_event_.reset();
     vblank_out_event_.reset();
     hblank_event_.reset();
-    scan_frame_cycles_ = 0u;
-    scan_epoch_cycle_ = 0u;
-    in_vblank_ = false;
+    reschedule_scanout();
 }
 
 std::uint64_t PvrRegisterFile::render_request_count() const noexcept {
