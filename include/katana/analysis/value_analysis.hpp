@@ -82,6 +82,11 @@ struct IndirectControlFlowResolution {
 propagate_local_constants(std::span<const katana::sh4::DisassemblyLine> lines,
                           const RegisterConstants& initial = {});
 
+[[nodiscard]] std::vector<ConstantTraceEntry>
+propagate_local_constants(std::span<const katana::sh4::DisassemblyLine> lines,
+                          const katana::io::ExecutableImage& image,
+                          const RegisterConstants& initial = {});
+
 [[nodiscard]] RegisterValueAnalysis
 analyze_register_values(std::span<const katana::sh4::DisassemblyLine> lines,
                         const RegisterConstants& initial = {});

@@ -306,6 +306,13 @@ initialize_dreamcast_runtime(CpuState& cpu,
     state.interrupt_router = std::make_shared<PlatformInterruptRouter>(
         *state.interrupt_controller, *state.tmu, *state.rtc, *state.dmac);
     state.interrupt_registers = map_sh4_interrupt_registers(cpu.memory, *state.interrupt_router);
+    const auto scif_router = state.interrupt_router;
+    state.scif = map_sh4_scif(
+        cpu.memory,
+        *state.scheduler,
+        [scif_router](const Sh4ScifInterrupt source, const bool pending) {
+            scif_router->set_scif_pending(static_cast<std::size_t>(source), pending);
+        });
     const auto channel2_dmac = std::weak_ptr<Sh4Dmac>(state.dmac);
     state.system_bus_control = map_dreamcast_system_bus_control(
         cpu.memory, [channel2_dmac](const std::uint32_t destination, const std::uint32_t length) {
@@ -435,14 +442,8 @@ initialize_dreamcast_runtime(CpuState& cpu,
             bool rendered = false;
             try {
                 auto frame = fifo->finish_frame();
-                if (frame.modifier_volumes_present) {
-                    renderer->record_error(PvrRenderError::UnsupportedFeature,
-                                           request,
-                                           "PVR-Modifier-Volumes wurden erfasst, aber nicht gerastert.");
-                } else {
-                    renderer->render(frame, *registers, *target);
-                    rendered = true;
-                }
+                renderer->render(frame, *registers, *target);
+                rendered = true;
             } catch (const std::out_of_range& error) {
                 renderer->record_error(PvrRenderError::MemoryRange, request, error.what());
             } catch (const std::invalid_argument& error) {
@@ -474,6 +475,8 @@ initialize_dreamcast_runtime(CpuState& cpu,
             if (const auto maple = maple_controller.lock()) maple->hardware_trigger();
         }
     });
+    state.pvr_registers->set_hblank_observer(
+        [raise_now] { raise_now(SystemAsicEvent::PvrHblank); });
     if (state.mutable_storage) {
         state.vmu = std::make_shared<MapleVmuDevice>(state.mutable_storage->vmu_image());
         state.maple->attach(0u, 1u, state.vmu);

@@ -40,15 +40,28 @@ inline constexpr std::uint32_t FramebufferReadSof1 = 0x050u;
 inline constexpr std::uint32_t FramebufferReadSof2 = 0x054u;
 inline constexpr std::uint32_t FramebufferReadSize = 0x05Cu;
 inline constexpr std::uint32_t FramebufferWriteSof1 = 0x060u;
+inline constexpr std::uint32_t FramebufferWriteSof2 = 0x064u;
 inline constexpr std::uint32_t FramebufferXClip = 0x068u;
 inline constexpr std::uint32_t FramebufferYClip = 0x06Cu;
+inline constexpr std::uint32_t ShadingScale = 0x074u;
+inline constexpr std::uint32_t CullingValue = 0x078u;
+inline constexpr std::uint32_t ParameterConfig = 0x07Cu;
+inline constexpr std::uint32_t HalfOffset = 0x080u;
+inline constexpr std::uint32_t PerpendicularValue = 0x084u;
 inline constexpr std::uint32_t BackgroundPlaneDepth = 0x088u;
 inline constexpr std::uint32_t BackgroundPlaneConfig = 0x08Cu;
+inline constexpr std::uint32_t IspFeedConfig = 0x098u;
+inline constexpr std::uint32_t SdramRefresh = 0x0A0u;
+inline constexpr std::uint32_t SdramArbitration = 0x0A4u;
+inline constexpr std::uint32_t SdramConfig = 0x0A8u;
 inline constexpr std::uint32_t FogTableColor = 0x0B0u;
 inline constexpr std::uint32_t FogVertexColor = 0x0B4u;
 inline constexpr std::uint32_t FogDensity = 0x0B8u;
 inline constexpr std::uint32_t ColorClampMaximum = 0x0BCu;
 inline constexpr std::uint32_t ColorClampMinimum = 0x0C0u;
+inline constexpr std::uint32_t SpgTriggerPosition = 0x0C4u;
+inline constexpr std::uint32_t SpgHblankInterrupt = 0x0C8u;
+inline constexpr std::uint32_t SpgVblankInterrupt = 0x0CCu;
 inline constexpr std::uint32_t SpgControl = 0x0D0u;
 inline constexpr std::uint32_t SpgHblank = 0x0D4u;
 inline constexpr std::uint32_t SpgLoad = 0x0D8u;
@@ -57,15 +70,22 @@ inline constexpr std::uint32_t SpgWidth = 0x0E0u;
 inline constexpr std::uint32_t VideoControl = 0x0E8u;
 inline constexpr std::uint32_t VideoStartX = 0x0ECu;
 inline constexpr std::uint32_t VideoStartY = 0x0F0u;
+inline constexpr std::uint32_t ScalerControl = 0x0F4u;
 inline constexpr std::uint32_t TextureModulo = 0x0E4u;
 inline constexpr std::uint32_t PaletteConfig = 0x108u;
 inline constexpr std::uint32_t SpgStatus = 0x10Cu;
+inline constexpr std::uint32_t FramebufferBurstControl = 0x110u;
+inline constexpr std::uint32_t FramebufferCurrentReadStart = 0x114u;
+inline constexpr std::uint32_t YCoefficient = 0x118u;
+inline constexpr std::uint32_t PunchThroughAlphaReference = 0x11Cu;
 inline constexpr std::uint32_t TaOpbStart = 0x124u;
 inline constexpr std::uint32_t TaVertexBufferStart = 0x128u;
 inline constexpr std::uint32_t TaOpbEnd = 0x12Cu;
 inline constexpr std::uint32_t TaVertexBufferEnd = 0x130u;
 inline constexpr std::uint32_t TaOpbPosition = 0x134u;
 inline constexpr std::uint32_t TaVertexBufferPosition = 0x138u;
+inline constexpr std::uint32_t TaGlobalTileClip = 0x13Cu;
+inline constexpr std::uint32_t TaAllocationControl = 0x140u;
 inline constexpr std::uint32_t TaInit = 0x144u;
 inline constexpr std::uint32_t YuvAddress = 0x148u;
 inline constexpr std::uint32_t YuvConfig = 0x14Cu;
@@ -113,10 +133,12 @@ class PvrRegisterFile final {
     [[nodiscard]] std::uint64_t reset_count() const noexcept;
     [[nodiscard]] std::uint64_t vblank_in_count() const noexcept;
     [[nodiscard]] std::uint64_t vblank_out_count() const noexcept;
+    [[nodiscard]] std::uint64_t hblank_count() const noexcept;
     [[nodiscard]] bool in_vblank() const noexcept;
     [[nodiscard]] std::uint32_t field() const noexcept;
     void set_render_observer(std::function<void()> observer);
     void set_vblank_observer(std::function<void(bool)> observer);
+    void set_hblank_observer(std::function<void()> observer);
     void set_ta_reset_observer(std::function<void()> observer);
     void set_ta_continue_observer(std::function<void()> observer);
     void record_ta_packet(std::uint32_t bytes);
@@ -124,9 +146,12 @@ class PvrRegisterFile final {
   private:
     [[nodiscard]] static std::size_t index(std::uint32_t offset);
     void complete_render(SchedulerEventId event_id);
+    void initialize_register_defaults() noexcept;
     void reschedule_scanout();
     void schedule_scan_event(std::uint32_t line, bool entering);
     void handle_scan_event(SchedulerEventId event_id, bool entering);
+    void schedule_hblank_event(std::uint32_t line);
+    void handle_hblank_event(SchedulerEventId event_id, std::uint32_t line);
     void cancel_scan_events() noexcept;
     void handle_scheduler_reset() noexcept;
     EventScheduler& scheduler_;
@@ -140,12 +165,15 @@ class PvrRegisterFile final {
     std::set<SchedulerEventId> render_events_;
     std::function<void()> render_observer_;
     std::function<void(bool)> vblank_observer_;
+    std::function<void()> hblank_observer_;
     std::function<void()> ta_reset_observer_;
     std::function<void()> ta_continue_observer_;
     std::optional<SchedulerEventId> vblank_in_event_;
     std::optional<SchedulerEventId> vblank_out_event_;
+    std::optional<SchedulerEventId> hblank_event_;
     std::uint64_t vblank_in_count_ = 0u;
     std::uint64_t vblank_out_count_ = 0u;
+    std::uint64_t hblank_count_ = 0u;
     std::uint64_t scan_frame_cycles_ = 0u;
     std::uint64_t scan_epoch_cycle_ = 0u;
     bool in_vblank_ = false;
@@ -159,12 +187,16 @@ enum class PvrFramebufferFormat : std::uint8_t { Rgb565, Argb1555, Rgb888, Rgb08
 struct PvrScanoutDescriptor {
     std::uint32_t width = 0u;
     std::uint32_t height = 0u;
+    std::uint32_t source_width = 0u;
+    std::uint32_t source_height = 0u;
     std::uint32_t stride_bytes = 0u;
     std::size_t base_offset = 0u;
     std::size_t second_base_offset = 0u;
     PvrFramebufferFormat format = PvrFramebufferFormat::Rgb565;
     bool line_double = false;
     bool interlaced = false;
+    bool horizontal_scale = false;
+    std::uint16_t vertical_scale_factor = 0x0400u;
 };
 
 [[nodiscard]] std::optional<PvrScanoutDescriptor>
@@ -183,7 +215,9 @@ class PvrFramebuffer final {
                    std::uint32_t stride_bytes,
                    PvrFramebufferFormat format,
                    bool line_double = false,
-                   bool interlaced = false);
+                   bool interlaced = false,
+                   std::uint32_t source_width = 0u,
+                   std::uint32_t source_height = 0u);
     [[nodiscard]] PvrFrame capture(std::span<const std::uint8_t> vram,
                                    std::size_t base_offset = 0u,
                                    std::optional<std::size_t> second_base_offset = std::nullopt);
@@ -192,6 +226,8 @@ class PvrFramebuffer final {
   private:
     std::uint32_t width_ = 0u;
     std::uint32_t height_ = 0u;
+    std::uint32_t source_width_ = 0u;
+    std::uint32_t source_height_ = 0u;
     std::uint32_t stride_ = 0u;
     PvrFramebufferFormat format_ = PvrFramebufferFormat::Rgb565;
     bool line_double_ = false;
@@ -215,6 +251,10 @@ struct PvrVertex {
     float v = 0.0f;
     std::uint32_t argb = 0xFFFFFFFFu;
     std::uint32_t oargb = 0u;
+    float volume_u = 0.0f;
+    float volume_v = 0.0f;
+    std::uint32_t volume_argb = 0xFFFFFFFFu;
+    std::uint32_t volume_oargb = 0u;
 };
 
 struct PvrMaterial {
@@ -229,6 +269,7 @@ struct PvrMaterial {
     bool offset_color_enabled = false;
     bool color_clamp_enabled = false;
     bool texture_supersampling = false;
+    bool shadow_enabled = false;
     bool blend_destination_accumulation = false;
     bool blend_source_accumulation = false;
     bool clamp_u = false;
@@ -255,6 +296,7 @@ struct PvrMaterial {
     std::uint32_t texture_height = 0u;
     std::uint32_t texture_base = 0u;
     std::uint32_t texture_stride_width = 0u;
+    std::shared_ptr<PvrMaterial> volume_material;
 };
 
 struct PvrPrimitive {
@@ -263,9 +305,22 @@ struct PvrPrimitive {
     PvrMaterial material;
 };
 
+struct PvrModifierVolume {
+    PvrListType list = PvrListType::OpaqueModifier;
+    std::vector<std::array<PvrVertex, 3u>> triangles;
+    std::uint8_t depth_mode = 0u;
+    std::uint8_t culling = 0u;
+    std::uint8_t user_clip_mode = 0u;
+    std::uint16_t user_clip_start_x = 0u;
+    std::uint16_t user_clip_start_y = 0u;
+    std::uint16_t user_clip_end_x = 0u;
+    std::uint16_t user_clip_end_y = 0u;
+    bool volume_last = false;
+};
+
 struct PvrTaFrame {
     std::vector<PvrPrimitive> primitives;
-    bool modifier_volumes_present = false;
+    std::vector<PvrModifierVolume> modifier_volumes;
 };
 
 class TileAccelerator final {
@@ -314,8 +369,10 @@ class PvrTaFifo final {
     bool active_uv16_ = false;
     std::uint8_t active_color_type_ = 0u;
     bool active_sprite_ = false;
+    bool active_two_volume_ = false;
     std::uint32_t active_header_argb_ = 0xFFFFFFFFu;
     std::uint32_t active_header_oargb_ = 0u;
+    std::uint32_t active_volume_header_argb_ = 0xFFFFFFFFu;
     bool intensity_face_color_valid_ = false;
     PvrMaterial active_material_;
     std::uint16_t user_clip_start_x_ = 0u;
@@ -326,8 +383,9 @@ class PvrTaFifo final {
     std::optional<PvrVertex> pending_extended_vertex_;
     bool pending_intensity_header_ = false;
     bool pending_extended_end_of_strip_ = false;
-    bool modifier_volumes_present_ = false;
-    bool pending_modifier_vertex_packet_ = false;
+    std::vector<PvrModifierVolume> modifier_volumes_;
+    std::optional<std::size_t> active_modifier_volume_;
+    std::optional<std::array<std::uint8_t, 32u>> pending_modifier_vertex_packet_;
     PvrTaMetrics metrics_;
 };
 

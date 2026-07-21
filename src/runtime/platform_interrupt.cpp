@@ -26,7 +26,13 @@ constexpr std::array<PlatformInterruptSource, PlatformInterruptRouter::external_
         PlatformInterruptSource::ExternalIrl13,
         PlatformInterruptSource::ExternalIrl11,
         PlatformInterruptSource::ExternalIrl9,
-};
+    };
+
+constexpr std::array<PlatformInterruptSource, PlatformInterruptRouter::scif_interrupt_count>
+    scif_sources = {PlatformInterruptSource::ScifError,
+                    PlatformInterruptSource::ScifReceive,
+                    PlatformInterruptSource::ScifBreak,
+                    PlatformInterruptSource::ScifTransmit};
 
 constexpr std::array<std::uint8_t, PlatformInterruptRouter::external_line_count> external_levels = {
     13u, 11u, 9u};
@@ -61,6 +67,14 @@ void PlatformInterruptRouter::set_rtc_level(const std::uint8_t level) noexcept {
 void PlatformInterruptRouter::set_dma_level(const std::uint8_t level) noexcept {
     dma_level_ = clamp_level(level);
 }
+void PlatformInterruptRouter::set_scif_level(const std::uint8_t level) noexcept {
+    scif_level_ = clamp_level(level);
+}
+void PlatformInterruptRouter::set_scif_pending(const std::size_t source, const bool pending) {
+    if (source >= scif_pending_.size())
+        throw std::out_of_range("Ungueltige SH-4-SCIF-Interruptquelle.");
+    scif_pending_[source] = pending;
+}
 
 void PlatformInterruptRouter::set_external_pending(const std::size_t line, const bool pending) {
     if (line >= external_pending_.size()) {
@@ -81,6 +95,14 @@ std::uint8_t PlatformInterruptRouter::rtc_level() const noexcept {
 }
 std::uint8_t PlatformInterruptRouter::dma_level() const noexcept {
     return dma_level_;
+}
+std::uint8_t PlatformInterruptRouter::scif_level() const noexcept {
+    return scif_level_;
+}
+bool PlatformInterruptRouter::scif_pending(const std::size_t source) const {
+    if (source >= scif_pending_.size())
+        throw std::out_of_range("Ungueltige SH-4-SCIF-Interruptquelle.");
+    return scif_pending_[source];
 }
 
 bool PlatformInterruptRouter::external_pending(const std::size_t line) const {
@@ -127,6 +149,11 @@ std::size_t PlatformInterruptRouter::synchronize() {
     route(PlatformInterruptSource::DmaError, dma_error, dma_level_);
     asserted += dma_error ? 1u : 0u;
 
+    for (std::size_t source = 0u; source < scif_sources.size(); ++source) {
+        route(scif_sources[source], scif_pending_[source], scif_level_);
+        asserted += scif_pending_[source] ? 1u : 0u;
+    }
+
     for (std::size_t line = 0u; line < external_sources.size(); ++line) {
         route(external_sources[line], external_pending_[line], external_levels[line]);
         asserted += external_pending_[line] ? 1u : 0u;
@@ -150,12 +177,16 @@ void PlatformInterruptRouter::reset() noexcept {
         static_cast<void>(controller_.cancel(source_id(source)));
     }
     static_cast<void>(controller_.cancel(source_id(PlatformInterruptSource::DmaError)));
+    for (const auto source : scif_sources)
+        static_cast<void>(controller_.cancel(source_id(source)));
     for (const auto source : external_sources) {
         static_cast<void>(controller_.cancel(source_id(source)));
     }
     tmu_levels_ = {};
     rtc_level_ = 0u;
     dma_level_ = 0u;
+    scif_level_ = 0u;
+    scif_pending_ = {};
     external_pending_ = {};
 }
 
@@ -203,6 +234,7 @@ void Sh4InterruptRegisters::synchronize_priorities() noexcept {
     router_.set_tmu_level(2u, static_cast<std::uint8_t>((priority_a_ >> 4u) & 0xFu));
     router_.set_rtc_level(static_cast<std::uint8_t>(priority_a_ & 0xFu));
     router_.set_dma_level(static_cast<std::uint8_t>((priority_c_ >> 8u) & 0xFu));
+    router_.set_scif_level(static_cast<std::uint8_t>((priority_c_ >> 4u) & 0xFu));
 }
 
 void Sh4InterruptRegisters::reset() noexcept {

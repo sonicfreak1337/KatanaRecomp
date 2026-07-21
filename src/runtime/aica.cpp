@@ -30,6 +30,13 @@ void AicaRegisterFile::check(const std::uint32_t offset, const MemoryAccessWidth
 std::uint32_t AicaRegisterFile::read(const std::uint32_t offset,
                                      const MemoryAccessWidth width) const {
     check(offset, width);
+    if (offset == 0x2C00u && execution_) {
+        auto value = static_cast<std::uint32_t>(registers_[0x2C00u] & 0xFEu) |
+                     static_cast<std::uint32_t>(execution_->arm7_reset_asserted());
+        if (width != MemoryAccessWidth::Byte)
+            value |= static_cast<std::uint32_t>(registers_[offset + 1u]) << 8u;
+        return value;
+    }
     if (execution_ && width == MemoryAccessWidth::Word) {
         if (offset == 0x28B8u) return execution_->interrupts().pending();
     }
@@ -52,6 +59,14 @@ void AicaRegisterFile::write(const std::uint32_t offset,
     check(offset, width);
     for (std::size_t index = 0u; index < width_bytes(width); ++index) {
         registers_[offset + index] = static_cast<std::uint8_t>(value >> (index * 8u));
+    }
+    if (offset == 0x2C00u) {
+        registers_[offset] &= 1u;
+        if (width == MemoryAccessWidth::Word) {
+            registers_[offset + 2u] = 0u;
+            registers_[offset + 3u] = 0u;
+        }
+        if (execution_) execution_->set_arm7_reset_asserted((registers_[offset] & 1u) != 0u);
     }
     if (offset < aica_channel_count * aica_channel_register_stride &&
         (offset % aica_channel_register_stride) < 4u) {
@@ -92,6 +107,7 @@ void AicaRegisterFile::reset() noexcept {
     writes_ = 0u;
     rendered_buffers_ = 0u;
     rendered_frames_ = 0u;
+    if (execution_) execution_->set_arm7_reset_asserted(false);
 }
 
 std::vector<std::int16_t> AicaRegisterFile::render_audio(const std::size_t frame_count,
@@ -455,6 +471,14 @@ AicaArm7Mode AicaExecutionController::mode() const noexcept {
 }
 bool AicaExecutionController::arm7_executes_instructions() const noexcept {
     return false;
+}
+
+void AicaExecutionController::set_arm7_reset_asserted(const bool asserted) noexcept {
+    arm7_reset_asserted_ = asserted;
+}
+
+bool AicaExecutionController::arm7_reset_asserted() const noexcept {
+    return arm7_reset_asserted_;
 }
 
 AicaTimer& AicaExecutionController::timer(const std::size_t index) {

@@ -246,6 +246,7 @@ add_library(katana_runtime STATIC
     src/runtime/pvr.cpp
     src/runtime/platform_interrupt.cpp
     src/runtime/scheduler.cpp
+    src/runtime/scif.cpp
     src/runtime/timers.cpp
     src/runtime/trace.cpp
     src/runtime/memory.cpp
@@ -296,6 +297,7 @@ add_library(katana_core STATIC
     src/analysis/basic_blocks.cpp
     src/analysis/function_analysis.cpp
     src/analysis/function_value_analysis.cpp
+    src/analysis/hardware_audit.cpp
     src/analysis/executable_inventory.cpp
     src/analysis/recursive_analysis.cpp
     src/analysis/value_analysis.cpp
@@ -1018,6 +1020,11 @@ target_link_libraries(katana-platform-interrupt-tests PRIVATE katana_runtime)
 katana_enable_warnings(katana-platform-interrupt-tests)
 add_test(NAME katana-platform-interrupt-tests COMMAND katana-platform-interrupt-tests)
 
+add_executable(katana-scif-tests tests/runtime/scif_tests.cpp)
+target_link_libraries(katana-scif-tests PRIVATE katana_runtime)
+katana_enable_warnings(katana-scif-tests)
+add_test(NAME katana-scif-tests COMMAND katana-scif-tests)
+
 add_executable(katana-system-asic-tests tests/runtime/system_asic_tests.cpp)
 target_link_libraries(katana-system-asic-tests PRIVATE katana_runtime)
 katana_enable_warnings(katana-system-asic-tests)
@@ -1340,6 +1347,18 @@ katana_enable_warnings(katana-value-analysis-tests)
 add_test(
     NAME katana-value-analysis-tests
     COMMAND katana-value-analysis-tests
+)
+
+add_executable(katana-hardware-audit-tests
+    tests/analysis/hardware_audit_tests.cpp
+)
+
+target_link_libraries(katana-hardware-audit-tests PRIVATE katana_core)
+katana_enable_warnings(katana-hardware-audit-tests)
+
+add_test(
+    NAME katana-hardware-audit-tests
+    COMMAND katana-hardware-audit-tests
 )
 
 add_executable(katana-function-value-analysis-tests

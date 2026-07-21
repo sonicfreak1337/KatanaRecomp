@@ -402,11 +402,15 @@ const PackedDiscInfo& PackedDiscSource::info() const noexcept {
 }
 
 std::uint32_t PackedDiscSource::primary_data_lba() const {
-    const auto track =
-        std::find_if(info_.tracks.rbegin(), info_.tracks.rend(), [](const auto& value) {
+    auto track = std::find_if(info_.tracks.begin(), info_.tracks.end(), [](const auto& value) {
+        return value.type == GdiTrackType::Data && value.lba >= 45000u;
+    });
+    if (track == info_.tracks.end()) {
+        track = std::find_if(info_.tracks.begin(), info_.tracks.end(), [](const auto& value) {
             return value.type == GdiTrackType::Data;
         });
-    if (track == info_.tracks.rend())
+    }
+    if (track == info_.tracks.end())
         throw std::runtime_error("Katana-Disc-Pack besitzt keinen Datentrack.");
     return track->lba;
 }

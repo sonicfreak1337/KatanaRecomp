@@ -158,6 +158,8 @@ class AicaExecutionController final {
     void set_mode(AicaArm7Mode mode);
     [[nodiscard]] AicaArm7Mode mode() const noexcept;
     [[nodiscard]] bool arm7_executes_instructions() const noexcept;
+    void set_arm7_reset_asserted(bool asserted) noexcept;
+    [[nodiscard]] bool arm7_reset_asserted() const noexcept;
     [[nodiscard]] AicaTimer& timer(std::size_t index);
     [[nodiscard]] const AicaTimer& timer(std::size_t index) const;
     [[nodiscard]] AicaInterruptState& interrupts() noexcept;
@@ -170,6 +172,7 @@ class AicaExecutionController final {
     void handle_tick(SchedulerEventId event_id);
     void handle_scheduler_reset() noexcept;
     AicaArm7Mode mode_ = AicaArm7Mode::HighLevelAudio;
+    bool arm7_reset_asserted_ = false;
     std::array<AicaTimer, timer_count> timers_{};
     AicaInterruptState interrupts_;
     EventScheduler* scheduler_ = nullptr;

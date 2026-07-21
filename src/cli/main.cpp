@@ -4,6 +4,7 @@
 #include "katana/analysis/control_flow_report.hpp"
 #include "katana/analysis/function_analysis.hpp"
 #include "katana/analysis/graph_export.hpp"
+#include "katana/analysis/hardware_audit.hpp"
 #include "katana/analysis/recursive_analysis.hpp"
 #include "katana/app/application.hpp"
 #include "katana/cli/exit_code.hpp"
@@ -13,6 +14,7 @@
 #include "katana/io/elf32_sh_loader.hpp"
 #include "katana/io/input_output_error.hpp"
 #include "katana/io/input_provenance.hpp"
+#include "katana/io/json_report.hpp"
 #include "katana/io/project_manifest.hpp"
 #include "katana/io/raw_binary_loader.hpp"
 #include "katana/ir/lower.hpp"
@@ -33,13 +35,16 @@
 #include <exception>
 #include <filesystem>
 #include <fstream>
+#include <future>
 #include <iomanip>
 #include <iostream>
 #include <limits>
+#include <optional>
 #include <sstream>
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <vector>
 
 #ifdef _WIN32
@@ -487,6 +492,140 @@ int analyze_manifest(const std::filesystem::path& path,
         std::cout << katana::analysis::format_indirect_control_flow_report(
             analysis.indirect_control_flow, analysis.jump_tables, analysis.symbolic_addresses);
     }
+    return 0;
+}
+
+katana::analysis::DreamcastHardwareAudit analyze_disc_hardware(const std::filesystem::path& path) {
+    const auto disc = katana::platform::load_dreamcast_gdi_boot(path);
+    const auto image = katana::platform::make_dreamcast_disc_executable(disc);
+    const auto analysis = katana::analysis::analyze_control_flow(image);
+    return katana::analysis::audit_dreamcast_hardware(image, analysis);
+}
+
+bool hardware_audit_failed(const katana::analysis::DreamcastHardwareAudit& audit,
+                           const bool fail_on_gap,
+                           const bool strict) {
+    const auto definite_gap = audit.known_gap_addresses != 0u || audit.rejected_addresses != 0u ||
+                              audit.unmapped_addresses != 0u;
+    return (fail_on_gap && definite_gap) ||
+           (strict && (definite_gap || audit.partial_addresses != 0u));
+}
+
+int audit_disc_hardware(const std::filesystem::path& path,
+                        const bool json,
+                        const bool include_accesses,
+                        const bool fail_on_gap,
+                        const bool strict) {
+    const auto audit = analyze_disc_hardware(path);
+    if (json)
+        std::cout << katana::analysis::format_hardware_audit_json(audit, include_accesses) << '\n';
+    else
+        std::cout << katana::analysis::format_hardware_audit_text(audit);
+    return hardware_audit_failed(audit, fail_on_gap, strict) ? 2 : 0;
+}
+
+struct DiscAuditSetEntry {
+    std::filesystem::path path;
+    std::optional<katana::analysis::DreamcastHardwareAudit> audit;
+    std::string error;
+};
+
+int audit_disc_hardware_set(const std::filesystem::path& root,
+                            const bool json,
+                            const std::size_t requested_jobs,
+                            const bool fail_on_gap,
+                            const bool strict) {
+    if (!std::filesystem::is_directory(root))
+        throw std::invalid_argument("disc-audit-set erwartet ein Verzeichnis.");
+    std::vector<std::filesystem::path> paths;
+    for (const auto& entry : std::filesystem::recursive_directory_iterator(root)) {
+        if (!entry.is_regular_file()) continue;
+        auto extension = entry.path().extension().string();
+        std::transform(extension.begin(), extension.end(), extension.begin(), [](const char value) {
+            return static_cast<char>(std::tolower(static_cast<unsigned char>(value)));
+        });
+        if (extension == ".gdi") paths.push_back(entry.path());
+    }
+    std::sort(paths.begin(), paths.end());
+    if (paths.empty()) throw std::invalid_argument("disc-audit-set fand keine GDI-Quelle.");
+    const auto jobs = std::max<std::size_t>(1u, std::min(requested_jobs, paths.size()));
+    std::vector<DiscAuditSetEntry> results(paths.size());
+    for (std::size_t first = 0u; first < paths.size(); first += jobs) {
+        const auto count = std::min(jobs, paths.size() - first);
+        std::vector<std::future<DiscAuditSetEntry>> workers;
+        workers.reserve(count);
+        for (std::size_t offset = 0u; offset < count; ++offset) {
+            const auto path = paths[first + offset];
+            workers.push_back(std::async(std::launch::async, [path] {
+                DiscAuditSetEntry result;
+                result.path = path;
+                try {
+                    result.audit = analyze_disc_hardware(path);
+                } catch (const std::exception& error) {
+                    result.error = error.what();
+                }
+                return result;
+            }));
+        }
+        for (std::size_t offset = 0u; offset < count; ++offset)
+            results[first + offset] = workers[offset].get();
+    }
+
+    std::size_t failures = 0u;
+    std::size_t definite_gaps = 0u;
+    std::size_t strict_failures = 0u;
+    for (const auto& result : results) {
+        if (!result.audit) {
+            ++failures;
+            continue;
+        }
+        const auto& audit = *result.audit;
+        const auto gap = audit.known_gap_addresses != 0u || audit.rejected_addresses != 0u ||
+                         audit.unmapped_addresses != 0u;
+        definite_gaps += gap ? 1u : 0u;
+        strict_failures += gap || audit.partial_addresses != 0u ? 1u : 0u;
+    }
+    if (json) {
+        std::cout << "{\"schema\":\"katana.hardware-audit-set.v1\",\"status\":"
+                  << katana::io::quote_json(failures == 0u ? "success" : "partial")
+                  << ",\"jobs\":" << jobs << ",\"disc_count\":" << results.size()
+                  << ",\"load_failures\":" << failures << ",\"results\":[";
+        for (std::size_t index = 0u; index < results.size(); ++index) {
+            if (index != 0u) std::cout << ',';
+            const auto& result = results[index];
+            std::cout << "{\"source_name\":"
+                      << katana::io::quote_json(result.path.filename().string());
+            if (result.audit)
+                std::cout << ",\"audit\":"
+                          << katana::analysis::format_hardware_audit_json(*result.audit);
+            else
+                std::cout << ",\"error\":" << katana::io::quote_json(result.error);
+            std::cout << '}';
+        }
+        std::cout << "]}\n";
+    } else {
+        std::cout << "Disc audit set: discs=" << results.size() << " jobs=" << jobs
+                  << " load_failures=" << failures << '\n';
+        for (const auto& result : results) {
+            std::cout << result.path.filename().string() << ": ";
+            if (!result.audit) {
+                std::cout << "error=" << result.error << '\n';
+                continue;
+            }
+            const auto& audit = *result.audit;
+            std::cout << "instructions=" << audit.reachable_instructions
+                      << " functions=" << audit.reachable_functions
+                      << " unknown=" << audit.unknown_instructions
+                      << " hardware=" << audit.addresses.size()
+                      << " implemented=" << audit.implemented_addresses
+                      << " partial=" << audit.partial_addresses
+                      << " known_gap=" << audit.known_gap_addresses
+                      << " rejected=" << audit.rejected_addresses
+                      << " unmapped=" << audit.unmapped_addresses << '\n';
+        }
+    }
+    if (failures != 0u) return 2;
+    if ((fail_on_gap && definite_gaps != 0u) || (strict && strict_failures != 0u)) return 2;
     return 0;
 }
 
@@ -1151,6 +1290,10 @@ void print_usage(std::ostream& output) {
            << "  katana-recomp cfg-dot <Projektmanifest> [Override-Datei]\n"
            << "  katana-recomp callgraph-json <Projektmanifest> [Override-Datei]\n"
            << "  katana-recomp callgraph-dot <Projektmanifest> [Override-Datei]\n"
+           << "  katana-recomp disc-audit <Quelle.gdi> [--json] [--include-accesses] "
+              "[--fail-on-gap|--strict]\n"
+           << "  katana-recomp disc-audit-set <Verzeichnis> [--json] [--jobs N] "
+              "[--fail-on-gap|--strict]\n"
            << "  katana-recomp firmware-diagnose <bios|flash> <Datei> [--sha256 <Hash>] "
               "[--include-sensitive]\n"
            << "  katana-recomp disasm <Datei> [Basisadresse]\n"
@@ -1197,6 +1340,54 @@ int main(const int argc, char* argv[]) {
                              katana::sh4::build_isa_coverage_report())
                       << '\n';
             return 0;
+        }
+        if (argc >= 3 && argc <= 6 && std::string_view(argv[1]) == "disc-audit") {
+            bool json = false;
+            bool include_accesses = false;
+            bool fail_on_gap = false;
+            bool strict = false;
+            for (int index = 3; index < argc; ++index) {
+                const auto option = std::string_view(argv[index]);
+                if (option == "--json") json = true;
+                else if (option == "--include-accesses") include_accesses = true;
+                else if (option == "--fail-on-gap") fail_on_gap = true;
+                else if (option == "--strict") strict = true;
+                else throw std::invalid_argument("Unbekannte disc-audit-Option: " +
+                                                 std::string(option));
+            }
+            if (fail_on_gap && strict)
+                throw std::invalid_argument("disc-audit akzeptiert nur einen Fehlermodus.");
+            if (include_accesses && !json)
+                throw std::invalid_argument("--include-accesses erfordert --json.");
+            return audit_disc_hardware(
+                std::filesystem::path(argv[2]), json, include_accesses, fail_on_gap, strict);
+        }
+        if (argc >= 3 && std::string_view(argv[1]) == "disc-audit-set") {
+            bool json = false;
+            bool fail_on_gap = false;
+            bool strict = false;
+            std::size_t jobs = std::max(1u, std::thread::hardware_concurrency());
+            for (int index = 3; index < argc; ++index) {
+                const auto option = std::string_view(argv[index]);
+                if (option == "--json") json = true;
+                else if (option == "--fail-on-gap") fail_on_gap = true;
+                else if (option == "--strict") strict = true;
+                else if (option == "--jobs") {
+                    if (++index >= argc)
+                        throw std::invalid_argument("--jobs braucht eine positive Anzahl.");
+                    const auto parsed = std::stoull(argv[index]);
+                    if (parsed == 0u || parsed > 256u)
+                        throw std::invalid_argument("--jobs muss zwischen 1 und 256 liegen.");
+                    jobs = static_cast<std::size_t>(parsed);
+                } else {
+                    throw std::invalid_argument("Unbekannte disc-audit-set-Option: " +
+                                                std::string(option));
+                }
+            }
+            if (fail_on_gap && strict)
+                throw std::invalid_argument("disc-audit-set akzeptiert nur einen Fehlermodus.");
+            return audit_disc_hardware_set(
+                std::filesystem::path(argv[2]), json, jobs, fail_on_gap, strict);
         }
 
         if (argc == 6 && std::string_view(argv[1]) == "workflow" &&

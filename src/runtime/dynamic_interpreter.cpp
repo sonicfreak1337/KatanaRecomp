@@ -364,7 +364,7 @@ StepResult execute_one(CpuState& cpu,
     case Kind::AndByteImmediate: { const auto address = cpu.gbr + cpu.r[0]; guest_write_u8(cpu, address, static_cast<std::uint8_t>(guest_read_u8(cpu, address) & instruction.immediate)); return {}; }
     case Kind::XorByteImmediate: { const auto address = cpu.gbr + cpu.r[0]; guest_write_u8(cpu, address, static_cast<std::uint8_t>(guest_read_u8(cpu, address) ^ instruction.immediate)); return {}; }
     case Kind::OrByteImmediate: { const auto address = cpu.gbr + cpu.r[0]; guest_write_u8(cpu, address, static_cast<std::uint8_t>(guest_read_u8(cpu, address) | instruction.immediate)); return {}; }
-    case Kind::TestAndSetByte: { const auto value = guest_read_u8(cpu, cpu.r[n]); write_t(cpu, value == 0u); guest_write_u8(cpu, cpu.r[n], static_cast<std::uint8_t>(value | 0x80u)); return {}; }
+    case Kind::TestAndSetByte: { const auto value = guest_read_u8(cpu, cpu.r[n]); guest_write_u8(cpu, cpu.r[n], static_cast<std::uint8_t>(value | 0x80u)); write_t(cpu, value == 0u); return {}; }
     case Kind::MovByteStore: guest_write_u8(cpu, cpu.r[n], static_cast<std::uint8_t>(cpu.r[m])); return {};
     case Kind::MovWordStore: guest_write_u16(cpu, cpu.r[n], static_cast<std::uint16_t>(cpu.r[m])); return {};
     case Kind::MovLongStore: guest_write_u32(cpu, cpu.r[n], cpu.r[m]); return {};
@@ -403,7 +403,27 @@ StepResult execute_one(CpuState& cpu,
     case Kind::LoadSpecialRegister: special_write(cpu, instruction.special_register, cpu.r[m]); return {};
     case Kind::LoadSpecialRegisterPostIncrement: { const auto value = guest_read_u32(cpu, cpu.r[m]); cpu.r[m] += 4u; special_write(cpu, instruction.special_register, value); return {}; }
     case Kind::TrapAlways: raise_trapa(cpu, static_cast<std::uint8_t>(instruction.immediate), pc); return {true, BlockEndKind::Exception, 1u};
-    case Kind::ReturnFromException: { const auto target = cpu.spc; const auto slot = execute_one(cpu, services, next, pc); if (slot.end_kind == BlockEndKind::Exception) return slot; return_from_exception(cpu); cpu.pc = target; return {true, BlockEndKind::ExceptionReturn, 1u + slot.cycles}; }
+    case Kind::ReturnFromException: {
+        const auto target = cpu.spc;
+        return_from_exception(cpu);
+        StepResult slot;
+        try {
+            slot = execute_one(cpu, services, next, pc);
+        } catch (const MemoryAccessError& error) {
+            enter_memory_exception(cpu, error, next, pc);
+            slot = {true, BlockEndKind::Exception, 1u, 1u};
+        }
+        if (slot.end_kind == BlockEndKind::Exception)
+            return {true,
+                    BlockEndKind::Exception,
+                    1u + slot.cycles,
+                    1u + slot.instructions};
+        cpu.pc = target;
+        return {true,
+                BlockEndKind::ExceptionReturn,
+                1u + slot.cycles,
+                1u + slot.instructions};
+    }
     case Kind::Sleep: cpu.sleeping = true; return {true, BlockEndKind::Sleep, 1u};
     case Kind::LoadTlb: load_tlb(cpu); return {};
     case Kind::Prefetch: static_cast<void>(services.prefetch(cpu, cpu.r[n])); return {};

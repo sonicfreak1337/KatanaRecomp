@@ -65,6 +65,7 @@ enum class SystemAsicEvent : std::uint16_t {
     PvrRenderDone = 0x0002u,
     PvrVblank = 0x0003u,
     PvrVblankOut = 0x0004u,
+    PvrHblank = 0x0005u,
     PvrYuvDone = 0x0006u,
     PvrOpaqueList = 0x0007u,
     PvrOpaqueModifierList = 0x0008u,

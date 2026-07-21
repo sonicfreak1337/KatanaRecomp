@@ -17,6 +17,7 @@
 #include "katana/runtime/platform_interrupt.hpp"
 #include "katana/runtime/pvr.hpp"
 #include "katana/runtime/runtime.hpp"
+#include "katana/runtime/scif.hpp"
 #include "katana/runtime/store_queue.hpp"
 #include "katana/runtime/system_asic.hpp"
 
@@ -97,6 +98,7 @@ struct DreamcastRuntimeState {
     std::shared_ptr<InterruptController> interrupt_controller;
     std::shared_ptr<PlatformInterruptRouter> interrupt_router;
     std::shared_ptr<Sh4InterruptRegisters> interrupt_registers;
+    std::shared_ptr<Sh4Scif> scif;
     std::shared_ptr<DreamcastSystemBusControl> system_bus_control;
     std::shared_ptr<DreamcastSystemAsic> system_asic;
     std::shared_ptr<PvrRegisterFile> pvr_registers;

@@ -83,6 +83,16 @@ void write_fixture(const std::filesystem::path& directory) {
     std::ofstream descriptor(directory / "disc.gdi", std::ios::trunc);
     descriptor << "2\n1 0 0 2352 audio.bin 0\n2 10 4 2048 data.bin 0\n";
 }
+
+void write_multidata_fixture(const std::filesystem::path& directory) {
+    std::filesystem::create_directory(directory);
+    write_binary(directory / "boot.bin", make_data_track());
+    write_binary(directory / "content.bin", std::vector<std::uint8_t>(2u * sector_size));
+    std::ofstream descriptor(directory / "disc.gdi", std::ios::trunc);
+    descriptor << "3\n1 0 4 2048 boot.bin 0\n"
+                  "2 45000 4 2048 boot.bin 0\n"
+                  "3 45024 4 2048 content.bin 0\n";
+}
 } // namespace
 
 int main(const int argc, const char* const* argv) {
@@ -99,6 +109,11 @@ int main(const int argc, const char* const* argv) {
             "GDI-Identitaet ist nicht inhaltsstabil oder haengt vom Hostpfad ab.");
     require(first->primary_data_lba() == 10u && first->descriptor().tracks.size() == 2u,
             "GDI-Datentrack oder Trackzuordnung ist falsch.");
+    const auto multidata_directory = fixture.path / "multidata";
+    write_multidata_fixture(multidata_directory);
+    const auto multidata = GdiDiscSource::open(multidata_directory / "disc.gdi");
+    require(multidata->primary_data_lba() == 45000u,
+            "Ein spaeterer Datentrack wurde faelschlich als Dreamcast-Boottrack gewaehlt.");
     require(first->descriptor().sha256.size() == 64u &&
                 std::all_of(first->descriptor().tracks.begin(),
                             first->descriptor().tracks.end(),

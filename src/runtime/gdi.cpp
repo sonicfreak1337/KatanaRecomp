@@ -291,11 +291,18 @@ const GdiDescriptor& GdiDiscSource::descriptor() const noexcept {
 }
 
 std::uint32_t GdiDiscSource::primary_data_lba() const {
-    const auto track =
-        std::find_if(descriptor_.tracks.rbegin(),
-                     descriptor_.tracks.rend(),
-                     [](const GdiTrack& value) { return value.type == GdiTrackType::Data; });
-    if (track == descriptor_.tracks.rend()) {
+    // A Dreamcast high-density session starts at LBA 45000.  Some retail discs
+    // contain further data tracks after the boot track, so selecting the last
+    // data track mistakes game content for the IP.BIN/ISO boot track.
+    auto track = std::find_if(descriptor_.tracks.begin(), descriptor_.tracks.end(), [](const auto& value) {
+        return value.type == GdiTrackType::Data && value.lba >= 45000u;
+    });
+    if (track == descriptor_.tracks.end()) {
+        track = std::find_if(descriptor_.tracks.begin(), descriptor_.tracks.end(), [](const auto& value) {
+            return value.type == GdiTrackType::Data;
+        });
+    }
+    if (track == descriptor_.tracks.end()) {
         throw std::runtime_error("GDI-Quelle besitzt keinen Datentrack.");
     }
     return track->lba;

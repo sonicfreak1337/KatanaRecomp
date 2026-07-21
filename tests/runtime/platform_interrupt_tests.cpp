@@ -48,7 +48,8 @@ int main() {
                 memory.read_u16(sh4_intc_p4_base + 0x0Cu) == 0x0B00u &&
                 memory.read_u16(sh4_intc_p4_base + 0x10u) == 0u && router.tmu_level(0u) == 10u &&
                 router.tmu_level(1u) == 7u && router.tmu_level(2u) == 6u &&
-                router.rtc_level() == 5u && router.dma_level() == 11u,
+                router.rtc_level() == 5u && router.dma_level() == 11u &&
+                router.scif_level() == 0u,
             "INTC ICR/IPRA/IPRB/IPRC/IPRD oder Area-7-Alias sind nicht registergenau.");
     require_failure([&] { memory.write_u16(sh4_intc_p4_base + 0x10u, 1u); },
                     "Read-only INTC-IPRD akzeptiert Schreibzugriffe.");
@@ -63,6 +64,8 @@ int main() {
     router.set_tmu_level(0u, 6u);
     router.set_rtc_level(5u);
     router.set_dma_level(8u);
+    router.set_scif_level(7u);
+    router.set_scif_pending(3u, true);
     router.set_external_pending(0u, true);
 
     tmu.write_constant(0u, 0u);
@@ -81,14 +84,21 @@ int main() {
     require(generated.processed_events == 6u,
             "Plattformquellen erzeugen ihre Scheduler-Ereignisse nicht deterministisch.");
 
-    require(router.synchronize() == 4u && controller.pending_count() == 4u &&
+    require(router.synchronize() == 5u && controller.pending_count() == 5u &&
                 controller.pending(static_cast<InterruptSource>(PlatformInterruptSource::Tmu0)) &&
                 controller.pending(
                     static_cast<InterruptSource>(PlatformInterruptSource::RtcPeriodic)) &&
                 controller.pending(static_cast<InterruptSource>(PlatformInterruptSource::Dma0)) &&
                 controller.pending(
+                    static_cast<InterruptSource>(PlatformInterruptSource::ScifTransmit)) &&
+                controller.pending(
                     static_cast<InterruptSource>(PlatformInterruptSource::ExternalIrl13)),
             "Plattformrouter spiegelt nicht alle gleichzeitig gesetzten Quellen.");
+    router.set_scif_pending(3u, false);
+    static_cast<void>(router.synchronize());
+    require(!controller.pending(
+                static_cast<InterruptSource>(PlatformInterruptSource::ScifTransmit)),
+            "Quittierte SCIF-TXI-Quelle bleibt im zentralen Controller haengen.");
 
     CpuState cpu;
     cpu.vbr = 0x8C000000u;
@@ -151,6 +161,7 @@ int main() {
     router.reset();
     require(controller.pending_count() == 0u && router.tmu_level(0u) == 0u &&
                 router.rtc_level() == 0u && router.dma_level() == 0u &&
+                router.scif_level() == 0u && !router.scif_pending(3u) &&
                 !router.external_pending(2u),
             "Plattformrouter-Reset hinterlaesst Quellen oder Prioritaeten.");
 

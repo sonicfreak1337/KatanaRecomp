@@ -29,11 +29,16 @@ enum class PlatformInterruptSource : std::uint32_t {
     Dma2 = 0x00000680u,
     Dma3 = 0x000006A0u,
     DmaError = 0x000006C0u,
+    ScifError = 0x00000700u,
+    ScifReceive = 0x00000720u,
+    ScifBreak = 0x00000740u,
+    ScifTransmit = 0x00000760u,
 };
 
 class PlatformInterruptRouter final {
   public:
     static constexpr std::size_t external_line_count = 3u;
+    static constexpr std::size_t scif_interrupt_count = 4u;
 
     PlatformInterruptRouter(InterruptController& controller,
                             Sh4Tmu& tmu,
@@ -43,11 +48,15 @@ class PlatformInterruptRouter final {
     void set_tmu_level(std::size_t channel, std::uint8_t level);
     void set_rtc_level(std::uint8_t level) noexcept;
     void set_dma_level(std::uint8_t level) noexcept;
+    void set_scif_level(std::uint8_t level) noexcept;
+    void set_scif_pending(std::size_t source, bool pending);
     void set_external_pending(std::size_t line, bool pending);
 
     [[nodiscard]] std::uint8_t tmu_level(std::size_t channel) const;
     [[nodiscard]] std::uint8_t rtc_level() const noexcept;
     [[nodiscard]] std::uint8_t dma_level() const noexcept;
+    [[nodiscard]] std::uint8_t scif_level() const noexcept;
+    [[nodiscard]] bool scif_pending(std::size_t source) const;
     [[nodiscard]] bool external_pending(std::size_t line) const;
 
     [[nodiscard]] std::size_t synchronize();
@@ -66,6 +75,8 @@ class PlatformInterruptRouter final {
     std::array<std::uint8_t, Sh4Tmu::channel_count> tmu_levels_{};
     std::uint8_t rtc_level_ = 0u;
     std::uint8_t dma_level_ = 0u;
+    std::uint8_t scif_level_ = 0u;
+    std::array<bool, scif_interrupt_count> scif_pending_{};
     std::array<bool, external_line_count> external_pending_{};
 };
 

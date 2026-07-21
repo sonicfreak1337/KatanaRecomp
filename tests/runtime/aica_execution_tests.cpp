@@ -65,6 +65,14 @@ int main() {
     auto sound_ram = map_dreamcast_aica_ram(memory);
     auto product_execution = std::make_shared<AicaExecutionController>();
     auto product_registers = map_aica_registers(memory, product_execution, sound_ram);
+    memory.write_u32(0x00702C00u, 0x0000ABCDu);
+    require(product_execution->arm7_reset_asserted() &&
+                memory.read_u32(0x00702C00u) == 0x0000AB01u,
+            "AICA-ARM-Resetbit und VREG sind nicht mit dem ExecutionController verbunden.");
+    memory.write_u8(0x00702C00u, 0u);
+    require(!product_execution->arm7_reset_asserted() && memory.read_u8(0x00702C00u) == 0u &&
+                !product_execution->arm7_executes_instructions(),
+            "AICA-ARM-Freigabe wird nicht verfolgt oder behauptet faelschlich ARM7-LLE.");
     sound_ram->write_u16(0u, 1000u);
     sound_ram->write_u16(2u, std::bit_cast<std::uint16_t>(std::int16_t{-1000}));
     memory.write_u32(0x00702800u, 0x0Fu);

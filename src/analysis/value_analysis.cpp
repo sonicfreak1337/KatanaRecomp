@@ -596,6 +596,13 @@ propagate_local_constants(const std::span<const katana::sh4::DisassemblyLine> li
     return propagate_constants(lines, initial, nullptr);
 }
 
+std::vector<ConstantTraceEntry>
+propagate_local_constants(const std::span<const katana::sh4::DisassemblyLine> lines,
+                          const katana::io::ExecutableImage& image,
+                          const RegisterConstants& initial) {
+    return propagate_constants(lines, initial, &image);
+}
+
 RegisterValueAnalysis
 analyze_register_values(const std::span<const katana::sh4::DisassemblyLine> lines,
                         const RegisterConstants& initial) {
