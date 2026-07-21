@@ -1,5 +1,9 @@
 #include "katana/runtime/pvr.hpp"
 
+#include <array>
+#include <bit>
+#include <cstdint>
+#include <cstring>
 #include <cstdlib>
 #include <iostream>
 #include <stdexcept>
@@ -22,6 +26,29 @@ template <typename E, typename F> bool throws(F&& f) {
 }
 katana::runtime::PvrVertex vertex(const float x) {
     return {x, x + 1.0f, 0.5f, 0.0f, 0.0f, 0xFFFFFFFFu};
+}
+using Packet = std::array<std::uint8_t, 32u>;
+void put_u32(Packet& packet, const std::size_t offset, const std::uint32_t value) {
+    std::memcpy(packet.data() + offset, &value, sizeof(value));
+}
+void put_float(Packet& packet, const std::size_t offset, const float value) {
+    put_u32(packet, offset, std::bit_cast<std::uint32_t>(value));
+}
+Packet header(const std::uint32_t object_control) {
+    Packet packet{};
+    put_u32(packet, 0u, 0x80000000u | object_control);
+    return packet;
+}
+Packet ta_vertex(const std::uint32_t command, const float x) {
+    Packet packet{};
+    put_u32(packet, 0u, command);
+    put_float(packet, 4u, x);
+    put_float(packet, 8u, x + 1.0f);
+    put_float(packet, 12u, 0.5f);
+    return packet;
+}
+void end_fifo_list(katana::runtime::PvrTaFifo& fifo) {
+    fifo.submit(Packet{});
 }
 } // namespace
 
@@ -65,6 +92,82 @@ int main() {
     empty_ordering.end_list();
     require(throws<std::logic_error>([&] { empty_ordering.begin_list(PvrListType::Opaque); }),
             "TA vergisst die Reihenfolge einer leeren Liste.");
+
+    PvrTaFifo packed_fifo;
+    packed_fifo.submit(header(0u));
+    for (std::uint32_t index = 0u; index < 3u; ++index) {
+        auto packet = ta_vertex(index == 2u ? 0xF0000000u : 0xE0000000u,
+                                static_cast<float>(index));
+        put_u32(packet, 16u, 0xDEADBEEFu);
+        put_u32(packet, 24u, 0xFF102030u + index);
+        packed_fifo.submit(packet);
+    }
+    end_fifo_list(packed_fifo);
+    const auto packed_frame = packed_fifo.finish_frame();
+    require(packed_frame.primitives[0].vertices[0].argb == 0xFF102030u,
+            "HOLLY2-Farbe eines untexturierten Packed-Vertices wird nicht aus 0x18 gelesen.");
+
+    PvrTaFifo float_fifo;
+    float_fifo.submit(header((1u << 4u) | 0x0Cu));
+    for (std::uint32_t index = 0u; index < 3u; ++index) {
+        auto first = ta_vertex(index == 2u ? 0xF0000000u : 0xE0000000u,
+                               static_cast<float>(index));
+        put_float(first, 16u, 0.25f);
+        put_float(first, 20u, 0.75f);
+        float_fifo.submit(first);
+        Packet colors{};
+        put_float(colors, 0u, 1.0f);
+        put_float(colors, 4u, 0.5f);
+        put_float(colors, 8u, 0.25f);
+        put_float(colors, 12u, 0.0f);
+        put_float(colors, 16u, 0.5f);
+        put_float(colors, 20u, 0.0f);
+        put_float(colors, 24u, 0.25f);
+        put_float(colors, 28u, 1.0f);
+        float_fifo.submit(colors);
+    }
+    end_fifo_list(float_fifo);
+    const auto float_frame = float_fifo.finish_frame();
+    require(float_frame.primitives[0].vertices[0].argb == 0xFF804000u &&
+                float_frame.primitives[0].vertices[0].oargb == 0x800040FFu,
+            "64-Byte-Floatvertex verliert Base- oder Offsetfarbe.");
+
+    PvrTaFifo invalid_mode2;
+    require(throws<std::logic_error>([&] { invalid_mode2.submit(header((3u << 4u) | 0x08u)); }),
+            "Intensity-Mode 2 wird ohne vorherige Mode-1-Face-Color akzeptiert.");
+
+    PvrTaFifo intensity_fifo;
+    intensity_fifo.submit(header((2u << 4u) | 0x0Cu));
+    Packet face_colors{};
+    put_float(face_colors, 0u, 1.0f);
+    put_float(face_colors, 4u, 0.8f);
+    put_float(face_colors, 8u, 0.4f);
+    put_float(face_colors, 12u, 0.2f);
+    put_float(face_colors, 16u, 1.0f);
+    put_float(face_colors, 20u, 0.4f);
+    put_float(face_colors, 24u, 0.8f);
+    put_float(face_colors, 28u, 0.2f);
+    intensity_fifo.submit(face_colors);
+    const auto submit_intensity_strip = [&](const float x_base) {
+        for (std::uint32_t index = 0u; index < 3u; ++index) {
+            auto packet = ta_vertex(index == 2u ? 0xF0000000u : 0xE0000000u,
+                                    x_base + static_cast<float>(index));
+            put_float(packet, 16u, 0.0f);
+            put_float(packet, 20u, 0.0f);
+            put_float(packet, 24u, 0.5f);
+            put_float(packet, 28u, 0.25f);
+            intensity_fifo.submit(packet);
+        }
+    };
+    submit_intensity_strip(0.0f);
+    intensity_fifo.submit(header((3u << 4u) | 0x0Cu));
+    submit_intensity_strip(4.0f);
+    end_fifo_list(intensity_fifo);
+    const auto intensity_frame = intensity_fifo.finish_frame();
+    require(intensity_frame.primitives.size() == 2u &&
+                intensity_frame.primitives[1].vertices[0].argb == 0xFF66331Au &&
+                intensity_frame.primitives[1].vertices[0].oargb == 0xFF1A330Du,
+            "Intensity-Mode 2 uebernimmt Face-Colors oder Vertex-Intensitaeten nicht korrekt.");
 
     std::cout << "KR-2803 Tile-Accelerator-Grundpfad erfolgreich.\n";
 }

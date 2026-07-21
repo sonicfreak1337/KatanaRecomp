@@ -279,7 +279,7 @@ class PvrTaFifo final {
     bool active_sprite_ = false;
     std::uint32_t active_header_argb_ = 0xFFFFFFFFu;
     std::uint32_t active_header_oargb_ = 0u;
-    float active_intensity_ = 1.0f;
+    bool intensity_face_color_valid_ = false;
     PvrMaterial active_material_;
     std::uint16_t user_clip_start_x_ = 0u;
     std::uint16_t user_clip_start_y_ = 0u;
@@ -287,6 +287,7 @@ class PvrTaFifo final {
     std::uint16_t user_clip_end_y_ = 0u;
     std::optional<std::array<std::uint8_t, 32u>> pending_sprite_vertex_;
     std::optional<PvrVertex> pending_extended_vertex_;
+    bool pending_intensity_header_ = false;
     bool pending_extended_end_of_strip_ = false;
     bool modifier_volumes_present_ = false;
     bool pending_modifier_vertex_packet_ = false;

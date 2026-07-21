@@ -14,8 +14,9 @@
   Aliasziel, waehrend nativer Code unter seiner kanonischen Imageadresse ausgefuehrt wird. Der
   Metadaten-Vollstaendigkeitstest erwartet wieder alle 159 normalen SH4-Regeln statt des alten
   Standes vor den drei Cache-/TLB-Ergaenzungen.
-- Die zusammenhaengenden Holly-G1-, G2- und PVR-DMA-Steuerbloecke bei
-  `0x005F7400`, `0x005F7800` und `0x005F7C00` besitzen geschlossene
+- Die zusammenhaengenden Holly-G1- und G2-DMA-Steuerbloecke bei
+  `0x005F7400` und `0x005F7800` sowie der echte Channel-2-/PVR-DMA-Pfad ueber
+  den Systembusblock ab `0x005F6800` besitzen geschlossene
   Register-, Masken-, Schutzschluessel- und Aliasvertraege. AICA/G2- und
   PVR-DMA kopieren reale Gastbytes ueber einen neuen linearen
   `Memory::copy_bytes`-Fastpath, aktualisieren Zaehler und Status nach
@@ -70,6 +71,14 @@
 
 ### Korrigiert
 
+- Der TA-Decoder folgt bei HOLLY2-Vertices jetzt den tatsaechlichen
+  32-/64-Byte-Parameterformaten. Untexturierte Packed-Color-Vertices lesen die
+  Base Color aus Offset `0x18`; texturierte Floating-Color-Vertices uebernehmen
+  Base- und Offset-ARGB aus ihrem zweiten Parameter. Intensity Mode 1 dekodiert
+  die Float-Face-Colors aus kurzen oder erweiterten Polygonheadern, waehrend
+  Mode 2 diese Face-Colors spezifikationsgemaess wiederverwendet, aber weiterhin
+  die Intensitaet jedes Vertices liest. Mode 2 ohne vorherige Mode-1-Face-Color
+  sowie abgeschnittene 64-Byte-Parameter werden sichtbar abgewiesen.
 - Dreamcast-Discimages tragen jetzt einen expliziten SH-4-Direktsegmentvertrag.
   P0-, P1- und P2-Funktionszeiger werden bei der Codevalidierung auf denselben
   committed P1-Block normalisiert, auch wenn der Alias erst durch mehrere

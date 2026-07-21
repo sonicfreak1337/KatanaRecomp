@@ -932,6 +932,27 @@ float decode_uv16_component(const std::uint32_t packed, const bool u) {
     return std::bit_cast<float>(bits);
 }
 
+std::uint32_t decode_ta_float_color(const std::span<const std::uint8_t> packet,
+                                    const std::size_t offset) {
+    const auto channel = [&](const std::size_t component) {
+        const auto value = std::bit_cast<float>(ta_u32(packet, offset + component));
+        if (!std::isfinite(value))
+            throw std::invalid_argument("TA-Floatfarbe ist nicht endlich.");
+        return static_cast<std::uint32_t>(
+            std::lround(std::clamp(value, 0.0f, 1.0f) * 255.0f));
+    };
+    return (channel(0u) << 24u) | (channel(4u) << 16u) | (channel(8u) << 8u) |
+           channel(12u);
+}
+
+std::uint32_t scale_ta_face_color(const std::uint32_t color, const float intensity) {
+    const auto scale = [intensity](const std::uint32_t value) {
+        return static_cast<std::uint32_t>(std::lround(value * intensity));
+    };
+    return (color & 0xFF000000u) | (scale((color >> 16u) & 0xFFu) << 16u) |
+           (scale((color >> 8u) & 0xFFu) << 8u) | scale(color & 0xFFu);
+}
+
 float interpolate_sprite_z(const PvrVertex& a,
                            const PvrVertex& b,
                            const PvrVertex& c,
@@ -959,6 +980,13 @@ PvrTaFifo::PvrTaFifo(std::function<void(PvrListType)> list_observer)
 void PvrTaFifo::submit(const std::span<const std::uint8_t> packet) {
     if (packet.size() != 32u) throw std::invalid_argument("TA-FIFO erwartet 32-Byte-Parameter.");
     ++metrics_.packets;
+    if (pending_intensity_header_) {
+        active_header_argb_ = decode_ta_float_color(packet, 0u);
+        active_header_oargb_ = decode_ta_float_color(packet, 16u);
+        intensity_face_color_valid_ = true;
+        pending_intensity_header_ = false;
+        return;
+    }
     if (pending_modifier_vertex_packet_) {
         pending_modifier_vertex_packet_ = false;
         modifier_volumes_present_ = true;
@@ -966,16 +994,9 @@ void PvrTaFifo::submit(const std::span<const std::uint8_t> packet) {
         return;
     }
     if (pending_extended_vertex_) {
-        const auto channel = [&](const std::size_t offset) {
-            const auto value = std::bit_cast<float>(ta_u32(packet, offset));
-            if (!std::isfinite(value))
-                throw std::invalid_argument("TA-Floatfarbe ist nicht endlich.");
-            return static_cast<std::uint32_t>(
-                std::lround(std::clamp(value, 0.0f, 1.0f) * 255.0f));
-        };
         auto vertex = *pending_extended_vertex_;
-        vertex.argb = (channel(0u) << 24u) | (channel(4u) << 16u) |
-                      (channel(8u) << 8u) | channel(12u);
+        vertex.argb = decode_ta_float_color(packet, 0u);
+        vertex.oargb = decode_ta_float_color(packet, 16u);
         accelerator_.submit_vertex(vertex, pending_extended_end_of_strip_);
         pending_extended_vertex_.reset();
         pending_extended_end_of_strip_ = false;
@@ -1077,8 +1098,6 @@ void PvrTaFifo::submit(const std::span<const std::uint8_t> packet) {
         active_textured_ = (pcw & 0x8u) != 0u;
         active_color_type_ = static_cast<std::uint8_t>((pcw >> 4u) & 3u);
         active_sprite_ = false;
-        active_header_argb_ = ta_u32(packet, 16u);
-        active_header_oargb_ = ta_u32(packet, 20u);
         const auto mode1 = ta_u32(packet, 4u);
         const auto mode2 = ta_u32(packet, 8u);
         const auto mode3 = ta_u32(packet, 12u);
@@ -1121,6 +1140,18 @@ void PvrTaFifo::submit(const std::span<const std::uint8_t> packet) {
             active_material_.palette_bank = static_cast<std::uint8_t>((mode3 >> 25u) & 3u);
         active_material_.texture_vq = (mode3 & 0x40000000u) != 0u;
         active_material_.texture_mipmapped = (mode3 & 0x80000000u) != 0u;
+        if (active_color_type_ == 2u) {
+            if (active_material_.offset_color_enabled) {
+                pending_intensity_header_ = true;
+            } else {
+                active_header_argb_ = decode_ta_float_color(packet, 16u);
+                active_header_oargb_ = 0u;
+                intensity_face_color_valid_ = true;
+            }
+        } else if (active_color_type_ == 3u && !intensity_face_color_valid_) {
+            throw std::logic_error(
+                "TA-Intensity-Mode 2 wurde vor einer Face-Color aus Mode 1 verwendet.");
+        }
         accelerator_.set_material(active_material_);
         ++metrics_.polygon_headers;
         return;
@@ -1198,13 +1229,13 @@ void PvrTaFifo::submit(const std::span<const std::uint8_t> packet) {
         vertex.x = std::bit_cast<float>(ta_u32(packet, 4u));
         vertex.y = std::bit_cast<float>(ta_u32(packet, 8u));
         vertex.z = std::bit_cast<float>(ta_u32(packet, 12u));
-        std::size_t color_offset = 16u;
+        std::size_t color_offset = 24u;
         if (active_textured_) {
             if (active_uv16_) {
                 const auto packed_uv = ta_u32(packet, 16u);
                 vertex.u = decode_uv16_component(packed_uv, true);
                 vertex.v = decode_uv16_component(packed_uv, false);
-                color_offset = 20u;
+                color_offset = 24u;
             } else {
                 vertex.u = std::bit_cast<float>(ta_u32(packet, 16u));
                 vertex.v = std::bit_cast<float>(ta_u32(packet, 20u));
@@ -1217,39 +1248,17 @@ void PvrTaFifo::submit(const std::span<const std::uint8_t> packet) {
                 pending_extended_end_of_strip_ = (pcw & 0x10000000u) != 0u;
                 return;
             }
-            const auto channel = [&](const std::size_t offset) {
-                const auto value =
-                    std::clamp(std::bit_cast<float>(ta_u32(packet, offset)), 0.0f, 1.0f);
-                return static_cast<std::uint32_t>(std::lround(value * 255.0f));
-            };
-            vertex.argb = (channel(16u) << 24u) | (channel(20u) << 16u) |
-                          (channel(24u) << 8u) | channel(28u);
-        } else if (active_color_type_ == 2u) {
-            active_intensity_ = std::clamp(
+            vertex.argb = decode_ta_float_color(packet, 16u);
+        } else if (active_color_type_ == 2u || active_color_type_ == 3u) {
+            const auto base_intensity = std::clamp(
                 std::bit_cast<float>(ta_u32(packet, color_offset)), 0.0f, 1.0f);
-            const auto scale = [this](const std::uint32_t value) {
-                return static_cast<std::uint32_t>(std::lround(value * active_intensity_));
-            };
-            vertex.argb = (active_header_argb_ & 0xFF000000u) |
-                          (scale((active_header_argb_ >> 16u) & 0xFFu) << 16u) |
-                          (scale((active_header_argb_ >> 8u) & 0xFFu) << 8u) |
-                          scale(active_header_argb_ & 0xFFu);
-            vertex.oargb = (active_header_oargb_ & 0xFF000000u) |
-                           (scale((active_header_oargb_ >> 16u) & 0xFFu) << 16u) |
-                           (scale((active_header_oargb_ >> 8u) & 0xFFu) << 8u) |
-                           scale(active_header_oargb_ & 0xFFu);
-        } else if (active_color_type_ == 3u) {
-            const auto scale = [this](const std::uint32_t value) {
-                return static_cast<std::uint32_t>(std::lround(value * active_intensity_));
-            };
-            vertex.argb = (active_header_argb_ & 0xFF000000u) |
-                          (scale((active_header_argb_ >> 16u) & 0xFFu) << 16u) |
-                          (scale((active_header_argb_ >> 8u) & 0xFFu) << 8u) |
-                          scale(active_header_argb_ & 0xFFu);
-            vertex.oargb = (active_header_oargb_ & 0xFF000000u) |
-                           (scale((active_header_oargb_ >> 16u) & 0xFFu) << 16u) |
-                           (scale((active_header_oargb_ >> 8u) & 0xFFu) << 8u) |
-                           scale(active_header_oargb_ & 0xFFu);
+            auto offset_intensity = 1.0f;
+            if (active_textured_ && active_material_.offset_color_enabled) {
+                offset_intensity = std::clamp(
+                    std::bit_cast<float>(ta_u32(packet, color_offset + 4u)), 0.0f, 1.0f);
+            }
+            vertex.argb = scale_ta_face_color(active_header_argb_, base_intensity);
+            vertex.oargb = scale_ta_face_color(active_header_oargb_, offset_intensity);
         } else {
             vertex.argb = ta_u32(packet, color_offset);
             if (color_offset + 4u < packet.size())
@@ -1266,7 +1275,8 @@ void PvrTaFifo::submit(const std::span<const std::uint8_t> packet) {
 }
 
 PvrTaFrame PvrTaFifo::finish_frame() {
-    if (pending_sprite_vertex_ || pending_extended_vertex_ || pending_modifier_vertex_packet_)
+    if (pending_sprite_vertex_ || pending_extended_vertex_ || pending_intensity_header_ ||
+        pending_modifier_vertex_packet_)
         throw std::logic_error("TA-Frame endet innerhalb eines 64-Byte-Parameters.");
     auto frame = accelerator_.finish_frame();
     frame.modifier_volumes_present = modifier_volumes_present_;
@@ -1288,7 +1298,7 @@ void PvrTaFifo::reset() noexcept {
     active_sprite_ = false;
     active_header_argb_ = 0xFFFFFFFFu;
     active_header_oargb_ = 0u;
-    active_intensity_ = 1.0f;
+    intensity_face_color_valid_ = false;
     active_material_ = {};
     user_clip_start_x_ = 0u;
     user_clip_start_y_ = 0u;
@@ -1296,6 +1306,7 @@ void PvrTaFifo::reset() noexcept {
     user_clip_end_y_ = 0u;
     pending_sprite_vertex_.reset();
     pending_extended_vertex_.reset();
+    pending_intensity_header_ = false;
     pending_extended_end_of_strip_ = false;
     modifier_volumes_present_ = false;
     pending_modifier_vertex_packet_ = false;
