@@ -1262,7 +1262,9 @@ int export_port_project(const std::filesystem::path& gdi_path,
             std::filesystem::rename(absolute_output, stale);
         try {
             std::filesystem::rename(report.output_root, absolute_output);
+            katana::codegen::preserve_local_port_user_data(stale, absolute_output);
         } catch (...) {
+            std::filesystem::remove_all(absolute_output, cleanup_error);
             if (std::filesystem::exists(stale)) std::filesystem::rename(stale, absolute_output);
             throw;
         }

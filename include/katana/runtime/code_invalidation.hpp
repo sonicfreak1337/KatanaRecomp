@@ -85,6 +85,8 @@ class ExecutableCodeTracker {
                                                        bool bytes_changed = true);
     [[nodiscard]] bool valid(const std::string& identity) const;
     [[nodiscard]] bool dispatchable(const std::string& identity) const noexcept;
+    [[nodiscard]] bool tracks_address(std::uint32_t address,
+                                      std::size_t size = 1u) const noexcept;
     [[nodiscard]] std::uint64_t page_generation(std::uint32_t address) const noexcept;
     [[nodiscard]] std::uint64_t invalidation_count() const noexcept;
     [[nodiscard]] std::size_t block_count() const noexcept;

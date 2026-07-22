@@ -259,6 +259,9 @@ int main() {
         require(inserted == BlockRegistrationResult::Inserted,
                 "Provenienzblock wurde nicht registriert.");
     }
+    require(tracker.tracks_address(0x8C001000u, 4u) &&
+                !tracker.tracks_address(0x7E000000u, 4u),
+            "Codeinvalidierung kann registrierte von reinen Datenseiten nicht unterscheiden.");
     static_cast<void>(tracker.observe_write(0x8C001000u, 1u, CodeWriteSource::Cpu));
     static_cast<void>(tracker.observe_write(0x0C002000u, 1u, CodeWriteSource::Dma));
     static_cast<void>(tracker.observe_write(0xAC003000u, 1u, CodeWriteSource::Copy));

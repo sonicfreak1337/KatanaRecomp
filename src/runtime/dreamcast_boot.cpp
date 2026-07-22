@@ -579,6 +579,9 @@ initialize_dreamcast_runtime(CpuState& cpu,
             }
             const auto tracker = code_tracker.lock();
             if (!tracker) return;
+            const bool main_ram = physical >= 0x0C000000u && physical < 0x0D000000u &&
+                                  event.size <= 0x0D000000u - physical;
+            if (!main_ram && !tracker->tracks_address(physical, event.size)) return;
             const auto invalidation =
                 tracker->observe_write(physical, event.size, event.source, event.bytes_changed);
             if (!invalidation.byte_identical) {

@@ -189,6 +189,24 @@ bool ExecutableCodeTracker::dispatchable(const std::string& identity) const noex
     return found == identity_index_.end() || blocks_[found->second].valid;
 }
 
+bool ExecutableCodeTracker::tracks_address(const std::uint32_t address,
+                                           const std::size_t size) const noexcept {
+    if (size == 0u) return false;
+    const auto canonical = canonical_physical_address(address);
+    if (size > std::numeric_limits<std::uint32_t>::max() ||
+        static_cast<std::uint64_t>(canonical) + size >
+            static_cast<std::uint64_t>(std::numeric_limits<std::uint32_t>::max()) + 1u)
+        return false;
+    const auto first_page = canonical / page_size * page_size;
+    const auto last_address = static_cast<std::uint32_t>(canonical + size - 1u);
+    const auto last_page = last_address / page_size * page_size;
+    for (auto page = first_page;; page += page_size) {
+        if (page_blocks_.contains(page)) return true;
+        if (page == last_page) break;
+    }
+    return false;
+}
+
 std::uint64_t ExecutableCodeTracker::page_generation(const std::uint32_t address) const noexcept {
     const auto page = canonical_physical_address(address) / page_size * page_size;
     const auto found = generations_.find(page);

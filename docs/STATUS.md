@@ -21,7 +21,16 @@ erzwungenes Blank. Eine optional aktivierte, leichtgewichtige Diagnostik
 erfasst letzten MMIO-Zugriff, aktive Interruptquelle, alle relevanten
 DMA-Zustaende, GD-ROM, TA/PVR, AICA und den Demand-Materializer. Der emittierte
 Produktcode wurde mit einer synthetischen High-Density-GDI bis zur nativen EXE
-gebaut. Die zusammenhaengende ASan-/Artifact-Gesamtvalidierung ist mit 180 von
+gebaut. Der aktuelle ABI-30-/Portvertrag-17-PAL-Lauf fuehrt den rekompilierten
+Disc-Systembootstrap stabil aus: 150 Millionen Gastzyklen beziehungsweise
+41.808.508 beobachtete Bloecke laufen ohne Exception bis in dessen belegte
+10.000-Iterationen-Warteschleife. `FB_R_CTRL` ist programmiert; TA, GD-ROM und
+ein echter PVR-Frame wurden bis zu diesem Punkt noch nicht beobachtet. Ein
+5-Millionen-Zyklen-Lauf sank durch gecachtes Hostpolling und das Auslassen von
+Codeinvalidierung fuer reine OCRAM-Stackwrites von rund 5,8 auf 4,265 Sekunden,
+ohne den Gastzustand zu veraendern. Ein erster Gastframe wird weiterhin
+ausdruecklich nicht behauptet. Die zusammenhaengende
+ASan-/Artifact-Gesamtvalidierung ist mit 180 von
 180 Tests bestanden; der anschliessende fokussierte Produktpfadlauf ist mit 28
 von 28 Tests gruen. Der danach frisch exportierte und lokal aus der
 unveraenderten PAL-Disc installierte Port erreichte 17.092.443 beobachtete
@@ -126,7 +135,7 @@ MMIO-Zugriff liegt im aktiven OCRAM; der fruehere Abbruch nach 12 Gastzyklen
 ist damit beseitigt. TA/PVR und ein echter Gastframe bleiben fuer den laengeren
 Folgelauf weiterhin offen.
 
-Runtime-ABI 30, BIOS-ABI 5 und Portprojektvertrag 16 bilden den kumulativen
+Runtime-ABI 30, BIOS-ABI 5 und Portprojektvertrag 17 bilden den kumulativen
 v0.48-Stand ab.
 PlatformServices-ABI 7 bleibt unveraendert.
 
@@ -164,6 +173,11 @@ Nachweis steht aus; ein Gastframe wird bis dahin weiterhin nicht behauptet.
 Der iterative Portworkflow verwendet jetzt sicheres inkrementelles Staging:
 Vorhandene Buildobjekte werden fuer denselben Ausgabeport wiederverwendet,
 waehrend `user-data` und `*.katana-disc` niemals in Staging oder Paket gelangen.
+Nach erfolgreicher atomarer Publikation wird das lokale `user-data` direkt vom
+alten in den neuen Port verschoben; ein Fehler rollt auf den exakten alten Port
+samt Disc-Cache, Flash und VMU zurueck. Der private PAL-Rebuild hat diesen Pfad
+mit erhaltenem 1.227.063.528-Byte-Pack und ohne liegengebliebene Stage-/Stale-
+Verzeichnisse bestaetigt.
 Bytegleiche Quellen behalten ihre Zeitstempel; AOT-Codegen und MSVC-Kompilierung
 arbeiten parallel. Die Workerzahl folgt der Host-CPU und kann mit
 `KATANA_PORT_CODEGEN_JOBS` begrenzt werden. Eine zusaetzliche identische Regeneration erhoehte den
@@ -187,7 +201,7 @@ Recipe 2. Die Content-Root entsteht aus den wirklich gelesenen Raw-Chunks und
 wird sowohl beim Schreiben gegen die Recipe als auch beim Oeffnen gegen
 Tracktabelle und Chunkindex geprueft; abweichendes Staging wird nicht
 veroeffentlicht. Der damals eingefuehrte AICA-Vertrag ist im aktuellen
-  Runtime-ABI 30 und Portprojektvertrag 16 enthalten. Das kumulative v0.48-
+  Runtime-ABI 30 und Portprojektvertrag 17 enthalten. Das kumulative v0.48-
 Debug-Gate ist mit 180 von 180 Tests bestanden; der anschliessende private
 PAL-Nachweis ist erfolgt: Der vollstaendige neue Port entstand mit 12 Workern
 in 126,8 Sekunden, ein inkrementeller Runtime-Neubau in 77,8 Sekunden. Die

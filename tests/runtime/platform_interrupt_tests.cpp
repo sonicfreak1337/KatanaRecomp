@@ -158,6 +158,11 @@ int main() {
     cpu.write_sr(cpu.read_sr() | sr_bl_mask);
     require(!router.accept(cpu), "BL sperrt eine externe Plattformleitung nicht.");
     cpu.write_sr(cpu.read_sr() & ~sr_bl_mask);
+    cpu.set_interrupt_mask(15u);
+    require(!router.accept(cpu) &&
+                !controller.pending(
+                    static_cast<InterruptSource>(PlatformInterruptSource::ExternalLevel2)),
+            "IMASK=15 fuehrt unnoetig einen Plattformscan aus oder nimmt einen Interrupt an.");
     cpu.set_interrupt_mask(1u);
     const auto level2_accepted = router.accept(cpu);
     require(level2_accepted && cpu.intevt == 0x000003A0u,

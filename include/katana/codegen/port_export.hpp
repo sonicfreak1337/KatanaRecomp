@@ -63,4 +63,9 @@ export_dreamcast_port_project(const std::filesystem::path& gdi_path,
                               const std::filesystem::path& output_root,
                               const PortExportOptions& options);
 
+// Moves local-only mutable state from a replaced port into its freshly
+// published successor without ever copying it through codegen staging.
+void preserve_local_port_user_data(const std::filesystem::path& previous_root,
+                                   const std::filesystem::path& published_root);
+
 } // namespace katana::codegen

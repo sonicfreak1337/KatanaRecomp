@@ -118,7 +118,7 @@ void PlatformInterruptRouter::route(const PlatformInterruptSource source,
     const auto id = source_id(source);
     if (asserted) {
         controller_.request(id, level, static_cast<std::uint32_t>(source));
-    } else {
+    } else if (controller_.pending(id)) {
         static_cast<void>(controller_.cancel(id));
     }
 }
@@ -162,6 +162,10 @@ std::size_t PlatformInterruptRouter::synchronize() {
 }
 
 bool PlatformInterruptRouter::accept(CpuState& cpu) {
+    // No SH-4 interrupt level can pass BL or IMASK=15.  Deferring the device
+    // scan until the CPU lowers its mask preserves delivery while avoiding a
+    // full router walk at every privileged bootstrap safepoint.
+    if (cpu.interrupts_blocked() || cpu.interrupt_mask() == 15u) return false;
     static_cast<void>(synchronize());
     return accept_pending_interrupt(cpu, controller_);
 }

@@ -197,6 +197,21 @@ int run_test(const int argc, char* argv[]) {
     require(argc == 1, "Unerwartete Argumente fuer den Portexporttest.");
     using namespace katana::codegen;
     Fixture fixture;
+    const auto previous_port = fixture.root / "previous-port";
+    const auto published_port = fixture.root / "published-port";
+    std::filesystem::create_directories(previous_port / "user-data" / "content");
+    std::filesystem::create_directories(published_port / "user-data" / "content");
+    {
+        std::ofstream local_pack(previous_port / "user-data" / "content" /
+                                 "game.katana-disc",
+                                 std::ios::binary);
+        local_pack << "local-retail-cache";
+    }
+    preserve_local_port_user_data(previous_port, published_port);
+    require(!std::filesystem::exists(previous_port / "user-data") &&
+                read_text(published_port / "user-data" / "content" /
+                          "game.katana-disc") == "local-retail-cache",
+            "Atomarer Portaustausch verliert oder kopiert lokale Disc-/Speicherdaten.");
     write_fixture(fixture.root / "disc");
     const auto gdi = fixture.root / "disc" / "disc.gdi";
     const auto runtime_boot = katana::runtime::load_dreamcast_runtime_boot(gdi);
@@ -341,6 +356,10 @@ int run_test(const int argc, char* argv[]) {
         0x289Cu, 0u, katana::runtime::MemoryAccessWidth::Halfword);
     hle_runtime_state.cache_control->write(
         katana::runtime::Sh4CacheControl::operand_ram_enable);
+    hle_runtime_cpu.memory.write_u32(katana::runtime::sh4_on_chip_ram_address, 0x12345678u);
+    require(hle_runtime_state.code_tracker->page_generation(
+                katana::runtime::sh4_on_chip_ram_address) == 0u,
+            "Reine OCRAM-Stackdaten erzeugen unnoetige Codeinvalidierungsprovenienz.");
     hle_runtime_state.io_ports->write_control_a(0x10u);
     hle_runtime_state.io_ports->write_data_a(0u);
     const auto system_vector = katana::runtime::hle_bios_abi_vectors()[5];
@@ -562,6 +581,12 @@ int run_test(const int argc, char* argv[]) {
             read_text(output / "src" / "main.cpp").find("create_native_video_output") !=
                 std::string::npos &&
             read_text(output / "src" / "main.cpp").find("pump_host_events") != std::string::npos &&
+            read_text(output / "src" / "main.cpp").find("next_lifecycle_poll_") !=
+                std::string::npos &&
+            read_text(output / "src" / "main.cpp")
+                    .find("result.processed_events != 0u") != std::string::npos &&
+            read_text(output / "src" / "main.cpp")
+                    .find("!lifecycle_test.empty()") != std::string::npos &&
             read_text(output / "src" / "main.cpp").find("KR_HOST_SHUTDOWN") != std::string::npos &&
             read_text(output / "src" / "main.cpp").find("framebuffer.capture") !=
                 std::string::npos &&

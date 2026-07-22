@@ -1760,6 +1760,15 @@ JobResult ApplicationService::execute(const JobRequest& request,
         if (transactional) {
             if (result.state == JobState::Completed || result.state == JobState::Partial) {
                 std::filesystem::rename(work_root, final_root);
+                try {
+                    codegen::preserve_local_port_user_data(stale_root, final_root);
+                } catch (...) {
+                    std::error_code rollback_error;
+                    std::filesystem::remove_all(final_root, rollback_error);
+                    if (std::filesystem::exists(stale_root))
+                        std::filesystem::rename(stale_root, final_root);
+                    throw;
+                }
                 std::error_code cleanup_error;
                 std::filesystem::remove_all(stale_root, cleanup_error);
                 if (cleanup_error)

@@ -220,9 +220,11 @@ std::string handwritten_main(const std::string& entry_namespace,
             "    PortPlatformServices(katana::runtime::CpuState& cpu,\n"
             "                         const katana::runtime::DreamcastRuntimeState& state,\n"
             "                         std::function<katana::runtime::PlatformLifecycleState()> "
-            "lifecycle_poll, std::function<void()> guest_frame_poll)\n"
+            "lifecycle_poll, std::function<void()> guest_frame_poll,\n"
+            "                         bool eager_host_poll = false)\n"
             "        : cpu_(cpu), state_(state), lifecycle_poll_(std::move(lifecycle_poll)),\n"
-            "          guest_frame_poll_(std::move(guest_frame_poll)) {\n"
+            "          guest_frame_poll_(std::move(guest_frame_poll)),\n"
+            "          eager_host_poll_(eager_host_poll) {\n"
            "        if (const auto budget = "
            "katana::runtime::guest_cycle_budget_from_environment())\n"
            "            state_.scheduler->set_guest_cycle_budget(*budget);\n"
@@ -264,8 +266,12 @@ std::string handwritten_main(const std::string& entry_namespace,
            "            std::this_thread::sleep_for(std::chrono::milliseconds(1));\n"
            "        }\n"
             "        const auto result = state_.scheduler->advance_by(cycles, budget);\n"
-            "        static_cast<void>(state_.interrupt_router->synchronize());\n"
-            "        if (guest_frame_poll_) guest_frame_poll_();\n"
+            "        const auto host_now = std::chrono::steady_clock::now();\n"
+            "        if (guest_frame_poll_ &&\n"
+            "            (result.processed_events != 0u || host_now >= next_frame_poll_)) {\n"
+            "            guest_frame_poll_();\n"
+            "            next_frame_poll_ = host_now + std::chrono::milliseconds(1);\n"
+            "        }\n"
            "        return {result.guest_cycle, result.processed_events,\n"
            "                result.status == "
            "katana::runtime::SchedulerAdvanceStatus::EventBudgetExhausted,\n"
@@ -300,8 +306,16 @@ std::string handwritten_main(const std::string& entry_namespace,
            "        return state_.store_queues->prefetch(address);\n"
            "    }\n"
            "    katana::runtime::PlatformLifecycleState poll_host_lifecycle() override {\n"
-           "        return lifecycle_poll_ ? lifecycle_poll_()\n"
-           "                               : katana::runtime::PlatformLifecycleState::Running;\n"
+           "        if (!lifecycle_poll_)\n"
+           "            return katana::runtime::PlatformLifecycleState::Running;\n"
+           "        const auto host_now = std::chrono::steady_clock::now();\n"
+           "        if (eager_host_poll_ || cached_lifecycle_ !=\n"
+           "                katana::runtime::PlatformLifecycleState::Running ||\n"
+           "            host_now >= next_lifecycle_poll_) {\n"
+           "            cached_lifecycle_ = lifecycle_poll_();\n"
+           "            next_lifecycle_poll_ = host_now + std::chrono::milliseconds(1);\n"
+           "        }\n"
+           "        return cached_lifecycle_;\n"
            "    }\n"
            "    void observe_guest_checkpoint(std::uint32_t address) noexcept override {\n"
            "        ++executed_blocks_;\n"
@@ -333,9 +347,14 @@ std::string handwritten_main(const std::string& entry_namespace,
            "    const katana::runtime::DreamcastRuntimeState& state_;\n"
             "    std::function<katana::runtime::PlatformLifecycleState()> lifecycle_poll_;\n"
             "    std::function<void()> guest_frame_poll_;\n"
+            "    std::chrono::steady_clock::time_point next_lifecycle_poll_{};\n"
+            "    std::chrono::steady_clock::time_point next_frame_poll_{};\n"
+            "    katana::runtime::PlatformLifecycleState cached_lifecycle_ =\n"
+            "        katana::runtime::PlatformLifecycleState::Running;\n"
            "    std::uint64_t executed_blocks_ = 0u;\n"
            "    std::uint64_t fallback_count_ = 0u;\n"
            "    bool guest_checkpoint_ = false;\n"
+           "    bool eager_host_poll_ = false;\n"
            "};\n\n"
            "std::string redact_source(std::string message, const std::filesystem::path& source) {\n"
            "    std::error_code path_error;\n"
@@ -592,7 +611,7 @@ std::string handwritten_main(const std::string& entry_namespace,
            "            if (host.state() == katana::runtime::HostRuntimeState::Paused)\n"
            "                return katana::runtime::PlatformLifecycleState::Paused;\n"
             "            return katana::runtime::PlatformLifecycleState::Running;\n"
-            "        }, pump_guest_frame);\n"
+            "        }, pump_guest_frame, !lifecycle_test.empty());\n"
            "        auto report_progress = [&] {\n"
            "            const auto gdrom_status = state.gdrom->status();\n"
            "            const auto g1_dma = state.holly_dma.g1->state();\n"
@@ -1433,6 +1452,38 @@ std::filesystem::path resolve_existing_parents(std::filesystem::path path) {
 }
 
 } // namespace
+
+void preserve_local_port_user_data(const std::filesystem::path& previous_root,
+                                   const std::filesystem::path& published_root) {
+    const auto previous = previous_root / "user-data";
+    std::error_code status_error;
+    const auto previous_status = std::filesystem::symlink_status(previous, status_error);
+    if (status_error == std::errc::no_such_file_or_directory ||
+        previous_status.type() == std::filesystem::file_type::not_found)
+        return;
+    if (status_error) throw std::filesystem::filesystem_error(
+        "Lokale Portdaten konnten nicht geprueft werden.", previous, status_error);
+    if (!std::filesystem::is_directory(previous_status) ||
+        std::filesystem::is_symlink(previous_status))
+        throw std::runtime_error("Lokale Portdaten sind kein sicherer regulaerer Ordner.");
+
+    const auto published = published_root / "user-data";
+    if (std::filesystem::exists(published)) {
+        const auto published_status = std::filesystem::symlink_status(published);
+        if (!std::filesystem::is_directory(published_status) ||
+            std::filesystem::is_symlink(published_status))
+            throw std::runtime_error(
+                "Frisch publizierte lokale Daten sind kein sicherer Ordner.");
+        for (const auto& entry : std::filesystem::recursive_directory_iterator(published)) {
+            const auto status = entry.symlink_status();
+            if (!std::filesystem::is_directory(status) || std::filesystem::is_symlink(status))
+                throw std::runtime_error(
+                    "Frisch publizierter Port besitzt unerwartet lokale Datendateien.");
+        }
+    }
+    std::filesystem::remove_all(published);
+    std::filesystem::rename(previous, published);
+}
 
 PortExportResult export_dreamcast_port_project(const PreparedPortProgram& prepared,
                                                const std::filesystem::path& output_root,

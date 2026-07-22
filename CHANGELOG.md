@@ -32,6 +32,28 @@
   den kleinsten Zaehler und wird danach normal aggregiert. Ein spaet
   auftretender, hundertfach wiederholter Kontrollfluss erscheint dadurch im
   Hotspotbericht und erhoeht den Verlustzaehler nur einmal.
+- Generierte Ports pollen native Fensterereignisse im laufenden Zustand
+  hoechstens einmal pro Hostmillisekunde statt bei jedem Gastblock. Pause und
+  Shutdown bleiben sofortige Lifecycle-Grenzen; synthetische Lifecycle-Tests
+  verwenden weiterhin absichtlich den Eager-Pfad. Gastframes werden
+  zusaetzlich bei jedem verarbeiteten Schedulerereignis geprueft. Damit bleibt
+  die Ausgabe korrekt, waehrend enge native Bootstrapschleifen nicht durch
+  Millionen redundanter Win32-Polls ausgebremst werden. Der Safepoint
+  synchronisiert Interruptquellen nur noch einmal, und inaktive Leitungen
+  mutieren den leeren Pending-Controller nicht wiederholt. Bei `BL` oder
+  `IMASK=15` wird der Geraetescan bis zur naechsten moeglichen Annahme
+  aufgeschoben, ohne eine Quelle zu verlieren. Portprojektvertrag 17
+  versioniert den optimierten Host-Safepoint.
+- CLI- und GUI-Buildpublikation verschieben `user-data` nach erfolgreichem
+  atomarem Portaustausch direkt aus dem alten in den neuen Port. Lokaler
+  Disc-Cache, Flash und VMU passieren weder Codegen-Staging noch Portpaket,
+  bleiben bei inkrementellen Rebuilds aber erhalten; ein Rollback stellt bei
+  einem Publikationsfehler den vorherigen Port samt Daten wieder her.
+- Die Gastwrite-Grenze fuehrt teure Seitengeneration, Hotspotprovenienz und
+  Blockinvalidierung nur fuer Haupt-RAM oder eine tatsaechlich registrierte
+  ausfuehrbare Seite aus. OCRAM-Stackdaten und reine Geraeteschreibzugriffe
+  umgehen diese Codebuchhaltung; sobald ausserhalb des Haupt-RAMs ein
+  Runtimeblock registriert ist, greifen dieselben Invalidierungsregeln wieder.
 - Der allgemeine Portauditor kann auf Fehlerpfaden neben den kompakten
   Dispatch-Hotspots optional den vollstaendigen deduplizierten Kontrollfluss
   mit Ziel, Aufrufstelle, `PR`, Blockendklasse und Aufloesungsherkunft
