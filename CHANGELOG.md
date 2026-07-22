@@ -4,6 +4,15 @@
 
 ### Geaendert
 
+- Die v0.48-Roadmap ist auf `Native Disc Boot und erster echter Gastframe`
+  fokussiert. Die neuen Tasks `KR-4841` bis `KR-4854` bilden Clean-Room-
+  Provenienz, Bootdiagnostik, P2-Bootstrap, Gastzeit, BIOS/GD-ROM, Runtimecode,
+  TA/PVR, echten Scanoutframe, Hotpath, konsolidierte Validierung und das
+  nutzerfreigegebene Gate ab. Port-, Harness-, Controller- und GUI-Integration
+  wandert nach v0.49; nur der moderne, geraeteagnostische Controllervertrag und
+  die interaktive Sitzung bleiben in v0.48 und beginnen strikt erst nach dem
+  echten Gastframe. `KR-4804`/`KR-4805` sind durch `KR-4853`/`KR-4854` ersetzt.
+  Ein Tag bleibt bis zur ausdruecklichen Nutzerfreigabe ausgeschlossen.
 - HLE-GDI-Ports rekompilieren nun auch den 16 Sektoren grossen, von der Disc
   gelieferten Dreamcast-Systembootstrap als eigenes initiales Programmsegment.
   Die Runtime bindet ihn bytegenau an die physische Herkunft `0x0C008000`, startet

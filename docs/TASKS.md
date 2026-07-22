@@ -9,8 +9,8 @@ tausend Zeilen wiederholt.
 - Eine Implementierung bearbeitet normalerweise genau eine Task-ID.
 - Allgemeine Semantik und verteilbare Regressionen sind Pflicht.
 - Private Retaildaten und daraus erzeugte Artefakte bleiben ausserhalb des Repos.
-- Vor Abschluss von v0.47 darf eine private Sonic-`game.exe` gebaut, aber nicht
-  gestartet werden.
+- Private Retaillaeufe sind fuer v0.48 nur als budgetierte lokale Diagnose
+  erlaubt; Quell-GDIs werden dabei nie geloescht oder veraendert.
 - Deterministische Probes und interaktive Sitzungen sind getrennte Modi.
 - Interaktive Sitzungen gelten nie als Gateevidenz.
 - Gate-Vorbereitung stoppt immer fuer das Nutzerreview.
@@ -40,22 +40,27 @@ KR-4715
   -> KR-4704
   -> KR-4705
 
-v0.48 Integration:
-KR-4831
+v0.48 Native Disc Boot und erster echter Gastframe:
+KR-4831 und KR-4841
+  -> KR-4842, KR-4843, KR-4844, KR-4845, KR-4846 und KR-4911
+  -> KR-4847, KR-4848 und KR-4912
+  -> KR-4913
+  -> KR-4849 und KR-4915
+  -> KR-4850
+  -> KR-4814 und KR-4914
+  -> KR-4851
+  -> KR-4852
+  -> KR-4853
+  -> Nutzerreview
+  -> KR-4854
+
+v0.49 Port-, Harness-, Controller-, GUI-Integration und Alpha-Candidate:
+KR-4854
   -> KR-4801, KR-4811, KR-4821 und KR-4824
   -> KR-4802
   -> KR-4803
-  -> KR-4812, KR-4813 und KR-4814
-  -> KR-4822
-  -> KR-4823
-  -> KR-4804
-  -> KR-4805
-
-v0.49 Alpha-Bring-up:
-KR-4911
-  -> KR-4912
-  -> KR-4913
-  -> KR-4914 und KR-4915
+  -> KR-4812 und KR-4813
+  -> KR-4822 und KR-4823
   -> KR-4916
   -> KR-4901, KR-4902 und KR-4903
   -> KR-4904
@@ -64,10 +69,10 @@ KR-4911
   -> KR-5000
 ```
 
-Korrektheit blockiert Performance. Performance und Soundness blockieren neue
-Retail-Codeentdeckung. GUI-, Controller- und Harnessarbeit darf nach dem
-Core-Gate parallel laufen, muss aber vor dem ersten privaten Retail-Runtimelauf
-bestehen.
+Korrektheit blockiert Performance. Waehrend KR-4841 bis KR-4851 werden nur
+betroffene Targets und kleine Regressionen ausgefuehrt; die konsolidierte Suite
+und der private Retaillauf folgen einmal in KR-4852. Jeder Prozess besitzt ein
+hartes Limit von 15 Minuten. GUI-, Controller- und Harnessarbeit folgt in v0.49.
 
 ---
 
@@ -649,7 +654,7 @@ es wurde weder ein Tag noch ein oeffentlicher Release erzeugt.
 
 ---
 
-## v0.48.0 - Port-, Harness-, Controller- und GUI-Integration
+## v0.48.0 - Native Disc Boot und erster echter Gastframe
 
 ### [x] KR-4831 - Generischer Originaldisc-Installer ohne Retaildaten im Portpaket
 
@@ -679,6 +684,155 @@ Repositorys und wird beim Nutzer read-only validiert. Der Cache entsteht
 atomar unter `user-data/content/`, die Quell-GDI und ihre Tracks bleiben
 unveraendert erhalten. Synthetische Negativtests und private PAL-Nachweise fuer
 mehrere Spiele verwenden denselben titelunabhaengigen Installervertrag.
+
+### [ ] KR-4841 - Clean-Room-Referenz- und Nicht-Emulationsvertrag
+
+Abhaengigkeiten: KR-4831
+Prioritaet: P0
+
+- Referenzcommits fuer Flycast und dcrecomp pinnen
+- Flycast nur als Verhaltensvergleich und dcrecomp nur als AOT-Architekturvergleich nutzen
+- keine Code-, Tabellen- oder Konstantenuebernahme und kein Linking
+- bounded Interpreter ausschliesslich fuer bytebewiesenen Runtimecode zulassen
+
+### [ ] KR-4842 - Seiteneffektfreie Bootdiagnostik und Wait-Loop-Klassifikation
+
+Abhaengigkeiten: KR-4841
+Prioritaet: P0
+
+- MMU-bewusste, nicht mutierende Peeks nur fuer lineare Speicherregionen
+- MMIO ausschliesslich ueber strukturierte Geraetesnapshots diagnostizieren
+- Backedges und Pollingloops samt Wertwechsel und Writer-Provenienz klassifizieren
+- Diagnose darf Gastzustand und Ereignisreihenfolge nicht veraendern
+
+### [ ] KR-4843 - Alias-korrekter nativer Disc-Systembootstrap
+
+Abhaengigkeiten: KR-4831, KR-4841
+Prioritaet: P0
+
+- Bootstrap physisch aus `0x0C008000` binden und bei `0xAC008300` betreten
+- virtuellen P2-PC fuer PC-relative Loads und MOVA erhalten
+- IP.BIN und Bootdatei als getrennte AOT-Segmente abbilden
+- Direct-Boot als expliziten Bypass sowie P1/P2- und Cachevertraege regressionssichern
+
+### [ ] KR-4844 - Gastzeit, Interruptreihenfolge und vollstaendiger AOT-Chaining-Guard
+
+Abhaengigkeiten: KR-4843
+Prioritaet: P0
+
+- pending Interrupts vor dem Block pruefen, Gastwirkung ausfuehren und erst danach
+  tatsaechlich retirierte Instruktionen und Schedulerzeit verbuchen
+- Faults und Delay Slots nur bis zur tatsaechlichen Ausfuehrungsgrenze zaehlen
+- Chaining gegen Codegeneration, FPSCR, Watchpoints und BlockVariantKey absichern
+- heissen Uebergang ohne Strings oder `unordered_map` halten; Referenzpfad bewahren
+
+### [ ] KR-4845 - BIOS-Lifecycle, HLE-Bridges, Flash, Sysinfo und Region
+
+Abhaengigkeiten: KR-4843, KR-4844
+Prioritaet: P0
+
+- SYSTEM `-1`, `1` und `3` als nicht zurueckkehrende Lifecyclegrenzen modellieren
+- GD2-Alias `0x8C0010F0` und validierte HLE-Handlerbytes erhalten
+- Flash-Readzaehler und read-only Factorypartition erzwingen
+- SYSINFO_ICON schreibt 704 Bytes oder meldet ServiceUnavailable
+- Disc-Areasymbole vom Konsolenprofil trennen; kein JUE-zu-Europa-Automatismus
+
+### [ ] KR-4846 - GD-ROM-BIOS-Requestqueue, Status und TOC
+
+Abhaengigkeiten: KR-4845
+Prioritaet: P0
+
+- Idle-, Queued-, Processing-, Complete-, Streaming- und Error-Zustaende abbilden
+- Rueckgaben `-1` bis `4`, Vierwortstatus und uebertragene Bytezahl implementieren
+- REQ_CMD, GET_CMD_STAT, EXEC_SERVER, Abort, Callbacks und Transferstatus abdecken
+- unbekannte Kommandos kontrolliert ablehnen
+- BIOS-TOC als 102 Gastwoerter fuer LOW/HIGH getrennt vom Paket-TOC erzeugen
+
+### [ ] KR-4847 - GD-ROM-MMIO, PIO, G1-DMA und Disc-Streaming
+
+Abhaengigkeiten: KR-4846
+Prioritaet: P0
+
+- gemeinsamen ATA-/SPI-Kommandozustand fuer BIOS, MMIO, PIO und DMA verwenden
+- IRQ-Quittierung, Alternate Status, DRQ, BSY, READY, CHECK und Sense modellieren
+- mehrphasige PIO-Daten und gastzeitgebundene G1-DMA-Teilschritte implementieren
+- konfigurierte GDSTAR/GDLEN von Livezaehlern GDSTARD/GDLEND trennen
+- Abort, Illegal Address, Overrun und Timeout sichtbar behandeln
+
+### [ ] KR-4848 - Runtimecode, Disc-Module, Overlays und latentes AOT
+
+Abhaengigkeiten: KR-4843, KR-4912
+Prioritaet: P0
+
+- bekannte Discdateien und Module beim Export analysieren und latentes AOT erzeugen
+- Aktivierung nur bei exakter Content- und Byteidentitaet erlauben
+- Runtimewrites bytegenau erfassen und Overlays atomar invalidieren
+- unbekannte RAM-Bytes nicht ausfuehren; Interpreteranteil und Herkunft berichten
+
+### [ ] KR-4849 - TA-Eingang und PVR-Kommandopfad
+
+Abhaengigkeiten: KR-4847, KR-4848, KR-4915
+Prioritaet: P0
+
+- Store Queue, Channel 2 und PVR-DMA in denselben TA-FIFO fuehren
+- normalisierte TA-Paketdiagnostik sowie allgemeine beobachtete Pakettypen abdecken
+- List Init, Continue, Completion und STARTRENDER implementieren
+- RenderDone nur nach erfolgreicher Verarbeitung melden; Unsupported sichtbar halten
+
+### [ ] KR-4850 - Erster scanoutgebundener Gastframe
+
+Abhaengigkeiten: KR-4849
+Prioritaet: P0
+
+- Rendergeneration, TA-Listen, Pixelwrites und tatsaechlich geaenderte Pixel belegen
+- Write-Framebuffer, aktiven Read-Framebuffer und ungeblankten Scanout verbinden
+- `KR_FIRST_GUEST_FRAME` hostunabhaengig von `KR_FIRST_PRESENTED_FRAME` trennen
+- Testframe, vorgefuellter VRAM oder blosser RenderDone-Zaehler gelten nicht
+
+### [ ] KR-4851 - Boot- und Frame-Hotpath
+
+Abhaengigkeiten: KR-4844, KR-4848, KR-4850
+Prioritaet: P0
+
+- numerische Blockhandles, Generationstoken und direkte P1/P2-RAM-Fastpaths nutzen
+- Scheduler bis zur naechsten Ereignisgrenze buendeln
+- statische Call-/Sprungtabellen und latente Module ohne erneuten Codegen aktivieren
+- Fastpath an/aus muss bytegleiche Gastresultate liefern und die Baseline halten
+
+### [ ] KR-4852 - Konsolidierte v0.48-Validierung
+
+Abhaengigkeiten: KR-4814, KR-4841 bis KR-4851, KR-4911 bis KR-4915
+Prioritaet: P0
+
+Erst nach vollstaendiger Implementierung der Kernrunde werden einmal gebuendelt
+betroffene Targets, fokussierte Regressionen, Gesamtbestand, Sanitizer, frischer
+Portexport, lokale Originaldisc-Installation und privater Bootlauf ausgefuehrt.
+Danach werden nur konkrete neue Blocker gezielt geprueft. Jeder Einzelprozess
+endet spaetestens nach 15 Minuten samt Prozessbaum.
+
+### [ ] KR-4853 - v0.48 Boot-Gate-Vorbereitung
+
+Abhaengigkeiten: KR-4852
+Prioritaet: P0
+
+- STATUS, README, ROADMAP, TASKS und CHANGELOG abgleichen
+- ABI-/Formatversionen aus dem finalen Diff bestimmen
+- nur belegte Testzahlen und keine Retaildaten dokumentieren
+- vor Freigabe zwingend fuer Nutzerreview stoppen
+
+### [ ] KR-4854 - v0.48 interne Freigabe und Tag
+
+Abhaengigkeiten: KR-4853 und ausdrueckliche Nutzerfreigabe
+Prioritaet: P0
+
+- zwei abschliessende private Reproduktionslaeufe ausfuehren
+- `v0.48.0` erst nach Nutzerfreigabe taggen und Artefakte abgleichen
+- genau einen aktuellen Build und ein aktuelles Backup behalten
+- keine Releaseartefakte mit Retaildaten erzeugen
+
+---
+
+## v0.49.0 - Port-, Harness-, Controller-, GUI-Integration und Alpha-Candidate
 
 ### [ ] KR-4801 - Versioniertes Runtime-SDK fuer externe Port-Projekte
 
@@ -775,7 +929,7 @@ Akzeptanz:
 - identische Eingabe erzeugt bytegleiche Quellen und Metadaten
 - GUI- und CLI-Jobresultate besitzen dieselben Rollen und Hashes
 
-### [ ] KR-4803 - Out-of-Tree-game.exe-Integration
+### [ ] KR-4803 - Out-of-Tree-`game.exe`-Integration
 
 Abhaengigkeiten: KR-4802, KR-4811
 Prioritaet: P0
@@ -838,14 +992,17 @@ Akzeptanz:
 
 ### [ ] KR-4814 - Nativer Controller und gastzeitgebundene Maple-Eingabe
 
-Abhaengigkeiten: KR-4803, KR-4616
-Prioritaet: P0
+Abhaengigkeiten: KR-4850, KR-4616
+Meilenstein: v0.48, Implementierung erst nach dem ersten echten Gastframe
+Prioritaet: P1 nach KR-4850 (Frame bleibt P0)
 
 Umfang:
 
 - Gast in begrenzten Quanta/Safepoints statt einmal synchron bis zum Ende laufen
 - Fenster-, Controller-, Scheduler-, Video- und Audioereignisse verschraenken
 - Windows-Gamepadbackend ueber stabile Hostabstraktion bereitstellen
+- aktuelle Xbox-Controller, DualSense/DualShock und uebliche Standardgamepads
+  ueber denselben geraeteagnostischen Vertrag abdecken
 - Keyboardfallback erhalten
 - Buttons, Trigger und Analogachsen mit Deadzones normalisieren
 - Hotplug, Fokus und Controller-1-Auswahl behandeln
@@ -856,6 +1013,8 @@ Umfang:
 Akzeptanz:
 
 - frei lizenziertes Homebrew reagiert auf Buttons, Trigger und Analogachsen
+- Xbox-, DualSense-/DualShock- und Standardcontrollerprofile bestehen denselben
+  normalisierten Eingabevertrag ohne titelbezogene Sonderbehandlung
 - aktiv-niedrige Maple-Payloads sind bitgenau
 - nur geaenderte Hostzustaende werden eingespeist
 - Hotplug und Fokus erzeugen keine haengenden Tasten
@@ -908,39 +1067,27 @@ Akzeptanz:
 - alle QOL-Aktionen besitzen Fehler- und Abbruchregressionen
 - private Pfade bleiben standardmaessig verborgen
 
-### [ ] KR-4804 - v0.48 Gate-Vorbereitung
+### [retired] KR-4804 - v0.48 Gate-Vorbereitung: Tests und Build
 
-Abhaengigkeiten: KR-4801 bis KR-4803, KR-4811 bis KR-4814, KR-4821 bis KR-4824
-Prioritaet: P0
+`superseded_by KR-4853`. Die ID bleibt ausschliesslich als Historieneintrag
+erhalten und ist keine aktive Aufgabe.
 
-Akzeptanz:
+### [retired] KR-4805 - v0.48 interne Meilenstein-Freigabe
 
-- Runtime-SDK-, Port-, Harness-, Controller- und GUI-Regressionen bestehen
-- CLI und GUI erzeugen denselben Portworkflow
-- Build-only kann technisch keinen Prozess starten
-- strukturierte Probe und Replay funktionieren mit frei lizenzierter Quelle
-- Controller erreicht Maple end-to-end
-- GUI zeigt reale Arbeitsmengen und Kontrollflussstatus
-- Task-ID-Linter besteht
-- danach fuer Nutzerreview stoppen
-
-### [ ] KR-4805 - v0.48 interne Meilenstein-Freigabe
-
-Abhaengigkeiten: KR-4804
-
-Akzeptanz:
-
-- die unveraenderte Gate-Vorbereitung ist freigegeben
-- die Freigabe erlaubt den ersten privaten, budgetierten Retail-Runtimelauf in v0.49
-- es erfolgen noch kein oeffentlicher Release, Tag oder Download
+`superseded_by KR-4854`. Die ID bleibt ausschliesslich als Historieneintrag
+erhalten und ist keine aktive Aufgabe.
 
 ---
 
-## v0.49.0 - Generischer Runtime-Bring-up und interner Release-Candidate
+## Bestehende Bring-up-Tasks nach aktualisierter Meilensteinzuordnung
+
+`KR-4814`, `KR-4911` bis `KR-4915` gehoeren zu v0.48.
+`KR-4916` bleibt in v0.49.
 
 ### [ ] KR-4911 - Runtimebeobachtung, Replay und Fehlerpakete
 
-Abhaengigkeiten: KR-4805
+Abhaengigkeiten: KR-4831, KR-4842
+Meilenstein: v0.48
 Prioritaet: P0
 
 Umfang:
@@ -961,6 +1108,7 @@ Akzeptanz:
 ### [ ] KR-4912 - Dynamische Codebereiche, Module und Overlays
 
 Abhaengigkeiten: KR-4911
+Meilenstein: v0.48
 Prioritaet: P0
 
 Umfang:
@@ -977,9 +1125,10 @@ Akzeptanz:
 - unkompilierte ausfuehrbare Bytes koennen nicht still ausgefuehrt werden
 - private Modulinhalte bleiben ausserhalb von Repository und Berichten
 
-### [ ] KR-4913 - CPU-/Plattform-Bring-up bis KR_GUEST_PROGRAM_ENTERED
+### [ ] KR-4913 - CPU-/Plattform-Bring-up bis `KR_GUEST_PROGRAM_ENTERED`
 
 Abhaengigkeiten: KR-4912
+Meilenstein: v0.48
 Prioritaet: P0
 
 Umfang:
@@ -999,8 +1148,9 @@ Akzeptanz:
 
 ### [ ] KR-4914 - Private interaktive Runtime-Sitzung mit Controller
 
-Abhaengigkeiten: KR-4913, KR-4814
-Prioritaet: P0
+Abhaengigkeiten: KR-4850, KR-4814
+Meilenstein: v0.48
+Prioritaet: P1 nach KR-4850 (Frame bleibt P0)
 
 Umfang:
 
@@ -1016,9 +1166,10 @@ Akzeptanz:
 - interaktive Sitzung wird in keinem Gate als deterministische Evidenz verwendet
 - Crash, Close und Timeout hinterlassen keine Kindprozesse oder Schedulerreste
 
-### [ ] KR-4915 - Gast-PVR-Pfad bis KR_FIRST_GUEST_FRAME
+### [ ] KR-4915 - Gast-PVR-Pfad bis `KR_FIRST_GUEST_FRAME`
 
 Abhaengigkeiten: KR-4913
+Meilenstein: v0.48
 Prioritaet: P0
 
 Umfang:
@@ -1036,9 +1187,10 @@ Akzeptanz:
 - `guest_pvr_frames` ist von `host_present_calls` getrennt
 - Fehlerpfade bleiben sichtbar und reproduzierbar
 
-### [ ] KR-4916 - Gastinput und kontrollierter Retail-Fortschritt
+### [ ] KR-4916 - Menue, Eingabe und spielbare Szene
 
 Abhaengigkeiten: KR-4914, KR-4915
+Meilenstein: v0.49
 Prioritaet: P0
 
 Umfang:
@@ -1112,7 +1264,7 @@ Akzeptanz:
 - doppelte, fehlende oder vertauschte Ereignisse scheitern
 - Hostsmokes koennen keine Gastcheckpoints vortaeuschen
 
-### [ ] KR-4904 - v0.49 Gate-Vorbereitung
+### [ ] KR-4904 - v0.49 Gate-Vorbereitung: Tests und Build
 
 Abhaengigkeiten: KR-4901 bis KR-4903, KR-4911 bis KR-4916
 Prioritaet: P0

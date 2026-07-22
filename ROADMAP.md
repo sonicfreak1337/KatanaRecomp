@@ -2,7 +2,7 @@
 
 Status: Pre-Alpha
 Aktueller interner Meilenstein: `v0.47.0`
-Aktuelle Phase: `v0.48.0` - Integration
+Aktuelle Phase: `v0.48.0` - Native Disc Boot und erster echter Gastframe
 Erster oeffentlicher Release: `v0.50.0` Alpha
 Weitere interne Gates: `v0.48.0` und `v0.49.0`; danach `v0.75.0` Beta und `v1.0.0` Stable
 
@@ -138,113 +138,134 @@ KR-4611 bis KR-4617
   `game_executable_started=false`
 - keine proprietaeren Daten oder privaten Identitaetsmerkmale gelangen ins Repo
 
-## v0.48.0 - Port-, Harness-, Controller- und GUI-Integration
+## v0.48.0 - Native Disc Boot und erster echter Gastframe
 
 ### Ziel
 
-Der eigenstaendige Portworkflow, der private Harness, native Eingabe und die
-Desktop-GUI werden vor dem ersten Sonic-Runtimelauf zu einem belastbaren,
-informativen und schnellen Produktpfad verbunden. Verteilbare Nachweise
-verwenden weiterhin ausschliesslich synthetische oder frei lizenzierte Quellen.
+Der Recompiler fuehrt den disc-eigenen Systembootstrap und die Bootdatei als
+native AOT-Segmente aus und erreicht einen scanoutgebundenen, vom Gast
+erzeugten Frame. Sonic Adventure PAL ist die private Haupttestbench; Sonic
+Shuffle PAL und Ecco dienen dem allgemeinen Architekturabgleich. Implementiert
+werden nur titelunabhaengige SH-4-, BIOS-, GD-ROM-, DMA-, TA- und PVR-Vertraege.
 
-### Urspruengliche, wiederhergestellte Tasks
+### Grundlage und migrierte Bring-up-Tasks
 
-- [ ] `KR-4801` - versioniertes Runtime-SDK fuer externe Port-Projekte
-- [ ] `KR-4802` - gemeinsamer CLI-/GUI-Portexport und Buildworkflow
-- [ ] `KR-4803` - Out-of-Tree-`game.exe`-Integration
-- [ ] `KR-4804` - v0.48 Gate-Vorbereitung
-- [ ] `KR-4805` - v0.48 interne Meilenstein-Freigabe
+- [x] `KR-4831` - Generischer Originaldisc-Installer ohne Retaildaten im Portpaket
+- [ ] `KR-4911` - Runtimebeobachtung, Replay und Fehlerpakete
+- [ ] `KR-4912` - Dynamische Codebereiche, Module und Overlays
+- [ ] `KR-4913` - CPU-/Plattform-Bring-up bis `KR_GUEST_PROGRAM_ENTERED`
+- [ ] `KR-4814` - Nativer Controller und gastzeitgebundene Maple-Eingabe
+- [ ] `KR-4914` - Private interaktive Runtime-Sitzung mit Controller
+- [ ] `KR-4915` - Gast-PVR-Pfad bis `KR_FIRST_GUEST_FRAME`
 
-### Neue Integrationsaufgaben
+### Native-Boot-Tasks
 
-- [x] `KR-4831` - generischer Originaldisc-Installer ohne Retaildaten im Portpaket
-- [ ] `KR-4811` - private Harnessmodi und technisch erzwungener No-run-Vertrag
-- [ ] `KR-4812` - strukturierte Runtimeevidenz, Budgets, Replay und Datenschutz
-- [ ] `KR-4813` - content-addressed Harness- und Portbuildbeschleunigung
-- [ ] `KR-4814` - nativer Controller und gastzeitgebundene Maple-Eingabe
-- [ ] `KR-4821` - versionierte Jobtelemetrie und belastbarer Fortschritt
-- [ ] `KR-4822` - GUI-Informationsarchitektur und responsives Layout
-- [ ] `KR-4823` - Diagnostik-, Ergebnis-, Log- und Workflow-QOL
-- [ ] `KR-4824` - unveraenderliche Task-ID-Registry und Roadmaplinter
+- [ ] `KR-4841` - Clean-Room-Referenz- und Nicht-Emulationsvertrag
+- [ ] `KR-4842` - Seiteneffektfreie Bootdiagnostik und Wait-Loop-Klassifikation
+- [ ] `KR-4843` - Alias-korrekter nativer Disc-Systembootstrap
+- [ ] `KR-4844` - Gastzeit, Interruptreihenfolge und vollstaendiger AOT-Chaining-Guard
+- [ ] `KR-4845` - BIOS-Lifecycle, HLE-Bridges, Flash, Sysinfo und Region
+- [ ] `KR-4846` - GD-ROM-BIOS-Requestqueue, Status und TOC
+- [ ] `KR-4847` - GD-ROM-MMIO, PIO, G1-DMA und Disc-Streaming
+- [ ] `KR-4848` - Runtimecode, Disc-Module, Overlays und latentes AOT
+- [ ] `KR-4849` - TA-Eingang und PVR-Kommandopfad
+- [ ] `KR-4850` - Erster scanoutgebundener Gastframe
+- [ ] `KR-4851` - Boot- und Frame-Hotpath
+- [ ] `KR-4852` - Konsolidierte v0.48-Validierung
+- [ ] `KR-4853` - v0.48 Boot-Gate-Vorbereitung
+- [ ] `KR-4854` - v0.48 interne Freigabe und Tag
+
+`KR-4804` ist `retired` (`superseded_by KR-4853`), `KR-4805` ist `retired`
+(`superseded_by KR-4854`). `KR-4831` bleibt als abgeschlossene Grundlage erhalten.
 
 ### Verbindliche Reihenfolge
 
 ```text
-KR-4705
-  -> KR-4831
-  -> KR-4801, KR-4811, KR-4821 und KR-4824
-  -> KR-4802
-  -> KR-4803
-  -> KR-4812, KR-4813 und KR-4814
-  -> KR-4822
-  -> KR-4823
-  -> KR-4804
-  -> KR-4805
+KR-4831 und KR-4841
+  -> KR-4842, KR-4843, KR-4844, KR-4845, KR-4846 und KR-4911
+  -> KR-4847, KR-4848 und KR-4912
+  -> KR-4913
+  -> KR-4849 und KR-4915
+  -> KR-4850
+  -> KR-4814 und KR-4914
+  -> KR-4851
+  -> KR-4852
+  -> KR-4853
+  -> Nutzerreview
+  -> KR-4854
 ```
 
 Unabhaengige Aufgaben derselben Stufe duerfen parallel entwickelt werden.
+Waehrend `KR-4841` bis `KR-4851` laufen nur betroffene Targets und kleine,
+fokussierte Regressionen. Vollstaendiges CTest, Sanitizer-Gate, Portexport,
+Originaldisc-Installation und privater Bootlauf werden einmal in `KR-4852`
+gebuendelt. Jeder Prozess besitzt ein hartes Limit von 15 Minuten.
 
 ### Gate
 
-- verteilbare Ports enthalten nur AOT-Code fuer Disc-Systembootstrap und
-  Bootdatei sowie eine generische Originaldisc-Recipe; vollstaendige
-  Retaildaten entstehen erst lokal beim Nutzer
-- der native HLE-Boot umfasst BIOS-RAM, direkten GD2-Alias und SH-4-OCRAM;
-  `SYSTEM 1` liest Bootstrap und Bootdatei erneut aus der lokalen Originaldisc
-  und stellt den Plattform-Handoff reproduzierbar wieder her
-- externe Ports bauen gegen ein versioniertes minimales Runtime-SDK
-- CLI und GUI erzeugen denselben Port- und Buildplan
-- `game.exe` stammt nachweisbar aus dem aktuellen Job und nicht aus einem
-  veralteten Ausgabeordner
-- Harnessmodi `build-only`, `runtime-probe` und `interactive` sind getrennt
-- deterministische Probes verwenden strukturierte, streng sequenzierte Metriken
-- interaktive Sitzungen gelten nie als Gateevidenz
-- Controllerbuttons, Trigger und Analogachsen erreichen Maple in einem
-  frei lizenzierten Test
-- Keyboardfallback, Hotplug und Fokusverhalten sind getestet
-- die GUI zeigt reale Stufen, Arbeitsmengen, Kontrollflussklassen, Diagnosen,
-  Cachehits und Artefakte
-- GUI-Aktualisierung ist eventgetrieben und kopiert keine unbeschraenkten
-  Verlaufsmengen pro Refresh
-- Task-IDs sind registriert und koennen nicht semantisch wiederverwendet werden
-- private Quellen und Runtimeberichte bleiben ausserhalb des Repositorys
-- `KR_V048_PORT_WORKFLOW_READY` wird reproduzierbar erreicht
+- der Einstieg erfolgt am virtuellen P2-PC `0xAC008300` mit physischer
+  Codeherkunft `0x0C008000`; PC-relative Semantik behaelt den Alias
+- IP.BIN und Bootdatei laufen als getrennte native AOT-Segmente
+- BIOS- und GD-ROM-Aufrufe bilden kleine, typisierte Plattformgrenzen; der
+  Produktpfad emuliert weder Firmware noch eine SH-4-CPU
+- Runtimecode, Module und Overlays werden nur mit bytebewiesener Herkunft
+  aktiviert; unbekannte RAM-Bytes sind nicht ausfuehrbar
+- `KR_GUEST_PROGRAM_ENTERED` belegt echten Gastkontrollfluss ausserhalb der
+  Hostgrenzen
+- `KR_FIRST_GUEST_FRAME` verlangt TA-/Rendergeneration, geaenderte Pixel,
+  gueltigen Read-/Write-Framebuffer und aktiven Scanout; Hostpraesentation ist
+  ein separater Checkpoint
+- Fastpath und Referenzpfad erzeugen bytegleiche Gastresultate
+- moderne Xbox-, DualSense-/DualShock- und uebliche Standardcontroller werden
+  ueber einen geraeteagnostischen Hostvertrag auf Maple abgebildet; Buttons,
+  Sticks, Trigger, Hotplug, Fokusverlust und festhaengende Eingaben sind getestet
+- keine festen Spieladressen, Spielbytes, Titelhacks oder uebernommenen
+  Emulatorimplementierungen gelangen in den Produktpfad
+- Quell-GDIs werden nie geloescht; Retaildaten und private Identitaeten bleiben
+  ausserhalb von Repository, CI und verteilbaren Paketen
+- vor `KR-4854` wird zwingend fuer Nutzerreview gestoppt; Tag und Freigabe gibt
+  es ausschliesslich nach ausdruecklicher Nutzerfreigabe
 
-## v0.49.0 - Generischer Runtime-Bring-up und interner Release-Candidate
+## v0.49.0 - Port-, Harness-, Controller-, GUI-Integration und Alpha-Candidate
 
 ### Ziel
 
-Nach dem v0.48-Integrationsgate beginnt der kontrollierte Runtime-Bring-up unter
-echter Gastlast. Sonic Adventure darf dafuer privat als wichtigste
-End-to-End-Testbench dienen. Implementiert und versioniert werden nur
-allgemeine Mechanismen fuer Programmeinstieg, Gastframes, Eingabe und
-kontrollierbaren Gastfortschritt.
+Nach dem nativen Boot- und Frame-Gate werden Runtime-SDK, Portworkflow,
+Harness, Controller, GUI, CI und Paketierung zu einem allgemeinen
+Alpha-Candidate integriert. Die v0.48-Basis bleibt dabei unveraendert und
+Sonic Adventure liefert keine titelspezifischen Produktvertraege.
 
-### Bring-up-Tasks mit neuen, konfliktfreien IDs
+### Migrierte Integrationsaufgaben
 
-- [ ] `KR-4911` - Runtimebeobachtung, Replay und Fehlerpakete
-- [ ] `KR-4912` - dynamische Codebereiche, Module und Overlays
-- [ ] `KR-4913` - CPU-/Plattform-Bring-up bis `KR_GUEST_PROGRAM_ENTERED`
-- [ ] `KR-4914` - private interaktive Runtime-Sitzung mit Controller
-- [ ] `KR-4915` - Gast-PVR-Pfad bis `KR_FIRST_GUEST_FRAME`
-- [ ] `KR-4916` - Gastinput und kontrollierter Retail-Fortschritt
+- [ ] `KR-4801` - Versioniertes Runtime-SDK fuer externe Port-Projekte
+- [ ] `KR-4802` - Gemeinsamer CLI-/GUI-Portexport und Buildworkflow
+- [ ] `KR-4803` - Out-of-Tree-`game.exe`-Integration
+- [ ] `KR-4811` - Private Harnessmodi und technisch erzwungener No-run-Vertrag
+- [ ] `KR-4812` - Strukturierte Runtimeevidenz, Budgets, Replay und Datenschutz
+- [ ] `KR-4813` - Content-addressed Harness- und Portbuildbeschleunigung
+- [ ] `KR-4821` - Versionierte Jobtelemetrie und belastbarer Fortschritt
+- [ ] `KR-4822` - GUI-Informationsarchitektur und responsives Layout
+- [ ] `KR-4823` - Diagnostik-, Ergebnis-, Log- und Workflow-QOL
+- [ ] `KR-4824` - Unveraenderliche Task-ID-Registry und Roadmaplinter
+- [ ] `KR-4916` - Menue, Eingabe und spielbare Szene
 
 ### Urspruengliche, wiederhergestellte Release-Candidate-Tasks
 
 - [ ] `KR-4901` - Alpha-CI-Konfiguration fuer Windows und Linux
 - [ ] `KR-4902` - reproduzierbare Pakete sowie Daten- und Lizenzaudit
 - [ ] `KR-4903` - Alpha-Checkpoint- und Gate-Automatisierung einfrieren
-- [ ] `KR-4904` - v0.49 Gate-Vorbereitung
+- [ ] `KR-4904` - v0.49 Gate-Vorbereitung: Tests und Build
 - [ ] `KR-4905` - v0.49 interne Kandidaten-Freigabe
 
 ### Verbindliche Reihenfolge
 
 ```text
-KR-4805
-  -> KR-4911
-  -> KR-4912
-  -> KR-4913
-  -> KR-4914 und KR-4915
+KR-4854
+  -> KR-4801, KR-4811, KR-4821 und KR-4824
+  -> KR-4802
+  -> KR-4803
+  -> KR-4812 und KR-4813
+  -> KR-4822 und KR-4823
   -> KR-4916
   -> KR-4901, KR-4902 und KR-4903
   -> KR-4904
