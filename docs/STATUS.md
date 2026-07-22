@@ -2,12 +2,27 @@
 
 Abgeschlossener interner Meilenstein: `v0.47.0`
 Phase: `v0.48.0` - Integration
-Naechster Roadmap-Task: `KR-4846`
+Naechster Roadmap-Task: `KR-4847`; die noch offene Wait-Loop-Klassifikation
+aus `KR-4842` laeuft als getrennte Diagnosearbeit
 Naechstes Gate: `v0.48.0` - Integration
 Weitere interne Gates: `v0.48.0` Integration und `v0.49.0` Alpha-Candidate
 Erster oeffentlicher Release: `v0.50.0` Alpha
 
 ## Aktiver P0: Sonic-Adventure-PAL bis zum ersten echten Gastframe
+
+Stand 2026-07-22: `KR-4841`, `KR-4843`, `KR-4844`, `KR-4845` und `KR-4846`
+sind in Roadmap und Taskliste als abgeschlossen markiert. Der aktuelle
+`KR-4847`-Teilstand korrigiert GD-ROM-Taskfile und IRQ-Quittierung, fuehrt
+Command-28-/37-Streaming ueber BIOS-PIO und gastzeitgebundene G1-DMA-Chunks,
+liefert exakte Transferresidue und beendet Abort/Reset ohne spaete Ereignisse.
+Der DMA-Callback wird erst nach dem echten G1-Abschluss als typisierter
+Gast-Call zugestellt; PIO behaelt seinen persistenten Callbackvertrag. Die
+Chunkgroesse wurde bei unveraenderter 32-Byte-Ausrichtung von 32 auf 2048 Byte
+angehoben und reduziert damit die Schedulerereignisse eines Disc-Transfers um
+bis zu Faktor 64. Elf angrenzende GD-ROM-, BIOS-, G1-, Boot-, ASIC-, TA-,
+Manifest- und Portexporttests sind fokussiert gruen. Das konsolidierte
+180-Test-Gate und ein neuer privater PAL-Lauf folgen weiterhin erst nach dem
+zusammenhaengenden Kernblock. Ein erster Gastframe wird nicht behauptet.
 
 Der allgemeine Disc-Hardwareauditor erfasst fuer den aktuellen privaten
 PAL-Build 55.504 erreichbare SH-4-Instruktionen in 815 Funktionen. Es bleiben
@@ -137,7 +152,7 @@ MMIO-Zugriff liegt im aktiven OCRAM; der fruehere Abbruch nach 12 Gastzyklen
 ist damit beseitigt. TA/PVR und ein echter Gastframe bleiben fuer den laengeren
 Folgelauf weiterhin offen.
 
-Runtime-ABI 33, BIOS-ABI 7 und Portprojektvertrag 20 bilden den kumulativen
+Runtime-ABI 34, BIOS-ABI 8 und Portprojektvertrag 20 bilden den kumulativen
 v0.48-Stand ab.
 PlatformServices-ABI 9 versioniert das invalidierungs- und timinggesicherte lokale
 Blockchaining.
@@ -157,15 +172,13 @@ implementiert und kompiliert; die zusammenhaengende synthetische Validierung
 und der anschliessende einzelne private PAL-Lauf stehen noch aus. Ein erster
 Gastframe wird weiterhin nicht behauptet.
 
-Die erste fokussierte `KR-4846`-Ergaenzung schliesst Abbruch, getrennte INIT-/
+Die erste fokussierte `KR-4846`-Ergaenzung schloss Abbruch, getrennte INIT-/
 RESET-Semantik, aktiven Laufwerksstatus und den tatsaechlich unterstuetzten
-Datentypvertrag. Abbruch und Reset entfernen ihre Schedulerauftraege, sodass
-keine spaeten Discwrites oder Scheinkompletions entstehen. DMA-/PIO-
-Callbackadressen sind als stabiler BIOS-Zustand vorhanden; Callbackausfuehrung,
-Streamingkommandos und der gemeinsame G1-Transferpfad bleiben bewusst Teil von
-`KR-4847`. Der parallele RelWithDebInfo-Build und vier fokussierte Runtime-/
-GD-ROM-Regressionen sind gruen. Ein erster Gastframe wird weiterhin nicht
-behauptet.
+Datentypvertrag. Der folgende `KR-4847`-Block fuehrt nun die Callbackausfuehrung,
+Streamingkommandos und den gemeinsamen G1-Transferpfad aus. PIO-Callbacks sind
+registrierter Zustand; DMA-Selektor 5 ist dagegen ein einmaliger IRQ-Handoff
+nach Abschluss und lehnt Vorabregistrierung ab. Ein erster Gastframe wird
+weiterhin nicht behauptet.
 
 WinCE-Bootlayouts und gescrambelte Nicht-GD-ROM-Bootdateien bleiben eine
 bewusste allgemeine Loadergrenze. Bis ein eigenstaendiger nativer Segment- und

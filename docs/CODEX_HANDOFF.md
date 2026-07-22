@@ -368,18 +368,30 @@ Typ: Implementierung | Gate-Vorbereitung | interne Freigabe | Release-Gate
 ## Aktuell empfohlener Einstieg
 
 ```text
-Review-Stopp nach KR-4402 - Phase-10-Gate-Bericht mit dem Nutzer pruefen
+v0.48 P0 - KR-4847 GD-ROM-MMIO, PIO, G1-DMA und Disc-Streaming fortsetzen
 ```
 
-Danach:
+Abgeschlossen und in Roadmap/Taskliste markiert sind `KR-4841`, `KR-4843`,
+`KR-4844`, `KR-4845` und `KR-4846`. Der aktuelle Runtimevertrag steht auf
+Runtime-ABI 34, BIOS-ABI 8 und Portprojektvertrag 20. Command 28/37 besitzt
+gastzeitgebundene PIO-/G1-DMA-Teiltransfers; Selector 5 ist ein DMA-IRQ-
+Handoff, Selector 11 die persistente PIO-Callbackregistrierung. Taskfile-
+Offsets, Command-IRQ-Ack, G1-Livezaehler sowie TA-Userclip und leeres EOL sind
+fokussiert regressionsgesichert.
+
+Weiter offen:
 
 ```text
-Erst nach ausdruecklicher Freigabe: KR-4403 - interne GUI-/GDI-Meilenstein-Freigabe
+KR-4842: Wait-Loop-Klassifikation vervollstaendigen
+KR-4847: verbleibenden gemeinsamen ATA/SPI-Zustand und EX-Streamingvertrag schliessen
+KR-4848: Disc-Module, Overlays und latentes AOT
+KR-4849/KR-4850: TA/PVR bis zum scanoutgebundenen echten Gastframe
 ```
 
-Phase 10 erreicht im unveraenderten Gate-Commit `9e9cdb2` mit 160/160 Tests
-`KR_PHASE10_GUI_END_TO_END`. GUI und CLI erzeugen dieselbe Projektidentitaet
-und dieselben Kernartefakte; das interne GUI-Paket besteht den standalone
-Smoke-Test. Das Logo ist hash- und herkunftsgebunden eingebunden, bleibt aber
-bis KR-4902 von oeffentlicher Verteilung ausgeschlossen. KR-4403 wurde nicht
-begonnen und darf ohne ausdrueckliche Nutzerfreigabe nicht starten.
+Ein erster Gastframe ist noch nicht nachgewiesen. Moderne Xbox-, DualSense-
+und vergleichbare Hostcontroller bleiben strikt hinter `KR-4850`. Waehrend
+der Kernrunde nur fokussierte Targets ausfuehren; das konsolidierte Gate und
+den privaten PAL-Lauf erst im vorgesehenen Block starten. Jeder Prozess endet
+spaetestens nach 15 Minuten. Original-GDI und Tracks sind immer read-only und
+werden nie geloescht; veraltete erzeugte Portordner duerfen nach eindeutiger
+Pfadpruefung ersetzt werden. Keine Tags vor ausdruecklicher Nutzerfreigabe.

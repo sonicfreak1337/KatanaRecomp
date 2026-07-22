@@ -66,27 +66,65 @@ werden Vektoren und HLE-Stubs sowie im oberen 32-KiB-Fenster der Discbootstrap
 installiert. Bootstrap- und Bootdateibytes unterliegen der normalen
 Codeinvalidierung; ein Lifecycle-Aufruf mutiert oder restauriert sie nicht.
 
-Der GD-ROM-Dienst modelliert Requests als `Queued`, `Processing`, `Complete`,
-`Streaming` oder `Error`. `GET_CMD_STAT` liefert vor der Verarbeitung 1, nach
-Erfolg einmalig 2, fuer Streaming 3, bei Fehler `-1` und nach Abholung 0. Der
-optionale Statuspuffer umfasst vier Woerter: Fehler 1, Fehler 2, uebertragene
-Bytezahl und Warte-/ATA-Zustand. Das BIOS-TOC besitzt unabhaengig vom
-Paketkommando exakt 102 Gastwoerter und trennt LOW/HIGH. Unbekannte Kommandos
-werden nicht als Erfolg abgeschlossen. Ein begrenztes Ereignislog zeichnet
-Zyklus, Aufrufstelle, Selektoren, Argumente, Zustandswechsel und Vierwortstatus
-ohne Pfade oder Discidentitaeten auf.
+Der GD-ROM-Dienst modelliert genau einen sichtbaren Request als `Queued`,
+`Processing`, `Streaming`, `Complete`, `Error` oder `Aborted`. `REQ_CMD`
+(Selektor 0) liefert eine positive Request-ID oder 0, wenn kein weiterer
+Request angenommen werden kann. `EXEC_SERVER` (Selektor 2) startet den
+eingereihten Request. `GET_CMD_STAT` (Selektor 1) liefert vor der Verarbeitung
+1, nach Erfolg einmalig 2, fuer einen bereiten Stream 3, bei Fehler `-1` und
+nach Abholung beziehungsweise Abbruch 0. Der optionale Statuspuffer umfasst
+vier Gastwoerter: Fehler 1, Fehler 2, uebertragene Bytezahl und Warte-/ATA-
+Zustand. Unbekannte Kommandos werden kontrolliert mit `InvalidCommand`
+abgeschlossen und niemals als stiller Erfolg behandelt.
+
+Die BIOS-Kommandos 28 und 37 bilden den DMA- beziehungsweise PIO-Stream als
+denselben Requestzustandsautomaten ab. Nach `EXEC_SERVER` wird die
+Discbereitschaft erst nach der geplanten Gastzeit sichtbar; erst dann meldet
+`GET_CMD_STAT` den Zustand 3. Selektor 6 startet einen ausgerichteten DMA-
+Teiltransfer, Selektor 7 schreibt den Fortschritts-/Restwert und liefert 1
+waehrend des Transfers beziehungsweise 0 nach Abschluss. Konkret steht bei
+Rueckgabe 1 der bereits uebertragene Zaehler des aktiven Teiltransfers im
+Ausgabewort; bei Rueckgabe 0 steht dort der noch verbleibende Gesamtstream.
+Der G1-Pfad bewegt
+die Daten in gastzeitgebundenen, hoechstens 2048 Byte grossen Chunks, fuehrt
+Liveadresse und Residue nach jedem Chunk fort und erzeugt genau einen finalen
+GD-ROM-DMA-Interrupt. Selektoren 12 und 13 bilden denselben Vertrag fuer einen
+PIO-Teiltransfer mit derselben Fortschritt-/Gesamtstream-Bedeutung ab; der
+Datentransfer findet dort an der expliziten BIOS-Grenze statt.
+
+Die EX-Kommandos 38 und 39 sind keine Aliase fuer 28 und 37: Ihr drittes
+Parameterwort waehlt einen abweichenden Paketvertrag. Bis dessen Bedeutung
+vollstaendig eigenstaendig spezifiziert und getestet ist, werden diese
+Kommandos kontrolliert abgelehnt statt mit erfundenen Normalstreamwerten
+ausgefuehrt.
+
+Selektor 5 ist ausdruecklich keine DMA-Callbackregistrierung. Er akzeptiert
+Callbackadresse und Argument nur als einmaligen Handoff, nachdem ein DMA-
+Teiltransfer seinen Interrupt wirklich erreicht hat; ein vorzeitiger oder
+wiederholter Aufruf schlaegt sichtbar fehl. Selektor 11 installiert dagegen
+einen persistenten PIO-Callback. Ein faelliger Callback verlaesst den BIOS-
+Block als typisierter Gast-`Call`, behaelt `PR` bei und uebergibt das
+registrierte Argument in `r4`. Abbruch und Reset entfernen ausstehende
+Schedulerereignisse, G1-Transfers und Callback-Handoffs, sodass keine spaeten
+Gastschreibzugriffe oder Interrupts entstehen.
+
+Das BIOS-TOC besitzt unabhaengig vom Paketkommando exakt 102 Gastwoerter und
+trennt LOW/HIGH. Ein begrenztes Ereignislog zeichnet Zyklus, Aufrufstelle,
+Selektoren, Argumente, Zustandswechsel und Vierwortstatus ohne Pfade oder
+Discidentitaeten auf.
 
 `GDSTAR/GDLEN` bleiben programmierte G1-Register. `GDSTARD/GDLEND` zeigen den
 separaten Liveadress- und Transferzaehler. `SYSTEM 0` restauriert den aus der
 geladenen Bootgroesse berechneten BIOS-Livewert, ohne die programmierten
 Register zu veraendern.
 
-Der maschinenlesbare Vertrag besitzt Schema `katana-bios-abi`, Version 7.
+Der maschinenlesbare Vertrag besitzt Schema `katana-bios-abi`, Version 8.
 Synthetische Tests pruefen reproduzierbare Vektorbytes, Runtimeblockdispatch,
 P1/P2-Handoff, Stubintegritaet, Factory-Schreibschutz, den direkten GD2-Alias,
 Lifecycle-Evidenz, GD-ROM-Zustaende,
-Vierwortstatus, LOW/HIGH-TOC, getrennte G1-Zaehler, bekannte aufgeschobene
-Dienste und unbekannte Funktionen.
+Vierwortstatus, LOW/HIGH-TOC, gastzeitgebundene DMA-Chunks, DMA-IRQ-Handoff,
+persistente PIO-Callbacks, Abbruch ohne spaete Ereignisse, getrennte G1-
+Zaehler, bekannte aufgeschobene Dienste und unbekannte Funktionen.
 
 Die Installation gehoert zum produktiven Bootzustand: `boot_homebrew()` gibt
 im HLE-Modus die befuellte `RuntimeBlockTable` und `FirmwareHandoffMap` als

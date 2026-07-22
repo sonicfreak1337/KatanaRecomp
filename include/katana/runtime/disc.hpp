@@ -101,6 +101,7 @@ class GdRomDrive final {
                         std::uint32_t sector_size = 2048u);
     [[nodiscard]] GdRomResponse execute(const GdRomRequest& request) const;
     [[nodiscard]] std::uint32_t sector_size() const noexcept;
+    [[nodiscard]] std::uint64_t sector_count() const noexcept;
     [[nodiscard]] const std::vector<DiscTrackLayout>& layout() const noexcept;
     [[nodiscard]] const std::string& identity() const noexcept;
 

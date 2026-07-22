@@ -3,6 +3,7 @@
 #include "katana/runtime/dma.hpp"
 #include "katana/runtime/dreamcast_memory.hpp"
 
+#include <algorithm>
 #include <limits>
 #include <stdexcept>
 #include <string>
@@ -498,15 +499,12 @@ void DreamcastG1BusController::write(const std::uint32_t offset, const std::uint
         return;
     case 0x14u:
         dma_enabled_ = value & 1u;
-        if (dma_enabled_ == 0u && completion_event_) {
-            static_cast<void>(scheduler_.cancel(*completion_event_));
-            completion_event_.reset();
-            dma_active_ = 0u;
-            remaining_length_ = 0u;
-        }
+        if (dma_enabled_ == 0u) abort_transfer();
         return;
     case 0x18u:
-        if ((value & 1u) != 0u && dma_enabled_ != 0u) start();
+        if ((value & 1u) != 0u && dma_enabled_ != 0u)
+            static_cast<void>(
+                begin_transfer(configured_address_, configured_length_, dma_direction_));
         return;
     case 0x80u:
     case 0x84u:
@@ -525,72 +523,102 @@ void DreamcastG1BusController::write(const std::uint32_t offset, const std::uint
     }
 }
 
-void DreamcastG1BusController::start() {
+bool DreamcastG1BusController::begin_transfer(const std::uint32_t address,
+                                              const std::uint32_t length,
+                                              const std::uint32_t direction) {
     fault_ = HollyDmaFaultReason::None;
     if (dma_active_ != 0u || completion_event_) {
         fail(HollyDmaFaultReason::Overrun, SystemAsicEvent::GdromOverrun);
-        return;
+        return false;
     }
+    configured_address_ = address;
+    configured_length_ = length;
+    dma_direction_ = direction;
     if (!transfer_handler_) {
         fail(HollyDmaFaultReason::MissingBackend, SystemAsicEvent::GdromAccessError);
-        return;
+        return false;
     }
-    if (configured_length_ == 0u) {
+    if (length == 0u || (length & (transfer_alignment - 1u)) != 0u) {
         fail(HollyDmaFaultReason::InvalidLength, SystemAsicEvent::GdromIllegalAddress);
-        return;
+        return false;
     }
-    live_address_ = configured_address_;
+    if ((address & (transfer_alignment - 1u)) != 0u) {
+        fail(HollyDmaFaultReason::IllegalAddress, SystemAsicEvent::GdromIllegalAddress);
+        return false;
+    }
+    if (direction != 1u) {
+        fail(HollyDmaFaultReason::InvalidDirection, SystemAsicEvent::GdromIllegalAddress);
+        return false;
+    }
+    live_address_ = address;
     transferred_length_ = 0u;
-    remaining_length_ = configured_length_;
+    remaining_length_ = length;
+    dma_enabled_ = 1u;
     dma_active_ = 1u;
+    schedule_chunk();
+    return dma_active_ != 0u;
+}
+
+void DreamcastG1BusController::schedule_chunk() {
+    const auto chunk = std::min(remaining_length_, transfer_chunk_bytes);
     try {
+        const auto cycles = dma_latency(chunk, timing_);
+        next_chunk_cycle_ = scheduler_.current_cycle() + cycles;
         completion_event_ = scheduler_.schedule_after(
-            dma_latency(remaining_length_, timing_),
-            [this](const auto event_id, const auto) { complete(event_id); });
+            cycles, [this](const auto event_id, const auto) { complete_chunk(event_id); });
     } catch (...) {
         fail(HollyDmaFaultReason::Timeout, SystemAsicEvent::GdromOverrun);
     }
 }
 
-void DreamcastG1BusController::complete(const SchedulerEventId event_id) {
+void DreamcastG1BusController::complete_chunk(const SchedulerEventId event_id) {
     if (!completion_event_ || *completion_event_ != event_id || dma_active_ == 0u) {
         fail(HollyDmaFaultReason::Overrun, SystemAsicEvent::GdromOverrun);
         return;
     }
+    completion_event_.reset();
+    next_chunk_cycle_ = 0u;
+    const auto chunk = std::min(remaining_length_, transfer_chunk_bytes);
     try {
-        transfer_handler_(live_address_, remaining_length_, dma_direction_);
+        transfer_handler_(live_address_, chunk, dma_direction_);
     } catch (...) {
         fail(HollyDmaFaultReason::TransferFailure, SystemAsicEvent::GdromOverrun);
         return;
     }
-    live_address_ += remaining_length_;
-    transferred_length_ += remaining_length_;
-    remaining_length_ = 0u;
+    live_address_ += chunk;
+    transferred_length_ += chunk;
+    remaining_length_ -= chunk;
+    if (remaining_length_ != 0u) {
+        schedule_chunk();
+        return;
+    }
     dma_active_ = 0u;
-    completion_event_.reset();
     if (completion_observer_) completion_observer_(SystemAsicEvent::GdromDma);
+}
+
+void DreamcastG1BusController::abort_transfer() noexcept {
+    if (completion_event_ && !scheduler_lifetime_.expired())
+        static_cast<void>(scheduler_.cancel(*completion_event_));
+    completion_event_.reset();
+    next_chunk_cycle_ = 0u;
+    dma_active_ = 0u;
+    remaining_length_ = 0u;
 }
 
 void DreamcastG1BusController::fail(const HollyDmaFaultReason reason,
                                     const SystemAsicEvent event) noexcept {
     const auto fault_address = dma_active_ != 0u ? live_address_ : configured_address_;
-    const auto fault_remaining =
-        dma_active_ != 0u ? remaining_length_ : configured_length_;
+    const auto fault_remaining = dma_active_ != 0u ? remaining_length_ : configured_length_;
     if (completion_event_ && !scheduler_lifetime_.expired())
         static_cast<void>(scheduler_.cancel(*completion_event_));
     completion_event_.reset();
+    next_chunk_cycle_ = 0u;
     dma_active_ = 0u;
     remaining_length_ = 0u;
     dma_enabled_ = 0u;
     fault_ = reason;
     ++fault_count_;
-    last_fault_ = HollyDmaFault{
-        reason,
-        event,
-        0u,
-        0u,
-        fault_address,
-        fault_remaining};
+    last_fault_ = HollyDmaFault{reason, event, 0u, 0u, fault_address, fault_remaining};
     if (completion_observer_) {
         try {
             completion_observer_(event);
@@ -601,12 +629,12 @@ void DreamcastG1BusController::fail(const HollyDmaFaultReason reason,
 
 void DreamcastG1BusController::handle_scheduler_reset() noexcept {
     completion_event_.reset();
+    next_chunk_cycle_ = 0u;
     dma_active_ = 0u;
     remaining_length_ = 0u;
 }
 
-void DreamcastG1BusController::configure_bios_handoff(
-    const std::uint32_t live_address) noexcept {
+void DreamcastG1BusController::configure_bios_handoff(const std::uint32_t live_address) noexcept {
     bios_handoff_live_address_ = live_address & 0x1FFFFFE0u;
     restore_bios_handoff();
 }
@@ -618,9 +646,7 @@ void DreamcastG1BusController::restore_bios_handoff() noexcept {
 }
 
 void DreamcastG1BusController::reset() noexcept {
-    if (completion_event_ && !scheduler_lifetime_.expired())
-        static_cast<void>(scheduler_.cancel(*completion_event_));
-    completion_event_.reset();
+    abort_transfer();
     configured_address_ = 0u;
     configured_length_ = 0u;
     live_address_ = 0u;
@@ -646,6 +672,10 @@ HollyDmaChannelState DreamcastG1BusController::state() const noexcept {
     result.peripheral_counter = transferred_length_;
     result.system_counter = live_address_;
     result.remaining = remaining_length_;
+    result.completion_cycle = next_chunk_cycle_;
+    result.remaining_cycles = next_chunk_cycle_ > scheduler_.current_cycle()
+                                  ? next_chunk_cycle_ - scheduler_.current_cycle()
+                                  : 0u;
     result.completion_event = completion_event_;
     result.fault = fault_;
     result.fault_count = fault_count_;

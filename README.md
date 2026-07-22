@@ -12,6 +12,14 @@ kommerziellen Spielen erzeugter Code gehoeren nicht in dieses Repository.
 
 ## Status
 
+v0.48 fuehrt den von der Originaldisc lokal installierten Systembootstrap und
+die Bootdatei als getrennte native AOT-Segmente aus. BIOS-Requestqueue,
+Vierwortstatus, LOW/HIGH-TOC sowie gastzeitgebundene GD-ROM-PIO-/G1-DMA-
+Streamingtransfers sind implementiert. Der aktuelle P0 bleibt der erste
+scanoutgebundene, vom Gast erzeugte Frame; ein solcher Frame ist noch nicht
+nachgewiesen. Moderner Hostcontrollersupport fuer Xbox-, DualSense- und
+vergleichbare Geraete beginnt laut Roadmap erst danach.
+
 Der aktuelle Pfad verarbeitet Raw-, ELF32-SH-, Projektmanifest- und validierte
 GDI-Eingaben bis zu partitioniertem C++, einer zentralen Dreamcast-Runtime und
 einem extern buildbaren Hostprojekt:

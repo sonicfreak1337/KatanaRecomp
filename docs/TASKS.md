@@ -685,7 +685,7 @@ atomar unter `user-data/content/`, die Quell-GDI und ihre Tracks bleiben
 unveraendert erhalten. Synthetische Negativtests und private PAL-Nachweise fuer
 mehrere Spiele verwenden denselben titelunabhaengigen Installervertrag.
 
-### [ ] KR-4841 - Clean-Room-Referenz- und Nicht-Emulationsvertrag
+### [x] KR-4841 - Clean-Room-Referenz- und Nicht-Emulationsvertrag
 
 Abhaengigkeiten: KR-4831
 Prioritaet: P0
@@ -694,6 +694,12 @@ Prioritaet: P0
 - Flycast nur als Verhaltensvergleich und dcrecomp nur als AOT-Architekturvergleich nutzen
 - keine Code-, Tabellen- oder Konstantenuebernahme und kein Linking
 - bounded Interpreter ausschliesslich fuer bytebewiesenen Runtimecode zulassen
+
+Abgeschlossen: 2026-07-22. Der Flycast-Vergleich ist auf den lokal geprueften
+Snapshot festgelegt und bleibt reiner Verhaltensvergleich. Die nicht
+reproduzierbar versionierte dcrecomp-Kopie mit enthaltenen GPL-Flycast-Teilen
+ist ausdruecklich keine Codequelle. Der Produktpfad bleibt AOT; nur
+bytebewiesener Runtimecode darf die begrenzte Diagnosegrenze verwenden.
 
 ### [ ] KR-4842 - Seiteneffektfreie Bootdiagnostik und Wait-Loop-Klassifikation
 
@@ -705,7 +711,7 @@ Prioritaet: P0
 - Backedges und Pollingloops samt Wertwechsel und Writer-Provenienz klassifizieren
 - Diagnose darf Gastzustand und Ereignisreihenfolge nicht veraendern
 
-### [ ] KR-4843 - Alias-korrekter nativer Disc-Systembootstrap
+### [x] KR-4843 - Alias-korrekter nativer Disc-Systembootstrap
 
 Abhaengigkeiten: KR-4831, KR-4841
 Prioritaet: P0
@@ -715,7 +721,12 @@ Prioritaet: P0
 - IP.BIN und Bootdatei als getrennte AOT-Segmente abbilden
 - Direct-Boot als expliziten Bypass sowie P1/P2- und Cachevertraege regressionssichern
 
-### [ ] KR-4844 - Gastzeit, Interruptreihenfolge und vollstaendiger AOT-Chaining-Guard
+Abgeschlossen: 2026-07-21. IP.BIN und Bootdatei sind getrennte, physisch
+gebundene Segmente; der native HLE-Pfad betritt den P2-Bootstrap bei
+`0xAC008300`. Alias-, PC-relativer und Direct-Boot-Vertrag sind fokussiert
+regressionsgesichert.
+
+### [x] KR-4844 - Gastzeit, Interruptreihenfolge und vollstaendiger AOT-Chaining-Guard
 
 Abhaengigkeiten: KR-4843
 Prioritaet: P0
@@ -726,7 +737,12 @@ Prioritaet: P0
 - Chaining gegen Codegeneration, FPSCR, Watchpoints und BlockVariantKey absichern
 - heissen Uebergang ohne Strings oder `unordered_map` halten; Referenzpfad bewahren
 
-### [ ] KR-4845 - BIOS-Lifecycle, HLE-Bridges, Flash, Sysinfo und Region
+Abgeschlossen: 2026-07-21. Retirierte Instruktionen bestimmen die Gastzeit;
+Faults und Delay-Slots werden nur bis zur echten Ausfuehrungsgrenze gezaehlt.
+Der native Chainingpfad prueft alle zustandsabhaengigen Generationen und endet
+spaetestens am begrenzten Scheduler-Safepoint.
+
+### [x] KR-4845 - BIOS-Lifecycle, HLE-Bridges, Flash, Sysinfo und Region
 
 Abhaengigkeiten: KR-4843, KR-4844
 Prioritaet: P0
@@ -737,7 +753,12 @@ Prioritaet: P0
 - SYSINFO_ICON schreibt 704 Bytes oder meldet ServiceUnavailable
 - Disc-Areasymbole vom Konsolenprofil trennen; kein JUE-zu-Europa-Automatismus
 
-### [ ] KR-4846 - GD-ROM-BIOS-Requestqueue, Status und TOC
+Abgeschlossen: 2026-07-22. Menue-/Resetaufrufe sind typisierte, nicht
+zurueckkehrende Lifecyclegrenzen; GD2-Alias und HLE-Stubintegritaet sind
+gesichert. Factory-Flash bleibt read-only, SYSINFO_ICON behauptet keinen
+Scheinerfolg und das Konsolenprofil ist von Disc-Areasymbolen getrennt.
+
+### [x] KR-4846 - GD-ROM-BIOS-Requestqueue, Status und TOC
 
 Abhaengigkeiten: KR-4845
 Prioritaet: P0
@@ -747,6 +768,12 @@ Prioritaet: P0
 - REQ_CMD, GET_CMD_STAT, EXEC_SERVER, Abort, Callbacks und Transferstatus abdecken
 - unbekannte Kommandos kontrolliert ablehnen
 - BIOS-TOC als 102 Gastwoerter fuer LOW/HIGH getrennt vom Paket-TOC erzeugen
+
+Abgeschlossen: 2026-07-22. Requestqueue, oeffentliche Zustandsklassen,
+Vierwortstatus, Bytezaehler, Abort, Transferstatus und kontrollierte
+Fehlerabschluesse sind implementiert. BIOS- und Paket-TOC besitzen getrennte,
+regressionsgesicherte Ausgabeformate. Die physische Transferintegration wird
+in `KR-4847` weitergefuehrt.
 
 ### [ ] KR-4847 - GD-ROM-MMIO, PIO, G1-DMA und Disc-Streaming
 
@@ -758,6 +785,13 @@ Prioritaet: P0
 - mehrphasige PIO-Daten und gastzeitgebundene G1-DMA-Teilschritte implementieren
 - konfigurierte GDSTAR/GDLEN von Livezaehlern GDSTARD/GDLEND trennen
 - Abort, Illegal Address, Overrun und Timeout sichtbar behandeln
+
+Teilstand 2026-07-22: Taskfile-Offsets und Command-IRQ-Quittierung,
+Command-28-/37-PIO-/DMA-Streaming, gastzeitgebundene 2048-Byte-G1-Chunks,
+Livezaehler, Fortschritt/Gesamtstream-Rest, Callback-Handoffs und Abort ohne
+spaete Ereignisse sind synthetisch belegt. Offen bleiben die vollstaendige
+Vereinheitlichung von BIOS- und ATA-/SPI-Zustand, mehrphasiges Paket-PIO samt
+CHECK/Sense sowie der eigenstaendige Dreiwortvertrag der EX-Kommandos 38/39.
 
 ### [ ] KR-4848 - Runtimecode, Disc-Module, Overlays und latentes AOT
 

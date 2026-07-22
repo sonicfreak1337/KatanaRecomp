@@ -1,6 +1,6 @@
 # Referenz- und Implementierungsprovenienz
 
-Stand: 2026-07-16, KR-3709. Dieser Bericht trennt Spezifikation,
+Stand: 2026-07-22, v0.48-Bootaudit. Dieser Bericht trennt Spezifikation,
 beobachtbares Verhalten, Architekturvergleich und uebernommenen Drittcode.
 
 ## Spezifikationen
@@ -20,6 +20,21 @@ Die Handbuecher werden als Verhaltensspezifikation verwendet. Text, Tabellen,
 Abbildungen und Beispielcode daraus werden nicht in KatanaRecomp
 weiterverbreitet.
 
+Fuer die oeffentlich sichtbare Dreamcast-BIOS- und GD-ROM-ABI ist KallistiOS
+die Primaerquelle:
+
+- BIOS-Syscallimplementierung:
+  <https://github.com/KallistiOS/KallistiOS/blob/master/kernel/arch/dreamcast/hardware/syscalls.c>
+- dokumentierter GD-ROM-Syscallvertrag:
+  <https://kos-docs.dreamcast.wiki/group__gdrom__syscalls.html>
+- dokumentierte GD-ROM-Streaming-API:
+  <https://kos-docs.dreamcast.wiki/group__gdrom.html>
+
+KatanaRecomp leitet daraus Rueckgabeklassen, Vierwortstatus, Request- und
+Streamingselektoren sowie nicht zurueckkehrende Lifecycle-Grenzen ab. Es wird
+weder KallistiOS-Code eingebettet noch dessen Implementierungsstruktur
+uebernommen.
+
 ## Beobachtbares Verhalten
 
 Die Tests verwenden selbst erstellte, minimale SH-4-Opcodes, ELF-/Raw-Images,
@@ -27,8 +42,13 @@ GDI-/ISO-Strukturen, Speicher- und MMIO-Ereignisse. Erwartete Werte wurden aus
 den oben genannten Semantikregeln abgeleitet und anschliessend als unabhaengige
 Assertions formuliert. Firmware-, Disc- oder Spielbytes sind keine Testorakel.
 
-Die lokale Sonic-Adventure-GDI und lokal vorhandene BIOS-/Flashdateien sind
-ausdruecklich nicht Teil dieses Gates. Die vom Nutzer genannte RetroBIOS-Seite
+Die lokalen Retail-GDIs bleiben ausschliesslich private, read-only
+Produktpfadtests. Die lokal zerlegte BIOS-Kopie wurde im v0.48-Audit nur
+statisch als semantischer Crosscheck fuer GD-ROM-Selektoren und
+Zustandsgrenzen betrachtet. Keine Firmwarebytes, Disassemblyausschnitte,
+Hashes oder titelbezogenen Werte werden uebernommen oder versioniert; alle
+Repositorytests formulieren den unabhaengig mit KallistiOS abgeglichenen
+Vertrag aus synthetischen Daten neu. Die vom Nutzer genannte RetroBIOS-Seite
 <https://github.com/Abdess/retrobios/tree/main/bios/Sega/Dreamcast> wurde in
 KR-3709 weder heruntergeladen noch als Implementierungs- oder Testquelle
 verwendet.
@@ -36,13 +56,12 @@ verwendet.
 ## Referenzvergleich: Flycast
 
 - Upstream: <https://github.com/flyinghead/flycast>
-- verifizierter Snapshot: `f09d1f22ef8d199b8b7a2395d0b46774e08a58c2`
-  vom 10.07.2026
+- lokal gepruefter Snapshot: `4126f1464fbc77c6bcec9cad00c32017ecabb799`
 - ausgewiesene Lizenz: GPL-2.0
-- betrachteter Umfang: Trennung virtueller/physischer Blockadressen,
-  Blockendklassen, zustandsabhaengige Blockvarianten, seitenweise
-  Codeinvalidierung, gastzyklusbasierte Ablaufplanung sowie die semantische
-  Einordnung der Reios-`SYSTEM`-Lifecycle-Aufrufe
+- betrachteter Umfang: Bootreihenfolge, sichtbare BIOS-/GD-ROM-Zustaende,
+  G1-Registerrollen, Interrupt- und Completiongrenzen, Trennung
+  virtueller/physischer Blockadressen, zustandsabhaengige Blockvarianten und
+  gastzyklusbasierte Ablaufplanung
 
 Flycast diente nur als Architektur-Plausibilitaetsvergleich. Keine Datei,
 Funktion, Tabelle oder Konstante wurde kopiert, uebersetzt oder gelinkt. Eine
@@ -50,12 +69,15 @@ direkte Flycast-Einbindung ist deaktiviert und darf erst nach einer expliziten
 Projektlizenzentscheidung erfolgen, welche die GPL-2.0-Pflichten fuer das
 Gesamtwerk bewertet.
 
-Fuer den v0.48-Bootaudit bestaetigte `reios_sys_misc` ausschliesslich die
-bereits unabhaengig aus BIOS- und SH-4-ABI-Analyse bestimmte Bedeutung von
-`SYSTEM 1` als Disc-Reboot und den bekannten direkten GD2-ABI-Einstieg bei
-`0x8C0010F0`. KatanaRecomp implementiert daraus eigenstaendig einen nativen
-Plattformkontrollfluss, der Disc-Bootbytes und Handoffzustand erneut aufbaut,
-und uebernimmt weder Flycast-Code noch dessen Emulationsarchitektur.
+Der v0.48-Bootaudit behandelt Reios-Verhalten ausdruecklich nicht als
+normative BIOS-Semantik. Insbesondere ist ein Reios-Neustart bei `SYSTEM 1`
+eine Emulatorpolicy fuer ein fehlendes BIOS-Menue und kein Beleg fuer einen
+Disc-Rebootvertrag. KatanaRecomp folgt hier der oeffentlichen ABI und erzeugt
+den nicht zurueckkehrenden Lifecycle-Ausgang `BiosMenu`. Der lokale Vergleich
+lieferte ausserdem einen Hinweis auf den direkten GD2-ABI-Einstieg bei
+`0x8C0010F0`; dessen Katana-Vertrag wurde eigenstaendig und synthetisch
+getestet. Weder Reios-Code noch Flycasts Emulationsarchitektur werden
+uebernommen.
 
 Der Vergleich des Dreamcast-BSC-Pfads zeigte ausserdem, dass der BIOS-Handoff
 bei Composite die oberen Kabelbits als Eingang behandelt und alternative
@@ -68,14 +90,17 @@ uebernommen.
 
 Der Name `dcrecomp` wurde im internen Planungscommit `7fdcdef` fuer die
 allgemeinen Muster aufgeteilte AOT-Ausgabe und zentrale Adresstabelle genannt.
-Eine autoritative Upstream-URL, ein reproduzierbarer externer Commit und eine
-kompatible Lizenz wurden dabei nicht festgehalten und konnten in KR-3709 nicht
-verifiziert werden. Deshalb ist dcrecomp **keine zulaessige Codequelle**.
+Fuer die vorhandene lokale Kopie lassen sich weder ein reproduzierbarer
+externer Commit noch eine geschlossene, kompatible Lizenzprovenienz
+verifizieren. Die Kopie enthaelt zudem als Flycast ausgewiesene, GPL-2.0-
+lizensierte Bestandteile. Deshalb ist dcrecomp **keine zulaessige Codequelle**
+und darf ausschliesslich als Warn- und Architekturvergleich gelesen werden.
 
 Hart kodierte Forced Entries, titelbezogene Remaps, stille BIOS-No-ops und
 Wall-Clock-Timing wurden ausdruecklich nicht uebernommen. Ohne nachgewiesene
 Upstream-Provenienz und kompatible Freigabe darf weder Code noch Datenmaterial
-aus einem als dcrecomp bezeichneten Projekt in KatanaRecomp gelangen.
+aus einem als dcrecomp bezeichneten Projekt in KatanaRecomp gelangen; das gilt
+insbesondere fuer die enthaltenen Flycast-Teile.
 
 ## Synthetische Testvektoren
 

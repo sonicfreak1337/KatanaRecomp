@@ -138,17 +138,17 @@ int main() {
     DreamcastG1BusController g1(
         g1_scheduler,
         HollyDmaTiming{4u},
-        [&](const std::uint32_t address, const std::uint32_t length, const std::uint32_t direction) {
-            require(address == 0x0C002000u && length == 32u && direction == 0u,
+        [&](const std::uint32_t address,
+            const std::uint32_t length,
+            const std::uint32_t direction) {
+            require(address == 0x0C002000u && length == 32u && direction == 1u,
                     "G1-DMA verliert Transferparameter bis zur Completion.");
             g1_bytes_committed = true;
         },
-        [&](const SystemAsicEvent event) {
-            g1_completed = event == SystemAsicEvent::GdromDma;
-        });
+        [&](const SystemAsicEvent event) { g1_completed = event == SystemAsicEvent::GdromDma; });
     g1.write(0x04u, 0x0C002000u);
     g1.write(0x08u, 32u);
-    g1.write(0x0Cu, 0u);
+    g1.write(0x0Cu, 1u);
     g1.write(0x14u, 1u);
     g1.write(0x18u, 1u);
     require(!g1_bytes_committed && !g1_completed && g1.read(0x18u) == 1u &&
@@ -167,6 +167,111 @@ int main() {
     require(g1.read(0x04u) == 0x0C002000u && g1.read(0x08u) == 32u &&
                 g1.read(0xF4u) == 0x0C123440u && g1.read(0xF8u) == 0u,
             "G1-BIOS-Handoff ueberschreibt konfigurierte DMA-Register.");
+
+    EventScheduler chunk_scheduler;
+    std::vector<std::uint32_t> chunk_addresses;
+    std::vector<std::uint32_t> chunk_lengths;
+    std::vector<std::uint32_t> chunk_directions;
+    std::vector<SystemAsicEvent> chunk_events;
+    DreamcastG1BusController chunked_g1(
+        chunk_scheduler,
+        HollyDmaTiming{4u},
+        [&](const std::uint32_t address,
+            const std::uint32_t length,
+            const std::uint32_t direction) {
+            chunk_addresses.push_back(address);
+            chunk_lengths.push_back(length);
+            chunk_directions.push_back(direction);
+        },
+        [&](const SystemAsicEvent event) { chunk_events.push_back(event); });
+    require(chunked_g1.begin_transfer(0x0C006000u, 4128u, 1u) &&
+                chunked_g1.read(0x04u) == 0x0C006000u && chunked_g1.read(0x08u) == 4128u &&
+                chunked_g1.read(0x0Cu) == 1u && chunked_g1.state().remaining == 4128u &&
+                chunked_g1.state().completion_cycle == 8192u,
+            "Oeffentlicher G1-Start uebernimmt keinen exakten gueltigen Transfervertrag.");
+    static_cast<void>(chunk_scheduler.advance_by(8191u, 4u));
+    require(chunk_addresses.empty() && chunk_events.empty(),
+            "G1-DMA committed den ersten Chunk vor dessen Gastzeit.");
+    static_cast<void>(chunk_scheduler.advance_by(1u, 1u));
+    require(chunk_addresses == std::vector<std::uint32_t>{0x0C006000u} &&
+                chunk_lengths == std::vector<std::uint32_t>{2048u} &&
+                chunk_directions == std::vector<std::uint32_t>{1u} &&
+                chunked_g1.state().active == 1u &&
+                chunked_g1.state().system_counter == 0x0C006800u &&
+                chunked_g1.state().peripheral_counter == 2048u &&
+                chunked_g1.state().remaining == 2080u && chunk_events.empty(),
+            "Erster G1-Chunk aktualisiert Liveadresse, Transferzaehler oder Residue falsch.");
+    static_cast<void>(chunk_scheduler.advance_by(8192u, 1u));
+    require(chunk_addresses == std::vector<std::uint32_t>{0x0C006000u, 0x0C006800u} &&
+                chunk_lengths == std::vector<std::uint32_t>{2048u, 2048u} &&
+                chunked_g1.state().system_counter == 0x0C007000u &&
+                chunked_g1.state().peripheral_counter == 4096u &&
+                chunked_g1.state().remaining == 32u && chunk_events.empty(),
+            "Zweiter G1-Chunk ist nicht separat gastzeitgebunden.");
+    static_cast<void>(chunk_scheduler.advance_by(128u, 1u));
+    require(
+        chunk_addresses == std::vector<std::uint32_t>{0x0C006000u, 0x0C006800u, 0x0C007000u} &&
+            chunk_lengths == std::vector<std::uint32_t>{2048u, 2048u, 32u} &&
+            chunked_g1.state().active == 0u && chunked_g1.state().system_counter == 0x0C007020u &&
+            chunked_g1.state().peripheral_counter == 4128u && chunked_g1.state().remaining == 0u &&
+            chunk_events == std::vector<SystemAsicEvent>{SystemAsicEvent::GdromDma},
+        "G1-DMA erzeugt nicht genau einen Abschluss nach dem letzten Chunk.");
+
+    const auto committed_before_abort = chunk_addresses.size();
+    require(chunked_g1.begin_transfer(0x0C008000u, 4096u, 1u),
+            "Gueltiger G1-Transfer kann nach Completion nicht erneut starten.");
+    static_cast<void>(chunk_scheduler.advance_by(8192u, 1u));
+    chunked_g1.abort_transfer();
+    require(chunked_g1.state().active == 0u && !chunked_g1.state().completion_event &&
+                chunked_g1.state().remaining == 0u &&
+                chunk_addresses.size() == committed_before_abort + 1u,
+            "G1-Abort beendet den aktiven Transfer nicht am Chunk-Safepoint.");
+    static_cast<void>(chunk_scheduler.advance_by(16384u, 16u));
+    require(chunk_addresses.size() == committed_before_abort + 1u &&
+                chunk_events == std::vector<SystemAsicEvent>{SystemAsicEvent::GdromDma},
+            "G1-Abort laesst einen spaeten Chunk oder Completion-Interrupt durch.");
+
+    require(chunked_g1.begin_transfer(0x0C00A000u, 4096u, 1u),
+            "G1-Reset-Test kann Transfer nicht starten.");
+    chunked_g1.reset();
+    static_cast<void>(chunk_scheduler.advance_by(16384u, 16u));
+    require(chunk_addresses.size() == committed_before_abort + 1u &&
+                chunk_events == std::vector<SystemAsicEvent>{SystemAsicEvent::GdromDma} &&
+                chunked_g1.state().active == 0u && !chunked_g1.state().completion_event,
+            "G1-Reset laesst einen spaeten Chunk oder Completion-Interrupt durch.");
+
+    require(chunked_g1.begin_transfer(0x0C00C000u, 4096u, 1u),
+            "G1-Scheduler-Reset-Test kann Transfer nicht starten.");
+    chunk_scheduler.reset();
+    static_cast<void>(chunk_scheduler.advance_by(16384u, 16u));
+    require(chunk_addresses.size() == committed_before_abort + 1u &&
+                chunk_events == std::vector<SystemAsicEvent>{SystemAsicEvent::GdromDma} &&
+                chunked_g1.state().active == 0u && !chunked_g1.state().completion_event,
+            "Scheduler-Reset laesst einen spaeten G1-Chunk oder Completion-Interrupt durch.");
+
+    require(!chunked_g1.begin_transfer(0x0C009000u, 0u, 1u) && chunked_g1.last_fault() &&
+                chunked_g1.last_fault()->reason == HollyDmaFaultReason::InvalidLength,
+            "G1-DMA akzeptiert eine leere Transferlaenge.");
+    chunked_g1.reset();
+    require(!chunked_g1.begin_transfer(0x0C009001u, 32u, 1u) && chunked_g1.last_fault() &&
+                chunked_g1.last_fault()->reason == HollyDmaFaultReason::IllegalAddress,
+            "G1-DMA akzeptiert eine nicht auf 32 Byte ausgerichtete Zieladresse.");
+    chunked_g1.reset();
+    require(!chunked_g1.begin_transfer(0x0C009000u, 33u, 1u) && chunked_g1.last_fault() &&
+                chunked_g1.last_fault()->reason == HollyDmaFaultReason::InvalidLength,
+            "G1-DMA akzeptiert eine nicht auf 32 Byte ausgerichtete Laenge.");
+    chunked_g1.reset();
+    require(!chunked_g1.begin_transfer(0x0C009000u, 32u, 0u) && chunked_g1.last_fault() &&
+                chunked_g1.last_fault()->reason == HollyDmaFaultReason::InvalidDirection,
+            "G1-DMA akzeptiert die falsche System-zu-Laufwerk-Richtung.");
+    chunked_g1.reset();
+    require(chunked_g1.begin_transfer(0x0C009000u, 64u, 1u) &&
+                !chunked_g1.begin_transfer(0x0C00A000u, 32u, 1u) && chunked_g1.last_fault() &&
+                chunked_g1.last_fault()->reason == HollyDmaFaultReason::Overrun,
+            "G1-DMA akzeptiert einen zweiten Start waehrend eines aktiven Transfers.");
+    static_cast<void>(chunk_scheduler.advance_by(1024u, 16u));
+    require(chunk_addresses.size() == committed_before_abort + 1u,
+            "Abgewiesener G1-Overrun laesst den alten Transfer spaet weiterlaufen.");
 
     memory.write_u32(0x005F7820u, 0x01000000u);
     memory.write_u32(0x005F7824u, 0x0C005000u);

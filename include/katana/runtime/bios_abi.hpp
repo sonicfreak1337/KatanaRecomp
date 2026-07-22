@@ -11,7 +11,7 @@
 
 namespace katana::runtime {
 
-inline constexpr std::uint32_t bios_abi_contract_version = 7u;
+inline constexpr std::uint32_t bios_abi_contract_version = 8u;
 inline constexpr std::uint32_t hle_bios_ram_base = 0x8C000000u;
 inline constexpr std::size_t hle_bios_ram_size = 64u * 1024u;
 inline constexpr std::uint32_t hle_bios_gdrom2_direct_alias_address = 0x8C0010F0u;

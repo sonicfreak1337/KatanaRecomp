@@ -93,6 +93,15 @@ int main() {
     require(throws<std::logic_error>([&] { empty_ordering.begin_list(PvrListType::Opaque); }),
             "TA vergisst die Reihenfolge einer leeren Liste.");
 
+    std::uint32_t empty_eol_notifications = 0u;
+    PvrTaFifo empty_eol_fifo(
+        [&](const PvrListType) { ++empty_eol_notifications; });
+    end_fifo_list(empty_eol_fifo);
+    require(empty_eol_fifo.finish_frame().primitives.empty() &&
+                empty_eol_fifo.metrics().list_completions == 0u &&
+                empty_eol_notifications == 0u,
+            "TA-End-of-List ohne Polygonheader ist kein gueltiger leerer No-op.");
+
     PvrTaFifo packed_fifo;
     packed_fifo.submit(header(0u));
     for (std::uint32_t index = 0u; index < 3u; ++index) {
@@ -106,6 +115,32 @@ int main() {
     const auto packed_frame = packed_fifo.finish_frame();
     require(packed_frame.primitives[0].vertices[0].argb == 0xFF102030u,
             "HOLLY2-Farbe eines untexturierten Packed-Vertices wird nicht aus 0x18 gelesen.");
+
+    PvrTaFifo user_clip_fifo;
+    Packet user_clip{};
+    put_u32(user_clip, 0u, 0x20000000u);
+    put_u32(user_clip, 12u, 0xFFFFFFC5u);
+    put_u32(user_clip, 16u, 0xFFFFFFE3u);
+    put_u32(user_clip, 20u, 0xFFFFFFCAu);
+    put_u32(user_clip, 24u, 0xFFFFFFE7u);
+    put_u32(user_clip, 28u, 0xFFFFFFFFu);
+    user_clip_fifo.submit(user_clip);
+    user_clip_fifo.submit(header(2u << 16u));
+    for (std::uint32_t index = 0u; index < 3u; ++index) {
+        auto packet = ta_vertex(index == 2u ? 0xF0000000u : 0xE0000000u,
+                                static_cast<float>(index));
+        put_u32(packet, 24u, 0xFFFFFFFFu);
+        user_clip_fifo.submit(packet);
+    }
+    end_fifo_list(user_clip_fifo);
+    const auto user_clip_frame = user_clip_fifo.finish_frame();
+    require(user_clip_frame.primitives.size() == 1u &&
+                user_clip_frame.primitives[0].material.user_clip_mode == 2u &&
+                user_clip_frame.primitives[0].material.user_clip_start_x == 5u &&
+                user_clip_frame.primitives[0].material.user_clip_start_y == 3u &&
+                user_clip_frame.primitives[0].material.user_clip_end_x == 10u &&
+                user_clip_frame.primitives[0].material.user_clip_end_y == 7u,
+            "TA-Userclip liest nicht Dwords 3 bis 6 oder maskiert X/Y falsch.");
 
     PvrTaFifo continued_fifo;
     const auto submit_packed_strip = [&](const float x_base) {

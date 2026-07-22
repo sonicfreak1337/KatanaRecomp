@@ -46,10 +46,31 @@
   Laufwerksreset den BIOS-Datentyp- und Callbackvertrag erhaelt.
   `GET_DRV_STAT` meldet aktive Reads als `BUSY`; der Datentypselektor
   akzeptiert nur die derzeit wirklich lieferbare 2048-Byte-Datensicht und
-  lehnt unimplementierte Rawsektormodi sichtbar ab. DMA-/PIO-Callbacks werden
-  stabil registriert; ihre Ausfuehrung folgt zusammen mit den echten
-  Streamingtransfers in `KR-4847`. Runtime-ABI 33 versioniert den erweiterten
-  oeffentlichen GD-ROM-Zustand und den abbrechbaren Async-Reader.
+  lehnt unimplementierte Rawsektormodi sichtbar ab. Der persistente PIO-
+  Callbackzustand bleibt ueber einen Laufwerksreset erhalten; DMA-Selektor 5
+  wird nicht mehr faelschlich als Vorabregistrierung behandelt. Runtime-ABI 33
+  versionierte diesen ersten Queue-/Abortvertrag.
+- Die GD-ROM-Kommandos 28 und 37 besitzen jetzt echte DMA-/PIO-
+  Streamingtransfers ueber die BIOS-Selektoren 6/7 beziehungsweise 12/13.
+  G1 bewegt Daten in gastzeitgebundenen 2048-Byte-Chunks in Richtung
+  Laufwerk-zu-System, aktualisiert Liveadresse und Residue pro Chunk und
+  erzeugt genau einen finalen DMA-Interrupt. Die Statusselektoren schreiben
+  waehrend eines Teiltransfers dessen uebertragenen Zaehler und nach Abschluss
+  den verbleibenden Gesamtstream. Selektor 5 uebergibt einen
+  Callback erst nach diesem Interrupt einmalig an den nativen Gastdispatch;
+  Selektor 11 bleibt die persistente PIO-Registrierung. Abbruch und Reset
+  entfernen alle spaeten Chunks, IRQs und Callbacks. Runtime-ABI 34 und
+  BIOS-ABI 8 versionieren den erweiterten Transfer- und Callbackvertrag.
+- Das GD-ROM-Taskfile verwendet den echten Alternate-Status-/Device-Control-
+  Offset `0x18`, fuehrt Feature-, Sector-Count-, Sector-Number- und Drive-
+  Select-Zustand und quittiert den Command-Interrupt ausschliesslich beim
+  normalen Statusread bei `0x9C`. Der alte erfundene Offset `0xA0` wird
+  sichtbar abgelehnt.
+- Der TA-Parser liest User-Tile-Clip aus den Dwords 3 bis 6 und maskiert X/Y
+  mit ihrer jeweiligen Feldbreite. Ein frisches End-of-List-Paket ist ein
+  gueltiger leerer No-op statt eines Hostfehlers. Diese allgemeinen
+  Korrekturen sind fokussiert regressionsgesichert; `KR-4849` bleibt bis zur
+  vollstaendigen TA-Eingangskette offen.
 - `SYSTEM 1` ist gemaess oeffentlicher BIOS-ABI ein nicht zurueckkehrender
   `BiosMenu`-Lifecycle-Ausgang und startet das Spiel nicht mehr intern neu.
   Reset und CD-Menue verwenden dieselbe typisierte Plattformgrenze. Die

@@ -7,6 +7,7 @@
 #include <array>
 #include <cstdint>
 #include <functional>
+#include <limits>
 #include <map>
 #include <memory>
 #include <optional>
@@ -15,6 +16,8 @@
 #include <vector>
 
 namespace katana::runtime {
+
+class DreamcastG1BusController;
 
 inline constexpr std::uint32_t gdrom_register_physical_base = 0x005F7000u;
 inline constexpr std::size_t gdrom_register_size = 0x100u;
@@ -31,6 +34,9 @@ struct GdRomProductStatus {
     std::uint32_t dma_callback_argument = 0u;
     std::uint32_t pio_callback = 0u;
     std::uint32_t pio_callback_argument = 0u;
+    std::uint64_t stream_bytes_remaining = 0u;
+    std::uint32_t transfer_bytes_remaining = 0u;
+    std::size_t pending_guest_callbacks = 0u;
 };
 
 enum class GdRomBiosRequestState : std::uint8_t {
@@ -65,6 +71,15 @@ struct GdRomBiosCallEvent {
     std::array<std::uint32_t, 4u> status{};
 };
 
+enum class GdRomBiosTransferKind : std::uint8_t { None, Dma, Pio };
+
+struct GdRomGuestCallback {
+    GdRomBiosTransferKind kind = GdRomBiosTransferKind::None;
+    std::uint32_t address = 0u;
+    std::uint32_t argument = 0u;
+    std::uint32_t request_id = 0u;
+};
+
 class DreamcastGdRomController final {
   public:
     using ModuleLoadObserver = std::function<void(std::uint32_t, std::span<const std::uint8_t>,
@@ -73,7 +88,8 @@ class DreamcastGdRomController final {
                              EventScheduler& scheduler,
                              GdRomDrive drive,
                              std::function<void(std::uint64_t)> completion_observer = {},
-                             ModuleLoadObserver module_load_observer = {});
+                             ModuleLoadObserver module_load_observer = {},
+                             std::function<void()> command_ack_observer = {});
     ~DreamcastGdRomController();
     [[nodiscard]] std::uint32_t read(std::uint32_t offset, MemoryAccessWidth width);
     void write(std::uint32_t offset, std::uint32_t value, MemoryAccessWidth width);
@@ -85,6 +101,8 @@ class DreamcastGdRomController final {
     [[nodiscard]] const GdRomBiosRequestStatus& last_bios_request() const noexcept;
     [[nodiscard]] std::span<const GdRomBiosCallEvent> bios_call_events() const noexcept;
     [[nodiscard]] std::string format_bios_call_events_json() const;
+    void bind_g1_bus(DreamcastG1BusController* g1_bus) noexcept;
+    [[nodiscard]] std::optional<GdRomGuestCallback> take_pending_guest_callback();
     void reset() noexcept;
 
   private:
@@ -98,6 +116,18 @@ class DreamcastGdRomController final {
         GdRomBiosRequestState state = GdRomBiosRequestState::Queued;
         std::array<std::uint32_t, 4u> status{};
         GdRomResponse response;
+        bool streaming_dma = false;
+        std::uint32_t stream_lba = 0u;
+        std::uint32_t stream_sector_count = 0u;
+        std::uint64_t stream_total_bytes = 0u;
+        std::uint64_t stream_consumed_bytes = 0u;
+        std::uint32_t cached_stream_sector = std::numeric_limits<std::uint32_t>::max();
+        std::vector<std::uint8_t> stream_sector_cache;
+        GdRomBiosTransferKind transfer_kind = GdRomBiosTransferKind::None;
+        std::uint32_t transfer_destination = 0u;
+        std::uint32_t transfer_size = 0u;
+        std::uint32_t transfer_transferred = 0u;
+        bool transfer_active = false;
     };
     void execute_packet();
     void schedule_packet();
@@ -108,6 +138,13 @@ class DreamcastGdRomController final {
     [[nodiscard]] std::array<std::uint32_t, 102u> build_bios_toc(std::uint32_t area) const;
     void execute_bios_request(CpuState& cpu, BiosRequest& request);
     void submit_bios_read(BiosRequest& request);
+    void submit_bios_stream(BiosRequest& request);
+    [[nodiscard]] std::vector<std::uint8_t> preview_stream_bytes(BiosRequest& request,
+                                                                 std::uint32_t length);
+    void commit_stream_bytes(BiosRequest& request, std::uint32_t length);
+    void finish_stream_transfer(BiosRequest& request);
+    [[nodiscard]] BiosRequest* active_stream_transfer(GdRomBiosTransferKind kind) noexcept;
+    void queue_stream_callback(std::uint32_t request_id, GdRomBiosTransferKind kind);
     void remember_bios_request(const BiosRequest& request) noexcept;
     [[nodiscard]] const BiosRequest* find_bios_request(std::uint32_t id) const noexcept;
     std::uint32_t finish_bios_call(GdRomBiosCallEvent event, std::uint32_t result);
@@ -123,6 +160,10 @@ class DreamcastGdRomController final {
     std::uint8_t status_ = 0x40u;
     std::uint8_t error_ = 0u;
     std::uint8_t interrupt_reason_ = 0u;
+    std::uint8_t features_ = 0u;
+    std::uint8_t sector_count_register_ = 0u;
+    std::uint8_t sector_number_ = 0u;
+    std::uint8_t drive_select_ = 0u;
     std::uint16_t byte_count_ = 0u;
     bool expecting_packet_ = false;
     std::map<std::uint64_t, BiosRequest> bios_requests_;
@@ -138,8 +179,15 @@ class DreamcastGdRomController final {
     std::uint32_t dma_callback_argument_ = 0u;
     std::uint32_t pio_callback_ = 0u;
     std::uint32_t pio_callback_argument_ = 0u;
+    bool dma_completion_pending_ = false;
+    bool pio_completion_pending_ = false;
+    std::uint32_t dma_completion_request_ = 0u;
+    std::uint32_t pio_completion_request_ = 0u;
+    std::vector<GdRomGuestCallback> pending_guest_callbacks_;
+    DreamcastG1BusController* g1_bus_ = nullptr;
     ModuleLoadObserver module_load_observer_;
     std::function<void(std::uint64_t)> completion_observer_;
+    std::function<void()> command_ack_observer_;
     std::optional<SchedulerEventId> packet_event_;
     SchedulerLifetimeToken scheduler_lifetime_;
 };
@@ -149,6 +197,7 @@ map_dreamcast_gdrom(Memory& memory,
                     EventScheduler& scheduler,
                     GdRomDrive drive,
                     std::function<void(std::uint64_t)> completion_observer = {},
-                    DreamcastGdRomController::ModuleLoadObserver module_load_observer = {});
+                    DreamcastGdRomController::ModuleLoadObserver module_load_observer = {},
+                    std::function<void()> command_ack_observer = {});
 
 } // namespace katana::runtime

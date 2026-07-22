@@ -191,6 +191,10 @@ std::uint32_t GdRomDrive::sector_size() const noexcept {
     return sector_size_;
 }
 
+std::uint64_t GdRomDrive::sector_count() const noexcept {
+    return source_->size() / sector_size_;
+}
+
 const std::vector<DiscTrackLayout>& GdRomDrive::layout() const noexcept {
     return layout_;
 }

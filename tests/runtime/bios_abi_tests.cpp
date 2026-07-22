@@ -2,10 +2,13 @@
 #include "katana/runtime/code_invalidation.hpp"
 #include "katana/runtime/dreamcast_boot.hpp"
 #include "katana/runtime/dreamcast_memory.hpp"
+#include "katana/runtime/gdrom_controller.hpp"
+#include "katana/runtime/holly_dma.hpp"
 #include "katana/runtime/platform_services.hpp"
 
 #include <cstdlib>
 #include <iostream>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -183,6 +186,7 @@ int main() {
     g1.configure_bios_handoff(0x0C123400u);
     g1.write(0x04u, 0x0C004000u);
     g1.write(0x08u, 32u);
+    g1.write(0x0Cu, 1u);
     g1.write(0x14u, 1u);
     g1.write(0x18u, 1u);
     static_cast<void>(g1_scheduler.advance_by(128u, 1u));
@@ -267,6 +271,102 @@ int main() {
                     std::string::npos,
                 "Runtimeblock meldet fehlenden Plattformdienst nicht konkret.");
     }
+
+    const auto gdrom_handle = blocks.lookup(vectors[3].handler_address, {});
+    const auto gdrom_block = gdrom_handle ? blocks.resolve(*gdrom_handle) : std::nullopt;
+    require(gdrom_block.has_value(),
+            "GD-ROM-Callback-Regression findet den echten BIOS-ABI-Block nicht.");
+    EventScheduler callback_scheduler;
+    std::vector<std::uint8_t> callback_disc_bytes(2u * 2048u);
+    for (std::size_t index = 0u; index < callback_disc_bytes.size(); ++index)
+        callback_disc_bytes[index] = static_cast<std::uint8_t>((index * 29u + 7u) & 0xFFu);
+    auto callback_disc =
+        std::make_shared<MemoryDiscSource>(callback_disc_bytes, "synthetic-bios-callback");
+    DreamcastGdRomController callback_gdrom(
+        cpu.memory, callback_scheduler, GdRomDrive(std::move(callback_disc)));
+    DreamcastG1BusController callback_g1(
+        callback_scheduler,
+        HollyDmaTiming{4u},
+        [&](const std::uint32_t address,
+            const std::uint32_t length,
+            const std::uint32_t direction) {
+            callback_gdrom.dma_to_memory(address, length, direction);
+        },
+        {});
+    callback_gdrom.bind_g1_bus(&callback_g1);
+    cpu.gdrom_services = &callback_gdrom;
+
+    constexpr std::uint32_t callback_parameters = 0x8C003000u;
+    constexpr std::uint32_t callback_transfer = 0x8C003020u;
+    constexpr std::uint32_t callback_destination = 0x8C004000u;
+    constexpr std::uint32_t callback_address = 0x8C010280u;
+    constexpr std::uint32_t callback_argument = 0x2468ACE0u;
+    constexpr std::uint32_t callback_pr = 0x8C012340u;
+    const auto invoke_gdrom_block = [&](const std::uint32_t selector) {
+        cpu.pc = vectors[3].handler_address;
+        cpu.r[6] = 0u;
+        cpu.r[7] = selector;
+        return gdrom_block->get().function(cpu, context);
+    };
+
+    cpu.memory.write_u32(callback_parameters, 150u);
+    cpu.memory.write_u32(callback_parameters + 4u, 2u);
+    cpu.memory.write_u32(callback_parameters + 8u, 0u);
+    cpu.memory.write_u32(callback_parameters + 12u, 0u);
+    cpu.pr = callback_pr;
+    cpu.r[4] = 28u;
+    cpu.r[5] = callback_parameters;
+    const auto queue_stream_exit = invoke_gdrom_block(0u);
+    const auto callback_request = cpu.r[0];
+    require(queue_stream_exit.kind == BlockEndKind::Return && callback_request >= 1u,
+            "Command-28-DMA-Stream wird nicht ueber den echten BIOS-Block eingereiht.");
+    cpu.r[4] = 0u;
+    cpu.r[5] = 0u;
+    static_cast<void>(invoke_gdrom_block(2u));
+    static_cast<void>(callback_scheduler.advance_by(1'000u, 1u));
+
+    const auto complete_dma_chunk = [&](const std::uint32_t destination) {
+        cpu.memory.write_u32(callback_transfer, destination);
+        cpu.memory.write_u32(callback_transfer + 4u, 2048u);
+        cpu.pr = callback_pr;
+        cpu.r[4] = callback_request;
+        cpu.r[5] = callback_transfer;
+        const auto start = invoke_gdrom_block(6u);
+        require(start.kind == BlockEndKind::Return && cpu.r[0] == 0u &&
+                    callback_g1.state().active == 1u,
+                "Selector 6 startet den synthetischen Command-28-DMA-Chunk nicht.");
+        static_cast<void>(callback_scheduler.advance_by(8'192u, 128u));
+        require(callback_g1.state().active == 0u &&
+                    callback_gdrom.status().completed_dma != 0u,
+                "Synthetischer Command-28-DMA-Chunk erreicht keine Gastzeit-Completion.");
+    };
+
+    complete_dma_chunk(callback_destination);
+    cpu.pr = callback_pr;
+    cpu.r[4] = callback_address;
+    cpu.r[5] = callback_argument;
+    const auto callback_exit = invoke_gdrom_block(5u);
+    require(callback_exit.kind == BlockEndKind::Call && cpu.pc == callback_address &&
+                cpu.r[4] == callback_argument && cpu.pr == callback_pr,
+            "Abgeschlossener Selector-5-Handoff liefert keinen Call mit Callbackargument und "
+            "unveraendertem PR.");
+
+    complete_dma_chunk(callback_destination + 0x1000u);
+    cpu.pr = callback_pr;
+    cpu.r[4] = callback_address | 1u;
+    cpu.r[5] = callback_argument ^ 0xFFFFFFFFu;
+    try {
+        static_cast<void>(invoke_gdrom_block(5u));
+        require(false, "Ungerade GD-ROM-DMA-Callbackadresse wurde dispatcht.");
+    } catch (const BiosAbiDispatchError& error) {
+        require(std::string(error.what()).find("invalid-transfer-callback") !=
+                        std::string::npos &&
+                    cpu.pr == callback_pr,
+                "Ungerade GD-ROM-DMA-Callbackadresse besitzt keine kontrollierte "
+                "BIOS-ABI-Diagnose.");
+    }
+    cpu.gdrom_services = nullptr;
+
     cpu.r[7] = 99u;
     try {
         static_cast<void>(route_hle_bios_abi_call(cpu));

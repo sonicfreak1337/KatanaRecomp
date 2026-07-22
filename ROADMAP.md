@@ -160,12 +160,12 @@ werden nur titelunabhaengige SH-4-, BIOS-, GD-ROM-, DMA-, TA- und PVR-Vertraege.
 
 ### Native-Boot-Tasks
 
-- [ ] `KR-4841` - Clean-Room-Referenz- und Nicht-Emulationsvertrag
+- [x] `KR-4841` - Clean-Room-Referenz- und Nicht-Emulationsvertrag
 - [ ] `KR-4842` - Seiteneffektfreie Bootdiagnostik und Wait-Loop-Klassifikation
-- [ ] `KR-4843` - Alias-korrekter nativer Disc-Systembootstrap
-- [ ] `KR-4844` - Gastzeit, Interruptreihenfolge und vollstaendiger AOT-Chaining-Guard
-- [ ] `KR-4845` - BIOS-Lifecycle, HLE-Bridges, Flash, Sysinfo und Region
-- [ ] `KR-4846` - GD-ROM-BIOS-Requestqueue, Status und TOC
+- [x] `KR-4843` - Alias-korrekter nativer Disc-Systembootstrap
+- [x] `KR-4844` - Gastzeit, Interruptreihenfolge und vollstaendiger AOT-Chaining-Guard
+- [x] `KR-4845` - BIOS-Lifecycle, HLE-Bridges, Flash, Sysinfo und Region
+- [x] `KR-4846` - GD-ROM-BIOS-Requestqueue, Status und TOC
 - [ ] `KR-4847` - GD-ROM-MMIO, PIO, G1-DMA und Disc-Streaming
 - [ ] `KR-4848` - Runtimecode, Disc-Module, Overlays und latentes AOT
 - [ ] `KR-4849` - TA-Eingang und PVR-Kommandopfad

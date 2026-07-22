@@ -29,6 +29,7 @@ enum class HollyDmaFaultReason : std::uint8_t {
     Overrun,
     Timeout,
     InvalidLength,
+    InvalidDirection,
     InvalidTrigger,
     MissingBackend,
     TransferFailure,
@@ -110,6 +111,8 @@ class DreamcastG2DmaController final {
 
 class DreamcastG1BusController final {
   public:
+    static constexpr std::uint32_t transfer_alignment = 32u;
+    static constexpr std::uint32_t transfer_chunk_bytes = 2048u;
     using TransferHandler =
         std::function<void(std::uint32_t address, std::uint32_t length, std::uint32_t direction)>;
     DreamcastG1BusController(EventScheduler& scheduler,
@@ -119,6 +122,9 @@ class DreamcastG1BusController final {
     ~DreamcastG1BusController();
     [[nodiscard]] std::uint32_t read(std::uint32_t offset) const;
     void write(std::uint32_t offset, std::uint32_t value);
+    [[nodiscard]] bool
+    begin_transfer(std::uint32_t address, std::uint32_t length, std::uint32_t direction);
+    void abort_transfer() noexcept;
     void configure_bios_handoff(std::uint32_t live_address) noexcept;
     void restore_bios_handoff() noexcept;
     void reset() noexcept;
@@ -126,8 +132,8 @@ class DreamcastG1BusController final {
     [[nodiscard]] const std::optional<HollyDmaFault>& last_fault() const noexcept;
 
   private:
-    void start();
-    void complete(SchedulerEventId event_id);
+    void schedule_chunk();
+    void complete_chunk(SchedulerEventId event_id);
     void handle_scheduler_reset() noexcept;
     void fail(HollyDmaFaultReason reason, SystemAsicEvent event) noexcept;
     EventScheduler& scheduler_;
@@ -147,6 +153,7 @@ class DreamcastG1BusController final {
     std::uint32_t dma_enabled_ = 0u;
     std::uint32_t dma_active_ = 0u;
     std::uint32_t system_mode_ = 1u;
+    std::uint64_t next_chunk_cycle_ = 0u;
     HollyDmaFaultReason fault_ = HollyDmaFaultReason::None;
     std::uint64_t fault_count_ = 0u;
     std::optional<HollyDmaFault> last_fault_;

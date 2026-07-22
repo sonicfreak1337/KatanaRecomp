@@ -575,6 +575,11 @@ initialize_dreamcast_runtime(CpuState& cpu,
                  ExecutableStorageRole::ProvenData});
             module_catalog->publish_loaded_range(
                 std::move(module), *module_blocks, *module_tracker);
+        },
+        [asic] {
+            const auto target = asic.lock();
+            if (!target) throw std::runtime_error("Dreamcast-System-ASIC-Lebenszyklus fehlt.");
+            target->write(0x04u, 1u);
         });
     cpu.gdrom_services = state.gdrom.get();
     const auto gdrom = std::weak_ptr<DreamcastGdRomController>(state.gdrom);
@@ -588,6 +593,7 @@ initialize_dreamcast_runtime(CpuState& cpu,
             if (!controller) throw std::runtime_error("G1-GD-ROM-Lebenszyklus fehlt.");
             controller->dma_to_memory(address, length, direction);
         });
+    state.gdrom->bind_g1_bus(state.holly_dma.g1.get());
     cpu.g1_bus = state.holly_dma.g1.get();
     const auto boot_sectors = static_cast<std::uint32_t>(
         (boot.boot_file.size() + dreamcast_data_sector_size - 1u) /

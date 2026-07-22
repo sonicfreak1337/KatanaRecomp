@@ -247,6 +247,23 @@ BlockExit bios_abi_block(CpuState& cpu, BlockExecutionContext& context) {
                : routed.vector == BiosAbiVectorKind::System
                    ? execute_system_call(cpu, routed.selector)
                    : 0u;
+    if (is_gdrom && cpu.gdrom_services != nullptr) {
+        if (const auto callback = cpu.gdrom_services->take_pending_guest_callback()) {
+            if (callback->address == 0u || (callback->address & 1u) != 0u)
+                throw BiosAbiDispatchError(source,
+                                           routed.selector,
+                                           routed.super_selector,
+                                           cpu.pr,
+                                           "invalid-transfer-callback" + register_snapshot(cpu));
+            cpu.r[4] = callback->argument;
+            cpu.pc = callback->address;
+            return make_block_exit(cpu,
+                                   context,
+                                   BlockEndKind::Call,
+                                   {source, canonical_physical_address(source)},
+                                   BlockAddress{cpu.pc, canonical_physical_address(cpu.pc)});
+        }
+    }
     cpu.pc = cpu.pr;
     return make_block_exit(cpu,
                            context,

@@ -1530,8 +1530,7 @@ void PvrTaFifo::submit(const std::span<const std::uint8_t> packet) {
     const auto pcw = ta_u32(packet, 0u);
     const auto parameter_type = (pcw >> 29u) & 7u;
     if (parameter_type == 0u) {
-        if (!accelerator_.list_open())
-            throw std::logic_error("TA-End-of-List ohne offene Objektliste.");
+        if (!accelerator_.list_open()) return;
         accelerator_.end_list();
         active_modifier_volume_.reset();
         ++metrics_.list_completions;
@@ -1539,11 +1538,11 @@ void PvrTaFifo::submit(const std::span<const std::uint8_t> packet) {
         return;
     }
     if (parameter_type == 1u) {
-        const auto start_x = ta_u32(packet, 16u);
-        const auto start_y = ta_u32(packet, 20u);
-        const auto end_x = ta_u32(packet, 24u);
-        const auto end_y = ta_u32(packet, 28u);
-        if (start_x > end_x || start_y > end_y || end_x >= 64u || end_y >= 32u)
+        const auto start_x = ta_u32(packet, 12u) & 0x3Fu;
+        const auto start_y = ta_u32(packet, 16u) & 0x1Fu;
+        const auto end_x = ta_u32(packet, 20u) & 0x3Fu;
+        const auto end_y = ta_u32(packet, 24u) & 0x1Fu;
+        if (start_x > end_x || start_y > end_y)
             throw std::invalid_argument("TA-Userclip liegt ausserhalb des 32-Pixel-Tilebereichs.");
         user_clip_start_x_ = static_cast<std::uint16_t>(start_x);
         user_clip_start_y_ = static_cast<std::uint16_t>(start_y);

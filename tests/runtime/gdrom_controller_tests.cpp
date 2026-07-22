@@ -1,11 +1,13 @@
 #include "katana/runtime/gdrom_controller.hpp"
 #include "katana/runtime/dreamcast_memory.hpp"
+#include "katana/runtime/holly_dma.hpp"
 
 #include <algorithm>
 #include <array>
 #include <cstdlib>
 #include <iostream>
 #include <memory>
+#include <span>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -17,6 +19,15 @@ void require(const bool condition, const char* message) {
         std::cerr << "TEST FEHLGESCHLAGEN: " << message << '\n';
         std::exit(EXIT_FAILURE);
     }
+}
+
+template <typename Operation> bool throws_runtime_error(Operation&& operation) {
+    try {
+        operation();
+    } catch (const std::runtime_error&) {
+        return true;
+    }
+    return false;
 }
 
 class LayoutDiscSource final : public katana::runtime::DiscSource {
@@ -49,12 +60,42 @@ int main() {
     std::vector<std::uint8_t> bytes(8u * 2048u, 0x5Au);
     auto source = std::make_shared<MemoryDiscSource>(bytes, "synthetic-gdrom");
     std::uint64_t completions = 0u;
+    std::uint64_t command_acks = 0u;
     DreamcastGdRomController controller(
-        cpu.memory, scheduler, GdRomDrive(source), [&](const std::uint64_t) { ++completions; });
+        cpu.memory,
+        scheduler,
+        GdRomDrive(source),
+        [&](const std::uint64_t) { ++completions; },
+        {},
+        [&] { ++command_acks; });
     require(controller.reload_system_bootstrap(cpu) &&
                 cpu.memory.read_u8(0x8C008100u) == 0x5Au &&
                 cpu.memory.read_u8(0x8C00B8FFu) == 0x5Au,
             "System-Disc-Check laedt die sieben Bootstrapsektoren nicht neu.");
+
+    controller.write(0x84u, 0x55u, MemoryAccessWidth::Byte);
+    controller.write(0x88u, 0x66u, MemoryAccessWidth::Byte);
+    controller.write(0x8Cu, 0x77u, MemoryAccessWidth::Byte);
+    controller.write(0x90u, 0x34u, MemoryAccessWidth::Byte);
+    controller.write(0x94u, 0x12u, MemoryAccessWidth::Byte);
+    controller.write(0x98u, 0xB7u, MemoryAccessWidth::Byte);
+    const auto taskfile_status = controller.status().ata_status;
+    require(controller.read(0x18u, MemoryAccessWidth::Byte) == taskfile_status &&
+                command_acks == 0u &&
+                controller.read(0x8Cu, MemoryAccessWidth::Byte) == 0x77u &&
+                controller.read(0x90u, MemoryAccessWidth::Byte) == 0x34u &&
+                controller.read(0x94u, MemoryAccessWidth::Byte) == 0x12u &&
+                controller.read(0x98u, MemoryAccessWidth::Byte) == 0xB0u,
+            "Korrigierte GD-ROM-Taskfile-Offsets liefern nicht ihren sichtbaren Zustand.");
+    require(controller.read(0x9Cu, MemoryAccessWidth::Byte) == taskfile_status &&
+                command_acks == 1u,
+            "Nur der normale Command-Status-Lesezugriff quittiert das GD-ROM-Ereignis nicht.");
+    require(throws_runtime_error(
+                [&] { static_cast<void>(controller.read(0xA0u, MemoryAccessWidth::Byte)); }) &&
+                throws_runtime_error(
+                    [&] { controller.write(0xA0u, 0u, MemoryAccessWidth::Byte); }),
+            "Der veraltete GD-ROM-Device-Control-Offset 0xA0 bleibt faelschlich aktiv.");
+    controller.reset();
 
     controller.write(0x9Cu, 0xA0u, MemoryAccessWidth::Byte);
     std::array<std::uint8_t, 12u> inquiry{};
@@ -175,17 +216,17 @@ int main() {
 
     cpu.r[4] = 0x8C010200u;
     cpu.r[5] = 0x12345678u;
-    require(controller.bios_call(cpu, 5u, 0u) == 0u,
-            "GD-ROM-DMA-Callback kann nicht registriert werden.");
+    require(controller.bios_call(cpu, 5u, 0u) == 0xFFFFFFFFu,
+            "GD-ROM-DMA-IRQ-Handoff wird ohne abgeschlossene DMA akzeptiert.");
     cpu.r[4] = 0x8C010240u;
     cpu.r[5] = 0x87654321u;
     require(controller.bios_call(cpu, 11u, 0u) == 0u &&
-                controller.status().dma_callback == 0x8C010200u &&
-                controller.status().dma_callback_argument == 0x12345678u &&
+                controller.status().dma_callback == 0u &&
+                controller.status().dma_callback_argument == 0u &&
                 controller.status().pio_callback == 0x8C010240u &&
                 controller.status().pio_callback_argument == 0x87654321u &&
                 controller.bios_call_events().back().request_id == 0u,
-            "GD-ROM-Callbackregistrierung ist kein stabiler Geraetezustand.");
+            "GD-ROM-Callbackvertraege trennen DMA-Handoff und PIO-Registrierung nicht.");
 
     constexpr std::uint32_t sector_mode = 0x8C00A000u;
     cpu.memory.write_u32(sector_mode, 0u);
@@ -217,7 +258,7 @@ int main() {
 
     cpu.r[4] = 0u;
     require(controller.bios_call(cpu, 9u, 0u) == 0u &&
-                controller.status().dma_callback == 0x8C010200u &&
+                controller.status().dma_callback == 0u &&
                 controller.status().pio_callback == 0x8C010240u &&
                 controller.status().sector_mode[1] == 0x2000u &&
                 controller.status().sector_mode[3] == 2048u,
@@ -251,6 +292,264 @@ int main() {
     require(completions == completions_before_init &&
                 cpu.memory.read_u8(reset_destination) == 0u,
             "INIT_SYSTEM laesst einen alten GD-ROM-Request spaeter abschliessen.");
+
+    CpuState stream_cpu;
+    stream_cpu.memory = Memory(0u);
+    static_cast<void>(map_dreamcast_main_ram(stream_cpu.memory));
+    EventScheduler stream_scheduler;
+    std::vector<std::uint8_t> stream_bytes(4u * 2048u);
+    for (std::size_t index = 0u; index < stream_bytes.size(); ++index)
+        stream_bytes[index] = static_cast<std::uint8_t>((index * 73u + 0x31u) & 0xFFu);
+    auto stream_source =
+        std::make_shared<MemoryDiscSource>(stream_bytes, "synthetic-streaming-gdrom");
+    std::uint64_t stream_drive_completions = 0u;
+    DreamcastGdRomController stream_controller(
+        stream_cpu.memory,
+        stream_scheduler,
+        GdRomDrive(std::move(stream_source)),
+        [&](const std::uint64_t) { ++stream_drive_completions; });
+    std::vector<SystemAsicEvent> stream_g1_events;
+    DreamcastG1BusController stream_g1(
+        stream_scheduler,
+        HollyDmaTiming{4u},
+        [&](const std::uint32_t address,
+            const std::uint32_t length,
+            const std::uint32_t direction) {
+            stream_controller.dma_to_memory(address, length, direction);
+        },
+        [&](const SystemAsicEvent event) { stream_g1_events.push_back(event); });
+    stream_controller.bind_g1_bus(&stream_g1);
+
+    constexpr std::uint32_t stream_parameters = 0x8C030000u;
+    constexpr std::uint32_t stream_status = 0x8C030020u;
+    constexpr std::uint32_t stream_transfer = 0x8C030040u;
+    constexpr std::uint32_t stream_residue = 0x8C030060u;
+    const auto queue_ready_stream = [&](const std::uint32_t command,
+                                        const std::uint32_t fad,
+                                        const std::uint32_t sector_count = 1u) {
+        stream_cpu.memory.write_u32(stream_parameters, fad);
+        stream_cpu.memory.write_u32(stream_parameters + 4u, sector_count);
+        stream_cpu.memory.write_u32(stream_parameters + 8u, 0u);
+        stream_cpu.memory.write_u32(stream_parameters + 12u, 0u);
+        stream_cpu.r[4] = command;
+        stream_cpu.r[5] = stream_parameters;
+        const auto request = stream_controller.bios_call(stream_cpu, 0u, 0u);
+        stream_cpu.r[4] = request;
+        stream_cpu.r[5] = stream_status;
+        require(request >= 1u && stream_controller.bios_call(stream_cpu, 1u, 0u) == 1u,
+                "Streaming-REQ_CMD wird nicht als PROCESSING eingereiht.");
+        static_cast<void>(stream_controller.bios_call(stream_cpu, 2u, 0u));
+        stream_cpu.r[4] = request;
+        stream_cpu.r[5] = stream_status;
+        const auto completions_before_ready = stream_drive_completions;
+        static_cast<void>(stream_scheduler.advance_by(999u, 1u));
+        require(stream_drive_completions == completions_before_ready &&
+                    stream_controller.bios_call(stream_cpu, 1u, 0u) == 1u,
+                "Streaming-Request wird vor seiner Gastzeit bereit.");
+        static_cast<void>(stream_scheduler.advance_by(1u, 1u));
+        stream_cpu.r[4] = request;
+        stream_cpu.r[5] = stream_status;
+        require(stream_drive_completions == completions_before_ready + 1u &&
+                    stream_controller.bios_call(stream_cpu, 1u, 0u) == 3u &&
+                    stream_cpu.memory.read_u32(stream_status + 8u) == 0u &&
+                    stream_controller.status().stream_bytes_remaining ==
+                        static_cast<std::uint64_t>(sector_count) * 2048u,
+                "Streaming-Request erreicht nach der Gastzeit keinen STREAMING-Zustand.");
+        return request;
+    };
+    const auto stream_memory_matches = [&](const std::uint32_t destination,
+                                           const std::size_t source_offset,
+                                           const std::size_t length) {
+        for (std::size_t index = 0u; index < length; ++index) {
+            if (stream_cpu.memory.read_u8(destination + static_cast<std::uint32_t>(index)) !=
+                stream_bytes[source_offset + index])
+                return false;
+        }
+        return true;
+    };
+
+    constexpr std::uint32_t dma_stream_destination = 0x8C040000u;
+    constexpr std::uint32_t dma_callback_address = 0x8C010280u;
+    constexpr std::uint32_t dma_callback_argument = 0x2468ACE0u;
+    const std::vector<std::uint8_t> untouched_stream(4096u, 0xCCu);
+    stream_cpu.memory.write_bytes(dma_stream_destination, untouched_stream);
+    const auto dma_stream_request = queue_ready_stream(28u, 150u, 2u);
+    stream_cpu.r[4] = dma_callback_address;
+    stream_cpu.r[5] = dma_callback_argument;
+    require(stream_controller.bios_call(stream_cpu, 5u, 0u) == 0xFFFFFFFFu &&
+                stream_controller.status().dma_callback == 0u &&
+                !stream_controller.take_pending_guest_callback(),
+            "DMA-IRQ-Callbackselector akzeptiert faelschlich eine Vorabregistrierung.");
+    stream_cpu.memory.write_u32(stream_transfer, dma_stream_destination);
+    stream_cpu.memory.write_u32(stream_transfer + 4u, 4096u);
+    stream_cpu.r[4] = dma_stream_request;
+    stream_cpu.r[5] = stream_transfer;
+    require(stream_controller.bios_call(stream_cpu, 6u, 0u) == 0u &&
+                stream_g1.state().active == 1u && stream_g1.state().enabled == 1u &&
+                stream_g1.state().direction == 1u && stream_g1.state().remaining == 4096u &&
+                stream_controller.status().transfer_bytes_remaining == 4096u,
+            "BIOS-DMA-Streaming startet keinen G1-Transfer in Laufwerk-zu-System-Richtung.");
+    stream_cpu.r[4] = dma_stream_request;
+    stream_cpu.r[5] = stream_residue;
+    require(stream_controller.bios_call(stream_cpu, 7u, 0u) == 1u &&
+                stream_cpu.memory.read_u32(stream_residue) == 0u,
+            "BIOS-DMA-Streaming meldet vor dem ersten Chunk keinen Null-Fortschritt.");
+    static_cast<void>(stream_scheduler.advance_by(8191u, 1u));
+    require(stream_cpu.memory.read_u8(dma_stream_destination) == 0xCCu &&
+                stream_g1_events.empty() &&
+                stream_controller.status().transfer_bytes_remaining == 4096u,
+            "BIOS-DMA-Streaming schreibt vor dem ersten gastzeitgebundenen G1-Chunk.");
+    static_cast<void>(stream_scheduler.advance_by(1u, 1u));
+    stream_cpu.r[4] = dma_stream_request;
+    stream_cpu.r[5] = stream_residue;
+    require(stream_memory_matches(dma_stream_destination, 0u, 2048u) &&
+                stream_cpu.memory.read_u8(dma_stream_destination + 2048u) == 0xCCu &&
+                stream_g1.state().system_counter == dma_stream_destination + 2048u &&
+                stream_g1.state().peripheral_counter == 2048u &&
+                stream_controller.bios_call(stream_cpu, 7u, 0u) == 1u &&
+                stream_cpu.memory.read_u32(stream_residue) == 2048u &&
+                stream_controller.status().stream_bytes_remaining == 2048u,
+            "Erster BIOS-DMA-Streamingchunk aktualisiert Daten oder Residue nicht exakt.");
+    static_cast<void>(stream_scheduler.advance_by(8192u, 1u));
+    require(stream_memory_matches(dma_stream_destination, 0u, 4096u) &&
+                stream_g1.state().active == 0u && stream_g1.state().remaining == 0u &&
+                stream_g1.state().system_counter == dma_stream_destination + 4096u &&
+                stream_g1.state().peripheral_counter == 4096u &&
+                stream_g1_events ==
+                    std::vector<SystemAsicEvent>{SystemAsicEvent::GdromDma} &&
+                stream_controller.status().completed_dma == 1u &&
+                stream_controller.status().stream_bytes_remaining == 0u &&
+                stream_controller.status().transfer_bytes_remaining == 0u,
+            "BIOS-DMA-Streaming liefert nicht exakt einen finalen IRQ und exakte Disc-Daten.");
+    stream_cpu.r[4] = dma_callback_address;
+    stream_cpu.r[5] = dma_callback_argument;
+    require(stream_controller.bios_call(stream_cpu, 5u, 0u) == 0u &&
+                stream_controller.status().pending_guest_callbacks == 1u,
+            "DMA-IRQ-Callbackselector nimmt die abgeschlossene DMA nicht entgegen.");
+    const auto dma_callback = stream_controller.take_pending_guest_callback();
+    require(dma_callback && dma_callback->kind == GdRomBiosTransferKind::Dma &&
+                dma_callback->address == dma_callback_address &&
+                dma_callback->argument == dma_callback_argument &&
+                dma_callback->request_id == dma_stream_request &&
+                !stream_controller.take_pending_guest_callback() &&
+                stream_controller.bios_call(stream_cpu, 5u, 0u) == 0xFFFFFFFFu,
+            "DMA-IRQ-Callback wird nicht genau einmal nach Completion ausgeliefert.");
+    stream_cpu.r[4] = dma_stream_request;
+    stream_cpu.r[5] = stream_residue;
+    require(stream_controller.bios_call(stream_cpu, 7u, 0u) == 0u &&
+                stream_cpu.memory.read_u32(stream_residue) == 0u,
+            "Abgeschlossenes BIOS-DMA-Streaming behaelt eine falsche Transferresidue.");
+    stream_cpu.r[4] = dma_stream_request;
+    stream_cpu.r[5] = stream_status;
+    require(stream_controller.bios_call(stream_cpu, 1u, 0u) == 2u &&
+                stream_cpu.memory.read_u32(stream_status) == 0u &&
+                stream_cpu.memory.read_u32(stream_status + 4u) == 0u &&
+                stream_cpu.memory.read_u32(stream_status + 8u) == 4096u &&
+                stream_cpu.memory.read_u32(stream_status + 12u) == 0u &&
+                stream_controller.bios_call(stream_cpu, 1u, 0u) == 0u,
+            "Finaler DMA-Streamingstatus ist nicht einmalig COMPLETED mit exakter Bytezahl.");
+
+    constexpr std::uint32_t pio_callback_address = 0x8C010240u;
+    constexpr std::uint32_t pio_callback_argument = 0x13579BDFu;
+    stream_cpu.r[4] = pio_callback_address;
+    stream_cpu.r[5] = pio_callback_argument;
+    require(stream_controller.bios_call(stream_cpu, 11u, 0u) == 0u,
+            "PIO-Streamingcallback kann nicht registriert werden.");
+    constexpr std::uint32_t pio_stream_destination = 0x8C041000u;
+    stream_cpu.memory.write_bytes(pio_stream_destination, untouched_stream);
+    const auto pio_stream_request = queue_ready_stream(37u, 151u, 2u);
+    stream_cpu.memory.write_u32(stream_transfer, pio_stream_destination);
+    stream_cpu.memory.write_u32(stream_transfer + 4u, 2048u);
+    stream_cpu.r[4] = pio_stream_request;
+    stream_cpu.r[5] = stream_transfer;
+    require(stream_controller.bios_call(stream_cpu, 12u, 0u) == 0u &&
+                stream_memory_matches(pio_stream_destination, 2048u, 2048u) &&
+                stream_cpu.memory.read_u8(pio_stream_destination + 2048u) == 0xCCu &&
+                stream_controller.status().stream_bytes_remaining == 2048u &&
+                stream_controller.status().transfer_bytes_remaining == 0u &&
+                stream_controller.status().pending_guest_callbacks == 1u,
+            "BIOS-PIO-Streaming schreibt nicht synchron exakte Daten oder verliert Callback.");
+    stream_cpu.r[4] = pio_stream_request;
+    stream_cpu.r[5] = stream_residue;
+    require(stream_controller.bios_call(stream_cpu, 13u, 0u) == 0u &&
+                stream_cpu.memory.read_u32(stream_residue) == 2048u,
+            "Abgeschlossener PIO-Chunk meldet nicht den verbleibenden Gesamtstream.");
+    const auto pio_callback = stream_controller.take_pending_guest_callback();
+    require(pio_callback && pio_callback->kind == GdRomBiosTransferKind::Pio &&
+                pio_callback->address == pio_callback_address &&
+                pio_callback->argument == pio_callback_argument &&
+                pio_callback->request_id == pio_stream_request &&
+                !stream_controller.take_pending_guest_callback(),
+            "PIO-Streamingcallback wird nicht genau einmal mit Request und Argument geliefert.");
+
+    stream_cpu.memory.write_u32(stream_transfer, pio_stream_destination + 2048u);
+    stream_cpu.memory.write_u32(stream_transfer + 4u, 2048u);
+    stream_cpu.r[4] = pio_stream_request;
+    stream_cpu.r[5] = stream_transfer;
+    require(stream_controller.bios_call(stream_cpu, 12u, 0u) == 0u &&
+                stream_memory_matches(pio_stream_destination + 2048u, 4096u, 2048u) &&
+                stream_controller.status().stream_bytes_remaining == 0u &&
+                stream_controller.status().pending_guest_callbacks == 1u,
+            "Zweiter PIO-Streamingchunk beendet den Stream nicht mit exakten Daten.");
+    stream_cpu.r[4] = pio_stream_request;
+    stream_cpu.r[5] = stream_residue;
+    require(stream_controller.bios_call(stream_cpu, 13u, 0u) == 0u &&
+                stream_cpu.memory.read_u32(stream_residue) == 0u,
+            "Finaler PIO-Streamingchunk behaelt eine falsche Gesamtresidue.");
+    const auto final_pio_callback = stream_controller.take_pending_guest_callback();
+    require(final_pio_callback &&
+                final_pio_callback->kind == GdRomBiosTransferKind::Pio &&
+                final_pio_callback->address == pio_callback_address &&
+                final_pio_callback->argument == pio_callback_argument &&
+                final_pio_callback->request_id == pio_stream_request &&
+                !stream_controller.take_pending_guest_callback(),
+            "Persistenter PIO-Callback wird nicht fuer jeden Transferrequest geliefert.");
+    stream_cpu.r[4] = pio_stream_request;
+    stream_cpu.r[5] = stream_status;
+    require(stream_controller.bios_call(stream_cpu, 1u, 0u) == 2u &&
+                stream_cpu.memory.read_u32(stream_status + 8u) == 4096u,
+            "Finaler PIO-Streamingstatus enthaelt nicht die exakte Bytezahl.");
+
+    constexpr std::uint32_t aborted_stream_destination = 0x8C042000u;
+    stream_cpu.memory.write_bytes(aborted_stream_destination, untouched_stream);
+    const auto aborted_stream_request = queue_ready_stream(28u, 152u, 2u);
+    stream_cpu.memory.write_u32(stream_transfer, aborted_stream_destination);
+    stream_cpu.memory.write_u32(stream_transfer + 4u, 4096u);
+    stream_cpu.r[4] = aborted_stream_request;
+    stream_cpu.r[5] = stream_transfer;
+    require(stream_controller.bios_call(stream_cpu, 6u, 0u) == 0u,
+            "Abort-Regression kann den DMA-Streamingtransfer nicht starten.");
+    stream_cpu.r[4] = dma_callback_address;
+    stream_cpu.r[5] = dma_callback_argument;
+    require(stream_controller.bios_call(stream_cpu, 5u, 0u) == 0xFFFFFFFFu &&
+                !stream_controller.take_pending_guest_callback(),
+            "Abort-Regression akzeptiert einen DMA-Callback vor dem echten IRQ.");
+    static_cast<void>(stream_scheduler.advance_by(8192u, 1u));
+    require(stream_memory_matches(aborted_stream_destination, 4096u, 2048u) &&
+                stream_cpu.memory.read_u8(aborted_stream_destination + 2048u) == 0xCCu,
+            "Abort-Regression erreicht keinen einzelnen bewiesenen DMA-Chunk.");
+    const auto g1_events_before_abort = stream_g1_events.size();
+    stream_cpu.r[4] = aborted_stream_request;
+    stream_cpu.r[5] = 0u;
+    require(stream_controller.bios_call(stream_cpu, 8u, 0u) == 0u &&
+                stream_g1.state().active == 0u && !stream_g1.state().completion_event &&
+                stream_g1.state().remaining == 0u,
+            "READ_ABORT stoppt den laufenden G1-Streamingtransfer nicht sofort.");
+    static_cast<void>(stream_scheduler.advance_by(16'384u, 256u));
+    stream_cpu.r[4] = dma_callback_address;
+    stream_cpu.r[5] = dma_callback_argument;
+    require(stream_controller.bios_call(stream_cpu, 5u, 0u) == 0xFFFFFFFFu &&
+                !stream_controller.take_pending_guest_callback(),
+            "Abgebrochene DMA erzeugt nachtraeglich einen quittierbaren Callback.");
+    stream_cpu.r[4] = aborted_stream_request;
+    stream_cpu.r[5] = stream_status;
+    require(stream_g1_events.size() == g1_events_before_abort &&
+                stream_memory_matches(aborted_stream_destination, 4096u, 2048u) &&
+                stream_cpu.memory.read_u8(aborted_stream_destination + 2048u) == 0xCCu &&
+                stream_controller.bios_call(stream_cpu, 1u, 0u) == 0u &&
+                !stream_controller.take_pending_guest_callback() &&
+                stream_controller.status().pending_guest_callbacks == 0u,
+            "READ_ABORT laesst spaete DMA-Chunks, IRQs oder Gastcallbacks durch.");
 
     CpuState toc_cpu;
     toc_cpu.memory = Memory(0u);
