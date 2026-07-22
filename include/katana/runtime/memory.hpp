@@ -179,6 +179,8 @@ class Memory {
     [[nodiscard]] bool maps_device(std::uint32_t address,
                                    std::size_t width,
                                    const MemoryDevice* device) const noexcept;
+    [[nodiscard]] bool is_writable_linear_range(std::uint32_t address,
+                                                std::size_t width) const noexcept;
 
     [[nodiscard]] MemoryAlignmentPolicy alignment_policy() const noexcept;
     void set_alignment_policy(MemoryAlignmentPolicy policy) noexcept;

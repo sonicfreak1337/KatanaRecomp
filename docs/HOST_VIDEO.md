@@ -47,11 +47,37 @@ Performancegrenze, nicht eine behauptete Capability.
 
 Der generierte Port dekodiert die aktiven PVR-Scanoutregister, einschliesslich
 `VO_CONTROL`-Blanking und `BORDER_COL`, und erzeugt daraus RGBA-Frames aus
-Dreamcast-VRAM. Ein Present wird erst zugelassen, nachdem der TA/PVR-Pfad einen
-Frame erfolgreich gerendert hat. `KR_FIRST_GUEST_FRAME` wird zusaetzlich nicht
-im Blankzustand gemeldet. Renderframes und Host-Presents bleiben getrennt in
-der Diagnostik sichtbar. Das relocatierte Runtime-SDK linkt die notwendigen
-Windows-Systembibliotheken selbst.
+Dreamcast-VRAM. Ein Renderabschluss speichert fuer jeden final geaenderten
+Pixel den gepackten Zielwert und die geaenderte Bytemaske als monotone
+Generationsevidenz. `PvrRegisterFile` ruft den Renderer am tatsaechlichen
+Scheduler-VBlank-In auf. Erst dort werden die aktuellen VRAM-Bytes erneut
+validiert und der exakte `PvrFrame` eingefroren; ein Render nach einem bereits
+verarbeiteten VBlank kann deshalb erst am folgenden VBlank zaehlen.
+
+Ein Proof verlangt aktiviertes `FB_R`, ungeblankten Videoausgang und einen
+tatsaechlich abgetasteten Evidenzpixel. PAL/Interlace prueft ausschliesslich das
+aktive `SPG_CONTROL`-Feld gegen `FB_R_SOF1` beziehungsweise `FB_R_SOF2` und
+traegt das Feld in den Proof ein. Auf der Schreibseite waehlen
+`SCALER_CTL.Interlace` Bit 17 und `Field Select` Bit 18 `FB_W_SOF1` oder
+`FB_W_SOF2`. Scaling und Interlace bestimmen, ob der geaenderte Quellpixel im
+Ausgabebild wirklich gesampelt wird; eine Offscreen-/RTT-Generation bleibt bis
+zu einem passenden Read-Framebuffer-Flip pending.
+
+Die Haltegrenze betraegt 256 Generationen beziehungsweise 64 MiB. Ein
+Bereichs-Fast-Reject vermeidet unnoetige Pixelscans; pro VBlank werden maximal
+2.097.152 Pixelrecords fair ab dem fortgeschriebenen Cursor geprueft. Die
+Metriken `dropped_render_evidence_generations`,
+`render_evidence_pixels_examined`, `render_evidence_range_rejections` und
+`render_evidence_scan_budget_exhaustions` machen Verwerfen, Arbeit und
+Budgetende sichtbar. Scanouts ueber 2048 x 2048 Pixel beziehungsweise
+4.194.304 Pixel insgesamt werden vor Frameallokation abgewiesen.
+
+`pump_guest_frame_proof` meldet den eingefrorenen Proof hostunabhaengig und
+reicht exakt dessen `PvrFrame` optional an `NativeVideoOutput` weiter.
+`KR_FIRST_GUEST_FRAME` entsteht aus `guest_proven`; der getrennte
+`KR_FIRST_PRESENTED_FRAME` erst nach nachweislich erfolgreichem Present. Das
+relocatierte Runtime-SDK linkt die notwendigen Windows-Systembibliotheken
+selbst.
 
 Auf Hosts ohne implementiertes natives Backend bleibt CLI/Core weiterhin ohne
 Fenstersystem-Abhaengigkeit buildbar. `native_video_available()` liefert dort
@@ -67,7 +93,14 @@ Win32-Fenster, Resize, RGBA-Present, abgeschnittene Frames und kontrolliertes
 Schliessen. `katana-port-cli-tests` kompiliert und startet zusaetzlich den
 produktiven `game.exe`-Pfad. Synthetische Lifecycle-Laeufe pruefen
 KeyDown/KeyUp, Fokusverlust/Fokusgewinn, Close im laufenden und pausierten
-Zustand sowie das nachweisliche Ende des nativen Gastdispatchs. Ein Frame wird
-nur gezaehlt, wenn die Gastfixture gueltige PVR-Scanoutregister programmiert und
-zuvor einen erfolgreichen PVR-Renderabschluss erzeugt; der aktuelle CLI-Smoke
-behauptet daher keine nicht erzeugte Presentation.
+Zustand sowie das nachweisliche Ende des nativen Gastdispatchs. Synthetische
+PVR-Regressionen pruefen deaktiviertes `FB_R`, Blank, einen nicht gebundenen
+Write-Framebuffer, einen spaeteren RTT-Flip, Scaling/Interlace-Abtastung und
+das einmalige Konsumieren einer Rendergeneration. Eine ausfuehrbare Regression
+fuehrt Scheduler-VBlank, Proof, `pump_guest_frame_proof` und ein `FakeVideo`
+pixelgenau zusammen; die Codegen-Regression bindet die beiden Marker an dessen
+getrennte Resultate. Der aktuelle CLI-Smoke erwartet weiterhin bewusst keinen
+Gastframe und behauptet daher weder eine nicht bewiesene Generation noch eine
+nicht ausgefuehrte Presentation. Die fokussierten Targets `pvr-render`,
+`pvr-framebuffer`, `host-video` und `port-export` bestehen mit 12 Buildjobs 4/4
+in 0,66 Sekunden.

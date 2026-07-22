@@ -1,28 +1,66 @@
 # Projektstatus
 
 Abgeschlossener interner Meilenstein: `v0.47.0`
-Phase: `v0.48.0` - Integration
-Naechster Roadmap-Task: `KR-4847`; die noch offene Wait-Loop-Klassifikation
-aus `KR-4842` laeuft als getrennte Diagnosearbeit
-Naechstes Gate: `v0.48.0` - Integration
-Weitere interne Gates: `v0.48.0` Integration und `v0.49.0` Alpha-Candidate
+Phase: `v0.48.0` - Native Disc Boot und erster echter Gastframe
+Aktuelle P0-Arbeit: den gemeinsamen `KR-4847`- bis `KR-4850`-Kernblock
+fokussiert validieren. `KR-4847` bleibt fuer EX 38/39 und noch unbelegte
+Timeout-/Overrun-Grenzen offen; danach folgen in `KR-4848` latentes natives AOT
+und in `KR-4849` die vollstaendige TA-Eingangskette. Die Wait-Loop-
+Klassifikation aus `KR-4842` laeuft als getrennte Diagnosearbeit.
+Naechstes Gate: `v0.48.0` - Boot- und Frame-Integration
+Weitere interne Gates: `v0.48.0` und `v0.49.0` Alpha-Candidate
 Erster oeffentlicher Release: `v0.50.0` Alpha
 
 ## Aktiver P0: Sonic-Adventure-PAL bis zum ersten echten Gastframe
 
 Stand 2026-07-22: `KR-4841`, `KR-4843`, `KR-4844`, `KR-4845` und `KR-4846`
-sind in Roadmap und Taskliste als abgeschlossen markiert. Der aktuelle
-`KR-4847`-Teilstand korrigiert GD-ROM-Taskfile und IRQ-Quittierung, fuehrt
-Command-28-/37-Streaming ueber BIOS-PIO und gastzeitgebundene G1-DMA-Chunks,
-liefert exakte Transferresidue und beendet Abort/Reset ohne spaete Ereignisse.
-Der DMA-Callback wird erst nach dem echten G1-Abschluss als typisierter
-Gast-Call zugestellt; PIO behaelt seinen persistenten Callbackvertrag. Die
-Chunkgroesse wurde bei unveraenderter 32-Byte-Ausrichtung von 32 auf 2048 Byte
-angehoben und reduziert damit die Schedulerereignisse eines Disc-Transfers um
-bis zu Faktor 64. Elf angrenzende GD-ROM-, BIOS-, G1-, Boot-, ASIC-, TA-,
-Manifest- und Portexporttests sind fokussiert gruen. Das konsolidierte
-180-Test-Gate und ein neuer privater PAL-Lauf folgen weiterhin erst nach dem
-zusammenhaengenden Kernblock. Ein erster Gastframe wird nicht behauptet.
+sind abgeschlossen. Das verbindliche Produktziel bleibt XenonRecomp-artig:
+`IP.BIN` und BootExecutable werden statisch aus SH-4 in nativen PC-Code
+rekompiliert; die Zielruntime stellt nur typisierte Dreamcast-
+Plattformgrenzen bereit und ist weder normaler Interpreter/JIT noch Discplayer
+oder Titelhackschicht. Dieses Produkt-Gate ist noch nicht erreicht: Der
+aktuelle Export linkt `runtime-sh4-interpreter` bedingungslos. `KR-4848` muss
+diese Bring-up-Abhaengigkeit durch gebundenes latentes AOT oder einen
+typisierten Abbruch ersetzen.
+
+Der aktuelle Kernblock erweitert `KR-4847` um einen gemeinsamen BIOS-/
+Taskfile-Besitzer, Dreamcast-SPI 11 bis 14, einen 32-Byte-Modepuffer und
+persistenten Sense/CHECK-Zustand. SPI `REQ_STAT` liefert zusaetzlich einen
+bereichsgeprueften 10-Byte-Laufwerks-/Track-/FAD-Status. PIO-DataIn/DataOut
+bleibt phasen- und
+ByteCount-gebunden; `CD_READ` mit `Features.Bit0` verwendet dagegen einen
+eigenen `DmaIn`-Pfad ohne PIO-DRQ oder Zwischen-IRQ und meldet erst nach dem
+letzten DMA-Byte den finalen Status-IRQ. Asynchrone BIOS-Completions sind vom
+quittierbaren Taskfile-IRQ-Latch getrennt; sequenzielle BIOS-Reads verlieren
+damit keine Flanke. Persistenter Sense-Payload setzt bei einem erfolgreichen
+Folgekommando nicht mehr faelschlich dessen ATA-`ERR`. Der fokussierte GD-ROM-
+Regressionstest besteht nach diesem Integrationsfix 1/1. Asynchrone Read- und
+BIOS-TOC-Zielpuffer werden vor jeder Mutation MMU-bewusst als vollstaendig
+linear schreibbarer Bereich validiert; ungueltige, ueberlaufende oder MMIO-
+Ziele enden ohne Teilwrite und Host-Exception als `InvalidField`. `KR-4848`
+besitzt physisch kanonische aktive Modulextents: Teilwrites erhalten
+unveraenderte Prefix-/Suffixbereiche,
+Copy/DMA entfernt veraltete Runtimeprovenienz und ein 4-KiB-Seitenindex weist
+Writes ohne moegliche Extentueberlappung vor dem Katalogscan ab. Ein
+vorvalidierter Ersatz derselben Modul-ID ist atomar; die neue Negativregression
+belegt, dass eine Ablehnung Katalog, Bloecke, Tracker, Provenienz und Metriken
+unveraendert laesst.
+
+`KR-4849` fuehrt Store-Queue-Pakete in den gemeinsamen TA-FIFO und aktualisiert
+dessen sichtbaren Positionszeiger. Der Hintergrundpfad bildet den festen
+Overscan-Quad einschliesslich HScale, D-Attributen und texturierter X/U-
+Erweiterung ab. `KR-4850` prueft final gepackte Pixelwerte samt Bytemaske erst
+am echten Scheduler-VBlank-In und friert dort den exakten Frame ein. PAL/
+Interlace bindet das aktive SPG-Feld an `FB_R_SOF1/2`; `SCALER_CTL` Bit 17/18
+waehlt rendernd `FB_W_SOF1/2`. 256 Generationen, 64 MiB Haltebudget,
+Range-Fast-Reject und 2.097.152 Pixelpruefungen pro VBlank begrenzen den
+Nachweis. Der gemeinsame Proof-Pump trennt Gastbeweis und erfolgreichen
+Host-Present. Die vier fokussierten PVR-/Framebuffer-/Hostvideo-/Portexport-
+Regressionen bestehen mit 12 Buildjobs 4/4 in 0,66 Sekunden. Die kombinierte
+fokussierte Validierung des gesamten Blocks besteht mit 12 Buildjobs 12/12.
+Das konsolidierte 180-Test-Gate und ein neuer privater PAL-Lauf folgen erst nach
+dem zusammenhaengenden Kernblock. Ein erster Sonic-Adventure-Gastframe wird
+nicht behauptet.
 
 Der allgemeine Disc-Hardwareauditor erfasst fuer den aktuellen privaten
 PAL-Build 55.504 erreichbare SH-4-Instruktionen in 815 Funktionen. Es bleiben
@@ -152,7 +190,7 @@ MMIO-Zugriff liegt im aktiven OCRAM; der fruehere Abbruch nach 12 Gastzyklen
 ist damit beseitigt. TA/PVR und ein echter Gastframe bleiben fuer den laengeren
 Folgelauf weiterhin offen.
 
-Runtime-ABI 34, BIOS-ABI 8 und Portprojektvertrag 20 bilden den kumulativen
+Runtime-ABI 35, BIOS-ABI 9 und Portprojektvertrag 21 bilden den kumulativen
 v0.48-Stand ab.
 PlatformServices-ABI 9 versioniert das invalidierungs- und timinggesicherte lokale
 Blockchaining.
@@ -441,7 +479,9 @@ Byteidentitaets-, Lebenszeit-, Invalidierungs- und Materialisierungskette
 verlassen. Neue Module und Overlays erhalten synthetische Fixtures. Die
 Demand-driven-Materialisierung validiert Ziel und Herkunft, findet oder baut
 einen budgetierten Block, registriert ihn und dispatcht erst danach. Sie bleibt
-deterministisch und abschaltbar; ein Interpreter ist nur Referenzpfad.
+deterministisch und abschaltbar. Im Zielvertrag ist ein Interpreter nur
+Referenz-/Diagnosepfad; der aktuelle Export linkt ihn bis zur offenen
+`KR-4848`-Korrektur noch bedingungslos.
 Runtime-only-Sites werden nach Aufrufen, Zielvielfalt, Stabilitaet, Misses,
 Materialisierungen und Invalidierungen profiliert, damit nachweislich mono-
 oder klein polymorphe Sites spaeter sicher spezialisiert werden koennen.

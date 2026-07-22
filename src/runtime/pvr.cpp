@@ -160,11 +160,15 @@ void PvrRegisterFile::write(const std::uint32_t offset, const std::uint32_t valu
         registers_[index(offset)] = value & 0x007FFFFCu;
         return;
     }
-    if (offset == pvr_register::ParameterBase || offset == pvr_register::RegionBase ||
-        offset == pvr_register::FramebufferReadSof1 ||
-        offset == pvr_register::FramebufferReadSof2 ||
-        offset == pvr_register::FramebufferWriteSof1 ||
+    if (offset == pvr_register::FramebufferWriteSof1 ||
         offset == pvr_register::FramebufferWriteSof2) {
+        // Bit 24 distinguishes a render-to-texture target from a display framebuffer.
+        // Preserve it in the guest-visible register and reduce to the physical VRAM
+        // address only at the renderer's memory access boundary.
+        registers_[index(offset)] = value & 0x01FFFFFCu;
+    } else if (offset == pvr_register::ParameterBase || offset == pvr_register::RegionBase ||
+               offset == pvr_register::FramebufferReadSof1 ||
+               offset == pvr_register::FramebufferReadSof2) {
         registers_[index(offset)] = value & 0x00FFFFFCu;
     } else if (offset == pvr_register::SpgTriggerPosition ||
                offset == pvr_register::SpgVblankInterrupt ||
@@ -1047,6 +1051,18 @@ std::optional<PvrScanoutDescriptor> decode_pvr_scanout(const PvrRegisterFile& re
                                                2u,
                                                "PVR-Line-Doubling-Hoehe ist zu gross.")
                             : scaled_height;
+    // The scan generator exposes ten-bit raster dimensions per field. Retain room
+    // for the composed pair of interlaced fields, but reject register combinations
+    // that would turn a tiny scale divisor into a multi-gigabyte host frame.
+    constexpr std::size_t maximum_scanout_dimension = 2048u;
+    constexpr std::size_t maximum_scanout_pixels =
+        maximum_scanout_dimension * maximum_scanout_dimension;
+    if (width > maximum_scanout_dimension || height > maximum_scanout_dimension)
+        throw std::out_of_range("PVR-Scanout-Skalierung liegt ausserhalb der Hardwaregrenzen.");
+    if (checked_multiply(width,
+                         height,
+                         "PVR-Scanout-Pixelzahl ist zu gross.") > maximum_scanout_pixels)
+        throw std::out_of_range("PVR-Scanout-Pixelbudget ist ueberschritten.");
     const auto field_span = checked_add(
         checked_multiply(stride,
                          field_height - 1u,
@@ -1961,15 +1977,6 @@ void PvrSoftwareRenderer::render(const PvrTaFrame& frame,
                                  const PvrRegisterFile& registers,
                                  LinearMemoryDevice& vram) {
     std::uint64_t frame_pixel_writes = 0u;
-    std::uint64_t frame_changed_pixels = 0u;
-    const auto write_pixel = [&](const std::uint32_t offset,
-                                 const std::uint32_t pack_mode,
-                                 const Rgba8 color) {
-        ++frame_pixel_writes;
-        if (write_render_pixel(
-                vram, offset, pack_mode, color.a, color.r, color.g, color.b))
-            ++frame_changed_pixels;
-    };
     const auto x_clip = registers.read(pvr_register::FramebufferXClip);
     const auto y_clip = registers.read(pvr_register::FramebufferYClip);
     const auto minimum_clip_x = x_clip & 0x7FFu;
@@ -1982,7 +1989,14 @@ void PvrSoftwareRenderer::render(const PvrTaFrame& frame,
     const auto height = maximum_clip_y + 1u;
     if (width > 2048u || height > 1024u)
         throw std::out_of_range("PVR-Renderclip ist ausserhalb der Hardwaregrenzen.");
-    const auto base = registers.read(pvr_register::FramebufferWriteSof1) & 0x007FFFFCu;
+    const auto scaler = registers.read(pvr_register::ScalerControl);
+    const auto scaler_interlaced = (scaler & 0x00020000u) != 0u;
+    const auto scaler_field = (scaler & 0x00040000u) != 0u;
+    const auto write_sof = scaler_interlaced && scaler_field
+                               ? pvr_register::FramebufferWriteSof2
+                               : pvr_register::FramebufferWriteSof1;
+    const auto write_start = registers.read(write_sof);
+    const auto base = write_start & 0x007FFFFCu;
     const auto pack_mode = registers.read(pvr_register::FramebufferWriteControl) & 7u;
     const auto pixel_bytes = render_bytes_per_pixel(pack_mode);
     const auto configured_modulo =
@@ -1995,7 +2009,25 @@ void PvrSoftwareRenderer::render(const PvrTaFrame& frame,
         throw std::invalid_argument("PVR-Render-Modulo ist kleiner als die Clipbreite.");
     if (base + stride * height > vram.size())
         throw std::out_of_range("PVR-Renderziel liegt ausserhalb des VRAM.");
-    std::vector<float> depth(static_cast<std::size_t>(width) * height,
+    const auto render_pixel_count = static_cast<std::size_t>(width) * height;
+    std::vector<std::uint32_t> original_pixels(render_pixel_count, 0u);
+    std::vector<std::uint8_t> touched_pixels(render_pixel_count, 0u);
+    const auto read_packed_pixel = [&](const std::uint32_t offset) {
+        return pixel_bytes == 2u ? static_cast<std::uint32_t>(vram.read_u16(offset))
+                                 : vram.read_u32(offset);
+    };
+    const auto write_pixel = [&](const std::uint32_t offset,
+                                 const std::size_t pixel_index,
+                                 const Rgba8 color) {
+        ++frame_pixel_writes;
+        if (touched_pixels[pixel_index] == 0u) {
+            touched_pixels[pixel_index] = 1u;
+            original_pixels[pixel_index] = read_packed_pixel(offset);
+        }
+        static_cast<void>(write_render_pixel(
+            vram, offset, pack_mode, color.a, color.r, color.g, color.b));
+    };
+    std::vector<float> depth(render_pixel_count,
                              -std::numeric_limits<float>::infinity());
     std::vector<std::uint8_t> shadow_eligible(static_cast<std::size_t>(width) * height, 0u);
     std::vector<std::uint8_t> volume_material_eligible(shadow_eligible.size(), 0u);
@@ -2007,60 +2039,222 @@ void PvrSoftwareRenderer::render(const PvrTaFrame& frame,
         return (x - a.x) * (b.y - a.y) - (y - a.y) * (b.x - a.x);
     };
     const auto background_config = registers.read(pvr_register::BackgroundPlaneConfig);
-    if ((background_config & 0x01000000u) != 0u) {
-        const auto parameter_base = registers.read(pvr_register::ParameterBase) & 0x007FFFFFu;
-        const auto background_offset = (background_config & 0x00FFFFFFu) >> 1u;
-        const auto background_address =
-            static_cast<std::uint64_t>(parameter_base) + background_offset;
-        if (background_address + 60u > vram.size())
-            throw std::out_of_range("PVR-Hintergrundebene liegt ausserhalb des VRAM.");
-        const auto read_vertex = [&](const std::uint32_t offset) {
-            return PvrVertex{std::bit_cast<float>(vram.read_u32(
-                                 static_cast<std::uint32_t>(background_address + offset))),
-                             std::bit_cast<float>(vram.read_u32(
-                                 static_cast<std::uint32_t>(background_address + offset + 4u))),
-                             std::bit_cast<float>(vram.read_u32(
-                                 static_cast<std::uint32_t>(background_address + offset + 8u))),
-                             0.0f,
-                             0.0f,
-                             vram.read_u32(
-                                 static_cast<std::uint32_t>(background_address + offset + 12u))};
-        };
-        const auto a = read_vertex(12u);
-        const auto b = read_vertex(28u);
-        const auto c = read_vertex(44u);
-        const auto plane_area = edge(a, b, c.x, c.y);
-        if (!std::isfinite(plane_area) || !std::isfinite(a.z) || !std::isfinite(b.z) ||
-            !std::isfinite(c.z))
-            throw std::invalid_argument("PVR-Hintergrundebene besitzt ungueltige Koordinaten.");
-        const auto channel = [](const std::uint32_t argb, const unsigned shift) {
-            return static_cast<float>((argb >> shift) & 0xFFu);
-        };
-        for (std::uint32_t y = minimum_clip_y; y <= maximum_clip_y; ++y) {
-            for (std::uint32_t x = minimum_clip_x; x <= maximum_clip_x; ++x) {
-                const auto px = static_cast<float>(x) + 0.5f;
-                const auto py = static_cast<float>(y) + 0.5f;
-                const auto w0 = plane_area == 0.0f ? 1.0f : edge(b, c, px, py) / plane_area;
-                const auto w1 = plane_area == 0.0f ? 0.0f : edge(c, a, px, py) / plane_area;
-                const auto w2 = plane_area == 0.0f ? 0.0f : edge(a, b, px, py) / plane_area;
-                const auto interpolate_channel = [&](const unsigned shift) {
-                    return static_cast<std::uint8_t>(std::lround(std::clamp(
-                        w0 * channel(a.argb, shift) + w1 * channel(b.argb, shift) +
-                            w2 * channel(c.argb, shift),
-                        0.0f,
-                        255.0f)));
-                };
-                const Rgba8 color{interpolate_channel(16u),
-                                  interpolate_channel(8u),
-                                  interpolate_channel(0u),
-                                  interpolate_channel(24u)};
-                const auto offset = static_cast<std::uint32_t>(
-                    base + static_cast<std::uint64_t>(y) * stride +
-                    static_cast<std::uint64_t>(x) * pixel_bytes);
-                write_pixel(offset, pack_mode, color);
-                depth[static_cast<std::size_t>(y) * width + x] =
-                    w0 * a.z + w1 * b.z + w2 * c.z;
+    const auto tag_offset = background_config & 0x7u;
+    const auto tag_address = (background_config >> 3u) & 0x001FFFFFu;
+    const auto skip = (background_config >> 24u) & 0x7u;
+    const auto shadow = (background_config & 0x08000000u) != 0u;
+    const auto parameter_bank = registers.read(pvr_register::ParameterBase) & 0x00F00000u;
+    const auto background_address =
+        (static_cast<std::uint64_t>(parameter_bank) +
+         static_cast<std::uint64_t>(tag_address) * 4u) &
+        (dreamcast_vram_size - 1u);
+    const auto background_isp =
+        vram.read_u32(static_cast<std::uint32_t>(background_address & 0x007FFFFCu));
+    const auto read_background_word = [&](const std::uint64_t address) {
+        return vram.read_u32(static_cast<std::uint32_t>(address & 0x007FFFFCu));
+    };
+    const auto background_tsp = read_background_word(background_address + 4u);
+    const auto background_tcw = read_background_word(background_address + 8u);
+    const auto textured = (background_isp & 0x02000000u) != 0u;
+    const auto uv16 = (background_isp & 0x00400000u) != 0u;
+    const auto offset_color = (background_isp & 0x01000000u) != 0u;
+    const auto required_vertex_payload_words =
+        (textured ? (uv16 ? 1u : 2u) : 0u) + 1u + (offset_color ? 1u : 0u);
+    if (skip < required_vertex_payload_words)
+        throw std::invalid_argument(
+            "PVR-Hintergrundvertex ist kleiner als sein ISP/TSP-Format.");
+    auto vertex_words = 3u + skip;
+    const auto intensity_shadow =
+        (registers.read(pvr_register::ShadingScale) & 0x00000100u) != 0u;
+    if (shadow && intensity_shadow) vertex_words += skip;
+    const auto vertex_stride = static_cast<std::uint64_t>(vertex_words) * 4u;
+    const auto first_vertex = background_address + 12u + tag_offset * vertex_stride;
+    const auto background_depth =
+        std::bit_cast<float>(registers.read(pvr_register::BackgroundPlaneDepth));
+    PvrMaterial background_material;
+    background_material.gouraud = (background_isp & 0x00800000u) != 0u;
+    background_material.textured = textured;
+    background_material.offset_color_enabled = offset_color;
+    background_material.shadow_enabled = shadow;
+    decode_ta_texture_words(background_material, background_tsp, background_tcw);
+    if (background_material.texture_x32_stride) {
+        background_material.texture_stride_width =
+            (registers.read(pvr_register::TextureModulo) & 0x1Fu) * 32u;
+        if (background_material.texture_stride_width < background_material.texture_width)
+            throw std::runtime_error(
+                "PVR-Hintergrundtexturstride ist kleiner als die logische Texturbreite.");
+    }
+    const auto read_vertex = [&](const std::uint64_t address) {
+        PvrVertex vertex;
+        vertex.x = std::bit_cast<float>(read_background_word(address));
+        vertex.y = std::bit_cast<float>(read_background_word(address + 4u));
+        vertex.z = background_depth;
+        auto cursor = address + 12u;
+        if (textured) {
+            if (uv16) {
+                const auto packed_uv = read_background_word(cursor);
+                vertex.u = decode_uv16_component(packed_uv, true);
+                vertex.v = decode_uv16_component(packed_uv, false);
+                cursor += 4u;
+            } else {
+                vertex.u = std::bit_cast<float>(read_background_word(cursor));
+                vertex.v = std::bit_cast<float>(read_background_word(cursor + 4u));
+                cursor += 8u;
             }
+        }
+        vertex.argb = read_background_word(cursor);
+        if (offset_color) vertex.oargb = read_background_word(cursor + 4u);
+        return vertex;
+    };
+    auto a = read_vertex(first_vertex);
+    auto b = read_vertex(first_vertex + vertex_stride);
+    auto c = read_vertex(first_vertex + vertex_stride * 2u);
+    const auto horizontal_scale = (scaler & 0x00010000u) != 0u ? 2.0f : 1.0f;
+    if (!textured) {
+        // The untextured background parameter supplies attributes, not raster
+        // coverage coordinates. The PVR defines a fixed oversized screen plane.
+        a.x = -256.0f * horizontal_scale;
+        a.y = 0.0f;
+        b.x = 896.0f * horizontal_scale;
+        b.y = 0.0f;
+        c.x = a.x;
+        c.y = 480.0f;
+    } else {
+        // Textured backgrounds extend beyond both horizontal viewport edges.
+        // Extend U by the same affine slope before applying horizontal doubling.
+        if (c.x == b.x) {
+            c.x = a.x;
+            c.u = a.u;
+        }
+        const auto extension_u = (b.u - a.u) * 0.4f;
+        a.x = (a.x - 256.0f) * horizontal_scale;
+        a.u -= extension_u;
+        b.x = (b.x + 256.0f) * horizontal_scale;
+        b.u += extension_u;
+        c.x = (c.x - 256.0f) * horizontal_scale;
+        c.u -= extension_u;
+    }
+    auto d = c;
+    d.x = b.x;
+    if (textured) d.u = b.u;
+    const auto first_triangle_area = edge(a, b, c.x, c.y);
+    const auto second_triangle_area = edge(b, d, c.x, c.y);
+    if (!std::isfinite(first_triangle_area) || !std::isfinite(second_triangle_area) ||
+        !std::isfinite(a.x) || !std::isfinite(a.y) ||
+        !std::isfinite(b.x) || !std::isfinite(b.y) || !std::isfinite(c.x) ||
+        !std::isfinite(c.y) || !std::isfinite(d.x) || !std::isfinite(d.y) ||
+        !std::isfinite(a.z) || !std::isfinite(b.z) || !std::isfinite(c.z) ||
+        !std::isfinite(d.z) ||
+        (textured && (!std::isfinite(a.u) || !std::isfinite(a.v) || !std::isfinite(b.u) ||
+                      !std::isfinite(b.v) || !std::isfinite(c.u) || !std::isfinite(c.v) ||
+                      !std::isfinite(d.u) || !std::isfinite(d.v))))
+        throw std::invalid_argument("PVR-Hintergrundebene besitzt ungueltige Koordinaten.");
+    if (textured && (first_triangle_area == 0.0f || second_triangle_area == 0.0f))
+        throw std::invalid_argument("Texturierte PVR-Hintergrundebene ist degeneriert.");
+    const auto first_triangle_side = edge(b, c, a.x, a.y);
+    const auto channel = [](const std::uint32_t argb, const unsigned shift) {
+        return static_cast<float>((argb >> shift) & 0xFFu);
+    };
+    for (std::uint32_t y = minimum_clip_y; y <= maximum_clip_y; ++y) {
+        for (std::uint32_t x = minimum_clip_x; x <= maximum_clip_x; ++x) {
+            const auto px = static_cast<float>(x) + 0.5f;
+            const auto py = static_cast<float>(y) + 0.5f;
+            const auto use_first_triangle =
+                edge(b, c, px, py) * first_triangle_side >= 0.0f;
+            const auto& first = use_first_triangle ? a : b;
+            const auto& second = use_first_triangle ? b : d;
+            const auto& third = c;
+            const auto triangle_area =
+                use_first_triangle ? first_triangle_area : second_triangle_area;
+            const auto w0 = triangle_area == 0.0f
+                                ? 1.0f
+                                : edge(second, third, px, py) / triangle_area;
+            const auto w1 = triangle_area == 0.0f
+                                ? 0.0f
+                                : edge(third, first, px, py) / triangle_area;
+            const auto w2 = triangle_area == 0.0f
+                                ? 0.0f
+                                : edge(first, second, px, py) / triangle_area;
+            const auto interpolate_channel = [&](const std::uint32_t first,
+                                                 const std::uint32_t second,
+                                                 const std::uint32_t third,
+                                                 const unsigned shift) {
+                const auto value = background_material.gouraud
+                                       ? w0 * channel(first, shift) +
+                                             w1 * channel(second, shift) +
+                                             w2 * channel(third, shift)
+                                       : channel(first, shift);
+                return static_cast<std::uint8_t>(
+                    std::lround(std::clamp(value, 0.0f, 255.0f)));
+            };
+            Rgba8 color{interpolate_channel(first.argb, second.argb, third.argb, 16u),
+                        interpolate_channel(first.argb, second.argb, third.argb, 8u),
+                        interpolate_channel(first.argb, second.argb, third.argb, 0u),
+                        background_material.vertex_alpha_enabled
+                            ? interpolate_channel(first.argb, second.argb, third.argb, 24u)
+                            : std::uint8_t{0xFFu}};
+            const Rgba8 interpolated_offset{
+                interpolate_channel(first.oargb, second.oargb, third.oargb, 16u),
+                interpolate_channel(first.oargb, second.oargb, third.oargb, 8u),
+                interpolate_channel(first.oargb, second.oargb, third.oargb, 0u),
+                interpolate_channel(first.oargb, second.oargb, third.oargb, 24u)};
+            std::uint8_t fog_coefficient = 0u;
+            if (background_material.fog_mode == 0u || background_material.fog_mode == 3u)
+                fog_coefficient = table_fog_coefficient(registers, background_depth);
+            else if (background_material.fog_mode == 1u && offset_color)
+                fog_coefficient = interpolated_offset.a;
+            if (background_material.fog_mode == 3u) {
+                const auto fog =
+                    decode_register_color(registers.read(pvr_register::FogTableColor));
+                color = {fog.r, fog.g, fog.b, fog_coefficient};
+            }
+            if (textured) {
+                const auto u = w0 * first.u + w1 * second.u + w2 * third.u;
+                const auto v = w0 * first.v + w1 * second.v + w2 * third.v;
+                const auto texture =
+                    sample_texture(vram, registers, background_material, u, v);
+                if (background_material.texture_format == 4u) {
+                    constexpr auto pi = 3.14159265358979323846f;
+                    const auto s = static_cast<float>(texture.r) * (0.5f * pi / 255.0f);
+                    const auto r = static_cast<float>(texture.g) * (2.0f * pi / 255.0f);
+                    const auto k1 = static_cast<float>(interpolated_offset.a) / 255.0f;
+                    const auto k2 = static_cast<float>(interpolated_offset.r) / 255.0f;
+                    const auto k3 = static_cast<float>(interpolated_offset.g) / 255.0f;
+                    const auto q = static_cast<float>(interpolated_offset.b) / 255.0f;
+                    const auto alpha = std::clamp(
+                        k1 + k2 * std::sin(s) +
+                            k3 * std::cos(s) * std::cos(r - 2.0f * pi * q),
+                        0.0f,
+                        1.0f);
+                    color = {0xFFu,
+                             0xFFu,
+                             0xFFu,
+                             static_cast<std::uint8_t>(std::lround(alpha * 255.0f))};
+                } else {
+                    color = shade_texture(texture, color, background_material.texture_shading);
+                }
+            }
+            if (offset_color && background_material.texture_format != 4u)
+                color = add_offset_color(color, interpolated_offset);
+            if (background_material.fog_mode == 0u) {
+                color = apply_fog(color,
+                                  decode_register_color(
+                                      registers.read(pvr_register::FogTableColor)),
+                                  fog_coefficient);
+            } else if (background_material.fog_mode == 1u && offset_color) {
+                color = apply_fog(color,
+                                  decode_register_color(
+                                      registers.read(pvr_register::FogVertexColor)),
+                                  fog_coefficient);
+            }
+            if (background_material.color_clamp_enabled)
+                color = clamp_fragment_color(color, registers);
+            const auto offset = static_cast<std::uint32_t>(
+                base + static_cast<std::uint64_t>(y) * stride +
+                static_cast<std::uint64_t>(x) * pixel_bytes);
+            const auto pixel_index = static_cast<std::size_t>(y) * width + x;
+            write_pixel(offset, pixel_index, color);
+            depth[pixel_index] = w0 * first.z + w1 * second.z + w2 * third.z;
         }
     }
     const auto render_primitive = [&](const PvrPrimitive& primitive) {
@@ -2276,7 +2470,7 @@ void PvrSoftwareRenderer::render(const PvrTaFrame& frame,
                     if (primitive.material.blend_destination_accumulation) {
                         secondary_accumulation[pixel_index] = source;
                     } else {
-                        write_pixel(offset, pack_mode, source);
+                        write_pixel(offset, pixel_index, source);
                     }
                     shadow_eligible[pixel_index] = primitive.material.shadow_enabled ? 1u : 0u;
                     volume_material_eligible[pixel_index] =
@@ -2404,7 +2598,7 @@ void PvrSoftwareRenderer::render(const PvrTaFrame& frame,
                 color.r = static_cast<std::uint8_t>((color.r * scale + 127u) / 256u);
                 color.g = static_cast<std::uint8_t>((color.g * scale + 127u) / 256u);
                 color.b = static_cast<std::uint8_t>((color.b * scale + 127u) / 256u);
-                write_pixel(offset, pack_mode, color);
+                write_pixel(offset, pixel_index, color);
                 ++metrics_.pixels;
             }
         }
@@ -2461,17 +2655,244 @@ void PvrSoftwareRenderer::render(const PvrTaFrame& frame,
     const auto translucent_volume_area =
         apply_modifier_volumes(PvrListType::TranslucentModifier);
     render_volume_materials(PvrListType::TranslucentModifier, translucent_volume_area);
+    PvrRenderGenerationEvidence evidence;
+    evidence.generation = next_render_generation_++;
+    evidence.write_base = base;
+    evidence.stride_bytes = static_cast<std::uint32_t>(stride);
+    evidence.width = width;
+    evidence.height = height;
+    evidence.pixel_bytes = static_cast<std::uint8_t>(pixel_bytes);
+    evidence.render_to_texture = (write_start & 0x01000000u) != 0u;
+    evidence.pixel_writes = frame_pixel_writes;
+    for (std::size_t pixel_index = 0u; pixel_index < render_pixel_count; ++pixel_index) {
+        if (touched_pixels[pixel_index] == 0u) continue;
+        const auto y = pixel_index / width;
+        const auto x = pixel_index % width;
+        const auto offset = static_cast<std::uint32_t>(
+            base + static_cast<std::uint64_t>(y) * stride +
+            static_cast<std::uint64_t>(x) * pixel_bytes);
+        const auto packed_value = read_packed_pixel(offset);
+        if (packed_value == original_pixels[pixel_index]) continue;
+        ++evidence.changed_pixels;
+        std::uint32_t changed_byte_mask = 0u;
+        for (std::size_t byte = 0u; byte < pixel_bytes; ++byte) {
+            const auto shift = static_cast<unsigned>(byte * 8u);
+            if (((packed_value >> shift) & 0xFFu) !=
+                ((original_pixels[pixel_index] >> shift) & 0xFFu))
+                changed_byte_mask |= 1u << byte;
+        }
+        evidence.changed_pixel_values.push_back(
+            PvrChangedPixelEvidence{offset, packed_value, changed_byte_mask});
+    }
+    const auto frame_changed_pixels = evidence.changed_pixels;
+    last_render_generation_ = evidence.generation;
+    if (!evidence.changed_pixel_values.empty()) {
+        const auto evidence_bytes =
+            evidence.changed_pixel_values.size() * sizeof(PvrChangedPixelEvidence);
+        while (!pending_render_evidence_.empty() &&
+               (pending_render_evidence_.size() >= render_evidence_capacity ||
+                pending_render_evidence_bytes_ + evidence_bytes >
+                    render_evidence_byte_capacity)) {
+            pending_render_evidence_bytes_ -=
+                pending_render_evidence_.front().changed_pixel_values.size() *
+                sizeof(PvrChangedPixelEvidence);
+            pending_render_evidence_.pop_front();
+            ++metrics_.dropped_render_evidence_generations;
+        }
+        if (evidence_bytes <= render_evidence_byte_capacity) {
+            next_evidence_scan_generation_ = evidence.generation;
+            pending_render_evidence_bytes_ += evidence_bytes;
+            pending_render_evidence_.push_back(std::move(evidence));
+        } else {
+            ++metrics_.dropped_render_evidence_generations;
+        }
+    }
     metrics_.pixel_writes += frame_pixel_writes;
     metrics_.changed_pixels += frame_changed_pixels;
     metrics_.last_frame_pixel_writes = frame_pixel_writes;
     metrics_.last_frame_changed_pixels = frame_changed_pixels;
-    if (frame_pixel_writes != 0u && frame_changed_pixels != 0u)
-        ++metrics_.proven_guest_frames;
     ++metrics_.frames;
+}
+
+void PvrSoftwareRenderer::observe_vblank_scanout(const PvrRegisterFile& registers,
+                                                 const std::span<const std::uint8_t> vram) {
+    // Keep the first unconsumed proof intact. This bounds queued frame storage and
+    // prevents later VBlanks from replacing the exact image that established the
+    // first host-independent guest-frame boundary.
+    if (queued_guest_frame_proof_) return;
+    const auto scanout = decode_pvr_scanout(registers, vram.size());
+    if (!scanout || scanout->video_blank || pending_render_evidence_.empty()) return;
+
+    const auto scanout_pixel_bytes = bytes_per_pixel(scanout->format);
+    const auto ceil_divide = [](const std::uint64_t numerator,
+                                const std::uint64_t denominator) {
+        return numerator / denominator + (numerator % denominator != 0u ? 1u : 0u);
+    };
+    const auto coordinate_is_sampled = [&](const std::uint32_t coordinate,
+                                           const std::uint32_t source_extent,
+                                           const std::uint32_t output_extent) {
+        const auto first_output = ceil_divide(
+            static_cast<std::uint64_t>(coordinate) * output_extent, source_extent);
+        const auto after_output = ceil_divide(
+            static_cast<std::uint64_t>(coordinate + 1u) * output_extent, source_extent);
+        return first_output != after_output;
+    };
+    const auto scanout_field = scanout->interlaced ? (registers.field() & 1u) : 0u;
+    const auto active_base = scanout_field == 0u ? scanout->base_offset
+                                                 : scanout->second_base_offset;
+    const auto active_field_rows = scanout->interlaced ? scanout->source_height / 2u
+                                                        : scanout->source_height;
+    const auto active_line_bytes =
+        static_cast<std::size_t>(scanout->source_width) * scanout_pixel_bytes;
+    const auto pixel_is_visible = [&](const PvrRenderGenerationEvidence& evidence,
+                                      const PvrChangedPixelEvidence& pixel) {
+        const auto pixel_end = static_cast<std::size_t>(pixel.offset) + evidence.pixel_bytes;
+        if (pixel_end > vram.size()) return false;
+        std::uint32_t current_value = 0u;
+        for (std::size_t byte = 0u; byte < evidence.pixel_bytes; ++byte)
+            current_value |= static_cast<std::uint32_t>(vram[pixel.offset + byte])
+                             << static_cast<unsigned>(byte * 8u);
+        if (current_value != pixel.packed_value) return false;
+        for (std::size_t byte = 0u; byte < evidence.pixel_bytes; ++byte) {
+            if ((pixel.changed_byte_mask & (1u << byte)) == 0u) continue;
+            const auto address = static_cast<std::size_t>(pixel.offset) + byte;
+            if (address < active_base) continue;
+            const auto relative = address - active_base;
+            const auto source_row = relative / scanout->stride_bytes;
+            const auto source_column = relative % scanout->stride_bytes;
+            if (source_row >= active_field_rows || source_column >= active_line_bytes)
+                continue;
+            const auto source_x =
+                static_cast<std::uint32_t>(source_column / scanout_pixel_bytes);
+            const auto source_line = static_cast<std::uint32_t>(
+                scanout->interlaced ? source_row * 2u + scanout_field : source_row);
+            if (coordinate_is_sampled(source_x, scanout->source_width, scanout->width) &&
+                coordinate_is_sampled(source_line, scanout->source_height, scanout->height))
+                return true;
+        }
+        return false;
+    };
+    const auto active_end = active_base +
+                            static_cast<std::size_t>(active_field_rows - 1u) *
+                                scanout->stride_bytes +
+                            active_line_bytes;
+    const auto generation_overlaps_active_field = [&](const PvrRenderGenerationEvidence& value) {
+        const auto generation_end = static_cast<std::uint64_t>(value.write_base) +
+                                    static_cast<std::uint64_t>(value.height - 1u) *
+                                        value.stride_bytes +
+                                    static_cast<std::uint64_t>(value.width) *
+                                        value.pixel_bytes;
+        return static_cast<std::uint64_t>(value.write_base) < active_end &&
+               active_base < generation_end;
+    };
+    const auto evidence_count = pending_render_evidence_.size();
+    auto start_index = evidence_count - 1u;
+    if (next_evidence_scan_generation_ != 0u) {
+        for (std::size_t index = evidence_count; index != 0u; --index) {
+            if (pending_render_evidence_[index - 1u].generation <=
+                next_evidence_scan_generation_) {
+                start_index = index - 1u;
+                break;
+            }
+        }
+    }
+    std::optional<std::size_t> selected_index;
+    std::size_t examined_pixels = 0u;
+    for (std::size_t step = 0u; step < evidence_count; ++step) {
+        if (examined_pixels == render_evidence_scan_pixel_budget) {
+            ++metrics_.render_evidence_scan_budget_exhaustions;
+            break;
+        }
+        const auto index = (start_index + evidence_count - step) % evidence_count;
+        auto& evidence = pending_render_evidence_[index];
+        const auto previous_index = index == 0u ? evidence_count - 1u : index - 1u;
+        if (!generation_overlaps_active_field(evidence)) {
+            ++metrics_.render_evidence_range_rejections;
+            evidence.validation_cursor = 0u;
+            next_evidence_scan_generation_ =
+                pending_render_evidence_[previous_index].generation;
+            continue;
+        }
+        auto cursor = std::min(evidence.validation_cursor,
+                               evidence.changed_pixel_values.size());
+        for (; cursor < evidence.changed_pixel_values.size() &&
+               examined_pixels < render_evidence_scan_pixel_budget;
+             ++cursor) {
+            ++examined_pixels;
+            ++metrics_.render_evidence_pixels_examined;
+            if (pixel_is_visible(evidence, evidence.changed_pixel_values[cursor])) {
+                selected_index = index;
+                break;
+            }
+        }
+        if (selected_index) break;
+        if (cursor != evidence.changed_pixel_values.size()) {
+            evidence.validation_cursor = cursor;
+            next_evidence_scan_generation_ = evidence.generation;
+            ++metrics_.render_evidence_scan_budget_exhaustions;
+            break;
+        }
+        evidence.validation_cursor = 0u;
+        next_evidence_scan_generation_ = pending_render_evidence_[previous_index].generation;
+    }
+    if (!selected_index) return;
+    const auto selected_generation = pending_render_evidence_[*selected_index].generation;
+    const auto selected_changed_pixels =
+        pending_render_evidence_[*selected_index].changed_pixels;
+
+    PvrFramebuffer framebuffer;
+    framebuffer.configure(scanout->width,
+                          scanout->height,
+                          scanout->stride_bytes,
+                          scanout->format,
+                          scanout->line_double,
+                          scanout->interlaced,
+                          scanout->source_width,
+                          scanout->source_height);
+    auto frame = framebuffer.capture(
+        vram,
+        scanout->base_offset,
+        scanout->interlaced ? std::optional<std::size_t>{scanout->second_base_offset}
+                            : std::nullopt);
+    queued_guest_frame_proof_ = PvrGuestFrameProof{selected_generation,
+                                                   selected_changed_pixels,
+                                                   scanout_field,
+                                                   *scanout,
+                                                   std::move(frame)};
+    for (auto evidence = pending_render_evidence_.begin();
+         evidence != pending_render_evidence_.end() &&
+         evidence->generation <= selected_generation;) {
+        pending_render_evidence_bytes_ -=
+            evidence->changed_pixel_values.size() * sizeof(PvrChangedPixelEvidence);
+        evidence = pending_render_evidence_.erase(evidence);
+    }
+    next_evidence_scan_generation_ = pending_render_evidence_.empty()
+                                         ? 0u
+                                         : pending_render_evidence_.back().generation;
+    ++metrics_.proven_guest_frames;
+}
+
+std::optional<PvrGuestFrameProof> PvrSoftwareRenderer::take_guest_frame_proof() {
+    if (!queued_guest_frame_proof_) return std::nullopt;
+    auto proof = std::move(queued_guest_frame_proof_);
+    queued_guest_frame_proof_.reset();
+    return proof;
 }
 
 const PvrSoftwareRenderMetrics& PvrSoftwareRenderer::metrics() const noexcept {
     return metrics_;
+}
+
+std::uint64_t PvrSoftwareRenderer::last_render_generation() const noexcept {
+    return last_render_generation_;
+}
+
+std::size_t PvrSoftwareRenderer::pending_render_generations() const noexcept {
+    return pending_render_evidence_.size();
+}
+
+std::size_t PvrSoftwareRenderer::pending_render_evidence_bytes() const noexcept {
+    return pending_render_evidence_bytes_;
 }
 
 const char* pvr_render_error_name(const PvrRenderError error) noexcept {

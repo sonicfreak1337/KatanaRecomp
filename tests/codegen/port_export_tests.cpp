@@ -294,11 +294,49 @@ int run_test(const int argc, char* argv[]) {
             "Produktive Store Queue uebertraegt keine 32 Byte nach RAM oder invalidiert Code.");
     runtime_cpu.memory.write_u32(0xFF00003Cu, 0x10u);
     runtime_cpu.memory.write_u32(0xE2000020u, 0x80000000u);
+    const auto ta_position_before_store_queue = runtime_state.pvr_registers->read(
+        katana::runtime::pvr_register::TaIspCurrent);
     require(runtime_state.store_queues->prefetch(0xE2000020u) &&
                 runtime_state.store_queue_transfers->back().target ==
                     katana::runtime::StoreQueueTarget::TileAccelerator &&
-                runtime_state.store_queue_transfers->back().bytes[0] == 0u,
-            "Produktive Store Queue verliert QACR-basierten TA-Transfer.");
+                runtime_state.store_queue_transfers->back().bytes[0] == 0u &&
+                runtime_state.pvr_registers->read(
+                    katana::runtime::pvr_register::TaIspCurrent) ==
+                    ta_position_before_store_queue + 32u,
+            "Produktive Store Queue verliert QACR-basierten TA-Transfer oder TA-Zeiger.");
+
+    const auto gdrom_events_before_packet = std::count_if(
+        runtime_state.system_asic->events().begin(),
+        runtime_state.system_asic->events().end(),
+        [](const auto& event) {
+            return event.event == katana::runtime::SystemAsicEvent::GdromCommand;
+        });
+    runtime_state.gdrom->write(0x9Cu, 0xA0u, katana::runtime::MemoryAccessWidth::Byte);
+    for (std::size_t word = 0u; word < 6u; ++word)
+        runtime_state.gdrom->write(0x80u, 0u, katana::runtime::MemoryAccessWidth::Halfword);
+    const auto packet_completion = runtime_state.scheduler->advance_by(1'000u, 1u);
+    const auto gdrom_events_after_completion = std::count_if(
+        runtime_state.system_asic->events().begin(),
+        runtime_state.system_asic->events().end(),
+        [](const auto& event) {
+            return event.event == katana::runtime::SystemAsicEvent::GdromCommand;
+        });
+    require(packet_completion.processed_events == 1u &&
+                gdrom_events_after_completion == gdrom_events_before_packet + 1u,
+            "GD-ROM-Completion setzt den Command-IRQ nicht atomar im Completion-Ereignis.");
+    static_cast<void>(runtime_state.gdrom->read(
+        0x9Cu, katana::runtime::MemoryAccessWidth::Byte));
+    const auto post_ack = runtime_state.scheduler->advance_to(
+        runtime_state.scheduler->current_cycle(), 1u);
+    const auto gdrom_events_after_ack = std::count_if(
+        runtime_state.system_asic->events().begin(),
+        runtime_state.system_asic->events().end(),
+        [](const auto& event) {
+            return event.event == katana::runtime::SystemAsicEvent::GdromCommand;
+        });
+    require(post_ack.processed_events == 0u &&
+                gdrom_events_after_ack == gdrom_events_after_completion,
+            "STATUS-Quittierung laesst einen verspaeteten Same-Cycle-GD-ROM-IRQ zurueck.");
     const auto ta_packets_before_channel2 = runtime_state.pvr_ta_fifo->metrics().packets;
     const auto pvr_dma_events_before_channel2 = std::count_if(
         runtime_state.system_asic->events().begin(),
@@ -413,14 +451,42 @@ int run_test(const int argc, char* argv[]) {
     hle_runtime_state.pvr_registers->write(
         katana::runtime::pvr_register::FramebufferWriteControl, 7u);
     const auto render_done_before_failure = render_done_count();
+    const auto render_completions_before_failure =
+        hle_runtime_state.pvr_registers->render_completion_count();
     hle_runtime_state.pvr_registers->write(katana::runtime::pvr_register::StartRender, 1u);
-    static_cast<void>(hle_runtime_state.scheduler->advance_by(2'000u, 1u));
-    require(render_done_count() == render_done_before_failure &&
+    static_cast<void>(hle_runtime_state.scheduler->advance_by(2'000u, 64u));
+    require(hle_runtime_state.pvr_registers->render_completion_count() ==
+                    render_completions_before_failure + 1u &&
+                render_done_count() == render_done_before_failure &&
                 hle_runtime_state.pvr_renderer->first_error().has_value(),
             "Fehlgeschlagener PVR-Renderpfad signalisiert RenderDone.");
     hle_runtime_state.pvr_registers->write(
         katana::runtime::pvr_register::FramebufferWriteControl, 0u);
+    constexpr std::uint32_t render_background = 0x00100000u;
+    hle_runtime_state.pvr_registers->write(
+        katana::runtime::pvr_register::ParameterBase, render_background);
+    hle_runtime_state.pvr_registers->write(
+        katana::runtime::pvr_register::BackgroundPlaneConfig, 1u << 24u);
+    hle_runtime_state.vram->write_u32(render_background, 0u);
+    hle_runtime_state.vram->write_u32(
+        render_background + 4u, (1u << 29u) | (2u << 22u) | (1u << 20u));
+    hle_runtime_state.vram->write_u32(render_background + 8u, 0u);
+    for (const auto vertex : {render_background + 12u,
+                              render_background + 28u,
+                              render_background + 44u}) {
+        hle_runtime_state.vram->write_u32(vertex, 0u);
+        hle_runtime_state.vram->write_u32(vertex + 4u, 0u);
+        hle_runtime_state.vram->write_u32(vertex + 8u, 0u);
+        hle_runtime_state.vram->write_u32(vertex + 12u, 0xFF204060u);
+    }
+    const auto render_completions_before_success =
+        hle_runtime_state.pvr_registers->render_completion_count();
     hle_runtime_state.pvr_registers->write(katana::runtime::pvr_register::StartRender, 1u);
+    static_cast<void>(hle_runtime_state.scheduler->advance_by(2'000u, 64u));
+    require(hle_runtime_state.pvr_registers->render_completion_count() ==
+                    render_completions_before_success + 1u &&
+                render_done_count() == render_done_before_failure + 1u,
+            "Gueltiger PVR-Renderabschluss erreicht RenderDone nicht deterministisch.");
     auto input = std::make_shared<katana::runtime::ReplayInputBackend>(
         std::vector<katana::runtime::ControllerState>{{}});
     hle_runtime_state.maple->attach(
@@ -442,11 +508,14 @@ int run_test(const int argc, char* argv[]) {
                            hle_runtime_state.system_asic->events().end(),
                            [&](const auto& event) { return event.event == expected; });
     };
-    require(has_asic_event(katana::runtime::SystemAsicEvent::PvrRenderDone) &&
-                has_asic_event(katana::runtime::SystemAsicEvent::MapleDma) &&
-                has_asic_event(katana::runtime::SystemAsicEvent::GdromCommand) &&
-                has_asic_event(katana::runtime::SystemAsicEvent::AicaInterrupt),
-        "Produktive PVR-, Maple-, GD-ROM- und AICA-Ereignisse erreichen das System-ASIC nicht.");
+    require(has_asic_event(katana::runtime::SystemAsicEvent::PvrRenderDone),
+            "Produktives PVR-RenderDone erreicht das System-ASIC nicht.");
+    require(has_asic_event(katana::runtime::SystemAsicEvent::MapleDma),
+            "Produktives Maple-DMA erreicht das System-ASIC nicht.");
+    require(has_asic_event(katana::runtime::SystemAsicEvent::GdromCommand),
+            "Produktive GD-ROM-Completion erreicht das System-ASIC nicht.");
+    require(has_asic_event(katana::runtime::SystemAsicEvent::AicaInterrupt),
+            "Produktiver AICA-Interrupt erreicht das System-ASIC nicht.");
     const auto output = fixture.root / "port";
     const PortExportOptions options{"synthetic_game", "0.37.0-dev", {1u, 4096u}};
 
@@ -636,9 +705,9 @@ int run_test(const int argc, char* argv[]) {
             read_text(output / "src" / "main.cpp")
                     .find("!lifecycle_test.empty()") != std::string::npos &&
             read_text(output / "src" / "main.cpp").find("KR_HOST_SHUTDOWN") != std::string::npos &&
-            read_text(output / "src" / "main.cpp").find("framebuffer.capture") !=
+            read_text(output / "src" / "main.cpp").find("pump_guest_frame_proof") !=
                 std::string::npos &&
-            read_text(output / "src" / "main.cpp").find("decode_pvr_scanout") !=
+            read_text(output / "src" / "main.cpp").find("result.guest_frame_proven") !=
                 std::string::npos &&
             read_text(output / "src" / "main.cpp").find("KATANA_PORT_PROGRESS") !=
                 std::string::npos &&
@@ -655,11 +724,13 @@ int run_test(const int argc, char* argv[]) {
                 std::string::npos &&
             read_text(output / "src" / "main.cpp").find("pump_guest_frame") !=
                 std::string::npos &&
-            read_text(output / "src" / "main.cpp").find("rendered_frames == 0u") !=
+            read_text(output / "src" / "main.cpp").find("result.frame_presented") !=
                 std::string::npos &&
             read_text(output / "src" / "main.cpp").find("KR_FIRST_GUEST_FRAME") !=
                 std::string::npos &&
-            read_text(output / "src" / "main.cpp").find("video->present") <
+            read_text(output / "src" / "main.cpp").find("KR_FIRST_PRESENTED_FRAME") !=
+                std::string::npos &&
+            read_text(output / "src" / "main.cpp").find("pump_guest_frame_proof") <
                 read_text(output / "src" / "main.cpp")
                     .find("run_runtime(cpu, services, *state.runtime_blocks)") &&
             read_text(output / "src" / "main.cpp").find("HostRuntimeSession") !=

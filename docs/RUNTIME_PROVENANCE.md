@@ -46,6 +46,21 @@ einen maximal 128 Byte grossen Snapshot autorisieren. Dessen Byteidentitaet
 wird vor Registrierung und vor jedem Dispatch erneut geprueft; ein
 ueberlappender Write deaktiviert ihn aliasunabhaengig.
 
+Ein aktives Modul besteht dabei aus kanonisch physischen Byte-Extents. Ein
+partieller Write entfernt nur sein tatsaechliches Ueberlappungsfenster und
+erhaelt unveraenderte Prefix-/Suffixextents. CPU-, FPU-, Store-Queue- und
+Fallback-Writes setzen Runtime-Write-Provenienz; Copy- und DMA-Loads loeschen
+sie fuer die ueberschriebenen Bytes. Byte-identische Writes veraendern weder
+Extents noch Provenienz. Physisch nichtlineare Bereiche ueber eine SH-4-
+Aliasgrenze werden abgelehnt.
+
+Ein kanonischer 4-KiB-Seitenindex haelt Referenzzaehler fuer aktive Extents.
+Ein Write auf Seiten ohne moegliche Ueberlappung ueberspringt dadurch den
+linearen Modulkatalogscan, ohne die Runtime-Write-Provenienz zu verlieren. Die
+Metriken `write_index_rejections` und `write_index_scans` machen Fast-Rejects
+und notwendige Extentscans getrennt sichtbar; Publish, Ersatz, partieller
+Patch, Unload und aliasierte Writes aktualisieren denselben Index.
+
 Die Historie wird best-effort nach der eigentlichen Invalidierung angelegt. Ein
 Speichermangel kann deshalb nur `dropped_invalidation_events` erhoehen und weder
 Seitengeneration, Blockgueltigkeit noch Linkaufloesung veraendern. Nicht portable

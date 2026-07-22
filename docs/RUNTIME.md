@@ -6,7 +6,7 @@ ungeloesten Kontrollflusspfaden mehr.
 
 ## ABI
 
-Die aktuelle Runtime-ABI ist Version `33`. Die typisierte Block-ABI ist seit
+Die aktuelle Runtime-ABI ist Version `35`. Die typisierte Block-ABI ist seit
 KR-4611 Version `2`.
 
 Generierter Code enthaelt eine Compile-Time-Pruefung gegen diese Version. Eine
@@ -40,6 +40,9 @@ Die kumulativen Versionen 21 bis 32 binden die anschliessenden SH-4-, MMU-,
 DMA-, PVR-, Boot-, Modul- und AOT-Vertraege; ihre einzelnen Aenderungen sind im
 Changelog nachvollziehbar. ABI-Version 33 erweitert den oeffentlichen
 GD-ROM-Produktzustand und macht ausstehende Async-Reads explizit abbrechbar.
+ABI-Version 34 versioniert die erweiterten GD-ROM-Streaming- und
+Callbackgrenzen. ABI-Version 35 bindet aktive Modulextents sowie den
+scanoutgebundenen PVR-Framebeweis in den oeffentlichen Runtimevertrag ein.
 
 ## CMake
 

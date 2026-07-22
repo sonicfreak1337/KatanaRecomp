@@ -690,16 +690,25 @@ mehrere Spiele verwenden denselben titelunabhaengigen Installervertrag.
 Abhaengigkeiten: KR-4831
 Prioritaet: P0
 
-- Referenzcommits fuer Flycast und dcrecomp pinnen
-- Flycast nur als Verhaltensvergleich und dcrecomp nur als AOT-Architekturvergleich nutzen
+- Referenzcommits fuer Flycast und XenonRecomp pinnen; dcrecomp ausschliesslich
+  als nicht uebernehmbare Warn-/Architekturreferenz dokumentieren
+- Flycast nur als Verhaltensvergleich und XenonRecomp nur als
+  AOT-Werkzeugklassenvergleich nutzen
 - keine Code-, Tabellen- oder Konstantenuebernahme und kein Linking
-- bounded Interpreter ausschliesslich fuer bytebewiesenen Runtimecode zulassen
+- bounded Interpreter nur als explizite Bring-up-Diagnose zulassen; der normale
+  Produktpfad darf weder Interpreter noch JIT enthalten
+- `IP.BIN` und BootExecutable statisch in nativen PC-Code rekompilieren;
+  Dreamcast-Komponenten nur als titelunabhaengige typisierte Plattformgrenzen
 
-Abgeschlossen: 2026-07-22. Der Flycast-Vergleich ist auf den lokal geprueften
-Snapshot festgelegt und bleibt reiner Verhaltensvergleich. Die nicht
-reproduzierbar versionierte dcrecomp-Kopie mit enthaltenen GPL-Flycast-Teilen
-ist ausdruecklich keine Codequelle. Der Produktpfad bleibt AOT; nur
-bytebewiesener Runtimecode darf die begrenzte Diagnosegrenze verwenden.
+Abgeschlossen als Architektur- und Provenienzvertrag: 2026-07-22. Flycast
+bleibt ein gepinnter reiner
+Verhaltensvergleich, XenonRecomp das gepinnte Vorbild fuer die statische
+Executable-zu-C++-/Hostcompiler-Werkzeugklasse. Die nicht reproduzierbar
+versionierte dcrecomp-Kopie mit enthaltenen GPL-Flycast-Teilen ist
+ausdruecklich keine Codequelle. Der Produktpfad rekompiliert `IP.BIN` und
+BootExecutable AOT. Das Gate verbietet die Interpretergrenze im normalen
+Portlauf; der aktuelle Export linkt sie noch bedingungslos und fuehrt diese
+Implementierungsluecke ausdruecklich als offenen Teil von `KR-4848`.
 
 ### [ ] KR-4842 - Seiteneffektfreie Bootdiagnostik und Wait-Loop-Klassifikation
 
@@ -789,9 +798,26 @@ Prioritaet: P0
 Teilstand 2026-07-22: Taskfile-Offsets und Command-IRQ-Quittierung,
 Command-28-/37-PIO-/DMA-Streaming, gastzeitgebundene 2048-Byte-G1-Chunks,
 Livezaehler, Fortschritt/Gesamtstream-Rest, Callback-Handoffs und Abort ohne
-spaete Ereignisse sind synthetisch belegt. Offen bleiben die vollstaendige
-Vereinheitlichung von BIOS- und ATA-/SPI-Zustand, mehrphasiges Paket-PIO samt
-CHECK/Sense sowie der eigenstaendige Dreiwortvertrag der EX-Kommandos 38/39.
+spaete Ereignisse sind synthetisch belegt. BIOS und Taskfile besitzen nun einen
+gemeinsamen Laufwerksbesitzer. Dreamcast-SPI 11 bis 14 verwenden einen
+vollstaendigen 32-Byte-Modepuffer, persistenten CHECK/Sense und phasengetrenntes
+PIO-DataIn/DataOut; `REQ_STAT` liefert den bereichsgeprueften 10-Byte-
+Laufwerks-/Track-/FAD-Status. `CD_READ` mit `Features.Bit0` fuehrt stattdessen einen
+eigenen `DmaIn`-/DMARQ-DMACK-Pfad ohne PIO-DRQ und Zwischen-IRQ aus; partielle
+Transfers bleiben `BSY`, erst das letzte DMA-Byte erzeugt den finalen
+Status-IRQ. Unbekannte SET-FEATURES-Kombinationen sowie InvalidCommand,
+InvalidField, OutOfRange und NoMedia enden kontrolliert. Offen bleiben der
+eigenstaendige Dreiwortvertrag der EX-Kommandos 38/39 sowie noch nicht belegte
+Timeout-/Overrun-Grenzen. Asynchrone BIOS-Completions verwenden nicht das
+quittierbare Taskfile-IRQ-Latch, sodass sequenzielle BIOS-Reads ihre Flanke
+behalten; persistenter Sense-Payload und ATA-`ERR` des aktuellen Kommandos sind
+getrennt. Der fokussierte GD-ROM-Test besteht nach diesem Integrationsfix 1/1;
+asynchrone Read- und TOC-Gastpuffer werden vor dem ersten Write MMU-bewusst als
+vollstaendig linear schreibbarer Bereich validiert und bei ungueltigen,
+ueberlaufenden oder MMIO-Zielen atomar als `InvalidField` abgelehnt. Die
+kombinierte fokussierte Validierung des aktuellen Blocks besteht mit 12
+Buildjobs 12/12; EX 38/39 und unabhaengig belegte Timeout-/Overrun-Grenzen
+bleiben offen.
 
 ### [ ] KR-4848 - Runtimecode, Disc-Module, Overlays und latentes AOT
 
@@ -801,7 +827,21 @@ Prioritaet: P0
 - bekannte Discdateien und Module beim Export analysieren und latentes AOT erzeugen
 - Aktivierung nur bei exakter Content- und Byteidentitaet erlauben
 - Runtimewrites bytegenau erfassen und Overlays atomar invalidieren
-- unbekannte RAM-Bytes nicht ausfuehren; Interpreteranteil und Herkunft berichten
+- im normalen Produktpfad fehlendes latentes AOT typisiert abbrechen; unbekannte
+  RAM-Bytes nicht ausfuehren
+- Interpreteranteil und Herkunft nur im expliziten Diagnosemodus berichten
+
+Teilstand 2026-07-22: Der Modulkatalog verwaltet aktive Byte-Extents ueber
+kanonische physische Herkunft. Partielle CPU-/FPU-/Store-Queue-Writes
+invalidieren nur ihr Fenster; Copy/DMA loeschen veraltete Runtimeprovenienz und
+P0/P1/P2-Aliase bleiben konsistent. Ein kanonischer 4-KiB-Seitenindex weist
+Writes ohne aktive Extentueberlappung vor dem Modulkatalogscan ab und misst
+Fast-Rejects getrennt von notwendigen Scans. Auch der Ersatz derselben Modul-
+ID wird vorvalidiert und atomar angewandt; ein ungueltiger Ersatz laesst laut
+Negativregression Katalog, Bloecke, Tracker, Provenienz und Metriken
+unveraendert. Offen sind weiterhin strukturierte Disc-Ladetransaktionen, vorab
+erzeugte latente native Module und der typisierte Produktabbruch anstelle der
+derzeit bedingungslos gelinkten Bring-up-Interpretergrenze.
 
 ### [ ] KR-4849 - TA-Eingang und PVR-Kommandopfad
 
@@ -813,6 +853,15 @@ Prioritaet: P0
 - List Init, Continue, Completion und STARTRENDER implementieren
 - RenderDone nur nach erfolgreicher Verarbeitung melden; Unsupported sichtbar halten
 
+Teilstand 2026-07-22: Der produktive Store-Queue-Pfad fuehrt TA-Pakete in den
+gemeinsamen FIFO und schreibt den sichtbaren TA-Positionszeiger fort. Der
+Hintergrundpfad dekodiert Tagadresse, Offset, Skip, Shadowstride, Tiefe und
+Render-to-Texture allgemein. Der feste Overscan-Quad beruecksichtigt HScale;
+D uebernimmt die Attribute von C und bei Texturierung X/U von B, waehrend die
+horizontale Texturerweiterung X und U gemeinsam anpasst. Der zusammenhaengende
+Nachweis aller drei TA-Eingaenge und ihrer Completion-/Fehlerreihenfolge bleibt
+offen.
+
 ### [ ] KR-4850 - Erster scanoutgebundener Gastframe
 
 Abhaengigkeiten: KR-4849
@@ -822,6 +871,20 @@ Prioritaet: P0
 - Write-Framebuffer, aktiven Read-Framebuffer und ungeblankten Scanout verbinden
 - `KR_FIRST_GUEST_FRAME` hostunabhaengig von `KR_FIRST_PRESENTED_FRAME` trennen
 - Testframe, vorgefuellter VRAM oder blosser RenderDone-Zaehler gelten nicht
+
+Teilstand 2026-07-22: Rendergenerationen erfassen final gepackte Pixelwerte und
+geaenderte Bytemasken. Erst der echte Scheduler-VBlank-In revalidiert die
+aktuellen VRAM-Bytes und friert den exakten Frame ein; ein spaeterer Render
+zaehlt erst am folgenden VBlank. PAL/Interlace prueft das aktive SPG-Feld gegen
+`FB_R_SOF1/2`, waehrend `SCALER_CTL.Interlace`/`Field Select` auf
+`FB_W_SOF1/2` rendern. Offscreen-/RTT-Evidenz kann erst durch einen passenden
+Bufferflip sichtbar werden. 256 Generationen, 64 MiB, Range-Fast-Reject und
+2.097.152 Pixelpruefungen pro VBlank begrenzen den Nachweis; Scanout-
+Skalierungsbomben werden vor der Allokation abgewiesen. Der gemeinsame Proof-
+Pump trennt Gastbeweis und Host-Present. Scheduler-VBlank, Proof, Pump und
+FakeVideo sind pixelgenau synthetisch verbunden; die vier fokussierten Targets
+bestehen 4/4 in 0,66 Sekunden mit 12 Buildjobs. Der Task bleibt bis zum ersten
+entsprechenden privaten Retail-Gastframe offen.
 
 ### [ ] KR-4851 - Boot- und Frame-Hotpath
 

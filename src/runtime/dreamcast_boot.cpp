@@ -524,12 +524,40 @@ initialize_dreamcast_runtime(CpuState& cpu,
             raise_now(SystemAsicEvent::MapleDma);
         });
     const auto maple_controller = std::weak_ptr<DreamcastMapleController>(state.maple_controller);
-    state.pvr_registers->set_vblank_observer([raise_now, maple_controller](const bool entering) {
-        raise_now(entering ? SystemAsicEvent::PvrVblank : SystemAsicEvent::PvrVblankOut);
-        if (entering) {
+    state.pvr_registers->set_vblank_observer(
+        [raise_now,
+         maple_controller,
+         pvr_registers,
+         pvr_renderer,
+         vram](const bool entering) {
+            raise_now(entering ? SystemAsicEvent::PvrVblank : SystemAsicEvent::PvrVblankOut);
+            if (!entering) return;
+            const auto registers = pvr_registers.lock();
+            const auto renderer = pvr_renderer.lock();
+            const auto target = vram.lock();
+            if (registers && renderer && target) {
+                try {
+                    renderer->observe_vblank_scanout(*registers, target->bytes());
+                } catch (const std::out_of_range& error) {
+                    renderer->record_error(PvrRenderError::MemoryRange,
+                                           registers->render_request_count(),
+                                           error.what());
+                } catch (const std::invalid_argument& error) {
+                    renderer->record_error(PvrRenderError::InvalidConfiguration,
+                                           registers->render_request_count(),
+                                           error.what());
+                } catch (const std::runtime_error& error) {
+                    renderer->record_error(PvrRenderError::UnsupportedFeature,
+                                           registers->render_request_count(),
+                                           error.what());
+                } catch (...) {
+                    renderer->record_error(PvrRenderError::InternalLifecycle,
+                                           registers->render_request_count(),
+                                           "Unbekannter Fehler am PVR-VBlank-Scanout.");
+                }
+            }
             if (const auto maple = maple_controller.lock()) maple->hardware_trigger();
-        }
-    });
+        });
     state.pvr_registers->set_hblank_observer(
         [raise_now] { raise_now(SystemAsicEvent::PvrHblank); });
     if (state.mutable_storage) {
@@ -553,7 +581,9 @@ initialize_dreamcast_runtime(CpuState& cpu,
             const auto clock = scheduler.lock();
             if (!target || !clock)
                 throw std::runtime_error("Dreamcast-System-ASIC-Lebenszyklus fehlt.");
-            static_cast<void>(target->schedule(*clock, SystemAsicEvent::GdromCommand, cycle));
+            if (cycle != clock->current_cycle())
+                throw std::logic_error("GD-ROM-Completion liegt nicht am aktuellen Gastzyklus.");
+            target->raise(SystemAsicEvent::GdromCommand, cycle);
         },
         [module_sequence, module_catalog, module_blocks, module_tracker](
             const std::uint32_t destination,
@@ -621,8 +651,10 @@ initialize_dreamcast_runtime(CpuState& cpu,
             const auto physical = canonical_physical_address(event.address);
             if (physical >= 0x0C000000u && physical < 0x0D000000u &&
                 event.size <= 0x0D000000u - physical) {
-                if (const auto modules = runtime_modules.lock())
-                    modules->record_runtime_write(event.address, event.size, event.bytes_changed);
+                if (const auto modules = runtime_modules.lock()) {
+                    modules->record_runtime_write(
+                        event.address, event.size, event.source, event.bytes_changed);
+                }
             }
             const auto tracker = code_tracker.lock();
             if (!tracker) return;
@@ -642,10 +674,12 @@ initialize_dreamcast_runtime(CpuState& cpu,
     const auto transfers = state.store_queue_transfers;
     const auto dropped_transfers = state.dropped_store_queue_transfers;
     const auto store_queue_ta = state.pvr_ta_fifo;
+    const auto store_queue_pvr = state.pvr_registers;
     auto* const memory = &cpu.memory;
     state.store_queues = std::make_shared<Sh4StoreQueues>(
         cpu.memory,
-        [transfers, dropped_transfers, memory, store_queue_ta](const StoreQueueTransfer& transfer) {
+        [transfers, dropped_transfers, memory, store_queue_ta, store_queue_pvr](
+            const StoreQueueTransfer& transfer) {
             if (transfers->size() == 1024u) {
                 transfers->erase(transfers->begin());
                 if (*dropped_transfers != std::numeric_limits<std::uint64_t>::max()) {
@@ -655,6 +689,8 @@ initialize_dreamcast_runtime(CpuState& cpu,
             transfers->push_back(transfer);
             if (transfer.target == StoreQueueTarget::TileAccelerator) {
                 store_queue_ta->submit(transfer.bytes);
+                store_queue_pvr->record_ta_packet(
+                    static_cast<std::uint32_t>(transfer.bytes.size()));
             } else {
                 memory->write_bytes(
                     transfer.target_address, transfer.bytes, CodeWriteSource::StoreQueue);

@@ -46,5 +46,15 @@ class NativeVideoOutput {
 [[nodiscard]] bool native_video_available() noexcept;
 [[nodiscard]] std::unique_ptr<NativeVideoOutput>
 create_native_video_output(const NativeVideoConfig& config = {});
+[[nodiscard]] bool present_guest_frame_proof(NativeVideoOutput& output,
+                                             const PvrGuestFrameProof& proof);
+
+struct GuestFramePumpResult {
+    bool guest_frame_proven = false;
+    bool frame_presented = false;
+};
+
+[[nodiscard]] GuestFramePumpResult pump_guest_frame_proof(PvrSoftwareRenderer& renderer,
+                                                          NativeVideoOutput* output);
 
 } // namespace katana::runtime

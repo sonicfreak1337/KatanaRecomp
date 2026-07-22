@@ -6,6 +6,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <deque>
 #include <functional>
 #include <limits>
 #include <memory>
@@ -444,6 +445,38 @@ struct PvrSoftwareRenderMetrics {
     std::uint64_t proven_guest_frames = 0u;
     std::uint64_t last_frame_pixel_writes = 0u;
     std::uint64_t last_frame_changed_pixels = 0u;
+    std::uint64_t dropped_render_evidence_generations = 0u;
+    std::uint64_t render_evidence_pixels_examined = 0u;
+    std::uint64_t render_evidence_range_rejections = 0u;
+    std::uint64_t render_evidence_scan_budget_exhaustions = 0u;
+};
+
+struct PvrChangedPixelEvidence {
+    std::uint32_t offset = 0u;
+    std::uint32_t packed_value = 0u;
+    std::uint32_t changed_byte_mask = 0u;
+};
+
+struct PvrRenderGenerationEvidence {
+    std::uint64_t generation = 0u;
+    std::uint32_t write_base = 0u;
+    std::uint32_t stride_bytes = 0u;
+    std::uint32_t width = 0u;
+    std::uint32_t height = 0u;
+    std::uint8_t pixel_bytes = 0u;
+    bool render_to_texture = false;
+    std::uint64_t pixel_writes = 0u;
+    std::uint64_t changed_pixels = 0u;
+    std::size_t validation_cursor = 0u;
+    std::vector<PvrChangedPixelEvidence> changed_pixel_values;
+};
+
+struct PvrGuestFrameProof {
+    std::uint64_t render_generation = 0u;
+    std::uint64_t changed_pixels = 0u;
+    std::uint32_t scanout_field = 0u;
+    PvrScanoutDescriptor scanout;
+    PvrFrame frame;
 };
 
 enum class PvrRenderError : std::uint8_t {
@@ -464,15 +497,31 @@ struct PvrRenderFirstError {
 
 class PvrSoftwareRenderer final {
   public:
+    static constexpr std::size_t render_evidence_capacity = 256u;
+    static constexpr std::size_t render_evidence_byte_capacity = 64u << 20u;
+    static constexpr std::size_t render_evidence_scan_pixel_budget = 2u << 20u;
+
     void render(const PvrTaFrame& frame,
                 const PvrRegisterFile& registers,
                 LinearMemoryDevice& vram);
+    void observe_vblank_scanout(const PvrRegisterFile& registers,
+                                std::span<const std::uint8_t> vram);
+    [[nodiscard]] std::optional<PvrGuestFrameProof> take_guest_frame_proof();
     [[nodiscard]] const PvrSoftwareRenderMetrics& metrics() const noexcept;
+    [[nodiscard]] std::uint64_t last_render_generation() const noexcept;
+    [[nodiscard]] std::size_t pending_render_generations() const noexcept;
+    [[nodiscard]] std::size_t pending_render_evidence_bytes() const noexcept;
     void record_error(PvrRenderError error, std::uint64_t render_request, std::string detail);
     [[nodiscard]] const std::optional<PvrRenderFirstError>& first_error() const noexcept;
 
   private:
     PvrSoftwareRenderMetrics metrics_;
+    std::uint64_t next_render_generation_ = 1u;
+    std::uint64_t last_render_generation_ = 0u;
+    std::deque<PvrRenderGenerationEvidence> pending_render_evidence_;
+    std::size_t pending_render_evidence_bytes_ = 0u;
+    std::uint64_t next_evidence_scan_generation_ = 0u;
+    std::optional<PvrGuestFrameProof> queued_guest_frame_proof_;
     std::optional<PvrRenderFirstError> first_error_;
 };
 

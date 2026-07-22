@@ -368,23 +368,56 @@ Typ: Implementierung | Gate-Vorbereitung | interne Freigabe | Release-Gate
 ## Aktuell empfohlener Einstieg
 
 ```text
-v0.48 P0 - KR-4847 GD-ROM-MMIO, PIO, G1-DMA und Disc-Streaming fortsetzen
+v0.48 P0 - kombinierten KR-4847- bis KR-4850-Kernblock fokussiert validieren
 ```
 
 Abgeschlossen und in Roadmap/Taskliste markiert sind `KR-4841`, `KR-4843`,
 `KR-4844`, `KR-4845` und `KR-4846`. Der aktuelle Runtimevertrag steht auf
-Runtime-ABI 34, BIOS-ABI 8 und Portprojektvertrag 20. Command 28/37 besitzt
-gastzeitgebundene PIO-/G1-DMA-Teiltransfers; Selector 5 ist ein DMA-IRQ-
-Handoff, Selector 11 die persistente PIO-Callbackregistrierung. Taskfile-
-Offsets, Command-IRQ-Ack, G1-Livezaehler sowie TA-Userclip und leeres EOL sind
-fokussiert regressionsgesichert.
+Runtime-ABI 35, BIOS-ABI 9 und Portprojektvertrag 21. Das verbindliche
+XenonRecomp-artige Produktmodell rekompiliert `IP.BIN` und BootExecutable
+statisch aus SH-4 in nativen PC-Code. Dreamcast-Komponenten bleiben typisierte,
+titelunabhaengige Plattformgrenzen; das Freigabegate verbietet Interpreter/
+JIT, Discplayer und Titelhacks. Der aktuelle Export linkt
+`runtime-sh4-interpreter` jedoch noch bedingungslos. Das ist eine offene
+`KR-4848`-Produktluecke, keine bereits erreichte Nicht-Emulationsgarantie.
+
+Command 28/37 besitzt gastzeitgebundene PIO-/G1-DMA-Teiltransfers; Selector 5
+ist ein DMA-IRQ-Handoff, Selector 11 die persistente PIO-
+Callbackregistrierung. Das Taskfile trennt phasenweises PIO-DataIn/DataOut von
+`CD_READ`-`DmaIn`: DMA besitzt kein PIO-DRQ und keinen Zwischen-IRQ, sondern
+genau einen finalen Status-IRQ nach dem letzten Byte. SPI 11 bis 14, der
+32-Byte-Modepuffer, der 10-Byte-`REQ_STAT`, persistenter Sense/CHECK,
+gemeinsamer Laufwerksbesitz sowie
+kontrollierte SET-FEATURES-Fehler liegen im aktuellen Block. Ausfuehrbare
+Module halten kanonische aktive Extents und einen 4-KiB-Fast-Reject-Index.
+Ein vorvalidierter Ersatz derselben Modul-ID ist atomar; seine
+Negativregression erhaelt bei Ablehnung Katalog, Bloecke, Tracker, Provenienz
+und Metriken.
+Asynchrone BIOS-Completions umgehen das quittierbare Taskfile-IRQ-Latch;
+persistenter Sense und ATA-`ERR` des aktuellen Kommandos sind getrennt. Der
+GD-ROM-Fokustest ist nach diesem Integrationsfix 1/1 gruen. Read- und
+TOC-Gastziele werden MMU-bewusst ueber ihre gesamte Laenge vorvalidiert;
+ungueltige, ueberlaufende oder MMIO-Ziele enden ohne Teilwrite und Host-
+Exception als `InvalidField`.
+
+Der PVR-Nachweis laeuft am echten Scheduler-VBlank-In und friert erst nach
+Wertrevalidierung einen exakten Frame ein. PAL/Interlace verwendet das aktive
+SPG-Feld mit `FB_R_SOF1/2`; `SCALER_CTL` Bit 17/18 waehlt `FB_W_SOF1/2` fuer
+den Render. Die Evidenz ist auf 256 Generationen, 64 MiB und 2.097.152
+Pixelpruefungen pro VBlank begrenzt und besitzt einen Range-Fast-Reject. Der
+Hintergrund-Overscan-Quad bildet HScale, D-Attribute und texturierte X/U-
+Erweiterung ab. Der gemeinsame Proof-Pump trennt Gastbeweis und Host-Present;
+die vier fokussierten PVR-/Framebuffer-/Hostvideo-/Portexporttests sind mit 12
+Buildjobs 4/4 in 0,66 Sekunden gruen. Die kombinierte fokussierte Validierung
+des gesamten Blocks besteht 12/12 mit 12 Buildjobs. Das ist nicht das spaetere
+180-Test-Gate und beweist noch keinen privaten Sonic-Adventure-Frame.
 
 Weiter offen:
 
 ```text
 KR-4842: Wait-Loop-Klassifikation vervollstaendigen
-KR-4847: verbleibenden gemeinsamen ATA/SPI-Zustand und EX-Streamingvertrag schliessen
-KR-4848: Disc-Module, Overlays und latentes AOT
+KR-4847: EX-38/39-Vertrag und belegte Timeout-/Overrun-Grenzen schliessen
+KR-4848: strukturierte Disc-Ladetransaktionen und latentes natives AOT
 KR-4849/KR-4850: TA/PVR bis zum scanoutgebundenen echten Gastframe
 ```
 

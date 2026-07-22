@@ -106,6 +106,16 @@ class DreamcastGdRomController final {
     void reset() noexcept;
 
   private:
+    enum class DriveOwner : std::uint8_t { None, Bios, Taskfile };
+    enum class TaskfilePhase : std::uint8_t {
+        Idle,
+        PacketIn,
+        Executing,
+        DataIn,
+        DmaIn,
+        DataOut,
+    };
+
     struct BiosRequest {
         std::uint32_t id = 0u;
         std::uint32_t command = 0u;
@@ -133,11 +143,29 @@ class DreamcastGdRomController final {
     void schedule_packet();
     void complete_packet(SchedulerEventId event_id, std::uint64_t cycle);
     void publish_data(std::vector<std::uint8_t> data);
+    void publish_dma_data(std::vector<std::uint8_t> data);
+    void begin_data_out(std::size_t size, std::uint8_t mode_offset);
+    void begin_next_taskfile_data_phase();
+    void complete_taskfile_data_phase();
+    void finish_taskfile_command();
+    void fail_taskfile_command(std::uint8_t sense_key,
+                               std::uint8_t asc,
+                               std::uint8_t ascq,
+                               bool ata_abort);
+    void latch_sense(std::uint8_t sense_key,
+                     std::uint8_t asc,
+                     std::uint8_t ascq,
+                     bool ata_abort = false) noexcept;
+    void clear_sense() noexcept;
+    void raise_command_irq(std::uint64_t cycle);
+    void acknowledge_command_irq();
+    [[nodiscard]] bool taskfile_blocks_bios() const noexcept;
+    void release_bios_owner_if_idle() noexcept;
     void pump_completions();
     [[nodiscard]] std::vector<std::uint8_t> build_packet_toc(std::uint32_t session) const;
     [[nodiscard]] std::array<std::uint32_t, 102u> build_bios_toc(std::uint32_t area) const;
     void execute_bios_request(CpuState& cpu, BiosRequest& request);
-    void submit_bios_read(BiosRequest& request);
+    void submit_bios_read(CpuState& cpu, BiosRequest& request);
     void submit_bios_stream(BiosRequest& request);
     [[nodiscard]] std::vector<std::uint8_t> preview_stream_bytes(BiosRequest& request,
                                                                  std::uint32_t length);
@@ -157,6 +185,28 @@ class DreamcastGdRomController final {
     std::vector<std::uint8_t> packet_;
     std::vector<std::uint8_t> data_;
     std::size_t data_cursor_ = 0u;
+    std::uint32_t taskfile_phase_remaining_ = 0u;
+    std::uint32_t taskfile_host_byte_limit_ = 65'536u;
+    TaskfilePhase taskfile_phase_ = TaskfilePhase::Idle;
+    DriveOwner drive_owner_ = DriveOwner::None;
+    bool command_irq_asserted_ = false;
+    bool command_irq_reassert_pending_ = false;
+    bool taskfile_command_failed_ = false;
+    bool clear_sense_after_data_ = false;
+    std::uint8_t set_mode_offset_ = 0u;
+    std::array<std::uint8_t, 32u> drive_mode_{0u,
+                                              0u,
+                                              0u,
+                                              0u,
+                                              0u,
+                                              0xB4u,
+                                              0x19u,
+                                              0u,
+                                              0u,
+                                              0x08u};
+    std::uint8_t sense_key_ = 0u;
+    std::uint8_t sense_asc_ = 0u;
+    std::uint8_t sense_ascq_ = 0u;
     std::uint8_t status_ = 0x40u;
     std::uint8_t error_ = 0u;
     std::uint8_t interrupt_reason_ = 0u;
@@ -165,6 +215,7 @@ class DreamcastGdRomController final {
     std::uint8_t sector_number_ = 0u;
     std::uint8_t drive_select_ = 0u;
     std::uint16_t byte_count_ = 0u;
+    std::uint32_t current_fad_ = 150u;
     bool expecting_packet_ = false;
     std::map<std::uint64_t, BiosRequest> bios_requests_;
     std::uint32_t next_bios_request_ = 1u;

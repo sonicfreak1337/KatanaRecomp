@@ -118,12 +118,58 @@ separaten Liveadress- und Transferzaehler. `SYSTEM 0` restauriert den aus der
 geladenen Bootgroesse berechneten BIOS-Livewert, ohne die programmierten
 Register zu veraendern.
 
-Der maschinenlesbare Vertrag besitzt Schema `katana-bios-abi`, Version 8.
+BIOS und ATA-/SPI-Taskfile teilen einen expliziten Laufwerksbesitzer und
+koennen keine widerspruechlichen Kommandos gleichzeitig beginnen. Der
+Taskfilepfad implementiert Dreamcast `REQ_MODE`, `SET_MODE`, `REQ_ERROR` und
+`GET_TOC`. `REQ_STAT` liefert aus einem exakt 10 Byte grossen Puffer den
+Laufwerks-, Discformat-, Track- und aktuellen FAD-Status; Offset und
+Allocation-Length muessen vollstaendig darin liegen. `REQ_MODE` adressiert
+einen 32-Byte-Hardwareinfopuffer nur an
+geraden, vollstaendig enthaltenen Bereichen; die unabhaengig bekannten Bytes
+0 bis 9 sind definiert, die nicht uebernommenen Identitaetsfelder 10 bis 31
+bleiben kontrolliert unavailable. `SET_MODE` darf nur den beschreibbaren
+Bereich 0 bis 9 aendern.
+
+PIO-DataIn/DataOut verwendet den programmierten Host-ByteCount als
+Phasengrenze (`0` bedeutet 64 KiB), aktualisiert den sichtbaren Restzaehler und
+signalisiert jede neue Datenphase sowie den finalen Status ueber Command-IRQ.
+Bleibt ein Phasen-IRQ bei bereits hohem Signal pending, wird er erst nach der
+normalen Statusquittierung erneut als Low-zu-High-Flanke zugestellt; Alternate
+Status quittiert ihn nicht. `CD_READ` mit `Features.Bit0` verwendet dagegen
+den getrennten `DmaIn`-/DMARQ-DMACK-Vertrag: kein PIO-DRQ, kein Zwischen-IRQ,
+`BSY` waehrend partieller G1-DMA und genau ein finaler Status-IRQ nach dem
+letzten DMA-Byte. Der belegte ATA-SET-FEATURES-Modus ist auf Features `0x13`
+mit Sector Count `0x22` begrenzt; andere Kombinationen enden mit ABRT und
+INVALID FIELD.
+
+Sense/CHECK bleibt bis zur Datenphase von `REQ_ERROR` persistent. Die
+sichtbaren ASC-Abbildungen unterscheiden InvalidCommand `0x20`, OutOfRange
+`0x21`, InvalidField `0x24` und NoMedia `0x3A`. Der persistente Sense-Payload
+ist vom ATA-`ERR`-Bit des aktuell abgeschlossenen Taskfilekommandos getrennt:
+Ein erfolgreiches Folgekommando endet ohne `ERR`, ohne den noch abrufbaren
+Sense vorzeitig zu verlieren. Asynchrone BIOS-Completions signalisieren die
+gemeinsame ASIC-Grenze direkt und verwenden nicht das durch Command-Status
+quittierbare Taskfile-IRQ-Latch; deshalb bleibt jede sequenzielle BIOS-
+Completion als eigene Flanke sichtbar. Waehrend eines BIOS-Reads
+beziehungsweise -Teiltransfers meldet das vierte Statuswort den Wartezustand 4
+und das Taskfile bleibt sichtbar `BSY`.
+
+Alle hier beschriebenen GD-ROM-BIOS-Ausgaben mit Gastziel werden vor dem ersten
+Byte MMU-bewusst ueber die gesamte Laenge vorvalidiert. Virtuelle Seiten
+muessen auf einen
+zusammenhaengenden, vollstaendig schreibbaren linearen Speicherbereich
+abbilden; Adressueberlauf, Luecken und MMIO werden kontrolliert als
+`InvalidField` mit Sense `0x24` beendet. Insbesondere asynchrone Reads und der
+408-Byte-BIOS-TOC koennen dadurch weder Teilwrites noch Host-Exceptions
+erzeugen.
+
+Der maschinenlesbare Vertrag besitzt Schema `katana-bios-abi`, Version 9.
 Synthetische Tests pruefen reproduzierbare Vektorbytes, Runtimeblockdispatch,
 P1/P2-Handoff, Stubintegritaet, Factory-Schreibschutz, den direkten GD2-Alias,
 Lifecycle-Evidenz, GD-ROM-Zustaende,
 Vierwortstatus, LOW/HIGH-TOC, gastzeitgebundene DMA-Chunks, DMA-IRQ-Handoff,
-persistente PIO-Callbacks, Abbruch ohne spaete Ereignisse, getrennte G1-
+persistente PIO-Callbacks, getrennte PIO-/`DmaIn`-Phasen, den 32-Byte-
+Modepuffer, Sense-/IRQ-Grenzen, Abbruch ohne spaete Ereignisse, getrennte G1-
 Zaehler, bekannte aufgeschobene Dienste und unbekannte Funktionen.
 
 Die Installation gehoert zum produktiven Bootzustand: `boot_homebrew()` gibt

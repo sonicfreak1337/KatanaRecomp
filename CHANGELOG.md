@@ -4,6 +4,63 @@
 
 ### Geaendert
 
+- Das verbindliche Produktmodell ist nun ausdruecklich XenonRecomp-artige
+  statische Rekompilierung: Discbootstrap (`IP.BIN`) und BootExecutable werden
+  vorausanalysiert, als SH-4-AOT in C++ beziehungsweise nativen PC-Code
+  uebersetzt und mit einer getrennten Plattformruntime gebaut. Dreamcast-
+  Komponenten bleiben kleine, typisierte Plattformgrenzen. Das Freigabegate
+  verbietet SH-4-Interpreter/JIT, virtuellen Discplayer und Titelhacks im
+  normalen Portlauf. Der aktuelle Export linkt `runtime-sh4-interpreter` noch
+  bedingungslos und erfuellt dieses Gate deshalb nicht; `KR-4848` ersetzt die
+  Bring-up-Luecke durch gebundenes latentes AOT oder einen kontrollierten
+  typisierten Abbruch.
+- Ausfuehrbare Module verwalten aktive Byte-Extents jetzt ueber ihre kanonische
+  physische Herkunft. Ein Teilwrite stanzt nur sein Patchfenster aus und
+  erhaelt unveraenderte Prefix-/Suffixbereiche; P0/P1/P2-Aliase koennen keine
+  ueberlappenden Module mehr erzeugen. CPU-, FPU-, Store-Queue- und Fallback-
+  Writes setzen aktuelle Runtimeprovenienz, waehrend Copy/DMA veraltete
+  Provenienz loeschen. Byte-identische Writes bleiben folgenlos und der
+  Materializer liest nie ueber ein aktives Extent hinaus. Ein kanonischer
+  4-KiB-Seitenindex weist Writes ohne aktive Extentueberlappung vor dem
+  Modulkatalogscan ab und zaehlt Fast-Rejects und notwendige Scans getrennt.
+  Auch ein Ersatz derselben Modul-ID wird vor jeder Mutation vollstaendig
+  validiert; eine Ablehnung laesst Katalog, Bloecke, Tracker, Provenienz und
+  Metriken unveraendert.
+- Das GD-ROM-Taskfile implementiert die Dreamcast-SPI-Kommandos `REQ_STAT`,
+  `REQ_MODE`, `SET_MODE`, `REQ_ERROR` und `GET_TOC` mit einem
+  bereichsgeprueften 10-Byte-Laufwerks-/Track-/FAD-Status und 32-Byte-
+  Modepuffer und persistentem Sense/CHECK-Zustand. PIO-DataIn/DataOut werden am
+  Host-ByteCount in Phasen geteilt und signalisieren jede neue Datenphase sowie
+  den finalen Status. `CD_READ` mit `Features.Bit0` verwendet dagegen einen
+  getrennten `DmaIn`-/DMARQ-DMACK-Vertrag: kein PIO-DRQ, kein Zwischen-IRQ und
+  genau ein finaler Status-IRQ nach dem letzten DMA-Byte. Unbekannte ATA-/SPI-
+  Kommandos und unbelegte SET-FEATURES-Kombinationen enden mit ABRT/Sense;
+  BIOS und Taskfile besitzen einen gemeinsamen exklusiven Laufwerksbesitzer
+  und BIOS-Statuswort 3 meldet waehrend BSY den Wartezustand 4. EX-Kommandos
+  38/39 bleiben bis zu einem unabhaengig belegten Vertrag sichtbar abgelehnt.
+  Asynchrone BIOS-Completions umgehen bewusst das quittierbare Taskfile-IRQ-
+  Latch, sodass sequenzielle BIOS-Reads keine Flanke verlieren; persistenter
+  Sense-Payload und ATA-`ERR` des aktuellen Kommandos sind getrennte Zustaende.
+  BIOS-Read- und TOC-Zielpuffer werden vor dem ersten Byte MMU-bewusst als
+  zusammenhaengender, vollstaendig schreibbarer linearer Bereich validiert;
+  ungueltige, ueberlaufende oder MMIO-Ziele enden atomar als `InvalidField`
+  statt partiell zu schreiben oder eine Host-Exception auszuliefern.
+- Der PVR-Renderer dekodiert `ISP_BACKGND_T`, `ISP_BACKGND_D`, Tagadresse,
+  Vertexoffset/-skip, Shadowstride und das Render-to-Texture-Bit ohne den
+  frueheren erfundenen Enable-Schalter. Der feste Hintergrund-Overscan-Quad
+  beruecksichtigt HScale; D uebernimmt die Attribute von C und bei Texturierung
+  X/U von B, waehrend horizontale Texturerweiterung X und U gemeinsam anpasst.
+  Jeder Renderabschluss erfasst eine monotone Generation, final gepackte
+  Pixelwerte und geaenderte Bytemasken. Erst der tatsaechliche Scheduler-
+  VBlank-In validiert diese Werte gegen VRAM und friert den exakten `PvrFrame`
+  ein; ein spaeterer Render kann daher erst beim naechsten VBlank beweisen.
+  PAL/Interlace waehlt das aktive `SPG_CONTROL`-Feld und `FB_R_SOF1/2`, waehrend
+  `SCALER_CTL.Interlace`/`Field Select` auf `FB_W_SOF1/2` rendern. Die Evidenz
+  ist auf 256 Generationen, 64 MiB und 2.097.152 Pixelpruefungen pro VBlank
+  begrenzt, besitzt Range-Fast-Reject und verwirft Scanout-Skalierungsbomben vor
+  der Allokation. `KR_FIRST_GUEST_FRAME` und erfolgreicher Host-Present bleiben
+  ueber denselben eingefrorenen Proof getrennt. Runtime-ABI 35, BIOS-ABI 9 und
+  Portprojektvertrag 21 versionieren diesen kumulativen Block.
 - Die v0.48-Roadmap ist auf `Native Disc Boot und erster echter Gastframe`
   fokussiert. Die neuen Tasks `KR-4841` bis `KR-4854` bilden Clean-Room-
   Provenienz, Bootdiagnostik, P2-Bootstrap, Gastzeit, BIOS/GD-ROM, Runtimecode,

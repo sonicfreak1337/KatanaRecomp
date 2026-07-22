@@ -103,6 +103,27 @@ physische Byteposition, ohne den gesamten RAM als Modul oder Code zu
 deklarieren. Erst der tatsaechliche Kontrolltransfer darf daraus einen neuen,
 begrenzten Modulsnapshot erzeugen.
 
+Der aktive Lebenszustand ist bytegenau als sortierte physische Extents
+modelliert. Partielle Overlays stanzen nur ihr Fenster aus; unbetroffene
+Extents derselben Quellenidentitaet bleiben aktiv und koennen weiter gebunden
+werden. Geladene Ersatzbereiche werden vor jeder Katalog-, Block- oder
+Provenienzmutation vollstaendig validiert, damit ein abgewiesener Load keinen
+alten gueltigen Zustand teilweise zerstoert. P0/P1/P2-Aliase werden vor
+Ueberlappungspruefung kanonisiert, waehrend Bereiche ueber nichtlineare
+Aliasgrenzen als ungueltig gelten.
+
+Das gilt auch fuer einen Ersatz mit derselben Modul-ID: Erst nach vollstaendiger
+Vorvalidierung werden alter Index-, Katalog-, Block-, Tracker- und
+Provenienzzustand atomar ersetzt. Die Negativregression prueft, dass ein
+ungueltiger Ersatz auch Metriken und Generationen unveraendert laesst.
+
+Ein kanonischer 4-KiB-Seitenindex zaehlt aktive Extents pro physischer Seite.
+Writes auf Seiten ohne aktive Extentherkunft werden damit vor dem linearen
+Modulkatalogscan verworfen, waehrend die bytegenaue Runtimeprovenienz weiterhin
+aktualisiert wird. Publish, Ersatz, Teilpatch, Unload und geladene Bereiche
+halten den Index konsistent; getrennte Metriken zaehlen Fast-Rejects und
+tatsaechlich erforderliche Katalogscans.
+
 Der unterstuetzte Relocationtyp `module_base32` interpretiert ein
 32-Bit-Little-Endian-Quellwort als `Quellwort + Gastmodulbasis + Addend` mit
 32-Bit-Ueberlauf. Die Byteidentitaet wird gegen dieses kanonisch relokierte
@@ -135,9 +156,13 @@ Code-Tracker entfernt den physischen Runtimeblock auch dann, wenn der Write
 ueber einen anderen P0/P1/P2-Alias erfolgt. Ein erneuter Kontrolltransfer muss
 die aktuellen Bytes unter einer neuen Modulidentitaet materialisieren.
 
-Ein Interpreter kann den expliziten Referenzcallback stellen, wird aber nicht
-automatisch oder dauerhaft aktiviert. Deaktivierung, unbekannte Quelle,
-Byteabweichung, Budgetende und ungueltiger Block sind typisierte Misses.
+Das Produkt-Gate erlaubt einen Interpreter nur in einem expliziten Bring-up-
+Diagnoseprofil. Der aktuelle Export linkt `runtime-sh4-interpreter` jedoch noch
+bedingungslos und kann ihn an der begrenzten Materialisierungsgrenze verwenden;
+dies ist eine offene `KR-4848`-Luecke. Das Ziel fuer normale Ports aktiviert
+ausschliesslich vorab gebundene native Module und endet bei fehlendem latentem
+AOT typisiert. Deaktivierung, unbekannte Quelle, Byteabweichung, Budgetende und
+ungueltiger Block sind bereits typisierte Misses.
 
 ## Runtime-only-Profil
 

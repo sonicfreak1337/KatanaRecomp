@@ -125,7 +125,7 @@ void runtime_write_provenance_regression() {
     ExecutableCodeTracker tracker;
     blocks.bind_code_tracker(&tracker);
     cpu.memory.set_guest_write_observer([&](const GuestWriteEvent& event) {
-        modules.record_runtime_write(event.address, event.size, event.bytes_changed);
+        modules.record_runtime_write(event.address, event.size, event.source, event.bytes_changed);
         const auto invalidation =
             tracker.observe_write(event.address, event.size, event.source, event.bytes_changed);
         if (!invalidation.byte_identical)
@@ -189,9 +189,11 @@ void runtime_write_provenance_regression() {
 
     const auto first_module_id = modules.resolve(request.target)->id;
     cpu.memory.write_u16(request.target, 0x000Bu);
-    require(modules.find(first_module_id) == nullptr &&
+    require(modules.find(first_module_id) != nullptr &&
+                modules.resolve(request.target, 2u) == nullptr &&
+                modules.resolve(request.target + 2u, 2u) != nullptr &&
                 !blocks.lookup(request.target, request.variant).has_value(),
-            "Gastschreibzugriff entwertet Runtimecode-Snapshot nicht.");
+            "Gastschreibzugriff entwertet nicht exakt sein Runtimecode-Patchfenster.");
     const auto second = dispatch_indirect(cpu, blocks, request);
     require(second.block && callback_calls == 2u && modules.resolve(request.target) != nullptr &&
                 modules.resolve(request.target)->id != first_module_id &&
@@ -208,7 +210,8 @@ void runtime_write_provenance_regression() {
     alias_blocks.bind_code_tracker(&alias_tracker);
     alias_cpu.memory.set_guest_write_observer([&](const GuestWriteEvent& event) {
         const auto physical = canonical_physical_address(event.address);
-        alias_modules.record_runtime_write(event.address, event.size, event.bytes_changed);
+        alias_modules.record_runtime_write(
+            event.address, event.size, event.source, event.bytes_changed);
         const auto invalidation =
             alias_tracker.observe_write(physical, event.size, event.source, event.bytes_changed);
         if (!invalidation.byte_identical)
@@ -252,9 +255,432 @@ void runtime_write_provenance_regression() {
     require(alias_dispatch.block == alias_interior_dispatch.block &&
                 alias_materializer.metrics().materializations == 1u &&
                 alias_materializer.metrics().cache_hits == 1u &&
-                alias_modules.find(alias_module_id) == nullptr &&
+                alias_modules.find(alias_module_id) != nullptr &&
+                alias_modules.resolve(0x8C000100u, 2u) == nullptr &&
+                alias_modules.resolve(0x8C000102u, 2u) != nullptr &&
                 !alias_blocks.active(alias_dispatch.block),
             "Innerer P1-Einstieg wird nicht wiederverwendet oder durch P0-Write entwertet.");
+}
+
+void partial_module_patch_regression() {
+    using namespace katana::runtime;
+    CpuState cpu;
+    const std::vector<std::uint8_t> bytes{
+        0x09u, 0x00u, 0x09u, 0x00u, 0x09u, 0x00u, 0x09u, 0x00u,
+        0x09u, 0x00u, 0x09u, 0x00u, 0x09u, 0x00u, 0x0Bu, 0x00u};
+    cpu.memory.write_bytes(0x1000u, bytes, CodeWriteSource::Copy);
+
+    ExecutableModule source;
+    source.id = "partial-source-module";
+    source.source_identity = "free-partial-source-v1";
+    source.guest_start = 0x1000u;
+    source.bytes = bytes;
+    ExecutableModuleCatalog modules;
+    modules.publish(source);
+
+    ExecutableModule alias_overlap = source;
+    alias_overlap.id = "physical-alias-overlap";
+    alias_overlap.guest_start = 0x80001000u;
+    bool alias_rejected = false;
+    try {
+        modules.publish(alias_overlap);
+    } catch (const std::invalid_argument&) {
+        alias_rejected = true;
+    }
+    require(alias_rejected, "P0/P1/P2-Aliasueberlappung wurde nicht physisch erkannt.");
+
+    modules.record_runtime_write(0x80001006u, 2u, CodeWriteSource::Cpu, true);
+    cpu.memory.write_u16(0x1006u, 0x000Bu, CodeWriteSource::Copy);
+    const auto* patched_source = modules.find(source.id);
+    const std::vector<ExecutableModuleActiveExtent> expected_extents{{0u, 6u}, {8u, 8u}};
+    require(patched_source != nullptr && patched_source->active_extents == expected_extents &&
+                modules.resolve(0x1000u, 6u) == patched_source &&
+                modules.resolve(0x1006u, 2u) == nullptr &&
+                modules.resolve(0x1008u, 8u) == patched_source &&
+                modules.resolve(0x1004u, 6u) == nullptr,
+            "Partieller Patch hat Prefix/Suffix oder das physische Patchfenster verloren.");
+
+    RuntimeBlockTable blocks;
+    DemandBlockMaterializer materializer(
+        modules,
+        blocks,
+        nullptr,
+        {true, 2u, 64u},
+        [](const std::uint32_t target,
+           const std::span<const std::uint8_t> snapshot,
+           const BlockVariantKey& requested_variant) {
+            return MaterializedBlockCandidate{{target,
+                                               canonical_physical_address(target),
+                                               2u,
+                                               BlockEndKind::Return,
+                                               requested_variant,
+                                               block,
+                                               "partial-extent-decoder",
+                                               true},
+                                              snapshot.size() == 6u,
+                                              true,
+                                              true,
+                                              true,
+                                              1u,
+                                              1u,
+                                              1u,
+                                              1u,
+                                              1u};
+        });
+    const auto materialized =
+        materializer.try_materialize(cpu, 0x1000u, 0x1000u, BlockVariantKey{}, 0x80u);
+    require(materialized.has_value() &&
+                materializer.last_failure() == MaterializationFailure::None,
+            "Materialisierung wurde nicht am aktiven Prefix-Extent begrenzt.");
+
+    const auto promoted = modules.promote_runtime_write(cpu.memory, 0x1006u, 16u);
+    require(promoted && modules.resolve(0x1006u, 2u) != nullptr &&
+                modules.resolve(0x1008u, 2u) == modules.find(source.id),
+            "Runtime-Patch wurde nicht ausschliesslich in die geoeffnete Luecke publiziert.");
+
+    const auto extents_before_identical = modules.find(source.id)->active_extents;
+    modules.record_runtime_write(0x1000u, 2u, CodeWriteSource::Cpu, false);
+    require(modules.find(source.id)->active_extents == extents_before_identical,
+            "Byte-identischer Write veraendert aktive Modulbereiche.");
+
+    ExecutableModuleCatalog provenance;
+    provenance.record_runtime_write(0x2000u, 4u, CodeWriteSource::Cpu, true);
+    provenance.record_runtime_write(0x2000u, 4u, CodeWriteSource::Copy, true);
+    require(!provenance.promote_runtime_write(cpu.memory, 0x2000u, 4u),
+            "Copy-Load behaelt veraltete Runtime-Write-Provenienz.");
+    provenance.record_runtime_write(0x2010u, 4u, CodeWriteSource::StoreQueue, true);
+    provenance.record_runtime_write(0x2010u, 4u, CodeWriteSource::Dma, true);
+    require(!provenance.promote_runtime_write(cpu.memory, 0x2010u, 4u),
+            "DMA-Load behaelt veraltete Runtime-Write-Provenienz.");
+    provenance.record_runtime_write(0x2020u, 4u, CodeWriteSource::Fpu, true);
+    provenance.record_runtime_write(0x2020u, 4u, CodeWriteSource::Copy, false);
+    cpu.memory.write_u32(0x2020u, 0x000B0009u, CodeWriteSource::Copy);
+    require(provenance.promote_runtime_write(cpu.memory, 0x2020u, 4u),
+            "Byte-identischer Load loescht aktuelle Runtime-Write-Provenienz.");
+
+    ExecutableModuleCatalog loaded_modules;
+    ExecutableModule old_loaded = source;
+    old_loaded.id = "old-loaded-module";
+    old_loaded.source_identity = "free-old-load-v1";
+    loaded_modules.publish(old_loaded);
+    ExecutableModule replacement;
+    replacement.id = "replacement-window";
+    replacement.source_identity = "free-replacement-load-v1";
+    replacement.guest_start = 0x80001006u;
+    replacement.bytes = {0x0Bu, 0x00u};
+    RuntimeBlockTable loaded_blocks;
+    ExecutableCodeTracker loaded_tracker;
+    loaded_modules.publish_loaded_range(replacement, loaded_blocks, loaded_tracker);
+    const auto* old_after_load = loaded_modules.find(old_loaded.id);
+    require(old_after_load != nullptr && old_after_load->active_extents == expected_extents &&
+                loaded_modules.resolve(0x1006u, 2u)->id == replacement.id &&
+                loaded_modules.resolve(0x1000u, 6u) == old_after_load &&
+                loaded_modules.resolve(0x1008u, 8u) == old_after_load,
+            "Teilweiser Copy-Load deaktiviert weiterhin das gesamte Quellmodul.");
+}
+
+void non_overlapping_write_stress_regression() {
+    using namespace katana::runtime;
+    ExecutableModuleCatalog modules;
+    constexpr std::uint32_t module_count = 512u;
+    constexpr std::uint32_t first_address = 0x00100000u;
+    constexpr std::uint32_t stride = 0x100u;
+    const std::vector<std::uint8_t> bytes(16u, 0x09u);
+    for (std::uint32_t index = 0u; index < module_count; ++index) {
+        ExecutableModule module;
+        module.id = "stress-module-" + std::to_string(index);
+        module.source_identity = "free-stress-fixture-v1";
+        module.guest_start = first_address + index * stride;
+        module.bytes = bytes;
+        modules.publish(std::move(module));
+    }
+
+    for (std::uint32_t index = 0u; index < module_count; ++index) {
+        modules.record_runtime_write(first_address + index * stride + 0x80u,
+                                     4u,
+                                     CodeWriteSource::Cpu,
+                                     true);
+    }
+    for (std::uint32_t index = 0u; index < module_count; ++index) {
+        const auto* module = modules.resolve(first_address + index * stride, bytes.size());
+        require(module != nullptr &&
+                    module->active_extents ==
+                        std::vector<ExecutableModuleActiveExtent>{{0u, 16u}},
+                "Nicht ueberlappender Write fragmentiert ein Modul im Store-Hotpath.");
+    }
+    require(modules.metrics().loads == module_count && modules.metrics().unloads == 0u,
+            "Nicht ueberlappende Store-Last veraendert Modulmetriken.");
+
+    const auto patched_address = first_address + (module_count / 2u) * stride;
+    modules.record_runtime_write(patched_address + 4u, 4u, CodeWriteSource::Cpu, true);
+    const auto* patched = modules.find("stress-module-256");
+    require(patched != nullptr &&
+                patched->active_extents ==
+                    std::vector<ExecutableModuleActiveExtent>{{0u, 4u}, {8u, 8u}},
+            "Der schnelle Non-Overlap-Pfad ueberspringt einen echten Modulpatch.");
+}
+
+void active_extent_page_index_lifecycle_regression() {
+    using namespace katana::runtime;
+    CpuState cpu;
+    cpu.memory.write_u16(0x00020000u, 0x000Bu, CodeWriteSource::Copy);
+    ExecutableModuleCatalog modules;
+    RuntimeBlockTable blocks;
+    ExecutableCodeTracker tracker;
+
+    ExecutableModule source;
+    source.id = "indexed-source";
+    source.source_identity = "free-indexed-source-v1";
+    source.guest_start = 0x00010000u;
+    source.bytes.assign(0x2200u, 0x09u);
+    modules.publish(source);
+
+    const auto initial_metrics = modules.metrics();
+    modules.record_runtime_write(0x00020000u, 2u, CodeWriteSource::Cpu, true);
+    require(modules.metrics().write_index_rejections ==
+                    initial_metrics.write_index_rejections + 1u &&
+                modules.metrics().write_index_scans == initial_metrics.write_index_scans,
+            "Aktiver Seitenindex verwirft einen sicher modulfreien Write nicht.");
+    require(modules.promote_runtime_write(cpu.memory, 0x00020000u, 2u),
+            "Seitenindex-Fast-Reject ueberspringt die Runtime-Write-Provenienz.");
+
+    modules.record_runtime_write(0x80010004u, 2u, CodeWriteSource::Cpu, true);
+    modules.record_runtime_write(0xA0011000u, 2u, CodeWriteSource::Cpu, true);
+    require(modules.metrics().write_index_scans == initial_metrics.write_index_scans + 2u &&
+                modules.resolve(0x00010004u, 2u) == nullptr &&
+                modules.resolve(0x80011000u, 2u) == nullptr &&
+                modules.resolve(0x00010006u, 2u) != nullptr &&
+                modules.resolve(0x00011002u, 2u) != nullptr,
+            "Aliaswrite trifft den Seitenindex oder aktualisierte Teil-Extents nicht.");
+
+    modules.unload(source.id, blocks, tracker);
+    const auto after_unload = modules.metrics();
+    modules.record_runtime_write(0x00010008u, 2u, CodeWriteSource::Cpu, true);
+    require(modules.metrics().write_index_rejections ==
+                    after_unload.write_index_rejections + 1u &&
+                modules.metrics().write_index_scans == after_unload.write_index_scans,
+            "Unload hinterlaesst einen aktiven Seitenindexeintrag.");
+
+    ExecutableModule replacement;
+    replacement.id = "indexed-replacement";
+    replacement.source_identity = "free-indexed-replacement-v1";
+    replacement.guest_start = 0x00030000u;
+    replacement.bytes.assign(0x100u, 0x09u);
+    modules.publish(replacement);
+    auto moved = replacement;
+    moved.guest_start = 0x00031000u;
+    modules.replace(moved, blocks, tracker);
+    const auto after_replacement = modules.metrics();
+    modules.record_runtime_write(0x00030004u, 2u, CodeWriteSource::Cpu, true);
+    modules.record_runtime_write(0x80031004u, 2u, CodeWriteSource::Cpu, true);
+    require(modules.metrics().write_index_rejections ==
+                    after_replacement.write_index_rejections + 1u &&
+                modules.metrics().write_index_scans == after_replacement.write_index_scans + 1u &&
+                modules.resolve(0x00031004u, 2u) == nullptr &&
+                modules.resolve(0x00031006u, 2u) != nullptr,
+            "Replacement entfernt alte Indexseiten oder indiziert neue Aliasbytes nicht.");
+
+    ExecutableModule loaded_source;
+    loaded_source.id = "indexed-loaded-source";
+    loaded_source.source_identity = "free-indexed-loaded-source-v1";
+    loaded_source.guest_start = 0x00040000u;
+    loaded_source.bytes.assign(0x100u, 0x09u);
+    modules.publish(loaded_source);
+    ExecutableModule loaded_window;
+    loaded_window.id = "indexed-loaded-window";
+    loaded_window.source_identity = "free-indexed-loaded-window-v1";
+    loaded_window.guest_start = 0x80040020u;
+    loaded_window.bytes.assign(0x10u, 0x0Bu);
+    const auto before_loaded_range = modules.metrics();
+    modules.publish_loaded_range(loaded_window, blocks, tracker);
+    require(modules.metrics().write_index_scans == before_loaded_range.write_index_scans + 1u &&
+                modules.resolve(0x00040020u, 0x10u)->id == loaded_window.id &&
+                modules.resolve(0x00040000u, 0x20u)->id == loaded_source.id &&
+                modules.resolve(0x00040030u, 0xD0u)->id == loaded_source.id,
+            "Publish-loaded-range verliert neuen oder verbleibenden Seitenindexzustand.");
+    const auto after_loaded_range = modules.metrics();
+    modules.record_runtime_write(0xA0040022u, 2u, CodeWriteSource::Cpu, true);
+    require(modules.metrics().write_index_scans == after_loaded_range.write_index_scans + 1u &&
+                modules.resolve(0x00040022u, 2u) == nullptr &&
+                modules.resolve(0x00040024u, 2u)->id == loaded_window.id,
+            "Aliaspatch nach publish-loaded-range wird vom aktualisierten Index uebersehen.");
+}
+
+void rejected_loaded_range_is_atomic_regression() {
+    using namespace katana::runtime;
+    CpuState cpu;
+    cpu.memory.write_u16(0x6000u, 0x000Bu, CodeWriteSource::Copy);
+
+    ExecutableModuleCatalog modules;
+    ExecutableModule source;
+    source.id = "atomic-source";
+    source.source_identity = "free-atomic-source-v1";
+    source.guest_start = 0x4000u;
+    source.bytes = {0x09u, 0x00u, 0x0Bu, 0x00u};
+    modules.publish(source);
+    modules.record_runtime_write(0x6000u, 2u, CodeWriteSource::Cpu, true);
+
+    RuntimeBlockTable blocks;
+    ExecutableCodeTracker tracker;
+    RuntimeBlock runtime_block{0x6000u,
+                               0x6000u,
+                               2u,
+                               BlockEndKind::Return,
+                               {},
+                               block,
+                               "atomic-load-runtime-block",
+                               true};
+    const auto block_identity = stable_runtime_block_identity(runtime_block);
+    const auto handle = blocks.register_runtime(runtime_block);
+    static_cast<void>(tracker.register_block({block_identity,
+                                              0x6000u,
+                                              2u,
+                                              runtime_block.provenance,
+                                              {},
+                                              ExecutableBlockOrigin::RuntimeWrite}));
+    blocks.bind_code_tracker(&tracker);
+
+    const auto metrics_before = modules.metrics();
+    const auto extents_before = modules.find(source.id)->active_extents;
+    const auto tracker_generation_before = tracker.page_generation(0x6000u);
+    const auto tracker_invalidations_before = tracker.invalidation_count();
+    ExecutableModule rejected;
+    rejected.id = source.id;
+    rejected.source_identity = "free-rejected-load-v1";
+    rejected.guest_start = 0x6000u;
+    rejected.bytes = {0x0Bu, 0x00u};
+    bool duplicate_rejected = false;
+    try {
+        modules.publish_loaded_range(rejected, blocks, tracker);
+    } catch (const std::invalid_argument&) {
+        duplicate_rejected = true;
+    }
+
+    const auto metrics_after = modules.metrics();
+    require(duplicate_rejected && modules.find(source.id) != nullptr &&
+                modules.find(source.id)->active_extents == extents_before &&
+                modules.resolve(0x6000u, 2u) == nullptr && blocks.active(handle) &&
+                tracker.valid(block_identity) &&
+                tracker.page_generation(0x6000u) == tracker_generation_before &&
+                tracker.invalidation_count() == tracker_invalidations_before &&
+                metrics_after.loads == metrics_before.loads &&
+                metrics_after.unloads == metrics_before.unloads &&
+                metrics_after.replacements == metrics_before.replacements &&
+                metrics_after.invalidated_blocks == metrics_before.invalidated_blocks &&
+                metrics_after.write_index_rejections == metrics_before.write_index_rejections &&
+                metrics_after.write_index_scans == metrics_before.write_index_scans,
+            "Abgelehnter Load veraendert Katalog, Blocks, Tracker oder Metriken.");
+    require(modules.promote_runtime_write(cpu.memory, 0x6000u, 2u),
+            "Abgelehnter Load loescht Runtime-Write-Provenienz.");
+}
+
+void rejected_replacement_is_atomic_regression() {
+    using namespace katana::runtime;
+    ExecutableModuleCatalog modules;
+    ExecutableModule source;
+    source.id = "atomic-replace-source";
+    source.source_identity = "free-atomic-replace-source-v1";
+    source.guest_start = 0x7000u;
+    source.bytes.assign(0x100u, 0x09u);
+    modules.publish(source);
+    ExecutableModule blocker;
+    blocker.id = "atomic-replace-blocker";
+    blocker.source_identity = "free-atomic-replace-blocker-v1";
+    blocker.guest_start = 0x7100u;
+    blocker.bytes.assign(0x100u, 0x0Bu);
+    modules.publish(blocker);
+
+    RuntimeBlockTable blocks;
+    ExecutableCodeTracker tracker;
+    RuntimeBlock runtime_block{0x7000u,
+                               0x7000u,
+                               2u,
+                               BlockEndKind::Return,
+                               {},
+                               block,
+                               "atomic-replace-runtime-block",
+                               true};
+    const auto block_identity = stable_runtime_block_identity(runtime_block);
+    const auto handle = blocks.register_runtime(runtime_block);
+    static_cast<void>(tracker.register_block({block_identity,
+                                              0x7000u,
+                                              2u,
+                                              runtime_block.provenance,
+                                              {},
+                                              ExecutableBlockOrigin::RuntimeWrite}));
+    blocks.bind_code_tracker(&tracker);
+
+    const auto metrics_before = modules.metrics();
+    const auto extents_before = modules.find(source.id)->active_extents;
+    const auto tracker_generation_before = tracker.page_generation(0x7000u);
+    const auto tracker_invalidations_before = tracker.invalidation_count();
+    auto overlap = source;
+    overlap.source_identity = "free-atomic-replace-overlap-v2";
+    overlap.guest_start = blocker.guest_start;
+    bool overlap_rejected = false;
+    try {
+        modules.replace(overlap, blocks, tracker);
+    } catch (const std::invalid_argument&) {
+        overlap_rejected = true;
+    }
+    auto invalid = source;
+    invalid.source_identity = "free-atomic-replace-invalid-v2";
+    invalid.bytes.clear();
+    bool invalid_rejected = false;
+    try {
+        modules.replace(invalid, blocks, tracker);
+    } catch (const std::invalid_argument&) {
+        invalid_rejected = true;
+    }
+
+    const auto metrics_after = modules.metrics();
+    require(overlap_rejected && invalid_rejected && modules.find(source.id) != nullptr &&
+                modules.find(source.id)->generation == source.generation &&
+                modules.find(source.id)->active_extents == extents_before &&
+                modules.resolve(0x7000u, source.bytes.size())->id == source.id &&
+                modules.resolve(0x7100u, blocker.bytes.size())->id == blocker.id &&
+                blocks.active(handle) && tracker.valid(block_identity) &&
+                tracker.page_generation(0x7000u) == tracker_generation_before &&
+                tracker.invalidation_count() == tracker_invalidations_before &&
+                metrics_after.loads == metrics_before.loads &&
+                metrics_after.unloads == metrics_before.unloads &&
+                metrics_after.replacements == metrics_before.replacements &&
+                metrics_after.invalidated_blocks == metrics_before.invalidated_blocks,
+            "Abgelehnter Modulersatz mutiert Katalog, Index, Blocks, Tracker oder Metriken.");
+}
+
+void nonlinear_alias_boundary_regression() {
+    using namespace katana::runtime;
+    const auto rejected = [](const std::uint32_t start,
+                             std::vector<ExecutableModuleActiveExtent> extents = {}) {
+        ExecutableModuleCatalog modules;
+        ExecutableModule module;
+        module.id = "nonlinear-boundary";
+        module.source_identity = "free-boundary-fixture-v1";
+        module.guest_start = start;
+        module.bytes = {0x09u, 0x00u, 0x09u, 0x00u, 0x0Bu, 0x00u};
+        module.active_extents = std::move(extents);
+        try {
+            modules.publish(std::move(module));
+        } catch (const std::out_of_range&) {
+            return true;
+        }
+        return false;
+    };
+    require(rejected(0x1FFFFFFEu) && rejected(0x9FFFFFFEu) &&
+                rejected(0x7BFFFFFEu) &&
+                rejected(0x1FFFFFFCu, {{0u, 4u}, {4u, 2u}}),
+            "Physisch nichtlineares Modul oder Extent ueberlebt eine SH-4-Aliasgrenze.");
+
+    ExecutableModuleCatalog legal;
+    ExecutableModule edge;
+    edge.id = "linear-edge";
+    edge.source_identity = "free-linear-edge-v1";
+    edge.guest_start = 0x1FFFFFFCu;
+    edge.bytes = {0x09u, 0x00u, 0x0Bu, 0x00u};
+    legal.publish(edge);
+    require(legal.resolve(0x9FFFFFFCu, edge.bytes.size()) != nullptr,
+            "Legales Modul unmittelbar vor der Aliasgrenze wird abgelehnt.");
 }
 
 void reverse_runtime_write_promotion_regression() {
@@ -262,7 +688,7 @@ void reverse_runtime_write_promotion_regression() {
     CpuState cpu;
     ExecutableModuleCatalog modules;
     cpu.memory.set_guest_write_observer([&](const GuestWriteEvent& event) {
-        modules.record_runtime_write(event.address, event.size, event.bytes_changed);
+        modules.record_runtime_write(event.address, event.size, event.source, event.bytes_changed);
     });
     for (std::uint32_t offset = 0u; offset < 8u; offset += 2u)
         cpu.memory.write_u16(0x500u + offset, static_cast<std::uint16_t>(0x0009u + offset));
@@ -566,6 +992,12 @@ int main() {
 
     relocated_module_regression();
     runtime_write_provenance_regression();
+    partial_module_patch_regression();
+    non_overlapping_write_stress_regression();
+    active_extent_page_index_lifecycle_regression();
+    rejected_loaded_range_is_atomic_regression();
+    rejected_replacement_is_atomic_regression();
+    nonlinear_alias_boundary_regression();
     reverse_runtime_write_promotion_regression();
     interpreter_interior_entry_regression();
     mmu_materialization_origin_regression();

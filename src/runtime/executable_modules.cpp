@@ -58,6 +58,168 @@ std::uint8_t relocated_module_byte(const ExecutableModule& module,
     return module.bytes[offset];
 }
 
+std::optional<std::size_t> module_offset(const ExecutableModule& module,
+                                         const std::uint32_t address,
+                                         const std::size_t width) noexcept {
+    const auto module_begin = canonical_physical_address(module.guest_start);
+    const auto begin = canonical_physical_address(address);
+    const auto end = static_cast<std::uint64_t>(begin) + width;
+    const auto module_end = static_cast<std::uint64_t>(module_begin) + module.bytes.size();
+    if (width == 0u || begin < module_begin || end < begin || end > module_end) return std::nullopt;
+    return static_cast<std::size_t>(begin - module_begin);
+}
+
+bool canonical_range_is_linear(const std::uint32_t address, const std::size_t size) noexcept {
+    if (size == 0u ||
+        size > static_cast<std::uint64_t>(std::numeric_limits<std::uint32_t>::max()) + 1u -
+                   address)
+        return false;
+    const auto physical_begin = canonical_physical_address(address);
+    const auto final_address =
+        address + static_cast<std::uint32_t>(static_cast<std::uint64_t>(size) - 1u);
+    const auto expected_physical_end =
+        static_cast<std::uint64_t>(physical_begin) + size - 1u;
+    return expected_physical_end <= std::numeric_limits<std::uint32_t>::max() &&
+           canonical_physical_address(final_address) == expected_physical_end;
+}
+
+void normalize_active_extents(ExecutableModule& module) {
+    if (module.active_extents.empty())
+        module.active_extents.push_back(
+            {0u, static_cast<std::uint32_t>(module.bytes.size())});
+    std::sort(module.active_extents.begin(),
+              module.active_extents.end(),
+              [](const auto& left, const auto& right) { return left.offset < right.offset; });
+    std::vector<ExecutableModuleActiveExtent> normalized;
+    normalized.reserve(module.active_extents.size());
+    for (const auto extent : module.active_extents) {
+        if (extent.size == 0u || extent.offset > module.bytes.size() ||
+            extent.size > module.bytes.size() - extent.offset)
+            throw std::invalid_argument("Aktiver Modulbereich liegt ausserhalb der Modulbytes.");
+        if (!normalized.empty()) {
+            const auto previous_end = static_cast<std::uint64_t>(normalized.back().offset) +
+                                      normalized.back().size;
+            if (extent.offset < previous_end)
+                throw std::invalid_argument("Aktive Modulbereiche ueberlappen sich.");
+            if (extent.offset == previous_end) {
+                normalized.back().size += extent.size;
+                continue;
+            }
+        }
+        normalized.push_back(extent);
+    }
+    module.active_extents = std::move(normalized);
+}
+
+void validate_and_normalize_module(ExecutableModule& module) {
+    if (module.id.empty() || module.source_identity.empty() || module.bytes.empty() ||
+        module.bytes.size() > std::numeric_limits<std::uint32_t>::max() ||
+        (module.guest_start & 1u) != 0u || module.generation == 0u ||
+        module.relocation_generation == 0u) {
+        throw std::invalid_argument(
+            "Ausfuehrbares Modul besitzt keine stabile Identitaet oder Bytes.");
+    }
+    if (module.end_address() >
+        static_cast<std::uint64_t>(std::numeric_limits<std::uint32_t>::max()) + 1u) {
+        throw std::out_of_range("Ausfuehrbares Modul ueberschreitet den Gastadressraum.");
+    }
+    if (!canonical_range_is_linear(module.guest_start, module.bytes.size()))
+        throw std::out_of_range(
+            "Ausfuehrbares Modul ueberschreitet eine nichtlineare SH-4-Adressaliasgrenze.");
+    normalize_active_extents(module);
+    for (const auto extent : module.active_extents) {
+        const auto extent_address = static_cast<std::uint32_t>(
+            static_cast<std::uint64_t>(module.guest_start) + extent.offset);
+        if (!canonical_range_is_linear(extent_address, extent.size))
+            throw std::out_of_range(
+                "Aktiver Modulbereich ueberschreitet eine SH-4-Adressaliasgrenze.");
+    }
+    validate_relocations(module, module.relocations);
+    for (const auto& range : module.range_roles) {
+        if (range.size == 0u || range.offset > module.bytes.size() ||
+            range.size > module.bytes.size() - range.offset)
+            throw std::invalid_argument("Modulbereichsrolle liegt ausserhalb der Modulbytes.");
+    }
+    module.active = true;
+}
+
+bool physical_extents_overlap(const ExecutableModule& left,
+                              const ExecutableModule& right) noexcept {
+    const auto left_base = canonical_physical_address(left.guest_start);
+    const auto right_base = canonical_physical_address(right.guest_start);
+    for (const auto left_extent : left.active_extents) {
+        const auto left_begin = static_cast<std::uint64_t>(left_base) + left_extent.offset;
+        const auto left_end = left_begin + left_extent.size;
+        for (const auto right_extent : right.active_extents) {
+            const auto right_begin = static_cast<std::uint64_t>(right_base) + right_extent.offset;
+            const auto right_end = right_begin + right_extent.size;
+            if (left_begin < right_end && right_begin < left_end) return true;
+        }
+    }
+    return false;
+}
+
+bool physical_range_overlaps_active_extents(const ExecutableModule& module,
+                                            const std::uint32_t physical_begin,
+                                            const std::uint64_t physical_end) noexcept {
+    if (!module.active) return false;
+    const auto module_base = canonical_physical_address(module.guest_start);
+    return std::any_of(module.active_extents.begin(),
+                       module.active_extents.end(),
+                       [&](const auto extent) {
+                           const auto extent_begin =
+                               static_cast<std::uint64_t>(module_base) + extent.offset;
+                           const auto extent_end = extent_begin + extent.size;
+                           return physical_begin < extent_end && extent_begin < physical_end;
+                       });
+}
+
+bool physical_range_covers_active_extents(const ExecutableModule& module,
+                                          const std::uint32_t physical_begin,
+                                          const std::uint64_t physical_end) noexcept {
+    if (!module.active) return true;
+    const auto module_base = canonical_physical_address(module.guest_start);
+    return std::all_of(module.active_extents.begin(),
+                       module.active_extents.end(),
+                       [&](const auto extent) {
+                           const auto extent_begin =
+                               static_cast<std::uint64_t>(module_base) + extent.offset;
+                           const auto extent_end = extent_begin + extent.size;
+                           return physical_begin <= extent_begin && extent_end <= physical_end;
+                       });
+}
+
+bool subtract_physical_range(ExecutableModule& module,
+                             const std::uint32_t physical_begin,
+                             const std::uint64_t physical_end) {
+    if (!physical_range_overlaps_active_extents(module, physical_begin, physical_end))
+        return false;
+    const auto module_base = canonical_physical_address(module.guest_start);
+    std::vector<ExecutableModuleActiveExtent> remaining;
+    remaining.reserve(module.active_extents.size() + 1u);
+    for (const auto extent : module.active_extents) {
+        const auto extent_begin = static_cast<std::uint64_t>(module_base) + extent.offset;
+        const auto extent_end = extent_begin + extent.size;
+        if (physical_begin >= extent_end || extent_begin >= physical_end) {
+            remaining.push_back(extent);
+            continue;
+        }
+        const auto overlap_begin = std::max<std::uint64_t>(physical_begin, extent_begin);
+        const auto overlap_end = std::min(physical_end, extent_end);
+        if (extent_begin < overlap_begin)
+            remaining.push_back({extent.offset,
+                                 static_cast<std::uint32_t>(overlap_begin - extent_begin)});
+        if (overlap_end < extent_end)
+            remaining.push_back(
+                {static_cast<std::uint32_t>(overlap_end - module_base),
+                 static_cast<std::uint32_t>(extent_end - overlap_end)});
+    }
+    const auto changed = remaining != module.active_extents;
+    module.active_extents = std::move(remaining);
+    module.active = !module.active_extents.empty();
+    return changed;
+}
+
 } // namespace
 
 std::uint64_t ExecutableModule::end_address() const noexcept {
@@ -66,25 +228,33 @@ std::uint64_t ExecutableModule::end_address() const noexcept {
 
 bool ExecutableModule::contains(const std::uint32_t address,
                                 const std::size_t width) const noexcept {
-    if (!active || width == 0u) return false;
-    const auto begin = static_cast<std::uint64_t>(address);
-    const auto end = begin + width;
-    if (begin >= guest_start && end >= begin && end <= end_address()) return true;
-    const auto canonical_start = canonical_physical_address(guest_start);
-    const auto canonical_begin = canonical_physical_address(address);
-    const auto canonical_end = static_cast<std::uint64_t>(canonical_begin) + width;
-    return canonical_begin >= canonical_start && canonical_end >= canonical_begin &&
-           canonical_end <= static_cast<std::uint64_t>(canonical_start) + bytes.size();
+    if (!active) return false;
+    const auto offset = module_offset(*this, address, width);
+    if (!offset) return false;
+    const auto end = static_cast<std::uint64_t>(*offset) + width;
+    return std::any_of(active_extents.begin(), active_extents.end(), [&](const auto extent) {
+        const auto extent_end = static_cast<std::uint64_t>(extent.offset) + extent.size;
+        return *offset >= extent.offset && end <= extent_end;
+    });
+}
+
+std::size_t
+ExecutableModule::active_extent_remaining(const std::uint32_t address) const noexcept {
+    if (!active) return 0u;
+    const auto offset = module_offset(*this, address, 1u);
+    if (!offset) return 0u;
+    for (const auto extent : active_extents) {
+        const auto extent_end = static_cast<std::uint64_t>(extent.offset) + extent.size;
+        if (*offset >= extent.offset && *offset < extent_end)
+            return static_cast<std::size_t>(extent_end - *offset);
+    }
+    return 0u;
 }
 
 bool ExecutableModule::materializable(const std::uint32_t address,
                                       const std::size_t width) const noexcept {
     if (!executable_permission || !contains(address, width)) return false;
-    const auto begin = address >= guest_start &&
-                               static_cast<std::uint64_t>(address) < end_address()
-                           ? static_cast<std::uint64_t>(address - guest_start)
-                           : static_cast<std::uint64_t>(canonical_physical_address(address) -
-                                                        canonical_physical_address(guest_start));
+    const auto begin = *module_offset(*this, address, width);
     const auto end = begin + width;
     for (const auto& range : range_roles) {
         if (range.role == ExecutableStorageRole::RuntimeMaterializable || range.size == 0u)
@@ -95,31 +265,105 @@ bool ExecutableModule::materializable(const std::uint32_t address,
     return true;
 }
 
+void ExecutableModuleCatalog::index_active_extents(const ExecutableModule& module) {
+    if (!module.active) return;
+    const auto module_base = canonical_physical_address(module.guest_start);
+    // First ensure every key exists. If allocation fails, only zero-count tombstones may have
+    // been added and the live index cannot acquire a false-positive or false-negative count.
+    for (const auto extent : module.active_extents) {
+        const auto extent_begin = static_cast<std::uint64_t>(module_base) + extent.offset;
+        const auto extent_end = extent_begin + extent.size;
+        const auto first_page = extent_begin / runtime_write_page_size * runtime_write_page_size;
+        const auto last_page =
+            (extent_end - 1u) / runtime_write_page_size * runtime_write_page_size;
+        for (auto page = first_page;; page += runtime_write_page_size) {
+            static_cast<void>(active_extent_page_refcounts_.try_emplace(
+                static_cast<std::uint32_t>(page), 0u));
+            if (page == last_page) break;
+        }
+    }
+    for (const auto extent : module.active_extents) {
+        const auto extent_begin = static_cast<std::uint64_t>(module_base) + extent.offset;
+        const auto extent_end = extent_begin + extent.size;
+        const auto first_page = extent_begin / runtime_write_page_size * runtime_write_page_size;
+        const auto last_page =
+            (extent_end - 1u) / runtime_write_page_size * runtime_write_page_size;
+        for (auto page = first_page;; page += runtime_write_page_size) {
+            auto& references =
+                active_extent_page_refcounts_.at(static_cast<std::uint32_t>(page));
+            if (references != std::numeric_limits<std::uint64_t>::max()) ++references;
+            if (page == last_page) break;
+        }
+    }
+}
+
+void ExecutableModuleCatalog::unindex_active_extents(const ExecutableModule& module) noexcept {
+    if (!module.active) return;
+    unindex_active_extents(module.guest_start, module.active_extents);
+}
+
+void ExecutableModuleCatalog::reserve_active_extent_index(const ExecutableModule& module) {
+    const auto module_base = canonical_physical_address(module.guest_start);
+    for (const auto extent : module.active_extents) {
+        const auto extent_begin = static_cast<std::uint64_t>(module_base) + extent.offset;
+        const auto extent_end = extent_begin + extent.size;
+        const auto first_page = extent_begin / runtime_write_page_size * runtime_write_page_size;
+        const auto last_page =
+            (extent_end - 1u) / runtime_write_page_size * runtime_write_page_size;
+        for (auto page = first_page;; page += runtime_write_page_size) {
+            static_cast<void>(
+                active_extent_page_refcounts_.try_emplace(static_cast<std::uint32_t>(page), 0u));
+            if (page == last_page) break;
+        }
+    }
+}
+
+void ExecutableModuleCatalog::unindex_active_extents(
+    const std::uint32_t guest_start,
+    const std::span<const ExecutableModuleActiveExtent> extents) noexcept {
+    const auto module_base = canonical_physical_address(guest_start);
+    for (const auto extent : extents) {
+        const auto extent_begin = static_cast<std::uint64_t>(module_base) + extent.offset;
+        const auto extent_end = extent_begin + extent.size;
+        const auto first_page = extent_begin / runtime_write_page_size * runtime_write_page_size;
+        const auto last_page =
+            (extent_end - 1u) / runtime_write_page_size * runtime_write_page_size;
+        for (auto page = first_page;; page += runtime_write_page_size) {
+            const auto found =
+                active_extent_page_refcounts_.find(static_cast<std::uint32_t>(page));
+            if (found != active_extent_page_refcounts_.end() && found->second != 0u)
+                --found->second;
+            if (page == last_page) break;
+        }
+    }
+}
+
+bool ExecutableModuleCatalog::active_extent_index_may_overlap(
+    const std::uint32_t physical_begin,
+    const std::uint64_t physical_end) const noexcept {
+    if (physical_end <= physical_begin) return false;
+    const auto first_page = physical_begin / runtime_write_page_size * runtime_write_page_size;
+    const auto last_page = static_cast<std::uint32_t>(
+        (physical_end - 1u) / runtime_write_page_size * runtime_write_page_size);
+    for (auto page = first_page;; page += runtime_write_page_size) {
+        const auto found = active_extent_page_refcounts_.find(page);
+        if (found != active_extent_page_refcounts_.end() && found->second != 0u) return true;
+        if (page == last_page) break;
+    }
+    return false;
+}
+
 void ExecutableModuleCatalog::publish(ExecutableModule module) {
-    if (module.id.empty() || module.source_identity.empty() || module.bytes.empty() ||
-        (module.guest_start & 1u) != 0u || module.generation == 0u ||
-        module.relocation_generation == 0u) {
-        throw std::invalid_argument(
-            "Ausfuehrbares Modul besitzt keine stabile Identitaet oder Bytes.");
-    }
-    if (module.end_address() >
-        static_cast<std::uint64_t>(std::numeric_limits<std::uint32_t>::max()) + 1u) {
-        throw std::out_of_range("Ausfuehrbares Modul ueberschreitet den Gastadressraum.");
-    }
+    validate_and_normalize_module(module);
     if (find(module.id) != nullptr)
         throw std::invalid_argument("Ausfuehrbare Modulidentitaet ist bereits aktiv.");
     for (const auto& existing : modules_) {
-        if (existing.active && module.guest_start < existing.end_address() &&
-            existing.guest_start < module.end_address())
+        if (existing.active && physical_extents_overlap(module, existing))
             throw std::invalid_argument("Ausfuehrbare Module ueberlappen sich.");
     }
-    validate_relocations(module, module.relocations);
-    for (const auto& range : module.range_roles) {
-        if (range.size == 0u || range.offset > module.bytes.size() ||
-            range.size > module.bytes.size() - range.offset)
-            throw std::invalid_argument("Modulbereichsrolle liegt ausserhalb der Modulbytes.");
-    }
-    module.active = true;
+    modules_.reserve(modules_.size() + 1u);
+    reserve_active_extent_index(module);
+    index_active_extents(module);
     modules_.push_back(std::move(module));
     increment(metrics_.loads);
 }
@@ -127,21 +371,32 @@ void ExecutableModuleCatalog::publish(ExecutableModule module) {
 void ExecutableModuleCatalog::publish_loaded_range(ExecutableModule module,
                                                    RuntimeBlockTable& blocks,
                                                    ExecutableCodeTracker& tracker) {
-    if (module.bytes.empty()) throw std::invalid_argument("Geladener Modulbereich ist leer.");
-    const auto end = module.end_address();
-    for (auto& existing : modules_) {
-        if (!existing.active || module.guest_start >= existing.end_address() ||
-            existing.guest_start >= end)
-            continue;
-        const auto invalidated =
-            blocks.erase_overlapping_physical(existing.guest_start, existing.bytes.size());
-        const auto tracked = tracker.observe_write(
-            existing.guest_start, existing.bytes.size(), CodeWriteSource::Copy, true);
-        metrics_.invalidated_blocks += std::max(invalidated, tracked.invalidated_blocks.size());
-        existing.active = false;
-        increment(metrics_.unloads);
+    validate_and_normalize_module(module);
+    const auto physical = canonical_physical_address(module.guest_start);
+    const auto physical_end = static_cast<std::uint64_t>(physical) + module.bytes.size();
+    for (const auto& existing : modules_) {
+        if (existing.active && existing.id == module.id &&
+            !physical_range_covers_active_extents(existing, physical, physical_end)) {
+            throw std::invalid_argument("Ausfuehrbare Modulidentitaet ist bereits aktiv.");
+        }
     }
-    publish(std::move(module));
+
+    // All deterministic rejection paths are complete before blocks, tracker, provenance or
+    // catalog state are touched. Reserving here also gives the catalog commit a no-allocation
+    // path after invalidation has begun.
+    modules_.reserve(modules_.size() + 1u);
+    reserve_active_extent_index(module);
+    const auto invalidated = blocks.erase_overlapping_physical(physical, module.bytes.size());
+    const auto tracked =
+        tracker.observe_write(physical, module.bytes.size(), CodeWriteSource::Copy, true);
+    metrics_.invalidated_blocks += std::max(invalidated, tracked.invalidated_blocks.size());
+    record_runtime_write(module.guest_start,
+                         module.bytes.size(),
+                         CodeWriteSource::Copy,
+                         true);
+    index_active_extents(module);
+    modules_.push_back(std::move(module));
+    increment(metrics_.loads);
 }
 
 void ExecutableModuleCatalog::unload(const std::string_view id,
@@ -156,20 +411,54 @@ void ExecutableModuleCatalog::unload(const std::string_view id,
     const auto tracked = tracker.observe_write(
         module->guest_start, module->bytes.size(), CodeWriteSource::Copy, true);
     metrics_.invalidated_blocks += std::max(invalidated, tracked.invalidated_blocks.size());
+    unindex_active_extents(*module);
     module->active = false;
+    module->active_extents.clear();
     increment(metrics_.unloads);
 }
 
 void ExecutableModuleCatalog::replace(ExecutableModule module,
-                                      RuntimeBlockTable& blocks,
-                                      ExecutableCodeTracker& tracker) {
-    const auto* previous = find(module.id);
-    if (previous == nullptr) throw std::invalid_argument("Zu ersetzendes Modul ist nicht aktiv.");
+                                       RuntimeBlockTable& blocks,
+                                       ExecutableCodeTracker& tracker) {
+    const auto previous = std::find_if(modules_.begin(), modules_.end(), [&](const auto& candidate) {
+        return candidate.active && candidate.id == module.id;
+    });
+    if (previous == modules_.end())
+        throw std::invalid_argument("Zu ersetzendes Modul ist nicht aktiv.");
     const auto generation = previous->generation;
-    unload(module.id, blocks, tracker);
     module.generation =
         generation == std::numeric_limits<std::uint64_t>::max() ? generation : generation + 1u;
-    publish(std::move(module));
+    validate_and_normalize_module(module);
+    for (auto existing = modules_.begin(); existing != modules_.end(); ++existing) {
+        if (existing != previous && existing->active && physical_extents_overlap(module, *existing))
+            throw std::invalid_argument("Ersatzmodul ueberlappt ein anderes aktives Modul.");
+    }
+
+    // Every deterministic rejection and every allocation is complete before the old module,
+    // runtime blocks or code tracker are mutated. The index reservation inserts only zero-count
+    // pages and is therefore harmless even if allocation itself fails.
+    modules_.reserve(modules_.size() + 1u);
+    reserve_active_extent_index(module);
+    const auto active_previous =
+        std::find_if(modules_.begin(), modules_.end(), [&](const auto& candidate) {
+            return candidate.active && candidate.id == module.id;
+        });
+    if (active_previous == modules_.end())
+        throw std::logic_error("Vorvalidiertes Ersatzmodul verlor sein aktives Quellmodul.");
+    const auto invalidated =
+        blocks.erase_overlapping_physical(active_previous->guest_start, active_previous->bytes.size());
+    const auto tracked = tracker.observe_write(active_previous->guest_start,
+                                               active_previous->bytes.size(),
+                                               CodeWriteSource::Copy,
+                                               true);
+    metrics_.invalidated_blocks += std::max(invalidated, tracked.invalidated_blocks.size());
+    unindex_active_extents(*active_previous);
+    active_previous->active = false;
+    active_previous->active_extents.clear();
+    index_active_extents(module);
+    modules_.push_back(std::move(module));
+    increment(metrics_.unloads);
+    increment(metrics_.loads);
     increment(metrics_.replacements);
 }
 
@@ -258,6 +547,7 @@ bool ExecutableModuleCatalog::authorize_control_transfer(const std::uint32_t add
 
 void ExecutableModuleCatalog::record_runtime_write(const std::uint32_t address,
                                                    const std::size_t size,
+                                                   const CodeWriteSource source,
                                                    const bool bytes_changed) {
     if (!bytes_changed || size == 0u ||
         size > static_cast<std::uint64_t>(std::numeric_limits<std::uint32_t>::max()) + 1u - address)
@@ -267,37 +557,64 @@ void ExecutableModuleCatalog::record_runtime_write(const std::uint32_t address,
     if (physical_end > static_cast<std::uint64_t>(std::numeric_limits<std::uint32_t>::max()) + 1u)
         return;
 
-    for (auto& module : modules_) {
-        if (!module.active || !module.source_identity.starts_with("guest-runtime-write-v1"))
-            continue;
-        const auto module_begin = canonical_physical_address(module.guest_start);
-        const auto module_end = static_cast<std::uint64_t>(module_begin) + module.bytes.size();
-        if (physical_begin < module_end && module_begin < physical_end) {
-            module.active = false;
-            increment(metrics_.unloads);
+    const auto scan_modules = !canonical_range_is_linear(address, size) ||
+                              active_extent_index_may_overlap(physical_begin, physical_end);
+    if (scan_modules) {
+        increment(metrics_.write_index_scans);
+        for (auto& module : modules_) {
+            if (!physical_range_overlaps_active_extents(module, physical_begin, physical_end))
+                continue;
+            const auto was_active = module.active;
+            const auto previous_extents = module.active_extents;
+            const auto changed = subtract_physical_range(module, physical_begin, physical_end);
+            if (changed) {
+                unindex_active_extents(module.guest_start, previous_extents);
+                if (module.active) index_active_extents(module);
+            }
+            if (changed && was_active && !module.active) increment(metrics_.unloads);
         }
+    } else {
+        increment(metrics_.write_index_rejections);
     }
 
-    std::uint64_t cursor = physical_begin;
-    while (cursor < physical_end) {
-        const auto page = static_cast<std::uint32_t>(cursor) & ~(runtime_write_page_size - 1u);
-        const auto page_end = std::min<std::uint64_t>(
-            physical_end, static_cast<std::uint64_t>(page) + runtime_write_page_size);
-        auto& written = runtime_write_pages_[page].written;
-        auto offset = static_cast<std::uint32_t>(cursor - page);
-        const auto end_offset = static_cast<std::uint32_t>(page_end - page);
-        while (offset < end_offset) {
-            const auto word = offset / 64u;
-            const auto first_bit = offset % 64u;
-            const auto word_end = std::min<std::uint32_t>(end_offset, (word + 1u) * 64u);
-            const auto last_bit = word_end - word * 64u;
-            auto mask = std::numeric_limits<std::uint64_t>::max() << first_bit;
-            if (last_bit < 64u) mask &= (std::uint64_t{1u} << last_bit) - 1u;
-            written[word] |= mask;
-            offset = word_end;
+    const auto update_provenance = [&](const bool set) {
+        std::uint64_t cursor = physical_begin;
+        while (cursor < physical_end) {
+            const auto page = static_cast<std::uint32_t>(cursor) & ~(runtime_write_page_size - 1u);
+            const auto page_end = std::min<std::uint64_t>(
+                physical_end, static_cast<std::uint64_t>(page) + runtime_write_page_size);
+            auto found = runtime_write_pages_.find(page);
+            if (set && found == runtime_write_pages_.end())
+                found = runtime_write_pages_.emplace(page, RuntimeWritePage{}).first;
+            if (found != runtime_write_pages_.end()) {
+                auto offset = static_cast<std::uint32_t>(cursor - page);
+                const auto end_offset = static_cast<std::uint32_t>(page_end - page);
+                while (offset < end_offset) {
+                    const auto word = offset / 64u;
+                    const auto first_bit = offset % 64u;
+                    const auto word_end = std::min<std::uint32_t>(end_offset, (word + 1u) * 64u);
+                    const auto last_bit = word_end - word * 64u;
+                    auto mask = std::numeric_limits<std::uint64_t>::max() << first_bit;
+                    if (last_bit < 64u) mask &= (std::uint64_t{1u} << last_bit) - 1u;
+                    if (set)
+                        found->second.written[word] |= mask;
+                    else
+                        found->second.written[word] &= ~mask;
+                    offset = word_end;
+                }
+                if (!set &&
+                    std::all_of(found->second.written.begin(),
+                                found->second.written.end(),
+                                [](const auto word) { return word == 0u; }))
+                    runtime_write_pages_.erase(found);
+            }
+            cursor = page_end;
         }
-        cursor = page_end;
-    }
+    };
+    update_provenance(false);
+    if (source == CodeWriteSource::Cpu || source == CodeWriteSource::Fpu ||
+        source == CodeWriteSource::StoreQueue || source == CodeWriteSource::Fallback)
+        update_provenance(true);
 }
 
 bool ExecutableModuleCatalog::promote_runtime_write(const Memory& memory,
@@ -318,10 +635,14 @@ bool ExecutableModuleCatalog::promote_runtime_write(const Memory& memory,
     auto snapshot_limit = maximum_bytes;
     for (const auto& existing : modules_) {
         if (!existing.active) continue;
-        const auto existing_start = canonical_physical_address(existing.guest_start);
-        if (existing_start <= physical_address) continue;
-        const auto distance = existing_start - physical_address;
-        snapshot_limit = std::min(snapshot_limit, distance);
+        const auto existing_base = canonical_physical_address(existing.guest_start);
+        for (const auto extent : existing.active_extents) {
+            const auto extent_start = static_cast<std::uint64_t>(existing_base) + extent.offset;
+            if (extent_start <= physical_address) continue;
+            const auto distance = extent_start - physical_address;
+            snapshot_limit = static_cast<std::uint32_t>(
+                std::min<std::uint64_t>(snapshot_limit, distance));
+        }
     }
 
     std::uint32_t snapshot_size = 0u;
@@ -502,14 +823,8 @@ DemandBlockMaterializer::try_materialize(CpuState& cpu,
     const auto source_identity = module->source_identity;
     const auto module_generation = module->generation;
     const auto relocation_generation = module->relocation_generation;
-    const auto offset = physical_target >= module->guest_start &&
-                                static_cast<std::uint64_t>(physical_target) < module->end_address()
-                            ? static_cast<std::size_t>(physical_target - module->guest_start)
-                            : static_cast<std::size_t>(
-                                  canonical_physical_address(physical_target) -
-                                  canonical_physical_address(module->guest_start));
     const auto snapshot_size = std::min<std::size_t>(
-        module->bytes.size() - offset,
+        module->active_extent_remaining(physical_target),
         static_cast<std::size_t>(policy_.max_bytes - metrics_.materialized_bytes));
     if (snapshot_size < 2u || snapshot_size > policy_.max_memory_bytes) {
         fail(MaterializationFailure::BudgetExhausted, target);

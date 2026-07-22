@@ -20,6 +20,32 @@ Die Handbuecher werden als Verhaltensspezifikation verwendet. Text, Tabellen,
 Abbildungen und Beispielcode daraus werden nicht in KatanaRecomp
 weiterverbreitet.
 
+Fuer den sichtbaren GD-ROM-Taskfile-/SPI-Vertrag wird ausserdem das
+Herstellerdokument *GD-ROM Protocol SPI (Sega Packet Interface) Specifications
+Ver.1.30* vom 12. Januar 1999, verwendet (oeffentlicher
+Dokumentmirror:
+<https://segaretro.org/images/7/72/Cdif131e.pdf>). Daraus werden
+REQ_MODE/SET_MODE-Grenzen, `Features.Bit0` als DMA-Wahl sowie der getrennte
+DMARQ/DMACK- und Abschluss-INTRQ-Ablauf abgeleitet. Dokumenttext, Tabellen und
+Identitaetsstrings werden nicht uebernommen; nicht benoetigte Hardware-
+Identitaetsfelder bleiben explizit unavailable.
+
+Der echte freie Dreamcast-Hardwarepfad im Linux-Kernel dient als unabhaengiger
+Plausibilitaetscheck fuer CD_READ-DMA und die belegte ATA-SET-FEATURES-
+Kombination:
+<https://github.com/torvalds/linux/blob/master/drivers/cdrom/gdrom.c>.
+KatanaRecomp uebernimmt weder Treibercode noch dessen Hoststruktur.
+
+Fuer den PVR-Y-Scaler und die feldweise Framebufferausgabe ist Sega,
+*Dreamcast/Dev.Box System Architecture*, Stand 3. September 1999, Abschnitt
+3.4.12.2, die Primaerquelle:
+<https://segaretro.org/images/7/78/DreamcastDevBoxSystemArchitecture.pdf>.
+Der sichtbare Katana-Vertrag leitet daraus `SCALER_CTL`-Interlace und
+`Field Select` sowie die zugehoerige feldweise SOF-Ausgabe ab. KallistiOS-
+Header dienen hier nur als Plausibilitaetscheck und decken die betreffenden
+Bits nicht vollstaendig ab; Dokumenttext, Abbildungen, Tabellen oder
+Implementierungscode werden nicht uebernommen.
+
 Fuer die oeffentlich sichtbare Dreamcast-BIOS- und GD-ROM-ABI ist KallistiOS
 die Primaerquelle:
 
@@ -52,6 +78,22 @@ Vertrag aus synthetischen Daten neu. Die vom Nutzer genannte RetroBIOS-Seite
 <https://github.com/Abdess/retrobios/tree/main/bios/Sega/Dreamcast> wurde in
 KR-3709 weder heruntergeladen noch als Implementierungs- oder Testquelle
 verwendet.
+
+## Architekturvorbild: XenonRecomp
+
+- Upstream: <https://github.com/hedge-dev/XenonRecomp>
+- bei der Architekturpruefung betrachteter Main-Snapshot:
+  `ddd128bcca99fe8bfbb99bea583c972351fa6ace`
+- ausgewiesene Lizenz: MIT
+- betrachteter Umfang: vorausanalysierte Executable-zu-C++-Uebersetzung,
+  anschliessender Hostcompiler, getrennte Plattformruntime und native
+  Adress-/Funktionsbindung
+
+XenonRecomp dient ausschliesslich als Architekturvorbild fuer die
+Werkzeugklasse. KatanaRecomp uebernimmt weder Code noch Xbox-spezifische
+Annahmen, Tabellen, Adressen oder Titelwissen. Der Dreamcast-Vertrag wird
+unabhaengig aus SH-4- und Plattformdokumentation sowie synthetischen Tests
+implementiert.
 
 ## Referenzvergleich: Flycast
 

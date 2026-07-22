@@ -40,6 +40,13 @@ struct ExecutableModuleRelocation {
     std::int32_t addend = 0;
 };
 
+struct ExecutableModuleActiveExtent {
+    std::uint32_t offset = 0u;
+    std::uint32_t size = 0u;
+
+    bool operator==(const ExecutableModuleActiveExtent&) const = default;
+};
+
 struct ExecutableModule {
     std::string id;
     std::string source_identity;
@@ -47,6 +54,7 @@ struct ExecutableModule {
     std::vector<std::uint8_t> bytes;
     std::vector<ExecutableModuleRelocation> relocations;
     std::vector<ExecutableModuleRangeRole> range_roles;
+    std::vector<ExecutableModuleActiveExtent> active_extents;
     ExecutableModuleKind kind = ExecutableModuleKind::Module;
     std::uint64_t generation = 1u;
     std::uint64_t relocation_generation = 1u;
@@ -57,6 +65,7 @@ struct ExecutableModule {
 
     [[nodiscard]] std::uint64_t end_address() const noexcept;
     [[nodiscard]] bool contains(std::uint32_t address, std::size_t width = 1u) const noexcept;
+    [[nodiscard]] std::size_t active_extent_remaining(std::uint32_t address) const noexcept;
     [[nodiscard]] bool materializable(std::uint32_t address, std::size_t width = 1u) const noexcept;
 };
 
@@ -65,6 +74,8 @@ struct ExecutableModuleMetrics {
     std::uint64_t unloads = 0u;
     std::uint64_t replacements = 0u;
     std::uint64_t invalidated_blocks = 0u;
+    std::uint64_t write_index_rejections = 0u;
+    std::uint64_t write_index_scans = 0u;
 };
 
 class ExecutableModuleCatalog final {
@@ -85,7 +96,10 @@ class ExecutableModuleCatalog final {
     [[nodiscard]] const ExecutableModule* find(std::string_view id) const noexcept;
     [[nodiscard]] bool authorize_control_transfer(std::uint32_t address,
                                                   std::uint32_t maximum_bytes = 128u);
-    void record_runtime_write(std::uint32_t address, std::size_t size, bool bytes_changed = true);
+    void record_runtime_write(std::uint32_t address,
+                              std::size_t size,
+                              CodeWriteSource source,
+                              bool bytes_changed = true);
     [[nodiscard]] bool promote_runtime_write(const Memory& memory,
                                              std::uint32_t address,
                                              std::uint32_t maximum_bytes = 128u);
@@ -103,8 +117,16 @@ class ExecutableModuleCatalog final {
     struct RuntimeWritePage {
         std::array<std::uint64_t, runtime_write_words_per_page> written{};
     };
+    void index_active_extents(const ExecutableModule& module);
+    void reserve_active_extent_index(const ExecutableModule& module);
+    void unindex_active_extents(const ExecutableModule& module) noexcept;
+    void unindex_active_extents(std::uint32_t guest_start,
+                                std::span<const ExecutableModuleActiveExtent> extents) noexcept;
+    [[nodiscard]] bool active_extent_index_may_overlap(std::uint32_t physical_begin,
+                                                       std::uint64_t physical_end) const noexcept;
     std::vector<ExecutableModule> modules_;
     std::map<std::uint32_t, RuntimeWritePage> runtime_write_pages_;
+    std::map<std::uint32_t, std::uint64_t> active_extent_page_refcounts_;
     std::uint64_t next_runtime_write_module_ = 1u;
     ExecutableModuleMetrics metrics_;
 };

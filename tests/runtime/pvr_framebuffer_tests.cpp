@@ -81,9 +81,21 @@ int main() {
     const auto blanked_frame = blanked_framebuffer.capture(
         {}, blanked->base_offset, std::nullopt, blanked->border_rgba);
     require(blanked->video_blank && blanked->border_rgba ==
-                                        std::array<std::uint8_t, 4u>{0x12u, 0x34u, 0x56u, 0xFFu} &&
+                                         std::array<std::uint8_t, 4u>{0x12u, 0x34u, 0x56u, 0xFFu} &&
                 blanked_frame.rgba.front() == 0x12u && blanked_frame.rgba.back() == 0xFFu,
             "VO_CONTROL-Blanking oder BORDER_COL erreicht die native Scanoutausgabe nicht.");
+    const auto original_read_control = registers.read(pvr_register::FramebufferReadControl);
+    const auto original_spg_control = registers.read(pvr_register::SpgControl);
+    registers.write(pvr_register::FramebufferReadControl, original_read_control | 2u);
+    registers.write(pvr_register::SpgControl, original_spg_control | 0x10u);
+    registers.write(pvr_register::ScalerControl, 1u);
+    require(throws<std::out_of_range>([&] {
+                static_cast<void>(decode_pvr_scanout(registers, dreamcast_vram_size));
+            }),
+            "Scale, Interlace und Line-Doubling duerfen keinen Multi-GiB-Hostframe erzeugen.");
+    registers.write(pvr_register::ScalerControl, 0x400u);
+    registers.write(pvr_register::SpgControl, original_spg_control);
+    registers.write(pvr_register::FramebufferReadControl, original_read_control);
     require(throws<std::invalid_argument>([] {
                 PvrFramebuffer value;
                 value.configure(2u, 1u, 3u, PvrFramebufferFormat::Rgb565);

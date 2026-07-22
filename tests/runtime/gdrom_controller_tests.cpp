@@ -30,6 +30,15 @@ template <typename Operation> bool throws_runtime_error(Operation&& operation) {
     return false;
 }
 
+template <typename Operation> bool throws_out_of_range(Operation&& operation) {
+    try {
+        operation();
+    } catch (const std::out_of_range&) {
+        return true;
+    }
+    return false;
+}
+
 class LayoutDiscSource final : public katana::runtime::DiscSource {
   public:
     LayoutDiscSource(std::vector<katana::runtime::DiscTrackLayout> layout, std::string identity)
@@ -56,6 +65,14 @@ int main() {
     CpuState cpu;
     cpu.memory = Memory(0u);
     static_cast<void>(map_dreamcast_main_ram(cpu.memory));
+    std::uint64_t rejected_mmio_writes = 0u;
+    auto rejected_mmio = std::make_shared<MmioMemoryDevice>(
+        0x1000u,
+        [](const std::uint32_t, const MemoryAccessWidth) { return 0u; },
+        [&](const std::uint32_t, const std::uint32_t, const MemoryAccessWidth) {
+            ++rejected_mmio_writes;
+        });
+    cpu.memory.map_region("gdrom-rejected-bios-mmio", 0x005F0000u, rejected_mmio);
     EventScheduler scheduler;
     std::vector<std::uint8_t> bytes(8u * 2048u, 0x5Au);
     auto source = std::make_shared<MemoryDiscSource>(bytes, "synthetic-gdrom");
@@ -68,6 +85,61 @@ int main() {
         [&](const std::uint64_t) { ++completions; },
         {},
         [&] { ++command_acks; });
+    const auto write_packet = [](DreamcastGdRomController& target,
+                                 const std::array<std::uint8_t, 12u>& packet) {
+        for (std::size_t offset = 0u; offset < packet.size(); offset += 2u) {
+            target.write(0x80u,
+                         static_cast<std::uint16_t>(packet[offset]) |
+                             (static_cast<std::uint16_t>(packet[offset + 1u]) << 8u),
+                         MemoryAccessWidth::Halfword);
+        }
+    };
+    const auto append_pio_word = [](DreamcastGdRomController& target,
+                                    std::vector<std::uint8_t>& output,
+                                    const std::size_t valid_bytes = 2u) {
+        const auto word = target.read(0x80u, MemoryAccessWidth::Halfword);
+        output.push_back(static_cast<std::uint8_t>(word));
+        if (valid_bytes == 2u) output.push_back(static_cast<std::uint8_t>(word >> 8u));
+    };
+    const auto issue_cd_read = [&](DreamcastGdRomController& target,
+                                   EventScheduler& target_scheduler,
+                                   const std::uint8_t features,
+                                   const std::uint32_t fad,
+                                   const std::uint32_t sector_count,
+                                   const std::uint16_t pio_byte_limit = 0u) {
+        target.write(0x84u, features, MemoryAccessWidth::Byte);
+        target.write(0x90u, pio_byte_limit & 0xFFu, MemoryAccessWidth::Byte);
+        target.write(0x94u, pio_byte_limit >> 8u, MemoryAccessWidth::Byte);
+        target.write(0x9Cu, 0xA0u, MemoryAccessWidth::Byte);
+        std::array<std::uint8_t, 12u> packet{};
+        packet[0] = 0x30u;
+        packet[2] = static_cast<std::uint8_t>(fad >> 16u);
+        packet[3] = static_cast<std::uint8_t>(fad >> 8u);
+        packet[4] = static_cast<std::uint8_t>(fad);
+        packet[8] = static_cast<std::uint8_t>(sector_count >> 16u);
+        packet[9] = static_cast<std::uint8_t>(sector_count >> 8u);
+        packet[10] = static_cast<std::uint8_t>(sector_count);
+        write_packet(target, packet);
+        static_cast<void>(target_scheduler.advance_by(1'000u, 1u));
+    };
+    const auto read_taskfile_sense = [&](DreamcastGdRomController& target,
+                                         EventScheduler& target_scheduler) {
+        static_cast<void>(target.read(0x9Cu, MemoryAccessWidth::Byte));
+        target.write(0x90u, 10u, MemoryAccessWidth::Byte);
+        target.write(0x94u, 0u, MemoryAccessWidth::Byte);
+        target.write(0x9Cu, 0xA0u, MemoryAccessWidth::Byte);
+        std::array<std::uint8_t, 12u> packet{};
+        packet[0] = 0x13u;
+        packet[4] = 10u;
+        write_packet(target, packet);
+        static_cast<void>(target_scheduler.advance_by(1'000u, 1u));
+        static_cast<void>(target.read(0x9Cu, MemoryAccessWidth::Byte));
+        std::vector<std::uint8_t> sense;
+        for (std::size_t index = 0u; index < 5u; ++index)
+            append_pio_word(target, sense);
+        static_cast<void>(target.read(0x9Cu, MemoryAccessWidth::Byte));
+        return sense;
+    };
     require(controller.reload_system_bootstrap(cpu) &&
                 cpu.memory.read_u8(0x8C008100u) == 0x5Au &&
                 cpu.memory.read_u8(0x8C00B8FFu) == 0x5Au,
@@ -88,8 +160,8 @@ int main() {
                 controller.read(0x98u, MemoryAccessWidth::Byte) == 0xB0u,
             "Korrigierte GD-ROM-Taskfile-Offsets liefern nicht ihren sichtbaren Zustand.");
     require(controller.read(0x9Cu, MemoryAccessWidth::Byte) == taskfile_status &&
-                command_acks == 1u,
-            "Nur der normale Command-Status-Lesezugriff quittiert das GD-ROM-Ereignis nicht.");
+                command_acks == 0u,
+            "Ein normaler Command-Status-Lesezugriff erfindet ohne IRQ eine Quittierung.");
     require(throws_runtime_error(
                 [&] { static_cast<void>(controller.read(0xA0u, MemoryAccessWidth::Byte)); }) &&
                 throws_runtime_error(
@@ -97,39 +169,391 @@ int main() {
             "Der veraltete GD-ROM-Device-Control-Offset 0xA0 bleibt faelschlich aktiv.");
     controller.reset();
 
+    controller.write(0x90u, 4u, MemoryAccessWidth::Byte);
+    controller.write(0x94u, 0u, MemoryAccessWidth::Byte);
     controller.write(0x9Cu, 0xA0u, MemoryAccessWidth::Byte);
-    std::array<std::uint8_t, 12u> inquiry{};
-    inquiry[0] = 0x12u;
-    for (std::size_t offset = 0u; offset < inquiry.size(); offset += 2u) {
-        controller.write(0x80u,
-                         static_cast<std::uint16_t>(inquiry[offset]) |
-                             (static_cast<std::uint16_t>(inquiry[offset + 1u]) << 8u),
-                         MemoryAccessWidth::Halfword);
-    }
+    cpu.r[4] = 16u;
+    cpu.r[5] = 0u;
+    require(controller.bios_call(cpu, 0u, 0u) == 0u,
+            "Ein Taskfile-Paket gibt den exklusiven Laufwerksbesitz an das BIOS ab.");
+    std::array<std::uint8_t, 12u> request_mode{};
+    request_mode[0] = 0x11u;
+    request_mode[4] = 10u;
+    write_packet(controller, request_mode);
     require(controller.status().ata_status == 0x80u && completions == 0u &&
                 controller.status().completed_commands == 0u,
             "GD-ROM-Paketkommando schliesst synchron beim letzten Paketwort ab.");
     static_cast<void>(scheduler.advance_by(999u, 1u));
     require(completions == 0u, "GD-ROM-Paketcompletion wird vor dem Zielzyklus signalisiert.");
     static_cast<void>(scheduler.advance_by(1u, 1u));
-    require(completions == 1u && controller.status().completed_commands == 1u &&
-                controller.status().pio_bytes_available == 36u,
-            "GD-ROM-Paketcompletion publiziert Daten oder Observer nicht asynchron.");
+    require(completions == 1u && controller.status().completed_commands == 0u &&
+                controller.status().pio_bytes_available == 10u &&
+                controller.status().interrupt_reason == 2u &&
+                controller.read(0x90u, MemoryAccessWidth::Byte) == 4u &&
+                controller.bios_call(cpu, 0u, 0u) == 0u,
+            "REQ_MODE publiziert seine erste DataIn-Phase nicht asynchron und exklusiv.");
+    require(controller.read(0x18u, MemoryAccessWidth::Byte) == 0x08u &&
+                command_acks == 0u &&
+                controller.read(0x9Cu, MemoryAccessWidth::Byte) == 0x08u &&
+                command_acks == 1u,
+            "Alternate- und Command-Status trennen IRQ-Beobachtung und Quittierung nicht.");
+    std::vector<std::uint8_t> mode_bytes;
+    append_pio_word(controller, mode_bytes);
+    append_pio_word(controller, mode_bytes);
+    require(completions == 2u && controller.read(0x90u, MemoryAccessWidth::Byte) == 4u &&
+                controller.status().pio_bytes_available == 6u &&
+                controller.read(0x9Cu, MemoryAccessWidth::Byte) == 0x08u,
+            "REQ_MODE beginnt nach vier Bytes keine zweite IRQ-Phase.");
+    append_pio_word(controller, mode_bytes);
+    append_pio_word(controller, mode_bytes);
+    require(completions == 3u && controller.read(0x90u, MemoryAccessWidth::Byte) == 2u &&
+                controller.status().pio_bytes_available == 2u &&
+                controller.read(0x9Cu, MemoryAccessWidth::Byte) == 0x08u,
+            "REQ_MODE dekrementiert ByteCount in der zweiten Phase nicht exakt.");
+    append_pio_word(controller, mode_bytes);
+    require(mode_bytes.size() == 10u && completions == 4u &&
+                controller.status().completed_commands == 1u &&
+                controller.status().pio_bytes_available == 0u &&
+                controller.status().interrupt_reason == 3u &&
+                controller.read(0x90u, MemoryAccessWidth::Byte) == 0u &&
+                controller.read(0x9Cu, MemoryAccessWidth::Byte) == 0x40u &&
+                command_acks == 4u,
+            "REQ_MODE liefert nicht drei DataIn-IRQs plus finalen Status-IRQ.");
+
+    controller.write(0x90u, 32u, MemoryAccessWidth::Byte);
+    controller.write(0x94u, 0u, MemoryAccessWidth::Byte);
+    controller.write(0x9Cu, 0xA0u, MemoryAccessWidth::Byte);
+    request_mode[2] = 0u;
+    request_mode[4] = 32u;
+    write_packet(controller, request_mode);
+    static_cast<void>(scheduler.advance_by(1'000u, 1u));
+    require(controller.status().pio_bytes_available == 32u &&
+                controller.read(0x90u, MemoryAccessWidth::Byte) == 32u,
+            "REQ_MODE stellt nicht den vollstaendigen 32-Byte-Hardwareinfopuffer bereit.");
+    static_cast<void>(controller.read(0x9Cu, MemoryAccessWidth::Byte));
+    std::vector<std::uint8_t> full_mode;
+    for (std::size_t index = 0u; index < 16u; ++index)
+        append_pio_word(controller, full_mode);
+    require(full_mode.size() == 32u && full_mode[2] == 0u && full_mode[5] == 0xB4u &&
+                full_mode[6] == 0x19u && full_mode[9] == 0x08u &&
+                std::all_of(full_mode.begin() + 10, full_mode.end(), [](const auto value) {
+                    return value == 0u;
+                }),
+            "REQ_MODE liefert keine strukturell vollstaendige, kontrolliert leere Identitaet.");
+    static_cast<void>(controller.read(0x9Cu, MemoryAccessWidth::Byte));
+
+    controller.write(0x90u, 22u, MemoryAccessWidth::Byte);
+    controller.write(0x94u, 0u, MemoryAccessWidth::Byte);
+    controller.write(0x9Cu, 0xA0u, MemoryAccessWidth::Byte);
+    request_mode[2] = 10u;
+    request_mode[4] = 22u;
+    write_packet(controller, request_mode);
+    static_cast<void>(scheduler.advance_by(1'000u, 1u));
+    static_cast<void>(controller.read(0x9Cu, MemoryAccessWidth::Byte));
+    std::vector<std::uint8_t> identity_mode;
+    for (std::size_t index = 0u; index < 11u; ++index)
+        append_pio_word(controller, identity_mode);
+    require(identity_mode.size() == 22u &&
+                std::all_of(identity_mode.begin(), identity_mode.end(), [](const auto value) {
+                    return value == 0u;
+                }),
+            "REQ_MODE schneidet die herstellerdefinierten Identitaetsfelder bei Byte 10 ab.");
+    static_cast<void>(controller.read(0x9Cu, MemoryAccessWidth::Byte));
+
+    controller.write(0x90u, 2u, MemoryAccessWidth::Byte);
+    controller.write(0x94u, 0u, MemoryAccessWidth::Byte);
+    controller.write(0x9Cu, 0xA0u, MemoryAccessWidth::Byte);
+    request_mode[2] = 1u;
+    request_mode[4] = 2u;
+    write_packet(controller, request_mode);
+    static_cast<void>(scheduler.advance_by(1'000u, 1u));
+    require((controller.status().ata_status & 1u) != 0u &&
+                controller.read(0x84u, MemoryAccessWidth::Byte) == 0x50u,
+            "REQ_MODE akzeptiert eine ungerade Hardwareinfo-Startadresse.");
+    const auto odd_mode_sense = read_taskfile_sense(controller, scheduler);
+    require(odd_mode_sense[2] == 5u && odd_mode_sense[8] == 0x24u,
+            "REQ_MODE meldet eine ungerade Startadresse nicht als INVALID FIELD.");
 
     controller.reset();
+    controller.write(0x90u, 4u, MemoryAccessWidth::Byte);
+    controller.write(0x94u, 0u, MemoryAccessWidth::Byte);
+    controller.write(0x9Cu, 0xA0u, MemoryAccessWidth::Byte);
+    request_mode[2] = 0u;
+    request_mode[4] = 10u;
+    const auto unacked_phase_completions = completions;
+    const auto unacked_phase_acks = command_acks;
+    write_packet(controller, request_mode);
+    static_cast<void>(scheduler.advance_by(1'000u, 1u));
+    std::vector<std::uint8_t> unacked_phase;
+    append_pio_word(controller, unacked_phase);
+    append_pio_word(controller, unacked_phase);
+    require(completions == unacked_phase_completions + 1u &&
+                controller.read(0x90u, MemoryAccessWidth::Byte) == 4u,
+            "Eine neue DataIn-Phase erzeugt ohne Low-Flanke einen doppelten Command-IRQ.");
+    static_cast<void>(controller.read(0x9Cu, MemoryAccessWidth::Byte));
+    require(completions == unacked_phase_completions + 2u &&
+                command_acks == unacked_phase_acks + 1u,
+            "Ein waehrend High wartender Phasen-IRQ wird nach dem Ack nicht neu signalisiert.");
+    static_cast<void>(controller.read(0x9Cu, MemoryAccessWidth::Byte));
+    require(command_acks == unacked_phase_acks + 2u,
+            "Der nachgezogene Phasen-IRQ laesst sich nicht separat quittieren.");
+
+    controller.reset();
+    const auto alternate_completions = completions;
+    const auto alternate_acks = command_acks;
+    const auto alternate_commands = controller.status().completed_commands;
+    std::array<std::uint8_t, 12u> test_unit{};
+    controller.write(0x9Cu, 0xA0u, MemoryAccessWidth::Byte);
+    write_packet(controller, test_unit);
+    static_cast<void>(scheduler.advance_by(1'000u, 1u));
+    require(controller.read(0x18u, MemoryAccessWidth::Byte) == 0x40u &&
+                completions == alternate_completions + 1u &&
+                command_acks == alternate_acks,
+            "Alternate Status veraendert den finalen Command-IRQ.");
+    controller.write(0x9Cu, 0xA0u, MemoryAccessWidth::Byte);
+    write_packet(controller, test_unit);
+    static_cast<void>(scheduler.advance_by(1'000u, 1u));
+    require(controller.status().completed_commands == alternate_commands + 2u &&
+                completions == alternate_completions + 1u,
+            "Finalstatus haelt Owner/Phase fest oder dupliziert einen bereits hohen IRQ.");
+    static_cast<void>(controller.read(0x9Cu, MemoryAccessWidth::Byte));
+    static_cast<void>(controller.read(0x9Cu, MemoryAccessWidth::Byte));
+    require(completions == alternate_completions + 2u &&
+                command_acks == alternate_acks + 2u,
+            "Der ohne Command-Status gestartete Folgeauftrag verliert seinen finalen IRQ.");
+
+    constexpr std::uint32_t taskfile_dma_destination = 0x8C030000u;
+    controller.reset();
+    const auto pio_cd_read_completions = completions;
+    const auto pio_cd_read_commands = controller.status().completed_commands;
+    issue_cd_read(controller, scheduler, 0u, 150u, 1u, 2048u);
+    require(completions == pio_cd_read_completions + 1u &&
+                controller.status().completed_commands == pio_cd_read_commands &&
+                controller.status().ata_status == 0x08u &&
+                controller.status().interrupt_reason == 2u &&
+                controller.status().pio_bytes_available == 2048u &&
+                throws_runtime_error([&] {
+                    controller.dma_to_memory(taskfile_dma_destination, 2048u, 1u);
+                }),
+            "CD_READ ohne DMA-Feature verlaesst den PIO-DRQ-Vertrag.");
+
+    controller.reset();
+    const auto taskfile_dma_completions = completions;
+    const auto taskfile_dma_commands = controller.status().completed_commands;
+    const auto taskfile_dma_count = controller.status().completed_dma;
+    issue_cd_read(controller, scheduler, 1u, 150u, 1u);
+    require(completions == taskfile_dma_completions &&
+                controller.status().completed_commands == taskfile_dma_commands &&
+                controller.status().completed_dma == taskfile_dma_count &&
+                controller.status().ata_status == 0x80u &&
+                controller.status().interrupt_reason == 0u &&
+                controller.status().pio_bytes_available == 0u &&
+                throws_runtime_error(
+                    [&] { static_cast<void>(controller.read(0x80u, MemoryAccessWidth::Halfword)); }),
+            "CD_READ-DMA erzeugt faelschlich eine PIO-DRQ-Phase oder Zwischen-IRQ.");
+    controller.dma_to_memory(taskfile_dma_destination, 1024u, 1u);
+    require(completions == taskfile_dma_completions &&
+                controller.status().ata_status == 0x80u &&
+                controller.status().completed_commands == taskfile_dma_commands &&
+                controller.status().completed_dma == taskfile_dma_count &&
+                cpu.memory.read_u8(taskfile_dma_destination) == 0x5Au,
+            "Partielle CD_READ-DMA beendet den Auftrag oder signalisiert einen Zwischen-IRQ.");
+    require(throws_out_of_range([&] {
+                controller.dma_to_memory(taskfile_dma_destination + 1024u, 1025u, 1u);
+            }) &&
+                controller.status().ata_status == 0x80u,
+            "CD_READ-DMA akzeptiert einen Transfer ueber den verbleibenden Puffer hinaus.");
+    controller.dma_to_memory(taskfile_dma_destination + 1024u, 1024u, 1u);
+    require(completions == taskfile_dma_completions + 1u &&
+                controller.status().completed_commands == taskfile_dma_commands + 1u &&
+                controller.status().completed_dma == taskfile_dma_count + 1u &&
+                controller.status().ata_status == 0x40u &&
+                controller.status().interrupt_reason == 3u &&
+                controller.status().pio_bytes_available == 0u &&
+                cpu.memory.read_u8(taskfile_dma_destination + 2047u) == 0x5Au,
+            "CD_READ-DMA liefert nicht exakt einen finalen Status-IRQ nach DMACK-Datenende.");
+    static_cast<void>(controller.read(0x9Cu, MemoryAccessWidth::Byte));
+
+    controller.reset();
+    const auto invalid_completions = completions;
     controller.write(0x9Cu, 0xA0u, MemoryAccessWidth::Byte);
     std::array<std::uint8_t, 12u> invalid{};
     invalid[0] = 0xFFu;
-    for (std::size_t offset = 0u; offset < invalid.size(); offset += 2u) {
-        controller.write(0x80u,
-                         static_cast<std::uint16_t>(invalid[offset]) |
-                             (static_cast<std::uint16_t>(invalid[offset + 1u]) << 8u),
-                         MemoryAccessWidth::Halfword);
-    }
+    write_packet(controller, invalid);
     static_cast<void>(scheduler.advance_by(1'000u, 1u));
-    require(completions == 2u && (controller.status().ata_status & 1u) != 0u &&
+    require(completions == invalid_completions + 1u &&
+                (controller.status().ata_status & 1u) != 0u &&
+                controller.read(0x84u, MemoryAccessWidth::Byte) == 0x50u &&
                 controller.status().interrupt_reason == 3u,
-            "Normaler GD-ROM-Kommandofehler wird nicht als ATA-Fehler abgeschlossen.");
+            "Unbekanntes SPI-Kommando wird nicht kontrolliert mit persistentem Sense beendet.");
+    static_cast<void>(controller.read(0x9Cu, MemoryAccessWidth::Byte));
+
+    controller.write(0x90u, 4u, MemoryAccessWidth::Byte);
+    controller.write(0x94u, 0u, MemoryAccessWidth::Byte);
+    controller.write(0x9Cu, 0xA0u, MemoryAccessWidth::Byte);
+    std::array<std::uint8_t, 12u> request_error{};
+    request_error[0] = 0x13u;
+    request_error[4] = 10u;
+    const auto sense_completions = completions;
+    write_packet(controller, request_error);
+    static_cast<void>(scheduler.advance_by(1'000u, 1u));
+    std::vector<std::uint8_t> sense;
+    static_cast<void>(controller.read(0x9Cu, MemoryAccessWidth::Byte));
+    append_pio_word(controller, sense);
+    append_pio_word(controller, sense);
+    static_cast<void>(controller.read(0x9Cu, MemoryAccessWidth::Byte));
+    append_pio_word(controller, sense);
+    append_pio_word(controller, sense);
+    static_cast<void>(controller.read(0x9Cu, MemoryAccessWidth::Byte));
+    append_pio_word(controller, sense);
+    require(sense == std::vector<std::uint8_t>({0xF0u, 0u, 5u, 0u, 0u,
+                                                0u, 0u, 0u, 0x20u, 0u}) &&
+                completions == sense_completions + 4u &&
+                (controller.status().ata_status & 1u) == 0u &&
+                controller.read(0x84u, MemoryAccessWidth::Byte) == 0u,
+            "REQ_ERROR liefert oder loescht den persistenten Sense nicht phasengenau.");
+    static_cast<void>(controller.read(0x9Cu, MemoryAccessWidth::Byte));
+
+    const auto ata_error_completions = completions;
+    controller.write(0x9Cu, 0x77u, MemoryAccessWidth::Byte);
+    require(completions == ata_error_completions + 1u &&
+                (controller.status().ata_status & 1u) != 0u &&
+                controller.read(0x84u, MemoryAccessWidth::Byte) == 0x54u &&
+                controller.status().interrupt_reason == 3u,
+            "Unbekanntes ATA-Kommando stuerzt den Host ab oder verliert ABRT/Sense.");
+    static_cast<void>(controller.read(0x9Cu, MemoryAccessWidth::Byte));
+
+    const auto success_after_error_completions = completions;
+    controller.write(0x9Cu, 0xA0u, MemoryAccessWidth::Byte);
+    write_packet(controller, test_unit);
+    static_cast<void>(scheduler.advance_by(1'000u, 1u));
+    require(completions == success_after_error_completions + 1u &&
+                controller.status().ata_status == 0x40u &&
+                controller.read(0x84u, MemoryAccessWidth::Byte) == 0x50u,
+            "Erfolgreiches Folgekommando erbt faelschlich ATA ERR vom persistenten Sense.");
+    const auto preserved_sense = read_taskfile_sense(controller, scheduler);
+    require(preserved_sense[2] == 5u && preserved_sense[8] == 0x20u,
+            "Erfolgreiches Folgekommando verliert den getrennt gespeicherten Sense-Payload.");
+
+    controller.reset();
+    const auto set_features_completions = completions;
+    const auto set_features_commands = controller.status().completed_commands;
+    controller.write(0x84u, 0x13u, MemoryAccessWidth::Byte);
+    controller.write(0x88u, 0x22u, MemoryAccessWidth::Byte);
+    controller.write(0x9Cu, 0xEFu, MemoryAccessWidth::Byte);
+    require(completions == set_features_completions + 1u &&
+                controller.status().completed_commands == set_features_commands + 1u &&
+                controller.status().ata_status == 0x40u &&
+                controller.read(0x84u, MemoryAccessWidth::Byte) == 0u &&
+                controller.status().interrupt_reason == 3u,
+            "ATA SET FEATURES lehnt den belegten Dreamcast-DMA-Modus 0x13/0x22 ab.");
+    static_cast<void>(controller.read(0x9Cu, MemoryAccessWidth::Byte));
+
+    controller.reset();
+    const auto rejected_features_completions = completions;
+    controller.write(0x84u, 0x03u, MemoryAccessWidth::Byte);
+    controller.write(0x88u, 0x22u, MemoryAccessWidth::Byte);
+    controller.write(0x9Cu, 0xEFu, MemoryAccessWidth::Byte);
+    require(completions == rejected_features_completions + 1u &&
+                (controller.status().ata_status & 1u) != 0u &&
+                controller.read(0x84u, MemoryAccessWidth::Byte) == 0x54u &&
+                controller.status().interrupt_reason == 3u,
+            "ATA SET FEATURES akzeptiert einen unbelegten Transfermodus als Scheinerfolg.");
+    const auto rejected_features_sense = read_taskfile_sense(controller, scheduler);
+    require(rejected_features_sense[2] == 5u && rejected_features_sense[8] == 0x24u,
+            "Unbekannter ATA-Transfermodus liefert nicht ABRT mit INVALID FIELD.");
+
+    controller.reset();
+    controller.write(0x90u, 4u, MemoryAccessWidth::Byte);
+    controller.write(0x94u, 0u, MemoryAccessWidth::Byte);
+    controller.write(0x9Cu, 0xA0u, MemoryAccessWidth::Byte);
+    std::array<std::uint8_t, 12u> set_mode{};
+    set_mode[0] = 0x12u;
+    set_mode[2] = 2u;
+    set_mode[4] = 4u;
+    write_packet(controller, set_mode);
+    static_cast<void>(scheduler.advance_by(1'000u, 1u));
+    require(controller.status().interrupt_reason == 0u &&
+                controller.read(0x90u, MemoryAccessWidth::Byte) == 4u,
+            "SET_MODE startet keine DataOut-Phase mit Host-ByteCount.");
+    static_cast<void>(controller.read(0x9Cu, MemoryAccessWidth::Byte));
+    require(throws_runtime_error([&] {
+                controller.dma_to_memory(taskfile_dma_destination, 4u, 1u);
+            }) &&
+                controller.read(0x90u, MemoryAccessWidth::Byte) == 4u,
+            "G1-DMA akzeptiert eine DataOut-Phase und kann deren Schreibcursor korrumpieren.");
+    controller.write(0x80u, 0x2211u, MemoryAccessWidth::Halfword);
+    controller.write(0x80u, 0x4433u, MemoryAccessWidth::Halfword);
+    static_cast<void>(controller.read(0x9Cu, MemoryAccessWidth::Byte));
+    controller.write(0x90u, 4u, MemoryAccessWidth::Byte);
+    controller.write(0x94u, 0u, MemoryAccessWidth::Byte);
+    controller.write(0x9Cu, 0xA0u, MemoryAccessWidth::Byte);
+    request_mode[2] = 2u;
+    request_mode[4] = 4u;
+    write_packet(controller, request_mode);
+    static_cast<void>(scheduler.advance_by(1'000u, 1u));
+    static_cast<void>(controller.read(0x9Cu, MemoryAccessWidth::Byte));
+    std::vector<std::uint8_t> changed_mode;
+    append_pio_word(controller, changed_mode);
+    append_pio_word(controller, changed_mode);
+    require(changed_mode == std::vector<std::uint8_t>({0x11u, 0x22u, 0x33u, 0x44u}),
+            "SET_MODE-DataOut wird nicht persistent durch REQ_MODE sichtbar.");
+    static_cast<void>(controller.read(0x9Cu, MemoryAccessWidth::Byte));
+
+    controller.write(0x90u, 2u, MemoryAccessWidth::Byte);
+    controller.write(0x94u, 0u, MemoryAccessWidth::Byte);
+    controller.write(0x9Cu, 0xA0u, MemoryAccessWidth::Byte);
+    set_mode[2] = 1u;
+    set_mode[4] = 2u;
+    write_packet(controller, set_mode);
+    static_cast<void>(scheduler.advance_by(1'000u, 1u));
+    require((controller.status().ata_status & 1u) != 0u &&
+                controller.read(0x84u, MemoryAccessWidth::Byte) == 0x50u,
+            "SET_MODE akzeptiert eine ungerade Modepuffer-Startadresse.");
+    const auto odd_set_mode_sense = read_taskfile_sense(controller, scheduler);
+    require(odd_set_mode_sense[2] == 5u && odd_set_mode_sense[8] == 0x24u,
+            "SET_MODE meldet eine ungerade Startadresse nicht als INVALID FIELD.");
+
+    controller.reset();
+    issue_cd_read(controller, scheduler, 0u, 150u, 0u);
+    require((controller.status().ata_status & 1u) != 0u,
+            "CD_READ mit leerer Sektoranzahl wird nicht abgelehnt.");
+    const auto invalid_field_sense = read_taskfile_sense(controller, scheduler);
+    require(invalid_field_sense[2] == 5u && invalid_field_sense[8] == 0x24u,
+            "GD-ROM InvalidField wird nicht auf Sense ASC 24 abgebildet.");
+
+    controller.reset();
+    issue_cd_read(controller, scheduler, 3u, 150u, 1u);
+    require((controller.status().ata_status & 1u) != 0u &&
+                throws_runtime_error([&] {
+                    controller.dma_to_memory(taskfile_dma_destination, 2048u, 1u);
+                }),
+            "CD_READ aktiviert DMA trotz reservierter Featurebits.");
+    const auto invalid_feature_sense = read_taskfile_sense(controller, scheduler);
+    require(invalid_feature_sense[2] == 5u && invalid_feature_sense[8] == 0x24u,
+            "Reservierte CD_READ-Featurebits liefern nicht INVALID FIELD.");
+
+    controller.reset();
+    issue_cd_read(controller, scheduler, 0u, 158u, 1u);
+    require((controller.status().ata_status & 1u) != 0u,
+            "CD_READ ausserhalb der Disc wird nicht abgelehnt.");
+    const auto out_of_range_sense = read_taskfile_sense(controller, scheduler);
+    require(out_of_range_sense[2] == 5u && out_of_range_sense[8] == 0x21u,
+            "GD-ROM OutOfRange wird nicht auf Sense ASC 21 abgebildet.");
+
+    EventScheduler no_media_scheduler;
+    auto no_media_source = std::make_shared<MemoryDiscSource>(
+        std::span<const std::uint8_t>{}, "synthetic-no-media");
+    DreamcastGdRomController no_media_controller(
+        cpu.memory, no_media_scheduler, GdRomDrive(std::move(no_media_source)));
+    no_media_controller.write(0x9Cu, 0xA0u, MemoryAccessWidth::Byte);
+    write_packet(no_media_controller, test_unit);
+    static_cast<void>(no_media_scheduler.advance_by(1'000u, 1u));
+    require((no_media_controller.status().ata_status & 1u) != 0u,
+            "TEST UNIT READY meldet ein leeres Medium als bereit.");
+    const auto no_media_sense = read_taskfile_sense(no_media_controller, no_media_scheduler);
+    require(no_media_sense[2] == 2u && no_media_sense[8] == 0x3Au,
+            "GD-ROM NoMedia wird nicht auf Sense ASC 3A abgebildet.");
 
     controller.reset();
     constexpr std::uint32_t parameters = 0x8C003000u;
@@ -141,13 +565,21 @@ int main() {
     cpu.r[4] = 16u;
     cpu.r[5] = parameters;
     const auto read_request = controller.bios_call(cpu, 0u, 0u);
+    const auto queued_status = controller.status().ata_status;
+    controller.write(0x9Cu, 0xA0u, MemoryAccessWidth::Byte);
     cpu.r[4] = read_request;
     cpu.r[5] = extended_status;
-    require(read_request >= 1u && controller.bios_call(cpu, 1u, 0u) == 1u,
-            "REQ_CMD oder GET_CMD_STAT meldet keinen eingereihten Request.");
+    require(read_request >= 1u && queued_status == 0x80u &&
+                controller.status().bios_requests == 1u &&
+                controller.status().ata_status == queued_status &&
+                controller.status().interrupt_reason == 0u &&
+                controller.bios_call(cpu, 1u, 0u) == 1u,
+            "REQ_CMD oder DriveOwner zeigt den exklusiven BIOS-Request nicht als BSY.");
     static_cast<void>(controller.bios_call(cpu, 2u, 0u));
-    require(controller.bios_call(cpu, 1u, 0u) == 1u,
-            "EXEC_SERVER schliesst einen asynchronen Read sofort ab.");
+    require(controller.bios_call(cpu, 1u, 0u) == 1u &&
+                cpu.memory.read_u32(extended_status + 12u) == 4u &&
+                controller.status().ata_status == 0x80u,
+            "EXEC_SERVER meldet waehrend BSY keinen erweiterten WAIT-Zustand 4.");
     static_cast<void>(scheduler.advance_by(1'500u, 1u));
     require(controller.bios_call(cpu, 1u, 0u) == 2u &&
                 cpu.memory.read_u32(extended_status) == 0u &&
@@ -158,6 +590,42 @@ int main() {
             "GET_CMD_STAT liefert keinen einmaligen Vierwortstatus mit Bytezahl.");
     require(controller.bios_call(cpu, 1u, 0u) == 0u,
             "Abgeholter BIOS-Request bleibt faelschlich aktiv.");
+
+    const auto first_bios_completion_count = completions;
+    cpu.memory.write_u32(parameters + 8u, destination + 2048u);
+    cpu.r[4] = 16u;
+    cpu.r[5] = parameters;
+    const auto second_read_request = controller.bios_call(cpu, 0u, 0u);
+    static_cast<void>(controller.bios_call(cpu, 2u, 0u));
+    static_cast<void>(scheduler.advance_by(1'500u, 1u));
+    cpu.r[4] = second_read_request;
+    cpu.r[5] = extended_status;
+    require(second_read_request >= 1u && completions == first_bios_completion_count + 1u &&
+                controller.bios_call(cpu, 1u, 0u) == 2u &&
+                cpu.memory.read_u8(destination + 2048u) == 0x5Au,
+            "Zweite BIOS-Completion verliert ohne Taskfile-STATUS-Read ihre IRQ-Flanke.");
+
+    cpu.memory.write_u32(0x8CFFFFFCu, 0xA5A55A5Au);
+    const auto invalid_destination_completions = completions;
+    for (const auto rejected_destination :
+         std::array<std::uint32_t, 3u>{0x8CFFFF00u, 0x01000000u, 0xA05F0000u}) {
+        cpu.memory.write_u32(parameters + 8u, rejected_destination);
+        cpu.r[4] = 16u;
+        cpu.r[5] = parameters;
+        const auto rejected_request = controller.bios_call(cpu, 0u, 0u);
+        static_cast<void>(controller.bios_call(cpu, 2u, 0u));
+        cpu.r[4] = rejected_request;
+        cpu.r[5] = extended_status;
+        require(rejected_request >= 1u && controller.bios_call(cpu, 1u, 0u) == 0xFFFFFFFFu &&
+                    cpu.memory.read_u32(extended_status) == 5u &&
+                    cpu.memory.read_u32(extended_status + 4u) ==
+                        static_cast<std::uint32_t>(GdRomStatus::InvalidField),
+                "Ungueltiger BIOS-Lesepuffer wird nicht kontrolliert als INVALID FIELD beendet.");
+    }
+    require(completions == invalid_destination_completions && rejected_mmio_writes == 0u &&
+                cpu.memory.read_u32(0x8CFFFFFCu) == 0xA5A55A5Au,
+            "Abgelehnter BIOS-Lesepuffer schreibt partiell, greift MMIO an oder erzeugt einen IRQ.");
+    cpu.memory.write_u32(parameters + 8u, destination);
 
     cpu.r[4] = 0x777u;
     cpu.r[5] = 0u;
@@ -349,12 +817,15 @@ int main() {
         static_cast<void>(stream_scheduler.advance_by(1u, 1u));
         stream_cpu.r[4] = request;
         stream_cpu.r[5] = stream_status;
-        require(stream_drive_completions == completions_before_ready + 1u &&
-                    stream_controller.bios_call(stream_cpu, 1u, 0u) == 3u &&
+        const auto ready_result = stream_controller.bios_call(stream_cpu, 1u, 0u);
+        require(stream_drive_completions == completions_before_ready + 1u,
+                "Streaming-Completion erzeugt keine neue Command-IRQ-Flanke.");
+        require(ready_result == 3u &&
                     stream_cpu.memory.read_u32(stream_status + 8u) == 0u &&
                     stream_controller.status().stream_bytes_remaining ==
                         static_cast<std::uint64_t>(sector_count) * 2048u,
                 "Streaming-Request erreicht nach der Gastzeit keinen STREAMING-Zustand.");
+        static_cast<void>(stream_controller.read(0x9Cu, MemoryAccessWidth::Byte));
         return request;
     };
     const auto stream_memory_matches = [&](const std::uint32_t destination,
@@ -389,6 +860,12 @@ int main() {
                 stream_g1.state().direction == 1u && stream_g1.state().remaining == 4096u &&
                 stream_controller.status().transfer_bytes_remaining == 4096u,
             "BIOS-DMA-Streaming startet keinen G1-Transfer in Laufwerk-zu-System-Richtung.");
+    stream_cpu.r[4] = dma_stream_request;
+    stream_cpu.r[5] = stream_status;
+    require(stream_controller.bios_call(stream_cpu, 1u, 0u) == 3u &&
+                stream_cpu.memory.read_u32(stream_status + 12u) == 4u &&
+                stream_controller.status().ata_status == 0x80u,
+            "Aktives BIOS-DMA-Streaming meldet waehrend BSY keinen WAIT-Zustand 4.");
     stream_cpu.r[4] = dma_stream_request;
     stream_cpu.r[5] = stream_residue;
     require(stream_controller.bios_call(stream_cpu, 7u, 0u) == 1u &&
@@ -560,8 +1037,12 @@ int main() {
                                      {2u, 100u, DiscTrackKind::Audio, 2352u, 100u, 1u},
                                      {3u, 45'000u, DiscTrackKind::Data, 2048u, 100u, 2u}},
         "synthetic-two-area-gdrom");
+    std::uint64_t toc_completions = 0u;
     DreamcastGdRomController toc_controller(
-        toc_cpu.memory, toc_scheduler, GdRomDrive(std::move(toc_source)));
+        toc_cpu.memory,
+        toc_scheduler,
+        GdRomDrive(std::move(toc_source)),
+        [&](const std::uint64_t) { ++toc_completions; });
     const auto request_toc = [&](const std::uint32_t area, const std::uint32_t output) {
         toc_cpu.memory.write_u32(parameters, area);
         toc_cpu.memory.write_u32(parameters + 4u, output);
@@ -590,5 +1071,103 @@ int main() {
                 toc_cpu.memory.read_u32(low_toc + 99u * 4u) !=
                     toc_cpu.memory.read_u32(high_toc + 99u * 4u),
             "LOW- und HIGH-BIOS-TOC trennen ihre Trackbereiche nicht.");
+
+    toc_cpu.memory.write_u32(0x8CFFFFFCu, 0x11223344u);
+    toc_cpu.memory.write_u32(parameters, 0u);
+    toc_cpu.memory.write_u32(parameters + 4u, 0x8CFFFF00u);
+    toc_cpu.r[4] = 19u;
+    toc_cpu.r[5] = parameters;
+    const auto rejected_toc = toc_controller.bios_call(toc_cpu, 0u, 0u);
+    static_cast<void>(toc_controller.bios_call(toc_cpu, 2u, 0u));
+    toc_cpu.r[4] = rejected_toc;
+    toc_cpu.r[5] = extended_status;
+    require(rejected_toc >= 1u &&
+                toc_controller.bios_call(toc_cpu, 1u, 0u) == 0xFFFFFFFFu &&
+                toc_cpu.memory.read_u32(extended_status) == 5u &&
+                toc_cpu.memory.read_u32(extended_status + 4u) ==
+                    static_cast<std::uint32_t>(GdRomStatus::InvalidField) &&
+                toc_cpu.memory.read_u32(0x8CFFFFFCu) == 0x11223344u,
+            "Abgelehnter BIOS-TOC-Puffer wird partiell beschrieben oder wirft zum Host.");
+
+    toc_controller.write(0x90u, 64u, MemoryAccessWidth::Byte);
+    toc_controller.write(0x94u, 0u, MemoryAccessWidth::Byte);
+    toc_controller.write(0x9Cu, 0xA0u, MemoryAccessWidth::Byte);
+    std::array<std::uint8_t, 12u> get_toc{};
+    get_toc[0] = 0x14u;
+    get_toc[1] = 0u;
+    get_toc[3] = 0x01u;
+    get_toc[4] = 0x98u;
+    write_packet(toc_controller, get_toc);
+    static_cast<void>(toc_scheduler.advance_by(1'000u, 1u));
+    std::vector<std::uint8_t> spi_toc;
+    while (toc_controller.status().pio_bytes_available != 0u) {
+        const auto phase_bytes = toc_controller.read(0x90u, MemoryAccessWidth::Byte) |
+                                 (toc_controller.read(0x94u, MemoryAccessWidth::Byte) << 8u);
+        require(phase_bytes != 0u && (phase_bytes & 1u) == 0u,
+                "GET_TOC liefert eine ungueltige PIO-Phasengroesse.");
+        static_cast<void>(toc_controller.read(0x9Cu, MemoryAccessWidth::Byte));
+        for (std::uint32_t offset = 0u; offset < phase_bytes; offset += 2u)
+            append_pio_word(toc_controller, spi_toc);
+    }
+    static_cast<void>(toc_controller.read(0x9Cu, MemoryAccessWidth::Byte));
+    auto spi_toc_matches_bios = spi_toc.size() == 408u;
+    for (std::size_t index = 0u; spi_toc_matches_bios && index < 102u; ++index) {
+        const auto offset = index * 4u;
+        const auto word = static_cast<std::uint32_t>(spi_toc[offset]) |
+                          (static_cast<std::uint32_t>(spi_toc[offset + 1u]) << 8u) |
+                          (static_cast<std::uint32_t>(spi_toc[offset + 2u]) << 16u) |
+                          (static_cast<std::uint32_t>(spi_toc[offset + 3u]) << 24u);
+        spi_toc_matches_bios = word == toc_cpu.memory.read_u32(
+                                            low_toc + static_cast<std::uint32_t>(offset));
+    }
+    require(spi_toc_matches_bios && toc_completions == 8u,
+            "GET_TOC liefert nicht 102 Gastwoerter in sieben DataIn-Phasen plus Final-IRQ.");
+
+    const auto read_req_stat = [&](const std::uint8_t offset, const std::uint8_t count) {
+        toc_controller.write(0x90u, 64u, MemoryAccessWidth::Byte);
+        toc_controller.write(0x94u, 0u, MemoryAccessWidth::Byte);
+        toc_controller.write(0x9Cu, 0xA0u, MemoryAccessWidth::Byte);
+        std::array<std::uint8_t, 12u> request{};
+        request[0] = 0x10u;
+        request[2] = offset;
+        request[4] = count;
+        write_packet(toc_controller, request);
+        static_cast<void>(toc_scheduler.advance_by(1'000u, 1u));
+        std::vector<std::uint8_t> result;
+        if (toc_controller.status().pio_bytes_available != 0u) {
+            static_cast<void>(toc_controller.read(0x9Cu, MemoryAccessWidth::Byte));
+            for (std::size_t index = 0u; index < count; index += 2u)
+                append_pio_word(toc_controller, result, std::min<std::size_t>(2u, count - index));
+            static_cast<void>(toc_controller.read(0x9Cu, MemoryAccessWidth::Byte));
+        }
+        return result;
+    };
+    const auto req_stat_completions = toc_completions;
+    const auto req_stat = read_req_stat(0u, 10u);
+    require(req_stat == std::vector<std::uint8_t>({1u, 0x80u, 0x01u, 1u, 1u,
+                                                   0u, 0u, 150u, 0u, 0u}) &&
+                toc_completions == req_stat_completions + 2u,
+            "REQ_STAT liefert keinen zehn Byte grossen GD-ROM-/Track-/FAD-Status.");
+    require(read_req_stat(2u, 4u) == std::vector<std::uint8_t>({0x01u, 1u, 1u, 0u}),
+            "REQ_STAT respektiert Offset und Allocation-Length nicht.");
+    const auto invalid_req_stat = read_req_stat(9u, 2u);
+    require(invalid_req_stat.empty() && (toc_controller.status().ata_status & 1u) != 0u,
+            "REQ_STAT akzeptiert einen Statusbereich hinter Byte zehn.");
+    const auto req_stat_sense = read_taskfile_sense(toc_controller, toc_scheduler);
+    require(req_stat_sense[2] == 5u && req_stat_sense[8] == 0x24u,
+            "REQ_STAT-Boundsfehler liefert nicht INVALID FIELD.");
+
+    for (const auto unsupported : std::array<std::uint8_t, 3u>{0x15u, 0x31u, 0x40u}) {
+        toc_controller.write(0x9Cu, 0xA0u, MemoryAccessWidth::Byte);
+        std::array<std::uint8_t, 12u> request{};
+        request[0] = unsupported;
+        write_packet(toc_controller, request);
+        static_cast<void>(toc_scheduler.advance_by(1'000u, 1u));
+        require((toc_controller.status().ata_status & 1u) != 0u,
+                "Unimplementiertes benachbartes SPI-Kommando meldet Scheinerfolg.");
+        const auto unsupported_sense = read_taskfile_sense(toc_controller, toc_scheduler);
+        require(unsupported_sense[2] == 5u && unsupported_sense[8] == 0x20u,
+                "Unimplementiertes benachbartes SPI-Kommando ist nicht INVALID COMMAND.");
+    }
     return EXIT_SUCCESS;
 }

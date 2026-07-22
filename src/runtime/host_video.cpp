@@ -334,3 +334,23 @@ std::unique_ptr<NativeVideoOutput> create_native_video_output(const NativeVideoC
 } // namespace katana::runtime
 
 #endif
+
+namespace katana::runtime {
+
+bool present_guest_frame_proof(NativeVideoOutput& output, const PvrGuestFrameProof& proof) {
+    const auto presented_before = output.presented_frames();
+    output.present(proof.frame);
+    return output.presented_frames() > presented_before;
+}
+
+GuestFramePumpResult pump_guest_frame_proof(PvrSoftwareRenderer& renderer,
+                                            NativeVideoOutput* const output) {
+    auto proof = renderer.take_guest_frame_proof();
+    if (!proof) return {};
+    GuestFramePumpResult result;
+    result.guest_frame_proven = true;
+    if (output != nullptr) result.frame_presented = present_guest_frame_proof(*output, *proof);
+    return result;
+}
+
+} // namespace katana::runtime

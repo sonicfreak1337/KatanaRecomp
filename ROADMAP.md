@@ -14,8 +14,19 @@ oder Enhancementlogik ist ausdruecklich kein Produktbestandteil.
 
 KatanaRecomp wandelt rechtmaessig lokal bereitgestellte Dreamcast-Programme in
 eigenstaendige native Portprojekte um. Analyzer, generierter Code und Runtime
-bleiben getrennt. ProprietÃ¤re Spiel-, BIOS- oder Assetdaten gehoeren weder in
+bleiben getrennt. Proprietaere Spiel-, BIOS- oder Assetdaten gehoeren weder in
 das Repository noch in verteilbare Pakete.
+
+Das verbindliche Architekturmodell ist XenonRecomp-artige statische
+Rekompilierung: Der allgemeine Werkzeugpfad uebersetzt die aus der lokalen
+Nutzerdisc nachgewiesenen Programme `IP.BIN` und BootExecutable vorab aus SH-4
+in C++ beziehungsweise nativen PC-Code. Die getrennte Runtime implementiert
+nur typisierte Dreamcast-Plattformgrenzen; ein freigegebener normaler Portlauf
+darf weder SH-4-Interpreter/JIT noch einen virtuellen Discplayer oder
+Titelhacks enthalten. Der aktuelle bedingungslose Interpreterlink ist eine
+offene `KR-4848`-Produktluecke und keine bereits erreichte Eigenschaft. Im
+Zielvertrag aktiviert unbekannter oder veraenderter Code nur vorab gebundene
+latente AOT-Module oder endet kontrolliert.
 
 ## Planungsregeln
 

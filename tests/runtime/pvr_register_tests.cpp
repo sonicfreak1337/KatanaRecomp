@@ -33,6 +33,11 @@ int main() {
     bus.write_u32(0xA05F8000u + pvr_register::FramebufferReadSof1, 0x00400000u);
     require(bus.read_u32(0x605F8000u + pvr_register::FramebufferReadSof1) == 0x00400000u,
             "PVR-Registerzustand wird nicht zwischen Aliasen geteilt.");
+    bus.write_u32(0x005F8000u + pvr_register::FramebufferWriteSof1, 0x01ABCDEFu);
+    bus.write_u32(0x005F8000u + pvr_register::FramebufferWriteSof2, 0x03FEDCBBu);
+    require(pvr->read(pvr_register::FramebufferWriteSof1) == 0x01ABCDECu &&
+                pvr->read(pvr_register::FramebufferWriteSof2) == 0x01FEDCB8u,
+            "FB_W_SOF verliert das Render-to-Texture-Bit oder maskiert reservierte Bits falsch.");
     bus.write_u32(0x005F8000u + pvr_register::StartRender, 1u);
     require(pvr->render_request_count() == 1u && pvr->render_completion_count() == 0u &&
                 scheduler.next_event_cycle() == 5u,

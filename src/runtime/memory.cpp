@@ -477,6 +477,26 @@ bool Memory::maps_device(const std::uint32_t address,
     return false;
 }
 
+bool Memory::is_writable_linear_range(const std::uint32_t address,
+                                      const std::size_t width) const noexcept {
+    if (width == 0u || width > address_space_size - static_cast<std::uint64_t>(address))
+        return false;
+    const auto writable_linear = [](const MappedRegion& mapped) {
+        return mapped.info.access == MemoryRegionAccess::ReadWrite && mapped.linear != nullptr;
+    };
+    if (const auto* mapped = indexed_region(address, width); mapped != nullptr)
+        return writable_linear(*mapped);
+    const auto end = static_cast<std::uint64_t>(address) + width;
+    for (const auto& mapped : regions_) {
+        ++performance_counters_.reference_region_probes;
+        const auto region_end =
+            static_cast<std::uint64_t>(mapped.info.base_address) + mapped.info.size;
+        if (address >= mapped.info.base_address && end <= region_end)
+            return writable_linear(mapped);
+    }
+    return false;
+}
+
 MemoryAlignmentPolicy Memory::alignment_policy() const noexcept {
     return alignment_policy_;
 }

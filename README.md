@@ -7,6 +7,16 @@ KatanaRecomp ist ein unabhaengiges C++20-Framework fuer die statische
 Rekompilierung von Sega-Dreamcast-SH-4-Code. Das Projekt ist kein Emulator,
 kein ISO-Loader und kein Paket fuer kommerzielle Spieldaten.
 
+Das Architekturziel entspricht der Werkzeugklasse von XenonRecomp: Gastcode
+wird vorausanalysiert, in C++ beziehungsweise nativen Hostcode uebersetzt und
+mit einer getrennten Plattformruntime gebaut. Das Freigabegate fuer einen
+normalen Portlauf verbietet interpretierte oder JIT-kompilierte SH-4-
+Instruktionen und eine virtuelle Dreamcast aus einem Disc-Image. Im Disc-Pfad
+werden konkret `IP.BIN` und das BootExecutable als getrennte SH-4-AOT-Segmente
+zu nativem PC-Code; Dreamcast-Geraete erscheinen nur als titelunabhaengige,
+typisierte Plattformgrenzen und nicht als Emulator-, Discplayer- oder
+Titelhackschicht.
+
 BIOS-Dateien, Disc-Images, urheberrechtlich geschuetzte Assets und aus
 kommerziellen Spielen erzeugter Code gehoeren nicht in dieses Repository.
 
@@ -19,6 +29,12 @@ Streamingtransfers sind implementiert. Der aktuelle P0 bleibt der erste
 scanoutgebundene, vom Gast erzeugte Frame; ein solcher Frame ist noch nicht
 nachgewiesen. Moderner Hostcontrollersupport fuer Xbox-, DualSense- und
 vergleichbare Geraete beginnt laut Roadmap erst danach.
+
+Der aktuelle Export linkt fuer nachgeladene oder zur Laufzeit veraenderte
+Codebytes `runtime-sh4-interpreter` noch bedingungslos. Seine Ausfuehrung ist
+zwar eine begrenzte Bring-up-Grenze, aber die Abhaengigkeit selbst verletzt das
+Produkt-Gate. KR-4848 ersetzt sie im normalen Portlauf durch
+byteidentitaetsgebundenes latentes AOT oder einen ehrlichen typisierten Abbruch.
 
 Der aktuelle Pfad verarbeitet Raw-, ELF32-SH-, Projektmanifest- und validierte
 GDI-Eingaben bis zu partitioniertem C++, einer zentralen Dreamcast-Runtime und
