@@ -23,6 +23,10 @@
   Kanal 0 des SH-4-DMAC einschliesslich 32-Byte-Modus, Requestvertrag und
   exakter Restlaenge und committed SAR/TCR/TE gemeinsam mit dem Transfer.
   Normale AICA-Audioticks erzeugen keine erfundenen G2-DMA-Requests mehr.
+- Rueckwaerts entdeckte, nachweislich geschriebene Runtime-Codefenster werden
+  am Beginn eines bereits aktiven Nachbarmoduls begrenzt. Dadurch bleiben die
+  bytegenauen Provenienz-Snapshots disjunkt, unabhaengig davon, in welcher
+  Reihenfolge Kontrolltransfers ihre Instruktionsbereiche entdecken.
 - Die drei externen Dreamcast-System-ASIC-Interruptpfade entsprechen jetzt
   dem dokumentierten Levelvertrag. Maskenfenster `0x005F6910`, `0x005F6920`
   und `0x005F6930` routen auf SH-4-Level 2, 4 und 6 mit `INTEVT` `0x3A0`,

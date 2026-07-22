@@ -88,9 +88,15 @@ pixelgebundenen Gastframe-Nachweis sowie zustandsfuehrende Holly-DMA-Fehler.
 Separater PVR-DMA ist jetzt vom Channel-2-Ereignis getrennt und an Kanal 0 des
 SH-4-DMAC samt Residue gebunden; AICA triggert G2 nur noch ueber einen echten
 expliziten Request. Die zehn fokussierten ASan-Regressionen sind gruen. Ein
-frischer Export, die einmalige lokale Installation aus der unveraenderten
-PAL-GDI und der budgetierte private Produktnachweis stehen als naechster Schritt
-aus; ein Gastframe wird bis zu diesem Nachweis weiterhin nicht behauptet.
+frischer Export und die einmalige lokale Installation aus der unveraenderten
+PAL-GDI sind erfolgt. Der erste budgetierte Produktlauf erreichte 51,3 Mio.
+Gastzyklen und 17,29 Mio. Dispatchbloecke mit 367 erfolgreichen dynamischen
+Materialisierungen, aber weiterhin ohne TA-/PVR-Aktivitaet oder Gastframe. Er
+legte eine reihenfolgeabhaengige Ueberlappung zweier Runtime-Code-Snapshots
+offen. Der allgemeine Katalog begrenzt ein neu entdecktes Fenster nun am
+Beginn jedes bereits aktiven Nachbarmoduls; die fokussierte Regression fuer
+rueckwaerts entdeckte Codebereiche ist gruen. Der erneute PAL-Nachweis steht
+aus; ein Gastframe wird bis dahin weiterhin nicht behauptet.
 
 Der iterative Portworkflow verwendet jetzt sicheres inkrementelles Staging:
 Vorhandene Buildobjekte werden fuer denselben Ausgabeport wiederverwendet,

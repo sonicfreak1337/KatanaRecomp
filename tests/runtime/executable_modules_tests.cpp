@@ -257,6 +257,27 @@ void runtime_write_provenance_regression() {
             "Innerer P1-Einstieg wird nicht wiederverwendet oder durch P0-Write entwertet.");
 }
 
+void reverse_runtime_write_promotion_regression() {
+    using namespace katana::runtime;
+    CpuState cpu;
+    ExecutableModuleCatalog modules;
+    cpu.memory.set_guest_write_observer([&](const GuestWriteEvent& event) {
+        modules.record_runtime_write(event.address, event.size, event.bytes_changed);
+    });
+    for (std::uint32_t offset = 0u; offset < 8u; offset += 2u)
+        cpu.memory.write_u16(0x500u + offset, static_cast<std::uint16_t>(0x0009u + offset));
+
+    require(modules.promote_runtime_write(cpu.memory, 0x504u, 128u),
+            "Spaeter Runtime-Codebereich wurde nicht zuerst promotet.");
+    require(modules.promote_runtime_write(cpu.memory, 0x500u, 128u),
+            "Frueher entdeckter Runtime-Codebereich kollidiert mit seinem Nachbarn.");
+    const auto* lower = modules.resolve(0x500u, 2u);
+    const auto* upper = modules.resolve(0x504u, 2u);
+    require(lower != nullptr && upper != nullptr && lower != upper && lower->bytes.size() == 4u &&
+                upper->bytes.size() == 4u && lower->end_address() == upper->guest_start,
+            "Rueckwaerts entdeckte Runtime-Codefenster werden nicht disjunkt begrenzt.");
+}
+
 void interpreter_interior_entry_regression() {
     using namespace katana::runtime;
     CpuState cpu;
@@ -545,6 +566,7 @@ int main() {
 
     relocated_module_regression();
     runtime_write_provenance_regression();
+    reverse_runtime_write_promotion_regression();
     interpreter_interior_entry_regression();
     mmu_materialization_origin_regression();
 

@@ -314,8 +314,18 @@ bool ExecutableModuleCatalog::promote_runtime_write(const Memory& memory,
     };
     if (!was_written(address) || !was_written(address + 1u)) return false;
 
+    const auto physical_address = canonical_physical_address(address);
+    auto snapshot_limit = maximum_bytes;
+    for (const auto& existing : modules_) {
+        if (!existing.active) continue;
+        const auto existing_start = canonical_physical_address(existing.guest_start);
+        if (existing_start <= physical_address) continue;
+        const auto distance = existing_start - physical_address;
+        snapshot_limit = std::min(snapshot_limit, distance);
+    }
+
     std::uint32_t snapshot_size = 0u;
-    while (snapshot_size < maximum_bytes && snapshot_size <=
+    while (snapshot_size < snapshot_limit && snapshot_size <=
                                                     std::numeric_limits<std::uint32_t>::max() -
                                                         address &&
            memory.contains(address + snapshot_size, 1u) &&
