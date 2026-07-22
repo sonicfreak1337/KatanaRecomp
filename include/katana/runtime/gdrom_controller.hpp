@@ -26,6 +26,11 @@ struct GdRomProductStatus {
     std::size_t bios_requests = 0u;
     std::uint64_t completed_commands = 0u;
     std::uint64_t completed_dma = 0u;
+    std::array<std::uint32_t, 4u> sector_mode{};
+    std::uint32_t dma_callback = 0u;
+    std::uint32_t dma_callback_argument = 0u;
+    std::uint32_t pio_callback = 0u;
+    std::uint32_t pio_callback_argument = 0u;
 };
 
 enum class GdRomBiosRequestState : std::uint8_t {
@@ -34,7 +39,8 @@ enum class GdRomBiosRequestState : std::uint8_t {
     Processing,
     Complete,
     Streaming,
-    Error
+    Error,
+    Aborted
 };
 
 struct GdRomBiosRequestStatus {
@@ -106,6 +112,7 @@ class DreamcastGdRomController final {
     [[nodiscard]] const BiosRequest* find_bios_request(std::uint32_t id) const noexcept;
     std::uint32_t finish_bios_call(GdRomBiosCallEvent event, std::uint32_t result);
     [[nodiscard]] static std::uint32_t fad_to_lba(std::uint32_t fad) noexcept;
+    void reset_transport() noexcept;
     Memory& memory_;
     EventScheduler& scheduler_;
     GdRomDrive drive_;
@@ -126,6 +133,11 @@ class DreamcastGdRomController final {
     std::uint64_t dropped_bios_call_events_ = 0u;
     std::uint64_t completed_commands_ = 0u;
     std::uint64_t completed_dma_ = 0u;
+    std::array<std::uint32_t, 4u> sector_mode_{0u, 0x2000u, 1024u, 2048u};
+    std::uint32_t dma_callback_ = 0u;
+    std::uint32_t dma_callback_argument_ = 0u;
+    std::uint32_t pio_callback_ = 0u;
+    std::uint32_t pio_callback_argument_ = 0u;
     ModuleLoadObserver module_load_observer_;
     std::function<void(std::uint64_t)> completion_observer_;
     std::optional<SchedulerEventId> packet_event_;

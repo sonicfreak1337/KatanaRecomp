@@ -26,12 +26,20 @@ Keine benachbarten Roadmap-Punkte werden nebenbei implementiert, ausser sie sind
 
 ## Startprozedur
 
-1. sauberen Git-Status pruefen
-2. aktuellen Branch und Version erfassen
-3. Tasktyp bestimmen: Implementierung, Gate-Vorbereitung, interne
+1. nach jedem neuen Lauf und nach jeder Kontextkomprimierung die gebuendelten
+   Workspace-Runtimes neu laden sowie vor Windows-Builds die MSVC-x64-
+   Entwicklungsumgebung neu initialisieren
+2. sauberen Git-Status pruefen
+3. aktuellen Branch und Version erfassen
+4. Tasktyp bestimmen: Implementierung, Gate-Vorbereitung, interne
    Meilenstein-Freigabe oder Release-Gate
-4. Abhaengigkeiten, aktuellen Status und vorhandene Gate-Berichte erfassen
-5. erst danach Dateien aendern
+5. Abhaengigkeiten, aktuellen Status und vorhandene Gate-Berichte erfassen
+6. erst danach Dateien aendern
+
+Jeder gestartete Prozess besitzt eine harte Laufzeitgrenze von hoechstens
+15 Minuten und wird danach mitsamt seinem Prozessbaum beendet. Fokussierte
+Builds nutzen die verfuegbaren Hostressourcen parallel; auf dem primaeren
+Entwicklungsrechner gilt `--parallel 12`.
 
 Windows-Basisbefehle:
 

@@ -40,6 +40,16 @@
   BIOS-Puffer umfasst exakt 102 Gastwoerter fuer LOW/HIGH. Ein begrenztes,
   sequenziertes JSON-Ereignislog erfasst Aufrufstelle, Zyklus, Argumente,
   Requestzustand, Ergebnis und Vierwortstatus ohne Discidentitaeten.
+- Der GD-ROM-BIOS-Dienst kann eingereihte und laufende Requests jetzt ohne
+  spaete Schedulercompletion abbrechen. `INIT_SYSTEM` setzt Subsystem,
+  Datentyp und Callbackregistrierungen zurueck, waehrend der getrennte
+  Laufwerksreset den BIOS-Datentyp- und Callbackvertrag erhaelt.
+  `GET_DRV_STAT` meldet aktive Reads als `BUSY`; der Datentypselektor
+  akzeptiert nur die derzeit wirklich lieferbare 2048-Byte-Datensicht und
+  lehnt unimplementierte Rawsektormodi sichtbar ab. DMA-/PIO-Callbacks werden
+  stabil registriert; ihre Ausfuehrung folgt zusammen mit den echten
+  Streamingtransfers in `KR-4847`. Runtime-ABI 33 versioniert den erweiterten
+  oeffentlichen GD-ROM-Zustand und den abbrechbaren Async-Reader.
 - `SYSTEM 1` ist gemaess oeffentlicher BIOS-ABI ein nicht zurueckkehrender
   `BiosMenu`-Lifecycle-Ausgang und startet das Spiel nicht mehr intern neu.
   Reset und CD-Menue verwenden dieselbe typisierte Plattformgrenze. Die

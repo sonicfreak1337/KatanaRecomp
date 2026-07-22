@@ -74,7 +74,14 @@ class FileDiscSource final : public DiscSource {
 
 enum class GdRomCommand : std::uint8_t { TestUnitReady, GetStatus, GetCapacity, ReadSectors };
 
-enum class GdRomStatus : std::uint8_t { Good, NoMedia, InvalidCommand, InvalidField, OutOfRange };
+enum class GdRomStatus : std::uint8_t {
+    Good,
+    NoMedia,
+    InvalidCommand,
+    InvalidField,
+    OutOfRange,
+    Aborted
+};
 
 struct GdRomRequest {
     GdRomCommand command = GdRomCommand::TestUnitReady;
@@ -124,6 +131,8 @@ class GdRomAsyncReader final {
     GdRomAsyncReader(const GdRomAsyncReader&) = delete;
     GdRomAsyncReader& operator=(const GdRomAsyncReader&) = delete;
     [[nodiscard]] std::uint64_t submit(const GdRomRequest& request);
+    [[nodiscard]] bool cancel(std::uint64_t request_id) noexcept;
+    void reset() noexcept;
     [[nodiscard]] std::optional<GdRomAsyncCompletion> take_completed();
     [[nodiscard]] std::size_t pending_count() const noexcept;
     [[nodiscard]] std::uint64_t current_cycle() const noexcept;

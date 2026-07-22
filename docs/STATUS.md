@@ -2,7 +2,7 @@
 
 Abgeschlossener interner Meilenstein: `v0.47.0`
 Phase: `v0.48.0` - Integration
-Naechster Roadmap-Task: `KR-4811`
+Naechster Roadmap-Task: `KR-4846`
 Naechstes Gate: `v0.48.0` - Integration
 Weitere interne Gates: `v0.48.0` Integration und `v0.49.0` Alpha-Candidate
 Erster oeffentlicher Release: `v0.50.0` Alpha
@@ -137,7 +137,7 @@ MMIO-Zugriff liegt im aktiven OCRAM; der fruehere Abbruch nach 12 Gastzyklen
 ist damit beseitigt. TA/PVR und ein echter Gastframe bleiben fuer den laengeren
 Folgelauf weiterhin offen.
 
-Runtime-ABI 32, BIOS-ABI 7 und Portprojektvertrag 20 bilden den kumulativen
+Runtime-ABI 33, BIOS-ABI 7 und Portprojektvertrag 20 bilden den kumulativen
 v0.48-Stand ab.
 PlatformServices-ABI 9 versioniert das invalidierungs- und timinggesicherte lokale
 Blockchaining.
@@ -156,6 +156,16 @@ sind explizit und werden nicht aus `JUE` abgeleitet. Diese Runde ist
 implementiert und kompiliert; die zusammenhaengende synthetische Validierung
 und der anschliessende einzelne private PAL-Lauf stehen noch aus. Ein erster
 Gastframe wird weiterhin nicht behauptet.
+
+Die erste fokussierte `KR-4846`-Ergaenzung schliesst Abbruch, getrennte INIT-/
+RESET-Semantik, aktiven Laufwerksstatus und den tatsaechlich unterstuetzten
+Datentypvertrag. Abbruch und Reset entfernen ihre Schedulerauftraege, sodass
+keine spaeten Discwrites oder Scheinkompletions entstehen. DMA-/PIO-
+Callbackadressen sind als stabiler BIOS-Zustand vorhanden; Callbackausfuehrung,
+Streamingkommandos und der gemeinsame G1-Transferpfad bleiben bewusst Teil von
+`KR-4847`. Der parallele RelWithDebInfo-Build und vier fokussierte Runtime-/
+GD-ROM-Regressionen sind gruen. Ein erster Gastframe wird weiterhin nicht
+behauptet.
 
 WinCE-Bootlayouts und gescrambelte Nicht-GD-ROM-Bootdateien bleiben eine
 bewusste allgemeine Loadergrenze. Bis ein eigenstaendiger nativer Segment- und

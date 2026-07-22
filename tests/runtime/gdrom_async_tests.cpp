@@ -53,6 +53,19 @@ int main() {
                 completion_cycles == std::vector<std::uint64_t>({10u, 20u}) &&
                 reader.current_cycle() == scheduler.current_cycle(),
             "Asynchroner Sektorread verliert Daten, Timing oder Pending-Zustand.");
+    const auto cancelled_request = reader.submit({GdRomCommand::GetStatus});
+    require(reader.cancel(cancelled_request) && !reader.cancel(cancelled_request) &&
+                reader.pending_count() == 0u,
+            "GD-ROM-Abbruch entfernt den Schedulerauftrag nicht eindeutig.");
+    static_cast<void>(scheduler.advance_to(30u, 1u));
+    require(!reader.take_completed().has_value() &&
+                completion_cycles == std::vector<std::uint64_t>({10u, 20u}),
+            "Abgebrochener GD-ROM-Request erzeugt spaeter eine Scheinkompletion.");
+    static_cast<void>(reader.submit({GdRomCommand::GetStatus}));
+    reader.reset();
+    static_cast<void>(scheduler.advance_to(40u, 1u));
+    require(reader.pending_count() == 0u && !reader.take_completed().has_value(),
+            "GD-ROM-Readerreset laesst einen alten Schedulerauftrag aktiv.");
     static_cast<void>(reader.submit({GdRomCommand::GetStatus}));
     scheduler.reset();
     require(reader.pending_count() == 0u && !reader.take_completed().has_value(),

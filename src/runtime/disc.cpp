@@ -240,6 +240,35 @@ std::uint64_t GdRomAsyncReader::submit(const GdRomRequest& request) {
     return id;
 }
 
+bool GdRomAsyncReader::cancel(const std::uint64_t request_id) noexcept {
+    const auto pending = std::find_if(pending_.begin(), pending_.end(), [&](const auto& value) {
+        return value.request_id == request_id;
+    });
+    if (pending != pending_.end()) {
+        if (!scheduler_lifetime_.expired())
+            static_cast<void>(scheduler_.cancel(pending->event_id));
+        pending_.erase(pending);
+        return true;
+    }
+    const auto completed =
+        std::find_if(completed_.begin(), completed_.end(), [&](const auto& value) {
+            return value.request_id == request_id;
+        });
+    if (completed == completed_.end()) return false;
+    completed_.erase(completed);
+    return true;
+}
+
+void GdRomAsyncReader::reset() noexcept {
+    if (!scheduler_lifetime_.expired()) {
+        for (const auto& request : pending_)
+            static_cast<void>(scheduler_.cancel(request.event_id));
+    }
+    pending_.clear();
+    completed_.clear();
+    next_request_id_ = 1u;
+}
+
 void GdRomAsyncReader::complete(const std::uint64_t request_id, const std::uint64_t cycle) {
     const auto request = std::find_if(pending_.begin(), pending_.end(), [&](const auto& value) {
         return value.request_id == request_id;

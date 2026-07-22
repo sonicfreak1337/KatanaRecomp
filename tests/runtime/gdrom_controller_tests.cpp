@@ -142,6 +142,116 @@ int main() {
                     std::string::npos,
             "Sequenziertes GD-ROM-BIOS-Ereignislog verliert Requestzustand oder Vierwortstatus.");
 
+    constexpr std::uint32_t aborted_destination = 0x8C020000u;
+    cpu.memory.write_u32(parameters, 150u);
+    cpu.memory.write_u32(parameters + 4u, 1u);
+    cpu.memory.write_u32(parameters + 8u, aborted_destination);
+    cpu.r[4] = 16u;
+    cpu.r[5] = parameters;
+    const auto aborted_request = controller.bios_call(cpu, 0u, 0u);
+    static_cast<void>(controller.bios_call(cpu, 2u, 0u));
+    constexpr std::uint32_t busy_drive_status = 0x8C00A180u;
+    cpu.r[4] = busy_drive_status;
+    require(controller.bios_call(cpu, 4u, 0u) == 0u &&
+                cpu.memory.read_u32(busy_drive_status) == 0u &&
+                cpu.memory.read_u32(busy_drive_status + 4u) == 0u,
+            "GD-ROM-Drive-Status meldet einen laufenden Read nicht als BUSY.");
+    cpu.r[4] = aborted_request;
+    cpu.r[5] = 0u;
+    const auto completions_before_abort = completions;
+    require(controller.bios_call(cpu, 8u, 0u) == 0u,
+            "GD-ROM READ_ABORT lehnt einen aktiven Request ab.");
+    cpu.memory.write_u32(extended_status, 0xCAFEBABEu);
+    cpu.r[5] = extended_status;
+    require(controller.bios_call(cpu, 1u, 0u) == 0u &&
+                cpu.memory.read_u32(extended_status) == 0xCAFEBABEu &&
+                controller.last_bios_request().state == GdRomBiosRequestState::Aborted &&
+                controller.bios_call(cpu, 8u, 0u) == 0xFFFFFFFFu,
+            "Abgebrochener GD-ROM-Request verschwindet nicht als NOT_FOUND.");
+    static_cast<void>(scheduler.advance_by(2'000u, 1u));
+    require(completions == completions_before_abort &&
+                cpu.memory.read_u8(aborted_destination) == 0u,
+            "Abgebrochener GD-ROM-Read schreibt spaeter Daten oder meldet Completion.");
+
+    cpu.r[4] = 0x8C010200u;
+    cpu.r[5] = 0x12345678u;
+    require(controller.bios_call(cpu, 5u, 0u) == 0u,
+            "GD-ROM-DMA-Callback kann nicht registriert werden.");
+    cpu.r[4] = 0x8C010240u;
+    cpu.r[5] = 0x87654321u;
+    require(controller.bios_call(cpu, 11u, 0u) == 0u &&
+                controller.status().dma_callback == 0x8C010200u &&
+                controller.status().dma_callback_argument == 0x12345678u &&
+                controller.status().pio_callback == 0x8C010240u &&
+                controller.status().pio_callback_argument == 0x87654321u &&
+                controller.bios_call_events().back().request_id == 0u,
+            "GD-ROM-Callbackregistrierung ist kein stabiler Geraetezustand.");
+
+    constexpr std::uint32_t sector_mode = 0x8C00A000u;
+    cpu.memory.write_u32(sector_mode, 0u);
+    cpu.memory.write_u32(sector_mode + 4u, 0x2000u);
+    cpu.memory.write_u32(sector_mode + 8u, 1024u);
+    cpu.memory.write_u32(sector_mode + 12u, 2048u);
+    cpu.r[4] = sector_mode;
+    require(controller.bios_call(cpu, 10u, 0u) == 0u,
+            "Gueltiger GD-ROM-Datentyp wird abgelehnt.");
+    cpu.memory.write_u32(sector_mode, 1u);
+    cpu.memory.write_u32(sector_mode + 4u, 0u);
+    cpu.memory.write_u32(sector_mode + 8u, 0u);
+    cpu.memory.write_u32(sector_mode + 12u, 0u);
+    require(controller.bios_call(cpu, 10u, 0u) == 0u &&
+                cpu.memory.read_u32(sector_mode) == 1u &&
+                cpu.memory.read_u32(sector_mode + 4u) == 0x2000u &&
+                cpu.memory.read_u32(sector_mode + 8u) == 1024u &&
+                cpu.memory.read_u32(sector_mode + 12u) == 2048u,
+            "GD-ROM-Datentyp-Query verliert den gesetzten Vierwortvertrag.");
+    cpu.memory.write_u32(sector_mode, 0u);
+    cpu.memory.write_u32(sector_mode + 4u, 0x1000u);
+    cpu.memory.write_u32(sector_mode + 8u, 0u);
+    cpu.memory.write_u32(sector_mode + 12u, 2352u);
+    require(controller.bios_call(cpu, 10u, 0u) == 0xFFFFFFFFu &&
+                controller.status().sector_mode[1] == 0x2000u &&
+                controller.status().sector_mode[2] == 1024u &&
+                controller.status().sector_mode[3] == 2048u,
+            "Ungueltiger GD-ROM-Datentyp mutiert den aktiven Modus.");
+
+    cpu.r[4] = 0u;
+    require(controller.bios_call(cpu, 9u, 0u) == 0u &&
+                controller.status().dma_callback == 0x8C010200u &&
+                controller.status().pio_callback == 0x8C010240u &&
+                controller.status().sector_mode[1] == 0x2000u &&
+                controller.status().sector_mode[3] == 2048u,
+            "GD-ROM RESET loescht faelschlich den BIOS-Callback- oder Datentypvertrag.");
+
+    constexpr std::uint32_t drive_status = 0x8C00A100u;
+    cpu.r[4] = drive_status;
+    require(controller.bios_call(cpu, 4u, 0u) == 0u &&
+                cpu.memory.read_u32(drive_status) == 1u &&
+                cpu.memory.read_u32(drive_status + 4u) == 0x80u,
+            "GD-ROM-Drive-Status meldet fuer eine eingelegte GD-ROM keinen Pausezustand.");
+
+    constexpr std::uint32_t reset_destination = 0x8C021000u;
+    cpu.memory.write_u32(parameters, 150u);
+    cpu.memory.write_u32(parameters + 4u, 1u);
+    cpu.memory.write_u32(parameters + 8u, reset_destination);
+    cpu.r[4] = 16u;
+    cpu.r[5] = parameters;
+    const auto reset_pending_request = controller.bios_call(cpu, 0u, 0u);
+    static_cast<void>(controller.bios_call(cpu, 2u, 0u));
+    const auto completions_before_init = completions;
+    require(reset_pending_request >= 1u && controller.bios_call(cpu, 3u, 0u) == 0u &&
+                controller.status().bios_requests == 0u &&
+                controller.status().dma_callback == 0u &&
+                controller.status().pio_callback == 0u &&
+                controller.status().sector_mode[1] == 0x2000u &&
+                controller.status().sector_mode[2] == 1024u &&
+                controller.status().sector_mode[3] == 2048u,
+            "INIT_SYSTEM setzt Queue, Callback- oder Datentypzustand nicht zurueck.");
+    static_cast<void>(scheduler.advance_by(2'000u, 1u));
+    require(completions == completions_before_init &&
+                cpu.memory.read_u8(reset_destination) == 0u,
+            "INIT_SYSTEM laesst einen alten GD-ROM-Request spaeter abschliessen.");
+
     CpuState toc_cpu;
     toc_cpu.memory = Memory(0u);
     static_cast<void>(map_dreamcast_main_ram(toc_cpu.memory));
