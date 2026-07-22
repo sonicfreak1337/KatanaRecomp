@@ -33,8 +33,16 @@ deterministisch abgeschlossen werden. Flash-, GD-ROM-, Fontdaten- und
 Host-Lifecycle-Aufrufe sind bekannt, enden bis zur Anbindung ihrer
 Plattformdienste aber sichtbar als `service-unavailable`. Unbekannte Vektoren,
 Selektoren und Superselektoren werfen eine stabile `BiosAbiDispatchError`-
-Diagnose mit Handler und Selektoren. Kein Aufruf wird titelbezogen umgebogen
-oder als erfolgreicher No-op behandelt.
+Diagnose mit Handler, Selektoren, Ruecksprungadresse und einem vollstaendigen
+SH-4-Registersnapshot. Kein Aufruf wird titelbezogen umgebogen oder als
+erfolgreicher No-op behandelt.
+
+Vor dem ersten nativen Gastblock stellt der Disc-Boot ausserdem den
+BIOS-Handoffzustand her. Dazu gehoeren die dokumentierten SH-4-Kontrollregister,
+`DMAOR=0x8201`, die AICA-Interruptlevel, der initiale 64-KiB-BIOS-Arbeitsbereich
+und fuer europaeische Discs das PAL-Broadcast-Bit. Diese Werte sind
+plattformweit und werden weder aus einem Spiel noch aus proprietaeren
+Firmwarebytes uebernommen.
 
 Der maschinenlesbare Vertrag besitzt Schema `katana-bios-abi`, Version 2.
 Synthetische Tests pruefen reproduzierbare Vektorbytes, Runtimeblockdispatch,

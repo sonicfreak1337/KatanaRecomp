@@ -196,6 +196,10 @@ int main() {
                 dispatch.events().front().occurrences == 2u,
             "Ausnahmesichere Dispatchbeobachtung veraendert Zaehler oder dedupliziert nicht.");
     const auto dispatch_json = dispatch.serialize_json();
+    const auto hotspot_json = dispatch.serialize_hotspots_json(1u);
+    require(hotspot_json.find("katana-dispatch-hotspots") != std::string::npos &&
+                hotspot_json.find("\"occurrences\":2") != std::string::npos,
+            "Dispatch-Hotspotbericht priorisiert wiederholte Kontrollfluesse nicht.");
     for (const auto marker : {"static-proof",       "override",         "table-lookup",
                               "inline-cache",       "fallback",         "unknown-code",
                               "unknown-target",     "unmapped-memory",  "firmware-denied",

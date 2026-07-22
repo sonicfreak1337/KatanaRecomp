@@ -34,6 +34,7 @@ class BiosAbiDispatchError final : public std::runtime_error {
     BiosAbiDispatchError(std::uint32_t handler_address,
                          std::uint32_t selector,
                          std::uint32_t super_selector,
+                         std::uint32_t return_address,
                          std::string reason);
 };
 

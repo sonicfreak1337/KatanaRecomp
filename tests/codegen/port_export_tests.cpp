@@ -197,11 +197,28 @@ int run_test(const int argc, char* argv[]) {
                 runtime_cpu.r[15] == 0x8D000000u &&
                 runtime_cpu.vbr == katana::runtime::dreamcast_direct_boot_vector_base &&
                 runtime_cpu.read_sr() == katana::runtime::dreamcast_disc_boot_status &&
+                runtime_cpu.read_fpscr() == katana::runtime::dreamcast_disc_boot_fpscr &&
+                runtime_cpu.gbr == katana::runtime::dreamcast_bios_handoff_gbr &&
+                runtime_cpu.ssr == katana::runtime::dreamcast_bios_handoff_ssr &&
+                runtime_cpu.spc == katana::runtime::dreamcast_bios_handoff_spc &&
+                runtime_cpu.sgr == katana::runtime::dreamcast_direct_boot_stack &&
+                runtime_cpu.dbr == katana::runtime::dreamcast_bios_handoff_dbr &&
+                runtime_cpu.pr == katana::runtime::dreamcast_bios_handoff_pr && runtime_cpu.t &&
                 runtime_cpu.privileged_mode() && runtime_cpu.interrupt_mask() == 15u &&
                 runtime_cpu.memory.read_u16(0x8C010000u) == 0x4F22u &&
                 runtime_state.runtime_blocks && runtime_state.runtime_blocks->size() == 0u &&
                 runtime_state.system_asic && runtime_state.interrupt_router &&
                 runtime_state.cache_control && runtime_state.io_ports &&
+                runtime_state.dmac->operation() ==
+                    katana::runtime::dreamcast_bios_handoff_dmaor &&
+                runtime_state.aica_registers->read(0x289Cu,
+                                                   katana::runtime::MemoryAccessWidth::Halfword) ==
+                    0x48u &&
+                runtime_state.aica_registers->read(0x28A8u,
+                                                   katana::runtime::MemoryAccessWidth::Byte) ==
+                    0x18u &&
+                runtime_state.io_ports->control_a() ==
+                    katana::runtime::dreamcast_bios_handoff_pctra &&
                 runtime_cpu.memory.read_u16(katana::runtime::sh4_port_data_a_address) ==
                     katana::runtime::dreamcast_composite_port_a_input &&
                 runtime_state.pvr_registers->read(katana::runtime::pvr_register::SpgLoad) ==
@@ -209,6 +226,14 @@ int run_test(const int argc, char* argv[]) {
                 runtime_cpu.memory.read_u32(katana::runtime::sh4_cache_control_address) == 0u,
             "Eigenstaendiger GDI-Boot initialisiert Bootimage, privilegierten CPU-Handoff oder "
             "Speicher nicht.");
+    auto pal_runtime_boot = runtime_boot;
+    pal_runtime_boot.area_symbols = "E";
+    katana::runtime::CpuState pal_runtime_cpu;
+    const auto pal_runtime_state =
+        katana::runtime::initialize_dreamcast_runtime(pal_runtime_cpu, pal_runtime_boot);
+    require((pal_runtime_state.io_ports->data_a() &
+             katana::runtime::dreamcast_bios_handoff_pal_pdtra) != 0u,
+            "PAL-BIOS-Handoff setzt den Broadcast-Portzustand nicht.");
     runtime_cpu.memory.write_u32(katana::runtime::sh4_cache_control_address,
                                  katana::runtime::Sh4CacheControl::instruction_invalidate);
     require(runtime_state.cache_control->instruction_invalidation_count() == 1u &&
@@ -275,6 +300,7 @@ int run_test(const int argc, char* argv[]) {
     const auto hle_runtime_state = katana::runtime::initialize_dreamcast_runtime(
         hle_runtime_cpu, runtime_boot, katana::runtime::DreamcastRuntimeFirmwareMode::HleBiosAbi);
     require(hle_runtime_cpu.memory.read_u32(0x8C0000B0u) == 0x8C000100u &&
+                hle_runtime_cpu.memory.read_u32(0x8C000010u) == 0xFFFFFFFFu &&
                 hle_runtime_state.runtime_blocks->size() == 6u,
             "Produktiver GDI-HLE-Runtimepfad installiert die BIOS-ABI nicht.");
     const auto render_done_count = [&] {
@@ -440,6 +466,8 @@ int run_test(const int argc, char* argv[]) {
                 std::string::npos &&
             generated_before.at("code/runtime-dispatch.cpp")
                     .find("runtime_only_dispatch_share_ppm") != std::string::npos &&
+            generated_before.at("code/runtime-dispatch.cpp")
+                    .find("KATANA_RUNTIME_DISPATCH_DIAGNOSTICS") != std::string::npos &&
             generated_before.at("code/runtime-dispatch.cpp").find("serialize_json(true)") !=
                 std::string::npos &&
             std::filesystem::exists(output / "CMakeLists.txt") &&

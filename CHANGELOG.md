@@ -4,12 +4,20 @@
 
 ### Geaendert
 
+- Der native Disc-Boot bildet den nach dem Dreamcast-BIOS erwarteten SH-4-
+  und Geraetehandoff jetzt vollstaendig ab: `T`, `FPSCR`, GBR/SSR/SPC/SGR/DBR/
+  PR, `DMAOR=0x8201`, AICA-Interruptmasken, initialer BIOS-RAM-Arbeitsbereich
+  und der PAL-Broadcast-Portzustand werden vor dem ersten Gastblock gesetzt.
+  Ein kompakter Dispatch-Hotspotbericht sortiert auf Fehlerpfaden die
+  meistwiederholten dynamischen Kontrollfluesse und ersetzt unbrauchbar grosse
+  Rohtraces. Runtime-ABI 25 und Portprojektvertrag 13 versionieren den Handoff
+  und die generierte Auditdiagnostik.
 - Der BIOS-SYSTEM-Vektor bei `0x8C0000E0` liest seinen Funktionscode jetzt
   gemaess SH-4-C-ABI aus `r4` statt wie SYSINFO/FLASH/GD-ROM aus `r7`.
   Normalinitialisierung setzt den bekannten ASIC-/PVR-Bootzustand; der
   Discpruefpfad validiert das angebundene Medium und laedt die sieben
   Bootstrapsektoren erneut in den Systembereich. BIOS-ABI-Vertrag 2 und
-  Runtime-ABI 24 versionieren Selektor und zustandsfuehrende Semantik.
+  Runtime-ABI 24 versionierte Selektor und zustandsfuehrende Semantik.
 - Der generierte Root-Dispatcher verwechselt ein normales SH-4-`RTS` nicht
   mehr mit dem Ende des nativen Portprozesses. Verschachtelte Host-Aufrufe
   enden weiterhin an ihrer eigenen Returngrenze; der Programmroot folgt dem

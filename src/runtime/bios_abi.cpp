@@ -158,6 +158,13 @@ std::string hex32(const std::uint32_t value) {
     output << "0x" << std::hex << std::uppercase << std::setw(8) << std::setfill('0') << value;
     return output.str();
 }
+
+std::string register_snapshot(const CpuState& cpu) {
+    std::ostringstream output;
+    for (std::size_t index = 0u; index < cpu.r.size(); ++index)
+        output << " r" << index << '=' << hex32(cpu.r[index]);
+    return output.str();
+}
 const BiosAbiVector* vector_for_handler(const std::uint32_t address) noexcept {
     for (const auto& vector : kVectors)
         if (canonical_physical_address(vector.handler_address) ==
@@ -182,7 +189,9 @@ BlockExit bios_abi_block(CpuState& cpu, BlockExecutionContext& context) {
         throw BiosAbiDispatchError(source,
                                    routed.selector,
                                    routed.super_selector,
-                                   "service-unavailable:" + std::string(routed.service));
+                                   cpu.pr,
+                                   "service-unavailable:" + std::string(routed.service) +
+                                       register_snapshot(cpu));
     cpu.r[0] = is_gdrom && cpu.gdrom_services != nullptr
                    ? cpu.gdrom_services->bios_call(cpu, routed.selector, routed.super_selector)
                : routed.vector == BiosAbiVectorKind::Flash ? execute_flash_call(cpu, routed.selector)
@@ -213,10 +222,11 @@ bool writable_range(const Memory& memory, const std::uint32_t address, const std
 BiosAbiDispatchError::BiosAbiDispatchError(const std::uint32_t handler_address,
                                            const std::uint32_t selector,
                                            const std::uint32_t super_selector,
+                                           const std::uint32_t return_address,
                                            std::string reason)
     : std::runtime_error("BIOS-ABI-Aufruf abgewiesen: handler=" + hex32(handler_address) +
                          " selector=" + hex32(selector) + " super=" + hex32(super_selector) +
-                         " reason=" + std::move(reason)) {}
+                         " return=" + hex32(return_address) + " reason=" + std::move(reason)) {}
 
 std::span<const BiosAbiVector> hle_bios_abi_vectors() noexcept {
     return kVectors;
@@ -224,7 +234,9 @@ std::span<const BiosAbiVector> hle_bios_abi_vectors() noexcept {
 
 BiosAbiCall route_hle_bios_abi_call(const CpuState& cpu) {
     const auto* vector = vector_for_handler(cpu.pc);
-    if (!vector) throw BiosAbiDispatchError(cpu.pc, cpu.r[7], cpu.r[6], "unknown-vector");
+    if (!vector)
+        throw BiosAbiDispatchError(
+            cpu.pc, cpu.r[7], cpu.r[6], cpu.pr, "unknown-vector" + register_snapshot(cpu));
     const auto selector = vector->kind == BiosAbiVectorKind::RomFont ? cpu.r[1]
                           : vector->kind == BiosAbiVectorKind::System ? cpu.r[4]
                                                                      : cpu.r[7];
@@ -306,7 +318,11 @@ BiosAbiCall route_hle_bios_abi_call(const CpuState& cpu) {
                         Status::ServiceUnavailable);
         break;
     }
-    throw BiosAbiDispatchError(cpu.pc, selector, super_selector, "unknown-function");
+    throw BiosAbiDispatchError(cpu.pc,
+                               selector,
+                               super_selector,
+                               cpu.pr,
+                               "unknown-function" + register_snapshot(cpu));
 }
 
 void install_hle_bios_abi(Memory& memory,

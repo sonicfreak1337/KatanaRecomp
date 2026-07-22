@@ -35,7 +35,17 @@ namespace katana::runtime {
 inline constexpr std::uint32_t dreamcast_disc_boot_address = 0x8C010000u;
 inline constexpr std::uint32_t dreamcast_direct_boot_stack = 0x8D000000u;
 inline constexpr std::uint32_t dreamcast_direct_boot_vector_base = 0x8C000000u;
-inline constexpr std::uint32_t dreamcast_disc_boot_status = sr_md_mask | sr_interrupt_mask;
+inline constexpr std::uint32_t dreamcast_disc_boot_status =
+    sr_md_mask | sr_interrupt_mask | sr_t_mask;
+inline constexpr std::uint32_t dreamcast_disc_boot_fpscr = fpscr_dn_mask | 1u;
+inline constexpr std::uint32_t dreamcast_bios_handoff_gbr = 0x8C000000u;
+inline constexpr std::uint32_t dreamcast_bios_handoff_ssr = 0x40000001u;
+inline constexpr std::uint32_t dreamcast_bios_handoff_spc = 0x8C000776u;
+inline constexpr std::uint32_t dreamcast_bios_handoff_dbr = 0x8C000010u;
+inline constexpr std::uint32_t dreamcast_bios_handoff_pr = 0xAC00043Cu;
+inline constexpr std::uint32_t dreamcast_bios_handoff_dmaor = 0x00008201u;
+inline constexpr std::uint32_t dreamcast_bios_handoff_pctra = 0x000A03F0u;
+inline constexpr std::uint16_t dreamcast_bios_handoff_pal_pdtra = 0x0004u;
 inline constexpr std::uint16_t dreamcast_composite_port_a_input = 0x0300u;
 enum class DreamcastRuntimeFirmwareMode : std::uint8_t { Direct, HleBiosAbi };
 enum class DreamcastRegion : std::uint8_t { Japan, NorthAmerica, Europe };

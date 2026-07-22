@@ -281,6 +281,7 @@ initialize_dreamcast_runtime(CpuState& cpu,
     if (!boot.source || boot.boot_file.empty() || !boot.repeated_reads_match) {
         throw std::invalid_argument("Dreamcast-Runtime-Bootimage ist unvollstaendig.");
     }
+    const auto boot_region = dreamcast_region_from_area_symbols(boot.area_symbols);
     cpu.memory = Memory(0u);
     DreamcastRuntimeState state;
     state.main_ram = map_dreamcast_main_ram(cpu.memory);
@@ -396,9 +397,8 @@ initialize_dreamcast_runtime(CpuState& cpu,
         });
     configure_dreamcast_video(
         *state.pvr_registers,
-        dreamcast_region_from_area_symbols(boot.area_symbols) == DreamcastRegion::Europe
-            ? DreamcastVideoMode::PalInterlaced
-            : DreamcastVideoMode::NtscInterlaced);
+        boot_region == DreamcastRegion::Europe ? DreamcastVideoMode::PalInterlaced
+                                               : DreamcastVideoMode::NtscInterlaced);
     state.pvr_ta_aperture =
         std::make_shared<PvrTaFifoMemoryDevice>(state.pvr_ta_fifo, state.pvr_registers);
     const auto reset_ta_fifo = std::weak_ptr<PvrTaFifo>(state.pvr_ta_fifo);
@@ -644,6 +644,10 @@ initialize_dreamcast_runtime(CpuState& cpu,
                                          0x0C000000u,
                                          static_cast<std::uint32_t>(dreamcast_main_ram_size)});
     if (firmware_mode == DreamcastRuntimeFirmwareMode::HleBiosAbi) {
+        std::array<std::uint8_t, 64u * 1024u> bios_workspace;
+        bios_workspace.fill(0xFFu);
+        cpu.memory.write_bytes(
+            dreamcast_direct_boot_vector_base, bios_workspace, CodeWriteSource::Copy);
         install_hle_bios_abi(cpu.memory,
                              *state.runtime_blocks,
                              *state.firmware_handoff,
@@ -658,7 +662,21 @@ initialize_dreamcast_runtime(CpuState& cpu,
                          dreamcast_direct_boot_stack,
                          dreamcast_direct_boot_vector_base,
                          dreamcast_disc_boot_status,
-                         0u});
+                         dreamcast_disc_boot_fpscr});
+    cpu.gbr = dreamcast_bios_handoff_gbr;
+    cpu.ssr = dreamcast_bios_handoff_ssr;
+    cpu.spc = dreamcast_bios_handoff_spc;
+    cpu.sgr = dreamcast_direct_boot_stack;
+    cpu.dbr = dreamcast_bios_handoff_dbr;
+    cpu.pr = dreamcast_bios_handoff_pr;
+    state.dmac->write_operation(dreamcast_bios_handoff_dmaor);
+    state.aica_registers->write(0x289Cu, 0x48u, MemoryAccessWidth::Halfword);
+    state.aica_registers->write(0x28A8u, 0x18u, MemoryAccessWidth::Byte);
+    state.aica_registers->write(0x28ACu, 0x50u, MemoryAccessWidth::Byte);
+    state.aica_registers->write(0x28B0u, 0x08u, MemoryAccessWidth::Byte);
+    state.io_ports->write_control_a(dreamcast_bios_handoff_pctra);
+    if (boot_region == DreamcastRegion::Europe)
+        state.io_ports->write_data_a(dreamcast_bios_handoff_pal_pdtra);
     return state;
 }
 

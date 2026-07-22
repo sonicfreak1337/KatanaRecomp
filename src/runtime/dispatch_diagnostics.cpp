@@ -167,6 +167,37 @@ std::string DispatchDiagnosticRecorder::serialize_json() const {
     return output.str();
 }
 
+std::string DispatchDiagnosticRecorder::serialize_hotspots_json(const std::size_t limit) const {
+    std::vector<const DispatchDiagnosticEvent*> ordered;
+    ordered.reserve(events_.size());
+    for (const auto& event : events_) ordered.push_back(&event);
+    std::sort(ordered.begin(), ordered.end(), [](const auto* left, const auto* right) {
+        if (left->occurrences != right->occurrences)
+            return left->occurrences > right->occurrences;
+        if (left->callsite != right->callsite) return left->callsite < right->callsite;
+        return left->virtual_target.value_or(0u) < right->virtual_target.value_or(0u);
+    });
+    if (ordered.size() > limit) ordered.resize(limit);
+
+    std::ostringstream output;
+    output << "{\"schema\":\"katana-dispatch-hotspots\",\"report_version\":1"
+           << ",\"diagnostic_version\":" << dispatch_diagnostic_schema_version
+           << ",\"total_occurrences\":" << total_occurrences_
+           << ",\"unique_events\":" << events_.size()
+           << ",\"dropped_unique_events\":" << dropped_unique_events_ << ",\"events\":[";
+    for (std::size_t index = 0u; index < ordered.size(); ++index) {
+        if (index != 0u) output << ',';
+        const auto& event = *ordered[index];
+        output << "{\"callsite\":\"" << hex32(event.callsite) << "\",\"virtual_target\":";
+        optional_address(output, event.virtual_target);
+        output << ",\"origin\":\"" << dispatch_resolution_origin_name(event.origin)
+               << "\",\"error\":\"" << dispatch_diagnostic_error_name(event.error)
+               << "\",\"occurrences\":" << event.occurrences << '}';
+    }
+    output << "]}";
+    return output.str();
+}
+
 const char* dispatch_resolution_origin_name(const DispatchResolutionOrigin value) noexcept {
     switch (value) {
     case DispatchResolutionOrigin::StaticProof:

@@ -77,6 +77,7 @@ class DispatchDiagnosticRecorder final {
     [[nodiscard]] std::uint64_t dropped_unique_events() const noexcept;
     [[nodiscard]] std::size_t capacity() const noexcept;
     [[nodiscard]] std::string serialize_json() const;
+    [[nodiscard]] std::string serialize_hotspots_json(std::size_t limit = 16u) const;
 
   private:
     std::vector<DispatchDiagnosticEvent> events_;
