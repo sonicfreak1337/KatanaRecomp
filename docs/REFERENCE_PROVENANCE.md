@@ -56,6 +56,13 @@ bereits unabhaengig aus BIOS- und SH-4-ABI-Analyse bestimmte Bedeutung von
 eigenen nativen Plattformkontrollfluss und uebernimmt weder Flycast-Code noch
 dessen Emulationsarchitektur.
 
+Der Vergleich des Dreamcast-BSC-Pfads zeigte ausserdem, dass der BIOS-Handoff
+bei Composite die oberen Kabelbits als Eingang behandelt und alternative
+Pinmodi nicht als GPIO-Ausgangslatch liest. Implementiert wurde daraus
+unabhaengig die allgemeine SH-4-Regel, dass ausschliesslich 2-Bit-Modus 1 ein
+normaler Ausgang ist; Flycasts geraetespezifische Lesefunktion wurde nicht
+uebernommen.
+
 ## Referenzvergleich: dcrecomp
 
 Der Name `dcrecomp` wurde im internen Planungscommit `7fdcdef` fuer die

@@ -95,7 +95,15 @@ Runtime-Codeprovenienz. Die fokussierten BIOS-, Boot-, Runtime- und
 Portexporttests sind gruen; der private Produktnachweis folgt mit einem frisch
 exportierten Port.
 
-Runtime-ABI 27 und Portprojektvertrag 13 bilden den kumulativen v0.48-Stand ab.
+Der erweiterte Kontrollflussaudit belegt den anschliessenden Soft-Reboot als
+absichtlichen Fatalpfad des fruehen Gastcodes. Ein unabhaengiger
+Flycast-/SH-4-Abgleich deckte dabei einen echten allgemeinen Portfehler auf:
+Pinmodus 3 wurde wie GPIO-Ausgang behandelt und machte aus dem PAL-Composite-
+Wert `0x0300` faelschlich `0x0304`. Die korrigierte 2-Bit-Modusdekodierung ist
+regressionsgetestet. Der private A/B-Lauf erreicht danach weiterhin keinen
+GD-ROM-/TA-/PVR-Zugriff; der vorgelagerte Statuspfad bleibt daher aktiver P0.
+
+Runtime-ABI 28 und Portprojektvertrag 14 bilden den kumulativen v0.48-Stand ab.
 PlatformServices-ABI 7 bleibt unveraendert.
 
 Die zusammenhaengende zweite Bootkorrekturrunde ist implementiert. Sie umfasst
@@ -155,7 +163,7 @@ Recipe 2. Die Content-Root entsteht aus den wirklich gelesenen Raw-Chunks und
 wird sowohl beim Schreiben gegen die Recipe als auch beim Oeffnen gegen
 Tracktabelle und Chunkindex geprueft; abweichendes Staging wird nicht
 veroeffentlicht. Der damals eingefuehrte AICA-Vertrag ist im aktuellen
-  Runtime-ABI 27 und Portprojektvertrag 13 enthalten. Das kumulative v0.48-
+  Runtime-ABI 28 und Portprojektvertrag 14 enthalten. Das kumulative v0.48-
 Debug-Gate ist mit 180 von 180 Tests bestanden; der anschliessende private
 PAL-Nachweis ist erfolgt: Der vollstaendige neue Port entstand mit 12 Workern
 in 126,8 Sekunden, ein inkrementeller Runtime-Neubau in 77,8 Sekunden. Die

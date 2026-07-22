@@ -9,6 +9,16 @@
   dokumentierten SH-4-BIOS-Handoff wieder her und behaelt RAM, Discquelle und
   Runtime-Codeprovenienz bei. BIOS-ABI-Vertrag 4 und Runtime-ABI 27
   versionieren die neue Kontrollflusssemantik.
+- Der allgemeine Portauditor kann auf Fehlerpfaden neben den kompakten
+  Dispatch-Hotspots optional den vollstaendigen deduplizierten Kontrollfluss
+  mit Ziel, Aufrufstelle, `PR`, Blockendklasse und Aufloesungsherkunft
+  ausgeben (`KATANA_PORT_DIAGNOSTICS_FULL=1`). Portprojektvertrag 14
+  versioniert die erweiterte generierte Diagnostik.
+- Das SH-4-I/O-Portmodell behandelt nur den 2-Bit-Pinmodus 1 als normalen
+  GPIO-Ausgang. Alternative/Peripheriemodi wie Modus 3 reichen das
+  Ausgangslatch nicht mehr faelschlich in `PDTRA` durch; der PAL-BIOS-Handoff
+  liest dadurch beim Composite-Vertrag `0x0300` statt `0x0304`. Runtime-ABI 28
+  versioniert die korrigierte Portsemantik.
 - Der native Disc-Boot bildet den nach dem Dreamcast-BIOS erwarteten SH-4-
   und Geraetehandoff jetzt vollstaendig ab: `T`, `FPSCR`, GBR/SSR/SPC/SGR/DBR/
   PR, `DMAOR=0x8201`, AICA-Interruptmasken und der PAL-Broadcast-Portzustand

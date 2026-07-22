@@ -47,6 +47,13 @@ int main() {
                 ports->gpio_interrupt_control() == 0xA55Au,
             "SH-4-I/O-Port liest Ausgangslatches und Eingangspins nicht bitgenau zusammen.");
 
+    ports->set_inputs({0x0300u, 0u});
+    memory.write_u16(sh4_port_data_a_address, 0x0004u);
+    memory.write_u32(sh4_port_control_a_address, 0x000A03F0u);
+    require(memory.read_u16(sh4_port_data_a_address) == 0x0300u,
+            "SH-4-Pinmodus 3 wird faelschlich als GPIO-Ausgangslatch gelesen.");
+    ports->set_inputs({0x0302u, 0x000Au});
+
     require(throws<MemoryAccessError>(
                 [&] { static_cast<void>(memory.read_u32(sh4_port_data_a_address)); }) &&
                 throws<MemoryAccessError>(

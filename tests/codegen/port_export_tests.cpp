@@ -231,6 +231,10 @@ int run_test(const int argc, char* argv[]) {
     katana::runtime::CpuState pal_runtime_cpu;
     const auto pal_runtime_state =
         katana::runtime::initialize_dreamcast_runtime(pal_runtime_cpu, pal_runtime_boot);
+    require(pal_runtime_state.io_ports->data_a() ==
+                katana::runtime::dreamcast_composite_port_a_input,
+            "PAL-BIOS-Handoff reicht das Latch im alternativen Pinmodus als GPIO-Ausgang durch.");
+    pal_runtime_state.io_ports->write_control_a(0x00000010u);
     require((pal_runtime_state.io_ports->data_a() &
              katana::runtime::dreamcast_bios_handoff_pal_pdtra) != 0u,
             "PAL-BIOS-Handoff setzt den Broadcast-Portzustand nicht.");
@@ -468,6 +472,10 @@ int run_test(const int argc, char* argv[]) {
                     .find("runtime_only_dispatch_share_ppm") != std::string::npos &&
             generated_before.at("code/runtime-dispatch.cpp")
                     .find("KATANA_RUNTIME_DISPATCH_DIAGNOSTICS") != std::string::npos &&
+            generated_before.at("code/runtime-dispatch.cpp")
+                    .find("KATANA_PORT_DIAGNOSTICS_FULL") != std::string::npos &&
+            generated_before.at("code/runtime-dispatch.cpp")
+                    .find("KATANA_RUNTIME_DISPATCH_EVENTS") != std::string::npos &&
             generated_before.at("code/runtime-dispatch.cpp").find("serialize_json(true)") !=
                 std::string::npos &&
             std::filesystem::exists(output / "CMakeLists.txt") &&

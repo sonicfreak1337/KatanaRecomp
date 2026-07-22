@@ -34,7 +34,8 @@ std::uint16_t Sh4IoPort::output_mask(const std::uint32_t control,
                                      const std::uint32_t bits) noexcept {
     std::uint16_t mask = 0u;
     for (std::uint32_t bit = 0u; bit < bits; ++bit)
-        mask |= static_cast<std::uint16_t>(((control >> (bit * 2u)) & 1u) << bit);
+        mask |= static_cast<std::uint16_t>(
+            (((control >> (bit * 2u)) & 3u) == 1u ? 1u : 0u) << bit);
     return mask;
 }
 
