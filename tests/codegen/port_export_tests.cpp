@@ -483,6 +483,10 @@ int run_test(const int argc, char* argv[]) {
             std::filesystem::exists(output / "src" / "main.cpp") &&
             read_text(output / "src" / "main.cpp")
                     .find("DreamcastRuntimeFirmwareMode::HleBiosAbi") != std::string::npos &&
+            read_text(output / "src" / "main.cpp")
+                    .find("KATANA_PORT_MEMORY_PROBES") != std::string::npos &&
+            read_text(output / "src" / "main.cpp")
+                    .find("memory_probe_value=") != std::string::npos &&
             read_text(output / "src" / "main.cpp").find("load_dreamcast_runtime_boot") !=
                 std::string::npos &&
             read_text(output / "src" / "main.cpp")

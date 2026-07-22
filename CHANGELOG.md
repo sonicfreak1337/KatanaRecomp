@@ -19,6 +19,10 @@
   Ausgangslatch nicht mehr faelschlich in `PDTRA` durch; der PAL-BIOS-Handoff
   liest dadurch beim Composite-Vertrag `0x0300` statt `0x0304`. Runtime-ABI 28
   versioniert die korrigierte Portsemantik.
+- Budget- und Fehlerberichte koennen bis zu 16 frei waehlbare 32-Bit-
+  Gastadressen mit ausgeben (`KATANA_PORT_MEMORY_PROBES`). Ungueltige oder
+  ungemappte Probes bleiben diagnostisch und veraendern den Gastlauf nicht.
+  Portprojektvertrag 15 versioniert das allgemeine Speicherprobe-Werkzeug.
 - Der native Disc-Boot bildet den nach dem Dreamcast-BIOS erwarteten SH-4-
   und Geraetehandoff jetzt vollstaendig ab: `T`, `FPSCR`, GBR/SSR/SPC/SGR/DBR/
   PR, `DMAOR=0x8201`, AICA-Interruptmasken und der PAL-Broadcast-Portzustand
