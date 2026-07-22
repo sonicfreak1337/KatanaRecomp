@@ -39,7 +39,12 @@ Keine benachbarten Roadmap-Punkte werden nebenbei implementiert, ausser sie sind
 Jeder gestartete Prozess besitzt eine harte Laufzeitgrenze von hoechstens
 15 Minuten und wird danach mitsamt seinem Prozessbaum beendet. Fokussierte
 Builds nutzen die verfuegbaren Hostressourcen parallel; auf dem primaeren
-Entwicklungsrechner gilt `--parallel 12`.
+Entwicklungsrechner gilt `--parallel 12`. Der CLI-Portbuild verwendet dafuer
+`KATANA_HOST_BUILD_JOBS`; ohne expliziten Wert folgen
+`KATANA_PORT_CODEGEN_JOBS` und danach die gemeldete CPU-Threadzahl. Unter
+Windows kann `KATANA_HOST_BUILD_GENERATOR=Ninja` zusammen mit
+`KATANA_HOST_BUILD_MAKE_PROGRAM` einen getrennten `build-ninja`-Hostbuild
+waehlen.
 
 Windows-Basisbefehle:
 
@@ -373,7 +378,8 @@ v0.48 P0 - kombinierten KR-4847- bis KR-4850-Kernblock fokussiert validieren
 
 Abgeschlossen und in Roadmap/Taskliste markiert sind `KR-4841`, `KR-4843`,
 `KR-4844`, `KR-4845` und `KR-4846`. Der aktuelle Runtimevertrag steht auf
-Runtime-ABI 36, BIOS-ABI 9 und Portprojektvertrag 22. Das verbindliche
+Runtime-ABI 37, Backend-Interface-ABI 3, BIOS-ABI 9 und Portprojektvertrag 23.
+Das verbindliche
 XenonRecomp-artige Produktmodell rekompiliert `IP.BIN` und BootExecutable
 statisch aus SH-4 in nativen PC-Code. Dreamcast-Komponenten bleiben typisierte,
 titelunabhaengige Plattformgrenzen; das Freigabegate verbietet Interpreter/
@@ -383,6 +389,41 @@ keinen SH-4-Interpreter mehr; ein fehlendes AOT-Ziel endet typisiert. Nur
 im Manifest aus. `KR-4848` bleibt trotzdem offen, bis strukturierte Disc-
 Ladetransaktionen und die vorab erzeugte Registry latenter nativer Module
 vorliegen.
+
+Der Relative16-Audit weist 87 Eintraege, 76 eindeutige Kandidaten und 73 im
+vorherigen Port fehlende Ziele aus. Sie sind native Blockleader, waehrend der
+live geladene `MOV.W`-/`BRAF`-Dispatch `RuntimeOnly` bleibt und keine erfundene
+CFG-Kante erhaelt. Snapshotcache und P2-Aliasaufloesung sind imagegebunden;
+lokale AOT-Blockketten melden die exakte letzte Terminatorquelle, Callsite,
+Transferart und Siteklasse.
+
+Der frische optimierte PAL-Export ist abgeschlossen: 140,5 Sekunden mit zwoelf
+Jobs, 1.856 Funktionen, 37 Codepartitionen, 43 Dispatchshards, Vertrag 23,
+Runtime-ABI 37 und Backend-Interface-ABI 3. Das Portpaket enthaelt null
+Retailsektoren. Die unveraenderte Original-GDI wurde mit drei Tracks und
+521.461 Sektoren lokal installiert und blieb erhalten; erst danach wurde der
+alte `gdrom-mode-fix`-Port geloescht. Der 30-Sekunden-Lauf blieb ueber
+312.939.023 Zyklen und 1.000.000 Rootdispatches stabil. `0x8C654F5C` ist kein
+Fehler mehr.
+
+Der kontrollierte 100-Millionen-Zyklen-Snapshot belegt `IP.BIN`-AOT und 48.471
+native Runtime-only-Treffer ohne Fehler, Fallback oder Materialisierung; GD-
+ROM, TA und PVR bleiben an dieser fruehen Grenze null. Bei 320 Millionen Zyklen
+erreicht der Gast Spielecode, zwei GD-ROM-Kommandos und einen spaeten PVR-
+Registerwrite. Alle 761.011 Dispatchereignisse bleiben fehlerfrei. Der
+Haupthotspot `0x8C6658D0 -> 0x8C65247E` mit 696.053 Aufrufen ist ein endlicher
+4-Byte-Kopier-/Initialisierungsloop (`r6=4`, Ziel `r14`, Quelle Stack,
+`r14+=4`), kein fehlender Zielblock. TA, Render und Frame bleiben null;
+`KR-4848` bleibt offen.
+
+Der Projektschreiber shardet Dispatchregistries nach jeweils maximal 512
+Bloecken, emittiert pro Owner und Shard genau einen Wrapper und routet
+balanciert. Beim PAL-Port misst die zentrale `runtime-dispatch.cpp` dadurch
+34.879 Byte/607 Zeilen statt 36.703.886 Byte/525.996 Zeilen; der groesste der
+43 Shards misst 393.454 Byte. Die 513-Block-Regression prueft zwei Shards und
+stale Cleanup; das vollstaendige synthetische Ninja-/MSVC-Projekt linkt in 15
+Sekunden. Die fokussierte Suite besteht 6/6. Diesen Toolingfortschritt bei
+weiteren grossen Ports beibehalten.
 
 Command 28/37 besitzt gastzeitgebundene PIO-/G1-DMA-Teiltransfers; Selector 5
 ist ein DMA-IRQ-Handoff, Selector 11 die persistente PIO-
@@ -434,10 +475,19 @@ KR-4849: Direct-Texture-Zielprogression und restliche TA/PVR-Eingangskette
 KR-4850: scanoutgebundener echter Gastframe
 ```
 
+Die verbindliche Abhaengigkeitsfolge lautet fuer die offenen Pfade
+`KR-4842 -> KR-4911 -> KR-4912 -> KR-4848`; danach implementiert `KR-4849`
+den TA/PVR-Vertrag, `KR-4915` beweist dessen echten Gastpfad und erst
+`KR-4850` bestaetigt den Frame. `KR-4814` und `KR-4914` folgen danach innerhalb
+von v0.48.
+
 Ein erster Gastframe ist noch nicht nachgewiesen. Moderne Xbox-, DualSense-
-und vergleichbare Hostcontroller bleiben strikt hinter `KR-4850`. Waehrend
+und vergleichbare Hostcontroller gehoeren zu `KR-4814`/`KR-4914` in v0.48,
+bleiben aber strikt hinter `KR-4850`. Waehrend
 der Kernrunde nur fokussierte Targets ausfuehren; das konsolidierte Gate und
-den privaten PAL-Lauf erst im vorgesehenen Block starten. Jeder Prozess endet
+die abschliessende private PAL-Wiederholung erst im vorgesehenen Block starten.
+Der bereits ausgefuehrte vorgezogene Lauf ist Diagnoseevidenz, kein Ersatz fuer
+dieses Gate. Jeder Prozess endet
 spaetestens nach 15 Minuten. Original-GDI und Tracks sind immer read-only und
 werden nie geloescht; veraltete erzeugte Portordner duerfen nach eindeutiger
-Pfadpruefung ersetzt werden. Keine Tags vor ausdruecklicher Nutzerfreigabe.
+Pfadpruefung ersetzt werden. Keine Tags vor der Alpha.

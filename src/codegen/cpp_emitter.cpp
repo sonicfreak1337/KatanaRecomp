@@ -2324,7 +2324,8 @@ void emit_block(std::ostringstream& output,
                 const std::unordered_set<std::uint32_t>& known_functions,
                 const std::unordered_set<std::uint32_t>& current_blocks,
                 const bool single_block,
-                const bool guarded_local_block_chaining) {
+                const bool guarded_local_block_chaining,
+                const bool note_external_block_entry) {
     std::unordered_set<std::uint32_t> guest_instruction_addresses;
     guest_instruction_addresses.reserve(block.instructions.size());
     for (const auto& instruction : block.instructions)
@@ -2338,6 +2339,8 @@ void emit_block(std::ostringstream& output,
             output << "            case " << hex32(direct_alias) << ":\n";
     }
     output << "            case " << hex32(block.start_address) << ": {\n";
+    if (note_external_block_entry)
+        output << "                note_block_entry(" << hex32(block.start_address) << ");\n";
     if (!single_block) {
         output << "                if (services != nullptr) {\n"
                << "                    const auto scheduler = services->consume_guest_cycles(\n"
@@ -2497,6 +2500,7 @@ BackendEmission CppBackend::emit(const BackendRequest& request) const {
                  << "using katana::runtime::return_from_exception;\n";
     if (request.external_dynamic_dispatch) {
         declarations << "void static_call(CpuState& cpu, std::uint32_t target);\n"
+                     << "void note_block_entry(std::uint32_t address) noexcept;\n"
                      << "void resolved_call(CpuState& cpu, std::uint32_t target);\n"
                      << "void guarded_call(CpuState& cpu, std::uint32_t target);\n"
                      << "void guarded_jump(CpuState& cpu, std::uint32_t target);\n"
@@ -2569,7 +2573,8 @@ BackendEmission CppBackend::emit(const BackendRequest& request) const {
                        known_functions,
                        current_blocks,
                        request.single_block_execution,
-                       request.guarded_local_block_chaining);
+                       request.guarded_local_block_chaining,
+                       request.external_dynamic_dispatch);
         }
 
         function_bodies << "            default:\n"

@@ -1096,6 +1096,37 @@ std::string normalized_host_command(const std::string& command) {
 #endif
 }
 
+std::optional<std::string> configured_environment_value(const char* name) {
+#ifdef _WIN32
+    char* value = nullptr;
+    std::size_t value_size = 0u;
+    if (_dupenv_s(&value, &value_size, name) != 0 || value == nullptr) return std::nullopt;
+    std::string result(value);
+    std::free(value);
+    if (result.empty()) return std::nullopt;
+    return result;
+#else
+    const auto* value = std::getenv(name);
+    if (value == nullptr || *value == '\0') return std::nullopt;
+    return std::string(value);
+#endif
+}
+
+std::size_t configured_host_build_jobs() {
+    constexpr std::size_t maximum_jobs = 256u;
+    auto configured = configured_environment_value("KATANA_HOST_BUILD_JOBS");
+    if (!configured) configured = configured_environment_value("KATANA_PORT_CODEGEN_JOBS");
+    if (!configured) {
+        return std::min<std::size_t>(
+            maximum_jobs, std::max(1u, std::thread::hardware_concurrency()));
+    }
+    std::size_t parsed = 0u;
+    const auto jobs = std::stoull(*configured, &parsed, 10);
+    if (parsed != configured->size() || jobs == 0u || jobs > maximum_jobs)
+        throw std::invalid_argument("KATANA_HOST_BUILD_JOBS ist ungueltig.");
+    return static_cast<std::size_t>(jobs);
+}
+
 void seed_incremental_port_stage(const std::filesystem::path& published,
                                  const std::filesystem::path& stage) {
     if (!std::filesystem::exists(published)) return;
@@ -1190,11 +1221,27 @@ int export_port_project(const std::filesystem::path& gdi_path,
              [](const std::string_view phase) {
                  std::cout << "KATANA_PORT_SUBPHASE " << phase << '\n' << std::flush;
              }});
+        bool use_ninja = false;
+#ifdef _WIN32
+        use_ninja = configured_environment_value("KATANA_HOST_BUILD_GENERATOR") == "Ninja";
+        const auto build_path = report.output_root / (use_ninja ? "build-ninja" : "build");
+#else
+        use_ninja = true;
         const auto build_path = report.output_root / "build";
+#endif
         auto configure = std::string("cmake -S ") + shell_quote(report.output_root) + " -B " +
                          shell_quote(build_path);
 #ifdef _WIN32
-        configure += " -DCMAKE_RUNTIME_OUTPUT_DIRECTORY_RELWITHDEBINFO=" + shell_quote(build_path);
+        if (use_ninja) {
+            configure += " -G Ninja";
+            if (const auto make_program =
+                    configured_environment_value("KATANA_HOST_BUILD_MAKE_PROGRAM"))
+                configure += " -DCMAKE_MAKE_PROGRAM=" +
+                             shell_quote(std::filesystem::path(*make_program));
+        } else {
+            configure +=
+                " -DCMAKE_RUNTIME_OUTPUT_DIRECTORY_RELWITHDEBINFO=" + shell_quote(build_path);
+        }
 #else
         configure += " -G Ninja";
 #endif
@@ -1208,9 +1255,9 @@ int export_port_project(const std::filesystem::path& gdi_path,
         }
         auto build =
             std::string("cmake --build ") + shell_quote(build_path) + " --target " + target_name;
-        build += " --parallel";
+        build += " --parallel " + std::to_string(configured_host_build_jobs());
 #ifdef _WIN32
-        build += " --config RelWithDebInfo";
+        if (!use_ninja) build += " --config RelWithDebInfo";
 #endif
         std::cout << "KATANA_PORT_PHASE host-build\n" << std::flush;
         const auto build_command = normalized_host_command(build);

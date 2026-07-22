@@ -750,6 +750,37 @@ void run_host_command(const std::string& command,
     }
 }
 
+std::optional<std::string> configured_environment_value(const char* name) {
+#ifdef _WIN32
+    char* value = nullptr;
+    std::size_t value_size = 0u;
+    if (_dupenv_s(&value, &value_size, name) != 0 || value == nullptr) return std::nullopt;
+    std::string result(value);
+    std::free(value);
+    if (result.empty()) return std::nullopt;
+    return result;
+#else
+    const auto* value = std::getenv(name);
+    if (value == nullptr || *value == '\0') return std::nullopt;
+    return std::string(value);
+#endif
+}
+
+std::size_t configured_host_build_jobs() {
+    constexpr std::size_t maximum_jobs = 256u;
+    auto configured = configured_environment_value("KATANA_HOST_BUILD_JOBS");
+    if (!configured) configured = configured_environment_value("KATANA_PORT_CODEGEN_JOBS");
+    if (!configured) {
+        return std::min<std::size_t>(
+            maximum_jobs, std::max(1u, std::thread::hardware_concurrency()));
+    }
+    std::size_t parsed = 0u;
+    const auto jobs = std::stoull(*configured, &parsed, 10);
+    if (parsed != configured->size() || jobs == 0u || jobs > maximum_jobs)
+        throw std::invalid_argument("KATANA_HOST_BUILD_JOBS ist ungueltig.");
+    return static_cast<std::size_t>(jobs);
+}
+
 void configure_and_build(const std::filesystem::path& source,
                          const std::filesystem::path& build,
                          const std::filesystem::path& runtime_root,
@@ -814,6 +845,7 @@ void configure_and_build(const std::filesystem::path& source,
     events.emit(JobState::Running, 80u, "host-compilation", {}, JobStepStatus::Running);
     auto compile =
         std::string("cmake --build ") + shell_quote(build) + " --target " + std::string(target);
+    compile += " --parallel " + std::to_string(configured_host_build_jobs());
 #ifdef _WIN32
     if (!use_ninja) compile += " --config RelWithDebInfo";
 #endif

@@ -6,8 +6,8 @@ ungeloesten Kontrollflusspfaden mehr.
 
 ## ABI
 
-Die aktuelle Runtime-ABI ist Version `36`. Die typisierte Block-ABI ist seit
-KR-4611 Version `2`.
+Die aktuelle Runtime-ABI ist Version `37`. Die typisierte Block-ABI ist seit
+KR-4611 Version `2`; die Backend-Interface-ABI ist Version `3`.
 
 Generierter Code enthaelt eine Compile-Time-Pruefung gegen diese Version. Eine
 abweichende Runtime wird beim Kompilieren sichtbar abgelehnt. ABI-Version 3
@@ -46,6 +46,11 @@ scanoutgebundenen PVR-Framebeweis in den oeffentlichen Runtimevertrag ein.
 ABI-Version 36 ergaenzt den oeffentlichen DMAC-Pruefvertrag um die erwartete
 Requestquelle und bindet Copy-/DMA-Loadbeobachtung an die atomare
 Veroeffentlichung geladener ausfuehrbarer Bereiche.
+ABI-Version 37 bindet die exakte externe Dispatchfortsetzung an den letzten
+tatsaechlich ausgefuehrten Block einer lokalen AOT-Kette. Terminatorquelle,
+Callsite, Call-/Tail-Jump-Art und statische, tabellenbasierte, Runtime-only-
+oder Fallback-Siteklasse bleiben dadurch bis zum folgenden Lookup und seiner
+Diagnostik erhalten.
 
 ## CMake
 
@@ -390,7 +395,7 @@ ein Write ueber eine Spiegelgrenze wird dafuer in Tail und Head geteilt.
 Der normale Produktport deaktiviert Demand-Interpreterausfuehrung vollstaendig:
 Nicht gebundener Code endet als typisierter Materialisierungs-/Dispatchfehler.
 Nur das explizite `diagnostic_partial`-Profil emittiert den begrenzten
-Diagnoseinterpreter. Der Portprojektvertrag `22` weist Profil,
+Diagnoseinterpreter. Der Portprojektvertrag `23` weist Profil,
 Interpreterstatus, Unbound-Code-Policy und Coverage-Vertrag im Manifest aus.
 
 Im produktiven Einblock-AOT-Pfad zaehlt `CpuState::retired_guest_instructions`
@@ -400,5 +405,28 @@ annehmen. Faulting Instructions und ausgefuehrte Delay Slots gehen dadurch in
 die Zeit ein, nicht ausgefuehrte Blockreste dagegen nicht. Lokales Chaining ist
 nur ohne faelliges Schedulerereignis und bei identischem Code-, MMU-,
 Watchpoint-, FPSCR- und Runtimezustand erlaubt; ein Chunk umfasst hoechstens 64
-Instruktionen. Der kumulative Stand verwendet Runtime-ABI 36,
-PlatformServices-ABI 9 und Portvertrag 22.
+Instruktionen. Jeder tatsaechlich betretene Block aktualisiert dabei die
+Fortsetzungsmetadaten. Verlaesst eine lokale Kette den Wrapper, verwendet der
+externe Dispatcher daher die Terminatorquelle und Siteklasse des letzten
+ausgefuehrten Blocks und nicht den urspruenglichen Wrapper-Einstieg. Der
+kumulative Stand verwendet Runtime-ABI 37, Backend-Interface-ABI 3,
+PlatformServices-ABI 9 und Portvertrag 23.
+
+Statische Dispatchregistries werden nicht mehr in eine einzelne
+Uebersetzungseinheit geschrieben. Der Projektschreiber teilt sie
+deterministisch in Shards zu maximal 512 Bloecken. Jeder Funktionsowner besitzt
+in einem Shard genau einen Wrapper, auch wenn mehrere seiner Bloecke dort
+liegen; ein balancierter Router ordnet die Zieladresse dem passenden Shard zu.
+Bei einer erneuten Ausgabe werden nicht mehr benoetigte Sharddateien entfernt,
+damit ein verkleinerter Port keinen stale Code mitbaut.
+
+Die Grenzregression erzeugt 513 Bloecke, erwartet genau zwei Shards und prueft
+das anschliessende stale Cleanup. Ein vollstaendiges synthetisches
+Ninja-/MSVC-Projekt kompiliert und linkt damit in 15 Sekunden. Beim aktuellen
+privaten PAL-Nachweis bestehen die sechs fokussierten Regressionstargets 6/6.
+Die Registry dieses PAL-Ports umfasst 43 Shards; die zentrale
+`runtime-dispatch.cpp` misst 34.879 Byte und 607 Zeilen statt zuvor 36.703.886
+Byte und 525.996 Zeilen. Der groesste Shard misst 393.454 Byte. Diese
+Aufteilung aendert weder Blockidentitaet noch Lookup-, Guard- oder
+Fortsetzungssemantik; sie ist ausschliesslich ein Buildzeit- und
+Uebersetzungseinheitenvertrag.

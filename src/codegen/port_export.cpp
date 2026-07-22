@@ -963,10 +963,11 @@ std::string handwritten_main(const std::string& entry_namespace,
            "}\n";
 }
 
-std::string runtime_dispatch_adapter(const std::string& entry_namespace,
-                                     const std::span<const katana::ir::Function> program,
-                                     const std::uint32_t entry_address,
-                                     const bool diagnostic_interpreter) {
+std::vector<ProjectArtifact>
+runtime_dispatch_artifacts(const std::string& entry_namespace,
+                           const std::span<const katana::ir::Function> program,
+                           const std::uint32_t entry_address,
+                           const bool diagnostic_interpreter) {
     const auto symbol = [](const std::uint32_t address) {
         constexpr std::array digits{'0', '1', '2', '3', '4', '5', '6', '7',
                                     '8', '9', 'A', 'B', 'C', 'D', 'E', 'F'};
@@ -1006,11 +1007,28 @@ std::string runtime_dispatch_adapter(const std::string& entry_namespace,
             return "Fallthrough";
         }
     };
+    const auto dispatch_site_class = [](const katana::ir::DynamicTargetClass target_class) {
+        using C = katana::ir::DynamicTargetClass;
+        switch (target_class) {
+        case C::GuardedComplete:
+        case C::GuardedPartial:
+            return "Guarded";
+        case C::RuntimeOnly:
+            return "RuntimeOnly";
+        case C::Unresolved:
+            return "Unresolved";
+        case C::NotApplicable:
+            return "NotDynamic";
+        }
+        return "NotDynamic";
+    };
     struct DispatchBlock {
-        std::string owner;
-        std::string address;
+        std::uint32_t owner;
+        std::uint32_t address;
+        std::uint32_t exit_source;
         std::uint32_t size;
         const char* end_kind;
+        katana::ir::DynamicTargetClass target_class;
     };
     std::size_t block_count = 0u;
     for (const auto& function : program) block_count += function.blocks.size();
@@ -1019,21 +1037,186 @@ std::string runtime_dispatch_adapter(const std::string& entry_namespace,
     std::vector<DispatchBlock> dispatch_blocks;
     dispatch_blocks.reserve(block_count);
     for (const auto& function : program) {
-        const auto owner = symbol(function.entry_address);
         for (const auto& block : function.blocks) {
             if (!block_addresses.insert(block.start_address).second)
                 throw std::runtime_error("IR-Basic-Block besitzt mehrere Funktionsbesitzer.");
             std::uint32_t end = block.start_address + 2u;
-            for (const auto& instruction : block.instructions)
+            const katana::ir::Instruction* terminal = nullptr;
+            for (const auto& instruction : block.instructions) {
                 end = std::max(end, instruction.source_address + 2u);
-            dispatch_blocks.push_back({owner,
-                                       symbol(block.start_address),
+                if (instruction.delay_slot.role != katana::ir::DelaySlotRole::Slot)
+                    terminal = &instruction;
+            }
+            dispatch_blocks.push_back({function.entry_address,
+                                       block.start_address,
+                                       terminal != nullptr ? terminal->source_address
+                                                           : block.start_address,
                                        end - block.start_address,
-                                       end_kind(block)});
+                                       end_kind(block),
+                                       terminal != nullptr
+                                            ? terminal->dynamic_target_class
+                                            : katana::ir::DynamicTargetClass::NotApplicable});
         }
     }
+    std::sort(dispatch_blocks.begin(), dispatch_blocks.end(), [](const auto& left, const auto& right) {
+        return left.address < right.address;
+    });
+    if (dispatch_blocks.empty())
+        throw std::runtime_error("Runtime-Dispatch besitzt keine generierten Bloecke.");
+
+    constexpr std::size_t dispatch_blocks_per_shard = 512u;
+    const auto shard_count =
+        (dispatch_blocks.size() + dispatch_blocks_per_shard - 1u) / dispatch_blocks_per_shard;
+    const auto shard_symbol = [](const std::size_t index) {
+        std::ostringstream name;
+        name << std::setfill('0') << std::setw(5) << index;
+        return name.str();
+    };
+
+    std::vector<ProjectArtifact> result;
+    result.reserve(shard_count + 2u);
+    std::ostringstream internal_header;
+    internal_header
+        << "#pragma once\n\n"
+        << "#include \"katana/runtime/block_abi.hpp\"\n"
+        << "#include \"katana/runtime/block_table.hpp\"\n"
+        << "#include \"katana/runtime/indirect_dispatch.hpp\"\n"
+        << "#include \"katana/runtime/platform_services.hpp\"\n"
+        << "#include <cstdint>\n#include <vector>\n\n"
+        << "namespace " << entry_namespace << "::runtime_dispatch_detail {\n"
+        << "extern thread_local katana::runtime::PlatformServices* active_services;\n"
+        << "extern thread_local katana::runtime::BlockAddress active_exit_source;\n"
+        << "extern thread_local katana::runtime::BlockEndKind active_exit_kind;\n"
+        << "extern thread_local katana::runtime::DynamicDispatchSiteClass "
+           "active_exit_site_class;\n"
+        << "extern thread_local bool tail_dispatch_completed;\n"
+        << "void append_static_block(\n"
+        << "    std::vector<katana::runtime::RuntimeBlock>& blocks,\n"
+        << "    std::uint32_t address, std::uint32_t size,\n"
+        << "    katana::runtime::BlockEndKind end_kind,\n"
+        << "    katana::runtime::BackendBlockFunction function, const char* provenance);\n"
+        << "void register_executable_block(\n"
+        << "    const katana::runtime::RuntimeBlockTable& table,\n"
+        << "    katana::runtime::PlatformServices& services,\n"
+        << "    std::uint32_t address, std::uint32_t size);\n";
+    for (std::size_t shard = 0u; shard < shard_count; ++shard) {
+        const auto suffix = shard_symbol(shard);
+        internal_header << "bool note_block_entry_shard_" << suffix
+                        << "(std::uint32_t address) noexcept;\n"
+                        << "void append_static_blocks_shard_" << suffix
+                        << "(std::vector<katana::runtime::RuntimeBlock>& blocks);\n"
+                        << "void register_executable_blocks_shard_" << suffix
+                        << "(const katana::runtime::RuntimeBlockTable& table, "
+                           "katana::runtime::PlatformServices& services);\n";
+    }
+    internal_header << "} // namespace " << entry_namespace << "::runtime_dispatch_detail\n";
+    result.push_back({"include/runtime-dispatch-internal.hpp", internal_header.str()});
+
+    for (std::size_t shard = 0u; shard < shard_count; ++shard) {
+        const auto begin = shard * dispatch_blocks_per_shard;
+        const auto end = std::min(begin + dispatch_blocks_per_shard, dispatch_blocks.size());
+        const auto suffix = shard_symbol(shard);
+        std::vector<std::uint32_t> owners;
+        owners.reserve(end - begin);
+        for (auto index = begin; index < end; ++index) owners.push_back(dispatch_blocks[index].owner);
+        std::sort(owners.begin(), owners.end());
+        owners.erase(std::unique(owners.begin(), owners.end()), owners.end());
+
+        std::ostringstream shard_output;
+        shard_output << "#include \"../include/runtime-dispatch-internal.hpp\"\n"
+                     << "#include <stdexcept>\n#include <utility>\n\n"
+                     << "namespace " << entry_namespace << " {\n";
+        for (const auto owner : owners) {
+            shard_output << "void fn_" << symbol(owner)
+                         << "_with_services(katana::runtime::CpuState&, "
+                            "katana::runtime::PlatformServices*);\n";
+        }
+        shard_output << "namespace runtime_dispatch_detail {\nnamespace {\n";
+        for (const auto owner : owners) {
+            shard_output
+                << "katana::runtime::BlockExit dispatch_owner_" << symbol(owner)
+                << "(katana::runtime::CpuState& cpu, "
+                   "katana::runtime::BlockExecutionContext& context) {\n"
+                << "    if (active_services == nullptr) throw "
+                   "std::runtime_error(\"Runtime-Plattformdienste fehlen.\");\n"
+                << "    active_exit_source = {cpu.pc, "
+                   "katana::runtime::canonical_physical_address(cpu.pc)};\n"
+                << "    active_exit_kind = katana::runtime::BlockEndKind::Fallthrough;\n"
+                << "    active_exit_site_class = "
+                   "katana::runtime::DynamicDispatchSiteClass::NotDynamic;\n"
+                << "    const bool exception_active_on_entry = cpu.trap_pending;\n"
+                << "    fn_" << symbol(owner)
+                << "_with_services(cpu, active_services);\n"
+                << "    context.scheduler_cycle = active_services->scheduler_cycle();\n"
+                << "    auto kind = active_exit_kind;\n"
+                << "    if (!exception_active_on_entry && cpu.trap_pending)\n"
+                << "        kind = katana::runtime::BlockEndKind::Exception;\n"
+                << "    if (std::exchange(tail_dispatch_completed, false))\n"
+                << "        kind = katana::runtime::BlockEndKind::Return;\n"
+                << "    return katana::runtime::make_block_exit(cpu, context,\n"
+                << "        kind, active_exit_source, katana::runtime::BlockAddress{cpu.pc, "
+                   "katana::runtime::canonical_physical_address(cpu.pc)});\n"
+                << "}\n";
+        }
+        shard_output << "} // namespace\n\n"
+                     << "bool note_block_entry_shard_" << suffix
+                     << "(const std::uint32_t address) noexcept {\n"
+                     << "    switch (address) {\n";
+        for (auto index = begin; index < end; ++index) {
+            const auto& block = dispatch_blocks[index];
+            const auto address = symbol(block.address);
+            const auto exit_source = symbol(block.exit_source);
+            shard_output << "    case 0x" << address << "u:\n"
+                         << "        active_exit_source = {0x" << exit_source
+                         << "u, katana::runtime::canonical_physical_address(0x" << exit_source
+                         << "u)};\n"
+                         << "        active_exit_kind = katana::runtime::BlockEndKind::"
+                         << block.end_kind << ";\n"
+                         << "        active_exit_site_class = "
+                            "katana::runtime::DynamicDispatchSiteClass::"
+                         << dispatch_site_class(block.target_class) << ";\n"
+                         << "        return true;\n";
+        }
+        shard_output << "    default: return false;\n"
+                     << "    }\n}\n\n"
+                     << "void append_static_blocks_shard_" << suffix
+                     << "(std::vector<katana::runtime::RuntimeBlock>& blocks) {\n";
+        for (auto index = begin; index < end; ++index) {
+            const auto& block = dispatch_blocks[index];
+            const auto address = symbol(block.address);
+            shard_output << "    append_static_block(blocks, 0x" << address << "u, "
+                         << block.size << "u, katana::runtime::BlockEndKind::" << block.end_kind
+                         << ", &dispatch_owner_" << symbol(block.owner)
+                         << ", \"generated-block-" << address
+                         << "\");\n";
+        }
+        shard_output << "}\n\n"
+                     << "void register_executable_blocks_shard_" << suffix
+                     << "(const katana::runtime::RuntimeBlockTable& table, "
+                        "katana::runtime::PlatformServices& services) {\n";
+        for (auto index = begin; index < end; ++index) {
+            const auto& block = dispatch_blocks[index];
+            const auto address = symbol(block.address);
+            shard_output << "    register_executable_block(table, services, 0x" << address
+                         << "u, " << block.size << "u);\n";
+            if (std::string_view(block.end_kind) != "Return" &&
+                std::string_view(block.end_kind) != "ExceptionReturn" &&
+                std::string_view(block.end_kind) != "Sleep" &&
+                std::string_view(block.end_kind) != "Exception")
+                shard_output << "    services.allow_executable_block_chaining(0x" << address
+                             << "u);\n";
+        }
+        shard_output << "}\n"
+                     << "} // namespace runtime_dispatch_detail\n"
+                     << "} // namespace " << entry_namespace << "\n";
+        result.push_back({std::filesystem::path("code") /
+                              ("runtime-dispatch-shard-" + suffix + ".cpp"),
+                          shard_output.str()});
+    }
+
     std::ostringstream output;
     output << "#include \"../include/katana_port.hpp\"\n"
+           << "#include \"../include/runtime-dispatch-internal.hpp\"\n"
            << "#include \"katana/runtime/block_abi.hpp\"\n"
            << "#include \"katana/runtime/block_table.hpp\"\n"
            << "#include \"katana/runtime/dispatch_diagnostics.hpp\"\n"
@@ -1050,14 +1233,49 @@ std::string runtime_dispatch_adapter(const std::string& entry_namespace,
     output << "thread_local RuntimeMaterializationStatus last_materialization_status;\n"
            << "const RuntimeMaterializationStatus& runtime_materialization_status() noexcept {\n"
            << "    return last_materialization_status;\n"
-           << "}\n";
-    for (const auto& function : program) {
-        output << "void fn_" << symbol(function.entry_address)
-               << "_with_services(katana::runtime::CpuState&, "
-                  "katana::runtime::PlatformServices*);\n";
-    }
-    output << "namespace {\n"
+           << "}\n"
+           << "namespace runtime_dispatch_detail {\n"
            << "thread_local katana::runtime::PlatformServices* active_services = nullptr;\n"
+           << "thread_local katana::runtime::BlockAddress active_exit_source;\n"
+           << "thread_local katana::runtime::BlockEndKind active_exit_kind =\n"
+              "    katana::runtime::BlockEndKind::Fallthrough;\n"
+           << "thread_local katana::runtime::DynamicDispatchSiteClass active_exit_site_class =\n"
+              "    katana::runtime::DynamicDispatchSiteClass::NotDynamic;\n"
+           << "thread_local bool tail_dispatch_completed = false;\n"
+           << "void register_executable_block(\n"
+           << "    const katana::runtime::RuntimeBlockTable& table,\n"
+           << "    katana::runtime::PlatformServices& services,\n"
+           << "    std::uint32_t address, std::uint32_t size) {\n"
+           << "    const auto registered_handle = table.lookup(address, {});\n"
+           << "    if (!registered_handle) throw std::runtime_error(\"Registrierter Block "
+              "fehlt.\");\n"
+           << "    const auto registered = table.resolve(*registered_handle);\n"
+           << "    if (!registered) throw std::runtime_error(\"Registrierter Block ist "
+              "stale.\");\n"
+           << "    services.register_executable_block(\n"
+           << "        address, size, "
+              "katana::runtime::stable_runtime_block_identity(registered->get()));\n"
+           << "}\n"
+           << "void append_static_block(\n"
+           << "    std::vector<katana::runtime::RuntimeBlock>& blocks,\n"
+           << "    std::uint32_t address, std::uint32_t size,\n"
+           << "    katana::runtime::BlockEndKind end_kind,\n"
+           << "    katana::runtime::BackendBlockFunction function, const char* provenance) {\n"
+           << "    katana::runtime::RuntimeBlock block;\n"
+           << "    block.virtual_start = address;\n"
+           << "    block.physical_origin = "
+              "katana::runtime::canonical_physical_address(address);\n"
+           << "    block.size = size; block.end_kind = end_kind; block.function = function;\n"
+           << "    block.provenance = provenance;\n"
+           << "    blocks.emplace_back(std::move(block));\n"
+           << "}\n"
+           << "} // namespace runtime_dispatch_detail\n"
+           << "using runtime_dispatch_detail::active_exit_kind;\n"
+           << "using runtime_dispatch_detail::active_exit_site_class;\n"
+           << "using runtime_dispatch_detail::active_exit_source;\n"
+           << "using runtime_dispatch_detail::active_services;\n"
+           << "using runtime_dispatch_detail::tail_dispatch_completed;\n"
+           << "namespace {\n"
            << "thread_local katana::runtime::RuntimeBlockTable* active_table = nullptr;\n"
            << "thread_local katana::runtime::BlockExecutionContext* active_context = nullptr;\n"
            << "thread_local katana::runtime::DispatchDiagnosticRecorder* active_diagnostics = "
@@ -1066,7 +1284,6 @@ std::string runtime_dispatch_adapter(const std::string& entry_namespace,
                "nullptr;\n"
            << "thread_local katana::runtime::DemandBlockMaterializer* active_materializer = "
               "nullptr;\n"
-           << "thread_local bool tail_dispatch_completed = false;\n"
            << "thread_local std::uint64_t executed_dispatch_blocks = 0u;\n"
            << "enum class DispatchChainBoundary { NestedCall, ProgramRoot };\n"
            << "void dispatch_chain(katana::runtime::CpuState&, std::uint32_t, "
@@ -1092,28 +1309,6 @@ std::string runtime_dispatch_adapter(const std::string& entry_namespace,
                "        active_context = nullptr; active_diagnostics = nullptr;\n"
                "        active_dispatch_metrics = nullptr; active_materializer = nullptr; }\n"
            << "};\n";
-    for (const auto& block : dispatch_blocks) {
-            output << "katana::runtime::BlockExit dispatch_" << block.address
-                   << "(katana::runtime::CpuState& cpu, katana::runtime::BlockExecutionContext& "
-                      "context) {\n"
-                   << "    if (active_services == nullptr) throw "
-                      "std::runtime_error(\"Runtime-Plattformdienste fehlen.\");\n"
-                   << "    const bool exception_active_on_entry = cpu.trap_pending;\n"
-                   << "    fn_" << block.owner << "_with_services(cpu, active_services);\n"
-                   << "    context.scheduler_cycle = active_services->scheduler_cycle();\n"
-                   << "    auto kind = !exception_active_on_entry && cpu.trap_pending\n"
-                   << "                    ? katana::runtime::BlockEndKind::Exception\n"
-                   << "                    : katana::runtime::BlockEndKind::" << block.end_kind
-                   << ";\n"
-                   << "    if (std::exchange(tail_dispatch_completed, false))\n"
-                   << "        kind = katana::runtime::BlockEndKind::Return;\n"
-                   << "    return katana::runtime::make_block_exit(cpu, context,\n"
-                   << "        kind, {0x" << block.address
-                   << "u, katana::runtime::canonical_physical_address(0x" << block.address
-                   << "u)}, katana::runtime::BlockAddress{cpu.pc, "
-                      "katana::runtime::canonical_physical_address(cpu.pc)});\n"
-                   << "}\n";
-    }
     if (diagnostic_interpreter)
         output << "katana::runtime::BlockExit dispatch_dynamic_interpreter(\n"
                   "        katana::runtime::CpuState& cpu,\n"
@@ -1168,6 +1363,13 @@ std::string runtime_dispatch_adapter(const std::string& entry_namespace,
            "                    bool diagnostic, DispatchChainBoundary boundary) {\n"
            "    const auto block_budget = configured_block_budget();\n"
            "    const auto program_return_sentinel = cpu.pr;\n"
+           "    std::uint32_t dispatch_callsite = cpu.pc;\n"
+           "    katana::runtime::BlockAddress dispatch_source{cpu.pc,\n"
+           "        katana::runtime::canonical_physical_address(cpu.pc)};\n"
+           "    auto dispatch_origin =\n"
+           "        dispatch_class == katana::runtime::RuntimeDispatchClass::RuntimeOnly\n"
+           "            ? katana::runtime::DispatchResolutionOrigin::RuntimeOnly\n"
+           "            : katana::runtime::DispatchResolutionOrigin::TableLookup;\n"
            "    for (;;) {\n"
            "        const auto lifecycle = active_services->poll_host_lifecycle();\n"
            "        if (lifecycle == katana::runtime::PlatformLifecycleState::Shutdown)\n"
@@ -1192,6 +1394,8 @@ std::string runtime_dispatch_adapter(const std::string& entry_namespace,
            "                kind = katana::runtime::IndirectDispatchKind::TailJump;\n"
            "                dispatch_class = "
            "katana::runtime::RuntimeDispatchClass::GuardedFallback;\n"
+           "                dispatch_origin = "
+           "katana::runtime::DispatchResolutionOrigin::TableLookup;\n"
            "                diagnostic = false;\n"
            "            } else {\n"
            "                const auto next_event = "
@@ -1209,15 +1413,14 @@ std::string runtime_dispatch_adapter(const std::string& entry_namespace,
            "                kind = katana::runtime::IndirectDispatchKind::TailJump;\n"
            "                dispatch_class = "
            "katana::runtime::RuntimeDispatchClass::GuardedFallback;\n"
+           "                dispatch_origin = "
+           "katana::runtime::DispatchResolutionOrigin::TableLookup;\n"
            "                diagnostic = false;\n"
            "            }\n"
            "        }\n"
            "        const auto selected = katana::runtime::dispatch_indirect(cpu, *active_table,\n"
-           "            {kind, cpu.pc, target, cpu.pr, {cpu.pc, "
-           "katana::runtime::canonical_physical_address(cpu.pc)}, {},\n"
-           "             dispatch_class == katana::runtime::RuntimeDispatchClass::RuntimeOnly\n"
-           "                 ? katana::runtime::DispatchResolutionOrigin::RuntimeOnly\n"
-           "                 : katana::runtime::DispatchResolutionOrigin::TableLookup,\n"
+           "            {kind, dispatch_callsite, target, cpu.pr, dispatch_source, {},\n"
+           "             dispatch_origin,\n"
            "             diagnostic ? active_diagnostics : nullptr, dispatch_class,\n"
             "             active_dispatch_metrics, active_materializer});\n"
            "        const auto selected_block = active_table->resolve(selected.block);\n"
@@ -1226,6 +1429,9 @@ std::string runtime_dispatch_adapter(const std::string& entry_namespace,
            "Block.\");\n"
            "        active_services->begin_executable_block(selected_block->get().variant);\n"
            "        const auto retired_before = cpu.retired_guest_instructions;\n"
+           "        active_exit_source = {selected.diagnostic_target, selected.physical_target};\n"
+           "        active_exit_site_class = "
+           "katana::runtime::DynamicDispatchSiteClass::NotDynamic;\n"
            "        auto exit = selected_block->get().function(cpu, *active_context);\n"
            "        if (cpu.retired_guest_instructions < retired_before)\n"
            "            throw std::runtime_error(\"Gastinstruktionszaehler lief rueckwaerts.\");\n"
@@ -1250,9 +1456,13 @@ std::string runtime_dispatch_adapter(const std::string& entry_namespace,
            "            // RTS latches PR before its delay slot. Follow the resulting guest PC;\n"
            "            // only a nested host-call boundary or the root sentinel ends a chain.\n"
            "            target = cpu.pc;\n"
+           "            dispatch_callsite = exit.source.virtual_address;\n"
+           "            dispatch_source = exit.source;\n"
            "            kind = katana::runtime::IndirectDispatchKind::TailJump;\n"
            "            dispatch_class = "
            "katana::runtime::RuntimeDispatchClass::GuardedFallback;\n"
+           "            dispatch_origin = "
+           "katana::runtime::DispatchResolutionOrigin::TableLookup;\n"
            "            diagnostic = false;\n"
            "            continue;\n"
            "        }\n"
@@ -1261,20 +1471,59 @@ std::string runtime_dispatch_adapter(const std::string& entry_namespace,
            "            exit.kind == katana::runtime::BlockEndKind::InterruptSafepoint ||\n"
            "            exit.kind == katana::runtime::BlockEndKind::Sleep) {\n"
            "            target = cpu.pc;\n"
+           "            dispatch_callsite = exit.source.virtual_address;\n"
+           "            dispatch_source = exit.source;\n"
            "            kind = katana::runtime::IndirectDispatchKind::TailJump;\n"
            "            dispatch_class = "
            "katana::runtime::RuntimeDispatchClass::GuardedFallback;\n"
+           "            dispatch_origin = "
+           "katana::runtime::DispatchResolutionOrigin::TableLookup;\n"
            "            diagnostic = false;\n"
            "            continue;\n"
            "        }\n"
-           "        target = cpu.pc; kind = katana::runtime::IndirectDispatchKind::TailJump;\n"
-           "        dispatch_class = "
-           "katana::runtime::RuntimeDispatchClass::GuardedFallback;\n"
-           "        diagnostic = false;\n"
+           "        const auto continuation =\n"
+           "            katana::runtime::make_indirect_dispatch_continuation(\n"
+           "                exit, active_exit_site_class);\n"
+           "        target = cpu.pc;\n"
+           "        kind = continuation.kind;\n"
+           "        dispatch_callsite = continuation.callsite;\n"
+           "        dispatch_source = continuation.source;\n"
+           "        dispatch_origin = continuation.resolution_origin;\n"
+           "        dispatch_class = continuation.dispatch_class;\n"
+           "        diagnostic = continuation.record_diagnostics;\n"
            "    }\n"
-           "    throw std::runtime_error(\"Runtime-Blockbudget erschoepft.\");\n"
-           "}\n"
-           "} // namespace\n\n"
+            "    throw std::runtime_error(\"Runtime-Blockbudget erschoepft.\");\n"
+            "}\n"
+            "} // namespace\n\n"
+            "void note_block_entry(const std::uint32_t address) noexcept {\n"
+            "    const bool matched = [&]() noexcept {\n";
+    const auto emit_note_router = [&](const auto& self,
+                                      const std::size_t begin,
+                                      const std::size_t end,
+                                      const std::string_view indentation) -> void {
+        if (end - begin == 1u) {
+            output << indentation << "return runtime_dispatch_detail::note_block_entry_shard_"
+                   << shard_symbol(begin) << "(address);\n";
+            return;
+        }
+        const auto middle = begin + (end - begin) / 2u;
+        const auto pivot = dispatch_blocks[middle * dispatch_blocks_per_shard - 1u].address;
+        output << indentation << "if (address <= 0x" << symbol(pivot) << "u) {\n";
+        const auto nested = std::string(indentation) + "    ";
+        self(self, begin, middle, nested);
+        output << indentation << "} else {\n";
+        self(self, middle, end, nested);
+        output << indentation << "}\n";
+    };
+    emit_note_router(emit_note_router, 0u, shard_count, "        ");
+    output << "    }();\n"
+              "    if (matched) return;\n"
+              "    active_exit_source = {address, "
+              "katana::runtime::canonical_physical_address(address)};\n"
+              "    active_exit_kind = katana::runtime::BlockEndKind::Fallthrough;\n"
+              "    active_exit_site_class = "
+              "katana::runtime::DynamicDispatchSiteClass::NotDynamic;\n"
+              "}\n\n"
         << "void static_call(katana::runtime::CpuState& cpu, std::uint32_t target) {\n"
            "    dispatch_chain(cpu, target, katana::runtime::IndirectDispatchKind::Call,\n"
            "        katana::runtime::RuntimeDispatchClass::GuardedFallback, false,\n"
@@ -1312,30 +1561,6 @@ std::string runtime_dispatch_adapter(const std::string& entry_namespace,
            "}\n"
            "void unresolved_jump(katana::runtime::CpuState& cpu, std::uint32_t target) {\n"
            "    katana::runtime::unresolved_jump(cpu, target);\n"
-           "}\n"
-           "void register_executable_block(\n"
-           "    const katana::runtime::RuntimeBlockTable& table,\n"
-           "    katana::runtime::PlatformServices& services,\n"
-           "    std::uint32_t address, std::uint32_t size) {\n"
-           "    const auto registered_handle = table.lookup(address, {});\n"
-           "    if (!registered_handle) throw std::runtime_error(\"Registrierter Block fehlt.\");\n"
-           "    const auto registered = table.resolve(*registered_handle);\n"
-           "    if (!registered) throw std::runtime_error(\"Registrierter Block ist stale.\");\n"
-           "    services.register_executable_block(\n"
-           "        address, size, "
-           "katana::runtime::stable_runtime_block_identity(registered->get()));\n"
-           "}\n"
-           "void append_static_block(\n"
-           "    std::vector<katana::runtime::RuntimeBlock>& blocks,\n"
-           "    std::uint32_t address, std::uint32_t size,\n"
-           "    katana::runtime::BlockEndKind end_kind,\n"
-           "    katana::runtime::BackendBlockFunction function, const char* provenance) {\n"
-           "    katana::runtime::RuntimeBlock block;\n"
-           "    block.virtual_start = address;\n"
-           "    block.physical_origin = katana::runtime::canonical_physical_address(address);\n"
-           "    block.size = size; block.end_kind = end_kind; block.function = function;\n"
-           "    block.provenance = provenance;\n"
-           "    blocks.emplace_back(std::move(block));\n"
            "}\n\n"
         << "RuntimeRunResult run_runtime(katana::runtime::CpuState& cpu,\n"
         << "                             katana::runtime::PlatformServices& services,\n"
@@ -1344,23 +1569,13 @@ std::string runtime_dispatch_adapter(const std::string& entry_namespace,
     output << "    table.bind_code_tracker(services.executable_code_tracker());\n";
     output << "    std::vector<katana::runtime::RuntimeBlock> static_blocks;\n";
     output << "    static_blocks.reserve(" << block_addresses.size() << "u);\n";
-    for (const auto& block : dispatch_blocks) {
-            output << "    append_static_block(static_blocks, 0x" << block.address << "u, "
-                   << block.size << "u, katana::runtime::BlockEndKind::" << block.end_kind
-                   << ", &dispatch_" << block.address << ", \"generated-block-" << block.address
-                   << "\");\n";
-    }
+    for (std::size_t shard = 0u; shard < shard_count; ++shard)
+        output << "    runtime_dispatch_detail::append_static_blocks_shard_"
+               << shard_symbol(shard) << "(static_blocks);\n";
     output << "    static_cast<void>(table.register_static_bulk(std::move(static_blocks)));\n";
-    for (const auto& block : dispatch_blocks) {
-            output << "    register_executable_block(table, services, 0x" << block.address
-                   << "u, " << block.size << "u);\n";
-            if (std::string_view(block.end_kind) != "Return" &&
-                std::string_view(block.end_kind) != "ExceptionReturn" &&
-                std::string_view(block.end_kind) != "Sleep" &&
-                std::string_view(block.end_kind) != "Exception")
-                output << "    services.allow_executable_block_chaining(0x" << block.address
-                       << "u);\n";
-    }
+    for (std::size_t shard = 0u; shard < shard_count; ++shard)
+        output << "    runtime_dispatch_detail::register_executable_blocks_shard_"
+               << shard_symbol(shard) << "(table, services);\n";
     const auto entry = symbol(entry_address);
     output << "    katana::runtime::DispatchDiagnosticRecorder diagnostics;\n"
            << "    katana::runtime::IndirectDispatchMetrics dispatch_metrics;\n"
@@ -1464,7 +1679,8 @@ std::string runtime_dispatch_adapter(const std::string& entry_namespace,
            << "        cpu.pc, services.scheduler_cycle()};\n"
            << "}\n"
            << "} // namespace " << entry_namespace << "\n";
-    return output.str();
+    result.push_back({"code/runtime-dispatch.cpp", output.str()});
+    return result;
 }
 
 std::string root_cmake() {
@@ -1751,12 +1967,11 @@ PortExportResult export_dreamcast_port_project(const PreparedPortProgram& prepar
     provenance.inputs.assign(prepared.inputs.begin(), prepared.inputs.end());
 
     artifacts.push_back({"include/katana_port.hpp", generated_header(entry_namespace)});
-    artifacts.push_back(
-        {"code/runtime-dispatch.cpp",
-         runtime_dispatch_adapter(entry_namespace,
-                                  prepared.program,
-                                  prepared.entry_address,
-                                  options.diagnostic_partial)});
+    auto dispatch_artifacts = runtime_dispatch_artifacts(entry_namespace,
+                                                         prepared.program,
+                                                         prepared.entry_address,
+                                                         options.diagnostic_partial);
+    for (auto& artifact : dispatch_artifacts) artifacts.push_back(std::move(artifact));
     artifacts.push_back({"katana-port.cmake", port_cmake(options.target_name)});
     artifacts.push_back({"metadata/port-project.json",
                          port_metadata(options,

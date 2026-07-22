@@ -92,6 +92,75 @@ int main() {
                     metrics.runtime_only_hits() == 1u && metrics.misses() == 0u,
                 "Gueltiger physischer Runtime-only-Alias wird nicht getrennt gezaehlt.");
 
+        constexpr std::uint32_t terminator = 0x8C0005F0u;
+        constexpr std::uint32_t dynamic_target = 0xAC001000u;
+        static_assert(terminator != dynamic_target);
+        BlockExit dynamic_exit;
+        dynamic_exit.kind = BlockEndKind::DynamicBranch;
+        dynamic_exit.source = {terminator, canonical_physical_address(terminator)};
+        dynamic_exit.target =
+            BlockAddress{dynamic_target, canonical_physical_address(dynamic_target)};
+        const auto continuation = make_indirect_dispatch_continuation(
+            dynamic_exit, DynamicDispatchSiteClass::RuntimeOnly);
+        IndirectDispatchMetrics continuation_metrics;
+        DispatchDiagnosticRecorder continuation_diagnostics;
+        cpu.pc = dynamic_target;
+        const auto continued = dispatch_indirect(
+            cpu,
+            table,
+            {continuation.kind,
+             continuation.callsite,
+             cpu.pc,
+             cpu.pr,
+             continuation.source,
+             variant,
+             continuation.resolution_origin,
+             continuation.record_diagnostics ? &continuation_diagnostics : nullptr,
+             continuation.dispatch_class,
+             &continuation_metrics});
+        const auto continuation_profile =
+            continuation_metrics.runtime_only_sites().find(terminator);
+        require(continued.diagnostic_target == dynamic_target &&
+                    continuation.callsite == terminator &&
+                    continuation.source == dynamic_exit.source &&
+                    continuation.kind == IndirectDispatchKind::TailJump &&
+                    continuation.dispatch_class == RuntimeDispatchClass::RuntimeOnly &&
+                    continuation.resolution_origin == DispatchResolutionOrigin::RuntimeOnly &&
+                    continuation.record_diagnostics && continuation_metrics.hits() == 1u &&
+                    continuation_metrics.runtime_only_hits() == 1u &&
+                    continuation_metrics.runtime_only_site_count() == 1u &&
+                    continuation_profile != continuation_metrics.runtime_only_sites().end() &&
+                    continuation_profile->second.calls == 1u &&
+                    continuation_profile->second.targets.size() == 1u &&
+                    continuation_profile->second.targets.front() == dynamic_target &&
+                    !continuation_metrics.runtime_only_sites().contains(dynamic_target) &&
+                    continuation_diagnostics.events().size() == 1u &&
+                    continuation_diagnostics.events().front().callsite == terminator &&
+                    continuation_diagnostics.events().front().virtual_target == dynamic_target &&
+                    continuation_diagnostics.events().front().origin ==
+                        DispatchResolutionOrigin::RuntimeOnly,
+                "Runtime-only-Fortsetzung verliert Terminator, Ziel oder Site-Profil.");
+
+        dynamic_exit.kind = BlockEndKind::Call;
+        const auto guarded_call = make_indirect_dispatch_continuation(
+            dynamic_exit, DynamicDispatchSiteClass::Guarded);
+        const auto static_call = make_indirect_dispatch_continuation(
+            dynamic_exit, DynamicDispatchSiteClass::NotDynamic);
+        const auto unresolved_call = make_indirect_dispatch_continuation(
+            dynamic_exit, DynamicDispatchSiteClass::Unresolved);
+        require(guarded_call.kind == IndirectDispatchKind::Call &&
+                    guarded_call.dispatch_class == RuntimeDispatchClass::GuardedFallback &&
+                    guarded_call.resolution_origin == DispatchResolutionOrigin::TableLookup &&
+                    guarded_call.record_diagnostics &&
+                    static_call.kind == IndirectDispatchKind::Call &&
+                    static_call.resolution_origin == DispatchResolutionOrigin::StaticProof &&
+                    !static_call.record_diagnostics &&
+                    unresolved_call.kind == IndirectDispatchKind::Call &&
+                    unresolved_call.dispatch_class == RuntimeDispatchClass::GuardedFallback &&
+                    unresolved_call.resolution_origin == DispatchResolutionOrigin::Fallback &&
+                    unresolved_call.record_diagnostics,
+                "Call-Fortsetzung verliert Aufrufart oder Guarded-/Static-Vertrag.");
+
         const auto expect_runtime_miss = [&](const std::uint32_t target,
                                              const DispatchDiagnosticError expected) {
             const auto pc_before = cpu.pc;

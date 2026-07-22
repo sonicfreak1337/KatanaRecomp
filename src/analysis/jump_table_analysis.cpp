@@ -234,6 +234,13 @@ JumpTableSnapshotCache::JumpTableSnapshotCache(const std::size_t capacity) : cap
     entries_.reserve(capacity_);
 }
 
+void JumpTableSnapshotCache::bind_image(const katana::io::ExecutableImage& image) noexcept {
+    if (image_ == &image) return;
+    image_ = &image;
+    order_.clear();
+    entries_.clear();
+}
+
 std::optional<JumpTableAnalysis> JumpTableSnapshotCache::load(const std::string_view key) {
     const auto found = entries_.find(std::string(key));
     if (found == entries_.end()) {
@@ -268,6 +275,7 @@ JumpTableAnalysis analyze_jump_table(const katana::io::ExecutableImage& image,
                                      const std::uint32_t table_address,
                                      const std::size_t entry_count,
                                      JumpTableSnapshotCache* const cache) {
+    if (cache != nullptr) cache->bind_image(image);
     const auto key = snapshot_key(
         image, JumpTableEncoding::Absolute32, dispatch_address, table_address, 0u, entry_count);
     if (cache != nullptr) {
@@ -344,7 +352,8 @@ JumpTableAnalysis analyze_relative_jump_table_impl(const katana::io::ExecutableI
                                                    const std::uint32_t dispatch_address,
                                                    const std::uint32_t table_address,
                                                    const std::uint32_t target_base,
-                                                   const std::size_t entry_count) {
+                                                   const std::size_t entry_count,
+                                                   const bool initial_snapshot_candidates = false) {
     JumpTableAnalysis analysis;
     analysis.dispatch_address = dispatch_address;
     analysis.table_address = table_address;
@@ -364,7 +373,11 @@ JumpTableAnalysis analyze_relative_jump_table_impl(const katana::io::ExecutableI
     }
     const auto* segment = image.find_segment(table_address, static_cast<std::size_t>(byte_count));
     const auto offset = segment != nullptr ? segment->byte_offset(table_address) : std::nullopt;
-    if (segment == nullptr || !segment->permissions.readable || segment->permissions.writable ||
+    const bool writable_snapshot_source =
+        initial_snapshot_candidates && segment != nullptr && segment->permissions.writable &&
+        snapshot_candidate_source(image, *segment);
+    if (segment == nullptr || !segment->permissions.readable ||
+        (segment->permissions.writable && !writable_snapshot_source) ||
         !offset.has_value() || *offset > segment->bytes.size() ||
         byte_count > segment->bytes.size() - *offset) {
         analysis.reason = segment != nullptr && segment->permissions.writable
@@ -389,13 +402,19 @@ JumpTableAnalysis analyze_relative_jump_table_impl(const katana::io::ExecutableI
         }
         entry.target = static_cast<std::uint32_t>(target);
         const auto validation = validate_decode_candidate(image, entry.target);
-        if (!validation.valid()) {
+        if (!validation.valid() ||
+            (initial_snapshot_candidates &&
+             (validation.segment == nullptr ||
+              !snapshot_candidate_source(image, *validation.segment)))) {
             entry.reason = code_address_status_name(validation.status);
+            if (validation.valid()) entry.reason = "target-not-in-initial-snapshot";
             analysis.reason = "table-entry-rejected";
         } else {
             entry.target = validation.resolved_address;
             entry.accepted = true;
-            entry.reason = "bounded-signed-relative-target";
+            entry.reason = initial_snapshot_candidates
+                               ? "snapshot-signed-relative16-target"
+                               : "bounded-signed-relative-target";
         }
         analysis.entries.push_back(std::move(entry));
     }
@@ -403,7 +422,13 @@ JumpTableAnalysis analyze_relative_jump_table_impl(const katana::io::ExecutableI
     for (const auto& entry : analysis.entries)
         analysis.resolved = analysis.resolved && entry.accepted;
     if (analysis.resolved) {
-        analysis.reason = "bounded-signed-relative-table";
+        if (initial_snapshot_candidates) {
+            analysis.aot_candidates_only = true;
+            analysis.evidence = ControlFlowEvidence::GuardedPartial;
+            analysis.reason = "snapshot-signed-relative16-candidates";
+        } else {
+            analysis.reason = "bounded-signed-relative-table";
+        }
     } else if (analysis.reason.empty()) {
         analysis.reason = "table-entry-rejected";
     }
@@ -418,6 +443,7 @@ JumpTableAnalysis analyze_relative_jump_table(const katana::io::ExecutableImage&
                                               const std::uint32_t target_base,
                                               const std::size_t entry_count,
                                               JumpTableSnapshotCache* const cache) {
+    if (cache != nullptr) cache->bind_image(image);
     const auto key = snapshot_key(image,
                                   JumpTableEncoding::SignedRelative16,
                                   dispatch_address,
@@ -462,8 +488,32 @@ recognize_bounded_relative_jump_table(const katana::io::ExecutableImage& image,
     if (!entry_count.has_value()) return std::nullopt;
     const auto table_address = ((table_base.address + 4u) & ~3u) +
                                static_cast<std::uint32_t>(table_base.instruction.displacement);
-    return analyze_relative_jump_table(
-        image, dispatch.address, table_address, dispatch.address + 4u, *entry_count, cache);
+    const auto table_byte_count = *entry_count * 2u;
+    const auto resolved_table = image.resolve_segment_address(table_address, table_byte_count);
+    if (!resolved_table.has_value()) return std::nullopt;
+    auto analysis = analyze_relative_jump_table(
+        image, dispatch.address, *resolved_table, dispatch.address + 4u, *entry_count, cache);
+    if (analysis.reason != "table-segment-writable") return analysis;
+
+    const auto dispatch_address = image.resolve_segment_address(dispatch.address, 2u);
+    const auto* dispatch_segment = dispatch_address.has_value()
+                                       ? image.find_segment(*dispatch_address, 2u)
+                                       : nullptr;
+    const auto* table_segment = resolved_table.has_value()
+                                    ? image.find_segment(*resolved_table, table_byte_count)
+                                    : nullptr;
+    if (dispatch_segment == nullptr || table_segment == nullptr ||
+        !dispatch_segment->permissions.executable || !table_segment->permissions.writable ||
+        !snapshot_candidate_source(image, *dispatch_segment) ||
+        !snapshot_candidate_source(image, *table_segment))
+        return analysis;
+
+    return analyze_relative_jump_table_impl(image,
+                                            dispatch.address,
+                                            *resolved_table,
+                                            dispatch.address + 4u,
+                                            *entry_count,
+                                            true);
 }
 
 std::optional<JumpTableAnalysis>

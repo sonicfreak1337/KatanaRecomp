@@ -10,35 +10,49 @@ AOT gebunden; offen bleiben strukturierte Ladetransaktionen und die vorab
 erzeugte Registry latenter Module. `KR-4849` fuehrt den realen Channel-2-Pfad
 bis TA-EOL fort. Die Wait-Loop-Klassifikation aus `KR-4842` laeuft getrennt.
 
-Der frische Sonic-Adventure-PAL-Port wurde erfolgreich exportiert und aus der
-unveraenderten Original-GDI lokal installiert. P1-/P2-Codealiase erreichen
-denselben nativen Block. Beschreibbare absolute Pointertabellen des garantierten
-Anfangssnapshots liefern nur `RuntimeOnly`-/`GuardedPartial`-AOT-Kandidaten,
-keine erfundenen CFG-Kanten; ihre Ziele sind Basic-Block-Leader und keine
-Funktionsseeds. Die SCANINT1-Wartestelle, der fruehere PR-Blocker und der
-Fixed-Stride-`BSRF`-Stopp sind verlassen. Der neueste budgetierte Lauf erreichte
-345.568.225 Hardwarezyklen und 7.421.380 native Bloecke. Beide GD-ROM-
-Modekommandos schlossen ab und der Gast schrieb in spaetere PVR-Register; der
-Lauf endete erst am fehlenden nativen Inneneinstieg `0x8C654F5C`. TA-Transfers,
-Renderrequests und echte Gastframes blieben null.
+Der neue optimierte Sonic-Adventure-PAL-Port wurde mit zwoelf Jobs in 140,5
+Sekunden exportiert. Er enthaelt 1.856 Funktionen, 37 Codepartitionen und 43
+Dispatchshards bei Portprojektvertrag 23, Runtime-ABI 37 und Backend-
+Interface-ABI 3. Im Portpaket liegen null Retailsektoren. Die unveraenderte
+Original-GDI wurde lokal mit drei Tracks und 521.461 Sektoren installiert; die
+Quelle blieb erhalten. Erst danach wurde der veraltete `gdrom-mode-fix`-Port
+entfernt.
 
-Die Ursache der neuen Front ist eine allgemeine, speicherabgeleitete `BSRF`-
-Fixed-Stride-Handlerinsel. Die neue statische Erkennung bereitet eine eindeutig
-maximale Folge aus mindestens vier gleichmaessigen `RTS`-/Delay-Slot-Handlern
-und dem obligatorischen terminalen `BRA`-Slot nur als `RuntimeOnly`-Kandidaten
-vor. Das live geladene Ziel bleibt autoritativ; statische CFG-Kanten oder
-Funktionen werden nicht erfunden. Der PAL-Audit erkennt beide Dispatches und
-alle Inselziele einschliesslich des bisherigen Stopps. Export und Produktlauf
-haben die Laufzeitkorrektheit dieses Vertrags bestaetigt. Der aktuelle P0 ist
-nun die allgemeine AOT-/Materializerklassifikation des spaeter erreichten
-Inneneinstiegs; PVR-Register-, Timing-, DMA- und Completionluecken bleiben
-parallel im Audit offen.
+Der 30-Sekunden-Produktlauf blieb ueber 312.939.023 Gastzyklen und 1.000.000
+Rootdispatches stabil. Der alte fehlende Inneneinstieg `0x8C654F5C` tritt nicht
+mehr auf. Im kontrollierten 100-Millionen-Zyklen-Snapshot laeuft `IP.BIN` nativ
+als AOT und erzeugt 48.471 Runtime-only-Treffer ohne Fehler, Fallback oder
+Materialisierung; GD-ROM, TA und PVR sind an dieser fruehen Grenze noch null.
+Der 320-Millionen-Zyklen-Snapshot erreicht Spielecode, zwei GD-ROM-Kommandos
+und einen spaeten PVR-Registerwrite. Alle 761.011 Dispatchereignisse bleiben
+fehlerfrei; TA-Transfer, Renderrequest und Gastframe bleiben null.
+
+Der fuehrende Dispatchhotspot `0x8C6658D0 -> 0x8C65247E` mit 696.053 Aufrufen
+ist ein endlicher 4-Byte-Kopier-/Initialisierungsloop: `r6=4`, das Ziel liegt in
+`r14`, die Quelle auf dem Stack und `r14` wird je Iteration um vier erhoeht. Das
+ist kein neuer fehlender Zielblock. Die zugrunde liegenden begrenzten
+`MOV.W`-/`BRAF`-Relative16-Tabellen liefern 87 Eintraege, 76 eindeutige
+Kandidaten und 73 im vorherigen Port fehlende Ziele. Der live geladene Dispatch
+bleibt `RuntimeOnly`; feste CFG-Kanten und Funktionsseeds werden nicht erfunden.
+Imagegebundener Snapshotcache, P2-Aliasaufloesung und exakte
+Fortsetzungsmetadaten ueber lokale AOT-Blockketten sichern diesen Vertrag.
 
 Der Export baut CFG-, Kanten- und Writer-Slice-Indizes einmalig auf, reicht die
 konfigurierte Hostparallelitaet bis zum Projektschreiber durch und hasht grosse
-Provenienzeingaben unter Windows ueber BCrypt in 4-MiB-Chunks. Stabile,
-datenschutzneutrale `KATANA_PORT_SUBPHASE`-Marker trennen Disc-Load, Analyse,
-Lowering, Optimierung, Emit und Writer. Ein erster Gastframe wird weiterhin
+Provenienzeingaben unter Windows ueber BCrypt in 4-MiB-Chunks. Statische
+Dispatchregistries werden allgemein in maximal 512 Bloecke grosse Shards
+zerlegt. Jeder Owner besitzt pro Shard genau einen Wrapper; ein balancierter
+Router waehlt den Shard. Beim aktuellen PAL-Port schrumpft die zentrale
+`runtime-dispatch.cpp` von 36.703.886 Byte/525.996 Zeilen auf 34.879 Byte/607
+Zeilen; der groesste der 43 Shards misst 393.454 Byte. Eine synthetische
+513-Block-Regression prueft zwei Shards samt Entfernung veralteter Dateien; das
+vollstaendige synthetische Ninja-/MSVC-Projekt kompiliert und linkt in 15
+Sekunden. Die sechs fokussierten Regressionstargets bestehen 6/6. Der CLI-
+Hostbuild verwendet `KATANA_HOST_BUILD_JOBS`, ersatzweise die
+Codegen-Workerzahl oder die gemeldete CPU-Threadzahl.
+
+`KR-4848` bleibt fuer strukturierte Disc-Ladetransaktionen und die Registry
+latenter nativer Module offen. Ein erster Gastframe wird weiterhin
 ausdruecklich nicht behauptet.
 Naechstes Gate: `v0.48.0` - Boot- und Frame-Integration
 Weitere interne Gates: `v0.48.0` und `v0.49.0` Alpha-Candidate
@@ -46,7 +60,7 @@ Erster oeffentlicher Release: `v0.50.0` Alpha
 
 ## Aktiver P0: Sonic-Adventure-PAL bis zum ersten echten Gastframe
 
-Stand 2026-07-22: `KR-4841`, `KR-4843`, `KR-4844`, `KR-4845` und `KR-4846`
+Stand 2026-07-23: `KR-4841`, `KR-4843`, `KR-4844`, `KR-4845` und `KR-4846`
 sind abgeschlossen. Das verbindliche Produktziel bleibt XenonRecomp-artig:
 `IP.BIN` und BootExecutable werden statisch aus SH-4 in nativen PC-Code
 rekompiliert; die Zielruntime stellt nur typisierte Dreamcast-
@@ -111,9 +125,10 @@ Nachweis. Der gemeinsame Proof-Pump trennt Gastbeweis und erfolgreichen
 Host-Present. Die vier fokussierten PVR-/Framebuffer-/Hostvideo-/Portexport-
 Regressionen bestehen mit 12 Buildjobs 4/4 in 0,66 Sekunden. Die kombinierte
 fokussierte Validierung des gesamten Blocks besteht mit 12 Buildjobs 12/12.
-Das konsolidierte 180-Test-Gate und ein neuer privater PAL-Lauf folgen erst nach
-dem zusammenhaengenden Kernblock. Ein erster Sonic-Adventure-Gastframe wird
-nicht behauptet.
+Das konsolidierte 180-Test-Gate folgt weiterhin erst nach dem
+zusammenhaengenden Kernblock. Der jetzt vorgezogene private PAL-Lauf ist
+Diagnoseevidenz und ersetzt dieses Gate nicht. Ein erster
+Sonic-Adventure-Gastframe wird nicht behauptet.
 
 Der allgemeine Disc-Hardwareauditor erfasst fuer den aktuellen privaten
 PAL-Build 55.504 erreichbare SH-4-Instruktionen in 815 Funktionen. Es bleiben
@@ -243,8 +258,8 @@ MMIO-Zugriff liegt im aktiven OCRAM; der fruehere Abbruch nach 12 Gastzyklen
 ist damit beseitigt. TA/PVR und ein echter Gastframe bleiben fuer den laengeren
 Folgelauf weiterhin offen.
 
-Runtime-ABI 36, BIOS-ABI 9 und Portprojektvertrag 22 bilden den kumulativen
-v0.48-Stand ab.
+Runtime-ABI 37, Backend-Interface-ABI 3, BIOS-ABI 9 und Portprojektvertrag 23
+bilden den kumulativen v0.48-Stand ab.
 PlatformServices-ABI 9 versioniert das invalidierungs- und timinggesicherte lokale
 Blockchaining.
 
@@ -259,9 +274,9 @@ typisierter BIOS-Menue-Ausgang mit Register- und letztem GD-ROM-Zustand, statt
 einen Emulatorersatz-Neustart auszufuehren. Ein begrenztes BIOS-Ereignislog
 wird auf diesem Pfad automatisch ausgegeben. Konsolenprofil und PAL/NTSC/VGA
 sind explizit und werden nicht aus `JUE` abgeleitet. Diese Runde ist
-implementiert und kompiliert; die zusammenhaengende synthetische Validierung
-und der anschliessende einzelne private PAL-Lauf stehen noch aus. Ein erster
-Gastframe wird weiterhin nicht behauptet.
+implementiert und kompiliert; die folgenden fokussierten Regressionen und
+privaten PAL-Laeufe haben den Pfad inzwischen ohne Dispatchfehler fortgesetzt.
+Ein erster Gastframe wird weiterhin nicht behauptet.
 
 Die erste fokussierte `KR-4846`-Ergaenzung schloss Abbruch, getrennte INIT-/
 RESET-Semantik, aktiven Laufwerksstatus und den tatsaechlich unterstuetzten
@@ -383,7 +398,9 @@ mehrere AOT-Uebersetzungseinheiten schrieben gleichzeitig dieselbe Ziel-PDB und 
 `C1041` abbrechen. Runtime und generierte AOT-Bibliothek verwenden deshalb nun explizit `/FS`;
 der erneute Produktbuild ist erfolgreich. Er veroeffentlichte 896 Funktionen in 14
 AOT-Partitionen und drei Installer-Recipe-Tracks bei weiterhin null Retailsektoren im
-verteilbaren Paket. Der lokale Disc-Installations- und Laufzeitnachweis steht noch aus.
+verteilbaren Paket. Der lokale Disc-Installations- und Laufzeitnachweis stand
+fuer diesen damaligen Build noch aus und wurde in den folgenden Runden
+nachgeholt.
 
 Sonic Adventure PAL erreicht reproduzierbar mehr als 5,1 Millionen native
 AOT-Bloecke, weiterhin ohne Gastframe. Die erste belegte Ausnahme bei
@@ -485,6 +502,18 @@ der unveraenderte Gast bis 345.568.225 Hardwarezyklen und 7.421.380 native
 Bloecke, absolvierte beide GD-ROM-Kommandos und schrieb spaetere PVR-Register.
 Der naechste typisierte Fehler ist ein fehlender nativer Inneneinstieg bei
 `0x8C654F5C`. TA-Transfers, Renderrequests und echte Gastframes bleiben null.
+Der Inneneinstieg stammt aus einer begrenzten `MOV.W`-/`BRAF`-Relative16-
+Tabelle. Der statische Audit findet ueber fuenf Tabellen 87 Eintraege, 76
+eindeutige Ziele und 73 Kandidaten, die im vorherigen Port fehlten. Der
+Anfangssnapshot darf sie nun als native Blockleader bereitstellen, ohne den
+live geladenen `RuntimeOnly`-Dispatch in eine feste Kante umzudeuten.
+Imagegebundener Snapshotcache, physische P2-Aliasaufloesung und die exakte
+Fortsetzungsmetadatenuebergabe ueber lokale Blockketten sichern den Vertrag.
+Der dazugehoerige neue Export, die lokale Installation aus der erhaltenen
+Original-GDI und die budgetierten Produktlaeufe sind abgeschlossen. Der alte
+Fehler bei `0x8C654F5C` ist verschwunden; 761.011 Dispatchereignisse bleiben
+fehlerfrei. Der neue Haupthotspot ist als endlicher 4-Byte-Kopier-/
+Initialisierungsloop klassifiziert, nicht als fehlender Zielblock.
 Der offene Audit richtet sich titelunabhaengig auf AOT-, Register-, Timing-,
 DMA-, FIFO- und Completionvertraege; feste Spieladressen werden nicht zum
 Produktvertrag.
@@ -492,7 +521,10 @@ Produktvertrag.
 Die Eingabeprovenienz verwendet unter Windows jetzt den nativen BCrypt-SHA-256-
 Pfad mit 4-MiB-Chunks. Zusammen mit den einmalig aufgebauten Analyseindizes und
 der parallelen Projektausgabe bleibt der private Export ein budgetierter
-Werkzeuglauf statt einer seriellen Dauerprobe.
+Werkzeuglauf statt einer seriellen Dauerprobe. Der CLI-Hostbuild kann seine
+Workerzahl ueber `KATANA_HOST_BUILD_JOBS` setzen und den Windows-Port in einem
+getrennten Ninja-Build parallel erzeugen; der primaere Host verwendet zwoelf
+Jobs.
 
 Die PAL-GDI und alle Trackquellen bleiben unveraendert; veraltete
 Portausgaben werden nur nach erfolgreichem Ersatz entfernt.
@@ -815,7 +847,9 @@ Hostsmokes sind nicht ausreichend von Gastfortschritt getrennt.
 Die Controllergrundlage existiert in Maple und Hostruntime. Der generierte Port
 pollt Eingaben jedoch erst nach dem synchronen Gastlauf. Controllerunterstuetzung
 braucht deshalb vor allem eine echte verschraenkte Runtime-Schleife, nicht noch
-eine weitere Taste in einem Enum.
+eine weitere Taste in einem Enum. `KR-4814` und die private interaktive Sitzung
+`KR-4914` gehoeren jetzt zu v0.48, beginnen aber strikt erst nach dem echten
+Gastframe aus `KR-4850`.
 
 Die GUI besitzt intern mehrere Seiten und strukturierte Jobereignisse, zeigt
 unter Windows aber fast nur eine Fliesstextzusammenfassung, zwei Balken und ein
@@ -986,12 +1020,17 @@ KR-4611 bis KR-4618
 
 v0.48 Native Disc Boot und erster echter Gastframe:
 KR-4831 und KR-4841
--> KR-4842 bis KR-4848 sowie KR-4911 bis KR-4913
--> KR-4849 und KR-4915 -> KR-4850 -> KR-4851 bis KR-4854
+-> KR-4843 -> KR-4844 -> KR-4845 -> KR-4846 -> KR-4847
+KR-4841 -> KR-4842 -> KR-4911 -> KR-4912
+KR-4843 und KR-4912 -> KR-4848 -> KR-4913
+KR-4847 und KR-4913 -> KR-4849 -> KR-4915 -> KR-4850
+KR-4850 -> KR-4851
+KR-4850 -> KR-4814 -> KR-4914
+KR-4851 und KR-4914 -> KR-4852 bis KR-4854
 
-v0.49 Controller-, Port-, Harness- und GUI-Integration:
-KR-4801 bis KR-4803, KR-4811 bis KR-4814 und KR-4821 bis KR-4824
--> KR-4914 und KR-4916
+v0.49 Port-, Harness- und GUI-Integration:
+KR-4801 bis KR-4803, KR-4811 bis KR-4813 und KR-4821 bis KR-4824
+-> KR-4916
 -> KR-4901 bis KR-4903 -> KR-4904 -> KR-4905
 
 v0.50:

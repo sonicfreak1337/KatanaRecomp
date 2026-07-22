@@ -4,6 +4,59 @@
 
 ### Geaendert
 
+- Begrenzte `MOV.W`-/`BRAF`-Relative16-Tabellen aus einem gueltigen
+  `EntryPointStraightLineQuiescent`-Anfangssnapshot liefern nun auch bei
+  beschreibbarem Tabellenspeicher endliche native AOT-Kandidaten. Der statische
+  Sonic-Adventure-PAL-Audit weist 87 Eintraege mit 76 eindeutigen Zielen aus;
+  73 davon fehlten im vorherigen Port. Der live geladene Dispatch bleibt
+  weiterhin `RuntimeOnly`: Die Kandidaten erzeugen weder feste CFG-Kanten noch
+  Funktionsseeds. Der Snapshotcache ist an die jeweilige `ExecutableImage`-
+  Instanz gebunden und kann Beweise nicht mehr zwischen Images weiterreichen;
+  P2-Tabellenadressen werden vor der Analyse auf ihre physische P1-Herkunft
+  aufgeloest. Der frische Produktlauf bestaetigt den Vertrag: Der alte Fehler
+  bei `0x8C654F5C` tritt nicht mehr auf; ein Gastframe wird weiterhin nicht
+  behauptet.
+- Externe Dispatchfortsetzungen bewahren jetzt auch ueber mehrere lokal
+  verkettete AOT-Bloecke die exakte tatsaechliche Terminatorquelle, Callsite,
+  Call-/Tail-Jump-Art und Siteklasse. Diagnosen und der folgende Lookup werden
+  dadurch dem letzten wirklich ausgefuehrten Block statt dem Wrapper-Einstieg
+  zugeordnet. Runtime-ABI 37, Backend-Interface-ABI 3 und
+  Portprojektvertrag 23 versionieren diesen Vertrag.
+- Grosse statische Dispatchregistries werden deterministisch in Shards mit
+  hoechstens 512 Bloecken zerlegt. Jeder Owner erhaelt pro Shard genau einen
+  Wrapper; ein balancierter Router waehlt den zustaendigen Shard. Beim
+  Sonic-Adventure-PAL-Port schrumpft die zentrale `runtime-dispatch.cpp` damit
+  von 36.703.886 Byte und 525.996 Zeilen auf 34.879 Byte und 607 Zeilen. Die
+  43 Shards bleiben bei maximal 393.454 Byte. Eine synthetische
+  513-Block-Regression erzwingt zwei Shards und prueft die Entfernung veralteter
+  Sharddateien; das vollstaendige synthetische Ninja-/MSVC-Projekt kompiliert
+  und linkt in 15 Sekunden. Die sechs fokussierten Regressionstargets bestehen
+  6/6.
+- Der CLI-Hostbuild nutzt standardmaessig die verfuegbare Hostparallelitaet und
+  akzeptiert `KATANA_HOST_BUILD_JOBS`; ersatzweise gelten
+  `KATANA_PORT_CODEGEN_JOBS` und danach die gemeldete CPU-Threadzahl. Unter
+  Windows kann der Portbuild mit `KATANA_HOST_BUILD_GENERATOR=Ninja` und
+  `KATANA_HOST_BUILD_MAKE_PROGRAM` ohne Visual-Studio-Generator-Kollision in
+  ein getrenntes `build-ninja`-Verzeichnis wechseln. Der primaere 12-Kern-
+  Entwicklungsrechner baut damit bis zu zwoelf Hostjobs parallel. Der frische
+  optimierte PAL-Export erzeugt 1.856 Funktionen, 37 Codepartitionen und 43
+  Dispatchshards in 140,5 Sekunden.
+- Der neue PAL-Port enthaelt bei Portprojektvertrag 23, Runtime-ABI 37 und
+  Backend-Interface-ABI 3 weiterhin null Retailsektoren. Die unveraenderte
+  Original-GDI wurde lokal mit drei Tracks und 521.461 Sektoren installiert;
+  die Quelle blieb erhalten und der veraltete `gdrom-mode-fix`-Port wurde erst
+  nach erfolgreichem Ersatz entfernt. Ein 30-Sekunden-Lauf blieb ueber
+  312.939.023 Gastzyklen und 1.000.000 Rootdispatches stabil. Der kontrollierte
+  100-Millionen-Zyklen-Snapshot fuehrt `IP.BIN` als AOT aus und meldet 48.471
+  native Runtime-only-Treffer ohne Fehler, Fallback oder Materialisierung; an
+  dieser fruehen Grenze sind GD-ROM, TA und PVR noch inaktiv. Bei 320 Millionen
+  Zyklen erreicht der Gast Spielecode, zwei GD-ROM-Kommandos und einen spaeten
+  PVR-Registerwrite. Alle 761.011 Dispatchereignisse bleiben fehlerfrei; TA,
+  Render und Gastframe bleiben null. Der fuehrende Hotspot
+  `0x8C6658D0 -> 0x8C65247E` mit 696.053 Aufrufen ist ein endlicher
+  4-Byte-Kopier-/Initialisierungsloop (`r6=4`, Ziel `r14`, Quelle Stack,
+  `r14+=4`) und kein fehlender Zielblock. `KR-4848` bleibt wegen der weiterhin
+  offenen strukturierten Disc-Ladetransaktionen und latenten Module offen.
 - Der native Portexport skaliert seine Analyse- und Ausgabephase nun mit der
   tatsaechlichen Arbeitsmenge statt globale Strukturen pro Funktion oder
   Sprungstelle neu aufzubauen. Bulk-Lowering erzeugt die globale CFG nur noch
@@ -15,7 +68,8 @@
   `KATANA_PORT_CODEGEN_JOBS`, schreibt Artefakte parallel und kopiert grosse
   Quellstrings nicht mehr unnoetig. Eine 4.096-Funktionen-Regression sowie die
   CFG-Join-/Partitionsregressionen sichern die Skalierung. Zwei veraltete
-  Runtime-Testassertionen folgen wieder dem bereits geltenden Runtime-ABI 36.
+  Runtime-Testassertionen folgen wieder dem fuer diesen Teilblock damals
+  geltenden Runtime-ABI 36.
   Die nachfolgende Funktionsanalyse kanonisiert Block-, Callee- und Sitevektoren
   nur noch einmal pro Funktion; die CFG-Optimierung findet erreichbare Bloecke
   ueber einen Adressindex. CLI-Subphasen markieren Disc-Load, Analyse,
@@ -145,18 +199,20 @@
   Ereignissen; falsche Richtung und Cycle-Steal enden sichtbar als Fehler.
   Die Direct-Texture-Ziele `0x11`/`0x13` benoetigen fuer mehrteilige Transfers
   noch einen eigenen fortschreitenden Zielvertrag und bleiben als generische
-  P1-Luecke offen. Runtime-ABI 36, BIOS-ABI 9 und Portprojektvertrag 22
-  versionieren diesen kumulativen Block. Ein Sonic-Adventure-Gastframe ist
+  P1-Luecke offen. Runtime-ABI 37, Backend-Interface-ABI 3, BIOS-ABI 9 und
+  Portprojektvertrag 23 versionieren inzwischen den kumulativen Block. Ein
+  Sonic-Adventure-Gastframe ist
   damit noch nicht nachgewiesen.
 - Die v0.48-Roadmap ist auf `Native Disc Boot und erster echter Gastframe`
   fokussiert. Die neuen Tasks `KR-4841` bis `KR-4854` bilden Clean-Room-
   Provenienz, Bootdiagnostik, P2-Bootstrap, Gastzeit, BIOS/GD-ROM, Runtimecode,
   TA/PVR, echten Scanoutframe, Hotpath, konsolidierte Validierung und das
-  nutzerfreigegebene Gate ab. Port-, Harness-, Controller- und GUI-Integration
-  liegt in v0.49. Der moderne, geraeteagnostische Controllervertrag und die
-  interaktive Sitzung beginnen auch dort strikt erst nach dem echten Gastframe.
+  nutzerfreigegebene Gate ab. Der moderne, geraeteagnostische
+  Controllervertrag und die private interaktive Sitzung gehoeren nun zu v0.48,
+  beginnen aber weiterhin strikt erst nach dem echten Gastframe. Die uebrige
+  Port-, Harness- und GUI-Integration liegt in v0.49.
   `KR-4804`/`KR-4805` sind durch `KR-4853`/`KR-4854` ersetzt.
-  Ein Tag bleibt bis zur ausdruecklichen Nutzerfreigabe ausgeschlossen.
+  v0.48 wird ohne Tag intern freigegeben; Tags beginnen erst mit der Alpha.
 - HLE-GDI-Ports rekompilieren nun auch den 16 Sektoren grossen, von der Disc
   gelieferten Dreamcast-Systembootstrap als eigenes initiales Programmsegment.
   Die Runtime bindet ihn bytegenau an die physische Herkunft `0x0C008000`, startet

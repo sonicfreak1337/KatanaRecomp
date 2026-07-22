@@ -311,6 +311,33 @@ const char* runtime_dispatch_class_name(const RuntimeDispatchClass value) noexce
     return "guarded-fallback";
 }
 
+IndirectDispatchContinuation make_indirect_dispatch_continuation(
+    const BlockExit& exit,
+    const DynamicDispatchSiteClass site_class) noexcept {
+    const bool runtime_only = site_class == DynamicDispatchSiteClass::RuntimeOnly;
+    const auto origin = [site_class] {
+        switch (site_class) {
+        case DynamicDispatchSiteClass::NotDynamic:
+            return DispatchResolutionOrigin::StaticProof;
+        case DynamicDispatchSiteClass::Guarded:
+            return DispatchResolutionOrigin::TableLookup;
+        case DynamicDispatchSiteClass::RuntimeOnly:
+            return DispatchResolutionOrigin::RuntimeOnly;
+        case DynamicDispatchSiteClass::Unresolved:
+            return DispatchResolutionOrigin::Fallback;
+        }
+        return DispatchResolutionOrigin::Fallback;
+    }();
+    return {exit.kind == BlockEndKind::Call ? IndirectDispatchKind::Call
+                                            : IndirectDispatchKind::TailJump,
+            exit.source.virtual_address,
+            exit.source,
+            origin,
+            runtime_only ? RuntimeDispatchClass::RuntimeOnly
+                         : RuntimeDispatchClass::GuardedFallback,
+            site_class != DynamicDispatchSiteClass::NotDynamic};
+}
+
 IndirectDispatchResult dispatch_indirect(CpuState& cpu,
                                          RuntimeBlockTable& table,
                                          const IndirectDispatchRequest& request) {

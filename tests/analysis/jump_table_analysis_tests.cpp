@@ -4,6 +4,7 @@
 #include <cstdlib>
 #include <iostream>
 #include <string>
+#include <tuple>
 #include <vector>
 
 namespace {
@@ -82,6 +83,59 @@ int main() {
                 cached_first.entries.size() == cached_second.entries.size() &&
                 snapshot_cache.counters().misses == 1u && snapshot_cache.counters().hits == 1u,
             "Begrenzter Jump-Table-Snapshotcache verliert Ergebnis oder Hitstatus.");
+
+    katana::io::ExecutableImage writable_cache_image;
+    writable_cache_image.add_segment({".text",
+                                      0x1000u,
+                                      0u,
+                                      8u,
+                                      katana::io::SegmentKind::Code,
+                                      {true, false, true},
+                                      {0x09u, 0x00u, 0x09u, 0x00u,
+                                       0x09u, 0x00u, 0x09u, 0x00u}});
+    writable_cache_image.add_segment(
+        {".jumptable",
+         0x2000u,
+         8u,
+         12u,
+         katana::io::SegmentKind::Data,
+         {true, true, false},
+         {0x00u, 0x10u, 0x00u, 0x00u, 0x04u, 0x10u, 0x00u, 0x00u,
+          0x01u, 0x10u, 0x00u, 0x00u}});
+    const auto writable_cache_result = katana::analysis::analyze_jump_table(
+        writable_cache_image, 0x1010u, 0x2000u, 2u, &snapshot_cache);
+    require(!writable_cache_result.resolved &&
+                writable_cache_result.reason == "table-segment-writable" &&
+                snapshot_cache.counters().misses == 2u &&
+                snapshot_cache.counters().hits == 1u,
+            "Snapshotcache uebernahm einen Immutable-Beweis in ein anderes RW-Image.");
+
+    katana::io::ExecutableImage non_executable_cache_image;
+    non_executable_cache_image.add_segment({".text",
+                                            0x1000u,
+                                            0u,
+                                            8u,
+                                            katana::io::SegmentKind::Data,
+                                            {true, false, false},
+                                            {0x09u, 0x00u, 0x09u, 0x00u,
+                                             0x09u, 0x00u, 0x09u, 0x00u}});
+    non_executable_cache_image.add_segment(
+        {".jumptable",
+         0x2000u,
+         8u,
+         12u,
+         katana::io::SegmentKind::Data,
+         {true, false, false},
+         {0x00u, 0x10u, 0x00u, 0x00u, 0x04u, 0x10u, 0x00u, 0x00u,
+          0x01u, 0x10u, 0x00u, 0x00u}});
+    const auto non_executable_cache_result = katana::analysis::analyze_jump_table(
+        non_executable_cache_image, 0x1010u, 0x2000u, 2u, &snapshot_cache);
+    require(!non_executable_cache_result.resolved &&
+                !non_executable_cache_result.entries.empty() &&
+                !non_executable_cache_result.entries.front().accepted &&
+                snapshot_cache.counters().misses == 3u &&
+                snapshot_cache.counters().hits == 1u,
+            "Snapshotcache uebernahm Zielvalidierung in ein anderes nicht-ausfuehrbares Image.");
 
     const auto rejected = katana::analysis::analyze_jump_table(image, 0x1010u, 0x2000u, 3u);
     require(!rejected.resolved, "Ungerades Sprungziel wurde als sicher markiert.");
@@ -426,7 +480,10 @@ int main() {
     bt_lines[7].instruction.branch_register = 4u;
     const auto bt_table =
         katana::analysis::recognize_bounded_relative_jump_table(relative, bt_lines, 7u);
-    require(bt_table.has_value() && bt_table->resolved && bt_table->entries.size() == 2u,
+    require(bt_table.has_value() && bt_table->resolved && !bt_table->aot_candidates_only &&
+                bt_table->evidence == katana::analysis::ControlFlowEvidence::Unresolved &&
+                bt_table->reason == "bounded-signed-relative-table" &&
+                bt_table->entries.size() == 2u,
             "BT-begrenzte relative Tabelle wurde nicht erkannt.");
 
     auto bf_lines = std::vector<katana::sh4::DisassemblyLine>{
@@ -463,6 +520,173 @@ int main() {
     require(mutable_auto.has_value() && !mutable_auto->resolved &&
                 mutable_auto->reason == "table-segment-writable",
             "Automatisch erkannte RWX-Relative16-Tabelle wurde statisch eingefroren.");
+
+    const auto snapshot_relative_image = [](const katana::io::ImageSourceKind source_kind,
+                                            const katana::io::ImageLoadPhase load_phase,
+                                            const katana::io::InitialSnapshotPolicy policy,
+                                            const bool snapshot_targets) {
+        std::vector<std::uint8_t> bytes(0x108u, 0u);
+        const auto put_u16 = [&bytes](const std::size_t offset,
+                                      const std::uint16_t value) {
+            bytes[offset] = static_cast<std::uint8_t>(value);
+            bytes[offset + 1u] = static_cast<std::uint8_t>(value >> 8u);
+        };
+        // Der BRAF liegt bei 0x0E, sein relativer Basiswert ist daher 0x12.
+        put_u16(0x100u, snapshot_targets ? 0x002Eu : 0x01EEu); // 0x40 / 0x200
+        put_u16(0x102u, snapshot_targets ? 0x0032u : 0x01F2u); // 0x44 / 0x204
+
+        katana::io::ExecutableImage result;
+        result.set_initial_snapshot_policy(policy);
+        result.add_segment({".snapshot-relative16",
+                            0u,
+                            0u,
+                            bytes.size(),
+                            katana::io::SegmentKind::Mixed,
+                            {true, true, true},
+                            std::move(bytes),
+                            source_kind,
+                            load_phase,
+                            "synthetic-snapshot-relative16"});
+        if (!snapshot_targets) {
+            result.add_segment({".runtime-targets",
+                                0x200u,
+                                0x108u,
+                                8u,
+                                katana::io::SegmentKind::Code,
+                                {true, false, true},
+                                {0x0Bu, 0x00u, 0x09u, 0x00u,
+                                 0x0Bu, 0x00u, 0x09u, 0x00u},
+                                katana::io::ImageSourceKind::RuntimeMemory,
+                                katana::io::ImageLoadPhase::RuntimeModule,
+                                "synthetic-runtime-targets"});
+        }
+        return result;
+    };
+
+    const auto snapshot_relative = snapshot_relative_image(
+        katana::io::ImageSourceKind::DiscBootFile,
+        katana::io::ImageLoadPhase::Initial,
+        katana::io::InitialSnapshotPolicy::EntryPointStraightLineQuiescent,
+        true);
+    const auto snapshot_relative_table =
+        katana::analysis::recognize_bounded_relative_jump_table(
+            snapshot_relative, bt_lines, 7u);
+    require(snapshot_relative_table.has_value() && snapshot_relative_table->resolved &&
+                snapshot_relative_table->aot_candidates_only &&
+                snapshot_relative_table->evidence ==
+                    katana::analysis::ControlFlowEvidence::GuardedPartial &&
+                snapshot_relative_table->encoding ==
+                    katana::analysis::JumpTableEncoding::SignedRelative16 &&
+                snapshot_relative_table->reason ==
+                    "snapshot-signed-relative16-candidates" &&
+                snapshot_relative_table->entries.size() == 2u &&
+                snapshot_relative_table->entries[0].target == 0x40u &&
+                snapshot_relative_table->entries[1].target == 0x44u,
+            "Begrenzte RWX-Relative16-Snapshotwerte wurden nicht als reine AOT-Kandidaten "
+            "erkannt.");
+
+    auto aliased_relative_lines = bt_lines;
+    for (auto& candidate : aliased_relative_lines) candidate.address += 0xAC000000u;
+    aliased_relative_lines[2].target_address = 0xAC000040u;
+    std::vector<std::uint8_t> aliased_relative_bytes(0x108u, 0u);
+    aliased_relative_bytes[0x40u] = 0x0Bu;
+    aliased_relative_bytes[0x42u] = 0x09u;
+    aliased_relative_bytes[0x44u] = 0x0Bu;
+    aliased_relative_bytes[0x46u] = 0x09u;
+    aliased_relative_bytes[0x100u] = 0x2Eu;
+    aliased_relative_bytes[0x102u] = 0x32u;
+    katana::io::ExecutableImage aliased_relative;
+    aliased_relative.set_address_model(katana::io::ImageAddressModel::Sh4DirectMapped);
+    aliased_relative.set_initial_snapshot_policy(
+        katana::io::InitialSnapshotPolicy::EntryPointStraightLineQuiescent);
+    aliased_relative.add_segment({".aliased-relative16",
+                                  0x8C000000u,
+                                  0u,
+                                  aliased_relative_bytes.size(),
+                                  katana::io::SegmentKind::Mixed,
+                                  {true, true, true},
+                                  std::move(aliased_relative_bytes),
+                                  katana::io::ImageSourceKind::DiscBootFile,
+                                  katana::io::ImageLoadPhase::Initial,
+                                  "synthetic-aliased-relative16"});
+    const auto aliased_relative_table =
+        katana::analysis::recognize_bounded_relative_jump_table(
+            aliased_relative, aliased_relative_lines, 7u);
+    require(aliased_relative_table.has_value() && aliased_relative_table->resolved &&
+                aliased_relative_table->aot_candidates_only &&
+                aliased_relative_table->table_address == 0x8C000100u &&
+                aliased_relative_table->entries.size() == 2u &&
+                aliased_relative_table->entries[0].target == 0x8C000040u &&
+                aliased_relative_table->entries[1].target == 0x8C000044u,
+            "P2-Relative16-Tabelle wurde nicht ueber ihre physische Herkunft erkannt.");
+
+    katana::io::ExecutableImage writable_data_relative;
+    writable_data_relative.set_initial_snapshot_policy(
+        katana::io::InitialSnapshotPolicy::EntryPointStraightLineQuiescent);
+    writable_data_relative.add_segment({".snapshot-code",
+                                        0u,
+                                        0u,
+                                        0x80u,
+                                        katana::io::SegmentKind::Code,
+                                        {true, true, true},
+                                        std::vector<std::uint8_t>(0x80u, 0u),
+                                        katana::io::ImageSourceKind::DiscBootFile,
+                                        katana::io::ImageLoadPhase::Initial,
+                                        "synthetic-snapshot-code"});
+    writable_data_relative.add_segment({".snapshot-table",
+                                        0x100u,
+                                        0x80u,
+                                        4u,
+                                        katana::io::SegmentKind::Data,
+                                        {true, true, false},
+                                        {0x2Eu, 0x00u, 0x32u, 0x00u},
+                                        katana::io::ImageSourceKind::DiscBootFile,
+                                        katana::io::ImageLoadPhase::Initial,
+                                        "synthetic-snapshot-table"});
+    const auto writable_data_table =
+        katana::analysis::recognize_bounded_relative_jump_table(
+            writable_data_relative, bt_lines, 7u);
+    require(writable_data_table.has_value() && writable_data_table->resolved &&
+                writable_data_table->aot_candidates_only &&
+                writable_data_table->reason ==
+                    "snapshot-signed-relative16-candidates",
+            "Eine zulaessige beschreibbare Daten-Tabelle verlangte faelschlich Execute-Rechte.");
+
+    for (const auto& [source_kind, load_phase, policy] :
+         std::array{std::tuple{katana::io::ImageSourceKind::DiscBootFile,
+                              katana::io::ImageLoadPhase::Initial,
+                              katana::io::InitialSnapshotPolicy::ImmutableOnly},
+                    std::tuple{katana::io::ImageSourceKind::RuntimeMemory,
+                              katana::io::ImageLoadPhase::Initial,
+                              katana::io::InitialSnapshotPolicy::EntryPointStraightLineQuiescent},
+                    std::tuple{katana::io::ImageSourceKind::DiscBootFile,
+                              katana::io::ImageLoadPhase::RuntimeModule,
+                              katana::io::InitialSnapshotPolicy::EntryPointStraightLineQuiescent}}) {
+        const auto rejected_image =
+            snapshot_relative_image(source_kind, load_phase, policy, true);
+        const auto rejected_table =
+            katana::analysis::recognize_bounded_relative_jump_table(
+                rejected_image, bt_lines, 7u);
+        require(rejected_table.has_value() && !rejected_table->resolved &&
+                    !rejected_table->aot_candidates_only &&
+                    rejected_table->reason == "table-segment-writable",
+                "Unzulaessige RWX-Relative16-Quelle wurde als Snapshotvertrag akzeptiert.");
+    }
+
+    const auto runtime_target_image = snapshot_relative_image(
+        katana::io::ImageSourceKind::DiscBootFile,
+        katana::io::ImageLoadPhase::Initial,
+        katana::io::InitialSnapshotPolicy::EntryPointStraightLineQuiescent,
+        false);
+    const auto runtime_target_table =
+        katana::analysis::recognize_bounded_relative_jump_table(
+            runtime_target_image, bt_lines, 7u);
+    require(runtime_target_table.has_value() && !runtime_target_table->resolved &&
+                runtime_target_table->reason == "table-entry-rejected" &&
+                !runtime_target_table->entries.empty() &&
+                runtime_target_table->entries[0].reason ==
+                    "target-not-in-initial-snapshot",
+            "Ein Relative16-Ziel aus RuntimeMemory wurde als Initial-Snapshotcode akzeptiert.");
 
     std::cout << "KR-1804/KR-4712 Jump-Table-Analyse erfolgreich.\n";
     return EXIT_SUCCESS;

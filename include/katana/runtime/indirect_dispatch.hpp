@@ -15,6 +15,25 @@ class DemandBlockMaterializer;
 
 enum class IndirectDispatchKind : std::uint8_t { Call, TailJump, Return };
 enum class RuntimeDispatchClass : std::uint8_t { GuardedFallback, RuntimeOnly };
+enum class DynamicDispatchSiteClass : std::uint8_t {
+    NotDynamic,
+    Guarded,
+    RuntimeOnly,
+    Unresolved
+};
+
+struct IndirectDispatchContinuation {
+    IndirectDispatchKind kind = IndirectDispatchKind::TailJump;
+    std::uint32_t callsite = 0u;
+    BlockAddress source;
+    DispatchResolutionOrigin resolution_origin = DispatchResolutionOrigin::TableLookup;
+    RuntimeDispatchClass dispatch_class = RuntimeDispatchClass::GuardedFallback;
+    bool record_diagnostics = false;
+};
+
+[[nodiscard]] IndirectDispatchContinuation make_indirect_dispatch_continuation(
+    const BlockExit& exit,
+    DynamicDispatchSiteClass site_class) noexcept;
 
 enum class RuntimeTargetStability : std::uint8_t {
     NeverHit,

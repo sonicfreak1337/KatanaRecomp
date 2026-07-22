@@ -14,6 +14,7 @@
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <iomanip>
 #include <iostream>
 #include <map>
 #include <sstream>
@@ -132,14 +133,14 @@ std::vector<std::uint8_t> boot_track(const bool immediate_trap = false) {
         record(bytes, directory, data_lba + 20u, payload_size, std::string(1u, '\1'), true);
     record(bytes, directory, data_lba + 21u, 24u, "BOOT.BIN;1", false);
     constexpr std::array<std::uint8_t, 24u> normal_program = {
-        0x22u, 0x4Fu, // sts.l pr,@-r15: preserve the program-root sentinel
-        0x0Au, 0xE0u, // mov #10,r0
-        0x03u, 0x00u, // bsrf r0 -> 0x8C010012
+        0x00u, 0xA0u, // bra 0x8C010004: force a locally chainable static entry block
+        0x22u, 0x4Fu, // delay slot: sts.l pr,@-r15, preserve the root sentinel
+        0x08u, 0xE0u, // mov #8,r0
+        0x03u, 0x00u, // bsrf r0 -> 0x8C010012 from a second, dynamic call block
         0x07u, 0xE2u, // delay slot: mov #7,r2
         0x26u, 0x4Fu, // lds.l @r15+,pr: restore the program-root sentinel
         0x0Bu, 0x00u, // caller rts
         0x09u, 0x00u, // delay-slot nop
-        0x09u, 0x00u, // padding nop
         0x09u, 0x00u, // padding nop
         0x05u, 0xE1u, // callee: mov #5,r1
         0x0Bu, 0x00u, // callee rts
@@ -194,6 +195,20 @@ std::string read_text(const std::filesystem::path& path) {
     return {std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>()};
 }
 
+std::string hex_symbol(const std::uint32_t address) {
+    std::ostringstream output;
+    output << std::hex << std::uppercase << std::setfill('0') << std::setw(8) << address;
+    return output.str();
+}
+
+std::size_t occurrences(const std::string_view text, const std::string_view needle) {
+    std::size_t count = 0u;
+    for (auto offset = text.find(needle); offset != std::string_view::npos;
+         offset = text.find(needle, offset + needle.size()))
+        ++count;
+    return count;
+}
+
 void disabled_product_materializer_regression() {
     using namespace katana::runtime;
     CpuState cpu;
@@ -209,7 +224,11 @@ void disabled_product_materializer_regression() {
     request.kind = IndirectDispatchKind::TailJump;
     request.callsite = 0x1000u;
     request.target = 0x2000u;
+    request.source = {request.callsite, canonical_physical_address(request.callsite)};
+    request.resolution_origin = DispatchResolutionOrigin::RuntimeOnly;
     request.dispatch_class = RuntimeDispatchClass::RuntimeOnly;
+    DispatchDiagnosticRecorder diagnostics;
+    request.diagnostics = &diagnostics;
     request.metrics = &metrics;
     request.materializer = &materializer;
     bool typed_abort = false;
@@ -219,11 +238,24 @@ void disabled_product_materializer_regression() {
         typed_abort = error.metrics_json().find("\"error\":\"unknown-target\"") !=
                       std::string::npos;
     }
-    require(typed_abort && materializer.last_failure() == MaterializationFailure::Disabled &&
+    const auto profile = metrics.runtime_only_sites().find(request.callsite);
+    require(typed_abort && request.callsite != request.target &&
+                materializer.last_failure() == MaterializationFailure::Disabled &&
                 materializer.metrics().requests == 1u && materializer.metrics().misses == 1u &&
                 materializer.metrics().first_failure == MaterializationFailure::Disabled &&
                 materializer.metrics().first_failure_target == request.target &&
-                metrics.misses() == 1u && blocks.size() == 0u,
+                metrics.misses() == 1u && metrics.runtime_only_misses() == 1u &&
+                metrics.runtime_only_site_count() == 1u &&
+                profile != metrics.runtime_only_sites().end() && profile->second.calls == 1u &&
+                profile->second.misses == 1u && profile->second.targets.size() == 1u &&
+                profile->second.targets.front() == request.target &&
+                !metrics.runtime_only_sites().contains(request.target) &&
+                diagnostics.events().size() == 1u &&
+                diagnostics.events().front().callsite == request.callsite &&
+                diagnostics.events().front().source_virtual == request.callsite &&
+                diagnostics.events().front().virtual_target == request.target &&
+                diagnostics.events().front().origin == DispatchResolutionOrigin::RuntimeOnly &&
+                blocks.size() == 0u,
             "Produktmaterializer setzt ungebundenen Code nicht typisiert und ohne Ausfuehrung ab.");
 }
 
@@ -274,7 +306,7 @@ int run_test(const int argc, char* argv[]) {
                 runtime_cpu.dbr == katana::runtime::dreamcast_bios_handoff_dbr &&
                 runtime_cpu.pr == katana::runtime::dreamcast_bios_handoff_pr && runtime_cpu.t &&
                 runtime_cpu.privileged_mode() && runtime_cpu.interrupt_mask() == 15u &&
-                runtime_cpu.memory.read_u16(0x8C010000u) == 0x4F22u &&
+                runtime_cpu.memory.read_u16(0x8C010000u) == 0xA000u &&
                 runtime_state.runtime_blocks && runtime_state.runtime_blocks->size() == 0u &&
                 runtime_state.system_asic && runtime_state.interrupt_router &&
                 runtime_state.cache_control && runtime_state.io_ports &&
@@ -571,6 +603,14 @@ int run_test(const int argc, char* argv[]) {
     observed_progress.clear();
     const auto first = export_dreamcast_port_project(gdi, output, options);
     const auto generated_before = snapshot(output / "generated");
+    std::string runtime_dispatch_shards;
+    std::size_t runtime_dispatch_shard_count = 0u;
+    for (const auto& [path, content] : generated_before) {
+        if (!path.starts_with("code/runtime-dispatch-shard-") || !path.ends_with(".cpp"))
+            continue;
+        runtime_dispatch_shards += content;
+        ++runtime_dispatch_shard_count;
+    }
     const auto unit =
         std::find_if(generated_before.begin(), generated_before.end(), [](const auto& entry) {
             return entry.first.starts_with("code/unit-00000-") && entry.first.ends_with(".cpp");
@@ -645,8 +685,10 @@ int run_test(const int argc, char* argv[]) {
     require(entry_metadata_count == 3u && p2_pc_relative_literal,
             "Mehrteiliger Portexport verliert P2-Einstieg oder PC-relativen P2-Literalzugriff.");
     for (const auto& path : {"include/katana_port.hpp",
-                             "code/runtime-dispatch.cpp",
-                             "metadata/port-project.json",
+                              "include/runtime-dispatch-internal.hpp",
+                              "code/runtime-dispatch.cpp",
+                              "code/runtime-dispatch-shard-00000.cpp",
+                              "metadata/port-project.json",
                              "metadata/provenance.json",
                              "metadata/source-map.json",
                              "metadata/cfg.json",
@@ -657,6 +699,21 @@ int run_test(const int argc, char* argv[]) {
         require(generated_before.contains(path),
                 "Portexport verliert Artefakt: " + std::string(path));
     }
+    require(runtime_dispatch_shard_count == 1u &&
+                generated_before.at("CMakeLists.txt")
+                        .find("code/runtime-dispatch-shard-00000.cpp") != std::string::npos &&
+                generated_before.at(".katana-generated-artifacts")
+                        .find("code/runtime-dispatch-shard-00000.cpp") != std::string::npos &&
+                generated_before.at("code/runtime-dispatch.cpp")
+                        .find("runtime_dispatch_detail::append_static_blocks_shard_00000") !=
+                    std::string::npos &&
+                generated_before.at("code/runtime-dispatch.cpp").find("generated-block-") ==
+                    std::string::npos &&
+                occurrences(runtime_dispatch_shards,
+                            "BlockExit dispatch_owner_8C010000(") == 1u &&
+                occurrences(runtime_dispatch_shards, "&dispatch_owner_8C010000") == 3u,
+            "Runtime-Dispatch ist nicht deterministisch geshardet oder dupliziert Wrapper pro "
+            "Block.");
     require(
         generated_before.at("katana-port.cmake").find("add_executable(synthetic_game") !=
                 std::string::npos &&
@@ -680,9 +737,9 @@ int run_test(const int argc, char* argv[]) {
                 std::string::npos &&
             generated_before.at("code/runtime-dispatch.cpp")
                     .find("candidate.instructions = 1u") == std::string::npos &&
-            generated_before.at("code/runtime-dispatch.cpp")
+            runtime_dispatch_shards
                     .find("generated-block-AC008300") != std::string::npos &&
-            generated_before.at("code/runtime-dispatch.cpp")
+            runtime_dispatch_shards
                     .find("register_executable_block(table, services, 0xAC008300u") !=
                 std::string::npos &&
             generated_before.at("metadata/port-project.json")
@@ -699,26 +756,26 @@ int run_test(const int argc, char* argv[]) {
             generated_before.at("metadata/port-project.json")
                     .find("\"unbound_code_policy\":\"typed-materialization-error\"") !=
                 std::string::npos &&
-            generated_before.at("code/runtime-dispatch.cpp").find("generated-block-8C010000") !=
+            runtime_dispatch_shards.find("generated-block-8C010000") !=
                 std::string::npos &&
-            generated_before.at("code/runtime-dispatch.cpp")
+            runtime_dispatch_shards
                     .find("register_executable_block(table, services, 0x8C010000u") !=
                 std::string::npos &&
-            generated_before.at("code/runtime-dispatch.cpp")
+            runtime_dispatch_shards
                     .find("services.allow_executable_block_chaining(") != std::string::npos &&
             generated_before.at("code/runtime-dispatch.cpp")
                     .find("executed_dispatch_blocks >= block_budget") != std::string::npos &&
             generated_before.at("code/runtime-dispatch.cpp").find("KATANA_PORT_BLOCK_PROGRESS") !=
                 std::string::npos &&
-            generated_before.at("code/runtime-dispatch.cpp")
-                    .find("append_static_block(static_blocks, 0x8C010000u") != std::string::npos &&
-            generated_before.at("code/runtime-dispatch.cpp").find("static_blocks.push_back({") ==
+            runtime_dispatch_shards
+                    .find("append_static_block(blocks, 0x8C010000u") != std::string::npos &&
+            runtime_dispatch_shards.find("static_blocks.push_back({") ==
                 std::string::npos &&
-            generated_before.at("code/runtime-dispatch.cpp")
+            runtime_dispatch_shards
                     .find("if (const auto registered_handle = table.lookup(0x8C010000u") ==
                 std::string::npos &&
-            generated_before.at("code/runtime-dispatch.cpp")
-                    .find("8u, katana::runtime::BlockEndKind::Call") != std::string::npos &&
+            runtime_dispatch_shards
+                    .find("6u, katana::runtime::BlockEndKind::Call") != std::string::npos &&
             generated_before.at("code/runtime-dispatch.cpp")
                     .find("SLEEP besitzt kein Wakeup-Ereignis") != std::string::npos &&
             generated_before.at("code/runtime-dispatch.cpp").find("Schedulerbudget erschoepft") !=
@@ -734,7 +791,10 @@ int run_test(const int argc, char* argv[]) {
             generated_before.at("code/runtime-dispatch.cpp")
                     .find("cpu.pc == program_return_sentinel") != std::string::npos &&
             generated_before.at("code/runtime-dispatch.cpp")
-                    .find("target = cpu.pc;\n            kind = "
+                    .find("target = cpu.pc;\n"
+                          "            dispatch_callsite = exit.source.virtual_address;\n"
+                          "            dispatch_source = exit.source;\n"
+                          "            kind = "
                           "katana::runtime::IndirectDispatchKind::TailJump") !=
                 std::string::npos &&
             generated_before.at("code/runtime-dispatch.cpp")
@@ -922,20 +982,42 @@ int run_test(const int argc, char* argv[]) {
                 root_begin_marker != std::string::npos && progress_marker < root_dispatch_marker &&
                 root_dispatch_marker < root_begin_marker,
             "Portfortschritt liegt nicht am kontrollierten Root-Dispatch-Safepoint.");
+    const auto callsite_state_marker =
+        runtime_dispatch.find("std::uint32_t dispatch_callsite = cpu.pc");
+    const auto attributed_request_marker = runtime_dispatch.find(
+        "{kind, dispatch_callsite, target, cpu.pr, dispatch_source", callsite_state_marker);
+    const auto site_reset_marker = runtime_dispatch.find(
+        "active_exit_site_class = katana::runtime::DynamicDispatchSiteClass::NotDynamic",
+        attributed_request_marker);
+    const auto continuation_marker = runtime_dispatch.find(
+        "make_indirect_dispatch_continuation", site_reset_marker);
+    const auto continuation_callsite_marker = runtime_dispatch.find(
+        "dispatch_callsite = continuation.callsite", continuation_marker);
+    require(callsite_state_marker != std::string::npos &&
+                attributed_request_marker != std::string::npos &&
+                site_reset_marker != std::string::npos &&
+                continuation_marker != std::string::npos &&
+                continuation_callsite_marker != std::string::npos &&
+                callsite_state_marker < attributed_request_marker &&
+                attributed_request_marker < site_reset_marker &&
+                site_reset_marker < continuation_marker &&
+                continuation_marker < continuation_callsite_marker,
+            "Dynamische Portkette verliert Terminator-Callsite oder RuntimeOnly-Klasse.");
     const auto require_chain_registration = [&](const std::string_view end_kind,
                                                 const bool expected) {
         const auto marker = ", katana::runtime::BlockEndKind::" + std::string(end_kind);
-        const auto marker_position = runtime_dispatch.find(marker);
+        const auto marker_position = runtime_dispatch_shards.find(marker);
         require(marker_position != std::string::npos,
                 "Portfixture besitzt keine Endklasse " + std::string(end_kind) + ".");
-        const auto address_begin = runtime_dispatch.rfind("0x", marker_position);
-        const auto address_end = runtime_dispatch.find('u', address_begin);
+        const auto address_begin = runtime_dispatch_shards.rfind("0x", marker_position);
+        const auto address_end = runtime_dispatch_shards.find('u', address_begin);
         require(address_begin != std::string::npos && address_end != std::string::npos,
                 "Portfixture verliert die Blockadresse vor " + std::string(end_kind) + ".");
-        const auto address = runtime_dispatch.substr(address_begin, address_end - address_begin);
+        const auto address =
+            runtime_dispatch_shards.substr(address_begin, address_end - address_begin);
         const auto registration =
             "services.allow_executable_block_chaining(" + address + "u)";
-        require((runtime_dispatch.find(registration) != std::string::npos) == expected,
+        require((runtime_dispatch_shards.find(registration) != std::string::npos) == expected,
                 "Lokales Chaining behandelt Endklasse " + std::string(end_kind) +
                     " nicht als Hostgrenze.");
     };
@@ -1022,6 +1104,30 @@ int run_test(const int argc, char* argv[]) {
     runtime_only_resolution.reason = "synthetic-runtime-contract";
     runtime_only_analysis.resolved_edges.clear();
     const auto runtime_only_program = katana::ir::lower_program(runtime_only_analysis);
+    const katana::ir::BasicBlock* runtime_only_block = nullptr;
+    const katana::ir::BasicBlock* runtime_only_predecessor = nullptr;
+    for (const auto& function : runtime_only_program) {
+        for (const auto& block : function.blocks) {
+            const auto site = std::find_if(
+                block.instructions.begin(), block.instructions.end(), [&](const auto& instruction) {
+                    return instruction.source_address ==
+                           runtime_only_resolution.instruction_address;
+                });
+            if (site != block.instructions.end()) runtime_only_block = &block;
+        }
+    }
+    require(runtime_only_block != nullptr,
+            "Synthetische Runtime-only-Stelle besitzt keinen IR-Block.");
+    for (const auto& function : runtime_only_program) {
+        for (const auto& block : function.blocks) {
+            if (std::find(block.successors.begin(),
+                          block.successors.end(),
+                          runtime_only_block->start_address) != block.successors.end())
+                runtime_only_predecessor = &block;
+        }
+    }
+    require(runtime_only_predecessor != nullptr,
+            "Runtime-only-Fixture besitzt keinen statisch chainbaren Vorgaengerblock.");
     const auto runtime_only_output = fixture.root / "runtime-only-port";
     static_cast<void>(export_dreamcast_port_project({guarded_image,
                                                      runtime_only_analysis,
@@ -1035,14 +1141,150 @@ int run_test(const int argc, char* argv[]) {
                                                     options));
     const auto runtime_only_sources = snapshot(runtime_only_output / "generated");
     std::string runtime_only_text;
+    std::string runtime_only_dispatch_shards;
     for (const auto& [path, content] : runtime_only_sources)
-        if (path.starts_with("code/unit-")) runtime_only_text += content;
+        if (path.starts_with("code/unit-"))
+            runtime_only_text += content;
+        else if (path.starts_with("code/runtime-dispatch-shard-"))
+            runtime_only_dispatch_shards += content;
+    const auto block_symbol = hex_symbol(runtime_only_block->start_address);
+    const auto note_function = runtime_only_dispatch_shards.find("bool note_block_entry_shard_");
+    const auto mapping_begin =
+        runtime_only_dispatch_shards.find("case 0x" + block_symbol + "u:", note_function);
+    const auto mapping_end = runtime_only_dispatch_shards.find("return true;", mapping_begin);
+    const auto mapping = mapping_begin != std::string::npos && mapping_end != std::string::npos
+                             ? runtime_only_dispatch_shards.substr(mapping_begin,
+                                                                   mapping_end - mapping_begin)
+                             : std::string{};
+    const auto site_symbol = hex_symbol(runtime_only_resolution.instruction_address);
+    const auto expected_source =
+        "active_exit_source = {0x" + site_symbol +
+        "u, katana::runtime::canonical_physical_address(0x" + site_symbol + "u)}";
+    const auto predecessor_symbol = hex_symbol(runtime_only_predecessor->start_address);
+    const auto predecessor_case =
+        runtime_only_text.find("case 0x" + predecessor_symbol + "u: {");
+    const auto predecessor_note = runtime_only_text.find(
+        "note_block_entry(0x" + predecessor_symbol + "u)", predecessor_case);
+    const auto local_chain = runtime_only_text.find(
+        "services->can_chain_executable_block(cpu.pc)) continue", predecessor_note);
+    const auto runtime_only_case =
+        runtime_only_text.find("case 0x" + block_symbol + "u: {", local_chain);
+    const auto runtime_only_note = runtime_only_text.find(
+        "note_block_entry(0x" + block_symbol + "u)", runtime_only_case);
     require(runtime_only_text.find("runtime_only_jump") != std::string::npos &&
+                predecessor_case != std::string::npos &&
+                predecessor_note != std::string::npos && local_chain != std::string::npos &&
+                runtime_only_case != std::string::npos &&
+                runtime_only_note != std::string::npos && predecessor_case < predecessor_note &&
+                predecessor_note < local_chain && local_chain < runtime_only_case &&
+                runtime_only_case < runtime_only_note &&
+                runtime_only_text.find("note_block_entry(0x" + block_symbol + "u)") !=
+                    std::string::npos &&
+                !mapping.empty() &&
+                mapping.find("DynamicDispatchSiteClass::RuntimeOnly") != std::string::npos &&
+                mapping.find("BlockEndKind::Call") != std::string::npos &&
+                mapping.find(expected_source) != std::string::npos &&
+                runtime_only_dispatch_shards.find("kind, active_exit_source") !=
+                    std::string::npos &&
                 runtime_only_sources.at("metadata/port-project.json")
                         .find("\"runtime_only_control_flow\":1") != std::string::npos &&
                 runtime_only_sources.at("metadata/port-project.json")
                         .find("\"unresolved_control_flow\":0") != std::string::npos,
             "Portexport verliert den validierenden Runtime-only-Vertrag.");
+
+    const auto make_shard_program = [](const std::size_t count) {
+        constexpr std::uint32_t base = katana::platform::dreamcast_disc_boot_address;
+        katana::ir::Function function;
+        function.entry_address = base;
+        function.blocks.reserve(count);
+        for (std::size_t index = 0u; index < count; ++index) {
+            const auto address = base + static_cast<std::uint32_t>(index * 2u);
+            katana::ir::Instruction instruction;
+            instruction.source_address = address;
+            instruction.original_opcode = 0x0009u;
+            instruction.original_operation = katana::ir::Operation::Nop;
+            instruction.operation = katana::ir::Operation::Nop;
+            instruction.widths = katana::ir::operation_operand_widths(instruction.operation);
+            instruction.status_effects =
+                katana::ir::instruction_status_effects(instruction.operation);
+            instruction.memory_effects =
+                katana::ir::instruction_memory_effects(instruction.operation);
+            instruction.accumulator_effects =
+                katana::ir::operation_accumulator_effects(instruction.operation);
+            katana::ir::BasicBlock block;
+            block.start_address = address;
+            block.instructions.push_back(instruction);
+            if (index + 1u != count) block.successors.push_back(address + 2u);
+            function.blocks.push_back(std::move(block));
+        }
+        return std::vector<katana::ir::Function>{std::move(function)};
+    };
+    katana::io::ExecutableImage shard_image(gdi);
+    katana::io::ImageSegment shard_segment;
+    shard_segment.name = "dispatch-shard-fixture";
+    shard_segment.virtual_address = katana::platform::dreamcast_disc_boot_address;
+    shard_segment.memory_size = 2048u;
+    shard_segment.kind = katana::io::SegmentKind::Code;
+    shard_segment.permissions = {true, false, true};
+    shard_segment.bytes.resize(static_cast<std::size_t>(shard_segment.memory_size));
+    for (std::size_t offset = 0u; offset < shard_segment.bytes.size(); offset += 2u)
+        shard_segment.bytes[offset] = 0x09u;
+    shard_segment.source_kind = katana::io::ImageSourceKind::DiscBootFile;
+    shard_segment.load_phase = katana::io::ImageLoadPhase::Initial;
+    shard_image.add_segment(std::move(shard_segment));
+    shard_image.add_entry_point(katana::platform::dreamcast_disc_boot_address);
+    katana::analysis::ControlFlowAnalysisResult shard_analysis;
+    const auto shard_output = fixture.root / "dispatch-shard-port";
+    auto shard_program = make_shard_program(513u);
+    static_cast<void>(export_dreamcast_port_project(
+        {shard_image,
+         shard_analysis,
+         shard_program,
+         guarded_inputs,
+         katana::platform::dreamcast_disc_boot_address,
+         katana::platform::dreamcast_disc_boot_address,
+         24u,
+         "dispatch-shard-fixture"},
+        shard_output,
+        options));
+    const auto shard_sources = snapshot(shard_output / "generated");
+    const auto& shard_core = shard_sources.at("code/runtime-dispatch.cpp");
+    const auto& shard_zero = shard_sources.at("code/runtime-dispatch-shard-00000.cpp");
+    const auto& shard_one = shard_sources.at("code/runtime-dispatch-shard-00001.cpp");
+    require(!shard_sources.contains("code/runtime-dispatch-shard-00002.cpp") &&
+                shard_core.find("if (address <= 0x8C0103FEu)") != std::string::npos &&
+                shard_zero.find("case 0x8C0103FEu:") != std::string::npos &&
+                shard_zero.find("case 0x8C010400u:") == std::string::npos &&
+                shard_one.find("case 0x8C010400u:") != std::string::npos &&
+                occurrences(shard_zero, "append_static_block(blocks,") == 512u &&
+                occurrences(shard_one, "append_static_block(blocks,") == 1u &&
+                occurrences(shard_zero, "BlockExit dispatch_owner_8C010000(") == 1u &&
+                occurrences(shard_one, "BlockExit dispatch_owner_8C010000(") == 1u &&
+                shard_sources.at("CMakeLists.txt")
+                        .find("code/runtime-dispatch-shard-00001.cpp") != std::string::npos &&
+                shard_sources.at(".katana-generated-artifacts")
+                        .find("code/runtime-dispatch-shard-00001.cpp") != std::string::npos,
+            "513 Bloecke werden nicht an der deterministischen 512er-Shardgrenze getrennt.");
+    shard_program = make_shard_program(512u);
+    const auto shrunk_shard_export = export_dreamcast_port_project(
+        {shard_image,
+         shard_analysis,
+         shard_program,
+         guarded_inputs,
+         katana::platform::dreamcast_disc_boot_address,
+         katana::platform::dreamcast_disc_boot_address,
+         24u,
+         "dispatch-shard-fixture"},
+        shard_output,
+        options);
+    const auto shrunk_shard_sources = snapshot(shard_output / "generated");
+    require(shrunk_shard_export.removed_files >= 1u &&
+                !shrunk_shard_sources.contains("code/runtime-dispatch-shard-00001.cpp") &&
+                shrunk_shard_sources.at("CMakeLists.txt")
+                        .find("code/runtime-dispatch-shard-00001.cpp") == std::string::npos &&
+                shrunk_shard_sources.at(".katana-generated-artifacts")
+                        .find("code/runtime-dispatch-shard-00001.cpp") == std::string::npos,
+            "Geschrumpfter Portexport entfernt veraltete Runtime-Dispatch-Shards nicht.");
 
     {
         std::ofstream user(output / "src" / "notes.txt", std::ios::trunc);
@@ -1098,8 +1340,8 @@ int run_test(const int argc, char* argv[]) {
     }
 
     auto incomplete_track = boot_track();
-    incomplete_track[payload_offset(21u, 2u)] = 0x09u;
-    incomplete_track[payload_offset(21u, 3u)] = 0x00u;
+    incomplete_track[payload_offset(21u, 4u)] = 0x09u;
+    incomplete_track[payload_offset(21u, 5u)] = 0x00u;
     write_binary(fixture.root / "disc" / "high.bin", incomplete_track);
     const auto incomplete_output = fixture.root / "incomplete-port";
     static_cast<void>(export_dreamcast_port_project(gdi, incomplete_output, options));

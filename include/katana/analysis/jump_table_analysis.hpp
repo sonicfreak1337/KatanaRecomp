@@ -59,12 +59,14 @@ struct JumpTableCacheCounters {
 class JumpTableSnapshotCache final {
   public:
     explicit JumpTableSnapshotCache(std::size_t capacity = 128u);
+    void bind_image(const katana::io::ExecutableImage& image) noexcept;
     [[nodiscard]] std::optional<JumpTableAnalysis> load(std::string_view key);
     void store(std::string key, JumpTableAnalysis analysis);
     [[nodiscard]] const JumpTableCacheCounters& counters() const noexcept;
     [[nodiscard]] std::size_t size() const noexcept;
 
   private:
+    const katana::io::ExecutableImage* image_ = nullptr;
     std::size_t capacity_ = 0u;
     std::vector<std::string> order_;
     std::unordered_map<std::string, JumpTableAnalysis> entries_;

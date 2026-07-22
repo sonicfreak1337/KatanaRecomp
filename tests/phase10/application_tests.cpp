@@ -32,6 +32,31 @@ void require(const bool condition, const std::string& message) {
     }
 }
 
+std::optional<std::string> environment_value(const char* name) {
+#ifdef _WIN32
+    char* value = nullptr;
+    std::size_t value_size = 0u;
+    if (_dupenv_s(&value, &value_size, name) != 0 || value == nullptr) return std::nullopt;
+    std::string result(value);
+    std::free(value);
+    return result;
+#else
+    const auto* value = std::getenv(name);
+    if (value == nullptr) return std::nullopt;
+    return std::string(value);
+#endif
+}
+
+void set_environment_value(const char* name, const std::optional<std::string>& value) {
+#ifdef _WIN32
+    if (_putenv_s(name, value ? value->c_str() : "") != 0)
+        throw std::runtime_error("Testumgebung konnte nicht gesetzt werden.");
+#else
+    const auto result = value ? ::setenv(name, value->c_str(), 1) : ::unsetenv(name);
+    if (result != 0) throw std::runtime_error("Testumgebung konnte nicht gesetzt werden.");
+#endif
+}
+
 template <typename Function> void require_failure(Function&& function, const std::string& message) {
     try {
         function();
@@ -203,6 +228,12 @@ int main() {
                 inspection.size == 6u && inspection.sha256.size() == 64u,
             "Raw-Quellinspektion verliert Format, portable Anzeige oder Identitaet.");
 
+    const auto original_host_build_jobs = environment_value("KATANA_HOST_BUILD_JOBS");
+    const auto original_codegen_jobs = environment_value("KATANA_PORT_CODEGEN_JOBS");
+    const auto original_cmake_parallel = environment_value("CMAKE_BUILD_PARALLEL_LEVEL");
+    set_environment_value("KATANA_HOST_BUILD_JOBS", std::string("2"));
+    set_environment_value("KATANA_PORT_CODEGEN_JOBS", std::string("257"));
+    set_environment_value("CMAKE_BUILD_PARALLEL_LEVEL", std::string("not-a-number"));
     std::string expected_identity;
     for (const auto kind : {app::JobKind::Validate,
                             app::JobKind::Analyze,
@@ -232,6 +263,25 @@ int main() {
                         std::string::npos,
                 "Job und JSON verlieren die kanonische Werkzeugversion.");
     }
+    set_environment_value("KATANA_HOST_BUILD_JOBS", original_host_build_jobs);
+    set_environment_value("KATANA_PORT_CODEGEN_JOBS", original_codegen_jobs);
+    set_environment_value("CMAKE_BUILD_PARALLEL_LEVEL", original_cmake_parallel);
+
+    set_environment_value("KATANA_HOST_BUILD_JOBS", std::string("257"));
+    set_environment_value("KATANA_PORT_CODEGEN_JOBS", std::string("2"));
+    const auto invalid_host_jobs = service.execute({"invalid-host-jobs",
+                                                    app::JobKind::Build,
+                                                    manifest_path,
+                                                    fixture.root / "invalid-host-jobs",
+                                                    "0.40.0-dev"});
+    set_environment_value("KATANA_HOST_BUILD_JOBS", original_host_build_jobs);
+    set_environment_value("KATANA_PORT_CODEGEN_JOBS", original_codegen_jobs);
+    require(invalid_host_jobs.state == app::JobState::Failed &&
+                invalid_host_jobs.failure_category == app::JobFailureCategory::Build &&
+                !invalid_host_jobs.diagnostics.empty() &&
+                invalid_host_jobs.diagnostics.back().message.find("KATANA_HOST_BUILD_JOBS") !=
+                    std::string::npos,
+            "Hostbuild akzeptiert mehr als 256 Jobs oder ignoriert die dedizierte Variable.");
 
     auto unsupported_profile = raw_manifest(raw);
     unsupported_profile.fallback_policy = io::ProjectFallbackPolicy::Interpreter;
@@ -447,6 +497,9 @@ int main() {
                 gdi_inspection.tracks[2].descriptor_line == 4u,
             "GDI-Projekt oder Trackinspektor verliert Rollen, Reihenfolge oder Zeilenprovenienz.");
     std::vector<app::JobEvent> gdi_events;
+    set_environment_value("KATANA_HOST_BUILD_JOBS", std::nullopt);
+    set_environment_value("KATANA_PORT_CODEGEN_JOBS", std::string("2"));
+    set_environment_value("CMAKE_BUILD_PARALLEL_LEVEL", std::string("not-a-number"));
     const auto gdi_job =
         service.execute({"gdi-build",
                          app::JobKind::Build,
@@ -455,6 +508,9 @@ int main() {
                          "0.40.0-dev"},
                         {},
                         [&](const app::JobEvent& event) { gdi_events.push_back(event); });
+    set_environment_value("KATANA_HOST_BUILD_JOBS", original_host_build_jobs);
+    set_environment_value("KATANA_PORT_CODEGEN_JOBS", original_codegen_jobs);
+    set_environment_value("CMAKE_BUILD_PARALLEL_LEVEL", original_cmake_parallel);
     require(
         gdi_job.state == app::JobState::Completed &&
             std::find(gdi_job.checkpoints.begin(),

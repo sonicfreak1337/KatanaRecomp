@@ -41,17 +41,37 @@ Ladetransaktionen und vorab erzeugte latente AOT-Module bleiben in KR-4848
 offen. P1-/P2-Aliase dispatchen denselben nativen Code; absolute Pointerwerte
 aus beschreibbaren Anfangssnapshottabellen bleiben validierte Runtime-
 Kandidaten und werden weder zu erfundenen CFG-Kanten noch zu Funktionsseeds.
-Der frische private PAL-Port wurde erfolgreich exportiert und aus der
-unveraenderten Original-GDI installiert. Die allgemeine Fixed-Stride-`BSRF`-
-Erkennung beseitigt den vorherigen Dispatchstopp. BIOS `REQ_MODE` und
-`SET_MODE` verwenden nun denselben persistenten Laufwerkszustand wie die
-Paketoberflaeche und folgen dem oeffentlichen asynchronen Statusvertrag. Der
-darauf folgende budgetierte Lauf erreicht 345.568.225 Gastzyklen und spaetere
-PVR-Registerwrites, endet aber noch an einem fehlenden nativen Inneneinstieg;
-TA-Transfers, Renderrequests und echte Gastframes bleiben null. Der aktuelle P0
-bleibt deshalb der erste scanoutgebundene, vom Gast erzeugte Frame. Moderner
-Hostcontrollersupport fuer Xbox-, DualSense- und vergleichbare Geraete ist Teil
-der v0.49-Integration und beginnt strikt erst danach.
+Der statische PAL-Audit findet in den begrenzten `MOV.W`-/`BRAF`-Relative16-
+Tabellen 87 Eintraege, 76 eindeutige Kandidaten und 73 Ziele, die im vorherigen
+Port noch fehlten. Diese Ziele werden als native Basic-Block-Leader
+vorbereitet; der live geladene Dispatch bleibt `RuntimeOnly` und erzeugt keine
+feste CFG-Kante. Snapshotcache und P2-Aliasaufloesung sind gegen imagefremde
+Beweise abgesichert. Lokale AOT-Blockketten tragen die exakte tatsaechliche
+Terminatorquelle und Siteklasse bis zum externen Dispatch weiter. Runtime-ABI
+37, Backend-Interface-ABI 3 und Portprojektvertrag 23 versionieren diesen
+Vertrag.
+
+Der frische optimierte PAL-Port wurde mit zwoelf Jobs in 140,5 Sekunden
+exportiert. Er umfasst 1.856 Funktionen, 37 Codepartitionen und 43
+Dispatchshards, aber weiterhin null Retailsektoren im Portpaket. Die
+unveraenderte Original-GDI wurde lokal mit drei Tracks und 521.461 Sektoren
+installiert; die Quelle blieb erhalten. Der veraltete `gdrom-mode-fix`-Port
+wurde nach dem erfolgreichen Ersatz entfernt. Ein stabiler 30-Sekunden-Lauf
+erreichte 312.939.023 Gastzyklen und 1.000.000 Rootdispatches; der alte Fehler
+bei `0x8C654F5C` ist beseitigt.
+
+Im kontrollierten 100-Millionen-Zyklen-Snapshot laeuft `IP.BIN` nativ als AOT:
+48.471 Runtime-only-Treffer enden ohne Fehler, Fallback oder Materialisierung;
+GD-ROM, TA und PVR sind an dieser fruehen Grenze noch inaktiv. Bei 320 Millionen
+Zyklen erreicht der Gast Spielecode, zwei GD-ROM-Kommandos und einen spaeten
+PVR-Registerwrite. Alle 761.011 Dispatchereignisse bleiben fehlerfrei. Der
+Haupthotspot `0x8C6658D0 -> 0x8C65247E` mit 696.053 Aufrufen ist ein endlicher
+4-Byte-Kopier-/Initialisierungsloop und kein fehlender Zielblock. TA-Transfers,
+Renderrequests und echte Gastframes bleiben null; `KR-4848` bleibt wegen der
+strukturierten Disc-Ladetransaktionen und latenten Module offen. Der aktuelle
+P0 bleibt damit der erste scanoutgebundene, vom Gast erzeugte Frame. Moderner
+Hostcontrollersupport fuer Xbox-, DualSense- und vergleichbare Geraete gehoert
+zu v0.48, beginnt aber strikt erst nach diesem Frame.
 
 Der aktuelle Pfad verarbeitet Raw-, ELF32-SH-, Projektmanifest- und validierte
 GDI-Eingaben bis zu partitioniertem C++, einer zentralen Dreamcast-Runtime und
@@ -173,6 +193,23 @@ cmake --preset artifact-debug
 cmake --build --preset artifact-debug --parallel
 ctest --test-dir build-current --output-on-failure
 ```
+
+Der CLI-Portbuild nutzt standardmaessig die vom Host gemeldete Parallelitaet.
+`KATANA_HOST_BUILD_JOBS` setzt die Hostbuild-Workerzahl explizit;
+`KATANA_PORT_CODEGEN_JOBS` dient als Fallback. Auf Windows kann
+`KATANA_HOST_BUILD_GENERATOR=Ninja` zusammen mit
+`KATANA_HOST_BUILD_MAKE_PROGRAM` einen getrennten parallelen `build-ninja`-
+Build erzwingen. Auf dem primaeren Entwicklungsrechner werden dafuer zwoelf
+Jobs verwendet; auf anderen Rechnern bleibt die Wahl dynamisch.
+
+Statische Dispatchregistries werden in maximal 512 Bloecke grosse Shards
+geteilt. Ein balancierter Router und hoechstens ein Wrapper pro Owner und Shard
+halten die zentrale Datei klein. Beim aktuellen PAL-Port misst
+`runtime-dispatch.cpp` 34.879 Byte beziehungsweise 607 Zeilen statt zuvor
+36.703.886 Byte beziehungsweise 525.996 Zeilen; der groesste der 43 Shards
+misst 393.454 Byte. Eine 513-Block-Regression prueft die Zwei-Shard-Grenze und
+entfernt veraltete Shards; ein vollstaendiges synthetisches Ninja-/MSVC-Projekt
+kompiliert und linkt in 15 Sekunden. Die fokussierte Suite besteht 6/6.
 
 Die kumulativen Gateprofile, Coverage und reproduzierbaren Artefakte sind in
 [docs/DEBUG_GATE.md](docs/DEBUG_GATE.md), [docs/COVERAGE.md](docs/COVERAGE.md)

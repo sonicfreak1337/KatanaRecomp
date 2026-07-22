@@ -184,7 +184,15 @@ werden nur titelunabhaengige SH-4-, BIOS-, GD-ROM-, DMA-, TA- und PVR-Vertraege.
 - [ ] `KR-4851` - Boot- und Frame-Hotpath
 - [ ] `KR-4852` - Konsolidierte v0.48-Validierung
 - [ ] `KR-4853` - v0.48 Boot-Gate-Vorbereitung
-- [ ] `KR-4854` - v0.48 interne Freigabe und Tag
+- [ ] `KR-4854` - v0.48 interne Freigabe
+
+### Post-Frame-Controller-Tasks
+
+- [ ] `KR-4814` - Nativer Controller und gastzeitgebundene Maple-Eingabe
+- [ ] `KR-4914` - Private interaktive Runtime-Sitzung mit Controller
+
+Beide Controlleraufgaben gehoeren zu v0.48, beginnen aber erst nach dem
+nachgewiesenen echten Gastframe aus `KR-4850`; der Frame bleibt P0.
 
 Aktueller Kernteilstand: Byteidentische BIOS-/GD-Reloads erhalten vorhandene
 native AOT-Bloecke, waehrend geaenderte Bytes exakt einmal invalidieren. Der
@@ -196,23 +204,57 @@ P1-Luecke offen. P1-/P2-Codealiase dispatchen denselben nativen Block.
 Beschreibbare absolute Pointertabellen und Fixed-Stride-`BSRF`-Handlerinseln des
 garantierten Anfangssnapshots liefern nur vorab kompilierbare `RuntimeOnly`-
 Kandidaten: Sie erzeugen keine erfundenen CFG-Kanten und ihre Ziele werden als
-Basic-Block-Leader, nicht als Funktionsseeds behandelt. Der damit neu
-exportierte private PAL-Port wurde aus der unveraenderten Original-GDI lokal
-installiert und verlaesst den vorherigen `BSRF`-Dispatchstopp. Die anschliessend
-belegten BIOS-Kommandos `NOP`, `REQ_MODE` und `SET_MODE` teilen ihren
-persistenten Modezustand mit der Paketoberflaeche. Der naechste budgetierte Lauf
-erreichte 345.568.225 Gastzyklen, 7.421.380 native Bloecke und spaetere
-PVR-Registerwrites. Er endet nun an einem fehlenden nativen Inneneinstieg;
-TA-Eingang, Rendergeneration und echter Gastframe bleiben null. `KR-4848`,
-`KR-4849` und `KR-4850` bleiben offen. Der weitere Audit bleibt auf allgemeine
-AOT-, Register-, Timing-, DMA- und Completionluecken gerichtet.
+Basic-Block-Leader, nicht als Funktionsseeds behandelt. Der damit exportierte
+private PAL-Port wurde aus der unveraenderten Original-GDI lokal installiert
+und verliess den frueheren `BSRF`-Dispatchstopp. Die anschliessend belegten
+BIOS-Kommandos `NOP`, `REQ_MODE` und `SET_MODE` teilen ihren persistenten
+Modezustand mit der Paketoberflaeche. Der folgende budgetierte Lauf erreichte
+345.568.225 Gastzyklen, 7.421.380 native Bloecke und spaetere PVR-
+Registerwrites, bevor der native Inneneinstieg `0x8C654F5C` fehlte.
+
+Dieser Einstieg gehoert zu einer begrenzten `MOV.W`-/`BRAF`-Relative16-Tabelle
+und nicht zu einer weiteren `BSRF`-Insel. Der aktuelle statische PAL-Audit
+liefert 87 Tabelleneintraege, 76 eindeutige AOT-Kandidaten und 73 Ziele, die im
+vorherigen Port fehlten. Sie werden nun als native Blockleader vorbereitet,
+waehrend der live geladene Dispatch `RuntimeOnly` bleibt. Der Snapshotcache ist
+imagegebunden, P2-Tabellenaliase werden physisch aufgeloest und lokale
+AOT-Blockketten reichen die exakte tatsaechliche Terminatorquelle samt
+Siteklasse an den externen Dispatch weiter. Der frische PAL-Lauf bestaetigt den
+Fix: Der alte Fehler bei `0x8C654F5C` ist verschwunden, und 761.011 beobachtete
+Dispatchereignisse bleiben ohne Fehler. Der neue Haupthotspot
+`0x8C6658D0 -> 0x8C65247E` ist mit 696.053 Aufrufen ein endlicher
+4-Byte-Kopier-/Initialisierungsloop und kein fehlender Zielblock. TA-Eingang,
+Rendergeneration und echter Gastframe bleiben unbelegt; `KR-4848`, `KR-4849`
+und `KR-4850` bleiben offen. Runtime-ABI 37, Backend-Interface-ABI 3 und
+Portprojektvertrag 23 versionieren den aktuellen Vertrag.
 
 Der Export-Hotpath baut globale CFG-, Kanten- und Writer-Slice-Indizes einmalig
-auf; Codegen und Projektausgabe reichen die Hostparallelitaet durch. Unter
+auf; Codegen und Projektausgabe reichen die Hostparallelitaet durch. Der CLI-
+Hostbuild waehlt dynamisch die CPU-Threadzahl, akzeptiert
+`KATANA_HOST_BUILD_JOBS` und kann unter Windows einen getrennten Ninja-Build
+verwenden; auf dem primaeren Rechner laufen zwoelf Jobs. Grosse
+Dispatchregistries werden in Shards zu maximal 512 Bloecken zerlegt. Der
+balancierte Router und genau ein Wrapper pro Owner und Shard reduzieren beim
+aktuellen PAL-Port die zentrale `runtime-dispatch.cpp` von 36.703.886 Byte und
+525.996 Zeilen auf 34.879 Byte und 607 Zeilen; 43 Shards bleiben bei maximal
+393.454 Byte. Eine 513-Block-Regression prueft zwei Shards samt Entfernung
+veralteter Dateien, und das vollstaendige synthetische Ninja-/MSVC-Projekt
+linkt in 15 Sekunden. Die fokussierte Suite besteht 6/6. Unter
 Windows verwendet die Eingabeprovenienz den nativen BCrypt-SHA-256-Pfad mit
 grossen Chunks. Funktionsdiscovery und CFG-Simplifizierung besitzen lineare
 Adressindizes; stabile, datenschutzneutrale Export-Subphasen grenzen weitere
 budgetierte Laeufe ohne einen unbudgetierten Profiler ein.
+
+Der optimierte 12-Job-Export des neuen PAL-Ports dauerte 140,5 Sekunden und
+erzeugte 1.856 Funktionen, 37 Codepartitionen sowie 43 Dispatchshards bei null
+Retailsektoren im Portpaket. Die unveraenderte Original-GDI wurde lokal mit
+drei Tracks und 521.461 Sektoren installiert; die Quelle blieb erhalten und
+der alte `gdrom-mode-fix`-Port wurde erst nach erfolgreichem Ersatz entfernt.
+Der 30-Sekunden-Lauf blieb ueber 312.939.023 Zyklen und 1.000.000
+Rootdispatches stabil. Der 100-Millionen-Zyklen-Snapshot belegt `IP.BIN`-AOT
+mit 48.471 Runtime-only-Treffern ohne Fehler, Fallback oder Materialisierung;
+bei 320 Millionen Zyklen sind Spielecode, zwei GD-ROM-Kommandos und ein spaeter
+PVR-Registerwrite erreicht, aber weiterhin kein TA-, Render- oder Framebeweis.
 
 `KR-4804` ist `retired` (`superseded_by KR-4853`), `KR-4805` ist `retired`
 (`superseded_by KR-4854`). `KR-4831` bleibt als abgeschlossene Grundlage erhalten.
@@ -221,12 +263,13 @@ budgetierte Laeufe ohne einen unbudgetierten Profiler ein.
 
 ```text
 KR-4831 und KR-4841
-  -> KR-4842, KR-4843, KR-4844, KR-4845, KR-4846 und KR-4911
-  -> KR-4847, KR-4848 und KR-4912
-  -> KR-4913
-  -> KR-4849 und KR-4915
-  -> KR-4850
-  -> KR-4851
+  -> KR-4843 -> KR-4844 -> KR-4845 -> KR-4846 -> KR-4847
+KR-4841 -> KR-4842 -> KR-4911 -> KR-4912
+KR-4843 und KR-4912 -> KR-4848 -> KR-4913
+KR-4847 und KR-4913 -> KR-4849 -> KR-4915 -> KR-4850
+KR-4850 -> KR-4851
+KR-4850 -> KR-4814 -> KR-4914
+KR-4851 und KR-4914
   -> KR-4852
   -> KR-4853
   -> Nutzerreview
@@ -258,17 +301,17 @@ gebuendelt. Jeder Prozess besitzt ein hartes Limit von 15 Minuten.
   Emulatorimplementierungen gelangen in den Produktpfad
 - Quell-GDIs werden nie geloescht; Retaildaten und private Identitaeten bleiben
   ausserhalb von Repository, CI und verteilbaren Paketen
-- vor `KR-4854` wird zwingend fuer Nutzerreview gestoppt; Tag und Freigabe gibt
-  es ausschliesslich nach ausdruecklicher Nutzerfreigabe
+- vor `KR-4854` wird zwingend fuer Nutzerreview gestoppt; v0.48 wird nur intern
+  freigegeben und nicht getaggt. Tags beginnen erst mit der Alpha.
 
-## v0.49.0 - Port-, Harness-, Controller-, GUI-Integration und Alpha-Candidate
+## v0.49.0 - Port-, Harness-, GUI-Integration und Alpha-Candidate
 
 ### Ziel
 
-Nach dem nativen Boot- und Frame-Gate werden Runtime-SDK, Portworkflow,
-Harness, Controller, GUI, CI und Paketierung zu einem allgemeinen
-Alpha-Candidate integriert. Die v0.48-Basis bleibt dabei unveraendert und
-Sonic Adventure liefert keine titelspezifischen Produktvertraege.
+Nach dem nativen Boot-, Frame- und Controller-Gate werden Runtime-SDK,
+Portworkflow, Harness, GUI, CI und Paketierung zu einem allgemeinen
+Alpha-Candidate integriert. Die v0.48-Basis bleibt dabei unveraendert und Sonic
+Adventure liefert keine titelspezifischen Produktvertraege.
 
 ### Migrierte Integrationsaufgaben
 
@@ -278,12 +321,10 @@ Sonic Adventure liefert keine titelspezifischen Produktvertraege.
 - [ ] `KR-4811` - Private Harnessmodi und technisch erzwungener No-run-Vertrag
 - [ ] `KR-4812` - Strukturierte Runtimeevidenz, Budgets, Replay und Datenschutz
 - [ ] `KR-4813` - Content-addressed Harness- und Portbuildbeschleunigung
-- [ ] `KR-4814` - Nativer Controller und gastzeitgebundene Maple-Eingabe
 - [ ] `KR-4821` - Versionierte Jobtelemetrie und belastbarer Fortschritt
 - [ ] `KR-4822` - GUI-Informationsarchitektur und responsives Layout
 - [ ] `KR-4823` - Diagnostik-, Ergebnis-, Log- und Workflow-QOL
 - [ ] `KR-4824` - Unveraenderliche Task-ID-Registry und Roadmaplinter
-- [ ] `KR-4914` - Private interaktive Runtime-Sitzung mit Controller
 - [ ] `KR-4916` - Menue, Eingabe und spielbare Szene
 
 ### Urspruengliche, wiederhergestellte Release-Candidate-Tasks
@@ -302,7 +343,6 @@ KR-4854
   -> KR-4802
   -> KR-4803
   -> KR-4812 und KR-4813
-  -> KR-4814 und KR-4914
   -> KR-4822 und KR-4823
   -> KR-4916
   -> KR-4901, KR-4902 und KR-4903

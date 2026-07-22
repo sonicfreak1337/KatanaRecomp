@@ -145,10 +145,18 @@ int main() {
     katana::codegen::BackendRequest local_chain_request{local_loop_program, 0x8C010000u};
     local_chain_request.single_block_execution = true;
     local_chain_request.guarded_local_block_chaining = true;
+    local_chain_request.external_dynamic_dispatch = true;
     const katana::codegen::CppBackend local_chain_backend;
     const auto local_chain_source = local_chain_backend.emit(local_chain_request).joined_text();
-    require(local_chain_source.find("services->can_chain_executable_block(cpu.pc)) continue;") !=
-                    std::string::npos &&
+    constexpr std::string_view block_note = "                note_block_entry(";
+    const auto first_block_note = local_chain_source.find(block_note);
+    const auto local_chain_transition =
+        local_chain_source.find("services->can_chain_executable_block(cpu.pc)) continue;");
+    const auto next_block_note = local_chain_source.find(block_note, first_block_note + 1u);
+    require(first_block_note != std::string::npos &&
+                local_chain_transition != std::string::npos &&
+                next_block_note != std::string::npos && first_block_note < local_chain_transition &&
+                local_chain_transition < next_block_note &&
                 local_chain_source.find("++cpu.retired_guest_instructions;") !=
                     std::string::npos &&
                 local_chain_source.find("services->consume_guest_cycles(") ==

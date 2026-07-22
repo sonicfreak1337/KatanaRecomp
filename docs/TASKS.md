@@ -42,24 +42,24 @@ KR-4715
 
 v0.48 Native Disc Boot und erster echter Gastframe:
 KR-4831 und KR-4841
-  -> KR-4842, KR-4843, KR-4844, KR-4845, KR-4846 und KR-4911
-  -> KR-4847, KR-4848 und KR-4912
-  -> KR-4913
-  -> KR-4849 und KR-4915
-  -> KR-4850
-  -> KR-4851
+  -> KR-4843 -> KR-4844 -> KR-4845 -> KR-4846 -> KR-4847
+KR-4841 -> KR-4842 -> KR-4911 -> KR-4912
+KR-4843 und KR-4912 -> KR-4848 -> KR-4913
+KR-4847 und KR-4913 -> KR-4849 -> KR-4915 -> KR-4850
+KR-4850 -> KR-4851
+KR-4850 -> KR-4814 -> KR-4914
+KR-4851 und KR-4914
   -> KR-4852
   -> KR-4853
   -> Nutzerreview
   -> KR-4854
 
-v0.49 Port-, Harness-, Controller-, GUI-Integration und Alpha-Candidate:
+v0.49 Port-, Harness-, GUI-Integration und Alpha-Candidate:
 KR-4854
   -> KR-4801, KR-4811, KR-4821 und KR-4824
   -> KR-4802
   -> KR-4803
   -> KR-4812 und KR-4813
-  -> KR-4814 und KR-4914
   -> KR-4822 und KR-4823
   -> KR-4916
   -> KR-4901, KR-4902 und KR-4903
@@ -73,9 +73,9 @@ Korrektheit blockiert Performance. Waehrend KR-4841 bis KR-4851 werden nur
 betroffene Targets und kleine Regressionen ausgefuehrt; die konsolidierte Suite
 und der private Retaillauf folgen einmal in KR-4852. Jeder Prozess besitzt ein
 hartes Limit von 15 Minuten. Der moderne Hostcontrollervertrag und die private
-interaktive Sitzung (`KR-4814`/`KR-4914`) gehoeren zur v0.49-Integration und
-beginnen auch dort strikt erst nach `KR-4850`; der erste echte Gastframe bleibt
-P0. GUI-, Harness- und Portintegration folgt ebenfalls in v0.49.
+interaktive Sitzung (`KR-4814`/`KR-4914`) gehoeren zur v0.48-Integration,
+beginnen aber strikt erst nach `KR-4850`; der erste echte Gastframe bleibt P0.
+GUI-, Harness- und Portintegration folgt in v0.49.
 
 ---
 
@@ -840,7 +840,7 @@ Prioritaet: P0
   RAM-Bytes nicht ausfuehren
 - Interpreteranteil und Herkunft nur im expliziten Diagnosemodus berichten
 
-Teilstand 2026-07-22: Der Modulkatalog verwaltet aktive Byte-Extents ueber
+Teilstand 2026-07-23: Der Modulkatalog verwaltet aktive Byte-Extents ueber
 kanonische physische Herkunft. Partielle CPU-/FPU-/Store-Queue-Writes
 invalidieren nur ihr Fenster; Copy/DMA loeschen veraltete Runtimeprovenienz und
 P0/P1/P2-Aliase bleiben konsistent. Ein kanonischer 4-KiB-Seitenindex weist
@@ -864,26 +864,62 @@ Diagnoseinterpreter. Beschreibbare absolute Pointertabellen aus einem
 `GuardedPartial`-Herkunft. Sie erzeugen weder bewiesene CFG-Kanten noch
 Funktionsseeds; ihre akzeptierten Ziele werden nur als Basic-Block-Leader fuer
 validierten nativen Eintritt vorbereitet. P1-/P2-Aliase dispatchen dabei
-denselben kompilierten Block. Offen bleiben strukturierte Disc-
+denselben kompilierten Block. Der Snapshotcache ist an das jeweilige Image
+gebunden; eine P2-Tabellenadresse wird vor der Analyse auf ihre physische
+P1-Herkunft aufgeloest. Offen bleiben strukturierte Disc-
 Ladetransaktionen und vorab erzeugte latente native Module; der Task wird
 deshalb nicht abgehakt.
 
 Der fuer den privaten Nachweis notwendige Exportpfad baut CFG-, Kanten- und
 Writer-Slice-Indizes nicht mehr pro Funktion beziehungsweise Site neu auf.
 Single-Block-Partitionen emittieren nur lokale Deklarationen und der Writer
-uebernimmt dieselbe konfigurierte Parallelitaet wie der Codegen. Windows hasht
-die Eingabeprovenienz ueber BCrypt in grossen Chunks. Der frische private PAL-
-Port wurde erfolgreich exportiert und aus der unveraenderten Original-GDI lokal
-installiert; die Quelle blieb erhalten. Der `BSRF`-Stopp ist im Produktlauf
-verschwunden. Nach Schliessen der unmittelbar danach belegten GD-ROM-
-Modekommandos erreicht der Gast 345.568.225 Zyklen und spaetere PVR-
-Registerwrites. Der naechste P0 ist ein fehlender nativer Inneneinstieg bei
-`0x8C654F5C`; strukturierte Disc-Ladetransaktionen und vorab erzeugte latente
-Module bleiben weiterhin offen.
+uebernimmt dieselbe konfigurierte Parallelitaet wie der Codegen. Der CLI-
+Hostbuild nutzt dynamisch die Host-CPU, akzeptiert
+`KATANA_HOST_BUILD_JOBS` und kann unter Windows in einem getrennten Ninja-
+Buildverzeichnis laufen; der primaere Rechner verwendet zwoelf Jobs. Windows
+hasht die Eingabeprovenienz ueber BCrypt in grossen Chunks.
+
+Der zuletzt installierte private PAL-Port verliess den frueheren `BSRF`-Stopp.
+Nach Schliessen der unmittelbar danach belegten GD-ROM-Modekommandos erreichte
+der Gast 345.568.225 Zyklen und spaetere PVR-Registerwrites. Der danach
+fehlende native Inneneinstieg `0x8C654F5C` gehoert zu einer begrenzten
+`MOV.W`-/`BRAF`-Relative16-Tabelle, nicht zu einer weiteren `BSRF`-Insel. Der
+statische Audit weist 87 Eintraege, 76 eindeutige Kandidaten und 73 im
+vorherigen Port fehlende Ziele nach. Diese Ziele werden nun nur als native
+Blockleader vorbereitet; der live geladene Dispatch bleibt `RuntimeOnly`.
+Lokale AOT-Blockketten reichen die tatsaechliche Terminatorquelle, Callsite,
+Transferart und Siteklasse exakt an den externen Dispatch weiter. Runtime-ABI
+37, Backend-Interface-ABI 3 und Portprojektvertrag 23 versionieren diesen
+Vertrag. Der frische Produktlauf verlaesst `0x8C654F5C` und meldet in 761.011
+Dispatchereignissen keinen Fehler. Sein Haupthotspot
+`0x8C6658D0 -> 0x8C65247E` ist ein endlicher 4-Byte-Kopier-/
+Initialisierungsloop (`r6=4`, Ziel `r14`, Quelle Stack, `r14+=4`) und kein
+fehlender Zielblock. Strukturierte Disc-Ladetransaktionen und vorab erzeugte
+latente Module bleiben weiterhin offen; der Task wird nicht abgehakt.
+
+Der allgemeine Projektschreiber shardet statische Dispatchregistries nach
+maximal 512 Bloecken. Jeder Owner besitzt pro Shard genau einen Wrapper; ein
+balancierter Router haelt die zentrale Datei klein. Beim PAL-Port misst
+`runtime-dispatch.cpp` 34.879 Byte/607 Zeilen statt zuvor 36.703.886 Byte/
+525.996 Zeilen; 43 Shards bleiben bei maximal 393.454 Byte. Eine synthetische
+513-Block-Regression erzwingt zwei Shards und entfernt veraltete Sharddateien;
+der vollstaendige Ninja-/MSVC-Link besteht in 15 Sekunden. Die sechs
+fokussierten Regressionstargets bestehen 6/6.
+
+Der optimierte 12-Job-PAL-Export dauerte 140,5 Sekunden und erzeugte 1.856
+Funktionen, 37 Codepartitionen und 43 Shards bei null Retailsektoren im
+Portpaket. Die unveraenderte Original-GDI wurde lokal mit drei Tracks und
+521.461 Sektoren installiert; die Quelle blieb erhalten, der ersetzte
+`gdrom-mode-fix`-Port wurde danach geloescht. Ein 30-Sekunden-Lauf blieb ueber
+312.939.023 Zyklen und 1.000.000 Rootdispatches stabil. Bei 100 Millionen
+Zyklen laufen `IP.BIN`-AOT und 48.471 native Runtime-only-Treffer ohne Fehler,
+Fallback oder Materialisierung; GD-ROM, TA und PVR sind noch null. Bei 320
+Millionen Zyklen erreicht der Gast Spielecode, zwei GD-ROM-Kommandos und einen
+spaeten PVR-Registerwrite, weiterhin ohne TA-, Render- oder Framebeweis.
 
 ### [ ] KR-4849 - TA-Eingang und PVR-Kommandopfad
 
-Abhaengigkeiten: KR-4847, KR-4848, KR-4915
+Abhaengigkeiten: KR-4847, KR-4848, KR-4913
 Prioritaet: P0
 
 - Store Queue, Channel 2 und PVR-DMA in denselben TA-FIFO fuehren
@@ -912,7 +948,7 @@ PVR-Register-, Timing-, DMA- und Completionvertraege statt Titeladressen.
 
 ### [ ] KR-4850 - Erster scanoutgebundener Gastframe
 
-Abhaengigkeiten: KR-4849
+Abhaengigkeiten: KR-4915
 Prioritaet: P0
 
 - Rendergeneration, TA-Listen, Pixelwrites und tatsaechlich geaenderte Pixel belegen
@@ -935,8 +971,65 @@ bestehen 4/4 in 0,66 Sekunden mit 12 Buildjobs. Der Task bleibt bis zum ersten
 entsprechenden privaten Retail-Gastframe offen. Die frische Probe verliess die
 SCANINT1-Wartestelle sowie die folgenden PR-, `BSRF`- und GD-ROM-Modegrenzen.
 Bei 345.568.225 Gastzyklen sind spaetere PVR-Registerwrites beobachtet, aber
-weiterhin kein TA-Transfer, Renderrequest oder echter Gastframe; der Lauf endet
-typisiert am naechsten fehlenden nativen Inneneinstieg.
+weiterhin kein TA-Transfer, Renderrequest oder echter Gastframe; der damalige
+Lauf endete typisiert am naechsten fehlenden nativen Inneneinstieg. Dieser ist
+inzwischen als Kandidat einer `MOV.W`-/`BRAF`-Relative16-Tabelle vorbereitet
+und im frischen privaten Lauf erfolgreich passiert. Der kontrollierte
+320-Millionen-Zyklen-Snapshot erreicht zwei GD-ROM-Kommandos und einen spaeten
+PVR-Registerwrite, aber weiterhin keinen TA-Transfer, Renderrequest oder echten
+Gastframe. Der fuehrende Dispatchhotspot ist ein endlicher 4-Byte-Kopier-/
+Initialisierungsloop und kein neuer fehlender Zielblock.
+
+### [ ] KR-4814 - Nativer Controller und gastzeitgebundene Maple-Eingabe
+
+Abhaengigkeiten: KR-4850, KR-4616
+Meilenstein: v0.48, Implementierung erst nach dem ersten echten Gastframe
+Prioritaet: P1 nach KR-4850 (Frame bleibt P0)
+
+Umfang:
+
+- Gast in begrenzten Quanta/Safepoints statt einmal synchron bis zum Ende laufen
+- Fenster-, Controller-, Scheduler-, Video- und Audioereignisse verschraenken
+- Windows-Gamepadbackend ueber stabile Hostabstraktion bereitstellen
+- aktuelle Xbox-Controller, DualSense/DualShock und uebliche Standardgamepads
+  ueber denselben geraeteagnostischen Vertrag abdecken
+- Keyboardfallback erhalten
+- Buttons, Trigger und Analogachsen mit Deadzones normalisieren
+- Hotplug, Fokus und Controller-1-Auswahl behandeln
+- Hostzustandsaenderungen mit Gastzyklus stempeln
+- Maple `GetCondition` liest den letzten zum Transaktionszyklus sichtbaren Zustand
+- Replayinput verwendet dieselbe Ereignisschnittstelle
+
+Akzeptanz:
+
+- frei lizenziertes Homebrew reagiert auf Buttons, Trigger und Analogachsen
+- Xbox-, DualSense-/DualShock- und Standardcontrollerprofile bestehen denselben
+  normalisierten Eingabevertrag ohne titelbezogene Sonderbehandlung
+- aktiv-niedrige Maple-Payloads sind bitgenau
+- nur geaenderte Hostzustaende werden eingespeist
+- Hotplug und Fokus erzeugen keine haengenden Tasten
+- deterministisches Replay ist bytegleich
+- keine Eingaberace zwischen Hostpoll und Maple-Read
+
+### [ ] KR-4914 - Private interaktive Runtime-Sitzung mit Controller
+
+Abhaengigkeiten: KR-4850, KR-4814
+Meilenstein: v0.48
+Prioritaet: P1 nach KR-4850 (Frame bleibt P0)
+
+Umfang:
+
+- separaten `interactive`-Modus mit Fenster, Controller und kontrolliertem Ende
+- Hosteventpump und Gastquanta dauerhaft verschraenken
+- Pause, Fokus, Controllerhotplug und sauberen Shutdown behandeln
+- interaktive Rohdiagnosen ausschliesslich privat speichern
+- keine Screenshots, Spielbytes oder Speicherabbilder standardmaessig erfassen
+
+Akzeptanz:
+
+- Nutzer kann einen erreichten Gastpfad mit Controller untersuchen
+- interaktive Sitzung wird in keinem Gate als deterministische Evidenz verwendet
+- Crash, Close und Timeout hinterlassen keine Kindprozesse oder Schedulerreste
 
 ### [ ] KR-4851 - Boot- und Frame-Hotpath
 
@@ -954,7 +1047,7 @@ Frame-Gate; der Task bleibt wegen seiner Abhaengigkeit von `KR-4850` offen.
 
 ### [ ] KR-4852 - Konsolidierte v0.48-Validierung
 
-Abhaengigkeiten: KR-4841 bis KR-4851, KR-4911 bis KR-4913 und KR-4915
+Abhaengigkeiten: KR-4814, KR-4841 bis KR-4851 und KR-4911 bis KR-4915
 Prioritaet: P0
 
 Erst nach vollstaendiger Implementierung der Kernrunde werden einmal gebuendelt
@@ -973,19 +1066,20 @@ Prioritaet: P0
 - nur belegte Testzahlen und keine Retaildaten dokumentieren
 - vor Freigabe zwingend fuer Nutzerreview stoppen
 
-### [ ] KR-4854 - v0.48 interne Freigabe und Tag
+### [ ] KR-4854 - v0.48 interne Freigabe
 
 Abhaengigkeiten: KR-4853 und ausdrueckliche Nutzerfreigabe
 Prioritaet: P0
 
 - zwei abschliessende private Reproduktionslaeufe ausfuehren
-- `v0.48.0` erst nach Nutzerfreigabe taggen und Artefakte abgleichen
+- `v0.48.0` erst nach Nutzerfreigabe intern freigeben und Artefakte abgleichen
+- keinen Tag erzeugen; Tags beginnen erst mit der Alpha
 - genau einen aktuellen Build und ein aktuelles Backup behalten
 - keine Releaseartefakte mit Retaildaten erzeugen
 
 ---
 
-## v0.49.0 - Port-, Harness-, Controller-, GUI-Integration und Alpha-Candidate
+## v0.49.0 - Port-, Harness-, GUI-Integration und Alpha-Candidate
 
 ### [ ] KR-4801 - Versioniertes Runtime-SDK fuer externe Port-Projekte
 
@@ -1149,37 +1243,6 @@ Akzeptanz:
 - Cache an/aus liefert identische Artefakte und Gastergebnisse
 - abgebrochene oder parallele Laeufe korrumpieren keinen Cache
 
-### [ ] KR-4814 - Nativer Controller und gastzeitgebundene Maple-Eingabe
-
-Abhaengigkeiten: KR-4850, KR-4616
-Meilenstein: v0.49, Implementierung erst nach dem ersten echten Gastframe
-Prioritaet: P1 nach KR-4850 (Frame bleibt P0)
-
-Umfang:
-
-- Gast in begrenzten Quanta/Safepoints statt einmal synchron bis zum Ende laufen
-- Fenster-, Controller-, Scheduler-, Video- und Audioereignisse verschraenken
-- Windows-Gamepadbackend ueber stabile Hostabstraktion bereitstellen
-- aktuelle Xbox-Controller, DualSense/DualShock und uebliche Standardgamepads
-  ueber denselben geraeteagnostischen Vertrag abdecken
-- Keyboardfallback erhalten
-- Buttons, Trigger und Analogachsen mit Deadzones normalisieren
-- Hotplug, Fokus und Controller-1-Auswahl behandeln
-- Hostzustandsaenderungen mit Gastzyklus stempeln
-- Maple `GetCondition` liest den letzten zum Transaktionszyklus sichtbaren Zustand
-- Replayinput verwendet dieselbe Ereignisschnittstelle
-
-Akzeptanz:
-
-- frei lizenziertes Homebrew reagiert auf Buttons, Trigger und Analogachsen
-- Xbox-, DualSense-/DualShock- und Standardcontrollerprofile bestehen denselben
-  normalisierten Eingabevertrag ohne titelbezogene Sonderbehandlung
-- aktiv-niedrige Maple-Payloads sind bitgenau
-- nur geaenderte Hostzustaende werden eingespeist
-- Hotplug und Fokus erzeugen keine haengenden Tasten
-- deterministisches Replay ist bytegleich
-- keine Eingaberace zwischen Hostpoll und Maple-Read
-
 ### [ ] KR-4822 - GUI-Informationsarchitektur und responsives Layout
 
 Abhaengigkeiten: KR-4802, KR-4821
@@ -1240,9 +1303,9 @@ erhalten und ist keine aktive Aufgabe.
 
 ## Bestehende Bring-up-Tasks nach aktualisierter Meilensteinzuordnung
 
-`KR-4911` bis `KR-4913` sowie `KR-4915` gehoeren zu v0.48.
-`KR-4814`, `KR-4914` und `KR-4916` gehoeren zu v0.49; Controllerarbeit beginnt
-strikt erst nach dem ersten echten Gastframe aus `KR-4850`.
+`KR-4911` bis `KR-4915` sowie `KR-4814` gehoeren zu v0.48. Die Controllerarbeit
+aus `KR-4814` und `KR-4914` beginnt strikt erst nach dem ersten echten
+Gastframe aus `KR-4850`. `KR-4916` bleibt Teil von v0.49.
 
 ### [ ] KR-4911 - Runtimebeobachtung, Replay und Fehlerpakete
 
@@ -1287,7 +1350,7 @@ Akzeptanz:
 
 ### [ ] KR-4913 - CPU-/Plattform-Bring-up bis `KR_GUEST_PROGRAM_ENTERED`
 
-Abhaengigkeiten: KR-4912
+Abhaengigkeiten: KR-4848, KR-4912
 Meilenstein: v0.48
 Prioritaet: P0
 
@@ -1306,29 +1369,9 @@ Akzeptanz:
 - deterministische Kernmetriken stimmen ueberein
 - Probe und Bericht enthalten keine Spielbytes oder privaten Adressen
 
-### [ ] KR-4914 - Private interaktive Runtime-Sitzung mit Controller
-
-Abhaengigkeiten: KR-4850, KR-4814
-Meilenstein: v0.49
-Prioritaet: P1 nach KR-4850 (Frame bleibt P0)
-
-Umfang:
-
-- separaten `interactive`-Modus mit Fenster, Controller und kontrolliertem Ende
-- Hosteventpump und Gastquanta dauerhaft verschraenken
-- Pause, Fokus, Controllerhotplug und sauberen Shutdown behandeln
-- interaktive Rohdiagnosen ausschliesslich privat speichern
-- keine Screenshots, Spielbytes oder Speicherabbilder standardmaessig erfassen
-
-Akzeptanz:
-
-- Nutzer kann einen erreichten Gastpfad mit Controller untersuchen
-- interaktive Sitzung wird in keinem Gate als deterministische Evidenz verwendet
-- Crash, Close und Timeout hinterlassen keine Kindprozesse oder Schedulerreste
-
 ### [ ] KR-4915 - Gast-PVR-Pfad bis `KR_FIRST_GUEST_FRAME`
 
-Abhaengigkeiten: KR-4913
+Abhaengigkeiten: KR-4849, KR-4913
 Meilenstein: v0.48
 Prioritaet: P0
 

@@ -177,7 +177,7 @@ void mark_resolved_table_dispatch(std::vector<IndirectControlFlowResolution>& re
             std::unique(resolution->analysis_candidates.begin(),
                         resolution->analysis_candidates.end()),
             resolution->analysis_candidates.end());
-        resolution->reason = "runtime-contract-snapshot-absolute-pointer-candidates";
+        resolution->reason = "runtime-contract-" + table.reason;
         return;
     }
     if (!table.resolved) {
