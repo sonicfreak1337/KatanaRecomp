@@ -28,11 +28,9 @@ const katana::sh4::DisassemblyLine& controlling_line(const BasicBlock& block) {
     return block.lines[last_index];
 }
 
-void add_sorted_unique(std::vector<std::uint32_t>& values, const std::uint32_t value) {
-    if (std::find(values.begin(), values.end(), value) == values.end()) {
-        values.push_back(value);
-        std::sort(values.begin(), values.end());
-    }
+void canonicalize_addresses(std::vector<std::uint32_t>& values) {
+    std::sort(values.begin(), values.end());
+    values.erase(std::unique(values.begin(), values.end()), values.end());
 }
 
 } // namespace
@@ -134,7 +132,7 @@ discover_functions_from_blocks(const std::span<const BasicBlock> blocks,
             }
 
             visited_blocks.insert(block_address);
-            add_sorted_unique(function.block_addresses, block_address);
+            function.block_addresses.push_back(block_address);
 
             const auto& block = blocks[block_iterator->second];
 
@@ -146,7 +144,7 @@ discover_functions_from_blocks(const std::span<const BasicBlock> blocks,
             const auto flow = control.instruction.control_flow;
 
             if (flow == katana::sh4::ControlFlowKind::Call && control.target_address.has_value()) {
-                add_sorted_unique(function.direct_callees, *control.target_address);
+                function.direct_callees.push_back(*control.target_address);
 
                 if (block_by_start.contains(*control.target_address) &&
                     !processed_entries.contains(*control.target_address)) {
@@ -155,14 +153,14 @@ discover_functions_from_blocks(const std::span<const BasicBlock> blocks,
             }
 
             if (flow == katana::sh4::ControlFlowKind::IndirectCall) {
-                add_sorted_unique(function.indirect_call_sites, control.address);
+                function.indirect_call_sites.push_back(control.address);
             }
 
             const auto [edge_begin, edge_end] = edges_by_instruction.equal_range(control.address);
             for (auto edge = edge_begin; edge != edge_end; ++edge) {
                 if (edge->second->kind == ResolvedControlFlowKind::Call) {
-                    add_sorted_unique(function.direct_callees, edge->second->target_address);
-                    add_sorted_unique(function.indirect_call_sites, control.address);
+                    function.direct_callees.push_back(edge->second->target_address);
+                    function.indirect_call_sites.push_back(control.address);
                     if (control_flow_evidence_complete(resolved_edge_evidence(*edge->second)) &&
                         block_by_start.contains(edge->second->target_address) &&
                         !processed_entries.contains(edge->second->target_address)) {
@@ -180,7 +178,7 @@ discover_functions_from_blocks(const std::span<const BasicBlock> blocks,
                 if (successor != entry && known_entries.contains(successor)) {
                     if (flow == katana::sh4::ControlFlowKind::UnconditionalBranch ||
                         flow == katana::sh4::ControlFlowKind::IndirectBranch)
-                        add_sorted_unique(function.tail_jump_targets, successor);
+                        function.tail_jump_targets.push_back(successor);
                     continue;
                 }
 
@@ -188,6 +186,10 @@ discover_functions_from_blocks(const std::span<const BasicBlock> blocks,
             }
         }
 
+        canonicalize_addresses(function.block_addresses);
+        canonicalize_addresses(function.direct_callees);
+        canonicalize_addresses(function.indirect_call_sites);
+        canonicalize_addresses(function.tail_jump_targets);
         functions.push_back(std::move(function));
     }
 

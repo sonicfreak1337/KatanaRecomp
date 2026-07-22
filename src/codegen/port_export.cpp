@@ -37,6 +37,10 @@
 namespace katana::codegen {
 namespace {
 
+void report_progress(const PortExportOptions& options, const std::string_view phase) {
+    if (options.progress_callback != nullptr) options.progress_callback(phase);
+}
+
 bool valid_target_name(const std::string_view value) noexcept {
     if (value.empty() || !std::isalpha(static_cast<unsigned char>(value.front()))) {
         return false;
@@ -1622,6 +1626,7 @@ void preserve_local_port_user_data(const std::filesystem::path& previous_root,
 PortExportResult export_dreamcast_port_project(const PreparedPortProgram& prepared,
                                                const std::filesystem::path& output_root,
                                                const PortExportOptions& options) {
+    report_progress(options, "program-validation");
     if (output_root.empty() || !valid_target_name(options.target_name) ||
         options.tool_version.empty() || prepared.entry_address == 0u || prepared.program.empty()) {
         throw std::invalid_argument(
@@ -1645,6 +1650,7 @@ PortExportResult export_dreamcast_port_project(const PreparedPortProgram& prepar
                                  " partielle oder ungeloeste Kontrollflussstellen.");
     }
     katana::ir::require_valid_program(prepared.program);
+    report_progress(options, "partition-codegen");
     const auto partitions =
         partition_translation_units(prepared.program, options.partition_options);
     if (partitions.empty()) throw std::runtime_error("Portcodegen erzeugte keine Partition.");
@@ -1693,6 +1699,7 @@ PortExportResult export_dreamcast_port_project(const PreparedPortProgram& prepar
     }
     for (auto& worker : workers) worker.get();
     for (auto& artifact : generated) artifacts.push_back(std::move(*artifact));
+    report_progress(options, "metadata");
     const auto entry_partition =
         std::find_if(partitions.begin(), partitions.end(), [&prepared](const auto& partition) {
             return std::any_of(partition.function_indices.begin(),
@@ -1778,6 +1785,7 @@ PortExportResult export_dreamcast_port_project(const PreparedPortProgram& prepar
     if (descriptor_input == prepared.inputs.end() || descriptor_input->local_path.empty())
         throw std::invalid_argument(
             "Portexport besitzt keine lokale GDI-Eingabe fuer die Installations-Recipe.");
+    report_progress(options, "disc-recipe");
     const auto disc_source = katana::runtime::GdiDiscSource::open(descriptor_input->local_path);
     const auto& disc_descriptor = disc_source->descriptor();
     if (disc_descriptor.sha256 != descriptor_input->sha256)
@@ -1811,6 +1819,7 @@ PortExportResult export_dreamcast_port_project(const PreparedPortProgram& prepar
                     true);
     std::filesystem::create_directories(canonical_root / "runtime");
     std::filesystem::create_directories(canonical_root / "user-data" / "content");
+    report_progress(options, "artifact-write");
     const auto write = write_codegen_project(canonical_root / "generated",
                                              std::move(artifacts),
                                              ProjectWriteOptions{codegen_jobs});
@@ -1870,12 +1879,18 @@ PortExportResult export_dreamcast_port_project(const std::filesystem::path& gdi_
     if (gdi_path.empty()) {
         throw std::invalid_argument("Portexport braucht eine GDI-Quelle.");
     }
+    report_progress(options, "disc-load");
     const auto disc = katana::platform::load_dreamcast_gdi_boot(gdi_path);
+    report_progress(options, "boot-image");
     auto image = katana::platform::make_dreamcast_disc_executable(
         disc, katana::platform::DreamcastDiscExecutionPath::NativeSystemBootstrap);
+    report_progress(options, "control-flow-analysis");
     const auto analysis = katana::analysis::analyze_control_flow(image);
+    report_progress(options, "ir-lowering");
     auto program = katana::ir::lower_program(analysis);
+    report_progress(options, "ir-optimization");
     static_cast<void>(katana::ir::optimize_program(program));
+    report_progress(options, "input-provenance");
     std::vector<katana::io::InputProvenance> inputs;
     const auto& descriptor = disc.source->descriptor();
     inputs.push_back(

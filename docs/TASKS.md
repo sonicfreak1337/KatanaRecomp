@@ -1018,6 +1018,12 @@ Akzeptanz:
 - CLI, GUI und Automatisierung sehen dieselben Ereignisse
 - Bericht und GUI koennen eine blockierende Siteklasse sichtbar nennen
 
+Teilstand 2026-07-22: Der CLI-Portexport meldet innerhalb von
+`analysis-codegen` datenschutzneutrale Subphasen fuer Disc-Load, Bootimage,
+Kontrollflussanalyse, Lowering, Optimierung, Provenienz, Validierung,
+Partitionscodegen, Metadaten, Recipe und Writer. Zaehler, Rate, ETA und der
+gemeinsame GUI-/JobEvent-Vertrag bleiben offen; der Task ist nicht abgeschlossen.
+
 ### [ ] KR-4824 - Unveraenderliche Task-ID-Registry und Roadmaplinter
 
 Abhaengigkeiten: KR-4705

@@ -7,9 +7,13 @@
 #include "katana/sh4/disassembler.hpp"
 
 #include <array>
+#include <chrono>
+#include <cstdint>
 #include <cstdlib>
 #include <iostream>
 #include <string>
+#include <utility>
+#include <vector>
 
 namespace {
 
@@ -196,6 +200,30 @@ int main() {
     require(disabled_report.passes.empty() && disabled_report.total_changes == 0u &&
                 katana::ir::emit_ir_text(disabled_program) == disabled_before,
             "Globaler Debug-Schalter deaktiviert nicht alle Optimierungen.");
+
+    constexpr std::size_t scaling_block_count = 8192u;
+    constexpr std::uint32_t scaling_base = 0x8C200000u;
+    katana::ir::Function scaling_function;
+    scaling_function.entry_address = scaling_base;
+    scaling_function.blocks.reserve(scaling_block_count);
+    for (std::size_t index = 0u; index < scaling_block_count; ++index) {
+        const auto address = scaling_base + static_cast<std::uint32_t>(index * 2u);
+        auto instruction = unreachable_nop;
+        instruction.source_address = address;
+        katana::ir::BasicBlock block;
+        block.start_address = address;
+        block.instructions.push_back(instruction);
+        if (index + 1u < scaling_block_count) block.successors.push_back(address + 2u);
+        scaling_function.blocks.push_back(std::move(block));
+    }
+    const auto scaling_start = std::chrono::steady_clock::now();
+    const auto scaling_result = katana::ir::simplify_cfg(scaling_function);
+    const auto scaling_elapsed = std::chrono::steady_clock::now() - scaling_start;
+    require(scaling_result.changes == 0u &&
+                scaling_function.blocks.size() == scaling_block_count,
+            "Die CFG-Simplifizierung verlor einen erreichbaren Block der langen Kette.");
+    require(scaling_elapsed < std::chrono::seconds(5),
+            "Die CFG-Simplifizierung sucht erreichbare Bloecke offenbar weiterhin linear.");
 
     std::cout << "Katana-IR-Optimierungen erfolgreich.\n";
     return EXIT_SUCCESS;

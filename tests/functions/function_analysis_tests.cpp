@@ -2,9 +2,12 @@
 #include "katana/sh4/disassembler.hpp"
 
 #include <array>
+#include <chrono>
+#include <cstdint>
 #include <cstdlib>
 #include <iostream>
 #include <string>
+#include <vector>
 
 namespace {
 
@@ -75,6 +78,34 @@ int main() {
             "Die Unterfunktion muss einen indirekten Aufruf besitzen.");
     require(sub_function.indirect_call_sites[0] == 0x8C010008u,
             "Die Adresse des indirekten Aufrufs ist falsch.");
+
+    constexpr std::size_t scaling_block_count = 4096u;
+    constexpr std::uint32_t scaling_base = 0x8C100000u;
+    constexpr std::array<std::uint8_t, 2u> nop_bytes = {0x09u, 0x00u};
+    const auto nop = katana::sh4::disassemble(nop_bytes, scaling_base).front();
+    std::vector<katana::analysis::BasicBlock> scaling_blocks(scaling_block_count);
+    for (std::size_t index = 0u; index < scaling_blocks.size(); ++index) {
+        const auto address = scaling_base + static_cast<std::uint32_t>(index * 2u);
+        auto& block = scaling_blocks[index];
+        block.id = index;
+        block.start_address = address;
+        block.end_address = address;
+        block.lines.push_back(nop);
+        block.lines.back().address = address;
+        if (index + 1u < scaling_blocks.size()) block.successors.push_back(address + 2u);
+    }
+    constexpr std::array<std::uint32_t, 1u> scaling_seeds = {scaling_base};
+    const auto scaling_start = std::chrono::steady_clock::now();
+    const auto scaling_functions =
+        katana::analysis::discover_functions_from_blocks(scaling_blocks, scaling_seeds);
+    const auto scaling_elapsed = std::chrono::steady_clock::now() - scaling_start;
+    require(scaling_functions.size() == 1u &&
+                scaling_functions.front().block_addresses.size() == scaling_block_count &&
+                scaling_functions.front().block_addresses.back() ==
+                    scaling_base + static_cast<std::uint32_t>((scaling_block_count - 1u) * 2u),
+            "Die gebuendelte Funktionsanalyse verlor einen Block der langen CFG-Kette.");
+    require(scaling_elapsed < std::chrono::seconds(5),
+            "Die Funktionsanalyse sortiert offenbar weiterhin nach jedem CFG-Block.");
 
     std::cout << "Alle Funktionsanalyse-Tests erfolgreich.\n";
 

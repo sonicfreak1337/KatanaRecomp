@@ -7,6 +7,7 @@
 #include <array>
 #include <cstdint>
 #include <optional>
+#include <unordered_map>
 #include <unordered_set>
 #include <utility>
 #include <vector>
@@ -360,17 +361,21 @@ OptimizationResult eliminate_dead_block_code(BasicBlock& block) {
 }
 
 OptimizationResult simplify_function_cfg(Function& function) {
+    std::unordered_map<std::uint32_t, const BasicBlock*> block_by_address;
+    block_by_address.reserve(function.blocks.size());
+    for (const auto& block : function.blocks)
+        block_by_address.emplace(block.start_address, &block);
     std::unordered_set<std::uint32_t> reachable;
     std::vector<std::uint32_t> worklist = {function.entry_address};
     while (!worklist.empty()) {
         const auto address = worklist.back();
         worklist.pop_back();
         if (!reachable.insert(address).second) continue;
-        for (const auto& block : function.blocks) {
-            if (block.start_address != address) continue;
-            worklist.insert(worklist.end(), block.successors.begin(), block.successors.end());
-            break;
-        }
+        const auto block = block_by_address.find(address);
+        if (block != block_by_address.end())
+            worklist.insert(worklist.end(),
+                            block->second->successors.begin(),
+                            block->second->successors.end());
     }
 
     OptimizationResult result;

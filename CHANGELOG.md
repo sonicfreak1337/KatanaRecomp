@@ -16,6 +16,11 @@
   Quellstrings nicht mehr unnoetig. Eine 4.096-Funktionen-Regression sowie die
   CFG-Join-/Partitionsregressionen sichern die Skalierung. Zwei veraltete
   Runtime-Testassertionen folgen wieder dem bereits geltenden Runtime-ABI 36.
+  Die nachfolgende Funktionsanalyse kanonisiert Block-, Callee- und Sitevektoren
+  nur noch einmal pro Funktion; die CFG-Optimierung findet erreichbare Bloecke
+  ueber einen Adressindex. CLI-Subphasen markieren Disc-Load, Analyse,
+  Lowering, Optimierung, Partitionen, Metadaten, Recipe und Writer getrennt,
+  ohne private Eingabedaten auszugeben.
 - Das verbindliche Produktmodell ist nun ausdruecklich XenonRecomp-artige
   statische Rekompilierung: Discbootstrap (`IP.BIN`) und BootExecutable werden
   vorausanalysiert, als SH-4-AOT in C++ beziehungsweise nativen PC-Code

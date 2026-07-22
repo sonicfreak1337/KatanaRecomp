@@ -1186,7 +1186,10 @@ int export_port_project(const std::filesystem::path& gdi_path,
              {},
              source_root,
              diagnostic_partial,
-             console_profile});
+             console_profile,
+             [](const std::string_view phase) {
+                 std::cout << "KATANA_PORT_SUBPHASE " << phase << '\n' << std::flush;
+             }});
         const auto build_path = report.output_root / "build";
         auto configure = std::string("cmake -S ") + shell_quote(report.output_root) + " -B " +
                          shell_quote(build_path);

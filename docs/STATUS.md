@@ -16,8 +16,15 @@ CPU-Kerne. Der generische Fix ersetzt rund 945 globale CFG-Neuaufbauten durch
 zwei vorbereitete CFGs, indiziert Kanten und Writer-Slices, entfernt globale
 Fremddeklarationen aus jeder Portpartition und reicht die konfigurierte
 Workerzahl bis zum Projektschreiber durch. Der gemeinsame 12-Job-Build ist
-gruen; der erneute private PAL-Export folgt unmittelbar. Ein Gastframe wird
-bis zu dessen Lauf weiterhin nicht behauptet.
+gruen. Der erste Wiederholungslauf blieb trotzdem fuer volle 300,4 Sekunden
+auf einem Kern innerhalb der Sammelphase und wurde mit null ueberlebenden
+Prozessen sowie ohne publiziertes Stage-/Zielverzeichnis beendet. Deshalb
+kanonisiert die vorgelagerte Funktionsanalyse ihre Vektoren nun einmal statt
+nach jedem CFG-Block; die CFG-Optimierung verwendet einen Adressindex fuer
+erreichbare Bloecke. Neue 4.096-/8.192-Block-Regressionen bestehen in 0,13 und
+0,60 Sekunden. Datenschutzneutrale `KATANA_PORT_SUBPHASE`-Marker trennen den
+naechsten Lauf in Disc-Load, Analyse, Lowering, Optimierung, Emit und Writer.
+Ein Gastframe wird bis zum privaten Lauf weiterhin nicht behauptet.
 Naechstes Gate: `v0.48.0` - Boot- und Frame-Integration
 Weitere interne Gates: `v0.48.0` und `v0.49.0` Alpha-Candidate
 Erster oeffentlicher Release: `v0.50.0` Alpha

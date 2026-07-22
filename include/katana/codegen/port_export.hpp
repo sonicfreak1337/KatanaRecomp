@@ -20,6 +20,8 @@ namespace katana::codegen {
 inline constexpr std::uint32_t port_project_contract_version =
     build_contract::port_project_contract_version;
 
+using PortExportProgressCallback = void (*)(std::string_view phase);
+
 struct PortExportOptions {
     std::string target_name;
     std::string tool_version;
@@ -27,6 +29,7 @@ struct PortExportOptions {
     std::filesystem::path forbidden_source_root;
     bool diagnostic_partial = false;
     std::string console_profile = "japan-ntsc";
+    PortExportProgressCallback progress_callback = nullptr;
 };
 
 struct PortExportResult {

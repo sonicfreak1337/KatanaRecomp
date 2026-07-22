@@ -199,6 +199,9 @@ fuer partitionierten C++-Codegen und Projektausgabe. Mit
 `KATANA_PORT_CODEGEN_JOBS` kann die Workerzahl reproduzierbar begrenzt werden,
 beispielsweise auf `12`; Analyseindizes werden einmal aufgebaut und von allen
 Funktionen wiederverwendet.
+Die CLI meldet innerhalb der groben `analysis-codegen`-Phase stabile
+`KATANA_PORT_SUBPHASE`-Marker. Sie enthalten nur den Stufennamen und weder
+Discidentitaeten noch private Pfade oder Inhalte.
 
 `workflow` schreibt waehrend des Laufs versionierte Fortschrittsereignisse als
 JSON Lines nach `stderr`; das abschliessende Jobergebnis bleibt als einzelnes

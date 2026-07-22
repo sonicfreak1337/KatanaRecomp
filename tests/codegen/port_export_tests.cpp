@@ -19,6 +19,7 @@
 #include <sstream>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace {
@@ -26,6 +27,12 @@ namespace {
 constexpr std::size_t raw_sector_size = 2352u;
 constexpr std::size_t payload_size = 2048u;
 constexpr std::uint32_t data_lba = 45'000u;
+
+std::vector<std::string> observed_progress;
+
+void observe_progress(const std::string_view phase) {
+    observed_progress.emplace_back(phase);
+}
 
 void require(const bool condition, const std::string& message) {
     if (!condition) {
@@ -553,8 +560,15 @@ int run_test(const int argc, char* argv[]) {
     require(has_asic_event(katana::runtime::SystemAsicEvent::AicaInterrupt),
             "Produktiver AICA-Interrupt erreicht das System-ASIC nicht.");
     const auto output = fixture.root / "port";
-    const PortExportOptions options{"synthetic_game", "0.37.0-dev", {1u, 4096u}};
+    const PortExportOptions options{"synthetic_game",
+                                    "0.37.0-dev",
+                                    {1u, 4096u},
+                                    {},
+                                    false,
+                                    "japan-ntsc",
+                                    observe_progress};
 
+    observed_progress.clear();
     const auto first = export_dreamcast_port_project(gdi, output, options);
     const auto generated_before = snapshot(output / "generated");
     const auto unit =
@@ -564,6 +578,19 @@ int run_test(const int argc, char* argv[]) {
     require(first.functions == 3u && first.partitions == 3u && first.checkpoints.size() == 8u &&
                 first.checkpoints.back() == "port-project-written",
             "Synthetische GDI durchlaeuft den Portexport nicht vollstaendig.");
+    const std::vector<std::string> expected_progress = {"disc-load",
+                                                        "boot-image",
+                                                        "control-flow-analysis",
+                                                        "ir-lowering",
+                                                        "ir-optimization",
+                                                        "input-provenance",
+                                                        "program-validation",
+                                                        "partition-codegen",
+                                                        "metadata",
+                                                        "disc-recipe",
+                                                        "artifact-write"};
+    require(observed_progress == expected_progress,
+            "Portexport meldet seine reale Analyse-/Codegen-Subphasenfolge nicht stabil.");
     require(std::filesystem::exists(output / "content" / "game.katana-install") &&
                 !std::filesystem::exists(output / "content" / "game.katana-disc") &&
                 read_text(output / ".gitignore").find("*.katana-disc") != std::string::npos &&

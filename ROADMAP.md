@@ -200,6 +200,9 @@ Der davor liegende Export-Hotpath baut globale CFG-, Kanten- und Writer-Slice-
 Indizes inzwischen einmalig auf; Codegen und Projektausgabe reichen die
 Hostparallelitaet durch. Der erneute private PAL-Export bleibt der unmittelbar
 folgende Nachweis und ist kein Ersatz fuer den noch offenen Gastframe.
+Funktionsdiscovery und CFG-Simplifizierung besitzen ebenfalls lineare
+Adressindizes; stabile, datenschutzneutrale Export-Subphasen grenzen den
+naechsten privaten Lauf ohne einen unbudgetierten Profiler ein.
 
 `KR-4804` ist `retired` (`superseded_by KR-4853`), `KR-4805` ist `retired`
 (`superseded_by KR-4854`). `KR-4831` bleibt als abgeschlossene Grundlage erhalten.
