@@ -335,6 +335,51 @@ int main() {
                 runtime_pointer_json.find("\"preceding_call\":false") != std::string::npos,
             "Der Sitebericht verliert Instruktionsform oder Definitionsprovenienz.");
 
+    std::vector<std::uint8_t> indexed_slice_bytes(24u, 0u);
+    for (std::size_t index = 0u; index < indexed_slice_bytes.size(); index += 2u)
+        indexed_slice_bytes[index] = 0x09u; // nop
+    const std::array<std::uint8_t, 12u> joined_slice{
+        0x22u, 0x61u, // mov.l @r2,r1
+        0x01u, 0x89u, // bt 0x8
+        0x09u, 0x00u, // nop
+        0x09u, 0x00u, // nop
+        0x2Bu, 0x41u, // jmp @r1
+        0x09u, 0x00u  // nop (delay)
+    };
+    const std::array<std::uint8_t, 6u> disjoint_slice{
+        0xF2u, 0x63u, // mov.l @r15,r3
+        0x2Bu, 0x43u, // jmp @r3
+        0x09u, 0x00u  // nop (delay)
+    };
+    std::copy(joined_slice.begin(), joined_slice.end(), indexed_slice_bytes.begin());
+    std::copy(disjoint_slice.begin(),
+              disjoint_slice.end(),
+              indexed_slice_bytes.begin() + 16u);
+    katana::io::ExecutableImage indexed_slice_image;
+    indexed_slice_image.set_guest_call_abi(katana::io::GuestCallAbi::SuperHC);
+    indexed_slice_image.add_segment({".text",
+                                     0u,
+                                     0u,
+                                     indexed_slice_bytes.size(),
+                                     katana::io::SegmentKind::Code,
+                                     {true, false, true},
+                                     std::move(indexed_slice_bytes)});
+    indexed_slice_image.add_entry_point(0u);
+    indexed_slice_image.add_entry_point(16u);
+    const auto indexed_slices = katana::analysis::analyze_control_flow(indexed_slice_image);
+    const auto* joined_site = site(indexed_slices, 8u);
+    const auto* disjoint_site = site(indexed_slices, 18u);
+    require(joined_site != nullptr && joined_site->definition_complete &&
+                joined_site->definition_sites == std::vector<std::uint32_t>{0u} &&
+                joined_site->origin_class ==
+                    katana::analysis::IndirectControlFlowOriginClass::UnboundedMemory,
+            "Writer-Slice-Index verliert die gemeinsame Definition am CFG-Join.");
+    require(disjoint_site != nullptr && disjoint_site->definition_complete &&
+                disjoint_site->definition_sites == std::vector<std::uint32_t>{16u} &&
+                disjoint_site->origin_class ==
+                    katana::analysis::IndirectControlFlowOriginClass::Stack,
+            "Writer-Slice-Index verwechselt Definitionen getrennter Entry-Bloecke.");
+
     std::vector<std::uint8_t> guarded_join_bytes(0x40u, 0x09u);
     const std::array<std::uint8_t, 20u> guarded_join_code{
         0x05u, 0xDCu, // mov.l @(0x18,pc),r12

@@ -206,26 +206,44 @@ struct BackwardSlice {
     bool preceding_call = false;
 };
 
-BackwardSlice bounded_writer_slice(const std::span<const BasicBlock> blocks,
-                                   const std::uint32_t before_address,
-                                   const std::uint8_t register_index) {
+struct WriterSliceLocation {
+    std::uint32_t block = 0u;
+    std::size_t before_index = 0u;
+};
+
+struct WriterSliceIndex {
     std::unordered_map<std::uint32_t, const BasicBlock*> by_start;
     std::unordered_map<std::uint32_t, std::vector<std::uint32_t>> predecessors;
-    const BasicBlock* initial = nullptr;
-    std::size_t initial_index = 0u;
+    std::unordered_map<std::uint32_t, WriterSliceLocation> locations;
+};
+
+WriterSliceIndex build_writer_slice_index(const std::span<const BasicBlock> blocks) {
+    WriterSliceIndex index;
+    index.by_start.reserve(blocks.size());
+    index.predecessors.reserve(blocks.size());
+    std::size_t instruction_count = 0u;
+    for (const auto& block : blocks)
+        instruction_count += block.lines.size();
+    index.locations.reserve(instruction_count);
     for (const auto& block : blocks) {
-        by_start.emplace(block.start_address, &block);
+        index.by_start.emplace(block.start_address, &block);
         for (const auto successor : block.successors)
-            predecessors[successor].push_back(block.start_address);
-        for (std::size_t index = 0u; index < block.lines.size(); ++index) {
-            if (block.lines[index].address == before_address) {
-                initial = &block;
-                initial_index = index;
-            }
+            index.predecessors[successor].push_back(block.start_address);
+        for (std::size_t line_index = 0u; line_index < block.lines.size(); ++line_index) {
+            index.locations.insert_or_assign(
+                block.lines[line_index].address,
+                WriterSliceLocation{block.start_address, line_index});
         }
     }
+    return index;
+}
+
+BackwardSlice bounded_writer_slice(const WriterSliceIndex& index,
+                                   const std::uint32_t before_address,
+                                   const std::uint8_t register_index) {
     BackwardSlice result;
-    if (initial == nullptr) {
+    const auto initial = index.locations.find(before_address);
+    if (initial == index.locations.end()) {
         result.incomplete = true;
         return result;
     }
@@ -234,28 +252,29 @@ BackwardSlice bounded_writer_slice(const std::span<const BasicBlock> blocks,
         std::size_t before_index = 0u;
         std::size_t depth = 0u;
     };
-    std::deque<Work> pending{{initial->start_address, initial_index, 0u}};
+    std::deque<Work> pending{
+        {initial->second.block, initial->second.before_index, 0u}};
     std::set<std::pair<std::uint32_t, std::size_t>> visited;
     constexpr std::size_t instruction_budget = 64u;
     while (!pending.empty()) {
         const auto work = pending.front();
         pending.pop_front();
         if (!visited.emplace(work.block, work.before_index).second) continue;
-        const auto found = by_start.find(work.block);
-        if (found == by_start.end()) {
+        const auto found = index.by_start.find(work.block);
+        if (found == index.by_start.end()) {
             result.incomplete = true;
             continue;
         }
         const auto& block = *found->second;
         bool writer_found = false;
         auto depth = work.depth;
-        for (std::size_t index = work.before_index; index-- > 0u;) {
+        for (std::size_t line_index = work.before_index; line_index-- > 0u;) {
             if (++depth > instruction_budget) {
                 result.incomplete = true;
                 writer_found = true;
                 break;
             }
-            const auto& line = block.lines[index];
+            const auto& line = block.lines[line_index];
             if (line.instruction.control_flow == katana::sh4::ControlFlowKind::Call ||
                 line.instruction.control_flow == katana::sh4::ControlFlowKind::IndirectCall)
                 result.preceding_call = true;
@@ -270,14 +289,14 @@ BackwardSlice bounded_writer_slice(const std::span<const BasicBlock> blocks,
             break;
         }
         if (writer_found) continue;
-        const auto incoming = predecessors.find(block.start_address);
-        if (incoming == predecessors.end() || incoming->second.empty()) {
+        const auto incoming = index.predecessors.find(block.start_address);
+        if (incoming == index.predecessors.end() || incoming->second.empty()) {
             result.incomplete = true;
             continue;
         }
         for (const auto predecessor : incoming->second) {
-            const auto predecessor_block = by_start.find(predecessor);
-            if (predecessor_block != by_start.end())
+            const auto predecessor_block = index.by_start.find(predecessor);
+            if (predecessor_block != index.by_start.end())
                 pending.push_back({predecessor, predecessor_block->second->lines.size(), depth});
         }
     }
@@ -287,6 +306,7 @@ BackwardSlice bounded_writer_slice(const std::span<const BasicBlock> blocks,
 void classify_dynamic_sites(const std::span<const katana::sh4::DisassemblyLine> lines,
                             std::vector<IndirectControlFlowResolution>& resolutions) {
     const auto blocks = build_basic_blocks(lines);
+    const auto writer_slice_index = build_writer_slice_index(blocks);
     for (auto& resolution : resolutions) {
         if (resolution.origin_class != IndirectControlFlowOriginClass::Table &&
             resolution.status == ResolutionStatus::Resolved &&
@@ -304,8 +324,8 @@ void classify_dynamic_sites(const std::span<const katana::sh4::DisassemblyLine> 
             }
             continue;
         }
-        const auto slice =
-            bounded_writer_slice(blocks, resolution.instruction_address, resolution.register_index);
+        const auto slice = bounded_writer_slice(
+            writer_slice_index, resolution.instruction_address, resolution.register_index);
         resolution.definition_sites.assign(slice.writers.begin(), slice.writers.end());
         resolution.definition_complete = !slice.incomplete && !slice.writers.empty();
         resolution.preceding_call = slice.preceding_call;
@@ -325,8 +345,8 @@ void classify_dynamic_sites(const std::span<const katana::sh4::DisassemblyLine> 
         bool object_field = false;
         bool callback_source = resolution.register_index == 13u;
         if (writer != nullptr) {
-            const auto base =
-                bounded_writer_slice(blocks, writer->address, writer->instruction.source_register);
+            const auto base = bounded_writer_slice(
+                writer_slice_index, writer->address, writer->instruction.source_register);
             vtable_base = base.writers.size() == 1u && !base.incomplete;
             callback_source = callback_source || (writer->instruction.kind ==
                                                       katana::sh4::InstructionKind::MovRegister &&

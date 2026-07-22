@@ -5,9 +5,12 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
+#include <cstdint>
 #include <cstdlib>
 #include <iostream>
 #include <string>
+#include <vector>
 
 namespace {
 
@@ -136,6 +139,29 @@ int main() {
         });
     require(guarded_function != guarded_program.end() && guarded_function->blocks.size() == 1u,
             "Bekannter dynamischer Codeblock wurde nicht fuer AOT-Rekompilierung materialisiert.");
+
+    constexpr std::size_t scaling_function_count = 4096u;
+    constexpr std::uint32_t scaling_base = 0x8C100000u;
+    std::vector<std::uint8_t> scaling_bytes;
+    scaling_bytes.reserve(scaling_function_count * 4u);
+    std::vector<katana::analysis::FunctionInfo> scaling_functions;
+    scaling_functions.reserve(scaling_function_count);
+    for (std::size_t index = 0u; index < scaling_function_count; ++index) {
+        scaling_bytes.insert(scaling_bytes.end(), {0x0Bu, 0x00u, 0x09u, 0x00u});
+        katana::analysis::FunctionInfo function;
+        function.id = index;
+        function.entry_address = scaling_base + static_cast<std::uint32_t>(index * 4u);
+        function.block_addresses.push_back(function.entry_address);
+        scaling_functions.push_back(std::move(function));
+    }
+    const auto scaling_lines = katana::sh4::disassemble(scaling_bytes, scaling_base);
+    const auto scaling_start = std::chrono::steady_clock::now();
+    const auto scaling_program = katana::ir::lower_program(scaling_lines, scaling_functions);
+    const auto scaling_elapsed = std::chrono::steady_clock::now() - scaling_start;
+    require(scaling_program.size() == scaling_function_count,
+            "Der gebuendelte Loweringpfad verlor unabhaengige Funktionen.");
+    require(scaling_elapsed < std::chrono::seconds(5),
+            "Der gebuendelte Loweringpfad baut die globale CFG offenbar pro Funktion neu.");
 
     std::cout << "Alle IR-Lowering-Tests erfolgreich.\n";
 

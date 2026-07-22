@@ -9,6 +9,15 @@ Produktport entfernt und identische Disc-Reloads an natives AOT gebunden; offen
 bleiben strukturierte Ladetransaktionen und die vorab erzeugte Registry
 latenter Module. `KR-4849` fuehrt den realen Channel-2-Pfad bis TA-EOL fort.
 Die Wait-Loop-Klassifikation aus `KR-4842` laeuft getrennt.
+Ein frischer Sonic-Adventure-PAL-Export erreichte vor diesem Performanceblock
+den harten Fuenf-Minuten-Abbruch noch in `analysis-codegen`. Eine begrenzte
+58,3-Sekunden-Probe belegte dort durchschnittlich 0,995 und maximal 1,013
+CPU-Kerne. Der generische Fix ersetzt rund 945 globale CFG-Neuaufbauten durch
+zwei vorbereitete CFGs, indiziert Kanten und Writer-Slices, entfernt globale
+Fremddeklarationen aus jeder Portpartition und reicht die konfigurierte
+Workerzahl bis zum Projektschreiber durch. Der gemeinsame 12-Job-Build ist
+gruen; der erneute private PAL-Export folgt unmittelbar. Ein Gastframe wird
+bis zu dessen Lauf weiterhin nicht behauptet.
 Naechstes Gate: `v0.48.0` - Boot- und Frame-Integration
 Weitere interne Gates: `v0.48.0` und `v0.49.0` Alpha-Candidate
 Erster oeffentlicher Release: `v0.50.0` Alpha

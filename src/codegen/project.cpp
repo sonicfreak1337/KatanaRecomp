@@ -251,19 +251,20 @@ ProjectWriteResult write_codegen_project(const std::filesystem::path& output_roo
         bool hit;
     };
     const auto write_artifact = [&](const ProjectArtifact& artifact) {
-        std::string content = artifact.content;
         bool hit = false;
         if (options.cache != nullptr) {
             const auto cache_name = artifact.relative_path.generic_string();
             const auto cached = options.cache->load(options.cache_key, cache_name);
             if (cached) {
-                content = *cached;
+                write_file(root, artifact.relative_path, *cached);
                 hit = true;
             } else {
-                options.cache->store(options.cache_key, cache_name, content);
+                options.cache->store(options.cache_key, cache_name, artifact.content);
+                write_file(root, artifact.relative_path, artifact.content);
             }
+        } else {
+            write_file(root, artifact.relative_path, artifact.content);
         }
-        write_file(root, artifact.relative_path, content);
         return WriteOutcome{artifact.relative_path, hit};
     };
 

@@ -11,6 +11,7 @@
 #include <stdexcept>
 #include <string_view>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -995,33 +996,40 @@ std::string_view operation_name(const Operation operation) noexcept {
     return "unknown";
 }
 
-Function
-lower_function(const std::span<const katana::sh4::DisassemblyLine> lines,
-               const katana::analysis::FunctionInfo& function,
-               const std::span<const katana::analysis::ResolvedControlFlowEdge> resolved_edges,
-               const std::span<const std::uint32_t> function_entries) {
-    const auto source_blocks =
-        katana::analysis::build_basic_blocks(lines, resolved_edges, function_entries);
+namespace {
 
-    std::unordered_map<std::uint32_t, const katana::analysis::BasicBlock*> block_by_address;
-
-    block_by_address.reserve(source_blocks.size());
-
-    for (const auto& block : source_blocks) {
-        block_by_address.emplace(block.start_address, &block);
+struct LoweringContext {
+    explicit LoweringContext(
+        const std::span<const katana::analysis::BasicBlock> source_blocks,
+        const std::span<const katana::analysis::ResolvedControlFlowEdge> resolved_edges) {
+        block_by_address.reserve(source_blocks.size());
+        for (const auto& block : source_blocks)
+            block_by_address.emplace(block.start_address, &block);
+        edges_by_instruction.reserve(resolved_edges.size());
+        for (const auto& edge : resolved_edges)
+            edges_by_instruction.emplace(edge.instruction_address, &edge);
     }
 
+    std::unordered_map<std::uint32_t, const katana::analysis::BasicBlock*> block_by_address;
+    std::unordered_multimap<std::uint32_t, const katana::analysis::ResolvedControlFlowEdge*>
+        edges_by_instruction;
+};
+
+Function lower_function(const LoweringContext& context,
+                        const katana::analysis::FunctionInfo& function) {
     Function result;
     result.entry_address = function.entry_address;
     result.direct_callees = function.direct_callees;
     result.indirect_call_sites = function.indirect_call_sites;
 
     result.blocks.reserve(function.block_addresses.size());
+    const std::unordered_set<std::uint32_t> function_blocks(function.block_addresses.begin(),
+                                                            function.block_addresses.end());
 
     for (const auto block_address : function.block_addresses) {
-        const auto block_iterator = block_by_address.find(block_address);
+        const auto block_iterator = context.block_by_address.find(block_address);
 
-        if (block_iterator == block_by_address.end()) {
+        if (block_iterator == context.block_by_address.end()) {
             throw std::runtime_error("Ein Funktionsblock wurde in der CFG nicht gefunden.");
         }
 
@@ -1033,10 +1041,8 @@ lower_function(const std::span<const katana::sh4::DisassemblyLine> lines,
         target_block.successors.erase(
             std::remove_if(target_block.successors.begin(),
                            target_block.successors.end(),
-                           [&function](const std::uint32_t successor) {
-                               return std::find(function.block_addresses.begin(),
-                                                function.block_addresses.end(),
-                                                successor) == function.block_addresses.end();
+                           [&function_blocks](const std::uint32_t successor) {
+                               return !function_blocks.contains(successor);
                            }),
             target_block.successors.end());
         target_block.has_indirect_successor = source_block.has_indirect_successor;
@@ -1045,10 +1051,10 @@ lower_function(const std::span<const katana::sh4::DisassemblyLine> lines,
 
         for (const auto& source_line : source_block.lines) {
             auto instruction = lower_instruction(source_line);
-            for (const auto& edge : resolved_edges) {
-                if (edge.instruction_address == source_line.address) {
-                    instruction.resolved_targets.push_back(edge.target_address);
-                }
+            const auto [edge_begin, edge_end] =
+                context.edges_by_instruction.equal_range(source_line.address);
+            for (auto edge = edge_begin; edge != edge_end; ++edge) {
+                instruction.resolved_targets.push_back(edge->second->target_address);
             }
             std::sort(instruction.resolved_targets.begin(), instruction.resolved_targets.end());
             instruction.resolved_targets.erase(std::unique(instruction.resolved_targets.begin(),
@@ -1070,27 +1076,43 @@ lower_function(const std::span<const katana::sh4::DisassemblyLine> lines,
 }
 
 std::vector<Function>
-lower_program(const std::span<const katana::sh4::DisassemblyLine> lines,
-              const std::span<const katana::analysis::FunctionInfo> functions,
-              const std::span<const katana::analysis::ResolvedControlFlowEdge> resolved_edges) {
+lower_program(const LoweringContext& context,
+              const std::span<const katana::analysis::FunctionInfo> functions) {
     std::vector<Function> result;
     result.reserve(functions.size());
 
-    std::vector<std::uint32_t> function_entries;
-    function_entries.reserve(functions.size());
-    for (const auto& function : functions) {
-        function_entries.push_back(function.entry_address);
-    }
-
-    for (const auto& function : functions) {
-        result.push_back(lower_function(lines, function, resolved_edges, function_entries));
-    }
+    for (const auto& function : functions)
+        result.push_back(lower_function(context, function));
 
     std::sort(result.begin(), result.end(), [](const Function& left, const Function& right) {
         return left.entry_address < right.entry_address;
     });
-
     return result;
+}
+
+} // namespace
+
+Function
+lower_function(const std::span<const katana::sh4::DisassemblyLine> lines,
+               const katana::analysis::FunctionInfo& function,
+               const std::span<const katana::analysis::ResolvedControlFlowEdge> resolved_edges,
+               const std::span<const std::uint32_t> function_entries) {
+    const auto source_blocks =
+        katana::analysis::build_basic_blocks(lines, resolved_edges, function_entries);
+    return lower_function(LoweringContext(source_blocks, resolved_edges), function);
+}
+
+std::vector<Function>
+lower_program(const std::span<const katana::sh4::DisassemblyLine> lines,
+              const std::span<const katana::analysis::FunctionInfo> functions,
+              const std::span<const katana::analysis::ResolvedControlFlowEdge> resolved_edges) {
+    std::vector<std::uint32_t> function_entries;
+    function_entries.reserve(functions.size());
+    for (const auto& function : functions)
+        function_entries.push_back(function.entry_address);
+    const auto source_blocks =
+        katana::analysis::build_basic_blocks(lines, resolved_edges, function_entries);
+    return lower_program(LoweringContext(source_blocks, resolved_edges), functions);
 }
 
 std::vector<Function> lower_program(const katana::analysis::ControlFlowAnalysisResult& analysis) {
@@ -1109,16 +1131,14 @@ std::vector<Function> lower_program(const katana::analysis::ControlFlowAnalysisR
     }
     std::sort(seeds.begin(), seeds.end());
     seeds.erase(std::unique(seeds.begin(), seeds.end()), seeds.end());
-    const auto functions = katana::analysis::discover_functions(
-        analysis.recursive.instructions, seeds, analysis.resolved_edges);
-    auto program =
-        lower_program(analysis.recursive.instructions, functions, analysis.resolved_edges);
+    const auto source_blocks = katana::analysis::build_basic_blocks(
+        analysis.recursive.instructions, analysis.resolved_edges, seeds);
+    const auto functions = katana::analysis::discover_functions_from_blocks(
+        source_blocks, seeds, analysis.resolved_edges);
 
     std::set<std::uint32_t> owned_blocks;
     for (const auto& function : functions)
         owned_blocks.insert(function.block_addresses.begin(), function.block_addresses.end());
-    const auto source_blocks = katana::analysis::build_basic_blocks(
-        analysis.recursive.instructions, analysis.resolved_edges, seeds);
     std::unordered_map<std::uint32_t, const katana::analysis::BasicBlock*> missing_blocks;
     for (const auto& block : source_blocks) {
         if (!owned_blocks.contains(block.start_address))
@@ -1170,13 +1190,18 @@ std::vector<Function> lower_program(const katana::analysis::ControlFlowAnalysisR
     }
 
     auto all_entries = seeds;
+    for (const auto& function : functions)
+        all_entries.push_back(function.entry_address);
     for (const auto& supplemental : supplemental_functions)
         all_entries.push_back(supplemental.entry_address);
     std::sort(all_entries.begin(), all_entries.end());
     all_entries.erase(std::unique(all_entries.begin(), all_entries.end()), all_entries.end());
+    const auto lowering_blocks = katana::analysis::build_basic_blocks(
+        analysis.recursive.instructions, analysis.resolved_edges, all_entries);
+    const LoweringContext context(lowering_blocks, analysis.resolved_edges);
+    auto program = lower_program(context, functions);
     for (const auto& supplemental : supplemental_functions) {
-        auto supplemental_ir = lower_function(
-            analysis.recursive.instructions, supplemental, analysis.resolved_edges, all_entries);
+        auto supplemental_ir = lower_function(context, supplemental);
         for (const auto& block : supplemental_ir.blocks) {
             for (const auto& instruction : block.instructions) {
                 if (instruction.operation == Operation::Call && instruction.target_address)
@@ -1204,18 +1229,18 @@ std::vector<Function> lower_program(const katana::analysis::ControlFlowAnalysisR
     std::sort(program.begin(), program.end(), [](const Function& left, const Function& right) {
         return left.entry_address < right.entry_address;
     });
+    std::unordered_map<std::uint32_t, const katana::analysis::IndirectControlFlowResolution*>
+        resolution_by_address;
+    resolution_by_address.reserve(analysis.indirect_control_flow.size());
+    for (const auto& resolution : analysis.indirect_control_flow)
+        resolution_by_address.emplace(resolution.instruction_address, &resolution);
     for (auto& function : program) {
         for (auto& block : function.blocks) {
             for (auto& instruction : block.instructions) {
                 if (instruction.dynamic_target_class == DynamicTargetClass::NotApplicable) continue;
-                const auto resolution = std::find_if(analysis.indirect_control_flow.begin(),
-                                                     analysis.indirect_control_flow.end(),
-                                                     [&instruction](const auto& candidate) {
-                                                         return candidate.instruction_address ==
-                                                                instruction.source_address;
-                                                     });
-                if (resolution == analysis.indirect_control_flow.end()) continue;
-                switch (katana::analysis::control_flow_report_status(*resolution)) {
+                const auto resolution = resolution_by_address.find(instruction.source_address);
+                if (resolution == resolution_by_address.end()) continue;
+                switch (katana::analysis::control_flow_report_status(*resolution->second)) {
                 case katana::analysis::ControlFlowReportStatus::Resolved:
                     instruction.dynamic_target_class = DynamicTargetClass::NotApplicable;
                     break;

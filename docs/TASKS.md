@@ -856,6 +856,11 @@ Interpreter mehr und endet bei fehlendem AOT-Ziel typisiert. Nur
 `diagnostic_partial` enthaelt den ausgewiesenen begrenzten
 Diagnoseinterpreter. Offen bleiben strukturierte Disc-Ladetransaktionen und
 vorab erzeugte latente native Module; der Task wird deshalb nicht abgehakt.
+Der fuer den privaten Nachweis notwendige Exportpfad baut CFG, Edge- und
+Writer-Slice-Indizes nicht mehr pro Funktion beziehungsweise Site neu auf.
+Single-Block-Partitionen emittieren nur lokale Deklarationen und der Writer
+uebernimmt dieselbe konfigurierte Parallelitaet wie der Codegen. Der erneute
+PAL-Export ist der naechste direkte Schritt.
 
 ### [ ] KR-4849 - TA-Eingang und PVR-Kommandopfad
 

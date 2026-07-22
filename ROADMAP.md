@@ -196,6 +196,10 @@ bis TA-Object-List/EOL synthetisch verbunden. Fuer Direct-Texture-Ziele
 `0x11`/`0x13` bleibt die Zielprogression mehrteiliger Transfers als generische
 P1-Luecke offen. Diese Zwischenschritte beweisen noch keinen privaten
 Sonic-Adventure-Gastframe; `KR-4848`, `KR-4849` und `KR-4850` bleiben offen.
+Der davor liegende Export-Hotpath baut globale CFG-, Kanten- und Writer-Slice-
+Indizes inzwischen einmalig auf; Codegen und Projektausgabe reichen die
+Hostparallelitaet durch. Der erneute private PAL-Export bleibt der unmittelbar
+folgende Nachweis und ist kein Ersatz fuer den noch offenen Gastframe.
 
 `KR-4804` ist `retired` (`superseded_by KR-4853`), `KR-4805` ist `retired`
 (`superseded_by KR-4854`). `KR-4831` bleibt als abgeschlossene Grundlage erhalten.

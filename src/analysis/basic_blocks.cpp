@@ -150,13 +150,9 @@ build_basic_blocks(const std::span<const katana::sh4::DisassemblyLine> lines,
 
         const auto fallthrough_address =
             control_line.address + (instruction.has_delay_slot ? 4u : 2u);
-        const auto has_fallthrough =
-            std::any_of(blocks.begin(),
-                        blocks.end(),
-                        [fallthrough_address](const auto& candidate) {
-                            return candidate.start_address == fallthrough_address;
-                        }) &&
-            paired_delay_slot;
+        const auto fallthrough = address_to_index.find(fallthrough_address);
+        const auto has_fallthrough = paired_delay_slot && fallthrough != address_to_index.end() &&
+                                     leaders.contains(fallthrough->second);
 
         if (!paired_delay_slot) {
             block.has_indirect_successor =

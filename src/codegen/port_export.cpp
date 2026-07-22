@@ -1649,10 +1649,6 @@ PortExportResult export_dreamcast_port_project(const PreparedPortProgram& prepar
         partition_translation_units(prepared.program, options.partition_options);
     if (partitions.empty()) throw std::runtime_error("Portcodegen erzeugte keine Partition.");
 
-    std::vector<std::uint32_t> global_entries;
-    global_entries.reserve(prepared.program.size());
-    for (const auto& function : prepared.program)
-        global_entries.push_back(function.entry_address);
     std::vector<ProjectArtifact> artifacts;
     artifacts.reserve(partitions.size() + 9u);
     const auto emit_partition = [&](const TranslationUnitPartition& partition) {
@@ -1661,10 +1657,13 @@ PortExportResult export_dreamcast_port_project(const PreparedPortProgram& prepar
             std::any_of(functions.begin(), functions.end(), [&prepared](const auto& function) {
                 return function.entry_address == prepared.entry_address;
             });
+        // Port units return every block transition to the runtime dispatcher. Advertising every
+        // other partition as a direct-link target would only emit the complete global declaration
+        // table into every unit, turning source generation and output size quadratic.
         const BackendRequest request{functions,
                                      functions.front().entry_address,
                                      {},
-                                     global_entries,
+                                     {},
                                      port_namespace,
                                      contains_program_entry,
                                      true,
@@ -1812,7 +1811,9 @@ PortExportResult export_dreamcast_port_project(const PreparedPortProgram& prepar
                     true);
     std::filesystem::create_directories(canonical_root / "runtime");
     std::filesystem::create_directories(canonical_root / "user-data" / "content");
-    const auto write = write_codegen_project(canonical_root / "generated", std::move(artifacts));
+    const auto write = write_codegen_project(canonical_root / "generated",
+                                             std::move(artifacts),
+                                             ProjectWriteOptions{codegen_jobs});
     write_port_file(canonical_root, "CMakeLists.txt", root_cmake(), true);
     write_port_file(canonical_root,
                     ".gitignore",

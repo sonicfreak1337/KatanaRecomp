@@ -4,6 +4,18 @@
 
 ### Geaendert
 
+- Der native Portexport skaliert seine Analyse- und Ausgabephase nun mit der
+  tatsaechlichen Arbeitsmenge statt globale Strukturen pro Funktion oder
+  Sprungstelle neu aufzubauen. Bulk-Lowering erzeugt die globale CFG nur noch
+  fuer Discovery und finale Eintritte, adressindiziert Bloecke, Kanten und
+  indirekte Aufloesungen und entfernt den quadratischen Fallthrough-Scan.
+  Rueckwaertsslices teilen sich pro Klassifikationslauf einen vorbereiteten
+  Block-/Vorgaenger-/Adressindex. Single-Block-Portpartitionen deklarieren nur
+  ihre lokalen Funktionen; der Projektschreiber uebernimmt
+  `KATANA_PORT_CODEGEN_JOBS`, schreibt Artefakte parallel und kopiert grosse
+  Quellstrings nicht mehr unnoetig. Eine 4.096-Funktionen-Regression sowie die
+  CFG-Join-/Partitionsregressionen sichern die Skalierung. Zwei veraltete
+  Runtime-Testassertionen folgen wieder dem bereits geltenden Runtime-ABI 36.
 - Das verbindliche Produktmodell ist nun ausdruecklich XenonRecomp-artige
   statische Rekompilierung: Discbootstrap (`IP.BIN`) und BootExecutable werden
   vorausanalysiert, als SH-4-AOT in C++ beziehungsweise nativen PC-Code

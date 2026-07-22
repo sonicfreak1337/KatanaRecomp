@@ -194,6 +194,12 @@ C:\ports\game\game.exe --install-disc .\disc\game.gdi
 C:\ports\game\game.exe
 ```
 
+Der Portexport verwendet standardmaessig die vom Host gemeldeten CPU-Threads
+fuer partitionierten C++-Codegen und Projektausgabe. Mit
+`KATANA_PORT_CODEGEN_JOBS` kann die Workerzahl reproduzierbar begrenzt werden,
+beispielsweise auf `12`; Analyseindizes werden einmal aufgebaut und von allen
+Funktionen wiederverwendet.
+
 `workflow` schreibt waehrend des Laufs versionierte Fortschrittsereignisse als
 JSON Lines nach `stderr`; das abschliessende Jobergebnis bleibt als einzelnes
 JSON-Dokument auf `stdout`. Gesamtprozente sind monoton. `step_total: null`

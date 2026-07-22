@@ -590,6 +590,14 @@ int run_test(const int argc, char* argv[]) {
                     "Portpartition besitzt einen abweichenden globalen Programmeinstieg.");
             p2_pc_relative_literal =
                 p2_pc_relative_literal || content.find("0xAC008308u") != std::string::npos;
+            constexpr std::string_view service_declaration =
+                "_with_services(CpuState& cpu, PlatformServices* services);";
+            std::size_t declaration_count = 0u;
+            for (auto offset = content.find(service_declaration); offset != std::string::npos;
+                 offset = content.find(service_declaration, offset + service_declaration.size()))
+                ++declaration_count;
+            require(declaration_count == 1u,
+                    "Portpartition deklariert fremde Funktionen und skaliert quadratisch.");
             ++entry_metadata_count;
         }
     }
