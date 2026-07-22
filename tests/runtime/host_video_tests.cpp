@@ -91,7 +91,7 @@ int main() {
     registers.write(pvr_register::ParameterBase, parameter_base);
     registers.write(pvr_register::BackgroundPlaneConfig, 1u << 24u);
     registers.write(pvr_register::BackgroundPlaneDepth, std::bit_cast<std::uint32_t>(0.5f));
-    registers.write(pvr_register::FramebufferReadControl, 0xDu);
+    registers.write(pvr_register::FramebufferReadControl, 0xDu | (1u << 23u));
     registers.write(pvr_register::FramebufferReadSize, 1u << 20u);
     registers.write(pvr_register::FramebufferReadSof1, 0x4000u);
     registers.write(pvr_register::VideoControl,

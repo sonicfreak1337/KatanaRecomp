@@ -167,8 +167,6 @@ werden nur titelunabhaengige SH-4-, BIOS-, GD-ROM-, DMA-, TA- und PVR-Vertraege.
 - [ ] `KR-4911` - Runtimebeobachtung, Replay und Fehlerpakete
 - [ ] `KR-4912` - Dynamische Codebereiche, Module und Overlays
 - [ ] `KR-4913` - CPU-/Plattform-Bring-up bis `KR_GUEST_PROGRAM_ENTERED`
-- [ ] `KR-4814` - Nativer Controller und gastzeitgebundene Maple-Eingabe
-- [ ] `KR-4914` - Private interaktive Runtime-Sitzung mit Controller
 - [ ] `KR-4915` - Gast-PVR-Pfad bis `KR_FIRST_GUEST_FRAME`
 
 ### Native-Boot-Tasks
@@ -194,15 +192,27 @@ SH-4-DMAC-Channel-2-Pfad verwendet den oeffentlichen Dreamcast-Vertrag `RS=2`,
 32-Byte-Bursts, inkrementierende Quelle, festes Ziel und `DMAOR.DME+DDT` und ist
 bis TA-Object-List/EOL synthetisch verbunden. Fuer Direct-Texture-Ziele
 `0x11`/`0x13` bleibt die Zielprogression mehrteiliger Transfers als generische
-P1-Luecke offen. Diese Zwischenschritte beweisen noch keinen privaten
-Sonic-Adventure-Gastframe; `KR-4848`, `KR-4849` und `KR-4850` bleiben offen.
-Der davor liegende Export-Hotpath baut globale CFG-, Kanten- und Writer-Slice-
-Indizes inzwischen einmalig auf; Codegen und Projektausgabe reichen die
-Hostparallelitaet durch. Der erneute private PAL-Export bleibt der unmittelbar
-folgende Nachweis und ist kein Ersatz fuer den noch offenen Gastframe.
-Funktionsdiscovery und CFG-Simplifizierung besitzen ebenfalls lineare
-Adressindizes; stabile, datenschutzneutrale Export-Subphasen grenzen den
-naechsten privaten Lauf ohne einen unbudgetierten Profiler ein.
+P1-Luecke offen. P1-/P2-Codealiase dispatchen denselben nativen Block.
+Beschreibbare absolute Pointertabellen und Fixed-Stride-`BSRF`-Handlerinseln des
+garantierten Anfangssnapshots liefern nur vorab kompilierbare `RuntimeOnly`-
+Kandidaten: Sie erzeugen keine erfundenen CFG-Kanten und ihre Ziele werden als
+Basic-Block-Leader, nicht als Funktionsseeds behandelt. Der damit neu
+exportierte private PAL-Port wurde aus der unveraenderten Original-GDI lokal
+installiert und verlaesst den vorherigen `BSRF`-Dispatchstopp. Die anschliessend
+belegten BIOS-Kommandos `NOP`, `REQ_MODE` und `SET_MODE` teilen ihren
+persistenten Modezustand mit der Paketoberflaeche. Der naechste budgetierte Lauf
+erreichte 345.568.225 Gastzyklen, 7.421.380 native Bloecke und spaetere
+PVR-Registerwrites. Er endet nun an einem fehlenden nativen Inneneinstieg;
+TA-Eingang, Rendergeneration und echter Gastframe bleiben null. `KR-4848`,
+`KR-4849` und `KR-4850` bleiben offen. Der weitere Audit bleibt auf allgemeine
+AOT-, Register-, Timing-, DMA- und Completionluecken gerichtet.
+
+Der Export-Hotpath baut globale CFG-, Kanten- und Writer-Slice-Indizes einmalig
+auf; Codegen und Projektausgabe reichen die Hostparallelitaet durch. Unter
+Windows verwendet die Eingabeprovenienz den nativen BCrypt-SHA-256-Pfad mit
+grossen Chunks. Funktionsdiscovery und CFG-Simplifizierung besitzen lineare
+Adressindizes; stabile, datenschutzneutrale Export-Subphasen grenzen weitere
+budgetierte Laeufe ohne einen unbudgetierten Profiler ein.
 
 `KR-4804` ist `retired` (`superseded_by KR-4853`), `KR-4805` ist `retired`
 (`superseded_by KR-4854`). `KR-4831` bleibt als abgeschlossene Grundlage erhalten.
@@ -216,7 +226,6 @@ KR-4831 und KR-4841
   -> KR-4913
   -> KR-4849 und KR-4915
   -> KR-4850
-  -> KR-4814 und KR-4914
   -> KR-4851
   -> KR-4852
   -> KR-4853
@@ -245,9 +254,6 @@ gebuendelt. Jeder Prozess besitzt ein hartes Limit von 15 Minuten.
   gueltigen Read-/Write-Framebuffer und aktiven Scanout; Hostpraesentation ist
   ein separater Checkpoint
 - Fastpath und Referenzpfad erzeugen bytegleiche Gastresultate
-- moderne Xbox-, DualSense-/DualShock- und uebliche Standardcontroller werden
-  ueber einen geraeteagnostischen Hostvertrag auf Maple abgebildet; Buttons,
-  Sticks, Trigger, Hotplug, Fokusverlust und festhaengende Eingaben sind getestet
 - keine festen Spieladressen, Spielbytes, Titelhacks oder uebernommenen
   Emulatorimplementierungen gelangen in den Produktpfad
 - Quell-GDIs werden nie geloescht; Retaildaten und private Identitaeten bleiben
@@ -272,10 +278,12 @@ Sonic Adventure liefert keine titelspezifischen Produktvertraege.
 - [ ] `KR-4811` - Private Harnessmodi und technisch erzwungener No-run-Vertrag
 - [ ] `KR-4812` - Strukturierte Runtimeevidenz, Budgets, Replay und Datenschutz
 - [ ] `KR-4813` - Content-addressed Harness- und Portbuildbeschleunigung
+- [ ] `KR-4814` - Nativer Controller und gastzeitgebundene Maple-Eingabe
 - [ ] `KR-4821` - Versionierte Jobtelemetrie und belastbarer Fortschritt
 - [ ] `KR-4822` - GUI-Informationsarchitektur und responsives Layout
 - [ ] `KR-4823` - Diagnostik-, Ergebnis-, Log- und Workflow-QOL
 - [ ] `KR-4824` - Unveraenderliche Task-ID-Registry und Roadmaplinter
+- [ ] `KR-4914` - Private interaktive Runtime-Sitzung mit Controller
 - [ ] `KR-4916` - Menue, Eingabe und spielbare Szene
 
 ### Urspruengliche, wiederhergestellte Release-Candidate-Tasks
@@ -294,6 +302,7 @@ KR-4854
   -> KR-4802
   -> KR-4803
   -> KR-4812 und KR-4813
+  -> KR-4814 und KR-4914
   -> KR-4822 und KR-4823
   -> KR-4916
   -> KR-4901, KR-4902 und KR-4903

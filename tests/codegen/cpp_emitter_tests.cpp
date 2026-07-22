@@ -79,6 +79,9 @@ int main() {
     require(source.find("fn_8C010000") != std::string::npos,
             "Die generierte Einstiegsfunktion fehlt.");
 
+    require(source.find("case 0xAC010000u:") != std::string::npos,
+            "Der native Block akzeptiert seinen direkten SH-4-P1/P2-Alias nicht.");
+
     require(source.find("fn_8C010008") != std::string::npos, "Die generierte Unterfunktion fehlt.");
 
     const auto delay_position = source.find("cpu.r[2] = static_cast<std::uint32_t>(7);");

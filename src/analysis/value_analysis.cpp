@@ -8,8 +8,8 @@
 #include <cstdint>
 #include <limits>
 #include <optional>
-#include <set>
 #include <string_view>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -138,6 +138,17 @@ std::optional<std::uint32_t> read_immutable_integer(const katana::io::Executable
         (segment->permissions.writable && !snapshot_range_unchanged(snapshot, address, width)))
         return std::nullopt;
     return read_committed_integer(image, address, width);
+}
+
+bool initial_snapshot_segment(const katana::io::ExecutableImage& image,
+                              const katana::io::ImageSegment& segment) {
+    if (!segment.permissions.readable) return false;
+    if (segment.load_phase != katana::io::ImageLoadPhase::Initial ||
+        segment.source_kind == katana::io::ImageSourceKind::RuntimeMemory)
+        return false;
+    if (!segment.permissions.writable) return true;
+    return image.initial_snapshot_policy() ==
+           katana::io::InitialSnapshotPolicy::EntryPointStraightLineQuiescent;
 }
 
 void apply_immutable_load(RegisterConstants& state,
@@ -538,7 +549,8 @@ propagate_constants(const std::span<const katana::sh4::DisassemblyLine> lines,
     RegisterConstants state = initial;
     std::vector<ConstantTraceEntry> trace;
     trace.reserve(lines.size());
-    std::set<std::uint32_t> control_flow_targets;
+    std::unordered_set<std::uint32_t> control_flow_targets;
+    control_flow_targets.reserve(lines.size());
     for (const auto& line : lines) {
         if (line.target_address.has_value()) control_flow_targets.insert(*line.target_address);
     }
@@ -625,21 +637,25 @@ analyze_register_values(const std::span<const katana::sh4::DisassemblyLine> line
     return analysis;
 }
 
-std::vector<IndirectControlFlowResolution>
-resolve_indirect_control_flow(const std::span<const katana::sh4::DisassemblyLine> lines,
-                              const katana::io::ExecutableImage& image) {
-    std::vector<IndirectControlFlowResolution> resolutions;
+LocalControlFlowAnalysis
+analyze_local_control_flow(const std::span<const katana::sh4::DisassemblyLine> lines,
+                           const katana::io::ExecutableImage& image) {
+    LocalControlFlowAnalysis analysis;
     RegisterConstants state;
-    std::set<std::uint32_t> control_flow_targets;
+    std::unordered_set<std::uint32_t> control_flow_targets;
+    control_flow_targets.reserve(lines.size());
     for (const auto& line : lines) {
         if (line.target_address.has_value()) control_flow_targets.insert(*line.target_address);
     }
     std::optional<std::uint16_t> clear_after_delay_slot;
     EntrySnapshotState snapshot;
-    snapshot.active = image.initial_snapshot_policy() ==
-                          katana::io::InitialSnapshotPolicy::EntryPointStraightLineQuiescent &&
-                      image.entry_points().size() == 1u && !lines.empty() &&
-                      lines.front().address == image.entry_points().front();
+    std::optional<std::uint32_t> snapshot_entry;
+    if (image.initial_snapshot_policy() ==
+        katana::io::InitialSnapshotPolicy::EntryPointStraightLineQuiescent) {
+        snapshot_entry = image.initial_snapshot_entry();
+        if (!snapshot_entry.has_value() && image.entry_points().size() == 1u)
+            snapshot_entry = image.entry_points().front();
+    }
     for (std::size_t index = 0u; index < lines.size(); ++index) {
         const auto& line = lines[index];
         if (index != 0u && line.address != lines[index - 1u].address + 2u) {
@@ -650,6 +666,68 @@ resolve_indirect_control_flow(const std::span<const katana::sh4::DisassemblyLine
         if (control_flow_targets.contains(line.address)) {
             clear_constants(state);
             snapshot.active = false;
+        }
+        if (snapshot_entry.has_value() && line.address == *snapshot_entry) {
+            // The global instruction list is address-sorted and can contain lower-addressed
+            // symbols or a second executable segment before the sole product entry.  Start the
+            // quiescent snapshot at that entry, not at lines.front().
+            clear_constants(state);
+            clear_after_delay_slot.reset();
+            snapshot.active = true;
+            snapshot.writes.clear();
+        }
+
+        const bool direct_pr_load =
+            line.instruction.kind == katana::sh4::InstructionKind::LoadSpecialRegister &&
+            line.instruction.special_register == katana::sh4::SpecialRegister::Pr;
+        const bool memory_pr_load =
+            line.instruction.kind ==
+                katana::sh4::InstructionKind::LoadSpecialRegisterPostIncrement &&
+            line.instruction.special_register == katana::sh4::SpecialRegister::Pr;
+        if (direct_pr_load || memory_pr_load) {
+            const auto register_index = line.instruction.source_register;
+            std::optional<std::uint32_t> value;
+            std::string source;
+            bool source_allowed = true;
+            if (direct_pr_load) {
+                value = state.registers[register_index];
+                source = state.sources[register_index];
+                // A writable literal outside the explicit entry-snapshot contract is useful as
+                // a live runtime value, but it is not a justified AOT byte-discovery source.
+                source_allowed =
+                    source.find("guarded-writable-") == std::string::npos;
+            } else if (const auto address = state.registers[register_index];
+                       address.has_value()) {
+                const auto resolved_address = image.resolve_segment_address(*address, 4u);
+                const auto* segment = resolved_address.has_value()
+                                          ? image.find_segment(*resolved_address, 4u)
+                                          : nullptr;
+                source_allowed = segment != nullptr && initial_snapshot_segment(image, *segment);
+                if (source_allowed) {
+                    value = read_immutable_integer(&image, *resolved_address, 4u, &snapshot);
+                    source = segment->permissions.writable
+                                 ? "entry-snapshot-pr-memory"
+                                 : "bounded-immutable-pr-memory";
+                }
+            }
+            if (source_allowed && value.has_value()) {
+                const auto validation = validate_decode_candidate(image, *value);
+                if (validation.valid() && validation.segment != nullptr &&
+                    initial_snapshot_segment(image, *validation.segment)) {
+                    StaticReturnContinuationCandidate candidate;
+                    candidate.instruction_address = line.address;
+                    candidate.register_index = register_index;
+                    candidate.target_address = validation.resolved_address;
+                    candidate.evidence = ControlFlowEvidence::RuntimeOnly;
+                    candidate.evidence_origins = {
+                        source.find("entry-snapshot-") != std::string::npos
+                            ? AnalysisEvidenceOrigin::EntrySnapshot
+                            : AnalysisEvidenceOrigin::LocalValue};
+                    candidate.reason = "runtime-contract-static-pr-continuation";
+                    candidate.value_source = source.empty() ? "constant-register" : source;
+                    analysis.static_return_continuations.push_back(std::move(candidate));
+                }
+            }
         }
 
         const bool indirect = line.instruction.kind == katana::sh4::InstructionKind::Jmp ||
@@ -700,7 +778,7 @@ resolve_indirect_control_flow(const std::span<const katana::sh4::DisassemblyLine
                     }
                 }
             }
-            resolutions.push_back(std::move(resolution));
+            analysis.indirect_control_flow.push_back(std::move(resolution));
         }
 
         record_snapshot_write(snapshot, state, line.instruction);
@@ -730,7 +808,28 @@ resolve_indirect_control_flow(const std::span<const katana::sh4::DisassemblyLine
             if (clear_mask == 0x80FFu) mark_abi_preserved(state, 0x7F00u);
         }
     }
-    return resolutions;
+    std::sort(analysis.static_return_continuations.begin(),
+              analysis.static_return_continuations.end(),
+              [](const auto& left, const auto& right) {
+                  if (left.instruction_address != right.instruction_address)
+                      return left.instruction_address < right.instruction_address;
+                  return left.target_address < right.target_address;
+              });
+    analysis.static_return_continuations.erase(
+        std::unique(analysis.static_return_continuations.begin(),
+                    analysis.static_return_continuations.end(),
+                    [](const auto& left, const auto& right) {
+                        return left.instruction_address == right.instruction_address &&
+                               left.target_address == right.target_address;
+                    }),
+        analysis.static_return_continuations.end());
+    return analysis;
+}
+
+std::vector<IndirectControlFlowResolution>
+resolve_indirect_control_flow(const std::span<const katana::sh4::DisassemblyLine> lines,
+                              const katana::io::ExecutableImage& image) {
+    return analyze_local_control_flow(lines, image).indirect_control_flow;
 }
 
 const char*

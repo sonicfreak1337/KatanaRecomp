@@ -92,6 +92,199 @@ int main() {
     require(!unbounded.resolved && unbounded.reason == "entry-count-out-of-range",
             "Unbegrenzte Tabelle wurde nicht abgelehnt.");
 
+    katana::io::ExecutableImage absolute_pointer_run;
+    std::vector<std::uint8_t> absolute_bytes(0x40u, 0u);
+    const auto put_u32 = [&absolute_bytes](const std::size_t offset,
+                                          const std::uint32_t value) {
+        absolute_bytes[offset] = static_cast<std::uint8_t>(value);
+        absolute_bytes[offset + 1u] = static_cast<std::uint8_t>(value >> 8u);
+        absolute_bytes[offset + 2u] = static_cast<std::uint8_t>(value >> 16u);
+        absolute_bytes[offset + 3u] = static_cast<std::uint8_t>(value >> 24u);
+    };
+    absolute_bytes[0x00u] = 0x03u;
+    absolute_bytes[0x01u] = 0xD3u;
+    absolute_bytes[0x02u] = 0x3Eu;
+    absolute_bytes[0x03u] = 0x03u;
+    absolute_bytes[0x04u] = 0xFCu;
+    absolute_bytes[0x05u] = 0x70u;
+    absolute_bytes[0x06u] = 0x2Bu;
+    absolute_bytes[0x07u] = 0x43u;
+    absolute_bytes[0x08u] = 0x09u;
+    absolute_bytes[0x09u] = 0x00u;
+    put_u32(0x10u, 0x80001020u);
+    put_u32(0x20u, 0x80001030u);
+    put_u32(0x24u, 0x80001034u);
+    absolute_bytes[0x30u] = 0x0Bu;
+    absolute_bytes[0x31u] = 0x00u;
+    absolute_bytes[0x32u] = 0x09u;
+    absolute_bytes[0x33u] = 0x00u;
+    absolute_bytes[0x34u] = 0x0Bu;
+    absolute_bytes[0x35u] = 0x00u;
+    absolute_bytes[0x36u] = 0x09u;
+    absolute_bytes[0x37u] = 0x00u;
+    absolute_pointer_run.add_segment({".bootstrap",
+                                      0xA0001000u,
+                                      0u,
+                                      absolute_bytes.size(),
+                                      katana::io::SegmentKind::Code,
+                                      {true, true, true},
+                                      std::move(absolute_bytes),
+                                      katana::io::ImageSourceKind::DiscBootFile,
+                                      katana::io::ImageLoadPhase::Initial,
+                                      "synthetic-bootstrap"});
+    absolute_pointer_run.set_initial_snapshot_policy(
+        katana::io::InitialSnapshotPolicy::EntryPointStraightLineQuiescent);
+    absolute_pointer_run.set_address_model(katana::io::ImageAddressModel::Sh4DirectMapped);
+    const auto absolute_lines = katana::sh4::disassemble(
+        absolute_pointer_run.segments()[0].bytes, 0xA0001000u);
+    const auto absolute = katana::analysis::recognize_snapshot_absolute_jump_table_candidates(
+        absolute_pointer_run, absolute_lines, 3u);
+    require(absolute.has_value() && absolute->resolved &&
+                absolute->aot_candidates_only &&
+                absolute->evidence == katana::analysis::ControlFlowEvidence::GuardedPartial &&
+                absolute->entries.size() == 2u &&
+                absolute->entries[0].target == 0xA0001030u &&
+                absolute->entries[1].target == 0xA0001034u &&
+                absolute->reason == "snapshot-absolute-pointer-candidates",
+            "RWX-Disc-Snapshotkandidaten einer absoluten SH-4-Sprungtabelle wurden nicht "
+            "konservativ erkannt.");
+
+    auto no_snapshot_contract = absolute_pointer_run;
+    no_snapshot_contract.set_initial_snapshot_policy(
+        katana::io::InitialSnapshotPolicy::ImmutableOnly);
+    require(!katana::analysis::recognize_snapshot_absolute_jump_table_candidates(
+                 no_snapshot_contract, absolute_lines, 3u)
+                 .has_value(),
+            "Schreibbare Sprungtabellendaten wurden ohne partiellen Snapshotvertrag verwendet.");
+
+    constexpr std::uint32_t call_island_base = 0x00400000u;
+    const auto call_island_image = [](const std::size_t return_handler_count,
+                                      const bool broken_return,
+                                      const katana::io::ImageSourceKind source_kind,
+                                      const bool call_dispatch,
+                                      const bool memory_derived,
+                                      const bool terminal_tail,
+                                      const bool executable = true) {
+        constexpr std::uint32_t base = call_island_base;
+        constexpr std::size_t first_handler = 0x20u;
+        constexpr std::size_t stride = 6u;
+        std::vector<std::uint8_t> bytes(0x60u, 0u);
+        const auto put_u16 = [&bytes](const std::size_t offset,
+                                      const std::uint16_t value) {
+            bytes[offset] = static_cast<std::uint8_t>(value);
+            bytes[offset + 1u] = static_cast<std::uint8_t>(value >> 8u);
+        };
+
+        // mov.w @r0+,r3; add #12,r3; bsrf r3; nop; rts; nop
+        put_u16(0x00u, memory_derived ? 0x6305u : 0xE300u);
+        put_u16(0x02u, 0x730Cu);
+        put_u16(0x04u, call_dispatch ? 0x0303u : 0x0323u);
+        put_u16(0x06u, 0x0009u);
+        put_u16(0x08u, 0x000Bu);
+        put_u16(0x0Au, 0x0009u);
+
+        for (std::size_t index = 0u; index < return_handler_count; ++index) {
+            const auto offset = first_handler + index * stride;
+            // mov #0,r1; rts; mov.l r1,@r2 (delay slot)
+            put_u16(offset, 0xE100u);
+            put_u16(offset + 2u,
+                    broken_return && index == return_handler_count / 2u ? 0x0009u : 0x000Bu);
+            put_u16(offset + 4u, 0x2212u);
+        }
+
+        if (terminal_tail) {
+            const auto offset = first_handler + return_handler_count * stride;
+            constexpr std::size_t tail_target = 0x50u;
+            const auto displacement = static_cast<std::uint16_t>(
+                (tail_target - (offset + 4u)) / 2u);
+            put_u16(offset, static_cast<std::uint16_t>(0xA000u | displacement));
+            put_u16(offset + 2u, 0x0009u);
+            put_u16(offset + 4u, 0x0009u);
+            put_u16(tail_target, 0x000Bu);
+            put_u16(tail_target + 2u, 0x0009u);
+        }
+
+        katana::io::ExecutableImage result;
+        result.set_initial_snapshot_policy(
+            katana::io::InitialSnapshotPolicy::EntryPointStraightLineQuiescent);
+        result.add_segment({".synthetic-call-island",
+                            base,
+                            0u,
+                            bytes.size(),
+                            katana::io::SegmentKind::Mixed,
+                            {true, true, executable},
+                            std::move(bytes),
+                            source_kind,
+                            katana::io::ImageLoadPhase::Initial,
+                            "synthetic-call-island"});
+        result.add_entry_point(base);
+        return result;
+    };
+
+    auto call_island = call_island_image(
+        4u, false, katana::io::ImageSourceKind::DiscBootFile, true, true, true);
+    const auto call_island_lines =
+        katana::sh4::disassemble(call_island.segments()[0].bytes, call_island_base);
+    const auto call_island_candidates =
+        katana::analysis::recognize_snapshot_relative_call_island_candidates(
+            call_island, call_island_lines, 2u);
+    const std::vector<std::uint32_t> expected_call_island_targets{
+        call_island_base + 0x20u,
+        call_island_base + 0x26u,
+        call_island_base + 0x2Cu,
+        call_island_base + 0x32u,
+        call_island_base + 0x38u};
+    require(call_island_candidates.has_value() &&
+                call_island_candidates->dispatch_address == call_island_base + 4u &&
+                call_island_candidates->first_target == call_island_base + 0x20u &&
+                call_island_candidates->stride == 6u &&
+                call_island_candidates->targets == expected_call_island_targets &&
+                call_island_candidates->terminal_tail_transfer &&
+                call_island_candidates->reason ==
+                    "snapshot-relative-call-island-candidates",
+            "Eine speicherabgeleitete BSRF-Handlerinsel wurde nicht begrenzt erkannt.");
+
+    const auto recognize_call_island = [&](katana::io::ExecutableImage candidate) {
+        const auto lines =
+            katana::sh4::disassemble(candidate.segments()[0].bytes, call_island_base);
+        return katana::analysis::recognize_snapshot_relative_call_island_candidates(
+            candidate, lines, 2u);
+    };
+    require(!recognize_call_island(call_island_image(
+                 3u, false, katana::io::ImageSourceKind::DiscBootFile, true, true, true))
+                 .has_value(),
+            "Nur drei gleichfoermige Return-Handler wurden als belastbare Insel akzeptiert.");
+    require(!recognize_call_island(call_island_image(
+                 4u, true, katana::io::ImageSourceKind::DiscBootFile, true, true, true))
+                 .has_value(),
+            "Eine Handlerinsel mit kaputtem RTS-Muster wurde akzeptiert.");
+    require(!recognize_call_island(call_island_image(
+                 4u, false, katana::io::ImageSourceKind::RuntimeMemory, true, true, true))
+                 .has_value(),
+            "Laufzeitspeicher wurde als statische BSRF-Handlerinsel eingefroren.");
+    require(!recognize_call_island(call_island_image(
+                 4u, false, katana::io::ImageSourceKind::DiscBootFile, false, true, true))
+                 .has_value(),
+            "Ein BRAF wurde faelschlich als BSRF-Handlerinsel klassifiziert.");
+    require(!recognize_call_island(call_island_image(
+                 4u, false, katana::io::ImageSourceKind::DiscBootFile, true, false, true))
+                 .has_value(),
+            "Ein BSRF ohne speicherabgeleitetes relatives Register wurde eingefroren.");
+    require(!recognize_call_island(call_island_image(
+                 4u, false, katana::io::ImageSourceKind::DiscBootFile, true, true, false))
+                 .has_value(),
+            "Eine nicht terminierte BSRF-Insel wurde am Scanende akzeptiert.");
+    require(!recognize_call_island(call_island_image(
+                 4u,
+                 false,
+                 katana::io::ImageSourceKind::DiscBootFile,
+                 true,
+                 true,
+                 true,
+                 false))
+                 .has_value(),
+            "Nicht ausfuehrbare Snapshotbytes wurden als BSRF-Codeinsel akzeptiert.");
+
     katana::io::ExecutableImage boundaries;
     boundaries.add_segment({".code",
                             0x3000u,

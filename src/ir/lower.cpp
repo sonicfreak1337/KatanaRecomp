@@ -1129,10 +1129,37 @@ std::vector<Function> lower_program(const katana::analysis::ControlFlowAnalysisR
             seeds.push_back(edge.target_address);
         }
     }
+    std::vector<std::uint32_t> candidate_leaders;
+    for (const auto& table : analysis.jump_tables) {
+        if (!table.aot_candidates_only) continue;
+        for (const auto& entry : table.entries)
+            if (entry.accepted) candidate_leaders.push_back(entry.target);
+    }
+    for (const auto& continuation : analysis.static_return_continuations)
+        candidate_leaders.push_back(continuation.target_address);
+    for (const auto& resolution : analysis.indirect_control_flow) {
+        candidate_leaders.insert(candidate_leaders.end(),
+                                 resolution.analysis_candidates.begin(),
+                                 resolution.analysis_candidates.end());
+    }
     std::sort(seeds.begin(), seeds.end());
     seeds.erase(std::unique(seeds.begin(), seeds.end()), seeds.end());
+    std::sort(candidate_leaders.begin(), candidate_leaders.end());
+    candidate_leaders.erase(std::unique(candidate_leaders.begin(), candidate_leaders.end()),
+                            candidate_leaders.end());
+    // Snapshot pointer runs are deliberately not CFG edges or proven function entries: the guest
+    // still loads the current writable value at runtime.  Their accepted initial targets do need
+    // independent native block leaders so the validating runtime dispatcher can enter the
+    // precompiled code.  Keeping them out of `seeds` also preserves ordinary fallthrough within
+    // the containing function instead of manufacturing a function return at every table entry.
+    auto block_leaders = seeds;
+    block_leaders.insert(
+        block_leaders.end(), candidate_leaders.begin(), candidate_leaders.end());
+    std::sort(block_leaders.begin(), block_leaders.end());
+    block_leaders.erase(std::unique(block_leaders.begin(), block_leaders.end()),
+                        block_leaders.end());
     const auto source_blocks = katana::analysis::build_basic_blocks(
-        analysis.recursive.instructions, analysis.resolved_edges, seeds);
+        analysis.recursive.instructions, analysis.resolved_edges, block_leaders);
     const auto functions = katana::analysis::discover_functions_from_blocks(
         source_blocks, seeds, analysis.resolved_edges);
 
@@ -1189,7 +1216,7 @@ std::vector<Function> lower_program(const katana::analysis::ControlFlowAnalysisR
         supplemental_functions.push_back(std::move(supplemental));
     }
 
-    auto all_entries = seeds;
+    auto all_entries = block_leaders;
     for (const auto& function : functions)
         all_entries.push_back(function.entry_address);
     for (const auto& supplemental : supplemental_functions)

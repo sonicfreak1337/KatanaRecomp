@@ -637,6 +637,137 @@ int main() {
             "Abgelehnter BIOS-Lesepuffer schreibt partiell, greift MMIO an oder erzeugt einen IRQ.");
     cpu.memory.write_u32(parameters + 8u, destination);
 
+    const auto commands_before_nop = controller.status().completed_commands;
+    cpu.r[4] = 29u;
+    cpu.r[5] = 0u;
+    const auto no_operation = controller.bios_call(cpu, 0u, 0u);
+    cpu.r[4] = no_operation;
+    cpu.r[5] = extended_status;
+    require(no_operation >= 1u && controller.bios_call(cpu, 1u, 0u) == 1u,
+            "BIOS CD_CMD_NOP wird nicht zunaechst als PROCESSING sichtbar.");
+    static_cast<void>(controller.bios_call(cpu, 2u, 0u));
+    cpu.r[4] = no_operation;
+    cpu.r[5] = extended_status;
+    require(controller.bios_call(cpu, 1u, 0u) == 2u &&
+                cpu.memory.read_u32(extended_status) == 0u &&
+                cpu.memory.read_u32(extended_status + 4u) == 0u &&
+                cpu.memory.read_u32(extended_status + 8u) == 0u &&
+                cpu.memory.read_u32(extended_status + 12u) == 0u &&
+                controller.status().completed_commands == commands_before_nop + 1u &&
+                controller.bios_call(cpu, 1u, 0u) == 0u,
+            "BIOS CD_CMD_NOP schliesst nicht genau einmal als erfolgreiches Kommando ab.");
+
+    constexpr std::uint32_t mode_output = 0x8C006000u;
+    cpu.memory.write_u32(parameters, mode_output);
+    cpu.memory.write_u32(parameters + 4u, 0u);
+    cpu.memory.write_u32(parameters + 8u, 0u);
+    cpu.memory.write_u32(parameters + 12u, 0u);
+    cpu.r[4] = 30u;
+    cpu.r[5] = parameters;
+    const auto request_mode_id = controller.bios_call(cpu, 0u, 0u);
+    cpu.r[4] = request_mode_id;
+    cpu.r[5] = extended_status;
+    require(request_mode_id >= 1u && controller.bios_call(cpu, 1u, 0u) == 1u,
+            "BIOS REQ_MODE wird nicht zunaechst als PROCESSING sichtbar.");
+    static_cast<void>(controller.bios_call(cpu, 2u, 0u));
+    cpu.r[4] = request_mode_id;
+    cpu.r[5] = extended_status;
+    require(controller.bios_call(cpu, 1u, 0u) == 2u &&
+                cpu.memory.read_u32(extended_status) == 0u &&
+                cpu.memory.read_u32(extended_status + 4u) == 0u &&
+                cpu.memory.read_u32(extended_status + 8u) == 10u &&
+                cpu.memory.read_u32(extended_status + 12u) == 0u &&
+                cpu.memory.read_u32(mode_output) == 0u &&
+                cpu.memory.read_u32(mode_output + 4u) == 0x00B4u &&
+                cpu.memory.read_u32(mode_output + 8u) == 0x19u &&
+                cpu.memory.read_u32(mode_output + 12u) == 0x08u &&
+                controller.bios_call(cpu, 1u, 0u) == 0u,
+            "BIOS REQ_MODE liefert weder den Vierwort-Modus noch den einmaligen Abschluss.");
+
+    cpu.memory.write_u32(parameters, 0xA5u);
+    cpu.memory.write_u32(parameters + 4u, 0x3456u);
+    cpu.memory.write_u32(parameters + 8u, 0x7Cu);
+    cpu.memory.write_u32(parameters + 12u, 0x11u);
+    cpu.r[4] = 31u;
+    cpu.r[5] = parameters;
+    const auto set_mode_id = controller.bios_call(cpu, 0u, 0u);
+    cpu.r[4] = set_mode_id;
+    cpu.r[5] = extended_status;
+    require(set_mode_id >= 1u && controller.bios_call(cpu, 1u, 0u) == 1u,
+            "BIOS SET_MODE wird nicht zunaechst als PROCESSING sichtbar.");
+    static_cast<void>(controller.bios_call(cpu, 2u, 0u));
+    cpu.r[4] = set_mode_id;
+    cpu.r[5] = extended_status;
+    require(controller.bios_call(cpu, 1u, 0u) == 2u &&
+                cpu.memory.read_u32(extended_status) == 0u &&
+                cpu.memory.read_u32(extended_status + 4u) == 0u &&
+                cpu.memory.read_u32(extended_status + 8u) == 10u &&
+                cpu.memory.read_u32(extended_status + 12u) == 0u &&
+                controller.bios_call(cpu, 1u, 0u) == 0u,
+            "BIOS SET_MODE schliesst nicht mit dem Vierwortstatus und NOT_FOUND ab.");
+
+    controller.write(0x90u, 10u, MemoryAccessWidth::Byte);
+    controller.write(0x94u, 0u, MemoryAccessWidth::Byte);
+    controller.write(0x9Cu, 0xA0u, MemoryAccessWidth::Byte);
+    std::array<std::uint8_t, 12u> bios_shared_request_mode{};
+    bios_shared_request_mode[0] = 0x11u;
+    bios_shared_request_mode[4] = 10u;
+    write_packet(controller, bios_shared_request_mode);
+    static_cast<void>(scheduler.advance_by(1'000u, 1u));
+    static_cast<void>(controller.read(0x9Cu, MemoryAccessWidth::Byte));
+    std::vector<std::uint8_t> bios_shared_mode;
+    for (std::size_t index = 0u; index < 5u; ++index)
+        append_pio_word(controller, bios_shared_mode);
+    require(bios_shared_mode ==
+                std::vector<std::uint8_t>({0u, 0u, 0xA5u, 0u, 0x34u,
+                                           0x56u, 0x7Cu, 0u, 0u, 0x11u}),
+            "BIOS SET_MODE wird nicht durch den gemeinsamen Paket-REQ_MODE sichtbar.");
+    static_cast<void>(controller.read(0x9Cu, MemoryAccessWidth::Byte));
+
+    cpu.memory.write_u32(mode_output, 0u);
+    cpu.memory.write_u32(mode_output + 4u, 0u);
+    cpu.memory.write_u32(mode_output + 8u, 0u);
+    cpu.memory.write_u32(mode_output + 12u, 0u);
+    cpu.memory.write_u32(parameters, mode_output);
+    cpu.r[4] = 30u;
+    cpu.r[5] = parameters;
+    const auto persisted_mode = controller.bios_call(cpu, 0u, 0u);
+    static_cast<void>(controller.bios_call(cpu, 2u, 0u));
+    cpu.r[4] = persisted_mode;
+    cpu.r[5] = extended_status;
+    require(persisted_mode >= 1u && controller.bios_call(cpu, 1u, 0u) == 2u &&
+                cpu.memory.read_u32(mode_output) == 0xA5u &&
+                cpu.memory.read_u32(mode_output + 4u) == 0x3456u &&
+                cpu.memory.read_u32(mode_output + 8u) == 0x7Cu &&
+                cpu.memory.read_u32(mode_output + 12u) == 0x11u,
+            "BIOS REQ_MODE sieht den gemeinsam gesetzten Laufwerksmodus nicht.");
+
+    constexpr std::uint32_t partial_mode_output = 0x8CFFFFF8u;
+    cpu.memory.write_u32(partial_mode_output, 0x13579BDFu);
+    cpu.memory.write_u32(partial_mode_output + 4u, 0x2468ACE0u);
+    const auto rejected_mode_mmio_writes = rejected_mmio_writes;
+    for (const auto rejected_destination :
+         std::array<std::uint32_t, 2u>{partial_mode_output, 0xA05F0000u}) {
+        cpu.memory.write_u32(parameters, rejected_destination);
+        cpu.r[4] = 30u;
+        cpu.r[5] = parameters;
+        const auto rejected_mode = controller.bios_call(cpu, 0u, 0u);
+        static_cast<void>(controller.bios_call(cpu, 2u, 0u));
+        cpu.r[4] = rejected_mode;
+        cpu.r[5] = extended_status;
+        require(rejected_mode >= 1u &&
+                    controller.bios_call(cpu, 1u, 0u) == 0xFFFFFFFFu &&
+                    cpu.memory.read_u32(extended_status) == 5u &&
+                    cpu.memory.read_u32(extended_status + 4u) ==
+                        static_cast<std::uint32_t>(GdRomStatus::InvalidField) &&
+                    controller.bios_call(cpu, 1u, 0u) == 0u,
+                "BIOS REQ_MODE lehnt ein ungueltiges Ziel nicht atomar als INVALID FIELD ab.");
+    }
+    require(cpu.memory.read_u32(partial_mode_output) == 0x13579BDFu &&
+                cpu.memory.read_u32(partial_mode_output + 4u) == 0x2468ACE0u &&
+                rejected_mmio_writes == rejected_mode_mmio_writes,
+            "Abgelehntes BIOS REQ_MODE schreibt partiell oder beruehrt MMIO.");
+
     cpu.r[4] = 0x777u;
     cpu.r[5] = 0u;
     const auto invalid_request = controller.bios_call(cpu, 0u, 0u);

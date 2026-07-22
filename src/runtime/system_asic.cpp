@@ -213,6 +213,12 @@ SchedulerEventId DreamcastSystemAsic::schedule(EventScheduler& scheduler,
         guest_cycle, [this, event](const auto, const auto cycle) { raise(event, cycle); });
 }
 std::uint32_t DreamcastSystemAsic::read(const std::uint32_t offset) const {
+    if (offset == 0x00u) {
+        auto normal = pending_[0u] & 0x3FFFFFFFu;
+        if (pending_[1u] != 0u) normal |= 1u << 30u;
+        if (pending_[2u] != 0u) normal |= 1u << 31u;
+        return normal;
+    }
     if (offset <= 0x08u && offset % 4u == 0u) return pending_[offset / 4u];
     if (offset >= 0x10u && offset <= 0x38u && offset % 4u == 0u) {
         const auto linear = (offset - 0x10u) / 4u;
@@ -228,6 +234,11 @@ std::uint32_t DreamcastSystemAsic::read(const std::uint32_t offset) const {
     throw std::runtime_error("Unbekannter System-ASIC-MMIO-Leseoffset.");
 }
 void DreamcastSystemAsic::write(const std::uint32_t offset, const std::uint32_t value) {
+    if (offset == 0x00u) {
+        pending_[0u] &= ~(value & 0x3FFFFFFFu);
+        synchronize_lines();
+        return;
+    }
     if (offset <= 0x08u && offset % 4u == 0u) {
         pending_[offset / 4u] &= ~value;
         synchronize_lines();

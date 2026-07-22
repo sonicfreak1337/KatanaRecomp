@@ -5,11 +5,11 @@
 #include "katana/sh4/decoder.hpp"
 
 #include <algorithm>
+#include <cstddef>
 #include <cstdint>
 #include <deque>
 #include <iomanip>
 #include <limits>
-#include <set>
 #include <sstream>
 #include <stdexcept>
 #include <tuple>
@@ -25,15 +25,25 @@ struct PendingAddress {
     std::optional<std::uint32_t> delay_slot_owner;
     ControlFlowEvidence evidence = ControlFlowEvidence::Unresolved;
 
-    [[nodiscard]] bool operator<(const PendingAddress& other) const noexcept {
-        return std::tie(address, incoming_address, delay_slot_owner, evidence) <
-               std::tie(
-                   other.address, other.incoming_address, other.delay_slot_owner, other.evidence);
+    bool operator==(const PendingAddress&) const = default;
+};
+
+struct PendingAddressHash {
+    std::size_t operator()(const PendingAddress& value) const noexcept {
+        auto hash = static_cast<std::size_t>(value.address);
+        hash ^= static_cast<std::size_t>(value.incoming_address) + 0x9E3779B9u + (hash << 6u) +
+                (hash >> 2u);
+        hash ^= static_cast<std::size_t>(value.delay_slot_owner.value_or(0u)) + 0x9E3779B9u +
+                (hash << 6u) + (hash >> 2u);
+        hash ^= static_cast<std::size_t>(value.delay_slot_owner.has_value()) << 1u;
+        hash ^= static_cast<std::size_t>(value.evidence) + 0x9E3779B9u + (hash << 6u) +
+                (hash >> 2u);
+        return hash;
     }
 };
 
 void enqueue(std::deque<PendingAddress>& pending,
-             std::set<PendingAddress>& scheduled,
+             std::unordered_set<PendingAddress, PendingAddressHash>& scheduled,
              const std::uint32_t address,
              const std::uint32_t incoming_address,
              const std::optional<std::uint32_t> delay_slot_owner,
@@ -43,7 +53,7 @@ void enqueue(std::deque<PendingAddress>& pending,
 }
 
 void enqueue_next(std::deque<PendingAddress>& pending,
-                  std::set<PendingAddress>& scheduled,
+                  std::unordered_set<PendingAddress, PendingAddressHash>& scheduled,
                   const std::uint32_t address,
                   const std::uint32_t distance,
                   const ControlFlowEvidence evidence) {
@@ -135,18 +145,27 @@ void add_function_evidence(std::unordered_map<std::uint32_t, FunctionCandidate>&
 RecursiveAnalysisResult analyze_reachable_code(const katana::io::ExecutableImage& image,
                                                const RecursiveAnalysisOptions& options) {
     std::deque<PendingAddress> pending;
-    std::set<PendingAddress> scheduled;
+    std::unordered_set<PendingAddress, PendingAddressHash> scheduled;
     std::unordered_set<std::uint32_t> delay_slots;
     std::unordered_map<std::uint32_t, katana::sh4::DisassemblyLine> discovered;
     std::unordered_map<std::uint32_t, FunctionCandidate> function_candidates;
-    delay_slots.reserve(1024u);
-    discovered.reserve(4096u);
-    function_candidates.reserve(256u);
+    const auto baseline_context_count = options.baseline == nullptr
+                                            ? 0u
+                                            : options.baseline->contextual_instructions.size();
+    const auto baseline_instruction_count =
+        options.baseline == nullptr ? 0u : options.baseline->instructions.size();
+    const auto baseline_function_count =
+        options.baseline == nullptr ? 0u : options.baseline->functions.size();
+    delay_slots.reserve(baseline_context_count + 1024u);
+    discovered.reserve(baseline_instruction_count + 4096u);
+    function_candidates.reserve(baseline_function_count + 256u);
 
     std::vector<AnalysisDiagnostic> diagnostics;
     std::vector<ContextualInstruction> result_contexts;
+    result_contexts.reserve(baseline_context_count + 4096u);
     std::size_t reused_contexts = 0u;
     std::size_t processed_work_items = 0u;
+    scheduled.reserve(baseline_context_count + 4096u);
     if (options.baseline != nullptr) {
         diagnostics = options.baseline->diagnostics;
         result_contexts = options.baseline->contextual_instructions;
@@ -333,8 +352,7 @@ RecursiveAnalysisResult analyze_reachable_code(const katana::io::ExecutableImage
     RecursiveAnalysisResult result;
     result.processed_work_items = processed_work_items;
     result.reused_contexts = reused_contexts;
-    std::sort(
-        result_contexts.begin(), result_contexts.end(), [](const auto& left, const auto& right) {
+    const auto contextual_order = [](const auto& left, const auto& right) {
             return std::tie(left.line.address,
                             left.delay_slot_owner,
                             left.incoming_address,
@@ -342,7 +360,12 @@ RecursiveAnalysisResult analyze_reachable_code(const katana::io::ExecutableImage
                                                       right.delay_slot_owner,
                                                       right.incoming_address,
                                                       right.evidence);
-        });
+        };
+    const auto unsorted_contexts =
+        result_contexts.begin() + static_cast<std::ptrdiff_t>(baseline_context_count);
+    std::sort(unsorted_contexts, result_contexts.end(), contextual_order);
+    std::inplace_merge(
+        result_contexts.begin(), unsorted_contexts, result_contexts.end(), contextual_order);
     result.contextual_instructions = std::move(result_contexts);
     result.instructions.reserve(discovered.size());
     for (auto& [address, line] : discovered) {
@@ -354,8 +377,10 @@ RecursiveAnalysisResult analyze_reachable_code(const katana::io::ExecutableImage
               [](const auto& left, const auto& right) { return left.address < right.address; });
     result.proven_instruction_addresses.reserve(result.instructions.size());
     result.guarded_candidate_instruction_addresses.reserve(result.instructions.size());
-    std::set<std::uint32_t> proven_addresses;
-    std::set<std::uint32_t> candidate_addresses;
+    std::unordered_set<std::uint32_t> proven_addresses;
+    std::unordered_set<std::uint32_t> candidate_addresses;
+    proven_addresses.reserve(result.contextual_instructions.size());
+    candidate_addresses.reserve(result.contextual_instructions.size());
     for (const auto& contextual : result.contextual_instructions) {
         if (control_flow_evidence_proven(contextual.evidence) &&
             contextual.line.instruction.is_known())
@@ -364,10 +389,14 @@ RecursiveAnalysisResult analyze_reachable_code(const katana::io::ExecutableImage
             candidate_addresses.insert(contextual.line.address);
     }
     result.proven_instruction_addresses.assign(proven_addresses.begin(), proven_addresses.end());
+    std::sort(result.proven_instruction_addresses.begin(),
+              result.proven_instruction_addresses.end());
     for (const auto address : candidate_addresses) {
         if (!proven_addresses.contains(address))
             result.guarded_candidate_instruction_addresses.push_back(address);
     }
+    std::sort(result.guarded_candidate_instruction_addresses.begin(),
+              result.guarded_candidate_instruction_addresses.end());
     classify_image(image, result.instructions, result);
     result.diagnostics = std::move(diagnostics);
     std::sort(result.diagnostics.begin(),

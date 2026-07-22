@@ -132,6 +132,58 @@ int main() {
     require((scan_pvr->read(pvr_register::SpgStatus) & 0x3FFu) == 5u,
             "Schedulerreset stellt das SPG-Scanouttiming nicht wieder her.");
 
+    EventScheduler cadence_scheduler;
+    Memory cadence_bus(0u);
+    std::uint64_t cadence_vblank_in = 0u;
+    std::uint64_t cadence_vblank_out = 0u;
+    const auto cadence_pvr = map_pvr_registers(
+        cadence_bus,
+        cadence_scheduler,
+        {},
+        PvrTiming{5u, 100u, 100u},
+        [&](const bool entering) {
+            if (entering)
+                ++cadence_vblank_in;
+            else
+                ++cadence_vblank_out;
+        });
+    cadence_pvr->write(pvr_register::SpgLoad, (9u << 16u) | 9u);
+    cadence_pvr->write(pvr_register::SpgHblankInterrupt, (1u << 12u) | 0x3FFu);
+    cadence_pvr->write(pvr_register::SpgVblankInterrupt, (0x3FFu << 16u) | 0u);
+    const auto require_frame_cycles = [&](const bool vclk_div,
+                                          const bool interlaced,
+                                          const std::uint64_t expected) {
+        cadence_pvr->write(pvr_register::FramebufferReadControl,
+                           vclk_div ? 1u << 23u : 0u);
+        cadence_pvr->write(pvr_register::SpgControl, interlaced ? 1u << 4u : 0u);
+        require(cadence_scheduler.next_event_cycle() == expected,
+                "FB_R_CTRL.vclk_div oder SPG_CONTROL.interlace skaliert die "
+                "SPG-Frameperiode falsch.");
+    };
+    require_frame_cycles(false, false, 200u);
+    require_frame_cycles(false, true, 100u);
+    require_frame_cycles(true, false, 100u);
+    require_frame_cycles(true, true, 50u);
+
+    cadence_pvr->write(pvr_register::SpgControl, 0u);
+    cadence_pvr->write(pvr_register::FramebufferReadControl, 1u << 23u);
+    cadence_pvr->write(pvr_register::SpgVblankInterrupt, (11u << 16u) | 10u);
+    require(!cadence_scheduler.next_event_cycle().has_value(),
+            "SPG_VBLANK_INT faltet ausserhalb von SPG_LOAD liegende Compare-Linien um.");
+    static_cast<void>(cadence_scheduler.advance_to(200u, 32u));
+    require(cadence_vblank_in == 0u && cadence_vblank_out == 0u,
+            "Ungueltige SPG-VBlank-Compare-Linien haben einen Interrupt terminiert.");
+
+    cadence_pvr->write(pvr_register::SpgVblankInterrupt, (11u << 16u) | 0u);
+    require(cadence_scheduler.next_event_cycle() == 300u,
+            "SPG-VBlank-Linie 0 liegt nicht an der naechsten Framegrenze.");
+    static_cast<void>(cadence_scheduler.advance_to(299u, 32u));
+    require(cadence_vblank_in == 0u,
+            "SPG-VBlank-Linie 0 wurde innerhalb des aktuellen Frames ausgeloest.");
+    static_cast<void>(cadence_scheduler.advance_to(300u, 32u));
+    require(cadence_vblank_in == 1u && cadence_vblank_out == 0u,
+            "SPG-VBlank-Linie 0 fehlt an der naechsten Framegrenze.");
+
     const auto require_profile = [&](const DreamcastVideoMode mode,
                                      const std::uint32_t load,
                                      const std::uint32_t hblank,

@@ -2,29 +2,44 @@
 
 Abgeschlossener interner Meilenstein: `v0.47.0`
 Phase: `v0.48.0` - Native Disc Boot und erster echter Gastframe
-Aktuelle P0-Arbeit: den gemeinsamen `KR-4847`- bis `KR-4850`-Kernblock
-fokussiert validieren. `KR-4847` bleibt fuer EX 38/39 und noch unbelegte
-Timeout-/Overrun-Grenzen offen. `KR-4848` hat den Interpreter aus dem normalen
-Produktport entfernt und identische Disc-Reloads an natives AOT gebunden; offen
-bleiben strukturierte Ladetransaktionen und die vorab erzeugte Registry
-latenter Module. `KR-4849` fuehrt den realen Channel-2-Pfad bis TA-EOL fort.
-Die Wait-Loop-Klassifikation aus `KR-4842` laeuft getrennt.
-Ein frischer Sonic-Adventure-PAL-Export erreichte vor diesem Performanceblock
-den harten Fuenf-Minuten-Abbruch noch in `analysis-codegen`. Eine begrenzte
-58,3-Sekunden-Probe belegte dort durchschnittlich 0,995 und maximal 1,013
-CPU-Kerne. Der generische Fix ersetzt rund 945 globale CFG-Neuaufbauten durch
-zwei vorbereitete CFGs, indiziert Kanten und Writer-Slices, entfernt globale
-Fremddeklarationen aus jeder Portpartition und reicht die konfigurierte
-Workerzahl bis zum Projektschreiber durch. Der gemeinsame 12-Job-Build ist
-gruen. Der erste Wiederholungslauf blieb trotzdem fuer volle 300,4 Sekunden
-auf einem Kern innerhalb der Sammelphase und wurde mit null ueberlebenden
-Prozessen sowie ohne publiziertes Stage-/Zielverzeichnis beendet. Deshalb
-kanonisiert die vorgelagerte Funktionsanalyse ihre Vektoren nun einmal statt
-nach jedem CFG-Block; die CFG-Optimierung verwendet einen Adressindex fuer
-erreichbare Bloecke. Neue 4.096-/8.192-Block-Regressionen bestehen in 0,13 und
-0,60 Sekunden. Datenschutzneutrale `KATANA_PORT_SUBPHASE`-Marker trennen den
-naechsten Lauf in Disc-Load, Analyse, Lowering, Optimierung, Emit und Writer.
-Ein Gastframe wird bis zum privaten Lauf weiterhin nicht behauptet.
+Aktuelle P0-Arbeit: den gemeinsamen `KR-4847`- bis `KR-4850`-Kernblock bis zum
+ersten echten Gastframe fokussiert validieren. `KR-4847` bleibt fuer EX 38/39
+und noch unbelegte Timeout-/Overrun-Grenzen offen. `KR-4848` hat den Interpreter
+aus dem normalen Produktport entfernt und identische Disc-Reloads an natives
+AOT gebunden; offen bleiben strukturierte Ladetransaktionen und die vorab
+erzeugte Registry latenter Module. `KR-4849` fuehrt den realen Channel-2-Pfad
+bis TA-EOL fort. Die Wait-Loop-Klassifikation aus `KR-4842` laeuft getrennt.
+
+Der frische Sonic-Adventure-PAL-Port wurde erfolgreich exportiert und aus der
+unveraenderten Original-GDI lokal installiert. P1-/P2-Codealiase erreichen
+denselben nativen Block. Beschreibbare absolute Pointertabellen des garantierten
+Anfangssnapshots liefern nur `RuntimeOnly`-/`GuardedPartial`-AOT-Kandidaten,
+keine erfundenen CFG-Kanten; ihre Ziele sind Basic-Block-Leader und keine
+Funktionsseeds. Die SCANINT1-Wartestelle, der fruehere PR-Blocker und der
+Fixed-Stride-`BSRF`-Stopp sind verlassen. Der neueste budgetierte Lauf erreichte
+345.568.225 Hardwarezyklen und 7.421.380 native Bloecke. Beide GD-ROM-
+Modekommandos schlossen ab und der Gast schrieb in spaetere PVR-Register; der
+Lauf endete erst am fehlenden nativen Inneneinstieg `0x8C654F5C`. TA-Transfers,
+Renderrequests und echte Gastframes blieben null.
+
+Die Ursache der neuen Front ist eine allgemeine, speicherabgeleitete `BSRF`-
+Fixed-Stride-Handlerinsel. Die neue statische Erkennung bereitet eine eindeutig
+maximale Folge aus mindestens vier gleichmaessigen `RTS`-/Delay-Slot-Handlern
+und dem obligatorischen terminalen `BRA`-Slot nur als `RuntimeOnly`-Kandidaten
+vor. Das live geladene Ziel bleibt autoritativ; statische CFG-Kanten oder
+Funktionen werden nicht erfunden. Der PAL-Audit erkennt beide Dispatches und
+alle Inselziele einschliesslich des bisherigen Stopps. Export und Produktlauf
+haben die Laufzeitkorrektheit dieses Vertrags bestaetigt. Der aktuelle P0 ist
+nun die allgemeine AOT-/Materializerklassifikation des spaeter erreichten
+Inneneinstiegs; PVR-Register-, Timing-, DMA- und Completionluecken bleiben
+parallel im Audit offen.
+
+Der Export baut CFG-, Kanten- und Writer-Slice-Indizes einmalig auf, reicht die
+konfigurierte Hostparallelitaet bis zum Projektschreiber durch und hasht grosse
+Provenienzeingaben unter Windows ueber BCrypt in 4-MiB-Chunks. Stabile,
+datenschutzneutrale `KATANA_PORT_SUBPHASE`-Marker trennen Disc-Load, Analyse,
+Lowering, Optimierung, Emit und Writer. Ein erster Gastframe wird weiterhin
+ausdruecklich nicht behauptet.
 Naechstes Gate: `v0.48.0` - Boot- und Frame-Integration
 Weitere interne Gates: `v0.48.0` und `v0.49.0` Alpha-Candidate
 Erster oeffentlicher Release: `v0.50.0` Alpha
@@ -57,7 +72,11 @@ Folgekommando nicht mehr faelschlich dessen ATA-`ERR`. Der fokussierte GD-ROM-
 Regressionstest besteht nach diesem Integrationsfix 1/1. Asynchrone Read- und
 BIOS-TOC-Zielpuffer werden vor jeder Mutation MMU-bewusst als vollstaendig
 linear schreibbarer Bereich validiert; ungueltige, ueberlaufende oder MMIO-
-Ziele enden ohne Teilwrite und Host-Exception als `InvalidField`. `KR-4848`
+Ziele enden ohne Teilwrite und Host-Exception als `InvalidField`. BIOS-
+`CD_CMD_NOP`, `REQ_MODE` und `SET_MODE` folgen nun ebenfalls der gemeinsamen
+Requestqueue. Mode-Read und -Write teilen den persistenten Zustand mit dem
+Paketvertrag; `REQ_MODE` validiert seinen 16-Byte-Gastpuffer atomar und meldet
+im Vierwortstatus die historisch sichtbaren zehn Modebytes. `KR-4848`
 besitzt physisch kanonische aktive Modulextents: Teilwrites erhalten
 unveraenderte Prefix-/Suffixbereiche,
 Copy/DMA entfernt veraltete Runtimeprovenienz und ein 4-KiB-Seitenindex weist
@@ -410,15 +429,32 @@ Instruktionsgrenze, waren der Analyse aber nur unter ihrem P1-Namen bekannt.
 Der allgemeine Image-, Analyse- und Dispatchvertrag normalisiert deshalb nun
 P0/P1/P2-Codealiase, kompiliert beschreibbare Snapshotkandidaten unter ihrer
 kanonischen Imageadresse vor und bewahrt das angeforderte Aliasziel getrennt
-vom nativen Ausfuehrungs-PC. Der erneute private Portbuild ist erfolgreich und
-enthaelt den zuvor fehlenden Block `0x8C5FBFAC` nativ; Installation und Lauf
-ueber die alte Grenze folgen als naechster Nachweis.
+vom nativen Ausfuehrungs-PC. Der erneut exportierte und lokal installierte Port
+ueberschreitet diese Grenze; die unveraenderte Original-GDI bleibt erhalten.
 
 Der angrenzende Analyseaudit bindet auch explizite Einstiegspunkte,
 Funktionssymbole, zusaetzliche Seeds und absolute wie relative Sprungtabellen
 an denselben kanonischen Aliasvertrag. Der Vollstaendigkeitstest deckt wieder
 alle 159 normalen SH-4-Metadatenregeln ab; seine alte 156er-Schranke war nach
 den drei bereits implementierten Cache-/TLB-Befehlen selbst veraltet.
+Zusaetzlich erkennt die Analyse zusammenhaengende absolute Pointerlaeufe aus
+dem garantierten Anfangssnapshot. Beschreibbare Tabellen bleiben
+`RuntimeOnly` mit `GuardedPartial`-Herkunft und fuehren ihre Anfangswerte nur
+als `analysis_candidates`; sie erzeugen weder bewiesene CFG-Kanten noch
+Funktionsseeds. Akzeptierte Ziele werden als eigene Basic-Block-Leader
+kompiliert, damit der weiterhin massgebliche Laufzeitload validiert in den
+nativen Block eintreten kann. Ein impliziter Funktionsreturn am Kandidatenziel
+wird dadurch vermieden.
+
+Ein zweiter kandidaten-only Vertrag deckt ungeloeste, speicherabgeleitete
+`BSRF`-Calls ab. In einem initialen, ausfuehrbaren Nicht-RuntimeMemory-Snapshot
+muss genau eine maximal lange Insel aus mindestens vier Return-Handlern mit
+demselben geraden Stride, `RTS` plus Delay-Slot und einem terminalen `BRA`-Slot
+existieren. Die Ziele bleiben `RuntimeOnly`; der geladene relative Laufzeitwert
+ist autoritativ. Die Insel erzeugt weder CFG-Kanten noch Funktionen. Der echte
+statische PAL-Audit erkennt die beiden Dispatches `0xAC00D994` und
+`0xAC00D9A0` sowie die Kandidaten im Bereich `0xAC00D9AA..0xAC00D9E6`; der
+bisherige Stopp bei `0xAC00D9BC` liegt in dieser vorbereiteten Menge.
 
 Der anschliessende PVR-Audit hat weitere spielagnostische Produktluecken
 geschlossen: HOLLY2-Packed-Color liest bei untexturierten Vertices die Base
@@ -439,8 +475,24 @@ dokumentierten HOLLY-Vertrag. Fortsetzungen erhalten abgeschlossene Primitive,
 setzen den transienten Parserzustand kontrolliert zurueck und werden waehrend
 offener oder unvollstaendiger Parameter abgewiesen. Adressmasken und read-only
 Arbeitszeiger sind in Register- und FIFO-Regressionen geschlossen.
-Diese Fortschritte sind synthetisch getestet; ein neuer privater PAL-Lauf ist
-noch nicht erfolgt, daher bleibt der erste echte Gastframe offen.
+
+Der aktuelle private PAL-Nachweis verliess zunaechst die SCANINT1-Wartestelle;
+SCANINT1 ist damit kein belegter PVR-Fehler. Auch der fruehere PR-Blocker bei
+`0xAC00B700` und der kandidaten-only `BSRF`-Stopp sind im folgenden Lauf
+verschwunden. Die erste Probe des neu exportierten Ports deckte stattdessen die
+fehlenden BIOS-Modekommandos 30/31 auf. Nach deren allgemeiner Korrektur lief
+der unveraenderte Gast bis 345.568.225 Hardwarezyklen und 7.421.380 native
+Bloecke, absolvierte beide GD-ROM-Kommandos und schrieb spaetere PVR-Register.
+Der naechste typisierte Fehler ist ein fehlender nativer Inneneinstieg bei
+`0x8C654F5C`. TA-Transfers, Renderrequests und echte Gastframes bleiben null.
+Der offene Audit richtet sich titelunabhaengig auf AOT-, Register-, Timing-,
+DMA-, FIFO- und Completionvertraege; feste Spieladressen werden nicht zum
+Produktvertrag.
+
+Die Eingabeprovenienz verwendet unter Windows jetzt den nativen BCrypt-SHA-256-
+Pfad mit 4-MiB-Chunks. Zusammen mit den einmalig aufgebauten Analyseindizes und
+der parallelen Projektausgabe bleibt der private Export ein budgetierter
+Werkzeuglauf statt einer seriellen Dauerprobe.
 
 Die PAL-GDI und alle Trackquellen bleiben unveraendert; veraltete
 Portausgaben werden nur nach erfolgreichem Ersatz entfernt.
@@ -932,13 +984,14 @@ KR-4611 bis KR-4618
 -> KR-4715 -> KR-4716 und KR-4717 -> KR-4718
 -> KR-4719 -> KR-4703 -> KR-4704 -> KR-4705
 
-v0.48:
-Runtime-SDK, gemeinsamer Export, Harness, Controller und GUI
--> KR-4804 -> KR-4805
+v0.48 Native Disc Boot und erster echter Gastframe:
+KR-4831 und KR-4841
+-> KR-4842 bis KR-4848 sowie KR-4911 bis KR-4913
+-> KR-4849 und KR-4915 -> KR-4850 -> KR-4851 bis KR-4854
 
-v0.49:
-KR-4911 -> KR-4912 -> KR-4913
--> KR-4914 und KR-4915 -> KR-4916
+v0.49 Controller-, Port-, Harness- und GUI-Integration:
+KR-4801 bis KR-4803, KR-4811 bis KR-4814 und KR-4821 bis KR-4824
+-> KR-4914 und KR-4916
 -> KR-4901 bis KR-4903 -> KR-4904 -> KR-4905
 
 v0.50:

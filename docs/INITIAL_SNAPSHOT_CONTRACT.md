@@ -10,8 +10,11 @@ In diesem Fenster muessen alle asynchronen Produzenten ruhen:
 - Interruptpfade duerfen noch nicht ausgefuehrt werden,
 - externe Runtime-Injektionen und Debugger-Schreibzugriffe muessen inaktiv sein.
 
-Nur unter diesem Vertrag darf der gerade Pfad ab dem einzigen Entry ein
-beschreibbares Literal zeitlich beweisen. Ein Join, eine Adressluecke,
+Nur unter diesem Vertrag darf der gerade Pfad ab dem explizit ausgezeichneten
+`initial_snapshot_entry` ein beschreibbares Literal zeitlich beweisen. Weitere
+Analyse-Eintritte koennen davor oder in anderen Segmenten liegen und oeffnen
+dieses Fenster nicht. Fehlt die Markierung, darf nur ein Image mit genau einem
+Entry diesen als kompatiblen Fallback verwenden. Ein Join, eine Adressluecke,
 Kontrollfluss, ein unbekanntes Schreibziel oder ein ueberdeckender Store beendet
 das Fenster. Loader ohne dieses explizite Versprechen verwenden
 `ImmutableOnly`; dort bleibt derselbe beschreibbare Wert `guarded`.
@@ -32,3 +35,23 @@ Portfortschritt ausgegeben werden. `runtime_only` bleibt Teil der offenen
 Analysefront, darf seit KR-4718 aber als explizite Laufzeitabdeckung exportiert
 werden; jedes konkrete Ziel muss dann den separaten Runtime-only-
 Dispatchvertrag erfuellen.
+
+Absolute Pointertabellen duerfen unter diesem Vertrag als endliche AOT-
+Kandidaten gelesen werden, wenn Literal, Tabelle und Ziele committed sind und
+die Tabelle aus der initialen Ladephase statt aus Runtime-Memory stammt. Bei
+beschreibbarem Speicher bleibt die Dispatch-Site dennoch `runtime_only`; ihre
+Herkunft ist `guarded_partial` und die Anfangswerte werden ausschliesslich als
+`analysis_candidates` gefuehrt. Sie erzeugen keine bewiesenen CFG-Kanten und
+keine Funktionsseeds. Das Lowering darf solche Ziele nur als Basic-Block-Leader
+vorbereiten, damit ein spaeter validierter Runtimeeintritt normalen Fallthrough
+innerhalb der bestehenden Funktion behaelt. Der aktuelle Laufzeitwert ist
+immer autoritativ und jedes nicht vorbereitete Ziel endet ueber den sichtbaren
+Runtime-only-Default.
+
+Dieselbe Nicht-Beweis-Regel gilt fuer strukturell erkannte relative `BSRF`-
+Handlerinseln. Ein initiales ausfuehrbares Nicht-RuntimeMemory-Segment darf eine
+eindeutig maximale Folge gleich weit auseinanderliegender `RTS`-/Delay-Slot-
+Handler mit obligatorischem terminalem `BRA`-Slot als endliche
+`analysis_candidates` liefern. Der geladene relative Laufzeitwert bleibt
+autoritativ; die Site ist `runtime_only`, und weder CFG-Kanten noch Funktionen
+werden aus der Snapshotstruktur erfunden.

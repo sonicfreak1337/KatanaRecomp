@@ -158,7 +158,8 @@ int main() {
         ordering_registers.write(pvr_register::BackgroundPlaneConfig, 1u << 24u);
         ordering_registers.write(pvr_register::BackgroundPlaneDepth,
                                  std::bit_cast<std::uint32_t>(0.5f));
-        ordering_registers.write(pvr_register::FramebufferReadControl, 0xDu);
+        ordering_registers.write(
+            pvr_register::FramebufferReadControl, 0xDu | (1u << 23u));
         ordering_registers.write(pvr_register::FramebufferReadSize, 1u << 20u);
         ordering_registers.write(pvr_register::FramebufferReadSof1, 0x4000u);
         ordering_registers.write(

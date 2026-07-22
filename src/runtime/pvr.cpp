@@ -190,7 +190,8 @@ void PvrRegisterFile::write(const std::uint32_t offset, const std::uint32_t valu
     } else {
         registers_[index(offset)] = value;
     }
-    if (offset == pvr_register::SpgControl || offset == pvr_register::SpgLoad ||
+    if (offset == pvr_register::FramebufferReadControl ||
+        offset == pvr_register::SpgControl || offset == pvr_register::SpgLoad ||
         offset == pvr_register::SpgVblank ||
         offset == pvr_register::SpgVblankInterrupt ||
         offset == pvr_register::SpgHblankInterrupt ||
@@ -321,31 +322,54 @@ void PvrRegisterFile::reschedule_scanout() {
     const auto pixels = horizontal * vertical;
     if (pixels > std::numeric_limits<std::uint64_t>::max() / timing_.guest_clock_hz)
         throw std::out_of_range("PVR-SPG-Frameperiode laeuft ueber.");
-    scan_frame_cycles_ = std::max<std::uint64_t>(
-        1u, (pixels * timing_.guest_clock_hz + timing_.pixel_clock_hz - 1u) /
-                timing_.pixel_clock_hz);
+    const auto base_cycles = pixels * timing_.guest_clock_hz;
+    const auto vclk_div =
+        (registers_[index(pvr_register::FramebufferReadControl)] & (1u << 23u)) != 0u;
+    const auto interlaced =
+        (registers_[index(pvr_register::SpgControl)] & (1u << 4u)) != 0u;
+    const auto ceil_div = [](const std::uint64_t numerator,
+                             const std::uint64_t denominator) {
+        return numerator / denominator + (numerator % denominator != 0u ? 1u : 0u);
+    };
+    if (!vclk_div && !interlaced) {
+        if (base_cycles > std::numeric_limits<std::uint64_t>::max() / 2u)
+            throw std::out_of_range("PVR-SPG-Frameperiode laeuft ueber.");
+        scan_frame_cycles_ = ceil_div(base_cycles * 2u, timing_.pixel_clock_hz);
+    } else if (vclk_div && interlaced) {
+        // ceil(base_cycles / (pixel_clock * 2)) without overflowing the denominator.
+        const auto quotient = base_cycles / timing_.pixel_clock_hz;
+        const auto remainder = base_cycles % timing_.pixel_clock_hz;
+        scan_frame_cycles_ = quotient / 2u +
+                             ((quotient & 1u) != 0u || remainder != 0u ? 1u : 0u);
+    } else {
+        scan_frame_cycles_ = ceil_div(base_cycles, timing_.pixel_clock_hz);
+    }
+    scan_frame_cycles_ = std::max<std::uint64_t>(1u, scan_frame_cycles_);
     const auto vblank = registers_[index(pvr_register::SpgVblankInterrupt)];
     const auto start = vblank & 0x3FFu;
     const auto end = (vblank >> 16u) & 0x3FFu;
-    schedule_scan_event(start % static_cast<std::uint32_t>(vertical), true);
-    schedule_scan_event(end % static_cast<std::uint32_t>(vertical), false);
+    if (start < vertical) schedule_scan_event(start, true);
+    if (end < vertical) schedule_scan_event(end, false);
     const auto hblank_interrupt = registers_[index(pvr_register::SpgHblankInterrupt)];
     const auto hblank_mode = (hblank_interrupt >> 12u) & 3u;
-    if (hblank_mode == 0u)
-        schedule_hblank_event((hblank_interrupt & 0x3FFu) %
-                              static_cast<std::uint32_t>(vertical));
-    else if (hblank_mode == 1u) {
+    if (hblank_mode == 0u) {
         const auto line_compare = hblank_interrupt & 0x3FFu;
         if (line_compare < vertical) schedule_hblank_event(line_compare);
-    }
-    else if (hblank_mode == 2u)
+    } else if (hblank_mode == 1u) {
+        const auto line_compare = hblank_interrupt & 0x3FFu;
+        if (line_compare < vertical) schedule_hblank_event(line_compare);
+    } else if (hblank_mode == 2u) {
         schedule_hblank_event(0u);
+    }
 }
 
 void PvrRegisterFile::schedule_scan_event(const std::uint32_t line, const bool entering) {
     const auto load = registers_[index(pvr_register::SpgLoad)];
     const auto vertical = static_cast<std::uint64_t>((load >> 16u) & 0x3FFu) + 1u;
-    const auto delay = std::max<std::uint64_t>(1u, scan_frame_cycles_ * line / vertical);
+    const auto delay = line == 0u
+                           ? scan_frame_cycles_
+                           : std::max<std::uint64_t>(
+                                 1u, scan_frame_cycles_ * line / vertical);
     const auto event = scheduler_.schedule_after(
         delay, [this, entering](const auto id, const auto) { handle_scan_event(id, entering); });
     (entering ? vblank_in_event_ : vblank_out_event_) = event;

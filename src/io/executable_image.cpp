@@ -127,6 +127,10 @@ void ExecutableImage::set_initial_snapshot_policy(const InitialSnapshotPolicy po
     initial_snapshot_policy_ = policy;
 }
 
+void ExecutableImage::set_initial_snapshot_entry(const std::uint32_t address) noexcept {
+    initial_snapshot_entry_ = address;
+}
+
 void ExecutableImage::set_address_model(const ImageAddressModel model) noexcept {
     address_model_ = model;
 }
@@ -157,6 +161,10 @@ GuestCallAbi ExecutableImage::guest_call_abi() const noexcept {
 
 InitialSnapshotPolicy ExecutableImage::initial_snapshot_policy() const noexcept {
     return initial_snapshot_policy_;
+}
+
+std::optional<std::uint32_t> ExecutableImage::initial_snapshot_entry() const noexcept {
+    return initial_snapshot_entry_;
 }
 
 ImageAddressModel ExecutableImage::address_model() const noexcept {

@@ -11,9 +11,11 @@
 #include "katana/io/executable_image.hpp"
 
 #include <cstddef>
+#include <functional>
 #include <memory>
 #include <span>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace katana::analysis {
@@ -46,6 +48,7 @@ struct ControlFlowSite {
 struct ControlFlowAnalysisResult {
     RecursiveAnalysisResult recursive;
     std::vector<IndirectControlFlowResolution> indirect_control_flow;
+    std::vector<StaticReturnContinuationCandidate> static_return_continuations;
     std::vector<JumpTableAnalysis> jump_tables;
     std::vector<FunctionValueSummary> function_value_summaries;
     std::vector<ResolvedControlFlowEdge> resolved_edges;
@@ -64,11 +67,28 @@ struct ControlFlowAnalysisResult {
     std::vector<SymbolicAddress> symbolic_addresses;
 };
 
+struct ControlFlowAnalysisProgress {
+    std::string_view phase;
+    std::size_t iteration = 0u;
+    std::size_t seeds = 0u;
+    std::size_t instructions = 0u;
+    std::size_t contexts = 0u;
+    std::size_t resolutions = 0u;
+};
+
+using ControlFlowAnalysisProgressCallback =
+    std::function<void(const ControlFlowAnalysisProgress& progress)>;
+
 [[nodiscard]] const char*
 analysis_directive_diagnostic_status_name(AnalysisDirectiveDiagnosticStatus status) noexcept;
 
 [[nodiscard]] ControlFlowAnalysisResult
 analyze_control_flow(const katana::io::ExecutableImage& image,
                      const AnalysisOverrides* overrides = nullptr);
+
+[[nodiscard]] ControlFlowAnalysisResult
+analyze_control_flow(const katana::io::ExecutableImage& image,
+                     const AnalysisOverrides* overrides,
+                     const ControlFlowAnalysisProgressCallback& progress_callback);
 
 } // namespace katana::analysis

@@ -106,6 +106,10 @@ int main() {
         katana::io::capture_input_provenance("main-image", fixture.root / "a" / "input.bin");
     const auto input_b =
         katana::io::capture_input_provenance("main-image", fixture.root / "b" / "input.bin");
+    require(input_a.size == 15u &&
+                input_a.sha256 ==
+                    "17f8454cc502920ef29db9ccf086eb7df8706daaa0f49a43917e038657cce0fb",
+            "Datei-SHA-256 weicht vom plattformunabhaengigen bekannten Vektor ab.");
     const auto first = provenance({input_a});
     const auto second = provenance({input_b});
     require(input_a.local_path != input_b.local_path &&

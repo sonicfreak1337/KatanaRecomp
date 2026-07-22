@@ -4,9 +4,12 @@
 #include "katana/io/executable_image.hpp"
 #include "katana/sh4/disassembler.hpp"
 
+#include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <span>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace katana::analysis {
@@ -65,10 +68,30 @@ struct FunctionValueAnalysisResult {
     bool budget_exhausted = false;
 };
 
+struct FunctionValueAnalysisProgress {
+    std::string_view phase;
+    std::size_t functions = 0u;
+    std::size_t blocks = 0u;
+    std::size_t fixpoint_iterations = 0u;
+    std::size_t completed_functions = 0u;
+    std::size_t pending = 0u;
+    std::size_t resolutions = 0u;
+};
+
+using FunctionValueAnalysisProgressCallback =
+    std::function<void(const FunctionValueAnalysisProgress& progress)>;
+
 [[nodiscard]] FunctionValueAnalysisResult
 analyze_function_values(const katana::io::ExecutableImage& image,
                         std::span<const katana::sh4::DisassemblyLine> lines,
                         std::span<const std::uint32_t> function_entries,
                         std::span<const ResolvedControlFlowEdge> resolved_edges = {});
+
+[[nodiscard]] FunctionValueAnalysisResult
+analyze_function_values(const katana::io::ExecutableImage& image,
+                        std::span<const katana::sh4::DisassemblyLine> lines,
+                        std::span<const std::uint32_t> function_entries,
+                        std::span<const ResolvedControlFlowEdge> resolved_edges,
+                        const FunctionValueAnalysisProgressCallback& progress_callback);
 
 } // namespace katana::analysis

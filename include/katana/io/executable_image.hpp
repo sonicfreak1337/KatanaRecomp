@@ -89,6 +89,7 @@ class ExecutableImage {
     void add_relocation(ImageRelocation relocation);
     void set_guest_call_abi(GuestCallAbi abi) noexcept;
     void set_initial_snapshot_policy(InitialSnapshotPolicy policy) noexcept;
+    void set_initial_snapshot_entry(std::uint32_t address) noexcept;
     void set_address_model(ImageAddressModel model) noexcept;
 
     [[nodiscard]] const std::filesystem::path& source_path() const noexcept;
@@ -98,6 +99,7 @@ class ExecutableImage {
     [[nodiscard]] std::span<const ImageRelocation> relocations() const noexcept;
     [[nodiscard]] GuestCallAbi guest_call_abi() const noexcept;
     [[nodiscard]] InitialSnapshotPolicy initial_snapshot_policy() const noexcept;
+    [[nodiscard]] std::optional<std::uint32_t> initial_snapshot_entry() const noexcept;
     [[nodiscard]] ImageAddressModel address_model() const noexcept;
     [[nodiscard]] std::optional<std::uint32_t>
     resolve_segment_address(std::uint32_t address, std::size_t width = 1u) const noexcept;
@@ -115,6 +117,7 @@ class ExecutableImage {
     std::vector<ImageRelocation> relocations_;
     GuestCallAbi guest_call_abi_ = GuestCallAbi::Unknown;
     InitialSnapshotPolicy initial_snapshot_policy_ = InitialSnapshotPolicy::ImmutableOnly;
+    std::optional<std::uint32_t> initial_snapshot_entry_;
     ImageAddressModel address_model_ = ImageAddressModel::Exact;
 };
 

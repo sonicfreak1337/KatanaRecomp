@@ -59,8 +59,10 @@ int main() {
     require(image.initial_snapshot_policy() == InitialSnapshotPolicy::ImmutableOnly,
             "Ein allgemeines Image aktivierte implizit beschreibbare Snapshotliterale.");
     image.set_initial_snapshot_policy(InitialSnapshotPolicy::EntryPointStraightLineQuiescent);
+    image.set_initial_snapshot_entry(0x8C010000u);
     require(image.initial_snapshot_policy() ==
-                InitialSnapshotPolicy::EntryPointStraightLineQuiescent,
+                InitialSnapshotPolicy::EntryPointStraightLineQuiescent &&
+                image.initial_snapshot_entry() == 0x8C010000u,
             "Expliziter Anfangssnapshotvertrag ging verloren.");
     require(image.address_model() == ImageAddressModel::Exact &&
                 !image.resolve_segment_address(0xAC010002u, 2u).has_value(),

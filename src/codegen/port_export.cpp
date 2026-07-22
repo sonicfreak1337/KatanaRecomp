@@ -23,6 +23,7 @@
 #include <array>
 #include <atomic>
 #include <cctype>
+#include <chrono>
 #include <cstdlib>
 #include <fstream>
 #include <future>
@@ -188,7 +189,7 @@ std::string handwritten_main(const std::string& entry_namespace,
            "#include \"katana/io/input_provenance.hpp\"\n"
            "#include <algorithm>\n#include <array>\n#include <chrono>\n#include <cstdlib>\n#include "
            "<exception>\n#include <filesystem>\n#include <functional>\n#include "
-           "<iostream>\n"
+           "<iostream>\n#include <limits>\n"
            "#include <optional>\n#include <span>\n#include <string>\n#include <string_view>\n"
            "#include <system_error>\n#include <thread>\n#include <unordered_map>\n#include "
            "<unordered_set>\n#include <vector>\n\n"
@@ -239,10 +240,9 @@ std::string handwritten_main(const std::string& entry_namespace,
             "                         bool eager_host_poll = false)\n"
             "        : cpu_(cpu), state_(state), lifecycle_poll_(std::move(lifecycle_poll)),\n"
             "          guest_frame_poll_(std::move(guest_frame_poll)),\n"
-            "          eager_host_poll_(eager_host_poll),\n"
-            "          local_block_chaining_enabled_(\n"
-            "              std::getenv(\"KATANA_PORT_BLOCK_LIMIT\") == nullptr &&\n"
-            "              std::getenv(\"KATANA_PORT_PROGRESS_INTERVAL\") == nullptr) {\n"
+             "          eager_host_poll_(eager_host_poll),\n"
+             "          local_block_chaining_enabled_(\n"
+             "              std::getenv(\"KATANA_PORT_BLOCK_LIMIT\") == nullptr) {\n"
            "        if (const auto budget = "
            "katana::runtime::guest_cycle_budget_from_environment())\n"
            "            state_.scheduler->set_guest_cycle_budget(*budget);\n"
@@ -351,7 +351,11 @@ std::string handwritten_main(const std::string& entry_namespace,
            "katana::runtime::canonical_physical_address(address),\n"
            "             size, \"generated-port\", {},\n"
            "             katana::runtime::ExecutableBlockOrigin::ImageSegment}));\n"
-           "        executable_blocks_.insert_or_assign(address, std::string(identity));\n"
+           "        const auto maximum_guest_instructions =\n"
+           "            std::max<std::uint64_t>(1u, (static_cast<std::uint64_t>(size) + 1u) / 2u);\n"
+           "        executable_blocks_.insert_or_assign(address, ExecutableBlockRegistration{\n"
+           "            std::string(identity), katana::runtime::base_guest_cycles_per_instruction *\n"
+           "                maximum_guest_instructions});\n"
            "    }\n"
            "    void allow_executable_block_chaining(std::uint32_t address) override {\n"
            "        chainable_blocks_.insert(address);\n"
@@ -367,11 +371,28 @@ std::string handwritten_main(const std::string& entry_namespace,
            "            (!cpu_.interrupts_blocked() && cpu_.interrupt_mask() != 15u) ||\n"
            "            cpu_.retired_guest_instructions < chain_retired_baseline_)\n"
            "            return false;\n"
-           "        const auto pending =\n"
+           "        const auto pending_instructions =\n"
            "            cpu_.retired_guest_instructions - chain_retired_baseline_;\n"
-           "        if (pending == 0u || pending >= 64u) return false;\n"
+           "        if (pending_instructions == 0u ||\n"
+           "            pending_instructions > std::numeric_limits<std::uint64_t>::max() /\n"
+           "                katana::runtime::base_guest_cycles_per_instruction) return false;\n"
+           "        const auto pending_guest_cycles =\n"
+           "            katana::runtime::base_guest_cycles_per_instruction * pending_instructions;\n"
+           "        const auto found = executable_blocks_.find(address);\n"
+           "        if (!chainable_blocks_.contains(address) ||\n"
+           "            found == executable_blocks_.end() ||\n"
+           "            found->second.maximum_guest_cycles > local_block_chain_guest_cycle_budget ||\n"
+           "            pending_guest_cycles > local_block_chain_guest_cycle_budget -\n"
+           "                found->second.maximum_guest_cycles) return false;\n"
+           "        const auto current_cycle = state_.scheduler->current_cycle();\n"
+           "        const auto prospective_guest_cycles =\n"
+           "            pending_guest_cycles + found->second.maximum_guest_cycles;\n"
+           "        if (const auto remaining = state_.scheduler->remaining_guest_cycles();\n"
+           "            remaining && prospective_guest_cycles > *remaining) return false;\n"
+           "        if (prospective_guest_cycles >\n"
+           "            std::numeric_limits<std::uint64_t>::max() - current_cycle) return false;\n"
            "        if (const auto event = state_.scheduler->next_event_cycle(); event &&\n"
-           "            *event <= state_.scheduler->current_cycle() + pending) return false;\n"
+           "            *event <= current_cycle + prospective_guest_cycles) return false;\n"
            "        try {\n"
            "            static_cast<void>(state_.address_space->translate(\n"
            "                address, katana::runtime::TranslationAccess::Instruction,\n"
@@ -381,10 +402,7 @@ std::string handwritten_main(const std::string& entry_namespace,
            "                active_block_variant_->runtime_generation);\n"
            "            if (current != *active_block_variant_) return false;\n"
            "        } catch (...) { return false; }\n"
-           "        const auto found = executable_blocks_.find(address);\n"
-           "        return chainable_blocks_.contains(address) &&\n"
-           "            found != executable_blocks_.end() &&\n"
-           "            state_.code_tracker->dispatchable(found->second);\n"
+           "        return state_.code_tracker->dispatchable(found->second.identity);\n"
            "    }\n"
             "    katana::runtime::ExecutableCodeTracker* executable_code_tracker() noexcept "
            "override {\n"
@@ -405,7 +423,12 @@ std::string handwritten_main(const std::string& entry_namespace,
             "        katana::runtime::PlatformLifecycleState::Running;\n"
            "    std::uint64_t executed_blocks_ = 0u;\n"
            "    std::uint64_t fallback_count_ = 0u;\n"
-           "    std::unordered_map<std::uint32_t, std::string> executable_blocks_;\n"
+           "    struct ExecutableBlockRegistration {\n"
+           "        std::string identity;\n"
+           "        std::uint64_t maximum_guest_cycles = 0u;\n"
+           "    };\n"
+           "    static constexpr std::uint64_t local_block_chain_guest_cycle_budget = 4'096u;\n"
+           "    std::unordered_map<std::uint32_t, ExecutableBlockRegistration> executable_blocks_;\n"
            "    std::unordered_set<std::uint32_t> chainable_blocks_;\n"
            "    std::optional<katana::runtime::BlockVariantKey> active_block_variant_;\n"
            "    std::uint64_t chain_retired_baseline_ = 0u;\n"
@@ -1885,7 +1908,30 @@ PortExportResult export_dreamcast_port_project(const std::filesystem::path& gdi_
     auto image = katana::platform::make_dreamcast_disc_executable(
         disc, katana::platform::DreamcastDiscExecutionPath::NativeSystemBootstrap);
     report_progress(options, "control-flow-analysis");
-    const auto analysis = katana::analysis::analyze_control_flow(image);
+    const auto analysis_started = std::chrono::steady_clock::now();
+    const auto analysis = katana::analysis::analyze_control_flow(
+        image,
+        nullptr,
+        [&options, analysis_started](
+            const katana::analysis::ControlFlowAnalysisProgress& progress) {
+            if (options.progress_callback == nullptr) return;
+            const bool sampled_iteration =
+                progress.iteration <= 16u ||
+                (progress.iteration != 0u &&
+                 (progress.iteration & (progress.iteration - 1u)) == 0u);
+            if (!sampled_iteration && progress.phase != "fixpoint-complete" &&
+                progress.phase != "complete")
+                return;
+            std::ostringstream marker;
+            marker << "control-flow-" << progress.phase << "-i" << progress.iteration << "-s"
+                   << progress.seeds << "-n" << progress.instructions << "-c"
+                   << progress.contexts << "-r" << progress.resolutions << "-ms"
+                   << std::chrono::duration_cast<std::chrono::milliseconds>(
+                          std::chrono::steady_clock::now() - analysis_started)
+                          .count();
+            const auto text = marker.str();
+            report_progress(options, text);
+        });
     report_progress(options, "ir-lowering");
     auto program = katana::ir::lower_program(analysis);
     report_progress(options, "ir-optimization");

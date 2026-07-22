@@ -23,6 +23,9 @@ constexpr std::size_t gdrom_writable_mode_size = 10u;
 constexpr std::uint32_t bios_command_pio_read = 16u;
 constexpr std::uint32_t bios_command_dma_read = 17u;
 constexpr std::uint32_t bios_command_dma_stream = 28u;
+constexpr std::uint32_t bios_command_no_operation = 29u;
+constexpr std::uint32_t bios_command_request_mode = 30u;
+constexpr std::uint32_t bios_command_set_mode = 31u;
 constexpr std::uint32_t bios_command_pio_stream = 37u;
 
 std::uint32_t be16(const std::vector<std::uint8_t>& bytes, const std::size_t offset) {
@@ -890,6 +893,55 @@ void DreamcastGdRomController::execute_bios_request(CpuState& cpu, BiosRequest& 
     }
     if (request.command == 24u) {
         request.status = {};
+        request.state = GdRomBiosRequestState::Complete;
+        remember_bios_request(request);
+        ++completed_commands_;
+        return;
+    }
+    if (request.command == bios_command_no_operation) {
+        request.status = {};
+        request.state = GdRomBiosRequestState::Complete;
+        remember_bios_request(request);
+        ++completed_commands_;
+        return;
+    }
+    if (request.command == bios_command_request_mode) {
+        constexpr std::size_t mode_word_count = 4u;
+        constexpr std::size_t mode_output_size = mode_word_count * sizeof(std::uint32_t);
+        const auto destination =
+            resolve_bios_write_destination(cpu, request.parameters[0], mode_output_size);
+        if (!destination) {
+            request.response.status = GdRomStatus::InvalidField;
+            request.status =
+                {5u, static_cast<std::uint32_t>(GdRomStatus::InvalidField), 0u, 0u};
+            request.state = GdRomBiosRequestState::Error;
+            latch_sense(5u, 0x24u, 0u);
+            remember_bios_request(request);
+            return;
+        }
+        const std::array<std::uint32_t, mode_word_count> mode{
+            drive_mode_[2u],
+            (static_cast<std::uint32_t>(drive_mode_[4u]) << 8u) | drive_mode_[5u],
+            drive_mode_[6u],
+            drive_mode_[9u],
+        };
+        std::vector<std::uint8_t> mode_bytes;
+        mode_bytes.reserve(mode_output_size);
+        for (const auto word : mode) append_le32(mode_bytes, word);
+        memory_.write_bytes(*destination, mode_bytes, CodeWriteSource::Copy);
+        request.status = {0u, 0u, static_cast<std::uint32_t>(gdrom_writable_mode_size), 0u};
+        request.state = GdRomBiosRequestState::Complete;
+        remember_bios_request(request);
+        ++completed_commands_;
+        return;
+    }
+    if (request.command == bios_command_set_mode) {
+        drive_mode_[2u] = static_cast<std::uint8_t>(request.parameters[0]);
+        drive_mode_[4u] = static_cast<std::uint8_t>(request.parameters[1] >> 8u);
+        drive_mode_[5u] = static_cast<std::uint8_t>(request.parameters[1]);
+        drive_mode_[6u] = static_cast<std::uint8_t>(request.parameters[2]);
+        drive_mode_[9u] = static_cast<std::uint8_t>(request.parameters[3]);
+        request.status = {0u, 0u, static_cast<std::uint32_t>(gdrom_writable_mode_size), 0u};
         request.state = GdRomBiosRequestState::Complete;
         remember_bios_request(request);
         ++completed_commands_;

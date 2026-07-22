@@ -272,7 +272,7 @@ else()
 endif()
 
 if(WIN32)
-    target_link_libraries(katana_runtime PUBLIC gdi32 user32 winmm)
+    target_link_libraries(katana_runtime PUBLIC bcrypt gdi32 user32 winmm)
 endif()
 
 add_library(katana_core STATIC

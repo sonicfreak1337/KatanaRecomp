@@ -1,9 +1,12 @@
 #include "katana/analysis/jump_table_analysis.hpp"
 #include "katana/analysis/code_address.hpp"
+#include "katana/analysis/value_analysis.hpp"
 #include "katana/io/binary_reader.hpp"
 #include "katana/io/input_provenance.hpp"
+#include "katana/sh4/decoder.hpp"
 #include "katana/sh4/instruction.hpp"
 
+#include <algorithm>
 #include <limits>
 #include <sstream>
 #include <stdexcept>
@@ -49,6 +52,129 @@ bool outside_dispatch_path(const std::uint32_t target,
                            const std::uint32_t path_begin,
                            const std::uint32_t dispatch_address) {
     return target < path_begin || target > dispatch_address;
+}
+
+bool snapshot_candidate_source(const katana::io::ExecutableImage& image,
+                               const katana::io::ImageSegment& segment) {
+    if (!segment.permissions.readable) return false;
+    if (segment.load_phase != katana::io::ImageLoadPhase::Initial ||
+        segment.source_kind == katana::io::ImageSourceKind::RuntimeMemory)
+        return false;
+    if (!segment.permissions.writable) return true;
+    return image.initial_snapshot_policy() ==
+           katana::io::InitialSnapshotPolicy::EntryPointStraightLineQuiescent;
+}
+
+bool relative_register_transform(const katana::sh4::DecodedInstruction& instruction,
+                                 const std::uint8_t register_index) {
+    if (instruction.destination_register != register_index) return false;
+    using K = katana::sh4::InstructionKind;
+    switch (instruction.kind) {
+    case K::AddImmediate:
+    case K::AndRegister:
+    case K::OrRegister:
+    case K::XorRegister:
+    case K::ExtendUnsignedWord:
+    case K::ExtendSignedWord:
+    case K::ShiftLogicalLeftOne:
+    case K::ShiftLogicalRightOne:
+    case K::ShiftArithmeticLeftOne:
+    case K::ShiftArithmeticRightOne:
+    case K::ShiftLogicalLeftTwo:
+    case K::ShiftLogicalLeftEight:
+    case K::ShiftLogicalLeftSixteen:
+    case K::ShiftLogicalRightTwo:
+    case K::ShiftLogicalRightEight:
+    case K::ShiftLogicalRightSixteen:
+        return true;
+    default:
+        return false;
+    }
+}
+
+bool memory_derived_relative_register(
+    const std::span<const katana::sh4::DisassemblyLine> lines,
+    const std::size_t dispatch_index,
+    const std::uint8_t register_index) {
+    constexpr std::size_t instruction_budget = 48u;
+    auto next_address = lines[dispatch_index].address;
+    for (std::size_t distance = 1u;
+         distance <= instruction_budget && distance <= dispatch_index;
+         ++distance) {
+        const auto& line = lines[dispatch_index - distance];
+        if (line.address > std::numeric_limits<std::uint32_t>::max() - 2u ||
+            line.address + 2u != next_address)
+            return false;
+        next_address = line.address;
+        if ((general_register_write_mask(line.instruction) &
+             static_cast<std::uint16_t>(1u << register_index)) == 0u)
+            continue;
+        if (relative_register_transform(line.instruction, register_index)) continue;
+        if (line.instruction.destination_register != register_index) return false;
+        using K = katana::sh4::InstructionKind;
+        return line.instruction.kind == K::MovWordLoad ||
+               line.instruction.kind == K::MovWordLoadPostIncrement ||
+               line.instruction.kind == K::MovWordLoadDisplacement ||
+               line.instruction.kind == K::MovWordLoadR0Indexed;
+    }
+    return false;
+}
+
+std::optional<katana::sh4::DecodedInstruction>
+snapshot_instruction(const katana::io::ExecutableImage& image,
+                     const std::uint32_t address,
+                     const katana::io::ImageSegment* const expected_segment = nullptr) {
+    const auto resolved = image.resolve_segment_address(address, 2u);
+    if (!resolved.has_value()) return std::nullopt;
+    const auto* segment = image.find_segment(*resolved, 2u);
+    if (segment == nullptr || (expected_segment != nullptr && segment != expected_segment) ||
+        !segment->permissions.executable || !snapshot_candidate_source(image, *segment))
+        return std::nullopt;
+    const auto offset = segment->byte_offset(*resolved);
+    if (!offset.has_value() || *offset > segment->bytes.size() - 2u) return std::nullopt;
+    return katana::sh4::decode(katana::io::read_u16_le(segment->bytes, *offset));
+}
+
+bool fixed_stride_return_handler(const katana::io::ExecutableImage& image,
+                                 const std::uint32_t address,
+                                 const std::size_t stride,
+                                 const katana::io::ImageSegment* const expected_segment) {
+    if (stride < 4u || (stride & 1u) != 0u) return false;
+    for (std::size_t offset = 0u; offset < stride; offset += 2u) {
+        if (address > std::numeric_limits<std::uint32_t>::max() - offset) return false;
+        const auto instruction = snapshot_instruction(
+            image, address + static_cast<std::uint32_t>(offset), expected_segment);
+        if (!instruction.has_value() || !instruction->is_known()) return false;
+        if (offset == stride - 4u) {
+            if (instruction->kind != katana::sh4::InstructionKind::Rts) return false;
+        } else if (instruction->changes_control_flow()) {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool fixed_stride_terminal_tail(const katana::io::ExecutableImage& image,
+                                const std::uint32_t address,
+                                const std::size_t stride,
+                                const katana::io::ImageSegment* const expected_segment) {
+    if (stride < 4u || (stride & 1u) != 0u) return false;
+    for (std::size_t offset = 0u; offset < stride; offset += 2u) {
+        if (address > std::numeric_limits<std::uint32_t>::max() - offset) return false;
+        const auto instruction = snapshot_instruction(
+            image, address + static_cast<std::uint32_t>(offset), expected_segment);
+        if (!instruction.has_value() || !instruction->is_known()) return false;
+        if (offset == 0u) {
+            if (instruction->kind != katana::sh4::InstructionKind::Bra) return false;
+        } else if (instruction->kind != katana::sh4::InstructionKind::Nop) {
+            return false;
+        }
+    }
+    const auto branch = snapshot_instruction(image, address, expected_segment);
+    const auto target = branch.has_value()
+                            ? katana::sh4::calculate_direct_branch_target(*branch, address)
+                            : std::nullopt;
+    return target.has_value() && validate_decode_candidate(image, *target).valid();
 }
 
 std::optional<std::size_t>
@@ -338,6 +464,207 @@ recognize_bounded_relative_jump_table(const katana::io::ExecutableImage& image,
                                static_cast<std::uint32_t>(table_base.instruction.displacement);
     return analyze_relative_jump_table(
         image, dispatch.address, table_address, dispatch.address + 4u, *entry_count, cache);
+}
+
+std::optional<JumpTableAnalysis>
+recognize_snapshot_absolute_jump_table_candidates(
+    const katana::io::ExecutableImage& image,
+    const std::span<const katana::sh4::DisassemblyLine> lines,
+    const std::size_t dispatch_index) {
+    if (dispatch_index < 2u || dispatch_index >= lines.size()) return std::nullopt;
+    const auto& dispatch = lines[dispatch_index];
+    if (dispatch.instruction.kind != katana::sh4::InstructionKind::Jmp &&
+        dispatch.instruction.kind != katana::sh4::InstructionKind::Jsr)
+        return std::nullopt;
+
+    std::optional<std::size_t> indexed_load_index;
+    for (std::size_t distance = 1u; distance <= 3u && distance <= dispatch_index; ++distance) {
+        const auto candidate_index = dispatch_index - distance;
+        const auto& candidate = lines[candidate_index];
+        if (!contiguous(candidate, lines[candidate_index + 1u])) break;
+        if (candidate.instruction.kind ==
+                katana::sh4::InstructionKind::MovLongLoadR0Indexed &&
+            candidate.instruction.destination_register == dispatch.instruction.branch_register) {
+            bool clobbered = false;
+            for (auto index = candidate_index + 1u; index < dispatch_index; ++index) {
+                const auto& between = lines[index].instruction;
+                if (between.changes_control_flow() ||
+                    (general_register_write_mask(between) &
+                     static_cast<std::uint16_t>(
+                         1u << dispatch.instruction.branch_register)) != 0u ||
+                    (between.kind != katana::sh4::InstructionKind::Nop &&
+                     !(between.kind == katana::sh4::InstructionKind::AddImmediate &&
+                       between.destination_register == 0u))) {
+                    clobbered = true;
+                    break;
+                }
+            }
+            if (!clobbered) indexed_load_index = candidate_index;
+            break;
+        }
+    }
+    if (!indexed_load_index.has_value() || *indexed_load_index == 0u) return std::nullopt;
+
+    const auto& indexed_load = lines[*indexed_load_index];
+    const auto& base_load = lines[*indexed_load_index - 1u];
+    if (!contiguous(base_load, indexed_load) ||
+        base_load.instruction.kind !=
+            katana::sh4::InstructionKind::MovLongLoadPcRelative ||
+        base_load.instruction.destination_register != indexed_load.instruction.source_register ||
+        indexed_load.instruction.source_register == 0u)
+        return std::nullopt;
+
+    const auto literal_address =
+        ((base_load.address + 4u) & ~3u) +
+        static_cast<std::uint32_t>(base_load.instruction.displacement);
+    const auto resolved_literal = image.resolve_segment_address(literal_address, 4u);
+    if (!resolved_literal.has_value()) return std::nullopt;
+    const auto* literal_segment = image.find_segment(*resolved_literal, 4u);
+    if (literal_segment == nullptr || !snapshot_candidate_source(image, *literal_segment))
+        return std::nullopt;
+
+    const auto table_pointer = image.read_u32_le(*resolved_literal);
+    const auto resolved_table = image.resolve_segment_address(table_pointer, 4u);
+    if (!resolved_table.has_value() || (*resolved_table & 3u) != 0u) return std::nullopt;
+    const auto* table_segment = image.find_segment(*resolved_table, 4u);
+    if (table_segment == nullptr || !snapshot_candidate_source(image, *table_segment))
+        return std::nullopt;
+    const auto table_offset = table_segment->byte_offset(*resolved_table);
+    if (!table_offset.has_value() || *table_offset > table_segment->bytes.size())
+        return std::nullopt;
+
+    const auto available_entries = (table_segment->bytes.size() - *table_offset) / 4u;
+    const auto scan_limit = std::min(available_entries, maximum_jump_table_entries);
+    JumpTableAnalysis analysis;
+    analysis.dispatch_address = dispatch.address;
+    analysis.table_address = *resolved_table;
+    analysis.dispatch_kind =
+        dispatch.instruction.kind == katana::sh4::InstructionKind::Jsr
+            ? JumpTableDispatchKind::Call
+            : JumpTableDispatchKind::Jump;
+    analysis.encoding = JumpTableEncoding::Absolute32;
+    analysis.aot_candidates_only = true;
+    analysis.evidence = ControlFlowEvidence::GuardedPartial;
+    analysis.entries.reserve(scan_limit);
+    for (std::size_t index = 0u; index < scan_limit; ++index) {
+        const auto offset = *table_offset + index * 4u;
+        const auto target = static_cast<std::uint32_t>(
+                                katana::io::read_u16_le(table_segment->bytes, offset)) |
+                            (static_cast<std::uint32_t>(katana::io::read_u16_le(
+                                 table_segment->bytes, offset + 2u))
+                             << 16u);
+        const auto validation = validate_decode_candidate(image, target);
+        if (!validation.valid()) break;
+        analysis.entries.push_back({index,
+                                    *resolved_table + static_cast<std::uint32_t>(index * 4u),
+                                    validation.resolved_address,
+                                    true,
+                                    "snapshot-absolute-target"});
+    }
+    if (analysis.entries.size() < 2u ||
+        (analysis.entries.size() == maximum_jump_table_entries &&
+         available_entries > maximum_jump_table_entries))
+        return std::nullopt;
+    analysis.requested_entries = analysis.entries.size();
+    analysis.resolved = true;
+    analysis.reason = "snapshot-absolute-pointer-candidates";
+    return analysis;
+}
+
+std::optional<RelativeCallIslandCandidates>
+recognize_snapshot_relative_call_island_candidates(
+    const katana::io::ExecutableImage& image,
+    const std::span<const katana::sh4::DisassemblyLine> lines,
+    const std::size_t dispatch_index) {
+    constexpr std::size_t minimum_handlers = 4u;
+    constexpr std::size_t maximum_handlers = 32u;
+    constexpr std::uint32_t minimum_start_distance = 4u;
+    constexpr std::uint32_t maximum_start_distance = 128u;
+    constexpr std::size_t minimum_stride = 4u;
+    constexpr std::size_t maximum_stride = 16u;
+
+    if (dispatch_index >= lines.size()) return std::nullopt;
+    const auto& dispatch = lines[dispatch_index];
+    if (dispatch.instruction.kind != katana::sh4::InstructionKind::Bsrf ||
+        dispatch.instruction.branch_register >= 16u ||
+        !memory_derived_relative_register(
+            lines, dispatch_index, dispatch.instruction.branch_register))
+        return std::nullopt;
+
+    const auto resolved_dispatch = image.resolve_segment_address(dispatch.address, 2u);
+    if (!resolved_dispatch.has_value()) return std::nullopt;
+    const auto* dispatch_segment = image.find_segment(*resolved_dispatch, 2u);
+    if (dispatch_segment == nullptr || !dispatch_segment->permissions.executable ||
+        !snapshot_candidate_source(image, *dispatch_segment))
+        return std::nullopt;
+
+    if (dispatch.address > std::numeric_limits<std::uint32_t>::max() - 4u)
+        return std::nullopt;
+    const auto relative_base = dispatch.address + 4u;
+    std::vector<std::pair<std::size_t, RelativeCallIslandCandidates>> matches;
+    std::size_t best_return_handlers = 0u;
+    for (std::uint32_t distance = minimum_start_distance;
+         distance <= maximum_start_distance;
+         distance += 2u) {
+        if (dispatch.address > std::numeric_limits<std::uint32_t>::max() - distance) break;
+        const auto first_target = dispatch.address + distance;
+        for (std::size_t stride = minimum_stride; stride <= maximum_stride; stride += 2u) {
+            if ((first_target - relative_base) % stride != 0u) continue;
+            const auto resolved_first = image.resolve_segment_address(first_target, 2u);
+            if (!resolved_first.has_value()) continue;
+            const auto* segment = image.find_segment(*resolved_first, 2u);
+            if (segment == nullptr || segment != dispatch_segment ||
+                !segment->permissions.executable ||
+                !snapshot_candidate_source(image, *segment))
+                continue;
+            if (first_target >= stride &&
+                fixed_stride_return_handler(image,
+                                            first_target - static_cast<std::uint32_t>(stride),
+                                            stride,
+                                            segment))
+                continue;
+            std::size_t return_handlers = 0u;
+            for (; return_handlers < maximum_handlers; ++return_handlers) {
+                const auto delta = static_cast<std::uint64_t>(return_handlers) * stride;
+                if (delta > std::numeric_limits<std::uint32_t>::max() - first_target) break;
+                if (!fixed_stride_return_handler(
+                        image,
+                        first_target + static_cast<std::uint32_t>(delta),
+                        stride,
+                        segment))
+                    break;
+            }
+            if (return_handlers < minimum_handlers) continue;
+            const auto tail_delta = static_cast<std::uint64_t>(return_handlers) * stride;
+            if (tail_delta > std::numeric_limits<std::uint32_t>::max() - first_target) continue;
+            const auto tail = first_target + static_cast<std::uint32_t>(tail_delta);
+            if (return_handlers == maximum_handlers &&
+                fixed_stride_return_handler(image, tail, stride, segment))
+                continue;
+            if (!fixed_stride_terminal_tail(image, tail, stride, segment)) continue;
+
+            RelativeCallIslandCandidates candidate;
+            candidate.dispatch_address = dispatch.address;
+            candidate.first_target = first_target;
+            candidate.stride = stride;
+            candidate.targets.reserve(return_handlers + 1u);
+            for (std::size_t index = 0u; index < return_handlers; ++index) {
+                candidate.targets.push_back(
+                    first_target + static_cast<std::uint32_t>(index * stride));
+            }
+            candidate.targets.push_back(tail);
+            candidate.terminal_tail_transfer = true;
+            candidate.reason = "snapshot-relative-call-island-candidates";
+            if (return_handlers > best_return_handlers) {
+                matches.clear();
+                best_return_handlers = return_handlers;
+            }
+            if (return_handlers == best_return_handlers)
+                matches.emplace_back(return_handlers, std::move(candidate));
+        }
+    }
+    if (matches.size() != 1u) return std::nullopt;
+    return std::move(matches.front().second);
 }
 
 const char* jump_table_encoding_name(const JumpTableEncoding encoding) noexcept {

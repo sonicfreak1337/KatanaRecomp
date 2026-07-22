@@ -99,8 +99,10 @@ io::ExecutableImage make_dreamcast_disc_executable(
     if (execution_path == DreamcastDiscExecutionPath::NativeSystemBootstrap) {
         image.add_entry_point(dreamcast_system_bootstrap_entry_address);
         image.add_entry_point(dreamcast_disc_boot_address);
+        image.set_initial_snapshot_entry(dreamcast_system_bootstrap_entry_address);
     } else {
         image.add_entry_point(dreamcast_disc_boot_address);
+        image.set_initial_snapshot_entry(dreamcast_disc_boot_address);
     }
     return image;
 }

@@ -2331,6 +2331,12 @@ void emit_block(std::ostringstream& output,
         guest_instruction_addresses.insert(instruction.source_address);
     const auto guest_instruction_count =
         std::max<std::size_t>(1u, guest_instruction_addresses.size());
+    const auto segment = block.start_address >> 29u;
+    if (segment == 4u || segment == 5u) {
+        const auto direct_alias = block.start_address ^ 0x20000000u;
+        if (!current_blocks.contains(direct_alias))
+            output << "            case " << hex32(direct_alias) << ":\n";
+    }
     output << "            case " << hex32(block.start_address) << ": {\n";
     if (!single_block) {
         output << "                if (services != nullptr) {\n"

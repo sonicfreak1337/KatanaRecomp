@@ -7,11 +7,20 @@
 #include <array>
 #include <bit>
 #include <cstddef>
+#include <cstring>
 #include <fstream>
 #include <iomanip>
 #include <limits>
 #include <sstream>
 #include <stdexcept>
+#include <vector>
+
+#ifdef _WIN32
+#define NOMINMAX
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
+#include <bcrypt.h>
+#endif
 
 namespace katana::io {
 namespace {
@@ -36,12 +45,27 @@ class Sha256 final {
             throw std::length_error("SHA-256-Eingabe ist zu gross.");
         }
         total_bytes_ += bytes.size();
-        for (const auto byte : bytes) {
-            buffer_[buffer_size_++] = static_cast<std::uint8_t>(byte);
+        auto* cursor = reinterpret_cast<const std::uint8_t*>(bytes.data());
+        auto remaining = bytes.size();
+        if (buffer_size_ != 0u) {
+            const auto copied = std::min(buffer_.size() - buffer_size_, remaining);
+            std::memcpy(buffer_.data() + buffer_size_, cursor, copied);
+            buffer_size_ += copied;
+            cursor += copied;
+            remaining -= copied;
             if (buffer_size_ == buffer_.size()) {
-                transform(buffer_);
+                transform(buffer_.data());
                 buffer_size_ = 0u;
             }
+        }
+        while (remaining >= buffer_.size()) {
+            transform(cursor);
+            cursor += buffer_.size();
+            remaining -= buffer_.size();
+        }
+        if (remaining != 0u) {
+            std::memcpy(buffer_.data(), cursor, remaining);
+            buffer_size_ = remaining;
         }
     }
 
@@ -54,7 +78,7 @@ class Sha256 final {
             std::fill(buffer_.begin() + static_cast<std::ptrdiff_t>(buffer_size_),
                       buffer_.end(),
                       std::uint8_t{0u});
-            transform(buffer_);
+            transform(buffer_.data());
             buffer_size_ = 0u;
         }
         std::fill(buffer_.begin() + static_cast<std::ptrdiff_t>(buffer_size_),
@@ -63,7 +87,7 @@ class Sha256 final {
         for (std::size_t index = 0u; index < 8u; ++index) {
             buffer_[63u - index] = static_cast<std::uint8_t>(bit_count >> (index * 8u));
         }
-        transform(buffer_);
+        transform(buffer_.data());
         std::ostringstream output;
         output << std::hex << std::setfill('0');
         for (const auto word : state_)
@@ -72,7 +96,7 @@ class Sha256 final {
     }
 
   private:
-    void transform(const std::array<std::uint8_t, 64u>& block) noexcept {
+    void transform(const std::uint8_t* const block) noexcept {
         std::array<std::uint32_t, 64u> words{};
         for (std::size_t index = 0u; index < 16u; ++index) {
             const auto offset = index * 4u;
@@ -136,6 +160,93 @@ class Sha256 final {
     bool finalized_ = false;
 };
 
+#ifdef _WIN32
+struct BCryptAlgorithmHandle final {
+    BCRYPT_ALG_HANDLE value = nullptr;
+    ~BCryptAlgorithmHandle() {
+        if (value != nullptr) static_cast<void>(BCryptCloseAlgorithmProvider(value, 0u));
+    }
+};
+
+struct BCryptHashHandle final {
+    BCRYPT_HASH_HANDLE value = nullptr;
+    ~BCryptHashHandle() {
+        if (value != nullptr) static_cast<void>(BCryptDestroyHash(value));
+    }
+};
+
+bool bcrypt_succeeded(const NTSTATUS status) noexcept {
+    return status >= 0;
+}
+
+std::string hash_file_windows(std::ifstream& input,
+                              const std::function<void()>& checkpoint,
+                              std::uint64_t& size) {
+    BCryptAlgorithmHandle algorithm;
+    if (!bcrypt_succeeded(BCryptOpenAlgorithmProvider(
+            &algorithm.value, BCRYPT_SHA256_ALGORITHM, nullptr, 0u)))
+        throw InputOutputError("Windows-SHA-256-Provider konnte nicht geoeffnet werden.");
+
+    DWORD object_size = 0u;
+    DWORD returned = 0u;
+    if (!bcrypt_succeeded(BCryptGetProperty(algorithm.value,
+                                            BCRYPT_OBJECT_LENGTH,
+                                            reinterpret_cast<PUCHAR>(&object_size),
+                                            sizeof(object_size),
+                                            &returned,
+                                            0u)) ||
+        returned != sizeof(object_size) || object_size == 0u)
+        throw InputOutputError("Windows-SHA-256-Objektgroesse ist ungueltig.");
+    DWORD digest_size = 0u;
+    if (!bcrypt_succeeded(BCryptGetProperty(algorithm.value,
+                                            BCRYPT_HASH_LENGTH,
+                                            reinterpret_cast<PUCHAR>(&digest_size),
+                                            sizeof(digest_size),
+                                            &returned,
+                                            0u)) ||
+        returned != sizeof(digest_size) || digest_size != 32u)
+        throw InputOutputError("Windows-SHA-256-Digestgroesse ist ungueltig.");
+
+    std::vector<UCHAR> object(object_size);
+    BCryptHashHandle hash;
+    if (!bcrypt_succeeded(BCryptCreateHash(algorithm.value,
+                                           &hash.value,
+                                           object.data(),
+                                           static_cast<ULONG>(object.size()),
+                                           nullptr,
+                                           0u,
+                                           0u)))
+        throw InputOutputError("Windows-SHA-256-Kontext konnte nicht erzeugt werden.");
+
+    constexpr std::size_t buffer_size = 4u * 1024u * 1024u;
+    std::vector<char> buffer(buffer_size);
+    while (input) {
+        if (checkpoint) checkpoint();
+        input.read(buffer.data(), static_cast<std::streamsize>(buffer.size()));
+        const auto count = input.gcount();
+        if (count <= 0) continue;
+        if (!bcrypt_succeeded(BCryptHashData(hash.value,
+                                             reinterpret_cast<PUCHAR>(buffer.data()),
+                                             static_cast<ULONG>(count),
+                                             0u)))
+            throw InputOutputError("Windows-SHA-256 konnte Eingabedaten nicht verarbeiten.");
+        size += static_cast<std::uint64_t>(count);
+    }
+    if (checkpoint) checkpoint();
+    if (!input.eof()) throw InputOutputError("Provenienzeingabe konnte nicht gelesen werden.");
+
+    std::array<UCHAR, 32u> digest{};
+    if (!bcrypt_succeeded(BCryptFinishHash(
+            hash.value, digest.data(), static_cast<ULONG>(digest.size()), 0u)))
+        throw InputOutputError("Windows-SHA-256 konnte nicht abgeschlossen werden.");
+    std::ostringstream output;
+    output << std::hex << std::setfill('0');
+    for (const auto byte : digest)
+        output << std::setw(2) << static_cast<unsigned>(byte);
+    return output.str();
+}
+#endif
+
 bool stable_token(const std::string_view value) noexcept {
     if (value.empty()) return false;
     return std::all_of(value.begin(), value.end(), [](const unsigned char character) {
@@ -195,8 +306,12 @@ InputProvenance capture_input_provenance(std::string role,
     }
     std::ifstream input(path, std::ios::binary);
     if (!input) throw InputOutputError("Provenienzeingabe konnte nicht geoeffnet werden.");
-    Sha256 hash;
     std::uint64_t size = 0u;
+    std::string digest;
+#ifdef _WIN32
+    digest = hash_file_windows(input, checkpoint, size);
+#else
+    Sha256 hash;
     std::vector<char> buffer(64u * 1024u);
     while (input) {
         if (checkpoint) checkpoint();
@@ -209,8 +324,10 @@ InputProvenance capture_input_provenance(std::string role,
     }
     if (checkpoint) checkpoint();
     if (!input.eof()) throw InputOutputError("Provenienzeingabe konnte nicht gelesen werden.");
+    digest = hash.finish();
+#endif
     return {
-        std::move(role), size, hash.finish(), std::filesystem::absolute(path).lexically_normal()};
+        std::move(role), size, std::move(digest), std::filesystem::absolute(path).lexically_normal()};
 }
 
 std::string make_portable_build_identity(const BuildProvenance& provenance) {

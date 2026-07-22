@@ -94,8 +94,11 @@ Gruenden `unresolved`.
 
 Dreamcast-GDI-Images tragen den expliziten
 `EntryPointStraightLineQuiescent`-Anfangssnapshotvertrag. Nur der
-zusammenhaengende gerade Pfad ab dem einzigen Entry darf ein beschreibbares
-PC-relatives Literal zeitlich beweisen. Ein CFG-Join, eine Adressluecke,
+zusammenhaengende gerade Pfad ab dem ausgezeichneten `initial_snapshot_entry`
+darf ein beschreibbares PC-relatives Literal zeitlich beweisen. Das ist bei
+Images mit mehreren Analyse-Eintritten insbesondere nicht zwingend der
+numerisch erste Entry. Fehlt die explizite Markierung, ist nur bei genau einem
+Entry ein kompatibler Fallback erlaubt. Ein CFG-Join, eine Adressluecke,
 Kontrollfluss, ein unbekanntes Schreibziel oder ein ueberdeckender bekannter
 Store beendet diesen Beweis. Allgemeine Raw-/ELF-Images bleiben bei
 `ImmutableOnly`. Der vollstaendige Asynchronitaets- und Berichtsvertrag steht
@@ -111,6 +114,55 @@ damit kein statischer Beweis und wird im Portbericht getrennt ausgewiesen. Es
 blockiert den Export nicht: Der erzeugte Basic-Block-Dispatcher prueft die
 Kandidaten zur Laufzeit und behaelt den dynamischen Default. Nur `unresolved`
 ohne endlichen Kandidaten bleibt ein Vollstaendigkeitsblocker.
+
+### Absolute Pointertabellen im Anfangssnapshot
+
+Ein getrenntes, konservatives Muster erkennt einen PC-relativ geladenen
+Tabellenzeiger, den nachfolgenden `MOV.L @(R0,Rm),Rn`-Load und dessen `JMP` oder
+`JSR`. Zwischen Load und Dispatch sind nur semantisch unschaedliche `NOP`- und
+R0-Indexanpassungen erlaubt. Der Literal- und Tabellenbereich muss committed,
+lesbar und Teil der initialen Ladephase sein; beschreibbare Segmente sind nur
+unter `EntryPointStraightLineQuiescent` zulaessig. Runtime-Memory ist immer
+ausgeschlossen. Ein zusammenhaengender Lauf braucht mindestens zwei und
+hoechstens 4096 ausgerichtete, committed ausfuehrbare Ziele. P0/P1/P2-Aliase
+werden dabei auf dieselbe Imageherkunft normalisiert.
+
+Diese Anfangswerte sind ausdruecklich kein Beweis fuer die spaetere
+Tabellenbelegung. Die Site bleibt `RuntimeOnly`, die Kandidatenherkunft
+`GuardedPartial`, und die Ziele erscheinen nur als `analysis_candidates`.
+Insbesondere entstehen daraus keine `resolved_edges`, keine bewiesenen CFG-
+Kanten und keine Funktionsseeds. Das IR verwendet akzeptierte Ziele lediglich
+als Basic-Block-Leader innerhalb der bereits bewiesenen Funktion. Damit kann
+der validierende Runtime-Dispatcher einen vorab kompilierten Zielblock betreten,
+ohne am Blockende einen kuenstlichen Funktionsreturn zu erzeugen. Der aktuelle
+Gastload bleibt massgeblich; jedes andere Ziel durchlaeuft weiterhin den
+typisierten dynamischen Default.
+
+### Relative BSRF-Handlerinseln im Anfangssnapshot
+
+Ein ungeloester `BSRF` darf endliche AOT-Kandidaten liefern, wenn sein relatives
+Zielregister innerhalb eines zusammenhaengenden begrenzten Rueckwaertsfensters
+nachweislich aus einem Speicherwort stammt und danach nur durch geschlossene
+relative Registertransformationen veraendert wird. Dispatch und Insel muessen
+im selben initialen, ausfuehrbaren Snapshotsegment liegen; `RuntimeMemory` ist
+ausgeschlossen. Beschreibbare Segmente setzen wie andere Snapshotkandidaten
+`EntryPointStraightLineQuiescent` voraus.
+
+Die Struktur muss eindeutig sein: Die Erkennung waehlt genau einen maximalen
+Lauf aus mindestens vier Handlern mit demselben geraden Stride. Jeder Handler
+enthaelt an der vorletzten Instruktionsposition ein `RTS`, an der letzten dessen
+gueltigen Delay-Slot und davor keinen anderen Kontrolltransfer. Auf den letzten
+Return-Handler folgt im selben Stride ein
+obligatorischer terminaler Slot, der mit `BRA` beginnt, sonst nur `NOP`
+enthaelt und auf gueltigen committed Code verzweigt. Gleich lange mehrdeutige,
+nicht terminierte, nicht ausfuehrbare oder ueberlange Laeufe werden verworfen.
+
+Auch diese Insel ist kein statischer Zielbeweis. Handler und terminaler Slot
+erscheinen nur als `analysis_candidates`; die Site bleibt kandidaten-only
+`RuntimeOnly`, und das live geladene relative BSRF-Ziel ist autoritativ. Es
+entstehen keine `resolved_edges`, keine CFG-Kanten und keine Funktionsseeds.
+Die Kandidaten werden lediglich bewacht analysiert und als Basic-Block-Leader
+fuer einen spaeter validierten nativen Eintritt vorbereitet.
 
 ## Interprozedurale SH-C-Summaries
 
@@ -162,6 +214,10 @@ mit 64-Bit-Zwischenwerten berechnet, weshalb ein einzelner Eintrag bei
 beschreibbare Tabellen werden vor dem ersten Eintrag vollstaendig abgelehnt.
 Die Dispatch-Adresse muss als `JMP @Rn` oder `JSR @Rn` entdeckt worden
 sein; Call-Tabellen erzeugen Funktionskandidaten, Jump-Tabellen nicht.
+Dieser vollstaendig bewiesene `Absolute32`-Vertrag ist von den oben
+beschriebenen beschreibbaren Snapshotkandidaten getrennt. Nur die
+nicht-beschreibbare, vollstaendige Tabelle erzeugt statische Kanten und bei
+Calls Funktionskandidaten.
 
 ## Override-Datei Version 1
 

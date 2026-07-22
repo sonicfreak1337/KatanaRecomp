@@ -31,6 +31,7 @@ constexpr std::int32_t maximum_stack_distance = 4'096;
 std::vector<std::vector<std::uint32_t>>
 strong_components(const std::span<const FunctionInfo> functions) {
     std::unordered_map<std::uint32_t, const FunctionInfo*> by_address;
+    by_address.reserve(functions.size());
     for (const auto& function : functions)
         by_address.emplace(function.entry_address, &function);
     std::unordered_map<std::uint32_t, std::size_t> index;
@@ -38,6 +39,11 @@ strong_components(const std::span<const FunctionInfo> functions) {
     std::unordered_set<std::uint32_t> on_stack;
     std::vector<std::uint32_t> stack;
     std::vector<std::vector<std::uint32_t>> components;
+    index.reserve(functions.size());
+    lowlink.reserve(functions.size());
+    on_stack.reserve(functions.size());
+    stack.reserve(functions.size());
+    components.reserve(functions.size());
     std::size_t next_index = 0u;
     std::function<void(std::uint32_t)> visit = [&](const std::uint32_t address) {
         index.emplace(address, next_index);
@@ -164,23 +170,40 @@ void set_value(AbstractValue& value, const std::uint32_t constant) {
 }
 
 bool merge_value(AbstractValue& destination, const AbstractValue& source) {
-    const auto before = destination;
-    destination.call_sites.insert(source.call_sites.begin(), source.call_sites.end());
-    destination.callees.insert(source.callees.begin(), source.callees.end());
     if (!destination.known || !source.known) {
+        const bool changed = destination.known || destination.guarded || destination.complete ||
+                             !destination.values.empty() || !destination.call_sites.empty() ||
+                             !destination.callees.empty();
         destination.known = false;
         destination.guarded = false;
         destination.complete = false;
         destination.values.clear();
-    } else {
-        destination.guarded = destination.guarded || source.guarded;
-        destination.complete = destination.complete && source.complete;
-        destination.values.insert(
-            destination.values.end(), source.values.begin(), source.values.end());
-        normalize(destination.values);
-        if (destination.values.size() > maximum_summary_values) make_unknown(destination);
+        destination.call_sites.clear();
+        destination.callees.clear();
+        return changed;
     }
-    return destination != before;
+    bool changed = false;
+    for (const auto call_site : source.call_sites)
+        changed = destination.call_sites.insert(call_site).second || changed;
+    for (const auto callee : source.callees)
+        changed = destination.callees.insert(callee).second || changed;
+    const auto guarded = destination.guarded || source.guarded;
+    const auto complete = destination.complete && source.complete;
+    changed = guarded != destination.guarded || complete != destination.complete || changed;
+    destination.guarded = guarded;
+    destination.complete = complete;
+    auto values = destination.values;
+    values.insert(values.end(), source.values.begin(), source.values.end());
+    normalize(values);
+    if (values.size() > maximum_summary_values) {
+        make_unknown(destination);
+        return true;
+    }
+    if (values != destination.values) {
+        destination.values = std::move(values);
+        changed = true;
+    }
+    return changed;
 }
 
 bool merge_state(AbstractState& destination, const AbstractState& source) {
@@ -903,8 +926,13 @@ void apply_call(AbstractState& state,
                 value.guarded = true;
             }
         }
-        for (const auto candidate : candidate_callees)
-            call_arguments->push_back({call_site, candidate, observation});
+        for (std::size_t index = 0u; index < candidate_callees.size(); ++index) {
+            const auto candidate = candidate_callees[index];
+            if (index + 1u == candidate_callees.size())
+                call_arguments->push_back({call_site, candidate, std::move(observation)});
+            else
+                call_arguments->push_back({call_site, candidate, observation});
+        }
     }
     if (image.guest_call_abi() != katana::io::GuestCallAbi::SuperHC) {
         for (auto& value : state)
@@ -1038,20 +1066,27 @@ FunctionEvaluation evaluate_function(
     const bool collect_resolutions) {
     FunctionEvaluation evaluation;
     evaluation.summary.function_address = function.entry_address;
-    std::unordered_set<std::uint32_t> members(function.block_addresses.begin(),
-                                              function.block_addresses.end());
+    evaluation.call_arguments.reserve(function.direct_callees.size());
+    std::unordered_set<std::uint32_t> members;
+    members.reserve(function.block_addresses.size());
+    members.insert(function.block_addresses.begin(), function.block_addresses.end());
     std::unordered_map<std::uint32_t, AbstractState> inputs;
+    inputs.reserve(function.block_addresses.size());
     std::deque<std::uint32_t> pending;
+    std::unordered_set<std::uint32_t> queued;
+    queued.reserve(function.block_addresses.size());
     inputs.emplace(function.entry_address, initial_state);
     pending.push_back(function.entry_address);
+    queued.insert(function.entry_address);
     std::vector<std::pair<std::uint32_t, AbstractState>> returns;
 
     while (!pending.empty()) {
         const auto address = pending.front();
         pending.pop_front();
+        queued.erase(address);
         const auto block = blocks.find(address);
         if (block == blocks.end()) continue;
-        auto state = inputs[address];
+        auto state = inputs.at(address);
         struct DelayedCall {
             std::uint32_t call_site = 0u;
             std::optional<std::uint32_t> direct_callee;
@@ -1162,7 +1197,9 @@ FunctionEvaluation evaluate_function(
         for (const auto successor : block->second->successors) {
             if (!members.contains(successor)) continue;
             const auto [input, inserted] = inputs.emplace(successor, state);
-            if (inserted || merge_state(input->second, state)) pending.push_back(successor);
+            if ((inserted || merge_state(input->second, state)) &&
+                queued.insert(successor).second)
+                pending.push_back(successor);
         }
     }
 
@@ -1236,8 +1273,12 @@ FunctionEvaluation evaluate_function(
 
 bool merge_candidate_input(CandidateInput& destination,
                            const FunctionEvaluation::CallArguments& observation) {
-    const auto previous = destination.state;
-    destination.observations[observation.call_site] = observation.state;
+    const auto [stored, inserted] =
+        destination.observations.try_emplace(observation.call_site, observation.state);
+    if (!inserted) {
+        if (stored->second == observation.state) return false;
+        stored->second = observation.state;
+    }
     AbstractState merged;
     merged.stack_offsets[15u] = 0;
     if (destination.unknown_ingress || destination.expected_call_sites.empty() ||
@@ -1245,8 +1286,9 @@ bool merge_candidate_input(CandidateInput& destination,
             destination.expected_call_sites.begin(),
             destination.expected_call_sites.end(),
             [&](const auto call_site) { return destination.observations.contains(call_site); })) {
+        const bool changed = destination.state != merged;
         destination.state = std::move(merged);
-        return destination.state != previous;
+        return changed;
     }
     for (std::uint8_t index = 0u; index < 15u; ++index) {
         auto& target = merged[index];
@@ -1302,8 +1344,9 @@ bool merge_candidate_input(CandidateInput& destination,
             ++value;
         }
     }
+    const bool changed = destination.state != merged;
     destination.state = std::move(merged);
-    return destination.state != previous;
+    return changed;
 }
 
 } // namespace
@@ -1313,19 +1356,49 @@ analyze_function_values(const katana::io::ExecutableImage& image,
                         const std::span<const katana::sh4::DisassemblyLine> lines,
                         const std::span<const std::uint32_t> function_entries,
                         const std::span<const ResolvedControlFlowEdge> resolved_edges) {
+    return analyze_function_values(image, lines, function_entries, resolved_edges, {});
+}
+
+FunctionValueAnalysisResult
+analyze_function_values(const katana::io::ExecutableImage& image,
+                        const std::span<const katana::sh4::DisassemblyLine> lines,
+                        const std::span<const std::uint32_t> function_entries,
+                        const std::span<const ResolvedControlFlowEdge> resolved_edges,
+                        const FunctionValueAnalysisProgressCallback& progress_callback) {
     FunctionValueAnalysisResult result;
     result.iteration_budget = maximum_fixpoint_iterations;
+    std::size_t completed_functions = 0u;
+    std::size_t resolution_count = 0u;
+    std::size_t block_count = 0u;
+    std::size_t function_count = 0u;
+    std::size_t pending_count = 0u;
+    const auto report_progress = [&](const std::string_view phase) {
+        if (!progress_callback) return;
+        progress_callback({phase,
+                           function_count,
+                           block_count,
+                           result.fixpoint_iterations,
+                           completed_functions,
+                           pending_count,
+                           resolution_count});
+    };
     if (lines.empty() || function_entries.empty() ||
         image.guest_call_abi() != katana::io::GuestCallAbi::SuperHC)
         return result;
     const auto blocks = build_basic_blocks(lines, resolved_edges, function_entries);
+    block_count = blocks.size();
+    report_progress("blocks-complete");
     std::unordered_map<std::uint32_t, const BasicBlock*> block_index;
+    block_index.reserve(blocks.size());
     for (const auto& block : blocks)
         block_index.emplace(block.start_address, &block);
     const auto functions = discover_functions_from_blocks(blocks, function_entries, resolved_edges);
     const auto components = strong_components(functions);
+    function_count = functions.size();
     result.strongly_connected_components = components.size();
+    report_progress("functions-complete");
     std::unordered_map<std::uint32_t, IndirectCalleeCandidates> indirect_callees;
+    indirect_callees.reserve(resolved_edges.size());
     for (const auto& edge : resolved_edges) {
         if (edge.kind != ResolvedControlFlowKind::Call) continue;
         auto& candidates = indirect_callees[edge.instruction_address];
@@ -1342,6 +1415,8 @@ analyze_function_values(const katana::io::ExecutableImage& image,
     std::map<std::uint32_t, CandidateInput> candidate_inputs;
     std::unordered_map<std::uint32_t, const FunctionInfo*> function_by_address;
     std::unordered_map<std::uint32_t, std::vector<std::uint32_t>> callers_by_callee;
+    function_by_address.reserve(functions.size());
+    callers_by_callee.reserve(functions.size());
     for (const auto& function : functions)
         summaries.emplace(function.entry_address, FunctionValueSummary{function.entry_address, {}});
     for (const auto& function : functions)
@@ -1374,12 +1449,15 @@ analyze_function_values(const katana::io::ExecutableImage& image,
     }
     std::deque<std::uint32_t> pending;
     std::unordered_set<std::uint32_t> queued;
+    queued.reserve(functions.size());
     for (const auto& component : components) {
         for (const auto address : component) {
             pending.push_back(address);
             queued.insert(address);
         }
     }
+    pending_count = pending.size();
+    report_progress("fixpoint-start");
     while (!pending.empty()) {
         if (result.fixpoint_iterations >= maximum_fixpoint_iterations) {
             result.budget_exhausted = true;
@@ -1391,6 +1469,12 @@ analyze_function_values(const katana::io::ExecutableImage& image,
         const auto function = function_by_address.find(address);
         if (function == function_by_address.end()) continue;
         ++result.fixpoint_iterations;
+        pending_count = pending.size();
+        const bool sampled_iteration = result.fixpoint_iterations <= 16u ||
+                                       (result.fixpoint_iterations &
+                                        (result.fixpoint_iterations - 1u)) == 0u ||
+                                       result.fixpoint_iterations % 128u == 0u;
+        if (sampled_iteration) report_progress("fixpoint-evaluate-start");
         auto evaluation = evaluate_function(image,
                                             *function->second,
                                             block_index,
@@ -1398,6 +1482,7 @@ analyze_function_values(const katana::io::ExecutableImage& image,
                                             summaries,
                                             candidate_inputs[address].state,
                                             false);
+        if (sampled_iteration) report_progress("fixpoint-evaluate-complete");
         auto& previous = summaries[address];
         if (previous != evaluation.summary) {
             previous = std::move(evaluation.summary);
@@ -1419,7 +1504,9 @@ analyze_function_values(const katana::io::ExecutableImage& image,
                 ++result.unchanged_ingress_skips;
             }
         }
+        pending_count = pending.size();
     }
+    report_progress("fixpoint-complete");
 
     if (result.budget_exhausted) {
         for (auto& [address, summary] : summaries) {
@@ -1442,6 +1529,7 @@ analyze_function_values(const katana::io::ExecutableImage& image,
 
     for (const auto& [address, summary] : summaries)
         result.summaries.push_back(summary);
+    report_progress("resolution-start");
     for (const auto& function : functions) {
         auto evaluation = evaluate_function(image,
                                             function,
@@ -1450,9 +1538,14 @@ analyze_function_values(const katana::io::ExecutableImage& image,
                                             summaries,
                                             candidate_inputs[function.entry_address].state,
                                             true);
+        resolution_count += evaluation.resolutions.size();
         result.resolutions.insert(result.resolutions.end(),
                                   std::make_move_iterator(evaluation.resolutions.begin()),
                                   std::make_move_iterator(evaluation.resolutions.end()));
+        ++completed_functions;
+        if (completed_functions <= 16u || completed_functions % 128u == 0u ||
+            completed_functions == functions.size())
+            report_progress("resolution-progress");
     }
     std::sort(result.resolutions.begin(),
               result.resolutions.end(),
@@ -1494,6 +1587,8 @@ analyze_function_values(const katana::io::ExecutableImage& image,
                                            : "merged-contexts-partial";
     }
     result.resolutions = std::move(merged);
+    resolution_count = result.resolutions.size();
+    report_progress("complete");
     return result;
 }
 

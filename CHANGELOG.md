@@ -21,6 +21,53 @@
   ueber einen Adressindex. CLI-Subphasen markieren Disc-Load, Analyse,
   Lowering, Optimierung, Partitionen, Metadaten, Recipe und Writer getrennt,
   ohne private Eingabedaten auszugeben.
+- Windows erfasst grosse Eingabeprovenienz jetzt ueber den nativen BCrypt-
+  SHA-256-Pfad mit 4-MiB-Chunks; der portable SHA-256-Fallback verarbeitet
+  vollstaendige 64-Byte-Bloecke ohne byteweisen Kopierloop. Hash und Groesse
+  bleiben plattformuebergreifend identisch. Zusammen mit der parallelen
+  Projektausgabe beseitigt dies einen weiteren seriellen Exportanteil.
+- Generierter nativer Dispatch akzeptiert P1- und P2-Codealiase desselben
+  physischen SH-4-Blocks. Die Kontrollflussanalyse erkennt ausserdem
+  zusammenhaengende absolute Pointertabellen aus dem garantierten
+  Anfangssnapshot. Beschreibbare Tabellen bleiben `RuntimeOnly` mit
+  `GuardedPartial`-Herkunft und liefern nur endliche `analysis_candidates`;
+  weder bewiesene CFG-Kanten noch Funktionsseeds werden daraus erfunden. Die
+  akzeptierten Ziele werden als Basic-Block-Leader kompiliert, waehrend der
+  aktuelle Laufzeitload und der validierende Default-Dispatch massgeblich
+  bleiben. Damit kann ein Kandidat innerhalb einer bestehenden Funktion
+  eintreten und normal weiterfallen, ohne einen kuenstlichen Funktionsreturn zu
+  erzeugen.
+- Der GD-ROM-BIOS-Vertrag deckt nun auch die oeffentlich belegten Kommandos
+  `CD_CMD_NOP` (29), `REQ_MODE` (30) und `SET_MODE` (31) ab. Alle drei folgen
+  der gemeinsamen `Queued -> EXEC_SERVER -> Complete`-Zustandsfolge;
+  `REQ_MODE` schreibt vier Little-Endian-Gastwoerter fuer Speed, Standby,
+  Read-Flags und Retry, waehrend `SET_MODE` dieselben bytebreiten Felder im
+  gemeinsamen BIOS-/Paket-Modezustand aktualisiert. Der historische
+  Vierwortstatus meldet fuer 30/31 exakt zehn uebertragene Modebytes. Ein
+  ungueltiger 16-Byte-Zielbereich scheitert vor dem ersten Write als
+  `InvalidField`; RAM-Ende, MMIO, einmaliger Abschluss und die gemeinsame
+  Sichtbarkeit ueber BIOS- und Paketoberflaeche sind regressionsgesichert.
+- Die Kontrollflussanalyse erkennt fuer ungeloeste, speicherabgeleitete `BSRF`-
+  Calls jetzt eine eindeutig maximale Fixed-Stride-Handlerinsel im initialen,
+  ausfuehrbaren Nicht-RuntimeMemory-Snapshot. Mindestens vier Handler besitzen
+  denselben geraden Abstand, jeweils `RTS` samt Delay-Slot und danach einen
+  obligatorischen terminalen `BRA`-Slot. Die Anfangsziele bleiben
+  kandidaten-only `RuntimeOnly`; das live geladene relative Ziel ist
+  autoritativ, und es entstehen weder statische CFG-Kanten noch erfundene
+  Funktionen. Der statische PAL-Audit erkennt damit beide Dispatches
+  `0xAC00D994`/`0xAC00D9A0` und die Inselziele `0xAC00D9AA..0xAC00D9E6`
+  einschliesslich des bisherigen Stopps. Der damit neu exportierte und aus der
+  unveraenderten Original-GDI lokal installierte Port verlaesst den alten
+  Dispatchstopp vollstaendig. Eine erste Probe belegte danach den zuvor
+  fehlenden `REQ_MODE`-/`SET_MODE`-Pfad; nach dessen allgemeiner Korrektur
+  erreichte der naechste budgetierte Lauf 345.568.225 Hardwarezyklen und
+  7.421.380 native Bloecke sowie erstmals spaetere PVR-Registerwrites. Der
+  naechste ehrliche Blocker ist ein fehlender nativer Inneneinstieg bei
+  `0x8C654F5C`; TA-Transfers, Renderrequests und echte Gastframes bleiben null.
+- `EntryPointStraightLineQuiescent` beginnt bei Images mit mehreren Eintritten
+  jetzt am explizit ausgezeichneten `initial_snapshot_entry`. Nur Images ohne
+  diese Markierung und mit genau einem Entry verwenden den kompatiblen
+  Einzeleintrittsfallback.
 - Das verbindliche Produktmodell ist nun ausdruecklich XenonRecomp-artige
   statische Rekompilierung: Discbootstrap (`IP.BIN`) und BootExecutable werden
   vorausanalysiert, als SH-4-AOT in C++ beziehungsweise nativen PC-Code
@@ -106,9 +153,9 @@
   Provenienz, Bootdiagnostik, P2-Bootstrap, Gastzeit, BIOS/GD-ROM, Runtimecode,
   TA/PVR, echten Scanoutframe, Hotpath, konsolidierte Validierung und das
   nutzerfreigegebene Gate ab. Port-, Harness-, Controller- und GUI-Integration
-  wandert nach v0.49; nur der moderne, geraeteagnostische Controllervertrag und
-  die interaktive Sitzung bleiben in v0.48 und beginnen strikt erst nach dem
-  echten Gastframe. `KR-4804`/`KR-4805` sind durch `KR-4853`/`KR-4854` ersetzt.
+  liegt in v0.49. Der moderne, geraeteagnostische Controllervertrag und die
+  interaktive Sitzung beginnen auch dort strikt erst nach dem echten Gastframe.
+  `KR-4804`/`KR-4805` sind durch `KR-4853`/`KR-4854` ersetzt.
   Ein Tag bleibt bis zur ausdruecklichen Nutzerfreigabe ausgeschlossen.
 - HLE-GDI-Ports rekompilieren nun auch den 16 Sektoren grossen, von der Disc
   gelieferten Dreamcast-Systembootstrap als eigenes initiales Programmsegment.

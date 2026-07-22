@@ -325,7 +325,8 @@ ExecutableByteInventory build_executable_byte_inventory(const io::ExecutableImag
                            entry.entry_address,
                            width,
                            ExecutableByteClass::JumpTable,
-                           RangeProofClass::Proven);
+                           table.aot_candidates_only ? RangeProofClass::Candidate
+                                                     : RangeProofClass::Proven);
         }
     }
 

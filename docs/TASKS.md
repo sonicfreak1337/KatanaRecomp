@@ -47,7 +47,6 @@ KR-4831 und KR-4841
   -> KR-4913
   -> KR-4849 und KR-4915
   -> KR-4850
-  -> KR-4814 und KR-4914
   -> KR-4851
   -> KR-4852
   -> KR-4853
@@ -60,6 +59,7 @@ KR-4854
   -> KR-4802
   -> KR-4803
   -> KR-4812 und KR-4813
+  -> KR-4814 und KR-4914
   -> KR-4822 und KR-4823
   -> KR-4916
   -> KR-4901, KR-4902 und KR-4903
@@ -73,9 +73,9 @@ Korrektheit blockiert Performance. Waehrend KR-4841 bis KR-4851 werden nur
 betroffene Targets und kleine Regressionen ausgefuehrt; die konsolidierte Suite
 und der private Retaillauf folgen einmal in KR-4852. Jeder Prozess besitzt ein
 hartes Limit von 15 Minuten. Der moderne Hostcontrollervertrag und die private
-interaktive Sitzung (`KR-4814`/`KR-4914`) gehoeren zu v0.48, beginnen aber
-strikt erst nach `KR-4850`. Breitere GUI-, Harness- und Portintegration folgt
-in v0.49.
+interaktive Sitzung (`KR-4814`/`KR-4914`) gehoeren zur v0.49-Integration und
+beginnen auch dort strikt erst nach `KR-4850`; der erste echte Gastframe bleibt
+P0. GUI-, Harness- und Portintegration folgt ebenfalls in v0.49.
 
 ---
 
@@ -822,7 +822,11 @@ vollstaendig linear schreibbarer Bereich validiert und bei ungueltigen,
 ueberlaufenden oder MMIO-Zielen atomar als `InvalidField` abgelehnt. Die
 kombinierte fokussierte Validierung des aktuellen Blocks besteht mit 12
 Buildjobs 12/12; EX 38/39 und unabhaengig belegte Timeout-/Overrun-Grenzen
-bleiben offen.
+bleiben offen. Die oeffentlich belegten BIOS-Kommandos 29 bis 31 sind nun
+ebenfalls geschlossen: `NOP`, `REQ_MODE` und `SET_MODE` verwenden die
+gemeinsame asynchrone Requestqueue. Mode-Read und -Write teilen den persistenten
+Zustand mit der Paketoberflaeche; Status, Endianness, einmalige Completion und
+atomare Ablehnung ungueltiger Zielbereiche sind regressionsgesichert.
 
 ### [ ] KR-4848 - Runtimecode, Disc-Module, Overlays und latentes AOT
 
@@ -854,13 +858,28 @@ vor dem ersten Write ab; `0x0C` bis `0x0F` invalidieren dasselbe Haupt-RAM-
 Backing auch ueber eine Spiegelgrenze. Der normale Produktport emittiert und linkt keinen
 Interpreter mehr und endet bei fehlendem AOT-Ziel typisiert. Nur
 `diagnostic_partial` enthaelt den ausgewiesenen begrenzten
-Diagnoseinterpreter. Offen bleiben strukturierte Disc-Ladetransaktionen und
-vorab erzeugte latente native Module; der Task wird deshalb nicht abgehakt.
-Der fuer den privaten Nachweis notwendige Exportpfad baut CFG, Edge- und
+Diagnoseinterpreter. Beschreibbare absolute Pointertabellen aus einem
+`EntryPointStraightLineQuiescent`-Anfangssnapshot liefern jetzt endliche
+`analysis_candidates`, bleiben am Dispatch aber `RuntimeOnly` mit
+`GuardedPartial`-Herkunft. Sie erzeugen weder bewiesene CFG-Kanten noch
+Funktionsseeds; ihre akzeptierten Ziele werden nur als Basic-Block-Leader fuer
+validierten nativen Eintritt vorbereitet. P1-/P2-Aliase dispatchen dabei
+denselben kompilierten Block. Offen bleiben strukturierte Disc-
+Ladetransaktionen und vorab erzeugte latente native Module; der Task wird
+deshalb nicht abgehakt.
+
+Der fuer den privaten Nachweis notwendige Exportpfad baut CFG-, Kanten- und
 Writer-Slice-Indizes nicht mehr pro Funktion beziehungsweise Site neu auf.
 Single-Block-Partitionen emittieren nur lokale Deklarationen und der Writer
-uebernimmt dieselbe konfigurierte Parallelitaet wie der Codegen. Der erneute
-PAL-Export ist der naechste direkte Schritt.
+uebernimmt dieselbe konfigurierte Parallelitaet wie der Codegen. Windows hasht
+die Eingabeprovenienz ueber BCrypt in grossen Chunks. Der frische private PAL-
+Port wurde erfolgreich exportiert und aus der unveraenderten Original-GDI lokal
+installiert; die Quelle blieb erhalten. Der `BSRF`-Stopp ist im Produktlauf
+verschwunden. Nach Schliessen der unmittelbar danach belegten GD-ROM-
+Modekommandos erreicht der Gast 345.568.225 Zyklen und spaetere PVR-
+Registerwrites. Der naechste P0 ist ein fehlender nativer Inneneinstieg bei
+`0x8C654F5C`; strukturierte Disc-Ladetransaktionen und vorab erzeugte latente
+Module bleiben weiterhin offen.
 
 ### [ ] KR-4849 - TA-Eingang und PVR-Kommandopfad
 
@@ -887,7 +906,9 @@ Render-to-Texture allgemein. Der feste Overscan-Quad beruecksichtigt HScale;
 D uebernimmt die Attribute von C und bei Texturierung X/U von B, waehrend die
 horizontale Texturerweiterung X und U gemeinsam anpasst. Der zusammenhaengende
 Nachweis aller drei TA-Eingaenge und ihrer Completion-/Fehlerreihenfolge bleibt
-offen.
+offen. Der aktuelle private PAL-Lauf erreichte weiterhin keinen TA-Transfer;
+SCANINT1 ist dabei kein belegter Fehler. Der weitere Audit prueft allgemeine
+PVR-Register-, Timing-, DMA- und Completionvertraege statt Titeladressen.
 
 ### [ ] KR-4850 - Erster scanoutgebundener Gastframe
 
@@ -911,7 +932,11 @@ Skalierungsbomben werden vor der Allokation abgewiesen. Der gemeinsame Proof-
 Pump trennt Gastbeweis und Host-Present. Scheduler-VBlank, Proof, Pump und
 FakeVideo sind pixelgenau synthetisch verbunden; die vier fokussierten Targets
 bestehen 4/4 in 0,66 Sekunden mit 12 Buildjobs. Der Task bleibt bis zum ersten
-entsprechenden privaten Retail-Gastframe offen.
+entsprechenden privaten Retail-Gastframe offen. Die frische Probe verliess die
+SCANINT1-Wartestelle sowie die folgenden PR-, `BSRF`- und GD-ROM-Modegrenzen.
+Bei 345.568.225 Gastzyklen sind spaetere PVR-Registerwrites beobachtet, aber
+weiterhin kein TA-Transfer, Renderrequest oder echter Gastframe; der Lauf endet
+typisiert am naechsten fehlenden nativen Inneneinstieg.
 
 ### [ ] KR-4851 - Boot- und Frame-Hotpath
 
@@ -923,9 +948,13 @@ Prioritaet: P0
 - statische Call-/Sprungtabellen und latente Module ohne erneuten Codegen aktivieren
 - Fastpath an/aus muss bytegleiche Gastresultate liefern und die Baseline halten
 
+Teilstand 2026-07-22: Ein budgetierter 50-Millionen-Zyklen-Lauf mit nativem
+P1-/P2-Blockchaining endete nach 6,0 Sekunden. Das ist ein Hotpathnachweis, kein
+Frame-Gate; der Task bleibt wegen seiner Abhaengigkeit von `KR-4850` offen.
+
 ### [ ] KR-4852 - Konsolidierte v0.48-Validierung
 
-Abhaengigkeiten: KR-4814, KR-4841 bis KR-4851, KR-4911 bis KR-4915
+Abhaengigkeiten: KR-4841 bis KR-4851, KR-4911 bis KR-4913 und KR-4915
 Prioritaet: P0
 
 Erst nach vollstaendiger Implementierung der Kernrunde werden einmal gebuendelt
@@ -1123,7 +1152,7 @@ Akzeptanz:
 ### [ ] KR-4814 - Nativer Controller und gastzeitgebundene Maple-Eingabe
 
 Abhaengigkeiten: KR-4850, KR-4616
-Meilenstein: v0.48, Implementierung erst nach dem ersten echten Gastframe
+Meilenstein: v0.49, Implementierung erst nach dem ersten echten Gastframe
 Prioritaet: P1 nach KR-4850 (Frame bleibt P0)
 
 Umfang:
@@ -1211,8 +1240,9 @@ erhalten und ist keine aktive Aufgabe.
 
 ## Bestehende Bring-up-Tasks nach aktualisierter Meilensteinzuordnung
 
-`KR-4814`, `KR-4911` bis `KR-4915` gehoeren zu v0.48.
-`KR-4916` bleibt in v0.49.
+`KR-4911` bis `KR-4913` sowie `KR-4915` gehoeren zu v0.48.
+`KR-4814`, `KR-4914` und `KR-4916` gehoeren zu v0.49; Controllerarbeit beginnt
+strikt erst nach dem ersten echten Gastframe aus `KR-4850`.
 
 ### [ ] KR-4911 - Runtimebeobachtung, Replay und Fehlerpakete
 
@@ -1279,7 +1309,7 @@ Akzeptanz:
 ### [ ] KR-4914 - Private interaktive Runtime-Sitzung mit Controller
 
 Abhaengigkeiten: KR-4850, KR-4814
-Meilenstein: v0.48
+Meilenstein: v0.49
 Prioritaet: P1 nach KR-4850 (Frame bleibt P0)
 
 Umfang:

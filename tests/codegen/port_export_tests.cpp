@@ -589,8 +589,22 @@ int run_test(const int argc, char* argv[]) {
                                                         "metadata",
                                                         "disc-recipe",
                                                         "artifact-write"};
-    require(observed_progress == expected_progress,
-            "Portexport meldet seine reale Analyse-/Codegen-Subphasenfolge nicht stabil.");
+    auto progress_cursor = observed_progress.cbegin();
+    for (const auto& expected : expected_progress) {
+        progress_cursor = std::find(progress_cursor, observed_progress.cend(), expected);
+        require(progress_cursor != observed_progress.cend(),
+                "Portexport verliert die Subphase " + expected + ".");
+        ++progress_cursor;
+    }
+    require(std::any_of(observed_progress.begin(), observed_progress.end(), [](const auto& phase) {
+                return phase.starts_with("control-flow-iteration-start-i1-");
+            }) &&
+                std::any_of(observed_progress.begin(),
+                            observed_progress.end(),
+                            [](const auto& phase) {
+                                return phase.starts_with("control-flow-complete-");
+                            }),
+            "Portexport verliert budgetierte Kontrollfluss-Fixpunktzaehler.");
     require(std::filesystem::exists(output / "content" / "game.katana-install") &&
                 !std::filesystem::exists(output / "content" / "game.katana-disc") &&
                 read_text(output / ".gitignore").find("*.katana-disc") != std::string::npos &&
@@ -777,6 +791,11 @@ int run_test(const int argc, char* argv[]) {
             read_text(output / "src" / "main.cpp")
                     .find("KATANA_PORT_BLOCK_LIMIT\") == nullptr") != std::string::npos &&
             read_text(output / "src" / "main.cpp")
+                    .find("KATANA_PORT_BLOCK_LIMIT\") == nullptr &&") == std::string::npos &&
+            read_text(output / "src" / "main.cpp")
+                    .find("std::getenv(\"KATANA_PORT_PROGRESS_INTERVAL\") == nullptr") ==
+                std::string::npos &&
+            read_text(output / "src" / "main.cpp")
                     .find("can_chain_executable_block(std::uint32_t address)") !=
                 std::string::npos &&
             read_text(output / "src" / "main.cpp")
@@ -788,7 +807,15 @@ int run_test(const int argc, char* argv[]) {
                     .find("cpu_.retired_guest_instructions - chain_retired_baseline_") !=
                 std::string::npos &&
             read_text(output / "src" / "main.cpp")
-                    .find("*event <= state_.scheduler->current_cycle() + pending") !=
+                    .find("local_block_chain_guest_cycle_budget = 4'096u") !=
+                std::string::npos &&
+            read_text(output / "src" / "main.cpp")
+                    .find("pending_guest_cycles + found->second.maximum_guest_cycles") !=
+                std::string::npos &&
+            read_text(output / "src" / "main.cpp")
+                    .find("prospective_guest_cycles > *remaining") != std::string::npos &&
+            read_text(output / "src" / "main.cpp")
+                    .find("*event <= current_cycle + prospective_guest_cycles") !=
                 std::string::npos &&
             read_text(output / "src" / "main.cpp")
                     .find("result.processed_events != 0u") != std::string::npos &&
@@ -885,6 +912,16 @@ int run_test(const int argc, char* argv[]) {
                 retire_marker < execute_marker && execute_marker < scheduler_marker &&
                 scheduler_marker < interrupt_marker,
             "Gastzyklen oder Interruptannahme liegen nicht hinter der ausgefuehrten Blocksemantik.");
+    const auto progress_marker =
+        runtime_dispatch.find("executed_dispatch_blocks % progress_interval");
+    const auto root_dispatch_marker = runtime_dispatch.find(
+        "const auto selected = katana::runtime::dispatch_indirect", progress_marker);
+    const auto root_begin_marker =
+        runtime_dispatch.find("active_services->begin_executable_block", root_dispatch_marker);
+    require(progress_marker != std::string::npos && root_dispatch_marker != std::string::npos &&
+                root_begin_marker != std::string::npos && progress_marker < root_dispatch_marker &&
+                root_dispatch_marker < root_begin_marker,
+            "Portfortschritt liegt nicht am kontrollierten Root-Dispatch-Safepoint.");
     const auto require_chain_registration = [&](const std::string_view end_kind,
                                                 const bool expected) {
         const auto marker = ", katana::runtime::BlockEndKind::" + std::string(end_kind);
@@ -915,6 +952,13 @@ int run_test(const int argc, char* argv[]) {
             "Portartefakte enthalten absolute oder private Disc-/Trackpfade.");
 
     const auto guarded_disc = katana::platform::load_dreamcast_gdi_boot(gdi);
+    const auto native_boot_image = katana::platform::make_dreamcast_disc_executable(
+        guarded_disc,
+        katana::platform::DreamcastDiscExecutionPath::NativeSystemBootstrap);
+    require(native_boot_image.entry_points().size() == 2u &&
+                native_boot_image.initial_snapshot_entry() ==
+                    katana::platform::dreamcast_system_bootstrap_entry_address,
+            "Native Disc-AOT-Wurzeln verlieren den ausgezeichneten Bootstrap-Snapshotentry.");
     auto guarded_image = katana::platform::make_dreamcast_disc_executable(guarded_disc);
     const auto guarded_boot_segment = std::find_if(
         guarded_image.segments().begin(), guarded_image.segments().end(), [](const auto& segment) {
@@ -1065,10 +1109,11 @@ int run_test(const int argc, char* argv[]) {
         if (path.starts_with("code/unit-")) inferred_runtime_text += content;
     require(inferred_runtime_text.find("runtime_only_jump") != std::string::npos &&
                 inferred_runtime_sources.at("metadata/port-project.json")
-                        .find("\"runtime_only_control_flow\":2") != std::string::npos &&
+                        .find("\"runtime_only_control_flow\":1") != std::string::npos &&
                 inferred_runtime_sources.at("metadata/port-project.json")
                         .find("\"unresolved_control_flow\":0") != std::string::npos,
-            "Allgemeiner Runtimezeiger erreicht den validierenden Portvertrag nicht.");
+            "Allgemeiner Runtimezeiger erreicht den validierenden Portvertrag nicht; der "
+            "ausgezeichnete Bootstrap-Snapshot muss separat statisch bleiben.");
 
     std::cout << "KR-3507/KR-4502/KR-4507 reproduzierbarer Port-Projektexport erfolgreich.\n";
     return EXIT_SUCCESS;

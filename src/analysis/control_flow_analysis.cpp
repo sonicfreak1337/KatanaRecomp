@@ -13,6 +13,7 @@
 #include <stdexcept>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 
 namespace katana::analysis {
 namespace {
@@ -81,7 +82,18 @@ bool add_resolution_seeds(std::map<std::uint32_t, SeedEvidence>& seeds,
     targets.erase(std::unique(targets.begin(), targets.end()), targets.end());
     if (targets.empty()) return false;
     bool changed = false;
+    const bool relative_call_island =
+        resolution.reason == "runtime-contract-snapshot-relative-call-island-candidates";
     for (const auto target : targets) {
+        if (relative_call_island) {
+            changed = add_seed(seeds,
+                               target,
+                               {},
+                               false,
+                               ControlFlowEvidence::GuardedPartial) ||
+                      changed;
+            continue;
+        }
         if (resolution.kind != IndirectControlFlowKind::Call) {
             changed = add_seed(seeds,
                                target,
@@ -151,6 +163,23 @@ void mark_resolved_table_dispatch(std::vector<IndirectControlFlowResolution>& re
                                     : table.evidence == ControlFlowEvidence::ForcedOverride
                                         ? AnalysisEvidenceOrigin::UserOverride
                                         : AnalysisEvidenceOrigin::JumpTable};
+    if (table.aot_candidates_only) {
+        resolution->status = ResolutionStatus::Unresolved;
+        resolution->evidence = ControlFlowEvidence::RuntimeOnly;
+        resolution->target.reset();
+        resolution->targets.clear();
+        resolution->analysis_candidates.clear();
+        for (const auto& entry : table.entries)
+            if (entry.accepted) resolution->analysis_candidates.push_back(entry.target);
+        std::sort(resolution->analysis_candidates.begin(),
+                  resolution->analysis_candidates.end());
+        resolution->analysis_candidates.erase(
+            std::unique(resolution->analysis_candidates.begin(),
+                        resolution->analysis_candidates.end()),
+            resolution->analysis_candidates.end());
+        resolution->reason = "runtime-contract-snapshot-absolute-pointer-candidates";
+        return;
+    }
     if (!table.resolved) {
         if (table.reason == "table-segment-writable") {
             resolution->status = ResolutionStatus::Unresolved;
@@ -490,14 +519,14 @@ collect_resolved_edges(const std::span<const IndirectControlFlowResolution> reso
         }
     }
     for (const auto& table : tables) {
-        if (!table.resolved) continue;
+        if (!table.resolved || table.aot_candidates_only) continue;
         for (const auto& entry : table.entries) {
             edges.push_back({table.dispatch_address,
                              entry.target,
                              table.dispatch_kind == JumpTableDispatchKind::Call
                                  ? ResolvedControlFlowKind::Call
                                  : ResolvedControlFlowKind::Jump,
-                             false,
+                             table.evidence != ControlFlowEvidence::ProvenComplete,
                              table.evidence,
                              {table.evidence == ControlFlowEvidence::HintCandidate
                                   ? AnalysisEvidenceOrigin::UserHint
@@ -523,7 +552,9 @@ collect_resolved_edges(const std::span<const IndirectControlFlowResolution> reso
 } // namespace
 
 ControlFlowAnalysisResult analyze_control_flow(const katana::io::ExecutableImage& image,
-                                               const AnalysisOverrides* overrides) {
+                                               const AnalysisOverrides* overrides,
+                                               const ControlFlowAnalysisProgressCallback&
+                                                   progress_callback) {
     std::map<std::uint32_t, SeedEvidence> seeds;
     const bool hints = overrides != nullptr && overrides->mode == AnalysisDirectiveMode::Hint;
     std::vector<AnalysisDirectiveDiagnostic> seed_diagnostics;
@@ -559,15 +590,46 @@ ControlFlowAnalysisResult analyze_control_flow(const katana::io::ExecutableImage
 
     ControlFlowAnalysisResult analysis;
     JumpTableSnapshotCache jump_table_cache;
+    const auto report_progress = [&](const std::string_view phase) {
+        if (!progress_callback) return;
+        progress_callback({phase,
+                           analysis.fixpoint_iterations,
+                           seeds.size(),
+                           analysis.recursive.instructions.size(),
+                           analysis.recursive.contextual_instructions.size(),
+                           analysis.indirect_control_flow.size()});
+    };
     for (;;) {
         ++analysis.fixpoint_iterations;
+        report_progress("iteration-start");
         auto recursive_options = make_options(seeds);
         if (!analysis.recursive.contextual_instructions.empty()) {
             recursive_options.baseline = &analysis.recursive;
         }
         analysis.recursive = analyze_reachable_code(image, recursive_options);
-        analysis.indirect_control_flow =
-            resolve_indirect_control_flow(analysis.recursive.instructions, image);
+        report_progress("recursive-complete");
+        auto local_control_flow =
+            analyze_local_control_flow(analysis.recursive.instructions, image);
+        analysis.indirect_control_flow = std::move(local_control_flow.indirect_control_flow);
+        for (auto& continuation : local_control_flow.static_return_continuations) {
+            const auto duplicate = std::find_if(
+                analysis.static_return_continuations.begin(),
+                analysis.static_return_continuations.end(),
+                [&continuation](const auto& existing) {
+                    return existing.instruction_address == continuation.instruction_address &&
+                           existing.target_address == continuation.target_address;
+                });
+            if (duplicate == analysis.static_return_continuations.end())
+                analysis.static_return_continuations.push_back(std::move(continuation));
+        }
+        std::sort(analysis.static_return_continuations.begin(),
+                  analysis.static_return_continuations.end(),
+                  [](const auto& left, const auto& right) {
+                      if (left.instruction_address != right.instruction_address)
+                          return left.instruction_address < right.instruction_address;
+                      return left.target_address < right.target_address;
+                  });
+        report_progress("local-resolution-complete");
         std::unordered_map<std::uint32_t, std::size_t> resolution_by_address;
         resolution_by_address.reserve(analysis.indirect_control_flow.size());
         for (std::size_t index = 0u; index < analysis.indirect_control_flow.size(); ++index)
@@ -576,6 +638,7 @@ ControlFlowAnalysisResult analyze_control_flow(const katana::io::ExecutableImage
         analysis.jump_tables.clear();
         analysis.directive_diagnostics = seed_diagnostics;
         bool missing_override_dispatch = false;
+        std::unordered_set<std::uint32_t> snapshot_candidate_dispatches;
 
         std::set<std::uint32_t> directive_dispatches;
         if (overrides != nullptr) {
@@ -586,18 +649,48 @@ ControlFlowAnalysisResult analyze_control_flow(const katana::io::ExecutableImage
         }
         for (std::size_t index = 0u; index < analysis.recursive.instructions.size(); ++index) {
             const auto& line = analysis.recursive.instructions[index];
-            if ((!hints && directive_dispatches.contains(line.address)) ||
-                line.instruction.kind != katana::sh4::InstructionKind::Braf)
-                continue;
+            if (!hints && directive_dispatches.contains(line.address)) continue;
             const auto found = resolution_by_address.find(line.address);
             if (found == resolution_by_address.end() ||
                 analysis.indirect_control_flow[found->second].status !=
                     ResolutionStatus::Unresolved)
                 continue;
-            auto table = recognize_bounded_relative_jump_table(
-                image, analysis.recursive.instructions, index, &jump_table_cache);
+            if (line.instruction.kind == katana::sh4::InstructionKind::Bsrf) {
+                const auto island = recognize_snapshot_relative_call_island_candidates(
+                    image, analysis.recursive.instructions, index);
+                if (island.has_value()) {
+                    auto& resolution = analysis.indirect_control_flow[found->second];
+                    resolution.status = ResolutionStatus::Unresolved;
+                    resolution.evidence = ControlFlowEvidence::RuntimeOnly;
+                    resolution.origin_class = IndirectControlFlowOriginClass::Table;
+                    resolution.evidence_origins = {AnalysisEvidenceOrigin::EntrySnapshot,
+                                                   AnalysisEvidenceOrigin::RuntimeClassification};
+                    resolution.target.reset();
+                    resolution.targets.clear();
+                    resolution.analysis_candidates = island->targets;
+                    std::sort(resolution.analysis_candidates.begin(),
+                              resolution.analysis_candidates.end());
+                    resolution.analysis_candidates.erase(
+                        std::unique(resolution.analysis_candidates.begin(),
+                                    resolution.analysis_candidates.end()),
+                        resolution.analysis_candidates.end());
+                    resolution.reason = "runtime-contract-" + island->reason;
+                    snapshot_candidate_dispatches.insert(line.address);
+                    continue;
+                }
+            }
+            std::optional<JumpTableAnalysis> table;
+            if (line.instruction.kind == katana::sh4::InstructionKind::Braf) {
+                table = recognize_bounded_relative_jump_table(
+                    image, analysis.recursive.instructions, index, &jump_table_cache);
+            } else if (line.instruction.kind == katana::sh4::InstructionKind::Jmp ||
+                       line.instruction.kind == katana::sh4::InstructionKind::Jsr) {
+                table = recognize_snapshot_absolute_jump_table_candidates(
+                    image, analysis.recursive.instructions, index);
+            }
             if (!table.has_value()) continue;
-            table->evidence = ControlFlowEvidence::ProvenComplete;
+            if (table->evidence == ControlFlowEvidence::Unresolved)
+                table->evidence = ControlFlowEvidence::ProvenComplete;
             analysis.jump_tables.push_back(std::move(*table));
             mark_resolved_table_dispatch(analysis.indirect_control_flow,
                                          analysis.jump_tables.back());
@@ -750,12 +843,23 @@ ControlFlowAnalysisResult analyze_control_flow(const katana::io::ExecutableImage
             }
         }
 
-        const auto is_jump_table_dispatch = [&analysis](const std::uint32_t address) {
-            return std::ranges::any_of(analysis.jump_tables, [address](const auto& table) {
-                return table.dispatch_address == address;
-            });
+        std::unordered_set<std::uint32_t> jump_table_dispatches;
+        jump_table_dispatches.reserve(analysis.jump_tables.size());
+        for (const auto& table : analysis.jump_tables)
+            jump_table_dispatches.insert(table.dispatch_address);
+        const auto is_jump_table_dispatch = [&jump_table_dispatches](
+                                                const std::uint32_t address) {
+            return jump_table_dispatches.contains(address);
         };
         bool changed = false;
+        for (const auto& continuation : analysis.static_return_continuations) {
+            changed = add_seed(seeds,
+                               continuation.target_address,
+                               {},
+                               false,
+                               continuation.evidence) ||
+                      changed;
+        }
         for (const auto& resolution : analysis.indirect_control_flow) {
             if (is_jump_table_dispatch(resolution.instruction_address)) continue;
             changed = add_resolution_seeds(seeds, resolution) || changed;
@@ -788,6 +892,7 @@ ControlFlowAnalysisResult analyze_control_flow(const katana::io::ExecutableImage
             }
         }
         if (changed) {
+            report_progress("seed-expansion");
             continue;
         }
 
@@ -799,16 +904,40 @@ ControlFlowAnalysisResult analyze_control_flow(const katana::io::ExecutableImage
         }
         const auto provisional_edges =
             collect_resolved_edges(analysis.indirect_control_flow, analysis.jump_tables);
+        report_progress("function-values-start");
         auto function_values = analyze_function_values(
-            image, analysis.recursive.instructions, function_entries, provisional_edges);
+            image,
+            analysis.recursive.instructions,
+            function_entries,
+            provisional_edges,
+            [&report_progress](const FunctionValueAnalysisProgress& progress) {
+                std::string phase = "function-values-";
+                phase += progress.phase;
+                phase += "-f" + std::to_string(progress.functions);
+                phase += "-b" + std::to_string(progress.blocks);
+                phase += "-k" + std::to_string(progress.fixpoint_iterations);
+                phase += "-d" + std::to_string(progress.completed_functions);
+                phase += "-p" + std::to_string(progress.pending);
+                phase += "-r" + std::to_string(progress.resolutions);
+                report_progress(phase);
+            });
         analysis.function_summary_iterations = function_values.fixpoint_iterations;
         analysis.function_scc_count = function_values.strongly_connected_components;
         analysis.unchanged_ingress_skips = function_values.unchanged_ingress_skips;
         analysis.function_iteration_budget = function_values.iteration_budget;
         analysis.function_budget_exhausted = function_values.budget_exhausted;
         analysis.function_value_summaries = std::move(function_values.summaries);
+        report_progress("function-values-complete");
         for (auto& proof : function_values.resolutions) {
             if (proof.targets.empty()) continue;
+            // A recognized table owns the finite AOT candidate set for this dispatch.  A
+            // function-summary proof may still have observed one writable-snapshot value, but
+            // replacing the guarded table resolution with that RuntimeOnly contract would leave
+            // the table edges and the site classification inconsistent.  The live runtime load
+            // remains authoritative because partial table evidence always retains its default.
+            if (is_jump_table_dispatch(proof.instruction_address) ||
+                snapshot_candidate_dispatches.contains(proof.instruction_address))
+                continue;
             const auto found = resolution_by_address.find(proof.instruction_address);
             if (found == resolution_by_address.end()) continue;
             auto resolution =
@@ -839,6 +968,7 @@ ControlFlowAnalysisResult analyze_control_flow(const katana::io::ExecutableImage
             if (is_jump_table_dispatch(resolution.instruction_address)) continue;
             changed = add_resolution_seeds(seeds, resolution) || changed;
         }
+        report_progress("summary-seed-expansion");
         if (!changed && missing_override_dispatch && overrides != nullptr) {
             for (const auto& jump : overrides->jumps) {
                 const auto resolution = std::find_if(analysis.indirect_control_flow.begin(),
@@ -881,6 +1011,7 @@ ControlFlowAnalysisResult analyze_control_flow(const katana::io::ExecutableImage
             break;
         }
     }
+    report_progress("fixpoint-complete");
     for (auto& resolution : analysis.indirect_control_flow) {
         if (!control_flow_evidence_proven(resolution.evidence)) continue;
         auto targets = resolution.targets;
@@ -957,10 +1088,16 @@ ControlFlowAnalysisResult analyze_control_flow(const katana::io::ExecutableImage
         symbolic_candidates.insert(resolution.instruction_address);
         if (resolution.target.has_value()) symbolic_candidates.insert(*resolution.target);
         symbolic_candidates.insert(resolution.targets.begin(), resolution.targets.end());
+        symbolic_candidates.insert(resolution.analysis_candidates.begin(),
+                                   resolution.analysis_candidates.end());
         symbolic_candidates.insert(resolution.evidence_call_sites.begin(),
                                    resolution.evidence_call_sites.end());
         symbolic_candidates.insert(resolution.evidence_callees.begin(),
                                    resolution.evidence_callees.end());
+    }
+    for (const auto& continuation : analysis.static_return_continuations) {
+        symbolic_candidates.insert(continuation.instruction_address);
+        symbolic_candidates.insert(continuation.target_address);
     }
     for (const auto& table : analysis.jump_tables) {
         symbolic_candidates.insert(table.dispatch_address);
@@ -997,6 +1134,8 @@ ControlFlowAnalysisResult analyze_control_flow(const katana::io::ExecutableImage
         evidence_strings.push_back(diagnostic.reason);
     for (const auto& resolution : analysis.indirect_control_flow)
         evidence_strings.push_back(resolution.reason);
+    for (const auto& continuation : analysis.static_return_continuations)
+        evidence_strings.push_back(continuation.reason);
     for (const auto& table : analysis.jump_tables) {
         evidence_strings.push_back(table.reason);
         for (const auto& entry : table.entries)
@@ -1008,7 +1147,13 @@ ControlFlowAnalysisResult analyze_control_flow(const katana::io::ExecutableImage
     for (const auto& evidence : evidence_strings)
         static_cast<void>(analysis.evidence_ids.intern(evidence));
     analysis.jump_table_cache = jump_table_cache.counters();
+    report_progress("complete");
     return analysis;
+}
+
+ControlFlowAnalysisResult analyze_control_flow(const katana::io::ExecutableImage& image,
+                                               const AnalysisOverrides* overrides) {
+    return analyze_control_flow(image, overrides, {});
 }
 
 const char*

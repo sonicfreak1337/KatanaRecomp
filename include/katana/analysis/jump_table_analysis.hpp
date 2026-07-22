@@ -35,8 +35,18 @@ struct JumpTableAnalysis {
     JumpTableDispatchKind dispatch_kind = JumpTableDispatchKind::Jump;
     JumpTableEncoding encoding = JumpTableEncoding::Absolute32;
     bool resolved = false;
+    bool aot_candidates_only = false;
     ControlFlowEvidence evidence = ControlFlowEvidence::Unresolved;
     std::vector<JumpTableEntry> entries;
+    std::string reason;
+};
+
+struct RelativeCallIslandCandidates {
+    std::uint32_t dispatch_address = 0u;
+    std::uint32_t first_target = 0u;
+    std::size_t stride = 0u;
+    std::vector<std::uint32_t> targets;
+    bool terminal_tail_transfer = false;
     std::string reason;
 };
 
@@ -80,6 +90,18 @@ recognize_bounded_relative_jump_table(const katana::io::ExecutableImage& image,
                                       std::span<const katana::sh4::DisassemblyLine> lines,
                                       std::size_t dispatch_index,
                                       JumpTableSnapshotCache* cache = nullptr);
+
+[[nodiscard]] std::optional<JumpTableAnalysis>
+recognize_snapshot_absolute_jump_table_candidates(
+    const katana::io::ExecutableImage& image,
+    std::span<const katana::sh4::DisassemblyLine> lines,
+    std::size_t dispatch_index);
+
+[[nodiscard]] std::optional<RelativeCallIslandCandidates>
+recognize_snapshot_relative_call_island_candidates(
+    const katana::io::ExecutableImage& image,
+    std::span<const katana::sh4::DisassemblyLine> lines,
+    std::size_t dispatch_index);
 
 [[nodiscard]] const char* jump_table_encoding_name(JumpTableEncoding encoding) noexcept;
 

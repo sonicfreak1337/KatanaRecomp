@@ -366,6 +366,8 @@ std::string format_control_flow_analysis_json(const ControlFlowAnalysisResult& a
            << ",\"guarded_candidate_instructions\":" << summary.guarded_candidate_instructions
            << ",\"unresolved_frontier\":" << summary.unresolved_frontier
            << ",\"jump_tables\":" << analysis.jump_tables.size()
+           << ",\"static_return_continuations\":"
+           << analysis.static_return_continuations.size()
            << ",\"function_value_summaries\":" << analysis.function_value_summaries.size()
            << ",\"directive_diagnostics\":" << analysis.directive_diagnostics.size()
            << ",\"fixpoint_iterations\":" << analysis.fixpoint_iterations
@@ -597,6 +599,28 @@ std::string format_control_flow_analysis_json(const ControlFlowAnalysisResult& a
     }
     output << ']';
 
+    output << ",\"static_return_continuations\":[";
+    for (std::size_t index = 0u; index < analysis.static_return_continuations.size(); ++index) {
+        if (index != 0u) output << ',';
+        const auto& continuation = analysis.static_return_continuations[index];
+        output << "{\"instruction_address\":"
+               << katana::io::quote_json(hex32(continuation.instruction_address))
+               << ",\"register\":" << static_cast<unsigned>(continuation.register_index)
+               << ",\"target_address\":"
+               << katana::io::quote_json(hex32(continuation.target_address))
+               << ",\"evidence\":"
+               << katana::io::quote_json(control_flow_evidence_name(continuation.evidence))
+               << ",\"evidence_origins\":[";
+        for (std::size_t origin = 0u; origin < continuation.evidence_origins.size(); ++origin) {
+            if (origin != 0u) output << ',';
+            output << katana::io::quote_json(
+                analysis_evidence_origin_name(continuation.evidence_origins[origin]));
+        }
+        output << "],\"value_source\":" << katana::io::quote_json(continuation.value_source)
+               << ",\"reason\":" << katana::io::quote_json(continuation.reason) << '}';
+    }
+    output << ']';
+
     output << ",\"function_value_summaries\":[";
     for (std::size_t index = 0u; index < analysis.function_value_summaries.size(); ++index) {
         if (index != 0u) output << ',';
@@ -666,7 +690,9 @@ std::string format_control_flow_analysis_json(const ControlFlowAnalysisResult& a
         output << ",\"kind\":"
                << katana::io::quote_json(
                       table.dispatch_kind == JumpTableDispatchKind::Call ? "call" : "jump")
-               << ",\"resolved\":" << (table.resolved ? "true" : "false") << ",\"evidence\":"
+               << ",\"resolved\":" << (table.resolved ? "true" : "false")
+               << ",\"aot_candidates_only\":"
+               << (table.aot_candidates_only ? "true" : "false") << ",\"evidence\":"
                << katana::io::quote_json(control_flow_evidence_name(table.evidence))
                << ",\"requested_entries\":" << table.requested_entries
                << ",\"reason\":" << katana::io::quote_json(table.reason) << ",\"entries\":[";

@@ -38,10 +38,20 @@ nicht vorab gebundenes AOT-Ziel endet stattdessen als typisierter Fehler. Nur
 ein expliziter `diagnostic_partial`-Export enthaelt den begrenzten
 Diagnoseinterpreter und weist ihn im Manifest aus. Strukturierte Disc-
 Ladetransaktionen und vorab erzeugte latente AOT-Module bleiben in KR-4848
-offen. Der aktuelle P0 bleibt der erste scanoutgebundene, vom Gast erzeugte
-Frame; ein solcher Frame ist noch nicht nachgewiesen. Moderner
-Hostcontrollersupport fuer Xbox-, DualSense- und vergleichbare Geraete beginnt
-laut Roadmap strikt erst danach.
+offen. P1-/P2-Aliase dispatchen denselben nativen Code; absolute Pointerwerte
+aus beschreibbaren Anfangssnapshottabellen bleiben validierte Runtime-
+Kandidaten und werden weder zu erfundenen CFG-Kanten noch zu Funktionsseeds.
+Der frische private PAL-Port wurde erfolgreich exportiert und aus der
+unveraenderten Original-GDI installiert. Die allgemeine Fixed-Stride-`BSRF`-
+Erkennung beseitigt den vorherigen Dispatchstopp. BIOS `REQ_MODE` und
+`SET_MODE` verwenden nun denselben persistenten Laufwerkszustand wie die
+Paketoberflaeche und folgen dem oeffentlichen asynchronen Statusvertrag. Der
+darauf folgende budgetierte Lauf erreicht 345.568.225 Gastzyklen und spaetere
+PVR-Registerwrites, endet aber noch an einem fehlenden nativen Inneneinstieg;
+TA-Transfers, Renderrequests und echte Gastframes bleiben null. Der aktuelle P0
+bleibt deshalb der erste scanoutgebundene, vom Gast erzeugte Frame. Moderner
+Hostcontrollersupport fuer Xbox-, DualSense- und vergleichbare Geraete ist Teil
+der v0.49-Integration und beginnt strikt erst danach.
 
 Der aktuelle Pfad verarbeitet Raw-, ELF32-SH-, Projektmanifest- und validierte
 GDI-Eingaben bis zu partitioniertem C++, einer zentralen Dreamcast-Runtime und
@@ -198,7 +208,8 @@ Der Portexport verwendet standardmaessig die vom Host gemeldeten CPU-Threads
 fuer partitionierten C++-Codegen und Projektausgabe. Mit
 `KATANA_PORT_CODEGEN_JOBS` kann die Workerzahl reproduzierbar begrenzt werden,
 beispielsweise auf `12`; Analyseindizes werden einmal aufgebaut und von allen
-Funktionen wiederverwendet.
+Funktionen wiederverwendet. Unter Windows verwendet die Provenienzerfassung
+den nativen BCrypt-SHA-256-Pfad mit grossen Eingabechunks.
 Die CLI meldet innerhalb der groben `analysis-codegen`-Phase stabile
 `KATANA_PORT_SUBPHASE`-Marker. Sie enthalten nur den Stufennamen und weder
 Discidentitaeten noch private Pfade oder Inhalte.

@@ -116,21 +116,30 @@ int main() {
     static_cast<void>(asic->schedule(scheduler, SystemAsicEvent::PvrDma, 12u));
     static_cast<void>(asic->schedule(scheduler, SystemAsicEvent::GdromCommand, 13u));
     static_cast<void>(asic->schedule(scheduler, SystemAsicEvent::AicaInterrupt, 14u));
-    const auto advanced = scheduler.advance_to(14u, 7u);
-    require(advanced.processed_events == 7u && asic->events().size() == 7u &&
+    static_cast<void>(asic->schedule(scheduler, SystemAsicEvent::PvrIllegalAddress, 15u));
+    const auto advanced = scheduler.advance_to(15u, 8u);
+    require(advanced.processed_events == 8u && asic->events().size() == 8u &&
                 asic->events()[0].sequence == 1u && asic->events()[1].sequence == 2u &&
-                asic->events().back().guest_cycle == 14u,
+                asic->events().back().guest_cycle == 15u,
             "ASIC-Ereignisse sind nicht gastzeit- und einreihungsdeterministisch.");
-    require(bus.read_u32(0x005F6900u) == 0x0000D808u && bus.read_u32(0x005F6904u) == 0x00000003u &&
+    require(bus.read_u32(0x005F6900u) == 0xC000D808u &&
+                bus.read_u32(0x005F6904u) == 0x00000003u &&
+                bus.read_u32(0x005F6908u) == 0x00000040u &&
                 router.external_pending(2u),
-            "PVR/Maple/GD-ROM/AICA-Ereignisse erreichen nicht denselben Status-/Maskenpfad.");
+            "ASIC-Bankstatus oder EXT-/ERR-Summarybits erreichen ISTNRM nicht korrekt.");
     static_cast<void>(router.synchronize());
     require(controller.pending(
                 static_cast<InterruptSource>(PlatformInterruptSource::ExternalLevel6)),
             "Maskierte System-ASIC-Ereignisse erreichen die Level-6-Leitung nicht.");
-    bus.write_u32(0x805F6900u, 0x0000D808u);
+    bus.write_u32(0x805F6900u, 0xFFFFFFFFu);
+    require(bus.read_u32(0x005F6900u) == 0xC0000000u &&
+                bus.read_u32(0x005F6904u) == 0x00000003u &&
+                bus.read_u32(0x005F6908u) == 0x00000040u,
+            "ISTNRM-W1C hat synthetische Summarybits oder fremde Pendingbanken geloescht.");
     bus.write_u32(0x805F6904u, 0x00000003u);
-    require(!router.external_pending(2u), "ACK loescht die gemeinsame ASIC-Leitung nicht.");
+    bus.write_u32(0x805F6908u, 0x00000040u);
+    require(bus.read_u32(0x005F6900u) == 0u && !router.external_pending(2u),
+            "ACK loescht die gemeinsame ASIC-Leitung oder Summarybits nicht.");
     require(throws([&] { static_cast<void>(bus.read_u32(0x005F690Cu)); }) &&
                 throws([&] { bus.write_u32(0x005F693Cu, 1u); }) &&
                 throws([&] { bus.write_u32(0x005F6948u, 1u); }) &&
@@ -138,6 +147,50 @@ int main() {
             "Unbekanntes oder falsch breites ASIC-MMIO war still erfolgreich.");
     require(throws([&] { asic->raise(SystemAsicEvent::PvrRenderDone, 9u); }),
             "Rueckwaerts laufende Gastzeit wurde akzeptiert.");
+
+    EventScheduler spg_scheduler;
+    Memory spg_bus(0u);
+    auto spg_rtc_clock = std::make_shared<Sh4RtcClockDomain>(256u);
+    Sh4Tmu spg_tmu(spg_scheduler, TmuTiming{1u, spg_rtc_clock});
+    Sh4Rtc spg_rtc(spg_scheduler, spg_rtc_clock);
+    Memory spg_dma_memory(256u);
+    Sh4Dmac spg_dmac(spg_scheduler, spg_dma_memory, DmaTiming{1u});
+    InterruptController spg_controller;
+    PlatformInterruptRouter spg_router(
+        spg_controller, spg_tmu, spg_rtc, spg_dmac);
+    const auto spg_asic = map_dreamcast_system_asic(spg_bus, spg_router);
+    const auto spg_pvr = map_pvr_registers(
+        spg_bus,
+        spg_scheduler,
+        {},
+        PvrTiming{5u, 100u, 100u},
+        [&](const bool entering) {
+            spg_asic->raise(entering ? SystemAsicEvent::PvrVblank
+                                     : SystemAsicEvent::PvrVblankOut,
+                            spg_scheduler.current_cycle());
+        });
+    spg_pvr->set_hblank_observer([&] {
+        spg_asic->raise(SystemAsicEvent::PvrHblank, spg_scheduler.current_cycle());
+    });
+    spg_pvr->write(pvr_register::FramebufferReadControl, 1u << 23u);
+    spg_pvr->write(pvr_register::SpgControl, 0u);
+    spg_pvr->write(pvr_register::SpgLoad, (9u << 16u) | 9u);
+    spg_pvr->write(pvr_register::SpgVblankInterrupt, (6u << 16u) | 2u);
+    spg_pvr->write(pvr_register::SpgHblankInterrupt, 4u);
+    const auto first_scan = spg_scheduler.advance_to(60u, 32u);
+    require(first_scan.processed_events == 3u && spg_asic->events().size() == 3u &&
+                spg_bus.read_u32(0x005F6900u) == 0x38u,
+            "SPG-Scheduler liefert VBlank-in, VBlank-out und HBlank nicht an ASIC 3/4/5.");
+    spg_bus.write_u32(0x005F6900u, 0x38u);
+    require(spg_bus.read_u32(0x005F6900u) == 0u,
+            "SPG-ASIC-W1C bestaetigt die Scaninterrupts nicht.");
+    static_cast<void>(spg_scheduler.advance_to(119u, 32u));
+    require(spg_bus.read_u32(0x005F6900u) == 0u,
+            "VBlank-in wurde vor seiner naechsten Frameposition erneut ausgeloest.");
+    static_cast<void>(spg_scheduler.advance_to(120u, 32u));
+    require(spg_bus.read_u32(0x005F6900u) == (1u << 3u) &&
+                spg_asic->events().back().guest_cycle == 120u,
+            "VBlank-in erscheint nach W1C nicht im naechsten Frame erneut.");
 
     DreamcastRuntimeBootImage runtime_boot;
     const std::vector<std::uint8_t> disc_sector(dreamcast_data_sector_size, 0u);
