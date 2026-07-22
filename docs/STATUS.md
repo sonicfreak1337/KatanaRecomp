@@ -137,7 +137,7 @@ MMIO-Zugriff liegt im aktiven OCRAM; der fruehere Abbruch nach 12 Gastzyklen
 ist damit beseitigt. TA/PVR und ein echter Gastframe bleiben fuer den laengeren
 Folgelauf weiterhin offen.
 
-Runtime-ABI 32, BIOS-ABI 6 und Portprojektvertrag 20 bilden den kumulativen
+Runtime-ABI 32, BIOS-ABI 7 und Portprojektvertrag 20 bilden den kumulativen
 v0.48-Stand ab.
 PlatformServices-ABI 9 versioniert das invalidierungs- und timinggesicherte lokale
 Blockchaining.

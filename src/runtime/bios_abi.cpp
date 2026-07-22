@@ -32,19 +32,28 @@ constexpr std::array kDirectAliases{
 struct FlashPartition {
     std::uint32_t offset;
     std::uint32_t size;
+    bool writable;
 };
 constexpr std::array kFlashPartitions{
-    FlashPartition{0x0001A000u, 0x00002000u},
-    FlashPartition{0x00018000u, 0x00002000u},
-    FlashPartition{0x0001C000u, 0x00004000u},
-    FlashPartition{0x00010000u, 0x00008000u},
-    FlashPartition{0x00000000u, 0x00010000u},
+    FlashPartition{0x0001A000u, 0x00002000u, false},
+    FlashPartition{0x00018000u, 0x00002000u, true},
+    FlashPartition{0x0001C000u, 0x00004000u, true},
+    FlashPartition{0x00010000u, 0x00008000u, true},
+    FlashPartition{0x00000000u, 0x00010000u, true},
 };
 
 bool valid_range(const std::uint32_t offset,
                  const std::uint32_t size,
                  const std::uint32_t limit) noexcept {
     return offset <= limit && size <= limit - offset;
+}
+
+bool flash_write_allowed(const std::uint32_t offset, const std::uint32_t size) noexcept {
+    if (size == 0u) return true;
+    const auto& factory = kFlashPartitions.front();
+    const auto end = static_cast<std::uint64_t>(offset) + size;
+    const auto factory_end = static_cast<std::uint64_t>(factory.offset) + factory.size;
+    return end <= factory.offset || offset >= factory_end;
 }
 
 void flash_unlock(CpuState& cpu, const std::uint8_t command) {
@@ -75,10 +84,11 @@ std::uint32_t execute_flash_call(CpuState& cpu, const std::uint32_t selector) no
             for (std::uint32_t index = 0u; index < size; ++index)
                 bytes[index] = cpu.memory.read_u8(dreamcast_flash_physical_base + offset + index);
             if (!bytes.empty()) cpu.memory.write_bytes(buffer, bytes, CodeWriteSource::Copy);
-            return 0u;
+            return size;
         }
         if (selector == 2u) {
             if (!valid_range(offset, size, static_cast<std::uint32_t>(dreamcast_flash_size)) ||
+                !flash_write_allowed(offset, size) ||
                 (size != 0u && !cpu.memory.contains(buffer, size)))
                 return 0xFFFFFFFFu;
             std::vector<std::uint8_t> bytes(size);
@@ -95,7 +105,7 @@ std::uint32_t execute_flash_call(CpuState& cpu, const std::uint32_t selector) no
                 std::find_if(kFlashPartitions.begin(),
                              kFlashPartitions.end(),
                              [offset](const auto partition) { return partition.offset == offset; });
-            if (found == kFlashPartitions.end()) return 0xFFFFFFFFu;
+            if (found == kFlashPartitions.end() || !found->writable) return 0xFFFFFFFFu;
             for (std::uint32_t sector = 0u; sector < found->size;
                  sector += static_cast<std::uint32_t>(dreamcast_flash_sector_size)) {
                 flash_unlock(cpu, 0x80u);
@@ -194,6 +204,9 @@ BiosAbiCall call(const BiosAbiVectorKind vector,
 }
 BlockExit bios_abi_block(CpuState& cpu, BlockExecutionContext& context) {
     const auto source = cpu.pc;
+    if (cpu.memory.read_u16(source) != 0x000Bu || cpu.memory.read_u16(source + 2u) != 0x0009u)
+        throw BiosAbiDispatchError(
+            source, cpu.r[7], cpu.r[6], cpu.pr, "handler-bytes-modified" + register_snapshot(cpu));
     const auto routed = route_hle_bios_abi_call(cpu);
     if (routed.vector == BiosAbiVectorKind::System &&
         (routed.selector == 0xFFFFFFFFu || routed.selector == 1u || routed.selector == 3u)) {

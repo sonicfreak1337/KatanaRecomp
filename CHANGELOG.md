@@ -39,6 +39,10 @@
   704-Byte-Implementierung sichtbar `ServiceUnavailable`, statt Erfolg ohne
   Pufferschreibzugriff zu behaupten. Der direkte GD2-Einstieg `0x8C0010F0`
   und der definierte `0xFF`-BIOS-RAM-Grundzustand bleiben erhalten.
+- `FLASHROM_READ` liefert die kopierte Bytezahl; die Factory-Partition wird
+  weder programmiert noch geloescht. HLE-Dispatch validiert die realen
+  `RTS/NOP`-Stubbytes bei jedem Eintritt und lehnt mutierte Stubs auch ueber
+  alte Runtimehandles ab. BIOS-ABI 7 versioniert diese Grenzen.
 - G1 trennt programmierte `GDSTAR/GDLEN` von `GDSTARD/GDLEND`, laufender
   Adresse, uebertragener und verbleibender Laenge. `SYSTEM 0` stellt den aus
   der geladenen Bootgroesse berechneten BIOS-Livezaehler wieder her, ohne die
@@ -48,7 +52,7 @@
 - Konsolenregion und Broadcastmodus werden nicht mehr aus den Disc-
   Areasymbolen abgeleitet. Der Portvertrag traegt ein explizites Profil
   `japan-ntsc`, `north-america-ntsc`, `europe-pal` oder `vga`; damit wird ein
-  regionsoffenes `JUE` nicht mehr still als PAL-Konsole behandelt. BIOS-ABI 6,
+  regionsoffenes `JUE` nicht mehr still als PAL-Konsole behandelt. BIOS-ABI 7,
   Runtime-ABI 32 und Portprojektvertrag 20 versionieren diese Korrekturen.
 - WinCE-Bootlayouts und gescrambelte Nicht-GD-ROM-Bootdateien werden bis zu
   ihrer eigenstaendigen nativen Segment-/Descramble-Implementierung mit

@@ -141,7 +141,7 @@ int main() {
     cpu.r[5] = 0x8C002100u;
     cpu.r[6] = 2u;
     static_cast<void>(invoke_flash(1u));
-    require(cpu.r[0] == 0u && cpu.memory.read_u16(0x8C002100u) == 0x3412u,
+    require(cpu.r[0] == 2u && cpu.memory.read_u16(0x8C002100u) == 0x3412u,
             "FLASHROM_READ kopiert keine Flashbytes in den Gastpuffer.");
     cpu.memory.write_u8(0x8C002200u, 0x0Fu);
     cpu.r[4] = 0x30u;
@@ -154,6 +154,20 @@ int main() {
     static_cast<void>(invoke_flash(3u));
     require(cpu.r[0] == 0u && cpu.memory.read_u8(dreamcast_flash_physical_base + 0x10000u) == 0xFFu,
             "FLASHROM_DELETE loescht eine gueltige Partition nicht sektorweise.");
+    cpu.memory.write_u8(0x8C002200u, 0x00u);
+    const auto factory_before = cpu.memory.read_u8(dreamcast_flash_physical_base + 0x1A000u);
+    cpu.r[4] = 0x1A000u;
+    cpu.r[5] = 0x8C002200u;
+    cpu.r[6] = 1u;
+    static_cast<void>(invoke_flash(2u));
+    require(cpu.r[0] == 0xFFFFFFFFu &&
+                cpu.memory.read_u8(dreamcast_flash_physical_base + 0x1A000u) == factory_before,
+            "FLASHROM_WRITE veraendert die schreibgeschuetzte Factory-Partition.");
+    cpu.r[4] = 0x1A000u;
+    static_cast<void>(invoke_flash(3u));
+    require(cpu.r[0] == 0xFFFFFFFFu &&
+                cpu.memory.read_u8(dreamcast_flash_physical_base + 0x1A000u) == factory_before,
+            "FLASHROM_DELETE loescht die schreibgeschuetzte Factory-Partition.");
     cpu.r[4] = static_cast<std::uint32_t>(dreamcast_flash_size - 1u);
     cpu.r[5] = 0x8C002100u;
     cpu.r[6] = 2u;
@@ -262,6 +276,18 @@ int main() {
                     std::string(error.what()).find("selector=0x00000063") != std::string::npos,
                 "Unbekannter BIOS-Aufruf besitzt keine stabile Diagnose.");
     }
+    cpu.memory.write_u16(vectors[2].handler_address, 0x0009u);
+    cpu.pc = vectors[2].handler_address;
+    try {
+        static_cast<void>(flash_block->get().function(cpu, context));
+        require(false,
+                "Mutierte HLE-Handlerbytes bleiben ueber einen alten Funktionshandle "
+                "ausfuehrbar.");
+    } catch (const BiosAbiDispatchError& error) {
+        require(std::string(error.what()).find("handler-bytes-modified") != std::string::npos,
+                "Mutierte HLE-Handlerbytes besitzen keine stabile Ablehnungsdiagnose.");
+    }
+
     const auto json = format_hle_bios_abi_contract_json();
     require(json.find("\"schema\":\"katana-bios-abi\"") != std::string::npos &&
                 json.find("\"selector_register\":\"r7\"") != std::string::npos &&

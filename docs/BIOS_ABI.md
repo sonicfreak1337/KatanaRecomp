@@ -44,6 +44,14 @@ Vektoren, Selektoren und Superselektoren werfen eine stabile
 einem vollstaendigen SH-4-Registersnapshot. Kein Aufruf wird titelbezogen
 umgebogen oder als erfolgreicher No-op behandelt.
 
+`FLASHROM_READ` liefert bei Erfolg die kopierte Bytezahl. Schreiben liefert
+die programmierte Bytezahl und behaelt die physische 1-nach-0-Semantik;
+Loeschen arbeitet partitionsweise. Die Factory-Partition bei `0x0001A000`
+ist fuer beide mutierenden Dienste schreibgeschuetzt. Vor jedem HLE-Aufruf
+werden ausserdem die installierten `RTS/NOP`-Stubbytes im Gastspeicher
+validiert. Eine Mutation bleibt dadurch auch ueber einen bereits aufgeloesten
+Runtimehandle nicht ausfuehrbar.
+
 Vor dem ersten nativen Gastblock stellt der Disc-Boot den BIOS-Handoffzustand
 her. Dazu gehoeren die dokumentierten SH-4-Kontrollregister, `DMAOR=0x8201`,
 die AICA-Interruptlevel und fuer das explizite Profil `europe-pal` das PAL-
@@ -73,9 +81,10 @@ separaten Liveadress- und Transferzaehler. `SYSTEM 0` restauriert den aus der
 geladenen Bootgroesse berechneten BIOS-Livewert, ohne die programmierten
 Register zu veraendern.
 
-Der maschinenlesbare Vertrag besitzt Schema `katana-bios-abi`, Version 6.
+Der maschinenlesbare Vertrag besitzt Schema `katana-bios-abi`, Version 7.
 Synthetische Tests pruefen reproduzierbare Vektorbytes, Runtimeblockdispatch,
-P1/P2-Handoff, den direkten GD2-Alias, Lifecycle-Evidenz, GD-ROM-Zustaende,
+P1/P2-Handoff, Stubintegritaet, Factory-Schreibschutz, den direkten GD2-Alias,
+Lifecycle-Evidenz, GD-ROM-Zustaende,
 Vierwortstatus, LOW/HIGH-TOC, getrennte G1-Zaehler, bekannte aufgeschobene
 Dienste und unbekannte Funktionen.
 
