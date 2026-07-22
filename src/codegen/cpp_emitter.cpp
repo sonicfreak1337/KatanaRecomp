@@ -1671,6 +1671,8 @@ void emit_guarded_simple_instruction(std::ostringstream& output,
                                      const int indent) {
     emit_indent(output, indent);
     output << "// katana-guest " << hex32(instruction.source_address) << "\n";
+    emit_indent(output, indent);
+    output << "++cpu.retired_guest_instructions;\n";
     emit_privileged_guard(output, instruction, indent);
     emit_fpu_disabled_guard(output, instruction, indent);
     emit_fpu_mode_guard(output, instruction, indent);
@@ -1786,6 +1788,8 @@ void emit_terminal(std::ostringstream& output,
 
     emit_indent(output, indent);
     output << "// katana-guest " << hex32(instruction.source_address) << "\n";
+    emit_indent(output, indent);
+    output << "++cpu.retired_guest_instructions;\n";
     emit_privileged_guard(output, instruction, indent);
 
     const katana::ir::Instruction* delay_slot = nullptr;
@@ -1834,12 +1838,9 @@ void emit_terminal(std::ostringstream& output,
             emit_call_delay_slot(output, *delay_slot, indent);
         }
 
-        if (single_block && known_functions.contains(*instruction.target_address)) {
+        if (single_block) {
             emit_indent(output, indent);
-            output << "static_call(cpu, " << hex32(*instruction.target_address) << ");\n";
-        } else if (single_block) {
-            emit_indent(output, indent);
-            output << "unresolved_call(cpu, " << hex32(*instruction.target_address) << ");\n";
+            output << "cpu.pc = " << hex32(*instruction.target_address) << ";\n";
         } else {
             emit_direct_call(output, *instruction.target_address, known_functions, indent);
         }
@@ -1893,6 +1894,14 @@ void emit_terminal(std::ostringstream& output,
 
         if (delay_slot != nullptr) {
             emit_guarded_simple_instruction(output, *delay_slot, indent);
+        }
+
+        if (single_block) {
+            emit_indent(output, indent);
+            output << "cpu.pc = jump_target;\n";
+            emit_indent(output, indent);
+            output << "return;\n";
+            return;
         }
 
         if (instruction.resolved_targets.empty()) {
@@ -1953,6 +1962,14 @@ void emit_terminal(std::ostringstream& output,
 
         if (delay_slot != nullptr) {
             emit_call_delay_slot(output, *delay_slot, indent);
+        }
+
+        if (single_block) {
+            emit_indent(output, indent);
+            output << "cpu.pc = call_target;\n";
+            emit_indent(output, indent);
+            output << "return;\n";
+            return;
         }
 
         if (instruction.resolved_targets.empty()) {
@@ -2315,18 +2332,20 @@ void emit_block(std::ostringstream& output,
     const auto guest_instruction_count =
         std::max<std::size_t>(1u, guest_instruction_addresses.size());
     output << "            case " << hex32(block.start_address) << ": {\n";
-    output << "                if (services != nullptr) {\n"
-           << "                    const auto scheduler = services->consume_guest_cycles(\n"
-           << "                        katana::runtime::base_guest_cycles_per_instruction * "
-           << guest_instruction_count << "u, 1024u);\n"
-           << "                    if (scheduler.budget_exhausted)\n"
-           << "                        throw std::runtime_error(\"Schedulerbudget erschoepft\");\n"
-           << "                    if (scheduler.guest_cycle_budget_exhausted)\n"
-           << "                        throw std::runtime_error(\"Gastzyklusbudget erschoepft\");\n"
-           << "                    services->observe_guest_checkpoint("
-           << hex32(block.start_address) << ");\n"
-           << "                    if (services->poll_interrupt().has_value()) return;\n"
-           << "                }\n";
+    if (!single_block) {
+        output << "                if (services != nullptr) {\n"
+               << "                    const auto scheduler = services->consume_guest_cycles(\n"
+               << "                        katana::runtime::base_guest_cycles_per_instruction * "
+               << guest_instruction_count << "u, 1024u);\n"
+               << "                    if (scheduler.budget_exhausted)\n"
+               << "                        throw std::runtime_error(\"Schedulerbudget erschoepft\");\n"
+               << "                    if (scheduler.guest_cycle_budget_exhausted)\n"
+               << "                        throw std::runtime_error(\"Gastzyklusbudget erschoepft\");\n"
+               << "                    services->observe_guest_checkpoint("
+               << hex32(block.start_address) << ");\n"
+               << "                    if (services->poll_interrupt().has_value()) return;\n"
+               << "                }\n";
+    }
 
     std::optional<std::size_t> control_index;
 

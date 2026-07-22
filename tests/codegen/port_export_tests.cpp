@@ -623,7 +623,13 @@ int run_test(const int argc, char* argv[]) {
             read_text(output / "src" / "main.cpp")
                     .find("chainable_blocks_.contains(address)") != std::string::npos &&
             read_text(output / "src" / "main.cpp")
-                    .find("(address & 0xC0000000u) != 0x80000000u") !=
+                    .find("active_block_variant_->runtime_generation") !=
+                std::string::npos &&
+            read_text(output / "src" / "main.cpp")
+                    .find("cpu_.retired_guest_instructions - chain_retired_baseline_") !=
+                std::string::npos &&
+            read_text(output / "src" / "main.cpp")
+                    .find("*event <= state_.scheduler->current_cycle() + pending") !=
                 std::string::npos &&
             read_text(output / "src" / "main.cpp")
                     .find("result.processed_events != 0u") != std::string::npos &&
@@ -673,6 +679,19 @@ int run_test(const int argc, char* argv[]) {
                 std::string::npos,
         "Portprojekt besitzt keinen ausfuehrbaren GDI-/Runtimevertrag.");
     const auto& runtime_dispatch = generated_before.at("code/runtime-dispatch.cpp");
+    const auto retire_marker = runtime_dispatch.find(
+        "const auto retired_before = cpu.retired_guest_instructions");
+    const auto execute_marker = runtime_dispatch.find(
+        "selected_block->get().function(cpu, *active_context)", retire_marker);
+    const auto scheduler_marker =
+        runtime_dispatch.find("active_services->consume_guest_cycles(", execute_marker);
+    const auto interrupt_marker =
+        runtime_dispatch.find("active_services->poll_interrupt().has_value()", scheduler_marker);
+    require(retire_marker != std::string::npos && execute_marker != std::string::npos &&
+                scheduler_marker != std::string::npos && interrupt_marker != std::string::npos &&
+                retire_marker < execute_marker && execute_marker < scheduler_marker &&
+                scheduler_marker < interrupt_marker,
+            "Gastzyklen oder Interruptannahme liegen nicht hinter der ausgefuehrten Blocksemantik.");
     const auto require_chain_registration = [&](const std::string_view end_kind,
                                                 const bool expected) {
         const auto marker = ", katana::runtime::BlockEndKind::" + std::string(end_kind);

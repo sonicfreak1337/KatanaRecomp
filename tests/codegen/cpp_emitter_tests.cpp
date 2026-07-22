@@ -146,9 +146,13 @@ int main() {
     const auto local_chain_source = local_chain_backend.emit(local_chain_request).joined_text();
     require(local_chain_source.find("services->can_chain_executable_block(cpu.pc)) continue;") !=
                     std::string::npos &&
+                local_chain_source.find("++cpu.retired_guest_instructions;") !=
+                    std::string::npos &&
+                local_chain_source.find("services->consume_guest_cycles(") ==
+                    std::string::npos &&
                 local_chain_source.find("cpu.pc = !cpu.t ? 0x8C010002u : 0x8C010006u;") !=
                     std::string::npos,
-            "Lokales Mehrblock-Chaining besitzt keinen Invalidierungsguard.");
+            "Lokales Mehrblock-Chaining besitzt Vorab-Timing oder keinen Retirement-Guard.");
 
     constexpr std::array<std::uint8_t, 12> indirect_jump_bytes = {
         0x08u,

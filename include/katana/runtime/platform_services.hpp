@@ -18,6 +18,7 @@ namespace katana::runtime {
 
 class ExecutableCodeTracker;
 class ExecutableModuleCatalog;
+struct BlockVariantKey;
 
 inline constexpr std::uint32_t platform_services_abi_version =
     build_contract::platform_services_abi_version;
@@ -165,6 +166,7 @@ class PlatformServices {
     virtual void observe_guest_checkpoint(std::uint32_t) noexcept {}
     virtual void register_executable_block(std::uint32_t, std::uint32_t, std::string_view) {}
     virtual void allow_executable_block_chaining(std::uint32_t) {}
+    virtual void begin_executable_block(const BlockVariantKey&) noexcept {}
     [[nodiscard]] virtual bool can_chain_executable_block(std::uint32_t) const noexcept {
         return false;
     }

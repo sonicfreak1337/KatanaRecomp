@@ -12,8 +12,16 @@
   getrennt. Damit wird der allgemeine IP-Handoff ausgefuehrt, statt nur das
   Hauptprogramm mit fehlendem Bootstrapzustand direkt anzuspringen. Direct-
   Mode bleibt ein expliziter Bypass; bestehende HLE-Manifeste mit dem alten
-  Standardentry werden migriert. Runtime-ABI 31 und Portprojektvertrag 19
+  Standardentry werden migriert. Runtime-ABI 32 und Portprojektvertrag 20
   versionieren den finalen Boot- und Portvertrag dieser Runde.
+- Der native AOT-Dispatcher berechnet Gastzeit nicht mehr pauschal vor einem
+  Block. Jede tatsaechlich betretene SH-4-Instruktion einschliesslich Faults und
+  Delay Slots wird gezaehlt; erst nach ihrer Blocksemantik wird der Scheduler
+  fortgeschrieben und danach ein Interrupt angenommen. Lokales Blockchaining
+  prueft Codeidentitaet, Adressraum-, MMU- und Watchpointgeneration, FPSCR,
+  Runtimegeneration sowie den naechsten Schedulertermin und endet spaetestens
+  nach 64 Instruktionen am Host-Safepoint. PlatformServices-ABI 9 versioniert
+  diesen Blockeintrittsvertrag.
 - Die GD-ROM-BIOS-ABI besitzt einen expliziten Queued-/Processing-/Complete-/
   Streaming-/Error-Zustandsautomaten. `GET_CMD_STAT` liefert nun die
   oeffentlichen Zustandsklassen 0 bis 4 beziehungsweise `-1`, schreibt vier
@@ -41,7 +49,7 @@
   Areasymbolen abgeleitet. Der Portvertrag traegt ein explizites Profil
   `japan-ntsc`, `north-america-ntsc`, `europe-pal` oder `vga`; damit wird ein
   regionsoffenes `JUE` nicht mehr still als PAL-Konsole behandelt. BIOS-ABI 6,
-  Runtime-ABI 31 und Portprojektvertrag 19 versionieren diese Korrekturen.
+  Runtime-ABI 32 und Portprojektvertrag 20 versionieren diese Korrekturen.
 - WinCE-Bootlayouts und gescrambelte Nicht-GD-ROM-Bootdateien werden bis zu
   ihrer eigenstaendigen nativen Segment-/Descramble-Implementierung mit
   stabilen Loaderfehlern abgelehnt. Sie laufen nicht mehr still mit einer

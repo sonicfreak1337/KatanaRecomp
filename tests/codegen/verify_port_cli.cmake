@@ -91,7 +91,8 @@ execute_process(
 )
 if(NOT generated_result EQUAL 0 OR
    NOT generated_output MATCHES "KR_GENERATED_RUNTIME_STARTED" OR
-   NOT generated_output MATCHES "indirect_dispatches=2" OR
+   NOT generated_output MATCHES "indirect_dispatches=0" OR
+   NOT generated_output MATCHES "runtime_dispatch_hits=4" OR
    NOT generated_output MATCHES "frames=0" OR
    NOT generated_output MATCHES "audio_buffers=0")
   file(REMOVE_RECURSE "${fixture}")

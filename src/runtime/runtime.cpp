@@ -129,6 +129,7 @@ void reset_cpu(CpuState& cpu, const ResetState& state) noexcept {
     cpu.sleeping = false;
     cpu.last_prefetch_address = 0u;
     cpu.prefetch_count = 0u;
+    cpu.retired_guest_instructions = 0u;
     cpu.last_prefetch_was_store_queue = false;
 
     if (cpu.address_space) {

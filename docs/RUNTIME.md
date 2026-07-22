@@ -359,3 +359,13 @@ Runtimeblock. Die eigenstaendige Hostanwendung loest den Programmeinstieg ueber
 registrierte Backendfunktion mit validierten Plattformdiensten auf. Fehlende
 Bloecke, Speicherabbildungen oder Bootquellen propagieren als Nichtnull-Exitcode;
 der Aufruferpfad wird vor der Ausgabe redigiert.
+
+Im produktiven Einblock-AOT-Pfad zaehlt `CpuState::retired_guest_instructions`
+jede betretene Gastinstruktion. Schedulerzeit wird nach der ausgefuehrten
+Blocksemantik verbucht; erst der anschliessende Safepoint darf einen Interrupt
+annehmen. Faulting Instructions und ausgefuehrte Delay Slots gehen dadurch in
+die Zeit ein, nicht ausgefuehrte Blockreste dagegen nicht. Lokales Chaining ist
+nur ohne faelliges Schedulerereignis und bei identischem Code-, MMU-,
+Watchpoint-, FPSCR- und Runtimezustand erlaubt; ein Chunk umfasst hoechstens 64
+Instruktionen. Runtime-ABI 32, PlatformServices-ABI 9 und Portvertrag 20 binden
+diesen Ausfuehrungsvertrag.

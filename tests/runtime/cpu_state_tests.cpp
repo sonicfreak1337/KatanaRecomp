@@ -30,7 +30,7 @@ int main() {
     static_assert(katana::runtime::banked_register_count == 8u);
     static_assert(katana::runtime::fpu_register_count == 16u);
 
-    static_assert(katana::runtime::abi_version == 31u);
+    static_assert(katana::runtime::abi_version == 32u);
 
     CpuState cpu;
 
@@ -86,7 +86,8 @@ int main() {
     require(!cpu.t && !cpu.s && !cpu.q && !cpu.m && !cpu.trap_pending &&
                 cpu.last_exception_cause == katana::runtime::ExceptionCause::None &&
                 !cpu.exception_in_delay_slot && !cpu.sleeping && cpu.last_prefetch_address == 0u &&
-                cpu.prefetch_count == 0u && !cpu.last_prefetch_was_store_queue,
+                cpu.prefetch_count == 0u && cpu.retired_guest_instructions == 0u &&
+                !cpu.last_prefetch_was_store_queue,
             "Ein Runtime-Zustandsflag besitzt keinen definierten Grundwert.");
 
     cpu.fr[0] = 0x3F800000u;

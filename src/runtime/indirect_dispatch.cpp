@@ -326,11 +326,10 @@ IndirectDispatchResult dispatch_indirect(CpuState& cpu,
                                            MemoryAccessWidth::Halfword,
                                            true);
         if (cpu.address_space) {
-            const auto translation = cpu.address_space->translate(
-                target, TranslationAccess::Instruction, cpu.privileged_mode());
-            if (!translation.no_mmu_fastpath)
-                effective_variant =
-                    block_variant_key(cpu.address_space->guard_for(target, cpu.read_fpscr()));
+            static_cast<void>(cpu.address_space->translate(
+                target, TranslationAccess::Instruction, cpu.privileged_mode()));
+            effective_variant =
+                block_variant_key(cpu.address_space->guard_for(target, cpu.read_fpscr()));
         }
     } catch (const MemoryAccessError& error) {
         enter_memory_exception(cpu, error, request.callsite);

@@ -120,6 +120,7 @@ struct CpuState {
     bool sleeping = false;
     std::uint32_t last_prefetch_address = 0u;
     std::uint64_t prefetch_count = 0u;
+    std::uint64_t retired_guest_instructions = 0u;
     bool last_prefetch_was_store_queue = false;
     std::shared_ptr<RuntimeAddressSpace> address_space;
     DreamcastGdRomController* gdrom_services = nullptr;

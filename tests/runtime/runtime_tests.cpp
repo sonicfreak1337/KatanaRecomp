@@ -17,7 +17,7 @@ void require(const bool condition, const std::string& message) {
 } // namespace
 
 int main() {
-    static_assert(katana::runtime::abi_version == 31u);
+    static_assert(katana::runtime::abi_version == 32u);
 
     katana::runtime::Memory memory(16u);
     require(memory.size() == 16u, "Die Runtime-Speichergroesse ist falsch.");
@@ -41,7 +41,8 @@ int main() {
     require(bounds_failed, "Runtime-Speichergrenzen werden nicht geprueft.");
 
     katana::runtime::CpuState cpu;
-    require(cpu.pc == 0u && cpu.pr == 0u && cpu.memory.size() == 1024u * 1024u,
+    require(cpu.pc == 0u && cpu.pr == 0u && cpu.retired_guest_instructions == 0u &&
+                cpu.memory.size() == 1024u * 1024u,
             "Der zentrale CPU-Zustand besitzt keinen deterministischen Grundzustand.");
 
     const auto invalidate = katana::runtime::maintain_coherent_operand_cache(
