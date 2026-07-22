@@ -112,16 +112,16 @@ std::vector<std::uint8_t> boot_track(const bool immediate_trap = false) {
         record(bytes, directory, data_lba + 20u, payload_size, std::string(1u, '\1'), true);
     record(bytes, directory, data_lba + 21u, 24u, "BOOT.BIN;1", false);
     constexpr std::array<std::uint8_t, 24u> normal_program = {
+        0x22u, 0x4Fu, // sts.l pr,@-r15: preserve the program-root sentinel
         0x0Au, 0xE0u, // mov #10,r0
-        0x03u, 0x00u, // bsrf r0 -> 0x8C010010
+        0x03u, 0x00u, // bsrf r0 -> 0x8C010012
         0x07u, 0xE2u, // delay slot: mov #7,r2
+        0x26u, 0x4Fu, // lds.l @r15+,pr: restore the program-root sentinel
         0x0Bu, 0x00u, // caller rts
         0x09u, 0x00u, // delay-slot nop
         0x09u, 0x00u, // padding nop
         0x09u, 0x00u, // padding nop
-        0x09u, 0x00u, // padding nop
         0x05u, 0xE1u, // callee: mov #5,r1
-        0xFFu, 0x71u, // add #-1,r1
         0x0Bu, 0x00u, // callee rts
         0x09u, 0x00u  // delay-slot nop
     };
@@ -198,7 +198,7 @@ int run_test(const int argc, char* argv[]) {
                 runtime_cpu.vbr == katana::runtime::dreamcast_direct_boot_vector_base &&
                 runtime_cpu.read_sr() == katana::runtime::dreamcast_disc_boot_status &&
                 runtime_cpu.privileged_mode() && runtime_cpu.interrupt_mask() == 15u &&
-                runtime_cpu.memory.read_u16(0x8C010000u) == 0xE00Au &&
+                runtime_cpu.memory.read_u16(0x8C010000u) == 0x4F22u &&
                 runtime_state.runtime_blocks && runtime_state.runtime_blocks->size() == 0u &&
                 runtime_state.system_asic && runtime_state.interrupt_router &&
                 runtime_state.cache_control && runtime_state.io_ports &&
@@ -409,7 +409,7 @@ int run_test(const int argc, char* argv[]) {
                     .find("if (const auto registered_handle = table.lookup(0x8C010000u") ==
                 std::string::npos &&
             generated_before.at("code/runtime-dispatch.cpp")
-                    .find("6u, katana::runtime::BlockEndKind::Call") != std::string::npos &&
+                    .find("8u, katana::runtime::BlockEndKind::Call") != std::string::npos &&
             generated_before.at("code/runtime-dispatch.cpp")
                     .find("SLEEP besitzt kein Wakeup-Ereignis") != std::string::npos &&
             generated_before.at("code/runtime-dispatch.cpp").find("Schedulerbudget erschoepft") !=
@@ -420,6 +420,16 @@ int run_test(const int argc, char* argv[]) {
                     .find("Runtime-Blockbudget erschoepft") != std::string::npos &&
             generated_before.at("code/runtime-dispatch.cpp").find("KATANA_PORT_BLOCK_LIMIT") !=
                 std::string::npos &&
+            generated_before.at("code/runtime-dispatch.cpp")
+                    .find("DispatchChainBoundary::ProgramRoot") != std::string::npos &&
+            generated_before.at("code/runtime-dispatch.cpp")
+                    .find("cpu.pc == program_return_sentinel") != std::string::npos &&
+            generated_before.at("code/runtime-dispatch.cpp")
+                    .find("target = cpu.pc;\n            kind = "
+                          "katana::runtime::IndirectDispatchKind::TailJump") !=
+                std::string::npos &&
+            generated_before.at("code/runtime-dispatch.cpp")
+                    .find("DispatchChainBoundary::NestedCall") != std::string::npos &&
             generated_before.at("code/runtime-dispatch.cpp").find("poll_host_lifecycle") !=
                 std::string::npos &&
             generated_before.at("code/runtime-dispatch.cpp").find("PlatformShutdownRequested") !=
@@ -635,8 +645,8 @@ int run_test(const int argc, char* argv[]) {
     }
 
     auto incomplete_track = boot_track();
-    incomplete_track[payload_offset(21u)] = 0x09u;
-    incomplete_track[payload_offset(21u, 1u)] = 0x00u;
+    incomplete_track[payload_offset(21u, 2u)] = 0x09u;
+    incomplete_track[payload_offset(21u, 3u)] = 0x00u;
     write_binary(fixture.root / "disc" / "high.bin", incomplete_track);
     const auto incomplete_output = fixture.root / "incomplete-port";
     static_cast<void>(export_dreamcast_port_project(gdi, incomplete_output, options));

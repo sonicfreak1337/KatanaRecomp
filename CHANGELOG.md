@@ -4,6 +4,13 @@
 
 ### Geaendert
 
+- Der generierte Root-Dispatcher verwechselt ein normales SH-4-`RTS` nicht
+  mehr mit dem Ende des nativen Portprozesses. Verschachtelte Host-Aufrufe
+  enden weiterhin an ihrer eigenen Returngrenze; der Programmroot folgt dem
+  vom Gast vor dem Delay-Slot gelatchten `PR` und endet nur am beim Einstieg
+  festgehaltenen Sentinel. Damit bleiben auch runtime-materialisierte Calls
+  und Returns im selben allgemeinen Gastkontrollfluss. Portprojektvertrag 12
+  versioniert die korrigierte generierte Dispatchsemantik.
 - AICA-RTC-Schreibzugriffe verwenden jetzt den Hardware-Latchvertrag: Low
   aktualisiert nur die vorbereitete untere Haelfte, High veroeffentlicht den
   vollstaendigen 32-Bit-Wert atomar und beendet die Schreibfreigabe. Die
@@ -146,7 +153,7 @@
   MMU-faehigen `guest_read_*`-/`guest_write_*`-Schnittstellen. Die globale
   nachtraegliche Zeichenersetzung des gesamten Funktionstexts ist entfallen.
 - PlatformServices-ABI 7 versioniert den korrigierten linearen und
-  gastzeitgebundenen DMA-Vertrag. Runtime-ABI 23 und Portprojektvertrag 11
+  gastzeitgebundenen DMA-Vertrag. Runtime-ABI 23 und Portprojektvertrag 12
   bleiben die aktuellen v0.48-Vertraege.
 - Der kumulative Debug-Gate umfasst 180 Tests und ist vollstaendig gruen.
   Die beiden Tests, die eigenstaendige Portprojekte mit CMake/MSVC bauen,
@@ -185,7 +192,7 @@
   der Recipe, verwirft abweichendes Staging und veroeffentlicht dadurch keinen
   unterdessen veraenderten oder semantisch umgebundenen Discinhalt. Der Parser
   rekonstruiert Trackintegritaet und Content-Root aus dem Chunkindex.
-- Runtime-ABI 23 und Portprojektvertrag 11 versionieren kumulativ den gemeinsamen
+- Runtime-ABI 23 und Portprojektvertrag 12 versionieren kumulativ den gemeinsamen
   AICA-Sound-RAM-/Audiopfad sowie den neuen Disc-Identitaetsvertrag.
 - Der Software-PVR fuehrt die TSP-Fogmodi jetzt im echten Fragmentpfad aus:
   Look-up-Table-Fog dekodiert `FOG_DENSITY` und interpoliert die 128
