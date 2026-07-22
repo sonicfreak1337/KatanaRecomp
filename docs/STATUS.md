@@ -80,11 +80,14 @@ isolierte den gueltigen SYSTEM-1-Rueckweg nach abgeschlossener
 Gastinitialisierung. Der Vergleich mit dem freien Reios-Handoff zeigte, dass
 der native Direktstart nur PC/SP/VBR/SR, nicht aber den uebrigen BIOS-CPU- und
 Geraetezustand setzte. Dieser allgemeine Handoff umfasst jetzt `T`, `FPSCR`,
-GBR/SSR/SPC/SGR/DBR/PR, DMAOR, AICA-Masken, BIOS-RAM und PAL-Portzustand. Der
-neue Dispatch-Hotspotbericht wies zudem 2.097.152 Aufrufe desselben gueltigen
+GBR/SSR/SPC/SGR/DBR/PR, DMAOR, AICA-Masken und PAL-Portzustand. Ein echter
+Address-Error deckte anschliessend auf, dass der alte SYSINFO-HLE-Stub mit
+`VBR+0x100` kollidierte. Alle HLE-Stubs liegen nun ausserhalb der
+SH-4-Exceptionvektoren. Der neue Dispatch-Hotspotbericht wies zudem 2.097.152
+Aufrufe desselben gueltigen
 Vier-Byte-Kopierpfads als Bootzeit-Hotspot statt als Dispatchfehler nach.
 
-Runtime-ABI 25 und Portprojektvertrag 13 bilden den kumulativen v0.48-Stand ab.
+Runtime-ABI 26 und Portprojektvertrag 13 bilden den kumulativen v0.48-Stand ab.
 PlatformServices-ABI 7 bleibt unveraendert.
 
 Die zusammenhaengende zweite Bootkorrekturrunde ist implementiert. Sie umfasst
@@ -144,7 +147,7 @@ Recipe 2. Die Content-Root entsteht aus den wirklich gelesenen Raw-Chunks und
 wird sowohl beim Schreiben gegen die Recipe als auch beim Oeffnen gegen
 Tracktabelle und Chunkindex geprueft; abweichendes Staging wird nicht
 veroeffentlicht. Der damals eingefuehrte AICA-Vertrag ist im aktuellen
-Runtime-ABI 25 und Portprojektvertrag 13 enthalten. Das kumulative v0.48-
+Runtime-ABI 26 und Portprojektvertrag 13 enthalten. Das kumulative v0.48-
 Debug-Gate ist mit 180 von 180 Tests bestanden; der anschliessende private
 PAL-Nachweis ist erfolgt: Der vollstaendige neue Port entstand mit 12 Workern
 in 126,8 Sekunden, ein inkrementeller Runtime-Neubau in 77,8 Sekunden. Die

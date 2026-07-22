@@ -39,12 +39,14 @@ erfolgreicher No-op behandelt.
 
 Vor dem ersten nativen Gastblock stellt der Disc-Boot ausserdem den
 BIOS-Handoffzustand her. Dazu gehoeren die dokumentierten SH-4-Kontrollregister,
-`DMAOR=0x8201`, die AICA-Interruptlevel, der initiale 64-KiB-BIOS-Arbeitsbereich
-und fuer europaeische Discs das PAL-Broadcast-Bit. Diese Werte sind
+`DMAOR=0x8201`, die AICA-Interruptlevel und fuer europaeische Discs das
+PAL-Broadcast-Bit. HLE-Stubs werden in reserviertem unteren RAM ausserhalb von
+`VBR+0x100`, `VBR+0x400` und `VBR+0x600` angelegt, damit echte Exceptions nie
+als BIOS-Aufruf fehlgeroutet werden. Diese Werte sind
 plattformweit und werden weder aus einem Spiel noch aus proprietaeren
 Firmwarebytes uebernommen.
 
-Der maschinenlesbare Vertrag besitzt Schema `katana-bios-abi`, Version 2.
+Der maschinenlesbare Vertrag besitzt Schema `katana-bios-abi`, Version 3.
 Synthetische Tests pruefen reproduzierbare Vektorbytes, Runtimeblockdispatch,
 P1/P2-Handoff, bekannte aufgeschobene Dienste und unbekannte Funktionen.
 

@@ -14,12 +14,12 @@
 namespace katana::runtime {
 namespace {
 constexpr std::array kVectors{
-    BiosAbiVector{BiosAbiVectorKind::SysInfo, "sysinfo", 0x8C0000B0u, 0x8C000100u},
-    BiosAbiVector{BiosAbiVectorKind::RomFont, "romfont", 0x8C0000B4u, 0x8C000120u},
-    BiosAbiVector{BiosAbiVectorKind::Flash, "flash", 0x8C0000B8u, 0x8C000140u},
-    BiosAbiVector{BiosAbiVectorKind::MiscGdrom, "misc-gdrom", 0x8C0000BCu, 0x8C000160u},
-    BiosAbiVector{BiosAbiVectorKind::Gdrom2, "gdrom2", 0x8C0000C0u, 0x8C000180u},
-    BiosAbiVector{BiosAbiVectorKind::System, "system", 0x8C0000E0u, 0x8C0001A0u}};
+    BiosAbiVector{BiosAbiVectorKind::SysInfo, "sysinfo", 0x8C0000B0u, 0x8C001100u},
+    BiosAbiVector{BiosAbiVectorKind::RomFont, "romfont", 0x8C0000B4u, 0x8C001120u},
+    BiosAbiVector{BiosAbiVectorKind::Flash, "flash", 0x8C0000B8u, 0x8C001140u},
+    BiosAbiVector{BiosAbiVectorKind::MiscGdrom, "misc-gdrom", 0x8C0000BCu, 0x8C001160u},
+    BiosAbiVector{BiosAbiVectorKind::Gdrom2, "gdrom2", 0x8C0000C0u, 0x8C001180u},
+    BiosAbiVector{BiosAbiVectorKind::System, "system", 0x8C0000E0u, 0x8C0011A0u}};
 
 struct FlashPartition {
     std::uint32_t offset;

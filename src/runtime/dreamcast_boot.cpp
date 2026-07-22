@@ -644,10 +644,6 @@ initialize_dreamcast_runtime(CpuState& cpu,
                                          0x0C000000u,
                                          static_cast<std::uint32_t>(dreamcast_main_ram_size)});
     if (firmware_mode == DreamcastRuntimeFirmwareMode::HleBiosAbi) {
-        std::array<std::uint8_t, 64u * 1024u> bios_workspace;
-        bios_workspace.fill(0xFFu);
-        cpu.memory.write_bytes(
-            dreamcast_direct_boot_vector_base, bios_workspace, CodeWriteSource::Copy);
         install_hle_bios_abi(cpu.memory,
                              *state.runtime_blocks,
                              *state.firmware_handoff,

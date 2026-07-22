@@ -1,4 +1,5 @@
 #include "katana/platform/dreamcast.hpp"
+#include "katana/runtime/bios_abi.hpp"
 
 #include <cstdlib>
 #include <filesystem>
@@ -56,7 +57,8 @@ int main() {
     require(hle_result.runtime_blocks && hle_result.firmware_handoff &&
                 hle_result.runtime_blocks->size() == 6u &&
                 hle_result.firmware_handoff->runtime_symbols().size() == 12u &&
-                hle_cpu.memory.read_u32(0x8C0000B0u) == 0x8C000100u &&
+                hle_cpu.memory.read_u32(0x8C0000B0u) ==
+                    katana::runtime::hle_bios_abi_vectors()[0].handler_address &&
                 hle_result.log.front() == "firmware=hle-bios-abi" &&
                 hle_result.log[hle_result.log.size() - 2u] == "bios-abi=installed",
             "Produktiver HLE-Boot installiert BIOS-ABI, Blocktabelle oder Handoff nicht.");

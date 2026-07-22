@@ -299,8 +299,8 @@ int run_test(const int argc, char* argv[]) {
     katana::runtime::CpuState hle_runtime_cpu;
     const auto hle_runtime_state = katana::runtime::initialize_dreamcast_runtime(
         hle_runtime_cpu, runtime_boot, katana::runtime::DreamcastRuntimeFirmwareMode::HleBiosAbi);
-    require(hle_runtime_cpu.memory.read_u32(0x8C0000B0u) == 0x8C000100u &&
-                hle_runtime_cpu.memory.read_u32(0x8C000010u) == 0xFFFFFFFFu &&
+    require(hle_runtime_cpu.memory.read_u32(0x8C0000B0u) ==
+                    katana::runtime::hle_bios_abi_vectors()[0].handler_address &&
                 hle_runtime_state.runtime_blocks->size() == 6u,
             "Produktiver GDI-HLE-Runtimepfad installiert die BIOS-ABI nicht.");
     const auto render_done_count = [&] {

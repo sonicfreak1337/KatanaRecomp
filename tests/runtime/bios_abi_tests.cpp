@@ -63,12 +63,18 @@ int main() {
                 handoff.runtime_symbols().size() == 12u,
             "BIOS-Bootstrap und nachfolgende statische AOT-Registry sind unvollstaendig.");
     for (const auto& vector : vectors)
-        require(cpu.memory.read_u32(vector.slot_address) == vector.handler_address &&
+        require(vector.handler_address != 0x8C000100u &&
+                    vector.handler_address != 0x8C000400u &&
+                    vector.handler_address != 0x8C000600u &&
+                    cpu.memory.read_u32(vector.slot_address) == vector.handler_address &&
                     cpu.memory.read_u16(vector.handler_address) == 0x000Bu &&
                     blocks.lookup_physical(vector.handler_address, {}).has_value(),
-                "BIOS-ABI-Vektor, RAM-Stub oder physischer Dispatchalias fehlt.");
-    require(handoff.resolve(0xAC000100u).statically_proven &&
-                handoff.resolve(0xAC000100u).provenance == "hle-generated-handler",
+                "BIOS-ABI-Vektor kollidiert mit einem SH-4-Exceptionvektor oder sein RAM-Stub "
+                "fehlt.");
+    const auto p2_handler =
+        0xA0000000u | canonical_physical_address(vectors[0].handler_address);
+    require(handoff.resolve(p2_handler).statically_proven &&
+                handoff.resolve(p2_handler).provenance == "hle-generated-handler",
             "P1/P2-RAM-Alias verliert den dynamischen HLE-Handoff.");
 
     cpu.pc = vectors[0].handler_address;

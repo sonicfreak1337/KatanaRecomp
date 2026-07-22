@@ -11,7 +11,7 @@
 
 namespace katana::runtime {
 
-inline constexpr std::uint32_t bios_abi_contract_version = 2u;
+inline constexpr std::uint32_t bios_abi_contract_version = 3u;
 enum class BiosAbiVectorKind : std::uint8_t { SysInfo, RomFont, Flash, MiscGdrom, Gdrom2, System };
 enum class BiosAbiServiceStatus : std::uint8_t { Completed, ServiceUnavailable };
 
