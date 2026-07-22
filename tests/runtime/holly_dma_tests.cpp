@@ -1,4 +1,5 @@
 #include "katana/runtime/holly_dma.hpp"
+#include "katana/runtime/dma.hpp"
 
 #include <cstdlib>
 #include <iostream>
@@ -119,6 +120,17 @@ int main() {
     static_cast<void>(scheduler.advance_by(128u, 1u));
     require(memory.read_u8(0x0400201Fu) == 0x5Fu && memory.read_u32(0x005F7C14u) == 1u,
             "Hardwaregetriggerte PVR-DMA behaelt Enable oder Daten nicht korrekt.");
+    memory.write_u32(0x005F7C00u, 0x04002000u);
+    memory.write_u32(0x005F7C04u, 0u);
+    memory.write_u32(0x005F7C08u, 32u);
+    memory.write_u32(0x005F7C10u, 0u);
+    memory.write_u32(0x005F7C14u, 1u);
+    memory.write_u32(0x005F7C18u, 1u);
+    require(controllers.pvr->last_fault() &&
+                controllers.pvr->last_fault()->reason == HollyDmaFaultReason::Overrun &&
+                events.back() == SystemAsicEvent::PvrOverrun &&
+                controllers.pvr->state().active == 0u,
+            "Ungueltiger PVR-DMA-Bereich entkommt als Hostfehler statt als ASIC-Fault.");
 
     EventScheduler g1_scheduler;
     bool g1_bytes_committed = false;
@@ -147,9 +159,71 @@ int main() {
     require(g1_bytes_committed && g1_completed && g1.read(0x18u) == 0u,
             "G1-DMA committed Daten oder ASIC-Completion nicht atomar am Zielzyklus.");
 
+    memory.write_u32(0x005F7820u, 0x01000000u);
+    memory.write_u32(0x005F7824u, 0x0C005000u);
+    memory.write_u32(0x005F7828u, 32u);
+    memory.write_u32(0x005F7830u, 0u);
+    memory.write_u32(0x005F7834u, 1u);
+    memory.write_u32(0x005F7838u, 1u);
+    require(controllers.g2->last_fault() &&
+                controllers.g2->last_fault()->reason == HollyDmaFaultReason::IllegalAddress &&
+                events.back() == SystemAsicEvent::Ext1DmaIllegalAddress &&
+                controllers.g2->channel_state(1u).active == 0u &&
+                controllers.g2->channel_state(1u).enabled == 0u,
+            "Ungueltige G2-DMA-Adresse entkommt als Hostfehler statt als ASIC-Fault.");
+
+    std::vector<SystemAsicEvent> contract_events;
+    EventScheduler contract_scheduler;
+    auto contract_dmac = std::make_shared<Sh4Dmac>(
+        contract_scheduler, memory, DmaTiming{1u}, DmaExecutionMode::DeterministicBatch);
+    DreamcastPvrDmaController contract_pvr(
+        memory,
+        contract_scheduler,
+        HollyDmaTiming{4u},
+        [&](const SystemAsicEvent event) { contract_events.push_back(event); });
+    contract_pvr.bind_sh4_dmac(contract_dmac, 0u);
+    contract_dmac->write_source(0u, 0x0C004000u);
+    contract_dmac->write_count(0u, 1u);
+    contract_dmac->write_control(0u, 0x00001841u);
+    contract_dmac->write_operation(Sh4Dmac::master_enable);
+    contract_pvr.write(0x00u, 0x04003000u);
+    contract_pvr.write(0x04u, 0x0C004000u);
+    contract_pvr.write(0x08u, 64u);
+    contract_pvr.write(0x14u, 1u);
+    contract_pvr.write(0x18u, 1u);
+    require(contract_pvr.last_fault() &&
+                contract_pvr.last_fault()->reason == HollyDmaFaultReason::HandshakeMismatch &&
+                contract_dmac->address_error() &&
+                contract_events == std::vector<SystemAsicEvent>{SystemAsicEvent::PvrOverrun},
+            "PVR-DMA akzeptiert eine SH-4-DMAC-Restlaenge, die nicht zum Transfer passt.");
+
+    contract_dmac->reset();
+    contract_pvr.reset();
+    contract_events.clear();
+    for (std::uint32_t index = 0u; index < 64u; ++index)
+        memory.write_u8(0x0C004000u + index, static_cast<std::uint8_t>(0x20u + index));
+    contract_dmac->write_source(0u, 0x0C004000u);
+    contract_dmac->write_count(0u, 2u);
+    contract_dmac->write_control(0u, 0x00001841u);
+    contract_dmac->write_operation(Sh4Dmac::master_enable);
+    contract_pvr.write(0x00u, 0x04003000u);
+    contract_pvr.write(0x04u, 0x0C004000u);
+    contract_pvr.write(0x08u, 64u);
+    contract_pvr.write(0x14u, 1u);
+    contract_pvr.write(0x18u, 1u);
+    static_cast<void>(contract_scheduler.advance_by(256u, 1u));
+    require(memory.read_u8(0x0400303Fu) == 0x5Fu &&
+                contract_dmac->source(0u) == 0x0C004040u && contract_dmac->count(0u) == 0u &&
+                (contract_dmac->control(0u) & Sh4Dmac::transfer_end) != 0u &&
+                contract_events == std::vector<SystemAsicEvent>{SystemAsicEvent::PvrDma},
+            "PVR-DMA committed Daten, SH-4-DMAC-Residue oder Completion nicht gemeinsam.");
+
     memory.write_u32(0x005F7418u, 0u);
     memory.write_u32(0x005F7414u, 1u);
-    require(throws([&] { memory.write_u32(0x005F7418u, 1u); }) &&
+    memory.write_u32(0x005F7418u, 1u);
+    require(controllers.g1->last_fault() &&
+                controllers.g1->last_fault()->reason == HollyDmaFaultReason::MissingBackend &&
+                events.back() == SystemAsicEvent::GdromAccessError &&
                 throws([&] { static_cast<void>(memory.read_u32(0x005F7400u)); }) &&
                 throws([&] { static_cast<void>(memory.read_u16(0x005F7800u)); }) &&
                 throws([&] { memory.write_u32(0x005F7880u, 1u); }) &&

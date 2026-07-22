@@ -67,16 +67,23 @@ void AicaRtc::write(const std::uint32_t offset,
                     const MemoryAccessWidth width) {
     check(offset, width);
     if (offset == aica_rtc_control_offset) {
-        write_enabled_ = (value & 1u) != 0u;
+        const bool enable = (value & 1u) != 0u;
+        if (enable && !write_enabled_) {
+            commit_elapsed();
+            write_latch_ = base_seconds_;
+        }
+        write_enabled_ = enable;
         return;
     }
     if (!write_enabled_) return;
-    commit_elapsed();
     if (offset == aica_rtc_high_offset) {
-        base_seconds_ = (base_seconds_ & 0x0000FFFFu) | ((value & 0xFFFFu) << 16u);
+        write_latch_ = (write_latch_ & 0x0000FFFFu) | ((value & 0xFFFFu) << 16u);
+        base_seconds_ = write_latch_;
+        if (scheduler_ != nullptr && !scheduler_lifetime_.expired())
+            base_cycle_ = scheduler_->current_cycle();
         write_enabled_ = false;
     } else {
-        base_seconds_ = (base_seconds_ & 0xFFFF0000u) | (value & 0xFFFFu);
+        write_latch_ = (write_latch_ & 0xFFFF0000u) | (value & 0xFFFFu);
     }
 }
 
@@ -85,6 +92,7 @@ void AicaRtc::reset() noexcept {
     base_cycle_ = scheduler_ != nullptr && !scheduler_lifetime_.expired()
                       ? scheduler_->current_cycle()
                       : 0u;
+    write_latch_ = initial_seconds_;
     write_enabled_ = false;
 }
 
@@ -95,6 +103,7 @@ bool AicaRtc::write_enabled() const noexcept {
 void AicaRtc::handle_scheduler_reset() noexcept {
     base_cycle_ = 0u;
     base_seconds_ = initial_seconds_;
+    write_latch_ = initial_seconds_;
     write_enabled_ = false;
 }
 
@@ -591,8 +600,11 @@ void AicaExecutionController::set_dma_request_observer(std::function<void()> obs
     dma_request_observer_ = std::move(observer);
 }
 
-void AicaExecutionController::tick(const std::uint64_t audio_cycles) {
+void AicaExecutionController::request_dma() {
     if (dma_request_observer_) dma_request_observer_();
+}
+
+void AicaExecutionController::tick(const std::uint64_t audio_cycles) {
     for (std::size_t index = 0u; index < timers_.size(); ++index) {
         if (timers_[index].tick(audio_cycles) != 0u) {
             interrupts_.request(timer_interrupt_base << index);

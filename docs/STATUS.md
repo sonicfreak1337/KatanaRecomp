@@ -81,6 +81,17 @@ Produktnachweis bleibt offen.
 Runtime-ABI 23 und Portprojektvertrag 11 bilden den kumulativen v0.48-Stand ab.
 PlatformServices-ABI 7 bleibt unveraendert.
 
+Die zusammenhaengende zweite Bootkorrekturrunde ist implementiert. Sie umfasst
+RTC-Schreiblatch, vollstaendige MMU-Miss-/Multiple-Hit-Semantik, `MMUCR.SV`,
+physisch gebundene AOT-/Demand-Varianten, bytegenaue Runtime-Codepromotion,
+pixelgebundenen Gastframe-Nachweis sowie zustandsfuehrende Holly-DMA-Fehler.
+Separater PVR-DMA ist jetzt vom Channel-2-Ereignis getrennt und an Kanal 0 des
+SH-4-DMAC samt Residue gebunden; AICA triggert G2 nur noch ueber einen echten
+expliziten Request. Die zehn fokussierten ASan-Regressionen sind gruen. Ein
+frischer Export, die einmalige lokale Installation aus der unveraenderten
+PAL-GDI und der budgetierte private Produktnachweis stehen als naechster Schritt
+aus; ein Gastframe wird bis zu diesem Nachweis weiterhin nicht behauptet.
+
 Der iterative Portworkflow verwendet jetzt sicheres inkrementelles Staging:
 Vorhandene Buildobjekte werden fuer denselben Ausgabeport wiederverwendet,
 waehrend `user-data` und `*.katana-disc` niemals in Staging oder Paket gelangen.

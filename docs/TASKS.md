@@ -651,7 +651,7 @@ es wurde weder ein Tag noch ein oeffentlicher Release erzeugt.
 
 ## v0.48.0 - Port-, Harness-, Controller- und GUI-Integration
 
-### [ ] KR-4831 - Generischer Originaldisc-Installer ohne Retaildaten im Portpaket
+### [x] KR-4831 - Generischer Originaldisc-Installer ohne Retaildaten im Portpaket
 
 Abhaengigkeiten: KR-4705
 Prioritaet: P0
@@ -672,6 +672,13 @@ Akzeptanz:
 - installierter Cache ist zur validierten Quelle sektorweise identisch
 - Original-GDI und Tracks bleiben byteidentisch und werden nie geloescht
 - dieselbe Installer-/Runtimeimplementierung gilt ohne Titelspezialfall fuer alle Spiele
+
+Abgeschlossen: 2026-07-20. Portprojekte enthalten nur die versionierte
+Installations-Recipe; die vollstaendige Disc bleibt lokal ausserhalb des
+Repositorys und wird beim Nutzer read-only validiert. Der Cache entsteht
+atomar unter `user-data/content/`, die Quell-GDI und ihre Tracks bleiben
+unveraendert erhalten. Synthetische Negativtests und private PAL-Nachweise fuer
+mehrere Spiele verwenden denselben titelunabhaengigen Installervertrag.
 
 ### [ ] KR-4801 - Versioniertes Runtime-SDK fuer externe Port-Projekte
 

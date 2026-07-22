@@ -60,6 +60,34 @@ int main() {
         }
         require(multiple_hit, "Mehrere passende UTLB-Eintraege erzeugen keinen Multiple-Hit.");
 
+        RuntimeAddressSpace sv_space;
+        sv_space.set_mode(AddressTranslationMode::Mmu);
+        sv_space.write_mmucr(0x00000101u);
+        sv_space.write_pteh(0x11u);
+        sv_space.ldtlb({0x8000u,
+                        0x0C008000u,
+                        4096u,
+                        0x22u,
+                        4u,
+                        true,
+                        true,
+                        true,
+                        true,
+                        true,
+                        true,
+                        false});
+        require(sv_space.translate(0x8000u, TranslationAccess::Read, true).physical_address ==
+                    0x0C008000u,
+                "MMUCR.SV unterdrueckt den ASID-Vergleich im privilegierten Modus nicht.");
+        bool user_asid_miss = false;
+        try {
+            static_cast<void>(sv_space.translate(0x8000u, TranslationAccess::Read, false));
+        } catch (const TranslationError& error) {
+            user_asid_miss = error.cause() == ExceptionCause::TlbMissRead;
+        }
+        require(user_asid_miss,
+                "MMUCR.SV unterdrueckt den ASID-Vergleich faelschlich im User-Modus.");
+
         CpuState tlb_cpu;
         tlb_cpu.address_space = std::make_shared<RuntimeAddressSpace>();
         tlb_cpu.pteh = 0x5000u;

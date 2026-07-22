@@ -159,6 +159,74 @@ void Sh4Dmac::set_completion_observer(std::function<void(std::size_t)> observer)
     completion_observer_ = std::move(observer);
 }
 
+void Sh4Dmac::set_fault_observer(std::function<void(const DmaFault&)> observer) {
+    fault_observer_ = std::move(observer);
+}
+
+bool Sh4Dmac::validate_external_transfer(const std::size_t index,
+                                         const std::uint32_t source,
+                                         const std::size_t bytes,
+                                         const std::size_t unit_size) noexcept {
+    if (index >= channels_.size() || bytes == 0u || unit_size == 0u ||
+        (bytes % unit_size) != 0u) {
+        if (index < channels_.size())
+            set_fault(index, DmaFaultReason::ExternalContractMismatch, unit_size);
+        return false;
+    }
+    const auto& value = channels_[index];
+    const auto units = bytes / unit_size;
+    const auto request_source = (value.control & request_source_mask) >> 8u;
+    const bool contract_matches =
+        (operation_ & master_enable) != 0u &&
+        (operation_ & (address_error_flag | nmi_flag)) == 0u &&
+        (value.control & channel_enable) != 0u &&
+        (value.control & transfer_end) == 0u && transfer_size(value) == unit_size &&
+        request_source == 8u && address_mode(value.control, 12u) == 1u &&
+        address_mode(value.control, 14u) == 0u &&
+        (value.source & 0x1FFFFFFFu) == (source & 0x1FFFFFFFu) &&
+        value.count == units;
+    if (!contract_matches) {
+        set_fault(index, DmaFaultReason::ExternalContractMismatch, unit_size);
+        return false;
+    }
+    return true;
+}
+
+void Sh4Dmac::complete_external_transfer(const std::size_t index,
+                                         const std::size_t bytes) noexcept {
+    if (index >= channels_.size()) return;
+    auto& value = channels_[index];
+    const auto unit_size = transfer_size(value);
+    if (unit_size == 0u || bytes == 0u || (bytes % unit_size) != 0u) {
+        set_fault(index, DmaFaultReason::ExternalContractMismatch, unit_size);
+        return;
+    }
+    if (address_mode(value.control, 12u) == 1u)
+        value.source += static_cast<std::uint32_t>(bytes);
+    else if (address_mode(value.control, 12u) == 2u)
+        value.source -= static_cast<std::uint32_t>(bytes);
+    if (address_mode(value.control, 14u) == 1u)
+        value.destination += static_cast<std::uint32_t>(bytes);
+    else if (address_mode(value.control, 14u) == 2u)
+        value.destination -= static_cast<std::uint32_t>(bytes);
+    value.count = 0u;
+    value.control |= transfer_end;
+    value.interrupt_pending = (value.control & interrupt_enable) != 0u;
+    value.completed_units += bytes / unit_size;
+    if (completion_observer_) {
+        try {
+            completion_observer_(index);
+        } catch (...) {
+        }
+    }
+}
+
+void Sh4Dmac::report_external_fault(const std::size_t index,
+                                    const DmaFaultReason reason,
+                                    const std::size_t unit_size) noexcept {
+    if (index < channels_.size()) set_fault(index, reason, unit_size);
+}
+
 void Sh4Dmac::signal_nmi() noexcept {
     operation_ |= nmi_flag;
     cancel_event();
@@ -464,6 +532,12 @@ void Sh4Dmac::set_fault(const std::size_t index,
     last_fault_ = DmaFault{reason, index, value.source, value.destination, size};
     cancel_event();
     discard_external_requests();
+    if (fault_observer_) {
+        try {
+            fault_observer_(*last_fault_);
+        } catch (...) {
+        }
+    }
 }
 
 void Sh4Dmac::reset() noexcept {

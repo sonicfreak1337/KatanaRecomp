@@ -35,6 +35,7 @@ enum class DmaFaultReason : std::uint8_t {
     ProhibitedAddressMode,
     MisalignedAddress,
     MemoryAccess,
+    ExternalContractMismatch,
 };
 
 struct DmaFault {
@@ -82,6 +83,15 @@ class Sh4Dmac final {
     [[nodiscard]] std::uint32_t pending_on_demand_requests(std::size_t channel) const;
     [[nodiscard]] std::size_t transfer_unit_size(std::size_t channel) const;
     void set_completion_observer(std::function<void(std::size_t)> observer);
+    void set_fault_observer(std::function<void(const DmaFault&)> observer);
+    [[nodiscard]] bool validate_external_transfer(std::size_t channel,
+                                                  std::uint32_t source,
+                                                  std::size_t bytes,
+                                                  std::size_t unit_size) noexcept;
+    void complete_external_transfer(std::size_t channel, std::size_t bytes) noexcept;
+    void report_external_fault(std::size_t channel,
+                               DmaFaultReason reason,
+                               std::size_t unit_size) noexcept;
     void signal_nmi() noexcept;
     [[nodiscard]] bool interrupt_pending(std::size_t channel) const;
     [[nodiscard]] bool address_error() const noexcept;
@@ -140,6 +150,7 @@ class Sh4Dmac final {
     mutable std::size_t round_robin_cursor_ = 0u;
     DmaPerformanceCounters performance_counters_;
     std::function<void(std::size_t)> completion_observer_;
+    std::function<void(const DmaFault&)> fault_observer_;
 };
 
 [[nodiscard]] std::shared_ptr<Sh4Dmac>

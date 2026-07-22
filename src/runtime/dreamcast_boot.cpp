@@ -328,17 +328,17 @@ initialize_dreamcast_runtime(CpuState& cpu,
                 (control & 0x00003000u) != 0x00001000u ||
                 (control & 0x0000C000u) != 0u ||
                 (control & Sh4Dmac::channel_enable) == 0u ||
-                (dmac->operation() & Sh4Dmac::master_enable) == 0u) {
-                throw std::runtime_error(
-                    "Systembus-Channel-2 braucht aktivierten externen 32-Byte-DMAC mit "
-                    "inkrementierender Quelle und festem TA-Ziel.");
+                (dmac->operation() & Sh4Dmac::master_enable) == 0u ||
+                (length % unit_size) != 0u) {
+                dmac->report_external_fault(
+                    channel, DmaFaultReason::ExternalContractMismatch, unit_size);
+                return;
             }
-            if ((length % unit_size) != 0u)
-                throw std::invalid_argument(
-                    "Systembus-Channel-2-Laenge muss ein Vielfaches von 32 Byte sein.");
             const auto units = length / static_cast<std::uint32_t>(unit_size);
+            if (!dmac->validate_external_transfer(
+                    channel, dmac->source(channel), length, unit_size))
+                return;
             dmac->write_destination(channel, destination);
-            dmac->write_count(channel, units);
             dmac->request_transfer(channel, units);
         });
     state.system_asic = map_dreamcast_system_asic(cpu.memory, *state.interrupt_router);
@@ -357,8 +357,14 @@ initialize_dreamcast_runtime(CpuState& cpu,
         const auto control = channel2_control.lock();
         if (!control) throw std::runtime_error("Systembus-Channel-2-Lebenszyklus fehlt.");
         control->complete_channel2();
-        raise_now(SystemAsicEvent::PvrDma);
+        raise_now(SystemAsicEvent::Channel2Dma);
     });
+    state.dmac->set_fault_observer(
+        [channel2_control, raise_now](const DmaFault& fault) {
+            if (fault.channel != 2u) return;
+            if (const auto control = channel2_control.lock()) control->complete_channel2();
+            raise_now(SystemAsicEvent::PvrIllegalAddress);
+        });
     state.pvr_ta_fifo = std::make_shared<PvrTaFifo>([raise_now](const PvrListType list) {
         switch (list) {
         case PvrListType::Opaque:
@@ -509,13 +515,10 @@ initialize_dreamcast_runtime(CpuState& cpu,
             const std::string_view source_identity) {
             if (bytes.empty() || (destination & 1u) != 0u) return;
             const auto physical = canonical_physical_address(destination);
-            const auto module_address =
-                physical >= 0x0C000000u && physical < 0x0D000000u ? physical | 0x80000000u
-                                                                  : destination;
             ExecutableModule module;
             module.id = "gdrom-load-" + std::to_string((*module_sequence)++);
             module.source_identity = std::string(source_identity);
-            module.guest_start = module_address;
+            module.guest_start = physical;
             module.bytes.assign(bytes.begin(), bytes.end());
             module.kind = ExecutableModuleKind::Overlay;
             module.executable_permission = false;
@@ -539,6 +542,7 @@ initialize_dreamcast_runtime(CpuState& cpu,
             if (!controller) throw std::runtime_error("G1-GD-ROM-Lebenszyklus fehlt.");
             controller->dma_to_memory(address, length, direction);
         });
+    state.holly_dma.pvr->bind_sh4_dmac(state.dmac, 0u);
     const auto g2_dma = std::weak_ptr<DreamcastG2DmaController>(state.holly_dma.g2);
     const auto pvr_dma = std::weak_ptr<DreamcastPvrDmaController>(state.holly_dma.pvr);
     state.system_asic->set_dma_trigger_observers(

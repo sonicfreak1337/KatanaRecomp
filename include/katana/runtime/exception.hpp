@@ -8,7 +8,9 @@
 namespace katana::runtime {
 
 inline constexpr std::uint32_t general_exception_vector = 0x00000100u;
+inline constexpr std::uint32_t tlb_miss_exception_vector = 0x00000400u;
 inline constexpr std::uint32_t interrupt_vector = 0x00000600u;
+inline constexpr std::uint32_t tlb_multiple_hit_reset_vector = 0xA0000000u;
 inline constexpr std::uint32_t sh4_tra_address = 0xFF000020u;
 inline constexpr std::uint32_t sh4_expevt_address = 0xFF000024u;
 inline constexpr std::uint32_t sh4_intevt_address = 0xFF000028u;

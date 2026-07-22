@@ -86,11 +86,14 @@ int main() {
     bus.write_u32(0x005F6890u, 0x7611u);
     require(system_bus->system_reset_requests() == 1u && bus.read_u32(0x005F6800u) == 0u,
             "Systemreset-Schluessel setzt den Steuerblock nicht deterministisch zurueck.");
-    static_assert(static_cast<std::uint16_t>(SystemAsicEvent::PvrDma) == 0x0013u,
-                  "PVR-DMA verwendet nicht das reale System-ASIC-Ereignis 0x0013.");
+    static_assert(static_cast<std::uint16_t>(SystemAsicEvent::PvrDma) == 0x000Bu,
+                  "Separater PVR-DMA verwendet nicht das reale ASIC-Bit 11.");
+    static_assert(static_cast<std::uint16_t>(SystemAsicEvent::Channel2Dma) == 0x0013u,
+                  "SH-4-Channel-2-DMA verwendet nicht das reale ASIC-Bit 19.");
 
     bus.write_u32(0xA05F6930u,
-                  (1u << 3u) | (1u << 12u) | (1u << 14u) | (1u << 15u) | (1u << 19u));
+                  (1u << 3u) | (1u << 11u) | (1u << 12u) | (1u << 14u) | (1u << 15u) |
+                      (1u << 19u));
     bus.write_u32(0xA05F6934u, (1u << 0u) | (1u << 1u));
     bus.write_u32(0xA05F6940u, 0xFFFFFFFFu);
     bus.write_u32(0xA05F6944u, 0xFFFFFFFFu);
@@ -111,14 +114,14 @@ int main() {
                 asic->events()[0].sequence == 1u && asic->events()[1].sequence == 2u &&
                 asic->events().back().guest_cycle == 14u,
             "ASIC-Ereignisse sind nicht gastzeit- und einreihungsdeterministisch.");
-    require(bus.read_u32(0x005F6900u) == 0x0008D008u && bus.read_u32(0x005F6904u) == 0x00000003u &&
+    require(bus.read_u32(0x005F6900u) == 0x0000D808u && bus.read_u32(0x005F6904u) == 0x00000003u &&
                 router.external_pending(2u),
             "PVR/Maple/GD-ROM/AICA-Ereignisse erreichen nicht denselben Status-/Maskenpfad.");
     static_cast<void>(router.synchronize());
     require(controller.pending(
                 static_cast<InterruptSource>(PlatformInterruptSource::ExternalLevel6)),
             "Maskierte System-ASIC-Ereignisse erreichen die Level-6-Leitung nicht.");
-    bus.write_u32(0x805F6900u, 0x0008D008u);
+    bus.write_u32(0x805F6900u, 0x0000D808u);
     bus.write_u32(0x805F6904u, 0x00000003u);
     require(!router.external_pending(2u), "ACK loescht die gemeinsame ASIC-Leitung nicht.");
     require(throws([&] { static_cast<void>(bus.read_u32(0x005F690Cu)); }) &&

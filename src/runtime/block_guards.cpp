@@ -9,6 +9,7 @@ namespace katana::runtime {
 namespace {
 constexpr std::uint32_t fpscr_guard_mask =
     fpscr_rounding_mode_mask | fpscr_pr_mask | fpscr_sz_mask | fpscr_fr_mask;
+constexpr std::uint32_t mmucr_sv_mask = 0x00000100u;
 }
 
 BlockVariantKey block_variant_key(const BlockStateGuard& guard,
@@ -114,8 +115,11 @@ TranslationResult RuntimeAddressSpace::translate(const std::uint32_t address,
     const auto matches = [&](const auto& value) {
         const auto start = static_cast<std::uint64_t>(value.virtual_page);
         const auto end = start + value.page_size;
+        const bool asid_match = value.shared ||
+                                (privileged && (mmucr_ & mmucr_sv_mask) != 0u) ||
+                                value.asid == asid_;
         return value.valid && address >= start && static_cast<std::uint64_t>(address) < end &&
-               (value.shared || value.asid == asid_);
+               asid_match;
     };
     const auto found = std::find_if(mappings_.begin(), mappings_.end(), matches);
     if (found == mappings_.end())

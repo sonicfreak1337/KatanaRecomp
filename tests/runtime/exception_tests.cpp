@@ -70,6 +70,18 @@ int main() {
                        general_exception_vector,
                        false,
                        false},
+        MetadataVector{ExceptionCause::TlbMissRead,
+                       ExceptionCause::TlbMissRead,
+                       event_tlb_miss_read,
+                       tlb_miss_exception_vector,
+                       false,
+                       false},
+        MetadataVector{ExceptionCause::TlbMissWrite,
+                       ExceptionCause::TlbMissWrite,
+                       event_tlb_miss_write,
+                       tlb_miss_exception_vector,
+                       false,
+                       false},
         MetadataVector{ExceptionCause::BusErrorRead,
                        ExceptionCause::AddressErrorRead,
                        event_address_error_read,
@@ -154,6 +166,34 @@ int main() {
             "Adressfehler im Delay Slot verliert Ursache, TEA oder Owner-PC.");
 
     return_from_exception(cpu);
+    cpu.pteh = 0x0000005Au;
+    cpu.vbr = 0x8C000000u;
+    MemoryAccessError tlb_miss(MemoryAccessErrorReason::TlbMiss,
+                               MemoryAccessOperation::Read,
+                               0x12345678u,
+                               MemoryAccessWidth::Word);
+    enter_memory_exception(cpu, tlb_miss, 0x8C060000u);
+    require(cpu.pc == 0x8C000400u && cpu.pteh == 0x1234545Au &&
+                cpu.expevt == event_tlb_miss_read && cpu.tea == 0x12345678u,
+            "TLB-Miss verliert VBR+0x400 oder aktualisiert PTEH.VPN nicht.");
+
+    return_from_exception(cpu);
+    cpu.pteh = 0x000000A5u;
+    cpu.vbr = 0x8C000000u;
+    cpu.write_sr(sr_fd_mask | sr_t_mask);
+    MemoryAccessError multiple_hit(MemoryAccessErrorReason::TlbMultipleHit,
+                                   MemoryAccessOperation::Read,
+                                   0x87654321u,
+                                   MemoryAccessWidth::Word);
+    enter_memory_exception(cpu, multiple_hit, 0x8C070000u);
+    require(cpu.pc == tlb_multiple_hit_reset_vector && cpu.vbr == 0u &&
+                cpu.pteh == 0x876540A5u && cpu.tea == 0x87654321u &&
+                cpu.expevt == event_tlb_multiple_hit && cpu.privileged_mode() &&
+                cpu.register_bank_selected() && cpu.interrupts_blocked() &&
+                cpu.interrupt_mask() == 15u && !cpu.fpu_disabled(),
+            "TLB-Multiple-Hit fuehrt keinen dokumentierten SH-4-Reset aus.");
+
+    reset_cpu(cpu);
     MemoryAccessError unmapped(MemoryAccessErrorReason::Unmapped,
                                MemoryAccessOperation::Write,
                                0xDEADBEEFu,

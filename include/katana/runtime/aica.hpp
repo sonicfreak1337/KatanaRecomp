@@ -88,6 +88,7 @@ class AicaRtc final {
     std::uint64_t base_cycle_ = 0u;
     std::uint32_t initial_seconds_ = aica_rtc_default_seconds;
     std::uint32_t base_seconds_ = aica_rtc_default_seconds;
+    std::uint32_t write_latch_ = aica_rtc_default_seconds;
     bool write_enabled_ = false;
 };
 
@@ -201,6 +202,7 @@ class AicaExecutionController final {
     [[nodiscard]] AicaInterruptState& interrupts() noexcept;
     [[nodiscard]] const AicaInterruptState& interrupts() const noexcept;
     void set_dma_request_observer(std::function<void()> observer);
+    void request_dma();
     void tick(std::uint64_t audio_cycles);
 
   private:

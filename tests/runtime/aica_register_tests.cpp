@@ -60,8 +60,8 @@ int main() {
     bus.write_u32(0x00710008u, 1u);
     require(rtc->write_enabled(), "AICA-RTC-Schreibfreigabe wurde nicht gesetzt.");
     bus.write_u16(0x20710004u, 0x5678u);
-    require(rtc->write_enabled() && (rtc->counter() & 0xFFFFu) == 0x5678u,
-            "AICA-RTC-Low-Schreiben verliert Wert oder Freigabe.");
+    require(rtc->write_enabled() && rtc->counter() == initial + 2u,
+            "AICA-RTC-Low-Latch publiziert einen halbfertigen Zaehlerstand.");
     bus.write_u32(0x40710000u, 0x1234u);
     require(!rtc->write_enabled() && rtc->counter() == 0x12345678u,
             "AICA-RTC-High-Schreiben setzt Zaehler oder Schreibschutz falsch.");

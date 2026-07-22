@@ -69,13 +69,22 @@ bool ExecutableModule::contains(const std::uint32_t address,
     if (!active || width == 0u) return false;
     const auto begin = static_cast<std::uint64_t>(address);
     const auto end = begin + width;
-    return begin >= guest_start && end >= begin && end <= end_address();
+    if (begin >= guest_start && end >= begin && end <= end_address()) return true;
+    const auto canonical_start = canonical_physical_address(guest_start);
+    const auto canonical_begin = canonical_physical_address(address);
+    const auto canonical_end = static_cast<std::uint64_t>(canonical_begin) + width;
+    return canonical_begin >= canonical_start && canonical_end >= canonical_begin &&
+           canonical_end <= static_cast<std::uint64_t>(canonical_start) + bytes.size();
 }
 
 bool ExecutableModule::materializable(const std::uint32_t address,
                                       const std::size_t width) const noexcept {
     if (!executable_permission || !contains(address, width)) return false;
-    const auto begin = static_cast<std::uint64_t>(address - guest_start);
+    const auto begin = address >= guest_start &&
+                               static_cast<std::uint64_t>(address) < end_address()
+                           ? static_cast<std::uint64_t>(address - guest_start)
+                           : static_cast<std::uint64_t>(canonical_physical_address(address) -
+                                                        canonical_physical_address(guest_start));
     const auto end = begin + width;
     for (const auto& range : range_roles) {
         if (range.role == ExecutableStorageRole::RuntimeMaterializable || range.size == 0u)
@@ -208,7 +217,11 @@ bool ExecutableModuleCatalog::authorize_control_transfer(const std::uint32_t add
     if (found == modules_.end()) return false;
     if (found->executable_permission && found->materializable(address, 2u)) return true;
     if (!found->active || !found->control_transfer_promotion_allowed) return false;
-    const auto begin = address - found->guest_start;
+    const auto begin = address >= found->guest_start &&
+                               static_cast<std::uint64_t>(address) < found->end_address()
+                           ? address - found->guest_start
+                           : canonical_physical_address(address) -
+                                 canonical_physical_address(found->guest_start);
     const auto end = static_cast<std::uint32_t>(std::min<std::uint64_t>(
         found->bytes.size(), static_cast<std::uint64_t>(begin) + maximum_bytes));
     std::vector<std::pair<std::uint32_t, std::uint32_t>> executable{{begin, end}};
@@ -301,9 +314,14 @@ bool ExecutableModuleCatalog::promote_runtime_write(const Memory& memory,
     };
     if (!was_written(address) || !was_written(address + 1u)) return false;
 
-    std::uint32_t snapshot_size = maximum_bytes;
-    while (snapshot_size >= 2u && !memory.contains(address, snapshot_size))
-        --snapshot_size;
+    std::uint32_t snapshot_size = 0u;
+    while (snapshot_size < maximum_bytes && snapshot_size <=
+                                                    std::numeric_limits<std::uint32_t>::max() -
+                                                        address &&
+           memory.contains(address + snapshot_size, 1u) &&
+           was_written(address + snapshot_size))
+        ++snapshot_size;
+    snapshot_size &= ~1u;
     if (snapshot_size < 2u) return false;
 
     ExecutableModule module;
@@ -324,11 +342,23 @@ bool ExecutableModuleCatalog::promote_runtime_write(const Memory& memory,
 bool ExecutableModuleCatalog::validate_bytes(const Memory& memory,
                                              const std::uint32_t address,
                                              const std::size_t width) const {
-    const auto* module = resolve(address, width);
-    if (module == nullptr || !memory.contains(address, width)) return false;
-    const auto offset = static_cast<std::size_t>(address - module->guest_start);
+    return validate_bytes_at(memory, address, address, width);
+}
+
+bool ExecutableModuleCatalog::validate_bytes_at(const Memory& memory,
+                                                const std::uint32_t module_address,
+                                                const std::uint32_t memory_address,
+                                                const std::size_t width) const {
+    const auto* module = resolve(module_address, width);
+    if (module == nullptr || !memory.contains(memory_address, width)) return false;
+    const auto offset = module_address >= module->guest_start &&
+                                static_cast<std::uint64_t>(module_address) < module->end_address()
+                            ? static_cast<std::size_t>(module_address - module->guest_start)
+                            : static_cast<std::size_t>(
+                                  canonical_physical_address(module_address) -
+                                  canonical_physical_address(module->guest_start));
     for (std::size_t current = 0u; current < width; ++current)
-        if (memory.read_u8(address + static_cast<std::uint32_t>(current)) !=
+        if (memory.read_u8(memory_address + static_cast<std::uint32_t>(current)) !=
             relocated_module_byte(*module, offset + current))
             return false;
     return true;
@@ -384,6 +414,7 @@ void DemandBlockMaterializer::record_success(const std::uint32_t target) noexcep
 std::optional<RuntimeBlockHandle>
 DemandBlockMaterializer::try_materialize(CpuState& cpu,
                                          const std::uint32_t target,
+                                         const std::uint32_t physical_origin,
                                          const BlockVariantKey& variant,
                                          const std::uint32_t callsite) {
     increment(metrics_.requests);
@@ -424,32 +455,33 @@ DemandBlockMaterializer::try_materialize(CpuState& cpu,
         fail(MaterializationFailure::RepeatedMissLimit, target);
         return std::nullopt;
     }
-    if (!cpu.memory.contains(target, 2u)) {
+    const auto physical_target = canonical_physical_address(physical_origin);
+    if (!cpu.memory.contains(physical_target, 2u)) {
         fail(MaterializationFailure::Uncommitted, target);
         return std::nullopt;
     }
-    auto* module = modules_.resolve(target, 2u);
+    auto* module = modules_.resolve(physical_target, 2u);
     if (module == nullptr) {
-        if (!modules_.promote_runtime_write(cpu.memory, target)) {
+        if (!modules_.promote_runtime_write(cpu.memory, physical_target)) {
             fail(MaterializationFailure::UnknownSource, target);
             return std::nullopt;
         }
-        module = modules_.resolve(target, 2u);
+        module = modules_.resolve(physical_target, 2u);
     }
     if (!module->executable_permission) {
         if (!module->control_transfer_promotion_allowed) {
             fail(MaterializationFailure::PermissionDenied, target);
             return std::nullopt;
         }
-        if (!modules_.authorize_control_transfer(target)) {
+        if (!modules_.authorize_control_transfer(physical_target)) {
             fail(MaterializationFailure::ProvenNonCode, target);
             return std::nullopt;
         }
-    } else if (!module->materializable(target, 2u)) {
+    } else if (!module->materializable(physical_target, 2u)) {
         fail(MaterializationFailure::ProvenNonCode, target);
         return std::nullopt;
     }
-    module = modules_.resolve(target, 2u);
+    module = modules_.resolve(physical_target, 2u);
     if (metrics_.materializations >= policy_.max_blocks ||
         metrics_.materializations >= policy_.max_materializations_per_run ||
         metrics_.materialized_bytes >= policy_.max_bytes) {
@@ -460,7 +492,12 @@ DemandBlockMaterializer::try_materialize(CpuState& cpu,
     const auto source_identity = module->source_identity;
     const auto module_generation = module->generation;
     const auto relocation_generation = module->relocation_generation;
-    const auto offset = static_cast<std::size_t>(target - module->guest_start);
+    const auto offset = physical_target >= module->guest_start &&
+                                static_cast<std::uint64_t>(physical_target) < module->end_address()
+                            ? static_cast<std::size_t>(physical_target - module->guest_start)
+                            : static_cast<std::size_t>(
+                                  canonical_physical_address(physical_target) -
+                                  canonical_physical_address(module->guest_start));
     const auto snapshot_size = std::min<std::size_t>(
         module->bytes.size() - offset,
         static_cast<std::size_t>(policy_.max_bytes - metrics_.materialized_bytes));
@@ -470,8 +507,10 @@ DemandBlockMaterializer::try_materialize(CpuState& cpu,
     }
     std::vector<std::uint8_t> snapshot(snapshot_size);
     for (std::size_t current = 0u; current < snapshot.size(); ++current)
-        snapshot[current] = cpu.memory.read_u8(target + static_cast<std::uint32_t>(current));
-    if (!modules_.validate_bytes(cpu.memory, target, snapshot.size())) {
+        snapshot[current] =
+            cpu.memory.read_u8(physical_target + static_cast<std::uint32_t>(current));
+    if (!modules_.validate_bytes_at(
+            cpu.memory, physical_target, physical_target, snapshot.size())) {
         fail(MaterializationFailure::ByteIdentityMismatch, target);
         return std::nullopt;
     }
@@ -526,30 +565,33 @@ DemandBlockMaterializer::try_materialize(CpuState& cpu,
         fail(MaterializationFailure::RelocationMismatch, target);
         return std::nullopt;
     }
-    if (!current_module->materializable(block.virtual_start, block.size)) {
+    if (!current_module->materializable(physical_target, block.size)) {
         fail(MaterializationFailure::ProvenNonCode, target);
         return std::nullopt;
     }
     for (std::size_t current = 0u; current < block.size; ++current) {
-        if (cpu.memory.read_u8(target + static_cast<std::uint32_t>(current)) != snapshot[current]) {
+        if (cpu.memory.read_u8(physical_target + static_cast<std::uint32_t>(current)) !=
+            snapshot[current]) {
             fail(MaterializationFailure::ByteIdentityMismatch, target);
             return std::nullopt;
         }
     }
-    if (!modules_.validate_bytes(cpu.memory, block.virtual_start, block.size)) {
+    if (!modules_.validate_bytes_at(
+            cpu.memory, physical_target, physical_target, block.size)) {
         fail(MaterializationFailure::ByteIdentityMismatch, target);
         return std::nullopt;
     }
-    block.physical_origin = canonical_physical_address(block.virtual_start);
+    block.physical_origin = physical_target;
     block.provenance = "runtime-module:" + module_id + ":g" + std::to_string(module_generation) +
                        ":r" + std::to_string(relocation_generation) + ":" + block.provenance;
     const auto identity = stable_runtime_block_identity(block);
-    const auto physical_origin = block.physical_origin;
+    const auto registered_physical_origin = block.physical_origin;
     const auto block_size = block.size;
     const auto provenance = block.provenance;
     const auto handle = blocks_.register_runtime(std::move(block));
     origins_.push_back(
         {target,
+         physical_target,
          block_size,
          callsite,
          module_id,
@@ -567,7 +609,7 @@ DemandBlockMaterializer::try_materialize(CpuState& cpu,
     try {
         if (tracker_ != nullptr) {
             static_cast<void>(tracker_->register_block({identity,
-                                                        physical_origin,
+                                                        registered_physical_origin,
                                                         block_size,
                                                         provenance,
                                                         {},
@@ -631,21 +673,24 @@ bool DemandBlockMaterializer::validate_for_dispatch(const CpuState& cpu,
         fail(MaterializationFailure::RelocationMismatch, target);
         return false;
     }
-    if (!module->materializable(origin->address, origin->size) ||
-        !cpu.memory.contains(origin->address, origin->size)) {
+    if (!module->materializable(origin->physical_address, origin->size) ||
+        !cpu.memory.contains(origin->physical_address, origin->size)) {
         increment(metrics_.dispatch_validation_failures);
         fail(MaterializationFailure::ProvenNonCode, target);
         return false;
     }
     for (std::size_t current = 0u; current < origin->snapshot.size(); ++current) {
-        if (cpu.memory.read_u8(origin->address + static_cast<std::uint32_t>(current)) !=
+        if (cpu.memory.read_u8(origin->physical_address + static_cast<std::uint32_t>(current)) !=
             origin->snapshot[current]) {
             increment(metrics_.dispatch_validation_failures);
             fail(MaterializationFailure::ByteIdentityMismatch, target);
             return false;
         }
     }
-    if (!modules_.validate_bytes(cpu.memory, origin->address, origin->size)) {
+    if (!modules_.validate_bytes_at(cpu.memory,
+                                    origin->physical_address,
+                                    origin->physical_address,
+                                    origin->size)) {
         increment(metrics_.dispatch_validation_failures);
         fail(MaterializationFailure::ByteIdentityMismatch, target);
         return false;
@@ -656,13 +701,15 @@ bool DemandBlockMaterializer::validate_for_dispatch(const CpuState& cpu,
 void DemandBlockMaterializer::record_invalidation(const std::uint32_t address,
                                                   const std::size_t size,
                                                   IndirectDispatchMetrics& dispatch_metrics) {
-    const auto end = static_cast<std::uint64_t>(address) + size;
+    const auto physical = canonical_physical_address(address);
+    const auto end = static_cast<std::uint64_t>(physical) + size;
     origins_.erase(std::remove_if(origins_.begin(),
                                   origins_.end(),
                                   [&](const auto& origin) {
                                       const auto origin_end =
-                                          static_cast<std::uint64_t>(origin.address) + origin.size;
-                                      if (address >= origin_end || origin.address >= end)
+                                          static_cast<std::uint64_t>(origin.physical_address) +
+                                          origin.size;
+                                      if (physical >= origin_end || origin.physical_address >= end)
                                           return false;
                                       dispatch_metrics.record_invalidation(origin.callsite);
                                       return true;

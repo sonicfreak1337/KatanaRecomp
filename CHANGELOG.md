@@ -4,6 +4,25 @@
 
 ### Geaendert
 
+- AICA-RTC-Schreibzugriffe verwenden jetzt den Hardware-Latchvertrag: Low
+  aktualisiert nur die vorbereitete untere Haelfte, High veroeffentlicht den
+  vollstaendigen 32-Bit-Wert atomar und beendet die Schreibfreigabe. Die
+  SH-4-MMU setzt bei Miss/Protection/Initial-Write `PTEH.VPN`, verwendet fuer
+  TLB-Misses `VBR+0x400`, bildet den Multiple-Hit-Reset bei `0xA0000000` ab
+  und beruecksichtigt `MMUCR.SV` bei privilegierten ASID-Vergleichen.
+- Statische AOT-Bloecke koennen fuer eine neue virtuelle MMU-Adresse nur ueber
+  dieselbe nachgewiesene physische Herkunft variantiert werden. Demand-Code
+  liest und validiert dabei die uebersetzten physischen Bytes; Runtime-Write-
+  Promotion umfasst ausschliesslich lueckenlos tatsaechlich geschriebene
+  Instruktionsbytes. Ein erster Gastframe wird nun unabhaengig von Hostvideo
+  nur nach echten, den PVR-Zielpuffer veraendernden Gastpixelwrites bewiesen.
+- G1-, G2- und PVR-DMA-Konfigurations- oder Transferfehler verlassen den
+  Scheduler nicht mehr als Hostexception, sondern setzen zustandsfuehrende
+  DMA-Faults und die dokumentierten Holly-ASIC-Fehlerbits. Separater PVR-DMA
+  (ASIC-Bit 11) und SH-4-Channel-2-DMA (Bit 19) sind getrennt. PVR-DMA prueft
+  Kanal 0 des SH-4-DMAC einschliesslich 32-Byte-Modus, Requestvertrag und
+  exakter Restlaenge und committed SAR/TCR/TE gemeinsam mit dem Transfer.
+  Normale AICA-Audioticks erzeugen keine erfundenen G2-DMA-Requests mehr.
 - Die drei externen Dreamcast-System-ASIC-Interruptpfade entsprechen jetzt
   dem dokumentierten Levelvertrag. Maskenfenster `0x005F6910`, `0x005F6920`
   und `0x005F6930` routen auf SH-4-Level 2, 4 und 6 mit `INTEVT` `0x3A0`,

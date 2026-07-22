@@ -78,6 +78,16 @@ int main() {
                 "Statische und dynamische Eintraege teilen nicht dieselbe Tabelle.");
         require(resolved(table, table.lookup(0x8C001000u, base)).function == block_a,
                 "Deterministischer Lookup schlug fehl.");
+        auto mmu_alias_variant = base;
+        ++mmu_alias_variant.mmu_generation;
+        const auto mmu_alias = table.register_static_variant(
+            0x00123000u, 0x0C001000u, base, mmu_alias_variant);
+        require(mmu_alias.has_value() &&
+                    resolved(table, mmu_alias).virtual_start == 0x00123000u &&
+                    resolved(table, mmu_alias).physical_origin == 0x0C001000u &&
+                    resolved(table, mmu_alias).variant == mmu_alias_variant &&
+                    resolved(table, mmu_alias).function == block_a && table.size() == 3u,
+                "AOT-MMU-Variante verliert neue virtuelle Adresse oder physische Herkunft.");
         require(resolved(table, table.lookup(0xAC001000u, base)).runtime_registered,
                 "Laufzeitprovenienz ging verloren.");
         const auto direct_handle = table.lookup(0x8C001000u, base);
@@ -88,9 +98,14 @@ int main() {
                 "Direkter Dispatchindex und deaktivierbarer Referenzbaum divergieren.");
         table.set_lookup_mode(RuntimeBlockLookupMode::Direct);
         const auto aliases = table.aliases(0xAC001000u);
-        require(aliases.size() == 2u && table.resolve(aliases[0])->get().virtual_start !=
-                                            table.resolve(aliases[1])->get().virtual_start,
-                "P1-/P2-Aliase bewahren ihre virtuellen Diagnosen nicht.");
+        require(aliases.size() == 3u &&
+                    table.resolve(aliases[0])->get().virtual_start !=
+                        table.resolve(aliases[1])->get().virtual_start &&
+                    table.resolve(aliases[0])->get().virtual_start !=
+                        table.resolve(aliases[2])->get().virtual_start &&
+                    table.resolve(aliases[1])->get().virtual_start !=
+                        table.resolve(aliases[2])->get().virtual_start,
+                "P1-/P2-/MMU-Aliase bewahren ihre virtuellen Diagnosen nicht.");
 
         RuntimeBlock same_identity = resolved(table, table.lookup(0x8C001000u, base));
         same_identity.function = block_b;
@@ -130,7 +145,7 @@ int main() {
         const auto dynamic_block = resolved(table, dynamic_handle);
         const auto identity = stable_runtime_block_identity(dynamic_block);
         require(table.erase_identity(identity) && !table.lookup(0xAC001000u, base).has_value() &&
-                    table.size() == 2u && !table.erase_identity(identity),
+                    table.size() == 3u && !table.erase_identity(identity),
                 "Gezielte Blockinvalidierung entfernt nicht genau die stabile Identitaet.");
         require(!table.resolve(*dynamic_handle), "Erase liess ein altes Handle aktiv.");
         const auto reactivated = table.register_runtime(dynamic_block);

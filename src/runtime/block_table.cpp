@@ -79,13 +79,16 @@ std::optional<RuntimeBlockHandle> RuntimeBlockTable::register_static_variant(
     const BlockVariantKey& source_variant,
     const BlockVariantKey& target_variant) {
     if (const auto existing = lookup(virtual_address, target_variant)) return existing;
-    const auto source = lookup(virtual_address, source_variant);
+    auto source = lookup(virtual_address, source_variant);
+    if (!source) source = lookup_physical(physical_address, source_variant);
     if (!source) return std::nullopt;
     const auto resolved = resolve(*source);
     if (!resolved || resolved->get().runtime_registered ||
         resolved->get().physical_origin != canonical_physical_address(physical_address))
         return std::nullopt;
     auto variant = resolved->get();
+    variant.virtual_start = virtual_address;
+    variant.physical_origin = canonical_physical_address(physical_address);
     variant.variant = target_variant;
     variant.provenance += "-mmu-variant";
     return insert(std::move(variant), false);

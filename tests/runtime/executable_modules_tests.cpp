@@ -1,4 +1,5 @@
 #include "katana/runtime/executable_modules.hpp"
+#include "katana/runtime/block_guards.hpp"
 #include "katana/runtime/indirect_dispatch.hpp"
 
 #include <cstdlib>
@@ -182,7 +183,8 @@ void runtime_write_provenance_regression() {
     cpu.memory.write_u16(request.target + 2u, 0x000Bu);
     const auto first = dispatch_indirect(cpu, blocks, request);
     require(first.block && callback_calls == 1u && modules.resolve(request.target) != nullptr &&
-                modules.resolve(request.target)->materializable(request.target, 2u),
+                modules.resolve(request.target)->materializable(request.target, 2u) &&
+                modules.resolve(request.target + 4u) == nullptr,
             "Tatsaechlich geschriebener Runtimecode wurde nicht bytegenau autorisiert.");
 
     const auto first_module_id = modules.resolve(request.target)->id;
@@ -239,6 +241,7 @@ void runtime_write_provenance_regression() {
                                                        1u};
                                                });
     alias_cpu.memory.write_u16(0x0C000100u, 0x0009u);
+    alias_cpu.memory.write_u16(0x0C000102u, 0x000Bu);
     request.target = 0x8C000100u;
     request.materializer = &alias_materializer;
     const auto alias_dispatch = dispatch_indirect(alias_cpu, alias_blocks, request);
@@ -380,6 +383,67 @@ void interpreter_interior_entry_regression() {
             "Nativer Runtimeblock akzeptiert unbewiesenen Inneneinstieg.");
 }
 
+void mmu_materialization_origin_regression() {
+    using namespace katana::runtime;
+    CpuState cpu;
+    const auto ram = std::make_shared<LinearMemoryDevice>(0x1000u);
+    cpu.memory.map_region("mmu-materialization-ram", 0x0C000000u, ram);
+    cpu.memory.write_u16(0x0C000100u, 0x0009u, CodeWriteSource::Copy);
+    cpu.address_space = std::make_shared<RuntimeAddressSpace>();
+    cpu.address_space->set_mode(AddressTranslationMode::Mmu);
+    cpu.address_space->write_mmucr(1u);
+    cpu.address_space->ldtlb(
+        {0x00002000u, 0x0C000000u, 4096u, 0u, 0u, true, true, true, true, true, true, false});
+
+    ExecutableModule module;
+    module.id = "mmu-physical-module";
+    module.source_identity = "free-mmu-materialization-fixture-v1";
+    module.guest_start = 0x0C000100u;
+    module.bytes = {0x09u, 0x00u};
+    ExecutableModuleCatalog modules;
+    modules.publish(module);
+    RuntimeBlockTable blocks;
+    DemandBlockMaterializer materializer(
+        modules,
+        blocks,
+        nullptr,
+        {true, 2u, 16u},
+        [](const std::uint32_t target,
+           const std::span<const std::uint8_t> snapshot,
+           const BlockVariantKey& requested_variant) {
+            return MaterializedBlockCandidate{{target,
+                                               target,
+                                               2u,
+                                               BlockEndKind::Return,
+                                               requested_variant,
+                                               block,
+                                               "synthetic-mmu-decoder",
+                                               true},
+                                              snapshot.size() == 2u && snapshot[0] == 0x09u &&
+                                                  snapshot[1] == 0x00u,
+                                              false,
+                                              true,
+                                              true,
+                                              true,
+                                              1u,
+                                              1u,
+                                              1u,
+                                              1u,
+                                              1u};
+        });
+    IndirectDispatchRequest request;
+    request.kind = IndirectDispatchKind::TailJump;
+    request.callsite = 0x80u;
+    request.target = 0x00002100u;
+    request.materializer = &materializer;
+    const auto result = dispatch_indirect(cpu, blocks, request);
+    const auto resolved_block = blocks.resolve(result.block);
+    require(resolved_block.has_value() &&
+                resolved_block->get().virtual_start == 0x00002100u &&
+                resolved_block->get().physical_origin == 0x0C000100u,
+            "MMU-Materialisierung liest virtuelle statt physischer Bytes oder verliert die VA.");
+}
+
 } // namespace
 
 int main() {
@@ -482,6 +546,7 @@ int main() {
     relocated_module_regression();
     runtime_write_provenance_regression();
     interpreter_interior_entry_regression();
+    mmu_materialization_origin_regression();
 
     std::cout << "KR-4704 executable module and materialization regression passed.\n";
     return EXIT_SUCCESS;

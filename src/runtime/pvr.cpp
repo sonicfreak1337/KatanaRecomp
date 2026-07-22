@@ -501,45 +501,45 @@ std::size_t render_bytes_per_pixel(const std::uint32_t pack_mode) {
     }
 }
 
-void write_render_pixel(LinearMemoryDevice& vram,
+bool write_render_pixel(LinearMemoryDevice& vram,
                         const std::uint32_t offset,
                         const std::uint32_t pack_mode,
                         const std::uint8_t alpha,
                         const std::uint8_t red,
                         const std::uint8_t green,
                         const std::uint8_t blue) {
+    const auto write16 = [&](const std::uint16_t value) {
+        const bool changed = vram.read_u16(offset) != value;
+        vram.write_u16(offset, value);
+        return changed;
+    };
+    const auto write32 = [&](const std::uint32_t value) {
+        const bool changed = vram.read_u32(offset) != value;
+        vram.write_u32(offset, value);
+        return changed;
+    };
     switch (pack_mode) {
     case 0u:
-        vram.write_u16(offset,
-                       static_cast<std::uint16_t>(((red >> 3u) << 10u) |
+        return write16(static_cast<std::uint16_t>(((red >> 3u) << 10u) |
                                                   ((green >> 3u) << 5u) | (blue >> 3u)));
-        return;
     case 1u:
-        vram.write_u16(offset,
-                       static_cast<std::uint16_t>(((red >> 3u) << 11u) |
+        return write16(static_cast<std::uint16_t>(((red >> 3u) << 11u) |
                                                   ((green >> 2u) << 5u) | (blue >> 3u)));
-        return;
     case 2u:
-        vram.write_u16(offset,
-                       static_cast<std::uint16_t>(((alpha >> 4u) << 12u) |
+        return write16(static_cast<std::uint16_t>(((alpha >> 4u) << 12u) |
                                                   ((red >> 4u) << 8u) |
                                                   ((green >> 4u) << 4u) | (blue >> 4u)));
-        return;
     case 3u:
-        vram.write_u16(offset,
-                       static_cast<std::uint16_t>(((alpha >= 0x80u) ? 0x8000u : 0u) |
+        return write16(static_cast<std::uint16_t>(((alpha >= 0x80u) ? 0x8000u : 0u) |
                                                   ((red >> 3u) << 10u) |
                                                   ((green >> 3u) << 5u) | (blue >> 3u)));
-        return;
     case 5u:
-        vram.write_u32(offset, static_cast<std::uint32_t>(red) << 16u |
-                                   static_cast<std::uint32_t>(green) << 8u | blue);
-        return;
+        return write32(static_cast<std::uint32_t>(red) << 16u |
+                       static_cast<std::uint32_t>(green) << 8u | blue);
     case 6u:
-        vram.write_u32(offset, static_cast<std::uint32_t>(alpha) << 24u |
-                                   static_cast<std::uint32_t>(red) << 16u |
-                                   static_cast<std::uint32_t>(green) << 8u | blue);
-        return;
+        return write32(static_cast<std::uint32_t>(alpha) << 24u |
+                       static_cast<std::uint32_t>(red) << 16u |
+                       static_cast<std::uint32_t>(green) << 8u | blue);
     default:
         throw std::invalid_argument("PVR-Framebuffer-Packmodus 4 oder 7 ist reserviert.");
     }
@@ -1961,6 +1961,16 @@ std::uint64_t PvrYuvConverterMemoryDevice::converted_macroblocks() const noexcep
 void PvrSoftwareRenderer::render(const PvrTaFrame& frame,
                                  const PvrRegisterFile& registers,
                                  LinearMemoryDevice& vram) {
+    std::uint64_t frame_pixel_writes = 0u;
+    std::uint64_t frame_changed_pixels = 0u;
+    const auto write_pixel = [&](const std::uint32_t offset,
+                                 const std::uint32_t pack_mode,
+                                 const Rgba8 color) {
+        ++frame_pixel_writes;
+        if (write_render_pixel(
+                vram, offset, pack_mode, color.a, color.r, color.g, color.b))
+            ++frame_changed_pixels;
+    };
     const auto x_clip = registers.read(pvr_register::FramebufferXClip);
     const auto y_clip = registers.read(pvr_register::FramebufferYClip);
     const auto minimum_clip_x = x_clip & 0x7FFu;
@@ -2048,7 +2058,7 @@ void PvrSoftwareRenderer::render(const PvrTaFrame& frame,
                 const auto offset = static_cast<std::uint32_t>(
                     base + static_cast<std::uint64_t>(y) * stride +
                     static_cast<std::uint64_t>(x) * pixel_bytes);
-                write_render_pixel(vram, offset, pack_mode, color.a, color.r, color.g, color.b);
+                write_pixel(offset, pack_mode, color);
                 depth[static_cast<std::size_t>(y) * width + x] =
                     w0 * a.z + w1 * b.z + w2 * c.z;
             }
@@ -2267,13 +2277,7 @@ void PvrSoftwareRenderer::render(const PvrTaFrame& frame,
                     if (primitive.material.blend_destination_accumulation) {
                         secondary_accumulation[pixel_index] = source;
                     } else {
-                        write_render_pixel(vram,
-                                           offset,
-                                           pack_mode,
-                                           source.a,
-                                           source.r,
-                                           source.g,
-                                           source.b);
+                        write_pixel(offset, pack_mode, source);
                     }
                     shadow_eligible[pixel_index] = primitive.material.shadow_enabled ? 1u : 0u;
                     volume_material_eligible[pixel_index] =
@@ -2401,8 +2405,7 @@ void PvrSoftwareRenderer::render(const PvrTaFrame& frame,
                 color.r = static_cast<std::uint8_t>((color.r * scale + 127u) / 256u);
                 color.g = static_cast<std::uint8_t>((color.g * scale + 127u) / 256u);
                 color.b = static_cast<std::uint8_t>((color.b * scale + 127u) / 256u);
-                write_render_pixel(
-                    vram, offset, pack_mode, color.a, color.r, color.g, color.b);
+                write_pixel(offset, pack_mode, color);
                 ++metrics_.pixels;
             }
         }
@@ -2459,6 +2462,12 @@ void PvrSoftwareRenderer::render(const PvrTaFrame& frame,
     const auto translucent_volume_area =
         apply_modifier_volumes(PvrListType::TranslucentModifier);
     render_volume_materials(PvrListType::TranslucentModifier, translucent_volume_area);
+    metrics_.pixel_writes += frame_pixel_writes;
+    metrics_.changed_pixels += frame_changed_pixels;
+    metrics_.last_frame_pixel_writes = frame_pixel_writes;
+    metrics_.last_frame_changed_pixels = frame_changed_pixels;
+    if (frame_pixel_writes != 0u && frame_changed_pixels != 0u)
+        ++metrics_.proven_guest_frames;
     ++metrics_.frames;
 }
 

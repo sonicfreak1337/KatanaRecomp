@@ -239,10 +239,13 @@ int run_test(const int argc, char* argv[]) {
     const auto pvr_dma_events_before_channel2 = std::count_if(
         runtime_state.system_asic->events().begin(),
         runtime_state.system_asic->events().end(),
-        [](const auto& event) { return event.event == katana::runtime::SystemAsicEvent::PvrDma; });
+        [](const auto& event) {
+            return event.event == katana::runtime::SystemAsicEvent::Channel2Dma;
+        });
     for (std::uint32_t offset = 0u; offset < 32u; offset += 4u)
         runtime_cpu.memory.write_u32(0x8C000800u + offset, 0u);
     runtime_state.dmac->write_source(2u, 0x8C000800u);
+    runtime_state.dmac->write_count(2u, 1u);
     runtime_state.dmac->write_control(2u, 0x00001841u);
     runtime_state.dmac->write_operation(katana::runtime::Sh4Dmac::master_enable);
     runtime_state.system_bus_control->write(
@@ -255,7 +258,9 @@ int run_test(const int argc, char* argv[]) {
     const auto pvr_dma_events_after_channel2 = std::count_if(
         runtime_state.system_asic->events().begin(),
         runtime_state.system_asic->events().end(),
-        [](const auto& event) { return event.event == katana::runtime::SystemAsicEvent::PvrDma; });
+        [](const auto& event) {
+            return event.event == katana::runtime::SystemAsicEvent::Channel2Dma;
+        });
     require(runtime_state.pvr_ta_fifo->metrics().packets ==
                     ta_packets_before_channel2 + 1u &&
                 runtime_state.dmac->completed_transfer_units(2u) == 1u &&

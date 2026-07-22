@@ -86,6 +86,10 @@ int main() {
     software.render({}, registers, vram);
     require(vram.read_u32(0x1000u) == 0x80402010u,
             "PVR-Hintergrundebene vertauscht ARGB-Kanaele im Renderziel.");
+    require(software.metrics().proven_guest_frames == 1u &&
+                software.metrics().last_frame_pixel_writes != 0u &&
+                software.metrics().last_frame_changed_pixels != 0u,
+            "Gastframe-Nachweis ist nicht an echte, veraendernde VRAM-Pixelwrites gebunden.");
     registers.write(pvr_register::FramebufferWriteControl, 4u);
     require(throws<std::invalid_argument>([&] { software.render({}, registers, vram); }),
             "Reservierter PVR-Renderpackmodus 4 wird als 24-Bit-Format erfunden.");

@@ -91,6 +91,10 @@ class ExecutableModuleCatalog final {
                                              std::uint32_t maximum_bytes = 128u);
     [[nodiscard]] bool
     validate_bytes(const Memory& memory, std::uint32_t address, std::size_t width) const;
+    [[nodiscard]] bool validate_bytes_at(const Memory& memory,
+                                         std::uint32_t module_address,
+                                         std::uint32_t memory_address,
+                                         std::size_t width) const;
     [[nodiscard]] const ExecutableModuleMetrics& metrics() const noexcept;
 
   private:
@@ -190,6 +194,7 @@ class DemandBlockMaterializer final {
                             BlockMaterializeCallback callback);
     [[nodiscard]] std::optional<RuntimeBlockHandle> try_materialize(CpuState& cpu,
                                                                     std::uint32_t target,
+                                                                    std::uint32_t physical_origin,
                                                                     const BlockVariantKey& variant,
                                                                     std::uint32_t callsite);
     [[nodiscard]] const BlockMaterializationMetrics& metrics() const noexcept;
@@ -217,6 +222,7 @@ class DemandBlockMaterializer final {
     std::map<std::uint32_t, std::uint64_t> misses_by_target_;
     struct MaterializedOrigin {
         std::uint32_t address = 0u;
+        std::uint32_t physical_address = 0u;
         std::uint32_t size = 0u;
         std::uint32_t callsite = 0u;
         std::string module_id;

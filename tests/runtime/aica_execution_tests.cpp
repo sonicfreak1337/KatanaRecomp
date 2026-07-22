@@ -49,6 +49,14 @@ int main() {
     execution.interrupts().acknowledge(1u << 6u);
     require(!execution.interrupts().asserted() && execution.interrupts().pending() == 0u,
             "AICA-Timerinterrupt kann nicht quittiert werden.");
+    std::uint32_t dma_requests = 0u;
+    execution.set_dma_request_observer([&] { ++dma_requests; });
+    execution.tick(256u);
+    require(dma_requests == 0u,
+            "Ein normaler AICA-Audiotick wird faelschlich als G2-DMA-Request ausgegeben.");
+    execution.request_dma();
+    require(dma_requests == 1u,
+            "Ein expliziter AICA-DMA-Request erreicht den G2-Hardwaretrigger nicht.");
     execution.timer(1u).configure(255u, 0u, true);
     execution.tick(1u);
     require(execution.interrupts().pending() == (1u << 7u) && !execution.interrupts().asserted(),

@@ -439,6 +439,11 @@ struct PvrSoftwareRenderMetrics {
     std::uint64_t frames = 0u;
     std::uint64_t triangles = 0u;
     std::uint64_t pixels = 0u;
+    std::uint64_t pixel_writes = 0u;
+    std::uint64_t changed_pixels = 0u;
+    std::uint64_t proven_guest_frames = 0u;
+    std::uint64_t last_frame_pixel_writes = 0u;
+    std::uint64_t last_frame_changed_pixels = 0u;
 };
 
 enum class PvrRenderError : std::uint8_t {

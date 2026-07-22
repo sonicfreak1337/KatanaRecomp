@@ -358,7 +358,7 @@ IndirectDispatchResult dispatch_indirect(CpuState& cpu,
     if ((target & 1u) != 0u) {
         if (request.materializer != nullptr) {
             static_cast<void>(request.materializer->try_materialize(
-                cpu, target, effective_variant, request.callsite));
+                cpu, target, physical, effective_variant, request.callsite));
             reject(materialization_error(request.materializer->last_failure()));
         }
         reject(DispatchDiagnosticError::Misaligned);
@@ -378,7 +378,8 @@ IndirectDispatchResult dispatch_indirect(CpuState& cpu,
     if (!block && request.materializer != nullptr) {
         const auto materializations_before = request.materializer->metrics().materializations;
         block =
-            request.materializer->try_materialize(cpu, target, effective_variant, request.callsite);
+            request.materializer->try_materialize(
+                cpu, target, physical, effective_variant, request.callsite);
         alias_lookup = false;
         materialized = block.has_value() &&
                        request.materializer->metrics().materializations !=

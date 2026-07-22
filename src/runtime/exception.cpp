@@ -31,9 +31,9 @@ constexpr std::array exception_table = {
                       general_exception_vector,
                       false},
     ExceptionMetadata{
-        ExceptionCause::TlbMissRead, event_tlb_miss_read, general_exception_vector, false},
+        ExceptionCause::TlbMissRead, event_tlb_miss_read, tlb_miss_exception_vector, false},
     ExceptionMetadata{
-        ExceptionCause::TlbMissWrite, event_tlb_miss_write, general_exception_vector, false},
+        ExceptionCause::TlbMissWrite, event_tlb_miss_write, tlb_miss_exception_vector, false},
     ExceptionMetadata{ExceptionCause::InitialPageWrite,
                       event_initial_page_write,
                       general_exception_vector,
@@ -167,6 +167,28 @@ void enter_memory_exception(CpuState& cpu,
         break;
     }
     const auto metadata = exception_metadata(cause);
+
+    const bool updates_pteh = cause == ExceptionCause::TlbMissRead ||
+                              cause == ExceptionCause::TlbMissWrite ||
+                              cause == ExceptionCause::InitialPageWrite ||
+                              cause == ExceptionCause::TlbProtectionRead ||
+                              cause == ExceptionCause::TlbProtectionWrite ||
+                              cause == ExceptionCause::TlbMultipleHit;
+    if (updates_pteh)
+        cpu.pteh = (cpu.pteh & 0x000003FFu) | (error.address() & 0xFFFFFC00u);
+
+    if (cause == ExceptionCause::TlbMultipleHit) {
+        cpu.tea = error.address();
+        cpu.expevt = event_tlb_multiple_hit;
+        cpu.vbr = 0u;
+        cpu.write_sr(sr_md_mask | sr_rb_mask | sr_bl_mask | sr_interrupt_mask);
+        cpu.pc = tlb_multiple_hit_reset_vector;
+        cpu.last_exception_cause = cause;
+        cpu.exception_in_delay_slot = in_delay_slot;
+        cpu.trap_pending = true;
+        cpu.sleeping = false;
+        return;
+    }
 
     enter_exception(cpu,
                     ExceptionRequest{cause,
