@@ -4,6 +4,7 @@
 #include "katana/runtime/runtime.hpp"
 #include "katana/runtime/scheduler.hpp"
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <optional>
@@ -11,6 +12,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <utility>
 
 namespace katana::runtime {
 
@@ -89,6 +91,45 @@ struct PlatformFallbackResult {
 };
 
 enum class PlatformLifecycleState : std::uint8_t { Running, Paused, Shutdown };
+
+enum class PlatformLifecycleExitReason : std::uint8_t { Reset, BiosMenu, CdMenu };
+
+struct PlatformLifecycleExitEvidence {
+    std::uint64_t guest_cycle = 0u;
+    std::uint32_t callsite = 0u;
+    std::uint32_t return_address = 0u;
+    std::array<std::uint32_t, general_register_count> registers{};
+    std::uint32_t last_gdrom_request = 0u;
+    std::uint32_t last_gdrom_command = 0u;
+    std::uint32_t last_gdrom_state = 0u;
+    std::array<std::uint32_t, 4u> last_gdrom_status{};
+};
+
+class PlatformLifecycleExit final : public std::exception {
+  public:
+    PlatformLifecycleExit(const PlatformLifecycleExitReason reason,
+                          PlatformLifecycleExitEvidence evidence) noexcept
+        : reason_(reason), evidence_(std::move(evidence)) {}
+    [[nodiscard]] PlatformLifecycleExitReason reason() const noexcept { return reason_; }
+    [[nodiscard]] const PlatformLifecycleExitEvidence& evidence() const noexcept {
+        return evidence_;
+    }
+    [[nodiscard]] const char* what() const noexcept override {
+        switch (reason_) {
+        case PlatformLifecycleExitReason::Reset:
+            return "Guest requested platform reset";
+        case PlatformLifecycleExitReason::BiosMenu:
+            return "Guest requested BIOS menu";
+        case PlatformLifecycleExitReason::CdMenu:
+            return "Guest requested CD menu";
+        }
+        return "Guest requested platform lifecycle exit";
+    }
+
+  private:
+    PlatformLifecycleExitReason reason_;
+    PlatformLifecycleExitEvidence evidence_;
+};
 
 class PlatformShutdownRequested final : public std::exception {
   public:

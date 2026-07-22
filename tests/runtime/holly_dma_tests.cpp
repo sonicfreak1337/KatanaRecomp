@@ -151,13 +151,22 @@ int main() {
     g1.write(0x0Cu, 0u);
     g1.write(0x14u, 1u);
     g1.write(0x18u, 1u);
-    require(!g1_bytes_committed && !g1_completed && g1.read(0x18u) == 1u,
+    require(!g1_bytes_committed && !g1_completed && g1.read(0x18u) == 1u &&
+                g1.read(0x04u) == 0x0C002000u && g1.read(0x08u) == 32u &&
+                g1.read(0xF4u) == 0x0C002000u && g1.read(0xF8u) == 0u,
             "G1-DMA macht Daten bereits beim Start sichtbar.");
     static_cast<void>(g1_scheduler.advance_by(127u, 1u));
     require(!g1_bytes_committed, "G1-DMA committed Daten vor dem faelligen Schedulerzyklus.");
     static_cast<void>(g1_scheduler.advance_by(1u, 1u));
-    require(g1_bytes_committed && g1_completed && g1.read(0x18u) == 0u,
-            "G1-DMA committed Daten oder ASIC-Completion nicht atomar am Zielzyklus.");
+    require(g1_bytes_committed && g1_completed && g1.read(0x18u) == 0u &&
+                g1.read(0x04u) == 0x0C002000u && g1.read(0x08u) == 32u &&
+                g1.read(0xF4u) == 0x0C002020u && g1.read(0xF8u) == 32u &&
+                g1.state().remaining == 0u,
+            "G1-DMA trennt konfigurierte Register und Livezaehler nicht atomar.");
+    g1.configure_bios_handoff(0x0C123456u);
+    require(g1.read(0x04u) == 0x0C002000u && g1.read(0x08u) == 32u &&
+                g1.read(0xF4u) == 0x0C123440u && g1.read(0xF8u) == 0u,
+            "G1-BIOS-Handoff ueberschreibt konfigurierte DMA-Register.");
 
     memory.write_u32(0x005F7820u, 0x01000000u);
     memory.write_u32(0x005F7824u, 0x0C005000u);

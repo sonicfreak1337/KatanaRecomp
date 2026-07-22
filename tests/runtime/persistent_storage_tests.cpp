@@ -169,10 +169,14 @@ int main() {
                 pal_flash->read_byte(0x1FFC0u) == 0x7Fu &&
                 pal_flash->source_byte(0x1A000u) == 0xFFu,
             "Erstes PAL-Portprofil erzeugt kein gueltiges, quellgetrenntes Europa-Flash.");
-    require(dreamcast_region_from_area_symbols("JUE") == DreamcastRegion::Europe &&
-                dreamcast_region_from_area_symbols("JU") == DreamcastRegion::NorthAmerica &&
-                dreamcast_region_from_area_symbols("J") == DreamcastRegion::Japan,
-            "Disc-Areasymbole waehlen keine deterministische Dreamcast-Region.");
+    require(dreamcast_region_for_console_profile(DreamcastConsoleProfile::EuropePal) ==
+                    DreamcastRegion::Europe &&
+                dreamcast_region_for_console_profile(
+                    DreamcastConsoleProfile::NorthAmericaNtsc) ==
+                    DreamcastRegion::NorthAmerica &&
+                dreamcast_region_for_console_profile(DreamcastConsoleProfile::JapanNtsc) ==
+                    DreamcastRegion::Japan,
+            "Explizite Konsolenprofile waehlen keine deterministische Dreamcast-Region.");
     pal_storage->save();
     pal_storage = DreamcastMutableStorage::open(pal_config);
     require(pal_storage->flash_image()->read_byte(0x1A002u) == '2',

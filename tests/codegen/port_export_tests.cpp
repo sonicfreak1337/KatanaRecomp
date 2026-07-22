@@ -3,6 +3,7 @@
 #include "katana/platform/dreamcast_disc.hpp"
 #include "katana/runtime/disc_install.hpp"
 #include "katana/runtime/dreamcast_boot.hpp"
+#include "katana/runtime/platform_services.hpp"
 
 #include <algorithm>
 #include <array>
@@ -100,7 +101,7 @@ std::vector<std::uint8_t> boot_track(const bool immediate_trap = false) {
               boot_file.end(),
               bytes.begin() + static_cast<std::ptrdiff_t>(payload_offset(0u, 0x60u)));
     constexpr std::array<std::uint8_t, 12u> system_bootstrap = {
-        0x01u, 0xD0u, // mov.l @(1,pc),r0 -> literal at 0x8C008308
+        0x01u, 0xD0u, // mov.l @(1,pc),r0 -> P2 literal at 0xAC008308
         0x2Bu, 0x40u, // jmp @r0
         0x09u, 0x00u, // delay-slot nop
         0x09u, 0x00u, // aligned padding
@@ -236,6 +237,10 @@ int run_test(const int argc, char* argv[]) {
                 runtime_state.cache_control && runtime_state.io_ports &&
                 runtime_state.dmac->operation() ==
                     katana::runtime::dreamcast_bios_handoff_dmaor &&
+                runtime_state.holly_dma.g1->read(0x04u) == 0u &&
+                runtime_state.holly_dma.g1->read(0x08u) == 0u &&
+                runtime_state.holly_dma.g1->read(0xF4u) == 0x0C010800u &&
+                runtime_state.holly_dma.g1->read(0xF8u) == 0u &&
                 runtime_state.aica_registers->read(0x289Cu,
                                                    katana::runtime::MemoryAccessWidth::Halfword) ==
                     0x48u &&
@@ -255,7 +260,12 @@ int run_test(const int argc, char* argv[]) {
     pal_runtime_boot.area_symbols = "E";
     katana::runtime::CpuState pal_runtime_cpu;
     const auto pal_runtime_state =
-        katana::runtime::initialize_dreamcast_runtime(pal_runtime_cpu, pal_runtime_boot);
+        katana::runtime::initialize_dreamcast_runtime(
+            pal_runtime_cpu,
+            pal_runtime_boot,
+            katana::runtime::DreamcastRuntimeFirmwareMode::Direct,
+            {},
+            katana::runtime::DreamcastConsoleProfile::EuropePal);
     require(pal_runtime_state.io_ports->data_a() ==
                 katana::runtime::dreamcast_composite_port_a_input,
             "PAL-BIOS-Handoff reicht das Latch im alternativen Pinmodus als GPIO-Ausgang durch.");
@@ -342,10 +352,6 @@ int run_test(const int argc, char* argv[]) {
                     ->lookup(katana::runtime::hle_bios_gdrom2_direct_alias_address, {})
                     .has_value(),
             "Produktiver GDI-HLE-Runtimepfad installiert BIOS-ABI oder Disc-Bootstrap nicht.");
-    const auto original_bootstrap_word = hle_runtime_cpu.memory.read_u32(
-        katana::runtime::dreamcast_system_bootstrap_entry_address);
-    const auto original_program_word = hle_runtime_cpu.memory.read_u32(
-        katana::runtime::dreamcast_disc_boot_address);
     hle_runtime_cpu.memory.write_u32(0x8C002400u, 0xC001D00Du);
     hle_runtime_cpu.memory.write_u32(
         katana::runtime::dreamcast_system_bootstrap_entry_address, 0xDEADBEEFu);
@@ -371,26 +377,31 @@ int run_test(const int argc, char* argv[]) {
     require(system_block.has_value(), "SYSTEM-1-Runtimeblock fehlt im produktiven HLE-Pfad.");
     hle_runtime_cpu.pc = system_vector.handler_address;
     hle_runtime_cpu.r[4] = 1u;
-    katana::runtime::BlockExecutionContext reboot_context;
-    const auto reboot_exit = system_block->get().function(hle_runtime_cpu, reboot_context);
-    require(reboot_exit.kind == katana::runtime::BlockEndKind::StaticBranch &&
-                hle_runtime_cpu.pc ==
-                    katana::runtime::dreamcast_system_bootstrap_entry_address &&
-                hle_runtime_cpu.memory.read_u32(
-                    katana::runtime::dreamcast_system_bootstrap_entry_address) ==
-                    original_bootstrap_word &&
-                hle_runtime_cpu.memory.read_u32(katana::runtime::dreamcast_disc_boot_address) ==
-                    original_program_word &&
-                hle_runtime_cpu.memory.read_u32(0x8C002400u) == 0xFFFFFFFFu &&
-                hle_runtime_state.dmac->operation() ==
-                    katana::runtime::dreamcast_bios_handoff_dmaor &&
-                hle_runtime_state.aica_registers->read(
-                    0x289Cu, katana::runtime::MemoryAccessWidth::Halfword) == 0x48u &&
-                hle_runtime_cpu.memory.read_u32(
-                    katana::runtime::sh4_cache_control_address) == 0u &&
-                hle_runtime_state.io_ports->control_a() ==
-                    katana::runtime::dreamcast_bios_handoff_pctra,
-            "SYSTEM 1 laedt Disc-Bootbytes oder den BIOS-Geraetehandoff nicht erneut.");
+    katana::runtime::BlockExecutionContext lifecycle_context;
+    lifecycle_context.scheduler_cycle = 77u;
+    try {
+        static_cast<void>(system_block->get().function(hle_runtime_cpu, lifecycle_context));
+        require(false, "SYSTEM 1 kehrt im produktiven HLE-Pfad zurueck.");
+    } catch (const katana::runtime::PlatformLifecycleExit& exit) {
+        require(exit.reason() == katana::runtime::PlatformLifecycleExitReason::BiosMenu &&
+                    exit.evidence().guest_cycle == 77u &&
+                    hle_runtime_cpu.pc == system_vector.handler_address &&
+                    hle_runtime_cpu.memory.read_u32(
+                        katana::runtime::dreamcast_system_bootstrap_entry_address) ==
+                        0xDEADBEEFu &&
+                    hle_runtime_cpu.memory.read_u32(
+                        katana::runtime::dreamcast_disc_boot_address) == 0xDEADBEEFu &&
+                    hle_runtime_cpu.memory.read_u32(0x8C002400u) == 0xC001D00Du &&
+                    hle_runtime_state.dmac->operation() ==
+                        katana::runtime::Sh4Dmac::master_enable &&
+                    hle_runtime_state.aica_registers->read(
+                        0x289Cu, katana::runtime::MemoryAccessWidth::Halfword) == 0u &&
+                    hle_runtime_cpu.memory.read_u32(
+                        katana::runtime::sh4_cache_control_address) ==
+                        katana::runtime::Sh4CacheControl::operand_ram_enable &&
+                    hle_runtime_state.io_ports->control_a() == 0x10u,
+                "SYSTEM 1 mutiert Bootbytes oder Geraetezustand statt als BIOS-Menue zu enden.");
+    }
     const auto render_done_count = [&] {
         return std::count_if(hle_runtime_state.system_asic->events().begin(),
                              hle_runtime_state.system_asic->events().end(),
@@ -422,6 +433,7 @@ int run_test(const int argc, char* argv[]) {
     hle_runtime_cpu.r[4] = 16u;
     hle_runtime_cpu.r[5] = 0x8C000400u;
     static_cast<void>(hle_runtime_state.gdrom->bios_call(hle_runtime_cpu, 0u, 0u));
+    static_cast<void>(hle_runtime_state.gdrom->bios_call(hle_runtime_cpu, 2u, 0u));
     static_cast<void>(hle_runtime_state.scheduler->advance_by(2'000u, 8u));
     hle_runtime_state.aica->interrupts().set_enabled(1u);
     hle_runtime_state.aica->interrupts().request(1u);
@@ -466,15 +478,18 @@ int run_test(const int argc, char* argv[]) {
     require(unit != generated_before.end(),
             "Portexport besitzt keine deterministische Translation Unit.");
     std::size_t entry_metadata_count = 0u;
+    bool p2_pc_relative_literal = false;
     for (const auto& [path, content] : generated_before) {
         if (path.starts_with("code/unit-") && path.ends_with(".cpp")) {
-            require(content.find("generated_entry_address = 0x8C008300u") != std::string::npos,
+            require(content.find("generated_entry_address = 0xAC008300u") != std::string::npos,
                     "Portpartition besitzt einen abweichenden globalen Programmeinstieg.");
+            p2_pc_relative_literal =
+                p2_pc_relative_literal || content.find("0xAC008308u") != std::string::npos;
             ++entry_metadata_count;
         }
     }
-    require(entry_metadata_count == 3u,
-            "Mehrteiliger Portexport erzeugt nicht exakt drei Translation Units.");
+    require(entry_metadata_count == 3u && p2_pc_relative_literal,
+            "Mehrteiliger Portexport verliert P2-Einstieg oder PC-relativen P2-Literalzugriff.");
     for (const auto& path : {"include/katana_port.hpp",
                              "code/runtime-dispatch.cpp",
                              "metadata/port-project.json",
@@ -501,6 +516,11 @@ int run_test(const int argc, char* argv[]) {
                 std::string::npos &&
             generated_before.at("code/runtime-dispatch.cpp")
                     .find("candidate.instructions = 1u") != std::string::npos &&
+            generated_before.at("code/runtime-dispatch.cpp")
+                    .find("generated-block-AC008300") != std::string::npos &&
+            generated_before.at("code/runtime-dispatch.cpp")
+                    .find("register_executable_block(table, services, 0xAC008300u") !=
+                std::string::npos &&
             generated_before.at("metadata/port-project.json")
                     .find("\"execution_coverage_contract\":\"validated-demand-v1\"") !=
                 std::string::npos &&
@@ -570,9 +590,19 @@ int run_test(const int argc, char* argv[]) {
             read_text(output / "src" / "main.cpp")
                     .find("DreamcastRuntimeFirmwareMode::HleBiosAbi") != std::string::npos &&
             read_text(output / "src" / "main.cpp")
+                    .find("DreamcastConsoleProfile::JapanNtsc") != std::string::npos &&
+            read_text(output / "src" / "main.cpp")
+                    .find("KATANA_PLATFORM_LIFECYCLE_EXIT") != std::string::npos &&
+            read_text(output / "src" / "main.cpp")
+                    .find("KATANA_GDROM_BIOS_EVENTS") != std::string::npos &&
+            read_text(output / "src" / "main.cpp")
                     .find("KATANA_PORT_MEMORY_PROBES") != std::string::npos &&
             read_text(output / "src" / "main.cpp")
                     .find("memory_probe_value=") != std::string::npos &&
+            read_text(output / "src" / "main.cpp").find("memory.peek_u32") !=
+                std::string::npos &&
+            read_text(output / "src" / "main.cpp")
+                    .find("cpu.memory.read_u32(address)") == std::string::npos &&
             read_text(output / "src" / "main.cpp").find("load_dreamcast_runtime_boot") !=
                 std::string::npos &&
             read_text(output / "src" / "main.cpp")

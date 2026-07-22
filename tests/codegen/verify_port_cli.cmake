@@ -91,7 +91,7 @@ execute_process(
 )
 if(NOT generated_result EQUAL 0 OR
    NOT generated_output MATCHES "KR_GENERATED_RUNTIME_STARTED" OR
-   NOT generated_output MATCHES "indirect_dispatches=1" OR
+   NOT generated_output MATCHES "indirect_dispatches=2" OR
    NOT generated_output MATCHES "frames=0" OR
    NOT generated_output MATCHES "audio_buffers=0")
   file(REMOVE_RECURSE "${fixture}")
@@ -110,10 +110,10 @@ execute_process(
 )
 if(NOT incremental_port_result EQUAL 0 OR
    NOT EXISTS "${fixture}/port/build/katana-incremental-marker" OR
-   EXISTS "${fixture}/port/user-data/content/game.katana-disc")
+   NOT EXISTS "${fixture}/port/user-data/content/game.katana-disc")
   file(REMOVE_RECURSE "${fixture}")
   message(FATAL_ERROR
-    "Inkrementeller Portbuild verliert Buildcache oder kopiert Retaildaten: "
+    "Inkrementeller Portbuild verliert Buildcache oder lokalen Nutzercache: "
     "${incremental_port_output} ${incremental_port_error}")
 endif()
 execute_process(

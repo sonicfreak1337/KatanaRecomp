@@ -2,6 +2,7 @@
 #include "katana/runtime/code_invalidation.hpp"
 #include "katana/runtime/dreamcast_boot.hpp"
 #include "katana/runtime/dreamcast_memory.hpp"
+#include "katana/runtime/platform_services.hpp"
 
 #include <cstdlib>
 #include <iostream>
@@ -106,13 +107,20 @@ int main() {
     cpu.pc = vectors[0].handler_address;
     cpu.r[7] = 2u;
     cpu.r[4] = 9u;
-    static_cast<void>(init_block->get().function(cpu, context));
-    require(cpu.r[0] == 704u, "SYSINFO_ICON akzeptiert keinen gueltigen Iconindex.");
-    cpu.pc = vectors[0].handler_address;
-    cpu.r[7] = 2u;
-    cpu.r[4] = 10u;
-    static_cast<void>(init_block->get().function(cpu, context));
-    require(cpu.r[0] == 0xFFFFFFFFu, "SYSINFO_ICON akzeptiert einen ungueltigen Iconindex.");
+    cpu.r[5] = 0x8C002000u;
+    cpu.memory.write_u32(cpu.r[5], 0xA5A5A5A5u, CodeWriteSource::Copy);
+    const auto icon = route_hle_bios_abi_call(cpu);
+    require(icon.status == BiosAbiServiceStatus::ServiceUnavailable,
+            "Nicht implementierter SYSINFO_ICON-Dienst behauptet weiterhin Erfolg.");
+    try {
+        static_cast<void>(init_block->get().function(cpu, context));
+        require(false, "SYSINFO_ICON kehrt ohne geschriebene 704 Bytes erfolgreich zurueck.");
+    } catch (const BiosAbiDispatchError& error) {
+        require(std::string(error.what()).find("service-unavailable:sysinfo-icon") !=
+                        std::string::npos &&
+                    cpu.memory.read_u32(cpu.r[5]) == 0xA5A5A5A5u,
+                "SYSINFO_ICON meldet keine stabile ServiceUnavailable-Grenze.");
+    }
 
     const auto flash_handle = blocks.lookup(vectors[2].handler_address, {});
     const auto flash_block = flash_handle ? blocks.resolve(*flash_handle) : std::nullopt;
@@ -155,6 +163,18 @@ int main() {
     const auto system_handle = blocks.lookup(vectors[5].handler_address, {});
     const auto system_block = system_handle ? blocks.resolve(*system_handle) : std::nullopt;
     require(system_block.has_value(), "System-BIOS-ABI-Block ist nicht aufloesbar.");
+    EventScheduler g1_scheduler;
+    DreamcastG1BusController g1(
+        g1_scheduler, {}, [](const auto, const auto, const auto) {}, {});
+    g1.configure_bios_handoff(0x0C123400u);
+    g1.write(0x04u, 0x0C004000u);
+    g1.write(0x08u, 32u);
+    g1.write(0x14u, 1u);
+    g1.write(0x18u, 1u);
+    static_cast<void>(g1_scheduler.advance_by(128u, 1u));
+    require(g1.read(0xF4u) == 0x0C004020u,
+            "G1-Testsetup erreicht keinen vom BIOS-Handoff abweichenden Livezaehler.");
+    cpu.g1_bus = &g1;
     cpu.pc = vectors[5].handler_address;
     cpu.pr = 0x8C010000u;
     cpu.r[4] = 0u;
@@ -164,8 +184,11 @@ int main() {
                 system_init.status == BiosAbiServiceStatus::Completed,
             "Systemvektor liest den Funktionsselektor nicht aus r4.");
     static_cast<void>(system_block->get().function(cpu, context));
-    require(cpu.r[0] == 0x00C0BEBCu && cpu.pc == cpu.pr,
-            "System-Normalinitialisierung liefert den BIOS-Borderzustand nicht.");
+    require(cpu.r[0] == 0x00C0BEBCu && cpu.pc == cpu.pr &&
+                g1.read(0x04u) == 0x0C004000u && g1.read(0x08u) == 32u &&
+                g1.read(0xF4u) == 0x0C123400u && g1.read(0xF8u) == 0u,
+            "System-Normalinitialisierung stellt Border oder getrennten G1-Livezaehler nicht "
+            "wieder her.");
     cpu.pc = vectors[5].handler_address;
     cpu.r[4] = 2u;
     const auto check_disc = route_hle_bios_abi_call(cpu);
@@ -176,39 +199,32 @@ int main() {
     require(cpu.r[0] == 0xFFFFFFFFu,
             "System-Disc-Check meldet ohne angebundenes Laufwerk ein Medium.");
 
-    constexpr std::uint32_t restored_boot_word = 0x1234ABCDu;
     cpu.memory.write_u32(0x8C002400u, 0xC001D00Du, CodeWriteSource::Copy);
     cpu.memory.write_u32(dreamcast_disc_boot_address, 0xDEADBEEFu, CodeWriteSource::Copy);
-    bool reboot_service_invoked = false;
-    cpu.disc_reboot = [&](CpuState& reboot_cpu) {
-        reboot_service_invoked = true;
-        refresh_hle_bios_abi_memory(reboot_cpu.memory);
-        reboot_cpu.memory.write_u32(
-            dreamcast_disc_boot_address, restored_boot_word, CodeWriteSource::Copy);
-        reset_dreamcast_direct_boot_cpu(reboot_cpu);
-        reboot_cpu.pc = dreamcast_system_bootstrap_entry_address;
-    };
     cpu.pc = vectors[5].handler_address;
     cpu.pr = 0x8C123456u;
     cpu.r[4] = 1u;
     cpu.gbr = 0xDEADBEEFu;
+    context.scheduler_cycle = 12345u;
     context.sync_point = BlockSyncPoint::Entry;
     context.delay_slot_owner_pc = 0x8C000222u;
-    const auto soft_reboot = route_hle_bios_abi_call(cpu);
-    require(soft_reboot.service == "system-soft-reboot" &&
-                soft_reboot.status == BiosAbiServiceStatus::Completed,
-            "System-Soft-Reboot ist nicht als bekannter Lifecycle geroutet.");
-    const auto reboot_exit = system_block->get().function(cpu, context);
-    require(reboot_exit.kind == BlockEndKind::StaticBranch && reboot_exit.target.has_value() &&
-                reboot_exit.target->virtual_address == dreamcast_system_bootstrap_entry_address &&
-                cpu.pc == dreamcast_system_bootstrap_entry_address && reboot_service_invoked &&
-                cpu.r[15] == dreamcast_direct_boot_stack &&
-                cpu.vbr == dreamcast_direct_boot_vector_base &&
-                cpu.gbr == dreamcast_bios_handoff_gbr && cpu.pr == dreamcast_bios_handoff_pr &&
-                !context.delay_slot_owner_pc.has_value() &&
-                cpu.memory.read_u32(0x8C002400u) == 0xFFFFFFFFu &&
-                cpu.memory.read_u32(dreamcast_disc_boot_address) == restored_boot_word,
-            "System-Soft-Reboot laedt Bootbytes oder BIOS-Handoff nicht reproduzierbar neu.");
+    const auto bios_menu = route_hle_bios_abi_call(cpu);
+    require(bios_menu.service == "system-bios-menu" &&
+                bios_menu.status == BiosAbiServiceStatus::Completed,
+            "SYSTEM 1 ist nicht als nicht zurueckkehrendes BIOS-Menue geroutet.");
+    try {
+        static_cast<void>(system_block->get().function(cpu, context));
+        require(false, "SYSTEM 1 kehrt in den Gast zurueck.");
+    } catch (const PlatformLifecycleExit& exit) {
+        const auto& evidence = exit.evidence();
+        require(exit.reason() == PlatformLifecycleExitReason::BiosMenu &&
+                    evidence.guest_cycle == 12345u && evidence.callsite == vectors[5].handler_address &&
+                    evidence.return_address == 0x8C123456u && evidence.registers[4] == 1u &&
+                    cpu.pc == vectors[5].handler_address && cpu.gbr == 0xDEADBEEFu &&
+                    cpu.memory.read_u32(0x8C002400u) == 0xC001D00Du &&
+                    cpu.memory.read_u32(dreamcast_disc_boot_address) == 0xDEADBEEFu,
+                "SYSTEM 1 verliert Lifecycle-Evidenz oder mutiert den laufenden Gastzustand.");
+    }
 
     cpu.pc = hle_bios_gdrom2_direct_alias_address;
     cpu.r[6] = 0u;

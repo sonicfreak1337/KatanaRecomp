@@ -465,9 +465,9 @@ DreamcastG1BusController::~DreamcastG1BusController() {
 std::uint32_t DreamcastG1BusController::read(const std::uint32_t offset) const {
     switch (offset) {
     case 0x04u:
-        return dma_address_;
+        return configured_address_;
     case 0x08u:
-        return dma_length_;
+        return configured_length_;
     case 0x0Cu:
         return dma_direction_;
     case 0x14u:
@@ -477,9 +477,9 @@ std::uint32_t DreamcastG1BusController::read(const std::uint32_t offset) const {
     case 0xB0u:
         return system_mode_;
     case 0xF4u:
-        return dma_address_;
+        return live_address_;
     case 0xF8u:
-        return dma_length_;
+        return transferred_length_;
     default:
         throw std::runtime_error("Unbekannter oder nicht lesbarer G1-MMIO-Offset.");
     }
@@ -488,10 +488,10 @@ std::uint32_t DreamcastG1BusController::read(const std::uint32_t offset) const {
 void DreamcastG1BusController::write(const std::uint32_t offset, const std::uint32_t value) {
     switch (offset) {
     case 0x04u:
-        dma_address_ = value & 0x1FFFFFE0u;
+        configured_address_ = value & 0x1FFFFFE0u;
         return;
     case 0x08u:
-        dma_length_ = value & 0x01FFFFFFu;
+        configured_length_ = value & 0x01FFFFFFu;
         return;
     case 0x0Cu:
         dma_direction_ = value & 1u;
@@ -502,6 +502,7 @@ void DreamcastG1BusController::write(const std::uint32_t offset, const std::uint
             static_cast<void>(scheduler_.cancel(*completion_event_));
             completion_event_.reset();
             dma_active_ = 0u;
+            remaining_length_ = 0u;
         }
         return;
     case 0x18u:
@@ -534,14 +535,17 @@ void DreamcastG1BusController::start() {
         fail(HollyDmaFaultReason::MissingBackend, SystemAsicEvent::GdromAccessError);
         return;
     }
-    if (dma_length_ == 0u) {
+    if (configured_length_ == 0u) {
         fail(HollyDmaFaultReason::InvalidLength, SystemAsicEvent::GdromIllegalAddress);
         return;
     }
+    live_address_ = configured_address_;
+    transferred_length_ = 0u;
+    remaining_length_ = configured_length_;
     dma_active_ = 1u;
     try {
         completion_event_ = scheduler_.schedule_after(
-            dma_latency(dma_length_, timing_),
+            dma_latency(remaining_length_, timing_),
             [this](const auto event_id, const auto) { complete(event_id); });
     } catch (...) {
         fail(HollyDmaFaultReason::Timeout, SystemAsicEvent::GdromOverrun);
@@ -554,13 +558,14 @@ void DreamcastG1BusController::complete(const SchedulerEventId event_id) {
         return;
     }
     try {
-        transfer_handler_(dma_address_, dma_length_, dma_direction_);
+        transfer_handler_(live_address_, remaining_length_, dma_direction_);
     } catch (...) {
         fail(HollyDmaFaultReason::TransferFailure, SystemAsicEvent::GdromOverrun);
         return;
     }
-    dma_address_ += dma_length_;
-    dma_length_ = 0u;
+    live_address_ += remaining_length_;
+    transferred_length_ += remaining_length_;
+    remaining_length_ = 0u;
     dma_active_ = 0u;
     completion_event_.reset();
     if (completion_observer_) completion_observer_(SystemAsicEvent::GdromDma);
@@ -568,15 +573,24 @@ void DreamcastG1BusController::complete(const SchedulerEventId event_id) {
 
 void DreamcastG1BusController::fail(const HollyDmaFaultReason reason,
                                     const SystemAsicEvent event) noexcept {
+    const auto fault_address = dma_active_ != 0u ? live_address_ : configured_address_;
+    const auto fault_remaining =
+        dma_active_ != 0u ? remaining_length_ : configured_length_;
     if (completion_event_ && !scheduler_lifetime_.expired())
         static_cast<void>(scheduler_.cancel(*completion_event_));
     completion_event_.reset();
     dma_active_ = 0u;
+    remaining_length_ = 0u;
     dma_enabled_ = 0u;
     fault_ = reason;
     ++fault_count_;
     last_fault_ = HollyDmaFault{
-        reason, event, 0u, 0u, dma_address_, dma_length_};
+        reason,
+        event,
+        0u,
+        0u,
+        fault_address,
+        fault_remaining};
     if (completion_observer_) {
         try {
             completion_observer_(event);
@@ -588,14 +602,31 @@ void DreamcastG1BusController::fail(const HollyDmaFaultReason reason,
 void DreamcastG1BusController::handle_scheduler_reset() noexcept {
     completion_event_.reset();
     dma_active_ = 0u;
+    remaining_length_ = 0u;
+}
+
+void DreamcastG1BusController::configure_bios_handoff(
+    const std::uint32_t live_address) noexcept {
+    bios_handoff_live_address_ = live_address & 0x1FFFFFE0u;
+    restore_bios_handoff();
+}
+
+void DreamcastG1BusController::restore_bios_handoff() noexcept {
+    live_address_ = bios_handoff_live_address_;
+    transferred_length_ = 0u;
+    remaining_length_ = 0u;
 }
 
 void DreamcastG1BusController::reset() noexcept {
     if (completion_event_ && !scheduler_lifetime_.expired())
         static_cast<void>(scheduler_.cancel(*completion_event_));
     completion_event_.reset();
-    dma_address_ = 0u;
-    dma_length_ = 0u;
+    configured_address_ = 0u;
+    configured_length_ = 0u;
+    live_address_ = 0u;
+    transferred_length_ = 0u;
+    remaining_length_ = 0u;
+    bios_handoff_live_address_ = 0u;
     dma_direction_ = 0u;
     dma_enabled_ = 0u;
     dma_active_ = 0u;
@@ -607,12 +638,14 @@ void DreamcastG1BusController::reset() noexcept {
 
 HollyDmaChannelState DreamcastG1BusController::state() const noexcept {
     HollyDmaChannelState result;
-    result.system_address = dma_address_;
-    result.length = dma_length_;
+    result.system_address = configured_address_;
+    result.length = configured_length_;
     result.direction = dma_direction_;
     result.enabled = dma_enabled_;
     result.active = dma_active_;
-    result.remaining = dma_active_ != 0u ? dma_length_ : 0u;
+    result.peripheral_counter = transferred_length_;
+    result.system_counter = live_address_;
+    result.remaining = remaining_length_;
     result.completion_event = completion_event_;
     result.fault = fault_;
     result.fault_count = fault_count_;

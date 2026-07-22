@@ -1140,7 +1140,8 @@ void seed_incremental_port_stage(const std::filesystem::path& published,
 int export_port_project(const std::filesystem::path& gdi_path,
                         const std::filesystem::path& output_path,
                         const std::string& target_name,
-                        const bool diagnostic_partial = false) {
+                        const bool diagnostic_partial = false,
+                        const std::string& console_profile = "japan-ntsc") {
     const auto source_root = discover_source_root_for_protection();
     const auto runtime_root = discover_runtime_root_for_build(source_root);
     const auto absolute_output = std::filesystem::absolute(output_path).lexically_normal();
@@ -1180,7 +1181,12 @@ int export_port_project(const std::filesystem::path& gdi_path,
         const auto report = katana::codegen::export_dreamcast_port_project(
             gdi_path,
             stage,
-            {target_name, KATANA_RECOMP_VERSION, {}, source_root, diagnostic_partial});
+            {target_name,
+             KATANA_RECOMP_VERSION,
+             {},
+             source_root,
+             diagnostic_partial,
+             console_profile});
         const auto build_path = report.output_root / "build";
         auto configure = std::string("cmake -S ") + shell_quote(report.output_root) + " -B " +
                          shell_quote(build_path);
@@ -1309,8 +1315,10 @@ void print_usage(std::ostream& output) {
            << "  katana-recomp emit-cpp <Raw|ELF|Manifest> <Einstieg> <Ausgabe.cpp> [Basisadresse] "
               "[--no-opt] [--dump-ir <Praefix>] [--directives <Datei>]\n\n"
            << "  katana-recomp phase6-probe-source <GDI> <Ausgabe.cpp>\n\n"
-           << "  katana-recomp port <Quelle.gdi> --output <Ordner> --target-name <Name>\n"
-           << "  katana-recomp probe-port <Quelle.gdi> --output <Ordner> --target-name <Name>\n\n"
+           << "  katana-recomp port <Quelle.gdi> --output <Ordner> --target-name <Name> "
+              "[--console-profile <japan-ntsc|north-america-ntsc|europe-pal|vga>]\n"
+           << "  katana-recomp probe-port <Quelle.gdi> --output <Ordner> --target-name <Name> "
+              "[--console-profile <...>]\n\n"
            << "  katana-recomp workflow <validate|analyze|codegen|build|run-preflight> "
               "<Projektmanifest> --output <Ordner>\n\n"
            << "Beispiel:\n"
@@ -1436,20 +1444,26 @@ int main(const int argc, char* argv[]) {
             return exit_status(ExitCode::InternalError);
         }
 
-        if (argc == 7 &&
+        if ((argc == 7 || argc == 9) &&
             (std::string_view(argv[1]) == "port" || std::string_view(argv[1]) == "probe-port")) {
             const bool diagnostic_partial = std::string_view(argv[1]) == "probe-port";
             std::optional<std::filesystem::path> output_path;
             std::optional<std::string> target_name;
-            for (std::size_t argument = 3u; argument < 7u; argument += 2u) {
+            std::string console_profile = "japan-ntsc";
+            bool console_profile_seen = false;
+            for (std::size_t argument = 3u; argument < static_cast<std::size_t>(argc);
+                 argument += 2u) {
                 const std::string_view option = argv[argument];
                 if (option == "--output" && !output_path.has_value()) {
                     output_path = std::filesystem::path(argv[argument + 1u]);
                 } else if (option == "--target-name" && !target_name.has_value()) {
                     target_name = argv[argument + 1u];
+                } else if (option == "--console-profile" && !console_profile_seen) {
+                    console_profile = argv[argument + 1u];
+                    console_profile_seen = true;
                 } else {
                     throw std::invalid_argument(
-                        "port erwartet --output und --target-name jeweils genau einmal.");
+                        "port erwartet eindeutige Ausgabe-, Ziel- und Konsolenprofiloptionen.");
                 }
             }
             if (!output_path.has_value() || !target_name.has_value()) {
@@ -1457,7 +1471,11 @@ int main(const int argc, char* argv[]) {
                     "port erwartet --output und --target-name jeweils genau einmal.");
             }
             return export_port_project(
-                std::filesystem::path(argv[2]), *output_path, *target_name, diagnostic_partial);
+                std::filesystem::path(argv[2]),
+                *output_path,
+                *target_name,
+                diagnostic_partial,
+                console_profile);
         }
 
         if ((argc == 3 || argc == 4) &&

@@ -6,22 +6,46 @@
 
 - HLE-GDI-Ports rekompilieren nun auch den 16 Sektoren grossen, von der Disc
   gelieferten Dreamcast-Systembootstrap als eigenes initiales Programmsegment.
-  Die Runtime laedt ihn bytegenau nach `0x8C008000`, startet nativen Code bei
-  `0x8C008300` und haelt ihn vom eigentlichen Programm bei `0x8C010000`
+  Die Runtime bindet ihn bytegenau an die physische Herkunft `0x0C008000`, startet
+  nativen Code ueber den P2-Alias `0xAC008300` und haelt ihn vom eigentlichen
+  Programm bei `0x8C010000`
   getrennt. Damit wird der allgemeine IP-Handoff ausgefuehrt, statt nur das
   Hauptprogramm mit fehlendem Bootstrapzustand direkt anzuspringen. Direct-
   Mode bleibt ein expliziter Bypass; bestehende HLE-Manifeste mit dem alten
-  Standardentry werden migriert. Runtime-ABI 30 und Portprojektvertrag 16
-  versionieren Bootimage, Runtimezustand und generierten Einstieg.
-- Der BIOS-`SYSTEM 1`-Lifecycle fuehrt nun einen reproduzierbaren nativen
-  Disc-Reboot aus: Systembootstrap und Bootdatei werden aus der gebundenen
-  Discquelle erneut gelesen, der definierte `0xFF`-BIOS-RAM-Grundzustand samt
-  HLE-Vektoren wird wiederhergestellt und DMAOR, AICA-Masken, Cachezustand
-  sowie Regionsport werden neu gesetzt. Der Gast springt anschliessend wieder
-  durch `0x8C008300`; veraenderte Bootbytes bleiben nicht erhalten. Der
-  bekannte direkte GD2-Einstieg `0x8C0010F0` ist zusaetzlich zum dynamischen
-  Vektorslot als Aliasblock registriert. BIOS-ABI-Vertrag 5 und Runtime-ABI 30
-  versionieren den geschlossenen Lifecycle.
+  Standardentry werden migriert. Runtime-ABI 31 und Portprojektvertrag 19
+  versionieren den finalen Boot- und Portvertrag dieser Runde.
+- Die GD-ROM-BIOS-ABI besitzt einen expliziten Queued-/Processing-/Complete-/
+  Streaming-/Error-Zustandsautomaten. `GET_CMD_STAT` liefert nun die
+  oeffentlichen Zustandsklassen 0 bis 4 beziehungsweise `-1`, schreibt vier
+  Statuswoerter mit uebertragenen Bytes und entfernt einen Abschluss erst nach
+  dessen einmaliger Abholung. Unbekannte Kommandos enden als stabiler Illegal-
+  Request statt als Scheinerfolg. BIOS-TOC und Paket-TOC sind getrennt; der
+  BIOS-Puffer umfasst exakt 102 Gastwoerter fuer LOW/HIGH. Ein begrenztes,
+  sequenziertes JSON-Ereignislog erfasst Aufrufstelle, Zyklus, Argumente,
+  Requestzustand, Ergebnis und Vierwortstatus ohne Discidentitaeten.
+- `SYSTEM 1` ist gemaess oeffentlicher BIOS-ABI ein nicht zurueckkehrender
+  `BiosMenu`-Lifecycle-Ausgang und startet das Spiel nicht mehr intern neu.
+  Reset und CD-Menue verwenden dieselbe typisierte Plattformgrenze. Die
+  Diagnose bewahrt Gastzyklus, Callsite, `PR`, alle allgemeinen Register sowie
+  den letzten GD-ROM-Request. `SYSINFO_ICON` meldet bis zu einer echten
+  704-Byte-Implementierung sichtbar `ServiceUnavailable`, statt Erfolg ohne
+  Pufferschreibzugriff zu behaupten. Der direkte GD2-Einstieg `0x8C0010F0`
+  und der definierte `0xFF`-BIOS-RAM-Grundzustand bleiben erhalten.
+- G1 trennt programmierte `GDSTAR/GDLEN` von `GDSTARD/GDLEND`, laufender
+  Adresse, uebertragener und verbleibender Laenge. `SYSTEM 0` stellt den aus
+  der geladenen Bootgroesse berechneten BIOS-Livezaehler wieder her, ohne die
+  DMA-Konfiguration zu ueberschreiben. Freie Speicherproben uebersetzen nun
+  ueber die aktive Gast-MMU und verwenden eine nebenwirkungsfreie Whitelist
+  fuer RAM, VRAM, AICA-RAM und Flash; MMIO-Handler werden nie aufgerufen.
+- Konsolenregion und Broadcastmodus werden nicht mehr aus den Disc-
+  Areasymbolen abgeleitet. Der Portvertrag traegt ein explizites Profil
+  `japan-ntsc`, `north-america-ntsc`, `europe-pal` oder `vga`; damit wird ein
+  regionsoffenes `JUE` nicht mehr still als PAL-Konsole behandelt. BIOS-ABI 6,
+  Runtime-ABI 31 und Portprojektvertrag 19 versionieren diese Korrekturen.
+- WinCE-Bootlayouts und gescrambelte Nicht-GD-ROM-Bootdateien werden bis zu
+  ihrer eigenstaendigen nativen Segment-/Descramble-Implementierung mit
+  stabilen Loaderfehlern abgelehnt. Sie laufen nicht mehr still mit einer
+  nachweislich falschen Bootabbildung weiter.
 - SH-4-On-Chip-RAM ist als allgemeines 8-KiB-Backing im 64-MiB-Aperturfenster
   `0x7C000000..0x7FFFFFFF` implementiert. `CCR.ORA` schaltet Zugriffe frei,
   `CCR.OIX` waehlt die dokumentierte Indexabbildung; deaktivierte Zugriffe,

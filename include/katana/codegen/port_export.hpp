@@ -26,6 +26,7 @@ struct PortExportOptions {
     PartitionOptions partition_options;
     std::filesystem::path forbidden_source_root;
     bool diagnostic_partial = false;
+    std::string console_profile = "japan-ntsc";
 };
 
 struct PortExportResult {

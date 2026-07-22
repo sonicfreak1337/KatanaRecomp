@@ -3,6 +3,7 @@
 #include "katana/runtime/dreamcast_boot.hpp"
 #include "katana/runtime/dreamcast_memory.hpp"
 #include "katana/runtime/gdrom_controller.hpp"
+#include "katana/runtime/platform_services.hpp"
 #include "katana/runtime/pvr.hpp"
 #include "katana/runtime/system_asic.hpp"
 
@@ -10,6 +11,7 @@
 #include <array>
 #include <iomanip>
 #include <sstream>
+#include <utility>
 #include <vector>
 
 namespace katana::runtime {
@@ -127,7 +129,7 @@ std::uint32_t execute_sysinfo_call(CpuState& cpu, const std::uint32_t selector) 
             cpu.memory.write_bytes(0x8C000068u, data, CodeWriteSource::Copy);
             return 0u;
         }
-        if (selector == 2u) return cpu.r[4] <= 9u ? 704u : 0xFFFFFFFFu;
+        if (selector == 2u) return 0xFFFFFFFFu;
         if (selector == 3u) return 0x8C000068u;
     } catch (...) {
         return 0xFFFFFFFFu;
@@ -146,6 +148,7 @@ std::uint32_t execute_system_call(CpuState& cpu, const std::uint32_t selector) n
                 cpu.memory.write_u32(level2_normal_mask, 0u);
             if (cpu.memory.contains(border_color, sizeof(std::uint32_t)))
                 cpu.memory.write_u32(border_color, boot_border_color);
+            if (cpu.g1_bus != nullptr) cpu.g1_bus->restore_bios_handoff();
             return boot_border_color;
         }
         if (selector == 2u)
@@ -192,21 +195,26 @@ BiosAbiCall call(const BiosAbiVectorKind vector,
 BlockExit bios_abi_block(CpuState& cpu, BlockExecutionContext& context) {
     const auto source = cpu.pc;
     const auto routed = route_hle_bios_abi_call(cpu);
-    if (routed.vector == BiosAbiVectorKind::System && routed.selector == 1u) {
-        if (!cpu.disc_reboot)
-            throw BiosAbiDispatchError(source,
-                                       routed.selector,
-                                       routed.super_selector,
-                                       cpu.pr,
-                                       "service-unavailable:system-soft-reboot" +
-                                           register_snapshot(cpu));
-        cpu.disc_reboot(cpu);
-        context.delay_slot_owner_pc.reset();
-        return make_block_exit(cpu,
-                               context,
-                               BlockEndKind::StaticBranch,
-                               {source, canonical_physical_address(source)},
-                               BlockAddress{cpu.pc, canonical_physical_address(cpu.pc)});
+    if (routed.vector == BiosAbiVectorKind::System &&
+        (routed.selector == 0xFFFFFFFFu || routed.selector == 1u || routed.selector == 3u)) {
+        PlatformLifecycleExitEvidence evidence;
+        evidence.guest_cycle = context.scheduler_cycle;
+        evidence.callsite = source;
+        evidence.return_address = cpu.pr;
+        evidence.registers = cpu.r;
+        if (cpu.gdrom_services != nullptr) {
+            const auto& gdrom = cpu.gdrom_services->last_bios_request();
+            evidence.last_gdrom_request = gdrom.id;
+            evidence.last_gdrom_command = gdrom.command;
+            evidence.last_gdrom_state = static_cast<std::uint32_t>(gdrom.state);
+            evidence.last_gdrom_status = gdrom.status;
+        }
+        const auto reason = routed.selector == 0xFFFFFFFFu
+                                ? PlatformLifecycleExitReason::Reset
+                            : routed.selector == 1u
+                                ? PlatformLifecycleExitReason::BiosMenu
+                                : PlatformLifecycleExitReason::CdMenu;
+        throw PlatformLifecycleExit(reason, std::move(evidence));
     }
     const auto is_gdrom = routed.vector == BiosAbiVectorKind::MiscGdrom ||
                           routed.vector == BiosAbiVectorKind::Gdrom2;
@@ -313,7 +321,11 @@ BiosAbiCall route_hle_bios_abi_call(const CpuState& cpu) {
         if (selector == 0u)
             return call(vector->kind, selector, super_selector, "sysinfo-init", Status::Completed);
         if (selector == 2u)
-            return call(vector->kind, selector, super_selector, "sysinfo-icon", Status::Completed);
+            return call(vector->kind,
+                        selector,
+                        super_selector,
+                        "sysinfo-icon",
+                        Status::ServiceUnavailable);
         if (selector == 3u)
             return call(vector->kind, selector, super_selector, "sysinfo-id", Status::Completed);
         break;
@@ -380,14 +392,14 @@ BiosAbiCall route_hle_bios_abi_call(const CpuState& cpu) {
             return call(vector->kind,
                         selector,
                         super_selector,
-                        "system-soft-reboot",
+                        "system-bios-menu",
                         Status::Completed);
         if (selector == 0xFFFFFFFFu || selector == 3u)
             return call(vector->kind,
                         selector,
                         super_selector,
                         "system-lifecycle",
-                        Status::ServiceUnavailable);
+                        Status::Completed);
         break;
     }
     throw BiosAbiDispatchError(cpu.pc,

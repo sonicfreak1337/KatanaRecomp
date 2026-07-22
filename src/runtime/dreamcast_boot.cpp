@@ -126,10 +126,34 @@ std::optional<std::filesystem::path> environment_path(const char* name) {
 
 } // namespace
 
-DreamcastRegion dreamcast_region_from_area_symbols(const std::string_view area_symbols) noexcept {
-    if (area_symbols.find('E') != std::string_view::npos) return DreamcastRegion::Europe;
-    if (area_symbols.find('U') != std::string_view::npos) return DreamcastRegion::NorthAmerica;
+DreamcastRegion
+dreamcast_region_for_console_profile(const DreamcastConsoleProfile profile) noexcept {
+    switch (profile) {
+    case DreamcastConsoleProfile::JapanNtsc:
+        return DreamcastRegion::Japan;
+    case DreamcastConsoleProfile::NorthAmericaNtsc:
+        return DreamcastRegion::NorthAmerica;
+    case DreamcastConsoleProfile::EuropePal:
+        return DreamcastRegion::Europe;
+    case DreamcastConsoleProfile::Vga:
+        return DreamcastRegion::Japan;
+    }
     return DreamcastRegion::Japan;
+}
+
+std::string_view
+dreamcast_console_profile_name(const DreamcastConsoleProfile profile) noexcept {
+    switch (profile) {
+    case DreamcastConsoleProfile::JapanNtsc:
+        return "japan-ntsc";
+    case DreamcastConsoleProfile::NorthAmericaNtsc:
+        return "north-america-ntsc";
+    case DreamcastConsoleProfile::EuropePal:
+        return "europe-pal";
+    case DreamcastConsoleProfile::Vga:
+        return "vga";
+    }
+    return "unknown";
 }
 
 std::filesystem::path default_dreamcast_user_data_root() {
@@ -234,6 +258,7 @@ DreamcastRuntimeBootImage load_dreamcast_runtime_boot(std::shared_ptr<DiscSource
     const auto repeated_system_bootstrap =
         source->read(bootstrap_offset, dreamcast_system_bootstrap_size);
     const auto hardware_id = trimmed_ascii(boot_sector, 0x00u, 16u);
+    const auto disc_type = trimmed_ascii(boot_sector, 0x25u, 6u);
     const auto area_symbols = trimmed_ascii(boot_sector, 0x30u, 8u);
     const auto boot_file_name = trimmed_ascii(boot_sector, 0x60u, 16u);
     if (hardware_id != "SEGA SEGAKATANA") {
@@ -241,6 +266,13 @@ DreamcastRuntimeBootImage load_dreamcast_runtime_boot(std::shared_ptr<DiscSource
     }
     if (!safe_iso_file_name(boot_file_name)) {
         throw std::invalid_argument("Dreamcast-Bootdateiname ist ungueltig.");
+    }
+    if (boot_sector.at(0x3Eu) == static_cast<std::uint8_t>('1') ||
+        boot_file_name == "0WINCEOS.BIN") {
+        throw std::runtime_error("unsupported-dreamcast-wince-boot-layout");
+    }
+    if (!disc_type.empty() && disc_type != "GD-ROM") {
+        throw std::runtime_error("unsupported-scrambled-non-gdrom-boot-layout");
     }
 
     std::vector<std::uint8_t> boot_file;
@@ -286,13 +318,14 @@ DreamcastRuntimeState
 initialize_dreamcast_runtime(CpuState& cpu,
                              const DreamcastRuntimeBootImage& boot,
                              const DreamcastRuntimeFirmwareMode firmware_mode,
-                             std::shared_ptr<DreamcastMutableStorage> mutable_storage) {
+                             std::shared_ptr<DreamcastMutableStorage> mutable_storage,
+                             const DreamcastConsoleProfile console_profile) {
     if (!boot.source || boot.system_bootstrap.size() != dreamcast_system_bootstrap_size ||
         boot.boot_file.empty() || !boot.repeated_bootstrap_reads_match ||
         !boot.repeated_reads_match) {
         throw std::invalid_argument("Dreamcast-Runtime-Bootimage ist unvollstaendig.");
     }
-    const auto boot_region = dreamcast_region_from_area_symbols(boot.area_symbols);
+    const auto boot_region = dreamcast_region_for_console_profile(console_profile);
     cpu.memory = Memory(0u);
     DreamcastRuntimeState state;
     state.main_ram = map_dreamcast_main_ram(cpu.memory);
@@ -406,10 +439,12 @@ initialize_dreamcast_runtime(CpuState& cpu,
         [raise_now](const bool entering) {
             raise_now(entering ? SystemAsicEvent::PvrVblank : SystemAsicEvent::PvrVblankOut);
         });
-    configure_dreamcast_video(
-        *state.pvr_registers,
-        boot_region == DreamcastRegion::Europe ? DreamcastVideoMode::PalInterlaced
-                                               : DreamcastVideoMode::NtscInterlaced);
+    const auto video_mode = console_profile == DreamcastConsoleProfile::EuropePal
+                                ? DreamcastVideoMode::PalInterlaced
+                            : console_profile == DreamcastConsoleProfile::Vga
+                                ? DreamcastVideoMode::Vga
+                                : DreamcastVideoMode::NtscInterlaced;
+    configure_dreamcast_video(*state.pvr_registers, video_mode);
     state.pvr_ta_aperture =
         std::make_shared<PvrTaFifoMemoryDevice>(state.pvr_ta_fifo, state.pvr_registers);
     const auto reset_ta_fifo = std::weak_ptr<PvrTaFifo>(state.pvr_ta_fifo);
@@ -553,6 +588,12 @@ initialize_dreamcast_runtime(CpuState& cpu,
             if (!controller) throw std::runtime_error("G1-GD-ROM-Lebenszyklus fehlt.");
             controller->dma_to_memory(address, length, direction);
         });
+    cpu.g1_bus = state.holly_dma.g1.get();
+    const auto boot_sectors = static_cast<std::uint32_t>(
+        (boot.boot_file.size() + dreamcast_data_sector_size - 1u) /
+        dreamcast_data_sector_size);
+    state.holly_dma.g1->configure_bios_handoff(
+        dreamcast_disc_boot_address + boot_sectors * dreamcast_data_sector_size);
     state.holly_dma.pvr->bind_sh4_dmac(state.dmac, 0u);
     const auto g2_dma = std::weak_ptr<DreamcastG2DmaController>(state.holly_dma.g2);
     const auto pvr_dma = std::weak_ptr<DreamcastPvrDmaController>(state.holly_dma.pvr);
@@ -681,58 +722,6 @@ initialize_dreamcast_runtime(CpuState& cpu,
     state.io_ports->write_control_a(dreamcast_bios_handoff_pctra);
     if (boot_region == DreamcastRegion::Europe)
         state.io_ports->write_data_a(dreamcast_bios_handoff_pal_pdtra);
-    if (firmware_mode == DreamcastRuntimeFirmwareMode::HleBiosAbi) {
-        const auto source = boot.source;
-        const auto data_track_lba = boot.data_track_lba;
-        const auto validated_tracks = boot.validated_tracks;
-        const auto main_ram = state.main_ram;
-        const auto dmac = state.dmac;
-        const auto aica_registers = state.aica_registers;
-        const auto cache_control = state.cache_control;
-        const auto io_ports = state.io_ports;
-        cpu.disc_reboot = [source,
-                           data_track_lba,
-                           validated_tracks,
-                           main_ram,
-                           dmac,
-                           aica_registers,
-                           cache_control,
-                           io_ports,
-                           boot_region](CpuState& reboot_cpu) {
-            const auto fresh_boot =
-                load_dreamcast_runtime_boot(source, data_track_lba, validated_tracks);
-
-            // The final BIOS handoff owns 0x0000..0x7fff.  The upper half of the
-            // 64-KiB BIOS work area is immediately replaced by the 16-sector
-            // system bootstrap, so preserving it here keeps byte-change based
-            // AOT invalidation precise instead of invalidating every bootstrap
-            // block on every reboot.
-            refresh_hle_bios_abi_memory(*main_ram, 0x8000u);
-            reboot_cpu.memory.write_bytes(dreamcast_system_bootstrap_address,
-                                          fresh_boot.system_bootstrap,
-                                          CodeWriteSource::Copy);
-            reboot_cpu.memory.write_bytes(
-                dreamcast_disc_boot_address, fresh_boot.boot_file, CodeWriteSource::Copy);
-
-            dmac->reset();
-            dmac->write_operation(dreamcast_bios_handoff_dmaor);
-            aica_registers->reset();
-            aica_registers->write(0x289Cu, 0x48u, MemoryAccessWidth::Halfword);
-            aica_registers->write(0x28A8u, 0x18u, MemoryAccessWidth::Byte);
-            aica_registers->write(0x28ACu, 0x50u, MemoryAccessWidth::Byte);
-            aica_registers->write(0x28B0u, 0x08u, MemoryAccessWidth::Byte);
-            cache_control->reset();
-            io_ports->reset();
-            io_ports->write_control_a(dreamcast_bios_handoff_pctra);
-            if (boot_region == DreamcastRegion::Europe)
-                io_ports->write_data_a(dreamcast_bios_handoff_pal_pdtra);
-
-            reset_dreamcast_direct_boot_cpu(reboot_cpu);
-            reboot_cpu.pc = dreamcast_system_bootstrap_entry_address;
-        };
-    } else {
-        cpu.disc_reboot = {};
-    }
     return state;
 }
 

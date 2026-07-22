@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <array>
 #include <limits>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -170,7 +171,7 @@ void DreamcastGdRomController::execute_packet() {
             return;
         }
         case 0x43u:
-            publish_data(build_toc(0u));
+            publish_data(build_packet_toc(0u));
             return;
         default:
             throw std::runtime_error("Unbekannter GD-ROM-Paketopcode.");
@@ -210,7 +211,8 @@ std::uint32_t DreamcastGdRomController::fad_to_lba(const std::uint32_t fad) noex
     return fad >= 150u ? fad - 150u : fad;
 }
 
-std::vector<std::uint8_t> DreamcastGdRomController::build_toc(const std::uint32_t session) const {
+std::vector<std::uint8_t>
+DreamcastGdRomController::build_packet_toc(const std::uint32_t session) const {
     std::vector<std::uint8_t> result;
     const auto& layout = drive_.layout();
     for (const auto& track : layout) {
@@ -225,29 +227,101 @@ std::vector<std::uint8_t> DreamcastGdRomController::build_toc(const std::uint32_
     return result;
 }
 
-std::uint64_t DreamcastGdRomController::submit_bios_read(CpuState& cpu,
-                                                         const std::uint32_t command,
-                                                         const std::uint32_t parameters) {
-    const auto fad = guest_read_u32(cpu, parameters);
-    const auto count = guest_read_u32(cpu, parameters + 4u);
-    const auto destination = guest_read_u32(cpu, parameters + 8u);
-    const auto async_id = reader_.submit({GdRomCommand::ReadSectors, fad_to_lba(fad), count});
-    bios_requests_.emplace(async_id,
-                           BiosRequest{async_id,
-                                       destination,
-                                       command == 17u ? CodeWriteSource::Dma
-                                                      : CodeWriteSource::Copy,
-                                       false,
-                                       {}});
-    return async_id;
+std::array<std::uint32_t, 102u>
+DreamcastGdRomController::build_bios_toc(const std::uint32_t area) const {
+    std::array<std::uint32_t, 102u> result{};
+    result.fill(0xFFFFFFFFu);
+    if (area > 1u) return result;
+    const auto& layout = drive_.layout();
+    if (layout.empty()) return result;
+    const auto [minimum_session, maximum_session] = std::minmax_element(
+        layout.begin(), layout.end(), [](const auto& left, const auto& right) {
+            return left.session < right.session;
+        });
+    const auto multi_area = minimum_session->session != maximum_session->session;
+    const auto selected_session = area == 0u ? minimum_session->session : maximum_session->session;
+    std::vector<const DiscTrackLayout*> selected;
+    for (const auto& track : layout) {
+        if ((!multi_area && area == 0u) || (multi_area && track.session == selected_session))
+            selected.push_back(&track);
+    }
+    if (selected.empty()) return result;
+    const auto encode = [](const DiscTrackLayout& track, const std::uint32_t fad) {
+        const auto control = track.kind == DiscTrackKind::Data ? 4u : 0u;
+        return (control << 28u) | (1u << 24u) | (fad & 0x00FFFFFFu);
+    };
+    for (const auto* track : selected) {
+        if (track->number == 0u || track->number > 99u) continue;
+        result[track->number - 1u] = encode(*track, track->lba + 150u);
+    }
+    const auto* first = selected.front();
+    const auto* last = selected.back();
+    result[99] = encode(*first, first->number << 16u);
+    result[100] = encode(*last, last->number << 16u);
+    const auto leadout = static_cast<std::uint64_t>(last->lba) + last->sector_count + 150u;
+    if (leadout <= 0x00FFFFFFu)
+        result[101] = encode(*last, static_cast<std::uint32_t>(leadout));
+    return result;
+}
+
+void DreamcastGdRomController::submit_bios_read(BiosRequest& request) {
+    request.destination = request.parameters[2];
+    request.write_source = request.command == 17u ? CodeWriteSource::Dma : CodeWriteSource::Copy;
+    request.async_id = reader_.submit({GdRomCommand::ReadSectors,
+                                       fad_to_lba(request.parameters[0]),
+                                       request.parameters[1]});
+    request.state = GdRomBiosRequestState::Processing;
+    request.status[3] = 1u;
+    remember_bios_request(request);
+}
+
+void DreamcastGdRomController::execute_bios_request(CpuState& cpu, BiosRequest& request) {
+    if (request.state != GdRomBiosRequestState::Queued) return;
+    if (request.command == 16u || request.command == 17u || request.command == 28u) {
+        submit_bios_read(request);
+        return;
+    }
+    if (request.command == 18u || request.command == 19u) {
+        if (request.parameters[0] > 1u || request.parameters[1] == 0u) {
+            request.response.status = GdRomStatus::InvalidField;
+            request.status = {5u, static_cast<std::uint32_t>(GdRomStatus::InvalidField), 0u, 0u};
+            request.state = GdRomBiosRequestState::Error;
+            remember_bios_request(request);
+            return;
+        }
+        const auto toc = build_bios_toc(request.parameters[0]);
+        for (std::size_t index = 0u; index < toc.size(); ++index)
+            guest_write_u32(cpu,
+                            request.parameters[1] + static_cast<std::uint32_t>(index * 4u),
+                            toc[index],
+                            CodeWriteSource::Copy);
+        request.status = {0u, 0u, static_cast<std::uint32_t>(toc.size() * 4u), 0u};
+        request.state = GdRomBiosRequestState::Complete;
+        remember_bios_request(request);
+        ++completed_commands_;
+        return;
+    }
+    if (request.command == 24u) {
+        request.status = {};
+        request.state = GdRomBiosRequestState::Complete;
+        remember_bios_request(request);
+        ++completed_commands_;
+        return;
+    }
+    request.response.status = GdRomStatus::InvalidCommand;
+    request.status = {5u, static_cast<std::uint32_t>(GdRomStatus::InvalidCommand), 0u, 0u};
+    request.state = GdRomBiosRequestState::Error;
+    remember_bios_request(request);
 }
 
 void DreamcastGdRomController::pump_completions() {
     while (auto completion = reader_.take_completed()) {
-        const auto found = bios_requests_.find(completion->request_id);
+        const auto found = std::find_if(bios_requests_.begin(), bios_requests_.end(),
+                                        [&](const auto& entry) {
+                                            return entry.second.async_id == completion->request_id;
+                                        });
         if (found == bios_requests_.end()) continue;
         found->second.response = std::move(completion->response);
-        found->second.completed = true;
         if (found->second.response.status == GdRomStatus::Good &&
             !found->second.response.data.empty()) {
             memory_.write_bytes(found->second.destination,
@@ -258,6 +332,25 @@ void DreamcastGdRomController::pump_completions() {
                                       found->second.response.data,
                                       drive_.identity());
         }
+        const auto transferred_bytes = found->second.response.data.empty()
+                                           ? static_cast<std::uint64_t>(
+                                                 found->second.response.transferred_sectors) *
+                                                 drive_.sector_size()
+                                           : found->second.response.data.size();
+        if (found->second.response.status == GdRomStatus::Good &&
+            transferred_bytes <= std::numeric_limits<std::uint32_t>::max()) {
+            found->second.status =
+                {0u, 0u, static_cast<std::uint32_t>(transferred_bytes), 0u};
+            found->second.state = GdRomBiosRequestState::Complete;
+        } else {
+            const auto error = found->second.response.status == GdRomStatus::NoMedia ? 2u : 5u;
+            found->second.status = {error,
+                                    static_cast<std::uint32_t>(found->second.response.status),
+                                    0u,
+                                    0u};
+            found->second.state = GdRomBiosRequestState::Error;
+        }
+        remember_bios_request(found->second);
         ++completed_commands_;
     }
 }
@@ -286,67 +379,145 @@ bool DreamcastGdRomController::reload_system_bootstrap(CpuState& cpu) {
     return true;
 }
 
+const DreamcastGdRomController::BiosRequest*
+DreamcastGdRomController::find_bios_request(const std::uint32_t id) const noexcept {
+    const auto found = bios_requests_.find(id);
+    return found == bios_requests_.end() ? nullptr : &found->second;
+}
+
+std::uint32_t DreamcastGdRomController::finish_bios_call(GdRomBiosCallEvent event,
+                                                         const std::uint32_t result) {
+    event.result = result;
+    if (event.selector == 0u && event.super_selector == 0u && result != 0u &&
+        result != 0xFFFFFFFFu)
+        event.request_id = result;
+    if (const auto* request = find_bios_request(event.request_id)) {
+        event.state_after = request->state;
+        event.status = request->status;
+    } else if (last_bios_request_.id == event.request_id) {
+        event.state_after = last_bios_request_.state;
+        event.status = last_bios_request_.status;
+    }
+    constexpr std::size_t event_capacity = 256u;
+    if (bios_call_events_.size() == event_capacity) {
+        bios_call_events_.erase(bios_call_events_.begin());
+        ++dropped_bios_call_events_;
+    }
+    bios_call_events_.push_back(std::move(event));
+    return result;
+}
+
 std::uint32_t DreamcastGdRomController::bios_call(CpuState& cpu,
                                                   const std::uint32_t selector,
                                                   const std::uint32_t super_selector) {
+    GdRomBiosCallEvent event;
+    event.sequence = next_bios_call_sequence_++;
+    event.guest_cycle = scheduler_.current_cycle();
+    event.callsite = cpu.pc;
+    event.return_address = cpu.pr;
+    event.selector = selector;
+    event.super_selector = super_selector;
+    event.arguments = {cpu.r[4], cpu.r[5], cpu.r[6], cpu.r[7]};
+    if (selector == 1u) {
+        event.request_id = cpu.r[4];
+    } else if (selector == 2u) {
+        const auto queued = std::find_if(bios_requests_.begin(), bios_requests_.end(),
+                                         [](const auto& entry) {
+                                             return entry.second.state ==
+                                                    GdRomBiosRequestState::Queued;
+                                         });
+        if (queued != bios_requests_.end()) event.request_id = queued->second.id;
+    } else {
+        event.request_id = last_bios_request_.id;
+    }
+    if (const auto* request = find_bios_request(event.request_id))
+        event.state_before = request->state;
+    else if (last_bios_request_.id == event.request_id)
+        event.state_before = last_bios_request_.state;
+
+    const auto finish = [&](const std::uint32_t result) {
+        return finish_bios_call(std::move(event), result);
+    };
     if (super_selector == 0xFFFFFFFFu && selector == 0u) {
         reset();
-        return 0u;
+        return finish(0u);
     }
-    if (super_selector != 0u) return 0xFFFFFFFFu;
+    if (super_selector != 0u) return finish(0xFFFFFFFFu);
     pump_completions();
     if (selector == 0u) {
-        const auto command = cpu.r[4];
-        const auto parameters = cpu.r[5];
-        if (command == 16u || command == 17u || command == 28u)
-            return static_cast<std::uint32_t>(submit_bios_read(cpu, command, parameters));
-        const auto id = next_immediate_request_++;
+        if (!bios_requests_.empty()) return finish(0u);
+        if (next_bios_request_ == 0u) next_bios_request_ = 1u;
         BiosRequest request;
-        request.completed = true;
-        if (command == 18u || command == 19u) {
-            const auto session = guest_read_u32(cpu, parameters);
-            request.destination = guest_read_u32(cpu, parameters + 4u);
-            request.response = {GdRomStatus::Good, build_toc(session), 0u};
-            memory_.write_bytes(request.destination, request.response.data, CodeWriteSource::Copy);
-        } else {
-            request.response.status = GdRomStatus::Good;
+        request.id = next_bios_request_++;
+        request.command = cpu.r[4];
+        if (cpu.r[5] != 0u) {
+            try {
+                for (std::size_t index = 0u; index < request.parameters.size(); ++index)
+                    request.parameters[index] = guest_read_u32(
+                        cpu, cpu.r[5] + static_cast<std::uint32_t>(index * 4u));
+            } catch (const MemoryAccessError&) {
+                return finish(0u);
+            }
         }
+        const auto id = request.id;
         bios_requests_.emplace(id, std::move(request));
-        return static_cast<std::uint32_t>(id);
+        remember_bios_request(bios_requests_.at(id));
+        return finish(id);
     }
     if (selector == 1u) {
         const auto found = bios_requests_.find(cpu.r[4]);
-        if (found == bios_requests_.end()) return 0xFFFFFFFFu;
-        if (!found->second.completed) return 0u;
+        if (found == bios_requests_.end()) return finish(0u);
         if (cpu.r[5] != 0u) {
-            guest_write_u32(cpu, cpu.r[5], found->second.response.transferred_sectors,
-                            CodeWriteSource::Copy);
-            guest_write_u32(cpu,
-                            cpu.r[5] + 4u,
-                            static_cast<std::uint32_t>(found->second.response.status),
-                            CodeWriteSource::Copy);
+            for (std::size_t index = 0u; index < found->second.status.size(); ++index)
+                guest_write_u32(cpu,
+                                cpu.r[5] + static_cast<std::uint32_t>(index * 4u),
+                                found->second.status[index],
+                                CodeWriteSource::Copy);
         }
-        const auto result = found->second.response.status == GdRomStatus::Good ? 1u : 0xFFFFFFFFu;
-        bios_requests_.erase(found);
-        return result;
+        switch (found->second.state) {
+        case GdRomBiosRequestState::None:
+            return finish(0u);
+        case GdRomBiosRequestState::Queued:
+        case GdRomBiosRequestState::Processing:
+            remember_bios_request(found->second);
+            return finish(1u);
+        case GdRomBiosRequestState::Streaming:
+            remember_bios_request(found->second);
+            return finish(3u);
+        case GdRomBiosRequestState::Complete:
+            remember_bios_request(found->second);
+            bios_requests_.erase(found);
+            return finish(2u);
+        case GdRomBiosRequestState::Error:
+            remember_bios_request(found->second);
+            bios_requests_.erase(found);
+            return finish(0xFFFFFFFFu);
+        }
+        return finish(0xFFFFFFFFu);
     }
     if (selector == 2u) {
+        const auto queued = std::find_if(bios_requests_.begin(), bios_requests_.end(),
+                                         [](const auto& entry) {
+                                             return entry.second.state ==
+                                                    GdRomBiosRequestState::Queued;
+                                         });
+        if (queued != bios_requests_.end()) execute_bios_request(cpu, queued->second);
         pump_completions();
-        return 0u;
+        return finish(0u);
     }
     if (selector == 3u || selector == 8u || selector == 9u || selector == 10u) {
         if (selector == 9u) reset();
-        return 0u;
+        return finish(0u);
     }
     if (selector == 4u) {
         if (cpu.r[4] != 0u) {
             guest_write_u32(cpu, cpu.r[4], 2u, CodeWriteSource::Copy);
             guest_write_u32(cpu, cpu.r[4] + 4u, 0x80u, CodeWriteSource::Copy);
         }
-        return 0u;
+        return finish(0u);
     }
-    if (selector == 5u || selector == 6u || selector == 7u) return 0u;
-    return 0xFFFFFFFFu;
+    if (selector == 5u || selector == 6u || selector == 7u) return finish(0u);
+    return finish(0xFFFFFFFFu);
 }
 
 void DreamcastGdRomController::dma_to_memory(const std::uint32_t address,
@@ -380,6 +551,50 @@ GdRomProductStatus DreamcastGdRomController::status() const noexcept {
             completed_dma_};
 }
 
+const GdRomBiosRequestStatus& DreamcastGdRomController::last_bios_request() const noexcept {
+    return last_bios_request_;
+}
+
+std::span<const GdRomBiosCallEvent>
+DreamcastGdRomController::bios_call_events() const noexcept {
+    return bios_call_events_;
+}
+
+std::string DreamcastGdRomController::format_bios_call_events_json() const {
+    std::ostringstream output;
+    output << "{\"schema\":\"katana-gdrom-bios-events\",\"version\":1,"
+              "\"dropped_events\":"
+           << dropped_bios_call_events_ << ",\"events\":[";
+    for (std::size_t index = 0u; index < bios_call_events_.size(); ++index) {
+        if (index != 0u) output << ',';
+        const auto& event = bios_call_events_[index];
+        output << "{\"sequence\":" << event.sequence << ",\"guest_cycle\":"
+               << event.guest_cycle << ",\"callsite\":" << event.callsite
+               << ",\"return_address\":" << event.return_address << ",\"selector\":"
+               << event.selector << ",\"super_selector\":" << event.super_selector
+               << ",\"arguments\":[";
+        for (std::size_t argument = 0u; argument < event.arguments.size(); ++argument) {
+            if (argument != 0u) output << ',';
+            output << event.arguments[argument];
+        }
+        output << "],\"request_id\":" << event.request_id << ",\"state_before\":"
+               << static_cast<std::uint32_t>(event.state_before) << ",\"state_after\":"
+               << static_cast<std::uint32_t>(event.state_after) << ",\"result\":"
+               << event.result << ",\"status\":[";
+        for (std::size_t word = 0u; word < event.status.size(); ++word) {
+            if (word != 0u) output << ',';
+            output << event.status[word];
+        }
+        output << "]}";
+    }
+    output << "]}";
+    return output.str();
+}
+
+void DreamcastGdRomController::remember_bios_request(const BiosRequest& request) noexcept {
+    last_bios_request_ = {request.id, request.command, request.state, request.status};
+}
+
 void DreamcastGdRomController::reset() noexcept {
     if (packet_event_ && !scheduler_lifetime_.expired())
         static_cast<void>(scheduler_.cancel(*packet_event_));
@@ -393,6 +608,8 @@ void DreamcastGdRomController::reset() noexcept {
     byte_count_ = 0u;
     expecting_packet_ = false;
     bios_requests_.clear();
+    next_bios_request_ = 1u;
+    last_bios_request_ = {};
 }
 
 std::shared_ptr<DreamcastGdRomController>

@@ -211,6 +211,9 @@ class Memory {
     [[nodiscard]] std::uint8_t read_u8(std::uint32_t address) const;
     [[nodiscard]] std::uint16_t read_u16(std::uint32_t address) const;
     [[nodiscard]] std::uint32_t read_u32(std::uint32_t address) const;
+    [[nodiscard]] std::uint32_t
+    peek_u32(std::uint32_t address,
+             std::span<const MemoryDevice* const> permitted_devices) const;
     [[nodiscard]] std::uint32_t read_s8(std::uint32_t address) const;
     [[nodiscard]] std::uint32_t read_s16(std::uint32_t address) const;
 

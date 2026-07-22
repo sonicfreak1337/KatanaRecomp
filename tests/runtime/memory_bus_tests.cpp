@@ -1,5 +1,6 @@
 #include "katana/runtime/memory.hpp"
 
+#include <array>
 #include <cstdlib>
 #include <iostream>
 #include <memory>
@@ -75,6 +76,23 @@ int main() {
                 bus.map_region("overflow", 0xFFFFFFFFu, std::make_shared<LinearMemoryDevice>(2u));
             }),
             "Regionen duerfen den 32-Bit-Adressraum nicht ueberschreiten.");
+
+    std::uint64_t diagnostic_mmio_reads = 0u;
+    const auto diagnostic_mmio = std::make_shared<katana::runtime::MmioMemoryDevice>(
+        4u,
+        [&](const auto, const auto) {
+            ++diagnostic_mmio_reads;
+            return 0xDEADBEEFu;
+        },
+        [](const auto, const auto, const auto) {});
+    bus.map_region("diagnostic-mmio", 0x00003000u, diagnostic_mmio);
+    const std::array<const katana::runtime::MemoryDevice*, 1u> permitted{work_ram.get()};
+    require(bus.peek_u32(0x00001004u, permitted) == 0x89ABCDEFu &&
+                throws<katana::runtime::MemoryAccessError>([&] {
+                    static_cast<void>(bus.peek_u32(0x00003000u, permitted));
+                }) &&
+                diagnostic_mmio_reads == 0u,
+            "Diagnostischer Peek liest MMIO oder umgeht seine Geraete-Whitelist.");
 
     Memory indexed(0u);
     auto indexed_ram = std::make_shared<LinearMemoryDevice>(0x20000u);

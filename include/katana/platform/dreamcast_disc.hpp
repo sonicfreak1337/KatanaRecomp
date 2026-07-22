@@ -14,8 +14,8 @@
 namespace katana::platform {
 
 inline constexpr std::uint32_t dreamcast_disc_boot_address = 0x8C010000u;
-inline constexpr std::uint32_t dreamcast_system_bootstrap_address = 0x8C008000u;
-inline constexpr std::uint32_t dreamcast_system_bootstrap_entry_address = 0x8C008300u;
+inline constexpr std::uint32_t dreamcast_system_bootstrap_address = 0xAC008000u;
+inline constexpr std::uint32_t dreamcast_system_bootstrap_entry_address = 0xAC008300u;
 
 enum class DreamcastDiscExecutionPath : std::uint8_t {
     DirectBootFile,

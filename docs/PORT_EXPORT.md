@@ -5,13 +5,18 @@ statischen nativen AOT-Code. Ein verteilbares Portpaket enthaelt keine Raw-,
 Audio- oder sonstigen kommerziellen Discsektoren:
 
 ```powershell
-katana-recomp port .\disc\game.gdi --output .\port --target-name game
+katana-recomp port .\disc\game.gdi --output .\port --target-name game --console-profile europe-pal
 ```
 
 Die GDI und alle Tracks werden read-only geoeffnet. Analyse, Katana-IR,
 Optimierung und C++-Partitionierung bleiben spielagnostisch; es gibt keine
 Titeladressen, Dateinamen oder Sonderfaelle. Die Originaldateien werden weder
 veraendert noch geloescht.
+
+`--console-profile` waehlt die nachgebildete Konsolenkonfiguration explizit:
+`japan-ntsc`, `north-america-ntsc`, `europe-pal` oder `vga`. Ohne Option gilt
+der dokumentierte Japan-NTSC-Default. Disc-Areasymbole sind nur
+Kompatibilitaetsmetadaten und werden nicht als Konsolenregion interpretiert.
 
 ## Verteilbares Layout
 
@@ -91,3 +96,10 @@ Pfade, Format-/ABI-Daten, Groessen, Generationen und SHA-256-Werte.
 Der Vertrag gilt fuer alle unterstuetzten Dreamcast-GDI-Titel. Private Spiele
 dienen ausschliesslich als lokale End-to-End-Fixtures; verteilbare und CI-Tests
 verwenden synthetische oder frei lizenzierte Inhalte.
+
+Bewusste Loadergrenze: WinCE-Layouts mit getrenntem erstem Bootsektor und
+gescrambelte Nicht-GD-ROM-Bootdateien werden derzeit mit den stabilen Fehlern
+`unsupported-dreamcast-wince-boot-layout` beziehungsweise
+`unsupported-scrambled-non-gdrom-boot-layout` abgelehnt. Der Export behauptet
+fuer diese Layouts keine native AOT-Faehigkeit und descrambelt keine Daten mit
+uebernommenem Emulatorcode.

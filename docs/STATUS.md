@@ -104,7 +104,7 @@ Bootdatei; der erneute Audit verwarf diesen unvollstaendigen Vertrag. Der
 allgemeine Runtimepfad liest jetzt Bootstrap und Bootdatei erneut aus der
 gebundenen Discquelle, rekonstruiert den definierten BIOS-RAM-Zustand samt
 Vektoren und setzt DMAOR, AICA-Masken, Cache sowie PAL-Port erneut. Der Einstieg
-erfolgt wieder ueber den Systembootstrap bei `0x8C008300`. Der direkte
+erfolgt wieder ueber den P2-Systembootstrap bei `0xAC008300`. Der direkte
 GD2-BIOS-Einstieg `0x8C0010F0` ist als zusaetzlicher Aliasblock vorhanden.
 Synthetische Regressionen veraendern Bootbytes und Geraetezustand vor SYSTEM 1
 und beweisen deren Wiederherstellung.
@@ -118,12 +118,12 @@ regressionsgetestet. Der private A/B-Lauf erreicht danach weiterhin keinen
 GD-ROM-/TA-/PVR-Zugriff; der vorgelagerte Statuspfad bleibt daher aktiver P0.
 
 Speicherproben vor dem Fatalpfad belegen die Ursache inzwischen enger: Das
-gesamte Disc-Systemfenster ab `0x8C008000` war null, weil der bisherige
+gesamte physische Disc-Systembereich ab `0x0C008000` war null, weil der bisherige
 Direct-Boot nur die Bootdatei nach `0x8C010000` lud. Der PAL-SYSINFO-Wert war
 dagegen korrekt. Der gegen Flycast-Reios und die lokale BIOS-Zerlegung
 abgeglichene, aber eigenstaendig implementierte Produktvertrag liest deshalb
 die ersten 16 Datensektoren als separates Bootstrapsegment, nimmt dessen
-Einstieg bei `0x8C008300` in Analyse, IR und nativen Codegen auf und laedt
+Einstieg bei `0xAC008300` in Analyse, IR und nativen Codegen auf und laedt
 Bootstrap sowie Hauptprogramm vor dem Gaststart. Die sieben Sektoren nach
 `0x8C008100` bleiben davon getrennt die Semantik des BIOS-Discpruefaufrufs.
 Sechs fokussierte Boot-, Manifest-, GUI- und Portexportregressionen sind gruen;
@@ -137,10 +137,30 @@ MMIO-Zugriff liegt im aktiven OCRAM; der fruehere Abbruch nach 12 Gastzyklen
 ist damit beseitigt. TA/PVR und ein echter Gastframe bleiben fuer den laengeren
 Folgelauf weiterhin offen.
 
-Runtime-ABI 30, BIOS-ABI 5 und Portprojektvertrag 18 bilden den kumulativen
+Runtime-ABI 31, BIOS-ABI 6 und Portprojektvertrag 19 bilden den kumulativen
 v0.48-Stand ab.
 PlatformServices-ABI 8 versioniert das invalidierungsgesicherte lokale
 Blockchaining.
+
+Der anschliessende statische Flycast-/KallistiOS-Abgleich hat den noch vor
+PVR liegenden BIOS-Statuspfad konkretisiert. Der produktive GD-ROM-BIOS-Dienst
+verwendet nun die oeffentlichen PROCESSING-/COMPLETED-/NOT_FOUND-Werte, vier
+Statuswoerter mit Bytezahl, einen echten EXEC_SERVER-Uebergang und getrennte
+408-Byte-LOW/HIGH-TOCs. G1 fuehrt konfigurierte und laufende Zaehler getrennt;
+`SYSTEM 0` restauriert den Boot-Livezaehler. Freie Gastproben sind MMU-bewusst
+und koennen keine MMIO-Leseeffekte mehr ausloesen. `SYSTEM 1` endet als
+typisierter BIOS-Menue-Ausgang mit Register- und letztem GD-ROM-Zustand, statt
+einen Emulatorersatz-Neustart auszufuehren. Ein begrenztes BIOS-Ereignislog
+wird auf diesem Pfad automatisch ausgegeben. Konsolenprofil und PAL/NTSC/VGA
+sind explizit und werden nicht aus `JUE` abgeleitet. Diese Runde ist
+implementiert und kompiliert; die zusammenhaengende synthetische Validierung
+und der anschliessende einzelne private PAL-Lauf stehen noch aus. Ein erster
+Gastframe wird weiterhin nicht behauptet.
+
+WinCE-Bootlayouts und gescrambelte Nicht-GD-ROM-Bootdateien bleiben eine
+bewusste allgemeine Loadergrenze. Bis ein eigenstaendiger nativer Segment- und
+Descramble-Vertrag implementiert ist, lehnt der Loader beide Klassen stabil ab
+und behauptet keine falsche Portfaehigkeit.
 
 Die zusammenhaengende zweite Bootkorrekturrunde ist implementiert. Sie umfasst
 RTC-Schreiblatch, vollstaendige MMU-Miss-/Multiple-Hit-Semantik, `MMUCR.SV`,

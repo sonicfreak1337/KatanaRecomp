@@ -55,8 +55,8 @@ int main() {
     hle.firmware_mode = platform::FirmwareMode::HleBiosAbi;
     const auto hle_result = platform::boot_homebrew(hle_cpu, image, hle);
     require(hle_result.runtime_blocks && hle_result.firmware_handoff &&
-                hle_result.runtime_blocks->size() == 6u &&
-                hle_result.firmware_handoff->runtime_symbols().size() == 12u &&
+                hle_result.runtime_blocks->size() == 7u &&
+                hle_result.firmware_handoff->runtime_symbols().size() == 13u &&
                 hle_cpu.memory.read_u32(0x8C0000B0u) ==
                     katana::runtime::hle_bios_abi_vectors()[0].handler_address &&
                 hle_result.log.front() == "firmware=hle-bios-abi" &&

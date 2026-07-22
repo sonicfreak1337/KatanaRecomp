@@ -66,7 +66,7 @@ int main() {
     cpu.vbr = 0x8C000000u;
     cpu.set_interrupt_mask(0u);
     require(router.accept(cpu) && cpu.intevt == 0x00000320u && asic->events().size() == 4u &&
-                boot.firmware_handoff->runtime_symbols().size() == 12u,
+                boot.firmware_handoff->runtime_symbols().size() == 13u,
             "Gemeinsamer Retail-Bootpfad erreicht BIOS-Handoff und ASIC-Level-6 nicht.");
 
     std::cout << "KR_V046_RETAIL_BOOT_SERVICES_READY\n";

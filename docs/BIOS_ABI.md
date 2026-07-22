@@ -28,18 +28,17 @@ Anders als die uebrigen C-artigen Vektoren uebergibt SYSTEM seinen
 Funktionscode als erstes Argument in `r4`. Die Rueckkehrfunktionen 0
 (Normalinitialisierung) und 2 (Discpruefung samt erneutem Laden der sieben
 Bootstrapsektoren) sind an PVR-/ASIC- beziehungsweise GD-ROM-Zustand gebunden.
-`SYSTEM 1` ist eine nicht zurueckkehrende Disc-Reboot-Grenze. Die Runtime liest
-den 16-Sektoren-Systembootstrap und die ISO-Bootdatei erneut aus der bereits
-gebundenen Discquelle, stellt BIOS-RAM, Vektoren, DMAOR, AICA-Masken,
-Cachezustand und Regionsport wieder her und springt ueber `0x8C008300` erneut
-in den nativen Bootstrap. BIOS-/CD-Menue bleiben sichtbare, nicht
-implementierte Lifecycle-Grenzen und werden nicht als erfolgreicher No-op
-ausgegeben.
+`SYSTEM -1`, `SYSTEM 1` und `SYSTEM 3` sind typisierte, nicht zurueckkehrende
+Lifecycle-Ausgaenge fuer Reset, BIOS-Menue und CD-Menue. Insbesondere startet
+`SYSTEM 1` weder den Bootstrap noch die Bootdatei intern neu. Der Host kann
+danach explizit einen neuen Lauf anbieten. Die Grenze bewahrt Gastzyklus,
+Callsite, `PR`, `r0..r15` und den letzten GD-ROM-Requeststatus als strukturierte
+Evidenz.
 
 Zustandsfreie Initialisierung sowie ROMFONT-Lock/Unlock koennen bereits
 deterministisch abgeschlossen werden. Flash- und GD-ROM-Dienste sind an ihre
-konkreten Plattformdienste gebunden. Fontdaten und noch nicht implementierte
-Lifecycle-Aufrufe enden sichtbar als `service-unavailable`. Unbekannte
+konkreten Plattformdienste gebunden. Fontdaten und `SYSINFO_ICON` enden bis zu
+einer echten Pufferausgabe sichtbar als `service-unavailable`. Unbekannte
 Vektoren, Selektoren und Superselektoren werfen eine stabile
 `BiosAbiDispatchError`-Diagnose mit Handler, Selektoren, Ruecksprungadresse und
 einem vollstaendigen SH-4-Registersnapshot. Kein Aufruf wird titelbezogen
@@ -47,7 +46,8 @@ umgebogen oder als erfolgreicher No-op behandelt.
 
 Vor dem ersten nativen Gastblock stellt der Disc-Boot den BIOS-Handoffzustand
 her. Dazu gehoeren die dokumentierten SH-4-Kontrollregister, `DMAOR=0x8201`,
-die AICA-Interruptlevel und fuer europaeische Discs das PAL-Broadcast-Bit.
+die AICA-Interruptlevel und fuer das explizite Profil `europe-pal` das PAL-
+Broadcast-Bit. Die Disc-Areasymbole waehlen keine Konsolenregion.
 HLE-Stubs liegen ausserhalb von `VBR+0x100`, `VBR+0x400` und `VBR+0x600`, damit
 echte Exceptions nie als BIOS-Aufruf fehlgeroutet werden. Diese Werte sind
 plattformweit und werden weder aus einem Spiel noch aus proprietaeren
@@ -55,16 +55,29 @@ Firmwarebytes uebernommen.
 
 Der untere 64-KiB-BIOS-Arbeitsbereich beginnt definiert mit `0xFF`. Danach
 werden Vektoren und HLE-Stubs sowie im oberen 32-KiB-Fenster der Discbootstrap
-installiert. Beim Reboot wird derselbe sichtbare Endzustand wiederhergestellt;
-das direkte RAM-Backing bewahrt dabei die unveraenderten HLE-Runtimeblocks,
-waehrend tatsaechlich veraenderte Bootstrap- oder Bootdateibytes weiterhin die
-normale Codeinvalidierung ausloesen.
+installiert. Bootstrap- und Bootdateibytes unterliegen der normalen
+Codeinvalidierung; ein Lifecycle-Aufruf mutiert oder restauriert sie nicht.
 
-Der maschinenlesbare Vertrag besitzt Schema `katana-bios-abi`, Version 5.
+Der GD-ROM-Dienst modelliert Requests als `Queued`, `Processing`, `Complete`,
+`Streaming` oder `Error`. `GET_CMD_STAT` liefert vor der Verarbeitung 1, nach
+Erfolg einmalig 2, fuer Streaming 3, bei Fehler `-1` und nach Abholung 0. Der
+optionale Statuspuffer umfasst vier Woerter: Fehler 1, Fehler 2, uebertragene
+Bytezahl und Warte-/ATA-Zustand. Das BIOS-TOC besitzt unabhaengig vom
+Paketkommando exakt 102 Gastwoerter und trennt LOW/HIGH. Unbekannte Kommandos
+werden nicht als Erfolg abgeschlossen. Ein begrenztes Ereignislog zeichnet
+Zyklus, Aufrufstelle, Selektoren, Argumente, Zustandswechsel und Vierwortstatus
+ohne Pfade oder Discidentitaeten auf.
+
+`GDSTAR/GDLEN` bleiben programmierte G1-Register. `GDSTARD/GDLEND` zeigen den
+separaten Liveadress- und Transferzaehler. `SYSTEM 0` restauriert den aus der
+geladenen Bootgroesse berechneten BIOS-Livewert, ohne die programmierten
+Register zu veraendern.
+
+Der maschinenlesbare Vertrag besitzt Schema `katana-bios-abi`, Version 6.
 Synthetische Tests pruefen reproduzierbare Vektorbytes, Runtimeblockdispatch,
-P1/P2-Handoff, den direkten GD2-Alias, veraenderte und erneut geladene
-Bootbytes, Geraetehandoff, bekannte aufgeschobene Dienste und unbekannte
-Funktionen.
+P1/P2-Handoff, den direkten GD2-Alias, Lifecycle-Evidenz, GD-ROM-Zustaende,
+Vierwortstatus, LOW/HIGH-TOC, getrennte G1-Zaehler, bekannte aufgeschobene
+Dienste und unbekannte Funktionen.
 
 Die Installation gehoert zum produktiven Bootzustand: `boot_homebrew()` gibt
 im HLE-Modus die befuellte `RuntimeBlockTable` und `FirmwareHandoffMap` als

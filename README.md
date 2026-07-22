@@ -154,7 +154,7 @@ dokumentiert.
 .\build-current\katana-recomp.exe emit-cpp .\program.bin 8C010000 .\generated.cpp 8C010000
 
 # Extern buildbares Portprojekt aus einer lokalen GDI erzeugen
-.\build-current\katana-recomp.exe port .\disc\game.gdi --output C:\ports\game --target-name game
+.\build-current\katana-recomp.exe port .\disc\game.gdi --output C:\ports\game --target-name game --console-profile europe-pal
 
 # Einmalig die eigene unveraenderte Originaldisc pruefen und lokalen Content installieren
 C:\ports\game\game.exe --install-disc .\disc\game.gdi
@@ -204,7 +204,8 @@ Konsolenemulation: Discbytes dienen lokal als Nutzerdatenquelle, waehrend der
 SH-4-Code in statische Hostfunktionen rekompiliert wird. Im HLE-GDI-Pfad gilt
 das sowohl fuer den 16-Sektoren-Systembootstrap der Disc als auch fuer die
 Bootdatei; beide bleiben getrennte, quellgebundene Segmente und der native
-Einstieg beginnt im Bootstrapcode bei `0x8C008300`. Noch nicht gebundene
+Einstieg beginnt im Bootstrapcode ueber den P2-Alias `0xAC008300` (physisch
+`0x0C008300`). Noch nicht gebundene
 Hardwareaktionen, insbesondere DMA-Starts, brechen sichtbar ab; die Runtime
 meldet sie nicht als erfolgreich und erzeugt daraus keinen kuenstlichen Frame.
 Bereits gebundene Einheiten wie Maple verarbeiten dagegen echte Gast-
@@ -218,10 +219,12 @@ synthetischer Stummpuffer gilt nicht mehr als Audioerfolg.
 
 Der HLE-BIOS-Pfad initialisiert den unteren BIOS-Arbeits-RAM definiert mit
 `0xFF`, installiert die dynamischen Vektoren sowie den direkten GD2-Alias und
-behandelt `SYSTEM 1` als echten Disc-Reboot. Dabei werden Bootstrap,
-Bootprogramm und Plattform-Handoff neu aufgebaut; veraenderte alte Bootbytes
-werden nicht als Neustartzustand weiterverwendet. Der Systembootstrap kann
-ueber `CCR.ORA/OIX` das allgemein modellierte SH-4-On-Chip-RAM verwenden.
+behandelt `SYSTEM 1` als nicht zurueckkehrenden BIOS-Menue-Lifecycle. Ein
+Neustart ist eine explizite Hostentscheidung und keine versteckte Semantik des
+BIOS-Aufrufs. Das Konsolenprofil wird beim Portexport explizit gewaehlt; offene
+Disc-Areasymbole wie `JUE` bestimmen weder PAL/NTSC noch die Flashregion. Der
+Systembootstrap kann ueber `CCR.ORA/OIX` das allgemein modellierte SH-4-On-
+Chip-RAM verwenden.
 
 Der generierte SH-4-Pfad erzwingt den privilegierten Modus fuer markierte
 Systemregister- und Kontrollinstruktionen. Ein Zugriff aus dem User-Modus wird

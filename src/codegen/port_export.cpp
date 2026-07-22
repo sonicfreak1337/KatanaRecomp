@@ -52,6 +52,14 @@ bool valid_target_name(const std::string_view value) noexcept {
 
 constexpr std::string_view port_namespace = "katana_port_generated";
 
+std::string_view console_profile_enumerator(const std::string_view profile) {
+    if (profile == "japan-ntsc") return "JapanNtsc";
+    if (profile == "north-america-ntsc") return "NorthAmericaNtsc";
+    if (profile == "europe-pal") return "EuropePal";
+    if (profile == "vga") return "Vga";
+    throw std::invalid_argument("Unbekanntes Dreamcast-Konsolenprofil.");
+}
+
 std::size_t port_codegen_jobs(const std::size_t partition_count) {
     auto requested = static_cast<std::size_t>(std::max(1u, std::thread::hardware_concurrency()));
     std::optional<std::string> configured;
@@ -144,6 +152,7 @@ std::string handwritten_main(const std::string& entry_namespace,
                              const std::string_view project_identity,
                              const std::string_view expected_content_identity,
                              const std::string_view expected_boot_sha256,
+                             const std::string_view console_profile,
                              const std::uint32_t entry_address) {
     std::ostringstream identity_contract;
     identity_contract
@@ -172,7 +181,7 @@ std::string handwritten_main(const std::string& entry_namespace,
            "#include \"katana/runtime/packed_disc.hpp\"\n"
            "#include \"katana/runtime/scheduler.hpp\"\n"
            "#include \"katana/io/input_provenance.hpp\"\n"
-           "#include <algorithm>\n#include <chrono>\n#include <cstdlib>\n#include "
+           "#include <algorithm>\n#include <array>\n#include <chrono>\n#include <cstdlib>\n#include "
            "<exception>\n#include <filesystem>\n#include <functional>\n#include "
            "<iostream>\n"
            "#include <optional>\n#include <span>\n#include <string>\n#include <string_view>\n"
@@ -466,15 +475,19 @@ std::string handwritten_main(const std::string& entry_namespace,
            "        katana::runtime::DreamcastMutableStorageConfig storage_config;\n"
            "        storage_config.project_identity = expected_project_identity;\n"
            "        storage_config.storage_root = port_root / \"user-data\";\n"
+           "        constexpr auto console_profile =\n"
+           "            katana::runtime::DreamcastConsoleProfile::" +
+           std::string(console_profile_enumerator(console_profile)) +
+           ";\n"
            "        storage_config.region =\n"
-           "            katana::runtime::dreamcast_region_from_area_symbols(boot.area_symbols);\n"
+           "            katana::runtime::dreamcast_region_for_console_profile(console_profile);\n"
            "        auto mutable_storage = katana::runtime::DreamcastMutableStorage::open(\n"
            "            std::move(storage_config));\n"
            "        katana::runtime::CpuState cpu;\n"
            "        const auto state = katana::runtime::initialize_dreamcast_runtime(\n"
            "            cpu, boot, katana::runtime::DreamcastRuntimeFirmwareMode::" +
            std::string(hle_bios_abi ? "HleBiosAbi" : "Direct") +
-           ", mutable_storage);\n"
+           ", mutable_storage, console_profile);\n"
            "        const auto* diagnostics_value = std::getenv(\"KATANA_PORT_DIAGNOSTICS\");\n"
            "        const bool detailed_diagnostics = diagnostics_value != nullptr &&\n"
            "            std::string_view(diagnostics_value) == \"1\";\n"
@@ -764,8 +777,17 @@ std::string handwritten_main(const std::string& entry_namespace,
            "                    }\n"
            "                    const auto address = static_cast<std::uint32_t>(parsed);\n"
            "                    std::cerr << \" memory_probe_address=\" << address;\n"
-           "                    try { std::cerr << \" memory_probe_value=\"\n"
-           "                                      << cpu.memory.read_u32(address); }\n"
+           "                    try {\n"
+           "                        const auto physical = katana::runtime::translate_guest_address(\n"
+           "                            cpu, address, katana::runtime::MemoryAccessOperation::Read,\n"
+           "                            katana::runtime::MemoryAccessWidth::Word);\n"
+           "                        const std::array<const katana::runtime::MemoryDevice*, 4u>\n"
+           "                            permitted{state.main_ram.get(), state.vram.get(),\n"
+           "                                      state.aica_ram.get(), state.flash.get()};\n"
+           "                        std::cerr << \" memory_probe_physical=\" << physical\n"
+           "                                  << \" memory_probe_value=\"\n"
+           "                                  << cpu.memory.peek_u32(physical, permitted);\n"
+           "                    }\n"
            "                    catch (...) { std::cerr << \" memory_probe_error=1\"; }\n"
            "                    if (*end == '\\0') break; cursor = end + 1;\n"
            "                }\n"
@@ -779,6 +801,14 @@ std::string handwritten_main(const std::string& entry_namespace,
            "            result = " +
            entry_namespace +
            "::run_runtime(cpu, services, *state.runtime_blocks);\n"
+           "        } catch (const katana::runtime::PlatformLifecycleExit&) {\n"
+           "            report_progress();\n"
+           "            if (state.gdrom)\n"
+           "                std::cerr << \"KATANA_GDROM_BIOS_EVENTS \"\n"
+           "                          << state.gdrom->format_bios_call_events_json() << '\\n';\n"
+           "            host.shutdown();\n"
+           "            host.require_clean_shutdown();\n"
+           "            throw;\n"
            "        } catch (...) {\n"
            "            report_progress();\n"
            "            throw;\n"
@@ -853,6 +883,36 @@ std::string handwritten_main(const std::string& entry_namespace,
            "                  << result.indirect_dispatches << \" final_pc=\" << result.final_pc "
            "<< '\\n';\n"
            "        return 0;\n"
+           "    } catch (const katana::runtime::PlatformLifecycleExit& exit) {\n"
+           "        const auto& evidence = exit.evidence();\n"
+           "        const auto* reason = exit.reason() ==\n"
+           "                katana::runtime::PlatformLifecycleExitReason::Reset ? \"reset\"\n"
+           "            : exit.reason() ==\n"
+           "                katana::runtime::PlatformLifecycleExitReason::BiosMenu\n"
+           "                ? \"bios-menu\" : \"cd-menu\";\n"
+           "        std::cerr << \"KATANA_PLATFORM_LIFECYCLE_EXIT {\\\"reason\\\":\\\"\"\n"
+           "                  << reason << \"\\\",\\\"guest_cycle\\\":\"\n"
+           "                  << evidence.guest_cycle << \" ,\\\"callsite\\\":\"\n"
+           "                  << evidence.callsite << \" ,\\\"return_address\\\":\"\n"
+           "                  << evidence.return_address << \" ,\\\"registers\\\":[\";\n"
+           "        for (std::size_t index = 0u; index < evidence.registers.size(); ++index) {\n"
+           "            if (index != 0u) std::cerr << ',';\n"
+           "            std::cerr << evidence.registers[index];\n"
+           "        }\n"
+           "        std::cerr << \"],\\\"last_gdrom_request\\\":\"\n"
+           "                  << evidence.last_gdrom_request\n"
+           "                  << \" ,\\\"last_gdrom_command\\\":\"\n"
+           "                  << evidence.last_gdrom_command\n"
+           "                  << \" ,\\\"last_gdrom_state\\\":\"\n"
+           "                  << evidence.last_gdrom_state\n"
+           "                  << \" ,\\\"last_gdrom_status\\\":[\";\n"
+           "        for (std::size_t index = 0u; index < evidence.last_gdrom_status.size();\n"
+           "             ++index) {\n"
+           "            if (index != 0u) std::cerr << ',';\n"
+           "            std::cerr << evidence.last_gdrom_status[index];\n"
+           "        }\n"
+           "        std::cerr << \"]}\\n\";\n"
+           "        return 4;\n"
            "    } catch (const katana::runtime::HostPacingException& error) {\n"
            "        std::cerr << \"KATANA_HOST_PACING_ERROR \" << error.serialize_json() << "
            "'\\n';\n"
@@ -1388,6 +1448,7 @@ port_metadata(const PortExportOptions& options,
     katana::io::write_json_report_header(output, "katana-port-project", "port-project");
     output << ",\"contract_version\":" << port_project_contract_version
            << ",\"target_name\":" << katana::io::quote_json(options.target_name)
+           << ",\"console_profile\":" << katana::io::quote_json(options.console_profile)
            << ",\"diagnostic_partial\":" << (options.diagnostic_partial ? "true" : "false")
            << ",\"runtime_abi\":" << katana::runtime::abi_version
            << ",\"backend_abi\":" << backend_interface_abi_version
@@ -1519,6 +1580,7 @@ PortExportResult export_dreamcast_port_project(const PreparedPortProgram& prepar
             "Portexport braucht vorbereitetes IR, Einstieg, Ausgabe, Zielkennung und "
             "Werkzeugversion.");
     }
+    static_cast<void>(console_profile_enumerator(options.console_profile));
     if (!options.diagnostic_partial && !prepared.analysis.recursive.diagnostics.empty()) {
         throw std::runtime_error("Portanalyse enthaelt unbekannte Instruktionen.");
     }
@@ -1725,6 +1787,7 @@ PortExportResult export_dreamcast_port_project(const PreparedPortProgram& prepar
                                      recipe.job_generation,
                                      recipe.content_identity,
                                      boot_sha256,
+                                     options.console_profile,
                                      prepared.entry_address),
                     true);
 

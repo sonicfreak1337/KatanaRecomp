@@ -119,6 +119,8 @@ class DreamcastG1BusController final {
     ~DreamcastG1BusController();
     [[nodiscard]] std::uint32_t read(std::uint32_t offset) const;
     void write(std::uint32_t offset, std::uint32_t value);
+    void configure_bios_handoff(std::uint32_t live_address) noexcept;
+    void restore_bios_handoff() noexcept;
     void reset() noexcept;
     [[nodiscard]] HollyDmaChannelState state() const noexcept;
     [[nodiscard]] const std::optional<HollyDmaFault>& last_fault() const noexcept;
@@ -135,8 +137,12 @@ class DreamcastG1BusController final {
     SchedulerLifetimeToken scheduler_lifetime_;
     SchedulerResetObserverId reset_observer_ = 0u;
     std::optional<SchedulerEventId> completion_event_;
-    std::uint32_t dma_address_ = 0u;
-    std::uint32_t dma_length_ = 0u;
+    std::uint32_t configured_address_ = 0u;
+    std::uint32_t configured_length_ = 0u;
+    std::uint32_t live_address_ = 0u;
+    std::uint32_t transferred_length_ = 0u;
+    std::uint32_t remaining_length_ = 0u;
+    std::uint32_t bios_handoff_live_address_ = 0u;
     std::uint32_t dma_direction_ = 0u;
     std::uint32_t dma_enabled_ = 0u;
     std::uint32_t dma_active_ = 0u;

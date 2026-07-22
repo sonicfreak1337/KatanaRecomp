@@ -11,6 +11,8 @@
 
 namespace katana::runtime {
 
+class DreamcastG1BusController;
+
 inline constexpr std::uint32_t sr_t_mask = 0x00000001u;
 inline constexpr std::uint32_t sr_s_mask = 0x00000002u;
 inline constexpr std::uint32_t sr_interrupt_mask = 0x000000F0u;
@@ -121,7 +123,7 @@ struct CpuState {
     bool last_prefetch_was_store_queue = false;
     std::shared_ptr<RuntimeAddressSpace> address_space;
     DreamcastGdRomController* gdrom_services = nullptr;
-    std::function<void(CpuState&)> disc_reboot;
+    DreamcastG1BusController* g1_bus = nullptr;
     Memory memory{1024u * 1024u, MemoryAlignmentPolicy::Permissive};
 
     [[nodiscard]] std::uint32_t read_sr() const noexcept;

@@ -33,11 +33,13 @@
 namespace katana::runtime {
 
 inline constexpr std::uint32_t dreamcast_disc_boot_address = 0x8C010000u;
-inline constexpr std::uint32_t dreamcast_system_bootstrap_address = 0x8C008000u;
-inline constexpr std::uint32_t dreamcast_system_bootstrap_entry_address = 0x8C008300u;
+inline constexpr std::uint32_t dreamcast_system_bootstrap_address = 0xAC008000u;
+inline constexpr std::uint32_t dreamcast_system_bootstrap_entry_address = 0xAC008300u;
 inline constexpr std::uint32_t dreamcast_system_bootstrap_sector_count = 16u;
+inline constexpr std::uint32_t dreamcast_data_sector_size = 2048u;
 inline constexpr std::size_t dreamcast_system_bootstrap_size =
-    static_cast<std::size_t>(dreamcast_system_bootstrap_sector_count) * 2048u;
+    static_cast<std::size_t>(dreamcast_system_bootstrap_sector_count) *
+    dreamcast_data_sector_size;
 inline constexpr std::uint32_t dreamcast_direct_boot_stack = 0x8D000000u;
 inline constexpr std::uint32_t dreamcast_direct_boot_vector_base = 0x8C000000u;
 inline constexpr std::uint32_t dreamcast_disc_boot_status =
@@ -54,9 +56,17 @@ inline constexpr std::uint16_t dreamcast_bios_handoff_pal_pdtra = 0x0004u;
 inline constexpr std::uint16_t dreamcast_composite_port_a_input = 0x0300u;
 enum class DreamcastRuntimeFirmwareMode : std::uint8_t { Direct, HleBiosAbi };
 enum class DreamcastRegion : std::uint8_t { Japan, NorthAmerica, Europe };
+enum class DreamcastConsoleProfile : std::uint8_t {
+    JapanNtsc,
+    NorthAmericaNtsc,
+    EuropePal,
+    Vga
+};
 
 [[nodiscard]] DreamcastRegion
-dreamcast_region_from_area_symbols(std::string_view area_symbols) noexcept;
+dreamcast_region_for_console_profile(DreamcastConsoleProfile profile) noexcept;
+[[nodiscard]] std::string_view
+dreamcast_console_profile_name(DreamcastConsoleProfile profile) noexcept;
 
 struct DreamcastMutableStorageConfig {
     std::string project_identity;
@@ -158,6 +168,7 @@ void reset_dreamcast_direct_boot_cpu(CpuState& cpu) noexcept;
     CpuState& cpu,
     const DreamcastRuntimeBootImage& boot,
     DreamcastRuntimeFirmwareMode firmware_mode = DreamcastRuntimeFirmwareMode::Direct,
-    std::shared_ptr<DreamcastMutableStorage> mutable_storage = {});
+    std::shared_ptr<DreamcastMutableStorage> mutable_storage = {},
+    DreamcastConsoleProfile console_profile = DreamcastConsoleProfile::JapanNtsc);
 
 } // namespace katana::runtime
