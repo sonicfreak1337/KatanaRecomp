@@ -512,6 +512,8 @@ int run_test(const int argc, char* argv[]) {
                     .find("register_executable_block(table, services, 0x8C010000u") !=
                 std::string::npos &&
             generated_before.at("code/runtime-dispatch.cpp")
+                    .find("services.allow_executable_block_chaining(") != std::string::npos &&
+            generated_before.at("code/runtime-dispatch.cpp")
                     .find("executed_dispatch_blocks >= block_budget") != std::string::npos &&
             generated_before.at("code/runtime-dispatch.cpp").find("KATANA_PORT_BLOCK_PROGRESS") !=
                 std::string::npos &&
@@ -584,6 +586,16 @@ int run_test(const int argc, char* argv[]) {
             read_text(output / "src" / "main.cpp").find("next_lifecycle_poll_") !=
                 std::string::npos &&
             read_text(output / "src" / "main.cpp")
+                    .find("KATANA_PORT_BLOCK_LIMIT\") == nullptr") != std::string::npos &&
+            read_text(output / "src" / "main.cpp")
+                    .find("can_chain_executable_block(std::uint32_t address)") !=
+                std::string::npos &&
+            read_text(output / "src" / "main.cpp")
+                    .find("chainable_blocks_.contains(address)") != std::string::npos &&
+            read_text(output / "src" / "main.cpp")
+                    .find("(address & 0xC0000000u) != 0x80000000u") !=
+                std::string::npos &&
+            read_text(output / "src" / "main.cpp")
                     .find("result.processed_events != 0u") != std::string::npos &&
             read_text(output / "src" / "main.cpp")
                     .find("!lifecycle_test.empty()") != std::string::npos &&
@@ -630,6 +642,26 @@ int run_test(const int argc, char* argv[]) {
             read_text(output / "src" / "main.cpp").find("source.parent_path().string()") ==
                 std::string::npos,
         "Portprojekt besitzt keinen ausfuehrbaren GDI-/Runtimevertrag.");
+    const auto& runtime_dispatch = generated_before.at("code/runtime-dispatch.cpp");
+    const auto require_chain_registration = [&](const std::string_view end_kind,
+                                                const bool expected) {
+        const auto marker = ", katana::runtime::BlockEndKind::" + std::string(end_kind);
+        const auto marker_position = runtime_dispatch.find(marker);
+        require(marker_position != std::string::npos,
+                "Portfixture besitzt keine Endklasse " + std::string(end_kind) + ".");
+        const auto address_begin = runtime_dispatch.rfind("0x", marker_position);
+        const auto address_end = runtime_dispatch.find('u', address_begin);
+        require(address_begin != std::string::npos && address_end != std::string::npos,
+                "Portfixture verliert die Blockadresse vor " + std::string(end_kind) + ".");
+        const auto address = runtime_dispatch.substr(address_begin, address_end - address_begin);
+        const auto registration =
+            "services.allow_executable_block_chaining(" + address + "u)";
+        require((runtime_dispatch.find(registration) != std::string::npos) == expected,
+                "Lokales Chaining behandelt Endklasse " + std::string(end_kind) +
+                    " nicht als Hostgrenze.");
+    };
+    require_chain_registration("Call", true);
+    require_chain_registration("Return", false);
     std::string portable_content;
     for (const auto& [path, content] : generated_before) {
         static_cast<void>(path);

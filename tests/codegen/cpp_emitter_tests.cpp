@@ -127,6 +127,29 @@ int main() {
                 source.find("cpu.pc = return_target;") != std::string::npos,
             "Die Ruecksprungsemantik fehlt.");
 
+    constexpr std::array<std::uint8_t, 10> local_loop_bytes = {
+        0x01u, 0xE0u, // MOV #1,R0
+        0x10u, 0x40u, // DT R0
+        0xFDu, 0x8Bu, // BF 0x8C010002
+        0x0Bu, 0x00u, // RTS
+        0x09u, 0x00u  // NOP (Delay Slot)
+    };
+    const auto local_loop_lines = katana::sh4::disassemble(local_loop_bytes, 0x8C010000u);
+    const auto local_loop_functions =
+        katana::analysis::discover_functions(local_loop_lines, seeds);
+    const auto local_loop_program =
+        katana::ir::lower_program(local_loop_lines, local_loop_functions);
+    katana::codegen::BackendRequest local_chain_request{local_loop_program, 0x8C010000u};
+    local_chain_request.single_block_execution = true;
+    local_chain_request.guarded_local_block_chaining = true;
+    const katana::codegen::CppBackend local_chain_backend;
+    const auto local_chain_source = local_chain_backend.emit(local_chain_request).joined_text();
+    require(local_chain_source.find("services->can_chain_executable_block(cpu.pc)) continue;") !=
+                    std::string::npos &&
+                local_chain_source.find("cpu.pc = !cpu.t ? 0x8C010002u : 0x8C010006u;") !=
+                    std::string::npos,
+            "Lokales Mehrblock-Chaining besitzt keinen Invalidierungsguard.");
+
     constexpr std::array<std::uint8_t, 12> indirect_jump_bytes = {
         0x08u,
         0xE1u, // MOV #8,R1

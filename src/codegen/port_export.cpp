@@ -176,7 +176,8 @@ std::string handwritten_main(const std::string& entry_namespace,
            "<exception>\n#include <filesystem>\n#include <functional>\n#include "
            "<iostream>\n"
            "#include <optional>\n#include <span>\n#include <string>\n#include <string_view>\n"
-           "#include <system_error>\n#include <thread>\n#include <vector>\n\n"
+           "#include <system_error>\n#include <thread>\n#include <unordered_map>\n#include "
+           "<unordered_set>\n#include <vector>\n\n"
            "namespace {\n" +
            identity_contract.str() +
            "void verify_boot_identity(\n"
@@ -224,7 +225,10 @@ std::string handwritten_main(const std::string& entry_namespace,
             "                         bool eager_host_poll = false)\n"
             "        : cpu_(cpu), state_(state), lifecycle_poll_(std::move(lifecycle_poll)),\n"
             "          guest_frame_poll_(std::move(guest_frame_poll)),\n"
-            "          eager_host_poll_(eager_host_poll) {\n"
+            "          eager_host_poll_(eager_host_poll),\n"
+            "          local_block_chaining_enabled_(\n"
+            "              std::getenv(\"KATANA_PORT_BLOCK_LIMIT\") == nullptr &&\n"
+            "              std::getenv(\"KATANA_PORT_PROGRESS_INTERVAL\") == nullptr) {\n"
            "        if (const auto budget = "
            "katana::runtime::guest_cycle_budget_from_environment())\n"
            "            state_.scheduler->set_guest_cycle_budget(*budget);\n"
@@ -333,6 +337,18 @@ std::string handwritten_main(const std::string& entry_namespace,
            "katana::runtime::canonical_physical_address(address),\n"
            "             size, \"generated-port\", {},\n"
            "             katana::runtime::ExecutableBlockOrigin::ImageSegment}));\n"
+           "        executable_blocks_.insert_or_assign(address, std::string(identity));\n"
+           "    }\n"
+           "    void allow_executable_block_chaining(std::uint32_t address) override {\n"
+           "        chainable_blocks_.insert(address);\n"
+           "    }\n"
+           "    bool can_chain_executable_block(std::uint32_t address) const noexcept override {\n"
+           "        if (!local_block_chaining_enabled_ ||\n"
+           "            (address & 0xC0000000u) != 0x80000000u) return false;\n"
+           "        const auto found = executable_blocks_.find(address);\n"
+           "        return chainable_blocks_.contains(address) &&\n"
+           "            found != executable_blocks_.end() &&\n"
+           "            state_.code_tracker->dispatchable(found->second);\n"
            "    }\n"
             "    katana::runtime::ExecutableCodeTracker* executable_code_tracker() noexcept "
            "override {\n"
@@ -353,8 +369,11 @@ std::string handwritten_main(const std::string& entry_namespace,
             "        katana::runtime::PlatformLifecycleState::Running;\n"
            "    std::uint64_t executed_blocks_ = 0u;\n"
            "    std::uint64_t fallback_count_ = 0u;\n"
+           "    std::unordered_map<std::uint32_t, std::string> executable_blocks_;\n"
+           "    std::unordered_set<std::uint32_t> chainable_blocks_;\n"
            "    bool guest_checkpoint_ = false;\n"
            "    bool eager_host_poll_ = false;\n"
+           "    bool local_block_chaining_enabled_ = false;\n"
            "};\n\n"
            "std::string redact_source(std::string message, const std::filesystem::path& source) {\n"
            "    std::error_code path_error;\n"
@@ -1221,6 +1240,12 @@ std::string runtime_dispatch_adapter(const std::string& entry_namespace,
     for (const auto& block : dispatch_blocks) {
             output << "    register_executable_block(table, services, 0x" << block.address
                    << "u, " << block.size << "u);\n";
+            if (std::string_view(block.end_kind) != "Return" &&
+                std::string_view(block.end_kind) != "ExceptionReturn" &&
+                std::string_view(block.end_kind) != "Sleep" &&
+                std::string_view(block.end_kind) != "Exception")
+                output << "    services.allow_executable_block_chaining(0x" << block.address
+                       << "u);\n";
     }
     const auto entry = symbol(entry_address);
     output << "    katana::runtime::DispatchDiagnosticRecorder diagnostics;\n"
@@ -1534,6 +1559,7 @@ PortExportResult export_dreamcast_port_project(const PreparedPortProgram& prepar
                                      contains_program_entry,
                                      true,
                                      prepared.entry_address,
+                                     true,
                                      true,
                                      true};
         const CppBackend backend;

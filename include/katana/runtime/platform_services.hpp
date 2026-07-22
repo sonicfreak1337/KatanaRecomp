@@ -123,6 +123,10 @@ class PlatformServices {
     }
     virtual void observe_guest_checkpoint(std::uint32_t) noexcept {}
     virtual void register_executable_block(std::uint32_t, std::uint32_t, std::string_view) {}
+    virtual void allow_executable_block_chaining(std::uint32_t) {}
+    [[nodiscard]] virtual bool can_chain_executable_block(std::uint32_t) const noexcept {
+        return false;
+    }
     [[nodiscard]] virtual ExecutableCodeTracker* executable_code_tracker() noexcept {
         return nullptr;
     }

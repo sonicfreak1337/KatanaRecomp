@@ -54,6 +54,13 @@
   ausfuehrbare Seite aus. OCRAM-Stackdaten und reine Geraeteschreibzugriffe
   umgehen diese Codebuchhaltung; sobald ausserhalb des Haupt-RAMs ein
   Runtimeblock registriert ist, greifen dieselben Invalidierungsregeln wieder.
+- Generierte AOT-Funktionen koennen lokale P1-/P2-Basic-Blocks innerhalb
+  derselben Funktion direkt weiterreichen. Vor jedem Uebergang prueft der Port
+  die registrierte Blockidentitaet; selbstmodifizierter Code faellt dadurch
+  sofort in den validierenden Dispatcher zurueck. Blocklimit-/Progresslaeufe,
+  MMU-Pfade, dynamische Ziele sowie `RTS`, `RTE`, `SLEEP` und Exceptions bleiben
+  explizite Dispatchgrenzen. PlatformServices-ABI 8 und Portprojektvertrag 18
+  versionieren den Fastpath.
 - Der allgemeine Portauditor kann auf Fehlerpfaden neben den kompakten
   Dispatch-Hotspots optional den vollstaendigen deduplizierten Kontrollfluss
   mit Ziel, Aufrufstelle, `PR`, Blockendklasse und Aufloesungsherkunft

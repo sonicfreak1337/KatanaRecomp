@@ -27,8 +27,10 @@ Disc-Systembootstrap stabil aus: 150 Millionen Gastzyklen beziehungsweise
 10.000-Iterationen-Warteschleife. `FB_R_CTRL` ist programmiert; TA, GD-ROM und
 ein echter PVR-Frame wurden bis zu diesem Punkt noch nicht beobachtet. Ein
 5-Millionen-Zyklen-Lauf sank durch gecachtes Hostpolling und das Auslassen von
-Codeinvalidierung fuer reine OCRAM-Stackwrites von rund 5,8 auf 4,265 Sekunden,
-ohne den Gastzustand zu veraendern. Ein erster Gastframe wird weiterhin
+Codeinvalidierung fuer reine OCRAM-Stackwrites zunaechst von rund 5,8 auf
+4,265 Sekunden. Invalidierungsgesichertes lokales P1-/P2-Blockchaining senkt
+denselben Lauf weiter auf 2,523 Sekunden; Gastzustand, Zykluszahl und 1.001.521
+beobachtete Bloecke bleiben identisch. Ein erster Gastframe wird weiterhin
 ausdruecklich nicht behauptet. Die zusammenhaengende
 ASan-/Artifact-Gesamtvalidierung ist mit 180 von
 180 Tests bestanden; der anschliessende fokussierte Produktpfadlauf ist mit 28
@@ -135,9 +137,10 @@ MMIO-Zugriff liegt im aktiven OCRAM; der fruehere Abbruch nach 12 Gastzyklen
 ist damit beseitigt. TA/PVR und ein echter Gastframe bleiben fuer den laengeren
 Folgelauf weiterhin offen.
 
-Runtime-ABI 30, BIOS-ABI 5 und Portprojektvertrag 17 bilden den kumulativen
+Runtime-ABI 30, BIOS-ABI 5 und Portprojektvertrag 18 bilden den kumulativen
 v0.48-Stand ab.
-PlatformServices-ABI 7 bleibt unveraendert.
+PlatformServices-ABI 8 versioniert das invalidierungsgesicherte lokale
+Blockchaining.
 
 Die zusammenhaengende zweite Bootkorrekturrunde ist implementiert. Sie umfasst
 RTC-Schreiblatch, vollstaendige MMU-Miss-/Multiple-Hit-Semantik, `MMUCR.SV`,
@@ -201,7 +204,7 @@ Recipe 2. Die Content-Root entsteht aus den wirklich gelesenen Raw-Chunks und
 wird sowohl beim Schreiben gegen die Recipe als auch beim Oeffnen gegen
 Tracktabelle und Chunkindex geprueft; abweichendes Staging wird nicht
 veroeffentlicht. Der damals eingefuehrte AICA-Vertrag ist im aktuellen
-  Runtime-ABI 30 und Portprojektvertrag 17 enthalten. Das kumulative v0.48-
+  Runtime-ABI 30 und Portprojektvertrag 18 enthalten. Das kumulative v0.48-
 Debug-Gate ist mit 180 von 180 Tests bestanden; der anschliessende private
 PAL-Nachweis ist erfolgt: Der vollstaendige neue Port entstand mit 12 Workern
 in 126,8 Sekunden, ein inkrementeller Runtime-Neubau in 77,8 Sekunden. Die

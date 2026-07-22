@@ -1753,13 +1753,33 @@ const char* dynamic_dispatch_name(const katana::ir::Instruction& instruction,
     return call ? "unresolved_call" : "unresolved_jump";
 }
 
+void emit_block_transition(std::ostringstream& output,
+                           const int indent,
+                           const bool single_block,
+                           const bool guarded_local_block_chaining,
+                           const bool local_target) {
+    if (!single_block) {
+        emit_indent(output, indent);
+        output << "continue;\n";
+        return;
+    }
+    if (guarded_local_block_chaining && local_target) {
+        emit_indent(output, indent);
+        output << "if (services != nullptr && "
+                  "services->can_chain_executable_block(cpu.pc)) continue;\n";
+    }
+    emit_indent(output, indent);
+    output << "return;\n";
+}
+
 void emit_terminal(std::ostringstream& output,
                    const katana::ir::BasicBlock& block,
                    const std::size_t control_index,
                    const std::unordered_set<std::uint32_t>& known_functions,
                    const std::unordered_set<std::uint32_t>& current_blocks,
                    const int indent,
-                   const bool single_block) {
+                   const bool single_block,
+                   const bool guarded_local_block_chaining) {
     using Operation = katana::ir::Operation;
 
     const auto& instruction = block.instructions[control_index];
@@ -1793,8 +1813,11 @@ void emit_terminal(std::ostringstream& output,
         emit_indent(output, indent);
         output << "cpu.pc = " << hex32(*instruction.target_address) << ";\n";
 
-        emit_indent(output, indent);
-        output << (single_block ? "return;\n" : "continue;\n");
+        emit_block_transition(output,
+                              indent,
+                              single_block,
+                              guarded_local_block_chaining,
+                              current_blocks.contains(*instruction.target_address));
         return;
 
     case Operation::Call:
@@ -1849,8 +1872,13 @@ void emit_terminal(std::ostringstream& output,
                    << " : " << hex32(fallthrough_address(instruction)) << ";\n";
         }
 
-        emit_indent(output, indent);
-        output << (single_block ? "return;\n" : "continue;\n");
+        emit_block_transition(
+            output,
+            indent,
+            single_block,
+            guarded_local_block_chaining,
+            current_blocks.contains(*instruction.target_address) &&
+                current_blocks.contains(fallthrough_address(instruction)));
         return;
     }
 
@@ -1884,8 +1912,11 @@ void emit_terminal(std::ostringstream& output,
             if (current_blocks.contains(target)) {
                 emit_indent(output, indent + 2);
                 output << "cpu.pc = " << hex32(target) << ";\n";
-                emit_indent(output, indent + 2);
-                output << (single_block ? "return;\n" : "continue;\n");
+                emit_block_transition(output,
+                                      indent + 2,
+                                      single_block,
+                                      guarded_local_block_chaining,
+                                      true);
             } else if (known_functions.contains(target)) {
                 emit_indent(output, indent + 2);
                 output << "cpu.pc = " << hex32(target) << ";\n";
@@ -2275,7 +2306,8 @@ void emit_block(std::ostringstream& output,
                 const katana::ir::BasicBlock& block,
                 const std::unordered_set<std::uint32_t>& known_functions,
                 const std::unordered_set<std::uint32_t>& current_blocks,
-                const bool single_block) {
+                const bool single_block,
+                const bool guarded_local_block_chaining) {
     std::unordered_set<std::uint32_t> guest_instruction_addresses;
     guest_instruction_addresses.reserve(block.instructions.size());
     for (const auto& instruction : block.instructions)
@@ -2314,14 +2346,23 @@ void emit_block(std::ostringstream& output,
     }
 
     if (control_index.has_value()) {
-        emit_terminal(
-            output, block, *control_index, known_functions, current_blocks, 4, single_block);
+        emit_terminal(output,
+                      block,
+                      *control_index,
+                      known_functions,
+                      current_blocks,
+                      4,
+                      single_block,
+                      guarded_local_block_chaining);
     } else if (block.successors.size() == 1u) {
         emit_indent(output, 4);
         output << "cpu.pc = " << hex32(block.successors.front()) << ";\n";
 
-        emit_indent(output, 4);
-        output << (single_block ? "return;\n" : "continue;\n");
+        emit_block_transition(output,
+                              4,
+                              single_block,
+                              guarded_local_block_chaining,
+                              current_blocks.contains(block.successors.front()));
     } else if (block.successors.empty()) {
         emit_indent(output, 4);
         output << "return;\n";
@@ -2502,7 +2543,8 @@ BackendEmission CppBackend::emit(const BackendRequest& request) const {
                        block,
                        known_functions,
                        current_blocks,
-                       request.single_block_execution);
+                       request.single_block_execution,
+                       request.guarded_local_block_chaining);
         }
 
         function_bodies << "            default:\n"

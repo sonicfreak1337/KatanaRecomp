@@ -48,6 +48,7 @@ struct BackendRequest {
     std::optional<std::uint32_t> metadata_entry_address;
     bool single_block_execution = false;
     bool external_dynamic_dispatch = false;
+    bool guarded_local_block_chaining = false;
 };
 
 struct BackendEmission {
