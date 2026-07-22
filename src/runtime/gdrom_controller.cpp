@@ -262,6 +262,30 @@ void DreamcastGdRomController::pump_completions() {
     }
 }
 
+bool DreamcastGdRomController::reload_system_bootstrap(CpuState& cpu) {
+    constexpr std::uint32_t destination = 0x8C008100u;
+    constexpr std::uint32_t sector_count = 7u;
+    const auto& layout = drive_.layout();
+    const auto track = std::max_element(
+        layout.begin(), layout.end(), [](const auto& left, const auto& right) {
+            if (left.kind != right.kind) return left.kind == DiscTrackKind::Audio;
+            if (left.session != right.session) return left.session < right.session;
+            return left.lba < right.lba;
+        });
+    if (track == layout.end() || track->kind != DiscTrackKind::Data ||
+        track->sector_count < sector_count)
+        return false;
+    const auto response = drive_.execute({GdRomCommand::ReadSectors, track->lba, sector_count});
+    if (response.status != GdRomStatus::Good ||
+        response.data.size() != static_cast<std::size_t>(sector_count) * 2048u ||
+        !cpu.memory.contains(destination, response.data.size()))
+        return false;
+    cpu.memory.write_bytes(destination, response.data, CodeWriteSource::Copy);
+    if (module_load_observer_)
+        module_load_observer_(destination, response.data, drive_.identity());
+    return true;
+}
+
 std::uint32_t DreamcastGdRomController::bios_call(CpuState& cpu,
                                                   const std::uint32_t selector,
                                                   const std::uint32_t super_selector) {

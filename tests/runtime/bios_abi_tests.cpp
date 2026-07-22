@@ -141,6 +141,30 @@ int main() {
     static_cast<void>(invoke_flash(1u));
     require(cpu.r[0] == 0xFFFFFFFFu, "FLASHROM_READ akzeptiert einen ueberlaufenden Flashbereich.");
 
+    const auto system_handle = blocks.lookup(vectors[5].handler_address, {});
+    const auto system_block = system_handle ? blocks.resolve(*system_handle) : std::nullopt;
+    require(system_block.has_value(), "System-BIOS-ABI-Block ist nicht aufloesbar.");
+    cpu.pc = vectors[5].handler_address;
+    cpu.pr = 0x8C010000u;
+    cpu.r[4] = 0u;
+    cpu.r[7] = 0xFF00001Cu;
+    const auto system_init = route_hle_bios_abi_call(cpu);
+    require(system_init.selector == 0u && system_init.service == "system-normal-init" &&
+                system_init.status == BiosAbiServiceStatus::Completed,
+            "Systemvektor liest den Funktionsselektor nicht aus r4.");
+    static_cast<void>(system_block->get().function(cpu, context));
+    require(cpu.r[0] == 0x00C0BEBCu && cpu.pc == cpu.pr,
+            "System-Normalinitialisierung liefert den BIOS-Borderzustand nicht.");
+    cpu.pc = vectors[5].handler_address;
+    cpu.r[4] = 2u;
+    const auto check_disc = route_hle_bios_abi_call(cpu);
+    require(check_disc.service == "system-check-disc" &&
+                check_disc.status == BiosAbiServiceStatus::Completed,
+            "System-Disc-Check ist nicht als bekannte Funktion geroutet.");
+    static_cast<void>(system_block->get().function(cpu, context));
+    require(cpu.r[0] == 0xFFFFFFFFu,
+            "System-Disc-Check meldet ohne angebundenes Laufwerk ein Medium.");
+
     cpu.pc = vectors[3].handler_address;
     cpu.r[6] = 0u;
     cpu.r[7] = 3u;
@@ -172,6 +196,7 @@ int main() {
     require(json.find("\"schema\":\"katana-bios-abi\"") != std::string::npos &&
                 json.find("\"selector_register\":\"r7\"") != std::string::npos &&
                 json.find("\"romfont_selector_register\":\"r1\"") != std::string::npos &&
+                json.find("\"system_selector_register\":\"r4\"") != std::string::npos &&
                 json.find("0x8C0000BC") != std::string::npos,
             "Maschinenlesbarer BIOS-ABI-Vertrag ist unvollstaendig.");
     std::cout << "KR-4602 BIOS-ABI, dynamische Vektoren und RAM-Handoff erfolgreich.\n";

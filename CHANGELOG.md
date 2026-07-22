@@ -4,6 +4,12 @@
 
 ### Geaendert
 
+- Der BIOS-SYSTEM-Vektor bei `0x8C0000E0` liest seinen Funktionscode jetzt
+  gemaess SH-4-C-ABI aus `r4` statt wie SYSINFO/FLASH/GD-ROM aus `r7`.
+  Normalinitialisierung setzt den bekannten ASIC-/PVR-Bootzustand; der
+  Discpruefpfad validiert das angebundene Medium und laedt die sieben
+  Bootstrapsektoren erneut in den Systembereich. BIOS-ABI-Vertrag 2 und
+  Runtime-ABI 24 versionieren Selektor und zustandsfuehrende Semantik.
 - Der generierte Root-Dispatcher verwechselt ein normales SH-4-`RTS` nicht
   mehr mit dem Ende des nativen Portprozesses. Verschachtelte Host-Aufrufe
   enden weiterhin an ihrer eigenen Returngrenze; der Programmroot folgt dem
@@ -153,7 +159,7 @@
   MMU-faehigen `guest_read_*`-/`guest_write_*`-Schnittstellen. Die globale
   nachtraegliche Zeichenersetzung des gesamten Funktionstexts ist entfallen.
 - PlatformServices-ABI 7 versioniert den korrigierten linearen und
-  gastzeitgebundenen DMA-Vertrag. Runtime-ABI 23 und Portprojektvertrag 12
+  gastzeitgebundenen DMA-Vertrag. Runtime-ABI 24 und Portprojektvertrag 12
   bleiben die aktuellen v0.48-Vertraege.
 - Der kumulative Debug-Gate umfasst 180 Tests und ist vollstaendig gruen.
   Die beiden Tests, die eigenstaendige Portprojekte mit CMake/MSVC bauen,
@@ -192,7 +198,7 @@
   der Recipe, verwirft abweichendes Staging und veroeffentlicht dadurch keinen
   unterdessen veraenderten oder semantisch umgebundenen Discinhalt. Der Parser
   rekonstruiert Trackintegritaet und Content-Root aus dem Chunkindex.
-- Runtime-ABI 23 und Portprojektvertrag 12 versionieren kumulativ den gemeinsamen
+- Runtime-ABI 24 und Portprojektvertrag 12 versionieren kumulativ den gemeinsamen
   AICA-Sound-RAM-/Audiopfad sowie den neuen Disc-Identitaetsvertrag.
 - Der Software-PVR fuehrt die TSP-Fogmodi jetzt im echten Fragmentpfad aus:
   Look-up-Table-Fog dekodiert `FOG_DENSITY` und interpoliert die 128

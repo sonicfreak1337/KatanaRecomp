@@ -2,6 +2,8 @@
 #include "katana/runtime/code_invalidation.hpp"
 #include "katana/runtime/dreamcast_memory.hpp"
 #include "katana/runtime/gdrom_controller.hpp"
+#include "katana/runtime/pvr.hpp"
+#include "katana/runtime/system_asic.hpp"
 
 #include <algorithm>
 #include <array>
@@ -127,6 +129,30 @@ std::uint32_t execute_sysinfo_call(CpuState& cpu, const std::uint32_t selector) 
     return 0xFFFFFFFFu;
 }
 
+std::uint32_t execute_system_call(CpuState& cpu, const std::uint32_t selector) noexcept {
+    try {
+        if (selector == 0u) {
+            constexpr std::uint32_t boot_border_color = 0x00C0BEBCu;
+            constexpr std::uint32_t level2_normal_mask = system_asic_physical_base + 0x10u;
+            constexpr std::uint32_t border_color =
+                pvr_register_physical_base + pvr_register::BorderColor;
+            if (cpu.memory.contains(level2_normal_mask, sizeof(std::uint32_t)))
+                cpu.memory.write_u32(level2_normal_mask, 0u);
+            if (cpu.memory.contains(border_color, sizeof(std::uint32_t)))
+                cpu.memory.write_u32(border_color, boot_border_color);
+            return boot_border_color;
+        }
+        if (selector == 2u)
+            return cpu.gdrom_services != nullptr &&
+                           cpu.gdrom_services->reload_system_bootstrap(cpu)
+                       ? 0u
+                       : 0xFFFFFFFFu;
+    } catch (...) {
+        return 0xFFFFFFFFu;
+    }
+    return 0xFFFFFFFFu;
+}
+
 std::string hex32(const std::uint32_t value) {
     std::ostringstream output;
     output << "0x" << std::hex << std::uppercase << std::setw(8) << std::setfill('0') << value;
@@ -162,6 +188,8 @@ BlockExit bios_abi_block(CpuState& cpu, BlockExecutionContext& context) {
                : routed.vector == BiosAbiVectorKind::Flash ? execute_flash_call(cpu, routed.selector)
                : routed.vector == BiosAbiVectorKind::SysInfo
                    ? execute_sysinfo_call(cpu, routed.selector)
+               : routed.vector == BiosAbiVectorKind::System
+                   ? execute_system_call(cpu, routed.selector)
                    : 0u;
     cpu.pc = cpu.pr;
     return make_block_exit(cpu,
@@ -197,7 +225,9 @@ std::span<const BiosAbiVector> hle_bios_abi_vectors() noexcept {
 BiosAbiCall route_hle_bios_abi_call(const CpuState& cpu) {
     const auto* vector = vector_for_handler(cpu.pc);
     if (!vector) throw BiosAbiDispatchError(cpu.pc, cpu.r[7], cpu.r[6], "unknown-vector");
-    const auto selector = vector->kind == BiosAbiVectorKind::RomFont ? cpu.r[1] : cpu.r[7];
+    const auto selector = vector->kind == BiosAbiVectorKind::RomFont ? cpu.r[1]
+                          : vector->kind == BiosAbiVectorKind::System ? cpu.r[4]
+                                                                     : cpu.r[7];
     const auto super_selector = cpu.r[6];
     using Status = BiosAbiServiceStatus;
     switch (vector->kind) {
@@ -256,6 +286,18 @@ BiosAbiCall route_hle_bios_abi_call(const CpuState& cpu) {
                     "gdrom2-undocumented",
                     Status::ServiceUnavailable);
     case BiosAbiVectorKind::System:
+        if (selector == 0u)
+            return call(vector->kind,
+                        selector,
+                        super_selector,
+                        "system-normal-init",
+                        Status::Completed);
+        if (selector == 2u)
+            return call(vector->kind,
+                        selector,
+                        super_selector,
+                        "system-check-disc",
+                        Status::Completed);
         if (selector == 0xFFFFFFFFu || selector == 1u || selector == 3u)
             return call(vector->kind,
                         selector,
@@ -329,8 +371,9 @@ const char* bios_abi_service_status_name(const BiosAbiServiceStatus status) noex
 std::string format_hle_bios_abi_contract_json() {
     std::ostringstream output;
     output << "{\"schema\":\"katana-bios-abi\",\"version\":" << bios_abi_contract_version
-           << ",\"selector_register\":\"r7\",\"romfont_selector_register\":\"r1\",\"super_selector_"
-              "register\":\"r6\",\"vectors\":[";
+           << ",\"selector_register\":\"r7\",\"romfont_selector_register\":\"r1\","
+              "\"system_selector_register\":\"r4\",\"super_selector_register\":\"r6\","
+              "\"vectors\":[";
     for (std::size_t index = 0u; index < kVectors.size(); ++index) {
         if (index) output << ',';
         output << "{\"name\":\"" << kVectors[index].name << "\",\"slot\":\""

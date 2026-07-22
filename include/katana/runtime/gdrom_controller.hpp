@@ -39,6 +39,7 @@ class DreamcastGdRomController final {
     void write(std::uint32_t offset, std::uint32_t value, MemoryAccessWidth width);
     [[nodiscard]] std::uint32_t
     bios_call(CpuState& cpu, std::uint32_t selector, std::uint32_t super_selector);
+    [[nodiscard]] bool reload_system_bootstrap(CpuState& cpu);
     void dma_to_memory(std::uint32_t address, std::uint32_t length, std::uint32_t direction);
     [[nodiscard]] GdRomProductStatus status() const noexcept;
     void reset() noexcept;

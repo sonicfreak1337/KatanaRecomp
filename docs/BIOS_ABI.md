@@ -14,12 +14,19 @@ Beim HLE-Boot werden sechs Zeiger in Dreamcast-RAM installiert:
 | `0x8C0000B8` | FLASH | `r7` |
 | `0x8C0000BC` | MISC/GD-ROM | `r7`, Superselektor `r6` |
 | `0x8C0000C0` | zweiter, undokumentierter GD-ROM-Vektor | `r7` |
-| `0x8C0000E0` | SYSTEM | `r7` |
+| `0x8C0000E0` | SYSTEM | `r4` |
 
 Jeder Slot zeigt auf einen generierten Vier-Byte-RAM-Stub und einen
 gleichadressigen Runtimeblock. Der normale physische Aliasdispatch findet diese
 Blocks auch ueber P1/P2-Aliase. `FirmwareHandoffMap` protokolliert Slot und
 Handler als dynamische Laufzeitsymbole mit Gastzyklus und HLE-Provenienz.
+
+Anders als die uebrigen C-artigen Vektoren uebergibt SYSTEM seinen
+Funktionscode als erstes Argument in `r4`. Die Rueckkehrfunktionen 0
+(Normalinitialisierung) und 2 (Discpruefung samt erneutem Laden der sieben
+Bootstrapsektoren) sind an PVR-/ASIC- beziehungsweise GD-ROM-Zustand gebunden.
+Reset sowie BIOS-/CD-Menue bleiben sichtbare nicht-zurueckkehrende
+Lifecycle-Grenzen und werden nicht als erfolgreicher No-op ausgegeben.
 
 Zustandsfreie Initialisierung sowie ROMFONT-Lock/Unlock koennen bereits
 deterministisch abgeschlossen werden. Flash-, GD-ROM-, Fontdaten- und
@@ -29,7 +36,7 @@ Selektoren und Superselektoren werfen eine stabile `BiosAbiDispatchError`-
 Diagnose mit Handler und Selektoren. Kein Aufruf wird titelbezogen umgebogen
 oder als erfolgreicher No-op behandelt.
 
-Der maschinenlesbare Vertrag besitzt Schema `katana-bios-abi`, Version 1.
+Der maschinenlesbare Vertrag besitzt Schema `katana-bios-abi`, Version 2.
 Synthetische Tests pruefen reproduzierbare Vektorbytes, Runtimeblockdispatch,
 P1/P2-Handoff, bekannte aufgeschobene Dienste und unbekannte Funktionen.
 

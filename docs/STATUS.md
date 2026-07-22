@@ -78,7 +78,7 @@ wurde als Level 2 zugestellt. Die drei Leitungen sind nun allgemein auf
 Level 2/4/6 und `INTEVT` `0x3A0/0x360/0x320` korrigiert; der erneute private
 Produktnachweis bleibt offen.
 
-Runtime-ABI 23 und Portprojektvertrag 12 bilden den kumulativen v0.48-Stand ab.
+Runtime-ABI 24 und Portprojektvertrag 12 bilden den kumulativen v0.48-Stand ab.
 PlatformServices-ABI 7 bleibt unveraendert.
 
 Die zusammenhaengende zweite Bootkorrekturrunde ist implementiert. Sie umfasst
@@ -102,8 +102,15 @@ naechsten allgemeinen Kontrollflussfehler auf: Der Root-Dispatcher behandelte
 das erste `RTS` eines runtime-materialisierten Aufrufs wie das Ende des
 gesamten Portprogramms. Programmroot und verschachtelte Host-Aufrufgrenzen sind
 nun getrennt; der Root folgt dem gelatchten Gast-Returnziel und endet nur an
-seinem expliziten Einstiegssentinel. Der erneute private Nachweis steht aus;
-ein Gastframe wird bis dahin weiterhin nicht behauptet.
+seinem expliziten Einstiegssentinel. Der folgende private Lauf erreicht 582
+erfolgreiche Runtime-Materialisierungen und endet nun sichtbar statt
+faelschlich erfolgreich. Dabei wird der BIOS-SYSTEM-Vektor aufgerufen. Dessen
+Funktionscode wurde bisher irrig aus dem fuer Cacheadressen verwendeten `r7`
+gelesen; KallistiOS, die lokale BIOS-Analyse und Flycast-Reios belegen fuer
+diesen Vektor uebereinstimmend das erste SH-4-C-Argument `r4`. BIOS-ABI 2
+korrigiert den Selektor und bindet die zurueckkehrenden Funktionen 0 und 2 an
+ASIC/PVR beziehungsweise den lokalen GD-ROM-Bootstrap. Der erneute private
+Nachweis steht aus; ein Gastframe wird bis dahin weiterhin nicht behauptet.
 
 Der iterative Portworkflow verwendet jetzt sicheres inkrementelles Staging:
 Vorhandene Buildobjekte werden fuer denselben Ausgabeport wiederverwendet,
@@ -131,7 +138,7 @@ Recipe 2. Die Content-Root entsteht aus den wirklich gelesenen Raw-Chunks und
 wird sowohl beim Schreiben gegen die Recipe als auch beim Oeffnen gegen
 Tracktabelle und Chunkindex geprueft; abweichendes Staging wird nicht
 veroeffentlicht. Der damals eingefuehrte AICA-Vertrag ist im aktuellen
-Runtime-ABI 23 und Portprojektvertrag 12 enthalten. Das kumulative v0.48-
+Runtime-ABI 24 und Portprojektvertrag 12 enthalten. Das kumulative v0.48-
 Debug-Gate ist mit 180 von 180 Tests bestanden; der anschliessende private
 PAL-Nachweis ist erfolgt: Der vollstaendige neue Port entstand mit 12 Workern
 in 126,8 Sekunden, ein inkrementeller Runtime-Neubau in 77,8 Sekunden. Die

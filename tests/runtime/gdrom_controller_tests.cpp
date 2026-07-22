@@ -1,4 +1,5 @@
 #include "katana/runtime/gdrom_controller.hpp"
+#include "katana/runtime/dreamcast_memory.hpp"
 
 #include <array>
 #include <cstdlib>
@@ -17,13 +18,19 @@ void require(const bool condition, const char* message) {
 
 int main() {
     using namespace katana::runtime;
-    Memory memory;
+    CpuState cpu;
+    cpu.memory = Memory(0u);
+    static_cast<void>(map_dreamcast_main_ram(cpu.memory));
     EventScheduler scheduler;
-    std::vector<std::uint8_t> bytes(2048u, 0x5Au);
+    std::vector<std::uint8_t> bytes(8u * 2048u, 0x5Au);
     auto source = std::make_shared<MemoryDiscSource>(bytes, "synthetic-gdrom");
     std::uint64_t completions = 0u;
     DreamcastGdRomController controller(
-        memory, scheduler, GdRomDrive(source), [&](const std::uint64_t) { ++completions; });
+        cpu.memory, scheduler, GdRomDrive(source), [&](const std::uint64_t) { ++completions; });
+    require(controller.reload_system_bootstrap(cpu) &&
+                cpu.memory.read_u8(0x8C008100u) == 0x5Au &&
+                cpu.memory.read_u8(0x8C00B8FFu) == 0x5Au,
+            "System-Disc-Check laedt die sieben Bootstrapsektoren nicht neu.");
 
     controller.write(0x9Cu, 0xA0u, MemoryAccessWidth::Byte);
     std::array<std::uint8_t, 12u> inquiry{};
