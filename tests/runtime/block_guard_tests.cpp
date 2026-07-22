@@ -1,4 +1,5 @@
 #include "katana/runtime/block_guards.hpp"
+#include "katana/runtime/cache_control.hpp"
 
 #include <iostream>
 #include <stdexcept>
@@ -21,9 +22,18 @@ int main() {
         const auto fast = space.translate(0xAC001234u, TranslationAccess::Instruction);
         require(fast.no_mmu_fastpath && fast.physical_address == 0x0C001234u,
                 "No-MMU-Fastpath ist nicht getrennt oder behauptet falsche Kanonisierung.");
+        const auto on_chip_ram =
+            space.translate(0x7E000FFCu, TranslationAccess::Write, true);
+        require(on_chip_ram.no_mmu_fastpath &&
+                    on_chip_ram.physical_address == 0x7E000FFCu &&
+                    canonical_physical_address(0x7E000FFCu) == 0x7E000FFCu,
+                "SH-4-On-Chip-RAM wird faelschlich als externer physischer Bus kanonisiert.");
 
         space.set_mode(AddressTranslationMode::Mmu);
         space.write_mmucr(1u);
+        require(space.translate(0x7E000FFCu, TranslationAccess::Read, true).physical_address ==
+                    0x7E000FFCu,
+                "Aktive MMU uebersetzt den architektonisch ausgenommenen OCRAM-Bereich.");
         space.ldtlb({0x1000u, 0x0C002000u, 4096u, 0u, 0u, true, true, true, true, true, true, false});
         const auto first = space.guard_for(0x1234u, fpscr_pr_mask);
         require(first.physical_page == 0x0C002000u &&

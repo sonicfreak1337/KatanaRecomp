@@ -23,8 +23,10 @@ Speicher, verbotenen Firmwarepfad, ungueltige Ausrichtung und eine verletzte
 Fallbackgrenze. Freie Hostfehlermeldungen, Pfade und Speicherinhalte werden
 nicht serialisiert.
 
-Identische Ereignisse werden nicht erneut angehaengt. Der erste vollstaendige
-Datensatz bleibt in seiner urspruenglichen Reihenfolge erhalten und nur
-`occurrences` sowie `total_occurrences` werden erhoeht. Dadurch bleibt der
-Bericht kompakt und ein unbekanntes Ziel dennoch bis zur ersten Quellinstruktion
-rueckverfolgbar.
+Identische Ereignisse werden nicht erneut angehaengt; nur `occurrences` und
+`total_occurrences` werden erhoeht. Bis zur konfigurierten Kapazitaet bleibt
+der erste vollstaendige Datensatz erhalten. Ist sie gefuellt, ersetzt ein
+neuer Schluessel den Eintrag mit der kleinsten Vorkommenszahl. Wiederholt sich
+der neue Schluessel, wird er ab dann normal aggregiert. So bleibt der Speicher
+streng begrenzt, ohne einen erst spaet auftretenden echten Hotspot bei jeder
+Wiederholung erneut als vermeintlich eindeutigen Verlust zu zaehlen.

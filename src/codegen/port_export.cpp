@@ -1679,7 +1679,8 @@ PortExportResult export_dreamcast_port_project(const std::filesystem::path& gdi_
         throw std::invalid_argument("Portexport braucht eine GDI-Quelle.");
     }
     const auto disc = katana::platform::load_dreamcast_gdi_boot(gdi_path);
-    auto image = katana::platform::make_dreamcast_disc_executable(disc);
+    auto image = katana::platform::make_dreamcast_disc_executable(
+        disc, katana::platform::DreamcastDiscExecutionPath::NativeSystemBootstrap);
     const auto analysis = katana::analysis::analyze_control_flow(image);
     auto program = katana::ir::lower_program(analysis);
     static_cast<void>(katana::ir::optimize_program(program));
@@ -1702,7 +1703,7 @@ PortExportResult export_dreamcast_port_project(const std::filesystem::path& gdi_
                                           analysis,
                                           program,
                                           inputs,
-                                          katana::platform::dreamcast_disc_boot_address,
+                                          katana::platform::dreamcast_system_bootstrap_entry_address,
                                           katana::platform::dreamcast_disc_boot_address,
                                           disc.boot_file.size(),
                                           project_identity,

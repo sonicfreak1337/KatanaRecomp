@@ -38,6 +38,23 @@ int main() {
     const auto invalidations = cache->instruction_invalidation_count();
     require(cached_value == 1u && invalidations == 1u,
             "CCR-Invalidierung ist nicht selbstloeschend oder wird nicht gezaehlt.");
+    memory.write_u32(sh4_on_chip_ram_address + 0x20u, 0xFFFFFFFFu);
+    require(memory.read_u32(sh4_on_chip_ram_address + 0x20u) == 0u,
+            "Deaktiviertes SH-4-On-Chip-RAM nimmt Schreibdaten an.");
+    memory.write_u32(sh4_cache_control_address, Sh4CacheControl::operand_ram_enable);
+    memory.write_u32(sh4_on_chip_ram_address + 0x20u, 0x11223344u);
+    memory.write_u16(sh4_on_chip_ram_address + 0x2024u, 0x5566u);
+    require(memory.read_u32(sh4_on_chip_ram_address + 0x4020u) == 0x11223344u &&
+                memory.read_u16(sh4_on_chip_ram_address + 0x6024u) == 0x5566u,
+            "CCR.OIX=0 waehlt OCRAM-Bank oder Spiegel falsch.");
+    memory.write_u32(sh4_cache_control_address,
+                     Sh4CacheControl::operand_ram_enable |
+                         Sh4CacheControl::operand_index_mode);
+    memory.write_u8(sh4_on_chip_ram_address + 0x30u, 0x77u);
+    memory.write_u32(sh4_on_chip_ram_address + 0x02000030u, 0xAABBCCDDu);
+    require(memory.read_u8(sh4_on_chip_ram_address + 0x01000030u) == 0x77u &&
+                memory.read_u32(sh4_on_chip_ram_address + 0x03000030u) == 0xAABBCCDDu,
+            "CCR.OIX=1 waehlt OCRAM-Bank oder Zugriffsbreite falsch.");
     memory.write_u32(sh4_instruction_cache_address_array + 0x20u, 0xFFFFFFFFu);
     memory.write_u32(sh4_operand_cache_address_array + 0x40u, 0xABCDE803u);
     memory.write_u32(sh4_instruction_cache_data_array + 0x24u, 0x11223344u);
@@ -63,7 +80,8 @@ int main() {
     require(invalid_bits && invalid_width && invalid_array_width,
             "CCR oder Cachearrays akzeptieren reservierte Bits oder falsche Zugriffsbreiten.");
     cache->reset();
-    require(cache->value() == 0u && cache->instruction_invalidation_count() == 0u,
+    require(cache->value() == 0u && cache->instruction_invalidation_count() == 0u &&
+                memory.read_u32(sh4_on_chip_ram_address + 0x20u) == 0u,
             "CCR-Reset hinterlaesst Zustand.");
 
     std::cout << "SH-4-CCR-Bootminimum erfolgreich.\n";

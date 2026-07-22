@@ -201,7 +201,10 @@ einer zuvor erfassten Identitaet erzeugen.
 
 Der aktuelle private PAL-Bring-up ist echte native AOT-Ausfuehrung und keine
 Konsolenemulation: Discbytes dienen lokal als Nutzerdatenquelle, waehrend der
-SH-4-Code in statische Hostfunktionen rekompiliert wird. Noch nicht gebundene
+SH-4-Code in statische Hostfunktionen rekompiliert wird. Im HLE-GDI-Pfad gilt
+das sowohl fuer den 16-Sektoren-Systembootstrap der Disc als auch fuer die
+Bootdatei; beide bleiben getrennte, quellgebundene Segmente und der native
+Einstieg beginnt im Bootstrapcode bei `0x8C008300`. Noch nicht gebundene
 Hardwareaktionen, insbesondere DMA-Starts, brechen sichtbar ab; die Runtime
 meldet sie nicht als erfolgreich und erzeugt daraus keinen kuenstlichen Frame.
 Bereits gebundene Einheiten wie Maple verarbeiten dagegen echte Gast-
@@ -212,6 +215,13 @@ referenziellen Einzelzugriffspfad.
 Der AICA-HLE-Produktpfad liest ebenfalls die echten Gast-Slotregister und das
 gemeinsame Sound-RAM und erzeugt pro Media-Clock-Tick PCM16-Stereo; ein
 synthetischer Stummpuffer gilt nicht mehr als Audioerfolg.
+
+Der HLE-BIOS-Pfad initialisiert den unteren BIOS-Arbeits-RAM definiert mit
+`0xFF`, installiert die dynamischen Vektoren sowie den direkten GD2-Alias und
+behandelt `SYSTEM 1` als echten Disc-Reboot. Dabei werden Bootstrap,
+Bootprogramm und Plattform-Handoff neu aufgebaut; veraenderte alte Bootbytes
+werden nicht als Neustartzustand weiterverwendet. Der Systembootstrap kann
+ueber `CCR.ORA/OIX` das allgemein modellierte SH-4-On-Chip-RAM verwenden.
 
 Der generierte SH-4-Pfad erzwingt den privilegierten Modus fuer markierte
 Systemregister- und Kontrollinstruktionen. Ein Zugriff aus dem User-Modus wird

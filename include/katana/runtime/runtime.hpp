@@ -6,6 +6,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <memory>
 
 namespace katana::runtime {
@@ -120,6 +121,7 @@ struct CpuState {
     bool last_prefetch_was_store_queue = false;
     std::shared_ptr<RuntimeAddressSpace> address_space;
     DreamcastGdRomController* gdrom_services = nullptr;
+    std::function<void(CpuState&)> disc_reboot;
     Memory memory{1024u * 1024u, MemoryAlignmentPolicy::Permissive};
 
     [[nodiscard]] std::uint32_t read_sr() const noexcept;

@@ -627,9 +627,19 @@ LoadedProject load_project(ProjectManifest manifest) {
         }
     } else {
         const auto disc = katana::platform::load_dreamcast_gdi_boot(manifest.input_path);
-        image = katana::platform::make_dreamcast_disc_executable(disc);
+        const bool legacy_hle_direct_entry =
+            manifest.firmware_mode == ProjectFirmwareMode::Hle &&
+            manifest.entry_point == katana::platform::dreamcast_disc_boot_address;
+        if (legacy_hle_direct_entry)
+            manifest.entry_point = katana::platform::dreamcast_system_bootstrap_entry_address;
+        image = katana::platform::make_dreamcast_disc_executable(
+            disc,
+            manifest.firmware_mode == ProjectFirmwareMode::Hle
+                ? katana::platform::DreamcastDiscExecutionPath::NativeSystemBootstrap
+                : katana::platform::DreamcastDiscExecutionPath::DirectBootFile);
         if (manifest.entry_point.has_value() &&
-            *manifest.entry_point != katana::platform::dreamcast_disc_boot_address) {
+            std::find(image.entry_points().begin(), image.entry_points().end(),
+                      *manifest.entry_point) == image.entry_points().end()) {
             image.add_entry_point(*manifest.entry_point);
         }
     }

@@ -1,4 +1,5 @@
 #include "katana/runtime/block_guards.hpp"
+#include "katana/runtime/cache_control.hpp"
 
 #include <algorithm>
 #include <iomanip>
@@ -95,6 +96,9 @@ TranslationResult RuntimeAddressSpace::translate(const std::uint32_t address,
                                                                : ExceptionCause::AddressErrorRead;
     if (!privileged && address >= 0x80000000u)
         throw TranslationError(access, address, read_cause);
+
+    if ((address & 0xFC000000u) == sh4_on_chip_ram_address)
+        return {address, address, mmu_generation_, true};
 
     const auto segment = address >> 29u;
     if (segment == 4u || segment == 5u) {

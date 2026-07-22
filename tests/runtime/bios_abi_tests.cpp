@@ -59,9 +59,10 @@ int main() {
                                               {},
                                               ExecutableBlockOrigin::ImageSegment}));
     blocks.bind_code_tracker(&tracker);
-    require(vectors.size() == 6u && blocks.size() == 7u &&
+    require(vectors.size() == 6u && blocks.size() == 8u &&
                 blocks.lookup(0x8C010000u, {}).has_value() &&
-                handoff.runtime_symbols().size() == 12u,
+                blocks.lookup(hle_bios_gdrom2_direct_alias_address, {}).has_value() &&
+                handoff.runtime_symbols().size() == 13u,
             "BIOS-Bootstrap und nachfolgende statische AOT-Registry sind unvollstaendig.");
     for (const auto& vector : vectors)
         require(vector.handler_address != 0x8C000100u &&
@@ -72,6 +73,9 @@ int main() {
                     blocks.lookup_physical(vector.handler_address, {}).has_value(),
                 "BIOS-ABI-Vektor kollidiert mit einem SH-4-Exceptionvektor oder sein RAM-Stub "
                 "fehlt.");
+    require(cpu.memory.read_u32(0x8C002400u) == 0xFFFFFFFFu &&
+                cpu.memory.read_u16(hle_bios_gdrom2_direct_alias_address) == 0x000Bu,
+            "Definierter 0xFF-BIOS-RAM-Grundzustand oder direkter GD2-Alias fehlt.");
     const auto p2_handler =
         0xA0000000u | canonical_physical_address(vectors[0].handler_address);
     require(handoff.resolve(p2_handler).statically_proven &&
@@ -172,7 +176,18 @@ int main() {
     require(cpu.r[0] == 0xFFFFFFFFu,
             "System-Disc-Check meldet ohne angebundenes Laufwerk ein Medium.");
 
+    constexpr std::uint32_t restored_boot_word = 0x1234ABCDu;
     cpu.memory.write_u32(0x8C002400u, 0xC001D00Du, CodeWriteSource::Copy);
+    cpu.memory.write_u32(dreamcast_disc_boot_address, 0xDEADBEEFu, CodeWriteSource::Copy);
+    bool reboot_service_invoked = false;
+    cpu.disc_reboot = [&](CpuState& reboot_cpu) {
+        reboot_service_invoked = true;
+        refresh_hle_bios_abi_memory(reboot_cpu.memory);
+        reboot_cpu.memory.write_u32(
+            dreamcast_disc_boot_address, restored_boot_word, CodeWriteSource::Copy);
+        reset_dreamcast_direct_boot_cpu(reboot_cpu);
+        reboot_cpu.pc = dreamcast_system_bootstrap_entry_address;
+    };
     cpu.pc = vectors[5].handler_address;
     cpu.pr = 0x8C123456u;
     cpu.r[4] = 1u;
@@ -185,14 +200,24 @@ int main() {
             "System-Soft-Reboot ist nicht als bekannter Lifecycle geroutet.");
     const auto reboot_exit = system_block->get().function(cpu, context);
     require(reboot_exit.kind == BlockEndKind::StaticBranch && reboot_exit.target.has_value() &&
-                reboot_exit.target->virtual_address == dreamcast_disc_boot_address &&
-                cpu.pc == dreamcast_disc_boot_address &&
+                reboot_exit.target->virtual_address == dreamcast_system_bootstrap_entry_address &&
+                cpu.pc == dreamcast_system_bootstrap_entry_address && reboot_service_invoked &&
                 cpu.r[15] == dreamcast_direct_boot_stack &&
                 cpu.vbr == dreamcast_direct_boot_vector_base &&
                 cpu.gbr == dreamcast_bios_handoff_gbr && cpu.pr == dreamcast_bios_handoff_pr &&
                 !context.delay_slot_owner_pc.has_value() &&
-                cpu.memory.read_u32(0x8C002400u) == 0xC001D00Du,
-            "System-Soft-Reboot stellt den Direct-Boot-CPU-Zustand nicht ohne RAM-Verlust her.");
+                cpu.memory.read_u32(0x8C002400u) == 0xFFFFFFFFu &&
+                cpu.memory.read_u32(dreamcast_disc_boot_address) == restored_boot_word,
+            "System-Soft-Reboot laedt Bootbytes oder BIOS-Handoff nicht reproduzierbar neu.");
+
+    cpu.pc = hle_bios_gdrom2_direct_alias_address;
+    cpu.r[6] = 0u;
+    cpu.r[7] = 0u;
+    const auto direct_gd2 = route_hle_bios_abi_call(cpu);
+    require(direct_gd2.vector == BiosAbiVectorKind::Gdrom2 &&
+                direct_gd2.service == "gdrom2-undocumented" &&
+                blocks.lookup(hle_bios_gdrom2_direct_alias_address, {}).has_value(),
+            "Bekannter direkter GD2-BIOS-Einstieg 0x8C0010F0 ist nicht dispatchbar.");
 
     cpu.pc = vectors[3].handler_address;
     cpu.r[6] = 0u;
@@ -226,7 +251,8 @@ int main() {
                 json.find("\"selector_register\":\"r7\"") != std::string::npos &&
                 json.find("\"romfont_selector_register\":\"r1\"") != std::string::npos &&
                 json.find("\"system_selector_register\":\"r4\"") != std::string::npos &&
-                json.find("0x8C0000BC") != std::string::npos,
+                json.find("0x8C0000BC") != std::string::npos &&
+                json.find("0x8C0010F0") != std::string::npos,
             "Maschinenlesbarer BIOS-ABI-Vertrag ist unvollstaendig.");
     std::cout << "KR-4602 BIOS-ABI, dynamische Vektoren und RAM-Handoff erfolgreich.\n";
 }

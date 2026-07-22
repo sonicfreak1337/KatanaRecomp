@@ -31,6 +31,7 @@ bool in_range(const std::uint32_t value,
 }
 
 std::uint32_t canonical_address(const std::uint32_t address) noexcept {
+    if ((address & 0xFC000000u) == 0x7C000000u) return address;
     if (address >= 0x80000000u && address < 0xE0000000u) return address & 0x1FFFFFFFu;
     if (address >= 0x1F000000u && address < 0x20000000u) return address | 0xE0000000u;
     return address;
@@ -251,7 +252,10 @@ AddressDescription describe(const std::uint32_t address) {
     else if (in_range(canonical, 0x05000000u, 0x00800000u)) set(DreamcastHardwareRegion::Vram32, true);
     else if (in_range(canonical, 0x11000000u, 0x01000000u) ||
              in_range(canonical, 0x13000000u, 0x01000000u)) set(DreamcastHardwareRegion::TaVram, true);
-    else if (in_range(canonical, 0xE0000000u, 0x04000000u)) set(DreamcastHardwareRegion::StoreQueue, true);
+    else if (in_range(canonical, 0x7C000000u, 0x04000000u))
+        set(DreamcastHardwareRegion::Sh4OnChipRam, true);
+    else if (in_range(canonical, 0xE0000000u, 0x04000000u))
+        set(DreamcastHardwareRegion::StoreQueue, true);
     else if (in_range(canonical, 0xFF000000u, 0x14u))
         set(DreamcastHardwareRegion::Sh4Mmu, true, sh4_register_name(canonical));
     else if (canonical == 0xFF00001Cu)
@@ -493,6 +497,11 @@ HardwareRuntimeSupport assess_support(const AddressDescription& description,
                                                  : HardwareRuntimeSupport::Rejected;
     case Region::StoreQueue:
         return HardwareRuntimeSupport::Implemented;
+    case Region::Sh4OnChipRam:
+        return kind != HardwareAccessKind::Prefetch &&
+                       (width == 1u || width == 2u || width == 4u)
+                   ? HardwareRuntimeSupport::Implemented
+                   : HardwareRuntimeSupport::Rejected;
     case Region::Sh4Mmu:
     case Region::Sh4Cache:
     case Region::Sh4Exception:
@@ -829,6 +838,7 @@ const char* dreamcast_hardware_region_name(const DreamcastHardwareRegion region)
     case DreamcastHardwareRegion::Vram64: return "vram_64";
     case DreamcastHardwareRegion::Vram32: return "vram_32";
     case DreamcastHardwareRegion::StoreQueue: return "store_queue";
+    case DreamcastHardwareRegion::Sh4OnChipRam: return "sh4_on_chip_ram";
     case DreamcastHardwareRegion::Sh4Mmu: return "sh4_mmu";
     case DreamcastHardwareRegion::Sh4Cache: return "sh4_cache";
     case DreamcastHardwareRegion::Sh4Exception: return "sh4_exception";

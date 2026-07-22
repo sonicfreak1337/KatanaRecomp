@@ -4,11 +4,34 @@
 
 ### Geaendert
 
-- Der BIOS-`SYSTEM 1`-Lifecycle ist nun als allgemeiner nativer Disc-Soft-Reboot
-  implementiert. Er verzweigt typisiert zum Direct-Boot-Einstieg, stellt den
-  dokumentierten SH-4-BIOS-Handoff wieder her und behaelt RAM, Discquelle und
-  Runtime-Codeprovenienz bei. BIOS-ABI-Vertrag 4 und Runtime-ABI 27
-  versionieren die neue Kontrollflusssemantik.
+- HLE-GDI-Ports rekompilieren nun auch den 16 Sektoren grossen, von der Disc
+  gelieferten Dreamcast-Systembootstrap als eigenes initiales Programmsegment.
+  Die Runtime laedt ihn bytegenau nach `0x8C008000`, startet nativen Code bei
+  `0x8C008300` und haelt ihn vom eigentlichen Programm bei `0x8C010000`
+  getrennt. Damit wird der allgemeine IP-Handoff ausgefuehrt, statt nur das
+  Hauptprogramm mit fehlendem Bootstrapzustand direkt anzuspringen. Direct-
+  Mode bleibt ein expliziter Bypass; bestehende HLE-Manifeste mit dem alten
+  Standardentry werden migriert. Runtime-ABI 30 und Portprojektvertrag 16
+  versionieren Bootimage, Runtimezustand und generierten Einstieg.
+- Der BIOS-`SYSTEM 1`-Lifecycle fuehrt nun einen reproduzierbaren nativen
+  Disc-Reboot aus: Systembootstrap und Bootdatei werden aus der gebundenen
+  Discquelle erneut gelesen, der definierte `0xFF`-BIOS-RAM-Grundzustand samt
+  HLE-Vektoren wird wiederhergestellt und DMAOR, AICA-Masken, Cachezustand
+  sowie Regionsport werden neu gesetzt. Der Gast springt anschliessend wieder
+  durch `0x8C008300`; veraenderte Bootbytes bleiben nicht erhalten. Der
+  bekannte direkte GD2-Einstieg `0x8C0010F0` ist zusaetzlich zum dynamischen
+  Vektorslot als Aliasblock registriert. BIOS-ABI-Vertrag 5 und Runtime-ABI 30
+  versionieren den geschlossenen Lifecycle.
+- SH-4-On-Chip-RAM ist als allgemeines 8-KiB-Backing im 64-MiB-Aperturfenster
+  `0x7C000000..0x7FFFFFFF` implementiert. `CCR.ORA` schaltet Zugriffe frei,
+  `CCR.OIX` waehlt die dokumentierte Indexabbildung; deaktivierte Zugriffe,
+  Reset, MMU-Ausnahme und Auditorabdeckung sind regressionsgetestet. Damit
+  kann der native Disc-Systembootstrap seinen Stack im OCRAM verwenden.
+- Der begrenzte Dispatchrecorder behaelt nach Kapazitaetssaettigung neue
+  Schluessel ueber ein Heavy-Hitter-Verfahren: Ein neuer Schluessel ersetzt
+  den kleinsten Zaehler und wird danach normal aggregiert. Ein spaet
+  auftretender, hundertfach wiederholter Kontrollfluss erscheint dadurch im
+  Hotspotbericht und erhoeht den Verlustzaehler nur einmal.
 - Der allgemeine Portauditor kann auf Fehlerpfaden neben den kompakten
   Dispatch-Hotspots optional den vollstaendigen deduplizierten Kontrollfluss
   mit Ziel, Aufrufstelle, `PR`, Blockendklasse und Aufloesungsherkunft

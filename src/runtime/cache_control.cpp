@@ -93,6 +93,22 @@ std::uint32_t Sh4CacheControl::read_operand_data(const std::uint32_t offset) con
     return read_cache_data(operand_data_, offset);
 }
 
+std::uint32_t Sh4CacheControl::read_on_chip_ram(
+    const std::uint32_t offset, const MemoryAccessWidth width) const noexcept {
+    if ((value_ & operand_ram_enable) == 0u) return 0u;
+    const auto index_for = [this](const std::uint32_t byte_offset) {
+        const auto address = sh4_on_chip_ram_address + byte_offset;
+        const auto bank =
+            (address >> ((value_ & operand_index_mode) != 0u ? 13u : 1u)) & 0x1000u;
+        return static_cast<std::size_t>(bank | (address & 0x0FFFu));
+    };
+    std::uint32_t result = 0u;
+    for (std::uint32_t byte = 0u; byte < static_cast<std::uint32_t>(width); ++byte)
+        result |= static_cast<std::uint32_t>(on_chip_ram_[index_for(offset + byte)]) <<
+                  (byte * 8u);
+    return result;
+}
+
 void Sh4CacheControl::write_instruction_address(const std::uint32_t offset,
                                                 const std::uint32_t value) {
     write_cache_address(instruction_addresses_, offset, value, 0x1FFFFC01u);
@@ -113,6 +129,20 @@ void Sh4CacheControl::write_operand_data(const std::uint32_t offset,
     write_cache_data(operand_data_, offset, value);
 }
 
+void Sh4CacheControl::write_on_chip_ram(const std::uint32_t offset,
+                                        const std::uint32_t value,
+                                        const MemoryAccessWidth width) noexcept {
+    if ((value_ & operand_ram_enable) == 0u) return;
+    const auto index_for = [this](const std::uint32_t byte_offset) {
+        const auto address = sh4_on_chip_ram_address + byte_offset;
+        const auto bank =
+            (address >> ((value_ & operand_index_mode) != 0u ? 13u : 1u)) & 0x1000u;
+        return static_cast<std::size_t>(bank | (address & 0x0FFFu));
+    };
+    for (std::uint32_t byte = 0u; byte < static_cast<std::uint32_t>(width); ++byte)
+        on_chip_ram_[index_for(offset + byte)] = static_cast<std::uint8_t>(value >> (byte * 8u));
+}
+
 void Sh4CacheControl::reset() noexcept {
     value_ = 0u;
     instruction_invalidations_ = 0u;
@@ -120,6 +150,7 @@ void Sh4CacheControl::reset() noexcept {
     operand_addresses_.fill(0u);
     instruction_data_.fill(0u);
     operand_data_.fill(0u);
+    on_chip_ram_.fill(0u);
 }
 
 std::shared_ptr<Sh4CacheControl> map_sh4_cache_control(Memory& memory) {
@@ -140,6 +171,15 @@ std::shared_ptr<Sh4CacheControl> map_sh4_cache_control(Memory& memory) {
             state->write(value);
         });
     memory.map_region("sh4-cache-control", sh4_cache_control_address, std::move(device));
+    auto on_chip_ram = std::make_shared<MmioMemoryDevice>(
+        sh4_on_chip_ram_aperture_size,
+        [state](const auto offset, const auto width) {
+            return state->read_on_chip_ram(offset, width);
+        },
+        [state](const auto offset, const auto value, const auto width) {
+            state->write_on_chip_ram(offset, value, width);
+        });
+    memory.map_region("sh4-on-chip-ram", sh4_on_chip_ram_address, std::move(on_chip_ram));
     memory.map_region(
         "sh4-instruction-cache-address-array",
         sh4_instruction_cache_address_array,

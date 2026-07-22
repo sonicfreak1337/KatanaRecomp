@@ -28,6 +28,7 @@ enum class DreamcastHardwareRegion : std::uint8_t {
     Vram64,
     Vram32,
     StoreQueue,
+    Sh4OnChipRam,
     Sh4Mmu,
     Sh4Cache,
     Sh4Exception,

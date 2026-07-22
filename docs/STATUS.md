@@ -87,13 +87,16 @@ SH-4-Exceptionvektoren. Der neue Dispatch-Hotspotbericht wies zudem 2.097.152
 Aufrufe desselben gueltigen
 Vier-Byte-Kopierpfads als Bootzeit-Hotspot statt als Dispatchfehler nach.
 
-Der anschliessende PAL-Lauf erreichte reproduzierbar `SYSTEM 1`. Der gegen
-Flycast-Reios und die lokale BIOS-Zerlegung abgeglichene allgemeine Fix bildet
-diesen Aufruf nun als nativen Disc-Soft-Reboot ab: typisierter Sprung zum
-Direct-Boot-Einstieg, erneuerter SH-4-Handoff und Erhalt von RAM sowie
-Runtime-Codeprovenienz. Die fokussierten BIOS-, Boot-, Runtime- und
-Portexporttests sind gruen; der private Produktnachweis folgt mit einem frisch
-exportierten Port.
+Der anschliessende PAL-Lauf erreichte reproduzierbar `SYSTEM 1`. Ein erster
+Shortcut setzte nur den CPU-Handoff und sprang direkt zur vorhandenen
+Bootdatei; der erneute Audit verwarf diesen unvollstaendigen Vertrag. Der
+allgemeine Runtimepfad liest jetzt Bootstrap und Bootdatei erneut aus der
+gebundenen Discquelle, rekonstruiert den definierten BIOS-RAM-Zustand samt
+Vektoren und setzt DMAOR, AICA-Masken, Cache sowie PAL-Port erneut. Der Einstieg
+erfolgt wieder ueber den Systembootstrap bei `0x8C008300`. Der direkte
+GD2-BIOS-Einstieg `0x8C0010F0` ist als zusaetzlicher Aliasblock vorhanden.
+Synthetische Regressionen veraendern Bootbytes und Geraetezustand vor SYSTEM 1
+und beweisen deren Wiederherstellung.
 
 Der erweiterte Kontrollflussaudit belegt den anschliessenden Soft-Reboot als
 absichtlichen Fatalpfad des fruehen Gastcodes. Ein unabhaengiger
@@ -103,7 +106,28 @@ Wert `0x0300` faelschlich `0x0304`. Die korrigierte 2-Bit-Modusdekodierung ist
 regressionsgetestet. Der private A/B-Lauf erreicht danach weiterhin keinen
 GD-ROM-/TA-/PVR-Zugriff; der vorgelagerte Statuspfad bleibt daher aktiver P0.
 
-Runtime-ABI 28 und Portprojektvertrag 15 bilden den kumulativen v0.48-Stand ab.
+Speicherproben vor dem Fatalpfad belegen die Ursache inzwischen enger: Das
+gesamte Disc-Systemfenster ab `0x8C008000` war null, weil der bisherige
+Direct-Boot nur die Bootdatei nach `0x8C010000` lud. Der PAL-SYSINFO-Wert war
+dagegen korrekt. Der gegen Flycast-Reios und die lokale BIOS-Zerlegung
+abgeglichene, aber eigenstaendig implementierte Produktvertrag liest deshalb
+die ersten 16 Datensektoren als separates Bootstrapsegment, nimmt dessen
+Einstieg bei `0x8C008300` in Analyse, IR und nativen Codegen auf und laedt
+Bootstrap sowie Hauptprogramm vor dem Gaststart. Die sieben Sektoren nach
+`0x8C008100` bleiben davon getrennt die Semantik des BIOS-Discpruefaufrufs.
+Sechs fokussierte Boot-, Manifest-, GUI- und Portexportregressionen sind gruen;
+der erste frische PAL-Nachweis erreichte den nativen Bootstrap und belegte
+`CCR.ORA` sowie einen Stack im SH-4-On-Chip-RAM. Das zuvor fehlende allgemeine
+OCRAM-Modell bildet nun das 8-KiB-Backing, ORA/OIX-Indexierung, Reset,
+MMU-Ausnahme und Hardwareaudit ab. Der danach frisch exportierte ABI-30-Port
+erreicht mit der unveraenderten PAL-Disc 5.000.000 Gastzyklen und 1.001.521
+Gastbloecke ohne Exception oder Materializerfehler. Der letzte beobachtete
+MMIO-Zugriff liegt im aktiven OCRAM; der fruehere Abbruch nach 12 Gastzyklen
+ist damit beseitigt. TA/PVR und ein echter Gastframe bleiben fuer den laengeren
+Folgelauf weiterhin offen.
+
+Runtime-ABI 30, BIOS-ABI 5 und Portprojektvertrag 16 bilden den kumulativen
+v0.48-Stand ab.
 PlatformServices-ABI 7 bleibt unveraendert.
 
 Die zusammenhaengende zweite Bootkorrekturrunde ist implementiert. Sie umfasst
@@ -163,7 +187,7 @@ Recipe 2. Die Content-Root entsteht aus den wirklich gelesenen Raw-Chunks und
 wird sowohl beim Schreiben gegen die Recipe als auch beim Oeffnen gegen
 Tracktabelle und Chunkindex geprueft; abweichendes Staging wird nicht
 veroeffentlicht. Der damals eingefuehrte AICA-Vertrag ist im aktuellen
-  Runtime-ABI 28 und Portprojektvertrag 15 enthalten. Das kumulative v0.48-
+  Runtime-ABI 30 und Portprojektvertrag 16 enthalten. Das kumulative v0.48-
 Debug-Gate ist mit 180 von 180 Tests bestanden; der anschliessende private
 PAL-Nachweis ist erfolgt: Der vollstaendige neue Port entstand mit 12 Workern
 in 126,8 Sekunden, ein inkrementeller Runtime-Neubau in 77,8 Sekunden. Die

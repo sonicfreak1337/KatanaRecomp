@@ -10,7 +10,7 @@
 
 namespace katana::runtime {
 
-inline constexpr std::uint32_t dispatch_diagnostic_schema_version = 1u;
+inline constexpr std::uint32_t dispatch_diagnostic_schema_version = 2u;
 
 enum class DispatchResolutionOrigin : std::uint8_t {
     StaticProof,

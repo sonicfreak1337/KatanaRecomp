@@ -121,6 +121,12 @@ int main() {
     require(invalid_rtc.addresses.size() == 1u && invalid_rtc.rejected_addresses == 1u &&
                 invalid_rtc.addresses.front().register_name.empty(),
             "AICA-RTC-Zwischenadresse wird vom Auditor faelschlich als Register behauptet.");
+    const auto on_chip_ram = audit_rtc_read(0x7E001000u, 0x6012u);
+    require(on_chip_ram.addresses.size() == 1u && on_chip_ram.implemented_addresses == 1u &&
+                on_chip_ram.addresses.front().canonical_address == 0x7E001000u &&
+                on_chip_ram.addresses.front().region ==
+                    katana::analysis::DreamcastHardwareRegion::Sh4OnChipRam,
+            "SH-4-On-Chip-RAM wird im allgemeinen Hardwareauditor falsch kanonisiert.");
 
     std::cout << "Allgemeines Dreamcast-Hardware-Audit erfolgreich.\n";
 }

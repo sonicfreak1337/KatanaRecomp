@@ -497,7 +497,8 @@ int analyze_manifest(const std::filesystem::path& path,
 
 katana::analysis::DreamcastHardwareAudit analyze_disc_hardware(const std::filesystem::path& path) {
     const auto disc = katana::platform::load_dreamcast_gdi_boot(path);
-    const auto image = katana::platform::make_dreamcast_disc_executable(disc);
+    const auto image = katana::platform::make_dreamcast_disc_executable(
+        disc, katana::platform::DreamcastDiscExecutionPath::NativeSystemBootstrap);
     const auto analysis = katana::analysis::analyze_control_flow(image);
     return katana::analysis::audit_dreamcast_hardware(image, analysis);
 }

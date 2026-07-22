@@ -33,6 +33,11 @@
 namespace katana::runtime {
 
 inline constexpr std::uint32_t dreamcast_disc_boot_address = 0x8C010000u;
+inline constexpr std::uint32_t dreamcast_system_bootstrap_address = 0x8C008000u;
+inline constexpr std::uint32_t dreamcast_system_bootstrap_entry_address = 0x8C008300u;
+inline constexpr std::uint32_t dreamcast_system_bootstrap_sector_count = 16u;
+inline constexpr std::size_t dreamcast_system_bootstrap_size =
+    static_cast<std::size_t>(dreamcast_system_bootstrap_sector_count) * 2048u;
 inline constexpr std::uint32_t dreamcast_direct_boot_stack = 0x8D000000u;
 inline constexpr std::uint32_t dreamcast_direct_boot_vector_base = 0x8C000000u;
 inline constexpr std::uint32_t dreamcast_disc_boot_status =
@@ -84,10 +89,12 @@ struct DreamcastRuntimeBootImage {
     std::string hardware_id;
     std::string area_symbols;
     std::string boot_file_name;
+    std::vector<std::uint8_t> system_bootstrap;
     std::vector<std::uint8_t> boot_file;
     std::uint32_t data_track_lba = 0u;
     std::uint32_t extent_lba_bias = 0u;
     std::size_t validated_tracks = 0u;
+    bool repeated_bootstrap_reads_match = false;
     bool repeated_reads_match = false;
 };
 
@@ -132,6 +139,7 @@ struct DreamcastRuntimeState {
     std::shared_ptr<std::vector<StoreQueueTransfer>> store_queue_transfers;
     std::shared_ptr<std::uint64_t> dropped_store_queue_transfers;
     std::shared_ptr<FirmwareHandoffMap> firmware_handoff;
+    std::size_t loaded_system_bootstrap_bytes = 0u;
     std::size_t loaded_boot_bytes = 0u;
 };
 

@@ -227,6 +227,21 @@ int main() {
                 bounded_dispatch.total_occurrences() == 3u,
             "Dispatchdiagnostik waechst ungebremst oder verliert den Aggregatzaehler.");
 
+    DispatchDiagnosticRecorder late_hotspot(1u);
+    late_hotspot.record(base);
+    auto frequent_late = base;
+    frequent_late.callsite += 0x40u;
+    for (std::size_t occurrence = 0u; occurrence < 100u; ++occurrence)
+        late_hotspot.record(frequent_late);
+    require(late_hotspot.events().size() == 1u &&
+                late_hotspot.events().front().callsite == frequent_late.callsite &&
+                late_hotspot.events().front().occurrences == 100u &&
+                late_hotspot.dropped_unique_events() == 1u &&
+                late_hotspot.serialize_hotspots_json().find("\"occurrences\":100") !=
+                    std::string::npos,
+            "Ein nach Kapazitaetssaettigung auftretender Hotspot wird verschluckt oder als "
+            "wiederholt neuer Verlust gezaehlt.");
+
     ExecutableCodeTracker tracker;
     const std::array block_origins{ExecutableBlockOrigin::ImageSegment,
                                    ExecutableBlockOrigin::RomRamCopy,

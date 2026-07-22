@@ -1,6 +1,7 @@
 #include "katana/runtime/block_table.hpp"
 
 #include "katana/runtime/code_invalidation.hpp"
+#include "katana/runtime/cache_control.hpp"
 
 #include <algorithm>
 #include <iomanip>
@@ -52,6 +53,7 @@ RuntimeBlockTable::VariantAddressHash::operator()(const VariantAddressKey& key) 
 }
 
 std::uint32_t canonical_physical_address(const std::uint32_t address) noexcept {
+    if ((address & 0xFC000000u) == sh4_on_chip_ram_address) return address;
     return address < 0xE0000000u ? address & 0x1FFFFFFFu : address;
 }
 

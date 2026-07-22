@@ -1536,9 +1536,17 @@ JobResult ApplicationService::execute(const JobRequest& request,
                     result.failure_category = JobFailureCategory::Build;
                     if (project.execution_profile.format == io::ProjectInputFormat::DreamcastGdi) {
                         const auto host_root = work_root / "sourcecode";
-                        const auto boot_size = project.image.segments().empty()
-                                                   ? 0u
-                                                   : project.image.segments().front().bytes.size();
+                        const auto boot_segment = std::find_if(
+                            project.image.segments().begin(),
+                            project.image.segments().end(),
+                            [](const auto& segment) {
+                                return segment.virtual_address ==
+                                       platform::dreamcast_disc_boot_address;
+                            });
+                        const auto boot_size =
+                            boot_segment == project.image.segments().end()
+                                ? 0u
+                                : boot_segment->bytes.size();
                         const auto port_export = codegen::export_dreamcast_port_project(
                             {project.image,
                              analysis,

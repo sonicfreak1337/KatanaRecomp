@@ -113,6 +113,12 @@ std::vector<std::uint8_t> boot_track() {
     std::copy(boot_file.begin(),
               boot_file.end(),
               bytes.begin() + static_cast<std::ptrdiff_t>(payload_offset(0u, 0x60u)));
+    constexpr std::array<std::uint8_t, 12u> system_bootstrap = {
+        0x01u, 0xD0u, 0x2Bu, 0x40u, 0x09u, 0x00u, 0x09u, 0x00u,
+        0x00u, 0x00u, 0x01u, 0x8Cu};
+    std::copy(system_bootstrap.begin(),
+              system_bootstrap.end(),
+              bytes.begin() + static_cast<std::ptrdiff_t>(payload_offset(0u, 0x300u)));
     const auto pvd = payload_offset(16u);
     bytes[pvd] = 1u;
     std::copy_n("CD001", 5u, bytes.begin() + static_cast<std::ptrdiff_t>(pvd + 1u));

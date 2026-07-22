@@ -99,6 +99,16 @@ std::vector<std::uint8_t> boot_track(const bool immediate_trap = false) {
     std::copy(boot_file.begin(),
               boot_file.end(),
               bytes.begin() + static_cast<std::ptrdiff_t>(payload_offset(0u, 0x60u)));
+    constexpr std::array<std::uint8_t, 12u> system_bootstrap = {
+        0x01u, 0xD0u, // mov.l @(1,pc),r0 -> literal at 0x8C008308
+        0x2Bu, 0x40u, // jmp @r0
+        0x09u, 0x00u, // delay-slot nop
+        0x09u, 0x00u, // aligned padding
+        0x00u, 0x00u, 0x01u, 0x8Cu // 0x8C010000
+    };
+    std::copy(system_bootstrap.begin(),
+              system_bootstrap.end(),
+              bytes.begin() + static_cast<std::ptrdiff_t>(payload_offset(0u, 0x300u)));
 
     const auto pvd = payload_offset(16u);
     bytes[pvd] = 1u;
@@ -305,8 +315,63 @@ int run_test(const int argc, char* argv[]) {
         hle_runtime_cpu, runtime_boot, katana::runtime::DreamcastRuntimeFirmwareMode::HleBiosAbi);
     require(hle_runtime_cpu.memory.read_u32(0x8C0000B0u) ==
                     katana::runtime::hle_bios_abi_vectors()[0].handler_address &&
-                hle_runtime_state.runtime_blocks->size() == 6u,
-            "Produktiver GDI-HLE-Runtimepfad installiert die BIOS-ABI nicht.");
+                hle_runtime_cpu.pc ==
+                    katana::runtime::dreamcast_system_bootstrap_entry_address &&
+                hle_runtime_state.loaded_system_bootstrap_bytes ==
+                    katana::runtime::dreamcast_system_bootstrap_size &&
+                hle_runtime_cpu.memory.read_u16(
+                    katana::runtime::dreamcast_system_bootstrap_entry_address) == 0xD001u &&
+                hle_runtime_state.runtime_blocks->size() == 7u &&
+                hle_runtime_cpu.memory.read_u32(0x8C002400u) == 0xFFFFFFFFu &&
+                hle_runtime_state.runtime_blocks
+                    ->lookup(katana::runtime::hle_bios_gdrom2_direct_alias_address, {})
+                    .has_value(),
+            "Produktiver GDI-HLE-Runtimepfad installiert BIOS-ABI oder Disc-Bootstrap nicht.");
+    const auto original_bootstrap_word = hle_runtime_cpu.memory.read_u32(
+        katana::runtime::dreamcast_system_bootstrap_entry_address);
+    const auto original_program_word = hle_runtime_cpu.memory.read_u32(
+        katana::runtime::dreamcast_disc_boot_address);
+    hle_runtime_cpu.memory.write_u32(0x8C002400u, 0xC001D00Du);
+    hle_runtime_cpu.memory.write_u32(
+        katana::runtime::dreamcast_system_bootstrap_entry_address, 0xDEADBEEFu);
+    hle_runtime_cpu.memory.write_u32(
+        katana::runtime::dreamcast_disc_boot_address, 0xDEADBEEFu);
+    hle_runtime_state.dmac->write_operation(katana::runtime::Sh4Dmac::master_enable);
+    hle_runtime_state.aica_registers->write(
+        0x289Cu, 0u, katana::runtime::MemoryAccessWidth::Halfword);
+    hle_runtime_state.cache_control->write(
+        katana::runtime::Sh4CacheControl::operand_ram_enable);
+    hle_runtime_state.io_ports->write_control_a(0x10u);
+    hle_runtime_state.io_ports->write_data_a(0u);
+    const auto system_vector = katana::runtime::hle_bios_abi_vectors()[5];
+    const auto system_handle = hle_runtime_state.runtime_blocks->lookup(
+        system_vector.handler_address, {});
+    const auto system_block = system_handle
+                                  ? hle_runtime_state.runtime_blocks->resolve(*system_handle)
+                                  : std::nullopt;
+    require(system_block.has_value(), "SYSTEM-1-Runtimeblock fehlt im produktiven HLE-Pfad.");
+    hle_runtime_cpu.pc = system_vector.handler_address;
+    hle_runtime_cpu.r[4] = 1u;
+    katana::runtime::BlockExecutionContext reboot_context;
+    const auto reboot_exit = system_block->get().function(hle_runtime_cpu, reboot_context);
+    require(reboot_exit.kind == katana::runtime::BlockEndKind::StaticBranch &&
+                hle_runtime_cpu.pc ==
+                    katana::runtime::dreamcast_system_bootstrap_entry_address &&
+                hle_runtime_cpu.memory.read_u32(
+                    katana::runtime::dreamcast_system_bootstrap_entry_address) ==
+                    original_bootstrap_word &&
+                hle_runtime_cpu.memory.read_u32(katana::runtime::dreamcast_disc_boot_address) ==
+                    original_program_word &&
+                hle_runtime_cpu.memory.read_u32(0x8C002400u) == 0xFFFFFFFFu &&
+                hle_runtime_state.dmac->operation() ==
+                    katana::runtime::dreamcast_bios_handoff_dmaor &&
+                hle_runtime_state.aica_registers->read(
+                    0x289Cu, katana::runtime::MemoryAccessWidth::Halfword) == 0x48u &&
+                hle_runtime_cpu.memory.read_u32(
+                    katana::runtime::sh4_cache_control_address) == 0u &&
+                hle_runtime_state.io_ports->control_a() ==
+                    katana::runtime::dreamcast_bios_handoff_pctra,
+            "SYSTEM 1 laedt Disc-Bootbytes oder den BIOS-Geraetehandoff nicht erneut.");
     const auto render_done_count = [&] {
         return std::count_if(hle_runtime_state.system_asic->events().begin(),
                              hle_runtime_state.system_asic->events().end(),
@@ -360,7 +425,7 @@ int run_test(const int argc, char* argv[]) {
         std::find_if(generated_before.begin(), generated_before.end(), [](const auto& entry) {
             return entry.first.starts_with("code/unit-00000-") && entry.first.ends_with(".cpp");
         });
-    require(first.functions == 2u && first.partitions == 2u && first.checkpoints.size() == 8u &&
+    require(first.functions == 3u && first.partitions == 3u && first.checkpoints.size() == 8u &&
                 first.checkpoints.back() == "port-project-written",
             "Synthetische GDI durchlaeuft den Portexport nicht vollstaendig.");
     require(std::filesystem::exists(output / "content" / "game.katana-install") &&
@@ -384,13 +449,13 @@ int run_test(const int argc, char* argv[]) {
     std::size_t entry_metadata_count = 0u;
     for (const auto& [path, content] : generated_before) {
         if (path.starts_with("code/unit-") && path.ends_with(".cpp")) {
-            require(content.find("generated_entry_address = 0x8C010000u") != std::string::npos,
+            require(content.find("generated_entry_address = 0x8C008300u") != std::string::npos,
                     "Portpartition besitzt einen abweichenden globalen Programmeinstieg.");
             ++entry_metadata_count;
         }
     }
-    require(entry_metadata_count == 2u,
-            "Mehrteiliger Portexport erzeugt nicht exakt zwei Translation Units.");
+    require(entry_metadata_count == 3u,
+            "Mehrteiliger Portexport erzeugt nicht exakt drei Translation Units.");
     for (const auto& path : {"include/katana_port.hpp",
                              "code/runtime-dispatch.cpp",
                              "metadata/port-project.json",
@@ -552,11 +617,16 @@ int run_test(const int argc, char* argv[]) {
 
     const auto guarded_disc = katana::platform::load_dreamcast_gdi_boot(gdi);
     auto guarded_image = katana::platform::make_dreamcast_disc_executable(guarded_disc);
-    require(guarded_image.segments().size() == 1u &&
-                guarded_image.segments()[0].kind == katana::io::SegmentKind::Mixed &&
-                guarded_image.segments()[0].source_kind ==
+    const auto guarded_boot_segment = std::find_if(
+        guarded_image.segments().begin(), guarded_image.segments().end(), [](const auto& segment) {
+            return segment.virtual_address == katana::platform::dreamcast_disc_boot_address;
+        });
+    require(guarded_image.segments().size() == 2u &&
+                guarded_boot_segment != guarded_image.segments().end() &&
+                guarded_boot_segment->kind == katana::io::SegmentKind::Mixed &&
+                guarded_boot_segment->source_kind ==
                     katana::io::ImageSourceKind::DiscBootFile &&
-                guarded_image.segments()[0].bytes.size() == guarded_image.segments()[0].memory_size,
+                guarded_boot_segment->bytes.size() == guarded_boot_segment->memory_size,
             "GDI-Loader markiert die Bootdatei pauschal als Code oder erfindet Zero-Fill.");
     auto guarded_analysis = katana::analysis::analyze_control_flow(guarded_image);
     require(!guarded_analysis.indirect_control_flow.empty() &&
@@ -696,7 +766,7 @@ int run_test(const int argc, char* argv[]) {
         if (path.starts_with("code/unit-")) inferred_runtime_text += content;
     require(inferred_runtime_text.find("runtime_only_jump") != std::string::npos &&
                 inferred_runtime_sources.at("metadata/port-project.json")
-                        .find("\"runtime_only_control_flow\":1") != std::string::npos &&
+                        .find("\"runtime_only_control_flow\":2") != std::string::npos &&
                 inferred_runtime_sources.at("metadata/port-project.json")
                         .find("\"unresolved_control_flow\":0") != std::string::npos,
             "Allgemeiner Runtimezeiger erreicht den validierenden Portvertrag nicht.");

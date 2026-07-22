@@ -21,6 +21,11 @@ constexpr std::array kVectors{
     BiosAbiVector{BiosAbiVectorKind::MiscGdrom, "misc-gdrom", 0x8C0000BCu, 0x8C001160u},
     BiosAbiVector{BiosAbiVectorKind::Gdrom2, "gdrom2", 0x8C0000C0u, 0x8C001180u},
     BiosAbiVector{BiosAbiVectorKind::System, "system", 0x8C0000E0u, 0x8C0011A0u}};
+constexpr std::array kDirectAliases{
+    BiosAbiVector{BiosAbiVectorKind::Gdrom2,
+                  "gdrom2-direct",
+                  0u,
+                  hle_bios_gdrom2_direct_alias_address}};
 
 struct FlashPartition {
     std::uint32_t offset;
@@ -171,6 +176,10 @@ const BiosAbiVector* vector_for_handler(const std::uint32_t address) noexcept {
         if (canonical_physical_address(vector.handler_address) ==
             canonical_physical_address(address))
             return &vector;
+    for (const auto& alias : kDirectAliases)
+        if (canonical_physical_address(alias.handler_address) ==
+            canonical_physical_address(address))
+            return &alias;
     return nullptr;
 }
 BiosAbiCall call(const BiosAbiVectorKind vector,
@@ -184,7 +193,14 @@ BlockExit bios_abi_block(CpuState& cpu, BlockExecutionContext& context) {
     const auto source = cpu.pc;
     const auto routed = route_hle_bios_abi_call(cpu);
     if (routed.vector == BiosAbiVectorKind::System && routed.selector == 1u) {
-        reset_dreamcast_direct_boot_cpu(cpu);
+        if (!cpu.disc_reboot)
+            throw BiosAbiDispatchError(source,
+                                       routed.selector,
+                                       routed.super_selector,
+                                       cpu.pr,
+                                       "service-unavailable:system-soft-reboot" +
+                                           register_snapshot(cpu));
+        cpu.disc_reboot(cpu);
         context.delay_slot_owner_pc.reset();
         return make_block_exit(cpu,
                                context,
@@ -240,6 +256,46 @@ BiosAbiDispatchError::BiosAbiDispatchError(const std::uint32_t handler_address,
 
 std::span<const BiosAbiVector> hle_bios_abi_vectors() noexcept {
     return kVectors;
+}
+
+void refresh_hle_bios_abi_memory(Memory& memory) {
+    std::vector<std::uint8_t> erased(hle_bios_ram_size, 0xFFu);
+    memory.write_bytes(hle_bios_ram_base, erased, CodeWriteSource::Copy);
+    for (const auto& vector : kVectors) {
+        memory.write_u32(vector.slot_address, vector.handler_address, CodeWriteSource::Copy);
+        memory.write_u16(vector.handler_address, 0x000Bu, CodeWriteSource::Copy);
+        memory.write_u16(vector.handler_address + 2u, 0x0009u, CodeWriteSource::Copy);
+    }
+    for (const auto& alias : kDirectAliases) {
+        memory.write_u16(alias.handler_address, 0x000Bu, CodeWriteSource::Copy);
+        memory.write_u16(alias.handler_address + 2u, 0x0009u, CodeWriteSource::Copy);
+    }
+}
+
+void refresh_hle_bios_abi_memory(LinearMemoryDevice& main_ram, const std::size_t erased_size) {
+    if (erased_size > hle_bios_ram_size || main_ram.size() < hle_bios_ram_size)
+        throw std::invalid_argument("BIOS-RAM-Grundzustand passt nicht in den Hauptspeicher.");
+    auto bytes = main_ram.writable_bytes();
+    std::fill_n(bytes.begin(), erased_size, static_cast<std::uint8_t>(0xFFu));
+    const auto write_u16 = [&bytes](const std::uint32_t address, const std::uint16_t value) {
+        const auto offset = static_cast<std::size_t>(address - hle_bios_ram_base);
+        bytes[offset] = static_cast<std::uint8_t>(value);
+        bytes[offset + 1u] = static_cast<std::uint8_t>(value >> 8u);
+    };
+    const auto write_u32 = [&bytes](const std::uint32_t address, const std::uint32_t value) {
+        const auto offset = static_cast<std::size_t>(address - hle_bios_ram_base);
+        for (std::size_t index = 0u; index < 4u; ++index)
+            bytes[offset + index] = static_cast<std::uint8_t>(value >> (index * 8u));
+    };
+    for (const auto& vector : kVectors) {
+        write_u32(vector.slot_address, vector.handler_address);
+        write_u16(vector.handler_address, 0x000Bu);
+        write_u16(vector.handler_address + 2u, 0x0009u);
+    }
+    for (const auto& alias : kDirectAliases) {
+        write_u16(alias.handler_address, 0x000Bu);
+        write_u16(alias.handler_address + 2u, 0x0009u);
+    }
 }
 
 BiosAbiCall route_hle_bios_abi_call(const CpuState& cpu) {
@@ -347,25 +403,26 @@ void install_hle_bios_abi(Memory& memory,
                           const BlockVariantKey& variant,
                           const std::uint64_t guest_cycle,
                           ExecutableCodeTracker* const code_tracker) {
-    for (const auto& vector : kVectors) {
-        if (!writable_range(memory, vector.slot_address, 4u) ||
+    const auto validate = [&](const BiosAbiVector& vector, const bool has_slot) {
+        if ((has_slot && !writable_range(memory, vector.slot_address, 4u)) ||
             !writable_range(memory, vector.handler_address, 4u))
             throw std::invalid_argument("BIOS-ABI-Vektor liegt nicht in schreibbarem RAM.");
         if (blocks.lookup(vector.handler_address, variant).has_value() ||
             blocks.lookup_physical(vector.handler_address, variant).has_value())
             throw std::invalid_argument("BIOS-ABI-Handler kollidiert mit Runtimeblock.");
         for (const auto& symbol : handoff.runtime_symbols()) {
-            if (symbol.virtual_address == vector.slot_address ||
+            if ((has_slot && symbol.virtual_address == vector.slot_address) ||
                 symbol.virtual_address == vector.handler_address ||
-                symbol.physical_address == canonical_physical_address(vector.slot_address) ||
+                (has_slot &&
+                 symbol.physical_address == canonical_physical_address(vector.slot_address)) ||
                 symbol.physical_address == canonical_physical_address(vector.handler_address))
                 throw std::invalid_argument("BIOS-ABI-Vektor kollidiert mit Laufzeitsymbol.");
         }
-    }
-    for (const auto& vector : kVectors) {
-        memory.write_u32(vector.slot_address, vector.handler_address, CodeWriteSource::Copy);
-        memory.write_u16(vector.handler_address, 0x000Bu, CodeWriteSource::Copy);
-        memory.write_u16(vector.handler_address + 2u, 0x0009u, CodeWriteSource::Copy);
+    };
+    for (const auto& vector : kVectors) validate(vector, true);
+    for (const auto& alias : kDirectAliases) validate(alias, false);
+    refresh_hle_bios_abi_memory(memory);
+    const auto register_handler = [&](const BiosAbiVector& vector, const bool has_slot) {
         RuntimeBlock block{vector.handler_address,
                            canonical_physical_address(vector.handler_address),
                            4u,
@@ -384,17 +441,20 @@ void install_hle_bios_abi(Memory& memory,
                                               {},
                                               ExecutableBlockOrigin::RomRamCopy}));
         }
-        handoff.install_runtime_symbol({"bios-vector-" + std::string(vector.name),
-                                        vector.slot_address,
-                                        canonical_physical_address(vector.slot_address),
-                                        "hle-generated-vector",
-                                        guest_cycle});
+        if (has_slot)
+            handoff.install_runtime_symbol({"bios-vector-" + std::string(vector.name),
+                                            vector.slot_address,
+                                            canonical_physical_address(vector.slot_address),
+                                            "hle-generated-vector",
+                                            guest_cycle});
         handoff.install_runtime_symbol({"bios-handler-" + std::string(vector.name),
                                         vector.handler_address,
                                         canonical_physical_address(vector.handler_address),
                                         "hle-generated-handler",
                                         guest_cycle});
-    }
+    };
+    for (const auto& vector : kVectors) register_handler(vector, true);
+    for (const auto& alias : kDirectAliases) register_handler(alias, false);
 }
 
 const char* bios_abi_service_status_name(const BiosAbiServiceStatus status) noexcept {
@@ -411,6 +471,12 @@ std::string format_hle_bios_abi_contract_json() {
         output << "{\"name\":\"" << kVectors[index].name << "\",\"slot\":\""
                << hex32(kVectors[index].slot_address) << "\",\"handler\":\""
                << hex32(kVectors[index].handler_address) << "\"}";
+    }
+    output << "],\"direct_aliases\":[";
+    for (std::size_t index = 0u; index < kDirectAliases.size(); ++index) {
+        if (index) output << ',';
+        output << "{\"name\":\"" << kDirectAliases[index].name << "\",\"handler\":\""
+               << hex32(kDirectAliases[index].handler_address) << "\"}";
     }
     output << "]}";
     return output.str();

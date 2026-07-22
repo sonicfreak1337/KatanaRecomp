@@ -61,7 +61,8 @@ void Model::new_project(const std::filesystem::path& manifest_path,
         manifest.entry_point = 0x8C010000u;
         manifest.segment_name = ".text";
     } else if (format == io::ProjectInputFormat::DreamcastGdi) {
-        manifest.entry_point = platform::dreamcast_disc_boot_address;
+        manifest.firmware_mode = io::ProjectFirmwareMode::Hle;
+        manifest.entry_point = platform::dreamcast_system_bootstrap_entry_address;
     }
     auto project = app::ProjectSession::create(manifest_path, std::move(manifest));
     auto source = inspect_source ? app::ApplicationService{}.inspect_source(project.manifest())

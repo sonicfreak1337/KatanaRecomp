@@ -186,8 +186,12 @@ Unabhaengige Aufgaben derselben Stufe duerfen parallel entwickelt werden.
 
 ### Gate
 
-- verteilbare Ports enthalten nur AOT-Code und eine generische Originaldisc-
-  Recipe; vollstaendige Retaildaten entstehen erst lokal beim Nutzer
+- verteilbare Ports enthalten nur AOT-Code fuer Disc-Systembootstrap und
+  Bootdatei sowie eine generische Originaldisc-Recipe; vollstaendige
+  Retaildaten entstehen erst lokal beim Nutzer
+- der native HLE-Boot umfasst BIOS-RAM, direkten GD2-Alias und SH-4-OCRAM;
+  `SYSTEM 1` liest Bootstrap und Bootdatei erneut aus der lokalen Originaldisc
+  und stellt den Plattform-Handoff reproduzierbar wieder her
 - externe Ports bauen gegen ein versioniertes minimales Runtime-SDK
 - CLI und GUI erzeugen denselben Port- und Buildplan
 - `game.exe` stammt nachweisbar aus dem aktuellen Job und nicht aus einem

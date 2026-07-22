@@ -52,9 +52,10 @@ Gesamtwerk bewertet.
 
 Fuer den v0.48-Bootaudit bestaetigte `reios_sys_misc` ausschliesslich die
 bereits unabhaengig aus BIOS- und SH-4-ABI-Analyse bestimmte Bedeutung von
-`SYSTEM 1` als Disc-Soft-Reboot. KatanaRecomp implementiert den Vorgang als
-eigenen nativen Plattformkontrollfluss und uebernimmt weder Flycast-Code noch
-dessen Emulationsarchitektur.
+`SYSTEM 1` als Disc-Reboot und den bekannten direkten GD2-ABI-Einstieg bei
+`0x8C0010F0`. KatanaRecomp implementiert daraus eigenstaendig einen nativen
+Plattformkontrollfluss, der Disc-Bootbytes und Handoffzustand erneut aufbaut,
+und uebernimmt weder Flycast-Code noch dessen Emulationsarchitektur.
 
 Der Vergleich des Dreamcast-BSC-Pfads zeigte ausserdem, dass der BIOS-Handoff
 bei Composite die oberen Kabelbits als Eingang behandelt und alternative

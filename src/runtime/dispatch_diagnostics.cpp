@@ -97,8 +97,18 @@ void DispatchDiagnosticRecorder::record(DispatchDiagnosticEvent event) {
     } else {
         if (events_.size() < capacity_) {
             events_.push_back(std::move(event));
-        } else if (dropped_unique_events_ != std::numeric_limits<std::uint64_t>::max()) {
-            ++dropped_unique_events_;
+        } else {
+            // Bounded heavy-hitter retention: an unseen event replaces the
+            // least frequent retained key.  If the new key then becomes a hot
+            // path, all following occurrences are aggregated instead of being
+            // counted as a fresh dropped key forever.
+            const auto least = std::min_element(
+                events_.begin(), events_.end(), [](const auto& left, const auto& right) {
+                    return left.occurrences < right.occurrences;
+                });
+            *least = std::move(event);
+            if (dropped_unique_events_ != std::numeric_limits<std::uint64_t>::max())
+                ++dropped_unique_events_;
         }
         ++total_occurrences_;
     }

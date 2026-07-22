@@ -11,7 +11,10 @@
 
 namespace katana::runtime {
 
-inline constexpr std::uint32_t bios_abi_contract_version = 4u;
+inline constexpr std::uint32_t bios_abi_contract_version = 5u;
+inline constexpr std::uint32_t hle_bios_ram_base = 0x8C000000u;
+inline constexpr std::size_t hle_bios_ram_size = 64u * 1024u;
+inline constexpr std::uint32_t hle_bios_gdrom2_direct_alias_address = 0x8C0010F0u;
 enum class BiosAbiVectorKind : std::uint8_t { SysInfo, RomFont, Flash, MiscGdrom, Gdrom2, System };
 enum class BiosAbiServiceStatus : std::uint8_t { Completed, ServiceUnavailable };
 
@@ -40,6 +43,9 @@ class BiosAbiDispatchError final : public std::runtime_error {
 
 [[nodiscard]] std::span<const BiosAbiVector> hle_bios_abi_vectors() noexcept;
 [[nodiscard]] BiosAbiCall route_hle_bios_abi_call(const CpuState& cpu);
+void refresh_hle_bios_abi_memory(Memory& memory);
+void refresh_hle_bios_abi_memory(LinearMemoryDevice& main_ram,
+                                 std::size_t erased_size = hle_bios_ram_size);
 void install_hle_bios_abi(Memory& memory,
                           RuntimeBlockTable& blocks,
                           FirmwareHandoffMap& handoff,

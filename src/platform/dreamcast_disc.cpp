@@ -51,21 +51,40 @@ DreamcastDiscBoot load_dreamcast_gdi_boot(const std::filesystem::path& descripto
     if (!source) throw std::logic_error("GDI-Boot besitzt keine GDI-DiscSource.");
     return {std::move(source),
             {std::move(boot.hardware_id), std::move(boot.boot_file_name)},
+            std::move(boot.system_bootstrap),
             std::move(boot.boot_file),
             boot.data_track_lba,
             boot.extent_lba_bias,
             boot.validated_tracks,
+            boot.repeated_bootstrap_reads_match,
             boot.repeated_reads_match};
 }
 
 io::ExecutableImage make_dreamcast_disc_executable(const DreamcastDiscBoot& disc) {
-    if (disc.boot_file.empty()) {
+    return make_dreamcast_disc_executable(disc, DreamcastDiscExecutionPath::DirectBootFile);
+}
+
+io::ExecutableImage make_dreamcast_disc_executable(
+    const DreamcastDiscBoot& disc, const DreamcastDiscExecutionPath execution_path) {
+    if (disc.system_bootstrap.size() != runtime::dreamcast_system_bootstrap_size ||
+        disc.boot_file.empty()) {
         throw std::invalid_argument("Dreamcast-Bootdatei ist leer.");
     }
     io::ExecutableImage image;
     image.set_guest_call_abi(io::GuestCallAbi::SuperHC);
     image.set_initial_snapshot_policy(io::InitialSnapshotPolicy::EntryPointStraightLineQuiescent);
     image.set_address_model(io::ImageAddressModel::Sh4DirectMapped);
+    io::ImageSegment bootstrap_segment{".disc-bootstrap",
+                                       dreamcast_system_bootstrap_address,
+                                       0u,
+                                       disc.system_bootstrap.size(),
+                                       io::SegmentKind::Mixed,
+                                       {true, true, true},
+                                       disc.system_bootstrap};
+    bootstrap_segment.source_kind = io::ImageSourceKind::DiscBootFile;
+    bootstrap_segment.load_phase = io::ImageLoadPhase::Initial;
+    bootstrap_segment.local_source_name = "disc-system-bootstrap";
+    image.add_segment(std::move(bootstrap_segment));
     io::ImageSegment boot_segment{".text",
                                   dreamcast_disc_boot_address,
                                   0u,
@@ -77,7 +96,12 @@ io::ExecutableImage make_dreamcast_disc_executable(const DreamcastDiscBoot& disc
     boot_segment.load_phase = io::ImageLoadPhase::Initial;
     boot_segment.local_source_name = disc.metadata.boot_file_name;
     image.add_segment(std::move(boot_segment));
-    image.add_entry_point(dreamcast_disc_boot_address);
+    if (execution_path == DreamcastDiscExecutionPath::NativeSystemBootstrap) {
+        image.add_entry_point(dreamcast_system_bootstrap_entry_address);
+        image.add_entry_point(dreamcast_disc_boot_address);
+    } else {
+        image.add_entry_point(dreamcast_disc_boot_address);
+    }
     return image;
 }
 
