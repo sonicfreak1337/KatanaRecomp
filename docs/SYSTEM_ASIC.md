@@ -29,6 +29,17 @@ Transaktionen, GD-ROM-Fertigstellungen und AICA-Interruptanforderungen mit
 und signalisiert abgeschlossene Plattform-DMA ueber das ASIC; er besitzt keinen
 separaten privaten Scheduler mehr.
 
+Channel 2 ist dabei kein Ersatzname fuer den separaten PVR-DMA-Controller. Der
+TA-Pfad nimmt den echten SH-4-DMAC-Kanal 2 mit `RS=2`, 32-Byte-Burst,
+inkrementierender Quelle, festem Ziel und `DMAOR.DME+DDT` an. `SB_C2DSTAT`
+enthaelt die feste Area-4-Zielregion, und der erfolgreiche Transfer erzeugt erst
+nach der letzten DMA-Einheit das eigene Channel-2-Ereignis. Die synthetische
+End-to-End-Regression enthaelt dabei eine TA-Object-List samt EOL. Falsche
+Richtung oder Cycle-Steal werden als PVR-Illegal-Address sichtbar. Sie prueft
+diesen Weg vom Haupt-RAM bis zum TA-FIFO. Die fortschreitende Zieladresse
+mehrteiliger Direct-Texture-Transfers in die Bereiche `0x11`/`0x13` bleibt als
+generische P1-Ergaenzung offen.
+
 Geraete melden Ereignisse mit einem Gastzyklus. Der `EventScheduler` ordnet
 gleiche Zyklen stabil nach Einreihungs-ID; das ASIC protokolliert zusaetzlich
 eine monotone Sequenz. Rueckwaerts laufende Gastzeit wird abgelehnt.

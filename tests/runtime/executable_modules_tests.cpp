@@ -1,9 +1,13 @@
 #include "katana/runtime/executable_modules.hpp"
 #include "katana/runtime/block_guards.hpp"
+#include "katana/runtime/dreamcast_boot.hpp"
 #include "katana/runtime/indirect_dispatch.hpp"
 
+#include <array>
 #include <cstdlib>
 #include <iostream>
+#include <memory>
+#include <span>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -260,6 +264,206 @@ void runtime_write_provenance_regression() {
                 alias_modules.resolve(0x8C000102u, 2u) != nullptr &&
                 !alias_blocks.active(alias_dispatch.block),
             "Innerer P1-Einstieg wird nicht wiederverwendet oder durch P0-Write entwertet.");
+}
+
+void identity_preserving_loaded_range_regression() {
+    using namespace katana::runtime;
+    CpuState cpu;
+    constexpr std::uint32_t static_address = 0x2000u;
+    constexpr std::uint32_t byte_identical_new_address = 0x3000u;
+    constexpr std::uint32_t new_address = 0x4000u;
+    const std::vector<std::uint8_t> original{0x09u, 0x00u, 0x0Bu, 0x00u};
+    cpu.memory.write_bytes(static_address, original, CodeWriteSource::Copy);
+
+    ExecutableModuleCatalog modules;
+    ExecutableModule original_module;
+    original_module.id = "static-aot-source";
+    original_module.source_identity = "free-static-aot-source-v1";
+    original_module.guest_start = static_address;
+    original_module.bytes = original;
+    modules.publish(original_module);
+
+    RuntimeBlockTable blocks;
+    ExecutableCodeTracker tracker;
+    blocks.bind_code_tracker(&tracker);
+    RuntimeBlock compiled;
+    compiled.virtual_start = static_address;
+    compiled.physical_origin = static_address;
+    compiled.size = static_cast<std::uint32_t>(original.size());
+    compiled.end_kind = BlockEndKind::Return;
+    compiled.function = block;
+    compiled.provenance = "free-static-aot-block-v1";
+    const auto compiled_identity = stable_runtime_block_identity(compiled);
+    const auto compiled_handle = blocks.register_static(compiled);
+    require(tracker.register_block({compiled_identity,
+                                    static_address,
+                                    static_cast<std::uint32_t>(original.size()),
+                                    "free-static-aot-block-v1",
+                                    {},
+                                    ExecutableBlockOrigin::ImageSegment}) ==
+                BlockRegistrationResult::Inserted,
+            "Statischer AOT-Trackerblock wurde nicht registriert.");
+
+    ExecutableLoadWriteTracker load_writes;
+    cpu.memory.set_guest_write_observer([&](const GuestWriteEvent& event) {
+        load_writes.observe(event);
+        modules.record_runtime_write(event.address, event.size, event.source, event.bytes_changed);
+        const auto invalidation =
+            tracker.observe_write(event.address, event.size, event.source, event.bytes_changed);
+        if (!invalidation.byte_identical)
+            static_cast<void>(blocks.erase_overlapping_physical(event.address, event.size));
+    });
+
+    // The BIOS PIO path emits adjacent halfword writes. Their combined byte-identity must survive
+    // until the one module-load callback for the complete transfer.
+    cpu.memory.write_u16(static_address, 0x0009u, CodeWriteSource::Copy);
+    cpu.memory.write_u16(static_address + 2u, 0x000Bu, CodeWriteSource::Copy);
+    ExecutableModule identical = original_module;
+    identical.id = "identical-disc-reload";
+    identical.source_identity = "free-identical-disc-reload-v1";
+    modules.publish_loaded_range(
+        identical, blocks, tracker, load_writes.consume(static_address, original.size()));
+    require(modules.find(identical.id) == nullptr && modules.find(original_module.id) != nullptr &&
+                blocks.active(compiled_handle) && tracker.valid(compiled_identity) &&
+                tracker.invalidation_count() == 0u &&
+                tracker.page_generation(static_address) == 0u,
+            "Byte-identischer Disc-Reload invalidiert statischen AOT-Code oder publiziert ein "
+            "Scheinoverlay.");
+
+    const std::vector<std::uint8_t> byte_identical_new_bytes(4u, 0u);
+    cpu.memory.write_bytes(byte_identical_new_address,
+                           byte_identical_new_bytes,
+                           CodeWriteSource::Dma);
+    ExecutableModule byte_identical_new;
+    byte_identical_new.id = "new-byte-identical-disc-load";
+    byte_identical_new.source_identity = "free-new-byte-identical-disc-load-v1";
+    byte_identical_new.guest_start = byte_identical_new_address;
+    byte_identical_new.bytes = byte_identical_new_bytes;
+    modules.publish_loaded_range(
+        byte_identical_new,
+        blocks,
+        tracker,
+        load_writes.consume(byte_identical_new_address, byte_identical_new_bytes.size()));
+    require(modules.resolve(byte_identical_new_address, byte_identical_new_bytes.size()) != nullptr &&
+                modules.resolve(byte_identical_new_address, byte_identical_new_bytes.size())->id ==
+                    byte_identical_new.id &&
+                tracker.page_generation(byte_identical_new_address) == 0u,
+            "Neuer bereits bytegleicher Disc-Load verliert seinen Modulnachweis.");
+
+    const std::vector<std::uint8_t> newly_loaded{0x09u, 0x00u, 0x09u, 0x00u};
+    cpu.memory.write_bytes(new_address, newly_loaded, CodeWriteSource::Dma);
+    ExecutableModule fresh;
+    fresh.id = "new-disc-load";
+    fresh.source_identity = "free-new-disc-load-v1";
+    fresh.guest_start = new_address;
+    fresh.bytes = newly_loaded;
+    modules.publish_loaded_range(
+        fresh, blocks, tracker, load_writes.consume(new_address, newly_loaded.size()));
+    require(modules.resolve(new_address, newly_loaded.size()) != nullptr &&
+                modules.resolve(new_address, newly_loaded.size())->id == fresh.id,
+            "Neuer beobachteter Disc-Load wird nicht als Modul publiziert.");
+
+    auto changed = original;
+    changed[0] = 0x0Bu;
+    cpu.memory.write_bytes(static_address, changed, CodeWriteSource::Copy);
+    ExecutableModule replacement;
+    replacement.id = "changed-disc-reload";
+    replacement.source_identity = "free-changed-disc-reload-v1";
+    replacement.guest_start = static_address;
+    replacement.bytes = changed;
+    modules.publish_loaded_range(
+        replacement, blocks, tracker, load_writes.consume(static_address, changed.size()));
+    require(!blocks.active(compiled_handle) && !tracker.valid(compiled_identity) &&
+                tracker.invalidation_count() == 1u &&
+                tracker.page_generation(static_address) == 1u &&
+                modules.resolve(static_address, changed.size()) != nullptr &&
+                modules.resolve(static_address, changed.size())->id == replacement.id,
+            "Geaenderter Disc-Reload invalidiert AOT-Code nicht exakt einmal oder verliert sein "
+            "neues Modul.");
+}
+
+void dreamcast_main_ram_mirror_invalidation_regression() {
+    using namespace katana::runtime;
+    DreamcastRuntimeBootImage boot_image;
+    const std::vector<std::uint8_t> disc_sector(dreamcast_data_sector_size, 0u);
+    boot_image.source = std::make_shared<MemoryDiscSource>(
+        std::span<const std::uint8_t>(disc_sector), "synthetic-main-ram-mirror-disc");
+    boot_image.system_bootstrap.resize(dreamcast_system_bootstrap_size, 0u);
+    boot_image.boot_file = {0x09u, 0x00u};
+    boot_image.repeated_bootstrap_reads_match = true;
+    boot_image.repeated_reads_match = true;
+    CpuState cpu;
+    auto runtime = initialize_dreamcast_runtime(cpu, boot_image);
+
+    constexpr std::array<std::uint32_t, 3u> mirror_bases{
+        0x0D000000u, 0x0E000000u, 0x0F000000u};
+    for (std::size_t index = 0u; index < mirror_bases.size(); ++index) {
+        const auto offset = 0x00006000u + static_cast<std::uint32_t>(index * 0x100u);
+        const auto canonical = 0x0C000000u + offset;
+        RuntimeBlock compiled;
+        compiled.virtual_start = 0x8C000000u + offset;
+        compiled.physical_origin = canonical;
+        compiled.size = 2u;
+        compiled.end_kind = BlockEndKind::Return;
+        compiled.function = block;
+        compiled.provenance = "free-dreamcast-main-ram-mirror-aot-" + std::to_string(index);
+        const auto identity = stable_runtime_block_identity(compiled);
+        const auto handle = runtime.runtime_blocks->register_static(compiled);
+        require(runtime.code_tracker->register_block(
+                    {identity,
+                     canonical,
+                     2u,
+                     compiled.provenance,
+                     {},
+                     ExecutableBlockOrigin::ImageSegment}) ==
+                    BlockRegistrationResult::Inserted,
+                "Dreamcast-Mirror-AOT-Block wurde nicht registriert.");
+
+        cpu.memory.write_u16(mirror_bases[index] + offset,
+                             static_cast<std::uint16_t>(0x1000u + index),
+                             CodeWriteSource::Cpu);
+        const auto table_active = runtime.runtime_blocks->active(handle);
+        const auto tracker_valid = runtime.code_tracker->valid(identity);
+        const auto page_generation = runtime.code_tracker->page_generation(canonical);
+        require(!table_active && !tracker_valid && page_generation != 0u,
+                "Dreamcast-Haupt-RAM-Spiegel invalidiert nicht denselben kanonischen AOT-Block.");
+    }
+
+    const auto register_wrap_block = [&](const std::uint32_t virtual_address,
+                                         const std::uint32_t physical_address,
+                                         const std::string& provenance) {
+        RuntimeBlock compiled;
+        compiled.virtual_start = virtual_address;
+        compiled.physical_origin = physical_address;
+        compiled.size = 16u;
+        compiled.end_kind = BlockEndKind::Return;
+        compiled.function = block;
+        compiled.provenance = provenance;
+        const auto identity = stable_runtime_block_identity(compiled);
+        const auto handle = runtime.runtime_blocks->register_static(compiled);
+        require(runtime.code_tracker->register_block({identity,
+                                                      physical_address,
+                                                      16u,
+                                                      provenance,
+                                                      {},
+                                                      ExecutableBlockOrigin::ImageSegment}) ==
+                    BlockRegistrationResult::Inserted,
+                "Dreamcast-Mirror-Wrap-AOT-Block wurde nicht registriert.");
+        return std::pair{handle, identity};
+    };
+    const auto tail = register_wrap_block(
+        0x8CFFFFF0u, 0x0CFFFFF0u, "free-dreamcast-main-ram-wrap-tail-v1");
+    const auto head = register_wrap_block(
+        0x8C000000u, 0x0C000000u, "free-dreamcast-main-ram-wrap-head-v1");
+    const std::vector<std::uint8_t> wrap_bytes(32u, 0xA5u);
+    cpu.memory.write_bytes(0x0DFFFFF0u, wrap_bytes, CodeWriteSource::Cpu);
+    require(!runtime.runtime_blocks->active(tail.first) &&
+                !runtime.runtime_blocks->active(head.first) &&
+                !runtime.code_tracker->valid(tail.second) &&
+                !runtime.code_tracker->valid(head.second) &&
+                runtime.code_tracker->page_generation(0x0CFFFFF0u) != 0u &&
+                runtime.code_tracker->page_generation(0x0C000000u) != 0u,
+            "Mirror-Wrap invalidiert nicht Tail und Head desselben Haupt-RAM-Backings.");
 }
 
 void partial_module_patch_regression() {
@@ -992,6 +1196,8 @@ int main() {
 
     relocated_module_regression();
     runtime_write_provenance_regression();
+    identity_preserving_loaded_range_regression();
+    dreamcast_main_ram_mirror_invalidation_regression();
     partial_module_patch_regression();
     non_overlapping_write_stress_regression();
     active_extent_page_index_lifecycle_regression();

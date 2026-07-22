@@ -3,6 +3,8 @@
 #include "katana/platform/dreamcast_disc.hpp"
 #include "katana/runtime/disc_install.hpp"
 #include "katana/runtime/dreamcast_boot.hpp"
+#include "katana/runtime/executable_modules.hpp"
+#include "katana/runtime/indirect_dispatch.hpp"
 #include "katana/runtime/platform_services.hpp"
 
 #include <algorithm>
@@ -185,6 +187,39 @@ std::string read_text(const std::filesystem::path& path) {
     return {std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>()};
 }
 
+void disabled_product_materializer_regression() {
+    using namespace katana::runtime;
+    CpuState cpu;
+    ExecutableModuleCatalog modules;
+    RuntimeBlockTable blocks;
+    ExecutableCodeTracker tracker;
+    blocks.bind_code_tracker(&tracker);
+    BlockMaterializationPolicy policy;
+    policy.enabled = false;
+    DemandBlockMaterializer materializer(modules, blocks, &tracker, policy, {});
+    IndirectDispatchMetrics metrics;
+    IndirectDispatchRequest request;
+    request.kind = IndirectDispatchKind::TailJump;
+    request.callsite = 0x1000u;
+    request.target = 0x2000u;
+    request.dispatch_class = RuntimeDispatchClass::RuntimeOnly;
+    request.metrics = &metrics;
+    request.materializer = &materializer;
+    bool typed_abort = false;
+    try {
+        static_cast<void>(dispatch_indirect(cpu, blocks, request));
+    } catch (const IndirectDispatchError& error) {
+        typed_abort = error.metrics_json().find("\"error\":\"unknown-target\"") !=
+                      std::string::npos;
+    }
+    require(typed_abort && materializer.last_failure() == MaterializationFailure::Disabled &&
+                materializer.metrics().requests == 1u && materializer.metrics().misses == 1u &&
+                materializer.metrics().first_failure == MaterializationFailure::Disabled &&
+                materializer.metrics().first_failure_target == request.target &&
+                metrics.misses() == 1u && blocks.size() == 0u,
+            "Produktmaterializer setzt ungebundenen Code nicht typisiert und ohne Ausfuehrung ab.");
+}
+
 } // namespace
 
 int run_test(const int argc, char* argv[]) {
@@ -196,6 +231,7 @@ int run_test(const int argc, char* argv[]) {
         return EXIT_SUCCESS;
     }
     require(argc == 1, "Unerwartete Argumente fuer den Portexporttest.");
+    disabled_product_materializer_regression();
     using namespace katana::codegen;
     Fixture fixture;
     const auto previous_port = fixture.root / "previous-port";
@@ -348,8 +384,8 @@ int run_test(const int argc, char* argv[]) {
         runtime_cpu.memory.write_u32(0x8C000800u + offset, 0u);
     runtime_state.dmac->write_source(2u, 0x8C000800u);
     runtime_state.dmac->write_count(2u, 1u);
-    runtime_state.dmac->write_control(2u, 0x00001841u);
-    runtime_state.dmac->write_operation(katana::runtime::Sh4Dmac::master_enable);
+    runtime_state.dmac->write_control(2u, 0x000012C1u);
+    runtime_state.dmac->write_operation(0x00008201u);
     runtime_state.system_bus_control->write(
         katana::runtime::system_bus_register::Channel2Destination, 0x10000000u);
     runtime_state.system_bus_control->write(
@@ -579,22 +615,41 @@ int run_test(const int argc, char* argv[]) {
             generated_before.at("code/runtime-dispatch.cpp").find("dispatch_indirect") !=
                 std::string::npos &&
             generated_before.at("code/runtime-dispatch.cpp")
-                    .find("execute_dynamic_sh4_block(cpu, *active_services, 1u)") !=
+                    .find("execute_dynamic_sh4_block(cpu, *active_services, 1u)") ==
                 std::string::npos &&
+            generated_before.at("code/runtime-dispatch.cpp")
+                    .find("dynamic_interpreter.hpp") == std::string::npos &&
+            generated_before.at("code/runtime-dispatch.cpp")
+                    .find("dispatch_dynamic_interpreter") == std::string::npos &&
+            generated_before.at("code/runtime-dispatch.cpp")
+                    .find("runtime-sh4-interpreter") == std::string::npos &&
+            generated_before.at("code/runtime-dispatch.cpp")
+                    .find("materialization_policy.enabled = false") != std::string::npos &&
+            generated_before.at("code/runtime-dispatch.cpp")
+                    .find("materialization_policy, {}") != std::string::npos &&
             generated_before.at("code/runtime-dispatch.cpp").find("count < 64u") ==
                 std::string::npos &&
             generated_before.at("code/runtime-dispatch.cpp")
-                    .find("candidate.instructions = 1u") != std::string::npos &&
+                    .find("candidate.instructions = 1u") == std::string::npos &&
             generated_before.at("code/runtime-dispatch.cpp")
                     .find("generated-block-AC008300") != std::string::npos &&
             generated_before.at("code/runtime-dispatch.cpp")
                     .find("register_executable_block(table, services, 0xAC008300u") !=
                 std::string::npos &&
             generated_before.at("metadata/port-project.json")
-                    .find("\"execution_coverage_contract\":\"validated-demand-v1\"") !=
+                    .find("\"execution_coverage_contract\":"
+                          "\"native-aot-or-typed-abort-v1\"") !=
                 std::string::npos &&
             generated_before.at("metadata/port-project.json")
                     .find("\"dispatch_paths_without_validation\":0") != std::string::npos &&
+            generated_before.at("metadata/port-project.json")
+                    .find("\"execution_profile\":\"native-aot-product\"") !=
+                std::string::npos &&
+            generated_before.at("metadata/port-project.json")
+                    .find("\"runtime_interpreter_enabled\":false") != std::string::npos &&
+            generated_before.at("metadata/port-project.json")
+                    .find("\"unbound_code_policy\":\"typed-materialization-error\"") !=
+                std::string::npos &&
             generated_before.at("code/runtime-dispatch.cpp").find("generated-block-8C010000") !=
                 std::string::npos &&
             generated_before.at("code/runtime-dispatch.cpp")
@@ -749,6 +804,38 @@ int run_test(const int argc, char* argv[]) {
             read_text(output / "src" / "main.cpp").find("source.parent_path().string()") ==
                 std::string::npos,
         "Portprojekt besitzt keinen ausfuehrbaren GDI-/Runtimevertrag.");
+    auto diagnostic_options = options;
+    diagnostic_options.diagnostic_partial = true;
+    const auto diagnostic_output = fixture.root / "diagnostic-port";
+    static_cast<void>(export_dreamcast_port_project(gdi, diagnostic_output, diagnostic_options));
+    const auto diagnostic_dispatch =
+        read_text(diagnostic_output / "generated" / "code" / "runtime-dispatch.cpp");
+    require(diagnostic_dispatch.find("dynamic_interpreter.hpp") != std::string::npos &&
+                diagnostic_dispatch.find(
+                    "execute_dynamic_sh4_block(cpu, *active_services, 1u)") !=
+                    std::string::npos &&
+                diagnostic_dispatch.find("runtime-sh4-interpreter") != std::string::npos &&
+                diagnostic_dispatch.find("candidate.interpreter_backed = true") !=
+                    std::string::npos &&
+                diagnostic_dispatch.find("materialization_policy.enabled = true") !=
+                    std::string::npos &&
+                read_text(diagnostic_output / "generated" / "metadata" /
+                          "port-project.json")
+                        .find("\"diagnostic_partial\":true") != std::string::npos &&
+                read_text(diagnostic_output / "generated" / "metadata" /
+                          "port-project.json")
+                        .find("\"execution_profile\":\"diagnostic-interpreter\"") !=
+                    std::string::npos &&
+                read_text(diagnostic_output / "generated" / "metadata" /
+                          "port-project.json")
+                        .find("\"runtime_interpreter_enabled\":true") !=
+                    std::string::npos &&
+                read_text(diagnostic_output / "generated" / "metadata" /
+                          "port-project.json")
+                        .find("\"execution_coverage_contract\":"
+                              "\"diagnostic-validated-demand-v1\"") !=
+                    std::string::npos,
+            "Explizites Diagnoseprofil besitzt keinen klar isolierten SH-4-Interpreter.");
     const auto& runtime_dispatch = generated_before.at("code/runtime-dispatch.cpp");
     const auto retire_marker = runtime_dispatch.find(
         "const auto retired_before = cpu.retired_guest_instructions");

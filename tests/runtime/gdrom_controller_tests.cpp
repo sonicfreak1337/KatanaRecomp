@@ -1,5 +1,7 @@
 #include "katana/runtime/gdrom_controller.hpp"
+#include "katana/runtime/block_guards.hpp"
 #include "katana/runtime/dreamcast_memory.hpp"
+#include "katana/runtime/executable_modules.hpp"
 #include "katana/runtime/holly_dma.hpp"
 
 #include <algorithm>
@@ -10,6 +12,7 @@
 #include <span>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -37,6 +40,13 @@ template <typename Operation> bool throws_out_of_range(Operation&& operation) {
         return true;
     }
     return false;
+}
+
+katana::runtime::BlockExit dormant_aot_block(katana::runtime::CpuState&,
+                                             katana::runtime::BlockExecutionContext&) {
+    katana::runtime::BlockExit exit;
+    exit.kind = katana::runtime::BlockEndKind::Return;
+    return exit;
 }
 
 class LayoutDiscSource final : public katana::runtime::DiscSource {
@@ -771,11 +781,42 @@ int main() {
     auto stream_source =
         std::make_shared<MemoryDiscSource>(stream_bytes, "synthetic-streaming-gdrom");
     std::uint64_t stream_drive_completions = 0u;
+    bool observe_stream_module_loads = false;
+    std::uint64_t stream_module_sequence = 0u;
+    std::vector<std::pair<std::uint32_t, std::size_t>> stream_module_loads;
+    ExecutableLoadWriteTracker stream_load_writes;
+    ExecutableModuleCatalog stream_modules;
+    RuntimeBlockTable stream_blocks;
+    ExecutableCodeTracker stream_code_tracker;
+    stream_blocks.bind_code_tracker(&stream_code_tracker);
     DreamcastGdRomController stream_controller(
         stream_cpu.memory,
         stream_scheduler,
         GdRomDrive(std::move(stream_source)),
-        [&](const std::uint64_t) { ++stream_drive_completions; });
+        [&](const std::uint64_t) { ++stream_drive_completions; },
+        [&](const std::uint32_t physical,
+            const std::span<const std::uint8_t> loaded,
+            const std::string_view source_identity) {
+            if (!observe_stream_module_loads) return;
+            stream_module_loads.emplace_back(physical, loaded.size());
+            ExecutableModule module;
+            module.id = "stream-module-" + std::to_string(stream_module_sequence++);
+            module.source_identity = std::string(source_identity);
+            module.guest_start = physical;
+            module.bytes.assign(loaded.begin(), loaded.end());
+            module.kind = ExecutableModuleKind::Overlay;
+            module.executable_permission = false;
+            module.control_transfer_promotion_allowed = true;
+            module.range_roles.push_back(
+                {0u,
+                 static_cast<std::uint32_t>(loaded.size()),
+                 ExecutableStorageRole::ProvenData});
+            stream_modules.publish_loaded_range(
+                std::move(module),
+                stream_blocks,
+                stream_code_tracker,
+                stream_load_writes.consume(physical, loaded.size()));
+        });
     std::vector<SystemAsicEvent> stream_g1_events;
     DreamcastG1BusController stream_g1(
         stream_scheduler,
@@ -804,8 +845,14 @@ int main() {
         const auto request = stream_controller.bios_call(stream_cpu, 0u, 0u);
         stream_cpu.r[4] = request;
         stream_cpu.r[5] = stream_status;
-        require(request >= 1u && stream_controller.bios_call(stream_cpu, 1u, 0u) == 1u,
-                "Streaming-REQ_CMD wird nicht als PROCESSING eingereiht.");
+        const auto queued_state = stream_controller.bios_call(stream_cpu, 1u, 0u);
+        const auto queued_error =
+            "Streaming-REQ_CMD wird nicht als PROCESSING eingereiht: command=" +
+            std::to_string(command) + ", fad=" + std::to_string(fad) +
+            ", request=" + std::to_string(request) +
+            ", state=" + std::to_string(queued_state);
+        require(request >= 1u && queued_state == 1u,
+                queued_error.c_str());
         static_cast<void>(stream_controller.bios_call(stream_cpu, 2u, 0u));
         stream_cpu.r[4] = request;
         stream_cpu.r[5] = stream_status;
@@ -986,6 +1033,115 @@ int main() {
     require(stream_controller.bios_call(stream_cpu, 1u, 0u) == 2u &&
                 stream_cpu.memory.read_u32(stream_status + 8u) == 4096u,
             "Finaler PIO-Streamingstatus enthaelt nicht die exakte Bytezahl.");
+    stream_cpu.r[4] = pio_stream_request;
+    stream_cpu.r[5] = stream_status;
+    require(stream_controller.bios_call(stream_cpu, 1u, 0u) == 0u,
+            "Abgerufener PIO-Streamingstatus blockiert den naechsten Request.");
+
+    observe_stream_module_loads = true;
+    stream_cpu.memory.set_guest_write_observer([&](const GuestWriteEvent& event) {
+        stream_load_writes.observe(event);
+        stream_modules.record_runtime_write(
+            event.address, event.size, event.source, event.bytes_changed);
+        const auto invalidation = stream_code_tracker.observe_write(
+            event.address, event.size, event.source, event.bytes_changed);
+        if (!invalidation.byte_identical)
+            static_cast<void>(
+                stream_blocks.erase_overlapping_physical(event.address, event.size));
+    });
+    stream_cpu.address_space = std::make_shared<RuntimeAddressSpace>();
+    stream_cpu.write_sr(sr_md_mask);
+    stream_cpu.address_space->set_mode(AddressTranslationMode::Mmu);
+    stream_cpu.address_space->write_mmucr(1u);
+    stream_cpu.address_space->ldtlb(
+        {0x00002000u, 0x0C050000u, 4096u, 0u, 0u, true, true, true, true, true, true, false});
+    stream_cpu.address_space->ldtlb(
+        {0x00003000u, 0x0C051000u, 4096u, 0u, 1u, true, true, true, true, true, true, false});
+    constexpr std::uint32_t mmu_pio_destination = 0x00002C00u;
+    constexpr std::uint32_t mmu_pio_physical = 0x0C050C00u;
+    RuntimeBlock mmu_aot;
+    mmu_aot.virtual_start = mmu_pio_destination;
+    mmu_aot.physical_origin = mmu_pio_physical;
+    mmu_aot.size = 2u;
+    mmu_aot.end_kind = BlockEndKind::Return;
+    mmu_aot.function = dormant_aot_block;
+    mmu_aot.provenance = "free-mmu-pio-aot-v1";
+    const auto mmu_aot_identity = stable_runtime_block_identity(mmu_aot);
+    const auto mmu_aot_handle = stream_blocks.register_static(mmu_aot);
+    require(stream_code_tracker.register_block({mmu_aot_identity,
+                                                mmu_pio_physical,
+                                                2u,
+                                                mmu_aot.provenance,
+                                                {},
+                                                ExecutableBlockOrigin::ImageSegment}) ==
+                BlockRegistrationResult::Inserted,
+            "MMU-PIO-AOT-Block wurde nicht registriert.");
+    const auto mmu_pio_request = queue_ready_stream(37u, 150u);
+    stream_cpu.memory.write_u32(stream_transfer, mmu_pio_destination);
+    stream_cpu.memory.write_u32(stream_transfer + 4u, 2048u);
+    stream_cpu.r[4] = mmu_pio_request;
+    stream_cpu.r[5] = stream_transfer;
+    const auto mmu_pio_result = stream_controller.bios_call(stream_cpu, 12u, 0u);
+    const auto mmu_memory_matches = stream_memory_matches(mmu_pio_physical, 0u, 2048u);
+    const auto mmu_load_matches =
+        stream_module_loads ==
+        std::vector<std::pair<std::uint32_t, std::size_t>>{{mmu_pio_physical, 2048u}};
+    const auto* mmu_physical_module = stream_modules.resolve(mmu_pio_physical, 2048u);
+    const auto* mmu_virtual_module = stream_modules.resolve(mmu_pio_destination, 2u);
+    const auto mmu_aot_active = stream_blocks.active(mmu_aot_handle);
+    const auto mmu_aot_valid = stream_code_tracker.valid(mmu_aot_identity);
+    const auto mmu_invalidations = stream_code_tracker.invalidation_count();
+    const auto mmu_physical_generation =
+        stream_code_tracker.page_generation(mmu_pio_physical);
+    const auto mmu_virtual_generation =
+        stream_code_tracker.page_generation(mmu_pio_destination);
+    const auto mmu_error =
+        "MMU-PIO-Load verwendet nicht durchgehend die committed physische Range: result=" +
+        std::to_string(mmu_pio_result) + ", memory=" + std::to_string(mmu_memory_matches) +
+        ", load=" + std::to_string(mmu_load_matches) +
+        ", physical_module=" + std::to_string(mmu_physical_module != nullptr) +
+        ", virtual_module=" + std::to_string(mmu_virtual_module != nullptr) +
+        ", active=" + std::to_string(mmu_aot_active) +
+        ", valid=" + std::to_string(mmu_aot_valid) +
+        ", invalidations=" + std::to_string(mmu_invalidations) +
+        ", physical_generation=" + std::to_string(mmu_physical_generation) +
+        ", virtual_generation=" + std::to_string(mmu_virtual_generation);
+    require(mmu_pio_result == 0u && mmu_memory_matches && mmu_load_matches &&
+                mmu_physical_module != nullptr && mmu_virtual_module == nullptr &&
+                !mmu_aot_active && !mmu_aot_valid && mmu_invalidations == 1u &&
+                mmu_physical_generation != 0u && mmu_virtual_generation == 0u,
+            mmu_error.c_str());
+    stream_cpu.r[4] = mmu_pio_request;
+    stream_cpu.r[5] = stream_status;
+    require(stream_controller.bios_call(stream_cpu, 1u, 0u) == 2u &&
+                stream_controller.bios_call(stream_cpu, 1u, 0u) == 0u,
+            "Abgerufener MMU-PIO-Status blockiert den Nichtlinearitaetstest.");
+
+    stream_cpu.address_space->ldtlb(
+        {0x00004000u, 0x0C060000u, 4096u, 0u, 2u, true, true, true, true, true, true, false});
+    stream_cpu.address_space->ldtlb(
+        {0x00005000u, 0x0C062000u, 4096u, 0u, 3u, true, true, true, true, true, true, false});
+    constexpr std::uint32_t nonlinear_pio_destination = 0x00004C00u;
+    constexpr std::uint32_t nonlinear_first_physical = 0x0C060C00u;
+    constexpr std::uint32_t nonlinear_second_physical = 0x0C062000u;
+    const auto nonlinear_request = queue_ready_stream(37u, 151u);
+    stream_cpu.memory.write_u32(stream_transfer, nonlinear_pio_destination);
+    stream_cpu.memory.write_u32(stream_transfer + 4u, 2048u);
+    const auto module_loads_before_nonlinear = stream_module_loads.size();
+    stream_cpu.r[4] = nonlinear_request;
+    stream_cpu.r[5] = stream_transfer;
+    require(stream_controller.bios_call(stream_cpu, 12u, 0u) == 0xFFFFFFFFu &&
+                stream_cpu.memory.read_u8(nonlinear_first_physical) == 0u &&
+                stream_cpu.memory.read_u8(nonlinear_second_physical) == 0u &&
+                stream_module_loads.size() == module_loads_before_nonlinear &&
+                stream_controller.status().transfer_bytes_remaining == 0u,
+            "Nichtlineare MMU-PIO-Range schreibt partiell oder erzeugt einen Modulnachweis.");
+    stream_cpu.r[4] = nonlinear_request;
+    static_cast<void>(stream_controller.bios_call(stream_cpu, 3u, 0u));
+    observe_stream_module_loads = false;
+    stream_cpu.memory.set_guest_write_observer({});
+    stream_cpu.address_space.reset();
+    stream_cpu.write_sr(0u);
 
     constexpr std::uint32_t aborted_stream_destination = 0x8C042000u;
     stream_cpu.memory.write_bytes(aborted_stream_destination, untouched_stream);

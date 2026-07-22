@@ -20,6 +20,30 @@ class IndirectDispatchMetrics;
 
 enum class ExecutableModuleKind : std::uint8_t { Module, Overlay };
 
+enum class LoadedRangeWriteObservation : std::uint8_t {
+    UnobservedChanged,
+    ObservedChanged,
+    ObservedByteIdentical
+};
+
+// Disc and DMA loaders write through Memory before they publish the loaded range as a possible
+// executable module. This bounded tracker carries the byte-identity result of that immediately
+// preceding write into the module publication without retaining guest data.
+class ExecutableLoadWriteTracker final {
+  public:
+    void observe(const GuestWriteEvent& event) noexcept;
+    [[nodiscard]] LoadedRangeWriteObservation consume(std::uint32_t address,
+                                                       std::size_t size) noexcept;
+    void reset() noexcept;
+
+  private:
+    std::uint32_t physical_begin_ = 0u;
+    std::uint64_t physical_end_ = 0u;
+    CodeWriteSource source_ = CodeWriteSource::Copy;
+    bool bytes_changed_ = false;
+    bool pending_ = false;
+};
+
 inline constexpr std::uint32_t executable_module_relocation_module_base32 = 1u;
 
 enum class ExecutableStorageRole : std::uint8_t {
@@ -83,7 +107,9 @@ class ExecutableModuleCatalog final {
     void publish(ExecutableModule module);
     void publish_loaded_range(ExecutableModule module,
                               RuntimeBlockTable& blocks,
-                              ExecutableCodeTracker& tracker);
+                              ExecutableCodeTracker& tracker,
+                              LoadedRangeWriteObservation observation =
+                                  LoadedRangeWriteObservation::UnobservedChanged);
     void
     replace(ExecutableModule module, RuntimeBlockTable& blocks, ExecutableCodeTracker& tracker);
     void unload(std::string_view id, RuntimeBlockTable& blocks, ExecutableCodeTracker& tracker);

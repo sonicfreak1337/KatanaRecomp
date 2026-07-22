@@ -166,9 +166,11 @@ void Sh4Dmac::set_fault_observer(std::function<void(const DmaFault&)> observer) 
 bool Sh4Dmac::validate_external_transfer(const std::size_t index,
                                          const std::uint32_t source,
                                          const std::size_t bytes,
-                                         const std::size_t unit_size) noexcept {
+                                         const std::size_t unit_size,
+                                         const std::uint8_t expected_request_source) noexcept {
     if (index >= channels_.size() || bytes == 0u || unit_size == 0u ||
-        (bytes % unit_size) != 0u) {
+        (bytes % unit_size) != 0u || expected_request_source > 14u ||
+        expected_request_source == 1u || expected_request_source == 7u) {
         if (index < channels_.size())
             set_fault(index, DmaFaultReason::ExternalContractMismatch, unit_size);
         return false;
@@ -181,7 +183,7 @@ bool Sh4Dmac::validate_external_transfer(const std::size_t index,
         (operation_ & (address_error_flag | nmi_flag)) == 0u &&
         (value.control & channel_enable) != 0u &&
         (value.control & transfer_end) == 0u && transfer_size(value) == unit_size &&
-        request_source == 8u && address_mode(value.control, 12u) == 1u &&
+        request_source == expected_request_source && address_mode(value.control, 12u) == 1u &&
         address_mode(value.control, 14u) == 0u &&
         (value.source & 0x1FFFFFFFu) == (source & 0x1FFFFFFFu) &&
         value.count == units;
@@ -461,8 +463,11 @@ bool Sh4Dmac::transfer_one(const std::size_t index, const std::size_t size) noex
         return false;
     }
     const auto request_source = (value.control & request_source_mask) >> 8u;
-    const bool prohibited_request = request_source == 1u || request_source == 7u ||
-                                    request_source == 15u || (index > 1u && request_source <= 3u);
+    const bool channel2_external_memory_to_device =
+        index == 2u && request_source == 2u && (operation_ & on_demand_enable) != 0u;
+    const bool prohibited_request =
+        request_source == 1u || request_source == 7u || request_source == 15u ||
+        (index > 1u && request_source <= 3u && !channel2_external_memory_to_device);
     if (prohibited_request) {
         set_fault(index, DmaFaultReason::InvalidRequestSource, size);
         return false;

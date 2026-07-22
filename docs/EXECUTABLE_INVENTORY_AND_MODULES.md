@@ -124,6 +124,21 @@ aktualisiert wird. Publish, Ersatz, Teilpatch, Unload und geladene Bereiche
 halten den Index konsistent; getrennte Metriken zaehlen Fast-Rejects und
 tatsaechlich erforderliche Katalogscans.
 
+BIOS-/GD-Ladevorgaenge besitzen zusaetzlich einen `ExecutableLoadWriteTracker`.
+Er fasst angrenzende unmittelbare Copy-/DMA-Writes ueber kanonische physische
+Aliase zusammen und ordnet sie exakt dem veroeffentlichten Ladebereich zu. Bei
+byteidentischen Bytes bleibt der vorhandene native AOT-Bestand unangetastet.
+Eine bereits bewiesene bytegleiche Modulabdeckung wird nicht dupliziert; ein
+frischer bereits bytegleicher Ladebereich erhaelt jedoch seinen notwendigen
+ersten Provenienznachweis. Bei geaenderten Bytes hat der Write-Observer die
+betroffenen Bloecke bereits einmal exakt invalidiert, sodass die
+Modulveroeffentlichung keine zweite Generation erzeugt. MMU-PIO verwendet die
+tatsaechlich committed physische Range; nichtlineare TLB-Spannen werden vor
+jedem Partialwrite abgelehnt. Die vier Area-3-Haupt-RAM-Spiegel teilen sich fuer
+Codewrites dasselbe 16-MiB-Backing und werden auch an der Wrapgrenze korrekt
+geteilt. Fehlt eine passende Beobachtung, bleibt die bisherige konservative
+Invalidierung bestehen.
+
 Der unterstuetzte Relocationtyp `module_base32` interpretiert ein
 32-Bit-Little-Endian-Quellwort als `Quellwort + Gastmodulbasis + Addend` mit
 32-Bit-Ueberlauf. Die Byteidentitaet wird gegen dieses kanonisch relokierte
@@ -157,12 +172,14 @@ ueber einen anderen P0/P1/P2-Alias erfolgt. Ein erneuter Kontrolltransfer muss
 die aktuellen Bytes unter einer neuen Modulidentitaet materialisieren.
 
 Das Produkt-Gate erlaubt einen Interpreter nur in einem expliziten Bring-up-
-Diagnoseprofil. Der aktuelle Export linkt `runtime-sh4-interpreter` jedoch noch
-bedingungslos und kann ihn an der begrenzten Materialisierungsgrenze verwenden;
-dies ist eine offene `KR-4848`-Luecke. Das Ziel fuer normale Ports aktiviert
-ausschliesslich vorab gebundene native Module und endet bei fehlendem latentem
-AOT typisiert. Deaktivierung, unbekannte Quelle, Byteabweichung, Budgetende und
-ungueltiger Block sind bereits typisierte Misses.
+Diagnoseprofil. Der normale Export emittiert und linkt
+`runtime-sh4-interpreter` nicht, deaktiviert die interpretiert gestuetzte
+Demand-Materialisierung und endet bei fehlendem AOT typisiert. Nur
+`diagnostic_partial` aktiviert den begrenzten Interpreter und weist dies im
+Manifest als `diagnostic-interpreter` aus. Deaktivierung, unbekannte Quelle,
+Byteabweichung, Budgetende und ungueltiger Block bleiben typisierte Misses.
+`KR-4848` bleibt fuer strukturierte Disc-Ladetransaktionen und vorab erzeugte
+latente native Module offen.
 
 ## Runtime-only-Profil
 

@@ -61,6 +61,21 @@ Streamingselektoren sowie nicht zurueckkehrende Lifecycle-Grenzen ab. Es wird
 weder KallistiOS-Code eingebettet noch dessen Implementierungsstruktur
 uebernommen.
 
+Fuer den oeffentlich sichtbaren Dreamcast-Channel-2-/PVR-DMA-Vertrag dienen
+ausserdem folgende KallistiOS-Referenzen als unabhaengiger Plausibilitaetscheck:
+
+- SH-4-DMAC-Konstanten und Channel-2-Rolle:
+  <https://kos-docs.dreamcast.wiki/group__dmac.html>
+- PVR-DMA-Schnittstelle:
+  <https://kos-docs.dreamcast.wiki/pvr__dma_8h.html>
+- oeffentliche PVR-Registerdefinitionen:
+  <https://kos-docs.dreamcast.wiki/pvr__regs_8h.html>
+
+Daraus werden ausschliesslich die sichtbaren Bedingungen `RS=2`, 32-Byte-
+Transfergroesse, Burstmodus und die TA/PVR-Grenze abgeleitet. KatanaRecomp
+uebernimmt weder KallistiOS-Quellcode noch dessen Kontrollfluss oder
+Implementierungsstruktur; die Runtime und Regressionen sind eigenstaendig.
+
 ## Beobachtbares Verhalten
 
 Die Tests verwenden selbst erstellte, minimale SH-4-Opcodes, ELF-/Raw-Images,

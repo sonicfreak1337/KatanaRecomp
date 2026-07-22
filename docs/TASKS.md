@@ -72,7 +72,10 @@ KR-4854
 Korrektheit blockiert Performance. Waehrend KR-4841 bis KR-4851 werden nur
 betroffene Targets und kleine Regressionen ausgefuehrt; die konsolidierte Suite
 und der private Retaillauf folgen einmal in KR-4852. Jeder Prozess besitzt ein
-hartes Limit von 15 Minuten. GUI-, Controller- und Harnessarbeit folgt in v0.49.
+hartes Limit von 15 Minuten. Der moderne Hostcontrollervertrag und die private
+interaktive Sitzung (`KR-4814`/`KR-4914`) gehoeren zu v0.48, beginnen aber
+strikt erst nach `KR-4850`. Breitere GUI-, Harness- und Portintegration folgt
+in v0.49.
 
 ---
 
@@ -707,8 +710,10 @@ Executable-zu-C++-/Hostcompiler-Werkzeugklasse. Die nicht reproduzierbar
 versionierte dcrecomp-Kopie mit enthaltenen GPL-Flycast-Teilen ist
 ausdruecklich keine Codequelle. Der Produktpfad rekompiliert `IP.BIN` und
 BootExecutable AOT. Das Gate verbietet die Interpretergrenze im normalen
-Portlauf; der aktuelle Export linkt sie noch bedingungslos und fuehrt diese
-Implementierungsluecke ausdruecklich als offenen Teil von `KR-4848`.
+Portlauf; der normale Export emittiert oder linkt sie inzwischen nicht mehr.
+Nur `diagnostic_partial` behaelt den begrenzten Diagnoseinterpreter. Die noch
+offenen strukturierten Disc-Ladetransaktionen und latenten nativen Module
+bleiben ausdruecklich Teil von `KR-4848`.
 
 ### [ ] KR-4842 - Seiteneffektfreie Bootdiagnostik und Wait-Loop-Klassifikation
 
@@ -839,9 +844,18 @@ Writes ohne aktive Extentueberlappung vor dem Modulkatalogscan ab und misst
 Fast-Rejects getrennt von notwendigen Scans. Auch der Ersatz derselben Modul-
 ID wird vorvalidiert und atomar angewandt; ein ungueltiger Ersatz laesst laut
 Negativregression Katalog, Bloecke, Tracker, Provenienz und Metriken
-unveraendert. Offen sind weiterhin strukturierte Disc-Ladetransaktionen, vorab
-erzeugte latente native Module und der typisierte Produktabbruch anstelle der
-derzeit bedingungslos gelinkten Bring-up-Interpretergrenze.
+unveraendert. BIOS-/GD-Reloads werden mit den tatsaechlichen Copy-/DMA-Writes
+korreliert: Byteidentische Reloads erhalten gebundene native AOT-Bloecke;
+bereits bewiesene Modulabdeckung wird nicht dupliziert und ein frischer
+bytegleicher Bereich behaelt seinen ersten Provenienznachweis. Geaenderte Bytes
+invalidieren durch den bereits beobachteten Gastwrite exakt einmal. MMU-PIO
+publiziert nur die committed physische Range und lehnt nichtlineare TLB-Spannen
+vor dem ersten Write ab; `0x0C` bis `0x0F` invalidieren dasselbe Haupt-RAM-
+Backing auch ueber eine Spiegelgrenze. Der normale Produktport emittiert und linkt keinen
+Interpreter mehr und endet bei fehlendem AOT-Ziel typisiert. Nur
+`diagnostic_partial` enthaelt den ausgewiesenen begrenzten
+Diagnoseinterpreter. Offen bleiben strukturierte Disc-Ladetransaktionen und
+vorab erzeugte latente native Module; der Task wird deshalb nicht abgehakt.
 
 ### [ ] KR-4849 - TA-Eingang und PVR-Kommandopfad
 
@@ -855,6 +869,14 @@ Prioritaet: P0
 
 Teilstand 2026-07-22: Der produktive Store-Queue-Pfad fuehrt TA-Pakete in den
 gemeinsamen FIFO und schreibt den sichtbaren TA-Positionszeiger fort. Der
+SH-4-DMAC-Channel-2-Pfad akzeptiert den realen externen Memory-to-Device-
+Request `RS=2` und verlangt 32-Byte-Einheiten, inkrementierende Quelle, festes
+Ziel, Burstmodus, `DE` sowie `DMAOR.DME+DDT`; die vier physischen Area-3-RAM-
+Spiegel sind abgedeckt. Eine Runtime-End-to-End-
+Regression fuehrt Haupt-RAM bis TA-Object-List/EOL und trennt Channel-2-
+Completion von PVR-DMA; falsche Richtung und Cycle-Steal scheitern sichtbar.
+Fuer Direct-Texture-Ziele `0x11`/`0x13` bleibt die Zielprogression bei
+mehrteiligen Transfers als generische P1-Luecke offen. Der
 Hintergrundpfad dekodiert Tagadresse, Offset, Skip, Shadowstride, Tiefe und
 Render-to-Texture allgemein. Der feste Overscan-Quad beruecksichtigt HScale;
 D uebernimmt die Attribute von C und bei Texturierung X/U von B, waehrend die

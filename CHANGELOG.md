@@ -10,10 +10,12 @@
   uebersetzt und mit einer getrennten Plattformruntime gebaut. Dreamcast-
   Komponenten bleiben kleine, typisierte Plattformgrenzen. Das Freigabegate
   verbietet SH-4-Interpreter/JIT, virtuellen Discplayer und Titelhacks im
-  normalen Portlauf. Der aktuelle Export linkt `runtime-sh4-interpreter` noch
-  bedingungslos und erfuellt dieses Gate deshalb nicht; `KR-4848` ersetzt die
-  Bring-up-Luecke durch gebundenes latentes AOT oder einen kontrollierten
-  typisierten Abbruch.
+  normalen Portlauf. Der Produktport linkt und emittiert deshalb keinen SH-4-
+  Interpreter mehr; ein nicht gebundenes AOT-Ziel endet als typisierter
+  Materialisierungs-/Dispatchfehler. Nur `diagnostic_partial` aktiviert den
+  klar ausgewiesenen, begrenzten Diagnoseinterpreter. Vorab erzeugte latente
+  AOT-Module und strukturierte Disc-Ladetransaktionen bleiben als offener Teil
+  von `KR-4848` erhalten.
 - Ausfuehrbare Module verwalten aktive Byte-Extents jetzt ueber ihre kanonische
   physische Herkunft. Ein Teilwrite stanzt nur sein Patchfenster aus und
   erhaelt unveraenderte Prefix-/Suffixbereiche; P0/P1/P2-Aliase koennen keine
@@ -25,7 +27,16 @@
   Modulkatalogscan ab und zaehlt Fast-Rejects und notwendige Scans getrennt.
   Auch ein Ersatz derselben Modul-ID wird vor jeder Mutation vollstaendig
   validiert; eine Ablehnung laesst Katalog, Bloecke, Tracker, Provenienz und
-  Metriken unveraendert.
+  Metriken unveraendert. Ein gemeinsamer Load-Write-Tracker bindet BIOS-/GD-
+  Reloads an die tatsaechlichen Copy-/DMA-Writes: byteidentische Reloads
+  erhalten vorhandene native AOT-Bloecke; bereits bewiesene Modulabdeckung wird
+  nicht dupliziert, waehrend ein frischer bereits bytegleicher Bereich seinen
+  ersten Provenienznachweis erhaelt. Geaenderte Bytes werden durch den bereits
+  beobachteten Gastwrite exakt einmal invalidiert. BIOS-PIO publiziert nach
+  vollstaendiger MMU-Linearitaetspruefung nur die wirklich geschriebene physische
+  Range; nichtlineare TLB-Spannen scheitern vor dem ersten Partialwrite.
+  Codewrites ueber die `0x0C`- bis `0x0F`-Haupt-RAM-Spiegel invalidieren dasselbe
+  AOT-Backing, einschliesslich eines Wraps an der 16-MiB-Grenze.
 - Das GD-ROM-Taskfile implementiert die Dreamcast-SPI-Kommandos `REQ_STAT`,
   `REQ_MODE`, `SET_MODE`, `REQ_ERROR` und `GET_TOC` mit einem
   bereichsgeprueften 10-Byte-Laufwerks-/Track-/FAD-Status und 32-Byte-
@@ -59,8 +70,20 @@
   ist auf 256 Generationen, 64 MiB und 2.097.152 Pixelpruefungen pro VBlank
   begrenzt, besitzt Range-Fast-Reject und verwirft Scanout-Skalierungsbomben vor
   der Allokation. `KR_FIRST_GUEST_FRAME` und erfolgreicher Host-Present bleiben
-  ueber denselben eingefrorenen Proof getrennt. Runtime-ABI 35, BIOS-ABI 9 und
-  Portprojektvertrag 21 versionieren diesen kumulativen Block.
+  ueber denselben eingefrorenen Proof getrennt.
+- SH-4-DMAC-Channel 2 akzeptiert fuer den TA-Pfad nun den realen externen
+  Memory-to-Device-Request `RS=2` statt des bisherigen kuenstlichen `RS=8`.
+  Der Vertrag verlangt 32-Byte-Einheiten, inkrementierende Quelle, festes Ziel,
+  Burstmodus, `DE` sowie `DMAOR.DME+DDT`; alle vier physischen Area-3-Haupt-RAM-
+  Spiegel werden akzeptiert. `SB_C2DSTAT` bildet die feste Area-4-
+  Zielregion ab. Eine Runtime-End-to-End-Regression fuehrt Haupt-RAM ueber DMAC
+  und Systembus bis zu TA-Object-List/EOL und getrennten Channel-2-/PVR-
+  Ereignissen; falsche Richtung und Cycle-Steal enden sichtbar als Fehler.
+  Die Direct-Texture-Ziele `0x11`/`0x13` benoetigen fuer mehrteilige Transfers
+  noch einen eigenen fortschreitenden Zielvertrag und bleiben als generische
+  P1-Luecke offen. Runtime-ABI 36, BIOS-ABI 9 und Portprojektvertrag 22
+  versionieren diesen kumulativen Block. Ein Sonic-Adventure-Gastframe ist
+  damit noch nicht nachgewiesen.
 - Die v0.48-Roadmap ist auf `Native Disc Boot und erster echter Gastframe`
   fokussiert. Die neuen Tasks `KR-4841` bis `KR-4854` bilden Clean-Room-
   Provenienz, Bootdiagnostik, P2-Bootstrap, Gastzeit, BIOS/GD-ROM, Runtimecode,

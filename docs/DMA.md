@@ -27,6 +27,25 @@ Abschnitt 14 des Renesas SH7750/SH7750S/SH7750R Hardware-Handbuchs.
 - Das 32-Bit-Registerfenster ist unter `0xFFA00000` und `0x1FA00000` erreichbar.
   Schmalere Registerzugriffe scheitern sichtbar.
 
+## Dreamcast-Channel-2-TA-Vertrag
+
+Der produktive TA-Pfad verwendet auf SH-4-DMAC-Kanal 2 den externen
+Memory-to-Device-Request `CHCR.RS=2`. Er akzeptiert nur 32-Byte-Einheiten,
+inkrementierende Quelle, festes Geraeteziel, Burstmodus, gesetztes `DE` sowie
+`DMAOR.DME+DDT`. Die Quelle muss aus einem der vier physischen Area-3-Haupt-RAM-
+Spiegel `0x0C` bis `0x0F` stammen; Transferadresse und Laenge muessen 32-Byte-
+ausgerichtet sein und duerfen Area 3 nicht verlassen. Andere Richtung,
+Cycle-Steal oder ein anderer Requesttyp werden vor einer Scheinfertigstellung
+sichtbar abgelehnt.
+
+Der Systembus setzt fuer `SB_C2DSTAT` die feste Area-4-Zielregion und fuehrt den
+Transfer bis zum gemeinsamen TA-FIFO. Eine Runtime-End-to-End-Regression
+beweist RAM -> SH-4-DMAC -> Channel-2-Systembus -> TA-Object-List/EOL samt
+Residue, `TE` und getrenntem ASIC-Channel-2-Ereignis. Die Direct-Texture-
+Zielbereiche `0x11`/`0x13` brauchen fuer Transfers ueber mehr als eine Einheit
+noch einen eigenen fortschreitenden Zielvertrag und bleiben als generische
+P1-Luecke offen.
+
 Nicht Teil des Hostvertrags sind elektrische DREQ-/DACK-/DBREQ-/BAVL-/TR-Pins
 und das Einlesen eines 64-Bit-DTR-Worts von einem physischen Datenbus. Ein
 angebundenes natives Geraet reicht die daraus dekodierte Kanal-Anforderung ueber
@@ -39,3 +58,13 @@ Primaerreferenz:
 - Renesas, *SH7750, SH7750S, SH7750R Group User's Manual: Hardware*, Abschnitt
   14, Direct Memory Access Controller (DMAC), Rev. 7.02, 2013:
   <https://www.renesas.com/en/document/mah/sh7750-sh7750s-sh7750r-group-users-manual-hardware>
+- KallistiOS, oeffentlicher SH-4-DMAC-Vertrag (Channel 2 fuer PVR,
+  External-Memory-to-Device `RS=2`, 32-Byte-Einheiten und Burstmodus):
+  <https://kos-docs.dreamcast.wiki/group__dmac.html>
+- KallistiOS, oeffentliche PVR-DMA-Schnittstelle als unabhaengiger
+  Plausibilitaetscheck der TA/PVR-Grenze:
+  <https://kos-docs.dreamcast.wiki/pvr__dma_8h.html>
+
+KatanaRecomp uebernimmt keinen KallistiOS-Code oder dessen interne Struktur;
+die sichtbaren Bedingungen sind als eigenstaendiger Runtimevertrag mit
+synthetischen Tests formuliert.

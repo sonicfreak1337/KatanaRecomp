@@ -1,5 +1,6 @@
 #include "katana/runtime/gdrom_controller.hpp"
 
+#include "katana/runtime/block_table.hpp"
 #include "katana/runtime/dreamcast_memory.hpp"
 #include "katana/runtime/holly_dma.hpp"
 
@@ -935,7 +936,7 @@ void DreamcastGdRomController::pump_completions() {
                                     found->second.response.data,
                                     found->second.write_source);
                 if (module_load_observer_)
-                    module_load_observer_(found->second.destination,
+                    module_load_observer_(canonical_physical_address(found->second.destination),
                                           found->second.response.data,
                                           drive_.identity());
             } catch (const MemoryAccessError&) {
@@ -999,7 +1000,8 @@ bool DreamcastGdRomController::reload_system_bootstrap(CpuState& cpu) {
         return false;
     cpu.memory.write_bytes(destination, response.data, CodeWriteSource::Copy);
     if (module_load_observer_)
-        module_load_observer_(destination, response.data, drive_.identity());
+        module_load_observer_(
+            canonical_physical_address(destination), response.data, drive_.identity());
     return true;
 }
 
@@ -1248,6 +1250,14 @@ std::uint32_t DreamcastGdRomController::bios_call(CpuState& cpu,
         if (length == 0u || (destination & (alignment - 1u)) != 0u ||
             (length & (alignment - 1u)) != 0u || length > stream_remaining)
             return finish(0xFFFFFFFFu);
+        const auto pio_physical_destination =
+            kind == GdRomBiosTransferKind::Pio
+                ? resolve_bios_write_destination(cpu, destination, length)
+                : std::optional<std::uint32_t>{destination};
+        if (!pio_physical_destination) {
+            latch_sense(5u, 0x21u, 0u);
+            return finish(0xFFFFFFFFu);
+        }
         auto& request = found->second;
         request.transfer_kind = kind;
         request.transfer_destination = destination;
@@ -1276,10 +1286,12 @@ std::uint32_t DreamcastGdRomController::bios_call(CpuState& cpu,
                 const auto value = static_cast<std::uint16_t>(
                     static_cast<std::uint16_t>(bytes[offset]) |
                     (static_cast<std::uint16_t>(bytes[offset + 1u]) << 8u));
-                guest_write_u16(cpu, destination + offset, value, CodeWriteSource::Copy);
+                memory_.write_u16(*pio_physical_destination + offset,
+                                  value,
+                                  CodeWriteSource::Copy);
             }
             if (module_load_observer_)
-                module_load_observer_(destination, bytes, drive_.identity());
+                module_load_observer_(*pio_physical_destination, bytes, drive_.identity());
             commit_stream_bytes(request, length);
             return finish(0u);
         } catch (const std::exception&) {
@@ -1364,7 +1376,8 @@ void DreamcastGdRomController::dma_to_memory(const std::uint32_t address,
             const auto bytes = preview_stream_bytes(*request, length);
             memory_.write_bytes(address, bytes, CodeWriteSource::Dma);
             if (module_load_observer_)
-                module_load_observer_(address, bytes, drive_.identity());
+                module_load_observer_(
+                    canonical_physical_address(address), bytes, drive_.identity());
             commit_stream_bytes(*request, length);
         } catch (...) {
             request->response.status = GdRomStatus::OutOfRange;
@@ -1389,7 +1402,7 @@ void DreamcastGdRomController::dma_to_memory(const std::uint32_t address,
                         std::span<const std::uint8_t>(data_).subspan(data_cursor_, length),
                         CodeWriteSource::Dma);
     if (module_load_observer_)
-        module_load_observer_(address,
+        module_load_observer_(canonical_physical_address(address),
                               std::span<const std::uint8_t>(data_).subspan(data_cursor_, length),
                               drive_.identity());
     data_cursor_ += length;

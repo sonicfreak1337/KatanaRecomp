@@ -67,7 +67,7 @@ bool is_system_bus_readable(const std::uint32_t offset) {
 std::uint32_t system_bus_write_mask(const std::uint32_t offset) {
     switch (offset) {
     case Channel2Destination:
-        return 0x1FFFFFE0u;
+        return 0x03FFFFE0u;
     case Channel2Length:
         return 0x00FFFFE0u;
     case Channel2Start:
@@ -142,12 +142,14 @@ void DreamcastSystemBusControl::write(const std::uint32_t offset, const std::uin
     }
     const auto mask = system_bus_write_mask(offset);
     auto normalized = value & mask;
+    if (offset == Channel2Destination) normalized |= 0x10000000u;
     if (offset == SortStartAddress || offset == SortBaseAddress) normalized |= 0x08000000u;
     registers_[index(offset)] = normalized;
 }
 
 void DreamcastSystemBusControl::reset() noexcept {
     registers_.fill(0u);
+    registers_[index(Channel2Destination)] = 0x10000000u;
     registers_[index(SortStartAddress)] = 0x08000000u;
     registers_[index(SortBaseAddress)] = 0x08000000u;
     registers_[index(TaFifoRemaining)] = 8u;

@@ -373,13 +373,16 @@ v0.48 P0 - kombinierten KR-4847- bis KR-4850-Kernblock fokussiert validieren
 
 Abgeschlossen und in Roadmap/Taskliste markiert sind `KR-4841`, `KR-4843`,
 `KR-4844`, `KR-4845` und `KR-4846`. Der aktuelle Runtimevertrag steht auf
-Runtime-ABI 35, BIOS-ABI 9 und Portprojektvertrag 21. Das verbindliche
+Runtime-ABI 36, BIOS-ABI 9 und Portprojektvertrag 22. Das verbindliche
 XenonRecomp-artige Produktmodell rekompiliert `IP.BIN` und BootExecutable
 statisch aus SH-4 in nativen PC-Code. Dreamcast-Komponenten bleiben typisierte,
 titelunabhaengige Plattformgrenzen; das Freigabegate verbietet Interpreter/
-JIT, Discplayer und Titelhacks. Der aktuelle Export linkt
-`runtime-sh4-interpreter` jedoch noch bedingungslos. Das ist eine offene
-`KR-4848`-Produktluecke, keine bereits erreichte Nicht-Emulationsgarantie.
+JIT, Discplayer und Titelhacks. Der normale Produktport emittiert oder linkt
+keinen SH-4-Interpreter mehr; ein fehlendes AOT-Ziel endet typisiert. Nur
+`diagnostic_partial` enthaelt den begrenzten Diagnoseinterpreter und weist ihn
+im Manifest aus. `KR-4848` bleibt trotzdem offen, bis strukturierte Disc-
+Ladetransaktionen und die vorab erzeugte Registry latenter nativer Module
+vorliegen.
 
 Command 28/37 besitzt gastzeitgebundene PIO-/G1-DMA-Teiltransfers; Selector 5
 ist ein DMA-IRQ-Handoff, Selector 11 die persistente PIO-
@@ -392,13 +395,22 @@ kontrollierte SET-FEATURES-Fehler liegen im aktuellen Block. Ausfuehrbare
 Module halten kanonische aktive Extents und einen 4-KiB-Fast-Reject-Index.
 Ein vorvalidierter Ersatz derselben Modul-ID ist atomar; seine
 Negativregression erhaelt bei Ablehnung Katalog, Bloecke, Tracker, Provenienz
-und Metriken.
+und Metriken. Ein Load-Write-Tracker bindet BIOS-/GD-Reloads an deren reale
+Copy-/DMA-Writes: identische Bootbytes erhalten vorhandenes natives AOT;
+geaenderte Bytes invalidieren exakt einmal.
 Asynchrone BIOS-Completions umgehen das quittierbare Taskfile-IRQ-Latch;
 persistenter Sense und ATA-`ERR` des aktuellen Kommandos sind getrennt. Der
 GD-ROM-Fokustest ist nach diesem Integrationsfix 1/1 gruen. Read- und
 TOC-Gastziele werden MMU-bewusst ueber ihre gesamte Laenge vorvalidiert;
 ungueltige, ueberlaufende oder MMIO-Ziele enden ohne Teilwrite und Host-
 Exception als `InvalidField`.
+
+Der SH-4-DMAC-Channel-2-Pfad verwendet fuer TA den oeffentlichen externen
+Memory-to-Device-Vertrag `RS=2`, 32-Byte-Einheiten, inkrementierende Quelle,
+festes Ziel, Burstmodus und `DMAOR.DME+DDT`. Eine Runtime-End-to-End-Regression
+fuehrt Haupt-RAM bis TA-Object-List/EOL; falsche Richtung und Cycle-Steal werden
+sichtbar abgelehnt. Direct-Texture-Ziele `0x11`/`0x13` benoetigen fuer
+mehrteilige Transfers noch eine fortschreitende Zieladresse und bleiben P1.
 
 Der PVR-Nachweis laeuft am echten Scheduler-VBlank-In und friert erst nach
 Wertrevalidierung einen exakten Frame ein. PAL/Interlace verwendet das aktive
@@ -417,8 +429,9 @@ Weiter offen:
 ```text
 KR-4842: Wait-Loop-Klassifikation vervollstaendigen
 KR-4847: EX-38/39-Vertrag und belegte Timeout-/Overrun-Grenzen schliessen
-KR-4848: strukturierte Disc-Ladetransaktionen und latentes natives AOT
-KR-4849/KR-4850: TA/PVR bis zum scanoutgebundenen echten Gastframe
+KR-4848: strukturierte Disc-Ladetransaktionen und Registry latenter nativer Module
+KR-4849: Direct-Texture-Zielprogression und restliche TA/PVR-Eingangskette
+KR-4850: scanoutgebundener echter Gastframe
 ```
 
 Ein erster Gastframe ist noch nicht nachgewiesen. Moderne Xbox-, DualSense-

@@ -9,6 +9,7 @@
 #include <cstdlib>
 #include <limits>
 #include <memory>
+#include <optional>
 #include <span>
 #include <sstream>
 #include <stdexcept>
@@ -47,6 +48,42 @@ bool project_identity_name(const std::string_view value) noexcept {
                return (character >= '0' && character <= '9') ||
                       (character >= 'a' && character <= 'f');
            });
+}
+
+bool valid_channel2_main_ram_range(const std::uint32_t source,
+                                   const std::uint32_t length) noexcept {
+    constexpr std::uint32_t area3_begin = 0x0C000000u;
+    constexpr std::uint32_t area3_end = 0x10000000u;
+    constexpr std::uint32_t transfer_alignment = 32u;
+    return source >= area3_begin && source < area3_end && length != 0u &&
+           (source & (transfer_alignment - 1u)) == 0u &&
+           (length & (transfer_alignment - 1u)) == 0u && length <= area3_end - source;
+}
+
+template <typename Operation>
+void for_each_dreamcast_executable_backing_extent(const std::uint32_t address,
+                                                  const std::size_t size,
+                                                  Operation&& operation) {
+    constexpr std::uint32_t area3_begin = 0x0C000000u;
+    constexpr std::uint32_t area3_end = 0x10000000u;
+    constexpr std::uint32_t backing_mask =
+        static_cast<std::uint32_t>(dreamcast_main_ram_size - 1u);
+    const auto physical = canonical_physical_address(address);
+    if (size != 0u && physical >= area3_begin && physical < area3_end &&
+        size <= static_cast<std::uint64_t>(area3_end) - physical) {
+        std::size_t source_offset = 0u;
+        auto cursor = physical;
+        while (source_offset < size) {
+            const auto backing_offset = (cursor - area3_begin) & backing_mask;
+            const auto extent_size = std::min<std::size_t>(
+                size - source_offset, dreamcast_main_ram_size - backing_offset);
+            operation(area3_begin + backing_offset, source_offset, extent_size, true);
+            source_offset += extent_size;
+            cursor += static_cast<std::uint32_t>(extent_size);
+        }
+        return;
+    }
+    operation(physical, 0u, size, false);
 }
 
 std::uint16_t flash_block_crc(const std::span<const std::uint8_t> block) {
@@ -367,21 +404,28 @@ initialize_dreamcast_runtime(CpuState& cpu,
             if (!dmac) throw std::runtime_error("Systembus-Channel-2-DMAC-Lebenszyklus fehlt.");
             constexpr std::size_t channel = 2u;
             constexpr std::size_t unit_size = 32u;
+            constexpr std::uint32_t external_memory_to_device = 0x00000200u;
+            constexpr std::uint32_t burst_transmit = 0x00000080u;
             const auto control = dmac->control(channel);
+            const auto operation = dmac->operation();
+            const auto source = dmac->source(channel) & 0x1FFFFFFFu;
+            const bool source_is_main_ram = valid_channel2_main_ram_range(source, length);
             if (dmac->transfer_unit_size(channel) != unit_size ||
-                (control & 0x00000F00u) != 0x00000800u ||
+                (control & 0x00000F00u) != external_memory_to_device ||
                 (control & 0x00003000u) != 0x00001000u ||
                 (control & 0x0000C000u) != 0u ||
+                (control & burst_transmit) == 0u ||
                 (control & Sh4Dmac::channel_enable) == 0u ||
-                (dmac->operation() & Sh4Dmac::master_enable) == 0u ||
-                (length % unit_size) != 0u) {
+                (operation & Sh4Dmac::master_enable) == 0u ||
+                (operation & Sh4Dmac::on_demand_enable) == 0u ||
+                (length % unit_size) != 0u || !source_is_main_ram) {
                 dmac->report_external_fault(
                     channel, DmaFaultReason::ExternalContractMismatch, unit_size);
                 return;
             }
             const auto units = length / static_cast<std::uint32_t>(unit_size);
             if (!dmac->validate_external_transfer(
-                    channel, dmac->source(channel), length, unit_size))
+                    channel, dmac->source(channel), length, unit_size, 2u))
                 return;
             dmac->write_destination(channel, destination);
             dmac->request_transfer(channel, units);
@@ -568,6 +612,7 @@ initialize_dreamcast_runtime(CpuState& cpu,
     state.code_tracker = std::make_shared<ExecutableCodeTracker>();
     state.runtime_blocks->bind_code_tracker(state.code_tracker.get());
     state.module_catalog = std::make_shared<ExecutableModuleCatalog>();
+    const auto module_load_writes = std::make_shared<ExecutableLoadWriteTracker>();
     const auto module_sequence = std::make_shared<std::uint64_t>(1u);
     const auto module_catalog = state.module_catalog;
     const auto module_blocks = state.runtime_blocks;
@@ -585,26 +630,37 @@ initialize_dreamcast_runtime(CpuState& cpu,
                 throw std::logic_error("GD-ROM-Completion liegt nicht am aktuellen Gastzyklus.");
             target->raise(SystemAsicEvent::GdromCommand, cycle);
         },
-        [module_sequence, module_catalog, module_blocks, module_tracker](
+        [module_sequence, module_catalog, module_blocks, module_tracker, module_load_writes](
             const std::uint32_t destination,
             const std::span<const std::uint8_t> bytes,
             const std::string_view source_identity) {
-            if (bytes.empty() || (destination & 1u) != 0u) return;
             const auto physical = canonical_physical_address(destination);
-            ExecutableModule module;
-            module.id = "gdrom-load-" + std::to_string((*module_sequence)++);
-            module.source_identity = std::string(source_identity);
-            module.guest_start = physical;
-            module.bytes.assign(bytes.begin(), bytes.end());
-            module.kind = ExecutableModuleKind::Overlay;
-            module.executable_permission = false;
-            module.control_transfer_promotion_allowed = true;
-            module.range_roles.push_back(
-                {0u,
-                 static_cast<std::uint32_t>(module.bytes.size()),
-                 ExecutableStorageRole::ProvenData});
-            module_catalog->publish_loaded_range(
-                std::move(module), *module_blocks, *module_tracker);
+            const auto write_observation = module_load_writes->consume(physical, bytes.size());
+            if (bytes.empty() || (destination & 1u) != 0u) return;
+            for_each_dreamcast_executable_backing_extent(
+                physical,
+                bytes.size(),
+                [&](const std::uint32_t backing,
+                    const std::size_t source_offset,
+                    const std::size_t extent_size,
+                    const bool) {
+                    ExecutableModule module;
+                    module.id = "gdrom-load-" + std::to_string((*module_sequence)++);
+                    module.source_identity = std::string(source_identity);
+                    module.guest_start = backing;
+                    module.bytes.assign(bytes.begin() + static_cast<std::ptrdiff_t>(source_offset),
+                                        bytes.begin() + static_cast<std::ptrdiff_t>(source_offset +
+                                                                                   extent_size));
+                    module.kind = ExecutableModuleKind::Overlay;
+                    module.executable_permission = false;
+                    module.control_transfer_promotion_allowed = true;
+                    module.range_roles.push_back(
+                        {0u,
+                         static_cast<std::uint32_t>(module.bytes.size()),
+                         ExecutableStorageRole::ProvenData});
+                    module_catalog->publish_loaded_range(
+                        std::move(module), *module_blocks, *module_tracker, write_observation);
+                });
         },
         [asic] {
             const auto target = asic.lock();
@@ -647,26 +703,36 @@ initialize_dreamcast_runtime(CpuState& cpu,
     const auto runtime_blocks = std::weak_ptr<RuntimeBlockTable>(state.runtime_blocks);
     const auto runtime_modules = std::weak_ptr<ExecutableModuleCatalog>(state.module_catalog);
     cpu.memory.set_guest_write_observer(
-        [code_tracker, runtime_blocks, runtime_modules](const GuestWriteEvent& event) {
-            const auto physical = canonical_physical_address(event.address);
-            if (physical >= 0x0C000000u && physical < 0x0D000000u &&
-                event.size <= 0x0D000000u - physical) {
-                if (const auto modules = runtime_modules.lock()) {
-                    modules->record_runtime_write(
-                        event.address, event.size, event.source, event.bytes_changed);
-                }
-            }
+        [code_tracker, runtime_blocks, runtime_modules, module_load_writes](
+            const GuestWriteEvent& event) {
+            auto load_event = event;
+            load_event.address = canonical_physical_address(event.address);
+            module_load_writes->observe(load_event);
             const auto tracker = code_tracker.lock();
-            if (!tracker) return;
-            const bool main_ram = physical >= 0x0C000000u && physical < 0x0D000000u &&
-                                  event.size <= 0x0D000000u - physical;
-            if (!main_ram && !tracker->tracks_address(physical, event.size)) return;
-            const auto invalidation =
-                tracker->observe_write(physical, event.size, event.source, event.bytes_changed);
-            if (!invalidation.byte_identical) {
-                if (const auto blocks = runtime_blocks.lock())
-                    static_cast<void>(blocks->erase_overlapping_physical(physical, event.size));
-            }
+            for_each_dreamcast_executable_backing_extent(
+                event.address,
+                event.size,
+                [&](const std::uint32_t backing,
+                    const std::size_t,
+                    const std::size_t extent_size,
+                    const bool main_ram) {
+                    if (main_ram) {
+                        if (const auto modules = runtime_modules.lock()) {
+                            modules->record_runtime_write(
+                                backing, extent_size, event.source, event.bytes_changed);
+                        }
+                    }
+                    if (!tracker ||
+                        (!main_ram && !tracker->tracks_address(backing, extent_size)))
+                        return;
+                    const auto invalidation = tracker->observe_write(
+                        backing, extent_size, event.source, event.bytes_changed);
+                    if (!invalidation.byte_identical) {
+                        if (const auto blocks = runtime_blocks.lock())
+                            static_cast<void>(
+                                blocks->erase_overlapping_physical(backing, extent_size));
+                    }
+                });
         });
     state.store_queue_transfers = std::make_shared<std::vector<StoreQueueTransfer>>();
     state.store_queue_transfers->reserve(1024u);
@@ -753,6 +819,7 @@ initialize_dreamcast_runtime(CpuState& cpu,
     state.loaded_system_bootstrap_bytes = boot.system_bootstrap.size();
     cpu.memory.write_bytes(dreamcast_disc_boot_address, boot.boot_file, CodeWriteSource::Copy);
     state.loaded_boot_bytes = boot.boot_file.size();
+    module_load_writes->reset();
     reset_dreamcast_direct_boot_cpu(cpu);
     if (firmware_mode == DreamcastRuntimeFirmwareMode::HleBiosAbi)
         cpu.pc = dreamcast_system_bootstrap_entry_address;

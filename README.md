@@ -25,16 +25,23 @@ kommerziellen Spielen erzeugter Code gehoeren nicht in dieses Repository.
 v0.48 fuehrt den von der Originaldisc lokal installierten Systembootstrap und
 die Bootdatei als getrennte native AOT-Segmente aus. BIOS-Requestqueue,
 Vierwortstatus, LOW/HIGH-TOC sowie gastzeitgebundene GD-ROM-PIO-/G1-DMA-
-Streamingtransfers sind implementiert. Der aktuelle P0 bleibt der erste
-scanoutgebundene, vom Gast erzeugte Frame; ein solcher Frame ist noch nicht
-nachgewiesen. Moderner Hostcontrollersupport fuer Xbox-, DualSense- und
-vergleichbare Geraete beginnt laut Roadmap erst danach.
+Streamingtransfers sind implementiert. Der reale SH-4-DMAC-Channel-2-Vertrag
+fuehrt `RS=2`, 32-Byte-Bursts und `DMAOR.DDT` aus allen vier Area-3-RAM-Spiegeln
+bis zum TA-FIFO; die Regression enthaelt eine vollstaendige Liste samt EOL.
+Byteidentische BIOS-/GD-Reloads erhalten bereits gebundene native AOT-Bloecke;
+geaenderte Bytes invalidieren diese genau einmal. MMU-PIO bindet den Load an die
+tatsaechlich geschriebene physische Range und lehnt nichtlineare TLB-Spannen vor
+dem ersten Write ab.
 
-Der aktuelle Export linkt fuer nachgeladene oder zur Laufzeit veraenderte
-Codebytes `runtime-sh4-interpreter` noch bedingungslos. Seine Ausfuehrung ist
-zwar eine begrenzte Bring-up-Grenze, aber die Abhaengigkeit selbst verletzt das
-Produkt-Gate. KR-4848 ersetzt sie im normalen Portlauf durch
-byteidentitaetsgebundenes latentes AOT oder einen ehrlichen typisierten Abbruch.
+Der normale Produktport emittiert oder linkt keinen SH-4-Interpreter. Ein
+nicht vorab gebundenes AOT-Ziel endet stattdessen als typisierter Fehler. Nur
+ein expliziter `diagnostic_partial`-Export enthaelt den begrenzten
+Diagnoseinterpreter und weist ihn im Manifest aus. Strukturierte Disc-
+Ladetransaktionen und vorab erzeugte latente AOT-Module bleiben in KR-4848
+offen. Der aktuelle P0 bleibt der erste scanoutgebundene, vom Gast erzeugte
+Frame; ein solcher Frame ist noch nicht nachgewiesen. Moderner
+Hostcontrollersupport fuer Xbox-, DualSense- und vergleichbare Geraete beginnt
+laut Roadmap strikt erst danach.
 
 Der aktuelle Pfad verarbeitet Raw-, ELF32-SH-, Projektmanifest- und validierte
 GDI-Eingaben bis zu partitioniertem C++, einer zentralen Dreamcast-Runtime und

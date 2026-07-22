@@ -87,7 +87,8 @@ class Sh4Dmac final {
     [[nodiscard]] bool validate_external_transfer(std::size_t channel,
                                                   std::uint32_t source,
                                                   std::size_t bytes,
-                                                  std::size_t unit_size) noexcept;
+                                                  std::size_t unit_size,
+                                                  std::uint8_t expected_request_source = 8u) noexcept;
     void complete_external_transfer(std::size_t channel, std::size_t bytes) noexcept;
     void report_external_fault(std::size_t channel,
                                DmaFaultReason reason,

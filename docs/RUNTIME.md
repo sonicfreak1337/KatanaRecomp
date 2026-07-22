@@ -6,7 +6,7 @@ ungeloesten Kontrollflusspfaden mehr.
 
 ## ABI
 
-Die aktuelle Runtime-ABI ist Version `35`. Die typisierte Block-ABI ist seit
+Die aktuelle Runtime-ABI ist Version `36`. Die typisierte Block-ABI ist seit
 KR-4611 Version `2`.
 
 Generierter Code enthaelt eine Compile-Time-Pruefung gegen diese Version. Eine
@@ -43,6 +43,9 @@ GD-ROM-Produktzustand und macht ausstehende Async-Reads explizit abbrechbar.
 ABI-Version 34 versioniert die erweiterten GD-ROM-Streaming- und
 Callbackgrenzen. ABI-Version 35 bindet aktive Modulextents sowie den
 scanoutgebundenen PVR-Framebeweis in den oeffentlichen Runtimevertrag ein.
+ABI-Version 36 ergaenzt den oeffentlichen DMAC-Pruefvertrag um die erwartete
+Requestquelle und bindet Copy-/DMA-Loadbeobachtung an die atomare
+Veroeffentlichung geladener ausfuehrbarer Bereiche.
 
 ## CMake
 
@@ -367,6 +370,29 @@ registrierte Backendfunktion mit validierten Plattformdiensten auf. Fehlende
 Bloecke, Speicherabbildungen oder Bootquellen propagieren als Nichtnull-Exitcode;
 der Aufruferpfad wird vor der Ausgabe redigiert.
 
+`ExecutableLoadWriteTracker` beobachtet unmittelbare Copy-/DMA-Gastwrites eines
+BIOS-/GD-Reloads ueber deren kanonische physische Aliase. Ein anschliessend
+publizierter, byteidentischer Bereich invalidiert keine registrierten nativen
+AOT-Bloecke. Bereits bewiesene Modulabdeckung wird nicht dupliziert; ein
+frischer, zufaellig schon bytegleicher Bereich erhaelt dagegen seinen ersten
+Provenienznachweis. Haben sich Bytes geaendert, hat der gemeinsame Gastwrite-
+Pfad die betroffenen Bloecke bereits exakt einmal invalidiert; die
+Modulveroeffentlichung wiederholt diesen Schritt nicht. Ein nicht beobachteter
+Load behaelt die konservative vollstaendige Invalidierung.
+
+BIOS-PIO loest die komplette virtuelle Zielspanne vor dem ersten Write ueber
+die aktive Gast-MMU auf und meldet nur eine durchgehend lineare, wirklich
+geschriebene physische Range. Nichtlineare TLB-Spannen werden ohne Partialwrite
+abgelehnt. Die vier physischen Area-3-Sichten `0x0C` bis `0x0F` werden fuer
+Codeprovenienz und Invalidation auf dasselbe 16-MiB-Haupt-RAM-Backing gefaltet;
+ein Write ueber eine Spiegelgrenze wird dafuer in Tail und Head geteilt.
+
+Der normale Produktport deaktiviert Demand-Interpreterausfuehrung vollstaendig:
+Nicht gebundener Code endet als typisierter Materialisierungs-/Dispatchfehler.
+Nur das explizite `diagnostic_partial`-Profil emittiert den begrenzten
+Diagnoseinterpreter. Der Portprojektvertrag `22` weist Profil,
+Interpreterstatus, Unbound-Code-Policy und Coverage-Vertrag im Manifest aus.
+
 Im produktiven Einblock-AOT-Pfad zaehlt `CpuState::retired_guest_instructions`
 jede betretene Gastinstruktion. Schedulerzeit wird nach der ausgefuehrten
 Blocksemantik verbucht; erst der anschliessende Safepoint darf einen Interrupt
@@ -374,5 +400,5 @@ annehmen. Faulting Instructions und ausgefuehrte Delay Slots gehen dadurch in
 die Zeit ein, nicht ausgefuehrte Blockreste dagegen nicht. Lokales Chaining ist
 nur ohne faelliges Schedulerereignis und bei identischem Code-, MMU-,
 Watchpoint-, FPSCR- und Runtimezustand erlaubt; ein Chunk umfasst hoechstens 64
-Instruktionen. Runtime-ABI 32, PlatformServices-ABI 9 und Portvertrag 20 binden
-diesen Ausfuehrungsvertrag.
+Instruktionen. Der kumulative Stand verwendet Runtime-ABI 36,
+PlatformServices-ABI 9 und Portvertrag 22.

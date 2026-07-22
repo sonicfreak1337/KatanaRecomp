@@ -4,9 +4,11 @@ Abgeschlossener interner Meilenstein: `v0.47.0`
 Phase: `v0.48.0` - Native Disc Boot und erster echter Gastframe
 Aktuelle P0-Arbeit: den gemeinsamen `KR-4847`- bis `KR-4850`-Kernblock
 fokussiert validieren. `KR-4847` bleibt fuer EX 38/39 und noch unbelegte
-Timeout-/Overrun-Grenzen offen; danach folgen in `KR-4848` latentes natives AOT
-und in `KR-4849` die vollstaendige TA-Eingangskette. Die Wait-Loop-
-Klassifikation aus `KR-4842` laeuft als getrennte Diagnosearbeit.
+Timeout-/Overrun-Grenzen offen. `KR-4848` hat den Interpreter aus dem normalen
+Produktport entfernt und identische Disc-Reloads an natives AOT gebunden; offen
+bleiben strukturierte Ladetransaktionen und die vorab erzeugte Registry
+latenter Module. `KR-4849` fuehrt den realen Channel-2-Pfad bis TA-EOL fort.
+Die Wait-Loop-Klassifikation aus `KR-4842` laeuft getrennt.
 Naechstes Gate: `v0.48.0` - Boot- und Frame-Integration
 Weitere interne Gates: `v0.48.0` und `v0.49.0` Alpha-Candidate
 Erster oeffentlicher Release: `v0.50.0` Alpha
@@ -18,10 +20,12 @@ sind abgeschlossen. Das verbindliche Produktziel bleibt XenonRecomp-artig:
 `IP.BIN` und BootExecutable werden statisch aus SH-4 in nativen PC-Code
 rekompiliert; die Zielruntime stellt nur typisierte Dreamcast-
 Plattformgrenzen bereit und ist weder normaler Interpreter/JIT noch Discplayer
-oder Titelhackschicht. Dieses Produkt-Gate ist noch nicht erreicht: Der
-aktuelle Export linkt `runtime-sh4-interpreter` bedingungslos. `KR-4848` muss
-diese Bring-up-Abhaengigkeit durch gebundenes latentes AOT oder einen
-typisierten Abbruch ersetzen.
+oder Titelhackschicht. Der normale Export emittiert und linkt jetzt keinen SH-4-
+Interpreter; ein fehlendes AOT-Ziel endet als typisierter Materialisierungs-/
+Dispatchfehler. Nur `diagnostic_partial` enthaelt und deklariert den begrenzten
+Diagnoseinterpreter. Das schliesst die Produktgrenze, aber noch nicht ganz
+`KR-4848`: Strukturierte Disc-Ladetransaktionen und vorab kompilierte latente
+Module bleiben offen.
 
 Der aktuelle Kernblock erweitert `KR-4847` um einen gemeinsamen BIOS-/
 Taskfile-Besitzer, Dreamcast-SPI 11 bis 14, einen 32-Byte-Modepuffer und
@@ -44,12 +48,26 @@ Copy/DMA entfernt veraltete Runtimeprovenienz und ein 4-KiB-Seitenindex weist
 Writes ohne moegliche Extentueberlappung vor dem Katalogscan ab. Ein
 vorvalidierter Ersatz derselben Modul-ID ist atomar; die neue Negativregression
 belegt, dass eine Ablehnung Katalog, Bloecke, Tracker, Provenienz und Metriken
-unveraendert laesst.
+unveraendert laesst. Ein Load-Write-Tracker klassifiziert die tatsaechlichen
+Copy-/DMA-Writes eines BIOS-/GD-Reloads. Byteidentische Bootbytes erhalten
+vorhandene native AOT-Bloecke; bestehende Modulabdeckung wird nicht dupliziert,
+frische bytegleiche Bereiche verlieren ihren Provenienznachweis aber nicht.
+Geaenderte Bytes werden durch den beobachteten Gastwrite exakt einmal
+invalidiert. MMU-PIO ist an die committed physische Range gebunden und lehnt
+nichtlineare TLB-Spannen atomar ab. Codewrites ueber `0x0C` bis `0x0F` treffen
+dasselbe Haupt-RAM-AOT-Backing, auch ueber eine 16-MiB-Spiegelgrenze.
 
-`KR-4849` fuehrt Store-Queue-Pakete in den gemeinsamen TA-FIFO und aktualisiert
-dessen sichtbaren Positionszeiger. Der Hintergrundpfad bildet den festen
-Overscan-Quad einschliesslich HScale, D-Attributen und texturierter X/U-
-Erweiterung ab. `KR-4850` prueft final gepackte Pixelwerte samt Bytemaske erst
+`KR-4849` fuehrt Store-Queue-Pakete und den realen SH-4-DMAC-Channel 2 in den
+gemeinsamen TA-FIFO. Channel 2 verwendet den externen Memory-to-Device-Request
+`RS=2`, 32-Byte-Einheiten, inkrementierende Quelle, festes Ziel, Burstmodus und
+`DMAOR.DME+DDT` aus allen vier physischen Area-3-RAM-Spiegeln. Eine Runtime-End-
+to-End-Regression belegt Haupt-RAM bis TA-
+Object-List/EOL sowie die getrennte Channel-2-Completion; falsche Richtung und
+Cycle-Steal scheitern sichtbar. Fuer Direct-Texture-Ziele `0x11`/`0x13` ist die
+Zielprogression mehrteiliger Transfers noch als generische P1-Luecke offen.
+Der Hintergrundpfad bildet den festen Overscan-Quad einschliesslich HScale,
+D-Attributen und texturierter X/U-Erweiterung ab. `KR-4850` prueft final
+gepackte Pixelwerte samt Bytemaske erst
 am echten Scheduler-VBlank-In und friert dort den exakten Frame ein. PAL/
 Interlace bindet das aktive SPG-Feld an `FB_R_SOF1/2`; `SCALER_CTL` Bit 17/18
 waehlt rendernd `FB_W_SOF1/2`. 256 Generationen, 64 MiB Haltebudget,
@@ -190,7 +208,7 @@ MMIO-Zugriff liegt im aktiven OCRAM; der fruehere Abbruch nach 12 Gastzyklen
 ist damit beseitigt. TA/PVR und ein echter Gastframe bleiben fuer den laengeren
 Folgelauf weiterhin offen.
 
-Runtime-ABI 35, BIOS-ABI 9 und Portprojektvertrag 21 bilden den kumulativen
+Runtime-ABI 36, BIOS-ABI 9 und Portprojektvertrag 22 bilden den kumulativen
 v0.48-Stand ab.
 PlatformServices-ABI 9 versioniert das invalidierungs- und timinggesicherte lokale
 Blockchaining.
@@ -479,9 +497,9 @@ Byteidentitaets-, Lebenszeit-, Invalidierungs- und Materialisierungskette
 verlassen. Neue Module und Overlays erhalten synthetische Fixtures. Die
 Demand-driven-Materialisierung validiert Ziel und Herkunft, findet oder baut
 einen budgetierten Block, registriert ihn und dispatcht erst danach. Sie bleibt
-deterministisch und abschaltbar. Im Zielvertrag ist ein Interpreter nur
-Referenz-/Diagnosepfad; der aktuelle Export linkt ihn bis zur offenen
-`KR-4848`-Korrektur noch bedingungslos.
+deterministisch und abschaltbar. Ein Interpreter ist nur im expliziten
+`diagnostic_partial`-Profil vorhanden; der normale Produktport bindet nur
+nativen AOT-Code und endet bei fehlendem Ziel typisiert.
 Runtime-only-Sites werden nach Aufrufen, Zielvielfalt, Stabilitaet, Misses,
 Materialisierungen und Invalidierungen profiliert, damit nachweislich mono-
 oder klein polymorphe Sites spaeter sicher spezialisiert werden koennen.

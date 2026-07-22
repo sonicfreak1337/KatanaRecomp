@@ -83,6 +83,13 @@ bool canonical_range_is_linear(const std::uint32_t address, const std::size_t si
            canonical_physical_address(final_address) == expected_physical_end;
 }
 
+std::optional<std::pair<std::uint32_t, std::uint64_t>>
+canonical_load_range(const std::uint32_t address, const std::size_t size) noexcept {
+    if (!canonical_range_is_linear(address, size)) return std::nullopt;
+    const auto begin = canonical_physical_address(address);
+    return std::pair{begin, static_cast<std::uint64_t>(begin) + size};
+}
+
 void normalize_active_extents(ExecutableModule& module) {
     if (module.active_extents.empty())
         module.active_extents.push_back(
@@ -265,6 +272,51 @@ bool ExecutableModule::materializable(const std::uint32_t address,
     return true;
 }
 
+void ExecutableLoadWriteTracker::observe(const GuestWriteEvent& event) noexcept {
+    if (event.source != CodeWriteSource::Copy && event.source != CodeWriteSource::Dma) {
+        reset();
+        return;
+    }
+    const auto range = canonical_load_range(event.address, event.size);
+    if (!range) {
+        reset();
+        return;
+    }
+    const auto [begin, end] = *range;
+    if (pending_ && source_ == event.source && physical_end_ == begin) {
+        physical_end_ = end;
+        bytes_changed_ = bytes_changed_ || event.bytes_changed;
+        return;
+    }
+    physical_begin_ = begin;
+    physical_end_ = end;
+    source_ = event.source;
+    bytes_changed_ = event.bytes_changed;
+    pending_ = true;
+}
+
+LoadedRangeWriteObservation ExecutableLoadWriteTracker::consume(const std::uint32_t address,
+                                                                const std::size_t size) noexcept {
+    const auto range = canonical_load_range(address, size);
+    if (!range || !pending_ || range->first != physical_begin_ ||
+        range->second != physical_end_) {
+        reset();
+        return LoadedRangeWriteObservation::UnobservedChanged;
+    }
+    const auto result = bytes_changed_ ? LoadedRangeWriteObservation::ObservedChanged
+                                       : LoadedRangeWriteObservation::ObservedByteIdentical;
+    reset();
+    return result;
+}
+
+void ExecutableLoadWriteTracker::reset() noexcept {
+    physical_begin_ = 0u;
+    physical_end_ = 0u;
+    source_ = CodeWriteSource::Copy;
+    bytes_changed_ = false;
+    pending_ = false;
+}
+
 void ExecutableModuleCatalog::index_active_extents(const ExecutableModule& module) {
     if (!module.active) return;
     const auto module_base = canonical_physical_address(module.guest_start);
@@ -370,10 +422,28 @@ void ExecutableModuleCatalog::publish(ExecutableModule module) {
 
 void ExecutableModuleCatalog::publish_loaded_range(ExecutableModule module,
                                                    RuntimeBlockTable& blocks,
-                                                   ExecutableCodeTracker& tracker) {
+                                                   ExecutableCodeTracker& tracker,
+                                                   const LoadedRangeWriteObservation observation) {
     validate_and_normalize_module(module);
     const auto physical = canonical_physical_address(module.guest_start);
     const auto physical_end = static_cast<std::uint64_t>(physical) + module.bytes.size();
+    if (observation == LoadedRangeWriteObservation::ObservedByteIdentical) {
+        const auto incoming_offset = module_offset(module, physical, module.bytes.size());
+        const auto already_proven = incoming_offset && std::any_of(
+            modules_.begin(), modules_.end(), [&](const auto& existing) {
+                if (!existing.contains(physical, module.bytes.size())) return false;
+                const auto existing_offset =
+                    module_offset(existing, physical, module.bytes.size());
+                if (!existing_offset) return false;
+                for (std::size_t current = 0u; current < module.bytes.size(); ++current) {
+                    if (relocated_module_byte(existing, *existing_offset + current) !=
+                        relocated_module_byte(module, *incoming_offset + current))
+                        return false;
+                }
+                return true;
+            });
+        if (already_proven) return;
+    }
     for (const auto& existing : modules_) {
         if (existing.active && existing.id == module.id &&
             !physical_range_covers_active_extents(existing, physical, physical_end)) {
@@ -386,14 +456,16 @@ void ExecutableModuleCatalog::publish_loaded_range(ExecutableModule module,
     // path after invalidation has begun.
     modules_.reserve(modules_.size() + 1u);
     reserve_active_extent_index(module);
-    const auto invalidated = blocks.erase_overlapping_physical(physical, module.bytes.size());
-    const auto tracked =
-        tracker.observe_write(physical, module.bytes.size(), CodeWriteSource::Copy, true);
-    metrics_.invalidated_blocks += std::max(invalidated, tracked.invalidated_blocks.size());
-    record_runtime_write(module.guest_start,
-                         module.bytes.size(),
-                         CodeWriteSource::Copy,
-                         true);
+    if (observation == LoadedRangeWriteObservation::UnobservedChanged) {
+        const auto invalidated = blocks.erase_overlapping_physical(physical, module.bytes.size());
+        const auto tracked =
+            tracker.observe_write(physical, module.bytes.size(), CodeWriteSource::Copy, true);
+        metrics_.invalidated_blocks += std::max(invalidated, tracked.invalidated_blocks.size());
+        record_runtime_write(module.guest_start,
+                             module.bytes.size(),
+                             CodeWriteSource::Copy,
+                             true);
+    }
     index_active_extents(module);
     modules_.push_back(std::move(module));
     increment(metrics_.loads);

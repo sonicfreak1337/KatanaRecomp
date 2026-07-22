@@ -82,8 +82,10 @@ struct GdRomGuestCallback {
 
 class DreamcastGdRomController final {
   public:
+    // The address passed to the observer is the contiguous physical range actually committed to
+    // Memory, never an untranslated guest pointer.
     using ModuleLoadObserver = std::function<void(std::uint32_t, std::span<const std::uint8_t>,
-                                                   std::string_view)>;
+                                                    std::string_view)>;
     DreamcastGdRomController(Memory& memory,
                              EventScheduler& scheduler,
                              GdRomDrive drive,

@@ -938,7 +938,8 @@ std::string handwritten_main(const std::string& entry_namespace,
 
 std::string runtime_dispatch_adapter(const std::string& entry_namespace,
                                      const std::span<const katana::ir::Function> program,
-                                     const std::uint32_t entry_address) {
+                                     const std::uint32_t entry_address,
+                                     const bool diagnostic_interpreter) {
     const auto symbol = [](const std::uint32_t address) {
         constexpr std::array digits{'0', '1', '2', '3', '4', '5', '6', '7',
                                     '8', '9', 'A', 'B', 'C', 'D', 'E', 'F'};
@@ -1009,10 +1010,12 @@ std::string runtime_dispatch_adapter(const std::string& entry_namespace,
            << "#include \"katana/runtime/block_abi.hpp\"\n"
            << "#include \"katana/runtime/block_table.hpp\"\n"
            << "#include \"katana/runtime/dispatch_diagnostics.hpp\"\n"
-           << "#include \"katana/runtime/dynamic_interpreter.hpp\"\n"
            << "#include \"katana/runtime/executable_modules.hpp\"\n"
-           << "#include \"katana/runtime/indirect_dispatch.hpp\"\n"
-           << "#include \"katana/sh4/decoder.hpp\"\n"
+           << "#include \"katana/runtime/indirect_dispatch.hpp\"\n";
+    if (diagnostic_interpreter)
+        output << "#include \"katana/runtime/dynamic_interpreter.hpp\"\n"
+               << "#include \"katana/sh4/decoder.hpp\"\n";
+    output
            << "#include <cerrno>\n#include <chrono>\n#include <cstdlib>\n#include "
               "<iostream>\n#include <limits>\n"
               "#include <stdexcept>\n#include <thread>\n#include <utility>\n#include <vector>\n\n"
@@ -1084,25 +1087,26 @@ std::string runtime_dispatch_adapter(const std::string& entry_namespace,
                       "katana::runtime::canonical_physical_address(cpu.pc)});\n"
                    << "}\n";
     }
-    output << "katana::runtime::BlockExit dispatch_dynamic_interpreter(\n"
-              "        katana::runtime::CpuState& cpu,\n"
-              "        katana::runtime::BlockExecutionContext& context) {\n"
-              "    if (active_services == nullptr)\n"
-              "        throw std::runtime_error(\"Dynamischer SH-4-Pfad ohne Plattformdienste.\");\n"
-              "    const auto source = cpu.pc;\n"
-              "    const auto interpreted =\n"
-              "        katana::runtime::execute_dynamic_sh4_block(cpu, *active_services, 1u);\n"
-              "    const auto scheduler = active_services->consume_guest_cycles(\n"
-              "        interpreted.guest_cycles, context.scheduler_event_budget);\n"
-              "    if (scheduler.budget_exhausted || scheduler.guest_cycle_budget_exhausted)\n"
-              "        throw std::runtime_error(\"Dynamischer SH-4-Schedulerbudgetabbruch.\");\n"
-              "    context.scheduler_cycle = scheduler.guest_cycle;\n"
-              "    return katana::runtime::make_block_exit(\n"
-              "        cpu, context, interpreted.end_kind,\n"
-              "        {source, katana::runtime::canonical_physical_address(source)},\n"
-              "        katana::runtime::BlockAddress{\n"
-              "            cpu.pc, katana::runtime::canonical_physical_address(cpu.pc)});\n"
-              "}\n";
+    if (diagnostic_interpreter)
+        output << "katana::runtime::BlockExit dispatch_dynamic_interpreter(\n"
+                  "        katana::runtime::CpuState& cpu,\n"
+                  "        katana::runtime::BlockExecutionContext& context) {\n"
+                  "    if (active_services == nullptr)\n"
+                  "        throw std::runtime_error(\"Dynamischer SH-4-Pfad ohne Plattformdienste.\");\n"
+                  "    const auto source = cpu.pc;\n"
+                  "    const auto interpreted =\n"
+                  "        katana::runtime::execute_dynamic_sh4_block(cpu, *active_services, 1u);\n"
+                  "    const auto scheduler = active_services->consume_guest_cycles(\n"
+                  "        interpreted.guest_cycles, context.scheduler_event_budget);\n"
+                  "    if (scheduler.budget_exhausted || scheduler.guest_cycle_budget_exhausted)\n"
+                  "        throw std::runtime_error(\"Dynamischer SH-4-Schedulerbudgetabbruch.\");\n"
+                  "    context.scheduler_cycle = scheduler.guest_cycle;\n"
+                  "    return katana::runtime::make_block_exit(\n"
+                  "        cpu, context, interpreted.end_kind,\n"
+                  "        {source, katana::runtime::canonical_physical_address(source)},\n"
+                  "        katana::runtime::BlockAddress{\n"
+                  "            cpu.pc, katana::runtime::canonical_physical_address(cpu.pc)});\n"
+                  "}\n";
     output
         << "std::uint64_t configured_block_budget() {\n"
            "    static const auto budget = [] {\n"
@@ -1339,46 +1343,56 @@ std::string runtime_dispatch_adapter(const std::string& entry_namespace,
            << "    auto* modules = services.executable_module_catalog();\n"
            << "    if (modules == nullptr)\n"
            << "        throw std::runtime_error(\"Produktpfad besitzt keinen Modul-Catalog.\");\n"
-           << "    katana::runtime::BlockMaterializationPolicy materialization_policy;\n"
-           << "    materialization_policy.enabled = true;\n"
-           << "    materialization_policy.max_blocks = 65536u;\n"
-           << "    materialization_policy.max_bytes = 64u * 1024u * 1024u;\n"
-           << "    materialization_policy.max_materializations_per_run = 65536u;\n"
-           << "    katana::runtime::DemandBlockMaterializer materializer(\n"
-           << "        *modules, table, services.executable_code_tracker(), materialization_policy,\n"
-           << "        [](const std::uint32_t target, const std::span<const std::uint8_t> bytes,\n"
-           << "           const katana::runtime::BlockVariantKey& variant) {\n"
-           << "            katana::runtime::MaterializedBlockCandidate candidate;\n"
-           << "            if (bytes.size() < 2u) return candidate;\n"
-           << "            const auto opcode = static_cast<std::uint16_t>(bytes[0]) |\n"
-           << "                static_cast<std::uint16_t>(bytes[1] << 8u);\n"
-           << "            const auto decoded = katana::sh4::decode(opcode);\n"
-           << "            if (!decoded.is_known()) return candidate;\n"
-           << "            std::size_t size = 2u;\n"
-           << "            candidate.instructions = 1u;\n"
-           << "            if (decoded.has_delay_slot) {\n"
-           << "                if (bytes.size() < 4u) return candidate;\n"
-           << "                const auto slot_opcode = static_cast<std::uint16_t>(bytes[2]) |\n"
-           << "                    static_cast<std::uint16_t>(bytes[3] << 8u);\n"
-           << "                const auto slot = katana::sh4::decode(slot_opcode);\n"
-           << "                if (!slot.is_known() || slot.changes_control_flow())\n"
-           << "                    return candidate;\n"
-           << "                size = 4u; ++candidate.instructions;\n"
-           << "            }\n"
-           << "            candidate.block = {target,\n"
-           << "                katana::runtime::canonical_physical_address(target),\n"
-           << "                static_cast<std::uint32_t>(size),\n"
-           << "                katana::runtime::BlockEndKind::DynamicBranch, variant,\n"
-           << "                &dispatch_dynamic_interpreter, \"runtime-sh4-interpreter\"};\n"
-           << "            candidate.decode_candidate_validated = true;\n"
-           << "            candidate.interpreter_backed = true;\n"
-           << "            candidate.bounded_analysis_complete = false;\n"
-           << "            candidate.ir_verified = false;\n"
-           << "            candidate.code_generated = false;\n"
-           << "            candidate.guest_cycles = candidate.instructions;\n"
-           << "            return candidate;\n"
-           << "        });\n"
-           << "    last_materialization_status = {};\n"
+           << "    katana::runtime::BlockMaterializationPolicy materialization_policy;\n";
+    if (diagnostic_interpreter) {
+        output << "    materialization_policy.enabled = true;\n"
+               << "    materialization_policy.max_blocks = 65536u;\n"
+               << "    materialization_policy.max_bytes = 64u * 1024u * 1024u;\n"
+               << "    materialization_policy.max_materializations_per_run = 65536u;\n"
+               << "    katana::runtime::DemandBlockMaterializer materializer(\n"
+               << "        *modules, table, services.executable_code_tracker(), materialization_policy,\n"
+               << "        [](const std::uint32_t target, const std::span<const std::uint8_t> bytes,\n"
+               << "           const katana::runtime::BlockVariantKey& variant) {\n"
+               << "            katana::runtime::MaterializedBlockCandidate candidate;\n"
+               << "            if (bytes.size() < 2u) return candidate;\n"
+               << "            const auto opcode = static_cast<std::uint16_t>(bytes[0]) |\n"
+               << "                static_cast<std::uint16_t>(bytes[1] << 8u);\n"
+               << "            const auto decoded = katana::sh4::decode(opcode);\n"
+               << "            if (!decoded.is_known()) return candidate;\n"
+               << "            std::size_t size = 2u;\n"
+               << "            candidate.instructions = 1u;\n"
+               << "            if (decoded.has_delay_slot) {\n"
+               << "                if (bytes.size() < 4u) return candidate;\n"
+               << "                const auto slot_opcode = static_cast<std::uint16_t>(bytes[2]) |\n"
+               << "                    static_cast<std::uint16_t>(bytes[3] << 8u);\n"
+               << "                const auto slot = katana::sh4::decode(slot_opcode);\n"
+               << "                if (!slot.is_known() || slot.changes_control_flow())\n"
+               << "                    return candidate;\n"
+               << "                size = 4u; ++candidate.instructions;\n"
+               << "            }\n"
+               << "            candidate.block = {target,\n"
+               << "                katana::runtime::canonical_physical_address(target),\n"
+               << "                static_cast<std::uint32_t>(size),\n"
+               << "                katana::runtime::BlockEndKind::DynamicBranch, variant,\n"
+               << "                &dispatch_dynamic_interpreter, \"runtime-sh4-interpreter\"};\n"
+               << "            candidate.decode_candidate_validated = true;\n"
+               << "            candidate.interpreter_backed = true;\n"
+               << "            candidate.bounded_analysis_complete = false;\n"
+               << "            candidate.ir_verified = false;\n"
+               << "            candidate.code_generated = false;\n"
+               << "            candidate.guest_cycles = candidate.instructions;\n"
+               << "            return candidate;\n"
+               << "        });\n";
+    } else {
+        output << "    // Product ports execute only statically generated native/AOT blocks.\n"
+               << "    // Keeping a disabled materializer preserves a typed, observable\n"
+               << "    // MaterializationFailure::Disabled boundary for an unbound target.\n"
+               << "    materialization_policy.enabled = false;\n"
+               << "    katana::runtime::DemandBlockMaterializer materializer(\n"
+               << "        *modules, table, services.executable_code_tracker(),\n"
+               << "        materialization_policy, {});\n";
+    }
+    output << "    last_materialization_status = {};\n"
            << "    const auto capture_materialization_status = [&] {\n"
            << "        const auto& metrics = materializer.metrics();\n"
            << "        last_materialization_status = {metrics.requests, metrics.cache_hits,\n"
@@ -1473,9 +1487,20 @@ port_metadata(const PortExportOptions& options,
            << ",\"target_name\":" << katana::io::quote_json(options.target_name)
            << ",\"console_profile\":" << katana::io::quote_json(options.console_profile)
            << ",\"diagnostic_partial\":" << (options.diagnostic_partial ? "true" : "false")
+           << ",\"execution_profile\":"
+           << katana::io::quote_json(options.diagnostic_partial ? "diagnostic-interpreter"
+                                                                : "native-aot-product")
+           << ",\"runtime_interpreter_enabled\":"
+           << (options.diagnostic_partial ? "true" : "false")
+           << ",\"unbound_code_policy\":"
+           << katana::io::quote_json(options.diagnostic_partial ? "diagnostic-interpreter"
+                                                                : "typed-materialization-error")
            << ",\"runtime_abi\":" << katana::runtime::abi_version
            << ",\"backend_abi\":" << backend_interface_abi_version
-           << ",\"execution_coverage_contract\":\"validated-demand-v1\""
+           << ",\"execution_coverage_contract\":"
+           << katana::io::quote_json(options.diagnostic_partial
+                                         ? "diagnostic-validated-demand-v1"
+                                         : "native-aot-or-typed-abort-v1")
            << ",\"dispatch_paths_without_validation\":0"
            << ",\"project_identity\":" << katana::io::quote_json(project_identity)
            << ",\"entry_address\":" << entry_address << ",\"boot_size\":" << boot_size
@@ -1699,7 +1724,10 @@ PortExportResult export_dreamcast_port_project(const PreparedPortProgram& prepar
     artifacts.push_back({"include/katana_port.hpp", generated_header(entry_namespace)});
     artifacts.push_back(
         {"code/runtime-dispatch.cpp",
-         runtime_dispatch_adapter(entry_namespace, prepared.program, prepared.entry_address)});
+         runtime_dispatch_adapter(entry_namespace,
+                                  prepared.program,
+                                  prepared.entry_address,
+                                  options.diagnostic_partial)});
     artifacts.push_back({"katana-port.cmake", port_cmake(options.target_name)});
     artifacts.push_back({"metadata/port-project.json",
                          port_metadata(options,

@@ -23,10 +23,12 @@ Nutzerdisc nachgewiesenen Programme `IP.BIN` und BootExecutable vorab aus SH-4
 in C++ beziehungsweise nativen PC-Code. Die getrennte Runtime implementiert
 nur typisierte Dreamcast-Plattformgrenzen; ein freigegebener normaler Portlauf
 darf weder SH-4-Interpreter/JIT noch einen virtuellen Discplayer oder
-Titelhacks enthalten. Der aktuelle bedingungslose Interpreterlink ist eine
-offene `KR-4848`-Produktluecke und keine bereits erreichte Eigenschaft. Im
-Zielvertrag aktiviert unbekannter oder veraenderter Code nur vorab gebundene
-latente AOT-Module oder endet kontrolliert.
+Titelhacks enthalten. Der Produktport erfuellt diese Grenze jetzt: Er emittiert
+und linkt keinen Interpreter, und unbekannter oder veraenderter Code aktiviert
+nur vorab gebundene AOT-Module oder endet kontrolliert. Der begrenzte
+Interpreter bleibt ausschliesslich im expliziten `diagnostic_partial`-Profil.
+Strukturierte Disc-Ladetransaktionen und die vorab erzeugte Registry latenter
+nativer Module bleiben offene `KR-4848`-Arbeit.
 
 ## Planungsregeln
 
@@ -185,6 +187,15 @@ werden nur titelunabhaengige SH-4-, BIOS-, GD-ROM-, DMA-, TA- und PVR-Vertraege.
 - [ ] `KR-4852` - Konsolidierte v0.48-Validierung
 - [ ] `KR-4853` - v0.48 Boot-Gate-Vorbereitung
 - [ ] `KR-4854` - v0.48 interne Freigabe und Tag
+
+Aktueller Kernteilstand: Byteidentische BIOS-/GD-Reloads erhalten vorhandene
+native AOT-Bloecke, waehrend geaenderte Bytes exakt einmal invalidieren. Der
+SH-4-DMAC-Channel-2-Pfad verwendet den oeffentlichen Dreamcast-Vertrag `RS=2`,
+32-Byte-Bursts, inkrementierende Quelle, festes Ziel und `DMAOR.DME+DDT` und ist
+bis TA-Object-List/EOL synthetisch verbunden. Fuer Direct-Texture-Ziele
+`0x11`/`0x13` bleibt die Zielprogression mehrteiliger Transfers als generische
+P1-Luecke offen. Diese Zwischenschritte beweisen noch keinen privaten
+Sonic-Adventure-Gastframe; `KR-4848`, `KR-4849` und `KR-4850` bleiben offen.
 
 `KR-4804` ist `retired` (`superseded_by KR-4853`), `KR-4805` ist `retired`
 (`superseded_by KR-4854`). `KR-4831` bleibt als abgeschlossene Grundlage erhalten.
