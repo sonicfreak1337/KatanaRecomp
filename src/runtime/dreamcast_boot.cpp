@@ -653,6 +653,19 @@ initialize_dreamcast_runtime(CpuState& cpu,
     }
     cpu.memory.write_bytes(dreamcast_disc_boot_address, boot.boot_file, CodeWriteSource::Copy);
     state.loaded_boot_bytes = boot.boot_file.size();
+    reset_dreamcast_direct_boot_cpu(cpu);
+    state.dmac->write_operation(dreamcast_bios_handoff_dmaor);
+    state.aica_registers->write(0x289Cu, 0x48u, MemoryAccessWidth::Halfword);
+    state.aica_registers->write(0x28A8u, 0x18u, MemoryAccessWidth::Byte);
+    state.aica_registers->write(0x28ACu, 0x50u, MemoryAccessWidth::Byte);
+    state.aica_registers->write(0x28B0u, 0x08u, MemoryAccessWidth::Byte);
+    state.io_ports->write_control_a(dreamcast_bios_handoff_pctra);
+    if (boot_region == DreamcastRegion::Europe)
+        state.io_ports->write_data_a(dreamcast_bios_handoff_pal_pdtra);
+    return state;
+}
+
+void reset_dreamcast_direct_boot_cpu(CpuState& cpu) noexcept {
     reset_cpu(cpu,
               ResetState{dreamcast_disc_boot_address,
                          dreamcast_direct_boot_stack,
@@ -665,15 +678,6 @@ initialize_dreamcast_runtime(CpuState& cpu,
     cpu.sgr = dreamcast_direct_boot_stack;
     cpu.dbr = dreamcast_bios_handoff_dbr;
     cpu.pr = dreamcast_bios_handoff_pr;
-    state.dmac->write_operation(dreamcast_bios_handoff_dmaor);
-    state.aica_registers->write(0x289Cu, 0x48u, MemoryAccessWidth::Halfword);
-    state.aica_registers->write(0x28A8u, 0x18u, MemoryAccessWidth::Byte);
-    state.aica_registers->write(0x28ACu, 0x50u, MemoryAccessWidth::Byte);
-    state.aica_registers->write(0x28B0u, 0x08u, MemoryAccessWidth::Byte);
-    state.io_ports->write_control_a(dreamcast_bios_handoff_pctra);
-    if (boot_region == DreamcastRegion::Europe)
-        state.io_ports->write_data_a(dreamcast_bios_handoff_pal_pdtra);
-    return state;
 }
 
 } // namespace katana::runtime

@@ -144,6 +144,8 @@ load_dreamcast_runtime_boot(const std::filesystem::path& descriptor_path);
 [[nodiscard]] DreamcastRuntimeBootImage
 load_dreamcast_runtime_boot_from_pack(const std::filesystem::path& pack_path);
 
+void reset_dreamcast_direct_boot_cpu(CpuState& cpu) noexcept;
+
 [[nodiscard]] DreamcastRuntimeState initialize_dreamcast_runtime(
     CpuState& cpu,
     const DreamcastRuntimeBootImage& boot,

@@ -1,5 +1,6 @@
 #include "katana/runtime/bios_abi.hpp"
 #include "katana/runtime/code_invalidation.hpp"
+#include "katana/runtime/dreamcast_boot.hpp"
 #include "katana/runtime/dreamcast_memory.hpp"
 #include "katana/runtime/gdrom_controller.hpp"
 #include "katana/runtime/pvr.hpp"
@@ -182,6 +183,15 @@ BiosAbiCall call(const BiosAbiVectorKind vector,
 BlockExit bios_abi_block(CpuState& cpu, BlockExecutionContext& context) {
     const auto source = cpu.pc;
     const auto routed = route_hle_bios_abi_call(cpu);
+    if (routed.vector == BiosAbiVectorKind::System && routed.selector == 1u) {
+        reset_dreamcast_direct_boot_cpu(cpu);
+        context.delay_slot_owner_pc.reset();
+        return make_block_exit(cpu,
+                               context,
+                               BlockEndKind::StaticBranch,
+                               {source, canonical_physical_address(source)},
+                               BlockAddress{cpu.pc, canonical_physical_address(cpu.pc)});
+    }
     const auto is_gdrom = routed.vector == BiosAbiVectorKind::MiscGdrom ||
                           routed.vector == BiosAbiVectorKind::Gdrom2;
     if (routed.status != BiosAbiServiceStatus::Completed &&
@@ -310,7 +320,13 @@ BiosAbiCall route_hle_bios_abi_call(const CpuState& cpu) {
                         super_selector,
                         "system-check-disc",
                         Status::Completed);
-        if (selector == 0xFFFFFFFFu || selector == 1u || selector == 3u)
+        if (selector == 1u)
+            return call(vector->kind,
+                        selector,
+                        super_selector,
+                        "system-soft-reboot",
+                        Status::Completed);
+        if (selector == 0xFFFFFFFFu || selector == 3u)
             return call(vector->kind,
                         selector,
                         super_selector,

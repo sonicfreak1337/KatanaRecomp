@@ -1,5 +1,6 @@
 #include "katana/runtime/bios_abi.hpp"
 #include "katana/runtime/code_invalidation.hpp"
+#include "katana/runtime/dreamcast_boot.hpp"
 #include "katana/runtime/dreamcast_memory.hpp"
 
 #include <cstdlib>
@@ -170,6 +171,28 @@ int main() {
     static_cast<void>(system_block->get().function(cpu, context));
     require(cpu.r[0] == 0xFFFFFFFFu,
             "System-Disc-Check meldet ohne angebundenes Laufwerk ein Medium.");
+
+    cpu.memory.write_u32(0x8C002400u, 0xC001D00Du, CodeWriteSource::Copy);
+    cpu.pc = vectors[5].handler_address;
+    cpu.pr = 0x8C123456u;
+    cpu.r[4] = 1u;
+    cpu.gbr = 0xDEADBEEFu;
+    context.sync_point = BlockSyncPoint::Entry;
+    context.delay_slot_owner_pc = 0x8C000222u;
+    const auto soft_reboot = route_hle_bios_abi_call(cpu);
+    require(soft_reboot.service == "system-soft-reboot" &&
+                soft_reboot.status == BiosAbiServiceStatus::Completed,
+            "System-Soft-Reboot ist nicht als bekannter Lifecycle geroutet.");
+    const auto reboot_exit = system_block->get().function(cpu, context);
+    require(reboot_exit.kind == BlockEndKind::StaticBranch && reboot_exit.target.has_value() &&
+                reboot_exit.target->virtual_address == dreamcast_disc_boot_address &&
+                cpu.pc == dreamcast_disc_boot_address &&
+                cpu.r[15] == dreamcast_direct_boot_stack &&
+                cpu.vbr == dreamcast_direct_boot_vector_base &&
+                cpu.gbr == dreamcast_bios_handoff_gbr && cpu.pr == dreamcast_bios_handoff_pr &&
+                !context.delay_slot_owner_pc.has_value() &&
+                cpu.memory.read_u32(0x8C002400u) == 0xC001D00Du,
+            "System-Soft-Reboot stellt den Direct-Boot-CPU-Zustand nicht ohne RAM-Verlust her.");
 
     cpu.pc = vectors[3].handler_address;
     cpu.r[6] = 0u;

@@ -87,7 +87,15 @@ SH-4-Exceptionvektoren. Der neue Dispatch-Hotspotbericht wies zudem 2.097.152
 Aufrufe desselben gueltigen
 Vier-Byte-Kopierpfads als Bootzeit-Hotspot statt als Dispatchfehler nach.
 
-Runtime-ABI 26 und Portprojektvertrag 13 bilden den kumulativen v0.48-Stand ab.
+Der anschliessende PAL-Lauf erreichte reproduzierbar `SYSTEM 1`. Der gegen
+Flycast-Reios und die lokale BIOS-Zerlegung abgeglichene allgemeine Fix bildet
+diesen Aufruf nun als nativen Disc-Soft-Reboot ab: typisierter Sprung zum
+Direct-Boot-Einstieg, erneuerter SH-4-Handoff und Erhalt von RAM sowie
+Runtime-Codeprovenienz. Die fokussierten BIOS-, Boot-, Runtime- und
+Portexporttests sind gruen; der private Produktnachweis folgt mit einem frisch
+exportierten Port.
+
+Runtime-ABI 27 und Portprojektvertrag 13 bilden den kumulativen v0.48-Stand ab.
 PlatformServices-ABI 7 bleibt unveraendert.
 
 Die zusammenhaengende zweite Bootkorrekturrunde ist implementiert. Sie umfasst
@@ -147,7 +155,7 @@ Recipe 2. Die Content-Root entsteht aus den wirklich gelesenen Raw-Chunks und
 wird sowohl beim Schreiben gegen die Recipe als auch beim Oeffnen gegen
 Tracktabelle und Chunkindex geprueft; abweichendes Staging wird nicht
 veroeffentlicht. Der damals eingefuehrte AICA-Vertrag ist im aktuellen
-Runtime-ABI 26 und Portprojektvertrag 13 enthalten. Das kumulative v0.48-
+  Runtime-ABI 27 und Portprojektvertrag 13 enthalten. Das kumulative v0.48-
 Debug-Gate ist mit 180 von 180 Tests bestanden; der anschliessende private
 PAL-Nachweis ist erfolgt: Der vollstaendige neue Port entstand mit 12 Workern
 in 126,8 Sekunden, ein inkrementeller Runtime-Neubau in 77,8 Sekunden. Die

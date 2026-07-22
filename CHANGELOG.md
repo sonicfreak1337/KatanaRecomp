@@ -4,6 +4,11 @@
 
 ### Geaendert
 
+- Der BIOS-`SYSTEM 1`-Lifecycle ist nun als allgemeiner nativer Disc-Soft-Reboot
+  implementiert. Er verzweigt typisiert zum Direct-Boot-Einstieg, stellt den
+  dokumentierten SH-4-BIOS-Handoff wieder her und behaelt RAM, Discquelle und
+  Runtime-Codeprovenienz bei. BIOS-ABI-Vertrag 4 und Runtime-ABI 27
+  versionieren die neue Kontrollflusssemantik.
 - Der native Disc-Boot bildet den nach dem Dreamcast-BIOS erwarteten SH-4-
   und Geraetehandoff jetzt vollstaendig ab: `T`, `FPSCR`, GBR/SSR/SPC/SGR/DBR/
   PR, `DMAOR=0x8201`, AICA-Interruptmasken und der PAL-Broadcast-Portzustand

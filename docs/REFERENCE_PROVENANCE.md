@@ -41,13 +41,20 @@ verwendet.
 - ausgewiesene Lizenz: GPL-2.0
 - betrachteter Umfang: Trennung virtueller/physischer Blockadressen,
   Blockendklassen, zustandsabhaengige Blockvarianten, seitenweise
-  Codeinvalidierung und gastzyklusbasierte Ablaufplanung
+  Codeinvalidierung, gastzyklusbasierte Ablaufplanung sowie die semantische
+  Einordnung der Reios-`SYSTEM`-Lifecycle-Aufrufe
 
 Flycast diente nur als Architektur-Plausibilitaetsvergleich. Keine Datei,
 Funktion, Tabelle oder Konstante wurde kopiert, uebersetzt oder gelinkt. Eine
 direkte Flycast-Einbindung ist deaktiviert und darf erst nach einer expliziten
 Projektlizenzentscheidung erfolgen, welche die GPL-2.0-Pflichten fuer das
 Gesamtwerk bewertet.
+
+Fuer den v0.48-Bootaudit bestaetigte `reios_sys_misc` ausschliesslich die
+bereits unabhaengig aus BIOS- und SH-4-ABI-Analyse bestimmte Bedeutung von
+`SYSTEM 1` als Disc-Soft-Reboot. KatanaRecomp implementiert den Vorgang als
+eigenen nativen Plattformkontrollfluss und uebernimmt weder Flycast-Code noch
+dessen Emulationsarchitektur.
 
 ## Referenzvergleich: dcrecomp
 
