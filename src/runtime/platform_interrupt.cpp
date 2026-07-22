@@ -23,9 +23,9 @@ constexpr std::array<PlatformInterruptSource, Sh4Dmac::channel_count> dma_source
 
 constexpr std::array<PlatformInterruptSource, PlatformInterruptRouter::external_line_count>
     external_sources = {
-        PlatformInterruptSource::ExternalIrl13,
-        PlatformInterruptSource::ExternalIrl11,
-        PlatformInterruptSource::ExternalIrl9,
+        PlatformInterruptSource::ExternalLevel2,
+        PlatformInterruptSource::ExternalLevel4,
+        PlatformInterruptSource::ExternalLevel6,
     };
 
 constexpr std::array<PlatformInterruptSource, PlatformInterruptRouter::scif_interrupt_count>
@@ -35,7 +35,7 @@ constexpr std::array<PlatformInterruptSource, PlatformInterruptRouter::scif_inte
                     PlatformInterruptSource::ScifTransmit};
 
 constexpr std::array<std::uint8_t, PlatformInterruptRouter::external_line_count> external_levels = {
-    13u, 11u, 9u};
+    2u, 4u, 6u};
 
 } // namespace
 

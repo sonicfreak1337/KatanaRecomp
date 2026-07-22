@@ -65,9 +65,9 @@ int main() {
             "Retail-Systemdienste erreichen den ASIC nicht im Gastzeitbudget.");
     cpu.vbr = 0x8C000000u;
     cpu.set_interrupt_mask(0u);
-    require(router.accept(cpu) && cpu.intevt == 0x000003A0u && asic->events().size() == 4u &&
+    require(router.accept(cpu) && cpu.intevt == 0x00000320u && asic->events().size() == 4u &&
                 boot.firmware_handoff->runtime_symbols().size() == 12u,
-            "Gemeinsamer Retail-Bootpfad erreicht BIOS-Handoff und ASIC-IRL9 nicht.");
+            "Gemeinsamer Retail-Bootpfad erreicht BIOS-Handoff und ASIC-Level-6 nicht.");
 
     std::cout << "KR_V046_RETAIL_BOOT_SERVICES_READY\n";
 }

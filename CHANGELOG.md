@@ -4,6 +4,14 @@
 
 ### Geaendert
 
+- Die drei externen Dreamcast-System-ASIC-Interruptpfade entsprechen jetzt
+  dem dokumentierten Levelvertrag. Maskenfenster `0x005F6910`, `0x005F6920`
+  und `0x005F6930` routen auf SH-4-Level 2, 4 und 6 mit `INTEVT` `0x3A0`,
+  `0x360` und `0x320`. Zuvor waren Reihenfolge und feste Prioritaeten als
+  13/11/9 modelliert; dadurch erhielt unter anderem ein Level-6-Event den
+  Level-2-Code und fiel im Gast faelschlich auf den Firmwarehandler zurueck.
+  Runtime-ABI 23 korrigiert Namen und Semantik; Regressionen pruefen alle drei
+  Leitungen und die echte System-ASIC-Maskenzuordnung.
 - Das zuvor nur vom Auditor behauptete AICA-RTC-Fenster bei `0x00710000`
   besitzt jetzt einen echten Produktpfad. `RTC_HIGH`, `RTC_LOW` und
   `RTC_ENABLE` liefern den 32-Bit-Zaehler seit der Dreamcast-Epoche, laufen
@@ -115,7 +123,7 @@
   MMU-faehigen `guest_read_*`-/`guest_write_*`-Schnittstellen. Die globale
   nachtraegliche Zeichenersetzung des gesamten Funktionstexts ist entfallen.
 - PlatformServices-ABI 7 versioniert den korrigierten linearen und
-  gastzeitgebundenen DMA-Vertrag. Runtime-ABI 22 und Portprojektvertrag 11
+  gastzeitgebundenen DMA-Vertrag. Runtime-ABI 23 und Portprojektvertrag 11
   bleiben die aktuellen v0.48-Vertraege.
 - Der kumulative Debug-Gate umfasst 180 Tests und ist vollstaendig gruen.
   Die beiden Tests, die eigenstaendige Portprojekte mit CMake/MSVC bauen,
@@ -154,7 +162,7 @@
   der Recipe, verwirft abweichendes Staging und veroeffentlicht dadurch keinen
   unterdessen veraenderten oder semantisch umgebundenen Discinhalt. Der Parser
   rekonstruiert Trackintegritaet und Content-Root aus dem Chunkindex.
-- Runtime-ABI 22 und Portprojektvertrag 11 versionieren kumulativ den gemeinsamen
+- Runtime-ABI 23 und Portprojektvertrag 11 versionieren kumulativ den gemeinsamen
   AICA-Sound-RAM-/Audiopfad sowie den neuen Disc-Identitaetsvertrag.
 - Der Software-PVR fuehrt die TSP-Fogmodi jetzt im echten Fragmentpfad aus:
   Look-up-Table-Fog dekodiert `FOG_DENSITY` und interpoliert die 128

@@ -71,10 +71,14 @@ hatte das AICA-RTC-Fenster faelschlich als implementiert bewertet, obwohl die
 Runtime nur die AICA-Register bis `0x00707FFF` mappte. Die drei RTC-Register
 sind nun samt Gastzeit, Write-Enable, Breiten, Aliasen und Reset allgemein
 implementiert; auch der Auditorvertrag besitzt positive und negative
-Registertests. Der erneute private Produktnachweis und der erste Gastframe
-bleiben offen.
+Registertests. Im ersten ABI-22-Lauf ist der RTC-Address-Error nachweislich
+verschwunden. Der folgende `INTEVT=0x3A0`-Fallback belegte stattdessen eine
+vertauschte System-ASIC-Zuordnung: Das vom Gast aktivierte Level-6-Maskenfenster
+wurde als Level 2 zugestellt. Die drei Leitungen sind nun allgemein auf
+Level 2/4/6 und `INTEVT` `0x3A0/0x360/0x320` korrigiert; der erneute private
+Produktnachweis bleibt offen.
 
-Runtime-ABI 22 und Portprojektvertrag 11 bilden den kumulativen v0.48-Stand ab.
+Runtime-ABI 23 und Portprojektvertrag 11 bilden den kumulativen v0.48-Stand ab.
 PlatformServices-ABI 7 bleibt unveraendert.
 
 Der iterative Portworkflow verwendet jetzt sicheres inkrementelles Staging:
@@ -103,7 +107,7 @@ Recipe 2. Die Content-Root entsteht aus den wirklich gelesenen Raw-Chunks und
 wird sowohl beim Schreiben gegen die Recipe als auch beim Oeffnen gegen
 Tracktabelle und Chunkindex geprueft; abweichendes Staging wird nicht
 veroeffentlicht. Der damals eingefuehrte AICA-Vertrag ist im aktuellen
-Runtime-ABI 22 und Portprojektvertrag 11 enthalten. Das kumulative v0.48-
+Runtime-ABI 23 und Portprojektvertrag 11 enthalten. Das kumulative v0.48-
 Debug-Gate ist mit 180 von 180 Tests bestanden; der anschliessende private
 PAL-Nachweis ist erfolgt: Der vollstaendige neue Port entstand mit 12 Workern
 in 126,8 Sekunden, ein inkrementeller Runtime-Neubau in 77,8 Sekunden. Die

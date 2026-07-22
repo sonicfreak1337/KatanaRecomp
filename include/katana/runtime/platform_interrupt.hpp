@@ -15,9 +15,9 @@ inline constexpr std::uint32_t sh4_intc_area7_base = 0x1FD00000u;
 inline constexpr std::size_t sh4_intc_register_size = 0x14u;
 
 enum class PlatformInterruptSource : std::uint32_t {
-    ExternalIrl13 = 0x00000320u,
-    ExternalIrl11 = 0x00000360u,
-    ExternalIrl9 = 0x000003A0u,
+    ExternalLevel6 = 0x00000320u,
+    ExternalLevel4 = 0x00000360u,
+    ExternalLevel2 = 0x000003A0u,
     Tmu0 = 0x00000400u,
     Tmu1 = 0x00000420u,
     Tmu2 = 0x00000440u,

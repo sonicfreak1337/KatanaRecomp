@@ -1,6 +1,7 @@
 #include "katana/runtime/exception.hpp"
 #include "katana/runtime/platform_interrupt.hpp"
 
+#include <cstdlib>
 #include <iostream>
 #include <memory>
 #include <stdexcept>
@@ -10,7 +11,8 @@ namespace {
 
 void require(const bool condition, const std::string& message) {
     if (!condition) {
-        throw std::runtime_error(message);
+        std::cerr << "TEST FEHLGESCHLAGEN: " << message << '\n';
+        std::exit(EXIT_FAILURE);
     }
 }
 
@@ -61,12 +63,12 @@ int main() {
     require(router.tmu_level(0u) == 0u && router.rtc_level() == 0u && router.dma_level() == 0u,
             "INTC-Reset hinterlaesst Interruptprioritaeten.");
 
-    router.set_tmu_level(0u, 6u);
-    router.set_rtc_level(5u);
-    router.set_dma_level(8u);
-    router.set_scif_level(7u);
+    router.set_tmu_level(0u, 4u);
+    router.set_rtc_level(3u);
+    router.set_dma_level(5u);
+    router.set_scif_level(4u);
     router.set_scif_pending(3u, true);
-    router.set_external_pending(0u, true);
+    router.set_external_pending(2u, true);
 
     tmu.write_constant(0u, 0u);
     tmu.write_counter(0u, 0u);
@@ -92,7 +94,7 @@ int main() {
                 controller.pending(
                     static_cast<InterruptSource>(PlatformInterruptSource::ScifTransmit)) &&
                 controller.pending(
-                    static_cast<InterruptSource>(PlatformInterruptSource::ExternalIrl13)),
+                    static_cast<InterruptSource>(PlatformInterruptSource::ExternalLevel6)),
             "Plattformrouter spiegelt nicht alle gleichzeitig gesetzten Quellen.");
     router.set_scif_pending(3u, false);
     static_cast<void>(router.synchronize());
@@ -106,7 +108,7 @@ int main() {
     cpu.set_interrupt_mask(0u);
     require(router.accept(cpu) && cpu.intevt == 0x00000320u && cpu.spc == 0x8C010000u,
             "Gleiches Level wird nicht nach stabiler Quellprioritaet angenommen.");
-    router.set_external_pending(0u, false);
+    router.set_external_pending(2u, false);
     return_from_exception(cpu);
     require(router.accept(cpu) && cpu.intevt == 0x00000640u,
             "DMTE0 wird nach Freigabe der hoeheren externen Quelle nicht zugestellt.");
@@ -116,7 +118,7 @@ int main() {
     require(!controller.pending(static_cast<InterruptSource>(PlatformInterruptSource::Dma0)),
             "Quittiertes DMTE bleibt im zentralen Controller haengen.");
 
-    cpu.set_interrupt_mask(5u);
+    cpu.set_interrupt_mask(3u);
     require(router.accept(cpu) && cpu.intevt == 0x00000400u,
             "TMU-Level oberhalb IMASK wird nicht angenommen.");
     tmu.write_control(0u, 0u);
@@ -145,17 +147,33 @@ int main() {
             "DMAE wird nicht als priorisierte Plattformausnahme zugestellt.");
     dmac.write_operation(0u);
     return_from_exception(cpu);
+    dmac.reset();
+    rtc.set_rtc_enabled(false);
+    rtc.acknowledge_periodic_interrupt();
     static_cast<void>(router.synchronize());
 
     router.set_tmu_level(1u, 0xFFu);
     require(router.tmu_level(1u) == 15u, "TMU-Prioritaet wird nicht auf 15 begrenzt.");
-    router.set_external_pending(2u, true);
+    router.set_external_pending(0u, true);
     cpu.write_sr(cpu.read_sr() | sr_bl_mask);
     require(!router.accept(cpu), "BL sperrt eine externe Plattformleitung nicht.");
     cpu.write_sr(cpu.read_sr() & ~sr_bl_mask);
-    cpu.set_interrupt_mask(8u);
-    require(router.accept(cpu) && cpu.intevt == 0x000003A0u,
-            "Externe IRL9-Leitung wird nach BL-Freigabe nicht auf Level 9 zugestellt.");
+    cpu.set_interrupt_mask(1u);
+    const auto level2_accepted = router.accept(cpu);
+    require(level2_accepted && cpu.intevt == 0x000003A0u,
+            "Externe ASIC-Leitung 0 wird nicht als Level 2/INTEVT 0x3A0 zugestellt.");
+    router.set_external_pending(0u, false);
+    return_from_exception(cpu);
+    router.set_external_pending(1u, true);
+    cpu.set_interrupt_mask(3u);
+    require(router.accept(cpu) && cpu.intevt == 0x00000360u,
+            "Externe ASIC-Leitung 1 wird nicht als Level 4/INTEVT 0x360 zugestellt.");
+    router.set_external_pending(1u, false);
+    return_from_exception(cpu);
+    router.set_external_pending(2u, true);
+    cpu.set_interrupt_mask(5u);
+    require(router.accept(cpu) && cpu.intevt == 0x00000320u,
+            "Externe ASIC-Leitung 2 wird nicht als Level 6/INTEVT 0x320 zugestellt.");
     router.set_external_pending(2u, false);
     return_from_exception(cpu);
     router.reset();

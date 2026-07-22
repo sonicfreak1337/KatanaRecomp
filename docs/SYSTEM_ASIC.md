@@ -8,10 +8,11 @@ und
 [`hardware/asic.c`](https://github.com/KallistiOS/KallistiOS/blob/master/kernel/arch/dreamcast/hardware/asic.c).
 
 Die drei Pending-/ACK-Baenke liegen bei `0x005F6900` bis `0x005F6908`.
-Masken fuer IRL13, IRL11 und IRL9 liegen jeweils in drei Baenken bei
-`0x005F6910..18`, `0x005F6920..28` und `0x005F6930..38`. Writes in eine
-Pending-Bank quittieren gesetzte Bits; Masken bestimmen, welche externe
-SH-4-Leitung der zentrale `PlatformInterruptRouter` setzt.
+Masken fuer SH-4-Level 2, 4 und 6 liegen jeweils in drei Baenken bei
+`0x005F6910..18`, `0x005F6920..28` und `0x005F6930..38`. Sie liefern die
+`INTEVT`-Codes `0x3A0`, `0x360` und `0x320`. Writes in eine Pending-Bank
+quittieren gesetzte Bits; Masken bestimmen, welche externe SH-4-Leitung der
+zentrale `PlatformInterruptRouter` setzt.
 
 Der Alpha-Vertrag fuehrt folgende Quellen durch dieselbe Matrix:
 

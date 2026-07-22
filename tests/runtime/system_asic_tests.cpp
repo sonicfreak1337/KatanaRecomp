@@ -115,8 +115,9 @@ int main() {
                 router.external_pending(2u),
             "PVR/Maple/GD-ROM/AICA-Ereignisse erreichen nicht denselben Status-/Maskenpfad.");
     static_cast<void>(router.synchronize());
-    require(controller.pending(static_cast<InterruptSource>(PlatformInterruptSource::ExternalIrl9)),
-            "Maskierte System-ASIC-Ereignisse erreichen IRL9 nicht.");
+    require(controller.pending(
+                static_cast<InterruptSource>(PlatformInterruptSource::ExternalLevel6)),
+            "Maskierte System-ASIC-Ereignisse erreichen die Level-6-Leitung nicht.");
     bus.write_u32(0x805F6900u, 0x0008D008u);
     bus.write_u32(0x805F6904u, 0x00000003u);
     require(!router.external_pending(2u), "ACK loescht die gemeinsame ASIC-Leitung nicht.");

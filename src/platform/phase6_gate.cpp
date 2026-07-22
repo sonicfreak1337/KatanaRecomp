@@ -151,8 +151,8 @@ Phase6GateReport run_phase6_gate(const std::filesystem::path& descriptor_path,
     runtime::Sh4Dmac dmac(scheduler, platform_memory, runtime::DmaTiming{1u});
     runtime::InterruptController interrupts;
     runtime::PlatformInterruptRouter router(interrupts, tmu, rtc, dmac);
-    router.set_tmu_level(0u, 6u);
-    router.set_dma_level(8u);
+    router.set_tmu_level(0u, 2u);
+    router.set_dma_level(4u);
 
     tmu.write_constant(0u, 0u);
     tmu.write_counter(0u, 0u);
@@ -173,7 +173,7 @@ Phase6GateReport run_phase6_gate(const std::filesystem::path& descriptor_path,
                                     runtime::GdRomTiming{2u, 1u},
                                     [&](const std::uint64_t) {
                                         ++report.gdrom_completions;
-                                        router.set_external_pending(0u, true);
+                                        router.set_external_pending(2u, true);
                                     });
     static_cast<void>(gdrom.submit({runtime::GdRomCommand::ReadSectors, disc.data_track_lba, 1u}));
 
@@ -202,7 +202,7 @@ Phase6GateReport run_phase6_gate(const std::filesystem::path& descriptor_path,
     }
     require_gate(report.interrupts_delivered == 1u &&
                      cpu.intevt == static_cast<std::uint32_t>(
-                                       runtime::PlatformInterruptSource::ExternalIrl13),
+                                       runtime::PlatformInterruptSource::ExternalLevel6),
                  "GD-ROM-Abschlussinterrupt wurde nicht angenommen.");
 
     report.checkpoint = "KR_PHASE6_MAIN_EXECUTION_STARTED";

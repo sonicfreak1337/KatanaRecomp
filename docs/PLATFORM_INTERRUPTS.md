@@ -10,12 +10,15 @@ an einem expliziten Safepoint und verwendet keine Hostthreads oder Hostzeit.
 - RTC Periodic und Carry: `0x4A0`, `0x4C0`
 - DMTE0 bis DMTE3: `0x640` bis `0x6A0`
 - DMAE: `0x6C0`
-- Dreamcast-externe IRL13-, IRL11- und IRL9-Leitungen: `0x320`, `0x360`, `0x3A0`
+- Dreamcast-externe Level-6-, Level-4- und Level-2-Leitungen: `0x320`, `0x360`,
+  `0x3A0`
 
 TMU-Kanaele besitzen getrennte Prioritaeten. RTC-Quellen teilen eine Prioritaet,
 ebenso alle DMAC-Quellen; das entspricht den IPRA-/IPRC-Gruppen des SH-4. Diese
-programmierbaren Level werden auf 0 bis 15 begrenzt. Die drei externen Leitungen
-besitzen ihre festen Dreamcast-Level 13, 11 und 9. Bei gleichem Level bleibt die
+programmierbaren Level werden auf 0 bis 15 begrenzt. Die drei externen
+Dreamcast-Leitungen besitzen die festen Level 2, 4 und 6. Die
+System-ASIC-Maskenfenster ab `0x005F6910`, `0x005F6920` und `0x005F6930`
+speisen sie in genau dieser Reihenfolge; bei gleichem Level bleibt die
 bestehende stabile Quellordnung erhalten.
 
 Der Router spiegelt levelartige Pending-Zustaende. Wird ein Interrupt angenommen,
@@ -30,6 +33,9 @@ den SH-4 verdrahtet. Frame- und Audio-Taktung folgt in KR-3105.
 
 Primaerreferenz:
 
+- Sega, *Dreamcast/Dev.Box System Architecture*, Abschnitt 2.7.3: externe
+  Level 6/4/2 und `INTEVT` `0x320/0x360/0x3A0`:
+  <https://segaretro.org/images/7/78/DreamcastDevBoxSystemArchitecture.pdf>
 - Renesas, *SH7750, SH7750S, SH7750R Group User's Manual: Hardware*, Abschnitte
   5 und 19, Rev. 7.02, 2013:
   <https://www.renesas.com/en/document/mah/sh7750-sh7750s-sh7750r-group-users-manual-hardware>
