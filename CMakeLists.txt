@@ -265,6 +265,34 @@ target_include_directories(
         $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
 )
 
+# A static runtime built with sanitizers carries sanitizer-dependent ABI details
+# into every object file. In particular, MSVC's ASan-enabled STL emits
+# annotate_string/annotate_vector mismatch records. Consumers therefore must be
+# compiled with the same sanitizer profile; keeping these flags PRIVATE makes
+# an otherwise valid installed SDK fail at link time. Export the profile as
+# target usage requirements so build-tree and installed consumers inherit it
+# through KatanaRecomp::runtime.
+if(KATANA_ENABLE_SANITIZERS)
+    if(MSVC)
+        target_compile_options(katana_runtime INTERFACE /fsanitize=address /Oy-)
+        target_link_options(katana_runtime INTERFACE /INCREMENTAL:NO)
+    elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+        target_compile_options(
+            katana_runtime
+            INTERFACE
+                -fsanitize=address,undefined
+                -fno-omit-frame-pointer
+                -fno-sanitize-recover=all
+        )
+        target_link_options(
+            katana_runtime
+            INTERFACE
+                -fsanitize=address,undefined
+                -fno-sanitize-recover=all
+        )
+    endif()
+endif()
+
 katana_enable_warnings(katana_runtime)
 if(MSVC)
     target_compile_options(katana_runtime PRIVATE /fp:strict)
