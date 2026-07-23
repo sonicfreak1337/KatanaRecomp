@@ -312,11 +312,11 @@ function Get-WorkflowFailureClass {
     return $null
 }
 
-function Test-ExactContractInteger {
-    param($Value, [int]$Expected)
+function Test-IntegralJsonNumber {
+    param($Value)
     if ($null -eq $Value) { return $false }
     $typeCode = [Type]::GetTypeCode($Value.GetType())
-    if ($typeCode -notin @(
+    return $typeCode -in @(
         [TypeCode]::SByte,
         [TypeCode]::Byte,
         [TypeCode]::Int16,
@@ -325,9 +325,21 @@ function Test-ExactContractInteger {
         [TypeCode]::UInt32,
         [TypeCode]::Int64,
         [TypeCode]::UInt64
-    )) {
-        return $false
+    )
+}
+
+function Get-StrictHostTimeoutSeconds {
+    param($Value)
+    if (-not (Test-IntegralJsonNumber $Value) -or
+        [decimal]$Value -lt 1 -or [decimal]$Value -gt 900) {
+        throw 'host_timeout_seconds muss eine integrale JSON-Zahl zwischen 1 und 900 sein.'
     }
+    return [int]$Value
+}
+
+function Test-ExactContractInteger {
+    param($Value, [int]$Expected)
+    if (-not (Test-IntegralJsonNumber $Value)) { return $false }
     return [decimal]$Value -eq [decimal]$Expected
 }
 
@@ -470,27 +482,77 @@ $requiredRuntimeAbi = [int]$requiredContracts.runtime_abi
 $requiredPortContract = [int]$requiredContracts.port_project
 
 if ($SelfTest) {
-    foreach ($parserCase in @(
+    foreach ($variableName in @(
+        'KATANA_RUNTIME_ABI_VERSION',
+        'KATANA_PORT_PROJECT_CONTRACT_VERSION'
+    )) {
+        foreach ($parserCase in @(
+            [pscustomobject]@{
+                name = 'doppelte Variable'
+                content = "set($variableName 1)`nset($variableName 2)"
+            },
+            [pscustomobject]@{
+                name = 'ungueltiger Wert'
+                content = "set($variableName current)"
+            },
+            [pscustomobject]@{
+                name = 'Nullwert'
+                content = "set($variableName 0)"
+            }
+        )) {
+            try {
+                [void](Get-StrictCMakePositiveInteger $parserCase.content `
+                    $variableName '<self-test>')
+                throw 'ungueltige-vertragsquelle-akzeptiert'
+            } catch {
+                if ($_.Exception.Message -eq 'ungueltige-vertragsquelle-akzeptiert') {
+                    throw "$($parserCase.name) fuer $variableName wurde als kanonische Vertragsquelle akzeptiert."
+                }
+            }
+        }
+    }
+    foreach ($validTimeoutJson in @(
+        '{"host_timeout_seconds":1}',
+        '{"host_timeout_seconds":900}'
+    )) {
+        $validTimeout = ($validTimeoutJson | ConvertFrom-Json).host_timeout_seconds
+        if ((Get-StrictHostTimeoutSeconds $validTimeout) -ne [int]$validTimeout) {
+            throw 'Gueltige host_timeout_seconds-Grenze wurde nicht exakt erhalten.'
+        }
+    }
+    foreach ($timeoutCase in @(
         [pscustomobject]@{
-            name = 'doppelte Variable'
-            content = "set(KATANA_RUNTIME_ABI_VERSION 1)`nset(KATANA_RUNTIME_ABI_VERSION 2)"
+            name = 'Null'
+            json = '{"host_timeout_seconds":0}'
         },
         [pscustomobject]@{
-            name = 'ungueltiger Wert'
-            content = 'set(KATANA_RUNTIME_ABI_VERSION current)'
+            name = 'ueber 900'
+            json = '{"host_timeout_seconds":901}'
         },
         [pscustomobject]@{
-            name = 'Nullwert'
-            content = 'set(KATANA_RUNTIME_ABI_VERSION 0)'
+            name = 'String'
+            json = '{"host_timeout_seconds":"30"}'
+        },
+        [pscustomobject]@{
+            name = 'Gleitkomma'
+            json = '{"host_timeout_seconds":30.0}'
+        },
+        [pscustomobject]@{
+            name = 'Array'
+            json = '{"host_timeout_seconds":[30]}'
         }
     )) {
+        $invalidTimeout = ($timeoutCase.json | ConvertFrom-Json).host_timeout_seconds
         try {
-            [void](Get-StrictCMakePositiveInteger $parserCase.content `
-                'KATANA_RUNTIME_ABI_VERSION' '<self-test>')
-            throw 'ungueltige-vertragsquelle-akzeptiert'
+            [void](Get-StrictHostTimeoutSeconds $invalidTimeout)
+            throw 'ungueltigen-timeout-akzeptiert'
         } catch {
-            if ($_.Exception.Message -eq 'ungueltige-vertragsquelle-akzeptiert') {
-                throw "$($parserCase.name) wurde als kanonische Vertragsquelle akzeptiert."
+            if ($_.Exception.Message -eq 'ungueltigen-timeout-akzeptiert') {
+                throw "$($timeoutCase.name)-Timeout wurde akzeptiert."
+            }
+            if ($_.Exception.Message -ne
+                'host_timeout_seconds muss eine integrale JSON-Zahl zwischen 1 und 900 sein.') {
+                throw
             }
         }
     }
@@ -509,6 +571,8 @@ if ($SelfTest) {
     foreach ($mismatch in @(
         [pscustomobject]@{
             name = 'Runtime-ABI'
+            job = $matchingJobResult
+            plan = $matchingBuildPlan
             metadata = [pscustomobject]@{
                 contract_version = $requiredPortContract
                 runtime_abi = 0
@@ -516,6 +580,8 @@ if ($SelfTest) {
         },
         [pscustomobject]@{
             name = 'Portvertrag'
+            job = $matchingJobResult
+            plan = $matchingBuildPlan
             metadata = [pscustomobject]@{
                 contract_version = 0
                 runtime_abi = $requiredRuntimeAbi
@@ -523,6 +589,8 @@ if ($SelfTest) {
         },
         [pscustomobject]@{
             name = 'Runtime-ABI-String'
+            job = $matchingJobResult
+            plan = $matchingBuildPlan
             metadata = [pscustomobject]@{
                 contract_version = $requiredPortContract
                 runtime_abi = [string]$requiredRuntimeAbi
@@ -530,14 +598,70 @@ if ($SelfTest) {
         },
         [pscustomobject]@{
             name = 'Portvertrag-Gleitkomma'
+            job = $matchingJobResult
+            plan = $matchingBuildPlan
             metadata = [pscustomobject]@{
                 contract_version = [double]$requiredPortContract
                 runtime_abi = $requiredRuntimeAbi
             }
+        },
+        [pscustomobject]@{
+            name = 'Runtime-ABI-Array'
+            job = $matchingJobResult
+            plan = $matchingBuildPlan
+            metadata = [pscustomobject]@{
+                contract_version = $requiredPortContract
+                runtime_abi = @($requiredRuntimeAbi)
+            }
+        },
+        [pscustomobject]@{
+            name = 'Portvertrag-String'
+            job = $matchingJobResult
+            plan = $matchingBuildPlan
+            metadata = [pscustomobject]@{
+                contract_version = [string]$requiredPortContract
+                runtime_abi = $requiredRuntimeAbi
+            }
+        },
+        [pscustomobject]@{
+            name = 'Jobvertrag-String'
+            job = [pscustomobject]@{ version = [string]$requiredApplicationContract }
+            plan = $matchingBuildPlan
+            metadata = $matchingPortMetadata
+        },
+        [pscustomobject]@{
+            name = 'Jobvertrag-Gleitkomma'
+            job = [pscustomobject]@{ version = [double]$requiredApplicationContract }
+            plan = $matchingBuildPlan
+            metadata = $matchingPortMetadata
+        },
+        [pscustomobject]@{
+            name = 'Jobvertrag-Array'
+            job = [pscustomobject]@{ version = @($requiredApplicationContract) }
+            plan = $matchingBuildPlan
+            metadata = $matchingPortMetadata
+        },
+        [pscustomobject]@{
+            name = 'Buildplanvertrag-String'
+            job = $matchingJobResult
+            plan = [pscustomobject]@{ version = [string]$requiredApplicationContract }
+            metadata = $matchingPortMetadata
+        },
+        [pscustomobject]@{
+            name = 'Buildplanvertrag-Gleitkomma'
+            job = $matchingJobResult
+            plan = [pscustomobject]@{ version = [double]$requiredApplicationContract }
+            metadata = $matchingPortMetadata
+        },
+        [pscustomobject]@{
+            name = 'Buildplanvertrag-Array'
+            job = $matchingJobResult
+            plan = [pscustomobject]@{ version = @($requiredApplicationContract) }
+            metadata = $matchingPortMetadata
         }
     )) {
         try {
-            Assert-ContractCompatibility $matchingJobResult $matchingBuildPlan $mismatch.metadata
+            Assert-ContractCompatibility $mismatch.job $mismatch.plan $mismatch.metadata
             throw 'contract-mismatch-akzeptiert'
         } catch {
             if ($_.Exception.Message -eq 'contract-mismatch-akzeptiert') {
@@ -658,7 +782,8 @@ if ($unknownFields.Count -ne 0 -or $missingFields.Count -ne 0) {
     throw 'Private Build-only-Konfiguration besitzt fehlende oder unbekannte Felder.'
 }
 if ($settings.schema -ne 'katana-private-retail-debug-config' -or
-    [int]$settings.version -ne 2 -or [string]$settings.execution_mode -ne $buildOnlyMode) {
+    -not (Test-ExactContractInteger $settings.version 2) -or
+    [string]$settings.execution_mode -ne $buildOnlyMode) {
     throw 'Privater Harness verlangt Configversion 2 und execution_mode=build-only.'
 }
 $manifest = Assert-OutsideRepository ([string]$settings.manifest_path) $repositoryRoot
@@ -669,8 +794,7 @@ if (-not (Test-Path -LiteralPath $manifest -PathType Leaf) -or
     -not (Test-Path -LiteralPath $gdi -PathType Leaf)) {
     throw 'Privates Manifest oder GDI fehlt.'
 }
-$timeout = [int]$settings.host_timeout_seconds
-if ($timeout -le 0) { throw 'host_timeout_seconds muss positiv sein.' }
+$timeout = Get-StrictHostTimeoutSeconds $settings.host_timeout_seconds
 if ($null -ne $settings.guest_cycle_budget -and [uint64]$settings.guest_cycle_budget -eq 0) {
     throw 'guest_cycle_budget muss positiv sein, wird in build-only aber nicht verbraucht.'
 }
