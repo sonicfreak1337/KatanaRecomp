@@ -732,7 +732,15 @@ int run_test(const int argc, char* argv[]) {
             generated_before.at("code/runtime-dispatch.cpp")
                     .find("materialization_policy.enabled = false") != std::string::npos &&
             generated_before.at("code/runtime-dispatch.cpp")
-                    .find("materialization_policy, {}") != std::string::npos &&
+                    .find("native_aot_template.hpp") != std::string::npos &&
+            generated_before.at("code/runtime-dispatch.cpp")
+                    .find("NativeAotTemplateBinder native_aot_binder") !=
+                std::string::npos &&
+            generated_before.at("code/runtime-dispatch.cpp")
+                    .find("target, physical_origin, bytes, variant)") !=
+                std::string::npos &&
+            generated_before.at("code/runtime-dispatch.cpp")
+                    .find("materialization_policy, {}") == std::string::npos &&
             generated_before.at("code/runtime-dispatch.cpp").find("count < 64u") ==
                 std::string::npos &&
             generated_before.at("code/runtime-dispatch.cpp")
@@ -972,7 +980,7 @@ int run_test(const int argc, char* argv[]) {
     const auto retire_marker = runtime_dispatch.find(
         "const auto retired_before = cpu.retired_guest_instructions");
     const auto execute_marker = runtime_dispatch.find(
-        "selected_block->get().function(cpu, *active_context)", retire_marker);
+        "katana::runtime::execute_runtime_block(", retire_marker);
     const auto scheduler_marker =
         runtime_dispatch.find("active_services->consume_guest_cycles(", execute_marker);
     const auto interrupt_marker =
@@ -1185,19 +1193,23 @@ int run_test(const int argc, char* argv[]) {
                              : std::string{};
     const auto site_symbol = hex_symbol(runtime_only_resolution.instruction_address);
     const auto expected_source =
-        "active_exit_source = {0x" + site_symbol +
-        "u, katana::runtime::canonical_physical_address(0x" + site_symbol + "u)}";
+        "active_exit_source = {katana::runtime::relocate_code_address(0x" + site_symbol +
+        "u), katana::runtime::canonical_physical_address("
+        "katana::runtime::relocate_code_address(0x" + site_symbol + "u))}";
     const auto predecessor_symbol = hex_symbol(runtime_only_predecessor->start_address);
     const auto predecessor_case =
         runtime_only_text.find("case 0x" + predecessor_symbol + "u: {");
     const auto predecessor_note = runtime_only_text.find(
-        "note_block_entry(0x" + predecessor_symbol + "u)", predecessor_case);
+        "note_block_entry(katana::runtime::relocate_code_address(0x" + predecessor_symbol +
+            "u))",
+        predecessor_case);
     const auto local_chain = runtime_only_text.find(
         "services->can_chain_executable_block(cpu.pc)) continue", predecessor_note);
     const auto runtime_only_case =
         runtime_only_text.find("case 0x" + block_symbol + "u: {", local_chain);
     const auto runtime_only_note = runtime_only_text.find(
-        "note_block_entry(0x" + block_symbol + "u)", runtime_only_case);
+        "note_block_entry(katana::runtime::relocate_code_address(0x" + block_symbol + "u))",
+        runtime_only_case);
     require(runtime_only_text.find("runtime_only_jump") != std::string::npos &&
                 predecessor_case != std::string::npos &&
                 predecessor_note != std::string::npos && local_chain != std::string::npos &&
@@ -1205,7 +1217,9 @@ int run_test(const int argc, char* argv[]) {
                 runtime_only_note != std::string::npos && predecessor_case < predecessor_note &&
                 predecessor_note < local_chain && local_chain < runtime_only_case &&
                 runtime_only_case < runtime_only_note &&
-                runtime_only_text.find("note_block_entry(0x" + block_symbol + "u)") !=
+                runtime_only_text.find(
+                    "note_block_entry(katana::runtime::relocate_code_address(0x" + block_symbol +
+                    "u))") !=
                     std::string::npos &&
                 !mapping.empty() &&
                 mapping.find("DynamicDispatchSiteClass::RuntimeOnly") != std::string::npos &&
@@ -1261,6 +1275,52 @@ int run_test(const int argc, char* argv[]) {
     shard_image.add_segment(std::move(shard_segment));
     shard_image.add_entry_point(katana::platform::dreamcast_disc_boot_address);
     katana::analysis::ControlFlowAnalysisResult shard_analysis;
+    auto native_template_program = make_shard_program(33u);
+    auto native_template_analysis = shard_analysis;
+    constexpr auto native_template_source = katana::platform::dreamcast_disc_boot_address;
+    constexpr auto native_template_patch_slot = native_template_source + 12u;
+    constexpr auto native_template_handler = native_template_source + 0x40u;
+    constexpr auto native_template_live_handler = native_template_handler + 0x20000000u;
+    native_template_analysis.runtime_code_copies.copies.push_back(
+        {native_template_source,
+         native_template_source,
+         native_template_source,
+         native_template_source + 12u,
+         16u,
+         0x600,
+         {{native_template_source,
+           native_template_patch_slot,
+           native_template_live_handler,
+           native_template_handler}},
+         katana::analysis::ControlFlowEvidence::GuardedPartial,
+         true,
+         "synthetic bounded runtime copy"});
+    const auto native_template_output = fixture.root / "native-template-port";
+    static_cast<void>(export_dreamcast_port_project(
+        {shard_image,
+         native_template_analysis,
+         native_template_program,
+         guarded_inputs,
+         native_template_source,
+         native_template_source,
+         2048u,
+         "native-template-fixture"},
+        native_template_output,
+        options));
+    const auto native_template_sources = snapshot(native_template_output / "generated");
+    const auto& native_template_dispatch =
+        native_template_sources.at("code/runtime-dispatch.cpp");
+    require(native_template_dispatch.find("materialization_policy.enabled = true") !=
+                    std::string::npos &&
+                native_template_dispatch.find(
+                    "dreamcast_initial_boot_executable_module_id), \"sha256:") !=
+                    std::string::npos &&
+                native_template_dispatch.find("{0xAC010040u,0x8C010040u}") !=
+                    std::string::npos &&
+                native_template_dispatch.find("{0x8C010040u,0x00000000u}") ==
+                    std::string::npos,
+            "Portexport verliert Rohzeiger/native Blockadresse oder aktiviert den nativen "
+            "Templatebinder nicht.");
     const auto shard_output = fixture.root / "dispatch-shard-port";
     auto shard_program = make_shard_program(513u);
     static_cast<void>(export_dreamcast_port_project(
@@ -1279,7 +1339,8 @@ int run_test(const int argc, char* argv[]) {
     const auto& shard_zero = shard_sources.at("code/runtime-dispatch-shard-00000.cpp");
     const auto& shard_one = shard_sources.at("code/runtime-dispatch-shard-00001.cpp");
     require(!shard_sources.contains("code/runtime-dispatch-shard-00002.cpp") &&
-                shard_core.find("if (address <= 0x8C0103FEu)") != std::string::npos &&
+                shard_core.find("if (source_address <= 0x8C0103FEu)") !=
+                    std::string::npos &&
                 shard_zero.find("case 0x8C0103FEu:") != std::string::npos &&
                 shard_zero.find("case 0x8C010400u:") == std::string::npos &&
                 shard_one.find("case 0x8C010400u:") != std::string::npos &&

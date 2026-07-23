@@ -228,6 +228,7 @@ add_library(katana_runtime STATIC
     src/runtime/dreamcast_memory.cpp
     src/runtime/dynamic_interpreter.cpp
     src/runtime/executable_modules.cpp
+    src/runtime/native_aot_template.cpp
     src/runtime/exception.cpp
     src/runtime/fpu.cpp
     src/runtime/gdi.cpp
@@ -300,6 +301,7 @@ add_library(katana_core STATIC
     src/analysis/hardware_audit.cpp
     src/analysis/executable_inventory.cpp
     src/analysis/recursive_analysis.cpp
+    src/analysis/runtime_code_copy_analysis.cpp
     src/analysis/value_analysis.cpp
     src/analysis/jump_table_analysis.cpp
     src/analysis/analysis_overrides.cpp
@@ -926,6 +928,11 @@ target_link_libraries(katana-executable-modules-tests PRIVATE katana_runtime)
 katana_enable_warnings(katana-executable-modules-tests)
 add_test(NAME katana-executable-modules-tests COMMAND katana-executable-modules-tests)
 
+add_executable(katana-native-aot-template-tests tests/runtime/native_aot_template_tests.cpp)
+target_link_libraries(katana-native-aot-template-tests PRIVATE katana_runtime)
+katana_enable_warnings(katana-native-aot-template-tests)
+add_test(NAME katana-native-aot-template-tests COMMAND katana-native-aot-template-tests)
+
 add_executable(katana-execution-coverage-tests tests/runtime/execution_coverage_tests.cpp)
 target_link_libraries(katana-execution-coverage-tests PRIVATE katana_runtime)
 katana_enable_warnings(katana-execution-coverage-tests)
@@ -1384,6 +1391,18 @@ katana_enable_warnings(katana-jump-table-analysis-tests)
 add_test(
     NAME katana-jump-table-analysis-tests
     COMMAND katana-jump-table-analysis-tests
+)
+
+add_executable(katana-runtime-code-copy-analysis-tests
+    tests/analysis/runtime_code_copy_analysis_tests.cpp
+)
+
+target_link_libraries(katana-runtime-code-copy-analysis-tests PRIVATE katana_core)
+katana_enable_warnings(katana-runtime-code-copy-analysis-tests)
+
+add_test(
+    NAME katana-runtime-code-copy-analysis-tests
+    COMMAND katana-runtime-code-copy-analysis-tests
 )
 
 add_executable(katana-analysis-overrides-tests

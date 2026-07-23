@@ -2,15 +2,21 @@
 
 Abgeschlossener interner Meilenstein: `v0.47.0`
 Phase: `v0.48.0` - Native Disc Boot und erster echter Gastframe
-Aktuelle P0-Arbeit: den gemeinsamen `KR-4847`- bis `KR-4850`-Kernblock bis zum
-ersten echten Gastframe fokussiert validieren. `KR-4847` bleibt fuer EX 38/39
-und noch unbelegte Timeout-/Overrun-Grenzen offen. `KR-4848` hat den Interpreter
-aus dem normalen Produktport entfernt und identische Disc-Reloads an natives
-AOT gebunden; offen bleiben strukturierte Ladetransaktionen und die vorab
-erzeugte Registry latenter Module. `KR-4849` fuehrt den realen Channel-2-Pfad
-bis TA-EOL fort. Die Wait-Loop-Klassifikation aus `KR-4842` laeuft getrennt.
+Aktuelle P0-Arbeit: Auf dem erstmals belegten Gast- und Hostframe den nativen
+IP.BIN-Boot bis BootExecutable und Spielboot fortsetzen. `KR-4915` und
+`KR-4850` sind durch den vorgezogenen Direct-Framebuffer-Pfad erfuellt.
+`KR-4847` bleibt fuer EX 38/39 und noch unbelegte Timeout-/Overrun-Grenzen
+offen. `KR-4848` hat den Interpreter aus dem normalen Produktport entfernt und
+identische Disc-Reloads an natives AOT gebunden; offen bleiben strukturierte
+Ladetransaktionen, der allgemeine native Materializer und die Registry latenter
+Module. `KR-4849` bleibt trotz synthetisch verbundenem Channel-2-/TA-EOL-Pfad
+fuer den produktiven Gastpfad offen. Die Wait-Loop-Klassifikation aus
+`KR-4842` laeuft getrennt.
 
-Runtime-ABI 38 schliesst in diesem Zwischenblock zwei allgemeine
+Der aktuelle kumulative Vertrag verwendet Runtime-ABI 39, Block-ABI 3,
+Backend-Interface-ABI 3, Portprojektvertrag 24 und Host-Video-Vertrag 2.
+
+Der mit Runtime-ABI 38 eingefuehrte Zwischenblock schliesst zwei allgemeine
 Hardwarevertraege. G1-DMA validiert Schutzfenster, 32-Bit-Ueberlauf und die
 vollstaendige beschreibbare Zielspanne vor dem Start. Ein Fehler traegt Phase,
 Adresse, exakt committed Praefix und Residue; der Transfer ist vor dem
@@ -39,15 +45,24 @@ Backend-Interface-ABI 3. Im Portpaket liegen null Retailsektoren. Die lokale
 Discinstallation war erfolgreich; die unveraenderte Original-GDI blieb
 erhalten.
 
-Der aktuelle Produktlauf erreicht 345.609.251 Gastzyklen und einen echten
-Runtimehandler am architektonischen SH-4-Interruptvektor `VBR + 0x600`.
-`frames`, TA-Transfers und Gast-PVR-Frames bleiben null. Eine getrennte
-begrenzte Diagnose weist ein 56-Byte-Copy-plus-Patch-Codetemplate bytegenau
-ueber Gastwriteprovenienz nach und fuehrt daraus 19 bewiesene
-Runtimeinstruktionen aus. Danach endet sie kontrolliert am naechsten noch
-nicht statisch gebundenen AOT-Einstieg. Der normale Produktport hat dabei
+Der aktuelle private Sonic-Adventure-PAL-AOT-Lauf erreicht innerhalb eines
+50-Millionen-Gastzyklusbudgets in 5,3 Sekunden erstmals
+`KR_FIRST_GUEST_FRAME` und `KR_FIRST_PRESENTED_FRAME`. Der recompilierte
+Discbootstrap `IP.BIN` beschreibt den sichtbaren Read-Framebuffer direkt; TA-
+Transfers und TA-Rendergeneration bleiben null. Der kontrollierte Budget-Exit
+ist erwartet. BootExecutable und der eigentliche Spielboot werden an dieser
+Grenze noch nicht erreicht.
+
+Read- und Write-Framebuffer verwenden dieselbe hardwaregenaue logische
+32-Bit-VRAM-Sicht. Der Scanout dekodiert opakes `RGB0555` samt Concatbits,
+gepacktes `RGB888`, den `FB_R_SIZE`-Modulus 0/1/>1 sowie gewebte und getrennte
+PAL-Felder. Backing-Byte-adressierte Dirty-Evidenz plus das vorherige
+Scanout-Abbild verhindern sichtbare False-Proofs durch Offscreen-Writes,
+unveraenderte Bilddaten oder Blanking. Der normale Produktport besitzt
 weiterhin keinen Interpreterpfad; weder Retailbytes noch eine private Adresse
-werden als Spielsonderfall uebernommen. `KR-4848` bleibt offen.
+werden als
+Spielsonderfall uebernommen. `KR-4848` bleibt fuer strukturierte Disc-
+Ladevorgaenge und den allgemeinen Materializer offen.
 
 Der Export baut CFG-, Kanten- und Writer-Slice-Indizes einmalig auf, reicht die
 konfigurierte Hostparallelitaet bis zum Projektschreiber durch und hasht grosse
@@ -59,24 +74,35 @@ Router waehlt den Shard. Beim aktuellen PAL-Port schrumpft die zentrale
 Zeilen; der groesste der 43 Shards misst 393.454 Byte. Eine synthetische
 513-Block-Regression prueft zwei Shards samt Entfernung veralteter Dateien; das
 vollstaendige synthetische Ninja-/MSVC-Projekt kompiliert und linkt in 15
-Sekunden. Das aktuelle fokussierte Kern-Gate besteht 9/9; nach der
-source-relativen Fallthroughkorrektur besteht der Portexporttest zusaetzlich
-1/1. Der konfigurierte 181-Test-Gesamtbestand wurde in diesem Zwischenblock
-nicht vollstaendig ausgefuehrt. Der CLI-
+Sekunden. Das aktuelle fokussierte Kern-Gate besteht 11/11. Der vollstaendige
+x64-Build ist mit zwoelf parallelen Jobs gruen; das anschliessende CTest-Gate
+besteht 178/178 Eintraege in rund 4:04 Minuten, darunter 176 regulaere Passes
+und zwei erwartete Regex-`PASS_REGULAR_EXPRESSION`-Erfolge. Der CLI-
 Hostbuild verwendet `KATANA_HOST_BUILD_JOBS`, ersatzweise die
 Codegen-Workerzahl oder die gemeldete CPU-Threadzahl.
 
-`KR-4848` bleibt fuer strukturierte Disc-Ladetransaktionen und die Registry
-latenter nativer Module offen. Ein erster Gastframe wird weiterhin
-ausdruecklich nicht behauptet.
+Nach diesem Vollgate wurde der Vertrag-24-Port unter Runtime-ABI 39 und
+Block-ABI 3 frisch neu exportiert und gebaut: 1.860 Funktionen, 37
+Codepartitionen und null Retailsektoren. Die lokale read-only Installation der
+Originaldisc umfasst drei Tracks und 521.461 Sektoren. Der abschliessende
+50-Millionen-Lauf reproduziert `KR_FIRST_GUEST_FRAME` und
+`KR_FIRST_PRESENTED_FRAME` mit `frames=2`, `pvr_guest_frames=2`,
+`pvr_direct_frames=2` und 302.287 geaenderten Direct-FB-Pixeln. TA,
+Rendergeneration und Materializer bleiben null; der Budget-Exit ist erwartet.
+
+`KR-4848` bleibt fuer strukturierte Disc-Ladetransaktionen, den allgemeinen
+Materializer und die Registry latenter nativer Module offen. Der erste
+Gastframe und sein Host-Present sind belegt; Spielboot und BootExecutable
+bleiben offen.
 Naechstes Gate: `v0.48.0` - Boot- und Frame-Integration
 Weitere interne Gates: `v0.48.0` und `v0.49.0` Alpha-Candidate
 Erster oeffentlicher Release: `v0.50.0` Alpha
 
-## Aktiver P0: Sonic-Adventure-PAL bis zum ersten echten Gastframe
+## Aktiver P0: Vom ersten Sonic-Adventure-PAL-Frame bis zum Spielboot
 
-Stand 2026-07-23: `KR-4841`, `KR-4843`, `KR-4844`, `KR-4845` und `KR-4846`
-sind abgeschlossen. Das verbindliche Produktziel bleibt XenonRecomp-artig:
+Stand 2026-07-23: `KR-4841`, `KR-4843`, `KR-4844`, `KR-4845`, `KR-4846`
+sowie die vorgezogenen Marker `KR-4915` und `KR-4850` sind abgeschlossen. Das
+verbindliche Produktziel bleibt XenonRecomp-artig:
 `IP.BIN` und BootExecutable werden statisch aus SH-4 in nativen PC-Code
 rekompiliert; die Zielruntime stellt nur typisierte Dreamcast-
 Plattformgrenzen bereit und ist weder normaler Interpreter/JIT noch Discplayer
@@ -84,8 +110,8 @@ oder Titelhackschicht. Der normale Export emittiert und linkt jetzt keinen SH-4-
 Interpreter; ein fehlendes AOT-Ziel endet als typisierter Materialisierungs-/
 Dispatchfehler. Nur `diagnostic_partial` enthaelt und deklariert den begrenzten
 Diagnoseinterpreter. Das schliesst die Produktgrenze, aber noch nicht ganz
-`KR-4848`: Strukturierte Disc-Ladetransaktionen und vorab kompilierte latente
-Module bleiben offen.
+`KR-4848`: Strukturierte Disc-Ladetransaktionen, der allgemeine native
+Materializer und vorab kompilierte latente Module bleiben offen.
 
 Der aktuelle Kernblock erweitert `KR-4847` um einen gemeinsamen BIOS-/
 Taskfile-Besitzer, Dreamcast-SPI 11 bis 14, einen 32-Byte-Modepuffer und
@@ -130,21 +156,30 @@ Object-List/EOL sowie die getrennte Channel-2-Completion; falsche Richtung und
 Cycle-Steal scheitern sichtbar. Fuer Direct-Texture-Ziele `0x11`/`0x13` ist die
 Zielprogression mehrteiliger Transfers noch als generische P1-Luecke offen.
 Der Hintergrundpfad bildet den festen Overscan-Quad einschliesslich HScale,
-D-Attributen und texturierter X/U-Erweiterung ab. `KR-4850` prueft final
-gepackte Pixelwerte samt Bytemaske erst
-am echten Scheduler-VBlank-In und friert dort den exakten Frame ein. PAL/
-Interlace bindet das aktive SPG-Feld an `FB_R_SOF1/2`; `SCALER_CTL` Bit 17/18
-waehlt rendernd `FB_W_SOF1/2`. 256 Generationen, 64 MiB Haltebudget,
-Range-Fast-Reject und 2.097.152 Pixelpruefungen pro VBlank begrenzen den
-Nachweis. Der gemeinsame Proof-Pump trennt Gastbeweis und erfolgreichen
-Host-Present. Die vier fokussierten PVR-/Framebuffer-/Hostvideo-/Portexport-
-Regressionen bestehen mit 12 Buildjobs 4/4 in 0,66 Sekunden. Die damalige
-kombinierte fokussierte Validierung dieses PVR-Blocks bestand mit 12 Buildjobs
-12/12. Das konfigurierte 181-Test-Gesamtgate folgt weiterhin erst nach dem
-zusammenhaengenden Kernblock und ist fuer den aktuellen Zwischenstand nicht als
-bestanden behauptet. Der jetzt vorgezogene private PAL-Lauf ist
-Diagnoseevidenz und ersetzt dieses Gate nicht. Ein erster
-Sonic-Adventure-Gastframe wird nicht behauptet.
+D-Attributen und texturierter X/U-Erweiterung ab. `KR-4850` akzeptiert am
+echten Scheduler-VBlank-In zwei gleichwertig echte Gastquellen: eine
+pixelvalidierte TA-Rendergeneration oder backing-byte-adressierte Direct-FB-
+Evidenz, die gegen das vorherige Scanout-Abbild einen sichtbaren Pixelwechsel
+belegt. Read und Write verwenden dieselbe logische 32-Bit-VRAM-Sicht.
+`RGB0555` ist opak und uebernimmt die Concatbits; gepacktes `RGB888`,
+Modulus 0/1/>1, PAL-Weave und getrennte PAL-Felder sind regressionsgesichert.
+Die Kombination aus Dirty-Evidenz und Scanout-Abbild weist Offscreen-Writes,
+unveraenderte Bilddaten und Blanking ab. Der gemeinsame Proof-Pump
+trennt Gastbeweis und erfolgreichen Host-Present.
+
+Der vorgezogene private PAL-AOT-Lauf erreicht mit einem
+50-Millionen-Gastzyklusbudget in 5,3 Sekunden erstmals
+`KR_FIRST_GUEST_FRAME` und `KR_FIRST_PRESENTED_FRAME`. Quelle ist der
+recompilierte IP.BIN-Direct-Framebuffer; TA bleibt null. Der anschliessende
+Budget-Exit ist erwartet. Das aktuelle x64-Zwischengate ist mit 178/178
+CTest-Eintraegen bestanden; das finale Freigabegate folgt weiterhin nach dem
+zusammenhaengenden Kernblock. BootExecutable, Spielboot, `KR-4848` und der
+produktive TA-Pfad bleiben offen.
+
+Die folgenden Abschnitte dokumentieren fruehere Bring-up-Zwischenstaende.
+Dortige Aussagen, ein Gastframe sei noch nicht belegt, gelten jeweils nur fuer
+den beschriebenen damaligen Lauf und nicht fuer den aktuellen Direct-FB-
+Nachweis.
 
 Der allgemeine Disc-Hardwareauditor erfasst fuer den aktuellen privaten
 PAL-Build 55.504 erreichbare SH-4-Instruktionen in 815 Funktionen. Es bleiben
@@ -152,9 +187,10 @@ keine unbekannten SH-4-Instruktionen und keine harte statische Hardwareluecke.
 Der SCIF-Produktpfad, AICA-ARM-Reset, PVR-Blank/Border-Scanout und die komplette
 Store-Queue-/Channel-2-DMAC-/TA-/ASIC-Kette sind allgemein implementiert.
 
-Der generierte Port praesentiert erst nach einem erfolgreich gerenderten
-PVR-Frame und meldet `KR_FIRST_GUEST_FRAME` nicht fuer blosses VBlank oder
-erzwungenes Blank. Eine optional aktivierte, leichtgewichtige Diagnostik
+Der generierte Port praesentiert erst nach einem validierten TA- oder
+Direct-FB-Gastframe und meldet `KR_FIRST_GUEST_FRAME` nicht fuer blosses
+VBlank, Offscreen-Writes oder erzwungenes Blank. Eine optional aktivierte,
+leichtgewichtige Diagnostik
 erfasst letzten MMIO-Zugriff, aktive Interruptquelle, alle relevanten
 DMA-Zustaende, GD-ROM, TA/PVR, AICA und den Demand-Materializer. Der emittierte
 Produktcode wurde mit einer synthetischen High-Density-GDI bis zur nativen EXE
@@ -274,8 +310,9 @@ MMIO-Zugriff liegt im aktiven OCRAM; der fruehere Abbruch nach 12 Gastzyklen
 ist damit beseitigt. TA/PVR und ein echter Gastframe bleiben fuer den laengeren
 Folgelauf weiterhin offen.
 
-Runtime-ABI 38, Backend-Interface-ABI 3, BIOS-ABI 9 und Portprojektvertrag 23
-bilden den kumulativen v0.48-Stand ab.
+Runtime-ABI 39, Block-ABI 3, Backend-Interface-ABI 3, BIOS-ABI 9,
+Portprojektvertrag 24 und Host-Video-Vertrag 2 bilden den kumulativen
+v0.48-Stand ab.
 PlatformServices-ABI 9 versioniert das invalidierungs- und timinggesicherte lokale
 Blockchaining.
 
@@ -368,16 +405,16 @@ Der abschliessende Identitaetsblock verwendet jetzt Disc-Pack-Format 2 und
 Recipe 2. Die Content-Root entsteht aus den wirklich gelesenen Raw-Chunks und
 wird sowohl beim Schreiben gegen die Recipe als auch beim Oeffnen gegen
 Tracktabelle und Chunkindex geprueft; abweichendes Staging wird nicht
-veroeffentlicht. Der damals eingefuehrte AICA-Vertrag ist im aktuellen
-  Runtime-ABI 30 und Portprojektvertrag 18 enthalten. Das kumulative v0.48-
-Debug-Gate ist mit 180 von 180 Tests bestanden; der anschliessende private
+veroeffentlicht. Der damals eingefuehrte AICA-Vertrag ist im damaligen
+Runtime-ABI 30 und Portprojektvertrag 18 enthalten. Das damalige kumulative
+v0.48-Debug-Gate ist mit 180 von 180 Tests bestanden; der anschliessende private
 PAL-Nachweis ist erfolgt: Der vollstaendige neue Port entstand mit 12 Workern
 in 126,8 Sekunden, ein inkrementeller Runtime-Neubau in 77,8 Sekunden. Die
 Originaldisc installiert 521.461 Sektoren ausschliesslich lokal. Der echte
 PVR-DMA-Steuerblock ab `0x005F7C00` und alle vier SH-4-Cachearray-Aperturen
 sind nun geschlossen; der Vergleichslauf erreicht 17.516.050 native
-AOT-Bloecke in 50 Mio. Gastzyklen ohne Exception. Ein Gastframe steht weiterhin
-aus.
+AOT-Bloecke in 50 Mio. Gastzyklen ohne Exception. In diesem damaligen Lauf
+steht ein Gastframe weiterhin aus.
 
 Die danach isolierte permanente Wartestelle las `SPG_STATUS` bei
 `0xA05F810C`, waehrend der HLE-Handoff `SPG_LOAD=0` hinterlassen hatte. Der
@@ -1041,10 +1078,10 @@ KR-4841 -> KR-4842 -> KR-4911 -> KR-4912
 KR-4843 und KR-4912 -> KR-4848 -> KR-4913
 KR-4847 und KR-4913 -> KR-4849 -> KR-4915 -> KR-4850
 KR-4850 -> KR-4851
-KR-4850 -> KR-4814 -> KR-4914
-KR-4851 und KR-4914 -> KR-4852 bis KR-4854
+KR-4851 -> KR-4852 bis KR-4854
 
-v0.49 Port-, Harness- und GUI-Integration:
+v0.49 Controller-, Port-, Harness- und GUI-Integration:
+KR-4814 -> KR-4914
 KR-4801 bis KR-4803, KR-4811 bis KR-4813 und KR-4821 bis KR-4824
 -> KR-4916
 -> KR-4901 bis KR-4903 -> KR-4904 -> KR-4905

@@ -108,7 +108,7 @@ void target_validation_regressions() {
         Fixture fixture;
         bool callback_called = false;
         const auto failure =
-            dispatch_failure(fixture, 0x101u, {true, 4u, 64u}, [&](auto, auto, const auto&) {
+            dispatch_failure(fixture, 0x101u, {true, 4u, 64u}, [&](auto, auto, auto, const auto&) {
                 callback_called = true;
                 return valid_candidate(0x101u, fixture.variant);
             });
@@ -118,7 +118,7 @@ void target_validation_regressions() {
     {
         Fixture fixture(0x200000u);
         const auto failure =
-            dispatch_failure(fixture, 0x200000u, {true, 4u, 64u}, [&](auto, auto, const auto&) {
+            dispatch_failure(fixture, 0x200000u, {true, 4u, 64u}, [&](auto, auto, auto, const auto&) {
                 return valid_candidate(0x200000u, fixture.variant);
             });
         require(failure == MaterializationFailure::Uncommitted,
@@ -133,7 +133,7 @@ void target_validation_regressions() {
         fixture.modules.publish(data);
         bool callback_called = false;
         const auto failure =
-            dispatch_failure(fixture, 0x100u, {true, 4u, 64u}, [&](auto, auto, const auto&) {
+            dispatch_failure(fixture, 0x100u, {true, 4u, 64u}, [&](auto, auto, auto, const auto&) {
                 callback_called = true;
                 return valid_candidate(0x100u, fixture.variant);
             });
@@ -148,7 +148,7 @@ void target_validation_regressions() {
         denied.executable_permission = false;
         fixture.modules.publish(denied);
         const auto failure =
-            dispatch_failure(fixture, 0x100u, {true, 4u, 64u}, [&](auto, auto, const auto&) {
+            dispatch_failure(fixture, 0x100u, {true, 4u, 64u}, [&](auto, auto, auto, const auto&) {
                 return valid_candidate(0x100u, fixture.variant);
             });
         require(failure == MaterializationFailure::PermissionDenied,
@@ -157,7 +157,7 @@ void target_validation_regressions() {
     {
         Fixture fixture(0x100u, false);
         const auto failure =
-            dispatch_failure(fixture, 0x100u, {true, 4u, 64u}, [&](auto, auto, const auto&) {
+            dispatch_failure(fixture, 0x100u, {true, 4u, 64u}, [&](auto, auto, auto, const auto&) {
                 return valid_candidate(0x100u, fixture.variant);
             });
         require(failure == MaterializationFailure::UnknownSource,
@@ -169,7 +169,7 @@ void revalidation_regressions() {
     {
         Fixture fixture;
         const auto failure =
-            dispatch_failure(fixture, 0x100u, {true, 4u, 64u}, [&](auto, auto, const auto&) {
+            dispatch_failure(fixture, 0x100u, {true, 4u, 64u}, [&](auto, auto, auto, const auto&) {
                 fixture.cpu.memory.write_u8(0x100u, 0x0Bu);
                 return valid_candidate(0x100u, fixture.variant);
             });
@@ -179,7 +179,7 @@ void revalidation_regressions() {
     {
         Fixture fixture;
         const auto failure =
-            dispatch_failure(fixture, 0x100u, {true, 4u, 64u}, [&](auto, auto, const auto&) {
+            dispatch_failure(fixture, 0x100u, {true, 4u, 64u}, [&](auto, auto, auto, const auto&) {
                 fixture.modules.unload(fixture.module.id, fixture.blocks, fixture.tracker);
                 return valid_candidate(0x100u, fixture.variant);
             });
@@ -189,7 +189,7 @@ void revalidation_regressions() {
     {
         Fixture fixture;
         const auto failure =
-            dispatch_failure(fixture, 0x100u, {true, 4u, 64u}, [&](auto, auto, const auto&) {
+            dispatch_failure(fixture, 0x100u, {true, 4u, 64u}, [&](auto, auto, auto, const auto&) {
                 auto replacement = fixture.module;
                 fixture.modules.replace(replacement, fixture.blocks, fixture.tracker);
                 return valid_candidate(0x100u, fixture.variant);
@@ -200,7 +200,7 @@ void revalidation_regressions() {
     {
         Fixture fixture;
         const auto failure =
-            dispatch_failure(fixture, 0x100u, {true, 4u, 64u}, [&](auto, auto, const auto&) {
+            dispatch_failure(fixture, 0x100u, {true, 4u, 64u}, [&](auto, auto, auto, const auto&) {
                 fixture.modules.update_relocations(
                     fixture.module.id, {{0u, 1u, 0}}, fixture.blocks, fixture.tracker);
                 return valid_candidate(0x100u, fixture.variant);
@@ -218,7 +218,7 @@ void budget_and_dispatch_regressions() {
             fixture.blocks,
             &fixture.tracker,
             {true, 4u, 64u},
-            [&](const auto target, auto, const auto& variant) {
+            [&](const auto target, auto, auto, const auto& variant) {
                 auto candidate = valid_candidate(target, variant);
                 candidate.interpreter_backed = true;
                 candidate.bounded_analysis_complete = false;
@@ -238,7 +238,7 @@ void budget_and_dispatch_regressions() {
         BlockMaterializationPolicy policy{true, 4u, 64u};
         policy.max_instructions = 1u;
         const auto failure =
-            dispatch_failure(fixture, 0x100u, policy, [&](auto, auto, const auto&) {
+            dispatch_failure(fixture, 0x100u, policy, [&](auto, auto, auto, const auto&) {
                 auto candidate = valid_candidate(0x100u, fixture.variant);
                 candidate.instructions = 2u;
                 return candidate;
@@ -252,7 +252,7 @@ void budget_and_dispatch_regressions() {
                                              fixture.blocks,
                                              &fixture.tracker,
                                              {true, 4u, 64u},
-                                             [&](const auto target, auto, const auto& variant) {
+                                             [&](const auto target, auto, auto, const auto& variant) {
                                                  return valid_candidate(target, variant);
                                              });
         const auto first =
@@ -299,7 +299,7 @@ std::vector<BlockMaterializationEvent> deterministic_events() {
                                          fixture.blocks,
                                          &fixture.tracker,
                                          {true, 4u, 64u},
-                                         [&](const auto target, auto, const auto& variant) {
+                                         [&](const auto target, auto, auto, const auto& variant) {
                                              return valid_candidate(target, variant);
                                          });
     try {

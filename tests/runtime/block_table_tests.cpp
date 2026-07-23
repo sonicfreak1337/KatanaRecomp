@@ -17,6 +17,12 @@ BlockExit block_a(CpuState&, BlockExecutionContext&) {
 BlockExit block_b(CpuState&, BlockExecutionContext&) {
     return {};
 }
+BlockExit relocated_block(CpuState&, BlockExecutionContext&) {
+    BlockExit exit;
+    exit.source.virtual_address = relocate_code_address(0x8C500010u);
+    exit.target = BlockAddress{unrelocate_code_address(0xAC200020u), 0u};
+    return exit;
+}
 
 void require(const bool condition, const char* message) {
     if (!condition) {
@@ -193,6 +199,106 @@ int main() {
                     !guarded.lookup(tracked.virtual_start, {}).has_value(),
                 "Trackerinvalidierung zwischen Lookup und Resolve fuehrt stale Code aus.");
 
+        RuntimeBlockTable aot_templates;
+        const RuntimeAotTemplateContract template_contract{
+            {0x8C500000u, 0xAC200000u, 0x40u}, 0x80u};
+        RuntimeBlock first_template_block{0xAC200010u,
+                                          canonical_physical_address(0xAC200010u),
+                                          4u,
+                                          BlockEndKind::Fallthrough,
+                                          {},
+                                          block_a,
+                                          "native-template-first",
+                                          false,
+                                          template_contract};
+        RuntimeBlock second_template_block{0xAC200020u,
+                                           canonical_physical_address(0xAC200020u),
+                                           4u,
+                                           BlockEndKind::Return,
+                                           {},
+                                           block_b,
+                                           "native-template-second",
+                                           false,
+                                           template_contract};
+        const auto first_template_identity = stable_runtime_block_identity(first_template_block);
+        const auto second_template_identity = stable_runtime_block_identity(second_template_block);
+        const auto first_template_handle =
+            aot_templates.register_runtime(first_template_block);
+        const auto second_template_handle =
+            aot_templates.register_runtime(second_template_block);
+        require(first_template_identity != second_template_identity &&
+                    first_template_identity.find("-ts8c500000-trac200000-te64-tv128") !=
+                        std::string::npos &&
+                    aot_templates.resolve(first_template_handle)->get().aot_template ==
+                        template_contract &&
+                    aot_templates.resolve(second_template_handle)->get().aot_template ==
+                        template_contract,
+                "AOT-Templatevertrag fehlt in stabiler Identitaet oder Runtimeblock.");
+        auto executable_template = first_template_block;
+        executable_template.function = relocated_block;
+        CpuState template_cpu;
+        BlockExecutionContext template_context;
+        const auto template_exit =
+            execute_runtime_block(executable_template, template_cpu, template_context);
+        require(template_exit.source.virtual_address == 0xAC200010u &&
+                    template_exit.target->virtual_address == 0x8C500020u &&
+                    relocate_code_address(0x8C500010u) == 0x8C500010u,
+                "Runtimeblockausfuehrung aktiviert oder entfernt sein AOT-Mapping nicht atomar.");
+        require(aot_templates.erase_overlapping_physical(
+                    canonical_physical_address(template_contract.mapping.runtime_start) + 0x70u,
+                    1u) == 2u &&
+                    !aot_templates.resolve(first_template_handle) &&
+                    !aot_templates.resolve(second_template_handle),
+                "Literalpatch ausserhalb der Blockbytes invalidiert nicht die ganze AOT-Vorlage.");
+
+        RuntimeBlockTable mmu_aot_templates;
+        const auto mmu_template_handle = mmu_aot_templates.register_runtime(
+            {0x00002010u,
+             0x0C000110u,
+             4u,
+             BlockEndKind::Return,
+             {},
+             block_a,
+             "native-template-mmu",
+             false,
+             RuntimeAotTemplateContract{{0x8C500000u, 0x00002000u, 0x40u}, 0x40u}});
+        require(mmu_aot_templates.resolve(mmu_template_handle).has_value() &&
+                    mmu_aot_templates.erase_overlapping_physical(0x0C000130u, 1u) == 1u,
+                "MMU-AOT-Template leitet die physische Validierung nicht vom Blockursprung ab.");
+
+        RuntimeBlockTable invalid_templates;
+        const auto valid_template_block = first_template_block;
+        require(throws_any([&] {
+                    static_cast<void>(invalid_templates.register_static(valid_template_block));
+                }) &&
+                    throws_any([&] {
+                        auto invalid = valid_template_block;
+                        invalid.virtual_start = 0xAC200040u;
+                        invalid.physical_origin = canonical_physical_address(invalid.virtual_start);
+                        static_cast<void>(invalid_templates.register_runtime(invalid));
+                    }) &&
+                    throws_any([&] {
+                        auto invalid = valid_template_block;
+                        invalid.aot_template->validation_extent = 0x20u;
+                        static_cast<void>(invalid_templates.register_runtime(invalid));
+                    }) &&
+                    throws_any([&] {
+                        auto invalid = valid_template_block;
+                        invalid.physical_origin = 0x00000008u;
+                        static_cast<void>(invalid_templates.register_runtime(invalid));
+                    }) &&
+                    throws_any([&] {
+                        auto invalid = valid_template_block;
+                        invalid.virtual_start = 0x9FFFFFF0u;
+                        invalid.physical_origin =
+                            canonical_physical_address(invalid.virtual_start);
+                        invalid.aot_template = RuntimeAotTemplateContract{
+                            {0x8D000000u, 0x9FFFFFF0u, 0x10u}, 0x20u};
+                        static_cast<void>(invalid_templates.register_runtime(invalid));
+                    }),
+                "Ungueltiger statischer, ausserhalb liegender oder aliasbrechender AOT-Vertrag "
+                "wurde akzeptiert.");
+
         RuntimeBlockTable rejected;
         require(throws_any([&] {
                     static_cast<void>(rejected.register_runtime(
@@ -213,6 +319,10 @@ int main() {
                 "Ungueltige Groesse, Funktion, Provenienz oder Adressraumgrenze wurde akzeptiert.");
         static_cast<void>(
             rejected.register_static({0x2000u, 0x2000u, 4u, {}, {}, block_a, "sealed", false}));
+        require(stable_runtime_block_identity(
+                    resolved(rejected, rejected.lookup(0x2000u, {}))) ==
+                    "v00002000-p00002000-s4-e0-a0-m0-w0-f0-r0-sealed",
+                "Statische Blockidentitaet wurde durch optionalen AOT-Vertrag veraendert.");
         rejected.seal_static();
         require(throws_any([&] {
                     static_cast<void>(rejected.register_static(

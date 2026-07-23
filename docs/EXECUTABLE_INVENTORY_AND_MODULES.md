@@ -178,8 +178,10 @@ Demand-Materialisierung und endet bei fehlendem AOT typisiert. Nur
 `diagnostic_partial` aktiviert den begrenzten Interpreter und weist dies im
 Manifest als `diagnostic-interpreter` aus. Deaktivierung, unbekannte Quelle,
 Byteabweichung, Budgetende und ungueltiger Block bleiben typisierte Misses.
-`KR-4848` bleibt fuer strukturierte Disc-Ladetransaktionen und vorab erzeugte
-latente native Module offen.
+`KR-4848` bleibt fuer strukturierte Disc-Ladetransaktionen, den allgemeinen
+nativen Materializer und vorab erzeugte latente native Module offen. Der
+aktuelle kumulative Vertrag verwendet Runtime-ABI 39, Block-ABI 3,
+Backend-Interface-ABI 3 und Portprojektvertrag 24.
 
 ## Runtime-only-Profil
 

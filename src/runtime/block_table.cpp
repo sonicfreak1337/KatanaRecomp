@@ -35,6 +35,16 @@ bool ranges_overlap(const std::uint32_t left_start,
     return left_start < right_end && right_start < left_end;
 }
 
+std::uint32_t validation_physical_start(const RuntimeBlock& block) noexcept {
+    if (!block.aot_template) return block.physical_origin;
+    return block.physical_origin -
+           (block.virtual_start - block.aot_template->mapping.runtime_start);
+}
+
+std::uint32_t validation_extent(const RuntimeBlock& block) noexcept {
+    return block.aot_template ? block.aot_template->validation_extent : block.size;
+}
+
 } // namespace
 
 std::size_t
@@ -65,7 +75,24 @@ std::string stable_runtime_block_identity(const RuntimeBlock& block) {
         << "-m" << block.variant.mmu_generation << "-w" << block.variant.watchpoint_generation
         << "-f" << block.variant.fpscr_mode << "-r" << block.variant.runtime_generation << "-"
         << block.provenance;
+    if (block.aot_template) {
+        const auto& contract = *block.aot_template;
+        out << std::hex << "-ts" << std::setw(8) << contract.mapping.source_start << "-tr"
+            << std::setw(8) << contract.mapping.runtime_start << std::dec << "-te"
+            << contract.mapping.extent << "-tv" << contract.validation_extent;
+    }
     return out.str();
+}
+
+BlockExit execute_runtime_block(const RuntimeBlock& block,
+                                CpuState& cpu,
+                                BlockExecutionContext& context) {
+    if (block.function == nullptr) {
+        throw std::invalid_argument("Runtimeblock besitzt keine ausfuehrbare Backendfunktion.");
+    }
+    if (!block.aot_template) return block.function(cpu, context);
+    const ScopedCodeAddressMapping mapping(block.aot_template->mapping);
+    return block.function(cpu, context);
 }
 
 RuntimeBlockHandle RuntimeBlockTable::register_static(RuntimeBlock block) {
@@ -141,6 +168,71 @@ RuntimeBlockHandle RuntimeBlockTable::insert(RuntimeBlock block, const bool runt
                                 block.provenance);
     }
     block.physical_origin = canonical_physical_address(block.physical_origin);
+    if (block.aot_template) {
+        if (!runtime_registered) {
+            throw std::invalid_argument(
+                "AOT-Templateabbildungen sind ausschliesslich fuer Runtimebloecke zulaessig: " +
+                block.provenance);
+        }
+        const auto& contract = *block.aot_template;
+        validate_code_address_mapping(contract.mapping);
+        if (contract.validation_extent == 0u ||
+            contract.validation_extent < contract.mapping.extent) {
+            throw std::invalid_argument(
+                "AOT-Templatevalidierung muss den vollstaendigen Mappingbereich abdecken: " +
+                block.provenance);
+        }
+        const auto mapping_runtime_end =
+            static_cast<std::uint64_t>(contract.mapping.runtime_start) + contract.mapping.extent;
+        if (block.virtual_start < contract.mapping.runtime_start ||
+            virtual_end > mapping_runtime_end) {
+            throw std::invalid_argument(
+                "Runtimeblock liegt ausserhalb seiner AOT-Templateabbildung: " +
+                block.provenance);
+        }
+        const auto block_offset = block.virtual_start - contract.mapping.runtime_start;
+        if (block_offset > block.physical_origin) {
+            throw std::invalid_argument(
+                "AOT-Templateblock kann seinen physischen Validierungsanfang nicht darstellen: " +
+                block.provenance);
+        }
+        const auto validation_start = block.physical_origin - block_offset;
+        const auto source_validation_end =
+            static_cast<std::uint64_t>(contract.mapping.source_start) +
+            contract.validation_extent;
+        const auto runtime_validation_end =
+            static_cast<std::uint64_t>(contract.mapping.runtime_start) +
+            contract.validation_extent;
+        const auto validation_end =
+            static_cast<std::uint64_t>(validation_start) + contract.validation_extent;
+        if (source_validation_end >
+                static_cast<std::uint64_t>(std::numeric_limits<std::uint32_t>::max()) + 1u ||
+            runtime_validation_end >
+                static_cast<std::uint64_t>(std::numeric_limits<std::uint32_t>::max()) + 1u ||
+            validation_end >
+            static_cast<std::uint64_t>(std::numeric_limits<std::uint32_t>::max()) + 1u) {
+            throw std::length_error(
+                "AOT-Templatevalidierung laeuft ueber den Gastadressraum hinaus: " +
+                block.provenance);
+        }
+        const auto validation_last_offset = contract.validation_extent - 1u;
+        const auto directly_aliased =
+            canonical_physical_address(block.virtual_start) == block.physical_origin;
+        if (directly_aliased &&
+            canonical_physical_address(contract.mapping.runtime_start +
+                                       validation_last_offset) !=
+                validation_start + validation_last_offset) {
+            throw std::invalid_argument(
+                "AOT-Templatevalidierung kreuzt eine nicht zusammenhaengende Aliasgrenze: " +
+                block.provenance);
+        }
+        if (static_cast<std::uint64_t>(block_offset) + block.size >
+            contract.validation_extent) {
+            throw std::invalid_argument(
+                "AOT-Templatevalidierung deckt die Runtimeblockbytes nicht ab: " +
+                block.provenance);
+        }
+    }
     const auto physical_end = static_cast<std::uint64_t>(block.physical_origin) + block.size;
     if (physical_end > static_cast<std::uint64_t>(std::numeric_limits<std::uint32_t>::max()) + 1u) {
         throw std::length_error("Physischer Blockbereich laeuft ueber 32 Bit hinaus: " +
@@ -225,9 +317,10 @@ void RuntimeBlockTable::index_active(const std::uint64_t id, const Record& recor
     physical_index.emplace(physical_key, id);
     alias_index[record.block.physical_origin].insert(id);
 
-    const auto first_page = record.block.physical_origin / physical_page_size;
+    const auto tracked_start = validation_physical_start(record.block);
+    const auto first_page = tracked_start / physical_page_size;
     const auto last_byte =
-        static_cast<std::uint64_t>(record.block.physical_origin) + record.block.size - 1u;
+        static_cast<std::uint64_t>(tracked_start) + validation_extent(record.block) - 1u;
     const auto last_page = static_cast<std::uint32_t>(last_byte / physical_page_size);
     for (auto page = first_page;; ++page) {
         active_physical_pages_[page].insert(id);
@@ -409,9 +502,10 @@ void RuntimeBlockTable::deactivate(const std::uint64_t id) noexcept {
             if (aliases->second.empty()) dynamic_alias_index_.erase(aliases);
         }
     }
-    const auto first_page = record.block.physical_origin / physical_page_size;
+    const auto tracked_start = validation_physical_start(record.block);
+    const auto first_page = tracked_start / physical_page_size;
     const auto last_byte =
-        static_cast<std::uint64_t>(record.block.physical_origin) + record.block.size - 1u;
+        static_cast<std::uint64_t>(tracked_start) + validation_extent(record.block) - 1u;
     const auto last_page = static_cast<std::uint32_t>(last_byte / physical_page_size);
     for (auto page = first_page;; ++page) {
         if (auto entries = active_physical_pages_.find(page);
@@ -456,8 +550,10 @@ std::size_t RuntimeBlockTable::erase_overlapping_physical(const std::uint32_t ph
     std::vector<std::uint64_t> invalidated;
     for (const auto id : candidates) {
         const auto& block = records_.at(id).block;
-        const auto block_end = static_cast<std::uint64_t>(block.physical_origin) + block.size;
-        if (block.physical_origin < write_end && canonical < block_end) invalidated.push_back(id);
+        const auto tracked_start = validation_physical_start(block);
+        const auto tracked_end =
+            static_cast<std::uint64_t>(tracked_start) + validation_extent(block);
+        if (tracked_start < write_end && canonical < tracked_end) invalidated.push_back(id);
     }
     for (const auto id : invalidated)
         deactivate(id);

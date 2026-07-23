@@ -607,6 +607,8 @@ ControlFlowAnalysisResult analyze_control_flow(const katana::io::ExecutableImage
             recursive_options.baseline = &analysis.recursive;
         }
         analysis.recursive = analyze_reachable_code(image, recursive_options);
+        analysis.runtime_code_copies =
+            analyze_runtime_code_copies(image, analysis.recursive.instructions);
         report_progress("recursive-complete");
         auto local_control_flow =
             analyze_local_control_flow(analysis.recursive.instructions, image);
@@ -852,6 +854,23 @@ ControlFlowAnalysisResult analyze_control_flow(const katana::io::ExecutableImage
             return jump_table_dispatches.contains(address);
         };
         bool changed = false;
+        for (const auto& copy : analysis.runtime_code_copies.copies) {
+            const std::array origins{FunctionOrigin::RuntimeCopy};
+            changed = add_seed(seeds,
+                               copy.source_begin,
+                               origins,
+                               false,
+                               ControlFlowEvidence::GuardedPartial) ||
+                      changed;
+            for (const auto& candidate : copy.patch_candidates) {
+                changed = add_seed(seeds,
+                                   candidate.target_address,
+                                   origins,
+                                   false,
+                                   ControlFlowEvidence::GuardedPartial) ||
+                          changed;
+            }
+        }
         for (const auto& continuation : analysis.static_return_continuations) {
             changed = add_seed(seeds,
                                continuation.target_address,
@@ -1105,6 +1124,17 @@ ControlFlowAnalysisResult analyze_control_flow(const katana::io::ExecutableImage
         for (const auto& entry : table.entries)
             symbolic_candidates.insert(entry.target);
     }
+    for (const auto& copy : analysis.runtime_code_copies.copies) {
+        symbolic_candidates.insert(copy.setup_address);
+        symbolic_candidates.insert(copy.loop_address);
+        symbolic_candidates.insert(copy.source_begin);
+        symbolic_candidates.insert(copy.source_end_inclusive);
+        for (const auto& candidate : copy.patch_candidates) {
+            symbolic_candidates.insert(candidate.store_instruction_address);
+            symbolic_candidates.insert(candidate.slot_address);
+            symbolic_candidates.insert(candidate.target_address);
+        }
+    }
     for (const auto& diagnostic : analysis.recursive.diagnostics) {
         symbolic_candidates.insert(diagnostic.address);
     }
@@ -1141,6 +1171,8 @@ ControlFlowAnalysisResult analyze_control_flow(const katana::io::ExecutableImage
         for (const auto& entry : table.entries)
             evidence_strings.push_back(entry.reason);
     }
+    for (const auto& copy : analysis.runtime_code_copies.copies)
+        evidence_strings.push_back(copy.reason);
     std::sort(evidence_strings.begin(), evidence_strings.end());
     evidence_strings.erase(std::unique(evidence_strings.begin(), evidence_strings.end()),
                            evidence_strings.end());

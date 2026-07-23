@@ -19,6 +19,41 @@ struct BlockAddress {
     [[nodiscard]] bool operator==(const BlockAddress&) const noexcept = default;
 };
 
+// Describes a byte-preserving native AOT template that was copied from one
+// guest virtual range to another.  The mapping is intentionally expressed in
+// virtual addresses: P1/P2 aliases must remain distinct even when they resolve
+// to the same physical bytes.
+struct CodeAddressMapping {
+    std::uint32_t source_start = 0u;
+    std::uint32_t runtime_start = 0u;
+    std::uint32_t extent = 0u;
+
+    [[nodiscard]] bool operator==(const CodeAddressMapping&) const noexcept = default;
+};
+
+void validate_code_address_mapping(const CodeAddressMapping& mapping);
+
+// Applies only the innermost active mapping that contains the address.  An
+// address outside every active range is returned unchanged.  The two helpers
+// perform exactly one translation step, which keeps overlapping aliases and
+// nested mappings deterministic.
+[[nodiscard]] std::uint32_t relocate_code_address(std::uint32_t source_address) noexcept;
+[[nodiscard]] std::uint32_t unrelocate_code_address(std::uint32_t runtime_address) noexcept;
+
+class ScopedCodeAddressMapping final {
+  public:
+    explicit ScopedCodeAddressMapping(CodeAddressMapping mapping);
+    ~ScopedCodeAddressMapping() noexcept;
+
+    ScopedCodeAddressMapping(const ScopedCodeAddressMapping&) = delete;
+    ScopedCodeAddressMapping& operator=(const ScopedCodeAddressMapping&) = delete;
+    ScopedCodeAddressMapping(ScopedCodeAddressMapping&&) = delete;
+    ScopedCodeAddressMapping& operator=(ScopedCodeAddressMapping&&) = delete;
+
+  private:
+    std::uint64_t token_ = 0u;
+};
+
 enum class BlockEndKind : std::uint8_t {
     Fallthrough,
     StaticBranch,

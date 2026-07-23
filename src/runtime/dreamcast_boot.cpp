@@ -1,5 +1,6 @@
 #include "katana/runtime/dreamcast_boot.hpp"
 
+#include "katana/io/input_provenance.hpp"
 #include "katana/io/json_report.hpp"
 #include "katana/runtime/exception.hpp"
 #include "katana/runtime/iso9660.hpp"
@@ -705,9 +706,12 @@ initialize_dreamcast_runtime(CpuState& cpu,
     const auto code_tracker = std::weak_ptr<ExecutableCodeTracker>(state.code_tracker);
     const auto runtime_blocks = std::weak_ptr<RuntimeBlockTable>(state.runtime_blocks);
     const auto runtime_modules = std::weak_ptr<ExecutableModuleCatalog>(state.module_catalog);
+    const auto direct_scanout = std::weak_ptr<PvrSoftwareRenderer>(state.pvr_renderer);
     cpu.memory.set_guest_write_observer(
-        [code_tracker, runtime_blocks, runtime_modules, module_load_writes](
+        [code_tracker, runtime_blocks, runtime_modules, module_load_writes, direct_scanout](
             const GuestWriteEvent& event) {
+            if (const auto renderer = direct_scanout.lock())
+                renderer->observe_vram_write(event.address, event.size, event.bytes_changed);
             auto load_event = event;
             load_event.address = canonical_physical_address(event.address);
             module_load_writes->observe(load_event);
@@ -827,6 +831,28 @@ initialize_dreamcast_runtime(CpuState& cpu,
     state.loaded_system_bootstrap_bytes = boot.system_bootstrap.size();
     cpu.memory.write_bytes(dreamcast_disc_boot_address, boot.boot_file, CodeWriteSource::Copy);
     state.loaded_boot_bytes = boot.boot_file.size();
+    const auto publish_initial_executable = [&](const std::string& id,
+                                                const std::uint32_t guest_start,
+                                                const std::span<const std::uint8_t> bytes) {
+        ExecutableModule module;
+        module.id = id;
+        module.source_identity =
+            "sha256:" + katana::io::sha256_bytes(std::string_view(
+                            reinterpret_cast<const char*>(bytes.data()), bytes.size()));
+        module.guest_start = guest_start;
+        module.bytes.assign(bytes.begin(), bytes.end());
+        module.kind = ExecutableModuleKind::Module;
+        module.executable_permission = true;
+        module.control_transfer_promotion_allowed = false;
+        module.writable = true;
+        state.module_catalog->publish(std::move(module));
+    };
+    publish_initial_executable(std::string(dreamcast_initial_disc_bootstrap_module_id),
+                               dreamcast_system_bootstrap_address,
+                               boot.system_bootstrap);
+    publish_initial_executable(std::string(dreamcast_initial_boot_executable_module_id),
+                               dreamcast_disc_boot_address,
+                               boot.boot_file);
     module_load_writes->reset();
     reset_dreamcast_direct_boot_cpu(cpu);
     if (firmware_mode == DreamcastRuntimeFirmwareMode::HleBiosAbi)

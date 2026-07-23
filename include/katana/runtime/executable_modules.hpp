@@ -172,6 +172,7 @@ enum class MaterializationFailure : std::uint8_t {
     IrVerificationFailed,
     CodeGenerationFailed,
     ByteIdentityMismatch,
+    AotTemplateMismatch,
     GenerationMismatch,
     ModuleUnloaded,
     RelocationMismatch,
@@ -219,6 +220,7 @@ struct MaterializedBlockCandidate {
     std::uint64_t recursive_seeds = 0u;
     std::uint64_t analysis_time_ms = 0u;
     std::uint64_t peak_memory_bytes = 0u;
+    MaterializationFailure rejection_failure = MaterializationFailure::None;
 };
 
 struct BlockMaterializationEvent {
@@ -231,7 +233,7 @@ struct BlockMaterializationEvent {
 };
 
 using BlockMaterializeCallback = std::function<MaterializedBlockCandidate(
-    std::uint32_t, std::span<const std::uint8_t>, const BlockVariantKey&)>;
+    std::uint32_t, std::uint32_t, std::span<const std::uint8_t>, const BlockVariantKey&)>;
 
 class DemandBlockMaterializer final {
   public:
@@ -272,6 +274,9 @@ class DemandBlockMaterializer final {
         std::uint32_t address = 0u;
         std::uint32_t physical_address = 0u;
         std::uint32_t size = 0u;
+        std::uint32_t module_address = 0u;
+        std::uint32_t block_module_address = 0u;
+        std::uint32_t block_size = 0u;
         std::uint32_t callsite = 0u;
         std::string module_id;
         std::string source_identity;
@@ -280,6 +285,7 @@ class DemandBlockMaterializer final {
         RuntimeBlockHandle handle;
         std::vector<std::uint8_t> snapshot;
         bool interpreter_backed = false;
+        bool aot_template = false;
     };
     std::vector<MaterializedOrigin> origins_;
 };

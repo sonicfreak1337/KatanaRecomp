@@ -168,9 +168,15 @@ int main(const int argc, char* argv[]) {
             "MOVA richtet den Instruktions-PC nicht auf vier Byte aus.");
 
     const auto source = katana::codegen::emit_cpp_program(program, entry_address);
-    require(source.find("guest_read_s16(cpu, 0x00000108u)") != std::string::npos &&
-                source.find("guest_read_u32(cpu, 0x00000110u)") != std::string::npos &&
-                source.find("cpu.r[0] = 0x00000118u;") != std::string::npos,
+    require(source.find("guest_read_s16(cpu, "
+                        "katana::runtime::relocate_code_address(0x00000108u))") !=
+                    std::string::npos &&
+                source.find("guest_read_u32(cpu, "
+                            "katana::runtime::relocate_code_address(0x00000110u))") !=
+                    std::string::npos &&
+                source.find("cpu.r[0] = "
+                            "katana::runtime::relocate_code_address(0x00000118u);") !=
+                    std::string::npos,
             "Der Codegenerator verwendet falsche PC-relative Adressen.");
 
     std::cout << "Alle KR-1405 Decoder-, IR- und Codegen-Tests erfolgreich.\n";

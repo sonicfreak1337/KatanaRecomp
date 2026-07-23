@@ -17,6 +17,7 @@
 #include "katana/platform/dreamcast_disc.hpp"
 #include "katana/runtime/abi.hpp"
 #include "katana/runtime/disc_install.hpp"
+#include "katana/runtime/dreamcast_boot.hpp"
 #include "katana/runtime/packed_disc.hpp"
 
 #include <algorithm>
@@ -24,10 +25,12 @@
 #include <atomic>
 #include <cctype>
 #include <chrono>
+#include <compare>
 #include <cstdlib>
 #include <fstream>
 #include <future>
 #include <iomanip>
+#include <map>
 #include <optional>
 #include <sstream>
 #include <stdexcept>
@@ -729,6 +732,10 @@ std::string handwritten_main(const std::string& entry_namespace,
            "                      << state.pvr_renderer->metrics().frames\n"
            "                      << \" pvr_guest_frames=\"\n"
            "                      << state.pvr_renderer->metrics().proven_guest_frames\n"
+           "                      << \" pvr_direct_frames=\"\n"
+           "                      << state.pvr_renderer->metrics().direct_scanout_frames\n"
+           "                      << \" pvr_direct_changed_pixels=\"\n"
+           "                      << state.pvr_renderer->metrics().direct_scanout_changed_pixels\n"
            "                      << \" pvr_changed_pixels=\"\n"
            "                      << state.pvr_renderer->metrics().changed_pixels\n"
            "                      << \" pvr_ta_packets=\" << state.pvr_ta_fifo->metrics().packets\n"
@@ -980,7 +987,12 @@ std::vector<ProjectArtifact>
 runtime_dispatch_artifacts(const std::string& entry_namespace,
                            const std::span<const katana::ir::Function> program,
                            const std::uint32_t entry_address,
-                           const bool diagnostic_interpreter) {
+                           const bool diagnostic_interpreter,
+                           const std::span<const katana::analysis::RuntimeCodeCopy>
+                               runtime_code_copies,
+                           const katana::io::ExecutableImage& image,
+                           const std::uint32_t boot_address,
+                           const std::size_t boot_size) {
     const auto symbol = [](const std::uint32_t address) {
         constexpr std::array digits{'0', '1', '2', '3', '4', '5', '6', '7',
                                     '8', '9', 'A', 'B', 'C', 'D', 'E', 'F'};
@@ -1035,6 +1047,110 @@ runtime_dispatch_artifacts(const std::string& entry_namespace,
         }
         return "NotDynamic";
     };
+    struct NativeTemplateEmission {
+        struct PatchTarget {
+            std::uint32_t live_value = 0u;
+            std::uint32_t block_address = 0u;
+
+            auto operator<=>(const PatchTarget&) const = default;
+        };
+
+        std::string_view module_id;
+        std::string expected_source_identity;
+        std::uint32_t source_start = 0u;
+        std::uint32_t extent = 0u;
+        std::int32_t destination_vbr_delta = 0;
+        std::map<std::uint32_t, std::vector<PatchTarget>> patch_targets;
+    };
+    const auto range_contains = [](const std::uint32_t outer_start,
+                                   const std::uint64_t outer_size,
+                                   const std::uint32_t inner_start,
+                                   const std::uint32_t inner_size) {
+        const auto outer_end = static_cast<std::uint64_t>(outer_start) + outer_size;
+        const auto inner_end = static_cast<std::uint64_t>(inner_start) + inner_size;
+        return inner_size != 0u && outer_end <= 0x1'0000'0000ull &&
+               inner_end <= 0x1'0000'0000ull && inner_start >= outer_start &&
+               inner_end <= outer_end;
+    };
+    std::vector<NativeTemplateEmission> native_templates;
+    for (const auto& copy : runtime_code_copies) {
+        if (copy.source_byte_count == 0u ||
+            static_cast<std::uint64_t>(copy.source_begin) + copy.source_byte_count >
+                0x1'0000'0000ull ||
+            copy.source_end_inclusive !=
+                copy.source_begin + copy.source_byte_count - sizeof(std::uint32_t))
+            throw std::runtime_error("Runtime-Codecopy besitzt ungueltige Quellgrenzen.");
+        std::string_view module_id;
+        std::uint32_t module_start = 0u;
+        std::size_t module_size = 0u;
+        if (range_contains(katana::runtime::dreamcast_system_bootstrap_address,
+                           katana::runtime::dreamcast_system_bootstrap_size,
+                           copy.source_begin,
+                           copy.source_byte_count)) {
+            module_id = katana::runtime::dreamcast_initial_disc_bootstrap_module_id;
+            module_start = katana::runtime::dreamcast_system_bootstrap_address;
+            module_size = katana::runtime::dreamcast_system_bootstrap_size;
+        } else if (range_contains(
+                       boot_address, boot_size, copy.source_begin, copy.source_byte_count)) {
+            module_id = katana::runtime::dreamcast_initial_boot_executable_module_id;
+            module_start = boot_address;
+            module_size = boot_size;
+        } else {
+            throw std::runtime_error(
+                "Runtime-Codecopy liegt ausserhalb lokal gebundener Disc-Bootmodule.");
+        }
+        const auto* module_segment = image.find_segment(module_start, module_size);
+        if (module_segment == nullptr) {
+            throw std::runtime_error(
+                "Runtime-Codecopy besitzt kein vollstaendiges lokales Quellsegment.");
+        }
+        const auto module_offset = module_segment->byte_offset(module_start);
+        if (!module_offset.has_value() || *module_offset > module_segment->bytes.size() ||
+            module_size > module_segment->bytes.size() - *module_offset) {
+            throw std::runtime_error(
+                "Runtime-Codecopy-Quellsegment besitzt keine vollstaendigen Modulbytes.");
+        }
+        const auto expected_source_identity =
+            "sha256:" + katana::io::sha256_bytes(std::string_view(
+                            reinterpret_cast<const char*>(module_segment->bytes.data() +
+                                                          *module_offset),
+                            module_size));
+        auto existing = std::find_if(native_templates.begin(),
+                                     native_templates.end(),
+                                     [&](const auto& candidate) {
+                                         return candidate.module_id == module_id &&
+                                                candidate.expected_source_identity ==
+                                                    expected_source_identity &&
+                                                candidate.source_start == copy.source_begin &&
+                                                candidate.extent == copy.source_byte_count &&
+                                                candidate.destination_vbr_delta ==
+                                                    copy.destination_vbr_delta;
+                                     });
+        if (existing == native_templates.end()) {
+            native_templates.push_back({module_id,
+                                        expected_source_identity,
+                                        copy.source_begin,
+                                        copy.source_byte_count,
+                                        copy.destination_vbr_delta,
+                                        {}});
+            existing = std::prev(native_templates.end());
+        }
+        for (const auto& patch : copy.patch_candidates) {
+            if (patch.slot_address < copy.source_begin ||
+                static_cast<std::uint64_t>(patch.slot_address) + sizeof(std::uint32_t) >
+                    static_cast<std::uint64_t>(copy.source_begin) + copy.source_byte_count)
+                throw std::runtime_error("Runtime-Codecopy-Patchslot liegt ausserhalb der Vorlage.");
+            existing->patch_targets[patch.slot_address - copy.source_begin].push_back(
+                {patch.live_value, patch.target_address});
+        }
+    }
+    for (auto& native_template : native_templates) {
+        for (auto& [offset, targets] : native_template.patch_targets) {
+            static_cast<void>(offset);
+            std::sort(targets.begin(), targets.end());
+            targets.erase(std::unique(targets.begin(), targets.end()), targets.end());
+        }
+    }
     struct DispatchBlock {
         std::uint32_t owner;
         std::uint32_t address;
@@ -1076,6 +1192,19 @@ runtime_dispatch_artifacts(const std::string& entry_namespace,
     });
     if (dispatch_blocks.empty())
         throw std::runtime_error("Runtime-Dispatch besitzt keine generierten Bloecke.");
+    for (const auto& native_template : native_templates) {
+        if (!block_addresses.contains(native_template.source_start))
+            throw std::runtime_error(
+                "Runtime-Codecopy besitzt keinen generierten AOT-Quellblock.");
+        for (const auto& [offset, targets] : native_template.patch_targets) {
+            static_cast<void>(offset);
+            if (std::any_of(targets.begin(), targets.end(), [&](const auto& target) {
+                    return !block_addresses.contains(target.block_address);
+                }))
+                throw std::runtime_error(
+                    "Runtime-Codecopy-Patchziel besitzt keinen generierten AOT-Block.");
+        }
+    }
 
     constexpr std::size_t dispatch_blocks_per_shard = 512u;
     const auto shard_count =
@@ -1180,9 +1309,12 @@ runtime_dispatch_artifacts(const std::string& entry_namespace,
             const auto address = symbol(block.address);
             const auto exit_source = symbol(block.exit_source);
             shard_output << "    case 0x" << address << "u:\n"
-                         << "        active_exit_source = {0x" << exit_source
-                         << "u, katana::runtime::canonical_physical_address(0x" << exit_source
-                         << "u)};\n"
+                         << "        active_exit_source = {"
+                            "katana::runtime::relocate_code_address(0x"
+                         << exit_source
+                         << "u), katana::runtime::canonical_physical_address("
+                            "katana::runtime::relocate_code_address(0x"
+                         << exit_source << "u))};\n"
                          << "        active_exit_kind = katana::runtime::BlockEndKind::"
                          << block.end_kind << ";\n"
                          << "        active_exit_site_class = "
@@ -1233,8 +1365,10 @@ runtime_dispatch_artifacts(const std::string& entry_namespace,
            << "#include \"katana/runtime/block_abi.hpp\"\n"
            << "#include \"katana/runtime/block_table.hpp\"\n"
            << "#include \"katana/runtime/dispatch_diagnostics.hpp\"\n"
+           << "#include \"katana/runtime/dreamcast_boot.hpp\"\n"
            << "#include \"katana/runtime/executable_modules.hpp\"\n"
            << "#include \"katana/runtime/indirect_dispatch.hpp\"\n";
+    output << "#include \"katana/runtime/native_aot_template.hpp\"\n";
     if (diagnostic_interpreter)
         output << "#include \"katana/runtime/dynamic_interpreter.hpp\"\n"
                << "#include \"katana/sh4/decoder.hpp\"\n";
@@ -1445,7 +1579,8 @@ runtime_dispatch_artifacts(const std::string& entry_namespace,
            "        active_exit_source = {selected.diagnostic_target, selected.physical_target};\n"
            "        active_exit_site_class = "
            "katana::runtime::DynamicDispatchSiteClass::NotDynamic;\n"
-           "        auto exit = selected_block->get().function(cpu, *active_context);\n"
+           "        auto exit = katana::runtime::execute_runtime_block(\n"
+           "            selected_block->get(), cpu, *active_context);\n"
            "        if (cpu.retired_guest_instructions < retired_before)\n"
            "            throw std::runtime_error(\"Gastinstruktionszaehler lief rueckwaerts.\");\n"
            "        const auto retired = cpu.retired_guest_instructions - retired_before;\n"
@@ -1520,6 +1655,8 @@ runtime_dispatch_artifacts(const std::string& entry_namespace,
             "}\n"
             "} // namespace\n\n"
             "void note_block_entry(const std::uint32_t address) noexcept {\n"
+            "    const auto source_address = "
+            "katana::runtime::unrelocate_code_address(address);\n"
             "    const bool matched = [&]() noexcept {\n";
     const auto emit_note_router = [&](const auto& self,
                                       const std::size_t begin,
@@ -1527,12 +1664,12 @@ runtime_dispatch_artifacts(const std::string& entry_namespace,
                                       const std::string_view indentation) -> void {
         if (end - begin == 1u) {
             output << indentation << "return runtime_dispatch_detail::note_block_entry_shard_"
-                   << shard_symbol(begin) << "(address);\n";
+                   << shard_symbol(begin) << "(source_address);\n";
             return;
         }
         const auto middle = begin + (end - begin) / 2u;
         const auto pivot = dispatch_blocks[middle * dispatch_blocks_per_shard - 1u].address;
-        output << indentation << "if (address <= 0x" << symbol(pivot) << "u) {\n";
+        output << indentation << "if (source_address <= 0x" << symbol(pivot) << "u) {\n";
         const auto nested = std::string(indentation) + "    ";
         self(self, begin, middle, nested);
         output << indentation << "} else {\n";
@@ -1609,16 +1746,51 @@ runtime_dispatch_artifacts(const std::string& entry_namespace,
            << "    auto* modules = services.executable_module_catalog();\n"
            << "    if (modules == nullptr)\n"
            << "        throw std::runtime_error(\"Produktpfad besitzt keinen Modul-Catalog.\");\n"
-           << "    katana::runtime::BlockMaterializationPolicy materialization_policy;\n";
+           << "    const std::vector<katana::runtime::NativeAotTemplate> native_aot_templates{\n";
+    for (const auto& native_template : native_templates) {
+        output << "        {std::string(katana::runtime::";
+        if (native_template.module_id ==
+            katana::runtime::dreamcast_initial_disc_bootstrap_module_id) {
+            output << "dreamcast_initial_disc_bootstrap_module_id";
+        } else if (native_template.module_id ==
+                   katana::runtime::dreamcast_initial_boot_executable_module_id) {
+            output << "dreamcast_initial_boot_executable_module_id";
+        } else {
+            throw std::logic_error("Unbekannte lokale AOT-Quellmodulkennung.");
+        }
+        output << "), \"" << native_template.expected_source_identity << "\", 0x"
+               << symbol(native_template.source_start) << "u, "
+               << native_template.extent << "u, " << native_template.destination_vbr_delta
+               << ", {";
+        for (const auto& [offset, targets] : native_template.patch_targets) {
+            output << "{" << offset << "u, {";
+            for (std::size_t index = 0u; index < targets.size(); ++index) {
+                if (index != 0u) output << ',';
+                output << "{0x" << symbol(targets[index].live_value) << "u,0x"
+                       << symbol(targets[index].block_address) << "u}";
+            }
+            output << "}},";
+        }
+        output << "}},\n";
+    }
+    output << "    };\n"
+           << "    katana::runtime::NativeAotTemplateBinder native_aot_binder(\n"
+           << "        cpu, *modules, table, native_aot_templates);\n"
+           << "    katana::runtime::BlockMaterializationPolicy materialization_policy;\n"
+           << "    materialization_policy.max_blocks = 65536u;\n"
+           << "    materialization_policy.max_bytes = 64u * 1024u * 1024u;\n"
+           << "    materialization_policy.max_materializations_per_run = 65536u;\n";
     if (diagnostic_interpreter) {
         output << "    materialization_policy.enabled = true;\n"
-               << "    materialization_policy.max_blocks = 65536u;\n"
-               << "    materialization_policy.max_bytes = 64u * 1024u * 1024u;\n"
-               << "    materialization_policy.max_materializations_per_run = 65536u;\n"
                << "    katana::runtime::DemandBlockMaterializer materializer(\n"
                << "        *modules, table, services.executable_code_tracker(), materialization_policy,\n"
-               << "        [](const std::uint32_t target, const std::span<const std::uint8_t> bytes,\n"
+               << "        [&native_aot_binder](const std::uint32_t target,\n"
+               << "           const std::uint32_t physical_origin,\n"
+               << "           const std::span<const std::uint8_t> bytes,\n"
                << "           const katana::runtime::BlockVariantKey& variant) {\n"
+               << "            auto native = native_aot_binder.bind(\n"
+               << "                target, physical_origin, bytes, variant);\n"
+               << "            if (native) return std::move(native.candidate);\n"
                << "            katana::runtime::MaterializedBlockCandidate candidate;\n"
                << "            if (bytes.size() < 2u) return candidate;\n"
                << "            const auto opcode = static_cast<std::uint16_t>(bytes[0]) |\n"
@@ -1651,12 +1823,20 @@ runtime_dispatch_artifacts(const std::string& entry_namespace,
                << "        });\n";
     } else {
         output << "    // Product ports execute only statically generated native/AOT blocks.\n"
-               << "    // Keeping a disabled materializer preserves a typed, observable\n"
-               << "    // MaterializationFailure::Disabled boundary for an unbound target.\n"
-               << "    materialization_policy.enabled = false;\n"
+               << "    // Runtime copies bind only to analysis-proven, pre-generated native code.\n"
+               << "    materialization_policy.enabled = "
+               << (native_templates.empty() ? "false" : "true") << ";\n"
                << "    katana::runtime::DemandBlockMaterializer materializer(\n"
                << "        *modules, table, services.executable_code_tracker(),\n"
-               << "        materialization_policy, {});\n";
+               << "        materialization_policy,\n"
+               << "        [&native_aot_binder](const std::uint32_t target,\n"
+               << "           const std::uint32_t physical_origin,\n"
+               << "           const std::span<const std::uint8_t> bytes,\n"
+               << "           const katana::runtime::BlockVariantKey& variant) {\n"
+               << "            return std::move(\n"
+               << "                native_aot_binder.bind(\n"
+               << "                    target, physical_origin, bytes, variant).candidate);\n"
+               << "        });\n";
     }
     output << "    last_materialization_status = {};\n"
            << "    const auto capture_materialization_status = [&] {\n"
@@ -1994,7 +2174,11 @@ PortExportResult export_dreamcast_port_project(const PreparedPortProgram& prepar
     auto dispatch_artifacts = runtime_dispatch_artifacts(entry_namespace,
                                                          prepared.program,
                                                          prepared.entry_address,
-                                                         options.diagnostic_partial);
+                                                         options.diagnostic_partial,
+                                                         prepared.analysis.runtime_code_copies.copies,
+                                                         prepared.image,
+                                                         prepared.boot_address,
+                                                         prepared.boot_size);
     for (auto& artifact : dispatch_artifacts) artifacts.push_back(std::move(artifact));
     artifacts.push_back({"katana-port.cmake", port_cmake(options.target_name)});
     artifacts.push_back({"metadata/port-project.json",

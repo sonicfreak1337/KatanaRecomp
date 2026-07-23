@@ -9,7 +9,7 @@
 
 namespace katana::runtime {
 
-inline constexpr std::uint32_t native_video_contract_version = 1u;
+inline constexpr std::uint32_t native_video_contract_version = 2u;
 
 struct NativeVideoConfig {
     std::uint32_t contract_version = native_video_contract_version;

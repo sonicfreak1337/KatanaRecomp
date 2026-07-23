@@ -1,3 +1,4 @@
+#include "katana/runtime/dreamcast_memory.hpp"
 #include "katana/runtime/pvr.hpp"
 
 #include <bit>
@@ -22,6 +23,21 @@ template <typename E, typename F> bool throws(F&& f) {
         return true;
     }
     return false;
+}
+
+std::uint32_t framebuffer_backing_offset(const std::uint32_t logical_offset) {
+    return katana::runtime::dreamcast_vram_32bit_to_linear_offset(logical_offset & 0x007FFFFFu);
+}
+
+std::uint32_t read_fb_u32(const katana::runtime::LinearMemoryDevice& vram,
+                          const std::uint32_t logical_offset) {
+    return vram.read_u32(framebuffer_backing_offset(logical_offset));
+}
+
+void write_fb_u32(katana::runtime::LinearMemoryDevice& vram,
+                  const std::uint32_t logical_offset,
+                  const std::uint32_t value) {
+    vram.write_u32(framebuffer_backing_offset(logical_offset), value);
 }
 } // namespace
 
@@ -110,7 +126,7 @@ int main() {
         return software.take_guest_frame_proof();
     };
     software.render({}, registers, vram);
-    require(vram.read_u32(0x1000u) == 0x80402010u,
+    require(read_fb_u32(vram, 0x1000u) == 0x80402010u,
             "PVR-Hintergrundebene dekodiert Tagadresse, Offset, Skip, ARGB oder Fullscreen-Coverage falsch.");
     const auto first_render_generation = software.last_render_generation();
     require(first_render_generation != 0u && software.metrics().proven_guest_frames == 0u &&
@@ -258,30 +274,30 @@ int main() {
         pal_renderer.observe_vblank_scanout(pal_registers, pal_vram.bytes());
         const auto pal_field_proof = pal_renderer.take_guest_frame_proof();
         require(pal_field_proof.has_value() && pal_field_proof->scanout_field == 1u &&
-                    pal_field_proof->frame.width == 1u && pal_field_proof->frame.height == 2u,
+                    pal_field_proof->frame.width == 1u && pal_field_proof->frame.height == 1u,
                 "Aktives PAL-Feld bindet SOF2 nicht an den exakten VBlank-Frame.");
 
         write_pal_background(0xFF654321u);
         pal_renderer.render({}, pal_registers, pal_vram);
-        pal_vram.write_u32(pal_field_2, 0xFFA0B0C0u);
+        write_fb_u32(pal_vram, pal_field_2, 0xFFA0B0C0u);
         pal_renderer.observe_vblank_scanout(pal_registers, pal_vram.bytes());
         require(!pal_renderer.take_guest_frame_proof().has_value() &&
                     pal_renderer.pending_render_generations() == 1u,
                 "Nach dem Render ueberschriebene VRAM-Bytes beweisen einen veralteten Frame.");
 
-        const auto field_2_before = pal_vram.read_u32(pal_field_2);
+        const auto field_2_before = read_fb_u32(pal_vram, pal_field_2);
         pal_registers.write(pvr_register::FramebufferWriteSof1, 0x7100u);
         pal_registers.write(pvr_register::FramebufferWriteSof2, 0x7000u);
         pal_registers.write(pvr_register::ScalerControl, 0x00060800u);
         write_pal_background(0xFF0A1B2Cu);
         pal_renderer.render({}, pal_registers, pal_vram);
-        require(pal_vram.read_u32(0x7000u) == 0xFF0A1B2Cu &&
-                    pal_vram.read_u32(pal_field_2) == field_2_before,
+        require(read_fb_u32(pal_vram, 0x7000u) == 0xFF0A1B2Cu &&
+                    read_fb_u32(pal_vram, pal_field_2) == field_2_before,
                 "SCALER_CTL-Interlace/Fieldselect schreibt Feld 2 nicht nach FB_W_SOF2.");
         pal_registers.write(pvr_register::ScalerControl, 0x00020800u);
         write_pal_background(0xFF2C1B0Au);
         pal_renderer.render({}, pal_registers, pal_vram);
-        require(pal_vram.read_u32(0x7100u) == 0xFF2C1B0Au,
+        require(read_fb_u32(pal_vram, 0x7100u) == 0xFF2C1B0Au,
                 "SCALER_CTL-Interlace ohne Fieldselect schreibt Feld 1 nicht nach FB_W_SOF1.");
     }
     software.render({}, registers, vram);
@@ -329,8 +345,8 @@ int main() {
                            x < 4u ? 0xF800u : 0x07E0u);
     }
     textured_background.render({}, registers, vram);
-    const auto textured_left = vram.read_u32(0x3000u);
-    const auto textured_right = vram.read_u32(0x3004u);
+    const auto textured_left = read_fb_u32(vram, 0x3000u);
+    const auto textured_right = read_fb_u32(vram, 0x3004u);
     require(textured_left == 0xFFFF0000u && textured_right == 0xFF00FF00u,
             "Texturierter PVR-Hintergrund verliert ISP/TSP/TCW, UV oder Decal-Sampling: " +
                 std::to_string(textured_left) + "/" + std::to_string(textured_right));
@@ -388,13 +404,13 @@ int main() {
         write_gradient_background(0.0f);
         background_registers.write(pvr_register::FramebufferWriteSof1, first_target);
         background_renderer.render({}, background_registers, background_vram);
-        const auto first_top_left = background_vram.read_u32(first_target);
+        const auto first_top_left = read_fb_u32(background_vram, first_target);
         const auto first_top_right =
-            background_vram.read_u32(first_target + 639u * 4u);
+            read_fb_u32(background_vram, first_target + 639u * 4u);
         const auto first_bottom_left =
-            background_vram.read_u32(first_target + 479u * 640u * 4u);
+            read_fb_u32(background_vram, first_target + 479u * 640u * 4u);
         const auto first_bottom_right =
-            background_vram.read_u32(first_target + (479u * 640u + 639u) * 4u);
+            read_fb_u32(background_vram, first_target + (479u * 640u + 639u) * 4u);
         require(first_top_left != first_top_right &&
                     ((first_bottom_left >> 8u) & 0xFFu) <= 2u &&
                     ((first_bottom_right >> 8u) & 0xFFu) <= 2u &&
@@ -404,12 +420,12 @@ int main() {
         write_gradient_background(50'000.0f);
         background_registers.write(pvr_register::FramebufferWriteSof1, second_target);
         background_renderer.render({}, background_registers, background_vram);
-        require(background_vram.read_u32(second_target) == first_top_left &&
-                    background_vram.read_u32(second_target + 639u * 4u) == first_top_right &&
-                    background_vram.read_u32(second_target + 479u * 640u * 4u) ==
+        require(read_fb_u32(background_vram, second_target) == first_top_left &&
+                    read_fb_u32(background_vram, second_target + 639u * 4u) == first_top_right &&
+                    read_fb_u32(background_vram, second_target + 479u * 640u * 4u) ==
                         first_bottom_left &&
-                    background_vram.read_u32(second_target +
-                                              (479u * 640u + 639u) * 4u) ==
+                    read_fb_u32(background_vram,
+                                second_target + (479u * 640u + 639u) * 4u) ==
                         first_bottom_right,
                 "Untexturierte BGP-Gouraud-/Offsetgewichte haengen von gespeicherten XY ab.");
 
@@ -417,7 +433,7 @@ int main() {
         background_registers.write(pvr_register::ScalerControl, 0x00010400u);
         background_registers.write(pvr_register::FramebufferWriteSof1, hscale_target);
         background_renderer.render({}, background_registers, background_vram);
-        require(background_vram.read_u32(hscale_target + 639u * 4u) != first_top_right,
+        require(read_fb_u32(background_vram, hscale_target + 639u * 4u) != first_top_right,
                 "SCALER_CTL.hscale erreicht die feste untexturierte BGP-Geometrie nicht.");
     }
 
@@ -476,13 +492,13 @@ int main() {
         textured_registers.write(pvr_register::FramebufferWriteSof1, normal_target);
         textured_renderer.render({}, textured_registers, textured_vram);
         const auto normal_middle =
-            textured_vram.read_u32(normal_target + (240u * 640u + 320u) * 4u);
+            read_fb_u32(textured_vram, normal_target + (240u * 640u + 320u) * 4u);
         write_textured_parameters();
         textured_registers.write(pvr_register::ScalerControl, 0x00010400u);
         textured_registers.write(pvr_register::FramebufferWriteSof1, hscale_target);
         textured_renderer.render({}, textured_registers, textured_vram);
         const auto hscale_middle =
-            textured_vram.read_u32(hscale_target + (240u * 640u + 320u) * 4u);
+            read_fb_u32(textured_vram, hscale_target + (240u * 640u + 320u) * 4u);
         require(normal_middle == 0xFF00FF00u && hscale_middle == 0xFFFF0000u,
                 "Texturierte BGP-Erweiterung passt X/U bei SCALER_CTL.hscale nicht gemeinsam an.");
     }
@@ -501,7 +517,7 @@ int main() {
     background_depth_frame.primitives.push_back(depth_triangle);
     registers.write(pvr_register::FramebufferWriteSof1, 0x1400u);
     software.render(background_depth_frame, registers, vram);
-    require(vram.read_u32(0x1400u) == 0x80402010u,
+    require(read_fb_u32(vram, 0x1400u) == 0x80402010u,
             "ISP_BACKGND_D ersetzt die im Hintergrundvertex gespeicherte Tiefe nicht.");
 
     constexpr std::uint32_t shadow_tag_address = 0x80u;
@@ -521,7 +537,7 @@ int main() {
     software.render({}, registers, vram);
     const auto rtt_generation = software.last_render_generation();
     require(registers.read(pvr_register::FramebufferWriteSof1) == 0x01001800u &&
-                vram.read_u32(0x1800u) == 0xFF102030u,
+                read_fb_u32(vram, 0x1800u) == 0xFF102030u,
             "PVR-Hintergrund verliert Shadow-Stride oder physische RTT-Zielreduktion.");
     require(!observe_scanout().has_value(),
             "Unsichtbare Render- oder RTT-Generation wird ohne Read-FB-Flip bewiesen.");
@@ -558,7 +574,7 @@ int main() {
     fog_frame.primitives.push_back(fog_triangle);
     registers.write(pvr_register::FogVertexColor, 0x000000FFu);
     software.render(fog_frame, registers, vram);
-    require(vram.read_u32(0x2000u) == 0xFF7F0080u,
+    require(read_fb_u32(vram, 0x2000u) == 0xFF7F0080u,
             "Per-Vertex-Fog verwendet Offset-Alpha oder Vertex-Fogfarbe nicht.");
 
     fog_frame.primitives[0].material.fog_mode = 0u;
@@ -567,14 +583,14 @@ int main() {
     registers.write(pvr_register::FogTableBase, 0x0000FF00u);
     registers.write(pvr_register::FogTableColor, 0x0000FF00u);
     software.render(fog_frame, registers, vram);
-    require(vram.read_u32(0x2000u) == 0xFF00FF00u,
+    require(read_fb_u32(vram, 0x2000u) == 0xFF00FF00u,
             "Tabellen-Fog wertet Density, Tabelle oder Fogfarbe nicht aus.");
 
     fog_frame.primitives[0].material.fog_mode = 3u;
     registers.write(pvr_register::FogTableBase, 0x00008000u);
     registers.write(pvr_register::FogTableColor, 0x000000FFu);
     software.render(fog_frame, registers, vram);
-    require(vram.read_u32(0x2000u) == 0x800000FFu,
+    require(read_fb_u32(vram, 0x2000u) == 0x800000FFu,
             "Tabellen-Fog-Mode 2 ersetzt Base-RGB und Base-Alpha nicht.");
 
     fog_frame.primitives[0].material.fog_mode = 2u;
@@ -582,7 +598,7 @@ int main() {
     registers.write(pvr_register::ColorClampMinimum, 0x00201000u);
     registers.write(pvr_register::ColorClampMaximum, 0x004080FFu);
     software.render(fog_frame, registers, vram);
-    require(vram.read_u32(0x2000u) == 0xFF401000u,
+    require(read_fb_u32(vram, 0x2000u) == 0xFF401000u,
             "PVR-Farbclamp bleibt trotz TSP-Freigabe wirkungslos.");
 
     PvrTaFrame perspective_frame;
@@ -606,7 +622,7 @@ int main() {
     vram.write_u16(0x3000u + 2u * 2u, 0xF800u);
     vram.write_u16(0x3000u + 3u * 2u, 0x001Fu);
     software.render(perspective_frame, registers, vram);
-    require(vram.read_u32(0x2000u) == 0xFF0000FFu,
+    require(read_fb_u32(vram, 0x2000u) == 0xFF0000FFu,
             "Texturkoordinaten werden affin statt perspektivisch ueber 1/W interpoliert.");
 
     perspective_frame.primitives[0].material.texture_filter = 2u;
@@ -620,12 +636,135 @@ int main() {
             "Textur-Supersampling erreicht den produktiven Renderer nicht.");
     perspective_frame.primitives[0].material.texture_supersampling = false;
     perspective_frame.primitives[0].material.blend_source_accumulation = true;
-    vram.write_u32(0x2000u, 0xFFFFFFFFu);
+    write_fb_u32(vram, 0x2000u, 0xFFFFFFFFu);
     const auto before_accumulation = software.metrics().frames;
     software.render(perspective_frame, registers, vram);
     require(software.metrics().frames == before_accumulation + 1u &&
-                vram.read_u32(0x2000u) == 0u,
+                read_fb_u32(vram, 0x2000u) == 0u,
             "Sekundaer-Akkumulationsquelle wird nicht im produktiven Renderer ausgewertet.");
+
+    {
+        EventScheduler direct_scheduler;
+        Memory direct_memory(0u);
+        const auto direct_vram = map_dreamcast_vram(direct_memory);
+        PvrRegisterFile direct_registers(direct_scheduler, PvrTiming{20u, 100u, 100u});
+        PvrSoftwareRenderer direct_renderer;
+        direct_memory.set_guest_write_observer([&](const GuestWriteEvent& event) {
+            direct_renderer.observe_vram_write(event.address, event.size, event.bytes_changed);
+        });
+        direct_registers.set_vblank_observer([&](const bool entering) {
+            if (entering)
+                direct_renderer.observe_vblank_scanout(direct_registers, direct_vram->bytes());
+        });
+        direct_registers.write(pvr_register::FramebufferReadControl, 0xDu);
+        direct_registers.write(pvr_register::FramebufferReadSof1, 0x00200000u);
+        direct_registers.write(pvr_register::FramebufferReadSize, 0u);
+        direct_registers.write(pvr_register::SpgLoad, (9u << 16u) | 9u);
+        direct_registers.write(pvr_register::SpgVblankInterrupt, (2u << 16u) | 1u);
+
+        constexpr std::uint32_t direct_32bit_offset = 0x00200000u;
+        constexpr std::uint32_t direct_32bit_address = 0xA5000000u + direct_32bit_offset;
+        constexpr std::uint32_t offscreen_32bit_address = direct_32bit_address + 0x00010000u;
+        constexpr std::uint32_t direct_linear_offset =
+            dreamcast_vram_32bit_to_linear_offset(direct_32bit_offset);
+        direct_vram->write_u32(direct_linear_offset, 0x00112233u);
+        direct_registers.write(pvr_register::VideoControl,
+                               direct_registers.read(pvr_register::VideoControl) & ~0x8u);
+        static_cast<void>(direct_scheduler.advance_to(20u, 8u));
+        require(!direct_renderer.take_guest_frame_proof().has_value() &&
+                    direct_renderer.metrics().proven_guest_frames == 0u,
+                "Hostseitig vorgefuelltes VRAM wird als direkter Gastframe bewiesen.");
+
+        direct_memory.write_u32(offscreen_32bit_address, 0x00AABBCCu);
+        static_cast<void>(direct_scheduler.advance_to(220u, 16u));
+        require(!direct_renderer.take_guest_frame_proof().has_value() &&
+                    direct_renderer.metrics().proven_guest_frames == 0u,
+                "Nicht sichtbarer direkter VRAM-Write beweist den aktiven Scanout.");
+
+        direct_registers.write(pvr_register::FramebufferReadSof1,
+                               direct_32bit_offset + 0x00010000u);
+        direct_renderer.observe_vblank_scanout(direct_registers, direct_vram->bytes());
+        const auto flipped_offscreen_proof = direct_renderer.take_guest_frame_proof();
+        require(flipped_offscreen_proof.has_value() &&
+                    flipped_offscreen_proof->source ==
+                        PvrGuestFrameProofSource::DirectFramebuffer &&
+                    flipped_offscreen_proof->frame.rgba ==
+                        std::vector<std::uint8_t>({0xAAu, 0xBBu, 0xCCu, 0xFFu}),
+                "Offscreen-Dirty-Evidenz bleibt nicht bis zum sichtbaren Buffer-Flip erhalten.");
+        direct_registers.write(pvr_register::FramebufferReadSof1, direct_32bit_offset);
+
+        direct_registers.write(pvr_register::VideoControl,
+                               direct_registers.read(pvr_register::VideoControl) | 0x8u);
+        direct_memory.write_u32(direct_32bit_address, 0x00445566u);
+        direct_renderer.observe_vblank_scanout(direct_registers, direct_vram->bytes());
+        require(!direct_renderer.take_guest_frame_proof().has_value() &&
+                    direct_renderer.metrics().proven_guest_frames == 1u,
+                "Geblankter direkter VRAM-Write wird als Gastframe bewiesen.");
+
+        direct_registers.write(pvr_register::VideoControl,
+                               direct_registers.read(pvr_register::VideoControl) & ~0x8u);
+        static_cast<void>(direct_scheduler.advance_to(240u, 8u));
+        const auto direct_proof = direct_renderer.take_guest_frame_proof();
+        require(direct_proof.has_value() && direct_proof->frame.width == 1u &&
+                    direct_proof->frame.height == 1u &&
+                    direct_proof->source == PvrGuestFrameProofSource::DirectFramebuffer &&
+                    direct_proof->frame.rgba ==
+                        std::vector<std::uint8_t>({0x44u, 0x55u, 0x66u, 0xFFu}) &&
+                    direct_renderer.metrics().proven_guest_frames == 2u &&
+                    direct_renderer.metrics().direct_scanout_frames == 2u &&
+                    direct_renderer.metrics().direct_scanout_changed_pixels == 2u &&
+                    direct_renderer.metrics().frames == 0u &&
+                    direct_registers.render_request_count() == 0u &&
+                    direct_vram->read_u32(direct_linear_offset) == 0x00445566u,
+                "32-Bit-VRAM-Alias, VBlank und aktiver Scanout beweisen keinen "
+                "direkten C888-Gastframe ohne TA.");
+        static_cast<void>(direct_scheduler.advance_to(440u, 16u));
+        require(!direct_renderer.take_guest_frame_proof().has_value() &&
+                    direct_renderer.metrics().proven_guest_frames == 2u,
+                "Ein direkter VRAM-Write wird an mehreren VBlanks erneut bewiesen.");
+
+        direct_memory.write_u32(offscreen_32bit_address, 0xFFAABBCCu);
+        direct_registers.write(pvr_register::FramebufferReadSof1,
+                               direct_32bit_offset + 0x00010000u);
+        direct_renderer.observe_vblank_scanout(direct_registers, direct_vram->bytes());
+        require(!direct_renderer.take_guest_frame_proof().has_value() &&
+                    direct_renderer.metrics().proven_guest_frames == 2u,
+                "Nur das unsichtbare C888-Highbyte erzeugt nach einem Buffer-Revisit einen Frame.");
+        direct_registers.write(pvr_register::FramebufferReadSof1, direct_32bit_offset);
+
+        direct_registers.write(pvr_register::FramebufferReadControl, 1u | (5u << 4u));
+        direct_memory.write_u16(direct_32bit_address, 0x7C00u);
+        direct_renderer.observe_vblank_scanout(direct_registers, direct_vram->bytes());
+        const auto rgb0555_proof = direct_renderer.take_guest_frame_proof();
+        require(rgb0555_proof.has_value() && rgb0555_proof->frame.width == 2u &&
+                    rgb0555_proof->frame.rgba.size() == 8u &&
+                    std::equal(rgb0555_proof->frame.rgba.begin(),
+                               rgb0555_proof->frame.rgba.begin() + 4u,
+                               std::array<std::uint8_t, 4u>{0xFDu, 0x05u, 0x05u, 0xFFu}.begin()),
+                "FB_R_CTRL-RGB0555 ignoriert Concatbits oder behandelt Bit 15 "
+                "faelschlich als Scanout-Alpha.");
+
+        direct_memory.write_u32(offscreen_32bit_address, 0x00010203u);
+        direct_renderer.reset_guest_frame_evidence();
+        direct_registers.write(pvr_register::FramebufferReadSof1,
+                               direct_32bit_offset + 0x00010000u);
+        direct_renderer.observe_vblank_scanout(direct_registers, direct_vram->bytes());
+        require(!direct_renderer.take_guest_frame_proof().has_value(),
+                "PVR-Evidenzreset laesst einen alten Direct-Write spaeter wieder erscheinen.");
+
+        direct_registers.write(pvr_register::FramebufferReadControl, 0xDu);
+        direct_registers.write(pvr_register::FramebufferReadSof1, direct_32bit_offset);
+        direct_memory.write_u32(direct_32bit_address, 0x00102030u);
+        direct_renderer.observe_vblank_scanout(direct_registers, direct_vram->bytes());
+        require(direct_renderer.take_guest_frame_proof().has_value(),
+                "C888-Scanout wird vor dem Evidenzreset nicht synchronisiert.");
+        direct_renderer.reset_guest_frame_evidence();
+        direct_memory.write_u8(direct_32bit_address + 3u, 0xFFu);
+        direct_renderer.observe_vblank_scanout(direct_registers, direct_vram->bytes());
+        require(!direct_renderer.take_guest_frame_proof().has_value(),
+                "Unsichtbares C888-Highbyte erzeugt direkt nach einem Evidenzreset "
+                "einen falschen Gastframe.");
+    }
 
     PvrSoftwareRenderer bounded_evidence;
     registers.write(pvr_register::FramebufferWriteSof1, 0x6000u);
@@ -695,7 +834,7 @@ int main() {
                     cap_renderer.metrics().dropped_render_evidence_generations != 0u,
                 "Pixelgenaue Renderevidenz ueberschreitet ihr globales Bytebudget.");
         for (std::uint32_t offset = 0u; offset < 512u * 512u * 4u; offset += 4u)
-            cap_vram.write_u32(offset, 0u);
+            write_fb_u32(cap_vram, offset, 0u);
         cap_registers.write(pvr_register::FramebufferReadControl, 0xDu);
         cap_registers.write(pvr_register::FramebufferReadSize, (511u << 10u) | 511u);
         cap_registers.write(pvr_register::FramebufferReadSof1, 0u);

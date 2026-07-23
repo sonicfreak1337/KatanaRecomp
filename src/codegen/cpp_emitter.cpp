@@ -27,6 +27,14 @@ std::string hex32(const std::uint32_t value) {
     return output.str();
 }
 
+std::string relocated_code_address(const std::uint32_t value) {
+    return "katana::runtime::relocate_code_address(" + hex32(value) + ")";
+}
+
+std::string unrelocated_code_address(const std::string_view value) {
+    return "katana::runtime::unrelocate_code_address(" + std::string(value) + ")";
+}
+
 std::string function_name(const std::uint32_t address) {
     std::ostringstream output;
 
@@ -227,10 +235,10 @@ void emit_fpu_disabled_guard(std::ostringstream& output,
     emit_indent(output, indent);
     output << "if (cpu.fpu_disabled()) {\n";
     emit_indent(output, indent + 1);
-    output << "raise_fpu_disabled(cpu, " << hex32(instruction.source_address);
+    output << "raise_fpu_disabled(cpu, " << relocated_code_address(instruction.source_address);
     if (instruction.delay_slot.role == katana::ir::DelaySlotRole::Slot &&
         instruction.delay_slot.counterpart_address.has_value()) {
-        output << ", " << hex32(*instruction.delay_slot.counterpart_address);
+        output << ", " << relocated_code_address(*instruction.delay_slot.counterpart_address);
     }
     output << ");\n";
     emit_indent(output, indent + 1);
@@ -333,10 +341,11 @@ void emit_fpu_mode_guard(std::ostringstream& output,
     emit_indent(output, indent);
     output << "if (" << invalid_condition << ") {\n";
     emit_indent(output, indent + 1);
-    output << "raise_illegal_instruction(cpu, " << hex32(instruction.source_address);
+    output << "raise_illegal_instruction(cpu, "
+           << relocated_code_address(instruction.source_address);
     if (instruction.delay_slot.role == katana::ir::DelaySlotRole::Slot &&
         instruction.delay_slot.counterpart_address.has_value()) {
-        output << ", " << hex32(*instruction.delay_slot.counterpart_address);
+        output << ", " << relocated_code_address(*instruction.delay_slot.counterpart_address);
     }
     output << ");\n";
     emit_indent(output, indent + 1);
@@ -352,10 +361,11 @@ void emit_privileged_guard(std::ostringstream& output,
     emit_indent(output, indent);
     output << "if (!cpu.privileged_mode()) {\n";
     emit_indent(output, indent + 1);
-    output << "raise_illegal_instruction(cpu, " << hex32(instruction.source_address);
+    output << "raise_illegal_instruction(cpu, "
+           << relocated_code_address(instruction.source_address);
     if (instruction.delay_slot.role == katana::ir::DelaySlotRole::Slot &&
         instruction.delay_slot.counterpart_address.has_value()) {
-        output << ", " << hex32(*instruction.delay_slot.counterpart_address);
+        output << ", " << relocated_code_address(*instruction.delay_slot.counterpart_address);
     }
     output << ");\n";
     emit_indent(output, indent + 1);
@@ -1481,7 +1491,8 @@ void emit_simple_instruction(std::ostringstream& output,
             throw std::runtime_error("PC-relativem Word-Load fehlt die effektive Adresse.");
         }
         output << "cpu.r[" << static_cast<unsigned>(instruction.destination_register)
-               << "] = katana::runtime::guest_read_s16(cpu, " << hex32(*instruction.effective_address) << ");\n";
+               << "] = katana::runtime::guest_read_s16(cpu, "
+               << relocated_code_address(*instruction.effective_address) << ");\n";
         return;
 
     case Operation::LoadLongPcRelative:
@@ -1489,14 +1500,15 @@ void emit_simple_instruction(std::ostringstream& output,
             throw std::runtime_error("PC-relativem Long-Load fehlt die effektive Adresse.");
         }
         output << "cpu.r[" << static_cast<unsigned>(instruction.destination_register)
-               << "] = katana::runtime::guest_read_u32(cpu, " << hex32(*instruction.effective_address) << ");\n";
+               << "] = katana::runtime::guest_read_u32(cpu, "
+               << relocated_code_address(*instruction.effective_address) << ");\n";
         return;
 
     case Operation::MoveAddressPcRelative:
         if (!instruction.effective_address.has_value()) {
             throw std::runtime_error("MOVA fehlt die effektive Adresse.");
         }
-        output << "cpu.r[0] = " << hex32(*instruction.effective_address) << ";\n";
+        output << "cpu.r[0] = " << relocated_code_address(*instruction.effective_address) << ";\n";
         return;
 
     case Operation::StoreSpecialRegister:
@@ -1636,10 +1648,11 @@ void emit_simple_instruction(std::ostringstream& output,
                << "}\n";
         return;
     case Operation::Unknown:
-        output << "raise_illegal_instruction(cpu, " << hex32(instruction.source_address);
+        output << "raise_illegal_instruction(cpu, "
+               << relocated_code_address(instruction.source_address);
         if (instruction.delay_slot.role == katana::ir::DelaySlotRole::Slot &&
             instruction.delay_slot.counterpart_address.has_value()) {
-            output << ", " << hex32(*instruction.delay_slot.counterpart_address);
+            output << ", " << relocated_code_address(*instruction.delay_slot.counterpart_address);
         }
         output << ");\n";
         emit_indent(output, indent);
@@ -1696,10 +1709,11 @@ void emit_guarded_simple_instruction(std::ostringstream& output,
     emit_indent(output, indent);
     output << "} catch (const katana::runtime::MemoryAccessError& error) {\n";
     emit_indent(output, indent + 1);
-    output << "enter_memory_exception(cpu, error, " << hex32(instruction.source_address);
+    output << "enter_memory_exception(cpu, error, "
+           << relocated_code_address(instruction.source_address);
     if (instruction.delay_slot.role == katana::ir::DelaySlotRole::Slot &&
         instruction.delay_slot.counterpart_address.has_value()) {
-        output << ", " << hex32(*instruction.delay_slot.counterpart_address);
+        output << ", " << relocated_code_address(*instruction.delay_slot.counterpart_address);
     }
     output << ");\n";
     emit_indent(output, indent + 1);
@@ -1729,9 +1743,10 @@ void emit_call_delay_slot(std::ostringstream& output,
 void emit_direct_call(std::ostringstream& output,
                       const std::uint32_t target,
                       const std::unordered_set<std::uint32_t>& known_functions,
-                      const int indent) {
+                      const int indent,
+                      const std::string_view runtime_target) {
     emit_indent(output, indent);
-    output << "cpu.pc = " << hex32(target) << ";\n";
+    output << "cpu.pc = " << runtime_target << ";\n";
 
     emit_indent(output, indent);
 
@@ -1744,7 +1759,7 @@ void emit_direct_call(std::ostringstream& output,
         emit_indent(output, indent);
         output << "}\n";
     } else {
-        output << "unresolved_call(cpu, " << hex32(target) << ");\n";
+        output << "unresolved_call(cpu, " << runtime_target << ");\n";
     }
 }
 
@@ -1823,7 +1838,7 @@ void emit_terminal(std::ostringstream& output,
         }
 
         emit_indent(output, indent);
-        output << "cpu.pc = " << hex32(*instruction.target_address) << ";\n";
+        output << "cpu.pc = " << relocated_code_address(*instruction.target_address) << ";\n";
 
         emit_block_transition(output,
                               indent,
@@ -1840,7 +1855,7 @@ void emit_terminal(std::ostringstream& output,
         emit_indent(output, indent);
         output << "const std::uint32_t previous_pr = cpu.pr;\n";
         emit_indent(output, indent);
-        output << "cpu.pr = " << hex32(instruction.source_address + 4u) << ";\n";
+        output << "cpu.pr = " << relocated_code_address(instruction.source_address + 4u) << ";\n";
 
         if (delay_slot != nullptr) {
             emit_call_delay_slot(output, *delay_slot, indent);
@@ -1848,9 +1863,11 @@ void emit_terminal(std::ostringstream& output,
 
         if (single_block) {
             emit_indent(output, indent);
-            output << "cpu.pc = " << hex32(*instruction.target_address) << ";\n";
+            output << "cpu.pc = " << relocated_code_address(*instruction.target_address) << ";\n";
         } else {
-            emit_direct_call(output, *instruction.target_address, known_functions, indent);
+            const auto runtime_target = relocated_code_address(*instruction.target_address);
+            emit_direct_call(
+                output, *instruction.target_address, known_functions, indent, runtime_target);
         }
 
         emit_indent(output, indent);
@@ -1873,12 +1890,14 @@ void emit_terminal(std::ostringstream& output,
             emit_guarded_simple_instruction(output, *delay_slot, indent);
 
             emit_indent(output, indent);
-            output << "cpu.pc = take_branch ? " << hex32(*instruction.target_address) << " : "
-                   << hex32(fallthrough_address(instruction)) << ";\n";
+            output << "cpu.pc = take_branch ? "
+                   << relocated_code_address(*instruction.target_address) << " : "
+                   << relocated_code_address(fallthrough_address(instruction)) << ";\n";
         } else {
             emit_indent(output, indent);
-            output << "cpu.pc = " << condition << " ? " << hex32(*instruction.target_address)
-                   << " : " << hex32(fallthrough_address(instruction)) << ";\n";
+            output << "cpu.pc = " << condition << " ? "
+                   << relocated_code_address(*instruction.target_address) << " : "
+                   << relocated_code_address(fallthrough_address(instruction)) << ";\n";
         }
 
         emit_block_transition(
@@ -1896,7 +1915,7 @@ void emit_terminal(std::ostringstream& output,
         output << "const std::uint32_t jump_target = cpu.r["
                << static_cast<unsigned>(instruction.branch_register) << "]";
         if (instruction.branch_register_relative) {
-            output << " + " << hex32(instruction.source_address + 4u);
+            output << " + " << relocated_code_address(instruction.source_address + 4u);
         }
         output << ";\n";
 
@@ -1922,13 +1941,13 @@ void emit_terminal(std::ostringstream& output,
         }
 
         emit_indent(output, indent);
-        output << "switch (jump_target) {\n";
+        output << "switch (" << unrelocated_code_address("jump_target") << ") {\n";
         for (const auto target : instruction.resolved_targets) {
             emit_indent(output, indent + 1);
             output << "case " << hex32(target) << ":\n";
             if (current_blocks.contains(target)) {
                 emit_indent(output, indent + 2);
-                output << "cpu.pc = " << hex32(target) << ";\n";
+                output << "cpu.pc = jump_target;\n";
                 emit_block_transition(output,
                                       indent + 2,
                                       single_block,
@@ -1936,7 +1955,7 @@ void emit_terminal(std::ostringstream& output,
                                       true);
             } else if (known_functions.contains(target)) {
                 emit_indent(output, indent + 2);
-                output << "cpu.pc = " << hex32(target) << ";\n";
+                output << "cpu.pc = jump_target;\n";
                 emit_indent(output, indent + 2);
                 output << service_function_name(target) << "(cpu, services);\n";
                 emit_indent(output, indent + 2);
@@ -1959,14 +1978,14 @@ void emit_terminal(std::ostringstream& output,
         output << "const std::uint32_t call_target = cpu.r["
                << static_cast<unsigned>(instruction.branch_register) << "]";
         if (instruction.branch_register_relative) {
-            output << " + " << hex32(instruction.source_address + 4u);
+            output << " + " << relocated_code_address(instruction.source_address + 4u);
         }
         output << ";\n";
 
         emit_indent(output, indent);
         output << "const std::uint32_t previous_pr = cpu.pr;\n";
         emit_indent(output, indent);
-        output << "cpu.pr = " << hex32(instruction.source_address + 4u) << ";\n";
+        output << "cpu.pr = " << relocated_code_address(instruction.source_address + 4u) << ";\n";
 
         if (delay_slot != nullptr) {
             emit_call_delay_slot(output, *delay_slot, indent);
@@ -1985,12 +2004,12 @@ void emit_terminal(std::ostringstream& output,
             output << dynamic_dispatch_name(instruction, true) << "(cpu, call_target);\n";
         } else {
             emit_indent(output, indent);
-            output << "switch (call_target) {\n";
+            output << "switch (" << unrelocated_code_address("call_target") << ") {\n";
             for (const auto target : instruction.resolved_targets) {
                 emit_indent(output, indent + 1);
                 output << "case " << hex32(target) << ":\n";
                 if (known_functions.contains(target) && !single_block) {
-                    emit_direct_call(output, target, known_functions, indent + 2);
+                    emit_direct_call(output, target, known_functions, indent + 2, "call_target");
                     emit_indent(output, indent + 2);
                     output << "break;\n";
                 } else if (known_functions.contains(target)) {
@@ -2035,7 +2054,7 @@ void emit_terminal(std::ostringstream& output,
     case Operation::TrapAlways:
         emit_indent(output, indent);
         output << "raise_trapa(cpu, " << static_cast<unsigned>(instruction.immediate) << "u, "
-               << hex32(instruction.source_address) << ");\n";
+               << relocated_code_address(instruction.source_address) << ");\n";
         emit_indent(output, indent);
         output << "return;\n";
         return;
@@ -2054,7 +2073,7 @@ void emit_terminal(std::ostringstream& output,
         emit_indent(output, indent);
         output << "cpu.sleeping = true;\n";
         emit_indent(output, indent);
-        output << "cpu.pc = " << hex32(instruction.source_address + 2u) << ";\n";
+        output << "cpu.pc = " << relocated_code_address(instruction.source_address + 2u) << ";\n";
         emit_indent(output, indent);
         output << "return;\n";
         return;
@@ -2348,7 +2367,8 @@ void emit_block(std::ostringstream& output,
     }
     output << "            case " << hex32(block.start_address) << ": {\n";
     if (note_external_block_entry)
-        output << "                note_block_entry(" << hex32(block.start_address) << ");\n";
+        output << "                note_block_entry(" << relocated_code_address(block.start_address)
+               << ");\n";
     if (!single_block) {
         output << "                if (services != nullptr) {\n"
                << "                    const auto scheduler = services->consume_guest_cycles(\n"
@@ -2359,7 +2379,7 @@ void emit_block(std::ostringstream& output,
                << "                    if (scheduler.guest_cycle_budget_exhausted)\n"
                << "                        throw std::runtime_error(\"Gastzyklusbudget erschoepft\");\n"
                << "                    services->observe_guest_checkpoint("
-               << hex32(block.start_address) << ");\n"
+               << relocated_code_address(block.start_address) << ");\n"
                << "                    if (services->poll_interrupt().has_value()) return;\n"
                << "                }\n";
     }
@@ -2392,7 +2412,7 @@ void emit_block(std::ostringstream& output,
                       guarded_local_block_chaining);
     } else if (block.successors.size() == 1u) {
         emit_indent(output, 4);
-        output << "cpu.pc = " << hex32(block.successors.front()) << ";\n";
+        output << "cpu.pc = " << relocated_code_address(block.successors.front()) << ";\n";
 
         emit_block_transition(output,
                               4,
@@ -2406,7 +2426,8 @@ void emit_block(std::ostringstream& output,
         // the retired block or a direct backend caller observes a stale PC.
         if (!block.instructions.empty()) {
             emit_indent(output, 4);
-            output << "cpu.pc = " << hex32(fallthrough_address(block.instructions.back()))
+            output << "cpu.pc = "
+                   << relocated_code_address(fallthrough_address(block.instructions.back()))
                    << ";\n";
         }
         emit_indent(output, 4);
@@ -2576,7 +2597,7 @@ BackendEmission CppBackend::emit(const BackendRequest& request) const {
                         << "(CpuState& cpu, PlatformServices* services) {\n"
                         << "    static_cast<void>(services);\n"
                         << "    for (;;) {\n"
-                        << "        switch (cpu.pc) {\n";
+                        << "        switch (katana::runtime::unrelocate_code_address(cpu.pc)) {\n";
 
         std::unordered_set<std::uint32_t> current_blocks;
         current_blocks.reserve(function.blocks.size());

@@ -237,9 +237,11 @@ RecursiveAnalysisResult analyze_reachable_code(const katana::io::ExecutableImage
         enqueue(pending, scheduled, resolved_address, resolved_address, std::nullopt, evidence);
         for (const auto origin : seed.function_origins) {
             const auto confidence =
-                origin == FunctionOrigin::UserOverride      ? AnalysisConfidence::Certain
-                : origin == FunctionOrigin::GuardedSnapshot ? AnalysisConfidence::Medium
-                                                            : AnalysisConfidence::High;
+                origin == FunctionOrigin::UserOverride ? AnalysisConfidence::Certain
+                : origin == FunctionOrigin::GuardedSnapshot ||
+                        origin == FunctionOrigin::RuntimeCopy
+                    ? AnalysisConfidence::Medium
+                    : AnalysisConfidence::High;
             add_function_evidence(
                 function_candidates, resolved_address, origin, confidence, evidence);
         }
@@ -459,6 +461,8 @@ const char* function_origin_name(const FunctionOrigin origin) noexcept {
         return "indirect-call";
     case FunctionOrigin::GuardedSnapshot:
         return "guarded-snapshot";
+    case FunctionOrigin::RuntimeCopy:
+        return "runtime-copy";
     case FunctionOrigin::JumpTableCall:
         return "jump-table-call";
     case FunctionOrigin::UserOverride:

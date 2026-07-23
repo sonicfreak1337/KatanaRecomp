@@ -536,14 +536,16 @@ bool write_render_pixel(LinearMemoryDevice& vram,
                         const std::uint8_t red,
                         const std::uint8_t green,
                         const std::uint8_t blue) {
+    const auto backing = dreamcast_vram_32bit_to_linear_offset(
+        offset & static_cast<std::uint32_t>(dreamcast_vram_size - 1u));
     const auto write16 = [&](const std::uint16_t value) {
-        const bool changed = vram.read_u16(offset) != value;
-        vram.write_u16(offset, value);
+        const bool changed = vram.read_u16(backing) != value;
+        vram.write_u16(backing, value);
         return changed;
     };
     const auto write32 = [&](const std::uint32_t value) {
-        const bool changed = vram.read_u32(offset) != value;
-        vram.write_u32(offset, value);
+        const bool changed = vram.read_u32(backing) != value;
+        vram.write_u32(backing, value);
         return changed;
     };
     switch (pack_mode) {
@@ -613,8 +615,10 @@ Rgba8 decode_bump_texel(const std::uint16_t pixel) {
 Rgba8 read_render_pixel(const LinearMemoryDevice& vram,
                         const std::uint32_t offset,
                         const std::uint32_t pack_mode) {
+    const auto backing = dreamcast_vram_32bit_to_linear_offset(
+        offset & static_cast<std::uint32_t>(dreamcast_vram_size - 1u));
     if (pack_mode <= 3u) {
-        const auto pixel = vram.read_u16(offset);
+        const auto pixel = vram.read_u16(backing);
         if (pack_mode == 0u)
             return {expand5(static_cast<std::uint16_t>((pixel >> 10u) & 0x1Fu)),
                     expand5(static_cast<std::uint16_t>((pixel >> 5u) & 0x1Fu)),
@@ -626,7 +630,7 @@ Rgba8 read_render_pixel(const LinearMemoryDevice& vram,
     }
     if (pack_mode == 4u || pack_mode == 7u)
         throw std::invalid_argument("PVR-Framebuffer-Packmodus 4 oder 7 ist reserviert.");
-    const auto pixel = vram.read_u32(offset);
+    const auto pixel = vram.read_u32(backing);
     return {static_cast<std::uint8_t>(pixel >> 16u),
             static_cast<std::uint8_t>(pixel >> 8u),
             static_cast<std::uint8_t>(pixel),
@@ -1026,33 +1030,38 @@ std::optional<PvrScanoutDescriptor> decode_pvr_scanout(const PvrRegisterFile& re
     if ((control & 1u) == 0u) return std::nullopt;
 
     const auto depth = (control >> 2u) & 3u;
-    const auto format = depth == 0u   ? PvrFramebufferFormat::Argb1555
+    const auto format = depth == 0u   ? PvrFramebufferFormat::Rgb0555
                         : depth == 1u ? PvrFramebufferFormat::Rgb565
                         : depth == 2u ? PvrFramebufferFormat::Rgb888
                                       : PvrFramebufferFormat::Rgb0888;
     const auto size = registers.read(pvr_register::FramebufferReadSize);
-    const auto line_words = static_cast<std::size_t>(size & 0x3FFu) + 1u;
+    const auto x_size = static_cast<std::size_t>(size & 0x3FFu);
+    const auto line_words = x_size + 1u;
     const auto line_bytes =
         checked_multiply(line_words, 4u, "PVR-Scanout-Zeilenbreite ist zu gross.");
     const auto pixel_bytes = bytes_per_pixel(format);
-    if ((line_bytes % pixel_bytes) != 0u) {
-        throw std::invalid_argument("PVR-Scanout-Zeilenbreite passt nicht zum Pixelformat.");
-    }
+    // Packed RGB888 consumes complete three-byte pixels from the byte stream. Any
+    // trailing byte(s) in the final 32-bit word are padding, not invalid geometry.
     const auto source_width = line_bytes / pixel_bytes;
     const auto field_height = static_cast<std::size_t>((size >> 10u) & 0x3FFu) + 1u;
     const auto modulus_units = static_cast<std::size_t>((size >> 20u) & 0x3FFu);
-    const auto modulus_bytes = checked_multiply(
-        modulus_units == 0u ? 0u : modulus_units - 1u,
+    // FB_R_SIZE encodes line bytes as (x + 1) * 4 and the next-row distance as
+    // (x + modulus) * 4. In particular, modulus zero intentionally overlaps the
+    // preceding row by one 32-bit word.
+    const auto stride = checked_multiply(
+        checked_add(x_size, modulus_units, "PVR-Scanout-Stride ist zu gross."),
         4u,
-        "PVR-Scanout-Modulus ist zu gross.");
-    const auto stride = checked_add(line_bytes, modulus_bytes, "PVR-Scanout-Stride ist zu gross.");
+        "PVR-Scanout-Stride ist zu gross.");
     const auto base =
         static_cast<std::size_t>(registers.read(pvr_register::FramebufferReadSof1) & 0x007FFFFCu);
     const auto second_base =
         static_cast<std::size_t>(registers.read(pvr_register::FramebufferReadSof2) & 0x007FFFFCu);
     const auto interlaced = (registers.read(pvr_register::SpgControl) & 0x10u) != 0u;
     const auto line_double = (control & 2u) != 0u;
-    const auto source_height = interlaced
+    const auto weave_fields =
+        interlaced && stride == checked_multiply(line_bytes, 2u, "PVR-Weave-Stride ist zu gross.") &&
+        second_base == checked_add(base, line_bytes, "PVR-Weave-Feldadresse laeuft ueber.");
+    const auto source_height = weave_fields
                                    ? checked_multiply(field_height,
                                                       2u,
                                                       "PVR-Scanout-Hoehe ist zu gross.")
@@ -1100,23 +1109,27 @@ std::optional<PvrScanoutDescriptor> decode_pvr_scanout(const PvrRegisterFile& re
         throw std::out_of_range("PVR-Scanout liegt ausserhalb des VRAM-Abbilds.");
     }
     const auto border = registers.read(pvr_register::BorderColor);
-    return PvrScanoutDescriptor{static_cast<std::uint32_t>(width),
-                                static_cast<std::uint32_t>(height),
-                                static_cast<std::uint32_t>(source_width),
-                                static_cast<std::uint32_t>(source_height),
-                                static_cast<std::uint32_t>(stride),
-                                base,
-                                second_base,
-                                format,
-                                line_double,
-                                interlaced,
-                                horizontal_scale,
-                                vertical_scale_factor,
-                                (registers.read(pvr_register::VideoControl) & 0x8u) != 0u,
-                                {static_cast<std::uint8_t>(border >> 16u),
-                                 static_cast<std::uint8_t>(border >> 8u),
-                                 static_cast<std::uint8_t>(border),
-                                 0xFFu}};
+    PvrScanoutDescriptor result;
+    result.width = static_cast<std::uint32_t>(width);
+    result.height = static_cast<std::uint32_t>(height);
+    result.source_width = static_cast<std::uint32_t>(source_width);
+    result.source_height = static_cast<std::uint32_t>(source_height);
+    result.stride_bytes = static_cast<std::uint32_t>(stride);
+    result.base_offset = base;
+    result.second_base_offset = second_base;
+    result.format = format;
+    result.concat = static_cast<std::uint8_t>((control >> 4u) & 7u);
+    result.line_double = line_double;
+    result.interlaced = interlaced;
+    result.weave_fields = weave_fields;
+    result.horizontal_scale = horizontal_scale;
+    result.vertical_scale_factor = vertical_scale_factor;
+    result.video_blank = (registers.read(pvr_register::VideoControl) & 0x8u) != 0u;
+    result.border_rgba = {static_cast<std::uint8_t>(border >> 16u),
+                          static_cast<std::uint8_t>(border >> 8u),
+                          static_cast<std::uint8_t>(border),
+                          0xFFu};
+    return result;
 }
 
 void PvrFramebuffer::configure(const std::uint32_t width,
@@ -1126,7 +1139,9 @@ void PvrFramebuffer::configure(const std::uint32_t width,
                                const bool line_double,
                                const bool interlaced,
                                const std::uint32_t source_width,
-                               const std::uint32_t source_height) {
+                               const std::uint32_t source_height,
+                               const std::uint8_t concat,
+                               const bool logical_32bit_vram) {
     if (width == 0u || height == 0u) {
         throw std::invalid_argument("Ungueltige PVR-Framebuffer-Geometrie oder Stride.");
     }
@@ -1144,7 +1159,11 @@ void PvrFramebuffer::configure(const std::uint32_t width,
         static_cast<std::size_t>(effective_source_width),
         pixel_bytes,
         "PVR-Framebuffer-Zeilenbreite ist zu gross.");
-    if (static_cast<std::size_t>(stride_bytes) < minimum_stride) {
+    const auto stride_is_valid =
+        static_cast<std::size_t>(stride_bytes) >= minimum_stride ||
+        ((stride_bytes & 3u) == 0u &&
+         static_cast<std::size_t>(stride_bytes) + 4u >= minimum_stride);
+    if (!stride_is_valid) {
         throw std::invalid_argument("Ungueltige PVR-Framebuffer-Geometrie oder Stride.");
     }
     width_ = width;
@@ -1153,8 +1172,10 @@ void PvrFramebuffer::configure(const std::uint32_t width,
     source_height_ = effective_source_height;
     stride_ = stride_bytes;
     format_ = format;
+    concat_ = concat & 7u;
     line_double_ = line_double;
     interlaced_ = interlaced;
+    logical_32bit_vram_ = logical_32bit_vram;
 }
 
 PvrFrame PvrFramebuffer::capture(const std::span<const std::uint8_t> vram,
@@ -1178,6 +1199,10 @@ PvrFrame PvrFramebuffer::capture(const std::span<const std::uint8_t> vram,
     }
     if (interlaced_ && !second_base_offset)
         throw std::invalid_argument("Interlaced PVR-Scanout braucht beide Feldadressen.");
+    if (logical_32bit_vram_ && vram.size() != dreamcast_vram_size) {
+        throw std::invalid_argument(
+            "Die logische PVR-32-Bit-Sicht braucht exakt das 8-MiB-VRAM-Abbild.");
+    }
     const auto field_rows = interlaced_ ? (static_cast<std::size_t>(source_height_) + 1u) / 2u
                                         : static_cast<std::size_t>(source_height_);
     const auto line_bytes = checked_multiply(static_cast<std::size_t>(source_width_),
@@ -1196,9 +1221,15 @@ PvrFrame PvrFramebuffer::capture(const std::span<const std::uint8_t> vram,
                                                    field_span,
                                                    "PVR-Framebuffer-VRAM-Endadresse laeuft ueber.")
                                      : 0u;
-    if (required > vram.size() || (second_base_offset && second_required > vram.size())) {
+    if (!logical_32bit_vram_ &&
+        (required > vram.size() || (second_base_offset && second_required > vram.size()))) {
         throw std::out_of_range("PVR-Framebuffer liegt ausserhalb des VRAM-Abbilds.");
     }
+    const auto read_vram_byte = [&](const std::size_t logical_offset) {
+        if (!logical_32bit_vram_) return vram[logical_offset];
+        const auto wrapped = static_cast<std::uint32_t>(logical_offset % dreamcast_vram_size);
+        return vram[dreamcast_vram_32bit_to_linear_offset(wrapped)];
+    };
     PvrFrame frame{width_, height_, std::vector<std::uint8_t>(rgba_size)};
     for (std::uint32_t y = 0u; y < height_; ++y) {
         const auto source_line = static_cast<std::uint32_t>(
@@ -1215,35 +1246,38 @@ PvrFrame PvrFramebuffer::capture(const std::span<const std::uint8_t> vram,
                 source_x * bytes_per_pixel(format_);
             const auto destination = (static_cast<std::size_t>(y) * width_ + x) * 4u;
             if (format_ == PvrFramebufferFormat::Rgb888) {
-                frame.rgba[destination] = vram[source + 2u];
-                frame.rgba[destination + 1u] = vram[source + 1u];
-                frame.rgba[destination + 2u] = vram[source];
+                frame.rgba[destination] = read_vram_byte(source + 2u);
+                frame.rgba[destination + 1u] = read_vram_byte(source + 1u);
+                frame.rgba[destination + 2u] = read_vram_byte(source);
                 frame.rgba[destination + 3u] = 0xFFu;
                 continue;
             }
             if (format_ == PvrFramebufferFormat::Rgb0888) {
-                frame.rgba[destination] = vram[source + 2u];
-                frame.rgba[destination + 1u] = vram[source + 1u];
-                frame.rgba[destination + 2u] = vram[source];
+                frame.rgba[destination] = read_vram_byte(source + 2u);
+                frame.rgba[destination + 1u] = read_vram_byte(source + 1u);
+                frame.rgba[destination + 2u] = read_vram_byte(source);
                 frame.rgba[destination + 3u] = 0xFFu;
                 continue;
             }
-            const auto pixel = static_cast<std::uint16_t>(vram[source]) |
-                               static_cast<std::uint16_t>(vram[source + 1u] << 8u);
+            const auto pixel = static_cast<std::uint16_t>(read_vram_byte(source)) |
+                               static_cast<std::uint16_t>(read_vram_byte(source + 1u) << 8u);
             if (format_ == PvrFramebufferFormat::Rgb565) {
                 frame.rgba[destination] =
-                    expand5(static_cast<std::uint16_t>((pixel >> 11u) & 0x1Fu));
+                    static_cast<std::uint8_t>(((pixel >> 11u) & 0x1Fu) << 3u | concat_);
                 frame.rgba[destination + 1u] =
-                    expand6(static_cast<std::uint16_t>((pixel >> 5u) & 0x3Fu));
-                frame.rgba[destination + 2u] = expand5(static_cast<std::uint16_t>(pixel & 0x1Fu));
+                    static_cast<std::uint8_t>(((pixel >> 5u) & 0x3Fu) << 2u |
+                                              (concat_ & 3u));
+                frame.rgba[destination + 2u] =
+                    static_cast<std::uint8_t>((pixel & 0x1Fu) << 3u | concat_);
                 frame.rgba[destination + 3u] = 0xFFu;
             } else {
                 frame.rgba[destination] =
-                    expand5(static_cast<std::uint16_t>((pixel >> 10u) & 0x1Fu));
+                    static_cast<std::uint8_t>(((pixel >> 10u) & 0x1Fu) << 3u | concat_);
                 frame.rgba[destination + 1u] =
-                    expand5(static_cast<std::uint16_t>((pixel >> 5u) & 0x1Fu));
-                frame.rgba[destination + 2u] = expand5(static_cast<std::uint16_t>(pixel & 0x1Fu));
-                frame.rgba[destination + 3u] = (pixel & 0x8000u) != 0u ? 0xFFu : 0u;
+                    static_cast<std::uint8_t>(((pixel >> 5u) & 0x1Fu) << 3u | concat_);
+                frame.rgba[destination + 2u] =
+                    static_cast<std::uint8_t>((pixel & 0x1Fu) << 3u | concat_);
+                frame.rgba[destination + 3u] = 0xFFu;
             }
         }
     }
@@ -2037,8 +2071,10 @@ void PvrSoftwareRenderer::render(const PvrTaFrame& frame,
     std::vector<std::uint32_t> original_pixels(render_pixel_count, 0u);
     std::vector<std::uint8_t> touched_pixels(render_pixel_count, 0u);
     const auto read_packed_pixel = [&](const std::uint32_t offset) {
-        return pixel_bytes == 2u ? static_cast<std::uint32_t>(vram.read_u16(offset))
-                                 : vram.read_u32(offset);
+        const auto backing = dreamcast_vram_32bit_to_linear_offset(
+            offset & static_cast<std::uint32_t>(dreamcast_vram_size - 1u));
+        return pixel_bytes == 2u ? static_cast<std::uint32_t>(vram.read_u16(backing))
+                                 : vram.read_u32(backing);
     };
     const auto write_pixel = [&](const std::uint32_t offset,
                                  const std::size_t pixel_index,
@@ -2738,6 +2774,73 @@ void PvrSoftwareRenderer::render(const PvrTaFrame& frame,
     ++metrics_.frames;
 }
 
+void PvrSoftwareRenderer::observe_vram_write(const std::uint32_t address,
+                                             const std::size_t size,
+                                             const bool bytes_changed) {
+    if (!bytes_changed || size == 0u) return;
+    const auto physical = address < 0xE0000000u ? address & 0x1FFFFFFFu : address;
+    const auto write_begin = static_cast<std::uint64_t>(physical);
+    const auto write_size = static_cast<std::uint64_t>(size);
+    const auto write_end =
+        write_size > std::numeric_limits<std::uint64_t>::max() - write_begin
+            ? std::numeric_limits<std::uint64_t>::max()
+            : write_begin + write_size;
+    bool direct_vram = false;
+    const auto mark_mapping = [&](const std::uint32_t base, const bool logical_32bit) {
+        const auto range_begin = static_cast<std::uint64_t>(base);
+        const auto range_end = range_begin + dreamcast_vram_size;
+        const auto overlap_begin = std::max(write_begin, range_begin);
+        const auto overlap_end = std::min(write_end, range_end);
+        if (overlap_begin >= overlap_end) return;
+        direct_vram = true;
+        if (direct_dirty_words_.empty())
+            direct_dirty_words_.resize((dreamcast_vram_size + 63u) / 64u, 0u);
+        for (auto current = overlap_begin; current < overlap_end; ++current) {
+            const auto offset = static_cast<std::uint32_t>(current - range_begin);
+            const auto backing = logical_32bit
+                                     ? dreamcast_vram_32bit_to_linear_offset(offset)
+                                     : offset;
+            auto& word = direct_dirty_words_[backing / 64u];
+            const auto mask = std::uint64_t{1u} << (backing & 63u);
+            if ((word & mask) == 0u) {
+                word |= mask;
+                ++direct_dirty_byte_count_;
+            }
+        }
+    };
+    for (const auto base : dreamcast_vram_64bit_physical_bases) mark_mapping(base, false);
+    for (const auto base : dreamcast_vram_32bit_physical_bases) mark_mapping(base, true);
+    mark_mapping(0x11000000u, false);
+    mark_mapping(0x11800000u, false);
+    mark_mapping(0x13000000u, true);
+    mark_mapping(0x13800000u, true);
+    if (!direct_vram) return;
+    const auto generation = next_direct_write_generation_;
+    if (next_direct_write_generation_ != std::numeric_limits<std::uint64_t>::max())
+        ++next_direct_write_generation_;
+    pending_direct_write_generation_ = generation;
+}
+
+void PvrSoftwareRenderer::reset_guest_frame_evidence(
+    const std::span<const std::uint8_t> vram) {
+    if (!vram.empty() && vram.size() != dreamcast_vram_size)
+        throw std::invalid_argument("PVR-Evidenzreset braucht ein vollstaendiges 8-MiB-VRAM-Abbild.");
+    pending_render_evidence_.clear();
+    pending_render_evidence_bytes_ = 0u;
+    next_evidence_scan_generation_ = 0u;
+    pending_direct_write_generation_ = 0u;
+    std::fill(direct_dirty_words_.begin(), direct_dirty_words_.end(), std::uint64_t{0u});
+    direct_dirty_byte_count_ = 0u;
+    if (vram.empty()) {
+        direct_vram_shadow_.clear();
+        direct_vram_shadow_valid_ = false;
+    } else {
+        direct_vram_shadow_.assign(vram.begin(), vram.end());
+        direct_vram_shadow_valid_ = true;
+    }
+    queued_guest_frame_proof_.reset();
+}
+
 void PvrSoftwareRenderer::observe_vblank_scanout(const PvrRegisterFile& registers,
                                                  const std::span<const std::uint8_t> vram) {
     // Keep the first unconsumed proof intact. This bounds queued frame storage and
@@ -2745,7 +2848,120 @@ void PvrSoftwareRenderer::observe_vblank_scanout(const PvrRegisterFile& register
     // first host-independent guest-frame boundary.
     if (queued_guest_frame_proof_) return;
     const auto scanout = decode_pvr_scanout(registers, vram.size());
-    if (!scanout || scanout->video_blank || pending_render_evidence_.empty()) return;
+    if (!scanout || scanout->video_blank) return;
+
+    const auto scanout_field = scanout->interlaced ? (registers.field() & 1u) : 0u;
+    const auto active_base = scanout_field == 0u ? scanout->base_offset
+                                                 : scanout->second_base_offset;
+    const auto capture_scanout = [&](const std::span<const std::uint8_t> source_vram) {
+        PvrFramebuffer framebuffer;
+        const auto weave_fields = scanout->interlaced && scanout->weave_fields;
+        framebuffer.configure(scanout->width,
+                              scanout->height,
+                              scanout->stride_bytes,
+                              scanout->format,
+                              scanout->line_double,
+                              weave_fields,
+                              scanout->source_width,
+                              scanout->source_height,
+                              scanout->concat,
+                              true);
+        return framebuffer.capture(
+            source_vram,
+            weave_fields ? scanout->base_offset : active_base,
+            weave_fields ? std::optional<std::size_t>{scanout->second_base_offset}
+                         : std::nullopt);
+    };
+    if (direct_vram_shadow_.empty()) direct_vram_shadow_.resize(dreamcast_vram_size, 0u);
+    auto frame = capture_scanout(vram);
+    if (!direct_vram_shadow_valid_) {
+        std::copy(vram.begin(), vram.end(), direct_vram_shadow_.begin());
+        std::fill(direct_dirty_words_.begin(), direct_dirty_words_.end(), std::uint64_t{0u});
+        direct_dirty_byte_count_ = 0u;
+        pending_direct_write_generation_ = 0u;
+        direct_vram_shadow_valid_ = true;
+    }
+    const auto needs_previous_frame =
+        pending_direct_write_generation_ != 0u && direct_dirty_byte_count_ != 0u;
+    const auto previous_frame = needs_previous_frame
+                                    ? std::optional<PvrFrame>{capture_scanout(
+                                          std::span<const std::uint8_t>(direct_vram_shadow_))}
+                                    : std::nullopt;
+    struct DirectScanoutResult {
+        std::uint64_t generation = 0u;
+        std::uint64_t changed_pixels = 0u;
+    };
+    const auto observe_direct_scanout = [&]() {
+        DirectScanoutResult result{pending_direct_write_generation_, 0u};
+        const auto dirty = [&](const std::uint32_t backing) {
+            if (direct_dirty_words_.empty()) return false;
+            return (direct_dirty_words_[backing / 64u] &
+                    (std::uint64_t{1u} << (backing & 63u))) != 0u;
+        };
+        const auto consume_dirty = [&](const std::uint32_t backing) {
+            if (direct_dirty_words_.empty()) return;
+            auto& word = direct_dirty_words_[backing / 64u];
+            const auto mask = std::uint64_t{1u} << (backing & 63u);
+            if ((word & mask) == 0u) return;
+            word &= ~mask;
+            --direct_dirty_byte_count_;
+        };
+        const auto pixel_bytes = bytes_per_pixel(scanout->format);
+        for (std::uint32_t y = 0u; y < frame.height; ++y) {
+            const auto source_line = static_cast<std::uint32_t>(
+                static_cast<std::uint64_t>(y) * scanout->source_height / frame.height);
+            if (scanout->weave_fields && (source_line & 1u) != scanout_field) continue;
+            const auto source_row = scanout->weave_fields ? source_line / 2u : source_line;
+            const auto row_begin = static_cast<std::size_t>(y) * frame.width * 4u;
+            for (std::uint32_t x = 0u; x < frame.width; ++x) {
+                const auto source_x = static_cast<std::uint32_t>(
+                    static_cast<std::uint64_t>(x) * scanout->source_width / frame.width);
+                const auto logical = static_cast<std::uint64_t>(active_base) +
+                                     static_cast<std::uint64_t>(source_row) *
+                                         scanout->stride_bytes +
+                                     static_cast<std::uint64_t>(source_x) * pixel_bytes;
+                bool pixel_is_dirty = false;
+                std::array<std::uint32_t, 4u> backing_offsets{};
+                for (std::size_t byte = 0u; byte < pixel_bytes; ++byte) {
+                    const auto logical_byte = static_cast<std::uint32_t>(
+                        (logical + byte) % dreamcast_vram_size);
+                    backing_offsets[byte] =
+                        dreamcast_vram_32bit_to_linear_offset(logical_byte);
+                    pixel_is_dirty = pixel_is_dirty || dirty(backing_offsets[byte]);
+                }
+                const auto pixel = row_begin + static_cast<std::size_t>(x) * 4u;
+                if (pixel_is_dirty && previous_frame &&
+                    !std::equal(frame.rgba.begin() + pixel,
+                                frame.rgba.begin() + pixel + 4u,
+                                previous_frame->rgba.begin() + pixel))
+                    ++result.changed_pixels;
+                for (std::size_t byte = 0u; byte < pixel_bytes; ++byte) {
+                    consume_dirty(backing_offsets[byte]);
+                    direct_vram_shadow_[backing_offsets[byte]] = vram[backing_offsets[byte]];
+                }
+            }
+        }
+        if (direct_dirty_byte_count_ == 0u) pending_direct_write_generation_ = 0u;
+        return result;
+    };
+    const auto direct_scanout = observe_direct_scanout();
+    const auto queue_direct_scanout = [&] {
+        if (direct_scanout.changed_pixels == 0u) return;
+        queued_guest_frame_proof_ =
+            PvrGuestFrameProof{direct_scanout.generation,
+                               direct_scanout.changed_pixels,
+                               scanout_field,
+                               *scanout,
+                               std::move(frame),
+                               PvrGuestFrameProofSource::DirectFramebuffer};
+        ++metrics_.proven_guest_frames;
+        ++metrics_.direct_scanout_frames;
+        metrics_.direct_scanout_changed_pixels += direct_scanout.changed_pixels;
+    };
+    if (pending_render_evidence_.empty()) {
+        queue_direct_scanout();
+        return;
+    }
 
     const auto scanout_pixel_bytes = bytes_per_pixel(scanout->format);
     const auto ceil_divide = [](const std::uint64_t numerator,
@@ -2761,11 +2977,8 @@ void PvrSoftwareRenderer::observe_vblank_scanout(const PvrRegisterFile& register
             static_cast<std::uint64_t>(coordinate + 1u) * output_extent, source_extent);
         return first_output != after_output;
     };
-    const auto scanout_field = scanout->interlaced ? (registers.field() & 1u) : 0u;
-    const auto active_base = scanout_field == 0u ? scanout->base_offset
-                                                 : scanout->second_base_offset;
-    const auto active_field_rows = scanout->interlaced ? scanout->source_height / 2u
-                                                        : scanout->source_height;
+    const auto active_field_rows = scanout->weave_fields ? scanout->source_height / 2u
+                                                         : scanout->source_height;
     const auto active_line_bytes =
         static_cast<std::size_t>(scanout->source_width) * scanout_pixel_bytes;
     const auto pixel_is_visible = [&](const PvrRenderGenerationEvidence& evidence,
@@ -2773,23 +2986,32 @@ void PvrSoftwareRenderer::observe_vblank_scanout(const PvrRegisterFile& register
         const auto pixel_end = static_cast<std::size_t>(pixel.offset) + evidence.pixel_bytes;
         if (pixel_end > vram.size()) return false;
         std::uint32_t current_value = 0u;
-        for (std::size_t byte = 0u; byte < evidence.pixel_bytes; ++byte)
-            current_value |= static_cast<std::uint32_t>(vram[pixel.offset + byte])
-                             << static_cast<unsigned>(byte * 8u);
+        for (std::size_t byte = 0u; byte < evidence.pixel_bytes; ++byte) {
+            const auto logical = static_cast<std::uint32_t>(pixel.offset + byte) &
+                                 static_cast<std::uint32_t>(dreamcast_vram_size - 1u);
+            current_value |=
+                static_cast<std::uint32_t>(
+                    vram[dreamcast_vram_32bit_to_linear_offset(logical)])
+                << static_cast<unsigned>(byte * 8u);
+        }
         if (current_value != pixel.packed_value) return false;
         for (std::size_t byte = 0u; byte < evidence.pixel_bytes; ++byte) {
             if ((pixel.changed_byte_mask & (1u << byte)) == 0u) continue;
             const auto address = static_cast<std::size_t>(pixel.offset) + byte;
             if (address < active_base) continue;
             const auto relative = address - active_base;
-            const auto source_row = relative / scanout->stride_bytes;
-            const auto source_column = relative % scanout->stride_bytes;
+            const auto source_row = scanout->stride_bytes == 0u
+                                        ? std::size_t{0u}
+                                        : relative / scanout->stride_bytes;
+            const auto source_column = scanout->stride_bytes == 0u
+                                           ? relative
+                                           : relative % scanout->stride_bytes;
             if (source_row >= active_field_rows || source_column >= active_line_bytes)
                 continue;
             const auto source_x =
                 static_cast<std::uint32_t>(source_column / scanout_pixel_bytes);
             const auto source_line = static_cast<std::uint32_t>(
-                scanout->interlaced ? source_row * 2u + scanout_field : source_row);
+                scanout->weave_fields ? source_row * 2u + scanout_field : source_row);
             if (coordinate_is_sampled(source_x, scanout->source_width, scanout->width) &&
                 coordinate_is_sampled(source_line, scanout->source_height, scanout->height))
                 return true;
@@ -2859,25 +3081,14 @@ void PvrSoftwareRenderer::observe_vblank_scanout(const PvrRegisterFile& register
         evidence.validation_cursor = 0u;
         next_evidence_scan_generation_ = pending_render_evidence_[previous_index].generation;
     }
-    if (!selected_index) return;
+    if (!selected_index) {
+        queue_direct_scanout();
+        return;
+    }
     const auto selected_generation = pending_render_evidence_[*selected_index].generation;
     const auto selected_changed_pixels =
         pending_render_evidence_[*selected_index].changed_pixels;
 
-    PvrFramebuffer framebuffer;
-    framebuffer.configure(scanout->width,
-                          scanout->height,
-                          scanout->stride_bytes,
-                          scanout->format,
-                          scanout->line_double,
-                          scanout->interlaced,
-                          scanout->source_width,
-                          scanout->source_height);
-    auto frame = framebuffer.capture(
-        vram,
-        scanout->base_offset,
-        scanout->interlaced ? std::optional<std::size_t>{scanout->second_base_offset}
-                            : std::nullopt);
     queued_guest_frame_proof_ = PvrGuestFrameProof{selected_generation,
                                                    selected_changed_pixels,
                                                    scanout_field,

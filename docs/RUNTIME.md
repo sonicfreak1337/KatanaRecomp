@@ -6,8 +6,8 @@ ungeloesten Kontrollflusspfaden mehr.
 
 ## ABI
 
-Die aktuelle Runtime-ABI ist Version `38`. Die typisierte Block-ABI ist seit
-KR-4611 Version `2`; die Backend-Interface-ABI ist Version `3`.
+Die aktuelle Runtime-ABI ist Version `39`. Die typisierte Block-ABI ist
+Version `3`; die Backend-Interface-ABI ist Version `3`.
 
 Generierter Code enthaelt eine Compile-Time-Pruefung gegen diese Version. Eine
 abweichende Runtime wird beim Kompilieren sichtbar abgelehnt. ABI-Version 3
@@ -57,6 +57,10 @@ ausserdem die MMU-abhaengige Store-Queue-`PREF`-Uebersetzung zwischen QACR und
 UTLB. Der generierte native Code behandelt `PREF` unabhaengig vom
 adressabhaengigen IR-Speichereffekt als moegliche `MemoryAccessError`-Quelle,
 sodass Alignment-, SQMD- und TLB-Fehler ueber `enter_memory_exception` laufen.
+ABI-Version 39 bindet source-relativierte native AOT-Templates und den
+scanoutgebundenen Direct-Framebuffer-Beweis in den kumulativen
+Runtimevertrag. Block-ABI 3 versioniert die zugehoerige virtuelle
+Quell-/Laufzeitadressabbildung.
 
 ## CMake
 
@@ -329,7 +333,8 @@ Renesas-SH7750-Hardwarevertrag.
 
 KR-4611 leitet Exceptionursache, Eventcode, Vektor und Interruptklasse aus
 einer gemeinsamen Metadatentabelle ab. `trap_pending` bezeichnet einen aktiven
-Gast-Exceptionhandler und keinen fatalen Hostabbruch. Block-ABI 2 trennt
+Gast-Exceptionhandler und keinen fatalen Hostabbruch. Der mit Block-ABI 2
+eingefuehrte und in Block-ABI 3 fortgefuehrte Vertrag trennt
 `ExceptionReturn` und `Sleep` von normalen Returns: Der Portdispatcher setzt
 Exceptions und Interrupts am durch VBR bestimmten Handler fort, dispatcht RTE
 zum restaurierten SPC und fuehrt waehrend SLEEP erst nach einem akzeptierten
@@ -434,7 +439,7 @@ ein Write ueber eine Spiegelgrenze wird dafuer in Tail und Head geteilt.
 Der normale Produktport deaktiviert Demand-Interpreterausfuehrung vollstaendig:
 Nicht gebundener Code endet als typisierter Materialisierungs-/Dispatchfehler.
 Nur das explizite `diagnostic_partial`-Profil emittiert den begrenzten
-Diagnoseinterpreter. Der Portprojektvertrag `23` weist Profil,
+Diagnoseinterpreter. Der Portprojektvertrag `24` weist Profil,
 Interpreterstatus, Unbound-Code-Policy und Coverage-Vertrag im Manifest aus.
 
 Im produktiven Einblock-AOT-Pfad zaehlt `CpuState::retired_guest_instructions`
@@ -452,9 +457,9 @@ generische C++-Emitter setzt auch bei einem durch Funktionsdiscovery
 nachfolgerlosen Block in jedem Backendmodus `PC` auf die Folgeadresse der
 letzten Gastinstruktion. Die Produktinvariante prueft einen Fallthrough relativ
 zu dieser tatsaechlichen Terminatorquelle und nicht zum Eintritt des
-umgebenden Wrappers. Der kumulative Stand verwendet Runtime-ABI 38,
-Backend-Interface-ABI 3,
-PlatformServices-ABI 9 und Portvertrag 23.
+umgebenden Wrappers. Der kumulative Stand verwendet Runtime-ABI 39, Block-ABI 3,
+Backend-Interface-ABI 3, PlatformServices-ABI 9, Portvertrag 24 und
+Host-Video-Vertrag 2.
 
 Statische Dispatchregistries werden nicht mehr in eine einzelne
 Uebersetzungseinheit geschrieben. Der Projektschreiber teilt sie
@@ -475,11 +480,11 @@ Aufteilung aendert weder Blockidentitaet noch Lookup-, Guard- oder
 Fortsetzungssemantik; sie ist ausschliesslich ein Buildzeit- und
 Uebersetzungseinheitenvertrag.
 
-Die aktuelle kompilierte Fallthroughregression deckt Einzelblock, lokales
-Chaining und normalen Backendpfad ab. Das fokussierte Kern-Gate besteht 9/9;
-nach der source-relativen Invariantenkorrektur besteht der Portexporttest
-zusaetzlich 1/1. Der konfigurierte Bestand umfasst 181 Tests, wurde fuer diesen
-Zwischenblock aber nicht als vollstaendiges Gate ausgefuehrt.
+Die kompilierte Fallthroughregression deckt Einzelblock, lokales Chaining und
+normalen Backendpfad ab. Das aktuelle fokussierte Kern-Gate besteht 11/11. Der
+vollstaendige x64-Build ist mit zwoelf parallelen Jobs gruen; das anschliessende
+CTest-Gate besteht 178/178 Eintraege in rund 4:04 Minuten, darunter 176
+regulaere Passes und zwei erwartete Regex-`PASS_REGULAR_EXPRESSION`-Erfolge.
 
 Der optimierte ABI-38-Export der privaten PAL-Testbench dauerte mit zwoelf Jobs
 140,9 Sekunden, der inkrementelle Reexport 29,2 Sekunden. Die lokale
@@ -492,3 +497,19 @@ Patch-Codetemplate und fuehrt daraus 19 bytebewiesene Runtimeinstruktionen aus,
 bevor der naechste noch nicht statisch gebundene AOT-Einstieg kontrolliert
 stoppt. Dieser Diagnosepfad fuegt weder Retailbytes noch eine titelbezogene
 Adresse zum Produktvertrag hinzu; `KR-4848` bleibt offen.
+
+Der nachfolgende Runtime-ABI-39-/Block-ABI-3-Produktpfad bindet die
+source-relativierten AOT-Templates unter Portprojektvertrag 24. Ein privater,
+budgetierter Sonic-Adventure-PAL-AOT-Lauf erreicht aus dem recompilierten
+`IP.BIN`-Direct-Framebuffer nach 50 Millionen Gastzyklen in 5,3 Sekunden
+`KR_FIRST_GUEST_FRAME` und `KR_FIRST_PRESENTED_FRAME`; TA bleibt null und der
+anschliessende Budget-Exit ist erwartet. BootExecutable, Spielboot, die
+strukturierten `KR-4848`-Disc-Ladetransaktionen und der allgemeine Materializer
+bleiben offen.
+
+Nach dem 178/178-Vollgate wurde der Vertrag-24-Port frisch neu exportiert und
+gebaut. Er umfasst 1.860 Funktionen, 37 Codepartitionen und null
+Retailsektoren; die lokale read-only Originaldisc-Installation umfasst drei
+Tracks und 521.461 Sektoren. Der abschliessende 50-Millionen-Lauf reproduziert
+beide Framemarker mit zwei Gast-/Direct-FB-Frames und 302.287 geaenderten
+Direct-FB-Pixeln. TA, Rendergeneration und Materializer bleiben null.

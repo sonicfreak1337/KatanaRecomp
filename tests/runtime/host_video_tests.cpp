@@ -64,7 +64,7 @@ class FakeVideoOutput final : public katana::runtime::NativeVideoOutput {
 
 int main() {
     using namespace katana::runtime;
-    static_assert(native_video_contract_version == 1u);
+    static_assert(native_video_contract_version == 2u);
     PvrGuestFrameProof proof;
     proof.render_generation = 7u;
     proof.changed_pixels = 2u;

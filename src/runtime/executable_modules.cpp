@@ -803,7 +803,8 @@ void DemandBlockMaterializer::fail(const MaterializationFailure failure,
         failure == MaterializationFailure::ModuleUnloaded ||
         failure == MaterializationFailure::RelocationMismatch)
         increment(metrics_.generation_revalidation_failures);
-    if (failure == MaterializationFailure::ByteIdentityMismatch)
+    if (failure == MaterializationFailure::ByteIdentityMismatch ||
+        failure == MaterializationFailure::AotTemplateMismatch)
         increment(metrics_.byte_identity_failures);
     events_.push_back({next_event_sequence_++, target, failure, false});
 }
@@ -835,8 +836,9 @@ DemandBlockMaterializer::try_materialize(CpuState& cpu,
     }
     const auto containing_origin =
         std::find_if(origins_.begin(), origins_.end(), [&](const auto& origin) {
+            if (origin.aot_template) return false;
             const auto begin = static_cast<std::uint64_t>(origin.address);
-            const auto end = begin + origin.size;
+            const auto end = begin + origin.block_size;
             const auto requested = static_cast<std::uint64_t>(target);
             if (requested < begin || requested + 2u > end ||
                 !blocks_.active(origin.handle))
@@ -912,13 +914,16 @@ DemandBlockMaterializer::try_materialize(CpuState& cpu,
         return std::nullopt;
     }
     const auto started = std::chrono::steady_clock::now();
-    auto candidate = callback_(target, snapshot, variant);
+    auto candidate = callback_(target, physical_target, snapshot, variant);
     const auto elapsed_ms =
         static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
                                        std::chrono::steady_clock::now() - started)
                                        .count());
     if (!candidate.decode_candidate_validated) {
-        fail(MaterializationFailure::DecodeRejected, target);
+        fail(candidate.rejection_failure == MaterializationFailure::None
+                 ? MaterializationFailure::DecodeRejected
+                 : candidate.rejection_failure,
+             target);
         return std::nullopt;
     }
     if (!candidate.interpreter_backed && !candidate.bounded_analysis_complete) {
@@ -979,25 +984,116 @@ DemandBlockMaterializer::try_materialize(CpuState& cpu,
         return std::nullopt;
     }
     block.physical_origin = physical_target;
-    block.provenance = "runtime-module:" + module_id + ":g" + std::to_string(module_generation) +
-                       ":r" + std::to_string(relocation_generation) + ":" + block.provenance;
+
+    auto validation_physical_address = physical_target;
+    auto validation_size = block.size;
+    auto validation_module_address = physical_target;
+    auto validation_block_module_address = physical_target;
+    auto validation_module_id = module_id;
+    auto validation_source_identity = source_identity;
+    auto validation_module_generation = module_generation;
+    auto validation_relocation_generation = relocation_generation;
+    auto validation_snapshot =
+        std::vector<std::uint8_t>(snapshot.begin(), snapshot.begin() + block.size);
+    const auto aot_template = block.aot_template.has_value();
+    if (aot_template) {
+        if (interpreter_backed) {
+            fail(MaterializationFailure::InvalidBlock, target);
+            return std::nullopt;
+        }
+        const auto& contract = *block.aot_template;
+        try {
+            validate_code_address_mapping(contract.mapping);
+        } catch (const std::exception&) {
+            fail(MaterializationFailure::InvalidBlock, target);
+            return std::nullopt;
+        }
+        const auto mapping_end =
+            static_cast<std::uint64_t>(contract.mapping.runtime_start) + contract.mapping.extent;
+        const auto block_end = static_cast<std::uint64_t>(block.virtual_start) + block.size;
+        if (contract.validation_extent < contract.mapping.extent ||
+            block.virtual_start < contract.mapping.runtime_start || block_end > mapping_end) {
+            fail(MaterializationFailure::InvalidBlock, target);
+            return std::nullopt;
+        }
+        const auto block_offset = block.virtual_start - contract.mapping.runtime_start;
+        if (block_offset > physical_target ||
+            static_cast<std::uint64_t>(contract.mapping.source_start) +
+                    contract.validation_extent >
+                static_cast<std::uint64_t>(std::numeric_limits<std::uint32_t>::max()) + 1u ||
+            static_cast<std::uint64_t>(contract.mapping.runtime_start) +
+                    contract.validation_extent >
+                static_cast<std::uint64_t>(std::numeric_limits<std::uint32_t>::max()) + 1u) {
+            fail(MaterializationFailure::InvalidBlock, target);
+            return std::nullopt;
+        }
+        if (contract.validation_extent > policy_.max_memory_bytes) {
+            fail(MaterializationFailure::BudgetExhausted, target);
+            return std::nullopt;
+        }
+        validation_physical_address = physical_target - block_offset;
+        validation_size = contract.validation_extent;
+        validation_module_address = contract.mapping.source_start;
+        validation_block_module_address = contract.mapping.source_start + block_offset;
+        const auto validation_last_offset = validation_size - 1u;
+        if (canonical_physical_address(block.virtual_start) == physical_target &&
+            canonical_physical_address(contract.mapping.runtime_start +
+                                       validation_last_offset) !=
+                validation_physical_address + validation_last_offset) {
+            fail(MaterializationFailure::InvalidBlock, target);
+            return std::nullopt;
+        }
+        if (static_cast<std::uint64_t>(validation_physical_address) + validation_size >
+                static_cast<std::uint64_t>(std::numeric_limits<std::uint32_t>::max()) + 1u ||
+            !cpu.memory.contains(validation_physical_address, validation_size)) {
+            fail(MaterializationFailure::Uncommitted, target);
+            return std::nullopt;
+        }
+        // The binder may explicitly allow patched pointer/literal words inside
+        // the template.  Such words are removed from the module's active
+        // extents, so resolve only the proven native entry here; the full live
+        // range is protected by the snapshot below.
+        const auto* source_module =
+            modules_.resolve(validation_block_module_address, block.size);
+        if (source_module == nullptr ||
+            !source_module->materializable(validation_block_module_address, block.size)) {
+            fail(MaterializationFailure::AotTemplateMismatch, target);
+            return std::nullopt;
+        }
+        validation_module_id = source_module->id;
+        validation_source_identity = source_module->source_identity;
+        validation_module_generation = source_module->generation;
+        validation_relocation_generation = source_module->relocation_generation;
+        validation_snapshot.resize(validation_size);
+        for (std::uint32_t current = 0u; current < validation_size; ++current) {
+            validation_snapshot[current] =
+                cpu.memory.read_u8(validation_physical_address + current);
+        }
+    }
+
+    block.provenance = "runtime-module:" + validation_module_id + ":g" +
+                       std::to_string(validation_module_generation) + ":r" +
+                       std::to_string(validation_relocation_generation) + ":" + block.provenance;
     const auto identity = stable_runtime_block_identity(block);
-    const auto registered_physical_origin = block.physical_origin;
     const auto block_size = block.size;
     const auto provenance = block.provenance;
     const auto handle = blocks_.register_runtime(std::move(block));
     origins_.push_back(
         {target,
-         physical_target,
+         validation_physical_address,
+         validation_size,
+         validation_module_address,
+         validation_block_module_address,
          block_size,
          callsite,
-         module_id,
-         source_identity,
-         module_generation,
-         relocation_generation,
+         validation_module_id,
+         validation_source_identity,
+         validation_module_generation,
+         validation_relocation_generation,
          handle,
-         std::vector<std::uint8_t>(snapshot.begin(), snapshot.begin() + block_size),
-         interpreter_backed});
+         std::move(validation_snapshot),
+         interpreter_backed,
+         aot_template});
     if (!validate_for_dispatch(cpu, handle, target)) {
         origins_.pop_back();
         static_cast<void>(blocks_.erase_identity(identity));
@@ -1006,11 +1102,13 @@ DemandBlockMaterializer::try_materialize(CpuState& cpu,
     try {
         if (tracker_ != nullptr) {
             static_cast<void>(tracker_->register_block({identity,
-                                                        registered_physical_origin,
-                                                        block_size,
+                                                        validation_physical_address,
+                                                        validation_size,
                                                         provenance,
                                                         {},
-                                                        ExecutableBlockOrigin::RuntimeWrite}));
+                                                        aot_template
+                                                            ? ExecutableBlockOrigin::RomRamCopy
+                                                            : ExecutableBlockOrigin::RuntimeWrite}));
         }
     } catch (...) {
         origins_.pop_back();
@@ -1042,7 +1140,7 @@ bool DemandBlockMaterializer::validate_for_dispatch(const CpuState& cpu,
                                                     const std::uint32_t target) noexcept {
     const auto origin = std::find_if(origins_.begin(), origins_.end(), [&](const auto& candidate) {
         const auto begin = static_cast<std::uint64_t>(candidate.address);
-        const auto end = begin + candidate.size;
+        const auto end = begin + candidate.block_size;
         const auto requested = static_cast<std::uint64_t>(target);
         return candidate.handle == handle &&
                (candidate.address == target ||
@@ -1070,7 +1168,7 @@ bool DemandBlockMaterializer::validate_for_dispatch(const CpuState& cpu,
         fail(MaterializationFailure::RelocationMismatch, target);
         return false;
     }
-    if (!module->materializable(origin->physical_address, origin->size) ||
+    if (!module->materializable(origin->block_module_address, origin->block_size) ||
         !cpu.memory.contains(origin->physical_address, origin->size)) {
         increment(metrics_.dispatch_validation_failures);
         fail(MaterializationFailure::ProvenNonCode, target);
@@ -1080,16 +1178,21 @@ bool DemandBlockMaterializer::validate_for_dispatch(const CpuState& cpu,
         if (cpu.memory.read_u8(origin->physical_address + static_cast<std::uint32_t>(current)) !=
             origin->snapshot[current]) {
             increment(metrics_.dispatch_validation_failures);
-            fail(MaterializationFailure::ByteIdentityMismatch, target);
+            fail(origin->aot_template ? MaterializationFailure::AotTemplateMismatch
+                                      : MaterializationFailure::ByteIdentityMismatch,
+                 target);
             return false;
         }
     }
-    if (!modules_.validate_bytes_at(cpu.memory,
-                                    origin->physical_address,
+    if (!origin->aot_template &&
+        !modules_.validate_bytes_at(cpu.memory,
+                                    origin->module_address,
                                     origin->physical_address,
                                     origin->size)) {
         increment(metrics_.dispatch_validation_failures);
-        fail(MaterializationFailure::ByteIdentityMismatch, target);
+        fail(origin->aot_template ? MaterializationFailure::AotTemplateMismatch
+                                  : MaterializationFailure::ByteIdentityMismatch,
+             target);
         return false;
     }
     return true;
@@ -1160,6 +1263,8 @@ const char* materialization_failure_name(const MaterializationFailure value) noe
         return "code-generation-failed";
     case MaterializationFailure::ByteIdentityMismatch:
         return "byte-identity-mismatch";
+    case MaterializationFailure::AotTemplateMismatch:
+        return "aot-template-mismatch";
     case MaterializationFailure::GenerationMismatch:
         return "generation-mismatch";
     case MaterializationFailure::ModuleUnloaded:

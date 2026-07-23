@@ -71,13 +71,16 @@ KR-4812, KR-4823 und KR-4914
   -> KR-5000
 ```
 
-Korrektheit blockiert Performance. Waehrend KR-4841 bis KR-4851 werden nur
-betroffene Targets und kleine Regressionen ausgefuehrt; die konsolidierte Suite
-und der private Retaillauf folgen einmal in KR-4852. Jeder Prozess besitzt ein
+Korrektheit blockiert Performance. Waehrend KR-4841 bis KR-4851 werden
+grundsaetzlich nur betroffene Targets und kleine Regressionen ausgefuehrt. Der
+First-Frame-/KR-4848-Zwischenblock erhielt zusaetzlich ein vollstaendiges
+x64-Auditgate mit 178/178 CTest-Eintraegen; die finale konsolidierte Suite und
+der private Retaillauf bleiben Teil von KR-4852. Jeder Prozess besitzt ein
 hartes Limit von 15 Minuten. Der moderne Hostcontrollervertrag und die private
 interaktive Sitzung (`KR-4814`/`KR-4914`) gehoeren gemeinsam mit GUI, Harness
-und Portintegration zu v0.49. Sie beginnen auf der freigegebenen Framebasis
-strikt nach `KR-4850`; der erste echte Gastframe bleibt das P0-Ziel von v0.48.
+und Portintegration zu v0.49. Sie beginnen erst nach der internen
+v0.48-Freigabe aus `KR-4854`. Der erste echte Gastframe ist durch `KR-4850`
+belegt; BootExecutable und Spielboot bleiben das aktuelle P0.
 
 ---
 
@@ -892,7 +895,7 @@ Blockleader vorbereitet; der live geladene Dispatch bleibt `RuntimeOnly`.
 Lokale AOT-Blockketten reichen die tatsaechliche Terminatorquelle, Callsite,
 Transferart und Siteklasse exakt an den externen Dispatch weiter. Runtime-ABI
 37, Backend-Interface-ABI 3 und Portprojektvertrag 23 versionieren diesen
-Vertrag. Der frische Produktlauf verlaesst `0x8C654F5C` und meldet in 761.011
+damaligen Vertrag. Der damalige Produktlauf verlaesst `0x8C654F5C` und meldet in 761.011
 Dispatchereignissen keinen Fehler. Sein Haupthotspot
 `0x8C6658D0 -> 0x8C65247E` ist ein endlicher 4-Byte-Kopier-/
 Initialisierungsloop (`r6=4`, Ziel `r14`, Quelle Stack, `r14+=4`) und kein
@@ -918,6 +921,15 @@ Zyklen laufen `IP.BIN`-AOT und 48.471 native Runtime-only-Treffer ohne Fehler,
 Fallback oder Materialisierung; GD-ROM, TA und PVR sind noch null. Bei 320
 Millionen Zyklen erreicht der Gast Spielecode, zwei GD-ROM-Kommandos und einen
 spaeten PVR-Registerwrite, weiterhin ohne TA-, Render- oder Framebeweis.
+
+Der aktuelle kumulative Schnittstellenstand verwendet Runtime-ABI 39,
+Block-ABI 3, Backend-Interface-ABI 3, Portprojektvertrag 24 und
+Host-Video-Vertrag 2. Source-relativierte native AOT-Templates und ihr
+adressierter Binder sind vorhanden; strukturierte Disc-Ladetransaktionen, der
+allgemeine native Materializer und die Registry latenter Module halten
+`KR-4848` weiterhin offen. Das fokussierte Gate besteht 11/11, der
+vollstaendige x64-Build mit zwoelf parallelen Jobs ist gruen und das
+CTest-Zwischengate besteht 178/178 Eintraege in rund 4:04 Minuten.
 
 ### [ ] KR-4849 - TA-Eingang und PVR-Kommandopfad
 
@@ -948,17 +960,18 @@ offen. Der aktuelle private PAL-Lauf erreichte weiterhin keinen TA-Transfer;
 SCANINT1 ist dabei kein belegter Fehler. Der weitere Audit prueft allgemeine
 PVR-Register-, Timing-, DMA- und Completionvertraege statt Titeladressen.
 
-### [ ] KR-4850 - Erster scanoutgebundener Gastframe
+### [x] KR-4850 - Erster scanoutgebundener Gastframe
 
 Abhaengigkeiten: KR-4915
 Prioritaet: P0
 
-- Rendergeneration, TA-Listen, Pixelwrites und tatsaechlich geaenderte Pixel belegen
+- aktiven Scanout und entweder eine validierte TA-Rendergeneration oder einen
+  sichtbar geaenderten Direct-Framebuffer-Gastwrite belegen
 - Write-Framebuffer, aktiven Read-Framebuffer und ungeblankten Scanout verbinden
 - `KR_FIRST_GUEST_FRAME` hostunabhaengig von `KR_FIRST_PRESENTED_FRAME` trennen
 - Testframe, vorgefuellter VRAM oder blosser RenderDone-Zaehler gelten nicht
 
-Teilstand 2026-07-22: Rendergenerationen erfassen final gepackte Pixelwerte und
+Historischer Teilstand 2026-07-22: Rendergenerationen erfassen final gepackte Pixelwerte und
 geaenderte Bytemasken. Erst der echte Scheduler-VBlank-In revalidiert die
 aktuellen VRAM-Bytes und friert den exakten Frame ein; ein spaeterer Render
 zaehlt erst am folgenden VBlank. PAL/Interlace prueft das aktive SPG-Feld gegen
@@ -969,8 +982,8 @@ Bufferflip sichtbar werden. 256 Generationen, 64 MiB, Range-Fast-Reject und
 Skalierungsbomben werden vor der Allokation abgewiesen. Der gemeinsame Proof-
 Pump trennt Gastbeweis und Host-Present. Scheduler-VBlank, Proof, Pump und
 FakeVideo sind pixelgenau synthetisch verbunden; die vier fokussierten Targets
-bestehen 4/4 in 0,66 Sekunden mit 12 Buildjobs. Der Task bleibt bis zum ersten
-entsprechenden privaten Retail-Gastframe offen. Die frische Probe verliess die
+bestehen 4/4 in 0,66 Sekunden mit 12 Buildjobs. Zu diesem Zeitpunkt blieb der
+Task bis zum ersten entsprechenden privaten Retail-Gastframe offen. Die frische Probe verliess die
 SCANINT1-Wartestelle sowie die folgenden PR-, `BSRF`- und GD-ROM-Modegrenzen.
 Bei 345.568.225 Gastzyklen sind spaetere PVR-Registerwrites beobachtet, aber
 weiterhin kein TA-Transfer, Renderrequest oder echter Gastframe; der damalige
@@ -982,6 +995,22 @@ PVR-Registerwrite, aber weiterhin keinen TA-Transfer, Renderrequest oder echten
 Gastframe. Der fuehrende Dispatchhotspot ist ein endlicher 4-Byte-Kopier-/
 Initialisierungsloop und kein neuer fehlender Zielblock.
 
+Abschluss 2026-07-23: Der recompilierte Sonic-Adventure-PAL-Discbootstrap
+`IP.BIN` beschreibt den sichtbaren Direct-Framebuffer ueber die gemeinsame
+logische 32-Bit-VRAM-Abbildung. Backing-Byte-adressierte Dirty-Evidenz plus das
+vorherige Scanout-Abbild belegen einen tatsaechlich geaenderten sichtbaren
+Pixel. Der budgetierte Lauf erreicht nach 50 Millionen Gastzyklen in 5,3
+Sekunden `KR_FIRST_GUEST_FRAME` und danach `KR_FIRST_PRESENTED_FRAME`; TA
+bleibt null und der Budget-Exit ist erwartet. BootExecutable, Spielboot,
+`KR-4848` und der produktive TA-Pfad bleiben offen.
+Nach dem Vollgate wurde der Vertrag-24-Port unter Runtime-ABI 39 und Block-ABI
+3 frisch neu exportiert und gebaut: 1.860 Funktionen, 37 Codepartitionen und
+null Retailsektoren. Die lokale read-only Originaldisc-Installation umfasst
+drei Tracks und 521.461 Sektoren. Der abschliessende 50-Millionen-Lauf
+reproduziert beide Marker mit `frames=2`, `pvr_guest_frames=2`,
+`pvr_direct_frames=2` und 302.287 geaenderten Direct-FB-Pixeln; TA,
+Rendergeneration und Materializer bleiben null.
+
 ### [ ] KR-4851 - Boot- und Frame-Hotpath
 
 Abhaengigkeiten: KR-4844, KR-4848, KR-4850
@@ -992,9 +1021,10 @@ Prioritaet: P0
 - statische Call-/Sprungtabellen und latente Module ohne erneuten Codegen aktivieren
 - Fastpath an/aus muss bytegleiche Gastresultate liefern und die Baseline halten
 
-Teilstand 2026-07-22: Ein budgetierter 50-Millionen-Zyklen-Lauf mit nativem
+Historischer Teilstand 2026-07-22: Ein budgetierter 50-Millionen-Zyklen-Lauf mit nativem
 P1-/P2-Blockchaining endete nach 6,0 Sekunden. Das ist ein Hotpathnachweis, kein
-Frame-Gate; der Task bleibt wegen seiner Abhaengigkeit von `KR-4850` offen.
+Frame-Gate. `KR-4850` ist inzwischen erfuellt; der Task bleibt fuer den
+vollstaendigen Boot-/Frame-Hotpath und den Fastpath-/Referenzvergleich offen.
 
 ### [ ] KR-4852 - Konsolidierte v0.48-Validierung
 
@@ -1094,7 +1124,7 @@ Akzeptanz:
 - deterministische Kernmetriken stimmen ueberein
 - Probe und Bericht enthalten keine Spielbytes oder privaten Adressen
 
-### [ ] KR-4915 - Gast-PVR-Pfad bis `KR_FIRST_GUEST_FRAME`
+### [x] KR-4915 - Gast-PVR-Pfad bis `KR_FIRST_GUEST_FRAME`
 
 Abhaengigkeiten: KR-4849, KR-4913
 Meilenstein: v0.48
@@ -1102,7 +1132,8 @@ Prioritaet: P0
 
 Umfang:
 
-- echten Gast-PVR-/TA-Befehlsstrom verarbeiten
+- echten Gast-PVR-Pfad ueber TA oder den programmierten Direct-Framebuffer
+  verarbeiten
 - benoetigte Polygon-, Textur-, Tiefen-, Blend-, Fog- und Listenpfade allgemein
   implementieren
 - Hostframe ausschliesslich aus Gastzustand erzeugen
@@ -1114,6 +1145,14 @@ Akzeptanz:
 - ein synthetisch vorgefuellter VRAM-Puffer gilt nicht als Nachweis
 - `guest_pvr_frames` ist von `host_present_calls` getrennt
 - Fehlerpfade bleiben sichtbar und reproduzierbar
+
+Abschluss 2026-07-23: Der legitime Direct-Framebuffer-Pfad des recompilierten
+`IP.BIN` erreicht innerhalb von 50 Millionen Gastzyklen in 5,3 Sekunden
+hostunabhaengig `KR_FIRST_GUEST_FRAME` und danach
+`KR_FIRST_PRESENTED_FRAME`. Der TA-Zaehler bleibt null; damit ist der
+Gast-PVR-/Scanoutnachweis erbracht, nicht aber der noch offene produktive
+TA-Vertrag aus `KR-4849`. Ebenso bleiben BootExecutable, Spielboot und
+`KR-4848` offen.
 
 ---
 

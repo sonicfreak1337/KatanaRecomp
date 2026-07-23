@@ -183,7 +183,7 @@ class PvrRegisterFile final {
 
 void configure_dreamcast_video(PvrRegisterFile& registers, DreamcastVideoMode mode);
 
-enum class PvrFramebufferFormat : std::uint8_t { Rgb565, Argb1555, Rgb888, Rgb0888 };
+enum class PvrFramebufferFormat : std::uint8_t { Rgb565, Rgb0555, Rgb888, Rgb0888 };
 
 struct PvrScanoutDescriptor {
     std::uint32_t width = 0u;
@@ -194,8 +194,10 @@ struct PvrScanoutDescriptor {
     std::size_t base_offset = 0u;
     std::size_t second_base_offset = 0u;
     PvrFramebufferFormat format = PvrFramebufferFormat::Rgb565;
+    std::uint8_t concat = 0u;
     bool line_double = false;
     bool interlaced = false;
+    bool weave_fields = false;
     bool horizontal_scale = false;
     std::uint16_t vertical_scale_factor = 0x0400u;
     bool video_blank = false;
@@ -220,7 +222,9 @@ class PvrFramebuffer final {
                    bool line_double = false,
                    bool interlaced = false,
                    std::uint32_t source_width = 0u,
-                   std::uint32_t source_height = 0u);
+                   std::uint32_t source_height = 0u,
+                   std::uint8_t concat = 0u,
+                   bool logical_32bit_vram = false);
     [[nodiscard]] PvrFrame capture(std::span<const std::uint8_t> vram,
                                    std::size_t base_offset = 0u,
                                    std::optional<std::size_t> second_base_offset = std::nullopt,
@@ -235,8 +239,10 @@ class PvrFramebuffer final {
     std::uint32_t source_height_ = 0u;
     std::uint32_t stride_ = 0u;
     PvrFramebufferFormat format_ = PvrFramebufferFormat::Rgb565;
+    std::uint8_t concat_ = 0u;
     bool line_double_ = false;
     bool interlaced_ = false;
+    bool logical_32bit_vram_ = false;
     std::uint64_t presented_frames_ = 0u;
 };
 
@@ -443,6 +449,8 @@ struct PvrSoftwareRenderMetrics {
     std::uint64_t pixel_writes = 0u;
     std::uint64_t changed_pixels = 0u;
     std::uint64_t proven_guest_frames = 0u;
+    std::uint64_t direct_scanout_frames = 0u;
+    std::uint64_t direct_scanout_changed_pixels = 0u;
     std::uint64_t last_frame_pixel_writes = 0u;
     std::uint64_t last_frame_changed_pixels = 0u;
     std::uint64_t dropped_render_evidence_generations = 0u;
@@ -450,6 +458,8 @@ struct PvrSoftwareRenderMetrics {
     std::uint64_t render_evidence_range_rejections = 0u;
     std::uint64_t render_evidence_scan_budget_exhaustions = 0u;
 };
+
+enum class PvrGuestFrameProofSource : std::uint8_t { TaRender, DirectFramebuffer };
 
 struct PvrChangedPixelEvidence {
     std::uint32_t offset = 0u;
@@ -477,6 +487,7 @@ struct PvrGuestFrameProof {
     std::uint32_t scanout_field = 0u;
     PvrScanoutDescriptor scanout;
     PvrFrame frame;
+    PvrGuestFrameProofSource source = PvrGuestFrameProofSource::TaRender;
 };
 
 enum class PvrRenderError : std::uint8_t {
@@ -504,6 +515,10 @@ class PvrSoftwareRenderer final {
     void render(const PvrTaFrame& frame,
                 const PvrRegisterFile& registers,
                 LinearMemoryDevice& vram);
+    void observe_vram_write(std::uint32_t address,
+                            std::size_t size,
+                            bool bytes_changed = true);
+    void reset_guest_frame_evidence(std::span<const std::uint8_t> vram = {});
     void observe_vblank_scanout(const PvrRegisterFile& registers,
                                 std::span<const std::uint8_t> vram);
     [[nodiscard]] std::optional<PvrGuestFrameProof> take_guest_frame_proof();
@@ -521,6 +536,12 @@ class PvrSoftwareRenderer final {
     std::deque<PvrRenderGenerationEvidence> pending_render_evidence_;
     std::size_t pending_render_evidence_bytes_ = 0u;
     std::uint64_t next_evidence_scan_generation_ = 0u;
+    std::uint64_t next_direct_write_generation_ = 1u;
+    std::uint64_t pending_direct_write_generation_ = 0u;
+    std::vector<std::uint64_t> direct_dirty_words_;
+    std::size_t direct_dirty_byte_count_ = 0u;
+    std::vector<std::uint8_t> direct_vram_shadow_;
+    bool direct_vram_shadow_valid_ = true;
     std::optional<PvrGuestFrameProof> queued_guest_frame_proof_;
     std::optional<PvrRenderFirstError> first_error_;
 };

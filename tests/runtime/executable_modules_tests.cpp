@@ -57,6 +57,7 @@ void relocated_module_regression() {
         &tracker,
         {true, 2u, source.size()},
         [&](const std::uint32_t target,
+            const std::uint32_t,
             const std::span<const std::uint8_t> snapshot,
             const BlockVariantKey& requested_variant) {
             ++callback_calls;
@@ -121,6 +122,96 @@ void relocated_module_regression() {
             "Unbekannter Relocationtyp veraendert den aktiven Modulvertrag.");
 }
 
+void native_aot_template_materialization_regression() {
+    using namespace katana::runtime;
+    CpuState cpu;
+    std::vector<std::uint8_t> template_bytes(56u);
+    for (std::size_t index = 0u; index < template_bytes.size(); ++index)
+        template_bytes[index] = static_cast<std::uint8_t>(index * 3u + 1u);
+    cpu.memory.write_bytes(0x1000u, template_bytes, CodeWriteSource::Copy);
+    cpu.memory.write_bytes(0x2000u, template_bytes, CodeWriteSource::Copy);
+
+    ExecutableModule source;
+    source.id = "native-aot-source";
+    source.source_identity = "free-native-aot-source-v1";
+    source.guest_start = 0x1000u;
+    source.bytes = template_bytes;
+    ExecutableModule runtime_copy = source;
+    runtime_copy.id = "native-aot-runtime-copy";
+    runtime_copy.source_identity = "free-native-aot-runtime-copy-v1";
+    runtime_copy.guest_start = 0x2000u;
+    ExecutableModuleCatalog modules;
+    modules.publish(source);
+    modules.publish(runtime_copy);
+
+    RuntimeBlockTable blocks;
+    ExecutableCodeTracker tracker;
+    blocks.bind_code_tracker(&tracker);
+    DemandBlockMaterializer materializer(
+        modules,
+        blocks,
+        &tracker,
+        {true, 4u, 128u},
+        [](const std::uint32_t target,
+           const std::uint32_t,
+           const std::span<const std::uint8_t> snapshot,
+           const BlockVariantKey& requested_variant) {
+            RuntimeBlock runtime_block{target,
+                                       target,
+                                       4u,
+                                       BlockEndKind::Return,
+                                       requested_variant,
+                                       block,
+                                       "native-aot-template",
+                                       false,
+                                       RuntimeAotTemplateContract{{0x1000u, 0x2000u, 48u}, 56u}};
+            return MaterializedBlockCandidate{std::move(runtime_block),
+                                              snapshot.size() >= 4u,
+                                              false,
+                                              true,
+                                              true,
+                                              true,
+                                              1u,
+                                              2u,
+                                              1u,
+                                              1u,
+                                              56u};
+        });
+    const auto handle = materializer.try_materialize(cpu, 0x2010u, 0x2010u, {}, 0x80u);
+    require(handle.has_value() && blocks.resolve(*handle)->get().aot_template.has_value() &&
+                tracker.blocks().size() == 1u &&
+                tracker.blocks()[0].block.physical_start == 0x2000u &&
+                tracker.blocks()[0].block.size == template_bytes.size() &&
+                tracker.blocks()[0].block.origin == ExecutableBlockOrigin::RomRamCopy &&
+                materializer.validate_for_dispatch(cpu, *handle, 0x2010u),
+            "AOT-Mitteleinstieg trackt nicht die vollstaendige Vorlage samt Literalbereich.");
+
+    cpu.memory.write_u8(0x2034u, static_cast<std::uint8_t>(template_bytes[52] ^ 0xFFu));
+    require(!materializer.validate_for_dispatch(cpu, *handle, 0x2010u) &&
+                materializer.last_failure() == MaterializationFailure::AotTemplateMismatch &&
+                materializer.metrics().byte_identity_failures != 0u,
+            "Literalpatch ausserhalb der Blockbytes bleibt fuer nativen AOT-Dispatch unsichtbar.");
+    cpu.memory.write_u8(0x2034u, template_bytes[52]);
+
+    RuntimeBlockTable rejected_blocks;
+    DemandBlockMaterializer rejected(
+        modules,
+        rejected_blocks,
+        nullptr,
+        {true, 1u, 128u},
+        [](const std::uint32_t,
+           const std::uint32_t,
+           const std::span<const std::uint8_t>,
+           const BlockVariantKey&) {
+            MaterializedBlockCandidate candidate;
+            candidate.rejection_failure = MaterializationFailure::AotTemplateMismatch;
+            return candidate;
+        });
+    require(!rejected.try_materialize(cpu, 0x2020u, 0x2020u, {}, 0x84u) &&
+                rejected.last_failure() == MaterializationFailure::AotTemplateMismatch,
+            "Binder-Ablehnungsgrund wird pauschal als DecodeRejected verschluckt.");
+}
+
 void runtime_write_provenance_regression() {
     using namespace katana::runtime;
     CpuState cpu;
@@ -142,6 +233,7 @@ void runtime_write_provenance_regression() {
                                          &tracker,
                                          {true, 4u, 512u},
                                          [&](const std::uint32_t target,
+                                             const std::uint32_t,
                                              const std::span<const std::uint8_t> snapshot,
                                              const BlockVariantKey& requested_variant) {
                                              ++callback_calls;
@@ -226,6 +318,7 @@ void runtime_write_provenance_regression() {
                                                &alias_tracker,
                                                {true, 2u, 256u},
                                                [](const std::uint32_t target,
+                                                  const std::uint32_t,
                                                   const std::span<const std::uint8_t> snapshot,
                                                   const BlockVariantKey& requested_variant) {
                                                    return MaterializedBlockCandidate{
@@ -395,6 +488,30 @@ void dreamcast_main_ram_mirror_invalidation_regression() {
     CpuState cpu;
     auto runtime = initialize_dreamcast_runtime(cpu, boot_image);
 
+    const auto* bootstrap_module =
+        runtime.module_catalog->find(dreamcast_initial_disc_bootstrap_module_id);
+    const auto* boot_module =
+        runtime.module_catalog->find(dreamcast_initial_boot_executable_module_id);
+    require(bootstrap_module != nullptr && boot_module != nullptr &&
+                bootstrap_module->guest_start == dreamcast_system_bootstrap_address &&
+                bootstrap_module->bytes.size() == dreamcast_system_bootstrap_size &&
+                boot_module->guest_start == dreamcast_disc_boot_address &&
+                boot_module->bytes == boot_image.boot_file &&
+                runtime.module_catalog->resolve(0x0C008000u, dreamcast_system_bootstrap_size) ==
+                    bootstrap_module &&
+                runtime.module_catalog->resolve(0x0C010000u, boot_image.boot_file.size()) ==
+                    boot_module &&
+                runtime.module_catalog->validate_bytes_at(cpu.memory,
+                                                          dreamcast_system_bootstrap_address,
+                                                          0x0C008000u,
+                                                          dreamcast_system_bootstrap_size) &&
+                runtime.module_catalog->validate_bytes_at(cpu.memory,
+                                                          dreamcast_disc_boot_address,
+                                                          0x0C010000u,
+                                                          boot_image.boot_file.size()),
+            "Initialer Discbootstrap und Bootcode sind nicht als lokal gebundene "
+            "AOT-Quellmodule publiziert.");
+
     constexpr std::array<std::uint32_t, 3u> mirror_bases{
         0x0D000000u, 0x0E000000u, 0x0F000000u};
     for (std::size_t index = 0u; index < mirror_bases.size(); ++index) {
@@ -511,6 +628,7 @@ void partial_module_patch_regression() {
         nullptr,
         {true, 2u, 64u},
         [](const std::uint32_t target,
+           const std::uint32_t,
            const std::span<const std::uint8_t> snapshot,
            const BlockVariantKey& requested_variant) {
             return MaterializedBlockCandidate{{target,
@@ -930,6 +1048,7 @@ void interpreter_interior_entry_regression() {
         &tracker,
         {true, 4u, 64u},
         [&](const std::uint32_t target,
+            const std::uint32_t,
             const std::span<const std::uint8_t> snapshot,
             const BlockVariantKey& requested_variant) {
             ++callback_calls;
@@ -996,6 +1115,7 @@ void interpreter_interior_entry_regression() {
         nullptr,
         {true, 4u, 64u},
         [&](const std::uint32_t target,
+            const std::uint32_t,
             const std::span<const std::uint8_t> snapshot,
             const BlockVariantKey& requested_variant) {
             ++native_callbacks;
@@ -1054,16 +1174,19 @@ void mmu_materialization_origin_regression() {
     ExecutableModuleCatalog modules;
     modules.publish(module);
     RuntimeBlockTable blocks;
+    std::optional<std::uint32_t> observed_callback_physical_origin;
     DemandBlockMaterializer materializer(
         modules,
         blocks,
         nullptr,
         {true, 2u, 16u},
-        [](const std::uint32_t target,
+        [&](const std::uint32_t target,
+           const std::uint32_t physical_origin,
            const std::span<const std::uint8_t> snapshot,
            const BlockVariantKey& requested_variant) {
+            observed_callback_physical_origin = physical_origin;
             return MaterializedBlockCandidate{{target,
-                                               target,
+                                               physical_origin,
                                                2u,
                                                BlockEndKind::Return,
                                                requested_variant,
@@ -1091,7 +1214,8 @@ void mmu_materialization_origin_regression() {
     const auto resolved_block = blocks.resolve(result.block);
     require(resolved_block.has_value() &&
                 resolved_block->get().virtual_start == 0x00002100u &&
-                resolved_block->get().physical_origin == 0x0C000100u,
+                resolved_block->get().physical_origin == 0x0C000100u &&
+                observed_callback_physical_origin == 0x0C000100u,
             "MMU-Materialisierung liest virtuelle statt physischer Bytes oder verliert die VA.");
 }
 
@@ -1120,6 +1244,7 @@ int main() {
                                          &tracker,
                                          {true, 2u, 4u},
                                          [](const std::uint32_t target,
+                                            const std::uint32_t,
                                             const std::span<const std::uint8_t>,
                                             const BlockVariantKey& requested_variant) {
                                              return MaterializedBlockCandidate{
@@ -1195,6 +1320,7 @@ int main() {
             "Modul-Unload hinterlaesst eine aktive ausfuehrbare Herkunft.");
 
     relocated_module_regression();
+    native_aot_template_materialization_regression();
     runtime_write_provenance_regression();
     identity_preserving_loaded_range_regression();
     dreamcast_main_ram_mirror_invalidation_regression();

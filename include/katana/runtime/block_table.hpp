@@ -28,6 +28,17 @@ struct BlockVariantKey {
     [[nodiscard]] auto operator<=>(const BlockVariantKey&) const noexcept = default;
 };
 
+struct RuntimeAotTemplateContract {
+    CodeAddressMapping mapping;
+    // Validation starts at the physical byte corresponding to mapping.runtime_start
+    // (derived from the block's physical origin).  It may be larger than the mapped
+    // executable range so writes to an adjacent literal pool invalidate every native
+    // block backed by the template as well.
+    std::uint32_t validation_extent = 0u;
+
+    [[nodiscard]] bool operator==(const RuntimeAotTemplateContract&) const noexcept = default;
+};
+
 struct RuntimeBlock {
     std::uint32_t virtual_start = 0u;
     std::uint32_t physical_origin = 0u;
@@ -37,6 +48,7 @@ struct RuntimeBlock {
     BackendBlockFunction function = nullptr;
     std::string provenance;
     bool runtime_registered = false;
+    std::optional<RuntimeAotTemplateContract> aot_template;
 };
 
 struct RuntimeBlockHandle {
@@ -69,6 +81,9 @@ struct RuntimeBlockLookupCounters {
 
 [[nodiscard]] std::uint32_t canonical_physical_address(std::uint32_t address) noexcept;
 [[nodiscard]] std::string stable_runtime_block_identity(const RuntimeBlock& block);
+[[nodiscard]] BlockExit execute_runtime_block(const RuntimeBlock& block,
+                                              CpuState& cpu,
+                                              BlockExecutionContext& context);
 
 class RuntimeBlockTable {
   public:

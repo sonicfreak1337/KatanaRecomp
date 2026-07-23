@@ -40,6 +40,10 @@ inline constexpr std::uint32_t dreamcast_data_sector_size = 2048u;
 inline constexpr std::size_t dreamcast_system_bootstrap_size =
     static_cast<std::size_t>(dreamcast_system_bootstrap_sector_count) *
     dreamcast_data_sector_size;
+inline constexpr std::string_view dreamcast_initial_disc_bootstrap_module_id =
+    "initial-disc-bootstrap";
+inline constexpr std::string_view dreamcast_initial_boot_executable_module_id =
+    "initial-boot-executable";
 inline constexpr std::uint32_t dreamcast_direct_boot_stack = 0x8D000000u;
 inline constexpr std::uint32_t dreamcast_direct_boot_vector_base = 0x8C000000u;
 inline constexpr std::uint32_t dreamcast_disc_boot_status =

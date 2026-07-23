@@ -73,6 +73,9 @@ int main() {
     require(source.find("required_runtime_abi = " + std::to_string(katana::runtime::abi_version) +
                         "u") != std::string::npos,
             "Der generierte Code prueft die Runtime-ABI nicht.");
+    require(source.find("switch (katana::runtime::unrelocate_code_address(cpu.pc))") !=
+                std::string::npos,
+            "Der Funktionsswitch normalisiert keine relokierte Runtime-PC-Adresse.");
     require(source.find("base_guest_cycles_per_instruction * 2u") != std::string::npos,
             "Owner und Delay Slot werden nicht als zwei Gastinstruktionen berechnet.");
 
@@ -96,6 +99,13 @@ int main() {
 
     require(delay_position < call_position,
             "Der Delay Slot muss vor dem Funktionsaufruf ausgefuehrt werden.");
+    require(source.find("cpu.pr = katana::runtime::relocate_code_address(0x8C010004u);") !=
+                    std::string::npos &&
+                source.find("cpu.pc = katana::runtime::relocate_code_address(0x8C010008u);") !=
+                    std::string::npos,
+            "BSR relokiert Ziel oder Rueckkehradresse nicht mit seinem Codetemplate.");
+    require(source.find("cpu.pc = 0x8C010000u;") != std::string::npos,
+            "Der normale Programmeinstieg wurde unnoetig in den Relokationskontext gezogen.");
 
     const std::vector<std::uint32_t> global_entries{0x8C010000u, 0x8C010008u};
     const katana::codegen::CppBackend partition_backend;
@@ -153,15 +163,17 @@ int main() {
     const auto local_chain_transition =
         local_chain_source.find("services->can_chain_executable_block(cpu.pc)) continue;");
     const auto next_block_note = local_chain_source.find(block_note, first_block_note + 1u);
-    require(first_block_note != std::string::npos &&
-                local_chain_transition != std::string::npos &&
+    require(first_block_note != std::string::npos && local_chain_transition != std::string::npos &&
                 next_block_note != std::string::npos && first_block_note < local_chain_transition &&
                 local_chain_transition < next_block_note &&
-                local_chain_source.find("++cpu.retired_guest_instructions;") !=
+                local_chain_source.find(
+                    "note_block_entry(katana::runtime::relocate_code_address(0x8C010000u));") !=
                     std::string::npos &&
-                local_chain_source.find("services->consume_guest_cycles(") ==
-                    std::string::npos &&
-                local_chain_source.find("cpu.pc = !cpu.t ? 0x8C010002u : 0x8C010006u;") !=
+                local_chain_source.find("++cpu.retired_guest_instructions;") != std::string::npos &&
+                local_chain_source.find("services->consume_guest_cycles(") == std::string::npos &&
+                local_chain_source.find("cpu.pc = !cpu.t ? "
+                                        "katana::runtime::relocate_code_address(0x8C010002u) : "
+                                        "katana::runtime::relocate_code_address(0x8C010006u);") !=
                     std::string::npos,
             "Lokales Mehrblock-Chaining besitzt Vorab-Timing oder keinen Retirement-Guard.");
 
@@ -189,10 +201,18 @@ int main() {
     const auto indirect_jump_program = katana::ir::lower_program(
         indirect_jump_lines, indirect_jump_functions, indirect_jump_edges);
     const auto indirect_jump_source = katana::codegen::emit_cpp_program(indirect_jump_program, 0u);
-    require(indirect_jump_source.find("switch (jump_target)") != std::string::npos &&
+    require(indirect_jump_source.find("const std::uint32_t jump_target = cpu.r[1];") !=
+                    std::string::npos &&
+                indirect_jump_source.find(
+                    "switch (katana::runtime::unrelocate_code_address(jump_target))") !=
+                    std::string::npos &&
                 indirect_jump_source.find("case 0x00000008u:") != std::string::npos &&
-                indirect_jump_source.find("cpu.pc = 0x00000008u;") != std::string::npos,
-            "Aufgeloestes indirektes JMP wird nicht als nativer Dispatch generiert.");
+                indirect_jump_source.find("cpu.pc = jump_target;") != std::string::npos &&
+                indirect_jump_source.find(
+                    "jump_target = katana::runtime::relocate_code_address(cpu.r[1])") ==
+                    std::string::npos,
+            "Aufgeloestes absolutes JMP veraendert sein Registerziel oder verliert nativen "
+            "Dispatch.");
 
     constexpr std::array<std::uint8_t, 18> relative_jump_bytes = {
         0x08u,
@@ -222,10 +242,11 @@ int main() {
     const auto relative_jump_program = katana::ir::lower_program(
         relative_jump_lines, relative_jump_functions, relative_jump_edges);
     const auto relative_jump_source = katana::codegen::emit_cpp_program(relative_jump_program, 0u);
-    require(relative_jump_source.find("jump_target = cpu.r[0] + 0x00000006u") !=
+    require(relative_jump_source.find("jump_target = cpu.r[0] + "
+                                      "katana::runtime::relocate_code_address(0x00000006u)") !=
                     std::string::npos &&
                 relative_jump_source.find("case 0x0000000Eu:") != std::string::npos,
-            "BRAF verliert PC+4+Rm-Zielbildung zwischen IR und C++-Backend.");
+            "BRAF verliert die relokierbare PC+4+Rm-Zielbildung zwischen IR und C++-Backend.");
 
     constexpr std::array<std::uint8_t, 16> indirect_call_bytes = {
         0x0Cu,
@@ -255,11 +276,42 @@ int main() {
     const auto indirect_call_program = katana::ir::lower_program(
         indirect_call_lines, indirect_call_functions, indirect_call_edges);
     const auto indirect_call_source = katana::codegen::emit_cpp_program(indirect_call_program, 0u);
-    require(indirect_call_source.find("switch (call_target)") != std::string::npos &&
+    require(indirect_call_source.find("const std::uint32_t call_target = cpu.r[1];") !=
+                    std::string::npos &&
+                indirect_call_source.find(
+                    "switch (katana::runtime::unrelocate_code_address(call_target))") !=
+                    std::string::npos &&
                 indirect_call_source.find("case 0x0000000Cu:") != std::string::npos &&
                 indirect_call_source.find("fn_0000000C_with_services(cpu, services);") !=
+                    std::string::npos &&
+                indirect_call_source.find(
+                    "cpu.pr = katana::runtime::relocate_code_address(0x00000006u);") !=
+                    std::string::npos &&
+                indirect_call_source.find(
+                    "call_target = katana::runtime::relocate_code_address(cpu.r[1])") ==
                     std::string::npos,
-            "Aufgeloestes indirektes JSR wird nicht als nativer Funktionsdispatch generiert.");
+            "Aufgeloestes absolutes JSR veraendert sein Registerziel oder verliert nativen "
+            "Funktionsdispatch.");
+
+    auto relative_call_bytes = relative_jump_bytes;
+    relative_call_bytes[2] = 0x03u; // BSRF R0: PC+4+8 = 0x0000000E
+    const auto relative_call_lines = katana::sh4::disassemble(relative_call_bytes, 0u);
+    const std::array<katana::analysis::ResolvedControlFlowEdge, 1> relative_call_edges = {
+        katana::analysis::ResolvedControlFlowEdge{
+            2u, 14u, katana::analysis::ResolvedControlFlowKind::Call}};
+    const auto relative_call_functions = katana::analysis::discover_functions(
+        relative_call_lines, indirect_jump_seeds, relative_call_edges);
+    const auto relative_call_program = katana::ir::lower_program(
+        relative_call_lines, relative_call_functions, relative_call_edges);
+    const auto relative_call_source = katana::codegen::emit_cpp_program(relative_call_program, 0u);
+    require(relative_call_source.find("call_target = cpu.r[0] + "
+                                      "katana::runtime::relocate_code_address(0x00000006u)") !=
+                    std::string::npos &&
+                relative_call_source.find(
+                    "cpu.pr = katana::runtime::relocate_code_address(0x00000006u);") !=
+                    std::string::npos &&
+                relative_call_source.find("case 0x0000000Eu:") != std::string::npos,
+            "BSRF relokiert Zielbasis oder Rueckkehradresse nicht mit seinem Codetemplate.");
 
     auto dynamic_program = indirect_call_program;
     const auto make_dynamic =
@@ -333,10 +385,61 @@ int main() {
         katana::codegen::emit_cpp_program(delay_memory_program, 0x8C020000u);
     require(delay_memory_source.find("catch (const katana::runtime::MemoryAccessError& error)") !=
                     std::string::npos &&
+                delay_memory_source.find("enter_memory_exception(cpu, error, "
+                                         "katana::runtime::relocate_code_address(0x8C020002u), "
+                                         "katana::runtime::relocate_code_address(0x8C020000u));") !=
+                    std::string::npos &&
                 delay_memory_source.find(
-                    "enter_memory_exception(cpu, error, 0x8C020002u, 0x8C020000u);") !=
+                    "cpu.pc = katana::runtime::relocate_code_address(0x8C020006u);") !=
                     std::string::npos,
-            "Speicherfehler im Delay Slot verlieren ihren Owner-PC.");
+            "BRA oder Speicherfehler im Delay Slot verlieren relokiertes Ziel, Fehler-PC oder "
+            "Owner-PC.");
+
+    constexpr std::array<std::uint8_t, 10> pc_relative_bytes = {
+        0x00u,
+        0x91u, // MOV.W @(0,PC),R1 -> 0x8C030004
+        0x00u,
+        0xD2u, // MOV.L @(0,PC),R2 -> 0x8C030004
+        0x00u,
+        0xC7u, // MOVA  @(0,PC),R0 -> 0x8C030008
+        0x0Bu,
+        0x00u, // RTS
+        0x09u,
+        0x00u // NOP (Delay Slot)
+    };
+    const auto pc_relative_lines = katana::sh4::disassemble(pc_relative_bytes, 0x8C030000u);
+    constexpr std::array<std::uint32_t, 1> pc_relative_seeds = {0x8C030000u};
+    const auto pc_relative_functions =
+        katana::analysis::discover_functions(pc_relative_lines, pc_relative_seeds);
+    const auto pc_relative_program =
+        katana::ir::lower_program(pc_relative_lines, pc_relative_functions);
+    const auto pc_relative_source =
+        katana::codegen::emit_cpp_program(pc_relative_program, 0x8C030000u);
+    require(pc_relative_source.find("guest_read_s16(cpu, "
+                                    "katana::runtime::relocate_code_address(0x8C030004u))") !=
+                    std::string::npos &&
+                pc_relative_source.find("guest_read_u32(cpu, "
+                                        "katana::runtime::relocate_code_address(0x8C030004u))") !=
+                    std::string::npos &&
+                pc_relative_source.find(
+                    "cpu.r[0] = katana::runtime::relocate_code_address(0x8C030008u);") !=
+                    std::string::npos &&
+                pc_relative_source.find("relocate_code_address(katana::runtime::guest_read_u32") ==
+                    std::string::npos,
+            "PC-relative MOV.W/MOV.L/MOVA folgen nicht dem Codetemplate oder veraendern den "
+            "geladenen Literalwert.");
+
+    constexpr std::array<std::uint8_t, 2> sleep_bytes = {0x1Bu, 0x00u};
+    const auto sleep_lines = katana::sh4::disassemble(sleep_bytes, 0x8C040000u);
+    constexpr std::array<std::uint32_t, 1> sleep_seeds = {0x8C040000u};
+    const auto sleep_functions = katana::analysis::discover_functions(sleep_lines, sleep_seeds);
+    const auto sleep_program = katana::ir::lower_program(sleep_lines, sleep_functions);
+    const auto sleep_source = katana::codegen::emit_cpp_program(sleep_program, 0x8C040000u);
+    require(
+        sleep_source.find("cpu.sleeping = true;") != std::string::npos &&
+            sleep_source.find("cpu.pc = katana::runtime::relocate_code_address(0x8C040002u);") !=
+                std::string::npos,
+        "SLEEP behaelt keinen relokierten Fortsetzungs-PC.");
 
     katana::ir::Instruction first_timing;
     first_timing.source_address = 0x3000u;
@@ -396,7 +499,8 @@ int main() {
             cache_source.find("katana::runtime::guest_write_u32(cpu, cpu.r[9], cpu.r[0])") !=
                 std::string::npos &&
             cache_source.find("services->prefetch(cpu, cpu.r[3])") != std::string::npos &&
-            cache_source.find("enter_memory_exception(cpu, error, 0x0000400Au);") !=
+            cache_source.find("enter_memory_exception(cpu, error, "
+                              "katana::runtime::relocate_code_address(0x0000400Au));") !=
                 std::string::npos,
         "Der C++-Emitter laesst LDTLB/cache instructions aus, verwechselt Register oder "
         "faengt PREF-MMU-Fehler nicht am SH-4-Exceptionpfad.");

@@ -91,6 +91,7 @@ DispatchDiagnosticError materialization_error(const MaterializationFailure failu
     case MaterializationFailure::RepeatedMissLimit:
         return DispatchDiagnosticError::MaterializationBudget;
     case MaterializationFailure::ByteIdentityMismatch:
+    case MaterializationFailure::AotTemplateMismatch:
         return DispatchDiagnosticError::ByteIdentityMismatch;
     case MaterializationFailure::GenerationMismatch:
     case MaterializationFailure::ModuleUnloaded:

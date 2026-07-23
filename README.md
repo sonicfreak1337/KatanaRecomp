@@ -47,8 +47,9 @@ Der normale Produktport emittiert oder linkt keinen SH-4-Interpreter. Ein
 nicht vorab gebundenes AOT-Ziel endet stattdessen als typisierter Fehler. Nur
 ein expliziter `diagnostic_partial`-Export enthaelt den begrenzten
 Diagnoseinterpreter und weist ihn im Manifest aus. Strukturierte Disc-
-Ladetransaktionen und vorab erzeugte latente AOT-Module bleiben in KR-4848
-offen. P1-/P2-Aliase dispatchen denselben nativen Code; absolute Pointerwerte
+Ladetransaktionen, der allgemeine native Materializer und vorab erzeugte
+latente AOT-Module bleiben in `KR-4848` offen. P1-/P2-Aliase dispatchen
+denselben nativen Code; absolute Pointerwerte
 aus beschreibbaren Anfangssnapshottabellen bleiben validierte Runtime-
 Kandidaten und werden weder zu erfundenen CFG-Kanten noch zu Funktionsseeds.
 Der statische PAL-Audit findet in den begrenzten `MOV.W`-/`BRAF`-Relative16-
@@ -58,27 +59,42 @@ vorbereitet; der live geladene Dispatch bleibt `RuntimeOnly` und erzeugt keine
 feste CFG-Kante. Snapshotcache und P2-Aliasaufloesung sind gegen imagefremde
 Beweise abgesichert. Lokale AOT-Blockketten tragen die exakte tatsaechliche
 Terminatorquelle und Siteklasse bis zum externen Dispatch weiter. Der aktuelle
-kumulative Stand verwendet Runtime-ABI 38, Backend-Interface-ABI 3 und
-Portprojektvertrag 23.
+kumulative Stand verwendet Runtime-ABI 39, Block-ABI 3,
+Backend-Interface-ABI 3, Portprojektvertrag 24 und Host-Video-Vertrag 2.
 
-Der frische optimierte ABI-38-PAL-Port wurde mit zwoelf Jobs in 140,9 Sekunden
+Der vorangegangene optimierte ABI-38-PAL-Port wurde mit zwoelf Jobs in
+140,9 Sekunden
 exportiert; der inkrementelle Reexport dauerte 29,2 Sekunden. Er umfasst 1.856
 Funktionen und 37 Codepartitionen, aber weiterhin null Retailsektoren im
 Portpaket. Die lokale Discinstallation war erfolgreich, und die unveraenderte
 Original-GDI blieb erhalten.
 
-Der aktuelle Produktlauf erreicht 345.609.251 Gastzyklen und einen echten
-Runtimehandler am architektonischen SH-4-Interruptvektor `VBR + 0x600`.
-Frame-, TA- und Gast-PVR-Zaehler bleiben null. Eine getrennte, begrenzte
-Diagnose weist ein 56-Byte-Copy-plus-Patch-Codetemplate ueber die beobachteten
-Gastwrites nach und fuehrt daraus 19 bytebewiesene Runtimeinstruktionen aus.
-Der folgende noch nicht statisch gebundene AOT-Einstieg stoppt kontrolliert;
-es wird weder interpretiertes SH-4 in den Produktpfad aufgenommen noch eine
-private Adresse als Spielsonderfall festgeschrieben. `KR-4848` bleibt fuer die
-allgemeine native Bindung solchen Runtimecodes offen. Der aktuelle P0 bleibt
-damit der erste scanoutgebundene, vom Gast erzeugte Frame. Moderner
-Hostcontrollersupport fuer Xbox-, DualSense- und vergleichbare Geraete gehoert
-zu v0.49 und beginnt auf der freigegebenen Framebasis.
+Der aktuelle private Sonic-Adventure-PAL-AOT-Lauf erreicht innerhalb eines
+50-Millionen-Gastzyklusbudgets in 5,3 Sekunden erstmals
+`KR_FIRST_GUEST_FRAME` und `KR_FIRST_PRESENTED_FRAME`. Der recompilierte
+Discbootstrap `IP.BIN` beschreibt den sichtbaren Dreamcast-Framebuffer direkt;
+der TA-Zaehler bleibt deshalb korrekt null. Read- und Write-Framebuffer teilen
+die hardwaregenaue logische 32-Bit-VRAM-Sicht. Der Scanout deckt `map32`,
+opakes `RGB0555` samt Concatbits, gepacktes `RGB888`, Modulus 0/1/>1 sowie
+gewebte und getrennte PAL-Felder ab. Backing-Byte-adressierte Dirty-Evidenz
+plus ein vorheriges Scanout-Abbild verhindern sichtbare False-Proofs durch
+Offscreen-Writes, unveraenderte Bilddaten oder Blanking.
+
+Der kontrollierte Exit am Ende des Gastzyklusbudgets ist erwartet und kein
+Crash. Der Lauf erreicht an dieser Grenze weder BootExecutable noch den
+eigentlichen Spielboot. `KR-4915` und `KR-4850` sind durch den vorgezogenen
+IP.BIN-Framepfad erfuellt; die offenen `KR-4848`-Ladevorgaenge und der
+Materializer sowie der TA-/Bootpfad werden dadurch nicht als abgeschlossen
+behauptet. Moderner Hostcontrollersupport fuer Xbox-, DualSense- und
+vergleichbare Geraete bleibt v0.49-Arbeit auf der jetzt belegten Framebasis.
+
+Nach dem vollstaendigen Gate wurde der Vertrag-24-Port unter Runtime-ABI 39 und
+Block-ABI 3 frisch neu exportiert und gebaut: 1.860 Funktionen, 37
+Codepartitionen und null Retailsektoren. Die lokale read-only Installation der
+Originaldisc umfasst drei Tracks und 521.461 Sektoren. Der abschliessende
+50-Millionen-Lauf reproduziert beide Marker mit zwei Gast-/Direct-FB-Frames und
+302.287 geaenderten Direct-FB-Pixeln; TA, Rendergeneration und Materializer
+bleiben null. Der Budget-Exit ist weiterhin erwartet.
 
 Der aktuelle Pfad verarbeitet Raw-, ELF32-SH-, Projektmanifest- und validierte
 GDI-Eingaben bis zu partitioniertem C++, einer zentralen Dreamcast-Runtime und
@@ -94,10 +110,10 @@ Eingabe
   -> natives Hostprojekt
 ```
 
-Der konfigurierte Testbestand umfasst derzeit 181 Tests; ein vollstaendiges
-181er Gate wurde in diesem Zwischenblock nicht ausgefuehrt. Das fokussierte
-Kern-Gate besteht 9/9, nach der source-relativen Fallthroughkorrektur der
-Portexporttest zusaetzlich 1/1. Der generische C++-Fix setzt bei
+Das aktuelle fokussierte Kern-Gate besteht 11/11. Der vollstaendige x64-Build
+ist mit zwoelf parallelen Jobs gruen; das anschliessende CTest-Gate besteht
+178/178 Eintraege in rund 4:04 Minuten, darunter 176 regulaere Passes und zwei
+erwartete Regex-`PASS_REGULAR_EXPRESSION`-Erfolge. Der generische C++-Fix setzt bei
 nachfolgerlosen Bloecken in allen Backendmodi den PC auf die echte
 Folgeinstruktion; eine kompilierte Regression deckt Einzelblock, lokales
 Chaining und normalen Backendpfad ab. Die Produktinvariante vergleicht mit der

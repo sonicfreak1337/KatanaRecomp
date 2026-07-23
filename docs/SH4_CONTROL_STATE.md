@@ -24,8 +24,9 @@ Exception- und Interrupt-Eintritt.
   Metadatentabelle. TEA und der Delay-Slot-Owner werden am Eintritt gemeinsam
   mit SPC gesichert.
 
-Block-ABI 2 fuehrt dafuer die Endtypen `ExceptionReturn` und `Sleep` ein.
-`Exception` bezeichnet den Uebergang in einen normalen Gast-Handler;
+Block-ABI 2 fuehrte dafuer die Endtypen `ExceptionReturn` und `Sleep` ein; der
+aktuelle kumulative Vertrag steht auf Block-ABI 3. `Exception` bezeichnet den
+Uebergang in einen normalen Gast-Handler;
 nachfolgende Handlerbloecke behalten ihre regulaere Abschlussart. `Return`
 bleibt der normale Subroutine-Return.
 

@@ -6,6 +6,7 @@
 #include "katana/analysis/function_value_analysis.hpp"
 #include "katana/analysis/jump_table_analysis.hpp"
 #include "katana/analysis/recursive_analysis.hpp"
+#include "katana/analysis/runtime_code_copy_analysis.hpp"
 #include "katana/analysis/symbol_names.hpp"
 #include "katana/analysis/value_analysis.hpp"
 #include "katana/io/executable_image.hpp"
@@ -47,6 +48,7 @@ struct ControlFlowSite {
 
 struct ControlFlowAnalysisResult {
     RecursiveAnalysisResult recursive;
+    RuntimeCodeCopyAnalysis runtime_code_copies;
     std::vector<IndirectControlFlowResolution> indirect_control_flow;
     std::vector<StaticReturnContinuationCandidate> static_return_continuations;
     std::vector<JumpTableAnalysis> jump_tables;

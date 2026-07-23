@@ -4,6 +4,40 @@
 
 ### Geaendert
 
+- Ein privater, budgetierter Sonic-Adventure-PAL-AOT-Lauf erreicht in der
+  laufenden v0.48-Entwicklung erstmals sowohl `KR_FIRST_GUEST_FRAME` als auch
+  `KR_FIRST_PRESENTED_FRAME`. Der recompilierte Discbootstrap `IP.BIN`
+  beschreibt den sichtbaren Read-Framebuffer direkt; der hostunabhaengige
+  Proof und die anschliessende native Presentation werden innerhalb eines
+  50-Millionen-Gastzyklusbudgets in 5,3 Sekunden erreicht. Der TA-Zaehler
+  bleibt dabei null: Direct-Framebuffer-Scanout ist ein legitimer Gastframe
+  und kein Host-Smoke. Der anschliessende Budget-Exit ist erwartet. Weder
+  BootExecutable noch Spielboot sind an dieser Grenze erreicht; `KR-4848`
+  bleibt fuer strukturierte Disc-Ladevorgaenge und den allgemeinen nativen
+  Materializer offen.
+- Der nach dem Vollgate frisch neu exportierte Vertrag-24-Port umfasst unter
+  Runtime-ABI 39 und Block-ABI 3 genau 1.860 Funktionen, 37 Codepartitionen
+  und null Retailsektoren. Die lokale read-only Installation der Originaldisc
+  umfasst drei Tracks und 521.461 Sektoren. Der abschliessende
+  50-Millionen-Lauf reproduziert beide Framemarker mit `frames=2`,
+  `pvr_guest_frames=2`, `pvr_direct_frames=2` und 302.287 geaenderten
+  Direct-FB-Pixeln. TA, Rendergeneration und Materializer bleiben null; der
+  Budget-Exit ist erwartet.
+- Der aktuelle kumulative Schnittstellenstand verwendet Runtime-ABI 39,
+  Block-ABI 3, Backend-Interface-ABI 3, Portprojektvertrag 24 und
+  Host-Video-Vertrag 2. Block-ABI 3 versioniert die virtuelle
+  Quell-/Laufzeitadressabbildung source-relativierter nativer AOT-Templates.
+- PVR-Read- und Write-Framebuffer verwenden nun dieselbe hardwaregenaue
+  logische 32-Bit-VRAM-Sicht statt eines linear interpretierten Hostpuffers.
+  Der Scanout bildet jeden logischen Zugriff ueber `map32` ab, dekodiert
+  opakes `RGB0555` samt `FB_R_CTRL.CONCAT`, gepacktes `RGB888`, den
+  hardwareseitigen `FB_R_SIZE`-Modulus einschliesslich der ueberlappenden
+  Nullvariante sowie gewebte und getrennte PAL-Felder. Backing-Byte-adressierte
+  Dirty-Evidenz plus das vorherige Scanout-Abbild verhindern sichtbare
+  False-Proofs durch Offscreen-Writes, unveraenderte Bilddaten oder Blanking.
+  `KR-4915` und `KR-4850` sind damit ueber den vorgezogenen
+  IP.BIN-Pfad erfuellt, ohne die weiterhin offenen Boot-, TA- oder
+  Materializeraufgaben vorwegzunehmen.
 - G1-DMA validiert jetzt den geschuetzten, beschreibbaren Zielbereich vor dem
   Start und meldet Fehler mit Phase, exakter Fehleradresse, bereits
   uebertragenem Praefix und Residue. Der Controller wird vor der
@@ -29,10 +63,10 @@
   tatsaechlichen Terminatorquelle (`source + 2`) statt relativ zum
   Wrapper-Einstieg; gueltige lokale Blockketten koennen dadurch keinen
   Fehlalarm mehr ausloesen.
-- Das fokussierte Kern-Gate besteht 9/9 Tests; nach der source-relativen
-  Invariantenkorrektur besteht der Portexporttest zusaetzlich 1/1. Das
-  konfigurierte 181-Test-Gesamtgate wurde in diesem Zwischenblock nicht
-  ausgefuehrt und wird nicht als bestanden behauptet.
+- Das aktuelle fokussierte Kern-Gate besteht 11/11. Der vollstaendige x64-Build
+  ist mit zwoelf parallelen Jobs gruen; das anschliessende CTest-Gate besteht
+  178/178 Eintraege in rund 4:04 Minuten. Davon sind 176 regulaere Passes und
+  zwei erwartete Regex-`PASS_REGULAR_EXPRESSION`-Erfolge.
 - Der optimierte ABI-38-Export der privaten PAL-Testbench dauerte mit zwoelf
   Jobs 140,9 Sekunden; der inkrementelle Reexport desselben Ports 29,2
   Sekunden. Die lokale Discinstallation war erfolgreich, die Originalquelle
@@ -54,7 +88,7 @@
   Funktionsseeds. Der Snapshotcache ist an die jeweilige `ExecutableImage`-
   Instanz gebunden und kann Beweise nicht mehr zwischen Images weiterreichen;
   P2-Tabellenadressen werden vor der Analyse auf ihre physische P1-Herkunft
-  aufgeloest. Der frische Produktlauf bestaetigt den Vertrag: Der alte Fehler
+  aufgeloest. Der damalige Produktlauf bestaetigt den Vertrag: Der alte Fehler
   bei `0x8C654F5C` tritt nicht mehr auf; ein Gastframe wird weiterhin nicht
   behauptet.
 - Externe Dispatchfortsetzungen bewahren jetzt auch ueber mehrere lokal
@@ -62,7 +96,7 @@
   Call-/Tail-Jump-Art und Siteklasse. Diagnosen und der folgende Lookup werden
   dadurch dem letzten wirklich ausgefuehrten Block statt dem Wrapper-Einstieg
   zugeordnet. Runtime-ABI 37, Backend-Interface-ABI 3 und
-  Portprojektvertrag 23 versionieren diesen Vertrag.
+  Portprojektvertrag 23 versionieren diesen damaligen Vertrag.
 - Grosse statische Dispatchregistries werden deterministisch in Shards mit
   hoechstens 512 Bloecken zerlegt. Jeder Owner erhaelt pro Shard genau einen
   Wrapper; ein balancierter Router waehlt den zustaendigen Shard. Beim
@@ -241,7 +275,7 @@
   Die Direct-Texture-Ziele `0x11`/`0x13` benoetigen fuer mehrteilige Transfers
   noch einen eigenen fortschreitenden Zielvertrag und bleiben als generische
   P1-Luecke offen. Runtime-ABI 37, Backend-Interface-ABI 3, BIOS-ABI 9 und
-  Portprojektvertrag 23 versionieren inzwischen den kumulativen Block. Ein
+  Portprojektvertrag 23 versionieren den damaligen kumulativen Block. Ein
   Sonic-Adventure-Gastframe ist
   damit noch nicht nachgewiesen.
 - Die v0.48-Roadmap ist auf `Native Disc Boot und erster echter Gastframe`

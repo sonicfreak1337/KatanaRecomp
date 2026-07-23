@@ -5,6 +5,7 @@
 #include <iostream>
 #include <stdexcept>
 #include <string>
+#include <utility>
 
 namespace {
 
@@ -15,13 +16,17 @@ void require(const bool condition, const std::string& message) {
     }
 }
 
-template <typename Function> bool throws_invalid(Function&& function) {
+template <typename Exception, typename Function> bool throws_as(Function&& function) {
     try {
         function();
-    } catch (const std::invalid_argument&) {
+    } catch (const Exception&) {
         return true;
     }
     return false;
+}
+
+template <typename Function> bool throws_invalid(Function&& function) {
+    return throws_as<std::invalid_argument>(std::forward<Function>(function));
 }
 
 using katana::runtime::BlockAddress;
@@ -72,6 +77,51 @@ int main() {
     BlockExecutionContext context;
     const BlockEntry entry{{0x8C000100u, 0x0C000100u}};
     validate_block_entry(cpu, context, entry);
+
+    require(relocate_code_address(0x8C001020u) == 0x8C001020u &&
+                unrelocate_code_address(0x8C001020u) == 0x8C001020u,
+            "Inaktiver Codeadressvertrag veraendert Gastadressen.");
+    {
+        const ScopedCodeAddressMapping outer({0x8C100000u, 0x8C200000u, 0x100u});
+        require(relocate_code_address(0x8C100000u) == 0x8C200000u &&
+                    relocate_code_address(0x8C1000FFu) == 0x8C2000FFu &&
+                    relocate_code_address(0x8C100100u) == 0x8C100100u &&
+                    unrelocate_code_address(0x8C200040u) == 0x8C100040u,
+                "Codeadressvertrag verliert Grenzen oder inverse Abbildung.");
+        {
+            const ScopedCodeAddressMapping inner({0x8C100040u, 0xAC300000u, 0x20u});
+            require(relocate_code_address(0x8C100048u) == 0xAC300008u &&
+                        relocate_code_address(0x8C100020u) == 0x8C200020u &&
+                        unrelocate_code_address(0xAC300008u) == 0x8C100048u &&
+                        unrelocate_code_address(0x8C200048u) == 0x8C100048u,
+                    "Verschachtelte Codeadressvertraege sind nicht deterministisch.");
+        }
+        require(relocate_code_address(0x8C100048u) == 0x8C200048u,
+                "Beendeter innerer Codeadressvertrag bleibt aktiv.");
+    }
+    require(relocate_code_address(0x8C100048u) == 0x8C100048u,
+            "RAII-Codeadressvertrag wird nach Scopeende nicht entfernt.");
+    {
+        const ScopedCodeAddressMapping alias({0x8C400000u, 0xAC400000u, 0x10u});
+        require(relocate_code_address(0x8C400006u) == 0xAC400006u &&
+                    unrelocate_code_address(0xAC400006u) == 0x8C400006u,
+                "P1-/P2-Codealias wird unerlaubt physisch kanonisiert.");
+    }
+    try {
+        const ScopedCodeAddressMapping unwind({0x1000u, 0x2000u, 4u});
+        throw std::runtime_error("expected-unwind");
+    } catch (const std::runtime_error&) {
+    }
+    require(relocate_code_address(0x1000u) == 0x1000u,
+            "Exception-Unwind laesst Codeadressmapping aktiv.");
+    require(throws_invalid([] { const ScopedCodeAddressMapping invalid({1u, 2u, 0u}); }) &&
+                throws_as<std::length_error>([] {
+                    const ScopedCodeAddressMapping invalid({0xFFFFFFFEu, 0x1000u, 4u});
+                }) &&
+                throws_as<std::length_error>([] {
+                    const ScopedCodeAddressMapping invalid({0x1000u, 0xFFFFFFFEu, 4u});
+                }),
+            "Leere oder ueberlaufende Codeadressabbildung wurde akzeptiert.");
 
     const auto first_exit = backend_a(cpu, context);
     backend_b(cpu, context);

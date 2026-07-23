@@ -1,8 +1,10 @@
 # Port-Runtime-Vertrauensvertrag
 
-Der Portprojektvertrag Version 3 trennt Analyseerfolg, Eingabeidentitaet und
-tatsaechliche Gastausfuehrung. Keine dieser Aussagen wird aus der blossen
-Erzeugung oder dem Start eines Hostprozesses abgeleitet.
+Der mit KR-4508 eingefuehrte Portprojektvertrag Version 3 trennt
+Analyseerfolg, Eingabeidentitaet und tatsaechliche Gastausfuehrung. Der
+aktuelle kumulative Stand verwendet Portprojektvertrag 24, Runtime-ABI 39,
+Block-ABI 3 und Backend-Interface-ABI 3. Keine der Vertrauensaussagen wird aus
+der blossen Erzeugung oder dem Start eines Hostprozesses abgeleitet.
 
 ## Eingabeidentitaet
 

@@ -167,7 +167,7 @@ werden nur titelunabhaengige SH-4-, BIOS-, GD-ROM-, DMA-, TA- und PVR-Vertraege.
 - [ ] `KR-4911` - Runtimebeobachtung, Replay und Fehlerpakete
 - [ ] `KR-4912` - Dynamische Codebereiche, Module und Overlays
 - [ ] `KR-4913` - CPU-/Plattform-Bring-up bis `KR_GUEST_PROGRAM_ENTERED`
-- [ ] `KR-4915` - Gast-PVR-Pfad bis `KR_FIRST_GUEST_FRAME`
+- [x] `KR-4915` - Gast-PVR-Pfad bis `KR_FIRST_GUEST_FRAME`
 
 ### Native-Boot-Tasks
 
@@ -180,16 +180,19 @@ werden nur titelunabhaengige SH-4-, BIOS-, GD-ROM-, DMA-, TA- und PVR-Vertraege.
 - [ ] `KR-4847` - GD-ROM-MMIO, PIO, G1-DMA und Disc-Streaming
 - [ ] `KR-4848` - Runtimecode, Disc-Module, Overlays und latentes AOT
 - [ ] `KR-4849` - TA-Eingang und PVR-Kommandopfad
-- [ ] `KR-4850` - Erster scanoutgebundener Gastframe
+- [x] `KR-4850` - Erster scanoutgebundener Gastframe
 - [ ] `KR-4851` - Boot- und Frame-Hotpath
 - [ ] `KR-4852` - Konsolidierte v0.48-Validierung
 - [ ] `KR-4853` - v0.48 Boot-Gate-Vorbereitung
 - [ ] `KR-4854` - v0.48 interne Freigabe
 
-Die Controlleraufgaben `KR-4814` und `KR-4914` beginnen weiterhin erst nach
-dem nachgewiesenen echten Gastframe aus `KR-4850`, gehoeren aber zur
-anschliessenden v0.49-Integration. Der Frame bleibt das alleinige P0-Ziel von
-v0.48.
+`KR-4915` und `KR-4850` wurden vor ihren noch offenen Boot- und TA-
+Voraussetzungen durch den legitimen IP.BIN-Direct-Framebuffer-Pfad
+vorgezogen: Ein privater PAL-AOT-Lauf erreicht hostunabhaengig
+`KR_FIRST_GUEST_FRAME` und danach `KR_FIRST_PRESENTED_FRAME`. Das schliesst
+weder `KR-4848`, `KR-4849` noch den Spielboot ab. Die Controlleraufgaben
+`KR-4814` und `KR-4914` bleiben trotz der jetzt belegten Framebasis Teil der
+anschliessenden v0.49-Integration.
 
 Aktueller Kernteilstand: Byteidentische BIOS-/GD-Reloads erhalten vorhandene
 native AOT-Bloecke, waehrend geaenderte Bytes exakt einmal invalidieren. Der
@@ -221,9 +224,10 @@ Fix: Der alte Fehler bei `0x8C654F5C` ist verschwunden, und 761.011 beobachtete
 Dispatchereignisse bleiben ohne Fehler. Der neue Haupthotspot
 `0x8C6658D0 -> 0x8C65247E` ist mit 696.053 Aufrufen ein endlicher
 4-Byte-Kopier-/Initialisierungsloop und kein fehlender Zielblock. TA-Eingang,
-Rendergeneration und echter Gastframe bleiben unbelegt; `KR-4848`, `KR-4849`
-und `KR-4850` bleiben offen. Runtime-ABI 38, Backend-Interface-ABI 3 und
-Portprojektvertrag 23 versionieren den aktuellen Vertrag.
+Rendergeneration und Gastframe waren an dieser Zwischenstufe noch unbelegt;
+`KR-4848` und `KR-4849` bleiben offen. Runtime-ABI 39, Block-ABI 3,
+Backend-Interface-ABI 3, Portprojektvertrag 24 und Host-Video-Vertrag 2
+versionieren den aktuellen Kernvertrag.
 
 Der Export-Hotpath baut globale CFG-, Kanten- und Writer-Slice-Indizes einmalig
 auf; Codegen und Projektausgabe reichen die Hostparallelitaet durch. Der CLI-
@@ -251,7 +255,36 @@ Der 30-Sekunden-Lauf blieb ueber 312.939.023 Zyklen und 1.000.000
 Rootdispatches stabil. Der 100-Millionen-Zyklen-Snapshot belegt `IP.BIN`-AOT
 mit 48.471 Runtime-only-Treffern ohne Fehler, Fallback oder Materialisierung;
 bei 320 Millionen Zyklen sind Spielecode, zwei GD-ROM-Kommandos und ein spaeter
-PVR-Registerwrite erreicht, aber weiterhin kein TA-, Render- oder Framebeweis.
+PVR-Registerwrite erreicht, aber in diesem frueheren Lauf noch kein TA-,
+Render- oder Framebeweis.
+
+Der nachfolgende hardwaregenaue Scanoutblock fuehrt Read- und Write-
+Framebuffer ueber dieselbe logische 32-Bit-VRAM-Abbildung. Er deckt
+`RGB0555` samt Concatbits, gepacktes `RGB888`, Modulus 0/1/>1, PAL-Weave und
+feldweisen PAL-Scanout ab. Backing-Byte-adressierte Dirty-Evidenz plus das
+vorherige Scanout-Abbild verhindern sichtbare False-Proofs durch Offscreen-
+Writes oder unveraenderte Bilddaten.
+Der damit erneuerte private AOT-Lauf erreicht innerhalb eines
+50-Millionen-Gastzyklusbudgets in 5,3 Sekunden erstmals
+`KR_FIRST_GUEST_FRAME` und `KR_FIRST_PRESENTED_FRAME` aus dem recompilierten
+`IP.BIN`; TA bleibt null. Der erwartete Budget-Exit folgt, bevor
+BootExecutable oder Spielboot erreicht werden. Dieser vorgezogene Marker
+schliesst die offenen strukturierten Disc-Ladevorgaenge, den Materializer und
+den TA-Pfad nicht.
+
+Das zugehoerige fokussierte Kern-Gate besteht 11/11. Der vollstaendige
+x64-Build ist mit zwoelf parallelen Jobs gruen; das CTest-Zwischengate besteht
+178/178 Eintraege in rund 4:04 Minuten. Es validiert den aktuellen
+First-Frame-/KR-4848-Zwischenblock, schliesst aber weder `KR-4852` noch das
+spaetere Freigabegate vorzeitig ab.
+
+Der danach frisch neu exportierte Vertrag-24-Port umfasst unter Runtime-ABI 39
+und Block-ABI 3 genau 1.860 Funktionen, 37 Codepartitionen und null
+Retailsektoren. Die read-only Originaldisc-Installation ist mit drei Tracks und
+521.461 Sektoren erneut erfolgreich. Der abschliessende 50-Millionen-Lauf
+reproduziert beide Framemarker mit zwei Gast-/Direct-FB-Frames und 302.287
+geaenderten Direct-FB-Pixeln; TA, Rendergeneration und Materializer bleiben
+null.
 
 `KR-4804` ist `retired` (`superseded_by KR-4853`), `KR-4805` ist `retired`
 (`superseded_by KR-4854`). `KR-4831` bleibt als abgeschlossene Grundlage erhalten.
@@ -271,6 +304,11 @@ KR-4851 -> KR-4852
   -> KR-4854
 ```
 
+`KR-4915` und `KR-4850` sind als beobachtete Marker bereits vorgezogen
+erfuellt. Die Reihenfolge bleibt fuer die noch offenen Produkt- und
+Freigabevertraege verbindlich; insbesondere werden `KR-4848`, `KR-4849`,
+Spielboot und das konsolidierte Gate dadurch nicht uebersprungen.
+
 Unabhaengige Aufgaben derselben Stufe duerfen parallel entwickelt werden.
 Waehrend `KR-4841` bis `KR-4851` laufen nur betroffene Targets und kleine,
 fokussierte Regressionen. Vollstaendiges CTest, Sanitizer-Gate, Portexport,
@@ -288,9 +326,11 @@ gebuendelt. Jeder Prozess besitzt ein hartes Limit von 15 Minuten.
   aktiviert; unbekannte RAM-Bytes sind nicht ausfuehrbar
 - `KR_GUEST_PROGRAM_ENTERED` belegt echten Gastkontrollfluss ausserhalb der
   Hostgrenzen
-- `KR_FIRST_GUEST_FRAME` verlangt TA-/Rendergeneration, geaenderte Pixel,
-  gueltigen Read-/Write-Framebuffer und aktiven Scanout; Hostpraesentation ist
-  ein separater Checkpoint
+- `KR_FIRST_GUEST_FRAME` verlangt einen aktiven Scanout und entweder eine
+  validierte TA-Rendergeneration oder backing-byte-adressierte Direct-FB-
+  Evidenz mit einem gegen das vorherige Scanout-Abbild sichtbar geaenderten
+  Pixel; Offscreen-Writes und Blanking zaehlen nicht. Hostpraesentation ist ein
+  separater Checkpoint
 - Fastpath und Referenzpfad erzeugen bytegleiche Gastresultate
 - keine festen Spieladressen, Spielbytes, Titelhacks oder uebernommenen
   Emulatorimplementierungen gelangen in den Produktpfad
