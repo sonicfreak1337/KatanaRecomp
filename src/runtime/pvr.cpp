@@ -102,24 +102,45 @@ std::uint32_t PvrRegisterFile::read(const std::uint32_t offset) const {
     return registers_[index(offset)];
 }
 
-PvrRegisterSnapshot PvrRegisterFile::snapshot() const noexcept {
-    return {
-        registers_[pvr_register::FramebufferReadControl / 4u],
-        registers_[pvr_register::FramebufferReadSize / 4u],
-        registers_[pvr_register::FramebufferReadSof1 / 4u],
-        registers_[pvr_register::FramebufferReadSof2 / 4u],
-        registers_[pvr_register::FramebufferWriteControl / 4u],
-        registers_[pvr_register::FramebufferWriteSof1 / 4u],
-        registers_[pvr_register::FramebufferWriteSof2 / 4u],
-        registers_[pvr_register::VideoControl / 4u],
-        render_requests_,
-        render_completions_,
-        vblank_in_count_,
-        vblank_out_count_,
-        hblank_count_,
-        in_vblank_,
-        field_,
-    };
+PvrRegisterSnapshot PvrRegisterFile::snapshot() const {
+    PvrRegisterSnapshot result;
+    result.registers = registers_;
+    result.registers[pvr_register::Id / 4u] = read(pvr_register::Id);
+    result.registers[pvr_register::Revision / 4u] = read(pvr_register::Revision);
+    result.registers[pvr_register::SpgStatus / 4u] = read(pvr_register::SpgStatus);
+    result.registers[pvr_register::FramebufferCurrentReadStart / 4u] =
+        read(pvr_register::FramebufferCurrentReadStart);
+    result.framebuffer_read_control =
+        result.registers[pvr_register::FramebufferReadControl / 4u];
+    result.framebuffer_read_size =
+        result.registers[pvr_register::FramebufferReadSize / 4u];
+    result.framebuffer_read_sof1 =
+        result.registers[pvr_register::FramebufferReadSof1 / 4u];
+    result.framebuffer_read_sof2 =
+        result.registers[pvr_register::FramebufferReadSof2 / 4u];
+    result.framebuffer_write_control =
+        result.registers[pvr_register::FramebufferWriteControl / 4u];
+    result.framebuffer_write_sof1 =
+        result.registers[pvr_register::FramebufferWriteSof1 / 4u];
+    result.framebuffer_write_sof2 =
+        result.registers[pvr_register::FramebufferWriteSof2 / 4u];
+    result.video_control = result.registers[pvr_register::VideoControl / 4u];
+    result.render_requests = render_requests_;
+    result.render_completions = render_completions_;
+    result.vblank_in = vblank_in_count_;
+    result.vblank_out = vblank_out_count_;
+    result.hblank = hblank_count_;
+    result.resets = resets_;
+    result.render_event_ids.assign(render_events_.begin(), render_events_.end());
+    result.vblank_in_event = vblank_in_event_;
+    result.vblank_out_event = vblank_out_event_;
+    result.hblank_event = hblank_event_;
+    result.scan_frame_cycles = scan_frame_cycles_;
+    result.scan_epoch_cycle = scan_epoch_cycle_;
+    result.timing = timing_;
+    result.in_vblank = in_vblank_;
+    result.field = field();
+    return result;
 }
 
 void PvrRegisterFile::write(const std::uint32_t offset, const std::uint32_t value) {
@@ -154,7 +175,8 @@ void PvrRegisterFile::write(const std::uint32_t offset, const std::uint32_t valu
         ++render_requests_;
         const auto event = scheduler_.schedule_after(
             timing_.render_latency,
-            [this](const auto event_id, const auto) { complete_render(event_id); });
+            [this](const auto event_id, const auto) { complete_render(event_id); },
+            SchedulerEventKind::PvrRender);
         render_events_.insert(event);
         return;
     }
@@ -391,7 +413,9 @@ void PvrRegisterFile::schedule_scan_event(const std::uint32_t line, const bool e
                            : std::max<std::uint64_t>(
                                  1u, scan_frame_cycles_ * line / vertical);
     const auto event = scheduler_.schedule_after(
-        delay, [this, entering](const auto id, const auto) { handle_scan_event(id, entering); });
+        delay,
+        [this, entering](const auto id, const auto) { handle_scan_event(id, entering); },
+        entering ? SchedulerEventKind::PvrVblankIn : SchedulerEventKind::PvrVblankOut);
     (entering ? vblank_in_event_ : vblank_out_event_) = event;
 }
 
@@ -410,7 +434,8 @@ void PvrRegisterFile::handle_scan_event(const SchedulerEventId event_id, const b
     if (scan_frame_cycles_ != 0u) {
         const auto next = scheduler_.schedule_after(
             scan_frame_cycles_,
-            [this, entering](const auto id, const auto) { handle_scan_event(id, entering); });
+            [this, entering](const auto id, const auto) { handle_scan_event(id, entering); },
+            entering ? SchedulerEventKind::PvrVblankIn : SchedulerEventKind::PvrVblankOut);
         slot = next;
     }
 }
@@ -427,7 +452,9 @@ void PvrRegisterFile::schedule_hblank_event(const std::uint32_t line) {
     const auto delay = std::max<std::uint64_t>(
         1u, (scan_frame_cycles_ * pixel + total_pixels - 1u) / total_pixels);
     hblank_event_ = scheduler_.schedule_after(
-        delay, [this, line](const auto id, const auto) { handle_hblank_event(id, line); });
+        delay,
+        [this, line](const auto id, const auto) { handle_hblank_event(id, line); },
+        SchedulerEventKind::PvrHblank);
 }
 
 void PvrRegisterFile::handle_hblank_event(const SchedulerEventId event_id,
@@ -457,7 +484,9 @@ void PvrRegisterFile::handle_hblank_event(const SchedulerEventId event_id,
         return;
     }
     hblank_event_ = scheduler_.schedule_after(
-        delay, [this, line](const auto id, const auto) { handle_hblank_event(id, line); });
+        delay,
+        [this, line](const auto id, const auto) { handle_hblank_event(id, line); },
+        SchedulerEventKind::PvrHblank);
 }
 
 void configure_dreamcast_video(PvrRegisterFile& registers, const DreamcastVideoMode mode) {
@@ -1429,6 +1458,18 @@ bool TileAccelerator::list_open() const noexcept {
     return list_open_;
 }
 
+TileAcceleratorSnapshot TileAccelerator::snapshot() const {
+    return {
+        primitives_,
+        current_strip_,
+        current_list_,
+        current_material_,
+        highest_list_rank_,
+        frame_has_list_,
+        list_open_,
+    };
+}
+
 namespace {
 
 std::uint32_t ta_u32(const std::span<const std::uint8_t> packet, const std::size_t offset) {
@@ -1914,6 +1955,35 @@ const PvrTaMetrics& PvrTaFifo::metrics() const noexcept {
     return metrics_;
 }
 
+PvrTaFifoSnapshot PvrTaFifo::snapshot() const {
+    return {
+        accelerator_.snapshot(),
+        active_list_,
+        active_textured_,
+        active_uv16_,
+        active_color_type_,
+        active_sprite_,
+        active_two_volume_,
+        active_header_argb_,
+        active_header_oargb_,
+        active_volume_header_argb_,
+        intensity_face_color_valid_,
+        active_material_,
+        user_clip_start_x_,
+        user_clip_start_y_,
+        user_clip_end_x_,
+        user_clip_end_y_,
+        pending_sprite_vertex_,
+        pending_extended_vertex_,
+        pending_intensity_header_,
+        pending_extended_end_of_strip_,
+        modifier_volumes_,
+        active_modifier_volume_,
+        pending_modifier_vertex_packet_,
+        metrics_,
+    };
+}
+
 void PvrTaFifo::continue_list() {
     if (accelerator_.list_open() || pending_sprite_vertex_ || pending_extended_vertex_ ||
         pending_intensity_header_ || pending_modifier_vertex_packet_)
@@ -2003,6 +2073,10 @@ void PvrTaFifoMemoryDevice::write_u8(const std::uint32_t offset, const std::uint
         written_mask_ = 0u;
         packet_active_ = false;
     }
+}
+
+PvrTaFifoMemoryDevice::Snapshot PvrTaFifoMemoryDevice::snapshot() const noexcept {
+    return {packet_, packet_base_, written_mask_, packet_active_};
 }
 
 PvrYuvConverterMemoryDevice::PvrYuvConverterMemoryDevice(
@@ -2135,6 +2209,17 @@ void PvrYuvConverterMemoryDevice::convert_macroblock() {
 
 std::uint64_t PvrYuvConverterMemoryDevice::converted_macroblocks() const noexcept {
     return converted_macroblocks_;
+}
+
+PvrYuvConverterMemoryDevice::Snapshot PvrYuvConverterMemoryDevice::snapshot() const {
+    return {
+        input_,
+        configuration_,
+        destination_,
+        frame_macroblock_,
+        converted_macroblocks_,
+        guest_memory_access_memory_ != nullptr,
+    };
 }
 
 void PvrSoftwareRenderer::render(const PvrTaFrame& frame,
@@ -3277,6 +3362,26 @@ void PvrSoftwareRenderer::record_error(const PvrRenderError error,
 
 const std::optional<PvrRenderFirstError>& PvrSoftwareRenderer::first_error() const noexcept {
     return first_error_;
+}
+
+PvrSoftwareRendererSnapshot PvrSoftwareRenderer::snapshot() const {
+    return {
+        metrics_,
+        next_render_generation_,
+        last_render_generation_,
+        pending_render_evidence_,
+        pending_render_evidence_bytes_,
+        next_evidence_scan_generation_,
+        next_direct_write_generation_,
+        pending_direct_write_generation_,
+        direct_dirty_words_,
+        direct_dirty_byte_count_,
+        direct_vram_shadow_,
+        guest_memory_access_memory_ != nullptr,
+        direct_vram_shadow_valid_,
+        queued_guest_frame_proof_,
+        first_error_,
+    };
 }
 
 PvrTexture decode_pvr_texture(const std::span<const std::uint8_t> source,

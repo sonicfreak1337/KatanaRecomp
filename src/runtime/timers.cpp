@@ -42,6 +42,19 @@ std::uint64_t Sh4RtcClockDomain::guest_cycles_per_second() const noexcept {
     return guest_cycles_per_second_;
 }
 
+Sh4RtcClockDomain::Snapshot Sh4RtcClockDomain::snapshot() const {
+    Snapshot result;
+    result.guest_cycles_per_second = guest_cycles_per_second_;
+    result.epoch_cycle = epoch_cycle_;
+    result.next_observer_id = next_observer_id_;
+    result.observer_ids.reserve(observers_.size());
+    for (const auto& [id, observer] : observers_) {
+        static_cast<void>(observer);
+        result.observer_ids.push_back(id);
+    }
+    return result;
+}
+
 std::uint64_t Sh4RtcClockDomain::ticks_at(const std::uint64_t guest_cycle) const {
     if (guest_cycle < epoch_cycle_) {
         throw std::logic_error("RTC-Taktdomaene liegt vor ihrem Phasenursprung.");
@@ -174,6 +187,16 @@ std::uint64_t Sh4Tmu::tick_period(const Channel& value) const {
         "Reservierter, externer oder rationaler TMU-Takt besitzt keine feste Zyklusbreite.");
 }
 
+std::uint32_t Sh4Tmu::effective_counter(const Channel& value) const {
+    if (!value.running || scheduler_.current_cycle() < value.anchor_cycle)
+        return value.counter;
+    const auto ticks =
+        uses_rtc_clock(value)
+            ? timing_.rtc_clock->elapsed_ticks(value.anchor_cycle, scheduler_.current_cycle())
+            : (scheduler_.current_cycle() - value.anchor_cycle) / tick_period(value);
+    return static_cast<std::uint32_t>(value.anchor_counter - ticks);
+}
+
 void Sh4Tmu::synchronize(const std::size_t index) {
     auto& value = channel(index);
     if (!value.running) {
@@ -217,7 +240,10 @@ void Sh4Tmu::schedule_underflow(const std::size_t index) {
                                             checked_multiply(ticks, tick_period(value)),
                                             "TMU-Ereignisfrist ist uebergelaufen.");
     value.event = scheduler_.schedule_at(
-        deadline, [this, index](const auto, const auto) { handle_underflow(index); });
+        deadline,
+        [this, index](const auto, const auto) { handle_underflow(index); },
+        static_cast<SchedulerEventKind>(
+            static_cast<std::uint32_t>(SchedulerEventKind::Sh4Tmu0) + index));
 }
 
 void Sh4Tmu::handle_underflow(const std::size_t index) {
@@ -343,6 +369,37 @@ void Sh4Tmu::acknowledge_interrupt(const std::size_t index) noexcept {
 }
 std::uint64_t Sh4Tmu::underflow_count(const std::size_t index) const {
     return channel(index).underflows;
+}
+
+Sh4TmuSnapshot Sh4Tmu::snapshot() const {
+    Sh4TmuSnapshot result;
+    result.scheduler_cycle = scheduler_.current_cycle();
+    result.guest_cycles_per_peripheral_cycle =
+        timing_.guest_cycles_per_peripheral_cycle;
+    for (std::size_t index = 0u; index < channels_.size(); ++index) {
+        const auto& source = channels_[index];
+        auto& destination = result.channels[index];
+        destination.constant = source.constant;
+        destination.stored_counter = source.counter;
+        destination.effective_counter = effective_counter(source);
+        destination.control = source.control;
+        destination.anchor_cycle = source.anchor_cycle;
+        destination.anchor_counter = source.anchor_counter;
+        destination.underflows = source.underflows;
+        destination.event = source.event;
+        destination.running = source.running;
+        if (source.event) {
+            const auto ticks = static_cast<std::uint64_t>(source.anchor_counter) + 1u;
+            destination.event_deadline =
+                uses_rtc_clock(source)
+                    ? timing_.rtc_clock->deadline_after(source.anchor_cycle, ticks)
+                    : checked_add(
+                          source.anchor_cycle,
+                          checked_multiply(ticks, tick_period(source)),
+                          "TMU-Snapshot-Ereignisfrist ist uebergelaufen.");
+        }
+    }
+    return result;
 }
 
 void Sh4Tmu::reset() noexcept {
@@ -493,6 +550,28 @@ std::uint64_t Sh4Rtc::periodic_event_count() const noexcept {
     return periodic_events_;
 }
 
+Sh4RtcSnapshot Sh4Rtc::snapshot() const {
+    return {
+        date_time_,
+        clock_->snapshot(),
+        event_,
+        periodic_rate_,
+        divider_256hz_phase_,
+        counter_64hz_,
+        periodic_phase_ticks_,
+        ticks_,
+        periodic_events_,
+        calendar_running_,
+        rtc_enabled_,
+        periodic_pending_,
+        carry_flag_,
+        carry_enabled_,
+        alarm_registers_,
+        alarm_pending_,
+        alarm_enabled_,
+    };
+}
+
 std::uint16_t Sh4Rtc::periodic_ticks(const RtcPeriodicRate rate) noexcept {
     switch (rate) {
     case RtcPeriodicRate::Disabled:
@@ -517,7 +596,10 @@ std::uint16_t Sh4Rtc::periodic_ticks(const RtcPeriodicRate rate) noexcept {
 
 void Sh4Rtc::schedule_tick() {
     const auto deadline = clock_->deadline_after(scheduler_.current_cycle(), 64u);
-    event_ = scheduler_.schedule_at(deadline, [this](const auto, const auto) { tick(); });
+    event_ = scheduler_.schedule_at(
+        deadline,
+        [this](const auto, const auto) { tick(); },
+        SchedulerEventKind::Sh4Rtc);
 }
 
 void Sh4Rtc::cancel_event() noexcept {

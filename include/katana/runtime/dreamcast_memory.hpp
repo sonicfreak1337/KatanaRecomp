@@ -25,6 +25,26 @@ inline constexpr std::size_t dreamcast_flash_sector_size = 0x00001000u;
 inline constexpr std::uint32_t dreamcast_flash_unlock_address_1 = 0x00005555u;
 inline constexpr std::uint32_t dreamcast_flash_unlock_address_2 = 0x00002AAAu;
 
+enum class FlashCommandState : std::uint8_t {
+    ReadArray,
+    Unlock2,
+    Command,
+    Program,
+    EraseUnlock1,
+    EraseUnlock2,
+    EraseConfirm
+};
+
+struct FlashMemorySnapshot {
+    std::size_t size = 0u;
+    FlashCommandState command_state = FlashCommandState::ReadArray;
+    bool write_protected = false;
+    bool working_copy_dirty = false;
+    bool persistent_working_copy = false;
+
+    [[nodiscard]] bool operator==(const FlashMemorySnapshot&) const = default;
+};
+
 class FlashMemoryDevice final : public MemoryDevice {
   public:
     explicit FlashMemoryDevice(std::span<const std::uint8_t> image = {});
@@ -39,17 +59,9 @@ class FlashMemoryDevice final : public MemoryDevice {
     void save_working_copy();
     [[nodiscard]] bool working_copy_dirty() const noexcept;
     [[nodiscard]] bool persistent_working_copy() const noexcept;
+    [[nodiscard]] FlashMemorySnapshot snapshot() const noexcept;
 
   private:
-    enum class CommandState : std::uint8_t {
-        ReadArray,
-        Unlock2,
-        Command,
-        Program,
-        EraseUnlock1,
-        EraseUnlock2,
-        EraseConfirm
-    };
     void check(std::uint32_t offset) const;
     [[nodiscard]] std::uint8_t working_byte(std::uint32_t offset) const;
     void set_working_byte(std::uint32_t offset, std::uint8_t value);
@@ -57,7 +69,7 @@ class FlashMemoryDevice final : public MemoryDevice {
     std::vector<std::uint8_t> source_;
     std::vector<std::uint8_t> working_;
     std::shared_ptr<PersistentImage> persistent_image_;
-    CommandState state_ = CommandState::ReadArray;
+    FlashCommandState state_ = FlashCommandState::ReadArray;
     bool write_protected_ = false;
 };
 

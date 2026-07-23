@@ -4,7 +4,21 @@
 
 ### Geaendert
 
-- Der deterministische Systemreplay-Vertrag v2 besitzt nun eine feste,
+- Runtime-ABI 43 und Portprojektvertrag 27 binden
+  `katana.runtime-probe` Version 1 mit Profil `deterministic-v1`,
+  Device-Schema 1 und Hashvertrag `fnv1a64-le-v1`. CPU, Scheduler, Haupt-RAM,
+  VRAM, AICA-RAM, Flash, VMU, Replay und exakt 35 produktive
+  Geraeteinstanzen mit 867 kanonischen Feldern gehen in domain-separierte
+  Hashes ein. Die begrenzte Store-Queue-Transferfolge und ihr Dropzaehler
+  binden dabei auch Reihenfolge und Writer-Provenienz. Der private
+  Diagnose=0/1-A/B-Runner bestand zwei frische Laeufe
+  mit 100.000 Gastzyklen und 120 Sekunden Hosttimeout. Die normativen Felder
+  waren gleich, Executable und Disc-Pack blieben unveraendert, Systemreplay v3
+  war vollstaendig und versiegelt, und beide Laeufe erzeugten null
+  Wait-Loop-Tracezeilen. Damit ist `KR-4842` abgeschlossen und `KR-4911`
+  freigegeben, bleibt aber selbst offen. Eine Vollsuite und `KR-4852` wurden
+  nicht ausgefuehrt.
+- Der deterministische Systemreplay-Vertrag v3 besitzt nun eine feste,
   konfigurierbare Ereigniskapazitaet von standardmaessig 4.096 und hoechstens
   65.536 Eintraegen; portable Ereigniscodes sind auf 64 Zeichen begrenzt.
   Beim Kapazitaetsueberlauf markiert `record()` genau einen Drop;
@@ -18,7 +32,9 @@
   exakt. Das JSON redigiert standardmaessig `code`, `address`, `value`,
   `detail`, `auxiliary`, `event_hash` und
   `final_guest_state_hash`; nur ein ausdrueckliches lokales Opt-in gibt sie
-  aus.
+  aus. Das Profil `deterministic-v1` verlangt vor dem ersten Ereignis alle
+  acht CPU-, Scheduler-, Interrupt-, Video-, Audio-, Eingabe-, MMIO- und
+  DMA-Hooks und trennt aktivierte von beobachteter Coverage.
 - Der allgemeine Hardwareauditor verwendet mit
   `katana.hardware-audit.v4` echte natuerliche Loops und eine skalierbare
   Dominatorberechnung statt einer dichten quadratischen Matrix. Er
@@ -112,8 +128,8 @@
   Der konsolidierte fokussierte Nachweis besteht 22/22 in 1,57 Sekunden; der
   Port-CLI-Nachweis besteht 1/1 in 151,12 Sekunden. Es lief weder eine
   Vollsuite noch `KR-4852`. Dynamische Wertlaeufe und echte Writer-Provenienz
-  sind damit vorhanden; `KR-4842` bleibt ausschliesslich bis zum vollstaendigen
-  Diagnose=0/1-A/B-Produktlauf offen.
+  waren damit vorhanden; der damals noch offene Diagnose=0/1-A/B-Produktlauf
+  ist mit Runtime-Probe Version 1 abgeschlossen.
 - Der private Retailrunner ermittelt Runtime-ABI und Portprojektvertrag strikt
   aus `cmake/KatanaVersions.cmake`. Malformed, doppelte und nullwertige
   Definitionen sowie JSON-Vertragswerte vom Typ String oder Double werden
@@ -174,9 +190,9 @@
   Direct-FB-Pixeln. TA, Rendergeneration und Materializer bleiben null; der
   Budget-Exit ist erwartet. Diese Port- und Laufevidenz bleibt ausdruecklich
   historisch und wird nicht als ABI-40-Export ausgegeben.
-- Der aktuelle kumulative Schnittstellenstand verwendet Runtime-ABI 42,
+- Der aktuelle kumulative Schnittstellenstand verwendet Runtime-ABI 43,
   Block-ABI 3, Backend-Interface-ABI 3, PlatformServices-ABI 10,
-  Portprojektvertrag 26 und Host-Video-Vertrag 2. Block-ABI 3 versioniert die virtuelle
+  Portprojektvertrag 27 und Host-Video-Vertrag 2. Block-ABI 3 versioniert die virtuelle
   Quell-/Laufzeitadressabbildung source-relativierter nativer AOT-Templates.
 - PVR-Read- und Write-Framebuffer verwenden nun dieselbe hardwaregenaue
   logische 32-Bit-VRAM-Sicht statt eines linear interpretierten Hostpuffers.

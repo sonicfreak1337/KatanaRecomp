@@ -10,6 +10,7 @@
 #include <map>
 #include <memory>
 #include <optional>
+#include <vector>
 
 namespace katana::runtime {
 
@@ -37,6 +38,15 @@ class Sh4RtcClockDomain final {
     [[nodiscard]] PhaseObserverId add_phase_observer(PhaseObserver observer);
     [[nodiscard]] bool remove_phase_observer(PhaseObserverId observer_id) noexcept;
     void reset_phase(std::uint64_t guest_cycle);
+    struct Snapshot {
+        std::uint64_t guest_cycles_per_second = 0u;
+        std::uint64_t epoch_cycle = 0u;
+        PhaseObserverId next_observer_id = 0u;
+        std::vector<PhaseObserverId> observer_ids;
+
+        [[nodiscard]] bool operator==(const Snapshot&) const = default;
+    };
+    [[nodiscard]] Snapshot snapshot() const;
 
   private:
     [[nodiscard]] std::uint64_t ticks_at(std::uint64_t guest_cycle) const;
@@ -51,6 +61,29 @@ class Sh4RtcClockDomain final {
 struct TmuTiming {
     std::uint64_t guest_cycles_per_peripheral_cycle = 4u;
     std::shared_ptr<Sh4RtcClockDomain> rtc_clock;
+};
+
+struct Sh4TmuChannelSnapshot {
+    std::uint32_t constant = 0xFFFFFFFFu;
+    std::uint32_t stored_counter = 0xFFFFFFFFu;
+    std::uint32_t effective_counter = 0xFFFFFFFFu;
+    std::uint16_t control = 0u;
+    std::uint64_t anchor_cycle = 0u;
+    std::uint32_t anchor_counter = 0xFFFFFFFFu;
+    std::uint64_t underflows = 0u;
+    std::optional<SchedulerEventId> event;
+    std::optional<std::uint64_t> event_deadline;
+    bool running = false;
+
+    [[nodiscard]] bool operator==(const Sh4TmuChannelSnapshot&) const = default;
+};
+
+struct Sh4TmuSnapshot {
+    std::uint64_t scheduler_cycle = 0u;
+    std::uint64_t guest_cycles_per_peripheral_cycle = 0u;
+    std::array<Sh4TmuChannelSnapshot, 3u> channels{};
+
+    [[nodiscard]] bool operator==(const Sh4TmuSnapshot&) const = default;
 };
 
 class Sh4Tmu final {
@@ -76,6 +109,7 @@ class Sh4Tmu final {
     [[nodiscard]] bool interrupt_pending(std::size_t channel) const;
     void acknowledge_interrupt(std::size_t channel) noexcept;
     [[nodiscard]] std::uint64_t underflow_count(std::size_t channel) const;
+    [[nodiscard]] Sh4TmuSnapshot snapshot() const;
     void reset() noexcept;
 
   private:
@@ -94,6 +128,7 @@ class Sh4Tmu final {
     [[nodiscard]] const Channel& channel(std::size_t index) const;
     [[nodiscard]] std::uint64_t tick_period(const Channel& value) const;
     [[nodiscard]] bool uses_rtc_clock(const Channel& value) const noexcept;
+    [[nodiscard]] std::uint32_t effective_counter(const Channel& value) const;
     void synchronize(std::size_t index);
     void cancel_event(Channel& value) noexcept;
     void schedule_underflow(std::size_t index);
@@ -132,6 +167,28 @@ enum class RtcPeriodicRate : std::uint8_t {
     Every2Seconds = 7u,
 };
 
+struct Sh4RtcSnapshot {
+    RtcDateTime date_time{};
+    Sh4RtcClockDomain::Snapshot clock{};
+    std::optional<SchedulerEventId> event;
+    RtcPeriodicRate periodic_rate = RtcPeriodicRate::Disabled;
+    std::uint8_t divider_256hz_phase = 0u;
+    std::uint8_t counter_64hz = 0u;
+    std::uint64_t periodic_phase_ticks = 0u;
+    std::uint64_t ticks = 0u;
+    std::uint64_t periodic_events = 0u;
+    bool calendar_running = false;
+    bool rtc_enabled = false;
+    bool periodic_pending = false;
+    bool carry_flag = false;
+    bool carry_enabled = false;
+    std::array<std::uint8_t, 6u> alarm_registers{};
+    bool alarm_pending = false;
+    bool alarm_enabled = false;
+
+    [[nodiscard]] bool operator==(const Sh4RtcSnapshot&) const = default;
+};
+
 class Sh4Rtc final {
   public:
     explicit Sh4Rtc(EventScheduler& scheduler,
@@ -167,6 +224,7 @@ class Sh4Rtc final {
     void acknowledge_alarm_interrupt() noexcept;
     [[nodiscard]] std::uint64_t tick_count() const noexcept;
     [[nodiscard]] std::uint64_t periodic_event_count() const noexcept;
+    [[nodiscard]] Sh4RtcSnapshot snapshot() const;
 
   private:
     static void validate(const RtcDateTime& value);

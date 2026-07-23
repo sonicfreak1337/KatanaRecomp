@@ -44,6 +44,14 @@ int main() {
         require(remapped.physical_page == 0x0D004000u &&
                     remapped.mmu_generation != first.mmu_generation,
                 "TLB-Aenderung redispatcht dieselbe virtuelle Adresse nicht auf den neuen Block.");
+        const auto address_space_snapshot = space.snapshot();
+        require(address_space_snapshot.mode == AddressTranslationMode::Mmu &&
+                    address_space_snapshot.mmucr == 1u &&
+                    address_space_snapshot.asid == 0u &&
+                    address_space_snapshot.mappings.size() == 1u &&
+                    address_space_snapshot.mappings.front().physical_page == 0x0D004000u &&
+                    address_space_snapshot.mmu_generation == remapped.mmu_generation,
+                "Adressraum-Snapshot verliert MMU-Modus, Generation oder dynamisches Mapping.");
 
         bool instruction_error = false;
         space.ldtlb({0x3000u, 0x0C003000u, 4096u, 0u, 1u, true, true, true, false, true, true, false});

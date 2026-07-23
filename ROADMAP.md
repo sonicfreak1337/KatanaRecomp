@@ -173,7 +173,7 @@ und Hosteingabevertraege.
 ### Native-Boot-Tasks
 
 - [x] `KR-4841` - Clean-Room-Referenz- und Nicht-Emulationsvertrag
-- [ ] `KR-4842` - Seiteneffektfreie Bootdiagnostik und Wait-Loop-Klassifikation
+- [x] `KR-4842` - Seiteneffektfreie Bootdiagnostik und Wait-Loop-Klassifikation
 - [x] `KR-4843` - Alias-korrekter nativer Disc-Systembootstrap
 - [x] `KR-4844` - Gastzeit, Interruptreihenfolge und vollstaendiger AOT-Chaining-Guard
 - [x] `KR-4845` - BIOS-Lifecycle, HLE-Bridges, Flash, Sysinfo und Region
@@ -198,16 +198,17 @@ erfuellt. Sie muessen vor der konsolidierten Validierung `KR-4852`
 abgeschlossen sein.
 
 Der Checkboxstand bleibt bewusst taskbezogen: `KR-4831`, `KR-4841`,
-`KR-4843` bis `KR-4846`, `KR-4915` und `KR-4850` sind abgeschlossen.
-`KR-4842` besitzt mit MMU-bewussten linearen Peeks, nicht mutierenden
-Geraetesnapshots, der erweiterten statischen Wait-Loop-/Guard-Provenienz und
-dem versionierten dynamischen Wait-Loop-Trace einen belastbaren Teilstand.
-Wertwechselfolgen und echte Runtime-Writer-Provenienz liegen jetzt vor; offen
-bleibt ausschliesslich der vollstaendige Diagnose=0/1-A/B-Produktlauf.
-Deshalb bleibt die `KR-4842`-Checkbox bewusst leer. `KR-4911` besitzt mit
-Systemreplay v2 ebenfalls einen abgesicherten Teilstand, bleibt jedoch bis zum
-vollstaendigen Runtimebeobachtungs- und Fehlerpaketvertrag offen. Diese
-Teilstaende setzen keine weiteren Checkboxen vorzeitig.
+`KR-4842`, `KR-4843` bis `KR-4846`, `KR-4915` und `KR-4850` sind
+abgeschlossen. `KR-4842` bindet MMU-bewusste lineare Peeks, nicht mutierende
+Geraetesnapshots, statische Wait-Loop-/Guard-Provenienz und den versionierten
+dynamischen Wait-Loop-Trace an eine deterministische Produktprobe. Der
+Diagnose=0/1-A/B-Lauf bestand mit zwei frischen, identisch auf 100.000
+Gastzyklen budgetierten Laeufen: Die normativen Felder waren gleich,
+Executable und Disc-Pack blieben unveraendert, Systemreplay v3 war
+vollstaendig und versiegelt, und beide Laeufe erzeugten null
+Wait-Loop-Tracezeilen. Damit ist `KR-4842` abgeschlossen und `KR-4911`
+freigegeben. `KR-4911` bleibt bis zum vollstaendigen Runtimebeobachtungs- und
+Fehlerpaketvertrag offen.
 
 `KR-4915` und `KR-4850` wurden vor ihren noch offenen Boot- und TA-
 Voraussetzungen durch den legitimen IP.BIN-Direct-Framebuffer-Pfad
@@ -253,10 +254,10 @@ Backend-Interface-ABI 3, Portprojektvertrag 24 und Host-Video-Vertrag 2
 versionierten diesen privaten Portlauf. Er bleibt ausdruecklich historische
 ABI-39-Evidenz und wurde nicht nachtraeglich als ABI-40-Artefakt umgedeutet.
 
-Der aktuelle kumulative Kernvertrag verwendet Runtime-ABI 42, Block-ABI 3,
-Backend-Interface-ABI 3, PlatformServices-ABI 10, Portprojektvertrag 26 und
+Der aktuelle kumulative Kernvertrag verwendet Runtime-ABI 43, Block-ABI 3,
+Backend-Interface-ABI 3, PlatformServices-ABI 10, Portprojektvertrag 27 und
 Host-Video-Vertrag 2.
-Systemreplay v2 begrenzt die Aufzeichnung auf standardmaessig 4.096 und
+Systemreplay v3 begrenzt die Aufzeichnung auf standardmaessig 4.096 und
 hoechstens 65.536 Ereignisse sowie 64 Zeichen pro Ereigniscode. Ein
 von `try_record()` an einem unversiegelten Log abgewiesener Best-effort-
 Aufnahmeversuch zaehlt genau einen Drop; versiegelte Logs bleiben
@@ -264,6 +265,9 @@ unveraendert. Danach darf die unvollstaendige Spur weder versiegelt noch
 abgespielt werden. Intern bleiben alle Werte fuer Hash und exakten Vergleich
 erhalten, waehrend das JSON standardmaessig `code`, `address`, `value`, `detail`, `auxiliary`,
 `event_hash` und `final_guest_state_hash` redigiert.
+Das Profil `deterministic-v1` bindet zusaetzlich alle acht erforderlichen
+CPU-, Scheduler-, Interrupt-, Video-, Audio-, Eingabe-, MMIO- und DMA-Hooks
+vor dem ersten Ereignis sowie einen geordneten, domain-separierten Digest.
 
 Der Hardwareauditor verwendet mit `katana.hardware-audit.v4` skalierbare
 Dominatorberechnung und echte natuerliche Loops. Er klassifiziert
@@ -303,6 +307,10 @@ Speicherzaehler sowie CPU-/Exceptionzustand bleiben unveraendert. Der letzte
 MMIO-Zugriff wird im Hotpath als allokationsfreier POD gehalten und erst beim
 terminalen Bericht mit einem Regionsstring versehen. PVR- und
 Systembus-Snapshots bewegen auch pending Render-/Channel-2-Zustaende nicht.
+Runtime-Probe-Schema 1 erfasst CPU, Scheduler, Haupt-RAM, VRAM, AICA-RAM,
+Flash, VMU, Replay und exakt 35 produktive Geraeteinstanzen mit 867
+kanonischen Feldern. Device-Schema 1 und `fnv1a64-le-v1` versionieren die
+domain-separierten Hashes.
 Runtime-ABI 42 fuehrt zusaetzlich einen seiteneffektfreien POD-Zugriffssink
 mit Quell-/Laufzeit-PC ein. AOT, begrenzter Diagnoseinterpreter, Store-Queue-
 `PREF`, PVR-Render und PVR-YUV behalten ihre Writer-Herkunft; VRAM32 wird auf
@@ -331,9 +339,15 @@ entfernt den Sink vor der terminalen Ausgabe. Der Trace-aus-Fastpath fuehrt
 weder Recorderallokation noch Projektion aus.
 Die Registervarianten von `PREF`, `OCBI`, `OCBP`, `OCBWB` und `TAS.B` sind im
 begrenzten Interpreter geschlossen; `FMOV` verarbeitet Doppelwortzugriffe low
-nach high. Der konsolidierte fokussierte Nachweis besteht 22/22 in
-1,57 Sekunden, der Port-CLI-Nachweis 1/1 in 151,12 Sekunden. Eine Vollsuite
-und `KR-4852` wurden nicht ausgefuehrt.
+nach high. Der vorangegangene fokussierte Zwischenblock bestand 22/22 in
+1,57 Sekunden, der Port-CLI-Nachweis 1/1 in 151,12 Sekunden. Der
+abschliessende Runner `katana-private-runtime-probe-ab` v1 bestand zwei
+Laeufe mit Profil `deterministic-v1`, Gastzyklusbudget 100.000 und
+Hosttimeout 120 Sekunden. Diagnose aus/an lieferte
+`normative_fields_equal=true`, `executable_and_pack_unchanged=true`,
+`replay_complete_and_sealed=true` und null/null Tracezeilen. Damit ist
+`KR-4842` abgeschlossen. Eine Vollsuite und `KR-4852` wurden nicht
+ausgefuehrt.
 
 Der private Retailrunner liest Runtime-ABI und Portprojektvertrag strikt aus
 `cmake/KatanaVersions.cmake`; malformed, doppelte oder nullwertige Definitionen

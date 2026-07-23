@@ -504,6 +504,15 @@ int main() {
                     cache_ops->read_operand_cache_ram(8190u, MemoryAccessWidth::Halfword) ==
                         0xAABBu,
                 "Explizit modellierter Operand-Cache-RAM besitzt keinen getrennten Zustand.");
+        const auto store_queue_snapshot = cache_ops->snapshot();
+        require(store_queue_snapshot.operand_cache_ram_enabled &&
+                    store_queue_snapshot.operand_cache_ram_profile ==
+                        OperandCacheRamProfile::Modeled &&
+                    store_queue_snapshot.operand_cache_ram[0u] == 0x11u &&
+                    store_queue_snapshot.operand_cache_ram[3u] == 0x44u &&
+                    store_queue_snapshot.operand_cache_ram[7u] == 0x5Au &&
+                    store_queue_snapshot.code_tracker_bound,
+                "Store-Queue-Snapshot verliert OCRAM-Bytes, Profil oder Trackerbindung.");
         require_rejected(
             [&] {
                 cache_ops->write_operand_cache_ram(8191u, 0xAABBu, MemoryAccessWidth::Halfword);

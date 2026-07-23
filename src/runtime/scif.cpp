@@ -97,7 +97,9 @@ void Sh4Scif::schedule_transmit() {
         (fifo_control_ & 0x04u) != 0u)
         return;
     transmit_event_ = scheduler_.schedule_after(
-        frame_cycles(), [this](const auto event_id, const auto) { complete_transmit(event_id); });
+        frame_cycles(),
+        [this](const auto event_id, const auto) { complete_transmit(event_id); },
+        SchedulerEventKind::ScifTransmit);
     update_interrupts();
 }
 
@@ -251,6 +253,23 @@ std::size_t Sh4Scif::transmit_fifo_size() const noexcept { return transmit_fifo_
 std::size_t Sh4Scif::receive_fifo_size() const noexcept { return receive_fifo_.size(); }
 const std::vector<std::uint8_t>& Sh4Scif::transmitted_bytes() const noexcept {
     return transmitted_bytes_;
+}
+
+Sh4ScifSnapshot Sh4Scif::snapshot() const {
+    Sh4ScifSnapshot result;
+    result.transmit_event = transmit_event_;
+    result.transmit_fifo.assign(transmit_fifo_.begin(), transmit_fifo_.end());
+    result.receive_fifo.assign(receive_fifo_.begin(), receive_fifo_.end());
+    result.transmitted_bytes = transmitted_bytes_;
+    result.mode = mode_;
+    result.bit_rate = bit_rate_;
+    result.control = control_;
+    result.status = status_;
+    result.status_last_read = status_last_read_;
+    result.fifo_control = fifo_control_;
+    result.port = port_;
+    result.line_status = line_status_;
+    return result;
 }
 
 std::shared_ptr<Sh4Scif> map_sh4_scif(Memory& memory,

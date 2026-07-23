@@ -32,6 +32,8 @@ struct ExecutableBlockRegistration {
     std::string provenance;
     std::set<std::string> incoming_links;
     ExecutableBlockOrigin origin = ExecutableBlockOrigin::ImageSegment;
+
+    [[nodiscard]] bool operator==(const ExecutableBlockRegistration&) const = default;
 };
 
 struct CodeInvalidationResult {
@@ -45,6 +47,8 @@ struct CodeInvalidationResult {
 struct CodeInvalidationPage {
     std::uint32_t physical_page = 0u;
     std::uint64_t generation = 0u;
+
+    [[nodiscard]] bool operator==(const CodeInvalidationPage&) const = default;
 };
 
 struct CodeInvalidationEvent {
@@ -57,11 +61,15 @@ struct CodeInvalidationEvent {
     std::vector<CodeInvalidationPage> pages;
     std::vector<std::string> invalidated_blocks;
     std::vector<std::string> unlinked_sources;
+
+    [[nodiscard]] bool operator==(const CodeInvalidationEvent&) const = default;
 };
 
 struct TrackedExecutableBlock {
     ExecutableBlockRegistration block;
     bool valid = true;
+
+    [[nodiscard]] bool operator==(const TrackedExecutableBlock&) const = default;
 };
 
 enum class CodeInvalidationLookupMode : std::uint8_t { PageIndex, ReferenceScan };
@@ -69,6 +77,23 @@ enum class CodeInvalidationLookupMode : std::uint8_t { PageIndex, ReferenceScan 
 struct CodeInvalidationPerformanceCounters {
     std::uint64_t indexed_candidates = 0u;
     std::uint64_t reference_candidates = 0u;
+
+    [[nodiscard]] bool operator==(const CodeInvalidationPerformanceCounters&) const = default;
+};
+
+struct ExecutableCodeTrackerSnapshot {
+    std::vector<TrackedExecutableBlock> blocks;
+    std::vector<CodeInvalidationPage> page_generations;
+    std::vector<CodeInvalidationPage> hotspots;
+    std::uint64_t invalidation_count = 0u;
+    std::vector<CodeInvalidationEvent> invalidation_events;
+    std::size_t provenance_capacity = 0u;
+    std::uint64_t next_provenance_sequence = 0u;
+    std::uint64_t dropped_provenance_events = 0u;
+    CodeInvalidationLookupMode lookup_mode = CodeInvalidationLookupMode::PageIndex;
+    CodeInvalidationPerformanceCounters performance_counters;
+
+    [[nodiscard]] bool operator==(const ExecutableCodeTrackerSnapshot&) const = default;
 };
 
 class ExecutableCodeTracker {
@@ -99,6 +124,7 @@ class ExecutableCodeTracker {
     [[nodiscard]] CodeInvalidationLookupMode lookup_mode() const noexcept;
     void set_lookup_mode(CodeInvalidationLookupMode mode) noexcept;
     [[nodiscard]] const CodeInvalidationPerformanceCounters& performance_counters() const noexcept;
+    [[nodiscard]] ExecutableCodeTrackerSnapshot snapshot() const;
     void reset_performance_counters() noexcept;
 
   private:

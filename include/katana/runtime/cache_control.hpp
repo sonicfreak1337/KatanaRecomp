@@ -18,6 +18,18 @@ inline constexpr std::uint32_t sh4_on_chip_ram_address = 0x7C000000u;
 inline constexpr std::uint32_t sh4_on_chip_ram_aperture_size = 0x04000000u;
 inline constexpr std::size_t sh4_on_chip_ram_size = 8u * 1024u;
 
+struct Sh4CacheControlSnapshot {
+    std::uint32_t value = 0u;
+    std::uint64_t instruction_invalidations = 0u;
+    std::array<std::uint32_t, 256u> instruction_addresses{};
+    std::array<std::uint32_t, 512u> operand_addresses{};
+    std::array<std::uint8_t, 8u * 1024u> instruction_data{};
+    std::array<std::uint8_t, 16u * 1024u> operand_data{};
+    std::array<std::uint8_t, sh4_on_chip_ram_size> on_chip_ram{};
+
+    [[nodiscard]] bool operator==(const Sh4CacheControlSnapshot&) const = default;
+};
+
 class Sh4CacheControl final {
   public:
     static constexpr std::uint32_t instruction_invalidate = 0x00000800u;
@@ -41,6 +53,7 @@ class Sh4CacheControl final {
                            std::uint32_t value,
                            MemoryAccessWidth width) noexcept;
     void write(std::uint32_t value);
+    [[nodiscard]] Sh4CacheControlSnapshot snapshot() const noexcept;
     void reset() noexcept;
 
   private:

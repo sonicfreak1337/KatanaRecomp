@@ -180,8 +180,8 @@ Manifest als `diagnostic-interpreter` aus. Deaktivierung, unbekannte Quelle,
 Byteabweichung, Budgetende und ungueltiger Block bleiben typisierte Misses.
 `KR-4848` bleibt fuer strukturierte Disc-Ladetransaktionen, den allgemeinen
 nativen Materializer und vorab erzeugte latente native Module offen. Der
-aktuelle kumulative Vertrag verwendet Runtime-ABI 42, Block-ABI 3,
-Backend-Interface-ABI 3, PlatformServices-ABI 10 und Portprojektvertrag 26.
+aktuelle kumulative Vertrag verwendet Runtime-ABI 43, Block-ABI 3,
+Backend-Interface-ABI 3, PlatformServices-ABI 10 und Portprojektvertrag 27.
 
 Die optionale Runtimebeobachtung aendert diesen Materialisierungsvertrag nicht.
 Ein POD-Zugriffssink versieht bereits ausgefuehrte AOT-Zugriffe und Zugriffe
@@ -217,10 +217,12 @@ geschlossen; `FMOV`-Doppelwortzugriffe laufen low nach high. Keine dieser
 Diagnosefaehigkeiten macht unbekannte Bytes zu Code oder einen
 Interpreterblock zu Produkt-AOT.
 
-Fuer den Zwischenblock bestehen 22/22 fokussierte Regressionen in
-1,57 Sekunden; der Port-CLI-Nachweis besteht 1/1 in 151,12 Sekunden. Es lief
-keine Vollsuite und kein `KR-4852`; `KR-4842` bleibt ausschliesslich bis zum
-vollstaendigen Diagnose=0/1-A/B-Produktlauf offen.
+Der Abschlussnachweis fuer `KR-4842` umfasst 6/6 fokussierte Tests in
+6,40 Sekunden, den Port-CLI-Pfad 1/1 in 156,11 Sekunden und einen erfolgreichen
+Diagnose=0/1-A/B-Produktlauf bis jeweils 100.000 Gastzyklen. Systemreplay v3
+war vollstaendig und versiegelt, die normativen Felder waren identisch und
+EXE sowie Pack blieben unveraendert. Es lief keine Vollsuite und kein
+`KR-4852`; `KR-4842` ist abgeschlossen.
 
 ## Runtime-only-Profil
 

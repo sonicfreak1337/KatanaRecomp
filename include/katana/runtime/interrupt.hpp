@@ -15,6 +15,14 @@ struct PendingInterrupt {
     InterruptSource source = 0u;
     std::uint8_t level = 0u;
     std::uint32_t event_code = 0u;
+
+    [[nodiscard]] bool operator==(const PendingInterrupt&) const = default;
+};
+
+struct InterruptControllerSnapshot {
+    std::vector<PendingInterrupt> pending;
+
+    [[nodiscard]] bool operator==(const InterruptControllerSnapshot&) const = default;
 };
 
 class InterruptController {
@@ -25,6 +33,7 @@ class InterruptController {
     [[nodiscard]] bool pending(InterruptSource source) const noexcept;
     [[nodiscard]] std::size_t pending_count() const noexcept;
     [[nodiscard]] std::optional<PendingInterrupt> highest_pending() const noexcept;
+    [[nodiscard]] InterruptControllerSnapshot snapshot() const;
 
   private:
     friend bool accept_pending_interrupt(CpuState& cpu, InterruptController& controller) noexcept;

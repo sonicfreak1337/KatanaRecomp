@@ -29,6 +29,39 @@ inline constexpr std::size_t aica_channel_count = 64u;
 inline constexpr std::size_t aica_channel_register_stride = 0x80u;
 inline constexpr std::uint32_t aica_common_register_base = 0x2800u;
 
+struct AicaChannelRuntimeSnapshot {
+    std::uint64_t phase = 0u;
+    std::uint32_t adpcm_position = 0u;
+    std::int32_t adpcm_predictor = 0;
+    std::int32_t adpcm_step = 127;
+    bool active = false;
+
+    [[nodiscard]] bool operator==(const AicaChannelRuntimeSnapshot&) const = default;
+};
+
+struct AicaRegisterSnapshot {
+    std::array<std::uint8_t, aica_register_size> registers{};
+    std::array<AicaChannelRuntimeSnapshot, aica_channel_count> channels{};
+    std::uint64_t writes = 0u;
+    std::uint64_t rendered_buffers = 0u;
+    std::uint64_t rendered_frames = 0u;
+
+    [[nodiscard]] bool operator==(const AicaRegisterSnapshot&) const = default;
+};
+
+struct AicaRtcSnapshot {
+    std::uint64_t scheduler_cycle = 0u;
+    std::uint64_t guest_clock_hz = 0u;
+    std::uint64_t base_cycle = 0u;
+    std::uint32_t initial_seconds = 0u;
+    std::uint32_t base_seconds = 0u;
+    std::uint32_t counter = 0u;
+    std::uint32_t write_latch = 0u;
+    bool write_enabled = false;
+
+    [[nodiscard]] bool operator==(const AicaRtcSnapshot&) const = default;
+};
+
 class AicaRegisterFile final {
   public:
     explicit AicaRegisterFile(std::shared_ptr<AicaExecutionController> execution = {},
@@ -42,6 +75,7 @@ class AicaRegisterFile final {
     [[nodiscard]] std::size_t active_channel_count() const noexcept;
     [[nodiscard]] std::uint64_t rendered_buffer_count() const noexcept;
     [[nodiscard]] std::uint64_t rendered_frame_count() const noexcept;
+    [[nodiscard]] AicaRegisterSnapshot snapshot() const noexcept;
 
   private:
     struct ChannelRuntime {
@@ -76,6 +110,7 @@ class AicaRtc final {
     void reset() noexcept;
     [[nodiscard]] std::uint32_t counter() const noexcept;
     [[nodiscard]] bool write_enabled() const noexcept;
+    [[nodiscard]] AicaRtcSnapshot snapshot() const noexcept;
 
   private:
     static void check(std::uint32_t offset, MemoryAccessWidth width);
@@ -158,6 +193,15 @@ class AicaTimer final {
     [[nodiscard]] std::uint64_t tick(std::uint64_t audio_cycles) noexcept;
     [[nodiscard]] std::uint8_t counter() const noexcept;
     [[nodiscard]] bool enabled() const noexcept;
+    struct Snapshot {
+        std::uint64_t remainder = 0u;
+        std::uint32_t divisor = 1u;
+        std::uint8_t counter = 0u;
+        bool enabled = false;
+
+        [[nodiscard]] bool operator==(const Snapshot&) const = default;
+    };
+    [[nodiscard]] Snapshot snapshot() const noexcept;
 
   private:
     std::uint64_t remainder_ = 0u;
@@ -175,6 +219,14 @@ class AicaInterruptState final {
     [[nodiscard]] std::uint32_t pending() const noexcept;
     [[nodiscard]] std::uint32_t enabled() const noexcept;
     [[nodiscard]] bool asserted() const noexcept;
+    struct Snapshot {
+        std::uint32_t enabled = 0u;
+        std::uint32_t pending = 0u;
+        bool asserted = false;
+
+        [[nodiscard]] bool operator==(const Snapshot&) const = default;
+    };
+    [[nodiscard]] Snapshot snapshot() const noexcept;
 
   private:
     std::uint32_t enabled_ = 0u;
@@ -204,6 +256,17 @@ class AicaExecutionController final {
     void set_dma_request_observer(std::function<void()> observer);
     void request_dma();
     void tick(std::uint64_t audio_cycles);
+    struct Snapshot {
+        AicaArm7Mode mode = AicaArm7Mode::HighLevelAudio;
+        bool arm7_reset_asserted = false;
+        std::array<AicaTimer::Snapshot, timer_count> timers{};
+        AicaInterruptState::Snapshot interrupts{};
+        std::optional<SchedulerEventId> tick_event;
+        std::uint64_t guest_cycles_per_tick = 0u;
+
+        [[nodiscard]] bool operator==(const Snapshot&) const = default;
+    };
+    [[nodiscard]] Snapshot snapshot() const noexcept;
 
   private:
     void schedule_tick();

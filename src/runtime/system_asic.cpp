@@ -161,12 +161,29 @@ std::uint64_t DreamcastSystemBusControl::system_reset_requests() const noexcept 
 }
 
 DreamcastSystemBusSnapshot DreamcastSystemBusControl::snapshot() const noexcept {
-    return {
-        registers_[Channel2Destination / 4u],
-        registers_[Channel2Length / 4u],
-        registers_[Channel2Start / 4u],
-        system_reset_requests_,
-    };
+    DreamcastSystemBusSnapshot result;
+    result.registers = registers_;
+    result.channel2_destination = registers_[Channel2Destination / 4u];
+    result.channel2_length = registers_[Channel2Length / 4u];
+    result.channel2_start = registers_[Channel2Start / 4u];
+    result.sort_start_address = registers_[SortStartAddress / 4u];
+    result.sort_base_address = registers_[SortBaseAddress / 4u];
+    result.sort_link_width = registers_[SortLinkWidth / 4u];
+    result.sort_address_shift = registers_[SortAddressShift / 4u];
+    result.sort_start = registers_[SortStart / 4u];
+    result.dbreq_mask = registers_[DbreqMask / 4u];
+    result.bavl_wait_count = registers_[BavlWaitCount / 4u];
+    result.channel2_priority = registers_[Channel2Priority / 4u];
+    result.channel2_max_burst = registers_[Channel2MaxBurst / 4u];
+    result.sort_divider = registers_[SortDivider / 4u];
+    result.ta_fifo_remaining = registers_[TaFifoRemaining / 4u];
+    result.texture_memory_mode0 = registers_[TextureMemoryMode0 / 4u];
+    result.texture_memory_mode1 = registers_[TextureMemoryMode1 / 4u];
+    result.fifo_status = registers_[FifoStatus / 4u];
+    result.revision = registers_[Revision / 4u];
+    result.root_bus_split = registers_[RootBusSplit / 4u];
+    result.system_reset_requests = system_reset_requests_;
+    return result;
 }
 
 void DreamcastSystemBusControl::complete_channel2() noexcept {
@@ -219,7 +236,9 @@ SchedulerEventId DreamcastSystemAsic::schedule(EventScheduler& scheduler,
                                                const SystemAsicEvent event,
                                                const std::uint64_t guest_cycle) {
     return scheduler.schedule_at_or_now(
-        guest_cycle, [this, event](const auto, const auto cycle) { raise(event, cycle); });
+        guest_cycle,
+        [this, event](const auto, const auto cycle) { raise(event, cycle); },
+        SchedulerEventKind::SystemAsic);
 }
 std::uint32_t DreamcastSystemAsic::read(const std::uint32_t offset) const {
     if (offset == 0x00u) {
@@ -271,6 +290,17 @@ void DreamcastSystemAsic::write(const std::uint32_t offset, const std::uint32_t 
 }
 const std::vector<SystemAsicEventRecord>& DreamcastSystemAsic::events() const noexcept {
     return events_;
+}
+
+DreamcastSystemAsicSnapshot DreamcastSystemAsic::snapshot() const {
+    return {
+        pending_,
+        masks_,
+        dma_trigger_masks_,
+        events_,
+        next_sequence_,
+        last_guest_cycle_,
+    };
 }
 void DreamcastSystemAsic::set_dma_trigger_observers(DmaTriggerObserver pvr,
                                                      DmaTriggerObserver g2) {

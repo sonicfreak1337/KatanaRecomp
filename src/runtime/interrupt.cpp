@@ -55,6 +55,14 @@ std::optional<PendingInterrupt> InterruptController::highest_pending() const noe
     return *selected;
 }
 
+InterruptControllerSnapshot InterruptController::snapshot() const {
+    auto pending = pending_;
+    std::sort(pending.begin(), pending.end(), [](const auto& left, const auto& right) {
+        return left.source < right.source;
+    });
+    return {std::move(pending)};
+}
+
 bool accept_pending_interrupt(CpuState& cpu, InterruptController& controller) noexcept {
     if (cpu.interrupts_blocked()) {
         return false;

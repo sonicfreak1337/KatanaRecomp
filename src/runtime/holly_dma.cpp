@@ -298,7 +298,9 @@ void DreamcastG2DmaController::schedule_completion(const std::size_t channel,
     state.remaining_cycles = 0u;
     state.completion_cycle = scheduler_.current_cycle() + cycles;
     state.completion_event = scheduler_.schedule_after(
-        cycles, [this, channel](const auto event_id, const auto) { complete(channel, event_id); });
+        cycles,
+        [this, channel](const auto event_id, const auto) { complete(channel, event_id); },
+        SchedulerEventKind::HollyG2Dma);
 }
 
 void DreamcastG2DmaController::set_suspended(const std::size_t channel,
@@ -443,6 +445,22 @@ const std::optional<HollyDmaFault>& DreamcastG2DmaController::last_fault() const
     return last_fault_;
 }
 
+DreamcastG2DmaSnapshot DreamcastG2DmaController::snapshot() const {
+    return {
+        channels_,
+        timing_,
+        address_protect_,
+        ds_timeout_,
+        tr_timeout_,
+        modem_timeout_,
+        modem_wait_,
+        completed_dma_count_,
+        last_fault_,
+        reset_observer_,
+        static_cast<bool>(completion_observer_),
+    };
+}
+
 DreamcastG1BusController::DreamcastG1BusController(
     EventScheduler& scheduler,
     const HollyDmaTiming timing,
@@ -584,7 +602,9 @@ void DreamcastG1BusController::schedule_chunk(const G1DmaFaultPhase failure_phas
         const auto cycles = dma_latency(chunk, timing_);
         next_chunk_cycle_ = scheduler_.current_cycle() + cycles;
         completion_event_ = scheduler_.schedule_after(
-            cycles, [this](const auto event_id, const auto) { complete_chunk(event_id); });
+            cycles,
+            [this](const auto event_id, const auto) { complete_chunk(event_id); },
+            SchedulerEventKind::HollyG1Dma);
     } catch (...) {
         fail(HollyDmaFaultReason::SchedulerFailure, std::nullopt, failure_phase);
     }
@@ -756,6 +776,24 @@ std::uint32_t DreamcastG1BusController::address_protect() const noexcept {
     return address_protect_;
 }
 
+DreamcastG1DmaSnapshot DreamcastG1BusController::snapshot() const noexcept {
+    return {
+        state(),
+        timing_,
+        bios_handoff_live_address_,
+        system_mode_,
+        gdrom_read_access_timing_,
+        address_protect_,
+        last_fault_,
+        last_g1_fault_,
+        reset_observer_,
+        static_cast<bool>(transfer_handler_),
+        static_cast<bool>(completion_observer_),
+        static_cast<bool>(range_validator_),
+        static_cast<bool>(fault_observer_),
+    };
+}
+
 DreamcastPvrDmaController::DreamcastPvrDmaController(
     Memory& memory,
     EventScheduler& scheduler,
@@ -880,7 +918,9 @@ void DreamcastPvrDmaController::start() {
     try {
         const auto cycles = dma_latency(bytes, timing_);
         completion_event_ = scheduler_.schedule_after(
-            cycles, [this](const auto event_id, const auto) { complete(event_id); });
+            cycles,
+            [this](const auto event_id, const auto) { complete(event_id); },
+            SchedulerEventKind::HollyPvrDma);
     } catch (...) {
         fail(HollyDmaFaultReason::Timeout, SystemAsicEvent::PvrOverrun);
     }
@@ -1003,6 +1043,20 @@ HollyDmaChannelState DreamcastPvrDmaController::state() const noexcept {
 
 const std::optional<HollyDmaFault>& DreamcastPvrDmaController::last_fault() const noexcept {
     return last_fault_;
+}
+
+DreamcastPvrDmaSnapshot DreamcastPvrDmaController::snapshot() const noexcept {
+    return {
+        state(),
+        timing_,
+        address_protect_,
+        last_fault_,
+        reset_observer_,
+        dmac_channel_,
+        !dmac_.expired(),
+        dmac_contract_required_,
+        static_cast<bool>(completion_observer_),
+    };
 }
 
 DreamcastHollyDmaControllers

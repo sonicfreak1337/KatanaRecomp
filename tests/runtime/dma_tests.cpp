@@ -108,6 +108,13 @@ int main() {
     static_cast<void>(scheduler.advance_to(20u, 0u));
     require(memory.read_u8(0x60u) == 0u, "Externer DMA-Request startet ohne Anforderung.");
     dmac->request_transfer(2u);
+    const auto pending_dma = dmac->snapshot();
+    require(pending_dma.channels[2u].pending_requests == 1u &&
+                pending_dma.event_id.has_value() &&
+                pending_dma.scheduled_channel == std::optional<std::size_t>{2u} &&
+                pending_dma.scheduled_units == 1u &&
+                pending_dma.timing == DmaTiming{1u, 256u},
+            "DMAC-Snapshot verliert externe Queue, Eventbindung oder geplanten FSM-Kanal.");
     static_cast<void>(scheduler.advance_to(21u, 1u));
     require(memory.read_u8(0x60u) == 0xCCu, "Expliziter DMA-Request startet den Kanal nicht.");
 

@@ -150,14 +150,18 @@ void DreamcastMediaClock::schedule_video() {
     const auto deadline = advance_deadline(video_cadence_);
     const auto generation = generation_;
     video_event_ = scheduler_.schedule_at(
-        deadline, [this, generation](const auto, const auto) { handle_video(generation); });
+        deadline,
+        [this, generation](const auto, const auto) { handle_video(generation); },
+        SchedulerEventKind::MediaVideo);
 }
 
 void DreamcastMediaClock::schedule_audio() {
     const auto deadline = advance_deadline(audio_cadence_);
     const auto generation = generation_;
     audio_event_ = scheduler_.schedule_at(
-        deadline, [this, generation](const auto, const auto) { handle_audio(generation); });
+        deadline,
+        [this, generation](const auto, const auto) { handle_audio(generation); },
+        SchedulerEventKind::MediaAudio);
 }
 
 void DreamcastMediaClock::handle_video(const std::uint64_t generation) {

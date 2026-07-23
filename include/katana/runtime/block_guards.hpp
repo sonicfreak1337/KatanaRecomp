@@ -24,6 +24,20 @@ struct TlbMapping {
     bool user_access = true;
     bool dirty = true;
     bool shared = false;
+
+    [[nodiscard]] bool operator==(const TlbMapping&) const = default;
+};
+
+struct RuntimeAddressSpaceSnapshot {
+    AddressTranslationMode mode = AddressTranslationMode::NoMmu;
+    std::uint32_t mmucr = 0u;
+    std::uint8_t asid = 0u;
+    std::uint64_t address_space_generation = 0u;
+    std::uint64_t mmu_generation = 0u;
+    std::uint64_t watchpoint_generation = 0u;
+    std::vector<TlbMapping> mappings;
+
+    [[nodiscard]] bool operator==(const RuntimeAddressSpaceSnapshot&) const = default;
 };
 
 struct TranslationResult {
@@ -77,6 +91,7 @@ class RuntimeAddressSpace {
     translate_store_queue_prefetch(std::uint32_t address, bool privileged = true) const;
     [[nodiscard]] BlockStateGuard guard_for(std::uint32_t virtual_address,
                                             std::uint32_t fpscr) const;
+    [[nodiscard]] RuntimeAddressSpaceSnapshot snapshot() const;
     [[nodiscard]] bool block_fits_translation_page(std::uint32_t virtual_start,
                                                    std::uint32_t size) const noexcept;
 

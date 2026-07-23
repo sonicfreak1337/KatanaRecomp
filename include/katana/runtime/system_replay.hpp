@@ -2,6 +2,7 @@
 
 #include "katana/runtime/runtime.hpp"
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
@@ -12,7 +13,7 @@
 
 namespace katana::runtime {
 
-inline constexpr std::uint32_t system_replay_schema_version = 2u;
+inline constexpr std::uint32_t system_replay_schema_version = 3u;
 
 struct SafepointReport;
 
@@ -29,6 +30,28 @@ enum class SystemReplayEventKind : std::uint8_t {
     ExternalInput,
     HostEvent
 };
+
+enum class SystemReplayProfile : std::uint8_t {
+    General,
+    DeterministicV1
+};
+
+enum class SystemReplayCoverage : std::uint32_t {
+    None = 0u,
+    CpuSafepoint = 1u << 0u,
+    SchedulerCallback = 1u << 1u,
+    AcceptedInterrupt = 1u << 2u,
+    Video = 1u << 3u,
+    Audio = 1u << 4u,
+    Input = 1u << 5u,
+    Mmio = 1u << 6u,
+    Dma = 1u << 7u
+};
+
+using SystemReplayCoverageMask = std::uint32_t;
+inline constexpr std::size_t system_replay_coverage_class_count = 8u;
+using SystemReplayEventCounts =
+    std::array<std::uint64_t, system_replay_coverage_class_count>;
 
 struct SystemReplayEvent {
     std::uint64_t sequence = 0u;
@@ -52,11 +75,13 @@ struct SystemReplayConfig {
 
     std::size_t capacity = default_capacity;
     bool serialize_values = false;
+    SystemReplayProfile profile = SystemReplayProfile::General;
 };
 
 class SystemReplayLog final {
   public:
     explicit SystemReplayLog(SystemReplayConfig config = {});
+    void enable_coverage(SystemReplayCoverageMask coverage);
     void record(SystemReplayEvent event);
     [[nodiscard]] bool try_record(SystemReplayEvent event) noexcept;
     void note_dropped_event() noexcept;
@@ -66,6 +91,12 @@ class SystemReplayLog final {
     [[nodiscard]] const std::vector<SystemReplayEvent>& events() const noexcept;
     [[nodiscard]] std::uint64_t dropped_events() const noexcept;
     [[nodiscard]] std::uint64_t event_hash() const noexcept;
+    [[nodiscard]] std::uint64_t ordering_digest() const noexcept;
+    [[nodiscard]] SystemReplayCoverageMask enabled_coverage() const noexcept;
+    [[nodiscard]] SystemReplayCoverageMask observed_coverage() const noexcept;
+    [[nodiscard]] SystemReplayCoverageMask required_coverage() const noexcept;
+    [[nodiscard]] bool coverage_complete() const noexcept;
+    [[nodiscard]] const SystemReplayEventCounts& event_counts() const noexcept;
     [[nodiscard]] std::uint64_t final_guest_state_hash() const;
     [[nodiscard]] std::string serialize_json() const;
     [[nodiscard]] const SystemReplayConfig& config() const noexcept;
@@ -77,6 +108,12 @@ class SystemReplayLog final {
     std::optional<std::uint64_t> last_time_epoch_;
     std::optional<std::uint64_t> final_guest_state_hash_;
     std::uint64_t dropped_events_ = 0u;
+    std::uint64_t ordering_digest_ = 0u;
+    SystemReplayCoverageMask enabled_coverage_ = 0u;
+    SystemReplayCoverageMask observed_coverage_ = 0u;
+    SystemReplayCoverageMask required_coverage_ = 0u;
+    SystemReplayEventCounts event_counts_{};
+    bool ordering_digest_initialized_ = false;
 };
 
 class SystemReplayMismatch final : public std::runtime_error {
@@ -112,6 +149,11 @@ system_replay_mmio_observer(SystemReplayLog& log,
 [[nodiscard]] std::uint64_t hash_replay_guest_state(const CpuState& cpu,
                                                     std::uint64_t scheduler_cycle,
                                                     std::uint64_t subsystem_hash = 0u) noexcept;
+[[nodiscard]] SystemReplayCoverageMask
+system_replay_required_coverage(SystemReplayProfile profile) noexcept;
+[[nodiscard]] SystemReplayCoverageMask
+system_replay_event_coverage(const SystemReplayEvent& event) noexcept;
+[[nodiscard]] const char* system_replay_profile_name(SystemReplayProfile profile) noexcept;
 [[nodiscard]] const char* system_replay_event_kind_name(SystemReplayEventKind kind) noexcept;
 
 } // namespace katana::runtime

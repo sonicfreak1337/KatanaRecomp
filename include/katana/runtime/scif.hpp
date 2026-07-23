@@ -19,6 +19,23 @@ inline constexpr std::size_t sh4_scif_register_size = 0x28u;
 
 enum class Sh4ScifInterrupt : std::uint8_t { Error, Receive, Break, Transmit };
 
+struct Sh4ScifSnapshot {
+    std::optional<SchedulerEventId> transmit_event;
+    std::vector<std::uint8_t> transmit_fifo;
+    std::vector<std::uint8_t> receive_fifo;
+    std::vector<std::uint8_t> transmitted_bytes;
+    std::uint16_t mode = 0u;
+    std::uint8_t bit_rate = 0u;
+    std::uint16_t control = 0u;
+    std::uint16_t status = 0u;
+    std::uint16_t status_last_read = 0u;
+    std::uint16_t fifo_control = 0u;
+    std::uint16_t port = 0u;
+    std::uint16_t line_status = 0u;
+
+    [[nodiscard]] bool operator==(const Sh4ScifSnapshot&) const = default;
+};
+
 class Sh4Scif final {
   public:
     using InterruptObserver = std::function<void(Sh4ScifInterrupt, bool)>;
@@ -40,6 +57,7 @@ class Sh4Scif final {
     [[nodiscard]] std::size_t transmit_fifo_size() const noexcept;
     [[nodiscard]] std::size_t receive_fifo_size() const noexcept;
     [[nodiscard]] const std::vector<std::uint8_t>& transmitted_bytes() const noexcept;
+    [[nodiscard]] Sh4ScifSnapshot snapshot() const;
 
   private:
     static constexpr std::uint16_t status_error = 0x0080u;

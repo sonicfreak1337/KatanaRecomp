@@ -218,14 +218,24 @@ int main() {
 
     Memory mmio_diagnostics(0u);
     std::uint32_t mmio_value = 0u;
+    std::vector<MemoryAccessEvent> mmio_trace_events;
     auto mmio = std::make_shared<katana::runtime::MmioMemoryDevice>(
         4u,
         [&mmio_value](const std::uint32_t, const MemoryAccessWidth) { return mmio_value; },
         [&mmio_value](const std::uint32_t,
                       const std::uint32_t value,
-                      const MemoryAccessWidth) { mmio_value = value; });
+                       const MemoryAccessWidth) { mmio_value = value; });
     mmio_diagnostics.map_region("diagnostic-mmio", 0x00007000u, mmio);
+    mmio_diagnostics.map_region(
+        "diagnostic-linear",
+        0x00008000u,
+        std::make_shared<katana::runtime::LinearMemoryDevice>(4u));
+    mmio_diagnostics.set_mmio_trace_handler(
+        [&mmio_trace_events](const MemoryAccessEvent& event) {
+            mmio_trace_events.push_back(event);
+        });
     mmio_diagnostics.set_mmio_access_tracking(true);
+    mmio_diagnostics.write_u32(0x00008000u, 0x11223344u);
     mmio_diagnostics.write_u32(0x00007000u, 0xA5A55A5Au);
     const auto last_mmio_write = mmio_diagnostics.last_mmio_access();
     require(mmio_diagnostics.mmio_access_tracking_enabled() &&
@@ -238,12 +248,19 @@ int main() {
             "Leichtgewichtige MMIO-Diagnostik verliert den letzten erfolgreichen Zugriff.");
     static_cast<void>(mmio_diagnostics.read_u32(0x00007000u));
     const auto last_mmio_read = mmio_diagnostics.last_mmio_access();
-    require(last_mmio_read && last_mmio_read->operation == MemoryAccessOperation::Read,
-            "MMIO-Diagnostik aktualisiert einen erfolgreichen Read nicht.");
+    require(last_mmio_read && last_mmio_read->operation == MemoryAccessOperation::Read &&
+                mmio_diagnostics.has_mmio_trace_handler() &&
+                mmio_trace_events.size() == 2u &&
+                mmio_trace_events[0].operation == MemoryAccessOperation::Write &&
+                mmio_trace_events[1].operation == MemoryAccessOperation::Read &&
+                mmio_trace_events[0].region_name == "diagnostic-mmio",
+            "MMIO-Diagnostik aktualisiert den Read nicht oder trace't linearen Speicher.");
+    mmio_diagnostics.clear_mmio_trace_handler();
     mmio_diagnostics.set_mmio_access_tracking(false);
     require(!mmio_diagnostics.mmio_access_tracking_enabled() &&
-                !mmio_diagnostics.last_mmio_access().has_value(),
-            "Deaktivierte MMIO-Diagnostik behaelt alten Zustand oder bleibt aktiv.");
+                !mmio_diagnostics.last_mmio_access().has_value() &&
+                !mmio_diagnostics.has_mmio_trace_handler(),
+            "Deaktivierte MMIO-Diagnostik behaelt alten Zustand oder Trace-Handler.");
 
     require(throws<std::invalid_argument>([&observed_bus] {
                 static_cast<void>(observed_bus.add_watchpoint(0x00005000u,

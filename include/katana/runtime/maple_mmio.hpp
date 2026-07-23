@@ -35,6 +35,32 @@ struct MapleDmaTiming {
     std::uint64_t cycles_per_word = 100u;
 };
 
+struct DreamcastMaplePendingResponseSnapshot {
+    std::uint32_t destination = 0u;
+    std::vector<std::uint32_t> words;
+
+    [[nodiscard]] bool operator==(const DreamcastMaplePendingResponseSnapshot&) const = default;
+};
+
+struct DreamcastMapleControllerSnapshot {
+    MapleDmaTiming timing{};
+    std::optional<SchedulerEventId> completion_event;
+    std::vector<DreamcastMaplePendingResponseSnapshot> pending_responses;
+    std::uint32_t command_table = 0u;
+    std::uint32_t trigger_select = 0u;
+    std::uint32_t enabled = 0u;
+    std::uint32_t active = 0u;
+    std::uint32_t system_control = 0u;
+    std::uint32_t address_protect = 0u;
+    std::uint32_t msb_select = 0u;
+    std::uint32_t tx_address = 0u;
+    std::uint32_t rx_address = 0u;
+    std::uint32_t rx_base = 0u;
+    std::uint64_t completed_dma_count = 0u;
+    std::uint64_t transferred_word_count = 0u;
+    bool hard_trigger_failed = false;
+};
+
 class DreamcastMapleController final {
   public:
     DreamcastMapleController(Memory& memory,
@@ -53,6 +79,7 @@ class DreamcastMapleController final {
     [[nodiscard]] std::uint64_t transferred_word_count() const noexcept;
     void hardware_trigger() noexcept;
     [[nodiscard]] bool hard_trigger_failed() const noexcept;
+    [[nodiscard]] DreamcastMapleControllerSnapshot snapshot() const;
 
   private:
     struct PendingResponse {

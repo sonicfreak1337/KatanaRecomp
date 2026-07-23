@@ -92,9 +92,17 @@ int main() {
     memory.write_u8(0x00700029u, 0u);
     memory.write_u32(0x00700000u, 0x0000C000u);
     const auto rendered = product_registers->render_audio(2u, 44'100u);
+    const auto register_snapshot = product_registers->snapshot();
     require(rendered == std::vector<std::int16_t>({1000, 1000, -1000, -1000}) &&
                 product_registers->active_channel_count() == 0u &&
-                product_registers->rendered_buffer_count() == 1u,
+                product_registers->rendered_buffer_count() == 1u &&
+                register_snapshot.registers[aica_common_register_base] == 0x0Fu &&
+                register_snapshot.registers[0u] == 0u &&
+                register_snapshot.registers[1u] == 0x40u &&
+                register_snapshot.channels[0u].phase == (std::uint64_t{2u} << 32u) &&
+                !register_snapshot.channels[0u].active &&
+                register_snapshot.rendered_buffers == 1u &&
+                register_snapshot.rendered_frames == 2u,
             "AICA-Gastregister, gemeinsames Sound-RAM und Produktmixer sind nicht verbunden.");
     memory.write_u32(0x00700000u, 0x00008000u);
     require(product_registers->render_audio(1u, 44'100u) ==

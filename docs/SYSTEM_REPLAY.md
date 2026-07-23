@@ -9,7 +9,7 @@ Paar aus Resetgeneration und Gastzyklus; innerhalb einer Epoche darf die
 Gastzeit nicht rueckwaerts laufen, waehrend eine neue Epoche wieder bei Zyklus
 null beginnen darf.
 
-Das v2-Format unterscheidet:
+Das v3-Format unterscheidet:
 
 - CPU-Safepoints
 - MMIO-Lese- und Schreibzugriffe
@@ -25,6 +25,22 @@ Safepoints koennen direkt beim `SchedulerSafepoints`-Objekt angebunden werden.
 DMA-, Interrupt-, Timer-, Scheduler- und Medienpfade liefern typisierte
 `SystemReplayEvent`-Eintraege mit stabilem Ereigniscode, Gastzyklus und den
 erforderlichen numerischen Parametern.
+
+## Profile und Coverage
+
+`SystemReplayProfile::General` verlangt keine feste Hookmenge.
+`SystemReplayProfile::DeterministicV1` aktiviert dagegen vor der ersten
+Gastinstruktion genau die acht Pflichtklassen CPU-Safepoint,
+Schedulercallback, akzeptierter Interrupt, Video, Audio, Input, MMIO und DMA.
+`enabled_coverage`, `observed_coverage`, `required_coverage`,
+`coverage_complete` und acht getrennte Ereigniszaehler machen den Vertrag
+maschinenlesbar. Vollstaendige Coverage bedeutet, dass alle Pflichthooks
+angebunden sind; nicht jede Klasse muss innerhalb eines kurzen Budgets
+tatsaechlich ein Ereignis erzeugen.
+
+Ein domain-separierter Ordnungsdigest bindet die kanonische Reihenfolge aller
+aufgezeichneten Ereignisse. Vertauschte Ereignisse koennen daher nicht durch
+gleiche Summen oder Coverage-Masken als identischer Lauf erscheinen.
 
 ## Begrenzung und portable Ereigniscodes
 
@@ -77,7 +93,7 @@ Integritaets- oder Sicherheitsgarantie.
 
 ## Redigierter JSON-Vertrag
 
-Der v2-JSON-Bericht ist standardmaessig redigiert. `code`, `address`, `value`,
+Der v3-JSON-Bericht ist standardmaessig redigiert. `code`, `address`, `value`,
 `detail` und `auxiliary` werden als `null` ausgegeben. Auch `event_hash` und
 `final_guest_state_hash` bleiben `null`, weil diese Felder sonst weiterhin
 private Gastidentitaeten, Adressen, Werte oder daraus abgeleitete exakte

@@ -56,12 +56,16 @@ struct ExecutableModuleRangeRole {
     std::uint32_t offset = 0u;
     std::uint32_t size = 0u;
     ExecutableStorageRole role = ExecutableStorageRole::RuntimeMaterializable;
+
+    [[nodiscard]] bool operator==(const ExecutableModuleRangeRole&) const = default;
 };
 
 struct ExecutableModuleRelocation {
     std::uint32_t offset = 0u;
     std::uint32_t type = 0u;
     std::int32_t addend = 0;
+
+    [[nodiscard]] bool operator==(const ExecutableModuleRelocation&) const = default;
 };
 
 struct ExecutableModuleActiveExtent {
@@ -87,6 +91,7 @@ struct ExecutableModule {
     bool writable = true;
     bool active = true;
 
+    [[nodiscard]] bool operator==(const ExecutableModule&) const = default;
     [[nodiscard]] std::uint64_t end_address() const noexcept;
     [[nodiscard]] bool contains(std::uint32_t address, std::size_t width = 1u) const noexcept;
     [[nodiscard]] std::size_t active_extent_remaining(std::uint32_t address) const noexcept;
@@ -100,6 +105,32 @@ struct ExecutableModuleMetrics {
     std::uint64_t invalidated_blocks = 0u;
     std::uint64_t write_index_rejections = 0u;
     std::uint64_t write_index_scans = 0u;
+
+    [[nodiscard]] bool operator==(const ExecutableModuleMetrics&) const = default;
+};
+
+struct ExecutableModuleRuntimeWritePageSnapshot {
+    std::uint32_t physical_page = 0u;
+    std::array<std::uint64_t, 64u> written{};
+
+    [[nodiscard]] bool operator==(const ExecutableModuleRuntimeWritePageSnapshot&) const = default;
+};
+
+struct ExecutableModulePageRefcountSnapshot {
+    std::uint32_t physical_page = 0u;
+    std::uint64_t refcount = 0u;
+
+    [[nodiscard]] bool operator==(const ExecutableModulePageRefcountSnapshot&) const = default;
+};
+
+struct ExecutableModuleCatalogSnapshot {
+    std::vector<ExecutableModule> modules;
+    std::vector<ExecutableModuleRuntimeWritePageSnapshot> runtime_write_pages;
+    std::vector<ExecutableModulePageRefcountSnapshot> active_extent_page_refcounts;
+    std::uint64_t next_runtime_write_module = 1u;
+    ExecutableModuleMetrics metrics;
+
+    [[nodiscard]] bool operator==(const ExecutableModuleCatalogSnapshot&) const = default;
 };
 
 class ExecutableModuleCatalog final {
@@ -136,6 +167,7 @@ class ExecutableModuleCatalog final {
                                          std::uint32_t memory_address,
                                          std::size_t width) const;
     [[nodiscard]] const ExecutableModuleMetrics& metrics() const noexcept;
+    [[nodiscard]] ExecutableModuleCatalogSnapshot snapshot() const;
 
   private:
     static constexpr std::uint32_t runtime_write_page_size = 4096u;
@@ -191,6 +223,8 @@ struct BlockMaterializationPolicy {
     std::uint64_t max_memory_bytes = 16u * 1024u * 1024u;
     std::uint64_t max_materializations_per_run = 1'024u;
     std::uint64_t max_repeated_misses_per_target = 2u;
+    // Ignore elapsed/candidate host-time metadata; deterministic resource budgets stay active.
+    bool deterministic_no_host_time = false;
 };
 
 struct BlockMaterializationMetrics {

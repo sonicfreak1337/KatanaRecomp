@@ -771,6 +771,20 @@ const ExecutableModuleMetrics& ExecutableModuleCatalog::metrics() const noexcept
     return metrics_;
 }
 
+ExecutableModuleCatalogSnapshot ExecutableModuleCatalog::snapshot() const {
+    ExecutableModuleCatalogSnapshot result;
+    result.modules = modules_;
+    result.runtime_write_pages.reserve(runtime_write_pages_.size());
+    for (const auto& [physical_page, page] : runtime_write_pages_)
+        result.runtime_write_pages.push_back({physical_page, page.written});
+    result.active_extent_page_refcounts.reserve(active_extent_page_refcounts_.size());
+    for (const auto& [physical_page, refcount] : active_extent_page_refcounts_)
+        result.active_extent_page_refcounts.push_back({physical_page, refcount});
+    result.next_runtime_write_module = next_runtime_write_module_;
+    result.metrics = metrics_;
+    return result;
+}
+
 DemandBlockMaterializer::DemandBlockMaterializer(ExecutableModuleCatalog& modules,
                                                  RuntimeBlockTable& blocks,
                                                  ExecutableCodeTracker* tracker,
@@ -781,7 +795,8 @@ DemandBlockMaterializer::DemandBlockMaterializer(ExecutableModuleCatalog& module
     if (policy_.enabled &&
         (!callback_ || policy_.max_blocks == 0u || policy_.max_bytes == 0u ||
          policy_.max_guest_cycles == 0u || policy_.max_instructions == 0u ||
-         policy_.max_recursive_seeds == 0u || policy_.max_analysis_time_ms == 0u ||
+         policy_.max_recursive_seeds == 0u ||
+         (!policy_.deterministic_no_host_time && policy_.max_analysis_time_ms == 0u) ||
          policy_.max_memory_bytes == 0u || policy_.max_materializations_per_run == 0u ||
          policy_.max_repeated_misses_per_target == 0u))
         throw std::invalid_argument("Aktive Blockmaterialisierung braucht Callback und Budgets.");
@@ -913,12 +928,18 @@ DemandBlockMaterializer::try_materialize(CpuState& cpu,
         fail(MaterializationFailure::ByteIdentityMismatch, target);
         return std::nullopt;
     }
-    const auto started = std::chrono::steady_clock::now();
+    std::optional<std::chrono::steady_clock::time_point> started;
+    if (!policy_.deterministic_no_host_time) {
+        started = std::chrono::steady_clock::now();
+    }
     auto candidate = callback_(target, physical_target, snapshot, variant);
-    const auto elapsed_ms =
-        static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
-                                       std::chrono::steady_clock::now() - started)
-                                       .count());
+    std::uint64_t elapsed_ms = 0u;
+    if (started) {
+        elapsed_ms =
+            static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
+                                           std::chrono::steady_clock::now() - *started)
+                                           .count());
+    }
     if (!candidate.decode_candidate_validated) {
         fail(candidate.rejection_failure == MaterializationFailure::None
                  ? MaterializationFailure::DecodeRejected
@@ -941,7 +962,8 @@ DemandBlockMaterializer::try_materialize(CpuState& cpu,
     if (candidate.guest_cycles > policy_.max_guest_cycles ||
         candidate.instructions > policy_.max_instructions ||
         candidate.recursive_seeds > policy_.max_recursive_seeds ||
-        std::max(elapsed_ms, candidate.analysis_time_ms) > policy_.max_analysis_time_ms ||
+        (!policy_.deterministic_no_host_time &&
+         std::max(elapsed_ms, candidate.analysis_time_ms) > policy_.max_analysis_time_ms) ||
         candidate.peak_memory_bytes > policy_.max_memory_bytes) {
         fail(MaterializationFailure::BudgetExhausted, target);
         return std::nullopt;

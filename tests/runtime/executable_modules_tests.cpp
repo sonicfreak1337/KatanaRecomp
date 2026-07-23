@@ -1219,6 +1219,92 @@ void mmu_materialization_origin_regression() {
             "MMU-Materialisierung liest virtuelle statt physischer Bytes oder verliert die VA.");
 }
 
+void deterministic_materialization_without_host_time_regression() {
+    using namespace katana::runtime;
+
+    const auto run = [](const BlockMaterializationPolicy policy,
+                        const std::uint64_t analysis_time_ms,
+                        const std::uint64_t instructions) {
+        CpuState cpu;
+        const std::vector<std::uint8_t> bytes{0x09u, 0x00u};
+        cpu.memory.write_bytes(0x100u, bytes, CodeWriteSource::Copy);
+
+        ExecutableModule module;
+        module.id = "deterministic-no-host-time-module";
+        module.source_identity = "free-deterministic-materialization-fixture-v1";
+        module.guest_start = 0x100u;
+        module.bytes = bytes;
+        ExecutableModuleCatalog modules;
+        modules.publish(module);
+        RuntimeBlockTable blocks;
+        DemandBlockMaterializer materializer(
+            modules,
+            blocks,
+            nullptr,
+            policy,
+            [analysis_time_ms, instructions](
+                const std::uint32_t target,
+                const std::uint32_t physical_origin,
+                const std::span<const std::uint8_t>,
+                const BlockVariantKey& requested_variant) {
+                MaterializedBlockCandidate candidate;
+                candidate.block = {target,
+                                   physical_origin,
+                                   2u,
+                                   BlockEndKind::Return,
+                                   requested_variant,
+                                   block,
+                                   "deterministic-no-host-time-decoder",
+                                   true};
+                candidate.decode_candidate_validated = true;
+                candidate.bounded_analysis_complete = true;
+                candidate.ir_verified = true;
+                candidate.code_generated = true;
+                candidate.guest_cycles = 1u;
+                candidate.instructions = instructions;
+                candidate.recursive_seeds = 1u;
+                candidate.analysis_time_ms = analysis_time_ms;
+                candidate.peak_memory_bytes = 1u;
+                return candidate;
+            });
+        const auto result =
+            materializer.try_materialize(cpu, 0x100u, 0x100u, BlockVariantKey{}, 0x80u);
+        return std::pair{result.has_value(), materializer.last_failure()};
+    };
+
+    BlockMaterializationPolicy deterministic;
+    deterministic.enabled = true;
+    deterministic.max_blocks = 1u;
+    deterministic.max_bytes = 2u;
+    deterministic.max_guest_cycles = 1u;
+    deterministic.max_instructions = 1u;
+    deterministic.max_recursive_seeds = 1u;
+    deterministic.max_analysis_time_ms = 0u;
+    deterministic.max_memory_bytes = 2u;
+    deterministic.max_materializations_per_run = 1u;
+    deterministic.max_repeated_misses_per_target = 1u;
+    deterministic.deterministic_no_host_time = true;
+
+    const auto no_host_time = run(deterministic, std::uint64_t{1u} << 60u, 1u);
+    require(no_host_time.first && no_host_time.second == MaterializationFailure::None,
+            "Deterministische Materialisierung haengt weiterhin von Hostzeit ab.");
+
+    const auto deterministic_instruction_overflow =
+        run(deterministic, std::uint64_t{1u} << 60u, 2u);
+    require(!deterministic_instruction_overflow.first &&
+                deterministic_instruction_overflow.second ==
+                    MaterializationFailure::BudgetExhausted,
+            "Deterministischer Modus ignoriert das Instruktionsbudget.");
+
+    auto host_timed = deterministic;
+    host_timed.deterministic_no_host_time = false;
+    host_timed.max_analysis_time_ms = 1u;
+    const auto host_time_budget = run(host_timed, 2u, 1u);
+    require(!host_time_budget.first &&
+                host_time_budget.second == MaterializationFailure::BudgetExhausted,
+            "Standardmodus wertet das bestehende Analysezeitbudget nicht mehr aus.");
+}
+
 } // namespace
 
 int main() {
@@ -1319,6 +1405,32 @@ int main() {
     require(modules.resolve(0x100u) == nullptr && modules.metrics().unloads == 2u,
             "Modul-Unload hinterlaesst eine aktive ausfuehrbare Herkunft.");
 
+    {
+        ExecutableModuleCatalog snapshot_catalog;
+        ExecutableModule snapshot_module;
+        snapshot_module.id = "snapshot-module";
+        snapshot_module.source_identity = "free-snapshot";
+        snapshot_module.guest_start = 0x2000u;
+        snapshot_module.bytes = bytes;
+        snapshot_catalog.publish(snapshot_module);
+        snapshot_catalog.record_runtime_write(
+            0x4003u, 2u, CodeWriteSource::Cpu, true);
+        const auto snapshot = snapshot_catalog.snapshot();
+        require(snapshot.modules.size() == 1u &&
+                    snapshot.modules.front().id == snapshot_module.id &&
+                    snapshot.modules.front().source_identity == snapshot_module.source_identity &&
+                    snapshot.modules.front().guest_start == snapshot_module.guest_start &&
+                    snapshot.modules.front().bytes == snapshot_module.bytes &&
+                    snapshot.modules.front().generation == 1u &&
+                    snapshot.modules.front().active &&
+                    snapshot.runtime_write_pages.size() == 1u &&
+                    snapshot.runtime_write_pages.front().physical_page == 0x4000u &&
+                    snapshot.runtime_write_pages.front().written[0u] == 0x18u &&
+                    snapshot.active_extent_page_refcounts ==
+                        std::vector<ExecutableModulePageRefcountSnapshot>{{0x2000u, 1u}},
+                "Modulkatalog-Snapshot verliert Runtimewrite-Bitmap oder Extent-Generation.");
+    }
+
     relocated_module_regression();
     native_aot_template_materialization_regression();
     runtime_write_provenance_regression();
@@ -1333,6 +1445,7 @@ int main() {
     reverse_runtime_write_promotion_regression();
     interpreter_interior_entry_regression();
     mmu_materialization_origin_regression();
+    deterministic_materialization_without_host_time_regression();
 
     std::cout << "KR-4704 executable module and materialization regression passed.\n";
     return EXIT_SUCCESS;

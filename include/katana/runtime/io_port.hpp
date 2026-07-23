@@ -18,6 +18,17 @@ struct Sh4IoPortInputs {
     std::uint16_t port_b = 0u;
 };
 
+struct Sh4IoPortSnapshot {
+    Sh4IoPortInputs inputs{};
+    std::uint32_t control_a = 0u;
+    std::uint16_t data_a_latch = 0u;
+    std::uint16_t effective_data_a = 0u;
+    std::uint32_t control_b = 0u;
+    std::uint16_t data_b_latch = 0u;
+    std::uint16_t effective_data_b = 0u;
+    std::uint16_t gpio_interrupt_control = 0u;
+};
+
 class Sh4IoPort final {
   public:
     explicit Sh4IoPort(Sh4IoPortInputs inputs = {});
@@ -33,6 +44,7 @@ class Sh4IoPort final {
     void write_data_b(std::uint16_t value) noexcept;
     void write_gpio_interrupt_control(std::uint16_t value) noexcept;
     void set_inputs(Sh4IoPortInputs inputs) noexcept;
+    [[nodiscard]] Sh4IoPortSnapshot snapshot() const noexcept;
     void reset() noexcept;
 
   private:

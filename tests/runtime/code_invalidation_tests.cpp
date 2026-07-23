@@ -38,6 +38,15 @@ int main() {
         require(tracker.page_generation(0x8C001000u) == 1u &&
                     tracker.page_generation(0xAC002000u) == 1u,
                 "P1-/P2-Aliase teilen keine Seitengeneration.");
+        const auto tracker_snapshot = tracker.snapshot();
+        require(tracker_snapshot.page_generations ==
+                    std::vector<CodeInvalidationPage>{{0x0C001000u, 1u},
+                                                      {0x0C002000u, 1u}} &&
+                    tracker_snapshot.invalidation_count == 2u &&
+                    tracker_snapshot.next_provenance_sequence == 1u &&
+                    tracker_snapshot.blocks.size() == 3u &&
+                    !tracker_snapshot.blocks[0u].valid && !tracker_snapshot.blocks[1u].valid,
+                "Code-Tracker-Snapshot verliert Seitengeneration, Sequenz oder Blockvaliditaet.");
 
         Memory observed_memory(0u);
         auto observed_backing = std::make_shared<LinearMemoryDevice>(0x100u);

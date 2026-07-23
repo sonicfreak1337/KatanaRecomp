@@ -43,9 +43,26 @@ inline constexpr std::uint32_t BootReservedAc = 0xACu;
 } // namespace system_bus_register
 
 struct DreamcastSystemBusSnapshot {
+    std::array<std::uint32_t, system_bus_control_register_size / 4u> registers{};
     std::uint32_t channel2_destination = 0u;
     std::uint32_t channel2_length = 0u;
     std::uint32_t channel2_start = 0u;
+    std::uint32_t sort_start_address = 0u;
+    std::uint32_t sort_base_address = 0u;
+    std::uint32_t sort_link_width = 0u;
+    std::uint32_t sort_address_shift = 0u;
+    std::uint32_t sort_start = 0u;
+    std::uint32_t dbreq_mask = 0u;
+    std::uint32_t bavl_wait_count = 0u;
+    std::uint32_t channel2_priority = 0u;
+    std::uint32_t channel2_max_burst = 0u;
+    std::uint32_t sort_divider = 0u;
+    std::uint32_t ta_fifo_remaining = 0u;
+    std::uint32_t texture_memory_mode0 = 0u;
+    std::uint32_t texture_memory_mode1 = 0u;
+    std::uint32_t fifo_status = 0u;
+    std::uint32_t revision = 0u;
+    std::uint32_t root_bus_split = 0u;
     std::uint64_t system_reset_requests = 0u;
 };
 
@@ -114,6 +131,19 @@ struct SystemAsicEventRecord {
     std::uint64_t guest_cycle = 0u;
     std::uint64_t sequence = 0u;
     SystemAsicEvent event = SystemAsicEvent::PvrRenderDone;
+
+    [[nodiscard]] bool operator==(const SystemAsicEventRecord&) const = default;
+};
+
+struct DreamcastSystemAsicSnapshot {
+    std::array<std::uint32_t, 3u> pending{};
+    std::array<std::array<std::uint32_t, 3u>, 3u> masks{};
+    std::array<std::array<std::uint32_t, 2u>, 2u> dma_trigger_masks{};
+    std::vector<SystemAsicEventRecord> events;
+    std::uint64_t next_sequence = 0u;
+    std::uint64_t last_guest_cycle = 0u;
+
+    [[nodiscard]] bool operator==(const DreamcastSystemAsicSnapshot&) const = default;
 };
 
 class DreamcastSystemAsic final {
@@ -126,6 +156,7 @@ class DreamcastSystemAsic final {
     [[nodiscard]] std::uint32_t read(std::uint32_t offset) const;
     void write(std::uint32_t offset, std::uint32_t value);
     [[nodiscard]] const std::vector<SystemAsicEventRecord>& events() const noexcept;
+    [[nodiscard]] DreamcastSystemAsicSnapshot snapshot() const;
     void set_dma_trigger_observers(DmaTriggerObserver pvr, DmaTriggerObserver g2);
     void reset() noexcept;
 

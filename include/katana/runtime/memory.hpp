@@ -273,6 +273,9 @@ class Memory {
     [[nodiscard]] bool mmio_access_tracking_enabled() const noexcept;
     [[nodiscard]] std::optional<MemoryAccessEvent> last_mmio_access() const;
     void clear_last_mmio_access() const noexcept;
+    void set_mmio_trace_handler(MemoryAccessObserver observer);
+    void clear_mmio_trace_handler() noexcept;
+    [[nodiscard]] bool has_mmio_trace_handler() const noexcept;
 
     void set_guest_write_observer(GuestWriteObserver observer);
     void clear_guest_write_observer() noexcept;
@@ -405,6 +408,7 @@ class Memory {
     std::vector<std::int32_t> region_page_index_;
     std::vector<Watchpoint> watchpoints_;
     MemoryAccessObserver trace_handler_;
+    MemoryAccessObserver mmio_trace_handler_;
     GuestWriteObserver guest_write_observer_;
     GuestMemoryAccessSink guest_memory_access_sink_;
     bool mmio_access_tracking_enabled_ = false;

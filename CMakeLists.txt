@@ -214,6 +214,7 @@ add_library(katana_runtime STATIC
     src/runtime/block_dispatch.cpp
     src/runtime/scheduler_safepoint.cpp
     src/runtime/system_replay.cpp
+    src/runtime/runtime_probe.cpp
     src/runtime/system_asic.cpp
     src/runtime/block_guards.cpp
     src/runtime/bios_abi.cpp
@@ -585,6 +586,17 @@ if(TARGET katana-recomp-gui)
         )
     endif()
 endif()
+if(WIN32)
+    add_test(
+        NAME katana-phase11-private-runtime-probe-runner-tests
+        COMMAND powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File
+            ${CMAKE_CURRENT_SOURCE_DIR}/tools/phase11/run-private-runtime-probe.ps1 -SelfTest
+    )
+    set_tests_properties(
+        katana-phase11-private-runtime-probe-runner-tests
+        PROPERTIES TIMEOUT 30
+    )
+endif()
 if(MSVC AND KATANA_ENABLE_SANITIZERS)
     add_test(
         NAME katana-phase10-msvc-asan-runtime
@@ -706,6 +718,11 @@ add_executable(katana-system-replay-tests tests/runtime/system_replay_tests.cpp)
 target_link_libraries(katana-system-replay-tests PRIVATE katana_runtime)
 katana_enable_warnings(katana-system-replay-tests)
 add_test(NAME katana-system-replay-tests COMMAND katana-system-replay-tests)
+
+add_executable(katana-runtime-probe-tests tests/runtime/runtime_probe_tests.cpp)
+target_link_libraries(katana-runtime-probe-tests PRIVATE katana_runtime)
+katana_enable_warnings(katana-runtime-probe-tests)
+add_test(NAME katana-runtime-probe-tests COMMAND katana-runtime-probe-tests)
 
 add_executable(katana-block-guard-tests tests/runtime/block_guard_tests.cpp)
 target_link_libraries(katana-block-guard-tests PRIVATE katana_runtime)

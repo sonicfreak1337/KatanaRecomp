@@ -266,6 +266,34 @@ const DmaPerformanceCounters& Sh4Dmac::performance_counters() const noexcept {
     return performance_counters_;
 }
 
+Sh4DmacSnapshot Sh4Dmac::snapshot() const noexcept {
+    Sh4DmacSnapshot result;
+    for (std::size_t index = 0u; index < channels_.size(); ++index) {
+        const auto& source = channels_[index];
+        result.channels[index] = {
+            source.source,
+            source.destination,
+            source.count,
+            source.control,
+            source.pending_requests,
+            source.pending_on_demand_requests,
+            source.completed_units,
+            source.interrupt_pending,
+        };
+    }
+    result.operation = operation_;
+    result.timing = timing_;
+    result.execution_mode = execution_mode_;
+    result.event_id = event_;
+    result.scheduled_channel = scheduled_channel_;
+    result.scheduled_units = scheduled_units_;
+    result.last_fault = last_fault_;
+    result.last_on_demand_channel = last_on_demand_channel_;
+    result.round_robin_cursor = round_robin_cursor_;
+    result.performance_counters = performance_counters_;
+    return result;
+}
+
 void Sh4Dmac::reset_performance_counters() noexcept {
     performance_counters_ = {};
 }
@@ -379,7 +407,8 @@ void Sh4Dmac::schedule(const std::size_t index) {
     const auto unit_delay = checked_delay(timing_.guest_cycles_per_byte, size);
     event_ = scheduler_.schedule_after(
         checked_delay(unit_delay, scheduled_units_),
-        [this, index](const auto, const auto) { handle_transfer(index); });
+        [this, index](const auto, const auto) { handle_transfer(index); },
+        SchedulerEventKind::Sh4Dmac);
 }
 
 std::size_t Sh4Dmac::batch_units(const std::size_t index, const std::size_t size) const noexcept {

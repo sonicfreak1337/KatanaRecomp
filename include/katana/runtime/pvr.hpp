@@ -118,6 +118,9 @@ struct PvrTiming {
 };
 
 struct PvrRegisterSnapshot {
+    // Exact guest-visible register aperture. Dynamic read-only registers are materialized at the
+    // snapshot cycle, while ordinary, fog-table and palette entries retain their stored values.
+    std::array<std::uint32_t, pvr_register_size / 4u> registers{};
     std::uint32_t framebuffer_read_control = 0u;
     std::uint32_t framebuffer_read_size = 0u;
     std::uint32_t framebuffer_read_sof1 = 0u;
@@ -131,6 +134,14 @@ struct PvrRegisterSnapshot {
     std::uint64_t vblank_in = 0u;
     std::uint64_t vblank_out = 0u;
     std::uint64_t hblank = 0u;
+    std::uint64_t resets = 0u;
+    std::vector<SchedulerEventId> render_event_ids;
+    std::optional<SchedulerEventId> vblank_in_event;
+    std::optional<SchedulerEventId> vblank_out_event;
+    std::optional<SchedulerEventId> hblank_event;
+    std::uint64_t scan_frame_cycles = 0u;
+    std::uint64_t scan_epoch_cycle = 0u;
+    PvrTiming timing{};
     bool in_vblank = false;
     std::uint32_t field = 0u;
 };
@@ -155,7 +166,7 @@ class PvrRegisterFile final {
     [[nodiscard]] std::uint64_t hblank_count() const noexcept;
     [[nodiscard]] bool in_vblank() const noexcept;
     [[nodiscard]] std::uint32_t field() const noexcept;
-    [[nodiscard]] PvrRegisterSnapshot snapshot() const noexcept;
+    [[nodiscard]] PvrRegisterSnapshot snapshot() const;
     void set_render_observer(std::function<void()> observer);
     void set_vblank_observer(std::function<void(bool)> observer);
     void set_hblank_observer(std::function<void()> observer);
@@ -353,6 +364,16 @@ struct PvrTaFrame {
     std::vector<PvrModifierVolume> modifier_volumes;
 };
 
+struct TileAcceleratorSnapshot {
+    std::vector<PvrPrimitive> primitives;
+    std::vector<PvrVertex> current_strip;
+    PvrListType current_list = PvrListType::Opaque;
+    PvrMaterial current_material;
+    std::uint8_t highest_list_rank = 0u;
+    bool frame_has_list = false;
+    bool list_open = false;
+};
+
 class TileAccelerator final {
   public:
     void begin_list(PvrListType type);
@@ -361,6 +382,7 @@ class TileAccelerator final {
     void end_list();
     [[nodiscard]] PvrTaFrame finish_frame();
     [[nodiscard]] bool list_open() const noexcept;
+    [[nodiscard]] TileAcceleratorSnapshot snapshot() const;
 
   private:
     [[nodiscard]] static std::uint8_t list_rank(PvrListType type) noexcept;
@@ -382,12 +404,40 @@ struct PvrTaMetrics {
     std::uint64_t continuations = 0u;
 };
 
+struct PvrTaFifoSnapshot {
+    TileAcceleratorSnapshot accelerator;
+    PvrListType active_list = PvrListType::Opaque;
+    bool active_textured = false;
+    bool active_uv16 = false;
+    std::uint8_t active_color_type = 0u;
+    bool active_sprite = false;
+    bool active_two_volume = false;
+    std::uint32_t active_header_argb = 0u;
+    std::uint32_t active_header_oargb = 0u;
+    std::uint32_t active_volume_header_argb = 0u;
+    bool intensity_face_color_valid = false;
+    PvrMaterial active_material;
+    std::uint16_t user_clip_start_x = 0u;
+    std::uint16_t user_clip_start_y = 0u;
+    std::uint16_t user_clip_end_x = 0u;
+    std::uint16_t user_clip_end_y = 0u;
+    std::optional<std::array<std::uint8_t, 32u>> pending_sprite_vertex;
+    std::optional<PvrVertex> pending_extended_vertex;
+    bool pending_intensity_header = false;
+    bool pending_extended_end_of_strip = false;
+    std::vector<PvrModifierVolume> modifier_volumes;
+    std::optional<std::size_t> active_modifier_volume;
+    std::optional<std::array<std::uint8_t, 32u>> pending_modifier_vertex_packet;
+    PvrTaMetrics metrics{};
+};
+
 class PvrTaFifo final {
   public:
     explicit PvrTaFifo(std::function<void(PvrListType)> list_observer = {});
     void submit(std::span<const std::uint8_t> packet);
     [[nodiscard]] PvrTaFrame finish_frame();
     [[nodiscard]] const PvrTaMetrics& metrics() const noexcept;
+    [[nodiscard]] PvrTaFifoSnapshot snapshot() const;
     void continue_list();
     void reset() noexcept;
 
@@ -427,6 +477,15 @@ class PvrTaFifoMemoryDevice final : public MemoryDevice {
     [[nodiscard]] std::size_t size() const noexcept override;
     [[nodiscard]] std::uint8_t read_u8(std::uint32_t offset) const override;
     void write_u8(std::uint32_t offset, std::uint8_t value) override;
+    struct Snapshot {
+        std::array<std::uint8_t, 32u> packet{};
+        std::uint32_t packet_base = 0u;
+        std::uint32_t written_mask = 0u;
+        bool packet_active = false;
+
+        [[nodiscard]] bool operator==(const Snapshot&) const = default;
+    };
+    [[nodiscard]] Snapshot snapshot() const noexcept;
 
   private:
     std::shared_ptr<PvrTaFifo> fifo_;
@@ -448,6 +507,15 @@ class PvrYuvConverterMemoryDevice final : public MemoryDevice {
     void write_u8(std::uint32_t offset, std::uint8_t value) override;
     void set_guest_memory_access_memory(Memory* memory) noexcept;
     [[nodiscard]] std::uint64_t converted_macroblocks() const noexcept;
+    struct Snapshot {
+        std::vector<std::uint8_t> input;
+        std::uint32_t configuration = 0u;
+        std::uint32_t destination = 0u;
+        std::uint32_t frame_macroblock = 0u;
+        std::uint64_t converted_macroblocks = 0u;
+        bool guest_memory_access_bound = false;
+    };
+    [[nodiscard]] Snapshot snapshot() const;
 
   private:
     void refresh_configuration();
@@ -525,6 +593,24 @@ struct PvrRenderFirstError {
     std::string detail;
 };
 
+struct PvrSoftwareRendererSnapshot {
+    PvrSoftwareRenderMetrics metrics{};
+    std::uint64_t next_render_generation = 0u;
+    std::uint64_t last_render_generation = 0u;
+    std::deque<PvrRenderGenerationEvidence> pending_render_evidence;
+    std::size_t pending_render_evidence_bytes = 0u;
+    std::uint64_t next_evidence_scan_generation = 0u;
+    std::uint64_t next_direct_write_generation = 0u;
+    std::uint64_t pending_direct_write_generation = 0u;
+    std::vector<std::uint64_t> direct_dirty_words;
+    std::size_t direct_dirty_byte_count = 0u;
+    std::vector<std::uint8_t> direct_vram_shadow;
+    bool guest_memory_access_bound = false;
+    bool direct_vram_shadow_valid = false;
+    std::optional<PvrGuestFrameProof> queued_guest_frame_proof;
+    std::optional<PvrRenderFirstError> first_error;
+};
+
 [[nodiscard]] const char* pvr_render_error_name(PvrRenderError error) noexcept;
 
 class PvrSoftwareRenderer final {
@@ -550,6 +636,7 @@ class PvrSoftwareRenderer final {
     [[nodiscard]] std::size_t pending_render_evidence_bytes() const noexcept;
     void record_error(PvrRenderError error, std::uint64_t render_request, std::string detail);
     [[nodiscard]] const std::optional<PvrRenderFirstError>& first_error() const noexcept;
+    [[nodiscard]] PvrSoftwareRendererSnapshot snapshot() const;
 
   private:
     PvrSoftwareRenderMetrics metrics_;

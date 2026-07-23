@@ -64,6 +64,15 @@ int main() {
                 memory.read_u32(sh4_instruction_cache_data_array + 0x24u) == 0x11223344u &&
                 memory.read_u32(sh4_operand_cache_data_array + 0x44u) == 0x55667788u,
             "SH-4-IC-/OC-Adress- oder Datenarrays maskieren Longwords falsch.");
+    const auto cache_snapshot = cache->snapshot();
+    require(cache_snapshot.value ==
+                    (Sh4CacheControl::operand_ram_enable |
+                     Sh4CacheControl::operand_index_mode) &&
+                cache_snapshot.instruction_addresses[1u] == 0x1FFFFC01u &&
+                cache_snapshot.operand_addresses[2u] == 0x0BCDE803u &&
+                cache_snapshot.instruction_data[0x24u] == 0x44u &&
+                cache_snapshot.operand_data[0x44u] == 0x88u,
+            "Cache-Snapshot verliert gastlesbare Tag-/Datenarrays oder CCR.");
     memory.write_u32(sh4_operand_cache_address_array + 0x48u, 0x0BCDE800u);
     require(memory.read_u32(sh4_operand_cache_address_array + 0x40u) == 0x0BCDE800u,
             "Assoziativer OC-Adressarraywrite aktualisiert U/V bei passendem Tag nicht.");

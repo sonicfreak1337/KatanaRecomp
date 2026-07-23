@@ -686,6 +686,18 @@ void Memory::clear_last_mmio_access() const noexcept {
     last_mmio_access_.reset();
 }
 
+void Memory::set_mmio_trace_handler(MemoryAccessObserver observer) {
+    mmio_trace_handler_ = std::move(observer);
+}
+
+void Memory::clear_mmio_trace_handler() noexcept {
+    mmio_trace_handler_ = {};
+}
+
+bool Memory::has_mmio_trace_handler() const noexcept {
+    return static_cast<bool>(mmio_trace_handler_);
+}
+
 void Memory::set_guest_write_observer(GuestWriteObserver observer) {
     guest_write_observer_ = std::move(observer);
 }
@@ -1383,9 +1395,17 @@ void Memory::record_mmio_access(const MappedRegion& mapped,
                                 const std::uint32_t address,
                                 const MemoryAccessWidth width,
                                 const std::uint32_t value) const noexcept {
-    if (!mmio_access_tracking_enabled_ || !mapped.mmio) return;
-    last_mmio_access_ =
-        LastMmioAccessRecord{operation, address, width, value, mapped.info.base_address};
+    if (!mapped.mmio) return;
+    if (mmio_access_tracking_enabled_) {
+        last_mmio_access_ =
+            LastMmioAccessRecord{operation, address, width, value, mapped.info.base_address};
+    }
+    if (mmio_trace_handler_) {
+        try {
+            mmio_trace_handler_({operation, address, width, value, mapped.info.name});
+        } catch (...) {
+        }
+    }
 }
 
 void Memory::notify_guest_write(const GuestWriteEvent& event) const {

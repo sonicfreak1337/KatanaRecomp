@@ -388,10 +388,10 @@ v0.48 P0 - vom belegten IP.BIN-Frame bis BootExecutable und Spielboot fortsetzen
 ```
 
 Abgeschlossen und in Roadmap/Taskliste markiert sind `KR-4831`, `KR-4841`,
-`KR-4843`, `KR-4844`, `KR-4845`, `KR-4846`, `KR-4915` und `KR-4850`. Der
-aktuelle Runtimevertrag steht auf Runtime-ABI 42, Block-ABI 3,
+`KR-4842`, `KR-4843`, `KR-4844`, `KR-4845`, `KR-4846`, `KR-4915` und
+`KR-4850`. Der aktuelle Runtimevertrag steht auf Runtime-ABI 43, Block-ABI 3,
 Backend-Interface-ABI 3, PlatformServices-ABI 10, BIOS-ABI 9,
-Portprojektvertrag 26 und Host-Video-Vertrag 2.
+Portprojektvertrag 27 und Host-Video-Vertrag 2.
 Das verbindliche
 XenonRecomp-artige Produktmodell rekompiliert `IP.BIN` und BootExecutable
 statisch aus SH-4 in nativen PC-Code. Dreamcast-Komponenten bleiben typisierte,
@@ -552,18 +552,24 @@ kanonisiert; Delay-Slot-Doppelkontexte, wurzellose SCCs und ein
 4.096-Block-Graph besitzen Regressionen.
 
 Der aktuelle private CLI-Disc-Audit ist unter Schema 4 und
-`native_disc_aot_boot_graph` im normalen Modus gruen. Er
-berichtet 142.380 Instruktionen, 1.542 Funktionen, null unbekannte
-Instruktionen, null bekannte Luecken, zwei partielle Adressen, 1.095 Loops und
-492 `unresolved_poll_guard_loops`. `--strict` bleibt damit
-erwartungsgemaess rot. Der konsolidierte fokussierte Zwischenblock besteht
-22/22 in 1,57 Sekunden; der Port-CLI-Nachweis besteht 1/1 in 151,12 Sekunden.
-Dynamische Wertwechselfolgen und echte Runtime-Writer-Provenienz liegen damit
-vor. Es lief keine Vollsuite und kein `KR-4852`. Ausschliesslich der
-vollstaendige Diagnose=0/1-A/B-Produktlauf bleibt der offene Rest von
-`KR-4842`; die Checkbox darf vorher nicht gesetzt werden.
+`native_disc_aot_boot_graph` im normalen Modus gruen. Er berichtet 142.380
+Instruktionen, 1.542 Funktionen, null unbekannte Instruktionen, null bekannte
+Luecken, zwei partielle Adressen, 1.095 Loops und 492
+`unresolved_poll_guard_loops`. `--strict` bleibt damit erwartungsgemaess rot.
+Der vorangegangene fokussierte Zwischenblock bestand 22/22 in 1,57 Sekunden;
+der Port-CLI-Nachweis bestand 1/1 in 151,12 Sekunden.
 
-Systemreplay-Schema 2 besitzt eine feste, konfigurierbare Kapazitaet von
+Runtime-ABI 43 und Portprojektvertrag 27 binden
+`katana.runtime-probe` Version 1 mit Device-Schema 1, 35 produktiven
+Geraeteinstanzen, 867 kanonischen Feldern und `fnv1a64-le-v1`. Der private
+Diagnose=0/1-A/B-Runner bestand zwei Laeufe mit 100.000 Gastzyklen und 120
+Sekunden Hosttimeout. Die normativen Felder waren gleich, Executable und
+Disc-Pack blieben unveraendert, Systemreplay v3 war vollstaendig und
+versiegelt, und beide Laeufe erzeugten null Wait-Loop-Tracezeilen. Damit ist
+`KR-4842` abgeschlossen und `KR-4911` freigegeben, bleibt aber selbst offen.
+Es lief keine Vollsuite und kein `KR-4852`.
+
+Systemreplay-Schema 3 besitzt eine feste, konfigurierbare Kapazitaet von
 standardmaessig 4.096 und hoechstens 65.536 Ereignissen; portable
 Ereigniscodes sind auf 64 Zeichen begrenzt. Ein gesaettigter Recordversuch
 zaehlt exakt einen Drop. Jeder Drop verbietet Versiegelung und Replay, waehrend
@@ -637,15 +643,15 @@ Budget-Exit ist erwartet.
 Weiter offen:
 
 ```text
-KR-4842: vollstaendiger Diagnose=0/1-A/B-Produktlauf
 KR-4847: EX-38/39-Vertrag und laufende G1-Timeout-/Overrun-Grenzen schliessen
 KR-4848: strukturierte Disc-Ladetransaktionen und Registry latenter nativer Module
 KR-4849: Direct-Texture-Zielprogression und restliche TA/PVR-Eingangskette
 KR-4911: Produktwiring, Stopptaxonomie, Checkpoint und Fehler-Envelope
 ```
 
-Die verbindliche Abhaengigkeitsfolge lautet fuer die offenen Bootpfade
-`KR-4842 -> KR-4911 -> KR-4912 -> KR-4848`; `KR-4849` schliesst den
+`KR-4842` ist als Vorbedingung erfuellt. Die verbindliche
+Abhaengigkeitsfolge fuer die offenen Bootpfade lautet
+`KR-4911 -> KR-4912 -> KR-4848`; `KR-4849` schliesst den
 produktiven TA/PVR-Vertrag. `KR-4915` und `KR-4850` sind durch den legitimen
 vorgezogenen Direct-Framebuffer-Pfad bereits erfuellt. `KR-4814` und
 `KR-4914` folgen als verbindliche Post-Frame-Arbeit in v0.48 auf `KR-4850`

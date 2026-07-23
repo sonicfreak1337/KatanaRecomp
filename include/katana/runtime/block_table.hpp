@@ -77,6 +77,46 @@ struct RuntimeBlockDispatchStatus {
 struct RuntimeBlockLookupCounters {
     std::uint64_t direct_probes = 0u;
     std::uint64_t reference_probes = 0u;
+
+    [[nodiscard]] bool operator==(const RuntimeBlockLookupCounters&) const = default;
+};
+
+struct RuntimeBlockRecordSnapshot {
+    RuntimeBlockHandle handle;
+    std::uint32_t virtual_start = 0u;
+    std::uint32_t physical_origin = 0u;
+    std::uint32_t size = 0u;
+    BlockEndKind end_kind = BlockEndKind::Fallthrough;
+    BlockVariantKey variant;
+    std::string identity;
+    std::string provenance;
+    bool runtime_registered = false;
+    bool active = false;
+    bool static_block = false;
+    std::optional<RuntimeAotTemplateContract> aot_template;
+
+    [[nodiscard]] bool operator==(const RuntimeBlockRecordSnapshot&) const = default;
+};
+
+struct RuntimeBlockRejectionSnapshot {
+    std::uint32_t virtual_address = 0u;
+    BlockVariantKey variant;
+    std::uint64_t generation = 0u;
+
+    [[nodiscard]] bool operator==(const RuntimeBlockRejectionSnapshot&) const = default;
+};
+
+struct RuntimeBlockTableSnapshot {
+    std::vector<RuntimeBlockRecordSnapshot> records;
+    std::vector<RuntimeBlockRejectionSnapshot> rejected;
+    std::uint64_t next_id = 1u;
+    std::size_t active_count = 0u;
+    bool static_sealed = false;
+    bool code_tracker_bound = false;
+    RuntimeBlockLookupMode lookup_mode = RuntimeBlockLookupMode::Direct;
+    RuntimeBlockLookupCounters lookup_counters;
+
+    [[nodiscard]] bool operator==(const RuntimeBlockTableSnapshot&) const = default;
 };
 
 [[nodiscard]] std::uint32_t canonical_physical_address(std::uint32_t address) noexcept;
@@ -114,6 +154,7 @@ class RuntimeBlockTable {
     [[nodiscard]] RuntimeBlockLookupMode lookup_mode() const noexcept;
     void set_lookup_mode(RuntimeBlockLookupMode mode) noexcept;
     [[nodiscard]] const RuntimeBlockLookupCounters& lookup_counters() const noexcept;
+    [[nodiscard]] RuntimeBlockTableSnapshot snapshot() const;
     void reset_lookup_counters() const noexcept;
     [[nodiscard]] bool erase_identity(const std::string& block_identity) noexcept;
     [[nodiscard]] std::size_t erase_overlapping_physical(std::uint32_t physical_address,

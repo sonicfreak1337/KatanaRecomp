@@ -31,8 +31,23 @@ int main() {
     tmu.write_counter(0u, 1u);
     tmu.write_control(0u, Sh4Tmu::underflow_interrupt_enable);
     tmu.write_start(1u);
+    const auto initial_tmu_snapshot = tmu.snapshot();
+    require(initial_tmu_snapshot.channels[0u].running &&
+                initial_tmu_snapshot.channels[0u].stored_counter == 1u &&
+                initial_tmu_snapshot.channels[0u].effective_counter == 1u &&
+                initial_tmu_snapshot.channels[0u].anchor_cycle == 0u &&
+                initial_tmu_snapshot.channels[0u].event.has_value() &&
+                initial_tmu_snapshot.channels[0u].event_deadline == 8u,
+            "TMU-Snapshot verliert laufenden Zaehler, Anker oder Ereignisfrist.");
     const auto before = scheduler.advance_to(7u, 1u);
-    require(before.processed_events == 0u && tmu.counter(0u) == 0u,
+    const auto scheduler_before_running_snapshot = scheduler.snapshot();
+    const auto running_tmu_snapshot = tmu.snapshot();
+    require(before.processed_events == 0u &&
+                running_tmu_snapshot.channels[0u].stored_counter == 1u &&
+                running_tmu_snapshot.channels[0u].effective_counter == 0u &&
+                running_tmu_snapshot.channels[0u].event_deadline == 8u &&
+                scheduler.snapshot() == scheduler_before_running_snapshot &&
+                tmu.counter(0u) == 0u,
             "TMU zaehlt Pck/4 nicht deterministisch herunter.");
     const auto underflow = scheduler.advance_to(8u, 1u);
     require(underflow.processed_events == 1u && tmu.counter(0u) == 1u &&
@@ -50,7 +65,14 @@ int main() {
     tmu.write_start(0u);
     const auto stopped_counter = tmu.counter(0u);
     static_cast<void>(scheduler.advance_to(100u, 0u));
-    require(tmu.counter(0u) == stopped_counter, "Gestoppter TMU-Kanal zaehlt weiter.");
+    const auto stopped_tmu_snapshot = tmu.snapshot();
+    require(tmu.counter(0u) == stopped_counter &&
+                !stopped_tmu_snapshot.channels[0u].running &&
+                stopped_tmu_snapshot.channels[0u].stored_counter == stopped_counter &&
+                stopped_tmu_snapshot.channels[0u].effective_counter == stopped_counter &&
+                !stopped_tmu_snapshot.channels[0u].event.has_value() &&
+                !stopped_tmu_snapshot.channels[0u].event_deadline.has_value(),
+            "Gestoppter TMU-Kanal zaehlt weiter oder verliert seinen Snapshotzustand.");
 
     tmu.write_counter(1u, 0u);
     tmu.write_control(1u, 6u);

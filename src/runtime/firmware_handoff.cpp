@@ -127,6 +127,15 @@ std::size_t FirmwareHandoffMap::canonical_origin_count() const noexcept {
     return origins.size();
 }
 
+FirmwareHandoffSnapshot FirmwareHandoffMap::snapshot() const {
+    return {
+        mappings_,
+        copies_,
+        symbols_,
+        canonical_origin_count(),
+    };
+}
+
 const char* firmware_segment_kind_name(const FirmwareSegmentKind value) noexcept {
     switch (value) {
     case FirmwareSegmentKind::Rom:

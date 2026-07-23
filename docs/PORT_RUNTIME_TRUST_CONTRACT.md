@@ -2,7 +2,7 @@
 
 Der mit KR-4508 eingefuehrte Portprojektvertrag Version 3 trennt
 Analyseerfolg, Eingabeidentitaet und tatsaechliche Gastausfuehrung. Der
-aktuelle kumulative Stand verwendet Portprojektvertrag 26, Runtime-ABI 42,
+aktuelle kumulative Stand verwendet Portprojektvertrag 27, Runtime-ABI 43,
 PlatformServices-ABI 10, Block-ABI 3 und Backend-Interface-ABI 3. Keine der
 Vertrauensaussagen wird aus der blossen Erzeugung oder dem Start eines
 Hostprozesses abgeleitet.
@@ -73,8 +73,7 @@ owning String. PVR- und Systembusfortschritt wird ueber strukturierte
 `snapshot()`-Schnittstellen gelesen. Sie pumpen keine Completion, starten oder
 beenden keinen Channel-2-Transfer und bewegen weder Scheduler noch
 Interruptbeobachter. Diagnose an oder aus darf damit keine andere
-Gastentscheidung erzeugen; der vollstaendige Produkt-A/B-Nachweis bleibt bis
-zum Abschluss von `KR-4842` offen.
+Gastentscheidung erzeugen.
 
 Runtime-ABI 42 stellt zusaetzlich einen POD-Zugriffssink fuer den bereits
 ausgefuehrten Gastzugriff bereit. AOT und begrenzter Diagnoseinterpreter
@@ -124,8 +123,31 @@ ungueltige skalare Range-Werte als `scalar_value_valid:false` mit
 RAII-Besitzer entfernt den Sink vor der terminalen
 JSON-Ausgabe; ohne Trace-Opt-in bleibt der Fastpath ohne Recorder oder
 Projektion.
-Die einzige noch offene `KR-4842`-Akzeptanz ist der vollstaendige
-Diagnose=0/1-A/B-Produktlauf.
+Runtime-ABI 43 und Portprojektvertrag 27 binden zusaetzlich
+`katana.runtime-probe` Version 1 mit Profil `deterministic-v1`,
+Device-Schema 1 und Hashvertrag `fnv1a64-le-v1`. Das Profil erfasst CPU,
+Scheduler, Replay, den vollstaendigen linearen Gast- und Persistenzspeicher
+sowie exakt 35 produktive Geraeteinstanzen mit 867 kanonischen Feldern.
+Grosse Bytebereiche werden laengengebunden und domain-separiert gehasht; rohe
+Werte, Hashes und private Pfade gehoeren nicht in den aggregierten Bericht.
+Die begrenzte Store-Queue-Transferfolge und ihr Dropzaehler werden in
+kanonischer Reihenfolge einbezogen.
+
+Der private A/B-Runner erzeugt zwei frische Runtimewurzeln, verwendet dieselbe
+EXE und denselben lokal installierten Disc-Pack und setzt ausschliesslich
+`KATANA_RUNTIME_PROBE=deterministic-v1`, ein positives Gastzyklusbudget sowie
+`KATANA_PORT_DIAGNOSTICS=0` beziehungsweise `1`. Andere Diagnose- und
+Tracevariablen sind verboten. Beide Prozesse laufen in einem begrenzten
+Kill-on-close-Job; der Vergleich akzeptiert genau eine terminale
+`KATANA_RUNTIME_PROBE`-Zeile je Lauf.
+
+Der Abschlussnachweis vom 23.07.2026 lief zweimal bis exakt 100.000
+Gastzyklen und endete jeweils `complete`/`budget-reached`. Systemreplay v3 war
+vollstaendig angebunden und versiegelt, ohne Drops. Alle normativen Felder
+waren identisch, EXE und Disc-Pack unveraendert und beide
+Wait-Loop-Rohtracezaehler null. Der aggregierte Bericht
+`katana-private-runtime-probe-ab` Version 1 meldete `status=success`; damit ist
+`KR-4842` abgeschlossen.
 
 ## Konsistenzgrenzen
 
@@ -146,6 +168,7 @@ Alle Fixtures sind synthetisch; Spielinhalte und private Adressen sind nicht
 Bestandteil des Repository. Das Zwischengate ist kein Abschluss von `KR-4852`,
 `KR-4853` oder `KR-4854`.
 
-Die fokussierten Regressionen des nachfolgenden KR-4842-Zwischenblocks
-bestehen 22/22 in 1,57 Sekunden; der Port-CLI-Nachweis besteht 1/1 in
-151,12 Sekunden. Es wurde keine neue Vollsuite und kein `KR-4852` ausgefuehrt.
+Der abschliessende KR-4842-Nachweis umfasst 6/6 fokussierte Tests in
+6,40 Sekunden, den generierten Port-CLI-Pfad 1/1 in 156,11 Sekunden und den
+erfolgreichen privaten A/B-Produktlauf. Es wurde keine neue Vollsuite und kein
+`KR-4852` ausgefuehrt.

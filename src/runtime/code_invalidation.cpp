@@ -259,6 +259,25 @@ ExecutableCodeTracker::performance_counters() const noexcept {
     return performance_counters_;
 }
 
+ExecutableCodeTrackerSnapshot ExecutableCodeTracker::snapshot() const {
+    ExecutableCodeTrackerSnapshot result;
+    result.blocks = blocks_;
+    result.page_generations.reserve(generations_.size());
+    for (const auto& [page, generation] : generations_)
+        result.page_generations.push_back({page, generation});
+    result.hotspots.reserve(hotspots_.size());
+    for (const auto& [page, count] : hotspots_)
+        result.hotspots.push_back({page, count});
+    result.invalidation_count = invalidation_count_;
+    result.invalidation_events = invalidation_events_;
+    result.provenance_capacity = provenance_capacity_;
+    result.next_provenance_sequence = next_provenance_sequence_;
+    result.dropped_provenance_events = dropped_provenance_events_;
+    result.lookup_mode = lookup_mode_;
+    result.performance_counters = performance_counters_;
+    return result;
+}
+
 void ExecutableCodeTracker::reset_performance_counters() noexcept {
     performance_counters_ = {};
 }

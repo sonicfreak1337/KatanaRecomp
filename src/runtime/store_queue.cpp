@@ -127,6 +127,20 @@ std::uint64_t Sh4StoreQueues::transfer_count() const noexcept {
     return transfer_count_;
 }
 
+Sh4StoreQueueSnapshot Sh4StoreQueues::snapshot() const noexcept {
+    return {
+        queues_,
+        qacr_,
+        operand_cache_ram_,
+        ocram_profile_,
+        operand_cache_ram_enabled_,
+        static_cast<bool>(sink_),
+        static_cast<bool>(address_translator_),
+        code_tracker_ != nullptr,
+        transfer_count_,
+    };
+}
+
 CacheMaintenanceResult Sh4StoreQueues::maintain(const CacheMaintenanceOperation operation,
                                                 const std::uint32_t address,
                                                 const std::uint32_t movca_value) {

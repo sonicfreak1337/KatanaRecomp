@@ -195,6 +195,15 @@ bool MapleVmuDevice::persistent_working_copy() const noexcept {
     return persistent_image_ != nullptr;
 }
 
+MapleVmuSnapshot MapleVmuDevice::snapshot() const noexcept {
+    return {
+        persistent_image_ ? persistent_image_->size() : working_.size(),
+        write_protected_,
+        working_copy_dirty(),
+        persistent_working_copy(),
+    };
+}
+
 std::size_t MapleBus::slot(const std::uint8_t port, const std::uint8_t unit) {
     if (port >= maple_port_count || unit >= maple_units_per_port) {
         throw std::out_of_range("Maple-Port oder -Unit liegt ausserhalb des Busses.");
@@ -247,6 +256,15 @@ MapleResponse MapleBus::exchange_impl(const std::uint8_t port,
 
 std::span<const MapleTransactionRecord> MapleBus::history() const noexcept {
     return history_;
+}
+
+MapleBusSnapshot MapleBus::snapshot() const {
+    MapleBusSnapshot result;
+    for (std::size_t index = 0u; index < devices_.size(); ++index)
+        result.attached[index] = devices_[index] != nullptr;
+    result.history = history_;
+    result.next_sequence = next_sequence_;
+    return result;
 }
 
 } // namespace katana::runtime

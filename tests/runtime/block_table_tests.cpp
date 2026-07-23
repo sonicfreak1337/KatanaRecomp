@@ -1,6 +1,7 @@
 #include "katana/runtime/block_table.hpp"
 #include "katana/runtime/code_invalidation.hpp"
 
+#include <algorithm>
 #include <chrono>
 #include <iostream>
 #include <stdexcept>
@@ -159,6 +160,19 @@ int main() {
                     reactivated.generation != dynamic_handle->generation &&
                     table.resolve(reactivated).has_value() && !table.resolve(*dynamic_handle),
                 "Dynamische Reaktivierung recycelt Generation oder Record-ID falsch.");
+        table.mark_rejected(0xAC00F000u, base);
+        const auto table_snapshot = table.snapshot();
+        const auto reactivated_record =
+            std::find_if(table_snapshot.records.begin(),
+                         table_snapshot.records.end(),
+                         [&](const auto& record) { return record.handle == reactivated; });
+        require(reactivated_record != table_snapshot.records.end() &&
+                    reactivated_record->active && reactivated_record->runtime_registered &&
+                    table_snapshot.next_id > reactivated.id &&
+                    table_snapshot.rejected ==
+                        std::vector<RuntimeBlockRejectionSnapshot>{
+                            {0xAC00F000u, base, 1u}},
+                "Blocktabellen-Snapshot verliert Runtimegeneration oder Rejection-FSM.");
 
         const auto retained = table.lookup(0x8C001000u, base);
         for (std::uint32_t index = 0u; index < 10'000u; ++index) {

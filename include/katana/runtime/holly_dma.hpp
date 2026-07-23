@@ -21,6 +21,8 @@ inline constexpr std::uint32_t holly_dma_register_size = 0x100u;
 
 struct HollyDmaTiming {
     std::uint64_t cycles_per_byte = 4u;
+
+    [[nodiscard]] bool operator==(const HollyDmaTiming&) const = default;
 };
 
 enum class HollyDmaFaultReason : std::uint8_t {
@@ -44,6 +46,8 @@ struct HollyDmaFault {
     std::uint32_t peripheral_address = 0u;
     std::uint32_t system_address = 0u;
     std::uint32_t remaining = 0u;
+
+    [[nodiscard]] bool operator==(const HollyDmaFault&) const = default;
 };
 
 enum class G1DmaFaultPhase : std::uint8_t {
@@ -77,6 +81,56 @@ struct HollyDmaChannelState {
     std::optional<SchedulerEventId> completion_event;
     HollyDmaFaultReason fault = HollyDmaFaultReason::None;
     std::uint64_t fault_count = 0u;
+
+    [[nodiscard]] bool operator==(const HollyDmaChannelState&) const = default;
+};
+
+struct DreamcastG2DmaSnapshot {
+    std::array<HollyDmaChannelState, 4u> channels{};
+    HollyDmaTiming timing;
+    std::uint32_t address_protect = 0u;
+    std::uint32_t ds_timeout = 0u;
+    std::uint32_t tr_timeout = 0u;
+    std::uint32_t modem_timeout = 0u;
+    std::uint32_t modem_wait = 0u;
+    std::uint64_t completed_dma_count = 0u;
+    std::optional<HollyDmaFault> last_fault;
+    SchedulerResetObserverId reset_observer = 0u;
+    bool completion_observer_bound = false;
+
+    [[nodiscard]] bool operator==(const DreamcastG2DmaSnapshot&) const = default;
+};
+
+struct DreamcastG1DmaSnapshot {
+    HollyDmaChannelState channel;
+    HollyDmaTiming timing;
+    std::uint32_t bios_handoff_live_address = 0u;
+    std::uint32_t system_mode = 0u;
+    std::uint32_t gdrom_read_access_timing = 0u;
+    std::uint32_t address_protect = 0u;
+    std::optional<HollyDmaFault> last_fault;
+    std::optional<G1DmaFault> last_g1_fault;
+    SchedulerResetObserverId reset_observer = 0u;
+    bool transfer_handler_bound = false;
+    bool completion_observer_bound = false;
+    bool range_validator_bound = false;
+    bool fault_observer_bound = false;
+
+    [[nodiscard]] bool operator==(const DreamcastG1DmaSnapshot&) const = default;
+};
+
+struct DreamcastPvrDmaSnapshot {
+    HollyDmaChannelState channel;
+    HollyDmaTiming timing;
+    std::uint32_t address_protect = 0u;
+    std::optional<HollyDmaFault> last_fault;
+    SchedulerResetObserverId reset_observer = 0u;
+    std::size_t dmac_channel = 0u;
+    bool dmac_bound = false;
+    bool dmac_contract_required = false;
+    bool completion_observer_bound = false;
+
+    [[nodiscard]] bool operator==(const DreamcastPvrDmaSnapshot&) const = default;
 };
 
 class DreamcastG2DmaController final {
@@ -94,6 +148,7 @@ class DreamcastG2DmaController final {
     [[nodiscard]] std::uint64_t completed_dma_count() const noexcept;
     [[nodiscard]] const HollyDmaChannelState& channel_state(std::size_t channel) const;
     [[nodiscard]] const std::optional<HollyDmaFault>& last_fault() const noexcept;
+    [[nodiscard]] DreamcastG2DmaSnapshot snapshot() const;
     void hardware_trigger(std::size_t channel);
     void interrupt_trigger(SystemAsicEvent event);
 
@@ -154,6 +209,7 @@ class DreamcastG1BusController final {
     void set_fault_observer(FaultObserver observer);
     [[nodiscard]] std::uint32_t gdrom_read_access_timing() const noexcept;
     [[nodiscard]] std::uint32_t address_protect() const noexcept;
+    [[nodiscard]] DreamcastG1DmaSnapshot snapshot() const noexcept;
 
   private:
     void schedule_chunk(G1DmaFaultPhase failure_phase);
@@ -209,6 +265,7 @@ class DreamcastPvrDmaController final {
     void reset() noexcept;
     [[nodiscard]] HollyDmaChannelState state() const noexcept;
     [[nodiscard]] const std::optional<HollyDmaFault>& last_fault() const noexcept;
+    [[nodiscard]] DreamcastPvrDmaSnapshot snapshot() const noexcept;
 
   private:
     void start();

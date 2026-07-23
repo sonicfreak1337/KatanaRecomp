@@ -49,6 +49,11 @@ int main() {
             "VMU veraendert ihr Quellabbild statt einer Arbeitskopie.");
 
     vmu->set_write_protected(true);
+    const auto protected_snapshot = vmu->snapshot();
+    require(protected_snapshot.size == vmu_storage_size &&
+                protected_snapshot.write_protected &&
+                !protected_snapshot.persistent_working_copy,
+            "VMU-Snapshot verliert Speicherprofil oder Schreibschutz.");
     require(throws<std::runtime_error>([&] {
                 static_cast<void>(bus.exchange(0u, 1u, {MapleCommand::BlockWrite, write_payload}));
             }),

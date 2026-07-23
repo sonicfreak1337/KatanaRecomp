@@ -480,6 +480,38 @@ const RuntimeBlockLookupCounters& RuntimeBlockTable::lookup_counters() const noe
     return lookup_counters_;
 }
 
+RuntimeBlockTableSnapshot RuntimeBlockTable::snapshot() const {
+    RuntimeBlockTableSnapshot result;
+    result.records.reserve(records_.size());
+    for (const auto& [id, record] : records_) {
+        result.records.push_back({
+            {id, record.generation},
+            record.block.virtual_start,
+            record.block.physical_origin,
+            record.block.size,
+            record.block.end_kind,
+            record.block.variant,
+            record.identity,
+            record.block.provenance,
+            record.block.runtime_registered,
+            record.active,
+            record.static_block,
+            record.block.aot_template,
+        });
+    }
+    result.rejected.reserve(rejected_generations_.size());
+    for (const auto& [key, generation] : rejected_generations_) {
+        result.rejected.push_back({key.address, key.variant, generation});
+    }
+    result.next_id = next_id_;
+    result.active_count = active_count_;
+    result.static_sealed = static_sealed_;
+    result.code_tracker_bound = code_tracker_ != nullptr;
+    result.lookup_mode = lookup_mode_;
+    result.lookup_counters = lookup_counters_;
+    return result;
+}
+
 void RuntimeBlockTable::reset_lookup_counters() const noexcept {
     lookup_counters_ = {};
 }

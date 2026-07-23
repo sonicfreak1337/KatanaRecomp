@@ -59,11 +59,11 @@ vorbereitet; der live geladene Dispatch bleibt `RuntimeOnly` und erzeugt keine
 feste CFG-Kante. Snapshotcache und P2-Aliasaufloesung sind gegen imagefremde
 Beweise abgesichert. Lokale AOT-Blockketten tragen die exakte tatsaechliche
 Terminatorquelle und Siteklasse bis zum externen Dispatch weiter. Der aktuelle
-kumulative Stand verwendet Runtime-ABI 42, Block-ABI 3,
-Backend-Interface-ABI 3, PlatformServices-ABI 10, Portprojektvertrag 26 und
+kumulative Stand verwendet Runtime-ABI 43, Block-ABI 3,
+Backend-Interface-ABI 3, PlatformServices-ABI 10, Portprojektvertrag 27 und
 Host-Video-Vertrag 2.
 
-Systemreplay v2 haelt standardmaessig 4.096 und maximal 65.536 Ereignisse;
+Systemreplay v3 haelt standardmaessig 4.096 und maximal 65.536 Ereignisse;
 portable Ereigniscodes sind auf 64 Zeichen begrenzt. Ein von `try_record()` an
 einem unversiegelten Log abgewiesener Best-effort-Aufnahmeversuch zaehlt genau
 einen Drop; versiegelte Logs bleiben unveraendert. Eine unvollstaendige Spur
@@ -72,6 +72,9 @@ Adressen, Werte, numerische Payloads sowie Ereignis- und Endzustandshash exakt
 erhalten. Das JSON redigiert standardmaessig `code`, `address`, `value`,
 `detail`, `auxiliary`, `event_hash` und `final_guest_state_hash`; exakte
 Ausgabe erfordert ein ausdrueckliches lokales Opt-in.
+Das Profil `deterministic-v1` verlangt vor dem ersten Ereignis alle acht
+CPU-, Scheduler-, Interrupt-, Video-, Audio-, Eingabe-, MMIO- und DMA-Hooks.
+Aktivierte und tatsaechlich beobachtete Coverage bleiben getrennt sichtbar.
 
 Der allgemeine Disc-Hardwareauditor schreibt
 `katana.hardware-audit.v4`, erkennt natuerliche Loops ueber skalierbare
@@ -145,14 +148,23 @@ Trace-Opt-in bleibt der Fastpath ohne
 Recorderallokation oder Projektion. PlatformServices-ABI 10 reicht die
 `PREF`-Instruktionsherkunft bis zur Store Queue weiter.
 
+Runtime-ABI 43 und Portprojektvertrag 27 binden
+`katana.runtime-probe` Version 1 mit Profil `deterministic-v1`,
+Device-Schema 1 und Hashvertrag `fnv1a64-le-v1`. CPU, Scheduler, Haupt-RAM,
+VRAM, AICA-RAM, Flash, VMU, Replay und exakt 35 produktive Geraeteinstanzen
+mit 867 kanonischen Feldern gehen in domain-separierte Hashes ein.
+
 Die generischen Interpreter-Registervarianten von `PREF`, `OCBI`, `OCBP`,
 `OCBWB` und `TAS.B` sind geschlossen; doppelte `FMOV`-Speicherzugriffe folgen
-low nach high. Der konsolidierte fokussierte Nachweis besteht 22/22 in
-1,57 Sekunden, der Port-CLI-Nachweis 1/1 in 151,12 Sekunden. Das war weder eine
-Vollsuite noch `KR-4852`. `KR-4842` bleibt jetzt ausschliesslich fuer den
-vollstaendigen Diagnose=0/1-A/B-Produktlauf offen. `KR-4911` bleibt unabhaengig
-davon bis zu seinem vollstaendigen Runtimebeobachtungs- und
-Fehlerpaketvertrag offen.
+low nach high. Der vorangegangene fokussierte Zwischenblock bestand 22/22 in
+1,57 Sekunden, der Port-CLI-Nachweis 1/1 in 151,12 Sekunden. Der
+abschliessende private A/B-Runner bestand zwei Laeufe mit 100.000
+Gastzyklen und 120 Sekunden Hosttimeout. Diagnose aus/an lieferte gleiche
+normative Felder, unveraendertes Executable und Disc-Pack, vollstaendiges und
+versiegeltes Systemreplay v3 sowie null/null Wait-Loop-Tracezeilen. Damit ist
+`KR-4842` abgeschlossen und `KR-4911` freigegeben. `KR-4911` bleibt bis zu
+seinem vollstaendigen Runtimebeobachtungs- und Fehlerpaketvertrag offen. Eine
+Vollsuite und `KR-4852` wurden nicht ausgefuehrt.
 
 Der vorangegangene optimierte ABI-38-PAL-Port wurde mit zwoelf Jobs in
 140,9 Sekunden
@@ -414,10 +426,15 @@ KatanaRecomp-App-Icon. Hauptinhalt und Live-Log lassen sich getrennt scrollen;
 Layout, Mindestgroesse und Controls skalieren per Monitor von 100 bis 300
 Prozent DPI. Das Icon bleibt bis zum KR-4902-Audit ein internes Asset.
 
-Private, budgetierte Retail-Debuglaeufe verwenden den strikt externen Harness
-aus [docs/PRIVATE_RETAIL_DEBUG.md](docs/PRIVATE_RETAIL_DEBUG.md). Er committed
-weder GDI noch generierte Quellen, Binaries, Rohlogs, Pfade, Hashes oder
-Captures und ersetzt keinen synthetischen Regressionstest oder Alpha-Nachweis.
+Der historische v0.47-Build-only-Nachweis verwendet den strikt externen
+No-run-Harness aus
+[docs/PRIVATE_RETAIL_DEBUG.md](docs/PRIVATE_RETAIL_DEBUG.md). Der
+deterministische v0.48-Produktvergleich verwendet getrennt davon
+`tools/phase11/run-private-runtime-probe.ps1` und den Vertrag aus
+[docs/PORT_RUNTIME_TRUST_CONTRACT.md](docs/PORT_RUNTIME_TRUST_CONTRACT.md).
+Beide halten GDI, generierte Retailquellen, Binaries, Rohlogs, Pfade und Hashes
+aus dem Repository und ersetzen keinen synthetischen Regressionstest oder
+Alpha-Nachweis.
 
 Der Port-Export liest private Disc-Dateien nur lokal, schreibt ausschliesslich
 verwaltete Dateien unter `generated/` neu und erhaelt handgeschriebenen Code
@@ -515,6 +532,8 @@ docs/             Vertraege, Status, Tasks und Releaseberichte
 - [docs/STATUS.md](docs/STATUS.md) - kompakter aktueller Projektstand
 - [CHANGELOG.md](CHANGELOG.md) - Versionshistorie
 - [docs/CODEX_HANDOFF.md](docs/CODEX_HANDOFF.md) - Arbeitsregeln
+- [docs/PORT_RUNTIME_TRUST_CONTRACT.md](docs/PORT_RUNTIME_TRUST_CONTRACT.md) - Produktprobe und Runtimevertrauen
+- [docs/SYSTEM_REPLAY.md](docs/SYSTEM_REPLAY.md) - deterministischer Replayvertrag
 - [docs/SONIC_ADVENTURE_ACCEPTANCE.md](docs/SONIC_ADVENTURE_ACCEPTANCE.md) - private Retail-Testbench
 - [docs/SH4_ALPHA_ISA.md](docs/SH4_ALPHA_ISA.md) - messbarer Alpha-ISA-Vertrag
 - [docs/REFERENCE_PROVENANCE.md](docs/REFERENCE_PROVENANCE.md) - Referenz- und Lizenzprovenienz

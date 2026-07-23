@@ -35,6 +35,27 @@ enum class PlatformInterruptSource : std::uint32_t {
     ScifTransmit = 0x00000760u,
 };
 
+struct PlatformInterruptRouterSnapshot {
+    std::array<std::uint8_t, 3u> tmu_levels{};
+    std::uint8_t rtc_level = 0u;
+    std::uint8_t dma_level = 0u;
+    std::uint8_t scif_level = 0u;
+    std::array<bool, 4u> scif_pending{};
+    std::array<bool, 3u> external_pending{};
+
+    [[nodiscard]] bool operator==(const PlatformInterruptRouterSnapshot&) const = default;
+};
+
+struct Sh4InterruptRegistersSnapshot {
+    std::uint16_t interrupt_control = 0u;
+    std::uint16_t priority_a = 0u;
+    std::uint16_t priority_b = 0u;
+    std::uint16_t priority_c = 0u;
+    std::uint16_t priority_d = 0u;
+
+    [[nodiscard]] bool operator==(const Sh4InterruptRegistersSnapshot&) const = default;
+};
+
 class PlatformInterruptRouter final {
   public:
     static constexpr std::size_t external_line_count = 3u;
@@ -58,6 +79,7 @@ class PlatformInterruptRouter final {
     [[nodiscard]] std::uint8_t scif_level() const noexcept;
     [[nodiscard]] bool scif_pending(std::size_t source) const;
     [[nodiscard]] bool external_pending(std::size_t line) const;
+    [[nodiscard]] PlatformInterruptRouterSnapshot snapshot() const noexcept;
 
     [[nodiscard]] std::size_t synchronize();
     [[nodiscard]] bool accept(CpuState& cpu);
@@ -94,6 +116,7 @@ class Sh4InterruptRegisters final {
     void write_priority_a(std::uint16_t value) noexcept;
     void write_priority_b(std::uint16_t value) noexcept;
     void write_priority_c(std::uint16_t value) noexcept;
+    [[nodiscard]] Sh4InterruptRegistersSnapshot snapshot() const noexcept;
     void reset() noexcept;
 
   private:

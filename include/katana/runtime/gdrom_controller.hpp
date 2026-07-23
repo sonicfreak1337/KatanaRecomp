@@ -81,6 +81,80 @@ struct GdRomGuestCallback {
     std::uint32_t request_id = 0u;
 };
 
+struct GdRomBiosRequestSnapshot {
+    std::uint32_t id = 0u;
+    std::uint32_t command = 0u;
+    std::array<std::uint32_t, 4u> parameters{};
+    std::uint64_t async_id = 0u;
+    std::uint32_t destination = 0u;
+    CodeWriteSource write_source = CodeWriteSource::Copy;
+    GdRomBiosRequestState state = GdRomBiosRequestState::Queued;
+    std::array<std::uint32_t, 4u> status{};
+    GdRomResponse response;
+    bool streaming_dma = false;
+    std::uint32_t stream_lba = 0u;
+    std::uint32_t stream_sector_count = 0u;
+    std::uint64_t stream_total_bytes = 0u;
+    std::uint64_t stream_consumed_bytes = 0u;
+    std::uint32_t cached_stream_sector = 0u;
+    std::vector<std::uint8_t> stream_sector_cache;
+    GdRomBiosTransferKind transfer_kind = GdRomBiosTransferKind::None;
+    std::uint32_t transfer_destination = 0u;
+    std::uint32_t transfer_size = 0u;
+    std::uint32_t transfer_transferred = 0u;
+    bool transfer_active = false;
+};
+
+struct DreamcastGdRomSnapshot {
+    GdRomAsyncReaderSnapshot reader;
+    std::vector<std::uint8_t> packet;
+    std::vector<std::uint8_t> data;
+    std::size_t data_cursor = 0u;
+    std::uint32_t taskfile_phase_remaining = 0u;
+    std::uint32_t taskfile_host_byte_limit = 0u;
+    std::uint8_t taskfile_phase = 0u;
+    std::uint8_t drive_owner = 0u;
+    bool command_irq_asserted = false;
+    bool command_irq_reassert_pending = false;
+    bool taskfile_command_failed = false;
+    bool clear_sense_after_data = false;
+    std::uint8_t set_mode_offset = 0u;
+    std::array<std::uint8_t, 32u> drive_mode{};
+    std::uint8_t sense_key = 0u;
+    std::uint8_t sense_asc = 0u;
+    std::uint8_t sense_ascq = 0u;
+    std::uint8_t status = 0u;
+    std::uint8_t error = 0u;
+    std::uint8_t interrupt_reason = 0u;
+    std::uint8_t features = 0u;
+    std::uint8_t sector_count_register = 0u;
+    std::uint8_t sector_number = 0u;
+    std::uint8_t drive_select = 0u;
+    std::uint16_t byte_count = 0u;
+    std::uint32_t current_fad = 0u;
+    bool expecting_packet = false;
+    std::vector<GdRomBiosRequestSnapshot> bios_requests;
+    std::uint32_t next_bios_request = 0u;
+    GdRomBiosRequestStatus last_bios_request;
+    std::vector<GdRomBiosCallEvent> bios_call_events;
+    std::uint64_t next_bios_call_sequence = 0u;
+    std::uint64_t dropped_bios_call_events = 0u;
+    std::uint64_t completed_commands = 0u;
+    std::uint64_t completed_dma = 0u;
+    std::array<std::uint32_t, 4u> sector_mode{};
+    std::uint32_t dma_callback = 0u;
+    std::uint32_t dma_callback_argument = 0u;
+    std::uint32_t pio_callback = 0u;
+    std::uint32_t pio_callback_argument = 0u;
+    bool dma_completion_pending = false;
+    bool pio_completion_pending = false;
+    std::uint32_t dma_completion_request = 0u;
+    std::uint32_t pio_completion_request = 0u;
+    std::vector<GdRomGuestCallback> pending_guest_callbacks;
+    std::optional<SchedulerEventId> packet_event;
+    bool g1_bus_bound = false;
+};
+
 class DreamcastGdRomController final {
   public:
     // The address passed to the observer is the contiguous physical range actually committed to
@@ -107,6 +181,7 @@ class DreamcastGdRomController final {
     void bind_g1_bus(DreamcastG1BusController* g1_bus) noexcept;
     void handle_g1_dma_fault(const G1DmaFault& fault) noexcept;
     [[nodiscard]] std::optional<GdRomGuestCallback> take_pending_guest_callback();
+    [[nodiscard]] DreamcastGdRomSnapshot snapshot() const;
     void reset() noexcept;
 
   private:

@@ -3,8 +3,8 @@
 KR-4701 definiert `katana-native-video` als Runtimevertrag Version 2. Externe
 Portprojekte erhalten die Schnittstelle ueber `katana_runtime`; die erzeugte
 `game.exe` benoetigt die KatanaRecomp-CLI nicht als Laufzeithuelle.
-Der kumulative Integrationsstand verwendet Runtime-ABI 42, Block-ABI 3,
-Backend-Interface-ABI 3, PlatformServices-ABI 10 und Portprojektvertrag 26.
+Der kumulative Integrationsstand verwendet Runtime-ABI 43, Block-ABI 3,
+Backend-Interface-ABI 3, PlatformServices-ABI 10 und Portprojektvertrag 27.
 
 ## Vertrag
 
@@ -154,7 +154,11 @@ Gate-Vorbereitung `KR-4853`.
 Die fokussierten Regressionen des nachfolgenden KR-4842-Zwischenblocks
 bestehen 22/22 in 1,57 Sekunden, einschliesslich Writer-Origin und
 VRAM32-Projektion. Der Port-CLI-Nachweis besteht 1/1 in 151,12 Sekunden.
-Dafuer lief weder eine neue Vollsuite noch `KR-4852`.
+Dafuer lief weder eine neue Vollsuite noch `KR-4852`. Der spaetere
+KR-4842-Abschluss lief Diagnose `0/1` bis jeweils 100.000 Gastzyklen mit
+identischen normativen Feldern, vollstaendigem und versiegeltem Systemreplay
+v3 sowie unveraenderter EXE und Disc-Pack. Dieser A/B-Nachweis aendert den
+Hostvideo-Vertrag nicht.
 
 Auf Hosts ohne implementiertes natives Backend bleibt CLI/Core weiterhin ohne
 Fenstersystem-Abhaengigkeit buildbar. `native_video_available()` liefert dort

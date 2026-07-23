@@ -30,6 +30,11 @@ int main() {
                 controller.highest_pending()->level == 10u &&
                 controller.highest_pending()->event_code == 0x00000620u,
             "Interrupt-Diagnostik meldet nicht dieselbe priorisierte Quelle wie der Eintritt.");
+    const auto pending_snapshot = controller.snapshot();
+    require(pending_snapshot.pending.size() == 2u &&
+                pending_snapshot.pending[0u] == PendingInterrupt{3u, 10u, 0x00000620u} &&
+                pending_snapshot.pending[1u] == PendingInterrupt{7u, 4u, 0x00000320u},
+            "Interrupt-Snapshot verliert aktualisierte Pendingquelle oder kanonische Reihenfolge.");
 
     CpuState cpu;
     cpu.vbr = 0x8C000000u;

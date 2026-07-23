@@ -59,6 +59,12 @@ int main() {
                 memory.read_u32(0x005F7808u) == 0x20u && memory.read_u32(0x005F7810u) == 5u &&
                 memory.read_u32(0x005F7880u) == 0x12u && memory.read_u32(0x005F7894u) == 0x271u,
             "PAL-G2-Initialisierungswerte oder Direktsegmente werden nicht gespiegelt.");
+    const auto g2_snapshot = controllers.g2->snapshot();
+    require(g2_snapshot.ds_timeout == 0x1Bu && g2_snapshot.tr_timeout == 0x271u &&
+                g2_snapshot.modem_timeout == 0u && g2_snapshot.modem_wait == 1u &&
+                g2_snapshot.address_protect == 0x00007F00u &&
+                g2_snapshot.reset_observer != 0u && g2_snapshot.completion_observer_bound,
+            "G2-DMA-Snapshot verliert private Timeout-/Protectregister oder Eventbindung.");
 
     for (std::uint32_t index = 0u; index < 32u; ++index)
         memory.write_u8(0x0C001000u + index, static_cast<std::uint8_t>(index + 1u));
@@ -152,10 +158,18 @@ int main() {
     g1.write(0x0Cu, 1u);
     g1.write(0x14u, 1u);
     g1.write(0x18u, 1u);
+    const auto g1_snapshot = g1.snapshot();
     require(!g1_bytes_committed && !g1_completed && g1.read(0x18u) == 1u &&
                 g1.read(0x04u) == 0x0C002000u && g1.read(0x08u) == 32u &&
                 g1.read(0xF4u) == 0x0C002000u && g1.read(0xF8u) == 0u,
             "G1-DMA macht Daten bereits beim Start sichtbar.");
+    require(g1_snapshot.channel.completion_event.has_value() &&
+                g1_snapshot.channel.remaining == 32u &&
+                g1_snapshot.timing == HollyDmaTiming{4u} &&
+                g1_snapshot.reset_observer != 0u &&
+                g1_snapshot.transfer_handler_bound &&
+                g1_snapshot.completion_observer_bound,
+            "G1-DMA-Snapshot verliert Chunk-FSM, Timing oder Schedulerbindung.");
     static_cast<void>(g1_scheduler.advance_by(127u, 1u));
     require(!g1_bytes_committed, "G1-DMA committed Daten vor dem faelligen Schedulerzyklus.");
     static_cast<void>(g1_scheduler.advance_by(1u, 1u));
@@ -439,6 +453,12 @@ int main() {
         HollyDmaTiming{4u},
         [&](const SystemAsicEvent event) { contract_events.push_back(event); });
     contract_pvr.bind_sh4_dmac(contract_dmac, 0u);
+    const auto bound_pvr_snapshot = contract_pvr.snapshot();
+    require(bound_pvr_snapshot.dmac_bound &&
+                bound_pvr_snapshot.dmac_contract_required &&
+                bound_pvr_snapshot.dmac_channel == 0u &&
+                bound_pvr_snapshot.reset_observer != 0u,
+            "PVR-DMA-Snapshot verliert SH-4-DMAC-Vertrag oder Eventbindung.");
     contract_dmac->write_source(0u, 0x0C004000u);
     contract_dmac->write_count(0u, 1u);
     contract_dmac->write_control(0u, 0x00001841u);

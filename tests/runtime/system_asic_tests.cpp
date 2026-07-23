@@ -74,6 +74,12 @@ int main() {
     require(system_bus_snapshot.channel2_destination == 0x11FF0000u &&
                 system_bus_snapshot.channel2_length == 0x00FFFFE0u &&
                 system_bus_snapshot.channel2_start == 0u &&
+                system_bus_snapshot.texture_memory_mode0 == 1u &&
+                system_bus_snapshot.texture_memory_mode1 == 1u &&
+                system_bus_snapshot.registers
+                        [system_bus_register::TextureMemoryMode0 / 4u] == 1u &&
+                system_bus_snapshot.registers
+                        [system_bus_register::TextureMemoryMode1 / 4u] == 1u &&
                 system_bus_snapshot.system_reset_requests == 0u &&
                 channel2_starts == starts_before_snapshot,
             "Strukturierter Systembus-Snapshot verliert Zustand oder startet Channel 2.");

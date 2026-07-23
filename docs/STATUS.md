@@ -12,20 +12,22 @@ BIOS-Reads und Disc-Streaming ohne Hostexception, Teilwrite oder klemmendes
 identische Disc-Reloads an natives AOT gebunden; offen bleiben strukturierte
 Ladetransaktionen, der allgemeine native Materializer und die Registry latenter
 Module. `KR-4849` bleibt trotz synthetisch verbundenem Channel-2-/TA-EOL-Pfad
-fuer den produktiven Gastpfad offen. `KR-4842` erzwingt fuer freie Probes
-inzwischen MMU-bewusst echte lineare Backings selbst, waehrend PVR- und
-Systembuszustand ueber nicht mutierende Snapshots gelesen wird.
+fuer den produktiven Gastpfad offen. `KR-4842` bindet fuer freie Probes
+MMU-bewusst echte lineare Backings und fuer Geraetezustand nicht mutierende
+Snapshots.
 Hardware-Audit-Schema 4 erkennt Natural Loops ueber skalierbare Dominatoren,
 deckt die bislang fehlenden GBR-, Byte-Read/RMW-, TAS-, FMOV-, PC-relativen,
 STC.L-/LDC.L- und MAC-Speicherfamilien ab und klassifiziert Counter-, RAM-Poll-,
 MMIO-Poll-, Mixed- und Unknown-Loops samt aufgeloester und konservativ
 unaufgeloester Guard-Evidenz.
-Der versionierte Runtime-Trace liefert inzwischen auch dynamische
-Wertwechselfolgen und echte Writer-Provenienz. Ausschliesslich der
-vollstaendige Diagnose=0/1-A/B-Produktlauf bleibt fuer `KR-4842` offen.
+Der versionierte Runtime-Trace liefert dynamische Wertwechselfolgen und echte
+Writer-Provenienz. Der abschliessende Diagnose=0/1-A/B-Produktlauf bestand mit
+zwei frischen Laeufen. Damit ist `KR-4842` abgeschlossen und `KR-4911`
+freigegeben; `KR-4911` bleibt bis zu seinem vollstaendigen
+Runtimebeobachtungs- und Fehlerpaketvertrag offen.
 
-Der aktuelle kumulative Vertrag verwendet Runtime-ABI 42, Block-ABI 3,
-Backend-Interface-ABI 3, PlatformServices-ABI 10, Portprojektvertrag 26 und
+Der aktuelle kumulative Vertrag verwendet Runtime-ABI 43, Block-ABI 3,
+Backend-Interface-ABI 3, PlatformServices-ABI 10, Portprojektvertrag 27 und
 Host-Video-Vertrag 2.
 
 Der aktuelle Sicherheitsblock schliesst zwei zuvor nur behauptete
@@ -40,9 +42,8 @@ bewegen ausstehende Render- oder Channel-2-Arbeit nicht. GD-ROM-PACKET liefert b
 undarstellbaren Schedulerfrist `READY|ERR`, ABRT-Sense und einen finalen
 Command-IRQ. BIOS-Read und -Streaming liefern denselben Fehler als einmaligen
 Vierwortstatus mit null Bytes und lassen den naechsten Request zu. Die
-aktuellen konsolidierten fokussierten Regressionen bestehen 22/22 in
-1,57 Sekunden; der Port-CLI-Nachweis besteht 1/1 in 151,12 Sekunden. Eine
-Vollsuite und `KR-4852` wurden nicht ausgefuehrt.
+vorangegangenen konsolidierten fokussierten Regressionen bestanden 22/22 in
+1,57 Sekunden; der Port-CLI-Nachweis bestand 1/1 in 151,12 Sekunden.
 
 Runtime-ABI 42 bindet den seiteneffektfreien POD-Zugriffssink und
 `RuntimeWaitLoopTrace` v1. Native AOT-Bloecke und der begrenzte
@@ -75,7 +76,18 @@ Store Queue. Die Registervarianten `PREF`, `OCBI`, `OCBP`, `OCBWB` und `TAS.B`
 sind im begrenzten Interpreter geschlossen; doppelte `FMOV`-Speicherzugriffe
 laufen low nach high.
 
-Systemreplay-Schema 2 schliesst zusaetzlich das unbegrenzte Wachstum des
+Runtime-ABI 43 und Portprojektvertrag 27 binden
+`katana.runtime-probe` Version 1 mit Profil `deterministic-v1`,
+Device-Schema 1 und Hashvertrag `fnv1a64-le-v1`. CPU, Scheduler, Haupt-RAM,
+VRAM, AICA-RAM, Flash, VMU, Replay und exakt 35 produktive Geraeteinstanzen
+mit 867 kanonischen Feldern gehen in domain-separierte Hashes ein. Der private
+A/B-Runner bestand zwei Laeufe mit 100.000 Gastzyklen und 120 Sekunden
+Hosttimeout. Diagnose aus/an lieferte gleiche normative Felder,
+unveraendertes Executable und Disc-Pack, vollstaendiges und versiegeltes Replay
+sowie null/null Wait-Loop-Tracezeilen. Eine Vollsuite und `KR-4852` wurden
+nicht ausgefuehrt.
+
+Systemreplay-Schema 3 schliesst zusaetzlich das unbegrenzte Wachstum des
 Diagnosepfads: Standardlogs halten 4.096, konfigurierbar hoechstens 65.536
 Ereignisse; Ereigniscodes sind auf 64 Zeichen begrenzt. Ein gesaettigter
 Recordversuch zaehlt exakt einen Drop. Jeder Drop verbietet Versiegelung und
@@ -84,9 +96,12 @@ Adressen, Werte, numerische Payloads und Hashes bleiben intern fuer Hash und
 deterministischen Vergleich exakt. Das Standard-JSON redigiert dagegen
 `code`, `address`, `value`, `detail`, `auxiliary`, `event_hash` und
 `final_guest_state_hash`; exakte Serialisierung verlangt ein ausdrueckliches
-lokales Opt-in. Die zwei fokussierten Replay- und Phase9-Regressionen bestehen
-2/2. `KR-4911` bleibt fuer Produktwiring, gemeinsame Stopptaxonomie, letzten
-stabilen Checkpoint und das redigierte Fehler-Envelope offen.
+lokales Opt-in. Das Profil `deterministic-v1` verlangt vor dem ersten Ereignis
+alle acht CPU-, Scheduler-, Interrupt-, Video-, Audio-, Eingabe-, MMIO- und
+DMA-Hooks und trennt aktivierte von beobachteter Coverage. Die zwei
+fokussierten Replay- und Phase9-Regressionen bestehen 2/2. `KR-4911` bleibt
+fuer Produktwiring, gemeinsame Stopptaxonomie, letzten stabilen Checkpoint und
+das redigierte Fehler-Envelope offen.
 
 Der mit Runtime-ABI 38 eingefuehrte Zwischenblock schliesst zwei allgemeine
 Hardwarevertraege. G1-DMA validiert Schutzfenster, 32-Bit-Ueberlauf und die
@@ -329,10 +344,17 @@ Range-Links bleiben explizite Kandidaten. Der nur ueber
 `KATANA_PORT_WAIT_LOOP_TRACE=1` aktivierte versionierte
 Wait-Loop-Rohwerttrace verdichtet daraus dynamische Wertlaeufe und
 zugehoerige Writer.
-Die konsolidierten fokussierten Regressionen bestehen 22/22 in 1,57 Sekunden;
-der Port-CLI-Nachweis besteht 1/1 in 151,12 Sekunden. `KR-4842` bleibt
-ausschliesslich fuer den vollstaendigen Diagnose=0/1-A/B-Produktlauf offen.
-Eine Vollsuite und `KR-4852` wurden nicht ausgefuehrt.
+Die vorangegangenen fokussierten Regressionen bestanden 22/22 in 1,57
+Sekunden; der Port-CLI-Nachweis bestand 1/1 in 151,12 Sekunden. Die
+abschliessende Probe erfasst zusaetzlich CPU, Scheduler, alle linearen und
+persistenten Speicherbereiche, Replay und 35 Geraeteinstanzen mit 867
+kanonischen Feldern. Der private A/B-Bericht
+`katana-private-runtime-probe-ab` Version 1 meldet fuer zwei Laeufe,
+Gastzyklusbudget 100.000 und Hosttimeout 120 Sekunden `status=success`,
+`normative_fields_equal=true`, `executable_and_pack_unchanged=true`,
+`replay_complete_and_sealed=true` und null/null Tracezeilen. Damit ist
+`KR-4842` abgeschlossen. Eine Vollsuite und `KR-4852` wurden nicht
+ausgefuehrt.
 
 Der generierte Port praesentiert erst nach einem validierten TA- oder
 Direct-FB-Gastframe und meldet `KR_FIRST_GUEST_FRAME` nicht fuer blosses
@@ -457,8 +479,8 @@ MMIO-Zugriff liegt im aktiven OCRAM; der fruehere Abbruch nach 12 Gastzyklen
 ist damit beseitigt. TA/PVR und ein echter Gastframe bleiben fuer den laengeren
 Folgelauf weiterhin offen.
 
-Runtime-ABI 42, Block-ABI 3, Backend-Interface-ABI 3, BIOS-ABI 9,
-PlatformServices-ABI 10, Portprojektvertrag 26 und Host-Video-Vertrag 2 bilden den kumulativen
+Runtime-ABI 43, Block-ABI 3, Backend-Interface-ABI 3, BIOS-ABI 9,
+PlatformServices-ABI 10, Portprojektvertrag 27 und Host-Video-Vertrag 2 bilden den kumulativen
 v0.48-Stand ab.
 PlatformServices-ABI 10 versioniert zusaetzlich die genaue
 `PREF`-Instruktionsherkunft bis zur Store Queue.

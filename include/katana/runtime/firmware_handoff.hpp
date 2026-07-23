@@ -17,6 +17,8 @@ struct FirmwareMapping {
     std::uint32_t virtual_start = 0u;
     std::uint32_t physical_start = 0u;
     std::uint32_t size = 0u;
+
+    [[nodiscard]] bool operator==(const FirmwareMapping&) const = default;
 };
 
 struct FirmwareCodeCopy {
@@ -26,6 +28,8 @@ struct FirmwareCodeCopy {
     std::string provenance;
     bool byte_verified = false;
     bool changed_after_copy = false;
+
+    [[nodiscard]] bool operator==(const FirmwareCodeCopy&) const = default;
 };
 
 struct RuntimeFirmwareSymbol {
@@ -34,6 +38,8 @@ struct RuntimeFirmwareSymbol {
     std::uint32_t physical_address = 0u;
     std::string provenance;
     std::uint64_t guest_cycle = 0u;
+
+    [[nodiscard]] bool operator==(const RuntimeFirmwareSymbol&) const = default;
 };
 
 struct FirmwareTargetResolution {
@@ -42,6 +48,15 @@ struct FirmwareTargetResolution {
     std::optional<FirmwareCodeCopy> copy;
     bool statically_proven = false;
     std::string provenance;
+};
+
+struct FirmwareHandoffSnapshot {
+    std::vector<FirmwareMapping> mappings;
+    std::vector<FirmwareCodeCopy> copies;
+    std::vector<RuntimeFirmwareSymbol> runtime_symbols;
+    std::size_t canonical_origin_count = 0u;
+
+    [[nodiscard]] bool operator==(const FirmwareHandoffSnapshot&) const = default;
 };
 
 class FirmwareHandoffMap {
@@ -55,6 +70,7 @@ class FirmwareHandoffMap {
     [[nodiscard]] const std::vector<FirmwareMapping>& mappings() const noexcept;
     [[nodiscard]] const std::vector<FirmwareCodeCopy>& copies() const noexcept;
     [[nodiscard]] std::size_t canonical_origin_count() const noexcept;
+    [[nodiscard]] FirmwareHandoffSnapshot snapshot() const;
 
   private:
     std::vector<FirmwareMapping> mappings_;

@@ -729,7 +729,7 @@ Nur `diagnostic_partial` behaelt den begrenzten Diagnoseinterpreter. Die noch
 offenen strukturierten Disc-Ladetransaktionen und latenten nativen Module
 bleiben ausdruecklich Teil von `KR-4848`.
 
-### [ ] KR-4842 - Seiteneffektfreie Bootdiagnostik und Wait-Loop-Klassifikation
+### [x] KR-4842 - Seiteneffektfreie Bootdiagnostik und Wait-Loop-Klassifikation
 
 Abhaengigkeiten: KR-4841
 Prioritaet: P0
@@ -807,15 +807,24 @@ Produkttrace.
 
 Die generischen Registervarianten von `PREF`, `OCBI`, `OCBP`, `OCBWB` und
 `TAS.B` sind im begrenzten Interpreter geschlossen. Doppelte `FMOV`-
-Speicherzugriffe folgen low nach high. Der konsolidierte fokussierte Nachweis
-besteht 22/22 in 1,57 Sekunden; der Port-CLI-Nachweis besteht 1/1 in
-151,12 Sekunden. Der aktuelle private Disc-Audit bleibt im normalen Modus bei
-null bekannten Luecken gruen: 142.380 Instruktionen, 1.542 Funktionen, 58.630
-Speicherstellen, zwei partielle Adressen und 1.095 Loops. Die 492
-`unresolved_poll_guard_loops` halten `--strict` erwartungsgemaess rot. Es lief
-weder eine Vollsuite noch `KR-4852`. Dynamische Wertwechselfolgen und echte
-Runtime-Writer-Provenienz liegen vor; ausschliesslich der vollstaendige
-Diagnose=0/1-A/B-Produktlauf haelt `KR-4842` weiter offen.
+Speicherzugriffe folgen low nach high. Der vorangegangene fokussierte
+Zwischenblock bestand 22/22 in 1,57 Sekunden; der Port-CLI-Nachweis bestand
+1/1 in 151,12 Sekunden. Der aktuelle private Disc-Audit bleibt im normalen
+Modus bei null bekannten Luecken gruen: 142.380 Instruktionen, 1.542
+Funktionen, 58.630 Speicherstellen, zwei partielle Adressen und 1.095 Loops.
+Die 492 `unresolved_poll_guard_loops` halten `--strict` erwartungsgemaess rot.
+
+Abgeschlossen: 2026-07-23. Runtime-ABI 43 und Portprojektvertrag 27 binden
+`katana.runtime-probe` Version 1 mit Profil `deterministic-v1`,
+Device-Schema 1 und Hashvertrag `fnv1a64-le-v1`. Die Probe erfasst CPU,
+Scheduler, Haupt-RAM, VRAM, AICA-RAM, Flash, VMU, Replay sowie exakt 35
+produktive Geraeteinstanzen mit 867 kanonischen Feldern. Der private A/B-Runner
+bestand zwei frische Laeufe mit einem Gastzyklusbudget von 100.000 und einem
+Hosttimeout von 120 Sekunden. Diagnose aus/an lieferte gleiche normative
+Felder, unveraendertes Executable und Disc-Pack, vollstaendiges und
+versiegeltes Systemreplay v3 sowie null/null Wait-Loop-Tracezeilen. Eine
+Vollsuite und `KR-4852` wurden nicht ausgefuehrt. Damit ist `KR-4842`
+abgeschlossen und `KR-4911` freigegeben, bleibt aber selbst offen.
 
 ### [x] KR-4843 - Alias-korrekter nativer Disc-Systembootstrap
 
@@ -1016,9 +1025,9 @@ Fallback oder Materialisierung; GD-ROM, TA und PVR sind noch null. Bei 320
 Millionen Zyklen erreicht der Gast Spielecode, zwei GD-ROM-Kommandos und einen
 spaeten PVR-Registerwrite, weiterhin ohne TA-, Render- oder Framebeweis.
 
-Der aktuelle kumulative Schnittstellenstand verwendet Runtime-ABI 42,
+Der aktuelle kumulative Schnittstellenstand verwendet Runtime-ABI 43,
 Block-ABI 3, Backend-Interface-ABI 3, PlatformServices-ABI 10,
-Portprojektvertrag 26 und Host-Video-Vertrag 2. Source-relativierte native AOT-Templates und ihr
+Portprojektvertrag 27 und Host-Video-Vertrag 2. Source-relativierte native AOT-Templates und ihr
 adressierter Binder sind vorhanden; strukturierte Disc-Ladetransaktionen, der
 allgemeine native Materializer und die Registry latenter Module halten
 `KR-4848` weiterhin offen. Das fokussierte Gate besteht 11/11, der x64-Kern-/
@@ -1242,7 +1251,7 @@ Akzeptanz:
 - identische synthetische Laeufe erzeugen identische Ereignisfolgen
 - private Fehlerpakete sind redigiert und bleiben ausserhalb des Repos
 
-Teilstand 2026-07-23: Systemreplay-Schema 2 begrenzt die Aufzeichnung
+Teilstand 2026-07-23: Systemreplay-Schema 3 begrenzt die Aufzeichnung
 standardmaessig auf 4.096 und maximal auf 65.536 Ereignisse; portable
 Ereigniscodes sind auf 64 Zeichen begrenzt. Ein gesaettigter Recordversuch
 zaehlt exakt einen Drop. Jeder Drop verhindert Versiegelung und Replay,
@@ -1251,7 +1260,10 @@ Interne Ereignisse, Ereignishash und Replayvergleich behalten alle Codes,
 Adressen, Werte, numerischen Payloads und Hashes exakt. Das Standard-JSON
 redigiert dagegen `code`, `address`, `value`, `detail`, `auxiliary`,
 `event_hash` und `final_guest_state_hash`; nur ein ausdrueckliches lokales
-Opt-in serialisiert sie. Produktwiring, gemeinsame Stopptaxonomie, letzter
+Opt-in serialisiert sie. Das Profil `deterministic-v1` verlangt vor dem ersten
+Ereignis alle acht CPU-, Scheduler-, Interrupt-, Video-, Audio-, Eingabe-,
+MMIO- und DMA-Hooks und trennt aktivierte von beobachteter Coverage.
+Produktwiring, gemeinsame Stopptaxonomie, letzter
 stabiler Checkpoint und ein gemeinsames redigiertes Fehler-Envelope halten
 `KR-4911` offen.
 
@@ -1283,7 +1295,8 @@ Prioritaet: P0
 
 Umfang:
 
-- eine private Retail-Testbench erstmals im `runtime-probe`-Modus starten;
+- den mit `KR-4842` eingefuehrten `runtime-probe`-Modus bis
+  `KR_GUEST_PROGRAM_ENTERED` fortsetzen;
   Sonic Adventure ist dabei eine lokale Testquelle, kein Produktprofil
 - SH-4-, FPU-, MMU-/Cache-, BIOS-, GD-ROM-, DMA-, Interrupt- und Timingblocker
   titelunabhaengig beheben

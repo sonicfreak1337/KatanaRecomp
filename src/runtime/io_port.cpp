@@ -80,6 +80,18 @@ void Sh4IoPort::write_gpio_interrupt_control(const std::uint16_t value) noexcept
 void Sh4IoPort::set_inputs(const Sh4IoPortInputs inputs) noexcept {
     inputs_ = inputs;
 }
+Sh4IoPortSnapshot Sh4IoPort::snapshot() const noexcept {
+    return {
+        inputs_,
+        control_a_,
+        data_a_latch_,
+        data_a(),
+        control_b_,
+        data_b_latch_,
+        data_b(),
+        gpio_interrupt_control_,
+    };
+}
 void Sh4IoPort::reset() noexcept {
     control_a_ = 0u;
     data_a_latch_ = 0u;

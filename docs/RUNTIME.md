@@ -75,6 +75,11 @@ PVR-Render und PVR-YUV bleiben unterscheidbare Writer, waehrend VRAM32 auf das
 gemeinsame lineare Backing projiziert wird. PlatformServices-ABI 10 reicht die
 exakte `PREF`-Instruktionsherkunft bis zur Store Queue. Portprojektvertrag 26
 versioniert die generischen Auditdeskriptoren und das explizite Trace-Opt-in.
+ABI-Version 43 und Portprojektvertrag 27 binden `katana.runtime-probe`
+Version 1, das Profil `deterministic-v1`, Device-Schema 1 und Systemreplay
+Schema 3. Der Produktzustand umfasst 35 Geraeteinstanzen mit 867 kanonischen
+Feldern; der aggregierte A/B-Vertrag gibt keine Rohwerte, privaten Pfade oder
+exakten Hashfingerabdruecke aus.
 
 ## CMake
 
@@ -515,13 +520,14 @@ spaetere Plattformkonfiguration.
   `DreamcastSystemBusControl::snapshot()`-Zustaende fuer Produktdiagnostik;
   auch pending Rendercompletions und aktive Channel-2-Transfers bleiben
   unveraendert und werden weder gepumpt noch quittiert
-- deterministische Systemreplays unter Schema 2 mit standardmaessig 4.096 und
+- deterministische Systemreplays unter Schema 3 mit standardmaessig 4.096 und
   maximal 65.536 Ereignissen sowie hoechstens 64 Zeichen langen Ereigniscodes;
   eine Saettigung zaehlt genau einen Drop je abgewiesenem Ereignis und
   verhindert Versiegelung und Replay. Ereigniswerte bleiben intern exakt,
   waehrend Standard-JSON Code, Adresse, Wert, numerische Nutzlasten,
   Ereignishash und Endzustandshash ohne ausdrueckliches lokales Opt-in
-  redigiert
+  redigiert. Das Profil `deterministic-v1` bindet acht Pflicht-Hookklassen,
+  getrennte Ereigniszaehler und einen domain-separierten Ordnungsdigest
 
 ## Eigenstaendiger Disc-Boot fuer Portanwendungen
 
@@ -562,7 +568,9 @@ Nur das explizite `diagnostic_partial`-Profil emittiert den begrenzten
 Diagnoseinterpreter. Der Portprojektvertrag `26` weist Profil,
 Interpreterstatus, Unbound-Code-Policy und Coverage-Vertrag im Manifest aus
 und verwendet fuer freie Speicherprobes sowie PVR-/Systembuszustand nur die
-seiteneffektfreien Runtime-ABI-42-Diagnoseschnittstellen.
+seiteneffektfreien Runtime-ABI-42-Diagnoseschnittstellen. Der nachfolgende
+Portprojektvertrag 27 bindet den vollstaendigen deterministischen
+Produktprobe- und A/B-Vertrag.
 
 Im produktiven Einblock-AOT-Pfad zaehlt `CpuState::retired_guest_instructions`
 jede betretene Gastinstruktion. Schedulerzeit wird nach der ausgefuehrten
@@ -579,8 +587,8 @@ generische C++-Emitter setzt auch bei einem durch Funktionsdiscovery
 nachfolgerlosen Block in jedem Backendmodus `PC` auf die Folgeadresse der
 letzten Gastinstruktion. Die Produktinvariante prueft einen Fallthrough relativ
 zu dieser tatsaechlichen Terminatorquelle und nicht zum Eintritt des
-umgebenden Wrappers. Der kumulative Stand verwendet Runtime-ABI 42, Block-ABI 3,
-Backend-Interface-ABI 3, PlatformServices-ABI 10, Portvertrag 26 und
+umgebenden Wrappers. Der kumulative Stand verwendet Runtime-ABI 43, Block-ABI 3,
+Backend-Interface-ABI 3, PlatformServices-ABI 10, Portvertrag 27 und
 Host-Video-Vertrag 2.
 
 Statische Dispatchregistries werden nicht mehr in eine einzelne
@@ -613,13 +621,14 @@ wurde in diesem direkten CTest-Lauf nicht erhoben; Desktop-GUI- und Harness-
 Tests sind nicht Teil der 183. Dieser Nachweis schliesst weder `KR-4852` noch
 `KR-4853` oder die interne Freigabe `KR-4854`.
 
-Die konsolidierten fokussierten Regressionen des nachfolgenden
-KR-4842-Zwischenblocks bestehen 22/22 in 1,57 Sekunden; der generierte
-Port-CLI-Pfad besteht 1/1 in 151,12 Sekunden. Dafuer wurde keine Vollsuite und
-kein `KR-4852` ausgefuehrt.
-Dynamische Wertlaeufe und Runtime-Writer-Provenienz sind damit abgedeckt.
-`KR-4842` bleibt ausschliesslich fuer den vollstaendigen
-Diagnose=0/1-A/B-Produktlauf offen.
+Der Abschlussnachweis fuer `KR-4842` besteht aus 6/6 fokussierten Tests in
+6,40 Sekunden, dem generierten Port-CLI-Pfad 1/1 in 156,11 Sekunden und zwei
+frischen Produktlaeufen bis exakt 100.000 Gastzyklen. Diagnose `0/1` lieferte
+identische normative Felder, vollstaendiges und versiegeltes Systemreplay v3
+ohne Drops, unveraenderte EXE/Disc-Pack-Artefakte und null
+Wait-Loop-Rohtracezeilen. Der aggregierte A/B-Bericht meldete
+`status=success`; `KR-4842` ist abgeschlossen. Eine Vollsuite und `KR-4852`
+wurden nicht ausgefuehrt.
 
 Der optimierte ABI-38-Export der privaten PAL-Testbench dauerte mit zwoelf Jobs
 140,9 Sekunden, der inkrementelle Reexport 29,2 Sekunden. Die lokale

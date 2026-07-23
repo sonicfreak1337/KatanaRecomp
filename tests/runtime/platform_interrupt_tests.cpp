@@ -53,6 +53,15 @@ int main() {
                 router.rtc_level() == 5u && router.dma_level() == 11u &&
                 router.scif_level() == 0u,
             "INTC ICR/IPRA/IPRB/IPRC/IPRD oder Area-7-Alias sind nicht registergenau.");
+    const auto intc_snapshot = intc->snapshot();
+    const auto router_snapshot = router.snapshot();
+    require(intc_snapshot.interrupt_control == 0x4380u &&
+                intc_snapshot.priority_a == 0xA765u &&
+                intc_snapshot.priority_b == 0x1234u &&
+                intc_snapshot.priority_c == 0x0B00u &&
+                router_snapshot.tmu_levels == std::array<std::uint8_t, 3u>{10u, 7u, 6u} &&
+                router_snapshot.rtc_level == 5u && router_snapshot.dma_level == 11u,
+            "INTC-/Router-Snapshot verliert gastlesbare Register oder abgeleitete Level.");
     require_failure([&] { memory.write_u16(sh4_intc_p4_base + 0x10u, 1u); },
                     "Read-only INTC-IPRD akzeptiert Schreibzugriffe.");
     require_failure([&] { memory.write_u32(sh4_intc_p4_base, 1u); },

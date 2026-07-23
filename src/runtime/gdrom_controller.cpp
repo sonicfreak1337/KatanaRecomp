@@ -619,7 +619,8 @@ void DreamcastGdRomController::schedule_packet() {
     try {
         packet_event_ = scheduler_.schedule_after(
             1'000u,
-            [this](const auto event_id, const auto cycle) { complete_packet(event_id, cycle); });
+            [this](const auto event_id, const auto cycle) { complete_packet(event_id, cycle); },
+            SchedulerEventKind::GdRomPacket);
     } catch (const std::overflow_error&) {
         packet_event_.reset();
         fail_taskfile_command(0x0Bu, 0u, 0u, true);
@@ -1546,7 +1547,85 @@ GdRomProductStatus DreamcastGdRomController::status() const noexcept {
             pio_callback_argument_,
             stream_remaining,
             transfer_remaining,
-            pending_guest_callbacks_.size()};
+             pending_guest_callbacks_.size()};
+}
+
+DreamcastGdRomSnapshot DreamcastGdRomController::snapshot() const {
+    DreamcastGdRomSnapshot result;
+    result.reader = reader_.snapshot();
+    result.packet = packet_;
+    result.data = data_;
+    result.data_cursor = data_cursor_;
+    result.taskfile_phase_remaining = taskfile_phase_remaining_;
+    result.taskfile_host_byte_limit = taskfile_host_byte_limit_;
+    result.taskfile_phase = static_cast<std::uint8_t>(taskfile_phase_);
+    result.drive_owner = static_cast<std::uint8_t>(drive_owner_);
+    result.command_irq_asserted = command_irq_asserted_;
+    result.command_irq_reassert_pending = command_irq_reassert_pending_;
+    result.taskfile_command_failed = taskfile_command_failed_;
+    result.clear_sense_after_data = clear_sense_after_data_;
+    result.set_mode_offset = set_mode_offset_;
+    result.drive_mode = drive_mode_;
+    result.sense_key = sense_key_;
+    result.sense_asc = sense_asc_;
+    result.sense_ascq = sense_ascq_;
+    result.status = status_;
+    result.error = error_;
+    result.interrupt_reason = interrupt_reason_;
+    result.features = features_;
+    result.sector_count_register = sector_count_register_;
+    result.sector_number = sector_number_;
+    result.drive_select = drive_select_;
+    result.byte_count = byte_count_;
+    result.current_fad = current_fad_;
+    result.expecting_packet = expecting_packet_;
+    result.bios_requests.reserve(bios_requests_.size());
+    for (const auto& [id, request] : bios_requests_) {
+        static_cast<void>(id);
+        result.bios_requests.push_back({
+            request.id,
+            request.command,
+            request.parameters,
+            request.async_id,
+            request.destination,
+            request.write_source,
+            request.state,
+            request.status,
+            request.response,
+            request.streaming_dma,
+            request.stream_lba,
+            request.stream_sector_count,
+            request.stream_total_bytes,
+            request.stream_consumed_bytes,
+            request.cached_stream_sector,
+            request.stream_sector_cache,
+            request.transfer_kind,
+            request.transfer_destination,
+            request.transfer_size,
+            request.transfer_transferred,
+            request.transfer_active,
+        });
+    }
+    result.next_bios_request = next_bios_request_;
+    result.last_bios_request = last_bios_request_;
+    result.bios_call_events = bios_call_events_;
+    result.next_bios_call_sequence = next_bios_call_sequence_;
+    result.dropped_bios_call_events = dropped_bios_call_events_;
+    result.completed_commands = completed_commands_;
+    result.completed_dma = completed_dma_;
+    result.sector_mode = sector_mode_;
+    result.dma_callback = dma_callback_;
+    result.dma_callback_argument = dma_callback_argument_;
+    result.pio_callback = pio_callback_;
+    result.pio_callback_argument = pio_callback_argument_;
+    result.dma_completion_pending = dma_completion_pending_;
+    result.pio_completion_pending = pio_completion_pending_;
+    result.dma_completion_request = dma_completion_request_;
+    result.pio_completion_request = pio_completion_request_;
+    result.pending_guest_callbacks = pending_guest_callbacks_;
+    result.packet_event = packet_event_;
+    result.g1_bus_bound = g1_bus_ != nullptr;
+    return result;
 }
 
 const GdRomBiosRequestStatus& DreamcastGdRomController::last_bios_request() const noexcept {

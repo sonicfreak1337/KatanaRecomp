@@ -112,6 +112,17 @@ bool PlatformInterruptRouter::external_pending(const std::size_t line) const {
     return external_pending_[line];
 }
 
+PlatformInterruptRouterSnapshot PlatformInterruptRouter::snapshot() const noexcept {
+    return {
+        tmu_levels_,
+        rtc_level_,
+        dma_level_,
+        scif_level_,
+        scif_pending_,
+        external_pending_,
+    };
+}
+
 void PlatformInterruptRouter::route(const PlatformInterruptSource source,
                                     const bool asserted,
                                     const std::uint8_t level) {
@@ -230,6 +241,16 @@ void Sh4InterruptRegisters::write_priority_b(const std::uint16_t value) noexcept
 void Sh4InterruptRegisters::write_priority_c(const std::uint16_t value) noexcept {
     priority_c_ = value;
     synchronize_priorities();
+}
+
+Sh4InterruptRegistersSnapshot Sh4InterruptRegisters::snapshot() const noexcept {
+    return {
+        interrupt_control_,
+        priority_a_,
+        priority_b_,
+        priority_c_,
+        0u,
+    };
 }
 
 void Sh4InterruptRegisters::synchronize_priorities() noexcept {

@@ -9,8 +9,9 @@ ein Sonic-Adventure-Port noch dessen Installer oder Enhancement-Projekt.
 
 - Sonic Adventure darf privat und read-only als End-to-End-Testbench fuer
   Analyse, Codegen, Hostbuild, Runtime und Dreamcast-Plattformdienste dienen.
-- Der erste Prozessstart erfolgt erst in einem ausdruecklich freigegebenen,
-  budgetierten `runtime-probe`-Lauf.
+- Prozessstarts erfolgen ausschliesslich in ausdruecklich freigegebenen,
+  budgetierten `runtime-probe`- oder spaeteren Gate-Laufarten. Der erste
+  solcher Lauf wurde am 23.07.2026 kontrolliert ausgefuehrt.
 - Private Sonic-Ergebnisse koennen ein internes Alpha-Akzeptanzziel stuetzen,
   sind aber kein oeffentlicher Katana-Produktvertrag und keine verteilbare
   Gateevidenz.
@@ -74,6 +75,20 @@ Jeder private Lauf besitzt Hostzeit- und Gastzyklusbudgets. Fuer jeden Blocker:
 Der private Lauf ist eine Testbench fuer Frameworkfehler, kein oeffentlicher
 Testbestand. Ein erfolgreicher Sonic-Lauf darf nicht durch Sonic-spezifische
 Implementierungslogik erkauft werden.
+
+## Deterministischer A/B-Nachweis
+
+Der generische KR-4842-Nachweis verwendet zwei frische Runtimewurzeln,
+dieselbe native AOT-EXE, denselben lokal aus der Originaldisc installierten
+Pack und dasselbe positive Gastzyklusbudget. Zwischen den Laeufen unterscheidet
+sich nur `KATANA_PORT_DIAGNOSTICS=0` beziehungsweise `1`; konkurrierende
+Rohtrace- oder Diagnosevariablen sind verboten.
+
+Am 23.07.2026 endeten beide Laeufe bei exakt 100.000 Gastzyklen
+`complete`/`budget-reached`. Systemreplay v3 war vollstaendig und versiegelt,
+alle normativen Felder waren gleich, EXE und Pack unveraendert und beide
+Wait-Loop-Tracezaehler null. Dokumentiert wird nur diese aggregierte Aussage,
+nicht die privaten Pfade, Rohlogs, Hashes oder Gastwerte.
 
 ## Framework-Alpha
 

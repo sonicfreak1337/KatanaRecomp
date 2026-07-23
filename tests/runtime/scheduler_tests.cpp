@@ -1,4 +1,5 @@
 #include "katana/runtime/scheduler.hpp"
+#include "katana/runtime/system_replay.hpp"
 
 #include <cstdint>
 #include <iostream>
@@ -30,8 +31,81 @@ template <typename Exception, typename Function> bool throws(Function&& function
 int main() {
     using katana::runtime::EventScheduler;
     using katana::runtime::SchedulerAdvanceStatus;
+    using katana::runtime::SchedulerEventKind;
+
+    {
+        EventScheduler replay_scheduler;
+        katana::runtime::SystemReplayLog replay;
+        replay_scheduler.attach_replay_log(replay);
+        static_cast<void>(replay_scheduler.schedule_at(1u, [](auto, auto) {}));
+        const auto advanced = replay_scheduler.advance_to(1u, 1u);
+        require(advanced.status == SchedulerAdvanceStatus::ReachedTarget &&
+                    replay.events().size() == 1u &&
+                    (replay.enabled_coverage() &
+                     static_cast<katana::runtime::SystemReplayCoverageMask>(
+                         katana::runtime::SystemReplayCoverage::SchedulerCallback)) != 0u &&
+                    replay.events().front().kind ==
+                        katana::runtime::SystemReplayEventKind::SchedulerCallback,
+                "Spaet gebundener Systemreplay muss Schedulerereignisse aufzeichnen.");
+
+        katana::runtime::SystemReplayLog duplicate;
+        require(throws<std::logic_error>(
+                    [&] { replay_scheduler.attach_replay_log(duplicate); }),
+                "Scheduler darf keine zweite Replay-Aufzeichnung akzeptieren.");
+
+        EventScheduler advanced_scheduler;
+        static_cast<void>(advanced_scheduler.advance_to(1u, 1u));
+        require(throws<std::logic_error>(
+                    [&] { advanced_scheduler.attach_replay_log(duplicate); }),
+                "Replay-Anbindung nach Schedulerfortschritt muss abgelehnt werden.");
+
+        EventScheduler sealed_scheduler;
+        katana::runtime::SystemReplayLog sealed;
+        sealed.seal(0u);
+        require(throws<std::invalid_argument>(
+                    [&] { sealed_scheduler.attach_replay_log(sealed); }),
+                "Versiegelter Replay darf nicht neu angebunden werden.");
+
+        EventScheduler populated_scheduler;
+        katana::runtime::SystemReplayLog populated;
+        populated.record({0u,
+                          0u,
+                          katana::runtime::SystemReplayEventKind::Timer,
+                          "preexisting",
+                          std::nullopt,
+                          std::nullopt,
+                          0u,
+                          0u,
+                          false,
+                          0u});
+        require(throws<std::invalid_argument>(
+                    [&] { populated_scheduler.attach_replay_log(populated); }),
+                "Scheduler darf keinen vorbefuellten Replay fortschreiben.");
+
+        EventScheduler reset_scheduler;
+        reset_scheduler.reset();
+        katana::runtime::SystemReplayLog after_reset;
+        require(throws<std::logic_error>(
+                    [&] { reset_scheduler.attach_replay_log(after_reset); }),
+                "Replay-Anbindung nach Schedulerreset muss abgelehnt werden.");
+    }
 
     EventScheduler scheduler;
+    static_cast<void>(scheduler.schedule_at(
+        7u, [](const auto, const auto) {}, SchedulerEventKind::MediaVideo));
+    static_cast<void>(scheduler.schedule_at(
+        9u, [](const auto, const auto) {}, SchedulerEventKind::MediaAudio));
+    const auto pending_snapshot = scheduler.snapshot();
+    require(pending_snapshot.pending_events.size() == 2u &&
+                pending_snapshot.pending_events[0].guest_cycle == 7u &&
+                pending_snapshot.pending_events[0].kind == SchedulerEventKind::MediaVideo &&
+                pending_snapshot.pending_events[1].guest_cycle == 9u &&
+                pending_snapshot.pending_events[1].kind == SchedulerEventKind::MediaAudio &&
+                pending_snapshot.next_event_id == 3u,
+            "Scheduler-Snapshot bindet Queue, Callbacktypen oder naechste ID nicht.");
+    require(scheduler.cancel(pending_snapshot.pending_events[0].event_id) &&
+                scheduler.cancel(pending_snapshot.pending_events[1].event_id),
+            "Scheduler-Snapshot-Regression kann Testereignisse nicht bereinigen.");
     std::vector<std::uint64_t> order;
     const auto late = scheduler.schedule_at(20u, [&](const auto id, const auto cycle) {
         require(cycle == scheduler.current_cycle(), "Callback sieht nicht seinen Gastzyklus.");

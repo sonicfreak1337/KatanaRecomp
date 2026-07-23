@@ -143,6 +143,18 @@ void Sh4CacheControl::write_on_chip_ram(const std::uint32_t offset,
         on_chip_ram_[index_for(offset + byte)] = static_cast<std::uint8_t>(value >> (byte * 8u));
 }
 
+Sh4CacheControlSnapshot Sh4CacheControl::snapshot() const noexcept {
+    return {
+        value_,
+        instruction_invalidations_,
+        instruction_addresses_,
+        operand_addresses_,
+        instruction_data_,
+        operand_data_,
+        on_chip_ram_,
+    };
+}
+
 void Sh4CacheControl::reset() noexcept {
     value_ = 0u;
     instruction_invalidations_ = 0u;

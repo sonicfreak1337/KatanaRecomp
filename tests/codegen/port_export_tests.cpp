@@ -626,6 +626,7 @@ int run_test(const int argc, char* argv[]) {
     const auto first = export_dreamcast_port_project(gdi, output, options);
     const auto generated_before = snapshot(output / "generated");
     const auto generated_main = read_text(output / "src" / "main.cpp");
+    const auto& runtime_dispatch = generated_before.at("code/runtime-dispatch.cpp");
     std::string runtime_dispatch_shards;
     std::size_t runtime_dispatch_shard_count = 0u;
     for (const auto& [path, content] : generated_before) {
@@ -723,9 +724,9 @@ int run_test(const int argc, char* argv[]) {
             trace_serialize != std::string::npos && trace_enable < trace_allocate &&
             trace_allocate < trace_set_sink && trace_clear_sink < trace_serialize &&
             generated_before.at("metadata/port-project.json")
-                    .find("\"contract_version\":26") != std::string::npos &&
+                    .find("\"contract_version\":27") != std::string::npos &&
             generated_before.at("metadata/provenance.json")
-                    .find("\"manifest_version\":26") != std::string::npos,
+                    .find("\"manifest_version\":27") != std::string::npos,
         "Portprodukt bindet den versionierten Wait-Loop-Trace nicht strikt opt-in, "
         "allokationsfrei im Normalpfad und RAII-bereinigt ein.");
     const auto poll_disc_directory = fixture.root / "poll-loop-disc";
@@ -812,6 +813,243 @@ int run_test(const int argc, char* argv[]) {
                 occurrences(runtime_dispatch_shards, "&dispatch_owner_8C010000") == 3u,
             "Runtime-Dispatch ist nicht deterministisch geshardet oder dupliziert Wrapper pro "
             "Block.");
+    const auto runtime_probe_function =
+        generated_main.find("int run_deterministic_runtime_probe(");
+    const auto runtime_probe_function_end =
+        generated_main.find("\nstd::string redact_source(", runtime_probe_function);
+    const auto runtime_probe_replay_attach =
+        generated_main.find("state.scheduler->attach_replay_log(replay)", runtime_probe_function);
+    const auto runtime_probe_scheduler_coverage =
+        generated_main.find("SystemReplayCoverage::SchedulerCallback",
+                            runtime_probe_replay_attach);
+    const auto runtime_probe_audio =
+        generated_main.find("katana::runtime::RecordingHostAudioOutput audio",
+                            runtime_probe_scheduler_coverage);
+    const auto runtime_probe_clock =
+        generated_main.find("katana::runtime::DreamcastMediaClock media_clock",
+                             runtime_probe_audio);
+    const auto runtime_probe_media_coverage =
+        generated_main.find("SystemReplayCoverage::Video",
+                            runtime_probe_clock);
+    const auto runtime_probe_mmio_trace =
+        generated_main.find("RuntimeProbeMmioTraceSession mmio_trace",
+                            runtime_probe_media_coverage);
+    const auto runtime_probe_input_coverage =
+        generated_main.find("SystemReplayCoverage::Input",
+                            runtime_probe_mmio_trace);
+    const auto runtime_probe_input_source =
+        generated_main.find("input->inject(1u, state.scheduler->current_cycle(), {})",
+                            runtime_probe_input_coverage);
+    const auto runtime_probe_input_event =
+        generated_main.find("replay.inject({", runtime_probe_input_source);
+    const auto runtime_probe_clock_start =
+        generated_main.find("media_clock.start()", runtime_probe_input_event);
+    const auto runtime_probe_dispatch = generated_main.find(
+        "katana_port_generated::run_runtime(cpu, services, *state.runtime_blocks)",
+        runtime_probe_clock_start);
+    const auto runtime_probe_budget_catch = generated_main.find(
+        "catch (const katana::runtime::RuntimeProbeBudgetReached& reached)",
+        runtime_probe_dispatch);
+    const auto runtime_probe_quiesce =
+        generated_main.find("media_clock.stop();\n    mmio_trace.finish();",
+                            runtime_probe_budget_catch);
+    const auto runtime_probe_capture =
+        generated_main.find("capture_runtime_probe_dreamcast(",
+                            runtime_probe_quiesce);
+    const auto runtime_probe_replay_seal =
+        generated_main.find("replay.seal(provisional.hashes.guest_state)",
+                            runtime_probe_capture);
+    const auto runtime_probe_output =
+        generated_main.find("std::cout << \"KATANA_RUNTIME_PROBE \"",
+                            runtime_probe_replay_seal);
+    const auto runtime_probe_serialize = generated_main.find(
+        "serialize_runtime_probe_report_json(report)", runtime_probe_output);
+    const auto runtime_probe_newline =
+        generated_main.find("<< '\\n';", runtime_probe_serialize);
+    const auto runtime_probe_return =
+        generated_main.find("return 0;", runtime_probe_newline);
+    const auto runtime_probe_branch =
+        generated_main.find("if (deterministic_runtime_probe)");
+    const auto runtime_probe_branch_call =
+        generated_main.find("return run_deterministic_runtime_probe(",
+                            runtime_probe_branch);
+    const auto normal_native_video =
+        generated_main.find("katana::runtime::native_video_available()",
+                            runtime_probe_branch_call);
+    const auto normal_native_audio =
+        generated_main.find("katana::runtime::native_audio_available()",
+                            normal_native_video);
+    const auto normal_host_runtime =
+        generated_main.find("katana::runtime::HostRuntimeSession host",
+                            normal_native_audio);
+    const auto normal_frame_pump =
+        generated_main.find("const auto pump_guest_frame = [&] {",
+                            normal_host_runtime);
+    const auto normal_frame_proof =
+        generated_main.find("pump_guest_frame_proof(", normal_frame_pump);
+    const auto normal_runtime_dispatch = generated_main.find(
+        "katana_port_generated::run_runtime(cpu, services, *state.runtime_blocks)",
+        normal_frame_proof);
+    const auto dispatch_probe_profile =
+        runtime_dispatch.find("std::getenv(\"KATANA_RUNTIME_PROBE\")");
+    const auto dispatch_probe_determinism =
+        runtime_dispatch.find("materialization_policy.deterministic_no_host_time = true",
+                              dispatch_probe_profile);
+    const auto dispatch_probe_budget_catch = runtime_dispatch.find(
+        "catch (const katana::runtime::RuntimeProbeBudgetReached&)");
+    const auto dispatch_generic_catch =
+        runtime_dispatch.find("catch (...)", dispatch_probe_budget_catch);
+    require(
+        generated_main.find("#include \"katana/runtime/runtime_probe.hpp\"") !=
+                std::string::npos &&
+            occurrences(generated_main,
+                        "std::getenv(\"KATANA_RUNTIME_PROBE\")") == 1u &&
+            generated_main.find(
+                "std::string_view(value) == \"deterministic-v1\"") !=
+                std::string::npos &&
+            generated_main.find("runtime-probe-profile-invalid") !=
+                std::string::npos &&
+            generated_main.find(
+                "std::string_view(diagnostics) != \"0\"") !=
+                std::string::npos &&
+            generated_main.find(
+                "std::string_view(diagnostics) != \"1\"") !=
+                std::string::npos &&
+            generated_main.find(
+                "guest_cycle_budget_from_environment().has_value()") !=
+                std::string::npos &&
+            generated_main.find("runtime-probe-budget-required") !=
+                std::string::npos &&
+            generated_main.find("\"KATANA_PORT_WAIT_LOOP_TRACE\"") !=
+                std::string::npos &&
+            generated_main.find("\"KATANA_PORT_DIAGNOSTICS_FULL\"") !=
+                std::string::npos &&
+            generated_main.find("\"KATANA_PORT_PROGRESS_INTERVAL\"") !=
+                std::string::npos &&
+            generated_main.find("\"KATANA_PORT_LIFECYCLE_TEST\"") !=
+                std::string::npos &&
+            generated_main.find("\"KATANA_PORT_BLOCK_LIMIT\"") !=
+                std::string::npos &&
+            generated_main.find("\"KATANA_PORT_IGNORE_FOCUS\"") !=
+                std::string::npos &&
+            generated_main.find("\"KATANA_PORT_MEMORY_PROBES\"") !=
+                std::string::npos &&
+            generated_main.find("runtime-probe-environment-conflict") !=
+                std::string::npos,
+        "Deterministische Runtime-Probe besitzt kein exaktes Profil oder keine "
+        "geschlossene Umgebungsvalidierung.");
+    require(
+        runtime_probe_function != std::string::npos &&
+            runtime_probe_function_end != std::string::npos &&
+            runtime_probe_replay_attach != std::string::npos &&
+            runtime_probe_scheduler_coverage != std::string::npos &&
+            runtime_probe_audio != std::string::npos &&
+            runtime_probe_clock != std::string::npos &&
+            runtime_probe_media_coverage != std::string::npos &&
+            runtime_probe_mmio_trace != std::string::npos &&
+            runtime_probe_input_coverage != std::string::npos &&
+            runtime_probe_input_source != std::string::npos &&
+            runtime_probe_input_event != std::string::npos &&
+            runtime_probe_clock_start != std::string::npos &&
+            runtime_probe_dispatch != std::string::npos &&
+            runtime_probe_budget_catch != std::string::npos &&
+            runtime_probe_quiesce != std::string::npos &&
+            runtime_probe_capture != std::string::npos &&
+            runtime_probe_replay_seal != std::string::npos &&
+            runtime_probe_output != std::string::npos &&
+            runtime_probe_serialize != std::string::npos &&
+            runtime_probe_newline != std::string::npos &&
+            runtime_probe_return != std::string::npos &&
+            runtime_probe_function < runtime_probe_replay_attach &&
+            runtime_probe_replay_attach < runtime_probe_scheduler_coverage &&
+            runtime_probe_scheduler_coverage < runtime_probe_audio &&
+            runtime_probe_replay_attach < runtime_probe_audio &&
+            runtime_probe_audio < runtime_probe_clock &&
+            runtime_probe_clock < runtime_probe_media_coverage &&
+            runtime_probe_media_coverage < runtime_probe_mmio_trace &&
+            runtime_probe_clock < runtime_probe_mmio_trace &&
+            runtime_probe_mmio_trace < runtime_probe_input_coverage &&
+            runtime_probe_input_coverage < runtime_probe_input_source &&
+            runtime_probe_input_source < runtime_probe_input_event &&
+            runtime_probe_input_event < runtime_probe_clock_start &&
+            runtime_probe_clock < runtime_probe_clock_start &&
+            runtime_probe_clock_start < runtime_probe_dispatch &&
+            runtime_probe_dispatch < runtime_probe_budget_catch &&
+            runtime_probe_budget_catch < runtime_probe_quiesce &&
+            runtime_probe_quiesce < runtime_probe_capture &&
+            runtime_probe_capture < runtime_probe_replay_seal &&
+            runtime_probe_replay_seal < runtime_probe_output &&
+            runtime_probe_output < runtime_probe_serialize &&
+            runtime_probe_serialize < runtime_probe_newline &&
+            runtime_probe_newline < runtime_probe_return &&
+            runtime_probe_return < runtime_probe_function_end &&
+            generated_main.find("create_native_video_output",
+                                runtime_probe_function) >
+                runtime_probe_function_end &&
+            generated_main.find("create_native_audio_output",
+                                runtime_probe_function) >
+                runtime_probe_function_end &&
+            occurrences(generated_main,
+                        "std::cout << \"KATANA_RUNTIME_PROBE \"") == 1u &&
+            generated_main.find(
+                "std::cerr << \"KATANA_RUNTIME_PROBE \"") ==
+                std::string::npos &&
+            generated_main.find(
+                "throw katana::runtime::RuntimeProbeBudgetReached("
+                "result.guest_cycle)") != std::string::npos &&
+            generated_main.find(
+                "termination = "
+                "katana::runtime::RuntimeProbeTermination::BudgetReached",
+                runtime_probe_budget_catch) != std::string::npos &&
+             generated_main.find(
+                 "report.guest_cycle != *report.guest_cycle_budget",
+                 runtime_probe_budget_catch) != std::string::npos &&
+            generated_main.find(
+                "SystemReplayProfile::DeterministicV1",
+                runtime_probe_function) != std::string::npos &&
+            generated_main.find(
+                "system_replay_mmio_observer(") != std::string::npos &&
+            generated_main.find(
+                "SystemReplayEventKind::Dma") != std::string::npos &&
+            generated_main.find(
+                "\"neutral-controller-input\"",
+                runtime_probe_function) != std::string::npos &&
+            occurrences(generated_main, "enable_coverage(") == 5u &&
+            generated_main.find(
+                "enable_coverage(replay.required_coverage())") == std::string::npos &&
+            generated_main.find("SystemReplayCoverage::CpuSafepoint") !=
+                std::string::npos &&
+            generated_main.find("SystemReplayCoverage::AcceptedInterrupt") !=
+                std::string::npos &&
+            generated_main.find("SystemReplayCoverage::Dma") != std::string::npos &&
+            generated_main.find("SystemReplayCoverage::Audio") != std::string::npos &&
+            generated_main.find("SystemReplayCoverage::Mmio") != std::string::npos,
+        "Runtime-Probe bindet Replay, typed Budget-Exit oder genau eine Ergebniszeile "
+        "nicht deterministisch beziehungsweise quiesziert vor dem Seal nicht.");
+    require(
+        runtime_probe_branch != std::string::npos &&
+            runtime_probe_branch_call != std::string::npos &&
+            normal_native_video != std::string::npos &&
+            normal_native_audio != std::string::npos &&
+            normal_host_runtime != std::string::npos &&
+            normal_frame_pump != std::string::npos &&
+            normal_frame_proof != std::string::npos &&
+            normal_runtime_dispatch != std::string::npos &&
+            runtime_probe_branch < runtime_probe_branch_call &&
+            runtime_probe_branch_call < normal_native_video &&
+            normal_native_video < normal_native_audio &&
+            normal_native_audio < normal_host_runtime &&
+            normal_host_runtime < normal_frame_pump &&
+            normal_frame_pump < normal_frame_proof &&
+            normal_frame_proof < normal_runtime_dispatch &&
+            dispatch_probe_profile != std::string::npos &&
+            dispatch_probe_determinism != std::string::npos &&
+            dispatch_probe_budget_catch != std::string::npos &&
+            dispatch_generic_catch != std::string::npos &&
+            dispatch_probe_profile < dispatch_probe_determinism &&
+            dispatch_probe_budget_catch < dispatch_generic_catch,
+        "Runtime-Probe liegt nicht vor nativen Hostbackends oder schwaecht den normalen "
+        "Produkt-Frame-/Dispatchpfad ab.");
     require(
         generated_before.at("katana-port.cmake").find("add_executable(synthetic_game") !=
                 std::string::npos &&
@@ -1038,9 +1276,7 @@ int run_test(const int argc, char* argv[]) {
                 std::string::npos &&
             read_text(output / "src" / "main.cpp").find("KR_FIRST_PRESENTED_FRAME") !=
                 std::string::npos &&
-            read_text(output / "src" / "main.cpp").find("pump_guest_frame_proof") <
-                read_text(output / "src" / "main.cpp")
-                    .find("run_runtime(cpu, services, *state.runtime_blocks)") &&
+            normal_frame_proof < normal_runtime_dispatch &&
             read_text(output / "src" / "main.cpp").find("HostRuntimeSession") !=
                 std::string::npos &&
             read_text(output / "src" / "main.cpp").find("DreamcastMutableStorage::open") !=
@@ -1089,7 +1325,6 @@ int run_test(const int argc, char* argv[]) {
                               "\"diagnostic-validated-demand-v1\"") !=
                     std::string::npos,
             "Explizites Diagnoseprofil besitzt keinen klar isolierten SH-4-Interpreter.");
-    const auto& runtime_dispatch = generated_before.at("code/runtime-dispatch.cpp");
     const auto retire_marker = runtime_dispatch.find(
         "const auto retired_before = cpu.retired_guest_instructions");
     const auto execute_marker = runtime_dispatch.find(

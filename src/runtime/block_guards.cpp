@@ -194,6 +194,18 @@ BlockStateGuard RuntimeAddressSpace::guard_for(const std::uint32_t virtual_addre
             translated.physical_address / page_size * page_size};
 }
 
+RuntimeAddressSpaceSnapshot RuntimeAddressSpace::snapshot() const {
+    return {
+        mode_,
+        mmucr_,
+        asid_,
+        address_space_generation_,
+        mmu_generation_,
+        watchpoint_generation_,
+        mappings_,
+    };
+}
+
 bool RuntimeAddressSpace::block_fits_translation_page(const std::uint32_t virtual_start,
                                                       const std::uint32_t size) const noexcept {
     if (size == 0u) {

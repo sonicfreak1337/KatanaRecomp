@@ -38,6 +38,14 @@ int main() {
     Memory bus(0u);
     const auto flash = map_dreamcast_command_flash(bus, source);
 
+    bus.write_u8(0x00200000u + dreamcast_flash_unlock_address_1, 0xAAu);
+    const auto unlock_snapshot = flash->snapshot();
+    require(unlock_snapshot.command_state == FlashCommandState::Unlock2 &&
+                !unlock_snapshot.write_protected &&
+                unlock_snapshot.size == dreamcast_flash_size,
+            "Flash-Snapshot verliert den laufenden Command-FSM-Zustand.");
+    bus.write_u8(0x00200000u, 0xF0u);
+
     program(bus, 0x00201234u, 0x5Au);
     require(bus.read_u8(0x80201234u) == 0x50u && source[0x1234u] == 0xF0u &&
                 flash->source_byte(0x1234u) == 0xF0u,
@@ -60,6 +68,8 @@ int main() {
     bus.write_u8(0x00200000u, 0xF0u);
 
     flash->set_write_protected(true);
+    require(flash->snapshot().write_protected,
+            "Flash-Snapshot verliert den gesetzten Schreibschutz.");
     require(throws<std::runtime_error>([&] { program(bus, 0x00200020u, 0u); }),
             "Schreibschutz verhindert Programmierung nicht.");
     flash->set_write_protected(false);

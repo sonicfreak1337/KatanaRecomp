@@ -19,6 +19,8 @@ inline constexpr std::size_t sh4_dmac_register_size = 0x44u;
 struct DmaTiming {
     std::uint64_t guest_cycles_per_byte = 1u;
     std::size_t maximum_batch_units = 256u;
+
+    [[nodiscard]] bool operator==(const DmaTiming&) const = default;
 };
 
 enum class DmaExecutionMode : std::uint8_t { SingleUnitReference, DeterministicBatch };
@@ -26,6 +28,8 @@ enum class DmaExecutionMode : std::uint8_t { SingleUnitReference, DeterministicB
 struct DmaPerformanceCounters {
     std::uint64_t scheduler_callbacks = 0u;
     std::uint64_t completed_batches = 0u;
+
+    [[nodiscard]] bool operator==(const DmaPerformanceCounters&) const = default;
 };
 
 enum class DmaFaultReason : std::uint8_t {
@@ -44,6 +48,37 @@ struct DmaFault {
     std::uint32_t source = 0u;
     std::uint32_t destination = 0u;
     std::size_t transfer_size = 0u;
+
+    [[nodiscard]] bool operator==(const DmaFault&) const = default;
+};
+
+struct Sh4DmacChannelSnapshot {
+    std::uint32_t source = 0u;
+    std::uint32_t destination = 0u;
+    std::uint32_t count = 0u;
+    std::uint32_t control = 0u;
+    std::uint32_t pending_requests = 0u;
+    std::uint32_t pending_on_demand_requests = 0u;
+    std::uint64_t completed_units = 0u;
+    bool interrupt_pending = false;
+
+    [[nodiscard]] bool operator==(const Sh4DmacChannelSnapshot&) const = default;
+};
+
+struct Sh4DmacSnapshot {
+    std::array<Sh4DmacChannelSnapshot, 4u> channels{};
+    std::uint32_t operation = 0u;
+    DmaTiming timing;
+    DmaExecutionMode execution_mode = DmaExecutionMode::SingleUnitReference;
+    std::optional<SchedulerEventId> event_id;
+    std::optional<std::size_t> scheduled_channel;
+    std::size_t scheduled_units = 0u;
+    std::optional<DmaFault> last_fault;
+    std::optional<std::size_t> last_on_demand_channel;
+    std::size_t round_robin_cursor = 0u;
+    DmaPerformanceCounters performance_counters;
+
+    [[nodiscard]] bool operator==(const Sh4DmacSnapshot&) const = default;
 };
 
 class Sh4Dmac final {
@@ -101,6 +136,7 @@ class Sh4Dmac final {
     [[nodiscard]] DmaExecutionMode execution_mode() const noexcept;
     void set_execution_mode(DmaExecutionMode mode);
     [[nodiscard]] const DmaPerformanceCounters& performance_counters() const noexcept;
+    [[nodiscard]] Sh4DmacSnapshot snapshot() const noexcept;
     void reset_performance_counters() noexcept;
     void reset() noexcept;
 

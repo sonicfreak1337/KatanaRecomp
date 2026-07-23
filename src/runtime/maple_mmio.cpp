@@ -151,6 +151,29 @@ bool DreamcastMapleController::hard_trigger_failed() const noexcept {
     return hard_trigger_failed_;
 }
 
+DreamcastMapleControllerSnapshot DreamcastMapleController::snapshot() const {
+    DreamcastMapleControllerSnapshot result;
+    result.timing = timing_;
+    result.completion_event = completion_event_;
+    result.pending_responses.reserve(pending_responses_.size());
+    for (const auto& response : pending_responses_)
+        result.pending_responses.push_back({response.destination, response.words});
+    result.command_table = command_table_;
+    result.trigger_select = trigger_select_;
+    result.enabled = enabled_;
+    result.active = active_;
+    result.system_control = system_control_;
+    result.address_protect = address_protect_;
+    result.msb_select = msb_select_;
+    result.tx_address = tx_address_;
+    result.rx_address = rx_address_;
+    result.rx_base = rx_base_;
+    result.completed_dma_count = completed_dma_count_;
+    result.transferred_word_count = transferred_word_count_;
+    result.hard_trigger_failed = hard_trigger_failed_;
+    return result;
+}
+
 bool DreamcastMapleController::protected_address(const std::uint32_t address,
                                                  const std::size_t size) const noexcept {
     if (size == 0u) return false;
@@ -262,7 +285,9 @@ void DreamcastMapleController::start_dma() {
             throw std::overflow_error("Maple-DMA-Zeitbudget ist ungueltig oder laeuft ueber.");
         const auto latency = transfer_words * timing_.cycles_per_word;
         completion_event_ = scheduler_.schedule_after(
-            latency, [this](const auto event_id, const auto) { complete_dma(event_id); });
+            latency,
+            [this](const auto event_id, const auto) { complete_dma(event_id); },
+            SchedulerEventKind::MapleDma);
         transferred_word_count_ += transfer_words;
     } catch (...) {
         active_ = 0u;

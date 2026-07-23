@@ -239,7 +239,9 @@ std::uint64_t GdRomAsyncReader::submit(const GdRomRequest& request) {
     const auto id = next_request_id_++;
     const auto ready_cycle = scheduler_.current_cycle() + duration;
     const auto event_id = scheduler_.schedule_at(
-        ready_cycle, [this, id](const auto, const auto cycle) { complete(id, cycle); });
+        ready_cycle,
+        [this, id](const auto, const auto cycle) { complete(id, cycle); },
+        SchedulerEventKind::DiscRead);
     pending_.push_back({id, ready_cycle, request, event_id});
     return id;
 }
@@ -311,6 +313,20 @@ std::size_t GdRomAsyncReader::pending_count() const noexcept {
 }
 std::uint64_t GdRomAsyncReader::current_cycle() const noexcept {
     return scheduler_.current_cycle();
+}
+
+GdRomAsyncReaderSnapshot GdRomAsyncReader::snapshot() const {
+    GdRomAsyncReaderSnapshot result;
+    result.scheduler_cycle = scheduler_.current_cycle();
+    result.timing = timing_;
+    result.next_request_id = next_request_id_;
+    result.pending.reserve(pending_.size());
+    for (const auto& request : pending_) {
+        result.pending.push_back(
+            {request.request_id, request.ready_cycle, request.request, request.event_id});
+    }
+    result.completed = completed_;
+    return result;
 }
 
 } // namespace katana::runtime

@@ -100,6 +100,21 @@ bool AicaRtc::write_enabled() const noexcept {
     return write_enabled_;
 }
 
+AicaRtcSnapshot AicaRtc::snapshot() const noexcept {
+    return {
+        scheduler_ != nullptr && !scheduler_lifetime_.expired()
+            ? scheduler_->current_cycle()
+            : base_cycle_,
+        guest_clock_hz_,
+        base_cycle_,
+        initial_seconds_,
+        base_seconds_,
+        counter(),
+        write_latch_,
+        write_enabled_,
+    };
+}
+
 void AicaRtc::handle_scheduler_reset() noexcept {
     base_cycle_ = 0u;
     base_seconds_ = initial_seconds_;
@@ -325,6 +340,23 @@ std::uint64_t AicaRegisterFile::rendered_frame_count() const noexcept {
     return rendered_frames_;
 }
 
+AicaRegisterSnapshot AicaRegisterFile::snapshot() const noexcept {
+    AicaRegisterSnapshot result;
+    result.registers = registers_;
+    for (std::size_t index = 0u; index < channels_.size(); ++index) {
+        const auto& source = channels_[index];
+        result.channels[index] = {source.phase,
+                                  source.adpcm_position,
+                                  source.adpcm_predictor,
+                                  source.adpcm_step,
+                                  source.active};
+    }
+    result.writes = writes_;
+    result.rendered_buffers = rendered_buffers_;
+    result.rendered_frames = rendered_frames_;
+    return result;
+}
+
 std::uint64_t AicaRegisterFile::write_count() const noexcept {
     return writes_;
 }
@@ -485,6 +517,10 @@ bool AicaTimer::enabled() const noexcept {
     return enabled_;
 }
 
+AicaTimer::Snapshot AicaTimer::snapshot() const noexcept {
+    return {remainder_, divisor_, counter_, enabled_};
+}
+
 void AicaInterruptState::set_enabled(const std::uint32_t mask) {
     const auto was_asserted = asserted();
     enabled_ = mask;
@@ -515,7 +551,9 @@ AicaExecutionController::~AicaExecutionController() {
 void AicaExecutionController::schedule_tick() {
     if (scheduler_ == nullptr || guest_cycles_per_tick_ == 0u) return;
     tick_event_ = scheduler_->schedule_after(
-        guest_cycles_per_tick_, [this](const auto event_id, const auto) { handle_tick(event_id); });
+        guest_cycles_per_tick_,
+        [this](const auto event_id, const auto) { handle_tick(event_id); },
+        SchedulerEventKind::AicaTick);
 }
 
 void AicaExecutionController::handle_tick(const SchedulerEventId event_id) {
@@ -552,6 +590,10 @@ std::uint32_t AicaInterruptState::enabled() const noexcept {
 }
 bool AicaInterruptState::asserted() const noexcept {
     return (pending_ & enabled_) != 0u;
+}
+
+AicaInterruptState::Snapshot AicaInterruptState::snapshot() const noexcept {
+    return {enabled_, pending_, asserted()};
 }
 
 void AicaExecutionController::set_mode(const AicaArm7Mode mode) {
@@ -610,6 +652,18 @@ void AicaExecutionController::tick(const std::uint64_t audio_cycles) {
             interrupts_.request(timer_interrupt_base << index);
         }
     }
+}
+
+AicaExecutionController::Snapshot AicaExecutionController::snapshot() const noexcept {
+    Snapshot result;
+    result.mode = mode_;
+    result.arm7_reset_asserted = arm7_reset_asserted_;
+    for (std::size_t index = 0u; index < timers_.size(); ++index)
+        result.timers[index] = timers_[index].snapshot();
+    result.interrupts = interrupts_.snapshot();
+    result.tick_event = tick_event_;
+    result.guest_cycles_per_tick = guest_cycles_per_tick_;
+    return result;
 }
 
 std::shared_ptr<AicaRegisterFile> map_aica_registers(Memory& memory) {

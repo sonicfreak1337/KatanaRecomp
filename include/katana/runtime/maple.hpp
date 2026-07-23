@@ -104,6 +104,15 @@ inline constexpr std::size_t vmu_block_size = 512u;
 inline constexpr std::size_t vmu_block_count = 256u;
 inline constexpr std::size_t vmu_storage_size = vmu_block_size * vmu_block_count;
 
+struct MapleVmuSnapshot {
+    std::size_t size = 0u;
+    bool write_protected = false;
+    bool working_copy_dirty = false;
+    bool persistent_working_copy = false;
+
+    [[nodiscard]] bool operator==(const MapleVmuSnapshot&) const = default;
+};
+
 class MapleVmuDevice final : public MapleDevice {
   public:
     explicit MapleVmuDevice(std::span<const std::uint8_t> image = {});
@@ -116,6 +125,7 @@ class MapleVmuDevice final : public MapleDevice {
     void save_working_copy();
     [[nodiscard]] bool working_copy_dirty() const noexcept;
     [[nodiscard]] bool persistent_working_copy() const noexcept;
+    [[nodiscard]] MapleVmuSnapshot snapshot() const noexcept;
 
   private:
     [[nodiscard]] MapleResponse read_block(const MapleRequest& request) const;
@@ -132,6 +142,16 @@ struct MapleTransactionRecord {
     std::uint8_t unit = 0u;
     MapleCommand command = MapleCommand::DeviceRequest;
     MapleResponseCode response = MapleResponseCode::UnknownCommand;
+
+    [[nodiscard]] bool operator==(const MapleTransactionRecord&) const = default;
+};
+
+struct MapleBusSnapshot {
+    std::array<bool, maple_port_count * maple_units_per_port> attached{};
+    std::vector<MapleTransactionRecord> history;
+    std::uint64_t next_sequence = 0u;
+
+    [[nodiscard]] bool operator==(const MapleBusSnapshot&) const = default;
 };
 
 class MapleBus final {
@@ -144,6 +164,7 @@ class MapleBus final {
     [[nodiscard]] MapleResponse
     exchange_without_completion(std::uint8_t port, std::uint8_t unit, const MapleRequest& request);
     [[nodiscard]] std::span<const MapleTransactionRecord> history() const noexcept;
+    [[nodiscard]] MapleBusSnapshot snapshot() const;
 
   private:
     [[nodiscard]] static std::size_t slot(std::uint8_t port, std::uint8_t unit);

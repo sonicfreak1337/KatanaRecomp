@@ -15,6 +15,16 @@ namespace {
 
 constexpr std::uint64_t fnv_offset = 14695981039346656037ull;
 constexpr std::uint64_t fnv_prime = 1099511628211ull;
+constexpr SystemReplayCoverageMask all_coverage =
+    static_cast<SystemReplayCoverageMask>(SystemReplayCoverage::CpuSafepoint) |
+    static_cast<SystemReplayCoverageMask>(SystemReplayCoverage::SchedulerCallback) |
+    static_cast<SystemReplayCoverageMask>(SystemReplayCoverage::AcceptedInterrupt) |
+    static_cast<SystemReplayCoverageMask>(SystemReplayCoverage::Video) |
+    static_cast<SystemReplayCoverageMask>(SystemReplayCoverage::Audio) |
+    static_cast<SystemReplayCoverageMask>(SystemReplayCoverage::Input) |
+    static_cast<SystemReplayCoverageMask>(SystemReplayCoverage::Mmio) |
+    static_cast<SystemReplayCoverageMask>(SystemReplayCoverage::Dma);
+constexpr std::string_view ordering_digest_domain = "katana-system-replay-order-v1";
 
 bool stable_code(const std::string_view value) noexcept {
     return !value.empty() && value.size() <= SystemReplayConfig::maximum_code_length &&
@@ -28,8 +38,27 @@ bool external_kind(const SystemReplayEventKind kind) noexcept {
     return kind == SystemReplayEventKind::ExternalInput || kind == SystemReplayEventKind::HostEvent;
 }
 
+bool known_event_kind(const SystemReplayEventKind kind) noexcept {
+    switch (kind) {
+    case SystemReplayEventKind::CpuSafepoint:
+    case SystemReplayEventKind::MmioRead:
+    case SystemReplayEventKind::MmioWrite:
+    case SystemReplayEventKind::Dma:
+    case SystemReplayEventKind::Interrupt:
+    case SystemReplayEventKind::Timer:
+    case SystemReplayEventKind::SchedulerCallback:
+    case SystemReplayEventKind::Video:
+    case SystemReplayEventKind::Audio:
+    case SystemReplayEventKind::ExternalInput:
+    case SystemReplayEventKind::HostEvent:
+        return true;
+    }
+    return false;
+}
+
 void validate_event(const SystemReplayEvent& event) {
-    if (!stable_code(event.code) || external_kind(event.kind) != event.injected) {
+    if (!known_event_kind(event.kind) || !stable_code(event.code) ||
+        external_kind(event.kind) != event.injected) {
         throw std::invalid_argument(
             "Systemereignis braucht portablen Code und explizite externe Injektion.");
     }
@@ -64,6 +93,28 @@ void hash_event(std::uint64_t& hash, const SystemReplayEvent& event) noexcept {
     hash_u64(hash, event.auxiliary);
     hash_byte(hash, event.injected ? 1u : 0u);
     hash_u64(hash, event.time_epoch);
+}
+
+std::uint64_t ordering_digest_seed(const SystemReplayProfile profile,
+                                   const SystemReplayCoverageMask enabled) noexcept {
+    auto hash = fnv_offset;
+    for (const unsigned char value : ordering_digest_domain)
+        hash_byte(hash, value);
+    hash_byte(hash, 0u);
+    hash_u64(hash, system_replay_schema_version);
+    hash_byte(hash, static_cast<std::uint8_t>(profile));
+    hash_u64(hash, enabled);
+    return hash;
+}
+
+std::size_t coverage_index(const SystemReplayCoverageMask coverage) noexcept {
+    std::size_t index = 0u;
+    auto bit = coverage;
+    while (bit > 1u) {
+        bit >>= 1u;
+        ++index;
+    }
+    return index;
 }
 
 std::string hex32(const std::uint32_t value) {
@@ -109,7 +160,12 @@ class SystemReplayCapacityError final : public std::length_error {
 
 } // namespace
 
-SystemReplayLog::SystemReplayLog(const SystemReplayConfig config) : config_(config) {
+SystemReplayLog::SystemReplayLog(const SystemReplayConfig config)
+    : config_(config), required_coverage_(system_replay_required_coverage(config.profile)) {
+    if (config_.profile != SystemReplayProfile::General &&
+        config_.profile != SystemReplayProfile::DeterministicV1) {
+        throw std::invalid_argument("Systemreplay-Profil ist unbekannt.");
+    }
     if (config_.capacity == 0u ||
         config_.capacity > SystemReplayConfig::maximum_capacity) {
         throw std::invalid_argument("Systemreplay-Kapazitaet liegt ausserhalb des Vertrags.");
@@ -117,11 +173,31 @@ SystemReplayLog::SystemReplayLog(const SystemReplayConfig config) : config_(conf
     events_.reserve(config_.capacity);
 }
 
+void SystemReplayLog::enable_coverage(const SystemReplayCoverageMask coverage) {
+    if ((coverage & ~all_coverage) != 0u) {
+        throw std::invalid_argument("Systemreplay-Coverage enthaelt unbekannte Klassen.");
+    }
+    if (final_guest_state_hash_.has_value()) {
+        throw std::logic_error("Versiegelter Systemreplay darf Coverage nicht aendern.");
+    }
+    if (!events_.empty() || dropped_events_ != 0u || ordering_digest_initialized_) {
+        throw std::logic_error(
+            "Systemreplay-Coverage muss vor dem ersten Ereignis aktiviert werden.");
+    }
+    enabled_coverage_ |= coverage;
+}
+
 void SystemReplayLog::record(SystemReplayEvent event) {
     if (final_guest_state_hash_.has_value()) {
         throw std::logic_error("Versiegelter Systemreplay darf keine Ereignisse aufnehmen.");
     }
     validate_event(event);
+    const auto coverage = system_replay_event_coverage(event);
+    if (config_.profile == SystemReplayProfile::DeterministicV1 &&
+        (coverage & ~enabled_coverage_) != 0u) {
+        throw std::logic_error(
+            "Deterministic-v1-Ereignis besitzt keinen vorab aktivierten Coverage-Hook.");
+    }
     if (last_time_epoch_.has_value() &&
         (event.time_epoch < *last_time_epoch_ ||
          (event.time_epoch == *last_time_epoch_ && event.guest_cycle < *last_guest_cycle_))) {
@@ -138,6 +214,15 @@ void SystemReplayLog::record(SystemReplayEvent event) {
     }
     event.sequence = events_.size();
     events_.push_back(std::move(event));
+    if (!ordering_digest_initialized_) {
+        ordering_digest_ = ordering_digest_seed(config_.profile, enabled_coverage_);
+        ordering_digest_initialized_ = true;
+    }
+    hash_event(ordering_digest_, events_.back());
+    observed_coverage_ |= coverage;
+    for (SystemReplayCoverageMask bit = 1u; bit <= all_coverage; bit <<= 1u) {
+        if ((coverage & bit) != 0u) ++event_counts_[coverage_index(bit)];
+    }
     last_guest_cycle_ = events_.back().guest_cycle;
     last_time_epoch_ = events_.back().time_epoch;
 }
@@ -189,10 +274,33 @@ std::uint64_t SystemReplayLog::dropped_events() const noexcept {
 }
 
 std::uint64_t SystemReplayLog::event_hash() const noexcept {
-    auto hash = fnv_offset;
-    for (const auto& event : events_)
-        hash_event(hash, event);
-    return hash;
+    return ordering_digest();
+}
+
+std::uint64_t SystemReplayLog::ordering_digest() const noexcept {
+    return ordering_digest_initialized_
+               ? ordering_digest_
+               : ordering_digest_seed(config_.profile, enabled_coverage_);
+}
+
+SystemReplayCoverageMask SystemReplayLog::enabled_coverage() const noexcept {
+    return enabled_coverage_;
+}
+
+SystemReplayCoverageMask SystemReplayLog::observed_coverage() const noexcept {
+    return observed_coverage_;
+}
+
+SystemReplayCoverageMask SystemReplayLog::required_coverage() const noexcept {
+    return required_coverage_;
+}
+
+bool SystemReplayLog::coverage_complete() const noexcept {
+    return (required_coverage_ & ~enabled_coverage_) == 0u;
+}
+
+const SystemReplayEventCounts& SystemReplayLog::event_counts() const noexcept {
+    return event_counts_;
 }
 
 std::uint64_t SystemReplayLog::final_guest_state_hash() const {
@@ -210,6 +318,17 @@ std::string SystemReplayLog::serialize_json() const {
            << (dropped_events_ == 0u ? "success" : "failed")
            << "\",\"sealed\":" << (sealed() ? "true" : "false")
            << ",\"capacity\":" << config_.capacity
+           << ",\"profile\":\"" << system_replay_profile_name(config_.profile) << '"'
+           << ",\"enabled_coverage\":" << enabled_coverage_
+           << ",\"observed_coverage\":" << observed_coverage_
+           << ",\"required_coverage\":" << required_coverage_
+           << ",\"coverage_complete\":" << (coverage_complete() ? "true" : "false")
+           << ",\"coverage_event_counts\":[";
+    for (std::size_t index = 0u; index < event_counts_.size(); ++index) {
+        if (index != 0u) output << ',';
+        output << event_counts_[index];
+    }
+    output << ']'
            << ",\"serialize_values\":" << (config_.serialize_values ? "true" : "false")
            << ",\"values_redacted\":" << (config_.serialize_values ? "false" : "true")
            << ",\"codes_redacted\":" << (config_.serialize_values ? "false" : "true")
@@ -265,6 +384,10 @@ DeterministicSystemReplay::DeterministicSystemReplay(const SystemReplayLog& expe
     if (!expected.sealed()) {
         throw std::invalid_argument("Unversiegelte Aufzeichnung kann nicht abgespielt werden.");
     }
+    if (!expected.coverage_complete()) {
+        throw std::invalid_argument(
+            "Aufzeichnung besitzt nicht alle verpflichtenden Replay-Coverage-Hooks.");
+    }
     expected_ = expected.events();
     expected_guest_state_hash_ = expected.final_guest_state_hash();
 }
@@ -302,7 +425,9 @@ bool DeterministicSystemReplay::complete() const noexcept {
 }
 
 SystemReplayEvent make_safepoint_replay_event(const SafepointReport& report) {
-    const auto flags = (report.interrupt_delivered ? 1u : 0u) | (report.budget_exhausted ? 2u : 0u);
+    const auto flags = (report.interrupt_delivered ? 1u : 0u) |
+                       (report.budget_exhausted ? 2u : 0u) |
+                       (report.guest_cycle_budget_exhausted ? 4u : 0u);
     return {0u,
             report.delivered_cycle,
             SystemReplayEventKind::CpuSafepoint,
@@ -390,6 +515,58 @@ std::uint64_t hash_replay_guest_state(const CpuState& cpu,
     hash_u64(hash, scheduler_cycle);
     hash_u64(hash, subsystem_hash);
     return hash;
+}
+
+SystemReplayCoverageMask
+system_replay_required_coverage(const SystemReplayProfile profile) noexcept {
+    switch (profile) {
+    case SystemReplayProfile::General:
+        return 0u;
+    case SystemReplayProfile::DeterministicV1:
+        return all_coverage;
+    }
+    return all_coverage;
+}
+
+SystemReplayCoverageMask
+system_replay_event_coverage(const SystemReplayEvent& event) noexcept {
+    switch (event.kind) {
+    case SystemReplayEventKind::CpuSafepoint:
+        return static_cast<SystemReplayCoverageMask>(SystemReplayCoverage::CpuSafepoint);
+    case SystemReplayEventKind::MmioRead:
+    case SystemReplayEventKind::MmioWrite:
+        return static_cast<SystemReplayCoverageMask>(SystemReplayCoverage::Mmio);
+    case SystemReplayEventKind::Dma:
+        return static_cast<SystemReplayCoverageMask>(SystemReplayCoverage::Dma);
+    case SystemReplayEventKind::Interrupt:
+        return event.code == "interrupt-accepted"
+                   ? static_cast<SystemReplayCoverageMask>(
+                         SystemReplayCoverage::AcceptedInterrupt)
+                   : 0u;
+    case SystemReplayEventKind::SchedulerCallback:
+        return static_cast<SystemReplayCoverageMask>(
+            SystemReplayCoverage::SchedulerCallback);
+    case SystemReplayEventKind::Video:
+        return static_cast<SystemReplayCoverageMask>(SystemReplayCoverage::Video);
+    case SystemReplayEventKind::Audio:
+        return static_cast<SystemReplayCoverageMask>(SystemReplayCoverage::Audio);
+    case SystemReplayEventKind::ExternalInput:
+        return static_cast<SystemReplayCoverageMask>(SystemReplayCoverage::Input);
+    case SystemReplayEventKind::Timer:
+    case SystemReplayEventKind::HostEvent:
+        return 0u;
+    }
+    return 0u;
+}
+
+const char* system_replay_profile_name(const SystemReplayProfile profile) noexcept {
+    switch (profile) {
+    case SystemReplayProfile::General:
+        return "general";
+    case SystemReplayProfile::DeterministicV1:
+        return "deterministic-v1";
+    }
+    return "unknown";
 }
 
 const char* system_replay_event_kind_name(const SystemReplayEventKind kind) noexcept {

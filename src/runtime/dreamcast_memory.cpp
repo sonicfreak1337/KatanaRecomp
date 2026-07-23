@@ -207,62 +207,62 @@ void FlashMemoryDevice::set_working_byte(const std::uint32_t offset, const std::
 }
 
 [[noreturn]] void FlashMemoryDevice::fail(const char* message) {
-    state_ = CommandState::ReadArray;
+    state_ = FlashCommandState::ReadArray;
     throw std::runtime_error(message);
 }
 
 void FlashMemoryDevice::write_u8(const std::uint32_t offset, const std::uint8_t value) {
     check(offset);
-    if (value == 0xF0u && state_ != CommandState::Program) {
+    if (value == 0xF0u && state_ != FlashCommandState::Program) {
         reset_command_state();
         return;
     }
     switch (state_) {
-    case CommandState::ReadArray:
+    case FlashCommandState::ReadArray:
         if (offset == dreamcast_flash_unlock_address_1 && value == 0xAAu) {
-            state_ = CommandState::Unlock2;
+            state_ = FlashCommandState::Unlock2;
             return;
         }
         fail("Flash-Schreibzugriff ohne Unlock-Sequenz.");
-    case CommandState::Unlock2:
+    case FlashCommandState::Unlock2:
         if (offset == dreamcast_flash_unlock_address_2 && value == 0x55u) {
-            state_ = CommandState::Command;
+            state_ = FlashCommandState::Command;
             return;
         }
         fail("Ungueltiger zweiter Flash-Unlock-Schritt.");
-    case CommandState::Command:
+    case FlashCommandState::Command:
         if (offset != dreamcast_flash_unlock_address_1) {
             fail("Flash-Kommando an falscher Adresse.");
         }
         if (value == 0xA0u) {
-            state_ = CommandState::Program;
+            state_ = FlashCommandState::Program;
             return;
         }
         if (value == 0x80u) {
-            state_ = CommandState::EraseUnlock1;
+            state_ = FlashCommandState::EraseUnlock1;
             return;
         }
         fail("Nicht unterstuetztes Flash-Herstellerkommando.");
-    case CommandState::Program:
+    case FlashCommandState::Program:
         if (write_protected_) {
             fail("Flash ist schreibgeschuetzt.");
         }
         set_working_byte(offset, static_cast<std::uint8_t>(working_byte(offset) & value));
-        state_ = CommandState::ReadArray;
+        state_ = FlashCommandState::ReadArray;
         return;
-    case CommandState::EraseUnlock1:
+    case FlashCommandState::EraseUnlock1:
         if (offset == dreamcast_flash_unlock_address_1 && value == 0xAAu) {
-            state_ = CommandState::EraseUnlock2;
+            state_ = FlashCommandState::EraseUnlock2;
             return;
         }
         fail("Ungueltiger Flash-Erase-Unlock-Schritt.");
-    case CommandState::EraseUnlock2:
+    case FlashCommandState::EraseUnlock2:
         if (offset == dreamcast_flash_unlock_address_2 && value == 0x55u) {
-            state_ = CommandState::EraseConfirm;
+            state_ = FlashCommandState::EraseConfirm;
             return;
         }
         fail("Ungueltiger zweiter Flash-Erase-Unlock-Schritt.");
-    case CommandState::EraseConfirm:
+    case FlashCommandState::EraseConfirm:
         if (write_protected_) {
             fail("Flash ist schreibgeschuetzt.");
         }
@@ -281,14 +281,14 @@ void FlashMemoryDevice::write_u8(const std::uint32_t offset, const std::uint8_t 
                             static_cast<std::uint8_t>(0xFFu));
             }
         }
-        state_ = CommandState::ReadArray;
+        state_ = FlashCommandState::ReadArray;
         return;
     }
     fail("Ungueltiger Flash-Zustand.");
 }
 
 void FlashMemoryDevice::reset_command_state() noexcept {
-    state_ = CommandState::ReadArray;
+    state_ = FlashCommandState::ReadArray;
 }
 void FlashMemoryDevice::set_write_protected(const bool value) noexcept {
     write_protected_ = value;
@@ -309,6 +309,16 @@ bool FlashMemoryDevice::working_copy_dirty() const noexcept {
 }
 bool FlashMemoryDevice::persistent_working_copy() const noexcept {
     return persistent_image_ != nullptr;
+}
+
+FlashMemorySnapshot FlashMemoryDevice::snapshot() const noexcept {
+    return {
+        size(),
+        state_,
+        write_protected_,
+        working_copy_dirty(),
+        persistent_working_copy(),
+    };
 }
 
 std::shared_ptr<LinearMemoryDevice> map_dreamcast_main_ram(Memory& memory) {

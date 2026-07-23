@@ -33,6 +33,20 @@ struct CacheMaintenanceResult {
     bool invalidated_code = false;
 };
 
+struct Sh4StoreQueueSnapshot {
+    std::array<std::array<std::uint8_t, 32u>, 2u> queues{};
+    std::array<std::uint32_t, 2u> qacr{};
+    std::array<std::uint8_t, 8192u> operand_cache_ram{};
+    OperandCacheRamProfile operand_cache_ram_profile = OperandCacheRamProfile::Reject;
+    bool operand_cache_ram_enabled = false;
+    bool external_sink_bound = false;
+    bool address_translator_bound = false;
+    bool code_tracker_bound = false;
+    std::uint64_t transfer_count = 0u;
+
+    [[nodiscard]] bool operator==(const Sh4StoreQueueSnapshot&) const = default;
+};
+
 using StoreQueueSink = std::function<void(const StoreQueueTransfer&)>;
 using StoreQueueAddressTranslator =
     std::function<StoreQueuePrefetchTranslation(std::uint32_t)>;
@@ -59,6 +73,7 @@ class Sh4StoreQueues {
     void set_prefetch_address_translator(StoreQueueAddressTranslator translator);
     [[nodiscard]] const std::array<std::uint8_t, 32u>& queue(std::size_t index) const;
     [[nodiscard]] std::uint64_t transfer_count() const noexcept;
+    [[nodiscard]] Sh4StoreQueueSnapshot snapshot() const noexcept;
     [[nodiscard]] CacheMaintenanceResult maintain(CacheMaintenanceOperation operation,
                                                   std::uint32_t address,
                                                   std::uint32_t movca_value = 0u);

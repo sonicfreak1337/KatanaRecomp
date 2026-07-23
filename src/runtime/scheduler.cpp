@@ -21,7 +21,8 @@ EventScheduler::~EventScheduler() {
 }
 
 SchedulerEventId EventScheduler::schedule_at(const std::uint64_t guest_cycle,
-                                             SchedulerCallback callback) {
+                                             SchedulerCallback callback,
+                                             const SchedulerEventKind kind) {
     if (!callback) {
         throw std::invalid_argument("Scheduler-Ereignis benoetigt einen Callback.");
     }
@@ -34,22 +35,25 @@ SchedulerEventId EventScheduler::schedule_at(const std::uint64_t guest_cycle,
 
     const SchedulerEventId event_id = next_event_id_++;
     const EventKey key{guest_cycle, event_id};
-    events_.emplace(key, std::move(callback));
+    events_.emplace(key, ScheduledEvent{std::move(callback), kind});
     event_keys_.emplace(event_id, key);
     return event_id;
 }
 
 SchedulerEventId EventScheduler::schedule_after(const std::uint64_t guest_cycles,
-                                                SchedulerCallback callback) {
+                                                SchedulerCallback callback,
+                                                const SchedulerEventKind kind) {
     if (guest_cycles > std::numeric_limits<std::uint64_t>::max() - current_cycle_) {
         throw std::overflow_error("Scheduler-Zielzyklus ist uebergelaufen.");
     }
-    return schedule_at(current_cycle_ + guest_cycles, std::move(callback));
+    return schedule_at(current_cycle_ + guest_cycles, std::move(callback), kind);
 }
 
 SchedulerEventId EventScheduler::schedule_at_or_now(const std::uint64_t requested_guest_cycle,
-                                                    SchedulerCallback callback) {
-    return schedule_at(std::max(requested_guest_cycle, current_cycle_), std::move(callback));
+                                                    SchedulerCallback callback,
+                                                    const SchedulerEventKind kind) {
+    return schedule_at(
+        std::max(requested_guest_cycle, current_cycle_), std::move(callback), kind);
 }
 
 bool EventScheduler::cancel(const SchedulerEventId event_id) noexcept {
@@ -168,7 +172,8 @@ SchedulerAdvanceResult EventScheduler::advance_to(const std::uint64_t guest_cycl
                                                SystemReplayEventKind::SchedulerCallback,
                                                "scheduled-event",
                                                std::nullopt,
-                                               std::nullopt,
+                                               static_cast<std::uint32_t>(
+                                                   event.mapped().kind),
                                                event_id,
                                                processed_event_count_,
                                                false};
@@ -178,7 +183,7 @@ SchedulerAdvanceResult EventScheduler::advance_to(const std::uint64_t guest_cycl
                 replay_log_->note_dropped_event();
             }
         }
-        event.mapped()(event_id, deadline);
+        event.mapped().callback(event_id, deadline);
     }
 
     current_cycle_ = effective_target;
@@ -224,8 +229,50 @@ std::uint64_t EventScheduler::reset_generation() const noexcept {
     return reset_generation_;
 }
 
+EventSchedulerSnapshot EventScheduler::snapshot() const {
+    EventSchedulerSnapshot result;
+    result.current_cycle = current_cycle_;
+    result.next_event_id = next_event_id_;
+    result.next_reset_observer_id = next_reset_observer_id_;
+    result.processed_event_count = processed_event_count_;
+    result.reset_generation = reset_generation_;
+    result.guest_cycle_budget = guest_cycle_budget_;
+    result.advance_in_progress = advance_in_progress_;
+    result.pending_events.reserve(events_.size());
+    for (const auto& [key, event] : events_) {
+        result.pending_events.push_back({key.first, key.second, event.kind});
+    }
+    result.reset_observer_ids.reserve(reset_observers_.size());
+    for (const auto& [id, callback] : reset_observers_) {
+        static_cast<void>(callback);
+        result.reset_observer_ids.push_back(id);
+    }
+    return result;
+}
+
 SchedulerLifetimeToken EventScheduler::lifetime_token() const noexcept {
     return lifetime_token_;
+}
+
+void EventScheduler::attach_replay_log(SystemReplayLog& replay_log) {
+    if (replay_log_ != nullptr) {
+        throw std::logic_error("Scheduler besitzt bereits eine Systemreplay-Aufzeichnung.");
+    }
+    if (current_cycle_ != 0u || processed_event_count_ != 0u || reset_generation_ != 0u) {
+        throw std::logic_error(
+            "Systemreplay muss vor dem ersten Schedulerfortschritt angebunden werden.");
+    }
+    if (replay_log.sealed()) {
+        throw std::invalid_argument(
+            "Versiegelter Systemreplay kann nicht an den Scheduler gebunden werden.");
+    }
+    if (!replay_log.events().empty() || replay_log.dropped_events() != 0u) {
+        throw std::invalid_argument(
+            "Scheduler-Replay muss leer und vollstaendig beginnen.");
+    }
+    replay_log.enable_coverage(static_cast<SystemReplayCoverageMask>(
+        SystemReplayCoverage::SchedulerCallback));
+    replay_log_ = &replay_log;
 }
 
 void EventScheduler::set_guest_cycle_budget(const std::optional<std::uint64_t> maximum_cycle) {

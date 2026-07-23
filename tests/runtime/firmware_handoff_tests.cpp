@@ -40,6 +40,12 @@ int main() {
         require(map.runtime_symbols().size() == 1u &&
                     map.runtime_symbols()[0].physical_address == 0x0C0000B0u,
                 "Dynamischer BIOS-ABI-Vektor ist nicht als Laufzeitsymbol sichtbar.");
+        const auto snapshot = map.snapshot();
+        require(snapshot.mappings.size() == 3u && snapshot.copies.size() == 1u &&
+                    snapshot.copies.front().changed_after_copy &&
+                    snapshot.runtime_symbols.size() == 1u &&
+                    snapshot.canonical_origin_count == 2u,
+                "Firmware-Handoff-Snapshot verliert Mapping, Copy-Mutation oder Runtimesymbol.");
     } catch (const std::exception& error) {
         std::cerr << error.what() << '\n';
         return 1;

@@ -122,6 +122,21 @@ struct GdRomAsyncCompletion {
     GdRomResponse response;
 };
 
+struct GdRomAsyncPendingSnapshot {
+    std::uint64_t request_id = 0u;
+    std::uint64_t ready_cycle = 0u;
+    GdRomRequest request;
+    SchedulerEventId event_id = 0u;
+};
+
+struct GdRomAsyncReaderSnapshot {
+    std::uint64_t scheduler_cycle = 0u;
+    GdRomTiming timing{};
+    std::uint64_t next_request_id = 0u;
+    std::vector<GdRomAsyncPendingSnapshot> pending;
+    std::vector<GdRomAsyncCompletion> completed;
+};
+
 class GdRomAsyncReader final {
   public:
     explicit GdRomAsyncReader(EventScheduler& scheduler,
@@ -137,6 +152,7 @@ class GdRomAsyncReader final {
     [[nodiscard]] std::optional<GdRomAsyncCompletion> take_completed();
     [[nodiscard]] std::size_t pending_count() const noexcept;
     [[nodiscard]] std::uint64_t current_cycle() const noexcept;
+    [[nodiscard]] GdRomAsyncReaderSnapshot snapshot() const;
 
   private:
     struct Pending {

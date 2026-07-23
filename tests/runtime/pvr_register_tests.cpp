@@ -36,6 +36,7 @@ int main() {
             "PVR-Registerzustand wird nicht zwischen Aliasen geteilt.");
     bus.write_u32(0x005F8000u + pvr_register::FramebufferWriteSof1, 0x01ABCDEFu);
     bus.write_u32(0x005F8000u + pvr_register::FramebufferWriteSof2, 0x03FEDCBBu);
+    bus.write_u32(0x005F8000u + pvr_register::BorderColor, 0x00123456u);
     require(pvr->read(pvr_register::FramebufferWriteSof1) == 0x01ABCDECu &&
                 pvr->read(pvr_register::FramebufferWriteSof2) == 0x01FEDCB8u,
             "FB_W_SOF verliert das Render-to-Texture-Bit oder maskiert reservierte Bits falsch.");
@@ -46,6 +47,11 @@ int main() {
                 diagnostic_snapshot.framebuffer_read_size == 0x00100140u &&
                 diagnostic_snapshot.framebuffer_write_sof1 == 0x01ABCDECu &&
                 diagnostic_snapshot.framebuffer_write_sof2 == 0x01FEDCB8u &&
+                diagnostic_snapshot.registers[pvr_register::BorderColor / 4u] ==
+                    0x00123456u &&
+                diagnostic_snapshot.registers[pvr_register::Id / 4u] == pvr_id &&
+                diagnostic_snapshot.registers[pvr_register::Revision / 4u] ==
+                    pvr_revision &&
                 diagnostic_snapshot.render_requests == 0u &&
                 diagnostic_snapshot.render_completions == 0u &&
                 scheduler.current_cycle() == scheduler_cycle_before_snapshot &&
@@ -61,6 +67,7 @@ int main() {
     const auto active_render_snapshot = pvr->snapshot();
     require(active_render_snapshot.render_requests == 1u &&
                 active_render_snapshot.render_completions == 0u &&
+                active_render_snapshot.render_event_ids.size() == 1u &&
                 scheduler.current_cycle() == active_cycle_before_snapshot &&
                 scheduler.pending_event_count() == active_pending_before_snapshot &&
                 scheduler.next_event_cycle() == active_next_before_snapshot && completions == 0u,

@@ -1,6 +1,7 @@
 #include "katana/runtime/scheduler_safepoint.hpp"
 #include "katana/runtime/system_replay.hpp"
 
+#include <algorithm>
 #include <cstdlib>
 #include <iostream>
 #include <locale>
@@ -107,6 +108,9 @@ int main() {
     require(log.event_hash() == duplicate.event_hash() &&
                 log.serialize_json() == duplicate.serialize_json() && log.events().size() == 12u,
             "Gleiche synthetische Framesequenz erzeugt keinen bytegleichen Ereignisvertrag.");
+    require(log.coverage_complete() && log.required_coverage() == 0u &&
+                log.enabled_coverage() == 0u && log.observed_coverage() != 0u,
+            "Allgemeiner Replayvertrag trennt aktivierte und beobachtete Coverage nicht.");
     const auto json = log.serialize_json();
     for (const auto marker : {"cpu-safepoint",
                               "mmio-read",
@@ -122,6 +126,10 @@ int main() {
                               "\"time_epoch\":1",
                               "\"injected\":true",
                               "\"event_hash\":null",
+                              "\"profile\":\"general\"",
+                              "\"enabled_coverage\":0",
+                              "\"coverage_complete\":true",
+                              "\"coverage_event_counts\":[",
                               "\"final_guest_state_hash\":null",
                               "\"detail\":null",
                               "\"auxiliary\":null"}) {
@@ -316,10 +324,13 @@ int main() {
 
     SystemReplayLog mmio;
     auto observer = system_replay_mmio_observer(mmio, [] { return 20u; }, "pvr-register");
-    observer({MemoryAccessOperation::Write, 0xA05F8000u, MemoryAccessWidth::Word, 0x1234u, "pvr"});
+    observer(
+        {MemoryAccessOperation::Write, 0xA05F8000u, MemoryAccessWidth::Word, 0x1234u, "pvr"});
     require(mmio.events().size() == 1u &&
                 mmio.events()[0].kind == SystemReplayEventKind::MmioWrite &&
-                mmio.events()[0].guest_cycle == 20u,
+                mmio.events()[0].guest_cycle == 20u &&
+                mmio.observed_coverage() ==
+                    static_cast<SystemReplayCoverageMask>(SystemReplayCoverage::Mmio),
             "MMIO-Beobachter erzeugt kein geordnetes Systemereignis.");
 
     SystemReplayLog reset_mmio;
@@ -330,10 +341,12 @@ int main() {
         "reset-mmio",
         [&] { return reset_scheduler.reset_generation(); });
     static_cast<void>(reset_scheduler.advance_to(100u, 1u));
-    reset_observer({MemoryAccessOperation::Write, 0xA05F8000u, MemoryAccessWidth::Word, 1u, "pvr"});
+    reset_observer(
+        {MemoryAccessOperation::Write, 0xA05F8000u, MemoryAccessWidth::Word, 1u, "pvr"});
     reset_scheduler.reset();
     static_cast<void>(reset_scheduler.advance_to(5u, 1u));
-    reset_observer({MemoryAccessOperation::Write, 0xA05F8004u, MemoryAccessWidth::Word, 2u, "pvr"});
+    reset_observer(
+        {MemoryAccessOperation::Write, 0xA05F8004u, MemoryAccessWidth::Word, 2u, "pvr"});
     reset_mmio.seal(0x1234u);
     const auto reset_copy = reset_mmio.serialize_json();
     require(reset_mmio.events().size() == 2u && reset_mmio.events()[1].time_epoch == 1u &&
@@ -341,12 +354,99 @@ int main() {
             "MMIO-Replay verliert nach Scheduler-Reset Epoche oder Bytegleichheit.");
 
     const SafepointReport safepoint{
-        SafepointKind::AfterDelaySlot, ExecutionOrigin::Fallback, 30u, 29u, 1u, 2u, true, true};
+        SafepointKind::AfterDelaySlot,
+        ExecutionOrigin::Fallback,
+        30u,
+        29u,
+        1u,
+        2u,
+        true,
+        true,
+        true};
     const auto safepoint_event = make_safepoint_replay_event(safepoint);
     require(safepoint_event.kind == SystemReplayEventKind::CpuSafepoint &&
                 safepoint_event.code == "after-delay-slot-fallback" &&
-                safepoint_event.guest_cycle == 29u && safepoint_event.value == 3u,
+                safepoint_event.guest_cycle == 29u && safepoint_event.value == 7u,
             "Safepoint-Replay verliert Origin, Delay-Slot-Grenze oder Budget-/Interruptflags.");
+
+    const auto deterministic_required =
+        system_replay_required_coverage(SystemReplayProfile::DeterministicV1);
+    SystemReplayLog enabled_without_events(
+        {16u, false, SystemReplayProfile::DeterministicV1});
+    require(!enabled_without_events.coverage_complete() &&
+                enabled_without_events.observed_coverage() == 0u,
+            "Deterministic-v1 behauptet Coverage ohne aktivierte Hooks.");
+    for (const auto hook : {SystemReplayCoverage::CpuSafepoint,
+                            SystemReplayCoverage::SchedulerCallback,
+                            SystemReplayCoverage::AcceptedInterrupt,
+                            SystemReplayCoverage::Video,
+                            SystemReplayCoverage::Audio,
+                            SystemReplayCoverage::Input,
+                            SystemReplayCoverage::Mmio,
+                            SystemReplayCoverage::Dma}) {
+        enabled_without_events.enable_coverage(
+            static_cast<SystemReplayCoverageMask>(hook));
+    }
+    require(enabled_without_events.coverage_complete() &&
+                enabled_without_events.enabled_coverage() == deterministic_required &&
+                enabled_without_events.observed_coverage() == 0u &&
+                std::all_of(enabled_without_events.event_counts().begin(),
+                            enabled_without_events.event_counts().end(),
+                            [](const auto count) { return count == 0u; }),
+            "Aktivierte Hooks werden faelschlich als aufgetretene Ereignisse gewertet.");
+    const auto empty_digest = enabled_without_events.ordering_digest();
+    enabled_without_events.seal(guest_hash);
+    require(empty_digest == enabled_without_events.ordering_digest(),
+            "Seal mutiert den kanonischen Reihenfolge-Digest eines leeren Laufs.");
+
+    SystemReplayLog incomplete_coverage(
+        {16u, false, SystemReplayProfile::DeterministicV1});
+    const auto dma_coverage =
+        static_cast<SystemReplayCoverageMask>(SystemReplayCoverage::Dma);
+    incomplete_coverage.enable_coverage(deterministic_required & ~dma_coverage);
+    require(!incomplete_coverage.coverage_complete() &&
+                (incomplete_coverage.required_coverage() &
+                 ~incomplete_coverage.enabled_coverage()) == dma_coverage,
+            "Fehlender DMA-Hook bleibt im Pflichtprofil nicht sichtbar.");
+
+    const auto make_order_log = [&](const bool reverse) {
+        SystemReplayLog order({8u, false, SystemReplayProfile::DeterministicV1});
+        order.enable_coverage(deterministic_required);
+        const auto cpu_event = event(SystemReplayEventKind::CpuSafepoint, 1u, "cpu-order");
+        const auto scheduler_event =
+            event(SystemReplayEventKind::SchedulerCallback, 1u, "scheduler-order");
+        reverse ? order.record(scheduler_event) : order.record(cpu_event);
+        reverse ? order.record(cpu_event) : order.record(scheduler_event);
+        order.seal(guest_hash);
+        return order;
+    };
+    const auto forward_order = make_order_log(false);
+    const auto reverse_order = make_order_log(true);
+    require(forward_order.coverage_complete() && reverse_order.coverage_complete() &&
+                forward_order.final_guest_state_hash() ==
+                    reverse_order.final_guest_state_hash() &&
+                forward_order.observed_coverage() == reverse_order.observed_coverage() &&
+                forward_order.ordering_digest() != reverse_order.ordering_digest(),
+            "Vertauschte Ereignisreihenfolge mit gleichem Endzustand aendert den Digest nicht.");
+
+    SystemReplayLog undeclared_hook(
+        {8u, false, SystemReplayProfile::DeterministicV1});
+    require(!undeclared_hook.try_record(
+                event(SystemReplayEventKind::CpuSafepoint, 1u, "undeclared-hook")) &&
+                undeclared_hook.dropped_events() == 1u,
+            "Deterministic-v1 akzeptiert Ereignisse aus nicht aktivierten Hooks.");
+    require_failure<std::invalid_argument>(
+        [] {
+            static_cast<void>(SystemReplayLog(
+                {8u, false, static_cast<SystemReplayProfile>(0xFFu)}));
+        },
+        "Unbekanntes Systemreplay-Profil wurde akzeptiert.");
+    SystemReplayLog unknown_event_kind;
+    auto unknown_event =
+        event(static_cast<SystemReplayEventKind>(0xFFu), 1u, "unknown-event-kind");
+    require(!unknown_event_kind.try_record(std::move(unknown_event)) &&
+                unknown_event_kind.dropped_events() == 1u,
+            "Unbekannte Systemreplay-Ereignisklasse wurde akzeptiert.");
 
     std::cout << "KR-3609 deterministische Systemereignis-Replays erfolgreich.\n";
     return EXIT_SUCCESS;
