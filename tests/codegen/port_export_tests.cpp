@@ -842,7 +842,15 @@ int run_test(const int argc, char* argv[]) {
                     .find("KATANA_PORT_MEMORY_PROBES") != std::string::npos &&
             read_text(output / "src" / "main.cpp")
                     .find("memory_probe_value=") != std::string::npos &&
-            read_text(output / "src" / "main.cpp").find("memory.peek_u32") !=
+            read_text(output / "src" / "main.cpp").find("peek_guest_u32") !=
+                std::string::npos &&
+            read_text(output / "src" / "main.cpp").find("pvr_registers->snapshot()") !=
+                std::string::npos &&
+            read_text(output / "src" / "main.cpp").find("system_bus_control->snapshot()") !=
+                std::string::npos &&
+            read_text(output / "src" / "main.cpp").find("pvr_registers->read(") ==
+                std::string::npos &&
+            read_text(output / "src" / "main.cpp").find("system_bus_control->read(") ==
                 std::string::npos &&
             read_text(output / "src" / "main.cpp")
                     .find("std::array<const katana::runtime::MemoryDevice*, 3u>") !=
@@ -851,6 +859,8 @@ int run_test(const int argc, char* argv[]) {
                 std::string::npos &&
             read_text(output / "src" / "main.cpp")
                     .find("cpu.memory.read_u32(address)") == std::string::npos &&
+            read_text(output / "src" / "main.cpp").find("translate_guest_address") ==
+                std::string::npos &&
             read_text(output / "src" / "main.cpp").find("load_dreamcast_runtime_boot") !=
                 std::string::npos &&
             read_text(output / "src" / "main.cpp")

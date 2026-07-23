@@ -227,16 +227,18 @@ int main() {
     mmio_diagnostics.map_region("diagnostic-mmio", 0x00007000u, mmio);
     mmio_diagnostics.set_mmio_access_tracking(true);
     mmio_diagnostics.write_u32(0x00007000u, 0xA5A55A5Au);
+    const auto last_mmio_write = mmio_diagnostics.last_mmio_access();
     require(mmio_diagnostics.mmio_access_tracking_enabled() &&
-                mmio_diagnostics.last_mmio_access().has_value() &&
-                mmio_diagnostics.last_mmio_access()->operation == MemoryAccessOperation::Write &&
-                mmio_diagnostics.last_mmio_access()->address == 0x00007000u &&
-                mmio_diagnostics.last_mmio_access()->width == MemoryAccessWidth::Word &&
-                mmio_diagnostics.last_mmio_access()->value == 0xA5A55A5Au &&
-                mmio_diagnostics.last_mmio_access()->region_name == "diagnostic-mmio",
+                last_mmio_write.has_value() &&
+                last_mmio_write->operation == MemoryAccessOperation::Write &&
+                last_mmio_write->address == 0x00007000u &&
+                last_mmio_write->width == MemoryAccessWidth::Word &&
+                last_mmio_write->value == 0xA5A55A5Au &&
+                last_mmio_write->region_name == "diagnostic-mmio",
             "Leichtgewichtige MMIO-Diagnostik verliert den letzten erfolgreichen Zugriff.");
     static_cast<void>(mmio_diagnostics.read_u32(0x00007000u));
-    require(mmio_diagnostics.last_mmio_access()->operation == MemoryAccessOperation::Read,
+    const auto last_mmio_read = mmio_diagnostics.last_mmio_access();
+    require(last_mmio_read && last_mmio_read->operation == MemoryAccessOperation::Read,
             "MMIO-Diagnostik aktualisiert einen erfolgreichen Read nicht.");
     mmio_diagnostics.set_mmio_access_tracking(false);
     require(!mmio_diagnostics.mmio_access_tracking_enabled() &&

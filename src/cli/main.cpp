@@ -8,6 +8,7 @@
 #include "katana/analysis/recursive_analysis.hpp"
 #include "katana/app/application.hpp"
 #include "katana/cli/exit_code.hpp"
+#include "katana/cli/hardware_audit_policy.hpp"
 #include "katana/codegen/cpp_emitter.hpp"
 #include "katana/codegen/port_export.hpp"
 #include "katana/codegen/probe.hpp"
@@ -500,16 +501,9 @@ katana::analysis::DreamcastHardwareAudit analyze_disc_hardware(const std::filesy
     const auto image = katana::platform::make_dreamcast_disc_executable(
         disc, katana::platform::DreamcastDiscExecutionPath::NativeSystemBootstrap);
     const auto analysis = katana::analysis::analyze_control_flow(image);
-    return katana::analysis::audit_dreamcast_hardware(image, analysis);
-}
-
-bool hardware_audit_failed(const katana::analysis::DreamcastHardwareAudit& audit,
-                           const bool fail_on_gap,
-                           const bool strict) {
-    const auto definite_gap = audit.known_gap_addresses != 0u || audit.rejected_addresses != 0u ||
-                              audit.unmapped_addresses != 0u;
-    return (fail_on_gap && definite_gap) ||
-           (strict && (definite_gap || audit.partial_addresses != 0u));
+    auto audit = katana::analysis::audit_dreamcast_hardware(image, analysis);
+    audit.scope = "native_disc_aot_boot_graph";
+    return audit;
 }
 
 int audit_disc_hardware(const std::filesystem::path& path,
@@ -522,7 +516,7 @@ int audit_disc_hardware(const std::filesystem::path& path,
         std::cout << katana::analysis::format_hardware_audit_json(audit, include_accesses) << '\n';
     else
         std::cout << katana::analysis::format_hardware_audit_text(audit);
-    return hardware_audit_failed(audit, fail_on_gap, strict) ? 2 : 0;
+    return katana::cli::hardware_audit_failed(audit, fail_on_gap, strict) ? 2 : 0;
 }
 
 struct DiscAuditSetEntry {
@@ -581,10 +575,9 @@ int audit_disc_hardware_set(const std::filesystem::path& root,
             continue;
         }
         const auto& audit = *result.audit;
-        const auto gap = audit.known_gap_addresses != 0u || audit.rejected_addresses != 0u ||
-                         audit.unmapped_addresses != 0u;
+        const auto gap = katana::cli::hardware_audit_has_definite_gap(audit);
         definite_gaps += gap ? 1u : 0u;
-        strict_failures += gap || audit.partial_addresses != 0u ? 1u : 0u;
+        strict_failures += katana::cli::hardware_audit_failed(audit, false, true) ? 1u : 0u;
     }
     if (json) {
         std::cout << "{\"schema\":\"katana.hardware-audit-set.v1\",\"status\":"
@@ -622,7 +615,9 @@ int audit_disc_hardware_set(const std::filesystem::path& root,
                       << " partial=" << audit.partial_addresses
                       << " known_gap=" << audit.known_gap_addresses
                       << " rejected=" << audit.rejected_addresses
-                      << " unmapped=" << audit.unmapped_addresses << '\n';
+                      << " unmapped=" << audit.unmapped_addresses
+                      << " unresolved_poll_guard_loops="
+                      << audit.unresolved_poll_guard_loops << '\n';
         }
     }
     if (failures != 0u) return 2;

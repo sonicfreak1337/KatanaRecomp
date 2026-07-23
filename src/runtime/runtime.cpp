@@ -220,6 +220,27 @@ std::uint32_t translate_guest_address(CpuState& cpu,
     }
 }
 
+std::uint32_t peek_guest_u32(
+    const CpuState& cpu,
+    const std::uint32_t address,
+    const std::span<const MemoryDevice* const> permitted_devices) {
+    std::uint32_t physical = 0u;
+    try {
+        physical = cpu.address_space
+                       ? cpu.address_space
+                             ->translate(address, TranslationAccess::Read, cpu.privileged_mode())
+                             .physical_address
+                       : canonical_physical_address(address);
+    } catch (const TranslationError& error) {
+        throw MemoryAccessError(translation_reason(error.cause()),
+                                MemoryAccessOperation::Read,
+                                address,
+                                MemoryAccessWidth::Word,
+                                "sh4-address-space-diagnostic-peek");
+    }
+    return cpu.memory.peek_u32(physical, permitted_devices);
+}
+
 StoreQueuePrefetchTranslation translate_store_queue_prefetch(CpuState& cpu,
                                                               const std::uint32_t address) {
     try {

@@ -69,6 +69,14 @@ int main() {
                 bus.read_u32(0x005F6884u) == 1u && bus.read_u32(0x005F6888u) == 1u &&
                 bus.read_u32(0x005F68A0u) == 0x80000000u,
             "Systembus-Steuerregister maskieren Werte oder spiegeln Direktsegmente falsch.");
+    const auto starts_before_snapshot = channel2_starts;
+    const auto system_bus_snapshot = system_bus->snapshot();
+    require(system_bus_snapshot.channel2_destination == 0x11FF0000u &&
+                system_bus_snapshot.channel2_length == 0x00FFFFE0u &&
+                system_bus_snapshot.channel2_start == 0u &&
+                system_bus_snapshot.system_reset_requests == 0u &&
+                channel2_starts == starts_before_snapshot,
+            "Strukturierter Systembus-Snapshot verliert Zustand oder startet Channel 2.");
     require(bus.read_u32(0x005F6860u) == 0u && bus.read_u32(0x005F6880u) == 8u &&
                 bus.read_u32(0x005F688Cu) == 0u && bus.read_u32(0x005F689Cu) == 0xBu,
             "Read-only-Systembusstatus besitzt falsche Resetwerte.");
@@ -86,6 +94,15 @@ int main() {
                 channel2_length == 0x00FFFFE0u && bus.read_u32(0x005F6808u) == 1u &&
                 throws([&] { bus.write_u32(0x005F6808u, 1u); }),
             "PVR-DMA startet nicht ueber den gemeinsamen Systembus-Channel-2-Zustand.");
+    const auto starts_before_active_snapshot = channel2_starts;
+    const auto active_channel2_snapshot = system_bus->snapshot();
+    require(active_channel2_snapshot.channel2_destination == 0x11FF0000u &&
+                active_channel2_snapshot.channel2_length == 0x00FFFFE0u &&
+                active_channel2_snapshot.channel2_start == 1u &&
+                active_channel2_snapshot.system_reset_requests == 0u &&
+                channel2_starts == starts_before_active_snapshot &&
+                bus.read_u32(0x005F6808u) == 1u,
+            "Systembus-Snapshot beendet oder wiederholt einen aktiven Channel-2-Transfer.");
     system_bus->complete_channel2();
     require(bus.read_u32(0x005F6804u) == 0u && bus.read_u32(0x005F6808u) == 0u,
             "PVR-DMA-Completion setzt Systembus-Laenge oder Startstatus nicht zurueck.");

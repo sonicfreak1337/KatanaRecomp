@@ -739,19 +739,44 @@ Prioritaet: P0
 - Backedges und Pollingloops samt Wertwechsel und Writer-Provenienz klassifizieren
 - Diagnose darf Gastzustand und Ereignisreihenfolge nicht veraendern
 
-Teilstand 2026-07-23: `Memory::peek_u32` erzwingt die lineare Geraetegrenze
-selbst. Selbst ein absichtlich in die Whitelist aufgenommenes
-`MmioMemoryDevice` wird vor dessen Readhandler abgelehnt; die Regression
-belegt null Handleraufrufe. Produktprobes erlauben nur die linearen Backings
-von Haupt-RAM, VRAM und AICA-RAM. Flash bleibt ohne eigenen
-Side-Effect-Free-Peek-Vertrag ausgeschlossen. Hardware-Audit-Schema 3 erkennt
-Natural Loops ueber skalierbare Dominatorberechnung und klassifiziert sie als
-Counter-, RAM-Poll-, MMIO-Poll-, Mixed- oder Unknown-Loop. Access-/Guard-
-Evidenz, kanonische Area-3-RAM-Spiegel sowie konservative Unknown-Ergebnisse
-bei unaufgeloesten Definitionen sind Bestandteil des Berichts. Delay-Slot-
-Doppelkontexte, wurzellose SCCs und ein 4.096-Block-Graph besitzen
-Regressionen. Dynamische Wertwechselfolgen, tatsaechliche Writer-Provenienz
-und die Diagnose-an/aus-Invarianz halten `KR-4842` weiter offen.
+Teilstand 2026-07-23: Freie Probes uebersetzen virtuelle Adressen ueber die
+aktive Gast-MMU und erlauben nur die linearen Backings von Haupt-RAM, VRAM und
+AICA-RAM. Selbst ein absichtlich in die Whitelist aufgenommenes
+`MmioMemoryDevice` wird vor dessen Readhandler abgelehnt. MMIO-Handler,
+Observer, Watchpoints, Speicherzaehler und CPU-/Exceptionzustand bleiben
+unveraendert; Flash bleibt ohne eigenen Side-Effect-Free-Peek-Vertrag
+ausgeschlossen. Das Last-MMIO-Tracking schreibt im Gast-Hotpath nur einen
+allokationsfreien POD und materialisiert den Regionsstring erst fuer den
+terminalen Bericht. Strukturierte PVR- und Systembus-Snapshots veraendern auch
+pending Render-/Channel-2-Zustaende nicht.
+
+Hardware-Audit-Schema 4 erkennt Natural Loops ueber skalierbare
+Dominatorberechnung und klassifiziert sie als Counter-, RAM-Poll-, MMIO-Poll-,
+Mixed- oder Unknown-Loop. Die statischen Speicherfamilien umfassen GBR-MOVs,
+`TST.B` als Read, `AND.B`/`XOR.B`/`OR.B` und `TAS.B` als RMW, FMOV mit
+konservativer FPSCR.SZ-Adressunion, PC-relative `MOV.W`/`MOV.L`,
+`STC.L`/`LDC.L` und `MAC.W`/`MAC.L`; OCRAM wird nicht als linearer Poll
+behandelt. Teilweise bekannte MAC-Basen bleiben einzeln erhalten und
+Predecrement wrappt auf 32 Bit. Guard-Provenienz folgt T-neutralen
+Instruktionen und eindeutigen Vorgaengern und stoppt an echten T-Schreibern
+oder Merges. Neben adressseitig unaufgeloesten Reads werden konservative
+Kandidaten einer unvollstaendig modellierten Condition-Domaene ausgewiesen.
+FMOV-/FCMP-Faelle ohne vollstaendigen FPU-Modus-/Bankbeweis bleiben `unknown`
+und erhalten kein `guards_loop`. `--strict` lehnt partielle Hardwareadressen
+sowie diese unaufgeloesten Poll-/Guard-Loops ab; `--fail-on-gap` bleibt
+unveraendert. Berichte tragen
+`scope=executable_image`, Disc-Audits explizit
+`scope=native_disc_aot_boot_graph`. Delay-Slot-Doppelkontexte, wurzellose SCCs
+und ein 4.096-Block-Graph besitzen Regressionen.
+
+Die fokussierten Runtime-/Codegenziele bestehen 5/5, Auditor und Policy 2/2;
+die CLI-Scope-Regression ist angelegt und der aktuelle private Disc-Audit
+bestaetigt die echte CLI-Integration. Er ist im normalen Modus bei null
+bekannten Luecken gruen: 142.380 Instruktionen, 1.542 Funktionen, 58.630
+Speicherstellen, zwei partielle Adressen und 1.095 Loops. Die 492
+`unresolved_poll_guard_loops` halten `--strict` erwartungsgemaess rot. Dies ist
+kein Vollgate. Dynamische Wertwechselfolgen, echte Runtime-Writer-Provenienz und der
+vollstaendige Diagnose=0/1-A/B-Produktlauf halten `KR-4842` weiter offen.
 
 ### [x] KR-4843 - Alias-korrekter nativer Disc-Systembootstrap
 
@@ -952,8 +977,8 @@ Fallback oder Materialisierung; GD-ROM, TA und PVR sind noch null. Bei 320
 Millionen Zyklen erreicht der Gast Spielecode, zwei GD-ROM-Kommandos und einen
 spaeten PVR-Registerwrite, weiterhin ohne TA-, Render- oder Framebeweis.
 
-Der aktuelle kumulative Schnittstellenstand verwendet Runtime-ABI 40,
-Block-ABI 3, Backend-Interface-ABI 3, Portprojektvertrag 24 und
+Der aktuelle kumulative Schnittstellenstand verwendet Runtime-ABI 41,
+Block-ABI 3, Backend-Interface-ABI 3, Portprojektvertrag 25 und
 Host-Video-Vertrag 2. Source-relativierte native AOT-Templates und ihr
 adressierter Binder sind vorhanden; strukturierte Disc-Ladetransaktionen, der
 allgemeine native Materializer und die Registry latenter Module halten

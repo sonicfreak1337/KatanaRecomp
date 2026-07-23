@@ -102,6 +102,26 @@ std::uint32_t PvrRegisterFile::read(const std::uint32_t offset) const {
     return registers_[index(offset)];
 }
 
+PvrRegisterSnapshot PvrRegisterFile::snapshot() const noexcept {
+    return {
+        registers_[pvr_register::FramebufferReadControl / 4u],
+        registers_[pvr_register::FramebufferReadSize / 4u],
+        registers_[pvr_register::FramebufferReadSof1 / 4u],
+        registers_[pvr_register::FramebufferReadSof2 / 4u],
+        registers_[pvr_register::FramebufferWriteControl / 4u],
+        registers_[pvr_register::FramebufferWriteSof1 / 4u],
+        registers_[pvr_register::FramebufferWriteSof2 / 4u],
+        registers_[pvr_register::VideoControl / 4u],
+        render_requests_,
+        render_completions_,
+        vblank_in_count_,
+        vblank_out_count_,
+        hblank_count_,
+        in_vblank_,
+        field_,
+    };
+}
+
 void PvrRegisterFile::write(const std::uint32_t offset, const std::uint32_t value) {
     static_cast<void>(index(offset));
     if (offset == pvr_register::Id || offset == pvr_register::Revision ||

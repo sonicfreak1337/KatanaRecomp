@@ -2,7 +2,7 @@
 
 Der mit KR-4508 eingefuehrte Portprojektvertrag Version 3 trennt
 Analyseerfolg, Eingabeidentitaet und tatsaechliche Gastausfuehrung. Der
-aktuelle kumulative Stand verwendet Portprojektvertrag 24, Runtime-ABI 40,
+aktuelle kumulative Stand verwendet Portprojektvertrag 25, Runtime-ABI 41,
 Block-ABI 3 und Backend-Interface-ABI 3. Keine der Vertrauensaussagen wird aus
 der blossen Erzeugung oder dem Start eines Hostprozesses abgeleitet.
 
@@ -54,6 +54,25 @@ statischer Erreichbarkeitsbeweis. Der Bericht weist `resolved`, `guarded` und
 `unresolved` getrennt aus; der Port behaelt fuer Guarded-Stellen den
 dynamischen Default. Nur Stellen ohne endliche Kandidaten blockieren die
 Vollstaendigkeit.
+
+## Seiteneffektfreie Produktdiagnostik
+
+Portprojektvertrag 25 und Runtime-ABI 41 binden freie Produktprobes an die
+aktuelle Gast-MMU und danach ausschliesslich an echte lineare Haupt-RAM-,
+VRAM- oder AICA-RAM-Backings. Eine Probe auf Flash oder MMIO wird vor jedem
+Geraetehandler abgelehnt. Erfolgreiche und abgelehnte Peeks veraendern weder
+CPU-/Exceptionzustand noch Observer, Watchpoints, MMIO-Tracking oder
+Speicherzaehler.
+
+Das aktivierte Last-MMIO-Tracking speichert waehrend der Gastausfuehrung einen
+allokationsfreien POD aus Operation, Adresse, Breite, Wert und Regionsbasis.
+Erst der terminale Reporter loest die Region auf und materialisiert den
+owning String. PVR- und Systembusfortschritt wird ueber strukturierte
+`snapshot()`-Schnittstellen gelesen. Sie pumpen keine Completion, starten oder
+beenden keinen Channel-2-Transfer und bewegen weder Scheduler noch
+Interruptbeobachter. Diagnose an oder aus darf damit keine andere
+Gastentscheidung erzeugen; der vollstaendige Produkt-A/B-Nachweis bleibt bis
+zum Abschluss von `KR-4842` offen.
 
 ## Konsistenzgrenzen
 

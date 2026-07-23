@@ -131,17 +131,48 @@ nur ueber ein ausdrueckliches lokales Opt-in serialisiert werden.
 
 ## Dreamcast-Hardwareaudit
 
-Ein einzelner Bericht verwendet `katana.hardware-audit.v3`; die
-Mehrquellen-Huelle bleibt `katana.hardware-audit-set.v1`. Version 3 erkennt
+Ein einzelner Bericht verwendet `katana.hardware-audit.v4`; die
+Mehrquellen-Huelle bleibt `katana.hardware-audit-set.v1`. Version 4 praezisiert
+die zuvor als `initial_boot_executable` verstandene Scope-Semantik inkompatibel
+zu `executable_image` beziehungsweise `native_disc_aot_boot_graph` und traegt
+daher bewusst eine neue fachliche Schemaversion. Sie erkennt
 skalierbar ueber Dominatoren echte Natural Loops und klassifiziert sie als
 `counter`, `ram_poll`, `mmio_poll`, `mixed` oder `unknown`. Jeder Loop traegt
 Backedge-, Block-, Counter- und Zugriffsevidenz; Zugriffe unterscheiden
 linearen Speicher, Geraeteapertur, Runtimeunterstuetzung und `guards_loop`.
+Das oberste Feld `scope` lautet fuer ein einzelnes geladenes Executable-Image
+`executable_image`. Die Disc-CLI setzt explizit
+`native_disc_aot_boot_graph`, weil ihr Bericht IP.BIN und BootExecutable
+gemeinsam umfasst.
 
 Area-3-Haupt-RAM-Spiegel werden auf dieselbe physische Herkunft kanonisiert.
-Ungeklaerte Definitionen oder Vorgaenger, nicht gemappte P4-Zugriffe und
-rootlose SCCs werden konservativ nicht als belegter Hardware-Waitloop
-ausgegeben. Delay-Slot-Doppelkontext, nichtdominierende Schleifenkandidaten und
-eine synthetische 4.096-Block-Skalierungsfixture sichern diese Grenze. Lokale
-Detailberichte duerfen Gastadressen enthalten; oeffentliche Aggregate und
-Fehlerpakete bleiben adress- und inhaltsredigiert.
+OCRAM bleibt eine Geraeteapertur und erhaelt deshalb keine
+`linear_memory=true`-Behauptung. Der statische Zugriffskatalog umfasst
+GBR-MOVs, `TST.B` als Read, `AND.B`/`XOR.B`/`OR.B` sowie `TAS.B` als RMW,
+FMOV mit konservativer FPSCR.SZ-Adressunion, PC-relative `MOV.W`/`MOV.L`,
+`STC.L`/`LDC.L` und beide Reads von `MAC.W`/`MAC.L`. Ist nur eine MAC-Basis
+statisch bekannt, bleibt deren Zugriff erhalten und die andere Site
+unaufgeloest. Predecrement-Adressen folgen dem SH-4-32-Bit-Wraparound.
+
+Ein aufgeloester Read, der die Schleifenbedingung speist, traegt
+`guards_loop=true`. `unresolved_guard_read_instruction_addresses` enthaelt
+dagegen entweder einen adressseitig unaufgeloesten Guard-Read oder einen
+konservativen Lesekandidaten, dessen Condition-Domaene noch nicht vollstaendig
+modelliert ist. Das betrifft aktuell insbesondere FMOV-/FCMP-Pfade mit
+unbewiesenem FPSCR.PR/SZ-, FR/XF-, FPUL- oder Vektorzustand. Sie bleiben
+`unknown` und erhalten keinen erfundenen `guards_loop`-Beweis. Die oberste
+Summe `unresolved_poll_guard_loops` zaehlt beide Klassen. T-neutrale
+Instruktionen und ein eindeutiger Vorgaenger erhalten die Integerprovenienz,
+echte T-Schreiber und Merges beenden sie konservativ.
+
+`disc-audit` und `disc-audit-set` behalten `--fail-on-gap` fuer eindeutige
+Luecken. `--strict` scheitert zusaetzlich an partiellen Hardwareadressen oder
+einem von `unresolved_poll_guard_loops` gezaehlten unaufgeloesten oder
+konservativen Poll-/Guard-Fall.
+Eine reine Unknown-Schleife ohne Read-/Guard-Evidenz ist kein solcher
+Strict-Fehler. Ungeklaerte Definitionen oder Vorgaenger, nicht gemappte
+P4-Zugriffe und rootlose SCCs werden konservativ nicht als belegter
+Hardware-Waitloop ausgegeben. Delay-Slot-Doppelkontext, nichtdominierende
+Schleifenkandidaten und eine synthetische 4.096-Block-Skalierungsfixture sichern
+diese Grenze. Lokale Detailberichte duerfen Gastadressen enthalten;
+oeffentliche Aggregate und Fehlerpakete bleiben adress- und inhaltsredigiert.

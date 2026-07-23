@@ -586,8 +586,19 @@ bool Memory::mmio_access_tracking_enabled() const noexcept {
     return mmio_access_tracking_enabled_;
 }
 
-const std::optional<MemoryAccessEvent>& Memory::last_mmio_access() const noexcept {
-    return last_mmio_access_;
+std::optional<MemoryAccessEvent> Memory::last_mmio_access() const {
+    if (!last_mmio_access_) return std::nullopt;
+    const auto region =
+        std::find_if(regions_.begin(), regions_.end(), [&](const MappedRegion& mapped) {
+            return mapped.info.base_address == last_mmio_access_->region_base_address;
+        });
+    return MemoryAccessEvent{
+        last_mmio_access_->operation,
+        last_mmio_access_->address,
+        last_mmio_access_->width,
+        last_mmio_access_->value,
+        region == regions_.end() ? std::string{} : region->info.name,
+    };
 }
 
 void Memory::clear_last_mmio_access() const noexcept {
@@ -684,7 +695,8 @@ std::uint32_t Memory::read_u32(const std::uint32_t address) const {
 std::uint32_t
 Memory::peek_u32(const std::uint32_t address,
                  const std::span<const MemoryDevice* const> permitted_devices) const {
-    const auto& mapped = resolve(address, MemoryAccessWidth::Word, MemoryAccessOperation::Read);
+    const auto& mapped =
+        resolve(address, MemoryAccessWidth::Word, MemoryAccessOperation::Read, false);
     if (mapped.linear == nullptr ||
         std::find(permitted_devices.begin(), permitted_devices.end(), mapped.device.get()) ==
             permitted_devices.end())
@@ -928,7 +940,8 @@ void Memory::copy_bytes(const std::uint32_t destination,
 
 const Memory::MappedRegion& Memory::resolve(const std::uint32_t address,
                                             const MemoryAccessWidth width,
-                                            const MemoryAccessOperation operation) const {
+                                            const MemoryAccessOperation operation,
+                                            const bool record_lookup_metrics) const {
     require_alignment(address, width, operation);
 
     const auto access_size = width_bytes(width);
@@ -939,12 +952,13 @@ const Memory::MappedRegion& Memory::resolve(const std::uint32_t address,
     }
     const std::uint64_t end = start + access_size;
 
-    if (const auto* mapped = indexed_region(address, access_size); mapped != nullptr) {
+    if (const auto* mapped = indexed_region(address, access_size, record_lookup_metrics);
+        mapped != nullptr) {
         return *mapped;
     }
 
     for (const auto& mapped : regions_) {
-        ++performance_counters_.reference_region_probes;
+        if (record_lookup_metrics) ++performance_counters_.reference_region_probes;
         const std::uint64_t region_start = mapped.info.base_address;
         const std::uint64_t region_end = region_start + mapped.info.size;
         if (start >= region_start && end <= region_end) {
@@ -960,7 +974,8 @@ const Memory::MappedRegion& Memory::resolve(const std::uint32_t address,
 }
 
 const Memory::MappedRegion* Memory::indexed_region(const std::uint32_t address,
-                                                   const std::size_t width) const noexcept {
+                                                   const std::size_t width,
+                                                   const bool record_lookup_metrics) const noexcept {
     if (lookup_mode_ != MemoryLookupMode::Indexed || width == 0u) return nullptr;
     const auto end = static_cast<std::uint64_t>(address) + width;
     if (end > address_space_size) return nullptr;
@@ -971,7 +986,7 @@ const Memory::MappedRegion* Memory::indexed_region(const std::uint32_t address,
     const auto region_start = static_cast<std::uint64_t>(mapped.info.base_address);
     const auto region_end = region_start + mapped.info.size;
     if (address < region_start || end > region_end) return nullptr;
-    ++performance_counters_.indexed_region_hits;
+    if (record_lookup_metrics) ++performance_counters_.indexed_region_hits;
     return &mapped;
 }
 
@@ -1048,9 +1063,10 @@ void Memory::record_mmio_access(const MappedRegion& mapped,
                                 const MemoryAccessOperation operation,
                                 const std::uint32_t address,
                                 const MemoryAccessWidth width,
-                                const std::uint32_t value) const {
+                                const std::uint32_t value) const noexcept {
     if (!mmio_access_tracking_enabled_ || !mapped.mmio) return;
-    last_mmio_access_ = MemoryAccessEvent{operation, address, width, value, mapped.info.name};
+    last_mmio_access_ =
+        LastMmioAccessRecord{operation, address, width, value, mapped.info.base_address};
 }
 
 void Memory::notify_guest_write(const GuestWriteEvent& event) const {

@@ -42,6 +42,13 @@ inline constexpr std::uint32_t BootReservedA4 = 0xA4u;
 inline constexpr std::uint32_t BootReservedAc = 0xACu;
 } // namespace system_bus_register
 
+struct DreamcastSystemBusSnapshot {
+    std::uint32_t channel2_destination = 0u;
+    std::uint32_t channel2_length = 0u;
+    std::uint32_t channel2_start = 0u;
+    std::uint64_t system_reset_requests = 0u;
+};
+
 class DreamcastSystemBusControl final {
   public:
     using Channel2StartObserver =
@@ -51,6 +58,7 @@ class DreamcastSystemBusControl final {
     void write(std::uint32_t offset, std::uint32_t value);
     void reset() noexcept;
     [[nodiscard]] std::uint64_t system_reset_requests() const noexcept;
+    [[nodiscard]] DreamcastSystemBusSnapshot snapshot() const noexcept;
     void complete_channel2() noexcept;
     [[nodiscard]] bool trigger_channel2();
 

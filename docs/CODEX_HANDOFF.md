@@ -389,9 +389,9 @@ v0.48 P0 - vom belegten IP.BIN-Frame bis BootExecutable und Spielboot fortsetzen
 
 Abgeschlossen und in Roadmap/Taskliste markiert sind `KR-4831`, `KR-4841`,
 `KR-4843`, `KR-4844`, `KR-4845`, `KR-4846`, `KR-4915` und `KR-4850`. Der
-aktuelle Runtimevertrag steht auf Runtime-ABI 40, Block-ABI 3,
+aktuelle Runtimevertrag steht auf Runtime-ABI 41, Block-ABI 3,
 Backend-Interface-ABI 3, PlatformServices-ABI 9, BIOS-ABI 9,
-Portprojektvertrag 24 und Host-Video-Vertrag 2.
+Portprojektvertrag 25 und Host-Video-Vertrag 2.
 Das verbindliche
 XenonRecomp-artige Produktmodell rekompiliert `IP.BIN` und BootExecutable
 statisch aus SH-4 in nativen PC-Code. Dreamcast-Komponenten bleiben typisierte,
@@ -483,13 +483,41 @@ Freie Speicherprobes sind MMU-bewusst und strukturell auf echte lineare
 Haupt-RAM-, VRAM- und AICA-RAM-Backings begrenzt. `Memory::peek_u32` weist
 auch ein versehentlich erlaubtes `MmioMemoryDevice` vor dessen Handler ab.
 Flash wird ohne einen eigenen expliziten Side-Effect-Free-Peek-Vertrag nicht
-mehr angeboten. Hardware-Audit-Schema 3 erkennt Natural Loops ueber skalierbare
+mehr angeboten. Peek-Aufloesung veraendert weder CPU-/Exceptionzustand noch
+MMIO-Handler, Observer, Watchpoints oder Speicherzaehler. Das Last-MMIO-
+Tracking ist im Gast-Hotpath ein allokationsfreier POD; erst der terminale
+Bericht materialisiert den Regionsstring. PVR- und Systembus-Snapshots bewegen
+auch pending Render-/Channel-2-Zustaende nicht.
+
+Hardware-Audit-Schema 4 erkennt Natural Loops ueber skalierbare
 Dominatorberechnung, klassifiziert Counter-, RAM-Poll-, MMIO-Poll-, Mixed- und
-Unknown-Loops und liefert Access-/Guard-Evidenz. Area-3-Haupt-RAM-Spiegel werden
-kanonisiert; unaufgeloeste Definitionen bleiben konservativ Unknown. Delay-
-Slot-Doppelkontexte, wurzellose SCCs und ein 4.096-Block-Graph besitzen
-Regressionen. Dynamische Wertwechselfolgen, tatsaechliche Writer-Provenienz und
-Diagnose-an/aus-Invarianz bleiben der offene Rest von `KR-4842`.
+Unknown-Loops und liefert Access-/Guard-Evidenz. Der Auditor deckt GBR-MOVs,
+`TST.B` als Read, `AND.B`/`XOR.B`/`OR.B` und `TAS.B` als RMW, FMOV,
+PC-relative `MOV.W`/`MOV.L`, `STC.L`/`LDC.L` und `MAC.W`/`MAC.L` ab; die
+unbekannte FPSCR.SZ-Lage wird fuer FMOV konservativ als Adressunion ausgegeben.
+Teilweise bekannte MAC-Basen bleiben einzeln sichtbar; Predecrement wrappt auf
+32 Bit. OCRAM ist kein linearer RAM-Poll. Guard-Provenienz folgt T-neutralen
+Instruktionen und eindeutigen Vorgaengern und stoppt an echten T-Schreibern
+oder Merges. Unaufgeloeste Reads und konservative Kandidaten einer
+unvollstaendigen Condition-Domaene bleiben sichtbar. FMOV-/FCMP-Faelle ohne
+vollstaendigen FPU-Modus-/Bankbeweis bleiben `unknown` und erhalten kein
+`guards_loop`. `--strict` lehnt partielle Hardwareadressen und diese
+unresolved Poll-/Guard-Loops ab, `--fail-on-gap` bleibt unveraendert.
+Einzelbilder tragen `scope=executable_image`, Disc-Audits
+`scope=native_disc_aot_boot_graph`. Area-3-Haupt-RAM-Spiegel werden
+kanonisiert; Delay-Slot-Doppelkontexte, wurzellose SCCs und ein
+4.096-Block-Graph besitzen Regressionen.
+
+Die fokussierten Runtime-/Codegenziele bestehen 5/5, Auditor und Policy 2/2.
+Die CLI-Scope-Regression ist angelegt; der aktuelle private CLI-Disc-Audit ist
+unter Schema 4 und `native_disc_aot_boot_graph` im normalen Modus gruen. Er
+berichtet 142.380 Instruktionen, 1.542 Funktionen, null unbekannte
+Instruktionen, null bekannte Luecken, zwei partielle Adressen, 1.095 Loops und
+492 `unresolved_poll_guard_loops`. `--strict` bleibt damit
+erwartungsgemaess rot. Dies ist kein Vollgate. Dynamische Wertwechselfolgen,
+echte Runtime-Writer-Provenienz und der
+vollstaendige Diagnose=0/1-A/B-Produktlauf bleiben der offene Rest von
+`KR-4842`.
 
 Systemreplay-Schema 2 besitzt eine feste, konfigurierbare Kapazitaet von
 standardmaessig 4.096 und hoechstens 65.536 Ereignissen; portable
@@ -565,7 +593,8 @@ Budget-Exit ist erwartet.
 Weiter offen:
 
 ```text
-KR-4842: dynamische Wertwechsel, Writer-Provenienz und Diagnoseinvarianz
+KR-4842: dynamische Wertwechselfolgen, Runtime-Writer-Provenienz und
+         vollstaendiger Diagnose=0/1-A/B-Produktlauf
 KR-4847: EX-38/39-Vertrag und laufende G1-Timeout-/Overrun-Grenzen schliessen
 KR-4848: strukturierte Disc-Ladetransaktionen und Registry latenter nativer Module
 KR-4849: Direct-Texture-Zielprogression und restliche TA/PVR-Eingangskette

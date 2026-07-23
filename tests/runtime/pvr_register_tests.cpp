@@ -31,6 +31,7 @@ int main() {
     require(bus.read_u32(0x005F8000u) == pvr_id && bus.read_u32(0x805F8004u) == pvr_revision,
             "PVR-ID oder Revision ist ueber Aliase nicht lesbar.");
     bus.write_u32(0xA05F8000u + pvr_register::FramebufferReadSof1, 0x00400000u);
+    bus.write_u32(0xA05F8000u + pvr_register::FramebufferReadSize, 0x00100140u);
     require(bus.read_u32(0x605F8000u + pvr_register::FramebufferReadSof1) == 0x00400000u,
             "PVR-Registerzustand wird nicht zwischen Aliasen geteilt.");
     bus.write_u32(0x005F8000u + pvr_register::FramebufferWriteSof1, 0x01ABCDEFu);
@@ -38,10 +39,32 @@ int main() {
     require(pvr->read(pvr_register::FramebufferWriteSof1) == 0x01ABCDECu &&
                 pvr->read(pvr_register::FramebufferWriteSof2) == 0x01FEDCB8u,
             "FB_W_SOF verliert das Render-to-Texture-Bit oder maskiert reservierte Bits falsch.");
+    const auto scheduler_cycle_before_snapshot = scheduler.current_cycle();
+    const auto pending_before_snapshot = scheduler.pending_event_count();
+    const auto diagnostic_snapshot = pvr->snapshot();
+    require(diagnostic_snapshot.framebuffer_read_sof1 == 0x00400000u &&
+                diagnostic_snapshot.framebuffer_read_size == 0x00100140u &&
+                diagnostic_snapshot.framebuffer_write_sof1 == 0x01ABCDECu &&
+                diagnostic_snapshot.framebuffer_write_sof2 == 0x01FEDCB8u &&
+                diagnostic_snapshot.render_requests == 0u &&
+                diagnostic_snapshot.render_completions == 0u &&
+                scheduler.current_cycle() == scheduler_cycle_before_snapshot &&
+                scheduler.pending_event_count() == pending_before_snapshot,
+            "Strukturierter PVR-Snapshot verliert Zustand oder bewegt den Scheduler.");
     bus.write_u32(0x005F8000u + pvr_register::StartRender, 1u);
     require(pvr->render_request_count() == 1u && pvr->render_completion_count() == 0u &&
                 scheduler.next_event_cycle() == 5u,
             "STARTRENDER erzeugt keine terminierte Completion.");
+    const auto active_cycle_before_snapshot = scheduler.current_cycle();
+    const auto active_pending_before_snapshot = scheduler.pending_event_count();
+    const auto active_next_before_snapshot = scheduler.next_event_cycle();
+    const auto active_render_snapshot = pvr->snapshot();
+    require(active_render_snapshot.render_requests == 1u &&
+                active_render_snapshot.render_completions == 0u &&
+                scheduler.current_cycle() == active_cycle_before_snapshot &&
+                scheduler.pending_event_count() == active_pending_before_snapshot &&
+                scheduler.next_event_cycle() == active_next_before_snapshot && completions == 0u,
+            "PVR-Snapshot bewegt eine ausstehende Rendercompletion oder meldet sie vorzeitig.");
     static_cast<void>(scheduler.advance_to(4u, 0u));
     require(completions == 0u, "PVR-Rendercompletion wird vor ihrer Frist sichtbar.");
     static_cast<void>(scheduler.advance_to(5u, 1u));

@@ -13,24 +13,34 @@ identische Disc-Reloads an natives AOT gebunden; offen bleiben strukturierte
 Ladetransaktionen, der allgemeine native Materializer und die Registry latenter
 Module. `KR-4849` bleibt trotz synthetisch verbundenem Channel-2-/TA-EOL-Pfad
 fuer den produktiven Gastpfad offen. `KR-4842` erzwingt fuer freie Probes
-inzwischen echte lineare Backings selbst. Hardware-Audit-Schema 3 erkennt
-Natural Loops ueber skalierbare Dominatoren und klassifiziert Counter-, RAM-
-Poll-, MMIO-Poll-, Mixed- und Unknown-Loops samt Access-/Guard-Evidenz und
-kanonischen Area-3-Spiegeln. Dynamischer Wertwechsel, tatsaechliche Writer-
-Provenienz und Diagnose-an/aus-Invarianz laufen getrennt weiter.
+inzwischen MMU-bewusst echte lineare Backings selbst, waehrend PVR- und
+Systembuszustand ueber nicht mutierende Snapshots gelesen wird.
+Hardware-Audit-Schema 4 erkennt Natural Loops ueber skalierbare Dominatoren,
+deckt die bislang fehlenden GBR-, Byte-Read/RMW-, TAS-, FMOV-, PC-relativen,
+STC.L-/LDC.L- und MAC-Speicherfamilien ab und klassifiziert Counter-, RAM-Poll-,
+MMIO-Poll-, Mixed- und Unknown-Loops samt aufgeloester und konservativ
+unaufgeloester Guard-Evidenz.
+Dynamische Wertwechselfolgen, echte Runtime-Writer-Provenienz und der
+vollstaendige Diagnose=0/1-A/B-Produktlauf laufen getrennt weiter.
 
-Der aktuelle kumulative Vertrag verwendet Runtime-ABI 40, Block-ABI 3,
-Backend-Interface-ABI 3, Portprojektvertrag 24 und Host-Video-Vertrag 2.
+Der aktuelle kumulative Vertrag verwendet Runtime-ABI 41, Block-ABI 3,
+Backend-Interface-ABI 3, Portprojektvertrag 25 und Host-Video-Vertrag 2.
 
 Der aktuelle Sicherheitsblock schliesst zwei zuvor nur behauptete
-Diagnose-/Schedulergrenzen. `Memory::peek_u32` lehnt ein nichtlineares
-Geraet selbst dann vor dessen Handler ab, wenn es versehentlich explizit
-erlaubt wurde; Produktprobes umfassen damit nur Haupt-RAM, VRAM und
-AICA-RAM, nicht Flash oder MMIO. GD-ROM-PACKET liefert bei einer
+Diagnose-/Schedulergrenzen. Freie Probes uebersetzen ueber die aktive Gast-MMU,
+lehnen ein nichtlineares Geraet selbst dann vor dessen Handler ab, wenn es
+versehentlich explizit erlaubt wurde, und veraendern weder CPU-/Exceptionzustand
+noch Observer, Watchpoints oder Speicherzaehler. Produktprobes umfassen damit
+nur Haupt-RAM, VRAM und AICA-RAM, nicht Flash oder MMIO. Der letzte
+MMIO-Zugriff bleibt im Gast-Hotpath ein allokationsfreier POD; erst der
+terminale Bericht erzeugt den Regionsstring. PVR- und Systembus-Snapshots
+bewegen ausstehende Render- oder Channel-2-Arbeit nicht. GD-ROM-PACKET liefert bei einer
 undarstellbaren Schedulerfrist `READY|ERR`, ABRT-Sense und einen finalen
 Command-IRQ. BIOS-Read und -Streaming liefern denselben Fehler als einmaligen
 Vierwortstatus mit null Bytes und lassen den naechsten Request zu. Die
-kombinierte fokussierte Suite fuer Memory, Portexport und GD-ROM besteht 5/5.
+aktuellen fokussierten Runtime-/Codegenziele bestehen 5/5, Auditor und Policy
+2/2. Die CLI-Scope-Regression ist angelegt; der aktuelle private Disc-Audit
+bestaetigt die echte CLI-Integration. Ein Vollgate wurde nicht ausgefuehrt.
 
 Systemreplay-Schema 2 schliesst zusaetzlich das unbegrenzte Wachstum des
 Diagnosepfads: Standardlogs halten 4.096, konfigurierbar hoechstens 65.536
@@ -239,17 +249,48 @@ den beschriebenen damaligen Lauf und nicht fuer den aktuellen Direct-FB-
 Nachweis.
 
 Der allgemeine Disc-Hardwareauditor erfasst fuer den aktuellen privaten
-PAL-Build 55.504 erreichbare SH-4-Instruktionen in 815 Funktionen. Es bleiben
-keine unbekannten SH-4-Instruktionen und keine harte statische Hardwareluecke.
+SA-PAL-AOT-Bootgraph unter Schema 4 142.380 erreichbare SH-4-Instruktionen in
+1.542 Funktionen. Es bleiben keine unbekannten SH-4-Instruktionen und keine
+bekannte statische Hardwareluecke. Von 58.630 Speicherstellen sind 18.159
+vollstaendig aufgeloest und 40.471 unaufgeloest oder partiell; zwei
+Hardwareadressen bleiben partiell.
 Der SCIF-Produktpfad, AICA-ARM-Reset, PVR-Blank/Border-Scanout und die komplette
 Store-Queue-/Channel-2-DMAC-/TA-/ASIC-Kette sind allgemein implementiert.
-Schema 3 ergaenzt Natural-Loop-Bloecke und Backedges ueber eine skalierbare
+Schema 4 ergaenzt Natural-Loop-Bloecke und Backedges ueber eine skalierbare
 Dominatorberechnung, klassifiziert Counter-, RAM-Poll-, MMIO-Poll-, Mixed- und
 Unknown-Loops und berichtet Access-/Guard-Evidenz. Area-3-Haupt-RAM-Spiegel
-werden kanonisiert; unaufgeloeste Definitionen bleiben konservativ Unknown.
-Delay-Slot-Doppelkontexte, wurzellose SCCs und ein 4.096-Block-Skalierungstest
-sichern die statische Seite. `KR-4842` bleibt fuer dynamische Wertwechsel,
-tatsaechliche Writer-Provenienz und Diagnose-an/aus-Invarianz offen.
+werden kanonisiert. Der Zugriffskatalog erfasst GBR-MOV, `TST.B` als Read,
+`AND.B`/`XOR.B`/`OR.B` sowie `TAS.B` als RMW, FMOV mit konservativer
+FPSCR.SZ-Adressunion, PC-relative `MOV.W`/`MOV.L`, `STC.L`/`LDC.L` und beide
+Reads von `MAC.W`/`MAC.L`. Teilweise bekannte MAC-Basen bleiben einzeln
+erhalten; Predecrement verwendet 32-Bit-Wraparound. OCRAM ist eine
+Geraeteapertur und kein linearer RAM-Poll. Guard-Provenienz folgt T-neutralen
+Instruktionen und eindeutigen Vorgaengern und stoppt an echten T-Schreibern
+oder Merges. Unaufgeloeste Reads sowie konservative Kandidaten einer
+unvollstaendigen Condition-Domaene bleiben getrennt von bewiesenen
+`guards_loop`-Zugriffen. FMOV-/FCMP-Faelle ohne vollstaendigen
+FPSCR.PR/SZ-, FR/XF-, FPUL- oder Vektorbeweis bleiben bewusst `unknown`.
+`--strict` macht partielle Hardwareadressen und diese unaufgeloesten
+Poll-/Guard-Faelle zu einem Fehler; `--fail-on-gap` behaelt seine engere
+Semantik. Einzelbilder berichten `scope=executable_image`, Disc-Audits
+`scope=native_disc_aot_boot_graph`. Delay-Slot-Doppelkontexte, wurzellose SCCs
+und ein 4.096-Block-Skalierungstest sichern die statische Seite.
+
+Der aktuelle Audit enthaelt 1.095 Natural Loops: 48 `counter`, eine
+`mmio_poll`, zwei `ram_poll` und 1.044 `unknown`. Der normale Audit ist bei
+null bekannten Luecken gruen. Zwei partielle Adressen und 492
+`unresolved_poll_guard_loops` halten `--strict` und damit `KR-4842`
+erwartungsgemaess offen.
+
+MMU-bewusste lineare Peeks veraendern MMIO, Observer, Watchpoints, Metriken und
+CPU-/Exceptionzustand nicht. Last-MMIO-Tracking ist im Gast-Hotpath
+allokationsfrei; PVR- und Systembus-Snapshots sind auch bei pending Render- und
+Channel-2-Zustaenden nicht mutierend. Die fokussierten Gruppen bestehen
+5/5 Runtime/Codegen und 2/2 Auditor/Policy. Die CLI-Scope-Regression ist
+angelegt; der private Schema-4-Disc-Audit bestaetigt die echte CLI-Integration.
+`KR-4842` bleibt fuer dynamische Wertwechselfolgen, echte
+Runtime-Writer-Provenienz und einen vollstaendigen Diagnose=0/1-A/B-
+Produktlauf offen.
 
 Der generierte Port praesentiert erst nach einem validierten TA- oder
 Direct-FB-Gastframe und meldet `KR_FIRST_GUEST_FRAME` nicht fuer blosses
@@ -374,8 +415,8 @@ MMIO-Zugriff liegt im aktiven OCRAM; der fruehere Abbruch nach 12 Gastzyklen
 ist damit beseitigt. TA/PVR und ein echter Gastframe bleiben fuer den laengeren
 Folgelauf weiterhin offen.
 
-Runtime-ABI 40, Block-ABI 3, Backend-Interface-ABI 3, BIOS-ABI 9,
-Portprojektvertrag 24 und Host-Video-Vertrag 2 bilden den kumulativen
+Runtime-ABI 41, Block-ABI 3, Backend-Interface-ABI 3, BIOS-ABI 9,
+Portprojektvertrag 25 und Host-Video-Vertrag 2 bilden den kumulativen
 v0.48-Stand ab.
 PlatformServices-ABI 9 versioniert das invalidierungs- und timinggesicherte lokale
 Blockchaining.

@@ -119,12 +119,14 @@ struct HardwareNaturalLoop {
     std::uint32_t backedge_instruction_address = 0u;
     HardwareLoopClassification classification = HardwareLoopClassification::Unknown;
     bool unresolved_guard_access = false;
+    std::vector<std::uint32_t> unresolved_guard_read_instruction_addresses;
     std::vector<std::uint32_t> block_addresses;
     std::vector<std::uint32_t> counter_instruction_addresses;
     std::vector<HardwareLoopAccessEvidence> accesses;
 };
 
 struct DreamcastHardwareAudit {
+    std::string scope = "executable_image";
     std::size_t image_bytes = 0u;
     std::size_t reachable_instructions = 0u;
     std::size_t reachable_functions = 0u;
@@ -137,11 +139,32 @@ struct DreamcastHardwareAudit {
     std::size_t known_gap_addresses = 0u;
     std::size_t rejected_addresses = 0u;
     std::size_t unmapped_addresses = 0u;
+    std::size_t unresolved_poll_guard_loops = 0u;
     std::vector<HardwareInstructionDiagnostic> instruction_diagnostics;
     std::vector<HardwareAccessReference> references;
     std::vector<HardwareAddressSummary> addresses;
     std::vector<HardwareNaturalLoop> loops;
 };
+
+[[nodiscard]] inline bool
+is_unresolved_poll_guard_loop(const HardwareNaturalLoop& loop) noexcept {
+    if (loop.classification != HardwareLoopClassification::Unknown) return false;
+    if (!loop.unresolved_guard_read_instruction_addresses.empty()) return true;
+    for (const auto& access : loop.accesses) {
+        if (access.kind != HardwareAccessKind::Read) continue;
+        if (access.guards_loop) return true;
+    }
+    return false;
+}
+
+[[nodiscard]] inline std::size_t
+count_unresolved_poll_guard_loops(const std::vector<HardwareNaturalLoop>& loops) noexcept {
+    std::size_t count = 0u;
+    for (const auto& loop : loops) {
+        if (is_unresolved_poll_guard_loop(loop)) ++count;
+    }
+    return count;
+}
 
 [[nodiscard]] DreamcastHardwareAudit
 audit_dreamcast_hardware(const io::ExecutableImage& image,

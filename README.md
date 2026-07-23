@@ -59,8 +59,8 @@ vorbereitet; der live geladene Dispatch bleibt `RuntimeOnly` und erzeugt keine
 feste CFG-Kante. Snapshotcache und P2-Aliasaufloesung sind gegen imagefremde
 Beweise abgesichert. Lokale AOT-Blockketten tragen die exakte tatsaechliche
 Terminatorquelle und Siteklasse bis zum externen Dispatch weiter. Der aktuelle
-kumulative Stand verwendet Runtime-ABI 40, Block-ABI 3,
-Backend-Interface-ABI 3, Portprojektvertrag 24 und Host-Video-Vertrag 2.
+kumulative Stand verwendet Runtime-ABI 41, Block-ABI 3,
+Backend-Interface-ABI 3, Portprojektvertrag 25 und Host-Video-Vertrag 2.
 
 Systemreplay v2 haelt standardmaessig 4.096 und maximal 65.536 Ereignisse;
 portable Ereigniscodes sind auf 64 Zeichen begrenzt. Ein von `try_record()` an
@@ -73,15 +73,49 @@ erhalten. Das JSON redigiert standardmaessig `code`, `address`, `value`,
 Ausgabe erfordert ein ausdrueckliches lokales Opt-in.
 
 Der allgemeine Disc-Hardwareauditor schreibt
-`katana.hardware-audit.v3`, erkennt natuerliche Loops ueber skalierbare
+`katana.hardware-audit.v4`, erkennt natuerliche Loops ueber skalierbare
 Dominatorberechnung und klassifiziert sie als `counter`, `ram_poll`,
 `mmio_poll`, `mixed` oder konservativ `unknown`. Access- und Guard-Evidenz
 bleiben getrennt; die vier Area-3-RAM-Spiegel werden kanonisch
-zusammengefuehrt. Delay-Slot-Doppelkontexte, wurzellose SCCs und ein
-4.096-Block-Skalierungsfall besitzen eigene Regressionen. Fehlende Definitionen
-oder Vorgaenger erzeugen keinen erfundenen Beweis. Damit sind `KR-4842` und
-`KR-4911` substanziell vorangekommen, bleiben fuer ihre dynamischen
-beziehungsweise vollstaendigen Runtimevertraege aber bewusst offen.
+zusammengefuehrt. Der Auditor erfasst GBR-MOVs, `TST.B` als Read,
+`AND.B`/`XOR.B`/`OR.B` sowie `TAS.B` als RMW, FMOV mit konservativer
+FPSCR.SZ-Adressunion, PC-relative `MOV.W`/`MOV.L`, `STC.L`/`LDC.L` und
+`MAC.W`/`MAC.L`. Teilweise bekannte MAC-Basen werden einzeln erhalten;
+Predecrement wrappt modulo 2 hoch 32. OCRAM bleibt eine Geraeteapertur und wird
+nicht als linearer RAM-Poll ausgegeben. Die Guard-Provenienz folgt T-neutralen
+Instruktionen sowie eindeutigen Vorgaengern. Aufgeloeste Guard-Reads werden von
+unaufgeloesten Reads und konservativen Kandidaten einer unvollstaendigen
+Condition-Domaene getrennt. FMOV-/FCMP-Faelle bleiben bei nicht bewiesenem
+FPU-Modus und Registerbankzustand `unknown` und erhalten kein erfundenes
+`guards_loop`. `--strict` lehnt partielle Hardwareadressen und diese
+unaufgeloesten Poll-/Guard-Faelle ab. Einzelbilder tragen
+`scope=executable_image`, waehrend Disc-Audits
+`scope=native_disc_aot_boot_graph` verwenden. Delay-Slot-Doppelkontexte,
+wurzellose SCCs und ein 4.096-Block-Skalierungsfall besitzen eigene
+Regressionen. Fehlende Definitionen oder Vorgaenger erzeugen keinen erfundenen
+Beweis.
+
+Der aktuelle normale SA-PAL-Disc-Audit ist gruen: Schema 4 und
+`native_disc_aot_boot_graph` umfassen 142.380 Instruktionen, 1.542 Funktionen,
+null unbekannte Instruktionen, 58.630 Speicherstellen, null bekannte Luecken,
+zwei partielle Adressen und 1.095 Natural Loops. Die 492
+`unresolved_poll_guard_loops` halten `--strict` erwartungsgemaess offen und
+damit auch `KR-4842`.
+
+Freie Produktprobes uebersetzen virtuelle Gastadressen MMU-bewusst und duerfen
+nur Haupt-RAM, VRAM oder AICA-RAM lesen. Sie rufen weder MMIO noch Observer,
+Watchpoints oder Metrikpfade auf und veraendern keinen CPU-/Exceptionzustand.
+Das Last-MMIO-Tracking bleibt im Gast-Hotpath allokationsfrei; Regionsstrings
+entstehen erst beim terminalen Bericht. Strukturierte PVR- und
+Systembus-Snapshots bewegen selbst bei ausstehenden Render- oder
+Channel-2-Vorgaengen weder Scheduler noch Geraetezustand. Die aktuellen
+fokussierten Runtime-/Codegen- und Auditor-/Policygruppen bestehen 5/5 und 2/2;
+die CLI-Scope-Regression ist angelegt und der aktuelle private Disc-Audit
+bestaetigt die echte CLI-Integration. Das ist kein Vollgate.
+Damit sind `KR-4842` und `KR-4911` substanziell vorangekommen, bleiben fuer
+dynamische Wertwechselfolgen, echte Runtime-Writer-Provenienz,
+Diagnose-an/aus-Invarianz beziehungsweise ihre vollstaendigen
+Runtimevertraege aber bewusst offen.
 
 Der vorangegangene optimierte ABI-38-PAL-Port wurde mit zwoelf Jobs in
 140,9 Sekunden

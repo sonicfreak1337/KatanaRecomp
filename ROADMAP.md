@@ -61,7 +61,7 @@ nicht mehr einzeln wiederholt.
 | Speicherbus, Exceptions, Interrupts, Scheduler und DMA | umgesetzt |
 | BIOS-HLE, System-ASIC, Maple, PVR-Minimalpfad, AICA-HLE und GD-ROM | umgesetzt, Genauigkeit noch begrenzt |
 | Windows-GUI, GDI-Workflow, Portexport und native Hostruntime | umgesetzt |
-| Private Retailanalyse | 55.504 Instruktionen, 815 Funktionen; keine unbekannte SH-4-Instruktion und keine harte statische Hardwareluecke |
+| Private Retailanalyse | Schema 4: 142.380 Instruktionen, 1.542 Funktionen, null unbekannte SH-4-Instruktionen und null bekannte Hardwareluecken; zwei partielle Adressen und 492 unaufgeloeste Poll-/Guard-Loops halten `--strict` offen |
 
 ## v0.47.0 - Core-Stabilisierung und generische Retail-Runtime
 
@@ -199,10 +199,12 @@ abgeschlossen sein.
 
 Der Checkboxstand bleibt bewusst taskbezogen: `KR-4831`, `KR-4841`,
 `KR-4843` bis `KR-4846`, `KR-4915` und `KR-4850` sind abgeschlossen.
-`KR-4842` besitzt mit der statischen Wait-Loop-Klassifikation einen belastbaren
-Teilstand, bleibt aber bis zur dynamischen Writer-/Wertaenderungs- und
-Diagnoseinvarianz offen. `KR-4911` besitzt mit Systemreplay v2 ebenfalls einen
-abgesicherten Teilstand, bleibt jedoch bis zum vollstaendigen
+`KR-4842` besitzt mit MMU-bewussten linearen Peeks, nicht mutierenden
+Geraetesnapshots und der erweiterten statischen Wait-Loop-/Guard-Provenienz
+einen belastbaren Teilstand. Es bleibt aber bis zu dynamischen
+Wertwechselfolgen, echter Runtime-Writer-Provenienz und einem vollstaendigen
+Diagnose=0/1-A/B-Produktlauf offen. `KR-4911` besitzt mit Systemreplay v2
+ebenfalls einen abgesicherten Teilstand, bleibt jedoch bis zum vollstaendigen
 Runtimebeobachtungs- und Fehlerpaketvertrag offen. Diese Teilstaende setzen
 keine weiteren Checkboxen vorzeitig.
 
@@ -250,8 +252,8 @@ Backend-Interface-ABI 3, Portprojektvertrag 24 und Host-Video-Vertrag 2
 versionierten diesen privaten Portlauf. Er bleibt ausdruecklich historische
 ABI-39-Evidenz und wurde nicht nachtraeglich als ABI-40-Artefakt umgedeutet.
 
-Der aktuelle kumulative Kernvertrag verwendet Runtime-ABI 40, Block-ABI 3,
-Backend-Interface-ABI 3, Portprojektvertrag 24 und Host-Video-Vertrag 2.
+Der aktuelle kumulative Kernvertrag verwendet Runtime-ABI 41, Block-ABI 3,
+Backend-Interface-ABI 3, Portprojektvertrag 25 und Host-Video-Vertrag 2.
 Systemreplay v2 begrenzt die Aufzeichnung auf standardmaessig 4.096 und
 hoechstens 65.536 Ereignisse sowie 64 Zeichen pro Ereigniscode. Ein
 von `try_record()` an einem unversiegelten Log abgewiesener Best-effort-
@@ -261,13 +263,46 @@ abgespielt werden. Intern bleiben alle Werte fuer Hash und exakten Vergleich
 erhalten, waehrend das JSON standardmaessig `code`, `address`, `value`, `detail`, `auxiliary`,
 `event_hash` und `final_guest_state_hash` redigiert.
 
-Der Hardwareauditor verwendet mit `katana.hardware-audit.v3` skalierbare
+Der Hardwareauditor verwendet mit `katana.hardware-audit.v4` skalierbare
 Dominatorberechnung und echte natuerliche Loops. Er klassifiziert
 `counter`, `ram_poll`, `mmio_poll`, `mixed` oder konservativ `unknown` und
 weist getrennte Access-/Guard-Evidenz aus. Die vier Area-3-RAM-Spiegel werden
-kanonisch zusammengefuehrt; Delay-Slot-Doppelkontexte, wurzellose SCCs und ein
-4.096-Block-Skalierungsfall sind regressionsgesichert. Unvollstaendige
+kanonisch zusammengefuehrt. GBR-MOV, `TST.B` als Read,
+`AND.B`/`XOR.B`/`OR.B` sowie `TAS.B` als RMW, FMOV, PC-relative
+`MOV.W`/`MOV.L`, `STC.L`/`LDC.L` und `MAC.W`/`MAC.L` sind als
+Speicherfamilien abgedeckt; FMOV verwendet wegen unbekanntem FPSCR.SZ eine
+konservative Adressunion. Teilweise bekannte MAC-Basen bleiben einzeln
+sichtbar, Predecrement wrappt modulo 2 hoch 32. OCRAM wird als Geraeteapertur
+statt als linearer RAM-Poll klassifiziert. Guard-Provenienz folgt T-neutralen
+Instruktionen und einem eindeutigen Vorgaenger und stoppt an echten
+T-Schreibern oder Merges. Unaufgeloeste Reads und konservative Kandidaten einer
+noch unvollstaendigen Condition-Domaene bleiben sichtbar; insbesondere
+FMOV-/FCMP-Faelle erhalten ohne vollstaendigen FPU-Modus-/Bankbeweis kein
+`guards_loop`. `--strict` lehnt partielle Hardwareadressen sowie diese
+unaufgeloesten Poll-/Guard-Loops ab; `--fail-on-gap` bleibt auf eindeutige
+Luecken beschraenkt. Der Berichts-Scope lautet fuer ein einzelnes
+Executable-Image `executable_image` und fuer Disc-Audits
+`native_disc_aot_boot_graph`. Delay-Slot-Doppelkontexte, wurzellose SCCs und
+ein 4.096-Block-Skalierungsfall sind regressionsgesichert. Unvollstaendige
 Definitionen oder Vorgaenger werden nicht als Beweis benutzt.
+
+Der aktuelle normale SA-PAL-Disc-Audit ist gruen: 142.380 Instruktionen, 1.542
+Funktionen, null unbekannte Instruktionen, 58.630 Speicherstellen
+(18.159 vollstaendig aufgeloest, 40.471 unaufgeloest oder partiell), null
+bekannte Luecken, zwei partielle Adressen und 1.095 Loops. Die Klassen sind
+48 `counter`, eine `mmio_poll`, zwei `ram_poll` und 1.044 `unknown`.
+492 `unresolved_poll_guard_loops` halten den Strict-Modus und `KR-4842`
+bewusst offen.
+
+Freie Diagnosepeeks uebersetzen ueber die aktive Gast-MMU und sind auf
+Haupt-RAM, VRAM und AICA-RAM begrenzt. MMIO, Observer, Watchpoints,
+Speicherzaehler sowie CPU-/Exceptionzustand bleiben unveraendert. Der letzte
+MMIO-Zugriff wird im Hotpath als allokationsfreier POD gehalten und erst beim
+terminalen Bericht mit einem Regionsstring versehen. PVR- und
+Systembus-Snapshots bewegen auch pending Render-/Channel-2-Zustaende nicht.
+Die fokussierten Runtime-/Codegenziele bestehen 5/5, Auditor und Policy 2/2;
+die CLI-Scope-Regression ist angelegt und der aktuelle private Disc-Audit
+bestaetigt die echte CLI-Integration. Dieser Teilblock ist kein Vollgate.
 
 Der private Retailrunner liest Runtime-ABI und Portprojektvertrag strikt aus
 `cmake/KatanaVersions.cmake`; malformed, doppelte oder nullwertige Definitionen

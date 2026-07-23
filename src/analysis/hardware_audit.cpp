@@ -3,6 +3,7 @@
 #include "katana/analysis/basic_blocks.hpp"
 #include "katana/analysis/value_analysis.hpp"
 #include "katana/io/json_report.hpp"
+#include "katana/ir/lower.hpp"
 #include "katana/sh4/instruction.hpp"
 
 #include <algorithm>
@@ -566,40 +567,18 @@ struct EffectiveAccess {
     std::uint8_t width = 0u;
 };
 
+struct EffectiveAccessSet {
+    std::vector<EffectiveAccess> accesses;
+    bool complete = false;
+};
+
 bool is_memory_access_instruction(const sh4::InstructionKind kind) noexcept {
-    using K = sh4::InstructionKind;
-    switch (kind) {
-    case K::MovByteStore:
-    case K::MovWordStore:
-    case K::MovLongStore:
-    case K::MovByteLoad:
-    case K::MovWordLoad:
-    case K::MovLongLoad:
-    case K::MovByteStoreDisplacement:
-    case K::MovWordStoreDisplacement:
-    case K::MovLongStoreDisplacement:
-    case K::MovByteLoadDisplacement:
-    case K::MovWordLoadDisplacement:
-    case K::MovLongLoadDisplacement:
-    case K::MovByteStoreR0Indexed:
-    case K::MovWordStoreR0Indexed:
-    case K::MovLongStoreR0Indexed:
-    case K::MovByteLoadR0Indexed:
-    case K::MovWordLoadR0Indexed:
-    case K::MovLongLoadR0Indexed:
-    case K::MovByteStorePreDecrement:
-    case K::MovWordStorePreDecrement:
-    case K::MovLongStorePreDecrement:
-    case K::MovByteLoadPostIncrement:
-    case K::MovWordLoadPostIncrement:
-    case K::MovLongLoadPostIncrement:
-    case K::MovcaLong:
-    case K::TestAndSetByte:
-    case K::Prefetch:
-        return true;
-    default:
-        return false;
-    }
+    const auto operation = ir::lowering_operation_for_instruction(kind);
+    const auto effects = ir::instruction_memory_effects(operation);
+    // PREF is address-dependent and intentionally has no unconditional IR memory effect,
+    // but it remains a hardware-aperture access for this audit.
+    return effects.access != ir::MemoryAccessKind::None ||
+           kind == sh4::InstructionKind::Prefetch;
 }
 
 std::optional<std::uint32_t> displaced(const std::optional<std::uint32_t>& base,
@@ -608,13 +587,17 @@ std::optional<std::uint32_t> displaced(const std::optional<std::uint32_t>& base,
     return *base + offset;
 }
 
-std::optional<EffectiveAccess> effective_access(const sh4::DisassemblyLine& line,
-                                                const RegisterConstants& before) {
+EffectiveAccessSet
+effective_accesses(const sh4::DisassemblyLine& line,
+                   const RegisterConstants& before,
+                   const std::optional<std::uint32_t> gbr) {
     using K = sh4::InstructionKind;
     const auto& instruction = line.instruction;
     std::optional<std::uint32_t> address;
     HardwareAccessKind kind = HardwareAccessKind::Read;
     std::uint8_t width = 0u;
+    bool read_modify_write = false;
+    bool fmov_pair = false;
     switch (instruction.kind) {
     case K::MovByteStore:
     case K::MovWordStore:
@@ -667,6 +650,36 @@ std::optional<EffectiveAccess> effective_access(const sh4::DisassemblyLine& line
             before.registers[instruction.source_register].has_value())
             address = *before.registers[0u] + *before.registers[instruction.source_register];
         break;
+    case K::MovByteStoreGbrDisplacement:
+    case K::MovWordStoreGbrDisplacement:
+    case K::MovLongStoreGbrDisplacement:
+        kind = HardwareAccessKind::Write;
+        width = instruction.kind == K::MovByteStoreGbrDisplacement ? 1u :
+                instruction.kind == K::MovWordStoreGbrDisplacement ? 2u : 4u;
+        address = displaced(gbr, static_cast<std::uint32_t>(instruction.displacement));
+        break;
+    case K::MovByteLoadGbrDisplacement:
+    case K::MovWordLoadGbrDisplacement:
+    case K::MovLongLoadGbrDisplacement:
+        width = instruction.kind == K::MovByteLoadGbrDisplacement ? 1u :
+                instruction.kind == K::MovWordLoadGbrDisplacement ? 2u : 4u;
+        address = displaced(gbr, static_cast<std::uint32_t>(instruction.displacement));
+        break;
+    case K::MovWordLoadPcRelative:
+    case K::MovLongLoadPcRelative:
+        width = instruction.kind == K::MovWordLoadPcRelative ? 2u : 4u;
+        address = (width == 4u ? (line.address + 4u) & ~3u : line.address + 4u) +
+                  static_cast<std::uint32_t>(instruction.displacement);
+        break;
+    case K::TestByteImmediate:
+    case K::AndByteImmediate:
+    case K::XorByteImmediate:
+    case K::OrByteImmediate:
+        width = 1u;
+        read_modify_write = instruction.kind != K::TestByteImmediate;
+        if (gbr.has_value() && before.registers[0u].has_value())
+            address = *gbr + *before.registers[0u];
+        break;
     case K::MovByteStorePreDecrement:
     case K::MovWordStorePreDecrement:
     case K::MovLongStorePreDecrement:
@@ -683,14 +696,41 @@ std::optional<EffectiveAccess> effective_access(const sh4::DisassemblyLine& line
                 instruction.kind == K::MovWordLoadPostIncrement ? 2u : 4u;
         address = before.registers[instruction.source_register];
         break;
+    case K::StoreSpecialRegisterPreDecrement:
+        kind = HardwareAccessKind::Write;
+        width = 4u;
+        if (before.registers[instruction.destination_register].has_value())
+            address = *before.registers[instruction.destination_register] - width;
+        break;
+    case K::LoadSpecialRegisterPostIncrement:
+        width = 4u;
+        address = before.registers[instruction.source_register];
+        break;
+    case K::MultiplyAccumulateWord:
+    case K::MultiplyAccumulateLong: {
+        width = instruction.kind == K::MultiplyAccumulateWord ? 2u : 4u;
+        const auto destination = before.registers[instruction.destination_register];
+        const auto source = before.registers[instruction.source_register];
+        EffectiveAccessSet result;
+        if (destination.has_value())
+            result.accesses.push_back({*destination, HardwareAccessKind::Read, width});
+        if (source.has_value()) {
+            const auto source_address =
+                *source + (instruction.source_register == instruction.destination_register ? width
+                                                                                           : 0u);
+            result.accesses.push_back({source_address, HardwareAccessKind::Read, width});
+        }
+        result.complete = destination.has_value() && source.has_value();
+        return result;
+    }
     case K::MovcaLong:
         kind = HardwareAccessKind::Write;
         width = 4u;
         address = before.registers[instruction.destination_register];
         break;
     case K::TestAndSetByte:
-        kind = HardwareAccessKind::Write;
         width = 1u;
+        read_modify_write = true;
         address = before.registers[instruction.source_register];
         break;
     case K::Prefetch:
@@ -698,10 +738,73 @@ std::optional<EffectiveAccess> effective_access(const sh4::DisassemblyLine& line
         width = 32u;
         address = before.registers[instruction.source_register];
         break;
-    default: return std::nullopt;
+    case K::FmovLoad:
+    case K::FmovLoadPostIncrement:
+        width = 4u;
+        fmov_pair = true;
+        address = before.registers[instruction.source_register];
+        break;
+    case K::FmovLoadR0Indexed:
+        width = 4u;
+        fmov_pair = true;
+        if (before.registers[0u].has_value() &&
+            before.registers[instruction.source_register].has_value())
+            address = *before.registers[0u] + *before.registers[instruction.source_register];
+        break;
+    case K::FmovStore:
+        kind = HardwareAccessKind::Write;
+        width = 4u;
+        fmov_pair = true;
+        address = before.registers[instruction.destination_register];
+        break;
+    case K::FmovStorePreDecrement:
+        kind = HardwareAccessKind::Write;
+        width = 4u;
+        fmov_pair = true;
+        if (before.registers[instruction.destination_register].has_value())
+            address = *before.registers[instruction.destination_register] - 8u;
+        break;
+    case K::FmovStoreR0Indexed:
+        kind = HardwareAccessKind::Write;
+        width = 4u;
+        fmov_pair = true;
+        if (before.registers[0u].has_value() &&
+            before.registers[instruction.destination_register].has_value())
+            address =
+                *before.registers[0u] + *before.registers[instruction.destination_register];
+        break;
+    default: return {};
     }
-    if (!address.has_value()) return std::nullopt;
-    return EffectiveAccess{*address, kind, width};
+    if (!address.has_value()) return {};
+    if (read_modify_write)
+        return {{{*address, HardwareAccessKind::Read, width},
+                 {*address, HardwareAccessKind::Write, width}},
+                true};
+    // FPSCR.SZ is not part of local constant propagation.  Enumerate the conservative
+    // union of its 32-bit bus words: SZ=0 uses the first word, while SZ=1 additionally
+    // uses the second.  Predecrement starts at base-8, so the pair also retains the
+    // SZ=0 base-4 address.
+    if (fmov_pair)
+        return {{{*address, kind, width}, {*address + 4u, kind, width}}, true};
+    return {{{*address, kind, width}}, true};
+}
+
+std::vector<std::optional<std::uint32_t>>
+propagate_local_gbr(const std::span<const sh4::DisassemblyLine> lines,
+                    const std::span<const ConstantTraceEntry> trace) {
+    std::vector<std::optional<std::uint32_t>> before;
+    before.reserve(lines.size());
+    std::optional<std::uint32_t> gbr;
+    for (std::size_t index = 0u; index < lines.size(); ++index) {
+        before.push_back(gbr);
+        const auto& instruction = lines[index].instruction;
+        if (instruction.special_register != sh4::SpecialRegister::Gbr) continue;
+        if (instruction.kind == sh4::InstructionKind::LoadSpecialRegister)
+            gbr = trace[index].before.registers[instruction.source_register];
+        else if (instruction.kind == sh4::InstructionKind::LoadSpecialRegisterPostIncrement)
+            gbr.reset();
+    }
+    return before;
 }
 
 std::string hex8(const std::uint32_t value) {
@@ -744,7 +847,79 @@ bool is_potential_memory_load(const sh4::InstructionKind kind) noexcept {
     case K::MovByteLoadGbrDisplacement:
     case K::MovWordLoadGbrDisplacement:
     case K::MovLongLoadGbrDisplacement:
+    case K::MovWordLoadPcRelative:
+    case K::MovLongLoadPcRelative:
         return true;
+    default:
+        return false;
+    }
+}
+
+bool is_syntactic_memory_read(const sh4::InstructionKind kind) noexcept {
+    using K = sh4::InstructionKind;
+    if (is_potential_memory_load(kind)) return true;
+    switch (kind) {
+    case K::TestByteImmediate:
+    case K::AndByteImmediate:
+    case K::XorByteImmediate:
+    case K::OrByteImmediate:
+    case K::TestAndSetByte:
+    case K::LoadSpecialRegisterPostIncrement:
+    case K::MultiplyAccumulateWord:
+    case K::MultiplyAccumulateLong:
+    case K::FmovLoad:
+    case K::FmovLoadPostIncrement:
+    case K::FmovLoadR0Indexed:
+        return true;
+    default:
+        return false;
+    }
+}
+
+bool instruction_writes_t(const sh4::DecodedInstruction& instruction) noexcept {
+    using K = sh4::InstructionKind;
+    switch (instruction.kind) {
+    case K::Unknown:
+    case K::AddWithCarry:
+    case K::AddWithOverflow:
+    case K::SubWithCarry:
+    case K::SubWithOverflow:
+    case K::NegateWithCarry:
+    case K::DecrementAndTest:
+    case K::ShiftLogicalLeftOne:
+    case K::ShiftLogicalRightOne:
+    case K::ShiftArithmeticLeftOne:
+    case K::ShiftArithmeticRightOne:
+    case K::RotateLeft:
+    case K::RotateRight:
+    case K::RotateLeftThroughT:
+    case K::RotateRightThroughT:
+    case K::DivideInitializeUnsigned:
+    case K::DivideInitializeSigned:
+    case K::DivideStep:
+    case K::ClearT:
+    case K::SetT:
+    case K::CompareEqualImmediate:
+    case K::CompareEqualRegister:
+    case K::CompareHigherOrSame:
+    case K::CompareGreaterOrEqual:
+    case K::CompareHigher:
+    case K::CompareGreaterThan:
+    case K::ComparePositiveOrZero:
+    case K::ComparePositive:
+    case K::CompareString:
+    case K::TestImmediate:
+    case K::TestRegister:
+    case K::TestByteImmediate:
+    case K::TestAndSetByte:
+    case K::FcmpEqual:
+    case K::FcmpGreater:
+    case K::TrapAlways:
+    case K::ReturnFromException:
+        return true;
+    case K::LoadSpecialRegister:
+    case K::LoadSpecialRegisterPostIncrement:
+        return instruction.special_register == sh4::SpecialRegister::Sr;
     default:
         return false;
     }
@@ -842,7 +1017,6 @@ bool is_linear_loop_memory(const AddressDescription& description) noexcept {
     case R::TaVram:
     case R::Vram64:
     case R::Vram32:
-    case R::Sh4OnChipRam:
         return true;
     default:
         return false;
@@ -1146,33 +1320,62 @@ find_natural_hardware_loops(const io::ExecutableImage& image,
             for (const auto index : member_indices)
                 loop.block_addresses.push_back(blocks[index].start_address);
 
+            std::unordered_map<std::uint32_t, std::vector<std::size_t>>
+                read_accesses_by_instruction;
+            std::unordered_map<std::uint32_t, bool> syntactic_read_by_instruction;
             for (const auto block_index : member_indices) {
                 const auto& block = blocks[block_index];
                 const auto trace = propagate_local_constants(block.lines, image);
-                std::unordered_map<std::uint32_t, std::size_t> access_by_instruction;
+                const auto gbr_trace = propagate_local_gbr(block.lines, trace);
                 for (std::size_t line_index = 0u; line_index < block.lines.size(); ++line_index) {
                     if (!is_memory_access_instruction(block.lines[line_index].instruction.kind))
                         continue;
-                    const auto access =
-                        effective_access(block.lines[line_index], trace[line_index].before);
-                    if (!access.has_value()) continue;
-                    const auto description = describe(access->address);
-                    HardwareLoopAccessEvidence evidence;
-                    evidence.instruction_address = block.lines[line_index].address;
-                    evidence.guest_address = access->address;
-                    evidence.canonical_address = loop_canonical_address(description);
-                    evidence.region = description.region;
-                    evidence.kind = access->kind;
-                    evidence.width = access->width;
-                    evidence.linear_memory = is_linear_loop_memory(description);
-                    evidence.aperture_mapped = description.aperture_mapped;
-                    evidence.runtime_support =
-                        assess_support(description, access->kind, access->width);
-                    access_by_instruction.emplace(evidence.instruction_address,
-                                                  loop.accesses.size());
-                    loop.accesses.push_back(std::move(evidence));
+                    if (is_syntactic_memory_read(block.lines[line_index].instruction.kind))
+                        syntactic_read_by_instruction.emplace(block.lines[line_index].address, true);
+                    const auto access_set = effective_accesses(
+                        block.lines[line_index], trace[line_index].before, gbr_trace[line_index]);
+                    for (const auto& access : access_set.accesses) {
+                        const auto description = describe(access.address);
+                        HardwareLoopAccessEvidence evidence;
+                        evidence.instruction_address = block.lines[line_index].address;
+                        evidence.guest_address = access.address;
+                        evidence.canonical_address = loop_canonical_address(description);
+                        evidence.region = description.region;
+                        evidence.kind = access.kind;
+                        evidence.width = access.width;
+                        evidence.linear_memory = is_linear_loop_memory(description);
+                        evidence.aperture_mapped = description.aperture_mapped;
+                        evidence.runtime_support =
+                            assess_support(description, access.kind, access.width);
+                        if (evidence.kind == HardwareAccessKind::Read)
+                            read_accesses_by_instruction[evidence.instruction_address].push_back(
+                                loop.accesses.size());
+                        loop.accesses.push_back(std::move(evidence));
+                    }
                 }
+            }
 
+            enum class GuardReadResolution : std::uint8_t {
+                NotARead,
+                ResolvedAddress,
+                UnresolvedAddress
+            };
+            const auto mark_direct_guard_access = [&](const std::uint32_t address) {
+                const auto found = read_accesses_by_instruction.find(address);
+                if (found != read_accesses_by_instruction.end()) {
+                    for (const auto index : found->second)
+                        loop.accesses[index].guards_loop = true;
+                    return GuardReadResolution::ResolvedAddress;
+                }
+                if (syntactic_read_by_instruction.contains(address)) {
+                    loop.unresolved_guard_read_instruction_addresses.push_back(address);
+                    return GuardReadResolution::UnresolvedAddress;
+                }
+                return GuardReadResolution::NotARead;
+            };
+            bool has_unresolved_fcmp_guard = false;
+            for (const auto block_index : member_indices) {
+                const auto& block = blocks[block_index];
                 if (block.lines.empty()) continue;
                 const auto control_index = controlling_instruction_index(block);
                 const auto& control = block.lines[control_index].instruction;
@@ -1188,16 +1391,64 @@ find_natural_hardware_loops(const io::ExecutableImage& image,
                         successor_outside = true;
                 }
                 if (!successor_inside || !successor_outside) continue;
-                if (control_index == 0u) {
+
+                std::size_t condition_block = block_index;
+                std::size_t condition_index = control_index;
+                std::vector<bool> visited_condition_blocks(blocks.size(), false);
+                bool condition_found = false;
+                while (!condition_found) {
+                    while (condition_index != 0u) {
+                        --condition_index;
+                        if (instruction_writes_t(
+                                blocks[condition_block].lines[condition_index].instruction)) {
+                            condition_found = true;
+                            break;
+                        }
+                    }
+                    if (condition_found) break;
+                    visited_condition_blocks[condition_block] = true;
+                    if (predecessors[condition_block].size() != 1u) break;
+                    const auto predecessor = predecessors[condition_block].front();
+                    if (!is_member(predecessor) || visited_condition_blocks[predecessor]) break;
+                    condition_block = predecessor;
+                    condition_index = blocks[condition_block].lines.size();
+                }
+                if (!condition_found) {
                     loop.unresolved_guard_access = true;
                     continue;
                 }
 
-                const auto condition_index = control_index - 1u;
-                const auto& condition = block.lines[condition_index].instruction;
+                const auto& condition_line = blocks[condition_block].lines[condition_index];
+                const auto& condition = condition_line.instruction;
                 if (condition.kind == sh4::InstructionKind::DecrementAndTest) {
-                    loop.counter_instruction_addresses.push_back(
-                        block.lines[condition_index].address);
+                    loop.counter_instruction_addresses.push_back(condition_line.address);
+                    continue;
+                }
+                if (condition.kind == sh4::InstructionKind::TestByteImmediate ||
+                    condition.kind == sh4::InstructionKind::TestAndSetByte ||
+                    (condition.kind ==
+                         sh4::InstructionKind::LoadSpecialRegisterPostIncrement &&
+                     condition.special_register == sh4::SpecialRegister::Sr)) {
+                    if (mark_direct_guard_access(condition_line.address) !=
+                        GuardReadResolution::ResolvedAddress)
+                        loop.unresolved_guard_access = true;
+                    continue;
+                }
+                if (condition.kind == sh4::InstructionKind::FcmpEqual ||
+                    condition.kind == sh4::InstructionKind::FcmpGreater) {
+                    // FPSCR.PR/SZ/FR, FR/XF banking, FPUL transfers and vector operations make
+                    // scalar-only backward slicing unsound. Keep every loop-local memory read as
+                    // an explicit unresolved FCMP guard candidate until that full state is modeled.
+                    if (!has_unresolved_fcmp_guard) {
+                        for (const auto& [instruction_address, is_read] :
+                             syntactic_read_by_instruction) {
+                            if (is_read)
+                                loop.unresolved_guard_read_instruction_addresses.push_back(
+                                    instruction_address);
+                        }
+                        has_unresolved_fcmp_guard = true;
+                    }
+                    loop.unresolved_guard_access = true;
                     continue;
                 }
                 auto required_registers = condition_register_mask(condition);
@@ -1205,62 +1456,85 @@ find_natural_hardware_loops(const io::ExecutableImage& image,
                     loop.unresolved_guard_access = true;
                     continue;
                 }
-                for (std::size_t writer_position = condition_index;
-                     writer_position != 0u && required_registers != 0u;) {
-                    --writer_position;
-                    const auto& writer = block.lines[writer_position];
-                    const auto writes = static_cast<std::uint16_t>(
-                        general_register_write_mask(writer.instruction) & required_registers);
-                    if (writes == 0u) continue;
 
-                    if (is_potential_memory_load(writer.instruction.kind)) {
-                        const auto loaded_register =
-                            loop_register_bit(writer.instruction.destination_register);
-                        const auto loaded_outputs =
-                            static_cast<std::uint16_t>(writes & loaded_register);
-                        if (loaded_outputs != 0u) {
-                            required_registers = static_cast<std::uint16_t>(
-                                required_registers & ~loaded_outputs);
-                            const auto found = access_by_instruction.find(writer.address);
-                            if (found == access_by_instruction.end()) {
-                                loop.unresolved_guard_access = true;
-                            } else {
-                                auto& evidence = loop.accesses[found->second];
-                                if (evidence.kind == HardwareAccessKind::Read)
-                                    evidence.guards_loop = true;
-                                else
-                                    loop.unresolved_guard_access = true;
+                std::size_t writer_block = condition_block;
+                std::size_t writer_position = condition_index;
+                std::vector<bool> visited_writer_blocks(blocks.size(), false);
+                bool provenance_complete = true;
+                while (required_registers != 0u) {
+                    while (writer_position != 0u && required_registers != 0u) {
+                        --writer_position;
+                        const auto& writer = blocks[writer_block].lines[writer_position];
+                        const auto writes = static_cast<std::uint16_t>(
+                            general_register_write_mask(writer.instruction) & required_registers);
+                        if (writes == 0u) continue;
+
+                        if (is_potential_memory_load(writer.instruction.kind)) {
+                            const auto loaded_register =
+                                loop_register_bit(writer.instruction.destination_register);
+                            const auto loaded_outputs =
+                                static_cast<std::uint16_t>(writes & loaded_register);
+                            if (loaded_outputs != 0u) {
+                                required_registers = static_cast<std::uint16_t>(
+                                    required_registers & ~loaded_outputs);
+                                if (mark_direct_guard_access(writer.address) !=
+                                    GuardReadResolution::ResolvedAddress) {
+                                    provenance_complete = false;
+                                }
                             }
+                            const auto non_value_outputs =
+                                static_cast<std::uint16_t>(writes & ~loaded_register);
+                            const auto postincrement =
+                                writer.instruction.kind ==
+                                    sh4::InstructionKind::MovByteLoadPostIncrement ||
+                                writer.instruction.kind ==
+                                    sh4::InstructionKind::MovWordLoadPostIncrement ||
+                                writer.instruction.kind ==
+                                    sh4::InstructionKind::MovLongLoadPostIncrement;
+                            if (non_value_outputs != 0u && !postincrement) {
+                                required_registers = static_cast<std::uint16_t>(
+                                    required_registers & ~non_value_outputs);
+                                provenance_complete = false;
+                            }
+                            continue;
                         }
-                        const auto non_value_outputs =
-                            static_cast<std::uint16_t>(writes & ~loaded_register);
-                        const auto postincrement =
-                            writer.instruction.kind == sh4::InstructionKind::MovByteLoadPostIncrement ||
-                            writer.instruction.kind == sh4::InstructionKind::MovWordLoadPostIncrement ||
-                            writer.instruction.kind == sh4::InstructionKind::MovLongLoadPostIncrement;
-                        if (non_value_outputs != 0u && !postincrement) {
-                            required_registers = static_cast<std::uint16_t>(
-                                required_registers & ~non_value_outputs);
-                            loop.unresolved_guard_access = true;
-                        }
-                        continue;
-                    }
 
-                    const auto inputs = guard_input_registers(writer.instruction);
-                    required_registers =
-                        static_cast<std::uint16_t>(required_registers & ~writes);
-                    if (inputs.has_value())
+                        const auto inputs = guard_input_registers(writer.instruction);
                         required_registers =
-                            static_cast<std::uint16_t>(required_registers | *inputs);
-                    else
-                        loop.unresolved_guard_access = true;
+                            static_cast<std::uint16_t>(required_registers & ~writes);
+                        if (inputs.has_value())
+                            required_registers =
+                                static_cast<std::uint16_t>(required_registers | *inputs);
+                        else
+                            provenance_complete = false;
+                    }
+                    if (required_registers == 0u) break;
+                    visited_writer_blocks[writer_block] = true;
+                    if (predecessors[writer_block].size() != 1u) {
+                        provenance_complete = false;
+                        break;
+                    }
+                    const auto predecessor = predecessors[writer_block].front();
+                    if (!is_member(predecessor) || visited_writer_blocks[predecessor]) {
+                        provenance_complete = false;
+                        break;
+                    }
+                    writer_block = predecessor;
+                    writer_position = blocks[writer_block].lines.size();
                 }
-                if (required_registers != 0u) loop.unresolved_guard_access = true;
+                if (!provenance_complete || required_registers != 0u)
+                    loop.unresolved_guard_access = true;
             }
 
             std::sort(loop.block_addresses.begin(), loop.block_addresses.end());
             std::sort(loop.counter_instruction_addresses.begin(),
                       loop.counter_instruction_addresses.end());
+            std::sort(loop.unresolved_guard_read_instruction_addresses.begin(),
+                      loop.unresolved_guard_read_instruction_addresses.end());
+            loop.unresolved_guard_read_instruction_addresses.erase(
+                std::unique(loop.unresolved_guard_read_instruction_addresses.begin(),
+                            loop.unresolved_guard_read_instruction_addresses.end()),
+                loop.unresolved_guard_read_instruction_addresses.end());
             std::sort(loop.accesses.begin(), loop.accesses.end(), [](const auto& left,
                                                                     const auto& right) {
                 return std::tie(left.instruction_address,
@@ -1324,30 +1598,35 @@ DreamcastHardwareAudit audit_dreamcast_hardware(const io::ExecutableImage& image
         for (const auto& span : analysis.block_spans) {
             const auto lines = span.view(*analysis.instruction_arena);
             const auto trace = propagate_local_constants(lines, image);
+            const auto gbr_trace = propagate_local_gbr(lines, trace);
             for (std::size_t index = 0u; index < lines.size(); ++index) {
                 if (!is_memory_access_instruction(lines[index].instruction.kind)) continue;
                 ++result.memory_access_sites;
-                const auto access = effective_access(lines[index], trace[index].before);
-                if (!access.has_value()) {
+                const auto access_set =
+                    effective_accesses(lines[index], trace[index].before, gbr_trace[index]);
+                if (!access_set.complete) {
                     ++result.unresolved_memory_access_sites;
-                    continue;
+                } else {
+                    ++result.resolved_memory_access_sites;
                 }
-                ++result.resolved_memory_access_sites;
-                const auto description = describe(access->address);
-                if (description.region == DreamcastHardwareRegion::Unknown) continue;
-                HardwareAccessReference reference;
-                reference.instruction_address = lines[index].address;
-                reference.guest_address = access->address;
-                reference.canonical_address = description.canonical;
-                reference.region = description.region;
-                reference.kind = access->kind;
-                reference.width = access->width;
-                reference.aperture_mapped = description.aperture_mapped;
-                reference.runtime_support =
-                    assess_support(description, access->kind, access->width);
-                reference.support_reason = support_reason(description, reference.runtime_support);
-                reference.register_name = description.name;
-                result.references.push_back(std::move(reference));
+                for (const auto& access : access_set.accesses) {
+                    const auto description = describe(access.address);
+                    if (description.region == DreamcastHardwareRegion::Unknown) continue;
+                    HardwareAccessReference reference;
+                    reference.instruction_address = lines[index].address;
+                    reference.guest_address = access.address;
+                    reference.canonical_address = description.canonical;
+                    reference.region = description.region;
+                    reference.kind = access.kind;
+                    reference.width = access.width;
+                    reference.aperture_mapped = description.aperture_mapped;
+                    reference.runtime_support =
+                        assess_support(description, access.kind, access.width);
+                    reference.support_reason =
+                        support_reason(description, reference.runtime_support);
+                    reference.register_name = description.name;
+                    result.references.push_back(std::move(reference));
+                }
             }
         }
     }
@@ -1392,6 +1671,7 @@ DreamcastHardwareAudit audit_dreamcast_hardware(const io::ExecutableImage& image
         }
     }
     result.loops = find_natural_hardware_loops(image, analysis);
+    result.unresolved_poll_guard_loops = count_unresolved_poll_guard_loops(result.loops);
     return result;
 }
 
@@ -1465,7 +1745,7 @@ const char* hardware_runtime_support_name(const HardwareRuntimeSupport support) 
 
 std::string format_hardware_audit_text(const DreamcastHardwareAudit& audit) {
     std::ostringstream output;
-    output << "Scope: initial boot executable\n"
+    output << "Scope: " << audit.scope << "\n"
            << "Image bytes: " << audit.image_bytes << "\n"
            << "Reachable instructions: " << audit.reachable_instructions << "\n"
            << "Reachable functions: " << audit.reachable_functions << "\n"
@@ -1478,7 +1758,8 @@ std::string format_hardware_audit_text(const DreamcastHardwareAudit& audit) {
            << ", known_gap=" << audit.known_gap_addresses
            << ", rejected=" << audit.rejected_addresses
            << ", unmapped=" << audit.unmapped_addresses << ")\n"
-           << "Natural loops: " << audit.loops.size() << "\n";
+           << "Natural loops: " << audit.loops.size() << "\n"
+           << "Unresolved poll/guard loops: " << audit.unresolved_poll_guard_loops << "\n";
     for (const auto& diagnostic : audit.instruction_diagnostics) {
         output << "Instruction diagnostic: address=" << hex8(diagnostic.address)
                << " opcode=" << hex4(diagnostic.opcode)
@@ -1498,6 +1779,14 @@ std::string format_hardware_audit_text(const DreamcastHardwareAudit& audit) {
                << " classification=" << hardware_loop_classification_name(loop.classification)
                << " unresolved_guard_access="
                << (loop.unresolved_guard_access ? "yes" : "no")
+               << " unresolved_guard_read_sites=";
+        for (std::size_t index = 0u;
+             index < loop.unresolved_guard_read_instruction_addresses.size();
+             ++index) {
+            if (index != 0u) output << ',';
+            output << hex8(loop.unresolved_guard_read_instruction_addresses[index]);
+        }
+        output
                << " blocks=";
         for (std::size_t index = 0u; index < loop.block_addresses.size(); ++index) {
             if (index != 0u) output << ',';
@@ -1549,8 +1838,9 @@ std::string format_hardware_audit_text(const DreamcastHardwareAudit& audit) {
 std::string format_hardware_audit_json(const DreamcastHardwareAudit& audit,
                                        const bool include_accesses) {
     std::ostringstream output;
-    io::write_json_report_header(output, "katana.hardware-audit.v3", "dreamcast_hardware_audit");
-    output << ",\"scope\":\"initial_boot_executable\",\"image_bytes\":" << audit.image_bytes
+    io::write_json_report_header(output, "katana.hardware-audit.v4", "dreamcast_hardware_audit");
+    output << ",\"scope\":" << io::quote_json(audit.scope) << ",\"image_bytes\":"
+           << audit.image_bytes
            << ",\"reachable_instructions\":" << audit.reachable_instructions
            << ",\"reachable_functions\":" << audit.reachable_functions
            << ",\"unknown_instructions\":" << audit.unknown_instructions
@@ -1563,6 +1853,7 @@ std::string format_hardware_audit_json(const DreamcastHardwareAudit& audit,
            << ",\"rejected_addresses\":" << audit.rejected_addresses
            << ",\"unmapped_addresses\":" << audit.unmapped_addresses
            << ",\"natural_loops\":" << audit.loops.size()
+           << ",\"unresolved_poll_guard_loops\":" << audit.unresolved_poll_guard_loops
            << ",\"instruction_diagnostics\":[";
     for (std::size_t index = 0u; index < audit.instruction_diagnostics.size(); ++index) {
         if (index != 0u) output << ',';
@@ -1596,6 +1887,14 @@ std::string format_hardware_audit_json(const DreamcastHardwareAudit& audit,
                << io::quote_json(hardware_loop_classification_name(loop.classification))
                << ",\"unresolved_guard_access\":"
                << (loop.unresolved_guard_access ? "true" : "false")
+               << ",\"unresolved_guard_read_instruction_addresses\":[";
+        for (std::size_t site = 0u;
+             site < loop.unresolved_guard_read_instruction_addresses.size();
+             ++site) {
+            if (site != 0u) output << ',';
+            output << io::quote_json(hex8(loop.unresolved_guard_read_instruction_addresses[site]));
+        }
+        output << "]"
                << ",\"block_addresses\":[";
         for (std::size_t block = 0u; block < loop.block_addresses.size(); ++block) {
             if (block != 0u) output << ',';

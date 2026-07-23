@@ -6,7 +6,7 @@ ungeloesten Kontrollflusspfaden mehr.
 
 ## ABI
 
-Die aktuelle Runtime-ABI ist Version `40`. Die typisierte Block-ABI ist
+Die aktuelle Runtime-ABI ist Version `41`. Die typisierte Block-ABI ist
 Version `3`; die Backend-Interface-ABI ist Version `3`.
 
 Generierter Code enthaelt eine Compile-Time-Pruefung gegen diese Version. Eine
@@ -64,6 +64,10 @@ Quell-/Laufzeitadressabbildung.
 ABI-Version 40 versioniert den oeffentlichen begrenzten und standardmaessig
 redigierten Systemreplay-Vertrag. Kapazitaet, Dropstatus und Redaktionsmodus
 sind damit Bestandteil der Runtime-Schnittstelle.
+ABI-Version 41 bindet MMU-bewusste lineare Gastpeeks, allokationsfreies
+Last-MMIO-Tracking und nicht mutierende PVR-/Systembus-Snapshots in den
+oeffentlichen Diagnosevertrag. Der Portprojektvertrag 25 verwendet diese
+Schnittstellen im generierten terminalen Fortschrittsbericht.
 
 ## CMake
 
@@ -413,11 +417,20 @@ spaetere Plattformkonfiguration.
 - sichtbare Fehlerpfade fuer ungeloeste Calls und Spruenge
 - Runtime-Tests fuer CPU-Zustand, Reset, Speicherbus, Ausrichtung, strukturierte Fehler, Traces, Watchpoints, breitenbewusste MMIO-Handler sowie Dreamcast-RAM-, VRAM-, AICA-RAM-, BIOS- und Flash-Aliase
 - optionales leichtgewichtiges Last-MMIO-Tracking fuer begrenzte Produktprobes;
-  ohne Aktivierung bleibt der normale Speicherhotpath frei von Trace-Callbacks
+  bei Aktivierung speichert der Gast-Hotpath nur Operation, Adresse, Breite,
+  Wert und Regionsbasis in einem allokationsfreien POD. Der owning
+  Regionsstring entsteht erst beim terminalen Abruf; ohne Aktivierung bleibt
+  der normale Speicherhotpath frei von Trace-Callbacks
 - MMU-bewusste freie 32-Bit-Probes ausschliesslich auf echten linearen
-  Haupt-RAM-, VRAM- und AICA-RAM-Backings; `Memory::peek_u32` lehnt Flash und
-  MMIO auch bei einer fehlerhaften expliziten Whitelist vor jedem
-  Geraetehandler ab
+  Haupt-RAM-, VRAM- und AICA-RAM-Backings; `peek_guest_u32` uebersetzt ueber
+  die aktuelle Gast-MMU ohne Exception- oder CPU-Mutation. `Memory::peek_u32`
+  lehnt Flash und MMIO auch bei einer fehlerhaften expliziten Whitelist vor
+  jedem Geraetehandler ab und beruehrt weder Observer, Watchpoints noch
+  Lookup-/Referenzzaehler
+- strukturierte `PvrRegisterFile::snapshot()`- und
+  `DreamcastSystemBusControl::snapshot()`-Zustaende fuer Produktdiagnostik;
+  auch pending Rendercompletions und aktive Channel-2-Transfers bleiben
+  unveraendert und werden weder gepumpt noch quittiert
 - deterministische Systemreplays unter Schema 2 mit standardmaessig 4.096 und
   maximal 65.536 Ereignissen sowie hoechstens 64 Zeichen langen Ereigniscodes;
   eine Saettigung zaehlt genau einen Drop je abgewiesenem Ereignis und
@@ -462,8 +475,10 @@ ein Write ueber eine Spiegelgrenze wird dafuer in Tail und Head geteilt.
 Der normale Produktport deaktiviert Demand-Interpreterausfuehrung vollstaendig:
 Nicht gebundener Code endet als typisierter Materialisierungs-/Dispatchfehler.
 Nur das explizite `diagnostic_partial`-Profil emittiert den begrenzten
-Diagnoseinterpreter. Der Portprojektvertrag `24` weist Profil,
-Interpreterstatus, Unbound-Code-Policy und Coverage-Vertrag im Manifest aus.
+Diagnoseinterpreter. Der Portprojektvertrag `25` weist Profil,
+Interpreterstatus, Unbound-Code-Policy und Coverage-Vertrag im Manifest aus
+und verwendet fuer freie Speicherprobes sowie PVR-/Systembuszustand nur die
+seiteneffektfreien Runtime-ABI-41-Diagnoseschnittstellen.
 
 Im produktiven Einblock-AOT-Pfad zaehlt `CpuState::retired_guest_instructions`
 jede betretene Gastinstruktion. Schedulerzeit wird nach der ausgefuehrten
@@ -480,8 +495,8 @@ generische C++-Emitter setzt auch bei einem durch Funktionsdiscovery
 nachfolgerlosen Block in jedem Backendmodus `PC` auf die Folgeadresse der
 letzten Gastinstruktion. Die Produktinvariante prueft einen Fallthrough relativ
 zu dieser tatsaechlichen Terminatorquelle und nicht zum Eintritt des
-umgebenden Wrappers. Der kumulative Stand verwendet Runtime-ABI 40, Block-ABI 3,
-Backend-Interface-ABI 3, PlatformServices-ABI 9, Portvertrag 24 und
+umgebenden Wrappers. Der kumulative Stand verwendet Runtime-ABI 41, Block-ABI 3,
+Backend-Interface-ABI 3, PlatformServices-ABI 9, Portvertrag 25 und
 Host-Video-Vertrag 2.
 
 Statische Dispatchregistries werden nicht mehr in eine einzelne

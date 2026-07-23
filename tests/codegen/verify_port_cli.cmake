@@ -25,6 +25,19 @@ if(NOT writer_result EQUAL 0)
 endif()
 
 execute_process(
+  COMMAND "${KATANA_CLI}" disc-audit "${fixture}/disc/disc.gdi" --json
+  RESULT_VARIABLE audit_result
+  OUTPUT_VARIABLE audit_output
+  ERROR_VARIABLE audit_error
+)
+if(NOT audit_result EQUAL 0 OR
+   NOT audit_output MATCHES "\"scope\":\"native_disc_aot_boot_graph\"")
+  file(REMOVE_RECURSE "${fixture}")
+  message(FATAL_ERROR
+    "Disc-Audit verliert den nativen AOT-Bootgraph-Scope: ${audit_output} ${audit_error}")
+endif()
+
+execute_process(
   COMMAND "${KATANA_CLI}" port "${fixture}/disc/disc.gdi"
           --output "${fixture}/port" --target-name cli_game
   RESULT_VARIABLE port_result

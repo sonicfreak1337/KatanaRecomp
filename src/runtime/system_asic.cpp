@@ -160,6 +160,15 @@ std::uint64_t DreamcastSystemBusControl::system_reset_requests() const noexcept 
     return system_reset_requests_;
 }
 
+DreamcastSystemBusSnapshot DreamcastSystemBusControl::snapshot() const noexcept {
+    return {
+        registers_[Channel2Destination / 4u],
+        registers_[Channel2Length / 4u],
+        registers_[Channel2Start / 4u],
+        system_reset_requests_,
+    };
+}
+
 void DreamcastSystemBusControl::complete_channel2() noexcept {
     registers_[index(Channel2Start)] = 0u;
     registers_[index(Channel2Length)] = 0u;

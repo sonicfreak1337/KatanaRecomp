@@ -20,15 +20,39 @@
   `final_guest_state_hash`; nur ein ausdrueckliches lokales Opt-in gibt sie
   aus.
 - Der allgemeine Hardwareauditor verwendet mit
-  `katana.hardware-audit.v3` echte natuerliche Loops und eine skalierbare
+  `katana.hardware-audit.v4` echte natuerliche Loops und eine skalierbare
   Dominatorberechnung statt einer dichten quadratischen Matrix. Er
   klassifiziert `counter`, `ram_poll`, `mmio_poll`, `mixed` und konservativ
   `unknown`, trennt Access- von Guard-Evidenz und fuehrt die vier
-  Area-3-RAM-Spiegel kanonisch zusammen. Unvollstaendige Definitionen oder
-  Vorgaenger bleiben `unknown`; Delay-Slot-Doppelkontexte, wurzellose SCCs und
-  ein 4.096-Block-Skalierungsfall besitzen Regressionen. Dieser statische
+  Area-3-RAM-Spiegel kanonisch zusammen. Die Speicherzugriffsabdeckung umfasst
+  jetzt auch GBR-MOVs, den Byte-Read `TST.B`, Byte-RMW durch
+  `AND.B`/`XOR.B`/`OR.B`, `TAS.B`, die konservative FPSCR.SZ-Adressunion der
+  FMOV-Familien, PC-relative `MOV.W`/`MOV.L`, `STC.L`/`LDC.L` sowie beide Reads
+  von `MAC.W`/`MAC.L`. Teilweise bekannte MAC-Basen bleiben einzeln sichtbar,
+  und Predecrement-Adressen folgen dem 32-Bit-Wraparound.
+  OCRAM gilt dabei als Geraeteapertur und nicht als linearer RAM-Poll.
+  Guard-Provenienz folgt T-neutralen Instruktionen und einem eindeutigen
+  Vorgaenger, stoppt jedoch an einem echten T-Schreiber oder Merge. Aufgeloeste
+  Guard-Reads bleiben von unaufgeloesten Reads und konservativen Kandidaten
+  einer noch nicht vollstaendig modellierten Condition-Domaene getrennt.
+  FMOV-/FCMP-Provenienz bleibt bei nicht bewiesenem FPSCR.PR/SZ-, FR/XF-,
+  FPUL- oder Vektorzustand bewusst `unknown` und erhaelt kein erfundenes
+  `guards_loop`. `--strict` macht partielle Hardwareadressen und diese
+  unaufgeloesten Poll-/Guard-Faelle zu einem Fehler, waehrend `--fail-on-gap`
+  seine bisherige Bedeutung behaelt. Einzelbilder tragen den Scope
+  `executable_image`; Disc-Audits setzen `native_disc_aot_boot_graph`.
+  Unvollstaendige Definitionen oder Vorgaenger bleiben `unknown`;
+  Delay-Slot-Doppelkontexte, wurzellose SCCs und ein
+  4.096-Block-Skalierungsfall besitzen Regressionen. Dieser statische
   Teilstand schliesst `KR-4842` ohne dynamische Writer-/Wertaenderungsevidenz
   bewusst noch nicht ab.
+  Der aktuelle private SA-PAL-Disc-Audit ist im normalen Modus gruen und
+  berichtet unter `native_disc_aot_boot_graph` 142.380 Instruktionen, 1.542
+  Funktionen, null unbekannte Instruktionen, 58.630 Speicherstellen
+  (18.159 vollstaendig aufgeloest, 40.471 unaufgeloest oder partiell), null
+  bekannte Luecken, zwei partielle Adressen sowie 1.095 Natural Loops. Davon
+  sind 48 `counter`, eine `mmio_poll`, zwei `ram_poll` und 1.044 `unknown`;
+  492 `unresolved_poll_guard_loops` halten `--strict` erwartungsgemaess rot.
 - Der private Retailrunner ermittelt Runtime-ABI und Portprojektvertrag strikt
   aus `cmake/KatanaVersions.cmake`. Malformed, doppelte und nullwertige
   Definitionen sowie JSON-Vertragswerte vom Typ String oder Double werden
@@ -53,11 +77,21 @@
   Fehlerstatus mit null uebertragenen Bytes. Weder Hostexception,
   Teilwrite noch ein dauerhaftes `BSY` koennen aus dieser Grenze entstehen,
   und ein nachfolgender Request bleibt zulaessig.
-- `Memory::peek_u32` erzwingt die seiteneffektfreie Diagnosegrenze jetzt
-  selbst: Auch ein versehentlich explizit erlaubtes MMIO-Geraet wird vor
-  seinem Readhandler abgelehnt. Der generierte Port bietet freie Probes nur
-  fuer die echten linearen Backings von Haupt-RAM, VRAM und AICA-RAM an;
-  Flash bleibt bis zu einem eigenen expliziten Peek-Vertrag ausgeschlossen.
+- Freie Speicherprobes uebersetzen virtuelle Gastadressen ueber die aktuelle
+  MMU, erlauben nur echte lineare Backings und veraendern weder CPU-/
+  Exceptionzustand noch MMIO-Handler, Observer, Watchpoints oder
+  Speicherzaehler. `Memory::peek_u32` weist daher auch ein versehentlich
+  explizit erlaubtes MMIO-Geraet vor dessen Readhandler ab; der generierte Port
+  bietet nur Haupt-RAM, VRAM und AICA-RAM an. Flash bleibt bis zu einem eigenen
+  expliziten Peek-Vertrag ausgeschlossen. Das Last-MMIO-Tracking schreibt im
+  Gast-Hotpath nur einen allokationsfreien POD-Datensatz; den Regionsstring
+  materialisiert erst der terminale Bericht. PVR- und Systembusdiagnostik
+  verwendet strukturierte `snapshot()`-Zustaende, die auch ausstehende Render-
+  oder Channel-2-Arbeit weder ausloesen, abschliessen noch umordnen. Die fuenf
+  fokussierten Runtime-/Codegenziele und die zwei Auditor-/Policyziele bestehen
+  5/5 beziehungsweise 2/2. Die CLI-Scope-Regression ist angelegt; der aktuelle
+  private Disc-Audit bestaetigt die echte CLI-Integration bereits mit Schema 4
+  und `native_disc_aot_boot_graph`. Dies ist kein Vollgate.
 - Ein privater, budgetierter Sonic-Adventure-PAL-AOT-Lauf erreicht in der
   laufenden v0.48-Entwicklung erstmals sowohl `KR_FIRST_GUEST_FRAME` als auch
   `KR_FIRST_PRESENTED_FRAME`. Der recompilierte Discbootstrap `IP.BIN`
@@ -79,8 +113,8 @@
   Direct-FB-Pixeln. TA, Rendergeneration und Materializer bleiben null; der
   Budget-Exit ist erwartet. Diese Port- und Laufevidenz bleibt ausdruecklich
   historisch und wird nicht als ABI-40-Export ausgegeben.
-- Der aktuelle kumulative Schnittstellenstand verwendet Runtime-ABI 40,
-  Block-ABI 3, Backend-Interface-ABI 3, Portprojektvertrag 24 und
+- Der aktuelle kumulative Schnittstellenstand verwendet Runtime-ABI 41,
+  Block-ABI 3, Backend-Interface-ABI 3, Portprojektvertrag 25 und
   Host-Video-Vertrag 2. Block-ABI 3 versioniert die virtuelle
   Quell-/Laufzeitadressabbildung source-relativierter nativer AOT-Templates.
 - PVR-Read- und Write-Framebuffer verwenden nun dieselbe hardwaregenaue
@@ -582,9 +616,12 @@
   zu konkreten MMIO-, Store-Queue- und Prefetch-Zugriffen, bewertet Breite,
   Richtung und Registersemantik gegen den produktiven Runtimevertrag und kann
   ganze Discverzeichnisse parallel und deterministisch pruefen. Der aktuelle
-  private PAL-Build umfasst 55.504 erreichbare Instruktionen in 815 Funktionen,
-  keine unbekannte SH-4-Instruktion und keine harte statische Hardwareluecke;
-  titelbezogene Adressen oder Bytes gelangen nicht in den Berichtscode.
+  private SA-PAL-Disc-Audit unter Schema 4 umfasst 142.380 erreichbare
+  Instruktionen in 1.542 Funktionen, keine unbekannte SH-4-Instruktion und
+  keine bekannte statische Hardwareluecke. Zwei partielle Adressen und 492
+  unaufgeloeste oder konservative Poll-/Guard-Faelle halten den Strict-Modus
+  bewusst offen; titelbezogene Adressen oder Bytes gelangen nicht in den
+  Berichtscode.
 - Der SH-4-SCIF-Block ist mit Status-, FIFO-, Baudraten-, Scheduler- und
   ERI/RXI/BRI/TXI-Interruptsemantik im gemeinsamen INTC-Produktpfad verbunden.
   AICA-ARM-Reset/VREG verwenden denselben ExecutionController wie Timer,

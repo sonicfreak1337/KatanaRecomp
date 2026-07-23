@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <span>
 
 namespace katana::runtime {
 
@@ -162,6 +163,10 @@ void load_tlb(CpuState& cpu) noexcept;
                                                     MemoryAccessOperation operation,
                                                     MemoryAccessWidth width,
                                                     bool instruction = false);
+[[nodiscard]] std::uint32_t
+peek_guest_u32(const CpuState& cpu,
+               std::uint32_t address,
+               std::span<const MemoryDevice* const> permitted_devices);
 [[nodiscard]] StoreQueuePrefetchTranslation
 translate_store_queue_prefetch(CpuState& cpu, std::uint32_t address);
 [[nodiscard]] std::uint8_t guest_read_u8(CpuState& cpu, std::uint32_t address);

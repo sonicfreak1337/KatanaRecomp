@@ -117,6 +117,24 @@ struct PvrTiming {
     std::uint64_t pixel_clock_hz = 27'000'000u;
 };
 
+struct PvrRegisterSnapshot {
+    std::uint32_t framebuffer_read_control = 0u;
+    std::uint32_t framebuffer_read_size = 0u;
+    std::uint32_t framebuffer_read_sof1 = 0u;
+    std::uint32_t framebuffer_read_sof2 = 0u;
+    std::uint32_t framebuffer_write_control = 0u;
+    std::uint32_t framebuffer_write_sof1 = 0u;
+    std::uint32_t framebuffer_write_sof2 = 0u;
+    std::uint32_t video_control = 0u;
+    std::uint64_t render_requests = 0u;
+    std::uint64_t render_completions = 0u;
+    std::uint64_t vblank_in = 0u;
+    std::uint64_t vblank_out = 0u;
+    std::uint64_t hblank = 0u;
+    bool in_vblank = false;
+    std::uint32_t field = 0u;
+};
+
 class PvrRegisterFile final {
   public:
     explicit PvrRegisterFile(EventScheduler& scheduler,
@@ -137,6 +155,7 @@ class PvrRegisterFile final {
     [[nodiscard]] std::uint64_t hblank_count() const noexcept;
     [[nodiscard]] bool in_vblank() const noexcept;
     [[nodiscard]] std::uint32_t field() const noexcept;
+    [[nodiscard]] PvrRegisterSnapshot snapshot() const noexcept;
     void set_render_observer(std::function<void()> observer);
     void set_vblank_observer(std::function<void(bool)> observer);
     void set_hblank_observer(std::function<void()> observer);

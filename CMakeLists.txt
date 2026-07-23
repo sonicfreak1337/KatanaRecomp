@@ -1397,6 +1397,18 @@ add_test(
     COMMAND katana-hardware-audit-tests
 )
 
+add_executable(katana-hardware-audit-policy-tests
+    tests/cli/hardware_audit_policy_tests.cpp
+)
+
+target_link_libraries(katana-hardware-audit-policy-tests PRIVATE katana_core)
+katana_enable_warnings(katana-hardware-audit-policy-tests)
+
+add_test(
+    NAME katana-hardware-audit-policy-tests
+    COMMAND katana-hardware-audit-policy-tests
+)
+
 add_executable(katana-function-value-analysis-tests
     tests/analysis/function_value_analysis_tests.cpp
 )

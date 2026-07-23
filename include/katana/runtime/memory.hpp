@@ -203,7 +203,7 @@ class Memory {
 
     void set_mmio_access_tracking(bool enabled) noexcept;
     [[nodiscard]] bool mmio_access_tracking_enabled() const noexcept;
-    [[nodiscard]] const std::optional<MemoryAccessEvent>& last_mmio_access() const noexcept;
+    [[nodiscard]] std::optional<MemoryAccessEvent> last_mmio_access() const;
     void clear_last_mmio_access() const noexcept;
 
     void set_guest_write_observer(GuestWriteObserver observer);
@@ -252,12 +252,24 @@ class Memory {
         MemoryAccessObserver observer;
     };
 
+    struct LastMmioAccessRecord {
+        MemoryAccessOperation operation = MemoryAccessOperation::Read;
+        std::uint32_t address = 0u;
+        MemoryAccessWidth width = MemoryAccessWidth::Byte;
+        std::uint32_t value = 0u;
+        std::uint32_t region_base_address = 0u;
+    };
+
     [[nodiscard]] const MappedRegion&
-    resolve(std::uint32_t address, MemoryAccessWidth width, MemoryAccessOperation operation) const;
+    resolve(std::uint32_t address,
+            MemoryAccessWidth width,
+            MemoryAccessOperation operation,
+            bool record_lookup_metrics = true) const;
     [[nodiscard]] const MappedRegion& resolve_writable(std::uint32_t address,
                                                        MemoryAccessWidth width) const;
     [[nodiscard]] const MappedRegion* indexed_region(std::uint32_t address,
-                                                     std::size_t width) const noexcept;
+                                                     std::size_t width,
+                                                     bool record_lookup_metrics = true) const noexcept;
     void rebuild_region_index();
     [[nodiscard]] bool access_observers_active() const noexcept;
     void require_alignment(std::uint32_t address,
@@ -268,7 +280,7 @@ class Memory {
                             MemoryAccessOperation operation,
                             std::uint32_t address,
                             MemoryAccessWidth width,
-                            std::uint32_t value) const;
+                            std::uint32_t value) const noexcept;
     void notify_guest_write(const GuestWriteEvent& event) const;
 
     MemoryAlignmentPolicy alignment_policy_ = MemoryAlignmentPolicy::Strict;
@@ -279,7 +291,7 @@ class Memory {
     MemoryAccessObserver trace_handler_;
     GuestWriteObserver guest_write_observer_;
     bool mmio_access_tracking_enabled_ = false;
-    mutable std::optional<MemoryAccessEvent> last_mmio_access_;
+    mutable std::optional<LastMmioAccessRecord> last_mmio_access_;
     MemoryWatchpointId next_watchpoint_id_ = 1u;
     mutable MemoryPerformanceCounters performance_counters_;
 };
