@@ -735,7 +735,8 @@ int run_desktop() {
                                             1,
                                             BlackPixel(display, screen),
                                             WhitePixel(display, screen));
-    XStoreName(display, window, "KatanaRecomp 0.40 - Phase 10");
+    const auto title = std::string("KatanaRecomp ") + KATANA_RECOMP_VERSION;
+    XStoreName(display, window, title.c_str());
     XSelectInput(display, window, ExposureMask | KeyPressMask | StructureNotifyMask);
     XMapWindow(display, window);
     bool running = true;
