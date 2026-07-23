@@ -1,5 +1,6 @@
 #include "katana/analysis/hardware_audit.hpp"
 
+#include "katana/analysis/basic_blocks.hpp"
 #include "katana/analysis/value_analysis.hpp"
 #include "katana/io/json_report.hpp"
 #include "katana/sh4/instruction.hpp"
@@ -7,11 +8,14 @@
 #include <algorithm>
 #include <array>
 #include <iomanip>
+#include <limits>
 #include <map>
 #include <optional>
 #include <sstream>
 #include <tuple>
+#include <unordered_map>
 #include <utility>
+#include <vector>
 
 namespace katana::analysis {
 namespace {
@@ -712,6 +716,577 @@ std::string hex4(const std::uint16_t value) {
     return output.str();
 }
 
+std::size_t controlling_instruction_index(const BasicBlock& block) noexcept {
+    if (block.lines.empty()) return 0u;
+    const auto last = block.lines.size() - 1u;
+    return block.lines[last].is_delay_slot && last != 0u &&
+                   block.lines[last - 1u].instruction.has_delay_slot &&
+                   block.lines[last].address == block.lines[last - 1u].address + 2u
+               ? last - 1u
+               : last;
+}
+
+bool is_potential_memory_load(const sh4::InstructionKind kind) noexcept {
+    using K = sh4::InstructionKind;
+    switch (kind) {
+    case K::MovByteLoad:
+    case K::MovWordLoad:
+    case K::MovLongLoad:
+    case K::MovByteLoadPostIncrement:
+    case K::MovWordLoadPostIncrement:
+    case K::MovLongLoadPostIncrement:
+    case K::MovByteLoadDisplacement:
+    case K::MovWordLoadDisplacement:
+    case K::MovLongLoadDisplacement:
+    case K::MovByteLoadR0Indexed:
+    case K::MovWordLoadR0Indexed:
+    case K::MovLongLoadR0Indexed:
+    case K::MovByteLoadGbrDisplacement:
+    case K::MovWordLoadGbrDisplacement:
+    case K::MovLongLoadGbrDisplacement:
+        return true;
+    default:
+        return false;
+    }
+}
+
+std::uint16_t condition_register_mask(const sh4::DecodedInstruction& instruction) noexcept {
+    using K = sh4::InstructionKind;
+    switch (instruction.kind) {
+    case K::CompareEqualImmediate:
+    case K::TestImmediate:
+        return 1u;
+    case K::CompareEqualRegister:
+    case K::CompareHigherOrSame:
+    case K::CompareGreaterOrEqual:
+    case K::CompareHigher:
+    case K::CompareGreaterThan:
+    case K::CompareString:
+    case K::TestRegister:
+        return static_cast<std::uint16_t>(
+            (1u << instruction.destination_register) | (1u << instruction.source_register));
+    case K::ComparePositiveOrZero:
+    case K::ComparePositive:
+        return static_cast<std::uint16_t>(1u << instruction.destination_register);
+    default:
+        return 0u;
+    }
+}
+
+constexpr std::uint16_t loop_register_bit(const std::uint8_t index) noexcept {
+    return static_cast<std::uint16_t>(1u << index);
+}
+
+std::optional<std::uint16_t>
+guard_input_registers(const sh4::DecodedInstruction& instruction) noexcept {
+    using K = sh4::InstructionKind;
+    const auto destination = loop_register_bit(instruction.destination_register);
+    const auto source = loop_register_bit(instruction.source_register);
+    switch (instruction.kind) {
+    case K::MovImmediate:
+    case K::MovWordLoadPcRelative:
+    case K::MovLongLoadPcRelative:
+    case K::MoveAddressPcRelative:
+        return static_cast<std::uint16_t>(0u);
+    case K::MovRegister:
+    case K::NegateRegister:
+    case K::NotRegister:
+    case K::ExtendUnsignedByte:
+    case K::ExtendUnsignedWord:
+    case K::ExtendSignedByte:
+    case K::ExtendSignedWord:
+    case K::SwapBytes:
+    case K::SwapWords:
+        return source;
+    case K::AddImmediate:
+    case K::AndImmediate:
+    case K::OrImmediate:
+    case K::XorImmediate:
+    case K::DecrementAndTest:
+    case K::ShiftLogicalLeftOne:
+    case K::ShiftLogicalRightOne:
+    case K::ShiftArithmeticLeftOne:
+    case K::ShiftArithmeticRightOne:
+    case K::ShiftLogicalLeftTwo:
+    case K::ShiftLogicalLeftEight:
+    case K::ShiftLogicalLeftSixteen:
+    case K::ShiftLogicalRightTwo:
+    case K::ShiftLogicalRightEight:
+    case K::ShiftLogicalRightSixteen:
+    case K::RotateLeft:
+    case K::RotateRight:
+        return destination;
+    case K::AddRegister:
+    case K::SubRegister:
+    case K::AndRegister:
+    case K::OrRegister:
+    case K::XorRegister:
+    case K::ExtractMiddle:
+    case K::ShiftArithmeticDynamic:
+    case K::ShiftLogicalDynamic:
+        return static_cast<std::uint16_t>(destination | source);
+    case K::MovByteStorePreDecrement:
+    case K::MovWordStorePreDecrement:
+    case K::MovLongStorePreDecrement:
+    case K::StoreSpecialRegisterPreDecrement:
+        return destination;
+    default: return std::nullopt;
+    }
+}
+
+bool is_linear_loop_memory(const AddressDescription& description) noexcept {
+    if (in_range(description.canonical, 0x0C000000u, 0x04000000u)) return true;
+    using R = DreamcastHardwareRegion;
+    switch (description.region) {
+    case R::AicaRam:
+    case R::TaVram:
+    case R::Vram64:
+    case R::Vram32:
+    case R::Sh4OnChipRam:
+        return true;
+    default:
+        return false;
+    }
+}
+
+std::uint32_t loop_canonical_address(const AddressDescription& description) noexcept {
+    if (in_range(description.canonical, 0x0C000000u, 0x04000000u))
+        return 0x0C000000u | (description.canonical & 0x00FFFFFFu);
+    return description.canonical;
+}
+
+enum class LoopReadStorage : std::uint8_t { Ram, Mmio, Unknown };
+
+LoopReadStorage loop_read_storage(const HardwareLoopAccessEvidence& access) noexcept {
+    if (access.linear_memory) return LoopReadStorage::Ram;
+    if (access.region != DreamcastHardwareRegion::Unknown && access.aperture_mapped &&
+        access.runtime_support != HardwareRuntimeSupport::Unmapped)
+        return LoopReadStorage::Mmio;
+    return LoopReadStorage::Unknown;
+}
+
+HardwareLoopClassification classify_loop(const HardwareNaturalLoop& loop) noexcept {
+    bool counter = !loop.counter_instruction_addresses.empty();
+    bool ram_poll = false;
+    bool mmio_poll = false;
+    bool unknown_poll = loop.unresolved_guard_access;
+    for (const auto& access : loop.accesses) {
+        if (!access.guards_loop || access.kind != HardwareAccessKind::Read) continue;
+        switch (loop_read_storage(access)) {
+        case LoopReadStorage::Ram: ram_poll = true; break;
+        case LoopReadStorage::Mmio: mmio_poll = true; break;
+        case LoopReadStorage::Unknown: unknown_poll = true; break;
+        }
+    }
+    if (unknown_poll) return HardwareLoopClassification::Unknown;
+    const auto evidence_classes =
+        static_cast<unsigned>(counter) + static_cast<unsigned>(ram_poll) +
+        static_cast<unsigned>(mmio_poll);
+    if (evidence_classes > 1u) return HardwareLoopClassification::Mixed;
+    if (counter) return HardwareLoopClassification::Counter;
+    if (ram_poll) return HardwareLoopClassification::RamPoll;
+    if (mmio_poll) return HardwareLoopClassification::MmioPoll;
+    return HardwareLoopClassification::Unknown;
+}
+
+void add_loop_cfg_successor(BasicBlock& block, const std::uint32_t address) {
+    if (std::find(block.successors.begin(), block.successors.end(), address) ==
+        block.successors.end())
+        block.successors.push_back(address);
+}
+
+void repair_contextual_delay_slot_edges(std::vector<BasicBlock>& blocks,
+                                        const ControlFlowAnalysisResult& analysis) {
+    for (auto& block : blocks) {
+        if (block.lines.empty()) continue;
+        const auto control_index = controlling_instruction_index(block);
+        const auto& control_line = block.lines[control_index];
+        const auto& instruction = control_line.instruction;
+        if (!instruction.has_delay_slot) continue;
+        const bool paired =
+            control_index + 1u < block.lines.size() &&
+            block.lines[control_index + 1u].address == control_line.address + 2u &&
+            block.lines[control_index + 1u].is_delay_slot;
+        if (paired) continue;
+
+        const auto delay_context = std::find_if(
+            analysis.recursive.contextual_instructions.begin(),
+            analysis.recursive.contextual_instructions.end(),
+            [&control_line](const auto& context) {
+                return context.line.address == control_line.address + 2u &&
+                       context.delay_slot_owner == control_line.address &&
+                       control_flow_evidence_proven(context.evidence) &&
+                       context.line.instruction.is_known() &&
+                       !context.line.instruction.changes_control_flow();
+            });
+        if (delay_context == analysis.recursive.contextual_instructions.end()) continue;
+
+        const auto fallthrough = control_line.address + 4u;
+        if (control_line.target_address.has_value() &&
+            instruction.control_flow != sh4::ControlFlowKind::Call)
+            add_loop_cfg_successor(block, *control_line.target_address);
+        switch (instruction.control_flow) {
+        case sh4::ControlFlowKind::ConditionalBranch:
+        case sh4::ControlFlowKind::Call:
+        case sh4::ControlFlowKind::IndirectCall:
+            add_loop_cfg_successor(block, fallthrough);
+            break;
+        case sh4::ControlFlowKind::IndirectBranch: block.has_indirect_successor = true; break;
+        default: break;
+        }
+        for (const auto& edge : analysis.resolved_edges) {
+            if (edge.instruction_address != control_line.address ||
+                edge.kind != ResolvedControlFlowKind::Jump)
+                continue;
+            add_loop_cfg_successor(block, edge.target_address);
+            if (control_flow_evidence_complete(resolved_edge_evidence(edge)))
+                block.has_indirect_successor = false;
+        }
+        std::sort(block.successors.begin(), block.successors.end());
+        if (control_index + 1u < block.lines.size() &&
+            block.lines[control_index + 1u].address == control_line.address + 2u) {
+            block.lines[control_index + 1u].is_delay_slot = true;
+        } else {
+            auto delay_line = delay_context->line;
+            delay_line.is_delay_slot = true;
+            block.lines.push_back(std::move(delay_line));
+        }
+    }
+}
+
+std::vector<HardwareNaturalLoop>
+find_natural_hardware_loops(const io::ExecutableImage& image,
+                            const ControlFlowAnalysisResult& analysis) {
+    std::vector<std::uint32_t> function_entries;
+    function_entries.reserve(analysis.recursive.functions.size());
+    for (const auto& function : analysis.recursive.functions)
+        function_entries.push_back(function.address);
+    auto blocks = build_basic_blocks(
+        analysis.recursive.instructions, analysis.resolved_edges, function_entries);
+    if (blocks.empty()) return {};
+    repair_contextual_delay_slot_edges(blocks, analysis);
+
+    std::unordered_map<std::uint32_t, std::size_t> block_by_address;
+    block_by_address.reserve(blocks.size());
+    for (std::size_t index = 0u; index < blocks.size(); ++index)
+        block_by_address.emplace(blocks[index].start_address, index);
+
+    std::vector<std::vector<std::size_t>> successors(blocks.size());
+    std::vector<std::vector<std::size_t>> predecessors(blocks.size());
+    for (std::size_t source = 0u; source < blocks.size(); ++source) {
+        for (const auto successor_address : blocks[source].successors) {
+            const auto found = block_by_address.find(successor_address);
+            if (found == block_by_address.end()) continue;
+            successors[source].push_back(found->second);
+            predecessors[found->second].push_back(source);
+        }
+    }
+
+    std::vector<bool> roots(blocks.size(), false);
+    for (const auto entry : function_entries) {
+        const auto found = block_by_address.find(entry);
+        if (found != block_by_address.end()) roots[found->second] = true;
+    }
+    for (std::size_t index = 0u; index < blocks.size(); ++index) {
+        if (predecessors[index].empty()) roots[index] = true;
+    }
+
+    std::vector<bool> reachable(blocks.size(), false);
+    const auto mark_reachable = [&](const std::size_t root) {
+        std::vector<std::size_t> worklist{root};
+        while (!worklist.empty()) {
+            const auto current = worklist.back();
+            worklist.pop_back();
+            if (reachable[current]) continue;
+            reachable[current] = true;
+            for (const auto successor : successors[current]) {
+                if (!reachable[successor]) worklist.push_back(successor);
+            }
+        }
+    };
+    for (std::size_t index = 0u; index < blocks.size(); ++index) {
+        if (roots[index]) mark_reachable(index);
+    }
+    for (std::size_t index = 0u; index < blocks.size(); ++index) {
+        if (!reachable[index]) roots[index] = true;
+    }
+
+    const auto synthetic_root = blocks.size();
+    std::vector<std::vector<std::size_t>> dominator_successors = successors;
+    std::vector<std::vector<std::size_t>> dominator_predecessors = predecessors;
+    dominator_successors.emplace_back();
+    dominator_predecessors.emplace_back();
+    for (std::size_t index = 0u; index < blocks.size(); ++index) {
+        if (!roots[index]) continue;
+        dominator_successors[synthetic_root].push_back(index);
+        dominator_predecessors[index].push_back(synthetic_root);
+    }
+
+    struct DfsFrame {
+        std::size_t node = 0u;
+        std::size_t next_successor = 0u;
+    };
+    std::vector<bool> visited(blocks.size() + 1u, false);
+    std::vector<std::size_t> postorder;
+    postorder.reserve(blocks.size() + 1u);
+    std::vector<DfsFrame> dfs{{synthetic_root, 0u}};
+    visited[synthetic_root] = true;
+    while (!dfs.empty()) {
+        auto& frame = dfs.back();
+        const auto& outgoing = dominator_successors[frame.node];
+        if (frame.next_successor < outgoing.size()) {
+            const auto successor = outgoing[frame.next_successor++];
+            if (!visited[successor]) {
+                visited[successor] = true;
+                dfs.push_back({successor, 0u});
+            }
+            continue;
+        }
+        postorder.push_back(frame.node);
+        dfs.pop_back();
+    }
+    std::reverse(postorder.begin(), postorder.end());
+    std::vector<std::size_t> rpo_position(blocks.size() + 1u, 0u);
+    for (std::size_t index = 0u; index < postorder.size(); ++index)
+        rpo_position[postorder[index]] = index;
+
+    constexpr auto no_dominator = std::numeric_limits<std::size_t>::max();
+    std::vector<std::size_t> immediate_dominator(blocks.size() + 1u, no_dominator);
+    immediate_dominator[synthetic_root] = synthetic_root;
+    const auto intersect = [&](std::size_t left, std::size_t right) {
+        while (left != right) {
+            while (rpo_position[left] > rpo_position[right])
+                left = immediate_dominator[left];
+            while (rpo_position[right] > rpo_position[left])
+                right = immediate_dominator[right];
+        }
+        return left;
+    };
+    bool changed = true;
+    while (changed) {
+        changed = false;
+        for (std::size_t rpo_index = 1u; rpo_index < postorder.size(); ++rpo_index) {
+            const auto block_index = postorder[rpo_index];
+            auto next = no_dominator;
+            for (const auto predecessor : dominator_predecessors[block_index]) {
+                if (immediate_dominator[predecessor] == no_dominator) continue;
+                next = next == no_dominator ? predecessor : intersect(predecessor, next);
+            }
+            if (next != no_dominator && next != immediate_dominator[block_index]) {
+                immediate_dominator[block_index] = next;
+                changed = true;
+            }
+        }
+    }
+
+    std::vector<std::vector<std::size_t>> dominator_children(blocks.size() + 1u);
+    for (std::size_t node = 0u; node < blocks.size(); ++node)
+        dominator_children[immediate_dominator[node]].push_back(node);
+    std::vector<std::size_t> dominator_preorder(blocks.size() + 1u, 0u);
+    std::vector<std::size_t> dominator_subtree_end(blocks.size() + 1u, 0u);
+    std::size_t dominator_clock = 0u;
+    std::vector<DfsFrame> dominator_dfs{{synthetic_root, 0u}};
+    dominator_preorder[synthetic_root] = dominator_clock++;
+    while (!dominator_dfs.empty()) {
+        auto& frame = dominator_dfs.back();
+        const auto& children = dominator_children[frame.node];
+        if (frame.next_successor < children.size()) {
+            const auto child = children[frame.next_successor++];
+            dominator_preorder[child] = dominator_clock++;
+            dominator_dfs.push_back({child, 0u});
+            continue;
+        }
+        dominator_subtree_end[frame.node] = dominator_clock;
+        dominator_dfs.pop_back();
+    }
+    const auto dominates = [&](const std::size_t dominator, const std::size_t node) noexcept {
+        return dominator_preorder[dominator] <= dominator_preorder[node] &&
+               dominator_preorder[node] < dominator_subtree_end[dominator];
+    };
+
+    std::vector<HardwareNaturalLoop> loops;
+    std::vector<std::size_t> loop_membership(blocks.size(), 0u);
+    std::size_t loop_generation = 0u;
+    for (std::size_t latch = 0u; latch < blocks.size(); ++latch) {
+        for (const auto header : successors[latch]) {
+            if (!reachable[header] || !reachable[latch]) continue;
+            if (!dominates(header, latch)) continue;
+            if (++loop_generation == 0u) {
+                std::fill(loop_membership.begin(), loop_membership.end(), 0u);
+                loop_generation = 1u;
+            }
+            const auto is_member = [&](const std::size_t block) noexcept {
+                return loop_membership[block] == loop_generation;
+            };
+            loop_membership[header] = loop_generation;
+            std::vector<std::size_t> member_indices{header};
+            if (latch != header) {
+                loop_membership[latch] = loop_generation;
+                member_indices.push_back(latch);
+            }
+            std::vector<std::size_t> worklist;
+            if (latch != header) worklist.push_back(latch);
+            while (!worklist.empty()) {
+                const auto current = worklist.back();
+                worklist.pop_back();
+                for (const auto predecessor : predecessors[current]) {
+                    if (is_member(predecessor) || !dominates(header, predecessor)) continue;
+                    loop_membership[predecessor] = loop_generation;
+                    member_indices.push_back(predecessor);
+                    if (predecessor != header) worklist.push_back(predecessor);
+                }
+            }
+            std::sort(member_indices.begin(), member_indices.end());
+
+            HardwareNaturalLoop loop;
+            loop.header_address = blocks[header].start_address;
+            loop.latch_address = blocks[latch].start_address;
+            loop.backedge_instruction_address =
+                blocks[latch].lines[controlling_instruction_index(blocks[latch])].address;
+            for (const auto index : member_indices)
+                loop.block_addresses.push_back(blocks[index].start_address);
+
+            for (const auto block_index : member_indices) {
+                const auto& block = blocks[block_index];
+                const auto trace = propagate_local_constants(block.lines, image);
+                std::unordered_map<std::uint32_t, std::size_t> access_by_instruction;
+                for (std::size_t line_index = 0u; line_index < block.lines.size(); ++line_index) {
+                    if (!is_memory_access_instruction(block.lines[line_index].instruction.kind))
+                        continue;
+                    const auto access =
+                        effective_access(block.lines[line_index], trace[line_index].before);
+                    if (!access.has_value()) continue;
+                    const auto description = describe(access->address);
+                    HardwareLoopAccessEvidence evidence;
+                    evidence.instruction_address = block.lines[line_index].address;
+                    evidence.guest_address = access->address;
+                    evidence.canonical_address = loop_canonical_address(description);
+                    evidence.region = description.region;
+                    evidence.kind = access->kind;
+                    evidence.width = access->width;
+                    evidence.linear_memory = is_linear_loop_memory(description);
+                    evidence.aperture_mapped = description.aperture_mapped;
+                    evidence.runtime_support =
+                        assess_support(description, access->kind, access->width);
+                    access_by_instruction.emplace(evidence.instruction_address,
+                                                  loop.accesses.size());
+                    loop.accesses.push_back(std::move(evidence));
+                }
+
+                if (block.lines.empty()) continue;
+                const auto control_index = controlling_instruction_index(block);
+                const auto& control = block.lines[control_index].instruction;
+                if (control.control_flow != sh4::ControlFlowKind::ConditionalBranch)
+                    continue;
+                bool successor_inside = false;
+                bool successor_outside = false;
+                for (const auto successor_address : block.successors) {
+                    const auto found = block_by_address.find(successor_address);
+                    if (found != block_by_address.end() && is_member(found->second))
+                        successor_inside = true;
+                    else
+                        successor_outside = true;
+                }
+                if (!successor_inside || !successor_outside) continue;
+                if (control_index == 0u) {
+                    loop.unresolved_guard_access = true;
+                    continue;
+                }
+
+                const auto condition_index = control_index - 1u;
+                const auto& condition = block.lines[condition_index].instruction;
+                if (condition.kind == sh4::InstructionKind::DecrementAndTest) {
+                    loop.counter_instruction_addresses.push_back(
+                        block.lines[condition_index].address);
+                    continue;
+                }
+                auto required_registers = condition_register_mask(condition);
+                if (required_registers == 0u) {
+                    loop.unresolved_guard_access = true;
+                    continue;
+                }
+                for (std::size_t writer_position = condition_index;
+                     writer_position != 0u && required_registers != 0u;) {
+                    --writer_position;
+                    const auto& writer = block.lines[writer_position];
+                    const auto writes = static_cast<std::uint16_t>(
+                        general_register_write_mask(writer.instruction) & required_registers);
+                    if (writes == 0u) continue;
+
+                    if (is_potential_memory_load(writer.instruction.kind)) {
+                        const auto loaded_register =
+                            loop_register_bit(writer.instruction.destination_register);
+                        const auto loaded_outputs =
+                            static_cast<std::uint16_t>(writes & loaded_register);
+                        if (loaded_outputs != 0u) {
+                            required_registers = static_cast<std::uint16_t>(
+                                required_registers & ~loaded_outputs);
+                            const auto found = access_by_instruction.find(writer.address);
+                            if (found == access_by_instruction.end()) {
+                                loop.unresolved_guard_access = true;
+                            } else {
+                                auto& evidence = loop.accesses[found->second];
+                                if (evidence.kind == HardwareAccessKind::Read)
+                                    evidence.guards_loop = true;
+                                else
+                                    loop.unresolved_guard_access = true;
+                            }
+                        }
+                        const auto non_value_outputs =
+                            static_cast<std::uint16_t>(writes & ~loaded_register);
+                        const auto postincrement =
+                            writer.instruction.kind == sh4::InstructionKind::MovByteLoadPostIncrement ||
+                            writer.instruction.kind == sh4::InstructionKind::MovWordLoadPostIncrement ||
+                            writer.instruction.kind == sh4::InstructionKind::MovLongLoadPostIncrement;
+                        if (non_value_outputs != 0u && !postincrement) {
+                            required_registers = static_cast<std::uint16_t>(
+                                required_registers & ~non_value_outputs);
+                            loop.unresolved_guard_access = true;
+                        }
+                        continue;
+                    }
+
+                    const auto inputs = guard_input_registers(writer.instruction);
+                    required_registers =
+                        static_cast<std::uint16_t>(required_registers & ~writes);
+                    if (inputs.has_value())
+                        required_registers =
+                            static_cast<std::uint16_t>(required_registers | *inputs);
+                    else
+                        loop.unresolved_guard_access = true;
+                }
+                if (required_registers != 0u) loop.unresolved_guard_access = true;
+            }
+
+            std::sort(loop.block_addresses.begin(), loop.block_addresses.end());
+            std::sort(loop.counter_instruction_addresses.begin(),
+                      loop.counter_instruction_addresses.end());
+            std::sort(loop.accesses.begin(), loop.accesses.end(), [](const auto& left,
+                                                                    const auto& right) {
+                return std::tie(left.instruction_address,
+                                left.guest_address,
+                                left.kind,
+                                left.width) <
+                       std::tie(right.instruction_address,
+                                right.guest_address,
+                                right.kind,
+                                right.width);
+            });
+            loop.classification = classify_loop(loop);
+            loops.push_back(std::move(loop));
+        }
+    }
+    std::sort(loops.begin(), loops.end(), [](const auto& left, const auto& right) {
+        return std::tie(left.header_address,
+                        left.latch_address,
+                        left.backedge_instruction_address) <
+               std::tie(right.header_address,
+                        right.latch_address,
+                        right.backedge_instruction_address);
+    });
+    return loops;
+}
+
 } // namespace
 
 DreamcastHardwareAudit audit_dreamcast_hardware(const io::ExecutableImage& image,
@@ -816,6 +1391,7 @@ DreamcastHardwareAudit audit_dreamcast_hardware(const io::ExecutableImage& image
         case HardwareRuntimeSupport::Unmapped: ++result.unmapped_addresses; break;
         }
     }
+    result.loops = find_natural_hardware_loops(image, analysis);
     return result;
 }
 
@@ -864,6 +1440,18 @@ const char* hardware_access_kind_name(const HardwareAccessKind kind) noexcept {
     return "read";
 }
 
+const char*
+hardware_loop_classification_name(const HardwareLoopClassification classification) noexcept {
+    switch (classification) {
+    case HardwareLoopClassification::Counter: return "counter";
+    case HardwareLoopClassification::RamPoll: return "ram_poll";
+    case HardwareLoopClassification::MmioPoll: return "mmio_poll";
+    case HardwareLoopClassification::Mixed: return "mixed";
+    case HardwareLoopClassification::Unknown: return "unknown";
+    }
+    return "unknown";
+}
+
 const char* hardware_runtime_support_name(const HardwareRuntimeSupport support) noexcept {
     switch (support) {
     case HardwareRuntimeSupport::Implemented: return "implemented";
@@ -889,7 +1477,8 @@ std::string format_hardware_audit_text(const DreamcastHardwareAudit& audit) {
            << audit.implemented_addresses << ", partial=" << audit.partial_addresses
            << ", known_gap=" << audit.known_gap_addresses
            << ", rejected=" << audit.rejected_addresses
-           << ", unmapped=" << audit.unmapped_addresses << ")\n";
+           << ", unmapped=" << audit.unmapped_addresses << ")\n"
+           << "Natural loops: " << audit.loops.size() << "\n";
     for (const auto& diagnostic : audit.instruction_diagnostics) {
         output << "Instruction diagnostic: address=" << hex8(diagnostic.address)
                << " opcode=" << hex4(diagnostic.opcode)
@@ -901,6 +1490,37 @@ std::string format_hardware_audit_text(const DreamcastHardwareAudit& audit) {
             output << hex8(diagnostic.incoming_addresses[index]);
         }
         output << '\n';
+    }
+    for (const auto& loop : audit.loops) {
+        output << "Loop: header=" << hex8(loop.header_address)
+               << " latch=" << hex8(loop.latch_address)
+               << " backedge=" << hex8(loop.backedge_instruction_address)
+               << " classification=" << hardware_loop_classification_name(loop.classification)
+               << " unresolved_guard_access="
+               << (loop.unresolved_guard_access ? "yes" : "no")
+               << " blocks=";
+        for (std::size_t index = 0u; index < loop.block_addresses.size(); ++index) {
+            if (index != 0u) output << ',';
+            output << hex8(loop.block_addresses[index]);
+        }
+        output << " counter_sites=";
+        for (std::size_t index = 0u; index < loop.counter_instruction_addresses.size(); ++index) {
+            if (index != 0u) output << ',';
+            output << hex8(loop.counter_instruction_addresses[index]);
+        }
+        output << '\n';
+        for (const auto& access : loop.accesses) {
+            output << "  access=" << hex8(access.instruction_address)
+                   << " guest=" << hex8(access.guest_address)
+                   << " canonical=" << hex8(access.canonical_address)
+                   << " region=" << dreamcast_hardware_region_name(access.region)
+                   << " kind=" << hardware_access_kind_name(access.kind)
+                   << " width=" << static_cast<unsigned>(access.width)
+                   << " storage=" << (access.linear_memory ? "linear" : "device")
+                   << " aperture=" << (access.aperture_mapped ? "mapped" : "unmapped")
+                   << " support=" << hardware_runtime_support_name(access.runtime_support)
+                   << " guards_loop=" << (access.guards_loop ? "yes" : "no") << '\n';
+        }
     }
     for (const auto& address : audit.addresses) {
         output << hex8(address.guest_address) << " canonical=" << hex8(address.canonical_address)
@@ -929,7 +1549,7 @@ std::string format_hardware_audit_text(const DreamcastHardwareAudit& audit) {
 std::string format_hardware_audit_json(const DreamcastHardwareAudit& audit,
                                        const bool include_accesses) {
     std::ostringstream output;
-    io::write_json_report_header(output, "katana.hardware-audit.v2", "dreamcast_hardware_audit");
+    io::write_json_report_header(output, "katana.hardware-audit.v3", "dreamcast_hardware_audit");
     output << ",\"scope\":\"initial_boot_executable\",\"image_bytes\":" << audit.image_bytes
            << ",\"reachable_instructions\":" << audit.reachable_instructions
            << ",\"reachable_functions\":" << audit.reachable_functions
@@ -942,6 +1562,7 @@ std::string format_hardware_audit_json(const DreamcastHardwareAudit& audit,
            << ",\"known_gap_addresses\":" << audit.known_gap_addresses
            << ",\"rejected_addresses\":" << audit.rejected_addresses
            << ",\"unmapped_addresses\":" << audit.unmapped_addresses
+           << ",\"natural_loops\":" << audit.loops.size()
            << ",\"instruction_diagnostics\":[";
     for (std::size_t index = 0u; index < audit.instruction_diagnostics.size(); ++index) {
         if (index != 0u) output << ',';
@@ -959,6 +1580,53 @@ std::string format_hardware_audit_json(const DreamcastHardwareAudit& audit,
         for (std::size_t owner = 0u; owner < diagnostic.delay_slot_owners.size(); ++owner) {
             if (owner != 0u) output << ',';
             output << io::quote_json(hex8(diagnostic.delay_slot_owners[owner]));
+        }
+        output << "]}";
+    }
+    output << "]"
+           << ",\"loops\":[";
+    for (std::size_t index = 0u; index < audit.loops.size(); ++index) {
+        if (index != 0u) output << ',';
+        const auto& loop = audit.loops[index];
+        output << "{\"header_address\":" << io::quote_json(hex8(loop.header_address))
+               << ",\"latch_address\":" << io::quote_json(hex8(loop.latch_address))
+               << ",\"backedge_instruction_address\":"
+               << io::quote_json(hex8(loop.backedge_instruction_address))
+               << ",\"classification\":"
+               << io::quote_json(hardware_loop_classification_name(loop.classification))
+               << ",\"unresolved_guard_access\":"
+               << (loop.unresolved_guard_access ? "true" : "false")
+               << ",\"block_addresses\":[";
+        for (std::size_t block = 0u; block < loop.block_addresses.size(); ++block) {
+            if (block != 0u) output << ',';
+            output << io::quote_json(hex8(loop.block_addresses[block]));
+        }
+        output << "],\"counter_instruction_addresses\":[";
+        for (std::size_t site = 0u; site < loop.counter_instruction_addresses.size(); ++site) {
+            if (site != 0u) output << ',';
+            output << io::quote_json(hex8(loop.counter_instruction_addresses[site]));
+        }
+        output << "],\"accesses\":[";
+        for (std::size_t access_index = 0u; access_index < loop.accesses.size();
+             ++access_index) {
+            if (access_index != 0u) output << ',';
+            const auto& access = loop.accesses[access_index];
+            output << "{\"instruction_address\":"
+                   << io::quote_json(hex8(access.instruction_address))
+                   << ",\"guest_address\":" << io::quote_json(hex8(access.guest_address))
+                   << ",\"canonical_address\":"
+                   << io::quote_json(hex8(access.canonical_address))
+                   << ",\"region\":"
+                   << io::quote_json(dreamcast_hardware_region_name(access.region))
+                   << ",\"kind\":" << io::quote_json(hardware_access_kind_name(access.kind))
+                   << ",\"width\":" << static_cast<unsigned>(access.width)
+                   << ",\"linear_memory\":" << (access.linear_memory ? "true" : "false")
+                   << ",\"aperture_mapped\":"
+                   << (access.aperture_mapped ? "true" : "false")
+                   << ",\"runtime_support\":"
+                   << io::quote_json(hardware_runtime_support_name(access.runtime_support))
+                   << ",\"guards_loop\":" << (access.guards_loop ? "true" : "false")
+                   << '}';
         }
         output << "]}";
     }

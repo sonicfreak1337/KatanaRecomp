@@ -45,6 +45,14 @@ enum class DreamcastHardwareRegion : std::uint8_t {
 
 enum class HardwareAccessKind : std::uint8_t { Read, Write, Prefetch };
 
+enum class HardwareLoopClassification : std::uint8_t {
+    Counter,
+    RamPoll,
+    MmioPoll,
+    Mixed,
+    Unknown
+};
+
 // Ordered from complete product support to a missing mapping. Address summaries retain the
 // weakest capability observed across all access widths and directions at that address.
 enum class HardwareRuntimeSupport : std::uint8_t {
@@ -92,6 +100,30 @@ struct HardwareInstructionDiagnostic {
     std::vector<std::uint32_t> delay_slot_owners;
 };
 
+struct HardwareLoopAccessEvidence {
+    std::uint32_t instruction_address = 0u;
+    std::uint32_t guest_address = 0u;
+    std::uint32_t canonical_address = 0u;
+    DreamcastHardwareRegion region = DreamcastHardwareRegion::Unknown;
+    HardwareAccessKind kind = HardwareAccessKind::Read;
+    std::uint8_t width = 0u;
+    bool linear_memory = false;
+    bool aperture_mapped = false;
+    HardwareRuntimeSupport runtime_support = HardwareRuntimeSupport::Unmapped;
+    bool guards_loop = false;
+};
+
+struct HardwareNaturalLoop {
+    std::uint32_t header_address = 0u;
+    std::uint32_t latch_address = 0u;
+    std::uint32_t backedge_instruction_address = 0u;
+    HardwareLoopClassification classification = HardwareLoopClassification::Unknown;
+    bool unresolved_guard_access = false;
+    std::vector<std::uint32_t> block_addresses;
+    std::vector<std::uint32_t> counter_instruction_addresses;
+    std::vector<HardwareLoopAccessEvidence> accesses;
+};
+
 struct DreamcastHardwareAudit {
     std::size_t image_bytes = 0u;
     std::size_t reachable_instructions = 0u;
@@ -108,6 +140,7 @@ struct DreamcastHardwareAudit {
     std::vector<HardwareInstructionDiagnostic> instruction_diagnostics;
     std::vector<HardwareAccessReference> references;
     std::vector<HardwareAddressSummary> addresses;
+    std::vector<HardwareNaturalLoop> loops;
 };
 
 [[nodiscard]] DreamcastHardwareAudit
@@ -115,6 +148,8 @@ audit_dreamcast_hardware(const io::ExecutableImage& image,
                          const ControlFlowAnalysisResult& analysis);
 [[nodiscard]] const char* dreamcast_hardware_region_name(DreamcastHardwareRegion region) noexcept;
 [[nodiscard]] const char* hardware_access_kind_name(HardwareAccessKind kind) noexcept;
+[[nodiscard]] const char*
+hardware_loop_classification_name(HardwareLoopClassification classification) noexcept;
 [[nodiscard]] const char* hardware_runtime_support_name(HardwareRuntimeSupport support) noexcept;
 [[nodiscard]] std::string format_hardware_audit_text(const DreamcastHardwareAudit& audit);
 [[nodiscard]] std::string format_hardware_audit_json(const DreamcastHardwareAudit& audit,
