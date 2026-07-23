@@ -166,7 +166,7 @@ und Hosteingabevertraege.
 
 - [x] `KR-4831` - Generischer Originaldisc-Installer ohne Retaildaten im Portpaket
 - [x] `KR-4911` - Runtimebeobachtung, Replay und Fehlerpakete
-- [ ] `KR-4912` - Dynamische Codebereiche, Module und Overlays
+- [x] `KR-4912` - Dynamische Codebereiche, Module und Overlays
 - [ ] `KR-4913` - CPU-/Plattform-Bring-up bis `KR_GUEST_PROGRAM_ENTERED`
 - [x] `KR-4915` - Gast-PVR-Pfad bis `KR_FIRST_GUEST_FRAME`
 
@@ -198,8 +198,8 @@ erfuellt. Sie muessen vor der konsolidierten Validierung `KR-4852`
 abgeschlossen sein.
 
 Der Checkboxstand bleibt bewusst taskbezogen: `KR-4831`, `KR-4841`,
-`KR-4842`, `KR-4843` bis `KR-4846`, `KR-4911`, `KR-4915` und `KR-4850` sind
-abgeschlossen. `KR-4842` bindet MMU-bewusste lineare Peeks, nicht mutierende
+`KR-4842`, `KR-4843` bis `KR-4846`, `KR-4911`, `KR-4912`, `KR-4915` und
+`KR-4850` sind abgeschlossen. `KR-4842` bindet MMU-bewusste lineare Peeks, nicht mutierende
 Geraetesnapshots, statische Wait-Loop-/Guard-Provenienz und den versionierten
 dynamischen Wait-Loop-Trace an eine deterministische Produktprobe. Der
 Diagnose=0/1-A/B-Lauf bestand mit zwei frischen, identisch auf 100.000
@@ -253,8 +253,8 @@ Backend-Interface-ABI 3, Portprojektvertrag 24 und Host-Video-Vertrag 2
 versionierten diesen privaten Portlauf. Er bleibt ausdruecklich historische
 ABI-39-Evidenz und wurde nicht nachtraeglich als ABI-40-Artefakt umgedeutet.
 
-Der aktuelle kumulative Kernvertrag verwendet Runtime-ABI 44, Block-ABI 3,
-Backend-Interface-ABI 3, PlatformServices-ABI 10, Portprojektvertrag 28 und
+Der aktuelle kumulative Kernvertrag verwendet Runtime-ABI 45, Block-ABI 3,
+Backend-Interface-ABI 3, PlatformServices-ABI 10, Portprojektvertrag 29 und
 Host-Video-Vertrag 2.
 Systemreplay v4 begrenzt die Aufzeichnung auf standardmaessig 4.096 und
 hoechstens 65.536 Ereignisse sowie 64 Zeichen pro Ereigniscode. Ein
@@ -287,6 +287,28 @@ Original-GDI und Tracks blieben unveraendert, beide Replays vollstaendig und
 versiegelt und die Tracezaehler null/null. Damit ist `KR-4911` abgeschlossen
 und `KR-4912` freigegeben. Eine Vollsuite und `KR-4852` wurden nicht
 ausgefuehrt.
+
+`KR-4912` schliesst die generische Lebenszeit dynamischer Codebereiche.
+Load, Relocation, Replace und Unload erzeugen monotone Modulinkarnationen;
+byteidentische Multi-Extent-Loads erhalten vorhandene Bloecke und Provenienz.
+Byteidentische CPU-, FPU-, Store-Queue-, Copy- und DMA-Writes invalidieren
+keinen Code, waehrend bewiesene Runtimewrites einen internen Snapshot bis zu
+einem zusammenhaengenden Tail samt Delay Slot erweitern koennen.
+P0-/P1-/P2-Aliase werden MMU-sicher auf dieselbe physische Blockherkunft
+gefaltet. Modulwechsel und Unload bereinigen davon abhaengige Materializer-
+Origins, Tracker-Handles und Tabellenbindungen, ohne fremde Owner in
+Multi-Extent-Luecken zu invalidieren. Ein ueberlaufender
+Relocation-Generation-Zaehler wird atomar vor jeder Mutation abgelehnt. Identische
+Validierungssnapshots werden geteilt, gegen das Speicherbudget gerechnet und
+nach der letzten Herkunft wieder freigegeben. Replay meldet eine tatsaechliche
+Materialisierung unabhaengig vom Stichprobenintervall; oeffentliche Berichte
+redigieren Modulidentitaeten, Quellidentitaeten und Bytes. Der normale
+Produktport besitzt weiterhin keinen Interpreter und beendet ungebundenen Code
+typisiert. Die fokussierten Regressionen bestanden 10/10 in 1,27 Sekunden; der
+interpreterfreie Produkt-E2E bestand 1/1 in 229,03 Sekunden. Es lief weder ein
+privater Retaillauf noch eine Vollsuite oder `KR-4852`. `KR-4848` bleibt fuer
+strukturierte Disc-Ladetransaktionen und die Registry vorab erzeugter latenter
+AOT-Module offen.
 
 Der Hardwareauditor verwendet mit `katana.hardware-audit.v4` skalierbare
 Dominatorberechnung und echte natuerliche Loops. Er klassifiziert

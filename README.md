@@ -59,9 +59,25 @@ vorbereitet; der live geladene Dispatch bleibt `RuntimeOnly` und erzeugt keine
 feste CFG-Kante. Snapshotcache und P2-Aliasaufloesung sind gegen imagefremde
 Beweise abgesichert. Lokale AOT-Blockketten tragen die exakte tatsaechliche
 Terminatorquelle und Siteklasse bis zum externen Dispatch weiter. Der aktuelle
-kumulative Stand verwendet Runtime-ABI 44, Block-ABI 3,
-Backend-Interface-ABI 3, PlatformServices-ABI 10, Portprojektvertrag 28 und
+kumulative Stand verwendet Runtime-ABI 45, Block-ABI 3,
+Backend-Interface-ABI 3, PlatformServices-ABI 10, Portprojektvertrag 29 und
 Host-Video-Vertrag 2.
+
+`KR-4912` schliesst die allgemeine Lebenszeit dynamischer Codebereiche:
+Load, Relocation, Replace und Unload erzeugen monotone Modulinkarnationen,
+byteidentische Multi-Extent-Loads behalten bestehende Bloecke, und bewiesene
+Runtimewrites koennen einen zusammenhaengenden Tail samt Delay Slot
+provenienzgesichert erweitern. MMU-sichere P0-/P1-/P2-Aliase teilen dieselbe
+physische Blockherkunft. Ein Lifecycle-Wechsel entfernt abhaengige
+Materializer-Origins, Tracker-Handles und Tabellenbindungen. Identische
+Validierungssnapshots werden geteilt, budgetiert und nach der letzten Herkunft
+freigegeben. Materialisierungen erscheinen unabhaengig von der Diagnoseabtastung
+im Replay; oeffentliche Berichte redigieren Identitaeten und Gastbytes. Der
+normale Produktport besitzt weiterhin keinen Interpreter und beendet
+unkompilierten Code typisiert. `KR-4848` bleibt fuer strukturierte
+Disc-Ladetransaktionen und die Registry latenter AOT-Module offen. Die
+fokussierten Regressionen sind gruen; ein privater Retaillauf, eine Vollsuite
+und `KR-4852` wurden fuer diesen Abschluss nicht ausgefuehrt.
 
 Systemreplay v4 haelt standardmaessig 4.096 und maximal 65.536 Ereignisse;
 portable Ereigniscodes sind auf 64 Zeichen begrenzt. Ein von `try_record()` an

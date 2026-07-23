@@ -66,6 +66,15 @@ BlockRegistrationResult ExecutableCodeTracker::register_block(ExecutableBlockReg
     return BlockRegistrationResult::Inserted;
 }
 
+bool ExecutableCodeTracker::retire_block(const std::string& identity) noexcept {
+    const auto known = identity_index_.find(identity);
+    if (known == identity_index_.end()) return false;
+    auto& tracked = blocks_[known->second];
+    if (!tracked.valid) return false;
+    tracked.valid = false;
+    return true;
+}
+
 CodeInvalidationResult ExecutableCodeTracker::observe_write(const std::uint32_t address,
                                                             const std::size_t size,
                                                             const CodeWriteSource source,

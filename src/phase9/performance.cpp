@@ -349,6 +349,7 @@ MonomorphicDispatchCache::dispatch(runtime::CpuState& cpu,
                     cpu.pc,
                     cpu.pr,
                     block->get().virtual_start != target,
+                    false,
                     "inline-cache"};
         }
     }

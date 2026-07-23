@@ -1026,9 +1026,9 @@ Fallback oder Materialisierung; GD-ROM, TA und PVR sind noch null. Bei 320
 Millionen Zyklen erreicht der Gast Spielecode, zwei GD-ROM-Kommandos und einen
 spaeten PVR-Registerwrite, weiterhin ohne TA-, Render- oder Framebeweis.
 
-Der aktuelle kumulative Schnittstellenstand verwendet Runtime-ABI 44,
+Der aktuelle kumulative Schnittstellenstand verwendet Runtime-ABI 45,
 Block-ABI 3, Backend-Interface-ABI 3, PlatformServices-ABI 10,
-Portprojektvertrag 28 und Host-Video-Vertrag 2. Source-relativierte native AOT-Templates und ihr
+Portprojektvertrag 29 und Host-Video-Vertrag 2. Source-relativierte native AOT-Templates und ihr
 adressierter Binder sind vorhanden; strukturierte Disc-Ladetransaktionen, der
 allgemeine native Materializer und die Registry latenter Module halten
 `KR-4848` weiterhin offen. Das fokussierte Gate besteht 11/11, der x64-Kern-/
@@ -1280,11 +1280,38 @@ Original-GDI und Tracks blieben unveraendert, beide Replays vollstaendig und
 versiegelt und die Tracezaehler null/null. Eine Vollsuite und `KR-4852` wurden
 nicht ausgefuehrt. `KR-4912` ist freigegeben.
 
-### [ ] KR-4912 - Dynamische Codebereiche, Module und Overlays
+### [x] KR-4912 - Dynamische Codebereiche, Module und Overlays
 
 Abhaengigkeiten: KR-4911
 Meilenstein: v0.48
 Prioritaet: P0
+
+Abgeschlossen: 2026-07-23. Der Modulkatalog modelliert Load, Relocation,
+Replace und Unload als monotone Inkarnationen und behandelt byteidentische
+Multi-Extent-Ladevorgaenge atomar. Byteidentische CPU-, FPU-, Store-Queue-,
+Copy- und DMA-Writes erhalten Code und Provenienz; bewiesene Runtimewrites
+koennen einen internen Snapshot kontrolliert um einen zusammenhaengenden Tail
+einschliesslich Delay Slot erweitern. P0-/P1-/P2-Codealiase werden MMU-sicher
+kanonisiert. Inaktive oder ersetzte Module bereinigen abhaengige
+Materializer-Origins, Code-Tracker und Runtime-Blocktabellen, ohne fremde Owner
+in Multi-Extent-Luecken zu invalidieren. Ein ueberlaufender
+Relocation-Generation-Zaehler wird vor jeder Mutation atomar abgelehnt.
+
+Gleiche Validierungssnapshots teilen sich einen budgetierten Proof. Der
+Materializer weist retained, peak und reclaimed Proofbytes aus und gibt den
+letzten Beleg bei Lifecycle-Ende frei. Jede tatsaechliche Materialisierung
+erzeugt ihr Replay-Ereignis unabhaengig von der Diagnoseabtastung. Oeffentliche
+Probe-, Fault- und Materialisierungsberichte enthalten weder Modul-/
+Quellidentitaeten noch Gastbytes; lokale Details bleiben ein explizites Opt-in.
+Der normale Produktport enthaelt keinen SH-4-Interpreter und beendet
+unkompilierten Code als typisierten Dispatch-/Materialisierungsfehler.
+
+Die fokussierten Load-, Relocation-, Replace-, Unload-, Alias-, Proof-,
+Replay- und Redaktionsregressionen bestanden 10/10 in 1,27 Sekunden; der
+interpreterfreie Produkt-E2E bestand 1/1 in 229,03 Sekunden. Es lief weder ein
+privater Retaillauf noch eine Vollsuite oder `KR-4852`. Strukturierte
+Disc-Ladetransaktionen und die Registry vorab erzeugter latenter AOT-Module
+bleiben in `KR-4848` offen.
 
 Umfang:
 

@@ -479,7 +479,8 @@ void SystemReplayObservationSession::record(const SystemReplayEventKind kind,
 void SystemReplayObservationSession::observe_block_dispatch_hit(
     const RuntimeDispatchClass dispatch_class,
     const bool materialized) noexcept {
-    if (!advance_power_of_two_sample(dispatch_hit_count_)) return;
+    const auto sampled = advance_power_of_two_sample(dispatch_hit_count_);
+    if (!materialized && !sampled) return;
     record(SystemReplayEventKind::BlockDispatchHit,
            scheduler_ != nullptr ? scheduler_->current_cycle() : 0u,
            scheduler_ != nullptr ? scheduler_->reset_generation() : 0u,

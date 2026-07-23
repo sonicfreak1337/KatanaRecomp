@@ -203,9 +203,8 @@ void IndirectDispatchMetrics::record_fallback(const RuntimeDispatchClass dispatc
 }
 
 void IndirectDispatchMetrics::record_invalidation(const std::uint32_t callsite) noexcept {
-    auto& site = runtime_only_sites_[callsite];
-    site.callsite = callsite;
-    increment(site.invalidations);
+    const auto site = runtime_only_sites_.find(callsite);
+    if (site != runtime_only_sites_.end()) increment(site->second.invalidations);
 }
 
 std::uint64_t IndirectDispatchMetrics::hits() const noexcept {
@@ -382,6 +381,8 @@ IndirectDispatchResult dispatch_indirect(CpuState& cpu,
                                     request.metrics != nullptr ? request.metrics->serialize_json()
                                                                : std::string{});
     };
+    if (request.materializer != nullptr)
+        request.materializer->reconcile_inactive_origins(request.metrics);
     if ((target & 1u) != 0u) {
         if (request.materializer != nullptr) {
             static_cast<void>(request.materializer->try_materialize(
@@ -416,24 +417,52 @@ IndirectDispatchResult dispatch_indirect(CpuState& cpu,
         reject(request.materializer != nullptr
                    ? materialization_error(request.materializer->last_failure())
                    : DispatchDiagnosticError::UnknownTarget);
-    const auto resolved = table.resolve(*block);
-    const auto runtime_interior =
-        resolved && resolved->get().runtime_registered && !alias_lookup &&
-        static_cast<std::uint64_t>(target) >= resolved->get().virtual_start &&
-        static_cast<std::uint64_t>(target) + 2u <=
-            static_cast<std::uint64_t>(resolved->get().virtual_start) + resolved->get().size;
-    if (!resolved || resolved->get().function == nullptr || resolved->get().size < 2u ||
-        (resolved->get().virtual_start & 1u) != 0u ||
-        (alias_lookup ? resolved->get().physical_origin != physical
-                      : resolved->get().virtual_start != target && !runtime_interior))
-        reject(DispatchDiagnosticError::InvalidBoundary);
+    auto resolved = table.resolve(*block);
+    const auto valid_boundary = [&] {
+        const auto runtime_interior =
+            resolved && resolved->get().runtime_registered && !alias_lookup &&
+            static_cast<std::uint64_t>(target) >= resolved->get().virtual_start &&
+            static_cast<std::uint64_t>(target) + 2u <=
+                static_cast<std::uint64_t>(resolved->get().virtual_start) +
+                    resolved->get().size;
+        return resolved && resolved->get().function != nullptr && resolved->get().size >= 2u &&
+               (resolved->get().virtual_start & 1u) == 0u &&
+               (alias_lookup ? resolved->get().physical_origin == physical
+                             : resolved->get().virtual_start == target || runtime_interior);
+    };
+    if (!valid_boundary()) reject(DispatchDiagnosticError::InvalidBoundary);
 
-    if (resolved->get().runtime_registered &&
-        (request.materializer == nullptr ||
-         !request.materializer->validate_for_dispatch(cpu, *block, target)))
-        reject(request.materializer != nullptr
-                   ? materialization_error(request.materializer->last_failure())
-                   : DispatchDiagnosticError::StaleBlock);
+    if (resolved->get().runtime_registered) {
+        if (request.materializer == nullptr)
+            reject(DispatchDiagnosticError::StaleBlock);
+        if (!request.materializer->validate_for_dispatch(cpu, *block, target, physical)) {
+            const auto stale_identity = stable_runtime_block_identity(resolved->get());
+            if (!table.erase_identity(stale_identity))
+                reject(materialization_error(request.materializer->last_failure()));
+            request.materializer->reconcile_inactive_origins(request.metrics);
+
+            const auto materializations_before =
+                request.materializer->metrics().materializations;
+            block = request.materializer->try_materialize(
+                cpu, target, physical, effective_variant, request.callsite);
+            alias_lookup = false;
+            materialized =
+                block.has_value() &&
+                request.materializer->metrics().materializations != materializations_before;
+            if (!block)
+                reject(materialization_error(request.materializer->last_failure()));
+            resolved = table.resolve(*block);
+            if (!valid_boundary()) reject(DispatchDiagnosticError::InvalidBoundary);
+            if (!request.materializer->validate_for_dispatch(cpu, *block, target, physical)) {
+                if (resolved) {
+                    static_cast<void>(
+                        table.erase_identity(stable_runtime_block_identity(resolved->get())));
+                    request.materializer->reconcile_inactive_origins(request.metrics);
+                }
+                reject(materialization_error(request.materializer->last_failure()));
+            }
+        }
+    }
 
     if (request.kind == IndirectDispatchKind::Call) {
         cpu.pr = request.return_address;
@@ -448,6 +477,7 @@ IndirectDispatchResult dispatch_indirect(CpuState& cpu,
             cpu.pc,
             cpu.pr,
             alias_lookup,
+            materialized,
             describe(request, target) + (alias_lookup ? " alias=physical" : " alias=exact")};
 }
 

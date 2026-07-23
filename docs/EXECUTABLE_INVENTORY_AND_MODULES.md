@@ -147,6 +147,24 @@ ueberlappende Relocationfelder werden bereits beim Publizieren beziehungsweise
 Aktualisieren abgelehnt. Eine Aenderung von Tabelle, Typ oder Addend invalidiert
 alte Bloecke und erhoeht die Relocationgeneration.
 
+`KR-4912` bindet diese Operationen an monotone Modulinkarnationen. Eine neue
+Load-, Relocation-, Replace- oder Unload-Transaktion kann eine fruehere
+Inkarnation nie unbemerkt wiederbeleben. `ObservedByteIdentical` prueft alle
+ueberlappten aktiven Extents vor einer Mutation. Die bereits identisch
+abgedeckte Vereinigungsmenge bleibt unangetastet; nur wirklich disjunkte neue
+Fenster werden veroeffentlicht. Damit sind auch Supersets ueber mehrere Extents
+atomar, waehrend eine widerspruechliche Modul-ID oder ein einzelnes
+abweichendes Byte den gesamten Load ohne Teilzustand ablehnt.
+
+Byteidentische CPU-, FPU-, Store-Queue- und Fallback-Writes stellen die
+Writer-Provenienz her, ohne native Bloecke zu invalidieren. Byteidentische
+Copy-/DMA-Writes erhalten den vorhandenen Provenienznachweis. Ein interner,
+bereits bewiesener Runtime-Write-Snapshot darf ausschliesslich an seinem
+zusammenhaengenden Tail ueber weitere geschriebene, gemappte und noch
+unbeanspruchte Bytes wachsen. So kann insbesondere ein Block an der bisherigen
+128-Byte-Grenze seinen tatsaechlich geschriebenen Delay Slot aufnehmen, ohne
+ID, Generation oder bereits gebundene Prefixbloecke auszutauschen.
+
 ## Demand-driven-Materialisierung
 
 Der optionale Pfad ist standardmaessig deaktiviert. Im aktivierten Modus gilt:
@@ -171,6 +189,26 @@ Code-Tracker entfernt den physischen Runtimeblock auch dann, wenn der Write
 ueber einen anderen P0/P1/P2-Alias erfolgt. Ein erneuter Kontrolltransfer muss
 die aktuellen Bytes unter einer neuen Modulidentitaet materialisieren.
 
+Materializer-Origins enthalten deshalb nicht nur Modul-, Quellen-,
+Relocation- und Codegeneration, sondern auch die konkrete Blockidentitaet.
+Vor Lookup und terminaler Statusausgabe werden inaktive oder nicht mehr zur
+aktuellen Modulinkarnation passende Origins abgeglichen. Der Abgleich
+deaktiviert eine noch gebundene Runtime-Tabellenidentitaet, retired den
+zugehoerigen Trackerblock und entfernt die veraltete Origin. Dieselbe
+Bereinigung gilt fuer Replace, Teilpatch, Unload und eine nachtraeglich
+fehlgeschlagene Bytevalidierung. P0-/P1-/P2-Ziele werden dabei nach
+MMU-Uebersetzung gegen dieselbe physische Herkunft und denselben
+Generationsvertrag geprueft.
+
+Gleiche AOT-Validierungsbelege teilen einen unveraenderlichen Bytesnapshot,
+wenn physischer Pruefbereich, Quelle, Inkarnation, Relocation und Template
+uebereinstimmen. Nur ein einzigartiger Snapshot zaehlt gegen
+`max_memory_bytes`. `retained_validation_bytes`,
+`peak_retained_validation_bytes` und `reclaimed_validation_bytes` machen
+Belegung und Freigabe sichtbar; die letzte Origin gibt den Proof frei.
+Byteabweichung, Budgetende oder ein veralteter Lifecycle koennen damit weder
+einen alten Block weiterverwenden noch unbegrenzt Beweisspeicher halten.
+
 Das Produkt-Gate erlaubt einen Interpreter nur in einem expliziten Bring-up-
 Diagnoseprofil. Der normale Export emittiert und linkt
 `runtime-sh4-interpreter` nicht, deaktiviert die interpretiert gestuetzte
@@ -180,8 +218,17 @@ Manifest als `diagnostic-interpreter` aus. Deaktivierung, unbekannte Quelle,
 Byteabweichung, Budgetende und ungueltiger Block bleiben typisierte Misses.
 `KR-4848` bleibt fuer strukturierte Disc-Ladetransaktionen, den allgemeinen
 nativen Materializer und vorab erzeugte latente native Module offen. Der
-aktuelle kumulative Vertrag verwendet Runtime-ABI 44, Block-ABI 3,
-Backend-Interface-ABI 3, PlatformServices-ABI 10 und Portprojektvertrag 28.
+aktuelle kumulative Vertrag verwendet Runtime-ABI 45, Block-ABI 3,
+Backend-Interface-ABI 3, PlatformServices-ABI 10 und Portprojektvertrag 29.
+
+Eine erfolgreiche Materialisierung markiert den Dispatch explizit und erzeugt
+ihr Replay-Ereignis unabhaengig vom Diagnose-Sampling. Oeffentliche Probe-,
+Fault- und Materialisierungsberichte serialisieren weder Modul-/
+Quellidentitaeten noch Gastbytes; die lokale Zieladresse bleibt einem
+ausdruecklichen Detailmodus vorbehalten. Die fokussierten Load-, Relocation-,
+Replace-, Unload-, Alias-, Proof-, Replay- und Redaktionsregressionen sind
+gruen. Fuer `KR-4912` lief weder ein privater Retaillauf noch eine Vollsuite
+oder `KR-4852`.
 
 Die optionale Runtimebeobachtung aendert diesen Materialisierungsvertrag nicht.
 Ein POD-Zugriffssink versieht bereits ausgefuehrte AOT-Zugriffe und Zugriffe

@@ -4,6 +4,29 @@
 
 ### Geaendert
 
+- KR-4912 schliesst dynamische Codebereiche, Module und Overlays allgemein.
+  Load, Relocation, Replace und Unload verwenden monotone Modulinkarnationen;
+  byteidentische Multi-Extent-Loads erhalten bestehende Bloecke. Byteidentische
+  CPU-, FPU-, Store-Queue-, Copy- und DMA-Writes erhalten Provenienz ohne
+  Invalidierung, waehrend bewiesene Runtimewrites einen zusammenhaengenden Tail
+  samt Delay Slot kontrolliert erweitern koennen. P0-/P1-/P2-Codealiase teilen
+  nach MMU-sicherer Kanonisierung dieselbe physische Herkunft.
+  Lifecycle-Wechsel bereinigen Materializer-Origins, Tracker-Handles und
+  Tabellenbindungen, ohne fremde Owner in Multi-Extent-Luecken zu
+  invalidieren; ein ueberlaufender Relocation-Zaehler wird vor jeder Mutation
+  atomar abgelehnt. Identische Validierungssnapshots werden geteilt,
+  budgetiert und nach der letzten Herkunft freigegeben; retained, peak und
+  reclaimed Proofbytes bleiben messbar. Tatsaechliche Materialisierungen
+  erzeugen ihr Replay-Ereignis unabhaengig von der Diagnoseabtastung.
+  Oeffentliche Probe-, Fault- und Materialisierungsberichte redigieren private
+  Modul-/Quellidentitaeten und Gastbytes. Der normale Produktport besitzt
+  weiterhin keinen Interpreter und beendet ungebundenen Code typisiert.
+  Runtime-ABI 45 und Portprojektvertrag 29 versionieren den Abschluss. Die
+  fokussierten Regressionen bestanden 10/10 in 1,27 Sekunden; der
+  interpreterfreie Produkt-E2E bestand 1/1 in 229,03 Sekunden. Es lief weder
+  ein privater Retaillauf noch eine Vollsuite oder `KR-4852`. Strukturierte
+  Disc-Ladetransaktionen und die Registry latenter AOT-Module bleiben in
+  `KR-4848` offen.
 - KR-4911 schliesst den Runtimebeobachtungs- und Fehlerpaketvertrag.
   Runtime-ABI 44 und Portprojektvertrag 28 binden Systemreplay-Schema 4 mit
   zwoelf Coverageklassen. Blockdispatch, Gastexception, kontrollierter Fallback
@@ -209,9 +232,9 @@
   Direct-FB-Pixeln. TA, Rendergeneration und Materializer bleiben null; der
   Budget-Exit ist erwartet. Diese Port- und Laufevidenz bleibt ausdruecklich
   historisch und wird nicht als ABI-40-Export ausgegeben.
-- Der aktuelle kumulative Schnittstellenstand verwendet Runtime-ABI 44,
+- Der aktuelle kumulative Schnittstellenstand verwendet Runtime-ABI 45,
   Block-ABI 3, Backend-Interface-ABI 3, PlatformServices-ABI 10,
-  Portprojektvertrag 28 und Host-Video-Vertrag 2. Block-ABI 3 versioniert die virtuelle
+  Portprojektvertrag 29 und Host-Video-Vertrag 2. Block-ABI 3 versioniert die virtuelle
   Quell-/Laufzeitadressabbildung source-relativierter nativer AOT-Templates.
 - PVR-Read- und Write-Framebuffer verwenden nun dieselbe hardwaregenaue
   logische 32-Bit-VRAM-Sicht statt eines linear interpretierten Hostpuffers.

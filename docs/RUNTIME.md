@@ -6,7 +6,7 @@ ungeloesten Kontrollflusspfaden mehr.
 
 ## ABI
 
-Die aktuelle Runtime-ABI ist Version `44`. Die typisierte Block-ABI ist
+Die aktuelle Runtime-ABI ist Version `45`. Die typisierte Block-ABI ist
 Version `3`; die Backend-Interface-ABI ist Version `3`.
 
 Generierter Code enthaelt eine Compile-Time-Pruefung gegen diese Version. Eine
@@ -88,6 +88,18 @@ monotone Gastcheckpoints an logische Gastzeit und gibt typisierte Fault- und
 Checkpointzeilen aus. First-Fault und letzter stabiler Checkpoint sichern
 intern vollstaendige CPU-Snapshots; die externen Fault-v1- und privaten
 Fehlerpakete bleiben allowlist-redigiert.
+ABI-Version 45 und Portprojektvertrag 29 schliessen den Lifecycle dynamischer
+Codebereiche. Load, Relocation, Replace und Unload verwenden monotone
+Modulinkarnationen; byteidentische Multi-Extent-Loads und byteidentische
+Runtimewrites erhalten Provenienz ohne Blockinvalidierung. Bewiesene
+Runtimewrites duerfen einen zusammenhaengenden Snapshot-Tail samt Delay Slot
+kontrolliert erweitern. MMU-sicher kanonisierte P0-/P1-/P2-Aliase teilen
+dieselbe physische Blockherkunft. Lifecycle-Wechsel bereinigen davon
+abhaengige Materializer-Origins, Tracker-Handles und Tabellenbindungen.
+Identische Validierungssnapshots werden geteilt, budgetiert und nach der
+letzten Herkunft freigegeben. Der Replaypfad beobachtet jede tatsaechliche
+Materialisierung unabhaengig vom Diagnose-Sampling; oeffentliche Berichte
+redigieren Identitaeten und Gastbytes.
 
 ## CMake
 
@@ -586,6 +598,14 @@ generierten `run_runtime`-Vertrag, versieht Schedulerquellen mit stabilen
 GD-ROM-, DMA-, PVR- und AICA-Codes und bindet strikt monotone Checkpoint- sowie
 typisierte Fault-v1-Zeilen. Private Fehlerpakete werden ausserhalb des
 Repositorys atomar und write-once veroeffentlicht.
+Portprojektvertrag 29 bindet daran den Materializer-Lifecycle. Der normale
+Produktport bleibt interpreterfrei und beendet ein nicht gebundenes AOT-Ziel
+als typisierten Dispatch-/Materialisierungsfehler. Materializer-Origins,
+Code-Tracker und Runtime-Blocktabellen werden bei Replace und Unload gemeinsam
+bereinigt. Geteilte Validierungsproofs zaehlen nur einmal gegen das
+Speicherbudget; retained, peak und reclaimed Proofbytes werden im terminalen
+Status ausgewiesen. Oeffentliche Ausgaben enthalten weder private
+Modul-/Quellidentitaeten noch Gastbytes.
 
 Im produktiven Einblock-AOT-Pfad zaehlt `CpuState::retired_guest_instructions`
 jede betretene Gastinstruktion. Schedulerzeit wird nach der ausgefuehrten
@@ -602,8 +622,8 @@ generische C++-Emitter setzt auch bei einem durch Funktionsdiscovery
 nachfolgerlosen Block in jedem Backendmodus `PC` auf die Folgeadresse der
 letzten Gastinstruktion. Die Produktinvariante prueft einen Fallthrough relativ
 zu dieser tatsaechlichen Terminatorquelle und nicht zum Eintritt des
-umgebenden Wrappers. Der kumulative Stand verwendet Runtime-ABI 44, Block-ABI 3,
-Backend-Interface-ABI 3, PlatformServices-ABI 10, Portvertrag 28 und
+umgebenden Wrappers. Der kumulative Stand verwendet Runtime-ABI 45, Block-ABI 3,
+Backend-Interface-ABI 3, PlatformServices-ABI 10, Portvertrag 29 und
 Host-Video-Vertrag 2.
 
 Statische Dispatchregistries werden nicht mehr in eine einzelne

@@ -226,6 +226,82 @@ if(trap_result EQUAL 0 OR trap_output MATCHES "KR_GUEST_PROGRAM_ENTERED|silent_f
     "Trap-Einstieg erzeugte einen falschen Hauptprogrammnachweis: ${trap_output} ${trap_error}")
 endif()
 
+file(MAKE_DIRECTORY "${fixture}/unknown-target-disc")
+execute_process(
+  COMMAND "${KATANA_FIXTURE_WRITER}" --write-unknown-target-fixture
+          "${fixture}/unknown-target-disc"
+  RESULT_VARIABLE unknown_writer_result
+  ERROR_VARIABLE unknown_writer_error
+)
+if(NOT unknown_writer_result EQUAL 0)
+  file(REMOVE_RECURSE "${fixture}")
+  message(FATAL_ERROR
+    "Unknown-Target-Portfixture fehlgeschlagen: ${unknown_writer_error}")
+endif()
+execute_process(
+  COMMAND "${KATANA_CLI}" port "${fixture}/unknown-target-disc/disc.gdi"
+          --output "${fixture}/unknown-target-port" --target-name unknown_target_game
+  RESULT_VARIABLE unknown_port_result
+  OUTPUT_VARIABLE unknown_port_output
+  ERROR_VARIABLE unknown_port_error
+)
+if(NOT unknown_port_result EQUAL 0)
+  file(REMOVE_RECURSE "${fixture}")
+  message(FATAL_ERROR
+    "Normaler Unknown-Target-Port konnte nicht gebaut werden: "
+    "${unknown_port_output} ${unknown_port_error}")
+endif()
+if(WIN32)
+  set(unknown_target_game "${fixture}/unknown-target-port/unknown_target_game.exe")
+else()
+  set(unknown_target_game "${fixture}/unknown-target-port/unknown_target_game")
+endif()
+if(NOT EXISTS "${fixture}/unknown-target-port/generated/metadata/port-project.json" OR
+   NOT EXISTS "${fixture}/unknown-target-port/generated/code/runtime-dispatch.cpp")
+  file(REMOVE_RECURSE "${fixture}")
+  message(FATAL_ERROR "Unknown-Target-Port besitzt keinen pruefbaren Produktvertrag")
+endif()
+file(READ "${fixture}/unknown-target-port/generated/metadata/port-project.json"
+     unknown_target_project_contract)
+file(READ "${fixture}/unknown-target-port/generated/code/runtime-dispatch.cpp"
+     unknown_target_runtime_source)
+if(NOT unknown_target_project_contract MATCHES "\"diagnostic_partial\":false" OR
+   unknown_target_runtime_source MATCHES "runtime-sh4-interpreter")
+  file(REMOVE_RECURSE "${fixture}")
+  message(FATAL_ERROR
+    "Unknown-Target-Beweis wurde nicht als normaler interpreterfreier Produktport gebaut")
+endif()
+execute_process(
+  COMMAND "${unknown_target_game}" --install-disc "${fixture}/unknown-target-disc/disc.gdi"
+  RESULT_VARIABLE unknown_install_result
+  OUTPUT_VARIABLE unknown_install_output
+  ERROR_VARIABLE unknown_install_error
+)
+if(NOT unknown_install_result EQUAL 0)
+  file(REMOVE_RECURSE "${fixture}")
+  message(FATAL_ERROR
+    "Unknown-Target-Originaldisc-Installation fehlgeschlagen: "
+    "${unknown_install_output} ${unknown_install_error}")
+endif()
+execute_process(
+  COMMAND "${unknown_target_game}"
+  RESULT_VARIABLE unknown_target_result
+  OUTPUT_VARIABLE unknown_target_output
+  ERROR_VARIABLE unknown_target_error
+)
+if(unknown_target_result EQUAL 0 OR
+   NOT unknown_target_error MATCHES "KATANA_RUNTIME_DISPATCH_ERROR" OR
+   NOT unknown_target_error MATCHES "\"error\":\"unknown-target\"" OR
+   NOT unknown_target_error MATCHES "\"class\":\"runtime-only\"" OR
+   NOT unknown_target_error MATCHES "\"target\":\"0x8C100000\"" OR
+   unknown_target_output MATCHES "KR_GUEST_PROGRAM_ENTERED|silent_failures=0" OR
+   unknown_target_error MATCHES "KR_GUEST_PROGRAM_ENTERED|silent_failures=0")
+  file(REMOVE_RECURSE "${fixture}")
+  message(FATAL_ERROR
+    "Unbewiesenes RAM-Ziel brach im normalen Produktpfad nicht typisiert ab: "
+    "${unknown_target_output} ${unknown_target_error}")
+endif()
+
 execute_process(
   COMMAND "${game}" --run-generated
   RESULT_VARIABLE missing_generated_result

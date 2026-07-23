@@ -104,6 +104,7 @@ class ExecutableCodeTracker {
     explicit ExecutableCodeTracker(std::size_t provenance_capacity = default_provenance_capacity);
 
     [[nodiscard]] BlockRegistrationResult register_block(ExecutableBlockRegistration block);
+    [[nodiscard]] bool retire_block(const std::string& identity) noexcept;
     [[nodiscard]] CodeInvalidationResult observe_write(std::uint32_t address,
                                                        std::size_t size,
                                                        CodeWriteSource source,

@@ -180,6 +180,16 @@ int main() {
                 repeated.valid("fallback-op") && repeated.block_count() == 1u &&
                 repeated.invalidation_count() == 1u,
             "Invalidierter Block wird nicht zaehlerstabil reaktiviert.");
+        require(repeated.retire_block("fallback-op") && !repeated.valid("fallback-op") &&
+                    !repeated.retire_block("fallback-op") &&
+                    !repeated.retire_block("unknown-runtime-block") &&
+                    repeated.invalidation_count() == 1u,
+                "Explizite Blocklebenszeit beendet Trackerprovenienz nicht idempotent.");
+        require(
+            repeated.register_block({"fallback-op", 0x0C008000u, 4u, "runtime-op", {"caller"}}) ==
+                    BlockRegistrationResult::Reactivated &&
+                repeated.valid("fallback-op"),
+            "Explizit beendeter Runtimeblock kann nicht identitaetsstabil reaktiviert werden.");
         require(throws<std::invalid_argument>([&] {
                     static_cast<void>(repeated.register_block(
                         {"fallback-op", 0x0C009000u, 4u, "runtime-op", {}}));

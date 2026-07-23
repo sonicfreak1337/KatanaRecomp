@@ -2,7 +2,7 @@
 
 Der mit KR-4508 eingefuehrte Portprojektvertrag Version 3 trennt
 Analyseerfolg, Eingabeidentitaet und tatsaechliche Gastausfuehrung. Der
-aktuelle kumulative Stand verwendet Portprojektvertrag 28, Runtime-ABI 44,
+aktuelle kumulative Stand verwendet Portprojektvertrag 29, Runtime-ABI 45,
 PlatformServices-ABI 10, Block-ABI 3 und Backend-Interface-ABI 3. Keine der
 Vertrauensaussagen wird aus der blossen Erzeugung oder dem Start eines
 Hostprozesses abgeleitet.
@@ -198,6 +198,42 @@ Felder und letzter Checkpoint waren gleich, Executable, Disc-Pack,
 Original-GDI und Tracks unveraendert, beide Replays vollstaendig und versiegelt
 und die Tracezaehler null/null. Damit ist `KR-4911` abgeschlossen und
 `KR-4912` freigegeben. Eine Vollsuite und `KR-4852` wurden nicht ausgefuehrt.
+
+## KR-4912-Modul- und Materializer-Lifecycle
+
+Runtime-ABI 45 und Portprojektvertrag 29 binden dynamische Codebereiche an
+monotone Modulinkarnationen. Load, Relocation, Replace und Unload koennen eine
+fruehere Herkunft nicht unbemerkt wiederverwenden. Byteidentische
+Multi-Extent-Loads erhalten vorhandene Bloecke; ein abweichendes Byte oder eine
+widerspruechliche Modul-ID lehnt den gesamten Load vor jeder Mutation ab.
+Byteidentische CPU-, FPU-, Store-Queue-, Fallback-, Copy- und DMA-Writes
+erhalten Code und Provenienz. Ein bewiesener Runtime-Write-Snapshot darf nur
+ueber einen zusammenhaengenden, geschriebenen und unbeanspruchten Tail
+einschliesslich eines benoetigten Delay Slots wachsen.
+
+Die Runtime kanonisiert P0-/P1-/P2-Ziele nach MMU-Uebersetzung auf dieselbe
+physische Blockherkunft. Replace, Teilpatch und Unload gleichen abhaengige
+Materializer-Origins ab, deaktivieren stale Runtime-Tabellenbindungen und
+retiren die zugehoerigen Tracker-Handles. Ein veralteter AOT-Block wird einmal
+kontrolliert neu validiert oder endet als typisierter Fehler; er darf nicht
+still weiterlaufen.
+
+Identische AOT-Validierungssnapshots werden nur bei gleicher physischer Range,
+Quelle, Inkarnation, Relocation und Templateart geteilt. Der einzigartige
+Proof zaehlt einmal gegen das Speicherbudget. Retained, peak und reclaimed
+Proofbytes werden berichtet, und die letzte Origin gibt den Snapshot frei.
+Eine tatsaechliche Materialisierung erzeugt unabhaengig vom
+Diagnose-Sampling ein Replay-Ereignis.
+
+Der oeffentliche Bericht enthaelt weder Modul-ID, Quellidentitaet noch
+Gastbytes; Probe- und Fault-JSON bleiben ebenfalls redigiert. Lokale
+Materialisierungsziele erfordern einen ausdruecklichen Detailmodus. Der normale
+Produktport emittiert oder linkt keinen SH-4-Interpreter und beendet
+unkompilierten Code als typisierten Dispatch-/Materialisierungsfehler.
+Die fokussierten Regressionen sind gruen. Fuer diesen Abschluss liefen weder
+ein privater Retaillauf noch eine Vollsuite oder `KR-4852`. `KR-4848` bleibt
+fuer strukturierte Disc-Ladetransaktionen und die Registry vorab erzeugter
+latenter AOT-Module offen.
 
 ## Konsistenzgrenzen
 

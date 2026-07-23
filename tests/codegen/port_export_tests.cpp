@@ -98,7 +98,14 @@ std::size_t payload_offset(const std::size_t sector, const std::size_t byte = 0u
     return sector * raw_sector_size + 16u + byte;
 }
 
-std::vector<std::uint8_t> boot_track(const bool immediate_trap = false) {
+enum class FixtureProgram : std::uint8_t {
+    Normal,
+    ImmediateTrap,
+    UnknownDynamicTarget,
+};
+
+std::vector<std::uint8_t> boot_track(
+    const FixtureProgram fixture_program = FixtureProgram::Normal) {
     std::vector<std::uint8_t> bytes(22u * raw_sector_size);
     for (std::size_t sector = 0u; sector < 22u; ++sector) {
         bytes[sector * raw_sector_size + 15u] = 1u;
@@ -152,7 +159,19 @@ std::vector<std::uint8_t> boot_track(const bool immediate_trap = false) {
         0x0Bu, 0x00u, // unreachable rts
         0x09u, 0x00u, 0x09u, 0x00u, 0x09u, 0x00u, 0x09u, 0x00u, 0x09u, 0x00u,
         0x09u, 0x00u, 0x09u, 0x00u, 0x09u, 0x00u, 0x09u, 0x00u, 0x09u, 0x00u};
-    const auto& program = immediate_trap ? trap_program : normal_program;
+    constexpr std::array<std::uint8_t, 24u> unknown_dynamic_target_program = {
+        0x01u, 0xD1u, // mov.l @(1,pc),r1 -> live target literal at 0x8C010008
+        0x2Bu, 0x41u, // jmp @r1
+        0x09u, 0x00u, // delay-slot nop
+        0x09u, 0x00u, // aligned padding
+        0x00u, 0x00u, 0x10u, 0x8Cu, // mapped main RAM at 0x8C100000, no code provenance
+        0x09u, 0x00u, 0x09u, 0x00u, 0x09u, 0x00u,
+        0x09u, 0x00u, 0x09u, 0x00u, 0x09u, 0x00u};
+    const auto& program = fixture_program == FixtureProgram::ImmediateTrap
+                              ? trap_program
+                          : fixture_program == FixtureProgram::UnknownDynamicTarget
+                              ? unknown_dynamic_target_program
+                              : normal_program;
     std::copy(program.begin(),
               program.end(),
               bytes.begin() + static_cast<std::ptrdiff_t>(payload_offset(21u)));
@@ -185,13 +204,14 @@ void write_binary(const std::filesystem::path& path, const std::vector<std::uint
                  static_cast<std::streamsize>(bytes.size()));
 }
 
-void write_fixture(const std::filesystem::path& directory, const bool immediate_trap = false) {
+void write_fixture(const std::filesystem::path& directory,
+                   const FixtureProgram fixture_program = FixtureProgram::Normal) {
     std::vector<std::uint8_t> low_track(24u * raw_sector_size);
     for (std::size_t sector = 0u; sector < 24u; ++sector)
         low_track[sector * raw_sector_size + 15u] = 1u;
     write_binary(directory / "low.bin", low_track);
     write_binary(directory / "audio.raw", std::vector<std::uint8_t>(raw_sector_size));
-    write_binary(directory / "high.bin", boot_track(immediate_trap));
+    write_binary(directory / "high.bin", boot_track(fixture_program));
     std::ofstream descriptor(directory / "disc.gdi", std::ios::trunc);
     descriptor << "3\n"
                << "1 0 4 2352 low.bin 0\n"
@@ -283,11 +303,18 @@ void disabled_product_materializer_regression() {
 } // namespace
 
 int run_test(const int argc, char* argv[]) {
-    if (argc == 3 && (std::string(argv[1]) == "--write-fixture" ||
-                      std::string(argv[1]) == "--write-trap-fixture")) {
+    if (argc == 3 &&
+        (std::string(argv[1]) == "--write-fixture" ||
+         std::string(argv[1]) == "--write-trap-fixture" ||
+         std::string(argv[1]) == "--write-unknown-target-fixture")) {
         const std::filesystem::path directory(argv[2]);
         std::filesystem::create_directories(directory);
-        write_fixture(directory, std::string(argv[1]) == "--write-trap-fixture");
+        const auto program = std::string(argv[1]) == "--write-trap-fixture"
+                                 ? FixtureProgram::ImmediateTrap
+                             : std::string(argv[1]) == "--write-unknown-target-fixture"
+                                 ? FixtureProgram::UnknownDynamicTarget
+                                 : FixtureProgram::Normal;
+        write_fixture(directory, program);
         return EXIT_SUCCESS;
     }
     require(argc == 1, "Unerwartete Argumente fuer den Portexporttest.");
@@ -724,9 +751,9 @@ int run_test(const int argc, char* argv[]) {
             trace_serialize != std::string::npos && trace_enable < trace_allocate &&
             trace_allocate < trace_set_sink && trace_clear_sink < trace_serialize &&
             generated_before.at("metadata/port-project.json")
-                    .find("\"contract_version\":28") != std::string::npos &&
+                    .find("\"contract_version\":29") != std::string::npos &&
             generated_before.at("metadata/provenance.json")
-                    .find("\"manifest_version\":28") != std::string::npos,
+                    .find("\"manifest_version\":29") != std::string::npos,
         "Portprodukt bindet den versionierten Wait-Loop-Trace nicht strikt opt-in, "
         "allokationsfrei im Normalpfad und RAII-bereinigt ein.");
     const auto poll_disc_directory = fixture.root / "poll-loop-disc";
@@ -1079,7 +1106,10 @@ int run_test(const int argc, char* argv[]) {
                 "SystemReplayObservationSession* active_observations") !=
                 std::string::npos &&
             runtime_dispatch.find(
-                "active_observations->observe_block_dispatch_hit(dispatch_class)") !=
+                "dispatch_class, result.materialized)") !=
+                std::string::npos &&
+            runtime_dispatch.find(
+                "materializer.reconcile_inactive_origins(&dispatch_metrics)") !=
                 std::string::npos &&
             runtime_dispatch.find(
                 "active_observations->observe_block_dispatch_miss(") !=
@@ -1320,6 +1350,12 @@ int run_test(const int argc, char* argv[]) {
             read_text(output / "src" / "main.cpp").find("highest_pending") !=
                 std::string::npos &&
             read_text(output / "src" / "main.cpp").find("runtime_materialization_status") !=
+                std::string::npos &&
+            read_text(output / "src" / "main.cpp").find("retained_validation_bytes=") !=
+                std::string::npos &&
+            read_text(output / "src" / "main.cpp")
+                    .find("peak_retained_validation_bytes=") != std::string::npos &&
+            read_text(output / "src" / "main.cpp").find("reclaimed_validation_bytes=") !=
                 std::string::npos &&
             read_text(output / "src" / "main.cpp").find("exception_cause=") != std::string::npos &&
             read_text(output / "src" / "main.cpp").find("cpu.expevt") != std::string::npos &&

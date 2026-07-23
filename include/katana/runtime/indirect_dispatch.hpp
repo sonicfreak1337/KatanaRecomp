@@ -118,6 +118,7 @@ struct IndirectDispatchResult {
     std::uint32_t resulting_pc = 0u;
     std::uint32_t resulting_pr = 0u;
     bool alias_lookup = false;
+    bool materialized = false;
     std::string diagnostic;
 };
 

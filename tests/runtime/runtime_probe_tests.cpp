@@ -11,6 +11,8 @@
 #include <iostream>
 #include <stdexcept>
 #include <string>
+#include <string_view>
+#include <vector>
 
 namespace {
 
@@ -738,8 +740,72 @@ int main() {
         RuntimeProbeMemoryRange{
             RuntimeProbeMemoryRegion::Flash, 0u, full_flash},
     };
-    const auto full_devices =
+    auto full_devices =
         complete_device_profile(pvr_device, system_bus_device);
+    constexpr std::string_view private_module_id_sentinel =
+        "KR4912_PRIVATE_MODULE_ID_SENTINEL";
+    constexpr std::string_view private_source_identity_sentinel =
+        "KR4912_PRIVATE_SOURCE_IDENTITY_SENTINEL";
+    constexpr std::string_view private_module_bytes_sentinel =
+        "KR4912_PRIVATE_MODULE_BYTES_SENTINEL";
+    ExecutableModuleCatalogSnapshot private_module_catalog;
+    ExecutableModule private_module;
+    private_module.id = private_module_id_sentinel;
+    private_module.source_identity = private_source_identity_sentinel;
+    private_module.guest_start = 0x8C200000u;
+    private_module.bytes.assign(private_module_bytes_sentinel.begin(),
+                                private_module_bytes_sentinel.end());
+    private_module.active_extents.push_back(
+        {0u, static_cast<std::uint32_t>(private_module.bytes.size())});
+    private_module_catalog.modules.push_back(private_module);
+    const auto module_device = std::find_if(
+        full_devices.begin(),
+        full_devices.end(),
+        [](const auto& device) {
+            return device.kind == RuntimeProbeDeviceKind::ModuleCatalog &&
+                   device.instance == 0u;
+        });
+    require(module_device != full_devices.end(),
+            "Dem Produktprofil fehlt der Modul-Katalog-Snapshot.");
+    *module_device = make_runtime_probe_device_snapshot(private_module_catalog);
+
+    const auto private_module_device_hash =
+        hash_runtime_probe_devices(full_devices);
+    auto changed_module_catalog = private_module_catalog;
+    ++changed_module_catalog.modules.front().bytes.front();
+    auto changed_module_devices = full_devices;
+    const auto changed_module_device = std::find_if(
+        changed_module_devices.begin(),
+        changed_module_devices.end(),
+        [](const auto& device) {
+            return device.kind == RuntimeProbeDeviceKind::ModuleCatalog &&
+                   device.instance == 0u;
+        });
+    require(changed_module_device != changed_module_devices.end(),
+            "Der geaenderte Produktzustand verlor den Modul-Katalog.");
+    *changed_module_device =
+        make_runtime_probe_device_snapshot(changed_module_catalog);
+    const auto changed_module_device_hash =
+        hash_runtime_probe_devices(changed_module_devices);
+    const auto full_memory_hash = hash_runtime_probe_memory(full_memory);
+    const auto full_persistent_hash =
+        hash_runtime_probe_persistent(full_persistent);
+    require(
+        private_module_device_hash != changed_module_device_hash &&
+            combine_runtime_probe_guest_state_hashes(
+                cpu_hash,
+                scheduler_hash,
+                full_memory_hash,
+                full_persistent_hash,
+                private_module_device_hash) !=
+                combine_runtime_probe_guest_state_hashes(
+                    cpu_hash,
+                    scheduler_hash,
+                    full_memory_hash,
+                    full_persistent_hash,
+                    changed_module_device_hash),
+        "Eine Modulbyteaenderung bleibt im Device- oder Gastzustandshash unsichtbar.");
+
     validate_runtime_probe_deterministic_v1(
         scheduler_snapshot,
         full_memory,
@@ -787,9 +853,9 @@ int main() {
     const auto full_device_hash = hash_runtime_probe_devices(full_devices);
     const auto product_guest_state_hash = combine_runtime_probe_guest_state_hashes(
         cpu_hash,
-        hash_runtime_probe_scheduler(scheduler_snapshot),
-        hash_runtime_probe_memory(full_memory),
-        hash_runtime_probe_persistent(full_persistent),
+        scheduler_hash,
+        full_memory_hash,
+        full_persistent_hash,
         full_device_hash);
     product_replay.seal(product_guest_state_hash);
     const auto bound_replay = capture_runtime_probe_replay(product_replay);
@@ -850,6 +916,48 @@ int main() {
                 json.find("\"final_guest_state_hash\"") == std::string::npos &&
                 json.find("probe-timer") == std::string::npos,
             "Der JSON-Report ist nicht deterministisch oder leakt Roh-/Replaywerte.");
+
+    BlockMaterializationMetrics private_materialization_metrics;
+    private_materialization_metrics.requests = 1u;
+    private_materialization_metrics.misses = 1u;
+    private_materialization_metrics.first_failure =
+        MaterializationFailure::UnknownSource;
+    private_materialization_metrics.first_failure_target = 0xDEADBEEFu;
+    const std::array private_materialization_events = {
+        BlockMaterializationEvent{
+            1u,
+            0xDEADBEEFu,
+            MaterializationFailure::UnknownSource,
+            false},
+    };
+    const auto public_materialization_json =
+        format_block_materialization_metrics_json(
+            private_materialization_metrics,
+            private_materialization_events);
+    const auto local_materialization_json =
+        format_block_materialization_metrics_json(
+            private_materialization_metrics,
+            private_materialization_events,
+            true);
+    const auto private_target_sentinel =
+        std::to_string(private_materialization_events.front().target);
+    require(
+        public_materialization_json.find(private_target_sentinel) ==
+                std::string::npos &&
+            local_materialization_json.find(private_target_sentinel) !=
+                std::string::npos,
+        "Oeffentliche Materialisierungsmetriken leaken ein lokales Gastziel.");
+
+    for (const auto sentinel : {private_module_id_sentinel,
+                                private_source_identity_sentinel,
+                                private_module_bytes_sentinel}) {
+        require(
+            json.find(sentinel) == std::string::npos &&
+                fault_json.find(sentinel) == std::string::npos &&
+                public_materialization_json.find(sentinel) ==
+                    std::string::npos,
+            "Eine oeffentliche Reportgrenze leakt Modulidentitaet oder Rohbytes.");
+    }
 
     std::cout << "Runtime-Probe-Tests bestanden.\n";
     return EXIT_SUCCESS;

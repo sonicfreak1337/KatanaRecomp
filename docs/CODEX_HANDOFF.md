@@ -388,10 +388,10 @@ v0.48 P0 - vom belegten IP.BIN-Frame bis BootExecutable und Spielboot fortsetzen
 ```
 
 Abgeschlossen und in Roadmap/Taskliste markiert sind `KR-4831`, `KR-4841`,
-`KR-4842`, `KR-4843`, `KR-4844`, `KR-4845`, `KR-4846`, `KR-4911`, `KR-4915`
-und `KR-4850`. Der aktuelle Runtimevertrag steht auf Runtime-ABI 44, Block-ABI 3,
+`KR-4842`, `KR-4843`, `KR-4844`, `KR-4845`, `KR-4846`, `KR-4911`, `KR-4912`,
+`KR-4915` und `KR-4850`. Der aktuelle Runtimevertrag steht auf Runtime-ABI 45, Block-ABI 3,
 Backend-Interface-ABI 3, PlatformServices-ABI 10, BIOS-ABI 9,
-Portprojektvertrag 28 und Host-Video-Vertrag 2. `KR-4912` ist freigegeben.
+Portprojektvertrag 29 und Host-Video-Vertrag 2.
 Das verbindliche
 XenonRecomp-artige Produktmodell rekompiliert `IP.BIN` und BootExecutable
 statisch aus SH-4 in nativen PC-Code. Dreamcast-Komponenten bleiben typisierte,
@@ -607,6 +607,32 @@ Original-GDI und Tracks blieben unveraendert, beide Replays vollstaendig und
 versiegelt und die Tracezaehler null/null. Es lief keine Vollsuite und kein
 `KR-4852`. `KR-4912` ist freigegeben.
 
+Runtime-ABI 45 und Portprojektvertrag 29 schliessen `KR-4912`. Load,
+Relocation, Replace und Unload erzeugen monotone Modulinkarnationen;
+byteidentische Multi-Extent-Loads sowie byteidentische CPU-, FPU-,
+Store-Queue-, Copy- und DMA-Writes erhalten bestehende Bloecke und Provenienz.
+Ein bewiesener Runtime-Write-Snapshot darf kontrolliert um einen
+zusammenhaengenden Tail samt Delay Slot wachsen. MMU-sichere P0-/P1-/P2-Aliase
+teilen dieselbe physische Blockherkunft.
+
+Replace und Unload gleichen Materializer-Origins, Runtime-Blocktabellen und
+Code-Tracker gemeinsam ab, ohne fremde Owner in Multi-Extent-Luecken zu
+invalidieren. Ein ueberlaufender Relocation-Generation-Zaehler wird vor jeder
+Mutation atomar abgelehnt. Identische Validierungssnapshots werden geteilt,
+gegen das Speicherbudget gerechnet und nach der letzten Origin freigegeben;
+retained, peak und reclaimed Bytes bleiben sichtbar. Eine tatsaechliche
+Materialisierung erzeugt ihr Replay-Ereignis unabhaengig vom
+Diagnose-Sampling. Oeffentliche Probe-, Fault- und
+Materialisierungsberichte redigieren Identitaeten und Gastbytes. Der normale
+Produktport bleibt interpreterfrei und beendet unbekannten Code typisiert.
+
+Die fokussierten Regressionen bestanden 10/10 in 1,27 Sekunden; der
+interpreterfreie Produkt-E2E bestand 1/1 in 229,03 Sekunden. Fuer `KR-4912`
+lief weder ein privater Retaillauf noch eine Vollsuite oder `KR-4852`.
+`KR-4848` bleibt fuer
+strukturierte Disc-Ladetransaktionen und die Registry vorab erzeugter latenter
+AOT-Module offen.
+
 Der SH-4-DMAC-Channel-2-Pfad verwendet fuer TA den oeffentlichen externen
 Memory-to-Device-Vertrag `RS=2`, 32-Byte-Einheiten, inkrementierende Quelle,
 festes Ziel, Burstmodus und `DMAOR.DME+DDT`. Eine Runtime-End-to-End-Regression
@@ -674,9 +700,9 @@ KR-4848: strukturierte Disc-Ladetransaktionen und Registry latenter nativer Modu
 KR-4849: Direct-Texture-Zielprogression und restliche TA/PVR-Eingangskette
 ```
 
-`KR-4842` und `KR-4911` sind als Vorbedingungen erfuellt. Die verbindliche
-Abhaengigkeitsfolge fuer die offenen Bootpfade beginnt jetzt mit
-`KR-4912 -> KR-4848`; `KR-4849` schliesst den
+`KR-4842`, `KR-4911` und `KR-4912` sind als Vorbedingungen erfuellt. Die
+verbindliche Abhaengigkeitsfolge fuer die offenen Bootpfade beginnt jetzt mit
+`KR-4848`; `KR-4849` schliesst den
 produktiven TA/PVR-Vertrag. `KR-4915` und `KR-4850` sind durch den legitimen
 vorgezogenen Direct-Framebuffer-Pfad bereits erfuellt. `KR-4814` und
 `KR-4914` folgen als verbindliche Post-Frame-Arbeit in v0.48 auf `KR-4850`

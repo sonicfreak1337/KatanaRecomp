@@ -511,6 +511,26 @@ int main() {
                 "\"status\":\"observed\",\"sequence\":2,"
                 "\"checkpoint\":\"guest-program-entered\"}",
             "Redigierter Checkpoint-Zeilenvertrag ist nicht exakt oder nicht monoton.");
+    SystemReplayLog materialized_sampling_log({8u, false});
+    EventScheduler materialized_sampling_scheduler;
+    SystemReplayObservationSession materialized_sampling_observations(
+        &materialized_sampling_log, &materialized_sampling_scheduler);
+    materialized_sampling_observations.observe_block_dispatch_hit(
+        RuntimeDispatchClass::GuardedFallback);
+    materialized_sampling_observations.observe_block_dispatch_hit(
+        RuntimeDispatchClass::GuardedFallback);
+    materialized_sampling_observations.observe_block_dispatch_hit(
+        RuntimeDispatchClass::RuntimeOnly, true);
+    materialized_sampling_observations.observe_block_dispatch_hit(
+        RuntimeDispatchClass::GuardedFallback);
+    require(materialized_sampling_log.events().size() == 4u &&
+                materialized_sampling_log.events()[2].code ==
+                    "block-dispatch-hit-materialized" &&
+                materialized_sampling_log.events()[2].auxiliary == 3u &&
+                materialized_sampling_log.events()[3].code == "block-dispatch-hit" &&
+                materialized_sampling_log.events()[3].auxiliary == 4u,
+            "Materialisierter Dispatch ausserhalb des Potenz-Samples wird verschluckt oder "
+            "veraendert die Dispatch-Countersemantik.");
     const auto redacted_observations = observation_log.serialize_json();
     require(redacted_observations.find("0x8C010000") == std::string::npos &&
                 redacted_observations.find("0x8C020000") == std::string::npos &&

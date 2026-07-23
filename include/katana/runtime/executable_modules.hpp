@@ -9,6 +9,7 @@
 #include <cstdint>
 #include <functional>
 #include <map>
+#include <memory>
 #include <optional>
 #include <span>
 #include <string>
@@ -233,6 +234,9 @@ struct BlockMaterializationMetrics {
     std::uint64_t materializations = 0u;
     std::uint64_t interpreter_materializations = 0u;
     std::uint64_t materialized_bytes = 0u;
+    std::uint64_t retained_validation_bytes = 0u;
+    std::uint64_t peak_retained_validation_bytes = 0u;
+    std::uint64_t reclaimed_validation_bytes = 0u;
     std::uint64_t misses = 0u;
     std::uint64_t budget_failures = 0u;
     std::uint64_t generation_revalidation_failures = 0u;
@@ -286,7 +290,10 @@ class DemandBlockMaterializer final {
     [[nodiscard]] MaterializationFailure last_failure() const noexcept;
     [[nodiscard]] bool validate_for_dispatch(const CpuState& cpu,
                                              RuntimeBlockHandle handle,
-                                             std::uint32_t target) noexcept;
+                                             std::uint32_t target,
+                                             std::optional<std::uint32_t> physical_entry =
+                                                 std::nullopt) noexcept;
+    void reconcile_inactive_origins(IndirectDispatchMetrics* dispatch_metrics = nullptr);
     void record_invalidation(std::uint32_t address,
                              std::size_t size,
                              IndirectDispatchMetrics& dispatch_metrics);
@@ -312,12 +319,13 @@ class DemandBlockMaterializer final {
         std::uint32_t block_module_address = 0u;
         std::uint32_t block_size = 0u;
         std::uint32_t callsite = 0u;
+        std::string block_identity;
         std::string module_id;
         std::string source_identity;
         std::uint64_t module_generation = 0u;
         std::uint64_t relocation_generation = 0u;
         RuntimeBlockHandle handle;
-        std::vector<std::uint8_t> snapshot;
+        std::shared_ptr<const std::vector<std::uint8_t>> snapshot;
         bool interpreter_backed = false;
         bool aot_template = false;
     };

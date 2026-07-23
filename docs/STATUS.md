@@ -23,12 +23,37 @@ unaufgeloester Guard-Evidenz.
 Der versionierte Runtime-Trace liefert dynamische Wertwechselfolgen und echte
 Writer-Provenienz. Der abschliessende Diagnose=0/1-A/B-Produktlauf bestand mit
 zwei frischen Laeufen. Damit ist `KR-4842` abgeschlossen; das damals
-freigegebene `KR-4911` ist inzwischen ebenfalls abgeschlossen und gibt
-`KR-4912` frei.
+freigegebene `KR-4911` ist inzwischen ebenfalls abgeschlossen. `KR-4912` ist
+ebenfalls abgeschlossen und gibt den verbleibenden `KR-4848`-Teil frei.
 
-Der aktuelle kumulative Vertrag verwendet Runtime-ABI 44, Block-ABI 3,
-Backend-Interface-ABI 3, PlatformServices-ABI 10, Portprojektvertrag 28 und
+Der aktuelle kumulative Vertrag verwendet Runtime-ABI 45, Block-ABI 3,
+Backend-Interface-ABI 3, PlatformServices-ABI 10, Portprojektvertrag 29 und
 Host-Video-Vertrag 2.
+
+`KR-4912` modelliert Load, Relocation, Replace und Unload als monotone
+Modulinkarnationen. Byteidentische Multi-Extent-Loads und byteidentische CPU-,
+FPU-, Store-Queue-, Copy- und DMA-Writes erhalten vorhandene Bloecke samt
+Provenienz. Bewiesene Runtimewrites koennen einen zusammenhaengenden
+Snapshotschwanz einschliesslich Delay Slot kontrolliert erweitern.
+P0-/P1-/P2-Aliase werden unter der aktiven MMU auf dieselbe physische
+Blockherkunft gefaltet. Ersetzte oder inaktive Module entfernen abhaengige
+Materializer-Origins, Tracker-Handles und Tabellenbindungen, ohne fremde Owner
+in Multi-Extent-Luecken zu invalidieren. Ein ueberlaufender
+Relocation-Generation-Zaehler wird atomar vor jeder Mutation abgelehnt.
+
+Identische Validierungssnapshots teilen einen gegen das Speicherbudget
+gerechneten Proof; retained, peak und reclaimed Bytes bleiben sichtbar, und
+die letzte Herkunft gibt den Proof wieder frei. Tatsaechliche
+Materialisierungen werden unabhaengig von der Diagnoseabtastung im Replay
+beobachtet. Oeffentliche Probe-, Fault- und Materialisierungsberichte
+redigieren private Modul-/Quellidentitaeten und Gastbytes. Der normale
+Produktport besitzt keinen Interpreter und beendet ungebundenen Code typisiert.
+Die fokussierten Regressionen bestanden 10/10 in 1,27 Sekunden; der
+interpreterfreie Produkt-E2E bestand 1/1 in 229,03 Sekunden. Fuer diesen
+Abschluss liefen weder ein privater Retaillauf noch eine Vollsuite oder
+`KR-4852`; strukturierte
+Disc-Ladetransaktionen und die Registry latenter AOT-Module bleiben in
+`KR-4848` offen.
 
 Der aktuelle Sicherheitsblock schliesst zwei zuvor nur behauptete
 Diagnose-/Schedulergrenzen. Freie Probes uebersetzen ueber die aktive Gast-MMU,
@@ -487,8 +512,8 @@ MMIO-Zugriff liegt im aktiven OCRAM; der fruehere Abbruch nach 12 Gastzyklen
 ist damit beseitigt. TA/PVR und ein echter Gastframe bleiben fuer den laengeren
 Folgelauf weiterhin offen.
 
-Runtime-ABI 44, Block-ABI 3, Backend-Interface-ABI 3, BIOS-ABI 9,
-PlatformServices-ABI 10, Portprojektvertrag 28 und Host-Video-Vertrag 2 bilden den kumulativen
+Runtime-ABI 45, Block-ABI 3, Backend-Interface-ABI 3, BIOS-ABI 9,
+PlatformServices-ABI 10, Portprojektvertrag 29 und Host-Video-Vertrag 2 bilden den kumulativen
 v0.48-Stand ab.
 PlatformServices-ABI 10 versioniert zusaetzlich die genaue
 `PREF`-Instruktionsherkunft bis zur Store Queue.

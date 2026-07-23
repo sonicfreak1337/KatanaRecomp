@@ -6,10 +6,12 @@
 #include <array>
 #include <cstdlib>
 #include <iostream>
+#include <limits>
 #include <memory>
 #include <span>
 #include <stdexcept>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -212,6 +214,365 @@ void native_aot_template_materialization_regression() {
             "Binder-Ablehnungsgrund wird pauschal als DecodeRejected verschluckt.");
 }
 
+void module_incarnation_aba_regression() {
+    using namespace katana::runtime;
+
+    CpuState cpu;
+    const std::vector<std::uint8_t> first_source_bytes{
+        0x09u, 0x00u, 0x0Bu, 0x00u};
+    const std::vector<std::uint8_t> second_source_bytes{
+        0x0Bu, 0x00u, 0x09u, 0x00u};
+    const std::vector<std::uint8_t> third_source_bytes{
+        0x09u, 0x00u, 0x09u, 0x00u};
+    cpu.memory.write_bytes(0x1000u, first_source_bytes, CodeWriteSource::Copy);
+    cpu.memory.write_bytes(0x2000u, first_source_bytes, CodeWriteSource::Copy);
+
+    ExecutableModule source;
+    source.id = "aot-incarnation-source";
+    source.source_identity = "free-aot-incarnation-source-v1";
+    source.guest_start = 0x1000u;
+    source.bytes = first_source_bytes;
+    ExecutableModule runtime_copy = source;
+    runtime_copy.id = "aot-incarnation-runtime-copy";
+    runtime_copy.source_identity = "free-aot-incarnation-runtime-copy-v1";
+    runtime_copy.guest_start = 0x2000u;
+    ExecutableModuleCatalog modules;
+    modules.publish(source);
+    modules.publish(runtime_copy);
+
+    RuntimeBlockTable blocks;
+    ExecutableCodeTracker tracker;
+    blocks.bind_code_tracker(&tracker);
+    BlockMaterializationPolicy policy;
+    policy.enabled = true;
+    policy.max_blocks = 4u;
+    policy.max_bytes = 64u;
+    policy.max_memory_bytes = first_source_bytes.size();
+    std::size_t callback_calls = 0u;
+    DemandBlockMaterializer materializer(
+        modules,
+        blocks,
+        &tracker,
+        policy,
+        [&](const std::uint32_t target,
+            const std::uint32_t physical_origin,
+            const std::span<const std::uint8_t> snapshot,
+            const BlockVariantKey& requested_variant) {
+            ++callback_calls;
+            MaterializedBlockCandidate candidate;
+            candidate.block = {
+                target,
+                physical_origin,
+                2u,
+                BlockEndKind::Return,
+                requested_variant,
+                block,
+                "aot-incarnation-template",
+                false,
+                RuntimeAotTemplateContract{{0x1000u, 0x2000u, 4u}, 4u}};
+            candidate.decode_candidate_validated = snapshot.size() >= 2u;
+            candidate.bounded_analysis_complete = true;
+            candidate.ir_verified = true;
+            candidate.code_generated = true;
+            candidate.guest_cycles = 1u;
+            candidate.instructions = 1u;
+            candidate.recursive_seeds = 1u;
+            candidate.peak_memory_bytes = first_source_bytes.size();
+            return candidate;
+        });
+    IndirectDispatchMetrics dispatch_metrics;
+    IndirectDispatchRequest request;
+    request.kind = IndirectDispatchKind::TailJump;
+    request.callsite = 0x80u;
+    request.target = 0x2000u;
+    request.dispatch_class = RuntimeDispatchClass::RuntimeOnly;
+    request.metrics = &dispatch_metrics;
+    request.materializer = &materializer;
+
+    const auto first = dispatch_indirect(cpu, blocks, request);
+    const auto first_block = blocks.resolve(first.block);
+    require(first.materialized && first_block.has_value() &&
+                modules.find(source.id)->generation == 1u,
+            "Erste AOT-Modulinkarnation wurde nicht deterministisch gebunden.");
+    const auto first_identity =
+        stable_runtime_block_identity(first_block->get());
+
+    modules.unload(source.id, blocks, tracker);
+    require(blocks.active(first.block) && tracker.valid(first_identity),
+            "Der ABA-Test invalidiert seinen getrennten AOT-Runtimebereich bereits beim "
+            "Quell-Unload.");
+    auto second_source = source;
+    second_source.bytes = second_source_bytes;
+    cpu.memory.write_bytes(
+        second_source.guest_start, second_source.bytes, CodeWriteSource::Copy);
+    modules.publish(second_source);
+    require(modules.find(source.id)->generation == 2u,
+            "Direktes Republish verwendet die alte Modulinkarnationsgeneration.");
+
+    const auto second = dispatch_indirect(cpu, blocks, request);
+    const auto second_block = blocks.resolve(second.block);
+    require(second.materialized && second.block != first.block &&
+                second_block.has_value() && !blocks.active(first.block) &&
+                !tracker.valid(first_identity),
+            "Republish reaktiviert einen stale AOT-Handle der alten Modulinkarnation.");
+    const auto second_identity =
+        stable_runtime_block_identity(second_block->get());
+
+    modules.unload(source.id, blocks, tracker);
+    require(blocks.active(second.block) && tracker.valid(second_identity),
+            "Der Loaded-Range-ABA-Test verlor seinen getrennten AOT-Handle vorzeitig.");
+    auto third_source = source;
+    third_source.bytes = third_source_bytes;
+    cpu.memory.write_bytes(
+        third_source.guest_start, third_source.bytes, CodeWriteSource::Copy);
+    modules.publish_loaded_range(third_source,
+                                 blocks,
+                                 tracker,
+                                 LoadedRangeWriteObservation::ObservedChanged);
+    require(modules.find(source.id)->generation == 3u,
+            "Loaded-Range-Republish verwendet keine monotone Modulinkarnation.");
+
+    const auto third = dispatch_indirect(cpu, blocks, request);
+    const auto third_block = blocks.resolve(third.block);
+    require(third.materialized && third.block != second.block &&
+                third_block.has_value() && !blocks.active(second.block) &&
+                !tracker.valid(second_identity) && callback_calls == 3u,
+            "Loaded-Range-Republish behaelt einen stale AOT-Handle aktiv.");
+
+    const auto snapshot = modules.snapshot();
+    std::vector<std::pair<std::uint64_t, bool>> source_incarnations;
+    for (const auto& module : snapshot.modules) {
+        if (module.id == source.id)
+            source_incarnations.emplace_back(module.generation, module.active);
+    }
+    require(source_incarnations ==
+                std::vector<std::pair<std::uint64_t, bool>>{
+                    {1u, false}, {2u, false}, {3u, true}},
+            "Modulkatalog-Snapshot verliert die monotone Inkarnationshistorie.");
+
+    ExecutableModuleCatalog exhausted_modules;
+    RuntimeBlockTable exhausted_blocks;
+    ExecutableCodeTracker exhausted_tracker;
+    auto exhausted = source;
+    exhausted.id = "exhausted-incarnation";
+    exhausted.generation = std::numeric_limits<std::uint64_t>::max();
+    exhausted_modules.publish(exhausted);
+    exhausted_modules.unload(exhausted.id, exhausted_blocks, exhausted_tracker);
+    bool exhausted_republish_rejected = false;
+    try {
+        exhausted.generation = 1u;
+        exhausted_modules.publish(exhausted);
+    } catch (const std::overflow_error&) {
+        exhausted_republish_rejected = true;
+    }
+    const auto exhausted_snapshot = exhausted_modules.snapshot();
+    require(exhausted_republish_rejected &&
+                exhausted_modules.find(exhausted.id) == nullptr &&
+                exhausted_snapshot.modules.size() == 1u &&
+                exhausted_snapshot.modules.front().generation ==
+                    std::numeric_limits<std::uint64_t>::max() &&
+                !exhausted_snapshot.modules.front().active,
+            "Ausgeschoepfte Modulinkarnation wird per Generation-ABA wiederverwendet.");
+}
+
+void multi_extent_module_lifecycle_regression() {
+    using namespace katana::runtime;
+
+    enum class LifecycleAction : std::uint8_t { Unload, Replace, Relocate };
+    for (const auto action :
+         {LifecycleAction::Unload, LifecycleAction::Replace, LifecycleAction::Relocate}) {
+        constexpr std::uint32_t base = 0x10000u;
+        constexpr std::uint32_t page = 0x1000u;
+        CpuState cpu;
+        const std::vector<std::uint8_t> bytes(page * 3u, 0x09u);
+        cpu.memory.write_bytes(base, bytes, CodeWriteSource::Copy);
+
+        ExecutableModule foreign;
+        foreign.id = "multi-extent-foreign-hole";
+        foreign.source_identity = "free-multi-extent-foreign-hole-v1";
+        foreign.guest_start = base + page;
+        foreign.bytes.assign(page, 0x09u);
+
+        ExecutableModule owner;
+        owner.id = "multi-extent-owner";
+        owner.source_identity = "free-multi-extent-owner-v1";
+        owner.guest_start = base;
+        owner.bytes = bytes;
+
+        ExecutableModuleCatalog modules;
+        RuntimeBlockTable blocks;
+        ExecutableCodeTracker tracker;
+        blocks.bind_code_tracker(&tracker);
+        modules.publish(foreign);
+        modules.publish_loaded_range(
+            owner, blocks, tracker, LoadedRangeWriteObservation::ObservedByteIdentical);
+        const std::vector<ExecutableModuleActiveExtent> expected_extents{
+            {0u, page}, {page * 2u, page}};
+        require(modules.find(owner.id) != nullptr &&
+                    modules.find(owner.id)->active_extents == expected_extents,
+                "Byte-identisches Lochmodul besitzt nicht die zwei disjunkten Eigentumsbereiche.");
+
+        DemandBlockMaterializer materializer(
+            modules,
+            blocks,
+            &tracker,
+            {true, 4u, 16u},
+            [](const std::uint32_t target,
+               const std::uint32_t physical_origin,
+               const std::span<const std::uint8_t> snapshot,
+               const BlockVariantKey& requested_variant) {
+                MaterializedBlockCandidate candidate;
+                candidate.block = {target,
+                                   physical_origin,
+                                   2u,
+                                   BlockEndKind::Return,
+                                   requested_variant,
+                                   block,
+                                   "multi-extent-lifecycle-block",
+                                   true};
+                candidate.decode_candidate_validated = snapshot.size() >= 2u;
+                candidate.interpreter_backed = true;
+                candidate.guest_cycles = 1u;
+                candidate.instructions = 1u;
+                candidate.recursive_seeds = 1u;
+                candidate.peak_memory_bytes = 2u;
+                return candidate;
+            });
+        const auto foreign_handle =
+            materializer.try_materialize(cpu, base + page, base + page, {}, 0x80u);
+        const auto owner_handle =
+            materializer.try_materialize(cpu, base, base, {}, 0x84u);
+        require(foreign_handle.has_value() && owner_handle.has_value(),
+                "Lochmodul-Lifecycle konnte seine getrennten Urspruenge nicht materialisieren.");
+        const auto foreign_block = blocks.resolve(*foreign_handle);
+        const auto owner_block = blocks.resolve(*owner_handle);
+        require(foreign_block.has_value() && owner_block.has_value(),
+                "Lochmodul-Lifecycle verlor einen vorbereiteten Runtimeblock.");
+        const auto foreign_identity = stable_runtime_block_identity(foreign_block->get());
+        const auto owner_identity = stable_runtime_block_identity(owner_block->get());
+        const auto invalidated_before = modules.metrics().invalidated_blocks;
+
+        switch (action) {
+        case LifecycleAction::Unload:
+            modules.unload(owner.id, blocks, tracker);
+            break;
+        case LifecycleAction::Replace: {
+            auto replacement = owner;
+            replacement.source_identity = "free-multi-extent-owner-v2";
+            replacement.guest_start = base + page * 4u;
+            replacement.bytes = {0x0Bu, 0x00u};
+            replacement.active_extents.clear();
+            modules.replace(std::move(replacement), blocks, tracker);
+            break;
+        }
+        case LifecycleAction::Relocate:
+            modules.update_relocations(owner.id, {}, blocks, tracker);
+            break;
+        }
+        materializer.reconcile_inactive_origins();
+
+        require(blocks.active(*foreign_handle) && !blocks.active(*owner_handle) &&
+                    tracker.valid(foreign_identity) && !tracker.valid(owner_identity) &&
+                    tracker.page_generation(base + page) == 0u &&
+                    materializer.validate_for_dispatch(
+                        cpu, *foreign_handle, base + page, base + page) &&
+                    materializer.metrics().retained_validation_bytes == 2u &&
+                    materializer.metrics().reclaimed_validation_bytes == 2u &&
+                    modules.metrics().invalidated_blocks == invalidated_before + 1u,
+                "Lochmodul-Lifecycle invalidiert fremden Code oder zaehlt denselben "
+                "Block mehrfach.");
+    }
+}
+
+void relocation_generation_overflow_regression() {
+    using namespace katana::runtime;
+
+    constexpr std::uint32_t source_address = 0x3000u;
+    constexpr std::uint32_t runtime_address = 0x4000u;
+    const std::vector<std::uint8_t> bytes{0x09u, 0x00u, 0x0Bu, 0x00u};
+    CpuState cpu;
+    cpu.memory.write_bytes(source_address, bytes, CodeWriteSource::Copy);
+    cpu.memory.write_bytes(runtime_address, bytes, CodeWriteSource::Copy);
+
+    ExecutableModule source;
+    source.id = "relocation-generation-overflow-source";
+    source.source_identity = "free-relocation-generation-overflow-source-v1";
+    source.guest_start = source_address;
+    source.bytes = bytes;
+    source.relocation_generation = std::numeric_limits<std::uint64_t>::max();
+    ExecutableModule runtime_copy = source;
+    runtime_copy.id = "relocation-generation-overflow-runtime-copy";
+    runtime_copy.source_identity = "free-relocation-generation-overflow-runtime-copy-v1";
+    runtime_copy.guest_start = runtime_address;
+    runtime_copy.relocation_generation = 1u;
+
+    ExecutableModuleCatalog modules;
+    RuntimeBlockTable blocks;
+    ExecutableCodeTracker tracker;
+    blocks.bind_code_tracker(&tracker);
+    modules.publish(source);
+    modules.publish(runtime_copy);
+    DemandBlockMaterializer materializer(
+        modules,
+        blocks,
+        &tracker,
+        {true, 2u, 8u},
+        [](const std::uint32_t target,
+           const std::uint32_t physical_origin,
+           const std::span<const std::uint8_t> snapshot,
+           const BlockVariantKey& requested_variant) {
+            MaterializedBlockCandidate candidate;
+            candidate.block = {
+                target,
+                physical_origin,
+                2u,
+                BlockEndKind::Return,
+                requested_variant,
+                block,
+                "relocation-generation-overflow-aot",
+                false,
+                RuntimeAotTemplateContract{{source_address, runtime_address, 4u}, 4u}};
+            candidate.decode_candidate_validated = snapshot.size() >= 2u;
+            candidate.bounded_analysis_complete = true;
+            candidate.ir_verified = true;
+            candidate.code_generated = true;
+            candidate.guest_cycles = 1u;
+            candidate.instructions = 1u;
+            candidate.recursive_seeds = 1u;
+            candidate.peak_memory_bytes = 4u;
+            return candidate;
+        });
+    const auto handle =
+        materializer.try_materialize(cpu, runtime_address, runtime_address, {}, 0x90u);
+    require(handle.has_value(), "Relocation-Overflow konnte seinen AOT-Runtimecopy nicht binden.");
+    const auto registered = blocks.resolve(*handle);
+    require(registered.has_value(), "Relocation-Overflow verlor seinen AOT-Runtimeblock.");
+    const auto identity = stable_runtime_block_identity(registered->get());
+    const auto catalog_before = modules.snapshot();
+    const auto materialization_before = materializer.metrics();
+
+    bool overflow_rejected = false;
+    try {
+        modules.update_relocations(
+            source.id,
+            {{0u, executable_module_relocation_module_base32, 0}},
+            blocks,
+            tracker);
+    } catch (const std::overflow_error&) {
+        overflow_rejected = true;
+    }
+
+    require(overflow_rejected && modules.snapshot() == catalog_before &&
+                blocks.active(*handle) && tracker.valid(identity) &&
+                materializer.validate_for_dispatch(
+                    cpu, *handle, runtime_address, runtime_address) &&
+                materializer.metrics().retained_validation_bytes ==
+                    materialization_before.retained_validation_bytes &&
+                materializer.metrics().reclaimed_validation_bytes ==
+                    materialization_before.reclaimed_validation_bytes,
+            "Ausgeschoepfte Relocation-Generation mutiert Quelle oder stale AOT-Lifecycle.");
+}
+
 void runtime_write_provenance_regression() {
     using namespace katana::runtime;
     CpuState cpu;
@@ -359,6 +720,147 @@ void runtime_write_provenance_regression() {
             "Innerer P1-Einstieg wird nicht wiederverwendet oder durch P0-Write entwertet.");
 }
 
+void byte_identical_runtime_write_provenance_regression() {
+    using namespace katana::runtime;
+
+    CpuState cpu;
+    ExecutableModuleCatalog modules;
+    constexpr std::array guest_sources{CodeWriteSource::Cpu,
+                                       CodeWriteSource::Fpu,
+                                       CodeWriteSource::StoreQueue,
+                                       CodeWriteSource::Fallback};
+    constexpr std::array identical_load_sources{CodeWriteSource::Copy,
+                                                CodeWriteSource::Dma,
+                                                CodeWriteSource::Copy,
+                                                CodeWriteSource::Dma};
+    for (std::size_t index = 0u; index < guest_sources.size(); ++index) {
+        const auto address = 0x1800u + static_cast<std::uint32_t>(index * 0x10u);
+        cpu.memory.write_u32(address, 0x00090009u, CodeWriteSource::Copy);
+        modules.record_runtime_write(address, 4u, guest_sources[index], false);
+        modules.record_runtime_write(address, 4u, identical_load_sources[index], false);
+        require(modules.promote_runtime_write(cpu.memory, address, 4u),
+                "Byte-identischer echter Gastwrite setzt keine haltbare "
+                "Runtimewrite-Provenienz.");
+    }
+
+    ExecutableModule stable;
+    stable.id = "byte-identical-stable-module";
+    stable.source_identity = "free-byte-identical-stable-module-v1";
+    stable.guest_start = 0x2000u;
+    stable.bytes = {0x09u, 0x00u, 0x0Bu, 0x00u};
+    cpu.memory.write_bytes(stable.guest_start, stable.bytes, CodeWriteSource::Copy);
+    modules.publish(stable);
+
+    RuntimeBlockTable blocks;
+    RuntimeBlock prefix_block{stable.guest_start,
+                              stable.guest_start,
+                              static_cast<std::uint32_t>(stable.bytes.size()),
+                              BlockEndKind::Return,
+                              {},
+                              block,
+                              "byte-identical-stable-prefix",
+                              true};
+    const auto prefix_handle = blocks.register_static(prefix_block);
+    const auto generation = modules.find(stable.id)->generation;
+    const auto extents = modules.find(stable.id)->active_extents;
+    for (const auto source : guest_sources)
+        modules.record_runtime_write(stable.guest_start, stable.bytes.size(), source, false);
+    require(modules.find(stable.id) != nullptr &&
+                modules.find(stable.id)->generation == generation &&
+                modules.find(stable.id)->active_extents == extents &&
+                blocks.active(prefix_handle),
+            "Byte-identischer echter Gastwrite invalidiert Modulprefix oder Runtimeblock.");
+}
+
+void runtime_write_delay_slot_extension_regression() {
+    using namespace katana::runtime;
+
+    constexpr std::uint32_t base = 0x2400u;
+    constexpr std::uint32_t delayed_branch = base + 126u;
+    CpuState cpu;
+    ExecutableModuleCatalog modules;
+    RuntimeBlockTable blocks;
+    ExecutableCodeTracker tracker;
+    blocks.bind_code_tracker(&tracker);
+    cpu.memory.set_guest_write_observer([&](const GuestWriteEvent& event) {
+        modules.record_runtime_write(event.address, event.size, event.source, event.bytes_changed);
+        const auto invalidation =
+            tracker.observe_write(event.address, event.size, event.source, event.bytes_changed);
+        if (!invalidation.byte_identical)
+            static_cast<void>(blocks.erase_overlapping_physical(event.address, event.size));
+    });
+
+    std::vector<std::uint8_t> bytes(132u);
+    for (std::size_t offset = 0u; offset < bytes.size(); offset += 2u)
+        bytes[offset] = 0x09u;
+    bytes[126u] = 0x0Bu;
+    bytes[127u] = 0x00u;
+    bytes[128u] = 0x09u;
+    bytes[129u] = 0x00u;
+    cpu.memory.write_bytes(base, bytes, CodeWriteSource::Cpu);
+
+    bool saw_delay_slot_snapshot = false;
+    DemandBlockMaterializer materializer(
+        modules,
+        blocks,
+        &tracker,
+        {true, 4u, 512u},
+        [&](const std::uint32_t target,
+            const std::uint32_t,
+            const std::span<const std::uint8_t> snapshot,
+            const BlockVariantKey& requested_variant) {
+            const auto block_size = target == delayed_branch ? 4u : 2u;
+            if (target == delayed_branch)
+                saw_delay_slot_snapshot =
+                    snapshot.size() >= block_size && snapshot[0u] == 0x0Bu &&
+                    snapshot[1u] == 0x00u && snapshot[2u] == 0x09u &&
+                    snapshot[3u] == 0x00u;
+            return MaterializedBlockCandidate{{target,
+                                               canonical_physical_address(target),
+                                               block_size,
+                                               BlockEndKind::Return,
+                                               requested_variant,
+                                               block,
+                                               "runtime-write-delay-slot-decoder",
+                                               true},
+                                              snapshot.size() >= block_size,
+                                              true,
+                                              true,
+                                              true,
+                                              1u,
+                                              1u,
+                                              1u,
+                                              1u,
+                                              1u};
+        });
+    IndirectDispatchRequest request;
+    request.kind = IndirectDispatchKind::TailJump;
+    request.callsite = 0x100u;
+    request.target = base;
+    request.dispatch_class = RuntimeDispatchClass::RuntimeOnly;
+    request.materializer = &materializer;
+    const auto prefix = dispatch_indirect(cpu, blocks, request);
+    const auto* initial = modules.resolve(base, 2u);
+    require(initial != nullptr && initial->bytes.size() == 128u,
+            "Initiale Runtimewrite-Promotion besitzt nicht das gebundene 128-Byte-Fenster.");
+    const auto module_id = initial->id;
+    const auto module_generation = initial->generation;
+    const std::vector<std::uint8_t> prefix_bytes(initial->bytes.begin(), initial->bytes.end());
+
+    request.callsite = 0x104u;
+    request.target = delayed_branch;
+    const auto delayed = dispatch_indirect(cpu, blocks, request);
+    const auto* expanded = modules.resolve(delayed_branch, 4u);
+    require(delayed.block && saw_delay_slot_snapshot && expanded != nullptr &&
+                expanded->id == module_id && expanded->generation == module_generation &&
+                expanded->bytes.size() == bytes.size() &&
+                std::equal(prefix_bytes.begin(), prefix_bytes.end(), expanded->bytes.begin()) &&
+                expanded->materializable(base + 128u, 2u) && blocks.active(prefix.block) &&
+                materializer.validate_for_dispatch(cpu, prefix.block, base),
+            "Runtimewrite-Modul wurde fuer einen Delay-Slot nicht sicher und "
+            "prefixstabil erweitert.");
+}
+
 void identity_preserving_loaded_range_regression() {
     using namespace katana::runtime;
     CpuState cpu;
@@ -473,6 +975,226 @@ void identity_preserving_loaded_range_regression() {
                 modules.resolve(static_address, changed.size())->id == replacement.id,
             "Geaenderter Disc-Reload invalidiert AOT-Code nicht exakt einmal oder verliert sein "
             "neues Modul.");
+}
+
+void identity_preserving_loaded_range_overlap_regression() {
+    using namespace katana::runtime;
+
+    {
+        ExecutableModuleCatalog modules;
+        RuntimeBlockTable blocks;
+        ExecutableCodeTracker tracker;
+        ExecutableModule original;
+        original.id = "partial-overlap-source";
+        original.source_identity = "free-partial-overlap-source-v1";
+        original.guest_start = 0x00008000u;
+        original.bytes = {0x10u, 0x11u, 0x12u, 0x13u};
+        modules.publish(original);
+
+        ExecutableModule incoming;
+        incoming.id = "partial-overlap-tail";
+        incoming.source_identity = "free-partial-overlap-tail-v1";
+        incoming.guest_start = 0x80008002u;
+        incoming.bytes = {0x12u, 0x13u, 0x14u, 0x15u};
+        modules.publish_loaded_range(incoming,
+                                     blocks,
+                                     tracker,
+                                     LoadedRangeWriteObservation::ObservedByteIdentical);
+
+        const auto* published = modules.find(incoming.id);
+        require(published != nullptr &&
+                    published->active_extents ==
+                        std::vector<ExecutableModuleActiveExtent>{{2u, 2u}} &&
+                    modules.resolve(0x00008000u, 4u) == modules.find(original.id) &&
+                    modules.resolve(0x00008002u, 2u) == modules.find(original.id) &&
+                    modules.resolve(0x00008004u, 2u) == published &&
+                    modules.metrics().loads == 2u,
+                "Teilweise byte-identische Aliasueberdeckung publiziert nicht nur den neuen "
+                "disjunkten Tail.");
+    }
+
+    {
+        ExecutableModuleCatalog modules;
+        RuntimeBlockTable blocks;
+        ExecutableCodeTracker tracker;
+        ExecutableModule original;
+        original.id = "superset-overlap-source";
+        original.source_identity = "free-superset-overlap-source-v1";
+        original.guest_start = 0x00009002u;
+        original.bytes = {0x22u, 0x23u, 0x24u, 0x25u};
+        modules.publish(original);
+
+        ExecutableModule incoming;
+        incoming.id = "superset-overlap-edges";
+        incoming.source_identity = "free-superset-overlap-edges-v1";
+        incoming.guest_start = 0x00009000u;
+        incoming.bytes = {0x20u, 0x21u, 0x22u, 0x23u, 0x24u, 0x25u, 0x26u, 0x27u};
+        modules.publish_loaded_range(incoming,
+                                     blocks,
+                                     tracker,
+                                     LoadedRangeWriteObservation::ObservedByteIdentical);
+
+        const auto* published = modules.find(incoming.id);
+        require(published != nullptr &&
+                    published->active_extents ==
+                        std::vector<ExecutableModuleActiveExtent>{{0u, 2u}, {6u, 2u}} &&
+                    modules.resolve(0x00009000u, 2u) == published &&
+                    modules.resolve(0x00009002u, 4u) == modules.find(original.id) &&
+                    modules.resolve(0x00009006u, 2u) == published &&
+                    modules.resolve(0x00009000u, 8u) == nullptr,
+                "Byte-identischer Superset-Load publiziert nicht exakt seine beiden neuen "
+                "Randfenster.");
+    }
+
+    {
+        ExecutableModuleCatalog modules;
+        RuntimeBlockTable blocks;
+        ExecutableCodeTracker tracker;
+        ExecutableModule left;
+        left.id = "union-left";
+        left.source_identity = "free-union-left-v1";
+        left.guest_start = 0x0000A000u;
+        left.bytes = {0x30u, 0x31u};
+        modules.publish(left);
+        ExecutableModule right;
+        right.id = "union-right";
+        right.source_identity = "free-union-right-v1";
+        right.guest_start = 0x8000A002u;
+        right.bytes = {0x32u, 0x33u};
+        modules.publish(right);
+
+        RuntimeBlock guarded_block{0x0000A000u,
+                                   0x0000A000u,
+                                   4u,
+                                   BlockEndKind::Return,
+                                   {},
+                                   block,
+                                   "union-byte-identical-guard",
+                                   true};
+        const auto guarded_identity = stable_runtime_block_identity(guarded_block);
+        const auto guarded_handle = blocks.register_runtime(guarded_block);
+        require(tracker.register_block({guarded_identity,
+                                        0x0000A000u,
+                                        4u,
+                                        guarded_block.provenance,
+                                        {},
+                                        ExecutableBlockOrigin::RuntimeWrite}) ==
+                    BlockRegistrationResult::Inserted,
+                "Union-No-op-Test konnte seinen Trackerblock nicht registrieren.");
+        blocks.bind_code_tracker(&tracker);
+        const auto catalog_before = modules.snapshot();
+        const auto tracker_generation_before = tracker.page_generation(0x0000A000u);
+        const auto tracker_invalidations_before = tracker.invalidation_count();
+
+        ExecutableModule incoming;
+        incoming.id = "union-fully-covered";
+        incoming.source_identity = "free-union-fully-covered-v1";
+        incoming.guest_start = 0xA000A000u;
+        incoming.bytes = {0x30u, 0x31u, 0x32u, 0x33u};
+        modules.publish_loaded_range(incoming,
+                                     blocks,
+                                     tracker,
+                                     LoadedRangeWriteObservation::ObservedByteIdentical);
+
+        require(modules.snapshot() == catalog_before && modules.find(incoming.id) == nullptr &&
+                    blocks.active(guarded_handle) && tracker.valid(guarded_identity) &&
+                    tracker.page_generation(0x0000A000u) == tracker_generation_before &&
+                    tracker.invalidation_count() == tracker_invalidations_before,
+                "Vollstaendige byte-identische Union-Coverage mutiert Katalog, Blocktabelle "
+                "oder Tracker-Generation.");
+    }
+
+    {
+        ExecutableModuleCatalog modules;
+        RuntimeBlockTable blocks;
+        ExecutableCodeTracker tracker;
+        ExecutableModule original;
+        original.id = "same-id-active";
+        original.source_identity = "free-same-id-active-v1";
+        original.guest_start = 0x0000B002u;
+        original.bytes = {0x42u, 0x43u};
+        modules.publish(original);
+
+        RuntimeBlock guarded_block{0x0000B000u,
+                                   0x0000B000u,
+                                   6u,
+                                   BlockEndKind::Return,
+                                   {},
+                                   block,
+                                   "same-id-rejection-guard",
+                                   true};
+        const auto guarded_identity = stable_runtime_block_identity(guarded_block);
+        const auto guarded_handle = blocks.register_runtime(guarded_block);
+        require(tracker.register_block({guarded_identity,
+                                        0x0000B000u,
+                                        6u,
+                                        guarded_block.provenance,
+                                        {},
+                                        ExecutableBlockOrigin::RuntimeWrite}) ==
+                    BlockRegistrationResult::Inserted,
+                "Same-ID-Test konnte seinen Trackerblock nicht registrieren.");
+        blocks.bind_code_tracker(&tracker);
+        const auto catalog_before = modules.snapshot();
+        const auto tracker_generation_before = tracker.page_generation(0x0000B000u);
+        const auto tracker_invalidations_before = tracker.invalidation_count();
+
+        ExecutableModule incoming;
+        incoming.id = original.id;
+        incoming.source_identity = "free-same-id-superset-v2";
+        incoming.guest_start = 0x0000B000u;
+        incoming.bytes = {0x40u, 0x41u, 0x42u, 0x43u, 0x44u, 0x45u};
+        bool rejected = false;
+        try {
+            modules.publish_loaded_range(incoming,
+                                         blocks,
+                                         tracker,
+                                         LoadedRangeWriteObservation::ObservedByteIdentical);
+        } catch (const std::invalid_argument&) {
+            rejected = true;
+        }
+
+        require(rejected && modules.snapshot() == catalog_before &&
+                    blocks.active(guarded_handle) && tracker.valid(guarded_identity) &&
+                    tracker.page_generation(0x0000B000u) == tracker_generation_before &&
+                    tracker.invalidation_count() == tracker_invalidations_before,
+                "Byte-identischer Same-ID-Superset wird nicht atomar abgelehnt.");
+    }
+
+    {
+        ExecutableModuleCatalog modules;
+        RuntimeBlockTable blocks;
+        ExecutableCodeTracker tracker;
+        ExecutableModule original;
+        original.id = "conflicting-overlap-source";
+        original.source_identity = "free-conflicting-overlap-source-v1";
+        original.guest_start = 0x0000C000u;
+        original.bytes = {0x50u, 0x51u, 0x52u, 0x53u};
+        modules.publish(original);
+        const auto catalog_before = modules.snapshot();
+        const auto tracker_generation_before = tracker.page_generation(0x0000C000u);
+        const auto tracker_invalidations_before = tracker.invalidation_count();
+
+        ExecutableModule incoming;
+        incoming.id = "conflicting-overlap";
+        incoming.source_identity = "free-conflicting-overlap-v1";
+        incoming.guest_start = 0x0000C002u;
+        incoming.bytes = {0xFFu, 0x53u, 0x54u, 0x55u};
+        bool rejected = false;
+        try {
+            modules.publish_loaded_range(incoming,
+                                         blocks,
+                                         tracker,
+                                         LoadedRangeWriteObservation::ObservedByteIdentical);
+        } catch (const std::invalid_argument&) {
+            rejected = true;
+        }
+
+        require(rejected && modules.snapshot() == catalog_before &&
+                    modules.find(incoming.id) == nullptr &&
+                    tracker.page_generation(0x0000C000u) == tracker_generation_before &&
+                    tracker.invalidation_count() == tracker_invalidations_before,
+                "Widerspruechliche Byte-identisch-Metadaten werden nicht atomar abgelehnt.");
+    }
 }
 
 void dreamcast_main_ram_mirror_invalidation_regression() {
@@ -1305,6 +2027,68 @@ void deterministic_materialization_without_host_time_regression() {
             "Standardmodus wertet das bestehende Analysezeitbudget nicht mehr aus.");
 }
 
+void materializer_alias_boundary_invalidation_regression() {
+    using namespace katana::runtime;
+
+    CpuState cpu;
+    const std::vector<std::uint8_t> bytes{0x09u, 0x00u, 0x0Bu, 0x00u};
+    cpu.memory.write_bytes(0u, bytes, CodeWriteSource::Copy);
+    ExecutableModule module;
+    module.id = "alias-boundary-materializer";
+    module.source_identity = "free-alias-boundary-materializer-v1";
+    module.guest_start = 0u;
+    module.bytes = bytes;
+    ExecutableModuleCatalog modules;
+    modules.publish(module);
+    RuntimeBlockTable blocks;
+    ExecutableCodeTracker tracker;
+    blocks.bind_code_tracker(&tracker);
+    DemandBlockMaterializer materializer(
+        modules,
+        blocks,
+        &tracker,
+        {true, 2u, 4u},
+        [](const std::uint32_t target,
+           const std::uint32_t physical_origin,
+           const std::span<const std::uint8_t>,
+           const BlockVariantKey& variant) {
+            MaterializedBlockCandidate candidate;
+            candidate.block = {target,
+                               physical_origin,
+                               2u,
+                               BlockEndKind::Return,
+                               variant,
+                               block,
+                               "alias-boundary-native-block",
+                               true};
+            candidate.decode_candidate_validated = true;
+            candidate.bounded_analysis_complete = true;
+            candidate.ir_verified = true;
+            candidate.code_generated = true;
+            candidate.guest_cycles = 1u;
+            candidate.instructions = 1u;
+            candidate.recursive_seeds = 1u;
+            candidate.peak_memory_bytes = 2u;
+            return candidate;
+        });
+    const auto handle =
+        materializer.try_materialize(cpu, 0u, 0u, BlockVariantKey{}, 0x80u);
+    require(handle.has_value(), "Aliasgrenzen-Fixture konnte keinen Runtimeblock binden.");
+    const auto resolved = blocks.resolve(*handle);
+    require(resolved.has_value(), "Aliasgrenzen-Fixture verlor ihren Runtimeblock.");
+    const auto identity = stable_runtime_block_identity(resolved->get());
+    IndirectDispatchMetrics metrics;
+    metrics.record_hit(RuntimeDispatchClass::RuntimeOnly, 0x80u, 0u, true);
+
+    materializer.record_invalidation(0x1FFFFFFEu, 4u, metrics);
+    require(!blocks.active(*handle) && !tracker.valid(identity) &&
+                materializer.metrics().retained_validation_bytes == 0u &&
+                materializer.metrics().reclaimed_validation_bytes == 2u &&
+                metrics.runtime_only_sites().at(0x80u).invalidations == 1u,
+            "Nichtlineare P0/P1/P2-Aliasgrenze verfehlt den gewrappten "
+            "Materialisierungsursprung.");
+}
+
 } // namespace
 
 int main() {
@@ -1433,8 +2217,14 @@ int main() {
 
     relocated_module_regression();
     native_aot_template_materialization_regression();
+    module_incarnation_aba_regression();
+    multi_extent_module_lifecycle_regression();
+    relocation_generation_overflow_regression();
     runtime_write_provenance_regression();
+    byte_identical_runtime_write_provenance_regression();
+    runtime_write_delay_slot_extension_regression();
     identity_preserving_loaded_range_regression();
+    identity_preserving_loaded_range_overlap_regression();
     dreamcast_main_ram_mirror_invalidation_regression();
     partial_module_patch_regression();
     non_overlapping_write_stress_regression();
@@ -1446,6 +2236,7 @@ int main() {
     interpreter_interior_entry_regression();
     mmu_materialization_origin_regression();
     deterministic_materialization_without_host_time_regression();
+    materializer_alias_boundary_invalidation_regression();
 
     std::cout << "KR-4704 executable module and materialization regression passed.\n";
     return EXIT_SUCCESS;
