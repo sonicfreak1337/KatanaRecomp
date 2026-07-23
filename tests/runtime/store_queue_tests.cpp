@@ -127,24 +127,24 @@ int main() {
         constexpr std::uint32_t sq_source = 0xE2000020u;
         constexpr std::uint32_t ta_target = 0x12000020u;
         std::vector<StoreQueueTransfer> translated_transfers;
-        Sh4StoreQueues translated_queues(
+        auto translated_queues = std::make_unique<Sh4StoreQueues>(
             memory, [&](const auto& transfer) { translated_transfers.push_back(transfer); });
         CpuState no_mmu_cpu;
         no_mmu_cpu.address_space = std::make_shared<RuntimeAddressSpace>();
         no_mmu_cpu.write_sr(sr_md_mask);
-        translated_queues.set_prefetch_address_translator(
+        translated_queues->set_prefetch_address_translator(
             [&no_mmu_cpu](const std::uint32_t address) {
                 return translate_store_queue_prefetch(no_mmu_cpu, address);
             });
-        translated_queues.write_qacr(1u, 0x10u);
+        translated_queues->write_qacr(1u, 0x10u);
         for (std::uint32_t offset = 0u; offset < 32u; offset += 4u) {
-            translated_queues.write_p4(
+            translated_queues->write_p4(
                 sq_source + offset, 0xA3A2A1A0u + offset * 0x01010101u, MemoryAccessWidth::Word);
         }
-        const auto expected_queue_bytes = translated_queues.queue(1u);
+        const auto expected_queue_bytes = translated_queues->queue(1u);
         const auto qacr_translation = translate_store_queue_prefetch(no_mmu_cpu, sq_source);
         require(qacr_translation.addressing == StoreQueueAddressingMode::Qacr &&
-                    translated_queues.prefetch(sq_source) && translated_transfers.size() == 1u &&
+                    translated_queues->prefetch(sq_source) && translated_transfers.size() == 1u &&
                     translated_transfers.back().target_address == ta_target &&
                     translated_transfers.back().bytes == expected_queue_bytes,
                 "AT=0 uebertraegt die Store Queue nicht unveraendert ueber QACR zum TA-FIFO.");
@@ -159,7 +159,7 @@ int main() {
                     "AT=0-Adressraum verliert den typisierten SQ-Adressfehler.");
         }
         try {
-            static_cast<void>(translated_queues.prefetch(sq_source + 2u));
+            static_cast<void>(translated_queues->prefetch(sq_source + 2u));
             require(false, "Nicht ausgerichtetes SQ-PREF wurde bei AT=0 akzeptiert.");
         } catch (const MemoryAccessError& error) {
             require(error.reason() == MemoryAccessErrorReason::Unmapped &&
@@ -168,13 +168,13 @@ int main() {
                     "Nicht ausgerichtetes AT=0-SQ-PREF verliert den typisierten Adressfehler.");
         }
         require(translated_transfers.size() == 1u &&
-                    translated_queues.transfer_count() == 1u,
+                    translated_queues->transfer_count() == 1u,
                 "Nicht ausgerichtetes AT=0-SQ-PREF mutiert Sink oder Transferzaehler.");
 
         no_mmu_cpu.write_sr(0u);
         no_mmu_cpu.address_space->write_mmucr(0x00000200u);
         try {
-            static_cast<void>(translated_queues.prefetch(sq_source));
+            static_cast<void>(translated_queues->prefetch(sq_source));
             require(false, "SQMD-geschuetztes User-SQ-PREF wurde bei AT=0 akzeptiert.");
         } catch (const MemoryAccessError& error) {
             require(error.reason() == MemoryAccessErrorReason::Unmapped &&
@@ -183,7 +183,7 @@ int main() {
                     "SQMD-geschuetztes AT=0-User-PREF verliert den typisierten Adressfehler.");
         }
         require(translated_transfers.size() == 1u &&
-                    translated_queues.transfer_count() == 1u,
+                    translated_queues->transfer_count() == 1u,
                 "SQMD-geschuetztes AT=0-User-PREF mutiert Sink oder Transferzaehler.");
 
         auto fallback_cpu = std::make_unique<CpuState>();
@@ -238,15 +238,15 @@ int main() {
                                      true,
                                      true,
                                      false});
-        translated_queues.set_prefetch_address_translator(
+        translated_queues->set_prefetch_address_translator(
             [&mmu_cpu](const std::uint32_t address) {
                 return translate_store_queue_prefetch(mmu_cpu, address);
             });
-        translated_queues.write_qacr(1u, 0x0Cu);
+        translated_queues->write_qacr(1u, 0x0Cu);
         const auto utlb_translation = translate_store_queue_prefetch(mmu_cpu, sq_source);
         require(utlb_translation.addressing == StoreQueueAddressingMode::Utlb &&
                     utlb_translation.target_address == ta_target &&
-                    translated_queues.prefetch(sq_source) && translated_transfers.size() == 2u &&
+                    translated_queues->prefetch(sq_source) && translated_transfers.size() == 2u &&
                     translated_transfers.back().target == StoreQueueTarget::TileAccelerator &&
                     translated_transfers.back().target_address == ta_target &&
                     translated_transfers.front().bytes == translated_transfers.back().bytes &&
@@ -261,12 +261,12 @@ int main() {
         miss_cpu.address_space->write_pteh(miss_cpu.pteh);
         miss_cpu.address_space->write_mmucr(1u);
         miss_cpu.address_space->set_mode(AddressTranslationMode::Mmu);
-        translated_queues.set_prefetch_address_translator(
+        translated_queues->set_prefetch_address_translator(
             [&miss_cpu](const std::uint32_t address) {
                 return translate_store_queue_prefetch(miss_cpu, address);
             });
         try {
-            static_cast<void>(translated_queues.prefetch(sq_source));
+            static_cast<void>(translated_queues->prefetch(sq_source));
             require(false, "Fehlende SQ-UTLB-Abbildung wurde akzeptiert.");
         } catch (const MemoryAccessError& error) {
             require(error.reason() == MemoryAccessErrorReason::TlbMiss &&
@@ -280,7 +280,7 @@ int main() {
                     miss_cpu.pc == 0x8C000400u && miss_cpu.tea == sq_source &&
                     miss_cpu.pteh == ((sq_source & 0xFFFFFC00u) | 0x5Au) &&
                     translated_transfers.size() == 2u &&
-                    translated_queues.transfer_count() == 2u,
+                    translated_queues->transfer_count() == 2u,
                 "SQ-UTLB-Miss schreibt ins FIFO oder verliert PTEH/TEA/Missvektor.");
 
         CpuState multiple_cpu;
@@ -314,12 +314,12 @@ int main() {
                                           true,
                                           true,
                                           false});
-        translated_queues.set_prefetch_address_translator(
+        translated_queues->set_prefetch_address_translator(
             [&multiple_cpu](const std::uint32_t address) {
                 return translate_store_queue_prefetch(multiple_cpu, address);
             });
         try {
-            static_cast<void>(translated_queues.prefetch(sq_source));
+            static_cast<void>(translated_queues->prefetch(sq_source));
             require(false, "Mehrere passende SQ-UTLB-Abbildungen wurden akzeptiert.");
         } catch (const MemoryAccessError& error) {
             require(error.reason() == MemoryAccessErrorReason::TlbMultipleHit &&
@@ -334,7 +334,7 @@ int main() {
                     multiple_cpu.vbr == 0u && multiple_cpu.tea == sq_source &&
                     multiple_cpu.pteh == ((sq_source & 0xFFFFFC00u) | 0xA5u) &&
                     translated_transfers.size() == 2u &&
-                    translated_queues.transfer_count() == 2u,
+                    translated_queues->transfer_count() == 2u,
                 "SQ-UTLB-Multiple-Hit schreibt ins FIFO oder verliert Reset/PTEH/TEA.");
 
         DreamcastRuntimeBootImage boot;

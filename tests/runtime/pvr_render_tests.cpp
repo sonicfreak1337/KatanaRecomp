@@ -647,7 +647,9 @@ int main() {
         EventScheduler direct_scheduler;
         Memory direct_memory(0u);
         const auto direct_vram = map_dreamcast_vram(direct_memory);
-        PvrRegisterFile direct_registers(direct_scheduler, PvrTiming{20u, 100u, 100u});
+        auto direct_registers_storage =
+            std::make_unique<PvrRegisterFile>(direct_scheduler, PvrTiming{20u, 100u, 100u});
+        auto& direct_registers = *direct_registers_storage;
         PvrSoftwareRenderer direct_renderer;
         direct_memory.set_guest_write_observer([&](const GuestWriteEvent& event) {
             direct_renderer.observe_vram_write(event.address, event.size, event.bytes_changed);

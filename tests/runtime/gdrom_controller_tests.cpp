@@ -73,7 +73,8 @@ class LayoutDiscSource final : public katana::runtime::DiscSource {
 
 int main() {
     using namespace katana::runtime;
-    CpuState cpu;
+    const auto cpu_storage = std::make_unique<CpuState>();
+    auto& cpu = *cpu_storage;
     cpu.memory = Memory(0u);
     static_cast<void>(map_dreamcast_main_ram(cpu.memory));
     std::uint64_t rejected_mmio_writes = 0u;
@@ -1106,7 +1107,8 @@ int main() {
                 cpu.memory.read_u8(reset_destination) == 0u,
             "INIT_SYSTEM laesst einen alten GD-ROM-Request spaeter abschliessen.");
 
-    CpuState stream_cpu;
+    const auto stream_cpu_storage = std::make_unique<CpuState>();
+    auto& stream_cpu = *stream_cpu_storage;
     stream_cpu.memory = Memory(0u);
     static_cast<void>(map_dreamcast_main_ram(stream_cpu.memory));
     EventScheduler stream_scheduler;
@@ -1595,7 +1597,8 @@ int main() {
                 stream_controller.status().pending_guest_callbacks == 0u,
             "READ_ABORT laesst spaete DMA-Chunks, IRQs oder Gastcallbacks durch.");
 
-    CpuState toc_cpu;
+    const auto toc_cpu_storage = std::make_unique<CpuState>();
+    auto& toc_cpu = *toc_cpu_storage;
     toc_cpu.memory = Memory(0u);
     static_cast<void>(map_dreamcast_main_ram(toc_cpu.memory));
     EventScheduler toc_scheduler;
