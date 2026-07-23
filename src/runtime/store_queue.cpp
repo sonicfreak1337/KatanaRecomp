@@ -72,11 +72,24 @@ bool Sh4StoreQueues::prefetch(const std::uint32_t address) {
     if (address < window_start || address > window_end) {
         return false;
     }
+    if ((address & 3u) != 0u) {
+        throw MemoryAccessError(MemoryAccessErrorReason::Unmapped,
+                                MemoryAccessOperation::Write,
+                                address,
+                                MemoryAccessWidth::Word,
+                                "sh4-store-queue-prefetch");
+    }
+    const auto translated = address_translator_
+                                ? address_translator_(address)
+                                : StoreQueuePrefetchTranslation{
+                                      address, 0u, StoreQueueAddressingMode::Qacr};
     const auto selected = queue_index(address);
     StoreQueueTransfer transfer;
     transfer.queue = static_cast<std::uint8_t>(selected);
     transfer.source_address = address & ~31u;
-    transfer.target_address = transfer_target(address, selected);
+    transfer.target_address = translated.addressing == StoreQueueAddressingMode::Utlb
+                                  ? translated.target_address
+                                  : transfer_target(address, selected);
     const auto ta_input =
         (transfer.target_address >= 0x10000000u && transfer.target_address <= 0x107FFFFFu) ||
         (transfer.target_address >= 0x12000000u && transfer.target_address <= 0x127FFFFFu);
@@ -89,6 +102,10 @@ bool Sh4StoreQueues::prefetch(const std::uint32_t address) {
     }
     ++transfer_count_;
     return true;
+}
+
+void Sh4StoreQueues::set_prefetch_address_translator(StoreQueueAddressTranslator translator) {
+    address_translator_ = std::move(translator);
 }
 
 const std::array<std::uint8_t, 32u>& Sh4StoreQueues::queue(const std::size_t index) const {

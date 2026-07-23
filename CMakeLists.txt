@@ -1713,6 +1713,53 @@ add_test(
     COMMAND katana-generated-execution-tests
 )
 
+add_executable(katana-single-block-fallthrough-program-writer
+    tests/codegen/single_block_fallthrough_program_writer.cpp
+)
+target_link_libraries(katana-single-block-fallthrough-program-writer PRIVATE katana_core)
+katana_enable_warnings(katana-single-block-fallthrough-program-writer)
+
+set(
+    KATANA_GENERATED_SINGLE_BLOCK_FALLTHROUGH_CPP
+    ${KATANA_GENERATED_TEST_DIR}/generated_single_block_fallthrough_program.cpp
+)
+add_custom_command(
+    OUTPUT ${KATANA_GENERATED_SINGLE_BLOCK_FALLTHROUGH_CPP}
+    COMMAND ${CMAKE_COMMAND} -E make_directory ${KATANA_GENERATED_TEST_DIR}
+    COMMAND $<TARGET_FILE:katana-single-block-fallthrough-program-writer>
+            ${KATANA_GENERATED_SINGLE_BLOCK_FALLTHROUGH_CPP}
+    DEPENDS
+        katana-single-block-fallthrough-program-writer
+        tests/codegen/single_block_fallthrough_program_writer.cpp
+    COMMENT "Generiere externen Single-Block-Fallthrough-Test"
+    VERBATIM
+)
+set_source_files_properties(
+    ${KATANA_GENERATED_SINGLE_BLOCK_FALLTHROUGH_CPP}
+    PROPERTIES GENERATED TRUE HEADER_FILE_ONLY TRUE
+)
+set_source_files_properties(
+    tests/codegen/generated_single_block_fallthrough_tests.cpp
+    PROPERTIES OBJECT_DEPENDS ${KATANA_GENERATED_SINGLE_BLOCK_FALLTHROUGH_CPP}
+)
+add_executable(katana-generated-single-block-fallthrough-tests
+    tests/codegen/generated_single_block_fallthrough_tests.cpp
+    ${KATANA_GENERATED_SINGLE_BLOCK_FALLTHROUGH_CPP}
+)
+target_include_directories(katana-generated-single-block-fallthrough-tests
+    PRIVATE ${KATANA_GENERATED_TEST_DIR}
+)
+target_link_libraries(katana-generated-single-block-fallthrough-tests PRIVATE katana_runtime)
+katana_enable_warnings(katana-generated-single-block-fallthrough-tests)
+add_dependencies(
+    katana-generated-single-block-fallthrough-tests
+    katana-single-block-fallthrough-program-writer
+)
+add_test(
+    NAME katana-generated-single-block-fallthrough-tests
+    COMMAND katana-generated-single-block-fallthrough-tests
+)
+
 set(
     KATANA_GENERATED_MEMORY_CPP
     ${KATANA_GENERATED_TEST_DIR}/generated_memory_program.cpp

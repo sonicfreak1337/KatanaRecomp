@@ -73,12 +73,16 @@ class RuntimeAddressSpace {
     void bump_watchpoints() noexcept;
     [[nodiscard]] TranslationResult
     translate(std::uint32_t address, TranslationAccess access, bool privileged = true) const;
+    [[nodiscard]] StoreQueuePrefetchTranslation
+    translate_store_queue_prefetch(std::uint32_t address, bool privileged = true) const;
     [[nodiscard]] BlockStateGuard guard_for(std::uint32_t virtual_address,
                                             std::uint32_t fpscr) const;
     [[nodiscard]] bool block_fits_translation_page(std::uint32_t virtual_start,
                                                    std::uint32_t size) const noexcept;
 
   private:
+    [[nodiscard]] TranslationResult
+    translate_mapped(std::uint32_t address, TranslationAccess access, bool privileged) const;
     AddressTranslationMode mode_ = AddressTranslationMode::NoMmu;
     std::uint32_t mmucr_ = 0u;
     std::uint8_t asid_ = 0u;

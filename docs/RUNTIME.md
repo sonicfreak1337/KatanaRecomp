@@ -6,7 +6,7 @@ ungeloesten Kontrollflusspfaden mehr.
 
 ## ABI
 
-Die aktuelle Runtime-ABI ist Version `37`. Die typisierte Block-ABI ist seit
+Die aktuelle Runtime-ABI ist Version `38`. Die typisierte Block-ABI ist seit
 KR-4611 Version `2`; die Backend-Interface-ABI ist Version `3`.
 
 Generierter Code enthaelt eine Compile-Time-Pruefung gegen diese Version. Eine
@@ -51,6 +51,12 @@ tatsaechlich ausgefuehrten Block einer lokalen AOT-Kette. Terminatorquelle,
 Callsite, Call-/Tail-Jump-Art und statische, tabellenbasierte, Runtime-only-
 oder Fallback-Siteklasse bleiben dadurch bis zum folgenden Lookup und seiner
 Diagnostik erhalten.
+ABI-Version 38 bindet den typisierten G1-DMA-Fault mit Phase, Fehleradresse,
+committed Praefix und Residue an den GD-ROM-Requestzustand. Sie versioniert
+ausserdem die MMU-abhaengige Store-Queue-`PREF`-Uebersetzung zwischen QACR und
+UTLB. Der generierte native Code behandelt `PREF` unabhaengig vom
+adressabhaengigen IR-Speichereffekt als moegliche `MemoryAccessError`-Quelle,
+sodass Alignment-, SQMD- und TLB-Fehler ueber `enter_memory_exception` laufen.
 
 ## CMake
 
@@ -262,6 +268,39 @@ V-Felder; Datenzugriffe und alle vier Aperturen akzeptieren ausschliesslich
 ausgerichtete 32-Bit-Zugriffe. `CCR.ICI` loescht die IC-Validbits und bleibt
 selbstloeschend.
 
+## Store-Queue-PREF und MMU
+
+Der produktive Store-Queue-Pfad bindet `PREF` an den aktuellen
+`RuntimeAddressSpace`. Bei `MMUCR.AT=0` entsteht das Ziel wie bisher aus QACR;
+bei `AT=1` liefert die passende UTLB-Abbildung die physische Zieladresse. Die
+32 Queuebytes bleiben in beiden Modi unveraendert.
+
+Vor jeder Sinkwirkung werden SQ-Fenster, Longwordausrichtung,
+`MMUCR.SQMD`, Privileg, ASID/SV, Schreibberechtigung und Dirty-Bit geprueft.
+Fehlende oder mehrdeutige UTLB-Eintraege werden als typisierte Write-TLB-
+Exception mit korrektem `TEA`, `PTEH` und Miss- beziehungsweise Resetvektor
+weitergereicht. Kein Fehler darf TA-FIFO, RAM oder Transferzaehler teilweise
+veraendern. Derselbe Vertrag gilt auch dann, wenn ein synthetischer CPU-Zustand
+noch keinen expliziten `RuntimeAddressSpace` besitzt; aktive MMU faellt dort
+nicht still auf QACR zurueck.
+
+## G1-/GD-ROM-DMA-Faultvertrag
+
+G1-DMA prueft vor dem ersten Schedulerevent die kodierte Laenge, Ausrichtung,
+Richtung, den 32-Bit-Endadressueberlauf, das GDAPRO-Schutzfenster und die
+vollstaendige beschreibbare Gastspanne. Ein Fehlerobjekt enthaelt Start- oder
+Chunkphase, exakte Fehleradresse, bereits committed Bytezahl und Residue. Vor
+seiner Beobachtung werden das geplante Event, `active` und alle spaeten
+Fortsetzungen geloescht.
+
+Der gebundene GD-ROM-Controller uebersetzt diesen Zustand in seinen
+Taskfile- oder BIOS-Requestvertrag: CHECK/ABRT beziehungsweise stabiler
+Sensezustand, exakte uebertragene Bytezahl, kein ausstehender Gastcallback und
+keine falsche DMA-Completion. Nur echte Hardwarevertragsfehler duerfen das
+passende ASIC-Fehlerereignis ausloesen; interne Backend-, Scheduler- oder
+Observerfehler bleiben typisierte Host-/Runtimefehler und simulieren kein
+Hardwareereignis.
+
 ## Ausnahmen und Interrupts
 
 KR-2301 bis KR-2305 fuehren einen gemeinsamen CPU-Exception-Pfad ein. Relevante
@@ -409,7 +448,12 @@ Instruktionen. Jeder tatsaechlich betretene Block aktualisiert dabei die
 Fortsetzungsmetadaten. Verlaesst eine lokale Kette den Wrapper, verwendet der
 externe Dispatcher daher die Terminatorquelle und Siteklasse des letzten
 ausgefuehrten Blocks und nicht den urspruenglichen Wrapper-Einstieg. Der
-kumulative Stand verwendet Runtime-ABI 37, Backend-Interface-ABI 3,
+generische C++-Emitter setzt auch bei einem durch Funktionsdiscovery
+nachfolgerlosen Block in jedem Backendmodus `PC` auf die Folgeadresse der
+letzten Gastinstruktion. Die Produktinvariante prueft einen Fallthrough relativ
+zu dieser tatsaechlichen Terminatorquelle und nicht zum Eintritt des
+umgebenden Wrappers. Der kumulative Stand verwendet Runtime-ABI 38,
+Backend-Interface-ABI 3,
 PlatformServices-ABI 9 und Portvertrag 23.
 
 Statische Dispatchregistries werden nicht mehr in eine einzelne
@@ -430,3 +474,21 @@ Byte und 525.996 Zeilen. Der groesste Shard misst 393.454 Byte. Diese
 Aufteilung aendert weder Blockidentitaet noch Lookup-, Guard- oder
 Fortsetzungssemantik; sie ist ausschliesslich ein Buildzeit- und
 Uebersetzungseinheitenvertrag.
+
+Die aktuelle kompilierte Fallthroughregression deckt Einzelblock, lokales
+Chaining und normalen Backendpfad ab. Das fokussierte Kern-Gate besteht 9/9;
+nach der source-relativen Invariantenkorrektur besteht der Portexporttest
+zusaetzlich 1/1. Der konfigurierte Bestand umfasst 181 Tests, wurde fuer diesen
+Zwischenblock aber nicht als vollstaendiges Gate ausgefuehrt.
+
+Der optimierte ABI-38-Export der privaten PAL-Testbench dauerte mit zwoelf Jobs
+140,9 Sekunden, der inkrementelle Reexport 29,2 Sekunden. Die lokale
+Discinstallation war erfolgreich; das Portpaket enthaelt null Retailsektoren
+und die Originalquelle blieb erhalten. Der normale Produktlauf erreicht
+345.609.251 Gastzyklen und den echten SH-4-Interruptpfad `VBR + 0x600`, meldet
+aber weiterhin null Frames, TA-Transfers und Gast-PVR-Frames. Eine getrennte
+begrenzte Diagnose beweist ueber Gastwriteprovenienz ein 56-Byte-Copy-plus-
+Patch-Codetemplate und fuehrt daraus 19 bytebewiesene Runtimeinstruktionen aus,
+bevor der naechste noch nicht statisch gebundene AOT-Einstieg kontrolliert
+stoppt. Dieser Diagnosepfad fuegt weder Retailbytes noch eine titelbezogene
+Adresse zum Produktvertrag hinzu; `KR-4848` bleibt offen.

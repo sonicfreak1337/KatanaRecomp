@@ -33,6 +33,16 @@ geaenderte Bytes invalidieren diese genau einmal. MMU-PIO bindet den Load an die
 tatsaechlich geschriebene physische Range und lehnt nichtlineare TLB-Spannen vor
 dem ersten Write ab.
 
+G1-DMA prueft den geschuetzten und beschreibbaren Zielbereich atomar. Ein
+Fehler meldet Phase, Adresse, uebertragenes Praefix und Residue, stoppt alle
+Folgeereignisse und wird vom GD-ROM-Vertrag als stabiler CHECK-/Sense- und
+Requestfehler uebernommen. Store-Queue-`PREF` verwendet bei deaktivierter MMU
+QACR und bei aktiver MMU die UTLB; Ausrichtung, `SQMD`, ASID/SV,
+Schreibberechtigung, Dirty-Bit, Miss und Multiple-Hit werden vor jeder
+TA-/Speicherwirkung geprueft. Der native Emitter fuehrt dabei auch
+adressabhaengige `PREF`-Fehler ueber den SH-4-Exceptionpfad und laesst sie nicht
+als Hostexception aus der Port-EXE entkommen.
+
 Der normale Produktport emittiert oder linkt keinen SH-4-Interpreter. Ein
 nicht vorab gebundenes AOT-Ziel endet stattdessen als typisierter Fehler. Nur
 ein expliziter `diagnostic_partial`-Export enthaelt den begrenzten
@@ -47,31 +57,28 @@ Port noch fehlten. Diese Ziele werden als native Basic-Block-Leader
 vorbereitet; der live geladene Dispatch bleibt `RuntimeOnly` und erzeugt keine
 feste CFG-Kante. Snapshotcache und P2-Aliasaufloesung sind gegen imagefremde
 Beweise abgesichert. Lokale AOT-Blockketten tragen die exakte tatsaechliche
-Terminatorquelle und Siteklasse bis zum externen Dispatch weiter. Runtime-ABI
-37, Backend-Interface-ABI 3 und Portprojektvertrag 23 versionieren diesen
-Vertrag.
+Terminatorquelle und Siteklasse bis zum externen Dispatch weiter. Der aktuelle
+kumulative Stand verwendet Runtime-ABI 38, Backend-Interface-ABI 3 und
+Portprojektvertrag 23.
 
-Der frische optimierte PAL-Port wurde mit zwoelf Jobs in 140,5 Sekunden
-exportiert. Er umfasst 1.856 Funktionen, 37 Codepartitionen und 43
-Dispatchshards, aber weiterhin null Retailsektoren im Portpaket. Die
-unveraenderte Original-GDI wurde lokal mit drei Tracks und 521.461 Sektoren
-installiert; die Quelle blieb erhalten. Der veraltete `gdrom-mode-fix`-Port
-wurde nach dem erfolgreichen Ersatz entfernt. Ein stabiler 30-Sekunden-Lauf
-erreichte 312.939.023 Gastzyklen und 1.000.000 Rootdispatches; der alte Fehler
-bei `0x8C654F5C` ist beseitigt.
+Der frische optimierte ABI-38-PAL-Port wurde mit zwoelf Jobs in 140,9 Sekunden
+exportiert; der inkrementelle Reexport dauerte 29,2 Sekunden. Er umfasst 1.856
+Funktionen und 37 Codepartitionen, aber weiterhin null Retailsektoren im
+Portpaket. Die lokale Discinstallation war erfolgreich, und die unveraenderte
+Original-GDI blieb erhalten.
 
-Im kontrollierten 100-Millionen-Zyklen-Snapshot laeuft `IP.BIN` nativ als AOT:
-48.471 Runtime-only-Treffer enden ohne Fehler, Fallback oder Materialisierung;
-GD-ROM, TA und PVR sind an dieser fruehen Grenze noch inaktiv. Bei 320 Millionen
-Zyklen erreicht der Gast Spielecode, zwei GD-ROM-Kommandos und einen spaeten
-PVR-Registerwrite. Alle 761.011 Dispatchereignisse bleiben fehlerfrei. Der
-Haupthotspot `0x8C6658D0 -> 0x8C65247E` mit 696.053 Aufrufen ist ein endlicher
-4-Byte-Kopier-/Initialisierungsloop und kein fehlender Zielblock. TA-Transfers,
-Renderrequests und echte Gastframes bleiben null; `KR-4848` bleibt wegen der
-strukturierten Disc-Ladetransaktionen und latenten Module offen. Der aktuelle
-P0 bleibt damit der erste scanoutgebundene, vom Gast erzeugte Frame. Moderner
+Der aktuelle Produktlauf erreicht 345.609.251 Gastzyklen und einen echten
+Runtimehandler am architektonischen SH-4-Interruptvektor `VBR + 0x600`.
+Frame-, TA- und Gast-PVR-Zaehler bleiben null. Eine getrennte, begrenzte
+Diagnose weist ein 56-Byte-Copy-plus-Patch-Codetemplate ueber die beobachteten
+Gastwrites nach und fuehrt daraus 19 bytebewiesene Runtimeinstruktionen aus.
+Der folgende noch nicht statisch gebundene AOT-Einstieg stoppt kontrolliert;
+es wird weder interpretiertes SH-4 in den Produktpfad aufgenommen noch eine
+private Adresse als Spielsonderfall festgeschrieben. `KR-4848` bleibt fuer die
+allgemeine native Bindung solchen Runtimecodes offen. Der aktuelle P0 bleibt
+damit der erste scanoutgebundene, vom Gast erzeugte Frame. Moderner
 Hostcontrollersupport fuer Xbox-, DualSense- und vergleichbare Geraete gehoert
-zu v0.48, beginnt aber strikt erst nach diesem Frame.
+zu v0.49 und beginnt auf der freigegebenen Framebasis.
 
 Der aktuelle Pfad verarbeitet Raw-, ELF32-SH-, Projektmanifest- und validierte
 GDI-Eingaben bis zu partitioniertem C++, einer zentralen Dreamcast-Runtime und
@@ -87,7 +94,15 @@ Eingabe
   -> natives Hostprojekt
 ```
 
-Der aktuelle kumulative Debug-Vertrag umfasst **180 automatische Tests**.
+Der konfigurierte Testbestand umfasst derzeit 181 Tests; ein vollstaendiges
+181er Gate wurde in diesem Zwischenblock nicht ausgefuehrt. Das fokussierte
+Kern-Gate besteht 9/9, nach der source-relativen Fallthroughkorrektur der
+Portexporttest zusaetzlich 1/1. Der generische C++-Fix setzt bei
+nachfolgerlosen Bloecken in allen Backendmodi den PC auf die echte
+Folgeinstruktion; eine kompilierte Regression deckt Einzelblock, lokales
+Chaining und normalen Backendpfad ab. Die Produktinvariante vergleicht mit der
+tatsaechlichen Terminatorquelle statt dem Wrapper-Einstieg.
+
 Phase 10 ist
 fuer den freigegebenen Windows-Workflow abgeschlossen: eine `.gdi` waehlen,
 einen Ausgabeordner waehlen und den Analyse-/Buildzustand sichtbar verfolgen.

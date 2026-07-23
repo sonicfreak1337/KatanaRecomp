@@ -186,13 +186,10 @@ werden nur titelunabhaengige SH-4-, BIOS-, GD-ROM-, DMA-, TA- und PVR-Vertraege.
 - [ ] `KR-4853` - v0.48 Boot-Gate-Vorbereitung
 - [ ] `KR-4854` - v0.48 interne Freigabe
 
-### Post-Frame-Controller-Tasks
-
-- [ ] `KR-4814` - Nativer Controller und gastzeitgebundene Maple-Eingabe
-- [ ] `KR-4914` - Private interaktive Runtime-Sitzung mit Controller
-
-Beide Controlleraufgaben gehoeren zu v0.48, beginnen aber erst nach dem
-nachgewiesenen echten Gastframe aus `KR-4850`; der Frame bleibt P0.
+Die Controlleraufgaben `KR-4814` und `KR-4914` beginnen weiterhin erst nach
+dem nachgewiesenen echten Gastframe aus `KR-4850`, gehoeren aber zur
+anschliessenden v0.49-Integration. Der Frame bleibt das alleinige P0-Ziel von
+v0.48.
 
 Aktueller Kernteilstand: Byteidentische BIOS-/GD-Reloads erhalten vorhandene
 native AOT-Bloecke, waehrend geaenderte Bytes exakt einmal invalidieren. Der
@@ -225,7 +222,7 @@ Dispatchereignisse bleiben ohne Fehler. Der neue Haupthotspot
 `0x8C6658D0 -> 0x8C65247E` ist mit 696.053 Aufrufen ein endlicher
 4-Byte-Kopier-/Initialisierungsloop und kein fehlender Zielblock. TA-Eingang,
 Rendergeneration und echter Gastframe bleiben unbelegt; `KR-4848`, `KR-4849`
-und `KR-4850` bleiben offen. Runtime-ABI 37, Backend-Interface-ABI 3 und
+und `KR-4850` bleiben offen. Runtime-ABI 38, Backend-Interface-ABI 3 und
 Portprojektvertrag 23 versionieren den aktuellen Vertrag.
 
 Der Export-Hotpath baut globale CFG-, Kanten- und Writer-Slice-Indizes einmalig
@@ -268,9 +265,7 @@ KR-4841 -> KR-4842 -> KR-4911 -> KR-4912
 KR-4843 und KR-4912 -> KR-4848 -> KR-4913
 KR-4847 und KR-4913 -> KR-4849 -> KR-4915 -> KR-4850
 KR-4850 -> KR-4851
-KR-4850 -> KR-4814 -> KR-4914
-KR-4851 und KR-4914
-  -> KR-4852
+KR-4851 -> KR-4852
   -> KR-4853
   -> Nutzerreview
   -> KR-4854
@@ -304,14 +299,23 @@ gebuendelt. Jeder Prozess besitzt ein hartes Limit von 15 Minuten.
 - vor `KR-4854` wird zwingend fuer Nutzerreview gestoppt; v0.48 wird nur intern
   freigegeben und nicht getaggt. Tags beginnen erst mit der Alpha.
 
-## v0.49.0 - Port-, Harness-, GUI-Integration und Alpha-Candidate
+## v0.49.0 - Controller-, Port-, Harness-, GUI-Integration und Alpha-Candidate
 
 ### Ziel
 
-Nach dem nativen Boot-, Frame- und Controller-Gate werden Runtime-SDK,
-Portworkflow, Harness, GUI, CI und Paketierung zu einem allgemeinen
+Nach dem nativen Boot- und Frame-Gate werden Controllerunterstuetzung,
+Runtime-SDK, Portworkflow, Harness, GUI, CI und Paketierung zu einem allgemeinen
 Alpha-Candidate integriert. Die v0.48-Basis bleibt dabei unveraendert und Sonic
 Adventure liefert keine titelspezifischen Produktvertraege.
+
+### Post-Frame-Controller-Tasks
+
+- [ ] `KR-4814` - Nativer Controller und gastzeitgebundene Maple-Eingabe
+- [ ] `KR-4914` - Private interaktive Runtime-Sitzung mit Controller
+
+Beide Controlleraufgaben gehoeren zu v0.49 und beginnen erst auf der durch
+`KR-4854` freigegebenen Framebasis. Damit bleibt Controllerarbeit klar hinter
+dem P0-Nachweis aus `KR-4850`.
 
 ### Migrierte Integrationsaufgaben
 
@@ -330,7 +334,7 @@ Adventure liefert keine titelspezifischen Produktvertraege.
 ### Urspruengliche, wiederhergestellte Release-Candidate-Tasks
 
 - [ ] `KR-4901` - Alpha-CI-Konfiguration fuer Windows und Linux
-- [ ] `KR-4902` - reproduzierbare Pakete sowie Daten- und Lizenzaudit
+- [ ] `KR-4902` - Reproduzierbare Pakete sowie Daten- und Lizenzaudit
 - [ ] `KR-4903` - Alpha-Checkpoint- und Gate-Automatisierung einfrieren
 - [ ] `KR-4904` - v0.49 Gate-Vorbereitung: Tests und Build
 - [ ] `KR-4905` - v0.49 interne Kandidaten-Freigabe
@@ -339,11 +343,15 @@ Adventure liefert keine titelspezifischen Produktvertraege.
 
 ```text
 KR-4854
+  -> KR-4814
+  -> KR-4914
+KR-4854
   -> KR-4801, KR-4811, KR-4821 und KR-4824
   -> KR-4802
   -> KR-4803
   -> KR-4812 und KR-4813
   -> KR-4822 und KR-4823
+KR-4812, KR-4823 und KR-4914
   -> KR-4916
   -> KR-4901, KR-4902 und KR-4903
   -> KR-4904

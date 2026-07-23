@@ -4,6 +4,47 @@
 
 ### Geaendert
 
+- G1-DMA validiert jetzt den geschuetzten, beschreibbaren Zielbereich vor dem
+  Start und meldet Fehler mit Phase, exakter Fehleradresse, bereits
+  uebertragenem Praefix und Residue. Der Controller wird vor der
+  Fehlerbenachrichtigung vollstaendig angehalten; interne Backend- oder
+  Schedulerfehler erzeugen keine erfundenen ASIC-Hardwareereignisse. Der
+  GD-ROM-Vertrag uebernimmt dieselbe Evidenz in stabilen CHECK-/Sense- und
+  BIOS-Requestzustand, verwirft ausstehende Callbacks und erzeugt keine spaete
+  DMA-Completion.
+- Store-Queue-`PREF` verwendet bei `MMUCR.AT=0` weiterhin QACR, bei `AT=1`
+  dagegen die aktuelle UTLB-Abbildung. Ausrichtung, `MMUCR.SQMD`, ASID/SV,
+  Schreibschutz, Dirty-Bit, TLB-Miss und Multiple-Hit werden vor jeder
+  Sinkwirkung geprueft; ein Fehler veraendert weder TA-FIFO noch
+  Transferzaehler. Der native C++-Emitter umschliesst `PREF` trotz seines
+  adressabhaengig leeren IR-Speichereffekts mit derselben
+  `MemoryAccessError`-Grenze: SQMD-, Alignment- und TLB-Fehler nehmen damit den
+  SH-4-Exceptionpfad statt als Hostexception die EXE zu beenden. Runtime-ABI
+  38 versioniert den erweiterten G1-Fault- und SQ/MMU-Vertrag.
+- Ein nach Funktionsdiscovery nachfolgerloser nativer C++-Block schreibt nun in
+  jedem Backendmodus den architektonischen Fallthrough-PC der letzten
+  Gastinstruktion, bevor er zum Dispatcher zurueckkehrt. Eine kompilierte
+  Regression deckt Einzelblock-, lokal verketteten und normalen Backendpfad
+  ab. Die Produktinvariante prueft den erwarteten Fallthrough relativ zur
+  tatsaechlichen Terminatorquelle (`source + 2`) statt relativ zum
+  Wrapper-Einstieg; gueltige lokale Blockketten koennen dadurch keinen
+  Fehlalarm mehr ausloesen.
+- Das fokussierte Kern-Gate besteht 9/9 Tests; nach der source-relativen
+  Invariantenkorrektur besteht der Portexporttest zusaetzlich 1/1. Das
+  konfigurierte 181-Test-Gesamtgate wurde in diesem Zwischenblock nicht
+  ausgefuehrt und wird nicht als bestanden behauptet.
+- Der optimierte ABI-38-Export der privaten PAL-Testbench dauerte mit zwoelf
+  Jobs 140,9 Sekunden; der inkrementelle Reexport desselben Ports 29,2
+  Sekunden. Die lokale Discinstallation war erfolgreich, die Originalquelle
+  blieb erhalten und das Portpaket enthaelt weiterhin null Retailsektoren.
+  Der Produktlauf erreicht 345.609.251 Gastzyklen und einen echten, zur
+  SH-4-Interruptgrenze `VBR + 0x600` gehoerenden Runtimehandler; Frame-, TA-
+  und Gast-PVR-Zaehler bleiben null. Eine getrennte begrenzte Diagnose weist
+  ein 56-Byte-Copy-plus-Patch-Codetemplate bytegenau nach und fuehrt daraus 19
+  bewiesene Runtimeinstruktionen aus, bevor der naechste noch nicht statisch
+  gebundene AOT-Einstieg kontrolliert stoppt. Es werden weder Retailbytes noch
+  eine titelbezogene feste Adresse in den Produktvertrag uebernommen;
+  `KR-4848` bleibt offen.
 - Begrenzte `MOV.W`-/`BRAF`-Relative16-Tabellen aus einem gueltigen
   `EntryPointStraightLineQuiescent`-Anfangssnapshot liefern nun auch bei
   beschreibbarem Tabellenspeicher endliche native AOT-Kandidaten. Der statische
@@ -39,9 +80,9 @@
   `KATANA_HOST_BUILD_MAKE_PROGRAM` ohne Visual-Studio-Generator-Kollision in
   ein getrenntes `build-ninja`-Verzeichnis wechseln. Der primaere 12-Kern-
   Entwicklungsrechner baut damit bis zu zwoelf Hostjobs parallel. Der frische
-  optimierte PAL-Export erzeugt 1.856 Funktionen, 37 Codepartitionen und 43
-  Dispatchshards in 140,5 Sekunden.
-- Der neue PAL-Port enthaelt bei Portprojektvertrag 23, Runtime-ABI 37 und
+  vorangehende ABI-37-PAL-Export erzeugte 1.856 Funktionen, 37
+  Codepartitionen und 43 Dispatchshards in 140,5 Sekunden.
+- Der vorangehende PAL-Port enthaelt bei Portprojektvertrag 23, Runtime-ABI 37 und
   Backend-Interface-ABI 3 weiterhin null Retailsektoren. Die unveraenderte
   Original-GDI wurde lokal mit drei Tracks und 521.461 Sektoren installiert;
   die Quelle blieb erhalten und der veraltete `gdrom-mode-fix`-Port wurde erst
@@ -208,9 +249,9 @@
   Provenienz, Bootdiagnostik, P2-Bootstrap, Gastzeit, BIOS/GD-ROM, Runtimecode,
   TA/PVR, echten Scanoutframe, Hotpath, konsolidierte Validierung und das
   nutzerfreigegebene Gate ab. Der moderne, geraeteagnostische
-  Controllervertrag und die private interaktive Sitzung gehoeren nun zu v0.48,
-  beginnen aber weiterhin strikt erst nach dem echten Gastframe. Die uebrige
-  Port-, Harness- und GUI-Integration liegt in v0.49.
+  Controllervertrag und die private interaktive Sitzung gehoeren nun gemeinsam
+  mit der Port-, Harness- und GUI-Integration zu v0.49. Sie beginnen weiterhin
+  strikt erst auf der in v0.48 freigegebenen Framebasis.
   `KR-4804`/`KR-4805` sind durch `KR-4853`/`KR-4854` ersetzt.
   v0.48 wird ohne Tag intern freigegeben; Tags beginnen erst mit der Alpha.
 - HLE-GDI-Ports rekompilieren nun auch den 16 Sektoren grossen, von der Disc

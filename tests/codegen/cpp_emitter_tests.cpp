@@ -367,7 +367,7 @@ int main() {
             katana::ir::lowering_operation_for_instruction(
                 katana::sh4::InstructionKind::MovcaLong) == katana::ir::Operation::MovcaLong,
         "LDTLB/OCBI/OCBP/OCBWB/MOVCA.L werden nicht in eigene IR-Operationen abgesenkt.");
-    constexpr std::array<std::uint8_t, 14> cache_bytes = {0x38u,
+    constexpr std::array<std::uint8_t, 16> cache_bytes = {0x38u,
                                                           0x00u,
                                                           0x93u,
                                                           0x07u,
@@ -377,6 +377,8 @@ int main() {
                                                           0x0Cu,
                                                           0xC3u,
                                                           0x09u,
+                                                          0x83u,
+                                                          0x03u,
                                                           0x0Bu,
                                                           0x00u,
                                                           0x09u,
@@ -392,8 +394,12 @@ int main() {
             cache_source.find("OperandCacheOperation::Purge, cpu.r[5]") != std::string::npos &&
             cache_source.find("OperandCacheOperation::WriteBack, cpu.r[12]") != std::string::npos &&
             cache_source.find("katana::runtime::guest_write_u32(cpu, cpu.r[9], cpu.r[0])") !=
+                std::string::npos &&
+            cache_source.find("services->prefetch(cpu, cpu.r[3])") != std::string::npos &&
+            cache_source.find("enter_memory_exception(cpu, error, 0x0000400Au);") !=
                 std::string::npos,
-        "Der C++-Emitter laesst LDTLB/cache instructions aus oder verwechselt Register.");
+        "Der C++-Emitter laesst LDTLB/cache instructions aus, verwechselt Register oder "
+        "faengt PREF-MMU-Fehler nicht am SH-4-Exceptionpfad.");
 
     std::cout << "Alle C++-Codegenerator-Tests erfolgreich.\n";
 

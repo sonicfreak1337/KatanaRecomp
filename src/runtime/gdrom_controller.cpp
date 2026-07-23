@@ -27,6 +27,8 @@ constexpr std::uint32_t bios_command_no_operation = 29u;
 constexpr std::uint32_t bios_command_request_mode = 30u;
 constexpr std::uint32_t bios_command_set_mode = 31u;
 constexpr std::uint32_t bios_command_pio_stream = 37u;
+constexpr std::uint32_t bios_command_dma_stream_ex = 38u;
+constexpr std::uint32_t bios_command_pio_stream_ex = 39u;
 
 std::uint32_t be16(const std::vector<std::uint8_t>& bytes, const std::size_t offset) {
     return (static_cast<std::uint32_t>(bytes.at(offset)) << 8u) | bytes.at(offset + 1u);
@@ -860,6 +862,18 @@ void DreamcastGdRomController::execute_bios_request(CpuState& cpu, BiosRequest& 
         submit_bios_stream(request);
         return;
     }
+    if (request.command == bios_command_dma_stream_ex ||
+        request.command == bios_command_pio_stream_ex) {
+        // The public ABI names these extended streaming commands, but their parameter contract is
+        // not independently established. Never guess by aliasing them to the non-EX commands: a
+        // deterministic Illegal Request leaves all streaming state untouched.
+        request.response.status = GdRomStatus::InvalidCommand;
+        request.status = {5u, static_cast<std::uint32_t>(GdRomStatus::InvalidCommand), 0u, 0u};
+        request.state = GdRomBiosRequestState::Error;
+        latch_sense(5u, 0x20u, 0u);
+        remember_bios_request(request);
+        return;
+    }
     if (request.command == 18u || request.command == 19u) {
         if (request.parameters[0] > 1u || request.parameters[1] == 0u) {
             request.response.status = GdRomStatus::InvalidField;
@@ -1422,7 +1436,10 @@ void DreamcastGdRomController::dma_to_memory(const std::uint32_t address,
     if (direction != 1u)
         throw std::runtime_error("GD-ROM-G1-DMA unterstuetzt nur Laufwerk-zu-Systemspeicher.");
     if (auto* request = active_stream_transfer(GdRomBiosTransferKind::Dma)) {
-        if (length == 0u || address != request->transfer_destination + request->transfer_transferred)
+        if (length == 0u ||
+            canonical_physical_address(address) !=
+                canonical_physical_address(request->transfer_destination +
+                                           request->transfer_transferred))
             throw std::out_of_range("GD-ROM-G1-DMA passt nicht zum BIOS-Streamingtransfer.");
         try {
             const auto bytes = preview_stream_bytes(*request, length);
@@ -1503,6 +1520,64 @@ const GdRomBiosRequestStatus& DreamcastGdRomController::last_bios_request() cons
 
 void DreamcastGdRomController::bind_g1_bus(DreamcastG1BusController* const g1_bus) noexcept {
     g1_bus_ = g1_bus;
+}
+
+void DreamcastGdRomController::handle_g1_dma_fault(const G1DmaFault& fault) noexcept {
+    try {
+        const auto illegal_address = fault.reason == HollyDmaFaultReason::IllegalAddress;
+        const auto invalid_contract = fault.reason == HollyDmaFaultReason::InvalidLength ||
+                                      fault.reason == HollyDmaFaultReason::InvalidDirection;
+        const auto sense_key = static_cast<std::uint8_t>(
+            illegal_address || invalid_contract ? 5u : 0x0Bu);
+        const auto asc = static_cast<std::uint8_t>(illegal_address ? 0x21u
+                                                   : invalid_contract ? 0x24u
+                                                                      : 0u);
+
+        if (taskfile_phase_ == TaskfilePhase::DmaIn) {
+            fail_taskfile_command(sense_key, asc, 0u, true);
+            return;
+        }
+
+        auto found = std::find_if(bios_requests_.begin(), bios_requests_.end(), [](auto& entry) {
+            const auto& request = entry.second;
+            return request.transfer_kind == GdRomBiosTransferKind::Dma &&
+                   (request.transfer_active || request.state == GdRomBiosRequestState::Error);
+        });
+        if (found == bios_requests_.end()) return;
+
+        auto& request = found->second;
+        const auto transfer_base =
+            request.stream_consumed_bytes >= request.transfer_transferred
+                ? request.stream_consumed_bytes - request.transfer_transferred
+                : 0u;
+        const auto exact_prefix = std::min(fault.transferred_bytes, request.transfer_size);
+        request.transfer_transferred = exact_prefix;
+        request.stream_consumed_bytes = std::min<std::uint64_t>(
+            request.stream_total_bytes, transfer_base + exact_prefix);
+        request.status[2] = static_cast<std::uint32_t>(request.stream_consumed_bytes);
+        request.status[3] = 0u;
+        request.response.status = illegal_address || invalid_contract ? GdRomStatus::OutOfRange
+                                                                      : GdRomStatus::Aborted;
+        request.status[0] = sense_key;
+        request.status[1] = static_cast<std::uint32_t>(request.response.status);
+        request.state = GdRomBiosRequestState::Error;
+        request.transfer_active = false;
+        pending_guest_callbacks_.erase(
+            std::remove_if(pending_guest_callbacks_.begin(),
+                           pending_guest_callbacks_.end(),
+                           [&](const auto& callback) { return callback.request_id == request.id; }),
+            pending_guest_callbacks_.end());
+        if (dma_completion_request_ == request.id) {
+            dma_completion_pending_ = false;
+            dma_completion_request_ = 0u;
+        }
+        latch_sense(sense_key, asc, 0u, true);
+        interrupt_reason_ = 0u;
+        remember_bios_request(request);
+    } catch (...) {
+        // The DMA engine has already cancelled and quiesced its event before notification. A
+        // diagnostic or host callback must never unwind back into the scheduler.
+    }
 }
 
 std::optional<GdRomGuestCallback> DreamcastGdRomController::take_pending_guest_callback() {

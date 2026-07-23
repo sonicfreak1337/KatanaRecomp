@@ -1677,7 +1677,15 @@ void emit_guarded_simple_instruction(std::ostringstream& output,
     emit_fpu_disabled_guard(output, instruction, indent);
     emit_fpu_mode_guard(output, instruction, indent);
 
-    if (instruction.memory_effects.access == katana::ir::MemoryAccessKind::None) {
+    // PREF is address-dependent: outside the store-queue window it is only a cache hint, while
+    // inside that window it performs a translated 32-byte transfer and can raise the same MMU,
+    // privilege and alignment faults as an ordinary guest memory access. Its conservative IR
+    // memory effect intentionally stays empty, so keep the architectural exception boundary
+    // explicit here instead of misclassifying every PREF as an unconditional store.
+    const auto may_raise_memory_error =
+        instruction.memory_effects.access != katana::ir::MemoryAccessKind::None ||
+        instruction.operation == katana::ir::Operation::Prefetch;
+    if (!may_raise_memory_error) {
         emit_simple_instruction(output, instruction, indent);
         return;
     }
@@ -2392,6 +2400,15 @@ void emit_block(std::ostringstream& output,
                               guarded_local_block_chaining,
                               current_blocks.contains(block.successors.front()));
     } else if (block.successors.empty()) {
+        // Function discovery deliberately removes successors that cross a function boundary.
+        // Every backend mode still has to expose the architectural fallthrough PC when it
+        // returns across that boundary. Otherwise either an external dispatcher redispatches
+        // the retired block or a direct backend caller observes a stale PC.
+        if (!block.instructions.empty()) {
+            emit_indent(output, 4);
+            output << "cpu.pc = " << hex32(fallthrough_address(block.instructions.back()))
+                   << ";\n";
+        }
         emit_indent(output, 4);
         output << "return;\n";
     } else {

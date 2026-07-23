@@ -220,6 +220,28 @@ std::uint32_t translate_guest_address(CpuState& cpu,
     }
 }
 
+StoreQueuePrefetchTranslation translate_store_queue_prefetch(CpuState& cpu,
+                                                              const std::uint32_t address) {
+    try {
+        if (!cpu.address_space) {
+            RuntimeAddressSpace fallback_address_space;
+            fallback_address_space.write_mmucr(cpu.mmucr);
+            fallback_address_space.set_mode((cpu.mmucr & 1u) != 0u
+                                                ? AddressTranslationMode::Mmu
+                                                : AddressTranslationMode::NoMmu);
+            return fallback_address_space.translate_store_queue_prefetch(
+                address, cpu.privileged_mode());
+        }
+        return cpu.address_space->translate_store_queue_prefetch(address, cpu.privileged_mode());
+    } catch (const TranslationError& error) {
+        throw MemoryAccessError(translation_reason(error.cause()),
+                                MemoryAccessOperation::Write,
+                                address,
+                                MemoryAccessWidth::Word,
+                                "sh4-store-queue-prefetch");
+    }
+}
+
 std::uint8_t guest_read_u8(CpuState& cpu, const std::uint32_t address) {
     return cpu.memory.read_u8(translate_guest_address(
         cpu, address, MemoryAccessOperation::Read, MemoryAccessWidth::Byte));

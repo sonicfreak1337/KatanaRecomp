@@ -47,20 +47,22 @@ KR-4841 -> KR-4842 -> KR-4911 -> KR-4912
 KR-4843 und KR-4912 -> KR-4848 -> KR-4913
 KR-4847 und KR-4913 -> KR-4849 -> KR-4915 -> KR-4850
 KR-4850 -> KR-4851
-KR-4850 -> KR-4814 -> KR-4914
-KR-4851 und KR-4914
-  -> KR-4852
+KR-4851 -> KR-4852
   -> KR-4853
   -> Nutzerreview
   -> KR-4854
 
-v0.49 Port-, Harness-, GUI-Integration und Alpha-Candidate:
+v0.49 Controller-, Port-, Harness-, GUI-Integration und Alpha-Candidate:
+KR-4854
+  -> KR-4814
+  -> KR-4914
 KR-4854
   -> KR-4801, KR-4811, KR-4821 und KR-4824
   -> KR-4802
   -> KR-4803
   -> KR-4812 und KR-4813
   -> KR-4822 und KR-4823
+KR-4812, KR-4823 und KR-4914
   -> KR-4916
   -> KR-4901, KR-4902 und KR-4903
   -> KR-4904
@@ -73,9 +75,9 @@ Korrektheit blockiert Performance. Waehrend KR-4841 bis KR-4851 werden nur
 betroffene Targets und kleine Regressionen ausgefuehrt; die konsolidierte Suite
 und der private Retaillauf folgen einmal in KR-4852. Jeder Prozess besitzt ein
 hartes Limit von 15 Minuten. Der moderne Hostcontrollervertrag und die private
-interaktive Sitzung (`KR-4814`/`KR-4914`) gehoeren zur v0.48-Integration,
-beginnen aber strikt erst nach `KR-4850`; der erste echte Gastframe bleibt P0.
-GUI-, Harness- und Portintegration folgt in v0.49.
+interaktive Sitzung (`KR-4814`/`KR-4914`) gehoeren gemeinsam mit GUI, Harness
+und Portintegration zu v0.49. Sie beginnen auf der freigegebenen Framebasis
+strikt nach `KR-4850`; der erste echte Gastframe bleibt das P0-Ziel von v0.48.
 
 ---
 
@@ -980,57 +982,6 @@ PVR-Registerwrite, aber weiterhin keinen TA-Transfer, Renderrequest oder echten
 Gastframe. Der fuehrende Dispatchhotspot ist ein endlicher 4-Byte-Kopier-/
 Initialisierungsloop und kein neuer fehlender Zielblock.
 
-### [ ] KR-4814 - Nativer Controller und gastzeitgebundene Maple-Eingabe
-
-Abhaengigkeiten: KR-4850, KR-4616
-Meilenstein: v0.48, Implementierung erst nach dem ersten echten Gastframe
-Prioritaet: P1 nach KR-4850 (Frame bleibt P0)
-
-Umfang:
-
-- Gast in begrenzten Quanta/Safepoints statt einmal synchron bis zum Ende laufen
-- Fenster-, Controller-, Scheduler-, Video- und Audioereignisse verschraenken
-- Windows-Gamepadbackend ueber stabile Hostabstraktion bereitstellen
-- aktuelle Xbox-Controller, DualSense/DualShock und uebliche Standardgamepads
-  ueber denselben geraeteagnostischen Vertrag abdecken
-- Keyboardfallback erhalten
-- Buttons, Trigger und Analogachsen mit Deadzones normalisieren
-- Hotplug, Fokus und Controller-1-Auswahl behandeln
-- Hostzustandsaenderungen mit Gastzyklus stempeln
-- Maple `GetCondition` liest den letzten zum Transaktionszyklus sichtbaren Zustand
-- Replayinput verwendet dieselbe Ereignisschnittstelle
-
-Akzeptanz:
-
-- frei lizenziertes Homebrew reagiert auf Buttons, Trigger und Analogachsen
-- Xbox-, DualSense-/DualShock- und Standardcontrollerprofile bestehen denselben
-  normalisierten Eingabevertrag ohne titelbezogene Sonderbehandlung
-- aktiv-niedrige Maple-Payloads sind bitgenau
-- nur geaenderte Hostzustaende werden eingespeist
-- Hotplug und Fokus erzeugen keine haengenden Tasten
-- deterministisches Replay ist bytegleich
-- keine Eingaberace zwischen Hostpoll und Maple-Read
-
-### [ ] KR-4914 - Private interaktive Runtime-Sitzung mit Controller
-
-Abhaengigkeiten: KR-4850, KR-4814
-Meilenstein: v0.48
-Prioritaet: P1 nach KR-4850 (Frame bleibt P0)
-
-Umfang:
-
-- separaten `interactive`-Modus mit Fenster, Controller und kontrolliertem Ende
-- Hosteventpump und Gastquanta dauerhaft verschraenken
-- Pause, Fokus, Controllerhotplug und sauberen Shutdown behandeln
-- interaktive Rohdiagnosen ausschliesslich privat speichern
-- keine Screenshots, Spielbytes oder Speicherabbilder standardmaessig erfassen
-
-Akzeptanz:
-
-- Nutzer kann einen erreichten Gastpfad mit Controller untersuchen
-- interaktive Sitzung wird in keinem Gate als deterministische Evidenz verwendet
-- Crash, Close und Timeout hinterlassen keine Kindprozesse oder Schedulerreste
-
 ### [ ] KR-4851 - Boot- und Frame-Hotpath
 
 Abhaengigkeiten: KR-4844, KR-4848, KR-4850
@@ -1047,7 +998,8 @@ Frame-Gate; der Task bleibt wegen seiner Abhaengigkeit von `KR-4850` offen.
 
 ### [ ] KR-4852 - Konsolidierte v0.48-Validierung
 
-Abhaengigkeiten: KR-4814, KR-4841 bis KR-4851 und KR-4911 bis KR-4915
+Abhaengigkeiten: KR-4831, KR-4841 bis KR-4851, KR-4911, KR-4912, KR-4913
+und KR-4915
 Prioritaet: P0
 
 Erst nach vollstaendiger Implementierung der Kernrunde werden einmal gebuendelt
@@ -1077,9 +1029,146 @@ Prioritaet: P0
 - genau einen aktuellen Build und ein aktuelles Backup behalten
 - keine Releaseartefakte mit Retaildaten erzeugen
 
+Die bestehenden Bring-up-IDs `KR-4911`, `KR-4912`, `KR-4913` und `KR-4915`
+sind dem nativen Boot- und Frame-Meilenstein v0.48 zugeordnet.
+
+### [ ] KR-4911 - Runtimebeobachtung, Replay und Fehlerpakete
+
+Abhaengigkeiten: KR-4831, KR-4842
+Meilenstein: v0.48
+Prioritaet: P0
+
+Umfang:
+
+- Blockdispatch, Exceptions, Fallbacks, MMIO, GD-ROM, DMA, Interrupts, PVR und
+  AICA in einem begrenzten Ereignisstrom erfassen
+- ersten Fehler, letzten stabilen Checkpoint und relevante CPU-Zustaende sichern
+- deterministische synthetische Replays und redigierte private Fehlerberichte
+  erzeugen
+- Rohspeicher und private Identitaetsdaten niemals committen
+
+Akzeptanz:
+
+- Haenger, Budgetende, Exception und Dispatch-Miss besitzen eindeutige Klassen
+- identische synthetische Laeufe erzeugen identische Ereignisfolgen
+- private Fehlerpakete sind redigiert und bleiben ausserhalb des Repos
+
+### [ ] KR-4912 - Dynamische Codebereiche, Module und Overlays
+
+Abhaengigkeiten: KR-4911
+Meilenstein: v0.48
+Prioritaet: P0
+
+Umfang:
+
+- nach dem Boot geladene ausfuehrbare Bereiche erkennen
+- Discmodule, Overlays und ersetzten RAM-Code allgemein katalogisieren
+- bekannte Module vorab rekompilieren oder kontrolliert materialisieren
+- Codeinvalidierung, Aliase und Lebenszeit der Bloecke erhalten
+- keine versteckte Analyzer-Abhaengigkeit in den Port einfuehren
+
+Akzeptanz:
+
+- synthetische Load-, Relocation-, Austausch- und Unload-Faelle bestehen
+- unkompilierte ausfuehrbare Bytes koennen nicht still ausgefuehrt werden
+- private Modulinhalte bleiben ausserhalb von Repository und Berichten
+
+### [ ] KR-4913 - CPU-/Plattform-Bring-up bis `KR_GUEST_PROGRAM_ENTERED`
+
+Abhaengigkeiten: KR-4848, KR-4912
+Meilenstein: v0.48
+Prioritaet: P0
+
+Umfang:
+
+- eine private Retail-Testbench erstmals im `runtime-probe`-Modus starten;
+  Sonic Adventure ist dabei eine lokale Testquelle, kein Produktprofil
+- SH-4-, FPU-, MMU-/Cache-, BIOS-, GD-ROM-, DMA-, Interrupt- und Timingblocker
+  titelunabhaengig beheben
+- jeden Retailbefund als synthetische oder frei lizenzierte Regression sichern
+
+Akzeptanz:
+
+- zwei identische Probes erreichen `KR_GUEST_PROGRAM_ENTERED`
+- kein Fallback, Trap oder stiller Fehler wird als Erfolg ausgegeben
+- deterministische Kernmetriken stimmen ueberein
+- Probe und Bericht enthalten keine Spielbytes oder privaten Adressen
+
+### [ ] KR-4915 - Gast-PVR-Pfad bis `KR_FIRST_GUEST_FRAME`
+
+Abhaengigkeiten: KR-4849, KR-4913
+Meilenstein: v0.48
+Prioritaet: P0
+
+Umfang:
+
+- echten Gast-PVR-/TA-Befehlsstrom verarbeiten
+- benoetigte Polygon-, Textur-, Tiefen-, Blend-, Fog- und Listenpfade allgemein
+  implementieren
+- Hostframe ausschliesslich aus Gastzustand erzeugen
+- Frame-, PVR-, DMA- und Interruptfortschritt diagnostizieren
+
+Akzeptanz:
+
+- `KR_FIRST_GUEST_FRAME` wird aus einem Gastframe erreicht
+- ein synthetisch vorgefuellter VRAM-Puffer gilt nicht als Nachweis
+- `guest_pvr_frames` ist von `host_present_calls` getrennt
+- Fehlerpfade bleiben sichtbar und reproduzierbar
+
 ---
 
-## v0.49.0 - Port-, Harness-, GUI-Integration und Alpha-Candidate
+## v0.49.0 - Controller-, Port-, Harness-, GUI-Integration und Alpha-Candidate
+
+### [ ] KR-4814 - Nativer Controller und gastzeitgebundene Maple-Eingabe
+
+Abhaengigkeiten: KR-4854, KR-4616
+Meilenstein: v0.49, Implementierung erst nach dem ersten echten Gastframe
+Prioritaet: P1 nach KR-4850 (Frame bleibt P0)
+
+Umfang:
+
+- Gast in begrenzten Quanta/Safepoints statt einmal synchron bis zum Ende laufen
+- Fenster-, Controller-, Scheduler-, Video- und Audioereignisse verschraenken
+- Windows-Gamepadbackend ueber stabile Hostabstraktion bereitstellen
+- aktuelle Xbox-Controller, DualSense/DualShock und uebliche Standardgamepads
+  ueber denselben geraeteagnostischen Vertrag abdecken
+- Keyboardfallback erhalten
+- Buttons, Trigger und Analogachsen mit Deadzones normalisieren
+- Hotplug, Fokus und Controller-1-Auswahl behandeln
+- Hostzustandsaenderungen mit Gastzyklus stempeln
+- Maple `GetCondition` liest den letzten zum Transaktionszyklus sichtbaren Zustand
+- Replayinput verwendet dieselbe Ereignisschnittstelle
+
+Akzeptanz:
+
+- frei lizenziertes Homebrew reagiert auf Buttons, Trigger und Analogachsen
+- Xbox-, DualSense-/DualShock- und Standardcontrollerprofile bestehen denselben
+  normalisierten Eingabevertrag ohne titelbezogene Sonderbehandlung
+- aktiv-niedrige Maple-Payloads sind bitgenau
+- nur geaenderte Hostzustaende werden eingespeist
+- Hotplug und Fokus erzeugen keine haengenden Tasten
+- deterministisches Replay ist bytegleich
+- keine Eingaberace zwischen Hostpoll und Maple-Read
+
+### [ ] KR-4914 - Private interaktive Runtime-Sitzung mit Controller
+
+Abhaengigkeiten: KR-4854, KR-4814
+Meilenstein: v0.49
+Prioritaet: P1 nach KR-4850 (Frame bleibt P0)
+
+Umfang:
+
+- separaten `interactive`-Modus mit Fenster, Controller und kontrolliertem Ende
+- Hosteventpump und Gastquanta dauerhaft verschraenken
+- Pause, Fokus, Controllerhotplug und sauberen Shutdown behandeln
+- interaktive Rohdiagnosen ausschliesslich privat speichern
+- keine Screenshots, Spielbytes oder Speicherabbilder standardmaessig erfassen
+
+Akzeptanz:
+
+- Nutzer kann einen erreichten Gastpfad mit Controller untersuchen
+- interaktive Sitzung wird in keinem Gate als deterministische Evidenz verwendet
+- Crash, Close und Timeout hinterlassen keine Kindprozesse oder Schedulerreste
 
 ### [ ] KR-4801 - Versioniertes Runtime-SDK fuer externe Port-Projekte
 
@@ -1298,97 +1387,6 @@ erhalten und ist keine aktive Aufgabe.
 
 `superseded_by KR-4854`. Die ID bleibt ausschliesslich als Historieneintrag
 erhalten und ist keine aktive Aufgabe.
-
----
-
-## Bestehende Bring-up-Tasks nach aktualisierter Meilensteinzuordnung
-
-`KR-4911` bis `KR-4915` sowie `KR-4814` gehoeren zu v0.48. Die Controllerarbeit
-aus `KR-4814` und `KR-4914` beginnt strikt erst nach dem ersten echten
-Gastframe aus `KR-4850`. `KR-4916` bleibt Teil von v0.49.
-
-### [ ] KR-4911 - Runtimebeobachtung, Replay und Fehlerpakete
-
-Abhaengigkeiten: KR-4831, KR-4842
-Meilenstein: v0.48
-Prioritaet: P0
-
-Umfang:
-
-- Blockdispatch, Exceptions, Fallbacks, MMIO, GD-ROM, DMA, Interrupts, PVR und
-  AICA in einem begrenzten Ereignisstrom erfassen
-- ersten Fehler, letzten stabilen Checkpoint und relevante CPU-Zustaende sichern
-- deterministische synthetische Replays und redigierte private Fehlerberichte
-  erzeugen
-- Rohspeicher und private Identitaetsdaten niemals committen
-
-Akzeptanz:
-
-- Haenger, Budgetende, Exception und Dispatch-Miss besitzen eindeutige Klassen
-- identische synthetische Laeufe erzeugen identische Ereignisfolgen
-- private Fehlerpakete sind redigiert und bleiben ausserhalb des Repos
-
-### [ ] KR-4912 - Dynamische Codebereiche, Module und Overlays
-
-Abhaengigkeiten: KR-4911
-Meilenstein: v0.48
-Prioritaet: P0
-
-Umfang:
-
-- nach dem Boot geladene ausfuehrbare Bereiche erkennen
-- Discmodule, Overlays und ersetzten RAM-Code allgemein katalogisieren
-- bekannte Module vorab rekompilieren oder kontrolliert materialisieren
-- Codeinvalidierung, Aliase und Lebenszeit der Bloecke erhalten
-- keine versteckte Analyzer-Abhaengigkeit in den Port einfuehren
-
-Akzeptanz:
-
-- synthetische Load-, Relocation-, Austausch- und Unload-Faelle bestehen
-- unkompilierte ausfuehrbare Bytes koennen nicht still ausgefuehrt werden
-- private Modulinhalte bleiben ausserhalb von Repository und Berichten
-
-### [ ] KR-4913 - CPU-/Plattform-Bring-up bis `KR_GUEST_PROGRAM_ENTERED`
-
-Abhaengigkeiten: KR-4848, KR-4912
-Meilenstein: v0.48
-Prioritaet: P0
-
-Umfang:
-
-- eine private Retail-Testbench erstmals im `runtime-probe`-Modus starten;
-  Sonic Adventure ist dabei eine lokale Testquelle, kein Produktprofil
-- SH-4-, FPU-, MMU-/Cache-, BIOS-, GD-ROM-, DMA-, Interrupt- und Timingblocker
-  titelunabhaengig beheben
-- jeden Retailbefund als synthetische oder frei lizenzierte Regression sichern
-
-Akzeptanz:
-
-- zwei identische Probes erreichen `KR_GUEST_PROGRAM_ENTERED`
-- kein Fallback, Trap oder stiller Fehler wird als Erfolg ausgegeben
-- deterministische Kernmetriken stimmen ueberein
-- Probe und Bericht enthalten keine Spielbytes oder privaten Adressen
-
-### [ ] KR-4915 - Gast-PVR-Pfad bis `KR_FIRST_GUEST_FRAME`
-
-Abhaengigkeiten: KR-4849, KR-4913
-Meilenstein: v0.48
-Prioritaet: P0
-
-Umfang:
-
-- echten Gast-PVR-/TA-Befehlsstrom verarbeiten
-- benoetigte Polygon-, Textur-, Tiefen-, Blend-, Fog- und Listenpfade allgemein
-  implementieren
-- Hostframe ausschliesslich aus Gastzustand erzeugen
-- Frame-, PVR-, DMA- und Interruptfortschritt diagnostizieren
-
-Akzeptanz:
-
-- `KR_FIRST_GUEST_FRAME` wird aus einem Gastframe erreicht
-- ein synthetisch vorgefuellter VRAM-Puffer gilt nicht als Nachweis
-- `guest_pvr_frames` ist von `host_present_calls` getrennt
-- Fehlerpfade bleiben sichtbar und reproduzierbar
 
 ### [ ] KR-4916 - Menue, Eingabe und spielbare Szene
 

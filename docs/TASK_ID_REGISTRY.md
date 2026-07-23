@@ -67,7 +67,7 @@ fuer neue Arbeit. Diese Zuordnung gilt als korrigierter Planungsfehler.
 | KR-4851 | Boot- und Frame-Hotpath |
 | KR-4852 | Konsolidierte v0.48-Validierung |
 | KR-4853 | v0.48 Boot-Gate-Vorbereitung |
-| KR-4854 | v0.48 interne Freigabe und Tag |
+| KR-4854 | v0.48 interne Freigabe |
 | KR-4911 | Runtimebeobachtung, Replay und Fehlerpakete |
 | KR-4912 | Dynamische Codebereiche, Module und Overlays |
 | KR-4913 | CPU-/Plattform-Bring-up bis `KR_GUEST_PROGRAM_ENTERED` |
@@ -77,10 +77,11 @@ fuer neue Arbeit. Diese Zuordnung gilt als korrigierter Planungsfehler.
 
 ## Aktuelle Meilensteinzuordnung
 
-- v0.48: `KR-4814`, `KR-4831`, `KR-4841` bis `KR-4854`, `KR-4911` bis
-  `KR-4915`; Controllerarbeit `KR-4814`/`KR-4914` beginnt erst nach `KR-4850`
-- v0.49: `KR-4801` bis `KR-4803`, `KR-4811` bis `KR-4813`, `KR-4821`
-  bis `KR-4824`, `KR-4901` bis `KR-4905` und `KR-4916`
+- v0.48: `KR-4831`, `KR-4841` bis `KR-4854` sowie `KR-4911`, `KR-4912`,
+  `KR-4913` und `KR-4915`
+- v0.49: `KR-4801` bis `KR-4803`, `KR-4811` bis `KR-4814`, `KR-4821`
+  bis `KR-4824`, `KR-4901` bis `KR-4905`, `KR-4914` und `KR-4916`;
+  Controllerarbeit `KR-4814`/`KR-4914` beginnt erst nach dem v0.48-Frame-Gate
 - `KR-4804` und `KR-4805` sind retired; die Nachfolger sind `KR-4853` und
   `KR-4854`.
 

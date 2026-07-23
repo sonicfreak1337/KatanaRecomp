@@ -60,6 +60,14 @@ class DreamcastGdRomController;
 
 enum class OperandCacheOperation : std::uint8_t { Invalidate, Purge, WriteBack };
 
+enum class StoreQueueAddressingMode : std::uint8_t { Qacr, Utlb };
+
+struct StoreQueuePrefetchTranslation {
+    std::uint32_t source_address = 0u;
+    std::uint32_t target_address = 0u;
+    StoreQueueAddressingMode addressing = StoreQueueAddressingMode::Qacr;
+};
+
 struct Sh4TlbEntry {
     std::uint32_t pteh = 0u;
     std::uint32_t ptel = 0u;
@@ -154,6 +162,8 @@ void load_tlb(CpuState& cpu) noexcept;
                                                     MemoryAccessOperation operation,
                                                     MemoryAccessWidth width,
                                                     bool instruction = false);
+[[nodiscard]] StoreQueuePrefetchTranslation
+translate_store_queue_prefetch(CpuState& cpu, std::uint32_t address);
 [[nodiscard]] std::uint8_t guest_read_u8(CpuState& cpu, std::uint32_t address);
 [[nodiscard]] std::uint16_t guest_read_u16(CpuState& cpu, std::uint32_t address);
 [[nodiscard]] std::uint32_t guest_read_u32(CpuState& cpu, std::uint32_t address);

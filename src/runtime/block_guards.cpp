@@ -11,6 +11,9 @@ namespace {
 constexpr std::uint32_t fpscr_guard_mask =
     fpscr_rounding_mode_mask | fpscr_pr_mask | fpscr_sz_mask | fpscr_fr_mask;
 constexpr std::uint32_t mmucr_sv_mask = 0x00000100u;
+constexpr std::uint32_t mmucr_sqmd_mask = 0x00000200u;
+constexpr std::uint32_t store_queue_window_mask = 0xFC000000u;
+constexpr std::uint32_t store_queue_window = 0xE0000000u;
 }
 
 BlockVariantKey block_variant_key(const BlockStateGuard& guard,
@@ -116,6 +119,32 @@ TranslationResult RuntimeAddressSpace::translate(const std::uint32_t address,
     if (segment == 6u && !privileged)
         throw TranslationError(access, address, read_cause);
 
+    return translate_mapped(address, access, privileged);
+}
+
+StoreQueuePrefetchTranslation RuntimeAddressSpace::translate_store_queue_prefetch(
+    const std::uint32_t address,
+    const bool privileged) const {
+    if ((address & store_queue_window_mask) != store_queue_window) {
+        throw std::invalid_argument(
+            "Store-Queue-PREF-Uebersetzung verlangt eine Adresse im P4-SQ-Fenster.");
+    }
+    if ((address & 3u) != 0u || (!privileged && (mmucr_ & mmucr_sqmd_mask) != 0u)) {
+        throw TranslationError(
+            TranslationAccess::Write, address, ExceptionCause::AddressErrorWrite);
+    }
+    if (mode_ == AddressTranslationMode::NoMmu) {
+        return {address, 0u, StoreQueueAddressingMode::Qacr};
+    }
+    const auto translated = translate_mapped(address, TranslationAccess::Write, privileged);
+    return {address,
+            translated.physical_address & ~std::uint32_t{31u},
+            StoreQueueAddressingMode::Utlb};
+}
+
+TranslationResult RuntimeAddressSpace::translate_mapped(const std::uint32_t address,
+                                                        const TranslationAccess access,
+                                                        const bool privileged) const {
     const auto matches = [&](const auto& value) {
         const auto start = static_cast<std::uint64_t>(value.virtual_page);
         const auto end = start + value.page_size;

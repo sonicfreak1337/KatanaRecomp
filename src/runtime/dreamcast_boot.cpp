@@ -680,6 +680,9 @@ initialize_dreamcast_runtime(CpuState& cpu,
             controller->dma_to_memory(address, length, direction);
         });
     state.gdrom->bind_g1_bus(state.holly_dma.g1.get());
+    state.holly_dma.g1->set_fault_observer([gdrom](const G1DmaFault& fault) {
+        if (const auto controller = gdrom.lock()) controller->handle_g1_dma_fault(fault);
+    });
     cpu.g1_bus = state.holly_dma.g1.get();
     const auto boot_sectors = static_cast<std::uint32_t>(
         (boot.boot_file.size() + dreamcast_data_sector_size - 1u) /
@@ -763,6 +766,11 @@ initialize_dreamcast_runtime(CpuState& cpu,
             }
         },
         state.code_tracker.get());
+    auto* const store_queue_cpu = &cpu;
+    state.store_queues->set_prefetch_address_translator(
+        [store_queue_cpu](const std::uint32_t address) {
+            return translate_store_queue_prefetch(*store_queue_cpu, address);
+        });
     const auto queues = state.store_queues;
     state.cache_control = map_sh4_cache_control(cpu.memory);
     state.io_ports = map_sh4_io_ports(cpu.memory, {dreamcast_composite_port_a_input, 0u});

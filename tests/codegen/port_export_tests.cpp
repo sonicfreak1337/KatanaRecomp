@@ -897,6 +897,16 @@ int run_test(const int argc, char* argv[]) {
             read_text(output / "src" / "main.cpp").find("exception_cause=") != std::string::npos &&
             read_text(output / "src" / "main.cpp").find("cpu.expevt") != std::string::npos &&
             read_text(output / "src" / "main.cpp").find("cpu.spc") != std::string::npos &&
+            read_text(output / "src" / "main.cpp")
+                    .find("retired_guest_instructions=") != std::string::npos &&
+            read_text(output / "src" / "main.cpp")
+                    .find("register_index < cpu.r.size()") != std::string::npos &&
+            read_text(output / "src" / "main.cpp")
+                    .find("cpu.r[register_index]") != std::string::npos &&
+            read_text(output / "src" / "main.cpp").find("cpu.read_sr()") !=
+                std::string::npos &&
+            read_text(output / "src" / "main.cpp").find("cpu.read_fpscr()") !=
+                std::string::npos &&
             read_text(output / "src" / "main.cpp").find("framebuffer.configure(640u") ==
                 std::string::npos &&
             read_text(output / "src" / "main.cpp").find("pump_guest_frame") !=
@@ -972,6 +982,23 @@ int run_test(const int argc, char* argv[]) {
                 retire_marker < execute_marker && execute_marker < scheduler_marker &&
                 scheduler_marker < interrupt_marker,
             "Gastzyklen oder Interruptannahme liegen nicht hinter der ausgefuehrten Blocksemantik.");
+    const auto fallthrough_stall_marker = runtime_dispatch.find(
+        "exit.kind == katana::runtime::BlockEndKind::Fallthrough", execute_marker);
+    const auto source_relative_marker = runtime_dispatch.find(
+        "exit.source.virtual_address + 2u", execute_marker);
+    const auto exact_target_marker = runtime_dispatch.find(
+        "exit.target->virtual_address != expected_fallthrough", fallthrough_stall_marker);
+    const auto stale_entry_comparison = runtime_dispatch.find("cpu.pc == block_entry_pc");
+    require(source_relative_marker != std::string::npos &&
+                fallthrough_stall_marker != std::string::npos &&
+                exact_target_marker != std::string::npos &&
+                stale_entry_comparison == std::string::npos &&
+                execute_marker < source_relative_marker &&
+                source_relative_marker < fallthrough_stall_marker &&
+                fallthrough_stall_marker < exact_target_marker &&
+                exact_target_marker < scheduler_marker,
+            "Portdispatch prueft den exakten Fallthrough nicht relativ zur zuletzt ausgefuehrten "
+            "Quellinstruktion oder verwechselt ihn mit dem Root-Blockeintritt.");
     const auto progress_marker =
         runtime_dispatch.find("executed_dispatch_blocks % progress_interval");
     const auto root_dispatch_marker = runtime_dispatch.find(

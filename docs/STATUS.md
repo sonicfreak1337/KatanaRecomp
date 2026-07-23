@@ -10,32 +10,44 @@ AOT gebunden; offen bleiben strukturierte Ladetransaktionen und die vorab
 erzeugte Registry latenter Module. `KR-4849` fuehrt den realen Channel-2-Pfad
 bis TA-EOL fort. Die Wait-Loop-Klassifikation aus `KR-4842` laeuft getrennt.
 
-Der neue optimierte Sonic-Adventure-PAL-Port wurde mit zwoelf Jobs in 140,5
-Sekunden exportiert. Er enthaelt 1.856 Funktionen, 37 Codepartitionen und 43
-Dispatchshards bei Portprojektvertrag 23, Runtime-ABI 37 und Backend-
-Interface-ABI 3. Im Portpaket liegen null Retailsektoren. Die unveraenderte
-Original-GDI wurde lokal mit drei Tracks und 521.461 Sektoren installiert; die
-Quelle blieb erhalten. Erst danach wurde der veraltete `gdrom-mode-fix`-Port
-entfernt.
+Runtime-ABI 38 schliesst in diesem Zwischenblock zwei allgemeine
+Hardwarevertraege. G1-DMA validiert Schutzfenster, 32-Bit-Ueberlauf und die
+vollstaendige beschreibbare Zielspanne vor dem Start. Ein Fehler traegt Phase,
+Adresse, exakt committed Praefix und Residue; der Transfer ist vor dem
+Faultobserver angehalten. Der gebundene GD-ROM-Controller uebernimmt diese
+Evidenz als stabilen CHECK-/Sense- und Requestfehler, waehrend interne Backend-
+oder Schedulerfehler keine Hardware-ASIC-Ereignisse vortaeuschen. Store-Queue-
+`PREF` verwendet bei `MMUCR.AT=0` QACR und bei `AT=1` die UTLB. Ausrichtung,
+`SQMD`, ASID/SV, Schreibschutz, Dirty-Bit, TLB-Miss und Multiple-Hit werden
+atomar vor jeder Sinkwirkung geprueft. Der native Emitter faengt diese
+adressabhaengigen `PREF`-Speicherfehler explizit und uebergibt sie an den
+architektonischen SH-4-Exceptioneintritt; sie koennen nicht als Hostexception
+aus dem Produktport entkommen.
 
-Der 30-Sekunden-Produktlauf blieb ueber 312.939.023 Gastzyklen und 1.000.000
-Rootdispatches stabil. Der alte fehlende Inneneinstieg `0x8C654F5C` tritt nicht
-mehr auf. Im kontrollierten 100-Millionen-Zyklen-Snapshot laeuft `IP.BIN` nativ
-als AOT und erzeugt 48.471 Runtime-only-Treffer ohne Fehler, Fallback oder
-Materialisierung; GD-ROM, TA und PVR sind an dieser fruehen Grenze noch null.
-Der 320-Millionen-Zyklen-Snapshot erreicht Spielecode, zwei GD-ROM-Kommandos
-und einen spaeten PVR-Registerwrite. Alle 761.011 Dispatchereignisse bleiben
-fehlerfrei; TA-Transfer, Renderrequest und Gastframe bleiben null.
+Der generische C++-Emitter setzt bei nach Funktionsdiscovery nachfolgerlosen
+Bloecken in jedem Backendmodus den Fallthrough-PC auf die echte
+Folgeinstruktion. Eine kompilierte Regression prueft Einzelblock, lokales
+Chaining und normalen Backendpfad. Die Produktinvariante leitet den erwarteten
+PC aus der tatsaechlichen Terminatorquelle ab und vergleicht nicht mehr mit dem
+Wrapper-Einstieg; damit ist der zuvor beobachtete Fehlalarm bei einer gueltigen
+lokalen AOT-Kette beseitigt.
 
-Der fuehrende Dispatchhotspot `0x8C6658D0 -> 0x8C65247E` mit 696.053 Aufrufen
-ist ein endlicher 4-Byte-Kopier-/Initialisierungsloop: `r6=4`, das Ziel liegt in
-`r14`, die Quelle auf dem Stack und `r14` wird je Iteration um vier erhoeht. Das
-ist kein neuer fehlender Zielblock. Die zugrunde liegenden begrenzten
-`MOV.W`-/`BRAF`-Relative16-Tabellen liefern 87 Eintraege, 76 eindeutige
-Kandidaten und 73 im vorherigen Port fehlende Ziele. Der live geladene Dispatch
-bleibt `RuntimeOnly`; feste CFG-Kanten und Funktionsseeds werden nicht erfunden.
-Imagegebundener Snapshotcache, P2-Aliasaufloesung und exakte
-Fortsetzungsmetadaten ueber lokale AOT-Blockketten sichern diesen Vertrag.
+Der optimierte ABI-38-Export der privaten Sonic-Adventure-PAL-Testbench dauerte
+mit zwoelf Jobs 140,9 Sekunden, der inkrementelle Reexport 29,2 Sekunden. Er
+enthaelt 1.856 Funktionen und 37 Codepartitionen bei Portprojektvertrag 23 und
+Backend-Interface-ABI 3. Im Portpaket liegen null Retailsektoren. Die lokale
+Discinstallation war erfolgreich; die unveraenderte Original-GDI blieb
+erhalten.
+
+Der aktuelle Produktlauf erreicht 345.609.251 Gastzyklen und einen echten
+Runtimehandler am architektonischen SH-4-Interruptvektor `VBR + 0x600`.
+`frames`, TA-Transfers und Gast-PVR-Frames bleiben null. Eine getrennte
+begrenzte Diagnose weist ein 56-Byte-Copy-plus-Patch-Codetemplate bytegenau
+ueber Gastwriteprovenienz nach und fuehrt daraus 19 bewiesene
+Runtimeinstruktionen aus. Danach endet sie kontrolliert am naechsten noch
+nicht statisch gebundenen AOT-Einstieg. Der normale Produktport hat dabei
+weiterhin keinen Interpreterpfad; weder Retailbytes noch eine private Adresse
+werden als Spielsonderfall uebernommen. `KR-4848` bleibt offen.
 
 Der Export baut CFG-, Kanten- und Writer-Slice-Indizes einmalig auf, reicht die
 konfigurierte Hostparallelitaet bis zum Projektschreiber durch und hasht grosse
@@ -47,7 +59,10 @@ Router waehlt den Shard. Beim aktuellen PAL-Port schrumpft die zentrale
 Zeilen; der groesste der 43 Shards misst 393.454 Byte. Eine synthetische
 513-Block-Regression prueft zwei Shards samt Entfernung veralteter Dateien; das
 vollstaendige synthetische Ninja-/MSVC-Projekt kompiliert und linkt in 15
-Sekunden. Die sechs fokussierten Regressionstargets bestehen 6/6. Der CLI-
+Sekunden. Das aktuelle fokussierte Kern-Gate besteht 9/9; nach der
+source-relativen Fallthroughkorrektur besteht der Portexporttest zusaetzlich
+1/1. Der konfigurierte 181-Test-Gesamtbestand wurde in diesem Zwischenblock
+nicht vollstaendig ausgefuehrt. Der CLI-
 Hostbuild verwendet `KATANA_HOST_BUILD_JOBS`, ersatzweise die
 Codegen-Workerzahl oder die gemeldete CPU-Threadzahl.
 
@@ -123,10 +138,11 @@ waehlt rendernd `FB_W_SOF1/2`. 256 Generationen, 64 MiB Haltebudget,
 Range-Fast-Reject und 2.097.152 Pixelpruefungen pro VBlank begrenzen den
 Nachweis. Der gemeinsame Proof-Pump trennt Gastbeweis und erfolgreichen
 Host-Present. Die vier fokussierten PVR-/Framebuffer-/Hostvideo-/Portexport-
-Regressionen bestehen mit 12 Buildjobs 4/4 in 0,66 Sekunden. Die kombinierte
-fokussierte Validierung des gesamten Blocks besteht mit 12 Buildjobs 12/12.
-Das konsolidierte 180-Test-Gate folgt weiterhin erst nach dem
-zusammenhaengenden Kernblock. Der jetzt vorgezogene private PAL-Lauf ist
+Regressionen bestehen mit 12 Buildjobs 4/4 in 0,66 Sekunden. Die damalige
+kombinierte fokussierte Validierung dieses PVR-Blocks bestand mit 12 Buildjobs
+12/12. Das konfigurierte 181-Test-Gesamtgate folgt weiterhin erst nach dem
+zusammenhaengenden Kernblock und ist fuer den aktuellen Zwischenstand nicht als
+bestanden behauptet. Der jetzt vorgezogene private PAL-Lauf ist
 Diagnoseevidenz und ersetzt dieses Gate nicht. Ein erster
 Sonic-Adventure-Gastframe wird nicht behauptet.
 
@@ -258,7 +274,7 @@ MMIO-Zugriff liegt im aktiven OCRAM; der fruehere Abbruch nach 12 Gastzyklen
 ist damit beseitigt. TA/PVR und ein echter Gastframe bleiben fuer den laengeren
 Folgelauf weiterhin offen.
 
-Runtime-ABI 37, Backend-Interface-ABI 3, BIOS-ABI 9 und Portprojektvertrag 23
+Runtime-ABI 38, Backend-Interface-ABI 3, BIOS-ABI 9 und Portprojektvertrag 23
 bilden den kumulativen v0.48-Stand ab.
 PlatformServices-ABI 9 versioniert das invalidierungs- und timinggesicherte lokale
 Blockchaining.
@@ -848,8 +864,8 @@ Die Controllergrundlage existiert in Maple und Hostruntime. Der generierte Port
 pollt Eingaben jedoch erst nach dem synchronen Gastlauf. Controllerunterstuetzung
 braucht deshalb vor allem eine echte verschraenkte Runtime-Schleife, nicht noch
 eine weitere Taste in einem Enum. `KR-4814` und die private interaktive Sitzung
-`KR-4914` gehoeren jetzt zu v0.48, beginnen aber strikt erst nach dem echten
-Gastframe aus `KR-4850`.
+`KR-4914` gehoeren jetzt zu v0.49 und beginnen dort strikt auf der in v0.48
+freigegebenen Framebasis nach `KR-4850`.
 
 Die GUI besitzt intern mehrere Seiten und strukturierte Jobereignisse, zeigt
 unter Windows aber fast nur eine Fliesstextzusammenfassung, zwei Balken und ein

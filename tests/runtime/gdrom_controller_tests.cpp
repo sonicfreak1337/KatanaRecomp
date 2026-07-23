@@ -8,6 +8,7 @@
 #include <array>
 #include <cstdlib>
 #include <iostream>
+#include <limits>
 #include <memory>
 #include <span>
 #include <stdexcept>
@@ -383,6 +384,60 @@ int main() {
                 cpu.memory.read_u8(taskfile_dma_destination + 2047u) == 0x5Au,
             "CD_READ-DMA liefert nicht exakt einen finalen Status-IRQ nach DMACK-Datenende.");
     static_cast<void>(controller.read(0x9Cu, MemoryAccessWidth::Byte));
+
+    std::vector<SystemAsicEvent> taskfile_fault_events;
+    std::uint64_t taskfile_fault_handler_calls = 0u;
+    DreamcastG1BusController taskfile_fault_g1(
+        scheduler,
+        HollyDmaTiming{4u},
+        [&](const std::uint32_t address,
+            const std::uint32_t length,
+            const std::uint32_t direction) {
+            ++taskfile_fault_handler_calls;
+            controller.dma_to_memory(address, length, direction);
+        },
+        [&](const SystemAsicEvent event) { taskfile_fault_events.push_back(event); });
+    std::optional<G1DmaFault> taskfile_fault;
+    taskfile_fault_g1.set_fault_observer([&](const G1DmaFault& fault) {
+        taskfile_fault = fault;
+        controller.handle_g1_dma_fault(fault);
+    });
+    controller.bind_g1_bus(&taskfile_fault_g1);
+    controller.reset();
+    taskfile_fault_g1.reset();
+    const auto range_fault_completions = completions;
+    const auto range_fault_commands = controller.status().completed_commands;
+    const auto range_fault_dma = controller.status().completed_dma;
+    issue_cd_read(controller, scheduler, 1u, 150u, 1u);
+    require(!taskfile_fault_g1.begin_transfer(0x0BFFFFE0u, 2048u, 1u) &&
+                taskfile_fault && taskfile_fault->reason == HollyDmaFaultReason::IllegalAddress &&
+                taskfile_fault->fault_address == 0x0BFFFFE0u &&
+                taskfile_fault->transferred_bytes == 0u && taskfile_fault->residue == 2048u &&
+                taskfile_fault->phase == G1DmaFaultPhase::Start &&
+                taskfile_fault_handler_calls == 0u &&
+                taskfile_fault_events ==
+                    std::vector<SystemAsicEvent>{SystemAsicEvent::GdromIllegalAddress} &&
+                completions == range_fault_completions + 1u &&
+                controller.status().completed_commands == range_fault_commands + 1u &&
+                controller.status().completed_dma == range_fault_dma &&
+                controller.status().ata_status == 0x41u &&
+                controller.status().interrupt_reason == 3u &&
+                controller.read(0x84u, MemoryAccessWidth::Byte) == 0x54u &&
+                controller.read(0x84u, MemoryAccessWidth::Byte) == 0x54u &&
+                throws_runtime_error([&] {
+                    controller.dma_to_memory(taskfile_dma_destination, 2048u, 1u);
+                }),
+            "Synchroner G1-Rangefehler verlaesst Taskfile-DMA nicht mit exakter Evidenz, "
+            "CHECK/ABRT und genau einem finalen Command-IRQ.");
+    static_cast<void>(scheduler.advance_by(16'384u, 32u));
+    require(completions == range_fault_completions + 1u &&
+                taskfile_fault_handler_calls == 0u &&
+                taskfile_fault_g1.state().fault_count == 1u,
+            "Synchroner G1-Rangefehler laesst einen spaeten Chunk oder IRQ durch.");
+    const auto range_fault_sense = read_taskfile_sense(controller, scheduler);
+    require(range_fault_sense[2] == 5u && range_fault_sense[8] == 0x21u &&
+                range_fault_sense[9] == 0u,
+            "Synchroner G1-Rangefehler haelt keinen stabilen Illegal-Address-Sense fest.");
 
     controller.reset();
     const auto invalid_completions = completions;
@@ -792,6 +847,48 @@ int main() {
                     std::string::npos,
             "Sequenziertes GD-ROM-BIOS-Ereignislog verliert Requestzustand oder Vierwortstatus.");
 
+    for (const auto command : std::array<std::uint32_t, 2u>{38u, 39u}) {
+        for (const auto p2 :
+             std::array<std::uint32_t, 3u>{0u, 1u, std::numeric_limits<std::uint32_t>::max()}) {
+            const auto before = controller.status();
+            cpu.memory.write_u32(parameters, 150u);
+            cpu.memory.write_u32(parameters + 4u, 1u);
+            cpu.memory.write_u32(parameters + 8u, p2);
+            cpu.memory.write_u32(parameters + 12u, 0xA55AA55Au);
+            cpu.r[4] = command;
+            cpu.r[5] = parameters;
+            const auto ex_request = controller.bios_call(cpu, 0u, 0u);
+            static_cast<void>(controller.bios_call(cpu, 2u, 0u));
+            cpu.r[4] = ex_request;
+            cpu.r[5] = extended_status;
+            require(ex_request >= 1u &&
+                        controller.bios_call(cpu, 1u, 0u) == 0xFFFFFFFFu &&
+                        cpu.memory.read_u32(extended_status) == 5u &&
+                        cpu.memory.read_u32(extended_status + 4u) ==
+                            static_cast<std::uint32_t>(GdRomStatus::InvalidCommand) &&
+                        cpu.memory.read_u32(extended_status + 8u) == 0u &&
+                        cpu.memory.read_u32(extended_status + 12u) == 0u &&
+                        controller.last_bios_request().id == ex_request &&
+                        controller.last_bios_request().command == command &&
+                        controller.last_bios_request().state == GdRomBiosRequestState::Error &&
+                        controller.bios_call(cpu, 1u, 0u) == 0u,
+                    "BIOS-Streaming-EX wird nicht kontrolliert als Illegal Request abgelehnt.");
+            const auto after = controller.status();
+            require(after.bios_requests == before.bios_requests &&
+                        after.completed_commands == before.completed_commands &&
+                        after.completed_dma == before.completed_dma &&
+                        after.sector_mode == before.sector_mode &&
+                        after.dma_callback == before.dma_callback &&
+                        after.dma_callback_argument == before.dma_callback_argument &&
+                        after.pio_callback == before.pio_callback &&
+                        after.pio_callback_argument == before.pio_callback_argument &&
+                        after.stream_bytes_remaining == before.stream_bytes_remaining &&
+                        after.transfer_bytes_remaining == before.transfer_bytes_remaining &&
+                        after.pending_guest_callbacks == before.pending_guest_callbacks,
+                    "Abgelehntes BIOS-Streaming-EX mutiert Streaming- oder Callbackzustand.");
+        }
+    }
+
     constexpr std::uint32_t aborted_destination = 0x8C020000u;
     cpu.memory.write_u32(parameters, 150u);
     cpu.memory.write_u32(parameters + 4u, 1u);
@@ -1059,7 +1156,7 @@ int main() {
     stream_cpu.r[5] = stream_residue;
     require(stream_memory_matches(dma_stream_destination, 0u, 2048u) &&
                 stream_cpu.memory.read_u8(dma_stream_destination + 2048u) == 0xCCu &&
-                stream_g1.state().system_counter == dma_stream_destination + 2048u &&
+                stream_g1.state().system_counter == 0x0C040800u &&
                 stream_g1.state().peripheral_counter == 2048u &&
                 stream_controller.bios_call(stream_cpu, 7u, 0u) == 1u &&
                 stream_cpu.memory.read_u32(stream_residue) == 2048u &&
@@ -1068,7 +1165,7 @@ int main() {
     static_cast<void>(stream_scheduler.advance_by(8192u, 1u));
     require(stream_memory_matches(dma_stream_destination, 0u, 4096u) &&
                 stream_g1.state().active == 0u && stream_g1.state().remaining == 0u &&
-                stream_g1.state().system_counter == dma_stream_destination + 4096u &&
+                stream_g1.state().system_counter == 0x0C041000u &&
                 stream_g1.state().peripheral_counter == 4096u &&
                 stream_g1_events ==
                     std::vector<SystemAsicEvent>{SystemAsicEvent::GdromDma} &&
@@ -1103,6 +1200,82 @@ int main() {
                 stream_cpu.memory.read_u32(stream_status + 12u) == 0u &&
                 stream_controller.bios_call(stream_cpu, 1u, 0u) == 0u,
             "Finaler DMA-Streamingstatus ist nicht einmalig COMPLETED mit exakter Bytezahl.");
+
+    std::uint32_t faulting_stream_handler_calls = 0u;
+    std::vector<SystemAsicEvent> faulting_stream_events;
+    DreamcastG1BusController faulting_stream_g1(
+        stream_scheduler,
+        HollyDmaTiming{4u},
+        [&](const std::uint32_t address,
+            const std::uint32_t length,
+            const std::uint32_t direction) {
+            if (faulting_stream_handler_calls++ != 0u)
+                throw std::runtime_error("synthetic second G1 chunk failure");
+            stream_controller.dma_to_memory(address, length, direction);
+        },
+        [&](const SystemAsicEvent event) { faulting_stream_events.push_back(event); });
+    std::optional<G1DmaFault> faulting_stream_fault;
+    faulting_stream_g1.set_fault_observer([&](const G1DmaFault& fault) {
+        faulting_stream_fault = fault;
+        stream_controller.handle_g1_dma_fault(fault);
+    });
+    stream_controller.bind_g1_bus(&faulting_stream_g1);
+    constexpr std::uint32_t faulting_stream_destination = 0x8C043000u;
+    stream_cpu.memory.write_bytes(faulting_stream_destination, untouched_stream);
+    const auto faulting_stream_request = queue_ready_stream(28u, 152u, 2u);
+    const auto drive_completions_before_g1_fault = stream_drive_completions;
+    const auto completed_dma_before_g1_fault = stream_controller.status().completed_dma;
+    stream_cpu.memory.write_u32(stream_transfer, faulting_stream_destination);
+    stream_cpu.memory.write_u32(stream_transfer + 4u, 4096u);
+    stream_cpu.r[4] = faulting_stream_request;
+    stream_cpu.r[5] = stream_transfer;
+    require(stream_controller.bios_call(stream_cpu, 6u, 0u) == 0u,
+            "BIOS-G1-Faultregression kann den DMA-Streamingtransfer nicht starten.");
+    static_cast<void>(stream_scheduler.advance_by(8192u, 1u));
+    require(faulting_stream_handler_calls == 1u &&
+                stream_memory_matches(faulting_stream_destination, 4096u, 2048u) &&
+                stream_cpu.memory.read_u8(faulting_stream_destination + 2048u) == 0xCCu,
+            "BIOS-G1-Faultregression erreicht keinen exakt committed ersten Chunk.");
+    static_cast<void>(stream_scheduler.advance_by(8192u, 1u));
+    const auto& faulting_stream_status = stream_controller.last_bios_request();
+    require(faulting_stream_handler_calls == 2u && faulting_stream_fault &&
+                faulting_stream_fault->reason == HollyDmaFaultReason::TransferFailure &&
+                faulting_stream_fault->fault_address == 0x0C043800u &&
+                faulting_stream_fault->transferred_bytes == 2048u &&
+                faulting_stream_fault->residue == 2048u &&
+                faulting_stream_fault->phase == G1DmaFaultPhase::Chunk &&
+                faulting_stream_g1.state().active == 0u &&
+                !faulting_stream_g1.state().completion_event && faulting_stream_events.empty() &&
+                stream_memory_matches(faulting_stream_destination, 4096u, 2048u) &&
+                stream_cpu.memory.read_u8(faulting_stream_destination + 2048u) == 0xCCu &&
+                faulting_stream_status.id == faulting_stream_request &&
+                faulting_stream_status.state == GdRomBiosRequestState::Error &&
+                faulting_stream_status.status[2] == 2048u &&
+                stream_controller.status().stream_bytes_remaining == 2048u &&
+                stream_controller.status().completed_dma == completed_dma_before_g1_fault &&
+                stream_drive_completions == drive_completions_before_g1_fault,
+            "Asynchroner G1-Chunkfehler verliert Prefix, Residue, Fehlerzustand oder erzeugt "
+            "eine falsche Completion.");
+    static_cast<void>(stream_scheduler.advance_by(32'768u, 64u));
+    stream_cpu.r[4] = dma_callback_address;
+    stream_cpu.r[5] = dma_callback_argument;
+    require(faulting_stream_handler_calls == 2u && faulting_stream_events.empty() &&
+                stream_controller.bios_call(stream_cpu, 5u, 0u) == 0xFFFFFFFFu &&
+                !stream_controller.take_pending_guest_callback() &&
+                stream_controller.status().pending_guest_callbacks == 0u &&
+                stream_drive_completions == drive_completions_before_g1_fault,
+            "Fehlgeschlagenes BIOS-DMA-Streaming laesst ein spaetes Event oder Callback durch.");
+    stream_cpu.r[4] = faulting_stream_request;
+    stream_cpu.r[5] = stream_status;
+    require(stream_controller.bios_call(stream_cpu, 1u, 0u) == 0xFFFFFFFFu &&
+                stream_cpu.memory.read_u32(stream_status) == 0x0Bu &&
+                stream_cpu.memory.read_u32(stream_status + 4u) ==
+                    static_cast<std::uint32_t>(GdRomStatus::Aborted) &&
+                stream_cpu.memory.read_u32(stream_status + 8u) == 2048u &&
+                stream_cpu.memory.read_u32(stream_status + 12u) == 0u &&
+                stream_controller.bios_call(stream_cpu, 1u, 0u) == 0u,
+            "Fehlgeschlagenes BIOS-DMA-Streaming liefert keinen einmaligen exakten Errorstatus.");
+    stream_controller.bind_g1_bus(&stream_g1);
 
     constexpr std::uint32_t pio_callback_address = 0x8C010240u;
     constexpr std::uint32_t pio_callback_argument = 0x13579BDFu;

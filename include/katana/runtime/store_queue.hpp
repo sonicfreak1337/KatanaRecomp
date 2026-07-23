@@ -2,6 +2,7 @@
 
 #include "katana/runtime/code_invalidation.hpp"
 #include "katana/runtime/memory.hpp"
+#include "katana/runtime/runtime.hpp"
 
 #include <array>
 #include <cstdint>
@@ -31,6 +32,8 @@ struct CacheMaintenanceResult {
 };
 
 using StoreQueueSink = std::function<void(const StoreQueueTransfer&)>;
+using StoreQueueAddressTranslator =
+    std::function<StoreQueuePrefetchTranslation(std::uint32_t)>;
 
 class Sh4StoreQueues {
   public:
@@ -49,6 +52,7 @@ class Sh4StoreQueues {
     [[nodiscard]] std::uint32_t read_p4(std::uint32_t address, MemoryAccessWidth width) const;
     void write_p4(std::uint32_t address, std::uint32_t value, MemoryAccessWidth width);
     [[nodiscard]] bool prefetch(std::uint32_t address);
+    void set_prefetch_address_translator(StoreQueueAddressTranslator translator);
     [[nodiscard]] const std::array<std::uint8_t, 32u>& queue(std::size_t index) const;
     [[nodiscard]] std::uint64_t transfer_count() const noexcept;
     [[nodiscard]] CacheMaintenanceResult maintain(CacheMaintenanceOperation operation,
@@ -69,6 +73,7 @@ class Sh4StoreQueues {
                                                 std::size_t queue) const noexcept;
     Memory& memory_;
     StoreQueueSink sink_;
+    StoreQueueAddressTranslator address_translator_;
     ExecutableCodeTracker* code_tracker_;
     OperandCacheRamProfile ocram_profile_;
     std::array<std::array<std::uint8_t, 32u>, 2u> queues_{};

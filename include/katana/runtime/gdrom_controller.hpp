@@ -18,6 +18,7 @@
 namespace katana::runtime {
 
 class DreamcastG1BusController;
+struct G1DmaFault;
 
 inline constexpr std::uint32_t gdrom_register_physical_base = 0x005F7000u;
 inline constexpr std::size_t gdrom_register_size = 0x100u;
@@ -104,6 +105,7 @@ class DreamcastGdRomController final {
     [[nodiscard]] std::span<const GdRomBiosCallEvent> bios_call_events() const noexcept;
     [[nodiscard]] std::string format_bios_call_events_json() const;
     void bind_g1_bus(DreamcastG1BusController* g1_bus) noexcept;
+    void handle_g1_dma_fault(const G1DmaFault& fault) noexcept;
     [[nodiscard]] std::optional<GdRomGuestCallback> take_pending_guest_callback();
     void reset() noexcept;
 

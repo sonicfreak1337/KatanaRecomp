@@ -3,6 +3,7 @@
 
 #include <cstdlib>
 #include <iostream>
+#include <limits>
 #include <memory>
 #include <string>
 #include <vector>
@@ -167,6 +168,18 @@ int main() {
     require(g1.read(0x04u) == 0x0C002000u && g1.read(0x08u) == 32u &&
                 g1.read(0xF4u) == 0x0C123440u && g1.read(0xF8u) == 0u,
             "G1-BIOS-Handoff ueberschreibt konfigurierte DMA-Register.");
+    g1.restore_bios_handoff();
+    require(g1.begin_transfer(0x0C002000u, 32u, 1u),
+            "Stale-Prefix-Regression kann keinen erfolgreichen Vortransfer starten.");
+    static_cast<void>(g1_scheduler.advance_by(128u, 1u));
+    std::optional<G1DmaFault> clean_start_fault;
+    g1.set_fault_observer([&](const G1DmaFault& fault) { clean_start_fault = fault; });
+    require(!g1.begin_transfer(0x0BFFFFE0u, 32u, 1u) && clean_start_fault &&
+                clean_start_fault->fault_address == 0x0BFFFFE0u &&
+                clean_start_fault->transferred_bytes == 0u &&
+                clean_start_fault->residue == 32u &&
+                clean_start_fault->phase == G1DmaFaultPhase::Start,
+            "Neuer synchron abgewiesener G1-Start erbt den Prefix des Vortransfers.");
 
     EventScheduler chunk_scheduler;
     std::vector<std::uint32_t> chunk_addresses;
@@ -249,10 +262,6 @@ int main() {
                 chunked_g1.state().active == 0u && !chunked_g1.state().completion_event,
             "Scheduler-Reset laesst einen spaeten G1-Chunk oder Completion-Interrupt durch.");
 
-    require(!chunked_g1.begin_transfer(0x0C009000u, 0u, 1u) && chunked_g1.last_fault() &&
-                chunked_g1.last_fault()->reason == HollyDmaFaultReason::InvalidLength,
-            "G1-DMA akzeptiert eine leere Transferlaenge.");
-    chunked_g1.reset();
     require(!chunked_g1.begin_transfer(0x0C009001u, 32u, 1u) && chunked_g1.last_fault() &&
                 chunked_g1.last_fault()->reason == HollyDmaFaultReason::IllegalAddress,
             "G1-DMA akzeptiert eine nicht auf 32 Byte ausgerichtete Zieladresse.");
@@ -267,11 +276,145 @@ int main() {
     chunked_g1.reset();
     require(chunked_g1.begin_transfer(0x0C009000u, 64u, 1u) &&
                 !chunked_g1.begin_transfer(0x0C00A000u, 32u, 1u) && chunked_g1.last_fault() &&
-                chunked_g1.last_fault()->reason == HollyDmaFaultReason::Overrun,
+                chunked_g1.last_fault()->reason == HollyDmaFaultReason::Overrun &&
+                chunked_g1.last_fault()->event == SystemAsicEvent::GdromOverrun &&
+                chunk_events.back() == SystemAsicEvent::GdromOverrun,
             "G1-DMA akzeptiert einen zweiten Start waehrend eines aktiven Transfers.");
     static_cast<void>(chunk_scheduler.advance_by(1024u, 16u));
     require(chunk_addresses.size() == committed_before_abort + 1u,
             "Abgewiesener G1-Overrun laesst den alten Transfer spaet weiterlaufen.");
+
+    EventScheduler protected_g1_scheduler;
+    std::vector<SystemAsicEvent> protected_g1_events;
+    DreamcastG1BusController protected_g1(
+        protected_g1_scheduler,
+        HollyDmaTiming{4u},
+        [](const auto, const auto, const auto) {},
+        [&](const SystemAsicEvent event) { protected_g1_events.push_back(event); });
+    require(protected_g1.address_protect() == 0x0000407Fu,
+            "G1-GDAPRO startet nicht mit dem Post-BIOS-Hauptspeicherfenster.");
+    protected_g1.write(0xA0u, 0x12345678u);
+    require(protected_g1.gdrom_read_access_timing() == 0x12345678u &&
+                throws([&] { static_cast<void>(protected_g1.read(0xA0u)); }),
+            "G1GDRC wird nicht als write-only Diagnostikwert gespeichert.");
+    protected_g1.write(0xB8u, 0x88434040u);
+    protected_g1.write(0xB8u, 0x12344141u);
+    require(protected_g1.address_protect() == 0x00004040u &&
+                throws([&] { static_cast<void>(protected_g1.read(0xB8u)); }),
+            "GDAPRO akzeptiert einen falschen Schluessel oder ist gastseitig lesbar.");
+    require(protected_g1.begin_transfer(0x0C000000u, 32u, 1u),
+            "GDAPRO lehnt die exakte untere Schutzgrenze ab.");
+    protected_g1.abort_transfer();
+    require(protected_g1.begin_transfer(0x0C0FFFE0u, 32u, 1u),
+            "GDAPRO lehnt die exakte obere Schutzgrenze ab.");
+    protected_g1.abort_transfer();
+    require(!protected_g1.begin_transfer(0x0BFFFFE0u, 32u, 1u) &&
+                protected_g1.last_fault() &&
+                protected_g1.last_fault()->reason == HollyDmaFaultReason::IllegalAddress &&
+                protected_g1.last_fault()->event == SystemAsicEvent::GdromIllegalAddress,
+            "GDAPRO akzeptiert einen Bereich unterhalb der Schutzgrenze.");
+    protected_g1.reset();
+    protected_g1.write(0xB8u, 0x88434040u);
+    require(!protected_g1.begin_transfer(0x0C0FFFE0u, 64u, 1u) &&
+                protected_g1.last_fault() &&
+                protected_g1.last_fault()->reason == HollyDmaFaultReason::IllegalAddress,
+            "G1-DMA prueft nur den ersten Chunk statt der vollstaendigen Zielspanne.");
+    protected_g1.reset();
+    protected_g1.write(0xB8u, 0x88434140u);
+    require(!protected_g1.begin_transfer(0x0C100000u, 32u, 1u) &&
+                protected_g1.last_fault() &&
+                protected_g1.last_fault()->reason == HollyDmaFaultReason::IllegalAddress,
+            "GDAPRO akzeptiert ein invertiertes Schutzfenster.");
+    protected_g1.reset();
+    require(!protected_g1.begin_transfer(0xFFFFFFE0u, 64u, 1u) &&
+                protected_g1.last_fault() &&
+                protected_g1.last_fault()->reason == HollyDmaFaultReason::IllegalAddress,
+            "G1-DMA akzeptiert einen 32-Bit-ueberlaufenden Zielbereich.");
+    protected_g1.reset();
+    require(protected_g1.begin_transfer(0x0C000000u, 0u, 1u) &&
+                protected_g1.read(0x08u) == 0u &&
+                protected_g1.state().remaining ==
+                    DreamcastG1BusController::maximum_transfer_bytes,
+            "GDLEN=0 wird nicht als 32-MiB-Hardwarekodierung dekodiert.");
+    protected_g1.abort_transfer();
+    require(!protected_g1.begin_transfer(0x0F000000u, 0u, 1u) &&
+                protected_g1.last_fault() &&
+                protected_g1.last_fault()->reason == HollyDmaFaultReason::IllegalAddress,
+            "Dekodiertes GDLEN=0 entkommt der Vollbereichspruefung.");
+
+    Memory bounded_g1_memory(0u);
+    bounded_g1_memory.map_region(
+        "bounded-system", 0x0C000000u, std::make_shared<LinearMemoryDevice>(0x1000u));
+    EventScheduler bounded_g1_scheduler;
+    std::uint64_t bounded_g1_handler_bytes = 0u;
+    std::vector<SystemAsicEvent> bounded_g1_events;
+    const auto bounded_g1 = map_dreamcast_holly_dma(
+        bounded_g1_memory,
+        bounded_g1_scheduler,
+        HollyDmaTiming{4u},
+        [&](const SystemAsicEvent event) { bounded_g1_events.push_back(event); },
+        [&](const auto, const auto length, const auto) { bounded_g1_handler_bytes += length; });
+    bounded_g1.g1->write(0xB8u, 0x88434040u);
+    require(bounded_g1.g1->begin_transfer(0x0C000FE0u, 32u, 1u),
+            "G1-Produktpfad lehnt das exakte Ende eines schreibbaren linearen Mappings ab.");
+    bounded_g1.g1->abort_transfer();
+    require(!bounded_g1.g1->begin_transfer(0x0C000FE0u, 64u, 1u) &&
+                bounded_g1_handler_bytes == 0u && bounded_g1.g1->last_fault() &&
+                bounded_g1.g1->last_fault()->reason == HollyDmaFaultReason::IllegalAddress &&
+                bounded_g1_events ==
+                    std::vector<SystemAsicEvent>{SystemAsicEvent::GdromIllegalAddress},
+            "G1-Produktpfad startet einen Chunk ueber das reale Zielmapping hinaus.");
+
+    EventScheduler failing_g1_scheduler;
+    std::vector<SystemAsicEvent> failing_g1_events;
+    DreamcastG1BusController failing_g1(
+        failing_g1_scheduler,
+        HollyDmaTiming{4u},
+        [](const auto, const auto, const auto) { throw std::runtime_error("synthetic"); },
+        [&](const SystemAsicEvent event) { failing_g1_events.push_back(event); });
+    std::optional<G1DmaFault> observed_g1_fault;
+    bool g1_quiesced_before_notification = false;
+    failing_g1.set_fault_observer([&](const G1DmaFault& fault) {
+        observed_g1_fault = fault;
+        const auto state = failing_g1.state();
+        g1_quiesced_before_notification =
+            state.active == 0u && state.enabled == 0u && !state.completion_event;
+        throw std::runtime_error("synthetic fault observer");
+    });
+    require(failing_g1.begin_transfer(0x0C000000u, 32u, 1u),
+            "G1-Handlerfehler-Test kann den Transfer nicht starten.");
+    static_cast<void>(failing_g1_scheduler.advance_by(128u, 1u));
+    require(failing_g1.last_fault() && failing_g1.last_g1_fault() && observed_g1_fault &&
+                failing_g1.last_fault()->reason == HollyDmaFaultReason::TransferFailure &&
+                !failing_g1.last_fault()->event && failing_g1_events.empty() &&
+                observed_g1_fault->reason == HollyDmaFaultReason::TransferFailure &&
+                observed_g1_fault->fault_address == 0x0C000000u &&
+                observed_g1_fault->transferred_bytes == 0u &&
+                observed_g1_fault->residue == 32u &&
+                observed_g1_fault->phase == G1DmaFaultPhase::Chunk &&
+                *observed_g1_fault == *failing_g1.last_g1_fault() &&
+                g1_quiesced_before_notification,
+            "Interner G1-Handlerfehler verliert typisierte Evidenz, Quieszenz oder wird als "
+            "Hardware-ASIC-Ereignis ausgegeben.");
+    static_cast<void>(failing_g1_scheduler.advance_by(1'024u, 16u));
+    require(failing_g1.state().active == 0u && !failing_g1.state().completion_event &&
+                failing_g1.state().fault_count == 1u,
+            "Werfender G1-Faultobserver laesst ein spaetes Event oder einen zweiten Fault durch.");
+
+    EventScheduler scheduler_failure_g1_scheduler;
+    std::vector<SystemAsicEvent> scheduler_failure_g1_events;
+    DreamcastG1BusController scheduler_failure_g1(
+        scheduler_failure_g1_scheduler,
+        HollyDmaTiming{std::numeric_limits<std::uint64_t>::max()},
+        [](const auto, const auto, const auto) {},
+        [&](const SystemAsicEvent event) { scheduler_failure_g1_events.push_back(event); });
+    require(!scheduler_failure_g1.begin_transfer(0x0C000000u, 32u, 1u) &&
+                scheduler_failure_g1.last_fault() &&
+                scheduler_failure_g1.last_fault()->reason ==
+                    HollyDmaFaultReason::SchedulerFailure &&
+                !scheduler_failure_g1.last_fault()->event &&
+                scheduler_failure_g1_events.empty(),
+            "Interner G1-Schedulerfehler wird als Timeout/Overrun auf das ASIC gespiegelt.");
 
     memory.write_u32(0x005F7820u, 0x01000000u);
     memory.write_u32(0x005F7824u, 0x0C005000u);
@@ -332,12 +475,17 @@ int main() {
                 contract_events == std::vector<SystemAsicEvent>{SystemAsicEvent::PvrDma},
             "PVR-DMA committed Daten, SH-4-DMAC-Residue oder Completion nicht gemeinsam.");
 
+    const auto events_before_missing_backend = events.size();
+    memory.write_u32(0x005F7404u, 0x0C000000u);
+    memory.write_u32(0x005F7408u, 32u);
+    memory.write_u32(0x005F740Cu, 1u);
     memory.write_u32(0x005F7418u, 0u);
     memory.write_u32(0x005F7414u, 1u);
     memory.write_u32(0x005F7418u, 1u);
     require(controllers.g1->last_fault() &&
                 controllers.g1->last_fault()->reason == HollyDmaFaultReason::MissingBackend &&
-                events.back() == SystemAsicEvent::GdromAccessError &&
+                !controllers.g1->last_fault()->event &&
+                events.size() == events_before_missing_backend &&
                 throws([&] { static_cast<void>(memory.read_u32(0x005F7400u)); }) &&
                 throws([&] { static_cast<void>(memory.read_u16(0x005F7800u)); }) &&
                 throws([&] { memory.write_u32(0x005F7880u, 1u); }) &&

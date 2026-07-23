@@ -32,17 +32,32 @@ enum class HollyDmaFaultReason : std::uint8_t {
     InvalidDirection,
     InvalidTrigger,
     MissingBackend,
+    SchedulerFailure,
     TransferFailure,
     HandshakeMismatch,
 };
 
 struct HollyDmaFault {
     HollyDmaFaultReason reason = HollyDmaFaultReason::None;
-    SystemAsicEvent event = SystemAsicEvent::PvrIllegalAddress;
+    std::optional<SystemAsicEvent> event;
     std::size_t channel = 0u;
     std::uint32_t peripheral_address = 0u;
     std::uint32_t system_address = 0u;
     std::uint32_t remaining = 0u;
+};
+
+enum class G1DmaFaultPhase : std::uint8_t {
+    Start,
+    Chunk,
+};
+
+struct G1DmaFault {
+    HollyDmaFaultReason reason = HollyDmaFaultReason::None;
+    std::uint32_t fault_address = 0u;
+    std::uint32_t transferred_bytes = 0u;
+    std::uint32_t residue = 0u;
+    G1DmaFaultPhase phase = G1DmaFaultPhase::Start;
+    bool operator==(const G1DmaFault&) const = default;
 };
 
 struct HollyDmaChannelState {
@@ -113,12 +128,17 @@ class DreamcastG1BusController final {
   public:
     static constexpr std::uint32_t transfer_alignment = 32u;
     static constexpr std::uint32_t transfer_chunk_bytes = 2048u;
+    static constexpr std::uint32_t maximum_transfer_bytes = 0x02000000u;
+    static constexpr std::uint32_t address_protect_key = 0x8843u;
     using TransferHandler =
         std::function<void(std::uint32_t address, std::uint32_t length, std::uint32_t direction)>;
+    using RangeValidator = std::function<bool(std::uint32_t address, std::size_t length)>;
+    using FaultObserver = std::function<void(const G1DmaFault&)>;
     DreamcastG1BusController(EventScheduler& scheduler,
                              HollyDmaTiming timing,
                              TransferHandler transfer_handler,
-                             std::function<void(SystemAsicEvent)> completion_observer);
+                             std::function<void(SystemAsicEvent)> completion_observer,
+                             RangeValidator range_validator = {});
     ~DreamcastG1BusController();
     [[nodiscard]] std::uint32_t read(std::uint32_t offset) const;
     void write(std::uint32_t offset, std::uint32_t value);
@@ -130,16 +150,27 @@ class DreamcastG1BusController final {
     void reset() noexcept;
     [[nodiscard]] HollyDmaChannelState state() const noexcept;
     [[nodiscard]] const std::optional<HollyDmaFault>& last_fault() const noexcept;
+    [[nodiscard]] const std::optional<G1DmaFault>& last_g1_fault() const noexcept;
+    void set_fault_observer(FaultObserver observer);
+    [[nodiscard]] std::uint32_t gdrom_read_access_timing() const noexcept;
+    [[nodiscard]] std::uint32_t address_protect() const noexcept;
 
   private:
-    void schedule_chunk();
+    void schedule_chunk(G1DmaFaultPhase failure_phase);
     void complete_chunk(SchedulerEventId event_id);
     void handle_scheduler_reset() noexcept;
-    void fail(HollyDmaFaultReason reason, SystemAsicEvent event) noexcept;
+    void fail(HollyDmaFaultReason reason,
+              std::optional<SystemAsicEvent> event = std::nullopt,
+              G1DmaFaultPhase phase = G1DmaFaultPhase::Start,
+              std::optional<std::uint32_t> fault_address = std::nullopt) noexcept;
+    [[nodiscard]] bool protected_system_range(std::uint32_t address,
+                                              std::uint32_t size) const noexcept;
     EventScheduler& scheduler_;
     HollyDmaTiming timing_;
     TransferHandler transfer_handler_;
     std::function<void(SystemAsicEvent)> completion_observer_;
+    RangeValidator range_validator_;
+    FaultObserver fault_observer_;
     SchedulerLifetimeToken scheduler_lifetime_;
     SchedulerResetObserverId reset_observer_ = 0u;
     std::optional<SchedulerEventId> completion_event_;
@@ -153,10 +184,13 @@ class DreamcastG1BusController final {
     std::uint32_t dma_enabled_ = 0u;
     std::uint32_t dma_active_ = 0u;
     std::uint32_t system_mode_ = 1u;
+    std::uint32_t gdrom_read_access_timing_ = 0u;
+    std::uint32_t address_protect_ = 0x0000407Fu;
     std::uint64_t next_chunk_cycle_ = 0u;
     HollyDmaFaultReason fault_ = HollyDmaFaultReason::None;
     std::uint64_t fault_count_ = 0u;
     std::optional<HollyDmaFault> last_fault_;
+    std::optional<G1DmaFault> last_g1_fault_;
 };
 
 class DreamcastPvrDmaController final {

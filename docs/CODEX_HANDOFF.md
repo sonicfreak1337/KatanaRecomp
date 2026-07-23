@@ -378,7 +378,7 @@ v0.48 P0 - kombinierten KR-4847- bis KR-4850-Kernblock fokussiert validieren
 
 Abgeschlossen und in Roadmap/Taskliste markiert sind `KR-4841`, `KR-4843`,
 `KR-4844`, `KR-4845` und `KR-4846`. Der aktuelle Runtimevertrag steht auf
-Runtime-ABI 37, Backend-Interface-ABI 3, BIOS-ABI 9 und Portprojektvertrag 23.
+Runtime-ABI 38, Backend-Interface-ABI 3, BIOS-ABI 9 und Portprojektvertrag 23.
 Das verbindliche
 XenonRecomp-artige Produktmodell rekompiliert `IP.BIN` und BootExecutable
 statisch aus SH-4 in nativen PC-Code. Dreamcast-Komponenten bleiben typisierte,
@@ -390,6 +390,23 @@ im Manifest aus. `KR-4848` bleibt trotzdem offen, bis strukturierte Disc-
 Ladetransaktionen und die vorab erzeugte Registry latenter nativer Module
 vorliegen.
 
+Der laufende ABI-38-Block bindet G1-DMA-Faults mit Phase, Adresse, exakt
+committed Praefix und Residue an den GD-ROM-CHECK-/Sense- und Requestzustand.
+G1 wird vor jeder Benachrichtigung angehalten; interne Backend-/Schedulerfehler
+duerfen kein ASIC-Hardwareereignis vortaeuschen. Store-Queue-`PREF` verwendet
+bei `MMUCR.AT=0` QACR und bei `AT=1` die UTLB. Ausrichtung, `SQMD`, ASID/SV,
+Schreibschutz, Dirty-Bit, Miss und Multiple-Hit werden atomar vor TA- oder
+Speicherwirkung geprueft. `PREF` muss im C++-Emitter trotz leerem,
+adressabhaengigem IR-Speichereffekt innerhalb der `MemoryAccessError`-Grenze
+bleiben; die Regression prueft den SH-4-Exceptioneintritt explizit.
+
+Nachfolgerlose generierte C++-Bloecke schreiben nun in jedem Backendmodus den
+architektonischen Fallthrough-PC. Die kompilierte Regression deckt
+Einzelblock, lokales Chaining und normalen Backendpfad ab. Die
+Produktinvariante berechnet den erwarteten PC aus der tatsaechlichen
+Terminatorquelle (`source + 2`) statt aus dem Wrapper-Eintritt; den frueheren
+Fehlalarm einer gueltigen lokalen Blockkette nicht wieder einfuehren.
+
 Der Relative16-Audit weist 87 Eintraege, 76 eindeutige Kandidaten und 73 im
 vorherigen Port fehlende Ziele aus. Sie sind native Blockleader, waehrend der
 live geladene `MOV.W`-/`BRAF`-Dispatch `RuntimeOnly` bleibt und keine erfundene
@@ -397,24 +414,21 @@ CFG-Kante erhaelt. Snapshotcache und P2-Aliasaufloesung sind imagegebunden;
 lokale AOT-Blockketten melden die exakte letzte Terminatorquelle, Callsite,
 Transferart und Siteklasse.
 
-Der frische optimierte PAL-Export ist abgeschlossen: 140,5 Sekunden mit zwoelf
-Jobs, 1.856 Funktionen, 37 Codepartitionen, 43 Dispatchshards, Vertrag 23,
-Runtime-ABI 37 und Backend-Interface-ABI 3. Das Portpaket enthaelt null
-Retailsektoren. Die unveraenderte Original-GDI wurde mit drei Tracks und
-521.461 Sektoren lokal installiert und blieb erhalten; erst danach wurde der
-alte `gdrom-mode-fix`-Port geloescht. Der 30-Sekunden-Lauf blieb ueber
-312.939.023 Zyklen und 1.000.000 Rootdispatches stabil. `0x8C654F5C` ist kein
-Fehler mehr.
+Der frische optimierte ABI-38-PAL-Export ist abgeschlossen: 140,9 Sekunden mit
+zwoelf Jobs, 1.856 Funktionen, 37 Codepartitionen und Vertrag 23. Der
+inkrementelle Reexport dauerte 29,2 Sekunden. Das Portpaket enthaelt null
+Retailsektoren; die lokale Discinstallation war erfolgreich und die
+unveraenderte Original-GDI blieb erhalten.
 
-Der kontrollierte 100-Millionen-Zyklen-Snapshot belegt `IP.BIN`-AOT und 48.471
-native Runtime-only-Treffer ohne Fehler, Fallback oder Materialisierung; GD-
-ROM, TA und PVR bleiben an dieser fruehen Grenze null. Bei 320 Millionen Zyklen
-erreicht der Gast Spielecode, zwei GD-ROM-Kommandos und einen spaeten PVR-
-Registerwrite. Alle 761.011 Dispatchereignisse bleiben fehlerfrei. Der
-Haupthotspot `0x8C6658D0 -> 0x8C65247E` mit 696.053 Aufrufen ist ein endlicher
-4-Byte-Kopier-/Initialisierungsloop (`r6=4`, Ziel `r14`, Quelle Stack,
-`r14+=4`), kein fehlender Zielblock. TA, Render und Frame bleiben null;
-`KR-4848` bleibt offen.
+Der aktuelle Produktlauf erreicht 345.609.251 Gastzyklen und einen echten
+Runtimehandler am architektonischen SH-4-Interruptvektor `VBR + 0x600`.
+Frames, TA-Transfers und Gast-PVR-Frames bleiben null. Eine getrennte begrenzte
+Diagnose beweist ueber Gastwriteprovenienz ein 56-Byte-Copy-plus-Patch-
+Codetemplate und fuehrt daraus 19 bytebewiesene Runtimeinstruktionen aus. Sie
+stoppt danach am naechsten noch nicht statisch gebundenen AOT-Einstieg. Keine
+privaten Bytes oder Adressen als Produkthardcode uebernehmen; die allgemeine
+native Bindung dieses Runtimecodes ist die naechste `KR-4848`-Arbeit und der
+Task bleibt offen.
 
 Der Projektschreiber shardet Dispatchregistries nach jeweils maximal 512
 Bloecken, emittiert pro Owner und Shard genau einen Wrapper und routet
@@ -460,10 +474,12 @@ den Render. Die Evidenz ist auf 256 Generationen, 64 MiB und 2.097.152
 Pixelpruefungen pro VBlank begrenzt und besitzt einen Range-Fast-Reject. Der
 Hintergrund-Overscan-Quad bildet HScale, D-Attribute und texturierte X/U-
 Erweiterung ab. Der gemeinsame Proof-Pump trennt Gastbeweis und Host-Present;
-die vier fokussierten PVR-/Framebuffer-/Hostvideo-/Portexporttests sind mit 12
-Buildjobs 4/4 in 0,66 Sekunden gruen. Die kombinierte fokussierte Validierung
-des gesamten Blocks besteht 12/12 mit 12 Buildjobs. Das ist nicht das spaetere
-180-Test-Gate und beweist noch keinen privaten Sonic-Adventure-Frame.
+die vier fokussierten PVR-/Framebuffer-/Hostvideo-/Portexporttests waren mit 12
+Buildjobs 4/4 in 0,66 Sekunden gruen. Das aktuelle fokussierte Kern-Gate
+besteht 9/9; nach der source-relativen Fallthroughkorrektur besteht der
+Portexporttest zusaetzlich 1/1. Der konfigurierte 181-Test-Gesamtbestand wurde
+in diesem Zwischenblock nicht vollstaendig ausgefuehrt und ist nicht als Gate
+bestanden. Ein privater Sonic-Adventure-Frame ist weiterhin nicht bewiesen.
 
 Weiter offen:
 
@@ -478,12 +494,12 @@ KR-4850: scanoutgebundener echter Gastframe
 Die verbindliche Abhaengigkeitsfolge lautet fuer die offenen Pfade
 `KR-4842 -> KR-4911 -> KR-4912 -> KR-4848`; danach implementiert `KR-4849`
 den TA/PVR-Vertrag, `KR-4915` beweist dessen echten Gastpfad und erst
-`KR-4850` bestaetigt den Frame. `KR-4814` und `KR-4914` folgen danach innerhalb
-von v0.48.
+`KR-4850` bestaetigt den Frame. `KR-4814` und `KR-4914` folgen danach in
+v0.49 auf der freigegebenen Framebasis.
 
 Ein erster Gastframe ist noch nicht nachgewiesen. Moderne Xbox-, DualSense-
-und vergleichbare Hostcontroller gehoeren zu `KR-4814`/`KR-4914` in v0.48,
-bleiben aber strikt hinter `KR-4850`. Waehrend
+und vergleichbare Hostcontroller gehoeren zu `KR-4814`/`KR-4914` in v0.49 und
+bleiben strikt hinter dem v0.48-Frame-Gate aus `KR-4850`. Waehrend
 der Kernrunde nur fokussierte Targets ausfuehren; das konsolidierte Gate und
 die abschliessende private PAL-Wiederholung erst im vorgesehenen Block starten.
 Der bereits ausgefuehrte vorgezogene Lauf ist Diagnoseevidenz, kein Ersatz fuer
