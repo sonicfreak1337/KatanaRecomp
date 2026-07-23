@@ -17,6 +17,7 @@
 #include <iomanip>
 #include <iostream>
 #include <map>
+#include <memory>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -333,7 +334,8 @@ int run_test(const int argc, char* argv[]) {
             "Speicher nicht.");
     auto pal_runtime_boot = runtime_boot;
     pal_runtime_boot.area_symbols = "E";
-    katana::runtime::CpuState pal_runtime_cpu;
+    auto pal_runtime_cpu_storage = std::make_unique<katana::runtime::CpuState>();
+    auto& pal_runtime_cpu = *pal_runtime_cpu_storage;
     const auto pal_runtime_state =
         katana::runtime::initialize_dreamcast_runtime(
             pal_runtime_cpu,
