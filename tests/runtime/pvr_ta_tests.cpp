@@ -1,11 +1,14 @@
+#include "katana/runtime/dreamcast_memory.hpp"
 #include "katana/runtime/pvr.hpp"
 
+#include <algorithm>
 #include <array>
 #include <bit>
 #include <cstdint>
 #include <cstring>
 #include <cstdlib>
 #include <iostream>
+#include <memory>
 #include <stdexcept>
 #include <string>
 
@@ -50,6 +53,26 @@ Packet ta_vertex(const std::uint32_t command, const float x) {
 void end_fifo_list(katana::runtime::PvrTaFifo& fifo) {
     fifo.submit(Packet{});
 }
+
+struct YuvAccessRecorder {
+    std::array<katana::runtime::GuestMemoryAccessEvent, 256u> events{};
+    std::size_t count = 0u;
+    bool overflow = false;
+
+    static void record(void* const context,
+                       const katana::runtime::GuestMemoryAccessEvent& event) noexcept {
+        auto& self = *static_cast<YuvAccessRecorder*>(context);
+        if (self.count == self.events.size()) {
+            self.overflow = true;
+            return;
+        }
+        self.events[self.count++] = event;
+    }
+
+    [[nodiscard]] katana::runtime::GuestMemoryAccessSink sink() noexcept {
+        return {this, &record};
+    }
+};
 } // namespace
 
 int main() {
@@ -229,6 +252,119 @@ int main() {
                 intensity_frame.primitives[1].vertices[0].argb == 0xFF66331Au &&
                 intensity_frame.primitives[1].vertices[0].oargb == 0xFF1A330Du,
             "Intensity-Mode 2 uebernimmt Face-Colors oder Vertex-Intensitaeten nicht korrekt.");
+
+    {
+        EventScheduler yuv_scheduler;
+        auto yuv_registers = std::make_shared<PvrRegisterFile>(yuv_scheduler);
+        auto yuv_vram = std::make_shared<LinearMemoryDevice>(dreamcast_vram_size);
+        Memory yuv_access_memory(0u);
+        YuvAccessRecorder yuv_accesses;
+        yuv_access_memory.set_guest_memory_access_sink(yuv_accesses.sink());
+        bool yuv_completed = false;
+        PvrYuvConverterMemoryDevice yuv_converter(
+            yuv_registers, yuv_vram, [&] { yuv_completed = true; });
+        yuv_converter.set_guest_memory_access_memory(&yuv_access_memory);
+        constexpr std::uint32_t yuv_destination = 0x2000u;
+        yuv_registers->write(pvr_register::YuvConfig, 0u);
+        yuv_registers->write(pvr_register::YuvAddress, yuv_destination);
+        std::array<std::uint8_t, 384u> macroblock{};
+        std::fill_n(macroblock.begin(), 64u, std::uint8_t{0x11u});
+        std::fill_n(macroblock.begin() + 64u, 64u, std::uint8_t{0x22u});
+        std::fill(macroblock.begin() + 128u, macroblock.end(), std::uint8_t{0x33u});
+        for (std::size_t index = 0u; index < macroblock.size(); ++index)
+            yuv_converter.write_u8(static_cast<std::uint32_t>(index), macroblock[index]);
+
+        require(yuv_completed && yuv_converter.converted_macroblocks() == 1u &&
+                    yuv_registers->read(pvr_register::YuvStatus) == 1u &&
+                    !yuv_accesses.overflow && yuv_accesses.count == 256u,
+                "PVR-YUV meldet nicht genau einen Zugriff je erfolgreichem Halfword-Store.");
+        for (std::size_t index = 0u; index < yuv_accesses.count; ++index) {
+            const auto& access = yuv_accesses.events[index];
+            const auto expected_offset =
+                yuv_destination + static_cast<std::uint32_t>(index * 2u);
+            const auto expected_value =
+                static_cast<std::uint32_t>((index & 1u) == 0u ? 0x3311u : 0x3322u);
+            require(access.operation == MemoryAccessOperation::Write &&
+                        access.access_origin == GuestMemoryAccessOrigin::PvrYuv &&
+                        !access.instruction.valid &&
+                        access.virtual_address == access.physical_address &&
+                        access.physical_address ==
+                            dreamcast_vram_64bit_physical_bases.front() + expected_offset &&
+                        access.width == MemoryAccessWidth::Halfword &&
+                        access.value == expected_value &&
+                        access.size == sizeof(std::uint16_t) &&
+                        access.write_source == CodeWriteSource::Fallback &&
+                        access.scalar_value_valid && access.bytes_changed &&
+                        access.linear_backing == yuv_vram.get() &&
+                        access.linear_offset == expected_offset &&
+                        access.linear_size == sizeof(std::uint16_t) &&
+                        access.linear_contiguous &&
+                        access.linear_byte_offsets[0] == expected_offset &&
+                        access.linear_byte_offsets[1] == expected_offset + 1u &&
+                        access.linear_byte_count == sizeof(std::uint16_t),
+                    "PVR-YUV verliert Origin, Adresse, Wert oder lineare VRAM-Projektion.");
+        }
+        yuv_accesses.count = 0u;
+        yuv_accesses.overflow = false;
+        PvrYuvConverterMemoryDevice unchanged_yuv_converter(
+            yuv_registers, yuv_vram);
+        unchanged_yuv_converter.set_guest_memory_access_memory(&yuv_access_memory);
+        for (std::size_t index = 0u; index < macroblock.size(); ++index)
+            unchanged_yuv_converter.write_u8(
+                static_cast<std::uint32_t>(index), macroblock[index]);
+        require(!yuv_accesses.overflow && yuv_accesses.count == 256u &&
+                    std::all_of(yuv_accesses.events.begin(),
+                                yuv_accesses.events.end(),
+                                [](const auto& access) { return !access.bytes_changed; }),
+                "Identische PVR-YUV-Stores werden faelschlich als geaendert gemeldet.");
+
+        EventScheduler unobserved_scheduler;
+        auto unobserved_registers =
+            std::make_shared<PvrRegisterFile>(unobserved_scheduler);
+        auto unobserved_vram =
+            std::make_shared<LinearMemoryDevice>(dreamcast_vram_size);
+        bool unobserved_completed = false;
+        PvrYuvConverterMemoryDevice unobserved_converter(
+            unobserved_registers,
+            unobserved_vram,
+            [&] { unobserved_completed = true; });
+        unobserved_registers->write(pvr_register::YuvConfig, 0u);
+        unobserved_registers->write(pvr_register::YuvAddress, yuv_destination);
+        for (std::size_t index = 0u; index < macroblock.size(); ++index)
+            unobserved_converter.write_u8(
+                static_cast<std::uint32_t>(index), macroblock[index]);
+        require(unobserved_completed &&
+                    unobserved_converter.converted_macroblocks() ==
+                        yuv_converter.converted_macroblocks() &&
+                    std::equal(yuv_vram->bytes().begin(),
+                               yuv_vram->bytes().end(),
+                               unobserved_vram->bytes().begin(),
+                               unobserved_vram->bytes().end()),
+                "Aktivierter PVR-YUV-Sink veraendert VRAM oder Completionzustand.");
+
+        EventScheduler invalid_scheduler;
+        auto invalid_registers =
+            std::make_shared<PvrRegisterFile>(invalid_scheduler);
+        auto invalid_vram = std::make_shared<LinearMemoryDevice>(dreamcast_vram_size);
+        PvrYuvConverterMemoryDevice invalid_converter(invalid_registers, invalid_vram);
+        invalid_converter.set_guest_memory_access_memory(&yuv_access_memory);
+        invalid_registers->write(pvr_register::YuvConfig, 0u);
+        invalid_registers->write(
+            pvr_register::YuvAddress,
+            static_cast<std::uint32_t>(dreamcast_vram_size - 0x100u));
+        yuv_accesses.count = 0u;
+        yuv_accesses.overflow = false;
+        for (std::size_t index = 0u; index + 1u < macroblock.size(); ++index)
+            invalid_converter.write_u8(
+                static_cast<std::uint32_t>(index), macroblock[index]);
+        require(throws<std::out_of_range>([&] {
+                    invalid_converter.write_u8(
+                        static_cast<std::uint32_t>(macroblock.size() - 1u),
+                        macroblock.back());
+                }) &&
+                    yuv_accesses.count == 0u && !yuv_accesses.overflow,
+                "Abgelehnter PVR-YUV-Ausgabebereich erzeugt Speicherzugriffsevidenz.");
+    }
 
     std::cout << "KR-2803 Tile-Accelerator-Grundpfad erfolgreich.\n";
 }

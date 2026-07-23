@@ -134,13 +134,19 @@ int main(const int argc, char* argv[]) {
             "R0-indexierte Loads wurden falsch in die IR abgesenkt.");
 
     const auto source = katana::codegen::emit_cpp_program(program, entry_address);
-    require(source.find("guest_write_u8(cpu, cpu.r[0] + cpu.r[2]") != std::string::npos &&
-                source.find("guest_write_u16(cpu, cpu.r[0] + cpu.r[4]") != std::string::npos &&
-                source.find("guest_write_u32(cpu, cpu.r[0] + cpu.r[6]") != std::string::npos,
+    require(source.find("guest_write_u8_at(cpu, guest_origin, cpu.r[0] + cpu.r[2]") !=
+                    std::string::npos &&
+                source.find("guest_write_u16_at(cpu, guest_origin, cpu.r[0] + cpu.r[4]") !=
+                    std::string::npos &&
+                source.find("guest_write_u32_at(cpu, guest_origin, cpu.r[0] + cpu.r[6]") !=
+                    std::string::npos,
             "Der Codegenerator verwendet falsche R0-indexierte Store-Adressen.");
-    require(source.find("guest_read_s8(cpu, cpu.r[0] + cpu.r[7]") != std::string::npos &&
-                source.find("guest_read_s16(cpu, cpu.r[0] + cpu.r[9]") != std::string::npos &&
-                source.find("guest_read_u32(cpu, cpu.r[0] + cpu.r[11]") != std::string::npos,
+    require(source.find("guest_read_s8_at(cpu, guest_origin, cpu.r[0] + cpu.r[7]") !=
+                    std::string::npos &&
+                source.find("guest_read_s16_at(cpu, guest_origin, cpu.r[0] + cpu.r[9]") !=
+                    std::string::npos &&
+                source.find("guest_read_u32_at(cpu, guest_origin, cpu.r[0] + cpu.r[11]") !=
+                    std::string::npos,
             "Der Codegenerator verwendet falsche R0-indexierte Load-Adressen.");
 
     std::cout << "Alle KR-1403 Decoder-, IR- und Codegen-Tests erfolgreich.\n";

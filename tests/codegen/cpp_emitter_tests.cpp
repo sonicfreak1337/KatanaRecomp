@@ -9,8 +9,12 @@
 
 #include <array>
 #include <cstdlib>
+#include <filesystem>
+#include <fstream>
 #include <iostream>
+#include <sstream>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -21,6 +25,40 @@ void require(const bool condition, const std::string& message) {
         std::cerr << "TEST FEHLGESCHLAGEN: " << message << '\n';
         std::exit(EXIT_FAILURE);
     }
+}
+
+std::size_t count_occurrences(const std::string_view text, const std::string_view needle) {
+    std::size_t count = 0u;
+    std::size_t offset = 0u;
+    while ((offset = text.find(needle, offset)) != std::string_view::npos) {
+        ++count;
+        offset += needle.size();
+    }
+    return count;
+}
+
+std::string_view emitted_instruction(const std::string_view source,
+                                     const std::string_view source_address) {
+    const auto marker = std::string{"// katana-guest "} + std::string{source_address};
+    const auto begin = source.find(marker);
+    if (begin == std::string_view::npos) {
+        return {};
+    }
+    const auto end = source.find("// katana-guest ", begin + marker.size());
+    return source.substr(begin, end == std::string_view::npos ? source.size() - begin : end - begin);
+}
+
+std::string read_cpp_emitter_implementation() {
+    const auto repository_root =
+        std::filesystem::path{__FILE__}.parent_path().parent_path().parent_path();
+    std::ifstream input{repository_root / "src" / "codegen" / "cpp_emitter.cpp",
+                        std::ios::binary};
+    if (!input) {
+        return {};
+    }
+    std::ostringstream buffer;
+    buffer << input.rdbuf();
+    return buffer.str();
 }
 
 } // namespace
@@ -60,6 +98,59 @@ int main() {
             "Der intraprozedurale Call-Nachfolger ist falsch.");
 
     const auto source = katana::codegen::emit_cpp_program(program, 0x8C010000u);
+
+    const auto emitter_implementation = read_cpp_emitter_implementation();
+    require(!emitter_implementation.empty(),
+            "Die Codegen-Regressions koennen cpp_emitter.cpp nicht lesen.");
+    constexpr std::array<std::string_view, 12u> legacy_guest_accesses = {
+        "guest_read_u8(cpu",
+        "guest_read_s8(cpu",
+        "guest_read_u16(cpu",
+        "guest_read_s16(cpu",
+        "guest_read_u32(cpu",
+        "guest_read_s32(cpu",
+        "guest_write_u8(cpu",
+        "guest_write_s8(cpu",
+        "guest_write_u16(cpu",
+        "guest_write_s16(cpu",
+        "guest_write_u32(cpu",
+        "guest_write_s32(cpu",
+    };
+    for (const auto legacy_access : legacy_guest_accesses) {
+        require(emitter_implementation.find(legacy_access) == std::string::npos,
+                "Der C++-Emitter besitzt noch einen Gastzugriff ohne Instruktionsprovenienz: " +
+                    std::string{legacy_access});
+    }
+    constexpr std::array<std::string_view, 12u> origin_guest_accesses = {
+        "guest_read_u8_at(cpu",
+        "guest_read_s8_at(cpu",
+        "guest_read_u16_at(cpu",
+        "guest_read_s16_at(cpu",
+        "guest_read_u32_at(cpu",
+        "guest_read_s32_at(cpu",
+        "guest_write_u8_at(cpu",
+        "guest_write_s8_at(cpu",
+        "guest_write_u16_at(cpu",
+        "guest_write_s16_at(cpu",
+        "guest_write_u32_at(cpu",
+        "guest_write_s32_at(cpu",
+    };
+    std::size_t origin_guest_access_count = 0u;
+    for (const auto origin_access : origin_guest_accesses) {
+        origin_guest_access_count += count_occurrences(emitter_implementation, origin_access);
+    }
+    require(origin_guest_access_count == 50u,
+            "Nicht alle 50 Gastzugriffs-Callsites tragen Instruktionsprovenienz.");
+    require(emitter_implementation.find(
+                "const auto guest_origin = cpu.memory.has_guest_memory_access_sink()") !=
+                std::string::npos &&
+                emitter_implementation.find(
+                    "? katana::runtime::GuestInstructionOrigin{") != std::string::npos &&
+                emitter_implementation.find(
+                    "services->prefetch(cpu, guest_origin,") != std::string::npos &&
+                emitter_implementation.find("services->prefetch(cpu, cpu.r[") ==
+                    std::string::npos,
+            "Origin wird eager erzeugt oder PREF verliert seine Instruktionsprovenienz.");
 
     require(source.find("#include \"katana/runtime/exception.hpp\"") != std::string::npos &&
                 source.find("#include \"katana/runtime/runtime.hpp\"") != std::string::npos,
@@ -383,8 +474,16 @@ int main() {
         katana::ir::lower_program(delay_memory_lines, delay_memory_functions);
     const auto delay_memory_source =
         katana::codegen::emit_cpp_program(delay_memory_program, 0x8C020000u);
+    const auto delay_load =
+        emitted_instruction(delay_memory_source, "0x8C020002");
     require(delay_memory_source.find("catch (const katana::runtime::MemoryAccessError& error)") !=
                     std::string::npos &&
+                delay_load.find(
+                    "GuestInstructionOrigin{0x8C020002u, "
+                    "katana::runtime::relocate_code_address(0x8C020002u), true}") !=
+                    std::string_view::npos &&
+                delay_load.find("guest_read_u32_at(cpu, guest_origin, cpu.r[1])") !=
+                    std::string_view::npos &&
                 delay_memory_source.find("enter_memory_exception(cpu, error, "
                                          "katana::runtime::relocate_code_address(0x8C020002u), "
                                          "katana::runtime::relocate_code_address(0x8C020000u));") !=
@@ -392,8 +491,8 @@ int main() {
                 delay_memory_source.find(
                     "cpu.pc = katana::runtime::relocate_code_address(0x8C020006u);") !=
                     std::string::npos,
-            "BRA oder Speicherfehler im Delay Slot verlieren relokiertes Ziel, Fehler-PC oder "
-            "Owner-PC.");
+            "BRA oder Load im Delay Slot verlieren eigene Provenienz, relokiertes Ziel, "
+            "Fehler-PC oder Owner-PC.");
 
     constexpr std::array<std::uint8_t, 10> pc_relative_bytes = {
         0x00u,
@@ -415,19 +514,121 @@ int main() {
         katana::ir::lower_program(pc_relative_lines, pc_relative_functions);
     const auto pc_relative_source =
         katana::codegen::emit_cpp_program(pc_relative_program, 0x8C030000u);
-    require(pc_relative_source.find("guest_read_s16(cpu, "
-                                    "katana::runtime::relocate_code_address(0x8C030004u))") !=
+    const auto pc_relative_word =
+        emitted_instruction(pc_relative_source, "0x8C030000");
+    const auto pc_relative_long =
+        emitted_instruction(pc_relative_source, "0x8C030002");
+    require(pc_relative_source.find(
+                "? katana::runtime::GuestInstructionOrigin{0x8C030000u, "
+                "katana::runtime::relocate_code_address(0x8C030000u), true}") !=
                     std::string::npos &&
-                pc_relative_source.find("guest_read_u32(cpu, "
-                                        "katana::runtime::relocate_code_address(0x8C030004u))") !=
+                pc_relative_source.find(
+                    "const auto guest_origin = cpu.memory.has_guest_memory_access_sink()") !=
+                    std::string::npos &&
+                pc_relative_source.find("guest_read_s16_at(cpu, guest_origin, "
+                                     "katana::runtime::relocate_code_address(0x8C030004u))") !=
+                    std::string::npos &&
+                pc_relative_source.find("guest_read_u32_at(cpu, guest_origin, "
+                                         "katana::runtime::relocate_code_address(0x8C030004u))") !=
                     std::string::npos &&
                 pc_relative_source.find(
                     "cpu.r[0] = katana::runtime::relocate_code_address(0x8C030008u);") !=
                     std::string::npos &&
-                pc_relative_source.find("relocate_code_address(katana::runtime::guest_read_u32") ==
-                    std::string::npos,
-            "PC-relative MOV.W/MOV.L/MOVA folgen nicht dem Codetemplate oder veraendern den "
-            "geladenen Literalwert.");
+                pc_relative_source.find(
+                    "relocate_code_address(katana::runtime::guest_read_u32_at") ==
+                    std::string::npos &&
+                count_occurrences(pc_relative_word, "GuestInstructionOrigin{0x8C030000u") == 1u &&
+                count_occurrences(pc_relative_word, "guest_read_s16_at(cpu, guest_origin") == 1u &&
+                pc_relative_word.find("0x8C030002u") == std::string_view::npos &&
+                count_occurrences(pc_relative_long, "GuestInstructionOrigin{0x8C030002u") == 1u &&
+                count_occurrences(pc_relative_long, "guest_read_u32_at(cpu, guest_origin") == 1u &&
+                pc_relative_long.find("GuestInstructionOrigin{0x8C030000u") ==
+                    std::string_view::npos,
+            "PC-relative MOV.W/MOV.L besitzen keine getrennten Origins, folgen nicht dem "
+            "Codetemplate oder veraendern den geladenen Literalwert.");
+
+    constexpr std::array<std::uint8_t, 6> read_modify_write_bytes = {
+        0x0Fu,
+        0xCDu, // AND.B #15,@(R0,GBR)
+        0x0Bu,
+        0x00u, // RTS
+        0x09u,
+        0x00u // NOP (Delay Slot)
+    };
+    const auto read_modify_write_lines =
+        katana::sh4::disassemble(read_modify_write_bytes, 0x8C050000u);
+    constexpr std::array<std::uint32_t, 1> read_modify_write_seeds = {0x8C050000u};
+    const auto read_modify_write_functions =
+        katana::analysis::discover_functions(read_modify_write_lines, read_modify_write_seeds);
+    const auto read_modify_write_program =
+        katana::ir::lower_program(read_modify_write_lines, read_modify_write_functions);
+    const auto read_modify_write_source =
+        katana::codegen::emit_cpp_program(read_modify_write_program, 0x8C050000u);
+    const auto read_modify_write =
+        emitted_instruction(read_modify_write_source, "0x8C050000");
+    require(count_occurrences(
+                read_modify_write,
+                "GuestInstructionOrigin{0x8C050000u, "
+                "katana::runtime::relocate_code_address(0x8C050000u), true}") == 1u &&
+                count_occurrences(
+                    read_modify_write, "guest_read_u8_at(cpu, guest_origin, address)") == 1u &&
+                count_occurrences(
+                    read_modify_write, "guest_write_u8_at(cpu, guest_origin, address") == 1u &&
+                count_occurrences(read_modify_write, "GuestInstructionOrigin{0x") == 1u,
+            "AND.B Read-Modify-Write verwendet nicht fuer Read und Write denselben Origin.");
+
+    constexpr std::array<std::uint8_t, 8> fmov_memory_bytes = {
+        0x28u,
+        0xF0u, // FMOV.S @R2,FR0
+        0x0Au,
+        0xF4u, // FMOV.S FR0,@R4
+        0x0Bu,
+        0x00u, // RTS
+        0x09u,
+        0x00u // NOP (Delay Slot)
+    };
+    const auto fmov_memory_lines = katana::sh4::disassemble(fmov_memory_bytes, 0x8C060000u);
+    constexpr std::array<std::uint32_t, 1> fmov_memory_seeds = {0x8C060000u};
+    const auto fmov_memory_functions =
+        katana::analysis::discover_functions(fmov_memory_lines, fmov_memory_seeds);
+    const auto fmov_memory_program =
+        katana::ir::lower_program(fmov_memory_lines, fmov_memory_functions);
+    const auto fmov_memory_source =
+        katana::codegen::emit_cpp_program(fmov_memory_program, 0x8C060000u);
+    const auto fmov_load = emitted_instruction(fmov_memory_source, "0x8C060000");
+    const auto fmov_store = emitted_instruction(fmov_memory_source, "0x8C060002");
+    require(count_occurrences(fmov_load, "GuestInstructionOrigin{0x8C060000u") == 1u &&
+                count_occurrences(fmov_load, "guest_read_u32_at(cpu, guest_origin") == 3u &&
+                count_occurrences(fmov_store, "GuestInstructionOrigin{0x8C060002u") == 1u &&
+                count_occurrences(fmov_store, "guest_write_u32_at(cpu, guest_origin") == 3u &&
+                count_occurrences(fmov_store, "CodeWriteSource::Fpu") == 3u,
+            "FMOV.S erzeugt fuer 32-/64-Bit-Pfade nicht 1/2 Events mit FPU-Writequelle.");
+
+    constexpr std::array<std::uint8_t, 8> mac_memory_bytes = {
+        0x1Fu,
+        0x42u, // MAC.W @R1+,@R2+
+        0x3Fu,
+        0x04u, // MAC.L @R3+,@R4+
+        0x0Bu,
+        0x00u, // RTS
+        0x09u,
+        0x00u // NOP (Delay Slot)
+    };
+    const auto mac_memory_lines = katana::sh4::disassemble(mac_memory_bytes, 0x8C070000u);
+    constexpr std::array<std::uint32_t, 1> mac_memory_seeds = {0x8C070000u};
+    const auto mac_memory_functions =
+        katana::analysis::discover_functions(mac_memory_lines, mac_memory_seeds);
+    const auto mac_memory_program =
+        katana::ir::lower_program(mac_memory_lines, mac_memory_functions);
+    const auto mac_memory_source =
+        katana::codegen::emit_cpp_program(mac_memory_program, 0x8C070000u);
+    const auto mac_word = emitted_instruction(mac_memory_source, "0x8C070000");
+    const auto mac_long = emitted_instruction(mac_memory_source, "0x8C070002");
+    require(count_occurrences(mac_word, "GuestInstructionOrigin{0x8C070000u") == 1u &&
+                count_occurrences(mac_word, "guest_read_u16_at(cpu, guest_origin") == 2u &&
+                count_occurrences(mac_long, "GuestInstructionOrigin{0x8C070002u") == 1u &&
+                count_occurrences(mac_long, "guest_read_u32_at(cpu, guest_origin") == 2u,
+            "MAC.W/MAC.L erzeugen nicht je zwei Reads mit ihrem gemeinsamen Instruktionsorigin.");
 
     constexpr std::array<std::uint8_t, 2> sleep_bytes = {0x1Bu, 0x00u};
     const auto sleep_lines = katana::sh4::disassemble(sleep_bytes, 0x8C040000u);
@@ -496,9 +697,12 @@ int main() {
             cache_source.find("OperandCacheOperation::Invalidate, cpu.r[7]") != std::string::npos &&
             cache_source.find("OperandCacheOperation::Purge, cpu.r[5]") != std::string::npos &&
             cache_source.find("OperandCacheOperation::WriteBack, cpu.r[12]") != std::string::npos &&
-            cache_source.find("katana::runtime::guest_write_u32(cpu, cpu.r[9], cpu.r[0])") !=
+            cache_source.find("katana::runtime::guest_write_u32_at(cpu, guest_origin, "
+                              "cpu.r[9], cpu.r[0], "
+                              "katana::runtime::CodeWriteSource::StoreQueue)") !=
                 std::string::npos &&
-            cache_source.find("services->prefetch(cpu, cpu.r[3])") != std::string::npos &&
+            cache_source.find("services->prefetch(cpu, guest_origin, cpu.r[3])") !=
+                std::string::npos &&
             cache_source.find("enter_memory_exception(cpu, error, "
                               "katana::runtime::relocate_code_address(0x0000400Au));") !=
                 std::string::npos,

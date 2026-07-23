@@ -20,11 +20,13 @@ deckt die bislang fehlenden GBR-, Byte-Read/RMW-, TAS-, FMOV-, PC-relativen,
 STC.L-/LDC.L- und MAC-Speicherfamilien ab und klassifiziert Counter-, RAM-Poll-,
 MMIO-Poll-, Mixed- und Unknown-Loops samt aufgeloester und konservativ
 unaufgeloester Guard-Evidenz.
-Dynamische Wertwechselfolgen, echte Runtime-Writer-Provenienz und der
-vollstaendige Diagnose=0/1-A/B-Produktlauf laufen getrennt weiter.
+Der versionierte Runtime-Trace liefert inzwischen auch dynamische
+Wertwechselfolgen und echte Writer-Provenienz. Ausschliesslich der
+vollstaendige Diagnose=0/1-A/B-Produktlauf bleibt fuer `KR-4842` offen.
 
-Der aktuelle kumulative Vertrag verwendet Runtime-ABI 41, Block-ABI 3,
-Backend-Interface-ABI 3, Portprojektvertrag 25 und Host-Video-Vertrag 2.
+Der aktuelle kumulative Vertrag verwendet Runtime-ABI 42, Block-ABI 3,
+Backend-Interface-ABI 3, PlatformServices-ABI 10, Portprojektvertrag 26 und
+Host-Video-Vertrag 2.
 
 Der aktuelle Sicherheitsblock schliesst zwei zuvor nur behauptete
 Diagnose-/Schedulergrenzen. Freie Probes uebersetzen ueber die aktive Gast-MMU,
@@ -38,9 +40,40 @@ bewegen ausstehende Render- oder Channel-2-Arbeit nicht. GD-ROM-PACKET liefert b
 undarstellbaren Schedulerfrist `READY|ERR`, ABRT-Sense und einen finalen
 Command-IRQ. BIOS-Read und -Streaming liefern denselben Fehler als einmaligen
 Vierwortstatus mit null Bytes und lassen den naechsten Request zu. Die
-aktuellen fokussierten Runtime-/Codegenziele bestehen 5/5, Auditor und Policy
-2/2. Die CLI-Scope-Regression ist angelegt; der aktuelle private Disc-Audit
-bestaetigt die echte CLI-Integration. Ein Vollgate wurde nicht ausgefuehrt.
+aktuellen konsolidierten fokussierten Regressionen bestehen 22/22 in
+1,57 Sekunden; der Port-CLI-Nachweis besteht 1/1 in 151,12 Sekunden. Eine
+Vollsuite und `KR-4852` wurden nicht ausgefuehrt.
+
+Runtime-ABI 42 bindet den seiteneffektfreien POD-Zugriffssink und
+`RuntimeWaitLoopTrace` v1. Native AOT-Bloecke und der begrenzte
+Diagnoseinterpreter melden Quell- und Laufzeit-PC. Store-Queue-`PREF`,
+PVR-Render und PVR-YUV tragen ihre Writer-Herkunft; die VRAM32-Sicht
+projiziert auf dasselbe lineare Backing. Der Portexport erzeugt aus dem
+Hardwareaudit generische, deterministisch deduplizierte Guard- und
+Kandidatendeskriptoren und indiziert Read-Sites vorab statt sie pro Zugriff
+linear zu durchsuchen. MMIO-Werte werden aus dem bereits ausgefuehrten Zugriff
+uebernommen. Bytegenaue lineare Writerlinks tragen
+`exact-backing-bytes`; nichtlineare MMIO-Ueberschneidungen bleiben
+`physical-range-candidate`. Backing-indizierte Locations vermeiden
+Vollscans fuer unbeteiligte lineare Writes. Nur der aktive Trace vergleicht
+Wrapperwrites gegen deren seiteneffektfreies lineares Backing, bestimmt
+skalare und Range-Aenderungen bytegenau und verwirft No-op-Writer.
+Produktobserver und Scanout-Evidenz bleiben konservativ und bei Trace aus/an
+identisch. Nur `KATANA_PORT_WAIT_LOOP_TRACE=1` aktiviert den
+Rohwerttrace,
+unabhaengig von `KATANA_PORT_DIAGNOSTICS`. Eine leere Deskriptorliste erzeugt
+weder Recorder noch Sink; sonst warnt der Port einmalig auf `stderr` vor nur
+lokal und nicht ungeprueft teilbaren Rohwerten. Das JSON deklariert
+`contains_raw_guest_values:true`, `writer_scope:"since-previous-sample"` und
+ungueltige skalare Range-Werte mit `scalar_value_valid:false` und `value:null`.
+Strukturell ungueltige Access-Events erhoehen `invalid_access_events` und
+erzwingen `complete:false`, statt im Zaehler fuer bloss irrelevante gueltige
+Events zu verschwinden. RAII entfernt den Sink vor der terminalen Ausgabe.
+Ohne Trace-Opt-in bleibt der Fastpath ohne Recorderallokation oder Projektion.
+PlatformServices-ABI 10 fuehrt die genaue `PREF`-Instruktionsherkunft bis zur
+Store Queue. Die Registervarianten `PREF`, `OCBI`, `OCBP`, `OCBWB` und `TAS.B`
+sind im begrenzten Interpreter geschlossen; doppelte `FMOV`-Speicherzugriffe
+laufen low nach high.
 
 Systemreplay-Schema 2 schliesst zusaetzlich das unbegrenzte Wachstum des
 Diagnosepfads: Standardlogs halten 4.096, konfigurierbar hoechstens 65.536
@@ -279,18 +312,27 @@ und ein 4.096-Block-Skalierungstest sichern die statische Seite.
 Der aktuelle Audit enthaelt 1.095 Natural Loops: 48 `counter`, eine
 `mmio_poll`, zwei `ram_poll` und 1.044 `unknown`. Der normale Audit ist bei
 null bekannten Luecken gruen. Zwei partielle Adressen und 492
-`unresolved_poll_guard_loops` halten `--strict` und damit `KR-4842`
-erwartungsgemaess offen.
+`unresolved_poll_guard_loops` halten `--strict` erwartungsgemaess rot, sind
+aber nicht mehr der verbleibende Abschlussgrund von `KR-4842`.
 
 MMU-bewusste lineare Peeks veraendern MMIO, Observer, Watchpoints, Metriken und
 CPU-/Exceptionzustand nicht. Last-MMIO-Tracking ist im Gast-Hotpath
 allokationsfrei; PVR- und Systembus-Snapshots sind auch bei pending Render- und
-Channel-2-Zustaenden nicht mutierend. Die fokussierten Gruppen bestehen
-5/5 Runtime/Codegen und 2/2 Auditor/Policy. Die CLI-Scope-Regression ist
-angelegt; der private Schema-4-Disc-Audit bestaetigt die echte CLI-Integration.
-`KR-4842` bleibt fuer dynamische Wertwechselfolgen, echte
-Runtime-Writer-Provenienz und einen vollstaendigen Diagnose=0/1-A/B-
-Produktlauf offen.
+Channel-2-Zustaenden nicht mutierend. Der POD-Zugriffssink beobachtet AOT und
+begrenzten Interpreter mit Quell-/Laufzeit-PC sowie Store-Queue-, PVR-Render-,
+PVR-YUV-, VRAM32- und bereits ausgefuehrte MMIO-Zugriffe, ohne Readwerte oder
+MMIO-Handler erneut abzufragen. Der aktive Trace darf fuer die
+No-op-Klassifikation eines Wrapperwrites dessen lineares Backing vorab
+seiteneffektfrei vergleichen.
+Lineare Backing-Writerlinks sind bytegenau beweisbar; physische MMIO-
+Range-Links bleiben explizite Kandidaten. Der nur ueber
+`KATANA_PORT_WAIT_LOOP_TRACE=1` aktivierte versionierte
+Wait-Loop-Rohwerttrace verdichtet daraus dynamische Wertlaeufe und
+zugehoerige Writer.
+Die konsolidierten fokussierten Regressionen bestehen 22/22 in 1,57 Sekunden;
+der Port-CLI-Nachweis besteht 1/1 in 151,12 Sekunden. `KR-4842` bleibt
+ausschliesslich fuer den vollstaendigen Diagnose=0/1-A/B-Produktlauf offen.
+Eine Vollsuite und `KR-4852` wurden nicht ausgefuehrt.
 
 Der generierte Port praesentiert erst nach einem validierten TA- oder
 Direct-FB-Gastframe und meldet `KR_FIRST_GUEST_FRAME` nicht fuer blosses
@@ -415,11 +457,11 @@ MMIO-Zugriff liegt im aktiven OCRAM; der fruehere Abbruch nach 12 Gastzyklen
 ist damit beseitigt. TA/PVR und ein echter Gastframe bleiben fuer den laengeren
 Folgelauf weiterhin offen.
 
-Runtime-ABI 41, Block-ABI 3, Backend-Interface-ABI 3, BIOS-ABI 9,
-Portprojektvertrag 25 und Host-Video-Vertrag 2 bilden den kumulativen
+Runtime-ABI 42, Block-ABI 3, Backend-Interface-ABI 3, BIOS-ABI 9,
+PlatformServices-ABI 10, Portprojektvertrag 26 und Host-Video-Vertrag 2 bilden den kumulativen
 v0.48-Stand ab.
-PlatformServices-ABI 9 versioniert das invalidierungs- und timinggesicherte lokale
-Blockchaining.
+PlatformServices-ABI 10 versioniert zusaetzlich die genaue
+`PREF`-Instruktionsherkunft bis zur Store Queue.
 
 Der anschliessende statische Flycast-/KallistiOS-Abgleich hat den noch vor
 PVR liegenden BIOS-Statuspfad konkretisiert. Der produktive GD-ROM-BIOS-Dienst

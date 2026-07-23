@@ -128,6 +128,7 @@ StepResult execute_one(CpuState& cpu,
                        const std::uint32_t pc,
                        const std::optional<std::uint32_t> delay_owner = std::nullopt) {
     const auto opcode = guest_read_u16(cpu, pc);
+    ++cpu.retired_guest_instructions;
     const auto instruction = sh4::decode(opcode);
     if (!instruction.is_known()) {
         raise_illegal_instruction(cpu, pc, delay_owner);
@@ -149,6 +150,10 @@ StepResult execute_one(CpuState& cpu,
     const auto m = instruction.source_register;
     const auto next = pc + 2u;
     cpu.pc = next;
+    const auto guest_origin =
+        cpu.memory.has_guest_memory_access_sink()
+            ? GuestInstructionOrigin{unrelocate_code_address(pc), pc, true}
+            : GuestInstructionOrigin{};
     const auto branch_target = [&]() {
         const auto target = sh4::calculate_direct_branch_target(instruction, pc);
         if (!target) throw std::logic_error("Direkter SH-4-Branch besitzt kein Ziel.");
@@ -272,13 +277,18 @@ StepResult execute_one(CpuState& cpu,
         const auto destination_address = cpu.r[n];
         const auto source_address = cpu.r[m] + (m == n ? bytes : 0u);
         const auto destination = bytes == 2u
-                                     ? static_cast<std::int64_t>(guest_read_s16(cpu, destination_address))
+                                     ? static_cast<std::int64_t>(
+                                           guest_read_s16_at(
+                                               cpu, guest_origin, destination_address))
                                      : static_cast<std::int64_t>(
-                                           static_cast<std::int32_t>(guest_read_u32(cpu, destination_address)));
+                                           static_cast<std::int32_t>(guest_read_u32_at(
+                                               cpu, guest_origin, destination_address)));
         const auto source = bytes == 2u
-                                ? static_cast<std::int64_t>(guest_read_s16(cpu, source_address))
+                                ? static_cast<std::int64_t>(
+                                      guest_read_s16_at(cpu, guest_origin, source_address))
                                 : static_cast<std::int64_t>(
-                                      static_cast<std::int32_t>(guest_read_u32(cpu, source_address)));
+                                      static_cast<std::int32_t>(
+                                          guest_read_u32_at(cpu, guest_origin, source_address)));
         cpu.r[n] += bytes;
         cpu.r[m] += bytes;
         const auto product = source * destination;
@@ -360,48 +370,225 @@ StepResult execute_one(CpuState& cpu,
     case Kind::CompareString: { const auto value = cpu.r[n] ^ cpu.r[m]; write_t(cpu, (value & 0xFFu) == 0u || (value & 0xFF00u) == 0u || (value & 0xFF0000u) == 0u || (value & 0xFF000000u) == 0u); return {}; }
     case Kind::TestImmediate: write_t(cpu, (cpu.r[0] & static_cast<std::uint32_t>(instruction.immediate)) == 0u); return {};
     case Kind::TestRegister: write_t(cpu, (cpu.r[n] & cpu.r[m]) == 0u); return {};
-    case Kind::TestByteImmediate: { const auto address = cpu.gbr + cpu.r[0]; write_t(cpu, (guest_read_u8(cpu, address) & static_cast<std::uint8_t>(instruction.immediate)) == 0u); return {}; }
-    case Kind::AndByteImmediate: { const auto address = cpu.gbr + cpu.r[0]; guest_write_u8(cpu, address, static_cast<std::uint8_t>(guest_read_u8(cpu, address) & instruction.immediate)); return {}; }
-    case Kind::XorByteImmediate: { const auto address = cpu.gbr + cpu.r[0]; guest_write_u8(cpu, address, static_cast<std::uint8_t>(guest_read_u8(cpu, address) ^ instruction.immediate)); return {}; }
-    case Kind::OrByteImmediate: { const auto address = cpu.gbr + cpu.r[0]; guest_write_u8(cpu, address, static_cast<std::uint8_t>(guest_read_u8(cpu, address) | instruction.immediate)); return {}; }
-    case Kind::TestAndSetByte: { const auto value = guest_read_u8(cpu, cpu.r[n]); guest_write_u8(cpu, cpu.r[n], static_cast<std::uint8_t>(value | 0x80u)); write_t(cpu, value == 0u); return {}; }
-    case Kind::MovByteStore: guest_write_u8(cpu, cpu.r[n], static_cast<std::uint8_t>(cpu.r[m])); return {};
-    case Kind::MovWordStore: guest_write_u16(cpu, cpu.r[n], static_cast<std::uint16_t>(cpu.r[m])); return {};
-    case Kind::MovLongStore: guest_write_u32(cpu, cpu.r[n], cpu.r[m]); return {};
-    case Kind::MovByteLoad: cpu.r[n] = static_cast<std::uint32_t>(guest_read_s8(cpu, cpu.r[m])); return {};
-    case Kind::MovWordLoad: cpu.r[n] = static_cast<std::uint32_t>(guest_read_s16(cpu, cpu.r[m])); return {};
-    case Kind::MovLongLoad: cpu.r[n] = guest_read_u32(cpu, cpu.r[m]); return {};
-    case Kind::MovByteStorePreDecrement: { const auto value = static_cast<std::uint8_t>(cpu.r[m]); const auto address = cpu.r[n] - 1u; guest_write_u8(cpu, address, value); cpu.r[n] = address; return {}; }
-    case Kind::MovWordStorePreDecrement: { const auto value = static_cast<std::uint16_t>(cpu.r[m]); const auto address = cpu.r[n] - 2u; guest_write_u16(cpu, address, value); cpu.r[n] = address; return {}; }
-    case Kind::MovLongStorePreDecrement: { const auto value = cpu.r[m]; const auto address = cpu.r[n] - 4u; guest_write_u32(cpu, address, value); cpu.r[n] = address; return {}; }
-    case Kind::MovByteLoadPostIncrement: { const auto address = cpu.r[m]; cpu.r[n] = static_cast<std::uint32_t>(guest_read_s8(cpu, address)); if (n != m) cpu.r[m] += 1u; return {}; }
-    case Kind::MovWordLoadPostIncrement: { const auto address = cpu.r[m]; cpu.r[n] = static_cast<std::uint32_t>(guest_read_s16(cpu, address)); if (n != m) cpu.r[m] += 2u; return {}; }
-    case Kind::MovLongLoadPostIncrement: { const auto address = cpu.r[m]; cpu.r[n] = guest_read_u32(cpu, address); if (n != m) cpu.r[m] += 4u; return {}; }
-    case Kind::MovByteStoreDisplacement: guest_write_u8(cpu, add_displacement(cpu.r[n], instruction.displacement), static_cast<std::uint8_t>(cpu.r[m])); return {};
-    case Kind::MovWordStoreDisplacement: guest_write_u16(cpu, add_displacement(cpu.r[n], instruction.displacement), static_cast<std::uint16_t>(cpu.r[m])); return {};
-    case Kind::MovLongStoreDisplacement: guest_write_u32(cpu, add_displacement(cpu.r[n], instruction.displacement), cpu.r[m]); return {};
-    case Kind::MovByteLoadDisplacement: cpu.r[n] = static_cast<std::uint32_t>(guest_read_s8(cpu, add_displacement(cpu.r[m], instruction.displacement))); return {};
-    case Kind::MovWordLoadDisplacement: cpu.r[n] = static_cast<std::uint32_t>(guest_read_s16(cpu, add_displacement(cpu.r[m], instruction.displacement))); return {};
-    case Kind::MovLongLoadDisplacement: cpu.r[n] = guest_read_u32(cpu, add_displacement(cpu.r[m], instruction.displacement)); return {};
-    case Kind::MovByteStoreR0Indexed: guest_write_u8(cpu, cpu.r[n] + cpu.r[0], static_cast<std::uint8_t>(cpu.r[m])); return {};
-    case Kind::MovWordStoreR0Indexed: guest_write_u16(cpu, cpu.r[n] + cpu.r[0], static_cast<std::uint16_t>(cpu.r[m])); return {};
-    case Kind::MovLongStoreR0Indexed: guest_write_u32(cpu, cpu.r[n] + cpu.r[0], cpu.r[m]); return {};
-    case Kind::MovByteLoadR0Indexed: cpu.r[n] = static_cast<std::uint32_t>(guest_read_s8(cpu, cpu.r[m] + cpu.r[0])); return {};
-    case Kind::MovWordLoadR0Indexed: cpu.r[n] = static_cast<std::uint32_t>(guest_read_s16(cpu, cpu.r[m] + cpu.r[0])); return {};
-    case Kind::MovLongLoadR0Indexed: cpu.r[n] = guest_read_u32(cpu, cpu.r[m] + cpu.r[0]); return {};
-    case Kind::MovByteStoreGbrDisplacement: guest_write_u8(cpu, add_displacement(cpu.gbr, instruction.displacement), static_cast<std::uint8_t>(cpu.r[0])); return {};
-    case Kind::MovWordStoreGbrDisplacement: guest_write_u16(cpu, add_displacement(cpu.gbr, instruction.displacement), static_cast<std::uint16_t>(cpu.r[0])); return {};
-    case Kind::MovLongStoreGbrDisplacement: guest_write_u32(cpu, add_displacement(cpu.gbr, instruction.displacement), cpu.r[0]); return {};
-    case Kind::MovByteLoadGbrDisplacement: cpu.r[0] = static_cast<std::uint32_t>(guest_read_s8(cpu, add_displacement(cpu.gbr, instruction.displacement))); return {};
-    case Kind::MovWordLoadGbrDisplacement: cpu.r[0] = static_cast<std::uint32_t>(guest_read_s16(cpu, add_displacement(cpu.gbr, instruction.displacement))); return {};
-    case Kind::MovLongLoadGbrDisplacement: cpu.r[0] = guest_read_u32(cpu, add_displacement(cpu.gbr, instruction.displacement)); return {};
-    case Kind::MovWordLoadPcRelative: cpu.r[n] = static_cast<std::uint32_t>(guest_read_s16(cpu, add_displacement(pc + 4u, instruction.displacement))); return {};
-    case Kind::MovLongLoadPcRelative: cpu.r[n] = guest_read_u32(cpu, add_displacement((pc + 4u) & ~3u, instruction.displacement)); return {};
+    case Kind::TestByteImmediate: {
+        const auto address = cpu.gbr + cpu.r[0];
+        write_t(cpu,
+                (guest_read_u8_at(cpu, guest_origin, address) &
+                 static_cast<std::uint8_t>(instruction.immediate)) == 0u);
+        return {};
+    }
+    case Kind::AndByteImmediate: {
+        const auto address = cpu.gbr + cpu.r[0];
+        guest_write_u8_at(
+            cpu,
+            guest_origin,
+            address,
+            static_cast<std::uint8_t>(
+                guest_read_u8_at(cpu, guest_origin, address) & instruction.immediate));
+        return {};
+    }
+    case Kind::XorByteImmediate: {
+        const auto address = cpu.gbr + cpu.r[0];
+        guest_write_u8_at(
+            cpu,
+            guest_origin,
+            address,
+            static_cast<std::uint8_t>(
+                guest_read_u8_at(cpu, guest_origin, address) ^ instruction.immediate));
+        return {};
+    }
+    case Kind::OrByteImmediate: {
+        const auto address = cpu.gbr + cpu.r[0];
+        guest_write_u8_at(
+            cpu,
+            guest_origin,
+            address,
+            static_cast<std::uint8_t>(
+                guest_read_u8_at(cpu, guest_origin, address) | instruction.immediate));
+        return {};
+    }
+    case Kind::TestAndSetByte: {
+        const auto value = guest_read_u8_at(cpu, guest_origin, cpu.r[m]);
+        guest_write_u8_at(
+            cpu, guest_origin, cpu.r[m], static_cast<std::uint8_t>(value | 0x80u));
+        write_t(cpu, value == 0u);
+        return {};
+    }
+    case Kind::MovByteStore:
+        guest_write_u8_at(
+            cpu, guest_origin, cpu.r[n], static_cast<std::uint8_t>(cpu.r[m]));
+        return {};
+    case Kind::MovWordStore:
+        guest_write_u16_at(
+            cpu, guest_origin, cpu.r[n], static_cast<std::uint16_t>(cpu.r[m]));
+        return {};
+    case Kind::MovLongStore:
+        guest_write_u32_at(cpu, guest_origin, cpu.r[n], cpu.r[m]);
+        return {};
+    case Kind::MovByteLoad:
+        cpu.r[n] =
+            static_cast<std::uint32_t>(guest_read_s8_at(cpu, guest_origin, cpu.r[m]));
+        return {};
+    case Kind::MovWordLoad:
+        cpu.r[n] =
+            static_cast<std::uint32_t>(guest_read_s16_at(cpu, guest_origin, cpu.r[m]));
+        return {};
+    case Kind::MovLongLoad:
+        cpu.r[n] = guest_read_u32_at(cpu, guest_origin, cpu.r[m]);
+        return {};
+    case Kind::MovByteStorePreDecrement: {
+        const auto value = static_cast<std::uint8_t>(cpu.r[m]);
+        const auto address = cpu.r[n] - 1u;
+        guest_write_u8_at(cpu, guest_origin, address, value);
+        cpu.r[n] = address;
+        return {};
+    }
+    case Kind::MovWordStorePreDecrement: {
+        const auto value = static_cast<std::uint16_t>(cpu.r[m]);
+        const auto address = cpu.r[n] - 2u;
+        guest_write_u16_at(cpu, guest_origin, address, value);
+        cpu.r[n] = address;
+        return {};
+    }
+    case Kind::MovLongStorePreDecrement: {
+        const auto value = cpu.r[m];
+        const auto address = cpu.r[n] - 4u;
+        guest_write_u32_at(cpu, guest_origin, address, value);
+        cpu.r[n] = address;
+        return {};
+    }
+    case Kind::MovByteLoadPostIncrement: {
+        const auto address = cpu.r[m];
+        cpu.r[n] =
+            static_cast<std::uint32_t>(guest_read_s8_at(cpu, guest_origin, address));
+        if (n != m) cpu.r[m] += 1u;
+        return {};
+    }
+    case Kind::MovWordLoadPostIncrement: {
+        const auto address = cpu.r[m];
+        cpu.r[n] =
+            static_cast<std::uint32_t>(guest_read_s16_at(cpu, guest_origin, address));
+        if (n != m) cpu.r[m] += 2u;
+        return {};
+    }
+    case Kind::MovLongLoadPostIncrement: {
+        const auto address = cpu.r[m];
+        cpu.r[n] = guest_read_u32_at(cpu, guest_origin, address);
+        if (n != m) cpu.r[m] += 4u;
+        return {};
+    }
+    case Kind::MovByteStoreDisplacement:
+        guest_write_u8_at(cpu,
+                          guest_origin,
+                          add_displacement(cpu.r[n], instruction.displacement),
+                          static_cast<std::uint8_t>(cpu.r[m]));
+        return {};
+    case Kind::MovWordStoreDisplacement:
+        guest_write_u16_at(cpu,
+                           guest_origin,
+                           add_displacement(cpu.r[n], instruction.displacement),
+                           static_cast<std::uint16_t>(cpu.r[m]));
+        return {};
+    case Kind::MovLongStoreDisplacement:
+        guest_write_u32_at(cpu,
+                           guest_origin,
+                           add_displacement(cpu.r[n], instruction.displacement),
+                           cpu.r[m]);
+        return {};
+    case Kind::MovByteLoadDisplacement:
+        cpu.r[n] = static_cast<std::uint32_t>(guest_read_s8_at(
+            cpu, guest_origin, add_displacement(cpu.r[m], instruction.displacement)));
+        return {};
+    case Kind::MovWordLoadDisplacement:
+        cpu.r[n] = static_cast<std::uint32_t>(guest_read_s16_at(
+            cpu, guest_origin, add_displacement(cpu.r[m], instruction.displacement)));
+        return {};
+    case Kind::MovLongLoadDisplacement:
+        cpu.r[n] = guest_read_u32_at(
+            cpu, guest_origin, add_displacement(cpu.r[m], instruction.displacement));
+        return {};
+    case Kind::MovByteStoreR0Indexed:
+        guest_write_u8_at(cpu,
+                          guest_origin,
+                          cpu.r[n] + cpu.r[0],
+                          static_cast<std::uint8_t>(cpu.r[m]));
+        return {};
+    case Kind::MovWordStoreR0Indexed:
+        guest_write_u16_at(cpu,
+                           guest_origin,
+                           cpu.r[n] + cpu.r[0],
+                           static_cast<std::uint16_t>(cpu.r[m]));
+        return {};
+    case Kind::MovLongStoreR0Indexed:
+        guest_write_u32_at(cpu, guest_origin, cpu.r[n] + cpu.r[0], cpu.r[m]);
+        return {};
+    case Kind::MovByteLoadR0Indexed:
+        cpu.r[n] = static_cast<std::uint32_t>(
+            guest_read_s8_at(cpu, guest_origin, cpu.r[m] + cpu.r[0]));
+        return {};
+    case Kind::MovWordLoadR0Indexed:
+        cpu.r[n] = static_cast<std::uint32_t>(
+            guest_read_s16_at(cpu, guest_origin, cpu.r[m] + cpu.r[0]));
+        return {};
+    case Kind::MovLongLoadR0Indexed:
+        cpu.r[n] = guest_read_u32_at(cpu, guest_origin, cpu.r[m] + cpu.r[0]);
+        return {};
+    case Kind::MovByteStoreGbrDisplacement:
+        guest_write_u8_at(cpu,
+                          guest_origin,
+                          add_displacement(cpu.gbr, instruction.displacement),
+                          static_cast<std::uint8_t>(cpu.r[0]));
+        return {};
+    case Kind::MovWordStoreGbrDisplacement:
+        guest_write_u16_at(cpu,
+                           guest_origin,
+                           add_displacement(cpu.gbr, instruction.displacement),
+                           static_cast<std::uint16_t>(cpu.r[0]));
+        return {};
+    case Kind::MovLongStoreGbrDisplacement:
+        guest_write_u32_at(cpu,
+                           guest_origin,
+                           add_displacement(cpu.gbr, instruction.displacement),
+                           cpu.r[0]);
+        return {};
+    case Kind::MovByteLoadGbrDisplacement:
+        cpu.r[0] = static_cast<std::uint32_t>(guest_read_s8_at(
+            cpu, guest_origin, add_displacement(cpu.gbr, instruction.displacement)));
+        return {};
+    case Kind::MovWordLoadGbrDisplacement:
+        cpu.r[0] = static_cast<std::uint32_t>(guest_read_s16_at(
+            cpu, guest_origin, add_displacement(cpu.gbr, instruction.displacement)));
+        return {};
+    case Kind::MovLongLoadGbrDisplacement:
+        cpu.r[0] = guest_read_u32_at(
+            cpu, guest_origin, add_displacement(cpu.gbr, instruction.displacement));
+        return {};
+    case Kind::MovWordLoadPcRelative:
+        cpu.r[n] = static_cast<std::uint32_t>(guest_read_s16_at(
+            cpu, guest_origin, add_displacement(pc + 4u, instruction.displacement)));
+        return {};
+    case Kind::MovLongLoadPcRelative:
+        cpu.r[n] = guest_read_u32_at(
+            cpu,
+            guest_origin,
+            add_displacement((pc + 4u) & ~3u, instruction.displacement));
+        return {};
     case Kind::MoveAddressPcRelative: cpu.r[0] = add_displacement((pc + 4u) & ~3u, instruction.displacement); return {};
     case Kind::StoreSpecialRegister: cpu.r[n] = special_read(cpu, instruction.special_register); return {};
-    case Kind::StoreSpecialRegisterPreDecrement: { const auto value = special_read(cpu, instruction.special_register); const auto address = cpu.r[n] - 4u; guest_write_u32(cpu, address, value); cpu.r[n] = address; return {}; }
+    case Kind::StoreSpecialRegisterPreDecrement: {
+        const auto value = special_read(cpu, instruction.special_register);
+        const auto address = cpu.r[n] - 4u;
+        guest_write_u32_at(cpu, guest_origin, address, value);
+        cpu.r[n] = address;
+        return {};
+    }
     case Kind::LoadSpecialRegister: special_write(cpu, instruction.special_register, cpu.r[m]); return {};
-    case Kind::LoadSpecialRegisterPostIncrement: { const auto value = guest_read_u32(cpu, cpu.r[m]); cpu.r[m] += 4u; special_write(cpu, instruction.special_register, value); return {}; }
+    case Kind::LoadSpecialRegisterPostIncrement: {
+        const auto value = guest_read_u32_at(cpu, guest_origin, cpu.r[m]);
+        cpu.r[m] += 4u;
+        special_write(cpu, instruction.special_register, value);
+        return {};
+    }
     case Kind::TrapAlways: raise_trapa(cpu, static_cast<std::uint8_t>(instruction.immediate), pc); return {true, BlockEndKind::Exception, 1u};
     case Kind::ReturnFromException: {
         const auto target = cpu.spc;
@@ -426,11 +613,16 @@ StepResult execute_one(CpuState& cpu,
     }
     case Kind::Sleep: cpu.sleeping = true; return {true, BlockEndKind::Sleep, 1u};
     case Kind::LoadTlb: load_tlb(cpu); return {};
-    case Kind::Prefetch: static_cast<void>(services.prefetch(cpu, cpu.r[n])); return {};
-    case Kind::Ocbi: static_cast<void>(maintain_coherent_operand_cache(OperandCacheOperation::Invalidate, cpu.r[n])); return {};
-    case Kind::Ocbp: static_cast<void>(maintain_coherent_operand_cache(OperandCacheOperation::Purge, cpu.r[n])); return {};
-    case Kind::Ocbwb: static_cast<void>(maintain_coherent_operand_cache(OperandCacheOperation::WriteBack, cpu.r[n])); return {};
-    case Kind::MovcaLong: guest_write_u32(cpu, cpu.r[n], cpu.r[0], CodeWriteSource::StoreQueue); return {};
+    case Kind::Prefetch:
+        static_cast<void>(services.prefetch(cpu, guest_origin, cpu.r[m]));
+        return {};
+    case Kind::Ocbi: static_cast<void>(maintain_coherent_operand_cache(OperandCacheOperation::Invalidate, cpu.r[m])); return {};
+    case Kind::Ocbp: static_cast<void>(maintain_coherent_operand_cache(OperandCacheOperation::Purge, cpu.r[m])); return {};
+    case Kind::Ocbwb: static_cast<void>(maintain_coherent_operand_cache(OperandCacheOperation::WriteBack, cpu.r[m])); return {};
+    case Kind::MovcaLong:
+        guest_write_u32_at(
+            cpu, guest_origin, cpu.r[n], cpu.r[0], CodeWriteSource::StoreQueue);
+        return {};
     case Kind::Bra: return delay_then(branch_target(), BlockEndKind::StaticBranch);
     case Kind::Bsr: return call_delay_then(branch_target());
     case Kind::Braf: return delay_then(pc + 4u + cpu.r[instruction.branch_register], BlockEndKind::DynamicBranch);
@@ -443,12 +635,103 @@ StepResult execute_one(CpuState& cpu,
     case Kind::Jsr: return call_delay_then(cpu.r[instruction.branch_register]);
     case Kind::Rts: return delay_then(cpu.pr, BlockEndKind::Return);
     case Kind::FmovRegister: if (cpu.fpu_transfer_pair()) write_fpu_pair_bits(cpu, n, read_fpu_pair_bits(cpu, m)); else cpu.fr[n] = cpu.fr[m]; return {};
-    case Kind::FmovLoad: if (cpu.fpu_transfer_pair()) write_fpu_pair_bits(cpu, n, (static_cast<std::uint64_t>(guest_read_u32(cpu, cpu.r[m] + 4u)) << 32u) | guest_read_u32(cpu, cpu.r[m])); else cpu.fr[n] = guest_read_u32(cpu, cpu.r[m]); return {};
-    case Kind::FmovLoadPostIncrement: { const auto address = cpu.r[m]; if (cpu.fpu_transfer_pair()) { write_fpu_pair_bits(cpu, n, (static_cast<std::uint64_t>(guest_read_u32(cpu, address + 4u)) << 32u) | guest_read_u32(cpu, address)); cpu.r[m] += 8u; } else { cpu.fr[n] = guest_read_u32(cpu, address); cpu.r[m] += 4u; } return {}; }
-    case Kind::FmovLoadR0Indexed: { const auto address = cpu.r[m] + cpu.r[0]; if (cpu.fpu_transfer_pair()) write_fpu_pair_bits(cpu, n, (static_cast<std::uint64_t>(guest_read_u32(cpu, address + 4u)) << 32u) | guest_read_u32(cpu, address)); else cpu.fr[n] = guest_read_u32(cpu, address); return {}; }
-    case Kind::FmovStore: if (cpu.fpu_transfer_pair()) { const auto bits = read_fpu_pair_bits(cpu, m); guest_write_u32(cpu, cpu.r[n], static_cast<std::uint32_t>(bits)); guest_write_u32(cpu, cpu.r[n] + 4u, static_cast<std::uint32_t>(bits >> 32u)); } else guest_write_u32(cpu, cpu.r[n], cpu.fr[m]); return {};
-    case Kind::FmovStorePreDecrement: { const auto size = cpu.fpu_transfer_pair() ? 8u : 4u; const auto address = cpu.r[n] - size; if (size == 8u) { const auto bits = read_fpu_pair_bits(cpu, m); guest_write_u32(cpu, address, static_cast<std::uint32_t>(bits)); guest_write_u32(cpu, address + 4u, static_cast<std::uint32_t>(bits >> 32u)); } else { const auto bits = cpu.fr[m]; guest_write_u32(cpu, address, bits); } cpu.r[n] = address; return {}; }
-    case Kind::FmovStoreR0Indexed: { const auto address = cpu.r[n] + cpu.r[0]; if (cpu.fpu_transfer_pair()) { const auto bits = read_fpu_pair_bits(cpu, m); guest_write_u32(cpu, address, static_cast<std::uint32_t>(bits)); guest_write_u32(cpu, address + 4u, static_cast<std::uint32_t>(bits >> 32u)); } else guest_write_u32(cpu, address, cpu.fr[m]); return {}; }
+    case Kind::FmovLoad:
+        if (cpu.fpu_transfer_pair()) {
+            const auto low = guest_read_u32_at(cpu, guest_origin, cpu.r[m]);
+            const auto high = guest_read_u32_at(cpu, guest_origin, cpu.r[m] + 4u);
+            write_fpu_pair_bits(
+                cpu, n, (static_cast<std::uint64_t>(high) << 32u) | low);
+        } else {
+            cpu.fr[n] = guest_read_u32_at(cpu, guest_origin, cpu.r[m]);
+        }
+        return {};
+    case Kind::FmovLoadPostIncrement: {
+        const auto address = cpu.r[m];
+        if (cpu.fpu_transfer_pair()) {
+            const auto low = guest_read_u32_at(cpu, guest_origin, address);
+            const auto high = guest_read_u32_at(cpu, guest_origin, address + 4u);
+            write_fpu_pair_bits(
+                cpu, n, (static_cast<std::uint64_t>(high) << 32u) | low);
+            cpu.r[m] += 8u;
+        } else {
+            cpu.fr[n] = guest_read_u32_at(cpu, guest_origin, address);
+            cpu.r[m] += 4u;
+        }
+        return {};
+    }
+    case Kind::FmovLoadR0Indexed: {
+        const auto address = cpu.r[m] + cpu.r[0];
+        if (cpu.fpu_transfer_pair()) {
+            const auto low = guest_read_u32_at(cpu, guest_origin, address);
+            const auto high = guest_read_u32_at(cpu, guest_origin, address + 4u);
+            write_fpu_pair_bits(
+                cpu, n, (static_cast<std::uint64_t>(high) << 32u) | low);
+        } else {
+            cpu.fr[n] = guest_read_u32_at(cpu, guest_origin, address);
+        }
+        return {};
+    }
+    case Kind::FmovStore:
+        if (cpu.fpu_transfer_pair()) {
+            const auto bits = read_fpu_pair_bits(cpu, m);
+            guest_write_u32_at(cpu,
+                               guest_origin,
+                               cpu.r[n],
+                               static_cast<std::uint32_t>(bits),
+                               CodeWriteSource::Fpu);
+            guest_write_u32_at(cpu,
+                               guest_origin,
+                               cpu.r[n] + 4u,
+                               static_cast<std::uint32_t>(bits >> 32u),
+                               CodeWriteSource::Fpu);
+        } else {
+            guest_write_u32_at(
+                cpu, guest_origin, cpu.r[n], cpu.fr[m], CodeWriteSource::Fpu);
+        }
+        return {};
+    case Kind::FmovStorePreDecrement: {
+        const auto size = cpu.fpu_transfer_pair() ? 8u : 4u;
+        const auto address = cpu.r[n] - size;
+        if (size == 8u) {
+            const auto bits = read_fpu_pair_bits(cpu, m);
+            guest_write_u32_at(cpu,
+                               guest_origin,
+                               address,
+                               static_cast<std::uint32_t>(bits),
+                               CodeWriteSource::Fpu);
+            guest_write_u32_at(cpu,
+                               guest_origin,
+                               address + 4u,
+                               static_cast<std::uint32_t>(bits >> 32u),
+                               CodeWriteSource::Fpu);
+        } else {
+            const auto bits = cpu.fr[m];
+            guest_write_u32_at(
+                cpu, guest_origin, address, bits, CodeWriteSource::Fpu);
+        }
+        cpu.r[n] = address;
+        return {};
+    }
+    case Kind::FmovStoreR0Indexed: {
+        const auto address = cpu.r[n] + cpu.r[0];
+        if (cpu.fpu_transfer_pair()) {
+            const auto bits = read_fpu_pair_bits(cpu, m);
+            guest_write_u32_at(cpu,
+                               guest_origin,
+                               address,
+                               static_cast<std::uint32_t>(bits),
+                               CodeWriteSource::Fpu);
+            guest_write_u32_at(cpu,
+                               guest_origin,
+                               address + 4u,
+                               static_cast<std::uint32_t>(bits >> 32u),
+                               CodeWriteSource::Fpu);
+        } else {
+            guest_write_u32_at(
+                cpu, guest_origin, address, cpu.fr[m], CodeWriteSource::Fpu);
+        }
+        return {};
+    }
     case Kind::Fldi0: write_fr_single(cpu, n, 0.0f); return {};
     case Kind::Fldi1: write_fr_single(cpu, n, 1.0f); return {};
     case Kind::Flds: cpu.fpul = cpu.fr[m]; return {};

@@ -250,6 +250,7 @@ add_library(katana_runtime STATIC
     src/runtime/scif.cpp
     src/runtime/timers.cpp
     src/runtime/trace.cpp
+    src/runtime/wait_loop_trace.cpp
     src/runtime/memory.cpp
     src/runtime/runtime.cpp
 )
@@ -815,6 +816,18 @@ katana_enable_warnings(katana-memory-diagnostics-tests)
 add_test(
     NAME katana-memory-diagnostics-tests
     COMMAND katana-memory-diagnostics-tests
+)
+
+add_executable(katana-wait-loop-trace-tests
+    tests/runtime/wait_loop_trace_tests.cpp
+)
+
+target_link_libraries(katana-wait-loop-trace-tests PRIVATE katana_runtime)
+katana_enable_warnings(katana-wait-loop-trace-tests)
+
+add_test(
+    NAME katana-wait-loop-trace-tests
+    COMMAND katana-wait-loop-trace-tests
 )
 
 add_executable(katana-cpu-state-tests

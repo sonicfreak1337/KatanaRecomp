@@ -83,6 +83,7 @@ class MockServices final : public katana::runtime::PlatformServices {
         return {true, cpu.pc};
     }
     [[nodiscard]] bool prefetch(katana::runtime::CpuState& cpu,
+                                const katana::runtime::GuestInstructionOrigin,
                                 const std::uint32_t address) override {
         katana::runtime::prefetch(cpu, address);
         return cpu.last_prefetch_was_store_queue;
@@ -116,7 +117,8 @@ int main() {
     const auto dma = services.start_dma({4u, 16u, 4u});
     CpuState cpu;
     const auto fallback = services.controlled_fallback(cpu, {0x8C010000u, 0xFFFFu});
-    const bool store_queue = services.prefetch(cpu, 0xE0000000u);
+    const bool store_queue =
+        services.prefetch(cpu, GuestInstructionOrigin{0x100u, 0x8C000100u, true}, 0xE0000000u);
     require(output == input && scheduler.guest_cycle == 100u && scheduler.processed_events == 2u &&
                 !scheduler.budget_exhausted && interrupt && interrupt->level == 11u &&
                 interrupt->event_code == 0x320u && dma.completed && dma.transferred == 4u &&

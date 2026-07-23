@@ -3,6 +3,7 @@
 #include "katana/analysis/control_flow_analysis.hpp"
 #include "katana/analysis/control_flow_report.hpp"
 #include "katana/analysis/graph_export.hpp"
+#include "katana/analysis/hardware_audit.hpp"
 #include "katana/codegen/backend.hpp"
 #include "katana/codegen/cpp_emitter.hpp"
 #include "katana/codegen/naming.hpp"
@@ -19,6 +20,7 @@
 #include "katana/runtime/disc_install.hpp"
 #include "katana/runtime/dreamcast_boot.hpp"
 #include "katana/runtime/packed_disc.hpp"
+#include "katana/runtime/wait_loop_trace.hpp"
 
 #include <algorithm>
 #include <array>
@@ -36,6 +38,7 @@
 #include <stdexcept>
 #include <system_error>
 #include <thread>
+#include <tuple>
 #include <unordered_set>
 
 namespace katana::codegen {
@@ -153,10 +156,95 @@ std::string generated_header(const std::string& entry_namespace) {
            "}\n";
 }
 
+std::vector<katana::runtime::RuntimeWaitLoopDescriptor>
+runtime_wait_loop_descriptors(const katana::analysis::DreamcastHardwareAudit& audit) {
+    using Classification = katana::analysis::HardwareLoopClassification;
+    using Evidence = katana::runtime::RuntimeWaitLoopEvidence;
+    using Kind = katana::analysis::HardwareAccessKind;
+    using Descriptor = katana::runtime::RuntimeWaitLoopDescriptor;
+
+    std::vector<Descriptor> descriptors;
+    for (const auto& loop : audit.loops) {
+        if (loop.classification == Classification::Counter) continue;
+
+        const auto add = [&](const std::uint32_t read_site, const Evidence evidence) {
+            descriptors.push_back(
+                {loop.header_address, loop.latch_address, read_site, evidence});
+        };
+        for (const auto& access : loop.accesses) {
+            if (access.kind == Kind::Read && access.guards_loop)
+                add(access.instruction_address, Evidence::ProvenGuard);
+        }
+        for (const auto read_site : loop.unresolved_guard_read_instruction_addresses)
+            add(read_site, Evidence::UnresolvedGuard);
+
+        const bool conservative_candidates =
+            loop.classification == Classification::RamPoll ||
+            loop.classification == Classification::MmioPoll ||
+            loop.classification == Classification::Mixed ||
+            loop.classification == Classification::Unknown;
+        if (!conservative_candidates) continue;
+        for (const auto& access : loop.accesses) {
+            if (access.kind == Kind::Read && !access.guards_loop)
+                add(access.instruction_address, Evidence::ConservativeCandidate);
+        }
+    }
+
+    const auto key = [](const Descriptor& descriptor) {
+        return std::tuple{descriptor.loop_header,
+                          descriptor.loop_latch,
+                          descriptor.read_site,
+                          static_cast<std::uint8_t>(descriptor.evidence)};
+    };
+    std::sort(descriptors.begin(), descriptors.end(), [&](const auto& left, const auto& right) {
+        return key(left) < key(right);
+    });
+    descriptors.erase(
+        std::unique(descriptors.begin(), descriptors.end(), [](const auto& left, const auto& right) {
+            return left.loop_header == right.loop_header &&
+                   left.loop_latch == right.loop_latch && left.read_site == right.read_site;
+        }),
+        descriptors.end());
+    return descriptors;
+}
+
+std::string runtime_wait_loop_descriptor_contract(
+    const std::span<const katana::runtime::RuntimeWaitLoopDescriptor> descriptors) {
+    const auto evidence_enumerator = [](const katana::runtime::RuntimeWaitLoopEvidence evidence) {
+        using Evidence = katana::runtime::RuntimeWaitLoopEvidence;
+        switch (evidence) {
+        case Evidence::ProvenGuard: return "ProvenGuard";
+        case Evidence::UnresolvedGuard: return "UnresolvedGuard";
+        case Evidence::ConservativeCandidate: return "ConservativeCandidate";
+        }
+        throw std::logic_error("Unbekannte Wait-Loop-Evidenz.");
+    };
+    const auto address = [](const std::uint32_t value) {
+        std::ostringstream output;
+        output << "0x" << std::hex << std::uppercase << std::setw(8) << std::setfill('0')
+               << value << 'u';
+        return output.str();
+    };
+
+    std::ostringstream output;
+    output << "constexpr std::array<katana::runtime::RuntimeWaitLoopDescriptor, "
+           << descriptors.size() << "u> runtime_wait_loop_descriptors{{\n";
+    for (const auto& descriptor : descriptors) {
+        output << "    {" << address(descriptor.loop_header) << ", "
+               << address(descriptor.loop_latch) << ", " << address(descriptor.read_site)
+               << ", katana::runtime::RuntimeWaitLoopEvidence::"
+               << evidence_enumerator(descriptor.evidence) << "},\n";
+    }
+    output << "}};\n";
+    return output.str();
+}
+
 std::string handwritten_main(const std::string& entry_namespace,
                              const bool hle_bios_abi,
                              const bool diagnostic_partial,
                              const std::span<const katana::io::InputProvenance> inputs,
+                             const std::span<const katana::runtime::RuntimeWaitLoopDescriptor>
+                                 wait_loop_descriptors,
                              const std::string_view project_identity,
                              const std::string_view expected_content_identity,
                              const std::string_view expected_boot_sha256,
@@ -179,7 +267,8 @@ std::string handwritten_main(const std::string& entry_namespace,
                       << "constexpr std::string_view expected_content_identity = "
                       << katana::io::quote_json(expected_content_identity) << ";\n"
                       << "constexpr std::string_view expected_boot_sha256 = "
-                      << katana::io::quote_json(expected_boot_sha256) << ";\n";
+                      << katana::io::quote_json(expected_boot_sha256) << ";\n"
+                      << runtime_wait_loop_descriptor_contract(wait_loop_descriptors);
     return "#include \"katana_port.hpp\"\n"
            "#include \"katana/runtime/block_guards.hpp\"\n"
            "#include \"katana/runtime/dreamcast_boot.hpp\"\n"
@@ -189,6 +278,7 @@ std::string handwritten_main(const std::string& entry_namespace,
            "#include \"katana/runtime/indirect_dispatch.hpp\"\n"
            "#include \"katana/runtime/packed_disc.hpp\"\n"
            "#include \"katana/runtime/scheduler.hpp\"\n"
+           "#include \"katana/runtime/wait_loop_trace.hpp\"\n"
            "#include \"katana/io/input_provenance.hpp\"\n"
            "#include <algorithm>\n#include <array>\n#include <chrono>\n#include <cstdlib>\n#include "
            "<exception>\n#include <filesystem>\n#include <functional>\n#include "
@@ -198,6 +288,41 @@ std::string handwritten_main(const std::string& entry_namespace,
            "<unordered_set>\n#include <vector>\n\n"
            "namespace {\n" +
            identity_contract.str() +
+           "class RuntimeWaitLoopTraceSession final {\n"
+           "  public:\n"
+           "    RuntimeWaitLoopTraceSession(katana::runtime::Memory& memory, bool enabled)\n"
+           "        : memory_(&memory) {\n"
+           "        if (!enabled || runtime_wait_loop_descriptors.empty()) return;\n"
+           "        std::cerr << \"KATANA_WAIT_LOOP_TRACE_NOTICE local-only; contains raw "
+           "guest-memory values; do not share without review\\n\";\n"
+           "        recorder_.emplace(runtime_wait_loop_descriptors);\n"
+           "        memory_->set_guest_memory_access_sink(recorder_->sink());\n"
+           "    }\n"
+           "    RuntimeWaitLoopTraceSession(const RuntimeWaitLoopTraceSession&) = delete;\n"
+           "    RuntimeWaitLoopTraceSession& operator=(const RuntimeWaitLoopTraceSession&) = "
+           "delete;\n"
+           "    ~RuntimeWaitLoopTraceSession() noexcept { finish(); }\n"
+           "    void finish() noexcept {\n"
+           "        if (!recorder_) return;\n"
+           "        memory_->clear_guest_memory_access_sink();\n"
+           "        if (reported_) return;\n"
+           "        reported_ = true;\n"
+           "        try {\n"
+           "            std::cerr << \"KATANA_WAIT_LOOP_TRACE \"\n"
+           "                      << recorder_->serialize_json() << '\\n';\n"
+           "        } catch (...) {\n"
+           "            std::cerr << \"KATANA_WAIT_LOOP_TRACE "
+           "{\\\"schema\\\":\\\"katana.runtime-wait-loop-trace\\\","
+           "\\\"trace_version\\\":1,\\\"complete\\\":false,"
+           "\\\"contains_raw_guest_values\\\":true,"
+           "\\\"serialization_error\\\":true}\\n\";\n"
+           "        }\n"
+           "    }\n"
+           "  private:\n"
+           "    katana::runtime::Memory* memory_ = nullptr;\n"
+           "    std::optional<katana::runtime::RuntimeWaitLoopTraceRecorder> recorder_;\n"
+           "    bool reported_ = false;\n"
+           "};\n"
            "void verify_boot_identity(\n"
            "        const katana::runtime::DreamcastRuntimeBootImage& boot) {\n"
            "    const std::string_view boot_bytes(\n"
@@ -322,9 +447,12 @@ std::string handwritten_main(const std::string& entry_namespace,
            "        ++fallback_count_;\n"
            "        return {};\n"
            "    }\n"
-           "    bool prefetch(katana::runtime::CpuState& cpu, std::uint32_t address) override {\n"
+           "    bool prefetch(katana::runtime::CpuState& cpu,\n"
+           "                  katana::runtime::GuestInstructionOrigin instruction,\n"
+           "                  std::uint32_t address) override {\n"
            "        katana::runtime::prefetch(cpu, address);\n"
-           "        return state_.store_queues->prefetch(address);\n"
+           "        return state_.store_queues->prefetch(\n"
+           "            address, instruction, cpu.retired_guest_instructions);\n"
            "    }\n"
            "    katana::runtime::PlatformLifecycleState poll_host_lifecycle() override {\n"
            "        if (!lifecycle_poll_)\n"
@@ -547,6 +675,12 @@ std::string handwritten_main(const std::string& entry_namespace,
            "        const bool detailed_diagnostics = diagnostics_value != nullptr &&\n"
            "            std::string_view(diagnostics_value) == \"1\";\n"
            "        cpu.memory.set_mmio_access_tracking(detailed_diagnostics);\n"
+           "        const auto* wait_loop_trace_value =\n"
+           "            std::getenv(\"KATANA_PORT_WAIT_LOOP_TRACE\");\n"
+           "        const bool wait_loop_trace_enabled = wait_loop_trace_value != nullptr &&\n"
+           "            std::string_view(wait_loop_trace_value) == \"1\";\n"
+           "        RuntimeWaitLoopTraceSession wait_loop_trace(\n"
+           "            cpu.memory, wait_loop_trace_enabled);\n"
            "        auto input = std::make_shared<katana::runtime::InjectedHostInput>();\n"
            "        state.maple->attach(0u, 0u,\n"
            "            std::make_shared<katana::runtime::MapleControllerDevice>(input));\n"
@@ -2087,6 +2221,11 @@ PortExportResult export_dreamcast_port_project(const PreparedPortProgram& prepar
                                  " partielle oder ungeloeste Kontrollflussstellen.");
     }
     katana::ir::require_valid_program(prepared.program);
+    const auto wait_loop_descriptors = [&] {
+        const auto hardware_audit =
+            katana::analysis::audit_dreamcast_hardware(prepared.image, prepared.analysis);
+        return runtime_wait_loop_descriptors(hardware_audit);
+    }();
     report_progress(options, "partition-codegen");
     const auto partitions =
         partition_translation_units(prepared.program, options.partition_options);
@@ -2285,6 +2424,7 @@ PortExportResult export_dreamcast_port_project(const PreparedPortProgram& prepar
                                      prepared.hle_bios_abi,
                                      options.diagnostic_partial,
                                      prepared.inputs,
+                                     wait_loop_descriptors,
                                      recipe.job_generation,
                                      recipe.content_identity,
                                      boot_sha256,

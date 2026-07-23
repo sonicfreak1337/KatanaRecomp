@@ -446,6 +446,7 @@ class PvrYuvConverterMemoryDevice final : public MemoryDevice {
     [[nodiscard]] std::size_t size() const noexcept override;
     [[nodiscard]] std::uint8_t read_u8(std::uint32_t offset) const override;
     void write_u8(std::uint32_t offset, std::uint8_t value) override;
+    void set_guest_memory_access_memory(Memory* memory) noexcept;
     [[nodiscard]] std::uint64_t converted_macroblocks() const noexcept;
 
   private:
@@ -454,6 +455,7 @@ class PvrYuvConverterMemoryDevice final : public MemoryDevice {
     std::shared_ptr<PvrRegisterFile> registers_;
     std::shared_ptr<LinearMemoryDevice> vram_;
     std::function<void()> completion_observer_;
+    Memory* guest_memory_access_memory_ = nullptr;
     std::vector<std::uint8_t> input_;
     std::uint32_t configuration_ = std::numeric_limits<std::uint32_t>::max();
     std::uint32_t destination_ = std::numeric_limits<std::uint32_t>::max();
@@ -534,6 +536,7 @@ class PvrSoftwareRenderer final {
     void render(const PvrTaFrame& frame,
                 const PvrRegisterFile& registers,
                 LinearMemoryDevice& vram);
+    void set_guest_memory_access_memory(Memory* memory) noexcept;
     void observe_vram_write(std::uint32_t address,
                             std::size_t size,
                             bool bytes_changed = true);
@@ -560,6 +563,7 @@ class PvrSoftwareRenderer final {
     std::vector<std::uint64_t> direct_dirty_words_;
     std::size_t direct_dirty_byte_count_ = 0u;
     std::vector<std::uint8_t> direct_vram_shadow_;
+    Memory* guest_memory_access_memory_ = nullptr;
     bool direct_vram_shadow_valid_ = true;
     std::optional<PvrGuestFrameProof> queued_guest_frame_proof_;
     std::optional<PvrRenderFirstError> first_error_;

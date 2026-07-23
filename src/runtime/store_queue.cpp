@@ -68,7 +68,9 @@ std::uint32_t Sh4StoreQueues::transfer_target(const std::uint32_t address,
     return (address & 0x03FFFFE0u) | ((qacr_[queue] & qacr_mask) << 24u);
 }
 
-bool Sh4StoreQueues::prefetch(const std::uint32_t address) {
+bool Sh4StoreQueues::prefetch(const std::uint32_t address,
+                              const GuestInstructionOrigin instruction,
+                              const std::uint64_t retired_guest_instructions) {
     if (address < window_start || address > window_end) {
         return false;
     }
@@ -94,11 +96,18 @@ bool Sh4StoreQueues::prefetch(const std::uint32_t address) {
         (transfer.target_address >= 0x10000000u && transfer.target_address <= 0x107FFFFFu) ||
         (transfer.target_address >= 0x12000000u && transfer.target_address <= 0x127FFFFFu);
     transfer.target = ta_input ? StoreQueueTarget::TileAccelerator : StoreQueueTarget::Ram;
+    transfer.instruction = instruction;
+    transfer.retired_guest_instructions = retired_guest_instructions;
     transfer.bytes = queues_[selected];
     if (sink_) {
         sink_(transfer);
     } else {
-        memory_.write_bytes(transfer.target_address, transfer.bytes, CodeWriteSource::StoreQueue);
+        memory_.write_bytes_at(
+            transfer.target_address,
+            transfer.bytes,
+            GuestMemoryAccessContext{
+                transfer.target_address, instruction, retired_guest_instructions},
+            CodeWriteSource::StoreQueue);
     }
     ++transfer_count_;
     return true;

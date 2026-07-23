@@ -59,8 +59,9 @@ vorbereitet; der live geladene Dispatch bleibt `RuntimeOnly` und erzeugt keine
 feste CFG-Kante. Snapshotcache und P2-Aliasaufloesung sind gegen imagefremde
 Beweise abgesichert. Lokale AOT-Blockketten tragen die exakte tatsaechliche
 Terminatorquelle und Siteklasse bis zum externen Dispatch weiter. Der aktuelle
-kumulative Stand verwendet Runtime-ABI 41, Block-ABI 3,
-Backend-Interface-ABI 3, Portprojektvertrag 25 und Host-Video-Vertrag 2.
+kumulative Stand verwendet Runtime-ABI 42, Block-ABI 3,
+Backend-Interface-ABI 3, PlatformServices-ABI 10, Portprojektvertrag 26 und
+Host-Video-Vertrag 2.
 
 Systemreplay v2 haelt standardmaessig 4.096 und maximal 65.536 Ereignisse;
 portable Ereigniscodes sind auf 64 Zeichen begrenzt. Ein von `try_record()` an
@@ -99,8 +100,9 @@ Der aktuelle normale SA-PAL-Disc-Audit ist gruen: Schema 4 und
 `native_disc_aot_boot_graph` umfassen 142.380 Instruktionen, 1.542 Funktionen,
 null unbekannte Instruktionen, 58.630 Speicherstellen, null bekannte Luecken,
 zwei partielle Adressen und 1.095 Natural Loops. Die 492
-`unresolved_poll_guard_loops` halten `--strict` erwartungsgemaess offen und
-damit auch `KR-4842`.
+`unresolved_poll_guard_loops` halten `--strict` erwartungsgemaess offen; sie
+sind keine erfundene dynamische Evidenz und nicht mehr der verbleibende
+Abschlussgrund von `KR-4842`.
 
 Freie Produktprobes uebersetzen virtuelle Gastadressen MMU-bewusst und duerfen
 nur Haupt-RAM, VRAM oder AICA-RAM lesen. Sie rufen weder MMIO noch Observer,
@@ -108,14 +110,49 @@ Watchpoints oder Metrikpfade auf und veraendern keinen CPU-/Exceptionzustand.
 Das Last-MMIO-Tracking bleibt im Gast-Hotpath allokationsfrei; Regionsstrings
 entstehen erst beim terminalen Bericht. Strukturierte PVR- und
 Systembus-Snapshots bewegen selbst bei ausstehenden Render- oder
-Channel-2-Vorgaengen weder Scheduler noch Geraetezustand. Die aktuellen
-fokussierten Runtime-/Codegen- und Auditor-/Policygruppen bestehen 5/5 und 2/2;
-die CLI-Scope-Regression ist angelegt und der aktuelle private Disc-Audit
-bestaetigt die echte CLI-Integration. Das ist kein Vollgate.
-Damit sind `KR-4842` und `KR-4911` substanziell vorangekommen, bleiben fuer
-dynamische Wertwechselfolgen, echte Runtime-Writer-Provenienz,
-Diagnose-an/aus-Invarianz beziehungsweise ihre vollstaendigen
-Runtimevertraege aber bewusst offen.
+Channel-2-Vorgaengen weder Scheduler noch Geraetezustand.
+
+Runtime-ABI 42 ergaenzt einen seiteneffektfreien POD-Zugriffssink. AOT-Code und
+der nur im begrenzten Diagnoseprofil vorhandene Interpreter melden Quell- und
+Laufzeit-PC; Store-Queue-`PREF`, PVR-Render- und PVR-YUV-Writes tragen ihre
+Writer-Herkunft bis zum gemeinsamen linearen Backing. Auch die logische
+VRAM32-Sicht wird darauf projiziert. Readwerte und MMIO-Handler werden nicht
+erneut gelesen; nur der aktivierte Trace vergleicht bei Wrapperwrites vorher
+das seiteneffektfreie lineare Backing. Produkt-`GuestWriteObserver` und
+Scanout-Evidenz bleiben konservativ und bei Trace aus/an identisch.
+`RuntimeWaitLoopTrace` v1
+verdichtet Wertlaeufe und passende Writer begrenzt. Der Port leitet generische,
+deterministisch deduplizierte Guard- und Kandidatendeskriptoren aus dem
+Hardwareaudit ab und ordnet Read-Sites ueber einen vorab sortierten Index zu.
+Auch beobachtete MMIO-Werte stammen aus dem bereits ausgefuehrten Zugriff,
+nicht aus einem zweiten Handleraufruf. Lineare, bytegenaue Writerlinks tragen
+`exact-backing-bytes`; nichtlineare MMIO-Ueberschneidungen bleiben mit
+`physical-range-candidate` ausdruecklich Kandidaten. Backing-indexierte
+Locations vermeiden Vollscans fuer unbeteiligte lineare Writes. Der aktive
+Trace wertet skalare und Range-Wrapperwrites bytegenau aus und verwirft
+No-op-Writer. Ausschliesslich
+`KATANA_PORT_WAIT_LOOP_TRACE=1` aktiviert den Rohwerttrace, unabhaengig vom
+breiten `KATANA_PORT_DIAGNOSTICS`-Schalter. Bei leerer Deskriptorliste werden
+weder Recorder noch Sink erzeugt; sonst warnt der Port einmalig auf `stderr`
+vor den nur lokal und erst nach Pruefung teilbaren Rohwerten. Das JSON nennt
+`contains_raw_guest_values:true`, den
+`writer_scope:"since-previous-sample"` und ungueltige skalare Range-Werte als
+`scalar_value_valid:false` mit `value:null`. Strukturell ungueltige
+Access-Events erhoehen `invalid_access_events` und erzwingen
+`complete:false`; sie werden nicht als bloss irrelevante gueltige Events
+ignoriert. RAII entfernt den Sink vor der terminalen Ausgabe. Ohne
+Trace-Opt-in bleibt der Fastpath ohne
+Recorderallokation oder Projektion. PlatformServices-ABI 10 reicht die
+`PREF`-Instruktionsherkunft bis zur Store Queue weiter.
+
+Die generischen Interpreter-Registervarianten von `PREF`, `OCBI`, `OCBP`,
+`OCBWB` und `TAS.B` sind geschlossen; doppelte `FMOV`-Speicherzugriffe folgen
+low nach high. Der konsolidierte fokussierte Nachweis besteht 22/22 in
+1,57 Sekunden, der Port-CLI-Nachweis 1/1 in 151,12 Sekunden. Das war weder eine
+Vollsuite noch `KR-4852`. `KR-4842` bleibt jetzt ausschliesslich fuer den
+vollstaendigen Diagnose=0/1-A/B-Produktlauf offen. `KR-4911` bleibt unabhaengig
+davon bis zu seinem vollstaendigen Runtimebeobachtungs- und
+Fehlerpaketvertrag offen.
 
 Der vorangegangene optimierte ABI-38-PAL-Port wurde mit zwoelf Jobs in
 140,9 Sekunden

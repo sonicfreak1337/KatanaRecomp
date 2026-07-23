@@ -200,13 +200,14 @@ abgeschlossen sein.
 Der Checkboxstand bleibt bewusst taskbezogen: `KR-4831`, `KR-4841`,
 `KR-4843` bis `KR-4846`, `KR-4915` und `KR-4850` sind abgeschlossen.
 `KR-4842` besitzt mit MMU-bewussten linearen Peeks, nicht mutierenden
-Geraetesnapshots und der erweiterten statischen Wait-Loop-/Guard-Provenienz
-einen belastbaren Teilstand. Es bleibt aber bis zu dynamischen
-Wertwechselfolgen, echter Runtime-Writer-Provenienz und einem vollstaendigen
-Diagnose=0/1-A/B-Produktlauf offen. `KR-4911` besitzt mit Systemreplay v2
-ebenfalls einen abgesicherten Teilstand, bleibt jedoch bis zum vollstaendigen
-Runtimebeobachtungs- und Fehlerpaketvertrag offen. Diese Teilstaende setzen
-keine weiteren Checkboxen vorzeitig.
+Geraetesnapshots, der erweiterten statischen Wait-Loop-/Guard-Provenienz und
+dem versionierten dynamischen Wait-Loop-Trace einen belastbaren Teilstand.
+Wertwechselfolgen und echte Runtime-Writer-Provenienz liegen jetzt vor; offen
+bleibt ausschliesslich der vollstaendige Diagnose=0/1-A/B-Produktlauf.
+Deshalb bleibt die `KR-4842`-Checkbox bewusst leer. `KR-4911` besitzt mit
+Systemreplay v2 ebenfalls einen abgesicherten Teilstand, bleibt jedoch bis zum
+vollstaendigen Runtimebeobachtungs- und Fehlerpaketvertrag offen. Diese
+Teilstaende setzen keine weiteren Checkboxen vorzeitig.
 
 `KR-4915` und `KR-4850` wurden vor ihren noch offenen Boot- und TA-
 Voraussetzungen durch den legitimen IP.BIN-Direct-Framebuffer-Pfad
@@ -252,8 +253,9 @@ Backend-Interface-ABI 3, Portprojektvertrag 24 und Host-Video-Vertrag 2
 versionierten diesen privaten Portlauf. Er bleibt ausdruecklich historische
 ABI-39-Evidenz und wurde nicht nachtraeglich als ABI-40-Artefakt umgedeutet.
 
-Der aktuelle kumulative Kernvertrag verwendet Runtime-ABI 41, Block-ABI 3,
-Backend-Interface-ABI 3, Portprojektvertrag 25 und Host-Video-Vertrag 2.
+Der aktuelle kumulative Kernvertrag verwendet Runtime-ABI 42, Block-ABI 3,
+Backend-Interface-ABI 3, PlatformServices-ABI 10, Portprojektvertrag 26 und
+Host-Video-Vertrag 2.
 Systemreplay v2 begrenzt die Aufzeichnung auf standardmaessig 4.096 und
 hoechstens 65.536 Ereignisse sowie 64 Zeichen pro Ereigniscode. Ein
 von `try_record()` an einem unversiegelten Log abgewiesener Best-effort-
@@ -291,8 +293,9 @@ Funktionen, null unbekannte Instruktionen, 58.630 Speicherstellen
 (18.159 vollstaendig aufgeloest, 40.471 unaufgeloest oder partiell), null
 bekannte Luecken, zwei partielle Adressen und 1.095 Loops. Die Klassen sind
 48 `counter`, eine `mmio_poll`, zwei `ram_poll` und 1.044 `unknown`.
-492 `unresolved_poll_guard_loops` halten den Strict-Modus und `KR-4842`
-bewusst offen.
+492 `unresolved_poll_guard_loops` halten den Strict-Modus bewusst rot. Sie
+bleiben konservative statische Diagnose, sind aber nicht mehr der
+Abschlussblocker von `KR-4842`.
 
 Freie Diagnosepeeks uebersetzen ueber die aktive Gast-MMU und sind auf
 Haupt-RAM, VRAM und AICA-RAM begrenzt. MMIO, Observer, Watchpoints,
@@ -300,9 +303,37 @@ Speicherzaehler sowie CPU-/Exceptionzustand bleiben unveraendert. Der letzte
 MMIO-Zugriff wird im Hotpath als allokationsfreier POD gehalten und erst beim
 terminalen Bericht mit einem Regionsstring versehen. PVR- und
 Systembus-Snapshots bewegen auch pending Render-/Channel-2-Zustaende nicht.
-Die fokussierten Runtime-/Codegenziele bestehen 5/5, Auditor und Policy 2/2;
-die CLI-Scope-Regression ist angelegt und der aktuelle private Disc-Audit
-bestaetigt die echte CLI-Integration. Dieser Teilblock ist kein Vollgate.
+Runtime-ABI 42 fuehrt zusaetzlich einen seiteneffektfreien POD-Zugriffssink
+mit Quell-/Laufzeit-PC ein. AOT, begrenzter Diagnoseinterpreter, Store-Queue-
+`PREF`, PVR-Render und PVR-YUV behalten ihre Writer-Herkunft; VRAM32 wird auf
+das gemeinsame lineare Backing projiziert. `RuntimeWaitLoopTrace` v1
+verdichtet Wertlaeufe und Writer anhand generischer, deterministisch
+deduplizierter Auditdeskriptoren und eines vorab sortierten Read-Site-Index.
+MMIO-Werte werden aus dem bereits ausgefuehrten Zugriff uebernommen, ohne
+zweiten Handleraufruf. Bytegenaue lineare Writerlinks werden als
+`exact-backing-bytes`, nichtlineare MMIO-Ueberschneidungen lediglich als
+`physical-range-candidate` ausgewiesen. Der Backing-Index vermeidet
+Location-Vollscans fuer unbeteiligte lineare Writes. Nur der aktive Trace
+vergleicht bei Wrapperwrites die seiteneffektfreie lineare Projektion,
+bestimmt skalare und Range-Aenderungen bytegenau und verwirft No-op-Writer.
+Produkt-`GuestWriteObserver` und Scanout-Evidenz bleiben konservativ und bei
+Trace aus/an identisch. Nur `KATANA_PORT_WAIT_LOOP_TRACE=1` aktiviert den
+Rohwerttrace, unabhaengig vom breiten Diagnoseschalter. Eine leere
+Deskriptorliste installiert weder Recorder noch Sink; bei tatsaechlich
+erzeugtem Recorder warnt der Port einmalig auf `stderr` vor nur lokal und
+nicht ungeprueft teilbaren Rohwerten. Das JSON deklariert
+`contains_raw_guest_values:true`,
+`writer_scope:"since-previous-sample"` sowie ungueltige skalare Range-Werte
+als `scalar_value_valid:false` und `value:null`. Strukturell ungueltige
+Access-Events erhoehen `invalid_access_events` und erzwingen
+`complete:false`, statt als bloss irrelevante gueltige Events zu gelten. RAII
+entfernt den Sink vor der terminalen Ausgabe. Der Trace-aus-Fastpath fuehrt
+weder Recorderallokation noch Projektion aus.
+Die Registervarianten von `PREF`, `OCBI`, `OCBP`, `OCBWB` und `TAS.B` sind im
+begrenzten Interpreter geschlossen; `FMOV` verarbeitet Doppelwortzugriffe low
+nach high. Der konsolidierte fokussierte Nachweis besteht 22/22 in
+1,57 Sekunden, der Port-CLI-Nachweis 1/1 in 151,12 Sekunden. Eine Vollsuite
+und `KR-4852` wurden nicht ausgefuehrt.
 
 Der private Retailrunner liest Runtime-ABI und Portprojektvertrag strikt aus
 `cmake/KatanaVersions.cmake`; malformed, doppelte oder nullwertige Definitionen

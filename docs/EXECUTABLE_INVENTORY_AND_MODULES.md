@@ -180,8 +180,47 @@ Manifest als `diagnostic-interpreter` aus. Deaktivierung, unbekannte Quelle,
 Byteabweichung, Budgetende und ungueltiger Block bleiben typisierte Misses.
 `KR-4848` bleibt fuer strukturierte Disc-Ladetransaktionen, den allgemeinen
 nativen Materializer und vorab erzeugte latente native Module offen. Der
-aktuelle kumulative Vertrag verwendet Runtime-ABI 41, Block-ABI 3,
-Backend-Interface-ABI 3 und Portprojektvertrag 25.
+aktuelle kumulative Vertrag verwendet Runtime-ABI 42, Block-ABI 3,
+Backend-Interface-ABI 3, PlatformServices-ABI 10 und Portprojektvertrag 26.
+
+Die optionale Runtimebeobachtung aendert diesen Materialisierungsvertrag nicht.
+Ein POD-Zugriffssink versieht bereits ausgefuehrte AOT-Zugriffe und Zugriffe
+des begrenzten Diagnoseinterpreters mit Quell- und Laufzeit-PC. Store-Queue-
+`PREF`, PVR-Render und PVR-YUV tragen getrennte Writer-Urspruenge; die
+VRAM32-Sicht projiziert auf das gemeinsame lineare Backing. Der Sink fragt
+beobachtete Readwerte und MMIO-Handler nicht erneut ab. Nur der aktive Trace
+vergleicht fuer Wrapperwrite-No-ops vor dem Write das seiteneffektfreie
+lineare Backing; Produktobserver und Scanout-Evidenz bleiben konservativ sowie
+bei Trace aus/an identisch.
+
+`RuntimeWaitLoopTrace` v1 verwendet ausschliesslich generische,
+deterministisch aus dem Hardwareaudit abgeleitete Deskriptoren. Ein vorab
+sortierter Read-Site-Index vermeidet lineare Deskriptorscans; MMIO-Werte
+werden aus dem bereits ausgefuehrten Zugriff uebernommen. Lineare bytegenaue
+Writerlinks tragen `exact-backing-bytes`; physische MMIO-Ueberschneidungen
+bleiben `physical-range-candidate`. Backing-indizierte Locations vermeiden
+Vollscans fuer unbeteiligte lineare Writes. Der aktive Trace bestimmt skalare
+und Range-Wrapperaenderungen bytegenau und verwirft No-op-Writer. Nur
+`KATANA_PORT_WAIT_LOOP_TRACE=1` aktiviert den Rohwerttrace, unabhaengig von
+`KATANA_PORT_DIAGNOSTICS`. Bei leerer Deskriptorliste entstehen weder Recorder
+noch Sink. Sonst warnt der Port einmalig auf `stderr`, dass die rohen
+Gastwerte nur lokal bestimmt und nicht ungeprueft teilbar sind. Das JSON
+deklariert `contains_raw_guest_values:true`,
+`writer_scope:"since-previous-sample"` und ungueltige skalare Range-Werte mit
+`scalar_value_valid:false` und `value:null`. Strukturell ungueltige
+Access-Events erhoehen `invalid_access_events` und erzwingen
+`complete:false`; sie sind keine bloss irrelevanten gueltigen Events. RAII
+entfernt den Sink vor der terminalen Ausgabe. Ohne Trace-Opt-in bleibt der
+Ausfuehrungs- und Materialisierungshotpath ohne Recorderprojektion. Die Registervarianten von
+`PREF`, `OCBI`, `OCBP`, `OCBWB` und `TAS.B` sind im begrenzten Interpreter
+geschlossen; `FMOV`-Doppelwortzugriffe laufen low nach high. Keine dieser
+Diagnosefaehigkeiten macht unbekannte Bytes zu Code oder einen
+Interpreterblock zu Produkt-AOT.
+
+Fuer den Zwischenblock bestehen 22/22 fokussierte Regressionen in
+1,57 Sekunden; der Port-CLI-Nachweis besteht 1/1 in 151,12 Sekunden. Es lief
+keine Vollsuite und kein `KR-4852`; `KR-4842` bleibt ausschliesslich bis zum
+vollstaendigen Diagnose=0/1-A/B-Produktlauf offen.
 
 ## Runtime-only-Profil
 

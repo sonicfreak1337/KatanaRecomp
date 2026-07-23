@@ -133,10 +133,14 @@ int main() {
     require(source.find("if (!same_register)") != std::string::npos,
             "Post-Increment besitzt keine Schutzbedingung fuer identische Register.");
 
-    require(source.find("katana::runtime::guest_read_s8(cpu, address)") != std::string::npos &&
-                source.find("katana::runtime::guest_read_s16(cpu, address)") !=
+    require(source.find(
+                "katana::runtime::guest_read_s8_at(cpu, guest_origin, address)") !=
                     std::string::npos &&
-                source.find("katana::runtime::guest_read_u32(cpu, address)") !=
+                source.find(
+                    "katana::runtime::guest_read_s16_at(cpu, guest_origin, address)") !=
+                    std::string::npos &&
+                source.find(
+                    "katana::runtime::guest_read_u32_at(cpu, guest_origin, address)") !=
                     std::string::npos,
             "Post-Increment-Loads verwenden falsche Speicherbreiten.");
 

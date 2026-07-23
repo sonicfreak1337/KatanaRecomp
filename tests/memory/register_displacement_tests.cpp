@@ -160,9 +160,12 @@ int main(const int argc, char* argv[]) {
                 source.find("cpu.r[4] + 60u") != std::string::npos,
             "Der Codegenerator verwendet falsche Store-Adressen.");
 
-    require(source.find("guest_read_s8(cpu, cpu.r[5] + 15u)") != std::string::npos &&
-                source.find("guest_read_s16(cpu, cpu.r[6] + 30u)") != std::string::npos &&
-                source.find("guest_read_u32(cpu, cpu.r[7] + 60u)") != std::string::npos,
+    require(source.find("guest_read_s8_at(cpu, guest_origin, cpu.r[5] + 15u)") !=
+                    std::string::npos &&
+                source.find("guest_read_s16_at(cpu, guest_origin, cpu.r[6] + 30u)") !=
+                    std::string::npos &&
+                source.find("guest_read_u32_at(cpu, guest_origin, cpu.r[7] + 60u)") !=
+                    std::string::npos,
             "Der Codegenerator verwendet falsche Load-Adressen oder Breiten.");
 
     std::cout << "Alle KR-1402 Decoder-, IR- und Codegen-Tests erfolgreich.\n";

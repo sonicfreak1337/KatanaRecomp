@@ -68,6 +68,13 @@ ABI-Version 41 bindet MMU-bewusste lineare Gastpeeks, allokationsfreies
 Last-MMIO-Tracking und nicht mutierende PVR-/Systembus-Snapshots in den
 oeffentlichen Diagnosevertrag. Der Portprojektvertrag 25 verwendet diese
 Schnittstellen im generierten terminalen Fortschrittsbericht.
+ABI-Version 42 bindet den seiteneffektfreien POD-Zugriffssink,
+Quell-/Laufzeit-PC-Provenienz und `RuntimeWaitLoopTrace` Version 1. AOT und der
+begrenzte Diagnoseinterpreter teilen den Herkunftsvertrag; Store-Queue-`PREF`,
+PVR-Render und PVR-YUV bleiben unterscheidbare Writer, waehrend VRAM32 auf das
+gemeinsame lineare Backing projiziert wird. PlatformServices-ABI 10 reicht die
+exakte `PREF`-Instruktionsherkunft bis zur Store Queue. Portprojektvertrag 26
+versioniert die generischen Auditdeskriptoren und das explizite Trace-Opt-in.
 
 ## CMake
 
@@ -304,6 +311,83 @@ veraendern. Derselbe Vertrag gilt auch dann, wenn ein synthetischer CPU-Zustand
 noch keinen expliziten `RuntimeAddressSpace` besitzt; aktive MMU faellt dort
 nicht still auf QACR zurueck.
 
+## Seiteneffektfreier Runtime-Wait-Loop-Trace
+
+`Memory` kann einen rohen POD-Sink fuer den bereits ausgefuehrten Zugriff
+benachrichtigen. Das Ereignis enthaelt Operation, virtuelle und physische
+Adresse, Breite, skalaren Wert, Quell- und Laufzeit-PC, Retirementstand,
+Writequelle und, wo vorhanden, die Projektion auf ein lineares Backing. Der
+Sink fragt einen beobachteten Readwert nicht erneut ab und ruft keinen
+zusaetzlichen MMIO-Handler auf. Das gilt auch fuer MMIO: Der Sink uebernimmt
+den bereits beobachteten Wert des ausgefuehrten Zugriffs. Nur fuer die
+No-op-Klassifikation eines Writes durch einen nichtlinearen Wrapper darf der
+aktivierte Trace vor dem Write die seiteneffektfreie lineare Projektion lesen.
+Der Produkt-`GuestWriteObserver` und damit der Scanout-Dirty-Vertrag bleiben
+fuer solche Wrapper bewusst konservativ und bei Trace aus/an identisch.
+Store-Queue-`PREF` reicht seine
+Instruktionsherkunft ueber
+PlatformServices-ABI 10 weiter. PVR-Render- und YUV-Writes melden getrennte
+Writer-Urspruenge. Die logische VRAM32-Abbildung projiziert ihre einzelnen
+Bytes auf dasselbe VRAM-Backing und bleibt dadurch mit RAM-/VRAM64-Writes
+vergleichbar.
+
+`RuntimeWaitLoopTrace` v1 verknuepft tatsaechlich ausgefuehrte Read-Sites mit
+begrenzten Wertlaeufen und ueberlappenden Writern. Der Portexport berechnet den
+Hardwareaudit genau einmal und leitet daraus deterministisch deduplizierte
+`ProvenGuard`-, `UnresolvedGuard`- und konservative Kandidatendeskriptoren ab;
+reine Counterloops werden nicht instrumentiert. Ein vorab sortierter Index
+ordnet ausgefuehrte Read-Sites ihren Deskriptoren zu, ohne pro Zugriff alle
+Deskriptoren linear zu durchsuchen. Aktive lineare Locations sind ausserdem
+nach Backing indiziert, sodass ein Write auf ein unbeteiligtes Backing ohne
+Location-Vollscan verworfen wird. Der aktive Trace berechnet seine
+Writer-Aenderung fuer skalare und Range-Wrapperwrites bytegenau, fasst nur
+Abschnitte mit gleichem Aenderungszustand zusammen und verwirft No-op-Writer.
+Diese Trace-Evidenz veraendert die konservative Produkt-/Scanout-Evidenz
+nicht. `guest_memory_access_change_tracking_limit` begrenzt die
+Trace-Aenderungsmap auf 1 MiB; bis 256 Byte liegen inline, erst darueber ist
+innerhalb dieses Limits eine Allokation noetig. Scheitert sie oder ist der
+Range groesser, wird der Gastwrite trotzdem vollstaendig nach seinem normalen
+Vertrag ausgefuehrt. Der Sink erhaelt stattdessen ein ungueltiges Event und
+markiert den Trace ueber `invalid_access_events` und `complete:false` als
+unvollstaendig. Der PVR-Renderer prueft die Trace-Aktivitaet einmal am
+Renderanfang und nicht pro Pixelstore.
+
+Strukturell ungueltige Access-Events, darunter lineare Projektionen mit
+mehr als den vier im Ereignis abbildbaren Byteoffsets, erhoehen
+`invalid_access_events` und erzwingen `complete:false`; sie zaehlen nicht als
+bloss ignorierte gueltige Events. Scheitert beim Anlegen oder Indizieren einer
+aktiven Location eine Allokation, faengt der `noexcept`-Callback sie ab,
+erhoeht `dropped_locations` und markiert die Ausgabe damit ebenfalls als
+unvollstaendig, statt den Prozess zu beenden.
+
+Ein Wertlauf kennzeichnet die Writerkorrelation als
+`writer_link_kind:"exact-backing-bytes"`, wenn sich die nachgewiesenen
+linearen Backing-Bytes ueberschneiden. Nichtlineare Zugriffe wie MMIO koennen
+nur ueber ihren physischen Bereich korreliert werden und tragen deshalb
+`writer_link_kind:"physical-range-candidate"` statt eines Beweises. Es gibt
+weder Titeladressen noch private Inhalte im Vertrag. Jeder serialisierte
+Writer traegt zusaetzlich `instruction_valid`; `source_pc` und `runtime_pc`
+sind nur bei gesetztem Marker als Instruktionsherkunft gueltig.
+
+Nur der exakte Wert `KATANA_PORT_WAIT_LOOP_TRACE=1` konstruiert diesen
+Rohwertrecorder, unabhaengig vom breiteren Schalter
+`KATANA_PORT_DIAGNOSTICS`. Bei einer leeren Deskriptorliste werden weder
+Recorder noch Sink erzeugt. Bei tatsaechlicher Aktivierung warnt der Port
+einmalig auf `stderr`: Die Ausgabe ist nur lokal bestimmt, enthaelt rohe
+Gastwerte und darf nicht ungeprueft geteilt werden. Das JSON deklariert
+`contains_raw_guest_values:true` und
+`writer_scope:"since-previous-sample"`; fuer Range-Writes ohne gueltigen
+Skalarwert stehen `scalar_value_valid:false` und `value:null`. Der
+`invalid_access_events`-Zaehler ist Teil desselben terminalen Schemas. RAII
+entfernt den Sink vor jeder terminalen `KATANA_WAIT_LOOP_TRACE`-JSON-Ausgabe, auch beim
+kontrollierten Lifecycle- oder Fehler-Unwind. Ohne dieses Trace-Opt-in bleiben
+Recorder und Speicherprojektion aus dem Fastpath.
+
+Der begrenzte Interpreter deckt die Registervarianten von `PREF`, `OCBI`,
+`OCBP`, `OCBWB` und `TAS.B` ab. Doppelte `FMOV`-Speicherzugriffe erfolgen in
+der Reihenfolge low nach high. Diese Diagnoseunterstuetzung aendert nicht die
+Produktgrenze: Der normale Port fuehrt weiterhin ausschliesslich AOT-Code aus.
+
 ## G1-/GD-ROM-DMA-Faultvertrag
 
 G1-DMA prueft vor dem ersten Schedulerevent die kodierte Laenge, Ausrichtung,
@@ -475,10 +559,10 @@ ein Write ueber eine Spiegelgrenze wird dafuer in Tail und Head geteilt.
 Der normale Produktport deaktiviert Demand-Interpreterausfuehrung vollstaendig:
 Nicht gebundener Code endet als typisierter Materialisierungs-/Dispatchfehler.
 Nur das explizite `diagnostic_partial`-Profil emittiert den begrenzten
-Diagnoseinterpreter. Der Portprojektvertrag `25` weist Profil,
+Diagnoseinterpreter. Der Portprojektvertrag `26` weist Profil,
 Interpreterstatus, Unbound-Code-Policy und Coverage-Vertrag im Manifest aus
 und verwendet fuer freie Speicherprobes sowie PVR-/Systembuszustand nur die
-seiteneffektfreien Runtime-ABI-41-Diagnoseschnittstellen.
+seiteneffektfreien Runtime-ABI-42-Diagnoseschnittstellen.
 
 Im produktiven Einblock-AOT-Pfad zaehlt `CpuState::retired_guest_instructions`
 jede betretene Gastinstruktion. Schedulerzeit wird nach der ausgefuehrten
@@ -495,8 +579,8 @@ generische C++-Emitter setzt auch bei einem durch Funktionsdiscovery
 nachfolgerlosen Block in jedem Backendmodus `PC` auf die Folgeadresse der
 letzten Gastinstruktion. Die Produktinvariante prueft einen Fallthrough relativ
 zu dieser tatsaechlichen Terminatorquelle und nicht zum Eintritt des
-umgebenden Wrappers. Der kumulative Stand verwendet Runtime-ABI 41, Block-ABI 3,
-Backend-Interface-ABI 3, PlatformServices-ABI 9, Portvertrag 25 und
+umgebenden Wrappers. Der kumulative Stand verwendet Runtime-ABI 42, Block-ABI 3,
+Backend-Interface-ABI 3, PlatformServices-ABI 10, Portvertrag 26 und
 Host-Video-Vertrag 2.
 
 Statische Dispatchregistries werden nicht mehr in eine einzelne
@@ -528,6 +612,14 @@ zwei erwartete Regex-`PASS_REGULAR_EXPRESSION`-Erfolge. Ein Coverage-Bericht
 wurde in diesem direkten CTest-Lauf nicht erhoben; Desktop-GUI- und Harness-
 Tests sind nicht Teil der 183. Dieser Nachweis schliesst weder `KR-4852` noch
 `KR-4853` oder die interne Freigabe `KR-4854`.
+
+Die konsolidierten fokussierten Regressionen des nachfolgenden
+KR-4842-Zwischenblocks bestehen 22/22 in 1,57 Sekunden; der generierte
+Port-CLI-Pfad besteht 1/1 in 151,12 Sekunden. Dafuer wurde keine Vollsuite und
+kein `KR-4852` ausgefuehrt.
+Dynamische Wertlaeufe und Runtime-Writer-Provenienz sind damit abgedeckt.
+`KR-4842` bleibt ausschliesslich fuer den vollstaendigen
+Diagnose=0/1-A/B-Produktlauf offen.
 
 Der optimierte ABI-38-Export der privaten PAL-Testbench dauerte mit zwoelf Jobs
 140,9 Sekunden, der inkrementelle Reexport 29,2 Sekunden. Die lokale

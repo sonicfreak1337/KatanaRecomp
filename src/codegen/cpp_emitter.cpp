@@ -409,12 +409,12 @@ void emit_simple_instruction(std::ostringstream& output,
         }
         output << "cpu.r[" << source << "];\n"
                << "if (cpu.fpu_transfer_pair()) {\n"
-               << "    const std::uint32_t low = katana::runtime::guest_read_u32(cpu, address);\n"
-               << "    const std::uint32_t high = katana::runtime::guest_read_u32(cpu, address + 4u);\n"
+               << "    const std::uint32_t low = katana::runtime::guest_read_u32_at(cpu, guest_origin, address);\n"
+               << "    const std::uint32_t high = katana::runtime::guest_read_u32_at(cpu, guest_origin, address + 4u);\n"
                << "    katana::runtime::write_fpu_pair_bits(cpu, " << destination
                << "u, (static_cast<std::uint64_t>(high) << 32u) | low);\n"
                << "} else {\n"
-               << "    cpu.fr[" << destination << "] = katana::runtime::guest_read_u32(cpu, address);\n"
+               << "    cpu.fr[" << destination << "] = katana::runtime::guest_read_u32_at(cpu, guest_origin, address);\n"
                << "}\n";
         if (instruction.operation == Operation::FmovLoadPostIncrement) {
             output << "cpu.r[" << source << "] = address + (cpu.fpu_transfer_pair() ? 8u : 4u);\n";
@@ -443,12 +443,12 @@ void emit_simple_instruction(std::ostringstream& output,
                << "if (cpu.fpu_transfer_pair()) {\n"
                << "    const std::uint64_t bits = katana::runtime::read_fpu_pair_bits(cpu, "
                << source << "u);\n"
-               << "    katana::runtime::guest_write_u32(cpu, address, static_cast<std::uint32_t>(bits), "
+               << "    katana::runtime::guest_write_u32_at(cpu, guest_origin, address, static_cast<std::uint32_t>(bits), "
                   "katana::runtime::CodeWriteSource::Fpu);\n"
-               << "    katana::runtime::guest_write_u32(cpu, address + 4u, static_cast<std::uint32_t>(bits >> 32u), "
+               << "    katana::runtime::guest_write_u32_at(cpu, guest_origin, address + 4u, static_cast<std::uint32_t>(bits >> 32u), "
                   "katana::runtime::CodeWriteSource::Fpu);\n"
                << "} else {\n"
-               << "    katana::runtime::guest_write_u32(cpu, address, cpu.fr[" << source
+               << "    katana::runtime::guest_write_u32_at(cpu, guest_origin, address, cpu.fr[" << source
                << "], katana::runtime::CodeWriteSource::Fpu);\n"
                << "}\n";
         if (instruction.operation == Operation::FmovStorePreDecrement) {
@@ -556,7 +556,7 @@ void emit_simple_instruction(std::ostringstream& output,
     case Operation::Prefetch:
         output << "if (services != nullptr) {\n";
         emit_indent(output, indent + 1);
-        output << "static_cast<void>(services->prefetch(cpu, cpu.r["
+        output << "static_cast<void>(services->prefetch(cpu, guest_origin, cpu.r["
                << static_cast<unsigned>(instruction.source_register) << "]));\n";
         emit_indent(output, indent);
         output << "} else {\n";
@@ -585,8 +585,9 @@ void emit_simple_instruction(std::ostringstream& output,
                << static_cast<unsigned>(instruction.source_register) << "]));\n";
         return;
     case Operation::MovcaLong:
-        output << "katana::runtime::guest_write_u32(cpu, cpu.r["
-               << static_cast<unsigned>(instruction.destination_register) << "], cpu.r[0]);\n";
+        output << "katana::runtime::guest_write_u32_at(cpu, guest_origin, cpu.r["
+               << static_cast<unsigned>(instruction.destination_register)
+               << "], cpu.r[0], katana::runtime::CodeWriteSource::StoreQueue);\n";
         return;
     case Operation::ClearMac:
         output << "cpu.mach = 0u;\n";
@@ -1021,9 +1022,9 @@ void emit_simple_instruction(std::ostringstream& output,
                << static_cast<unsigned>(instruction.source_register)
                << "] + (same_register ? 2u : 0u);\n"
                << "const std::uint32_t destination_raw =\n"
-               << "    katana::runtime::guest_read_u16(cpu, destination_address);\n"
+               << "    katana::runtime::guest_read_u16_at(cpu, guest_origin, destination_address);\n"
                << "const std::uint32_t source_raw =\n"
-               << "    katana::runtime::guest_read_u16(cpu, source_address);\n"
+               << "    katana::runtime::guest_read_u16_at(cpu, guest_origin, source_address);\n"
                << "const std::int64_t destination =\n"
                << "    (destination_raw & 0x00008000u) != 0u\n"
                << "    ? static_cast<std::int64_t>(destination_raw) - 0x00010000ll\n"
@@ -1072,9 +1073,9 @@ void emit_simple_instruction(std::ostringstream& output,
                << static_cast<unsigned>(instruction.source_register)
                << "] + (same_register ? 4u : 0u);\n"
                << "const std::uint32_t destination_raw =\n"
-               << "    katana::runtime::guest_read_u32(cpu, destination_address);\n"
+               << "    katana::runtime::guest_read_u32_at(cpu, guest_origin, destination_address);\n"
                << "const std::uint32_t source_raw =\n"
-               << "    katana::runtime::guest_read_u32(cpu, source_address);\n"
+               << "    katana::runtime::guest_read_u32_at(cpu, guest_origin, source_address);\n"
                << "const std::int64_t destination =\n"
                << "    (destination_raw & 0x80000000u) != 0u\n"
                << "    ? static_cast<std::int64_t>(destination_raw) - 0x100000000ll\n"
@@ -1293,7 +1294,7 @@ void emit_simple_instruction(std::ostringstream& output,
         emit_indent(output, indent + 1);
         output << "const std::uint32_t address = cpu.gbr + cpu.r[0];\n";
         emit_indent(output, indent + 1);
-        output << "const std::uint8_t value = katana::runtime::guest_read_u8(cpu, address);\n";
+        output << "const std::uint8_t value = katana::runtime::guest_read_u8_at(cpu, guest_origin, address);\n";
         emit_indent(output, indent + 1);
         if (instruction.operation == Operation::TestByteImmediate) {
             output << "cpu.t = (value & static_cast<std::uint8_t>(" << instruction.immediate
@@ -1302,7 +1303,7 @@ void emit_simple_instruction(std::ostringstream& output,
             const char* operation = instruction.operation == Operation::AndByteImmediate   ? "&"
                                     : instruction.operation == Operation::XorByteImmediate ? "^"
                                                                                            : "|";
-            output << "katana::runtime::guest_write_u8(cpu, address, static_cast<std::uint8_t>(value " << operation
+            output << "katana::runtime::guest_write_u8_at(cpu, guest_origin, address, static_cast<std::uint8_t>(value " << operation
                    << " static_cast<std::uint8_t>(" << instruction.immediate << ")));\n";
         }
         emit_indent(output, indent);
@@ -1315,9 +1316,9 @@ void emit_simple_instruction(std::ostringstream& output,
         output << "const std::uint32_t address = cpu.r["
                << static_cast<unsigned>(instruction.source_register) << "];\n";
         emit_indent(output, indent + 1);
-        output << "const std::uint8_t value = katana::runtime::guest_read_u8(cpu, address);\n";
+        output << "const std::uint8_t value = katana::runtime::guest_read_u8_at(cpu, guest_origin, address);\n";
         emit_indent(output, indent + 1);
-        output << "katana::runtime::guest_write_u8(cpu, address, static_cast<std::uint8_t>(value | 0x80u));\n";
+        output << "katana::runtime::guest_write_u8_at(cpu, guest_origin, address, static_cast<std::uint8_t>(value | 0x80u));\n";
         emit_indent(output, indent + 1);
         output << "cpu.t = value == 0u;\n";
         emit_indent(output, indent);
@@ -1325,13 +1326,13 @@ void emit_simple_instruction(std::ostringstream& output,
         return;
     case Operation::LoadByteSigned:
         output << "cpu.r[" << static_cast<unsigned>(instruction.destination_register)
-               << "] = katana::runtime::guest_read_s8(cpu, cpu.r["
+               << "] = katana::runtime::guest_read_s8_at(cpu, guest_origin, cpu.r["
                << static_cast<unsigned>(instruction.source_register) << "]);\n";
         return;
 
     case Operation::LoadWordSigned:
         output << "cpu.r[" << static_cast<unsigned>(instruction.destination_register)
-               << "] = katana::runtime::guest_read_s16(cpu, cpu.r["
+               << "] = katana::runtime::guest_read_s16_at(cpu, guest_origin, cpu.r["
                << static_cast<unsigned>(instruction.source_register) << "]);\n";
         return;
 
@@ -1340,40 +1341,40 @@ void emit_simple_instruction(std::ostringstream& output,
             output << "{\n"
                    << "const std::uint32_t forwarded_value = cpu.r["
                    << static_cast<unsigned>(*instruction.forwarded_value_register) << "];\n"
-                   << "static_cast<void>(katana::runtime::guest_read_u32(cpu, cpu.r["
+                   << "static_cast<void>(katana::runtime::guest_read_u32_at(cpu, guest_origin, cpu.r["
                    << static_cast<unsigned>(instruction.source_register) << "]));\n"
                    << "cpu.r[" << static_cast<unsigned>(instruction.destination_register)
                    << "] = forwarded_value;\n"
                    << "}\n";
         } else {
             output << "cpu.r[" << static_cast<unsigned>(instruction.destination_register)
-                   << "] = katana::runtime::guest_read_u32(cpu, cpu.r["
+                   << "] = katana::runtime::guest_read_u32_at(cpu, guest_origin, cpu.r["
                    << static_cast<unsigned>(instruction.source_register) << "]);\n";
         }
         return;
 
     case Operation::StoreByte:
-        output << "katana::runtime::guest_write_u8(cpu, cpu.r["
+        output << "katana::runtime::guest_write_u8_at(cpu, guest_origin, cpu.r["
                << static_cast<unsigned>(instruction.destination_register)
                << "], static_cast<std::uint8_t>(cpu.r["
                << static_cast<unsigned>(instruction.source_register) << "]));\n";
         return;
 
     case Operation::StoreWord:
-        output << "katana::runtime::guest_write_u16(cpu, cpu.r["
+        output << "katana::runtime::guest_write_u16_at(cpu, guest_origin, cpu.r["
                << static_cast<unsigned>(instruction.destination_register)
                << "], static_cast<std::uint16_t>(cpu.r["
                << static_cast<unsigned>(instruction.source_register) << "]));\n";
         return;
 
     case Operation::StoreLong:
-        output << "katana::runtime::guest_write_u32(cpu, cpu.r["
+        output << "katana::runtime::guest_write_u32_at(cpu, guest_origin, cpu.r["
                << static_cast<unsigned>(instruction.destination_register) << "], cpu.r["
                << static_cast<unsigned>(instruction.source_register) << "]);\n";
         return;
 
     case Operation::StoreByteDisplacement:
-        output << "katana::runtime::guest_write_u8(cpu, cpu.r["
+        output << "katana::runtime::guest_write_u8_at(cpu, guest_origin, cpu.r["
                << static_cast<unsigned>(instruction.destination_register) << "] + "
                << static_cast<std::uint32_t>(instruction.displacement)
                << "u, static_cast<std::uint8_t>(cpu.r["
@@ -1381,7 +1382,7 @@ void emit_simple_instruction(std::ostringstream& output,
         return;
 
     case Operation::StoreWordDisplacement:
-        output << "katana::runtime::guest_write_u16(cpu, cpu.r["
+        output << "katana::runtime::guest_write_u16_at(cpu, guest_origin, cpu.r["
                << static_cast<unsigned>(instruction.destination_register) << "] + "
                << static_cast<std::uint32_t>(instruction.displacement)
                << "u, static_cast<std::uint16_t>(cpu.r["
@@ -1389,7 +1390,7 @@ void emit_simple_instruction(std::ostringstream& output,
         return;
 
     case Operation::StoreLongDisplacement:
-        output << "katana::runtime::guest_write_u32(cpu, cpu.r["
+        output << "katana::runtime::guest_write_u32_at(cpu, guest_origin, cpu.r["
                << static_cast<unsigned>(instruction.destination_register) << "] + "
                << static_cast<std::uint32_t>(instruction.displacement) << "u, cpu.r["
                << static_cast<unsigned>(instruction.source_register) << "]);\n";
@@ -1397,92 +1398,92 @@ void emit_simple_instruction(std::ostringstream& output,
 
     case Operation::LoadByteSignedDisplacement:
         output << "cpu.r[" << static_cast<unsigned>(instruction.destination_register)
-               << "] = katana::runtime::guest_read_s8(cpu, cpu.r["
+               << "] = katana::runtime::guest_read_s8_at(cpu, guest_origin, cpu.r["
                << static_cast<unsigned>(instruction.source_register) << "] + "
                << static_cast<std::uint32_t>(instruction.displacement) << "u);\n";
         return;
 
     case Operation::LoadWordSignedDisplacement:
         output << "cpu.r[" << static_cast<unsigned>(instruction.destination_register)
-               << "] = katana::runtime::guest_read_s16(cpu, cpu.r["
+               << "] = katana::runtime::guest_read_s16_at(cpu, guest_origin, cpu.r["
                << static_cast<unsigned>(instruction.source_register) << "] + "
                << static_cast<std::uint32_t>(instruction.displacement) << "u);\n";
         return;
 
     case Operation::LoadLongDisplacement:
         output << "cpu.r[" << static_cast<unsigned>(instruction.destination_register)
-               << "] = katana::runtime::guest_read_u32(cpu, cpu.r["
+               << "] = katana::runtime::guest_read_u32_at(cpu, guest_origin, cpu.r["
                << static_cast<unsigned>(instruction.source_register) << "] + "
                << static_cast<std::uint32_t>(instruction.displacement) << "u);\n";
         return;
 
     case Operation::StoreByteR0Indexed:
-        output << "katana::runtime::guest_write_u8(cpu, cpu.r[0] + cpu.r["
+        output << "katana::runtime::guest_write_u8_at(cpu, guest_origin, cpu.r[0] + cpu.r["
                << static_cast<unsigned>(instruction.destination_register)
                << "], static_cast<std::uint8_t>(cpu.r["
                << static_cast<unsigned>(instruction.source_register) << "]));\n";
         return;
 
     case Operation::StoreWordR0Indexed:
-        output << "katana::runtime::guest_write_u16(cpu, cpu.r[0] + cpu.r["
+        output << "katana::runtime::guest_write_u16_at(cpu, guest_origin, cpu.r[0] + cpu.r["
                << static_cast<unsigned>(instruction.destination_register)
                << "], static_cast<std::uint16_t>(cpu.r["
                << static_cast<unsigned>(instruction.source_register) << "]));\n";
         return;
 
     case Operation::StoreLongR0Indexed:
-        output << "katana::runtime::guest_write_u32(cpu, cpu.r[0] + cpu.r["
+        output << "katana::runtime::guest_write_u32_at(cpu, guest_origin, cpu.r[0] + cpu.r["
                << static_cast<unsigned>(instruction.destination_register) << "], cpu.r["
                << static_cast<unsigned>(instruction.source_register) << "]);\n";
         return;
 
     case Operation::LoadByteSignedR0Indexed:
         output << "cpu.r[" << static_cast<unsigned>(instruction.destination_register)
-               << "] = katana::runtime::guest_read_s8(cpu, cpu.r[0] + cpu.r["
+               << "] = katana::runtime::guest_read_s8_at(cpu, guest_origin, cpu.r[0] + cpu.r["
                << static_cast<unsigned>(instruction.source_register) << "]);\n";
         return;
 
     case Operation::LoadWordSignedR0Indexed:
         output << "cpu.r[" << static_cast<unsigned>(instruction.destination_register)
-               << "] = katana::runtime::guest_read_s16(cpu, cpu.r[0] + cpu.r["
+               << "] = katana::runtime::guest_read_s16_at(cpu, guest_origin, cpu.r[0] + cpu.r["
                << static_cast<unsigned>(instruction.source_register) << "]);\n";
         return;
 
     case Operation::LoadLongR0Indexed:
         output << "cpu.r[" << static_cast<unsigned>(instruction.destination_register)
-               << "] = katana::runtime::guest_read_u32(cpu, cpu.r[0] + cpu.r["
+               << "] = katana::runtime::guest_read_u32_at(cpu, guest_origin, cpu.r[0] + cpu.r["
                << static_cast<unsigned>(instruction.source_register) << "]);\n";
         return;
 
     case Operation::StoreByteGbrDisplacement:
-        output << "katana::runtime::guest_write_u8(cpu, cpu.gbr + "
+        output << "katana::runtime::guest_write_u8_at(cpu, guest_origin, cpu.gbr + "
                << static_cast<std::uint32_t>(instruction.displacement)
                << "u, static_cast<std::uint8_t>(cpu.r[0]));\n";
         return;
 
     case Operation::StoreWordGbrDisplacement:
-        output << "katana::runtime::guest_write_u16(cpu, cpu.gbr + "
+        output << "katana::runtime::guest_write_u16_at(cpu, guest_origin, cpu.gbr + "
                << static_cast<std::uint32_t>(instruction.displacement)
                << "u, static_cast<std::uint16_t>(cpu.r[0]));\n";
         return;
 
     case Operation::StoreLongGbrDisplacement:
-        output << "katana::runtime::guest_write_u32(cpu, cpu.gbr + "
+        output << "katana::runtime::guest_write_u32_at(cpu, guest_origin, cpu.gbr + "
                << static_cast<std::uint32_t>(instruction.displacement) << "u, cpu.r[0]);\n";
         return;
 
     case Operation::LoadByteSignedGbrDisplacement:
-        output << "cpu.r[0] = katana::runtime::guest_read_s8(cpu, cpu.gbr + "
+        output << "cpu.r[0] = katana::runtime::guest_read_s8_at(cpu, guest_origin, cpu.gbr + "
                << static_cast<std::uint32_t>(instruction.displacement) << "u);\n";
         return;
 
     case Operation::LoadWordSignedGbrDisplacement:
-        output << "cpu.r[0] = katana::runtime::guest_read_s16(cpu, cpu.gbr + "
+        output << "cpu.r[0] = katana::runtime::guest_read_s16_at(cpu, guest_origin, cpu.gbr + "
                << static_cast<std::uint32_t>(instruction.displacement) << "u);\n";
         return;
 
     case Operation::LoadLongGbrDisplacement:
-        output << "cpu.r[0] = katana::runtime::guest_read_u32(cpu, cpu.gbr + "
+        output << "cpu.r[0] = katana::runtime::guest_read_u32_at(cpu, guest_origin, cpu.gbr + "
                << static_cast<std::uint32_t>(instruction.displacement) << "u);\n";
         return;
 
@@ -1491,7 +1492,7 @@ void emit_simple_instruction(std::ostringstream& output,
             throw std::runtime_error("PC-relativem Word-Load fehlt die effektive Adresse.");
         }
         output << "cpu.r[" << static_cast<unsigned>(instruction.destination_register)
-               << "] = katana::runtime::guest_read_s16(cpu, "
+               << "] = katana::runtime::guest_read_s16_at(cpu, guest_origin, "
                << relocated_code_address(*instruction.effective_address) << ");\n";
         return;
 
@@ -1500,7 +1501,7 @@ void emit_simple_instruction(std::ostringstream& output,
             throw std::runtime_error("PC-relativem Long-Load fehlt die effektive Adresse.");
         }
         output << "cpu.r[" << static_cast<unsigned>(instruction.destination_register)
-               << "] = katana::runtime::guest_read_u32(cpu, "
+               << "] = katana::runtime::guest_read_u32_at(cpu, guest_origin, "
                << relocated_code_address(*instruction.effective_address) << ");\n";
         return;
 
@@ -1522,7 +1523,7 @@ void emit_simple_instruction(std::ostringstream& output,
                << special_register_read_expression(instruction.special_register) << ";\n"
                << "const std::uint32_t address = cpu.r["
                << static_cast<unsigned>(instruction.destination_register) << "] - 4u;\n"
-               << "katana::runtime::guest_write_u32(cpu, address, value);\n"
+               << "katana::runtime::guest_write_u32_at(cpu, guest_origin, address, value);\n"
                << "cpu.r[" << static_cast<unsigned>(instruction.destination_register)
                << "] = address;\n"
                << "}\n";
@@ -1541,7 +1542,7 @@ void emit_simple_instruction(std::ostringstream& output,
         output << "{\n"
                << "const std::uint32_t address = cpu.r["
                << static_cast<unsigned>(instruction.source_register) << "];\n"
-               << "const std::uint32_t value = katana::runtime::guest_read_u32(cpu, address);\n"
+               << "const std::uint32_t value = katana::runtime::guest_read_u32_at(cpu, guest_origin, address);\n"
                << "cpu.r[" << static_cast<unsigned>(instruction.source_register)
                << "] = address + 4u;\n";
         emit_special_register_write(output, instruction.special_register, "value");
@@ -1555,7 +1556,7 @@ void emit_simple_instruction(std::ostringstream& output,
                << static_cast<unsigned>(instruction.source_register) << "];\n"
                << "const std::uint32_t address = cpu.r["
                << static_cast<unsigned>(instruction.destination_register) << "] - 1u;\n"
-               << "katana::runtime::guest_write_u8(cpu, \n"
+               << "katana::runtime::guest_write_u8_at(cpu, guest_origin, \n"
                << "    address,\n"
                << "    static_cast<std::uint8_t>(value)\n"
                << ");\n"
@@ -1570,7 +1571,7 @@ void emit_simple_instruction(std::ostringstream& output,
                << static_cast<unsigned>(instruction.source_register) << "];\n"
                << "const std::uint32_t address = cpu.r["
                << static_cast<unsigned>(instruction.destination_register) << "] - 2u;\n"
-               << "katana::runtime::guest_write_u16(cpu, \n"
+               << "katana::runtime::guest_write_u16_at(cpu, guest_origin, \n"
                << "    address,\n"
                << "    static_cast<std::uint16_t>(value)\n"
                << ");\n"
@@ -1585,7 +1586,7 @@ void emit_simple_instruction(std::ostringstream& output,
                << static_cast<unsigned>(instruction.source_register) << "];\n"
                << "const std::uint32_t address = cpu.r["
                << static_cast<unsigned>(instruction.destination_register) << "] - 4u;\n"
-               << "katana::runtime::guest_write_u32(cpu, address, value);\n"
+               << "katana::runtime::guest_write_u32_at(cpu, guest_origin, address, value);\n"
                << "cpu.r[" << static_cast<unsigned>(instruction.destination_register)
                << "] = address;\n"
                << "}\n";
@@ -1600,7 +1601,7 @@ void emit_simple_instruction(std::ostringstream& output,
                << "const std::uint32_t address = cpu.r["
                << static_cast<unsigned>(instruction.source_register) << "];\n"
                << "const std::uint32_t value =\n"
-               << "    katana::runtime::guest_read_s8(cpu, address);\n"
+               << "    katana::runtime::guest_read_s8_at(cpu, guest_origin, address);\n"
                << "cpu.r[" << static_cast<unsigned>(instruction.destination_register)
                << "] = value;\n"
                << "if (!same_register) {\n"
@@ -1619,7 +1620,7 @@ void emit_simple_instruction(std::ostringstream& output,
                << "const std::uint32_t address = cpu.r["
                << static_cast<unsigned>(instruction.source_register) << "];\n"
                << "const std::uint32_t value =\n"
-               << "    katana::runtime::guest_read_s16(cpu, address);\n"
+               << "    katana::runtime::guest_read_s16_at(cpu, guest_origin, address);\n"
                << "cpu.r[" << static_cast<unsigned>(instruction.destination_register)
                << "] = value;\n"
                << "if (!same_register) {\n"
@@ -1638,7 +1639,7 @@ void emit_simple_instruction(std::ostringstream& output,
                << "const std::uint32_t address = cpu.r["
                << static_cast<unsigned>(instruction.source_register) << "];\n"
                << "const std::uint32_t value =\n"
-               << "    katana::runtime::guest_read_u32(cpu, address);\n"
+               << "    katana::runtime::guest_read_u32_at(cpu, guest_origin, address);\n"
                << "cpu.r[" << static_cast<unsigned>(instruction.destination_register)
                << "] = value;\n"
                << "if (!same_register) {\n"
@@ -1705,6 +1706,14 @@ void emit_guarded_simple_instruction(std::ostringstream& output,
 
     emit_indent(output, indent);
     output << "try {\n";
+    emit_indent(output, indent + 1);
+    output << "const auto guest_origin = cpu.memory.has_guest_memory_access_sink()\n";
+    emit_indent(output, indent + 2);
+    output << "? katana::runtime::GuestInstructionOrigin{"
+           << hex32(instruction.source_address) << ", "
+           << relocated_code_address(instruction.source_address) << ", true}\n";
+    emit_indent(output, indent + 2);
+    output << ": katana::runtime::GuestInstructionOrigin{};\n";
     emit_simple_instruction(output, instruction, indent + 1);
     emit_indent(output, indent);
     output << "} catch (const katana::runtime::MemoryAccessError& error) {\n";

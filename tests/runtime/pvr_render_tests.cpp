@@ -1,6 +1,8 @@
 #include "katana/runtime/dreamcast_memory.hpp"
 #include "katana/runtime/pvr.hpp"
 
+#include <algorithm>
+#include <array>
 #include <bit>
 #include <cstdlib>
 #include <iostream>
@@ -24,6 +26,26 @@ template <typename E, typename F> bool throws(F&& f) {
     }
     return false;
 }
+
+template <std::size_t Capacity> struct FixedAccessRecorder {
+    std::array<katana::runtime::GuestMemoryAccessEvent, Capacity> events{};
+    std::size_t count = 0u;
+    bool overflow = false;
+
+    static void record(void* const context,
+                       const katana::runtime::GuestMemoryAccessEvent& event) noexcept {
+        auto& self = *static_cast<FixedAccessRecorder*>(context);
+        if (self.count == self.events.size()) {
+            self.overflow = true;
+            return;
+        }
+        self.events[self.count++] = event;
+    }
+
+    [[nodiscard]] katana::runtime::GuestMemoryAccessSink sink() noexcept {
+        return {this, &record};
+    }
+};
 
 std::uint32_t framebuffer_backing_offset(const std::uint32_t logical_offset) {
     return katana::runtime::dreamcast_vram_32bit_to_linear_offset(logical_offset & 0x007FFFFFu);
@@ -120,12 +142,55 @@ int main() {
         background_first + background_stride, 100.0f, 100.0f, 0x80402010u);
     put_background_vertex(
         background_first + background_stride * 2u, 102.0f, 102.0f, 0x80402010u);
+    LinearMemoryDevice unobserved_vram = vram;
+    PvrSoftwareRenderer unobserved_software;
+    unobserved_software.render({}, registers, unobserved_vram);
+    Memory render_access_memory(0u);
+    FixedAccessRecorder<16u> render_accesses;
+    render_access_memory.set_guest_memory_access_sink(render_accesses.sink());
     PvrSoftwareRenderer software;
+    software.set_guest_memory_access_memory(&render_access_memory);
     const auto observe_scanout = [&] {
         software.observe_vblank_scanout(registers, vram.bytes());
         return software.take_guest_frame_proof();
     };
     software.render({}, registers, vram);
+    require(!render_accesses.overflow &&
+                render_accesses.count == software.metrics().last_frame_pixel_writes &&
+                render_accesses.count == 4u,
+            "PVR-Renderer meldet nicht genau einen Speicherzugriff je erfolgreichem Pixelstore.");
+    for (std::size_t index = 0u; index < render_accesses.count; ++index) {
+        const auto& access = render_accesses.events[index];
+        require(access.operation == MemoryAccessOperation::Write &&
+                    access.access_origin == GuestMemoryAccessOrigin::PvrRender &&
+                    !access.instruction.valid &&
+                    access.virtual_address == access.physical_address &&
+                    access.physical_address >= 0x05001000u &&
+                    access.physical_address < 0x05001010u &&
+                    access.width == MemoryAccessWidth::Word &&
+                    access.value == 0x80402010u &&
+                    access.size == sizeof(std::uint32_t) &&
+                    access.write_source == CodeWriteSource::Fallback &&
+                    access.scalar_value_valid && access.bytes_changed &&
+                    access.linear_backing == &vram && access.linear_contiguous &&
+                    access.linear_offset ==
+                        dreamcast_vram_32bit_to_linear_offset(
+                            access.physical_address - dreamcast_vram_32bit_physical_bases.front()) &&
+                    access.linear_size == sizeof(std::uint32_t) &&
+                    access.linear_byte_count == sizeof(std::uint32_t) &&
+                    access.linear_byte_offsets[0] == access.linear_offset &&
+                    access.linear_byte_offsets[1] == access.linear_offset + 1u &&
+                    access.linear_byte_offsets[2] == access.linear_offset + 2u &&
+                    access.linear_byte_offsets[3] == access.linear_offset + 3u,
+                "PVR-Renderer verliert Origin, Aliasadresse, Wert oder lineare VRAM-Projektion.");
+    }
+    require(std::equal(vram.bytes().begin(),
+                       vram.bytes().end(),
+                       unobserved_vram.bytes().begin(),
+                       unobserved_vram.bytes().end()) &&
+                software.metrics().pixel_writes == unobserved_software.metrics().pixel_writes &&
+                software.metrics().changed_pixels == unobserved_software.metrics().changed_pixels,
+            "Aktivierter PVR-Speichersink veraendert VRAM oder Renderstatistik.");
     require(read_fb_u32(vram, 0x1000u) == 0x80402010u,
             "PVR-Hintergrundebene dekodiert Tagadresse, Offset, Skip, ARGB oder Fullscreen-Coverage falsch.");
     const auto first_render_generation = software.last_render_generation();
@@ -148,6 +213,7 @@ int main() {
                 software.pending_render_generations() == 1u,
             "Nicht gebundener Renderbuffer wird als aktiver Gastframe bewiesen.");
     registers.write(pvr_register::FramebufferReadSof1, 0x1000u);
+    const auto render_access_count = render_accesses.count;
     const auto first_guest_frame = observe_scanout();
     require(first_guest_frame.has_value() &&
                 first_guest_frame->render_generation == first_render_generation &&
@@ -158,6 +224,10 @@ int main() {
                 software.pending_render_generations() == 0u &&
                 !observe_scanout().has_value(),
             "Gastframe-Nachweis ist nicht einmalig an veraenderte, abgetastete Pixel gebunden.");
+    require(render_accesses.count == render_access_count,
+            "Host-Scanout oder Gastframe-Shadow wird faelschlich als Gast-VRAM-Write gemeldet.");
+    software.set_guest_memory_access_memory(nullptr);
+    render_access_memory.clear_guest_memory_access_sink();
 
     {
         EventScheduler ordering_scheduler;

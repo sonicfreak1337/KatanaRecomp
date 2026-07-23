@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
@@ -13,6 +14,8 @@
 
 namespace katana::runtime {
 
+class LinearMemoryDevice;
+
 enum class MemoryRegionAccess { ReadOnly, ReadWrite };
 
 enum class MemoryAccessWidth : std::uint8_t { Byte = 1u, Halfword = 2u, Word = 4u };
@@ -21,9 +24,14 @@ enum class MemoryAccessOperation { Read, Write };
 
 enum class CodeWriteSource : std::uint8_t { Cpu, Fpu, Dma, StoreQueue, Copy, Fallback };
 
+enum class GuestMemoryAccessOrigin : std::uint8_t { Memory, PvrRender, PvrYuv };
+
 enum class MemoryAlignmentPolicy { Strict, Permissive };
 
 enum class MemoryLookupMode { Indexed, Reference };
+
+inline constexpr std::size_t guest_memory_access_change_tracking_limit =
+    1024u * 1024u;
 
 enum class MemoryAccessErrorReason {
     Misaligned,
@@ -36,6 +44,31 @@ enum class MemoryAccessErrorReason {
     TlbMultipleHit,
     InitialPageWrite,
     TlbProtection
+};
+
+struct GuestInstructionOrigin {
+    std::uint32_t source_pc = 0u;
+    std::uint32_t runtime_pc = 0u;
+    bool valid = false;
+};
+
+struct GuestMemoryAccessContext {
+    std::uint32_t virtual_address = 0u;
+    GuestInstructionOrigin instruction;
+    std::uint64_t retired_guest_instructions = 0u;
+    GuestMemoryAccessOrigin access_origin = GuestMemoryAccessOrigin::Memory;
+};
+
+struct LinearMemoryProjection {
+    const LinearMemoryDevice* backing = nullptr;
+    std::array<std::uint32_t, 4u> byte_offsets{};
+    std::uint8_t byte_count = 0u;
+    bool contiguous = false;
+
+    [[nodiscard]] explicit operator bool() const noexcept {
+        return backing != nullptr && byte_count != 0u &&
+               byte_count <= byte_offsets.size();
+    }
 };
 
 class MemoryAccessError final : public std::runtime_error {
@@ -76,6 +109,8 @@ class MemoryDevice {
     virtual void write_u8(std::uint32_t offset, std::uint8_t value) = 0;
     virtual void write_u16(std::uint32_t offset, std::uint16_t value);
     virtual void write_u32(std::uint32_t offset, std::uint32_t value);
+    [[nodiscard]] virtual LinearMemoryProjection
+    linear_projection(std::uint32_t offset, MemoryAccessWidth width) const noexcept;
 };
 
 class LinearMemoryDevice final : public MemoryDevice {
@@ -89,6 +124,8 @@ class LinearMemoryDevice final : public MemoryDevice {
     void write_u8(std::uint32_t offset, std::uint8_t value) override;
     void write_u16(std::uint32_t offset, std::uint16_t value) override;
     void write_u32(std::uint32_t offset, std::uint32_t value) override;
+    [[nodiscard]] LinearMemoryProjection
+    linear_projection(std::uint32_t offset, MemoryAccessWidth width) const noexcept override;
     [[nodiscard]] std::span<const std::uint8_t> bytes() const noexcept;
     [[nodiscard]] std::span<std::uint8_t> writable_bytes() noexcept;
 
@@ -155,6 +192,37 @@ struct GuestWriteEvent {
 
 using GuestWriteObserver = std::function<void(const GuestWriteEvent&)>;
 
+struct GuestMemoryAccessEvent {
+    MemoryAccessOperation operation = MemoryAccessOperation::Read;
+    GuestMemoryAccessOrigin access_origin = GuestMemoryAccessOrigin::Memory;
+    GuestInstructionOrigin instruction;
+    std::uint32_t virtual_address = 0u;
+    std::uint32_t physical_address = 0u;
+    MemoryAccessWidth width = MemoryAccessWidth::Byte;
+    std::uint32_t value = 0u;
+    std::size_t size = 0u;
+    CodeWriteSource write_source = CodeWriteSource::Cpu;
+    bool scalar_value_valid = false;
+    bool bytes_changed = true;
+    std::uint64_t retired_guest_instructions = 0u;
+    const LinearMemoryDevice* linear_backing = nullptr;
+    std::uint32_t linear_offset = 0u;
+    std::size_t linear_size = 0u;
+    bool linear_contiguous = false;
+    std::array<std::uint32_t, 4u> linear_byte_offsets{};
+    std::uint8_t linear_byte_count = 0u;
+};
+
+using GuestMemoryAccessCallback =
+    void (*)(void* context, const GuestMemoryAccessEvent& event) noexcept;
+
+struct GuestMemoryAccessSink {
+    void* context = nullptr;
+    GuestMemoryAccessCallback callback = nullptr;
+
+    [[nodiscard]] explicit operator bool() const noexcept { return callback != nullptr; }
+};
+
 struct MemoryPerformanceCounters {
     std::uint64_t indexed_region_hits = 0u;
     std::uint64_t reference_region_probes = 0u;
@@ -210,9 +278,23 @@ class Memory {
     void clear_guest_write_observer() noexcept;
     [[nodiscard]] bool has_guest_write_observer() const noexcept;
 
+    void set_guest_memory_access_sink(GuestMemoryAccessSink sink) noexcept;
+    void clear_guest_memory_access_sink() noexcept;
+    [[nodiscard]] bool has_guest_memory_access_sink() const noexcept {
+        return static_cast<bool>(guest_memory_access_sink_);
+    }
+    [[nodiscard]] GuestMemoryAccessSink guest_memory_access_sink() const noexcept;
+    void notify_external_guest_memory_access(const GuestMemoryAccessEvent& event) const noexcept;
+
     [[nodiscard]] std::uint8_t read_u8(std::uint32_t address) const;
     [[nodiscard]] std::uint16_t read_u16(std::uint32_t address) const;
     [[nodiscard]] std::uint32_t read_u32(std::uint32_t address) const;
+    [[nodiscard]] std::uint8_t
+    read_u8_at(std::uint32_t address, const GuestMemoryAccessContext& context) const;
+    [[nodiscard]] std::uint16_t
+    read_u16_at(std::uint32_t address, const GuestMemoryAccessContext& context) const;
+    [[nodiscard]] std::uint32_t
+    read_u32_at(std::uint32_t address, const GuestMemoryAccessContext& context) const;
     [[nodiscard]] std::uint32_t
     peek_u32(std::uint32_t address,
              std::span<const MemoryDevice* const> permitted_devices) const;
@@ -228,9 +310,25 @@ class Memory {
     void write_u32(std::uint32_t address,
                    std::uint32_t value,
                    CodeWriteSource source = CodeWriteSource::Cpu);
+    void write_u8_at(std::uint32_t address,
+                     std::uint8_t value,
+                     const GuestMemoryAccessContext& context,
+                     CodeWriteSource source = CodeWriteSource::Cpu);
+    void write_u16_at(std::uint32_t address,
+                      std::uint16_t value,
+                      const GuestMemoryAccessContext& context,
+                      CodeWriteSource source = CodeWriteSource::Cpu);
+    void write_u32_at(std::uint32_t address,
+                      std::uint32_t value,
+                      const GuestMemoryAccessContext& context,
+                      CodeWriteSource source = CodeWriteSource::Cpu);
     void write_bytes(std::uint32_t address,
                      std::span<const std::uint8_t> bytes,
                      CodeWriteSource source = CodeWriteSource::Copy);
+    void write_bytes_at(std::uint32_t address,
+                        std::span<const std::uint8_t> bytes,
+                        const GuestMemoryAccessContext& context,
+                        CodeWriteSource source = CodeWriteSource::Copy);
     void copy_bytes(std::uint32_t destination,
                     std::uint32_t source_address,
                     std::size_t size,
@@ -282,6 +380,24 @@ class Memory {
                             MemoryAccessWidth width,
                             std::uint32_t value) const noexcept;
     void notify_guest_write(const GuestWriteEvent& event) const;
+    void notify_guest_memory_access(const MappedRegion& mapped,
+                                    MemoryAccessOperation operation,
+                                    std::uint32_t physical_address,
+                                    std::uint32_t value,
+                                    MemoryAccessWidth width,
+                                    std::size_t size,
+                                    CodeWriteSource source,
+                                    bool scalar_value_valid,
+                                    bool bytes_changed,
+                                    const GuestMemoryAccessContext* context = nullptr) const noexcept;
+    void notify_guest_memory_write_range(std::uint32_t address,
+                                         std::size_t size,
+                                         CodeWriteSource source,
+                                         std::span<const std::uint8_t> changed_bytes,
+                                         const GuestMemoryAccessContext* context = nullptr) const
+        noexcept;
+    void notify_guest_memory_access_loss(
+        const GuestMemoryAccessContext* context = nullptr) const noexcept;
 
     MemoryAlignmentPolicy alignment_policy_ = MemoryAlignmentPolicy::Strict;
     MemoryLookupMode lookup_mode_ = MemoryLookupMode::Indexed;
@@ -290,6 +406,7 @@ class Memory {
     std::vector<Watchpoint> watchpoints_;
     MemoryAccessObserver trace_handler_;
     GuestWriteObserver guest_write_observer_;
+    GuestMemoryAccessSink guest_memory_access_sink_;
     bool mmio_access_tracking_enabled_ = false;
     mutable std::optional<LastMmioAccessRecord> last_mmio_access_;
     MemoryWatchpointId next_watchpoint_id_ = 1u;

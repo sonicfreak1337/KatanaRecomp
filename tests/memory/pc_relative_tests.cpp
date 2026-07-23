@@ -168,10 +168,10 @@ int main(const int argc, char* argv[]) {
             "MOVA richtet den Instruktions-PC nicht auf vier Byte aus.");
 
     const auto source = katana::codegen::emit_cpp_program(program, entry_address);
-    require(source.find("guest_read_s16(cpu, "
+    require(source.find("guest_read_s16_at(cpu, guest_origin, "
                         "katana::runtime::relocate_code_address(0x00000108u))") !=
                     std::string::npos &&
-                source.find("guest_read_u32(cpu, "
+                source.find("guest_read_u32_at(cpu, guest_origin, "
                             "katana::runtime::relocate_code_address(0x00000110u))") !=
                     std::string::npos &&
                 source.find("cpu.r[0] = "

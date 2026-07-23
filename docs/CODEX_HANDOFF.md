@@ -389,9 +389,9 @@ v0.48 P0 - vom belegten IP.BIN-Frame bis BootExecutable und Spielboot fortsetzen
 
 Abgeschlossen und in Roadmap/Taskliste markiert sind `KR-4831`, `KR-4841`,
 `KR-4843`, `KR-4844`, `KR-4845`, `KR-4846`, `KR-4915` und `KR-4850`. Der
-aktuelle Runtimevertrag steht auf Runtime-ABI 41, Block-ABI 3,
-Backend-Interface-ABI 3, PlatformServices-ABI 9, BIOS-ABI 9,
-Portprojektvertrag 25 und Host-Video-Vertrag 2.
+aktuelle Runtimevertrag steht auf Runtime-ABI 42, Block-ABI 3,
+Backend-Interface-ABI 3, PlatformServices-ABI 10, BIOS-ABI 9,
+Portprojektvertrag 26 und Host-Video-Vertrag 2.
 Das verbindliche
 XenonRecomp-artige Produktmodell rekompiliert `IP.BIN` und BootExecutable
 statisch aus SH-4 in nativen PC-Code. Dreamcast-Komponenten bleiben typisierte,
@@ -489,6 +489,49 @@ Tracking ist im Gast-Hotpath ein allokationsfreier POD; erst der terminale
 Bericht materialisiert den Regionsstring. PVR- und Systembus-Snapshots bewegen
 auch pending Render-/Channel-2-Zustaende nicht.
 
+Runtime-ABI 42 bindet einen POD-Zugriffssink fuer bereits ausgefuehrte
+Gastzugriffe. AOT und begrenzter Diagnoseinterpreter tragen Quell- und
+Laufzeit-PC; PlatformServices-ABI 10 reicht die `PREF`-Herkunft bis zur Store
+Queue. PVR-Render und PVR-YUV bleiben getrennte Writer-Urspruenge, VRAM32 wird
+auf das gemeinsame lineare Backing projiziert. Der Sink darf beobachtete
+Readwerte oder MMIO-Handler nicht erneut abfragen. Nur fuer die
+No-op-Klassifikation eines Wrapperwrites darf der aktive Trace vor dem Write
+das seiteneffektfreie lineare Backing vergleichen. Produktobserver und
+Scanout-Evidenz muessen dabei konservativ und bei Trace aus/an identisch
+bleiben.
+
+`RuntimeWaitLoopTrace` v1 verdichtet Wertlaeufe und Writer begrenzt. Der
+Portexport erzeugt aus genau einem Hardwareaudit generische, deterministisch
+deduplizierte Guard- und Kandidatendeskriptoren; reine Counterloops werden
+ausgelassen. Ein vorab sortierter Read-Site-Index verhindert lineare
+Deskriptorscans, und auch MMIO-Werte stammen nur aus dem bereits ausgefuehrten
+Zugriff. Lineare bytegenaue Writerlinks muessen
+`exact-backing-bytes`, nichtlineare physische MMIO-Ueberschneidungen dagegen
+`physical-range-candidate` melden. Backing-indizierte Locations muessen
+unbeteiligte lineare Writes ohne Vollscan verwerfen. Der aktive Trace muss
+skalare und Range-Wrapperaenderungen bytegenau bestimmen und No-op-Writer
+verwerfen, ohne den konservativen Produktvertrag umzuschreiben.
+Ausschliesslich
+`KATANA_PORT_WAIT_LOOP_TRACE=1` aktiviert den
+Rohwerttrace, unabhaengig von `KATANA_PORT_DIAGNOSTICS`. Bei leerer
+Deskriptorliste werden weder Recorder noch Sink erzeugt. Sonst muss der Port
+einmalig auf `stderr` vor nur lokaler Nutzung, rohen Gastwerten und
+ungeprueftem Teilen warnen. Das JSON muss
+`contains_raw_guest_values:true`, `writer_scope:"since-previous-sample"` und
+ungueltige skalare Range-Werte als `scalar_value_valid:false` mit `value:null`
+ausweisen. Strukturell ungueltige Access-Events muessen
+`invalid_access_events` erhoehen und `complete:false` erzwingen; sie duerfen
+nicht als bloss irrelevante gueltige Events gelten. Der RAII-Besitzer entfernt
+den Sink vor der terminalen JSON-Ausgabe. Ohne Trace-Opt-in muss der Fastpath
+ohne Recorderallokation und Zugriffsprojektion bleiben.
+Keine Titeladressen, privaten Pfade oder Retaildaten in Deskriptoren,
+Regressionen oder Dokumentation uebernehmen.
+
+Die Registervarianten von `PREF`, `OCBI`, `OCBP`, `OCBWB` und `TAS.B` sind
+auch im begrenzten Interpreter geschlossen; doppelte `FMOV`-Speicherzugriffe
+laufen low nach high. Der normale Produktport bleibt davon unberuehrt und
+AOT-only.
+
 Hardware-Audit-Schema 4 erkennt Natural Loops ueber skalierbare
 Dominatorberechnung, klassifiziert Counter-, RAM-Poll-, MMIO-Poll-, Mixed- und
 Unknown-Loops und liefert Access-/Guard-Evidenz. Der Auditor deckt GBR-MOVs,
@@ -508,16 +551,17 @@ Einzelbilder tragen `scope=executable_image`, Disc-Audits
 kanonisiert; Delay-Slot-Doppelkontexte, wurzellose SCCs und ein
 4.096-Block-Graph besitzen Regressionen.
 
-Die fokussierten Runtime-/Codegenziele bestehen 5/5, Auditor und Policy 2/2.
-Die CLI-Scope-Regression ist angelegt; der aktuelle private CLI-Disc-Audit ist
-unter Schema 4 und `native_disc_aot_boot_graph` im normalen Modus gruen. Er
+Der aktuelle private CLI-Disc-Audit ist unter Schema 4 und
+`native_disc_aot_boot_graph` im normalen Modus gruen. Er
 berichtet 142.380 Instruktionen, 1.542 Funktionen, null unbekannte
 Instruktionen, null bekannte Luecken, zwei partielle Adressen, 1.095 Loops und
 492 `unresolved_poll_guard_loops`. `--strict` bleibt damit
-erwartungsgemaess rot. Dies ist kein Vollgate. Dynamische Wertwechselfolgen,
-echte Runtime-Writer-Provenienz und der
-vollstaendige Diagnose=0/1-A/B-Produktlauf bleiben der offene Rest von
-`KR-4842`.
+erwartungsgemaess rot. Der konsolidierte fokussierte Zwischenblock besteht
+22/22 in 1,57 Sekunden; der Port-CLI-Nachweis besteht 1/1 in 151,12 Sekunden.
+Dynamische Wertwechselfolgen und echte Runtime-Writer-Provenienz liegen damit
+vor. Es lief keine Vollsuite und kein `KR-4852`. Ausschliesslich der
+vollstaendige Diagnose=0/1-A/B-Produktlauf bleibt der offene Rest von
+`KR-4842`; die Checkbox darf vorher nicht gesetzt werden.
 
 Systemreplay-Schema 2 besitzt eine feste, konfigurierbare Kapazitaet von
 standardmaessig 4.096 und hoechstens 65.536 Ereignissen; portable
@@ -557,7 +601,7 @@ recompilierten `IP.BIN`-Direct-Framebuffer innerhalb eines
 erwartet. BootExecutable, Spielboot, `KR-4848` und der produktive TA-Pfad
 bleiben offen.
 
-Das aktuelle fokussierte Kern-Gate besteht 11/11. Der x64-Kern-/Runtime-Build
+Das vorangegangene fokussierte Kern-Gate bestand 11/11. Der x64-Kern-/Runtime-Build
 der Desktop-GUI-off-Konfiguration ist mit zwoelf parallelen Jobs gruen; deren
 vollstaendiges CTest-Zwischengate auf Quellstand `924ea89` besteht 183/183
 Eintraege in 312,97 Sekunden, darunter 181 regulaere Passes und zwei erwartete
@@ -593,8 +637,7 @@ Budget-Exit ist erwartet.
 Weiter offen:
 
 ```text
-KR-4842: dynamische Wertwechselfolgen, Runtime-Writer-Provenienz und
-         vollstaendiger Diagnose=0/1-A/B-Produktlauf
+KR-4842: vollstaendiger Diagnose=0/1-A/B-Produktlauf
 KR-4847: EX-38/39-Vertrag und laufende G1-Timeout-/Overrun-Grenzen schliessen
 KR-4848: strukturierte Disc-Ladetransaktionen und Registry latenter nativer Module
 KR-4849: Direct-Texture-Zielprogression und restliche TA/PVR-Eingangskette

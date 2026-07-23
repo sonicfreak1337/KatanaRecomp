@@ -21,6 +21,8 @@ struct StoreQueueTransfer {
     std::uint32_t source_address = 0u;
     std::uint32_t target_address = 0u;
     StoreQueueTarget target = StoreQueueTarget::Ram;
+    GuestInstructionOrigin instruction;
+    std::uint64_t retired_guest_instructions = 0u;
     std::array<std::uint8_t, 32u> bytes{};
 };
 
@@ -51,7 +53,9 @@ class Sh4StoreQueues {
     [[nodiscard]] std::uint32_t qacr(std::size_t queue) const;
     [[nodiscard]] std::uint32_t read_p4(std::uint32_t address, MemoryAccessWidth width) const;
     void write_p4(std::uint32_t address, std::uint32_t value, MemoryAccessWidth width);
-    [[nodiscard]] bool prefetch(std::uint32_t address);
+    [[nodiscard]] bool prefetch(std::uint32_t address,
+                                GuestInstructionOrigin instruction = {},
+                                std::uint64_t retired_guest_instructions = 0u);
     void set_prefetch_address_translator(StoreQueueAddressTranslator translator);
     [[nodiscard]] const std::array<std::uint8_t, 32u>& queue(std::size_t index) const;
     [[nodiscard]] std::uint64_t transfer_count() const noexcept;

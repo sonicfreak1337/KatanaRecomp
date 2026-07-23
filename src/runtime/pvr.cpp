@@ -549,23 +549,75 @@ std::size_t render_bytes_per_pixel(const std::uint32_t pack_mode) {
     }
 }
 
+void notify_pvr_vram_write(Memory* const memory,
+                           const GuestMemoryAccessOrigin origin,
+                           LinearMemoryDevice& vram,
+                           const std::uint32_t physical_address,
+                           const std::uint32_t linear_offset,
+                           const MemoryAccessWidth width,
+                           const std::uint32_t value,
+                           const bool bytes_changed) noexcept {
+    if (memory == nullptr || !memory->has_guest_memory_access_sink()) return;
+
+    GuestMemoryAccessEvent event;
+    event.operation = MemoryAccessOperation::Write;
+    event.access_origin = origin;
+    event.virtual_address = physical_address;
+    event.physical_address = physical_address;
+    event.width = width;
+    event.value = value;
+    event.size = static_cast<std::size_t>(width);
+    event.write_source = CodeWriteSource::Fallback;
+    event.scalar_value_valid = true;
+    event.bytes_changed = bytes_changed;
+    event.linear_backing = &vram;
+    event.linear_offset = linear_offset;
+    event.linear_size = event.size;
+    event.linear_contiguous = true;
+    event.linear_byte_count = static_cast<std::uint8_t>(event.size);
+    for (std::uint8_t index = 0u; index < event.linear_byte_count; ++index)
+        event.linear_byte_offsets[index] = linear_offset + index;
+    memory->notify_external_guest_memory_access(event);
+}
+
 bool write_render_pixel(LinearMemoryDevice& vram,
+                        Memory* const guest_memory_access_memory,
                         const std::uint32_t offset,
                         const std::uint32_t pack_mode,
                         const std::uint8_t alpha,
                         const std::uint8_t red,
                         const std::uint8_t green,
                         const std::uint8_t blue) {
+    const auto logical_offset =
+        offset & static_cast<std::uint32_t>(dreamcast_vram_size - 1u);
     const auto backing = dreamcast_vram_32bit_to_linear_offset(
-        offset & static_cast<std::uint32_t>(dreamcast_vram_size - 1u));
+        logical_offset);
+    const auto physical_address =
+        dreamcast_vram_32bit_physical_bases.front() + logical_offset;
     const auto write16 = [&](const std::uint16_t value) {
         const bool changed = vram.read_u16(backing) != value;
         vram.write_u16(backing, value);
+        notify_pvr_vram_write(guest_memory_access_memory,
+                              GuestMemoryAccessOrigin::PvrRender,
+                              vram,
+                              physical_address,
+                              backing,
+                              MemoryAccessWidth::Halfword,
+                              value,
+                              changed);
         return changed;
     };
     const auto write32 = [&](const std::uint32_t value) {
         const bool changed = vram.read_u32(backing) != value;
         vram.write_u32(backing, value);
+        notify_pvr_vram_write(guest_memory_access_memory,
+                              GuestMemoryAccessOrigin::PvrRender,
+                              vram,
+                              physical_address,
+                              backing,
+                              MemoryAccessWidth::Word,
+                              value,
+                              changed);
         return changed;
     };
     switch (pack_mode) {
@@ -1994,6 +2046,10 @@ void PvrYuvConverterMemoryDevice::write_u8(const std::uint32_t offset,
     if (input_.size() == macroblock_size) convert_macroblock();
 }
 
+void PvrYuvConverterMemoryDevice::set_guest_memory_access_memory(Memory* const memory) noexcept {
+    guest_memory_access_memory_ = memory;
+}
+
 void PvrYuvConverterMemoryDevice::convert_macroblock() {
     const bool yuv422 = (configuration_ & 0x01000000u) != 0u;
     const auto blocks_x = (configuration_ & 0x3Fu) + 1u;
@@ -2007,6 +2063,8 @@ void PvrYuvConverterMemoryDevice::convert_macroblock() {
     const auto frame_bytes = output_width * static_cast<std::uint64_t>(blocks_y) * 16u * 2u;
     if (static_cast<std::uint64_t>(destination_) + frame_bytes > vram_->size())
         throw std::out_of_range("PVR-YUV-Ausgabe liegt ausserhalb des VRAM.");
+    const bool trace_writes = guest_memory_access_memory_ != nullptr &&
+                              guest_memory_access_memory_->has_guest_memory_access_sink();
 
     const auto y_sample = [&](const std::uint32_t x, const std::uint32_t y) {
         if (!yuv422) {
@@ -2034,10 +2092,38 @@ void PvrYuvConverterMemoryDevice::convert_macroblock() {
             const auto global_y = static_cast<std::uint64_t>(block_y) * 16u + y;
             const auto output = static_cast<std::uint64_t>(destination_) +
                                 (global_y * output_width + global_x) * 2u;
-            vram_->write_u16(static_cast<std::uint32_t>(output),
-                             static_cast<std::uint16_t>(y_sample(x, y) << 8u | u));
-            vram_->write_u16(static_cast<std::uint32_t>(output + 2u),
-                             static_cast<std::uint16_t>(y_sample(x + 1u, y) << 8u | v));
+            const auto first_offset = static_cast<std::uint32_t>(output);
+            const auto first_value = static_cast<std::uint16_t>(y_sample(x, y) << 8u | u);
+            const bool first_changed =
+                !trace_writes || vram_->read_u16(first_offset) != first_value;
+            vram_->write_u16(first_offset, first_value);
+            if (trace_writes)
+                notify_pvr_vram_write(
+                    guest_memory_access_memory_,
+                    GuestMemoryAccessOrigin::PvrYuv,
+                    *vram_,
+                    dreamcast_vram_64bit_physical_bases.front() + first_offset,
+                    first_offset,
+                    MemoryAccessWidth::Halfword,
+                    first_value,
+                    first_changed);
+
+            const auto second_offset = static_cast<std::uint32_t>(output + 2u);
+            const auto second_value =
+                static_cast<std::uint16_t>(y_sample(x + 1u, y) << 8u | v);
+            const bool second_changed =
+                !trace_writes || vram_->read_u16(second_offset) != second_value;
+            vram_->write_u16(second_offset, second_value);
+            if (trace_writes)
+                notify_pvr_vram_write(
+                    guest_memory_access_memory_,
+                    GuestMemoryAccessOrigin::PvrYuv,
+                    *vram_,
+                    dreamcast_vram_64bit_physical_bases.front() + second_offset,
+                    second_offset,
+                    MemoryAccessWidth::Halfword,
+                    second_value,
+                    second_changed);
         }
     }
     input_.clear();
@@ -2088,6 +2174,11 @@ void PvrSoftwareRenderer::render(const PvrTaFrame& frame,
     if (base + stride * height > vram.size())
         throw std::out_of_range("PVR-Renderziel liegt ausserhalb des VRAM.");
     const auto render_pixel_count = static_cast<std::size_t>(width) * height;
+    Memory* const trace_memory =
+        guest_memory_access_memory_ != nullptr &&
+                guest_memory_access_memory_->has_guest_memory_access_sink()
+            ? guest_memory_access_memory_
+            : nullptr;
     std::vector<std::uint32_t> original_pixels(render_pixel_count, 0u);
     std::vector<std::uint8_t> touched_pixels(render_pixel_count, 0u);
     const auto read_packed_pixel = [&](const std::uint32_t offset) {
@@ -2105,7 +2196,14 @@ void PvrSoftwareRenderer::render(const PvrTaFrame& frame,
             original_pixels[pixel_index] = read_packed_pixel(offset);
         }
         static_cast<void>(write_render_pixel(
-            vram, offset, pack_mode, color.a, color.r, color.g, color.b));
+            vram,
+            trace_memory,
+            offset,
+            pack_mode,
+            color.a,
+            color.r,
+            color.g,
+            color.b));
     };
     std::vector<float> depth(render_pixel_count,
                              -std::numeric_limits<float>::infinity());
@@ -2792,6 +2890,10 @@ void PvrSoftwareRenderer::render(const PvrTaFrame& frame,
     metrics_.last_frame_pixel_writes = frame_pixel_writes;
     metrics_.last_frame_changed_pixels = frame_changed_pixels;
     ++metrics_.frames;
+}
+
+void PvrSoftwareRenderer::set_guest_memory_access_memory(Memory* const memory) noexcept {
+    guest_memory_access_memory_ = memory;
 }
 
 void PvrSoftwareRenderer::observe_vram_write(const std::uint32_t address,

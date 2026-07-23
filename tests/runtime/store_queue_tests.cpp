@@ -3,6 +3,7 @@
 #include "katana/runtime/exception.hpp"
 #include "katana/runtime/store_queue.hpp"
 
+#include <array>
 #include <iostream>
 #include <stdexcept>
 #include <vector>
@@ -21,6 +22,49 @@ template <typename Action> void require_rejected(Action&& action, const char* me
         rejected = true;
     }
     require(rejected, message);
+}
+
+template <std::size_t Capacity> struct GuestMemoryAccessCapture {
+    std::array<GuestMemoryAccessEvent, Capacity> events{};
+    std::size_t count = 0u;
+    std::size_t dropped = 0u;
+
+    static void callback(void* const context,
+                         const GuestMemoryAccessEvent& event) noexcept {
+        auto& capture = *static_cast<GuestMemoryAccessCapture*>(context);
+        if (capture.count < capture.events.size()) {
+            capture.events[capture.count++] = event;
+        } else {
+            ++capture.dropped;
+        }
+    }
+
+    [[nodiscard]] GuestMemoryAccessSink sink() noexcept {
+        return GuestMemoryAccessSink{this, &GuestMemoryAccessCapture::callback};
+    }
+};
+
+void require_store_queue_range_write(const GuestMemoryAccessEvent& event,
+                                     const std::uint32_t target_address,
+                                     const std::size_t expected_size,
+                                     const bool expected_changed,
+                                     const GuestInstructionOrigin instruction,
+                                     const std::uint64_t retired_guest_instructions,
+                                     const char* const message) {
+    require(event.operation == MemoryAccessOperation::Write &&
+                event.access_origin == GuestMemoryAccessOrigin::Memory &&
+                event.instruction.source_pc == instruction.source_pc &&
+                event.instruction.runtime_pc == instruction.runtime_pc &&
+                event.instruction.valid == instruction.valid &&
+                event.virtual_address == target_address &&
+                event.physical_address == target_address &&
+                event.width == MemoryAccessWidth::Byte && event.size == expected_size &&
+                event.write_source == CodeWriteSource::StoreQueue &&
+                !event.scalar_value_valid && event.bytes_changed == expected_changed &&
+                event.retired_guest_instructions == retired_guest_instructions &&
+                event.linear_backing != nullptr && event.linear_contiguous &&
+                event.linear_size == expected_size && event.linear_byte_count == 1u,
+            message);
 }
 } // namespace
 
@@ -115,9 +159,38 @@ int main() {
             memory, StoreQueueSink{}, &direct_tracker, OperandCacheRamProfile::Modeled);
         direct->write_qacr(0u, 0x0Cu);
         direct->write_p4(0xE0000040u, 0x44332211u, MemoryAccessWidth::Word);
-        require(direct->prefetch(0xE0000040u) && memory.read_u32(0x0C000040u) == 0x44332211u &&
+        constexpr GuestInstructionOrigin prefetch_origin{
+            0x8C012340u, 0x8D012340u, true};
+        constexpr std::uint64_t prefetch_retired = 0x123456789ull;
+        GuestMemoryAccessCapture<4u> direct_accesses;
+        memory.set_guest_memory_access_sink(direct_accesses.sink());
+        require(direct->prefetch(0xE0000040u, prefetch_origin, prefetch_retired) &&
                     !direct_tracker.valid("sq-code"),
                 "RAM-SQ-Ziel umgeht Speichernebenwirkung oder Codeinvalidierung.");
+        require(direct_accesses.count == 2u && direct_accesses.dropped == 0u,
+                "Direktes SQ-PREF trennt geaenderte und unveraenderte Bytes nicht exakt.");
+        require_store_queue_range_write(
+            direct_accesses.events.front(),
+            0x0C000040u,
+            4u,
+            true,
+            prefetch_origin,
+            prefetch_retired,
+            "Direktes SQ-PREF verliert Writer-PC, Runtime-PC, Retired-Zahl oder StoreQueue-Quelle.");
+        require_store_queue_range_write(
+            direct_accesses.events[1u],
+            0x0C000044u,
+            28u,
+            false,
+            prefetch_origin,
+            prefetch_retired,
+            "Direktes SQ-PREF markiert unveraenderte Restbytes als Writer.");
+        require(!direct->prefetch(0x8C000040u, prefetch_origin, prefetch_retired) &&
+                    direct_accesses.count == 2u,
+                "Normales PREF ausserhalb des SQ-Fensters emittiert einen Zielwrite.");
+        memory.clear_guest_memory_access_sink();
+        require(memory.read_u32(0x0C000040u) == 0x44332211u,
+                "RAM-SQ-Ziel enthaelt nach PREF nicht den Queue-Inhalt.");
         direct->write_qacr(1u, 0x10u);
         direct->write_p4(0xE2000020u, 0x88776655u, MemoryAccessWidth::Word);
         require(direct->prefetch(0xE2000020u) && ta_offsets.size() == 32u &&
@@ -348,6 +421,39 @@ int main() {
         auto product_cpu = std::make_unique<CpuState>();
         auto product_runtime = std::make_unique<DreamcastRuntimeState>(
             initialize_dreamcast_runtime(*product_cpu, boot));
+        GuestMemoryAccessCapture<4u> product_accesses;
+        product_cpu->memory.set_guest_memory_access_sink(product_accesses.sink());
+        product_runtime->store_queues->write_qacr(0u, 0x0Cu);
+        product_runtime->store_queues->write_p4(
+            0xE0000040u, 0x44332211u, MemoryAccessWidth::Word);
+        require(product_runtime->store_queues->prefetch(
+                    0xE0000040u, prefetch_origin, prefetch_retired) &&
+                    product_runtime->store_queue_transfers->size() == 1u &&
+                    product_runtime->store_queue_transfers->front().instruction.source_pc ==
+                        prefetch_origin.source_pc &&
+                    product_runtime->store_queue_transfers->front().instruction.runtime_pc ==
+                        prefetch_origin.runtime_pc &&
+                    product_runtime->store_queue_transfers->front()
+                            .retired_guest_instructions == prefetch_retired &&
+                    product_accesses.count == 2u && product_accesses.dropped == 0u,
+                "Produktiver externer SQ-Sink verliert PREF-Provenienz vor write_bytes_at.");
+        require_store_queue_range_write(
+            product_accesses.events.front(),
+            0x0C000040u,
+            4u,
+            true,
+            prefetch_origin,
+            prefetch_retired,
+            "Produktiver SQ-write_bytes_at-Pfad verliert Writer-Provenienz oder Quelle.");
+        require_store_queue_range_write(
+            product_accesses.events[1u],
+            0x0C000044u,
+            28u,
+            false,
+            prefetch_origin,
+            prefetch_retired,
+            "Produktiver SQ-write_bytes_at-Pfad markiert No-op-Bytes als Writer.");
+        product_cpu->memory.clear_guest_memory_access_sink();
         product_runtime->store_queues->write_qacr(1u, 0x0Cu);
         for (std::uint32_t offset = 0u; offset < 32u; offset += 4u) {
             product_runtime->store_queues->write_p4(sq_source + offset,
@@ -368,10 +474,10 @@ int main() {
                                                false});
         product_runtime->mmu_control->write(0x10u, 1u);
         require(product_runtime->store_queues->prefetch(sq_source) &&
-                    product_runtime->store_queue_transfers->size() == 1u &&
-                    product_runtime->store_queue_transfers->front().target ==
+                    product_runtime->store_queue_transfers->size() == 2u &&
+                    product_runtime->store_queue_transfers->back().target ==
                         StoreQueueTarget::TileAccelerator &&
-                    product_runtime->store_queue_transfers->front().target_address == ta_target &&
+                    product_runtime->store_queue_transfers->back().target_address == ta_target &&
                     product_runtime->pvr_ta_fifo->metrics().packets == 1u,
                 "Produktive Dreamcast-Runtime verdrahtet SQ-PREF bei AT=1 nicht mit UTLB und TA.");
 

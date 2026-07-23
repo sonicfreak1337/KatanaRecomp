@@ -476,6 +476,7 @@ initialize_dreamcast_runtime(CpuState& cpu,
         throw std::logic_error("Ungueltiger TA-Listentyp.");
     });
     state.pvr_renderer = std::make_shared<PvrSoftwareRenderer>();
+    state.pvr_renderer->set_guest_memory_access_memory(&cpu.memory);
     state.pvr_registers = map_pvr_registers(
         cpu.memory,
         *state.scheduler,
@@ -503,6 +504,7 @@ initialize_dreamcast_runtime(CpuState& cpu,
         state.pvr_registers,
         state.vram,
         [raise_now] { raise_now(SystemAsicEvent::PvrYuvDone); });
+    state.pvr_yuv_converter->set_guest_memory_access_memory(&cpu.memory);
     for (const auto segment : dreamcast_direct_segment_bases) {
         const auto ta_base = segment + 0x10000000u;
         const auto ta_mirror = segment + 0x12000000u;
@@ -749,9 +751,15 @@ initialize_dreamcast_runtime(CpuState& cpu,
     const auto store_queue_ta = state.pvr_ta_fifo;
     const auto store_queue_pvr = state.pvr_registers;
     auto* const memory = &cpu.memory;
+    auto* const store_queue_cpu = &cpu;
     state.store_queues = std::make_shared<Sh4StoreQueues>(
         cpu.memory,
-        [transfers, dropped_transfers, memory, store_queue_ta, store_queue_pvr](
+        [transfers,
+         dropped_transfers,
+         memory,
+         store_queue_cpu,
+         store_queue_ta,
+         store_queue_pvr](
             const StoreQueueTransfer& transfer) {
             if (transfers->size() == 1024u) {
                 transfers->erase(transfers->begin());
@@ -765,12 +773,16 @@ initialize_dreamcast_runtime(CpuState& cpu,
                 store_queue_pvr->record_ta_packet(
                     static_cast<std::uint32_t>(transfer.bytes.size()));
             } else {
-                memory->write_bytes(
-                    transfer.target_address, transfer.bytes, CodeWriteSource::StoreQueue);
+                memory->write_bytes_at(
+                    transfer.target_address,
+                    transfer.bytes,
+                    GuestMemoryAccessContext{transfer.target_address,
+                                             transfer.instruction,
+                                             transfer.retired_guest_instructions},
+                    CodeWriteSource::StoreQueue);
             }
         },
         state.code_tracker.get());
-    auto* const store_queue_cpu = &cpu;
     state.store_queues->set_prefetch_address_translator(
         [store_queue_cpu](const std::uint32_t address) {
             return translate_store_queue_prefetch(*store_queue_cpu, address);

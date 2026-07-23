@@ -735,7 +735,9 @@ Abhaengigkeiten: KR-4841
 Prioritaet: P0
 
 - MMU-bewusste, nicht mutierende Peeks nur fuer lineare Speicherregionen
-- MMIO ausschliesslich ueber strukturierte Geraetesnapshots diagnostizieren
+- Freie oder aktive MMIO-Probes ausschliesslich ueber strukturierte
+  Geraetesnapshots diagnostizieren; eine passive Zugriffserfassung darf nur
+  den bereits beobachteten Wert uebernehmen
 - Backedges und Pollingloops samt Wertwechsel und Writer-Provenienz klassifizieren
 - Diagnose darf Gastzustand und Ereignisreihenfolge nicht veraendern
 
@@ -769,14 +771,51 @@ unveraendert. Berichte tragen
 `scope=native_disc_aot_boot_graph`. Delay-Slot-Doppelkontexte, wurzellose SCCs
 und ein 4.096-Block-Graph besitzen Regressionen.
 
-Die fokussierten Runtime-/Codegenziele bestehen 5/5, Auditor und Policy 2/2;
-die CLI-Scope-Regression ist angelegt und der aktuelle private Disc-Audit
-bestaetigt die echte CLI-Integration. Er ist im normalen Modus bei null
-bekannten Luecken gruen: 142.380 Instruktionen, 1.542 Funktionen, 58.630
+Runtime-ABI 42 fuehrt einen seiteneffektfreien POD-Zugriffssink ein. AOT und
+der begrenzte Diagnoseinterpreter melden Quell- und Laufzeit-PC; Store-Queue-
+`PREF`, PVR-Render und PVR-YUV behalten ihre Writer-Herkunft. Die VRAM32-Sicht
+projiziert auf das gemeinsame lineare Backing. Readwerte und MMIO-Handler
+werden nicht erneut abgefragt; der aktive Trace darf fuer einen Wrapperwrite
+dessen seiteneffektfreie lineare Projektion vor dem Write vergleichen.
+`RuntimeWaitLoopTrace` v1 verdichtet dynamische Wertlaeufe und zugehoerige
+Writer begrenzt. Der Portexport erzeugt aus dem Hardwareaudit generische,
+deterministisch deduplizierte `ProvenGuard`-, `UnresolvedGuard`- und
+konservative Kandidatendeskriptoren; reine Counterloops werden ausgelassen.
+Ein vorab sortierter Read-Site-Index vermeidet lineare Deskriptorscans, und
+MMIO-Werte werden ohne zweiten Handleraufruf aus dem bereits ausgefuehrten
+Zugriff uebernommen. Bytegenaue lineare Writerlinks tragen
+`exact-backing-bytes`; physische MMIO-Ueberschneidungen bleiben als
+`physical-range-candidate` gekennzeichnet. Backing-indizierte Locations
+vermeiden Vollscans fuer unbeteiligte lineare Writes. Der aktive Trace
+bestimmt skalare und Range-Wrapperaenderungen bytegenau und verwirft
+No-op-Writer; Produkt-`GuestWriteObserver` und Scanout-Evidenz bleiben
+konservativ sowie bei Trace aus/an identisch. Nur
+`KATANA_PORT_WAIT_LOOP_TRACE=1` aktiviert den
+Rohwerttrace, unabhaengig von `KATANA_PORT_DIAGNOSTICS`. Eine leere
+Deskriptorliste erzeugt weder Recorder noch Sink; bei tatsaechlich erzeugtem
+Recorder warnt der Port einmalig auf `stderr` vor nur lokal und nicht
+ungeprueft teilbaren Rohwerten. Das JSON deklariert
+`contains_raw_guest_values:true`,
+`writer_scope:"since-previous-sample"` und ungueltige skalare Range-Werte mit
+`scalar_value_valid:false` und `value:null`. Strukturell ungueltige
+Access-Events erhoehen `invalid_access_events` und erzwingen
+`complete:false`; sie zaehlen nicht als bloss irrelevante gueltige Events.
+RAII entfernt den Sink vor der terminalen Ausgabe; ohne Trace-Opt-in bleibt
+der Fastpath ohne Recorderallokation oder Projektion. PlatformServices-ABI 10 reicht die genaue
+`PREF`-Instruktionsherkunft zur Store Queue, Portprojektvertrag 26 bindet den
+Produkttrace.
+
+Die generischen Registervarianten von `PREF`, `OCBI`, `OCBP`, `OCBWB` und
+`TAS.B` sind im begrenzten Interpreter geschlossen. Doppelte `FMOV`-
+Speicherzugriffe folgen low nach high. Der konsolidierte fokussierte Nachweis
+besteht 22/22 in 1,57 Sekunden; der Port-CLI-Nachweis besteht 1/1 in
+151,12 Sekunden. Der aktuelle private Disc-Audit bleibt im normalen Modus bei
+null bekannten Luecken gruen: 142.380 Instruktionen, 1.542 Funktionen, 58.630
 Speicherstellen, zwei partielle Adressen und 1.095 Loops. Die 492
-`unresolved_poll_guard_loops` halten `--strict` erwartungsgemaess rot. Dies ist
-kein Vollgate. Dynamische Wertwechselfolgen, echte Runtime-Writer-Provenienz und der
-vollstaendige Diagnose=0/1-A/B-Produktlauf halten `KR-4842` weiter offen.
+`unresolved_poll_guard_loops` halten `--strict` erwartungsgemaess rot. Es lief
+weder eine Vollsuite noch `KR-4852`. Dynamische Wertwechselfolgen und echte
+Runtime-Writer-Provenienz liegen vor; ausschliesslich der vollstaendige
+Diagnose=0/1-A/B-Produktlauf haelt `KR-4842` weiter offen.
 
 ### [x] KR-4843 - Alias-korrekter nativer Disc-Systembootstrap
 
@@ -977,9 +1016,9 @@ Fallback oder Materialisierung; GD-ROM, TA und PVR sind noch null. Bei 320
 Millionen Zyklen erreicht der Gast Spielecode, zwei GD-ROM-Kommandos und einen
 spaeten PVR-Registerwrite, weiterhin ohne TA-, Render- oder Framebeweis.
 
-Der aktuelle kumulative Schnittstellenstand verwendet Runtime-ABI 41,
-Block-ABI 3, Backend-Interface-ABI 3, Portprojektvertrag 25 und
-Host-Video-Vertrag 2. Source-relativierte native AOT-Templates und ihr
+Der aktuelle kumulative Schnittstellenstand verwendet Runtime-ABI 42,
+Block-ABI 3, Backend-Interface-ABI 3, PlatformServices-ABI 10,
+Portprojektvertrag 26 und Host-Video-Vertrag 2. Source-relativierte native AOT-Templates und ihr
 adressierter Binder sind vorhanden; strukturierte Disc-Ladetransaktionen, der
 allgemeine native Materializer und die Registry latenter Module halten
 `KR-4848` weiterhin offen. Das fokussierte Gate besteht 11/11, der x64-Kern-/

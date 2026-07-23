@@ -159,7 +159,9 @@ class PlatformServices {
     [[nodiscard]] virtual PlatformDmaResult start_dma(const PlatformDmaRequest& request) = 0;
     [[nodiscard]] virtual PlatformFallbackResult
     controlled_fallback(CpuState& cpu, const PlatformFallbackRequest& request) = 0;
-    [[nodiscard]] virtual bool prefetch(CpuState& cpu, std::uint32_t address) = 0;
+    [[nodiscard]] virtual bool prefetch(CpuState& cpu,
+                                        GuestInstructionOrigin instruction,
+                                        std::uint32_t address) = 0;
     [[nodiscard]] virtual PlatformLifecycleState poll_host_lifecycle() {
         return PlatformLifecycleState::Running;
     }

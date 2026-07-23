@@ -44,8 +44,8 @@
   Unvollstaendige Definitionen oder Vorgaenger bleiben `unknown`;
   Delay-Slot-Doppelkontexte, wurzellose SCCs und ein
   4.096-Block-Skalierungsfall besitzen Regressionen. Dieser statische
-  Teilstand schliesst `KR-4842` ohne dynamische Writer-/Wertaenderungsevidenz
-  bewusst noch nicht ab.
+  Teilstand schloss `KR-4842` fuer sich allein ohne dynamische Writer-/
+  Wertaenderungsevidenz bewusst noch nicht ab.
   Der aktuelle private SA-PAL-Disc-Audit ist im normalen Modus gruen und
   berichtet unter `native_disc_aot_boot_graph` 142.380 Instruktionen, 1.542
   Funktionen, null unbekannte Instruktionen, 58.630 Speicherstellen
@@ -53,6 +53,67 @@
   bekannte Luecken, zwei partielle Adressen sowie 1.095 Natural Loops. Davon
   sind 48 `counter`, eine `mmio_poll`, zwei `ram_poll` und 1.044 `unknown`;
   492 `unresolved_poll_guard_loops` halten `--strict` erwartungsgemaess rot.
+- Runtime-ABI 42 fuehrt einen seiteneffektfreien, allokationsfreien POD-
+  Zugriffssink fuer tatsaechlich ausgefuehrte Gastzugriffe ein. Native AOT-
+  Bloecke und der ausschliesslich im begrenzten Diagnoseprofil vorhandene
+  Interpreter melden statische Quell- und relocatierte Laufzeit-PCs; Store-
+  Queue-`PREF`, PVR-Renderwrites und PVR-YUV-Writes behalten ihre getrennte
+  Writer-Herkunft. Die logische VRAM32-Sicht projiziert dabei auf dasselbe
+  lineare Backing. Beobachtete Readwerte und MMIO-Handler werden nicht erneut
+  gelesen. Nur bei einem Write durch einen nichtlinearen Wrapper vergleicht
+  der aktivierte Trace vor dem Write dessen seiteneffektfreie lineare
+  Backing-Projektion, um No-ops bytegenau zu erkennen; Produkt-
+  `GuestWriteObserver` und Scanout-Evidenz bleiben dabei konservativ und bei
+  Trace aus/an identisch.
+  `RuntimeWaitLoopTrace` Version 1 verdichtet beobachtete Wertlaeufe und
+  zugehoerige Writer begrenzt. Der Portexport leitet seine deterministisch
+  deduplizierten `ProvenGuard`-, `UnresolvedGuard`- und konservativen
+  Kandidatendeskriptoren titelunabhaengig aus dem Hardwareaudit ab; reine
+  Counterloops werden ausgelassen. Ein vorab sortierter Read-Site-Index
+  vermeidet lineare Deskriptorscans im beobachteten Zugriffspfad. Auch
+  MMIO-Werte stammen ausschliesslich aus dem bereits ausgefuehrten Zugriff;
+  der Trace liest keinen Handler ein zweites Mal. Writerlinks kennzeichnen
+  lineare, bytegenaue Backing-Ueberschneidungen als
+  `exact-backing-bytes`, waehrend nichtlineare MMIO-Ueberschneidungen nur
+  `physical-range-candidate` sind. Ein Backing-Index verwirft unbeteiligte
+  lineare Writes ohne Location-Vollscan. Der aktive Trace berechnet seine
+  Writer-Aenderung fuer skalare und Range-Wrapperwrites bytegenau, fasst nur
+  gleichartige Abschnitte zusammen und verwirft No-op-Writer; der
+  konservative Produktobserververtrag wird dadurch nicht umgeschrieben.
+  `guest_memory_access_change_tracking_limit` begrenzt die
+  Diagnose-Aenderungsmap auf 1 MiB, davon bis zu 256 Byte inline. Eine
+  fehlgeschlagene Diagnoseallokation oder ein groesserer Range bricht den
+  Gastwrite nicht ab, sondern meldet ein strukturell ungueltiges Event:
+  `invalid_access_events` steigt und `complete` wird falsch. Der PVR-Renderer
+  prueft die Trace-Aktivitaet einmal pro Render statt pro Pixel.
+  Strukturell ungueltige Access-Events, darunter lineare Projektionen mit mehr
+  als vier Byteoffsets, erhoehen `invalid_access_events` und erzwingen
+  `complete:false`; sie zaehlen nicht als bloss ignorierte gueltige Events.
+  Eine Allokationsausnahme beim Anlegen oder Indizieren einer Location erhoeht
+  `dropped_locations` und macht den Trace ebenfalls unvollstaendig, statt den
+  `noexcept`-Callback zu beenden. Writer-JSON weist mit
+  `instruction_valid` explizit aus, ob seine PC-Herkunft gueltig ist.
+  Nur `KATANA_PORT_WAIT_LOOP_TRACE=1` aktiviert diesen Rohwerttrace,
+  unabhaengig von `KATANA_PORT_DIAGNOSTICS`. Bei leerer Deskriptorliste
+  entstehen weder Recorder noch Sink; andernfalls warnt der Port einmalig auf
+  `stderr`, dass die Ausgabe nur lokal verwendet, wegen roher Gastwerte
+  geprueft und nicht ungeprueft geteilt werden darf. Das JSON kennzeichnet
+  `contains_raw_guest_values:true`, begrenzt Writer mit
+  `writer_scope:"since-previous-sample"` und serialisiert ungueltige skalare
+  Range-Werte als `scalar_value_valid:false` und `value:null`. RAII entfernt
+  den Sink vor der terminalen `KATANA_WAIT_LOOP_TRACE`-JSON-Ausgabe; ohne das
+  Trace-Opt-in bleiben Recorderallokation und Zugriffsprojektion im Fastpath
+  aus.
+  PlatformServices-ABI 10 reicht die exakte `PREF`-Instruktionsherkunft bis zur
+  Store Queue weiter, Portprojektvertrag 26 bindet Deskriptoren und Opt-in in
+  das erzeugte Produkt. Die generischen Registervarianten von `PREF`, `OCBI`,
+  `OCBP`, `OCBWB` und `TAS.B` sind auch im begrenzten Interpreter geschlossen;
+  doppelte `FMOV`-Speicherzugriffe folgen der Reihenfolge low nach high.
+  Der konsolidierte fokussierte Nachweis besteht 22/22 in 1,57 Sekunden; der
+  Port-CLI-Nachweis besteht 1/1 in 151,12 Sekunden. Es lief weder eine
+  Vollsuite noch `KR-4852`. Dynamische Wertlaeufe und echte Writer-Provenienz
+  sind damit vorhanden; `KR-4842` bleibt ausschliesslich bis zum vollstaendigen
+  Diagnose=0/1-A/B-Produktlauf offen.
 - Der private Retailrunner ermittelt Runtime-ABI und Portprojektvertrag strikt
   aus `cmake/KatanaVersions.cmake`. Malformed, doppelte und nullwertige
   Definitionen sowie JSON-Vertragswerte vom Typ String oder Double werden
@@ -113,9 +174,9 @@
   Direct-FB-Pixeln. TA, Rendergeneration und Materializer bleiben null; der
   Budget-Exit ist erwartet. Diese Port- und Laufevidenz bleibt ausdruecklich
   historisch und wird nicht als ABI-40-Export ausgegeben.
-- Der aktuelle kumulative Schnittstellenstand verwendet Runtime-ABI 41,
-  Block-ABI 3, Backend-Interface-ABI 3, Portprojektvertrag 25 und
-  Host-Video-Vertrag 2. Block-ABI 3 versioniert die virtuelle
+- Der aktuelle kumulative Schnittstellenstand verwendet Runtime-ABI 42,
+  Block-ABI 3, Backend-Interface-ABI 3, PlatformServices-ABI 10,
+  Portprojektvertrag 26 und Host-Video-Vertrag 2. Block-ABI 3 versioniert die virtuelle
   Quell-/Laufzeitadressabbildung source-relativierter nativer AOT-Templates.
 - PVR-Read- und Write-Framebuffer verwenden nun dieselbe hardwaregenaue
   logische 32-Bit-VRAM-Sicht statt eines linear interpretierten Hostpuffers.

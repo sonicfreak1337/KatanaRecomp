@@ -42,6 +42,27 @@ class Vram32BitMemoryDevice final : public MemoryDevice {
         backing_->write_u8(dreamcast_vram_32bit_to_linear_offset(offset), value);
     }
 
+    [[nodiscard]] LinearMemoryProjection
+    linear_projection(const std::uint32_t offset,
+                      const MemoryAccessWidth width) const noexcept override {
+        const auto byte_count = static_cast<std::uint8_t>(width);
+        if (offset > size() || byte_count > size() - offset) return {};
+
+        LinearMemoryProjection projection;
+        projection.backing = backing_.get();
+        projection.byte_count = byte_count;
+        projection.contiguous = true;
+        for (std::uint8_t index = 0u; index < byte_count; ++index) {
+            projection.byte_offsets[index] =
+                dreamcast_vram_32bit_to_linear_offset(offset + index);
+            if (index != 0u &&
+                projection.byte_offsets[index] != projection.byte_offsets[index - 1u] + 1u) {
+                projection.contiguous = false;
+            }
+        }
+        return projection;
+    }
+
   private:
     std::shared_ptr<LinearMemoryDevice> backing_;
 };

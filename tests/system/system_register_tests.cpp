@@ -290,7 +290,8 @@ int main(const int argc, char* argv[]) {
     const auto source = katana::codegen::emit_cpp_program(build_program(), 0x100u);
     require(source.find("cpu.write_sr(value);") != std::string::npos &&
                 source.find("cpu.r_bank[7] = value;") != std::string::npos &&
-                source.find("katana::runtime::guest_write_u32(cpu, address, value);") !=
+                source.find("katana::runtime::guest_write_u32_at(cpu, guest_origin, "
+                            "address, value);") !=
                     std::string::npos &&
                 source.find("if (!cpu.privileged_mode())") != std::string::npos,
             "Der C++-Emitter bildet Spezialregistertransfers nicht vollstaendig ab.");

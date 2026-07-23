@@ -71,7 +71,9 @@ class ChainServices final : public katana::runtime::PlatformServices {
                         const katana::runtime::PlatformFallbackRequest&) override {
         return {};
     }
-    [[nodiscard]] bool prefetch(katana::runtime::CpuState&, std::uint32_t) override {
+    [[nodiscard]] bool prefetch(katana::runtime::CpuState&,
+                                katana::runtime::GuestInstructionOrigin,
+                                std::uint32_t) override {
         return false;
     }
     [[nodiscard]] bool

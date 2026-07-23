@@ -159,6 +159,26 @@ std::vector<std::uint8_t> boot_track(const bool immediate_trap = false) {
     return bytes;
 }
 
+std::vector<std::uint8_t> poll_loop_boot_track() {
+    auto bytes = boot_track();
+    constexpr std::array<std::uint8_t, 24u> program = {
+        0x03u, 0xD3u, // loop: mov.l @(3,pc),r3 (conservative loop-local read)
+        0x04u, 0xD0u, // mov.l @(4,pc),r0 (proven loop guard read)
+        0x08u, 0x20u, // tst r0,r0
+        0xFBu, 0x89u, // bt 0x8C010000
+        0x0Bu, 0x00u, // rts
+        0x09u, 0x00u, // delay-slot nop
+        0x09u, 0x00u, // aligned padding
+        0x09u, 0x00u, // aligned padding
+        0x11u, 0x11u, 0x11u, 0x11u, // conservative source at 0x8C010010
+        0x00u, 0x00u, 0x00u, 0x00u  // guard source at 0x8C010014
+    };
+    std::copy(program.begin(),
+              program.end(),
+              bytes.begin() + static_cast<std::ptrdiff_t>(payload_offset(21u)));
+    return bytes;
+}
+
 void write_binary(const std::filesystem::path& path, const std::vector<std::uint8_t>& bytes) {
     std::ofstream output(path, std::ios::binary | std::ios::trunc);
     output.write(reinterpret_cast<const char*>(bytes.data()),
@@ -605,6 +625,7 @@ int run_test(const int argc, char* argv[]) {
     observed_progress.clear();
     const auto first = export_dreamcast_port_project(gdi, output, options);
     const auto generated_before = snapshot(output / "generated");
+    const auto generated_main = read_text(output / "src" / "main.cpp");
     std::string runtime_dispatch_shards;
     std::size_t runtime_dispatch_shard_count = 0u;
     for (const auto& [path, content] : generated_before) {
@@ -663,6 +684,81 @@ int run_test(const int argc, char* argv[]) {
                 read_text(first.disc_install_recipe).find(fixture.root.string()) ==
                     std::string::npos,
             "Generische Disc-Recipe verliert Bindung oder enthaelt private Quellpfade.");
+    const auto trace_enable = generated_main.find(
+        "if (!enabled || runtime_wait_loop_descriptors.empty()) return;");
+    const auto trace_allocate =
+        generated_main.find("recorder_.emplace(runtime_wait_loop_descriptors)");
+    const auto trace_set_sink =
+        generated_main.find("set_guest_memory_access_sink(recorder_->sink())");
+    const auto trace_clear_sink =
+        generated_main.find("clear_guest_memory_access_sink()");
+    const auto trace_serialize = generated_main.find("recorder_->serialize_json()");
+    require(
+        generated_main.find("#include \"katana/runtime/wait_loop_trace.hpp\"") !=
+                std::string::npos &&
+            generated_main.find(
+                "std::array<katana::runtime::RuntimeWaitLoopDescriptor, 0u> "
+                "runtime_wait_loop_descriptors") != std::string::npos &&
+            generated_main.find(
+                "std::optional<katana::runtime::RuntimeWaitLoopTraceRecorder> recorder_") !=
+                std::string::npos &&
+            generated_main.find(
+                "std::getenv(\"KATANA_PORT_WAIT_LOOP_TRACE\")") != std::string::npos &&
+            generated_main.find(
+                "std::string_view(wait_loop_trace_value) == \"1\"") !=
+                std::string::npos &&
+            generated_main.find(
+                "KATANA_WAIT_LOOP_TRACE_NOTICE local-only; contains raw guest-memory "
+                "values; do not share without review") != std::string::npos &&
+            generated_main.find("\"contains_raw_guest_values\\\":true") !=
+                std::string::npos &&
+            generated_main.find(
+                "~RuntimeWaitLoopTraceSession() noexcept { finish(); }") !=
+                std::string::npos &&
+            generated_main.find("KATANA_WAIT_LOOP_TRACE ") != std::string::npos &&
+            generated_main.find("katana.runtime-wait-loop-trace") !=
+                std::string::npos &&
+            trace_enable != std::string::npos && trace_allocate != std::string::npos &&
+            trace_set_sink != std::string::npos && trace_clear_sink != std::string::npos &&
+            trace_serialize != std::string::npos && trace_enable < trace_allocate &&
+            trace_allocate < trace_set_sink && trace_clear_sink < trace_serialize &&
+            generated_before.at("metadata/port-project.json")
+                    .find("\"contract_version\":26") != std::string::npos &&
+            generated_before.at("metadata/provenance.json")
+                    .find("\"manifest_version\":26") != std::string::npos,
+        "Portprodukt bindet den versionierten Wait-Loop-Trace nicht strikt opt-in, "
+        "allokationsfrei im Normalpfad und RAII-bereinigt ein.");
+    const auto poll_disc_directory = fixture.root / "poll-loop-disc";
+    std::filesystem::create_directories(poll_disc_directory);
+    write_fixture(poll_disc_directory);
+    write_binary(poll_disc_directory / "high.bin", poll_loop_boot_track());
+    const auto poll_output = fixture.root / "poll-loop-port";
+    static_cast<void>(
+        export_dreamcast_port_project(poll_disc_directory / "disc.gdi", poll_output, options));
+    const auto poll_main = read_text(poll_output / "src" / "main.cpp");
+    const auto conservative_descriptor = poll_main.find(
+        "{0x8C010000u, 0x8C010000u, 0x8C010000u, "
+        "katana::runtime::RuntimeWaitLoopEvidence::ConservativeCandidate}");
+    const auto proven_descriptor = poll_main.find(
+        "{0x8C010000u, 0x8C010000u, 0x8C010002u, "
+        "katana::runtime::RuntimeWaitLoopEvidence::ProvenGuard}");
+    static_cast<void>(
+        export_dreamcast_port_project(poll_disc_directory / "disc.gdi", poll_output, options));
+    require(
+        poll_main.find(
+            "std::array<katana::runtime::RuntimeWaitLoopDescriptor, 2u> "
+            "runtime_wait_loop_descriptors") != std::string::npos &&
+            conservative_descriptor != std::string::npos &&
+            proven_descriptor != std::string::npos &&
+            conservative_descriptor < proven_descriptor &&
+            occurrences(poll_main, "RuntimeWaitLoopEvidence::ConservativeCandidate") == 1u &&
+            occurrences(poll_main, "RuntimeWaitLoopEvidence::ProvenGuard") == 1u &&
+            read_text(poll_output / "src" / "main.cpp") == poll_main &&
+            poll_main.find(fixture.root.string()) == std::string::npos &&
+            poll_main.find("poll-loop-disc") == std::string::npos &&
+            poll_main.find("high.bin") == std::string::npos,
+        "Generische Poll-Loops werden nicht deterministisch, dedupliziert oder frei von "
+        "privaten Quelldaten in den Produkttrace exportiert.");
     require(unit != generated_before.end(),
             "Portexport besitzt keine deterministische Translation Unit.");
     std::size_t entry_metadata_count = 0u;
@@ -1396,7 +1492,9 @@ int run_test(const int argc, char* argv[]) {
         user << "keep-user-file\n";
     }
     const auto second = export_dreamcast_port_project(gdi, output, options);
-    require(generated_before == snapshot(output / "generated") && second.removed_files == 0u,
+    require(generated_before == snapshot(output / "generated") &&
+                read_text(output / "src" / "main.cpp") == generated_main &&
+                second.removed_files == 0u,
             "Identische Portregenerierung ist nicht bytegleich.");
     std::ifstream user(output / "src" / "notes.txt");
     std::ostringstream user_content;

@@ -26,11 +26,14 @@ class StoreQueueServices final : public katana::runtime::PlatformServices {
     explicit StoreQueueServices(katana::runtime::CpuState& cpu)
         : cpu_(cpu), queues_(cpu.memory, [this](const auto& transfer) {
               if (transfer.target == katana::runtime::StoreQueueTarget::Ram) {
-                  for (std::size_t index = 0u; index < transfer.bytes.size(); ++index) {
-                      cpu_.memory.write_u8(transfer.target_address +
-                                               static_cast<std::uint32_t>(index),
-                                           transfer.bytes[index]);
-                  }
+                  cpu_.memory.write_bytes_at(
+                      transfer.target_address,
+                      transfer.bytes,
+                      katana::runtime::GuestMemoryAccessContext{
+                          transfer.target_address,
+                          transfer.instruction,
+                          transfer.retired_guest_instructions},
+                      katana::runtime::CodeWriteSource::StoreQueue);
               } else {
                   transfers.push_back(transfer);
               }
@@ -86,9 +89,10 @@ class StoreQueueServices final : public katana::runtime::PlatformServices {
         return {};
     }
     [[nodiscard]] bool prefetch(katana::runtime::CpuState& cpu,
+                                const katana::runtime::GuestInstructionOrigin instruction,
                                 const std::uint32_t address) override {
         katana::runtime::prefetch(cpu, address);
-        return queues_.prefetch(address);
+        return queues_.prefetch(address, instruction, cpu.retired_guest_instructions);
     }
 
     katana::runtime::CpuState& cpu_;

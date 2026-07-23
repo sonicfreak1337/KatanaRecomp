@@ -286,6 +286,51 @@ std::int32_t guest_read_s16(CpuState& cpu, const std::uint32_t address) {
     return static_cast<std::int16_t>(guest_read_u16(cpu, address));
 }
 
+std::uint8_t guest_read_u8_at(CpuState& cpu,
+                              const GuestInstructionOrigin origin,
+                              const std::uint32_t virtual_address) {
+    const auto physical_address = translate_guest_address(
+        cpu, virtual_address, MemoryAccessOperation::Read, MemoryAccessWidth::Byte);
+    return cpu.memory.read_u8_at(
+        physical_address,
+        GuestMemoryAccessContext{
+            virtual_address, origin, cpu.retired_guest_instructions});
+}
+
+std::uint16_t guest_read_u16_at(CpuState& cpu,
+                                const GuestInstructionOrigin origin,
+                                const std::uint32_t virtual_address) {
+    const auto physical_address = translate_guest_address(
+        cpu, virtual_address, MemoryAccessOperation::Read, MemoryAccessWidth::Halfword);
+    return cpu.memory.read_u16_at(
+        physical_address,
+        GuestMemoryAccessContext{
+            virtual_address, origin, cpu.retired_guest_instructions});
+}
+
+std::uint32_t guest_read_u32_at(CpuState& cpu,
+                                const GuestInstructionOrigin origin,
+                                const std::uint32_t virtual_address) {
+    const auto physical_address = translate_guest_address(
+        cpu, virtual_address, MemoryAccessOperation::Read, MemoryAccessWidth::Word);
+    return cpu.memory.read_u32_at(
+        physical_address,
+        GuestMemoryAccessContext{
+            virtual_address, origin, cpu.retired_guest_instructions});
+}
+
+std::int32_t guest_read_s8_at(CpuState& cpu,
+                              const GuestInstructionOrigin origin,
+                              const std::uint32_t virtual_address) {
+    return static_cast<std::int8_t>(guest_read_u8_at(cpu, origin, virtual_address));
+}
+
+std::int32_t guest_read_s16_at(CpuState& cpu,
+                               const GuestInstructionOrigin origin,
+                               const std::uint32_t virtual_address) {
+    return static_cast<std::int16_t>(guest_read_u16_at(cpu, origin, virtual_address));
+}
+
 void guest_write_u8(CpuState& cpu,
                     const std::uint32_t address,
                     const std::uint8_t value,
@@ -313,6 +358,51 @@ void guest_write_u32(CpuState& cpu,
     cpu.memory.write_u32(
         translate_guest_address(cpu, address, MemoryAccessOperation::Write, MemoryAccessWidth::Word),
         value,
+        source);
+}
+
+void guest_write_u8_at(CpuState& cpu,
+                       const GuestInstructionOrigin origin,
+                       const std::uint32_t virtual_address,
+                       const std::uint8_t value,
+                       const CodeWriteSource source) {
+    const auto physical_address = translate_guest_address(
+        cpu, virtual_address, MemoryAccessOperation::Write, MemoryAccessWidth::Byte);
+    cpu.memory.write_u8_at(
+        physical_address,
+        value,
+        GuestMemoryAccessContext{
+            virtual_address, origin, cpu.retired_guest_instructions},
+        source);
+}
+
+void guest_write_u16_at(CpuState& cpu,
+                        const GuestInstructionOrigin origin,
+                        const std::uint32_t virtual_address,
+                        const std::uint16_t value,
+                        const CodeWriteSource source) {
+    const auto physical_address = translate_guest_address(
+        cpu, virtual_address, MemoryAccessOperation::Write, MemoryAccessWidth::Halfword);
+    cpu.memory.write_u16_at(
+        physical_address,
+        value,
+        GuestMemoryAccessContext{
+            virtual_address, origin, cpu.retired_guest_instructions},
+        source);
+}
+
+void guest_write_u32_at(CpuState& cpu,
+                        const GuestInstructionOrigin origin,
+                        const std::uint32_t virtual_address,
+                        const std::uint32_t value,
+                        const CodeWriteSource source) {
+    const auto physical_address = translate_guest_address(
+        cpu, virtual_address, MemoryAccessOperation::Write, MemoryAccessWidth::Word);
+    cpu.memory.write_u32_at(
+        physical_address,
+        value,
+        GuestMemoryAccessContext{
+            virtual_address, origin, cpu.retired_guest_instructions},
         source);
 }
 

@@ -3,8 +3,8 @@
 KR-4701 definiert `katana-native-video` als Runtimevertrag Version 2. Externe
 Portprojekte erhalten die Schnittstelle ueber `katana_runtime`; die erzeugte
 `game.exe` benoetigt die KatanaRecomp-CLI nicht als Laufzeithuelle.
-Der kumulative Integrationsstand verwendet Runtime-ABI 41, Block-ABI 3,
-Backend-Interface-ABI 3 und Portprojektvertrag 25.
+Der kumulative Integrationsstand verwendet Runtime-ABI 42, Block-ABI 3,
+Backend-Interface-ABI 3, PlatformServices-ABI 10 und Portprojektvertrag 26.
 
 ## Vertrag
 
@@ -76,6 +76,30 @@ Erst dort werden die aktuellen VRAM-Bytes erneut validiert und der exakte
 `PvrFrame` eingefroren; ein Render oder Direct-Write nach einem bereits
 verarbeiteten VBlank kann deshalb erst am folgenden VBlank zaehlen.
 
+Die optionale Runtime-ABI-42-Diagnostik beobachtet PVR-Render- und YUV-Writes
+als getrennte Writer-Urspruenge am gemeinsamen linearen VRAM-Backing; die
+VRAM32-Sicht wird bytegenau darauf projiziert. Beobachtete Readwerte, Scanout
+und MMIO-Handler werden nicht erneut abgefragt. Nur der aktive Trace
+vergleicht vor einem Wrapperwrite dessen seiteneffektfreies lineares Backing,
+um skalare und Range-No-ops zu verwerfen. Der
+`GuestWriteObserver` des Produkt-/Scanoutpfads bleibt konservativ und bei
+Trace aus/an identisch; der Trace ist kein alternativer Framebeweis. Writerlinks auf
+dasselbe lineare VRAM-Backing tragen `exact-backing-bytes`; nichtlineare
+physische Bereiche bleiben `physical-range-candidate`. Backing-indizierte
+Locations verhindern Vollscans bei unbeteiligten PVR-Writes. Ausschliesslich
+`KATANA_PORT_WAIT_LOOP_TRACE=1` aktiviert diesen Rohwerttrace, unabhaengig von
+`KATANA_PORT_DIAGNOSTICS`; bei leerer Deskriptorliste werden weder Recorder
+noch Sink erzeugt. Bei tatsaechlich erzeugtem Recorder warnt der Port einmalig
+auf `stderr` vor den nur lokal und nicht ungeprueft teilbaren Rohwerten. Das
+JSON kennzeichnet `contains_raw_guest_values:true`, den
+`writer_scope:"since-previous-sample"` und ungueltige Range-Skalarwerte mit
+`scalar_value_valid:false` und `value:null`. Strukturell ungueltige
+Access-Events erhoehen `invalid_access_events` und erzwingen
+`complete:false`, statt als bloss irrelevante gueltige Events zu gelten. Der
+Read-Site-Index vermeidet lineare Deskriptorscans, und RAII entfernt den Sink
+vor der terminalen Wait-Loop-JSON-Ausgabe. Ohne Trace-Opt-in bleibt der
+Videohotpath ohne Recorderprojektion.
+
 Ein Proof verlangt aktiviertes `FB_R`, ungeblankten Videoausgang und einen
 tatsaechlich abgetasteten Evidenzpixel. Seine Quelle ist explizit entweder
 `TaRender` oder `DirectFramebuffer`. Ein Direct-Proof entsteht nur, wenn die
@@ -126,6 +150,11 @@ Regex-`PASS_REGULAR_EXPRESSION`-Erfolge. Desktop-GUI- und Harness-Tests sind
 nicht Teil dieser 183. Der Lauf validiert den kumulativen Hostvideo-Vertrag,
 ist aber weder die konsolidierte v0.48-Validierung `KR-4852` noch die
 Gate-Vorbereitung `KR-4853`.
+
+Die fokussierten Regressionen des nachfolgenden KR-4842-Zwischenblocks
+bestehen 22/22 in 1,57 Sekunden, einschliesslich Writer-Origin und
+VRAM32-Projektion. Der Port-CLI-Nachweis besteht 1/1 in 151,12 Sekunden.
+Dafuer lief weder eine neue Vollsuite noch `KR-4852`.
 
 Auf Hosts ohne implementiertes natives Backend bleibt CLI/Core weiterhin ohne
 Fenstersystem-Abhaengigkeit buildbar. `native_video_available()` liefert dort

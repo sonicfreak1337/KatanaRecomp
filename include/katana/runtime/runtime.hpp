@@ -174,6 +174,21 @@ translate_store_queue_prefetch(CpuState& cpu, std::uint32_t address);
 [[nodiscard]] std::uint32_t guest_read_u32(CpuState& cpu, std::uint32_t address);
 [[nodiscard]] std::int32_t guest_read_s8(CpuState& cpu, std::uint32_t address);
 [[nodiscard]] std::int32_t guest_read_s16(CpuState& cpu, std::uint32_t address);
+[[nodiscard]] std::uint8_t guest_read_u8_at(CpuState& cpu,
+                                            GuestInstructionOrigin origin,
+                                            std::uint32_t virtual_address);
+[[nodiscard]] std::uint16_t guest_read_u16_at(CpuState& cpu,
+                                              GuestInstructionOrigin origin,
+                                              std::uint32_t virtual_address);
+[[nodiscard]] std::uint32_t guest_read_u32_at(CpuState& cpu,
+                                              GuestInstructionOrigin origin,
+                                              std::uint32_t virtual_address);
+[[nodiscard]] std::int32_t guest_read_s8_at(CpuState& cpu,
+                                            GuestInstructionOrigin origin,
+                                            std::uint32_t virtual_address);
+[[nodiscard]] std::int32_t guest_read_s16_at(CpuState& cpu,
+                                             GuestInstructionOrigin origin,
+                                             std::uint32_t virtual_address);
 void guest_write_u8(CpuState& cpu,
                     std::uint32_t address,
                     std::uint8_t value,
@@ -186,6 +201,21 @@ void guest_write_u32(CpuState& cpu,
                      std::uint32_t address,
                      std::uint32_t value,
                      CodeWriteSource source = CodeWriteSource::Cpu);
+void guest_write_u8_at(CpuState& cpu,
+                       GuestInstructionOrigin origin,
+                       std::uint32_t virtual_address,
+                       std::uint8_t value,
+                       CodeWriteSource source = CodeWriteSource::Cpu);
+void guest_write_u16_at(CpuState& cpu,
+                        GuestInstructionOrigin origin,
+                        std::uint32_t virtual_address,
+                        std::uint16_t value,
+                        CodeWriteSource source = CodeWriteSource::Cpu);
+void guest_write_u32_at(CpuState& cpu,
+                        GuestInstructionOrigin origin,
+                        std::uint32_t virtual_address,
+                        std::uint32_t value,
+                        CodeWriteSource source = CodeWriteSource::Cpu);
 
 // The reference runtime exposes stores directly through Memory and therefore has no hidden dirty
 // operand-cache line. OCBI/OCBP/OCBWB still pass through this explicit contract so a future cache
