@@ -6,11 +6,58 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $buildOnlyMode = 'build-only'
-$requiredRuntimeAbi = 14
-$requiredPortContract = 7
 $requiredApplicationContract = 7
 $checkpointOrder = @('KR_RETAIL_NOT_REACHED', 'KR_RETAIL_ANALYSIS_CONTINUES')
 $script:RuntimeProcessStarts = 0
+
+function Get-StrictCMakePositiveInteger {
+    param(
+        [string]$Content,
+        [string]$VariableName,
+        [string]$SourcePath
+    )
+    $escapedName = [regex]::Escape($VariableName)
+    $declarationPattern =
+        '(?m)^[ \t]*(?i:set)[ \t]*\([ \t]*{0}(?=[ \t\r\n\)])' -f $escapedName
+    $valuePattern = (
+        '(?m)^[ \t]*(?i:set)[ \t]*\([ \t]*{0}[ \t]+(?<value>0|[1-9][0-9]*)' +
+        '[ \t]*\)[ \t]*(?:#[^\r\n]*)?\r?$') -f $escapedName
+    $declarations = [regex]::Matches($Content, $declarationPattern)
+    $values = [regex]::Matches($Content, $valuePattern)
+    if ($declarations.Count -ne 1 -or $values.Count -ne 1) {
+        throw "Kanonische CMake-Variable ist nicht genau einmal strikt definiert: $VariableName ($SourcePath)"
+    }
+    try {
+        $value = [int]::Parse(
+            $values[0].Groups['value'].Value,
+            [Globalization.NumberStyles]::None,
+            [Globalization.CultureInfo]::InvariantCulture)
+    } catch {
+        throw "Kanonische CMake-Variable ist keine gueltige positive Ganzzahl: $VariableName ($SourcePath)"
+    }
+    if ($value -le 0) {
+        throw "Kanonische CMake-Variable muss positiv sein: $VariableName ($SourcePath)"
+    }
+    return $value
+}
+
+function Resolve-KatanaContractVersions {
+    param([string]$RepositoryRoot)
+    $sourcePath = Join-Path $RepositoryRoot 'cmake\KatanaVersions.cmake'
+    if (-not (Test-Path -LiteralPath $sourcePath -PathType Leaf)) {
+        throw "Kanonische CMake-Vertragsquelle fehlt: $sourcePath"
+    }
+    $content = Get-Content -LiteralPath $sourcePath -Raw
+    if ([string]::IsNullOrWhiteSpace($content)) {
+        throw "Kanonische CMake-Vertragsquelle ist leer: $sourcePath"
+    }
+    return [pscustomobject]@{
+        runtime_abi = Get-StrictCMakePositiveInteger $content `
+            'KATANA_RUNTIME_ABI_VERSION' $sourcePath
+        port_project = Get-StrictCMakePositiveInteger $content `
+            'KATANA_PORT_PROJECT_CONTRACT_VERSION' $sourcePath
+    }
+}
 
 function Resolve-PhysicalPath {
     param([string]$Path)
@@ -265,6 +312,35 @@ function Get-WorkflowFailureClass {
     return $null
 }
 
+function Test-ExactContractInteger {
+    param($Value, [int]$Expected)
+    if ($null -eq $Value) { return $false }
+    $typeCode = [Type]::GetTypeCode($Value.GetType())
+    if ($typeCode -notin @(
+        [TypeCode]::SByte,
+        [TypeCode]::Byte,
+        [TypeCode]::Int16,
+        [TypeCode]::UInt16,
+        [TypeCode]::Int32,
+        [TypeCode]::UInt32,
+        [TypeCode]::Int64,
+        [TypeCode]::UInt64
+    )) {
+        return $false
+    }
+    return [decimal]$Value -eq [decimal]$Expected
+}
+
+function Assert-ContractCompatibility {
+    param($JobResult, $BuildPlan, $PortMetadata)
+    if (-not (Test-ExactContractInteger $JobResult.version $requiredApplicationContract) -or
+        -not (Test-ExactContractInteger $BuildPlan.version $requiredApplicationContract) -or
+        -not (Test-ExactContractInteger $PortMetadata.contract_version $requiredPortContract) -or
+        -not (Test-ExactContractInteger $PortMetadata.runtime_abi $requiredRuntimeAbi)) {
+        throw 'Runtime-, Port- oder Anwendungsvertrag des aktuellen Jobs ist inkompatibel.'
+    }
+}
+
 function Assert-BuildEvidence {
     param($Run)
     $failure = Get-WorkflowFailureClass $Run
@@ -327,12 +403,7 @@ function Assert-BuildEvidence {
         $resultIndex.project_identity -cne $job.project_identity) {
         throw 'Manifest, GDI, Portmetadaten und aktueller Job verlieren ihre Identitaetsbindung.'
     }
-    if ([int]$jobResult.version -ne $requiredApplicationContract -or
-        [int]$buildPlan.version -ne $requiredApplicationContract -or
-        [int]$portMetadata.contract_version -ne $requiredPortContract -or
-        [int]$portMetadata.runtime_abi -ne $requiredRuntimeAbi) {
-        throw 'Runtime-, Port- oder Anwendungsvertrag des aktuellen Jobs ist inkompatibel.'
-    }
+    Assert-ContractCompatibility $jobResult $buildPlan $portMetadata
     if ($buildPlan.status -ne 'built' -or -not [bool]$buildPlan.host_compilation -or
         [bool]$buildPlan.native_execution) {
         throw 'Buildplan verletzt den Build-only-Vertrag.'
@@ -393,7 +464,91 @@ function Write-AtomicReport {
     return ($Report | ConvertTo-Json -Depth 6 -Compress)
 }
 
+$repositoryRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..'))
+$requiredContracts = Resolve-KatanaContractVersions $repositoryRoot
+$requiredRuntimeAbi = [int]$requiredContracts.runtime_abi
+$requiredPortContract = [int]$requiredContracts.port_project
+
 if ($SelfTest) {
+    foreach ($parserCase in @(
+        [pscustomobject]@{
+            name = 'doppelte Variable'
+            content = "set(KATANA_RUNTIME_ABI_VERSION 1)`nset(KATANA_RUNTIME_ABI_VERSION 2)"
+        },
+        [pscustomobject]@{
+            name = 'ungueltiger Wert'
+            content = 'set(KATANA_RUNTIME_ABI_VERSION current)'
+        },
+        [pscustomobject]@{
+            name = 'Nullwert'
+            content = 'set(KATANA_RUNTIME_ABI_VERSION 0)'
+        }
+    )) {
+        try {
+            [void](Get-StrictCMakePositiveInteger $parserCase.content `
+                'KATANA_RUNTIME_ABI_VERSION' '<self-test>')
+            throw 'ungueltige-vertragsquelle-akzeptiert'
+        } catch {
+            if ($_.Exception.Message -eq 'ungueltige-vertragsquelle-akzeptiert') {
+                throw "$($parserCase.name) wurde als kanonische Vertragsquelle akzeptiert."
+            }
+        }
+    }
+    $resolvedContracts = Resolve-KatanaContractVersions $repositoryRoot
+    if ([int]$resolvedContracts.runtime_abi -ne $requiredRuntimeAbi -or
+        [int]$resolvedContracts.port_project -ne $requiredPortContract) {
+        throw 'SelfTest konnte die kanonischen Vertragswerte nicht reproduzierbar aufloesen.'
+    }
+    $matchingJobResult = [pscustomobject]@{ version = $requiredApplicationContract }
+    $matchingBuildPlan = [pscustomobject]@{ version = $requiredApplicationContract }
+    $matchingPortMetadata = [pscustomobject]@{
+        contract_version = $requiredPortContract
+        runtime_abi = $requiredRuntimeAbi
+    }
+    Assert-ContractCompatibility $matchingJobResult $matchingBuildPlan $matchingPortMetadata
+    foreach ($mismatch in @(
+        [pscustomobject]@{
+            name = 'Runtime-ABI'
+            metadata = [pscustomobject]@{
+                contract_version = $requiredPortContract
+                runtime_abi = 0
+            }
+        },
+        [pscustomobject]@{
+            name = 'Portvertrag'
+            metadata = [pscustomobject]@{
+                contract_version = 0
+                runtime_abi = $requiredRuntimeAbi
+            }
+        },
+        [pscustomobject]@{
+            name = 'Runtime-ABI-String'
+            metadata = [pscustomobject]@{
+                contract_version = $requiredPortContract
+                runtime_abi = [string]$requiredRuntimeAbi
+            }
+        },
+        [pscustomobject]@{
+            name = 'Portvertrag-Gleitkomma'
+            metadata = [pscustomobject]@{
+                contract_version = [double]$requiredPortContract
+                runtime_abi = $requiredRuntimeAbi
+            }
+        }
+    )) {
+        try {
+            Assert-ContractCompatibility $matchingJobResult $matchingBuildPlan $mismatch.metadata
+            throw 'contract-mismatch-akzeptiert'
+        } catch {
+            if ($_.Exception.Message -eq 'contract-mismatch-akzeptiert') {
+                throw "$($mismatch.name)-Mismatch wurde akzeptiert."
+            }
+            if ($_.Exception.Message -ne
+                'Runtime-, Port- oder Anwendungsvertrag des aktuellen Jobs ist inkompatibel.') {
+                throw
+            }
+        }
+    }
     Assert-BuildOnlyProcessAllowed 'build-only' 'tool'
     $toolProbe = Invoke-BudgetedProcess 'build-only' 'tool' `
         ([Diagnostics.Process]::GetCurrentProcess().MainModule.FileName) `
@@ -490,7 +645,6 @@ if ($SelfTest) {
 if ([string]::IsNullOrWhiteSpace($Config)) {
     throw 'Config ist erforderlich; alternativ -SelfTest verwenden.'
 }
-$repositoryRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..'))
 $configPath = Assert-OutsideRepository $Config $repositoryRoot
 $settings = Get-Content -LiteralPath $configPath -Raw | ConvertFrom-Json
 $requiredFields = @(
