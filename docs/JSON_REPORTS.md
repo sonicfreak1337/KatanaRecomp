@@ -45,7 +45,7 @@ Faehigkeitsbehauptung.
 
 ## Anwendungsjob und Buildplan
 
-`katana-application-job` Version 5 unterscheidet die Endzustaende `completed`,
+`katana-application-job` Version 7 unterscheidet die Endzustaende `completed`,
 `partial`, `failed` und `cancelled`. `partial` ist kein erfolgreicher Build:
 Analyseartefakte bleiben nutzbar, Codegen und Hostkompilierung werden jedoch
 unterdrueckt. Das Feld `analysis` enthaelt committed ausfuehrbare Bytes,
@@ -73,7 +73,7 @@ Kategorien auf ihre bestehenden stabilen Exitcodes ab. `partial` und
 `cancelled` sind keine versteckten Exceptions; ihr Feld bleibt `none`, der
 Prozessstatus ist dennoch ungleich null, solange der Job nicht `completed` ist.
 
-`katana-build-plan` Version 5 spiegelt denselben Zustand und dieselben Metriken.
+`katana-build-plan` Version 7 spiegelt denselben Zustand und dieselben Metriken.
 Bei `status=partial` ist `host_compilation=false`; nur `status=built` darf eine
 veroeffentlichte `game.exe` behaupten. Beide Berichte tragen `tool_version` aus
 derselben CMake-Definition wie CLI, GUI und Portprovenienz.
@@ -85,6 +85,11 @@ Reproduzierbarkeit, aktuelles Executable und No-run sowie eine allgemeine
 Fehlerklasse. Projektidentitaet, Datei- oder Eingabehashes, Gastadressen,
 Tracknamen, private Pfade und Rohlogs sind verboten. Der Bericht wird neben dem
 Ziel vorbereitet, allowlist-geprueft und atomar ersetzt.
+Der private Runner ermittelt Runtime-ABI und Portprojektvertrag strikt aus der
+kanonischen `cmake/KatanaVersions.cmake`. Fehlende, doppelte, malformed,
+nicht-positive oder ueberlaufende Deklarationen werden ebenso abgelehnt wie
+als JSON-String oder Gleitkommazahl eingeschleuste Vertragswerte. Der
+Anwendungskontrakt bleibt Version 7.
 
 `katana-persistent-image-v1` und `katana-dreamcast-storage-v1` berichten den
 lokalen Arbeitskopienzustand ohne Pfade, Hashes oder Nutzdaten.
@@ -104,3 +109,39 @@ geben Ereigniszeit und Joblaufzeit an. `log_chunk` enthaelt ausschliesslich neu
 beobachtete, bereits redigierte Hostausgabe; Diagnosen stehen typisiert in
 `diagnostic`. Fehler und Abbruch verwenden den aktiven Schritt statt eines
 informationsarmen generischen `failed`-Schritts.
+
+## Systemreplay
+
+`katana-system-replay` verwendet `replay_version=2`. Die konfigurierbare
+Kapazitaet betraegt standardmaessig 4.096 und maximal 65.536 Ereignisse; ein
+portabler Ereigniscode ist auf 64 Zeichen begrenzt. `record()` markiert einen
+Kapazitaetsueberlauf genau einmal. Ein von `try_record()` an einem
+unversiegelten Log abgewiesener Best-effort-Aufnahmeversuch erhoeht den
+Dropzaehler ebenfalls genau einmal; ein versiegelter Log bleibt unveraendert.
+Ein Log mit Drop darf weder versiegelt noch von `DeterministicSystemReplay`
+abgespielt werden; dasselbe gilt fuer einen unversiegelten Log.
+
+Der interne Ereignisvergleich und seine Hashes bleiben bytegenau. Im
+Standardmodus `serialize_values=false` werden dagegen `code`, `address`,
+`value`, `detail`, `auxiliary`, `event_hash` und
+`final_guest_state_hash` als `null` ausgegeben. Die Flags
+`codes_redacted`, `addresses_redacted`, `numeric_payloads_redacted` und
+`hashes_redacted` machen diese Grenze maschinenlesbar. Exakte Werte duerfen
+nur ueber ein ausdrueckliches lokales Opt-in serialisiert werden.
+
+## Dreamcast-Hardwareaudit
+
+Ein einzelner Bericht verwendet `katana.hardware-audit.v3`; die
+Mehrquellen-Huelle bleibt `katana.hardware-audit-set.v1`. Version 3 erkennt
+skalierbar ueber Dominatoren echte Natural Loops und klassifiziert sie als
+`counter`, `ram_poll`, `mmio_poll`, `mixed` oder `unknown`. Jeder Loop traegt
+Backedge-, Block-, Counter- und Zugriffsevidenz; Zugriffe unterscheiden
+linearen Speicher, Geraeteapertur, Runtimeunterstuetzung und `guards_loop`.
+
+Area-3-Haupt-RAM-Spiegel werden auf dieselbe physische Herkunft kanonisiert.
+Ungeklaerte Definitionen oder Vorgaenger, nicht gemappte P4-Zugriffe und
+rootlose SCCs werden konservativ nicht als belegter Hardware-Waitloop
+ausgegeben. Delay-Slot-Doppelkontext, nichtdominierende Schleifenkandidaten und
+eine synthetische 4.096-Block-Skalierungsfixture sichern diese Grenze. Lokale
+Detailberichte duerfen Gastadressen enthalten; oeffentliche Aggregate und
+Fehlerpakete bleiben adress- und inhaltsredigiert.

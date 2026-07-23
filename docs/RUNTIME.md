@@ -6,7 +6,7 @@ ungeloesten Kontrollflusspfaden mehr.
 
 ## ABI
 
-Die aktuelle Runtime-ABI ist Version `39`. Die typisierte Block-ABI ist
+Die aktuelle Runtime-ABI ist Version `40`. Die typisierte Block-ABI ist
 Version `3`; die Backend-Interface-ABI ist Version `3`.
 
 Generierter Code enthaelt eine Compile-Time-Pruefung gegen diese Version. Eine
@@ -61,6 +61,9 @@ ABI-Version 39 bindet source-relativierte native AOT-Templates und den
 scanoutgebundenen Direct-Framebuffer-Beweis in den kumulativen
 Runtimevertrag. Block-ABI 3 versioniert die zugehoerige virtuelle
 Quell-/Laufzeitadressabbildung.
+ABI-Version 40 versioniert den oeffentlichen begrenzten und standardmaessig
+redigierten Systemreplay-Vertrag. Kapazitaet, Dropstatus und Redaktionsmodus
+sind damit Bestandteil der Runtime-Schnittstelle.
 
 ## CMake
 
@@ -73,6 +76,15 @@ target_link_libraries(mein_programm PRIVATE KatanaRecomp::runtime)
 
 Der generierte C++-Code bindet automatisch `katana/runtime/runtime.hpp`,
 `katana/runtime/exception.hpp` und `katana/runtime/fpu.hpp` ein.
+
+Ein statisches Runtime-SDK aus einem Sanitizer-Build exportiert sein
+Sanitizerprofil als `INTERFACE`-Usage-Requirement von
+`KatanaRecomp::runtime`. Ein installierter Out-of-Tree-Consumer erbt dadurch
+insbesondere unter MSVC dieselben ASan-STL-Annotationen; GNU- und
+Clang-Consumer erben die passenden ASan-/UBSan-Compile- und Linkoptionen.
+Der Paketvertrag ist sowohl fuer das sanitizte als auch fuer das
+nicht-sanitizte Profil mit einem konfigurierten, kompilierten und gelinkten
+Consumer geprueft.
 
 ## Zentraler CPU-Zustand
 
@@ -406,6 +418,13 @@ spaetere Plattformkonfiguration.
   Haupt-RAM-, VRAM- und AICA-RAM-Backings; `Memory::peek_u32` lehnt Flash und
   MMIO auch bei einer fehlerhaften expliziten Whitelist vor jedem
   Geraetehandler ab
+- deterministische Systemreplays unter Schema 2 mit standardmaessig 4.096 und
+  maximal 65.536 Ereignissen sowie hoechstens 64 Zeichen langen Ereigniscodes;
+  eine Saettigung zaehlt genau einen Drop je abgewiesenem Ereignis und
+  verhindert Versiegelung und Replay. Ereigniswerte bleiben intern exakt,
+  waehrend Standard-JSON Code, Adresse, Wert, numerische Nutzlasten,
+  Ereignishash und Endzustandshash ohne ausdrueckliches lokales Opt-in
+  redigiert
 
 ## Eigenstaendiger Disc-Boot fuer Portanwendungen
 
@@ -461,7 +480,7 @@ generische C++-Emitter setzt auch bei einem durch Funktionsdiscovery
 nachfolgerlosen Block in jedem Backendmodus `PC` auf die Folgeadresse der
 letzten Gastinstruktion. Die Produktinvariante prueft einen Fallthrough relativ
 zu dieser tatsaechlichen Terminatorquelle und nicht zum Eintritt des
-umgebenden Wrappers. Der kumulative Stand verwendet Runtime-ABI 39, Block-ABI 3,
+umgebenden Wrappers. Der kumulative Stand verwendet Runtime-ABI 40, Block-ABI 3,
 Backend-Interface-ABI 3, PlatformServices-ABI 9, Portvertrag 24 und
 Host-Video-Vertrag 2.
 
@@ -486,9 +505,14 @@ Uebersetzungseinheitenvertrag.
 
 Die kompilierte Fallthroughregression deckt Einzelblock, lokales Chaining und
 normalen Backendpfad ab. Das aktuelle fokussierte Kern-Gate besteht 11/11. Der
-vollstaendige x64-Build ist mit zwoelf parallelen Jobs gruen; das anschliessende
-CTest-Gate besteht 178/178 Eintraege in rund 4:04 Minuten, darunter 176
-regulaere Passes und zwei erwartete Regex-`PASS_REGULAR_EXPRESSION`-Erfolge.
+x64-Debug-Kern-/Runtime-Build der Desktop-GUI-off-Konfiguration mit ASan,
+konfiguriertem MSVC-Coverage-Backend und `/analyze /WX` ist mit zwoelf
+parallelen Jobs gruen; das anschliessende vollstaendige CTest-Zwischengate
+besteht 183/183 Eintraege in 312,97 Sekunden, darunter 181 regulaere Passes und
+zwei erwartete Regex-`PASS_REGULAR_EXPRESSION`-Erfolge. Ein Coverage-Bericht
+wurde in diesem direkten CTest-Lauf nicht erhoben; Desktop-GUI- und Harness-
+Tests sind nicht Teil der 183. Dieser Nachweis schliesst weder `KR-4852` noch
+`KR-4853` oder die interne Freigabe `KR-4854`.
 
 Der optimierte ABI-38-Export der privaten PAL-Testbench dauerte mit zwoelf Jobs
 140,9 Sekunden, der inkrementelle Reexport 29,2 Sekunden. Die lokale
@@ -511,8 +535,9 @@ anschliessende Budget-Exit ist erwartet. BootExecutable, Spielboot, die
 strukturierten `KR-4848`-Disc-Ladetransaktionen und der allgemeine Materializer
 bleiben offen.
 
-Nach dem 178/178-Vollgate wurde der Vertrag-24-Port frisch neu exportiert und
-gebaut. Er umfasst 1.860 Funktionen, 37 Codepartitionen und null
+Nach dem frueheren 178/178-Gate wurde der damalige
+Vertrag-24-/Runtime-ABI-39-Port frisch neu exportiert und gebaut. Er umfasst
+1.860 Funktionen, 37 Codepartitionen und null
 Retailsektoren; die lokale read-only Originaldisc-Installation umfasst drei
 Tracks und 521.461 Sektoren. Der abschliessende 50-Millionen-Lauf reproduziert
 beide Framemarker mit zwei Gast-/Direct-FB-Frames und 302.287 geaenderten

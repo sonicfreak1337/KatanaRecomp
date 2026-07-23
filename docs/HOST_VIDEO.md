@@ -3,7 +3,7 @@
 KR-4701 definiert `katana-native-video` als Runtimevertrag Version 2. Externe
 Portprojekte erhalten die Schnittstelle ueber `katana_runtime`; die erzeugte
 `game.exe` benoetigt die KatanaRecomp-CLI nicht als Laufzeithuelle.
-Der kumulative Integrationsstand verwendet Runtime-ABI 39, Block-ABI 3,
+Der kumulative Integrationsstand verwendet Runtime-ABI 40, Block-ABI 3,
 Backend-Interface-ABI 3 und Portprojektvertrag 24.
 
 ## Vertrag
@@ -113,11 +113,19 @@ eines 50-Millionen-Gastzyklusbudgets in 5,3 Sekunden beide Marker. TA bleibt
 dabei null. Der folgende Budget-Exit ist erwartet; BootExecutable und
 Spielboot sind zu diesem Zeitpunkt noch nicht erreicht.
 
-Nach dem vollstaendigen 178/178-x64-Gate reproduziert ein frisch exportierter
-Vertrag-24-/Runtime-ABI-39-Port den Nachweis mit `frames=2`,
+Nach dem damaligen vollstaendigen 178/178-x64-Gate reproduzierte ein frisch
+exportierter Vertrag-24-/Runtime-ABI-39-Port den Nachweis mit `frames=2`,
 `pvr_guest_frames=2`, `pvr_direct_frames=2` und 302.287 geaenderten
 Direct-FB-Pixeln. TA, Rendergeneration und Materializer bleiben null; der
 Budget-Exit nach 50 Millionen Gastzyklen ist erwartet.
+
+Das vollstaendige CTest-Zwischengate der x64-Desktop-GUI-off-Konfiguration
+unter Runtime-ABI 40 besteht 183/183 Eintraege in 312,97 Sekunden, darunter
+181 regulaere Passes und zwei erwartete
+Regex-`PASS_REGULAR_EXPRESSION`-Erfolge. Desktop-GUI- und Harness-Tests sind
+nicht Teil dieser 183. Der Lauf validiert den kumulativen Hostvideo-Vertrag,
+ist aber weder die konsolidierte v0.48-Validierung `KR-4852` noch die
+Gate-Vorbereitung `KR-4853`.
 
 Auf Hosts ohne implementiertes natives Backend bleibt CLI/Core weiterhin ohne
 Fenstersystem-Abhaengigkeit buildbar. `native_video_available()` liefert dort

@@ -315,9 +315,18 @@ Letzter Gate-Vorbereitungstask:
 4. Gate-Berichte, Dokumentation, CHANGELOG und Status aktualisieren
 5. anschliessend zwingend fuer das Nutzerreview stoppen
 
+Meilensteinspezifische Ausnahme fuer v0.48: Bis alle v0.48-
+Implementierungsaufgaben abgeschlossen sind, laufen ausschliesslich
+fokussierte Builds und Regressionen. Das danach ausgefuehrte vollstaendige
+Freigabegate besitzt seit 23.07.2026 eine Standing Approval. Ist der
+unveraenderte finale Gatebericht vollstaendig gruen, gilt das Nutzerreview
+automatisch als bestanden und v0.48 als erreicht sowie release-ready; ein
+weiterer Review-Stopp oder eine erneute Freigabefrage entfaellt.
+
 Interne Meilenstein- oder Release-Freigabe:
 
-1. ausdrueckliche Nutzerfreigabe des unveraenderten Gate-Berichts pruefen
+1. ausdrueckliche Nutzerfreigabe des unveraenderten Gate-Berichts pruefen;
+   fuer v0.48 gilt stattdessen die dokumentierte Standing Approval
 2. keine neue Semantik, Tests oder Builds hinzufuegen
 3. bis einschliesslich v0.49.0 nur den naechsten internen Meilenstein
    freigeben; keine Versionierung, kein Release-Commit, kein Tag und keine
@@ -349,7 +358,8 @@ Die Abschlussmeldung enthaelt:
   Gate-Bericht
 - bekannte Einschraenkungen
 - naechsten nicht blockierten Task
-- bei Gate-Vorbereitungen: ausdruecklicher Hinweis auf den Review-Stopp
+- bei Gate-Vorbereitungen: ausdruecklicher Hinweis auf den Review-Stopp oder
+  die fuer den Meilenstein dokumentierte Standing Approval
 
 ## Pull-Request-Checkliste
 
@@ -361,7 +371,8 @@ Typ: Implementierung | Gate-Vorbereitung | interne Freigabe | Release-Gate
 - [ ] Testanforderungen dokumentiert
 - [ ] Gate-Vorbereitung: gesammelte Tests umgesetzt
 - [ ] Gate-Vorbereitung: frischer Build und vollstaendige Regression bestanden
-- [ ] Freigabe: unveraenderter Gate-Bericht vom Nutzer freigegeben
+- [ ] Freigabe: unveraenderter Gate-Bericht freigegeben oder dokumentierte
+      Standing Approval durch vollstaendig gruenes Gate erfuellt
 - [ ] vor v0.50.0: keine Release-Aktionen ausgefuehrt
 - [ ] Dokumentation aktualisiert
 - [ ] CHANGELOG aktualisiert
@@ -376,10 +387,11 @@ Typ: Implementierung | Gate-Vorbereitung | interne Freigabe | Release-Gate
 v0.48 P0 - vom belegten IP.BIN-Frame bis BootExecutable und Spielboot fortsetzen
 ```
 
-Abgeschlossen und in Roadmap/Taskliste markiert sind `KR-4841`, `KR-4843`,
-`KR-4844`, `KR-4845`, `KR-4846`, `KR-4915` und `KR-4850`. Der aktuelle
-Runtimevertrag steht auf Runtime-ABI 39, Block-ABI 3, Backend-Interface-ABI 3,
-BIOS-ABI 9, Portprojektvertrag 24 und Host-Video-Vertrag 2.
+Abgeschlossen und in Roadmap/Taskliste markiert sind `KR-4831`, `KR-4841`,
+`KR-4843`, `KR-4844`, `KR-4845`, `KR-4846`, `KR-4915` und `KR-4850`. Der
+aktuelle Runtimevertrag steht auf Runtime-ABI 40, Block-ABI 3,
+Backend-Interface-ABI 3, PlatformServices-ABI 9, BIOS-ABI 9,
+Portprojektvertrag 24 und Host-Video-Vertrag 2.
 Das verbindliche
 XenonRecomp-artige Produktmodell rekompiliert `IP.BIN` und BootExecutable
 statisch aus SH-4 in nativen PC-Code. Dreamcast-Komponenten bleiben typisierte,
@@ -471,8 +483,25 @@ Freie Speicherprobes sind MMU-bewusst und strukturell auf echte lineare
 Haupt-RAM-, VRAM- und AICA-RAM-Backings begrenzt. `Memory::peek_u32` weist
 auch ein versehentlich erlaubtes `MmioMemoryDevice` vor dessen Handler ab.
 Flash wird ohne einen eigenen expliziten Side-Effect-Free-Peek-Vertrag nicht
-mehr angeboten. Die Wait-Loop-Klassifikation mit Wertwechsel und
-Writer-Provenienz bleibt der offene Rest von `KR-4842`.
+mehr angeboten. Hardware-Audit-Schema 3 erkennt Natural Loops ueber skalierbare
+Dominatorberechnung, klassifiziert Counter-, RAM-Poll-, MMIO-Poll-, Mixed- und
+Unknown-Loops und liefert Access-/Guard-Evidenz. Area-3-Haupt-RAM-Spiegel werden
+kanonisiert; unaufgeloeste Definitionen bleiben konservativ Unknown. Delay-
+Slot-Doppelkontexte, wurzellose SCCs und ein 4.096-Block-Graph besitzen
+Regressionen. Dynamische Wertwechselfolgen, tatsaechliche Writer-Provenienz und
+Diagnose-an/aus-Invarianz bleiben der offene Rest von `KR-4842`.
+
+Systemreplay-Schema 2 besitzt eine feste, konfigurierbare Kapazitaet von
+standardmaessig 4.096 und hoechstens 65.536 Ereignissen; portable
+Ereigniscodes sind auf 64 Zeichen begrenzt. Ein gesaettigter Recordversuch
+zaehlt exakt einen Drop. Jeder Drop verbietet Versiegelung und Replay, waehrend
+ein bereits versiegelter Log unveraenderlich bleibt. Codes, Adressen, Werte,
+numerische Payloads und Hashes bleiben intern fuer Ereignishash und
+Replayvergleich exakt. Das Standard-JSON redigiert `code`, `address`, `value`,
+`detail`, `auxiliary`, `event_hash` und `final_guest_state_hash`; nur ein
+ausdrueckliches lokales Opt-in serialisiert sie. `KR-4911` bleibt offen, bis
+Produktwiring, gemeinsame Stopptaxonomie, letzter stabiler Checkpoint und ein
+redigiertes Fehler-Envelope ebenfalls geschlossen sind.
 
 Der SH-4-DMAC-Channel-2-Pfad verwendet fuer TA den oeffentlichen externen
 Memory-to-Device-Vertrag `RS=2`, 32-Byte-Einheiten, inkrementierende Quelle,
@@ -500,17 +529,32 @@ recompilierten `IP.BIN`-Direct-Framebuffer innerhalb eines
 erwartet. BootExecutable, Spielboot, `KR-4848` und der produktive TA-Pfad
 bleiben offen.
 
-Das aktuelle fokussierte Kern-Gate besteht 11/11. Der vollstaendige x64-Build
-ist mit zwoelf parallelen Jobs gruen; das anschliessende CTest-Gate besteht
-178/178 Eintraege in rund 4:04 Minuten, darunter 176 regulaere Passes und zwei
-erwartete Regex-`PASS_REGULAR_EXPRESSION`-Erfolge. Ein einmaliger Vorlauf ohne
-korrekt geladene x64-`VsDevCmd`-Umgebung scheiterte bereits am
+Das aktuelle fokussierte Kern-Gate besteht 11/11. Der x64-Kern-/Runtime-Build
+der Desktop-GUI-off-Konfiguration ist mit zwoelf parallelen Jobs gruen; deren
+vollstaendiges CTest-Zwischengate auf Quellstand `924ea89` besteht 183/183
+Eintraege in 312,97 Sekunden, darunter 181 regulaere Passes und zwei erwartete
+Regex-`PASS_REGULAR_EXPRESSION`-Erfolge. Desktop-GUI- und Harness-Tests sind
+nicht Teil dieser 183; der Runner-Selbsttest ist separat gruen. Ein einmaliger
+Vorlauf ohne korrekt
+geladene x64-`VsDevCmd`-Umgebung scheiterte bereits am
 Standardbibliotheksinclude `cstdint`; der identische Lauf in der korrekt
 geladenen Toolchain ist vollstaendig gruen. Dies war ein Umgebungsfehler und
-kein Quellcodefehler.
+kein Quellcodefehler. Das Zwischengate ist keine Erledigung von `KR-4852`,
+`KR-4853` oder `KR-4854`.
 
-Nach diesem Vollgate wurde der Vertrag-24-Port unter Runtime-ABI 39 und
-Block-ABI 3 frisch neu exportiert und gebaut: 1.860 Funktionen, 37
+Der private Retail-Runner bezieht Runtime-ABI und Portprojektvertrag strikt und
+jeweils genau einmal aus der kanonischen `cmake/KatanaVersions.cmake`.
+Fehlende, doppelte, ungueltige oder nullwertige Definitionen sowie JSON-Strings
+und Gleitkommazahlen anstelle ganzzahliger Vertragswerte werden ohne
+Typkoerzierung abgelehnt. Ein mit Sanitizern gebautes statisches Runtime-SDK
+exportiert seine erforderlichen Compiler- und Linkoptionen als
+`KatanaRecomp::runtime`-Usage-Requirements; der installierte Out-of-Tree-
+Verbraucher erbt damit dasselbe ASan-ABI-Profil. Das ist ein Teilstand von
+`KR-4801`, nicht dessen Abschluss.
+
+Historische ABI-39-Portevidenz: Nach dem damaligen 178/178-Zwischengate wurde
+der Vertrag-24-Port unter Runtime-ABI 39 und Block-ABI 3 frisch neu exportiert
+und gebaut: 1.860 Funktionen, 37
 Codepartitionen und null Retailsektoren. Die lokale read-only Installation der
 Originaldisc umfasst drei Tracks und 521.461 Sektoren. Der abschliessende
 50-Millionen-Lauf reproduziert beide Framemarker mit `frames=2`,
@@ -521,28 +565,29 @@ Budget-Exit ist erwartet.
 Weiter offen:
 
 ```text
-KR-4842: Wait-Loop-Klassifikation vervollstaendigen
+KR-4842: dynamische Wertwechsel, Writer-Provenienz und Diagnoseinvarianz
 KR-4847: EX-38/39-Vertrag und laufende G1-Timeout-/Overrun-Grenzen schliessen
 KR-4848: strukturierte Disc-Ladetransaktionen und Registry latenter nativer Module
 KR-4849: Direct-Texture-Zielprogression und restliche TA/PVR-Eingangskette
+KR-4911: Produktwiring, Stopptaxonomie, Checkpoint und Fehler-Envelope
 ```
 
 Die verbindliche Abhaengigkeitsfolge lautet fuer die offenen Bootpfade
 `KR-4842 -> KR-4911 -> KR-4912 -> KR-4848`; `KR-4849` schliesst den
 produktiven TA/PVR-Vertrag. `KR-4915` und `KR-4850` sind durch den legitimen
 vorgezogenen Direct-Framebuffer-Pfad bereits erfuellt. `KR-4814` und
-`KR-4914` folgen erst in v0.49 auf der durch `KR-4854` freigegebenen
-Framebasis.
+`KR-4914` folgen als verbindliche Post-Frame-Arbeit in v0.48 auf `KR-4850`
+und muessen vor `KR-4852` abgeschlossen sein.
 
 Ein erster Gastframe und sein Host-Present sind nachgewiesen; BootExecutable
 und Spielboot sind es noch nicht. Moderne Xbox-, DualSense- und vergleichbare
-Hostcontroller gehoeren zu `KR-4814`/`KR-4914` in v0.49 und bleiben hinter der
-internen v0.48-Freigabe aus `KR-4854`. Waehrend
-nach diesem abgeschlossenen Auditgate in der Kernrunde wieder nur fokussierte
-Targets ausfuehren; das finale konsolidierte Gate und die abschliessende
-private PAL-Wiederholung bleiben Teil des vorgesehenen Freigabeblocks. Der
-bereits ausgefuehrte vorgezogene Lauf ist Diagnoseevidenz, kein Ersatz fuer
-Spielboot oder Freigabe. Jeder Prozess endet
+Hostcontroller gehoeren zu `KR-4814`/`KR-4914` in v0.48; Spielboot bleibt
+dabei P0, Controllerintegration P1. In der Kernrunde nur fokussierte Targets
+ausfuehren. Das einzige finale Vollgate laeuft nach allen v0.48-
+Implementierungen in `KR-4852`; `KR-4853` uebernimmt dessen unveraenderten
+Bericht und fuehrt weder Build noch Test erneut aus. Der bereits ausgefuehrte
+vorgezogene Lauf ist Diagnoseevidenz, kein Ersatz fuer Spielboot oder
+Freigabe. Jeder Prozess endet
 spaetestens nach 15 Minuten. Original-GDI und Tracks sind immer read-only und
 werden nie geloescht; veraltete erzeugte Portordner duerfen nach eindeutiger
 Pfadpruefung ersetzt werden. Keine Tags vor der Alpha.

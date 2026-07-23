@@ -2,7 +2,7 @@
 
 Der mit KR-4508 eingefuehrte Portprojektvertrag Version 3 trennt
 Analyseerfolg, Eingabeidentitaet und tatsaechliche Gastausfuehrung. Der
-aktuelle kumulative Stand verwendet Portprojektvertrag 24, Runtime-ABI 39,
+aktuelle kumulative Stand verwendet Portprojektvertrag 24, Runtime-ABI 40,
 Block-ABI 3 und Backend-Interface-ABI 3. Keine der Vertrauensaussagen wird aus
 der blossen Erzeugung oder dem Start eines Hostprozesses abgeleitet.
 
@@ -36,8 +36,9 @@ Erfolgsmeldungen ausbleiben.
 
 ## Plattformdienste
 
-Der PlatformServices-ABI Version 4 verwendet die vorhandenen
-Dreamcast-Runtimekomponenten:
+PlatformServices-ABI 4 fuehrte diese Bindung an die vorhandenen
+Dreamcast-Runtimekomponenten ein; der aktuelle kumulative Vertrag steht auf
+PlatformServices-ABI 9:
 
 - Interrupts werden ueber den Interrupt-Router angenommen.
 - DMA wird ueber den SH-4-DMAC geplant und bleibt bis zur Schedulerausfuehrung
@@ -63,6 +64,12 @@ Schnittmenge. Eine absichtlich abgelehnte Schicht muss deshalb den
 Gesamtstatus ablehnen.
 
 Der reproduzierbare Nachweis besteht aus den CTests fuer Wertanalyse,
-ISA-Abdeckung, Portexport, Port-CLI, Application und PlatformServices sowie der
-vollstaendigen 166-Test-Suite. Alle Fixtures sind synthetisch; Spielinhalte und
-private Adressen sind nicht Bestandteil des Repository.
+ISA-Abdeckung, Portexport, Port-CLI, Application und PlatformServices sowie dem
+vollstaendigen CTest-Zwischengate der x64-Debug-Desktop-GUI-off-Konfiguration
+mit ASan, konfiguriertem MSVC-Coverage-Backend und `/analyze /WX`. Es besteht
+183/183 Eintraege in 312,97 Sekunden, darunter 181 regulaere Passes und zwei
+erwartete Regex-Erfolge. Ein Coverage-Bericht wurde in diesem direkten CTest-
+Lauf nicht erhoben; Desktop-GUI- und Harness-Tests sind nicht Teil der 183.
+Alle Fixtures sind synthetisch; Spielinhalte und private Adressen sind nicht
+Bestandteil des Repository. Das Zwischengate ist kein Abschluss von `KR-4852`,
+`KR-4853` oder `KR-4854`.

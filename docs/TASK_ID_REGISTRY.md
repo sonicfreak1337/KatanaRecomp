@@ -77,11 +77,12 @@ fuer neue Arbeit. Diese Zuordnung gilt als korrigierter Planungsfehler.
 
 ## Aktuelle Meilensteinzuordnung
 
-- v0.48: `KR-4831`, `KR-4841` bis `KR-4854` sowie `KR-4911`, `KR-4912`,
-  `KR-4913` und `KR-4915`
-- v0.49: `KR-4801` bis `KR-4803`, `KR-4811` bis `KR-4814`, `KR-4821`
-  bis `KR-4824`, `KR-4901` bis `KR-4905`, `KR-4914` und `KR-4916`;
-  Controllerarbeit `KR-4814`/`KR-4914` beginnt erst nach dem v0.48-Frame-Gate
+- v0.48: `KR-4814`, `KR-4831`, `KR-4841` bis `KR-4854` sowie `KR-4911`,
+  `KR-4912`, `KR-4913`, `KR-4914` und `KR-4915`; Controllerarbeit
+  `KR-4814`/`KR-4914` beginnt nach dem durch `KR-4850` belegten Gastframe und
+  endet vor dem einzigen finalen Vollgate in `KR-4852`
+- v0.49: `KR-4801` bis `KR-4803`, `KR-4811` bis `KR-4813`, `KR-4821`
+  bis `KR-4824`, `KR-4901` bis `KR-4905` und `KR-4916`
 - `KR-4804` und `KR-4805` sind retired; die Nachfolger sind `KR-4853` und
   `KR-4854`.
 

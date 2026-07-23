@@ -13,10 +13,13 @@ identische Disc-Reloads an natives AOT gebunden; offen bleiben strukturierte
 Ladetransaktionen, der allgemeine native Materializer und die Registry latenter
 Module. `KR-4849` bleibt trotz synthetisch verbundenem Channel-2-/TA-EOL-Pfad
 fuer den produktiven Gastpfad offen. `KR-4842` erzwingt fuer freie Probes
-inzwischen echte lineare Backings selbst; Wait-Loop-Klassifikation,
-Wertwechsel und Writer-Provenienz laufen getrennt weiter.
+inzwischen echte lineare Backings selbst. Hardware-Audit-Schema 3 erkennt
+Natural Loops ueber skalierbare Dominatoren und klassifiziert Counter-, RAM-
+Poll-, MMIO-Poll-, Mixed- und Unknown-Loops samt Access-/Guard-Evidenz und
+kanonischen Area-3-Spiegeln. Dynamischer Wertwechsel, tatsaechliche Writer-
+Provenienz und Diagnose-an/aus-Invarianz laufen getrennt weiter.
 
-Der aktuelle kumulative Vertrag verwendet Runtime-ABI 39, Block-ABI 3,
+Der aktuelle kumulative Vertrag verwendet Runtime-ABI 40, Block-ABI 3,
 Backend-Interface-ABI 3, Portprojektvertrag 24 und Host-Video-Vertrag 2.
 
 Der aktuelle Sicherheitsblock schliesst zwei zuvor nur behauptete
@@ -28,6 +31,19 @@ undarstellbaren Schedulerfrist `READY|ERR`, ABRT-Sense und einen finalen
 Command-IRQ. BIOS-Read und -Streaming liefern denselben Fehler als einmaligen
 Vierwortstatus mit null Bytes und lassen den naechsten Request zu. Die
 kombinierte fokussierte Suite fuer Memory, Portexport und GD-ROM besteht 5/5.
+
+Systemreplay-Schema 2 schliesst zusaetzlich das unbegrenzte Wachstum des
+Diagnosepfads: Standardlogs halten 4.096, konfigurierbar hoechstens 65.536
+Ereignisse; Ereigniscodes sind auf 64 Zeichen begrenzt. Ein gesaettigter
+Recordversuch zaehlt exakt einen Drop. Jeder Drop verbietet Versiegelung und
+Replay, ein bereits versiegelter Log bleibt danach unveraenderlich. Codes,
+Adressen, Werte, numerische Payloads und Hashes bleiben intern fuer Hash und
+deterministischen Vergleich exakt. Das Standard-JSON redigiert dagegen
+`code`, `address`, `value`, `detail`, `auxiliary`, `event_hash` und
+`final_guest_state_hash`; exakte Serialisierung verlangt ein ausdrueckliches
+lokales Opt-in. Die zwei fokussierten Replay- und Phase9-Regressionen bestehen
+2/2. `KR-4911` bleibt fuer Produktwiring, gemeinsame Stopptaxonomie, letzten
+stabilen Checkpoint und das redigierte Fehler-Envelope offen.
 
 Der mit Runtime-ABI 38 eingefuehrte Zwischenblock schliesst zwei allgemeine
 Hardwarevertraege. G1-DMA validiert Schutzfenster, 32-Bit-Ueberlauf und die
@@ -87,15 +103,38 @@ Router waehlt den Shard. Beim aktuellen PAL-Port schrumpft die zentrale
 Zeilen; der groesste der 43 Shards misst 393.454 Byte. Eine synthetische
 513-Block-Regression prueft zwei Shards samt Entfernung veralteter Dateien; das
 vollstaendige synthetische Ninja-/MSVC-Projekt kompiliert und linkt in 15
-Sekunden. Das aktuelle fokussierte Kern-Gate besteht 11/11. Der vollstaendige
-x64-Build ist mit zwoelf parallelen Jobs gruen; das anschliessende CTest-Gate
-besteht 178/178 Eintraege in rund 4:04 Minuten, darunter 176 regulaere Passes
-und zwei erwartete Regex-`PASS_REGULAR_EXPRESSION`-Erfolge. Der CLI-
+Sekunden. Das aktuelle fokussierte Kern-Gate besteht 11/11. Der x64-Kern-/
+Runtime-Build der Desktop-GUI-off-Konfiguration ist mit zwoelf parallelen Jobs
+gruen; deren vollstaendiges CTest-Zwischengate auf Quellstand `924ea89`
+besteht 183/183 Eintraege in 312,97 Sekunden, darunter 181 regulaere Passes und
+zwei erwartete Regex-`PASS_REGULAR_EXPRESSION`-Erfolge. Desktop-GUI- und
+Harness-Tests sind nicht Teil dieser 183; der Runner-Selbsttest ist separat
+gruen. Dies ist ausdruecklich kein Abschluss von `KR-4852`, `KR-4853` oder
+`KR-4854`. Der CLI-
 Hostbuild verwendet `KATANA_HOST_BUILD_JOBS`, ersatzweise die
 Codegen-Workerzahl oder die gemeldete CPU-Threadzahl.
 
-Nach diesem Vollgate wurde der Vertrag-24-Port unter Runtime-ABI 39 und
-Block-ABI 3 frisch neu exportiert und gebaut: 1.860 Funktionen, 37
+Fuer die restliche v0.48-Implementierung laufen nur fokussierte Targets und
+Regressionen. Das naechste Vollgate folgt erst nach Abschluss aller
+v0.48-Implementierungen. Der Nutzer hat am 23.07.2026 eine Standing Approval
+erteilt: Ist dieses finale Gate vollstaendig gruen, gilt die Review automatisch
+als bestanden und v0.48 ohne weitere Freigabefrage als erreicht sowie
+release-ready. Die Pre-Alpha-Freigabe bleibt ungetaggt; Tags beginnen erst mit
+der Alpha.
+
+Der private Retail-Runner bezieht Runtime-ABI und Portprojektvertrag strikt aus
+der kanonischen `cmake/KatanaVersions.cmake`. Fehlende, doppelte, ungueltige
+oder nullwertige Definitionen und typkoerzierte JSON-Vertragswerte wie Strings
+oder Gleitkommazahlen werden abgelehnt. Sanitizer-Builds des statischen
+Runtime-SDK exportieren ihre erforderlichen Compiler- und Linkoptionen als
+`KatanaRecomp::runtime`-Usage-Requirements, sodass auch der installierte
+Out-of-Tree-Verbraucher dasselbe ASan-ABI-Profil verwendet. Dies ist ein
+belegter Teilstand von `KR-4801`; das Task bleibt bis zum vollstaendigen
+minimalen, reproduzierbaren externen SDK offen.
+
+Historische ABI-39-Portevidenz: Nach dem damaligen 178/178-Zwischengate wurde
+der Vertrag-24-Port unter Runtime-ABI 39 und Block-ABI 3 frisch neu exportiert
+und gebaut: 1.860 Funktionen, 37
 Codepartitionen und null Retailsektoren. Die lokale read-only Installation der
 Originaldisc umfasst drei Tracks und 521.461 Sektoren. Der abschliessende
 50-Millionen-Lauf reproduziert `KR_FIRST_GUEST_FRAME` und
@@ -108,13 +147,14 @@ Materializer und die Registry latenter nativer Module offen. Der erste
 Gastframe und sein Host-Present sind belegt; Spielboot und BootExecutable
 bleiben offen.
 Naechstes Gate: `v0.48.0` - Boot- und Frame-Integration
-Weitere interne Gates: `v0.48.0` und `v0.49.0` Alpha-Candidate
+Danach: `v0.49.0` Alpha-Candidate
 Erster oeffentlicher Release: `v0.50.0` Alpha
 
 ## Aktiver P0: Vom ersten Sonic-Adventure-PAL-Frame bis zum Spielboot
 
-Stand 2026-07-23: `KR-4841`, `KR-4843`, `KR-4844`, `KR-4845`, `KR-4846`
-sowie die vorgezogenen Marker `KR-4915` und `KR-4850` sind abgeschlossen. Das
+Stand 2026-07-23: `KR-4831`, `KR-4841`, `KR-4843`, `KR-4844`, `KR-4845`,
+`KR-4846` sowie die vorgezogenen Marker `KR-4915` und `KR-4850` sind
+abgeschlossen. Das
 verbindliche Produktziel bleibt XenonRecomp-artig:
 `IP.BIN` und BootExecutable werden statisch aus SH-4 in nativen PC-Code
 rekompiliert; die Zielruntime stellt nur typisierte Dreamcast-
@@ -184,10 +224,14 @@ Der vorgezogene private PAL-AOT-Lauf erreicht mit einem
 50-Millionen-Gastzyklusbudget in 5,3 Sekunden erstmals
 `KR_FIRST_GUEST_FRAME` und `KR_FIRST_PRESENTED_FRAME`. Quelle ist der
 recompilierte IP.BIN-Direct-Framebuffer; TA bleibt null. Der anschliessende
-Budget-Exit ist erwartet. Das aktuelle x64-Zwischengate ist mit 178/178
-CTest-Eintraegen bestanden; das finale Freigabegate folgt weiterhin nach dem
-zusammenhaengenden Kernblock. BootExecutable, Spielboot, `KR-4848` und der
-produktive TA-Pfad bleiben offen.
+Budget-Exit ist erwartet. Das vollstaendige CTest-Zwischengate der x64-
+Desktop-GUI-off-Konfiguration auf Quellstand `924ea89` ist mit 183/183
+Eintraegen in 312,97 Sekunden und zwoelf parallelen Jobs bestanden, darunter
+181 regulaere Passes und zwei erwartete
+Regex-`PASS_REGULAR_EXPRESSION`-Erfolge; Desktop-GUI- und Harness-Tests sind
+nicht Teil dieser 183. Das einzige finale Freigabegate folgt erst nach
+Abschluss aller v0.48-Implementierungen. BootExecutable, Spielboot, `KR-4848`
+und der produktive TA-Pfad bleiben offen.
 
 Die folgenden Abschnitte dokumentieren fruehere Bring-up-Zwischenstaende.
 Dortige Aussagen, ein Gastframe sei noch nicht belegt, gelten jeweils nur fuer
@@ -199,6 +243,13 @@ PAL-Build 55.504 erreichbare SH-4-Instruktionen in 815 Funktionen. Es bleiben
 keine unbekannten SH-4-Instruktionen und keine harte statische Hardwareluecke.
 Der SCIF-Produktpfad, AICA-ARM-Reset, PVR-Blank/Border-Scanout und die komplette
 Store-Queue-/Channel-2-DMAC-/TA-/ASIC-Kette sind allgemein implementiert.
+Schema 3 ergaenzt Natural-Loop-Bloecke und Backedges ueber eine skalierbare
+Dominatorberechnung, klassifiziert Counter-, RAM-Poll-, MMIO-Poll-, Mixed- und
+Unknown-Loops und berichtet Access-/Guard-Evidenz. Area-3-Haupt-RAM-Spiegel
+werden kanonisiert; unaufgeloeste Definitionen bleiben konservativ Unknown.
+Delay-Slot-Doppelkontexte, wurzellose SCCs und ein 4.096-Block-Skalierungstest
+sichern die statische Seite. `KR-4842` bleibt fuer dynamische Wertwechsel,
+tatsaechliche Writer-Provenienz und Diagnose-an/aus-Invarianz offen.
 
 Der generierte Port praesentiert erst nach einem validierten TA- oder
 Direct-FB-Gastframe und meldet `KR_FIRST_GUEST_FRAME` nicht fuer blosses
@@ -323,7 +374,7 @@ MMIO-Zugriff liegt im aktiven OCRAM; der fruehere Abbruch nach 12 Gastzyklen
 ist damit beseitigt. TA/PVR und ein echter Gastframe bleiben fuer den laengeren
 Folgelauf weiterhin offen.
 
-Runtime-ABI 39, Block-ABI 3, Backend-Interface-ABI 3, BIOS-ABI 9,
+Runtime-ABI 40, Block-ABI 3, Backend-Interface-ABI 3, BIOS-ABI 9,
 Portprojektvertrag 24 und Host-Video-Vertrag 2 bilden den kumulativen
 v0.48-Stand ab.
 PlatformServices-ABI 9 versioniert das invalidierungs- und timinggesicherte lokale
@@ -914,8 +965,10 @@ Die Controllergrundlage existiert in Maple und Hostruntime. Der generierte Port
 pollt Eingaben jedoch erst nach dem synchronen Gastlauf. Controllerunterstuetzung
 braucht deshalb vor allem eine echte verschraenkte Runtime-Schleife, nicht noch
 eine weitere Taste in einem Enum. `KR-4814` und die private interaktive Sitzung
-`KR-4914` gehoeren jetzt zu v0.49 und beginnen dort strikt auf der in v0.48
-freigegebenen Framebasis nach `KR-4850`.
+`KR-4914` gehoeren als Post-Frame-Arbeit verbindlich zu v0.48. Der durch
+`KR-4850` belegte Gastframe gibt beide Aufgaben frei; sie muessen vor dem
+einzigen finalen Vollgate in `KR-4852` abgeschlossen sein. Spielboot bleibt
+dabei P0, Controllerintegration P1.
 
 Die GUI besitzt intern mehrere Seiten und strukturierte Jobereignisse, zeigt
 unter Windows aber fast nur eine Fliesstextzusammenfassung, zwei Balken und ein
@@ -1090,11 +1143,14 @@ KR-4831 und KR-4841
 KR-4841 -> KR-4842 -> KR-4911 -> KR-4912
 KR-4843 und KR-4912 -> KR-4848 -> KR-4913
 KR-4847 und KR-4913 -> KR-4849 -> KR-4915 -> KR-4850
+KR-4850 -> KR-4814 -> KR-4914
 KR-4850 -> KR-4851
-KR-4851 -> KR-4852 bis KR-4854
+KR-4851 und KR-4914
+-> KR-4852 (einziges finales Vollgate; gruen = Nutzerreview bestanden)
+-> KR-4853 (unveraenderter Gatebericht, kein erneuter Build oder Test)
+-> KR-4854
 
-v0.49 Controller-, Port-, Harness- und GUI-Integration:
-KR-4814 -> KR-4914
+v0.49 Port-, Harness-, GUI-Integration und Alpha-Candidate:
 KR-4801 bis KR-4803, KR-4811 bis KR-4813 und KR-4821 bis KR-4824
 -> KR-4916
 -> KR-4901 bis KR-4903 -> KR-4904 -> KR-4905

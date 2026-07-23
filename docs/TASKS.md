@@ -13,7 +13,10 @@ tausend Zeilen wiederholt.
   erlaubt; Quell-GDIs werden dabei nie geloescht oder veraendert.
 - Deterministische Probes und interaktive Sitzungen sind getrennte Modi.
 - Interaktive Sitzungen gelten nie als Gateevidenz.
-- Gate-Vorbereitung stoppt immer fuer das Nutzerreview.
+- Gate-Vorbereitung stoppt grundsaetzlich fuer das Nutzerreview. Fuer v0.48
+  gilt die am 23.07.2026 erteilte Standing Approval: Sind alle
+  Implementierungen abgeschlossen und das finale Gate vollstaendig gruen, ist
+  das Review automatisch bestanden.
 - Gate-Freigaben erzeugen nur dann einen oeffentlichen Release, wenn die Task das
   ausdruecklich verlangt.
 - Eine Task-ID ist ab ihrem ersten Merge semantisch unveraenderlich.
@@ -46,16 +49,14 @@ KR-4831 und KR-4841
 KR-4841 -> KR-4842 -> KR-4911 -> KR-4912
 KR-4843 und KR-4912 -> KR-4848 -> KR-4913
 KR-4847 und KR-4913 -> KR-4849 -> KR-4915 -> KR-4850
+KR-4850 -> KR-4814 -> KR-4914
 KR-4850 -> KR-4851
-KR-4851 -> KR-4852
-  -> KR-4853
-  -> Nutzerreview
+KR-4851 und KR-4914
+  -> KR-4852 (einziges finales Vollgate; gruen = Nutzerreview bestanden)
+  -> KR-4853 (uebernimmt den unveraenderten Gatebericht; kein Build oder Test)
   -> KR-4854
 
-v0.49 Controller-, Port-, Harness-, GUI-Integration und Alpha-Candidate:
-KR-4854
-  -> KR-4814
-  -> KR-4914
+v0.49 Port-, Harness-, GUI-Integration und Alpha-Candidate:
 KR-4854
   -> KR-4801, KR-4811, KR-4821 und KR-4824
   -> KR-4802
@@ -71,16 +72,24 @@ KR-4812, KR-4823 und KR-4914
   -> KR-5000
 ```
 
-Korrektheit blockiert Performance. Waehrend KR-4841 bis KR-4851 werden
+Korrektheit blockiert Performance. Waehrend aller noch offenen v0.48-
+Implementierungsaufgaben einschliesslich `KR-4814` und `KR-4914` werden
 grundsaetzlich nur betroffene Targets und kleine Regressionen ausgefuehrt. Der
-First-Frame-/KR-4848-Zwischenblock erhielt zusaetzlich ein vollstaendiges
-x64-Auditgate mit 178/178 CTest-Eintraegen; die finale konsolidierte Suite und
-der private Retaillauf bleiben Teil von KR-4852. Jeder Prozess besitzt ein
+First-Frame-/KR-4848-Zwischenblock erhielt zusaetzlich auf Quellstand
+`924ea89` ein vollstaendiges CTest-Zwischengate der x64-Desktop-GUI-off-
+Konfiguration mit 183/183 Eintraegen in 312,97 Sekunden bei zwoelf parallelen
+Jobs, darunter 181 regulaere Passes und zwei erwartete
+Regex-`PASS_REGULAR_EXPRESSION`-Erfolge. Desktop-GUI- und Harness-Tests sind
+nicht Teil dieser 183; der Runner-Selbsttest ist separat gruen. Die finale
+konsolidierte Suite und die privaten Reproduktionslaeufe folgen erst nach
+Abschluss aller v0.48-Implementierungen genau einmal in `KR-4852`. `KR-4853`
+uebernimmt nur den unveraenderten gruenen Bericht. Das Zwischengate schliesst
+`KR-4852`, `KR-4853` oder `KR-4854` nicht ab. Jeder Prozess besitzt ein
 hartes Limit von 15 Minuten. Der moderne Hostcontrollervertrag und die private
-interaktive Sitzung (`KR-4814`/`KR-4914`) gehoeren gemeinsam mit GUI, Harness
-und Portintegration zu v0.49. Sie beginnen erst nach der internen
-v0.48-Freigabe aus `KR-4854`. Der erste echte Gastframe ist durch `KR-4850`
-belegt; BootExecutable und Spielboot bleiben das aktuelle P0.
+interaktive Sitzung (`KR-4814`/`KR-4914`) gehoeren als Post-Frame-Arbeit zu
+v0.48. Der erste echte Gastframe ist durch `KR-4850` belegt und gibt diese
+Aufgaben damit frei; beide muessen vor `KR-4852` abgeschlossen sein.
+BootExecutable und Spielboot bleiben parallel das aktuelle P0.
 
 ---
 
@@ -735,9 +744,14 @@ selbst. Selbst ein absichtlich in die Whitelist aufgenommenes
 `MmioMemoryDevice` wird vor dessen Readhandler abgelehnt; die Regression
 belegt null Handleraufrufe. Produktprobes erlauben nur die linearen Backings
 von Haupt-RAM, VRAM und AICA-RAM. Flash bleibt ohne eigenen
-Side-Effect-Free-Peek-Vertrag ausgeschlossen. Wait-Loop-Erkennung,
-Wertwechselfolge, Writer-Provenienz und die Diagnose-an/aus-Invarianz halten
-`KR-4842` weiter offen.
+Side-Effect-Free-Peek-Vertrag ausgeschlossen. Hardware-Audit-Schema 3 erkennt
+Natural Loops ueber skalierbare Dominatorberechnung und klassifiziert sie als
+Counter-, RAM-Poll-, MMIO-Poll-, Mixed- oder Unknown-Loop. Access-/Guard-
+Evidenz, kanonische Area-3-RAM-Spiegel sowie konservative Unknown-Ergebnisse
+bei unaufgeloesten Definitionen sind Bestandteil des Berichts. Delay-Slot-
+Doppelkontexte, wurzellose SCCs und ein 4.096-Block-Graph besitzen
+Regressionen. Dynamische Wertwechselfolgen, tatsaechliche Writer-Provenienz
+und die Diagnose-an/aus-Invarianz halten `KR-4842` weiter offen.
 
 ### [x] KR-4843 - Alias-korrekter nativer Disc-Systembootstrap
 
@@ -938,14 +952,19 @@ Fallback oder Materialisierung; GD-ROM, TA und PVR sind noch null. Bei 320
 Millionen Zyklen erreicht der Gast Spielecode, zwei GD-ROM-Kommandos und einen
 spaeten PVR-Registerwrite, weiterhin ohne TA-, Render- oder Framebeweis.
 
-Der aktuelle kumulative Schnittstellenstand verwendet Runtime-ABI 39,
+Der aktuelle kumulative Schnittstellenstand verwendet Runtime-ABI 40,
 Block-ABI 3, Backend-Interface-ABI 3, Portprojektvertrag 24 und
 Host-Video-Vertrag 2. Source-relativierte native AOT-Templates und ihr
 adressierter Binder sind vorhanden; strukturierte Disc-Ladetransaktionen, der
 allgemeine native Materializer und die Registry latenter Module halten
-`KR-4848` weiterhin offen. Das fokussierte Gate besteht 11/11, der
-vollstaendige x64-Build mit zwoelf parallelen Jobs ist gruen und das
-CTest-Zwischengate besteht 178/178 Eintraege in rund 4:04 Minuten.
+`KR-4848` weiterhin offen. Das fokussierte Gate besteht 11/11, der x64-Kern-/
+Runtime-Build der Desktop-GUI-off-Konfiguration mit zwoelf parallelen Jobs ist
+gruen und deren vollstaendiges CTest-Zwischengate auf Quellstand `924ea89`
+besteht 183/183 Eintraege in 312,97 Sekunden; darunter 181 regulaere Passes
+und zwei erwartete Regex-`PASS_REGULAR_EXPRESSION`-Erfolge. Desktop-GUI- und
+Harness-Tests sind nicht Teil dieser 183; der Runner-Selbsttest ist separat
+gruen.
+Es ist kein Abschluss von `KR-4852`, `KR-4853` oder `KR-4854`.
 
 ### [ ] KR-4849 - TA-Eingang und PVR-Kommandopfad
 
@@ -1019,13 +1038,65 @@ Pixel. Der budgetierte Lauf erreicht nach 50 Millionen Gastzyklen in 5,3
 Sekunden `KR_FIRST_GUEST_FRAME` und danach `KR_FIRST_PRESENTED_FRAME`; TA
 bleibt null und der Budget-Exit ist erwartet. BootExecutable, Spielboot,
 `KR-4848` und der produktive TA-Pfad bleiben offen.
-Nach dem Vollgate wurde der Vertrag-24-Port unter Runtime-ABI 39 und Block-ABI
-3 frisch neu exportiert und gebaut: 1.860 Funktionen, 37 Codepartitionen und
-null Retailsektoren. Die lokale read-only Originaldisc-Installation umfasst
-drei Tracks und 521.461 Sektoren. Der abschliessende 50-Millionen-Lauf
+Historische ABI-39-Portevidenz: Nach dem damaligen 178/178-Zwischengate wurde
+der Vertrag-24-Port unter Runtime-ABI 39 und Block-ABI 3 frisch neu exportiert
+und gebaut: 1.860 Funktionen, 37 Codepartitionen und null Retailsektoren. Die
+lokale read-only Originaldisc-Installation umfasst drei Tracks und 521.461
+Sektoren. Der abschliessende 50-Millionen-Lauf
 reproduziert beide Marker mit `frames=2`, `pvr_guest_frames=2`,
 `pvr_direct_frames=2` und 302.287 geaenderten Direct-FB-Pixeln; TA,
 Rendergeneration und Materializer bleiben null.
+
+### [ ] KR-4814 - Nativer Controller und gastzeitgebundene Maple-Eingabe
+
+Abhaengigkeiten: KR-4850, KR-4616
+Meilenstein: v0.48, Implementierung nach dem erreichten ersten echten Gastframe
+Prioritaet: P1 nach KR-4850; Boot und Frame bleiben P0
+
+Umfang:
+
+- Gast in begrenzten Quanta/Safepoints statt einmal synchron bis zum Ende laufen
+- Fenster-, Controller-, Scheduler-, Video- und Audioereignisse verschraenken
+- Windows-Gamepadbackend ueber stabile Hostabstraktion bereitstellen
+- aktuelle Xbox-Controller, DualSense/DualShock und uebliche Standardgamepads
+  ueber denselben geraeteagnostischen Vertrag abdecken
+- Keyboardfallback erhalten
+- Buttons, Trigger und Analogachsen mit Deadzones normalisieren
+- Hotplug, Fokus und Controller-1-Auswahl behandeln
+- Hostzustandsaenderungen mit Gastzyklus stempeln
+- Maple `GetCondition` liest den letzten zum Transaktionszyklus sichtbaren Zustand
+- Replayinput verwendet dieselbe Ereignisschnittstelle
+
+Akzeptanz:
+
+- frei lizenziertes Homebrew reagiert auf Buttons, Trigger und Analogachsen
+- Xbox-, DualSense-/DualShock- und Standardcontrollerprofile bestehen denselben
+  normalisierten Eingabevertrag ohne titelbezogene Sonderbehandlung
+- aktiv-niedrige Maple-Payloads sind bitgenau
+- nur geaenderte Hostzustaende werden eingespeist
+- Hotplug und Fokus erzeugen keine haengenden Tasten
+- deterministisches Replay ist bytegleich
+- keine Eingaberace zwischen Hostpoll und Maple-Read
+
+### [ ] KR-4914 - Private interaktive Runtime-Sitzung mit Controller
+
+Abhaengigkeiten: KR-4814, KR-4850
+Meilenstein: v0.48
+Prioritaet: P1 nach KR-4850; Boot und Frame bleiben P0
+
+Umfang:
+
+- separaten `interactive`-Modus mit Fenster, Controller und kontrolliertem Ende
+- Hosteventpump und Gastquanta dauerhaft verschraenken
+- Pause, Fokus, Controllerhotplug und sauberen Shutdown behandeln
+- interaktive Rohdiagnosen ausschliesslich privat speichern
+- keine Screenshots, Spielbytes oder Speicherabbilder standardmaessig erfassen
+
+Akzeptanz:
+
+- Nutzer kann einen erreichten Gastpfad mit Controller untersuchen
+- interaktive Sitzung wird in keinem Gate als deterministische Evidenz verwendet
+- Crash, Close und Timeout hinterlassen keine Kindprozesse oder Schedulerreste
 
 ### [ ] KR-4851 - Boot- und Frame-Hotpath
 
@@ -1044,15 +1115,17 @@ vollstaendigen Boot-/Frame-Hotpath und den Fastpath-/Referenzvergleich offen.
 
 ### [ ] KR-4852 - Konsolidierte v0.48-Validierung
 
-Abhaengigkeiten: KR-4831, KR-4841 bis KR-4851, KR-4911, KR-4912, KR-4913
-und KR-4915
+Abhaengigkeiten: KR-4831, KR-4841 bis KR-4851, KR-4814, KR-4911, KR-4912,
+KR-4913, KR-4914 und KR-4915
 Prioritaet: P0
 
-Erst nach vollstaendiger Implementierung der Kernrunde werden einmal gebuendelt
-betroffene Targets, fokussierte Regressionen, Gesamtbestand, Sanitizer, frischer
-Portexport, lokale Originaldisc-Installation und privater Bootlauf ausgefuehrt.
-Danach werden nur konkrete neue Blocker gezielt geprueft. Jeder Einzelprozess
-endet spaetestens nach 15 Minuten samt Prozessbaum.
+Erst nach vollstaendiger Implementierung aller v0.48-Aufgaben werden in genau
+einem finalen Gate gebuendelt betroffene Targets, fokussierte Regressionen,
+Gesamtbestand, Sanitizer, frischer Portexport, lokale
+Originaldisc-Installation und zwei private Reproduktionslaeufe ausgefuehrt.
+Waehrend der Implementierungsrunde gibt es kein weiteres Vollgate. Danach
+werden nur konkrete neue Blocker gezielt geprueft. Jeder Einzelprozess endet
+spaetestens nach 15 Minuten samt Prozessbaum.
 
 ### [ ] KR-4853 - v0.48 Boot-Gate-Vorbereitung
 
@@ -1062,15 +1135,21 @@ Prioritaet: P0
 - STATUS, README, ROADMAP, TASKS und CHANGELOG abgleichen
 - ABI-/Formatversionen aus dem finalen Diff bestimmen
 - nur belegte Testzahlen und keine Retaildaten dokumentieren
-- vor Freigabe zwingend fuer Nutzerreview stoppen
+- den unveraenderten gruenen finalen Gatebericht aus `KR-4852` uebernehmen
+- keine neue Semantik, Builds oder Testlaeufe zwischen finalem Gate und
+  Freigabe einfuehren
+- ein vollstaendig gruener Gatebericht erfuellt die Standing Approval vom
+  23.07.2026 automatisch; kein weiterer Review-Stopp ist erforderlich
 
 ### [ ] KR-4854 - v0.48 interne Freigabe
 
-Abhaengigkeiten: KR-4853 und ausdrueckliche Nutzerfreigabe
+Abhaengigkeiten: KR-4853 mit vollstaendig gruenem finalem Gate
 Prioritaet: P0
 
-- zwei abschliessende private Reproduktionslaeufe ausfuehren
-- `v0.48.0` erst nach Nutzerfreigabe intern freigeben und Artefakte abgleichen
+- nach dem unveraenderten gruenen Gate keine neue Semantik, Builds oder Tests
+  einfuehren
+- `v0.48.0` durch die bestehende Standing Approval automatisch als erreicht
+  und release-ready intern freigeben
 - keinen Tag erzeugen; Tags beginnen erst mit der Alpha
 - genau einen aktuellen Build und ein aktuelles Backup behalten
 - keine Releaseartefakte mit Retaildaten erzeugen
@@ -1098,6 +1177,19 @@ Akzeptanz:
 - Haenger, Budgetende, Exception und Dispatch-Miss besitzen eindeutige Klassen
 - identische synthetische Laeufe erzeugen identische Ereignisfolgen
 - private Fehlerpakete sind redigiert und bleiben ausserhalb des Repos
+
+Teilstand 2026-07-23: Systemreplay-Schema 2 begrenzt die Aufzeichnung
+standardmaessig auf 4.096 und maximal auf 65.536 Ereignisse; portable
+Ereigniscodes sind auf 64 Zeichen begrenzt. Ein gesaettigter Recordversuch
+zaehlt exakt einen Drop. Jeder Drop verhindert Versiegelung und Replay,
+waehrend ein bereits versiegelter Log nicht nachtraeglich veraendert wird.
+Interne Ereignisse, Ereignishash und Replayvergleich behalten alle Codes,
+Adressen, Werte, numerischen Payloads und Hashes exakt. Das Standard-JSON
+redigiert dagegen `code`, `address`, `value`, `detail`, `auxiliary`,
+`event_hash` und `final_guest_state_hash`; nur ein ausdrueckliches lokales
+Opt-in serialisiert sie. Produktwiring, gemeinsame Stopptaxonomie, letzter
+stabiler Checkpoint und ein gemeinsames redigiertes Fehler-Envelope halten
+`KR-4911` offen.
 
 ### [ ] KR-4912 - Dynamische Codebereiche, Module und Overlays
 
@@ -1172,58 +1264,7 @@ TA-Vertrag aus `KR-4849`. Ebenso bleiben BootExecutable, Spielboot und
 
 ---
 
-## v0.49.0 - Controller-, Port-, Harness-, GUI-Integration und Alpha-Candidate
-
-### [ ] KR-4814 - Nativer Controller und gastzeitgebundene Maple-Eingabe
-
-Abhaengigkeiten: KR-4854, KR-4616
-Meilenstein: v0.49, Implementierung erst nach dem ersten echten Gastframe
-Prioritaet: P1 nach KR-4850 (Frame bleibt P0)
-
-Umfang:
-
-- Gast in begrenzten Quanta/Safepoints statt einmal synchron bis zum Ende laufen
-- Fenster-, Controller-, Scheduler-, Video- und Audioereignisse verschraenken
-- Windows-Gamepadbackend ueber stabile Hostabstraktion bereitstellen
-- aktuelle Xbox-Controller, DualSense/DualShock und uebliche Standardgamepads
-  ueber denselben geraeteagnostischen Vertrag abdecken
-- Keyboardfallback erhalten
-- Buttons, Trigger und Analogachsen mit Deadzones normalisieren
-- Hotplug, Fokus und Controller-1-Auswahl behandeln
-- Hostzustandsaenderungen mit Gastzyklus stempeln
-- Maple `GetCondition` liest den letzten zum Transaktionszyklus sichtbaren Zustand
-- Replayinput verwendet dieselbe Ereignisschnittstelle
-
-Akzeptanz:
-
-- frei lizenziertes Homebrew reagiert auf Buttons, Trigger und Analogachsen
-- Xbox-, DualSense-/DualShock- und Standardcontrollerprofile bestehen denselben
-  normalisierten Eingabevertrag ohne titelbezogene Sonderbehandlung
-- aktiv-niedrige Maple-Payloads sind bitgenau
-- nur geaenderte Hostzustaende werden eingespeist
-- Hotplug und Fokus erzeugen keine haengenden Tasten
-- deterministisches Replay ist bytegleich
-- keine Eingaberace zwischen Hostpoll und Maple-Read
-
-### [ ] KR-4914 - Private interaktive Runtime-Sitzung mit Controller
-
-Abhaengigkeiten: KR-4854, KR-4814
-Meilenstein: v0.49
-Prioritaet: P1 nach KR-4850 (Frame bleibt P0)
-
-Umfang:
-
-- separaten `interactive`-Modus mit Fenster, Controller und kontrolliertem Ende
-- Hosteventpump und Gastquanta dauerhaft verschraenken
-- Pause, Fokus, Controllerhotplug und sauberen Shutdown behandeln
-- interaktive Rohdiagnosen ausschliesslich privat speichern
-- keine Screenshots, Spielbytes oder Speicherabbilder standardmaessig erfassen
-
-Akzeptanz:
-
-- Nutzer kann einen erreichten Gastpfad mit Controller untersuchen
-- interaktive Sitzung wird in keinem Gate als deterministische Evidenz verwendet
-- Crash, Close und Timeout hinterlassen keine Kindprozesse oder Schedulerreste
+## v0.49.0 - Port-, Harness-, GUI-Integration und Alpha-Candidate
 
 ### [ ] KR-4801 - Versioniertes Runtime-SDK fuer externe Port-Projekte
 
@@ -1242,6 +1283,18 @@ Akzeptanz:
 - sauberer Out-of-Tree-Port baut ohne KatanaRecomp-Quellbaum
 - inkompatible Runtime-ABI wird vor dem Link sichtbar abgelehnt
 - SDK-Inhalt ist reproduzierbar und enthaelt keine privaten Daten
+
+Teilstand 2026-07-23: Ein mit Sanitizern gebautes statisches Runtime-SDK
+exportiert die erforderlichen ASan-Compiler- und Linkoptionen als
+`KatanaRecomp::runtime`-Usage-Requirements. Der installierte
+Out-of-Tree-Verbraucher baut dadurch mit demselben ABI-Profil. Der private
+Retail-Runner liest Runtime-ABI und Portprojektvertrag jeweils genau einmal
+und als strikt positive Ganzzahlen aus der kanonischen
+`cmake/KatanaVersions.cmake`; fehlende, doppelte, ungueltige oder nullwertige
+Definitionen sowie JSON-Strings und Gleitkommazahlen statt ganzzahliger
+Vertragswerte werden ohne Typkoerzierung abgelehnt. Das vollstaendige minimale,
+reproduzierbare SDK und seine finalen externen Abhaengigkeitsgrenzen halten
+`KR-4801` offen.
 
 ### [ ] KR-4811 - Private Harnessmodi und technisch erzwungener No-run-Vertrag
 

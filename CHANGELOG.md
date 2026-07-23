@@ -4,6 +4,48 @@
 
 ### Geaendert
 
+- Der deterministische Systemreplay-Vertrag v2 besitzt nun eine feste,
+  konfigurierbare Ereigniskapazitaet von standardmaessig 4.096 und hoechstens
+  65.536 Eintraegen; portable Ereigniscodes sind auf 64 Zeichen begrenzt.
+  Beim Kapazitaetsueberlauf markiert `record()` genau einen Drop;
+  `try_record()` liefert `false`, ohne denselben Drop ein zweites Mal zu
+  zaehlen. Auch andere von `try_record()` an einem unversiegelten Log
+  abgewiesene Best-effort-Aufnahmen werden genau einmal erfasst; versiegelte
+  Logs bleiben unveraendert. Eine unvollstaendige Spur darf danach weder
+  versiegelt noch fuer einen Replay kopiert werden; ein haengender Gast kann
+  die Diagnose damit nicht mehr unbegrenzt im Host-RAM wachsen lassen. Codes, Adressen,
+  Werte und numerische Payloads bleiben intern fuer Hash und Replayvergleich
+  exakt. Das JSON redigiert standardmaessig `code`, `address`, `value`,
+  `detail`, `auxiliary`, `event_hash` und
+  `final_guest_state_hash`; nur ein ausdrueckliches lokales Opt-in gibt sie
+  aus.
+- Der allgemeine Hardwareauditor verwendet mit
+  `katana.hardware-audit.v3` echte natuerliche Loops und eine skalierbare
+  Dominatorberechnung statt einer dichten quadratischen Matrix. Er
+  klassifiziert `counter`, `ram_poll`, `mmio_poll`, `mixed` und konservativ
+  `unknown`, trennt Access- von Guard-Evidenz und fuehrt die vier
+  Area-3-RAM-Spiegel kanonisch zusammen. Unvollstaendige Definitionen oder
+  Vorgaenger bleiben `unknown`; Delay-Slot-Doppelkontexte, wurzellose SCCs und
+  ein 4.096-Block-Skalierungsfall besitzen Regressionen. Dieser statische
+  Teilstand schliesst `KR-4842` ohne dynamische Writer-/Wertaenderungsevidenz
+  bewusst noch nicht ab.
+- Der private Retailrunner ermittelt Runtime-ABI und Portprojektvertrag strikt
+  aus `cmake/KatanaVersions.cmake`. Malformed, doppelte und nullwertige
+  Definitionen sowie JSON-Vertragswerte vom Typ String oder Double werden
+  abgelehnt; feste veraltete Vertragsnummern koennen den privaten Lauf damit
+  nicht mehr still verfremden.
+- Das exportierte ASan-Paketinterface transportiert seine benoetigten
+  Compile-/Link-Usage-Requirements bis zum Out-of-Tree-Consumer. Der
+  Paketvertrag besteht sowohl fuer den ASan-instrumentierten als auch fuer den
+  nicht instrumentierten Consumer, ohne den nicht instrumentierten
+  Standardexport unnoetig zu instrumentieren.
+- Die v0.48-Freigabelogik besitzt eine Standing Approval vom 23.07.2026.
+  Waehrend der restlichen Implementierung laufen nur fokussierte Builds und
+  Regressionen. Erst nach Abschluss aller v0.48-Implementierungen folgt das
+  vollstaendige Freigabegate; ist es vollstaendig gruen, gilt das Nutzerreview
+  automatisch als bestanden und v0.48 als erreicht sowie release-ready. Eine
+  weitere Freigabefrage entfaellt. Die interne Pre-Alpha-Freigabe bleibt ohne
+  Tag; Tags beginnen erst mit der Alpha.
 - GD-ROM-PACKET- und BIOS-Read-/Streaming-Auftraege fangen eine nicht mehr
   darstellbare Gastzeitfrist jetzt an der Scheduler-Admission ab. Ein
   Taskfile-Auftrag endet deterministisch mit `READY|ERR`, ABRT-Sense und
@@ -27,15 +69,17 @@
   BootExecutable noch Spielboot sind an dieser Grenze erreicht; `KR-4848`
   bleibt fuer strukturierte Disc-Ladevorgaenge und den allgemeinen nativen
   Materializer offen.
-- Der nach dem Vollgate frisch neu exportierte Vertrag-24-Port umfasst unter
+- Der nach dem damaligen ABI-39-Vollgate frisch neu exportierte
+  Vertrag-24-Port umfasst unter
   Runtime-ABI 39 und Block-ABI 3 genau 1.860 Funktionen, 37 Codepartitionen
   und null Retailsektoren. Die lokale read-only Installation der Originaldisc
   umfasst drei Tracks und 521.461 Sektoren. Der abschliessende
   50-Millionen-Lauf reproduziert beide Framemarker mit `frames=2`,
   `pvr_guest_frames=2`, `pvr_direct_frames=2` und 302.287 geaenderten
   Direct-FB-Pixeln. TA, Rendergeneration und Materializer bleiben null; der
-  Budget-Exit ist erwartet.
-- Der aktuelle kumulative Schnittstellenstand verwendet Runtime-ABI 39,
+  Budget-Exit ist erwartet. Diese Port- und Laufevidenz bleibt ausdruecklich
+  historisch und wird nicht als ABI-40-Export ausgegeben.
+- Der aktuelle kumulative Schnittstellenstand verwendet Runtime-ABI 40,
   Block-ABI 3, Backend-Interface-ABI 3, Portprojektvertrag 24 und
   Host-Video-Vertrag 2. Block-ABI 3 versioniert die virtuelle
   Quell-/Laufzeitadressabbildung source-relativierter nativer AOT-Templates.
@@ -75,10 +119,16 @@
   tatsaechlichen Terminatorquelle (`source + 2`) statt relativ zum
   Wrapper-Einstieg; gueltige lokale Blockketten koennen dadurch keinen
   Fehlalarm mehr ausloesen.
-- Das aktuelle fokussierte Kern-Gate besteht 11/11. Der vollstaendige x64-Build
-  ist mit zwoelf parallelen Jobs gruen; das anschliessende CTest-Gate besteht
-  178/178 Eintraege in rund 4:04 Minuten. Davon sind 176 regulaere Passes und
-  zwei erwartete Regex-`PASS_REGULAR_EXPRESSION`-Erfolge.
+- Das fokussierte First-Frame-Kern-Gate bestand 11/11; das zugehoerige
+  ABI-39-CTest-Zwischengate bestand historisch 178/178 Eintraege in rund
+  4:04 Minuten. Nach Replay-v2-, Hardwareaudit-v3-, Runner- und
+  Paketvertragskorrekturen ist der x64-Kern-/Runtime-Build der Desktop-GUI-
+  off-Konfiguration erneut mit zwoelf parallelen Jobs gruen. Deren
+  vollstaendiges CTest-Zwischengate auf Codecommit `924ea89` besteht 183/183
+  Eintraege in 312,97 Sekunden: 181 regulaere Passes und zwei erwartete
+  `PASS_REGULAR_EXPRESSION`-Erfolge. Desktop-GUI- und Harness-Tests sind nicht
+  Teil dieser 183; der Runner-Selbsttest ist separat gruen. Der Lauf schliesst
+  weder `KR-4852` noch das v0.48-Freigabegate vorzeitig ab.
 - Der optimierte ABI-38-Export der privaten PAL-Testbench dauerte mit zwoelf
   Jobs 140,9 Sekunden; der inkrementelle Reexport desselben Ports 29,2
   Sekunden. Die lokale Discinstallation war erfolgreich, die Originalquelle
@@ -295,9 +345,11 @@
   Provenienz, Bootdiagnostik, P2-Bootstrap, Gastzeit, BIOS/GD-ROM, Runtimecode,
   TA/PVR, echten Scanoutframe, Hotpath, konsolidierte Validierung und das
   nutzerfreigegebene Gate ab. Der moderne, geraeteagnostische
-  Controllervertrag und die private interaktive Sitzung gehoeren nun gemeinsam
-  mit der Port-, Harness- und GUI-Integration zu v0.49. Sie beginnen weiterhin
-  strikt erst auf der in v0.48 freigegebenen Framebasis.
+  Controllervertrag und die private interaktive Sitzung gehoeren als
+  Post-Frame-Arbeit ebenfalls zu v0.48. Der durch `KR-4850` belegte Gastframe
+  gibt `KR-4814`/`KR-4914` frei; beide werden vor dem einzigen finalen Vollgate
+  in `KR-4852` abgeschlossen. v0.49 integriert diese Grundlage in Port,
+  Harness, GUI und Alpha-Candidate.
   `KR-4804`/`KR-4805` sind durch `KR-4853`/`KR-4854` ersetzt.
   v0.48 wird ohne Tag intern freigegeben; Tags beginnen erst mit der Alpha.
 - HLE-GDI-Ports rekompilieren nun auch den 16 Sektoren grossen, von der Disc

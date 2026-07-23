@@ -59,8 +59,29 @@ vorbereitet; der live geladene Dispatch bleibt `RuntimeOnly` und erzeugt keine
 feste CFG-Kante. Snapshotcache und P2-Aliasaufloesung sind gegen imagefremde
 Beweise abgesichert. Lokale AOT-Blockketten tragen die exakte tatsaechliche
 Terminatorquelle und Siteklasse bis zum externen Dispatch weiter. Der aktuelle
-kumulative Stand verwendet Runtime-ABI 39, Block-ABI 3,
+kumulative Stand verwendet Runtime-ABI 40, Block-ABI 3,
 Backend-Interface-ABI 3, Portprojektvertrag 24 und Host-Video-Vertrag 2.
+
+Systemreplay v2 haelt standardmaessig 4.096 und maximal 65.536 Ereignisse;
+portable Ereigniscodes sind auf 64 Zeichen begrenzt. Ein von `try_record()` an
+einem unversiegelten Log abgewiesener Best-effort-Aufnahmeversuch zaehlt genau
+einen Drop; versiegelte Logs bleiben unveraendert. Eine unvollstaendige Spur
+kann danach weder versiegelt noch abgespielt werden. Intern bleiben Codes,
+Adressen, Werte, numerische Payloads sowie Ereignis- und Endzustandshash exakt
+erhalten. Das JSON redigiert standardmaessig `code`, `address`, `value`,
+`detail`, `auxiliary`, `event_hash` und `final_guest_state_hash`; exakte
+Ausgabe erfordert ein ausdrueckliches lokales Opt-in.
+
+Der allgemeine Disc-Hardwareauditor schreibt
+`katana.hardware-audit.v3`, erkennt natuerliche Loops ueber skalierbare
+Dominatorberechnung und klassifiziert sie als `counter`, `ram_poll`,
+`mmio_poll`, `mixed` oder konservativ `unknown`. Access- und Guard-Evidenz
+bleiben getrennt; die vier Area-3-RAM-Spiegel werden kanonisch
+zusammengefuehrt. Delay-Slot-Doppelkontexte, wurzellose SCCs und ein
+4.096-Block-Skalierungsfall besitzen eigene Regressionen. Fehlende Definitionen
+oder Vorgaenger erzeugen keinen erfundenen Beweis. Damit sind `KR-4842` und
+`KR-4911` substanziell vorangekommen, bleiben fuer ihre dynamischen
+beziehungsweise vollstaendigen Runtimevertraege aber bewusst offen.
 
 Der vorangegangene optimierte ABI-38-PAL-Port wurde mit zwoelf Jobs in
 140,9 Sekunden
@@ -85,16 +106,19 @@ Crash. Der Lauf erreicht an dieser Grenze weder BootExecutable noch den
 eigentlichen Spielboot. `KR-4915` und `KR-4850` sind durch den vorgezogenen
 IP.BIN-Framepfad erfuellt; die offenen `KR-4848`-Ladevorgaenge und der
 Materializer sowie der TA-/Bootpfad werden dadurch nicht als abgeschlossen
-behauptet. Moderner Hostcontrollersupport fuer Xbox-, DualSense- und
-vergleichbare Geraete bleibt v0.49-Arbeit auf der jetzt belegten Framebasis.
+behauptet. Der jetzt belegte Frame gibt die verbindliche v0.48-
+Controllerarbeit fuer Xbox-, DualSense- und vergleichbare Geraete frei; sie
+bleibt vor der konsolidierten v0.48-Validierung abzuschliessen.
 
-Nach dem vollstaendigen Gate wurde der Vertrag-24-Port unter Runtime-ABI 39 und
-Block-ABI 3 frisch neu exportiert und gebaut: 1.860 Funktionen, 37
+Nach dem damaligen ABI-39-Gate wurde der Vertrag-24-Port unter Runtime-ABI 39
+und Block-ABI 3 frisch neu exportiert und gebaut: 1.860 Funktionen, 37
 Codepartitionen und null Retailsektoren. Die lokale read-only Installation der
 Originaldisc umfasst drei Tracks und 521.461 Sektoren. Der abschliessende
 50-Millionen-Lauf reproduziert beide Marker mit zwei Gast-/Direct-FB-Frames und
 302.287 geaenderten Direct-FB-Pixeln; TA, Rendergeneration und Materializer
-bleiben null. Der Budget-Exit ist weiterhin erwartet.
+bleiben null. Der Budget-Exit ist weiterhin erwartet. Diese Port- und
+Laufevidenz bleibt ausdruecklich historisch und wird nicht als ABI-40-Export
+ausgegeben.
 
 Der aktuelle Pfad verarbeitet Raw-, ELF32-SH-, Projektmanifest- und validierte
 GDI-Eingaben bis zu partitioniertem C++, einer zentralen Dreamcast-Runtime und
@@ -110,14 +134,38 @@ Eingabe
   -> natives Hostprojekt
 ```
 
-Das aktuelle fokussierte Kern-Gate besteht 11/11. Der vollstaendige x64-Build
-ist mit zwoelf parallelen Jobs gruen; das anschliessende CTest-Gate besteht
-178/178 Eintraege in rund 4:04 Minuten, darunter 176 regulaere Passes und zwei
-erwartete Regex-`PASS_REGULAR_EXPRESSION`-Erfolge. Der generische C++-Fix setzt bei
-nachfolgerlosen Bloecken in allen Backendmodi den PC auf die echte
-Folgeinstruktion; eine kompilierte Regression deckt Einzelblock, lokales
-Chaining und normalen Backendpfad ab. Die Produktinvariante vergleicht mit der
-tatsaechlichen Terminatorquelle statt dem Wrapper-Einstieg.
+Das fokussierte First-Frame-Kern-Gate bestand 11/11; das zugehoerige
+ABI-39-CTest-Zwischengate bestand historisch 178/178 Eintraege in rund
+4:04 Minuten. Nach den Replay-, Hardwareaudit-, Runner- und
+Paketvertragskorrekturen ist der x64-Kern-/Runtime-Build der Desktop-GUI-off-
+Konfiguration erneut mit zwoelf parallelen Jobs gruen. Deren vollstaendiges
+CTest-Zwischengate auf Codecommit `924ea89` besteht 183/183 Eintraege in
+312,97 Sekunden: 181 regulaere Passes und zwei erwartete
+`PASS_REGULAR_EXPRESSION`-Erfolge. Desktop-GUI- und Harness-Tests sind nicht
+Teil dieser 183; der Runner-Selbsttest ist separat gruen. Der Lauf ist
+Entwicklungsevidenz und schliesst weder `KR-4852` noch das v0.48-
+Freigabegate vorzeitig ab.
+
+Waehrend der restlichen v0.48-Implementierung laufen nur fokussierte Builds
+und Regressionen. Das naechste Vollgate folgt erst, wenn alle
+v0.48-Implementierungen abgeschlossen sind. Besteht dieser finale Gatebericht
+vollstaendig gruen, gilt durch die Standing Approval vom 23.07.2026 zugleich
+das Nutzerreview als bestanden und v0.48 als erreicht sowie release-ready. Eine
+weitere Freigabefrage entfaellt; vor der Alpha wird weiterhin kein Tag erzeugt.
+
+Der private Retailrunner ermittelt Runtime-ABI und Portprojektvertrag strikt
+aus `cmake/KatanaVersions.cmake`. Malformed, doppelte oder nullwertige
+Definitionen sowie JSON-Vertragswerte vom Typ String oder Double werden
+abgelehnt. Das exportierte ASan-Paketinterface traegt seine erforderlichen
+Compile-/Link-Usage-Requirements zum Out-of-Tree-Consumer; sowohl der
+ASan-instrumentierte als auch der nicht instrumentierte Consumervertrag ist
+gruen.
+
+Der generische C++-Fix setzt bei nachfolgerlosen Bloecken in allen Backendmodi
+den PC auf die echte Folgeinstruktion; eine kompilierte Regression deckt
+Einzelblock, lokales Chaining und normalen Backendpfad ab. Die
+Produktinvariante vergleicht mit der tatsaechlichen Terminatorquelle statt dem
+Wrapper-Einstieg.
 
 Phase 10 ist
 fuer den freigegebenen Windows-Workflow abgeschlossen: eine `.gdi` waehlen,
@@ -147,9 +195,10 @@ redigierte Buildlog live an und erzeugt bei vollstaendiger Analyse
 Ergebnisindex und Buildplan als Debuggrundlage erhalten; ein irrefuehrender
 Hostbuild wird nicht erzeugt.
 
-Der sichtbare interne Meilenstein `0.47.0` ist kein Produktrelease. CLI,
-Fenstertitel, Jobberichte, Buildplan und Provenienz verwenden gemeinsam die
-kanonische Werkzeugversion aus `VERSION`/CMake.
+Der letzte abgeschlossene interne Meilenstein `0.47.0` ist kein
+Produktrelease. Die sichtbare aktuelle Entwicklungsfassung ist `0.48.0`;
+CLI, Fenstertitel, Jobberichte, Buildplan und Provenienz verwenden gemeinsam
+die kanonische Werkzeugversion aus `VERSION`/CMake.
 
 CLI und GUI verwenden intern dieselben Loader-, Analyse-, Codegen- und
 Hostbuildkomponenten. Der entsprechende CLI-Pfad ist beispielsweise:

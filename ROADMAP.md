@@ -1,7 +1,7 @@
 # KatanaRecomp Roadmap
 
 Status: Pre-Alpha
-Aktueller interner Meilenstein: `v0.47.0`
+Abgeschlossener interner Meilenstein: `v0.47.0`
 Aktuelle Phase: `v0.48.0` - Native Disc Boot und erster echter Gastframe
 Erster oeffentlicher Release: `v0.50.0` Alpha
 Weitere interne Gates: `v0.48.0` und `v0.49.0`; danach `v0.75.0` Beta und `v1.0.0` Stable
@@ -98,7 +98,7 @@ nicht gestartet werden.
 ### Stufe C: Retail-Kontrollfluss und Build
 
 - [x] `KR-4715` - ungeloeste Kontrollflussfront inventarisieren
-- [x] `KR-4716` - ABI-erhaltene Callbacks, Parameter und Stackwerte
+- [x] `KR-4716` - ABI-erhaltene Callback-, Parameter- und Stackwerte
 - [x] `KR-4717` - Objekt-, Feld- und VTable-Points-to
 - [x] `KR-4718` - expliziter Runtime-only-Dispatch
 - [x] `KR-4719` - privater Retail-Buildnachweis mit erzwungenem Build-only-Modus
@@ -159,7 +159,8 @@ Der Recompiler fuehrt den disc-eigenen Systembootstrap und die Bootdatei als
 native AOT-Segmente aus und erreicht einen scanoutgebundenen, vom Gast
 erzeugten Frame. Sonic Adventure PAL ist die private Haupttestbench; Sonic
 Shuffle PAL und Ecco dienen dem allgemeinen Architekturabgleich. Implementiert
-werden nur titelunabhaengige SH-4-, BIOS-, GD-ROM-, DMA-, TA- und PVR-Vertraege.
+werden nur titelunabhaengige SH-4-, BIOS-, GD-ROM-, DMA-, TA-, PVR-, Maple-
+und Hosteingabevertraege.
 
 ### Grundlage und migrierte Bring-up-Tasks
 
@@ -186,13 +187,32 @@ werden nur titelunabhaengige SH-4-, BIOS-, GD-ROM-, DMA-, TA- und PVR-Vertraege.
 - [ ] `KR-4853` - v0.48 Boot-Gate-Vorbereitung
 - [ ] `KR-4854` - v0.48 interne Freigabe
 
+### Post-Frame-Controller-Tasks
+
+- [ ] `KR-4814` - Nativer Controller und gastzeitgebundene Maple-Eingabe
+- [ ] `KR-4914` - Private interaktive Runtime-Sitzung mit Controller
+
+Beide Controlleraufgaben gehoeren verbindlich zu v0.48. Sie durften erst nach
+dem P0-Framebeweis aus `KR-4850` beginnen; diese Voraussetzung ist inzwischen
+erfuellt. Sie muessen vor der konsolidierten Validierung `KR-4852`
+abgeschlossen sein.
+
+Der Checkboxstand bleibt bewusst taskbezogen: `KR-4831`, `KR-4841`,
+`KR-4843` bis `KR-4846`, `KR-4915` und `KR-4850` sind abgeschlossen.
+`KR-4842` besitzt mit der statischen Wait-Loop-Klassifikation einen belastbaren
+Teilstand, bleibt aber bis zur dynamischen Writer-/Wertaenderungs- und
+Diagnoseinvarianz offen. `KR-4911` besitzt mit Systemreplay v2 ebenfalls einen
+abgesicherten Teilstand, bleibt jedoch bis zum vollstaendigen
+Runtimebeobachtungs- und Fehlerpaketvertrag offen. Diese Teilstaende setzen
+keine weiteren Checkboxen vorzeitig.
+
 `KR-4915` und `KR-4850` wurden vor ihren noch offenen Boot- und TA-
 Voraussetzungen durch den legitimen IP.BIN-Direct-Framebuffer-Pfad
 vorgezogen: Ein privater PAL-AOT-Lauf erreicht hostunabhaengig
 `KR_FIRST_GUEST_FRAME` und danach `KR_FIRST_PRESENTED_FRAME`. Das schliesst
-weder `KR-4848`, `KR-4849` noch den Spielboot ab. Die Controlleraufgaben
-`KR-4814` und `KR-4914` bleiben trotz der jetzt belegten Framebasis Teil der
-anschliessenden v0.49-Integration.
+weder `KR-4848`, `KR-4849` noch den Spielboot ab. Der belegte Frame gibt jetzt
+die v0.48-Controlleraufgaben `KR-4814` und `KR-4914` frei; beide bleiben vor
+`KR-4852` verpflichtend.
 
 Aktueller Kernteilstand: Byteidentische BIOS-/GD-Reloads erhalten vorhandene
 native AOT-Bloecke, waehrend geaenderte Bytes exakt einmal invalidieren. Der
@@ -227,7 +247,34 @@ Dispatchereignisse bleiben ohne Fehler. Der neue Haupthotspot
 Rendergeneration und Gastframe waren an dieser Zwischenstufe noch unbelegt;
 `KR-4848` und `KR-4849` bleiben offen. Runtime-ABI 39, Block-ABI 3,
 Backend-Interface-ABI 3, Portprojektvertrag 24 und Host-Video-Vertrag 2
-versionieren den aktuellen Kernvertrag.
+versionierten diesen privaten Portlauf. Er bleibt ausdruecklich historische
+ABI-39-Evidenz und wurde nicht nachtraeglich als ABI-40-Artefakt umgedeutet.
+
+Der aktuelle kumulative Kernvertrag verwendet Runtime-ABI 40, Block-ABI 3,
+Backend-Interface-ABI 3, Portprojektvertrag 24 und Host-Video-Vertrag 2.
+Systemreplay v2 begrenzt die Aufzeichnung auf standardmaessig 4.096 und
+hoechstens 65.536 Ereignisse sowie 64 Zeichen pro Ereigniscode. Ein
+von `try_record()` an einem unversiegelten Log abgewiesener Best-effort-
+Aufnahmeversuch zaehlt genau einen Drop; versiegelte Logs bleiben
+unveraendert. Danach darf die unvollstaendige Spur weder versiegelt noch
+abgespielt werden. Intern bleiben alle Werte fuer Hash und exakten Vergleich
+erhalten, waehrend das JSON standardmaessig `code`, `address`, `value`, `detail`, `auxiliary`,
+`event_hash` und `final_guest_state_hash` redigiert.
+
+Der Hardwareauditor verwendet mit `katana.hardware-audit.v3` skalierbare
+Dominatorberechnung und echte natuerliche Loops. Er klassifiziert
+`counter`, `ram_poll`, `mmio_poll`, `mixed` oder konservativ `unknown` und
+weist getrennte Access-/Guard-Evidenz aus. Die vier Area-3-RAM-Spiegel werden
+kanonisch zusammengefuehrt; Delay-Slot-Doppelkontexte, wurzellose SCCs und ein
+4.096-Block-Skalierungsfall sind regressionsgesichert. Unvollstaendige
+Definitionen oder Vorgaenger werden nicht als Beweis benutzt.
+
+Der private Retailrunner liest Runtime-ABI und Portprojektvertrag strikt aus
+`cmake/KatanaVersions.cmake`; malformed, doppelte oder nullwertige Definitionen
+sowie JSON-Werte vom Typ String oder Double werden abgelehnt. Das exportierte
+ASan-Paketinterface transportiert die erforderlichen Compile-/Link-Usage-
+Requirements, und sowohl der ASan-instrumentierte als auch der nicht
+instrumentierte Out-of-Tree-Consumer sind gruen.
 
 Der Export-Hotpath baut globale CFG-, Kanten- und Writer-Slice-Indizes einmalig
 auf; Codegen und Projektausgabe reichen die Hostparallelitaet durch. Der CLI-
@@ -272,19 +319,26 @@ BootExecutable oder Spielboot erreicht werden. Dieser vorgezogene Marker
 schliesst die offenen strukturierten Disc-Ladevorgaenge, den Materializer und
 den TA-Pfad nicht.
 
-Das zugehoerige fokussierte Kern-Gate besteht 11/11. Der vollstaendige
-x64-Build ist mit zwoelf parallelen Jobs gruen; das CTest-Zwischengate besteht
-178/178 Eintraege in rund 4:04 Minuten. Es validiert den aktuellen
-First-Frame-/KR-4848-Zwischenblock, schliesst aber weder `KR-4852` noch das
-spaetere Freigabegate vorzeitig ab.
+Das zugehoerige fokussierte Kern-Gate bestand 11/11; das damalige
+ABI-39-CTest-Zwischengate bestand 178/178 Eintraege in rund 4:04 Minuten.
+Beides bleibt historische First-Frame-/KR-4848-Evidenz. Nach Replay-v2-,
+Hardwareaudit-v3-, Runner- und Paketvertragskorrekturen ist der x64-Kern-/
+Runtime-Build der Desktop-GUI-off-Konfiguration erneut mit zwoelf parallelen
+Jobs gruen; deren vollstaendiges CTest-Zwischengate auf Codecommit `924ea89`
+besteht 183/183 Eintraege in 312,97 Sekunden: 181 regulaere Passes und zwei
+erwartete `PASS_REGULAR_EXPRESSION`-Erfolge. Desktop-GUI- und Harness-Tests
+sind nicht Teil dieser 183; der Runner-Selbsttest ist separat gruen. Der Lauf
+validiert den aktuellen Entwicklungsstand, schliesst aber weder `KR-4852` noch
+das spaetere Freigabegate vorzeitig ab.
 
-Der danach frisch neu exportierte Vertrag-24-Port umfasst unter Runtime-ABI 39
-und Block-ABI 3 genau 1.860 Funktionen, 37 Codepartitionen und null
-Retailsektoren. Die read-only Originaldisc-Installation ist mit drei Tracks und
-521.461 Sektoren erneut erfolgreich. Der abschliessende 50-Millionen-Lauf
-reproduziert beide Framemarker mit zwei Gast-/Direct-FB-Frames und 302.287
-geaenderten Direct-FB-Pixeln; TA, Rendergeneration und Materializer bleiben
-null.
+Der historisch unmittelbar nach dem ABI-39-178er-Gate frisch neu exportierte
+Vertrag-24-Port umfasst unter Runtime-ABI 39 und Block-ABI 3 genau 1.860
+Funktionen, 37 Codepartitionen und null Retailsektoren. Die read-only
+Originaldisc-Installation ist mit drei Tracks und 521.461 Sektoren erneut
+erfolgreich. Der abschliessende 50-Millionen-Lauf reproduziert beide
+Framemarker mit zwei Gast-/Direct-FB-Frames und 302.287 geaenderten
+Direct-FB-Pixeln; TA, Rendergeneration und Materializer bleiben null. Diese
+Evidenz bleibt historisch und ist kein ABI-40-Portnachweis.
 
 `KR-4804` ist `retired` (`superseded_by KR-4853`), `KR-4805` ist `retired`
 (`superseded_by KR-4854`). `KR-4831` bleibt als abgeschlossene Grundlage erhalten.
@@ -297,10 +351,11 @@ KR-4831 und KR-4841
 KR-4841 -> KR-4842 -> KR-4911 -> KR-4912
 KR-4843 und KR-4912 -> KR-4848 -> KR-4913
 KR-4847 und KR-4913 -> KR-4849 -> KR-4915 -> KR-4850
+KR-4850 -> KR-4814 -> KR-4914
 KR-4850 -> KR-4851
-KR-4851 -> KR-4852
-  -> KR-4853
-  -> Nutzerreview
+KR-4851 und KR-4914
+  -> KR-4852 (einziges finales Vollgate; gruen = Nutzerreview bestanden)
+  -> KR-4853 (uebernimmt den unveraenderten Gatebericht; kein Build oder Test)
   -> KR-4854
 ```
 
@@ -310,10 +365,16 @@ Freigabevertraege verbindlich; insbesondere werden `KR-4848`, `KR-4849`,
 Spielboot und das konsolidierte Gate dadurch nicht uebersprungen.
 
 Unabhaengige Aufgaben derselben Stufe duerfen parallel entwickelt werden.
-Waehrend `KR-4841` bis `KR-4851` laufen nur betroffene Targets und kleine,
-fokussierte Regressionen. Vollstaendiges CTest, Sanitizer-Gate, Portexport,
-Originaldisc-Installation und privater Bootlauf werden einmal in `KR-4852`
-gebuendelt. Jeder Prozess besitzt ein hartes Limit von 15 Minuten.
+Waehrend aller noch offenen v0.48-Implementierungsaufgaben einschliesslich
+`KR-4814` und `KR-4914` laufen nur betroffene Targets und kleine, fokussierte
+Regressionen. Vollstaendiges CTest, Sanitizer-Gate, finaler Portexport, finale
+Originaldisc-Installation und die beiden abschliessenden privaten
+Reproduktionslaeufe werden einmal in `KR-4852` gebuendelt. Budgetierte private
+Diagnoselaeufe nach einem konkreten vertikalen Bootfix bleiben davon
+unberuehrt. `KR-4853` uebernimmt danach ausschliesslich den unveraenderten
+gruenen Gatebericht und synchronisiert die Freigabedokumente; es startet
+keinen zweiten Build oder Testlauf. Jeder Prozess besitzt ein hartes Limit von
+15 Minuten.
 
 ### Gate
 
@@ -336,26 +397,23 @@ gebuendelt. Jeder Prozess besitzt ein hartes Limit von 15 Minuten.
   Emulatorimplementierungen gelangen in den Produktpfad
 - Quell-GDIs werden nie geloescht; Retaildaten und private Identitaeten bleiben
   ausserhalb von Repository, CI und verteilbaren Paketen
-- vor `KR-4854` wird zwingend fuer Nutzerreview gestoppt; v0.48 wird nur intern
-  freigegeben und nicht getaggt. Tags beginnen erst mit der Alpha.
+- das vollstaendige Freigabegate laeuft erst, wenn alle v0.48-
+  Implementierungsaufgaben abgeschlossen sind. Ein vollstaendig gruener
+  unveraenderter Gatebericht erfuellt die am 23.07.2026 erteilte Standing
+  Approval automatisch: `KR-4854` darf ohne weiteren Review-Stopp als
+  release-ready abgeschlossen werden
+- v0.48 wird nur intern freigegeben und nicht getaggt. Tags beginnen erst mit
+  der Alpha
 
-## v0.49.0 - Controller-, Port-, Harness-, GUI-Integration und Alpha-Candidate
+## v0.49.0 - Port-, Harness-, GUI-Integration und Alpha-Candidate
 
 ### Ziel
 
-Nach dem nativen Boot- und Frame-Gate werden Controllerunterstuetzung,
-Runtime-SDK, Portworkflow, Harness, GUI, CI und Paketierung zu einem allgemeinen
-Alpha-Candidate integriert. Die v0.48-Basis bleibt dabei unveraendert und Sonic
-Adventure liefert keine titelspezifischen Produktvertraege.
-
-### Post-Frame-Controller-Tasks
-
-- [ ] `KR-4814` - Nativer Controller und gastzeitgebundene Maple-Eingabe
-- [ ] `KR-4914` - Private interaktive Runtime-Sitzung mit Controller
-
-Beide Controlleraufgaben gehoeren zu v0.49 und beginnen erst auf der durch
-`KR-4854` freigegebenen Framebasis. Damit bleibt Controllerarbeit klar hinter
-dem P0-Nachweis aus `KR-4850`.
+Nach dem nativen Boot-, Frame- und Controller-Gate werden die in v0.48
+geschlossenen Eingabevertraege mit Runtime-SDK, Portworkflow, Harness, GUI, CI
+und Paketierung zu einem allgemeinen Alpha-Candidate integriert. Die
+v0.48-Basis bleibt dabei unveraendert und Sonic Adventure liefert keine
+titelspezifischen Produktvertraege.
 
 ### Migrierte Integrationsaufgaben
 
@@ -382,9 +440,6 @@ dem P0-Nachweis aus `KR-4850`.
 ### Verbindliche Reihenfolge
 
 ```text
-KR-4854
-  -> KR-4814
-  -> KR-4914
 KR-4854
   -> KR-4801, KR-4811, KR-4821 und KR-4824
   -> KR-4802
@@ -480,9 +535,9 @@ ausgewiesenen unterstuetzten Bereich.
 
 ### Tasks
 
-- [ ] `KR-9001` - oeffentliche Vertrage und unterstuetzten Umfang einfrieren
+- [ ] `KR-9001` - Oeffentliche Vertrage und Supportumfang einfrieren
 - [ ] `KR-9002` - Plattformpakete, Installation und Migration
-- [ ] `KR-9003` - Langzeit-QA, Dokumentation, Datenschutz und Wartung
+- [ ] `KR-9003` - Langzeit-QA, Dokumentation und Wartung
 - [ ] `KR-9999` - v1.0 Gate-Vorbereitung
 - [ ] `KR-10000` - v1.0.0 Release
 
