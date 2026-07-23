@@ -203,6 +203,7 @@ const std::string& GdRomDrive::identity() const noexcept {
     return source_->identity();
 }
 
+
 GdRomAsyncReader::GdRomAsyncReader(EventScheduler& scheduler,
                                    GdRomDrive drive,
                                    const GdRomTiming timing,

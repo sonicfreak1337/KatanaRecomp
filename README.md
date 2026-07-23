@@ -47,8 +47,10 @@ Der normale Produktport emittiert oder linkt keinen SH-4-Interpreter. Ein
 nicht vorab gebundenes AOT-Ziel endet stattdessen als typisierter Fehler. Nur
 ein expliziter `diagnostic_partial`-Export enthaelt den begrenzten
 Diagnoseinterpreter und weist ihn im Manifest aus. Strukturierte Disc-
-Ladetransaktionen, der allgemeine native Materializer und vorab erzeugte
-latente AOT-Module bleiben in `KR-4848` offen. P1-/P2-Aliase dispatchen
+Ladetransaktionen committen RAM, Provenienz, Module und Invalidierungen
+atomar. Bekannte Discdateien werden exportseitig begrenzt AOT-analysiert und
+erst nach exakter Content-/Byteidentitaet sowie Vollabdeckung aktiviert.
+P1-/P2-Aliase dispatchen
 denselben nativen Code; absolute Pointerwerte
 aus beschreibbaren Anfangssnapshottabellen bleiben validierte Runtime-
 Kandidaten und werden weder zu erfundenen CFG-Kanten noch zu Funktionsseeds.
@@ -59,8 +61,8 @@ vorbereitet; der live geladene Dispatch bleibt `RuntimeOnly` und erzeugt keine
 feste CFG-Kante. Snapshotcache und P2-Aliasaufloesung sind gegen imagefremde
 Beweise abgesichert. Lokale AOT-Blockketten tragen die exakte tatsaechliche
 Terminatorquelle und Siteklasse bis zum externen Dispatch weiter. Der aktuelle
-kumulative Stand verwendet Runtime-ABI 45, Block-ABI 3,
-Backend-Interface-ABI 3, PlatformServices-ABI 10, Portprojektvertrag 29 und
+kumulative Stand verwendet Runtime-ABI 46, Block-ABI 3,
+Backend-Interface-ABI 3, PlatformServices-ABI 10, Portprojektvertrag 30 und
 Host-Video-Vertrag 2.
 
 `KR-4912` schliesst die allgemeine Lebenszeit dynamischer Codebereiche:
@@ -74,8 +76,8 @@ Validierungssnapshots werden geteilt, budgetiert und nach der letzten Herkunft
 freigegeben. Materialisierungen erscheinen unabhaengig von der Diagnoseabtastung
 im Replay; oeffentliche Berichte redigieren Identitaeten und Gastbytes. Der
 normale Produktport besitzt weiterhin keinen Interpreter und beendet
-unkompilierten Code typisiert. `KR-4848` bleibt fuer strukturierte
-Disc-Ladetransaktionen und die Registry latenter AOT-Module offen. Die
+unkompilierten Code typisiert. `KR-4848` ist mit atomaren Disc-
+Ladetransaktionen und der Registry latenter AOT-Module abgeschlossen. Die
 fokussierten Regressionen sind gruen; ein privater Retaillauf, eine Vollsuite
 und `KR-4852` wurden fuer diesen Abschluss nicht ausgefuehrt.
 
@@ -222,9 +224,9 @@ Offscreen-Writes, unveraenderte Bilddaten oder Blanking.
 Der kontrollierte Exit am Ende des Gastzyklusbudgets ist erwartet und kein
 Crash. Der Lauf erreicht an dieser Grenze weder BootExecutable noch den
 eigentlichen Spielboot. `KR-4915` und `KR-4850` sind durch den vorgezogenen
-IP.BIN-Framepfad erfuellt; die offenen `KR-4848`-Ladevorgaenge und der
-Materializer sowie der TA-/Bootpfad werden dadurch nicht als abgeschlossen
-behauptet. Der jetzt belegte Frame gibt die verbindliche v0.48-
+IP.BIN-Framepfad erfuellt; die damals offenen `KR-4848`-Ladevorgaenge und der
+Materializer sind inzwischen geschlossen, der TA-/Bootpfad dagegen nicht.
+Der belegte Frame gibt die verbindliche v0.48-
 Controllerarbeit fuer Xbox-, DualSense- und vergleichbare Geraete frei; sie
 bleibt vor der konsolidierten v0.48-Validierung abzuschliessen.
 

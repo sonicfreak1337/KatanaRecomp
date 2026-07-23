@@ -19,6 +19,11 @@ struct NativeAotTemplatePatch {
     std::vector<NativeAotTemplatePatchTarget> allowed_targets;
 };
 
+enum class NativeAotTemplateDestination : std::uint8_t {
+    VbrRelative,
+    LoadedModule
+};
+
 // Describes proof metadata only. The original template bytes stay in the local
 // disc-backed ExecutableModuleCatalog and are never embedded in an exported port.
 struct NativeAotTemplate {
@@ -28,6 +33,9 @@ struct NativeAotTemplate {
     std::uint32_t extent = 0u;
     std::int32_t destination_vbr_delta = 0;
     std::vector<NativeAotTemplatePatch> patches;
+    NativeAotTemplateDestination destination = NativeAotTemplateDestination::VbrRelative;
+    std::string expected_runtime_content_identity;
+    std::string expected_runtime_byte_identity;
 };
 
 enum class NativeAotTemplateBindFailure : std::uint8_t {
@@ -39,7 +47,9 @@ enum class NativeAotTemplateBindFailure : std::uint8_t {
     SourceIdentityMismatch,
     RuntimeBytesMismatch,
     PatchTargetRejected,
-    SourceBlockMissing
+    SourceBlockMissing,
+    RuntimeContentIdentityMismatch,
+    MissingAot
 };
 
 struct NativeAotTemplateBindResult {

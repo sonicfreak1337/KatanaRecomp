@@ -322,7 +322,10 @@ int main() {
     auto moved = PackedDiscSource::open(portable_pack);
     moved->verify_all_chunks();
     const auto boot =
-        load_dreamcast_runtime_boot(moved, moved->primary_data_lba(), moved->info().tracks.size());
+        load_dreamcast_runtime_boot(moved,
+                                    moved->primary_data_lba(),
+                                    moved->info().tracks.size(),
+                                    moved->info().content_identity);
     require(
         boot.boot_file == std::vector<std::uint8_t>({0x0Bu, 0x00u, 0x09u, 0x00u}) &&
             boot.repeated_reads_match && hash(portable_pack) == read_only_hash &&

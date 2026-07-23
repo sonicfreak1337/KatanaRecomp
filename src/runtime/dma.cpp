@@ -117,12 +117,36 @@ std::uint32_t Sh4Dmac::operation() const noexcept {
     return operation_;
 }
 
-void Sh4Dmac::request_transfer(const std::size_t index, const std::uint32_t requests) {
+void Sh4Dmac::request_transfer(
+    const std::size_t index,
+    const std::uint32_t requests,
+    const DmaExternalDestinationProgression destination_progression) {
     auto& value = channel(index);
     if (requests == 0u) throw std::invalid_argument("DMA-Anforderung braucht mindestens einen Request.");
+    if (destination_progression ==
+        DmaExternalDestinationProgression::IncrementByTransferUnit) {
+        const auto request_source = (value.control & request_source_mask) >> 8u;
+        const auto channel2_direct_texture_contract =
+            index == 2u && request_source == 2u &&
+            (operation_ & (master_enable | on_demand_enable)) ==
+                (master_enable | on_demand_enable) &&
+            (value.control & channel_enable) != 0u &&
+            (value.control & 0x00000080u) != 0u && transfer_size(value) == 32u &&
+            address_mode(value.control, 12u) == 1u &&
+            address_mode(value.control, 14u) == 0u;
+        if (!channel2_direct_texture_contract)
+            throw std::invalid_argument(
+                "Fortschreitendes externes DMA-Ziel braucht den "
+                "Channel-2-/RS=2-/32-Byte-/DDT-Vertrag.");
+    }
+    if (value.pending_requests != 0u &&
+        value.external_destination_progression != destination_progression)
+        throw std::logic_error(
+            "Externe DMA-Requests mit verschiedener Zielprogression sind nicht mischbar.");
     if (requests > std::numeric_limits<std::uint32_t>::max() - value.pending_requests) {
         throw std::overflow_error("DMA-Anforderungszaehler ist uebergelaufen.");
     }
+    value.external_destination_progression = destination_progression;
     value.pending_requests += requests;
     reevaluate();
 }
@@ -278,6 +302,7 @@ Sh4DmacSnapshot Sh4Dmac::snapshot() const noexcept {
             source.pending_requests,
             source.pending_on_demand_requests,
             source.completed_units,
+            source.external_destination_progression,
             source.interrupt_pending,
         };
     }
@@ -376,6 +401,8 @@ void Sh4Dmac::reevaluate() {
 void Sh4Dmac::discard_external_requests() noexcept {
     for (auto& value : channels_) {
         value.pending_requests = 0u;
+        value.external_destination_progression =
+            DmaExternalDestinationProgression::AddressMode;
     }
     discard_on_demand_requests();
 }
@@ -478,6 +505,9 @@ void Sh4Dmac::handle_transfer(const std::size_t index) {
         }
     }
     ++performance_counters_.completed_batches;
+    if (value.pending_requests == 0u)
+        value.external_destination_progression =
+            DmaExternalDestinationProgression::AddressMode;
     if (completed && completion_observer_) completion_observer_(index);
     if (((operation_ >> 8u) & 0x3u) == 3u) {
         round_robin_cursor_ = (index + 1u) % channel_count;
@@ -555,7 +585,11 @@ void Sh4Dmac::update_addresses(Channel& value, const std::size_t size) noexcept 
         }
     };
     update(value.source, address_mode(value.control, 12u));
-    update(value.destination, address_mode(value.control, 14u));
+    if (value.external_destination_progression ==
+        DmaExternalDestinationProgression::IncrementByTransferUnit)
+        value.destination += static_cast<std::uint32_t>(size);
+    else
+        update(value.destination, address_mode(value.control, 14u));
 }
 
 void Sh4Dmac::set_fault(const std::size_t index,

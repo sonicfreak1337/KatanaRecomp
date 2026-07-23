@@ -877,7 +877,7 @@ int main() {
                 report.persistent_range_count == 2u &&
                 report.device_count ==
                     runtime_probe_deterministic_v1_device_schemas.size() &&
-                report.device_field_count == 867u &&
+                report.device_field_count == 884u &&
                 report.hashes.combined ==
                     combine_runtime_probe_hashes(report.hashes.guest_state,
                                                  report.hashes.replay),

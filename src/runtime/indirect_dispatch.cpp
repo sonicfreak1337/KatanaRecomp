@@ -93,6 +93,8 @@ DispatchDiagnosticError materialization_error(const MaterializationFailure failu
     case MaterializationFailure::ByteIdentityMismatch:
     case MaterializationFailure::AotTemplateMismatch:
         return DispatchDiagnosticError::ByteIdentityMismatch;
+    case MaterializationFailure::MissingAot:
+        return DispatchDiagnosticError::MissingAot;
     case MaterializationFailure::GenerationMismatch:
     case MaterializationFailure::ModuleUnloaded:
         return DispatchDiagnosticError::GenerationMismatch;

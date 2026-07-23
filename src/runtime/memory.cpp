@@ -1078,6 +1078,50 @@ void Memory::write_bytes(const std::uint32_t address,
     write_bytes_at(address, bytes, GuestMemoryAccessContext{address}, source);
 }
 
+bool Memory::commit_prevalidated_linear_transaction_bytes(
+    const std::uint32_t address,
+    const std::span<const std::uint8_t> bytes,
+    const std::span<const std::uint8_t> changed_bytes,
+    const CodeWriteSource source) noexcept {
+    if (bytes.empty() || changed_bytes.size() != bytes.size()) return false;
+    const auto* mapped = indexed_region(address, bytes.size(), false);
+    if (mapped == nullptr || mapped->info.access != MemoryRegionAccess::ReadWrite ||
+        mapped->linear == nullptr)
+        return false;
+    const auto offset = region_offset(mapped->info, address);
+    auto backing = mapped->linear->writable_bytes();
+    if (offset > backing.size() || bytes.size() > backing.size() - offset) return false;
+
+    std::copy(bytes.begin(), bytes.end(), backing.begin() + offset);
+    const auto changed = std::any_of(
+        changed_bytes.begin(), changed_bytes.end(), [](const auto value) { return value != 0u; });
+    if (access_observers_active()) {
+        for (std::size_t index = 0u; index < bytes.size(); ++index) {
+            ++performance_counters_.observed_accesses;
+            try {
+                notify_access({MemoryAccessOperation::Write,
+                               address + static_cast<std::uint32_t>(index),
+                               MemoryAccessWidth::Byte,
+                               bytes[index],
+                               mapped->info.name});
+            } catch (...) {
+                // Diagnostic observers are not allowed to tear an admitted guest transaction.
+            }
+        }
+    } else {
+        performance_counters_.unobserved_accesses += bytes.size();
+    }
+    try {
+        notify_guest_write({address, bytes.size(), source, changed});
+    } catch (...) {
+        // The product observer only consumes the admitted range. A diagnostic observer failure
+        // cannot turn a completed linear RAM commit into a partial device write.
+    }
+    notify_guest_memory_write_range(
+        address, bytes.size(), source, changed_bytes, nullptr);
+    return true;
+}
+
 void Memory::write_bytes_at(const std::uint32_t address,
                             const std::span<const std::uint8_t> bytes,
                             const GuestMemoryAccessContext& context,

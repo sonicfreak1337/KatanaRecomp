@@ -1,4 +1,5 @@
 #include "katana/runtime/dreamcast_memory.hpp"
+#include "katana/runtime/dma.hpp"
 #include "katana/runtime/pvr.hpp"
 
 #include <algorithm>
@@ -53,6 +54,10 @@ Packet ta_vertex(const std::uint32_t command, const float x) {
 void end_fifo_list(katana::runtime::PvrTaFifo& fifo) {
     fifo.submit(Packet{});
 }
+std::uint64_t packet_count(const katana::runtime::PvrTaMetrics& metrics,
+                           const katana::runtime::PvrTaPacketKind kind) {
+    return metrics.normalized_packets[static_cast<std::size_t>(kind)];
+}
 
 struct YuvAccessRecorder {
     std::array<katana::runtime::GuestMemoryAccessEvent, 256u> events{};
@@ -77,6 +82,113 @@ struct YuvAccessRecorder {
 
 int main() {
     using namespace katana::runtime;
+    const auto fifo_destination =
+        plan_pvr_channel2_destination(0x10001220u, 64u);
+    require(fifo_destination.kind == PvrChannel2DestinationKind::TaFifo &&
+                !fifo_destination.destination_progresses() &&
+                fifo_destination.unit_count == 2u &&
+                fifo_destination.destination_for_unit(0u) == 0x10001220u &&
+                fifo_destination.destination_for_unit(1u) == 0x10001220u,
+            "TA-FIFO-Ziel wird nicht als festes 32-Byte-Channel-2-Ziel geplant.");
+    const auto yuv_destination =
+        plan_pvr_channel2_destination(0x12800000u, 32u);
+    require(yuv_destination.kind == PvrChannel2DestinationKind::YuvConverter &&
+                !yuv_destination.destination_progresses(),
+            "YUV-Fenster wird nicht als festes Channel-2-Geraeteziel erkannt.");
+    const auto direct64_destination =
+        plan_pvr_channel2_destination(0x11FFFFC0u, 64u);
+    const auto direct32_destination =
+        plan_pvr_channel2_destination(0x13000400u, 96u);
+    require(direct64_destination.kind ==
+                    PvrChannel2DestinationKind::DirectTexture64 &&
+                direct64_destination.destination_progresses() &&
+                direct64_destination.destination_for_unit(0u) == 0x11FFFFC0u &&
+                direct64_destination.destination_for_unit(1u) == 0x11FFFFE0u &&
+                direct32_destination.kind ==
+                    PvrChannel2DestinationKind::DirectTexture32 &&
+                direct32_destination.destination_for_unit(2u) == 0x13000440u,
+            "Direct-Texture-Ziele 0x11/0x13 schreiten nicht je 32-Byte-Einheit fort.");
+    require(throws<std::out_of_range>(
+                [&] { static_cast<void>(direct64_destination.destination_for_unit(2u)); }) &&
+                throws<std::out_of_range>([&] {
+                    static_cast<void>(
+                        plan_pvr_channel2_destination(0x11FFFFE0u, 64u));
+                }) &&
+                throws<std::invalid_argument>([&] {
+                    static_cast<void>(
+                        plan_pvr_channel2_destination(0x11000004u, 32u));
+                }) &&
+                throws<std::invalid_argument>([&] {
+                    static_cast<void>(
+                        plan_pvr_channel2_destination(0x11000000u, 48u));
+                }) &&
+                throws<std::out_of_range>([&] {
+                    static_cast<void>(
+                        plan_pvr_channel2_destination(0x14000000u, 32u));
+                }),
+            "PVR-Channel-2-Plan akzeptiert Einheiten ausserhalb von Laenge, "
+            "Ausrichtung oder Direct-Texture-Fenster.");
+
+    {
+        EventScheduler direct_scheduler;
+        Memory direct_memory(0u);
+        auto direct_source = std::make_shared<LinearMemoryDevice>(128u);
+        auto direct_vram = std::make_shared<LinearMemoryDevice>(dreamcast_vram_size);
+        direct_memory.map_region(
+            "synthetic-channel2-source", 0x0C000000u, direct_source);
+        map_dreamcast_ta_vram_aliases(direct_memory, direct_vram);
+        Sh4Dmac direct_dmac(direct_scheduler, direct_memory, DmaTiming{1u});
+        const auto run_direct_transfer =
+            [&](const std::uint32_t source_offset,
+                const PvrChannel2DestinationPlan& plan,
+                const std::uint32_t pattern) {
+                direct_dmac.reset();
+                for (std::uint32_t offset = 0u;
+                     offset < static_cast<std::uint32_t>(plan.byte_count);
+                     offset += 4u)
+                    direct_source->write_u32(
+                        source_offset + offset, pattern + offset);
+                direct_dmac.write_source(2u, 0x0C000000u + source_offset);
+                direct_dmac.write_destination(2u, plan.initial_address);
+                direct_dmac.write_count(
+                    2u, static_cast<std::uint32_t>(plan.unit_count));
+                direct_dmac.write_control(2u, 0x000012C1u);
+                direct_dmac.write_operation(
+                    Sh4Dmac::master_enable | Sh4Dmac::on_demand_enable);
+                direct_dmac.request_transfer(
+                    2u,
+                    static_cast<std::uint32_t>(plan.unit_count),
+                    plan.destination_progresses()
+                        ? DmaExternalDestinationProgression::IncrementByTransferUnit
+                        : DmaExternalDestinationProgression::AddressMode);
+                static_cast<void>(direct_scheduler.advance_by(
+                    plan.byte_count, plan.unit_count));
+                bool matches = true;
+                for (std::uint32_t offset = 0u;
+                     offset < static_cast<std::uint32_t>(plan.byte_count);
+                     offset += 4u)
+                    matches =
+                        matches &&
+                        direct_memory.read_u32(plan.initial_address + offset) ==
+                            pattern + offset;
+                require(
+                    matches &&
+                        direct_dmac.destination(2u) ==
+                            plan.initial_address +
+                                static_cast<std::uint32_t>(plan.byte_count),
+                    "Mehrteiliger Direct-Texture-Transfer erreicht sein "
+                    "fortschreitendes VRAM-Ziel nicht.");
+            };
+        run_direct_transfer(
+            0u,
+            plan_pvr_channel2_destination(0x11000200u, 64u),
+            0x64000000u);
+        run_direct_transfer(
+            64u,
+            plan_pvr_channel2_destination(0x13000400u, 64u),
+            0x32000000u);
+    }
+
     TileAccelerator ta;
     require(throws<std::logic_error>([&] { ta.submit_vertex(vertex(0.0f), true); }),
             "Vertex ohne offene TA-Liste wird akzeptiert.");
@@ -124,6 +236,80 @@ int main() {
                 empty_eol_fifo.metrics().list_completions == 0u &&
                 empty_eol_notifications == 0u,
             "TA-End-of-List ohne Polygonheader ist kein gueltiger leerer No-op.");
+
+    PvrTaFifo normalized_object_list_fifo;
+    Packet object_list_set{};
+    put_u32(object_list_set, 0u, 0x40000000u);
+    normalized_object_list_fifo.submit(object_list_set);
+    end_fifo_list(normalized_object_list_fifo);
+    require(packet_count(normalized_object_list_fifo.metrics(),
+                         PvrTaPacketKind::ObjectListSet) == 1u &&
+                packet_count(normalized_object_list_fifo.metrics(),
+                             PvrTaPacketKind::EndOfList) == 1u &&
+                normalized_object_list_fifo.metrics().normalized_packets.size() ==
+                    pvr_ta_packet_kind_count,
+            "Normalisierte TA-Diagnostik verliert Object-List-Set oder EOL.");
+
+    PvrTaFifo normalized_sprite_fifo;
+    Packet sprite_header{};
+    put_u32(sprite_header, 0u, 0xA0000000u);
+    put_u32(sprite_header, 16u, 0xFFFFFFFFu);
+    normalized_sprite_fifo.submit(sprite_header);
+    Packet sprite_first{};
+    put_u32(sprite_first, 0u, 0xE0000000u);
+    put_float(sprite_first, 4u, 0.0f);
+    put_float(sprite_first, 8u, 0.0f);
+    put_float(sprite_first, 12u, 0.5f);
+    put_float(sprite_first, 16u, 1.0f);
+    put_float(sprite_first, 20u, 0.0f);
+    put_float(sprite_first, 24u, 0.5f);
+    put_float(sprite_first, 28u, 0.0f);
+    normalized_sprite_fifo.submit(sprite_first);
+    Packet sprite_second{};
+    put_float(sprite_second, 0u, 1.0f);
+    put_float(sprite_second, 4u, 0.5f);
+    put_float(sprite_second, 8u, 1.0f);
+    put_float(sprite_second, 12u, 1.0f);
+    normalized_sprite_fifo.submit(sprite_second);
+    end_fifo_list(normalized_sprite_fifo);
+    const auto normalized_sprite_frame = normalized_sprite_fifo.finish_frame();
+    require(normalized_sprite_frame.primitives.size() == 1u &&
+                packet_count(normalized_sprite_fifo.metrics(),
+                             PvrTaPacketKind::SpriteHeader) == 1u &&
+                packet_count(normalized_sprite_fifo.metrics(),
+                             PvrTaPacketKind::Vertex) == 1u &&
+                packet_count(normalized_sprite_fifo.metrics(),
+                             PvrTaPacketKind::SpriteContinuation) == 1u,
+            "TA-Sprite oder seine normalisierte Continuation-Diagnostik fehlt.");
+
+    PvrTaFifo normalized_modifier_fifo;
+    normalized_modifier_fifo.submit(header(1u << 24u));
+    Packet modifier_first{};
+    put_u32(modifier_first, 0u, 0xE0000000u);
+    normalized_modifier_fifo.submit(modifier_first);
+    normalized_modifier_fifo.submit(Packet{});
+    end_fifo_list(normalized_modifier_fifo);
+    const auto normalized_modifier_frame = normalized_modifier_fifo.finish_frame();
+    require(normalized_modifier_frame.modifier_volumes.size() == 1u &&
+                normalized_modifier_frame.modifier_volumes[0].triangles.size() == 1u &&
+                packet_count(normalized_modifier_fifo.metrics(),
+                             PvrTaPacketKind::ModifierVertexContinuation) == 1u,
+            "TA-Modifier-Continuation wird nicht normalisiert oder verarbeitet.");
+
+    PvrTaFifo normalized_unsupported_fifo;
+    Packet reserved_parameter3{};
+    Packet reserved_parameter6{};
+    put_u32(reserved_parameter3, 0u, 3u << 29u);
+    put_u32(reserved_parameter6, 0u, 6u << 29u);
+    require(throws<std::runtime_error>(
+                [&] { normalized_unsupported_fifo.submit(reserved_parameter3); }) &&
+                throws<std::runtime_error>(
+                    [&] { normalized_unsupported_fifo.submit(reserved_parameter6); }) &&
+                packet_count(normalized_unsupported_fifo.metrics(),
+                             PvrTaPacketKind::ReservedParameter3) == 1u &&
+                packet_count(normalized_unsupported_fifo.metrics(),
+                             PvrTaPacketKind::ReservedParameter6) == 1u,
+            "Reservierte TA-Pakettypen scheitern nicht sichtbar in bounded Diagnostik.");
 
     PvrTaFifo packed_fifo;
     packed_fifo.submit(header(0u));
@@ -213,7 +399,9 @@ int main() {
     end_fifo_list(float_fifo);
     const auto float_frame = float_fifo.finish_frame();
     require(float_frame.primitives[0].vertices[0].argb == 0xFF804000u &&
-                float_frame.primitives[0].vertices[0].oargb == 0x800040FFu,
+                float_frame.primitives[0].vertices[0].oargb == 0x800040FFu &&
+                packet_count(float_fifo.metrics(),
+                             PvrTaPacketKind::ExtendedVertexContinuation) == 3u,
             "64-Byte-Floatvertex verliert Base- oder Offsetfarbe.");
 
     PvrTaFifo invalid_mode2;
@@ -250,7 +438,9 @@ int main() {
     const auto intensity_frame = intensity_fifo.finish_frame();
     require(intensity_frame.primitives.size() == 2u &&
                 intensity_frame.primitives[1].vertices[0].argb == 0xFF66331Au &&
-                intensity_frame.primitives[1].vertices[0].oargb == 0xFF1A330Du,
+                intensity_frame.primitives[1].vertices[0].oargb == 0xFF1A330Du &&
+                packet_count(intensity_fifo.metrics(),
+                             PvrTaPacketKind::IntensityContinuation) == 1u,
             "Intensity-Mode 2 uebernimmt Face-Colors oder Vertex-Intensitaeten nicht korrekt.");
 
     {

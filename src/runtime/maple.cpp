@@ -47,6 +47,14 @@ std::vector<std::uint32_t> device_info_payload(const std::uint32_t functions,
 MapleBus::MapleBus(std::function<void()> completion_observer)
     : completion_observer_(std::move(completion_observer)) {}
 
+MapleResponse MapleDevice::transact_at(const MapleRequest& request, const std::uint64_t) {
+    return transact(request);
+}
+
+ControllerState HostInputBackend::sample_at(const std::uint64_t frame, const std::uint64_t) {
+    return sample(frame);
+}
+
 ReplayInputBackend::ReplayInputBackend(std::vector<ControllerState> frames)
     : frames_(std::move(frames)) {
     if (frames_.empty()) {
@@ -69,6 +77,11 @@ MapleControllerDevice::MapleControllerDevice(std::shared_ptr<HostInputBackend> i
 }
 
 MapleResponse MapleControllerDevice::transact(const MapleRequest& request) {
+    return transact_at(request, 0u);
+}
+
+MapleResponse MapleControllerDevice::transact_at(const MapleRequest& request,
+                                                 const std::uint64_t guest_cycle) {
     constexpr std::uint32_t controller_function = 0x01000000u;
     if (request.command == MapleCommand::DeviceRequest) {
         return {MapleResponseCode::DeviceInfo,
@@ -78,7 +91,7 @@ MapleResponse MapleControllerDevice::transact(const MapleRequest& request) {
     if (request.command != MapleCommand::GetCondition) {
         return {MapleResponseCode::UnknownCommand, {}};
     }
-    const auto state = input_->sample(next_frame_++);
+    const auto state = input_->sample_at(next_frame_++, guest_cycle);
     const auto buttons = static_cast<std::uint16_t>(~state.pressed_buttons);
     const std::uint32_t condition0 = static_cast<std::uint32_t>(buttons) |
                                      (static_cast<std::uint32_t>(state.right_trigger) << 16u) |
@@ -230,24 +243,40 @@ bool MapleBus::attached(const std::uint8_t port, const std::uint8_t unit) const 
 
 MapleResponse
 MapleBus::exchange(const std::uint8_t port, const std::uint8_t unit, const MapleRequest& request) {
-    return exchange_impl(port, unit, request, true);
+    return exchange_impl(port, unit, request, true, 0u);
+}
+
+MapleResponse MapleBus::exchange_at(const std::uint8_t port,
+                                    const std::uint8_t unit,
+                                    const MapleRequest& request,
+                                    const std::uint64_t guest_cycle) {
+    return exchange_impl(port, unit, request, true, guest_cycle);
 }
 
 MapleResponse MapleBus::exchange_without_completion(const std::uint8_t port,
                                                     const std::uint8_t unit,
                                                     const MapleRequest& request) {
-    return exchange_impl(port, unit, request, false);
+    return exchange_impl(port, unit, request, false, 0u);
+}
+
+MapleResponse
+MapleBus::exchange_without_completion_at(const std::uint8_t port,
+                                         const std::uint8_t unit,
+                                         const MapleRequest& request,
+                                         const std::uint64_t guest_cycle) {
+    return exchange_impl(port, unit, request, false, guest_cycle);
 }
 
 MapleResponse MapleBus::exchange_impl(const std::uint8_t port,
                                       const std::uint8_t unit,
                                       const MapleRequest& request,
-                                      const bool notify_completion) {
+                                      const bool notify_completion,
+                                      const std::uint64_t guest_cycle) {
     auto& device = devices_[slot(port, unit)];
     if (!device) {
         throw std::runtime_error("Kein Maple-Geraet an der angeforderten Adresse.");
     }
-    auto response = device->transact(request);
+    auto response = device->transact_at(request, guest_cycle);
     history_.push_back(
         MapleTransactionRecord{next_sequence_++, port, unit, request.command, response.code});
     if (notify_completion && completion_observer_) completion_observer_();

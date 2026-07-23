@@ -4,6 +4,21 @@
 
 ### Geaendert
 
+- KR-4848 schliesst atomare Disc-Ladetransaktionen und latentes natives AOT.
+  BIOS-, PIO-, G1-DMA-, Stream- und Bootstrap-Loads committen RAM, Module,
+  Codegenerationen und Blockinvalidierungen gemeinsam. Mehrere Teilreads
+  aktivieren bekannte Discdateien erst nach exakter Contentidentitaet,
+  lueckenloser Vollabdeckung und Vollhash; partielle oder fremde Bytes bleiben
+  ohne Produktinterpreter typisiert nicht ausfuehrbar. Die begrenzte parallele
+  Exportdiscovery publiziert weder Dateinamen, Pfade noch Retailbytes.
+  `KR_GUEST_PROGRAM_ENTERED` prueft jetzt die exakte MMU-bewusste
+  BootExecutable-Range. Channel 2 schreitet in Direct-Texture-Fenstern je 32
+  Byte fort, und ein fehlgeschlagener PVR-Render erfindet weder Completion noch
+  RenderDone. Der gastzeitgebundene Controllerkern normalisiert moderne
+  Controllerprofile; natives Windows-Polling und die interaktive Sitzung
+  bleiben in KR-4814/KR-4914 offen. Runtime-ABI 46 und Portprojektvertrag 30
+  versionieren den Block. Der fokussierte 12-Job-Build und 17/17 Regressionen
+  sind gruen; privater Lauf, Vollsuite und KR-4852 liefen nicht.
 - KR-4912 schliesst dynamische Codebereiche, Module und Overlays allgemein.
   Load, Relocation, Replace und Unload verwenden monotone Modulinkarnationen;
   byteidentische Multi-Extent-Loads erhalten bestehende Bloecke. Byteidentische

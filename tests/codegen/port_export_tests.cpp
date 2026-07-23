@@ -5,6 +5,7 @@
 #include "katana/runtime/dreamcast_boot.hpp"
 #include "katana/runtime/executable_modules.hpp"
 #include "katana/runtime/indirect_dispatch.hpp"
+#include "katana/runtime/packed_disc.hpp"
 #include "katana/runtime/platform_services.hpp"
 
 #include <algorithm>
@@ -195,6 +196,28 @@ std::vector<std::uint8_t> poll_loop_boot_track() {
     std::copy(program.begin(),
               program.end(),
               bytes.begin() + static_cast<std::ptrdiff_t>(payload_offset(21u)));
+    return bytes;
+}
+
+std::vector<std::uint8_t> latent_module_boot_track() {
+    auto bytes = boot_track();
+    bytes.resize(23u * raw_sector_size);
+    bytes[22u * raw_sector_size + 15u] = 1u;
+    auto directory = payload_offset(20u);
+    directory +=
+        record(bytes, directory, data_lba + 20u, payload_size, std::string(1u, '\0'), true);
+    directory +=
+        record(bytes, directory, data_lba + 20u, payload_size, std::string(1u, '\1'), true);
+    directory += record(bytes, directory, data_lba + 21u, 24u, "BOOT.BIN;1", false);
+    static_cast<void>(
+        record(bytes, directory, data_lba + 22u, 4u, "ENGINE.BIN;1", false));
+    constexpr std::array<std::uint8_t, 4u> module{
+        0x0Bu, 0x00u, // rts
+        0x09u, 0x00u  // delay-slot nop
+    };
+    std::copy(module.begin(),
+              module.end(),
+              bytes.begin() + static_cast<std::ptrdiff_t>(payload_offset(22u)));
     return bytes;
 }
 
@@ -577,10 +600,14 @@ int run_test(const int argc, char* argv[]) {
     const auto render_done_before_failure = render_done_count();
     const auto render_completions_before_failure =
         hle_runtime_state.pvr_registers->render_completion_count();
+    const auto render_failures_before_failure =
+        hle_runtime_state.pvr_registers->render_failure_count();
     hle_runtime_state.pvr_registers->write(katana::runtime::pvr_register::StartRender, 1u);
     static_cast<void>(hle_runtime_state.scheduler->advance_by(2'000u, 64u));
     require(hle_runtime_state.pvr_registers->render_completion_count() ==
-                    render_completions_before_failure + 1u &&
+                    render_completions_before_failure &&
+                hle_runtime_state.pvr_registers->render_failure_count() ==
+                    render_failures_before_failure + 1u &&
                 render_done_count() == render_done_before_failure &&
                 hle_runtime_state.pvr_renderer->first_error().has_value(),
             "Fehlgeschlagener PVR-Renderpfad signalisiert RenderDone.");
@@ -712,6 +739,53 @@ int run_test(const int argc, char* argv[]) {
                 read_text(first.disc_install_recipe).find(fixture.root.string()) ==
                     std::string::npos,
             "Generische Disc-Recipe verliert Bindung oder enthaelt private Quellpfade.");
+
+    const auto latent_disc_directory = fixture.root / "latent-aot-disc";
+    std::filesystem::create_directories(latent_disc_directory);
+    write_fixture(latent_disc_directory);
+    write_binary(latent_disc_directory / "high.bin", latent_module_boot_track());
+    const auto latent_gdi_path = latent_disc_directory / "disc.gdi";
+    const auto latent_output = fixture.root / "latent-aot-port";
+    const auto latent_result =
+        export_dreamcast_port_project(latent_gdi_path, latent_output, options);
+    const auto latent_generated = snapshot(latent_output / "generated");
+    const auto& latent_dispatch = latent_generated.at("code/runtime-dispatch.cpp");
+    const auto latent_metadata = latent_generated.at("metadata/port-project.json");
+    const auto latent_main = read_text(latent_output / "src" / "main.cpp");
+    const auto latent_recipe =
+        katana::runtime::parse_disc_install_recipe(latent_result.disc_install_recipe);
+    const auto latent_gdi = katana::runtime::GdiDiscSource::open(latent_gdi_path);
+    const auto representation_specific_identity =
+        katana::runtime::gdi_content_identity(latent_gdi->descriptor());
+    require(latent_result.functions == first.functions + 1u &&
+                std::find(latent_result.checkpoints.begin(),
+                          latent_result.checkpoints.end(),
+                          "latent-aot-registry-written") != latent_result.checkpoints.end() &&
+                latent_metadata.find("\"latent_aot_modules\":1") != std::string::npos &&
+                latent_dispatch.find("register_latent_aot_modules") != std::string::npos &&
+                latent_dispatch.find(
+                    "NativeAotTemplateDestination::LoadedModule") != std::string::npos &&
+                latent_dispatch.find("set_aot_module_descriptors") != std::string::npos &&
+                latent_dispatch.find("source->read(") != std::string::npos &&
+                latent_dispatch.find(latent_recipe.content_identity) != std::string::npos &&
+                latent_main.find(
+                    "packed->info().tracks.size(), packed->info().content_identity)") !=
+                    std::string::npos &&
+                latent_main.find("auto gdi = katana::runtime::GdiDiscSource::open(source)") !=
+                    std::string::npos &&
+                latent_main.find(
+                    "gdi->descriptor().tracks.size(), "
+                    "std::string(expected_content_identity))") != std::string::npos &&
+                latent_dispatch.find("ENGINE.BIN") == std::string::npos &&
+                latent_dispatch.find(latent_disc_directory.string()) == std::string::npos,
+            "Latentes natives Disc-AOT wurde nicht generisch, lokal gebunden oder metadatenfrei "
+            "exportiert.");
+    require(representation_specific_identity != latent_recipe.content_identity &&
+                katana::runtime::packed_disc_content_identity(*latent_gdi) ==
+                    latent_recipe.content_identity &&
+                latent_dispatch.find(representation_specific_identity) == std::string::npos,
+            "Latentes AOT bindet faelschlich die repraesentationsspezifische GDI-Identitaet "
+            "statt der GDI-zu-Pack-Contentidentitaet.");
     const auto trace_enable = generated_main.find(
         "if (!enabled || runtime_wait_loop_descriptors.empty()) return;");
     const auto trace_allocate =
@@ -751,9 +825,9 @@ int run_test(const int argc, char* argv[]) {
             trace_serialize != std::string::npos && trace_enable < trace_allocate &&
             trace_allocate < trace_set_sink && trace_clear_sink < trace_serialize &&
             generated_before.at("metadata/port-project.json")
-                    .find("\"contract_version\":29") != std::string::npos &&
+                    .find("\"contract_version\":30") != std::string::npos &&
             generated_before.at("metadata/provenance.json")
-                    .find("\"manifest_version\":29") != std::string::npos,
+                    .find("\"manifest_version\":30") != std::string::npos,
         "Portprodukt bindet den versionierten Wait-Loop-Trace nicht strikt opt-in, "
         "allokationsfrei im Normalpfad und RAII-bereinigt ein.");
     const auto poll_disc_directory = fixture.root / "poll-loop-disc";
@@ -1102,6 +1176,18 @@ int run_test(const int argc, char* argv[]) {
             generated_main.find(
                 "SystemReplayCheckpointKind::GuestProgramEntered") !=
                 std::string::npos &&
+            generated_main.find(
+                "constexpr katana::runtime::GuestProgramRange "
+                "expected_guest_program_range") !=
+                std::string::npos &&
+            generated_main.find(
+                "guest_program_range_contains_instruction(") !=
+                std::string::npos &&
+            generated_main.find(
+                "if (address != " +
+                std::to_string(
+                    katana::platform::dreamcast_system_bootstrap_entry_address) +
+                "u)") == std::string::npos &&
             runtime_dispatch.find(
                 "SystemReplayObservationSession* active_observations") !=
                 std::string::npos &&

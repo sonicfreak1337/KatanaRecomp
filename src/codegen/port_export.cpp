@@ -6,6 +6,7 @@
 #include "katana/analysis/hardware_audit.hpp"
 #include "katana/codegen/backend.hpp"
 #include "katana/codegen/cpp_emitter.hpp"
+#include "katana/codegen/latent_aot_registry.hpp"
 #include "katana/codegen/naming.hpp"
 #include "katana/codegen/project.hpp"
 #include "katana/codegen/source_map.hpp"
@@ -19,6 +20,7 @@
 #include "katana/runtime/abi.hpp"
 #include "katana/runtime/disc_install.hpp"
 #include "katana/runtime/dreamcast_boot.hpp"
+#include "katana/runtime/guest_program_range.hpp"
 #include "katana/runtime/packed_disc.hpp"
 #include "katana/runtime/wait_loop_trace.hpp"
 
@@ -32,8 +34,10 @@
 #include <fstream>
 #include <future>
 #include <iomanip>
+#include <limits>
 #include <map>
 #include <optional>
+#include <set>
 #include <sstream>
 #include <stdexcept>
 #include <system_error>
@@ -115,10 +119,13 @@ select_functions(const std::span<const katana::ir::Function> program,
 std::string generated_header(const std::string& entry_namespace) {
     return "#pragma once\n\n"
            "#include \"katana/runtime/block_table.hpp\"\n"
+           "#include \"katana/runtime/disc.hpp\"\n"
+           "#include \"katana/runtime/disc_load_transaction.hpp\"\n"
+           "#include \"katana/runtime/executable_modules.hpp\"\n"
            "#include \"katana/runtime/platform_services.hpp\"\n"
            "#include \"katana/runtime/runtime.hpp\"\n"
            "#include \"katana/runtime/system_replay.hpp\"\n"
-           "#include <string>\n\n"
+           "#include <memory>\n#include <string>\n#include <string_view>\n\n"
            "namespace " +
            entry_namespace +
            " {\n"
@@ -154,6 +161,11 @@ std::string generated_header(const std::string& entry_namespace) {
            "    std::uint32_t first_failure_target = 0u;\n"
            "};\n"
            "const RuntimeMaterializationStatus& runtime_materialization_status() noexcept;\n"
+           "void register_latent_aot_modules(\n"
+           "    const std::shared_ptr<const katana::runtime::DiscSource>& source,\n"
+           "    std::string_view content_identity,\n"
+           "    katana::runtime::ExecutableModuleCatalog& modules,\n"
+           "    katana::runtime::ExecutableDiscLoadTransactionCoordinator& transactions);\n"
            "RuntimeRunResult run_runtime(katana::runtime::CpuState& cpu,\n"
            "                             katana::runtime::PlatformServices& services,\n"
            "                             katana::runtime::RuntimeBlockTable& table,\n"
@@ -255,7 +267,8 @@ std::string handwritten_main(const std::string& entry_namespace,
                              const std::string_view expected_content_identity,
                              const std::string_view expected_boot_sha256,
                              const std::string_view console_profile,
-                             const std::uint32_t entry_address) {
+                             const std::uint32_t boot_address,
+                             const std::size_t boot_size) {
     std::ostringstream identity_contract;
     identity_contract
         << "struct ExpectedInput { std::string_view role; std::string_view sha256; };\n"
@@ -274,6 +287,9 @@ std::string handwritten_main(const std::string& entry_namespace,
                       << katana::io::quote_json(expected_content_identity) << ";\n"
                       << "constexpr std::string_view expected_boot_sha256 = "
                       << katana::io::quote_json(expected_boot_sha256) << ";\n"
+                      << "constexpr katana::runtime::GuestProgramRange "
+                         "expected_guest_program_range{"
+                      << boot_address << "u, " << boot_size << "u};\n"
                       << runtime_wait_loop_descriptor_contract(wait_loop_descriptors);
     return "#include \"katana_port.hpp\"\n"
            "#include \"katana/runtime/block_guards.hpp\"\n"
@@ -281,6 +297,7 @@ std::string handwritten_main(const std::string& entry_namespace,
            "#include \"katana/runtime/disc_install.hpp\"\n"
            "#include \"katana/runtime/host_runtime.hpp\"\n"
            "#include \"katana/runtime/host_video.hpp\"\n"
+           "#include \"katana/runtime/guest_program_range.hpp\"\n"
            "#include \"katana/runtime/indirect_dispatch.hpp\"\n"
            "#include \"katana/runtime/packed_disc.hpp\"\n"
            "#include \"katana/runtime/runtime_probe.hpp\"\n"
@@ -610,14 +627,13 @@ std::string handwritten_main(const std::string& entry_namespace,
            "    }\n"
            "    void observe_guest_checkpoint(std::uint32_t address) noexcept override {\n"
            "        ++executed_blocks_;\n"
-           "        if (address != " +
-           std::to_string(entry_address) +
-           "u) {\n"
-           "            guest_checkpoint_ = true;\n"
-           "            observe_runtime_checkpoint(\n"
-           "                katana::runtime::SystemReplayCheckpointKind::GuestProgramEntered,\n"
-           "                katana::runtime::RuntimeProbeCheckpoint::GuestProgramEntered);\n"
-           "        }\n"
+           "        if (guest_checkpoint_) return;\n"
+           "        if (!katana::runtime::guest_program_range_contains_instruction(\n"
+           "                cpu_, address, expected_guest_program_range)) return;\n"
+           "        guest_checkpoint_ = true;\n"
+           "        observe_runtime_checkpoint(\n"
+           "            katana::runtime::SystemReplayCheckpointKind::GuestProgramEntered,\n"
+           "            katana::runtime::RuntimeProbeCheckpoint::GuestProgramEntered);\n"
            "    }\n"
            "    void observe_runtime_started() noexcept {\n"
            "        observe_runtime_checkpoint(\n"
@@ -960,7 +976,7 @@ std::string handwritten_main(const std::string& entry_namespace,
            "                verify_pack_identity(*packed);\n"
            "                const auto boot = katana::runtime::load_dreamcast_runtime_boot(\n"
            "                    packed, packed->primary_data_lba(), "
-           "packed->info().tracks.size());\n"
+           "packed->info().tracks.size(), packed->info().content_identity);\n"
            "                verify_boot_identity(boot);\n"
            "                std::cout << \"KATANA_DISC_INSTALL_OK tracks=\" << info.tracks.size()\n"
            "                          << \" sectors=\" << info.packed_sectors << '\\n';\n"
@@ -972,14 +988,17 @@ std::string handwritten_main(const std::string& entry_namespace,
            "        katana::runtime::DreamcastRuntimeBootImage boot;\n"
            "        try {\n"
            "            if (gdi_debug) {\n"
-           "                boot = katana::runtime::load_dreamcast_runtime_boot(source);\n"
+           "                auto gdi = katana::runtime::GdiDiscSource::open(source);\n"
+           "                boot = katana::runtime::load_dreamcast_runtime_boot(\n"
+           "                    gdi, gdi->primary_data_lba(), "
+           "gdi->descriptor().tracks.size(), std::string(expected_content_identity));\n"
            "                verify_source_identity(source, boot);\n"
            "            } else {\n"
            "                auto packed = katana::runtime::PackedDiscSource::open(source);\n"
            "                verify_pack_identity(*packed);\n"
            "                boot = katana::runtime::load_dreamcast_runtime_boot(\n"
            "                    packed, packed->primary_data_lba(), "
-           "packed->info().tracks.size());\n"
+           "packed->info().tracks.size(), packed->info().content_identity);\n"
            "            }\n"
            "            verify_boot_identity(boot);\n"
            "        } catch (const std::exception&) { throw "
@@ -1000,6 +1019,15 @@ std::string handwritten_main(const std::string& entry_namespace,
            "            cpu, boot, katana::runtime::DreamcastRuntimeFirmwareMode::" +
            std::string(hle_bios_abi ? "HleBiosAbi" : "Direct") +
            ", mutable_storage, console_profile);\n"
+           "        if (!gdi_debug) {\n"
+           "            if (!state.disc_load_transactions)\n"
+           "                throw std::runtime_error(\"disc-load-transactions-missing\");\n"
+           "            " +
+           entry_namespace +
+           "::register_latent_aot_modules(\n"
+           "                boot.source, boot.content_identity, *state.module_catalog,\n"
+           "                *state.disc_load_transactions);\n"
+           "        }\n"
            "        const auto* diagnostics_value = std::getenv(\"KATANA_PORT_DIAGNOSTICS\");\n"
            "        const bool detailed_diagnostics = diagnostics_value != nullptr &&\n"
            "            std::string_view(diagnostics_value) == \"1\";\n"
@@ -1464,7 +1492,9 @@ runtime_dispatch_artifacts(const std::string& entry_namespace,
                                runtime_code_copies,
                            const katana::io::ExecutableImage& image,
                            const std::uint32_t boot_address,
-                           const std::size_t boot_size) {
+                           const std::size_t boot_size,
+                           const std::span<const PreparedLatentAotModule> latent_modules,
+                           const std::string_view expected_content_identity) {
     const auto symbol = [](const std::uint32_t address) {
         constexpr std::array digits{'0', '1', '2', '3', '4', '5', '6', '7',
                                     '8', '9', 'A', 'B', 'C', 'D', 'E', 'F'};
@@ -1677,6 +1707,25 @@ runtime_dispatch_artifacts(const std::string& entry_namespace,
                     "Runtime-Codecopy-Patchziel besitzt keinen generierten AOT-Block.");
         }
     }
+    std::set<std::string> latent_ids;
+    for (const auto& module : latent_modules) {
+        if (module.id.empty() || !latent_ids.insert(module.id).second ||
+            module.byte_identity.size() != 71u ||
+            !module.byte_identity.starts_with("sha256:") || module.byte_size == 0u ||
+            (module.byte_size & 3u) != 0u ||
+            static_cast<std::uint64_t>(module.source_address) + module.byte_size >
+                0x1'0000'0000ull ||
+            module.disc_byte_offset >
+                std::numeric_limits<std::uint64_t>::max() - module.byte_size)
+            throw std::runtime_error("Latentes AOT-Modul besitzt ungueltige Exportgrenzen.");
+        bool has_block = false;
+        for (const auto& function : module.program) {
+            for (const auto& block : function.blocks)
+                has_block = has_block || block_addresses.contains(block.start_address);
+        }
+        if (!has_block)
+            throw std::runtime_error("Latentes AOT-Modul besitzt keinen generierten Block.");
+    }
 
     constexpr std::size_t dispatch_blocks_per_shard = 512u;
     const auto shard_count =
@@ -1837,10 +1886,13 @@ runtime_dispatch_artifacts(const std::string& entry_namespace,
            << "#include \"katana/runtime/block_abi.hpp\"\n"
            << "#include \"katana/runtime/block_table.hpp\"\n"
            << "#include \"katana/runtime/dispatch_diagnostics.hpp\"\n"
+           << "#include \"katana/runtime/disc.hpp\"\n"
+           << "#include \"katana/runtime/disc_load_transaction.hpp\"\n"
            << "#include \"katana/runtime/dreamcast_boot.hpp\"\n"
            << "#include \"katana/runtime/executable_modules.hpp\"\n"
            << "#include \"katana/runtime/indirect_dispatch.hpp\"\n"
-           << "#include \"katana/runtime/runtime_probe.hpp\"\n";
+           << "#include \"katana/runtime/runtime_probe.hpp\"\n"
+           << "#include \"katana/io/input_provenance.hpp\"\n";
     output << "#include \"katana/runtime/native_aot_template.hpp\"\n";
     if (diagnostic_interpreter)
         output << "#include \"katana/runtime/dynamic_interpreter.hpp\"\n"
@@ -1848,12 +1900,69 @@ runtime_dispatch_artifacts(const std::string& entry_namespace,
     output
            << "#include <cerrno>\n#include <chrono>\n#include <cstdlib>\n#include "
               "<iostream>\n#include <limits>\n"
-              "#include <stdexcept>\n#include <string>\n#include <thread>\n#include <utility>\n#include <vector>\n\n"
+              "#include <memory>\n#include <span>\n#include <stdexcept>\n#include <string>\n"
+              "#include <string_view>\n#include <thread>\n#include <utility>\n#include <vector>\n\n"
            << "namespace " << entry_namespace << " {\n";
     output << "thread_local RuntimeMaterializationStatus last_materialization_status;\n"
            << "const RuntimeMaterializationStatus& runtime_materialization_status() noexcept {\n"
            << "    return last_materialization_status;\n"
-           << "}\n"
+           << "}\n";
+    output << "void register_latent_aot_modules(\n"
+           << "    const std::shared_ptr<const katana::runtime::DiscSource>& source,\n"
+           << "    const std::string_view content_identity,\n"
+           << "    katana::runtime::ExecutableModuleCatalog& modules,\n"
+           << "    katana::runtime::ExecutableDiscLoadTransactionCoordinator& transactions) {\n";
+    if (latent_modules.empty()) {
+        output << "    static_cast<void>(source); static_cast<void>(content_identity);\n"
+               << "    static_cast<void>(modules); static_cast<void>(transactions);\n"
+               << "    return;\n";
+    } else {
+        output << "    if (!source || content_identity != "
+               << katana::io::quote_json(expected_content_identity) << ")\n"
+               << "        throw std::runtime_error(\"source-identity-mismatch\");\n"
+               << "    std::vector<katana::runtime::DiscLoadAotModuleDescriptor> "
+                  "descriptors;\n"
+               << "    descriptors.reserve(" << latent_modules.size() << "u);\n";
+        for (const auto& module : latent_modules) {
+            output << "    {\n"
+                   << "        auto bytes = source->read(" << module.disc_byte_offset
+                   << "ull, " << module.byte_size << "u);\n"
+                   << "        const auto byte_identity = std::string(\"sha256:\") +\n"
+                   << "            katana::io::sha256_bytes(std::string_view(\n"
+                   << "                reinterpret_cast<const char*>(bytes.data()), "
+                      "bytes.size()));\n"
+                   << "        if (byte_identity != "
+                   << katana::io::quote_json(module.byte_identity) << ")\n"
+                   << "            throw std::runtime_error(\"latent-aot-byte-identity-"
+                      "mismatch\");\n"
+                   << "        katana::runtime::ExecutableModule source_module;\n"
+                   << "        source_module.id = " << katana::io::quote_json(module.id)
+                   << ";\n"
+                   << "        source_module.source_identity = byte_identity;\n"
+                   << "        source_module.content_identity = std::string(content_identity);\n"
+                   << "        source_module.byte_identity = byte_identity;\n"
+                   << "        source_module.guest_start = 0x"
+                   << symbol(module.source_address) << "u;\n"
+                   << "        source_module.bytes = std::move(bytes);\n"
+                   << "        source_module.kind = "
+                      "katana::runtime::ExecutableModuleKind::Module;\n"
+                   << "        source_module.executable_permission = true;\n"
+                   << "        source_module.control_transfer_promotion_allowed = false;\n"
+                   << "        source_module.writable = false;\n"
+                   << "        source_module.range_roles.push_back({0u, "
+                   << module.byte_size
+                   << "u, katana::runtime::ExecutableStorageRole::RuntimeMaterializable});\n"
+                   << "        modules.publish(std::move(source_module));\n"
+                   << "        descriptors.push_back({"
+                   << katana::io::quote_json(module.id) << ", "
+                   << katana::io::quote_json(expected_content_identity) << ", "
+                   << module.disc_byte_offset << "ull, " << module.byte_size << "u, "
+                   << katana::io::quote_json(module.byte_identity) << "});\n"
+                   << "    }\n";
+        }
+        output << "    transactions.set_aot_module_descriptors(descriptors);\n";
+    }
+    output << "}\n"
            << "namespace runtime_dispatch_detail {\n"
            << "thread_local katana::runtime::PlatformServices* active_services = nullptr;\n"
            << "thread_local katana::runtime::BlockAddress active_exit_source;\n"
@@ -2267,6 +2376,15 @@ runtime_dispatch_artifacts(const std::string& entry_namespace,
         }
         output << "}},\n";
     }
+    for (const auto& module : latent_modules) {
+        output << "        {" << katana::io::quote_json(module.id) << ", "
+               << katana::io::quote_json(module.byte_identity) << ", 0x"
+               << symbol(module.source_address) << "u, " << module.byte_size
+               << "u, 0, {}, "
+                  "katana::runtime::NativeAotTemplateDestination::LoadedModule, "
+               << katana::io::quote_json(expected_content_identity) << ", "
+               << katana::io::quote_json(module.byte_identity) << "},\n";
+    }
     output << "    };\n"
            << "    katana::runtime::NativeAotTemplateBinder native_aot_binder(\n"
            << "        cpu, *modules, table, native_aot_templates);\n"
@@ -2322,7 +2440,8 @@ runtime_dispatch_artifacts(const std::string& entry_namespace,
         output << "    // Product ports execute only statically generated native/AOT blocks.\n"
                << "    // Runtime copies bind only to analysis-proven, pre-generated native code.\n"
                << "    materialization_policy.enabled = "
-               << (native_templates.empty() ? "false" : "true") << ";\n"
+               << (native_templates.empty() && latent_modules.empty() ? "false" : "true")
+               << ";\n"
                << "    katana::runtime::DemandBlockMaterializer materializer(\n"
                << "        *modules, table, services.executable_code_tracker(),\n"
                << "        materialization_policy,\n"
@@ -2427,7 +2546,8 @@ port_metadata(const PortExportOptions& options,
               const std::uint32_t entry_address,
               const std::size_t boot_size,
               const std::string_view project_identity,
-              const std::span<const katana::analysis::IndirectControlFlowResolution> indirect) {
+              const std::span<const katana::analysis::IndirectControlFlowResolution> indirect,
+              const std::size_t latent_aot_module_count) {
     const auto count = [indirect](const auto status) {
         return std::count_if(indirect.begin(), indirect.end(), [status](const auto& resolution) {
             return katana::analysis::control_flow_report_status(resolution) == status;
@@ -2456,7 +2576,9 @@ port_metadata(const PortExportOptions& options,
            << ",\"dispatch_paths_without_validation\":0"
            << ",\"project_identity\":" << katana::io::quote_json(project_identity)
            << ",\"entry_address\":" << entry_address << ",\"boot_size\":" << boot_size
-           << ",\"function_count\":" << function_count << ",\"resolved_control_flow\":"
+           << ",\"function_count\":" << function_count
+           << ",\"latent_aot_modules\":" << latent_aot_module_count
+           << ",\"resolved_control_flow\":"
            << count(katana::analysis::ControlFlowReportStatus::Resolved)
            << ",\"guarded_control_flow\":"
            << count(katana::analysis::ControlFlowReportStatus::GuardedComplete) +
@@ -2537,6 +2659,73 @@ std::filesystem::path resolve_existing_parents(std::filesystem::path path) {
     return resolved.lexically_normal();
 }
 
+struct DiscExportContext {
+    std::shared_ptr<katana::runtime::GdiDiscSource> source;
+    katana::runtime::DiscInstallRecipe recipe;
+    std::string boot_sha256;
+};
+
+DiscExportContext prepare_disc_export_context(const PreparedPortProgram& prepared) {
+    const auto descriptor_input =
+        std::find_if(prepared.inputs.begin(), prepared.inputs.end(), [](const auto& input) {
+            return input.role == "gdi-descriptor";
+        });
+    if (descriptor_input == prepared.inputs.end() || descriptor_input->local_path.empty())
+        throw std::invalid_argument(
+            "Portexport besitzt keine lokale GDI-Eingabe fuer die Installations-Recipe.");
+    auto disc_source = katana::runtime::GdiDiscSource::open(descriptor_input->local_path);
+    const auto& disc_descriptor = disc_source->descriptor();
+    if (disc_descriptor.sha256 != descriptor_input->sha256)
+        throw std::runtime_error("GDI wurde vor dem Recipe-Export veraendert.");
+    for (const auto& track : disc_descriptor.tracks) {
+        const auto role = "gdi-track-" + std::to_string(track.number);
+        const auto expected = std::find_if(prepared.inputs.begin(),
+                                           prepared.inputs.end(),
+                                           [&](const auto& input) { return input.role == role; });
+        if (expected == prepared.inputs.end() || expected->sha256 != track.sha256)
+            throw std::runtime_error("GDI-Track wurde vor dem Recipe-Export veraendert.");
+    }
+    const auto* boot_segment =
+        prepared.image.find_segment(prepared.boot_address, prepared.boot_size);
+    if (boot_segment == nullptr)
+        throw std::runtime_error("Portvertrag kann das analysierte Bootprogramm nicht binden.");
+    const auto boot_offset = boot_segment->byte_offset(prepared.boot_address);
+    if (!boot_offset || *boot_offset > boot_segment->bytes.size() ||
+        prepared.boot_size > boot_segment->bytes.size() - *boot_offset)
+        throw std::runtime_error("Portvertrag findet keine vollstaendigen Bootbytes.");
+    const auto boot_bytes =
+        std::string_view(reinterpret_cast<const char*>(boot_segment->bytes.data() + *boot_offset),
+                         prepared.boot_size);
+    auto boot_sha256 = katana::io::sha256_bytes(boot_bytes);
+    auto recipe = katana::runtime::make_disc_install_recipe(
+        *disc_source, std::string(prepared.project_identity), boot_sha256);
+    return {std::move(disc_source), std::move(recipe), std::move(boot_sha256)};
+}
+
+std::vector<LatentAotOccupiedRange>
+latent_aot_occupied_ranges(const PreparedPortProgram& prepared) {
+    std::vector<LatentAotOccupiedRange> result;
+    result.reserve(prepared.image.segments().size() + prepared.program.size() * 2u);
+    for (const auto& segment : prepared.image.segments()) {
+        if (segment.memory_size != 0u)
+            result.push_back({segment.virtual_address, segment.memory_size});
+    }
+    for (const auto& function : prepared.program) {
+        result.push_back({function.entry_address, 2u});
+        for (const auto& block : function.blocks) {
+            std::uint64_t end = static_cast<std::uint64_t>(block.start_address) + 2u;
+            for (const auto& instruction : block.instructions)
+                end = std::max(end,
+                               static_cast<std::uint64_t>(instruction.source_address) + 2u);
+            if (end > 0x1'0000'0000ull || end <= block.start_address)
+                throw std::runtime_error(
+                    "Vorbereitetes IR besitzt keine lineare belegte Adressrange.");
+            result.push_back({block.start_address, end - block.start_address});
+        }
+    }
+    return result;
+}
+
 } // namespace
 
 void preserve_local_port_user_data(const std::filesystem::path& previous_root,
@@ -2576,11 +2765,17 @@ PortExportResult export_dreamcast_port_project(const PreparedPortProgram& prepar
                                                const PortExportOptions& options) {
     report_progress(options, "program-validation");
     if (output_root.empty() || !valid_target_name(options.target_name) ||
-        options.tool_version.empty() || prepared.entry_address == 0u || prepared.program.empty()) {
+        options.tool_version.empty() || prepared.entry_address == 0u ||
+        prepared.boot_address == 0u || prepared.boot_size == 0u || prepared.program.empty()) {
         throw std::invalid_argument(
-            "Portexport braucht vorbereitetes IR, Einstieg, Ausgabe, Zielkennung und "
-            "Werkzeugversion.");
+            "Portexport braucht vorbereitetes IR, Einstieg, Bootprogramm, Ausgabe, "
+            "Zielkennung und Werkzeugversion.");
     }
+    if (prepared.boot_size > std::numeric_limits<std::uint32_t>::max() ||
+        !katana::runtime::valid_guest_program_range(
+            {prepared.boot_address, static_cast<std::uint32_t>(prepared.boot_size)}))
+        throw std::invalid_argument(
+            "Bootprogramm besitzt keine lineare ausfuehrbare Gastprogramm-Range.");
     static_cast<void>(console_profile_enumerator(options.console_profile));
     if (!options.diagnostic_partial && !prepared.analysis.recursive.diagnostics.empty()) {
         throw std::runtime_error("Portanalyse enthaelt unbekannte Instruktionen.");
@@ -2598,6 +2793,28 @@ PortExportResult export_dreamcast_port_project(const PreparedPortProgram& prepar
                                  " partielle oder ungeloeste Kontrollflussstellen.");
     }
     katana::ir::require_valid_program(prepared.program);
+    std::optional<DiscExportContext> disc_context;
+    LatentAotDiscovery latent_aot;
+    if (prepared.discover_latent_aot) {
+        report_progress(options, "latent-aot-source-validation");
+        disc_context.emplace(prepare_disc_export_context(prepared));
+        const std::array excluded_identities{
+            "sha256:" + disc_context->boot_sha256};
+        const auto occupied = latent_aot_occupied_ranges(prepared);
+        report_progress(options, "latent-aot-discovery");
+        latent_aot = discover_latent_aot_modules(disc_context->source,
+                                                 prepared.disc_volume_start_lba,
+                                                 prepared.disc_extent_lba_bias,
+                                                 excluded_identities,
+                                                 {},
+                                                 occupied);
+    }
+    std::vector<katana::ir::Function> emitted_program(prepared.program.begin(),
+                                                      prepared.program.end());
+    for (const auto& module : latent_aot.modules)
+        emitted_program.insert(
+            emitted_program.end(), module.program.begin(), module.program.end());
+    katana::ir::require_valid_program(emitted_program);
     const auto wait_loop_descriptors = [&] {
         const auto hardware_audit =
             katana::analysis::audit_dreamcast_hardware(prepared.image, prepared.analysis);
@@ -2605,13 +2822,13 @@ PortExportResult export_dreamcast_port_project(const PreparedPortProgram& prepar
     }();
     report_progress(options, "partition-codegen");
     const auto partitions =
-        partition_translation_units(prepared.program, options.partition_options);
+        partition_translation_units(emitted_program, options.partition_options);
     if (partitions.empty()) throw std::runtime_error("Portcodegen erzeugte keine Partition.");
 
     std::vector<ProjectArtifact> artifacts;
     artifacts.reserve(partitions.size() + 9u);
     const auto emit_partition = [&](const TranslationUnitPartition& partition) {
-        auto functions = select_functions(prepared.program, partition);
+        auto functions = select_functions(emitted_program, partition);
         const auto contains_program_entry =
             std::any_of(functions.begin(), functions.end(), [&prepared](const auto& function) {
                 return function.entry_address == prepared.entry_address;
@@ -2633,7 +2850,7 @@ PortExportResult export_dreamcast_port_project(const PreparedPortProgram& prepar
         const CppBackend backend;
         return ProjectArtifact{
             std::filesystem::path("code") /
-                deterministic_translation_unit_name(partition, prepared.program),
+                deterministic_translation_unit_name(partition, emitted_program),
             backend.emit(request).joined_text()};
     };
     const auto codegen_jobs = port_codegen_jobs(partitions.size());
@@ -2654,11 +2871,11 @@ PortExportResult export_dreamcast_port_project(const PreparedPortProgram& prepar
     for (auto& artifact : generated) artifacts.push_back(std::move(*artifact));
     report_progress(options, "metadata");
     const auto entry_partition =
-        std::find_if(partitions.begin(), partitions.end(), [&prepared](const auto& partition) {
+        std::find_if(partitions.begin(), partitions.end(), [&](const auto& partition) {
             return std::any_of(partition.function_indices.begin(),
                                partition.function_indices.end(),
-                               [&prepared](const auto index) {
-                                   return prepared.program[index].entry_address ==
+                               [&](const auto index) {
+                                   return emitted_program[index].entry_address ==
                                           prepared.entry_address;
                                });
         });
@@ -2666,7 +2883,23 @@ PortExportResult export_dreamcast_port_project(const PreparedPortProgram& prepar
         throw std::runtime_error("Portcodegen besitzt keine Einstiegspartition.");
     }
     const auto entry_namespace = std::string(port_namespace);
-    const auto source_map = build_address_source_map(prepared.image, artifacts);
+    auto source_map_image = prepared.image;
+    for (const auto& module : latent_aot.modules) {
+        katana::io::ImageSegment segment{
+            "latent-aot-module",
+            module.source_address,
+            module.disc_byte_offset,
+            module.byte_size,
+            katana::io::SegmentKind::Mixed,
+            {true, false, true},
+            // Source-map lookup needs addressable placeholder bytes, but the retail file bytes
+            // deliberately do not survive discovery or enter any generated artifact.
+            std::vector<std::uint8_t>(module.byte_size, 0u)};
+        segment.source_kind = katana::io::ImageSourceKind::DiscModule;
+        segment.load_phase = katana::io::ImageLoadPhase::RuntimeModule;
+        source_map_image.add_segment(std::move(segment));
+    }
+    const auto source_map = build_address_source_map(source_map_image, artifacts);
     const auto control_flow_graph = katana::analysis::build_control_flow_graph(prepared.analysis);
     const auto call_graph = katana::analysis::build_call_graph(prepared.analysis);
     katana::io::BuildProvenance provenance;
@@ -2682,23 +2915,30 @@ PortExportResult export_dreamcast_port_project(const PreparedPortProgram& prepar
 
     artifacts.push_back({"include/katana_port.hpp", generated_header(entry_namespace)});
     auto dispatch_artifacts = runtime_dispatch_artifacts(entry_namespace,
-                                                         prepared.program,
+                                                         emitted_program,
                                                          prepared.entry_address,
                                                          options.diagnostic_partial,
                                                          prepared.analysis.runtime_code_copies.copies,
                                                          prepared.image,
                                                          prepared.boot_address,
-                                                         prepared.boot_size);
+                                                         prepared.boot_size,
+                                                         latent_aot.modules,
+                                                         disc_context
+                                                             ? std::string_view(
+                                                                   disc_context->recipe
+                                                                       .content_identity)
+                                                             : std::string_view{});
     for (auto& artifact : dispatch_artifacts) artifacts.push_back(std::move(artifact));
     artifacts.push_back({"katana-port.cmake", port_cmake(options.target_name)});
     artifacts.push_back({"metadata/port-project.json",
                          port_metadata(options,
-                                       prepared.program.size(),
+                                       emitted_program.size(),
                                        partitions,
                                        prepared.entry_address,
                                        prepared.boot_size,
                                        prepared.project_identity,
-                                       prepared.analysis.indirect_control_flow)});
+                                       prepared.analysis.indirect_control_flow,
+                                       latent_aot.modules.size())});
     artifacts.push_back(
         {"metadata/provenance.json", katana::io::format_build_provenance_json(provenance)});
     artifacts.push_back({"metadata/source-map.json", serialize_address_source_map(source_map)});
@@ -2734,40 +2974,12 @@ PortExportResult export_dreamcast_port_project(const PreparedPortProgram& prepar
         path_is_within(canonical_root, std::filesystem::canonical(options.forbidden_source_root))) {
         throw std::invalid_argument("Kanonische Port-Ausgabe liegt im KatanaRecomp-Quellbaum.");
     }
-    const auto descriptor_input =
-        std::find_if(prepared.inputs.begin(), prepared.inputs.end(), [](const auto& input) {
-            return input.role == "gdi-descriptor";
-        });
-    if (descriptor_input == prepared.inputs.end() || descriptor_input->local_path.empty())
-        throw std::invalid_argument(
-            "Portexport besitzt keine lokale GDI-Eingabe fuer die Installations-Recipe.");
     report_progress(options, "disc-recipe");
-    const auto disc_source = katana::runtime::GdiDiscSource::open(descriptor_input->local_path);
-    const auto& disc_descriptor = disc_source->descriptor();
-    if (disc_descriptor.sha256 != descriptor_input->sha256)
-        throw std::runtime_error("GDI wurde vor dem Recipe-Export veraendert.");
-    for (const auto& track : disc_descriptor.tracks) {
-        const auto role = "gdi-track-" + std::to_string(track.number);
-        const auto expected = std::find_if(prepared.inputs.begin(),
-                                           prepared.inputs.end(),
-                                           [&](const auto& input) { return input.role == role; });
-        if (expected == prepared.inputs.end() || expected->sha256 != track.sha256)
-            throw std::runtime_error("GDI-Track wurde vor dem Recipe-Export veraendert.");
+    if (!disc_context) {
+        disc_context.emplace(prepare_disc_export_context(prepared));
     }
-    const auto* boot_segment =
-        prepared.image.find_segment(prepared.boot_address, prepared.boot_size);
-    if (boot_segment == nullptr)
-        throw std::runtime_error("Portvertrag kann das analysierte Bootprogramm nicht binden.");
-    const auto boot_offset = boot_segment->byte_offset(prepared.boot_address);
-    if (!boot_offset || *boot_offset > boot_segment->bytes.size() ||
-        prepared.boot_size > boot_segment->bytes.size() - *boot_offset)
-        throw std::runtime_error("Portvertrag findet keine vollstaendigen Bootbytes.");
-    const auto boot_bytes =
-        std::string_view(reinterpret_cast<const char*>(boot_segment->bytes.data() + *boot_offset),
-                         prepared.boot_size);
-    const auto boot_sha256 = katana::io::sha256_bytes(boot_bytes);
-    const auto recipe = katana::runtime::make_disc_install_recipe(
-        *disc_source, std::string(prepared.project_identity), boot_sha256);
+    const auto& recipe = disc_context->recipe;
+    const auto& boot_sha256 = disc_context->boot_sha256;
     const auto recipe_path = canonical_root / "content" / "game.katana-install";
     write_port_file(canonical_root,
                     "content/game.katana-install",
@@ -2806,12 +3018,13 @@ PortExportResult export_dreamcast_port_project(const PreparedPortProgram& prepar
                                      recipe.content_identity,
                                      boot_sha256,
                                      options.console_profile,
-                                     prepared.entry_address),
+                                     prepared.boot_address,
+                                     prepared.boot_size),
                     true);
 
     PortExportResult result;
     result.output_root = canonical_root;
-    result.functions = prepared.program.size();
+    result.functions = emitted_program.size();
     result.partitions = partitions.size();
     result.generated_files = write.written_files.size();
     result.removed_files = write.removed_files.size();
@@ -2827,6 +3040,9 @@ PortExportResult export_dreamcast_port_project(const PreparedPortProgram& prepar
                           "ir-lowered",
                           "partitioned-codegen-complete",
                           "port-project-written"};
+    if (!latent_aot.modules.empty())
+        result.checkpoints.insert(result.checkpoints.begin() + 2u,
+                                  "latent-aot-registry-written");
     return result;
 }
 
@@ -2894,7 +3110,10 @@ PortExportResult export_dreamcast_port_project(const std::filesystem::path& gdi_
                                           katana::platform::dreamcast_disc_boot_address,
                                           disc.boot_file.size(),
                                           project_identity,
-                                          true},
+                                          true,
+                                          true,
+                                          disc.data_track_lba,
+                                          disc.extent_lba_bias},
                                          output_root,
                                          options);
 }

@@ -283,7 +283,15 @@ int main() {
     auto callback_disc =
         std::make_shared<MemoryDiscSource>(callback_disc_bytes, "synthetic-bios-callback");
     DreamcastGdRomController callback_gdrom(
-        cpu.memory, callback_scheduler, GdRomDrive(std::move(callback_disc)));
+        cpu.memory,
+        callback_scheduler,
+        GdRomDrive(std::move(callback_disc)),
+        {},
+        {},
+        {},
+        {},
+        {},
+        DiscLoadExecutionPolicy::StandaloneTestMode);
     DreamcastG1BusController callback_g1(
         callback_scheduler,
         HollyDmaTiming{4u},

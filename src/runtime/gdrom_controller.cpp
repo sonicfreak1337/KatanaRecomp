@@ -122,13 +122,32 @@ DreamcastGdRomController::DreamcastGdRomController(
     GdRomDrive drive,
     std::function<void(std::uint64_t)> completion_observer,
     ModuleLoadObserver module_load_observer,
-    std::function<void()> command_ack_observer)
+    std::function<void()> command_ack_observer,
+    DiscLoadTransactionExecutor load_transaction_executor,
+    std::string content_identity,
+    const DiscLoadExecutionPolicy load_execution_policy)
     : memory_(memory), scheduler_(scheduler), drive_(std::move(drive)),
-      reader_(scheduler, drive_, GdRomTiming{}, completion_observer),
+      // Raw media readiness only re-enters the controller. pump_completions() publishes the
+      // final BIOS state and commits RAM before it raises the guest-visible observer.
+      reader_(scheduler,
+              drive_,
+              GdRomTiming{},
+              [this](const std::uint64_t) { pump_completions(); }),
       module_load_observer_(std::move(module_load_observer)),
+      load_transaction_executor_(std::move(load_transaction_executor)),
+      content_identity_(std::move(content_identity)),
+      load_execution_policy_(load_execution_policy),
       completion_observer_(std::move(completion_observer)),
       command_ack_observer_(std::move(command_ack_observer)),
       scheduler_lifetime_(scheduler.lifetime_token()) {
+    if (load_execution_policy_ == DiscLoadExecutionPolicy::RequireAtomicExecutor &&
+        !load_transaction_executor_)
+        throw std::invalid_argument(
+            "Produktiver GD-ROM-Pfad braucht einen atomaren Disc-Load-Executor.");
+    if (load_execution_policy_ == DiscLoadExecutionPolicy::RequireAtomicExecutor &&
+        content_identity_.empty())
+        throw std::invalid_argument(
+            "Produktiver GD-ROM-Pfad braucht die verifizierte Contentidentitaet.");
     sector_mode_ = drive_.sector_size() == 2352u
                        ? std::array<std::uint32_t, 4u>{0u, 0x1000u, 0u, 2352u}
                        : std::array<std::uint32_t, 4u>{
@@ -138,6 +157,68 @@ DreamcastGdRomController::DreamcastGdRomController(
 DreamcastGdRomController::~DreamcastGdRomController() {
     if (packet_event_ && !scheduler_lifetime_.expired())
         static_cast<void>(scheduler_.cancel(*packet_event_));
+}
+
+DiscLoadCommit DreamcastGdRomController::commit_disc_load(
+    const DiscLoadRoute route,
+    const std::uint32_t guest_destination,
+    const std::uint32_t physical_destination,
+    const std::span<const std::uint8_t> bytes,
+    const CodeWriteSource source,
+    const DiscLoadSourceRange source_range) {
+    DiscLoadRequest request;
+    request.sequence = claim_disc_load_sequence(next_load_transaction_);
+    request.route = route;
+    request.guest_destination = guest_destination;
+    request.physical_destination = canonical_physical_address(physical_destination);
+    request.write_source = source;
+    request.content_identity = content_identity_;
+    request.byte_identity = disc_load_byte_identity(bytes);
+    request.source_range = source_range;
+    request.bytes = bytes;
+    request.guest_translation_validated = true;
+
+    try {
+        DiscLoadCommit commit;
+        if (load_transaction_executor_) {
+            commit = load_transaction_executor_(request);
+        } else {
+            if (load_execution_policy_ != DiscLoadExecutionPolicy::StandaloneTestMode)
+                throw std::logic_error(
+                    "Produktiver GD-ROM-Pfad darf Discbytes nicht direkt schreiben.");
+            if (!memory_.is_writable_linear_range(request.physical_destination, bytes.size()))
+                throw std::out_of_range(
+                    "Disc-Ladetransaktion zielt nicht auf lineares schreibbares RAM.");
+            memory_.write_bytes(request.physical_destination, bytes, source);
+            if (module_load_observer_)
+                module_load_observer_(request.physical_destination, bytes, drive_.identity());
+            DiscLoadCommittedRange range;
+            range.target_physical_address = request.physical_destination;
+            range.backing_physical_address = request.physical_destination;
+            range.size = static_cast<std::uint32_t>(bytes.size());
+            range.byte_identity = request.byte_identity;
+            range.source_range_known = request.source_range.known;
+            range.source_byte_offset = request.source_range.byte_offset;
+            commit.sequence = request.sequence;
+            commit.route = request.route;
+            commit.guest_destination = request.guest_destination;
+            commit.physical_destination = request.physical_destination;
+            commit.write_source = request.write_source;
+            commit.content_identity = request.content_identity;
+            commit.byte_identity = request.byte_identity;
+            commit.source_range = request.source_range;
+            commit.committed_bytes = bytes.size();
+            commit.ranges.push_back(std::move(range));
+        }
+        validate_disc_load_commit(request, commit);
+        if (committed_load_transactions_ != std::numeric_limits<std::uint64_t>::max())
+            ++committed_load_transactions_;
+        return commit;
+    } catch (...) {
+        if (failed_load_transactions_ != std::numeric_limits<std::uint64_t>::max())
+            ++failed_load_transactions_;
+        throw;
+    }
 }
 
 std::uint32_t DreamcastGdRomController::read(const std::uint32_t offset,
@@ -282,6 +363,7 @@ void DreamcastGdRomController::write(const std::uint32_t offset,
 void DreamcastGdRomController::publish_data(std::vector<std::uint8_t> data) {
     data_ = std::move(data);
     data_cursor_ = 0u;
+    taskfile_data_source_range_ = {};
     taskfile_phase_remaining_ = 0u;
     if (data_.empty()) {
         if (clear_sense_after_data_) clear_sense();
@@ -292,9 +374,11 @@ void DreamcastGdRomController::publish_data(std::vector<std::uint8_t> data) {
     begin_next_taskfile_data_phase();
 }
 
-void DreamcastGdRomController::publish_dma_data(std::vector<std::uint8_t> data) {
+void DreamcastGdRomController::publish_dma_data(std::vector<std::uint8_t> data,
+                                                const DiscLoadSourceRange source_range) {
     data_ = std::move(data);
     data_cursor_ = 0u;
+    taskfile_data_source_range_ = source_range;
     taskfile_phase_remaining_ = 0u;
     byte_count_ = 0u;
     if (data_.empty()) {
@@ -589,9 +673,13 @@ void DreamcastGdRomController::execute_packet() {
                 return;
             }
             current_fad_ = static_cast<std::uint32_t>(last_fad);
-            if ((features_ & 1u) != 0u)
-                publish_dma_data(std::move(response.data));
-            else
+            if ((features_ & 1u) != 0u) {
+                const DiscLoadSourceRange source_range{
+                    true,
+                    static_cast<std::uint64_t>(fad_to_lba(fad)) * drive_.sector_size(),
+                    response.data.size()};
+                publish_dma_data(std::move(response.data), source_range);
+            } else
                 publish_data(std::move(response.data));
             return;
         }
@@ -1029,19 +1117,30 @@ void DreamcastGdRomController::pump_completions() {
                 latch_sense(sense[0], sense[1], sense[2]);
             }
             remember_bios_request(found->second);
+            if (completion_observer_) completion_observer_(scheduler_.current_cycle());
             continue;
         }
         if (found->second.response.status == GdRomStatus::Good &&
             !found->second.response.data.empty()) {
             try {
-                memory_.write_bytes(found->second.destination,
-                                    found->second.response.data,
-                                    found->second.write_source);
-                if (module_load_observer_)
-                    module_load_observer_(canonical_physical_address(found->second.destination),
-                                          found->second.response.data,
-                                          drive_.identity());
+                static_cast<void>(commit_disc_load(
+                    found->second.command == bios_command_dma_read
+                        ? DiscLoadRoute::BiosDma
+                        : DiscLoadRoute::BiosPio,
+                     found->second.parameters[2],
+                     found->second.destination,
+                     found->second.response.data,
+                     found->second.write_source,
+                     {true,
+                      static_cast<std::uint64_t>(
+                          fad_to_lba(found->second.parameters[0])) *
+                          drive_.sector_size(),
+                      found->second.response.data.size()}));
             } catch (const MemoryAccessError&) {
+                found->second.response.status = GdRomStatus::InvalidField;
+                found->second.response.data.clear();
+                found->second.response.transferred_sectors = 0u;
+            } catch (const std::exception&) {
                 found->second.response.status = GdRomStatus::InvalidField;
                 found->second.response.data.clear();
                 found->second.response.transferred_sectors = 0u;
@@ -1079,6 +1178,7 @@ void DreamcastGdRomController::pump_completions() {
         }
         remember_bios_request(found->second);
         ++completed_commands_;
+        if (completion_observer_) completion_observer_(scheduler_.current_cycle());
     }
 }
 
@@ -1100,10 +1200,19 @@ bool DreamcastGdRomController::reload_system_bootstrap(CpuState& cpu) {
         response.data.size() != static_cast<std::size_t>(sector_count) * 2048u ||
         !cpu.memory.contains(destination, response.data.size()))
         return false;
-    cpu.memory.write_bytes(destination, response.data, CodeWriteSource::Copy);
-    if (module_load_observer_)
-        module_load_observer_(
-            canonical_physical_address(destination), response.data, drive_.identity());
+    try {
+        static_cast<void>(commit_disc_load(DiscLoadRoute::SystemBootstrap,
+                                           destination,
+                                           canonical_physical_address(destination),
+                                           response.data,
+                                           CodeWriteSource::Copy,
+                                           {true,
+                                            static_cast<std::uint64_t>(track->lba) *
+                                                drive_.sector_size(),
+                                            response.data.size()}));
+    } catch (const std::exception&) {
+        return false;
+    }
     return true;
 }
 
@@ -1384,24 +1493,33 @@ std::uint32_t DreamcastGdRomController::bios_call(CpuState& cpu,
         }
         try {
             const auto bytes = preview_stream_bytes(request, length);
-            for (std::uint32_t offset = 0u; offset < length; offset += 2u) {
-                const auto value = static_cast<std::uint16_t>(
-                    static_cast<std::uint16_t>(bytes[offset]) |
-                    (static_cast<std::uint16_t>(bytes[offset + 1u]) << 8u));
-                memory_.write_u16(*pio_physical_destination + offset,
-                                  value,
-                                  CodeWriteSource::Copy);
-            }
-            if (module_load_observer_)
-                module_load_observer_(*pio_physical_destination, bytes, drive_.identity());
+            static_cast<void>(commit_disc_load(DiscLoadRoute::BiosPioStream,
+                                               destination,
+                                               *pio_physical_destination,
+                                               bytes,
+                                               CodeWriteSource::Copy,
+                                               {true,
+                                                static_cast<std::uint64_t>(
+                                                    request.stream_lba) *
+                                                        drive_.sector_size() +
+                                                    request.stream_consumed_bytes,
+                                                bytes.size()}));
             commit_stream_bytes(request, length);
             return finish(0u);
         } catch (const std::exception&) {
+            request.response.status = GdRomStatus::OutOfRange;
+            request.status = {5u,
+                              static_cast<std::uint32_t>(request.response.status),
+                              request.status[2],
+                              0u};
+            request.state = GdRomBiosRequestState::Error;
             request.transfer_kind = GdRomBiosTransferKind::None;
             request.transfer_size = 0u;
+            request.transfer_transferred = 0u;
             request.transfer_active = false;
             request.status[3] = 0u;
             latch_sense(5u, 0x21u, 0u);
+            remember_bios_request(request);
             return finish(0xFFFFFFFFu);
         }
     }
@@ -1479,10 +1597,18 @@ void DreamcastGdRomController::dma_to_memory(const std::uint32_t address,
             throw std::out_of_range("GD-ROM-G1-DMA passt nicht zum BIOS-Streamingtransfer.");
         try {
             const auto bytes = preview_stream_bytes(*request, length);
-            memory_.write_bytes(address, bytes, CodeWriteSource::Dma);
-            if (module_load_observer_)
-                module_load_observer_(
-                    canonical_physical_address(address), bytes, drive_.identity());
+            static_cast<void>(commit_disc_load(DiscLoadRoute::BiosDmaStream,
+                                               request->transfer_destination +
+                                                   request->transfer_transferred,
+                                               address,
+                                               bytes,
+                                               CodeWriteSource::Dma,
+                                               {true,
+                                                static_cast<std::uint64_t>(
+                                                    request->stream_lba) *
+                                                        drive_.sector_size() +
+                                                    request->stream_consumed_bytes,
+                                                bytes.size()}));
             commit_stream_bytes(*request, length);
         } catch (...) {
             request->response.status = GdRomStatus::OutOfRange;
@@ -1503,13 +1629,17 @@ void DreamcastGdRomController::dma_to_memory(const std::uint32_t address,
         throw std::runtime_error("GD-ROM-G1-DMA braucht einen CD_READ-DMA-Vertrag.");
     if (length == 0u || data_cursor_ > data_.size() || length > data_.size() - data_cursor_)
         throw std::out_of_range("GD-ROM-G1-DMA ueberschreitet den aktiven DMA-Puffer.");
-    memory_.write_bytes(address,
-                        std::span<const std::uint8_t>(data_).subspan(data_cursor_, length),
-                        CodeWriteSource::Dma);
-    if (module_load_observer_)
-        module_load_observer_(canonical_physical_address(address),
-                              std::span<const std::uint8_t>(data_).subspan(data_cursor_, length),
-                              drive_.identity());
+    static_cast<void>(commit_disc_load(
+        DiscLoadRoute::TaskfileDma,
+        address,
+        address,
+        std::span<const std::uint8_t>(data_).subspan(data_cursor_, length),
+        CodeWriteSource::Dma,
+        taskfile_data_source_range_.known
+            ? DiscLoadSourceRange{true,
+                                  taskfile_data_source_range_.byte_offset + data_cursor_,
+                                  length}
+            : DiscLoadSourceRange{}));
     data_cursor_ += length;
     const auto command_data_complete = data_cursor_ == data_.size();
     if (command_data_complete) {
@@ -1540,6 +1670,8 @@ GdRomProductStatus DreamcastGdRomController::status() const noexcept {
             bios_requests_.size(),
             completed_commands_,
             completed_dma_,
+            committed_load_transactions_,
+            failed_load_transactions_,
             sector_mode_,
             dma_callback_,
             dma_callback_argument_,
@@ -1613,6 +1745,9 @@ DreamcastGdRomSnapshot DreamcastGdRomController::snapshot() const {
     result.dropped_bios_call_events = dropped_bios_call_events_;
     result.completed_commands = completed_commands_;
     result.completed_dma = completed_dma_;
+    result.next_load_transaction = next_load_transaction_;
+    result.committed_load_transactions = committed_load_transactions_;
+    result.failed_load_transactions = failed_load_transactions_;
     result.sector_mode = sector_mode_;
     result.dma_callback = dma_callback_;
     result.dma_callback_argument = dma_callback_argument_;
@@ -1749,6 +1884,7 @@ void DreamcastGdRomController::reset_transport() noexcept {
     packet_.clear();
     data_.clear();
     data_cursor_ = 0u;
+    taskfile_data_source_range_ = {};
     taskfile_phase_remaining_ = 0u;
     taskfile_host_byte_limit_ = 65'536u;
     taskfile_phase_ = TaskfilePhase::Idle;
@@ -1800,14 +1936,20 @@ map_dreamcast_gdrom(Memory& memory,
                     GdRomDrive drive,
                     std::function<void(std::uint64_t)> completion_observer,
                     DreamcastGdRomController::ModuleLoadObserver module_load_observer,
-                    std::function<void()> command_ack_observer) {
+                    std::function<void()> command_ack_observer,
+                    DiscLoadTransactionExecutor load_transaction_executor,
+                    std::string content_identity,
+                    const DiscLoadExecutionPolicy load_execution_policy) {
     auto controller = std::make_shared<DreamcastGdRomController>(
         memory,
         scheduler,
         std::move(drive),
         std::move(completion_observer),
         std::move(module_load_observer),
-        std::move(command_ack_observer));
+        std::move(command_ack_observer),
+        std::move(load_transaction_executor),
+        std::move(content_identity),
+        load_execution_policy);
     auto device = std::make_shared<MmioMemoryDevice>(
         gdrom_register_size,
         [controller](const auto offset, const auto width) { return controller->read(offset, width); },

@@ -145,6 +145,117 @@ CodeInvalidationResult ExecutableCodeTracker::observe_write(const std::uint32_t 
     return result;
 }
 
+ExecutableCodeTracker::PreparedDiscLoadWrite
+ExecutableCodeTracker::prepare_disc_load_write(const std::uint32_t address,
+                                               const std::size_t size,
+                                               const CodeWriteSource source) {
+    if (size == 0u)
+        throw std::invalid_argument("Disc-Codewrite-Admission braucht eine Groesse.");
+    const auto canonical = canonical_physical_address(address);
+    if (size > std::numeric_limits<std::uint32_t>::max() ||
+        static_cast<std::uint64_t>(canonical) + size >
+            static_cast<std::uint64_t>(std::numeric_limits<std::uint32_t>::max()) + 1u)
+        throw std::length_error("Disc-Codewrite-Admission laeuft ueber den Adressraum.");
+
+    PreparedDiscLoadWrite plan;
+    plan.address = address;
+    plan.physical_address = canonical;
+    plan.size = size;
+    plan.source = source;
+    plan.result.source = source;
+    const auto first_page = canonical / page_size * page_size;
+    const auto final_address = static_cast<std::uint32_t>(canonical + size - 1u);
+    const auto last_page = final_address / page_size * page_size;
+    for (auto page = first_page;; page += page_size) {
+        plan.pages.push_back(page);
+        plan.result.changed_pages.push_back(page);
+        if (page == last_page) break;
+    }
+
+    std::vector<std::size_t> candidates;
+    plan.indexed_lookup = lookup_mode_ == CodeInvalidationLookupMode::PageIndex;
+    if (plan.indexed_lookup) {
+        for (const auto page : plan.pages) {
+            if (const auto found = page_blocks_.find(page); found != page_blocks_.end())
+                candidates.insert(candidates.end(), found->second.begin(), found->second.end());
+        }
+        std::sort(candidates.begin(), candidates.end());
+        candidates.erase(std::unique(candidates.begin(), candidates.end()), candidates.end());
+    } else {
+        candidates.resize(blocks_.size());
+        for (std::size_t index = 0u; index < candidates.size(); ++index)
+            candidates[index] = index;
+    }
+    plan.candidate_count = candidates.size();
+    for (const auto index : candidates) {
+        const auto& tracked = blocks_.at(index);
+        if (!tracked.valid ||
+            !overlaps(tracked.block.physical_start, tracked.block.size, canonical, size))
+            continue;
+        plan.block_indices.push_back(index);
+        plan.result.invalidated_blocks.push_back(tracked.block.identity);
+        plan.result.unlinked_sources.insert(plan.result.unlinked_sources.end(),
+                                            tracked.block.incoming_links.begin(),
+                                            tracked.block.incoming_links.end());
+    }
+    std::sort(plan.result.invalidated_blocks.begin(), plan.result.invalidated_blocks.end());
+    std::sort(plan.result.unlinked_sources.begin(), plan.result.unlinked_sources.end());
+    plan.result.unlinked_sources.erase(
+        std::unique(plan.result.unlinked_sources.begin(), plan.result.unlinked_sources.end()),
+        plan.result.unlinked_sources.end());
+
+    try {
+        for (const auto page : plan.pages) {
+            if (!generations_.contains(page)) {
+                generations_.emplace(page, 0u);
+                plan.inserted_generation_pages.push_back(page);
+            }
+            if (!hotspots_.contains(page)) {
+                hotspots_.emplace(page, 0u);
+                plan.inserted_hotspot_pages.push_back(page);
+            }
+        }
+    } catch (...) {
+        cancel_disc_load_write(plan);
+        throw;
+    }
+    return plan;
+}
+
+void ExecutableCodeTracker::cancel_disc_load_write(PreparedDiscLoadWrite& plan) noexcept {
+    for (const auto page : plan.inserted_generation_pages) {
+        const auto found = generations_.find(page);
+        if (found != generations_.end() && found->second == 0u) generations_.erase(found);
+    }
+    for (const auto page : plan.inserted_hotspot_pages) {
+        const auto found = hotspots_.find(page);
+        if (found != hotspots_.end() && found->second == 0u) hotspots_.erase(found);
+    }
+    plan.inserted_generation_pages.clear();
+    plan.inserted_hotspot_pages.clear();
+}
+
+void ExecutableCodeTracker::commit_disc_load_write(PreparedDiscLoadWrite plan) noexcept {
+    for (const auto page : plan.pages) {
+        auto generation = generations_.find(page);
+        auto hotspot = hotspots_.find(page);
+        if (generation == generations_.end() || hotspot == hotspots_.end()) continue;
+        ++generation->second;
+        ++hotspot->second;
+    }
+    for (const auto index : plan.block_indices) {
+        if (index >= blocks_.size() || !blocks_[index].valid) continue;
+        blocks_[index].valid = false;
+        ++invalidation_count_;
+    }
+    if (plan.indexed_lookup)
+        performance_counters_.indexed_candidates += plan.candidate_count;
+    else
+        performance_counters_.reference_candidates += plan.candidate_count;
+    record_invalidation_event(
+        plan.address, plan.physical_address, plan.size, plan.result);
+}
+
 void ExecutableCodeTracker::record_invalidation_event(
     const std::uint32_t virtual_address,
     const std::uint32_t physical_address,

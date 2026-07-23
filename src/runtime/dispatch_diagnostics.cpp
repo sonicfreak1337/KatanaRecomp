@@ -294,6 +294,8 @@ const char* dispatch_diagnostic_error_name(const DispatchDiagnosticError value) 
         return "materialization-budget";
     case DispatchDiagnosticError::ByteIdentityMismatch:
         return "byte-identity-mismatch";
+    case DispatchDiagnosticError::MissingAot:
+        return "missing-aot";
     case DispatchDiagnosticError::GenerationMismatch:
         return "generation-mismatch";
     case DispatchDiagnosticError::RelocationMismatch:

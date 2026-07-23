@@ -267,7 +267,9 @@ load_dreamcast_runtime_boot(const std::filesystem::path& descriptor_path) {
     auto source = GdiDiscSource::open(descriptor_path);
     const auto data_track_lba = source->primary_data_lba();
     const auto validated_tracks = source->descriptor().tracks.size();
-    return load_dreamcast_runtime_boot(std::move(source), data_track_lba, validated_tracks);
+    const auto content_identity = packed_disc_content_identity(*source);
+    return load_dreamcast_runtime_boot(
+        std::move(source), data_track_lba, validated_tracks, content_identity);
 }
 
 DreamcastRuntimeBootImage
@@ -278,12 +280,15 @@ load_dreamcast_runtime_boot_from_pack(const std::filesystem::path& pack_path) {
     auto source = PackedDiscSource::open(pack_path);
     const auto data_track_lba = source->primary_data_lba();
     const auto validated_tracks = source->info().tracks.size();
-    return load_dreamcast_runtime_boot(std::move(source), data_track_lba, validated_tracks);
+    const auto content_identity = source->info().content_identity;
+    return load_dreamcast_runtime_boot(
+        std::move(source), data_track_lba, validated_tracks, content_identity);
 }
 
 DreamcastRuntimeBootImage load_dreamcast_runtime_boot(std::shared_ptr<DiscSource> source,
-                                                      const std::uint32_t data_track_lba,
-                                                      const std::size_t validated_tracks) {
+                                                       const std::uint32_t data_track_lba,
+                                                       const std::size_t validated_tracks,
+                                                       std::string content_identity) {
     if (!source || validated_tracks == 0u) {
         throw std::invalid_argument("Dreamcast-Runtime-Discquelle ist unvollstaendig.");
     }
@@ -346,10 +351,11 @@ DreamcastRuntimeBootImage load_dreamcast_runtime_boot(std::shared_ptr<DiscSource
             std::move(system_bootstrap),
             std::move(boot_file),
             data_track_lba,
-            selected_bias,
-            validated_tracks,
-            repeated_bootstrap_reads_match,
-            repeated_reads_match};
+             selected_bias,
+             validated_tracks,
+             repeated_bootstrap_reads_match,
+             repeated_reads_match,
+             std::move(content_identity)};
 }
 
 DreamcastRuntimeState
@@ -358,7 +364,8 @@ initialize_dreamcast_runtime(CpuState& cpu,
                              const DreamcastRuntimeFirmwareMode firmware_mode,
                              std::shared_ptr<DreamcastMutableStorage> mutable_storage,
                              const DreamcastConsoleProfile console_profile) {
-    if (!boot.source || boot.system_bootstrap.size() != dreamcast_system_bootstrap_size ||
+    if (!boot.source || boot.content_identity.empty() ||
+        boot.system_bootstrap.size() != dreamcast_system_bootstrap_size ||
         boot.boot_file.empty() || !boot.repeated_bootstrap_reads_match ||
         !boot.repeated_reads_match) {
         throw std::invalid_argument("Dreamcast-Runtime-Bootimage ist unvollstaendig.");
@@ -407,6 +414,18 @@ initialize_dreamcast_runtime(CpuState& cpu,
             constexpr std::size_t unit_size = 32u;
             constexpr std::uint32_t external_memory_to_device = 0x00000200u;
             constexpr std::uint32_t burst_transmit = 0x00000080u;
+            PvrChannel2DestinationPlan destination_plan;
+            try {
+                destination_plan = plan_pvr_channel2_destination(destination, length);
+            } catch (const std::out_of_range&) {
+                dmac->report_external_fault(
+                    channel, DmaFaultReason::MemoryAccess, unit_size);
+                return;
+            } catch (const std::invalid_argument&) {
+                dmac->report_external_fault(
+                    channel, DmaFaultReason::ExternalContractMismatch, unit_size);
+                return;
+            }
             const auto control = dmac->control(channel);
             const auto operation = dmac->operation();
             const auto source = dmac->source(channel) & 0x1FFFFFFFu;
@@ -428,8 +447,13 @@ initialize_dreamcast_runtime(CpuState& cpu,
             if (!dmac->validate_external_transfer(
                     channel, dmac->source(channel), length, unit_size, 2u))
                 return;
-            dmac->write_destination(channel, destination);
-            dmac->request_transfer(channel, units);
+            dmac->write_destination(channel, destination_plan.initial_address);
+            dmac->request_transfer(
+                channel,
+                units,
+                destination_plan.destination_progresses()
+                    ? DmaExternalDestinationProgression::IncrementByTransferUnit
+                    : DmaExternalDestinationProgression::AddressMode);
         });
     state.system_asic = map_dreamcast_system_asic(cpu.memory, *state.interrupt_router);
     const auto asic = std::weak_ptr<DreamcastSystemAsic>(state.system_asic);
@@ -526,7 +550,7 @@ initialize_dreamcast_runtime(CpuState& cpu,
     const auto pvr_registers = std::weak_ptr<PvrRegisterFile>(state.pvr_registers);
     const auto pvr_renderer = std::weak_ptr<PvrSoftwareRenderer>(state.pvr_renderer);
     const auto vram = std::weak_ptr<LinearMemoryDevice>(state.vram);
-    state.pvr_registers->set_render_observer(
+    state.pvr_registers->set_render_result_observer(
         [ta_fifo, pvr_registers, pvr_renderer, vram, raise_now] {
             const auto fifo = ta_fifo.lock();
             const auto registers = pvr_registers.lock();
@@ -537,28 +561,32 @@ initialize_dreamcast_runtime(CpuState& cpu,
                     renderer->record_error(PvrRenderError::InternalLifecycle,
                                            registers ? registers->render_request_count() : 0u,
                                            "PVR-Renderpfad-Lebenszyklus fehlt.");
-                return;
+                return PvrRenderResult::Failed;
             }
             const auto request = registers->render_request_count();
-            bool rendered = false;
             try {
                 auto frame = fifo->finish_frame();
                 renderer->render(frame, *registers, *target);
-                rendered = true;
             } catch (const std::out_of_range& error) {
                 renderer->record_error(PvrRenderError::MemoryRange, request, error.what());
+                return PvrRenderResult::Failed;
             } catch (const std::invalid_argument& error) {
                 renderer->record_error(PvrRenderError::InvalidConfiguration, request, error.what());
+                return PvrRenderResult::Failed;
             } catch (const std::logic_error& error) {
                 renderer->record_error(PvrRenderError::InvalidTaState, request, error.what());
+                return PvrRenderResult::Failed;
             } catch (const std::runtime_error& error) {
                 renderer->record_error(PvrRenderError::UnsupportedFeature, request, error.what());
+                return PvrRenderResult::Failed;
             } catch (...) {
                 renderer->record_error(PvrRenderError::InternalLifecycle,
                                        request,
                                        "Unbekannter Fehler an der PVR-Produktgrenze.");
+                return PvrRenderResult::Failed;
             }
-            if (rendered) raise_now(SystemAsicEvent::PvrRenderDone);
+            raise_now(SystemAsicEvent::PvrRenderDone);
+            return PvrRenderResult::Success;
         });
     state.aica = std::make_shared<AicaExecutionController>(state.scheduler.get());
     state.aica->interrupts().set_observer(
@@ -615,11 +643,37 @@ initialize_dreamcast_runtime(CpuState& cpu,
     state.code_tracker = std::make_shared<ExecutableCodeTracker>();
     state.runtime_blocks->bind_code_tracker(state.code_tracker.get());
     state.module_catalog = std::make_shared<ExecutableModuleCatalog>();
-    const auto module_load_writes = std::make_shared<ExecutableLoadWriteTracker>();
-    const auto module_sequence = std::make_shared<std::uint64_t>(1u);
-    const auto module_catalog = state.module_catalog;
-    const auto module_blocks = state.runtime_blocks;
-    const auto module_tracker = state.code_tracker;
+    state.disc_load_transactions =
+        std::make_shared<ExecutableDiscLoadTransactionCoordinator>(
+            cpu.memory,
+            *state.module_catalog,
+            *state.runtime_blocks,
+            *state.code_tracker,
+            [](const std::uint32_t physical, const std::size_t size) {
+                std::vector<DiscLoadCommittedRange> ranges;
+                for_each_dreamcast_executable_backing_extent(
+                    physical,
+                    size,
+                    [&](const std::uint32_t backing,
+                        const std::size_t source_offset,
+                        const std::size_t extent_size,
+                        const bool main_ram) {
+                        ranges.push_back(
+                            {canonical_physical_address(
+                                 physical + static_cast<std::uint32_t>(source_offset)),
+                             backing,
+                             static_cast<std::uint32_t>(source_offset),
+                             static_cast<std::uint32_t>(extent_size),
+                             {},
+                             main_ram,
+                             false,
+                             false});
+                    });
+                return ranges;
+            });
+    const auto disc_load_transactions =
+        std::weak_ptr<ExecutableDiscLoadTransactionCoordinator>(
+            state.disc_load_transactions);
     state.gdrom = map_dreamcast_gdrom(
         cpu.memory,
         *state.scheduler,
@@ -633,43 +687,19 @@ initialize_dreamcast_runtime(CpuState& cpu,
                 throw std::logic_error("GD-ROM-Completion liegt nicht am aktuellen Gastzyklus.");
             target->raise(SystemAsicEvent::GdromCommand, cycle);
         },
-        [module_sequence, module_catalog, module_blocks, module_tracker, module_load_writes](
-            const std::uint32_t destination,
-            const std::span<const std::uint8_t> bytes,
-            const std::string_view source_identity) {
-            const auto physical = canonical_physical_address(destination);
-            const auto write_observation = module_load_writes->consume(physical, bytes.size());
-            if (bytes.empty() || (destination & 1u) != 0u) return;
-            for_each_dreamcast_executable_backing_extent(
-                physical,
-                bytes.size(),
-                [&](const std::uint32_t backing,
-                    const std::size_t source_offset,
-                    const std::size_t extent_size,
-                    const bool) {
-                    ExecutableModule module;
-                    module.id = "gdrom-load-" + std::to_string((*module_sequence)++);
-                    module.source_identity = std::string(source_identity);
-                    module.guest_start = backing;
-                    module.bytes.assign(bytes.begin() + static_cast<std::ptrdiff_t>(source_offset),
-                                        bytes.begin() + static_cast<std::ptrdiff_t>(source_offset +
-                                                                                   extent_size));
-                    module.kind = ExecutableModuleKind::Overlay;
-                    module.executable_permission = false;
-                    module.control_transfer_promotion_allowed = true;
-                    module.range_roles.push_back(
-                        {0u,
-                         static_cast<std::uint32_t>(module.bytes.size()),
-                         ExecutableStorageRole::ProvenData});
-                    module_catalog->publish_loaded_range(
-                        std::move(module), *module_blocks, *module_tracker, write_observation);
-                });
-        },
+        {},
         [asic] {
             const auto target = asic.lock();
             if (!target) throw std::runtime_error("Dreamcast-System-ASIC-Lebenszyklus fehlt.");
             target->write(0x04u, 1u);
-        });
+        },
+        [disc_load_transactions](const DiscLoadRequest& request) {
+            const auto transactions = disc_load_transactions.lock();
+            if (!transactions)
+                throw std::runtime_error("Disc-Ladetransaktions-Lebenszyklus fehlt.");
+            return transactions->execute(request);
+        },
+        boot.content_identity);
     cpu.gdrom_services = state.gdrom.get();
     const auto gdrom = std::weak_ptr<DreamcastGdRomController>(state.gdrom);
     state.holly_dma = map_dreamcast_holly_dma(
@@ -710,13 +740,17 @@ initialize_dreamcast_runtime(CpuState& cpu,
     const auto runtime_modules = std::weak_ptr<ExecutableModuleCatalog>(state.module_catalog);
     const auto direct_scanout = std::weak_ptr<PvrSoftwareRenderer>(state.pvr_renderer);
     cpu.memory.set_guest_write_observer(
-        [code_tracker, runtime_blocks, runtime_modules, module_load_writes, direct_scanout](
+        [code_tracker,
+         runtime_blocks,
+         runtime_modules,
+         disc_load_transactions,
+         direct_scanout](
             const GuestWriteEvent& event) {
             if (const auto renderer = direct_scanout.lock())
                 renderer->observe_vram_write(event.address, event.size, event.bytes_changed);
-            auto load_event = event;
-            load_event.address = canonical_physical_address(event.address);
-            module_load_writes->observe(load_event);
+            if (const auto transactions = disc_load_transactions.lock();
+                transactions && transactions->consume_guest_write(event))
+                return;
             const auto tracker = code_tracker.lock();
             for_each_dreamcast_executable_backing_extent(
                 event.address,
@@ -848,9 +882,10 @@ initialize_dreamcast_runtime(CpuState& cpu,
                                                 const std::span<const std::uint8_t> bytes) {
         ExecutableModule module;
         module.id = id;
-        module.source_identity =
-            "sha256:" + katana::io::sha256_bytes(std::string_view(
-                            reinterpret_cast<const char*>(bytes.data()), bytes.size()));
+        module.content_identity = boot.content_identity;
+        module.byte_identity = disc_load_byte_identity(bytes);
+        // Static export templates already bind this historical raw-byte source identity.
+        module.source_identity = module.byte_identity;
         module.guest_start = guest_start;
         module.bytes.assign(bytes.begin(), bytes.end());
         module.kind = ExecutableModuleKind::Module;
@@ -865,7 +900,6 @@ initialize_dreamcast_runtime(CpuState& cpu,
     publish_initial_executable(std::string(dreamcast_initial_boot_executable_module_id),
                                dreamcast_disc_boot_address,
                                boot.boot_file);
-    module_load_writes->reset();
     reset_dreamcast_direct_boot_cpu(cpu);
     if (firmware_mode == DreamcastRuntimeFirmwareMode::HleBiosAbi)
         cpu.pc = dreamcast_system_bootstrap_entry_address;

@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <exception>
 #include <limits>
 #include <sstream>
 #include <stdexcept>
@@ -13,6 +14,7 @@ namespace {
 
 constexpr std::string_view runtime_write_module_id_prefix = "guest-runtime-write-";
 constexpr std::string_view runtime_write_module_source_identity = "guest-runtime-write-v1";
+constexpr std::uint64_t executable_address_space_size = 0x1'0000'0000ull;
 
 void increment(std::uint64_t& value) noexcept {
     if (value != std::numeric_limits<std::uint64_t>::max()) ++value;
@@ -191,6 +193,54 @@ bool physical_extents_overlap(const ExecutableModule& left,
         }
     }
     return false;
+}
+
+bool physical_extents_overlap(const ExecutableModule& left,
+                              const std::uint32_t right_guest_start,
+                              const std::span<const ExecutableModuleActiveExtent> right_extents)
+    noexcept {
+    const auto left_base = canonical_physical_address(left.guest_start);
+    const auto right_base = canonical_physical_address(right_guest_start);
+    for (const auto left_extent : left.active_extents) {
+        const auto left_begin = static_cast<std::uint64_t>(left_base) + left_extent.offset;
+        const auto left_end = left_begin + left_extent.size;
+        for (const auto right_extent : right_extents) {
+            const auto right_begin =
+                static_cast<std::uint64_t>(right_base) + right_extent.offset;
+            const auto right_end = right_begin + right_extent.size;
+            if (left_begin < right_end && right_begin < left_end) return true;
+        }
+    }
+    return false;
+}
+
+bool subtract_physical_range(std::vector<ExecutableModuleActiveExtent>& extents,
+                             const std::uint32_t module_guest_start,
+                             const std::uint32_t physical_begin,
+                             const std::uint64_t physical_end) {
+    const auto module_base = canonical_physical_address(module_guest_start);
+    std::vector<ExecutableModuleActiveExtent> remaining;
+    remaining.reserve(extents.size() + 1u);
+    for (const auto extent : extents) {
+        const auto extent_begin = static_cast<std::uint64_t>(module_base) + extent.offset;
+        const auto extent_end = extent_begin + extent.size;
+        if (physical_begin >= extent_end || extent_begin >= physical_end) {
+            remaining.push_back(extent);
+            continue;
+        }
+        const auto overlap_begin = std::max<std::uint64_t>(physical_begin, extent_begin);
+        const auto overlap_end = std::min(physical_end, extent_end);
+        if (extent_begin < overlap_begin)
+            remaining.push_back({extent.offset,
+                                 static_cast<std::uint32_t>(overlap_begin - extent_begin)});
+        if (overlap_end < extent_end)
+            remaining.push_back(
+                {static_cast<std::uint32_t>(overlap_end - module_base),
+                 static_cast<std::uint32_t>(extent_end - overlap_end)});
+    }
+    if (remaining == extents) return false;
+    extents = std::move(remaining);
+    return true;
 }
 
 bool physical_range_overlaps_active_extents(const ExecutableModule& module,
@@ -385,16 +435,33 @@ void ExecutableModuleCatalog::unindex_active_extents(const ExecutableModule& mod
 }
 
 void ExecutableModuleCatalog::reserve_active_extent_index(const ExecutableModule& module) {
-    const auto module_base = canonical_physical_address(module.guest_start);
-    for (const auto extent : module.active_extents) {
+    reserve_active_extent_index(module.guest_start, module.active_extents);
+}
+
+void ExecutableModuleCatalog::reserve_active_extent_index(
+    const std::uint32_t guest_start,
+    const std::span<const ExecutableModuleActiveExtent> extents,
+    std::vector<std::uint32_t>* const inserted_pages) {
+    const auto module_base = canonical_physical_address(guest_start);
+    for (const auto extent : extents) {
         const auto extent_begin = static_cast<std::uint64_t>(module_base) + extent.offset;
         const auto extent_end = extent_begin + extent.size;
         const auto first_page = extent_begin / runtime_write_page_size * runtime_write_page_size;
         const auto last_page =
             (extent_end - 1u) / runtime_write_page_size * runtime_write_page_size;
         for (auto page = first_page;; page += runtime_write_page_size) {
-            static_cast<void>(
-                active_extent_page_refcounts_.try_emplace(static_cast<std::uint32_t>(page), 0u));
+            const auto page32 = static_cast<std::uint32_t>(page);
+            const auto [entry, inserted] =
+                active_extent_page_refcounts_.try_emplace(page32, 0u);
+            static_cast<void>(entry);
+            if (inserted && inserted_pages != nullptr) {
+                try {
+                    inserted_pages->push_back(page32);
+                } catch (...) {
+                    active_extent_page_refcounts_.erase(page32);
+                    throw;
+                }
+            }
             if (page == last_page) break;
         }
     }
@@ -450,6 +517,176 @@ void ExecutableModuleCatalog::publish(ExecutableModule module) {
     index_active_extents(module);
     modules_.push_back(std::move(module));
     increment(metrics_.loads);
+}
+
+ExecutableModuleCatalog::PreparedDiscLoadCatalog
+ExecutableModuleCatalog::prepare_disc_load_catalog(
+    std::vector<ExecutableModule> modules,
+    const std::span<const std::pair<std::uint32_t, std::size_t>> invalidated_ranges) {
+    if (invalidated_ranges.empty())
+        throw std::invalid_argument("Disc-Ladetransaktion besitzt keine Invalidierungsbereiche.");
+    for (const auto [address, size] : invalidated_ranges) {
+        const auto begin = canonical_physical_address(address);
+        if (size == 0u ||
+            size > executable_address_space_size - static_cast<std::uint64_t>(begin))
+            throw std::out_of_range(
+                "Disc-Ladetransaktion invalidiert ausserhalb des Gastadressraums.");
+    }
+    for (auto& module : modules)
+        validate_and_normalize_module(module);
+    for (std::size_t index = 0u; index < modules.size(); ++index) {
+        for (std::size_t previous = 0u; previous < index; ++previous) {
+            if (modules[index].id == modules[previous].id)
+                throw std::invalid_argument(
+                    "Disc-Ladetransaktion verwendet eine Modulidentitaet mehrfach.");
+            if (physical_extents_overlap(modules[index], modules[previous]))
+                throw std::invalid_argument(
+                    "Disc-Ladetransaktion besitzt ueberlappende Modulbereiche.");
+        }
+        modules[index].generation =
+            next_module_incarnation_generation(modules_, modules[index].id, modules[index].generation);
+    }
+
+    PreparedDiscLoadCatalog plan;
+    plan.modules = std::move(modules);
+    plan.invalidated_ranges.assign(invalidated_ranges.begin(), invalidated_ranges.end());
+    plan.updates.reserve(modules_.size());
+    for (std::size_t index = 0u; index < modules_.size(); ++index) {
+        const auto& existing = modules_[index];
+        if (!existing.active) continue;
+        auto remaining = existing.active_extents;
+        bool changed = false;
+        for (const auto [address, size] : invalidated_ranges) {
+            const auto begin = canonical_physical_address(address);
+            const auto end = static_cast<std::uint64_t>(begin) + size;
+            changed =
+                subtract_physical_range(remaining, existing.guest_start, begin, end) || changed;
+        }
+        if (changed) {
+            const auto remains_active = !remaining.empty();
+            plan.updates.push_back({index, std::move(remaining), remains_active});
+        }
+    }
+    for (const auto& incoming : plan.modules) {
+        for (std::size_t index = 0u; index < modules_.size(); ++index) {
+            const auto& existing = modules_[index];
+            if (!existing.active) continue;
+            const auto update = std::find_if(
+                plan.updates.begin(), plan.updates.end(), [&](const auto& candidate) {
+                    return candidate.module_index == index;
+                });
+            if (existing.id == incoming.id &&
+                (update == plan.updates.end() || update->remains_active))
+                throw std::invalid_argument(
+                    "Disc-Ladetransaktion laesst dieselbe Modulidentitaet aktiv.");
+            const auto extents =
+                update == plan.updates.end()
+                    ? std::span<const ExecutableModuleActiveExtent>(existing.active_extents)
+                    : std::span<const ExecutableModuleActiveExtent>(update->remaining_extents);
+            if (!extents.empty() &&
+                physical_extents_overlap(incoming, existing.guest_start, extents))
+                throw std::invalid_argument(
+                    "Disc-Ladetransaktion laesst einen ueberlappenden Altbereich aktiv.");
+        }
+    }
+
+    modules_.reserve(modules_.size() + plan.modules.size());
+    try {
+        for (const auto& module : plan.modules)
+            reserve_active_extent_index(
+                module.guest_start, module.active_extents, &plan.inserted_index_pages);
+        for (const auto& update : plan.updates)
+            reserve_active_extent_index(
+                modules_[update.module_index].guest_start,
+                update.remaining_extents,
+                &plan.inserted_index_pages);
+    } catch (...) {
+        cancel_disc_load_catalog(plan);
+        throw;
+    }
+    return plan;
+}
+
+void ExecutableModuleCatalog::cancel_disc_load_catalog(
+    PreparedDiscLoadCatalog& plan) noexcept {
+    for (const auto page : plan.inserted_index_pages) {
+        const auto found = active_extent_page_refcounts_.find(page);
+        if (found != active_extent_page_refcounts_.end() && found->second == 0u)
+            active_extent_page_refcounts_.erase(found);
+    }
+    plan.inserted_index_pages.clear();
+}
+
+void ExecutableModuleCatalog::commit_disc_load_catalog(
+    PreparedDiscLoadCatalog plan) noexcept {
+    const auto index_noalloc = [&](const ExecutableModule& module) noexcept {
+        if (!module.active) return;
+        const auto module_base = canonical_physical_address(module.guest_start);
+        for (const auto extent : module.active_extents) {
+            const auto extent_begin = static_cast<std::uint64_t>(module_base) + extent.offset;
+            const auto extent_end = extent_begin + extent.size;
+            const auto first_page =
+                extent_begin / runtime_write_page_size * runtime_write_page_size;
+            const auto last_page =
+                (extent_end - 1u) / runtime_write_page_size * runtime_write_page_size;
+            for (auto page = first_page;; page += runtime_write_page_size) {
+                const auto found =
+                    active_extent_page_refcounts_.find(static_cast<std::uint32_t>(page));
+                if (found == active_extent_page_refcounts_.end()) std::terminate();
+                if (found->second != std::numeric_limits<std::uint64_t>::max())
+                    ++found->second;
+                if (page == last_page) break;
+            }
+        }
+    };
+    for (auto& update : plan.updates) {
+        auto& module = modules_[update.module_index];
+        const auto was_active = module.active;
+        unindex_active_extents(module);
+        module.active_extents.swap(update.remaining_extents);
+        module.active = update.remains_active;
+        index_noalloc(module);
+        if (was_active && !module.active) increment(metrics_.unloads);
+    }
+    for (const auto [address, size] : plan.invalidated_ranges) {
+        const auto physical_begin = canonical_physical_address(address);
+        const auto physical_end = static_cast<std::uint64_t>(physical_begin) + size;
+        std::uint64_t cursor = physical_begin;
+        while (cursor < physical_end) {
+            const auto page =
+                static_cast<std::uint32_t>(cursor) & ~(runtime_write_page_size - 1u);
+            const auto page_end = std::min<std::uint64_t>(
+                physical_end, static_cast<std::uint64_t>(page) + runtime_write_page_size);
+            const auto found = runtime_write_pages_.find(page);
+            if (found != runtime_write_pages_.end()) {
+                auto offset = static_cast<std::uint32_t>(cursor - page);
+                const auto end_offset = static_cast<std::uint32_t>(page_end - page);
+                while (offset < end_offset) {
+                    const auto word = offset / 64u;
+                    const auto first_bit = offset % 64u;
+                    const auto word_end =
+                        std::min<std::uint32_t>(end_offset, (word + 1u) * 64u);
+                    const auto last_bit = word_end - word * 64u;
+                    auto mask = std::numeric_limits<std::uint64_t>::max() << first_bit;
+                    if (last_bit < 64u)
+                        mask &= (std::uint64_t{1u} << last_bit) - 1u;
+                    found->second.written[word] &= ~mask;
+                    offset = word_end;
+                }
+                if (std::all_of(found->second.written.begin(),
+                                found->second.written.end(),
+                                [](const auto word) { return word == 0u; }))
+                    runtime_write_pages_.erase(found);
+            }
+            cursor = page_end;
+        }
+        increment(metrics_.write_index_scans);
+    }
+    for (auto& module : plan.modules) {
+        index_noalloc(module);
+        modules_.push_back(std::move(module));
+        increment(metrics_.loads);
+    }
 }
 
 void ExecutableModuleCatalog::publish_loaded_range(ExecutableModule module,
@@ -1558,6 +1795,8 @@ const char* materialization_failure_name(const MaterializationFailure value) noe
         return "byte-identity-mismatch";
     case MaterializationFailure::AotTemplateMismatch:
         return "aot-template-mismatch";
+    case MaterializationFailure::MissingAot:
+        return "missing-aot";
     case MaterializationFailure::GenerationMismatch:
         return "generation-mismatch";
     case MaterializationFailure::ModuleUnloaded:

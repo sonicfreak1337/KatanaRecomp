@@ -1205,6 +1205,7 @@ void dreamcast_main_ram_mirror_invalidation_regression() {
         std::span<const std::uint8_t>(disc_sector), "synthetic-main-ram-mirror-disc");
     boot_image.system_bootstrap.resize(dreamcast_system_bootstrap_size, 0u);
     boot_image.boot_file = {0x09u, 0x00u};
+    boot_image.content_identity = "sha256:synthetic-main-ram-mirror-content";
     boot_image.repeated_bootstrap_reads_match = true;
     boot_image.repeated_reads_match = true;
     CpuState cpu;

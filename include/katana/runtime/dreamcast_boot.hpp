@@ -110,6 +110,8 @@ struct DreamcastRuntimeBootImage {
     std::size_t validated_tracks = 0u;
     bool repeated_bootstrap_reads_match = false;
     bool repeated_reads_match = false;
+    // Representation-independent identity from the verified install recipe/pack contract.
+    std::string content_identity;
 };
 
 struct DreamcastRuntimeState {
@@ -147,6 +149,7 @@ struct DreamcastRuntimeState {
     std::shared_ptr<RuntimeBlockTable> runtime_blocks;
     std::shared_ptr<ExecutableCodeTracker> code_tracker;
     std::shared_ptr<ExecutableModuleCatalog> module_catalog;
+    std::shared_ptr<ExecutableDiscLoadTransactionCoordinator> disc_load_transactions;
     std::shared_ptr<Sh4StoreQueues> store_queues;
     std::shared_ptr<Sh4CacheControl> cache_control;
     std::shared_ptr<Sh4IoPort> io_ports;
@@ -161,7 +164,10 @@ struct DreamcastRuntimeState {
 load_dreamcast_runtime_boot(const std::filesystem::path& descriptor_path);
 
 [[nodiscard]] DreamcastRuntimeBootImage load_dreamcast_runtime_boot(
-    std::shared_ptr<DiscSource> source, std::uint32_t data_track_lba, std::size_t validated_tracks);
+    std::shared_ptr<DiscSource> source,
+    std::uint32_t data_track_lba,
+    std::size_t validated_tracks,
+    std::string content_identity = {});
 
 [[nodiscard]] DreamcastRuntimeBootImage
 load_dreamcast_runtime_boot_from_pack(const std::filesystem::path& pack_path);

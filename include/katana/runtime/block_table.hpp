@@ -163,6 +163,15 @@ class RuntimeBlockTable {
     void clear() noexcept;
 
   private:
+    friend class ExecutableDiscLoadTransactionCoordinator;
+    struct PreparedDiscLoadInvalidation {
+        std::vector<std::uint64_t> ids;
+    };
+    [[nodiscard]] PreparedDiscLoadInvalidation
+    prepare_disc_load_invalidation(std::uint32_t physical_address, std::size_t size) const;
+    [[nodiscard]] std::size_t
+    commit_disc_load_invalidation(PreparedDiscLoadInvalidation plan) noexcept;
+
     struct VariantAddressKey {
         BlockVariantKey variant;
         std::uint32_t address = 0u;

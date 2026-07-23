@@ -134,6 +134,44 @@ int main() {
                     [&] { pvr->write(pvr_register::TaIspCurrent, 0x1000u); }),
             "Read-only-TA-Positionsregister sind beschreibbar.");
 
+    EventScheduler result_scheduler;
+    PvrRegisterFile result_pvr(result_scheduler, PvrTiming{3u});
+    std::uint64_t result_observer_calls = 0u;
+    result_pvr.set_render_result_observer([&] {
+        ++result_observer_calls;
+        return result_observer_calls == 1u ? PvrRenderResult::Failed
+                                          : PvrRenderResult::Success;
+    });
+    result_pvr.write(pvr_register::StartRender, 1u);
+    static_cast<void>(result_scheduler.advance_to(3u, 1u));
+    const auto failed_result_snapshot = result_pvr.snapshot();
+    require(result_observer_calls == 1u && result_pvr.render_request_count() == 1u &&
+                result_pvr.render_completion_count() == 0u &&
+                result_pvr.render_failure_count() == 1u &&
+                failed_result_snapshot.render_completions == 0u &&
+                failed_result_snapshot.render_failures == 1u,
+            "Fehlgeschlagener PVR-Render wird als Completion gezaehlt oder bleibt unsichtbar.");
+    result_pvr.write(pvr_register::StartRender, 1u);
+    static_cast<void>(result_scheduler.advance_to(6u, 1u));
+    require(result_observer_calls == 2u && result_pvr.render_request_count() == 2u &&
+                result_pvr.render_completion_count() == 1u &&
+                result_pvr.render_failure_count() == 1u,
+            "Erfolgreicher PVR-Renderabschluss wird nicht getrennt von Fehlern gezaehlt.");
+    result_pvr.set_render_result_observer({});
+    result_pvr.write(pvr_register::StartRender, 1u);
+    static_cast<void>(result_scheduler.advance_to(9u, 1u));
+    require(result_pvr.render_completion_count() == 1u &&
+                result_pvr.render_failure_count() == 2u,
+            "STARTRENDER ohne produktiven Renderpfad erfindet eine Completion.");
+    result_pvr.set_render_result_observer([]() -> PvrRenderResult {
+        throw std::runtime_error("synthetic-render-observer-failure");
+    });
+    result_pvr.write(pvr_register::StartRender, 1u);
+    static_cast<void>(result_scheduler.advance_to(12u, 1u));
+    require(result_pvr.render_completion_count() == 1u &&
+                result_pvr.render_failure_count() == 3u,
+            "Renderobserver-Exception entkommt untypisiert oder wird als Completion gezaehlt.");
+
     EventScheduler scan_scheduler;
     Memory scan_bus(0u);
     const auto scan_pvr = map_pvr_registers(

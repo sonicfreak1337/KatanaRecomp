@@ -8,10 +8,10 @@ IP.BIN-Boot bis BootExecutable und Spielboot fortsetzen. `KR-4915` und
 `KR-4847` schliesst jetzt auch Scheduler-Admission-Ueberlaeufe fuer PACKET,
 BIOS-Reads und Disc-Streaming ohne Hostexception, Teilwrite oder klemmendes
 `BSY`; offen bleiben EX 38/39 und laufende G1-Overrun-/Timeout-Grenzen.
-`KR-4848` hat den Interpreter aus dem normalen Produktport entfernt und
-identische Disc-Reloads an natives AOT gebunden; offen bleiben strukturierte
-Ladetransaktionen, der allgemeine native Materializer und die Registry latenter
-Module. `KR-4849` bleibt trotz synthetisch verbundenem Channel-2-/TA-EOL-Pfad
+`KR-4848` ist abgeschlossen: atomare strukturierte Ladetransaktionen binden
+identische Disc-Reloads und mehrteilige bekannte Module erst nach exakter
+Content-/Byteidentitaet an natives AOT. `KR-4849` bleibt trotz synthetisch
+verbundenem Channel-2-/TA-EOL-Pfad
 fuer den produktiven Gastpfad offen. `KR-4842` bindet fuer freie Probes
 MMU-bewusst echte lineare Backings und fuer Geraetezustand nicht mutierende
 Snapshots.
@@ -26,8 +26,8 @@ zwei frischen Laeufen. Damit ist `KR-4842` abgeschlossen; das damals
 freigegebene `KR-4911` ist inzwischen ebenfalls abgeschlossen. `KR-4912` ist
 ebenfalls abgeschlossen und gibt den verbleibenden `KR-4848`-Teil frei.
 
-Der aktuelle kumulative Vertrag verwendet Runtime-ABI 45, Block-ABI 3,
-Backend-Interface-ABI 3, PlatformServices-ABI 10, Portprojektvertrag 29 und
+Der aktuelle kumulative Vertrag verwendet Runtime-ABI 46, Block-ABI 3,
+Backend-Interface-ABI 3, PlatformServices-ABI 10, Portprojektvertrag 30 und
 Host-Video-Vertrag 2.
 
 `KR-4912` modelliert Load, Relocation, Replace und Unload als monotone
@@ -51,9 +51,8 @@ Produktport besitzt keinen Interpreter und beendet ungebundenen Code typisiert.
 Die fokussierten Regressionen bestanden 10/10 in 1,27 Sekunden; der
 interpreterfreie Produkt-E2E bestand 1/1 in 229,03 Sekunden. Fuer diesen
 Abschluss liefen weder ein privater Retaillauf noch eine Vollsuite oder
-`KR-4852`; strukturierte
-Disc-Ladetransaktionen und die Registry latenter AOT-Module bleiben in
-`KR-4848` offen.
+`KR-4852`; bei diesem KR-4912-Zwischenabschluss blieben strukturierte
+Disc-Ladetransaktionen und die Registry latenter AOT-Module noch offen.
 
 Der aktuelle Sicherheitsblock schliesst zwei zuvor nur behauptete
 Diagnose-/Schedulergrenzen. Freie Probes uebersetzen ueber die aktive Gast-MMU,
@@ -181,8 +180,9 @@ Scanout-Abbild verhindern sichtbare False-Proofs durch Offscreen-Writes,
 unveraenderte Bilddaten oder Blanking. Der normale Produktport besitzt
 weiterhin keinen Interpreterpfad; weder Retailbytes noch eine private Adresse
 werden als
-Spielsonderfall uebernommen. `KR-4848` bleibt fuer strukturierte Disc-
-Ladevorgaenge und den allgemeinen Materializer offen.
+Spielsonderfall uebernommen. Die damals offenen strukturierten Disc-
+Ladevorgaenge und der allgemeine Materializer sind inzwischen durch
+`KR-4848` geschlossen.
 
 Der Export baut CFG-, Kanten- und Writer-Slice-Indizes einmalig auf, reicht die
 konfigurierte Hostparallelitaet bis zum Projektschreiber durch und hasht grosse
@@ -233,8 +233,9 @@ Originaldisc umfasst drei Tracks und 521.461 Sektoren. Der abschliessende
 `pvr_direct_frames=2` und 302.287 geaenderten Direct-FB-Pixeln. TA,
 Rendergeneration und Materializer bleiben null; der Budget-Exit ist erwartet.
 
-`KR-4848` bleibt fuer strukturierte Disc-Ladetransaktionen, den allgemeinen
-Materializer und die Registry latenter nativer Module offen. Der erste
+Die in dieser historischen ABI-39-Evidenz noch offenen Disc-
+Ladetransaktionen, der Materializer und die latente Registry sind inzwischen
+durch `KR-4848` geschlossen. Der erste
 Gastframe und sein Host-Present sind belegt; Spielboot und BootExecutable
 bleiben offen.
 Naechstes Gate: `v0.48.0` - Boot- und Frame-Integration
@@ -253,9 +254,9 @@ Plattformgrenzen bereit und ist weder normaler Interpreter/JIT noch Discplayer
 oder Titelhackschicht. Der normale Export emittiert und linkt jetzt keinen SH-4-
 Interpreter; ein fehlendes AOT-Ziel endet als typisierter Materialisierungs-/
 Dispatchfehler. Nur `diagnostic_partial` enthaelt und deklariert den begrenzten
-Diagnoseinterpreter. Das schliesst die Produktgrenze, aber noch nicht ganz
-`KR-4848`: Strukturierte Disc-Ladetransaktionen, der allgemeine native
-Materializer und vorab kompilierte latente Module bleiben offen.
+Diagnoseinterpreter. `KR-4848` ist inzwischen geschlossen: Strukturierte Disc-
+Ladetransaktionen, der allgemeine native Materializer und vorab kompilierte
+latente Module sind atomar und identitaetsgebunden integriert.
 
 Der aktuelle Kernblock erweitert `KR-4847` um einen gemeinsamen BIOS-/
 Taskfile-Besitzer, Dreamcast-SPI 11 bis 14, einen 32-Byte-Modepuffer und
@@ -297,8 +298,9 @@ gemeinsamen TA-FIFO. Channel 2 verwendet den externen Memory-to-Device-Request
 `DMAOR.DME+DDT` aus allen vier physischen Area-3-RAM-Spiegeln. Eine Runtime-End-
 to-End-Regression belegt Haupt-RAM bis TA-
 Object-List/EOL sowie die getrennte Channel-2-Completion; falsche Richtung und
-Cycle-Steal scheitern sichtbar. Fuer Direct-Texture-Ziele `0x11`/`0x13` ist die
-Zielprogression mehrteiliger Transfers noch als generische P1-Luecke offen.
+Cycle-Steal scheitern sichtbar. Fuer Direct-Texture-Ziele `0x11`/`0x13`
+progressiert das Ziel jetzt pro 32-Byte-Einheit; die generische P1-Luecke ist
+geschlossen.
 Der Hintergrundpfad bildet den festen Overscan-Quad einschliesslich HScale,
 D-Attributen und texturierter X/U-Erweiterung ab. `KR-4850` akzeptiert am
 echten Scheduler-VBlank-In zwei gleichwertig echte Gastquellen: eine
@@ -321,8 +323,9 @@ Eintraegen in 312,97 Sekunden und zwoelf parallelen Jobs bestanden, darunter
 181 regulaere Passes und zwei erwartete
 Regex-`PASS_REGULAR_EXPRESSION`-Erfolge; Desktop-GUI- und Harness-Tests sind
 nicht Teil dieser 183. Das einzige finale Freigabegate folgt erst nach
-Abschluss aller v0.48-Implementierungen. BootExecutable, Spielboot, `KR-4848`
-und der produktive TA-Pfad bleiben offen.
+Abschluss aller v0.48-Implementierungen. An diesem historischen Checkpoint
+waren BootExecutable, Spielboot, `KR-4848` und der produktive TA-Pfad noch
+offen; `KR-4848` ist inzwischen geschlossen.
 
 Die folgenden Abschnitte dokumentieren fruehere Bring-up-Zwischenstaende.
 Dortige Aussagen, ein Gastframe sei noch nicht belegt, gelten jeweils nur fuer
@@ -512,9 +515,9 @@ MMIO-Zugriff liegt im aktiven OCRAM; der fruehere Abbruch nach 12 Gastzyklen
 ist damit beseitigt. TA/PVR und ein echter Gastframe bleiben fuer den laengeren
 Folgelauf weiterhin offen.
 
-Runtime-ABI 45, Block-ABI 3, Backend-Interface-ABI 3, BIOS-ABI 9,
-PlatformServices-ABI 10, Portprojektvertrag 29 und Host-Video-Vertrag 2 bilden den kumulativen
-v0.48-Stand ab.
+Runtime-ABI 46, Block-ABI 3, Backend-Interface-ABI 3, BIOS-ABI 9,
+PlatformServices-ABI 10, Portprojektvertrag 30 und Host-Video-Vertrag 2 bilden
+den kumulativen v0.48-Stand ab.
 PlatformServices-ABI 10 versioniert zusaetzlich die genaue
 `PREF`-Instruktionsherkunft bis zur Store Queue.
 

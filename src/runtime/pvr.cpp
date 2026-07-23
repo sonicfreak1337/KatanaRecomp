@@ -18,10 +18,10 @@ PvrRegisterFile::PvrRegisterFile(EventScheduler& scheduler,
                                  std::function<void()> render_observer,
                                  std::function<void(bool)> vblank_observer)
     : scheduler_(scheduler), timing_(timing), scheduler_lifetime_(scheduler.lifetime_token()),
-      render_observer_(std::move(render_observer)),
       vblank_observer_(std::move(vblank_observer)) {
     if (timing_.guest_clock_hz == 0u || timing_.pixel_clock_hz == 0u)
         throw std::invalid_argument("PVR-SPG braucht positive Gast- und Pixeltakte.");
+    set_render_observer(std::move(render_observer));
     initialize_register_defaults();
     reschedule_scanout();
     reset_observer_ = scheduler_.add_reset_observer([this] { handle_scheduler_reset(); });
@@ -127,6 +127,7 @@ PvrRegisterSnapshot PvrRegisterFile::snapshot() const {
     result.video_control = result.registers[pvr_register::VideoControl / 4u];
     result.render_requests = render_requests_;
     result.render_completions = render_completions_;
+    result.render_failures = render_failures_;
     result.vblank_in = vblank_in_count_;
     result.vblank_out = vblank_out_count_;
     result.hblank = hblank_count_;
@@ -279,8 +280,18 @@ void PvrRegisterFile::reset() {
 void PvrRegisterFile::complete_render(const SchedulerEventId event_id) {
     if (render_events_.erase(event_id) == 0u)
         throw std::logic_error("PVR-Rendercompletion besitzt keinen Request.");
-    ++render_completions_;
-    if (render_observer_) render_observer_();
+    if (!render_result_observer_) {
+        ++render_failures_;
+        return;
+    }
+    try {
+        if (render_result_observer_() == PvrRenderResult::Success)
+            ++render_completions_;
+        else
+            ++render_failures_;
+    } catch (...) {
+        ++render_failures_;
+    }
 }
 
 void PvrRegisterFile::handle_scheduler_reset() {
@@ -296,6 +307,9 @@ std::uint64_t PvrRegisterFile::render_request_count() const noexcept {
 }
 std::uint64_t PvrRegisterFile::render_completion_count() const noexcept {
     return render_completions_;
+}
+std::uint64_t PvrRegisterFile::render_failure_count() const noexcept {
+    return render_failures_;
 }
 std::uint64_t PvrRegisterFile::reset_count() const noexcept {
     return resets_;
@@ -322,7 +336,19 @@ std::uint32_t PvrRegisterFile::field() const noexcept {
     return static_cast<std::uint32_t>((elapsed / scan_frame_cycles_) & 1u);
 }
 void PvrRegisterFile::set_render_observer(std::function<void()> observer) {
-    render_observer_ = std::move(observer);
+    if (!observer) {
+        render_result_observer_ = {};
+        return;
+    }
+    render_result_observer_ =
+        [observer = std::move(observer)]() mutable {
+            observer();
+            return PvrRenderResult::Success;
+        };
+}
+void PvrRegisterFile::set_render_result_observer(
+    std::function<PvrRenderResult()> observer) {
+    render_result_observer_ = std::move(observer);
 }
 void PvrRegisterFile::set_vblank_observer(std::function<void(bool)> observer) {
     vblank_observer_ = std::move(observer);
@@ -1586,6 +1612,17 @@ PvrTaFifo::PvrTaFifo(std::function<void(PvrListType)> list_observer)
 void PvrTaFifo::submit(const std::span<const std::uint8_t> packet) {
     if (packet.size() != 32u) throw std::invalid_argument("TA-FIFO erwartet 32-Byte-Parameter.");
     ++metrics_.packets;
+    const auto normalized_kind =
+        pending_intensity_header_
+            ? PvrTaPacketKind::IntensityContinuation
+        : pending_modifier_vertex_packet_
+            ? PvrTaPacketKind::ModifierVertexContinuation
+        : pending_extended_vertex_
+            ? PvrTaPacketKind::ExtendedVertexContinuation
+        : pending_sprite_vertex_
+            ? PvrTaPacketKind::SpriteContinuation
+            : static_cast<PvrTaPacketKind>((ta_u32(packet, 0u) >> 29u) & 7u);
+    ++metrics_.normalized_packets[static_cast<std::size_t>(normalized_kind)];
     if (pending_intensity_header_) {
         active_header_argb_ = decode_ta_float_color(packet, 0u);
         if (active_two_volume_) {
@@ -2033,6 +2070,74 @@ void PvrTaFifo::reset() noexcept {
     active_modifier_volume_.reset();
     pending_modifier_vertex_packet_.reset();
     metrics_ = {};
+}
+
+bool PvrChannel2DestinationPlan::destination_progresses() const noexcept {
+    return kind == PvrChannel2DestinationKind::DirectTexture64 ||
+           kind == PvrChannel2DestinationKind::DirectTexture32;
+}
+
+std::uint32_t
+PvrChannel2DestinationPlan::destination_for_unit(const std::size_t unit) const {
+    if (unit >= unit_count)
+        throw std::out_of_range("PVR-Channel-2-Zieleinheit liegt ausserhalb des Transfers.");
+    if (!destination_progresses()) return initial_address;
+    const auto address = static_cast<std::uint64_t>(initial_address) +
+                         static_cast<std::uint64_t>(unit) *
+                             pvr_channel2_transfer_unit_size;
+    if (address > std::numeric_limits<std::uint32_t>::max())
+        throw std::overflow_error("PVR-Channel-2-Zieladresse ist uebergelaufen.");
+    return static_cast<std::uint32_t>(address);
+}
+
+PvrChannel2DestinationPlan
+plan_pvr_channel2_destination(const std::uint32_t destination,
+                              const std::size_t byte_count) {
+    constexpr std::size_t maximum_channel2_length = 0x00FFFFE0u;
+    constexpr std::uint64_t direct_texture_window_size = 0x01000000u;
+    if (byte_count == 0u || byte_count > maximum_channel2_length ||
+        (byte_count % pvr_channel2_transfer_unit_size) != 0u)
+        throw std::invalid_argument(
+            "PVR-Channel-2-Transfer braucht eine gueltige positive 32-Byte-Laenge.");
+    if ((destination & (pvr_channel2_transfer_unit_size - 1u)) != 0u)
+        throw std::invalid_argument(
+            "PVR-Channel-2-Zieladresse muss auf 32 Byte ausgerichtet sein.");
+
+    const auto window = destination & 0xFF000000u;
+    PvrChannel2DestinationKind kind;
+    switch (window) {
+    case 0x10000000u:
+    case 0x12000000u:
+        kind = (destination & 0x00800000u) == 0u
+                   ? PvrChannel2DestinationKind::TaFifo
+                   : PvrChannel2DestinationKind::YuvConverter;
+        break;
+    case 0x11000000u:
+        kind = PvrChannel2DestinationKind::DirectTexture64;
+        break;
+    case 0x13000000u:
+        kind = PvrChannel2DestinationKind::DirectTexture32;
+        break;
+    default:
+        throw std::out_of_range(
+            "PVR-Channel-2-Ziel liegt ausserhalb der Area-4-PVR-Fenster.");
+    }
+
+    if (kind == PvrChannel2DestinationKind::DirectTexture64 ||
+        kind == PvrChannel2DestinationKind::DirectTexture32) {
+        const auto end = static_cast<std::uint64_t>(destination) + byte_count;
+        const auto window_end = static_cast<std::uint64_t>(window) +
+                                direct_texture_window_size;
+        if (end > window_end)
+            throw std::out_of_range(
+                "PVR-Direct-Texture-Transfer verlaesst sein 16-MiB-Zielfenster.");
+    }
+    return {
+        destination,
+        byte_count,
+        byte_count / pvr_channel2_transfer_unit_size,
+        kind,
+    };
 }
 
 PvrTaFifoMemoryDevice::PvrTaFifoMemoryDevice(std::shared_ptr<PvrTaFifo> fifo,

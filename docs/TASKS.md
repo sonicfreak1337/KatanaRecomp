@@ -937,7 +937,7 @@ und freigegebenem Owner; BIOS-Read und -Streaming liefern einmalig
 wird. EX 38/39 sowie unabhaengige laufende G1-Overrun-/Timeoutgrenzen halten
 `KR-4847` weiter offen.
 
-### [ ] KR-4848 - Runtimecode, Disc-Module, Overlays und latentes AOT
+### [x] KR-4848 - Runtimecode, Disc-Module, Overlays und latentes AOT
 
 Abhaengigkeiten: KR-4843, KR-4912
 Prioritaet: P0
@@ -1026,12 +1026,12 @@ Fallback oder Materialisierung; GD-ROM, TA und PVR sind noch null. Bei 320
 Millionen Zyklen erreicht der Gast Spielecode, zwei GD-ROM-Kommandos und einen
 spaeten PVR-Registerwrite, weiterhin ohne TA-, Render- oder Framebeweis.
 
-Der aktuelle kumulative Schnittstellenstand verwendet Runtime-ABI 45,
+Der damalige kumulative Schnittstellenstand verwendet Runtime-ABI 45,
 Block-ABI 3, Backend-Interface-ABI 3, PlatformServices-ABI 10,
 Portprojektvertrag 29 und Host-Video-Vertrag 2. Source-relativierte native AOT-Templates und ihr
 adressierter Binder sind vorhanden; strukturierte Disc-Ladetransaktionen, der
 allgemeine native Materializer und die Registry latenter Module halten
-`KR-4848` weiterhin offen. Das fokussierte Gate besteht 11/11, der x64-Kern-/
+`KR-4848` an diesem Zwischenstand noch offen. Das fokussierte Gate besteht 11/11, der x64-Kern-/
 Runtime-Build der Desktop-GUI-off-Konfiguration mit zwoelf parallelen Jobs ist
 gruen und deren vollstaendiges CTest-Zwischengate auf Quellstand `924ea89`
 besteht 183/183 Eintraege in 312,97 Sekunden; darunter 181 regulaere Passes
@@ -1039,6 +1039,17 @@ und zwei erwartete Regex-`PASS_REGULAR_EXPRESSION`-Erfolge. Desktop-GUI- und
 Harness-Tests sind nicht Teil dieser 183; der Runner-Selbsttest ist separat
 gruen.
 Es ist kein Abschluss von `KR-4852`, `KR-4853` oder `KR-4854`.
+
+Abschluss 2026-07-23: Alle Disc-Lesewege verwenden einen gemeinsamen atomaren
+Loadvertrag mit representation-unabhaengiger Contentidentitaet, logischem
+Quelloffset und exakter Byteidentitaet. Mehrteilige Loads aktivieren latentes
+AOT erst nach lueckenloser Vollabdeckung und Vollhash; partielle Kandidaten
+bleiben ohne Produktinterpreter typisiert nicht ausfuehrbar. Exportdiscovery,
+Source-Registry, Binder, Materializer, Alias-/MMU-Ranges und atomarer
+Overlayersatz sind synthetisch abgedeckt. Runtime-ABI 46 und
+Portprojektvertrag 30 sind der kumulative Vertrag. Der fokussierte 12-Job-
+Build sowie 17/17 Regressionen sind gruen. Ein privater Lauf, die Vollsuite
+und `KR-4852` wurden nicht ausgefuehrt.
 
 ### [ ] KR-4849 - TA-Eingang und PVR-Kommandopfad
 

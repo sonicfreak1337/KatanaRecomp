@@ -43,6 +43,8 @@ class MapleDevice {
   public:
     virtual ~MapleDevice() = default;
     [[nodiscard]] virtual MapleResponse transact(const MapleRequest& request) = 0;
+    [[nodiscard]] virtual MapleResponse transact_at(const MapleRequest& request,
+                                                    std::uint64_t guest_cycle);
 };
 
 enum class ControllerButton : std::uint16_t {
@@ -72,12 +74,16 @@ struct ControllerState {
     std::uint8_t joystick_y = 0x80u;
     std::uint8_t joystick2_x = 0x80u;
     std::uint8_t joystick2_y = 0x80u;
+
+    [[nodiscard]] bool operator==(const ControllerState&) const = default;
 };
 
 class HostInputBackend {
   public:
     virtual ~HostInputBackend() = default;
     [[nodiscard]] virtual ControllerState sample(std::uint64_t frame) = 0;
+    [[nodiscard]] virtual ControllerState sample_at(std::uint64_t frame,
+                                                    std::uint64_t guest_cycle);
 };
 
 class ReplayInputBackend final : public HostInputBackend {
@@ -93,6 +99,8 @@ class MapleControllerDevice final : public MapleDevice {
   public:
     explicit MapleControllerDevice(std::shared_ptr<HostInputBackend> input);
     [[nodiscard]] MapleResponse transact(const MapleRequest& request) override;
+    [[nodiscard]] MapleResponse transact_at(const MapleRequest& request,
+                                            std::uint64_t guest_cycle) override;
     [[nodiscard]] std::uint64_t sampled_frames() const noexcept;
 
   private:
@@ -161,8 +169,16 @@ class MapleBus final {
     [[nodiscard]] bool attached(std::uint8_t port, std::uint8_t unit) const;
     [[nodiscard]] MapleResponse
     exchange(std::uint8_t port, std::uint8_t unit, const MapleRequest& request);
+    [[nodiscard]] MapleResponse exchange_at(std::uint8_t port,
+                                            std::uint8_t unit,
+                                            const MapleRequest& request,
+                                            std::uint64_t guest_cycle);
     [[nodiscard]] MapleResponse
     exchange_without_completion(std::uint8_t port, std::uint8_t unit, const MapleRequest& request);
+    [[nodiscard]] MapleResponse exchange_without_completion_at(std::uint8_t port,
+                                                               std::uint8_t unit,
+                                                               const MapleRequest& request,
+                                                               std::uint64_t guest_cycle);
     [[nodiscard]] std::span<const MapleTransactionRecord> history() const noexcept;
     [[nodiscard]] MapleBusSnapshot snapshot() const;
 
@@ -171,7 +187,8 @@ class MapleBus final {
     [[nodiscard]] MapleResponse exchange_impl(std::uint8_t port,
                                               std::uint8_t unit,
                                               const MapleRequest& request,
-                                              bool notify_completion);
+                                              bool notify_completion,
+                                              std::uint64_t guest_cycle);
     std::array<std::shared_ptr<MapleDevice>, maple_port_count * maple_units_per_port> devices_{};
     std::vector<MapleTransactionRecord> history_;
     std::uint64_t next_sequence_ = 1u;

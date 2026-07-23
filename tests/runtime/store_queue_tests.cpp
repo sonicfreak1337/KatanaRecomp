@@ -416,6 +416,7 @@ int main() {
             std::span<const std::uint8_t>(disc_sector), "synthetic-store-queue-disc");
         boot.system_bootstrap.resize(dreamcast_system_bootstrap_size, 0u);
         boot.boot_file = {0x09u, 0x00u};
+        boot.content_identity = "sha256:synthetic-store-queue-content";
         boot.repeated_bootstrap_reads_match = true;
         boot.repeated_reads_match = true;
         auto product_cpu = std::make_unique<CpuState>();

@@ -55,6 +55,9 @@ struct PreparedPortProgram {
     std::size_t boot_size = 0u;
     std::string_view project_identity;
     bool hle_bios_abi = false;
+    bool discover_latent_aot = false;
+    std::uint32_t disc_volume_start_lba = 0u;
+    std::uint32_t disc_extent_lba_bias = 0u;
 };
 
 [[nodiscard]] PortExportResult

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "katana/runtime/disc.hpp"
+#include "katana/runtime/disc_load_transaction.hpp"
 #include "katana/runtime/memory.hpp"
 #include "katana/runtime/runtime.hpp"
 
@@ -30,6 +31,8 @@ struct GdRomProductStatus {
     std::size_t bios_requests = 0u;
     std::uint64_t completed_commands = 0u;
     std::uint64_t completed_dma = 0u;
+    std::uint64_t committed_load_transactions = 0u;
+    std::uint64_t failed_load_transactions = 0u;
     std::array<std::uint32_t, 4u> sector_mode{};
     std::uint32_t dma_callback = 0u;
     std::uint32_t dma_callback_argument = 0u;
@@ -73,6 +76,11 @@ struct GdRomBiosCallEvent {
 };
 
 enum class GdRomBiosTransferKind : std::uint8_t { None, Dma, Pio };
+
+enum class DiscLoadExecutionPolicy : std::uint8_t {
+    RequireAtomicExecutor,
+    StandaloneTestMode
+};
 
 struct GdRomGuestCallback {
     GdRomBiosTransferKind kind = GdRomBiosTransferKind::None;
@@ -141,6 +149,9 @@ struct DreamcastGdRomSnapshot {
     std::uint64_t dropped_bios_call_events = 0u;
     std::uint64_t completed_commands = 0u;
     std::uint64_t completed_dma = 0u;
+    std::uint64_t next_load_transaction = 0u;
+    std::uint64_t committed_load_transactions = 0u;
+    std::uint64_t failed_load_transactions = 0u;
     std::array<std::uint32_t, 4u> sector_mode{};
     std::uint32_t dma_callback = 0u;
     std::uint32_t dma_callback_argument = 0u;
@@ -166,7 +177,11 @@ class DreamcastGdRomController final {
                              GdRomDrive drive,
                              std::function<void(std::uint64_t)> completion_observer = {},
                              ModuleLoadObserver module_load_observer = {},
-                             std::function<void()> command_ack_observer = {});
+                             std::function<void()> command_ack_observer = {},
+                             DiscLoadTransactionExecutor load_transaction_executor = {},
+                             std::string content_identity = {},
+                             DiscLoadExecutionPolicy load_execution_policy =
+                                 DiscLoadExecutionPolicy::RequireAtomicExecutor);
     ~DreamcastGdRomController();
     [[nodiscard]] std::uint32_t read(std::uint32_t offset, MemoryAccessWidth width);
     void write(std::uint32_t offset, std::uint32_t value, MemoryAccessWidth width);
@@ -222,7 +237,8 @@ class DreamcastGdRomController final {
     void schedule_packet();
     void complete_packet(SchedulerEventId event_id, std::uint64_t cycle);
     void publish_data(std::vector<std::uint8_t> data);
-    void publish_dma_data(std::vector<std::uint8_t> data);
+    void publish_dma_data(std::vector<std::uint8_t> data,
+                          DiscLoadSourceRange source_range);
     void begin_data_out(std::size_t size, std::uint8_t mode_offset);
     void begin_next_taskfile_data_phase();
     void complete_taskfile_data_phase();
@@ -252,6 +268,12 @@ class DreamcastGdRomController final {
     void finish_stream_transfer(BiosRequest& request);
     [[nodiscard]] BiosRequest* active_stream_transfer(GdRomBiosTransferKind kind) noexcept;
     void queue_stream_callback(std::uint32_t request_id, GdRomBiosTransferKind kind);
+    [[nodiscard]] DiscLoadCommit commit_disc_load(DiscLoadRoute route,
+                                                  std::uint32_t guest_destination,
+                                                  std::uint32_t physical_destination,
+                                                  std::span<const std::uint8_t> bytes,
+                                                  CodeWriteSource source,
+                                                  DiscLoadSourceRange source_range = {});
     void remember_bios_request(const BiosRequest& request) noexcept;
     [[nodiscard]] const BiosRequest* find_bios_request(std::uint32_t id) const noexcept;
     std::uint32_t finish_bios_call(GdRomBiosCallEvent event, std::uint32_t result);
@@ -264,6 +286,7 @@ class DreamcastGdRomController final {
     std::vector<std::uint8_t> packet_;
     std::vector<std::uint8_t> data_;
     std::size_t data_cursor_ = 0u;
+    DiscLoadSourceRange taskfile_data_source_range_;
     std::uint32_t taskfile_phase_remaining_ = 0u;
     std::uint32_t taskfile_host_byte_limit_ = 65'536u;
     TaskfilePhase taskfile_phase_ = TaskfilePhase::Idle;
@@ -304,6 +327,9 @@ class DreamcastGdRomController final {
     std::uint64_t dropped_bios_call_events_ = 0u;
     std::uint64_t completed_commands_ = 0u;
     std::uint64_t completed_dma_ = 0u;
+    std::uint64_t next_load_transaction_ = 1u;
+    std::uint64_t committed_load_transactions_ = 0u;
+    std::uint64_t failed_load_transactions_ = 0u;
     std::array<std::uint32_t, 4u> sector_mode_{0u, 0x2000u, 1024u, 2048u};
     std::uint32_t dma_callback_ = 0u;
     std::uint32_t dma_callback_argument_ = 0u;
@@ -316,6 +342,10 @@ class DreamcastGdRomController final {
     std::vector<GdRomGuestCallback> pending_guest_callbacks_;
     DreamcastG1BusController* g1_bus_ = nullptr;
     ModuleLoadObserver module_load_observer_;
+    DiscLoadTransactionExecutor load_transaction_executor_;
+    std::string content_identity_;
+    DiscLoadExecutionPolicy load_execution_policy_ =
+        DiscLoadExecutionPolicy::RequireAtomicExecutor;
     std::function<void(std::uint64_t)> completion_observer_;
     std::function<void()> command_ack_observer_;
     std::optional<SchedulerEventId> packet_event_;
@@ -328,6 +358,10 @@ map_dreamcast_gdrom(Memory& memory,
                     GdRomDrive drive,
                     std::function<void(std::uint64_t)> completion_observer = {},
                     DreamcastGdRomController::ModuleLoadObserver module_load_observer = {},
-                    std::function<void()> command_ack_observer = {});
+                    std::function<void()> command_ack_observer = {},
+                    DiscLoadTransactionExecutor load_transaction_executor = {},
+                    std::string content_identity = {},
+                    DiscLoadExecutionPolicy load_execution_policy =
+                        DiscLoadExecutionPolicy::RequireAtomicExecutor);
 
 } // namespace katana::runtime

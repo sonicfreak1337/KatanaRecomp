@@ -221,6 +221,7 @@ int main() {
         std::span<const std::uint8_t>(disc_sector), "synthetic-channel2-ta-disc");
     runtime_boot.system_bootstrap.resize(dreamcast_system_bootstrap_size, 0u);
     runtime_boot.boot_file = {0x09u, 0x00u};
+    runtime_boot.content_identity = "sha256:synthetic-channel2-ta-content";
     runtime_boot.repeated_bootstrap_reads_match = true;
     runtime_boot.repeated_reads_match = true;
     CpuState runtime_cpu;

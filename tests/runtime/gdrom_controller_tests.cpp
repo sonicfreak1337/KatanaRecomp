@@ -96,7 +96,10 @@ int main() {
         GdRomDrive(source),
         [&](const std::uint64_t) { ++completions; },
         {},
-        [&] { ++command_acks; });
+        [&] { ++command_acks; },
+        {},
+        {},
+        DiscLoadExecutionPolicy::StandaloneTestMode);
     const auto write_packet = [](DreamcastGdRomController& target,
                                  const std::array<std::uint8_t, 12u>& packet) {
         for (std::size_t offset = 0u; offset < packet.size(); offset += 2u) {
@@ -165,7 +168,12 @@ int main() {
             timeout_scheduler,
             GdRomDrive(
                 std::make_shared<MemoryDiscSource>(bytes, "synthetic-taskfile-timeout")),
-            [&](const std::uint64_t) { ++timeout_irqs; });
+            [&](const std::uint64_t) { ++timeout_irqs; },
+            {},
+            {},
+            {},
+            {},
+            DiscLoadExecutionPolicy::StandaloneTestMode);
 
         timeout_controller.write(0x9Cu, 0xA0u, MemoryAccessWidth::Byte);
         std::array<std::uint8_t, 12u> timeout_packet{};
@@ -201,7 +209,12 @@ int main() {
             timeout_cpu.memory,
             timeout_scheduler,
             GdRomDrive(std::make_shared<MemoryDiscSource>(bytes, "synthetic-bios-timeout")),
-            [&](const std::uint64_t) { ++timeout_irqs; });
+            [&](const std::uint64_t) { ++timeout_irqs; },
+            {},
+            {},
+            {},
+            {},
+            DiscLoadExecutionPolicy::StandaloneTestMode);
         constexpr std::uint32_t timeout_parameters = 0x8C001000u;
         constexpr std::uint32_t timeout_status = 0x8C001020u;
         constexpr std::uint32_t timeout_destination = 0x8C002000u;
@@ -718,7 +731,15 @@ int main() {
     auto no_media_source = std::make_shared<MemoryDiscSource>(
         std::span<const std::uint8_t>{}, "synthetic-no-media");
     DreamcastGdRomController no_media_controller(
-        cpu.memory, no_media_scheduler, GdRomDrive(std::move(no_media_source)));
+        cpu.memory,
+        no_media_scheduler,
+        GdRomDrive(std::move(no_media_source)),
+        {},
+        {},
+        {},
+        {},
+        {},
+        DiscLoadExecutionPolicy::StandaloneTestMode);
     no_media_controller.write(0x9Cu, 0xA0u, MemoryAccessWidth::Byte);
     write_packet(no_media_controller, test_unit);
     static_cast<void>(no_media_scheduler.advance_by(1'000u, 1u));
@@ -1153,7 +1174,11 @@ int main() {
                 stream_blocks,
                 stream_code_tracker,
                 stream_load_writes.consume(physical, loaded.size()));
-        });
+        },
+        {},
+        {},
+        {},
+        DiscLoadExecutionPolicy::StandaloneTestMode);
     std::vector<SystemAsicEvent> stream_g1_events;
     DreamcastG1BusController stream_g1(
         stream_scheduler,
@@ -1612,7 +1637,12 @@ int main() {
         toc_cpu.memory,
         toc_scheduler,
         GdRomDrive(std::move(toc_source)),
-        [&](const std::uint64_t) { ++toc_completions; });
+        [&](const std::uint64_t) { ++toc_completions; },
+        {},
+        {},
+        {},
+        {},
+        DiscLoadExecutionPolicy::StandaloneTestMode);
     const auto request_toc = [&](const std::uint32_t area, const std::uint32_t output) {
         toc_cpu.memory.write_u32(parameters, area);
         toc_cpu.memory.write_u32(parameters + 4u, output);

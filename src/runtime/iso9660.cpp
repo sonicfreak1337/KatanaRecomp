@@ -111,14 +111,20 @@ std::vector<std::string> Iso9660Filesystem::split_path(const std::string_view pa
     return result;
 }
 
-std::vector<Iso9660Entry> Iso9660Filesystem::read_directory(const Iso9660Entry& directory) const {
+std::vector<Iso9660Entry>
+Iso9660Filesystem::read_directory(const Iso9660Entry& directory,
+                                  const Iso9660DirectoryReadLimits limits) const {
     if (!directory.directory) {
         throw std::invalid_argument("ISO9660-Pfad ist kein Verzeichnis.");
     }
+    if (limits.maximum_entries == 0u || directory.size > limits.maximum_bytes)
+        throw std::length_error("ISO9660-Verzeichnis ueberschreitet das Lesebudget.");
     const auto cache_key = (static_cast<std::uint64_t>(directory.lba) << 32u) | directory.size;
     if (cache_mode_ == Iso9660CacheMode::Enabled) {
         const std::lock_guard lock(cache_mutex_);
         if (const auto found = directory_cache_.find(cache_key); found != directory_cache_.end()) {
+            if (found->second.size() > limits.maximum_entries)
+                throw std::length_error("ISO9660-Verzeichnis ueberschreitet das Eintragsbudget.");
             ++io_counters_.directory_cache_hits;
             return found->second;
         }
@@ -140,6 +146,8 @@ std::vector<Iso9660Entry> Iso9660Filesystem::read_directory(const Iso9660Entry& 
         const auto entry = parse_record(bytes, offset);
         const auto length = bytes[offset];
         if (entry.name != std::string(1u, '\0') && entry.name != std::string(1u, '\1')) {
+            if (result.size() == limits.maximum_entries)
+                throw std::length_error("ISO9660-Verzeichnis ueberschreitet das Eintragsbudget.");
             result.push_back(entry);
         }
         offset += length;
@@ -203,11 +211,28 @@ std::vector<Iso9660Entry> Iso9660Filesystem::list_directory(const std::string_vi
     return read_directory(resolve(path));
 }
 
+Iso9660Entry Iso9660Filesystem::root_directory() const noexcept {
+    return root_;
+}
+
+std::vector<Iso9660Entry>
+Iso9660Filesystem::list_directory(const Iso9660Entry& directory,
+                                  const Iso9660DirectoryReadLimits limits) const {
+    return read_directory(directory, limits);
+}
+
 std::vector<std::uint8_t> Iso9660Filesystem::read_file(const std::string_view path) const {
-    const auto entry = resolve(path);
+    return read_file(resolve(path), std::numeric_limits<std::uint32_t>::max());
+}
+
+std::vector<std::uint8_t>
+Iso9660Filesystem::read_file(const Iso9660Entry& entry,
+                             const std::uint32_t maximum_bytes) const {
     if (entry.directory) {
         throw std::invalid_argument("ISO9660-Pfad bezeichnet ein Verzeichnis.");
     }
+    if (entry.size > maximum_bytes)
+        throw std::length_error("ISO9660-Datei ueberschreitet das Lesebudget.");
     return source_->read(sector_offset(extent_lba_bias_, entry.lba, sector_size_), entry.size);
 }
 

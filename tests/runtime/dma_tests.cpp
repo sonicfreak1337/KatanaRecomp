@@ -156,6 +156,110 @@ int main() {
     }
     require(block_matches, "DMAC fuehrt 32-Byte-Blocktransfers nicht vollstaendig aus.");
 
+    {
+        EventScheduler progression_scheduler;
+        Memory progression_memory(256u, MemoryAlignmentPolicy::Strict);
+        Sh4Dmac progression(progression_scheduler, progression_memory, DmaTiming{1u});
+        for (std::uint32_t offset = 0u; offset < 64u; offset += 4u)
+            progression_memory.write_u32(offset, 0xC2000000u + offset);
+        progression.write_source(2u, 0u);
+        progression.write_destination(2u, 0x80u);
+        progression.write_count(2u, 2u);
+        progression.write_control(2u, 0x000012C1u);
+        progression.write_operation(
+            Sh4Dmac::master_enable | Sh4Dmac::on_demand_enable);
+        progression.request_transfer(
+            2u,
+            2u,
+            DmaExternalDestinationProgression::IncrementByTransferUnit);
+        const auto pending_progression = progression.snapshot();
+        require(pending_progression.channels[2u].external_destination_progression ==
+                    DmaExternalDestinationProgression::IncrementByTransferUnit &&
+                    pending_progression.channels[2u].pending_requests == 2u,
+                "DMAC-Snapshot verliert den externen Zielprogressionsvertrag.");
+        static_cast<void>(progression_scheduler.advance_to(64u, 2u));
+        bool progressed_blocks_match = true;
+        for (std::uint32_t offset = 0u; offset < 64u; offset += 4u)
+            progressed_blocks_match =
+                progressed_blocks_match &&
+                progression_memory.read_u32(0x80u + offset) ==
+                    0xC2000000u + offset;
+        require(progressed_blocks_match && progression.destination(2u) == 0xC0u &&
+                    progression.count(2u) == 0u &&
+                    progression.snapshot()
+                            .channels[2u]
+                            .external_destination_progression ==
+                        DmaExternalDestinationProgression::AddressMode,
+                "Externes Channel-2-Ziel schreitet nicht je 32-Byte-Einheit fort "
+                "oder bleibt nach Completion aktiv.");
+
+        progression.reset();
+        progression.write_source(2u, 0u);
+        progression.write_destination(2u, 0x80u);
+        progression.write_count(2u, 2u);
+        progression.write_control(2u, 0x000012C1u);
+        progression.write_operation(
+            Sh4Dmac::master_enable | Sh4Dmac::on_demand_enable);
+        progression.request_transfer(
+            2u,
+            1u,
+            DmaExternalDestinationProgression::IncrementByTransferUnit);
+        require(throws<std::logic_error>([&] {
+                    progression.request_transfer(
+                        2u, 1u, DmaExternalDestinationProgression::AddressMode);
+                }),
+                "DMAC mischt pending Requests mit verschiedener Zielprogression.");
+        progression.signal_nmi();
+        require(progression.snapshot()
+                        .channels[2u]
+                        .external_destination_progression ==
+                    DmaExternalDestinationProgression::AddressMode,
+                "NMI verwirft den externen Zielprogressionsvertrag nicht.");
+
+        progression.reset();
+        for (std::uint32_t offset = 0u; offset < 64u; offset += 4u) {
+            progression_memory.write_u32(offset, 0xD2000000u + offset);
+            progression_memory.write_u32(0x80u + offset, 0u);
+        }
+        progression.write_source(2u, 0u);
+        progression.write_destination(2u, 0x80u);
+        progression.write_count(2u, 2u);
+        progression.write_control(2u, 0x000012C1u);
+        progression.write_operation(
+            Sh4Dmac::master_enable | Sh4Dmac::on_demand_enable);
+        progression.request_transfer(
+            2u,
+            2u,
+            DmaExternalDestinationProgression::IncrementByTransferUnit);
+        progression_scheduler.reset();
+        const auto rescheduled_progression = progression.snapshot();
+        require(rescheduled_progression.channels[2u].pending_requests == 2u &&
+                    rescheduled_progression.channels[2u]
+                            .external_destination_progression ==
+                        DmaExternalDestinationProgression::IncrementByTransferUnit &&
+                    rescheduled_progression.event_id.has_value(),
+                "Schedulerreset verwirft oder entkoppelt pending externe Zielprogression.");
+        static_cast<void>(progression_scheduler.advance_to(64u, 2u));
+        bool rescheduled_blocks_match = true;
+        for (std::uint32_t offset = 0u; offset < 64u; offset += 4u)
+            rescheduled_blocks_match =
+                rescheduled_blocks_match &&
+                progression_memory.read_u32(0x80u + offset) ==
+                    0xD2000000u + offset;
+        require(rescheduled_blocks_match && progression.count(2u) == 0u,
+                "Nach Schedulerreset neu geplante Zielprogression schliesst nicht korrekt ab.");
+
+        progression.reset();
+        require(throws<std::invalid_argument>([&] {
+                    progression.request_transfer(
+                        0u,
+                        1u,
+                        DmaExternalDestinationProgression::IncrementByTransferUnit);
+                }),
+                "DMAC akzeptiert Zielprogression ausserhalb des "
+                "Channel-2-/RS=2-/32-Byte-/DDT-Vertrags.");
+    }
+
     dmac->reset();
     memory.write_u32(0x184u, 0xCAFEBABEu);
     memory.write_u32(0x180u, 0x0BADF00Du);

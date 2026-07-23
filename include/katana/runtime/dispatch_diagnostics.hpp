@@ -41,6 +41,7 @@ enum class DispatchDiagnosticError : std::uint8_t {
     ProvenNonCode,
     MaterializationBudget,
     ByteIdentityMismatch,
+    MissingAot,
     GenerationMismatch,
     RelocationMismatch,
     StaleBlock

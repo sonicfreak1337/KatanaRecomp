@@ -1,7 +1,9 @@
 #include "katana/runtime/indirect_dispatch.hpp"
 #include "katana/runtime/block_guards.hpp"
 #include "katana/runtime/executable_modules.hpp"
+#include "katana/runtime/native_aot_template.hpp"
 
+#include <array>
 #include <iostream>
 #include <memory>
 #include <stdexcept>
@@ -258,12 +260,98 @@ void runtime_aot_alias_lifetime_regression() {
             "Gleiche kanonische VA validiert unter MMU-Remap einen falschen physischen "
             "Runtimeblock.");
 }
+
+void missing_aot_dispatch_regression() {
+    constexpr std::uint32_t source_address = 0x88001000u;
+    constexpr std::uint32_t runtime_address = 0x00003000u;
+    const std::vector<std::uint8_t> bytes{0x0Bu, 0x00u, 0x09u, 0x00u};
+    CpuState cpu;
+    cpu.memory.write_bytes(runtime_address, bytes, CodeWriteSource::Copy);
+
+    ExecutableModule source;
+    source.id = "latent-aot-source";
+    source.source_identity = "sha256:source-fixture";
+    source.byte_identity = source.source_identity;
+    source.guest_start = source_address;
+    source.bytes = bytes;
+    source.writable = false;
+    ExecutableModule loaded;
+    loaded.id = "loaded-disc-file";
+    loaded.source_identity = "sha256:loaded-fixture";
+    loaded.content_identity = "content-fixture";
+    loaded.byte_identity = "sha256:loaded-fixture";
+    loaded.guest_start = runtime_address;
+    loaded.bytes = bytes;
+    ExecutableModuleCatalog modules;
+    modules.publish(source);
+    modules.publish(loaded);
+
+    RuntimeBlockTable blocks;
+    static_cast<void>(blocks.register_static({source_address,
+                                              canonical_physical_address(source_address),
+                                              2u,
+                                              BlockEndKind::Return,
+                                              {},
+                                              block,
+                                              "latent-aot-source"}));
+    ExecutableCodeTracker tracker;
+    blocks.bind_code_tracker(&tracker);
+    const std::array templates{NativeAotTemplate{
+        source.id,
+        source.source_identity,
+        source_address,
+        static_cast<std::uint32_t>(bytes.size()),
+        0,
+        {},
+        NativeAotTemplateDestination::LoadedModule,
+        loaded.content_identity,
+        loaded.byte_identity}};
+    NativeAotTemplateBinder binder(cpu, modules, blocks, templates);
+    BlockMaterializationPolicy policy;
+    policy.enabled = true;
+    policy.max_blocks = 4u;
+    policy.max_bytes = 16u;
+    policy.max_memory_bytes = 16u;
+    policy.max_materializations_per_run = 4u;
+    policy.max_repeated_misses_per_target = 2u;
+    DemandBlockMaterializer materializer(
+        modules,
+        blocks,
+        &tracker,
+        policy,
+        [&binder](const std::uint32_t target,
+                  const std::uint32_t physical,
+                  const std::span<const std::uint8_t> snapshot,
+                  const BlockVariantKey& variant) {
+            return binder.bind(target, physical, snapshot, variant).candidate;
+        });
+    IndirectDispatchMetrics metrics;
+    IndirectDispatchRequest request;
+    request.kind = IndirectDispatchKind::TailJump;
+    request.callsite = 0x80u;
+    request.target = runtime_address + 2u;
+    request.resolution_origin = DispatchResolutionOrigin::RuntimeOnly;
+    request.dispatch_class = RuntimeDispatchClass::RuntimeOnly;
+    request.metrics = &metrics;
+    request.materializer = &materializer;
+    bool rejected = false;
+    try {
+        static_cast<void>(dispatch_indirect(cpu, blocks, request));
+    } catch (const IndirectDispatchError&) {
+        rejected = true;
+    }
+    require(rejected && materializer.last_failure() == MaterializationFailure::MissingAot &&
+                metrics.first_error().has_value() &&
+                metrics.first_error()->error == DispatchDiagnosticError::MissingAot,
+            "Missing-AOT ging zwischen Binder, Materializer und Dispatchdiagnose verloren.");
+}
 } // namespace
 
 int main() {
     try {
         materializer_lifecycle_regression();
         runtime_aot_alias_lifetime_regression();
+        missing_aot_dispatch_regression();
         RuntimeBlockTable table;
         const BlockVariantKey variant{1u, 0u, 0u, 0u, 0u};
         static_cast<void>(table.register_static({0x8C001000u,

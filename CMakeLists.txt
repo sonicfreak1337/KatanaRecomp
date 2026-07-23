@@ -215,6 +215,7 @@ add_library(katana_runtime STATIC
     src/runtime/scheduler_safepoint.cpp
     src/runtime/system_replay.cpp
     src/runtime/runtime_probe.cpp
+    src/runtime/guest_program_range.cpp
     src/runtime/system_asic.cpp
     src/runtime/block_guards.cpp
     src/runtime/bios_abi.cpp
@@ -224,6 +225,7 @@ add_library(katana_runtime STATIC
     src/runtime/io_port.cpp
     src/runtime/dma.cpp
     src/runtime/disc.cpp
+    src/runtime/disc_load_transaction.cpp
     src/runtime/disc_install.cpp
     src/runtime/dreamcast_boot.cpp
     src/runtime/dreamcast_memory.cpp
@@ -236,6 +238,7 @@ add_library(katana_runtime STATIC
     src/runtime/gdrom_controller.cpp
     src/runtime/holly_dma.cpp
     src/runtime/host_video.cpp
+    src/runtime/host_input.cpp
     src/runtime/host_runtime.cpp
     src/runtime/interrupt.cpp
     src/runtime/iso9660.cpp
@@ -350,6 +353,7 @@ add_library(katana_core STATIC
     src/codegen/backend.cpp
     src/codegen/cache.cpp
     src/codegen/cpp_emitter.cpp
+    src/codegen/latent_aot_registry.cpp
     src/codegen/metadata.cpp
     src/codegen/naming.cpp
     src/codegen/partition.cpp
@@ -724,6 +728,11 @@ target_link_libraries(katana-runtime-probe-tests PRIVATE katana_runtime)
 katana_enable_warnings(katana-runtime-probe-tests)
 add_test(NAME katana-runtime-probe-tests COMMAND katana-runtime-probe-tests)
 
+add_executable(katana-guest-program-range-tests tests/runtime/guest_program_range_tests.cpp)
+target_link_libraries(katana-guest-program-range-tests PRIVATE katana_runtime)
+katana_enable_warnings(katana-guest-program-range-tests)
+add_test(NAME katana-guest-program-range-tests COMMAND katana-guest-program-range-tests)
+
 add_executable(katana-block-guard-tests tests/runtime/block_guard_tests.cpp)
 target_link_libraries(katana-block-guard-tests PRIVATE katana_runtime)
 katana_enable_warnings(katana-block-guard-tests)
@@ -951,6 +960,11 @@ target_link_libraries(katana-maple-controller-tests PRIVATE katana_runtime)
 katana_enable_warnings(katana-maple-controller-tests)
 add_test(NAME katana-maple-controller-tests COMMAND katana-maple-controller-tests)
 
+add_executable(katana-host-input-tests tests/runtime/host_input_tests.cpp)
+target_link_libraries(katana-host-input-tests PRIVATE katana_runtime)
+katana_enable_warnings(katana-host-input-tests)
+add_test(NAME katana-host-input-tests COMMAND katana-host-input-tests)
+
 add_executable(katana-maple-vmu-tests tests/runtime/maple_vmu_tests.cpp)
 target_link_libraries(katana-maple-vmu-tests PRIVATE katana_runtime)
 katana_enable_warnings(katana-maple-vmu-tests)
@@ -985,6 +999,16 @@ add_executable(katana-executable-modules-tests tests/runtime/executable_modules_
 target_link_libraries(katana-executable-modules-tests PRIVATE katana_runtime)
 katana_enable_warnings(katana-executable-modules-tests)
 add_test(NAME katana-executable-modules-tests COMMAND katana-executable-modules-tests)
+
+add_executable(katana-disc-load-transaction-tests
+    tests/runtime/disc_load_transaction_tests.cpp
+)
+target_link_libraries(katana-disc-load-transaction-tests PRIVATE katana_runtime)
+katana_enable_warnings(katana-disc-load-transaction-tests)
+add_test(
+    NAME katana-disc-load-transaction-tests
+    COMMAND katana-disc-load-transaction-tests
+)
 
 add_executable(katana-native-aot-template-tests tests/runtime/native_aot_template_tests.cpp)
 target_link_libraries(katana-native-aot-template-tests PRIVATE katana_runtime)
@@ -1697,6 +1721,11 @@ target_compile_definitions(katana-codegen-project-tests PRIVATE
 )
 katana_enable_warnings(katana-codegen-project-tests)
 add_test(NAME katana-codegen-project-tests COMMAND katana-codegen-project-tests)
+
+add_executable(katana-latent-aot-registry-tests tests/codegen/latent_aot_registry_tests.cpp)
+target_link_libraries(katana-latent-aot-registry-tests PRIVATE katana_core)
+katana_enable_warnings(katana-latent-aot-registry-tests)
+add_test(NAME katana-latent-aot-registry-tests COMMAND katana-latent-aot-registry-tests)
 
 add_executable(katana-port-export-tests tests/codegen/port_export_tests.cpp)
 target_link_libraries(katana-port-export-tests PRIVATE katana_core katana_runtime)

@@ -15,6 +15,7 @@
 namespace katana::runtime {
 
 class LinearMemoryDevice;
+class ExecutableDiscLoadTransactionCoordinator;
 
 enum class MemoryRegionAccess { ReadOnly, ReadWrite };
 
@@ -338,6 +339,13 @@ class Memory {
                     CodeWriteSource source = CodeWriteSource::Dma);
 
   private:
+    friend class ExecutableDiscLoadTransactionCoordinator;
+    [[nodiscard]] bool commit_prevalidated_linear_transaction_bytes(
+        std::uint32_t address,
+        std::span<const std::uint8_t> bytes,
+        std::span<const std::uint8_t> changed_bytes,
+        CodeWriteSource source) noexcept;
+
     struct MappedRegion {
         MemoryRegionInfo info;
         std::shared_ptr<MemoryDevice> device;

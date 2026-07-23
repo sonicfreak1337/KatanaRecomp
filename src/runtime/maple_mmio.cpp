@@ -249,7 +249,8 @@ void DreamcastMapleController::start_dma() {
                     MapleRequest request;
                     request.command = static_cast<MapleCommand>(frame_header & 0xFFu);
                     request.payload.assign(frame.begin() + 1, frame.end());
-                    auto response = bus_->exchange_without_completion(port, unit, request);
+                    auto response = bus_->exchange_without_completion_at(
+                        port, unit, request, scheduler_.current_cycle());
                     if (response.payload.size() > 0xFFu)
                         throw std::out_of_range("Maple-Antwort ueberschreitet 255 Payloadwoerter.");
                     const auto response_header =

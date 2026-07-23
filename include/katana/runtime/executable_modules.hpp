@@ -13,11 +13,13 @@
 #include <optional>
 #include <span>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace katana::runtime {
 
 class IndirectDispatchMetrics;
+class ExecutableDiscLoadTransactionCoordinator;
 
 enum class ExecutableModuleKind : std::uint8_t { Module, Overlay };
 
@@ -79,6 +81,10 @@ struct ExecutableModuleActiveExtent {
 struct ExecutableModule {
     std::string id;
     std::string source_identity;
+    // Disc-backed modules carry both identities explicitly. source_identity remains opaque
+    // provenance and must never be used as a substitute for either binding.
+    std::string content_identity;
+    std::string byte_identity;
     std::uint32_t guest_start = 0u;
     std::vector<std::uint8_t> bytes;
     std::vector<ExecutableModuleRelocation> relocations;
@@ -171,6 +177,23 @@ class ExecutableModuleCatalog final {
     [[nodiscard]] ExecutableModuleCatalogSnapshot snapshot() const;
 
   private:
+    friend class ExecutableDiscLoadTransactionCoordinator;
+    struct PreparedDiscLoadCatalog {
+        struct ModuleUpdate {
+            std::size_t module_index = 0u;
+            std::vector<ExecutableModuleActiveExtent> remaining_extents;
+            bool remains_active = false;
+        };
+        std::vector<ExecutableModule> modules;
+        std::vector<ModuleUpdate> updates;
+        std::vector<std::pair<std::uint32_t, std::size_t>> invalidated_ranges;
+        std::vector<std::uint32_t> inserted_index_pages;
+    };
+    [[nodiscard]] PreparedDiscLoadCatalog prepare_disc_load_catalog(
+        std::vector<ExecutableModule> modules,
+        std::span<const std::pair<std::uint32_t, std::size_t>> invalidated_ranges);
+    void cancel_disc_load_catalog(PreparedDiscLoadCatalog& plan) noexcept;
+    void commit_disc_load_catalog(PreparedDiscLoadCatalog plan) noexcept;
     static constexpr std::uint32_t runtime_write_page_size = 4096u;
     static constexpr std::size_t runtime_write_words_per_page = runtime_write_page_size / 64u;
     struct RuntimeWritePage {
@@ -178,6 +201,10 @@ class ExecutableModuleCatalog final {
     };
     void index_active_extents(const ExecutableModule& module);
     void reserve_active_extent_index(const ExecutableModule& module);
+    void reserve_active_extent_index(
+        std::uint32_t guest_start,
+        std::span<const ExecutableModuleActiveExtent> extents,
+        std::vector<std::uint32_t>* inserted_pages = nullptr);
     void unindex_active_extents(const ExecutableModule& module) noexcept;
     void unindex_active_extents(std::uint32_t guest_start,
                                 std::span<const ExecutableModuleActiveExtent> extents) noexcept;
@@ -206,6 +233,7 @@ enum class MaterializationFailure : std::uint8_t {
     CodeGenerationFailed,
     ByteIdentityMismatch,
     AotTemplateMismatch,
+    MissingAot,
     GenerationMismatch,
     ModuleUnloaded,
     RelocationMismatch,

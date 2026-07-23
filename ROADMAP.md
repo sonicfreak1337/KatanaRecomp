@@ -28,7 +28,7 @@ und linkt keinen Interpreter, und unbekannter oder veraenderter Code aktiviert
 nur vorab gebundene AOT-Module oder endet kontrolliert. Der begrenzte
 Interpreter bleibt ausschliesslich im expliziten `diagnostic_partial`-Profil.
 Strukturierte Disc-Ladetransaktionen und die vorab erzeugte Registry latenter
-nativer Module bleiben offene `KR-4848`-Arbeit.
+nativer Module sind mit `KR-4848` abgeschlossen.
 
 ## Planungsregeln
 
@@ -179,7 +179,7 @@ und Hosteingabevertraege.
 - [x] `KR-4845` - BIOS-Lifecycle, HLE-Bridges, Flash, Sysinfo und Region
 - [x] `KR-4846` - GD-ROM-BIOS-Requestqueue, Status und TOC
 - [ ] `KR-4847` - GD-ROM-MMIO, PIO, G1-DMA und Disc-Streaming
-- [ ] `KR-4848` - Runtimecode, Disc-Module, Overlays und latentes AOT
+- [x] `KR-4848` - Runtimecode, Disc-Module, Overlays und latentes AOT
 - [ ] `KR-4849` - TA-Eingang und PVR-Kommandopfad
 - [x] `KR-4850` - Erster scanoutgebundener Gastframe
 - [ ] `KR-4851` - Boot- und Frame-Hotpath
@@ -209,21 +209,21 @@ vollstaendig und versiegelt, und beide Laeufe erzeugten null
 Wait-Loop-Tracezeilen. Damit ist `KR-4842` abgeschlossen; das damals
 freigegebene `KR-4911` ist inzwischen ebenfalls abgeschlossen.
 
-`KR-4915` und `KR-4850` wurden vor ihren noch offenen Boot- und TA-
-Voraussetzungen durch den legitimen IP.BIN-Direct-Framebuffer-Pfad
-vorgezogen: Ein privater PAL-AOT-Lauf erreicht hostunabhaengig
-`KR_FIRST_GUEST_FRAME` und danach `KR_FIRST_PRESENTED_FRAME`. Das schliesst
-weder `KR-4848`, `KR-4849` noch den Spielboot ab. Der belegte Frame gibt jetzt
-die v0.48-Controlleraufgaben `KR-4814` und `KR-4914` frei; beide bleiben vor
-`KR-4852` verpflichtend.
+`KR-4915` und `KR-4850` wurden vor ihren Boot- und TA-Voraussetzungen durch den
+legitimen IP.BIN-Direct-Framebuffer-Pfad vorgezogen: Ein privater PAL-AOT-Lauf
+erreicht hostunabhaengig `KR_FIRST_GUEST_FRAME` und danach
+`KR_FIRST_PRESENTED_FRAME`. Dieser Nachweis schloss `KR-4848`, `KR-4849` und
+den Spielboot damals noch nicht ab; `KR-4848` ist inzwischen geschlossen. Der
+belegte Frame gibt die v0.48-Controlleraufgaben `KR-4814` und `KR-4914` frei;
+beide bleiben vor `KR-4852` verpflichtend.
 
 Aktueller Kernteilstand: Byteidentische BIOS-/GD-Reloads erhalten vorhandene
 native AOT-Bloecke, waehrend geaenderte Bytes exakt einmal invalidieren. Der
 SH-4-DMAC-Channel-2-Pfad verwendet den oeffentlichen Dreamcast-Vertrag `RS=2`,
 32-Byte-Bursts, inkrementierende Quelle, festes Ziel und `DMAOR.DME+DDT` und ist
 bis TA-Object-List/EOL synthetisch verbunden. Fuer Direct-Texture-Ziele
-`0x11`/`0x13` bleibt die Zielprogression mehrteiliger Transfers als generische
-P1-Luecke offen. P1-/P2-Codealiase dispatchen denselben nativen Block.
+`0x11`/`0x13` progressiert das Ziel mehrteiliger Transfers jetzt pro
+32-Byte-Einheit. P1-/P2-Codealiase dispatchen denselben nativen Block.
 Beschreibbare absolute Pointertabellen und Fixed-Stride-`BSRF`-Handlerinseln des
 garantierten Anfangssnapshots liefern nur vorab kompilierbare `RuntimeOnly`-
 Kandidaten: Sie erzeugen keine erfundenen CFG-Kanten und ihre Ziele werden als
@@ -253,8 +253,8 @@ Backend-Interface-ABI 3, Portprojektvertrag 24 und Host-Video-Vertrag 2
 versionierten diesen privaten Portlauf. Er bleibt ausdruecklich historische
 ABI-39-Evidenz und wurde nicht nachtraeglich als ABI-40-Artefakt umgedeutet.
 
-Der aktuelle kumulative Kernvertrag verwendet Runtime-ABI 45, Block-ABI 3,
-Backend-Interface-ABI 3, PlatformServices-ABI 10, Portprojektvertrag 29 und
+Der aktuelle kumulative Kernvertrag verwendet Runtime-ABI 46, Block-ABI 3,
+Backend-Interface-ABI 3, PlatformServices-ABI 10, Portprojektvertrag 30 und
 Host-Video-Vertrag 2.
 Systemreplay v4 begrenzt die Aufzeichnung auf standardmaessig 4.096 und
 hoechstens 65.536 Ereignisse sowie 64 Zeichen pro Ereigniscode. Ein
@@ -306,9 +306,9 @@ redigieren Modulidentitaeten, Quellidentitaeten und Bytes. Der normale
 Produktport besitzt weiterhin keinen Interpreter und beendet ungebundenen Code
 typisiert. Die fokussierten Regressionen bestanden 10/10 in 1,27 Sekunden; der
 interpreterfreie Produkt-E2E bestand 1/1 in 229,03 Sekunden. Es lief weder ein
-privater Retaillauf noch eine Vollsuite oder `KR-4852`. `KR-4848` bleibt fuer
-strukturierte Disc-Ladetransaktionen und die Registry vorab erzeugter latenter
-AOT-Module offen.
+privater Retaillauf noch eine Vollsuite oder `KR-4852`. Die an diesem
+KR-4912-Zwischenstand offenen Disc-Ladetransaktionen und latenten AOT-Module
+sind inzwischen durch `KR-4848` geschlossen.
 
 Der Hardwareauditor verwendet mit `katana.hardware-audit.v4` skalierbare
 Dominatorberechnung und echte natuerliche Loops. Er klassifiziert

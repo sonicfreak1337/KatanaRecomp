@@ -2,7 +2,9 @@
 
 #include "katana/runtime/disc.hpp"
 
+#include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -30,6 +32,11 @@ struct Iso9660IoCounters {
     std::uint64_t cache_evictions = 0u;
 };
 
+struct Iso9660DirectoryReadLimits {
+    std::size_t maximum_entries = std::numeric_limits<std::size_t>::max();
+    std::uint32_t maximum_bytes = std::numeric_limits<std::uint32_t>::max();
+};
+
 class Iso9660Filesystem final {
   public:
     explicit Iso9660Filesystem(std::shared_ptr<const DiscSource> source,
@@ -37,7 +44,12 @@ class Iso9660Filesystem final {
                                std::uint32_t volume_start_lba = 0u,
                                std::optional<std::uint32_t> extent_lba_bias = std::nullopt);
     [[nodiscard]] std::vector<Iso9660Entry> list_directory(std::string_view path = "/") const;
+    [[nodiscard]] Iso9660Entry root_directory() const noexcept;
+    [[nodiscard]] std::vector<Iso9660Entry>
+    list_directory(const Iso9660Entry& directory, Iso9660DirectoryReadLimits limits) const;
     [[nodiscard]] std::vector<std::uint8_t> read_file(std::string_view path) const;
+    [[nodiscard]] std::vector<std::uint8_t>
+    read_file(const Iso9660Entry& entry, std::uint32_t maximum_bytes) const;
     void set_cache_mode(Iso9660CacheMode mode) noexcept;
     [[nodiscard]] Iso9660CacheMode cache_mode() const noexcept;
     [[nodiscard]] const Iso9660IoCounters& io_counters() const noexcept;
@@ -47,7 +59,8 @@ class Iso9660Filesystem final {
 
   private:
     [[nodiscard]] Iso9660Entry resolve(std::string_view path) const;
-    [[nodiscard]] std::vector<Iso9660Entry> read_directory(const Iso9660Entry& directory) const;
+    [[nodiscard]] std::vector<Iso9660Entry>
+    read_directory(const Iso9660Entry& directory, Iso9660DirectoryReadLimits limits = {}) const;
     [[nodiscard]] static std::vector<std::string> split_path(std::string_view path);
     std::shared_ptr<const DiscSource> source_;
     std::uint32_t sector_size_ = 2048u;

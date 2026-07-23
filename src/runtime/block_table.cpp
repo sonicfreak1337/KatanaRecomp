@@ -561,6 +561,50 @@ bool RuntimeBlockTable::erase_identity(const std::string& block_identity) noexce
     return true;
 }
 
+RuntimeBlockTable::PreparedDiscLoadInvalidation
+RuntimeBlockTable::prepare_disc_load_invalidation(const std::uint32_t physical_address,
+                                                  const std::size_t size) const {
+    PreparedDiscLoadInvalidation plan;
+    if (size == 0u) return plan;
+    const auto canonical = canonical_physical_address(physical_address);
+    constexpr auto address_space_end =
+        static_cast<std::uint64_t>(std::numeric_limits<std::uint32_t>::max()) + 1u;
+    const auto write_end = size >= address_space_end - canonical
+                               ? address_space_end
+                               : static_cast<std::uint64_t>(canonical) + size;
+    const auto first_page = canonical / physical_page_size;
+    const auto last_page = static_cast<std::uint32_t>((write_end - 1u) / physical_page_size);
+    std::set<std::uint64_t> candidates;
+    for (auto page = first_page;; ++page) {
+        if (const auto found = active_physical_pages_.find(page);
+            found != active_physical_pages_.end())
+            candidates.insert(found->second.begin(), found->second.end());
+        if (page == last_page) break;
+    }
+    plan.ids.reserve(candidates.size());
+    for (const auto id : candidates) {
+        const auto& record = records_.at(id);
+        const auto tracked_start = validation_physical_start(record.block);
+        const auto tracked_end =
+            static_cast<std::uint64_t>(tracked_start) + validation_extent(record.block);
+        if (record.active && tracked_start < write_end && canonical < tracked_end)
+            plan.ids.push_back(id);
+    }
+    return plan;
+}
+
+std::size_t RuntimeBlockTable::commit_disc_load_invalidation(
+    PreparedDiscLoadInvalidation plan) noexcept {
+    std::size_t invalidated = 0u;
+    for (const auto id : plan.ids) {
+        const auto found = records_.find(id);
+        if (found == records_.end() || !found->second.active) continue;
+        deactivate(id);
+        ++invalidated;
+    }
+    return invalidated;
+}
+
 std::size_t RuntimeBlockTable::erase_overlapping_physical(const std::uint32_t physical_address,
                                                           const std::size_t size) noexcept {
     if (size == 0u) return 0u;

@@ -117,6 +117,8 @@ struct PvrTiming {
     std::uint64_t pixel_clock_hz = 27'000'000u;
 };
 
+enum class PvrRenderResult : std::uint8_t { Success, Failed };
+
 struct PvrRegisterSnapshot {
     // Exact guest-visible register aperture. Dynamic read-only registers are materialized at the
     // snapshot cycle, while ordinary, fog-table and palette entries retain their stored values.
@@ -131,6 +133,7 @@ struct PvrRegisterSnapshot {
     std::uint32_t video_control = 0u;
     std::uint64_t render_requests = 0u;
     std::uint64_t render_completions = 0u;
+    std::uint64_t render_failures = 0u;
     std::uint64_t vblank_in = 0u;
     std::uint64_t vblank_out = 0u;
     std::uint64_t hblank = 0u;
@@ -160,6 +163,7 @@ class PvrRegisterFile final {
     void reset();
     [[nodiscard]] std::uint64_t render_request_count() const noexcept;
     [[nodiscard]] std::uint64_t render_completion_count() const noexcept;
+    [[nodiscard]] std::uint64_t render_failure_count() const noexcept;
     [[nodiscard]] std::uint64_t reset_count() const noexcept;
     [[nodiscard]] std::uint64_t vblank_in_count() const noexcept;
     [[nodiscard]] std::uint64_t vblank_out_count() const noexcept;
@@ -168,6 +172,7 @@ class PvrRegisterFile final {
     [[nodiscard]] std::uint32_t field() const noexcept;
     [[nodiscard]] PvrRegisterSnapshot snapshot() const;
     void set_render_observer(std::function<void()> observer);
+    void set_render_result_observer(std::function<PvrRenderResult()> observer);
     void set_vblank_observer(std::function<void(bool)> observer);
     void set_hblank_observer(std::function<void()> observer);
     void set_ta_reset_observer(std::function<void()> observer);
@@ -190,11 +195,12 @@ class PvrRegisterFile final {
     std::array<std::uint32_t, pvr_register_size / 4u> registers_{};
     std::uint64_t render_requests_ = 0u;
     std::uint64_t render_completions_ = 0u;
+    std::uint64_t render_failures_ = 0u;
     std::uint64_t resets_ = 0u;
     SchedulerResetObserverId reset_observer_ = 0u;
     SchedulerLifetimeToken scheduler_lifetime_;
     std::set<SchedulerEventId> render_events_;
-    std::function<void()> render_observer_;
+    std::function<PvrRenderResult()> render_result_observer_;
     std::function<void(bool)> vblank_observer_;
     std::function<void()> hblank_observer_;
     std::function<void()> ta_reset_observer_;
@@ -395,8 +401,28 @@ class TileAccelerator final {
     bool list_open_ = false;
 };
 
+enum class PvrTaPacketKind : std::uint8_t {
+    EndOfList,
+    UserClip,
+    ObjectListSet,
+    ReservedParameter3,
+    PolygonHeader,
+    SpriteHeader,
+    ReservedParameter6,
+    Vertex,
+    IntensityContinuation,
+    SpriteContinuation,
+    ExtendedVertexContinuation,
+    ModifierVertexContinuation,
+    Count,
+};
+
+inline constexpr std::size_t pvr_ta_packet_kind_count =
+    static_cast<std::size_t>(PvrTaPacketKind::Count);
+
 struct PvrTaMetrics {
     std::uint64_t packets = 0u;
+    std::array<std::uint64_t, pvr_ta_packet_kind_count> normalized_packets{};
     std::uint64_t polygon_headers = 0u;
     std::uint64_t vertices = 0u;
     std::uint64_t list_completions = 0u;
@@ -468,6 +494,28 @@ class PvrTaFifo final {
     std::optional<std::array<std::uint8_t, 32u>> pending_modifier_vertex_packet_;
     PvrTaMetrics metrics_;
 };
+
+inline constexpr std::size_t pvr_channel2_transfer_unit_size = 32u;
+
+enum class PvrChannel2DestinationKind : std::uint8_t {
+    TaFifo,
+    YuvConverter,
+    DirectTexture64,
+    DirectTexture32,
+};
+
+struct PvrChannel2DestinationPlan {
+    std::uint32_t initial_address = 0u;
+    std::size_t byte_count = 0u;
+    std::size_t unit_count = 0u;
+    PvrChannel2DestinationKind kind = PvrChannel2DestinationKind::TaFifo;
+
+    [[nodiscard]] bool destination_progresses() const noexcept;
+    [[nodiscard]] std::uint32_t destination_for_unit(std::size_t unit) const;
+};
+
+[[nodiscard]] PvrChannel2DestinationPlan
+plan_pvr_channel2_destination(std::uint32_t destination, std::size_t byte_count);
 
 class PvrTaFifoMemoryDevice final : public MemoryDevice {
   public:

@@ -13,6 +13,8 @@
 
 namespace katana::runtime {
 
+class ExecutableDiscLoadTransactionCoordinator;
+
 enum class ExecutableBlockOrigin : std::uint8_t {
     ImageSegment,
     RomRamCopy,
@@ -129,6 +131,27 @@ class ExecutableCodeTracker {
     void reset_performance_counters() noexcept;
 
   private:
+    friend class ExecutableDiscLoadTransactionCoordinator;
+    struct PreparedDiscLoadWrite {
+        std::uint32_t address = 0u;
+        std::uint32_t physical_address = 0u;
+        std::size_t size = 0u;
+        CodeWriteSource source = CodeWriteSource::Copy;
+        std::vector<std::uint32_t> pages;
+        std::vector<std::size_t> block_indices;
+        std::vector<std::uint32_t> inserted_generation_pages;
+        std::vector<std::uint32_t> inserted_hotspot_pages;
+        CodeInvalidationResult result;
+        bool indexed_lookup = true;
+        std::uint64_t candidate_count = 0u;
+    };
+    [[nodiscard]] PreparedDiscLoadWrite
+    prepare_disc_load_write(std::uint32_t address,
+                            std::size_t size,
+                            CodeWriteSource source);
+    void cancel_disc_load_write(PreparedDiscLoadWrite& plan) noexcept;
+    void commit_disc_load_write(PreparedDiscLoadWrite plan) noexcept;
+
     void record_invalidation_event(std::uint32_t virtual_address,
                                    std::uint32_t physical_address,
                                    std::size_t size,

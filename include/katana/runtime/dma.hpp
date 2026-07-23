@@ -25,6 +25,11 @@ struct DmaTiming {
 
 enum class DmaExecutionMode : std::uint8_t { SingleUnitReference, DeterministicBatch };
 
+enum class DmaExternalDestinationProgression : std::uint8_t {
+    AddressMode,
+    IncrementByTransferUnit,
+};
+
 struct DmaPerformanceCounters {
     std::uint64_t scheduler_callbacks = 0u;
     std::uint64_t completed_batches = 0u;
@@ -60,6 +65,8 @@ struct Sh4DmacChannelSnapshot {
     std::uint32_t pending_requests = 0u;
     std::uint32_t pending_on_demand_requests = 0u;
     std::uint64_t completed_units = 0u;
+    DmaExternalDestinationProgression external_destination_progression =
+        DmaExternalDestinationProgression::AddressMode;
     bool interrupt_pending = false;
 
     [[nodiscard]] bool operator==(const Sh4DmacChannelSnapshot&) const = default;
@@ -112,7 +119,11 @@ class Sh4Dmac final {
     [[nodiscard]] std::uint32_t control(std::size_t channel) const;
     [[nodiscard]] std::uint32_t operation() const noexcept;
 
-    void request_transfer(std::size_t channel, std::uint32_t requests = 1u);
+    void request_transfer(
+        std::size_t channel,
+        std::uint32_t requests = 1u,
+        DmaExternalDestinationProgression destination_progression =
+            DmaExternalDestinationProgression::AddressMode);
     [[nodiscard]] bool request_on_demand_transfer(std::size_t channel);
     [[nodiscard]] bool repeat_on_demand_transfer();
     [[nodiscard]] std::uint32_t pending_on_demand_requests(std::size_t channel) const;
@@ -149,6 +160,8 @@ class Sh4Dmac final {
         std::uint32_t pending_requests = 0u;
         std::uint32_t pending_on_demand_requests = 0u;
         std::uint64_t completed_units = 0u;
+        DmaExternalDestinationProgression external_destination_progression =
+            DmaExternalDestinationProgression::AddressMode;
         bool interrupt_pending = false;
     };
 

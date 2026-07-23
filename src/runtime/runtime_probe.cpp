@@ -792,6 +792,7 @@ make_runtime_probe_device_snapshot(const PvrRegisterSnapshot& snapshot,
     fields.scalar(snapshot.video_control);
     fields.scalar(snapshot.render_requests);
     fields.scalar(snapshot.render_completions);
+    fields.scalar(snapshot.render_failures);
     fields.scalar(snapshot.vblank_in);
     fields.scalar(snapshot.vblank_out);
     fields.scalar(snapshot.hblank);
@@ -1291,6 +1292,8 @@ make_runtime_probe_device_snapshot(const PvrTaFifoSnapshot& snapshot,
                                *snapshot.pending_modifier_vertex_packet);
                    });
     fields.scalar(snapshot.metrics.packets);
+    for (const auto count : snapshot.metrics.normalized_packets)
+        fields.scalar(count);
     fields.scalar(snapshot.metrics.polygon_headers);
     fields.scalar(snapshot.metrics.vertices);
     fields.scalar(snapshot.metrics.list_completions);
@@ -1412,6 +1415,8 @@ make_runtime_probe_device_snapshot(const Sh4DmacSnapshot& snapshot,
         fields.scalar(channel.pending_requests);
         fields.scalar(channel.pending_on_demand_requests);
         fields.scalar(channel.completed_units);
+        fields.scalar(
+            static_cast<std::uint64_t>(channel.external_destination_progression));
         fields.scalar(channel.interrupt_pending);
     }
     fields.scalar(snapshot.operation);
