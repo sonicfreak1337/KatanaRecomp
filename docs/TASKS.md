@@ -730,6 +730,15 @@ Prioritaet: P0
 - Backedges und Pollingloops samt Wertwechsel und Writer-Provenienz klassifizieren
 - Diagnose darf Gastzustand und Ereignisreihenfolge nicht veraendern
 
+Teilstand 2026-07-23: `Memory::peek_u32` erzwingt die lineare Geraetegrenze
+selbst. Selbst ein absichtlich in die Whitelist aufgenommenes
+`MmioMemoryDevice` wird vor dessen Readhandler abgelehnt; die Regression
+belegt null Handleraufrufe. Produktprobes erlauben nur die linearen Backings
+von Haupt-RAM, VRAM und AICA-RAM. Flash bleibt ohne eigenen
+Side-Effect-Free-Peek-Vertrag ausgeschlossen. Wait-Loop-Erkennung,
+Wertwechselfolge, Writer-Provenienz und die Diagnose-an/aus-Invarianz halten
+`KR-4842` weiter offen.
+
 ### [x] KR-4843 - Alias-korrekter nativer Disc-Systembootstrap
 
 Abhaengigkeiten: KR-4831, KR-4841
@@ -832,6 +841,13 @@ ebenfalls geschlossen: `NOP`, `REQ_MODE` und `SET_MODE` verwenden die
 gemeinsame asynchrone Requestqueue. Mode-Read und -Write teilen den persistenten
 Zustand mit der Paketoberflaeche; Status, Endianness, einmalige Completion und
 atomare Ablehnung ungueltiger Zielbereiche sind regressionsgesichert.
+Eine nicht mehr darstellbare Schedulerfrist wird inzwischen bereits bei der
+Admission geschlossen: PACKET endet mit `READY|ERR`, ABRT-Sense, finalem IRQ
+und freigegebenem Owner; BIOS-Read und -Streaming liefern einmalig
+`Aborted`, null Bytes und keinen Teilwrite. Regressionen am
+`UINT64_MAX-999`-Rand belegen ausserdem, dass ein Folgerequest angenommen
+wird. EX 38/39 sowie unabhaengige laufende G1-Overrun-/Timeoutgrenzen halten
+`KR-4847` weiter offen.
 
 ### [ ] KR-4848 - Runtimecode, Disc-Module, Overlays und latentes AOT
 

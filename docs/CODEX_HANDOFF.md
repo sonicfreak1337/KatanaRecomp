@@ -460,6 +460,19 @@ GD-ROM-Fokustest ist nach diesem Integrationsfix 1/1 gruen. Read- und
 TOC-Gastziele werden MMU-bewusst ueber ihre gesamte Laenge vorvalidiert;
 ungueltige, ueberlaufende oder MMIO-Ziele enden ohne Teilwrite und Host-
 Exception als `InvalidField`.
+Eine am Ende des 64-Bit-Gastzeitraums nicht mehr planbare PACKET-Completion
+endet jetzt kontrolliert mit `READY|ERR`, ABRT-Sense, finalem Command-IRQ und
+freigegebenem Laufwerksbesitz. Dieselbe Admission-Grenze liefert fuer
+BIOS-Read und -Streaming einen einmaligen `Aborted`-Vierwortstatus mit null
+Bytes; ein Folgerequest bleibt zulaessig. Das ist noch nicht der vollstaendige
+laufende G1-Timeout-/Overrun-Vertrag.
+
+Freie Speicherprobes sind MMU-bewusst und strukturell auf echte lineare
+Haupt-RAM-, VRAM- und AICA-RAM-Backings begrenzt. `Memory::peek_u32` weist
+auch ein versehentlich erlaubtes `MmioMemoryDevice` vor dessen Handler ab.
+Flash wird ohne einen eigenen expliziten Side-Effect-Free-Peek-Vertrag nicht
+mehr angeboten. Die Wait-Loop-Klassifikation mit Wertwechsel und
+Writer-Provenienz bleibt der offene Rest von `KR-4842`.
 
 Der SH-4-DMAC-Channel-2-Pfad verwendet fuer TA den oeffentlichen externen
 Memory-to-Device-Vertrag `RS=2`, 32-Byte-Einheiten, inkrementierende Quelle,
@@ -509,7 +522,7 @@ Weiter offen:
 
 ```text
 KR-4842: Wait-Loop-Klassifikation vervollstaendigen
-KR-4847: EX-38/39-Vertrag und belegte Timeout-/Overrun-Grenzen schliessen
+KR-4847: EX-38/39-Vertrag und laufende G1-Timeout-/Overrun-Grenzen schliessen
 KR-4848: strukturierte Disc-Ladetransaktionen und Registry latenter nativer Module
 KR-4849: Direct-Texture-Zielprogression und restliche TA/PVR-Eingangskette
 ```

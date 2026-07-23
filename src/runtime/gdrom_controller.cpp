@@ -55,6 +55,18 @@ void append_le32(std::vector<std::uint8_t>& bytes, const std::uint32_t value) {
     bytes.push_back(static_cast<std::uint8_t>(value >> 24u));
 }
 
+template <typename Submit>
+bool admit_scheduled_gdrom_request(std::uint64_t& request_id, Submit&& submit) {
+    try {
+        request_id = std::forward<Submit>(submit)();
+        return true;
+    } catch (const std::out_of_range&) {
+        return false;
+    } catch (const std::overflow_error&) {
+        return false;
+    }
+}
+
 std::array<std::uint8_t, 3u> packet_sense_for_status(const GdRomStatus status) noexcept {
     switch (status) {
     case GdRomStatus::Good:
@@ -604,9 +616,14 @@ void DreamcastGdRomController::schedule_packet() {
     taskfile_phase_ = TaskfilePhase::Executing;
     status_ = ata_busy;
     interrupt_reason_ = 0u;
-    packet_event_ = scheduler_.schedule_after(
-        1'000u,
-        [this](const auto event_id, const auto cycle) { complete_packet(event_id, cycle); });
+    try {
+        packet_event_ = scheduler_.schedule_after(
+            1'000u,
+            [this](const auto event_id, const auto cycle) { complete_packet(event_id, cycle); });
+    } catch (const std::overflow_error&) {
+        packet_event_.reset();
+        fail_taskfile_command(0x0Bu, 0u, 0u, true);
+    }
 }
 
 void DreamcastGdRomController::complete_packet(const SchedulerEventId event_id,
@@ -701,9 +718,18 @@ void DreamcastGdRomController::submit_bios_read(CpuState& cpu, BiosRequest& requ
     }
     request.destination = *destination;
     request.write_source = request.command == 17u ? CodeWriteSource::Dma : CodeWriteSource::Copy;
-    request.async_id = reader_.submit({GdRomCommand::ReadSectors,
-                                       fad_to_lba(request.parameters[0]),
-                                       request.parameters[1]});
+    if (!admit_scheduled_gdrom_request(request.async_id, [&] {
+            return reader_.submit({GdRomCommand::ReadSectors,
+                                   fad_to_lba(request.parameters[0]),
+                                   request.parameters[1]});
+        })) {
+        request.response.status = GdRomStatus::Aborted;
+        request.status = {0x0Bu, static_cast<std::uint32_t>(GdRomStatus::Aborted), 0u, 0u};
+        request.state = GdRomBiosRequestState::Error;
+        latch_sense(0x0Bu, 0u, 0u, true);
+        remember_bios_request(request);
+        return;
+    }
     request.state = GdRomBiosRequestState::Processing;
     request.status[3] = 4u;
     status_ = ata_busy;
@@ -742,7 +768,16 @@ void DreamcastGdRomController::submit_bios_stream(BiosRequest& request) {
     request.stream_consumed_bytes = 0u;
     request.cached_stream_sector = std::numeric_limits<std::uint32_t>::max();
     request.stream_sector_cache.clear();
-    request.async_id = reader_.submit({GdRomCommand::TestUnitReady});
+    if (!admit_scheduled_gdrom_request(
+            request.async_id,
+            [&] { return reader_.submit({GdRomCommand::TestUnitReady}); })) {
+        request.response.status = GdRomStatus::Aborted;
+        request.status = {0x0Bu, static_cast<std::uint32_t>(GdRomStatus::Aborted), 0u, 0u};
+        request.state = GdRomBiosRequestState::Error;
+        latch_sense(0x0Bu, 0u, 0u, true);
+        remember_bios_request(request);
+        return;
+    }
     request.state = GdRomBiosRequestState::Processing;
     request.status = {0u, 0u, 0u, 4u};
     status_ = ata_busy;

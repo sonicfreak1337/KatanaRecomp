@@ -5,16 +5,29 @@ Phase: `v0.48.0` - Native Disc Boot und erster echter Gastframe
 Aktuelle P0-Arbeit: Auf dem erstmals belegten Gast- und Hostframe den nativen
 IP.BIN-Boot bis BootExecutable und Spielboot fortsetzen. `KR-4915` und
 `KR-4850` sind durch den vorgezogenen Direct-Framebuffer-Pfad erfuellt.
-`KR-4847` bleibt fuer EX 38/39 und noch unbelegte Timeout-/Overrun-Grenzen
-offen. `KR-4848` hat den Interpreter aus dem normalen Produktport entfernt und
+`KR-4847` schliesst jetzt auch Scheduler-Admission-Ueberlaeufe fuer PACKET,
+BIOS-Reads und Disc-Streaming ohne Hostexception, Teilwrite oder klemmendes
+`BSY`; offen bleiben EX 38/39 und laufende G1-Overrun-/Timeout-Grenzen.
+`KR-4848` hat den Interpreter aus dem normalen Produktport entfernt und
 identische Disc-Reloads an natives AOT gebunden; offen bleiben strukturierte
 Ladetransaktionen, der allgemeine native Materializer und die Registry latenter
 Module. `KR-4849` bleibt trotz synthetisch verbundenem Channel-2-/TA-EOL-Pfad
-fuer den produktiven Gastpfad offen. Die Wait-Loop-Klassifikation aus
-`KR-4842` laeuft getrennt.
+fuer den produktiven Gastpfad offen. `KR-4842` erzwingt fuer freie Probes
+inzwischen echte lineare Backings selbst; Wait-Loop-Klassifikation,
+Wertwechsel und Writer-Provenienz laufen getrennt weiter.
 
 Der aktuelle kumulative Vertrag verwendet Runtime-ABI 39, Block-ABI 3,
 Backend-Interface-ABI 3, Portprojektvertrag 24 und Host-Video-Vertrag 2.
+
+Der aktuelle Sicherheitsblock schliesst zwei zuvor nur behauptete
+Diagnose-/Schedulergrenzen. `Memory::peek_u32` lehnt ein nichtlineares
+Geraet selbst dann vor dessen Handler ab, wenn es versehentlich explizit
+erlaubt wurde; Produktprobes umfassen damit nur Haupt-RAM, VRAM und
+AICA-RAM, nicht Flash oder MMIO. GD-ROM-PACKET liefert bei einer
+undarstellbaren Schedulerfrist `READY|ERR`, ABRT-Sense und einen finalen
+Command-IRQ. BIOS-Read und -Streaming liefern denselben Fehler als einmaligen
+Vierwortstatus mit null Bytes und lassen den naechsten Request zu. Die
+kombinierte fokussierte Suite fuer Memory, Portexport und GD-ROM besteht 5/5.
 
 Der mit Runtime-ABI 38 eingefuehrte Zwischenblock schliesst zwei allgemeine
 Hardwarevertraege. G1-DMA validiert Schutzfenster, 32-Bit-Ueberlauf und die

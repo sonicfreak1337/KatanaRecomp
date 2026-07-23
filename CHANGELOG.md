@@ -4,6 +4,18 @@
 
 ### Geaendert
 
+- GD-ROM-PACKET- und BIOS-Read-/Streaming-Auftraege fangen eine nicht mehr
+  darstellbare Gastzeitfrist jetzt an der Scheduler-Admission ab. Ein
+  Taskfile-Auftrag endet deterministisch mit `READY|ERR`, ABRT-Sense und
+  finalem Command-IRQ; BIOS-Auftraege liefern einmalig einen Vierwort-
+  Fehlerstatus mit null uebertragenen Bytes. Weder Hostexception,
+  Teilwrite noch ein dauerhaftes `BSY` koennen aus dieser Grenze entstehen,
+  und ein nachfolgender Request bleibt zulaessig.
+- `Memory::peek_u32` erzwingt die seiteneffektfreie Diagnosegrenze jetzt
+  selbst: Auch ein versehentlich explizit erlaubtes MMIO-Geraet wird vor
+  seinem Readhandler abgelehnt. Der generierte Port bietet freie Probes nur
+  fuer die echten linearen Backings von Haupt-RAM, VRAM und AICA-RAM an;
+  Flash bleibt bis zu einem eigenen expliziten Peek-Vertrag ausgeschlossen.
 - Ein privater, budgetierter Sonic-Adventure-PAL-AOT-Lauf erreicht in der
   laufenden v0.48-Entwicklung erstmals sowohl `KR_FIRST_GUEST_FRAME` als auch
   `KR_FIRST_PRESENTED_FRAME`. Der recompilierte Discbootstrap `IP.BIN`
@@ -363,7 +375,7 @@
   der geladenen Bootgroesse berechneten BIOS-Livezaehler wieder her, ohne die
   DMA-Konfiguration zu ueberschreiben. Freie Speicherproben uebersetzen nun
   ueber die aktive Gast-MMU und verwenden eine nebenwirkungsfreie Whitelist
-  fuer RAM, VRAM, AICA-RAM und Flash; MMIO-Handler werden nie aufgerufen.
+  fuer RAM, VRAM und AICA-RAM; Flash und MMIO-Handler werden nie aufgerufen.
 - Konsolenregion und Broadcastmodus werden nicht mehr aus den Disc-
   Areasymbolen abgeleitet. Der Portvertrag traegt ein explizites Profil
   `japan-ntsc`, `north-america-ntsc`, `europe-pal` oder `vga`; damit wird ein

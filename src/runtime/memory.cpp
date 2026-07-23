@@ -685,16 +685,16 @@ std::uint32_t
 Memory::peek_u32(const std::uint32_t address,
                  const std::span<const MemoryDevice* const> permitted_devices) const {
     const auto& mapped = resolve(address, MemoryAccessWidth::Word, MemoryAccessOperation::Read);
-    if (std::find(permitted_devices.begin(), permitted_devices.end(), mapped.device.get()) ==
-        permitted_devices.end())
+    if (mapped.linear == nullptr ||
+        std::find(permitted_devices.begin(), permitted_devices.end(), mapped.device.get()) ==
+            permitted_devices.end())
         throw MemoryAccessError(MemoryAccessErrorReason::Unmapped,
                                 MemoryAccessOperation::Read,
                                 address,
                                 MemoryAccessWidth::Word,
                                 "diagnostic-peek-denied");
     const auto offset = region_offset(mapped.info, address);
-    return mapped.linear != nullptr ? mapped.linear->read_u32(offset)
-                                    : mapped.device->read_u32(offset);
+    return mapped.linear->read_u32(offset);
 }
 
 std::uint32_t Memory::read_s8(const std::uint32_t address) const {

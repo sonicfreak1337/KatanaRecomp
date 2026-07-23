@@ -151,6 +151,113 @@ int main() {
         static_cast<void>(target.read(0x9Cu, MemoryAccessWidth::Byte));
         return sense;
     };
+    {
+        CpuState timeout_cpu;
+        timeout_cpu.memory = Memory(0u);
+        static_cast<void>(map_dreamcast_main_ram(timeout_cpu.memory));
+        EventScheduler timeout_scheduler;
+        static_cast<void>(timeout_scheduler.advance_to(
+            std::numeric_limits<std::uint64_t>::max() - 999u, 0u));
+        std::uint64_t timeout_irqs = 0u;
+        DreamcastGdRomController timeout_controller(
+            timeout_cpu.memory,
+            timeout_scheduler,
+            GdRomDrive(
+                std::make_shared<MemoryDiscSource>(bytes, "synthetic-taskfile-timeout")),
+            [&](const std::uint64_t) { ++timeout_irqs; });
+
+        timeout_controller.write(0x9Cu, 0xA0u, MemoryAccessWidth::Byte);
+        std::array<std::uint8_t, 12u> timeout_packet{};
+        timeout_packet[0] = 0x00u;
+        write_packet(timeout_controller, timeout_packet);
+        require(timeout_controller.status().ata_status == 0x41u &&
+                    timeout_controller.status().interrupt_reason == 3u &&
+                    timeout_controller.status().completed_commands == 1u &&
+                    timeout_controller.read(0x84u, MemoryAccessWidth::Byte) == 0xB4u &&
+                    timeout_irqs == 1u,
+                "GD-ROM-Paket-Schedulerueberlauf entkommt als Hostexception oder bleibt BSY.");
+        static_cast<void>(timeout_controller.read(0x9Cu, MemoryAccessWidth::Byte));
+
+        timeout_cpu.r[4] = 29u;
+        timeout_cpu.r[5] = 0u;
+        const auto recovered_request = timeout_controller.bios_call(timeout_cpu, 0u, 0u);
+        static_cast<void>(timeout_controller.bios_call(timeout_cpu, 2u, 0u));
+        timeout_cpu.r[4] = recovered_request;
+        timeout_cpu.r[5] = 0u;
+        require(recovered_request >= 1u &&
+                    timeout_controller.bios_call(timeout_cpu, 1u, 0u) == 2u,
+                "Taskfile-Schedulerfehler gibt den Laufwerksbesitz nicht fuer Folgerequests frei.");
+    }
+    {
+        CpuState timeout_cpu;
+        timeout_cpu.memory = Memory(0u);
+        static_cast<void>(map_dreamcast_main_ram(timeout_cpu.memory));
+        EventScheduler timeout_scheduler;
+        static_cast<void>(timeout_scheduler.advance_to(
+            std::numeric_limits<std::uint64_t>::max() - 999u, 0u));
+        std::uint64_t timeout_irqs = 0u;
+        DreamcastGdRomController timeout_controller(
+            timeout_cpu.memory,
+            timeout_scheduler,
+            GdRomDrive(std::make_shared<MemoryDiscSource>(bytes, "synthetic-bios-timeout")),
+            [&](const std::uint64_t) { ++timeout_irqs; });
+        constexpr std::uint32_t timeout_parameters = 0x8C001000u;
+        constexpr std::uint32_t timeout_status = 0x8C001020u;
+        constexpr std::uint32_t timeout_destination = 0x8C002000u;
+
+        timeout_cpu.memory.write_u32(timeout_parameters, 150u);
+        timeout_cpu.memory.write_u32(timeout_parameters + 4u, 1u);
+        timeout_cpu.memory.write_u32(timeout_parameters + 8u, timeout_destination);
+        timeout_cpu.memory.write_u32(timeout_parameters + 12u, 0u);
+        timeout_cpu.memory.write_u32(timeout_destination, 0xA55AA55Au);
+        timeout_cpu.r[4] = 16u;
+        timeout_cpu.r[5] = timeout_parameters;
+        const auto read_request = timeout_controller.bios_call(timeout_cpu, 0u, 0u);
+        static_cast<void>(timeout_controller.bios_call(timeout_cpu, 2u, 0u));
+        timeout_cpu.r[4] = read_request;
+        timeout_cpu.r[5] = timeout_status;
+        require(read_request >= 1u &&
+                    timeout_controller.bios_call(timeout_cpu, 1u, 0u) == 0xFFFFFFFFu &&
+                    timeout_cpu.memory.read_u32(timeout_status) == 0x0Bu &&
+                    timeout_cpu.memory.read_u32(timeout_status + 4u) ==
+                        static_cast<std::uint32_t>(GdRomStatus::Aborted) &&
+                    timeout_cpu.memory.read_u32(timeout_status + 8u) == 0u &&
+                    timeout_cpu.memory.read_u32(timeout_status + 12u) == 0u &&
+                    timeout_cpu.memory.read_u32(timeout_destination) == 0xA55AA55Au &&
+                    timeout_irqs == 0u,
+                "BIOS-Read-Schedulerueberlauf entkommt oder schreibt vor der Fehlergrenze.");
+
+        timeout_cpu.memory.write_u32(timeout_parameters, 150u);
+        timeout_cpu.memory.write_u32(timeout_parameters + 4u, 1u);
+        timeout_cpu.memory.write_u32(timeout_parameters + 8u, 0u);
+        timeout_cpu.memory.write_u32(timeout_parameters + 12u, 0u);
+        timeout_cpu.r[4] = 28u;
+        timeout_cpu.r[5] = timeout_parameters;
+        const auto stream_request = timeout_controller.bios_call(timeout_cpu, 0u, 0u);
+        static_cast<void>(timeout_controller.bios_call(timeout_cpu, 2u, 0u));
+        timeout_cpu.r[4] = stream_request;
+        timeout_cpu.r[5] = timeout_status;
+        require(stream_request > read_request &&
+                    timeout_controller.bios_call(timeout_cpu, 1u, 0u) == 0xFFFFFFFFu &&
+                    timeout_cpu.memory.read_u32(timeout_status) == 0x0Bu &&
+                    timeout_cpu.memory.read_u32(timeout_status + 4u) ==
+                        static_cast<std::uint32_t>(GdRomStatus::Aborted) &&
+                    timeout_cpu.memory.read_u32(timeout_status + 8u) == 0u &&
+                    timeout_cpu.memory.read_u32(timeout_status + 12u) == 0u &&
+                    timeout_irqs == 0u,
+                "BIOS-Stream-Schedulerueberlauf entkommt oder verliert seinen Fehlerstatus.");
+
+        timeout_cpu.r[4] = 29u;
+        timeout_cpu.r[5] = 0u;
+        const auto recovered_request = timeout_controller.bios_call(timeout_cpu, 0u, 0u);
+        static_cast<void>(timeout_controller.bios_call(timeout_cpu, 2u, 0u));
+        timeout_cpu.r[4] = recovered_request;
+        timeout_cpu.r[5] = 0u;
+        require(recovered_request > stream_request &&
+                    timeout_controller.bios_call(timeout_cpu, 1u, 0u) == 2u &&
+                    timeout_controller.status().bios_requests == 0u,
+                "BIOS-Schedulerfehler blockiert einen unabhaengigen Folgerequest.");
+    }
     require(controller.reload_system_bootstrap(cpu) &&
                 cpu.memory.read_u8(0x8C008100u) == 0x5Au &&
                 cpu.memory.read_u8(0x8C00B8FFu) == 0x5Au,

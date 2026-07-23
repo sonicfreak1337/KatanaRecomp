@@ -843,6 +843,11 @@ int run_test(const int argc, char* argv[]) {
             read_text(output / "src" / "main.cpp").find("memory.peek_u32") !=
                 std::string::npos &&
             read_text(output / "src" / "main.cpp")
+                    .find("std::array<const katana::runtime::MemoryDevice*, 3u>") !=
+                std::string::npos &&
+            read_text(output / "src" / "main.cpp").find("state.flash.get()};") ==
+                std::string::npos &&
+            read_text(output / "src" / "main.cpp")
                     .find("cpu.memory.read_u32(address)") == std::string::npos &&
             read_text(output / "src" / "main.cpp").find("load_dreamcast_runtime_boot") !=
                 std::string::npos &&

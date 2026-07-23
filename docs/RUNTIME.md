@@ -402,6 +402,10 @@ spaetere Plattformkonfiguration.
 - Runtime-Tests fuer CPU-Zustand, Reset, Speicherbus, Ausrichtung, strukturierte Fehler, Traces, Watchpoints, breitenbewusste MMIO-Handler sowie Dreamcast-RAM-, VRAM-, AICA-RAM-, BIOS- und Flash-Aliase
 - optionales leichtgewichtiges Last-MMIO-Tracking fuer begrenzte Produktprobes;
   ohne Aktivierung bleibt der normale Speicherhotpath frei von Trace-Callbacks
+- MMU-bewusste freie 32-Bit-Probes ausschliesslich auf echten linearen
+  Haupt-RAM-, VRAM- und AICA-RAM-Backings; `Memory::peek_u32` lehnt Flash und
+  MMIO auch bei einer fehlerhaften expliziten Whitelist vor jedem
+  Geraetehandler ab
 
 ## Eigenstaendiger Disc-Boot fuer Portanwendungen
 

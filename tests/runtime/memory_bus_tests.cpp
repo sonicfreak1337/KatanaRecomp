@@ -86,13 +86,15 @@ int main() {
         },
         [](const auto, const auto, const auto) {});
     bus.map_region("diagnostic-mmio", 0x00003000u, diagnostic_mmio);
-    const std::array<const katana::runtime::MemoryDevice*, 1u> permitted{work_ram.get()};
+    const std::array<const katana::runtime::MemoryDevice*, 2u> permitted{
+        work_ram.get(), diagnostic_mmio.get()};
     require(bus.peek_u32(0x00001004u, permitted) == 0x89ABCDEFu &&
                 throws<katana::runtime::MemoryAccessError>([&] {
                     static_cast<void>(bus.peek_u32(0x00003000u, permitted));
                 }) &&
                 diagnostic_mmio_reads == 0u,
-            "Diagnostischer Peek liest MMIO oder umgeht seine Geraete-Whitelist.");
+            "Diagnostischer Peek liest ein absichtlich erlaubtes MMIO-Geraet oder umgeht seine "
+            "lineare Geraete-Whitelist.");
 
     Memory indexed(0u);
     auto indexed_ram = std::make_shared<LinearMemoryDevice>(0x20000u);
