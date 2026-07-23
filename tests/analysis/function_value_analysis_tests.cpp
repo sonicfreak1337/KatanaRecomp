@@ -189,93 +189,97 @@ int main() {
                 guarded_return->callees == std::vector<std::uint32_t>{0x20u},
             "Guarded-complete-Callee verlor Ingressguard oder R0-Return-Summary.");
 
-    const auto multi_image =
-        image_with_callee({// bt 0x28; mov #0x10,r0; rts; nop; mov #0x14,r0; rts; nop
-                           0x02u,
-                           0x89u,
-                           0x10u,
-                           0xE0u,
-                           0x0Bu,
-                           0x00u,
-                           0x09u,
-                           0x00u,
-                           0x14u,
-                           0xE0u,
-                           0x0Bu,
-                           0x00u,
-                           0x09u,
-                           0x00u});
-    const auto multi = katana::analysis::analyze_control_flow(multi_image);
-    const auto* multi_site = site(multi, 4u);
-    require(multi_site != nullptr &&
-                multi_site->status == katana::analysis::ResolutionStatus::Resolved &&
-                !multi_site->target.has_value() &&
-                multi_site->targets == std::vector<std::uint32_t>({0x10u, 0x14u}) &&
-                multi_site->reason == "interprocedural-return-set",
-            "Mehrwertige Return-Summary wurde nicht als endliche Zielmenge aufgeloest.");
-    require(std::count_if(multi.resolved_edges.begin(),
-                          multi.resolved_edges.end(),
-                          [](const auto& edge) { return edge.instruction_address == 4u; }) == 2,
-            "Mehrwertige Return-Summary erzeugte nicht genau zwei CFG-Kanten.");
-    const auto multi_text = katana::analysis::format_indirect_control_flow_report(
-        multi.indirect_control_flow, multi.jump_tables, multi.symbolic_addresses);
-    const auto multi_json = katana::analysis::format_control_flow_analysis_json(multi);
-    require(multi_text.find("interprocedural-return-set; evidence=proven-complete; r0; callees=") !=
+    [] {
+        const auto multi_image =
+            image_with_callee({// bt 0x28; mov #0x10,r0; rts; nop; mov #0x14,r0; rts; nop
+                               0x02u,
+                               0x89u,
+                               0x10u,
+                               0xE0u,
+                               0x0Bu,
+                               0x00u,
+                               0x09u,
+                               0x00u,
+                               0x14u,
+                               0xE0u,
+                               0x0Bu,
+                               0x00u,
+                               0x09u,
+                               0x00u});
+        const auto multi = katana::analysis::analyze_control_flow(multi_image);
+        const auto* multi_site = site(multi, 4u);
+        require(multi_site != nullptr &&
+                    multi_site->status == katana::analysis::ResolutionStatus::Resolved &&
+                    !multi_site->target.has_value() &&
+                    multi_site->targets == std::vector<std::uint32_t>({0x10u, 0x14u}) &&
+                    multi_site->reason == "interprocedural-return-set",
+                "Mehrwertige Return-Summary wurde nicht als endliche Zielmenge aufgeloest.");
+        require(std::count_if(multi.resolved_edges.begin(),
+                              multi.resolved_edges.end(),
+                              [](const auto& edge) { return edge.instruction_address == 4u; }) == 2,
+                "Mehrwertige Return-Summary erzeugte nicht genau zwei CFG-Kanten.");
+        const auto multi_text = katana::analysis::format_indirect_control_flow_report(
+            multi.indirect_control_flow, multi.jump_tables, multi.symbolic_addresses);
+        const auto multi_json = katana::analysis::format_control_flow_analysis_json(multi);
+        require(
+            multi_text.find("interprocedural-return-set; evidence=proven-complete; r0; callees=") !=
                     std::string::npos &&
                 multi_json.find("\"targets\":[\"0x00000010\",\"0x00000014\"]") !=
                     std::string::npos &&
                 multi_json.find("\"function_value_summaries\":[") != std::string::npos,
             "Mehrziel- oder Summary-Evidenz fehlt im Text-/JSON-Bericht.");
 
-    const auto conflicting_image = image_with_callee({// bt 0x28; mov #0x10,r0; rts; nop; rts; nop
-                                                      0x02u,
-                                                      0x89u,
-                                                      0x10u,
-                                                      0xE0u,
-                                                      0x0Bu,
-                                                      0x00u,
-                                                      0x09u,
-                                                      0x00u,
-                                                      0x0Bu,
-                                                      0x00u,
-                                                      0x09u,
-                                                      0x00u});
-    const auto conflicting = katana::analysis::analyze_control_flow(conflicting_image);
-    const auto* conflicting_site = site(conflicting, 4u);
-    require(conflicting_site != nullptr &&
-                conflicting_site->status == katana::analysis::ResolutionStatus::Unresolved &&
-                conflicting_site->reason == "dynamic-return-value",
-            "Widerspruechlicher Return-Pfad wurde nicht sichtbar dynamisch gelassen.");
-    const auto* conflicting_summary = summary(conflicting, 0x20u, 0u);
-    require(conflicting_summary != nullptr && !conflicting_summary->complete &&
-                conflicting_summary->reason == "return-path-unknown",
-            "Widerspruechliche Return-Summary wurde faelschlich als vollstaendig markiert.");
+        const auto conflicting_image =
+            image_with_callee({// bt 0x28; mov #0x10,r0; rts; nop; rts; nop
+                               0x02u,
+                               0x89u,
+                               0x10u,
+                               0xE0u,
+                               0x0Bu,
+                               0x00u,
+                               0x09u,
+                               0x00u,
+                               0x0Bu,
+                               0x00u,
+                               0x09u,
+                               0x00u});
+        const auto conflicting = katana::analysis::analyze_control_flow(conflicting_image);
+        const auto* conflicting_site = site(conflicting, 4u);
+        require(conflicting_site != nullptr &&
+                    conflicting_site->status == katana::analysis::ResolutionStatus::Unresolved &&
+                    conflicting_site->reason == "dynamic-return-value",
+                "Widerspruechlicher Return-Pfad wurde nicht sichtbar dynamisch gelassen.");
+        const auto* conflicting_summary = summary(conflicting, 0x20u, 0u);
+        require(conflicting_summary != nullptr && !conflicting_summary->complete &&
+                    conflicting_summary->reason == "return-path-unknown",
+                "Widerspruechliche Return-Summary wurde faelschlich als vollstaendig markiert.");
 
-    const auto recursive_image = image_with_callee({// bsr 0x20; nop; rts; nop
-                                                    0xFEu,
-                                                    0xBFu,
-                                                    0x09u,
-                                                    0x00u,
-                                                    0x0Bu,
-                                                    0x00u,
-                                                    0x09u,
-                                                    0x00u});
-    const auto recursive = katana::analysis::analyze_control_flow(recursive_image);
-    const auto* recursive_site = site(recursive, 4u);
-    require(recursive_site != nullptr &&
-                recursive_site->status == katana::analysis::ResolutionStatus::Unresolved &&
-                recursive_site->reason == "dynamic-return-value" &&
-                recursive_site->origin_class ==
-                    katana::analysis::IndirectControlFlowOriginClass::Callback,
-            "Rekursive Summary ohne stabilen Return wurde als Zielbeweis verwendet.");
+        const auto recursive_image = image_with_callee({// bsr 0x20; nop; rts; nop
+                                                        0xFEu,
+                                                        0xBFu,
+                                                        0x09u,
+                                                        0x00u,
+                                                        0x0Bu,
+                                                        0x00u,
+                                                        0x09u,
+                                                        0x00u});
+        const auto recursive = katana::analysis::analyze_control_flow(recursive_image);
+        const auto* recursive_site = site(recursive, 4u);
+        require(recursive_site != nullptr &&
+                    recursive_site->status == katana::analysis::ResolutionStatus::Unresolved &&
+                    recursive_site->reason == "dynamic-return-value" &&
+                    recursive_site->origin_class ==
+                        katana::analysis::IndirectControlFlowOriginClass::Callback,
+                "Rekursive Summary ohne stabilen Return wurde als Zielbeweis verwendet.");
 
-    const auto missing_return_image = image_with_callee({0x09u, 0x00u});
-    const auto missing_return = katana::analysis::analyze_control_flow(missing_return_image);
-    const auto* missing_return_summary = summary(missing_return, 0x20u, 0u);
-    require(missing_return_summary != nullptr && !missing_return_summary->complete &&
-                missing_return_summary->reason == "no-return" &&
-                site(missing_return, 4u)->reason == "dynamic-return-value",
-            "Callee ohne Return wurde nicht konservativ als unbekannt klassifiziert.");
+        const auto missing_return_image = image_with_callee({0x09u, 0x00u});
+        const auto missing_return = katana::analysis::analyze_control_flow(missing_return_image);
+        const auto* missing_return_summary = summary(missing_return, 0x20u, 0u);
+        require(missing_return_summary != nullptr && !missing_return_summary->complete &&
+                    missing_return_summary->reason == "no-return" &&
+                    site(missing_return, 4u)->reason == "dynamic-return-value",
+                "Callee ohne Return wurde nicht konservativ als unbekannt klassifiziert.");
+    }();
 
     auto abi_less_image = unique_image;
     abi_less_image.set_guest_call_abi(katana::io::GuestCallAbi::Unknown);
