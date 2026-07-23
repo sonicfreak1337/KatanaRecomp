@@ -12,7 +12,7 @@
 
 namespace katana::runtime {
 
-inline constexpr std::uint32_t system_replay_schema_version = 1u;
+inline constexpr std::uint32_t system_replay_schema_version = 2u;
 
 struct SafepointReport;
 
@@ -45,8 +45,18 @@ struct SystemReplayEvent {
     [[nodiscard]] bool operator==(const SystemReplayEvent&) const = default;
 };
 
+struct SystemReplayConfig {
+    static constexpr std::size_t default_capacity = 4096u;
+    static constexpr std::size_t maximum_capacity = 65'536u;
+    static constexpr std::size_t maximum_code_length = 64u;
+
+    std::size_t capacity = default_capacity;
+    bool serialize_values = false;
+};
+
 class SystemReplayLog final {
   public:
+    explicit SystemReplayLog(SystemReplayConfig config = {});
     void record(SystemReplayEvent event);
     [[nodiscard]] bool try_record(SystemReplayEvent event) noexcept;
     void note_dropped_event() noexcept;
@@ -58,8 +68,10 @@ class SystemReplayLog final {
     [[nodiscard]] std::uint64_t event_hash() const noexcept;
     [[nodiscard]] std::uint64_t final_guest_state_hash() const;
     [[nodiscard]] std::string serialize_json() const;
+    [[nodiscard]] const SystemReplayConfig& config() const noexcept;
 
   private:
+    SystemReplayConfig config_;
     std::vector<SystemReplayEvent> events_;
     std::optional<std::uint64_t> last_guest_cycle_;
     std::optional<std::uint64_t> last_time_epoch_;

@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <iomanip>
 #include <limits>
+#include <locale>
 #include <sstream>
 #include <string_view>
 #include <utility>
@@ -16,10 +17,11 @@ constexpr std::uint64_t fnv_offset = 14695981039346656037ull;
 constexpr std::uint64_t fnv_prime = 1099511628211ull;
 
 bool stable_code(const std::string_view value) noexcept {
-    return !value.empty() && std::all_of(value.begin(), value.end(), [](const unsigned char value) {
-        return (value >= 'a' && value <= 'z') || (value >= '0' && value <= '9') || value == '-' ||
-               value == '_' || value == '.';
-    });
+    return !value.empty() && value.size() <= SystemReplayConfig::maximum_code_length &&
+           std::all_of(value.begin(), value.end(), [](const unsigned char value) {
+               return (value >= 'a' && value <= 'z') || (value >= '0' && value <= '9') ||
+                      value == '-' || value == '_' || value == '.';
+           });
 }
 
 bool external_kind(const SystemReplayEventKind kind) noexcept {
@@ -66,12 +68,14 @@ void hash_event(std::uint64_t& hash, const SystemReplayEvent& event) noexcept {
 
 std::string hex32(const std::uint32_t value) {
     std::ostringstream output;
+    output.imbue(std::locale::classic());
     output << "0x" << std::hex << std::uppercase << std::setfill('0') << std::setw(8) << value;
     return output.str();
 }
 
 std::string hex64(const std::uint64_t value) {
     std::ostringstream output;
+    output.imbue(std::locale::classic());
     output << "0x" << std::hex << std::uppercase << std::setfill('0') << std::setw(16) << value;
     return output.str();
 }
@@ -98,7 +102,20 @@ const char* execution_origin_name(const ExecutionOrigin origin) noexcept {
     return origin == ExecutionOrigin::Backend ? "backend" : "fallback";
 }
 
+class SystemReplayCapacityError final : public std::length_error {
+  public:
+    SystemReplayCapacityError() : std::length_error("Systemreplay-Kapazitaet ist erschoepft.") {}
+};
+
 } // namespace
+
+SystemReplayLog::SystemReplayLog(const SystemReplayConfig config) : config_(config) {
+    if (config_.capacity == 0u ||
+        config_.capacity > SystemReplayConfig::maximum_capacity) {
+        throw std::invalid_argument("Systemreplay-Kapazitaet liegt ausserhalb des Vertrags.");
+    }
+    events_.reserve(config_.capacity);
+}
 
 void SystemReplayLog::record(SystemReplayEvent event) {
     if (final_guest_state_hash_.has_value()) {
@@ -110,6 +127,12 @@ void SystemReplayLog::record(SystemReplayEvent event) {
          (event.time_epoch == *last_time_epoch_ && event.guest_cycle < *last_guest_cycle_))) {
         throw std::invalid_argument("Systemreplay-Gastzeitpaar darf nicht rueckwaerts laufen.");
     }
+    if (events_.size() == config_.capacity) {
+        note_dropped_event();
+        throw SystemReplayCapacityError();
+    }
+    std::string normalized_code(event.code.data(), event.code.size());
+    event.code.swap(normalized_code);
     if (events_.size() == std::numeric_limits<std::uint64_t>::max()) {
         throw std::overflow_error("Systemreplay-Sequenz ist uebergelaufen.");
     }
@@ -120,16 +143,18 @@ void SystemReplayLog::record(SystemReplayEvent event) {
 }
 
 bool SystemReplayLog::try_record(SystemReplayEvent event) noexcept {
+    const auto dropped_before = dropped_events_;
     try {
         record(std::move(event));
         return true;
     } catch (...) {
-        note_dropped_event();
+        if (dropped_events_ == dropped_before) note_dropped_event();
         return false;
     }
 }
 
 void SystemReplayLog::note_dropped_event() noexcept {
+    if (final_guest_state_hash_.has_value()) return;
     if (dropped_events_ != std::numeric_limits<std::uint64_t>::max()) {
         ++dropped_events_;
     }
@@ -179,29 +204,49 @@ std::uint64_t SystemReplayLog::final_guest_state_hash() const {
 
 std::string SystemReplayLog::serialize_json() const {
     std::ostringstream output;
+    output.imbue(std::locale::classic());
     output << "{\"schema\":\"katana-system-replay\",\"report_version\":1"
            << ",\"replay_version\":" << system_replay_schema_version << ",\"status\":\""
            << (dropped_events_ == 0u ? "success" : "failed")
            << "\",\"sealed\":" << (sealed() ? "true" : "false")
-           << ",\"dropped_events\":" << dropped_events_ << ",\"event_hash\":\""
-           << hex64(event_hash()) << "\",\"final_guest_state_hash\":";
-    sealed() ? output << '"' << hex64(*final_guest_state_hash_) << '"' : output << "null";
+           << ",\"capacity\":" << config_.capacity
+           << ",\"serialize_values\":" << (config_.serialize_values ? "true" : "false")
+           << ",\"values_redacted\":" << (config_.serialize_values ? "false" : "true")
+           << ",\"codes_redacted\":" << (config_.serialize_values ? "false" : "true")
+           << ",\"addresses_redacted\":" << (config_.serialize_values ? "false" : "true")
+           << ",\"numeric_payloads_redacted\":"
+           << (config_.serialize_values ? "false" : "true")
+           << ",\"hashes_redacted\":" << (config_.serialize_values ? "false" : "true")
+           << ",\"dropped_events\":" << dropped_events_ << ",\"event_hash\":";
+    config_.serialize_values ? output << '"' << hex64(event_hash()) << '"' : output << "null";
+    output << ",\"final_guest_state_hash\":";
+    sealed() && config_.serialize_values
+        ? output << '"' << hex64(*final_guest_state_hash_) << '"'
+        : output << "null";
     output << ",\"events\":[";
     for (std::size_t index = 0u; index < events_.size(); ++index) {
         if (index != 0u) output << ',';
         const auto& event = events_[index];
         output << "{\"sequence\":" << event.sequence << ",\"time_epoch\":" << event.time_epoch
                << ",\"guest_cycle\":" << event.guest_cycle << ",\"kind\":\""
-               << system_replay_event_kind_name(event.kind) << "\",\"code\":\"" << event.code
-               << "\",\"address\":";
-        optional_hex(output, event.address);
+               << system_replay_event_kind_name(event.kind) << "\",\"code\":";
+        config_.serialize_values ? output << '"' << event.code << '"' : output << "null";
+        output << ",\"address\":";
+        optional_hex(output, config_.serialize_values ? event.address : std::nullopt);
         output << ",\"value\":";
-        optional_hex(output, event.value);
-        output << ",\"detail\":" << event.detail << ",\"auxiliary\":" << event.auxiliary
-               << ",\"injected\":" << (event.injected ? "true" : "false") << '}';
+        optional_hex(output, config_.serialize_values ? event.value : std::nullopt);
+        output << ",\"detail\":";
+        config_.serialize_values ? output << event.detail : output << "null";
+        output << ",\"auxiliary\":";
+        config_.serialize_values ? output << event.auxiliary : output << "null";
+        output << ",\"injected\":" << (event.injected ? "true" : "false") << '}';
     }
     output << "]}";
     return output.str();
+}
+
+const SystemReplayConfig& SystemReplayLog::config() const noexcept {
+    return config_;
 }
 
 SystemReplayMismatch::SystemReplayMismatch(const std::size_t event_index, std::string reason)
@@ -213,11 +258,15 @@ std::size_t SystemReplayMismatch::event_index() const noexcept {
     return event_index_;
 }
 
-DeterministicSystemReplay::DeterministicSystemReplay(const SystemReplayLog& expected)
-    : expected_(expected.events()), expected_guest_state_hash_(expected.final_guest_state_hash()) {
+DeterministicSystemReplay::DeterministicSystemReplay(const SystemReplayLog& expected) {
     if (expected.dropped_events() != 0u) {
         throw std::invalid_argument("Unvollstaendige Aufzeichnung kann nicht abgespielt werden.");
     }
+    if (!expected.sealed()) {
+        throw std::invalid_argument("Unversiegelte Aufzeichnung kann nicht abgespielt werden.");
+    }
+    expected_ = expected.events();
+    expected_guest_state_hash_ = expected.final_guest_state_hash();
 }
 
 void DeterministicSystemReplay::observe(SystemReplayEvent event) {

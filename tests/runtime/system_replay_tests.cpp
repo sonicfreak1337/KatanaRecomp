@@ -3,6 +3,7 @@
 
 #include <cstdlib>
 #include <iostream>
+#include <locale>
 #include <stdexcept>
 #include <string>
 
@@ -25,6 +26,31 @@ std::string require_failure(Function&& function, const std::string& message) {
     require(false, message);
     return {};
 }
+
+class GroupedNumberPunctuation final : public std::numpunct<char> {
+  protected:
+    [[nodiscard]] char do_thousands_sep() const override {
+        return '\'';
+    }
+    [[nodiscard]] std::string do_grouping() const override {
+        return "\1";
+    }
+};
+
+class GlobalLocaleGuard final {
+  public:
+    explicit GlobalLocaleGuard(const std::locale& replacement)
+        : previous_(std::locale::global(replacement)) {}
+    ~GlobalLocaleGuard() {
+        std::locale::global(previous_);
+    }
+
+    GlobalLocaleGuard(const GlobalLocaleGuard&) = delete;
+    GlobalLocaleGuard& operator=(const GlobalLocaleGuard&) = delete;
+
+  private:
+    std::locale previous_;
+};
 
 katana::runtime::SystemReplayEvent event(const katana::runtime::SystemReplayEventKind kind,
                                          const std::uint64_t cycle,
@@ -95,8 +121,10 @@ int main() {
                               "host-event",
                               "\"time_epoch\":1",
                               "\"injected\":true",
-                              "\"event_hash\":\"0x",
-                              "\"final_guest_state_hash\":\"0x"}) {
+                              "\"event_hash\":null",
+                              "\"final_guest_state_hash\":null",
+                              "\"detail\":null",
+                              "\"auxiliary\":null"}) {
         require(json.find(marker) != std::string::npos,
                 std::string("Systemreplay verliert Ereignis- oder Hashfeld: ") + marker);
     }
@@ -152,6 +180,139 @@ int main() {
             "Fehlende explizite externe Injektion wird nicht als Drop sichtbar.");
     require_failure<std::runtime_error>([&] { dropped.seal(1u); },
                                         "Unvollstaendige Aufzeichnung wurde versiegelt.");
+    const auto dropped_replay_error = require_failure<std::invalid_argument>(
+        [&] { static_cast<void>(DeterministicSystemReplay(dropped)); },
+        "Unvollstaendige Aufzeichnung wurde fuer Replay kopiert.");
+    require(dropped_replay_error.find("Unvollstaendige") != std::string::npos,
+            "Replay prueft den Drop nicht vor Versiegelung, Kopie und Hash.");
+    SystemReplayLog unsealed;
+    unsealed.record(event(SystemReplayEventKind::Timer, 1u, "unsealed"));
+    const auto unsealed_replay_error = require_failure<std::invalid_argument>(
+        [&] { static_cast<void>(DeterministicSystemReplay(unsealed)); },
+        "Unversiegelte Aufzeichnung wurde fuer Replay kopiert.");
+    require(unsealed_replay_error.find("Unversiegelte") != std::string::npos,
+            "Replay prueft den Seal-Zustand nicht vor Kopie und Hash.");
+
+    require_failure<std::invalid_argument>(
+        [] { static_cast<void>(SystemReplayLog({0u, false})); },
+        "Systemreplay akzeptiert Kapazitaet null.");
+    require_failure<std::invalid_argument>(
+        [] {
+            static_cast<void>(
+                SystemReplayLog({SystemReplayConfig::maximum_capacity + 1u, false}));
+        },
+        "Systemreplay akzeptiert eine nicht portable Kapazitaet.");
+    SystemReplayLog overlong_code;
+    require(!overlong_code.try_record(
+                event(SystemReplayEventKind::Timer,
+                      1u,
+                      std::string(SystemReplayConfig::maximum_code_length + 1u, 'a'))) &&
+                overlong_code.events().empty() && overlong_code.dropped_events() == 1u,
+            "Systemreplay akzeptiert einen ueberlangen portablen Ereigniscode.");
+
+    SystemReplayLog normalized_code({1u, false});
+    auto oversized_code =
+        event(SystemReplayEventKind::Timer, 1u, "short-code-with-large-reserve");
+    oversized_code.code.reserve(1024u * 1024u);
+    const auto oversized_capacity = oversized_code.code.capacity();
+    normalized_code.record(std::move(oversized_code));
+    require(oversized_capacity > SystemReplayConfig::maximum_code_length &&
+                normalized_code.events()[0].code == "short-code-with-large-reserve" &&
+                normalized_code.events()[0].code.capacity() <=
+                    SystemReplayConfig::maximum_code_length,
+            "Systemreplay behaelt eine uebergrosse Aufruferkapazitaet im Ereigniscode.");
+
+    SystemReplayLog bounded({2u, false});
+    auto bounded_first = event(SystemReplayEventKind::MmioWrite, 1u, "private-title-id");
+    bounded_first.address = 0xDEADC0DEu;
+    bounded_first.value = 0xDEADBEEFu;
+    bounded.record(bounded_first);
+    bounded.record(event(SystemReplayEventKind::Timer, 2u, "bounded-second"));
+    require(!bounded.try_record(event(SystemReplayEventKind::Video, 3u, "bounded-third")) &&
+                bounded.events().size() == 2u && bounded.dropped_events() == 1u &&
+                bounded.config().capacity == 2u && !bounded.config().serialize_values,
+            "Systemreplay ueberschreitet seine Kapazitaet oder verliert Drop-/Konfigevidenz.");
+    const auto bounded_json = bounded.serialize_json();
+    require(bounded_json.find("\"capacity\":2") != std::string::npos &&
+                bounded_json.find("\"serialize_values\":false") != std::string::npos &&
+                bounded_json.find("\"values_redacted\":true") != std::string::npos &&
+                bounded_json.find("\"codes_redacted\":true") != std::string::npos &&
+                bounded_json.find("\"addresses_redacted\":true") != std::string::npos &&
+                bounded_json.find("\"numeric_payloads_redacted\":true") != std::string::npos &&
+                bounded_json.find("\"hashes_redacted\":true") != std::string::npos &&
+                bounded_json.find("\"event_hash\":null") != std::string::npos &&
+                bounded_json.find("\"code\":null") != std::string::npos &&
+                bounded_json.find("\"address\":null") != std::string::npos &&
+                bounded_json.find("\"detail\":null") != std::string::npos &&
+                bounded_json.find("\"auxiliary\":null") != std::string::npos &&
+                bounded_json.find("private-title-id") == std::string::npos &&
+                bounded_json.find("DEADC0DE") == std::string::npos &&
+                bounded_json.find("DEADBEEF") == std::string::npos,
+            "Begrenzter Systemreplay weist Kapazitaet/Redaktion nicht aus oder gibt Werte preis.");
+    require_failure<std::runtime_error>([&] { bounded.seal(1u); },
+                                        "Systemreplay mit Kapazitaetsdrop wurde versiegelt.");
+
+    SystemReplayLog bounded_duplicate({2u, false});
+    bounded_duplicate.record(bounded_first);
+    bounded_duplicate.record(event(SystemReplayEventKind::Timer, 2u, "bounded-second"));
+    bounded_duplicate.note_dropped_event();
+    require(bounded.serialize_json() == bounded_duplicate.serialize_json() &&
+                bounded.event_hash() == bounded_duplicate.event_hash(),
+            "Gleiche begrenzte Systemreplays erzeugen keine bytegleiche Evidenz.");
+
+    SystemReplayLog direct_overflow({1u, false});
+    direct_overflow.record(event(SystemReplayEventKind::Timer, 1u, "direct-first"));
+    require_failure<std::length_error>(
+        [&] {
+            direct_overflow.record(
+                event(SystemReplayEventKind::Timer, 2u, "direct-overflow"));
+        },
+        "Direkter Systemreplay-Overflow wurde nicht sichtbar gestoppt.");
+    require(direct_overflow.events().size() == 1u &&
+                direct_overflow.dropped_events() == 1u,
+            "Direkter Systemreplay-Overflow markiert den Drop nicht genau einmal.");
+    require_failure<std::runtime_error>([&] { direct_overflow.seal(1u); },
+                                        "Direkter Kapazitaetsdrop blieb versiegelbar.");
+
+    SystemReplayLog value_opt_in({2u, true});
+    value_opt_in.record(bounded_first);
+    value_opt_in.seal(0x1234u);
+    const auto opt_in_json = value_opt_in.serialize_json();
+    require(opt_in_json.find("\"serialize_values\":true") != std::string::npos &&
+                opt_in_json.find("\"values_redacted\":false") != std::string::npos &&
+                opt_in_json.find("\"codes_redacted\":false") != std::string::npos &&
+                opt_in_json.find("\"addresses_redacted\":false") != std::string::npos &&
+                opt_in_json.find("\"numeric_payloads_redacted\":false") !=
+                    std::string::npos &&
+                opt_in_json.find("\"hashes_redacted\":false") != std::string::npos &&
+                opt_in_json.find("\"event_hash\":\"0x") != std::string::npos &&
+                opt_in_json.find("\"final_guest_state_hash\":\"0x0000000000001234\"") !=
+                    std::string::npos &&
+                opt_in_json.find("\"code\":\"private-title-id\"") != std::string::npos &&
+                opt_in_json.find("\"address\":\"0xDEADC0DE\"") != std::string::npos &&
+                opt_in_json.find("\"value\":\"0xDEADBEEF\"") != std::string::npos &&
+                opt_in_json.find("\"detail\":2") != std::string::npos &&
+                opt_in_json.find("\"auxiliary\":3") != std::string::npos,
+            "Explizites lokales Replay-Wert-Opt-in wird nicht ausgewiesen oder angewendet.");
+    const auto original_global_locale = std::locale();
+    std::string locale_independent_json;
+    {
+        const GlobalLocaleGuard locale_guard(
+            std::locale(std::locale::classic(), new GroupedNumberPunctuation));
+        locale_independent_json = value_opt_in.serialize_json();
+    }
+    require(locale_independent_json == opt_in_json &&
+                std::locale() == original_global_locale,
+            "Systemreplay-JSON haengt von der globalen Locale ab oder stellt sie nicht wieder her.");
+
+    SystemReplayLog sealed_drop_guard;
+    sealed_drop_guard.record(event(SystemReplayEventKind::Timer, 1u, "sealed"));
+    sealed_drop_guard.seal(0x5678u);
+    const auto sealed_before_drop = sealed_drop_guard.serialize_json();
+    sealed_drop_guard.note_dropped_event();
+    require(sealed_drop_guard.dropped_events() == 0u &&
+                sealed_drop_guard.serialize_json() == sealed_before_drop,
+            "Dropmeldung mutiert einen bereits versiegelten Systemreplay.");
 
     SystemReplayLog mmio;
     auto observer = system_replay_mmio_observer(mmio, [] { return 20u; }, "pvr-register");
