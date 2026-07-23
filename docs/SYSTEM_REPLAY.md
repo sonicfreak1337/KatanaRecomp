@@ -9,7 +9,7 @@ Paar aus Resetgeneration und Gastzyklus; innerhalb einer Epoche darf die
 Gastzeit nicht rueckwaerts laufen, waehrend eine neue Epoche wieder bei Zyklus
 null beginnen darf.
 
-Das v4-Format unterscheidet:
+Das v5-Format unterscheidet:
 
 - CPU-Safepoints
 - MMIO-Lese- und Schreibzugriffe
@@ -44,8 +44,11 @@ angebunden sind; nicht jede Klasse muss innerhalb eines kurzen Budgets
 tatsaechlich ein Ereignis erzeugen.
 
 Ein domain-separierter Ordnungsdigest bindet die kanonische Reihenfolge aller
-aufgezeichneten Ereignisse. Vertauschte Ereignisse koennen daher nicht durch
-gleiche Summen oder Coverage-Masken als identischer Lauf erscheinen.
+angenommenen Ereignisse, auch wenn der skalierbare Modus nicht jedes davon als
+Einzelobjekt behaelt. Vertauschte Ereignisse koennen daher nicht durch gleiche
+Summen oder Coverage-Masken als identischer Lauf erscheinen. Der Digest
+verwendet ungekeytes FNV-1a und ist deterministische Evidenz, keine
+Authentisierung oder kryptografische Integritaetsgarantie.
 
 ## Produktbeobachtung und Checkpoints
 
@@ -111,20 +114,29 @@ optionalen letzten Checkpoint, `replay_complete` und `redacted=true`.
 
 ## Begrenzung und portable Ereigniscodes
 
-`SystemReplayLog` verwendet standardmaessig eine feste Kapazitaet von 4096
-Ereignissen. Eine lokale Konfiguration darf sie verkleinern oder bis hoechstens
-65536 Ereignisse anheben. Null und groessere Werte werden vor einer
-Speicherreservierung abgelehnt. Portable Ereigniscodes sind auf 64 Zeichen und
-die bereits festgelegte ASCII-Zeichenmenge begrenzt. Vor der Speicherung wird
-der Code in eine eigene kurze Zeichenfolge normalisiert; eine vom Aufrufer
-uebernommene uebergrosse `std::string`-Kapazitaet kann deshalb den RAM-Vertrag
-nicht umgehen.
+Systemreplay-Schema 5 besitzt zwei explizite Speichermodi:
 
-Erreicht `record()` die Kapazitaet, markiert es genau einen Drop und bricht den
-Aufruf sichtbar ab. `try_record()` liefert dafuer `false`, ohne denselben Drop
-ein zweites Mal zu zaehlen. Jede unvollstaendige Aufzeichnung bleibt
-unversiegelbar. Nach erfolgreichem `seal()` kann auch ein spaeter
+- `ExactEvents` behaelt jedes Ereignis. Erreicht `record()` die konfigurierte
+  Kapazitaet, markiert es genau einen Drop und bricht sichtbar ab.
+  `try_record()` liefert dafuer `false`, ohne denselben Drop ein zweites Mal zu
+  zaehlen. Die Spur ist danach unvollstaendig und unversiegelbar.
+- `DigestStream` behaelt nur ein Praefix als Einzelzeugen. Nach dessen
+  Saettigung werden weitere Ereignisse weiterhin vollstaendig validiert,
+  gezaehlt und in Coverage, Ereignisklassen und Ordnungsdigest eingebunden.
+  Sie erhoehen `summarized_event_count`, nicht `dropped_events`.
+
+Die Aufbewahrungskapazitaet betraegt standardmaessig 4096 und darf lokal bis
+hoechstens 65536 Zeugen angehoben werden. Null und groessere Werte werden vor
+einer Speicherreservierung abgelehnt. Die Gesamtzahl des Digeststroms ist
+davon unabhaengig und wird als 64-Bit-Zaehler gefuehrt. Ein echter
+Validierungs-, Sequenz- oder Aufnahmefehler bleibt in beiden Modi ein Drop und
+verhindert die Versiegelung. Nach erfolgreichem `seal()` kann ein spaeter
 Best-effort-Drophinweis den versiegelten Zustand nicht mehr veraendern.
+
+Portable Ereigniscodes sind auf 64 Zeichen und die festgelegte
+ASCII-Zeichenmenge begrenzt. Bei behaltenen Zeugen wird der Code in eine eigene
+kurze Zeichenfolge normalisiert; eine vom Aufrufer uebernommene uebergrosse
+`std::string`-Kapazitaet kann den RAM-Vertrag deshalb nicht umgehen.
 
 ## Externe Injektionen
 
@@ -143,11 +155,19 @@ Subsystemhash. Speicher, MMIO, DMA, Timer, Interrupt- und Medienzustand werden
 ueber diesen Subsystemhash gebunden, ohne rohe Speicher- oder Firmwarebytes im
 Bericht abzulegen.
 
-`DeterministicSystemReplay` vergleicht jedes beobachtete Ereignis sofort mit
-dem naechsten erwarteten Eintrag. Ein fehlendes, zusaetzliches, anders
-sortiertes oder inhaltlich abweichendes Ereignis wirft
-`SystemReplayMismatch` am ersten betroffenen Index. Nach dem letzten Ereignis
-muss auch der Gastzustandshash exakt uebereinstimmen.
+`DeterministicSystemReplay` akzeptiert ausschliesslich einen vollstaendigen
+`ExactEvents`-Strom und vergleicht jedes beobachtete Ereignis sofort mit dem
+naechsten erwarteten Eintrag. Ein fehlendes, zusaetzliches, anders sortiertes
+oder inhaltlich abweichendes Ereignis wirft `SystemReplayMismatch` am ersten
+betroffenen Index. Nach dem letzten Ereignis muss auch der Gastzustandshash
+exakt uebereinstimmen.
+
+`DeterministicSystemReplayDigest` ist der getrennte Verifier fuer einen
+versiegelten, dropfreien `DigestStream`. Er prueft das behaltene Zeugenpraefix
+ereignisgenau und bindet am Ende zusaetzlich Gesamtzahl, Ordnungsdigest,
+beobachtete Coverage, alle Ereignisklassenzaehler und den finalen
+Gastzustandshash. Damit wird ein zusammengefasster Strom nicht faelschlich als
+verfuegbarer exakter Einzelereignisstrom ausgegeben.
 
 Best-effort-Hooks koennen die Gastausfuehrung bei einem Diagnosefehler nicht
 stoppen. Jeder solche Verlust erhoeht jedoch vor der Versiegelung
@@ -160,7 +180,11 @@ Integritaets- oder Sicherheitsgarantie.
 
 ## Redigierter JSON-Vertrag
 
-Der v4-JSON-Bericht ist standardmaessig redigiert. `code`, `address`, `value`,
+Der v5-JSON-Bericht ist standardmaessig redigiert. Neben
+`storage_mode` weist er `event_count`, `retained_event_count`,
+`summarized_event_count` und `exact_event_stream` aus. Der
+Runtime-Probe-Bericht Version 2 ergaenzt dazu `retention_capacity`. `code`,
+`address`, `value`,
 `detail` und `auxiliary` werden als `null` ausgegeben. Auch `event_hash` und
 `final_guest_state_hash` bleiben `null`, weil diese Felder sonst weiterhin
 private Gastidentitaeten, Adressen, Werte oder daraus abgeleitete exakte
@@ -170,8 +194,9 @@ Fingerabdruecke veroeffentlichen wuerden. `capacity`, `serialize_values`,
 explizit. Zahlen- und Hexfelder verwenden unabhaengig von der globalen
 Host-Locale immer die klassische portable Schreibweise.
 
-Die interne Aufzeichnung, `event_hash()` und `DeterministicSystemReplay`
-behalten trotzdem alle Werte und vergleichen sie exakt. Nur ein ausdrueckliches
+`ExactEvents` behaelt intern alle Ereigniswerte fuer den exakten Vergleich.
+`DigestStream` behaelt nur das Zeugenpraefix, verarbeitet aber alle Werte in
+seinem Ordnungsdigest und den kanonischen Zaehlern. Nur ein ausdrueckliches
 lokales `SystemReplayConfig::serialize_values=true` schreibt Codes, Adressen,
 Werte, numerische Payloads sowie Ereignis- und Endzustandshash in JSON. Dieses
 Opt-in ist fuer lokale Differentialdiagnostik bestimmt und darf nicht fuer

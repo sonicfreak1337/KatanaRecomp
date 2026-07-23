@@ -44,6 +44,11 @@ bool external_kind(const SystemReplayEventKind kind) noexcept {
     return kind == SystemReplayEventKind::ExternalInput || kind == SystemReplayEventKind::HostEvent;
 }
 
+bool known_storage_mode(const SystemReplayStorageMode mode) noexcept {
+    return mode == SystemReplayStorageMode::ExactEvents ||
+           mode == SystemReplayStorageMode::DigestStream;
+}
+
 bool known_event_kind(const SystemReplayEventKind kind) noexcept {
     switch (kind) {
     case SystemReplayEventKind::CpuSafepoint:
@@ -128,6 +133,12 @@ std::size_t coverage_index(const SystemReplayCoverageMask coverage) noexcept {
     return index;
 }
 
+std::size_t mismatch_index(const std::uint64_t value) noexcept {
+    return value > std::numeric_limits<std::size_t>::max()
+               ? std::numeric_limits<std::size_t>::max()
+               : static_cast<std::size_t>(value);
+}
+
 bool advance_power_of_two_sample(std::uint64_t& count) noexcept {
     if (count != std::numeric_limits<std::uint64_t>::max()) ++count;
     return count != 0u && (count & (count - 1u)) == 0u;
@@ -186,6 +197,9 @@ SystemReplayLog::SystemReplayLog(const SystemReplayConfig config)
         config_.capacity > SystemReplayConfig::maximum_capacity) {
         throw std::invalid_argument("Systemreplay-Kapazitaet liegt ausserhalb des Vertrags.");
     }
+    if (!known_storage_mode(config_.storage_mode)) {
+        throw std::invalid_argument("Systemreplay-Speichermodus ist unbekannt.");
+    }
     events_.reserve(config_.capacity);
 }
 
@@ -196,7 +210,7 @@ void SystemReplayLog::enable_coverage(const SystemReplayCoverageMask coverage) {
     if (final_guest_state_hash_.has_value()) {
         throw std::logic_error("Versiegelter Systemreplay darf Coverage nicht aendern.");
     }
-    if (!events_.empty() || dropped_events_ != 0u || ordering_digest_initialized_) {
+    if (event_count_ != 0u || dropped_events_ != 0u || ordering_digest_initialized_) {
         throw std::logic_error(
             "Systemreplay-Coverage muss vor dem ersten Ereignis aktiviert werden.");
     }
@@ -219,28 +233,46 @@ void SystemReplayLog::record(SystemReplayEvent event) {
          (event.time_epoch == *last_time_epoch_ && event.guest_cycle < *last_guest_cycle_))) {
         throw std::invalid_argument("Systemreplay-Gastzeitpaar darf nicht rueckwaerts laufen.");
     }
-    if (events_.size() == config_.capacity) {
+    if (config_.storage_mode == SystemReplayStorageMode::ExactEvents &&
+        events_.size() == config_.capacity) {
         note_dropped_event();
         throw SystemReplayCapacityError();
     }
-    std::string normalized_code(event.code.data(), event.code.size());
-    event.code.swap(normalized_code);
-    if (events_.size() == std::numeric_limits<std::uint64_t>::max()) {
+    if (event_count_ == std::numeric_limits<std::uint64_t>::max()) {
         throw std::overflow_error("Systemreplay-Sequenz ist uebergelaufen.");
     }
-    event.sequence = events_.size();
-    events_.push_back(std::move(event));
+    for (SystemReplayCoverageMask bit = 1u; bit <= all_coverage; bit <<= 1u) {
+        if ((coverage & bit) != 0u &&
+            event_counts_[coverage_index(bit)] ==
+                std::numeric_limits<std::uint64_t>::max()) {
+            throw std::overflow_error("Systemreplay-Ereigniszaehler ist uebergelaufen.");
+        }
+    }
+    event.sequence = event_count_;
+    const auto retain_event =
+        config_.storage_mode == SystemReplayStorageMode::ExactEvents ||
+        events_.size() < config_.capacity;
+    if (retain_event) {
+        std::string normalized_code(event.code.data(), event.code.size());
+        event.code.swap(normalized_code);
+    }
+    const SystemReplayEvent* recorded_event = &event;
+    if (retain_event) {
+        events_.push_back(std::move(event));
+        recorded_event = &events_.back();
+    }
     if (!ordering_digest_initialized_) {
         ordering_digest_ = ordering_digest_seed(config_.profile, enabled_coverage_);
         ordering_digest_initialized_ = true;
     }
-    hash_event(ordering_digest_, events_.back());
+    hash_event(ordering_digest_, *recorded_event);
     observed_coverage_ |= coverage;
     for (SystemReplayCoverageMask bit = 1u; bit <= all_coverage; bit <<= 1u) {
         if ((coverage & bit) != 0u) ++event_counts_[coverage_index(bit)];
     }
-    last_guest_cycle_ = events_.back().guest_cycle;
-    last_time_epoch_ = events_.back().time_epoch;
+    last_guest_cycle_ = recorded_event->guest_cycle;
+    last_time_epoch_ = recorded_event->time_epoch;
+    ++event_count_;
 }
 
 bool SystemReplayLog::try_record(SystemReplayEvent event) noexcept {
@@ -284,6 +316,15 @@ bool SystemReplayLog::sealed() const noexcept {
 }
 const std::vector<SystemReplayEvent>& SystemReplayLog::events() const noexcept {
     return events_;
+}
+std::uint64_t SystemReplayLog::event_count() const noexcept {
+    return event_count_;
+}
+std::uint64_t SystemReplayLog::summarized_event_count() const noexcept {
+    return event_count_ - static_cast<std::uint64_t>(events_.size());
+}
+bool SystemReplayLog::exact_event_stream_available() const noexcept {
+    return dropped_events_ == 0u && summarized_event_count() == 0u;
 }
 std::uint64_t SystemReplayLog::dropped_events() const noexcept {
     return dropped_events_;
@@ -335,6 +376,13 @@ std::string SystemReplayLog::serialize_json() const {
            << "\",\"sealed\":" << (sealed() ? "true" : "false")
            << ",\"capacity\":" << config_.capacity
            << ",\"profile\":\"" << system_replay_profile_name(config_.profile) << '"'
+           << ",\"storage_mode\":\""
+           << system_replay_storage_mode_name(config_.storage_mode) << '"'
+           << ",\"event_count\":" << event_count_
+           << ",\"retained_event_count\":" << events_.size()
+           << ",\"summarized_event_count\":" << summarized_event_count()
+           << ",\"exact_event_stream\":"
+           << (exact_event_stream_available() ? "true" : "false")
            << ",\"enabled_coverage\":" << enabled_coverage_
            << ",\"observed_coverage\":" << observed_coverage_
            << ",\"required_coverage\":" << required_coverage_
@@ -404,6 +452,11 @@ DeterministicSystemReplay::DeterministicSystemReplay(const SystemReplayLog& expe
         throw std::invalid_argument(
             "Aufzeichnung besitzt nicht alle verpflichtenden Replay-Coverage-Hooks.");
     }
+    if (expected.config().storage_mode != SystemReplayStorageMode::ExactEvents ||
+        !expected.exact_event_stream_available()) {
+        throw std::invalid_argument(
+            "Digest-Aufzeichnung braucht den typisierten Digest-Replay.");
+    }
     expected_ = expected.events();
     expected_guest_state_hash_ = expected.final_guest_state_hash();
 }
@@ -437,6 +490,87 @@ std::size_t DeterministicSystemReplay::position() const noexcept {
     return position_;
 }
 bool DeterministicSystemReplay::complete() const noexcept {
+    return finished_;
+}
+
+DeterministicSystemReplayDigest::DeterministicSystemReplayDigest(
+    const SystemReplayLog& expected)
+    : observed_({expected.config().capacity,
+                 false,
+                 expected.config().profile,
+                 SystemReplayStorageMode::DigestStream}) {
+    if (expected.config().storage_mode != SystemReplayStorageMode::DigestStream) {
+        throw std::invalid_argument(
+            "Digest-Replay braucht eine explizite Digest-Stream-Aufzeichnung.");
+    }
+    if (expected.dropped_events() != 0u) {
+        throw std::invalid_argument(
+            "Unvollstaendige Digest-Aufzeichnung kann nicht verifiziert werden.");
+    }
+    if (!expected.sealed()) {
+        throw std::invalid_argument(
+            "Unversiegelte Digest-Aufzeichnung kann nicht verifiziert werden.");
+    }
+    if (!expected.coverage_complete()) {
+        throw std::invalid_argument(
+            "Digest-Aufzeichnung besitzt nicht alle verpflichtenden Replay-Coverage-Hooks.");
+    }
+    observed_.enable_coverage(expected.enabled_coverage());
+    expected_witnesses_ = expected.events();
+    expected_event_count_ = expected.event_count();
+    expected_ordering_digest_ = expected.ordering_digest();
+    expected_guest_state_hash_ = expected.final_guest_state_hash();
+    expected_observed_coverage_ = expected.observed_coverage();
+    expected_event_counts_ = expected.event_counts();
+}
+
+void DeterministicSystemReplayDigest::observe(SystemReplayEvent event) {
+    if (finished_) {
+        throw std::logic_error(
+            "Abgeschlossener Systemreplay-Digest kann nicht fortgesetzt werden.");
+    }
+    const auto event_index = observed_.event_count();
+    if (event_index >= expected_event_count_) {
+        throw SystemReplayMismatch(mismatch_index(event_index), "zusaetzliches Ereignis");
+    }
+    observed_.record(std::move(event));
+    if (event_index < expected_witnesses_.size() &&
+        observed_.events().back() != expected_witnesses_[event_index]) {
+        throw SystemReplayMismatch(
+            mismatch_index(event_index),
+            "Inhalt oder Reihenfolge im gespeicherten Digest-Witness unterschiedlich");
+    }
+}
+
+void DeterministicSystemReplayDigest::finish(
+    const std::uint64_t final_guest_state_hash) {
+    if (finished_) {
+        throw std::logic_error("Systemreplay-Digest wurde bereits abgeschlossen.");
+    }
+    if (observed_.event_count() != expected_event_count_) {
+        throw SystemReplayMismatch(mismatch_index(observed_.event_count()),
+                                   "erwartetes Ereignis fehlt");
+    }
+    observed_.seal(final_guest_state_hash);
+    if (observed_.ordering_digest() != expected_ordering_digest_ ||
+        observed_.observed_coverage() != expected_observed_coverage_ ||
+        observed_.event_counts() != expected_event_counts_) {
+        throw SystemReplayMismatch(
+            mismatch_index(observed_.event_count()),
+            "Digest, Coverage oder Ereigniszaehler unterschiedlich");
+    }
+    if (final_guest_state_hash != expected_guest_state_hash_) {
+        throw SystemReplayMismatch(mismatch_index(observed_.event_count()),
+                                   "Gastzustandshash unterschiedlich");
+    }
+    finished_ = true;
+}
+
+std::uint64_t DeterministicSystemReplayDigest::position() const noexcept {
+    return observed_.event_count();
+}
+
+bool DeterministicSystemReplayDigest::complete() const noexcept {
     return finished_;
 }
 
@@ -713,6 +847,17 @@ const char* system_replay_profile_name(const SystemReplayProfile profile) noexce
         return "general";
     case SystemReplayProfile::DeterministicV1:
         return "deterministic-v1";
+    }
+    return "unknown";
+}
+
+const char*
+system_replay_storage_mode_name(const SystemReplayStorageMode mode) noexcept {
+    switch (mode) {
+    case SystemReplayStorageMode::ExactEvents:
+        return "exact-events";
+    case SystemReplayStorageMode::DigestStream:
+        return "digest-stream";
     }
     return "unknown";
 }

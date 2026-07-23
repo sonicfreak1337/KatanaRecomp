@@ -38,7 +38,7 @@ namespace katana::runtime {
 struct DreamcastRuntimeState;
 class SystemReplayLog;
 
-inline constexpr std::uint32_t runtime_probe_schema_version = 1u;
+inline constexpr std::uint32_t runtime_probe_schema_version = 2u;
 inline constexpr std::uint64_t runtime_probe_device_schema_version = 2u;
 inline constexpr std::string_view runtime_probe_hash_contract = "fnv1a64-le-v1";
 inline constexpr std::uint32_t runtime_probe_fault_report_version = 1u;
@@ -146,7 +146,11 @@ struct RuntimeProbeSchedulerSnapshot {
 
 struct RuntimeProbeReplaySnapshot {
     std::uint32_t replay_schema_version = 0u;
+    std::uint32_t storage_mode = 0u;
+    std::uint64_t retention_capacity = 0u;
     std::uint64_t event_count = 0u;
+    std::uint64_t retained_event_count = 0u;
+    std::uint64_t summarized_event_count = 0u;
     std::uint64_t dropped_events = 0u;
     std::uint64_t event_hash = 0u;
     std::uint64_t ordering_digest = 0u;
@@ -157,6 +161,7 @@ struct RuntimeProbeReplaySnapshot {
         event_counts{};
     bool coverage_complete = false;
     bool complete = false;
+    bool exact_event_stream = false;
     bool sealed = false;
     std::optional<std::uint64_t> final_guest_state_hash;
 

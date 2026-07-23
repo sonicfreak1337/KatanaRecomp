@@ -167,7 +167,7 @@ und Hosteingabevertraege.
 - [x] `KR-4831` - Generischer Originaldisc-Installer ohne Retaildaten im Portpaket
 - [x] `KR-4911` - Runtimebeobachtung, Replay und Fehlerpakete
 - [x] `KR-4912` - Dynamische Codebereiche, Module und Overlays
-- [ ] `KR-4913` - CPU-/Plattform-Bring-up bis `KR_GUEST_PROGRAM_ENTERED`
+- [x] `KR-4913` - CPU-/Plattform-Bring-up bis `KR_GUEST_PROGRAM_ENTERED`
 - [x] `KR-4915` - Gast-PVR-Pfad bis `KR_FIRST_GUEST_FRAME`
 
 ### Native-Boot-Tasks
@@ -198,8 +198,9 @@ erfuellt. Sie muessen vor der konsolidierten Validierung `KR-4852`
 abgeschlossen sein.
 
 Der Checkboxstand bleibt bewusst taskbezogen: `KR-4831`, `KR-4841`,
-`KR-4842`, `KR-4843` bis `KR-4846`, `KR-4911`, `KR-4912`, `KR-4915` und
-`KR-4850` sind abgeschlossen. `KR-4842` bindet MMU-bewusste lineare Peeks, nicht mutierende
+`KR-4842`, `KR-4843` bis `KR-4846`, `KR-4848`, `KR-4911` bis `KR-4913`,
+`KR-4915` und `KR-4850` sind abgeschlossen. `KR-4842` bindet MMU-bewusste
+lineare Peeks, nicht mutierende
 Geraetesnapshots, statische Wait-Loop-/Guard-Provenienz und den versionierten
 dynamischen Wait-Loop-Trace an eine deterministische Produktprobe. Der
 Diagnose=0/1-A/B-Lauf bestand mit zwei frischen, identisch auf 100.000
@@ -253,17 +254,20 @@ Backend-Interface-ABI 3, Portprojektvertrag 24 und Host-Video-Vertrag 2
 versionierten diesen privaten Portlauf. Er bleibt ausdruecklich historische
 ABI-39-Evidenz und wurde nicht nachtraeglich als ABI-40-Artefakt umgedeutet.
 
-Der aktuelle kumulative Kernvertrag verwendet Runtime-ABI 46, Block-ABI 3,
-Backend-Interface-ABI 3, PlatformServices-ABI 10, Portprojektvertrag 30 und
+Der aktuelle kumulative Kernvertrag verwendet Runtime-ABI 47, Block-ABI 3,
+Backend-Interface-ABI 3, PlatformServices-ABI 10, Portprojektvertrag 31 und
 Host-Video-Vertrag 2.
-Systemreplay v4 begrenzt die Aufzeichnung auf standardmaessig 4.096 und
-hoechstens 65.536 Ereignisse sowie 64 Zeichen pro Ereigniscode. Ein
-von `try_record()` an einem unversiegelten Log abgewiesener Best-effort-
-Aufnahmeversuch zaehlt genau einen Drop; versiegelte Logs bleiben
-unveraendert. Danach darf die unvollstaendige Spur weder versiegelt noch
-abgespielt werden. Intern bleiben alle Werte fuer Hash und exakten Vergleich
-erhalten, waehrend das JSON standardmaessig `code`, `address`, `value`, `detail`, `auxiliary`,
-`event_hash` und `final_guest_state_hash` redigiert.
+Systemreplay v5 trennt `ExactEvents` und `DigestStream`. Der exakte Modus
+behaelt den bisherigen begrenzten Ereignisstrom und markiert eine Saettigung
+als Drop. Der Produktprobe behaelt im Digestmodus 4.096 Praefixzeugen, zaehlt,
+validiert und hasht jedoch den gesamten Strom. Zusammengefasste Ereignisse
+sind daher keine Drops; Coverage, Klassenzahlen, Ordnungsdigest und finaler
+Gastzustand bleiben gebunden. Runtime-Probe-Schema 2 weist Speichermodus,
+Kapazitaet, Gesamt-, behaltene und zusammengefasste Anzahl sowie
+`exact_event_stream` aus. Der ungekeyte FNV-Digest ist deterministische
+Evidenz, keine Authentisierung. Standard-JSON redigiert weiterhin `code`,
+`address`, `value`, `detail`, `auxiliary`, `event_hash` und
+`final_guest_state_hash`.
 Das Profil `deterministic-v1` bindet zusaetzlich alle zwoelf erforderlichen
 Klassen CPU-Safepoint, Scheduler-Callback, akzeptierter Interrupt, Video,
 Audio, Eingabe, MMIO, DMA, Blockdispatch, Gastexception, kontrollierter
@@ -287,6 +291,21 @@ Original-GDI und Tracks blieben unveraendert, beide Replays vollstaendig und
 versiegelt und die Tracezaehler null/null. Damit ist `KR-4911` abgeschlossen
 und `KR-4912` freigegeben. Eine Vollsuite und `KR-4852` wurden nicht
 ausgefuehrt.
+
+`KR-4913` ist mit zwei frischen Diagnose-aus/an-Probes bis jeweils
+356.000.000 Gastzyklen abgeschlossen. Beide Laeufe banden insgesamt je
+137.057.656 Replayereignisse ohne Drop, behielten 4.096 Praefixzeugen und
+lieferten identische normative Felder sowie denselben letzten Checkpoint. Die
+Replays waren vollstaendig und versiegelt, die Artefakte blieben unveraendert;
+zusammen liefen beide Probes 175,3 Sekunden. Ein direkter
+Bestaetigungslauf emittierte `runtime-started` und
+`guest-program-entered` und endete nach 83,9 Sekunden kontrolliert. Fallback,
+Trap und stille Fehler konnten den Erfolg nicht erzeugen. Der frische Port
+umfasst 1.873 Funktionen, 37 Partitionen und null Retailsektoren; die lokale
+Installation umfasst drei Tracks und 521.461 Sektoren, die Original-GDI blieb
+unveraendert. Der Eintritt in BootExecutable ist damit belegt. Der sichtbare
+Stillstand nach dem Sega-Logo bleibt als naechster nativer Spielhotspot in
+`KR-4851` offen.
 
 `KR-4912` schliesst die generische Lebenszeit dynamischer Codebereiche.
 Load, Relocation, Replace und Unload erzeugen monotone Modulinkarnationen;
@@ -480,10 +499,10 @@ KR-4851 und KR-4914
   -> KR-4854
 ```
 
-`KR-4915` und `KR-4850` sind als beobachtete Marker bereits vorgezogen
-erfuellt. Die Reihenfolge bleibt fuer die noch offenen Produkt- und
-Freigabevertraege verbindlich; insbesondere werden `KR-4848`, `KR-4849`,
-Spielboot und das konsolidierte Gate dadurch nicht uebersprungen.
+`KR-4913`, `KR-4915` und `KR-4850` sind als beobachtete Marker erfuellt. Die
+Reihenfolge bleibt fuer die noch offenen Produkt- und Freigabevertraege
+verbindlich; insbesondere werden `KR-4847`, `KR-4849`, der weitere Spielboot
+und das konsolidierte Gate dadurch nicht uebersprungen.
 
 Unabhaengige Aufgaben derselben Stufe duerfen parallel entwickelt werden.
 Waehrend aller noch offenen v0.48-Implementierungsaufgaben einschliesslich

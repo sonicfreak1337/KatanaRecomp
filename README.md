@@ -61,8 +61,8 @@ vorbereitet; der live geladene Dispatch bleibt `RuntimeOnly` und erzeugt keine
 feste CFG-Kante. Snapshotcache und P2-Aliasaufloesung sind gegen imagefremde
 Beweise abgesichert. Lokale AOT-Blockketten tragen die exakte tatsaechliche
 Terminatorquelle und Siteklasse bis zum externen Dispatch weiter. Der aktuelle
-kumulative Stand verwendet Runtime-ABI 46, Block-ABI 3,
-Backend-Interface-ABI 3, PlatformServices-ABI 10, Portprojektvertrag 30 und
+kumulative Stand verwendet Runtime-ABI 47, Block-ABI 3,
+Backend-Interface-ABI 3, PlatformServices-ABI 10, Portprojektvertrag 31 und
 Host-Video-Vertrag 2.
 
 `KR-4912` schliesst die allgemeine Lebenszeit dynamischer Codebereiche:
@@ -81,13 +81,18 @@ Ladetransaktionen und der Registry latenter AOT-Module abgeschlossen. Die
 fokussierten Regressionen sind gruen; ein privater Retaillauf, eine Vollsuite
 und `KR-4852` wurden fuer diesen Abschluss nicht ausgefuehrt.
 
-Systemreplay v4 haelt standardmaessig 4.096 und maximal 65.536 Ereignisse;
-portable Ereigniscodes sind auf 64 Zeichen begrenzt. Ein von `try_record()` an
-einem unversiegelten Log abgewiesener Best-effort-Aufnahmeversuch zaehlt genau
-einen Drop; versiegelte Logs bleiben unveraendert. Eine unvollstaendige Spur
-kann danach weder versiegelt noch abgespielt werden. Intern bleiben Codes,
-Adressen, Werte, numerische Payloads sowie Ereignis- und Endzustandshash exakt
-erhalten. Das JSON redigiert standardmaessig `code`, `address`, `value`,
+Systemreplay v5 trennt `ExactEvents` von `DigestStream`. Der exakte Modus
+behaelt den bisherigen begrenzten Vollstromvertrag; eine Saettigung erzeugt
+einen echten Drop und verhindert Versiegelung und Replay. Der skalierbare
+Produktmodus behaelt standardmaessig 4.096 Praefixzeugen, validiert, zaehlt und
+bindet aber jedes weitere Ereignis in Coverage, Klassenzahlen und den
+geordneten FNV-Digest ein. Solche Ereignisse sind `summarized`, nicht
+`dropped`; die Gesamtzahl darf daher die maximale Zeugenkapazitaet
+ueberschreiten. Runtime-Probe-Schema 2 weist Speichermodus, Kapazitaet,
+Gesamt-, behaltene und zusammengefasste Ereignisse sowie
+`exact_event_stream` aus. Der Digest ist eine deterministische Pruefsumme und
+keine Authentisierung. Portable Ereigniscodes bleiben auf 64 Zeichen
+begrenzt. Das JSON redigiert standardmaessig `code`, `address`, `value`,
 `detail`, `auxiliary`, `event_hash` und `final_guest_state_hash`; exakte
 Ausgabe erfordert ein ausdrueckliches lokales Opt-in.
 Das Profil `deterministic-v1` verlangt vor dem ersten Ereignis alle zwoelf
@@ -202,6 +207,21 @@ Replays vollstaendig und versiegelt und die Tracezaehler null/null. Private
 Fault-v1-Pakete werden ausserhalb des Repositorys atomar und write-once
 veroeffentlicht. `KR-4911` ist abgeschlossen und `KR-4912` freigegeben. Eine
 Vollsuite und `KR-4852` wurden nicht ausgefuehrt.
+
+`KR-4913` ist unter Runtime-ABI 47 und Portprojektvertrag 31 abgeschlossen.
+Zwei frische Diagnose-aus/an-Probes mit je 356.000.000 Gastzyklen liefen in
+zusammen 175,3 Sekunden. Die normativen Felder und der letzte Checkpoint waren
+identisch, beide Replays vollstaendig und versiegelt und die Artefakte
+unveraendert. DigestStream band dabei alle 137.057.656 Ereignisse ohne Drop,
+waehrend 4.096 Praefixzeugen gespeichert blieben. Ein direkter
+Bestaetigungslauf emittierte `runtime-started` und
+`guest-program-entered` und endete nach 83,9 Sekunden kontrolliert; Fallback,
+Trap oder stiller Fehler galten nicht als Erfolg. Der frische Port umfasst
+1.873 Funktionen, 37 Codepartitionen und null Retailsektoren. Die lokale
+Installation umfasst drei Tracks und 521.461 Sektoren; die Original-GDI blieb
+unveraendert. Damit ist der native BootExecutable-Eintritt bewiesen.
+`KR-4851` bleibt dennoch P0: Im normalen sichtbaren Produktlauf folgt nach dem
+Sega-Logo noch kein weiterer Spiel-Fortschritt.
 
 Der vorangegangene optimierte ABI-38-PAL-Port wurde mit zwoelf Jobs in
 140,9 Sekunden

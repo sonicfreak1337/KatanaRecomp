@@ -1,6 +1,7 @@
 #pragma once
 
 #include "katana/runtime/block_table.hpp"
+#include "katana/runtime/cache_control.hpp"
 
 #include <cstdint>
 #include <stdexcept>
@@ -10,6 +11,7 @@ namespace katana::runtime {
 
 enum class AddressTranslationMode : std::uint8_t { NoMmu, Mmu };
 enum class TranslationAccess : std::uint8_t { Instruction, Read, Write };
+enum class InstructionTranslationPath : std::uint8_t { Direct, Mapped, Invalid };
 
 struct TlbMapping {
     std::uint32_t virtual_page = 0u;
@@ -87,6 +89,27 @@ class RuntimeAddressSpace {
     void bump_watchpoints() noexcept;
     [[nodiscard]] TranslationResult
     translate(std::uint32_t address, TranslationAccess access, bool privileged = true) const;
+    // Classifies the architecturally visible instruction-address path without walking the TLB.
+    // Direct covers P1/P2, enabled on-chip RAM and every valid No-MMU address. Mapped is the
+    // only result for which translate(..., Instruction) may need a TLB lookup.
+    [[nodiscard]] InstructionTranslationPath
+    instruction_translation_path(std::uint32_t address,
+                                 bool privileged = true) const noexcept {
+        if (!privileged && address >= 0x80000000u)
+            return InstructionTranslationPath::Invalid;
+        if ((address & 0xFC000000u) == sh4_on_chip_ram_address)
+            return InstructionTranslationPath::Direct;
+
+        const auto segment = address >> 29u;
+        if (segment == 4u || segment == 5u)
+            return privileged ? InstructionTranslationPath::Direct
+                              : InstructionTranslationPath::Invalid;
+        if (segment >= 7u) return InstructionTranslationPath::Invalid;
+        if (mode_ == AddressTranslationMode::NoMmu)
+            return InstructionTranslationPath::Direct;
+        if (segment == 6u && !privileged) return InstructionTranslationPath::Invalid;
+        return InstructionTranslationPath::Mapped;
+    }
     [[nodiscard]] StoreQueuePrefetchTranslation
     translate_store_queue_prefetch(std::uint32_t address, bool privileged = true) const;
     [[nodiscard]] BlockStateGuard guard_for(std::uint32_t virtual_address,

@@ -2,9 +2,10 @@
 
 Abgeschlossener interner Meilenstein: `v0.47.0`
 Phase: `v0.48.0` - Native Disc Boot und erster echter Gastframe
-Aktuelle P0-Arbeit: Auf dem erstmals belegten Gast- und Hostframe den nativen
-IP.BIN-Boot bis BootExecutable und Spielboot fortsetzen. `KR-4915` und
-`KR-4850` sind durch den vorgezogenen Direct-Framebuffer-Pfad erfuellt.
+Aktuelle P0-Arbeit: Der native IP.BIN-Boot erreicht BootExecutable
+nachweislich; `KR-4913`, `KR-4915` und `KR-4850` sind abgeschlossen. Der
+normale sichtbare Produktlauf bleibt nach dem Sega-Logo im nativen Spielpfad
+stehen. Dieser naechste Hotspot gehoert zu `KR-4851`.
 `KR-4847` schliesst jetzt auch Scheduler-Admission-Ueberlaeufe fuer PACKET,
 BIOS-Reads und Disc-Streaming ohne Hostexception, Teilwrite oder klemmendes
 `BSY`; offen bleiben EX 38/39 und laufende G1-Overrun-/Timeout-Grenzen.
@@ -24,10 +25,11 @@ Der versionierte Runtime-Trace liefert dynamische Wertwechselfolgen und echte
 Writer-Provenienz. Der abschliessende Diagnose=0/1-A/B-Produktlauf bestand mit
 zwei frischen Laeufen. Damit ist `KR-4842` abgeschlossen; das damals
 freigegebene `KR-4911` ist inzwischen ebenfalls abgeschlossen. `KR-4912` ist
-ebenfalls abgeschlossen und gibt den verbleibenden `KR-4848`-Teil frei.
+ebenfalls abgeschlossen; `KR-4848` und `KR-4913` sind inzwischen ebenfalls
+geschlossen.
 
-Der aktuelle kumulative Vertrag verwendet Runtime-ABI 46, Block-ABI 3,
-Backend-Interface-ABI 3, PlatformServices-ABI 10, Portprojektvertrag 30 und
+Der aktuelle kumulative Vertrag verwendet Runtime-ABI 47, Block-ABI 3,
+Backend-Interface-ABI 3, PlatformServices-ABI 10, Portprojektvertrag 31 und
 Host-Video-Vertrag 2.
 
 `KR-4912` modelliert Load, Relocation, Replace und Unload als monotone
@@ -111,15 +113,19 @@ unveraendertes Executable und Disc-Pack, vollstaendiges und versiegeltes Replay
 sowie null/null Wait-Loop-Tracezeilen. Eine Vollsuite und `KR-4852` wurden
 nicht ausgefuehrt.
 
-Systemreplay-Schema 4 behaelt die feste Kapazitaet von standardmaessig 4.096
-und hoechstens 65.536 Ereignissen, den 64-Zeichen-Codevertrag sowie die Drop-,
-Versiegelungs- und Standardredaktionsregeln von v3. `deterministic-v1`
-verlangt nun die zwoelf Klassen CPU-Safepoint, Scheduler-Callback,
-akzeptierter Interrupt, Video, Audio, Eingabe, MMIO, DMA, Blockdispatch,
-Gastexception, kontrollierter Fallback und Gastcheckpoint. Eine zentrale
-Observation-Session schreibt Dispatch-Hits und -Misses, Fallbacks, Exceptions
-und streng monotone Checkpoints gegen Gastzyklus und Resetepoche. GD-ROM-,
-DMA-, PVR- und AICA-Schedulerereignisse besitzen stabile Codes.
+Systemreplay-Schema 5 trennt den exakten Ereignisstrom von `DigestStream`.
+Der Produktmodus behaelt standardmaessig 4.096 und maximal 65.536
+Praefixzeugen, validiert, zaehlt und hasht aber auch jedes zusammengefasste
+Ereignis. Zusammenfassung ist kein Drop; ein echter Drop verhindert weiterhin
+Versiegelung und Replay. Runtime-Probe-Schema 2 weist Speichermodus,
+Aufbewahrungskapazitaet, Gesamt-, behaltene und zusammengefasste Ereignisse
+sowie `exact_event_stream` aus. `deterministic-v1` verlangt weiterhin die
+zwoelf Klassen CPU-Safepoint, Scheduler-Callback, akzeptierter Interrupt,
+Video, Audio, Eingabe, MMIO, DMA, Blockdispatch, Gastexception,
+kontrollierter Fallback und Gastcheckpoint. Eine zentrale Observation-Session
+schreibt Dispatch-Hits und -Misses, Fallbacks, Exceptions und streng monotone
+Checkpoints gegen Gastzyklus und Resetepoche. Der ungekeyte FNV-Digest ist
+deterministische Evidenz, keine Authentisierung.
 
 Typisierte Endklassen unterscheiden `budget-reached`, `hang`,
 `guest-exception`, `dispatch-miss` und `failed`. First-Fault und letzter
@@ -134,6 +140,19 @@ normative Felder und letzter Checkpoint waren gleich, Executable, Disc-Pack,
 Original-GDI und Tracks unveraendert, beide Replays vollstaendig und versiegelt
 und die Tracezaehler null/null. Damit ist `KR-4911` abgeschlossen und
 `KR-4912` freigegeben. Eine Vollsuite und `KR-4852` wurden nicht ausgefuehrt.
+
+Der KR-4913-Abschluss verwendet einen vorbereiteten MMU-bewussten
+Gastprogrammbereich und zwei frische Diagnose-aus/an-Probes mit je
+356.000.000 Gastzyklen. Beide Laeufe banden je 137.057.656 Ereignisse ohne
+Drop, behielten 4.096 Praefixzeugen und lieferten identische normative Felder
+sowie denselben letzten Checkpoint. Die Replays waren vollstaendig und
+versiegelt, die Artefakte unveraendert; zusammen liefen die Probes 175,3
+Sekunden. Ein direkter Bestaetigungslauf emittierte `runtime-started` und
+`guest-program-entered` und endete nach 83,9 Sekunden kontrolliert. Fallback,
+Trap oder stiller Fehler galt nicht als Erfolg. Der frische Port umfasst 1.873
+Funktionen, 37 Partitionen und null Retailsektoren; die lokale Installation
+umfasst drei Tracks und 521.461 Sektoren, die Original-GDI blieb
+unveraendert.
 
 Der mit Runtime-ABI 38 eingefuehrte Zwischenblock schliesst zwei allgemeine
 Hardwarevertraege. G1-DMA validiert Schutzfenster, 32-Bit-Ueberlauf und die
@@ -515,8 +534,8 @@ MMIO-Zugriff liegt im aktiven OCRAM; der fruehere Abbruch nach 12 Gastzyklen
 ist damit beseitigt. TA/PVR und ein echter Gastframe bleiben fuer den laengeren
 Folgelauf weiterhin offen.
 
-Runtime-ABI 46, Block-ABI 3, Backend-Interface-ABI 3, BIOS-ABI 9,
-PlatformServices-ABI 10, Portprojektvertrag 30 und Host-Video-Vertrag 2 bilden
+Runtime-ABI 47, Block-ABI 3, Backend-Interface-ABI 3, BIOS-ABI 9,
+PlatformServices-ABI 10, Portprojektvertrag 31 und Host-Video-Vertrag 2 bilden
 den kumulativen v0.48-Stand ab.
 PlatformServices-ABI 10 versioniert zusaetzlich die genaue
 `PREF`-Instruktionsherkunft bis zur Store Queue.

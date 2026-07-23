@@ -384,14 +384,15 @@ Typ: Implementierung | Gate-Vorbereitung | interne Freigabe | Release-Gate
 ## Aktuell empfohlener Einstieg
 
 ```text
-v0.48 P0 - vom belegten IP.BIN-Frame bis BootExecutable und Spielboot fortsetzen
+v0.48 P0 - nativen Spielhotspot nach dem Sega-Logo in KR-4851 aufloesen
 ```
 
 Abgeschlossen und in Roadmap/Taskliste markiert sind `KR-4831`, `KR-4841`,
-`KR-4842`, `KR-4843`, `KR-4844`, `KR-4845`, `KR-4846`, `KR-4911`, `KR-4912`,
-`KR-4915` und `KR-4850`. Der aktuelle Runtimevertrag steht auf Runtime-ABI 45, Block-ABI 3,
+`KR-4842`, `KR-4843`, `KR-4844`, `KR-4845`, `KR-4846`, `KR-4848`,
+`KR-4911`, `KR-4912`, `KR-4913`, `KR-4915` und `KR-4850`. Der aktuelle
+Runtimevertrag steht auf Runtime-ABI 47, Block-ABI 3,
 Backend-Interface-ABI 3, PlatformServices-ABI 10, BIOS-ABI 9,
-Portprojektvertrag 29 und Host-Video-Vertrag 2.
+Portprojektvertrag 31 und Host-Video-Vertrag 2.
 Das verbindliche
 XenonRecomp-artige Produktmodell rekompiliert `IP.BIN` und BootExecutable
 statisch aus SH-4 in nativen PC-Code. Dreamcast-Komponenten bleiben typisierte,
@@ -399,9 +400,8 @@ titelunabhaengige Plattformgrenzen; das Freigabegate verbietet Interpreter/
 JIT, Discplayer und Titelhacks. Der normale Produktport emittiert oder linkt
 keinen SH-4-Interpreter mehr; ein fehlendes AOT-Ziel endet typisiert. Nur
 `diagnostic_partial` enthaelt den begrenzten Diagnoseinterpreter und weist ihn
-im Manifest aus. `KR-4848` bleibt trotzdem offen, bis strukturierte Disc-
-Ladetransaktionen und die vorab erzeugte Registry latenter nativer Module
-vorliegen.
+im Manifest aus. `KR-4848` ist mit strukturierten Disc-Ladetransaktionen und
+der vorab erzeugten Registry latenter nativer Module abgeschlossen.
 
 Der mit ABI 38 eingefuehrte Block bindet G1-DMA-Faults mit Phase, Adresse, exakt
 committed Praefix und Residue an den GD-ROM-CHECK-/Sense- und Requestzustand.
@@ -629,9 +629,31 @@ Produktport bleibt interpreterfrei und beendet unbekannten Code typisiert.
 Die fokussierten Regressionen bestanden 10/10 in 1,27 Sekunden; der
 interpreterfreie Produkt-E2E bestand 1/1 in 229,03 Sekunden. Fuer `KR-4912`
 lief weder ein privater Retaillauf noch eine Vollsuite oder `KR-4852`.
-`KR-4848` bleibt fuer
-strukturierte Disc-Ladetransaktionen und die Registry vorab erzeugter latenter
-AOT-Module offen.
+An diesem damaligen Zwischenstand blieb `KR-4848` fuer strukturierte Disc-
+Ladetransaktionen und die Registry vorab erzeugter latenter AOT-Module offen;
+der Task ist inzwischen abgeschlossen.
+
+Runtime-ABI 47 und Portprojektvertrag 31 schliessen `KR-4913`.
+Systemreplay-Schema 5 trennt `ExactEvents` von `DigestStream`; der
+Produktprobe behaelt 4.096 Praefixzeugen, bindet aber jedes Ereignis an
+Zeitvalidierung, Coverage, Klassenzaehler und den geordneten FNV-Digest.
+Runtime-Probe-Schema 2 weist Gesamt-, behaltene und zusammengefasste
+Ereignisse sowie `exact_event_stream` aus. Der ungekeyte Digest ist
+deterministische Evidenz, keine Authentisierung. Der vorbereitete
+Gastprogrammbereich prueft den MMU-bewussten BootExecutable-Eintritt ohne
+wiederholte Kanonisierung direkter P1-/P2-Pfade.
+
+Zwei frische Diagnose-aus/an-Probes mit je 356.000.000 Gastzyklen banden je
+137.057.656 Ereignisse ohne Drop und waren zusammen nach 175,3 Sekunden
+vollstaendig und versiegelt. Normative Felder und letzter Checkpoint waren
+identisch; die Artefakte blieben unveraendert. Ein direkter
+Bestaetigungslauf emittierte `runtime-started` und
+`guest-program-entered` und endete nach 83,9 Sekunden kontrolliert. Kein
+Fallback, Trap oder stiller Fehler galt als Erfolg. Der frische Port umfasst
+1.873 Funktionen, 37 Partitionen und null Retailsektoren; die lokale
+Installation umfasst drei Tracks und 521.461 Sektoren, die Original-GDI blieb
+unveraendert. Der weitere sichtbare Stillstand nach dem Sega-Logo ist der
+naechste native Hotspot in `KR-4851`.
 
 Der SH-4-DMAC-Channel-2-Pfad verwendet fuer TA den oeffentlichen externen
 Memory-to-Device-Vertrag `RS=2`, 32-Byte-Einheiten, inkrementierende Quelle,

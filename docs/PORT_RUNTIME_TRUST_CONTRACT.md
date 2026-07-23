@@ -2,7 +2,7 @@
 
 Der mit KR-4508 eingefuehrte Portprojektvertrag Version 3 trennt
 Analyseerfolg, Eingabeidentitaet und tatsaechliche Gastausfuehrung. Der
-aktuelle kumulative Stand verwendet Portprojektvertrag 29, Runtime-ABI 45,
+aktuelle kumulative Stand verwendet Portprojektvertrag 31, Runtime-ABI 47,
 PlatformServices-ABI 10, Block-ABI 3 und Backend-Interface-ABI 3. Keine der
 Vertrauensaussagen wird aus der blossen Erzeugung oder dem Start eines
 Hostprozesses abgeleitet.
@@ -231,9 +231,48 @@ Materialisierungsziele erfordern einen ausdruecklichen Detailmodus. Der normale
 Produktport emittiert oder linkt keinen SH-4-Interpreter und beendet
 unkompilierten Code als typisierten Dispatch-/Materialisierungsfehler.
 Die fokussierten Regressionen sind gruen. Fuer diesen Abschluss liefen weder
-ein privater Retaillauf noch eine Vollsuite oder `KR-4852`. `KR-4848` bleibt
-fuer strukturierte Disc-Ladetransaktionen und die Registry vorab erzeugter
-latenter AOT-Module offen.
+ein privater Retaillauf noch eine Vollsuite oder `KR-4852`. An diesem damaligen
+Zwischenstand blieb `KR-4848` fuer strukturierte Disc-Ladetransaktionen und die
+Registry vorab erzeugter latenter AOT-Module offen; der Task ist inzwischen
+abgeschlossen.
+
+## KR-4913-Gastprogrammeintritt und skalierbares Replay
+
+Runtime-ABI 47 und Portprojektvertrag 31 binden den exakten
+BootExecutable-Eintritt an einen vorbereiteten, MMU-bewussten
+`GuestProgramRangeMatcher`. Direkte P1-/P2-Adresspfade koennen ohne
+wiederholte Kanonisierung abgelehnt oder angenommen werden; nur der
+tatsaechlich abgebildete Pfad fragt die aktuelle TLB-Uebersetzung ab. Der
+Checkpoint darf weiterhin nur aus echtem Gastkontrollfluss entstehen.
+
+Systemreplay-Schema 5 trennt den vollstaendig behaltenen Modus `ExactEvents`
+vom skalierbaren `DigestStream`. Die Produktprobe behaelt 4.096
+Praefixereignisse als Zeugen. Jedes spaetere Ereignis wird dennoch auf
+Sequenz, Zeit und Vertrag geprueft, in Coverage und Klassenzaehlern erfasst und
+in den geordneten FNV-Digest aufgenommen. `summarized_event_count` ist deshalb
+kein Drop. Echte Aufnahme- oder Validierungsfehler bleiben Drops und
+verhindern die Versiegelung.
+
+Runtime-Probe-Schema 2 gibt Speichermodus, Aufbewahrungskapazitaet,
+Gesamtzahl, behaltene und zusammengefasste Anzahl sowie
+`exact_event_stream` aus. `DeterministicSystemReplay` akzeptiert weiterhin nur
+einen exakten Einzelereignisstrom. Der getrennte Digest-Verifier prueft
+Zeugenpraefix, Gesamtzahl, Ordnungsdigest, Coverage, Klassenzaehler und finalen
+Gastzustand. Der ungekeyte FNV-Digest ist eine deterministische Pruefsumme,
+keine Authentisierung.
+
+Der redigierte Abschlussnachweis verwendete zwei frische Diagnose-aus/an-
+Probes mit je 356.000.000 Gastzyklen. Alle 137.057.656 Ereignisse wurden ohne
+Drop gebunden, beide Replays waren vollstaendig und versiegelt, normative
+Felder und letzter Checkpoint identisch und die Artefakte unveraendert. Beide
+Laeufe benoetigten zusammen 175,3 Sekunden. Ein direkter Bestaetigungslauf
+emittierte `runtime-started` und `guest-program-entered` und endete nach
+83,9 Sekunden kontrolliert; Fallback, Trap oder stiller Fehler war kein
+Erfolgspfad. Der frische Port enthaelt 1.873 Funktionen, 37 Partitionen und
+null Retailsektoren. Die lokale Installation umfasst drei Tracks und 521.461
+Sektoren; die Original-GDI blieb unveraendert. `KR-4913` ist abgeschlossen.
+Der sichtbare Stillstand nach dem Sega-Logo bleibt als nativer Hotspot in
+`KR-4851` offen.
 
 ## Konsistenzgrenzen
 

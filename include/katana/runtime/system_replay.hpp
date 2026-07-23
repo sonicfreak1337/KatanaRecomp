@@ -14,7 +14,7 @@
 
 namespace katana::runtime {
 
-inline constexpr std::uint32_t system_replay_schema_version = 4u;
+inline constexpr std::uint32_t system_replay_schema_version = 5u;
 inline constexpr std::string_view runtime_probe_checkpoint_line_prefix =
     "KATANA_RUNTIME_PROBE_CHECKPOINT ";
 
@@ -46,6 +46,11 @@ enum class SystemReplayEventKind : std::uint8_t {
 enum class SystemReplayProfile : std::uint8_t {
     General,
     DeterministicV1
+};
+
+enum class SystemReplayStorageMode : std::uint8_t {
+    ExactEvents,
+    DigestStream
 };
 
 enum class SystemReplayCoverage : std::uint32_t {
@@ -107,6 +112,7 @@ struct SystemReplayConfig {
     std::size_t capacity = default_capacity;
     bool serialize_values = false;
     SystemReplayProfile profile = SystemReplayProfile::General;
+    SystemReplayStorageMode storage_mode = SystemReplayStorageMode::ExactEvents;
 };
 
 class SystemReplayLog final {
@@ -120,6 +126,9 @@ class SystemReplayLog final {
     void seal(std::uint64_t final_guest_state_hash);
     [[nodiscard]] bool sealed() const noexcept;
     [[nodiscard]] const std::vector<SystemReplayEvent>& events() const noexcept;
+    [[nodiscard]] std::uint64_t event_count() const noexcept;
+    [[nodiscard]] std::uint64_t summarized_event_count() const noexcept;
+    [[nodiscard]] bool exact_event_stream_available() const noexcept;
     [[nodiscard]] std::uint64_t dropped_events() const noexcept;
     [[nodiscard]] std::uint64_t event_hash() const noexcept;
     [[nodiscard]] std::uint64_t ordering_digest() const noexcept;
@@ -135,6 +144,7 @@ class SystemReplayLog final {
   private:
     SystemReplayConfig config_;
     std::vector<SystemReplayEvent> events_;
+    std::uint64_t event_count_ = 0u;
     std::optional<std::uint64_t> last_guest_cycle_;
     std::optional<std::uint64_t> last_time_epoch_;
     std::optional<std::uint64_t> final_guest_state_hash_;
@@ -168,6 +178,25 @@ class DeterministicSystemReplay final {
     std::vector<SystemReplayEvent> expected_;
     std::uint64_t expected_guest_state_hash_ = 0u;
     std::size_t position_ = 0u;
+    bool finished_ = false;
+};
+
+class DeterministicSystemReplayDigest final {
+  public:
+    explicit DeterministicSystemReplayDigest(const SystemReplayLog& expected);
+    void observe(SystemReplayEvent event);
+    void finish(std::uint64_t final_guest_state_hash);
+    [[nodiscard]] std::uint64_t position() const noexcept;
+    [[nodiscard]] bool complete() const noexcept;
+
+  private:
+    SystemReplayLog observed_;
+    std::vector<SystemReplayEvent> expected_witnesses_;
+    std::uint64_t expected_event_count_ = 0u;
+    std::uint64_t expected_ordering_digest_ = 0u;
+    std::uint64_t expected_guest_state_hash_ = 0u;
+    SystemReplayCoverageMask expected_observed_coverage_ = 0u;
+    SystemReplayEventCounts expected_event_counts_{};
     bool finished_ = false;
 };
 
@@ -217,6 +246,8 @@ system_replay_required_coverage(SystemReplayProfile profile) noexcept;
 [[nodiscard]] SystemReplayCoverageMask
 system_replay_event_coverage(const SystemReplayEvent& event) noexcept;
 [[nodiscard]] const char* system_replay_profile_name(SystemReplayProfile profile) noexcept;
+[[nodiscard]] const char*
+system_replay_storage_mode_name(SystemReplayStorageMode mode) noexcept;
 [[nodiscard]] const char* system_replay_event_kind_name(SystemReplayEventKind kind) noexcept;
 [[nodiscard]] const char*
 system_replay_checkpoint_kind_name(SystemReplayCheckpointKind checkpoint) noexcept;

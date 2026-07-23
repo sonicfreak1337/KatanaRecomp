@@ -4,6 +4,29 @@
 
 ### Geaendert
 
+- KR-4913 ist abgeschlossen. Systemreplay-Schema 5 trennt den exakten
+  Ereignisstrom von einem skalierbaren `DigestStream`: Die Produktprobe behaelt
+  4.096 Praefixzeugen, validiert, zaehlt und hasht aber jedes weitere Ereignis,
+  ohne Zusammenfassungen als Drops umzudeuten. Runtime-Probe-Schema 2 weist
+  Speichermodus, Kapazitaet, Gesamt-, behaltene und zusammengefasste
+  Ereigniszahl sowie die Verfuegbarkeit eines exakten Stroms aus. Der
+  FNV-Ordnungsdigest ist deterministische Evidenz und ausdruecklich keine
+  Authentisierung. Der vorbereitete Gastprogrammbereich prueft den
+  MMU-bewussten BootExecutable-Eintritt ohne wiederholte
+  Bereichskanonisierung. Runtime-ABI 47 und Portprojektvertrag 31 versionieren
+  den Block.
+  Zwei frische Diagnose-aus/an-Probes liefen mit 356.000.000 Gastzyklen in
+  zusammen 175,3 Sekunden: Alle 137.057.656 Replayereignisse wurden ohne Drop
+  gebunden, beide Replays waren vollstaendig und versiegelt, normative Felder
+  und letzter Checkpoint identisch und die Artefakte unveraendert. Ein direkter
+  Bestaetigungslauf emittierte `runtime-started` und
+  `guest-program-entered` und endete nach 83,9 Sekunden kontrolliert. Kein
+  Fallback, Trap oder stiller Fehler wurde als Erfolg gewertet. Der frische
+  Port umfasst 1.873 Funktionen, 37 Partitionen und null Retailsektoren; die
+  lokale Installation umfasst drei Tracks und 521.461 Sektoren, waehrend die
+  Original-GDI unveraendert blieb. `KR-4851` bleibt offen: Der normale
+  Produktlauf erreicht den nativen Spielpfad, kommt sichtbar aber noch nicht
+  ueber das Sega-Logo hinaus.
 - KR-4848 schliesst atomare Disc-Ladetransaktionen und latentes natives AOT.
   BIOS-, PIO-, G1-DMA-, Stream- und Bootstrap-Loads committen RAM, Module,
   Codegenerationen und Blockinvalidierungen gemeinsam. Mehrere Teilreads

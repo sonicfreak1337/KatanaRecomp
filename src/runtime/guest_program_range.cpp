@@ -31,35 +31,36 @@ bool resolve_range(const GuestProgramRange range,
 } // namespace
 
 bool valid_guest_program_range(const GuestProgramRange range) noexcept {
-    std::uint32_t physical_start = 0u;
+    return GuestProgramRangeMatcher(range).valid();
+}
+
+GuestProgramRangeMatcher::GuestProgramRangeMatcher(const GuestProgramRange range) noexcept {
     std::uint64_t physical_end = 0u;
-    return resolve_range(range, physical_start, physical_end);
+    valid_ = resolve_range(range, physical_start_, physical_end);
+    if (valid_)
+        physical_last_instruction_ = static_cast<std::uint32_t>(physical_end - 2u);
+}
+
+bool GuestProgramRangeMatcher::contains_mapped_instruction(
+    const CpuState& cpu,
+    const std::uint32_t instruction_address) const noexcept {
+    try {
+        const auto physical_instruction =
+            cpu.address_space
+                ->translate(instruction_address,
+                            TranslationAccess::Instruction,
+                            cpu.privileged_mode())
+                .physical_address;
+        return contains_physical_instruction(physical_instruction);
+    } catch (const TranslationError&) {
+        return false;
+    }
 }
 
 bool guest_program_range_contains_instruction(const CpuState& cpu,
                                               const std::uint32_t instruction_address,
                                               const GuestProgramRange range) noexcept {
-    if ((instruction_address & 1u) != 0u) return false;
-    std::uint32_t physical_start = 0u;
-    std::uint64_t physical_end = 0u;
-    if (!resolve_range(range, physical_start, physical_end)) return false;
-
-    std::uint32_t physical_instruction = 0u;
-    try {
-        physical_instruction =
-            cpu.address_space
-                ? cpu.address_space
-                      ->translate(instruction_address,
-                                  TranslationAccess::Instruction,
-                                  cpu.privileged_mode())
-                      .physical_address
-                : canonical_physical_address(instruction_address);
-    } catch (const TranslationError&) {
-        return false;
-    }
-
-    return physical_instruction >= physical_start &&
-           static_cast<std::uint64_t>(physical_instruction) + 2u <= physical_end;
+    return GuestProgramRangeMatcher(range).contains_instruction(cpu, instruction_address);
 }
 
 } // namespace katana::runtime

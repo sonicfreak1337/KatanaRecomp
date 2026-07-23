@@ -100,6 +100,15 @@ Identische Validierungssnapshots werden geteilt, budgetiert und nach der
 letzten Herkunft freigegeben. Der Replaypfad beobachtet jede tatsaechliche
 Materialisierung unabhaengig vom Diagnose-Sampling; oeffentliche Berichte
 redigieren Identitaeten und Gastbytes.
+ABI-Version 46 und Portprojektvertrag 30 binden atomare Disc-
+Ladetransaktionen, latente native AOT-Module und den exakten MMU-bewussten
+Gastprogrammbereich an den Produktport.
+ABI-Version 47 und Portprojektvertrag 31 skalieren die deterministische Probe
+mit Systemreplay-Schema 5 und Runtime-Probe-Schema 2. `DigestStream` behaelt
+ein begrenztes Zeugenpraefix, validiert, zaehlt und hasht jedoch jedes
+Ereignis. Der vorbereitete `GuestProgramRangeMatcher` vermeidet auf direkten
+P1-/P2-Pfaden wiederholte Bereichskanonisierung und uebersetzt nur den
+tatsaechlich MMU-abgebildeten Instruktionspfad.
 
 ## CMake
 
@@ -540,16 +549,17 @@ spaetere Plattformkonfiguration.
   `DreamcastSystemBusControl::snapshot()`-Zustaende fuer Produktdiagnostik;
   auch pending Rendercompletions und aktive Channel-2-Transfers bleiben
   unveraendert und werden weder gepumpt noch quittiert
-- deterministische Systemreplays unter Schema 4 mit standardmaessig 4.096 und
-  maximal 65.536 Ereignissen sowie hoechstens 64 Zeichen langen Ereigniscodes;
-  eine Saettigung zaehlt genau einen Drop je abgewiesenem Ereignis und
-  verhindert Versiegelung und Replay. Ereigniswerte bleiben intern exakt,
-  waehrend Standard-JSON Code, Adresse, Wert, numerische Nutzlasten,
-  Ereignishash und Endzustandshash ohne ausdrueckliches lokales Opt-in
-  redigiert. Das Profil `deterministic-v1` bindet zwoelf Pflichtklassen,
-  darunter Blockdispatch, Gastexception, kontrollierter Fallback und
-  Gastcheckpoint, getrennte Ereigniszaehler und einen domain-separierten
-  Ordnungsdigest
+- deterministische Systemreplays unter Schema 5 mit den expliziten Modi
+  `ExactEvents` und `DigestStream`. Die Zeugenkapazitaet betraegt
+  standardmaessig 4.096 und maximal 65.536 Ereignisse; portable Codes bleiben
+  auf 64 Zeichen begrenzt. Nur die Saettigung des exakten Modus ist ein Drop.
+  Der Digestmodus fasst den Reststrom zusammen, validiert und bindet ihn aber
+  weiterhin an Gesamtzahl, Coverage, Ereignisklassen und Ordnungsdigest.
+  Runtime-Probe-Schema 2 macht Gesamt-, behaltene und zusammengefasste Anzahl
+  sowie die Verfuegbarkeit eines exakten Stroms sichtbar. Standard-JSON
+  redigiert Code, Adresse, Wert, numerische Nutzlasten, Ereignishash und
+  Endzustandshash ohne ausdrueckliches lokales Opt-in. Der ungekeyte FNV-Digest
+  ist Reproduzierbarkeitsevidenz und keine Authentisierung
 
 ## Eigenstaendiger Disc-Boot fuer Portanwendungen
 
@@ -606,6 +616,10 @@ bereinigt. Geteilte Validierungsproofs zaehlen nur einmal gegen das
 Speicherbudget; retained, peak und reclaimed Proofbytes werden im terminalen
 Status ausgewiesen. Oeffentliche Ausgaben enthalten weder private
 Modul-/Quellidentitaeten noch Gastbytes.
+Portprojektvertrag 30 bindet atomare Disc-Ladetransaktionen und die Registry
+latenter AOT-Module. Portprojektvertrag 31 aktiviert im deterministischen
+Produktprofil den skalierbaren Digeststrom und den vorbereiteten
+Gastprogrammbereich; der normale Port bleibt interpreterfrei.
 
 Im produktiven Einblock-AOT-Pfad zaehlt `CpuState::retired_guest_instructions`
 jede betretene Gastinstruktion. Schedulerzeit wird nach der ausgefuehrten
@@ -622,8 +636,8 @@ generische C++-Emitter setzt auch bei einem durch Funktionsdiscovery
 nachfolgerlosen Block in jedem Backendmodus `PC` auf die Folgeadresse der
 letzten Gastinstruktion. Die Produktinvariante prueft einen Fallthrough relativ
 zu dieser tatsaechlichen Terminatorquelle und nicht zum Eintritt des
-umgebenden Wrappers. Der kumulative Stand verwendet Runtime-ABI 45, Block-ABI 3,
-Backend-Interface-ABI 3, PlatformServices-ABI 10, Portvertrag 29 und
+umgebenden Wrappers. Der kumulative Stand verwendet Runtime-ABI 47, Block-ABI 3,
+Backend-Interface-ABI 3, PlatformServices-ABI 10, Portvertrag 31 und
 Host-Video-Vertrag 2.
 
 Statische Dispatchregistries werden nicht mehr in eine einzelne

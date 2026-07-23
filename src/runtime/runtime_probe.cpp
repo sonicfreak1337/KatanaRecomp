@@ -757,7 +757,14 @@ RuntimeProbeReplaySnapshot
 capture_runtime_probe_replay(const SystemReplayLog& replay) {
     RuntimeProbeReplaySnapshot snapshot;
     snapshot.replay_schema_version = system_replay_schema_version;
-    snapshot.event_count = static_cast<std::uint64_t>(replay.events().size());
+    snapshot.storage_mode =
+        static_cast<std::uint32_t>(replay.config().storage_mode);
+    snapshot.retention_capacity =
+        static_cast<std::uint64_t>(replay.config().capacity);
+    snapshot.event_count = replay.event_count();
+    snapshot.retained_event_count =
+        static_cast<std::uint64_t>(replay.events().size());
+    snapshot.summarized_event_count = replay.summarized_event_count();
     snapshot.dropped_events = replay.dropped_events();
     snapshot.event_hash = replay.event_hash();
     snapshot.ordering_digest = replay.ordering_digest();
@@ -767,6 +774,7 @@ capture_runtime_probe_replay(const SystemReplayLog& replay) {
     snapshot.event_counts = replay.event_counts();
     snapshot.coverage_complete = replay.coverage_complete();
     snapshot.complete = snapshot.dropped_events == 0u && snapshot.coverage_complete;
+    snapshot.exact_event_stream = replay.exact_event_stream_available();
     snapshot.sealed = replay.sealed();
     if (snapshot.sealed)
         snapshot.final_guest_state_hash = replay.final_guest_state_hash();
@@ -2165,7 +2173,11 @@ hash_runtime_probe_replay(const RuntimeProbeReplaySnapshot& snapshot) noexcept {
     RuntimeProbeFnv1a64LeV1 hash;
     begin_hash(hash, HashDomain::Replay);
     hash.append_u32(snapshot.replay_schema_version);
+    hash.append_u32(snapshot.storage_mode);
+    hash.append_u64(snapshot.retention_capacity);
     hash.append_u64(snapshot.event_count);
+    hash.append_u64(snapshot.retained_event_count);
+    hash.append_u64(snapshot.summarized_event_count);
     hash.append_u64(snapshot.dropped_events);
     hash.append_u64(snapshot.event_hash);
     hash.append_u64(snapshot.ordering_digest);
@@ -2176,6 +2188,7 @@ hash_runtime_probe_replay(const RuntimeProbeReplaySnapshot& snapshot) noexcept {
         hash.append_u64(count);
     hash.append_bool(snapshot.coverage_complete);
     hash.append_bool(snapshot.complete);
+    hash.append_bool(snapshot.exact_event_stream);
     hash.append_bool(snapshot.sealed);
     append_optional(hash, snapshot.final_guest_state_hash);
     return hash.value();
@@ -2251,14 +2264,41 @@ void validate_runtime_probe_deterministic_v1(
     }
     const auto required_replay_coverage =
         system_replay_required_coverage(SystemReplayProfile::DeterministicV1);
+    const auto exact_replay_storage =
+        static_cast<std::uint32_t>(SystemReplayStorageMode::ExactEvents);
+    const auto digest_replay_storage =
+        static_cast<std::uint32_t>(SystemReplayStorageMode::DigestStream);
+    const auto known_replay_storage =
+        replay.storage_mode == exact_replay_storage ||
+        replay.storage_mode == digest_replay_storage;
+    const auto retention_sum_overflows =
+        replay.summarized_event_count >
+        std::numeric_limits<std::uint64_t>::max() -
+            replay.retained_event_count;
+    const auto retention_sum =
+        retention_sum_overflows
+            ? 0u
+            : replay.retained_event_count + replay.summarized_event_count;
     if (replay.replay_schema_version != system_replay_schema_version ||
+        !known_replay_storage ||
+        replay.retention_capacity == 0u ||
+        replay.retention_capacity > SystemReplayConfig::maximum_capacity ||
+        replay.retained_event_count > replay.retention_capacity ||
+        retention_sum_overflows ||
+        retention_sum != replay.event_count ||
+        (replay.summarized_event_count != 0u &&
+         replay.retained_event_count != replay.retention_capacity) ||
+        replay.exact_event_stream !=
+            (replay.summarized_event_count == 0u &&
+             replay.dropped_events == 0u) ||
+        (replay.storage_mode == exact_replay_storage &&
+         replay.summarized_event_count != 0u) ||
         replay.required_coverage != required_replay_coverage ||
         replay.enabled_coverage != required_replay_coverage ||
         !replay.coverage_complete ||
         replay.ordering_digest != replay.event_hash ||
         replay.complete !=
             (replay.dropped_events == 0u && replay.coverage_complete) ||
-        replay.event_count > SystemReplayConfig::maximum_capacity ||
         (replay.observed_coverage & ~replay.enabled_coverage) != 0u ||
         replay.sealed != replay.final_guest_state_hash.has_value()) {
         throw std::invalid_argument(
@@ -2353,9 +2393,21 @@ std::string serialize_runtime_probe_report_json(const RuntimeProbeReport& report
            << ",\"persistent_range_count\":" << report.persistent_range_count
            << ",\"device_count\":" << report.device_count
            << ",\"device_field_count\":" << report.device_field_count
-           << ",\"replay\":{\"event_count\":" << report.replay.event_count
+           << ",\"replay\":{\"storage_mode\":\""
+           << system_replay_storage_mode_name(
+                  static_cast<SystemReplayStorageMode>(
+                      report.replay.storage_mode))
+           << "\",\"retention_capacity\":"
+           << report.replay.retention_capacity
+           << ",\"event_count\":" << report.replay.event_count
+           << ",\"retained_event_count\":"
+           << report.replay.retained_event_count
+           << ",\"summarized_event_count\":"
+           << report.replay.summarized_event_count
            << ",\"dropped_events\":" << report.replay.dropped_events
            << ",\"complete\":" << (report.replay.complete ? "true" : "false")
+           << ",\"exact_event_stream\":"
+           << (report.replay.exact_event_stream ? "true" : "false")
            << ",\"sealed\":" << (report.replay.sealed ? "true" : "false")
            << "},\"hashes\":{\"cpu\":";
     append_hex64(output, report.hashes.cpu);

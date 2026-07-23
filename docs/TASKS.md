@@ -1047,7 +1047,7 @@ AOT erst nach lueckenloser Vollabdeckung und Vollhash; partielle Kandidaten
 bleiben ohne Produktinterpreter typisiert nicht ausfuehrbar. Exportdiscovery,
 Source-Registry, Binder, Materializer, Alias-/MMU-Ranges und atomarer
 Overlayersatz sind synthetisch abgedeckt. Runtime-ABI 46 und
-Portprojektvertrag 30 sind der kumulative Vertrag. Der fokussierte 12-Job-
+Portprojektvertrag 30 versionierten diesen Abschluss. Der fokussierte 12-Job-
 Build sowie 17/17 Regressionen sind gruen. Ein privater Lauf, die Vollsuite
 und `KR-4852` wurden nicht ausgefuehrt.
 
@@ -1338,7 +1338,7 @@ Akzeptanz:
 - unkompilierte ausfuehrbare Bytes koennen nicht still ausgefuehrt werden
 - private Modulinhalte bleiben ausserhalb von Repository und Berichten
 
-### [ ] KR-4913 - CPU-/Plattform-Bring-up bis `KR_GUEST_PROGRAM_ENTERED`
+### [x] KR-4913 - CPU-/Plattform-Bring-up bis `KR_GUEST_PROGRAM_ENTERED`
 
 Abhaengigkeiten: KR-4848, KR-4912
 Meilenstein: v0.48
@@ -1359,6 +1359,37 @@ Akzeptanz:
 - kein Fallback, Trap oder stiller Fehler wird als Erfolg ausgegeben
 - deterministische Kernmetriken stimmen ueberein
 - Probe und Bericht enthalten keine Spielbytes oder privaten Adressen
+
+Abgeschlossen: 2026-07-23. Der vorbereitete
+`GuestProgramRangeMatcher` kanonisiert den erwarteten physischen
+BootExecutable-Bereich einmal und trennt direkte, MMU-abgebildete und
+ungueltige Instruktionspfade. P1-/P2-Misses bleiben billig; nur der
+tatsaechlich abgebildete Pfad uebersetzt ueber die aktive Gast-MMU.
+
+Systemreplay-Schema 5 fuehrt dafuer `ExactEvents` und `DigestStream` als
+explizite Speichermodi. Der Produktprobe behaelt im Digestmodus 4.096
+Praefixzeugen, bindet aber jedes Ereignis an monotone Zeitvalidierung,
+Coverage, Klassenzaehler und den geordneten FNV-Digest. Zusammengefasste
+Ereignisse sind keine Drops. Runtime-Probe-Schema 2 weist Speichermodus,
+Kapazitaet, Gesamt-, behaltene und zusammengefasste Anzahl sowie
+`exact_event_stream` aus. Ein exakter Replay lehnt einen Digeststrom ab; der
+typisierte Digest-Replay prueft Zeugenpraefix, Gesamtzahl, Digest, Coverage,
+Klassenzaehler und finalen Gastzustand. Der ungekeyte FNV-Digest ist nur
+deterministische Evidenz und keine Authentisierung. Runtime-ABI 47 und
+Portprojektvertrag 31 versionieren den Abschluss.
+
+Zwei frische Diagnose-aus/an-Probes mit je 356.000.000 Gastzyklen liefen
+zusammen 175,3 Sekunden. Alle 137.057.656 Ereignisse wurden ohne Drop
+gebunden, jeweils 4.096 Zeugen behalten, beide Replays vollstaendig und
+versiegelt und normative Felder sowie letzter Checkpoint identisch. Die
+Artefakte blieben unveraendert. Ein direkter Bestaetigungslauf emittierte
+`runtime-started` und `guest-program-entered` und endete nach 83,9 Sekunden
+kontrolliert; Fallback, Trap oder stiller Fehler galt nicht als Erfolg. Der
+frische Port umfasst 1.873 Funktionen, 37 Partitionen und null Retailsektoren.
+Die lokale Installation umfasst drei Tracks und 521.461 Sektoren; die
+Original-GDI blieb unveraendert. `KR-4851` bleibt offen, weil der normale
+sichtbare Produktlauf nach dem Sega-Logo noch keinen weiteren
+Spiel-Fortschritt zeigt.
 
 ### [x] KR-4915 - Gast-PVR-Pfad bis `KR_FIRST_GUEST_FRAME`
 

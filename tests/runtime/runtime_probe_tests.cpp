@@ -612,7 +612,16 @@ int main() {
     replay_log.seal(0x1020304050607080ull);
     const auto replay_snapshot = capture_runtime_probe_replay(replay_log);
     require(replay_snapshot.replay_schema_version == system_replay_schema_version &&
-                replay_snapshot.event_count == 1u && replay_snapshot.dropped_events == 0u &&
+                replay_snapshot.storage_mode ==
+                    static_cast<std::uint32_t>(
+                        SystemReplayStorageMode::ExactEvents) &&
+                replay_snapshot.retention_capacity ==
+                    SystemReplayConfig::default_capacity &&
+                replay_snapshot.event_count == 1u &&
+                replay_snapshot.retained_event_count == 1u &&
+                replay_snapshot.summarized_event_count == 0u &&
+                replay_snapshot.exact_event_stream &&
+                replay_snapshot.dropped_events == 0u &&
                 replay_snapshot.event_hash == replay_snapshot.ordering_digest &&
                 replay_snapshot.coverage_complete &&
                 replay_snapshot.complete && replay_snapshot.sealed &&
@@ -695,20 +704,23 @@ int main() {
             "Doppelte Geraetefeld-IDs werden nicht abgelehnt.");
 
     SystemReplayLog product_replay(
-        {SystemReplayConfig::default_capacity,
+        {8u,
          false,
-         SystemReplayProfile::DeterministicV1});
+         SystemReplayProfile::DeterministicV1,
+         SystemReplayStorageMode::DigestStream});
     product_replay.enable_coverage(product_replay.required_coverage());
-    product_replay.record({0u,
-                           3u,
-                           SystemReplayEventKind::Timer,
-                           "profile-timer",
-                           std::nullopt,
-                           std::nullopt,
-                           1u,
-                           2u,
-                           false,
-                           0u});
+    for (std::uint64_t index = 0u; index < 100'000u; ++index) {
+        product_replay.record({0u,
+                               index + 3u,
+                               SystemReplayEventKind::Timer,
+                               "profile-timer",
+                               std::nullopt,
+                               std::nullopt,
+                               index,
+                               index + 1u,
+                               false,
+                               0u});
+    }
     const auto unsealed_product_replay =
         capture_runtime_probe_replay(product_replay);
     require(throws<std::invalid_argument>([&] {
@@ -859,6 +871,42 @@ int main() {
         full_device_hash);
     product_replay.seal(product_guest_state_hash);
     const auto bound_replay = capture_runtime_probe_replay(product_replay);
+    require(bound_replay.event_count == 100'000u &&
+                bound_replay.retained_event_count == 8u &&
+                bound_replay.summarized_event_count == 99'992u &&
+                !bound_replay.exact_event_stream &&
+                bound_replay.dropped_events == 0u,
+            "Runtime-Probe-Snapshot verwechselt Digest-Zusammenfassung mit Drops "
+            "oder einem exakten Ereignisstrom.");
+    const auto replay_contract_rejects = [&](const RuntimeProbeReplaySnapshot& replay) {
+        return throws<std::invalid_argument>([&] {
+            validate_runtime_probe_deterministic_v1(
+                scheduler_snapshot,
+                full_memory,
+                full_persistent,
+                full_devices,
+                replay);
+        });
+    };
+    auto false_exact_replay = bound_replay;
+    false_exact_replay.storage_mode =
+        static_cast<std::uint32_t>(SystemReplayStorageMode::ExactEvents);
+    require(replay_contract_rejects(false_exact_replay),
+            "Zusammengefasste Ereignisse werden als exakter Replaystrom akzeptiert.");
+    auto false_complete_replay = bound_replay;
+    false_complete_replay.dropped_events = 1u;
+    require(replay_contract_rejects(false_complete_replay),
+            "Ein echter Ereignisverlust bleibt als vollstaendiger Replay markierbar.");
+    auto inconsistent_summary = bound_replay;
+    --inconsistent_summary.summarized_event_count;
+    require(replay_contract_rejects(inconsistent_summary),
+            "Ein widerspruechlicher Digest-Gesamtzaehler bleibt validierbar.");
+    auto impossible_partial_retention = bound_replay;
+    impossible_partial_retention.retained_event_count = 1u;
+    impossible_partial_retention.summarized_event_count =
+        impossible_partial_retention.event_count - 1u;
+    require(replay_contract_rejects(impossible_partial_retention),
+            "Digest-Zusammenfassung vor vollstaendiger Retention bleibt validierbar.");
     auto report = make_runtime_probe_report(
         cpu_snapshot,
         scheduler_snapshot,
@@ -910,6 +958,14 @@ int main() {
                     std::string::npos &&
                 json.find("\"diagnostics_enabled\":true") != std::string::npos &&
                 json.find("\"guest_cycle_budget\":500") != std::string::npos &&
+                json.find("\"storage_mode\":\"digest-stream\"") !=
+                    std::string::npos &&
+                json.find("\"event_count\":100000") != std::string::npos &&
+                json.find("\"retained_event_count\":8") != std::string::npos &&
+                json.find("\"summarized_event_count\":99992") !=
+                    std::string::npos &&
+                json.find("\"exact_event_stream\":false") !=
+                    std::string::npos &&
                 json.find("\"persistent\":\"") != std::string::npos &&
                 json.find("\"guest_state\":\"") != std::string::npos &&
                 json.find("\"event_hash\"") == std::string::npos &&

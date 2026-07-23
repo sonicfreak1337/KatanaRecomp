@@ -97,6 +97,17 @@ TranslationResult RuntimeAddressSpace::translate(const std::uint32_t address,
                                                  const bool privileged) const {
     const auto read_cause = access == TranslationAccess::Write ? ExceptionCause::AddressErrorWrite
                                                                : ExceptionCause::AddressErrorRead;
+    if (access == TranslationAccess::Instruction) {
+        switch (instruction_translation_path(address, privileged)) {
+        case InstructionTranslationPath::Direct:
+            return {address, canonical_physical_address(address), mmu_generation_, true};
+        case InstructionTranslationPath::Mapped:
+            return translate_mapped(address, access, privileged);
+        case InstructionTranslationPath::Invalid:
+            throw TranslationError(access, address, read_cause);
+        }
+    }
+
     if (!privileged && address >= 0x80000000u)
         throw TranslationError(access, address, read_cause);
 
@@ -109,8 +120,7 @@ TranslationResult RuntimeAddressSpace::translate(const std::uint32_t address,
         return {address, canonical_physical_address(address), mmu_generation_, true};
     }
     if (segment >= 7u) {
-        if (!privileged || access == TranslationAccess::Instruction)
-            throw TranslationError(access, address, read_cause);
+        if (!privileged) throw TranslationError(access, address, read_cause);
         return {address, address, mmu_generation_, true};
     }
     if (mode_ == AddressTranslationMode::NoMmu) {

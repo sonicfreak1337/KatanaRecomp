@@ -112,16 +112,31 @@ informationsarmen generischen `failed`-Schritts.
 
 ## Systemreplay
 
-`katana-system-replay` verwendet `replay_version=2`. Die konfigurierbare
-Kapazitaet betraegt standardmaessig 4.096 und maximal 65.536 Ereignisse; ein
-portabler Ereigniscode ist auf 64 Zeichen begrenzt. `record()` markiert einen
-Kapazitaetsueberlauf genau einmal. Ein von `try_record()` an einem
-unversiegelten Log abgewiesener Best-effort-Aufnahmeversuch erhoeht den
-Dropzaehler ebenfalls genau einmal; ein versiegelter Log bleibt unveraendert.
-Ein Log mit Drop darf weder versiegelt noch von `DeterministicSystemReplay`
-abgespielt werden; dasselbe gilt fuer einen unversiegelten Log.
+`katana-system-replay` verwendet `replay_version=5` und weist den
+`storage_mode` explizit als `exact-events` oder `digest-stream` aus.
+`event_count`, `retained_event_count`, `summarized_event_count` und
+`exact_event_stream` trennen Gesamtstrom, gespeicherte Zeugen und
+Zusammenfassung. Die konfigurierbare Aufbewahrungskapazitaet betraegt
+standardmaessig 4.096 und maximal 65.536 Ereigniszeugen; ein portabler
+Ereigniscode ist auf 64 Zeichen begrenzt.
 
-Der interne Ereignisvergleich und seine Hashes bleiben bytegenau. Im
+Im exakten Modus markiert `record()` einen Kapazitaetsueberlauf genau einmal
+als Drop. Ein von `try_record()` an einem unversiegelten Log abgewiesener
+Best-effort-Aufnahmeversuch erhoeht den Dropzaehler ebenfalls genau einmal; ein
+versiegelter Log bleibt unveraendert. Ein Log mit Drop darf weder versiegelt
+noch abgespielt werden. Im Digestmodus sind Ereignisse nach dem Zeugenpraefix
+dagegen `summarized`, nicht `dropped`: Sie fliessen weiter in Sequenzpruefung,
+Coverage, Klassenzaehler und den geordneten FNV-Digest ein. Der ungekeyte
+Digest dient der deterministischen Reproduzierbarkeit und nicht der
+Authentisierung.
+
+`katana.runtime-probe` verwendet Runtime-Probe-Schema 2. Sein Replayobjekt
+ergaenzt `retention_capacity` und dieselben Gesamt-, Behalte-,
+Zusammenfassungs- und Exaktheitsfelder. Ein als vollstaendig ausgegebener
+Digeststrom muss dropfrei und coverage-vollstaendig sein; er behauptet bei
+zusammengefassten Ereignissen nicht `exact_event_stream=true`.
+
+Der exakte Ereignisvergleich und die kanonischen Hashes bleiben bytegenau. Im
 Standardmodus `serialize_values=false` werden dagegen `code`, `address`,
 `value`, `detail`, `auxiliary`, `event_hash` und
 `final_guest_state_hash` als `null` ausgegeben. Die Flags

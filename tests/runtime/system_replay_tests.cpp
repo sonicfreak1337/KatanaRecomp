@@ -239,6 +239,7 @@ int main() {
     bounded.record(event(SystemReplayEventKind::Timer, 2u, "bounded-second"));
     require(!bounded.try_record(event(SystemReplayEventKind::Video, 3u, "bounded-third")) &&
                 bounded.events().size() == 2u && bounded.dropped_events() == 1u &&
+                !bounded.exact_event_stream_available() &&
                 bounded.config().capacity == 2u && !bounded.config().serialize_values,
             "Systemreplay ueberschreitet seine Kapazitaet oder verliert Drop-/Konfigevidenz.");
     const auto bounded_json = bounded.serialize_json();
@@ -446,6 +447,15 @@ int main() {
                 {8u, false, static_cast<SystemReplayProfile>(0xFFu)}));
         },
         "Unbekanntes Systemreplay-Profil wurde akzeptiert.");
+    require_failure<std::invalid_argument>(
+        [] {
+            static_cast<void>(SystemReplayLog(
+                {8u,
+                 false,
+                 SystemReplayProfile::General,
+                 static_cast<SystemReplayStorageMode>(0xFFu)}));
+        },
+        "Unbekannter Systemreplay-Speichermodus wurde akzeptiert.");
     SystemReplayLog unknown_event_kind;
     auto unknown_event =
         event(static_cast<SystemReplayEventKind>(0xFFu), 1u, "unknown-event-kind");
@@ -560,6 +570,122 @@ int main() {
                 high_volume.events() == high_volume_duplicate.events(),
             "100.000 Dispatch-/Fallback-/Exceptionbeobachtungen saettigen den begrenzten "
             "Replay oder werden nicht deterministisch potenzbasiert verdichtet.");
+
+    constexpr std::uint64_t long_replay_event_count = 100'000u;
+    const auto long_replay_event = [](const std::uint64_t index) {
+        return event(SystemReplayEventKind::CpuSafepoint,
+                     index,
+                     "long-product-safepoint",
+                     index * 3u + 1u);
+    };
+    const auto make_long_digest = [&] {
+        SystemReplayLog digest(
+            {8u,
+             false,
+             SystemReplayProfile::DeterministicV1,
+             SystemReplayStorageMode::DigestStream});
+        digest.enable_coverage(digest.required_coverage());
+        for (std::uint64_t index = 0u; index < long_replay_event_count; ++index)
+            digest.record(long_replay_event(index));
+        digest.seal(0xD16E57u);
+        return digest;
+    };
+    const auto long_digest = make_long_digest();
+    const auto long_digest_duplicate = make_long_digest();
+    require(long_digest.event_count() == long_replay_event_count &&
+                long_digest.events().size() == 8u &&
+                long_digest.summarized_event_count() ==
+                    long_replay_event_count - 8u &&
+                !long_digest.exact_event_stream_available() &&
+                long_digest.dropped_events() == 0u && long_digest.sealed() &&
+                long_digest.ordering_digest() ==
+                    long_digest_duplicate.ordering_digest() &&
+                long_digest.event_counts() ==
+                    long_digest_duplicate.event_counts(),
+            "DigestStream verliert lange Produktreplays, waechst ueber die Retention "
+            "hinaus oder ist nicht deterministisch.");
+    const auto long_digest_json = long_digest.serialize_json();
+    require(long_digest_json.find("\"storage_mode\":\"digest-stream\"") !=
+                    std::string::npos &&
+                long_digest_json.find("\"event_count\":100000") !=
+                    std::string::npos &&
+                long_digest_json.find("\"retained_event_count\":8") !=
+                    std::string::npos &&
+                long_digest_json.find("\"summarized_event_count\":99992") !=
+                    std::string::npos &&
+                long_digest_json.find("\"exact_event_stream\":false") !=
+                    std::string::npos &&
+                long_digest_json.find("\"dropped_events\":0") !=
+                    std::string::npos,
+            "DigestStream weist Gesamtzahl, Retention und Zusammenfassung nicht "
+            "explizit aus.");
+    require_failure<std::invalid_argument>(
+        [&] { static_cast<void>(DeterministicSystemReplay(long_digest)); },
+        "Exakter Replay akzeptiert faelschlich einen DigestStream.");
+    require_failure<std::invalid_argument>(
+        [&] { static_cast<void>(DeterministicSystemReplayDigest(frame_log(1u))); },
+        "Digest-Replay akzeptiert faelschlich eine exakte Aufzeichnung.");
+
+    DeterministicSystemReplayDigest digest_replay(long_digest);
+    for (std::uint64_t index = 0u; index < long_replay_event_count; ++index)
+        digest_replay.observe(long_replay_event(index));
+    digest_replay.finish(0xD16E57u);
+    require(digest_replay.complete() &&
+                digest_replay.position() == long_replay_event_count,
+            "Langer DigestStream wird nicht vollstaendig reproduziert.");
+
+    DeterministicSystemReplayDigest witness_mismatch(long_digest);
+    witness_mismatch.observe(long_replay_event(0u));
+    auto changed_witness = long_replay_event(1u);
+    ++changed_witness.detail;
+    require_failure<SystemReplayMismatch>(
+        [&] { witness_mismatch.observe(std::move(changed_witness)); },
+        "Digest-Witness meldet eine fruehe Inhaltsabweichung nicht sofort.");
+
+    DeterministicSystemReplayDigest summarized_mismatch(long_digest);
+    for (std::uint64_t index = 0u; index < long_replay_event_count; ++index) {
+        auto observed = long_replay_event(index);
+        if (index == 90'000u) ++observed.detail;
+        summarized_mismatch.observe(std::move(observed));
+    }
+    require_failure<SystemReplayMismatch>(
+        [&] { summarized_mismatch.finish(0xD16E57u); },
+        "DigestStream akzeptiert eine Abweichung ausserhalb des Witness-Praefix.");
+
+    DeterministicSystemReplayDigest missing_digest_event(long_digest);
+    for (std::uint64_t index = 0u; index + 1u < long_replay_event_count; ++index)
+        missing_digest_event.observe(long_replay_event(index));
+    require_failure<SystemReplayMismatch>(
+        [&] { missing_digest_event.finish(0xD16E57u); },
+        "DigestStream akzeptiert ein fehlendes Ereignis.");
+
+    DeterministicSystemReplayDigest extra_digest_event(long_digest);
+    for (std::uint64_t index = 0u; index < long_replay_event_count; ++index)
+        extra_digest_event.observe(long_replay_event(index));
+    require_failure<SystemReplayMismatch>(
+        [&] { extra_digest_event.observe(long_replay_event(long_replay_event_count)); },
+        "DigestStream akzeptiert ein zusaetzliches Ereignis.");
+
+    DeterministicSystemReplayDigest wrong_digest_state(long_digest);
+    for (std::uint64_t index = 0u; index < long_replay_event_count; ++index)
+        wrong_digest_state.observe(long_replay_event(index));
+    require_failure<SystemReplayMismatch>(
+        [&] { wrong_digest_state.finish(0xBAD57A7Eu); },
+        "DigestStream akzeptiert einen falschen Gastendzustand.");
+
+    SystemReplayLog invalid_digest(
+        {8u,
+         false,
+         SystemReplayProfile::General,
+         SystemReplayStorageMode::DigestStream});
+    require(!invalid_digest.try_record(
+                event(static_cast<SystemReplayEventKind>(0xFFu), 1u, "invalid")) &&
+                invalid_digest.dropped_events() == 1u &&
+                !invalid_digest.exact_event_stream_available(),
+            "DigestStream weist einen echten Aufnahmefehler nicht als Drop aus.");
+    require_failure<std::runtime_error>(
+        [&] { invalid_digest.seal(0u); },
+        "DigestStream mit echtem Aufnahmefehler bleibt versiegelbar.");
 
     require(std::string(system_replay_scheduler_event_code(SchedulerEventKind::DiscRead)) ==
                     "gdrom-disc-read" &&

@@ -1898,9 +1898,14 @@ function Read-RuntimeProbeLine {
     )
     Assert-ExactFields $probe $rootFields @() 'invalid-runtime-probe-contract'
     Assert-ExactFields $probe.replay @(
+        'storage_mode',
+        'retention_capacity',
         'event_count',
+        'retained_event_count',
+        'summarized_event_count',
         'dropped_events',
         'complete',
+        'exact_event_stream',
         'sealed'
     ) @() 'invalid-runtime-probe-contract'
     $hashFields = @(
@@ -1918,7 +1923,7 @@ function Read-RuntimeProbeLine {
     if ($probe.schema -isnot [string] -or
         [string]$probe.schema -cne 'katana.runtime-probe' -or
         -not (Test-IntegralJsonNumber $probe.probe_version) -or
-        [decimal]$probe.probe_version -ne 1 -or
+        [decimal]$probe.probe_version -ne 2 -or
         $probe.profile -isnot [string] -or
         [string]$probe.profile -cne $script:ProbeProfile -or
         $probe.hash_contract -isnot [string] -or
@@ -1941,13 +1946,37 @@ function Read-RuntimeProbeLine {
     $persistentRanges = Get-StrictUInt64 $probe.persistent_range_count
     $deviceCount = Get-StrictUInt64 $probe.device_count
     $deviceFields = Get-StrictUInt64 $probe.device_field_count
+    if ($probe.replay.storage_mode -isnot [string] -or
+        [string]$probe.replay.storage_mode -cne 'digest-stream') {
+        Throw-ProbeFailure 'invalid-runtime-probe-contract'
+    }
+    $retentionCapacity = Get-StrictUInt64 $probe.replay.retention_capacity
     $eventCount = Get-StrictUInt64 $probe.replay.event_count
+    $retainedEventCount = Get-StrictUInt64 $probe.replay.retained_event_count
+    $summarizedEventCount = Get-StrictUInt64 $probe.replay.summarized_event_count
     $droppedEvents = Get-StrictUInt64 $probe.replay.dropped_events
+    $retentionSumOverflows =
+        $summarizedEventCount -gt ([uint64]::MaxValue - $retainedEventCount)
+    $retentionSum = if ($retentionSumOverflows) {
+        [uint64]0
+    } else {
+        [uint64]($retainedEventCount + $summarizedEventCount)
+    }
     if ($budget -ne $ExpectedBudget -or
         $cycle -ne $ExpectedBudget -or
+        $retentionCapacity -eq 0 -or
+        $retentionCapacity -gt 65536 -or
+        $retainedEventCount -gt $retentionCapacity -or
+        $retentionSumOverflows -or
+        $retentionSum -ne $eventCount -or
+        ($summarizedEventCount -ne 0 -and
+            $retainedEventCount -ne $retentionCapacity) -or
         $droppedEvents -ne 0 -or
         -not (Test-JsonBoolean $probe.replay.complete) -or
         -not [bool]$probe.replay.complete -or
+        -not (Test-JsonBoolean $probe.replay.exact_event_stream) -or
+        [bool]$probe.replay.exact_event_stream -ne
+            ($summarizedEventCount -eq 0 -and $droppedEvents -eq 0) -or
         -not (Test-JsonBoolean $probe.replay.sealed) -or
         -not [bool]$probe.replay.sealed) {
         Throw-ProbeFailure 'runtime-probe-incomplete'
@@ -1962,7 +1991,7 @@ function Read-RuntimeProbeLine {
     }
     $normative = [ordered]@{
         schema = [string]$probe.schema
-        probe_version = 1
+        probe_version = 2
         profile = [string]$probe.profile
         hash_contract = [string]$probe.hash_contract
         status = [string]$probe.status
@@ -1984,10 +2013,18 @@ function Read-RuntimeProbeLine {
         device_field_count =
             $deviceFields.ToString([Globalization.CultureInfo]::InvariantCulture)
         replay = [ordered]@{
+            storage_mode = 'digest-stream'
+            retention_capacity =
+                $retentionCapacity.ToString([Globalization.CultureInfo]::InvariantCulture)
             event_count =
                 $eventCount.ToString([Globalization.CultureInfo]::InvariantCulture)
+            retained_event_count =
+                $retainedEventCount.ToString([Globalization.CultureInfo]::InvariantCulture)
+            summarized_event_count =
+                $summarizedEventCount.ToString([Globalization.CultureInfo]::InvariantCulture)
             dropped_events = '0'
             complete = $true
+            exact_event_stream = [bool]$probe.replay.exact_event_stream
             sealed = $true
         }
         hashes = $normalizedHashes
@@ -2139,7 +2176,7 @@ function New-SyntheticProbeJson {
     )
     return ([ordered]@{
         schema = 'katana.runtime-probe'
-        probe_version = 1
+        probe_version = 2
         profile = 'deterministic-v1'
         hash_contract = 'fnv1a64-le-v1'
         status = 'complete'
@@ -2155,9 +2192,14 @@ function New-SyntheticProbeJson {
         device_count = 2
         device_field_count = 3
         replay = [ordered]@{
+            storage_mode = 'digest-stream'
+            retention_capacity = 8
             event_count = 4
+            retained_event_count = 4
+            summarized_event_count = 0
             dropped_events = $DroppedEvents
             complete = $DroppedEvents -eq 0
+            exact_event_stream = $DroppedEvents -eq 0
             sealed = $true
         }
         hashes = [ordered]@{
@@ -2556,8 +2598,8 @@ function Invoke-SelfTest {
         ($script:ProbeMarker + (New-SyntheticProbeJson 100 $true)),
         ($script:ProbeMarker + (New-SyntheticProbeJson 100 $false 1)),
         ($script:ProbeMarker + $probeOff.Replace(
-            '"probe_version":1',
-            '"probe_version":1,"probe_version":1'))
+            '"probe_version":2',
+            '"probe_version":2,"probe_version":2'))
     )) {
         if (-not (Test-ThrowsProbeFailure {
             [void](Read-RuntimeProbeLine $invalidProbe '' 100 $false)

@@ -825,9 +825,13 @@ int run_test(const int argc, char* argv[]) {
             trace_serialize != std::string::npos && trace_enable < trace_allocate &&
             trace_allocate < trace_set_sink && trace_clear_sink < trace_serialize &&
             generated_before.at("metadata/port-project.json")
-                    .find("\"contract_version\":30") != std::string::npos &&
+                    .find("\"contract_version\":" +
+                          std::to_string(port_project_contract_version)) !=
+                std::string::npos &&
             generated_before.at("metadata/provenance.json")
-                    .find("\"manifest_version\":30") != std::string::npos,
+                    .find("\"manifest_version\":" +
+                          std::to_string(port_project_contract_version)) !=
+                std::string::npos,
         "Portprodukt bindet den versionierten Wait-Loop-Trace nicht strikt opt-in, "
         "allokationsfrei im Normalpfad und RAII-bereinigt ein.");
     const auto poll_disc_directory = fixture.root / "poll-loop-disc";
@@ -1122,6 +1126,12 @@ int run_test(const int argc, char* argv[]) {
                 "SystemReplayProfile::DeterministicV1",
                 runtime_probe_function) != std::string::npos &&
             generated_main.find(
+                "SystemReplayStorageMode::DigestStream",
+                runtime_probe_function) != std::string::npos &&
+            generated_main.find(
+                "SystemReplayConfig::default_capacity",
+                runtime_probe_function) != std::string::npos &&
+            generated_main.find(
                 "system_replay_mmio_observer(") != std::string::npos &&
             generated_main.find(
                 "SystemReplayEventKind::Dma") != std::string::npos &&
@@ -1181,7 +1191,11 @@ int run_test(const int argc, char* argv[]) {
                 "expected_guest_program_range") !=
                 std::string::npos &&
             generated_main.find(
-                "guest_program_range_contains_instruction(") !=
+                "guest_program_range_matcher_.contains_instruction(") !=
+                std::string::npos &&
+            generated_main.find(
+                "GuestProgramRangeMatcher "
+                "guest_program_range_matcher_{expected_guest_program_range}") !=
                 std::string::npos &&
             generated_main.find(
                 "if (address != " +
