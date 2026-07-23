@@ -124,6 +124,7 @@ void reset_cpu(CpuState& cpu, const ResetState& state) noexcept {
     cpu.q = false;
     cpu.m = false;
     cpu.trap_pending = false;
+    cpu.exception_generation = 0u;
     cpu.last_exception_cause = ExceptionCause::None;
     cpu.exception_in_delay_slot = false;
     cpu.sleeping = false;

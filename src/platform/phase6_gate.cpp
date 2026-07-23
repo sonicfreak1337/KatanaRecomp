@@ -38,6 +38,7 @@ struct ObservableCpuState {
     std::uint32_t expevt;
     std::uint32_t intevt;
     bool trap_pending;
+    std::uint64_t exception_generation;
     runtime::ExceptionCause exception_cause;
     bool exception_in_delay_slot;
     bool sleeping;
@@ -60,6 +61,7 @@ ObservableCpuState observable_state(const runtime::CpuState& cpu) {
             cpu.expevt,
             cpu.intevt,
             cpu.trap_pending,
+            cpu.exception_generation,
             cpu.last_exception_cause,
             cpu.exception_in_delay_slot,
             cpu.sleeping,

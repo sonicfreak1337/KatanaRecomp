@@ -124,6 +124,10 @@ struct CpuState {
     bool q = false;
     bool m = false;
     bool trap_pending = false;
+    // Monotonic host-side edge detector for newly entered SH-4 exceptions. `trap_pending`
+    // remains true for the complete handler lifetime until RTE, so generated code must not use
+    // that level as proof that its own instruction just raised an exception.
+    std::uint64_t exception_generation = 0u;
     ExceptionCause last_exception_cause = ExceptionCause::None;
     bool exception_in_delay_slot = false;
     bool sleeping = false;

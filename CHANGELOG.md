@@ -4,6 +4,24 @@
 
 ### Geaendert
 
+- Der nach dem sichtbaren Sega-Logo belegte `KR-4851`-Hotspot ist als
+  allgemeiner SH-4-Exception-/Codegenfehler geschlossen. `trap_pending`
+  bezeichnet den gesamten Zeitraum vom Exceptioneintritt bis `RTE`; der
+  generierte BSR-/BSRF-/JSR-Pfad hatte diesen Pegel faelschlich als neu im
+  eigenen Delay Slot entstandene Exception behandelt und deshalb Ziel-PC
+  sowie neuen PR verworfen. Eine monotone `exception_generation` trennt jetzt
+  aktive Handler von neuen Exceptionkanten. Delay-Slot-Aufrufe, direkte native
+  Aufrufketten, Port-Blockwrapper und die begrenzte Interpretergrenze verwenden
+  denselben Edge-Vertrag. Probe, Systemreplay, Differentialcheckpoints und
+  Crashbericht binden den steuerflussrelevanten Zustand mit ein.
+  Runtime-ABI 48, Portprojektvertrag 32, Systemreplay-Schema 6,
+  Runtime-Probe-Schema 3 und Crashbericht-Schema 2 versionieren die Aenderung.
+  Elf fokussierte ausfuehrbare Regressionen bestanden 11/11 in 1,55 Sekunden,
+  einschliesslich BSR, BSRF und JSR innerhalb eines bereits aktiven
+  Interrupt-Handlers sowie neu im Delay Slot entstehender Fehler. Eine
+  Vollsuite, `KR-4852` und ein frischer privater Produktlauf wurden fuer diesen
+  Codeabschluss noch nicht ausgefuehrt; der erwartete naechste sichtbare
+  PAL-Marker ist der 50-/60-Hz-Auswahlbildschirm.
 - KR-4913 ist abgeschlossen. Systemreplay-Schema 5 trennt den exakten
   Ereignisstrom von einem skalierbaren `DigestStream`: Die Produktprobe behaelt
   4.096 Praefixzeugen, validiert, zaehlt und hasht aber jedes weitere Ereignis,

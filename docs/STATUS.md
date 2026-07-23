@@ -3,9 +3,11 @@
 Abgeschlossener interner Meilenstein: `v0.47.0`
 Phase: `v0.48.0` - Native Disc Boot und erster echter Gastframe
 Aktuelle P0-Arbeit: Der native IP.BIN-Boot erreicht BootExecutable
-nachweislich; `KR-4913`, `KR-4915` und `KR-4850` sind abgeschlossen. Der
-normale sichtbare Produktlauf bleibt nach dem Sega-Logo im nativen Spielpfad
-stehen. Dieser naechste Hotspot gehoert zu `KR-4851`.
+nachweislich; `KR-4913`, `KR-4915` und `KR-4850` sind abgeschlossen. Der erste
+nach dem Sega-Logo belegte `KR-4851`-Hotspot war ein allgemeiner
+Exception-Edge-Fehler im nativen Aufrufpfad und ist synthetisch geschlossen.
+Der frische Produktnachweis bis zum PAL-50-/60-Hz-Auswahlbildschirm steht noch
+aus.
 `KR-4847` schliesst jetzt auch Scheduler-Admission-Ueberlaeufe fuer PACKET,
 BIOS-Reads und Disc-Streaming ohne Hostexception, Teilwrite oder klemmendes
 `BSY`; offen bleiben EX 38/39 und laufende G1-Overrun-/Timeout-Grenzen.
@@ -28,9 +30,18 @@ freigegebene `KR-4911` ist inzwischen ebenfalls abgeschlossen. `KR-4912` ist
 ebenfalls abgeschlossen; `KR-4848` und `KR-4913` sind inzwischen ebenfalls
 geschlossen.
 
-Der aktuelle kumulative Vertrag verwendet Runtime-ABI 47, Block-ABI 3,
-Backend-Interface-ABI 3, PlatformServices-ABI 10, Portprojektvertrag 31 und
+Der aktuelle kumulative Vertrag verwendet Runtime-ABI 48, Block-ABI 3,
+Backend-Interface-ABI 3, PlatformServices-ABI 10, Portprojektvertrag 32 und
 Host-Video-Vertrag 2.
+
+Runtime-ABI 48 trennt den Handler-Lifetime-Pegel `trap_pending` von einer neu
+entstandenen Exceptionkante. Jeder Exceptioneintritt erhoeht eine monotone
+Generation; `RTE` beendet den Handler, veraendert diese Evidenz aber nicht.
+Generierte Aufrufe, direkte native Aufrufketten, Portwrapper und die begrenzte
+Interpretergrenze brechen deshalb nur bei einem Generationwechsel ab. Der
+Zustand ist in Probe, Replay-Gastzustandshash, Differentialcheckpoints und
+Crashberichten gebunden. Elf fokussierte Regressionen bestanden 11/11; ein
+Vollgate und `KR-4852` liefen nicht.
 
 `KR-4912` modelliert Load, Relocation, Replace und Unload als monotone
 Modulinkarnationen. Byteidentische Multi-Extent-Loads und byteidentische CPU-,
@@ -113,11 +124,12 @@ unveraendertes Executable und Disc-Pack, vollstaendiges und versiegeltes Replay
 sowie null/null Wait-Loop-Tracezeilen. Eine Vollsuite und `KR-4852` wurden
 nicht ausgefuehrt.
 
-Systemreplay-Schema 5 trennt den exakten Ereignisstrom von `DigestStream`.
+Systemreplay-Schema 6 trennt den exakten Ereignisstrom von `DigestStream` und
+bindet die Exceptiongeneration in den finalen Gastzustandshash.
 Der Produktmodus behaelt standardmaessig 4.096 und maximal 65.536
 Praefixzeugen, validiert, zaehlt und hasht aber auch jedes zusammengefasste
 Ereignis. Zusammenfassung ist kein Drop; ein echter Drop verhindert weiterhin
-Versiegelung und Replay. Runtime-Probe-Schema 2 weist Speichermodus,
+Versiegelung und Replay. Runtime-Probe-Schema 3 weist Speichermodus,
 Aufbewahrungskapazitaet, Gesamt-, behaltene und zusammengefasste Ereignisse
 sowie `exact_event_stream` aus. `deterministic-v1` verlangt weiterhin die
 zwoelf Klassen CPU-Safepoint, Scheduler-Callback, akzeptierter Interrupt,
@@ -534,8 +546,8 @@ MMIO-Zugriff liegt im aktiven OCRAM; der fruehere Abbruch nach 12 Gastzyklen
 ist damit beseitigt. TA/PVR und ein echter Gastframe bleiben fuer den laengeren
 Folgelauf weiterhin offen.
 
-Runtime-ABI 47, Block-ABI 3, Backend-Interface-ABI 3, BIOS-ABI 9,
-PlatformServices-ABI 10, Portprojektvertrag 31 und Host-Video-Vertrag 2 bilden
+Runtime-ABI 48, Block-ABI 3, Backend-Interface-ABI 3, BIOS-ABI 9,
+PlatformServices-ABI 10, Portprojektvertrag 32 und Host-Video-Vertrag 2 bilden
 den kumulativen v0.48-Stand ab.
 PlatformServices-ABI 10 versioniert zusaetzlich die genaue
 `PREF`-Instruktionsherkunft bis zur Store Queue.

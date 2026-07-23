@@ -116,6 +116,49 @@ void test_calls_write_pr_before_delay_slot() {
     }
 }
 
+void test_calls_continue_inside_active_exception() {
+    struct Case {
+        const char* name;
+        std::uint32_t owner;
+        GeneratedFunction function;
+        bool pc_relative;
+    };
+    const std::array cases{
+        Case{"BSR", 0x1B00u, katana_generated::fn_00001B00, false},
+        Case{"BSRF", 0x1D00u, katana_generated::fn_00001D00, true},
+        Case{"JSR", 0x1F00u, katana_generated::fn_00001F00, false},
+    };
+
+    for (const auto& test : cases) {
+        katana_generated::CpuState cpu;
+        prepare(cpu, test.owner);
+        katana::runtime::enter_exception(
+            cpu,
+            {ExceptionCause::Interrupt,
+             0x00000320u,
+             katana::runtime::interrupt_vector,
+             0x8C010000u,
+             std::nullopt,
+             true});
+        const auto active_exception_generation = cpu.exception_generation;
+
+        // Execute ordinary handler code while the architectural exception remains active.
+        cpu.pc = test.owner;
+        cpu.r[10] = test.pc_relative ? 0x3000u - (test.owner + 4u) : 0x3000u;
+        cpu.r[12] = 0u;
+        test.function(cpu);
+
+        require(cpu.trap_pending &&
+                    cpu.exception_generation == active_exception_generation &&
+                    cpu.last_exception_cause == ExceptionCause::Interrupt &&
+                    cpu.r[12] == test.owner + 4u && cpu.pr == test.owner + 4u &&
+                    cpu.pc == test.owner + 6u,
+                std::string(test.name) +
+                    " verwechselt eine bereits aktive Exception mit einem neuen "
+                    "Delay-Slot-Fehler.");
+    }
+}
+
 void test_rts_latches_pr_before_delay_slot() {
     katana_generated::CpuState cpu;
     prepare(cpu, 0x1A00u);
@@ -182,6 +225,7 @@ int main() {
     test_nested_exception_propagation();
     test_call_fpu_delay_slot_exception();
     test_calls_write_pr_before_delay_slot();
+    test_calls_continue_inside_active_exception();
     test_rts_latches_pr_before_delay_slot();
     std::cout << "Ausfuehrbare Delay-Slot-Exception-Regression erfolgreich.\n";
     return EXIT_SUCCESS;

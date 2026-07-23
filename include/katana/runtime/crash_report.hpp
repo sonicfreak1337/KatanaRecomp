@@ -10,7 +10,7 @@
 
 namespace katana::runtime {
 
-inline constexpr std::uint32_t crash_report_schema_version = 1u;
+inline constexpr std::uint32_t crash_report_schema_version = 2u;
 
 struct CrashReportContext {
     std::string stop_code;
@@ -44,6 +44,7 @@ struct CrashReport {
     std::uint32_t expevt = 0u;
     std::uint32_t intevt = 0u;
     bool trap_pending = false;
+    std::uint64_t exception_generation = 0u;
     ExceptionCause exception_cause = ExceptionCause::None;
     bool exception_in_delay_slot = false;
 };

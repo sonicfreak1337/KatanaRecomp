@@ -112,7 +112,7 @@ informationsarmen generischen `failed`-Schritts.
 
 ## Systemreplay
 
-`katana-system-replay` verwendet `replay_version=5` und weist den
+`katana-system-replay` verwendet `replay_version=6` und weist den
 `storage_mode` explizit als `exact-events` oder `digest-stream` aus.
 `event_count`, `retained_event_count`, `summarized_event_count` und
 `exact_event_stream` trennen Gesamtstrom, gespeicherte Zeugen und
@@ -128,9 +128,11 @@ noch abgespielt werden. Im Digestmodus sind Ereignisse nach dem Zeugenpraefix
 dagegen `summarized`, nicht `dropped`: Sie fliessen weiter in Sequenzpruefung,
 Coverage, Klassenzaehler und den geordneten FNV-Digest ein. Der ungekeyte
 Digest dient der deterministischen Reproduzierbarkeit und nicht der
-Authentisierung.
+Authentisierung. Schema 6 bindet zusaetzlich die monotone
+Exceptiongeneration in den finalen Gastzustandshash. Sie ist technische
+Steuerflussevidenz und enthaelt weder Gastadressen noch Spieldaten.
 
-`katana.runtime-probe` verwendet Runtime-Probe-Schema 2. Sein Replayobjekt
+`katana.runtime-probe` verwendet Runtime-Probe-Schema 3. Sein Replayobjekt
 ergaenzt `retention_capacity` und dieselben Gesamt-, Behalte-,
 Zusammenfassungs- und Exaktheitsfelder. Ein als vollstaendig ausgegebener
 Digeststrom muss dropfrei und coverage-vollstaendig sein; er behauptet bei

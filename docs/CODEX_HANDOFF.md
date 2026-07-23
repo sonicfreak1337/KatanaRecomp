@@ -384,15 +384,15 @@ Typ: Implementierung | Gate-Vorbereitung | interne Freigabe | Release-Gate
 ## Aktuell empfohlener Einstieg
 
 ```text
-v0.48 P0 - nativen Spielhotspot nach dem Sega-Logo in KR-4851 aufloesen
+v0.48 P0 - frischen Produktnachweis bis zum PAL-50-/60-Hz-Menue fuer KR-4851
 ```
 
 Abgeschlossen und in Roadmap/Taskliste markiert sind `KR-4831`, `KR-4841`,
 `KR-4842`, `KR-4843`, `KR-4844`, `KR-4845`, `KR-4846`, `KR-4848`,
 `KR-4911`, `KR-4912`, `KR-4913`, `KR-4915` und `KR-4850`. Der aktuelle
-Runtimevertrag steht auf Runtime-ABI 47, Block-ABI 3,
+Runtimevertrag steht auf Runtime-ABI 48, Block-ABI 3,
 Backend-Interface-ABI 3, PlatformServices-ABI 10, BIOS-ABI 9,
-Portprojektvertrag 31 und Host-Video-Vertrag 2.
+Portprojektvertrag 32 und Host-Video-Vertrag 2.
 Das verbindliche
 XenonRecomp-artige Produktmodell rekompiliert `IP.BIN` und BootExecutable
 statisch aus SH-4 in nativen PC-Code. Dreamcast-Komponenten bleiben typisierte,
@@ -652,8 +652,13 @@ Bestaetigungslauf emittierte `runtime-started` und
 Fallback, Trap oder stiller Fehler galt als Erfolg. Der frische Port umfasst
 1.873 Funktionen, 37 Partitionen und null Retailsektoren; die lokale
 Installation umfasst drei Tracks und 521.461 Sektoren, die Original-GDI blieb
-unveraendert. Der weitere sichtbare Stillstand nach dem Sega-Logo ist der
-naechste native Hotspot in `KR-4851`.
+unveraendert. Die anschliessende genaue Spur des Stillstands nach dem
+Sega-Logo belegte einen Level-/Edge-Fehler: Ein bereits aktiver
+Exceptionhandler wurde als neue Delay-Slot-Exception gewertet. Runtime-ABI 48
+und Portprojektvertrag 32 fuehren eine monotone Exceptiongeneration fuer
+Emitter, Portwrapper und Diagnosegrenze ein; 11/11 fokussierte Regressionen
+sind gruen. Der frische PAL-Produktnachweis bis zum 50-/60-Hz-Menue bleibt in
+`KR-4851` offen.
 
 Der SH-4-DMAC-Channel-2-Pfad verwendet fuer TA den oeffentlichen externen
 Memory-to-Device-Vertrag `RS=2`, 32-Byte-Einheiten, inkrementierende Quelle,

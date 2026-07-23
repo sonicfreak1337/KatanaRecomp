@@ -1198,6 +1198,17 @@ P1-/P2-Blockchaining endete nach 6,0 Sekunden. Das ist ein Hotpathnachweis, kein
 Frame-Gate. `KR-4850` ist inzwischen erfuellt; der Task bleibt fuer den
 vollstaendigen Boot-/Frame-Hotpath und den Fastpath-/Referenzvergleich offen.
 
+Teilstand 2026-07-23: Die genaue Spur des sichtbaren Stillstands nach dem
+Sega-Logo belegt einen generierten JSR im bereits aktiven Interrupt-Handler.
+Der Handler-Lifetime-Pegel `trap_pending` wurde dabei faelschlich als neu im
+Delay Slot entstandene Exception ausgewertet; Ziel-PC und neuer PR wurden
+deshalb alle zwei Gastinstruktionen verworfen. Eine monotone
+Exceptiongeneration schliesst diesen Level-/Edge-Fehler fuer BSR, BSRF, JSR,
+direkte native Aufrufketten, Portwrapper und die Diagnosegrenze. Elf
+fokussierte Regressionen sind gruen. Der Task bleibt bis zum frischen
+Produktnachweis bis mindestens zum PAL-50-/60-Hz-Auswahlbildschirm und dem
+Fastpath-/Referenzvergleich offen.
+
 ### [ ] KR-4852 - Konsolidierte v0.48-Validierung
 
 Abhaengigkeiten: KR-4831, KR-4841 bis KR-4851, KR-4814, KR-4911, KR-4912,

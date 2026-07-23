@@ -71,6 +71,7 @@ InterpreterResult PreciseInterpreterBoundary::execute(CpuState& cpu,
     }
     ++counts_[request.reason];
     cpu.pc = request.guest_pc;
+    const auto exception_generation_on_entry = cpu.exception_generation;
     bool supported = false;
     auto diagnostic_error = DispatchDiagnosticError::None;
     try {
@@ -81,7 +82,7 @@ InterpreterResult PreciseInterpreterBoundary::execute(CpuState& cpu,
                                : DispatchDiagnosticError::UnmappedMemory;
         enter_memory_exception(cpu, error, request.guest_pc, request.delay_slot_owner);
     }
-    if (!supported && cpu.last_exception_cause == ExceptionCause::None) {
+    if (!supported && cpu.exception_generation == exception_generation_on_entry) {
         diagnostic_error = DispatchDiagnosticError::UnknownCode;
         raise_illegal_instruction(cpu, request.guest_pc, request.delay_slot_owner);
     }
@@ -90,7 +91,7 @@ InterpreterResult PreciseInterpreterBoundary::execute(CpuState& cpu,
         request.delay_slot_owner ? SafepointKind::AfterDelaySlot : SafepointKind::BlockEnd;
     const auto safepoint =
         safepoints_.consume(request.guest_cycles, kind, ExecutionOrigin::Fallback);
-    const bool exception = cpu.last_exception_cause != ExceptionCause::None;
+    const bool exception = cpu.exception_generation != exception_generation_on_entry;
     if (!exception && cpu.pc != request.exit_boundary) {
         diagnose(
             diagnostics_, request, cpu, DispatchDiagnosticError::InvalidBoundary, cpu.pc, false);
@@ -110,7 +111,11 @@ InterpreterResult PreciseInterpreterBoundary::execute(CpuState& cpu,
                                                          ExecutableBlockOrigin::FallbackDecode}));
     }
     diagnose(diagnostics_, request, cpu, diagnostic_error, cpu.pc, exception);
-    return {!exception, exception, cpu.pc, cpu.last_exception_cause, safepoint};
+    return {!exception,
+            exception,
+            cpu.pc,
+            exception ? cpu.last_exception_cause : ExceptionCause::None,
+            safepoint};
 }
 
 std::uint64_t PreciseInterpreterBoundary::count(const std::string& reason) const noexcept {

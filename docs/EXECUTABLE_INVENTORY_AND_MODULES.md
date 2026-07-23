@@ -218,9 +218,9 @@ Manifest als `diagnostic-interpreter` aus. Deaktivierung, unbekannte Quelle,
 Byteabweichung, Budgetende und ungueltiger Block bleiben typisierte Misses.
 `KR-4848` ist mit strukturierten Disc-Ladetransaktionen, dem allgemeinen
 nativen Materializer und vorab erzeugten latenten nativen Modulen
-abgeschlossen. Der aktuelle kumulative Vertrag verwendet Runtime-ABI 47,
+abgeschlossen. Der aktuelle kumulative Vertrag verwendet Runtime-ABI 48,
 Block-ABI 3, Backend-Interface-ABI 3, PlatformServices-ABI 10 und
-Portprojektvertrag 31. Systemreplay-Schema 5 und Runtime-Probe-Schema 2
+Portprojektvertrag 32. Systemreplay-Schema 6 und Runtime-Probe-Schema 3
 skalieren die Produktbeobachtung, ohne den interpreterfreien
 Materialisierungsvertrag zu aendern.
 

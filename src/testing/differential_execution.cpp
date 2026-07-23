@@ -227,6 +227,7 @@ make_runtime_checkpoint(const runtime::CpuState& cpu,
     add(checkpoint, "cpu.flag.q", cpu.q);
     add(checkpoint, "cpu.flag.m", cpu.m);
     add(checkpoint, "cpu.trap_pending", cpu.trap_pending);
+    add(checkpoint, "cpu.exception_generation", cpu.exception_generation);
     add(checkpoint, "cpu.sleeping", cpu.sleeping);
     add(checkpoint, "cpu.prefetch.address", cpu.last_prefetch_address);
     add(checkpoint, "cpu.prefetch.count", cpu.prefetch_count);

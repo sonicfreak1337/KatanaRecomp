@@ -474,6 +474,14 @@ Exceptions und Interrupts am durch VBR bestimmten Handler fort, dispatcht RTE
 zum restaurierten SPC und fuehrt waehrend SLEEP erst nach einem akzeptierten
 Interrupt wieder Gastcode aus.
 
+Runtime-ABI 48 ergaenzt dafuer `exception_generation` als monotonen
+Exception-Edge-Zaehler. Jeder Eintritt, einschliesslich TLB-Multiple-Hit,
+erhoeht ihn; `RTE` loescht den Handler-Lifetime-Pegel, setzt die Generation
+aber nicht zurueck. Generierter BSR-/BSRF-/JSR-Code vergleicht die Generation
+vor und nach seinem Delay Slot beziehungsweise nativen Callee. Ein bereits
+aktiver Handler laeuft dadurch normal weiter, waehrend eine neu entstandene
+Slotexception PR restauriert und exakt propagiert wird.
+
 Der `InterruptController` verwaltet Pending-Quellen nach Quell-ID, Prioritaet
 und Eventcode. Angenommen wird deterministisch der hoechste Level oberhalb von
 `IMASK`; gleich priorisierte Quellen werden nach kleinerer Quell-ID geordnet.
@@ -636,8 +644,8 @@ generische C++-Emitter setzt auch bei einem durch Funktionsdiscovery
 nachfolgerlosen Block in jedem Backendmodus `PC` auf die Folgeadresse der
 letzten Gastinstruktion. Die Produktinvariante prueft einen Fallthrough relativ
 zu dieser tatsaechlichen Terminatorquelle und nicht zum Eintritt des
-umgebenden Wrappers. Der kumulative Stand verwendet Runtime-ABI 47, Block-ABI 3,
-Backend-Interface-ABI 3, PlatformServices-ABI 10, Portvertrag 31 und
+umgebenden Wrappers. Der kumulative Stand verwendet Runtime-ABI 48, Block-ABI 3,
+Backend-Interface-ABI 3, PlatformServices-ABI 10, Portvertrag 32 und
 Host-Video-Vertrag 2.
 
 Statische Dispatchregistries werden nicht mehr in eine einzelne

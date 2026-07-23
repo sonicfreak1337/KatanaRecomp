@@ -38,7 +38,7 @@ namespace katana::runtime {
 struct DreamcastRuntimeState;
 class SystemReplayLog;
 
-inline constexpr std::uint32_t runtime_probe_schema_version = 2u;
+inline constexpr std::uint32_t runtime_probe_schema_version = 3u;
 inline constexpr std::uint64_t runtime_probe_device_schema_version = 2u;
 inline constexpr std::string_view runtime_probe_hash_contract = "fnv1a64-le-v1";
 inline constexpr std::uint32_t runtime_probe_fault_report_version = 1u;
@@ -117,6 +117,7 @@ struct RuntimeProbeCpuSnapshot {
     bool q = false;
     bool m = false;
     bool trap_pending = false;
+    std::uint64_t exception_generation = 0u;
     ExceptionCause last_exception_cause = ExceptionCause::None;
     bool exception_in_delay_slot = false;
     bool sleeping = false;

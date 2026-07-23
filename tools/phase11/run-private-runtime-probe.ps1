@@ -1923,7 +1923,7 @@ function Read-RuntimeProbeLine {
     if ($probe.schema -isnot [string] -or
         [string]$probe.schema -cne 'katana.runtime-probe' -or
         -not (Test-IntegralJsonNumber $probe.probe_version) -or
-        [decimal]$probe.probe_version -ne 2 -or
+        [decimal]$probe.probe_version -ne 3 -or
         $probe.profile -isnot [string] -or
         [string]$probe.profile -cne $script:ProbeProfile -or
         $probe.hash_contract -isnot [string] -or
@@ -1991,7 +1991,7 @@ function Read-RuntimeProbeLine {
     }
     $normative = [ordered]@{
         schema = [string]$probe.schema
-        probe_version = 2
+        probe_version = 3
         profile = [string]$probe.profile
         hash_contract = [string]$probe.hash_contract
         status = [string]$probe.status
@@ -2176,7 +2176,7 @@ function New-SyntheticProbeJson {
     )
     return ([ordered]@{
         schema = 'katana.runtime-probe'
-        probe_version = 2
+        probe_version = 3
         profile = 'deterministic-v1'
         hash_contract = 'fnv1a64-le-v1'
         status = 'complete'
@@ -2598,8 +2598,8 @@ function Invoke-SelfTest {
         ($script:ProbeMarker + (New-SyntheticProbeJson 100 $true)),
         ($script:ProbeMarker + (New-SyntheticProbeJson 100 $false 1)),
         ($script:ProbeMarker + $probeOff.Replace(
-            '"probe_version":2',
-            '"probe_version":2,"probe_version":2'))
+            '"probe_version":3',
+            '"probe_version":3,"probe_version":3'))
     )) {
         if (-not (Test-ThrowsProbeFailure {
             [void](Read-RuntimeProbeLine $invalidProbe '' 100 $false)

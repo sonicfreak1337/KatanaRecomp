@@ -784,6 +784,7 @@ std::uint64_t hash_replay_guest_state(const CpuState& cpu,
                              cpu.last_prefetch_was_store_queue})
         hash_byte(hash, value ? 1u : 0u);
     hash_byte(hash, static_cast<std::uint8_t>(cpu.last_exception_cause));
+    hash_u64(hash, cpu.exception_generation);
     hash_u64(hash, cpu.prefetch_count);
     hash_u64(hash, scheduler_cycle);
     hash_u64(hash, subsystem_hash);

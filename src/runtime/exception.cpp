@@ -75,6 +75,7 @@ ExceptionMetadata exception_metadata(const ExceptionCause cause,
 }
 
 void enter_exception(CpuState& cpu, const ExceptionRequest& request) noexcept {
+    ++cpu.exception_generation;
     const auto metadata = exception_metadata(request.cause, request.event_code);
     const std::uint32_t saved_sr = cpu.read_sr();
     cpu.ssr = saved_sr;
@@ -178,6 +179,7 @@ void enter_memory_exception(CpuState& cpu,
         cpu.pteh = (cpu.pteh & 0x000003FFu) | (error.address() & 0xFFFFFC00u);
 
     if (cause == ExceptionCause::TlbMultipleHit) {
+        ++cpu.exception_generation;
         cpu.tea = error.address();
         cpu.expevt = event_tlb_multiple_hit;
         cpu.vbr = 0u;

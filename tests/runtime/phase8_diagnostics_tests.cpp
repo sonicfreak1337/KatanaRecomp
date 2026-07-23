@@ -60,6 +60,7 @@ int main() {
     cpu.spc = 0x8C020000u;
     cpu.pr = 0x8C010004u;
     cpu.r[3] = 0x12345678u;
+    cpu.exception_generation = 9u;
     cpu.exception_in_delay_slot = true;
     cpu.last_exception_cause = ExceptionCause::AddressErrorRead;
     CrashReportContext crash_context;
@@ -80,6 +81,7 @@ int main() {
                 crash_json.find("\"delay_slot_owner_pc\":\"0x8C020000\"") != std::string::npos &&
                 crash_json.find("\"watchpoint_generation\":3") != std::string::npos &&
                 crash_json.find("\"pending_events\":2") != std::string::npos &&
+                crash_json.find("\"exception_generation\":9") != std::string::npos &&
                 crash_json.find("address-error-read") != std::string::npos,
             "Crashbericht verliert Delay-Slot-Owner, kanonische Adresse oder Laufzeitkontext.");
     auto incomplete = crash_context;

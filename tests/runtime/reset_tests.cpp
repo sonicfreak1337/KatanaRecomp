@@ -26,7 +26,7 @@ bool scalar_state_is_zero(const katana::runtime::CpuState& cpu) {
            cpu.spc == 0u && cpu.sgr == 0u && cpu.dbr == 0u && cpu.tra == 0u && cpu.tea == 0u &&
            cpu.expevt == 0u && cpu.intevt == 0u && cpu.mach == 0u && cpu.macl == 0u &&
            cpu.fpul == 0u && cpu.fpscr == 0u && cpu.read_sr() == 0u && !cpu.t && !cpu.s && !cpu.q &&
-           !cpu.m && !cpu.trap_pending &&
+           !cpu.m && !cpu.trap_pending && cpu.exception_generation == 0u &&
            cpu.last_exception_cause == katana::runtime::ExceptionCause::None &&
            !cpu.exception_in_delay_slot && !cpu.sleeping && cpu.last_prefetch_address == 0u &&
            cpu.prefetch_count == 0u && !cpu.last_prefetch_was_store_queue;
@@ -63,6 +63,7 @@ int main() {
     cpu.fpscr = 0x00040001u;
     cpu.write_sr(0x700083F3u);
     cpu.trap_pending = true;
+    cpu.exception_generation = 17u;
     cpu.last_exception_cause = katana::runtime::ExceptionCause::Trap;
     cpu.exception_in_delay_slot = true;
     cpu.sleeping = true;
@@ -107,6 +108,7 @@ int main() {
     cpu.macl = 11u;
     cpu.fpul = 12u;
     cpu.trap_pending = true;
+    cpu.exception_generation = 23u;
     cpu.last_exception_cause = katana::runtime::ExceptionCause::BusErrorRead;
     cpu.exception_in_delay_slot = true;
     cpu.sleeping = true;
@@ -130,7 +132,7 @@ int main() {
     require(cpu.pr == 0u && cpu.gbr == 0u && cpu.ssr == 0u && cpu.spc == 0u && cpu.sgr == 0u &&
                 cpu.dbr == 0u && cpu.tra == 0u && cpu.tea == 0u && cpu.expevt == 0u &&
                 cpu.intevt == 0u && cpu.mach == 0u && cpu.macl == 0u && cpu.fpul == 0u &&
-                !cpu.trap_pending &&
+                !cpu.trap_pending && cpu.exception_generation == 0u &&
                 cpu.last_exception_cause == katana::runtime::ExceptionCause::None &&
                 !cpu.exception_in_delay_slot && !cpu.sleeping,
             "Der konfigurierte Reset bewahrt unerlaubt alten CPU-Zustand.");

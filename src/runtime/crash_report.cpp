@@ -101,6 +101,7 @@ CrashReport capture_crash_report(const CpuState& cpu, CrashReportContext context
     report.expevt = cpu.expevt;
     report.intevt = cpu.intevt;
     report.trap_pending = cpu.trap_pending;
+    report.exception_generation = cpu.exception_generation;
     report.exception_cause = cpu.last_exception_cause;
     report.exception_in_delay_slot = cpu.exception_in_delay_slot;
     return report;
@@ -130,6 +131,7 @@ std::string serialize_crash_report(const CrashReport& report) {
            << "\",\"tea\":\"" << hex32(report.tea) << "\",\"expevt\":\"" << hex32(report.expevt)
            << "\",\"intevt\":\"" << hex32(report.intevt)
            << "\",\"trap_pending\":" << (report.trap_pending ? "true" : "false")
+           << ",\"exception_generation\":" << report.exception_generation
            << ",\"exception_cause\":\"" << exception_cause_name(report.exception_cause)
            << "\",\"exception_in_delay_slot\":"
            << (report.exception_in_delay_slot ? "true" : "false") << '}'

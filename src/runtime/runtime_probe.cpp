@@ -722,6 +722,7 @@ RuntimeProbeCpuSnapshot capture_runtime_probe_cpu(const CpuState& cpu) noexcept 
     snapshot.q = cpu.q;
     snapshot.m = cpu.m;
     snapshot.trap_pending = cpu.trap_pending;
+    snapshot.exception_generation = cpu.exception_generation;
     snapshot.last_exception_cause = cpu.last_exception_cause;
     snapshot.exception_in_delay_slot = cpu.exception_in_delay_slot;
     snapshot.sleeping = cpu.sleeping;
@@ -2084,6 +2085,7 @@ hash_runtime_probe_cpu(const RuntimeProbeCpuSnapshot& snapshot) noexcept {
     hash.append_bool(snapshot.q);
     hash.append_bool(snapshot.m);
     hash.append_bool(snapshot.trap_pending);
+    hash.append_u64(snapshot.exception_generation);
     hash.append_u8(static_cast<std::uint8_t>(snapshot.last_exception_cause));
     hash.append_bool(snapshot.exception_in_delay_slot);
     hash.append_bool(snapshot.sleeping);

@@ -14,7 +14,7 @@
 
 namespace katana::runtime {
 
-inline constexpr std::uint32_t system_replay_schema_version = 5u;
+inline constexpr std::uint32_t system_replay_schema_version = 6u;
 inline constexpr std::string_view runtime_probe_checkpoint_line_prefix =
     "KATANA_RUNTIME_PROBE_CHECKPOINT ";
 

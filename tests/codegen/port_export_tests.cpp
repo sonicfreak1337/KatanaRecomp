@@ -913,6 +913,14 @@ int run_test(const int argc, char* argv[]) {
                     std::string::npos &&
                 generated_before.at("code/runtime-dispatch.cpp").find("generated-block-") ==
                     std::string::npos &&
+                runtime_dispatch_shards.find(
+                    "const auto exception_generation_on_entry = "
+                    "cpu.exception_generation;") != std::string::npos &&
+                runtime_dispatch_shards.find(
+                    "cpu.exception_generation != exception_generation_on_entry && "
+                    "cpu.trap_pending") != std::string::npos &&
+                runtime_dispatch_shards.find("exception_active_on_entry") ==
+                    std::string::npos &&
                 occurrences(runtime_dispatch_shards,
                             "BlockExit dispatch_owner_8C010000(") == 1u &&
                 occurrences(runtime_dispatch_shards, "&dispatch_owner_8C010000") == 3u,

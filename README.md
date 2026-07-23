@@ -61,8 +61,8 @@ vorbereitet; der live geladene Dispatch bleibt `RuntimeOnly` und erzeugt keine
 feste CFG-Kante. Snapshotcache und P2-Aliasaufloesung sind gegen imagefremde
 Beweise abgesichert. Lokale AOT-Blockketten tragen die exakte tatsaechliche
 Terminatorquelle und Siteklasse bis zum externen Dispatch weiter. Der aktuelle
-kumulative Stand verwendet Runtime-ABI 47, Block-ABI 3,
-Backend-Interface-ABI 3, PlatformServices-ABI 10, Portprojektvertrag 31 und
+kumulative Stand verwendet Runtime-ABI 48, Block-ABI 3,
+Backend-Interface-ABI 3, PlatformServices-ABI 10, Portprojektvertrag 32 und
 Host-Video-Vertrag 2.
 
 `KR-4912` schliesst die allgemeine Lebenszeit dynamischer Codebereiche:
@@ -81,14 +81,14 @@ Ladetransaktionen und der Registry latenter AOT-Module abgeschlossen. Die
 fokussierten Regressionen sind gruen; ein privater Retaillauf, eine Vollsuite
 und `KR-4852` wurden fuer diesen Abschluss nicht ausgefuehrt.
 
-Systemreplay v5 trennt `ExactEvents` von `DigestStream`. Der exakte Modus
+Systemreplay v6 trennt `ExactEvents` von `DigestStream`. Der exakte Modus
 behaelt den bisherigen begrenzten Vollstromvertrag; eine Saettigung erzeugt
 einen echten Drop und verhindert Versiegelung und Replay. Der skalierbare
 Produktmodus behaelt standardmaessig 4.096 Praefixzeugen, validiert, zaehlt und
 bindet aber jedes weitere Ereignis in Coverage, Klassenzahlen und den
 geordneten FNV-Digest ein. Solche Ereignisse sind `summarized`, nicht
 `dropped`; die Gesamtzahl darf daher die maximale Zeugenkapazitaet
-ueberschreiten. Runtime-Probe-Schema 2 weist Speichermodus, Kapazitaet,
+ueberschreiten. Runtime-Probe-Schema 3 weist Speichermodus, Kapazitaet,
 Gesamt-, behaltene und zusammengefasste Ereignisse sowie
 `exact_event_stream` aus. Der Digest ist eine deterministische Pruefsumme und
 keine Authentisierung. Portable Ereigniscodes bleiben auf 64 Zeichen
@@ -220,8 +220,13 @@ Trap oder stiller Fehler galten nicht als Erfolg. Der frische Port umfasst
 1.873 Funktionen, 37 Codepartitionen und null Retailsektoren. Die lokale
 Installation umfasst drei Tracks und 521.461 Sektoren; die Original-GDI blieb
 unveraendert. Damit ist der native BootExecutable-Eintritt bewiesen.
-`KR-4851` bleibt dennoch P0: Im normalen sichtbaren Produktlauf folgt nach dem
-Sega-Logo noch kein weiterer Spiel-Fortschritt.
+Der erste `KR-4851`-P0-Hotspot nach dem Sega-Logo ist aufgeloest: Ein bereits
+aktiver Interrupt-Handler wurde vom generierten Aufrufpfad mit einer neuen
+Delay-Slot-Exception verwechselt. Die monotone Exceptiongeneration laesst
+BSR, BSRF und JSR im Handler normal fortsetzen und propagiert nur neu
+entstehende Fehler. `KR-4851` bleibt bis zum frischen Produktnachweis offen;
+bei der PAL-Disc ist der 50-/60-Hz-Auswahlbildschirm der naechste sichtbare
+Marker.
 
 Der vorangegangene optimierte ABI-38-PAL-Port wurde mit zwoelf Jobs in
 140,9 Sekunden

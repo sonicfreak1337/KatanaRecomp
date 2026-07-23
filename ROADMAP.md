@@ -254,15 +254,15 @@ Backend-Interface-ABI 3, Portprojektvertrag 24 und Host-Video-Vertrag 2
 versionierten diesen privaten Portlauf. Er bleibt ausdruecklich historische
 ABI-39-Evidenz und wurde nicht nachtraeglich als ABI-40-Artefakt umgedeutet.
 
-Der aktuelle kumulative Kernvertrag verwendet Runtime-ABI 47, Block-ABI 3,
-Backend-Interface-ABI 3, PlatformServices-ABI 10, Portprojektvertrag 31 und
+Der aktuelle kumulative Kernvertrag verwendet Runtime-ABI 48, Block-ABI 3,
+Backend-Interface-ABI 3, PlatformServices-ABI 10, Portprojektvertrag 32 und
 Host-Video-Vertrag 2.
-Systemreplay v5 trennt `ExactEvents` und `DigestStream`. Der exakte Modus
+Systemreplay v6 trennt `ExactEvents` und `DigestStream`. Der exakte Modus
 behaelt den bisherigen begrenzten Ereignisstrom und markiert eine Saettigung
 als Drop. Der Produktprobe behaelt im Digestmodus 4.096 Praefixzeugen, zaehlt,
 validiert und hasht jedoch den gesamten Strom. Zusammengefasste Ereignisse
 sind daher keine Drops; Coverage, Klassenzahlen, Ordnungsdigest und finaler
-Gastzustand bleiben gebunden. Runtime-Probe-Schema 2 weist Speichermodus,
+Gastzustand bleiben gebunden. Runtime-Probe-Schema 3 weist Speichermodus,
 Kapazitaet, Gesamt-, behaltene und zusammengefasste Anzahl sowie
 `exact_event_stream` aus. Der ungekeyte FNV-Digest ist deterministische
 Evidenz, keine Authentisierung. Standard-JSON redigiert weiterhin `code`,
@@ -303,9 +303,14 @@ Bestaetigungslauf emittierte `runtime-started` und
 Trap und stille Fehler konnten den Erfolg nicht erzeugen. Der frische Port
 umfasst 1.873 Funktionen, 37 Partitionen und null Retailsektoren; die lokale
 Installation umfasst drei Tracks und 521.461 Sektoren, die Original-GDI blieb
-unveraendert. Der Eintritt in BootExecutable ist damit belegt. Der sichtbare
-Stillstand nach dem Sega-Logo bleibt als naechster nativer Spielhotspot in
-`KR-4851` offen.
+unveraendert. Der Eintritt in BootExecutable ist damit belegt. Der dabei
+gefundene erste Spielhotspot nach dem Sega-Logo ist allgemein behoben:
+`trap_pending` bleibt waehrend des gesamten Exceptionhandlers gesetzt und
+darf nicht als neue Delay-Slot-Exception interpretiert werden. Eine monotone
+Exceptiongeneration schuetzt jetzt BSR, BSRF, JSR, direkte native
+Aufrufketten, Port-Blockwrapper und Diagnosegrenzen. Der frische
+Produktnachweis bis zum PAL-50-/60-Hz-Auswahlbildschirm steht noch aus; deshalb
+bleibt `KR-4851` offen.
 
 `KR-4912` schliesst die generische Lebenszeit dynamischer Codebereiche.
 Load, Relocation, Replace und Unload erzeugen monotone Modulinkarnationen;

@@ -87,6 +87,7 @@ filled_cpu_snapshot(std::uint32_t value,
     cpu.q = false;
     cpu.m = true;
     cpu.trap_pending = true;
+    cpu.exception_generation = next();
     cpu.last_exception_cause = ExceptionCause::TlbProtectionWrite;
     cpu.exception_in_delay_slot = true;
     cpu.sleeping = false;

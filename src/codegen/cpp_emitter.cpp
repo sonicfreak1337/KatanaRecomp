@@ -1735,12 +1735,15 @@ void emit_call_delay_slot(std::ostringstream& output,
                           const katana::ir::Instruction& instruction,
                           const int indent) {
     emit_indent(output, indent);
+    output << "const auto exception_generation_before_delay_slot = "
+              "cpu.exception_generation;\n";
+    emit_indent(output, indent);
     output << "[&] {\n";
     emit_guarded_simple_instruction(output, instruction, indent + 1);
     emit_indent(output, indent);
     output << "}();\n";
     emit_indent(output, indent);
-    output << "if (cpu.trap_pending) {\n";
+    output << "if (cpu.exception_generation != exception_generation_before_delay_slot) {\n";
     emit_indent(output, indent + 1);
     output << "cpu.pr = previous_pr;\n";
     emit_indent(output, indent + 1);
@@ -1760,11 +1763,17 @@ void emit_direct_call(std::ostringstream& output,
     emit_indent(output, indent);
 
     if (known_functions.contains(target)) {
-        output << service_function_name(target) << "(cpu, services);\n";
-        emit_indent(output, indent);
-        output << "if (cpu.trap_pending) {\n";
+        output << "{\n";
         emit_indent(output, indent + 1);
+        output << "const auto exception_generation_before_call = cpu.exception_generation;\n";
+        emit_indent(output, indent + 1);
+        output << service_function_name(target) << "(cpu, services);\n";
+        emit_indent(output, indent + 1);
+        output << "if (cpu.exception_generation != exception_generation_before_call) {\n";
+        emit_indent(output, indent + 2);
         output << "return;\n";
+        emit_indent(output, indent + 1);
+        output << "}\n";
         emit_indent(output, indent);
         output << "}\n";
     } else {

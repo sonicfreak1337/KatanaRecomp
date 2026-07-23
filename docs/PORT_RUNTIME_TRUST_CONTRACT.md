@@ -2,7 +2,7 @@
 
 Der mit KR-4508 eingefuehrte Portprojektvertrag Version 3 trennt
 Analyseerfolg, Eingabeidentitaet und tatsaechliche Gastausfuehrung. Der
-aktuelle kumulative Stand verwendet Portprojektvertrag 31, Runtime-ABI 47,
+aktuelle kumulative Stand verwendet Portprojektvertrag 32, Runtime-ABI 48,
 PlatformServices-ABI 10, Block-ABI 3 und Backend-Interface-ABI 3. Keine der
 Vertrauensaussagen wird aus der blossen Erzeugung oder dem Start eines
 Hostprozesses abgeleitet.
@@ -273,6 +273,13 @@ null Retailsektoren. Die lokale Installation umfasst drei Tracks und 521.461
 Sektoren; die Original-GDI blieb unveraendert. `KR-4913` ist abgeschlossen.
 Der sichtbare Stillstand nach dem Sega-Logo bleibt als nativer Hotspot in
 `KR-4851` offen.
+
+Der nachfolgende Runtime-ABI-48-/Portprojektvertrag-32-Block schliesst diesen
+ersten Hotspot allgemein. Der Handler-Lifetime-Pegel `trap_pending` ist kein
+Nachweis fuer eine neu im aktuellen Block entstandene Exception. Eine monotone
+Generation bindet neue Exceptionkanten in generierten Delay Slots, direkten
+Aufrufketten, Portwrappern, Probe- und Replayhashes. Der frische sichtbare
+PAL-Nachweis bleibt dennoch Voraussetzung fuer den Abschluss von `KR-4851`.
 
 ## Konsistenzgrenzen
 

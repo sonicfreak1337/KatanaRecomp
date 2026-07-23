@@ -124,7 +124,7 @@ int main() {
                 state.pc == state.vbr + vector.vector && state.spc == 0x8C010000u &&
                 state.ssr == (sr_t_mask | (3u << 4u)) && state.sgr == 0x8C00FFF0u &&
                 state.tea == 0xAABBCCDDu && state.exception_in_delay_slot == vector.slot &&
-                state.trap_pending &&
+                state.trap_pending && state.exception_generation == 1u &&
                 (vector.interrupt ? state.intevt == vector.event : state.expevt == vector.event),
             "Exception-Eintritt verliert Event, Vektor oder gesicherten Gastzustand.");
     }
@@ -145,13 +145,15 @@ int main() {
     require(cpu.ssr == (sr_t_mask | (3u << 4u)) && cpu.spc == 0x8C010000u && cpu.sgr == 0x8C00FFF0u,
             "Exception-Eintritt sichert den CPU-Zustand falsch.");
     require(cpu.expevt == event_illegal_instruction && cpu.pc == 0x8C000100u && cpu.trap_pending &&
+                cpu.exception_generation == 1u &&
                 cpu.privileged_mode() && cpu.register_bank_selected() && cpu.interrupts_blocked() &&
                 cpu.r[0] == 0x22222222u,
             "Exception-Eintritt setzt Ereignis, Vektor oder SR falsch.");
 
     return_from_exception(cpu);
     require(cpu.pc == 0x8C010000u && cpu.read_sr() == (sr_t_mask | (3u << 4u)) &&
-                !cpu.trap_pending && cpu.r[0] == 0x11111111u,
+                !cpu.trap_pending && cpu.exception_generation == 1u &&
+                cpu.r[0] == 0x11111111u,
             "Exception-Rueckkehr restauriert PC, SR oder Registerbank falsch.");
 
     MemoryAccessError misaligned(MemoryAccessErrorReason::Misaligned,
@@ -161,6 +163,7 @@ int main() {
                                  "ram");
     enter_memory_exception(cpu, misaligned, 0x8C020000u, 0x8C01FFFEu);
     require(cpu.last_exception_cause == ExceptionCause::AddressErrorRead &&
+                cpu.exception_generation == 2u &&
                 cpu.expevt == event_address_error_read && cpu.tea == 0x8C010003u &&
                 cpu.spc == 0x8C01FFFEu && cpu.exception_in_delay_slot,
             "Adressfehler im Delay Slot verliert Ursache, TEA oder Owner-PC.");
@@ -190,7 +193,8 @@ int main() {
                 cpu.pteh == 0x876540A5u && cpu.tea == 0x87654321u &&
                 cpu.expevt == event_tlb_multiple_hit && cpu.privileged_mode() &&
                 cpu.register_bank_selected() && cpu.interrupts_blocked() &&
-                cpu.interrupt_mask() == 15u && !cpu.fpu_disabled(),
+                cpu.interrupt_mask() == 15u && !cpu.fpu_disabled() &&
+                cpu.exception_generation == 4u,
             "TLB-Multiple-Hit fuehrt keinen dokumentierten SH-4-Reset aus.");
 
     reset_cpu(cpu);

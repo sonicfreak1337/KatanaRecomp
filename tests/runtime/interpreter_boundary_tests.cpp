@@ -13,7 +13,7 @@ void require(bool value, const char* message) {
 int main() {
     try {
         EventScheduler scheduler;
-        SchedulerSafepoints safepoints(scheduler, 8u, 4u);
+        SchedulerSafepoints safepoints(scheduler, 12u, 4u);
         ExecutableCodeTracker tracker;
         bool watchpoint = false;
         CpuState cpu;
@@ -67,7 +67,27 @@ int main() {
                     boundary.count("unsupported-generated-op") == 3u,
                 "Invalidierter dynamischer Fallback wird nicht ohne Trackerduplikat reaktiviert.");
 
-        cpu.last_exception_cause = ExceptionCause::None;
+        cpu.vbr = 0x8C000000u;
+        enter_exception(cpu,
+                        {ExceptionCause::Interrupt,
+                         0x00000320u,
+                         interrupt_vector,
+                         0x8C001006u,
+                         std::nullopt,
+                         true});
+        const auto active_exception_generation = cpu.exception_generation;
+        const auto handler_step = boundary.execute(
+            cpu, {"handler-step", 0x8C001100u, 1u, 0x8C001102u, 1u});
+        require(handler_step.resumed && !handler_step.exception &&
+                    handler_step.exception_cause == ExceptionCause::None &&
+                    cpu.trap_pending &&
+                    cpu.last_exception_cause == ExceptionCause::Interrupt &&
+                    cpu.exception_generation == active_exception_generation &&
+                    cpu.pc == 0x8C001102u,
+                "Interpretergrenze verwechselt einen aktiven Handler mit einer neu "
+                "ausgeloesten Exception.");
+        return_from_exception(cpu);
+
         cpu.vbr = 0x8C000000u;
         const auto fault =
             boundary.execute(cpu, {"memory-fault", 0x8C002002u, 2u, 0x8C002004u, 1u, 0x8C002000u});
@@ -76,7 +96,7 @@ int main() {
                 cpu.spc == 0x8C002000u && cpu.expevt == event_address_error_read,
             "Fallback-Speicherfehler besitzt nicht Ursache und Owner-PC des generierten Pfads.");
 
-        cpu.last_exception_cause = ExceptionCause::None;
+        return_from_exception(cpu);
         const auto illegal = boundary.execute(
             cpu, {"unknown-opcode", 0x8C003002u, 0xFFFFu, 0x8C003004u, 1u, 0x8C003000u});
         require(illegal.exception &&
