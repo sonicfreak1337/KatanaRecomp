@@ -41,6 +41,10 @@ class SystemReplayLog;
 inline constexpr std::uint32_t runtime_probe_schema_version = 1u;
 inline constexpr std::uint64_t runtime_probe_device_schema_version = 1u;
 inline constexpr std::string_view runtime_probe_hash_contract = "fnv1a64-le-v1";
+inline constexpr std::uint32_t runtime_probe_fault_report_version = 1u;
+inline constexpr std::size_t runtime_probe_replay_coverage_class_count = 12u;
+inline constexpr std::string_view runtime_probe_fault_line_prefix =
+    "KATANA_RUNTIME_PROBE_FAULT ";
 inline constexpr std::uint64_t runtime_probe_fnv1a64_offset_basis =
     14695981039346656037ull;
 inline constexpr std::uint64_t runtime_probe_fnv1a64_prime = 1099511628211ull;
@@ -149,7 +153,8 @@ struct RuntimeProbeReplaySnapshot {
     std::uint32_t enabled_coverage = 0u;
     std::uint32_t observed_coverage = 0u;
     std::uint32_t required_coverage = 0u;
-    std::array<std::uint64_t, 8u> event_counts{};
+    std::array<std::uint64_t, runtime_probe_replay_coverage_class_count>
+        event_counts{};
     bool coverage_complete = false;
     bool complete = false;
     bool sealed = false;
@@ -298,12 +303,69 @@ enum class RuntimeProbeStatus : std::uint8_t {
 };
 
 enum class RuntimeProbeTermination : std::uint8_t {
-    Unknown,
-    Completed,
-    GuestLifecycle,
-    BudgetReached,
-    HostShutdown,
-    Failed,
+    Unknown = 0u,
+    Completed = 1u,
+    GuestLifecycle = 2u,
+    BudgetReached = 3u,
+    HostShutdown = 4u,
+    Failed = 5u,
+    Hang = 6u,
+    GuestException = 7u,
+    DispatchMiss = 8u,
+};
+
+enum class RuntimeProbeCheckpoint : std::uint8_t {
+    None = 0u,
+    RuntimeStarted = 1u,
+    GuestProgramEntered = 2u,
+    FirstGuestFrame = 3u,
+    GuestInputInteractive = 4u,
+    ControlledRetailScene = 5u,
+};
+
+struct RuntimeProbeCheckpointObservation {
+    RuntimeProbeCheckpoint checkpoint = RuntimeProbeCheckpoint::None;
+    RuntimeProbeCpuSnapshot cpu;
+
+    [[nodiscard]] bool
+    operator==(const RuntimeProbeCheckpointObservation&) const = default;
+};
+
+struct RuntimeProbeFaultObservation {
+    RuntimeProbeTermination termination = RuntimeProbeTermination::Unknown;
+    RuntimeProbeCpuSnapshot cpu;
+
+    [[nodiscard]] bool operator==(const RuntimeProbeFaultObservation&) const = default;
+};
+
+struct RuntimeProbeFaultEnvelope {
+    std::uint32_t report_version = runtime_probe_fault_report_version;
+    RuntimeProbeTermination termination = RuntimeProbeTermination::Unknown;
+    std::optional<RuntimeProbeFaultObservation> first_fault;
+    std::optional<RuntimeProbeCheckpointObservation> last_stable_checkpoint;
+
+    [[nodiscard]] bool operator==(const RuntimeProbeFaultEnvelope&) const = default;
+};
+
+class RuntimeProbeObservationState final {
+  public:
+    [[nodiscard]] bool
+    observe_checkpoint(RuntimeProbeCheckpoint checkpoint,
+                       const RuntimeProbeCpuSnapshot& cpu) noexcept;
+    [[nodiscard]] bool
+    latch_fault(RuntimeProbeTermination termination,
+                const RuntimeProbeCpuSnapshot& cpu) noexcept;
+
+    [[nodiscard]] const std::optional<RuntimeProbeCheckpointObservation>&
+    last_stable_checkpoint() const noexcept;
+    [[nodiscard]] const std::optional<RuntimeProbeFaultObservation>&
+    first_fault() const noexcept;
+    [[nodiscard]] RuntimeProbeFaultEnvelope
+    fault_envelope(RuntimeProbeTermination termination) const noexcept;
+
+  private:
+    std::optional<RuntimeProbeCheckpointObservation> last_stable_checkpoint_;
+    std::optional<RuntimeProbeFaultObservation> first_fault_;
 };
 
 struct RuntimeProbeReport {
@@ -481,5 +543,8 @@ make_runtime_probe_report(const RuntimeProbeCpuSnapshot& cpu,
                           const RuntimeProbeReplaySnapshot& replay);
 [[nodiscard]] std::string
 serialize_runtime_probe_report_json(const RuntimeProbeReport& report);
+[[nodiscard]] std::string
+serialize_runtime_probe_fault_envelope_json(
+    const RuntimeProbeFaultEnvelope& envelope);
 
 } // namespace katana::runtime

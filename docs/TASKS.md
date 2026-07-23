@@ -824,7 +824,8 @@ Hosttimeout von 120 Sekunden. Diagnose aus/an lieferte gleiche normative
 Felder, unveraendertes Executable und Disc-Pack, vollstaendiges und
 versiegeltes Systemreplay v3 sowie null/null Wait-Loop-Tracezeilen. Eine
 Vollsuite und `KR-4852` wurden nicht ausgefuehrt. Damit ist `KR-4842`
-abgeschlossen und `KR-4911` freigegeben, bleibt aber selbst offen.
+abgeschlossen; `KR-4911` war an diesem Zwischenstand freigegeben, aber noch
+offen.
 
 ### [x] KR-4843 - Alias-korrekter nativer Disc-Systembootstrap
 
@@ -1025,9 +1026,9 @@ Fallback oder Materialisierung; GD-ROM, TA und PVR sind noch null. Bei 320
 Millionen Zyklen erreicht der Gast Spielecode, zwei GD-ROM-Kommandos und einen
 spaeten PVR-Registerwrite, weiterhin ohne TA-, Render- oder Framebeweis.
 
-Der aktuelle kumulative Schnittstellenstand verwendet Runtime-ABI 43,
+Der aktuelle kumulative Schnittstellenstand verwendet Runtime-ABI 44,
 Block-ABI 3, Backend-Interface-ABI 3, PlatformServices-ABI 10,
-Portprojektvertrag 27 und Host-Video-Vertrag 2. Source-relativierte native AOT-Templates und ihr
+Portprojektvertrag 28 und Host-Video-Vertrag 2. Source-relativierte native AOT-Templates und ihr
 adressierter Binder sind vorhanden; strukturierte Disc-Ladetransaktionen, der
 allgemeine native Materializer und die Registry latenter Module halten
 `KR-4848` weiterhin offen. Das fokussierte Gate besteht 11/11, der x64-Kern-/
@@ -1230,7 +1231,7 @@ Prioritaet: P0
 Die bestehenden Bring-up-IDs `KR-4911`, `KR-4912`, `KR-4913` und `KR-4915`
 sind dem nativen Boot- und Frame-Meilenstein v0.48 zugeordnet.
 
-### [ ] KR-4911 - Runtimebeobachtung, Replay und Fehlerpakete
+### [x] KR-4911 - Runtimebeobachtung, Replay und Fehlerpakete
 
 Abhaengigkeiten: KR-4831, KR-4842
 Meilenstein: v0.48
@@ -1251,21 +1252,33 @@ Akzeptanz:
 - identische synthetische Laeufe erzeugen identische Ereignisfolgen
 - private Fehlerpakete sind redigiert und bleiben ausserhalb des Repos
 
-Teilstand 2026-07-23: Systemreplay-Schema 3 begrenzt die Aufzeichnung
-standardmaessig auf 4.096 und maximal auf 65.536 Ereignisse; portable
-Ereigniscodes sind auf 64 Zeichen begrenzt. Ein gesaettigter Recordversuch
-zaehlt exakt einen Drop. Jeder Drop verhindert Versiegelung und Replay,
-waehrend ein bereits versiegelter Log nicht nachtraeglich veraendert wird.
-Interne Ereignisse, Ereignishash und Replayvergleich behalten alle Codes,
-Adressen, Werte, numerischen Payloads und Hashes exakt. Das Standard-JSON
-redigiert dagegen `code`, `address`, `value`, `detail`, `auxiliary`,
-`event_hash` und `final_guest_state_hash`; nur ein ausdrueckliches lokales
-Opt-in serialisiert sie. Das Profil `deterministic-v1` verlangt vor dem ersten
-Ereignis alle acht CPU-, Scheduler-, Interrupt-, Video-, Audio-, Eingabe-,
-MMIO- und DMA-Hooks und trennt aktivierte von beobachteter Coverage.
-Produktwiring, gemeinsame Stopptaxonomie, letzter
-stabiler Checkpoint und ein gemeinsames redigiertes Fehler-Envelope halten
-`KR-4911` offen.
+Abgeschlossen: 2026-07-23. Systemreplay-Schema 4 behaelt die feste Kapazitaet
+von standardmaessig 4.096 und maximal 65.536 Ereignissen, den 64-Zeichen-
+Codevertrag sowie Drop-, Versiegelungs- und Standardredaktionsregeln von v3.
+Das Profil `deterministic-v1` verlangt nun die zwoelf Pflichtklassen
+CPU-Safepoint, Scheduler-Callback, akzeptierter Interrupt, Video, Audio,
+Eingabe, MMIO, DMA, Blockdispatch, Gastexception, kontrollierter Fallback und
+Gastcheckpoint. Eine zentrale Observation-Session schreibt Dispatch-Hits und
+-Misses, Fallbacks, Exceptions und streng monotone Checkpoints gegen Gastzyklus
+und Resetepoche; GD-ROM-, DMA-, PVR- und AICA-Schedulerereignisse besitzen
+stabile Codes.
+
+Die typisierte Stopptaxonomie unterscheidet `budget-reached`, `hang`,
+`guest-exception`, `dispatch-miss` und `failed`. First-Fault und letzter
+stabiler Checkpoint sichern intern vollstaendige CPU-Snapshots und bleiben nach
+dem ersten Fehler unveraenderlich. `katana.runtime-probe-fault` v1 gibt nur
+allowlist-redigierte Klassen- und Checkpointfelder aus. Der private Runner
+validiert Fault- und Checkpointzeilen strikt, vergleicht den letzten Checkpoint
+beider A/B-Laeufe und schreibt `katana-private-runtime-fault` v1 ausserhalb des
+Repositorys atomar und write-once.
+
+Das fokussierte Gate bestand 8/8 in 6,60 Sekunden,
+`katana-port-cli-tests` 1/1 in 155,67 Sekunden. Der frische private PAL-A/B-
+Lauf bestand 2/2 mit 100.000 Gastzyklen und 120 Sekunden Hosttimeout:
+normative Felder und letzter Checkpoint waren gleich, Executable, Disc-Pack,
+Original-GDI und Tracks blieben unveraendert, beide Replays vollstaendig und
+versiegelt und die Tracezaehler null/null. Eine Vollsuite und `KR-4852` wurden
+nicht ausgefuehrt. `KR-4912` ist freigegeben.
 
 ### [ ] KR-4912 - Dynamische Codebereiche, Module und Overlays
 

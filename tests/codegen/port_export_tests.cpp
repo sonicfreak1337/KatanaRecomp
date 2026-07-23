@@ -724,9 +724,9 @@ int run_test(const int argc, char* argv[]) {
             trace_serialize != std::string::npos && trace_enable < trace_allocate &&
             trace_allocate < trace_set_sink && trace_clear_sink < trace_serialize &&
             generated_before.at("metadata/port-project.json")
-                    .find("\"contract_version\":27") != std::string::npos &&
+                    .find("\"contract_version\":28") != std::string::npos &&
             generated_before.at("metadata/provenance.json")
-                    .find("\"manifest_version\":27") != std::string::npos,
+                    .find("\"manifest_version\":28") != std::string::npos,
         "Portprodukt bindet den versionierten Wait-Loop-Trace nicht strikt opt-in, "
         "allokationsfrei im Normalpfad und RAII-bereinigt ein.");
     const auto poll_disc_directory = fixture.root / "poll-loop-disc";
@@ -845,11 +845,18 @@ int run_test(const int argc, char* argv[]) {
     const auto runtime_probe_clock_start =
         generated_main.find("media_clock.start()", runtime_probe_input_event);
     const auto runtime_probe_dispatch = generated_main.find(
-        "katana_port_generated::run_runtime(cpu, services, *state.runtime_blocks)",
+        "katana_port_generated::run_runtime(cpu, services, *state.runtime_blocks,",
         runtime_probe_clock_start);
     const auto runtime_probe_budget_catch = generated_main.find(
         "catch (const katana::runtime::RuntimeProbeBudgetReached& reached)",
         runtime_probe_dispatch);
+    const auto runtime_probe_dispatch_miss_catch = generated_main.find(
+        "catch (const katana::runtime::IndirectDispatchError&)",
+        runtime_probe_budget_catch);
+    const auto runtime_probe_std_exception_catch = generated_main.find(
+        "catch (const std::exception&)", runtime_probe_dispatch_miss_catch);
+    const auto runtime_probe_catch_all =
+        generated_main.find("catch (...)", runtime_probe_std_exception_catch);
     const auto runtime_probe_quiesce =
         generated_main.find("media_clock.stop();\n    mmio_trace.finish();",
                             runtime_probe_budget_catch);
@@ -888,7 +895,7 @@ int run_test(const int argc, char* argv[]) {
     const auto normal_frame_proof =
         generated_main.find("pump_guest_frame_proof(", normal_frame_pump);
     const auto normal_runtime_dispatch = generated_main.find(
-        "katana_port_generated::run_runtime(cpu, services, *state.runtime_blocks)",
+        "katana_port_generated::run_runtime(cpu, services, *state.runtime_blocks,",
         normal_frame_proof);
     const auto dispatch_probe_profile =
         runtime_dispatch.find("std::getenv(\"KATANA_RUNTIME_PROBE\")");
@@ -953,6 +960,9 @@ int run_test(const int argc, char* argv[]) {
             runtime_probe_clock_start != std::string::npos &&
             runtime_probe_dispatch != std::string::npos &&
             runtime_probe_budget_catch != std::string::npos &&
+            runtime_probe_dispatch_miss_catch != std::string::npos &&
+            runtime_probe_std_exception_catch != std::string::npos &&
+            runtime_probe_catch_all != std::string::npos &&
             runtime_probe_quiesce != std::string::npos &&
             runtime_probe_capture != std::string::npos &&
             runtime_probe_replay_seal != std::string::npos &&
@@ -975,6 +985,9 @@ int run_test(const int argc, char* argv[]) {
             runtime_probe_clock < runtime_probe_clock_start &&
             runtime_probe_clock_start < runtime_probe_dispatch &&
             runtime_probe_dispatch < runtime_probe_budget_catch &&
+            runtime_probe_budget_catch < runtime_probe_dispatch_miss_catch &&
+            runtime_probe_dispatch_miss_catch < runtime_probe_std_exception_catch &&
+            runtime_probe_std_exception_catch < runtime_probe_catch_all &&
             runtime_probe_budget_catch < runtime_probe_quiesce &&
             runtime_probe_quiesce < runtime_probe_capture &&
             runtime_probe_capture < runtime_probe_replay_seal &&
@@ -1026,6 +1039,61 @@ int run_test(const int argc, char* argv[]) {
             generated_main.find("SystemReplayCoverage::Mmio") != std::string::npos,
         "Runtime-Probe bindet Replay, typed Budget-Exit oder genau eine Ergebniszeile "
         "nicht deterministisch beziehungsweise quiesziert vor dem Seal nicht.");
+    require(
+        generated_before.at("include/katana_port.hpp")
+                    .find("SystemReplayObservationSession& observations") !=
+                std::string::npos &&
+            generated_main.find(
+                "SystemReplayObservationSession replay_observations_") !=
+                std::string::npos &&
+            generated_main.find("RuntimeProbeObservationState probe_observations_") !=
+                std::string::npos &&
+            occurrences(generated_main, "services.observe_runtime_started();") == 2u &&
+            generated_main.find("runtime_probe_checkpoint_line_prefix") !=
+                std::string::npos &&
+            generated_main.find("serialize_checkpoint_json()") != std::string::npos &&
+            generated_main.find("runtime_probe_fault_line_prefix") !=
+                std::string::npos &&
+            generated_main.find("serialize_runtime_probe_fault_envelope_json(") !=
+                std::string::npos &&
+            generated_main.find("RuntimeProbeTermination::DispatchMiss") !=
+                std::string::npos &&
+            generated_main.find("RuntimeProbeTermination::Failed") != std::string::npos &&
+            generated_main
+                    .substr(runtime_probe_std_exception_catch,
+                            runtime_probe_catch_all -
+                                runtime_probe_std_exception_catch)
+                    .find("cpu.last_exception_cause") == std::string::npos &&
+            generated_main
+                    .substr(runtime_probe_std_exception_catch,
+                            runtime_probe_catch_all -
+                                runtime_probe_std_exception_catch)
+                    .find("RuntimeProbeTermination::Failed") !=
+                std::string::npos &&
+            generated_main.find("replay_observations_.observe_controlled_fallback()") !=
+                std::string::npos &&
+            generated_main.find(
+                "SystemReplayCheckpointKind::GuestProgramEntered") !=
+                std::string::npos &&
+            runtime_dispatch.find(
+                "SystemReplayObservationSession* active_observations") !=
+                std::string::npos &&
+            runtime_dispatch.find(
+                "active_observations->observe_block_dispatch_hit(dispatch_class)") !=
+                std::string::npos &&
+            runtime_dispatch.find(
+                "active_observations->observe_block_dispatch_miss(") !=
+                std::string::npos &&
+            runtime_dispatch.find("*active_dispatch_metrics") != std::string::npos &&
+            runtime_dispatch.find(
+                "active_observations->observe_guest_exception("
+                "cpu.last_exception_cause)") != std::string::npos &&
+            runtime_dispatch.find(
+                "ServiceScope scope(\n"
+                "        services, table, context, diagnostics, dispatch_metrics,\n"
+                "        observations, materializer)") != std::string::npos,
+        "Generierter Produktpfad verdrahtet Dispatch, Fallback, Guest-Exception, "
+        "Checkpoint oder redigiertes Fehlerpaket nicht ueber eine zentrale Observation-Session.");
     require(
         runtime_probe_branch != std::string::npos &&
             runtime_probe_branch_call != std::string::npos &&
@@ -1358,7 +1426,7 @@ int run_test(const int argc, char* argv[]) {
     const auto progress_marker =
         runtime_dispatch.find("executed_dispatch_blocks % progress_interval");
     const auto root_dispatch_marker = runtime_dispatch.find(
-        "const auto selected = katana::runtime::dispatch_indirect", progress_marker);
+        "auto result = katana::runtime::dispatch_indirect", progress_marker);
     const auto root_begin_marker =
         runtime_dispatch.find("active_services->begin_executable_block", root_dispatch_marker);
     require(progress_marker != std::string::npos && root_dispatch_marker != std::string::npos &&

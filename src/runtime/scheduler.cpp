@@ -170,7 +170,8 @@ SchedulerAdvanceResult EventScheduler::advance_to(const std::uint64_t guest_cycl
                 SystemReplayEvent replay_event{0u,
                                                deadline,
                                                SystemReplayEventKind::SchedulerCallback,
-                                               "scheduled-event",
+                                               system_replay_scheduler_event_code(
+                                                   event.mapped().kind),
                                                std::nullopt,
                                                static_cast<std::uint32_t>(
                                                    event.mapped().kind),

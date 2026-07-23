@@ -6,7 +6,7 @@ ungeloesten Kontrollflusspfaden mehr.
 
 ## ABI
 
-Die aktuelle Runtime-ABI ist Version `41`. Die typisierte Block-ABI ist
+Die aktuelle Runtime-ABI ist Version `44`. Die typisierte Block-ABI ist
 Version `3`; die Backend-Interface-ABI ist Version `3`.
 
 Generierter Code enthaelt eine Compile-Time-Pruefung gegen diese Version. Eine
@@ -80,6 +80,14 @@ Version 1, das Profil `deterministic-v1`, Device-Schema 1 und Systemreplay
 Schema 3. Der Produktzustand umfasst 35 Geraeteinstanzen mit 867 kanonischen
 Feldern; der aggregierte A/B-Vertrag gibt keine Rohwerte, privaten Pfade oder
 exakten Hashfingerabdruecke aus.
+ABI-Version 44 und Portprojektvertrag 28 erweitern diesen Vertrag auf
+Systemreplay-Schema 4 mit zwoelf Coverageklassen. Der generierte Produktport
+reicht eine zentrale `SystemReplayObservationSession` bis in den
+Blockdispatcher, bindet Dispatch, kontrollierte Fallbacks, Gastexceptions und
+monotone Gastcheckpoints an logische Gastzeit und gibt typisierte Fault- und
+Checkpointzeilen aus. First-Fault und letzter stabiler Checkpoint sichern
+intern vollstaendige CPU-Snapshots; die externen Fault-v1- und privaten
+Fehlerpakete bleiben allowlist-redigiert.
 
 ## CMake
 
@@ -520,14 +528,16 @@ spaetere Plattformkonfiguration.
   `DreamcastSystemBusControl::snapshot()`-Zustaende fuer Produktdiagnostik;
   auch pending Rendercompletions und aktive Channel-2-Transfers bleiben
   unveraendert und werden weder gepumpt noch quittiert
-- deterministische Systemreplays unter Schema 3 mit standardmaessig 4.096 und
+- deterministische Systemreplays unter Schema 4 mit standardmaessig 4.096 und
   maximal 65.536 Ereignissen sowie hoechstens 64 Zeichen langen Ereigniscodes;
   eine Saettigung zaehlt genau einen Drop je abgewiesenem Ereignis und
   verhindert Versiegelung und Replay. Ereigniswerte bleiben intern exakt,
   waehrend Standard-JSON Code, Adresse, Wert, numerische Nutzlasten,
   Ereignishash und Endzustandshash ohne ausdrueckliches lokales Opt-in
-  redigiert. Das Profil `deterministic-v1` bindet acht Pflicht-Hookklassen,
-  getrennte Ereigniszaehler und einen domain-separierten Ordnungsdigest
+  redigiert. Das Profil `deterministic-v1` bindet zwoelf Pflichtklassen,
+  darunter Blockdispatch, Gastexception, kontrollierter Fallback und
+  Gastcheckpoint, getrennte Ereigniszaehler und einen domain-separierten
+  Ordnungsdigest
 
 ## Eigenstaendiger Disc-Boot fuer Portanwendungen
 
@@ -571,6 +581,11 @@ und verwendet fuer freie Speicherprobes sowie PVR-/Systembuszustand nur die
 seiteneffektfreien Runtime-ABI-42-Diagnoseschnittstellen. Der nachfolgende
 Portprojektvertrag 27 bindet den vollstaendigen deterministischen
 Produktprobe- und A/B-Vertrag.
+Portprojektvertrag 28 reicht die zentrale Replay-Observation-Session in den
+generierten `run_runtime`-Vertrag, versieht Schedulerquellen mit stabilen
+GD-ROM-, DMA-, PVR- und AICA-Codes und bindet strikt monotone Checkpoint- sowie
+typisierte Fault-v1-Zeilen. Private Fehlerpakete werden ausserhalb des
+Repositorys atomar und write-once veroeffentlicht.
 
 Im produktiven Einblock-AOT-Pfad zaehlt `CpuState::retired_guest_instructions`
 jede betretene Gastinstruktion. Schedulerzeit wird nach der ausgefuehrten
@@ -587,8 +602,8 @@ generische C++-Emitter setzt auch bei einem durch Funktionsdiscovery
 nachfolgerlosen Block in jedem Backendmodus `PC` auf die Folgeadresse der
 letzten Gastinstruktion. Die Produktinvariante prueft einen Fallthrough relativ
 zu dieser tatsaechlichen Terminatorquelle und nicht zum Eintritt des
-umgebenden Wrappers. Der kumulative Stand verwendet Runtime-ABI 43, Block-ABI 3,
-Backend-Interface-ABI 3, PlatformServices-ABI 10, Portvertrag 27 und
+umgebenden Wrappers. Der kumulative Stand verwendet Runtime-ABI 44, Block-ABI 3,
+Backend-Interface-ABI 3, PlatformServices-ABI 10, Portvertrag 28 und
 Host-Video-Vertrag 2.
 
 Statische Dispatchregistries werden nicht mehr in eine einzelne
@@ -629,6 +644,14 @@ ohne Drops, unveraenderte EXE/Disc-Pack-Artefakte und null
 Wait-Loop-Rohtracezeilen. Der aggregierte A/B-Bericht meldete
 `status=success`; `KR-4842` ist abgeschlossen. Eine Vollsuite und `KR-4852`
 wurden nicht ausgefuehrt.
+
+Der Abschlussnachweis fuer `KR-4911` besteht aus dem fokussierten Gate 8/8 in
+6,60 Sekunden, `katana-port-cli-tests` 1/1 in 155,67 Sekunden und einem
+frischen privaten PAL-A/B-Lauf 2/2 mit 100.000 Gastzyklen und 120 Sekunden
+Hosttimeout. Normative Felder und letzter Checkpoint waren gleich, Executable,
+Disc-Pack, Original-GDI und Tracks unveraendert, beide Replays vollstaendig und
+versiegelt und die Tracezaehler null/null. Eine Vollsuite und `KR-4852` wurden
+nicht ausgefuehrt.
 
 Der optimierte ABI-38-Export der privaten PAL-Testbench dauerte mit zwoelf Jobs
 140,9 Sekunden, der inkrementelle Reexport 29,2 Sekunden. Die lokale

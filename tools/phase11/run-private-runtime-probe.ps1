@@ -10,6 +10,8 @@ $script:IsWindowsPlatform =
 $script:RepositoryRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..'))
 $script:ProbeProfile = 'deterministic-v1'
 $script:ProbeMarker = 'KATANA_RUNTIME_PROBE '
+$script:FaultMarker = 'KATANA_RUNTIME_PROBE_FAULT '
+$script:CheckpointMarker = 'KATANA_RUNTIME_PROBE_CHECKPOINT '
 $script:TraceMarker = 'KATANA_WAIT_LOOP_TRACE '
 $script:TraceNotice =
     'KATANA_WAIT_LOOP_TRACE_NOTICE local-only; contains raw guest-memory values; do not share without review'
@@ -1619,6 +1621,234 @@ function Get-OutputLines {
     return @([regex]::Split($Text, '\r\n|\n|\r'))
 }
 
+function Get-RuntimeCheckpointState {
+    param(
+        [AllowEmptyString()][string]$Stdout,
+        [AllowEmptyString()][string]$Stderr
+    )
+    $stdoutLines = @(Get-OutputLines $Stdout)
+    $checkpointLines = @($stdoutLines | Where-Object {
+        $_.StartsWith($script:CheckpointMarker, [StringComparison]::Ordinal)
+    })
+    $stdoutOccurrences = [regex]::Matches(
+        $Stdout,
+        [regex]::Escape($script:CheckpointMarker)).Count
+    $stderrOccurrences = [regex]::Matches(
+        $Stderr,
+        [regex]::Escape($script:CheckpointMarker)).Count
+    if ($stdoutOccurrences -ne $checkpointLines.Count -or
+        $stderrOccurrences -ne 0) {
+        Throw-ProbeFailure 'invalid-runtime-checkpoint-lines'
+    }
+    $allowedCheckpoints = @(
+        'runtime-started',
+        'guest-program-entered',
+        'first-guest-frame',
+        'guest-input-interactive',
+        'controlled-retail-scene'
+    )
+    [uint64]$expectedSequence = 1
+    $lastRank = -1
+    $lastCheckpoint = $null
+    foreach ($line in $checkpointLines) {
+        $payload = $line.Substring($script:CheckpointMarker.Length)
+        if ([string]::IsNullOrWhiteSpace($payload) -or $payload.Length -gt 65536) {
+            Throw-ProbeFailure 'invalid-runtime-checkpoint-json'
+        }
+        $checkpoint = Read-JsonObject $payload 'invalid-runtime-checkpoint-json'
+        Assert-ExactFields $checkpoint @(
+            'schema',
+            'report_version',
+            'status',
+            'sequence',
+            'checkpoint'
+        ) @() 'invalid-runtime-checkpoint-contract'
+        $sequence = Get-StrictUInt64 $checkpoint.sequence -Positive
+        if ($checkpoint.schema -isnot [string] -or
+            [string]$checkpoint.schema -cne 'katana.runtime-probe-checkpoint' -or
+            -not (Test-IntegralJsonNumber $checkpoint.report_version) -or
+            [decimal]$checkpoint.report_version -ne 1 -or
+            $checkpoint.status -isnot [string] -or
+            [string]$checkpoint.status -cne 'observed' -or
+            $checkpoint.checkpoint -isnot [string] -or
+            $allowedCheckpoints -cnotcontains [string]$checkpoint.checkpoint -or
+            $sequence -ne $expectedSequence) {
+            Throw-ProbeFailure 'invalid-runtime-checkpoint-contract'
+        }
+        $rank = [Array]::IndexOf(
+            [string[]]$allowedCheckpoints,
+            [string]$checkpoint.checkpoint)
+        if ($rank -le $lastRank) {
+            Throw-ProbeFailure 'invalid-runtime-checkpoint-order'
+        }
+        $lastRank = $rank
+        $lastCheckpoint = [string]$checkpoint.checkpoint
+        ++$expectedSequence
+    }
+    return [pscustomobject]@{
+        present = $checkpointLines.Count -ne 0
+        checkpoint = $lastCheckpoint
+        count = [uint64]$checkpointLines.Count
+    }
+}
+
+function Read-RuntimeFaultLine {
+    param(
+        [AllowEmptyString()][string]$Stdout,
+        [AllowEmptyString()][string]$Stderr
+    )
+    $stdoutLines = @(Get-OutputLines $Stdout)
+    $faultLines = @($stdoutLines | Where-Object {
+        $_.StartsWith($script:FaultMarker, [StringComparison]::Ordinal)
+    })
+    if ($faultLines.Count -ne 1 -or
+        [regex]::Matches(
+            $Stdout,
+            [regex]::Escape($script:FaultMarker)).Count -ne 1 -or
+        [regex]::Matches(
+            $Stderr,
+            [regex]::Escape($script:FaultMarker)).Count -ne 0) {
+        Throw-ProbeFailure 'runtime-fault-line-count'
+    }
+    $payload = $faultLines[0].Substring($script:FaultMarker.Length)
+    if ([string]::IsNullOrWhiteSpace($payload) -or $payload.Length -gt 65536) {
+        Throw-ProbeFailure 'invalid-runtime-fault-json'
+    }
+    $fault = Read-JsonObject $payload 'invalid-runtime-fault-json'
+    Assert-ExactFields $fault @(
+        'schema',
+        'report_version',
+        'termination',
+        'first_fault_present',
+        'first_fault',
+        'last_checkpoint_present',
+        'last_checkpoint'
+    ) @() 'invalid-runtime-fault-contract'
+    $allowedFaults = @('hang', 'guest-exception', 'dispatch-miss', 'failed')
+    $allowedCheckpoints = @(
+        'runtime-started',
+        'guest-program-entered',
+        'first-guest-frame',
+        'guest-input-interactive',
+        'controlled-retail-scene'
+    )
+    if ($fault.schema -isnot [string] -or
+        [string]$fault.schema -cne 'katana.runtime-probe-fault' -or
+        -not (Test-IntegralJsonNumber $fault.report_version) -or
+        [decimal]$fault.report_version -ne 1 -or
+        $fault.termination -isnot [string] -or
+        $allowedFaults -cnotcontains [string]$fault.termination -or
+        -not (Test-JsonBoolean $fault.first_fault_present) -or
+        -not [bool]$fault.first_fault_present -or
+        $fault.first_fault -isnot [string] -or
+        $allowedFaults -cnotcontains [string]$fault.first_fault -or
+        [string]$fault.termination -cne [string]$fault.first_fault -or
+        -not (Test-JsonBoolean $fault.last_checkpoint_present)) {
+        Throw-ProbeFailure 'invalid-runtime-fault-contract'
+    }
+    $checkpointPresent = [bool]$fault.last_checkpoint_present
+    if (($checkpointPresent -and (
+            $fault.last_checkpoint -isnot [string] -or
+            $allowedCheckpoints -cnotcontains [string]$fault.last_checkpoint)) -or
+        (-not $checkpointPresent -and $null -ne $fault.last_checkpoint)) {
+        Throw-ProbeFailure 'invalid-runtime-fault-contract'
+    }
+    return [pscustomobject]@{
+        termination = [string]$fault.termination
+        first_fault = [string]$fault.first_fault
+        last_checkpoint_present = $checkpointPresent
+        last_checkpoint = if ($checkpointPresent) {
+            [string]$fault.last_checkpoint
+        } else {
+            $null
+        }
+    }
+}
+
+function Assert-NoRuntimeFaultLine {
+    param(
+        [AllowEmptyString()][string]$Stdout,
+        [AllowEmptyString()][string]$Stderr
+    )
+    if ([regex]::Matches(
+            $Stdout,
+            [regex]::Escape($script:FaultMarker)).Count -ne 0 -or
+        [regex]::Matches(
+            $Stderr,
+            [regex]::Escape($script:FaultMarker)).Count -ne 0) {
+        Throw-ProbeFailure 'unexpected-runtime-fault-line'
+    }
+}
+
+function New-PrivateFaultEnvelope {
+    param(
+        [string]$Termination,
+        [string]$FirstFault,
+        [bool]$CheckpointPresent,
+        [AllowNull()][string]$Checkpoint,
+        [bool]$ReplayComplete
+    )
+    $allowedFaults = @('hang', 'guest-exception', 'dispatch-miss', 'failed')
+    if ($allowedFaults -cnotcontains $Termination -or
+        $allowedFaults -cnotcontains $FirstFault -or
+        $Termination -cne $FirstFault -or
+        ($CheckpointPresent -and [string]::IsNullOrWhiteSpace($Checkpoint)) -or
+        (-not $CheckpointPresent -and $null -ne $Checkpoint)) {
+        Throw-ProbeFailure 'invalid-private-fault-envelope'
+    }
+    return [ordered]@{
+        schema = 'katana-private-runtime-fault'
+        version = 1
+        status = 'failed'
+        termination = $Termination
+        first_fault = $FirstFault
+        last_checkpoint_present = $CheckpointPresent
+        last_checkpoint = if ($CheckpointPresent) { $Checkpoint } else { $null }
+        replay_complete = $ReplayComplete
+        redacted = $true
+    }
+}
+
+function Write-AtomicFaultEnvelope {
+    param(
+        [string]$OutputRoot,
+        [ValidateSet('diagnostics-off', 'diagnostics-on', 'self-test')]
+        [string]$RunLabel,
+        $Envelope
+    )
+    if (-not (Test-Path -LiteralPath $OutputRoot -PathType Container)) {
+        Throw-ProbeFailure 'fault-output-root-missing'
+    }
+    $outputRootFull = [IO.Path]::GetFullPath($OutputRoot)
+    if (Test-PathWithinOrEqual $outputRootFull $script:RepositoryRoot) {
+        Throw-ProbeFailure 'fault-output-inside-repository'
+    }
+    $finalPath = Join-Path $outputRootFull (
+        'runtime-probe-fault-' + $RunLabel + '.json')
+    if (Test-Path -LiteralPath $finalPath) {
+        Throw-ProbeFailure 'fault-output-already-exists'
+    }
+    $temporaryPath = Join-Path $outputRootFull (
+        '.runtime-probe-fault-' + [guid]::NewGuid().ToString('N') + '.tmp')
+    $json = $Envelope | ConvertTo-Json -Depth 3 -Compress
+    if ([string]::IsNullOrWhiteSpace($json) -or $json.Length -gt 65536) {
+        Throw-ProbeFailure 'invalid-private-fault-envelope'
+    }
+    try {
+        [IO.File]::WriteAllText(
+            $temporaryPath,
+            $json,
+            [Text.UTF8Encoding]::new($false))
+        [IO.File]::Move($temporaryPath, $finalPath)
+    } catch {
+        Throw-ProbeFailure 'fault-output-write-failed'
+    } finally {
+        if (Test-Path -LiteralPath $temporaryPath -PathType Leaf) {
+            Remove-Item -LiteralPath $temporaryPath -Force
+        }
+    }
+}
+
 function Read-RuntimeProbeLine {
     param(
         [string]$Stdout,
@@ -1632,8 +1862,12 @@ function Read-RuntimeProbeLine {
         $_.StartsWith($script:ProbeMarker, [StringComparison]::Ordinal)
     })
     if ($probeLines.Count -ne 1 -or
-        [regex]::Matches($Stdout, [regex]::Escape('KATANA_RUNTIME_PROBE')).Count -ne 1 -or
-        [regex]::Matches($Stderr, [regex]::Escape('KATANA_RUNTIME_PROBE')).Count -ne 0) {
+        [regex]::Matches(
+            $Stdout,
+            [regex]::Escape($script:ProbeMarker)).Count -ne 1 -or
+        [regex]::Matches(
+            $Stderr,
+            [regex]::Escape($script:ProbeMarker)).Count -ne 0) {
         Throw-ProbeFailure 'runtime-probe-line-count'
     }
     $payload = $probeLines[0].Substring($script:ProbeMarker.Length)
@@ -1785,7 +2019,10 @@ function Invoke-OneProbeRun {
         [hashtable]$BaseEnvironment,
         [uint64]$GuestCycleBudget,
         [bool]$DiagnosticsEnabled,
-        [int]$TimeoutSeconds
+        [int]$TimeoutSeconds,
+        [string]$FaultOutputRoot,
+        [ValidateSet('diagnostics-off', 'diagnostics-on')]
+        [string]$RunLabel
     )
     $processResult = Invoke-BudgetedRuntime `
         ([string]$RuntimeRoot.executable) `
@@ -1796,10 +2033,73 @@ function Invoke-OneProbeRun {
         $DiagnosticsEnabled `
         $TimeoutSeconds
     if ($processResult.timed_out) {
-        Throw-ProbeFailure 'runtime-host-timeout'
+        $checkpoint = [pscustomobject]@{
+            present = $false
+            checkpoint = $null
+            count = [uint64]0
+        }
+        try {
+            $checkpoint = Get-RuntimeCheckpointState `
+                ([string]$processResult.stdout) `
+                ([string]$processResult.stderr)
+        } catch {
+            # A forced timeout can cut a flushed line between bytes. The host
+            # timeout remains authoritative and the partial checkpoint is
+            # omitted from the redacted package.
+        }
+        $envelope = New-PrivateFaultEnvelope `
+            'hang' `
+            'hang' `
+            ([bool]$checkpoint.present) `
+            $checkpoint.checkpoint `
+            $false
+        Write-AtomicFaultEnvelope $FaultOutputRoot $RunLabel $envelope
+        Throw-ProbeFailure 'hang'
     }
+    $checkpoint = Get-RuntimeCheckpointState `
+        ([string]$processResult.stdout) `
+        ([string]$processResult.stderr)
     if ($processResult.exit_code -ne 0) {
-        Throw-ProbeFailure 'runtime-nonzero-exit'
+        $faultMarkerCount =
+            [regex]::Matches(
+                [string]$processResult.stdout,
+                [regex]::Escape($script:FaultMarker)).Count +
+            [regex]::Matches(
+                [string]$processResult.stderr,
+                [regex]::Escape($script:FaultMarker)).Count
+        if ($faultMarkerCount -eq 0) {
+            $envelope = New-PrivateFaultEnvelope `
+                'failed' `
+                'failed' `
+                ([bool]$checkpoint.present) `
+                $checkpoint.checkpoint `
+                $false
+            Write-AtomicFaultEnvelope $FaultOutputRoot $RunLabel $envelope
+            Throw-ProbeFailure 'failed'
+        }
+        $fault = Read-RuntimeFaultLine `
+            ([string]$processResult.stdout) `
+            ([string]$processResult.stderr)
+        if ([bool]$fault.last_checkpoint_present -ne [bool]$checkpoint.present -or
+            ([bool]$checkpoint.present -and
+                [string]$fault.last_checkpoint -cne
+                [string]$checkpoint.checkpoint)) {
+            Throw-ProbeFailure 'runtime-fault-checkpoint-mismatch'
+        }
+        $envelope = New-PrivateFaultEnvelope `
+            ([string]$fault.termination) `
+            ([string]$fault.first_fault) `
+            ([bool]$fault.last_checkpoint_present) `
+            $fault.last_checkpoint `
+            $false
+        Write-AtomicFaultEnvelope $FaultOutputRoot $RunLabel $envelope
+        Throw-ProbeFailure ([string]$fault.termination)
+    }
+    Assert-NoRuntimeFaultLine `
+        ([string]$processResult.stdout) `
+        ([string]$processResult.stderr)
+    if (-not [bool]$checkpoint.present) {
+        Throw-ProbeFailure 'runtime-checkpoint-missing'
     }
     $probe = Read-RuntimeProbeLine `
         ([string]$processResult.stdout) `
@@ -1816,6 +2116,8 @@ function Invoke-OneProbeRun {
     return [pscustomobject]@{
         probe = $probe
         trace_count = $traceCount
+        last_checkpoint_present = [bool]$checkpoint.present
+        last_checkpoint = [string]$checkpoint.checkpoint
     }
 }
 
@@ -1869,6 +2171,40 @@ function New-SyntheticProbeJson {
             combined = '0000000000000008'
         }
     } | ConvertTo-Json -Depth 5 -Compress)
+}
+
+function New-SyntheticCheckpointLine {
+    param(
+        [uint64]$Sequence,
+        [string]$Checkpoint
+    )
+    $json = [ordered]@{
+        schema = 'katana.runtime-probe-checkpoint'
+        report_version = 1
+        status = 'observed'
+        sequence = $Sequence
+        checkpoint = $Checkpoint
+    } | ConvertTo-Json -Compress
+    return $script:CheckpointMarker + $json
+}
+
+function New-SyntheticFaultLine {
+    param(
+        [ValidateSet('hang', 'guest-exception', 'dispatch-miss', 'failed')]
+        [string]$Termination,
+        [AllowNull()][string]$Checkpoint
+    )
+    $checkpointPresent = -not [string]::IsNullOrWhiteSpace($Checkpoint)
+    $json = [ordered]@{
+        schema = 'katana.runtime-probe-fault'
+        report_version = 1
+        termination = $Termination
+        first_fault_present = $true
+        first_fault = $Termination
+        last_checkpoint_present = $checkpointPresent
+        last_checkpoint = if ($checkpointPresent) { $Checkpoint } else { $null }
+    } | ConvertTo-Json -Compress
+    return $script:FaultMarker + $json
 }
 
 function Invoke-PortBindingSelfTest {
@@ -2229,6 +2565,108 @@ function Invoke-SelfTest {
             Throw-ProbeFailure 'self-test-probe-invalid'
         }
     }
+
+    $checkpointOutput =
+        (New-SyntheticCheckpointLine 1 'runtime-started') + "`n" +
+        (New-SyntheticCheckpointLine 2 'guest-program-entered') + "`n"
+    $checkpointState = Get-RuntimeCheckpointState $checkpointOutput ''
+    if (-not $checkpointState.present -or
+        $checkpointState.count -ne 2 -or
+        [string]$checkpointState.checkpoint -cne 'guest-program-entered') {
+        Throw-ProbeFailure 'self-test-checkpoint-valid'
+    }
+    foreach ($invalidCheckpoint in @(
+        (New-SyntheticCheckpointLine 2 'runtime-started'),
+        ((New-SyntheticCheckpointLine 1 'guest-program-entered') + "`n" +
+            (New-SyntheticCheckpointLine 2 'runtime-started')),
+        ((New-SyntheticCheckpointLine 1 'runtime-started').Replace(
+            '"status":"observed"',
+            '"status":"observed","address":"private-value"'))
+    )) {
+        if (-not (Test-ThrowsProbeFailure {
+            [void](Get-RuntimeCheckpointState $invalidCheckpoint '')
+        })) {
+            Throw-ProbeFailure 'self-test-checkpoint-invalid'
+        }
+    }
+
+    $guestFaultLine =
+        New-SyntheticFaultLine 'guest-exception' 'guest-program-entered'
+    $guestFault = Read-RuntimeFaultLine $guestFaultLine ''
+    if ([string]$guestFault.termination -cne 'guest-exception' -or
+        -not $guestFault.last_checkpoint_present -or
+        [string]$guestFault.last_checkpoint -cne 'guest-program-entered') {
+        Throw-ProbeFailure 'self-test-guest-fault-valid'
+    }
+    $dispatchFault = Read-RuntimeFaultLine (
+        New-SyntheticFaultLine 'dispatch-miss' $null) ''
+    if ([string]$dispatchFault.termination -cne 'dispatch-miss' -or
+        $dispatchFault.last_checkpoint_present) {
+        Throw-ProbeFailure 'self-test-dispatch-fault-valid'
+    }
+    foreach ($invalidFault in @(
+        ($guestFaultLine + "`n" + $guestFaultLine),
+        $guestFaultLine.Replace(
+            '"termination":"guest-exception"',
+            '"termination":"guest-exception","address":"8c010000"'),
+        $guestFaultLine.Replace(
+            '"report_version":1',
+            '"report_version":1,"report_version":1'),
+        $guestFaultLine.Replace(
+            '"first_fault":"guest-exception"',
+            '"first_fault":"dispatch-miss"')
+    )) {
+        if (-not (Test-ThrowsProbeFailure {
+            [void](Read-RuntimeFaultLine $invalidFault '')
+        })) {
+            Throw-ProbeFailure 'self-test-fault-invalid'
+        }
+    }
+
+    $faultOutputRoot = Join-Path ([IO.Path]::GetTempPath()) (
+        'katana-runtime-probe-fault-self-test-' +
+        [guid]::NewGuid().ToString('N'))
+    try {
+        [void][IO.Directory]::CreateDirectory($faultOutputRoot)
+        $hangEnvelope = New-PrivateFaultEnvelope `
+            'hang' 'hang' $true 'runtime-started' $false
+        Write-AtomicFaultEnvelope $faultOutputRoot 'self-test' $hangEnvelope
+        $faultPath = Join-Path $faultOutputRoot (
+            'runtime-probe-fault-self-test.json')
+        Assert-RegularNonReparseFile $faultPath 'self-test-fault-output'
+        $faultText = [IO.File]::ReadAllText($faultPath)
+        $faultObject = Read-JsonObject $faultText 'self-test-fault-output'
+        Assert-ExactFields $faultObject @(
+            'schema',
+            'version',
+            'status',
+            'termination',
+            'first_fault',
+            'last_checkpoint_present',
+            'last_checkpoint',
+            'replay_complete',
+            'redacted'
+        ) @() 'self-test-fault-output'
+        if ([string]$faultObject.schema -cne 'katana-private-runtime-fault' -or
+            [string]$faultObject.termination -cne 'hang' -or
+            [string]$faultObject.first_fault -cne 'hang' -or
+            [string]$faultObject.last_checkpoint -cne 'runtime-started' -or
+            [bool]$faultObject.replay_complete -or
+            -not [bool]$faultObject.redacted -or
+            $faultText -match '(?i)address|register|hash|path|stdout|stderr|8c[0-9a-f]{6}') {
+            Throw-ProbeFailure 'self-test-fault-output'
+        }
+        if (-not (Test-ThrowsProbeFailure {
+            Write-AtomicFaultEnvelope $faultOutputRoot 'self-test' $hangEnvelope
+        })) {
+            Throw-ProbeFailure 'self-test-fault-atomic-replace'
+        }
+    } finally {
+        if (Test-Path -LiteralPath $faultOutputRoot -PathType Container) {
+            Remove-Item -LiteralPath $faultOutputRoot -Recurse -Force
+        }
+    }
+
     if ((Assert-NoWaitLoopTrace '' '') -ne 0) {
         Throw-ProbeFailure 'self-test-trace-off'
     }
@@ -2317,7 +2755,9 @@ function Invoke-ConfiguredProbe {
         $baseEnvironment `
         $settings.guest_cycle_budget `
         $false `
-        $settings.host_timeout_seconds
+        $settings.host_timeout_seconds `
+        $outputRoot `
+        'diagnostics-off'
     if ((Get-FileSha256 $packedDisc) -cne $packSha256) {
         Throw-ProbeFailure 'packed-disc-changed'
     }
@@ -2328,7 +2768,9 @@ function Invoke-ConfiguredProbe {
         $baseEnvironment `
         $settings.guest_cycle_budget `
         $true `
-        $settings.host_timeout_seconds
+        $settings.host_timeout_seconds `
+        $outputRoot `
+        'diagnostics-on'
     if ((Get-FileSha256 $packedDisc) -cne $packSha256) {
         Throw-ProbeFailure 'packed-disc-changed'
     }
@@ -2337,6 +2779,13 @@ function Invoke-ConfiguredProbe {
     if ([string]$runA.probe.normative_json -cne
         [string]$runB.probe.normative_json) {
         Throw-ProbeFailure 'normative-runtime-probe-mismatch'
+    }
+    if ([bool]$runA.last_checkpoint_present -ne
+            [bool]$runB.last_checkpoint_present -or
+        ([bool]$runA.last_checkpoint_present -and
+            [string]$runA.last_checkpoint -cne
+            [string]$runB.last_checkpoint)) {
+        Throw-ProbeFailure 'runtime-checkpoint-ab-mismatch'
     }
     if ($runA.probe.diagnostics_enabled -or
         -not $runB.probe.diagnostics_enabled -or
@@ -2358,6 +2807,7 @@ function Invoke-ConfiguredProbe {
             on = $true
         }
         normative_fields_equal = $true
+        last_checkpoint_equal = $true
         executable_and_pack_unchanged = $true
         replay_complete_and_sealed = $true
         trace_lines = [ordered]@{

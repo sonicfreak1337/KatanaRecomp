@@ -2,7 +2,7 @@
 
 Der mit KR-4508 eingefuehrte Portprojektvertrag Version 3 trennt
 Analyseerfolg, Eingabeidentitaet und tatsaechliche Gastausfuehrung. Der
-aktuelle kumulative Stand verwendet Portprojektvertrag 27, Runtime-ABI 43,
+aktuelle kumulative Stand verwendet Portprojektvertrag 28, Runtime-ABI 44,
 PlatformServices-ABI 10, Block-ABI 3 und Backend-Interface-ABI 3. Keine der
 Vertrauensaussagen wird aus der blossen Erzeugung oder dem Start eines
 Hostprozesses abgeleitet.
@@ -148,6 +148,56 @@ waren identisch, EXE und Disc-Pack unveraendert und beide
 Wait-Loop-Rohtracezaehler null. Der aggregierte Bericht
 `katana-private-runtime-probe-ab` Version 1 meldete `status=success`; damit ist
 `KR-4842` abgeschlossen.
+
+## KR-4911-Runtimebeobachtung und Fehlerpakete
+
+Runtime-ABI 44 und Portprojektvertrag 28 erweitern den deterministischen
+Produktvertrag auf Systemreplay-Schema 4. `deterministic-v1` verlangt vor dem
+ersten Ereignis zwoelf Coverageklassen: CPU-Safepoint, Scheduler-Callback,
+akzeptierter Interrupt, Video, Audio, Input, MMIO, DMA, Blockdispatch,
+Gastexception, kontrollierter Fallback und Gastcheckpoint. Der generierte Port
+reicht genau eine `SystemReplayObservationSession` in den zentralen
+Blockdispatcher. Dispatch-Hits und -Misses, Fallbacks, Exceptions und
+Checkpoints verwenden ausschliesslich Gastzyklus und Resetepoche; GD-ROM-,
+DMA-, PVR- und AICA-Schedulercallbacks besitzen stabile Ereigniscodes.
+
+Checkpoints sind streng monoton, beginnen mit Sequenz eins und verwenden nur
+`runtime-started`, `guest-program-entered`, `first-guest-frame`,
+`guest-input-interactive` und `controlled-retail-scene`. Jede angenommene
+Observation erscheint im Probe-Modus als genau eine stdout-Zeile mit
+`KATANA_RUNTIME_PROBE_CHECKPOINT ` und dem exakten
+`katana.runtime-probe-checkpoint`-Schema Version 1. Der private Runner lehnt
+stderr-Marker, zusaetzliche Felder, doppelte Sequenzen sowie gleiche oder
+rueckwaerts laufende Checkpoints ab.
+
+Die stabilen Endklassen unterscheiden insbesondere `budget-reached`, `hang`,
+`guest-exception`, `dispatch-miss` und `failed`. Der erste echte Fehler latched
+Klasse und vollstaendigen CPU-Snapshot; der letzte zuvor akzeptierte Checkpoint
+haelt ebenfalls einen eigenen CPU-Snapshot. Beide bleiben nach First-Fault
+unveraenderlich. Die produktseitige Zeile `KATANA_RUNTIME_PROBE_FAULT ` folgt
+`katana.runtime-probe-fault` Version 1 und serialisiert ausschliesslich
+Endklasse, First-Fault-Praesenz/-Klasse und optionale
+Checkpoint-Praesenz/-Klasse. Register, Adressen, Gastzeit, Hashes, Pfade,
+stdout/stderr und Rohlogs gehoeren nicht in das Envelope.
+
+Ein Nichtnull-Exit muss genau eine gueltige Faultzeile besitzen; ein
+erfolgreicher Lauf darf keine enthalten. Der Runner klassifiziert einen
+Hosttimeout selbst als `hang` und gleicht den letzten Fault-Checkpoint mit den
+vorherigen Checkpointzeilen ab. Das daraus gebildete
+`katana-private-runtime-fault` Version 1 enthaelt nur `status=failed`,
+Endklasse, First-Fault-Klasse, optionalen letzten Checkpoint,
+`replay_complete` und `redacted=true`. Es wird im konfigurierten Ausgabebaum
+ausserhalb des Repositorys zuerst als temporaere UTF-8-Datei geschrieben und
+danach atomar an einen noch nicht vorhandenen Zielnamen verschoben. Vorhandene
+Fehlerpakete werden nicht ersetzt.
+
+Der Abschlussnachweis bestand aus dem fokussierten Gate 8/8 in 6,60 Sekunden,
+`katana-port-cli-tests` 1/1 in 155,67 Sekunden und einem frischen privaten
+PAL-A/B-Lauf 2/2 mit 100.000 Gastzyklen und 120 Sekunden Hosttimeout. Normative
+Felder und letzter Checkpoint waren gleich, Executable, Disc-Pack,
+Original-GDI und Tracks unveraendert, beide Replays vollstaendig und versiegelt
+und die Tracezaehler null/null. Damit ist `KR-4911` abgeschlossen und
+`KR-4912` freigegeben. Eine Vollsuite und `KR-4852` wurden nicht ausgefuehrt.
 
 ## Konsistenzgrenzen
 

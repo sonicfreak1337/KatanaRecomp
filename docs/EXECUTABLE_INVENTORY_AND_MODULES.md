@@ -180,8 +180,8 @@ Manifest als `diagnostic-interpreter` aus. Deaktivierung, unbekannte Quelle,
 Byteabweichung, Budgetende und ungueltiger Block bleiben typisierte Misses.
 `KR-4848` bleibt fuer strukturierte Disc-Ladetransaktionen, den allgemeinen
 nativen Materializer und vorab erzeugte latente native Module offen. Der
-aktuelle kumulative Vertrag verwendet Runtime-ABI 43, Block-ABI 3,
-Backend-Interface-ABI 3, PlatformServices-ABI 10 und Portprojektvertrag 27.
+aktuelle kumulative Vertrag verwendet Runtime-ABI 44, Block-ABI 3,
+Backend-Interface-ABI 3, PlatformServices-ABI 10 und Portprojektvertrag 28.
 
 Die optionale Runtimebeobachtung aendert diesen Materialisierungsvertrag nicht.
 Ein POD-Zugriffssink versieht bereits ausgefuehrte AOT-Zugriffe und Zugriffe

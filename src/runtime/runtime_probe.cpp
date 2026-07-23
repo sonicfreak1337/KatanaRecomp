@@ -76,8 +76,78 @@ const char* termination_name(const RuntimeProbeTermination termination) noexcept
         return "host-shutdown";
     case RuntimeProbeTermination::Failed:
         return "failed";
+    case RuntimeProbeTermination::Hang:
+        return "hang";
+    case RuntimeProbeTermination::GuestException:
+        return "guest-exception";
+    case RuntimeProbeTermination::DispatchMiss:
+        return "dispatch-miss";
     }
     return "unknown";
+}
+
+bool known_termination(const RuntimeProbeTermination termination) noexcept {
+    switch (termination) {
+    case RuntimeProbeTermination::Unknown:
+    case RuntimeProbeTermination::Completed:
+    case RuntimeProbeTermination::GuestLifecycle:
+    case RuntimeProbeTermination::BudgetReached:
+    case RuntimeProbeTermination::HostShutdown:
+    case RuntimeProbeTermination::Failed:
+    case RuntimeProbeTermination::Hang:
+    case RuntimeProbeTermination::GuestException:
+    case RuntimeProbeTermination::DispatchMiss:
+        return true;
+    }
+    return false;
+}
+
+bool fault_termination(const RuntimeProbeTermination termination) noexcept {
+    switch (termination) {
+    case RuntimeProbeTermination::Failed:
+    case RuntimeProbeTermination::Hang:
+    case RuntimeProbeTermination::GuestException:
+    case RuntimeProbeTermination::DispatchMiss:
+        return true;
+    case RuntimeProbeTermination::Unknown:
+    case RuntimeProbeTermination::Completed:
+    case RuntimeProbeTermination::GuestLifecycle:
+    case RuntimeProbeTermination::BudgetReached:
+    case RuntimeProbeTermination::HostShutdown:
+        return false;
+    }
+    return false;
+}
+
+const char* checkpoint_name(const RuntimeProbeCheckpoint checkpoint) noexcept {
+    switch (checkpoint) {
+    case RuntimeProbeCheckpoint::None:
+        return "none";
+    case RuntimeProbeCheckpoint::RuntimeStarted:
+        return "runtime-started";
+    case RuntimeProbeCheckpoint::GuestProgramEntered:
+        return "guest-program-entered";
+    case RuntimeProbeCheckpoint::FirstGuestFrame:
+        return "first-guest-frame";
+    case RuntimeProbeCheckpoint::GuestInputInteractive:
+        return "guest-input-interactive";
+    case RuntimeProbeCheckpoint::ControlledRetailScene:
+        return "controlled-retail-scene";
+    }
+    return "none";
+}
+
+bool known_checkpoint(const RuntimeProbeCheckpoint checkpoint) noexcept {
+    switch (checkpoint) {
+    case RuntimeProbeCheckpoint::None:
+    case RuntimeProbeCheckpoint::RuntimeStarted:
+    case RuntimeProbeCheckpoint::GuestProgramEntered:
+    case RuntimeProbeCheckpoint::FirstGuestFrame:
+    case RuntimeProbeCheckpoint::GuestInputInteractive:
+    case RuntimeProbeCheckpoint::ControlledRetailScene:
+        return true;
+    }
+    return false;
 }
 
 void append_hex64(std::ostringstream& output, const std::uint64_t value) {
@@ -529,6 +599,54 @@ RuntimeProbeBudgetReached::RuntimeProbeBudgetReached(
 std::optional<std::uint64_t>
 RuntimeProbeBudgetReached::final_guest_cycle() const noexcept {
     return final_guest_cycle_;
+}
+
+bool RuntimeProbeObservationState::observe_checkpoint(
+    const RuntimeProbeCheckpoint checkpoint,
+    const RuntimeProbeCpuSnapshot& cpu) noexcept {
+    if (first_fault_.has_value() || checkpoint == RuntimeProbeCheckpoint::None ||
+        !known_checkpoint(checkpoint)) {
+        return false;
+    }
+    if (last_stable_checkpoint_.has_value()) {
+        if (static_cast<std::uint8_t>(checkpoint) <=
+                static_cast<std::uint8_t>(
+                    last_stable_checkpoint_->checkpoint) ||
+            cpu.retired_guest_instructions <
+                last_stable_checkpoint_->cpu.retired_guest_instructions) {
+            return false;
+        }
+    }
+    last_stable_checkpoint_ = RuntimeProbeCheckpointObservation{checkpoint, cpu};
+    return true;
+}
+
+bool RuntimeProbeObservationState::latch_fault(
+    const RuntimeProbeTermination termination,
+    const RuntimeProbeCpuSnapshot& cpu) noexcept {
+    if (first_fault_.has_value() || !fault_termination(termination)) return false;
+    first_fault_ = RuntimeProbeFaultObservation{termination, cpu};
+    return true;
+}
+
+const std::optional<RuntimeProbeCheckpointObservation>&
+RuntimeProbeObservationState::last_stable_checkpoint() const noexcept {
+    return last_stable_checkpoint_;
+}
+
+const std::optional<RuntimeProbeFaultObservation>&
+RuntimeProbeObservationState::first_fault() const noexcept {
+    return first_fault_;
+}
+
+RuntimeProbeFaultEnvelope RuntimeProbeObservationState::fault_envelope(
+    const RuntimeProbeTermination termination) const noexcept {
+    RuntimeProbeFaultEnvelope envelope;
+    envelope.termination =
+        first_fault_.has_value() ? first_fault_->termination : termination;
+    envelope.first_fault = first_fault_;
+    envelope.last_stable_checkpoint = last_stable_checkpoint_;
+    return envelope;
 }
 
 void RuntimeProbeFnv1a64LeV1::append_u8(const std::uint8_t value) noexcept {
@@ -2251,6 +2369,57 @@ std::string serialize_runtime_probe_report_json(const RuntimeProbeReport& report
     output << ",\"combined\":";
     append_hex64(output, report.hashes.combined);
     output << "}}";
+    return output.str();
+}
+
+std::string serialize_runtime_probe_fault_envelope_json(
+    const RuntimeProbeFaultEnvelope& envelope) {
+    if (envelope.report_version != runtime_probe_fault_report_version)
+        throw std::invalid_argument(
+            "Runtime-Probe-Fehlerpaket besitzt eine unbekannte Version.");
+    if (!fault_termination(envelope.termination))
+        throw std::invalid_argument(
+            "Runtime-Probe-Fehlerpaket besitzt keine stabile Fehlerklasse.");
+    if (envelope.first_fault.has_value()) {
+        if (!fault_termination(envelope.first_fault->termination) ||
+            envelope.termination != envelope.first_fault->termination) {
+            throw std::invalid_argument(
+                "Runtime-Probe-Fehlerpaket verletzt den First-Fault-Vertrag.");
+        }
+    } else {
+        throw std::invalid_argument(
+            "Runtime-Probe-Fehlerklasse besitzt keinen gelatchten CPU-Zustand.");
+    }
+    if (envelope.last_stable_checkpoint.has_value() &&
+        (envelope.last_stable_checkpoint->checkpoint ==
+             RuntimeProbeCheckpoint::None ||
+         !known_checkpoint(envelope.last_stable_checkpoint->checkpoint))) {
+        throw std::invalid_argument(
+            "Runtime-Probe-Fehlerpaket besitzt keinen stabilen Checkpoint.");
+    }
+
+    std::ostringstream output;
+    output.imbue(std::locale::classic());
+    output << "{\"schema\":\"katana.runtime-probe-fault\",\"report_version\":"
+           << envelope.report_version << ",\"termination\":\""
+           << termination_name(envelope.termination)
+           << "\",\"first_fault_present\":"
+           << (envelope.first_fault.has_value() ? "true" : "false")
+           << ",\"first_fault\":";
+    if (envelope.first_fault.has_value())
+        output << '"' << termination_name(envelope.first_fault->termination) << '"';
+    else
+        output << "null";
+    output << ",\"last_checkpoint_present\":"
+           << (envelope.last_stable_checkpoint.has_value() ? "true" : "false")
+           << ",\"last_checkpoint\":";
+    if (envelope.last_stable_checkpoint.has_value())
+        output << '"'
+               << checkpoint_name(envelope.last_stable_checkpoint->checkpoint)
+               << '"';
+    else
+        output << "null";
+    output << '}';
     return output.str();
 }
 

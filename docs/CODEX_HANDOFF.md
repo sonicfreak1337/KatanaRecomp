@@ -388,10 +388,10 @@ v0.48 P0 - vom belegten IP.BIN-Frame bis BootExecutable und Spielboot fortsetzen
 ```
 
 Abgeschlossen und in Roadmap/Taskliste markiert sind `KR-4831`, `KR-4841`,
-`KR-4842`, `KR-4843`, `KR-4844`, `KR-4845`, `KR-4846`, `KR-4915` und
-`KR-4850`. Der aktuelle Runtimevertrag steht auf Runtime-ABI 43, Block-ABI 3,
+`KR-4842`, `KR-4843`, `KR-4844`, `KR-4845`, `KR-4846`, `KR-4911`, `KR-4915`
+und `KR-4850`. Der aktuelle Runtimevertrag steht auf Runtime-ABI 44, Block-ABI 3,
 Backend-Interface-ABI 3, PlatformServices-ABI 10, BIOS-ABI 9,
-Portprojektvertrag 27 und Host-Video-Vertrag 2.
+Portprojektvertrag 28 und Host-Video-Vertrag 2. `KR-4912` ist freigegeben.
 Das verbindliche
 XenonRecomp-artige Produktmodell rekompiliert `IP.BIN` und BootExecutable
 statisch aus SH-4 in nativen PC-Code. Dreamcast-Komponenten bleiben typisierte,
@@ -566,10 +566,12 @@ Diagnose=0/1-A/B-Runner bestand zwei Laeufe mit 100.000 Gastzyklen und 120
 Sekunden Hosttimeout. Die normativen Felder waren gleich, Executable und
 Disc-Pack blieben unveraendert, Systemreplay v3 war vollstaendig und
 versiegelt, und beide Laeufe erzeugten null Wait-Loop-Tracezeilen. Damit ist
-`KR-4842` abgeschlossen und `KR-4911` freigegeben, bleibt aber selbst offen.
+`KR-4842` abgeschlossen; `KR-4911` war an diesem Zwischenstand freigegeben,
+aber noch offen.
 Es lief keine Vollsuite und kein `KR-4852`.
 
-Systemreplay-Schema 3 besitzt eine feste, konfigurierbare Kapazitaet von
+Der damalige Systemreplay-Zwischenstand unter Schema 3 besitzt eine feste,
+konfigurierbare Kapazitaet von
 standardmaessig 4.096 und hoechstens 65.536 Ereignissen; portable
 Ereigniscodes sind auf 64 Zeichen begrenzt. Ein gesaettigter Recordversuch
 zaehlt exakt einen Drop. Jeder Drop verbietet Versiegelung und Replay, waehrend
@@ -577,9 +579,33 @@ ein bereits versiegelter Log unveraenderlich bleibt. Codes, Adressen, Werte,
 numerische Payloads und Hashes bleiben intern fuer Ereignishash und
 Replayvergleich exakt. Das Standard-JSON redigiert `code`, `address`, `value`,
 `detail`, `auxiliary`, `event_hash` und `final_guest_state_hash`; nur ein
-ausdrueckliches lokales Opt-in serialisiert sie. `KR-4911` bleibt offen, bis
-Produktwiring, gemeinsame Stopptaxonomie, letzter stabiler Checkpoint und ein
-redigiertes Fehler-Envelope ebenfalls geschlossen sind.
+ausdrueckliches lokales Opt-in serialisiert sie.
+
+Runtime-ABI 44 und Portprojektvertrag 28 schliessen darauf aufbauend
+`KR-4911`. Systemreplay-Schema 4 erweitert `deterministic-v1` auf zwoelf
+Pflichtklassen und bindet Blockdispatch, Gastexception, kontrollierten Fallback
+und Gastcheckpoint an die bisherigen acht Klassen. Die zentrale
+Observation-Session schreibt diese Ereignisse gegen Gastzyklus und Resetepoche;
+GD-ROM-, DMA-, PVR- und AICA-Schedulercallbacks besitzen stabile Codes.
+Checkpoints laufen strikt monoton von `runtime-started` ueber
+`guest-program-entered`, `first-guest-frame` und `guest-input-interactive` bis
+`controlled-retail-scene`.
+
+Die typisierten Endklassen umfassen `budget-reached`, `hang`,
+`guest-exception`, `dispatch-miss` und `failed`. First-Fault und letzter
+stabiler Checkpoint sichern intern vollstaendige CPU-Snapshots und frieren nach
+dem ersten Fehler ein; das Fault-v1-JSON gibt nur allowlist-redigierte Klassen-
+und Checkpointfelder aus. Der private A/B-Runner validiert die parsebaren
+Fault- und Checkpointzeilen strikt und schreibt private Fehlerpakete ausserhalb
+des Repositorys atomar und write-once.
+
+Das fokussierte Gate bestand 8/8 in 6,60 Sekunden,
+`katana-port-cli-tests` 1/1 in 155,67 Sekunden. Der frische private PAL-A/B-
+Lauf bestand 2/2 mit 100.000 Gastzyklen und 120 Sekunden Hosttimeout:
+normative Felder und letzter Checkpoint waren gleich, Executable, Disc-Pack,
+Original-GDI und Tracks blieben unveraendert, beide Replays vollstaendig und
+versiegelt und die Tracezaehler null/null. Es lief keine Vollsuite und kein
+`KR-4852`. `KR-4912` ist freigegeben.
 
 Der SH-4-DMAC-Channel-2-Pfad verwendet fuer TA den oeffentlichen externen
 Memory-to-Device-Vertrag `RS=2`, 32-Byte-Einheiten, inkrementierende Quelle,
@@ -646,12 +672,11 @@ Weiter offen:
 KR-4847: EX-38/39-Vertrag und laufende G1-Timeout-/Overrun-Grenzen schliessen
 KR-4848: strukturierte Disc-Ladetransaktionen und Registry latenter nativer Module
 KR-4849: Direct-Texture-Zielprogression und restliche TA/PVR-Eingangskette
-KR-4911: Produktwiring, Stopptaxonomie, Checkpoint und Fehler-Envelope
 ```
 
-`KR-4842` ist als Vorbedingung erfuellt. Die verbindliche
-Abhaengigkeitsfolge fuer die offenen Bootpfade lautet
-`KR-4911 -> KR-4912 -> KR-4848`; `KR-4849` schliesst den
+`KR-4842` und `KR-4911` sind als Vorbedingungen erfuellt. Die verbindliche
+Abhaengigkeitsfolge fuer die offenen Bootpfade beginnt jetzt mit
+`KR-4912 -> KR-4848`; `KR-4849` schliesst den
 produktiven TA/PVR-Vertrag. `KR-4915` und `KR-4850` sind durch den legitimen
 vorgezogenen Direct-Framebuffer-Pfad bereits erfuellt. `KR-4814` und
 `KR-4914` folgen als verbindliche Post-Frame-Arbeit in v0.48 auf `KR-4850`

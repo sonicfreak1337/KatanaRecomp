@@ -1,5 +1,7 @@
 #include "katana/runtime/system_replay.hpp"
 
+#include "katana/runtime/indirect_dispatch.hpp"
+#include "katana/runtime/scheduler.hpp"
 #include "katana/runtime/scheduler_safepoint.hpp"
 
 #include <algorithm>
@@ -23,7 +25,11 @@ constexpr SystemReplayCoverageMask all_coverage =
     static_cast<SystemReplayCoverageMask>(SystemReplayCoverage::Audio) |
     static_cast<SystemReplayCoverageMask>(SystemReplayCoverage::Input) |
     static_cast<SystemReplayCoverageMask>(SystemReplayCoverage::Mmio) |
-    static_cast<SystemReplayCoverageMask>(SystemReplayCoverage::Dma);
+    static_cast<SystemReplayCoverageMask>(SystemReplayCoverage::Dma) |
+    static_cast<SystemReplayCoverageMask>(SystemReplayCoverage::BlockDispatch) |
+    static_cast<SystemReplayCoverageMask>(SystemReplayCoverage::GuestException) |
+    static_cast<SystemReplayCoverageMask>(SystemReplayCoverage::ControlledFallback) |
+    static_cast<SystemReplayCoverageMask>(SystemReplayCoverage::GuestCheckpoint);
 constexpr std::string_view ordering_digest_domain = "katana-system-replay-order-v1";
 
 bool stable_code(const std::string_view value) noexcept {
@@ -51,6 +57,11 @@ bool known_event_kind(const SystemReplayEventKind kind) noexcept {
     case SystemReplayEventKind::Audio:
     case SystemReplayEventKind::ExternalInput:
     case SystemReplayEventKind::HostEvent:
+    case SystemReplayEventKind::BlockDispatchHit:
+    case SystemReplayEventKind::BlockDispatchMiss:
+    case SystemReplayEventKind::ControlledFallback:
+    case SystemReplayEventKind::GuestException:
+    case SystemReplayEventKind::GuestCheckpoint:
         return true;
     }
     return false;
@@ -115,6 +126,11 @@ std::size_t coverage_index(const SystemReplayCoverageMask coverage) noexcept {
         ++index;
     }
     return index;
+}
+
+bool advance_power_of_two_sample(std::uint64_t& count) noexcept {
+    if (count != std::numeric_limits<std::uint64_t>::max()) ++count;
+    return count != 0u && (count & (count - 1u)) == 0u;
 }
 
 std::string hex32(const std::uint32_t value) {
@@ -424,6 +440,128 @@ bool DeterministicSystemReplay::complete() const noexcept {
     return finished_;
 }
 
+SystemReplayObservationSession::SystemReplayObservationSession(
+    SystemReplayLog* replay_log,
+    const EventScheduler* scheduler)
+    : replay_log_(replay_log), scheduler_(scheduler) {
+    if (replay_log_ != nullptr && scheduler_ == nullptr) {
+        throw std::invalid_argument(
+            "Systemreplay-Observation braucht eine logische Scheduleruhr.");
+    }
+    if (replay_log_ != nullptr) {
+        replay_log_->enable_coverage(
+            static_cast<SystemReplayCoverageMask>(SystemReplayCoverage::BlockDispatch) |
+            static_cast<SystemReplayCoverageMask>(SystemReplayCoverage::GuestException) |
+            static_cast<SystemReplayCoverageMask>(SystemReplayCoverage::ControlledFallback) |
+            static_cast<SystemReplayCoverageMask>(SystemReplayCoverage::GuestCheckpoint));
+    }
+}
+
+void SystemReplayObservationSession::record(const SystemReplayEventKind kind,
+                                            const std::uint64_t guest_cycle,
+                                            const std::uint64_t time_epoch,
+                                            std::string code,
+                                            const std::uint64_t detail,
+                                            const std::uint64_t auxiliary) noexcept {
+    if (replay_log_ == nullptr) return;
+    static_cast<void>(replay_log_->try_record({0u,
+                                               guest_cycle,
+                                               kind,
+                                               std::move(code),
+                                               std::nullopt,
+                                               std::nullopt,
+                                               detail,
+                                               auxiliary,
+                                               false,
+                                               time_epoch}));
+}
+
+void SystemReplayObservationSession::observe_block_dispatch_hit(
+    const RuntimeDispatchClass dispatch_class,
+    const bool materialized) noexcept {
+    if (!advance_power_of_two_sample(dispatch_hit_count_)) return;
+    record(SystemReplayEventKind::BlockDispatchHit,
+           scheduler_ != nullptr ? scheduler_->current_cycle() : 0u,
+           scheduler_ != nullptr ? scheduler_->reset_generation() : 0u,
+           materialized ? "block-dispatch-hit-materialized" : "block-dispatch-hit",
+           static_cast<std::uint64_t>(dispatch_class),
+           dispatch_hit_count_);
+}
+
+void SystemReplayObservationSession::observe_block_dispatch_miss(
+    const IndirectDispatchMetrics& metrics) noexcept {
+    const auto& first_error = metrics.first_error();
+    record(SystemReplayEventKind::BlockDispatchMiss,
+           scheduler_ != nullptr ? scheduler_->current_cycle() : 0u,
+           scheduler_ != nullptr ? scheduler_->reset_generation() : 0u,
+           "block-dispatch-miss",
+           first_error ? static_cast<std::uint64_t>(first_error->error) : 0u,
+           first_error ? static_cast<std::uint64_t>(first_error->dispatch_class) : 0u);
+}
+
+void SystemReplayObservationSession::observe_controlled_fallback() noexcept {
+    if (!advance_power_of_two_sample(controlled_fallback_count_)) return;
+    record(SystemReplayEventKind::ControlledFallback,
+           scheduler_ != nullptr ? scheduler_->current_cycle() : 0u,
+           scheduler_ != nullptr ? scheduler_->reset_generation() : 0u,
+           "controlled-fallback",
+           0u,
+           controlled_fallback_count_);
+}
+
+void SystemReplayObservationSession::observe_guest_exception(
+    const ExceptionCause cause) noexcept {
+    if (cause == ExceptionCause::None) return;
+    if (!advance_power_of_two_sample(guest_exception_count_)) return;
+    record(SystemReplayEventKind::GuestException,
+           scheduler_ != nullptr ? scheduler_->current_cycle() : 0u,
+           scheduler_ != nullptr ? scheduler_->reset_generation() : 0u,
+           "guest-exception",
+           static_cast<std::uint64_t>(cause),
+           guest_exception_count_);
+}
+
+bool SystemReplayObservationSession::observe_guest_checkpoint(
+    const SystemReplayCheckpointKind checkpoint) noexcept {
+    const auto ordinal = static_cast<std::uint8_t>(checkpoint);
+    if (ordinal < static_cast<std::uint8_t>(SystemReplayCheckpointKind::RuntimeStarted) ||
+        ordinal >
+            static_cast<std::uint8_t>(SystemReplayCheckpointKind::ControlledRetailScene) ||
+        (last_checkpoint_.has_value() &&
+         ordinal <= static_cast<std::uint8_t>(last_checkpoint_->kind)) ||
+        (last_checkpoint_.has_value() &&
+         last_checkpoint_->sequence == std::numeric_limits<std::uint64_t>::max())) {
+        return false;
+    }
+    const auto sequence = last_checkpoint_.has_value() ? last_checkpoint_->sequence + 1u : 1u;
+    last_checkpoint_ = SystemReplayCheckpoint{sequence, checkpoint};
+    record(SystemReplayEventKind::GuestCheckpoint,
+           scheduler_ != nullptr ? scheduler_->current_cycle() : 0u,
+           scheduler_ != nullptr ? scheduler_->reset_generation() : 0u,
+           "guest-checkpoint",
+           ordinal,
+           sequence);
+    return true;
+}
+
+const std::optional<SystemReplayCheckpoint>&
+SystemReplayObservationSession::last_checkpoint() const noexcept {
+    return last_checkpoint_;
+}
+
+std::string SystemReplayObservationSession::serialize_checkpoint_json() const {
+    if (!last_checkpoint_.has_value()) {
+        throw std::logic_error("Observation-Session besitzt keinen Gastcheckpoint.");
+    }
+    std::ostringstream output;
+    output.imbue(std::locale::classic());
+    output << "{\"schema\":\"katana.runtime-probe-checkpoint\",\"report_version\":1"
+           << ",\"status\":\"observed\",\"sequence\":" << last_checkpoint_->sequence
+           << ",\"checkpoint\":\""
+           << system_replay_checkpoint_kind_name(last_checkpoint_->kind) << "\"}";
+    return output.str();
+}
+
 SystemReplayEvent make_safepoint_replay_event(const SafepointReport& report) {
     const auto flags = (report.interrupt_delivered ? 1u : 0u) |
                        (report.budget_exhausted ? 2u : 0u) |
@@ -552,6 +690,15 @@ system_replay_event_coverage(const SystemReplayEvent& event) noexcept {
         return static_cast<SystemReplayCoverageMask>(SystemReplayCoverage::Audio);
     case SystemReplayEventKind::ExternalInput:
         return static_cast<SystemReplayCoverageMask>(SystemReplayCoverage::Input);
+    case SystemReplayEventKind::BlockDispatchHit:
+    case SystemReplayEventKind::BlockDispatchMiss:
+        return static_cast<SystemReplayCoverageMask>(SystemReplayCoverage::BlockDispatch);
+    case SystemReplayEventKind::GuestException:
+        return static_cast<SystemReplayCoverageMask>(SystemReplayCoverage::GuestException);
+    case SystemReplayEventKind::ControlledFallback:
+        return static_cast<SystemReplayCoverageMask>(SystemReplayCoverage::ControlledFallback);
+    case SystemReplayEventKind::GuestCheckpoint:
+        return static_cast<SystemReplayCoverageMask>(SystemReplayCoverage::GuestCheckpoint);
     case SystemReplayEventKind::Timer:
     case SystemReplayEventKind::HostEvent:
         return 0u;
@@ -593,8 +740,83 @@ const char* system_replay_event_kind_name(const SystemReplayEventKind kind) noex
         return "external-input";
     case SystemReplayEventKind::HostEvent:
         return "host-event";
+    case SystemReplayEventKind::BlockDispatchHit:
+        return "block-dispatch-hit";
+    case SystemReplayEventKind::BlockDispatchMiss:
+        return "block-dispatch-miss";
+    case SystemReplayEventKind::ControlledFallback:
+        return "controlled-fallback";
+    case SystemReplayEventKind::GuestException:
+        return "guest-exception";
+    case SystemReplayEventKind::GuestCheckpoint:
+        return "guest-checkpoint";
     }
     return "unknown";
+}
+
+const char*
+system_replay_checkpoint_kind_name(const SystemReplayCheckpointKind checkpoint) noexcept {
+    switch (checkpoint) {
+    case SystemReplayCheckpointKind::RuntimeStarted:
+        return "runtime-started";
+    case SystemReplayCheckpointKind::GuestProgramEntered:
+        return "guest-program-entered";
+    case SystemReplayCheckpointKind::FirstGuestFrame:
+        return "first-guest-frame";
+    case SystemReplayCheckpointKind::GuestInputInteractive:
+        return "guest-input-interactive";
+    case SystemReplayCheckpointKind::ControlledRetailScene:
+        return "controlled-retail-scene";
+    }
+    return "unknown";
+}
+
+const char* system_replay_scheduler_event_code(const SchedulerEventKind kind) noexcept {
+    switch (kind) {
+    case SchedulerEventKind::Unknown:
+        return "scheduler-unknown";
+    case SchedulerEventKind::DiscRead:
+        return "gdrom-disc-read";
+    case SchedulerEventKind::Sh4Dmac:
+        return "sh4-dmac";
+    case SchedulerEventKind::GdRomPacket:
+        return "gdrom-packet";
+    case SchedulerEventKind::HollyG1Dma:
+        return "holly-g1-dma";
+    case SchedulerEventKind::HollyG2Dma:
+        return "holly-g2-dma";
+    case SchedulerEventKind::HollyPvrDma:
+        return "holly-pvr-dma";
+    case SchedulerEventKind::MapleDma:
+        return "maple-dma";
+    case SchedulerEventKind::MediaVideo:
+        return "media-video";
+    case SchedulerEventKind::MediaAudio:
+        return "media-audio";
+    case SchedulerEventKind::PvrRender:
+        return "pvr-render";
+    case SchedulerEventKind::PvrVblankIn:
+        return "pvr-vblank-in";
+    case SchedulerEventKind::PvrVblankOut:
+        return "pvr-vblank-out";
+    case SchedulerEventKind::PvrHblank:
+        return "pvr-hblank";
+    case SchedulerEventKind::ScifTransmit:
+        return "scif-transmit";
+    case SchedulerEventKind::SystemAsic:
+        return "system-asic";
+    case SchedulerEventKind::Sh4Rtc:
+        return "sh4-rtc";
+    case SchedulerEventKind::Sh4Tmu0:
+        return "sh4-tmu0";
+    case SchedulerEventKind::Sh4Tmu1:
+        return "sh4-tmu1";
+    case SchedulerEventKind::Sh4Tmu2:
+        return "sh4-tmu2";
+    case SchedulerEventKind::AicaTick:
+        return "aica-tick";
+    }
+    return "scheduler-unknown";
 }
 
 } // namespace katana::runtime

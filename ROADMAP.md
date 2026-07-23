@@ -165,7 +165,7 @@ und Hosteingabevertraege.
 ### Grundlage und migrierte Bring-up-Tasks
 
 - [x] `KR-4831` - Generischer Originaldisc-Installer ohne Retaildaten im Portpaket
-- [ ] `KR-4911` - Runtimebeobachtung, Replay und Fehlerpakete
+- [x] `KR-4911` - Runtimebeobachtung, Replay und Fehlerpakete
 - [ ] `KR-4912` - Dynamische Codebereiche, Module und Overlays
 - [ ] `KR-4913` - CPU-/Plattform-Bring-up bis `KR_GUEST_PROGRAM_ENTERED`
 - [x] `KR-4915` - Gast-PVR-Pfad bis `KR_FIRST_GUEST_FRAME`
@@ -198,7 +198,7 @@ erfuellt. Sie muessen vor der konsolidierten Validierung `KR-4852`
 abgeschlossen sein.
 
 Der Checkboxstand bleibt bewusst taskbezogen: `KR-4831`, `KR-4841`,
-`KR-4842`, `KR-4843` bis `KR-4846`, `KR-4915` und `KR-4850` sind
+`KR-4842`, `KR-4843` bis `KR-4846`, `KR-4911`, `KR-4915` und `KR-4850` sind
 abgeschlossen. `KR-4842` bindet MMU-bewusste lineare Peeks, nicht mutierende
 Geraetesnapshots, statische Wait-Loop-/Guard-Provenienz und den versionierten
 dynamischen Wait-Loop-Trace an eine deterministische Produktprobe. Der
@@ -206,9 +206,8 @@ Diagnose=0/1-A/B-Lauf bestand mit zwei frischen, identisch auf 100.000
 Gastzyklen budgetierten Laeufen: Die normativen Felder waren gleich,
 Executable und Disc-Pack blieben unveraendert, Systemreplay v3 war
 vollstaendig und versiegelt, und beide Laeufe erzeugten null
-Wait-Loop-Tracezeilen. Damit ist `KR-4842` abgeschlossen und `KR-4911`
-freigegeben. `KR-4911` bleibt bis zum vollstaendigen Runtimebeobachtungs- und
-Fehlerpaketvertrag offen.
+Wait-Loop-Tracezeilen. Damit ist `KR-4842` abgeschlossen; das damals
+freigegebene `KR-4911` ist inzwischen ebenfalls abgeschlossen.
 
 `KR-4915` und `KR-4850` wurden vor ihren noch offenen Boot- und TA-
 Voraussetzungen durch den legitimen IP.BIN-Direct-Framebuffer-Pfad
@@ -254,10 +253,10 @@ Backend-Interface-ABI 3, Portprojektvertrag 24 und Host-Video-Vertrag 2
 versionierten diesen privaten Portlauf. Er bleibt ausdruecklich historische
 ABI-39-Evidenz und wurde nicht nachtraeglich als ABI-40-Artefakt umgedeutet.
 
-Der aktuelle kumulative Kernvertrag verwendet Runtime-ABI 43, Block-ABI 3,
-Backend-Interface-ABI 3, PlatformServices-ABI 10, Portprojektvertrag 27 und
+Der aktuelle kumulative Kernvertrag verwendet Runtime-ABI 44, Block-ABI 3,
+Backend-Interface-ABI 3, PlatformServices-ABI 10, Portprojektvertrag 28 und
 Host-Video-Vertrag 2.
-Systemreplay v3 begrenzt die Aufzeichnung auf standardmaessig 4.096 und
+Systemreplay v4 begrenzt die Aufzeichnung auf standardmaessig 4.096 und
 hoechstens 65.536 Ereignisse sowie 64 Zeichen pro Ereigniscode. Ein
 von `try_record()` an einem unversiegelten Log abgewiesener Best-effort-
 Aufnahmeversuch zaehlt genau einen Drop; versiegelte Logs bleiben
@@ -265,9 +264,29 @@ unveraendert. Danach darf die unvollstaendige Spur weder versiegelt noch
 abgespielt werden. Intern bleiben alle Werte fuer Hash und exakten Vergleich
 erhalten, waehrend das JSON standardmaessig `code`, `address`, `value`, `detail`, `auxiliary`,
 `event_hash` und `final_guest_state_hash` redigiert.
-Das Profil `deterministic-v1` bindet zusaetzlich alle acht erforderlichen
-CPU-, Scheduler-, Interrupt-, Video-, Audio-, Eingabe-, MMIO- und DMA-Hooks
-vor dem ersten Ereignis sowie einen geordneten, domain-separierten Digest.
+Das Profil `deterministic-v1` bindet zusaetzlich alle zwoelf erforderlichen
+Klassen CPU-Safepoint, Scheduler-Callback, akzeptierter Interrupt, Video,
+Audio, Eingabe, MMIO, DMA, Blockdispatch, Gastexception, kontrollierter
+Fallback und Gastcheckpoint vor dem ersten Ereignis sowie einen geordneten,
+domain-separierten Digest. Die zentrale Observation-Session schreibt
+Dispatch-Hits und -Misses, Fallbacks, Exceptions und streng monotone
+Checkpoints gegen Gastzyklus und Resetepoche; GD-ROM-, DMA-, PVR- und
+AICA-Schedulerereignisse besitzen stabile Codes.
+
+Die Runtime-Endklassen unterscheiden `budget-reached`, `hang`,
+`guest-exception`, `dispatch-miss` und `failed`. First-Fault und letzter
+stabiler Checkpoint halten intern vollstaendige CPU-Snapshots und frieren nach
+dem ersten Fehler ein. Das parsebare Fault-v1-JSON gibt nur allowlist-redigierte
+Klassen- und Checkpointfelder aus. Der private A/B-Runner validiert Fault- und
+Checkpointzeilen strikt und schreibt redigierte Fehlerpakete ausserhalb des
+Repositorys atomar und write-once. Das fokussierte Gate bestand 8/8 in 6,60
+Sekunden, `katana-port-cli-tests` 1/1 in 155,67 Sekunden. Ein frischer privater
+PAL-A/B-Lauf bestand 2/2 mit 100.000 Gastzyklen und 120 Sekunden Hosttimeout:
+normative Felder und letzter Checkpoint waren gleich, Executable, Disc-Pack,
+Original-GDI und Tracks blieben unveraendert, beide Replays vollstaendig und
+versiegelt und die Tracezaehler null/null. Damit ist `KR-4911` abgeschlossen
+und `KR-4912` freigegeben. Eine Vollsuite und `KR-4852` wurden nicht
+ausgefuehrt.
 
 Der Hardwareauditor verwendet mit `katana.hardware-audit.v4` skalierbare
 Dominatorberechnung und echte natuerliche Loops. Er klassifiziert

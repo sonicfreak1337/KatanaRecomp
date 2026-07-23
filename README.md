@@ -59,11 +59,11 @@ vorbereitet; der live geladene Dispatch bleibt `RuntimeOnly` und erzeugt keine
 feste CFG-Kante. Snapshotcache und P2-Aliasaufloesung sind gegen imagefremde
 Beweise abgesichert. Lokale AOT-Blockketten tragen die exakte tatsaechliche
 Terminatorquelle und Siteklasse bis zum externen Dispatch weiter. Der aktuelle
-kumulative Stand verwendet Runtime-ABI 43, Block-ABI 3,
-Backend-Interface-ABI 3, PlatformServices-ABI 10, Portprojektvertrag 27 und
+kumulative Stand verwendet Runtime-ABI 44, Block-ABI 3,
+Backend-Interface-ABI 3, PlatformServices-ABI 10, Portprojektvertrag 28 und
 Host-Video-Vertrag 2.
 
-Systemreplay v3 haelt standardmaessig 4.096 und maximal 65.536 Ereignisse;
+Systemreplay v4 haelt standardmaessig 4.096 und maximal 65.536 Ereignisse;
 portable Ereigniscodes sind auf 64 Zeichen begrenzt. Ein von `try_record()` an
 einem unversiegelten Log abgewiesener Best-effort-Aufnahmeversuch zaehlt genau
 einen Drop; versiegelte Logs bleiben unveraendert. Eine unvollstaendige Spur
@@ -72,9 +72,18 @@ Adressen, Werte, numerische Payloads sowie Ereignis- und Endzustandshash exakt
 erhalten. Das JSON redigiert standardmaessig `code`, `address`, `value`,
 `detail`, `auxiliary`, `event_hash` und `final_guest_state_hash`; exakte
 Ausgabe erfordert ein ausdrueckliches lokales Opt-in.
-Das Profil `deterministic-v1` verlangt vor dem ersten Ereignis alle acht
-CPU-, Scheduler-, Interrupt-, Video-, Audio-, Eingabe-, MMIO- und DMA-Hooks.
+Das Profil `deterministic-v1` verlangt vor dem ersten Ereignis alle zwoelf
+Klassen CPU-Safepoint, Scheduler-Callback, akzeptierter Interrupt, Video,
+Audio, Eingabe, MMIO, DMA, Blockdispatch, Gastexception, kontrollierter
+Fallback und Gastcheckpoint.
 Aktivierte und tatsaechlich beobachtete Coverage bleiben getrennt sichtbar.
+Die zentrale Observation-Session schreibt Dispatch, Fallbacks, Exceptions und
+streng monotone Checkpoints gegen logische Gastzeit; GD-ROM-, DMA-, PVR- und
+AICA-Schedulerereignisse besitzen stabile Codes. Typisierte Endklassen
+unterscheiden `budget-reached`, `hang`, `guest-exception`, `dispatch-miss` und
+`failed`. First-Fault und letzter stabiler Checkpoint halten intern
+vollstaendige CPU-Snapshots, waehrend Fault-v1 und private Fehlerpakete nur
+allowlist-redigierte Klassen- und Checkpointfelder ausgeben.
 
 Der allgemeine Disc-Hardwareauditor schreibt
 `katana.hardware-audit.v4`, erkennt natuerliche Loops ueber skalierbare
@@ -162,8 +171,18 @@ abschliessende private A/B-Runner bestand zwei Laeufe mit 100.000
 Gastzyklen und 120 Sekunden Hosttimeout. Diagnose aus/an lieferte gleiche
 normative Felder, unveraendertes Executable und Disc-Pack, vollstaendiges und
 versiegeltes Systemreplay v3 sowie null/null Wait-Loop-Tracezeilen. Damit ist
-`KR-4842` abgeschlossen und `KR-4911` freigegeben. `KR-4911` bleibt bis zu
-seinem vollstaendigen Runtimebeobachtungs- und Fehlerpaketvertrag offen. Eine
+`KR-4842` abgeschlossen und `KR-4911` freigegeben worden; dieser Lauf bleibt
+historische v3-Evidenz.
+
+Der anschliessende KR-4911-Abschluss steht auf Runtime-ABI 44,
+Portprojektvertrag 28 und Systemreplay-Schema 4. Das fokussierte Gate bestand
+8/8 in 6,60 Sekunden, `katana-port-cli-tests` 1/1 in 155,67 Sekunden. Der
+frische private PAL-A/B-Lauf bestand 2/2 mit 100.000 Gastzyklen und 120
+Sekunden Hosttimeout. Normative Felder und letzter Checkpoint waren gleich,
+Executable, Disc-Pack, Original-GDI und Tracks blieben unveraendert, beide
+Replays vollstaendig und versiegelt und die Tracezaehler null/null. Private
+Fault-v1-Pakete werden ausserhalb des Repositorys atomar und write-once
+veroeffentlicht. `KR-4911` ist abgeschlossen und `KR-4912` freigegeben. Eine
 Vollsuite und `KR-4852` wurden nicht ausgefuehrt.
 
 Der vorangegangene optimierte ABI-38-PAL-Port wurde mit zwoelf Jobs in

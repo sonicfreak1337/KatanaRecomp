@@ -22,12 +22,12 @@ MMIO-Poll-, Mixed- und Unknown-Loops samt aufgeloester und konservativ
 unaufgeloester Guard-Evidenz.
 Der versionierte Runtime-Trace liefert dynamische Wertwechselfolgen und echte
 Writer-Provenienz. Der abschliessende Diagnose=0/1-A/B-Produktlauf bestand mit
-zwei frischen Laeufen. Damit ist `KR-4842` abgeschlossen und `KR-4911`
-freigegeben; `KR-4911` bleibt bis zu seinem vollstaendigen
-Runtimebeobachtungs- und Fehlerpaketvertrag offen.
+zwei frischen Laeufen. Damit ist `KR-4842` abgeschlossen; das damals
+freigegebene `KR-4911` ist inzwischen ebenfalls abgeschlossen und gibt
+`KR-4912` frei.
 
-Der aktuelle kumulative Vertrag verwendet Runtime-ABI 43, Block-ABI 3,
-Backend-Interface-ABI 3, PlatformServices-ABI 10, Portprojektvertrag 27 und
+Der aktuelle kumulative Vertrag verwendet Runtime-ABI 44, Block-ABI 3,
+Backend-Interface-ABI 3, PlatformServices-ABI 10, Portprojektvertrag 28 und
 Host-Video-Vertrag 2.
 
 Der aktuelle Sicherheitsblock schliesst zwei zuvor nur behauptete
@@ -87,21 +87,29 @@ unveraendertes Executable und Disc-Pack, vollstaendiges und versiegeltes Replay
 sowie null/null Wait-Loop-Tracezeilen. Eine Vollsuite und `KR-4852` wurden
 nicht ausgefuehrt.
 
-Systemreplay-Schema 3 schliesst zusaetzlich das unbegrenzte Wachstum des
-Diagnosepfads: Standardlogs halten 4.096, konfigurierbar hoechstens 65.536
-Ereignisse; Ereigniscodes sind auf 64 Zeichen begrenzt. Ein gesaettigter
-Recordversuch zaehlt exakt einen Drop. Jeder Drop verbietet Versiegelung und
-Replay, ein bereits versiegelter Log bleibt danach unveraenderlich. Codes,
-Adressen, Werte, numerische Payloads und Hashes bleiben intern fuer Hash und
-deterministischen Vergleich exakt. Das Standard-JSON redigiert dagegen
-`code`, `address`, `value`, `detail`, `auxiliary`, `event_hash` und
-`final_guest_state_hash`; exakte Serialisierung verlangt ein ausdrueckliches
-lokales Opt-in. Das Profil `deterministic-v1` verlangt vor dem ersten Ereignis
-alle acht CPU-, Scheduler-, Interrupt-, Video-, Audio-, Eingabe-, MMIO- und
-DMA-Hooks und trennt aktivierte von beobachteter Coverage. Die zwei
-fokussierten Replay- und Phase9-Regressionen bestehen 2/2. `KR-4911` bleibt
-fuer Produktwiring, gemeinsame Stopptaxonomie, letzten stabilen Checkpoint und
-das redigierte Fehler-Envelope offen.
+Systemreplay-Schema 4 behaelt die feste Kapazitaet von standardmaessig 4.096
+und hoechstens 65.536 Ereignissen, den 64-Zeichen-Codevertrag sowie die Drop-,
+Versiegelungs- und Standardredaktionsregeln von v3. `deterministic-v1`
+verlangt nun die zwoelf Klassen CPU-Safepoint, Scheduler-Callback,
+akzeptierter Interrupt, Video, Audio, Eingabe, MMIO, DMA, Blockdispatch,
+Gastexception, kontrollierter Fallback und Gastcheckpoint. Eine zentrale
+Observation-Session schreibt Dispatch-Hits und -Misses, Fallbacks, Exceptions
+und streng monotone Checkpoints gegen Gastzyklus und Resetepoche. GD-ROM-,
+DMA-, PVR- und AICA-Schedulerereignisse besitzen stabile Codes.
+
+Typisierte Endklassen unterscheiden `budget-reached`, `hang`,
+`guest-exception`, `dispatch-miss` und `failed`. First-Fault und letzter
+stabiler Checkpoint halten intern vollstaendige CPU-Snapshots und frieren nach
+dem ersten Fehler ein. Das Fault-v1-JSON bleibt auf Klassen- und
+Checkpointfelder allowlist-redigiert. Der private A/B-Runner validiert Fault-
+und Checkpointzeilen strikt und schreibt private Fehlerpakete ausserhalb des
+Repositorys atomar und write-once. Das fokussierte Gate bestand 8/8 in 6,60
+Sekunden, `katana-port-cli-tests` 1/1 in 155,67 Sekunden. Ein frischer privater
+PAL-A/B-Lauf bestand 2/2 mit 100.000 Gastzyklen und 120 Sekunden Hosttimeout:
+normative Felder und letzter Checkpoint waren gleich, Executable, Disc-Pack,
+Original-GDI und Tracks unveraendert, beide Replays vollstaendig und versiegelt
+und die Tracezaehler null/null. Damit ist `KR-4911` abgeschlossen und
+`KR-4912` freigegeben. Eine Vollsuite und `KR-4852` wurden nicht ausgefuehrt.
 
 Der mit Runtime-ABI 38 eingefuehrte Zwischenblock schliesst zwei allgemeine
 Hardwarevertraege. G1-DMA validiert Schutzfenster, 32-Bit-Ueberlauf und die
@@ -479,8 +487,8 @@ MMIO-Zugriff liegt im aktiven OCRAM; der fruehere Abbruch nach 12 Gastzyklen
 ist damit beseitigt. TA/PVR und ein echter Gastframe bleiben fuer den laengeren
 Folgelauf weiterhin offen.
 
-Runtime-ABI 43, Block-ABI 3, Backend-Interface-ABI 3, BIOS-ABI 9,
-PlatformServices-ABI 10, Portprojektvertrag 27 und Host-Video-Vertrag 2 bilden den kumulativen
+Runtime-ABI 44, Block-ABI 3, Backend-Interface-ABI 3, BIOS-ABI 9,
+PlatformServices-ABI 10, Portprojektvertrag 28 und Host-Video-Vertrag 2 bilden den kumulativen
 v0.48-Stand ab.
 PlatformServices-ABI 10 versioniert zusaetzlich die genaue
 `PREF`-Instruktionsherkunft bis zur Store Queue.

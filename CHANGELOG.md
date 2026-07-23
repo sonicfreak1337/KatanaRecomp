@@ -4,6 +4,25 @@
 
 ### Geaendert
 
+- KR-4911 schliesst den Runtimebeobachtungs- und Fehlerpaketvertrag.
+  Runtime-ABI 44 und Portprojektvertrag 28 binden Systemreplay-Schema 4 mit
+  zwoelf Coverageklassen. Blockdispatch, Gastexception, kontrollierter Fallback
+  und strikt monotone Gastcheckpoints ergaenzen die bisherigen acht Klassen;
+  GD-ROM-, DMA-, PVR- und AICA-Schedulercallbacks besitzen stabile
+  Ereigniscodes. Typisierte Endklassen unterscheiden `budget-reached`, `hang`,
+  `guest-exception`, `dispatch-miss` und `failed`. First-Fault und letzter
+  stabiler Checkpoint halten intern vollstaendige CPU-Snapshots, waehrend
+  `katana.runtime-probe-fault` v1 nur allowlist-redigierte Klassen- und
+  Checkpointfelder ausgibt. Der private A/B-Runner validiert Fault- und
+  Checkpointzeilen strikt und schreibt `katana-private-runtime-fault` v1
+  ausserhalb des Repositorys atomar und write-once.
+  Das fokussierte Gate bestand 8/8 in 6,60 Sekunden,
+  `katana-port-cli-tests` 1/1 in 155,67 Sekunden. Ein frischer privater
+  PAL-A/B-Lauf bestand 2/2 mit 100.000 Gastzyklen und 120 Sekunden Hosttimeout:
+  normative Felder und letzter Checkpoint waren gleich, Executable, Disc-Pack,
+  Original-GDI und Tracks blieben unveraendert, beide Replays vollstaendig und
+  versiegelt und die Tracezaehler null/null. `KR-4912` ist freigegeben. Eine
+  Vollsuite und `KR-4852` wurden nicht ausgefuehrt.
 - Runtime-ABI 43 und Portprojektvertrag 27 binden
   `katana.runtime-probe` Version 1 mit Profil `deterministic-v1`,
   Device-Schema 1 und Hashvertrag `fnv1a64-le-v1`. CPU, Scheduler, Haupt-RAM,
@@ -15,9 +34,9 @@
   mit 100.000 Gastzyklen und 120 Sekunden Hosttimeout. Die normativen Felder
   waren gleich, Executable und Disc-Pack blieben unveraendert, Systemreplay v3
   war vollstaendig und versiegelt, und beide Laeufe erzeugten null
-  Wait-Loop-Tracezeilen. Damit ist `KR-4842` abgeschlossen und `KR-4911`
-  freigegeben, bleibt aber selbst offen. Eine Vollsuite und `KR-4852` wurden
-  nicht ausgefuehrt.
+  Wait-Loop-Tracezeilen. Damit ist `KR-4842` abgeschlossen; `KR-4911` war an
+  diesem Zwischenstand freigegeben, aber noch offen. Eine Vollsuite und
+  `KR-4852` wurden nicht ausgefuehrt.
 - Der deterministische Systemreplay-Vertrag v3 besitzt nun eine feste,
   konfigurierbare Ereigniskapazitaet von standardmaessig 4.096 und hoechstens
   65.536 Eintraegen; portable Ereigniscodes sind auf 64 Zeichen begrenzt.
@@ -190,9 +209,9 @@
   Direct-FB-Pixeln. TA, Rendergeneration und Materializer bleiben null; der
   Budget-Exit ist erwartet. Diese Port- und Laufevidenz bleibt ausdruecklich
   historisch und wird nicht als ABI-40-Export ausgegeben.
-- Der aktuelle kumulative Schnittstellenstand verwendet Runtime-ABI 43,
+- Der aktuelle kumulative Schnittstellenstand verwendet Runtime-ABI 44,
   Block-ABI 3, Backend-Interface-ABI 3, PlatformServices-ABI 10,
-  Portprojektvertrag 27 und Host-Video-Vertrag 2. Block-ABI 3 versioniert die virtuelle
+  Portprojektvertrag 28 und Host-Video-Vertrag 2. Block-ABI 3 versioniert die virtuelle
   Quell-/Laufzeitadressabbildung source-relativierter nativer AOT-Templates.
 - PVR-Read- und Write-Framebuffer verwenden nun dieselbe hardwaregenaue
   logische 32-Bit-VRAM-Sicht statt eines linear interpretierten Hostpuffers.

@@ -1,3 +1,4 @@
+#include "katana/runtime/indirect_dispatch.hpp"
 #include "katana/runtime/scheduler_safepoint.hpp"
 #include "katana/runtime/system_replay.hpp"
 
@@ -381,9 +382,13 @@ int main() {
                             SystemReplayCoverage::AcceptedInterrupt,
                             SystemReplayCoverage::Video,
                             SystemReplayCoverage::Audio,
-                            SystemReplayCoverage::Input,
-                            SystemReplayCoverage::Mmio,
-                            SystemReplayCoverage::Dma}) {
+                             SystemReplayCoverage::Input,
+                             SystemReplayCoverage::Mmio,
+                             SystemReplayCoverage::Dma,
+                             SystemReplayCoverage::BlockDispatch,
+                             SystemReplayCoverage::GuestException,
+                             SystemReplayCoverage::ControlledFallback,
+                             SystemReplayCoverage::GuestCheckpoint}) {
         enabled_without_events.enable_coverage(
             static_cast<SystemReplayCoverageMask>(hook));
     }
@@ -447,6 +452,140 @@ int main() {
     require(!unknown_event_kind.try_record(std::move(unknown_event)) &&
                 unknown_event_kind.dropped_events() == 1u,
             "Unbekannte Systemreplay-Ereignisklasse wurde akzeptiert.");
+
+    const auto observation_coverage =
+        static_cast<SystemReplayCoverageMask>(SystemReplayCoverage::BlockDispatch) |
+        static_cast<SystemReplayCoverageMask>(SystemReplayCoverage::GuestException) |
+        static_cast<SystemReplayCoverageMask>(SystemReplayCoverage::ControlledFallback) |
+        static_cast<SystemReplayCoverageMask>(SystemReplayCoverage::GuestCheckpoint);
+    SystemReplayLog observation_log(
+        {32u, false, SystemReplayProfile::DeterministicV1});
+    observation_log.enable_coverage(deterministic_required & ~observation_coverage);
+    EventScheduler observation_scheduler;
+    SystemReplayObservationSession observations(&observation_log, &observation_scheduler);
+    require(observation_log.coverage_complete(),
+            "Zentrale Observation-Session aktiviert ihre vier Pflichtklassen nicht.");
+    require(observations.observe_guest_checkpoint(SystemReplayCheckpointKind::RuntimeStarted) &&
+                !observations.observe_guest_checkpoint(
+                    SystemReplayCheckpointKind::RuntimeStarted),
+            "Runtime-Checkpoint wird nicht strikt monoton und dedupliziert erfasst.");
+    observations.observe_block_dispatch_hit(RuntimeDispatchClass::GuardedFallback, true);
+    IndirectDispatchMetrics observation_metrics;
+    observation_metrics.record_miss(RuntimeDispatchClass::RuntimeOnly,
+                                    DispatchDiagnosticError::PermissionDenied,
+                                    0x8C010000u,
+                                    0x8C020000u);
+    observations.observe_block_dispatch_miss(observation_metrics);
+    observations.observe_controlled_fallback();
+    observations.observe_guest_exception(ExceptionCause::TlbMissRead);
+    observations.observe_guest_exception(ExceptionCause::None);
+    require(observations.observe_guest_checkpoint(
+                SystemReplayCheckpointKind::GuestProgramEntered) &&
+                !observations.observe_guest_checkpoint(
+                    SystemReplayCheckpointKind::RuntimeStarted),
+            "Observation-Session akzeptiert einen zuruecklaufenden Checkpoint.");
+    require(observation_log.events().size() == 6u &&
+                observation_log.events()[1].kind ==
+                    SystemReplayEventKind::BlockDispatchHit &&
+                observation_log.events()[2].kind ==
+                    SystemReplayEventKind::BlockDispatchMiss &&
+                observation_log.events()[2].detail ==
+                    static_cast<std::uint64_t>(DispatchDiagnosticError::PermissionDenied) &&
+                observation_log.events()[2].auxiliary ==
+                    static_cast<std::uint64_t>(RuntimeDispatchClass::RuntimeOnly) &&
+                observation_log.events()[3].kind ==
+                    SystemReplayEventKind::ControlledFallback &&
+                observation_log.events()[4].kind ==
+                    SystemReplayEventKind::GuestException &&
+                observation_log.events()[5].kind ==
+                    SystemReplayEventKind::GuestCheckpoint,
+            "Observation-Session verliert Dispatch-, Fallback-, Exception- oder Checkpointklasse.");
+    require(std::all_of(observation_log.events().begin(),
+                        observation_log.events().end(),
+                        [](const auto& recorded) {
+                            return !recorded.address.has_value() && !recorded.value.has_value();
+                        }),
+            "Zentrale Observation-Events speichern rohe Gastadressen oder Werte.");
+    require(observations.serialize_checkpoint_json() ==
+                "{\"schema\":\"katana.runtime-probe-checkpoint\",\"report_version\":1,"
+                "\"status\":\"observed\",\"sequence\":2,"
+                "\"checkpoint\":\"guest-program-entered\"}",
+            "Redigierter Checkpoint-Zeilenvertrag ist nicht exakt oder nicht monoton.");
+    const auto redacted_observations = observation_log.serialize_json();
+    require(redacted_observations.find("0x8C010000") == std::string::npos &&
+                redacted_observations.find("0x8C020000") == std::string::npos &&
+                redacted_observations.find("\"detail\":null") != std::string::npos &&
+                redacted_observations.find("\"auxiliary\":null") != std::string::npos,
+            "Redigierter Observation-Replay gibt Dispatchadressen oder Payloads preis.");
+
+    const auto make_high_volume_observations = [] {
+        SystemReplayLog high_volume({64u, false});
+        EventScheduler high_volume_scheduler;
+        SystemReplayObservationSession high_volume_observations(
+            &high_volume, &high_volume_scheduler);
+        for (std::uint64_t index = 0u; index < 100'000u; ++index) {
+            high_volume_observations.observe_block_dispatch_hit(
+                RuntimeDispatchClass::GuardedFallback);
+            high_volume_observations.observe_controlled_fallback();
+            high_volume_observations.observe_guest_exception(ExceptionCause::Trap);
+        }
+        high_volume.seal(0u);
+        return high_volume;
+    };
+    const auto high_volume = make_high_volume_observations();
+    const auto high_volume_duplicate = make_high_volume_observations();
+    require(high_volume.events().size() == 51u &&
+                high_volume.dropped_events() == 0u &&
+                high_volume.event_hash() == high_volume_duplicate.event_hash() &&
+                high_volume.events() == high_volume_duplicate.events(),
+            "100.000 Dispatch-/Fallback-/Exceptionbeobachtungen saettigen den begrenzten "
+            "Replay oder werden nicht deterministisch potenzbasiert verdichtet.");
+
+    require(std::string(system_replay_scheduler_event_code(SchedulerEventKind::DiscRead)) ==
+                    "gdrom-disc-read" &&
+                std::string(
+                    system_replay_scheduler_event_code(SchedulerEventKind::GdRomPacket)) ==
+                    "gdrom-packet" &&
+                std::string(
+                    system_replay_scheduler_event_code(SchedulerEventKind::PvrRender)) ==
+                    "pvr-render" &&
+                std::string(
+                    system_replay_scheduler_event_code(SchedulerEventKind::PvrVblankIn)) ==
+                    "pvr-vblank-in" &&
+                std::string(
+                    system_replay_scheduler_event_code(SchedulerEventKind::PvrVblankOut)) ==
+                    "pvr-vblank-out" &&
+                std::string(
+                    system_replay_scheduler_event_code(SchedulerEventKind::PvrHblank)) ==
+                    "pvr-hblank" &&
+                std::string(system_replay_scheduler_event_code(SchedulerEventKind::AicaTick)) ==
+                    "aica-tick",
+            "GD-ROM-, PVR- oder AICA-Schedulerklassen besitzen kein stabiles Replaymapping.");
+    SystemReplayLog mapped_scheduler_log;
+    EventScheduler mapped_scheduler(&mapped_scheduler_log);
+    for (const auto kind : {SchedulerEventKind::DiscRead,
+                            SchedulerEventKind::GdRomPacket,
+                            SchedulerEventKind::PvrRender,
+                            SchedulerEventKind::AicaTick}) {
+        static_cast<void>(
+            mapped_scheduler.schedule_at(1u, [](const auto, const auto) {}, kind));
+    }
+    static_cast<void>(mapped_scheduler.advance_to(1u, 8u));
+    const std::array expected_scheduler_codes{
+        std::string("gdrom-disc-read"),
+        std::string("gdrom-packet"),
+        std::string("pvr-render"),
+        std::string("aica-tick")};
+    require(mapped_scheduler_log.events().size() == expected_scheduler_codes.size() &&
+                std::equal(mapped_scheduler_log.events().begin(),
+                           mapped_scheduler_log.events().end(),
+                           expected_scheduler_codes.begin(),
+                           [](const auto& recorded, const auto& code) {
+                               return recorded.kind ==
+                                          SystemReplayEventKind::SchedulerCallback &&
+                                      recorded.code == code;
+                           }),
+            "Scheduler schreibt GD-ROM-, PVR- und AICA-Klassen nicht in den Replaystrom.");
 
     std::cout << "KR-3609 deterministische Systemereignis-Replays erfolgreich.\n";
     return EXIT_SUCCESS;

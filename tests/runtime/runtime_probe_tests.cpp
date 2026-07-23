@@ -42,6 +42,59 @@ void require_snapshot_mutation_changes(const Snapshot& before,
             message);
 }
 
+katana::runtime::RuntimeProbeCpuSnapshot
+filled_cpu_snapshot(std::uint32_t value,
+                    const std::uint64_t retired_guest_instructions) {
+    using namespace katana::runtime;
+    RuntimeProbeCpuSnapshot cpu;
+    const auto next = [&value]() { return value++; };
+    for (auto& entry : cpu.r) entry = next();
+    for (auto& entry : cpu.r_bank) entry = next();
+    for (auto& entry : cpu.fr) entry = next();
+    for (auto& entry : cpu.xf) entry = next();
+    cpu.pc = next();
+    cpu.pr = next();
+    cpu.gbr = next();
+    cpu.vbr = next();
+    cpu.ssr = next();
+    cpu.spc = next();
+    cpu.sgr = next();
+    cpu.dbr = next();
+    cpu.tra = next();
+    cpu.tea = next();
+    cpu.expevt = next();
+    cpu.intevt = next();
+    cpu.pteh = next();
+    cpu.ptel = next();
+    cpu.ptea = next();
+    cpu.ttb = next();
+    cpu.mmucr = next();
+    for (auto& entry : cpu.utlb) {
+        entry.pteh = next();
+        entry.ptel = next();
+        entry.ptea = next();
+    }
+    cpu.tlb_load_count = next();
+    cpu.mach = next();
+    cpu.macl = next();
+    cpu.fpul = next();
+    cpu.fpscr = next();
+    cpu.sr = next();
+    cpu.t = true;
+    cpu.s = true;
+    cpu.q = false;
+    cpu.m = true;
+    cpu.trap_pending = true;
+    cpu.last_exception_cause = ExceptionCause::TlbProtectionWrite;
+    cpu.exception_in_delay_slot = true;
+    cpu.sleeping = false;
+    cpu.last_prefetch_address = next();
+    cpu.prefetch_count = next();
+    cpu.retired_guest_instructions = retired_guest_instructions;
+    cpu.last_prefetch_was_store_queue = true;
+    return cpu;
+}
+
 std::vector<katana::runtime::RuntimeProbeDeviceSnapshot>
 complete_device_profile(
     const katana::runtime::RuntimeProbeDeviceSnapshot& pvr,
@@ -91,6 +144,159 @@ int main() {
     byte_hash.append_bytes(scalar_bytes);
     require(scalar_hash.value() == byte_hash.value(),
             "Der Runtime-Probe-Codec kodiert u32 nicht fest little-endian.");
+
+    require(static_cast<std::uint8_t>(RuntimeProbeTermination::BudgetReached) == 3u &&
+                static_cast<std::uint8_t>(RuntimeProbeTermination::Failed) == 5u &&
+                static_cast<std::uint8_t>(RuntimeProbeTermination::Hang) == 6u &&
+                static_cast<std::uint8_t>(
+                    RuntimeProbeTermination::GuestException) == 7u &&
+                static_cast<std::uint8_t>(
+                    RuntimeProbeTermination::DispatchMiss) == 8u,
+            "Die Runtime-Probe-Endklassen sind nicht stabil nummeriert.");
+    require(runtime_probe_fault_line_prefix == "KATANA_RUNTIME_PROBE_FAULT ",
+            "Der parsebare Runtime-Probe-Fehlerprefix ist instabil.");
+
+    const std::array fault_classes = {
+        std::pair{RuntimeProbeTermination::Hang, std::string_view{"hang"}},
+        std::pair{RuntimeProbeTermination::GuestException,
+                  std::string_view{"guest-exception"}},
+        std::pair{RuntimeProbeTermination::DispatchMiss,
+                  std::string_view{"dispatch-miss"}},
+        std::pair{RuntimeProbeTermination::Failed, std::string_view{"failed"}},
+    };
+    for (const auto& [termination, name] : fault_classes) {
+        RuntimeProbeObservationState state;
+        const auto cpu = filled_cpu_snapshot(0xA0000000u, 37u);
+        require(state.latch_fault(termination, cpu),
+                "Eine stabile Runtime-Probe-Fehlerklasse wurde nicht gelatcht.");
+        const auto envelope =
+            state.fault_envelope(RuntimeProbeTermination::BudgetReached);
+        const auto json = serialize_runtime_probe_fault_envelope_json(envelope);
+        require(envelope.termination == termination &&
+                    envelope.first_fault.has_value() &&
+                    envelope.first_fault->termination == termination &&
+                    envelope.first_fault->cpu == cpu &&
+                    json.find("\"termination\":\"" + std::string{name} + "\"") !=
+                        std::string::npos &&
+                    json.find("\"first_fault\":\"" + std::string{name} + "\"") !=
+                        std::string::npos,
+                "Eine Runtime-Probe-Fehlerklasse verlor Klasse oder CPU-Snapshot.");
+    }
+
+    for (const auto non_fault : {RuntimeProbeTermination::Unknown,
+                                 RuntimeProbeTermination::Completed,
+                                 RuntimeProbeTermination::GuestLifecycle,
+                                 RuntimeProbeTermination::BudgetReached,
+                                 RuntimeProbeTermination::HostShutdown}) {
+        RuntimeProbeObservationState non_fault_observation;
+        require(throws<std::invalid_argument>([&] {
+                    static_cast<void>(serialize_runtime_probe_fault_envelope_json(
+                        non_fault_observation.fault_envelope(non_fault)));
+                }),
+                "Fault-Envelope akzeptiert eine regulaere oder unbekannte Endklasse.");
+    }
+
+    RuntimeProbeObservationState observation;
+    auto runtime_cpu = filled_cpu_snapshot(0xDEADBEEFu, 10u);
+    const auto expected_runtime_cpu = runtime_cpu;
+    require(!observation.observe_checkpoint(RuntimeProbeCheckpoint::None,
+                                            runtime_cpu) &&
+                !observation.latch_fault(RuntimeProbeTermination::BudgetReached,
+                                         runtime_cpu) &&
+                observation.observe_checkpoint(
+                    RuntimeProbeCheckpoint::RuntimeStarted, runtime_cpu),
+            "Runtime-Probe akzeptiert ungueltige Observationen oder verwirft den Start.");
+    runtime_cpu.pc = 0u;
+    require(observation.last_stable_checkpoint().has_value() &&
+                observation.last_stable_checkpoint()->cpu ==
+                    expected_runtime_cpu,
+            "Der Checkpoint haelt keinen vollstaendigen eigenen CPU-Snapshot.");
+
+    const auto duplicate_cpu = filled_cpu_snapshot(0xB0000000u, 11u);
+    const auto regressive_cpu = filled_cpu_snapshot(0xC0000000u, 9u);
+    require(!observation.observe_checkpoint(RuntimeProbeCheckpoint::RuntimeStarted,
+                                            duplicate_cpu) &&
+                !observation.observe_checkpoint(
+                    RuntimeProbeCheckpoint::GuestProgramEntered,
+                    regressive_cpu) &&
+                observation.last_stable_checkpoint()->cpu ==
+                    expected_runtime_cpu,
+            "Doppelter oder zaehlerregressiver Checkpoint veraendert die Latch.");
+
+    const auto guest_cpu = filled_cpu_snapshot(0xD0000000u, 12u);
+    require(observation.observe_checkpoint(
+                RuntimeProbeCheckpoint::GuestProgramEntered, guest_cpu) &&
+                !observation.observe_checkpoint(
+                    RuntimeProbeCheckpoint::RuntimeStarted,
+                    duplicate_cpu),
+            "Runtime-Probe erzwingt keine strikt monotone Checkpointklasse.");
+
+    const auto first_fault_cpu = filled_cpu_snapshot(0xE0000000u, 13u);
+    const auto later_fault_cpu = filled_cpu_snapshot(0xF0000000u, 14u);
+    require(observation.latch_fault(RuntimeProbeTermination::GuestException,
+                                    first_fault_cpu) &&
+                !observation.latch_fault(RuntimeProbeTermination::DispatchMiss,
+                                         later_fault_cpu) &&
+                !observation.observe_checkpoint(
+                    RuntimeProbeCheckpoint::ControlledRetailScene,
+                    later_fault_cpu),
+            "First-Fault oder Checkpoint-Freeze ist nicht unveraenderlich.");
+
+    const auto fault_envelope =
+        observation.fault_envelope(RuntimeProbeTermination::HostShutdown);
+    require(fault_envelope.termination ==
+                RuntimeProbeTermination::GuestException &&
+                fault_envelope.first_fault.has_value() &&
+                fault_envelope.first_fault->cpu == first_fault_cpu &&
+                fault_envelope.last_stable_checkpoint.has_value() &&
+                fault_envelope.last_stable_checkpoint->checkpoint ==
+                    RuntimeProbeCheckpoint::GuestProgramEntered &&
+                fault_envelope.last_stable_checkpoint->cpu == guest_cpu,
+            "Fehlerpaket verlor First-Fault oder letzten stabilen Checkpoint.");
+
+    const auto fault_json =
+        serialize_runtime_probe_fault_envelope_json(fault_envelope);
+    require(
+        fault_json ==
+            "{\"schema\":\"katana.runtime-probe-fault\",\"report_version\":1,"
+            "\"termination\":\"guest-exception\",\"first_fault_present\":true,"
+            "\"first_fault\":\"guest-exception\","
+            "\"last_checkpoint_present\":true,"
+            "\"last_checkpoint\":\"guest-program-entered\"}",
+        "Das Runtime-Probe-Fehlerpaket besitzt kein exaktes v1-Allowlist-Schema.");
+    const std::array<std::string_view, 11u> forbidden_fault_json_tokens = {
+        "\"cpu\"",       "\"pc\"",      "\"register\"", "\"address\"",
+        "\"guest_cycle\"", "\"retired\"", "\"hash\"",     "\"path\"",
+        "\"raw\"",       "\"log\"",     "deadbeef",
+    };
+    for (const auto token : forbidden_fault_json_tokens) {
+        require(fault_json.find(token) == std::string::npos,
+                "Redigiertes Fehlerpaket leakt CPU-, Identitaets- oder Rohdaten.");
+    }
+
+    auto invalid_fault_envelope = fault_envelope;
+    invalid_fault_envelope.report_version = 2u;
+    require(throws<std::invalid_argument>([&] {
+                static_cast<void>(serialize_runtime_probe_fault_envelope_json(
+                    invalid_fault_envelope));
+            }),
+            "Fehlerpaket akzeptiert eine unbekannte Reportversion.");
+    invalid_fault_envelope = {};
+    invalid_fault_envelope.termination = RuntimeProbeTermination::DispatchMiss;
+    require(throws<std::invalid_argument>([&] {
+                static_cast<void>(serialize_runtime_probe_fault_envelope_json(
+                    invalid_fault_envelope));
+            }),
+            "Fehlerpaket akzeptiert eine Fehlerklasse ohne First-Fault-Snapshot.");
+    invalid_fault_envelope = {};
+    invalid_fault_envelope.termination = RuntimeProbeTermination::Completed;
+    invalid_fault_envelope.last_stable_checkpoint =
+        RuntimeProbeCheckpointObservation{};
+    require(throws<std::invalid_argument>([&] {
+                static_cast<void>(serialize_runtime_probe_fault_envelope_json(
+                    invalid_fault_envelope));
+            }),
+            "Fehlerpaket akzeptiert einen nicht gesetzten Checkpoint.");
 
     const std::array schema_samples = {
         make_runtime_probe_device_snapshot(PvrRegisterSnapshot{}),
