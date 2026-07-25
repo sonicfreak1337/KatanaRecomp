@@ -18,10 +18,25 @@
   Runtime-Probe-Schema 3 und Crashbericht-Schema 2 versionieren die Aenderung.
   Elf fokussierte ausfuehrbare Regressionen bestanden 11/11 in 1,55 Sekunden,
   einschliesslich BSR, BSRF und JSR innerhalb eines bereits aktiven
-  Interrupt-Handlers sowie neu im Delay Slot entstehender Fehler. Eine
-  Vollsuite, `KR-4852` und ein frischer privater Produktlauf wurden fuer diesen
-  Codeabschluss noch nicht ausgefuehrt; der erwartete naechste sichtbare
-  PAL-Marker ist der 50-/60-Hz-Auswahlbildschirm.
+  Interrupt-Handlers sowie neu im Delay Slot entstehender Fehler.
+- Der daraufhin einmalig exportierte und gebaute private v7-Port umfasst
+  1.873 Funktionen, 37 Partitionen und drei latente Module. Export und
+  Hostbuild benoetigten 187,8 Sekunden, die lokale Installation 16,8 Sekunden.
+  Ein deterministischer Probe-Lauf dauerte 73,5 Sekunden, der anschliessende
+  Detail-Lauf 49,2 Sekunden. Beide Gastframemarker werden am sichtbaren
+  Sega-Bild erreicht; die alte Zwei-Instruktions-JSR-Schleife ist
+  verschwunden. Der Lauf endet jetzt eindeutig und ohne Fallback am fehlenden
+  AOT-Ziel `0x8C65E96A -> 0x8C652150`: 7.422.352 Dispatch-Hits mit einem Miss
+  sowie 2.609.376 `RuntimeOnly`-Hits mit einem Miss und null Fallbacks. Der
+  allgemeine Quellefix katalogisiert endliche, mit bewiesener
+  Aufrufargument-Provenienz ueber nicht-Stack-bezogene 32-Bit-Stores
+  weitergereichte Codepointer als bewachte AOT-Inventarseeds.
+  Die zur Laufzeit geladene Dispatchkante bleibt dabei `RuntimeOnly` und wird
+  nicht als feste CFG-Kante eingefroren. Die fokussierten Regressionen sind
+  gruen. Bewusst wurden weder ein zweiter privater Build/v8 noch eine
+  Vollsuite oder das v0.48-Freigabegate ausgefuehrt. Der native
+  PAL-50-/60-Hz-Auswahlbildschirm ist noch nicht erreicht, `KR-4851` bleibt
+  offen, v6 bleibt erhalten und die Original-GDI blieb unveraendert.
 - KR-4913 ist abgeschlossen. Systemreplay-Schema 5 trennt den exakten
   Ereignisstrom von einem skalierbaren `DigestStream`: Die Produktprobe behaelt
   4.096 Praefixzeugen, validiert, zaehlt und hasht aber jedes weitere Ereignis,

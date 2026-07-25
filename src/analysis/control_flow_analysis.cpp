@@ -549,6 +549,40 @@ collect_resolved_edges(const std::span<const IndirectControlFlowResolution> reso
     return edges;
 }
 
+std::vector<ResolvedControlFlowEdge>
+collect_function_value_edges(
+    const std::span<const IndirectControlFlowResolution> resolutions,
+    const std::span<const JumpTableAnalysis> tables) {
+    auto edges = collect_resolved_edges(resolutions, tables);
+    // Candidate-only calls must not become executable CFG edges, but the
+    // interprocedural value analysis needs their possible callees so it can
+    // propagate ABI arguments into registration functions.  GuardedPartial
+    // keeps unknown live targets authoritative.
+    for (const auto& resolution : resolutions) {
+        if (resolution.kind != IndirectControlFlowKind::Call) continue;
+        for (const auto target : resolution.analysis_candidates) {
+            edges.push_back({resolution.instruction_address,
+                             target,
+                             ResolvedControlFlowKind::Call,
+                             true,
+                             ControlFlowEvidence::GuardedPartial,
+                             resolution.evidence_origins});
+        }
+    }
+    std::sort(edges.begin(), edges.end(), [](const auto& left, const auto& right) {
+        if (left.instruction_address != right.instruction_address)
+            return left.instruction_address < right.instruction_address;
+        if (left.target_address != right.target_address)
+            return left.target_address < right.target_address;
+        if (left.kind != right.kind) return left.kind < right.kind;
+        if (left.guarded != right.guarded) return left.guarded < right.guarded;
+        if (left.evidence != right.evidence) return left.evidence < right.evidence;
+        return left.evidence_origins < right.evidence_origins;
+    });
+    edges.erase(std::unique(edges.begin(), edges.end()), edges.end());
+    return edges;
+}
+
 } // namespace
 
 ControlFlowAnalysisResult analyze_control_flow(const katana::io::ExecutableImage& image,
@@ -922,7 +956,7 @@ ControlFlowAnalysisResult analyze_control_flow(const katana::io::ExecutableImage
                 function_entries.push_back(function.address);
         }
         const auto provisional_edges =
-            collect_resolved_edges(analysis.indirect_control_flow, analysis.jump_tables);
+            collect_function_value_edges(analysis.indirect_control_flow, analysis.jump_tables);
         report_progress("function-values-start");
         auto function_values = analyze_function_values(
             image,
@@ -947,6 +981,15 @@ ControlFlowAnalysisResult analyze_control_flow(const katana::io::ExecutableImage
         analysis.function_budget_exhausted = function_values.budget_exhausted;
         analysis.function_value_summaries = std::move(function_values.summaries);
         report_progress("function-values-complete");
+        for (const auto& candidate : function_values.stored_code_address_candidates) {
+            const std::array origins{FunctionOrigin::StoredCodeAddress};
+            changed = add_seed(seeds,
+                               candidate.target_address,
+                               origins,
+                               false,
+                               ControlFlowEvidence::GuardedPartial) ||
+                      changed;
+        }
         for (auto& proof : function_values.resolutions) {
             if (proof.targets.empty()) continue;
             // A recognized table owns the finite AOT candidate set for this dispatch.  A

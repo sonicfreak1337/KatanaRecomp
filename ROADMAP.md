@@ -309,8 +309,26 @@ gefundene erste Spielhotspot nach dem Sega-Logo ist allgemein behoben:
 darf nicht als neue Delay-Slot-Exception interpretiert werden. Eine monotone
 Exceptiongeneration schuetzt jetzt BSR, BSRF, JSR, direkte native
 Aufrufketten, Port-Blockwrapper und Diagnosegrenzen. Der frische
-Produktnachweis bis zum PAL-50-/60-Hz-Auswahlbildschirm steht noch aus; deshalb
-bleibt `KR-4851` offen.
+Produktnachweis erreicht damit nicht mehr die alte Zwei-Instruktions-
+JSR-Schleife.
+
+Der einmalig exportierte und gebaute v7-Port unter Runtime-ABI 48 und
+Portprojektvertrag 32 umfasst 1.873 Funktionen, 37 Partitionen und drei
+latente Module. Export und Hostbuild dauerten 187,8 Sekunden, die lokale
+Installation 16,8 Sekunden. Der deterministische Probe-Lauf dauerte
+73,5 Sekunden, der Detail-Lauf 49,2 Sekunden. Beide Gastframemarker werden am
+sichtbaren Sega-Bild erreicht. Der naechste eindeutige, interpreterfrei
+typisierte Missing-AOT liegt bei `0x8C65E96A -> 0x8C652150`; der Detail-Lauf
+weist 7.422.352 Dispatch-Hits mit einem Miss sowie 2.609.376
+`RuntimeOnly`-Hits mit einem Miss und null Fallbacks aus. Die Quelle
+katalogisiert nun endliche, mit bewiesener Aufrufargument-Provenienz ueber
+nicht-Stack-bezogene 32-Bit-Stores weitergereichte Codepointer als bewachte
+AOT-Inventarseeds, ohne die live geladene Dispatchkante als statische
+CFG-Kante einzufrieren. Die fokussierten
+Regressionen sind gruen. Ein zweiter privater Build/v8 und das v0.48-Vollgate
+wurden bewusst nicht ausgefuehrt. Der PAL-50-/60-Hz-Auswahlbildschirm ist
+noch nicht erreicht; deshalb bleibt `KR-4851` offen. v6 bleibt bis zum
+weitergehenden Nachweis erhalten, die Original-GDI blieb unveraendert.
 
 `KR-4912` schliesst die generische Lebenszeit dynamischer Codebereiche.
 Load, Relocation, Replace und Unload erzeugen monotone Modulinkarnationen;

@@ -278,8 +278,28 @@ Der nachfolgende Runtime-ABI-48-/Portprojektvertrag-32-Block schliesst diesen
 ersten Hotspot allgemein. Der Handler-Lifetime-Pegel `trap_pending` ist kein
 Nachweis fuer eine neu im aktuellen Block entstandene Exception. Eine monotone
 Generation bindet neue Exceptionkanten in generierten Delay Slots, direkten
-Aufrufketten, Portwrappern, Probe- und Replayhashes. Der frische sichtbare
-PAL-Nachweis bleibt dennoch Voraussetzung fuer den Abschluss von `KR-4851`.
+Aufrufketten, Portwrappern, Probe- und Replayhashes.
+
+Der daraufhin einmalig exportierte und gebaute v7-Port mit 1.873 Funktionen,
+37 Partitionen und drei latenten Modulen erreicht
+`KR_FIRST_GUEST_FRAME` und `KR_FIRST_PRESENTED_FRAME` am sichtbaren Sega-Bild.
+Die alte Zwei-Instruktions-JSR-Schleife ist beseitigt. Der Detail-Lauf endet
+bei `0x8C65E96A -> 0x8C652150` als typisierter Missing-AOT und weist
+7.422.352 Dispatch-Hits/1 Miss sowie 2.609.376 `RuntimeOnly`-Hits/1 Miss/0
+Fallbacks aus. Damit ist praktisch belegt, dass weder ein Interpreter noch ein
+stiller Fallback die Grenze uebernimmt.
+
+Die statische Analyse darf endliche, decodierbare Codepointer, die mit
+nachgewiesener Aufrufargument-Provenienz ueber nicht-Stack-bezogene
+32-Bit-Stores weitergereicht werden, als bewachte AOT-Inventarseeds verwenden.
+Solche Seeds erweitern ausschliesslich den vorab kompilierten Bestand: Sie
+erzeugen keine feste CFG- oder Runtime-Dispatchkante und ersetzen nicht den
+live geladenen Zielwert. Gewoehnliche lokale Datenpointer, Stackspills, nicht
+finite Werte und semantisch ungueltige Ziele liefern keinen Seed. Die
+fokussierten Regressionen sind gruen. Ein zweiter privater Build/v8
+und das v0.48-Vollgate wurden bewusst nicht ausgefuehrt. Der native
+PAL-50-/60-Hz-Nachweis bleibt Voraussetzung fuer den Abschluss von `KR-4851`;
+v6 bleibt erhalten und die Original-GDI blieb unveraendert.
 
 ## Konsistenzgrenzen
 

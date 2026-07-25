@@ -31,7 +31,8 @@ enum class FunctionOrigin {
     JumpTableCall,
     UserOverride,
     UserHint,
-    Symbol
+    Symbol,
+    StoredCodeAddress
 };
 
 enum class AnalysisConfidence { Low, Medium, High, Certain };

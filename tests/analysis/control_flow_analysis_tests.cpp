@@ -176,6 +176,208 @@ int main() {
     require(chain.indirect_control_flow.size() == 2u,
             "Fixpunkt duplizierte oder verlor Aufloesungen.");
 
+    const auto stored_callback_image = [] {
+        std::vector<std::uint8_t> bytes(0x50u, 0x09u);
+        const auto put_u32 = [&bytes](const std::size_t offset,
+                                      const std::uint32_t value) {
+            bytes[offset] = static_cast<std::uint8_t>(value);
+            bytes[offset + 1u] = static_cast<std::uint8_t>(value >> 8u);
+            bytes[offset + 2u] = static_cast<std::uint8_t>(value >> 16u);
+            bytes[offset + 3u] = static_cast<std::uint8_t>(value >> 24u);
+        };
+        const std::array<std::uint8_t, 12u> caller{
+            0x03u, 0xD4u, // mov.l @(0x10,pc),r4 -> handler 0x30
+            0x04u, 0xD3u, // mov.l @(0x14,pc),r3 -> registrar 0x20
+            0x0Bu, 0x43u, // jsr @r3
+            0x09u, 0x00u, // nop (delay)
+            0x0Bu, 0x00u, // rts
+            0x09u, 0x00u  // nop (delay)
+        };
+        std::copy(caller.begin(), caller.end(), bytes.begin());
+        put_u32(0x10u, 0x30u);
+        put_u32(0x14u, 0x20u);
+        bytes[0x20u] = 0x42u;
+        bytes[0x21u] = 0x22u; // mov.l r4,@r2 (symbolic non-stack destination)
+        bytes[0x22u] = 0x0Bu;
+        bytes[0x23u] = 0x00u; // rts
+        bytes[0x24u] = 0x09u;
+        bytes[0x25u] = 0x00u; // nop (delay)
+        bytes[0x30u] = 0x0Bu;
+        bytes[0x31u] = 0x00u; // handler: rts
+        bytes[0x32u] = 0x09u;
+        bytes[0x33u] = 0x00u; // nop (delay)
+        bytes[0x40u] = 0x2Eu;
+        bytes[0x41u] = 0x0Eu; // mov.l @(r0,r2),r14
+        bytes[0x42u] = 0x0Bu;
+        bytes[0x43u] = 0x4Eu; // jsr @r14
+        bytes[0x44u] = 0x09u;
+        bytes[0x45u] = 0x00u; // nop (delay)
+        bytes[0x46u] = 0x0Bu;
+        bytes[0x47u] = 0x00u; // rts
+        bytes[0x48u] = 0x09u;
+        bytes[0x49u] = 0x00u; // nop (delay)
+        katana::io::ExecutableImage image;
+        image.set_guest_call_abi(katana::io::GuestCallAbi::SuperHC);
+        image.set_initial_snapshot_policy(
+            katana::io::InitialSnapshotPolicy::EntryPointStraightLineQuiescent);
+        image.add_segment({".stored-callback",
+                           0u,
+                           0u,
+                           bytes.size(),
+                           katana::io::SegmentKind::Mixed,
+                           {true, true, true},
+                           std::move(bytes),
+                           katana::io::ImageSourceKind::DiscBootFile,
+                           katana::io::ImageLoadPhase::Initial,
+                           "synthetic-stored-callback"});
+        image.add_entry_point(0u);
+        image.add_entry_point(0x40u);
+        return image;
+    }();
+    const auto stored_callback =
+        katana::analysis::analyze_control_flow(stored_callback_image);
+    const auto* stored_handler = find_function(stored_callback, 0x30u);
+    require(stored_handler != nullptr &&
+                stored_handler->origins ==
+                    std::vector{katana::analysis::FunctionOrigin::StoredCodeAddress} &&
+                has_instruction(stored_callback, 0x30u) &&
+                std::binary_search(
+                    stored_callback.recursive.guarded_candidate_instruction_addresses.begin(),
+                    stored_callback.recursive.guarded_candidate_instruction_addresses.end(),
+                    0x30u),
+            "Gespeicherter endlicher Codepointer erreichte das bewachte AOT-Inventar nicht.");
+    const auto callback_registrar_call =
+        std::find_if(stored_callback.indirect_control_flow.begin(),
+                     stored_callback.indirect_control_flow.end(),
+                     [](const auto& resolution) {
+                         return resolution.instruction_address == 0x04u;
+                     });
+    const auto callback_dispatch =
+        std::find_if(stored_callback.indirect_control_flow.begin(),
+                     stored_callback.indirect_control_flow.end(),
+                     [](const auto& resolution) {
+                         return resolution.instruction_address == 0x42u;
+                     });
+    require(callback_registrar_call != stored_callback.indirect_control_flow.end() &&
+                callback_registrar_call->evidence ==
+                    katana::analysis::ControlFlowEvidence::RuntimeOnly &&
+                callback_registrar_call->targets.empty() &&
+                callback_registrar_call->analysis_candidates ==
+                    std::vector<std::uint32_t>{0x20u} &&
+                callback_dispatch != stored_callback.indirect_control_flow.end() &&
+                callback_dispatch->evidence ==
+                    katana::analysis::ControlFlowEvidence::RuntimeOnly &&
+                callback_dispatch->targets.empty() &&
+                callback_dispatch->analysis_candidates.empty() &&
+                std::none_of(stored_callback.resolved_edges.begin(),
+                             stored_callback.resolved_edges.end(),
+                             [](const auto& edge) {
+                                 return edge.target_address == 0x30u ||
+                                        (edge.instruction_address == 0x04u &&
+                                         edge.target_address == 0x20u);
+                             }),
+            "Kandidat-only ABI-Fluss fror einen Runtime-Dispatcher als statische Kante ein.");
+    const auto stored_callback_ir = katana::ir::lower_program(stored_callback);
+    require(std::any_of(stored_callback_ir.begin(),
+                        stored_callback_ir.end(),
+                        [](const auto& function) { return function.entry_address == 0x30u; }) &&
+                katana::ir::verify_program(stored_callback_ir).empty(),
+            "Gespeicherter Codepointer erreichte das native IR-Inventar nicht.");
+
+    const auto forwarded_store_image = [](std::vector<std::uint8_t> registrar,
+                                          std::string name) {
+        std::vector<std::uint8_t> bytes(0x50u, 0x09u);
+        bytes[0x00u] = 0x03u;
+        bytes[0x01u] = 0xD4u; // mov.l @(0x10,pc),r4 -> handler 0x30
+        bytes[0x02u] = 0x04u;
+        bytes[0x03u] = 0xD3u; // mov.l @(0x14,pc),r3 -> registrar 0x20
+        bytes[0x04u] = 0x0Bu;
+        bytes[0x05u] = 0x43u; // jsr @r3
+        bytes[0x06u] = 0x09u;
+        bytes[0x07u] = 0x00u; // nop (delay)
+        bytes[0x08u] = 0x0Bu;
+        bytes[0x09u] = 0x00u; // rts
+        bytes[0x0Au] = 0x09u;
+        bytes[0x0Bu] = 0x00u; // nop (delay)
+        bytes[0x10u] = 0x30u;
+        bytes[0x14u] = 0x20u;
+        std::copy(registrar.begin(), registrar.end(), bytes.begin() + 0x20u);
+        bytes[0x30u] = 0x0Bu;
+        bytes[0x31u] = 0x00u; // handler: rts
+        bytes[0x32u] = 0x09u;
+        bytes[0x33u] = 0x00u; // nop (delay)
+        katana::io::ExecutableImage image;
+        image.set_guest_call_abi(katana::io::GuestCallAbi::SuperHC);
+        image.set_initial_snapshot_policy(
+            katana::io::InitialSnapshotPolicy::EntryPointStraightLineQuiescent);
+        image.add_segment({"." + name,
+                           0u,
+                           0u,
+                           bytes.size(),
+                           katana::io::SegmentKind::Mixed,
+                           {true, true, true},
+                           std::move(bytes),
+                           katana::io::ImageSourceKind::DiscBootFile,
+                           katana::io::ImageLoadPhase::Initial,
+                           "synthetic-" + name});
+        image.add_entry_point(0u);
+        return image;
+    };
+
+    const auto stack_pointer = katana::analysis::analyze_control_flow(
+        forwarded_store_image(
+            {0x46u, 0x2Fu, 0x0Bu, 0x00u, 0x09u, 0x00u}, "stack-pointer"));
+    require(find_function(stack_pointer, 0x30u) == nullptr &&
+                !has_instruction(stack_pointer, 0x30u),
+            "Ein normaler Stackspill wurde faelschlich als gespeicherter Callback katalogisiert.");
+
+    const auto indexed_stack_pointer = katana::analysis::analyze_control_flow(
+        forwarded_store_image({0xF3u,
+                               0x60u,
+                               0x46u,
+                               0x02u,
+                               0x0Bu,
+                               0x00u,
+                               0x09u,
+                               0x00u},
+                              "indexed-stack-pointer"));
+    require(find_function(indexed_stack_pointer, 0x30u) == nullptr &&
+                !has_instruction(indexed_stack_pointer, 0x30u),
+            "Ein R0-indizierter Stackspill wurde faelschlich als Callback katalogisiert.");
+
+    std::vector<std::uint8_t> ordinary_data_pointer_bytes(0x30u, 0x09u);
+    ordinary_data_pointer_bytes[0x00u] = 0x03u;
+    ordinary_data_pointer_bytes[0x01u] = 0xD4u; // mov.l @(0x10,pc),r4 -> 0x20
+    ordinary_data_pointer_bytes[0x02u] = 0x42u;
+    ordinary_data_pointer_bytes[0x03u] = 0x22u; // mov.l r4,@r2
+    ordinary_data_pointer_bytes[0x04u] = 0x0Bu;
+    ordinary_data_pointer_bytes[0x05u] = 0x00u; // rts
+    ordinary_data_pointer_bytes[0x06u] = 0x09u;
+    ordinary_data_pointer_bytes[0x07u] = 0x00u; // nop (delay)
+    ordinary_data_pointer_bytes[0x10u] = 0x20u;
+    ordinary_data_pointer_bytes[0x20u] = 0x0Bu;
+    ordinary_data_pointer_bytes[0x22u] = 0x09u;
+    katana::io::ExecutableImage ordinary_data_pointer_image;
+    ordinary_data_pointer_image.set_guest_call_abi(katana::io::GuestCallAbi::SuperHC);
+    ordinary_data_pointer_image.set_initial_snapshot_policy(
+        katana::io::InitialSnapshotPolicy::EntryPointStraightLineQuiescent);
+    ordinary_data_pointer_image.add_segment({".ordinary-data-pointer",
+                                             0u,
+                                             0u,
+                                             ordinary_data_pointer_bytes.size(),
+                                             katana::io::SegmentKind::Mixed,
+                                             {true, true, true},
+                                             std::move(ordinary_data_pointer_bytes),
+                                             katana::io::ImageSourceKind::DiscBootFile,
+                                             katana::io::ImageLoadPhase::Initial,
+                                             "synthetic-ordinary-data-pointer"});
+    ordinary_data_pointer_image.add_entry_point(0u);
+    const auto ordinary_data_pointer =
+        katana::analysis::analyze_control_flow(ordinary_data_pointer_image);
+    require(find_function(ordinary_data_pointer, 0x20u) == nullptr &&
+                !has_instruction(ordinary_data_pointer, 0x20u),
+            "Ein gewoehnlicher codeaehnlicher Datenpointer wurde als Callback katalogisiert.");
+
     const auto absolute_snapshot_image = [](const katana::io::ImageSourceKind source_kind,
                                             const katana::io::ImageLoadPhase load_phase,
                                             const katana::io::InitialSnapshotPolicy policy) {

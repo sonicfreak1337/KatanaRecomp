@@ -239,7 +239,8 @@ RecursiveAnalysisResult analyze_reachable_code(const katana::io::ExecutableImage
             const auto confidence =
                 origin == FunctionOrigin::UserOverride ? AnalysisConfidence::Certain
                 : origin == FunctionOrigin::GuardedSnapshot ||
-                        origin == FunctionOrigin::RuntimeCopy
+                        origin == FunctionOrigin::RuntimeCopy ||
+                        origin == FunctionOrigin::StoredCodeAddress
                     ? AnalysisConfidence::Medium
                     : AnalysisConfidence::High;
             add_function_evidence(
@@ -471,6 +472,8 @@ const char* function_origin_name(const FunctionOrigin origin) noexcept {
         return "user-hint";
     case FunctionOrigin::Symbol:
         return "symbol";
+    case FunctionOrigin::StoredCodeAddress:
+        return "stored-code-address";
     }
     return "unknown";
 }

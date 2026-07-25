@@ -90,6 +90,28 @@ Literalpools, Jump-/Pointertabellen und vollstaendig bewiesenes Padding zaehlen
 als `never_executed_data`. Module und Overlays duerfen nur mit dem
 nachfolgenden sicheren Runtimevertrag aufgeschoben werden.
 
+## Gespeicherte Codepointer als bewachtes Inventar
+
+Ein endlicher, decodierbarer 32-Bit-Codepointer kann ueber eine bekannte
+Aufrufargumentkette in eine erst zur Laufzeit adressierte Tabelle geschrieben
+werden. Die Analyse darf ein solches Ziel als bewachten AOT-Inventarseed
+katalogisieren, auch wenn die symbolische Zieladresse des Stores noch nicht
+statisch feststeht. Zulassungsfaehig sind nur endliche bekannte Quellwerte
+mit nachgewiesener interprozeduraler Aufrufargument-Provenienz an einem
+nicht-Stack-bezogenen 32-Bit-Store; jedes Ziel muss die normale
+Decode-/Imagevalidierung bestehen. Gewoehnliche lokale Datenpointer,
+Stackspills, Byte-/Wortstores, nicht finite Wertmengen und ungueltige Ziele
+erzeugen keinen Seed.
+
+Die dafuer verwendeten kandidatenbasierten Aufrufkanten existieren nur
+innerhalb der interprozeduralen Wertanalyse. Sie werden weder als geloeste
+CFG-Kante veroeffentlicht noch in den Produktdispatcher eingefroren. Ebenso
+ist ein gespeicherter Codepointer nur eine bewachte
+Vorabkompilierungsherkunft: Der zur Laufzeit geladene `RuntimeOnly`-Wert bleibt
+massgeblich und ein abweichendes oder ungebundenes Ziel endet weiterhin
+typisiert. Damit erweitert der Beleg den nativen Bestand, ohne dynamischen
+Kontrollfluss vorzutaeuschen.
+
 ## Module und Overlays
 
 Ein ausfuehrbares Modul besitzt eine stabile Modul- und Quellenidentitaet,
@@ -285,6 +307,19 @@ Spezialisierung ist nur aufgrund wiederholbarer Profile zulaessig; das Profil
 selbst ist kein statischer Vollstaendigkeitsbeweis.
 
 ## Aktueller privater Messstand
+
+Der einmalig exportierte und gebaute v7-Port unter Runtime-ABI 48 und
+Portprojektvertrag 32 umfasst 1.873 Funktionen, 37 Partitionen und drei
+latente Module. Export/Hostbuild, lokale Installation, deterministischer
+Probe-Lauf und Detail-Lauf benoetigten 187,8, 16,8, 73,5 beziehungsweise
+49,2 Sekunden. Beide Gastframemarker werden am Sega-Bild erreicht; die alte
+Zwei-Instruktions-JSR-Schleife ist verschwunden. Der Detail-Lauf endet mit
+7.422.352 Dispatch-Hits/1 Miss und 2.609.376 `RuntimeOnly`-Hits/1 Miss/0
+Fallbacks am typisierten Missing-AOT `0x8C65E96A -> 0x8C652150`. Der oben
+beschriebene allgemeine Stored-Code-Pointer-Beleg ist fokussiert
+regressionsgeprueft, aber bewusst noch nicht durch einen zweiten privaten
+Build/v8 nachgewiesen. Der native PAL-50-/60-Hz-Auswahlbildschirm ist noch
+nicht erreicht; v6 bleibt erhalten und die Original-GDI blieb unveraendert.
 
 Der reine Analyselauf startete kein Gastprogramm. Von 6.735.296 committed
 ausfuehrbaren Bytes sind 110.404 `initially_reachable`. 16.554 Bytes sind

@@ -6,8 +6,10 @@ Aktuelle P0-Arbeit: Der native IP.BIN-Boot erreicht BootExecutable
 nachweislich; `KR-4913`, `KR-4915` und `KR-4850` sind abgeschlossen. Der erste
 nach dem Sega-Logo belegte `KR-4851`-Hotspot war ein allgemeiner
 Exception-Edge-Fehler im nativen Aufrufpfad und ist synthetisch geschlossen.
-Der frische Produktnachweis bis zum PAL-50-/60-Hz-Auswahlbildschirm steht noch
-aus.
+Der frische v7-Produktnachweis verlaesst die alte Zwei-Instruktions-
+JSR-Schleife und endet jetzt eindeutig am typisierten Missing-AOT
+`0x8C65E96A -> 0x8C652150`. Der native PAL-50-/60-Hz-Auswahlbildschirm ist
+noch nicht erreicht.
 `KR-4847` schliesst jetzt auch Scheduler-Admission-Ueberlaeufe fuer PACKET,
 BIOS-Reads und Disc-Streaming ohne Hostexception, Teilwrite oder klemmendes
 `BSY`; offen bleiben EX 38/39 und laufende G1-Overrun-/Timeout-Grenzen.
@@ -42,6 +44,22 @@ Interpretergrenze brechen deshalb nur bei einem Generationwechsel ab. Der
 Zustand ist in Probe, Replay-Gastzustandshash, Differentialcheckpoints und
 Crashberichten gebunden. Elf fokussierte Regressionen bestanden 11/11; ein
 Vollgate und `KR-4852` liefen nicht.
+
+Der danach einmalig exportierte und gebaute private v7-Port umfasst
+1.873 Funktionen, 37 Partitionen und drei latente Module. Export und
+Hostbuild benoetigten 187,8 Sekunden, die lokale Installation 16,8 Sekunden.
+Der deterministische Probe-Lauf dauerte 73,5 Sekunden, der Detail-Lauf
+49,2 Sekunden. `KR_FIRST_GUEST_FRAME` und `KR_FIRST_PRESENTED_FRAME` werden
+am sichtbaren Sega-Bild erreicht. Der Detail-Lauf zaehlt 7.422.352
+Dispatch-Hits mit einem Miss sowie 2.609.376 `RuntimeOnly`-Hits mit einem Miss
+und null Fallbacks. Die allgemeine Analyse katalogisiert jetzt endliche
+Codepointer, die mit bewiesener Aufrufargument-Provenienz ueber
+nicht-Stack-bezogene 32-Bit-Stores weitergereicht werden, als bewachte
+AOT-Inventarseeds. Das liefert keine feste Runtime-
+Dispatchkante; der live geladene Wert bleibt massgeblich. Die fokussierten
+Regressionen sind gruen. Ein zweiter privater Build/v8, die Vollsuite und das
+v0.48-Gate wurden bewusst nicht ausgefuehrt. `KR-4851` bleibt offen, v6 bleibt
+erhalten und die Original-GDI blieb unveraendert.
 
 `KR-4912` modelliert Load, Relocation, Replace und Unload als monotone
 Modulinkarnationen. Byteidentische Multi-Extent-Loads und byteidentische CPU-,

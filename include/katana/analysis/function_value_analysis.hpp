@@ -58,9 +58,25 @@ struct InterproceduralTargetResolution {
     std::string reason;
 };
 
+// A finite code address forwarded through a known guest-call argument and then
+// stored through a non-stack 32-bit memory operation.  The destination may
+// remain symbolic (for example VBR-relative); this is only native-inventory
+// evidence and never a concrete dispatch edge.
+struct StoredCodeAddressCandidate {
+    std::uint32_t target_address = 0u;
+    bool complete = false;
+    bool guarded = true;
+    std::vector<std::uint32_t> store_instruction_addresses;
+    std::vector<std::uint32_t> evidence_call_sites;
+    std::vector<std::uint32_t> evidence_callees;
+
+    bool operator==(const StoredCodeAddressCandidate&) const = default;
+};
+
 struct FunctionValueAnalysisResult {
     std::vector<FunctionValueSummary> summaries;
     std::vector<InterproceduralTargetResolution> resolutions;
+    std::vector<StoredCodeAddressCandidate> stored_code_address_candidates;
     std::size_t fixpoint_iterations = 0u;
     std::size_t strongly_connected_components = 0u;
     std::size_t unchanged_ingress_skips = 0u;

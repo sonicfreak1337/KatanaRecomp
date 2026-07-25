@@ -125,6 +125,7 @@ struct AbstractState {
 struct FunctionEvaluation {
     FunctionValueSummary summary;
     std::vector<InterproceduralTargetResolution> resolutions;
+    std::vector<StoredCodeAddressCandidate> stored_code_address_candidates;
     struct CallArguments {
         std::uint32_t call_site = 0u;
         std::uint32_t callee = 0u;
@@ -1056,6 +1057,68 @@ std::vector<std::uint32_t> checked_targets(const katana::io::ExecutableImage& im
     return targets;
 }
 
+void observe_stored_code_addresses(
+    const katana::io::ExecutableImage& image,
+    const katana::sh4::DisassemblyLine& line,
+    const AbstractState& state,
+    std::vector<StoredCodeAddressCandidate>& candidates) {
+    using K = katana::sh4::InstructionKind;
+    const auto& instruction = line.instruction;
+    bool supported = false;
+    bool stack_based = false;
+    switch (instruction.kind) {
+    case K::MovLongStore:
+    case K::MovLongStorePreDecrement:
+    case K::MovLongStoreDisplacement:
+        supported = true;
+        stack_based = state.stack_offsets[instruction.destination_register].has_value();
+        break;
+    case K::MovLongStoreR0Indexed:
+        supported = true;
+        stack_based = state.stack_offsets[0u].has_value() ||
+                      state.stack_offsets[instruction.destination_register].has_value();
+        break;
+    case K::MovLongStoreGbrDisplacement:
+        supported = true;
+        break;
+    default:
+        break;
+    }
+    if (!supported || stack_based) return;
+
+    const auto& value = state[instruction.source_register];
+    if (!value.known || value.values.empty() ||
+        value.values.size() > maximum_summary_values || value.call_sites.empty())
+        return;
+    std::vector<std::uint32_t> validated_candidates;
+    validated_candidates.reserve(value.values.size());
+    bool all_candidates_valid = true;
+    for (const auto candidate : value.values) {
+        const auto validation = validate_decode_candidate(image, candidate);
+        if (!validation.valid()) {
+            all_candidates_valid = false;
+            continue;
+        }
+        validated_candidates.push_back(validation.resolved_address);
+    }
+    normalize(validated_candidates);
+    const bool complete = value.complete && all_candidates_valid;
+    for (const auto candidate : validated_candidates) {
+        StoredCodeAddressCandidate observation;
+        observation.target_address = candidate;
+        observation.complete = complete;
+        // A stored value proves only that native code may be needed.  The later
+        // live memory load remains authoritative even for an otherwise complete
+        // source value.
+        observation.guarded = true;
+        observation.store_instruction_addresses = {line.address};
+        observation.evidence_call_sites.assign(value.call_sites.begin(),
+                                               value.call_sites.end());
+        observation.evidence_callees.assign(value.callees.begin(), value.callees.end());
+        candidates.push_back(std::move(observation));
+    }
+}
+
 FunctionEvaluation evaluate_function(
     const katana::io::ExecutableImage& image,
     const FunctionInfo& function,
@@ -1142,6 +1205,9 @@ FunctionEvaluation evaluate_function(
             const bool call =
                 line.instruction.control_flow == katana::sh4::ControlFlowKind::Call ||
                 line.instruction.control_flow == katana::sh4::ControlFlowKind::IndirectCall;
+            if (collect_resolutions && !call)
+                observe_stored_code_addresses(
+                    image, line, state, evaluation.stored_code_address_candidates);
             if (!call) apply_transfer(state, line, image);
             if (delayed_call.has_value()) {
                 apply_call(state,
@@ -1542,6 +1608,10 @@ analyze_function_values(const katana::io::ExecutableImage& image,
         result.resolutions.insert(result.resolutions.end(),
                                   std::make_move_iterator(evaluation.resolutions.begin()),
                                   std::make_move_iterator(evaluation.resolutions.end()));
+        result.stored_code_address_candidates.insert(
+            result.stored_code_address_candidates.end(),
+            std::make_move_iterator(evaluation.stored_code_address_candidates.begin()),
+            std::make_move_iterator(evaluation.stored_code_address_candidates.end()));
         ++completed_functions;
         if (completed_functions <= 16u || completed_functions % 128u == 0u ||
             completed_functions == functions.size())
@@ -1555,6 +1625,42 @@ analyze_function_values(const katana::io::ExecutableImage& image,
                   if (left.call != right.call) return left.call < right.call;
                   return left.targets < right.targets;
               });
+    std::sort(result.stored_code_address_candidates.begin(),
+              result.stored_code_address_candidates.end(),
+              [](const auto& left, const auto& right) {
+                  if (left.target_address != right.target_address)
+                      return left.target_address < right.target_address;
+                  return left.store_instruction_addresses <
+                         right.store_instruction_addresses;
+              });
+    std::vector<StoredCodeAddressCandidate> merged_stored_candidates;
+    for (auto& candidate : result.stored_code_address_candidates) {
+        if (merged_stored_candidates.empty() ||
+            merged_stored_candidates.back().target_address != candidate.target_address) {
+            merged_stored_candidates.push_back(std::move(candidate));
+            continue;
+        }
+        auto& merged_candidate = merged_stored_candidates.back();
+        merged_candidate.complete = merged_candidate.complete && candidate.complete;
+        merged_candidate.guarded = merged_candidate.guarded || candidate.guarded;
+        merged_candidate.store_instruction_addresses.insert(
+            merged_candidate.store_instruction_addresses.end(),
+            candidate.store_instruction_addresses.begin(),
+            candidate.store_instruction_addresses.end());
+        merged_candidate.evidence_call_sites.insert(
+            merged_candidate.evidence_call_sites.end(),
+            candidate.evidence_call_sites.begin(),
+            candidate.evidence_call_sites.end());
+        merged_candidate.evidence_callees.insert(merged_candidate.evidence_callees.end(),
+                                                 candidate.evidence_callees.begin(),
+                                                 candidate.evidence_callees.end());
+    }
+    for (auto& candidate : merged_stored_candidates) {
+        normalize(candidate.store_instruction_addresses);
+        normalize(candidate.evidence_call_sites);
+        normalize(candidate.evidence_callees);
+    }
+    result.stored_code_address_candidates = std::move(merged_stored_candidates);
     std::vector<InterproceduralTargetResolution> merged;
     std::unordered_set<std::uint32_t> merged_context_sites;
     for (auto& resolution : result.resolutions) {

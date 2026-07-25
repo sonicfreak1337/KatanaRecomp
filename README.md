@@ -224,9 +224,26 @@ Der erste `KR-4851`-P0-Hotspot nach dem Sega-Logo ist aufgeloest: Ein bereits
 aktiver Interrupt-Handler wurde vom generierten Aufrufpfad mit einer neuen
 Delay-Slot-Exception verwechselt. Die monotone Exceptiongeneration laesst
 BSR, BSRF und JSR im Handler normal fortsetzen und propagiert nur neu
-entstehende Fehler. `KR-4851` bleibt bis zum frischen Produktnachweis offen;
-bei der PAL-Disc ist der 50-/60-Hz-Auswahlbildschirm der naechste sichtbare
-Marker.
+entstehende Fehler.
+
+Der danach genau einmal exportierte und gebaute v7-Port verwendet
+Runtime-ABI 48 und Portprojektvertrag 32 und enthaelt 1.873 Funktionen,
+37 Partitionen und drei latente Module. Export und Hostbuild dauerten
+187,8 Sekunden, die lokale Installation 16,8 Sekunden, der deterministische
+Probe-Lauf 73,5 Sekunden und der Detail-Lauf 49,2 Sekunden.
+`KR_FIRST_GUEST_FRAME` und `KR_FIRST_PRESENTED_FRAME` werden am sichtbaren
+Sega-Bild erreicht; die alte Zwei-Instruktions-JSR-Schleife ist beseitigt.
+Der neue typisierte Missing-AOT ist
+`0x8C65E96A -> 0x8C652150`. Der Detail-Lauf zaehlt 7.422.352 Dispatch-Hits
+mit einem Miss sowie 2.609.376 `RuntimeOnly`-Hits mit einem Miss und null
+Fallbacks. Endliche Codepointer, die mit bewiesener Aufrufargument-Provenienz
+ueber nicht-Stack-bezogene 32-Bit-Stores weitergereicht werden, speisen jetzt
+bewacht das AOT-Inventar, ohne den live geladenen Dispatch als feste Kante
+einzufrieren; die
+fokussierten Regressionen sind gruen. Ein zweiter privater Build/v8 und das
+Vollgate wurden bewusst nicht ausgefuehrt. `KR-4851` bleibt offen, bis der
+native PAL-50-/60-Hz-Auswahlbildschirm erreicht ist. v6 bleibt erhalten und
+die Original-GDI blieb unveraendert.
 
 Der vorangegangene optimierte ABI-38-PAL-Port wurde mit zwoelf Jobs in
 140,9 Sekunden

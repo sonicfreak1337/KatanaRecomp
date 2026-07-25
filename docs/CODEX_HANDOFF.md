@@ -384,7 +384,8 @@ Typ: Implementierung | Gate-Vorbereitung | interne Freigabe | Release-Gate
 ## Aktuell empfohlener Einstieg
 
 ```text
-v0.48 P0 - frischen Produktnachweis bis zum PAL-50-/60-Hz-Menue fuer KR-4851
+v0.48 P0 - den getesteten Stored-Code-Pointer-Fix beim naechsten erlaubten
+privaten Build bis zum PAL-50-/60-Hz-Menue fuer KR-4851 nachweisen
 ```
 
 Abgeschlossen und in Roadmap/Taskliste markiert sind `KR-4831`, `KR-4841`,
@@ -657,8 +658,26 @@ Sega-Logo belegte einen Level-/Edge-Fehler: Ein bereits aktiver
 Exceptionhandler wurde als neue Delay-Slot-Exception gewertet. Runtime-ABI 48
 und Portprojektvertrag 32 fuehren eine monotone Exceptiongeneration fuer
 Emitter, Portwrapper und Diagnosegrenze ein; 11/11 fokussierte Regressionen
-sind gruen. Der frische PAL-Produktnachweis bis zum 50-/60-Hz-Menue bleibt in
-`KR-4851` offen.
+sind gruen.
+
+Der danach genau einmal exportierte und gebaute v7-Port umfasst
+1.873 Funktionen, 37 Partitionen und drei latente Module. Export und Hostbuild
+dauerten 187,8 Sekunden, die lokale Installation 16,8 Sekunden. Der
+deterministische Probe-Lauf dauerte 73,5 Sekunden, der Detail-Lauf
+49,2 Sekunden. `KR_FIRST_GUEST_FRAME` und `KR_FIRST_PRESENTED_FRAME` werden
+am sichtbaren Sega-Bild erreicht, und die alte Zwei-Instruktions-JSR-Schleife
+ist verschwunden. Der naechste typisierte Missing-AOT ist
+`0x8C65E96A -> 0x8C652150`; 7.422.352 Dispatch-Hits/1 Miss und 2.609.376
+`RuntimeOnly`-Hits/1 Miss/0 Fallbacks machen die Grenze eindeutig. Der
+allgemeine Quellefix katalogisiert endliche, mit bewiesener
+Aufrufargument-Provenienz ueber nicht-Stack-bezogene 32-Bit-Stores
+weitergereichte Codepointer als bewachte AOT-Inventarseeds, ohne die live
+geladene Dispatchkante fest einzufrieren. Die fokussierten
+Regressionen sind gruen. Auf Nutzerwunsch wurde bewusst kein zweiter privater
+Build/v8 erzeugt; beim naechsten erlaubten Build ist genau dieser Fix bis zum
+nativen PAL-50-/60-Hz-Menue zu pruefen. `KR-4851` bleibt offen, v6 bleibt
+erhalten und die Original-GDI blieb unveraendert. Kein v0.48-Vollgate vor
+Abschluss aller Implementierungsaufgaben starten.
 
 Der SH-4-DMAC-Channel-2-Pfad verwendet fuer TA den oeffentlichen externen
 Memory-to-Device-Vertrag `RS=2`, 32-Byte-Einheiten, inkrementierende Quelle,
@@ -679,12 +698,12 @@ Backing-Byte-adressierte Dirty-Evidenz plus das vorherige Scanout-Abbild
 verhindern sichtbare False-Proofs durch Offscreen-Writes, unveraenderte
 Bilddaten oder Blanking.
 
-Der aktuelle private Sonic-Adventure-PAL-AOT-Lauf erreicht aus dem
+Der vorgezogene historische Sonic-Adventure-PAL-AOT-Lauf erreicht aus dem
 recompilierten `IP.BIN`-Direct-Framebuffer innerhalb eines
 50-Millionen-Gastzyklusbudgets in 5,3 Sekunden `KR_FIRST_GUEST_FRAME` und
 `KR_FIRST_PRESENTED_FRAME`; TA bleibt null. Der anschliessende Budget-Exit ist
-erwartet. BootExecutable, Spielboot, `KR-4848` und der produktive TA-Pfad
-bleiben offen.
+erwartet. In diesem Lauf blieben BootExecutable, Spielboot, `KR-4848` und der
+produktive TA-Pfad offen; `KR-4848` wurde spaeter abgeschlossen.
 
 Das vorangegangene fokussierte Kern-Gate bestand 11/11. Der x64-Kern-/Runtime-Build
 der Desktop-GUI-off-Konfiguration ist mit zwoelf parallelen Jobs gruen; deren

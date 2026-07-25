@@ -1205,9 +1205,24 @@ Delay Slot entstandene Exception ausgewertet; Ziel-PC und neuer PR wurden
 deshalb alle zwei Gastinstruktionen verworfen. Eine monotone
 Exceptiongeneration schliesst diesen Level-/Edge-Fehler fuer BSR, BSRF, JSR,
 direkte native Aufrufketten, Portwrapper und die Diagnosegrenze. Elf
-fokussierte Regressionen sind gruen. Der Task bleibt bis zum frischen
-Produktnachweis bis mindestens zum PAL-50-/60-Hz-Auswahlbildschirm und dem
-Fastpath-/Referenzvergleich offen.
+fokussierte Regressionen sind gruen.
+
+Der anschliessend genau einmal exportierte und gebaute v7-Port umfasst
+1.873 Funktionen, 37 Partitionen und drei latente Module. Export/Hostbuild,
+lokale Installation, deterministischer Probe-Lauf und Detail-Lauf dauerten
+187,8, 16,8, 73,5 beziehungsweise 49,2 Sekunden.
+`KR_FIRST_GUEST_FRAME` und `KR_FIRST_PRESENTED_FRAME` werden am Sega-Bild
+erreicht; die alte Zwei-Instruktions-JSR-Schleife ist verschwunden. Der neue
+typisierte Missing-AOT liegt bei `0x8C65E96A -> 0x8C652150`. Der Detail-Lauf
+zaehlt 7.422.352 Dispatch-Hits mit einem Miss sowie 2.609.376
+`RuntimeOnly`-Hits mit einem Miss und null Fallbacks. Die Quelle fuehrt
+endliche, mit bewiesener Aufrufargument-Provenienz ueber nicht-Stack-bezogene
+32-Bit-Stores weitergereichte Codepointer nun als bewachte AOT-Inventarseeds,
+ohne die Runtime-Dispatchkante festzulegen; die fokussierten Regressionen sind
+gruen. Bewusst liefen kein zweiter privater
+Build/v8 und kein v0.48-Gate. Der Task bleibt bis mindestens zum nativen
+PAL-50-/60-Hz-Auswahlbildschirm und dem Fastpath-/Referenzvergleich offen. v6
+bleibt erhalten und die Original-GDI blieb unveraendert.
 
 ### [ ] KR-4852 - Konsolidierte v0.48-Validierung
 
