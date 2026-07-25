@@ -171,6 +171,41 @@ int main() {
     require(throws([&] { asic->raise(SystemAsicEvent::PvrRenderDone, 9u); }),
             "Rueckwaerts laufende Gastzeit wurde akzeptiert.");
 
+    DreamcastSystemAsic bounded_asic(router, 3u);
+    bounded_asic.raise(SystemAsicEvent::PvrRenderDone, 20u);
+    bounded_asic.raise(SystemAsicEvent::PvrVblank, 21u);
+    bounded_asic.raise(SystemAsicEvent::PvrOpaqueList, 22u);
+    bounded_asic.raise(SystemAsicEvent::PvrTranslucentList, 23u);
+    bounded_asic.raise(SystemAsicEvent::PvrDma, 24u);
+    const auto bounded_snapshot = bounded_asic.snapshot();
+    require(bounded_asic.events().size() == 3u &&
+                bounded_asic.events().front().sequence == 3u &&
+                bounded_asic.events().back().sequence == 5u &&
+                bounded_asic.total_event_count() == 5u &&
+                bounded_asic.dropped_event_count() == 2u &&
+                bounded_asic.last_event() &&
+                bounded_asic.last_event()->event == SystemAsicEvent::PvrDma &&
+                bounded_snapshot.events == bounded_asic.events() &&
+                bounded_snapshot.last_event == bounded_asic.last_event() &&
+                bounded_snapshot.total_events == 5u &&
+                bounded_snapshot.dropped_events == 2u,
+            "Gebundener ASIC-Ring behaelt nicht die letzten Ereignisse, Zaehler und Last-Event.");
+    bounded_asic.reset();
+    require(bounded_asic.events().empty() && !bounded_asic.last_event() &&
+                bounded_asic.total_event_count() == 0u &&
+                bounded_asic.dropped_event_count() == 0u,
+            "ASIC-Ringreset laesst Ereignisprovenienz oder Zaehler stehen.");
+
+    DreamcastSystemAsic history_disabled_asic(router, 0u);
+    history_disabled_asic.raise(SystemAsicEvent::PvrRenderDone, 25u);
+    require(history_disabled_asic.events().empty() &&
+                history_disabled_asic.last_event() &&
+                history_disabled_asic.last_event()->sequence == 1u &&
+                history_disabled_asic.total_event_count() == 1u &&
+                history_disabled_asic.dropped_event_count() == 1u,
+            "ASIC ohne Retention verliert Last-Event oder zaehlt den Drop nicht.");
+    history_disabled_asic.reset();
+
     EventScheduler spg_scheduler;
     Memory spg_bus(0u);
     auto spg_rtc_clock = std::make_shared<Sh4RtcClockDomain>(256u);

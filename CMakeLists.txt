@@ -236,6 +236,7 @@ add_library(katana_runtime STATIC
     src/runtime/fpu.cpp
     src/runtime/gdi.cpp
     src/runtime/gdrom_controller.cpp
+    src/runtime/guest_buffer.cpp
     src/runtime/holly_dma.cpp
     src/runtime/host_video.cpp
     src/runtime/host_input.cpp
@@ -598,7 +599,7 @@ if(WIN32)
     )
     set_tests_properties(
         katana-phase11-private-runtime-probe-runner-tests
-        PROPERTIES TIMEOUT 30
+        PROPERTIES TIMEOUT 45
     )
 endif()
 if(MSVC AND KATANA_ENABLE_SANITIZERS)
@@ -1670,6 +1671,9 @@ add_test(
         -DKATANA_ENABLE_SANITIZERS=${KATANA_ENABLE_SANITIZERS}
         -DKATANA_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}
         -DKATANA_GENERATED_INCLUDE=${CMAKE_CURRENT_BINARY_DIR}/generated/include
+        "-DMSVC_INCLUDE_ENVIRONMENT=$ENV{INCLUDE}"
+        "-DMSVC_LIB_ENVIRONMENT=$ENV{LIB}"
+        "-DMSVC_LIBPATH_ENVIRONMENT=$ENV{LIBPATH}"
         -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/cmake/check_optimization_cli.cmake
 )
 

@@ -12,13 +12,31 @@ Sie ist eine monotone 64-Bit-Zahl ohne Hostzeit, Sleep oder Hintergrundthread.
 Gastzeitvertrag 1 ist ueber `guest_cycle_contract_version` versioniert und wird
 zusammen mit PlatformServices-ABI 5 validiert.
 
-Der generierte Backendpfad reicht relative Instruktionskosten mit
-`consume_guest_cycles` ein. Die Basiskosten betragen in Vertrag 1 einen
-Gastzyklus pro unterschiedlicher Gastinstruktionsadresse im IR-Block;
-gepaarte Delay Slots zaehlen damit genau einmal als eigene Instruktion. Ein
-Basic Block ist der Interrupt-Safepoint. Der Fallbackpfad verwendet dieselbe
-Uhr ueber `SchedulerSafepoints`; Blockaustritt, Replay und Runtimebericht lesen
-den danach erreichten Schedulerzyklus.
+Generierter Backend- und Diagnosepfad verwenden dieselbe zentrale
+Opcodeklassifikation. Einfache Integeroperationen kosten eine Einheit,
+Kontrollfluss und einfache FPU zwei, Speicherzugriffe zwei, MAC/DIV und
+explizite Busgrenzen drei sowie komplexe FPU-Operationen vier Einheiten. Diese
+groben, deterministischen Klassen sind keine Pipelineemulation.
+
+Jeder Instruktionsversuch akkumuliert seine Kosten unabhaengig davon, ob er
+retired. Vor einem nicht statisch als lineares RAM bewiesenen Speicherzugriff,
+P4/PREF oder einer Geraete-/Busgrenze wird zuerst nur die bereits von frueheren
+Instruktionen aufgelaufene Zeit committed; die Kosten der aktuellen
+Instruktion werden danach ihrem Versuch zugerechnet. Damit sieht ein MMIO-
+Zugriff den korrekten Startzyklus, waehrend auch eine faultende Instruktion
+ihre eigenen Kosten behaelt. Der gemeinsame Blockabschluss committed den Rest
+erst nach der Blocksemantik, beobachtet danach den Checkpoint und pollt nur
+ohne neue Exceptionkante einen Interrupt. Single- und Multi-Block-Backend
+verwenden denselben Abschlussvertrag.
+
+Lokales AOT-Chaining unterscheidet `PureCpu`, `LinearRamOnly`,
+`RequiresCycleFlush` und `NeverChain`. Nur die beiden ersten Klassen sind
+chainbar; ein faelliges Schedulerereignis oder ein Zyklusbudget beendet die
+Kette vor dem Zielblock. `LinearRamOnly` ist ein positiver IR-Beweis und keine
+Adressheuristik: Der Portexport markiert nur fest adressierte Zugriffe, deren
+gesamte Breite in einem direkt gemappten P1-/P2-Hauptspeicheralias liegt.
+Dynamische Adressen sowie P0/P3-, MMU-, P4- und Geraetezugriffe bleiben
+`RequiresCycleFlush` beziehungsweise `NeverChain`.
 
 TMU, RTC und DMA planen ihre Fristen direkt auf dem Scheduler. Die
 Dreamcast-Runtime verwendet die gemeinsame 200-MHz-Gastfrequenz, den
@@ -32,6 +50,15 @@ oeffentliche `advance_to`-Grenze mehr. `submit` berechnet seine Frist aus dem
 aktuellen Schedulerzyklus und plant genau ein Completionereignis. Die Antwort
 wird vor dem Completionobserver sichtbar; ein dort geplantes ASIC-Ereignis
 fuer denselben Zyklus folgt aufgrund seiner hoeheren Scheduler-ID danach.
+Die Submission reserviert Pending- und Completionkapazitaet vor der
+Scheduleraufnahme und verbraucht ihre ID erst nach erfolgreicher Planung.
+Planungsfehler hinterlassen daher weder Queueeintrag noch Ereignis. Ein
+erwartbarer Medienfehler wird am Zielzyklus als `Aborted`-Antwort publiziert;
+eine Exception des Hostobservers kann weder durch den Scheduler austreten
+noch die bereits eingereihte Antwort verlieren. Der GD-ROM-Controller
+committet seinerseits RAM und terminalen Requestzustand vor der
+Gastbenachrichtigung, sodass auch ein ablehnender Interruptsink keine
+Completion verschluckt.
 
 Ein PVR-`StartRender` plant ebenfalls ein Completionereignis. Erst dessen
 Callback erhoeht den Completionzaehler und meldet `PvrRenderDone` an den

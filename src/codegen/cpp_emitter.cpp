@@ -1,6 +1,7 @@
 #include "katana/codegen/cpp_emitter.hpp"
 #include "katana/ir/verifier.hpp"
 #include "katana/runtime/block_abi.hpp"
+#include "katana/sh4/instruction_timing.hpp"
 
 #include "katana/ir/ir.hpp"
 
@@ -50,6 +51,11 @@ std::string service_function_name(const std::uint32_t address) {
 std::uint32_t fallthrough_address(const katana::ir::Instruction& instruction) {
     return instruction.source_address +
            (instruction.delay_slot.role == katana::ir::DelaySlotRole::Owner ? 4u : 2u);
+}
+
+bool has_proven_linear_ram_access(const katana::ir::Instruction& instruction) noexcept {
+    return instruction.memory_effects.access != katana::ir::MemoryAccessKind::None &&
+           instruction.memory_effects.region == katana::ir::MemoryRegionKind::NormalRam;
 }
 
 std::string special_register_read_expression(const katana::ir::SpecialRegister special_register) {
@@ -225,9 +231,45 @@ bool is_fpu_operation(const katana::ir::Instruction& instruction) {
     }
 }
 
+void emit_multi_block_completion(std::ostringstream& output,
+                                 const int indent,
+                                 const bool single_block,
+                                 const bool exception_exit = false) {
+    if (single_block) return;
+    emit_indent(output, indent);
+    output << "if (!block_completion_committed && services != nullptr) {\n";
+    emit_indent(output, indent + 1);
+    output << "const bool block_raised_exception = "
+              "cpu.exception_generation != block_exception_generation_before;\n";
+    emit_indent(output, indent + 1);
+    output << "const auto block_completion = katana::runtime::finalize_guest_block(\n";
+    emit_indent(output, indent + 2);
+    output << "cpu, *services, 1024u, block_checkpoint,\n";
+    emit_indent(output, indent + 2);
+    output << "cpu.retired_guest_instructions - block_retired_before,\n";
+    emit_indent(output, indent + 2);
+    output << "block_raised_exception, "
+           << (exception_exit ? "true" : "block_raised_exception") << ");\n";
+    emit_indent(output, indent + 1);
+    output << "block_completion_committed = true;\n";
+    emit_indent(output, indent + 1);
+    output << "if (block_completion.interrupt.has_value()) return;\n";
+    emit_indent(output, indent);
+    output << "}\n";
+}
+
+void emit_terminal_instruction_completion(std::ostringstream& output,
+                                          const int indent,
+                                          const bool single_block) {
+    if (single_block) return;
+    emit_indent(output, indent);
+    output << "terminal_instruction_attempt.complete();\n";
+}
+
 void emit_fpu_disabled_guard(std::ostringstream& output,
                              const katana::ir::Instruction& instruction,
-                             const int indent) {
+                             const int indent,
+                             const bool single_block) {
     if (!is_fpu_operation(instruction)) {
         return;
     }
@@ -241,6 +283,7 @@ void emit_fpu_disabled_guard(std::ostringstream& output,
         output << ", " << relocated_code_address(*instruction.delay_slot.counterpart_address);
     }
     output << ");\n";
+    emit_multi_block_completion(output, indent + 1, single_block, true);
     emit_indent(output, indent + 1);
     output << "return;\n";
     emit_indent(output, indent);
@@ -249,7 +292,8 @@ void emit_fpu_disabled_guard(std::ostringstream& output,
 
 void emit_fpu_mode_guard(std::ostringstream& output,
                          const katana::ir::Instruction& instruction,
-                         const int indent) {
+                         const int indent,
+                         const bool single_block) {
     using Operation = katana::ir::Operation;
 
     std::string invalid_condition;
@@ -348,6 +392,7 @@ void emit_fpu_mode_guard(std::ostringstream& output,
         output << ", " << relocated_code_address(*instruction.delay_slot.counterpart_address);
     }
     output << ");\n";
+    emit_multi_block_completion(output, indent + 1, single_block, true);
     emit_indent(output, indent + 1);
     output << "return;\n";
     emit_indent(output, indent);
@@ -356,7 +401,8 @@ void emit_fpu_mode_guard(std::ostringstream& output,
 
 void emit_privileged_guard(std::ostringstream& output,
                            const katana::ir::Instruction& instruction,
-                           const int indent) {
+                           const int indent,
+                           const bool single_block) {
     if (!instruction.is_privileged) return;
     emit_indent(output, indent);
     output << "if (!cpu.privileged_mode()) {\n";
@@ -368,6 +414,7 @@ void emit_privileged_guard(std::ostringstream& output,
         output << ", " << relocated_code_address(*instruction.delay_slot.counterpart_address);
     }
     output << ");\n";
+    emit_multi_block_completion(output, indent + 1, single_block, true);
     emit_indent(output, indent + 1);
     output << "return;\n";
     emit_indent(output, indent);
@@ -1656,12 +1703,6 @@ void emit_simple_instruction(std::ostringstream& output,
             output << ", " << relocated_code_address(*instruction.delay_slot.counterpart_address);
         }
         output << ");\n";
-        emit_indent(output, indent);
-        output << "if (cpu.trap_pending) {\n";
-        emit_indent(output, indent + 1);
-        output << "return;\n";
-        emit_indent(output, indent);
-        output << "}\n";
         return;
 
     case Operation::Branch:
@@ -1682,14 +1723,26 @@ void emit_simple_instruction(std::ostringstream& output,
 
 void emit_guarded_simple_instruction(std::ostringstream& output,
                                      const katana::ir::Instruction& instruction,
-                                     const int indent) {
+                                     const int indent,
+                                     const bool single_block) {
+    const auto timing = katana::sh4::instruction_timing(instruction.original_opcode);
     emit_indent(output, indent);
-    output << "// katana-guest " << hex32(instruction.source_address) << "\n";
+    output << "{\n";
     emit_indent(output, indent);
-    output << "++cpu.retired_guest_instructions;\n";
-    emit_privileged_guard(output, instruction, indent);
-    emit_fpu_disabled_guard(output, instruction, indent);
-    emit_fpu_mode_guard(output, instruction, indent);
+    output << "    // katana-guest " << hex32(instruction.source_address) << "\n";
+    if (timing.requires_cycle_flush && !has_proven_linear_ram_access(instruction)) {
+        emit_indent(output, indent + 1);
+        output << "if (services != nullptr) "
+                  "katana::runtime::flush_pending_guest_cycles(cpu, *services);\n";
+    }
+    emit_indent(output, indent + 1);
+    output << "katana::runtime::GuestInstructionAttempt guest_instruction_attempt(\n";
+    emit_indent(output, indent + 2);
+    output << "cpu, " << relocated_code_address(instruction.source_address) << ", "
+           << timing.guest_cycles << "u);\n";
+    emit_privileged_guard(output, instruction, indent + 1, single_block);
+    emit_fpu_disabled_guard(output, instruction, indent + 1, single_block);
+    emit_fpu_mode_guard(output, instruction, indent + 1, single_block);
 
     // PREF is address-dependent: outside the store-queue window it is only a cache hint, while
     // inside that window it performs a translated 32-byte transfer and can raise the same MMU,
@@ -1700,24 +1753,31 @@ void emit_guarded_simple_instruction(std::ostringstream& output,
         instruction.memory_effects.access != katana::ir::MemoryAccessKind::None ||
         instruction.operation == katana::ir::Operation::Prefetch;
     if (!may_raise_memory_error) {
-        emit_simple_instruction(output, instruction, indent);
+        emit_simple_instruction(output, instruction, indent + 1);
+        if (instruction.operation == katana::ir::Operation::Unknown) {
+            emit_multi_block_completion(output, indent + 1, single_block, true);
+            emit_indent(output, indent + 1);
+            output << "return;\n";
+        }
+        emit_indent(output, indent);
+        output << "}\n";
         return;
     }
 
-    emit_indent(output, indent);
-    output << "try {\n";
     emit_indent(output, indent + 1);
-    output << "const auto guest_origin = cpu.memory.has_guest_memory_access_sink()\n";
+    output << "try {\n";
     emit_indent(output, indent + 2);
+    output << "const auto guest_origin = cpu.memory.has_guest_memory_access_sink()\n";
+    emit_indent(output, indent + 3);
     output << "? katana::runtime::GuestInstructionOrigin{"
            << hex32(instruction.source_address) << ", "
            << relocated_code_address(instruction.source_address) << ", true}\n";
-    emit_indent(output, indent + 2);
+    emit_indent(output, indent + 3);
     output << ": katana::runtime::GuestInstructionOrigin{};\n";
-    emit_simple_instruction(output, instruction, indent + 1);
-    emit_indent(output, indent);
-    output << "} catch (const katana::runtime::MemoryAccessError& error) {\n";
+    emit_simple_instruction(output, instruction, indent + 2);
     emit_indent(output, indent + 1);
+    output << "} catch (const katana::runtime::MemoryAccessError& error) {\n";
+    emit_indent(output, indent + 2);
     output << "enter_memory_exception(cpu, error, "
            << relocated_code_address(instruction.source_address);
     if (instruction.delay_slot.role == katana::ir::DelaySlotRole::Slot &&
@@ -1725,21 +1785,25 @@ void emit_guarded_simple_instruction(std::ostringstream& output,
         output << ", " << relocated_code_address(*instruction.delay_slot.counterpart_address);
     }
     output << ");\n";
-    emit_indent(output, indent + 1);
+    emit_multi_block_completion(output, indent + 2, single_block, true);
+    emit_indent(output, indent + 2);
     output << "return;\n";
+    emit_indent(output, indent + 1);
+    output << "}\n";
     emit_indent(output, indent);
     output << "}\n";
 }
 
 void emit_call_delay_slot(std::ostringstream& output,
                           const katana::ir::Instruction& instruction,
-                          const int indent) {
+                          const int indent,
+                          const bool single_block) {
     emit_indent(output, indent);
     output << "const auto exception_generation_before_delay_slot = "
               "cpu.exception_generation;\n";
     emit_indent(output, indent);
     output << "[&] {\n";
-    emit_guarded_simple_instruction(output, instruction, indent + 1);
+    emit_guarded_simple_instruction(output, instruction, indent + 1, single_block);
     emit_indent(output, indent);
     output << "}();\n";
     emit_indent(output, indent);
@@ -1759,6 +1823,7 @@ void emit_direct_call(std::ostringstream& output,
                       const std::string_view runtime_target) {
     emit_indent(output, indent);
     output << "cpu.pc = " << runtime_target << ";\n";
+    emit_multi_block_completion(output, indent, false);
 
     emit_indent(output, indent);
 
@@ -1802,6 +1867,7 @@ void emit_block_transition(std::ostringstream& output,
                            const bool guarded_local_block_chaining,
                            const bool local_target) {
     if (!single_block) {
+        emit_multi_block_completion(output, indent, false);
         emit_indent(output, indent);
         output << "continue;\n";
         return;
@@ -1826,12 +1892,16 @@ void emit_terminal(std::ostringstream& output,
     using Operation = katana::ir::Operation;
 
     const auto& instruction = block.instructions[control_index];
+    const auto timing = katana::sh4::instruction_timing(instruction.original_opcode);
 
     emit_indent(output, indent);
     output << "// katana-guest " << hex32(instruction.source_address) << "\n";
     emit_indent(output, indent);
-    output << "++cpu.retired_guest_instructions;\n";
-    emit_privileged_guard(output, instruction, indent);
+    output << "katana::runtime::GuestInstructionAttempt terminal_instruction_attempt(\n";
+    emit_indent(output, indent + 1);
+    output << "cpu, " << relocated_code_address(instruction.source_address) << ", "
+           << timing.guest_cycles << "u);\n";
+    emit_privileged_guard(output, instruction, indent, single_block);
 
     const katana::ir::Instruction* delay_slot = nullptr;
 
@@ -1852,12 +1922,13 @@ void emit_terminal(std::ostringstream& output,
         }
 
         if (delay_slot != nullptr) {
-            emit_guarded_simple_instruction(output, *delay_slot, indent);
+            emit_guarded_simple_instruction(output, *delay_slot, indent, single_block);
         }
 
         emit_indent(output, indent);
         output << "cpu.pc = " << relocated_code_address(*instruction.target_address) << ";\n";
 
+        emit_terminal_instruction_completion(output, indent, single_block);
         emit_block_transition(output,
                               indent,
                               single_block,
@@ -1876,9 +1947,10 @@ void emit_terminal(std::ostringstream& output,
         output << "cpu.pr = " << relocated_code_address(instruction.source_address + 4u) << ";\n";
 
         if (delay_slot != nullptr) {
-            emit_call_delay_slot(output, *delay_slot, indent);
+            emit_call_delay_slot(output, *delay_slot, indent, single_block);
         }
 
+        emit_terminal_instruction_completion(output, indent, single_block);
         if (single_block) {
             emit_indent(output, indent);
             output << "cpu.pc = " << relocated_code_address(*instruction.target_address) << ";\n";
@@ -1888,6 +1960,7 @@ void emit_terminal(std::ostringstream& output,
                 output, *instruction.target_address, known_functions, indent, runtime_target);
         }
 
+        emit_multi_block_completion(output, indent, single_block);
         emit_indent(output, indent);
         output << (single_block ? "return;\n" : "continue;\n");
         return;
@@ -1905,7 +1978,7 @@ void emit_terminal(std::ostringstream& output,
             emit_indent(output, indent);
             output << "const bool take_branch = " << condition << ";\n";
 
-            emit_guarded_simple_instruction(output, *delay_slot, indent);
+            emit_guarded_simple_instruction(output, *delay_slot, indent, single_block);
 
             emit_indent(output, indent);
             output << "cpu.pc = take_branch ? "
@@ -1918,6 +1991,7 @@ void emit_terminal(std::ostringstream& output,
                    << relocated_code_address(fallthrough_address(instruction)) << ";\n";
         }
 
+        emit_terminal_instruction_completion(output, indent, single_block);
         emit_block_transition(
             output,
             indent,
@@ -1938,9 +2012,10 @@ void emit_terminal(std::ostringstream& output,
         output << ";\n";
 
         if (delay_slot != nullptr) {
-            emit_guarded_simple_instruction(output, *delay_slot, indent);
+            emit_guarded_simple_instruction(output, *delay_slot, indent, single_block);
         }
 
+        emit_terminal_instruction_completion(output, indent, single_block);
         if (single_block) {
             emit_indent(output, indent);
             output << "cpu.pc = jump_target;\n";
@@ -1950,6 +2025,7 @@ void emit_terminal(std::ostringstream& output,
         }
 
         if (instruction.resolved_targets.empty()) {
+            emit_multi_block_completion(output, indent, single_block);
             emit_indent(output, indent);
             output << dynamic_dispatch_name(instruction, false) << "(cpu, jump_target);\n";
 
@@ -1974,19 +2050,26 @@ void emit_terminal(std::ostringstream& output,
             } else if (known_functions.contains(target)) {
                 emit_indent(output, indent + 2);
                 output << "cpu.pc = jump_target;\n";
+                emit_multi_block_completion(output, indent + 2, single_block);
                 emit_indent(output, indent + 2);
                 output << service_function_name(target) << "(cpu, services);\n";
                 emit_indent(output, indent + 2);
                 output << "return;\n";
             } else {
+                emit_multi_block_completion(output, indent + 2, single_block);
                 emit_indent(output, indent + 2);
                 output << dynamic_dispatch_name(instruction, false) << "(cpu, jump_target);\n";
+                emit_indent(output, indent + 2);
+                output << "return;\n";
             }
         }
         emit_indent(output, indent + 1);
         output << "default:\n";
+        emit_multi_block_completion(output, indent + 2, single_block);
         emit_indent(output, indent + 2);
         output << dynamic_dispatch_name(instruction, false) << "(cpu, jump_target);\n";
+        emit_indent(output, indent + 2);
+        output << "return;\n";
         emit_indent(output, indent);
         output << "}\n";
         return;
@@ -2006,9 +2089,10 @@ void emit_terminal(std::ostringstream& output,
         output << "cpu.pr = " << relocated_code_address(instruction.source_address + 4u) << ";\n";
 
         if (delay_slot != nullptr) {
-            emit_call_delay_slot(output, *delay_slot, indent);
+            emit_call_delay_slot(output, *delay_slot, indent, single_block);
         }
 
+        emit_terminal_instruction_completion(output, indent, single_block);
         if (single_block) {
             emit_indent(output, indent);
             output << "cpu.pc = call_target;\n";
@@ -2018,6 +2102,7 @@ void emit_terminal(std::ostringstream& output,
         }
 
         if (instruction.resolved_targets.empty()) {
+            emit_multi_block_completion(output, indent, single_block);
             emit_indent(output, indent);
             output << dynamic_dispatch_name(instruction, true) << "(cpu, call_target);\n";
         } else {
@@ -2036,6 +2121,7 @@ void emit_terminal(std::ostringstream& output,
                     emit_indent(output, indent + 2);
                     output << "break;\n";
                 } else {
+                    emit_multi_block_completion(output, indent + 2, single_block);
                     emit_indent(output, indent + 2);
                     output << dynamic_dispatch_name(instruction, true) << "(cpu, call_target);\n";
                     emit_indent(output, indent + 2);
@@ -2044,12 +2130,14 @@ void emit_terminal(std::ostringstream& output,
             }
             emit_indent(output, indent + 1);
             output << "default:\n";
+            emit_multi_block_completion(output, indent + 2, single_block);
             emit_indent(output, indent + 2);
             output << dynamic_dispatch_name(instruction, true) << "(cpu, call_target);\n";
             emit_indent(output, indent);
             output << "}\n";
         }
 
+        emit_multi_block_completion(output, indent, single_block);
         emit_indent(output, indent);
         output << (single_block ? "return;\n" : "continue;\n");
         return;
@@ -2059,12 +2147,14 @@ void emit_terminal(std::ostringstream& output,
         output << "const std::uint32_t return_target = cpu.pr;\n";
 
         if (delay_slot != nullptr) {
-            emit_guarded_simple_instruction(output, *delay_slot, indent);
+            emit_guarded_simple_instruction(output, *delay_slot, indent, single_block);
         }
 
         emit_indent(output, indent);
         output << "cpu.pc = return_target;\n";
 
+        emit_terminal_instruction_completion(output, indent, single_block);
+        emit_multi_block_completion(output, indent, single_block);
         emit_indent(output, indent);
         output << "return;\n";
         return;
@@ -2073,6 +2163,8 @@ void emit_terminal(std::ostringstream& output,
         emit_indent(output, indent);
         output << "raise_trapa(cpu, " << static_cast<unsigned>(instruction.immediate) << "u, "
                << relocated_code_address(instruction.source_address) << ");\n";
+        emit_terminal_instruction_completion(output, indent, single_block);
+        emit_multi_block_completion(output, indent, single_block, true);
         emit_indent(output, indent);
         output << "return;\n";
         return;
@@ -2081,8 +2173,10 @@ void emit_terminal(std::ostringstream& output,
         emit_indent(output, indent);
         output << "return_from_exception(cpu);\n";
         if (delay_slot != nullptr) {
-            emit_guarded_simple_instruction(output, *delay_slot, indent);
+            emit_guarded_simple_instruction(output, *delay_slot, indent, single_block);
         }
+        emit_terminal_instruction_completion(output, indent, single_block);
+        emit_multi_block_completion(output, indent, single_block);
         emit_indent(output, indent);
         output << "return;\n";
         return;
@@ -2092,6 +2186,8 @@ void emit_terminal(std::ostringstream& output,
         output << "cpu.sleeping = true;\n";
         emit_indent(output, indent);
         output << "cpu.pc = " << relocated_code_address(instruction.source_address + 2u) << ";\n";
+        emit_terminal_instruction_completion(output, indent, single_block);
+        emit_multi_block_completion(output, indent, single_block);
         emit_indent(output, indent);
         output << "return;\n";
         return;
@@ -2371,12 +2467,6 @@ void emit_block(std::ostringstream& output,
                 const bool single_block,
                 const bool guarded_local_block_chaining,
                 const bool note_external_block_entry) {
-    std::unordered_set<std::uint32_t> guest_instruction_addresses;
-    guest_instruction_addresses.reserve(block.instructions.size());
-    for (const auto& instruction : block.instructions)
-        guest_instruction_addresses.insert(instruction.source_address);
-    const auto guest_instruction_count =
-        std::max<std::size_t>(1u, guest_instruction_addresses.size());
     const auto segment = block.start_address >> 29u;
     if (segment == 4u || segment == 5u) {
         const auto direct_alias = block.start_address ^ 0x20000000u;
@@ -2388,18 +2478,13 @@ void emit_block(std::ostringstream& output,
         output << "                note_block_entry(" << relocated_code_address(block.start_address)
                << ");\n";
     if (!single_block) {
-        output << "                if (services != nullptr) {\n"
-               << "                    const auto scheduler = services->consume_guest_cycles(\n"
-               << "                        katana::runtime::base_guest_cycles_per_instruction * "
-               << guest_instruction_count << "u, 1024u);\n"
-               << "                    if (scheduler.budget_exhausted)\n"
-               << "                        throw std::runtime_error(\"Schedulerbudget erschoepft\");\n"
-               << "                    if (scheduler.guest_cycle_budget_exhausted)\n"
-               << "                        throw std::runtime_error(\"Gastzyklusbudget erschoepft\");\n"
-               << "                    services->observe_guest_checkpoint("
-               << relocated_code_address(block.start_address) << ");\n"
-               << "                    if (services->poll_interrupt().has_value()) return;\n"
-               << "                }\n";
+        output << "                const auto block_retired_before = "
+                  "cpu.retired_guest_instructions;\n"
+               << "                const auto block_exception_generation_before = "
+                  "cpu.exception_generation;\n"
+               << "                const auto block_checkpoint = "
+               << relocated_code_address(block.start_address) << ";\n"
+               << "                bool block_completion_committed = false;\n";
     }
 
     std::optional<std::size_t> control_index;
@@ -2416,7 +2501,7 @@ void emit_block(std::ostringstream& output,
             break;
         }
 
-        emit_guarded_simple_instruction(output, instruction, 4);
+        emit_guarded_simple_instruction(output, instruction, 4, single_block);
     }
 
     if (control_index.has_value()) {
@@ -2448,6 +2533,7 @@ void emit_block(std::ostringstream& output,
                    << relocated_code_address(fallthrough_address(block.instructions.back()))
                    << ";\n";
         }
+        emit_multi_block_completion(output, 4, single_block);
         emit_indent(output, 4);
         output << "return;\n";
     } else {
@@ -2483,7 +2569,7 @@ bool cpp_backend_supports_operation(const katana::ir::Operation operation) noexc
             break;
         }
         std::ostringstream output;
-        emit_guarded_simple_instruction(output, instruction, 0);
+        emit_guarded_simple_instruction(output, instruction, 0, true);
         return !output.str().empty();
     } catch (...) {
         return false;

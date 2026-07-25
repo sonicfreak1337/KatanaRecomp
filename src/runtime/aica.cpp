@@ -167,46 +167,75 @@ void AicaRegisterFile::write(const std::uint32_t offset,
                              const std::uint32_t value,
                              const MemoryAccessWidth width) {
     check(offset, width);
-    for (std::size_t index = 0u; index < width_bytes(width); ++index) {
+    const auto written_bytes = width_bytes(width);
+    for (std::size_t index = 0u; index < written_bytes; ++index) {
         registers_[offset + index] = static_cast<std::uint8_t>(value >> (index * 8u));
     }
-    if (offset == 0x2C00u) {
-        registers_[offset] &= 1u;
-        if (width == MemoryAccessWidth::Word) {
-            registers_[offset + 2u] = 0u;
-            registers_[offset + 3u] = 0u;
-        }
-        if (execution_) execution_->set_arm7_reset_asserted((registers_[offset] & 1u) != 0u);
+
+    const auto overlaps = [offset, written_bytes](const std::uint32_t register_offset,
+                                                  const std::size_t register_bytes) {
+        const auto write_begin = static_cast<std::uint64_t>(offset);
+        const auto write_end = write_begin + written_bytes;
+        const auto register_begin = static_cast<std::uint64_t>(register_offset);
+        const auto register_end = register_begin + register_bytes;
+        return write_begin < register_end && register_begin < write_end;
+    };
+    const auto load16 = [this](const std::uint32_t register_offset) {
+        return static_cast<std::uint16_t>(registers_[register_offset]) |
+               static_cast<std::uint16_t>(
+                   static_cast<std::uint16_t>(registers_[register_offset + 1u]) << 8u);
+    };
+    const auto load32 = [this](const std::uint32_t register_offset) {
+        std::uint32_t result = 0u;
+        for (std::size_t index = 0u; index < sizeof(result); ++index)
+            result |= static_cast<std::uint32_t>(registers_[register_offset + index])
+                      << (index * 8u);
+        return result;
+    };
+
+    if (overlaps(0x2C00u, 4u)) {
+        registers_[0x2C00u] &= 1u;
+        registers_[0x2C02u] = 0u;
+        registers_[0x2C03u] = 0u;
+        if (execution_)
+            execution_->set_arm7_reset_asserted((registers_[0x2C00u] & 1u) != 0u);
     }
-    if (offset < aica_channel_count * aica_channel_register_stride &&
-        (offset % aica_channel_register_stride) < 4u) {
-        const auto local = offset % aica_channel_register_stride;
-        if (local == 0u || (local < 2u && width != MemoryAccessWidth::Byte)) {
-            const auto control_offset = offset - local;
-            const auto control = static_cast<std::uint16_t>(registers_[control_offset]) |
-                                 static_cast<std::uint16_t>(registers_[control_offset + 1u] << 8u);
-            if ((control & 0x8000u) != 0u) {
-                for (std::size_t channel = 0u; channel < channels_.size(); ++channel) {
-                    const auto base = channel * aica_channel_register_stride;
-                    const auto candidate = static_cast<std::uint16_t>(registers_[base]) |
-                                           static_cast<std::uint16_t>(registers_[base + 1u] << 8u);
-                    auto& runtime = channels_[channel];
-                    const auto enabled = (candidate & 0x4000u) != 0u;
-                    if (enabled && !runtime.active) runtime = ChannelRuntime{0u, 0u, 0, 127, true};
-                    if (!enabled) runtime.active = false;
-                    registers_[base + 1u] &= 0x7Fu;
-                }
-            }
+
+    bool execute_key_on = false;
+    for (std::size_t channel = 0u; channel < channels_.size(); ++channel) {
+        const auto base = static_cast<std::uint32_t>(channel * aica_channel_register_stride);
+        if (overlaps(base, 2u) && (load16(base) & 0x8000u) != 0u) {
+            execute_key_on = true;
+            break;
         }
     }
-    if (execution_ && offset >= 0x2890u && offset <= 0x2898u && (offset & 3u) == 0u) {
-        const auto timer = static_cast<std::size_t>((offset - 0x2890u) / 4u);
-        execution_->timer(timer).configure(
-            static_cast<std::uint8_t>(value), static_cast<std::uint8_t>((value >> 8u) & 7u), true);
-    } else if (execution_ && offset == 0x28B4u) {
-        execution_->interrupts().set_enabled(value);
-    } else if (execution_ && offset == 0x28BCu) {
-        execution_->interrupts().acknowledge(value);
+    if (execute_key_on) {
+        for (std::size_t channel = 0u; channel < channels_.size(); ++channel) {
+            const auto base = static_cast<std::uint32_t>(
+                channel * aica_channel_register_stride);
+            const auto candidate = load16(base);
+            auto& runtime = channels_[channel];
+            const auto enabled = (candidate & 0x4000u) != 0u;
+            if (enabled && !runtime.active) runtime = ChannelRuntime{0u, 0u, 0, 127, true};
+            if (!enabled) runtime.active = false;
+            registers_[base + 1u] &= 0x7Fu;
+        }
+    }
+
+    if (execution_) {
+        for (std::size_t timer = 0u; timer < AicaExecutionController::timer_count; ++timer) {
+            const auto timer_offset = static_cast<std::uint32_t>(0x2890u + timer * 4u);
+            if (!overlaps(timer_offset, 2u)) continue;
+            const auto timer_value = load16(timer_offset);
+            execution_->timer(timer).configure(
+                static_cast<std::uint8_t>(timer_value),
+                static_cast<std::uint8_t>((timer_value >> 8u) & 7u),
+                true);
+        }
+        if (overlaps(0x28B4u, 4u))
+            execution_->interrupts().set_enabled(load32(0x28B4u));
+        if (overlaps(0x28BCu, 4u))
+            execution_->interrupts().acknowledge(load32(0x28BCu));
     }
     ++writes_;
 }
@@ -217,7 +246,26 @@ void AicaRegisterFile::reset() noexcept {
     writes_ = 0u;
     rendered_buffers_ = 0u;
     rendered_frames_ = 0u;
-    if (execution_) execution_->set_arm7_reset_asserted(false);
+    voice_errors_ = 0u;
+    first_voice_error_.reset();
+    if (execution_) execution_->reset();
+}
+
+void AicaRegisterFile::record_voice_error(const AicaVoiceError error,
+                                          const AicaSampleFormat format,
+                                          const std::size_t channel,
+                                          const std::uint64_t sample_address,
+                                          const std::uint64_t rendered_frame) noexcept {
+    ++voice_errors_;
+    if (!first_voice_error_) {
+        first_voice_error_ = AicaVoiceFirstError{
+            error,
+            format,
+            static_cast<std::uint32_t>(channel),
+            sample_address,
+            rendered_frame,
+        };
+    }
 }
 
 std::vector<std::int16_t> AicaRegisterFile::render_audio(const std::size_t frame_count,
@@ -231,6 +279,7 @@ std::vector<std::int16_t> AicaRegisterFile::render_audio(const std::size_t frame
         return static_cast<std::uint16_t>(registers_[offset]) |
                static_cast<std::uint16_t>(registers_[offset + 1u] << 8u);
     };
+    const auto ram_size = static_cast<std::uint64_t>(ram_->size());
     const auto master = static_cast<double>(registers_[aica_common_register_base] & 0x0Fu) / 15.0;
     for (std::size_t channel = 0u; channel < channels_.size(); ++channel) {
         auto& runtime = channels_[channel];
@@ -238,11 +287,25 @@ std::vector<std::int16_t> AicaRegisterFile::render_audio(const std::size_t frame
         const auto base = channel * aica_channel_register_stride;
         const auto control = read16(base);
         const auto format = static_cast<std::uint8_t>((control >> 7u) & 3u);
+        const auto sample_format =
+            format == 0u ? AicaSampleFormat::Pcm16
+            : format == 1u ? AicaSampleFormat::Pcm8
+                           : AicaSampleFormat::Adpcm4;
+        const auto range_error =
+            format == 0u ? AicaVoiceError::Pcm16OutOfRange
+            : format == 1u ? AicaVoiceError::Pcm8OutOfRange
+                           : AicaVoiceError::AdpcmOutOfRange;
         const auto sample_base = (static_cast<std::uint32_t>(control & 0x7Fu) << 16u) |
                                  read16(base + 4u);
         const auto loop_start = static_cast<std::uint32_t>(read16(base + 8u));
         const auto loop_end = static_cast<std::uint32_t>(read16(base + 12u));
-        if (loop_end == 0u || sample_base >= ram_->size()) {
+        if (loop_end == 0u) {
+            runtime.active = false;
+            continue;
+        }
+        if (sample_base >= ram_size) {
+            record_voice_error(
+                range_error, sample_format, channel, sample_base, rendered_frames_);
             runtime.active = false;
             continue;
         }
@@ -266,11 +329,21 @@ std::vector<std::int16_t> AicaRegisterFile::render_audio(const std::size_t frame
             runtime.adpcm_predictor = 0;
             runtime.adpcm_step = 127;
         };
-        const auto decode_adpcm_until = [&](const std::uint32_t target) {
+        const auto decode_adpcm_until =
+            [&](const std::uint32_t target,
+                const std::size_t frame) -> std::optional<std::int16_t> {
             while (runtime.adpcm_position <= target) {
                 const auto byte_offset = static_cast<std::uint64_t>(sample_base) +
                                          runtime.adpcm_position / 2u;
-                if (byte_offset >= ram_->size()) throw std::out_of_range("AICA-ADPCM verlaesst Sound-RAM.");
+                if (byte_offset >= ram_size) {
+                    record_voice_error(AicaVoiceError::AdpcmOutOfRange,
+                                       AicaSampleFormat::Adpcm4,
+                                       channel,
+                                       byte_offset,
+                                       rendered_frames_ + frame);
+                    runtime.active = false;
+                    return std::nullopt;
+                }
                 const auto packed = ram_->read_u8(static_cast<std::uint32_t>(byte_offset));
                 const auto nibble = static_cast<std::uint8_t>(
                     (runtime.adpcm_position & 1u) == 0u ? packed & 0x0Fu : packed >> 4u);
@@ -301,16 +374,34 @@ std::vector<std::int16_t> AicaRegisterFile::render_audio(const std::size_t frame
             std::int16_t sample = 0;
             if (format == 0u) {
                 const auto address = static_cast<std::uint64_t>(sample_base) + position * 2u;
-                if (address + 2u > ram_->size()) throw std::out_of_range("AICA-PCM16 verlaesst Sound-RAM.");
+                if (address > ram_size || ram_size - address < 2u) {
+                    record_voice_error(AicaVoiceError::Pcm16OutOfRange,
+                                       AicaSampleFormat::Pcm16,
+                                       channel,
+                                       address,
+                                       rendered_frames_ + frame);
+                    runtime.active = false;
+                    break;
+                }
                 sample = std::bit_cast<std::int16_t>(ram_->read_u16(static_cast<std::uint32_t>(address)));
             } else if (format == 1u) {
                 const auto address = static_cast<std::uint64_t>(sample_base) + position;
-                if (address >= ram_->size()) throw std::out_of_range("AICA-PCM8 verlaesst Sound-RAM.");
+                if (address >= ram_size) {
+                    record_voice_error(AicaVoiceError::Pcm8OutOfRange,
+                                       AicaSampleFormat::Pcm8,
+                                       channel,
+                                       address,
+                                       rendered_frames_ + frame);
+                    runtime.active = false;
+                    break;
+                }
                 sample = static_cast<std::int16_t>(
                     static_cast<std::int16_t>(std::bit_cast<std::int8_t>(ram_->read_u8(static_cast<std::uint32_t>(address)))) * 256);
             } else {
                 if (runtime.adpcm_position > position) reset_adpcm();
-                sample = decode_adpcm_until(position);
+                const auto decoded = decode_adpcm_until(position, frame);
+                if (!decoded) break;
+                sample = *decoded;
             }
             accumulation[frame * 2u] += static_cast<std::int64_t>(std::lround(sample * left_gain));
             accumulation[frame * 2u + 1u] += static_cast<std::int64_t>(std::lround(sample * right_gain));
@@ -340,6 +431,14 @@ std::uint64_t AicaRegisterFile::rendered_frame_count() const noexcept {
     return rendered_frames_;
 }
 
+std::uint64_t AicaRegisterFile::voice_error_count() const noexcept {
+    return voice_errors_;
+}
+
+std::optional<AicaVoiceFirstError> AicaRegisterFile::first_voice_error() const noexcept {
+    return first_voice_error_;
+}
+
 AicaRegisterSnapshot AicaRegisterFile::snapshot() const noexcept {
     AicaRegisterSnapshot result;
     result.registers = registers_;
@@ -354,6 +453,8 @@ AicaRegisterSnapshot AicaRegisterFile::snapshot() const noexcept {
     result.writes = writes_;
     result.rendered_buffers = rendered_buffers_;
     result.rendered_frames = rendered_frames_;
+    result.voice_errors = voice_errors_;
+    result.first_voice_error = first_voice_error_;
     return result;
 }
 
@@ -494,6 +595,13 @@ void AicaTimer::configure(const std::uint8_t initial_counter,
     enabled_ = enabled;
 }
 
+void AicaTimer::reset() noexcept {
+    remainder_ = 0u;
+    divisor_ = 1u;
+    counter_ = 0u;
+    enabled_ = false;
+}
+
 std::uint64_t AicaTimer::tick(const std::uint64_t audio_cycles) noexcept {
     if (!enabled_) {
         return 0u;
@@ -527,6 +635,11 @@ void AicaInterruptState::set_enabled(const std::uint32_t mask) {
     if (!was_asserted && asserted() && observer_) observer_();
 }
 
+void AicaInterruptState::reset() noexcept {
+    enabled_ = 0u;
+    pending_ = 0u;
+}
+
 AicaExecutionController::AicaExecutionController(EventScheduler* const scheduler,
                                                  const std::uint64_t guest_clock_hz,
                                                  const std::uint64_t audio_clock_hz)
@@ -539,7 +652,12 @@ AicaExecutionController::AicaExecutionController(EventScheduler* const scheduler
         std::max<std::uint64_t>(1u, (guest_clock_hz * audio_cycles_per_tick) / audio_clock_hz);
     scheduler_lifetime_ = scheduler_->lifetime_token();
     reset_observer_ = scheduler_->add_reset_observer([this] { handle_scheduler_reset(); });
-    schedule_tick();
+    try {
+        schedule_tick();
+    } catch (...) {
+        static_cast<void>(scheduler_->remove_reset_observer(reset_observer_));
+        throw;
+    }
 }
 
 AicaExecutionController::~AicaExecutionController() {
@@ -549,7 +667,11 @@ AicaExecutionController::~AicaExecutionController() {
 }
 
 void AicaExecutionController::schedule_tick() {
-    if (scheduler_ == nullptr || guest_cycles_per_tick_ == 0u) return;
+    if (scheduler_ == nullptr || scheduler_lifetime_.expired() ||
+        guest_cycles_per_tick_ == 0u)
+        return;
+    if (tick_event_)
+        throw std::logic_error("AICA-Tick ist bereits geplant.");
     tick_event_ = scheduler_->schedule_after(
         guest_cycles_per_tick_,
         [this](const auto event_id, const auto) { handle_tick(event_id); },
@@ -561,15 +683,17 @@ void AicaExecutionController::handle_tick(const SchedulerEventId event_id) {
         throw std::logic_error("AICA-Timercompletion besitzt kein aktives Ereignis.");
     tick_event_.reset();
     tick(audio_cycles_per_tick);
-    schedule_tick();
+    try {
+        schedule_tick();
+        error_ = AicaExecutionError::None;
+    } catch (...) {
+        tick_event_.reset();
+        error_ = AicaExecutionError::TickScheduleFailure;
+    }
 }
 
 void AicaExecutionController::handle_scheduler_reset() noexcept {
-    tick_event_.reset();
-    try {
-        schedule_tick();
-    } catch (...) {
-    }
+    reset();
 }
 void AicaInterruptState::set_observer(std::function<void()> observer) {
     observer_ = std::move(observer);
@@ -594,6 +718,25 @@ bool AicaInterruptState::asserted() const noexcept {
 
 AicaInterruptState::Snapshot AicaInterruptState::snapshot() const noexcept {
     return {enabled_, pending_, asserted()};
+}
+
+void AicaExecutionController::reset() noexcept {
+    mode_ = AicaArm7Mode::HighLevelAudio;
+    arm7_reset_asserted_ = false;
+    for (auto& timer : timers_) timer.reset();
+    interrupts_.reset();
+    error_ = AicaExecutionError::None;
+
+    if (scheduler_ != nullptr && !scheduler_lifetime_.expired() && tick_event_)
+        static_cast<void>(scheduler_->cancel(*tick_event_));
+    tick_event_.reset();
+    if (scheduler_ == nullptr || scheduler_lifetime_.expired()) return;
+    try {
+        schedule_tick();
+    } catch (...) {
+        tick_event_.reset();
+        error_ = AicaExecutionError::TickScheduleFailure;
+    }
 }
 
 void AicaExecutionController::set_mode(const AicaArm7Mode mode) {
@@ -662,6 +805,7 @@ AicaExecutionController::Snapshot AicaExecutionController::snapshot() const noex
         result.timers[index] = timers_[index].snapshot();
     result.interrupts = interrupts_.snapshot();
     result.tick_event = tick_event_;
+    result.error = error_;
     result.guest_cycles_per_tick = guest_cycles_per_tick_;
     return result;
 }

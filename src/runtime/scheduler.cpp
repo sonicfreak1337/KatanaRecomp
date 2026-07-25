@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <charconv>
 #include <cstdlib>
+#include <exception>
 #include <limits>
 #include <memory>
 #include <stdexcept>
@@ -33,10 +34,22 @@ SchedulerEventId EventScheduler::schedule_at(const std::uint64_t guest_cycle,
         throw std::overflow_error("Scheduler-Ereignis-ID ist uebergelaufen.");
     }
 
-    const SchedulerEventId event_id = next_event_id_++;
+    const SchedulerEventId event_id = next_event_id_;
     const EventKey key{guest_cycle, event_id};
-    events_.emplace(key, ScheduledEvent{std::move(callback), kind});
-    event_keys_.emplace(event_id, key);
+    const auto [event, event_inserted] =
+        events_.emplace(key, ScheduledEvent{std::move(callback), kind});
+    if (!event_inserted)
+        throw std::logic_error("Scheduler-Ereignisschluessel ist bereits aktiv.");
+    try {
+        const auto [entry, inserted] = event_keys_.emplace(event_id, key);
+        static_cast<void>(entry);
+        if (!inserted)
+            throw std::logic_error("Scheduler-Ereignis-ID ist bereits aktiv.");
+    } catch (...) {
+        events_.erase(event);
+        throw;
+    }
+    ++next_event_id_;
     return event_id;
 }
 
@@ -95,6 +108,14 @@ void EventScheduler::reset() {
     if (reset_generation_ == std::numeric_limits<std::uint64_t>::max()) {
         throw std::overflow_error("Scheduler-Resetgeneration ist uebergelaufen.");
     }
+
+    std::vector<SchedulerResetCallback> observers;
+    observers.reserve(reset_observers_.size());
+    for (const auto& [id, callback] : reset_observers_) {
+        static_cast<void>(id);
+        observers.push_back(callback);
+    }
+
     clear();
     current_cycle_ = 0u;
     processed_event_count_ = 0u;
@@ -117,15 +138,15 @@ void EventScheduler::reset() {
         }
     }
 
-    std::vector<SchedulerResetCallback> observers;
-    observers.reserve(reset_observers_.size());
-    for (const auto& [id, callback] : reset_observers_) {
-        static_cast<void>(id);
-        observers.push_back(callback);
-    }
+    std::exception_ptr first_observer_error;
     for (const auto& callback : observers) {
-        callback();
+        try {
+            callback();
+        } catch (...) {
+            if (!first_observer_error) first_observer_error = std::current_exception();
+        }
     }
+    if (first_observer_error) std::rethrow_exception(first_observer_error);
 }
 
 SchedulerAdvanceResult EventScheduler::advance_to(const std::uint64_t guest_cycle,

@@ -153,6 +153,7 @@ void runtime_aot_alias_lifetime_regression() {
     const std::vector<std::uint8_t> bytes{0x09u, 0x00u, 0x0Bu, 0x00u};
 
     CpuState cpu;
+    cpu.write_sr(sr_md_mask);
     cpu.memory.map_region(
         "runtime-aot-alias-ram", runtime_start, std::make_shared<LinearMemoryDevice>(0x2000u));
     cpu.memory.write_bytes(runtime_start, bytes, CodeWriteSource::Copy);
@@ -268,13 +269,6 @@ void missing_aot_dispatch_regression() {
     CpuState cpu;
     cpu.memory.write_bytes(runtime_address, bytes, CodeWriteSource::Copy);
 
-    ExecutableModule source;
-    source.id = "latent-aot-source";
-    source.source_identity = "sha256:source-fixture";
-    source.byte_identity = source.source_identity;
-    source.guest_start = source_address;
-    source.bytes = bytes;
-    source.writable = false;
     ExecutableModule loaded;
     loaded.id = "loaded-disc-file";
     loaded.source_identity = "sha256:loaded-fixture";
@@ -283,7 +277,6 @@ void missing_aot_dispatch_regression() {
     loaded.guest_start = runtime_address;
     loaded.bytes = bytes;
     ExecutableModuleCatalog modules;
-    modules.publish(source);
     modules.publish(loaded);
 
     RuntimeBlockTable blocks;
@@ -297,8 +290,8 @@ void missing_aot_dispatch_regression() {
     ExecutableCodeTracker tracker;
     blocks.bind_code_tracker(&tracker);
     const std::array templates{NativeAotTemplate{
-        source.id,
-        source.source_identity,
+        "latent-aot-source",
+        loaded.byte_identity,
         source_address,
         static_cast<std::uint32_t>(bytes.size()),
         0,
@@ -363,6 +356,7 @@ int main() {
                                                  "compiled",
                                                  false}));
         CpuState cpu;
+        cpu.write_sr(sr_md_mask);
         cpu.pr = 0xDEADBEEFu;
         const BlockAddress source{0x8C000100u, 0x0C000100u};
 
@@ -495,8 +489,103 @@ int main() {
                     unresolved_call.record_diagnostics,
                 "Call-Fortsetzung verliert Aufrufart oder Guarded-/Static-Vertrag.");
 
+        static_cast<void>(table.register_static({0x00000100u,
+                                                 0x00000100u,
+                                                 2u,
+                                                 BlockEndKind::Return,
+                                                 variant,
+                                                 block,
+                                                 "address-error-handler",
+                                                 false}));
+        IndirectDispatchMetrics address_error_metrics;
+        cpu.vbr = 0u;
+        cpu.pc = 0x11111110u;
+        cpu.pr = 0x22222220u;
+        const auto generation_before_odd_target = cpu.exception_generation;
+        const auto attempts_before_odd_target = cpu.attempted_guest_instructions;
+        const auto cycles_before_odd_target = elapsed_guest_cycles(cpu);
+        const auto odd_target = dispatch_indirect(
+            cpu,
+            table,
+            {IndirectDispatchKind::Call,
+             0x8C0005F0u,
+             0x8C001001u,
+             0x33333330u,
+             source,
+             variant,
+             DispatchResolutionOrigin::RuntimeOnly,
+             nullptr,
+             RuntimeDispatchClass::RuntimeOnly,
+             &address_error_metrics});
+        require(odd_target.diagnostic_target == 0x00000100u &&
+                    cpu.last_exception_cause == ExceptionCause::AddressErrorRead &&
+                    cpu.tea == 0x8C001001u &&
+                    cpu.spc == 0x8C001001u &&
+                    cpu.last_exception_instruction_pc == 0x8C001001u &&
+                    cpu.last_exception_owner_pc == 0x8C001001u &&
+                    !cpu.exception_in_delay_slot &&
+                    cpu.exception_generation == generation_before_odd_target + 1u &&
+                    cpu.attempted_guest_instructions == attempts_before_odd_target + 1u &&
+                    elapsed_guest_cycles(cpu) == cycles_before_odd_target + 1u &&
+                    cpu.pr == 0x33333330u,
+                "Ungerades indirektes Ziel meldet den Ziel-Fetch nicht mit exaktem "
+                 "Fault-/Owner-PC, Versuch/Zeit oder verliert die abgeschlossene "
+                 "Call-/Delay-Slot-PR.");
+
+        static_cast<void>(table.register_static({0xA0000000u,
+                                                 0x00000000u,
+                                                 2u,
+                                                 BlockEndKind::Return,
+                                                 variant,
+                                                 block,
+                                                 "manual-reset-vector",
+                                                 false}));
+        CpuState blocked_handler_fetch;
+        blocked_handler_fetch.write_sr(sr_md_mask);
+        blocked_handler_fetch.vbr = 1u;
+        blocked_handler_fetch.pc = 0x44444440u;
+        blocked_handler_fetch.pr = 0x55555550u;
+        const auto blocked_generation_before = blocked_handler_fetch.exception_generation;
+        const auto blocked_attempts_before =
+            blocked_handler_fetch.attempted_guest_instructions;
+        const auto blocked_retired_before =
+            blocked_handler_fetch.retired_guest_instructions;
+        const auto blocked_cycles_before = elapsed_guest_cycles(blocked_handler_fetch);
+        const auto reset_dispatch = dispatch_indirect(
+            blocked_handler_fetch,
+            table,
+            {IndirectDispatchKind::Call,
+             0x8C0005F2u,
+             0x8C001001u,
+             0x66666660u,
+             source,
+             variant,
+             DispatchResolutionOrigin::RuntimeOnly,
+             nullptr,
+             RuntimeDispatchClass::RuntimeOnly,
+             nullptr});
+        require(reset_dispatch.diagnostic_target == 0xA0000000u &&
+                    reset_dispatch.physical_target == 0u &&
+                    blocked_handler_fetch.pc == 0xA0000000u &&
+                    blocked_handler_fetch.pr == 0u &&
+                    blocked_handler_fetch.last_exception_cause ==
+                        ExceptionCause::AddressErrorRead &&
+                    blocked_handler_fetch.last_exception_instruction_pc == 0x00000101u &&
+                    blocked_handler_fetch.last_exception_owner_pc == 0x00000101u &&
+                    blocked_handler_fetch.tea == 0x00000101u &&
+                    blocked_handler_fetch.exception_generation ==
+                        blocked_generation_before + 2u &&
+                    blocked_handler_fetch.attempted_guest_instructions ==
+                        blocked_attempts_before + 2u &&
+                    blocked_handler_fetch.retired_guest_instructions ==
+                        blocked_retired_before &&
+                    elapsed_guest_cycles(blocked_handler_fetch) ==
+                        blocked_cycles_before + 2u,
+                "Faultender Exception-Handler-Fetch entkommt roh, ueberspringt den "
+                "Manual-Reset-Pfad oder wird faelschlich retired.");
+
         const auto expect_runtime_miss = [&](const std::uint32_t target,
-                                             const DispatchDiagnosticError expected) {
+                                              const DispatchDiagnosticError expected) {
             const auto pc_before = cpu.pc;
             const auto pr_before = cpu.pr;
             try {
@@ -524,12 +613,11 @@ int main() {
             }
             throw std::runtime_error("Ungueltiges Runtime-only-Ziel wurde akzeptiert.");
         };
-        expect_runtime_miss(0x8C001001u, DispatchDiagnosticError::Misaligned);
         expect_runtime_miss(0x8C001002u, DispatchDiagnosticError::UnknownTarget);
         expect_runtime_miss(0x12345000u, DispatchDiagnosticError::UnknownTarget);
-        require(metrics.misses() == 3u && metrics.runtime_only_misses() == 3u &&
-                    metrics.fallbacks() == 0u && metrics.runtime_only_fallbacks() == 0u &&
-                    metrics.first_error()->target == 0x8C001001u &&
+        require(metrics.misses() == 2u && metrics.runtime_only_misses() == 2u &&
+                     metrics.fallbacks() == 0u && metrics.runtime_only_fallbacks() == 0u &&
+                     metrics.first_error()->target == 0x8C001002u &&
                     metrics.serialize_json().find("\"class\":\"runtime-only\"") !=
                         std::string::npos,
                 "Runtime-only-Zaehler oder erster Fehler sind nicht stabil.");

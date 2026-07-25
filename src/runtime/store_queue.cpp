@@ -5,6 +5,14 @@
 
 namespace katana::runtime {
 
+StoreQueueSinkError::StoreQueueSinkError(const StoreQueueSinkErrorReason reason,
+                                         std::string detail)
+    : std::runtime_error(std::move(detail)), reason_(reason) {}
+
+StoreQueueSinkErrorReason StoreQueueSinkError::reason() const noexcept {
+    return reason_;
+}
+
 Sh4StoreQueues::Sh4StoreQueues(Memory& memory,
                                StoreQueueSink sink,
                                ExecutableCodeTracker* code_tracker,
@@ -70,12 +78,13 @@ std::uint32_t Sh4StoreQueues::transfer_target(const std::uint32_t address,
 
 bool Sh4StoreQueues::prefetch(const std::uint32_t address,
                               const GuestInstructionOrigin instruction,
-                              const std::uint64_t retired_guest_instructions) {
+                              const std::uint64_t retired_guest_instructions,
+                              const std::uint64_t attempted_guest_instructions) {
     if (address < window_start || address > window_end) {
         return false;
     }
     if ((address & 3u) != 0u) {
-        throw MemoryAccessError(MemoryAccessErrorReason::Unmapped,
+        throw MemoryAccessError(MemoryAccessErrorReason::Misaligned,
                                 MemoryAccessOperation::Write,
                                 address,
                                 MemoryAccessWidth::Word,
@@ -98,15 +107,41 @@ bool Sh4StoreQueues::prefetch(const std::uint32_t address,
     transfer.target = ta_input ? StoreQueueTarget::TileAccelerator : StoreQueueTarget::Ram;
     transfer.instruction = instruction;
     transfer.retired_guest_instructions = retired_guest_instructions;
+    transfer.attempted_guest_instructions = attempted_guest_instructions;
     transfer.bytes = queues_[selected];
     if (sink_) {
-        sink_(transfer);
+        try {
+            sink_(transfer);
+        } catch (const StoreQueueSinkError& error) {
+            ++rejected_transfer_count_;
+            last_sink_fault_.reset();
+            try {
+                last_sink_fault_ = StoreQueueSinkFault{
+                    error.reason(),
+                    transfer.source_address,
+                    transfer.target_address,
+                    error.what()};
+            } catch (...) {
+                try {
+                    auto& fallback = last_sink_fault_.emplace();
+                    fallback.reason = error.reason();
+                    fallback.source_address = transfer.source_address;
+                    fallback.target_address = transfer.target_address;
+                } catch (...) {
+                    last_sink_fault_.reset();
+                }
+            }
+            return false;
+        }
     } else {
         memory_.write_bytes_at(
             transfer.target_address,
             transfer.bytes,
-            GuestMemoryAccessContext{
-                transfer.target_address, instruction, retired_guest_instructions},
+            GuestMemoryAccessContext{transfer.target_address,
+                                     instruction,
+                                     retired_guest_instructions,
+                                     GuestMemoryAccessOrigin::Memory,
+                                     attempted_guest_instructions},
             CodeWriteSource::StoreQueue);
     }
     ++transfer_count_;
@@ -127,7 +162,15 @@ std::uint64_t Sh4StoreQueues::transfer_count() const noexcept {
     return transfer_count_;
 }
 
-Sh4StoreQueueSnapshot Sh4StoreQueues::snapshot() const noexcept {
+std::uint64_t Sh4StoreQueues::rejected_transfer_count() const noexcept {
+    return rejected_transfer_count_;
+}
+
+const std::optional<StoreQueueSinkFault>& Sh4StoreQueues::last_sink_fault() const noexcept {
+    return last_sink_fault_;
+}
+
+Sh4StoreQueueSnapshot Sh4StoreQueues::snapshot() const {
     return {
         queues_,
         qacr_,
@@ -138,7 +181,19 @@ Sh4StoreQueueSnapshot Sh4StoreQueues::snapshot() const noexcept {
         static_cast<bool>(address_translator_),
         code_tracker_ != nullptr,
         transfer_count_,
+        rejected_transfer_count_,
+        last_sink_fault_,
     };
+}
+
+void Sh4StoreQueues::reset() noexcept {
+    queues_.fill({});
+    qacr_.fill(0u);
+    operand_cache_ram_.fill(0u);
+    operand_cache_ram_enabled_ = false;
+    transfer_count_ = 0u;
+    rejected_transfer_count_ = 0u;
+    last_sink_fault_.reset();
 }
 
 CacheMaintenanceResult Sh4StoreQueues::maintain(const CacheMaintenanceOperation operation,

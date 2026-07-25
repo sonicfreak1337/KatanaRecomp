@@ -14,7 +14,11 @@ void require(bool value, const char* message) {
 int main() {
     try {
         CpuState cpu;
-        BlockExecutionContext context{77u, 9u, std::nullopt, BlockSyncPoint::Entry};
+        BlockExecutionContext context{
+            .scheduler_cycle = 77u,
+            .scheduler_event_budget = 9u,
+            .sync_point = BlockSyncPoint::Entry,
+        };
         const ControlledFallbackRequest opcode{FallbackReason::UnknownOpcode,
                                                0x8C001000u,
                                                std::uint16_t{0xFFFFu},

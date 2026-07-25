@@ -202,8 +202,10 @@ unveraendert.
 
 Das beobachtbare Adresslayout wurde unabhaengig gegen Flycast
 (`core/hw/sh4/sh4_mem.cpp`, `core/hw/mem/addrspace.cpp`) und dcrecomp
-(`include/recompiler/sh4_cpu.h`, `src/recompiler/sh4_cpu.c`) gegengeprueft.
-Aus den Referenzprojekten wurde kein Code uebernommen.
+(`include/recompiler/sh4_cpu.h`, `src/recompiler/sh4_cpu.c`) am in
+`docs/REFERENCE_PROVENANCE.md` gepinnten Commit
+`25bdc3d248a0084fa98335511991872e578b2b4a` gegengeprueft. Aus den
+Referenzprojekten wurde kein Code uebernommen.
 
 ## Dreamcast-VRAM und AICA-RAM
 
@@ -595,6 +597,19 @@ Pfad die betroffenen Bloecke bereits exakt einmal invalidiert; die
 Modulveroeffentlichung wiederholt diesen Schritt nicht. Ein nicht beobachteter
 Load behaelt die konservative vollstaendige Invalidierung.
 
+Latente AOT-Module registrieren beim Programmstart ausschliesslich ihren
+stabilen Templatebezeichner, Disc-Sourceoffset, Groesse, Contentidentitaet und
+SHA-256-Byteidentitaet. Der Startpfad liest oder hasht ihre Payloadbytes nicht
+und veroeffentlicht kein vorgezogenes Quellmodul im Runtimekatalog. Erst
+tatsaechliche Gastloads sammeln die belegten Source- und Zielintervalle. Nur
+eine vollstaendig zusammenhaengende Zielabbildung mit passender Contentidentitaet
+und Hash der wirklich geladenen Bytes wird als ausfuehrbares Modul
+veroeffentlicht. Der `LoadedModule`-Binder koppelt diesen Nachweis an den
+gleichlautenden exportzeitlichen Templatehash und bereits generierten statischen
+AOT-Code; partielle, lueckenhafte oder abweichende Loads bleiben typisiert
+`MissingAot` beziehungsweise `ByteIdentityMismatch`. Daraus entsteht weder eine
+Interpreterfreigabe noch eine schwaechere Bytepruefung.
+
 BIOS-PIO loest die komplette virtuelle Zielspanne vor dem ersten Write ueber
 die aktive Gast-MMU auf und meldet nur eine durchgehend lineare, wirklich
 geschriebene physische Range. Nichtlineare TLB-Spannen werden ohne Partialwrite
@@ -629,14 +644,16 @@ latenter AOT-Module. Portprojektvertrag 31 aktiviert im deterministischen
 Produktprofil den skalierbaren Digeststrom und den vorbereiteten
 Gastprogrammbereich; der normale Port bleibt interpreterfrei.
 
-Im produktiven Einblock-AOT-Pfad zaehlt `CpuState::retired_guest_instructions`
-jede betretene Gastinstruktion. Schedulerzeit wird nach der ausgefuehrten
-Blocksemantik verbucht; erst der anschliessende Safepoint darf einen Interrupt
-annehmen. Faulting Instructions und ausgefuehrte Delay Slots gehen dadurch in
-die Zeit ein, nicht ausgefuehrte Blockreste dagegen nicht. Lokales Chaining ist
-nur ohne faelliges Schedulerereignis und bei identischem Code-, MMU-,
-Watchpoint-, FPSCR- und Runtimezustand erlaubt; ein Chunk umfasst hoechstens 64
-Instruktionen. Jeder tatsaechlich betretene Block aktualisiert dabei die
+Im produktiven Einblock-AOT-Pfad trennt `CpuState` versuchte Instruktionen,
+erfolgreich retired Instruktionen und verbrauchte Gastzyklen. Eine faultende
+Instruktion erhoeht attempted und kostet ihre Opcodeklasse, retired aber nicht.
+Schedulerzeit wird nach der ausgefuehrten Blocksemantik verbucht; erst der
+anschliessende Safepoint darf ohne neue Exceptionkante einen Interrupt
+annehmen. Lokales Chaining ist nur ohne faelliges Schedulerereignis und bei
+identischem Code-, MMU-, Watchpoint-, FPSCR- und Runtimezustand erlaubt. Vor
+jedem Chainziel wird ausserdem dessen aktuelle komplette Instruktionsabbildung
+gegen die bei der AOT-Registrierung gespeicherte physische Herkunft bewiesen.
+Jeder tatsaechlich betretene Block aktualisiert dabei die
 Fortsetzungsmetadaten. Verlaesst eine lokale Kette den Wrapper, verwendet der
 externe Dispatcher daher die Terminatorquelle und Siteklasse des letzten
 ausgefuehrten Blocks und nicht den urspruenglichen Wrapper-Einstieg. Der
@@ -644,9 +661,17 @@ generische C++-Emitter setzt auch bei einem durch Funktionsdiscovery
 nachfolgerlosen Block in jedem Backendmodus `PC` auf die Folgeadresse der
 letzten Gastinstruktion. Die Produktinvariante prueft einen Fallthrough relativ
 zu dieser tatsaechlichen Terminatorquelle und nicht zum Eintritt des
-umgebenden Wrappers. Der kumulative Stand verwendet Runtime-ABI 48, Block-ABI 3,
-Backend-Interface-ABI 3, PlatformServices-ABI 10, Portvertrag 32 und
+umgebenden Wrappers. Der kumulative Stand verwendet Runtime-ABI 49, Block-ABI 4,
+Backend-Interface-ABI 3, PlatformServices-ABI 11, Portvertrag 33 und
 Host-Video-Vertrag 2.
+
+Der Produktfortschritt unterscheidet `GuestProgramDispatched` von
+`GuestProgramProgressed`. Progression verlangt mindestens eine retired
+Instruktion sowie weder eine neue Exceptionkante noch einen Exception-Exit im
+beobachteten Blockabschluss. Nur Progression erfuellt das Produktgate und darf
+zur Gameplay-Evidenz beitragen. Frameevidenz trennt den ersten echten
+Gastscanout, den ersten TA-Frame und den ersten Gameplayframe; ein
+Direct-Framebuffer-Scanout kann nur den ersten Gastscanout ausloesen.
 
 Statische Dispatchregistries werden nicht mehr in eine einzelne
 Uebersetzungseinheit geschrieben. Der Projektschreiber teilt sie

@@ -88,12 +88,24 @@ filled_cpu_snapshot(std::uint32_t value,
     cpu.m = true;
     cpu.trap_pending = true;
     cpu.exception_generation = next();
+    cpu.last_exception_generation = next();
     cpu.last_exception_cause = ExceptionCause::TlbProtectionWrite;
     cpu.exception_in_delay_slot = true;
+    cpu.last_exception_instruction_pc = next();
+    cpu.last_exception_instruction_physical_pc = next();
+    cpu.last_exception_owner_pc = next();
     cpu.sleeping = false;
     cpu.last_prefetch_address = next();
     cpu.prefetch_count = next();
+    cpu.attempted_guest_instructions = next();
     cpu.retired_guest_instructions = retired_guest_instructions;
+    cpu.total_guest_cycles = next();
+    cpu.pending_guest_cycles = next();
+    cpu.active_instruction_pc = next();
+    cpu.active_instruction_physical_pc = next();
+    cpu.active_block_virtual_start = next();
+    cpu.active_block_physical_start = next();
+    cpu.active_block_size = next();
     cpu.last_prefetch_was_store_queue = true;
     return cpu;
 }
@@ -361,6 +373,28 @@ int main() {
         pvr_register_before,
         pvr_register_after,
         "Die volle PVR-Registerapertur fehlt im Devicehash.");
+    pvr_register_after = pvr_register_before;
+    pvr_register_after.render_overruns = 1u;
+    pvr_register_after.active_render_request = 4u;
+    pvr_register_after.active_render_generation = 9u;
+    pvr_register_after.active_render_start_cycle = 100u;
+    pvr_register_after.last_render_start_error = PvrRenderStartError::Busy;
+    require_snapshot_mutation_changes(
+        pvr_register_before,
+        pvr_register_after,
+        "Aktiver eingefrorener PVR-Renderauftrag oder Overrun fehlt im Devicehash.");
+    pvr_register_after = pvr_register_before;
+    pvr_register_after.next_render_generation = 7u;
+    require_snapshot_mutation_changes(
+        pvr_register_before,
+        pvr_register_after,
+        "Die naechste PVR-Rendergeneration fehlt im Devicehash.");
+    pvr_register_after = pvr_register_before;
+    pvr_register_after.active_render_payload_digest = 0x1122334455667788u;
+    require_snapshot_mutation_changes(
+        pvr_register_before,
+        pvr_register_after,
+        "Der eingefrorene PVR-Renderpayload fehlt im Devicehash.");
 
     DreamcastSystemBusSnapshot bus_before;
     auto bus_after = bus_before;
@@ -381,6 +415,18 @@ int main() {
         aica_register_before,
         aica_register_after,
         "Der AICA-Kanallaufzustand fehlt im Devicehash.");
+    aica_register_after = aica_register_before;
+    aica_register_after.voice_errors = 1u;
+    aica_register_after.first_voice_error =
+        AicaVoiceFirstError{AicaVoiceError::Pcm8OutOfRange,
+                            AicaSampleFormat::Pcm8,
+                            7u,
+                            0x00200000u,
+                            12u};
+    require_snapshot_mutation_changes(
+        aica_register_before,
+        aica_register_after,
+        "Der erste strukturierte AICA-Voicefehler fehlt im Devicehash.");
 
     AicaExecutionController::Snapshot aica_execution_before;
     auto aica_execution_after = aica_execution_before;
@@ -389,6 +435,12 @@ int main() {
         aica_execution_before,
         aica_execution_after,
         "Der AICA-Ausfuehrungszustand fehlt im Devicehash.");
+    aica_execution_after = aica_execution_before;
+    aica_execution_after.error = AicaExecutionError::TickScheduleFailure;
+    require_snapshot_mutation_changes(
+        aica_execution_before,
+        aica_execution_after,
+        "Der AICA-Tick-Schedulerfehler fehlt im Devicehash.");
 
     AicaRtcSnapshot aica_rtc_before;
     auto aica_rtc_after = aica_rtc_before;
@@ -413,6 +465,28 @@ int main() {
         gdrom_before,
         gdrom_after,
         "Der GD-ROM-BIOS-/Streamzustand fehlt im Devicehash.");
+    gdrom_after = gdrom_before;
+    gdrom_after.bios_requests.push_back({});
+    gdrom_after.bios_requests.back().guest_binding_present = true;
+    gdrom_after.bios_requests.back().guest_binding_privileged = true;
+    gdrom_after.bios_requests.back().guest_address_space =
+        RuntimeAddressSpaceSnapshot{};
+    require_snapshot_mutation_changes(
+        gdrom_before,
+        gdrom_after,
+        "Der gebundene GD-ROM-Gastadressraum fehlt im Devicehash.");
+    gdrom_after = gdrom_before;
+    gdrom_after.coalesced_guest_callbacks = 1u;
+    require_snapshot_mutation_changes(
+        gdrom_before,
+        gdrom_after,
+        "Zusammengefasste GD-ROM-Gastcallbacks fehlen im Devicehash.");
+    gdrom_after = gdrom_before;
+    gdrom_after.dropped_guest_callbacks = 1u;
+    require_snapshot_mutation_changes(
+        gdrom_before,
+        gdrom_after,
+        "Verworfene GD-ROM-Gastcallbacks fehlen im Devicehash.");
 
     MapleBusSnapshot maple_bus_before;
     auto maple_bus_after = maple_bus_before;
@@ -431,12 +505,42 @@ int main() {
         maple_controller_before,
         maple_controller_after,
         "Der Maple-Controllerzustand fehlt im Devicehash.");
+    maple_controller_after = maple_controller_before;
+    maple_controller_after.state = MapleDmaState::Failed;
+    maple_controller_after.error = MapleDmaError::AtomicCommitFailure;
+    maple_controller_after.error_address = 0x0C000120u;
+    maple_controller_after.failed_dma_count = 1u;
+    require_snapshot_mutation_changes(
+        maple_controller_before,
+        maple_controller_after,
+        "Der strukturierte Maple-Completionfehler fehlt im Devicehash.");
 
     DreamcastSystemAsicSnapshot asic_before;
     auto asic_after = asic_before;
     asic_after.events.push_back({8u, 2u, SystemAsicEvent::PvrVblank});
     require_snapshot_mutation_changes(
         asic_before, asic_after, "Die ASIC-Ereignisqueue fehlt im Devicehash.");
+    asic_after = asic_before;
+    asic_after.last_event = SystemAsicEventRecord{9u, 3u, SystemAsicEvent::PvrOverrun};
+    asic_after.event_capacity = 64u;
+    asic_after.total_events = 65u;
+    asic_after.dropped_events = 1u;
+    require_snapshot_mutation_changes(
+        asic_before,
+        asic_after,
+        "ASIC-Letztereignis, Kapazitaet oder Dropzaehler fehlt im Devicehash.");
+
+    RuntimeAddressSpaceSnapshot address_space_before;
+    auto address_space_after = address_space_before;
+    address_space_after.itlb[2u].virtual_page = 0x00123000u;
+    address_space_after.itlb[2u].physical_page = 0x0C456000u;
+    address_space_after.itlb_valid[2u] = true;
+    address_space_after.itlb_lru[2u] = 3u;
+    address_space_after.itlb_source_slots[2u] = 7u;
+    require_snapshot_mutation_changes(
+        address_space_before,
+        address_space_after,
+        "Expliziter ITLB- und Replacementzustand fehlt im Devicehash.");
 
     Sh4TmuSnapshot tmu_before;
     auto tmu_after = tmu_before;
@@ -474,6 +578,66 @@ int main() {
     (*ta_after.pending_modifier_vertex_packet)[3u] = 0x7Fu;
     require_snapshot_mutation_changes(
         ta_before, ta_after, "Die TA/FSM-Zustaende fehlen im Devicehash.");
+    ta_after = ta_before;
+    ta_after.metrics.rejected_packets = 1u;
+    require_snapshot_mutation_changes(
+        ta_before,
+        ta_after,
+        "Der TA-Rejectionzaehler fehlt im Devicehash.");
+    ta_after = ta_before;
+    ta_after.frame_packets = 9u;
+    require_snapshot_mutation_changes(
+        ta_before,
+        ta_after,
+        "Der begrenzte TA-Framepaketzaehler fehlt im Devicehash.");
+    ta_after = ta_before;
+    ta_after.first_input_error =
+        PvrTaInputError{PvrTaInputErrorReason::UnsupportedPacket, 3u, "Pakettyp"};
+    require_snapshot_mutation_changes(
+        ta_before,
+        ta_after,
+        "Der erste strukturierte TA-Eingangsfehler fehlt im Devicehash.");
+    ta_before.first_input_error =
+        PvrTaInputError{PvrTaInputErrorReason::UnsupportedPacket, 3u, "Pakettyp"};
+    ta_after = ta_before;
+    ta_after.first_input_error->detail = "Anderer Pakettyp";
+    require_snapshot_mutation_changes(
+        ta_before,
+        ta_after,
+        "Das Detail des ersten TA-Eingangsfehlers fehlt im Devicehash.");
+
+    PvrRegisterSnapshot payload_registers;
+    payload_registers.registers[pvr_register::BorderColor / 4u] = 0x00112233u;
+    PvrTaFifoSnapshot payload_ta;
+    payload_ta.active_header_argb = 0xFF445566u;
+    const auto payload_digest =
+        hash_pvr_render_payload(payload_registers, payload_ta);
+    auto diagnostic_registers = payload_registers;
+    diagnostic_registers.render_requests = 9u;
+    diagnostic_registers.render_failures = 2u;
+    diagnostic_registers.next_render_generation = 17u;
+    diagnostic_registers.active_render_request = 8u;
+    diagnostic_registers.active_render_generation = 16u;
+    diagnostic_registers.active_render_start_cycle = 123u;
+    diagnostic_registers.active_render_payload_digest = 0xDEADBEEFu;
+    diagnostic_registers.last_render_start_error = PvrRenderStartError::Busy;
+    auto diagnostic_ta = payload_ta;
+    diagnostic_ta.metrics.packets = 4u;
+    diagnostic_ta.metrics.rejected_packets = 1u;
+    diagnostic_ta.first_input_error =
+        PvrTaInputError{PvrTaInputErrorReason::UnsupportedPacket, 5u, "diagnostic"};
+    require(hash_pvr_render_payload(diagnostic_registers, diagnostic_ta) ==
+                payload_digest,
+            "STARTRENDER-Payloaddigest bindet Request-/Generations- oder Parserdiagnostik.");
+    auto changed_payload_registers = payload_registers;
+    changed_payload_registers.registers[pvr_register::BorderColor / 4u] ^= 1u;
+    auto changed_payload_ta = payload_ta;
+    changed_payload_ta.active_header_argb ^= 1u;
+    require(hash_pvr_render_payload(changed_payload_registers, payload_ta) !=
+                payload_digest &&
+                hash_pvr_render_payload(payload_registers, changed_payload_ta) !=
+                    payload_digest,
+            "STARTRENDER-Payloaddigest ignoriert eingefrorene Register- oder TA-Daten.");
 
     PvrTaFifoMemoryDevice::Snapshot aperture_before;
     auto aperture_after = aperture_before;
@@ -497,6 +661,14 @@ int main() {
         renderer_before,
         renderer_after,
         "Der Renderer-Folge-/Shadowzustand fehlt im Devicehash.");
+    renderer_after = renderer_before;
+    renderer_after.pending_direct_write_generation = 6u;
+    renderer_after.pending_direct_first_write_generation = 2u;
+    renderer_after.pending_direct_last_write_generation = 6u;
+    require_snapshot_mutation_changes(
+        renderer_before,
+        renderer_after,
+        "Das Direct-FB-Generationsepoch fehlt im Devicehash.");
 
     Sh4IoPortSnapshot io_before;
     auto io_after = io_before;
@@ -512,6 +684,7 @@ int main() {
     first_transfer.target = StoreQueueTarget::TileAccelerator;
     first_transfer.instruction = {0x8C010000u, 0xAC010000u, true};
     first_transfer.retired_guest_instructions = 7u;
+    first_transfer.attempted_guest_instructions = 9u;
     first_transfer.bytes[0u] = 0x11u;
     auto second_transfer = first_transfer;
     second_transfer.queue = 1u;
@@ -520,9 +693,32 @@ int main() {
     second_transfer.bytes[0u] = 0x22u;
     const std::array ordered_transfers = {first_transfer, second_transfer};
     const std::array reversed_transfers = {second_transfer, first_transfer};
+    auto rejected_store_queue_snapshot = store_queue_snapshot;
+    rejected_store_queue_snapshot.rejected_transfer_count = 1u;
+    rejected_store_queue_snapshot.last_sink_fault =
+        StoreQueueSinkFault{StoreQueueSinkErrorReason::UnsupportedInput,
+                            0xE0000000u,
+                            0x10000000u,
+                            "invalid-packet"};
+    const std::array store_queue_before = {
+        make_runtime_probe_device_snapshot(store_queue_snapshot)};
+    const std::array store_queue_after = {
+        make_runtime_probe_device_snapshot(rejected_store_queue_snapshot)};
+    require(hash_runtime_probe_devices(store_queue_before) !=
+                hash_runtime_probe_devices(store_queue_after),
+            "Der strukturierte Store-Queue-Sinkfehler fehlt im Devicehash.");
     const std::array ordered_snapshot = {
         make_runtime_probe_device_snapshot(
             store_queue_snapshot, ordered_transfers, 0u)};
+    auto attempted_transfer = first_transfer;
+    ++attempted_transfer.attempted_guest_instructions;
+    const std::array attempted_transfer_history = {attempted_transfer, second_transfer};
+    const std::array attempted_snapshot = {
+        make_runtime_probe_device_snapshot(
+            store_queue_snapshot, attempted_transfer_history, 0u)};
+    require(hash_runtime_probe_devices(ordered_snapshot) !=
+                hash_runtime_probe_devices(attempted_snapshot),
+            "Die Attempted-Provenienz eines Store-Queue-Transfers fehlt im Devicehash.");
     const std::array reversed_snapshot = {
         make_runtime_probe_device_snapshot(
             store_queue_snapshot, reversed_transfers, 0u)};
@@ -559,16 +755,26 @@ int main() {
     cpu.tlb_load_count = 9u;
     cpu.write_sr(sr_md_mask | sr_t_mask | sr_s_mask);
     cpu.write_fpscr(fpscr_dn_mask | fpscr_sz_mask);
+    cpu.attempted_guest_instructions = 1236u;
     cpu.retired_guest_instructions = 1234u;
+    cpu.total_guest_cycles = 2222u;
+    cpu.pending_guest_cycles = 7u;
     const auto cpu_snapshot = capture_runtime_probe_cpu(cpu);
     require(cpu_snapshot.pc == cpu.pc && cpu_snapshot.utlb[7].ptea == 3u &&
-                cpu_snapshot.retired_guest_instructions == 1234u,
+                cpu_snapshot.attempted_guest_instructions == 1236u &&
+                cpu_snapshot.retired_guest_instructions == 1234u &&
+                cpu_snapshot.total_guest_cycles == 2222u &&
+                cpu_snapshot.pending_guest_cycles == 7u,
             "Der CPU-Snapshot verliert MMU-/TLB- oder Fortschrittszustand.");
     const auto cpu_hash = hash_runtime_probe_cpu(cpu_snapshot);
     auto changed_cpu = cpu_snapshot;
     ++changed_cpu.utlb[7].ptea;
     require(hash_runtime_probe_cpu(changed_cpu) != cpu_hash,
             "Eine TLB-Aenderung bleibt im CPU-Hash unsichtbar.");
+    changed_cpu = cpu_snapshot;
+    ++changed_cpu.attempted_guest_instructions;
+    require(hash_runtime_probe_cpu(changed_cpu) != cpu_hash,
+            "Versuchte Gastinstruktionen bleiben im CPU-Hash unsichtbar.");
 
     EventScheduler scheduler;
     scheduler.set_guest_cycle_budget(500u);
@@ -915,6 +1121,9 @@ int main() {
         full_persistent,
         full_devices,
         bound_replay);
+    std::uint64_t expected_device_field_count = 0u;
+    for (const auto& schema : runtime_probe_deterministic_v1_device_schemas)
+        expected_device_field_count += schema.field_count;
     require(report.status == RuntimeProbeStatus::Complete &&
                 report.guest_cycle_budget == 500u &&
                 report.memory_byte_count ==
@@ -926,7 +1135,7 @@ int main() {
                 report.persistent_range_count == 2u &&
                 report.device_count ==
                     runtime_probe_deterministic_v1_device_schemas.size() &&
-                report.device_field_count == 884u &&
+                report.device_field_count == expected_device_field_count &&
                 report.hashes.combined ==
                     combine_runtime_probe_hashes(report.hashes.guest_state,
                                                  report.hashes.replay),

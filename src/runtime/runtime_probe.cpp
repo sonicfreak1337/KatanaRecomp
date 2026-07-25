@@ -535,6 +535,42 @@ void append_response(RuntimeProbeFnv1a64LeV1& hash, const GdRomResponse& respons
     hash.append_bytes(response.data);
 }
 
+void append_tlb_mapping(RuntimeProbeFnv1a64LeV1& hash,
+                        const TlbMapping& mapping) noexcept {
+    hash.append_u32(mapping.virtual_page);
+    hash.append_u32(mapping.physical_page);
+    hash.append_u32(mapping.page_size);
+    hash.append_u8(mapping.asid);
+    hash.append_u8(mapping.slot);
+    hash.append_bool(mapping.valid);
+    hash.append_bool(mapping.readable);
+    hash.append_bool(mapping.writable);
+    hash.append_bool(mapping.executable);
+    hash.append_bool(mapping.user_access);
+    hash.append_bool(mapping.dirty);
+    hash.append_bool(mapping.shared);
+}
+
+void append_address_space_snapshot(
+    RuntimeProbeFnv1a64LeV1& hash,
+    const RuntimeAddressSpaceSnapshot& snapshot) noexcept {
+    hash.append_u8(static_cast<std::uint8_t>(snapshot.mode));
+    hash.append_u32(snapshot.mmucr);
+    hash.append_u8(snapshot.asid);
+    hash.append_u64(snapshot.address_space_generation);
+    hash.append_u64(snapshot.mmu_generation);
+    hash.append_u64(snapshot.watchpoint_generation);
+    hash.append_u64(static_cast<std::uint64_t>(snapshot.mappings.size()));
+    for (const auto& mapping : snapshot.mappings)
+        append_tlb_mapping(hash, mapping);
+    for (std::size_t index = 0u; index < snapshot.itlb.size(); ++index) {
+        append_tlb_mapping(hash, snapshot.itlb[index]);
+        hash.append_bool(snapshot.itlb_valid[index]);
+        hash.append_u8(snapshot.itlb_lru[index]);
+        hash.append_u8(snapshot.itlb_source_slots[index]);
+    }
+}
+
 void append_render_evidence(RuntimeProbeFnv1a64LeV1& hash,
                             const PvrRenderGenerationEvidence& evidence) noexcept {
     hash.append_u64(evidence.generation);
@@ -587,6 +623,8 @@ void append_guest_frame_proof(RuntimeProbeFnv1a64LeV1& hash,
     hash.append_u64(static_cast<std::uint64_t>(proof.frame.rgba.size()));
     hash.append_bytes(proof.frame.rgba);
     hash.append_u8(static_cast<std::uint8_t>(proof.source));
+    hash.append_u64(proof.write_generation_first);
+    hash.append_u64(proof.write_generation_last);
 }
 
 } // namespace
@@ -723,12 +761,25 @@ RuntimeProbeCpuSnapshot capture_runtime_probe_cpu(const CpuState& cpu) noexcept 
     snapshot.m = cpu.m;
     snapshot.trap_pending = cpu.trap_pending;
     snapshot.exception_generation = cpu.exception_generation;
+    snapshot.last_exception_generation = cpu.last_exception_generation;
     snapshot.last_exception_cause = cpu.last_exception_cause;
     snapshot.exception_in_delay_slot = cpu.exception_in_delay_slot;
+    snapshot.last_exception_instruction_pc = cpu.last_exception_instruction_pc;
+    snapshot.last_exception_instruction_physical_pc =
+        cpu.last_exception_instruction_physical_pc;
+    snapshot.last_exception_owner_pc = cpu.last_exception_owner_pc;
     snapshot.sleeping = cpu.sleeping;
     snapshot.last_prefetch_address = cpu.last_prefetch_address;
     snapshot.prefetch_count = cpu.prefetch_count;
+    snapshot.attempted_guest_instructions = cpu.attempted_guest_instructions;
     snapshot.retired_guest_instructions = cpu.retired_guest_instructions;
+    snapshot.total_guest_cycles = cpu.total_guest_cycles;
+    snapshot.pending_guest_cycles = cpu.pending_guest_cycles;
+    snapshot.active_instruction_pc = cpu.active_instruction_pc;
+    snapshot.active_instruction_physical_pc = cpu.active_instruction_physical_pc;
+    snapshot.active_block_virtual_start = cpu.active_block_virtual_start;
+    snapshot.active_block_physical_start = cpu.active_block_physical_start;
+    snapshot.active_block_size = cpu.active_block_size;
     snapshot.last_prefetch_was_store_queue = cpu.last_prefetch_was_store_queue;
     return snapshot;
 }
@@ -802,6 +853,7 @@ make_runtime_probe_device_snapshot(const PvrRegisterSnapshot& snapshot,
     fields.scalar(snapshot.render_requests);
     fields.scalar(snapshot.render_completions);
     fields.scalar(snapshot.render_failures);
+    fields.scalar(snapshot.render_overruns);
     fields.scalar(snapshot.vblank_in);
     fields.scalar(snapshot.vblank_out);
     fields.scalar(snapshot.hblank);
@@ -821,6 +873,12 @@ make_runtime_probe_device_snapshot(const PvrRegisterSnapshot& snapshot,
     fields.scalar(snapshot.timing.pixel_clock_hz);
     fields.scalar(snapshot.in_vblank);
     fields.scalar(snapshot.field);
+    fields.scalar(snapshot.next_render_generation);
+    fields.scalar(snapshot.active_render_request);
+    fields.scalar(snapshot.active_render_generation);
+    fields.scalar(snapshot.active_render_start_cycle);
+    fields.scalar(snapshot.active_render_payload_digest);
+    fields.optional_scalar(snapshot.last_render_start_error);
     return std::move(fields).finish();
 }
 
@@ -876,8 +934,17 @@ make_runtime_probe_device_snapshot(const DreamcastSystemAsicSnapshot& snapshot,
                            hash.append_u16(static_cast<std::uint16_t>(event.event));
                        }
                    });
+    fields.scalar(snapshot.last_event.has_value());
+    fields.scalar(snapshot.last_event ? snapshot.last_event->guest_cycle : 0u);
+    fields.scalar(snapshot.last_event ? snapshot.last_event->sequence : 0u);
+    fields.scalar(snapshot.last_event
+                      ? static_cast<std::uint64_t>(snapshot.last_event->event)
+                      : 0u);
     fields.scalar(snapshot.next_sequence);
     fields.scalar(snapshot.last_guest_cycle);
+    fields.scalar(static_cast<std::uint64_t>(snapshot.event_capacity));
+    fields.scalar(snapshot.total_events);
+    fields.scalar(snapshot.dropped_events);
     return std::move(fields).finish();
 }
 
@@ -901,6 +968,17 @@ make_runtime_probe_device_snapshot(const AicaRegisterSnapshot& snapshot,
     fields.scalar(snapshot.writes);
     fields.scalar(snapshot.rendered_buffers);
     fields.scalar(snapshot.rendered_frames);
+    fields.scalar(snapshot.voice_errors);
+    fields.scalar(snapshot.first_voice_error.has_value());
+    fields.scalar(snapshot.first_voice_error
+                      ? static_cast<std::uint64_t>(snapshot.first_voice_error->error)
+                      : 0u);
+    fields.scalar(snapshot.first_voice_error
+                      ? static_cast<std::uint64_t>(snapshot.first_voice_error->format)
+                      : 0u);
+    fields.scalar(snapshot.first_voice_error ? snapshot.first_voice_error->channel : 0u);
+    fields.scalar(snapshot.first_voice_error ? snapshot.first_voice_error->sample_address : 0u);
+    fields.scalar(snapshot.first_voice_error ? snapshot.first_voice_error->rendered_frame : 0u);
     return std::move(fields).finish();
 }
 
@@ -935,6 +1013,7 @@ make_runtime_probe_device_snapshot(const AicaExecutionController::Snapshot& snap
     fields.scalar(snapshot.interrupts.pending);
     fields.scalar(snapshot.interrupts.asserted);
     fields.optional_scalar(snapshot.tick_event);
+    fields.scalar(static_cast<std::uint64_t>(snapshot.error));
     fields.scalar(snapshot.guest_cycles_per_tick);
     return std::move(fields).finish();
 }
@@ -1024,6 +1103,25 @@ make_runtime_probe_device_snapshot(const DreamcastGdRomSnapshot& snapshot,
                            hash.append_u32(request.transfer_size);
                            hash.append_u32(request.transfer_transferred);
                            hash.append_bool(request.transfer_active);
+                           hash.append_bool(request.transfer_buffer.has_value());
+                           if (request.transfer_buffer) {
+                               hash.append_u32(
+                                   request.transfer_buffer->guest_address);
+                               hash.append_u32(
+                                   request.transfer_buffer->physical_address);
+                               hash.append_u64(static_cast<std::uint64_t>(
+                                   request.transfer_buffer->size));
+                               hash.append_u64(static_cast<std::uint64_t>(
+                                   request.transfer_buffer->alignment));
+                               hash.append_u8(static_cast<std::uint8_t>(
+                                   request.transfer_buffer->access));
+                           }
+                           hash.append_bool(request.guest_binding_present);
+                           hash.append_bool(request.guest_binding_privileged);
+                           hash.append_bool(request.guest_address_space.has_value());
+                           if (request.guest_address_space)
+                               append_address_space_snapshot(
+                                   hash, *request.guest_address_space);
                        }
                    });
     fields.scalar(snapshot.next_bios_request);
@@ -1077,6 +1175,8 @@ make_runtime_probe_device_snapshot(const DreamcastGdRomSnapshot& snapshot,
                            hash.append_u32(callback.request_id);
                        }
                    });
+    fields.scalar(snapshot.coalesced_guest_callbacks);
+    fields.scalar(snapshot.dropped_guest_callbacks);
     fields.optional_scalar(snapshot.packet_event);
     fields.scalar(snapshot.g1_bus_bound);
     return std::move(fields).finish();
@@ -1124,6 +1224,9 @@ make_runtime_probe_device_snapshot(const DreamcastMapleControllerSnapshot& snaps
     fields.scalar(snapshot.trigger_select);
     fields.scalar(snapshot.enabled);
     fields.scalar(snapshot.active);
+    fields.scalar(static_cast<std::uint64_t>(snapshot.state));
+    fields.scalar(static_cast<std::uint64_t>(snapshot.error));
+    fields.optional_scalar(snapshot.error_address);
     fields.scalar(snapshot.system_control);
     fields.scalar(snapshot.address_protect);
     fields.scalar(snapshot.msb_select);
@@ -1132,6 +1235,7 @@ make_runtime_probe_device_snapshot(const DreamcastMapleControllerSnapshot& snaps
     fields.scalar(snapshot.rx_base);
     fields.scalar(snapshot.completed_dma_count);
     fields.scalar(snapshot.transferred_word_count);
+    fields.scalar(snapshot.failed_dma_count);
     fields.scalar(snapshot.hard_trigger_failed);
     return std::move(fields).finish();
 }
@@ -1308,6 +1412,21 @@ make_runtime_probe_device_snapshot(const PvrTaFifoSnapshot& snapshot,
     fields.scalar(snapshot.metrics.list_completions);
     fields.scalar(snapshot.metrics.frames);
     fields.scalar(snapshot.metrics.continuations);
+    fields.scalar(snapshot.metrics.rejected_packets);
+    fields.scalar(snapshot.frame_packets);
+    const auto has_input_error = snapshot.first_input_error.has_value();
+    fields.scalar(has_input_error);
+    fields.scalar(has_input_error
+                      ? static_cast<std::uint64_t>(snapshot.first_input_error->reason)
+                      : 0u);
+    fields.scalar(has_input_error ? snapshot.first_input_error->packet : 0u);
+    const std::string_view input_error_detail =
+        has_input_error ? std::string_view(snapshot.first_input_error->detail)
+                        : std::string_view{};
+    fields.payload(input_error_detail.size(),
+                   [input_error_detail](RuntimeProbeFnv1a64LeV1& hash) {
+                       append_string(hash, input_error_detail);
+                   });
     return std::move(fields).finish();
 }
 
@@ -1365,6 +1484,8 @@ make_runtime_probe_device_snapshot(const PvrSoftwareRendererSnapshot& snapshot,
     fields.scalar(snapshot.next_evidence_scan_generation);
     fields.scalar(snapshot.next_direct_write_generation);
     fields.scalar(snapshot.pending_direct_write_generation);
+    fields.scalar(snapshot.pending_direct_first_write_generation);
+    fields.scalar(snapshot.pending_direct_last_write_generation);
     fields.payload(snapshot.direct_dirty_words.size(),
                    [&snapshot](RuntimeProbeFnv1a64LeV1& hash) {
                        for (const auto value : snapshot.direct_dirty_words)
@@ -1394,6 +1515,24 @@ make_runtime_probe_device_snapshot(const PvrSoftwareRendererSnapshot& snapshot,
                        append_string(hash, error_detail);
                    });
     return std::move(fields).finish();
+}
+
+std::uint64_t hash_pvr_render_payload(const PvrRegisterSnapshot& registers,
+                                      PvrTaFifoSnapshot fifo) {
+    // STARTRENDER identity covers the immutable register/TA inputs frozen for the
+    // renderer. Runtime counters, scheduler identity and prior diagnostics remain
+    // separately observable and must not make an otherwise identical payload differ.
+    PvrRegisterSnapshot payload_registers{};
+    payload_registers.registers = registers.registers;
+    payload_registers.timing = PvrTiming{0u, 0u, 0u};
+    payload_registers.next_render_generation = 0u;
+    fifo.metrics = {};
+    fifo.first_input_error.reset();
+    const std::array payload_devices = {
+        make_runtime_probe_device_snapshot(payload_registers),
+        make_runtime_probe_device_snapshot(fifo),
+    };
+    return hash_runtime_probe_devices(payload_devices);
 }
 
 RuntimeProbeDeviceSnapshot
@@ -1537,6 +1676,27 @@ make_runtime_probe_device_snapshot(const RuntimeAddressSpaceSnapshot& snapshot,
                            hash.append_bool(mapping.user_access);
                            hash.append_bool(mapping.dirty);
                            hash.append_bool(mapping.shared);
+                       }
+                   });
+    fields.payload(snapshot.itlb.size(),
+                   [&snapshot](RuntimeProbeFnv1a64LeV1& hash) {
+                       for (std::size_t index = 0u; index < snapshot.itlb.size(); ++index) {
+                           const auto& mapping = snapshot.itlb[index];
+                           hash.append_u32(mapping.virtual_page);
+                           hash.append_u32(mapping.physical_page);
+                           hash.append_u32(mapping.page_size);
+                           hash.append_u8(mapping.asid);
+                           hash.append_u8(mapping.slot);
+                           hash.append_bool(mapping.valid);
+                           hash.append_bool(mapping.readable);
+                           hash.append_bool(mapping.writable);
+                           hash.append_bool(mapping.executable);
+                           hash.append_bool(mapping.user_access);
+                           hash.append_bool(mapping.dirty);
+                           hash.append_bool(mapping.shared);
+                           hash.append_bool(snapshot.itlb_valid[index]);
+                           hash.append_u8(snapshot.itlb_lru[index]);
+                           hash.append_u8(snapshot.itlb_source_slots[index]);
                        }
                    });
     return std::move(fields).finish();
@@ -1774,6 +1934,20 @@ make_runtime_probe_device_snapshot(const Sh4StoreQueueSnapshot& snapshot,
     fields.scalar(snapshot.address_translator_bound);
     fields.scalar(snapshot.code_tracker_bound);
     fields.scalar(snapshot.transfer_count);
+    fields.scalar(snapshot.rejected_transfer_count);
+    fields.scalar(snapshot.last_sink_fault.has_value());
+    fields.scalar(snapshot.last_sink_fault
+                      ? static_cast<std::uint64_t>(snapshot.last_sink_fault->reason)
+                      : 0u);
+    fields.scalar(snapshot.last_sink_fault ? snapshot.last_sink_fault->source_address : 0u);
+    fields.scalar(snapshot.last_sink_fault ? snapshot.last_sink_fault->target_address : 0u);
+    const std::string_view sink_fault_detail =
+        snapshot.last_sink_fault ? std::string_view(snapshot.last_sink_fault->detail)
+                                 : std::string_view{};
+    fields.payload(sink_fault_detail.size(),
+                   [sink_fault_detail](RuntimeProbeFnv1a64LeV1& hash) {
+                       append_string(hash, sink_fault_detail);
+                   });
     fields.payload(static_cast<std::uint64_t>(transfer_history.size()),
                    [transfer_history](RuntimeProbeFnv1a64LeV1& hash) {
                        for (const auto& transfer : transfer_history) {
@@ -1785,6 +1959,7 @@ make_runtime_probe_device_snapshot(const Sh4StoreQueueSnapshot& snapshot,
                            hash.append_u32(transfer.instruction.runtime_pc);
                            hash.append_bool(transfer.instruction.valid);
                            hash.append_u64(transfer.retired_guest_instructions);
+                           hash.append_u64(transfer.attempted_guest_instructions);
                            hash.append_u64(
                                static_cast<std::uint64_t>(transfer.bytes.size()));
                            for (const auto byte : transfer.bytes)
@@ -2086,12 +2261,24 @@ hash_runtime_probe_cpu(const RuntimeProbeCpuSnapshot& snapshot) noexcept {
     hash.append_bool(snapshot.m);
     hash.append_bool(snapshot.trap_pending);
     hash.append_u64(snapshot.exception_generation);
+    hash.append_u64(snapshot.last_exception_generation);
     hash.append_u8(static_cast<std::uint8_t>(snapshot.last_exception_cause));
     hash.append_bool(snapshot.exception_in_delay_slot);
+    hash.append_u32(snapshot.last_exception_instruction_pc);
+    hash.append_u32(snapshot.last_exception_instruction_physical_pc);
+    hash.append_u32(snapshot.last_exception_owner_pc);
     hash.append_bool(snapshot.sleeping);
     hash.append_u32(snapshot.last_prefetch_address);
     hash.append_u64(snapshot.prefetch_count);
+    hash.append_u64(snapshot.attempted_guest_instructions);
     hash.append_u64(snapshot.retired_guest_instructions);
+    hash.append_u64(snapshot.total_guest_cycles);
+    hash.append_u64(snapshot.pending_guest_cycles);
+    hash.append_u32(snapshot.active_instruction_pc);
+    hash.append_u32(snapshot.active_instruction_physical_pc);
+    hash.append_u32(snapshot.active_block_virtual_start);
+    hash.append_u32(snapshot.active_block_physical_start);
+    hash.append_u32(snapshot.active_block_size);
     hash.append_bool(snapshot.last_prefetch_was_store_queue);
     return hash.value();
 }

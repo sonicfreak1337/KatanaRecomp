@@ -1,6 +1,7 @@
 #include "katana/runtime/disc.hpp"
 
 #include <cstdlib>
+#include <exception>
 #include <iostream>
 #include <limits>
 #include <memory>
@@ -23,6 +24,21 @@ template <typename E, typename F> bool throws(F&& f) {
     }
     return false;
 }
+
+class ThrowingDiscSource final : public katana::runtime::DiscSource {
+  public:
+    [[nodiscard]] std::uint64_t size() const noexcept override { return 2048u; }
+    [[nodiscard]] const std::string& identity() const noexcept override {
+        return identity_;
+    }
+    void read(const std::uint64_t,
+              const std::span<std::uint8_t>) const override {
+        throw std::runtime_error("synthetischer GD-ROM-Lesefehler");
+    }
+
+  private:
+    std::string identity_ = "synthetic:throwing-gdrom";
+};
 } // namespace
 
 int main() {
@@ -84,6 +100,41 @@ int main() {
     require(throws<std::out_of_range>(
                 [&] { static_cast<void>(overflow.submit({GdRomCommand::GetStatus})); }),
             "Ueberlaufender GD-ROM-Fertigstellungszyklus wird akzeptiert.");
+    require(overflow.pending_count() == 0u &&
+                overflow_scheduler.pending_event_count() == 0u,
+            "Abgelehnte GD-ROM-Submission hinterlaesst Queue- oder Schedulerzustand.");
+
+    EventScheduler failure_scheduler;
+    std::uint64_t throwing_observer_calls = 0u;
+    GdRomAsyncReader failure_reader(
+        failure_scheduler,
+        GdRomDrive(std::make_shared<ThrowingDiscSource>()),
+        {1u, 1u},
+        [&](const auto) {
+            ++throwing_observer_calls;
+            throw std::runtime_error("synthetischer Completionbeobachterfehler");
+        });
+    const auto failed_read =
+        failure_reader.submit({GdRomCommand::ReadSectors, 0u, 1u});
+    require(!throws<std::exception>(
+                [&] { static_cast<void>(failure_scheduler.advance_to(2u, 1u)); }),
+            "Erwartbarer GD-ROM-Lese- oder Beobachterfehler tritt aus dem Scheduler aus.");
+    const auto failed_completion = failure_reader.take_completed();
+    require(failed_completion && failed_completion->request_id == failed_read &&
+                failed_completion->response.status == GdRomStatus::Aborted &&
+                failed_completion->response.data.empty() &&
+                failure_reader.pending_count() == 0u &&
+                throwing_observer_calls == 1u,
+            "Fehlgeschlagene GD-ROM-Completion wird nicht atomar als ABORTED publiziert.");
+    const auto recovery_request =
+        failure_reader.submit({GdRomCommand::GetStatus});
+    static_cast<void>(failure_scheduler.advance_to(3u, 1u));
+    const auto recovery_completion = failure_reader.take_completed();
+    require(recovery_completion &&
+                recovery_completion->request_id == recovery_request &&
+                recovery_completion->response.status == GdRomStatus::Good &&
+                throwing_observer_calls == 2u,
+            "GD-ROM-Reader ist nach einer fehlgeschlagenen Completion nicht wiederverwendbar.");
 
     std::cout << "KR-3004 Asynchrone Reads und Timing erfolgreich.\n";
 }

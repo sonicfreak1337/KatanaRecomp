@@ -69,17 +69,19 @@ void run_normal_cases() {
 
 void run_wraparound_case() {
     katana_generated::CpuState cpu;
-    cpu.gbr = 0xFFFFFF01u;
+    // 32-Bit-Wraparound pruefen, ohne Word-/Long-Stores in Alignment-Fehler zu verwandeln.
+    cpu.gbr = 0xFFFFFF04u;
     cpu.r[0] = 0xA1B2C3D4u;
     set_preserved_state(cpu);
 
     cpu.pc = 0x8C010030u;
     katana_generated::fn_8C010030(cpu);
 
-    require(cpu.memory.read_u8(0u) == 0xD4u && cpu.memory.read_u16(0x000000FFu) == 0xC3D4u &&
-                cpu.memory.read_u32(0x000002FDu) == 0xA1B2C3D4u,
+    require(!cpu.trap_pending && cpu.memory.read_u8(0x00000003u) == 0xD4u &&
+                cpu.memory.read_u16(0x00000102u) == 0xC3D4u &&
+                cpu.memory.read_u32(0x00000300u) == 0xA1B2C3D4u,
             "GBR-relative Adressen verwenden kein 32-Bit-Wraparound.");
-    require(cpu.gbr == 0xFFFFFF01u, "GBR wurde im Wraparound-Fall veraendert.");
+    require(cpu.gbr == 0xFFFFFF04u, "GBR wurde im Wraparound-Fall veraendert.");
 }
 
 void run_invalid_access_case() {

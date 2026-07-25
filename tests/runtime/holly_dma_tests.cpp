@@ -1,10 +1,13 @@
 #include "katana/runtime/holly_dma.hpp"
 #include "katana/runtime/dma.hpp"
+#include "katana/runtime/pvr.hpp"
 
+#include <array>
 #include <cstdlib>
 #include <iostream>
 #include <limits>
 #include <memory>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -24,6 +27,25 @@ template <typename F> bool throws(F&& function) {
     }
     return false;
 }
+
+class RejectSecondDmaUnitMemoryDevice final : public katana::runtime::MemoryDevice {
+  public:
+    [[nodiscard]] std::size_t size() const noexcept override { return bytes_.size(); }
+
+    [[nodiscard]] std::uint8_t read_u8(const std::uint32_t offset) const override {
+        if (offset >= bytes_.size()) throw std::out_of_range("DMA-Testdevice-Leseoffset.");
+        return bytes_[offset];
+    }
+
+    void write_u8(const std::uint32_t offset, const std::uint8_t value) override {
+        if (offset >= bytes_.size()) throw std::out_of_range("DMA-Testdevice-Schreiboffset.");
+        if (offset >= 32u) throw std::runtime_error("Synthetischer DMA-Teilbatchfehler.");
+        bytes_[offset] = value;
+    }
+
+  private:
+    std::array<std::uint8_t, 64u> bytes_{};
+};
 } // namespace
 
 int main() {
@@ -88,6 +110,97 @@ int main() {
                 events == std::vector<SystemAsicEvent>{SystemAsicEvent::AicaDma},
             "AICA-G2-DMA-Resume/Completion aktualisiert Daten, Status oder ASIC-Ereignis falsch.");
 
+    for (std::uint32_t index = 0u; index < 4096u; ++index)
+        memory.write_u8(0x0C006000u + index, static_cast<std::uint8_t>(index));
+    memory.write_u32(0x005F7840u, 0x00806000u);
+    memory.write_u32(0x005F7844u, 0x0C006000u);
+    memory.write_u32(0x005F7848u, 4096u);
+    memory.write_u32(0x005F784Cu, 0u);
+    memory.write_u32(0x005F7850u, 4u);
+    memory.write_u32(0x005F7854u, 1u);
+    memory.write_u32(0x005F7858u, 1u);
+    static_cast<void>(scheduler.advance_by(8192u, 1u));
+    require(memory.read_u32(0x005F7840u) == 0x00806000u &&
+                memory.read_u32(0x005F7844u) == 0x0C006000u &&
+                memory.read_u32(0x005F78E0u) == 0x00806800u &&
+                memory.read_u32(0x005F78E4u) == 0x0C006800u &&
+                memory.read_u32(0x005F78E8u) == 2048u &&
+                memory.read_u8(0x008067FFu) == 0xFFu &&
+                memory.read_u8(0x00806800u) == 0u,
+            "G2-DMA meldet nach dem ersten Chunk keine getrennten Live-Zaehler oder Residue.");
+    memory.write_u32(0x005F785Cu, 1u);
+    const auto g2_suspended = controllers.g2->channel_state(2u);
+    static_cast<void>(scheduler.advance_by(8192u, 1u));
+    require(g2_suspended.remaining_cycles == 8192u &&
+                controllers.g2->channel_state(2u).remaining == 2048u &&
+                memory.read_u8(0x00806801u) == 0u,
+            "G2-DMA-Suspend verliert Chunk-Restzyklen oder laesst Daten weiterlaufen.");
+    memory.write_u32(0x005F785Cu, 0u);
+    static_cast<void>(scheduler.advance_by(8192u, 1u));
+    require(controllers.g2->channel_state(2u).active == 0u &&
+                controllers.g2->channel_state(2u).remaining == 0u &&
+                memory.read_u8(0x00806FFFu) == 0xFFu &&
+                events.back() == SystemAsicEvent::Ext2Dma,
+            "G2-DMA-Resume schliesst den verbliebenen Chunk nicht deterministisch ab.");
+
+    for (std::uint32_t index = 0u; index < 4096u; ++index)
+        memory.write_u8(0x0C007000u + index, static_cast<std::uint8_t>(0x80u + index));
+    const auto g2_events_before_abort = events.size();
+    memory.write_u32(0x005F7840u, 0x00807000u);
+    memory.write_u32(0x005F7844u, 0x0C007000u);
+    memory.write_u32(0x005F7848u, 4096u);
+    memory.write_u32(0x005F7850u, 0u);
+    memory.write_u32(0x005F7854u, 1u);
+    memory.write_u32(0x005F7858u, 1u);
+    static_cast<void>(scheduler.advance_by(8192u, 1u));
+    memory.write_u32(0x005F7854u, 0u);
+    const auto g2_aborted = controllers.g2->channel_state(2u);
+    static_cast<void>(scheduler.advance_by(8192u, 1u));
+    require(g2_aborted.active == 0u && g2_aborted.remaining == 2048u &&
+                g2_aborted.peripheral_counter == 0x00807800u &&
+                g2_aborted.system_counter == 0x0C007800u &&
+                controllers.g2->channel_state(2u).remaining == 2048u &&
+                memory.read_u8(0x00807800u) == 0u &&
+                events.size() == g2_events_before_abort,
+            "G2-DMA-Abort verwirft Residue oder fuehrt einen spaeten Chunk aus.");
+
+    Memory g2_fault_memory(0u);
+    g2_fault_memory.map_region(
+        "fault-system", 0x0C100000u, std::make_shared<LinearMemoryDevice>(0x1000u));
+    g2_fault_memory.map_region(
+        "fault-g2", 0x00820000u, std::make_shared<RejectSecondDmaUnitMemoryDevice>());
+    for (std::uint32_t index = 0u; index < 64u; ++index)
+        g2_fault_memory.write_u8(
+            0x0C100000u + index, static_cast<std::uint8_t>(index + 1u));
+    EventScheduler g2_fault_scheduler;
+    std::vector<SystemAsicEvent> g2_fault_events;
+    DreamcastG2DmaController g2_fault(
+        g2_fault_memory,
+        g2_fault_scheduler,
+        HollyDmaTiming{4u},
+        [&](const auto event) { g2_fault_events.push_back(event); });
+    g2_fault.write(0x00u, 0x00820000u);
+    g2_fault.write(0x04u, 0x0C100000u);
+    g2_fault.write(0x08u, 64u);
+    g2_fault.write(0x0Cu, 0u);
+    g2_fault.write(0x10u, 0u);
+    g2_fault.write(0x14u, 1u);
+    g2_fault.write(0x18u, 1u);
+    static_cast<void>(g2_fault_scheduler.advance_by(256u, 1u));
+    const auto g2_partial_fault = g2_fault.channel_state(0u);
+    require(g2_fault.last_fault() &&
+                g2_fault.last_fault()->reason == HollyDmaFaultReason::TransferFailure &&
+                g2_fault.last_fault()->remaining == 32u &&
+                g2_partial_fault.active == 0u &&
+                g2_partial_fault.peripheral_counter == 0x00820020u &&
+                g2_partial_fault.system_counter == 0x0C100020u &&
+                g2_partial_fault.remaining == 32u &&
+                g2_fault_memory.read_u8(0x0082001Fu) == 32u &&
+                g2_fault_memory.read_u8(0x00820020u) == 0u &&
+                g2_fault_events ==
+                    std::vector<SystemAsicEvent>{SystemAsicEvent::AicaDmaIllegalAddress},
+            "G2-DMA-Teilbatchfehler verliert den committed Prefix oder seine Livezaehler.");
+
     for (std::uint32_t index = 0u; index < 32u; ++index)
         memory.write_u8(0x0C002000u + index, static_cast<std::uint8_t>(0x80u + index));
     memory.write_u32(0xA05F7C00u, 0x0400101Fu);
@@ -111,6 +224,7 @@ int main() {
                 memory.read_u32(0x005F7CF4u) == 0x0C002020u &&
                 memory.read_u32(0x005F7CF8u) == 0u &&
                 events == std::vector<SystemAsicEvent>{SystemAsicEvent::AicaDma,
+                                                       SystemAsicEvent::Ext2Dma,
                                                        SystemAsicEvent::PvrDma},
             "PVR-DMA-Completion aktualisiert Daten, Zaehler oder ASIC-Ereignis falsch.");
 
@@ -127,9 +241,36 @@ int main() {
     static_cast<void>(scheduler.advance_by(128u, 1u));
     require(memory.read_u8(0x0400201Fu) == 0x5Fu && memory.read_u32(0x005F7C14u) == 1u,
             "Hardwaregetriggerte PVR-DMA behaelt Enable oder Daten nicht korrekt.");
+    const auto pvr_live_before_reverse = controllers.pvr->state();
+    const auto pvr_events_before_reverse = events.size();
+    memory.write_u8(0x0C003800u, 0x5Au);
+    memory.write_u8(0x04002800u, 0xC3u);
+    memory.write_u32(0x005F7C00u, 0x04002800u);
+    memory.write_u32(0x005F7C04u, 0x0C003800u);
+    memory.write_u32(0x005F7C08u, 32u);
+    memory.write_u32(0x005F7C0Cu, 1u);
+    memory.write_u32(0x005F7C10u, 0u);
+    memory.write_u32(0x005F7C14u, 1u);
+    memory.write_u32(0x005F7C18u, 1u);
+    static_cast<void>(scheduler.advance_by(128u, 1u));
+    require(controllers.pvr->last_fault() &&
+                controllers.pvr->last_fault()->reason ==
+                    HollyDmaFaultReason::InvalidDirection &&
+                controllers.pvr->last_fault()->event ==
+                    SystemAsicEvent::PvrIllegalAddress &&
+                events.size() == pvr_events_before_reverse + 1u &&
+                events.back() == SystemAsicEvent::PvrIllegalAddress &&
+                controllers.pvr->state().peripheral_counter ==
+                    pvr_live_before_reverse.peripheral_counter &&
+                controllers.pvr->state().system_counter ==
+                    pvr_live_before_reverse.system_counter &&
+                memory.read_u8(0x0C003800u) == 0x5Au &&
+                memory.read_u8(0x04002800u) == 0xC3u,
+            "Reverse-PVR-DMA wird nicht typisiert und ohne Datenmutation abgewiesen.");
     memory.write_u32(0x005F7C00u, 0x04002000u);
     memory.write_u32(0x005F7C04u, 0u);
     memory.write_u32(0x005F7C08u, 32u);
+    memory.write_u32(0x005F7C0Cu, 0u);
     memory.write_u32(0x005F7C10u, 0u);
     memory.write_u32(0x005F7C14u, 1u);
     memory.write_u32(0x005F7C18u, 1u);
@@ -138,6 +279,46 @@ int main() {
                 events.back() == SystemAsicEvent::PvrOverrun &&
                 controllers.pvr->state().active == 0u,
             "Ungueltiger PVR-DMA-Bereich entkommt als Hostfehler statt als ASIC-Fault.");
+
+    Memory pvr_fault_memory(0u);
+    pvr_fault_memory.map_region(
+        "fault-system", 0x0C100000u, std::make_shared<LinearMemoryDevice>(0x1000u));
+    const auto pvr_fault_fifo = std::make_shared<PvrTaFifo>();
+    const auto pvr_fault_aperture =
+        std::make_shared<PvrTaFifoMemoryDevice>(pvr_fault_fifo);
+    pvr_fault_memory.map_region("fault-ta", 0x10000000u, pvr_fault_aperture);
+    pvr_fault_memory.write_u32(0x0C100000u, 0x80000000u);
+    pvr_fault_memory.write_u32(0x0C100020u, 0x60000000u);
+    EventScheduler pvr_fault_scheduler;
+    std::vector<SystemAsicEvent> pvr_fault_events;
+    DreamcastPvrDmaController pvr_fault(
+        pvr_fault_memory,
+        pvr_fault_scheduler,
+        HollyDmaTiming{4u},
+        [&](const auto event) { pvr_fault_events.push_back(event); });
+    pvr_fault.write(0x00u, 0x10000000u);
+    pvr_fault.write(0x04u, 0x0C100000u);
+    pvr_fault.write(0x08u, 64u);
+    pvr_fault.write(0x0Cu, 0u);
+    pvr_fault.write(0x10u, 0u);
+    pvr_fault.write(0x14u, 1u);
+    pvr_fault.write(0x18u, 1u);
+    static_cast<void>(pvr_fault_scheduler.advance_by(256u, 1u));
+    const auto pvr_partial_fault = pvr_fault.state();
+    require(pvr_fault.last_fault() &&
+                pvr_fault.last_fault()->reason ==
+                    HollyDmaFaultReason::TransferFailure &&
+                pvr_fault.last_fault()->remaining == 32u &&
+                pvr_partial_fault.active == 0u &&
+                pvr_partial_fault.peripheral_counter == 0x10000020u &&
+                pvr_partial_fault.system_counter == 0x0C100020u &&
+                pvr_partial_fault.remaining == 32u &&
+                pvr_fault_fifo->metrics().packets == 1u &&
+                pvr_fault_fifo->metrics().rejected_packets == 1u &&
+                !pvr_fault_aperture->snapshot().packet_active &&
+                pvr_fault_events ==
+                    std::vector<SystemAsicEvent>{SystemAsicEvent::PvrIllegalAddress},
+            "PVR-DMA-TA-Teilbatchfehler verliert Prefix, Residue oder Parserquieszenz.");
 
     EventScheduler g1_scheduler;
     bool g1_bytes_committed = false;
@@ -430,6 +611,56 @@ int main() {
                 scheduler_failure_g1_events.empty(),
             "Interner G1-Schedulerfehler wird als Timeout/Overrun auf das ASIC gespiegelt.");
 
+    EventScheduler scheduler_failure_g2_scheduler;
+    std::vector<SystemAsicEvent> scheduler_failure_g2_events;
+    DreamcastG2DmaController scheduler_failure_g2(
+        memory,
+        scheduler_failure_g2_scheduler,
+        HollyDmaTiming{std::numeric_limits<std::uint64_t>::max()},
+        [&](const SystemAsicEvent event) {
+            scheduler_failure_g2_events.push_back(event);
+        });
+    scheduler_failure_g2.write(0x00u, 0x00800000u);
+    scheduler_failure_g2.write(0x04u, 0x0C000000u);
+    scheduler_failure_g2.write(0x08u, 32u);
+    scheduler_failure_g2.write(0x0Cu, 0u);
+    scheduler_failure_g2.write(0x10u, 0u);
+    scheduler_failure_g2.write(0x14u, 1u);
+    scheduler_failure_g2.write(0x18u, 1u);
+    require(scheduler_failure_g2.last_fault() &&
+                scheduler_failure_g2.last_fault()->reason ==
+                    HollyDmaFaultReason::SchedulerFailure &&
+                !scheduler_failure_g2.last_fault()->event &&
+                scheduler_failure_g2_events.empty() &&
+                scheduler_failure_g2.channel_state(0u).active == 0u &&
+                scheduler_failure_g2.channel_state(0u).enabled == 0u,
+            "Interner G2-Schedulerfehler wird als Hardware-Timeout/Overrun ausgegeben.");
+
+    EventScheduler scheduler_failure_pvr_scheduler;
+    std::vector<SystemAsicEvent> scheduler_failure_pvr_events;
+    DreamcastPvrDmaController scheduler_failure_pvr(
+        memory,
+        scheduler_failure_pvr_scheduler,
+        HollyDmaTiming{std::numeric_limits<std::uint64_t>::max()},
+        [&](const SystemAsicEvent event) {
+            scheduler_failure_pvr_events.push_back(event);
+        });
+    scheduler_failure_pvr.write(0x00u, 0x04000000u);
+    scheduler_failure_pvr.write(0x04u, 0x0C000000u);
+    scheduler_failure_pvr.write(0x08u, 32u);
+    scheduler_failure_pvr.write(0x0Cu, 0u);
+    scheduler_failure_pvr.write(0x10u, 0u);
+    scheduler_failure_pvr.write(0x14u, 1u);
+    scheduler_failure_pvr.write(0x18u, 1u);
+    require(scheduler_failure_pvr.last_fault() &&
+                scheduler_failure_pvr.last_fault()->reason ==
+                    HollyDmaFaultReason::SchedulerFailure &&
+                !scheduler_failure_pvr.last_fault()->event &&
+                scheduler_failure_pvr_events.empty() &&
+                scheduler_failure_pvr.state().active == 0u &&
+                scheduler_failure_pvr.state().enabled == 0u,
+            "Interner PVR-Schedulerfehler wird als Hardware-Timeout/Overrun ausgegeben.");
+
     memory.write_u32(0x005F7820u, 0x01000000u);
     memory.write_u32(0x005F7824u, 0x0C005000u);
     memory.write_u32(0x005F7828u, 32u);
@@ -494,6 +725,78 @@ int main() {
                 (contract_dmac->control(0u) & Sh4Dmac::transfer_end) != 0u &&
                 contract_events == std::vector<SystemAsicEvent>{SystemAsicEvent::PvrDma},
             "PVR-DMA committed Daten, SH-4-DMAC-Residue oder Completion nicht gemeinsam.");
+
+    contract_dmac->reset();
+    contract_pvr.reset();
+    contract_events.clear();
+    for (std::uint32_t index = 0u; index < 4096u; ++index)
+        memory.write_u8(0x0C008000u + index, static_cast<std::uint8_t>(index));
+    contract_dmac->write_source(0u, 0x0C008000u);
+    contract_dmac->write_count(0u, 128u);
+    contract_dmac->write_control(0u, 0x00001841u);
+    contract_dmac->write_operation(Sh4Dmac::master_enable);
+    contract_pvr.write(0x00u, 0x04008000u);
+    contract_pvr.write(0x04u, 0x0C008000u);
+    contract_pvr.write(0x08u, 4096u);
+    contract_pvr.write(0x14u, 1u);
+    contract_pvr.write(0x18u, 1u);
+    static_cast<void>(contract_scheduler.advance_by(8192u, 1u));
+    const auto pvr_partial = contract_pvr.state();
+    require(pvr_partial.active == 1u && pvr_partial.remaining == 2048u &&
+                pvr_partial.peripheral_counter == 0x04008800u &&
+                pvr_partial.system_counter == 0x0C008800u &&
+                contract_dmac->source(0u) == 0x0C008800u &&
+                contract_dmac->count(0u) == 64u &&
+                (contract_dmac->control(0u) & Sh4Dmac::transfer_end) == 0u &&
+                memory.read_u8(0x040087FFu) == 0xFFu &&
+                memory.read_u8(0x04008800u) == 0u,
+            "PVR-DMA-Teilfortschritt erreicht Live-Zaehler oder SH-4-DMAC-Residue nicht.");
+    contract_pvr.set_suspended(true);
+    const auto pvr_suspended = contract_pvr.state();
+    static_cast<void>(contract_scheduler.advance_by(8192u, 1u));
+    require(pvr_suspended.remaining_cycles == 8192u &&
+                contract_pvr.state().remaining == 2048u &&
+                contract_dmac->count(0u) == 64u &&
+                memory.read_u8(0x04008801u) == 0u,
+            "PVR-DMA-Suspend verliert Restzyklen oder committed den naechsten Chunk.");
+    contract_pvr.set_suspended(false);
+    static_cast<void>(contract_scheduler.advance_by(8192u, 1u));
+    require(contract_pvr.state().active == 0u && contract_pvr.state().remaining == 0u &&
+                contract_dmac->source(0u) == 0x0C009000u &&
+                contract_dmac->count(0u) == 0u &&
+                (contract_dmac->control(0u) & Sh4Dmac::transfer_end) != 0u &&
+                memory.read_u8(0x04008FFFu) == 0xFFu &&
+                contract_events == std::vector<SystemAsicEvent>{SystemAsicEvent::PvrDma},
+            "PVR-DMA-Resume finalisiert Daten und DMAC-Vertrag nicht gemeinsam.");
+
+    contract_dmac->reset();
+    contract_pvr.reset();
+    contract_events.clear();
+    for (std::uint32_t index = 0u; index < 4096u; ++index)
+        memory.write_u8(0x0C00A000u + index, static_cast<std::uint8_t>(0x40u + index));
+    contract_dmac->write_source(0u, 0x0C00A000u);
+    contract_dmac->write_count(0u, 128u);
+    contract_dmac->write_control(0u, 0x00001841u);
+    contract_dmac->write_operation(Sh4Dmac::master_enable);
+    contract_pvr.write(0x00u, 0x0400A000u);
+    contract_pvr.write(0x04u, 0x0C00A000u);
+    contract_pvr.write(0x08u, 4096u);
+    contract_pvr.write(0x14u, 1u);
+    contract_pvr.write(0x18u, 1u);
+    static_cast<void>(contract_scheduler.advance_by(8192u, 1u));
+    contract_pvr.abort();
+    const auto pvr_aborted = contract_pvr.state();
+    static_cast<void>(contract_scheduler.advance_by(8192u, 1u));
+    require(pvr_aborted.active == 0u && pvr_aborted.enabled == 0u &&
+                pvr_aborted.remaining == 2048u &&
+                pvr_aborted.peripheral_counter == 0x0400A800u &&
+                pvr_aborted.system_counter == 0x0C00A800u &&
+                contract_pvr.state().remaining == 2048u &&
+                contract_dmac->source(0u) == 0x0C00A800u &&
+                contract_dmac->count(0u) == 64u &&
+                (contract_dmac->control(0u) & Sh4Dmac::transfer_end) == 0u &&
+                memory.read_u8(0x0400A800u) == 0u && contract_events.empty(),
+            "PVR-DMA-Abort verwirft Residue, finalisiert den DMAC oder laesst einen spaeten Chunk laufen.");
 
     const auto events_before_missing_backend = events.size();
     memory.write_u32(0x005F7404u, 0x0C000000u);

@@ -20,6 +20,8 @@ constexpr std::uint32_t control_writable_mask =
     Sh4Dmac::interrupt_enable | Sh4Dmac::channel_enable | 0x00000080u;
 constexpr std::uint32_t operation_writable_mask = 0x00008301u;
 constexpr std::uint32_t on_demand_queue_depth = 4u;
+constexpr std::uint32_t automatic_byte_transfer_control =
+    0x00004000u | 0x00001000u | 0x00000400u | 0x00000010u;
 
 std::uint64_t checked_delay(const std::uint64_t cycles_per_byte, const std::size_t bytes) {
     if (cycles_per_byte > std::numeric_limits<std::uint64_t>::max() / bytes) {
@@ -99,6 +101,25 @@ void Sh4Dmac::write_operation(const std::uint32_t value) {
         last_fault_.reset();
     }
     reevaluate();
+}
+
+void Sh4Dmac::start_byte_transfer(const std::size_t index,
+                                  const std::uint32_t source,
+                                  const std::uint32_t destination,
+                                  const std::uint32_t byte_count,
+                                  const bool interrupt_on_completion) {
+    if (byte_count == 0u || byte_count > transfer_count_mask) {
+        throw std::invalid_argument(
+            "Byte-DMA braucht eine durch DMATCR darstellbare positive Bytezahl.");
+    }
+    static_cast<void>(channel(index));
+    write_source(index, source);
+    write_destination(index, destination);
+    write_count(index, byte_count);
+    write_control(index,
+                  automatic_byte_transfer_control |
+                      (interrupt_on_completion ? interrupt_enable : 0u) | channel_enable);
+    write_operation(master_enable);
 }
 
 std::uint32_t Sh4Dmac::source(const std::size_t index) const {
@@ -218,33 +239,64 @@ bool Sh4Dmac::validate_external_transfer(const std::size_t index,
     return true;
 }
 
-void Sh4Dmac::complete_external_transfer(const std::size_t index,
+bool Sh4Dmac::progress_external_transfer(const std::size_t index,
                                          const std::size_t bytes) noexcept {
-    if (index >= channels_.size()) return;
+    if (index >= channels_.size()) return false;
     auto& value = channels_[index];
     const auto unit_size = transfer_size(value);
-    if (unit_size == 0u || bytes == 0u || (bytes % unit_size) != 0u) {
+    if (unit_size == 0u || bytes == 0u || bytes > std::numeric_limits<std::uint32_t>::max() ||
+        (bytes % unit_size) != 0u) {
         set_fault(index, DmaFaultReason::ExternalContractMismatch, unit_size);
-        return;
+        return false;
     }
-    if (address_mode(value.control, 12u) == 1u)
-        value.source += static_cast<std::uint32_t>(bytes);
-    else if (address_mode(value.control, 12u) == 2u)
-        value.source -= static_cast<std::uint32_t>(bytes);
-    if (address_mode(value.control, 14u) == 1u)
-        value.destination += static_cast<std::uint32_t>(bytes);
-    else if (address_mode(value.control, 14u) == 2u)
-        value.destination -= static_cast<std::uint32_t>(bytes);
-    value.count = 0u;
+    const auto units = bytes / unit_size;
+    if ((operation_ & master_enable) == 0u ||
+        (operation_ & (address_error_flag | nmi_flag)) != 0u ||
+        (value.control & channel_enable) == 0u || (value.control & transfer_end) != 0u ||
+        units > value.count) {
+        set_fault(index, DmaFaultReason::ExternalContractMismatch, unit_size);
+        return false;
+    }
+    update_addresses(value, bytes);
+    value.count -= static_cast<std::uint32_t>(units);
+    value.completed_units += units;
+    return true;
+}
+
+bool Sh4Dmac::finish_external_transfer(const std::size_t index) noexcept {
+    if (index >= channels_.size()) return false;
+    auto& value = channels_[index];
+    const auto unit_size = transfer_size(value);
+    if (unit_size == 0u || (operation_ & master_enable) == 0u ||
+        (operation_ & (address_error_flag | nmi_flag)) != 0u ||
+        (value.control & channel_enable) == 0u || (value.control & transfer_end) != 0u ||
+        value.count != 0u) {
+        set_fault(index, DmaFaultReason::ExternalContractMismatch, unit_size);
+        return false;
+    }
     value.control |= transfer_end;
     value.interrupt_pending = (value.control & interrupt_enable) != 0u;
-    value.completed_units += bytes / unit_size;
     if (completion_observer_) {
         try {
             completion_observer_(index);
         } catch (...) {
         }
     }
+    return true;
+}
+
+void Sh4Dmac::complete_external_transfer(const std::size_t index,
+                                         const std::size_t bytes) noexcept {
+    if (index >= channels_.size()) return;
+    auto& value = channels_[index];
+    const auto unit_size = transfer_size(value);
+    if (unit_size == 0u || bytes == 0u || (bytes % unit_size) != 0u ||
+        bytes / unit_size != value.count) {
+        set_fault(index, DmaFaultReason::ExternalContractMismatch, unit_size);
+        return;
+    }
+    if (!progress_external_transfer(index, bytes)) return;
+    static_cast<void>(finish_external_transfer(index));
 }
 
 void Sh4Dmac::report_external_fault(const std::size_t index,

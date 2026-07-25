@@ -3,6 +3,7 @@
 #include <array>
 #include <cstdlib>
 #include <iostream>
+#include <limits>
 #include <string>
 
 namespace {
@@ -13,6 +14,27 @@ void require(const bool condition, const std::string& message) {
         std::exit(EXIT_FAILURE);
     }
 }
+
+class RecordingManualReset final : public katana::runtime::ManualResetCoordinator {
+  public:
+    void reset(katana::runtime::CpuState& cpu,
+               const katana::runtime::ManualResetRequest& requested) noexcept override {
+        ++count;
+        request = requested;
+        katana::runtime::reset_cpu(
+            cpu,
+            katana::runtime::ResetState{
+                katana::runtime::tlb_multiple_hit_reset_vector,
+                0u,
+                0u,
+                katana::runtime::sr_md_mask | katana::runtime::sr_rb_mask |
+                    katana::runtime::sr_bl_mask | katana::runtime::sr_interrupt_mask,
+                0u});
+    }
+
+    std::uint32_t count = 0u;
+    katana::runtime::ManualResetRequest request;
+};
 
 } // namespace
 
@@ -150,12 +172,25 @@ int main() {
                 cpu.r[0] == 0x22222222u,
             "Exception-Eintritt setzt Ereignis, Vektor oder SR falsch.");
 
+    CpuState trap_cpu;
+    trap_cpu.vbr = 0x8C000000u;
+    trap_cpu.active_instruction_pc = 0x8C020000u;
+    trap_cpu.active_instruction_physical_pc = 0x0C020000u;
+    raise_trapa(trap_cpu, 7u, 0x8C020000u);
+    require(trap_cpu.spc == 0x8C020002u &&
+                trap_cpu.last_exception_instruction_pc == 0x8C020000u &&
+                trap_cpu.last_exception_instruction_physical_pc == 0x0C020000u &&
+                trap_cpu.last_exception_owner_pc == 0x8C020000u &&
+                !trap_cpu.exception_in_delay_slot,
+            "TRAPA meldet den Rueckkehr-PC statt Instruktions-/Owner-PC als Faultquelle.");
+
     return_from_exception(cpu);
     require(cpu.pc == 0x8C010000u && cpu.read_sr() == (sr_t_mask | (3u << 4u)) &&
                 !cpu.trap_pending && cpu.exception_generation == 1u &&
                 cpu.r[0] == 0x11111111u,
             "Exception-Rueckkehr restauriert PC, SR oder Registerbank falsch.");
 
+    cpu.pteh = 0x0000035Au;
     MemoryAccessError misaligned(MemoryAccessErrorReason::Misaligned,
                                  MemoryAccessOperation::Read,
                                  0x8C010003u,
@@ -165,8 +200,10 @@ int main() {
     require(cpu.last_exception_cause == ExceptionCause::AddressErrorRead &&
                 cpu.exception_generation == 2u &&
                 cpu.expevt == event_address_error_read && cpu.tea == 0x8C010003u &&
-                cpu.spc == 0x8C01FFFEu && cpu.exception_in_delay_slot,
-            "Adressfehler im Delay Slot verliert Ursache, TEA oder Owner-PC.");
+                cpu.pteh == 0x8C01005Au && cpu.spc == 0x8C01FFFEu &&
+                cpu.exception_in_delay_slot,
+            "Adressfehler im Delay Slot verliert Ursache, TEA, PTEH.VPN/ASID oder behaelt "
+            "reservierte PTEH-Bits.");
 
     return_from_exception(cpu);
     cpu.pteh = 0x0000005Au;
@@ -197,6 +234,42 @@ int main() {
                 cpu.exception_generation == 4u,
             "TLB-Multiple-Hit fuehrt keinen dokumentierten SH-4-Reset aus.");
 
+    RecordingManualReset manual_reset;
+    reset_cpu(cpu);
+    cpu.manual_reset_sink = manual_reset.sink();
+    cpu.ssr = 0x11111111u;
+    cpu.spc = 0x22222222u;
+    cpu.sgr = 0x33333333u;
+    cpu.write_sr(sr_md_mask | sr_rb_mask | sr_bl_mask | sr_interrupt_mask);
+    raise_illegal_instruction(cpu, 0x8C080000u);
+    require(manual_reset.count == 1u &&
+                manual_reset.request.reason == ManualResetReason::BlockedGeneralException &&
+                manual_reset.request.cause == ExceptionCause::IllegalInstruction &&
+                manual_reset.request.instruction_pc == 0x8C080000u &&
+                cpu.pc == tlb_multiple_hit_reset_vector && cpu.ssr == 0u && cpu.spc == 0u &&
+                cpu.sgr == 0u && cpu.exception_generation == 1u,
+            "Neue General Exception bei SR.BL benutzt nicht den gemeinsamen Manual-Reset-Pfad.");
+
+    CpuState blocked_memory;
+    RecordingManualReset blocked_memory_reset;
+    blocked_memory.manual_reset_sink = blocked_memory_reset.sink();
+    blocked_memory.pteh = 0x000003C7u;
+    blocked_memory.write_sr(sr_md_mask | sr_rb_mask | sr_bl_mask);
+    MemoryAccessError blocked_address_error(MemoryAccessErrorReason::Misaligned,
+                                            MemoryAccessOperation::Write,
+                                            0x76543ABCu,
+                                            MemoryAccessWidth::Word,
+                                            "ram");
+    enter_memory_exception(blocked_memory, blocked_address_error, 0x8C081000u);
+    require(blocked_memory_reset.count == 1u &&
+                blocked_memory_reset.request.reason ==
+                    ManualResetReason::BlockedGeneralException &&
+                blocked_memory_reset.request.cause == ExceptionCause::AddressErrorWrite &&
+                blocked_memory.pteh == 0x765438C7u &&
+                blocked_memory.tea == 0x76543ABCu &&
+                blocked_memory.expevt == event_address_error_write,
+            "Address Error bei SR.BL verliert PTEH.VPN/ASID im Manual-Reset-Pfad.");
+
     reset_cpu(cpu);
     MemoryAccessError unmapped(MemoryAccessErrorReason::Unmapped,
                                MemoryAccessOperation::Write,
@@ -221,6 +294,16 @@ int main() {
                 cpu.expevt == event_fpu_disabled && cpu.spc == 0x8C050000u &&
                 !cpu.exception_in_delay_slot,
             "FPU-Sperre ausserhalb eines Delay Slots wird falsch gemeldet.");
+
+    CpuState generation_wrap;
+    generation_wrap.exception_generation = std::numeric_limits<std::uint64_t>::max();
+    generation_wrap.active_instruction_pc = 0x8C090000u;
+    generation_wrap.active_instruction_physical_pc = 0x0C090000u;
+    raise_illegal_instruction(generation_wrap, 0x8C090000u);
+    require(generation_wrap.exception_generation == 1u &&
+                generation_wrap.last_exception_generation == 1u &&
+                generation_wrap.last_exception_instruction_physical_pc == 0x0C090000u,
+            "Exception-Generation laeuft auf den reservierten Nullwert ueber.");
 
     map_sh4_exception_event_registers(cpu.memory, cpu);
     require(cpu.memory.read_u32(sh4_tra_address) == cpu.tra &&

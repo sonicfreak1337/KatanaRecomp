@@ -23,9 +23,19 @@ Exception- und Interrupt-Eintritt.
 - Exceptionursache, EXPEVT/INTEVT und Vektor stammen aus einer gemeinsamen
   Metadatentabelle. TEA und der Delay-Slot-Owner werden am Eintritt gemeinsam
   mit SPC gesichert.
+- `exception_generation` bezeichnet die neue Kante; das waehrend eines
+  Handlers gesetzte `trap_pending` ist kein erneuter Exceptionnachweis.
+- Eine neue allgemeine Exception bei gesetztem `SR.BL` und ein TLB Multiple
+  Hit benutzen denselben typisierten Manual-Reset-Koordinator. Er setzt PC auf
+  `0xA0000000` und koordiniert CPU, MMU/TLB, Cache, Interrupts, DMA, Timer,
+  Scheduler und angeschlossene Dreamcast-Module.
+- LDTLB schreibt den durch URC bezeichneten UTLB-Slot, erhoeht URC aber nicht.
+  UTLB-Zugriffe aktualisieren URC innerhalb der URB-Grenze. Instruktionszugriffe
+  fuellen eine eigene deterministische ITLB aus der UTLB nach; `MMUCR.TI`
+  invalidiert beide.
 
 Block-ABI 2 fuehrte dafuer die Endtypen `ExceptionReturn` und `Sleep` ein; der
-aktuelle kumulative Vertrag steht auf Block-ABI 3. `Exception` bezeichnet den
+aktuelle kumulative Vertrag steht auf Block-ABI 4. `Exception` bezeichnet den
 Uebergang in einen normalen Gast-Handler;
 nachfolgende Handlerbloecke behalten ihre regulaere Abschlussart. `Return`
 bleibt der normale Subroutine-Return.

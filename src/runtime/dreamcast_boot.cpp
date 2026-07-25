@@ -4,10 +4,12 @@
 #include "katana/io/json_report.hpp"
 #include "katana/runtime/exception.hpp"
 #include "katana/runtime/iso9660.hpp"
+#include "katana/runtime/runtime_probe.hpp"
 
 #include <algorithm>
 #include <array>
 #include <cstdlib>
+#include <functional>
 #include <limits>
 #include <memory>
 #include <optional>
@@ -15,9 +17,32 @@
 #include <sstream>
 #include <stdexcept>
 #include <string_view>
+#include <type_traits>
 
 namespace katana::runtime {
 namespace {
+
+class DreamcastManualResetCoordinator final : public ManualResetCoordinator {
+  public:
+    explicit DreamcastManualResetCoordinator(std::function<void(CpuState&)> reset)
+        : reset_(std::move(reset)) {}
+
+    void reset(CpuState& cpu, const ManualResetRequest&) noexcept override {
+        try {
+            reset_(cpu);
+        } catch (...) {
+            reset_cpu(cpu,
+                      ResetState{tlb_multiple_hit_reset_vector,
+                                 0u,
+                                 0u,
+                                 sr_md_mask | sr_rb_mask | sr_bl_mask | sr_interrupt_mask,
+                                 0u});
+        }
+    }
+
+  private:
+    std::function<void(CpuState&)> reset_;
+};
 
 std::string trimmed_ascii(const std::span<const std::uint8_t> bytes,
                           const std::size_t offset,
@@ -518,8 +543,11 @@ initialize_dreamcast_runtime(CpuState& cpu,
     state.pvr_ta_aperture =
         std::make_shared<PvrTaFifoMemoryDevice>(state.pvr_ta_fifo, state.pvr_registers);
     const auto reset_ta_fifo = std::weak_ptr<PvrTaFifo>(state.pvr_ta_fifo);
-    state.pvr_registers->set_ta_reset_observer([reset_ta_fifo] {
+    const auto reset_ta_aperture =
+        std::weak_ptr<PvrTaFifoMemoryDevice>(state.pvr_ta_aperture);
+    state.pvr_registers->set_ta_reset_observer([reset_ta_fifo, reset_ta_aperture] {
         if (const auto fifo = reset_ta_fifo.lock()) fifo->reset();
+        if (const auto aperture = reset_ta_aperture.lock()) aperture->reset();
     });
     state.pvr_registers->set_ta_continue_observer([reset_ta_fifo] {
         if (const auto fifo = reset_ta_fifo.lock()) fifo->continue_list();
@@ -550,44 +578,101 @@ initialize_dreamcast_runtime(CpuState& cpu,
     const auto pvr_registers = std::weak_ptr<PvrRegisterFile>(state.pvr_registers);
     const auto pvr_renderer = std::weak_ptr<PvrSoftwareRenderer>(state.pvr_renderer);
     const auto vram = std::weak_ptr<LinearMemoryDevice>(state.vram);
-    state.pvr_registers->set_render_result_observer(
-        [ta_fifo, pvr_registers, pvr_renderer, vram, raise_now] {
+    state.pvr_registers->set_render_job_factory(
+        [ta_fifo, pvr_renderer, vram, raise_now](
+            const PvrRegisterSnapshot& register_snapshot,
+            const std::uint64_t request,
+            const std::uint64_t generation,
+            const std::uint64_t) -> PvrRegisterFile::PreparedRenderJob {
+            static_assert(std::is_nothrow_move_assignable_v<PvrTaFifo>);
             const auto fifo = ta_fifo.lock();
-            const auto registers = pvr_registers.lock();
             const auto renderer = pvr_renderer.lock();
             const auto target = vram.lock();
-            if (!fifo || !registers || !renderer || !target) {
+            if (!fifo || !renderer || !target) {
                 if (renderer)
                     renderer->record_error(PvrRenderError::InternalLifecycle,
-                                           registers ? registers->render_request_count() : 0u,
+                                           request,
                                            "PVR-Renderpfad-Lebenszyklus fehlt.");
-                return PvrRenderResult::Failed;
+                return {[] { return PvrRenderResult::Failed; }, {}};
             }
-            const auto request = registers->render_request_count();
+            auto staged_fifo = *fifo;
+            const auto payload_digest =
+                hash_pvr_render_payload(register_snapshot, staged_fifo.snapshot());
+            PvrTaFrame frame;
             try {
-                auto frame = fifo->finish_frame();
-                renderer->render(frame, *registers, *target);
+                frame = staged_fifo.finish_frame();
+            } catch (const PvrTaParserException& error) {
+                renderer->record_error(PvrRenderError::InvalidTaState, request, error.what());
+                return {[] { return PvrRenderResult::Failed; }, {}, payload_digest};
             } catch (const std::out_of_range& error) {
                 renderer->record_error(PvrRenderError::MemoryRange, request, error.what());
-                return PvrRenderResult::Failed;
+                return {[] { return PvrRenderResult::Failed; }, {}, payload_digest};
             } catch (const std::invalid_argument& error) {
                 renderer->record_error(PvrRenderError::InvalidConfiguration, request, error.what());
-                return PvrRenderResult::Failed;
+                return {[] { return PvrRenderResult::Failed; }, {}, payload_digest};
             } catch (const std::logic_error& error) {
                 renderer->record_error(PvrRenderError::InvalidTaState, request, error.what());
-                return PvrRenderResult::Failed;
+                return {[] { return PvrRenderResult::Failed; }, {}, payload_digest};
             } catch (const std::runtime_error& error) {
                 renderer->record_error(PvrRenderError::UnsupportedFeature, request, error.what());
-                return PvrRenderResult::Failed;
+                return {[] { return PvrRenderResult::Failed; }, {}, payload_digest};
             } catch (...) {
                 renderer->record_error(PvrRenderError::InternalLifecycle,
                                        request,
-                                       "Unbekannter Fehler an der PVR-Produktgrenze.");
-                return PvrRenderResult::Failed;
+                                       "Unbekannter Fehler beim Einfrieren des PVR-Auftrags.");
+                return {[] { return PvrRenderResult::Failed; }, {}, payload_digest};
             }
-            raise_now(SystemAsicEvent::PvrRenderDone);
-            return PvrRenderResult::Success;
+            return {
+                [frame = std::move(frame),
+                 registers = register_snapshot,
+                 pvr_renderer,
+                 vram,
+                 raise_now,
+                 request,
+                 generation]() mutable {
+                    const auto renderer = pvr_renderer.lock();
+                    const auto target = vram.lock();
+                    if (!renderer || !target) {
+                        if (renderer)
+                            renderer->record_error(PvrRenderError::InternalLifecycle,
+                                                   request,
+                                                   "Eingefrorener PVR-Auftrag verlor sein Ziel.");
+                        return PvrRenderResult::Failed;
+                    }
+                    try {
+                        renderer->render(frame, registers, *target, generation);
+                    } catch (const std::out_of_range& error) {
+                        renderer->record_error(PvrRenderError::MemoryRange, request, error.what());
+                        return PvrRenderResult::Failed;
+                    } catch (const std::invalid_argument& error) {
+                        renderer->record_error(
+                            PvrRenderError::InvalidConfiguration, request, error.what());
+                        return PvrRenderResult::Failed;
+                    } catch (const std::logic_error& error) {
+                        renderer->record_error(
+                            PvrRenderError::InvalidTaState, request, error.what());
+                        return PvrRenderResult::Failed;
+                    } catch (const std::runtime_error& error) {
+                        renderer->record_error(
+                            PvrRenderError::UnsupportedFeature, request, error.what());
+                        return PvrRenderResult::Failed;
+                    } catch (...) {
+                        renderer->record_error(PvrRenderError::InternalLifecycle,
+                                               request,
+                                               "Unbekannter Fehler an der PVR-Produktgrenze.");
+                        return PvrRenderResult::Failed;
+                    }
+                    raise_now(SystemAsicEvent::PvrRenderDone);
+                    return PvrRenderResult::Success;
+                },
+                [fifo, staged_fifo = std::move(staged_fifo)]() mutable noexcept {
+                    *fifo = std::move(staged_fifo);
+                },
+                payload_digest,
+            };
         });
+    state.pvr_registers->set_render_overrun_observer(
+        [raise_now] { raise_now(SystemAsicEvent::PvrOverrun); });
     state.aica = std::make_shared<AicaExecutionController>(state.scheduler.get());
     state.aica->interrupts().set_observer(
         [raise_now] { raise_now(SystemAsicEvent::AicaInterrupt); });
@@ -803,7 +888,18 @@ initialize_dreamcast_runtime(CpuState& cpu,
             }
             transfers->push_back(transfer);
             if (transfer.target == StoreQueueTarget::TileAccelerator) {
-                store_queue_ta->submit(transfer.bytes);
+                const auto result = store_queue_ta->submit_guest(transfer.bytes);
+                if (!result.accepted) {
+                    const auto reason =
+                        result.error &&
+                                result.error->reason == PvrTaInputErrorReason::UnsupportedPacket
+                            ? StoreQueueSinkErrorReason::UnsupportedInput
+                            : StoreQueueSinkErrorReason::DeviceRejected;
+                    throw StoreQueueSinkError(
+                        reason,
+                        result.error ? result.error->detail
+                                     : "TA-Eingabe wurde ohne Detail abgelehnt.");
+                }
                 store_queue_pvr->record_ta_packet(
                     static_cast<std::uint32_t>(transfer.bytes.size()));
             } else {
@@ -812,7 +908,9 @@ initialize_dreamcast_runtime(CpuState& cpu,
                     transfer.bytes,
                     GuestMemoryAccessContext{transfer.target_address,
                                              transfer.instruction,
-                                             transfer.retired_guest_instructions},
+                                             transfer.retired_guest_instructions,
+                                             GuestMemoryAccessOrigin::Memory,
+                                             transfer.attempted_guest_instructions},
                     CodeWriteSource::StoreQueue);
             }
         },
@@ -911,6 +1009,71 @@ initialize_dreamcast_runtime(CpuState& cpu,
     state.io_ports->write_control_a(dreamcast_bios_handoff_pctra);
     if (boot_region == DreamcastRegion::Europe)
         state.io_ports->write_data_a(dreamcast_bios_handoff_pal_pdtra);
+    state.manual_reset = std::make_shared<DreamcastManualResetCoordinator>(
+        [scheduler = state.scheduler,
+         rtc_clock = state.rtc_clock,
+         tmu = state.tmu,
+         rtc = state.rtc,
+         dmac = state.dmac,
+         mmu_control = state.mmu_control,
+         interrupt_controller = state.interrupt_controller,
+         interrupt_router = state.interrupt_router,
+         interrupt_registers = state.interrupt_registers,
+         scif = state.scif,
+         system_bus_control = state.system_bus_control,
+         system_asic = state.system_asic,
+         pvr_registers = state.pvr_registers,
+         pvr_ta_fifo = state.pvr_ta_fifo,
+         pvr_renderer = state.pvr_renderer,
+         vram = state.vram,
+         aica_registers = state.aica_registers,
+         aica_rtc = state.aica_rtc,
+         maple_controller = state.maple_controller,
+         holly_dma = state.holly_dma,
+         gdrom = state.gdrom,
+         cache_control = state.cache_control,
+         store_queues = state.store_queues,
+         io_ports = state.io_ports](CpuState& reset_cpu_state) {
+            const auto best_effort = [](auto&& operation) noexcept {
+                try {
+                    operation();
+                } catch (...) {
+                }
+            };
+            best_effort([&] { scheduler->reset(); });
+            reset_cpu(reset_cpu_state,
+                      ResetState{tlb_multiple_hit_reset_vector,
+                                 0u,
+                                 0u,
+                                 sr_md_mask | sr_rb_mask | sr_bl_mask | sr_interrupt_mask,
+                                 0u});
+            mmu_control->reset();
+            cache_control->reset();
+            store_queues->reset();
+            interrupt_controller->clear();
+            interrupt_router->reset();
+            interrupt_registers->reset();
+            dmac->reset();
+            tmu->reset();
+            best_effort([&] { rtc_clock->reset_phase(0u); });
+            best_effort([&] { rtc->reset_divider(); });
+            scif->reset();
+            system_bus_control->reset();
+            system_asic->reset();
+            best_effort([&] { pvr_registers->reset(); });
+            pvr_ta_fifo->reset();
+            best_effort(
+                [&] { pvr_renderer->reset_guest_frame_evidence(vram->bytes()); });
+            aica_registers->reset();
+            aica_rtc->reset();
+            maple_controller->reset();
+            if (holly_dma.g1) holly_dma.g1->reset();
+            if (holly_dma.g2) holly_dma.g2->reset();
+            if (holly_dma.pvr) holly_dma.pvr->reset();
+            gdrom->reset();
+            io_ports->reset();
+        });
+    cpu.manual_reset_sink = state.manual_reset->sink();
     return state;
 }
 

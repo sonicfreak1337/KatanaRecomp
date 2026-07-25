@@ -114,7 +114,7 @@ optionalen letzten Checkpoint, `replay_complete` und `redacted=true`.
 
 ## Begrenzung und portable Ereigniscodes
 
-Systemreplay-Schema 6 besitzt zwei explizite Speichermodi:
+Systemreplay-Schema 7 besitzt zwei explizite Speichermodi:
 
 - `ExactEvents` behaelt jedes Ereignis. Erreicht `record()` die konfigurierte
   Kapazitaet, markiert es genau einen Drop und bricht sichtbar ab.
@@ -150,7 +150,8 @@ Wahrheit behandeln.
 
 Vor dem Replay wird die Aufzeichnung mit einem Gastzustandshash versiegelt.
 `hash_replay_guest_state()` hasht alle expliziten SH-4-Register- und
-Steuerfelder einschliesslich der monotonen Exceptiongeneration,
+Steuerfelder einschliesslich UTLB, Fault-Herkunft, der monotonen
+Exceptiongeneration sowie getrennten Attempted-/Retired-/Cycle-Zaehlern,
 Schedulerzyklus und einen vom Plattformverbund gelieferten Subsystemhash.
 Speicher, MMIO, DMA, Timer, Interrupt- und Medienzustand werden
 ueber diesen Subsystemhash gebunden, ohne rohe Speicher- oder Firmwarebytes im

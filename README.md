@@ -61,8 +61,8 @@ vorbereitet; der live geladene Dispatch bleibt `RuntimeOnly` und erzeugt keine
 feste CFG-Kante. Snapshotcache und P2-Aliasaufloesung sind gegen imagefremde
 Beweise abgesichert. Lokale AOT-Blockketten tragen die exakte tatsaechliche
 Terminatorquelle und Siteklasse bis zum externen Dispatch weiter. Der aktuelle
-kumulative Stand verwendet Runtime-ABI 48, Block-ABI 3,
-Backend-Interface-ABI 3, PlatformServices-ABI 10, Portprojektvertrag 32 und
+kumulative Stand verwendet Runtime-ABI 49, Block-ABI 4,
+Backend-Interface-ABI 3, PlatformServices-ABI 11, Portprojektvertrag 33 und
 Host-Video-Vertrag 2.
 
 `KR-4912` schliesst die allgemeine Lebenszeit dynamischer Codebereiche:
@@ -81,14 +81,14 @@ Ladetransaktionen und der Registry latenter AOT-Module abgeschlossen. Die
 fokussierten Regressionen sind gruen; ein privater Retaillauf, eine Vollsuite
 und `KR-4852` wurden fuer diesen Abschluss nicht ausgefuehrt.
 
-Systemreplay v6 trennt `ExactEvents` von `DigestStream`. Der exakte Modus
+Systemreplay v7 trennt `ExactEvents` von `DigestStream`. Der exakte Modus
 behaelt den bisherigen begrenzten Vollstromvertrag; eine Saettigung erzeugt
 einen echten Drop und verhindert Versiegelung und Replay. Der skalierbare
 Produktmodus behaelt standardmaessig 4.096 Praefixzeugen, validiert, zaehlt und
 bindet aber jedes weitere Ereignis in Coverage, Klassenzahlen und den
 geordneten FNV-Digest ein. Solche Ereignisse sind `summarized`, nicht
 `dropped`; die Gesamtzahl darf daher die maximale Zeugenkapazitaet
-ueberschreiten. Runtime-Probe-Schema 3 weist Speichermodus, Kapazitaet,
+ueberschreiten. Runtime-Probe-Schema 4 weist Speichermodus, Kapazitaet,
 Gesamt-, behaltene und zusammengefasste Ereignisse sowie
 `exact_event_stream` aus. Der Digest ist eine deterministische Pruefsumme und
 keine Authentisierung. Portable Ereigniscodes bleiben auf 64 Zeichen

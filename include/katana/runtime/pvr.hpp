@@ -9,11 +9,13 @@
 #include <deque>
 #include <functional>
 #include <limits>
+#include <map>
 #include <memory>
 #include <optional>
-#include <set>
 #include <span>
+#include <stdexcept>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace katana::runtime {
@@ -118,6 +120,12 @@ struct PvrTiming {
 };
 
 enum class PvrRenderResult : std::uint8_t { Success, Failed };
+enum class PvrRenderStartError : std::uint8_t {
+    Busy,
+    CaptureFailed,
+    SchedulerFailure,
+    GenerationExhausted,
+};
 
 struct PvrRegisterSnapshot {
     // Exact guest-visible register aperture. Dynamic read-only registers are materialized at the
@@ -134,6 +142,7 @@ struct PvrRegisterSnapshot {
     std::uint64_t render_requests = 0u;
     std::uint64_t render_completions = 0u;
     std::uint64_t render_failures = 0u;
+    std::uint64_t render_overruns = 0u;
     std::uint64_t vblank_in = 0u;
     std::uint64_t vblank_out = 0u;
     std::uint64_t hblank = 0u;
@@ -147,10 +156,39 @@ struct PvrRegisterSnapshot {
     PvrTiming timing{};
     bool in_vblank = false;
     std::uint32_t field = 0u;
+    // Zero is the terminal exhausted state; generations never wrap or repeat.
+    std::uint64_t next_render_generation = 1u;
+    std::uint64_t active_render_request = 0u;
+    std::uint64_t active_render_generation = 0u;
+    std::uint64_t active_render_start_cycle = 0u;
+    std::uint64_t active_render_payload_digest = 0u;
+    std::optional<PvrRenderStartError> last_render_start_error;
+
+    [[nodiscard]] std::uint32_t read(const std::uint32_t offset) const {
+        if ((offset & 3u) != 0u || offset >= pvr_register_size)
+            throw std::out_of_range("PVR-Snapshotregister liegt ausserhalb des Aperturvertrags.");
+        return registers[offset / 4u];
+    }
 };
 
 class PvrRegisterFile final {
   public:
+    using RenderJob = std::function<PvrRenderResult()>;
+    using RenderJobCommit = std::function<void()>;
+    struct PreparedRenderJob {
+        RenderJob execute;
+        // Published exactly once after the scheduler event and frozen job are registered.
+        // Product factories stage mutable capture state until this non-throwing commit.
+        RenderJobCommit commit;
+        // Deterministic TA-frame/register payload digest. Request, generation and start cycle
+        // remain explicit FrozenRenderJob/Snapshot fields rather than being folded into it.
+        std::uint64_t payload_digest = 0u;
+    };
+    using RenderJobFactory =
+        std::function<PreparedRenderJob(const PvrRegisterSnapshot&,
+                                        std::uint64_t,
+                                        std::uint64_t,
+                                        std::uint64_t)>;
     explicit PvrRegisterFile(EventScheduler& scheduler,
                              PvrTiming timing = {},
                              std::function<void()> render_observer = {},
@@ -164,6 +202,7 @@ class PvrRegisterFile final {
     [[nodiscard]] std::uint64_t render_request_count() const noexcept;
     [[nodiscard]] std::uint64_t render_completion_count() const noexcept;
     [[nodiscard]] std::uint64_t render_failure_count() const noexcept;
+    [[nodiscard]] std::uint64_t render_overrun_count() const noexcept;
     [[nodiscard]] std::uint64_t reset_count() const noexcept;
     [[nodiscard]] std::uint64_t vblank_in_count() const noexcept;
     [[nodiscard]] std::uint64_t vblank_out_count() const noexcept;
@@ -173,6 +212,8 @@ class PvrRegisterFile final {
     [[nodiscard]] PvrRegisterSnapshot snapshot() const;
     void set_render_observer(std::function<void()> observer);
     void set_render_result_observer(std::function<PvrRenderResult()> observer);
+    void set_render_job_factory(RenderJobFactory factory);
+    void set_render_overrun_observer(std::function<void()> observer);
     void set_vblank_observer(std::function<void(bool)> observer);
     void set_hblank_observer(std::function<void()> observer);
     void set_ta_reset_observer(std::function<void()> observer);
@@ -180,6 +221,15 @@ class PvrRegisterFile final {
     void record_ta_packet(std::uint32_t bytes);
 
   private:
+    struct FrozenRenderJob {
+        std::uint64_t request = 0u;
+        std::uint64_t generation = 0u;
+        std::uint64_t start_cycle = 0u;
+        std::uint64_t payload_digest = 0u;
+        RenderJob execute;
+        bool published = false;
+    };
+
     [[nodiscard]] static std::size_t index(std::uint32_t offset);
     void complete_render(SchedulerEventId event_id);
     void initialize_register_defaults() noexcept;
@@ -196,11 +246,16 @@ class PvrRegisterFile final {
     std::uint64_t render_requests_ = 0u;
     std::uint64_t render_completions_ = 0u;
     std::uint64_t render_failures_ = 0u;
+    std::uint64_t render_overruns_ = 0u;
+    std::uint64_t next_render_generation_ = 1u;
+    std::optional<PvrRenderStartError> last_render_start_error_;
     std::uint64_t resets_ = 0u;
     SchedulerResetObserverId reset_observer_ = 0u;
     SchedulerLifetimeToken scheduler_lifetime_;
-    std::set<SchedulerEventId> render_events_;
+    std::map<SchedulerEventId, FrozenRenderJob> render_jobs_;
     std::function<PvrRenderResult()> render_result_observer_;
+    RenderJobFactory render_job_factory_;
+    std::function<void()> render_overrun_observer_;
     std::function<void(bool)> vblank_observer_;
     std::function<void()> hblank_observer_;
     std::function<void()> ta_reset_observer_;
@@ -419,6 +474,8 @@ enum class PvrTaPacketKind : std::uint8_t {
 
 inline constexpr std::size_t pvr_ta_packet_kind_count =
     static_cast<std::size_t>(PvrTaPacketKind::Count);
+inline constexpr std::uint64_t pvr_ta_maximum_frame_packets =
+    0x00800000u / 32u;
 
 struct PvrTaMetrics {
     std::uint64_t packets = 0u;
@@ -428,6 +485,39 @@ struct PvrTaMetrics {
     std::uint64_t list_completions = 0u;
     std::uint64_t frames = 0u;
     std::uint64_t continuations = 0u;
+    std::uint64_t rejected_packets = 0u;
+};
+
+enum class PvrTaInputErrorReason : std::uint8_t {
+    InvalidPacket,
+    UnsupportedPacket,
+    InvalidListOrder,
+    IncompletePacket,
+    BufferOverflow,
+};
+
+class PvrTaParserException final : public std::runtime_error {
+  public:
+    PvrTaParserException(PvrTaInputErrorReason reason, std::string detail)
+        : std::runtime_error(std::move(detail)), reason_(reason) {}
+
+    [[nodiscard]] PvrTaInputErrorReason reason() const noexcept { return reason_; }
+
+  private:
+    PvrTaInputErrorReason reason_;
+};
+
+struct PvrTaInputError {
+    PvrTaInputErrorReason reason = PvrTaInputErrorReason::InvalidPacket;
+    std::uint64_t packet = 0u;
+    std::string detail;
+
+    [[nodiscard]] bool operator==(const PvrTaInputError&) const = default;
+};
+
+struct PvrTaSubmitResult {
+    bool accepted = false;
+    std::optional<PvrTaInputError> error;
 };
 
 struct PvrTaFifoSnapshot {
@@ -455,12 +545,17 @@ struct PvrTaFifoSnapshot {
     std::optional<std::size_t> active_modifier_volume;
     std::optional<std::array<std::uint8_t, 32u>> pending_modifier_vertex_packet;
     PvrTaMetrics metrics{};
+    std::uint64_t frame_packets = 0u;
+    std::optional<PvrTaInputError> first_input_error;
 };
 
 class PvrTaFifo final {
   public:
     explicit PvrTaFifo(std::function<void(PvrListType)> list_observer = {});
     void submit(std::span<const std::uint8_t> packet);
+    [[nodiscard]] PvrTaSubmitResult submit_guest(std::span<const std::uint8_t> packet);
+    [[nodiscard]] PvrTaSubmitResult
+    reject_guest(PvrTaInputErrorReason reason, std::string detail);
     [[nodiscard]] PvrTaFrame finish_frame();
     [[nodiscard]] const PvrTaMetrics& metrics() const noexcept;
     [[nodiscard]] PvrTaFifoSnapshot snapshot() const;
@@ -468,6 +563,7 @@ class PvrTaFifo final {
     void reset() noexcept;
 
   private:
+    void discard_frame_state() noexcept;
     TileAccelerator accelerator_;
     std::function<void(PvrListType)> list_observer_;
     PvrListType active_list_ = PvrListType::Opaque;
@@ -493,6 +589,8 @@ class PvrTaFifo final {
     std::optional<std::size_t> active_modifier_volume_;
     std::optional<std::array<std::uint8_t, 32u>> pending_modifier_vertex_packet_;
     PvrTaMetrics metrics_;
+    std::uint64_t frame_packets_ = 0u;
+    std::optional<PvrTaInputError> first_input_error_;
 };
 
 inline constexpr std::size_t pvr_channel2_transfer_unit_size = 32u;
@@ -534,6 +632,7 @@ class PvrTaFifoMemoryDevice final : public MemoryDevice {
         [[nodiscard]] bool operator==(const Snapshot&) const = default;
     };
     [[nodiscard]] Snapshot snapshot() const noexcept;
+    void reset() noexcept;
 
   private:
     std::shared_ptr<PvrTaFifo> fifo_;
@@ -625,6 +724,8 @@ struct PvrGuestFrameProof {
     PvrScanoutDescriptor scanout;
     PvrFrame frame;
     PvrGuestFrameProofSource source = PvrGuestFrameProofSource::TaRender;
+    std::uint64_t write_generation_first = 0u;
+    std::uint64_t write_generation_last = 0u;
 };
 
 enum class PvrRenderError : std::uint8_t {
@@ -649,7 +750,10 @@ struct PvrSoftwareRendererSnapshot {
     std::size_t pending_render_evidence_bytes = 0u;
     std::uint64_t next_evidence_scan_generation = 0u;
     std::uint64_t next_direct_write_generation = 0u;
+    // Compatibility view for existing probe consumers; equals the last generation.
     std::uint64_t pending_direct_write_generation = 0u;
+    std::uint64_t pending_direct_first_write_generation = 0u;
+    std::uint64_t pending_direct_last_write_generation = 0u;
     std::vector<std::uint64_t> direct_dirty_words;
     std::size_t direct_dirty_byte_count = 0u;
     std::vector<std::uint8_t> direct_vram_shadow;
@@ -670,6 +774,13 @@ class PvrSoftwareRenderer final {
     void render(const PvrTaFrame& frame,
                 const PvrRegisterFile& registers,
                 LinearMemoryDevice& vram);
+    void render(const PvrTaFrame& frame,
+                const PvrRegisterSnapshot& registers,
+                LinearMemoryDevice& vram);
+    void render(const PvrTaFrame& frame,
+                const PvrRegisterSnapshot& registers,
+                LinearMemoryDevice& vram,
+                std::uint64_t render_generation);
     void set_guest_memory_access_memory(Memory* memory) noexcept;
     void observe_vram_write(std::uint32_t address,
                             std::size_t size,
@@ -694,7 +805,8 @@ class PvrSoftwareRenderer final {
     std::size_t pending_render_evidence_bytes_ = 0u;
     std::uint64_t next_evidence_scan_generation_ = 0u;
     std::uint64_t next_direct_write_generation_ = 1u;
-    std::uint64_t pending_direct_write_generation_ = 0u;
+    std::uint64_t pending_direct_first_write_generation_ = 0u;
+    std::uint64_t pending_direct_last_write_generation_ = 0u;
     std::vector<std::uint64_t> direct_dirty_words_;
     std::size_t direct_dirty_byte_count_ = 0u;
     std::vector<std::uint8_t> direct_vram_shadow_;

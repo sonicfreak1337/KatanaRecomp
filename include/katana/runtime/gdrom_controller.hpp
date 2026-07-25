@@ -1,7 +1,9 @@
 #pragma once
 
+#include "katana/runtime/block_guards.hpp"
 #include "katana/runtime/disc.hpp"
 #include "katana/runtime/disc_load_transaction.hpp"
+#include "katana/runtime/guest_buffer.hpp"
 #include "katana/runtime/memory.hpp"
 #include "katana/runtime/runtime.hpp"
 
@@ -23,6 +25,7 @@ struct G1DmaFault;
 
 inline constexpr std::uint32_t gdrom_register_physical_base = 0x005F7000u;
 inline constexpr std::size_t gdrom_register_size = 0x100u;
+inline constexpr std::size_t gdrom_guest_callback_capacity = 64u;
 
 struct GdRomProductStatus {
     std::uint8_t ata_status = 0u;
@@ -41,6 +44,8 @@ struct GdRomProductStatus {
     std::uint64_t stream_bytes_remaining = 0u;
     std::uint32_t transfer_bytes_remaining = 0u;
     std::size_t pending_guest_callbacks = 0u;
+    std::uint64_t coalesced_guest_callbacks = 0u;
+    std::uint64_t dropped_guest_callbacks = 0u;
 };
 
 enum class GdRomBiosRequestState : std::uint8_t {
@@ -111,6 +116,10 @@ struct GdRomBiosRequestSnapshot {
     std::uint32_t transfer_size = 0u;
     std::uint32_t transfer_transferred = 0u;
     bool transfer_active = false;
+    std::optional<GuestLinearBuffer> transfer_buffer;
+    bool guest_binding_present = false;
+    bool guest_binding_privileged = false;
+    std::optional<RuntimeAddressSpaceSnapshot> guest_address_space;
 };
 
 struct DreamcastGdRomSnapshot {
@@ -162,6 +171,8 @@ struct DreamcastGdRomSnapshot {
     std::uint32_t dma_completion_request = 0u;
     std::uint32_t pio_completion_request = 0u;
     std::vector<GdRomGuestCallback> pending_guest_callbacks;
+    std::uint64_t coalesced_guest_callbacks = 0u;
+    std::uint64_t dropped_guest_callbacks = 0u;
     std::optional<SchedulerEventId> packet_event;
     bool g1_bus_bound = false;
 };
@@ -232,6 +243,11 @@ class DreamcastGdRomController final {
         std::uint32_t transfer_size = 0u;
         std::uint32_t transfer_transferred = 0u;
         bool transfer_active = false;
+        std::optional<GuestLinearBuffer> transfer_buffer;
+        // The controller's memory_ identity is verified when the request is queued. This owned
+        // address-space handle and captured privilege level are then used at both admission and
+        // completion, independent of which CpuState invokes EXEC_SERVER later.
+        std::optional<GuestAddressSpaceBinding> guest_binding;
     };
     void execute_packet();
     void schedule_packet();
@@ -252,6 +268,7 @@ class DreamcastGdRomController final {
                      std::uint8_t ascq,
                      bool ata_abort = false) noexcept;
     void clear_sense() noexcept;
+    void notify_completion(std::uint64_t cycle) noexcept;
     void raise_command_irq(std::uint64_t cycle);
     void acknowledge_command_irq();
     [[nodiscard]] bool taskfile_blocks_bios() const noexcept;
@@ -259,14 +276,15 @@ class DreamcastGdRomController final {
     void pump_completions();
     [[nodiscard]] std::vector<std::uint8_t> build_packet_toc(std::uint32_t session) const;
     [[nodiscard]] std::array<std::uint32_t, 102u> build_bios_toc(std::uint32_t area) const;
-    void execute_bios_request(CpuState& cpu, BiosRequest& request);
-    void submit_bios_read(CpuState& cpu, BiosRequest& request);
+    void execute_bios_request(BiosRequest& request);
+    void submit_bios_read(BiosRequest& request);
     void submit_bios_stream(BiosRequest& request);
     [[nodiscard]] std::vector<std::uint8_t> preview_stream_bytes(BiosRequest& request,
                                                                  std::uint32_t length);
     void commit_stream_bytes(BiosRequest& request, std::uint32_t length);
     void finish_stream_transfer(BiosRequest& request);
     [[nodiscard]] BiosRequest* active_stream_transfer(GdRomBiosTransferKind kind) noexcept;
+    void enqueue_guest_callback(GdRomGuestCallback callback) noexcept;
     void queue_stream_callback(std::uint32_t request_id, GdRomBiosTransferKind kind);
     [[nodiscard]] DiscLoadCommit commit_disc_load(DiscLoadRoute route,
                                                   std::uint32_t guest_destination,
@@ -276,9 +294,12 @@ class DreamcastGdRomController final {
                                                   DiscLoadSourceRange source_range = {});
     void remember_bios_request(const BiosRequest& request) noexcept;
     [[nodiscard]] const BiosRequest* find_bios_request(std::uint32_t id) const noexcept;
+    [[nodiscard]] bool bios_request_id_reserved(std::uint32_t id) const noexcept;
+    [[nodiscard]] std::optional<std::uint32_t> next_available_bios_request_id() const noexcept;
     std::uint32_t finish_bios_call(GdRomBiosCallEvent event, std::uint32_t result);
     [[nodiscard]] static std::uint32_t fad_to_lba(std::uint32_t fad) noexcept;
     void reset_transport() noexcept;
+    void handle_scheduler_reset() noexcept;
     Memory& memory_;
     EventScheduler& scheduler_;
     GdRomDrive drive_;
@@ -340,6 +361,8 @@ class DreamcastGdRomController final {
     std::uint32_t dma_completion_request_ = 0u;
     std::uint32_t pio_completion_request_ = 0u;
     std::vector<GdRomGuestCallback> pending_guest_callbacks_;
+    std::uint64_t coalesced_guest_callbacks_ = 0u;
+    std::uint64_t dropped_guest_callbacks_ = 0u;
     DreamcastG1BusController* g1_bus_ = nullptr;
     ModuleLoadObserver module_load_observer_;
     DiscLoadTransactionExecutor load_transaction_executor_;
@@ -350,6 +373,7 @@ class DreamcastGdRomController final {
     std::function<void()> command_ack_observer_;
     std::optional<SchedulerEventId> packet_event_;
     SchedulerLifetimeToken scheduler_lifetime_;
+    SchedulerResetObserverId reset_observer_ = 0u;
 };
 
 [[nodiscard]] std::shared_ptr<DreamcastGdRomController>

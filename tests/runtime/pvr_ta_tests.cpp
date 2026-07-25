@@ -190,7 +190,7 @@ int main() {
     }
 
     TileAccelerator ta;
-    require(throws<std::logic_error>([&] { ta.submit_vertex(vertex(0.0f), true); }),
+    require(throws<PvrTaParserException>([&] { ta.submit_vertex(vertex(0.0f), true); }),
             "Vertex ohne offene TA-Liste wird akzeptiert.");
     ta.begin_list(PvrListType::Opaque);
     ta.submit_vertex(vertex(0.0f), false);
@@ -212,7 +212,8 @@ int main() {
     TileAccelerator short_strip;
     short_strip.begin_list(PvrListType::Opaque);
     short_strip.submit_vertex(vertex(0.0f), false);
-    require(throws<std::invalid_argument>([&] { short_strip.submit_vertex(vertex(1.0f), true); }),
+    require(throws<PvrTaParserException>(
+                [&] { short_strip.submit_vertex(vertex(1.0f), true); }),
             "TA akzeptiert einen Strip mit weniger als drei Vertices.");
     TileAccelerator ordering;
     ordering.begin_list(PvrListType::Translucent);
@@ -220,12 +221,14 @@ int main() {
     ordering.submit_vertex(vertex(1.0f), false);
     ordering.submit_vertex(vertex(2.0f), true);
     ordering.end_list();
-    require(throws<std::logic_error>([&] { ordering.begin_list(PvrListType::Opaque); }),
+    require(throws<PvrTaParserException>(
+                [&] { ordering.begin_list(PvrListType::Opaque); }),
             "TA akzeptiert rueckwaertige Listenreihenfolge.");
     TileAccelerator empty_ordering;
     empty_ordering.begin_list(PvrListType::Translucent);
     empty_ordering.end_list();
-    require(throws<std::logic_error>([&] { empty_ordering.begin_list(PvrListType::Opaque); }),
+    require(throws<PvrTaParserException>(
+                [&] { empty_ordering.begin_list(PvrListType::Opaque); }),
             "TA vergisst die Reihenfolge einer leeren Liste.");
 
     std::uint32_t empty_eol_notifications = 0u;
@@ -374,7 +377,7 @@ int main() {
 
     PvrTaFifo open_list_fifo;
     open_list_fifo.submit(header(0u));
-    require(throws<std::logic_error>([&] { open_list_fifo.continue_list(); }),
+    require(throws<PvrTaParserException>([&] { open_list_fifo.continue_list(); }),
             "TA_LIST_CONT akzeptiert eine noch offene Objektliste.");
 
     PvrTaFifo float_fifo;
@@ -405,7 +408,8 @@ int main() {
             "64-Byte-Floatvertex verliert Base- oder Offsetfarbe.");
 
     PvrTaFifo invalid_mode2;
-    require(throws<std::logic_error>([&] { invalid_mode2.submit(header((3u << 4u) | 0x08u)); }),
+    require(throws<PvrTaParserException>(
+                [&] { invalid_mode2.submit(header((3u << 4u) | 0x08u)); }),
             "Intensity-Mode 2 wird ohne vorherige Mode-1-Face-Color akzeptiert.");
 
     PvrTaFifo intensity_fifo;
@@ -454,9 +458,9 @@ int main() {
         PvrYuvConverterMemoryDevice yuv_converter(
             yuv_registers, yuv_vram, [&] { yuv_completed = true; });
         yuv_converter.set_guest_memory_access_memory(&yuv_access_memory);
-        constexpr std::uint32_t yuv_destination = 0x2000u;
+        constexpr std::uint32_t yuv_target = 0x2000u;
         yuv_registers->write(pvr_register::YuvConfig, 0u);
-        yuv_registers->write(pvr_register::YuvAddress, yuv_destination);
+        yuv_registers->write(pvr_register::YuvAddress, yuv_target);
         std::array<std::uint8_t, 384u> macroblock{};
         std::fill_n(macroblock.begin(), 64u, std::uint8_t{0x11u});
         std::fill_n(macroblock.begin() + 64u, 64u, std::uint8_t{0x22u});
@@ -471,7 +475,7 @@ int main() {
         for (std::size_t index = 0u; index < yuv_accesses.count; ++index) {
             const auto& access = yuv_accesses.events[index];
             const auto expected_offset =
-                yuv_destination + static_cast<std::uint32_t>(index * 2u);
+                yuv_target + static_cast<std::uint32_t>(index * 2u);
             const auto expected_value =
                 static_cast<std::uint32_t>((index & 1u) == 0u ? 0x3311u : 0x3322u);
             require(access.operation == MemoryAccessOperation::Write &&
@@ -519,7 +523,7 @@ int main() {
             unobserved_vram,
             [&] { unobserved_completed = true; });
         unobserved_registers->write(pvr_register::YuvConfig, 0u);
-        unobserved_registers->write(pvr_register::YuvAddress, yuv_destination);
+        unobserved_registers->write(pvr_register::YuvAddress, yuv_target);
         for (std::size_t index = 0u; index < macroblock.size(); ++index)
             unobserved_converter.write_u8(
                 static_cast<std::uint32_t>(index), macroblock[index]);
@@ -555,6 +559,91 @@ int main() {
                     yuv_accesses.count == 0u && !yuv_accesses.overflow,
                 "Abgelehnter PVR-YUV-Ausgabebereich erzeugt Speicherzugriffsevidenz.");
     }
+
+    PvrTaFifo typed_error_fifo;
+    Packet unsupported_parameter{};
+    put_u32(unsupported_parameter, 0u, 0x60000000u);
+    const auto unsupported_result = typed_error_fifo.submit_guest(unsupported_parameter);
+    require(!unsupported_result.accepted && unsupported_result.error &&
+                unsupported_result.error->reason ==
+                    PvrTaInputErrorReason::UnsupportedPacket &&
+                typed_error_fifo.metrics().packets == 0u &&
+                typed_error_fifo.metrics().rejected_packets == 1u,
+            "TA-Gasteingabe liefert keinen typisierten, transaktionalen Parserfehler.");
+    auto direct_parser_reason = PvrTaInputErrorReason::InvalidPacket;
+    try {
+        typed_error_fifo.submit(unsupported_parameter);
+    } catch (const PvrTaParserException& error) {
+        direct_parser_reason = error.reason();
+    }
+    require(direct_parser_reason == PvrTaInputErrorReason::UnsupportedPacket,
+            "Direkter TA-Parserfehler traegt keinen stabilen Fehlergrund.");
+
+    PvrTaFifo recovery_fifo;
+    require(recovery_fifo.submit_guest(header(0u)).accepted &&
+                !recovery_fifo.submit_guest(unsupported_parameter).accepted,
+            "TA-Recovery-Test erreicht die strukturierte Rejected-Grenze nicht.");
+    const auto rejected_open_frame = recovery_fifo.snapshot();
+    require(!rejected_open_frame.accelerator.list_open &&
+                !rejected_open_frame.accelerator.frame_has_list &&
+                rejected_open_frame.frame_packets == 0u &&
+                rejected_open_frame.metrics.packets == 1u &&
+                rejected_open_frame.metrics.rejected_packets == 1u,
+            "TA-Rejected-Grenze behaelt partiell mutierten Framezustand.");
+    require(recovery_fifo.submit_guest(header(0u)).accepted &&
+                recovery_fifo.submit_guest(Packet{}).accepted &&
+                recovery_fifo.finish_frame().primitives.empty(),
+            "TA-Rejected-Grenze verhindert einen nachfolgenden gueltigen Frame.");
+
+    auto aperture_fifo = std::make_shared<PvrTaFifo>();
+    PvrTaFifoMemoryDevice aperture(aperture_fifo);
+    const auto write_aperture_packet = [&](const Packet& packet,
+                                           const std::uint32_t base) {
+        for (std::size_t byte = 0u; byte < packet.size(); ++byte)
+            aperture.write_u8(base + static_cast<std::uint32_t>(byte), packet[byte]);
+    };
+    require(throws<PvrTaParserException>(
+                [&] { write_aperture_packet(unsupported_parameter, 0u); }) &&
+                !aperture.snapshot().packet_active &&
+                aperture.snapshot().written_mask == 0u &&
+                aperture_fifo->metrics().packets == 0u &&
+                aperture_fifo->metrics().rejected_packets == 1u,
+            "Abgelehntes TA-Aperturpaket bleibt aktiv oder entkommt untypisiert.");
+    write_aperture_packet(header(0u), 0x20u);
+    write_aperture_packet(Packet{}, 0x40u);
+    require(aperture_fifo->metrics().packets == 2u &&
+                aperture_fifo->finish_frame().primitives.empty(),
+            "TA-Apertur bleibt nach einer Ablehnung verklemmt.");
+    const auto partial_header = header(0u);
+    write_aperture_packet(partial_header, 0x60u);
+    aperture.write_u8(0x80u, partial_header[0u]);
+    require(throws<PvrTaParserException>(
+                [&] { aperture.write_u8(0xA0u, partial_header[1u]); }) &&
+                aperture.snapshot() == PvrTaFifoMemoryDevice::Snapshot{} &&
+                !aperture_fifo->snapshot().accelerator.list_open &&
+                !aperture_fifo->snapshot().accelerator.frame_has_list &&
+                aperture_fifo->snapshot().frame_packets == 0u &&
+                aperture_fifo->metrics().packets == 3u &&
+                aperture_fifo->metrics().rejected_packets == 2u,
+            "TA-Apertur-Basiswechsel entkommt untypisiert oder behaelt Frame-/Teilzustand.");
+    write_aperture_packet(partial_header, 0xC0u);
+    write_aperture_packet(Packet{}, 0xE0u);
+    require(aperture_fifo->finish_frame().primitives.empty(),
+            "TA-Apertur erholt sich nach einem partiellen Basiswechsel nicht.");
+    write_aperture_packet(partial_header, 0x100u);
+    aperture.write_u8(0x120u, partial_header[0u]);
+    require(throws<PvrTaParserException>(
+                [&] { aperture.write_u8(0x120u, partial_header[0u]); }) &&
+                aperture.snapshot() == PvrTaFifoMemoryDevice::Snapshot{} &&
+                !aperture_fifo->snapshot().accelerator.list_open &&
+                aperture_fifo->snapshot().frame_packets == 0u &&
+                aperture_fifo->metrics().rejected_packets == 3u,
+            "Doppeltes TA-Aperturbyte entkommt untypisiert oder behaelt Frame-/Teilzustand.");
+    for (std::uint32_t byte = 0u; byte < 4u; ++byte)
+        aperture.write_u8(0x140u + byte, partial_header[byte]);
+    aperture.reset();
+    require(aperture.snapshot() == PvrTaFifoMemoryDevice::Snapshot{},
+            "TA-Aperturreset behaelt ein partielles Parameterpaket.");
 
     std::cout << "KR-2803 Tile-Accelerator-Grundpfad erfolgreich.\n";
 }

@@ -22,7 +22,9 @@
 #include "katana/runtime/dreamcast_boot.hpp"
 #include "katana/runtime/guest_program_range.hpp"
 #include "katana/runtime/packed_disc.hpp"
+#include "katana/runtime/platform_services.hpp"
 #include "katana/runtime/wait_loop_trace.hpp"
+#include "katana/sh4/instruction_timing.hpp"
 
 #include <algorithm>
 #include <array>
@@ -116,6 +118,68 @@ select_functions(const std::span<const katana::ir::Function> program,
     return selected;
 }
 
+std::optional<std::size_t>
+memory_access_width_bytes(const katana::ir::OperandWidth width) noexcept {
+    using Width = katana::ir::OperandWidth;
+    switch (width) {
+    case Width::Bits8:
+        return 1u;
+    case Width::Bits16:
+        return 2u;
+    case Width::Bits32:
+        return 4u;
+    case Width::Bits64:
+        return 8u;
+    case Width::None:
+    case Width::Bit1:
+    case Width::Bits4:
+    case Width::Bits12:
+        return std::nullopt;
+    }
+    return std::nullopt;
+}
+
+bool statically_proves_direct_main_ram_access(
+    const katana::ir::Instruction& instruction) noexcept {
+    if (instruction.memory_effects.access == katana::ir::MemoryAccessKind::None ||
+        instruction.memory_effects.access_count != 1u || !instruction.effective_address)
+        return false;
+    const auto width = memory_access_width_bytes(instruction.memory_effects.width);
+    if (!width) return false;
+
+    const auto address = *instruction.effective_address;
+    const auto last = static_cast<std::uint64_t>(address) + *width - 1u;
+    if (last > std::numeric_limits<std::uint32_t>::max()) return false;
+    const auto segment = address & 0xE0000000u;
+    if ((segment != 0x80000000u && segment != 0xA0000000u) ||
+        (static_cast<std::uint32_t>(last) & 0xE0000000u) != segment)
+        return false;
+
+    constexpr std::uint32_t physical_begin = 0x0C000000u;
+    constexpr std::uint32_t physical_end = 0x10000000u;
+    const auto physical = address & 0x1FFFFFFFu;
+    return physical >= physical_begin && physical < physical_end &&
+           *width <= static_cast<std::size_t>(physical_end - physical);
+}
+
+void annotate_proven_linear_ram_accesses(std::span<katana::ir::Function> program) noexcept {
+    for (auto& function : program) {
+        for (auto& block : function.blocks) {
+            for (auto& instruction : block.instructions) {
+                if (instruction.memory_effects.region ==
+                        katana::ir::MemoryRegionKind::Unknown &&
+                    statically_proves_direct_main_ram_access(instruction))
+                    instruction.memory_effects.region = katana::ir::MemoryRegionKind::NormalRam;
+            }
+        }
+    }
+}
+
+bool has_proven_linear_ram_access(const katana::ir::Instruction& instruction) noexcept {
+    return instruction.memory_effects.access != katana::ir::MemoryAccessKind::None &&
+           instruction.memory_effects.region == katana::ir::MemoryRegionKind::NormalRam;
+}
+
 std::string generated_header(const std::string& entry_namespace) {
     return "#pragma once\n\n"
            "#include \"katana/runtime/block_table.hpp\"\n"
@@ -162,9 +226,7 @@ std::string generated_header(const std::string& entry_namespace) {
            "};\n"
            "const RuntimeMaterializationStatus& runtime_materialization_status() noexcept;\n"
            "void register_latent_aot_modules(\n"
-           "    const std::shared_ptr<const katana::runtime::DiscSource>& source,\n"
            "    std::string_view content_identity,\n"
-           "    katana::runtime::ExecutableModuleCatalog& modules,\n"
            "    katana::runtime::ExecutableDiscLoadTransactionCoordinator& transactions);\n"
            "RuntimeRunResult run_runtime(katana::runtime::CpuState& cpu,\n"
            "                             katana::runtime::PlatformServices& services,\n"
@@ -583,13 +645,8 @@ std::string handwritten_main(const std::string& entry_namespace,
             "                \"platform-dma-start\", request.length,\n"
             "                (static_cast<std::uint64_t>(request.source) << 32u) |\n"
             "                    request.destination);\n"
-            "        state_.dmac->write_source(0u, request.source);\n"
-           "        state_.dmac->write_destination(0u, request.destination);\n"
-           "        state_.dmac->write_count(0u, request.length);\n"
-           "        state_.dmac->write_control(0u, 0x00005400u |\n"
-           "            katana::runtime::Sh4Dmac::interrupt_enable |\n"
-           "            katana::runtime::Sh4Dmac::channel_enable);\n"
-           "        state_.dmac->write_operation(katana::runtime::Sh4Dmac::master_enable);\n"
+            "        state_.dmac->start_byte_transfer(\n"
+            "            0u, request.source, request.destination, request.length, true);\n"
            "        return {0u, false};\n"
            "    }\n"
            "    katana::runtime::PlatformFallbackResult controlled_fallback(\n"
@@ -604,7 +661,10 @@ std::string handwritten_main(const std::string& entry_namespace,
            "                  std::uint32_t address) override {\n"
            "        katana::runtime::prefetch(cpu, address);\n"
            "        return state_.store_queues->prefetch(\n"
-           "            address, instruction, cpu.retired_guest_instructions);\n"
+           "            address,\n"
+           "            instruction,\n"
+           "            cpu.retired_guest_instructions,\n"
+           "            cpu.attempted_guest_instructions);\n"
            "    }\n"
            "    katana::runtime::PlatformLifecycleState poll_host_lifecycle() override {\n"
            "        if (runtime_probe_mode_) {\n"
@@ -626,11 +686,18 @@ std::string handwritten_main(const std::string& entry_namespace,
            "        return cached_lifecycle_;\n"
            "    }\n"
            "    void observe_guest_checkpoint(std::uint32_t address) noexcept override {\n"
+           "        observe_guest_block_completion(address, 0u, false, false);\n"
+           "    }\n"
+           "    void observe_guest_block_completion(\n"
+           "            std::uint32_t address, std::uint64_t retired_delta,\n"
+           "            bool new_exception, bool exception_exit) noexcept override {\n"
            "        ++executed_blocks_;\n"
-           "        if (guest_checkpoint_) return;\n"
            "        if (!guest_program_range_matcher_.contains_instruction(\n"
            "                cpu_, address)) return;\n"
-           "        guest_checkpoint_ = true;\n"
+           "        guest_program_dispatched_ = true;\n"
+           "        if (guest_program_progressed_ || retired_delta == 0u || new_exception ||\n"
+           "            exception_exit) return;\n"
+           "        guest_program_progressed_ = true;\n"
            "        observe_runtime_checkpoint(\n"
            "            katana::runtime::SystemReplayCheckpointKind::GuestProgramEntered,\n"
            "            katana::runtime::RuntimeProbeCheckpoint::GuestProgramEntered);\n"
@@ -662,46 +729,61 @@ std::string handwritten_main(const std::string& entry_namespace,
            "            if (replay_log_ != nullptr) replay_log_->note_dropped_event();\n"
            "        }\n"
            "    }\n"
-           "    bool guest_checkpoint_reached() const noexcept { return guest_checkpoint_; }\n"
+           "    bool guest_checkpoint_reached() const noexcept {\n"
+           "        return guest_program_progressed_;\n"
+           "    }\n"
+           "    bool guest_program_dispatched() const noexcept {\n"
+           "        return guest_program_dispatched_;\n"
+           "    }\n"
+           "    bool guest_program_progressed() const noexcept {\n"
+           "        return guest_program_progressed_;\n"
+           "    }\n"
            "    std::uint64_t executed_blocks() const noexcept { return executed_blocks_; }\n"
            "    std::uint64_t fallback_count() const noexcept { return fallback_count_; }\n"
-           "    void register_executable_block(std::uint32_t address, std::uint32_t size,\n"
-           "                                   std::string_view identity) override {\n"
+           "    void register_executable_block(\n"
+           "            std::uint32_t address, std::uint32_t physical_origin,\n"
+           "            std::uint32_t size, std::string_view identity,\n"
+           "            katana::runtime::ExecutableBlockTimingClass timing_class,\n"
+           "            std::uint64_t maximum_guest_cycles) override {\n"
            "        static_cast<void>(state_.code_tracker->register_block(\n"
            "            {std::string(identity), "
-           "katana::runtime::canonical_physical_address(address),\n"
+           "katana::runtime::canonical_physical_address(physical_origin),\n"
            "             size, \"generated-port\", {},\n"
            "             katana::runtime::ExecutableBlockOrigin::ImageSegment}));\n"
-           "        const auto maximum_guest_instructions =\n"
-           "            std::max<std::uint64_t>(1u, (static_cast<std::uint64_t>(size) + 1u) / 2u);\n"
            "        executable_blocks_.insert_or_assign(address, ExecutableBlockRegistration{\n"
-           "            std::string(identity), katana::runtime::base_guest_cycles_per_instruction *\n"
-           "                maximum_guest_instructions});\n"
+           "            std::string(identity), "
+           "katana::runtime::canonical_physical_address(physical_origin),\n"
+           "            size, timing_class, maximum_guest_cycles});\n"
            "    }\n"
            "    void allow_executable_block_chaining(std::uint32_t address) override {\n"
            "        chainable_blocks_.insert(address);\n"
            "    }\n"
            "    void begin_executable_block(\n"
+           "            std::uint32_t virtual_start, std::uint32_t physical_start,\n"
+           "            std::uint32_t size,\n"
            "            const katana::runtime::BlockVariantKey& variant) noexcept override {\n"
+           "        static_cast<void>(virtual_start);\n"
+           "        static_cast<void>(physical_start);\n"
+           "        static_cast<void>(size);\n"
            "        active_block_variant_ = variant;\n"
-           "        chain_retired_baseline_ = cpu_.retired_guest_instructions;\n"
            "    }\n"
            "    bool can_chain_executable_block(std::uint32_t address) const noexcept override {\n"
            "        if (!local_block_chaining_enabled_ || !active_block_variant_ ||\n"
            "            !state_.address_space ||\n"
-           "            (!cpu_.interrupts_blocked() && cpu_.interrupt_mask() != 15u) ||\n"
-           "            cpu_.retired_guest_instructions < chain_retired_baseline_)\n"
+           "            (!cpu_.interrupts_blocked() && cpu_.interrupt_mask() != 15u))\n"
            "            return false;\n"
-           "        const auto pending_instructions =\n"
-           "            cpu_.retired_guest_instructions - chain_retired_baseline_;\n"
-           "        if (pending_instructions == 0u ||\n"
-           "            pending_instructions > std::numeric_limits<std::uint64_t>::max() /\n"
-           "                katana::runtime::base_guest_cycles_per_instruction) return false;\n"
-           "        const auto pending_guest_cycles =\n"
-           "            katana::runtime::base_guest_cycles_per_instruction * pending_instructions;\n"
+           "        const auto pending_guest_cycles = cpu_.pending_guest_cycles;\n"
+           "        if (pending_guest_cycles == 0u) return false;\n"
+           "        if (!guest_program_progressed_ &&\n"
+           "            guest_program_range_matcher_.contains_instruction(cpu_, address))\n"
+           "            return false;\n"
            "        const auto found = executable_blocks_.find(address);\n"
            "        if (!chainable_blocks_.contains(address) ||\n"
            "            found == executable_blocks_.end() ||\n"
+           "            (found->second.timing_class !=\n"
+           "                 katana::runtime::ExecutableBlockTimingClass::PureCpu &&\n"
+           "             found->second.timing_class !=\n"
+           "                 katana::runtime::ExecutableBlockTimingClass::LinearRamOnly) ||\n"
            "            found->second.maximum_guest_cycles > local_block_chain_guest_cycle_budget ||\n"
            "            pending_guest_cycles > local_block_chain_guest_cycle_budget -\n"
            "                found->second.maximum_guest_cycles) return false;\n"
@@ -715,15 +797,33 @@ std::string handwritten_main(const std::string& entry_namespace,
            "        if (const auto event = state_.scheduler->next_event_cycle(); event &&\n"
            "            *event <= current_cycle + prospective_guest_cycles) return false;\n"
            "        try {\n"
-           "            static_cast<void>(state_.address_space->translate(\n"
+           "            const auto inspected = state_.address_space->inspect_translation(\n"
            "                address, katana::runtime::TranslationAccess::Instruction,\n"
-           "                cpu_.privileged_mode()));\n"
+           "                cpu_.privileged_mode());\n"
+           "            if (katana::runtime::canonical_physical_address(\n"
+           "                    inspected.physical_address) != found->second.physical_origin)\n"
+           "                return false;\n"
+           "            if (!state_.address_space->prove_instruction_mapping(\n"
+           "                    address, found->second.physical_origin, found->second.size,\n"
+           "                    cpu_.privileged_mode())) return false;\n"
            "            const auto current = katana::runtime::block_variant_key(\n"
-           "                state_.address_space->guard_for(address, cpu_.read_fpscr()),\n"
+           "                state_.address_space->guard_for(\n"
+           "                    address, cpu_.read_fpscr(), cpu_.privileged_mode()),\n"
            "                active_block_variant_->runtime_generation);\n"
            "            if (current != *active_block_variant_) return false;\n"
            "        } catch (...) { return false; }\n"
-           "        return state_.code_tracker->dispatchable(found->second.identity);\n"
+           "        if (!state_.code_tracker->dispatchable(found->second.identity)) return false;\n"
+           "        try {\n"
+           "            const auto fetched_physical = katana::runtime::translate_guest_address(\n"
+           "                cpu_, address, katana::runtime::MemoryAccessOperation::Read,\n"
+           "                katana::runtime::MemoryAccessWidth::Halfword, true);\n"
+           "            if (katana::runtime::canonical_physical_address(fetched_physical) !=\n"
+           "                found->second.physical_origin) return false;\n"
+           "        } catch (...) { return false; }\n"
+           "        cpu_.active_block_virtual_start = address;\n"
+           "        cpu_.active_block_physical_start = found->second.physical_origin;\n"
+           "        cpu_.active_block_size = found->second.size;\n"
+           "        return true;\n"
            "    }\n"
             "    katana::runtime::ExecutableCodeTracker* executable_code_tracker() noexcept "
            "override {\n"
@@ -768,14 +868,18 @@ std::string handwritten_main(const std::string& entry_namespace,
            "    std::uint64_t fallback_count_ = 0u;\n"
            "    struct ExecutableBlockRegistration {\n"
            "        std::string identity;\n"
+           "        std::uint32_t physical_origin = 0u;\n"
+           "        std::uint32_t size = 0u;\n"
+           "        katana::runtime::ExecutableBlockTimingClass timing_class =\n"
+           "            katana::runtime::ExecutableBlockTimingClass::NeverChain;\n"
            "        std::uint64_t maximum_guest_cycles = 0u;\n"
            "    };\n"
            "    static constexpr std::uint64_t local_block_chain_guest_cycle_budget = 4'096u;\n"
            "    std::unordered_map<std::uint32_t, ExecutableBlockRegistration> executable_blocks_;\n"
            "    std::unordered_set<std::uint32_t> chainable_blocks_;\n"
            "    std::optional<katana::runtime::BlockVariantKey> active_block_variant_;\n"
-           "    std::uint64_t chain_retired_baseline_ = 0u;\n"
-           "    bool guest_checkpoint_ = false;\n"
+           "    bool guest_program_dispatched_ = false;\n"
+           "    bool guest_program_progressed_ = false;\n"
             "    bool eager_host_poll_ = false;\n"
               "    bool runtime_probe_mode_ = false;\n"
               "    bool local_block_chaining_enabled_ = false;\n"
@@ -1028,8 +1132,7 @@ std::string handwritten_main(const std::string& entry_namespace,
            "            " +
            entry_namespace +
            "::register_latent_aot_modules(\n"
-           "                boot.source, boot.content_identity, *state.module_catalog,\n"
-           "                *state.disc_load_transactions);\n"
+           "                boot.content_identity, *state.disc_load_transactions);\n"
            "        }\n"
            "        const auto* diagnostics_value = std::getenv(\"KATANA_PORT_DIAGNOSTICS\");\n"
            "        const bool detailed_diagnostics = diagnostics_value != nullptr &&\n"
@@ -1054,7 +1157,7 @@ std::string handwritten_main(const std::string& entry_namespace,
            "                 \"KatanaRecomp Game\", 640u, 480u, true});\n"
            "        }\n"
            "        std::uint64_t presented_frames = 0u;\n"
-           "        bool first_guest_frame_reported = false;\n"
+           "        katana::runtime::GuestFrameEvidenceTracker guest_frame_evidence;\n"
            "        bool first_presented_frame_reported = false;\n"
             "        std::uint64_t host_sequence = 1u;\n"
             "        PortPlatformServices* runtime_observer = nullptr;\n"
@@ -1090,12 +1193,25 @@ std::string handwritten_main(const std::string& entry_namespace,
            "        const auto pump_guest_frame = [&] {\n"
            "            const auto result = katana::runtime::pump_guest_frame_proof(\n"
            "                *state.pvr_renderer, video.get());\n"
-            "            if (result.guest_frame_proven && !first_guest_frame_reported) {\n"
-             "                std::cout << \"KR_FIRST_GUEST_FRAME\\n\";\n"
-             "                if (runtime_observer != nullptr)\n"
-             "                    runtime_observer->observe_first_guest_frame();\n"
-             "                first_guest_frame_reported = true;\n"
+           "            const auto evidence = guest_frame_evidence.observe(\n"
+           "                result, runtime_observer != nullptr &&\n"
+           "                            runtime_observer->guest_program_progressed());\n"
+           "            if (katana::runtime::has_guest_frame_evidence_marker(\n"
+           "                    evidence.markers,\n"
+           "                    katana::runtime::GuestFrameEvidenceMarker::FirstGuestScanout)) {\n"
+           "                std::cout << \"KR_FIRST_GUEST_SCANOUT\\n\";\n"
+           "                std::cout << \"KR_FIRST_GUEST_FRAME\\n\";\n"
+           "                if (runtime_observer != nullptr)\n"
+           "                    runtime_observer->observe_first_guest_frame();\n"
            "            }\n"
+           "            if (katana::runtime::has_guest_frame_evidence_marker(\n"
+           "                    evidence.markers,\n"
+           "                    katana::runtime::GuestFrameEvidenceMarker::FirstTaFrame))\n"
+           "                std::cout << \"KR_FIRST_TA_FRAME\\n\";\n"
+           "            if (katana::runtime::has_guest_frame_evidence_marker(\n"
+           "                    evidence.markers,\n"
+           "                    katana::runtime::GuestFrameEvidenceMarker::FirstGameplayFrame))\n"
+           "                std::cout << \"KR_FIRST_GAMEPLAY_FRAME\\n\";\n"
            "            if (video) presented_frames = video->presented_frames();\n"
            "            if (result.frame_presented &&\n"
            "                !first_presented_frame_reported) {\n"
@@ -1378,10 +1494,12 @@ std::string handwritten_main(const std::string& entry_namespace,
            "                      << input->injected_events() << '\\n';\n"
            "            return 0;\n"
            "        }\n"
+           "        if (services.guest_program_dispatched())\n"
+           "            std::cout << \"KR_GUEST_PROGRAM_DISPATCHED\\n\";\n"
            "        const std::uint64_t silent_failures =\n"
            "            (state.loaded_boot_bytes == 0u ? 1u : 0u) +\n"
            "            (result.scheduler_cycle == 0u ? 1u : 0u) +\n"
-           "            (!services.guest_checkpoint_reached() ? 1u : 0u) +\n"
+           "            (!services.guest_program_progressed() ? 1u : 0u) +\n"
            "            (cpu.trap_pending ? 1u : 0u) +\n"
            "            (cpu.last_exception_cause != katana::runtime::ExceptionCause::None ? 1u : "
            "0u) +\n"
@@ -1404,6 +1522,7 @@ std::string handwritten_main(const std::string& entry_namespace,
            "                      << services.executed_blocks() << '\\n';\n"
            "            return 3;\n"
            "        }\n"
+           "        std::cout << \"KR_GUEST_PROGRAM_PROGRESSED\\n\";\n"
            "        std::cout << \"KR_GUEST_PROGRAM_ENTERED\\n\";\n"
            "        std::cout << \"KATANA_RUNTIME_METRICS silent_failures=\"\n"
            "                  << silent_failures << \" guest_cycles=\"\n"
@@ -1663,6 +1782,8 @@ runtime_dispatch_artifacts(const std::string& entry_namespace,
         std::uint32_t size;
         const char* end_kind;
         katana::ir::DynamicTargetClass target_class;
+        const char* timing_class;
+        std::uint64_t maximum_guest_cycles;
     };
     std::size_t block_count = 0u;
     for (const auto& function : program) block_count += function.blocks.size();
@@ -1676,11 +1797,46 @@ runtime_dispatch_artifacts(const std::string& entry_namespace,
                 throw std::runtime_error("IR-Basic-Block besitzt mehrere Funktionsbesitzer.");
             std::uint32_t end = block.start_address + 2u;
             const katana::ir::Instruction* terminal = nullptr;
+            auto timing_class = katana::runtime::ExecutableBlockTimingClass::PureCpu;
+            std::uint64_t maximum_guest_cycles = 0u;
+            std::unordered_set<std::uint32_t> timed_instructions;
             for (const auto& instruction : block.instructions) {
                 end = std::max(end, instruction.source_address + 2u);
                 if (instruction.delay_slot.role != katana::ir::DelaySlotRole::Slot)
                     terminal = &instruction;
+                if (!timed_instructions.insert(instruction.source_address).second) continue;
+                const auto timing = katana::sh4::instruction_timing(instruction.original_opcode);
+                maximum_guest_cycles += timing.guest_cycles;
+                if (timing.timing_class ==
+                    katana::sh4::InstructionTimingClass::DeviceBusBoundary) {
+                    timing_class = katana::runtime::ExecutableBlockTimingClass::NeverChain;
+                } else if (timing.requires_cycle_flush &&
+                           timing_class !=
+                               katana::runtime::ExecutableBlockTimingClass::NeverChain) {
+                    if (has_proven_linear_ram_access(instruction)) {
+                        if (timing_class ==
+                            katana::runtime::ExecutableBlockTimingClass::PureCpu)
+                            timing_class =
+                                katana::runtime::ExecutableBlockTimingClass::LinearRamOnly;
+                    } else {
+                        timing_class =
+                            katana::runtime::ExecutableBlockTimingClass::RequiresCycleFlush;
+                    }
+                }
             }
+            const auto timing_class_name = [&] {
+                switch (timing_class) {
+                case katana::runtime::ExecutableBlockTimingClass::PureCpu:
+                    return "PureCpu";
+                case katana::runtime::ExecutableBlockTimingClass::LinearRamOnly:
+                    return "LinearRamOnly";
+                case katana::runtime::ExecutableBlockTimingClass::RequiresCycleFlush:
+                    return "RequiresCycleFlush";
+                case katana::runtime::ExecutableBlockTimingClass::NeverChain:
+                    return "NeverChain";
+                }
+                return "NeverChain";
+            }();
             dispatch_blocks.push_back({function.entry_address,
                                        block.start_address,
                                        terminal != nullptr ? terminal->source_address
@@ -1689,7 +1845,10 @@ runtime_dispatch_artifacts(const std::string& entry_namespace,
                                        end_kind(block),
                                        terminal != nullptr
                                             ? terminal->dynamic_target_class
-                                            : katana::ir::DynamicTargetClass::NotApplicable});
+                                            : katana::ir::DynamicTargetClass::NotApplicable,
+                                       timing_class_name,
+                                       std::max<std::uint64_t>(1u,
+                                                               maximum_guest_cycles)});
         }
     }
     std::sort(dispatch_blocks.begin(), dispatch_blocks.end(), [](const auto& left, const auto& right) {
@@ -1764,7 +1923,9 @@ runtime_dispatch_artifacts(const std::string& entry_namespace,
         << "void register_executable_block(\n"
         << "    const katana::runtime::RuntimeBlockTable& table,\n"
         << "    katana::runtime::PlatformServices& services,\n"
-        << "    std::uint32_t address, std::uint32_t size);\n";
+        << "    std::uint32_t address, std::uint32_t size,\n"
+        << "    katana::runtime::ExecutableBlockTimingClass timing_class,\n"
+        << "    std::uint64_t maximum_guest_cycles);\n";
     for (std::size_t shard = 0u; shard < shard_count; ++shard) {
         const auto suffix = shard_symbol(shard);
         internal_header << "bool note_block_entry_shard_" << suffix
@@ -1814,12 +1975,12 @@ runtime_dispatch_artifacts(const std::string& entry_namespace,
                 << "    fn_" << symbol(owner)
                 << "_with_services(cpu, active_services);\n"
                 << "    context.scheduler_cycle = active_services->scheduler_cycle();\n"
-                << "    auto kind = active_exit_kind;\n"
-                << "    if (cpu.exception_generation != exception_generation_on_entry && "
-                   "cpu.trap_pending)\n"
-                << "        kind = katana::runtime::BlockEndKind::Exception;\n"
-                << "    if (std::exchange(tail_dispatch_completed, false))\n"
-                << "        kind = katana::runtime::BlockEndKind::Return;\n"
+                 << "    auto kind = active_exit_kind;\n"
+                 << "    if (cpu.exception_generation != exception_generation_on_entry)\n"
+                 << "        kind = katana::runtime::BlockEndKind::Exception;\n"
+                 << "    if (kind != katana::runtime::BlockEndKind::Exception &&\n"
+                    "        std::exchange(tail_dispatch_completed, false))\n"
+                 << "        kind = katana::runtime::BlockEndKind::Return;\n"
                 << "    return katana::runtime::make_block_exit(cpu, context,\n"
                 << "        kind, active_exit_source, katana::runtime::BlockAddress{cpu.pc, "
                    "katana::runtime::canonical_physical_address(cpu.pc)});\n"
@@ -1868,8 +2029,12 @@ runtime_dispatch_artifacts(const std::string& entry_namespace,
             const auto& block = dispatch_blocks[index];
             const auto address = symbol(block.address);
             shard_output << "    register_executable_block(table, services, 0x" << address
-                         << "u, " << block.size << "u);\n";
-            if (std::string_view(block.end_kind) != "Return" &&
+                         << "u, " << block.size
+                         << "u, katana::runtime::ExecutableBlockTimingClass::"
+                         << block.timing_class << ", " << block.maximum_guest_cycles << "u);\n";
+            if ((std::string_view(block.timing_class) == "PureCpu" ||
+                 std::string_view(block.timing_class) == "LinearRamOnly") &&
+                std::string_view(block.end_kind) != "Return" &&
                 std::string_view(block.end_kind) != "ExceptionReturn" &&
                 std::string_view(block.end_kind) != "Sleep" &&
                 std::string_view(block.end_kind) != "Exception")
@@ -1912,16 +2077,14 @@ runtime_dispatch_artifacts(const std::string& entry_namespace,
            << "    return last_materialization_status;\n"
            << "}\n";
     output << "void register_latent_aot_modules(\n"
-           << "    const std::shared_ptr<const katana::runtime::DiscSource>& source,\n"
            << "    const std::string_view content_identity,\n"
-           << "    katana::runtime::ExecutableModuleCatalog& modules,\n"
            << "    katana::runtime::ExecutableDiscLoadTransactionCoordinator& transactions) {\n";
     if (latent_modules.empty()) {
-        output << "    static_cast<void>(source); static_cast<void>(content_identity);\n"
-               << "    static_cast<void>(modules); static_cast<void>(transactions);\n"
+        output << "    static_cast<void>(content_identity);\n"
+               << "    static_cast<void>(transactions);\n"
                << "    return;\n";
     } else {
-        output << "    if (!source || content_identity != "
+        output << "    if (content_identity != "
                << katana::io::quote_json(expected_content_identity) << ")\n"
                << "        throw std::runtime_error(\"source-identity-mismatch\");\n"
                << "    std::vector<katana::runtime::DiscLoadAotModuleDescriptor> "
@@ -1929,34 +2092,6 @@ runtime_dispatch_artifacts(const std::string& entry_namespace,
                << "    descriptors.reserve(" << latent_modules.size() << "u);\n";
         for (const auto& module : latent_modules) {
             output << "    {\n"
-                   << "        auto bytes = source->read(" << module.disc_byte_offset
-                   << "ull, " << module.byte_size << "u);\n"
-                   << "        const auto byte_identity = std::string(\"sha256:\") +\n"
-                   << "            katana::io::sha256_bytes(std::string_view(\n"
-                   << "                reinterpret_cast<const char*>(bytes.data()), "
-                      "bytes.size()));\n"
-                   << "        if (byte_identity != "
-                   << katana::io::quote_json(module.byte_identity) << ")\n"
-                   << "            throw std::runtime_error(\"latent-aot-byte-identity-"
-                      "mismatch\");\n"
-                   << "        katana::runtime::ExecutableModule source_module;\n"
-                   << "        source_module.id = " << katana::io::quote_json(module.id)
-                   << ";\n"
-                   << "        source_module.source_identity = byte_identity;\n"
-                   << "        source_module.content_identity = std::string(content_identity);\n"
-                   << "        source_module.byte_identity = byte_identity;\n"
-                   << "        source_module.guest_start = 0x"
-                   << symbol(module.source_address) << "u;\n"
-                   << "        source_module.bytes = std::move(bytes);\n"
-                   << "        source_module.kind = "
-                      "katana::runtime::ExecutableModuleKind::Module;\n"
-                   << "        source_module.executable_permission = true;\n"
-                   << "        source_module.control_transfer_promotion_allowed = false;\n"
-                   << "        source_module.writable = false;\n"
-                   << "        source_module.range_roles.push_back({0u, "
-                   << module.byte_size
-                   << "u, katana::runtime::ExecutableStorageRole::RuntimeMaterializable});\n"
-                   << "        modules.publish(std::move(source_module));\n"
                    << "        descriptors.push_back({"
                    << katana::io::quote_json(module.id) << ", "
                    << katana::io::quote_json(expected_content_identity) << ", "
@@ -1978,7 +2113,9 @@ runtime_dispatch_artifacts(const std::string& entry_namespace,
            << "void register_executable_block(\n"
            << "    const katana::runtime::RuntimeBlockTable& table,\n"
            << "    katana::runtime::PlatformServices& services,\n"
-           << "    std::uint32_t address, std::uint32_t size) {\n"
+           << "    std::uint32_t address, std::uint32_t size,\n"
+           << "    katana::runtime::ExecutableBlockTimingClass timing_class,\n"
+           << "    std::uint64_t maximum_guest_cycles) {\n"
            << "    const auto registered_handle = table.lookup(address, {});\n"
            << "    if (!registered_handle) throw std::runtime_error(\"Registrierter Block "
               "fehlt.\");\n"
@@ -1986,8 +2123,9 @@ runtime_dispatch_artifacts(const std::string& entry_namespace,
            << "    if (!registered) throw std::runtime_error(\"Registrierter Block ist "
               "stale.\");\n"
            << "    services.register_executable_block(\n"
-           << "        address, size, "
-              "katana::runtime::stable_runtime_block_identity(registered->get()));\n"
+           << "        address, registered->get().physical_origin, size,\n"
+              "        katana::runtime::stable_runtime_block_identity(registered->get()),\n"
+              "        timing_class, maximum_guest_cycles);\n"
            << "}\n"
            << "void append_static_block(\n"
            << "    std::vector<katana::runtime::RuntimeBlock>& blocks,\n"
@@ -2056,11 +2194,6 @@ runtime_dispatch_artifacts(const std::string& entry_namespace,
                   "    const auto source = cpu.pc;\n"
                   "    const auto interpreted =\n"
                   "        katana::runtime::execute_dynamic_sh4_block(cpu, *active_services, 1u);\n"
-                  "    const auto scheduler = active_services->consume_guest_cycles(\n"
-                  "        interpreted.guest_cycles, context.scheduler_event_budget);\n"
-                  "    if (scheduler.budget_exhausted || scheduler.guest_cycle_budget_exhausted)\n"
-                  "        throw std::runtime_error(\"Dynamischer SH-4-Schedulerbudgetabbruch.\");\n"
-                  "    context.scheduler_cycle = scheduler.guest_cycle;\n"
                   "    return katana::runtime::make_block_exit(\n"
                   "        cpu, context, interpreted.end_kind,\n"
                   "        {source, katana::runtime::canonical_physical_address(source)},\n"
@@ -2177,8 +2310,13 @@ runtime_dispatch_artifacts(const std::string& entry_namespace,
            "        if (!selected_block || selected_block->get().function == nullptr)\n"
            "            throw std::runtime_error(\"Runtime-Dispatchziel besitzt keinen generierten "
            "Block.\");\n"
-           "        active_services->begin_executable_block(selected_block->get().variant);\n"
+           "        active_services->begin_executable_block(\n"
+           "            selected_block->get().virtual_start,\n"
+           "            selected_block->get().physical_origin,\n"
+           "            selected_block->get().size,\n"
+           "            selected_block->get().variant);\n"
            "        const auto retired_before = cpu.retired_guest_instructions;\n"
+           "        const auto exception_generation_before = cpu.exception_generation;\n"
            "        active_exit_source = {selected.diagnostic_target, selected.physical_target};\n"
            "        active_exit_site_class = "
            "katana::runtime::DynamicDispatchSiteClass::NotDynamic;\n"
@@ -2187,6 +2325,9 @@ runtime_dispatch_artifacts(const std::string& entry_namespace,
            "        if (cpu.retired_guest_instructions < retired_before)\n"
            "            throw std::runtime_error(\"Gastinstruktionszaehler lief rueckwaerts.\");\n"
            "        const auto retired = cpu.retired_guest_instructions - retired_before;\n"
+           "        const bool new_exception =\n"
+           "            cpu.exception_generation != exception_generation_before;\n"
+           "        if (new_exception) exit.kind = katana::runtime::BlockEndKind::Exception;\n"
            "        const auto expected_fallthrough = static_cast<std::uint32_t>(\n"
            "            exit.source.virtual_address + 2u);\n"
            "        if (retired != 0u &&\n"
@@ -2198,20 +2339,14 @@ runtime_dispatch_artifacts(const std::string& entry_namespace,
            "                std::to_string(exit.source.virtual_address) + \" expected=\" +\n"
            "                std::to_string(expected_fallthrough) + \" actual=\" +\n"
            "                std::to_string(cpu.pc));\n"
-           "        if (retired != 0u) {\n"
-           "            const auto scheduler = active_services->consume_guest_cycles(\n"
-           "                katana::runtime::base_guest_cycles_per_instruction * retired,\n"
-           "                active_context->scheduler_event_budget);\n"
-           "            if (scheduler.budget_exhausted)\n"
-           "                throw std::runtime_error(\"Schedulerbudget erschoepft\");\n"
-           "            if (scheduler.guest_cycle_budget_exhausted)\n"
-           "                throw std::runtime_error(\"Gastzyklusbudget erschoepft\");\n"
-           "            active_context->scheduler_cycle = scheduler.guest_cycle;\n"
-           "        }\n"
-           "        active_services->observe_guest_checkpoint(selected.diagnostic_target);\n"
+           "        const auto completion = katana::runtime::finalize_guest_block(\n"
+           "            cpu, *active_services, active_context->scheduler_event_budget,\n"
+           "            selected.diagnostic_target, retired, new_exception,\n"
+           "            exit.kind == katana::runtime::BlockEndKind::Exception);\n"
+           "        active_context->scheduler_cycle = completion.scheduler.guest_cycle;\n"
            "        if (exit.kind == katana::runtime::BlockEndKind::Exception)\n"
            "            active_observations->observe_guest_exception(cpu.last_exception_cause);\n"
-           "        if (active_services->poll_interrupt().has_value())\n"
+           "        if (completion.interrupt.has_value())\n"
            "            exit.kind = katana::runtime::BlockEndKind::InterruptSafepoint;\n"
            "        if (exit.kind == katana::runtime::BlockEndKind::Return) {\n"
            "            if (boundary == DispatchChainBoundary::NestedCall ||\n"
@@ -2818,6 +2953,7 @@ PortExportResult export_dreamcast_port_project(const PreparedPortProgram& prepar
     for (const auto& module : latent_aot.modules)
         emitted_program.insert(
             emitted_program.end(), module.program.begin(), module.program.end());
+    annotate_proven_linear_ram_accesses(emitted_program);
     katana::ir::require_valid_program(emitted_program);
     const auto wait_loop_descriptors = [&] {
         const auto hardware_audit =

@@ -767,6 +767,11 @@ std::uint64_t hash_replay_guest_state(const CpuState& cpu,
                              cpu.tea,
                              cpu.expevt,
                              cpu.intevt,
+                             cpu.pteh,
+                             cpu.ptel,
+                             cpu.ptea,
+                             cpu.ttb,
+                             cpu.mmucr,
                              cpu.mach,
                              cpu.macl,
                              cpu.fpul,
@@ -783,9 +788,28 @@ std::uint64_t hash_replay_guest_state(const CpuState& cpu,
                              cpu.sleeping,
                              cpu.last_prefetch_was_store_queue})
         hash_byte(hash, value ? 1u : 0u);
+    for (const auto& entry : cpu.utlb) {
+        hash_u64(hash, entry.pteh);
+        hash_u64(hash, entry.ptel);
+        hash_u64(hash, entry.ptea);
+    }
     hash_byte(hash, static_cast<std::uint8_t>(cpu.last_exception_cause));
     hash_u64(hash, cpu.exception_generation);
+    hash_u64(hash, cpu.last_exception_generation);
+    hash_u64(hash, cpu.last_exception_instruction_pc);
+    hash_u64(hash, cpu.last_exception_instruction_physical_pc);
+    hash_u64(hash, cpu.last_exception_owner_pc);
+    hash_u64(hash, cpu.tlb_load_count);
     hash_u64(hash, cpu.prefetch_count);
+    hash_u64(hash, cpu.attempted_guest_instructions);
+    hash_u64(hash, cpu.retired_guest_instructions);
+    hash_u64(hash, cpu.total_guest_cycles);
+    hash_u64(hash, cpu.pending_guest_cycles);
+    hash_u64(hash, cpu.active_instruction_pc);
+    hash_u64(hash, cpu.active_instruction_physical_pc);
+    hash_u64(hash, cpu.active_block_virtual_start);
+    hash_u64(hash, cpu.active_block_physical_start);
+    hash_u64(hash, cpu.active_block_size);
     hash_u64(hash, scheduler_cycle);
     hash_u64(hash, subsystem_hash);
     return hash;

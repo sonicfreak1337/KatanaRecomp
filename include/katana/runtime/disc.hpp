@@ -161,7 +161,7 @@ class GdRomAsyncReader final {
         GdRomRequest request;
         SchedulerEventId event_id = 0u;
     };
-    void complete(std::uint64_t request_id, std::uint64_t cycle);
+    void complete(std::uint64_t request_id, std::uint64_t cycle) noexcept;
     void handle_scheduler_reset() noexcept;
     EventScheduler& scheduler_;
     SchedulerLifetimeToken scheduler_lifetime_;

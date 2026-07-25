@@ -14,9 +14,13 @@ Flycast is a GPL-2.0 reference project. KatanaRecomp does not contain or link
 Flycast code. Any future direct integration requires a documented project-wide
 GPL compatibility decision before it can be enabled.
 
-No verifiable upstream version or compatible license is recorded for the
-planning reference called dcrecomp. Its code is therefore prohibited unless a
-future provenance and license review explicitly clears a precise snapshot.
+The planning reference called dcrecomp is recorded as the public upstream
+`sp00nznet/dcrecomp` at commit
+`25bdc3d248a0084fa98335511991872e578b2b4a`. This pin makes the reviewed
+behavioral snapshot reproducible; it does not grant code-use permission. The
+upstream describes its core as private and includes GPLv2 Flycast subsystems,
+so KatanaRecomp neither contains nor links dcrecomp code. Any future direct
+integration requires a separate provenance and project-wide license review.
 
 Renesas SH-4 manuals are used as behavioral specifications. They are linked,
 not redistributed. See `docs/REFERENCE_PROVENANCE.md` for exact document

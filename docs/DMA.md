@@ -27,6 +27,32 @@ Abschnitt 14 des Renesas SH7750/SH7750S/SH7750R Hardware-Handbuchs.
 - Das 32-Bit-Registerfenster ist unter `0xFFA00000` und `0x1FA00000` erreichbar.
   Schmalere Registerzugriffe scheitern sichtbar.
 
+## PVR- und G2-Teilfortschritt
+
+PVR- und G2-DMA werden in gastzeitlich terminierten 2-KiB-Chunks ausgefuehrt.
+Nach jedem abgeschlossenen Chunk zeigen die separaten Live-Quell-/Zielzaehler
+und das Residuum den bereits committed Fortschritt; die programmierten
+Startadressen bleiben davon unberuehrt. Suspend speichert die Restzyklen des
+laufenden Chunks und Resume terminiert genau diesen Rest erneut. Abort loescht
+das ausstehende Schedulerevent, behaelt Live-Zaehler und Residuum fuer die
+Diagnose bei und erzeugt weder eine spaete Kopie noch eine Completion.
+Innerhalb eines faelligen Chunks werden G2- und PVR-Ziele an 32-Byte-
+Safepoints committed. Scheitert eine spaetere Einheit, bleiben der bereits
+geschriebene Prefix, die dazugehoerigen Livezaehler und das exakte Residuum
+gemeinsam sichtbar; die fehlerhafte Einheit erzeugt keine Scheinfertigstellung.
+Ein arithmetischer oder registrierungsseitiger Schedulerfehler bleibt als
+interner `SchedulerFailure` ohne erfundenes Timeout-/Overrun-ASIC-Ereignis
+sichtbar. Die G2-Timeoutregister sind weiterhin gespeichert und im Snapshot
+enthalten; eine davon unabhaengige elektrische Timeoutmaschine ist nicht
+modelliert.
+
+Der angebundene SH-4-DMAC schreitet bei PVR-DMA ebenfalls pro Chunk fort:
+`SAR` und `DMATCR` werden live aktualisiert, waehrend `CHCR.TE` erst nach dem
+letzten erfolgreich kopierten Chunk gesetzt wird. Ein Handshakebruch bleibt
+als typisierter `HandshakeMismatch` sichtbar. Die vom PVR-Block nicht
+modellierte Reverse-Richtung wird vor dem ersten Speicherwrite als
+`InvalidDirection` mit dem ASIC-Ereignis `PvrIllegalAddress` abgewiesen.
+
 ## Dreamcast-Channel-2-TA-Vertrag
 
 Der produktive TA-Pfad verwendet auf SH-4-DMAC-Kanal 2 den externen

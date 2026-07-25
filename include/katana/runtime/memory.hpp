@@ -58,6 +58,7 @@ struct GuestMemoryAccessContext {
     GuestInstructionOrigin instruction;
     std::uint64_t retired_guest_instructions = 0u;
     GuestMemoryAccessOrigin access_origin = GuestMemoryAccessOrigin::Memory;
+    std::uint64_t attempted_guest_instructions = 0u;
 };
 
 struct LinearMemoryProjection {
@@ -206,6 +207,7 @@ struct GuestMemoryAccessEvent {
     bool scalar_value_valid = false;
     bool bytes_changed = true;
     std::uint64_t retired_guest_instructions = 0u;
+    std::uint64_t attempted_guest_instructions = 0u;
     const LinearMemoryDevice* linear_backing = nullptr;
     std::uint32_t linear_offset = 0u;
     std::size_t linear_size = 0u;
@@ -231,6 +233,11 @@ struct MemoryPerformanceCounters {
     std::uint64_t observed_accesses = 0u;
 };
 
+struct LinearMemoryTransactionWrite {
+    std::uint32_t address = 0u;
+    std::span<const std::uint8_t> bytes;
+};
+
 class Memory {
   public:
     explicit Memory(std::size_t legacy_size = 1024u * 1024u,
@@ -248,8 +255,10 @@ class Memory {
     [[nodiscard]] bool maps_device(std::uint32_t address,
                                    std::size_t width,
                                    const MemoryDevice* device) const noexcept;
-    [[nodiscard]] bool is_writable_linear_range(std::uint32_t address,
+    [[nodiscard]] bool is_readable_linear_range(std::uint32_t address,
                                                 std::size_t width) const noexcept;
+    [[nodiscard]] bool is_writable_linear_range(std::uint32_t address,
+                                                 std::size_t width) const noexcept;
 
     [[nodiscard]] MemoryAlignmentPolicy alignment_policy() const noexcept;
     void set_alignment_policy(MemoryAlignmentPolicy policy) noexcept;
@@ -329,6 +338,13 @@ class Memory {
     void write_bytes(std::uint32_t address,
                      std::span<const std::uint8_t> bytes,
                      CodeWriteSource source = CodeWriteSource::Copy);
+    [[nodiscard]] bool commit_linear_transaction_bytes(
+        std::uint32_t address,
+        std::span<const std::uint8_t> bytes,
+        CodeWriteSource source = CodeWriteSource::Copy) noexcept;
+    [[nodiscard]] bool commit_linear_transaction_batch(
+        std::span<const LinearMemoryTransactionWrite> writes,
+        CodeWriteSource source = CodeWriteSource::Copy) noexcept;
     void write_bytes_at(std::uint32_t address,
                         std::span<const std::uint8_t> bytes,
                         const GuestMemoryAccessContext& context,

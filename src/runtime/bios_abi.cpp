@@ -3,6 +3,7 @@
 #include "katana/runtime/dreamcast_boot.hpp"
 #include "katana/runtime/dreamcast_memory.hpp"
 #include "katana/runtime/gdrom_controller.hpp"
+#include "katana/runtime/guest_buffer.hpp"
 #include "katana/runtime/platform_services.hpp"
 #include "katana/runtime/pvr.hpp"
 #include "katana/runtime/system_asic.hpp"
@@ -56,6 +57,11 @@ bool flash_write_allowed(const std::uint32_t offset, const std::uint32_t size) n
     return end <= factory.offset || offset >= factory_end;
 }
 
+void store_le32(std::span<std::uint8_t, 4u> bytes, const std::uint32_t value) noexcept {
+    for (std::size_t index = 0u; index < bytes.size(); ++index)
+        bytes[index] = static_cast<std::uint8_t>(value >> (index * 8u));
+}
+
 void flash_unlock(CpuState& cpu, const std::uint8_t command) {
     const auto base = dreamcast_flash_physical_base;
     cpu.memory.write_u8(base + dreamcast_flash_unlock_address_1, 0xAAu);
@@ -69,31 +75,33 @@ std::uint32_t execute_flash_call(CpuState& cpu, const std::uint32_t selector) no
         const auto buffer = cpu.r[5];
         const auto size = cpu.r[6];
         if (selector == 0u) {
-            if (offset >= kFlashPartitions.size() || !cpu.memory.contains(buffer, 8u))
-                return 0xFFFFFFFFu;
+            if (offset >= kFlashPartitions.size()) return 0xFFFFFFFFu;
+            const auto destination = resolve_guest_write_buffer(cpu, buffer, 8u, 4u);
+            if (!destination) return 0xFFFFFFFFu;
             const auto partition = kFlashPartitions[offset];
-            cpu.memory.write_u32(buffer, partition.offset, CodeWriteSource::Copy);
-            cpu.memory.write_u32(buffer + 4u, partition.size, CodeWriteSource::Copy);
-            return 0u;
+            std::array<std::uint8_t, 8u> bytes{};
+            store_le32(std::span<std::uint8_t, 4u>(bytes.data(), 4u), partition.offset);
+            store_le32(std::span<std::uint8_t, 4u>(bytes.data() + 4u, 4u), partition.size);
+            return commit_guest_write_buffer(cpu, *destination, bytes) ? 0u : 0xFFFFFFFFu;
         }
         if (selector == 1u) {
-            if (!valid_range(offset, size, static_cast<std::uint32_t>(dreamcast_flash_size)) ||
-                (size != 0u && !cpu.memory.contains(buffer, size)))
+            if (!valid_range(offset, size, static_cast<std::uint32_t>(dreamcast_flash_size)))
                 return 0xFFFFFFFFu;
+            const auto destination = resolve_guest_write_buffer(cpu, buffer, size);
+            if (!destination) return 0xFFFFFFFFu;
             std::vector<std::uint8_t> bytes(size);
             for (std::uint32_t index = 0u; index < size; ++index)
                 bytes[index] = cpu.memory.read_u8(dreamcast_flash_physical_base + offset + index);
-            if (!bytes.empty()) cpu.memory.write_bytes(buffer, bytes, CodeWriteSource::Copy);
-            return size;
+            return commit_guest_write_buffer(cpu, *destination, bytes) ? size : 0xFFFFFFFFu;
         }
         if (selector == 2u) {
             if (!valid_range(offset, size, static_cast<std::uint32_t>(dreamcast_flash_size)) ||
-                !flash_write_allowed(offset, size) ||
-                (size != 0u && !cpu.memory.contains(buffer, size)))
+                !flash_write_allowed(offset, size))
                 return 0xFFFFFFFFu;
+            const auto source = resolve_guest_read_buffer(cpu, buffer, size);
+            if (!source) return 0xFFFFFFFFu;
             std::vector<std::uint8_t> bytes(size);
-            for (std::uint32_t index = 0u; index < size; ++index)
-                bytes[index] = cpu.memory.read_u8(buffer + index);
+            if (!read_guest_buffer(cpu, *source, bytes)) return 0xFFFFFFFFu;
             for (std::uint32_t index = 0u; index < size; ++index) {
                 flash_unlock(cpu, 0xA0u);
                 cpu.memory.write_u8(dreamcast_flash_physical_base + offset + index, bytes[index]);
@@ -131,13 +139,15 @@ std::uint32_t execute_sysinfo_call(CpuState& cpu, const std::uint32_t selector) 
     try {
         if (selector == 0u) {
             std::array<std::uint8_t, 24u> data{};
+            const auto destination =
+                resolve_guest_write_buffer(cpu, 0x8C000068u, data.size());
+            if (!destination) return 0xFFFFFFFFu;
             for (std::uint32_t index = 0u; index < 8u; ++index)
                 data[index] = cpu.memory.read_u8(dreamcast_flash_physical_base + 0x1A056u + index);
             for (std::uint32_t index = 0u; index < 5u; ++index)
                 data[8u + index] =
                     cpu.memory.read_u8(dreamcast_flash_physical_base + 0x1A000u + index);
-            cpu.memory.write_bytes(0x8C000068u, data, CodeWriteSource::Copy);
-            return 0u;
+            return commit_guest_write_buffer(cpu, *destination, data) ? 0u : 0xFFFFFFFFu;
         }
         if (selector == 2u) return 0xFFFFFFFFu;
         if (selector == 3u) return 0x8C000068u;

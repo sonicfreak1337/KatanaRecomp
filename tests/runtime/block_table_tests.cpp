@@ -18,11 +18,16 @@ BlockExit block_a(CpuState&, BlockExecutionContext&) {
 BlockExit block_b(CpuState&, BlockExecutionContext&) {
     return {};
 }
-BlockExit relocated_block(CpuState&, BlockExecutionContext&) {
-    BlockExit exit;
-    exit.source.virtual_address = relocate_code_address(0x8C500010u);
-    exit.target = BlockAddress{unrelocate_code_address(0xAC200020u), 0u};
-    return exit;
+BlockExit relocated_block(CpuState& cpu, BlockExecutionContext& context) {
+    return make_block_exit(
+        cpu,
+        context,
+        BlockEndKind::Fallthrough,
+        {relocate_code_address(0x8C500010u), canonical_physical_address(0x8C500010u)},
+        BlockAddress{unrelocate_code_address(0xAC200020u), 0u});
+}
+BlockExit throwing_block(CpuState&, BlockExecutionContext&) {
+    throw std::runtime_error("expected-backend-throw");
 }
 
 void require(const bool condition, const char* message) {
@@ -251,13 +256,37 @@ int main() {
         auto executable_template = first_template_block;
         executable_template.function = relocated_block;
         CpuState template_cpu;
+        template_cpu.active_block_virtual_start = 0x11110000u;
+        template_cpu.active_block_physical_start = 0x02220000u;
+        template_cpu.active_block_size = 0x40u;
         BlockExecutionContext template_context;
         const auto template_exit =
             execute_runtime_block(executable_template, template_cpu, template_context);
         require(template_exit.source.virtual_address == 0xAC200010u &&
+                    template_exit.source.physical_address == 0x0C200010u &&
                     template_exit.target->virtual_address == 0x8C500020u &&
-                    relocate_code_address(0x8C500010u) == 0x8C500010u,
-                "Runtimeblockausfuehrung aktiviert oder entfernt sein AOT-Mapping nicht atomar.");
+                    relocate_code_address(0x8C500010u) == 0x8C500010u &&
+                    template_cpu.active_block_virtual_start == 0x11110000u &&
+                    template_cpu.active_block_physical_start == 0x02220000u &&
+                    template_cpu.active_block_size == 0x40u &&
+                    !template_context.exception_generation_on_entry.has_value(),
+                "Runtimeblockausfuehrung aktiviert oder entfernt AOT-Mapping/physische "
+                "Blockprovenienz nicht atomar.");
+        auto throwing_template = executable_template;
+        throwing_template.function = throwing_block;
+        require(throws_with(
+                    [&] {
+                        static_cast<void>(execute_runtime_block(
+                            throwing_template, template_cpu, template_context));
+                    },
+                     "expected-backend-throw",
+                     "") &&
+                    template_cpu.active_block_virtual_start == 0x11110000u &&
+                    template_cpu.active_block_physical_start == 0x02220000u &&
+                    template_cpu.active_block_size == 0x40u &&
+                    !template_context.exception_generation_on_entry.has_value(),
+                "Runtimeblock-Throw laesst Exceptiongenerationssnapshot oder aktive "
+                "Blockprovenienz gesetzt.");
         require(aot_templates.erase_overlapping_physical(
                     canonical_physical_address(template_contract.mapping.runtime_start) + 0x70u,
                     1u) == 2u &&

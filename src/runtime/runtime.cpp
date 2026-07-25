@@ -2,7 +2,9 @@
 
 #include "katana/runtime/block_guards.hpp"
 
+#include <exception>
 #include <stdexcept>
+#include <type_traits>
 #include <utility>
 
 namespace katana::runtime {
@@ -127,10 +129,22 @@ void reset_cpu(CpuState& cpu, const ResetState& state) noexcept {
     cpu.exception_generation = 0u;
     cpu.last_exception_cause = ExceptionCause::None;
     cpu.exception_in_delay_slot = false;
+    cpu.last_exception_instruction_pc = 0u;
+    cpu.last_exception_instruction_physical_pc = 0u;
+    cpu.last_exception_owner_pc = 0u;
+    cpu.last_exception_generation = 0u;
     cpu.sleeping = false;
     cpu.last_prefetch_address = 0u;
     cpu.prefetch_count = 0u;
+    cpu.attempted_guest_instructions = 0u;
     cpu.retired_guest_instructions = 0u;
+    cpu.total_guest_cycles = 0u;
+    cpu.pending_guest_cycles = 0u;
+    cpu.active_instruction_pc = 0u;
+    cpu.active_instruction_physical_pc = 0u;
+    cpu.active_block_virtual_start = 0u;
+    cpu.active_block_physical_start = 0u;
+    cpu.active_block_size = 0u;
     cpu.last_prefetch_was_store_queue = false;
 
     if (cpu.address_space) {
@@ -144,6 +158,60 @@ void reset_cpu(CpuState& cpu, const ResetState& state) noexcept {
     cpu.write_sr(state.status_register);
 }
 
+void begin_guest_instruction(CpuState& cpu,
+                             const std::uint32_t instruction_pc,
+                             const std::uint64_t guest_cycles) noexcept {
+    ++cpu.attempted_guest_instructions;
+    cpu.active_instruction_pc = instruction_pc;
+    const auto block_offset = instruction_pc - cpu.active_block_virtual_start;
+    cpu.active_instruction_physical_pc =
+        cpu.active_block_size != 0u && block_offset < cpu.active_block_size
+            ? cpu.active_block_physical_start + block_offset
+            : canonical_physical_address(instruction_pc);
+    cpu.pending_guest_cycles += guest_cycles;
+}
+
+void add_guest_instruction_cycles(CpuState& cpu,
+                                  const std::uint64_t guest_cycles) noexcept {
+    cpu.pending_guest_cycles += guest_cycles;
+}
+
+void retire_guest_instruction(CpuState& cpu) noexcept {
+    ++cpu.retired_guest_instructions;
+}
+
+std::uint64_t take_pending_guest_cycles(CpuState& cpu) noexcept {
+    const auto cycles = cpu.pending_guest_cycles;
+    cpu.pending_guest_cycles = 0u;
+    cpu.total_guest_cycles += cycles;
+    return cycles;
+}
+
+std::uint64_t elapsed_guest_cycles(const CpuState& cpu) noexcept {
+    return cpu.total_guest_cycles + cpu.pending_guest_cycles;
+}
+
+GuestInstructionAttempt::GuestInstructionAttempt(CpuState& cpu,
+                                                 const std::uint32_t instruction_pc,
+                                                 const std::uint64_t guest_cycles) noexcept
+    : cpu_(cpu),
+      exception_generation_on_entry_(cpu.exception_generation),
+      uncaught_exceptions_on_entry_(std::uncaught_exceptions()) {
+    begin_guest_instruction(cpu_, instruction_pc, guest_cycles);
+}
+
+GuestInstructionAttempt::~GuestInstructionAttempt() noexcept {
+    complete();
+}
+
+void GuestInstructionAttempt::complete() noexcept {
+    if (!completed_ && cpu_.exception_generation == exception_generation_on_entry_ &&
+        std::uncaught_exceptions() == uncaught_exceptions_on_entry_) {
+        retire_guest_instruction(cpu_);
+        completed_ = true;
+    }
+}
+
 void prefetch(CpuState& cpu, const std::uint32_t address) noexcept {
     cpu.last_prefetch_address = address;
     ++cpu.prefetch_count;
@@ -153,7 +221,6 @@ void prefetch(CpuState& cpu, const std::uint32_t address) noexcept {
 void load_tlb(CpuState& cpu) noexcept {
     constexpr std::uint32_t mmucr_urc_shift = 10u;
     constexpr std::uint32_t mmucr_urc_mask = 0x3Fu;
-    constexpr std::uint32_t mmucr_urb_shift = 18u;
     const auto index = static_cast<std::size_t>((cpu.mmucr >> mmucr_urc_shift) & mmucr_urc_mask);
     cpu.utlb[index] = {cpu.pteh, cpu.ptel, cpu.ptea};
     if (cpu.address_space) {
@@ -173,12 +240,6 @@ void load_tlb(CpuState& cpu) noexcept {
                                            (cpu.ptel & 0x00000004u) != 0u,
                                            (cpu.ptel & 0x00000002u) != 0u});
     }
-    const auto urb = static_cast<std::uint32_t>((cpu.mmucr >> mmucr_urb_shift) & mmucr_urc_mask);
-    const auto boundary = urb == 0u ? 64u : urb;
-    const auto next_urc = static_cast<std::uint32_t>((index + 1u) >= boundary ? 0u : index + 1u);
-    cpu.mmucr = (cpu.mmucr & ~(mmucr_urc_mask << mmucr_urc_shift)) |
-                (next_urc << mmucr_urc_shift);
-    if (cpu.address_space) cpu.address_space->write_mmucr(cpu.mmucr);
     ++cpu.tlb_load_count;
 }
 
@@ -201,20 +262,83 @@ MemoryAccessErrorReason translation_reason(const ExceptionCause cause) noexcept 
     }
 }
 
+void validate_virtual_alignment(const std::uint32_t address,
+                                const MemoryAccessOperation operation,
+                                const MemoryAccessWidth width,
+                                const bool instruction) {
+    const auto alignment = instruction ? 2u : static_cast<std::uint32_t>(width);
+    if ((address & (alignment - 1u)) == 0u) return;
+    throw MemoryAccessError(MemoryAccessErrorReason::Misaligned,
+                            operation,
+                            address,
+                            width,
+                            "sh4-virtual-address");
+}
+
+void update_urc_after_utlb_access(CpuState& cpu) noexcept {
+    constexpr std::uint32_t mmucr_urc_shift = 10u;
+    constexpr std::uint32_t mmucr_urc_mask = 0x3Fu;
+    constexpr std::uint32_t mmucr_urb_shift = 18u;
+    const auto urc = (cpu.mmucr >> mmucr_urc_shift) & mmucr_urc_mask;
+    const auto urb = (cpu.mmucr >> mmucr_urb_shift) & mmucr_urc_mask;
+    const auto boundary = urb == 0u ? 64u : urb;
+    const auto next = urc + 1u >= boundary ? 0u : urc + 1u;
+    cpu.mmucr = (cpu.mmucr & ~(mmucr_urc_mask << mmucr_urc_shift)) |
+                (next << mmucr_urc_shift);
+    if (cpu.address_space) cpu.address_space->write_mmucr(cpu.mmucr);
+}
+
+void note_translation(CpuState& cpu, const TranslationResult& translated) noexcept {
+    if (translated.utlb_slot != 0xFFu) update_urc_after_utlb_access(cpu);
+}
+
+template <typename Function>
+decltype(auto) with_guest_virtual_address(const std::uint32_t virtual_address,
+                                          Function&& function) {
+    try {
+        return std::forward<Function>(function)();
+    } catch (const MemoryAccessError& error) {
+        if (error.address() == virtual_address) throw;
+        throw MemoryAccessError(error.reason(),
+                                error.operation(),
+                                virtual_address,
+                                error.width(),
+                                error.region_name());
+    }
+}
+
 } // namespace
 
 std::uint32_t translate_guest_address(CpuState& cpu,
                                       const std::uint32_t address,
                                       const MemoryAccessOperation operation,
-                                      const MemoryAccessWidth width,
-                                      const bool instruction) {
-    if (!cpu.address_space) return canonical_physical_address(address);
+                                       const MemoryAccessWidth width,
+                                       const bool instruction) {
+    validate_virtual_alignment(address, operation, width, instruction);
+    if (!cpu.address_space) {
+        if (!cpu.privileged_mode() && address >= 0x80000000u)
+            throw MemoryAccessError(MemoryAccessErrorReason::Unmapped,
+                                    operation,
+                                    address,
+                                    width,
+                                    "sh4-user-segment");
+        if (instruction && (address >> 29u) >= 7u)
+            throw MemoryAccessError(MemoryAccessErrorReason::Unmapped,
+                                    operation,
+                                    address,
+                                    width,
+                                    "sh4-instruction-segment");
+        return canonical_physical_address(address);
+    }
     const auto access = instruction ? TranslationAccess::Instruction
                                     : operation == MemoryAccessOperation::Write
                                           ? TranslationAccess::Write
                                           : TranslationAccess::Read;
     try {
-        return cpu.address_space->translate(address, access, cpu.privileged_mode()).physical_address;
+        const auto translated =
+            cpu.address_space->translate(address, access, cpu.privileged_mode());
+        note_translation(cpu, translated);
+        return translated.physical_address;
     } catch (const TranslationError& error) {
         throw MemoryAccessError(
             translation_reason(error.cause()), operation, address, width, "sh4-address-space");
@@ -245,18 +369,26 @@ std::uint32_t peek_guest_u32(
 StoreQueuePrefetchTranslation translate_store_queue_prefetch(CpuState& cpu,
                                                               const std::uint32_t address) {
     try {
+        StoreQueuePrefetchTranslation translated;
         if (!cpu.address_space) {
             RuntimeAddressSpace fallback_address_space;
             fallback_address_space.write_mmucr(cpu.mmucr);
             fallback_address_space.set_mode((cpu.mmucr & 1u) != 0u
                                                 ? AddressTranslationMode::Mmu
                                                 : AddressTranslationMode::NoMmu);
-            return fallback_address_space.translate_store_queue_prefetch(
+            translated = fallback_address_space.translate_store_queue_prefetch(
+                address, cpu.privileged_mode());
+        } else {
+            translated = cpu.address_space->translate_store_queue_prefetch(
                 address, cpu.privileged_mode());
         }
-        return cpu.address_space->translate_store_queue_prefetch(address, cpu.privileged_mode());
+        if (translated.addressing == StoreQueueAddressingMode::Utlb)
+            update_urc_after_utlb_access(cpu);
+        return translated;
     } catch (const TranslationError& error) {
-        throw MemoryAccessError(translation_reason(error.cause()),
+        throw MemoryAccessError((address & 3u) != 0u
+                                    ? MemoryAccessErrorReason::Misaligned
+                                    : translation_reason(error.cause()),
                                 MemoryAccessOperation::Write,
                                 address,
                                 MemoryAccessWidth::Word,
@@ -264,19 +396,33 @@ StoreQueuePrefetchTranslation translate_store_queue_prefetch(CpuState& cpu,
     }
 }
 
+std::uint16_t guest_fetch_u16(CpuState& cpu, const std::uint32_t address) {
+    const auto physical = translate_guest_address(
+        cpu, address, MemoryAccessOperation::Read, MemoryAccessWidth::Halfword, true);
+    cpu.active_instruction_physical_pc = physical;
+    return with_guest_virtual_address(
+        address, [&] { return cpu.memory.read_u16(physical); });
+}
+
 std::uint8_t guest_read_u8(CpuState& cpu, const std::uint32_t address) {
-    return cpu.memory.read_u8(translate_guest_address(
-        cpu, address, MemoryAccessOperation::Read, MemoryAccessWidth::Byte));
+    const auto physical = translate_guest_address(
+        cpu, address, MemoryAccessOperation::Read, MemoryAccessWidth::Byte);
+    return with_guest_virtual_address(
+        address, [&] { return cpu.memory.read_u8(physical); });
 }
 
 std::uint16_t guest_read_u16(CpuState& cpu, const std::uint32_t address) {
-    return cpu.memory.read_u16(translate_guest_address(
-        cpu, address, MemoryAccessOperation::Read, MemoryAccessWidth::Halfword));
+    const auto physical = translate_guest_address(
+        cpu, address, MemoryAccessOperation::Read, MemoryAccessWidth::Halfword);
+    return with_guest_virtual_address(
+        address, [&] { return cpu.memory.read_u16(physical); });
 }
 
 std::uint32_t guest_read_u32(CpuState& cpu, const std::uint32_t address) {
-    return cpu.memory.read_u32(translate_guest_address(
-        cpu, address, MemoryAccessOperation::Read, MemoryAccessWidth::Word));
+    const auto physical = translate_guest_address(
+        cpu, address, MemoryAccessOperation::Read, MemoryAccessWidth::Word);
+    return with_guest_virtual_address(
+        address, [&] { return cpu.memory.read_u32(physical); });
 }
 
 std::int32_t guest_read_s8(CpuState& cpu, const std::uint32_t address) {
@@ -292,10 +438,16 @@ std::uint8_t guest_read_u8_at(CpuState& cpu,
                               const std::uint32_t virtual_address) {
     const auto physical_address = translate_guest_address(
         cpu, virtual_address, MemoryAccessOperation::Read, MemoryAccessWidth::Byte);
-    return cpu.memory.read_u8_at(
-        physical_address,
-        GuestMemoryAccessContext{
-            virtual_address, origin, cpu.retired_guest_instructions});
+    return with_guest_virtual_address(virtual_address, [&] {
+        return cpu.memory.read_u8_at(
+            physical_address,
+            GuestMemoryAccessContext{
+                virtual_address,
+                origin,
+                cpu.retired_guest_instructions,
+                GuestMemoryAccessOrigin::Memory,
+                cpu.attempted_guest_instructions});
+    });
 }
 
 std::uint16_t guest_read_u16_at(CpuState& cpu,
@@ -303,10 +455,16 @@ std::uint16_t guest_read_u16_at(CpuState& cpu,
                                 const std::uint32_t virtual_address) {
     const auto physical_address = translate_guest_address(
         cpu, virtual_address, MemoryAccessOperation::Read, MemoryAccessWidth::Halfword);
-    return cpu.memory.read_u16_at(
-        physical_address,
-        GuestMemoryAccessContext{
-            virtual_address, origin, cpu.retired_guest_instructions});
+    return with_guest_virtual_address(virtual_address, [&] {
+        return cpu.memory.read_u16_at(
+            physical_address,
+            GuestMemoryAccessContext{
+                virtual_address,
+                origin,
+                cpu.retired_guest_instructions,
+                GuestMemoryAccessOrigin::Memory,
+                cpu.attempted_guest_instructions});
+    });
 }
 
 std::uint32_t guest_read_u32_at(CpuState& cpu,
@@ -314,10 +472,16 @@ std::uint32_t guest_read_u32_at(CpuState& cpu,
                                 const std::uint32_t virtual_address) {
     const auto physical_address = translate_guest_address(
         cpu, virtual_address, MemoryAccessOperation::Read, MemoryAccessWidth::Word);
-    return cpu.memory.read_u32_at(
-        physical_address,
-        GuestMemoryAccessContext{
-            virtual_address, origin, cpu.retired_guest_instructions});
+    return with_guest_virtual_address(virtual_address, [&] {
+        return cpu.memory.read_u32_at(
+            physical_address,
+            GuestMemoryAccessContext{
+                virtual_address,
+                origin,
+                cpu.retired_guest_instructions,
+                GuestMemoryAccessOrigin::Memory,
+                cpu.attempted_guest_instructions});
+    });
 }
 
 std::int32_t guest_read_s8_at(CpuState& cpu,
@@ -336,30 +500,30 @@ void guest_write_u8(CpuState& cpu,
                     const std::uint32_t address,
                     const std::uint8_t value,
                     const CodeWriteSource source) {
-    cpu.memory.write_u8(
-        translate_guest_address(cpu, address, MemoryAccessOperation::Write, MemoryAccessWidth::Byte),
-        value,
-        source);
+    const auto physical = translate_guest_address(
+        cpu, address, MemoryAccessOperation::Write, MemoryAccessWidth::Byte);
+    with_guest_virtual_address(
+        address, [&] { cpu.memory.write_u8(physical, value, source); });
 }
 
 void guest_write_u16(CpuState& cpu,
                      const std::uint32_t address,
                      const std::uint16_t value,
                      const CodeWriteSource source) {
-    cpu.memory.write_u16(translate_guest_address(
-                             cpu, address, MemoryAccessOperation::Write, MemoryAccessWidth::Halfword),
-                         value,
-                         source);
+    const auto physical = translate_guest_address(
+        cpu, address, MemoryAccessOperation::Write, MemoryAccessWidth::Halfword);
+    with_guest_virtual_address(
+        address, [&] { cpu.memory.write_u16(physical, value, source); });
 }
 
 void guest_write_u32(CpuState& cpu,
                      const std::uint32_t address,
                      const std::uint32_t value,
                      const CodeWriteSource source) {
-    cpu.memory.write_u32(
-        translate_guest_address(cpu, address, MemoryAccessOperation::Write, MemoryAccessWidth::Word),
-        value,
-        source);
+    const auto physical = translate_guest_address(
+        cpu, address, MemoryAccessOperation::Write, MemoryAccessWidth::Word);
+    with_guest_virtual_address(
+        address, [&] { cpu.memory.write_u32(physical, value, source); });
 }
 
 void guest_write_u8_at(CpuState& cpu,
@@ -369,12 +533,18 @@ void guest_write_u8_at(CpuState& cpu,
                        const CodeWriteSource source) {
     const auto physical_address = translate_guest_address(
         cpu, virtual_address, MemoryAccessOperation::Write, MemoryAccessWidth::Byte);
-    cpu.memory.write_u8_at(
-        physical_address,
-        value,
-        GuestMemoryAccessContext{
-            virtual_address, origin, cpu.retired_guest_instructions},
-        source);
+    with_guest_virtual_address(virtual_address, [&] {
+        cpu.memory.write_u8_at(
+            physical_address,
+            value,
+            GuestMemoryAccessContext{
+                virtual_address,
+                origin,
+                cpu.retired_guest_instructions,
+                GuestMemoryAccessOrigin::Memory,
+                cpu.attempted_guest_instructions},
+            source);
+    });
 }
 
 void guest_write_u16_at(CpuState& cpu,
@@ -384,12 +554,18 @@ void guest_write_u16_at(CpuState& cpu,
                         const CodeWriteSource source) {
     const auto physical_address = translate_guest_address(
         cpu, virtual_address, MemoryAccessOperation::Write, MemoryAccessWidth::Halfword);
-    cpu.memory.write_u16_at(
-        physical_address,
-        value,
-        GuestMemoryAccessContext{
-            virtual_address, origin, cpu.retired_guest_instructions},
-        source);
+    with_guest_virtual_address(virtual_address, [&] {
+        cpu.memory.write_u16_at(
+            physical_address,
+            value,
+            GuestMemoryAccessContext{
+                virtual_address,
+                origin,
+                cpu.retired_guest_instructions,
+                GuestMemoryAccessOrigin::Memory,
+                cpu.attempted_guest_instructions},
+            source);
+    });
 }
 
 void guest_write_u32_at(CpuState& cpu,
@@ -399,12 +575,18 @@ void guest_write_u32_at(CpuState& cpu,
                         const CodeWriteSource source) {
     const auto physical_address = translate_guest_address(
         cpu, virtual_address, MemoryAccessOperation::Write, MemoryAccessWidth::Word);
-    cpu.memory.write_u32_at(
-        physical_address,
-        value,
-        GuestMemoryAccessContext{
-            virtual_address, origin, cpu.retired_guest_instructions},
-        source);
+    with_guest_virtual_address(virtual_address, [&] {
+        cpu.memory.write_u32_at(
+            physical_address,
+            value,
+            GuestMemoryAccessContext{
+                virtual_address,
+                origin,
+                cpu.retired_guest_instructions,
+                GuestMemoryAccessOrigin::Memory,
+                cpu.attempted_guest_instructions},
+            source);
+    });
 }
 
 OperandCacheMaintenanceResult

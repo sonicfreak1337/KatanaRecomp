@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <span>
 
 namespace katana::runtime {
@@ -58,6 +59,7 @@ enum class ExceptionCause : std::uint8_t {
 
 class RuntimeAddressSpace;
 class DreamcastGdRomController;
+struct CpuState;
 
 enum class OperandCacheOperation : std::uint8_t { Invalidate, Purge, WriteBack };
 
@@ -73,6 +75,46 @@ struct Sh4TlbEntry {
     std::uint32_t pteh = 0u;
     std::uint32_t ptel = 0u;
     std::uint32_t ptea = 0u;
+};
+
+enum class ManualResetReason : std::uint8_t {
+    BlockedGeneralException,
+    TlbMultipleHit,
+};
+
+struct ManualResetRequest {
+    ManualResetReason reason = ManualResetReason::BlockedGeneralException;
+    ExceptionCause cause = ExceptionCause::None;
+    std::uint32_t event_code = 0u;
+    std::optional<std::uint32_t> fault_address;
+    std::uint32_t instruction_pc = 0u;
+    std::uint32_t owner_pc = 0u;
+    bool in_delay_slot = false;
+};
+
+using ManualResetCallback =
+    void (*)(void* context, CpuState& cpu, const ManualResetRequest& request) noexcept;
+
+struct ManualResetSink {
+    void* context = nullptr;
+    ManualResetCallback callback = nullptr;
+
+    [[nodiscard]] explicit operator bool() const noexcept { return callback != nullptr; }
+};
+
+class ManualResetCoordinator {
+  public:
+    virtual ~ManualResetCoordinator() = default;
+    virtual void reset(CpuState& cpu, const ManualResetRequest& request) noexcept = 0;
+
+    [[nodiscard]] ManualResetSink sink() noexcept {
+        return {this,
+                [](void* context,
+                   CpuState& cpu,
+                   const ManualResetRequest& request) noexcept {
+                    static_cast<ManualResetCoordinator*>(context)->reset(cpu, request);
+                }};
+    }
 };
 
 struct OperandCacheMaintenanceResult {
@@ -130,11 +172,24 @@ struct CpuState {
     std::uint64_t exception_generation = 0u;
     ExceptionCause last_exception_cause = ExceptionCause::None;
     bool exception_in_delay_slot = false;
+    std::uint32_t last_exception_instruction_pc = 0u;
+    std::uint32_t last_exception_instruction_physical_pc = 0u;
+    std::uint32_t last_exception_owner_pc = 0u;
+    std::uint64_t last_exception_generation = 0u;
     bool sleeping = false;
     std::uint32_t last_prefetch_address = 0u;
     std::uint64_t prefetch_count = 0u;
+    std::uint64_t attempted_guest_instructions = 0u;
     std::uint64_t retired_guest_instructions = 0u;
+    std::uint64_t total_guest_cycles = 0u;
+    std::uint64_t pending_guest_cycles = 0u;
+    std::uint32_t active_instruction_pc = 0u;
+    std::uint32_t active_instruction_physical_pc = 0u;
+    std::uint32_t active_block_virtual_start = 0u;
+    std::uint32_t active_block_physical_start = 0u;
+    std::uint32_t active_block_size = 0u;
     bool last_prefetch_was_store_queue = false;
+    ManualResetSink manual_reset_sink;
     std::shared_ptr<RuntimeAddressSpace> address_space;
     DreamcastGdRomController* gdrom_services = nullptr;
     DreamcastG1BusController* g1_bus = nullptr;
@@ -159,6 +214,38 @@ struct CpuState {
 
 void reset_cpu(CpuState& cpu, const ResetState& state = ResetState{}) noexcept;
 
+void begin_guest_instruction(CpuState& cpu,
+                             std::uint32_t instruction_pc,
+                             std::uint64_t guest_cycles) noexcept;
+void add_guest_instruction_cycles(CpuState& cpu, std::uint64_t guest_cycles) noexcept;
+void retire_guest_instruction(CpuState& cpu) noexcept;
+[[nodiscard]] std::uint64_t take_pending_guest_cycles(CpuState& cpu) noexcept;
+[[nodiscard]] std::uint64_t elapsed_guest_cycles(const CpuState& cpu) noexcept;
+
+class GuestInstructionAttempt final {
+  public:
+    GuestInstructionAttempt(CpuState& cpu,
+                            std::uint32_t instruction_pc,
+                            std::uint64_t guest_cycles) noexcept;
+    GuestInstructionAttempt(const GuestInstructionAttempt&) = delete;
+    GuestInstructionAttempt& operator=(const GuestInstructionAttempt&) = delete;
+    GuestInstructionAttempt(GuestInstructionAttempt&&) = delete;
+    GuestInstructionAttempt& operator=(GuestInstructionAttempt&&) = delete;
+    ~GuestInstructionAttempt() noexcept;
+
+    void complete() noexcept;
+
+    [[nodiscard]] std::uint64_t exception_generation_on_entry() const noexcept {
+        return exception_generation_on_entry_;
+    }
+
+  private:
+    CpuState& cpu_;
+    std::uint64_t exception_generation_on_entry_ = 0u;
+    int uncaught_exceptions_on_entry_ = 0;
+    bool completed_ = false;
+};
+
 void prefetch(CpuState& cpu, std::uint32_t address) noexcept;
 void load_tlb(CpuState& cpu) noexcept;
 
@@ -173,6 +260,7 @@ peek_guest_u32(const CpuState& cpu,
                std::span<const MemoryDevice* const> permitted_devices);
 [[nodiscard]] StoreQueuePrefetchTranslation
 translate_store_queue_prefetch(CpuState& cpu, std::uint32_t address);
+[[nodiscard]] std::uint16_t guest_fetch_u16(CpuState& cpu, std::uint32_t address);
 [[nodiscard]] std::uint8_t guest_read_u8(CpuState& cpu, std::uint32_t address);
 [[nodiscard]] std::uint16_t guest_read_u16(CpuState& cpu, std::uint32_t address);
 [[nodiscard]] std::uint32_t guest_read_u32(CpuState& cpu, std::uint32_t address);

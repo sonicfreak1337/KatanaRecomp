@@ -76,6 +76,10 @@ std::vector<SafepointReport> SchedulerSafepoints::consume_loop(std::uint64_t gue
     return result;
 }
 
+std::uint64_t SchedulerSafepoints::current_cycle() const noexcept {
+    return scheduler_.current_cycle();
+}
+
 const std::vector<SafepointReport>& SchedulerSafepoints::reports() const noexcept {
     return reports_;
 }

@@ -30,6 +30,7 @@ int main() {
         }
         CanonicalBlockDispatcher dispatcher(table);
         CpuState cpu;
+        cpu.write_sr(sr_md_mask);
         BlockExecutionContext context{};
         const BlockAddress source{0x8C000100u, 0x0C000100u};
         const BlockAddress taken{0x8C001000u, 0x0C001000u};

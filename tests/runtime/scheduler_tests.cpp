@@ -226,6 +226,21 @@ int main() {
                 reset_ids.remove_reset_observer(observer),
             "Scheduler-Reset recycelt Ereignis-IDs oder benachrichtigt Zeitgeber nicht sicher.");
 
+    EventScheduler observer_failure_scheduler;
+    std::size_t observer_after_failure = 0u;
+    static_cast<void>(observer_failure_scheduler.add_reset_observer(
+        [] { throw std::runtime_error("sichtbarer Resetbeobachterfehler"); }));
+    static_cast<void>(observer_failure_scheduler.add_reset_observer(
+        [&] { ++observer_after_failure; }));
+    static_cast<void>(
+        observer_failure_scheduler.schedule_at(9u, [](const auto, const auto) {}));
+    require(throws<std::runtime_error>([&] { observer_failure_scheduler.reset(); }) &&
+                observer_after_failure == 1u &&
+                observer_failure_scheduler.current_cycle() == 0u &&
+                observer_failure_scheduler.pending_event_count() == 0u &&
+                observer_failure_scheduler.reset_generation() == 1u,
+            "Ein werfender Resetbeobachter verhindert den Reset nachfolgender Module.");
+
     require(katana::runtime::parse_guest_cycle_budget("18446744073709551615") ==
                     std::numeric_limits<std::uint64_t>::max() &&
                 throws<std::invalid_argument>(

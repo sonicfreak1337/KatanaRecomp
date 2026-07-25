@@ -89,12 +89,20 @@ MaterializationFailure dispatch_failure(Fixture& fixture,
         fixture.modules, fixture.blocks, &fixture.tracker, policy, std::move(callback));
     const auto pc = fixture.cpu.pc;
     const auto pr = fixture.cpu.pr;
+    const auto exception_generation = fixture.cpu.exception_generation;
+    const auto attempted = fixture.cpu.attempted_guest_instructions;
+    const auto retired = fixture.cpu.retired_guest_instructions;
+    const auto cycles = elapsed_guest_cycles(fixture.cpu);
     try {
         static_cast<void>(
             dispatch_indirect(fixture.cpu, fixture.blocks, fixture.request(target, &materializer)));
     } catch (const IndirectDispatchError&) {
-        require(fixture.cpu.pc == pc && fixture.cpu.pr == pr,
-                "Abgelehntes Ziel hatte bereits Gastwirkung.");
+        require(fixture.cpu.pc == pc && fixture.cpu.pr == pr &&
+                    fixture.cpu.exception_generation == exception_generation &&
+                    fixture.cpu.attempted_guest_instructions == attempted &&
+                    fixture.cpu.retired_guest_instructions == retired &&
+                    elapsed_guest_cycles(fixture.cpu) == cycles,
+                "Abgelehntes Hostziel hatte bereits Gastwirkung.");
         require(fixture.blocks.dispatch_status(target, fixture.variant).state ==
                     RuntimeBlockDispatchState::Rejected,
                 "Abgelehntes Ziel besitzt keinen expliziten Rejected-Status.");
@@ -103,12 +111,39 @@ MaterializationFailure dispatch_failure(Fixture& fixture,
     throw std::runtime_error("Ungueltiges Ziel wurde dispatcht.");
 }
 
+MaterializationFailure materialization_preflight_failure(
+    Fixture& fixture,
+    const std::uint32_t target,
+    BlockMaterializationPolicy policy,
+    BlockMaterializeCallback callback) {
+    DemandBlockMaterializer materializer(
+        fixture.modules, fixture.blocks, &fixture.tracker, policy, std::move(callback));
+    const auto pc = fixture.cpu.pc;
+    const auto pr = fixture.cpu.pr;
+    const auto exception_generation = fixture.cpu.exception_generation;
+    const auto attempted = fixture.cpu.attempted_guest_instructions;
+    const auto retired = fixture.cpu.retired_guest_instructions;
+    const auto cycles = elapsed_guest_cycles(fixture.cpu);
+    const auto materialized = materializer.try_materialize(fixture.cpu,
+                                                           target,
+                                                           canonical_physical_address(target),
+                                                           fixture.variant,
+                                                           0x80u);
+    require(!materialized && fixture.cpu.pc == pc && fixture.cpu.pr == pr &&
+                fixture.cpu.exception_generation == exception_generation &&
+                fixture.cpu.attempted_guest_instructions == attempted &&
+                fixture.cpu.retired_guest_instructions == retired &&
+                elapsed_guest_cycles(fixture.cpu) == cycles,
+            "Abgelehnter Materialisierungs-Preflight hatte Gastwirkung.");
+    return materializer.last_failure();
+}
+
 void target_validation_regressions() {
     {
         Fixture fixture;
         bool callback_called = false;
-        const auto failure =
-            dispatch_failure(fixture, 0x101u, {true, 4u, 64u}, [&](auto, auto, auto, const auto&) {
+        const auto failure = materialization_preflight_failure(
+            fixture, 0x101u, {true, 4u, 64u}, [&](auto, auto, auto, const auto&) {
                 callback_called = true;
                 return valid_candidate(0x101u, fixture.variant);
             });
@@ -299,14 +334,13 @@ std::vector<BlockMaterializationEvent> deterministic_events() {
                                          fixture.blocks,
                                          &fixture.tracker,
                                          {true, 4u, 64u},
-                                         [&](const auto target, auto, auto, const auto& variant) {
-                                             return valid_candidate(target, variant);
-                                         });
-    try {
-        static_cast<void>(
-            dispatch_indirect(fixture.cpu, fixture.blocks, fixture.request(0x101u, &materializer)));
-    } catch (const IndirectDispatchError&) {
-    }
+                                          [&](const auto target, auto, auto, const auto& variant) {
+                                              return valid_candidate(target, variant);
+                                          });
+    require(!materializer.try_materialize(
+                fixture.cpu, 0x101u, 0x101u, fixture.variant, 0x80u) &&
+                materializer.last_failure() == MaterializationFailure::Misaligned,
+            "Deterministische Ereignisfolge verliert den Misalignment-Preflight.");
     static_cast<void>(
         dispatch_indirect(fixture.cpu, fixture.blocks, fixture.request(0x100u, &materializer)));
     const auto public_json =

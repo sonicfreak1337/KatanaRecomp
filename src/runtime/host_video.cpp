@@ -343,12 +343,71 @@ bool present_guest_frame_proof(NativeVideoOutput& output, const PvrGuestFramePro
     return output.presented_frames() > presented_before;
 }
 
+GuestFrameEvidenceObservation
+GuestFrameEvidenceTracker::observe(const GuestFramePumpResult& frame,
+                                   const bool guest_program_progressed) noexcept {
+    GuestFrameEvidenceObservation observation;
+    if (!frame.guest_frame_proven || !frame.proof_source || frame.render_generation == 0u)
+        return observation;
+    if (*frame.proof_source == PvrGuestFrameProofSource::DirectFramebuffer &&
+        (frame.write_generation_first == 0u ||
+         frame.write_generation_last < frame.write_generation_first ||
+         frame.render_generation != frame.write_generation_last))
+        return observation;
+
+    observation.proof_source = frame.proof_source;
+    observation.render_generation = frame.render_generation;
+    observation.write_generation_first = frame.write_generation_first;
+    observation.write_generation_last = frame.write_generation_last;
+    const auto add_marker = [&](const GuestFrameEvidenceMarker marker) {
+        observation.markers |= guest_frame_evidence_marker(marker);
+    };
+    const bool prior_guest_scanout = guest_scanout_seen_;
+    if (!guest_scanout_seen_) {
+        guest_scanout_seen_ = true;
+        add_marker(GuestFrameEvidenceMarker::FirstGuestScanout);
+    }
+    if (!guest_program_progressed) bootstrap_scanout_seen_ = true;
+
+    const bool ta_frame = *frame.proof_source == PvrGuestFrameProofSource::TaRender;
+    if (ta_frame && !ta_frame_seen_) {
+        ta_frame_seen_ = true;
+        add_marker(GuestFrameEvidenceMarker::FirstTaFrame);
+    }
+    if (ta_frame && guest_program_progressed && !gameplay_frame_seen_ &&
+        (bootstrap_scanout_seen_ || prior_guest_scanout)) {
+        gameplay_frame_seen_ = true;
+        add_marker(GuestFrameEvidenceMarker::FirstGameplayFrame);
+    }
+    return observation;
+}
+
+bool GuestFrameEvidenceTracker::guest_scanout_seen() const noexcept {
+    return guest_scanout_seen_;
+}
+
+bool GuestFrameEvidenceTracker::ta_frame_seen() const noexcept {
+    return ta_frame_seen_;
+}
+
+bool GuestFrameEvidenceTracker::gameplay_frame_seen() const noexcept {
+    return gameplay_frame_seen_;
+}
+
+bool GuestFrameEvidenceTracker::bootstrap_scanout_seen() const noexcept {
+    return bootstrap_scanout_seen_;
+}
+
 GuestFramePumpResult pump_guest_frame_proof(PvrSoftwareRenderer& renderer,
                                             NativeVideoOutput* const output) {
     auto proof = renderer.take_guest_frame_proof();
     if (!proof) return {};
     GuestFramePumpResult result;
     result.guest_frame_proven = true;
+    result.proof_source = proof->source;
+    result.render_generation = proof->render_generation;
+    result.write_generation_first = proof->write_generation_first;
+    result.write_generation_last = proof->write_generation_last;
     if (output != nullptr) result.frame_presented = present_guest_frame_proof(*output, *proof);
     return result;
 }

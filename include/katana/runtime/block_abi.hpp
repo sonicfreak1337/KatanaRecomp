@@ -73,6 +73,10 @@ struct BlockExecutionContext {
     std::uint64_t scheduler_cycle = 0u;
     std::size_t scheduler_event_budget = 0u;
     std::optional<std::uint32_t> delay_slot_owner_pc;
+    // Only execute_runtime_block may establish the generation snapshot used to
+    // classify a new exception edge.  A disengaged value keeps direct backend
+    // probes from interpreting persistent CPU exception metadata as a new edge.
+    std::optional<std::uint64_t> exception_generation_on_entry;
     BlockSyncPoint sync_point = BlockSyncPoint::Entry;
 };
 
@@ -91,6 +95,8 @@ struct BlockExit {
     ExceptionCause exception_cause = ExceptionCause::None;
     bool in_delay_slot = false;
     std::uint32_t exception_owner_pc = 0u;
+    std::uint32_t exception_instruction_pc = 0u;
+    std::uint64_t exception_generation = 0u;
 };
 
 void validate_block_entry(const CpuState& cpu,

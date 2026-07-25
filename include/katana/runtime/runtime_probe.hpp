@@ -38,8 +38,8 @@ namespace katana::runtime {
 struct DreamcastRuntimeState;
 class SystemReplayLog;
 
-inline constexpr std::uint32_t runtime_probe_schema_version = 3u;
-inline constexpr std::uint64_t runtime_probe_device_schema_version = 2u;
+inline constexpr std::uint32_t runtime_probe_schema_version = 4u;
+inline constexpr std::uint64_t runtime_probe_device_schema_version = 3u;
 inline constexpr std::string_view runtime_probe_hash_contract = "fnv1a64-le-v1";
 inline constexpr std::uint32_t runtime_probe_fault_report_version = 1u;
 inline constexpr std::size_t runtime_probe_replay_coverage_class_count = 12u;
@@ -118,12 +118,24 @@ struct RuntimeProbeCpuSnapshot {
     bool m = false;
     bool trap_pending = false;
     std::uint64_t exception_generation = 0u;
+    std::uint64_t last_exception_generation = 0u;
     ExceptionCause last_exception_cause = ExceptionCause::None;
     bool exception_in_delay_slot = false;
+    std::uint32_t last_exception_instruction_pc = 0u;
+    std::uint32_t last_exception_instruction_physical_pc = 0u;
+    std::uint32_t last_exception_owner_pc = 0u;
     bool sleeping = false;
     std::uint32_t last_prefetch_address = 0u;
     std::uint64_t prefetch_count = 0u;
+    std::uint64_t attempted_guest_instructions = 0u;
     std::uint64_t retired_guest_instructions = 0u;
+    std::uint64_t total_guest_cycles = 0u;
+    std::uint64_t pending_guest_cycles = 0u;
+    std::uint32_t active_instruction_pc = 0u;
+    std::uint32_t active_instruction_physical_pc = 0u;
+    std::uint32_t active_block_virtual_start = 0u;
+    std::uint32_t active_block_physical_start = 0u;
+    std::uint32_t active_block_size = 0u;
     bool last_prefetch_was_store_queue = false;
 
     [[nodiscard]] bool operator==(const RuntimeProbeCpuSnapshot&) const = default;
@@ -231,35 +243,35 @@ struct RuntimeProbeDeviceSchema {
 
 inline constexpr std::array<RuntimeProbeDeviceSchema, 35u>
     runtime_probe_deterministic_v1_device_schemas = {{
-        {RuntimeProbeDeviceKind::Pvr, 0u, 33u},
+        {RuntimeProbeDeviceKind::Pvr, 0u, 41u},
         {RuntimeProbeDeviceKind::SystemBus, 0u, 23u},
-        {RuntimeProbeDeviceKind::Aica, 0u, 8u},
-        {RuntimeProbeDeviceKind::GdRom, 0u, 71u},
+        {RuntimeProbeDeviceKind::Aica, 0u, 15u},
+        {RuntimeProbeDeviceKind::GdRom, 0u, 73u},
         {RuntimeProbeDeviceKind::Maple, 0u, 28u},
         {RuntimeProbeDeviceKind::Dmac, 0u, 57u},
         {RuntimeProbeDeviceKind::InterruptController, 0u, 3u},
-        {RuntimeProbeDeviceKind::StoreQueue, 0u, 18u},
+        {RuntimeProbeDeviceKind::StoreQueue, 0u, 25u},
         {RuntimeProbeDeviceKind::HollyDma, 0u, 42u},
         {RuntimeProbeDeviceKind::HollyDma, 1u, 33u},
         {RuntimeProbeDeviceKind::HollyDma, 2u, 86u},
         {RuntimeProbeDeviceKind::Tmu, 0u, 39u},
         {RuntimeProbeDeviceKind::Rtc, 0u, 34u},
-        {RuntimeProbeDeviceKind::Renderer, 0u, 38u},
+        {RuntimeProbeDeviceKind::Renderer, 0u, 40u},
         {RuntimeProbeDeviceKind::HostAudio, 0u, 4u},
         {RuntimeProbeDeviceKind::Scif, 0u, 17u},
-        {RuntimeProbeDeviceKind::SystemAsic, 0u, 21u},
-        {RuntimeProbeDeviceKind::PvrTa, 0u, 147u},
+        {RuntimeProbeDeviceKind::SystemAsic, 0u, 28u},
+        {RuntimeProbeDeviceKind::PvrTa, 0u, 154u},
         {RuntimeProbeDeviceKind::PvrTaAperture, 0u, 6u},
         {RuntimeProbeDeviceKind::PvrYuv, 0u, 8u},
         {RuntimeProbeDeviceKind::IoPort, 0u, 10u},
         {RuntimeProbeDeviceKind::AicaRtc, 0u, 9u},
-        {RuntimeProbeDeviceKind::AicaExecution, 0u, 21u},
-        {RuntimeProbeDeviceKind::MapleController, 0u, 19u},
+        {RuntimeProbeDeviceKind::AicaExecution, 0u, 22u},
+        {RuntimeProbeDeviceKind::MapleController, 0u, 24u},
         {RuntimeProbeDeviceKind::RtcClock, 0u, 6u},
         {RuntimeProbeDeviceKind::InterruptRouter, 0u, 14u},
         {RuntimeProbeDeviceKind::InterruptRegisters, 0u, 6u},
         {RuntimeProbeDeviceKind::CacheControl, 0u, 13u},
-        {RuntimeProbeDeviceKind::AddressSpace, 0u, 9u},
+        {RuntimeProbeDeviceKind::AddressSpace, 0u, 11u},
         {RuntimeProbeDeviceKind::BlockTable, 0u, 12u},
         {RuntimeProbeDeviceKind::CodeTracker, 0u, 16u},
         {RuntimeProbeDeviceKind::ModuleCatalog, 0u, 14u},
@@ -521,6 +533,9 @@ hash_runtime_probe_memory(std::span<const RuntimeProbeMemoryRange> ranges);
 hash_runtime_probe_persistent(std::span<const RuntimeProbeMemoryRange> ranges);
 [[nodiscard]] std::uint64_t
 hash_runtime_probe_devices(std::span<const RuntimeProbeDeviceSnapshot> devices);
+[[nodiscard]] std::uint64_t
+hash_pvr_render_payload(const PvrRegisterSnapshot& registers,
+                        PvrTaFifoSnapshot fifo);
 [[nodiscard]] std::uint64_t
 hash_runtime_probe_replay(const RuntimeProbeReplaySnapshot& snapshot) noexcept;
 [[nodiscard]] std::uint64_t

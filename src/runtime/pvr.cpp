@@ -29,8 +29,10 @@ PvrRegisterFile::PvrRegisterFile(EventScheduler& scheduler,
 
 PvrRegisterFile::~PvrRegisterFile() {
     if (scheduler_lifetime_.expired()) return;
-    for (const auto event : render_events_)
+    for (const auto& [event, job] : render_jobs_) {
+        static_cast<void>(job);
         static_cast<void>(scheduler_.cancel(event));
+    }
     cancel_scan_events();
     static_cast<void>(scheduler_.remove_reset_observer(reset_observer_));
 }
@@ -128,11 +130,14 @@ PvrRegisterSnapshot PvrRegisterFile::snapshot() const {
     result.render_requests = render_requests_;
     result.render_completions = render_completions_;
     result.render_failures = render_failures_;
+    result.render_overruns = render_overruns_;
     result.vblank_in = vblank_in_count_;
     result.vblank_out = vblank_out_count_;
     result.hblank = hblank_count_;
     result.resets = resets_;
-    result.render_event_ids.assign(render_events_.begin(), render_events_.end());
+    result.render_event_ids.reserve(render_jobs_.size());
+    for (const auto& [event, job] : render_jobs_)
+        if (job.published) result.render_event_ids.push_back(event);
     result.vblank_in_event = vblank_in_event_;
     result.vblank_out_event = vblank_out_event_;
     result.hblank_event = hblank_event_;
@@ -141,6 +146,15 @@ PvrRegisterSnapshot PvrRegisterFile::snapshot() const {
     result.timing = timing_;
     result.in_vblank = in_vblank_;
     result.field = field();
+    result.next_render_generation = next_render_generation_;
+    if (render_jobs_.size() == 1u && render_jobs_.begin()->second.published) {
+        const auto& active_job = render_jobs_.begin()->second;
+        result.active_render_request = active_job.request;
+        result.active_render_generation = active_job.generation;
+        result.active_render_start_cycle = active_job.start_cycle;
+        result.active_render_payload_digest = active_job.payload_digest;
+    }
+    result.last_render_start_error = last_render_start_error_;
     return result;
 }
 
@@ -161,9 +175,11 @@ void PvrRegisterFile::write(const std::uint32_t offset, const std::uint32_t valu
         // SOFTRESET drives three independent reset inputs. It is not a power-on reset of the
         // register bank or the scan generator.
         if ((requested & 0x2u) != 0u) {
-            for (const auto event : render_events_)
+            for (const auto& [event, job] : render_jobs_) {
+                static_cast<void>(job);
                 static_cast<void>(scheduler_.cancel(event));
-            render_events_.clear();
+            }
+            render_jobs_.clear();
         }
         if ((requested & 0x1u) != 0u) {
             registers_[index(pvr_register::TaNextOpb)] = 0u;
@@ -173,12 +189,85 @@ void PvrRegisterFile::write(const std::uint32_t offset, const std::uint32_t valu
         return;
     }
     if (offset == pvr_register::StartRender) {
-        ++render_requests_;
-        const auto event = scheduler_.schedule_after(
-            timing_.render_latency,
-            [this](const auto event_id, const auto) { complete_render(event_id); },
-            SchedulerEventKind::PvrRender);
-        render_events_.insert(event);
+        const auto request = ++render_requests_;
+        if (!render_jobs_.empty()) {
+            ++render_overruns_;
+            ++render_failures_;
+            last_render_start_error_ = PvrRenderStartError::Busy;
+            if (render_overrun_observer_) {
+                try {
+                    render_overrun_observer_();
+                } catch (...) {
+                }
+            }
+            return;
+        }
+        if (next_render_generation_ == 0u) {
+            ++render_failures_;
+            last_render_start_error_ = PvrRenderStartError::GenerationExhausted;
+            return;
+        }
+        const auto generation = next_render_generation_;
+        next_render_generation_ =
+            generation == std::numeric_limits<std::uint64_t>::max()
+                ? 0u
+                : generation + 1u;
+        const auto start_cycle = scheduler_.current_cycle();
+        PreparedRenderJob prepared_job{render_result_observer_, {}, 0u};
+        if (render_job_factory_) {
+            try {
+                prepared_job =
+                    render_job_factory_(snapshot(), request, generation, start_cycle);
+            } catch (...) {
+                ++render_failures_;
+                last_render_start_error_ = PvrRenderStartError::CaptureFailed;
+                return;
+            }
+        }
+        std::optional<SchedulerEventId> scheduled_event;
+        try {
+            const auto event = scheduler_.schedule_after(
+                timing_.render_latency,
+                [this](const auto event_id, const auto) { complete_render(event_id); },
+                SchedulerEventKind::PvrRender);
+            scheduled_event = event;
+            const auto [job_position, job_inserted] = render_jobs_.emplace(
+                event,
+                FrozenRenderJob{
+                    request,
+                    generation,
+                    start_cycle,
+                    prepared_job.payload_digest,
+                    std::move(prepared_job.execute),
+                    false});
+            if (!job_inserted)
+                throw std::logic_error("PVR-Renderauftrag-ID ist bereits aktiv.");
+            static_cast<void>(job_position);
+        } catch (...) {
+            if (scheduled_event) {
+                static_cast<void>(scheduler_.cancel(*scheduled_event));
+                render_jobs_.erase(*scheduled_event);
+            }
+            ++render_failures_;
+            last_render_start_error_ = PvrRenderStartError::SchedulerFailure;
+            return;
+        }
+        try {
+            if (prepared_job.commit) prepared_job.commit();
+            const auto job = render_jobs_.find(*scheduled_event);
+            if (job == render_jobs_.end())
+                throw std::logic_error("Vorbereiteter PVR-Renderauftrag ging verloren.");
+            job->second.published = true;
+        } catch (...) {
+            if (scheduled_event) {
+                static_cast<void>(scheduler_.cancel(*scheduled_event));
+                render_jobs_.erase(*scheduled_event);
+            }
+            ++render_failures_;
+            last_render_start_error_ = PvrRenderStartError::CaptureFailed;
+            return;
+        }
+        last_render_start_error_.reset();
         return;
     }
     if (offset == pvr_register::TaInit) {
@@ -266,9 +355,11 @@ void PvrRegisterFile::initialize_register_defaults() noexcept {
 }
 
 void PvrRegisterFile::reset() {
-    for (const auto event : render_events_)
+    for (const auto& [event, job] : render_jobs_) {
+        static_cast<void>(job);
         static_cast<void>(scheduler_.cancel(event));
-    render_events_.clear();
+    }
+    render_jobs_.clear();
     cancel_scan_events();
     initialize_register_defaults();
     field_ = 0u;
@@ -278,14 +369,18 @@ void PvrRegisterFile::reset() {
 }
 
 void PvrRegisterFile::complete_render(const SchedulerEventId event_id) {
-    if (render_events_.erase(event_id) == 0u)
-        throw std::logic_error("PVR-Rendercompletion besitzt keinen Request.");
-    if (!render_result_observer_) {
+    const auto found = render_jobs_.find(event_id);
+    if (found == render_jobs_.end() || !found->second.published)
+        throw std::logic_error(
+            "PVR-Rendercompletion besitzt keinen veroeffentlichten Frozen Job.");
+    auto frozen_job = std::move(found->second);
+    render_jobs_.erase(found);
+    if (!frozen_job.execute) {
         ++render_failures_;
         return;
     }
     try {
-        if (render_result_observer_() == PvrRenderResult::Success)
+        if (frozen_job.execute() == PvrRenderResult::Success)
             ++render_completions_;
         else
             ++render_failures_;
@@ -295,7 +390,7 @@ void PvrRegisterFile::complete_render(const SchedulerEventId event_id) {
 }
 
 void PvrRegisterFile::handle_scheduler_reset() {
-    render_events_.clear();
+    render_jobs_.clear();
     vblank_in_event_.reset();
     vblank_out_event_.reset();
     hblank_event_.reset();
@@ -310,6 +405,9 @@ std::uint64_t PvrRegisterFile::render_completion_count() const noexcept {
 }
 std::uint64_t PvrRegisterFile::render_failure_count() const noexcept {
     return render_failures_;
+}
+std::uint64_t PvrRegisterFile::render_overrun_count() const noexcept {
+    return render_overruns_;
 }
 std::uint64_t PvrRegisterFile::reset_count() const noexcept {
     return resets_;
@@ -349,6 +447,12 @@ void PvrRegisterFile::set_render_observer(std::function<void()> observer) {
 void PvrRegisterFile::set_render_result_observer(
     std::function<PvrRenderResult()> observer) {
     render_result_observer_ = std::move(observer);
+}
+void PvrRegisterFile::set_render_job_factory(RenderJobFactory factory) {
+    render_job_factory_ = std::move(factory);
+}
+void PvrRegisterFile::set_render_overrun_observer(std::function<void()> observer) {
+    render_overrun_observer_ = std::move(observer);
 }
 void PvrRegisterFile::set_vblank_observer(std::function<void(bool)> observer) {
     vblank_observer_ = std::move(observer);
@@ -813,7 +917,8 @@ std::uint64_t mipmap_level_offset(const PvrMaterial& material) {
     return byte_offset;
 }
 
-Rgba8 decode_palette_color(const PvrRegisterFile& registers, const std::uint32_t index) {
+template <typename RegisterView>
+Rgba8 decode_palette_color(const RegisterView& registers, const std::uint32_t index) {
     if (index >= 1024u) throw std::out_of_range("PVR-Palettenindex liegt ausserhalb des Palette-RAM.");
     const auto value = registers.read(pvr_register::PaletteTableBase + index * 4u);
     const auto format = registers.read(pvr_register::PaletteConfig) & 3u;
@@ -858,7 +963,8 @@ Rgba8 apply_fog(const Rgba8 source, const Rgba8 fog, const std::uint8_t coeffici
     return {blend(source.r, fog.r), blend(source.g, fog.g), blend(source.b, fog.b), source.a};
 }
 
-std::uint8_t table_fog_coefficient(const PvrRegisterFile& registers, const float depth) {
+template <typename RegisterView>
+std::uint8_t table_fog_coefficient(const RegisterView& registers, const float depth) {
     const auto encoded_density = registers.read(pvr_register::FogDensity) & 0xFFFFu;
     const auto mantissa = static_cast<std::uint8_t>(encoded_density >> 8u);
     if (mantissa == 0u || !std::isfinite(depth) || depth <= 0.0f) return 0u;
@@ -877,7 +983,8 @@ std::uint8_t table_fog_coefficient(const PvrRegisterFile& registers, const float
     return static_cast<std::uint8_t>(std::lround(current + (next - current) * fraction));
 }
 
-Rgba8 clamp_fragment_color(const Rgba8 source, const PvrRegisterFile& registers) {
+template <typename RegisterView>
+Rgba8 clamp_fragment_color(const Rgba8 source, const RegisterView& registers) {
     const auto minimum = decode_register_color(registers.read(pvr_register::ColorClampMinimum));
     const auto maximum = decode_register_color(registers.read(pvr_register::ColorClampMaximum));
     if (minimum.r > maximum.r || minimum.g > maximum.g || minimum.b > maximum.b)
@@ -888,8 +995,9 @@ Rgba8 clamp_fragment_color(const Rgba8 source, const PvrRegisterFile& registers)
             source.a};
 }
 
+template <typename RegisterView>
 Rgba8 sample_texture_nearest(const LinearMemoryDevice& vram,
-                             const PvrRegisterFile& registers,
+                             const RegisterView& registers,
                              const PvrMaterial& material,
                              float u,
                              float v) {
@@ -992,8 +1100,9 @@ Rgba8 sample_texture_nearest(const LinearMemoryDevice& vram,
     return color;
 }
 
+template <typename RegisterView>
 Rgba8 sample_texture(const LinearMemoryDevice& vram,
-                     const PvrRegisterFile& registers,
+                     const RegisterView& registers,
                      const PvrMaterial& material,
                      const float u,
                      const float v) {
@@ -1422,10 +1531,13 @@ std::uint8_t TileAccelerator::list_rank(const PvrListType type) noexcept {
 
 void TileAccelerator::begin_list(const PvrListType type) {
     if (list_open_) {
-        throw std::logic_error("Eine PVR-Primitivliste ist bereits offen.");
+        throw PvrTaParserException(PvrTaInputErrorReason::InvalidListOrder,
+                                   "Eine PVR-Primitivliste ist bereits offen.");
     }
     if (frame_has_list_ && list_rank(type) < highest_list_rank_) {
-        throw std::logic_error("PVR-Primitivlisten wurden in rueckwaertiger Reihenfolge begonnen.");
+        throw PvrTaParserException(
+            PvrTaInputErrorReason::InvalidListOrder,
+            "PVR-Primitivlisten wurden in rueckwaertiger Reihenfolge begonnen.");
     }
     current_list_ = type;
     highest_list_rank_ = list_rank(type);
@@ -1436,22 +1548,28 @@ void TileAccelerator::begin_list(const PvrListType type) {
 
 void TileAccelerator::set_material(PvrMaterial material) {
     if (!list_open_)
-        throw std::logic_error("PVR-Material ohne offene Primitivliste.");
+        throw PvrTaParserException(PvrTaInputErrorReason::InvalidListOrder,
+                                   "PVR-Material ohne offene Primitivliste.");
     if (!current_strip_.empty())
-        throw std::logic_error("PVR-Material wechselt innerhalb eines Triangle-Strips.");
+        throw PvrTaParserException(
+            PvrTaInputErrorReason::InvalidListOrder,
+            "PVR-Material wechselt innerhalb eines Triangle-Strips.");
     current_material_ = std::move(material);
 }
 
 void TileAccelerator::submit_vertex(const PvrVertex& vertex, const bool end_of_strip) {
     if (!list_open_) {
-        throw std::logic_error("PVR-Vertex ohne offene Primitivliste.");
+        throw PvrTaParserException(PvrTaInputErrorReason::InvalidListOrder,
+                                   "PVR-Vertex ohne offene Primitivliste.");
     }
     current_strip_.push_back(vertex);
     if (!end_of_strip) {
         return;
     }
     if (current_strip_.size() < 3u) {
-        throw std::invalid_argument("Ein PVR-Triangle-Strip braucht mindestens drei Vertices.");
+        throw PvrTaParserException(
+            PvrTaInputErrorReason::IncompletePacket,
+            "Ein PVR-Triangle-Strip braucht mindestens drei Vertices.");
     }
     primitives_.push_back(
         PvrPrimitive{current_list_, std::move(current_strip_), current_material_});
@@ -1460,17 +1578,21 @@ void TileAccelerator::submit_vertex(const PvrVertex& vertex, const bool end_of_s
 
 void TileAccelerator::end_list() {
     if (!list_open_) {
-        throw std::logic_error("Keine PVR-Primitivliste ist offen.");
+        throw PvrTaParserException(PvrTaInputErrorReason::InvalidListOrder,
+                                   "Keine PVR-Primitivliste ist offen.");
     }
     if (!current_strip_.empty()) {
-        throw std::logic_error("PVR-Primitivliste endet mit einem unvollstaendigen Strip.");
+        throw PvrTaParserException(
+            PvrTaInputErrorReason::IncompletePacket,
+            "PVR-Primitivliste endet mit einem unvollstaendigen Strip.");
     }
     list_open_ = false;
 }
 
 PvrTaFrame TileAccelerator::finish_frame() {
     if (list_open_) {
-        throw std::logic_error("PVR-Frame endet mit einer offenen Primitivliste.");
+        throw PvrTaParserException(PvrTaInputErrorReason::IncompletePacket,
+                                   "PVR-Frame endet mit einer offenen Primitivliste.");
     }
     PvrTaFrame result{std::move(primitives_)};
     primitives_.clear();
@@ -1500,7 +1622,8 @@ namespace {
 
 std::uint32_t ta_u32(const std::span<const std::uint8_t> packet, const std::size_t offset) {
     if (offset > packet.size() || packet.size() - offset < 4u)
-        throw std::out_of_range("TA-Paket ist abgeschnitten.");
+        throw PvrTaParserException(PvrTaInputErrorReason::BufferOverflow,
+                                   "TA-Paket ist abgeschnitten.");
     std::uint32_t value = 0u;
     std::memcpy(&value, packet.data() + offset, sizeof(value));
     return value;
@@ -1519,7 +1642,9 @@ PvrListType decode_list_type(const std::uint32_t pcw) {
     case 4u:
         return PvrListType::PunchThrough;
     default:
-        throw std::invalid_argument("TA-Objektliste wird vom allgemeinen Polygonpfad abgewiesen.");
+        throw PvrTaParserException(
+            PvrTaInputErrorReason::UnsupportedPacket,
+            "TA-Objektliste wird vom allgemeinen Polygonpfad abgewiesen.");
     }
 }
 
@@ -1533,7 +1658,8 @@ std::uint32_t decode_ta_float_color(const std::span<const std::uint8_t> packet,
     const auto channel = [&](const std::size_t component) {
         const auto value = std::bit_cast<float>(ta_u32(packet, offset + component));
         if (!std::isfinite(value))
-            throw std::invalid_argument("TA-Floatfarbe ist nicht endlich.");
+            throw PvrTaParserException(PvrTaInputErrorReason::InvalidPacket,
+                                       "TA-Floatfarbe ist nicht endlich.");
         return static_cast<std::uint32_t>(
             std::lround(std::clamp(value, 0.0f, 1.0f) * 255.0f));
     };
@@ -1610,7 +1736,14 @@ PvrTaFifo::PvrTaFifo(std::function<void(PvrListType)> list_observer)
     : list_observer_(std::move(list_observer)) {}
 
 void PvrTaFifo::submit(const std::span<const std::uint8_t> packet) {
-    if (packet.size() != 32u) throw std::invalid_argument("TA-FIFO erwartet 32-Byte-Parameter.");
+    if (packet.size() != 32u)
+        throw PvrTaParserException(PvrTaInputErrorReason::InvalidPacket,
+                                   "TA-FIFO erwartet 32-Byte-Parameter.");
+    if (frame_packets_ == pvr_ta_maximum_frame_packets)
+        throw PvrTaParserException(
+            PvrTaInputErrorReason::BufferOverflow,
+            "TA-Frame ueberschreitet das 8-MiB-Parameterfenster.");
+    ++frame_packets_;
     ++metrics_.packets;
     const auto normalized_kind =
         pending_intensity_header_
@@ -1637,7 +1770,9 @@ void PvrTaFifo::submit(const std::span<const std::uint8_t> packet) {
     }
     if (pending_modifier_vertex_packet_) {
         if (!active_modifier_volume_ || *active_modifier_volume_ >= modifier_volumes_.size())
-            throw std::logic_error("TA-Modifier-Vertex besitzt keinen aktiven Volume-Header.");
+            throw PvrTaParserException(
+                PvrTaInputErrorReason::InvalidListOrder,
+                "TA-Modifier-Vertex besitzt keinen aktiven Volume-Header.");
         const auto first = std::span<const std::uint8_t>(*pending_modifier_vertex_packet_);
         std::array<PvrVertex, 3u> triangle{
             PvrVertex{std::bit_cast<float>(ta_u32(first, 4u)),
@@ -1652,7 +1787,8 @@ void PvrTaFifo::submit(const std::span<const std::uint8_t> packet) {
         for (const auto& vertex : triangle) {
             if (!std::isfinite(vertex.x) || !std::isfinite(vertex.y) ||
                 !std::isfinite(vertex.z))
-                throw std::invalid_argument(
+                throw PvrTaParserException(
+                    PvrTaInputErrorReason::InvalidPacket,
                     "TA-Modifier-Volume besitzt nicht-endliche Koordinaten.");
         }
         modifier_volumes_[*active_modifier_volume_].triangles.push_back(triangle);
@@ -1686,14 +1822,17 @@ void PvrTaFifo::submit(const std::span<const std::uint8_t> packet) {
                         scale_ta_face_color(active_header_oargb_, offset_intensity);
                 }
             } else {
-                throw std::logic_error("TA-Zwei-Volumen-Vertexformat ist inkonsistent.");
+                throw PvrTaParserException(
+                    PvrTaInputErrorReason::IncompletePacket,
+                    "TA-Zwei-Volumen-Vertexformat ist inkonsistent.");
             }
         } else {
             vertex.argb = decode_ta_float_color(packet, 0u);
             vertex.oargb = decode_ta_float_color(packet, 16u);
         }
         if (!std::isfinite(vertex.volume_u) || !std::isfinite(vertex.volume_v))
-            throw std::invalid_argument(
+            throw PvrTaParserException(
+                PvrTaInputErrorReason::InvalidPacket,
                 "TA-Zwei-Volumen-Vertex besitzt nicht-endliche UV-Koordinaten.");
         accelerator_.submit_vertex(vertex, pending_extended_end_of_strip_);
         pending_extended_vertex_.reset();
@@ -1767,7 +1906,9 @@ void PvrTaFifo::submit(const std::span<const std::uint8_t> packet) {
         const auto end_x = ta_u32(packet, 20u) & 0x3Fu;
         const auto end_y = ta_u32(packet, 24u) & 0x1Fu;
         if (start_x > end_x || start_y > end_y)
-            throw std::invalid_argument("TA-Userclip liegt ausserhalb des 32-Pixel-Tilebereichs.");
+            throw PvrTaParserException(
+                PvrTaInputErrorReason::InvalidPacket,
+                "TA-Userclip liegt ausserhalb des 32-Pixel-Tilebereichs.");
         user_clip_start_x_ = static_cast<std::uint16_t>(start_x);
         user_clip_start_y_ = static_cast<std::uint16_t>(start_y);
         user_clip_end_x_ = static_cast<std::uint16_t>(end_x);
@@ -1780,7 +1921,9 @@ void PvrTaFifo::submit(const std::span<const std::uint8_t> packet) {
             active_list_ = selected;
             accelerator_.begin_list(selected);
         } else if (selected != active_list_) {
-            throw std::logic_error("TA-Objektlistenauswahl wechselt eine offene Liste.");
+            throw PvrTaParserException(
+                PvrTaInputErrorReason::InvalidListOrder,
+                "TA-Objektlistenauswahl wechselt eine offene Liste.");
         }
         return;
     }
@@ -1789,7 +1932,9 @@ void PvrTaFifo::submit(const std::span<const std::uint8_t> packet) {
         if (!accelerator_.list_open()) {
             accelerator_.begin_list(selected);
         } else if (selected != active_list_) {
-            throw std::logic_error("TA-Polygonheader wechselt eine offene Objektliste.");
+            throw PvrTaParserException(
+                PvrTaInputErrorReason::InvalidListOrder,
+                "TA-Polygonheader wechselt eine offene Objektliste.");
         }
         active_list_ = selected;
         const auto mode1 = ta_u32(packet, 4u);
@@ -1799,7 +1944,8 @@ void PvrTaFifo::submit(const std::span<const std::uint8_t> packet) {
             volume.list = selected;
             volume.depth_mode = static_cast<std::uint8_t>((mode1 >> 29u) & 7u);
             if (volume.depth_mode > 2u)
-                throw std::invalid_argument(
+                throw PvrTaParserException(
+                    PvrTaInputErrorReason::UnsupportedPacket,
                     "TA-Modifier-Volume besitzt einen reservierten Depth-Mode.");
             volume.culling = static_cast<std::uint8_t>((mode1 >> 27u) & 3u);
             volume.volume_last = (pcw & 0x40u) != 0u;
@@ -1839,7 +1985,8 @@ void PvrTaFifo::submit(const std::span<const std::uint8_t> packet) {
         decode_ta_texture_words(active_material_, mode2, mode3);
         if (active_two_volume_) {
             if (active_color_type_ == 1u)
-                throw std::invalid_argument(
+                throw PvrTaParserException(
+                    PvrTaInputErrorReason::UnsupportedPacket,
                     "TA-Zwei-Volumen-Modus besitzt kein Floating-Color-Vertexformat.");
             active_material_.volume_material = std::make_shared<PvrMaterial>(active_material_);
             active_material_.volume_material->volume_material.reset();
@@ -1856,7 +2003,8 @@ void PvrTaFifo::submit(const std::span<const std::uint8_t> packet) {
                 intensity_face_color_valid_ = true;
             }
         } else if (active_color_type_ == 3u && !intensity_face_color_valid_) {
-            throw std::logic_error(
+            throw PvrTaParserException(
+                PvrTaInputErrorReason::InvalidListOrder,
                 "TA-Intensity-Mode 2 wurde vor einer Face-Color aus Mode 1 verwendet.");
         }
         accelerator_.set_material(active_material_);
@@ -1868,7 +2016,9 @@ void PvrTaFifo::submit(const std::span<const std::uint8_t> packet) {
         if (!accelerator_.list_open()) {
             accelerator_.begin_list(selected);
         } else if (selected != active_list_) {
-            throw std::logic_error("TA-Spriteheader wechselt eine offene Objektliste.");
+            throw PvrTaParserException(
+                PvrTaInputErrorReason::InvalidListOrder,
+                "TA-Spriteheader wechselt eine offene Objektliste.");
         }
         active_list_ = selected;
         active_textured_ = (pcw & 0x8u) != 0u;
@@ -1900,7 +2050,8 @@ void PvrTaFifo::submit(const std::span<const std::uint8_t> packet) {
         if (active_list_ == PvrListType::OpaqueModifier ||
             active_list_ == PvrListType::TranslucentModifier) {
             if (!active_modifier_volume_ || *active_modifier_volume_ >= modifier_volumes_.size())
-                throw std::logic_error(
+                throw PvrTaParserException(
+                    PvrTaInputErrorReason::InvalidListOrder,
                     "TA-Modifier-Vertex wurde vor einem Volume-Header gesendet.");
             std::array<std::uint8_t, 32u> first{};
             std::copy(packet.begin(), packet.end(), first.begin());
@@ -1963,7 +2114,8 @@ void PvrTaFifo::submit(const std::span<const std::uint8_t> packet) {
         }
         if (!std::isfinite(vertex.x) || !std::isfinite(vertex.y) ||
             !std::isfinite(vertex.z) || !std::isfinite(vertex.u) || !std::isfinite(vertex.v))
-            throw std::invalid_argument("TA-Vertex besitzt nicht-endliche Koordinaten.");
+            throw PvrTaParserException(PvrTaInputErrorReason::InvalidPacket,
+                                       "TA-Vertex besitzt nicht-endliche Koordinaten.");
         if (active_two_volume_ && active_textured_) {
             pending_extended_vertex_ = vertex;
             pending_extended_end_of_strip_ = (pcw & 0x10000000u) != 0u;
@@ -1973,18 +2125,50 @@ void PvrTaFifo::submit(const std::span<const std::uint8_t> packet) {
         ++metrics_.vertices;
         return;
     }
-    throw std::runtime_error("TA-Parametertyp ist noch nicht in den Polygonpfad integrierbar.");
+    throw PvrTaParserException(
+        PvrTaInputErrorReason::UnsupportedPacket,
+        "TA-Parametertyp ist noch nicht in den Polygonpfad integrierbar.");
+}
+
+PvrTaSubmitResult PvrTaFifo::submit_guest(const std::span<const std::uint8_t> packet) {
+    const auto metrics_before = metrics_;
+    try {
+        submit(packet);
+    } catch (const PvrTaParserException& error) {
+        // A rejected guest packet may have reached a late parser check. Quiesce all
+        // partially mutated frame state, but preserve cumulative accepted/rejected
+        // diagnostics and the first-error contract.
+        metrics_ = metrics_before;
+        return reject_guest(error.reason(), error.what());
+    } catch (...) {
+        discard_frame_state();
+        metrics_ = metrics_before;
+        throw;
+    }
+    return {true, std::nullopt};
+}
+
+PvrTaSubmitResult PvrTaFifo::reject_guest(const PvrTaInputErrorReason reason,
+                                          std::string detail) {
+    const auto packet_sequence = metrics_.packets + metrics_.rejected_packets + 1u;
+    discard_frame_state();
+    ++metrics_.rejected_packets;
+    PvrTaInputError fault{reason, packet_sequence, std::move(detail)};
+    if (!first_input_error_) first_input_error_ = fault;
+    return {false, std::move(fault)};
 }
 
 PvrTaFrame PvrTaFifo::finish_frame() {
     if (pending_sprite_vertex_ || pending_extended_vertex_ || pending_intensity_header_ ||
         pending_modifier_vertex_packet_)
-        throw std::logic_error("TA-Frame endet innerhalb eines 64-Byte-Parameters.");
+        throw PvrTaParserException(PvrTaInputErrorReason::IncompletePacket,
+                                   "TA-Frame endet innerhalb eines 64-Byte-Parameters.");
     auto frame = accelerator_.finish_frame();
     frame.modifier_volumes = std::move(modifier_volumes_);
     modifier_volumes_.clear();
     active_modifier_volume_.reset();
     ++metrics_.frames;
+    frame_packets_ = 0u;
     return frame;
 }
 
@@ -2018,13 +2202,17 @@ PvrTaFifoSnapshot PvrTaFifo::snapshot() const {
         active_modifier_volume_,
         pending_modifier_vertex_packet_,
         metrics_,
+        frame_packets_,
+        first_input_error_,
     };
 }
 
 void PvrTaFifo::continue_list() {
     if (accelerator_.list_open() || pending_sprite_vertex_ || pending_extended_vertex_ ||
         pending_intensity_header_ || pending_modifier_vertex_packet_)
-        throw std::logic_error("TA-Listenfortsetzung beginnt innerhalb eines Parameters oder einer Liste.");
+        throw PvrTaParserException(
+            PvrTaInputErrorReason::IncompletePacket,
+            "TA-Listenfortsetzung beginnt innerhalb eines Parameters oder einer Liste.");
     active_list_ = PvrListType::Opaque;
     active_textured_ = false;
     active_uv16_ = false;
@@ -2045,7 +2233,7 @@ void PvrTaFifo::continue_list() {
     ++metrics_.continuations;
 }
 
-void PvrTaFifo::reset() noexcept {
+void PvrTaFifo::discard_frame_state() noexcept {
     accelerator_ = TileAccelerator{};
     active_list_ = PvrListType::Opaque;
     active_textured_ = false;
@@ -2069,7 +2257,13 @@ void PvrTaFifo::reset() noexcept {
     modifier_volumes_.clear();
     active_modifier_volume_.reset();
     pending_modifier_vertex_packet_.reset();
+    frame_packets_ = 0u;
+}
+
+void PvrTaFifo::reset() noexcept {
+    discard_frame_state();
     metrics_ = {};
+    first_input_error_.reset();
 }
 
 bool PvrChannel2DestinationPlan::destination_progresses() const noexcept {
@@ -2164,24 +2358,45 @@ void PvrTaFifoMemoryDevice::write_u8(const std::uint32_t offset, const std::uint
         written_mask_ = 0u;
         packet_.fill(0u);
     } else if (base != packet_base_) {
-        throw std::runtime_error(
+        reset();
+        const auto rejection = fifo_->reject_guest(
+            PvrTaInputErrorReason::IncompletePacket,
             "TA-FIFO-Schreibfolge verlaesst ein unvollstaendiges 32-Byte-Parameterpaket.");
+        throw PvrTaParserException(rejection.error->reason, rejection.error->detail);
     }
     const auto bit = std::uint32_t{1u} << byte;
-    if ((written_mask_ & bit) != 0u)
-        throw std::runtime_error("TA-FIFO-Parameterbyte wurde vor Completion doppelt geschrieben.");
+    if ((written_mask_ & bit) != 0u) {
+        reset();
+        const auto rejection = fifo_->reject_guest(
+            PvrTaInputErrorReason::InvalidPacket,
+            "TA-FIFO-Parameterbyte wurde vor Completion doppelt geschrieben.");
+        throw PvrTaParserException(rejection.error->reason, rejection.error->detail);
+    }
     packet_[byte] = value;
     written_mask_ |= bit;
     if (written_mask_ == std::numeric_limits<std::uint32_t>::max()) {
-        fifo_->submit(packet_);
+        const auto completed_packet = packet_;
+        reset();
+        const auto result = fifo_->submit_guest(completed_packet);
+        if (!result.accepted) {
+            throw PvrTaParserException(
+                result.error ? result.error->reason : PvrTaInputErrorReason::InvalidPacket,
+                result.error ? result.error->detail
+                             : "TA-FIFO-Aperturpaket wurde ohne Detail abgelehnt.");
+        }
         if (registers_) registers_->record_ta_packet(32u);
-        written_mask_ = 0u;
-        packet_active_ = false;
     }
 }
 
 PvrTaFifoMemoryDevice::Snapshot PvrTaFifoMemoryDevice::snapshot() const noexcept {
     return {packet_, packet_base_, written_mask_, packet_active_};
+}
+
+void PvrTaFifoMemoryDevice::reset() noexcept {
+    packet_.fill(0u);
+    packet_base_ = 0u;
+    written_mask_ = 0u;
+    packet_active_ = false;
 }
 
 PvrYuvConverterMemoryDevice::PvrYuvConverterMemoryDevice(
@@ -2330,6 +2545,23 @@ PvrYuvConverterMemoryDevice::Snapshot PvrYuvConverterMemoryDevice::snapshot() co
 void PvrSoftwareRenderer::render(const PvrTaFrame& frame,
                                  const PvrRegisterFile& registers,
                                  LinearMemoryDevice& vram) {
+    render(frame, registers.snapshot(), vram);
+}
+
+void PvrSoftwareRenderer::render(const PvrTaFrame& frame,
+                                 const PvrRegisterSnapshot& registers,
+                                 LinearMemoryDevice& vram) {
+    render(frame, registers, vram, next_render_generation_);
+}
+
+void PvrSoftwareRenderer::render(const PvrTaFrame& frame,
+                                 const PvrRegisterSnapshot& registers,
+                                 LinearMemoryDevice& vram,
+                                 const std::uint64_t render_generation) {
+    if (render_generation == 0u)
+        throw std::invalid_argument("PVR-Rendergeneration Null ist ungueltig.");
+    if (render_generation <= last_render_generation_)
+        throw std::logic_error("PVR-Rendergeneration ist nicht streng monoton.");
     std::uint64_t frame_pixel_writes = 0u;
     const auto x_clip = registers.read(pvr_register::FramebufferXClip);
     const auto y_clip = registers.read(pvr_register::FramebufferYClip);
@@ -3024,7 +3256,7 @@ void PvrSoftwareRenderer::render(const PvrTaFrame& frame,
         apply_modifier_volumes(PvrListType::TranslucentModifier);
     render_volume_materials(PvrListType::TranslucentModifier, translucent_volume_area);
     PvrRenderGenerationEvidence evidence;
-    evidence.generation = next_render_generation_++;
+    evidence.generation = render_generation;
     evidence.write_base = base;
     evidence.stride_bytes = static_cast<std::uint32_t>(stride);
     evidence.width = width;
@@ -3054,6 +3286,10 @@ void PvrSoftwareRenderer::render(const PvrTaFrame& frame,
     }
     const auto frame_changed_pixels = evidence.changed_pixels;
     last_render_generation_ = evidence.generation;
+    next_render_generation_ =
+        render_generation == std::numeric_limits<std::uint64_t>::max()
+            ? 0u
+            : render_generation + 1u;
     if (!evidence.changed_pixel_values.empty()) {
         const auto evidence_bytes =
             evidence.changed_pixel_values.size() * sizeof(PvrChangedPixelEvidence);
@@ -3098,6 +3334,32 @@ void PvrSoftwareRenderer::observe_vram_write(const std::uint32_t address,
             ? std::numeric_limits<std::uint64_t>::max()
             : write_begin + write_size;
     bool direct_vram = false;
+    const auto mark_backing_range = [&](const std::uint32_t begin,
+                                        const std::uint32_t end) {
+        if (begin >= end) return;
+        const auto first_word = static_cast<std::size_t>(begin / 64u);
+        const auto last_word = static_cast<std::size_t>((end - 1u) / 64u);
+        const auto add_mask = [&](const std::size_t word_index,
+                                  const std::uint64_t mask) {
+            auto& word = direct_dirty_words_[word_index];
+            direct_dirty_byte_count_ += std::popcount(mask & ~word);
+            word |= mask;
+        };
+        const auto first_bit = begin & 63u;
+        const auto end_bit = end & 63u;
+        const auto first_mask = ~std::uint64_t{0u} << first_bit;
+        const auto last_mask =
+            end_bit == 0u ? ~std::uint64_t{0u}
+                          : (std::uint64_t{1u} << end_bit) - 1u;
+        if (first_word == last_word) {
+            add_mask(first_word, first_mask & last_mask);
+            return;
+        }
+        add_mask(first_word, first_mask);
+        for (auto word = first_word + 1u; word < last_word; ++word)
+            add_mask(word, ~std::uint64_t{0u});
+        add_mask(last_word, last_mask);
+    };
     const auto mark_mapping = [&](const std::uint32_t base, const bool logical_32bit) {
         const auto range_begin = static_cast<std::uint64_t>(base);
         const auto range_end = range_begin + dreamcast_vram_size;
@@ -3107,17 +3369,24 @@ void PvrSoftwareRenderer::observe_vram_write(const std::uint32_t address,
         direct_vram = true;
         if (direct_dirty_words_.empty())
             direct_dirty_words_.resize((dreamcast_vram_size + 63u) / 64u, 0u);
-        for (auto current = overlap_begin; current < overlap_end; ++current) {
-            const auto offset = static_cast<std::uint32_t>(current - range_begin);
-            const auto backing = logical_32bit
-                                     ? dreamcast_vram_32bit_to_linear_offset(offset)
-                                     : offset;
-            auto& word = direct_dirty_words_[backing / 64u];
-            const auto mask = std::uint64_t{1u} << (backing & 63u);
-            if ((word & mask) == 0u) {
-                word |= mask;
-                ++direct_dirty_byte_count_;
-            }
+        const auto offset_begin =
+            static_cast<std::uint32_t>(overlap_begin - range_begin);
+        const auto offset_end =
+            static_cast<std::uint32_t>(overlap_end - range_begin);
+        if (!logical_32bit) {
+            mark_backing_range(offset_begin, offset_end);
+            return;
+        }
+        // The 32-bit aperture interleaves four-byte guest words across the two
+        // VRAM banks. Mark each mapped word as one bitmap range instead of
+        // walking and setting every byte individually.
+        auto current = offset_begin;
+        while (current < offset_end) {
+            const auto next_word =
+                std::min<std::uint32_t>(offset_end, (current & ~3u) + 4u);
+            const auto backing = dreamcast_vram_32bit_to_linear_offset(current);
+            mark_backing_range(backing, backing + (next_word - current));
+            current = next_word;
         }
     };
     for (const auto base : dreamcast_vram_64bit_physical_bases) mark_mapping(base, false);
@@ -3130,7 +3399,9 @@ void PvrSoftwareRenderer::observe_vram_write(const std::uint32_t address,
     const auto generation = next_direct_write_generation_;
     if (next_direct_write_generation_ != std::numeric_limits<std::uint64_t>::max())
         ++next_direct_write_generation_;
-    pending_direct_write_generation_ = generation;
+    if (pending_direct_first_write_generation_ == 0u)
+        pending_direct_first_write_generation_ = generation;
+    pending_direct_last_write_generation_ = generation;
 }
 
 void PvrSoftwareRenderer::reset_guest_frame_evidence(
@@ -3140,7 +3411,8 @@ void PvrSoftwareRenderer::reset_guest_frame_evidence(
     pending_render_evidence_.clear();
     pending_render_evidence_bytes_ = 0u;
     next_evidence_scan_generation_ = 0u;
-    pending_direct_write_generation_ = 0u;
+    pending_direct_first_write_generation_ = 0u;
+    pending_direct_last_write_generation_ = 0u;
     std::fill(direct_dirty_words_.begin(), direct_dirty_words_.end(), std::uint64_t{0u});
     direct_dirty_byte_count_ = 0u;
     if (vram.empty()) {
@@ -3190,21 +3462,25 @@ void PvrSoftwareRenderer::observe_vblank_scanout(const PvrRegisterFile& register
         std::copy(vram.begin(), vram.end(), direct_vram_shadow_.begin());
         std::fill(direct_dirty_words_.begin(), direct_dirty_words_.end(), std::uint64_t{0u});
         direct_dirty_byte_count_ = 0u;
-        pending_direct_write_generation_ = 0u;
+        pending_direct_first_write_generation_ = 0u;
+        pending_direct_last_write_generation_ = 0u;
         direct_vram_shadow_valid_ = true;
     }
     const auto needs_previous_frame =
-        pending_direct_write_generation_ != 0u && direct_dirty_byte_count_ != 0u;
+        pending_direct_first_write_generation_ != 0u && direct_dirty_byte_count_ != 0u;
     const auto previous_frame = needs_previous_frame
                                     ? std::optional<PvrFrame>{capture_scanout(
                                           std::span<const std::uint8_t>(direct_vram_shadow_))}
                                     : std::nullopt;
     struct DirectScanoutResult {
-        std::uint64_t generation = 0u;
+        std::uint64_t first_generation = 0u;
+        std::uint64_t last_generation = 0u;
         std::uint64_t changed_pixels = 0u;
     };
     const auto observe_direct_scanout = [&]() {
-        DirectScanoutResult result{pending_direct_write_generation_, 0u};
+        DirectScanoutResult result{pending_direct_first_write_generation_,
+                                   pending_direct_last_write_generation_,
+                                   0u};
         const auto dirty = [&](const std::uint32_t backing) {
             if (direct_dirty_words_.empty()) return false;
             return (direct_dirty_words_[backing / 64u] &
@@ -3253,19 +3529,24 @@ void PvrSoftwareRenderer::observe_vblank_scanout(const PvrRegisterFile& register
                 }
             }
         }
-        if (direct_dirty_byte_count_ == 0u) pending_direct_write_generation_ = 0u;
+        if (direct_dirty_byte_count_ == 0u) {
+            pending_direct_first_write_generation_ = 0u;
+            pending_direct_last_write_generation_ = 0u;
+        }
         return result;
     };
     const auto direct_scanout = observe_direct_scanout();
     const auto queue_direct_scanout = [&] {
         if (direct_scanout.changed_pixels == 0u) return;
-        queued_guest_frame_proof_ =
-            PvrGuestFrameProof{direct_scanout.generation,
-                               direct_scanout.changed_pixels,
-                               scanout_field,
-                               *scanout,
-                               std::move(frame),
-                               PvrGuestFrameProofSource::DirectFramebuffer};
+        auto proof = PvrGuestFrameProof{direct_scanout.last_generation,
+                                        direct_scanout.changed_pixels,
+                                        scanout_field,
+                                        *scanout,
+                                        std::move(frame),
+                                        PvrGuestFrameProofSource::DirectFramebuffer};
+        proof.write_generation_first = direct_scanout.first_generation;
+        proof.write_generation_last = direct_scanout.last_generation;
+        queued_guest_frame_proof_ = std::move(proof);
         ++metrics_.proven_guest_frames;
         ++metrics_.direct_scanout_frames;
         metrics_.direct_scanout_changed_pixels += direct_scanout.changed_pixels;
@@ -3478,7 +3759,9 @@ PvrSoftwareRendererSnapshot PvrSoftwareRenderer::snapshot() const {
         pending_render_evidence_bytes_,
         next_evidence_scan_generation_,
         next_direct_write_generation_,
-        pending_direct_write_generation_,
+        pending_direct_last_write_generation_,
+        pending_direct_first_write_generation_,
+        pending_direct_last_write_generation_,
         direct_dirty_words_,
         direct_dirty_byte_count_,
         direct_vram_shadow_,

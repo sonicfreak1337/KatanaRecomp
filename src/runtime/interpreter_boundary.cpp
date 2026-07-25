@@ -2,6 +2,7 @@
 
 #include "katana/runtime/block_table.hpp"
 
+#include <algorithm>
 #include <stdexcept>
 #include <utility>
 
@@ -71,6 +72,9 @@ InterpreterResult PreciseInterpreterBoundary::execute(CpuState& cpu,
     }
     ++counts_[request.reason];
     cpu.pc = request.guest_pc;
+    GuestInstructionAttempt instruction_attempt(cpu, request.guest_pc, request.guest_cycles);
+    if (request.dynamic_code && request.dynamic_size != 0u)
+        cpu.active_instruction_physical_pc = request.dynamic_physical_address;
     const auto exception_generation_on_entry = cpu.exception_generation;
     bool supported = false;
     auto diagnostic_error = DispatchDiagnosticError::None;
@@ -87,11 +91,32 @@ InterpreterResult PreciseInterpreterBoundary::execute(CpuState& cpu,
         raise_illegal_instruction(cpu, request.guest_pc, request.delay_slot_owner);
     }
 
+    const bool exception = cpu.exception_generation != exception_generation_on_entry;
+    if (!exception) instruction_attempt.complete();
     const auto kind =
         request.delay_slot_owner ? SafepointKind::AfterDelaySlot : SafepointKind::BlockEnd;
-    const auto safepoint =
-        safepoints_.consume(request.guest_cycles, kind, ExecutionOrigin::Fallback);
-    const bool exception = cpu.exception_generation != exception_generation_on_entry;
+    const auto pending_guest_cycles = cpu.pending_guest_cycles;
+    const auto scheduler_cycle_before = safepoints_.current_cycle();
+    const auto commit_delivered_cycles = [&]() noexcept {
+        const auto scheduler_cycle_after = safepoints_.current_cycle();
+        const auto delivered =
+            scheduler_cycle_after >= scheduler_cycle_before
+                ? std::min(pending_guest_cycles,
+                           scheduler_cycle_after - scheduler_cycle_before)
+                : 0u;
+        const auto accountable = std::min(delivered, cpu.pending_guest_cycles);
+        cpu.pending_guest_cycles -= accountable;
+        cpu.total_guest_cycles += accountable;
+    };
+    SafepointReport safepoint;
+    try {
+        safepoint =
+            safepoints_.consume(pending_guest_cycles, kind, ExecutionOrigin::Fallback);
+    } catch (...) {
+        commit_delivered_cycles();
+        throw;
+    }
+    commit_delivered_cycles();
     if (!exception && cpu.pc != request.exit_boundary) {
         diagnose(
             diagnostics_, request, cpu, DispatchDiagnosticError::InvalidBoundary, cpu.pc, false);

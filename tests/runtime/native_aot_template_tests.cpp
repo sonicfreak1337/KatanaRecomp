@@ -203,13 +203,6 @@ int main() {
                             reinterpret_cast<const char*>(latent_bytes.data()),
                             latent_bytes.size()));
         ExecutableModuleCatalog latent_modules;
-        ExecutableModule latent_source_module;
-        latent_source_module.id = "latent-source-module";
-        latent_source_module.source_identity = latent_byte_identity;
-        latent_source_module.guest_start = latent_source;
-        latent_source_module.bytes = latent_bytes;
-        latent_source_module.writable = false;
-        latent_modules.publish(latent_source_module);
         ExecutableModule loaded_module;
         loaded_module.id = "disc-load-module";
         loaded_module.source_identity = "disc-load-v1:free-provenance";
@@ -231,8 +224,8 @@ int main() {
              native_template_block,
              "synthetic-latent-aot-source"}));
         const std::array latent_templates{NativeAotTemplate{
-            latent_source_module.id,
-            latent_source_module.source_identity,
+            "latent-source-module",
+            latent_byte_identity,
             latent_source,
             static_cast<std::uint32_t>(latent_bytes.size()),
             0,
@@ -247,7 +240,9 @@ int main() {
             canonical_physical_address(latent_runtime + latent_offset),
             std::span<const std::uint8_t>(latent_bytes).subspan(latent_offset),
             BlockVariantKey{9u, 8u, 7u, 6u, 5u});
-        require(latent_bound && latent_bound.candidate.block.function == native_template_block &&
+        require(latent_modules.find("latent-source-module") == nullptr && latent_bound &&
+                    !latent_bound.candidate.interpreter_backed &&
+                    latent_bound.candidate.block.function == native_template_block &&
                     latent_bound.candidate.block.aot_template ==
                         RuntimeAotTemplateContract{
                             {latent_source,
@@ -255,6 +250,39 @@ int main() {
                              static_cast<std::uint32_t>(latent_bytes.size())},
                             static_cast<std::uint32_t>(latent_bytes.size())},
                 "Byteidentisches geladenes Discmodul wurde nicht an latentes AOT gebunden.");
+
+        auto mismatched_template_identity = latent_templates;
+        mismatched_template_identity[0].expected_source_identity =
+            "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff";
+        NativeAotTemplateBinder mismatched_template_binder(
+            cpu, latent_modules, latent_blocks, mismatched_template_identity);
+        const auto mismatched_template = mismatched_template_binder.bind(
+            latent_runtime + latent_offset,
+            canonical_physical_address(latent_runtime + latent_offset),
+            std::span<const std::uint8_t>(latent_bytes).subspan(latent_offset),
+            {});
+        require(!mismatched_template &&
+                    mismatched_template.failure ==
+                        NativeAotTemplateBindFailure::InvalidDefinition,
+                "Latentes AOT akzeptierte einen vom Runtimehash geloesten Templatevertrag.");
+
+        auto mutated_loaded_bytes = latent_bytes;
+        mutated_loaded_bytes[latent_offset] ^= 0x01u;
+        cpu.memory.write_bytes(canonical_physical_address(latent_runtime),
+                               mutated_loaded_bytes,
+                               CodeWriteSource::Cpu);
+        const auto mutated_loaded = latent_binder.bind(
+            latent_runtime + latent_offset,
+            canonical_physical_address(latent_runtime + latent_offset),
+            std::span<const std::uint8_t>(mutated_loaded_bytes).subspan(latent_offset),
+            {});
+        require(!mutated_loaded &&
+                    mutated_loaded.failure ==
+                        NativeAotTemplateBindFailure::RuntimeBytesMismatch,
+                "Nach dem Load veraenderte Runtimebytes wurden trotz Metadatenbindung akzeptiert.");
+        cpu.memory.write_bytes(canonical_physical_address(latent_runtime),
+                               latent_bytes,
+                               CodeWriteSource::Copy);
 
         constexpr std::uint32_t latent_tlb_virtual = 0x00103000u;
         cpu.write_sr(sr_md_mask);
@@ -273,6 +301,7 @@ int main() {
                                   true,
                                   true,
                                   false});
+        const auto address_space_before_tlb_bind = cpu.address_space->snapshot();
         const auto latent_tlb_bound = latent_binder.bind(
             latent_tlb_virtual + latent_offset,
             canonical_physical_address(latent_runtime + latent_offset),
@@ -284,8 +313,10 @@ int main() {
                             {latent_source,
                              latent_tlb_virtual,
                              static_cast<std::uint32_t>(latent_bytes.size())},
-                            static_cast<std::uint32_t>(latent_bytes.size())},
-                "Lineares aktives P0-TLB-Mapping wurde nicht an latentes AOT gebunden.");
+                            static_cast<std::uint32_t>(latent_bytes.size())} &&
+                    cpu.address_space->snapshot() == address_space_before_tlb_bind,
+                "Lineares aktives P0-TLB-Mapping wurde nicht beobachtend an latentes AOT "
+                "gebunden.");
         cpu.address_space.reset();
 
         auto wrong_content_definition = latent_templates;
@@ -304,8 +335,10 @@ int main() {
                 "Latentes AOT wurde ohne exakte Disc-Contentidentitaet aktiviert.");
 
         auto unknown_bytes_definition = latent_templates;
-        unknown_bytes_definition[0].expected_runtime_byte_identity =
+        unknown_bytes_definition[0].expected_source_identity =
             "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff";
+        unknown_bytes_definition[0].expected_runtime_byte_identity =
+            unknown_bytes_definition[0].expected_source_identity;
         NativeAotTemplateBinder unknown_bytes_binder(
             cpu, latent_modules, latent_blocks, unknown_bytes_definition);
         const auto unknown_bytes = unknown_bytes_binder.bind(
@@ -322,7 +355,6 @@ int main() {
                 "als Byte-Identity-Mismatch abgelehnt.");
 
         ExecutableModuleCatalog holey_modules;
-        holey_modules.publish(latent_source_module);
         auto holey_loaded_module = loaded_module;
         holey_loaded_module.id = "holey-disc-load-module";
         holey_loaded_module.active_extents = {{0u, 8u}, {12u, 4u}};

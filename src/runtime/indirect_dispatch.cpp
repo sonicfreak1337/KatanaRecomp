@@ -348,26 +348,50 @@ IndirectDispatchResult dispatch_indirect(CpuState& cpu,
     auto target = requested_target;
     std::uint32_t physical = 0u;
     auto effective_variant = request.variant;
-    try {
+    bool architectural_target_fetch_fault = false;
+    const auto translate_target = [&] {
+        effective_variant = request.variant;
         physical = translate_guest_address(cpu,
                                            target,
                                            MemoryAccessOperation::Read,
                                            MemoryAccessWidth::Halfword,
                                            true);
         if (cpu.address_space) {
-            static_cast<void>(cpu.address_space->translate(
-                target, TranslationAccess::Instruction, cpu.privileged_mode()));
             effective_variant =
-                block_variant_key(cpu.address_space->guard_for(target, cpu.read_fpscr()));
+                block_variant_key(cpu.address_space->guard_for(
+                    target, cpu.read_fpscr(), cpu.privileged_mode()));
         }
+    };
+    try {
+        translate_target();
     } catch (const MemoryAccessError& error) {
-        enter_memory_exception(cpu, error, request.callsite);
+        GuestInstructionAttempt target_fetch_attempt(cpu, target, 1u);
+        // A call and its delay slot have architecturally completed before target
+        // fetch. Preserve the resulting PR on that architectural exception edge;
+        // ordinary host lookup rejection below remains transactional.
+        architectural_target_fetch_fault = true;
+        if (request.kind == IndirectDispatchKind::Call) {
+            cpu.pr = request.return_address;
+        }
+        // The architectural faulting instruction fetch is at the target after the
+        // branch delay slot, not at the already-retired control-transfer site.
+        enter_memory_exception(cpu, error, target);
         target = cpu.pc;
-        physical = translate_guest_address(cpu,
-                                           target,
-                                           MemoryAccessOperation::Read,
-                                           MemoryAccessWidth::Halfword,
-                                           true);
+        try {
+            translate_target();
+        } catch (const MemoryAccessError& handler_error) {
+            GuestInstructionAttempt handler_fetch_attempt(cpu, target, 1u);
+            // A fault while fetching the exception handler is a second architectural
+            // instruction-fetch attempt. SR.BL is already set, so the common exception
+            // path converts a general exception into the shared manual-reset transition
+            // (and handles a repeated TLB multiple hit through the same reset contract).
+            enter_memory_exception(cpu, handler_error, target);
+            target = cpu.pc;
+            // A valid manual reset always selects the privileged P2 reset vector. Failure
+            // to translate that vector is an internal reset-contract violation and must
+            // remain visible rather than being turned into an unbounded exception loop.
+            translate_target();
+        }
     }
     const auto reject = [&](const DispatchDiagnosticError error) {
         table.mark_rejected(target, effective_variant);
@@ -385,14 +409,6 @@ IndirectDispatchResult dispatch_indirect(CpuState& cpu,
     };
     if (request.materializer != nullptr)
         request.materializer->reconcile_inactive_origins(request.metrics);
-    if ((target & 1u) != 0u) {
-        if (request.materializer != nullptr) {
-            static_cast<void>(request.materializer->try_materialize(
-                cpu, target, physical, effective_variant, request.callsite));
-            reject(materialization_error(request.materializer->last_failure()));
-        }
-        reject(DispatchDiagnosticError::Misaligned);
-    }
     auto block = table.lookup(target, effective_variant);
     bool alias_lookup = false;
     if (!block) {
@@ -466,7 +482,7 @@ IndirectDispatchResult dispatch_indirect(CpuState& cpu,
         }
     }
 
-    if (request.kind == IndirectDispatchKind::Call) {
+    if (request.kind == IndirectDispatchKind::Call && !architectural_target_fetch_fault) {
         cpu.pr = request.return_address;
     }
     cpu.pc = alias_lookup ? resolved->get().virtual_start : target;

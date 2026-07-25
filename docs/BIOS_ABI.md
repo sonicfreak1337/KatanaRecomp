@@ -52,6 +52,16 @@ werden ausserdem die installierten `RTS/NOP`-Stubbytes im Gastspeicher
 validiert. Eine Mutation bleibt dadurch auch ueber einen bereits aufgeloesten
 Runtimehandle nicht ausfuehrbar.
 
+Flash-, SYSINFO- und GD-ROM-Dienste verwenden denselben MMU-bewussten
+Gastpuffervertrag. Der gesamte virtuelle Bereich wird vor der ersten
+Seitenausgabe auf Ausrichtung, Ueberlauf, Berechtigung, physische
+Zusammenhaengigkeit und lineares RAM-Backing geprueft. Leseingaben werden vor
+einer Flashmutation vollstaendig in einen Hostpuffer kopiert; Mehrwort- und
+Byteausgaben werden dort little-endian serialisiert und mit genau einem
+atomaren linearen Commit publiziert. Eine zwischen Validierung und Commit
+geaenderte TLB-Abbildung, eine nichtlineare Folgeseite, MMIO oder eine
+Registerluecke beendet den Dienst ohne Teilwrite.
+
 Vor dem ersten nativen Gastblock stellt der Disc-Boot den BIOS-Handoffzustand
 her. Dazu gehoeren die dokumentierten SH-4-Kontrollregister, `DMAOR=0x8201`,
 die AICA-Interruptlevel und fuer das explizite Profil `europe-pal` das PAL-
@@ -76,6 +86,19 @@ nach Abholung beziehungsweise Abbruch 0. Der optionale Statuspuffer umfasst
 vier Gastwoerter: Fehler 1, Fehler 2, uebertragene Bytezahl und Warte-/ATA-
 Zustand. Unbekannte Kommandos werden kontrolliert mit `InvalidCommand`
 abgeschlossen und niemals als stiller Erfolg behandelt.
+
+Erst nach vollstaendig gelesenem Parameterblock und erfolgreicher
+Queueaufnahme wird eine Request-ID verbraucht. Der Wraparound ueberspringt
+aktive Requests, ausstehende DMA-/PIO-Handoffs und bereits eingereihte
+Gastcallbacks. Jeder angenommene Request besitzt die bei `REQ_CMD` gebundene
+Adressrauminstanz samt Privilegstufe; die Controller-Memory-Identitaet wird
+dabei geprueft. Ein spaeter im aufrufenden `CpuState` ersetzter Adressraum
+lenkt den Request deshalb nicht um. Start, Completion und jeder
+DMA-Streamingchunk pruefen die gebundene Abbildung erneut; eine veraenderte
+TLB-Abbildung endet vor dem naechsten Write. Auch der zweifache
+Transferdeskriptor wird als ein vollstaendiger, ausgerichteter Gastpuffer
+gelesen und kann nicht ueber einen Wrap oder eine nichtlineare Folgeseite
+teilweise interpretiert werden.
 
 Die BIOS-Kommandos 28 und 37 bilden den DMA- beziehungsweise PIO-Stream als
 denselben Requestzustandsautomaten ab. Nach `EXEC_SERVER` wird die
@@ -107,6 +130,13 @@ Block als typisierter Gast-`Call`, behaelt `PR` bei und uebergibt das
 registrierte Argument in `r4`. Abbruch und Reset entfernen ausstehende
 Schedulerereignisse, G1-Transfers und Callback-Handoffs, sodass keine spaeten
 Gastschreibzugriffe oder Interrupts entstehen.
+
+Die Gastcallbackqueue ist auf 64 Eintraege begrenzt. Ein bereits ausstehender
+identischer Handoff aus Art, Adresse, Argument und Request-ID wird
+zusammengefasst; bei Kapazitaetsueberschreitung faellt deterministisch der
+aelteste Eintrag heraus. Getrennte saturierende Diagnosezaehler melden
+Zusammenfassungen und Drops. Reset leert die ausstehenden Handoffs, waehrend
+diese Lebenszeitzaehler als Diagnosehistorie erhalten bleiben.
 
 Das BIOS-TOC besitzt unabhaengig vom Paketkommando exakt 102 Gastwoerter und
 trennt LOW/HIGH. Ein begrenztes Ereignislog zeichnet Zyklus, Aufrufstelle,

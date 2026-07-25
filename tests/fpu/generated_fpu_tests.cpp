@@ -92,7 +92,10 @@ class StoreQueueServices final : public katana::runtime::PlatformServices {
                                 const katana::runtime::GuestInstructionOrigin instruction,
                                 const std::uint32_t address) override {
         katana::runtime::prefetch(cpu, address);
-        return queues_.prefetch(address, instruction, cpu.retired_guest_instructions);
+        return queues_.prefetch(address,
+                                instruction,
+                                cpu.retired_guest_instructions,
+                                cpu.attempted_guest_instructions);
     }
 
     katana::runtime::CpuState& cpu_;

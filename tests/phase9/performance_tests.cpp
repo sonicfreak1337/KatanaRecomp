@@ -164,6 +164,7 @@ int main() {
                                                  "phase9-target",
                                                  false}));
         CpuState cpu;
+        cpu.write_sr(sr_md_mask);
         const IndirectDispatchRequest request{IndirectDispatchKind::Call,
                                               0x8C000100u,
                                               0x8C001000u,
@@ -184,6 +185,7 @@ int main() {
                 "Explizite Blockinvalidierung leert den Inline-Cache nicht.");
 
         CpuState returning_cpu;
+        returning_cpu.write_sr(sr_md_mask);
         returning_cpu.pr = 0x8C001000u;
         const IndirectDispatchRequest return_request{IndirectDispatchKind::Return,
                                                      0x8C000200u,

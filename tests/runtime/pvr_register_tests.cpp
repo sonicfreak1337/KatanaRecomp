@@ -1,9 +1,13 @@
 #include "katana/runtime/pvr.hpp"
 
+#include <array>
 #include <cstdlib>
 #include <iostream>
+#include <limits>
+#include <optional>
 #include <stdexcept>
 #include <string>
+#include <vector>
 
 namespace {
 void require(const bool value, const std::string& message) {
@@ -171,6 +175,170 @@ int main() {
     require(result_pvr.render_completion_count() == 1u &&
                 result_pvr.render_failure_count() == 3u,
             "Renderobserver-Exception entkommt untypisiert oder wird als Completion gezaehlt.");
+
+    EventScheduler frozen_scheduler;
+    PvrRegisterFile frozen_pvr(frozen_scheduler, PvrTiming{5u});
+    PvrTaFifo frozen_fifo;
+    std::array<std::uint8_t, 32u> list_start{};
+    list_start[3u] = 0x40u;
+    const std::array<std::uint8_t, 32u> list_end{};
+    const auto submit_closed_list = [&] {
+        frozen_fifo.submit(list_start);
+        frozen_fifo.submit(list_end);
+    };
+    struct ExecutedRenderJob {
+        std::uint64_t request = 0u;
+        std::uint64_t generation = 0u;
+        std::uint64_t start_cycle = 0u;
+        std::uint64_t captured_packets = 0u;
+        std::uint32_t captured_border = 0u;
+    };
+    std::vector<ExecutedRenderJob> executed_jobs;
+    std::uint64_t render_factory_calls = 0u;
+    std::optional<PvrRegisterSnapshot> snapshot_during_commit;
+    frozen_pvr.set_render_job_factory(
+        [&](const PvrRegisterSnapshot& register_snapshot,
+            const std::uint64_t request,
+            const std::uint64_t generation,
+            const std::uint64_t start_cycle) {
+            auto staged_fifo = frozen_fifo;
+            static_cast<void>(staged_fifo.finish_frame());
+            const auto captured_packets = staged_fifo.metrics().packets;
+            const auto captured_border = register_snapshot.read(pvr_register::BorderColor);
+            const auto payload_digest =
+                captured_packets ^ (static_cast<std::uint64_t>(captured_border) << 32u);
+            ++render_factory_calls;
+            return PvrRegisterFile::PreparedRenderJob{
+                [&, request, generation, start_cycle, captured_packets, captured_border] {
+                    executed_jobs.push_back(ExecutedRenderJob{
+                        request, generation, start_cycle, captured_packets, captured_border});
+                    return PvrRenderResult::Success;
+                },
+                [&frozen_fifo,
+                 &frozen_pvr,
+                 &snapshot_during_commit,
+                 staged_fifo = std::move(staged_fifo)]() mutable {
+                    snapshot_during_commit = frozen_pvr.snapshot();
+                    frozen_fifo = std::move(staged_fifo);
+                },
+                payload_digest,
+            };
+        });
+    submit_closed_list();
+    frozen_pvr.write(pvr_register::BorderColor, 0x00112233u);
+    frozen_pvr.write(pvr_register::StartRender, 1u);
+    submit_closed_list();
+    frozen_pvr.write(pvr_register::BorderColor, 0x00445566u);
+    frozen_pvr.write(pvr_register::StartRender, 1u);
+    const auto busy_render = frozen_pvr.snapshot();
+    require(snapshot_during_commit &&
+                snapshot_during_commit->render_event_ids.empty() &&
+                snapshot_during_commit->active_render_request == 0u &&
+                snapshot_during_commit->active_render_generation == 0u &&
+                render_factory_calls == 1u && executed_jobs.empty() &&
+                busy_render.render_requests == 2u && busy_render.render_failures == 1u &&
+                busy_render.render_overruns == 1u &&
+                busy_render.next_render_generation == 2u &&
+                busy_render.active_render_request == 1u &&
+                busy_render.active_render_generation == 1u &&
+                busy_render.active_render_start_cycle == 0u &&
+                busy_render.active_render_payload_digest ==
+                    (2u ^ (static_cast<std::uint64_t>(0x00112233u) << 32u)) &&
+                busy_render.last_render_start_error == PvrRenderStartError::Busy &&
+                busy_render.render_event_ids.size() == 1u,
+            "STARTRENDER veroeffentlicht einen halben Auftrag oder ersetzt ihn bei Busy.");
+    static_cast<void>(frozen_scheduler.advance_to(5u, 1u));
+    require(executed_jobs.size() == 1u && executed_jobs[0u].request == 1u &&
+                executed_jobs[0u].generation == 1u &&
+                executed_jobs[0u].start_cycle == 0u &&
+                executed_jobs[0u].captured_packets == 2u &&
+                executed_jobs[0u].captured_border == 0x00112233u,
+            "TA-Pakete oder Register nach STARTRENDER mutieren den laufenden Renderauftrag.");
+    frozen_pvr.write(pvr_register::StartRender, 1u);
+    static_cast<void>(frozen_scheduler.advance_to(10u, 1u));
+    require(render_factory_calls == 2u && executed_jobs.size() == 2u &&
+                executed_jobs[1u].request == 3u && executed_jobs[1u].generation == 2u &&
+                executed_jobs[1u].start_cycle == 5u &&
+                executed_jobs[1u].captured_packets == 4u &&
+                executed_jobs[1u].captured_border == 0x00445566u &&
+                frozen_pvr.render_completion_count() == 2u &&
+                frozen_pvr.render_failure_count() == 1u,
+            "Nach STARTRENDER eintreffende TA-Pakete werden nicht dem naechsten Auftrag zugeordnet.");
+
+    EventScheduler rollback_scheduler;
+    PvrRegisterFile rollback_pvr(rollback_scheduler, PvrTiming{5u});
+    rollback_pvr.set_render_job_factory(
+        [](const PvrRegisterSnapshot&, const std::uint64_t, const std::uint64_t,
+           const std::uint64_t) -> PvrRegisterFile::PreparedRenderJob {
+            throw 7;
+        });
+    rollback_pvr.write(pvr_register::StartRender, 1u);
+    const auto capture_rollback = rollback_pvr.snapshot();
+    require(capture_rollback.render_event_ids.empty() &&
+                capture_rollback.active_render_request == 0u &&
+                capture_rollback.active_render_generation == 0u &&
+                capture_rollback.active_render_start_cycle == 0u &&
+                capture_rollback.active_render_payload_digest == 0u &&
+                capture_rollback.next_render_generation == 2u &&
+                capture_rollback.render_failures == 1u &&
+                capture_rollback.last_render_start_error ==
+                    PvrRenderStartError::CaptureFailed,
+            "Fehlgeschlagene STARTRENDER-Capture hinterlaesst einen halben Auftrag.");
+
+    EventScheduler registration_scheduler;
+    PvrRegisterFile registration_pvr(
+        registration_scheduler,
+        PvrTiming{std::numeric_limits<std::uint64_t>::max()});
+    static_cast<void>(registration_scheduler.advance_to(1u, 0u));
+    PvrTaFifo registration_fifo;
+    registration_fifo.submit(list_start);
+    registration_fifo.submit(list_end);
+    const auto fifo_before_registration = registration_fifo.snapshot();
+    std::uint64_t registration_commit_calls = 0u;
+    registration_pvr.set_render_job_factory(
+        [&](const PvrRegisterSnapshot&,
+            const std::uint64_t,
+            const std::uint64_t,
+            const std::uint64_t) {
+            auto staged_fifo = registration_fifo;
+            static_cast<void>(staged_fifo.finish_frame());
+            return PvrRegisterFile::PreparedRenderJob{
+                [] { return PvrRenderResult::Success; },
+                [&registration_fifo,
+                 &registration_commit_calls,
+                 staged_fifo = std::move(staged_fifo)]() mutable noexcept {
+                    registration_fifo = std::move(staged_fifo);
+                    ++registration_commit_calls;
+                },
+            };
+        });
+    registration_pvr.write(pvr_register::StartRender, 1u);
+    const auto registration_failure = registration_pvr.snapshot();
+    const auto fifo_after_registration = registration_fifo.snapshot();
+    require(registration_commit_calls == 0u &&
+                registration_failure.render_requests == 1u &&
+                registration_failure.render_failures == 1u &&
+                registration_failure.render_event_ids.empty() &&
+                registration_failure.next_render_generation == 2u &&
+                registration_failure.active_render_request == 0u &&
+                registration_failure.active_render_generation == 0u &&
+                registration_failure.active_render_start_cycle == 0u &&
+                registration_failure.active_render_payload_digest == 0u &&
+                registration_failure.last_render_start_error ==
+                    PvrRenderStartError::SchedulerFailure &&
+                fifo_after_registration.metrics.frames ==
+                    fifo_before_registration.metrics.frames &&
+                fifo_after_registration.metrics.packets ==
+                    fifo_before_registration.metrics.packets &&
+                fifo_after_registration.accelerator.frame_has_list ==
+                    fifo_before_registration.accelerator.frame_has_list &&
+                fifo_after_registration.accelerator.list_open ==
+                    fifo_before_registration.accelerator.list_open,
+            "Schedulerfehler nach STARTRENDER-Prepare konsumiert den alten TA-Auftrag.");
+    static_cast<void>(registration_fifo.finish_frame());
+    require(registration_fifo.metrics().frames ==
+                fifo_before_registration.metrics.frames + 1u,
+            "Nach Schedulerrollback ist der vorbereitete TA-Auftrag nicht mehr renderbar.");
 
     EventScheduler scan_scheduler;
     Memory scan_bus(0u);

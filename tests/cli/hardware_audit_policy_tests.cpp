@@ -3,6 +3,7 @@
 
 #include <cstdlib>
 #include <iostream>
+#include <string>
 
 namespace {
 
@@ -31,6 +32,21 @@ int main() {
                 !katana::cli::hardware_audit_failed(audit, false, true),
             "Reine Unknown-Loop ohne Read-/Guard-Evidenz wird im Strict-Modus hart gemacht.");
 
+    katana::analysis::DreamcastHardwareAudit unresolved_access;
+    unresolved_access.memory_access_sites = 1u;
+    unresolved_access.unresolved_memory_access_sites = 1u;
+    const auto unresolved_text =
+        katana::analysis::format_hardware_audit_text(unresolved_access);
+    const auto unresolved_json =
+        katana::analysis::format_hardware_audit_json(unresolved_access);
+    require(!katana::cli::hardware_audit_failed(unresolved_access, true, false) &&
+                !katana::cli::hardware_audit_failed(unresolved_access, false, true) &&
+                unresolved_text.find("Memory access sites: 1 (constant=0, dynamic=1)") !=
+                    std::string::npos &&
+                unresolved_json.find("\"unresolved_memory_access_sites\":1") !=
+                    std::string::npos,
+            "Ein policy-gruener Audit verliert seine unvollstaendige Zugriffsevidenz.");
+
     auto overwritten_guard = unknown;
     overwritten_guard.unresolved_guard_access = true;
     overwritten_guard.accesses.push_back(
@@ -55,8 +71,9 @@ int main() {
     const auto text = katana::analysis::format_hardware_audit_text(audit);
     const auto json = katana::analysis::format_hardware_audit_json(audit);
     require(text.find("Unresolved poll/guard loops: 1") != std::string::npos &&
-                json.find("\"unresolved_poll_guard_loops\":1") != std::string::npos,
-            "Hardware-Audit-Text oder JSON verliert die Strict-Loop-Metrik.");
+                json.find("\"unresolved_poll_guard_loops\":1") != std::string::npos &&
+                json.find("\"classification\":\"unknown\"") != std::string::npos,
+            "Hardware-Audit-Text oder JSON verliert unvollstaendige Loop-Evidenz.");
 
     katana::analysis::DreamcastHardwareAudit definite_gap;
     definite_gap.known_gap_addresses = 1u;

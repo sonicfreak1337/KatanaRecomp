@@ -2,8 +2,8 @@
 
 Der mit KR-4508 eingefuehrte Portprojektvertrag Version 3 trennt
 Analyseerfolg, Eingabeidentitaet und tatsaechliche Gastausfuehrung. Der
-aktuelle kumulative Stand verwendet Portprojektvertrag 32, Runtime-ABI 48,
-PlatformServices-ABI 10, Block-ABI 3 und Backend-Interface-ABI 3. Keine der
+aktuelle kumulative Stand verwendet Portprojektvertrag 33, Runtime-ABI 49,
+PlatformServices-ABI 11, Block-ABI 4 und Backend-Interface-ABI 3. Keine der
 Vertrauensaussagen wird aus der blossen Erzeugung oder dem Start eines
 Hostprozesses abgeleitet.
 
@@ -39,7 +39,7 @@ Erfolgsmeldungen ausbleiben.
 
 PlatformServices-ABI 4 fuehrte diese Bindung an die vorhandenen
 Dreamcast-Runtimekomponenten ein; der aktuelle kumulative Vertrag steht auf
-PlatformServices-ABI 10:
+PlatformServices-ABI 11:
 
 - Interrupts werden ueber den Interrupt-Router angenommen.
 - DMA wird ueber den SH-4-DMAC geplant und bleibt bis zur Schedulerausfuehrung
@@ -324,3 +324,24 @@ Der abschliessende KR-4842-Nachweis umfasst 6/6 fokussierte Tests in
 6,40 Sekunden, den generierten Port-CLI-Pfad 1/1 in 156,11 Sekunden und den
 erfolgreichen privaten A/B-Produktlauf. Es wurde keine neue Vollsuite und kein
 `KR-4852` ausgefuehrt.
+
+## Physischer Chaining- und Fortschrittsvertrag
+
+Jeder registrierte AOT-Block bindet virtuelle Startadresse, physische Herkunft,
+Groesse, stabile Byteidentitaet, Zeitklasse und maximale Gastzyklen. Ein
+lokaler Chain-Sprung uebersetzt das virtuelle Ziel erneut, vergleicht die
+exakte physische Herkunft und beweist die komplette Instruktionsspanne. Eine
+abweichende oder nicht eindeutig beweisbare Abbildung faellt in den normalen
+Dispatcher zurueck; Variantengenerationen allein genuegen nicht.
+
+`GuestProgramDispatched` bedeutet nur, dass der Dispatcher einen Block im
+vorbereiteten Gastprogrammbereich gewaehlt hat. `GuestProgramProgressed`
+verlangt dagegen mindestens eine erfolgreich retired Instruktion, keine neue
+Exceptionkante und keinen Exception-Exit desselben Blockabschlusses. Nur
+dieses zweite Signal erfuellt das Produktgate und fliesst in die konservative
+Gameplay-Evidenz ein.
+
+Die Frameevidenz meldet den ersten echten Gastscanout, den ersten TA-Frame und
+den ersten Gameplayframe getrennt. `KR_FIRST_GUEST_FRAME` bleibt als
+Kompatibilitaetsalias des ersten Gastscanouts erhalten.
+Direct-Framebuffer-Evidenz kann niemals den TA- oder Gameplaymarker setzen.

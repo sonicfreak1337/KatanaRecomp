@@ -168,6 +168,8 @@ void latent_aot_multiread_regression() {
                                                 source,
                                                 static_cast<std::uint32_t>(file.size()),
                                                 disc_load_byte_identity(file)}});
+    require(fixture.modules.snapshot().modules.empty(),
+            "Reine AOT-Metadatenregistrierung veroeffentlichte vor dem Gastload Payloadbytes.");
 
     const auto first = fixture.coordinator->execute(request(
         1u,

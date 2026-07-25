@@ -102,10 +102,17 @@ execute_process(
   OUTPUT_VARIABLE generated_output
   ERROR_VARIABLE generated_error
 )
+# Bootstrap und alle vier synthetischen Gastbloecke werden zentral abgeschlossen. Der erste
+# Gastblock darf erst lokal weiterketten, nachdem sein Abschluss GuestProgramProgressed belegt.
 if(NOT generated_result EQUAL 0 OR
    NOT generated_output MATCHES "KR_GENERATED_RUNTIME_STARTED" OR
+   NOT generated_output MATCHES "KR_GUEST_PROGRAM_DISPATCHED" OR
+   NOT generated_output MATCHES "KR_GUEST_PROGRAM_PROGRESSED" OR
+   NOT generated_output MATCHES "KR_GUEST_PROGRAM_ENTERED" OR
+   NOT generated_output MATCHES "silent_failures=0" OR
    NOT generated_output MATCHES "indirect_dispatches=0" OR
-   NOT generated_output MATCHES "runtime_dispatch_hits=4" OR
+   NOT generated_output MATCHES "runtime_dispatch_hits=5 runtime_dispatch_misses=0" OR
+   NOT generated_output MATCHES "executed_blocks=5 guest_cycle_contract=2" OR
    NOT generated_output MATCHES "frames=0" OR
    NOT generated_output MATCHES "audio_buffers=0")
   file(REMOVE_RECURSE "${fixture}")

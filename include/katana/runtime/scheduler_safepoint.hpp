@@ -39,6 +39,7 @@ class SchedulerSafepoints {
     consume(std::uint64_t guest_cycles, SafepointKind kind, ExecutionOrigin origin);
     [[nodiscard]] std::vector<SafepointReport> consume_loop(std::uint64_t guest_cycles,
                                                             ExecutionOrigin origin);
+    [[nodiscard]] std::uint64_t current_cycle() const noexcept;
     [[nodiscard]] const std::vector<SafepointReport>& reports() const noexcept;
     [[nodiscard]] std::string machine_report() const;
 

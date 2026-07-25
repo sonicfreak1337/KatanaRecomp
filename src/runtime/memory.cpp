@@ -578,6 +578,26 @@ bool Memory::is_writable_linear_range(const std::uint32_t address,
     return false;
 }
 
+bool Memory::is_readable_linear_range(const std::uint32_t address,
+                                      const std::size_t width) const noexcept {
+    if (width == 0u || width > address_space_size - static_cast<std::uint64_t>(address))
+        return false;
+    const auto readable_linear = [](const MappedRegion& mapped) {
+        return mapped.linear != nullptr;
+    };
+    if (const auto* mapped = indexed_region(address, width); mapped != nullptr)
+        return readable_linear(*mapped);
+    const auto end = static_cast<std::uint64_t>(address) + width;
+    for (const auto& mapped : regions_) {
+        ++performance_counters_.reference_region_probes;
+        const auto region_end =
+            static_cast<std::uint64_t>(mapped.info.base_address) + mapped.info.size;
+        if (address >= mapped.info.base_address && end <= region_end)
+            return readable_linear(mapped);
+    }
+    return false;
+}
+
 MemoryAlignmentPolicy Memory::alignment_policy() const noexcept {
     return alignment_policy_;
 }
@@ -1078,6 +1098,142 @@ void Memory::write_bytes(const std::uint32_t address,
     write_bytes_at(address, bytes, GuestMemoryAccessContext{address}, source);
 }
 
+bool Memory::commit_linear_transaction_bytes(
+    const std::uint32_t address,
+    const std::span<const std::uint8_t> bytes,
+    const CodeWriteSource source) noexcept {
+    const LinearMemoryTransactionWrite write{address, bytes};
+    return commit_linear_transaction_batch(
+        std::span<const LinearMemoryTransactionWrite>(&write, 1u), source);
+}
+
+bool Memory::commit_linear_transaction_batch(
+    const std::span<const LinearMemoryTransactionWrite> writes,
+    const CodeWriteSource source) noexcept {
+    struct PreparedWrite {
+        std::uint32_t address = 0u;
+        std::vector<std::uint8_t> bytes;
+        std::shared_ptr<MemoryDevice> device;
+        LinearMemoryDevice* linear = nullptr;
+        std::size_t offset = 0u;
+        std::string region_name;
+        std::vector<std::uint8_t> changed_bytes;
+        bool changed = false;
+    };
+
+    try {
+        std::vector<PreparedWrite> prepared;
+        prepared.reserve(writes.size());
+        for (const auto& write : writes) {
+            if (write.bytes.empty()) continue;
+            if (write.bytes.size() >
+                address_space_size - static_cast<std::uint64_t>(write.address))
+                return false;
+            const auto& mapped = resolve(write.address,
+                                         MemoryAccessWidth::Byte,
+                                         MemoryAccessOperation::Write,
+                                         false);
+            const auto mapped_end =
+                static_cast<std::uint64_t>(mapped.info.base_address) +
+                mapped.info.size;
+            const auto write_end =
+                static_cast<std::uint64_t>(write.address) + write.bytes.size();
+            if (write_end > mapped_end ||
+                mapped.info.access != MemoryRegionAccess::ReadWrite ||
+                mapped.linear == nullptr)
+                return false;
+            const auto offset = static_cast<std::size_t>(
+                region_offset(mapped.info, write.address));
+            const auto backing = mapped.linear->bytes();
+            if (offset > backing.size() ||
+                write.bytes.size() > backing.size() - offset)
+                return false;
+
+            PreparedWrite item;
+            item.address = write.address;
+            item.bytes.assign(write.bytes.begin(), write.bytes.end());
+            item.device = mapped.device;
+            item.linear = mapped.linear;
+            item.offset = offset;
+            item.region_name = mapped.info.name;
+            item.changed_bytes.assign(backing.begin() + static_cast<std::ptrdiff_t>(offset),
+                                      backing.begin() +
+                                          static_cast<std::ptrdiff_t>(
+                                              offset + write.bytes.size()));
+            for (const auto& previous : prepared) {
+                if (previous.linear != item.linear) continue;
+                const auto overlap_begin = std::max(item.offset, previous.offset);
+                const auto overlap_end =
+                    std::min(item.offset + item.bytes.size(),
+                             previous.offset + previous.bytes.size());
+                if (overlap_begin >= overlap_end) continue;
+                std::copy(previous.bytes.begin() +
+                              static_cast<std::ptrdiff_t>(
+                                  overlap_begin - previous.offset),
+                          previous.bytes.begin() +
+                              static_cast<std::ptrdiff_t>(
+                                  overlap_end - previous.offset),
+                          item.changed_bytes.begin() +
+                              static_cast<std::ptrdiff_t>(
+                                  overlap_begin - item.offset));
+            }
+            for (std::size_t index = 0u; index < write.bytes.size(); ++index) {
+                item.changed_bytes[index] =
+                    item.changed_bytes[index] != item.bytes[index] ? 1u : 0u;
+                item.changed = item.changed ||
+                               item.changed_bytes[index] != 0u;
+            }
+            prepared.push_back(std::move(item));
+        }
+
+        // No callbacks are made before every admitted range is visible. Keeping each backing
+        // device alive also makes subsequent diagnostic callbacks free to alter the map without
+        // invalidating the remainder of this transaction.
+        for (const auto& write : prepared) {
+            auto backing = write.linear->writable_bytes();
+            std::copy(write.bytes.begin(),
+                      write.bytes.end(),
+                      backing.begin() + static_cast<std::ptrdiff_t>(write.offset));
+        }
+
+        for (const auto& write : prepared) {
+            if (access_observers_active()) {
+                for (std::size_t index = 0u; index < write.bytes.size(); ++index) {
+                    ++performance_counters_.observed_accesses;
+                    try {
+                        notify_access(
+                            {MemoryAccessOperation::Write,
+                             write.address + static_cast<std::uint32_t>(index),
+                             MemoryAccessWidth::Byte,
+                             write.bytes[index],
+                             write.region_name});
+                    } catch (...) {
+                        // Diagnostics cannot turn an admitted multi-range commit into a
+                        // partially observable transaction.
+                    }
+                }
+            } else {
+                performance_counters_.unobserved_accesses +=
+                    write.bytes.size();
+            }
+            try {
+                notify_guest_write(
+                    {write.address, write.bytes.size(), source, write.changed});
+            } catch (...) {
+                // The complete batch is already visible.
+            }
+            notify_guest_memory_write_range(write.address,
+                                            write.bytes.size(),
+                                            source,
+                                            write.changed_bytes,
+                                            nullptr);
+        }
+        return true;
+    } catch (...) {
+        return false;
+    }
+}
+
 bool Memory::commit_prevalidated_linear_transaction_bytes(
     const std::uint32_t address,
     const std::span<const std::uint8_t> bytes,
@@ -1476,6 +1632,7 @@ void Memory::notify_guest_memory_access(const MappedRegion& mapped,
         event.instruction = context->instruction;
         event.virtual_address = context->virtual_address;
         event.retired_guest_instructions = context->retired_guest_instructions;
+        event.attempted_guest_instructions = context->attempted_guest_instructions;
     } else {
         event.virtual_address = physical_address;
     }
@@ -1543,6 +1700,8 @@ void Memory::notify_guest_memory_write_range(const std::uint32_t address,
                 event.virtual_address =
                     context->virtual_address + static_cast<std::uint32_t>(emitted);
                 event.retired_guest_instructions = context->retired_guest_instructions;
+                event.attempted_guest_instructions =
+                    context->attempted_guest_instructions;
             } else {
                 event.virtual_address = current;
             }
@@ -1579,6 +1738,8 @@ void Memory::notify_guest_memory_access_loss(
         invalid_event.virtual_address = context->virtual_address;
         invalid_event.retired_guest_instructions =
             context->retired_guest_instructions;
+        invalid_event.attempted_guest_instructions =
+            context->attempted_guest_instructions;
     }
     guest_memory_access_sink_.callback(
         guest_memory_access_sink_.context, invalid_event);

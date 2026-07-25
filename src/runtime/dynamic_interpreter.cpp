@@ -3,6 +3,7 @@
 #include "katana/runtime/exception.hpp"
 #include "katana/runtime/fpu.hpp"
 #include "katana/sh4/decoder.hpp"
+#include "katana/sh4/instruction_timing.hpp"
 
 #include <algorithm>
 #include <bit>
@@ -127,9 +128,18 @@ StepResult execute_one(CpuState& cpu,
                        PlatformServices& services,
                        const std::uint32_t pc,
                        const std::optional<std::uint32_t> delay_owner = std::nullopt) {
-    const auto opcode = guest_read_u16(cpu, pc);
-    ++cpu.retired_guest_instructions;
+    GuestInstructionAttempt attempt(cpu, pc, 0u);
+    std::uint16_t opcode = 0u;
+    try {
+        opcode = guest_fetch_u16(cpu, pc);
+    } catch (...) {
+        add_guest_instruction_cycles(cpu, 1u);
+        throw;
+    }
     const auto instruction = sh4::decode(opcode);
+    const auto timing = sh4::instruction_timing(instruction);
+    if (timing.requires_cycle_flush) flush_pending_guest_cycles(cpu, services);
+    add_guest_instruction_cycles(cpu, timing.guest_cycles);
     if (!instruction.is_known()) {
         raise_illegal_instruction(cpu, pc, delay_owner);
         return {true, BlockEndKind::Exception, 1u};
@@ -772,7 +782,9 @@ DynamicInterpreterResult execute_dynamic_sh4_block(CpuState& cpu,
         throw std::invalid_argument("Dynamischer SH-4-Block braucht ein Instruktionsbudget.");
     DynamicInterpreterResult result;
     result.start_pc = cpu.pc;
-    for (; result.instructions < maximum_instructions;) {
+    const auto attempts_before = cpu.attempted_guest_instructions;
+    const auto cycles_before = elapsed_guest_cycles(cpu);
+    for (; cpu.attempted_guest_instructions - attempts_before < maximum_instructions;) {
         const auto instruction_pc = cpu.pc;
         StepResult step;
         try {
@@ -781,9 +793,12 @@ DynamicInterpreterResult execute_dynamic_sh4_block(CpuState& cpu,
             enter_memory_exception(cpu, error, instruction_pc);
             step = {true, BlockEndKind::Exception, 1u};
         }
-        result.instructions += step.instructions;
-        result.guest_cycles += step.cycles;
-        const auto bytes = static_cast<std::uint64_t>(instruction_pc - result.start_pc) + 2u;
+        result.instructions = cpu.attempted_guest_instructions - attempts_before;
+        result.guest_cycles = elapsed_guest_cycles(cpu) - cycles_before;
+        const auto bytes =
+            result.instructions > std::numeric_limits<std::uint64_t>::max() / 2u
+                ? std::numeric_limits<std::uint64_t>::max()
+                : result.instructions * 2u;
         result.byte_size = static_cast<std::uint32_t>(std::min<std::uint64_t>(bytes, 0xFFFFFFFFu));
         if (step.control_flow) {
             result.end_kind = step.end_kind;

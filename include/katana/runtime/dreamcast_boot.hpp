@@ -156,6 +156,7 @@ struct DreamcastRuntimeState {
     std::shared_ptr<std::vector<StoreQueueTransfer>> store_queue_transfers;
     std::shared_ptr<std::uint64_t> dropped_store_queue_transfers;
     std::shared_ptr<FirmwareHandoffMap> firmware_handoff;
+    std::shared_ptr<ManualResetCoordinator> manual_reset;
     std::size_t loaded_system_bootstrap_bytes = 0u;
     std::size_t loaded_boot_bytes = 0u;
 };

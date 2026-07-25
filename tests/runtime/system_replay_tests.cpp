@@ -182,6 +182,14 @@ int main() {
     changed_cpu.r[0] ^= 1u;
     require(hash_replay_guest_state(changed_cpu, 100u, 0x55AAu) != guest_hash,
             "Gastzustandshash erkennt Registeraenderung nicht.");
+    changed_cpu = cpu;
+    changed_cpu.attempted_guest_instructions = 1u;
+    require(hash_replay_guest_state(changed_cpu, 100u, 0x55AAu) != guest_hash,
+            "Gastzustandshash erkennt versuchte Instruktionen nicht.");
+    changed_cpu = cpu;
+    changed_cpu.utlb[3] = {0x00123000u, 0x0C4561D4u, 0u};
+    require(hash_replay_guest_state(changed_cpu, 100u, 0x55AAu) != guest_hash,
+            "Gastzustandshash erkennt UTLB-Zustand nicht.");
 
     SystemReplayLog dropped;
     require(!dropped.try_record(event(SystemReplayEventKind::ExternalInput, 1u, "not-injected")) &&

@@ -78,6 +78,23 @@ foreach(variant IN ITEMS optimized unoptimized)
         "std::cout << cpu.r[1] << ' ' << cpu.r[2] << ' ' << cpu.pc << ' ' << cpu.pr << '\\n'; }\n"
     )
     if(CXX_COMPILER_ID STREQUAL "MSVC")
+        set(msvc_include_environment "${MSVC_INCLUDE_ENVIRONMENT}")
+        set(msvc_lib_environment "${MSVC_LIB_ENVIRONMENT}")
+        set(msvc_libpath_environment "${MSVC_LIBPATH_ENVIRONMENT}")
+        if(msvc_include_environment STREQUAL "")
+            set(msvc_include_environment "$ENV{INCLUDE}")
+        endif()
+        if(msvc_lib_environment STREQUAL "")
+            set(msvc_lib_environment "$ENV{LIB}")
+        endif()
+        if(msvc_libpath_environment STREQUAL "")
+            set(msvc_libpath_environment "$ENV{LIBPATH}")
+        endif()
+        if(msvc_include_environment STREQUAL "" OR msvc_lib_environment STREQUAL "")
+            message(FATAL_ERROR
+                "MSVC-Harness besitzt keine konfigurierte INCLUDE-/LIB-Umgebung."
+            )
+        endif()
         if(KATANA_BUILD_TYPE STREQUAL "Debug")
             set(runtime_compile_flags /MDd /Zi)
         else()
@@ -88,6 +105,12 @@ foreach(variant IN ITEMS optimized unoptimized)
         endif()
         execute_process(
             COMMAND
+                "${CMAKE_COMMAND}"
+                -E
+                env
+                "INCLUDE=${msvc_include_environment}"
+                "LIB=${msvc_lib_environment}"
+                "LIBPATH=${msvc_libpath_environment}"
                 "${CXX_COMPILER}"
                 /nologo
                 /std:c++20

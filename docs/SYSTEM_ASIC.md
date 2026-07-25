@@ -29,6 +29,20 @@ Transaktionen, GD-ROM-Fertigstellungen und AICA-Interruptanforderungen mit
 und signalisiert abgeschlossene Plattform-DMA ueber das ASIC; er besitzt keinen
 separaten privaten Scheduler mehr.
 
+Maple-DMA besitzt die expliziten Zustaende `Disabled`, `Armed`, `Active`,
+`Completed` und `Failed`. Im Hardwaretriggermodus setzt ein Startwrite nur
+`Armed`; erst der angebundene Hardwaretrigger liest die Deskriptortabelle und
+plant die Completion. Deaktivieren, Reset und Schedulerreset entfernen
+wartende und aktive Transfers. Die letzte vollstaendig enthaltene
+32-Byte-Startadresse des Schutzfensters ist gueltig.
+
+Antwortziele werden bei Completion erneut gegen Schutzfenster und lineares,
+schreibbares RAM validiert. Jede Antwort wird vollstaendig little-endian in
+einem Hostpuffer aufgebaut und atomar committed. Eine inzwischen ungueltige
+Spanne setzt einen strukturierten Fehlercode samt Adresse und laesst weder
+Teilwrites noch eine Gastexception aus dem Schedulercallback austreten. Nur
+erfolgreiche Completions erreichen den ASIC-Observer.
+
 Channel 2 ist dabei kein Ersatzname fuer den separaten PVR-DMA-Controller. Der
 TA-Pfad nimmt den echten SH-4-DMAC-Kanal 2 mit `RS=2`, 32-Byte-Burst,
 inkrementierender Quelle, festem Ziel und `DMAOR.DME+DDT` an. `SB_C2DSTAT`
@@ -42,7 +56,13 @@ generische P1-Ergaenzung offen.
 
 Geraete melden Ereignisse mit einem Gastzyklus. Der `EventScheduler` ordnet
 gleiche Zyklen stabil nach Einreihungs-ID; das ASIC protokolliert zusaetzlich
-eine monotone Sequenz. Rueckwaerts laufende Gastzeit wird abgelehnt.
+eine monotone Sequenz. Rueckwaerts laufende Gastzeit wird abgelehnt. Der
+Produktpfad behaelt die letzten 64 Ereignisse; `last_event`, Gesamtzahl und
+Dropzaehler bleiben davon unabhaengig sichtbar. Eine fehlgeschlagene
+Diagnostikallokation darf den Interruptpfad nicht abbrechen und wird als Drop
+gezaehlt. Die Sequenz laeuft nicht auf bereits verwendete Werte zurueck,
+sondern endet nach dem maximalen 64-Bit-Wert in einem sichtbaren
+Erschoepfungsfehler.
 
 Nur 32-Bit-Zugriffe auf dokumentierte Register sind erlaubt. Reservierte
 Offsets, Registerluecken und falsche Zugriffsbreiten werfen Fehler und koennen

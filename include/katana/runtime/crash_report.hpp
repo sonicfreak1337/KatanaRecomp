@@ -10,7 +10,7 @@
 
 namespace katana::runtime {
 
-inline constexpr std::uint32_t crash_report_schema_version = 2u;
+inline constexpr std::uint32_t crash_report_schema_version = 3u;
 
 struct CrashReportContext {
     std::string stop_code;
@@ -45,8 +45,16 @@ struct CrashReport {
     std::uint32_t intevt = 0u;
     bool trap_pending = false;
     std::uint64_t exception_generation = 0u;
+    std::uint64_t last_exception_generation = 0u;
     ExceptionCause exception_cause = ExceptionCause::None;
     bool exception_in_delay_slot = false;
+    std::uint32_t last_exception_instruction_pc = 0u;
+    std::uint32_t last_exception_instruction_physical_pc = 0u;
+    std::uint32_t last_exception_owner_pc = 0u;
+    std::uint64_t attempted_guest_instructions = 0u;
+    std::uint64_t retired_guest_instructions = 0u;
+    std::uint64_t total_guest_cycles = 0u;
+    std::uint64_t pending_guest_cycles = 0u;
 };
 
 [[nodiscard]] CrashReport capture_crash_report(const CpuState& cpu, CrashReportContext context);

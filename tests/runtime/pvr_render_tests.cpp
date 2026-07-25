@@ -154,7 +154,17 @@ int main() {
         software.observe_vblank_scanout(registers, vram.bytes());
         return software.take_guest_frame_proof();
     };
-    software.render({}, registers, vram);
+    constexpr std::uint64_t frozen_render_generation = 7u;
+    software.render({}, registers.snapshot(), vram, frozen_render_generation);
+    const auto frozen_generation_snapshot = software.snapshot();
+    require(frozen_generation_snapshot.last_render_generation == frozen_render_generation &&
+                frozen_generation_snapshot.next_render_generation ==
+                    frozen_render_generation + 1u &&
+                frozen_generation_snapshot.pending_render_evidence.size() == 1u &&
+                frozen_generation_snapshot.pending_render_evidence.front().generation ==
+                    frozen_render_generation,
+            "Eingefrorene STARTRENDER-Generation wird nicht in Renderevidenz und Snapshot "
+            "uebernommen.");
     require(!render_accesses.overflow &&
                 render_accesses.count == software.metrics().last_frame_pixel_writes &&
                 render_accesses.count == 4u,
@@ -767,7 +777,17 @@ int main() {
 
         direct_registers.write(pvr_register::VideoControl,
                                direct_registers.read(pvr_register::VideoControl) | 0x8u);
-        direct_memory.write_u32(direct_32bit_address, 0x00445566u);
+        const auto generation_before_visible_writes = direct_renderer.snapshot();
+        direct_memory.write_u16(direct_32bit_address, 0x5566u);
+        direct_memory.write_u8(direct_32bit_address + 2u, 0x44u);
+        const auto pending_direct_epoch = direct_renderer.snapshot();
+        require(pending_direct_epoch.pending_direct_first_write_generation ==
+                        generation_before_visible_writes.next_direct_write_generation &&
+                    pending_direct_epoch.pending_direct_last_write_generation ==
+                        pending_direct_epoch.pending_direct_first_write_generation + 1u &&
+                    pending_direct_epoch.pending_direct_write_generation ==
+                        pending_direct_epoch.pending_direct_last_write_generation,
+                "Direkte VRAM-Writes verlieren den ersten/letzten Generationsepoch.");
         direct_renderer.observe_vblank_scanout(direct_registers, direct_vram->bytes());
         require(!direct_renderer.take_guest_frame_proof().has_value() &&
                     direct_renderer.metrics().proven_guest_frames == 1u,
@@ -780,6 +800,11 @@ int main() {
         require(direct_proof.has_value() && direct_proof->frame.width == 1u &&
                     direct_proof->frame.height == 1u &&
                     direct_proof->source == PvrGuestFrameProofSource::DirectFramebuffer &&
+                    direct_proof->write_generation_first ==
+                        pending_direct_epoch.pending_direct_first_write_generation &&
+                    direct_proof->write_generation_last ==
+                        pending_direct_epoch.pending_direct_last_write_generation &&
+                    direct_proof->render_generation == direct_proof->write_generation_last &&
                     direct_proof->frame.rgba ==
                         std::vector<std::uint8_t>({0x44u, 0x55u, 0x66u, 0xFFu}) &&
                     direct_renderer.metrics().proven_guest_frames == 2u &&
@@ -836,6 +861,19 @@ int main() {
         require(!direct_renderer.take_guest_frame_proof().has_value(),
                 "Unsichtbares C888-Highbyte erzeugt direkt nach einem Evidenzreset "
                 "einen falschen Gastframe.");
+
+        direct_renderer.reset_guest_frame_evidence(direct_vram->bytes());
+        direct_renderer.observe_vram_write(direct_32bit_address + 3u, 4096u);
+        const auto range_dirty = direct_renderer.snapshot();
+        std::size_t range_dirty_bits = 0u;
+        for (const auto word : range_dirty.direct_dirty_words)
+            range_dirty_bits += std::popcount(word);
+        require(range_dirty.direct_dirty_byte_count == 4096u &&
+                    range_dirty_bits == 4096u &&
+                    range_dirty.pending_direct_first_write_generation ==
+                        range_dirty.pending_direct_last_write_generation,
+                "Wortweise Direct-FB-Range-Markierung verliert Bytes oder dupliziert Dirty-Bits.");
+        direct_renderer.reset_guest_frame_evidence(direct_vram->bytes());
     }
 
     PvrSoftwareRenderer bounded_evidence;

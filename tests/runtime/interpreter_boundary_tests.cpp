@@ -2,6 +2,7 @@
 
 #include <iostream>
 #include <stdexcept>
+#include <string>
 
 using namespace katana::runtime;
 namespace {
@@ -50,7 +51,10 @@ int main() {
         const auto normal = boundary.execute(cpu, dynamic_request);
         require(normal.resumed && cpu.r[0] == 2u && cpu.memory.read_u8(0x20u) == 0x5Au &&
                     watchpoint && normal.safepoint.delivered_cycle == 2u &&
-                    tracker.valid("fallback-runtime-op") && tracker.block_count() == 1u,
+                    tracker.valid("fallback-runtime-op") && tracker.block_count() == 1u &&
+                    cpu.attempted_guest_instructions == 1u &&
+                    cpu.retired_guest_instructions == 1u &&
+                    elapsed_guest_cycles(cpu) == 2u,
                 "Fallback umgeht CPU-/Speicherzustand, Watchpoint, Scheduler oder Codeprovenienz.");
         const auto repeated = boundary.execute(cpu, dynamic_request);
         require(
@@ -93,7 +97,10 @@ int main() {
             boundary.execute(cpu, {"memory-fault", 0x8C002002u, 2u, 0x8C002004u, 1u, 0x8C002000u});
         require(
             fault.exception && cpu.last_exception_cause == ExceptionCause::AddressErrorRead &&
-                cpu.spc == 0x8C002000u && cpu.expevt == event_address_error_read,
+                cpu.spc == 0x8C002000u && cpu.expevt == event_address_error_read &&
+                cpu.attempted_guest_instructions == 5u &&
+                cpu.retired_guest_instructions == 4u &&
+                elapsed_guest_cycles(cpu) == 8u,
             "Fallback-Speicherfehler besitzt nicht Ursache und Owner-PC des generierten Pfads.");
 
         return_from_exception(cpu);
@@ -101,7 +108,10 @@ int main() {
             cpu, {"unknown-opcode", 0x8C003002u, 0xFFFFu, 0x8C003004u, 1u, 0x8C003000u});
         require(illegal.exception &&
                     cpu.last_exception_cause == ExceptionCause::SlotIllegalInstruction &&
-                    cpu.spc == 0x8C003000u && boundary.count("unknown-opcode") == 1u,
+                    cpu.spc == 0x8C003000u && boundary.count("unknown-opcode") == 1u &&
+                    cpu.attempted_guest_instructions == 6u &&
+                    cpu.retired_guest_instructions == 4u &&
+                    elapsed_guest_cycles(cpu) == 9u,
                 "Illegale Delay-Slot-Instruktion ist nicht praezise oder stabil gezaehlt.");
 
         bool forbidden = false;
@@ -113,6 +123,77 @@ int main() {
         }
         require(forbidden && boundary.count("manifest-denied") == 0u,
                 "Manifestverbot wird umgangen oder faelschlich als Eintritt gezaehlt.");
+
+        EventScheduler invalid_scheduler;
+        SchedulerSafepoints invalid_safepoints(invalid_scheduler, 12u, 4u);
+        PreciseInterpreterBoundary invalid_boundary(
+            invalid_safepoints,
+            [](CpuState& state, const InterpreterRequest& request) {
+                state.pc = request.guest_pc + 4u;
+                return true;
+            });
+        CpuState invalid_cpu;
+        bool invalid_boundary_rejected = false;
+        try {
+            static_cast<void>(invalid_boundary.execute(
+                invalid_cpu,
+                {"invalid-boundary", 0x8C005000u, 1u, 0x8C005002u, 3u}));
+        } catch (const std::runtime_error&) {
+            invalid_boundary_rejected = true;
+        }
+        require(invalid_boundary_rejected &&
+                    invalid_cpu.attempted_guest_instructions == 1u &&
+                    invalid_cpu.retired_guest_instructions == 1u &&
+                    elapsed_guest_cycles(invalid_cpu) == 3u &&
+                    invalid_scheduler.current_cycle() == 3u,
+                "Erfolgreicher Fallback-Step wird vor Safepoint/Boundaryfehler nicht retired.");
+
+        EventScheduler partial_scheduler;
+        static_cast<void>(partial_scheduler.schedule_at(2u, [](auto, auto) {}));
+        static_cast<void>(partial_scheduler.schedule_at(4u, [](auto, auto) {}));
+        SchedulerSafepoints partial_safepoints(partial_scheduler, 1u, 8u);
+        PreciseInterpreterBoundary partial_boundary(
+            partial_safepoints,
+            [](CpuState& state, const InterpreterRequest& request) {
+                state.pc = request.exit_boundary;
+                return true;
+            });
+        CpuState partial_cpu;
+        const auto partial = partial_boundary.execute(
+            partial_cpu, {"partial-safepoint", 0x8C006000u, 1u, 0x8C006002u, 5u});
+        require(partial.safepoint.budget_exhausted &&
+                    partial_scheduler.current_cycle() == 2u &&
+                    partial_cpu.total_guest_cycles == 2u &&
+                    partial_cpu.pending_guest_cycles == 3u &&
+                    elapsed_guest_cycles(partial_cpu) == 5u,
+                "Partieller Safepoint verbucht nicht nur tatsaechlich gelieferte Gastzeit.");
+
+        EventScheduler throwing_scheduler;
+        static_cast<void>(throwing_scheduler.schedule_at(
+            2u, [](auto, auto) { throw std::runtime_error("expected-safepoint-throw"); }));
+        SchedulerSafepoints throwing_safepoints(throwing_scheduler, 1u, 8u);
+        PreciseInterpreterBoundary throwing_boundary(
+            throwing_safepoints,
+            [](CpuState& state, const InterpreterRequest& request) {
+                state.pc = request.exit_boundary;
+                return true;
+            });
+        CpuState throwing_cpu;
+        bool safepoint_threw = false;
+        try {
+            static_cast<void>(throwing_boundary.execute(
+                throwing_cpu,
+                {"throwing-safepoint", 0x8C007000u, 1u, 0x8C007002u, 5u}));
+        } catch (const std::runtime_error& error) {
+            safepoint_threw =
+                std::string(error.what()).find("expected-safepoint-throw") !=
+                std::string::npos;
+        }
+        require(safepoint_threw && throwing_scheduler.current_cycle() == 2u &&
+                    throwing_cpu.total_guest_cycles == 2u &&
+                    throwing_cpu.pending_guest_cycles == 3u &&
+                    elapsed_guest_cycles(throwing_cpu) == 5u,
+                "Safepoint-Throw verliert gelieferten Anteil oder verbucht Restzeit vorzeitig.");
     } catch (const std::exception& error) {
         std::cerr << error.what() << '\n';
         return 1;

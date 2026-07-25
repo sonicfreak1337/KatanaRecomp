@@ -454,6 +454,33 @@ int main() {
                 "Deterministischer DMA-Batch divergiert oder reduziert Schedulerarbeit nicht.");
     }
 
+    {
+        EventScheduler byte_scheduler;
+        Memory byte_memory(128u, MemoryAlignmentPolicy::Strict);
+        Sh4Dmac byte_dma(byte_scheduler, byte_memory, DmaTiming{1u});
+        byte_memory.write_u8(0x10u, 0x11u);
+        byte_memory.write_u8(0x11u, 0x22u);
+        byte_memory.write_u8(0x12u, 0x33u);
+        byte_memory.write_u8(0x13u, 0x44u);
+        byte_memory.write_u8(0x20u, 0xA5u);
+        byte_memory.write_u8(0x25u, 0x5Au);
+
+        byte_dma.start_byte_transfer(0u, 0x10u, 0x21u, 4u);
+        require(byte_dma.transfer_unit_size(0u) == 1u && byte_dma.count(0u) == 4u,
+                "Generischer Byte-DMA programmiert keine ein Byte grosse Transfereinheit.");
+        static_cast<void>(byte_scheduler.advance_to(4u, 4u));
+        require(byte_memory.read_u8(0x20u) == 0xA5u &&
+                    byte_memory.read_u8(0x21u) == 0x11u &&
+                    byte_memory.read_u8(0x22u) == 0x22u &&
+                    byte_memory.read_u8(0x23u) == 0x33u &&
+                    byte_memory.read_u8(0x24u) == 0x44u &&
+                    byte_memory.read_u8(0x25u) == 0x5Au && byte_dma.count(0u) == 0u,
+                "Generischer DMA mit vier Byte veraendert Zielspanne oder Guardbytes falsch.");
+        require(throws<std::invalid_argument>(
+                    [&] { byte_dma.start_byte_transfer(0u, 0x10u, 0x21u, 0u); }),
+                "Generischer Byte-DMA akzeptiert den DMATCR-Nullwert als leere Laenge.");
+    }
+
     require(throws<std::out_of_range>([&] { dmac->write_count(4u, 1u); }) &&
                 throws<std::out_of_range>(
                     [&] { static_cast<void>(dmac->request_on_demand_transfer(4u)); }) &&

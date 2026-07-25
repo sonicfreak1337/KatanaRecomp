@@ -1,10 +1,12 @@
 #include "katana/runtime/dynamic_interpreter.hpp"
 
 #include "katana/runtime/block_abi.hpp"
+#include "katana/runtime/block_guards.hpp"
 
 #include <array>
 #include <cstdlib>
 #include <iostream>
+#include <memory>
 #include <optional>
 #include <span>
 #include <stdexcept>
@@ -134,10 +136,12 @@ void require_instruction_origin(const GuestMemoryAccessEvent& event,
                                 const std::uint32_t source_pc,
                                 const std::uint32_t runtime_pc,
                                 const std::uint64_t retired_guest_instructions,
+                                const std::uint64_t attempted_guest_instructions,
                                 const char* const message) {
     require(event.instruction.valid && event.instruction.source_pc == source_pc &&
                 event.instruction.runtime_pc == runtime_pc &&
-                event.retired_guest_instructions == retired_guest_instructions,
+                event.retired_guest_instructions == retired_guest_instructions &&
+                event.attempted_guest_instructions == attempted_guest_instructions,
             message);
 }
 
@@ -145,6 +149,26 @@ void require_instruction_origin(const GuestMemoryAccessEvent& event,
 
 int main() {
     Services services;
+
+    CpuState mapped_fetch;
+    mapped_fetch.pc = 0x1000u;
+    mapped_fetch.write_sr(sr_md_mask);
+    mapped_fetch.mmucr = 1u;
+    mapped_fetch.address_space = std::make_shared<RuntimeAddressSpace>();
+    mapped_fetch.address_space->set_mode(AddressTranslationMode::Mmu);
+    mapped_fetch.address_space->write_mmucr(mapped_fetch.mmucr);
+    mapped_fetch.address_space->ldtlb(
+        {0x1000u, 0x4000u, 4096u, 0u, 0u, true, true, true, true, true, true, false});
+    mapped_fetch.memory.write_u16(0x4000u, 0x0009u);
+    mapped_fetch.active_block_virtual_start = 0x1000u;
+    mapped_fetch.active_block_physical_start = 0xDEAD0000u;
+    mapped_fetch.active_block_size = 2u;
+    static_cast<void>(execute_dynamic_sh4_block(mapped_fetch, services, 1u));
+    require(mapped_fetch.active_instruction_pc == 0x1000u &&
+                mapped_fetch.active_instruction_physical_pc == 0x4000u &&
+                mapped_fetch.attempted_guest_instructions == 1u &&
+                mapped_fetch.retired_guest_instructions == 1u,
+            "MMU-Fetch uebernimmt nicht den tatsaechlichen physischen Fault-/Diagnose-PC.");
 
     CpuState same_register;
     same_register.pc = 0u;
@@ -162,8 +186,40 @@ int main() {
     faulting_predecrement.r[1] = 2u;
     faulting_predecrement.memory.write_u16(0u, 0x2116u);
     const auto fault = execute_dynamic_sh4_block(faulting_predecrement, services, 1u);
-    require(fault.end_kind == BlockEndKind::Exception && faulting_predecrement.r[1] == 2u,
-            "Fehlgeschlagenes Pre-Decrement mutiert Rn vor dem Speicherzugriff.");
+    require(fault.end_kind == BlockEndKind::Exception && faulting_predecrement.r[1] == 2u &&
+                faulting_predecrement.attempted_guest_instructions == 1u &&
+                faulting_predecrement.retired_guest_instructions == 0u &&
+                elapsed_guest_cycles(faulting_predecrement) == 2u &&
+                fault.guest_cycles == 2u,
+            "Faultende Instruktion mutiert Rn oder trennt attempted/retired/Zeit nicht.");
+
+    Services timed_services;
+    CpuState timed_mmio;
+    timed_mmio.pc = 0u;
+    timed_mmio.r[1] = 0x04000000u;
+    timed_mmio.pending_guest_cycles = 5u;
+    bool timed_mmio_read = false;
+    std::uint64_t timed_mmio_observed_cycle = 0u;
+    timed_mmio.memory.map_region(
+        "timed-mmio",
+        0x04000000u,
+        std::make_shared<MmioMemoryDevice>(
+            4u,
+            [&](const std::uint32_t, const MemoryAccessWidth) {
+                timed_mmio_read = true;
+                timed_mmio_observed_cycle = timed_services.scheduler_cycle();
+                return 0xAABBCCDDu;
+            },
+            [](const std::uint32_t, const std::uint32_t, const MemoryAccessWidth) {}));
+    timed_mmio.memory.write_u16(0u, 0x6012u);
+    const auto timed_mmio_result =
+        execute_dynamic_sh4_block(timed_mmio, timed_services, 1u);
+    require(timed_mmio_read && timed_mmio.r[0] == 0xAABBCCDDu &&
+                timed_mmio_observed_cycle == 5u && timed_services.scheduler_cycle() == 5u &&
+                timed_mmio.total_guest_cycles == 5u &&
+                timed_mmio.pending_guest_cycles == 2u &&
+                timed_mmio_result.guest_cycles == 2u,
+            "MMIO sieht die Kosten der aktuellen Instruktion schon vor ihrer Ausfuehrung.");
 
     CpuState arithmetic_shift;
     arithmetic_shift.pc = 0u;
@@ -211,14 +267,14 @@ int main() {
 
     const auto& load = accesses.semantic(0u);
     require_instruction_origin(
-        load, 0x1000u, 0x2000u, 78u, "MOV.L-Read verliert Source-/Runtime-PC.");
+        load, 0x1000u, 0x2000u, 77u, 1u, "MOV.L-Read verliert Source-/Runtime-PC.");
     require(load.operation == MemoryAccessOperation::Read &&
                 load.virtual_address == 0x0300u && load.width == MemoryAccessWidth::Word,
             "MOV.L-Read meldet falsche Adresse oder Breite.");
 
     const auto& store = accesses.semantic(1u);
     require_instruction_origin(
-        store, 0x1002u, 0x2002u, 79u, "MOV.L-Write verliert Source-/Runtime-PC.");
+        store, 0x1002u, 0x2002u, 78u, 2u, "MOV.L-Write verliert Source-/Runtime-PC.");
     require(store.operation == MemoryAccessOperation::Write &&
                 store.virtual_address == 0x0304u &&
                 store.write_source == CodeWriteSource::Cpu,
@@ -227,9 +283,9 @@ int main() {
     const auto& rmw_read = accesses.semantic(2u);
     const auto& rmw_write = accesses.semantic(3u);
     require_instruction_origin(
-        rmw_read, 0x1004u, 0x2004u, 80u, "RMW-Read verliert Instruktionsherkunft.");
+        rmw_read, 0x1004u, 0x2004u, 79u, 3u, "RMW-Read verliert Instruktionsherkunft.");
     require_instruction_origin(
-        rmw_write, 0x1004u, 0x2004u, 80u, "RMW-Write verliert Instruktionsherkunft.");
+        rmw_write, 0x1004u, 0x2004u, 79u, 3u, "RMW-Write verliert Instruktionsherkunft.");
     require(rmw_read.operation == MemoryAccessOperation::Read &&
                 rmw_write.operation == MemoryAccessOperation::Write &&
                 rmw_read.virtual_address == 0x0310u &&
@@ -238,7 +294,7 @@ int main() {
 
     const auto& fmov = accesses.semantic(4u);
     require_instruction_origin(
-        fmov, 0x1006u, 0x2006u, 81u, "FMOV-Store verliert Instruktionsherkunft.");
+        fmov, 0x1006u, 0x2006u, 80u, 4u, "FMOV-Store verliert Instruktionsherkunft.");
     require(fmov.operation == MemoryAccessOperation::Write &&
                 fmov.virtual_address == 0x0314u &&
                 fmov.write_source == CodeWriteSource::Fpu,
@@ -246,7 +302,7 @@ int main() {
 
     const auto& movca = accesses.semantic(5u);
     require_instruction_origin(
-        movca, 0x100Au, 0x200Au, 83u, "MOVCA.L verliert Instruktionsherkunft.");
+        movca, 0x100Au, 0x200Au, 82u, 6u, "MOVCA.L verliert Instruktionsherkunft.");
     require(movca.operation == MemoryAccessOperation::Write &&
                 movca.virtual_address == 0x0318u &&
                 movca.write_source == CodeWriteSource::StoreQueue,
@@ -319,15 +375,17 @@ int main() {
     delay_slot.memory.set_guest_memory_access_sink(slot_accesses.sink());
     Services slot_services;
     const auto slot_result = execute_dynamic_sh4_block(delay_slot, slot_services, 2u);
-    require(slot_result.instructions == 2u && delay_slot.pc == 0x2046u &&
+    require(slot_result.instructions == 2u && slot_result.byte_size == 4u &&
+                delay_slot.pc == 0x2046u &&
                 slot_accesses.semantic_count() == 1u,
-            "Delay-Slot-Test erreicht nicht exakt den Datenzugriff im Slot.");
+            "Delay-Slot-Test erreicht nicht exakt den Datenzugriff oder seine Blockgroesse.");
     const auto& slot_write = slot_accesses.semantic(0u);
     require_instruction_origin(
         slot_write,
         0x1042u,
         0x2042u,
-        79u,
+        77u,
+        2u,
         "Delay-Slot benutzt den Branch-PC als Herkunft.");
     require(slot_write.operation == MemoryAccessOperation::Write &&
                 slot_write.virtual_address == 0x0340u &&

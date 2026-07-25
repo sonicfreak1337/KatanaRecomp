@@ -39,7 +39,8 @@ void prepare_cpu(katana_generated::CpuState& cpu) {
     cpu.r[11] = 0x00000180u;
     cpu.memory.write_u32(0x00000180u, 0x76543210u);
 
-    cpu.r[13] = 0x00000210u;
+    // Die aufeinanderfolgenden Byte-/Word-/Long-Ziele muessen natuerlich ausgerichtet bleiben.
+    cpu.r[13] = 0x00000213u;
 
     cpu.r[14] = 0x00000300u;
     cpu.memory.write_u8(0x00000300u, 0x10u);
@@ -77,9 +78,9 @@ void verify_cpu(const katana_generated::CpuState& cpu, const std::string& contex
     require(cpu.r[11] == 0x00000184u && cpu.r[12] == 0x76543210u,
             context + ": MOV.L Post-Increment ist falsch.");
 
-    require(cpu.r[13] == 0x00000209u && cpu.memory.read_u8(0x0000020Fu) == 0x10u &&
-                cpu.memory.read_u16(0x0000020Du) == 0x020Fu &&
-                cpu.memory.read_u32(0x00000209u) == 0x0000020Du,
+    require(cpu.r[13] == 0x0000020Cu && cpu.memory.read_u8(0x00000212u) == 0x13u &&
+                cpu.memory.read_u16(0x00000210u) == 0x0212u &&
+                cpu.memory.read_u32(0x0000020Cu) == 0x00000210u,
             context + ": Identische Pre-Decrement-Register sind falsch.");
 
     require(cpu.r[14] == 0x12345678u,

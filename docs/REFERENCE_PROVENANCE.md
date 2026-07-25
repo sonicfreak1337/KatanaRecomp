@@ -147,17 +147,33 @@ uebernommen.
 
 Der Name `dcrecomp` wurde im internen Planungscommit `7fdcdef` fuer die
 allgemeinen Muster aufgeteilte AOT-Ausgabe und zentrale Adresstabelle genannt.
-Fuer die vorhandene lokale Kopie lassen sich weder ein reproduzierbarer
-externer Commit noch eine geschlossene, kompatible Lizenzprovenienz
-verifizieren. Die Kopie enthaelt zudem als Flycast ausgewiesene, GPL-2.0-
-lizensierte Bestandteile. Deshalb ist dcrecomp **keine zulaessige Codequelle**
-und darf ausschliesslich als Warn- und Architekturvergleich gelesen werden.
+Die fuer den Vergleich verwendete, lokal ohne `.git`-Metadaten abgelegte Kopie
+ist auf den oeffentlichen Upstream
+[`sp00nznet/dcrecomp`](https://github.com/sp00nznet/dcrecomp) und Commit
+[`25bdc3d248a0084fa98335511991872e578b2b4a`](https://github.com/sp00nznet/dcrecomp/commit/25bdc3d248a0084fa98335511991872e578b2b4a)
+gepinnt. Der Abgleich erfolgte ueber identische Git-Blob-IDs repraesentativer
+Dateien, darunter die in diesem Commit geaenderte Hardwaredatei:
 
-Hart kodierte Forced Entries, titelbezogene Remaps, stille BIOS-No-ops und
-Wall-Clock-Timing wurden ausdruecklich nicht uebernommen. Ohne nachgewiesene
-Upstream-Provenienz und kompatible Freigabe darf weder Code noch Datenmaterial
-aus einem als dcrecomp bezeichneten Projekt in KatanaRecomp gelangen; das gilt
-insbesondere fuer die enthaltenen Flycast-Teile.
+- `README.md`: `1acecbf3a3cdd1c99efaf495a06a39d5dd1ad3ff`
+- `src/hal/dc_hardware.c`: `07c78fa36434eeca5449f8ff0500f43cb8875e25`
+- `include/recompiler/sh4_cpu.h`: `1576f5b17cbe9803ee67757264bda97266e5603d`
+- `tools/static_recompile.py`: `d7f65cbb654eba2820f05d1a7bc5d6120d6b2f0b`
+
+Dieser Pin macht ausschliesslich den betrachteten Referenzstand
+reproduzierbar. Oeffentliche Sichtbarkeit ist keine kompatible
+Weiterverbreitungs- oder Codeuebernahmeerlaubnis: Das Upstream-README bezeichnet
+den dcrecomp-Core als `Private repository` und die enthaltenen
+Flycast-Subsysteme als GPLv2. Deshalb ist dcrecomp **keine zulaessige
+Codequelle** und darf nur als Warn-, Architektur- und Verhaltensvergleich
+gelesen werden.
+
+Aus diesem Referenzprojekt wurden weder Code, Tabellen, Konstantensammlungen
+noch Datenmaterial uebernommen. Das gilt insbesondere fuer hart kodierte oder
+titelbezogene Forced Entries, Titelremaps, Adresspatches, stille BIOS- oder
+Hardware-No-op-Stubs, Wall-Clock-Timing sowie proprietaere Firmware-, ROM- oder
+Spieldaten. Allgemeine KatanaRecomp-Semantik muss weiterhin aus unabhaengiger
+oeffentlicher Dokumentation abgeleitet und mit eigenen synthetischen Fixtures
+implementiert werden.
 
 ## Synthetische Testvektoren
 

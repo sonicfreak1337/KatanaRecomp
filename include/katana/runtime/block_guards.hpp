@@ -3,6 +3,7 @@
 #include "katana/runtime/block_table.hpp"
 #include "katana/runtime/cache_control.hpp"
 
+#include <array>
 #include <cstdint>
 #include <stdexcept>
 #include <vector>
@@ -38,6 +39,10 @@ struct RuntimeAddressSpaceSnapshot {
     std::uint64_t mmu_generation = 0u;
     std::uint64_t watchpoint_generation = 0u;
     std::vector<TlbMapping> mappings;
+    std::array<TlbMapping, 4u> itlb{};
+    std::array<bool, 4u> itlb_valid{};
+    std::array<std::uint8_t, 4u> itlb_lru{};
+    std::array<std::uint8_t, 4u> itlb_source_slots{};
 
     [[nodiscard]] bool operator==(const RuntimeAddressSpaceSnapshot&) const = default;
 };
@@ -47,6 +52,9 @@ struct TranslationResult {
     std::uint32_t physical_address = 0u;
     std::uint64_t mmu_generation = 0u;
     bool no_mmu_fastpath = false;
+    std::uint8_t utlb_slot = 0xFFu;
+    std::uint8_t itlb_slot = 0xFFu;
+    bool itlb_refilled = false;
 };
 
 struct BlockStateGuard {
@@ -85,10 +93,17 @@ class RuntimeAddressSpace {
     void write_pteh(std::uint32_t value) noexcept;
     void ldtlb(TlbMapping mapping);
     void clear_tlb() noexcept;
+    void clear_itlb() noexcept;
     void bump_address_space() noexcept;
     void bump_watchpoints() noexcept;
     [[nodiscard]] TranslationResult
     translate(std::uint32_t address, TranslationAccess access, bool privileged = true) const;
+    // Performs the same permission, overlap and physical-origin checks without touching or
+    // refilling the architecturally visible ITLB replacement state.
+    [[nodiscard]] TranslationResult
+    inspect_translation(std::uint32_t address,
+                        TranslationAccess access,
+                        bool privileged = true) const;
     // Classifies the architecturally visible instruction-address path without walking the TLB.
     // Direct covers P1/P2, enabled on-chip RAM and every valid No-MMU address. Mapped is the
     // only result for which translate(..., Instruction) may need a TLB lookup.
@@ -113,14 +128,27 @@ class RuntimeAddressSpace {
     [[nodiscard]] StoreQueuePrefetchTranslation
     translate_store_queue_prefetch(std::uint32_t address, bool privileged = true) const;
     [[nodiscard]] BlockStateGuard guard_for(std::uint32_t virtual_address,
-                                            std::uint32_t fpscr) const;
+                                            std::uint32_t fpscr,
+                                            bool privileged = true) const;
+    [[nodiscard]] bool prove_instruction_mapping(std::uint32_t virtual_start,
+                                                 std::uint32_t physical_start,
+                                                 std::uint32_t size,
+                                                 bool privileged = true) const noexcept;
     [[nodiscard]] RuntimeAddressSpaceSnapshot snapshot() const;
     [[nodiscard]] bool block_fits_translation_page(std::uint32_t virtual_start,
                                                    std::uint32_t size) const noexcept;
 
   private:
     [[nodiscard]] TranslationResult
-    translate_mapped(std::uint32_t address, TranslationAccess access, bool privileged) const;
+    translate_impl(std::uint32_t address,
+                   TranslationAccess access,
+                   bool privileged,
+                   bool update_instruction_tlb) const;
+    [[nodiscard]] TranslationResult
+    translate_mapped(std::uint32_t address,
+                     TranslationAccess access,
+                     bool privileged,
+                     bool update_instruction_tlb) const;
     AddressTranslationMode mode_ = AddressTranslationMode::NoMmu;
     std::uint32_t mmucr_ = 0u;
     std::uint8_t asid_ = 0u;
@@ -128,6 +156,11 @@ class RuntimeAddressSpace {
     std::uint64_t mmu_generation_ = 0u;
     std::uint64_t watchpoint_generation_ = 0u;
     std::vector<TlbMapping> mappings_;
+    mutable std::array<TlbMapping, 4u> itlb_{};
+    mutable std::array<bool, 4u> itlb_valid_{};
+    mutable std::array<std::uint8_t, 4u> itlb_lru_{};
+    mutable std::array<std::uint8_t, 4u> itlb_source_slots_{
+        0xFFu, 0xFFu, 0xFFu, 0xFFu};
 };
 
 } // namespace katana::runtime

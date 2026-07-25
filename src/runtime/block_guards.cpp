@@ -10,8 +10,12 @@ namespace katana::runtime {
 namespace {
 constexpr std::uint32_t fpscr_guard_mask =
     fpscr_rounding_mode_mask | fpscr_pr_mask | fpscr_sz_mask | fpscr_fr_mask;
+constexpr std::uint32_t mmucr_at_mask = 0x00000001u;
 constexpr std::uint32_t mmucr_sv_mask = 0x00000100u;
 constexpr std::uint32_t mmucr_sqmd_mask = 0x00000200u;
+constexpr std::uint32_t mmucr_translation_mask =
+    mmucr_at_mask | mmucr_sv_mask | mmucr_sqmd_mask;
+constexpr std::uint32_t mmucr_itlb_context_mask = mmucr_at_mask | mmucr_sv_mask;
 constexpr std::uint32_t store_queue_window_mask = 0xFC000000u;
 constexpr std::uint32_t store_queue_window = 0xE0000000u;
 }
@@ -53,8 +57,13 @@ void RuntimeAddressSpace::set_mode(const AddressTranslationMode mode) noexcept {
 }
 void RuntimeAddressSpace::write_mmucr(const std::uint32_t value) noexcept {
     if (mmucr_ != value) {
+        const bool translation_changed =
+            ((mmucr_ ^ value) & mmucr_translation_mask) != 0u;
+        const bool itlb_context_changed =
+            ((mmucr_ ^ value) & mmucr_itlb_context_mask) != 0u;
         mmucr_ = value;
-        ++mmu_generation_;
+        if (itlb_context_changed) clear_itlb();
+        if (translation_changed) ++mmu_generation_;
     }
 }
 void RuntimeAddressSpace::write_pteh(const std::uint32_t value) noexcept {
@@ -79,11 +88,20 @@ void RuntimeAddressSpace::ldtlb(TlbMapping mapping) {
     } else {
         *found = mapping;
     }
+    // UTLB writes can introduce an overlap with any cached translation. Keeping one
+    // source slot alive would hide a subsequent architectural multiple hit.
+    clear_itlb();
     ++mmu_generation_;
 }
 void RuntimeAddressSpace::clear_tlb() noexcept {
     mappings_.clear();
+    clear_itlb();
     ++mmu_generation_;
+}
+void RuntimeAddressSpace::clear_itlb() noexcept {
+    itlb_valid_.fill(false);
+    itlb_lru_.fill(0u);
+    itlb_source_slots_.fill(0xFFu);
 }
 void RuntimeAddressSpace::bump_address_space() noexcept {
     ++address_space_generation_;
@@ -95,14 +113,31 @@ void RuntimeAddressSpace::bump_watchpoints() noexcept {
 TranslationResult RuntimeAddressSpace::translate(const std::uint32_t address,
                                                  const TranslationAccess access,
                                                  const bool privileged) const {
+    return translate_impl(address, access, privileged, true);
+}
+
+TranslationResult RuntimeAddressSpace::inspect_translation(
+    const std::uint32_t address,
+    const TranslationAccess access,
+    const bool privileged) const {
+    return translate_impl(address, access, privileged, false);
+}
+
+TranslationResult RuntimeAddressSpace::translate_impl(
+    const std::uint32_t address,
+    const TranslationAccess access,
+    const bool privileged,
+    const bool update_instruction_tlb) const {
     const auto read_cause = access == TranslationAccess::Write ? ExceptionCause::AddressErrorWrite
                                                                : ExceptionCause::AddressErrorRead;
     if (access == TranslationAccess::Instruction) {
+        if ((address & 1u) != 0u)
+            throw TranslationError(access, address, ExceptionCause::AddressErrorRead);
         switch (instruction_translation_path(address, privileged)) {
         case InstructionTranslationPath::Direct:
             return {address, canonical_physical_address(address), mmu_generation_, true};
         case InstructionTranslationPath::Mapped:
-            return translate_mapped(address, access, privileged);
+            return translate_mapped(address, access, privileged, update_instruction_tlb);
         case InstructionTranslationPath::Invalid:
             throw TranslationError(access, address, read_cause);
         }
@@ -129,7 +164,7 @@ TranslationResult RuntimeAddressSpace::translate(const std::uint32_t address,
     if (segment == 6u && !privileged)
         throw TranslationError(access, address, read_cause);
 
-    return translate_mapped(address, access, privileged);
+    return translate_mapped(address, access, privileged, update_instruction_tlb);
 }
 
 StoreQueuePrefetchTranslation RuntimeAddressSpace::translate_store_queue_prefetch(
@@ -146,15 +181,17 @@ StoreQueuePrefetchTranslation RuntimeAddressSpace::translate_store_queue_prefetc
     if (mode_ == AddressTranslationMode::NoMmu) {
         return {address, 0u, StoreQueueAddressingMode::Qacr};
     }
-    const auto translated = translate_mapped(address, TranslationAccess::Write, privileged);
+    const auto translated =
+        translate_mapped(address, TranslationAccess::Write, privileged, false);
     return {address,
             translated.physical_address & ~std::uint32_t{31u},
             StoreQueueAddressingMode::Utlb};
 }
 
 TranslationResult RuntimeAddressSpace::translate_mapped(const std::uint32_t address,
-                                                        const TranslationAccess access,
-                                                        const bool privileged) const {
+                                                         const TranslationAccess access,
+                                                         const bool privileged,
+                                                         const bool update_instruction_tlb) const {
     const auto matches = [&](const auto& value) {
         const auto start = static_cast<std::uint64_t>(value.virtual_page);
         const auto end = start + value.page_size;
@@ -164,6 +201,56 @@ TranslationResult RuntimeAddressSpace::translate_mapped(const std::uint32_t addr
         return value.valid && address >= start && static_cast<std::uint64_t>(address) < end &&
                asid_match;
     };
+    const auto finish_translation = [&](const TlbMapping& mapping,
+                                        const std::uint8_t utlb_slot,
+                                        const std::uint8_t itlb_slot,
+                                        const bool itlb_refilled) {
+        if (!privileged && !mapping.user_access)
+            throw TranslationError(access,
+                                   address,
+                                   access == TranslationAccess::Write
+                                       ? ExceptionCause::TlbProtectionWrite
+                                       : ExceptionCause::TlbProtectionRead);
+        if (access == TranslationAccess::Write && (!mapping.writable || !mapping.dirty))
+            throw TranslationError(access,
+                                   address,
+                                   mapping.writable ? ExceptionCause::InitialPageWrite
+                                                    : ExceptionCause::TlbProtectionWrite);
+        if ((access == TranslationAccess::Instruction && !mapping.executable) ||
+            (access == TranslationAccess::Read && !mapping.readable))
+            throw TranslationError(access, address, ExceptionCause::TlbProtectionRead);
+        return TranslationResult{address,
+                                 mapping.physical_page + (address - mapping.virtual_page),
+                                 mmu_generation_,
+                                 false,
+                                 utlb_slot,
+                                 itlb_slot,
+                                 itlb_refilled};
+    };
+
+    if (access == TranslationAccess::Instruction && update_instruction_tlb) {
+        const auto touch_itlb = [&](const std::size_t touched) {
+            const auto old_rank = itlb_lru_[touched];
+            const auto valid_count =
+                static_cast<std::uint8_t>(std::count(itlb_valid_.begin(), itlb_valid_.end(), true));
+            for (std::size_t index = 0u; index < itlb_.size(); ++index) {
+                if (index != touched && itlb_valid_[index] &&
+                    itlb_lru_[index] > old_rank)
+                    --itlb_lru_[index];
+            }
+            itlb_lru_[touched] = valid_count == 0u ? 0u : valid_count - 1u;
+        };
+        const auto itlb_matches = [&](const std::size_t index) {
+            return itlb_valid_[index] && matches(itlb_[index]);
+        };
+        for (std::size_t index = 0u; index < itlb_.size(); ++index) {
+            if (!itlb_matches(index)) continue;
+            touch_itlb(index);
+            return finish_translation(
+                itlb_[index], 0xFFu, static_cast<std::uint8_t>(index), false);
+        }
+    }
+
     const auto found = std::find_if(mappings_.begin(), mappings_.end(), matches);
     if (found == mappings_.end())
         throw TranslationError(access,
@@ -172,29 +259,46 @@ TranslationResult RuntimeAddressSpace::translate_mapped(const std::uint32_t addr
                                                                   : ExceptionCause::TlbMissRead);
     if (std::find_if(std::next(found), mappings_.end(), matches) != mappings_.end())
         throw TranslationError(access, address, ExceptionCause::TlbMultipleHit);
-    if (!privileged && !found->user_access)
-        throw TranslationError(access,
-                               address,
-                               access == TranslationAccess::Write
-                                   ? ExceptionCause::TlbProtectionWrite
-                                   : ExceptionCause::TlbProtectionRead);
-    if (access == TranslationAccess::Write && (!found->writable || !found->dirty))
-        throw TranslationError(access,
-                               address,
-                               found->writable ? ExceptionCause::InitialPageWrite
-                                               : ExceptionCause::TlbProtectionWrite);
-    if ((access == TranslationAccess::Instruction && !found->executable) ||
-        (access == TranslationAccess::Read && !found->readable))
-        throw TranslationError(access, address, ExceptionCause::TlbProtectionRead);
-    return {address,
-            found->physical_page + (address - found->virtual_page),
-            mmu_generation_,
-            false};
+    if (access != TranslationAccess::Instruction)
+        return finish_translation(*found, found->slot, 0xFFu, false);
+    if (!update_instruction_tlb)
+        return finish_translation(*found, found->slot, 0xFFu, false);
+
+    std::size_t replacement = itlb_.size();
+    for (std::size_t index = 0u; index < itlb_.size(); ++index) {
+        if (!itlb_valid_[index]) {
+            replacement = index;
+            break;
+        }
+    }
+    if (replacement == itlb_.size()) {
+        replacement = static_cast<std::size_t>(
+            std::min_element(itlb_lru_.begin(), itlb_lru_.end()) - itlb_lru_.begin());
+    }
+    const bool replacing_valid_entry = itlb_valid_[replacement];
+    const auto old_rank = itlb_lru_[replacement];
+    itlb_[replacement] = *found;
+    itlb_valid_[replacement] = true;
+    itlb_source_slots_[replacement] = found->slot;
+    const auto valid_count =
+        static_cast<std::uint8_t>(std::count(itlb_valid_.begin(), itlb_valid_.end(), true));
+    if (replacing_valid_entry) {
+        for (std::size_t index = 0u; index < itlb_.size(); ++index) {
+            if (index != replacement && itlb_valid_[index] &&
+                itlb_lru_[index] > old_rank)
+                --itlb_lru_[index];
+        }
+    }
+    itlb_lru_[replacement] = valid_count - 1u;
+    return finish_translation(
+        *found, found->slot, static_cast<std::uint8_t>(replacement), true);
 }
 
 BlockStateGuard RuntimeAddressSpace::guard_for(const std::uint32_t virtual_address,
-                                               const std::uint32_t fpscr) const {
-    const auto translated = translate(virtual_address, TranslationAccess::Instruction);
+                                               const std::uint32_t fpscr,
+                                               const bool privileged) const {
+    const auto translated =
+        inspect_translation(virtual_address, TranslationAccess::Instruction, privileged);
     return {mode_,
             mmucr_,
             address_space_generation_,
@@ -202,6 +306,41 @@ BlockStateGuard RuntimeAddressSpace::guard_for(const std::uint32_t virtual_addre
             watchpoint_generation_,
             fpscr & fpscr_guard_mask,
             translated.physical_address / page_size * page_size};
+}
+
+bool RuntimeAddressSpace::prove_instruction_mapping(const std::uint32_t virtual_start,
+                                                    const std::uint32_t physical_start,
+                                                    const std::uint32_t size,
+                                                    const bool privileged) const noexcept {
+    if (size < 2u || (size & 1u) != 0u || (virtual_start & 1u) != 0u ||
+        (physical_start & 1u) != 0u)
+        return false;
+    const auto virtual_end = static_cast<std::uint64_t>(virtual_start) + size;
+    const auto physical_end = static_cast<std::uint64_t>(physical_start) + size;
+    if (virtual_end > 0x1'0000'0000ull || physical_end > 0x1'0000'0000ull)
+        return false;
+    const auto translated_at = [&](const std::uint32_t offset) {
+        try {
+            return inspect_translation(virtual_start + offset,
+                                       TranslationAccess::Instruction,
+                                       privileged)
+                       .physical_address ==
+                   physical_start + offset;
+        } catch (...) {
+            return false;
+        }
+    };
+    if (!translated_at(0u) || !translated_at(size - 2u)) return false;
+    constexpr std::uint64_t smallest_tlb_page = 1024u;
+    auto boundary =
+        (static_cast<std::uint64_t>(virtual_start) / smallest_tlb_page + 1u) *
+        smallest_tlb_page;
+    while (boundary < virtual_end) {
+        const auto offset = static_cast<std::uint32_t>(boundary - virtual_start);
+        if (!translated_at(offset) || !translated_at(offset - 2u)) return false;
+        boundary += smallest_tlb_page;
+    }
+    return true;
 }
 
 RuntimeAddressSpaceSnapshot RuntimeAddressSpace::snapshot() const {
@@ -213,25 +352,28 @@ RuntimeAddressSpaceSnapshot RuntimeAddressSpace::snapshot() const {
         mmu_generation_,
         watchpoint_generation_,
         mappings_,
+        itlb_,
+        itlb_valid_,
+        itlb_lru_,
+        itlb_source_slots_,
     };
 }
 
 bool RuntimeAddressSpace::block_fits_translation_page(const std::uint32_t virtual_start,
                                                       const std::uint32_t size) const noexcept {
-    if (size == 0u) {
-        return false;
-    }
-    if (mode_ == AddressTranslationMode::NoMmu) {
-        return true;
-    }
-    const auto last = static_cast<std::uint64_t>(virtual_start) + size - 1u;
-    if (last > 0xFFFFFFFFull) return false;
+    if (size < 2u || (virtual_start & 1u) != 0u || (size & 1u) != 0u) return false;
+    const auto final_instruction =
+        static_cast<std::uint64_t>(virtual_start) + size - 2u;
+    if (final_instruction > 0xFFFFFFFFull) return false;
     try {
-        const auto first = translate(virtual_start, TranslationAccess::Instruction);
-        const auto final =
-            translate(static_cast<std::uint32_t>(last), TranslationAccess::Instruction);
-        return final.physical_address - first.physical_address == size - 1u;
-    } catch (const TranslationError&) {
+        const auto first =
+            inspect_translation(virtual_start, TranslationAccess::Instruction);
+        const auto final = inspect_translation(
+            static_cast<std::uint32_t>(final_instruction), TranslationAccess::Instruction);
+        return first.utlb_slot == final.utlb_slot &&
+               static_cast<std::uint64_t>(final.physical_address) ==
+                   static_cast<std::uint64_t>(first.physical_address) + size - 2u;
+    } catch (...) {
         return false;
     }
 }

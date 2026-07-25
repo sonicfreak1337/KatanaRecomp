@@ -77,6 +77,12 @@ int main() {
     auto& cpu = *cpu_storage;
     cpu.memory = Memory(0u);
     static_cast<void>(map_dreamcast_main_ram(cpu.memory));
+    cpu.write_sr(sr_md_mask);
+    CpuState p4_buffer_cpu;
+    p4_buffer_cpu.write_sr(sr_md_mask);
+    require(!resolve_guest_write_buffer(
+                p4_buffer_cpu, 0xE0000000u, sizeof(std::uint32_t)),
+            "Privilegierter P4-Gastpuffer wird im No-MMU-Pfad auf lineares RAM umgebogen.");
     std::uint64_t rejected_mmio_writes = 0u;
     auto rejected_mmio = std::make_shared<MmioMemoryDevice>(
         0x1000u,
@@ -159,6 +165,7 @@ int main() {
         CpuState timeout_cpu;
         timeout_cpu.memory = Memory(0u);
         static_cast<void>(map_dreamcast_main_ram(timeout_cpu.memory));
+        timeout_cpu.write_sr(sr_md_mask);
         EventScheduler timeout_scheduler;
         static_cast<void>(timeout_scheduler.advance_to(
             std::numeric_limits<std::uint64_t>::max() - 999u, 0u));
@@ -201,6 +208,7 @@ int main() {
         CpuState timeout_cpu;
         timeout_cpu.memory = Memory(0u);
         static_cast<void>(map_dreamcast_main_ram(timeout_cpu.memory));
+        timeout_cpu.write_sr(sr_md_mask);
         EventScheduler timeout_scheduler;
         static_cast<void>(timeout_scheduler.advance_to(
             std::numeric_limits<std::uint64_t>::max() - 999u, 0u));
@@ -753,6 +761,13 @@ int main() {
     constexpr std::uint32_t parameters = 0x8C003000u;
     constexpr std::uint32_t destination = 0x8C004000u;
     constexpr std::uint32_t extended_status = 0x8C005000u;
+    const auto next_request_before_rejection = controller.snapshot().next_bios_request;
+    cpu.r[4] = 16u;
+    cpu.r[5] = 0x01000000u;
+    require(controller.bios_call(cpu, 0u, 0u) == 0u &&
+                controller.snapshot().next_bios_request == next_request_before_rejection &&
+                controller.status().bios_requests == 0u,
+            "Abgelehnte REQ_CMD-Parameter verbrauchen eine GD-ROM-Request-ID.");
     cpu.memory.write_u32(parameters, 150u);
     cpu.memory.write_u32(parameters + 4u, 1u);
     cpu.memory.write_u32(parameters + 8u, destination);
@@ -763,7 +778,7 @@ int main() {
     controller.write(0x9Cu, 0xA0u, MemoryAccessWidth::Byte);
     cpu.r[4] = read_request;
     cpu.r[5] = extended_status;
-    require(read_request >= 1u && queued_status == 0x80u &&
+    require(read_request == next_request_before_rejection && queued_status == 0x80u &&
                 controller.status().bios_requests == 1u &&
                 controller.status().ata_status == queued_status &&
                 controller.status().interrupt_reason == 0u &&
@@ -798,6 +813,193 @@ int main() {
                 controller.bios_call(cpu, 1u, 0u) == 2u &&
                 cpu.memory.read_u8(destination + 2048u) == 0x5Au,
             "Zweite BIOS-Completion verliert ohne Taskfile-STATUS-Read ihre IRQ-Flanke.");
+
+    {
+        EventScheduler throwing_observer_scheduler;
+        std::uint64_t throwing_observer_calls = 0u;
+        DreamcastGdRomController throwing_observer_controller(
+            cpu.memory,
+            throwing_observer_scheduler,
+            GdRomDrive(source),
+            [&](const std::uint64_t) {
+                ++throwing_observer_calls;
+                throw std::runtime_error("synthetischer GD-ROM-Beobachterfehler");
+            },
+            {},
+            {},
+            {},
+            {},
+            DiscLoadExecutionPolicy::StandaloneTestMode);
+        throwing_observer_controller.write(
+            0x9Cu, 0xA0u, MemoryAccessWidth::Byte);
+        write_packet(throwing_observer_controller, test_unit);
+        auto observer_escaped = false;
+        try {
+            static_cast<void>(
+                throwing_observer_scheduler.advance_by(1'000u, 1u));
+        } catch (...) {
+            observer_escaped = true;
+        }
+        const auto throwing_taskfile_status =
+            throwing_observer_controller.read(0x9Cu, MemoryAccessWidth::Byte);
+        require(!observer_escaped && throwing_observer_calls == 1u &&
+                    (throwing_taskfile_status & 1u) == 0u,
+                "Werfender Completion-Beobachter wird als Taskfilefehler behandelt.");
+
+        constexpr std::uint32_t observer_destination = 0x8C008000u;
+        cpu.memory.write_u32(parameters, 150u);
+        cpu.memory.write_u32(parameters + 4u, 1u);
+        cpu.memory.write_u32(parameters + 8u, observer_destination);
+        cpu.r[4] = 16u;
+        cpu.r[5] = parameters;
+        const auto observer_request =
+            throwing_observer_controller.bios_call(cpu, 0u, 0u);
+        static_cast<void>(
+            throwing_observer_controller.bios_call(cpu, 2u, 0u));
+        observer_escaped = false;
+        try {
+            static_cast<void>(
+                throwing_observer_scheduler.advance_by(1'500u, 1u));
+        } catch (...) {
+            observer_escaped = true;
+        }
+        cpu.r[4] = observer_request;
+        cpu.r[5] = extended_status;
+        require(!observer_escaped && throwing_observer_calls == 2u &&
+                    throwing_observer_controller.bios_call(cpu, 1u, 0u) == 2u &&
+                    cpu.memory.read_u8(observer_destination) == 0x5Au &&
+                    throwing_observer_controller.status().bios_requests == 0u,
+                "Werfender Completion-Beobachter darf Controllerzustand oder Scheduler "
+                "nicht verlieren.");
+    }
+
+    {
+        EventScheduler rejected_commit_scheduler;
+        DreamcastGdRomController rejected_commit_controller(
+            cpu.memory,
+            rejected_commit_scheduler,
+            GdRomDrive(source),
+            {},
+            {},
+            {},
+            [](const DiscLoadRequest&) -> DiscLoadCommit {
+                throw 0x4744u;
+            },
+            "synthetic-gdrom",
+            DiscLoadExecutionPolicy::RequireAtomicExecutor);
+        constexpr std::uint32_t rejected_commit_destination = 0x8C009000u;
+        cpu.memory.write_u8(rejected_commit_destination, 0xC3u);
+        cpu.memory.write_u32(parameters, 150u);
+        cpu.memory.write_u32(parameters + 4u, 1u);
+        cpu.memory.write_u32(parameters + 8u, rejected_commit_destination);
+        cpu.r[4] = 16u;
+        cpu.r[5] = parameters;
+        const auto rejected_commit_request =
+            rejected_commit_controller.bios_call(cpu, 0u, 0u);
+        static_cast<void>(
+            rejected_commit_controller.bios_call(cpu, 2u, 0u));
+        static_cast<void>(
+            rejected_commit_scheduler.advance_by(1'500u, 1u));
+        cpu.r[4] = rejected_commit_request;
+        cpu.r[5] = extended_status;
+        require(rejected_commit_controller.bios_call(cpu, 1u, 0u) ==
+                    0xFFFFFFFFu &&
+                    cpu.memory.read_u32(extended_status + 4u) ==
+                        static_cast<std::uint32_t>(GdRomStatus::InvalidField) &&
+                    cpu.memory.read_u8(rejected_commit_destination) == 0xC3u &&
+                    rejected_commit_controller.status().bios_requests == 0u &&
+                    rejected_commit_controller.status().failed_load_transactions == 1u,
+                "Nichtstandard-Executorfehler verliert eine bereits entnommene "
+                "GD-ROM-Completion.");
+    }
+
+    const auto original_address_space = cpu.address_space;
+    const auto original_sr = cpu.read_sr();
+    cpu.write_sr(original_sr | sr_md_mask);
+    auto queued_address_space = std::make_shared<RuntimeAddressSpace>();
+    queued_address_space->set_mode(AddressTranslationMode::Mmu);
+    queued_address_space->write_mmucr(1u);
+    queued_address_space->ldtlb(
+        {0x00002000u,
+         0x0C060000u,
+         4096u,
+         0u,
+         0u,
+         true,
+         true,
+         true,
+         true,
+         true,
+         true,
+         false});
+    auto replacement_address_space = std::make_shared<RuntimeAddressSpace>();
+    replacement_address_space->set_mode(AddressTranslationMode::Mmu);
+    replacement_address_space->write_mmucr(1u);
+    replacement_address_space->ldtlb(
+        {0x00002000u,
+         0x0C070000u,
+         4096u,
+         0u,
+         0u,
+         true,
+         true,
+         true,
+         true,
+         true,
+         true,
+         false});
+    constexpr std::uint32_t bound_guest_destination = 0x00002400u;
+    constexpr std::uint32_t queued_physical_destination = 0x0C060400u;
+    constexpr std::uint32_t replacement_physical_destination = 0x0C070400u;
+    cpu.memory.write_u32(parameters + 8u, bound_guest_destination);
+    cpu.memory.write_u8(queued_physical_destination, 0u);
+    cpu.memory.write_u8(replacement_physical_destination, 0u);
+    cpu.address_space = queued_address_space;
+    cpu.r[4] = 16u;
+    cpu.r[5] = parameters;
+    const auto bound_request = controller.bios_call(cpu, 0u, 0u);
+    cpu.address_space = replacement_address_space;
+    static_cast<void>(controller.bios_call(cpu, 2u, 0u));
+    static_cast<void>(scheduler.advance_by(1'500u, 1u));
+    cpu.r[4] = bound_request;
+    cpu.r[5] = extended_status;
+    require(bound_request >= 1u && controller.bios_call(cpu, 1u, 0u) == 2u &&
+                cpu.memory.read_u8(queued_physical_destination) == 0x5Au &&
+                cpu.memory.read_u8(replacement_physical_destination) == 0u,
+            "Asynchroner GD-ROM-Request wechselt beim Start auf den aufrufenden CPU-Kontext.");
+
+    cpu.memory.write_u8(queued_physical_destination, 0x44u);
+    cpu.memory.write_u8(replacement_physical_destination, 0x55u);
+    cpu.address_space = queued_address_space;
+    cpu.r[4] = 16u;
+    cpu.r[5] = parameters;
+    const auto remapped_request = controller.bios_call(cpu, 0u, 0u);
+    static_cast<void>(controller.bios_call(cpu, 2u, 0u));
+    queued_address_space->ldtlb(
+        {0x00002000u,
+         0x0C070000u,
+         4096u,
+         0u,
+         0u,
+         true,
+         true,
+         true,
+         true,
+         true,
+         true,
+         false});
+    static_cast<void>(scheduler.advance_by(1'500u, 1u));
+    cpu.r[4] = remapped_request;
+    cpu.r[5] = extended_status;
+    require(remapped_request >= 1u &&
+                controller.bios_call(cpu, 1u, 0u) == 0xFFFFFFFFu &&
+                cpu.memory.read_u32(extended_status + 4u) ==
+                    static_cast<std::uint32_t>(GdRomStatus::InvalidField) &&
+                cpu.memory.read_u8(queued_physical_destination) == 0x44u &&
+                cpu.memory.read_u8(replacement_physical_destination) == 0x55u,
+            "GD-ROM-Completion akzeptiert eine nach Start umgebundene Gastadresse.");
+    cpu.address_space = original_address_space;
+    cpu.write_sr(original_sr);
 
     cpu.memory.write_u32(0x8CFFFFFCu, 0xA5A55A5Au);
     const auto invalid_destination_completions = completions;
@@ -1128,10 +1330,42 @@ int main() {
                 cpu.memory.read_u8(reset_destination) == 0u,
             "INIT_SYSTEM laesst einen alten GD-ROM-Request spaeter abschliessen.");
 
+    controller.write(0x84u, 0xA5u, MemoryAccessWidth::Byte);
+    controller.write(0x9Cu, 0xA0u, MemoryAccessWidth::Byte);
+    write_packet(controller, test_unit);
+    const auto completions_before_scheduler_reset = completions;
+    require(controller.snapshot().packet_event &&
+                scheduler.pending_event_count() == 1u,
+            "GD-ROM-Schedulerresettest besitzt kein aktives Paketereignis.");
+    scheduler.reset();
+    const auto reset_snapshot = controller.snapshot();
+    require(!reset_snapshot.packet_event && reset_snapshot.packet.empty() &&
+                reset_snapshot.data.empty() &&
+                reset_snapshot.taskfile_phase == 0u &&
+                reset_snapshot.drive_owner == 0u &&
+                reset_snapshot.status == 0x40u &&
+                reset_snapshot.features == 0u &&
+                reset_snapshot.bios_requests.empty() &&
+                reset_snapshot.reader.pending.empty() &&
+                reset_snapshot.reader.completed.empty() &&
+                controller.status().dma_callback == 0u &&
+                controller.status().pio_callback == 0u &&
+                scheduler.pending_event_count() == 0u &&
+                completions == completions_before_scheduler_reset,
+            "Schedulerreset raeumt nur den GD-ROM-Reader, nicht den Controllerzustand.");
+    controller.write(0x9Cu, 0xA0u, MemoryAccessWidth::Byte);
+    write_packet(controller, test_unit);
+    static_cast<void>(scheduler.advance_by(1'000u, 1u));
+    require(!controller.snapshot().packet_event &&
+                (controller.status().ata_status & 1u) == 0u &&
+                completions == completions_before_scheduler_reset + 1u,
+            "GD-ROM-Controller ist nach Schedulerreset nicht wiederverwendbar.");
+
     const auto stream_cpu_storage = std::make_unique<CpuState>();
     auto& stream_cpu = *stream_cpu_storage;
     stream_cpu.memory = Memory(0u);
     static_cast<void>(map_dreamcast_main_ram(stream_cpu.memory));
+    stream_cpu.write_sr(sr_md_mask);
     EventScheduler stream_scheduler;
     std::vector<std::uint8_t> stream_bytes(4u * 2048u);
     for (std::size_t index = 0u; index < stream_bytes.size(); ++index)
@@ -1476,6 +1710,75 @@ int main() {
     require(stream_controller.bios_call(stream_cpu, 1u, 0u) == 0u,
             "Abgerufener PIO-Streamingstatus blockiert den naechsten Request.");
 
+    constexpr std::uint32_t coalesced_pio_destination = 0x8C042000u;
+    stream_cpu.memory.write_bytes(coalesced_pio_destination, untouched_stream);
+    const auto coalesced_pio_request = queue_ready_stream(37u, 152u, 2u);
+    const auto coalesced_callbacks_before =
+        stream_controller.status().coalesced_guest_callbacks;
+    const auto dropped_callbacks_before_coalescing =
+        stream_controller.status().dropped_guest_callbacks;
+    for (std::uint32_t chunk = 0u; chunk < 2u; ++chunk) {
+        stream_cpu.memory.write_u32(
+            stream_transfer, coalesced_pio_destination + chunk * 2048u);
+        stream_cpu.memory.write_u32(stream_transfer + 4u, 2048u);
+        stream_cpu.r[4] = coalesced_pio_request;
+        stream_cpu.r[5] = stream_transfer;
+        require(stream_controller.bios_call(stream_cpu, 12u, 0u) == 0u,
+                "PIO-Callback-Coalescing kann einen Teiltransfer nicht abschliessen.");
+    }
+    require(stream_controller.status().pending_guest_callbacks == 1u &&
+                stream_controller.status().coalesced_guest_callbacks ==
+                    coalesced_callbacks_before + 1u &&
+                stream_controller.status().dropped_guest_callbacks ==
+                    dropped_callbacks_before_coalescing &&
+                stream_memory_matches(coalesced_pio_destination, 4096u, 4096u),
+            "Identische ausstehende PIO-Callbacks werden ungegrenzt dupliziert.");
+    const auto coalesced_pio_callback =
+        stream_controller.take_pending_guest_callback();
+    require(coalesced_pio_callback &&
+                coalesced_pio_callback->request_id == coalesced_pio_request &&
+                !stream_controller.take_pending_guest_callback(),
+            "Coalescierter PIO-Callback verliert seinen Requestbezug.");
+    stream_cpu.r[4] = coalesced_pio_request;
+    stream_cpu.r[5] = stream_status;
+    require(stream_controller.bios_call(stream_cpu, 1u, 0u) == 2u,
+            "Coalescing-Regression kann ihren Streamingrequest nicht freigeben.");
+
+    constexpr std::uint32_t bounded_callback_destination = 0x8C044000u;
+    std::vector<std::uint32_t> bounded_callback_requests;
+    bounded_callback_requests.reserve(gdrom_guest_callback_capacity + 1u);
+    const auto dropped_callbacks_before_capacity =
+        stream_controller.status().dropped_guest_callbacks;
+    for (std::size_t index = 0u; index <= gdrom_guest_callback_capacity; ++index) {
+        const auto request = queue_ready_stream(37u, 150u, 1u);
+        stream_cpu.memory.write_u32(stream_transfer, bounded_callback_destination);
+        stream_cpu.memory.write_u32(stream_transfer + 4u, 2048u);
+        stream_cpu.r[4] = request;
+        stream_cpu.r[5] = stream_transfer;
+        require(stream_controller.bios_call(stream_cpu, 12u, 0u) == 0u,
+                "Begrenzungstest kann einen PIO-Transfer nicht abschliessen.");
+        stream_cpu.r[4] = request;
+        stream_cpu.r[5] = stream_status;
+        require(stream_controller.bios_call(stream_cpu, 1u, 0u) == 2u,
+                "Begrenzungstest kann einen PIO-Request nicht freigeben.");
+        bounded_callback_requests.push_back(request);
+    }
+    const auto bounded_callback_snapshot = stream_controller.snapshot();
+    require(bounded_callback_snapshot.pending_guest_callbacks.size() ==
+                gdrom_guest_callback_capacity &&
+                bounded_callback_snapshot.dropped_guest_callbacks ==
+                    dropped_callbacks_before_capacity + 1u &&
+                bounded_callback_snapshot.pending_guest_callbacks.front().request_id ==
+                    bounded_callback_requests[1u] &&
+                bounded_callback_snapshot.pending_guest_callbacks.back().request_id ==
+                    bounded_callback_requests.back(),
+            "GD-ROM-Gastcallbackqueue ist nicht begrenzt oder meldet ihren Ueberlauf nicht.");
+    std::size_t drained_bounded_callbacks = 0u;
+    while (stream_controller.take_pending_guest_callback())
+        ++drained_bounded_callbacks;
+    require(drained_bounded_callbacks == gdrom_guest_callback_capacity,
+            "Begrenzte GD-ROM-Gastcallbackqueue laesst sich nicht deterministisch leeren.");
+
     observe_stream_module_loads = true;
     stream_cpu.memory.set_guest_write_observer([&](const GuestWriteEvent& event) {
         stream_load_writes.observe(event);
@@ -1487,6 +1790,8 @@ int main() {
             static_cast<void>(
                 stream_blocks.erase_overlapping_physical(event.address, event.size));
     });
+    const auto stream_address_space_before_mmu = stream_cpu.address_space;
+    const auto stream_sr_before_mmu = stream_cpu.read_sr();
     stream_cpu.address_space = std::make_shared<RuntimeAddressSpace>();
     stream_cpu.write_sr(sr_md_mask);
     stream_cpu.address_space->set_mode(AddressTranslationMode::Mmu);
@@ -1549,11 +1854,79 @@ int main() {
                 !mmu_aot_active && !mmu_aot_valid && mmu_invalidations == 1u &&
                 mmu_physical_generation != 0u && mmu_virtual_generation == 0u,
             mmu_error.c_str());
+    const auto mmu_pio_callback =
+        stream_controller.take_pending_guest_callback();
+    require(mmu_pio_callback &&
+                mmu_pio_callback->kind == GdRomBiosTransferKind::Pio &&
+                mmu_pio_callback->address == pio_callback_address &&
+                mmu_pio_callback->argument == pio_callback_argument &&
+                mmu_pio_callback->request_id == mmu_pio_request &&
+                !stream_controller.take_pending_guest_callback(),
+            "MMU-PIO-Streamingcallback verliert Request, Ziel oder Argument.");
     stream_cpu.r[4] = mmu_pio_request;
     stream_cpu.r[5] = stream_status;
     require(stream_controller.bios_call(stream_cpu, 1u, 0u) == 2u &&
                 stream_controller.bios_call(stream_cpu, 1u, 0u) == 0u,
             "Abgerufener MMU-PIO-Status blockiert den Nichtlinearitaetstest.");
+
+    const auto bound_stream_address_space = stream_cpu.address_space;
+    auto replacement_stream_address_space =
+        std::make_shared<RuntimeAddressSpace>();
+    replacement_stream_address_space->set_mode(AddressTranslationMode::Mmu);
+    replacement_stream_address_space->write_mmucr(1u);
+    replacement_stream_address_space->ldtlb(
+        {0x00003000u, 0x0C052000u, 4096u, 0u, 0u, true, true, true, true, true, true, false});
+    constexpr std::uint32_t bound_stream_destination = 0x00003400u;
+    constexpr std::uint32_t bound_stream_physical = 0x0C051400u;
+    constexpr std::uint32_t replacement_stream_physical = 0x0C052400u;
+    stream_cpu.memory.write_u8(bound_stream_physical, 0x44u);
+    stream_cpu.memory.write_u8(replacement_stream_physical, 0x55u);
+    const auto bound_pio_request = queue_ready_stream(37u, 152u);
+    stream_cpu.memory.write_u32(stream_transfer, bound_stream_destination);
+    stream_cpu.memory.write_u32(stream_transfer + 4u, 2048u);
+    stream_cpu.address_space = replacement_stream_address_space;
+    stream_cpu.r[4] = bound_pio_request;
+    stream_cpu.r[5] = stream_transfer;
+    require(stream_controller.bios_call(stream_cpu, 12u, 0u) == 0u &&
+                stream_memory_matches(bound_stream_physical, 4096u, 2048u) &&
+                stream_cpu.memory.read_u8(replacement_stream_physical) == 0x55u,
+            "PIO-Streaming wechselt nach REQ_CMD auf einen ersetzten CPU-Adressraum.");
+    const auto bound_pio_callback =
+        stream_controller.take_pending_guest_callback();
+    stream_cpu.r[4] = bound_pio_request;
+    stream_cpu.r[5] = stream_status;
+    require(bound_pio_callback &&
+                bound_pio_callback->request_id == bound_pio_request &&
+                stream_controller.bios_call(stream_cpu, 1u, 0u) == 2u,
+            "Gebundener PIO-Streamingrequest verliert Callback oder Abschlussstatus.");
+
+    stream_cpu.address_space = bound_stream_address_space;
+    stream_cpu.memory.write_u8(bound_stream_physical, 0x66u);
+    stream_cpu.memory.write_u8(replacement_stream_physical, 0x77u);
+    const auto remapped_dma_request = queue_ready_stream(28u, 151u);
+    stream_cpu.memory.write_u32(stream_transfer, bound_stream_destination);
+    stream_cpu.memory.write_u32(stream_transfer + 4u, 2048u);
+    stream_cpu.r[4] = remapped_dma_request;
+    stream_cpu.r[5] = stream_transfer;
+    require(stream_controller.bios_call(stream_cpu, 6u, 0u) == 0u,
+            "MMU-DMA-Remapregression kann den gebundenen Transfer nicht starten.");
+    stream_g1.set_fault_observer([&](const G1DmaFault& fault) {
+        stream_controller.handle_g1_dma_fault(fault);
+    });
+    bound_stream_address_space->ldtlb(
+        {0x00003000u, 0x0C052000u, 4096u, 0u, 1u, true, true, true, true, true, true, false});
+    static_cast<void>(stream_scheduler.advance_by(8192u, 1u));
+    bound_stream_address_space->ldtlb(
+        {0x00003000u, 0x0C051000u, 4096u, 0u, 1u, true, true, true, true, true, true, false});
+    stream_cpu.r[4] = remapped_dma_request;
+    stream_cpu.r[5] = stream_status;
+    require(stream_controller.bios_call(stream_cpu, 1u, 0u) == 0xFFFFFFFFu &&
+                stream_cpu.memory.read_u8(bound_stream_physical) == 0x66u &&
+                stream_cpu.memory.read_u8(replacement_stream_physical) == 0x77u &&
+                stream_g1.state().active == 0u &&
+                !stream_g1.state().completion_event,
+            "MMU-DMA schreibt nach einer umgebundenen Gastadresse spaet weiter.");
+    stream_g1.set_fault_observer({});
 
     stream_cpu.address_space->ldtlb(
         {0x00004000u, 0x0C060000u, 4096u, 0u, 2u, true, true, true, true, true, true, false});
@@ -1578,8 +1951,8 @@ int main() {
     static_cast<void>(stream_controller.bios_call(stream_cpu, 3u, 0u));
     observe_stream_module_loads = false;
     stream_cpu.memory.set_guest_write_observer({});
-    stream_cpu.address_space.reset();
-    stream_cpu.write_sr(0u);
+    stream_cpu.address_space = stream_address_space_before_mmu;
+    stream_cpu.write_sr(stream_sr_before_mmu);
 
     constexpr std::uint32_t aborted_stream_destination = 0x8C042000u;
     stream_cpu.memory.write_bytes(aborted_stream_destination, untouched_stream);
@@ -1626,6 +1999,7 @@ int main() {
     auto& toc_cpu = *toc_cpu_storage;
     toc_cpu.memory = Memory(0u);
     static_cast<void>(map_dreamcast_main_ram(toc_cpu.memory));
+    toc_cpu.write_sr(sr_md_mask);
     EventScheduler toc_scheduler;
     auto toc_source = std::make_shared<LayoutDiscSource>(
         std::vector<DiscTrackLayout>{{1u, 0u, DiscTrackKind::Audio, 2352u, 100u, 1u},

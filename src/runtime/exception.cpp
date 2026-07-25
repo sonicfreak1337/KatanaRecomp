@@ -1,6 +1,9 @@
 #include "katana/runtime/exception.hpp"
+#include "katana/runtime/block_guards.hpp"
+#include "katana/runtime/block_table.hpp"
 
 #include <array>
+#include <limits>
 #include <memory>
 #include <stdexcept>
 
@@ -62,6 +65,36 @@ constexpr std::array exception_table = {
 
 static_assert(exception_table.size() == static_cast<std::size_t>(ExceptionCause::Interrupt) + 1u);
 
+std::uint32_t instruction_physical_pc(const CpuState& cpu,
+                                      const std::uint32_t instruction_pc) noexcept {
+    if (instruction_pc == cpu.active_instruction_pc)
+        return cpu.active_instruction_physical_pc;
+    const auto offset = instruction_pc - cpu.active_block_virtual_start;
+    if (cpu.active_block_size != 0u && offset < cpu.active_block_size)
+        return cpu.active_block_physical_start + offset;
+    return canonical_physical_address(instruction_pc);
+}
+
+std::uint64_t next_exception_generation(const std::uint64_t current) noexcept {
+    return current == std::numeric_limits<std::uint64_t>::max() ? 1u : current + 1u;
+}
+
+bool exception_updates_pteh(const ExceptionCause cause) noexcept {
+    switch (cause) {
+    case ExceptionCause::AddressErrorRead:
+    case ExceptionCause::AddressErrorWrite:
+    case ExceptionCause::TlbMissRead:
+    case ExceptionCause::TlbMissWrite:
+    case ExceptionCause::InitialPageWrite:
+    case ExceptionCause::TlbProtectionRead:
+    case ExceptionCause::TlbProtectionWrite:
+    case ExceptionCause::TlbMultipleHit:
+        return true;
+    default:
+        return false;
+    }
+}
+
 } // namespace
 
 ExceptionMetadata exception_metadata(const ExceptionCause cause,
@@ -74,10 +107,76 @@ ExceptionMetadata exception_metadata(const ExceptionCause cause,
     return metadata;
 }
 
+void request_manual_reset(CpuState& cpu, const ManualResetRequest& request) noexcept {
+    const auto generation = next_exception_generation(cpu.exception_generation);
+    const auto attempted = cpu.attempted_guest_instructions;
+    const auto retired = cpu.retired_guest_instructions;
+    const auto total_cycles = cpu.total_guest_cycles;
+    const auto pending_cycles = cpu.pending_guest_cycles;
+    const auto physical_instruction_pc =
+        instruction_physical_pc(cpu, request.instruction_pc);
+    const auto fault_pteh =
+        exception_updates_pteh(request.cause) && request.fault_address.has_value()
+            ? std::optional<std::uint32_t>{
+                  (cpu.pteh & 0x000000FFu) |
+                  (*request.fault_address & 0xFFFFFC00u)}
+            : std::nullopt;
+    const auto sink = cpu.manual_reset_sink;
+    if (sink) {
+        sink.callback(sink.context, cpu, request);
+    } else {
+        reset_cpu(cpu,
+                  ResetState{tlb_multiple_hit_reset_vector,
+                             0u,
+                             0u,
+                             sr_md_mask | sr_rb_mask | sr_bl_mask | sr_interrupt_mask,
+                             0u});
+    }
+
+    cpu.exception_generation = generation;
+    cpu.attempted_guest_instructions = attempted;
+    cpu.retired_guest_instructions = retired;
+    cpu.total_guest_cycles = total_cycles;
+    cpu.pending_guest_cycles = pending_cycles;
+    cpu.last_exception_generation = generation;
+    cpu.last_exception_cause = request.cause;
+    cpu.last_exception_instruction_pc = request.instruction_pc;
+    cpu.last_exception_instruction_physical_pc = physical_instruction_pc;
+    cpu.last_exception_owner_pc = request.owner_pc;
+    cpu.exception_in_delay_slot = request.in_delay_slot;
+    cpu.expevt = request.event_code;
+    if (request.fault_address.has_value()) cpu.tea = *request.fault_address;
+    if (fault_pteh.has_value()) {
+        cpu.pteh = *fault_pteh;
+        if (cpu.address_space) cpu.address_space->write_pteh(cpu.pteh);
+    }
+    cpu.pc = tlb_multiple_hit_reset_vector;
+    cpu.write_sr(sr_md_mask | sr_rb_mask | sr_bl_mask | sr_interrupt_mask);
+    cpu.trap_pending = false;
+    cpu.sleeping = false;
+}
+
 void enter_exception(CpuState& cpu, const ExceptionRequest& request) noexcept {
-    ++cpu.exception_generation;
     const auto metadata = exception_metadata(request.cause, request.event_code);
     const std::uint32_t saved_sr = cpu.read_sr();
+    const auto instruction_pc =
+        request.instruction_pc.value_or(cpu.active_instruction_pc);
+    const auto owner_pc = request.delay_slot_owner_pc.value_or(instruction_pc);
+    if (!metadata.interrupt && metadata.vector_offset == general_exception_vector &&
+        (saved_sr & sr_bl_mask) != 0u) {
+        request_manual_reset(
+            cpu,
+            ManualResetRequest{ManualResetReason::BlockedGeneralException,
+                               metadata.cause,
+                               metadata.event_code,
+                               request.fault_address,
+                               instruction_pc,
+                               owner_pc,
+                               request.in_delay_slot});
+        return;
+    }
+
+    cpu.exception_generation = next_exception_generation(cpu.exception_generation);
     cpu.ssr = saved_sr;
     cpu.spc = request.return_pc;
     cpu.sgr = cpu.r[15];
@@ -94,6 +193,11 @@ void enter_exception(CpuState& cpu, const ExceptionRequest& request) noexcept {
 
     cpu.last_exception_cause = metadata.cause;
     cpu.exception_in_delay_slot = request.in_delay_slot;
+    cpu.last_exception_instruction_pc = instruction_pc;
+    cpu.last_exception_instruction_physical_pc =
+        instruction_physical_pc(cpu, instruction_pc);
+    cpu.last_exception_owner_pc = owner_pc;
+    cpu.last_exception_generation = cpu.exception_generation;
     cpu.trap_pending = true;
     cpu.sleeping = false;
     cpu.write_sr(saved_sr | sr_md_mask | sr_rb_mask | sr_bl_mask);
@@ -104,41 +208,47 @@ void raise_trapa(CpuState& cpu,
                  const std::uint8_t immediate,
                  const std::uint32_t instruction_pc) noexcept {
     cpu.tra = static_cast<std::uint32_t>(immediate) << 2u;
-    enter_exception(
-        cpu,
-        ExceptionRequest{
-            ExceptionCause::Trap, event_trapa, general_exception_vector, instruction_pc + 2u});
+    auto request = ExceptionRequest{
+        ExceptionCause::Trap, event_trapa, general_exception_vector, instruction_pc + 2u};
+    request.instruction_pc = instruction_pc;
+    enter_exception(cpu, request);
 }
 
 void raise_illegal_instruction(CpuState& cpu,
                                const std::uint32_t instruction_pc,
                                const std::optional<std::uint32_t> delay_slot_owner) noexcept {
     const bool in_delay_slot = delay_slot_owner.has_value();
-    enter_exception(
-        cpu,
+    auto request =
         ExceptionRequest{in_delay_slot ? ExceptionCause::SlotIllegalInstruction
                                        : ExceptionCause::IllegalInstruction,
-                         in_delay_slot ? event_slot_illegal_instruction : event_illegal_instruction,
+                         in_delay_slot ? event_slot_illegal_instruction
+                                       : event_illegal_instruction,
                          general_exception_vector,
                          delay_slot_owner.value_or(instruction_pc),
                          std::nullopt,
                          false,
-                         in_delay_slot});
+                         in_delay_slot};
+    request.instruction_pc = instruction_pc;
+    request.delay_slot_owner_pc = delay_slot_owner;
+    enter_exception(cpu, request);
 }
 
 void raise_fpu_disabled(CpuState& cpu,
                         const std::uint32_t instruction_pc,
                         const std::optional<std::uint32_t> delay_slot_owner) noexcept {
     const bool in_delay_slot = delay_slot_owner.has_value();
-    enter_exception(cpu,
-                    ExceptionRequest{in_delay_slot ? ExceptionCause::SlotFpuDisabled
-                                                   : ExceptionCause::FpuDisabled,
-                                     in_delay_slot ? event_slot_fpu_disabled : event_fpu_disabled,
-                                     general_exception_vector,
-                                     delay_slot_owner.value_or(instruction_pc),
-                                     std::nullopt,
-                                     false,
-                                     in_delay_slot});
+    auto request =
+        ExceptionRequest{in_delay_slot ? ExceptionCause::SlotFpuDisabled
+                                       : ExceptionCause::FpuDisabled,
+                         in_delay_slot ? event_slot_fpu_disabled : event_fpu_disabled,
+                         general_exception_vector,
+                         delay_slot_owner.value_or(instruction_pc),
+                         std::nullopt,
+                         false,
+                         in_delay_slot};
+    request.instruction_pc = instruction_pc;
+    request.delay_slot_owner_pc = delay_slot_owner;
+    enter_exception(cpu, request);
 }
 
 void enter_memory_exception(CpuState& cpu,
@@ -169,37 +279,32 @@ void enter_memory_exception(CpuState& cpu,
     }
     const auto metadata = exception_metadata(cause);
 
-    const bool updates_pteh = cause == ExceptionCause::TlbMissRead ||
-                              cause == ExceptionCause::TlbMissWrite ||
-                              cause == ExceptionCause::InitialPageWrite ||
-                              cause == ExceptionCause::TlbProtectionRead ||
-                              cause == ExceptionCause::TlbProtectionWrite ||
-                              cause == ExceptionCause::TlbMultipleHit;
-    if (updates_pteh)
-        cpu.pteh = (cpu.pteh & 0x000003FFu) | (error.address() & 0xFFFFFC00u);
+    if (exception_updates_pteh(metadata.cause))
+        cpu.pteh = (cpu.pteh & 0x000000FFu) | (error.address() & 0xFFFFFC00u);
 
     if (cause == ExceptionCause::TlbMultipleHit) {
-        ++cpu.exception_generation;
-        cpu.tea = error.address();
-        cpu.expevt = event_tlb_multiple_hit;
-        cpu.vbr = 0u;
-        cpu.write_sr(sr_md_mask | sr_rb_mask | sr_bl_mask | sr_interrupt_mask);
-        cpu.pc = tlb_multiple_hit_reset_vector;
-        cpu.last_exception_cause = cause;
-        cpu.exception_in_delay_slot = in_delay_slot;
-        cpu.trap_pending = true;
-        cpu.sleeping = false;
+        request_manual_reset(
+            cpu,
+            ManualResetRequest{ManualResetReason::TlbMultipleHit,
+                               cause,
+                               event_tlb_multiple_hit,
+                               error.address(),
+                               instruction_pc,
+                               delay_slot_owner.value_or(instruction_pc),
+                               in_delay_slot});
         return;
     }
 
-    enter_exception(cpu,
-                    ExceptionRequest{cause,
-                                     metadata.event_code,
-                                     general_exception_vector,
-                                     delay_slot_owner.value_or(instruction_pc),
-                                     error.address(),
-                                     false,
-                                     in_delay_slot});
+    auto request = ExceptionRequest{cause,
+                                    metadata.event_code,
+                                    general_exception_vector,
+                                    delay_slot_owner.value_or(instruction_pc),
+                                    error.address(),
+                                    false,
+                                    in_delay_slot};
+    request.instruction_pc = instruction_pc;
+    request.delay_slot_owner_pc = delay_slot_owner;
+    enter_exception(cpu, request);
 }
 
 void return_from_exception(CpuState& cpu) noexcept {

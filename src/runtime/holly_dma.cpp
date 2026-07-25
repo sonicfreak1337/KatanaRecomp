@@ -24,10 +24,7 @@ constexpr std::array g2_overrun_events{SystemAsicEvent::AicaDmaOverrun,
                                        SystemAsicEvent::Ext1DmaOverrun,
                                        SystemAsicEvent::Ext2DmaOverrun,
                                        SystemAsicEvent::DeviceDmaOverrun};
-constexpr std::array g2_timeout_events{SystemAsicEvent::AicaDmaTimeout,
-                                       SystemAsicEvent::Ext1DmaTimeout,
-                                       SystemAsicEvent::Ext2DmaTimeout,
-                                       SystemAsicEvent::DeviceDmaTimeout};
+constexpr std::uint32_t holly_dma_transfer_unit_bytes = 32u;
 
 std::uint64_t dma_latency(const std::size_t bytes, const HollyDmaTiming timing) {
     if (bytes == 0u || timing.cycles_per_byte == 0u ||
@@ -174,9 +171,9 @@ void DreamcastG2DmaController::write(const std::uint32_t offset, const std::uint
                     static_cast<void>(scheduler_.cancel(*state.completion_event));
                 state.completion_event.reset();
                 state.active = 0u;
-                state.remaining = 0u;
                 state.completion_cycle = 0u;
                 state.remaining_cycles = 0u;
+                state.suspend &= 1u;
             }
             return;
         case 0x18u:
@@ -272,9 +269,10 @@ void DreamcastG2DmaController::start(const std::size_t channel) {
     std::uint64_t cycles = state.remaining_cycles;
     if (cycles == 0u) {
         try {
-            cycles = dma_latency(static_cast<std::size_t>(state.remaining), timing_);
+            cycles = dma_latency(
+                std::min<std::size_t>(state.remaining, transfer_chunk_bytes), timing_);
         } catch (...) {
-            fail(channel, HollyDmaFaultReason::Timeout, g2_timeout_events[channel]);
+            fail(channel, HollyDmaFaultReason::SchedulerFailure, std::nullopt);
             return;
         }
     }
@@ -292,15 +290,19 @@ void DreamcastG2DmaController::schedule_completion(const std::size_t channel,
     auto& state = channels_.at(channel);
     if (cycles == 0u || cycles > std::numeric_limits<std::uint64_t>::max() -
                                       scheduler_.current_cycle()) {
-        fail(channel, HollyDmaFaultReason::Timeout, g2_timeout_events[channel]);
+        fail(channel, HollyDmaFaultReason::SchedulerFailure, std::nullopt);
         return;
     }
     state.remaining_cycles = 0u;
     state.completion_cycle = scheduler_.current_cycle() + cycles;
-    state.completion_event = scheduler_.schedule_after(
-        cycles,
-        [this, channel](const auto event_id, const auto) { complete(channel, event_id); },
-        SchedulerEventKind::HollyG2Dma);
+    try {
+        state.completion_event = scheduler_.schedule_after(
+            cycles,
+            [this, channel](const auto event_id, const auto) { complete(channel, event_id); },
+            SchedulerEventKind::HollyG2Dma);
+    } catch (...) {
+        fail(channel, HollyDmaFaultReason::SchedulerFailure, std::nullopt);
+    }
 }
 
 void DreamcastG2DmaController::set_suspended(const std::size_t channel,
@@ -328,40 +330,52 @@ void DreamcastG2DmaController::complete(const std::size_t channel,
                                         const SchedulerEventId event_id) {
     auto& state = channels_.at(channel);
     if (!state.completion_event || *state.completion_event != event_id || state.active == 0u) {
-        fail(channel, HollyDmaFaultReason::Overrun, g2_overrun_events[channel]);
+        fail(channel, HollyDmaFaultReason::SchedulerFailure, std::nullopt);
         return;
     }
-    const auto bytes = state.length & 0x7FFFFFFFu;
-    auto source = state.system_address;
-    auto destination = state.peripheral_address;
-    if (state.direction != 0u) std::swap(source, destination);
-    try {
-        transfer(memory_, source, destination, bytes);
-    } catch (...) {
-        fail(channel, HollyDmaFaultReason::TransferFailure, g2_illegal_address_events[channel]);
+    state.completion_event.reset();
+    state.completion_cycle = 0u;
+    state.remaining_cycles = 0u;
+    const auto chunk =
+        std::min<std::uint32_t>(state.remaining, transfer_chunk_bytes);
+    std::uint32_t transferred = 0u;
+    while (transferred != chunk) {
+        const auto unit =
+            std::min<std::uint32_t>(chunk - transferred, holly_dma_transfer_unit_bytes);
+        auto source = state.system_counter;
+        auto destination = state.peripheral_counter;
+        if (state.direction != 0u) std::swap(source, destination);
+        try {
+            transfer(memory_, source, destination, unit);
+        } catch (...) {
+            fail(channel,
+                 HollyDmaFaultReason::TransferFailure,
+                 g2_illegal_address_events[channel]);
+            return;
+        }
+        state.peripheral_counter += unit;
+        state.system_counter += unit;
+        state.remaining -= unit;
+        transferred += unit;
+    }
+    if (state.remaining != 0u) {
+        start(channel);
         return;
     }
-    state.peripheral_address += bytes;
-    state.system_address += bytes;
-    state.peripheral_counter = state.peripheral_address;
-    state.system_counter = state.system_address;
-    state.remaining = 0u;
     state.enabled = (state.length & 0x80000000u) != 0u ? 0u : 1u;
     state.length = 0u;
     state.active = 0u;
     state.suspend |= 0x10u;
-    state.completion_event.reset();
-    state.completion_cycle = 0u;
-    state.remaining_cycles = 0u;
     ++completed_dma_count_;
     if (completion_observer_) completion_observer_(g2_completion_events[channel]);
 }
 
 void DreamcastG2DmaController::fail(const std::size_t channel,
                                     const HollyDmaFaultReason reason,
-                                    const SystemAsicEvent event) noexcept {
+                                    const std::optional<SystemAsicEvent> event) noexcept {
     if (channel >= channels_.size()) return;
     auto& state = channels_[channel];
+    const auto in_flight = state.active != 0u;
     if (state.completion_event && !scheduler_lifetime_.expired())
         static_cast<void>(scheduler_.cancel(*state.completion_event));
     state.completion_event.reset();
@@ -374,14 +388,14 @@ void DreamcastG2DmaController::fail(const std::size_t channel,
     last_fault_ = HollyDmaFault{reason,
                                 event,
                                 channel,
-                                state.peripheral_address,
-                                state.system_address,
-                                state.remaining != 0u
-                                    ? state.remaining
-                                    : (state.length & 0x7FFFFFFFu)};
-    if (completion_observer_) {
+                                in_flight ? state.peripheral_counter
+                                          : state.peripheral_address,
+                                in_flight ? state.system_counter : state.system_address,
+                                in_flight ? state.remaining
+                                          : (state.length & 0x7FFFFFFFu)};
+    if (event && completion_observer_) {
         try {
-            completion_observer_(event);
+            completion_observer_(*event);
         } catch (...) {
         }
     }
@@ -428,6 +442,7 @@ void DreamcastG2DmaController::reset() noexcept {
     tr_timeout_ = 0u;
     modem_timeout_ = 0u;
     modem_wait_ = 0u;
+    completed_dma_count_ = 0u;
     last_fault_.reset();
 }
 
@@ -862,11 +877,7 @@ void DreamcastPvrDmaController::write(const std::uint32_t offset,
         return;
     case 0x14u:
         enabled_ = value & 1u;
-        if (enabled_ == 0u) {
-            cancel();
-            active_ = 0u;
-            remaining_ = 0u;
-        }
+        if (enabled_ == 0u) abort();
         return;
     case 0x18u:
         if ((value & 1u) != 0u && enabled_ != 0u && trigger_select_ == 0u) start();
@@ -895,6 +906,10 @@ void DreamcastPvrDmaController::start() {
         fail(HollyDmaFaultReason::InvalidLength, SystemAsicEvent::PvrIllegalAddress);
         return;
     }
+    if (direction_ != 0u) {
+        fail(HollyDmaFaultReason::InvalidDirection, SystemAsicEvent::PvrIllegalAddress);
+        return;
+    }
     if (!protected_system_range(system_address_, bytes)) {
         fail(HollyDmaFaultReason::Overrun, SystemAsicEvent::PvrOverrun);
         return;
@@ -915,50 +930,126 @@ void DreamcastPvrDmaController::start() {
     system_counter_ = system_address_;
     remaining_ = length_;
     active_ = 1u;
+    suspend_ &= 1u;
+    schedule_chunk();
+}
+
+void DreamcastPvrDmaController::schedule_chunk(std::uint64_t cycles) {
     try {
-        const auto cycles = dma_latency(bytes, timing_);
+        if (cycles == 0u)
+            cycles = dma_latency(
+                std::min<std::uint32_t>(remaining_, transfer_chunk_bytes), timing_);
+        if ((suspend_ & 1u) != 0u) {
+            suspend_ |= 0x10u;
+            remaining_cycles_ = cycles;
+            completion_cycle_ = 0u;
+            return;
+        }
+        if (cycles == 0u ||
+            cycles > std::numeric_limits<std::uint64_t>::max() -
+                         scheduler_.current_cycle()) {
+            fail(HollyDmaFaultReason::SchedulerFailure, std::nullopt);
+            return;
+        }
+        suspend_ &= ~0x10u;
+        completion_cycle_ = scheduler_.current_cycle() + cycles;
+        remaining_cycles_ = 0u;
         completion_event_ = scheduler_.schedule_after(
             cycles,
             [this](const auto event_id, const auto) { complete(event_id); },
             SchedulerEventKind::HollyPvrDma);
     } catch (...) {
-        fail(HollyDmaFaultReason::Timeout, SystemAsicEvent::PvrOverrun);
+        fail(HollyDmaFaultReason::SchedulerFailure, std::nullopt);
     }
 }
 
 void DreamcastPvrDmaController::complete(const SchedulerEventId event_id) {
     if (!completion_event_ || *completion_event_ != event_id || active_ == 0u) {
-        fail(HollyDmaFaultReason::Overrun, SystemAsicEvent::PvrOverrun);
+        fail(HollyDmaFaultReason::SchedulerFailure, std::nullopt);
         return;
     }
+    completion_event_.reset();
+    completion_cycle_ = 0u;
+    remaining_cycles_ = 0u;
+    const auto chunk = std::min<std::uint32_t>(remaining_, transfer_chunk_bytes);
     if (dmac_contract_required_) {
         const auto dmac = dmac_.lock();
         if (!dmac ||
-            !dmac->validate_external_transfer(dmac_channel_, system_address_, length_, 32u)) {
+            !dmac->validate_external_transfer(
+                dmac_channel_, system_counter_, remaining_, 32u)) {
             fail(HollyDmaFaultReason::HandshakeMismatch, SystemAsicEvent::PvrOverrun);
             return;
         }
     }
-    auto source = system_address_;
-    auto destination = pvr_address_;
-    if (direction_ != 0u) std::swap(source, destination);
-    try {
-        memory_.copy_bytes(destination, source, length_, CodeWriteSource::Dma);
-    } catch (...) {
-        if (const auto dmac = dmac_.lock())
-            dmac->report_external_fault(
-                dmac_channel_, DmaFaultReason::MemoryAccess, 32u);
-        fail(HollyDmaFaultReason::TransferFailure, SystemAsicEvent::PvrIllegalAddress);
+    std::uint32_t transferred = 0u;
+    while (transferred != chunk) {
+        const auto unit =
+            std::min<std::uint32_t>(chunk - transferred, holly_dma_transfer_unit_bytes);
+        try {
+            memory_.copy_bytes(
+                pvr_counter_, system_counter_, unit, CodeWriteSource::Dma);
+        } catch (...) {
+            if (const auto dmac = dmac_.lock())
+                dmac->report_external_fault(
+                    dmac_channel_, DmaFaultReason::MemoryAccess, unit);
+            fail(HollyDmaFaultReason::TransferFailure,
+                 SystemAsicEvent::PvrIllegalAddress);
+            return;
+        }
+        if (dmac_contract_required_) {
+            const auto dmac = dmac_.lock();
+            if (!dmac || !dmac->progress_external_transfer(dmac_channel_, unit)) {
+                // The PVR unit is already visible. Preserve that committed prefix in the
+                // controller counters even if an internal DMAC invariant unexpectedly fails.
+                pvr_counter_ += unit;
+                system_counter_ += unit;
+                remaining_ -= unit;
+                fail(HollyDmaFaultReason::HandshakeMismatch,
+                     SystemAsicEvent::PvrOverrun);
+                return;
+            }
+        }
+        pvr_counter_ += unit;
+        system_counter_ += unit;
+        remaining_ -= unit;
+        transferred += unit;
+    }
+    if (remaining_ != 0u) {
+        schedule_chunk();
         return;
     }
-    pvr_counter_ = pvr_address_ + length_;
-    system_counter_ = system_address_ + length_;
-    remaining_ = 0u;
+    if (dmac_contract_required_) {
+        const auto dmac = dmac_.lock();
+        if (!dmac || !dmac->finish_external_transfer(dmac_channel_)) {
+            fail(HollyDmaFaultReason::HandshakeMismatch, SystemAsicEvent::PvrOverrun);
+            return;
+        }
+    }
     active_ = 0u;
-    completion_event_.reset();
-    if (const auto dmac = dmac_.lock())
-        dmac->complete_external_transfer(dmac_channel_, length_);
+    suspend_ |= 0x10u;
     if (completion_observer_) completion_observer_(SystemAsicEvent::PvrDma);
+}
+
+void DreamcastPvrDmaController::set_suspended(const bool suspended) {
+    suspend_ = (suspend_ & ~1u) | (suspended ? 1u : 0u);
+    if (suspended && completion_event_) {
+        const auto now = scheduler_.current_cycle();
+        remaining_cycles_ = completion_cycle_ > now ? completion_cycle_ - now : 1u;
+        static_cast<void>(scheduler_.cancel(*completion_event_));
+        completion_event_.reset();
+        completion_cycle_ = 0u;
+        suspend_ |= 0x10u;
+    } else if (!suspended && active_ != 0u && (suspend_ & 0x10u) != 0u) {
+        suspend_ &= ~0x10u;
+        schedule_chunk(remaining_cycles_);
+    }
+}
+
+void DreamcastPvrDmaController::abort() noexcept {
+    cancel();
+    active_ = 0u;
+    enabled_ = 0u;
+    suspend_ &= 1u;
 }
 
 void DreamcastPvrDmaController::hardware_trigger() {
@@ -976,19 +1067,28 @@ void DreamcastPvrDmaController::bind_sh4_dmac(std::shared_ptr<Sh4Dmac> dmac,
 }
 
 void DreamcastPvrDmaController::fail(const HollyDmaFaultReason reason,
-                                     const SystemAsicEvent event) noexcept {
+                                     const std::optional<SystemAsicEvent> event) noexcept {
+    const auto in_flight = active_ != 0u;
+    const auto residue = in_flight ? remaining_ : length_;
     if (completion_event_ && !scheduler_lifetime_.expired())
         static_cast<void>(scheduler_.cancel(*completion_event_));
     completion_event_.reset();
+    completion_cycle_ = 0u;
+    remaining_cycles_ = 0u;
     active_ = 0u;
     enabled_ = 0u;
+    suspend_ &= 1u;
     fault_ = reason;
     ++fault_count_;
-    last_fault_ = HollyDmaFault{
-        reason, event, 0u, pvr_address_, system_address_, remaining_ != 0u ? remaining_ : length_};
-    if (completion_observer_) {
+    last_fault_ = HollyDmaFault{reason,
+                                event,
+                                0u,
+                                in_flight ? pvr_counter_ : pvr_address_,
+                                in_flight ? system_counter_ : system_address_,
+                                residue};
+    if (event && completion_observer_) {
         try {
-            completion_observer_(event);
+            completion_observer_(*event);
         } catch (...) {
         }
     }
@@ -997,12 +1097,17 @@ void DreamcastPvrDmaController::fail(const HollyDmaFaultReason reason,
 void DreamcastPvrDmaController::cancel() noexcept {
     if (completion_event_) static_cast<void>(scheduler_.cancel(*completion_event_));
     completion_event_.reset();
+    completion_cycle_ = 0u;
+    remaining_cycles_ = 0u;
 }
 
 void DreamcastPvrDmaController::handle_scheduler_reset() noexcept {
     completion_event_.reset();
     active_ = 0u;
     remaining_ = 0u;
+    suspend_ = 0u;
+    completion_cycle_ = 0u;
+    remaining_cycles_ = 0u;
     fault_ = HollyDmaFaultReason::None;
     fault_count_ = 0u;
     last_fault_.reset();
@@ -1017,10 +1122,16 @@ void DreamcastPvrDmaController::reset() noexcept {
     trigger_select_ = 0u;
     enabled_ = 0u;
     active_ = 0u;
+    suspend_ = 0u;
     address_protect_ = 0x00007F00u;
     pvr_counter_ = 0u;
     system_counter_ = 0u;
     remaining_ = 0u;
+    completion_cycle_ = 0u;
+    remaining_cycles_ = 0u;
+    fault_ = HollyDmaFaultReason::None;
+    fault_count_ = 0u;
+    last_fault_.reset();
 }
 
 HollyDmaChannelState DreamcastPvrDmaController::state() const noexcept {
@@ -1032,9 +1143,15 @@ HollyDmaChannelState DreamcastPvrDmaController::state() const noexcept {
     result.trigger_select = trigger_select_;
     result.enabled = enabled_;
     result.active = active_;
+    result.suspend = suspend_;
     result.peripheral_counter = pvr_counter_;
     result.system_counter = system_counter_;
     result.remaining = remaining_;
+    result.completion_cycle = completion_cycle_;
+    result.remaining_cycles =
+        completion_event_ && completion_cycle_ > scheduler_.current_cycle()
+            ? completion_cycle_ - scheduler_.current_cycle()
+            : remaining_cycles_;
     result.completion_event = completion_event_;
     result.fault = fault_;
     result.fault_count = fault_count_;

@@ -32,8 +32,8 @@ freigegebene `KR-4911` ist inzwischen ebenfalls abgeschlossen. `KR-4912` ist
 ebenfalls abgeschlossen; `KR-4848` und `KR-4913` sind inzwischen ebenfalls
 geschlossen.
 
-Der aktuelle kumulative Vertrag verwendet Runtime-ABI 48, Block-ABI 3,
-Backend-Interface-ABI 3, PlatformServices-ABI 10, Portprojektvertrag 32 und
+Der aktuelle kumulative Vertrag verwendet Runtime-ABI 49, Block-ABI 4,
+Backend-Interface-ABI 3, PlatformServices-ABI 11, Portprojektvertrag 33 und
 Host-Video-Vertrag 2.
 
 Runtime-ABI 48 trennt den Handler-Lifetime-Pegel `trap_pending` von einer neu
@@ -142,12 +142,13 @@ unveraendertes Executable und Disc-Pack, vollstaendiges und versiegeltes Replay
 sowie null/null Wait-Loop-Tracezeilen. Eine Vollsuite und `KR-4852` wurden
 nicht ausgefuehrt.
 
-Systemreplay-Schema 6 trennt den exakten Ereignisstrom von `DigestStream` und
-bindet die Exceptiongeneration in den finalen Gastzustandshash.
+Systemreplay-Schema 7 trennt den exakten Ereignisstrom von `DigestStream` und
+bindet UTLB, Fault-Herkunft, Exceptiongeneration sowie
+Attempted-/Retired-/Cycle-Zustand in den finalen Gastzustandshash.
 Der Produktmodus behaelt standardmaessig 4.096 und maximal 65.536
 Praefixzeugen, validiert, zaehlt und hasht aber auch jedes zusammengefasste
 Ereignis. Zusammenfassung ist kein Drop; ein echter Drop verhindert weiterhin
-Versiegelung und Replay. Runtime-Probe-Schema 3 weist Speichermodus,
+Versiegelung und Replay. Runtime-Probe-Schema 4 weist Speichermodus,
 Aufbewahrungskapazitaet, Gesamt-, behaltene und zusammengefasste Ereignisse
 sowie `exact_event_stream` aus. `deterministic-v1` verlangt weiterhin die
 zwoelf Klassen CPU-Safepoint, Scheduler-Callback, akzeptierter Interrupt,
@@ -564,8 +565,8 @@ MMIO-Zugriff liegt im aktiven OCRAM; der fruehere Abbruch nach 12 Gastzyklen
 ist damit beseitigt. TA/PVR und ein echter Gastframe bleiben fuer den laengeren
 Folgelauf weiterhin offen.
 
-Runtime-ABI 48, Block-ABI 3, Backend-Interface-ABI 3, BIOS-ABI 9,
-PlatformServices-ABI 10, Portprojektvertrag 32 und Host-Video-Vertrag 2 bilden
+Runtime-ABI 49, Block-ABI 4, Backend-Interface-ABI 3, BIOS-ABI 9,
+PlatformServices-ABI 11, Portprojektvertrag 33 und Host-Video-Vertrag 2 bilden
 den kumulativen v0.48-Stand ab.
 PlatformServices-ABI 10 versioniert zusaetzlich die genaue
 `PREF`-Instruktionsherkunft bis zur Store Queue.

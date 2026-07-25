@@ -29,8 +29,11 @@ int main() {
     bus.write_u32(0x00700000u, 0x78563412u);
     require(bus.read_u8(0x80700000u) == 0x12u && bus.read_u16(0xA0700002u) == 0x7856u,
             "AICA-Register sind nicht little-endian oder werden nicht zwischen Aliasen geteilt.");
-    bus.write_u8(0x60700001u, 0xAAu);
-    require(bus.read_u32(0x00700000u) == 0x7856AA12u && aica->write_count() == 2u,
+    // Byte 1 contains the self-clearing KYONEX command bit. Exercise an inert byte of the same
+    // channel register instead, so this test measures width/alias preservation rather than
+    // intentionally triggering channel execution semantics.
+    bus.write_u8(0x60700002u, 0xAAu);
+    require(bus.read_u32(0x00700000u) == 0x78AA3412u && aica->write_count() == 2u,
             "Breitenbewusster AICA-Teilzugriff verliert Registerbits oder Ereignisse.");
     bus.write_u16(0x00700000u + aica_common_register_base, 0x0F0Fu);
     require(aica->read(aica_common_register_base, MemoryAccessWidth::Halfword) == 0x0F0Fu,

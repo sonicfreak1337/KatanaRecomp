@@ -13,7 +13,7 @@
 
 namespace katana::runtime {
 
-inline constexpr std::uint32_t guest_cycle_contract_version = 1u;
+inline constexpr std::uint32_t guest_cycle_contract_version = 2u;
 inline constexpr std::uint64_t dreamcast_guest_cycles_per_second = 200'000'000u;
 
 class SystemReplayLog;

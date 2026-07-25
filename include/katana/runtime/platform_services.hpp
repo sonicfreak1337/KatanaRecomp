@@ -4,6 +4,7 @@
 #include "katana/runtime/runtime.hpp"
 #include "katana/runtime/scheduler.hpp"
 
+#include <algorithm>
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -23,6 +24,14 @@ struct BlockVariantKey;
 inline constexpr std::uint32_t platform_services_abi_version =
     build_contract::platform_services_abi_version;
 inline constexpr std::uint64_t base_guest_cycles_per_instruction = 1u;
+inline constexpr std::size_t guest_cycle_flush_event_budget = 1024u;
+
+enum class ExecutableBlockTimingClass : std::uint8_t {
+    PureCpu,
+    LinearRamOnly,
+    RequiresCycleFlush,
+    NeverChain,
+};
 
 enum class PlatformCapability : std::uint64_t {
     Memory = 1ull << 0u,
@@ -166,9 +175,26 @@ class PlatformServices {
         return PlatformLifecycleState::Running;
     }
     virtual void observe_guest_checkpoint(std::uint32_t) noexcept {}
-    virtual void register_executable_block(std::uint32_t, std::uint32_t, std::string_view) {}
+    virtual void observe_guest_block_completion(std::uint32_t checkpoint,
+                                                std::uint64_t,
+                                                bool,
+                                                bool) noexcept {
+        observe_guest_checkpoint(checkpoint);
+    }
+    virtual void register_executable_block(std::uint32_t,
+                                           std::uint32_t,
+                                           std::uint32_t,
+                                           std::string_view,
+                                           ExecutableBlockTimingClass,
+                                           std::uint64_t) {}
     virtual void allow_executable_block_chaining(std::uint32_t) {}
     virtual void begin_executable_block(const BlockVariantKey&) noexcept {}
+    virtual void begin_executable_block(std::uint32_t,
+                                        std::uint32_t,
+                                        std::uint32_t,
+                                        const BlockVariantKey& variant) noexcept {
+        begin_executable_block(variant);
+    }
     [[nodiscard]] virtual bool can_chain_executable_block(std::uint32_t) const noexcept {
         return false;
     }
@@ -179,6 +205,77 @@ class PlatformServices {
         return nullptr;
     }
 };
+
+[[nodiscard]] inline PlatformSchedulerResult
+commit_pending_guest_cycles(CpuState& cpu,
+                            PlatformServices& services,
+                            const std::size_t event_budget) {
+    const auto pending = cpu.pending_guest_cycles;
+    if (pending == 0u) {
+        return {services.scheduler_cycle(), 0u, false, false};
+    }
+    const auto cycle_before = services.scheduler_cycle();
+    const auto commit_delivered_cycles = [&](const std::uint64_t cycle_after,
+                                             const bool complete) noexcept {
+        const auto delivered =
+            complete ? pending
+                     : cycle_after >= cycle_before
+                           ? std::min(pending, cycle_after - cycle_before)
+                           : 0u;
+        const auto accountable = std::min(delivered, cpu.pending_guest_cycles);
+        cpu.pending_guest_cycles -= accountable;
+        cpu.total_guest_cycles += accountable;
+    };
+    PlatformSchedulerResult result;
+    try {
+        result = services.consume_guest_cycles(pending, event_budget);
+    } catch (...) {
+        commit_delivered_cycles(services.scheduler_cycle(), false);
+        throw;
+    }
+    commit_delivered_cycles(
+        result.guest_cycle,
+        !result.budget_exhausted && !result.guest_cycle_budget_exhausted);
+    return result;
+}
+
+inline void flush_pending_guest_cycles(CpuState& cpu,
+                                       PlatformServices& services,
+                                       const std::size_t event_budget =
+                                           guest_cycle_flush_event_budget) {
+    const auto result = commit_pending_guest_cycles(cpu, services, event_budget);
+    if (result.budget_exhausted)
+        throw std::runtime_error("Schedulerbudget beim Gastzeit-Flush erschoepft.");
+    if (result.guest_cycle_budget_exhausted)
+        throw std::runtime_error("Gastzyklusbudget beim Gastzeit-Flush erschoepft.");
+}
+
+struct PlatformBlockCompletion {
+    PlatformSchedulerResult scheduler;
+    std::optional<PlatformInterruptRequest> interrupt;
+};
+
+[[nodiscard]] inline PlatformBlockCompletion
+finalize_guest_block(CpuState& cpu,
+                     PlatformServices& services,
+                     const std::size_t event_budget,
+                     const std::uint32_t checkpoint,
+                     const std::uint64_t retired_guest_instructions = 0u,
+                     const bool new_exception = false,
+                     const bool exception_exit = false,
+                     const bool observe_checkpoint = true) {
+    auto scheduler = commit_pending_guest_cycles(cpu, services, event_budget);
+    if (scheduler.budget_exhausted)
+        throw std::runtime_error("Schedulerbudget beim Blockabschluss erschoepft.");
+    if (scheduler.guest_cycle_budget_exhausted)
+        throw std::runtime_error("Gastzyklusbudget beim Blockabschluss erschoepft.");
+    if (observe_checkpoint)
+        services.observe_guest_block_completion(checkpoint,
+                                                retired_guest_instructions,
+                                                new_exception,
+                                                exception_exit);
+    return {scheduler, new_exception ? std::nullopt : services.poll_interrupt()};
+}
 
 inline void validate_platform_services(const PlatformServices& services,
                                        const PlatformServiceRequirements& requirements = {}) {

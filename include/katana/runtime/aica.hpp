@@ -29,6 +29,24 @@ inline constexpr std::size_t aica_channel_count = 64u;
 inline constexpr std::size_t aica_channel_register_stride = 0x80u;
 inline constexpr std::uint32_t aica_common_register_base = 0x2800u;
 
+enum class AicaSampleFormat : std::uint8_t { Pcm16, Pcm8, Adpcm4 };
+
+enum class AicaVoiceError : std::uint8_t {
+    Pcm16OutOfRange,
+    Pcm8OutOfRange,
+    AdpcmOutOfRange,
+};
+
+struct AicaVoiceFirstError {
+    AicaVoiceError error = AicaVoiceError::Pcm16OutOfRange;
+    AicaSampleFormat format = AicaSampleFormat::Pcm16;
+    std::uint32_t channel = 0u;
+    std::uint64_t sample_address = 0u;
+    std::uint64_t rendered_frame = 0u;
+
+    [[nodiscard]] bool operator==(const AicaVoiceFirstError&) const = default;
+};
+
 struct AicaChannelRuntimeSnapshot {
     std::uint64_t phase = 0u;
     std::uint32_t adpcm_position = 0u;
@@ -45,6 +63,8 @@ struct AicaRegisterSnapshot {
     std::uint64_t writes = 0u;
     std::uint64_t rendered_buffers = 0u;
     std::uint64_t rendered_frames = 0u;
+    std::uint64_t voice_errors = 0u;
+    std::optional<AicaVoiceFirstError> first_voice_error;
 
     [[nodiscard]] bool operator==(const AicaRegisterSnapshot&) const = default;
 };
@@ -75,6 +95,8 @@ class AicaRegisterFile final {
     [[nodiscard]] std::size_t active_channel_count() const noexcept;
     [[nodiscard]] std::uint64_t rendered_buffer_count() const noexcept;
     [[nodiscard]] std::uint64_t rendered_frame_count() const noexcept;
+    [[nodiscard]] std::uint64_t voice_error_count() const noexcept;
+    [[nodiscard]] std::optional<AicaVoiceFirstError> first_voice_error() const noexcept;
     [[nodiscard]] AicaRegisterSnapshot snapshot() const noexcept;
 
   private:
@@ -87,6 +109,11 @@ class AicaRegisterFile final {
     };
     [[nodiscard]] static std::size_t width_bytes(MemoryAccessWidth width) noexcept;
     void check(std::uint32_t offset, MemoryAccessWidth width) const;
+    void record_voice_error(AicaVoiceError error,
+                            AicaSampleFormat format,
+                            std::size_t channel,
+                            std::uint64_t sample_address,
+                            std::uint64_t rendered_frame) noexcept;
     std::array<std::uint8_t, aica_register_size> registers_{};
     std::uint64_t writes_ = 0u;
     std::shared_ptr<AicaExecutionController> execution_;
@@ -94,6 +121,8 @@ class AicaRegisterFile final {
     std::array<ChannelRuntime, aica_channel_count> channels_{};
     std::uint64_t rendered_buffers_ = 0u;
     std::uint64_t rendered_frames_ = 0u;
+    std::uint64_t voice_errors_ = 0u;
+    std::optional<AicaVoiceFirstError> first_voice_error_;
 };
 
 class AicaRtc final {
@@ -126,8 +155,6 @@ class AicaRtc final {
     std::uint32_t write_latch_ = aica_rtc_default_seconds;
     bool write_enabled_ = false;
 };
-
-enum class AicaSampleFormat : std::uint8_t { Pcm16, Pcm8, Adpcm4 };
 
 class AicaSampleDecoder final {
   public:
@@ -186,10 +213,12 @@ class RecordingAicaAudioBackend final : public AicaAudioBackend {
 };
 
 enum class AicaArm7Mode : std::uint8_t { HighLevelAudio, LowLevelArm7 };
+enum class AicaExecutionError : std::uint8_t { None, TickScheduleFailure };
 
 class AicaTimer final {
   public:
     void configure(std::uint8_t initial_counter, std::uint8_t divider_scale, bool enabled);
+    void reset() noexcept;
     [[nodiscard]] std::uint64_t tick(std::uint64_t audio_cycles) noexcept;
     [[nodiscard]] std::uint8_t counter() const noexcept;
     [[nodiscard]] bool enabled() const noexcept;
@@ -216,6 +245,7 @@ class AicaInterruptState final {
     void set_enabled(std::uint32_t mask);
     void request(std::uint32_t mask);
     void acknowledge(std::uint32_t mask) noexcept;
+    void reset() noexcept;
     [[nodiscard]] std::uint32_t pending() const noexcept;
     [[nodiscard]] std::uint32_t enabled() const noexcept;
     [[nodiscard]] bool asserted() const noexcept;
@@ -244,6 +274,7 @@ class AicaExecutionController final {
     ~AicaExecutionController();
     AicaExecutionController(const AicaExecutionController&) = delete;
     AicaExecutionController& operator=(const AicaExecutionController&) = delete;
+    void reset() noexcept;
     void set_mode(AicaArm7Mode mode);
     [[nodiscard]] AicaArm7Mode mode() const noexcept;
     [[nodiscard]] bool arm7_executes_instructions() const noexcept;
@@ -262,6 +293,7 @@ class AicaExecutionController final {
         std::array<AicaTimer::Snapshot, timer_count> timers{};
         AicaInterruptState::Snapshot interrupts{};
         std::optional<SchedulerEventId> tick_event;
+        AicaExecutionError error = AicaExecutionError::None;
         std::uint64_t guest_cycles_per_tick = 0u;
 
         [[nodiscard]] bool operator==(const Snapshot&) const = default;
@@ -280,6 +312,7 @@ class AicaExecutionController final {
     SchedulerLifetimeToken scheduler_lifetime_;
     SchedulerResetObserverId reset_observer_ = 0u;
     std::optional<SchedulerEventId> tick_event_;
+    AicaExecutionError error_ = AicaExecutionError::None;
     std::function<void()> dma_request_observer_;
     std::uint64_t guest_cycles_per_tick_ = 0u;
     static constexpr std::uint64_t audio_cycles_per_tick = 256u;

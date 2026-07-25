@@ -41,6 +41,7 @@ int main() {
     RuntimeWaitLoopTraceRecorder recorder(descriptors);
 
     CpuState cpu;
+    cpu.write_sr(sr_md_mask);
     const auto ram = std::make_shared<LinearMemoryDevice>(16u);
     cpu.memory.map_region("wait-primary", 0x0C000000u, ram);
     cpu.memory.map_region("wait-alias", 0x0D000000u, ram);
@@ -149,6 +150,7 @@ int main() {
             "Nichtlineare MMIO-Werte oder ihre echten Gastwriter werden nicht korreliert.");
 
     CpuState vram_cpu;
+    vram_cpu.write_sr(sr_md_mask);
     const auto vram = map_dreamcast_vram(vram_cpu.memory);
     RuntimeWaitLoopTraceRecorder vram_recorder(descriptors);
     vram_cpu.memory.set_guest_memory_access_sink(vram_recorder.sink());
@@ -192,6 +194,7 @@ int main() {
     RuntimeWaitLoopTraceRecorder bounded(
         descriptors, RuntimeWaitLoopTraceConfig{1u, 1u, 1u});
     CpuState bounded_cpu;
+    bounded_cpu.write_sr(sr_md_mask);
     const auto bounded_ram = std::make_shared<LinearMemoryDevice>(4u);
     bounded_cpu.memory.map_region("bounded", 0x0C000000u, bounded_ram);
     bounded_cpu.memory.set_guest_memory_access_sink(bounded.sink());
@@ -207,6 +210,7 @@ int main() {
 
     RuntimeWaitLoopTraceRecorder precise_range_writer(descriptors);
     CpuState precise_range_cpu;
+    precise_range_cpu.write_sr(sr_md_mask);
     const auto precise_range_ram = std::make_shared<LinearMemoryDevice>(8u);
     precise_range_cpu.memory.map_region("precise-range", 0x0C000000u, precise_range_ram);
     precise_range_ram->write_u32(0u, 0x44332211u);

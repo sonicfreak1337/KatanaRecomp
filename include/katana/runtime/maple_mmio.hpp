@@ -35,6 +35,26 @@ struct MapleDmaTiming {
     std::uint64_t cycles_per_word = 100u;
 };
 
+enum class MapleDmaState : std::uint8_t {
+    Disabled,
+    Armed,
+    Active,
+    Completed,
+    Failed,
+};
+
+enum class MapleDmaError : std::uint8_t {
+    None,
+    InvalidConfiguration,
+    ProtectedRange,
+    InvalidDescriptor,
+    UnsupportedDescriptor,
+    ResponseRange,
+    SchedulerFailure,
+    AtomicCommitFailure,
+    InternalLifecycle,
+};
+
 struct DreamcastMaplePendingResponseSnapshot {
     std::uint32_t destination = 0u;
     std::vector<std::uint32_t> words;
@@ -50,6 +70,9 @@ struct DreamcastMapleControllerSnapshot {
     std::uint32_t trigger_select = 0u;
     std::uint32_t enabled = 0u;
     std::uint32_t active = 0u;
+    MapleDmaState state = MapleDmaState::Disabled;
+    MapleDmaError error = MapleDmaError::None;
+    std::optional<std::uint32_t> error_address;
     std::uint32_t system_control = 0u;
     std::uint32_t address_protect = 0u;
     std::uint32_t msb_select = 0u;
@@ -58,6 +81,7 @@ struct DreamcastMapleControllerSnapshot {
     std::uint32_t rx_base = 0u;
     std::uint64_t completed_dma_count = 0u;
     std::uint64_t transferred_word_count = 0u;
+    std::uint64_t failed_dma_count = 0u;
     bool hard_trigger_failed = false;
 };
 
@@ -79,6 +103,9 @@ class DreamcastMapleController final {
     [[nodiscard]] std::uint64_t transferred_word_count() const noexcept;
     void hardware_trigger() noexcept;
     [[nodiscard]] bool hard_trigger_failed() const noexcept;
+    [[nodiscard]] MapleDmaState state() const noexcept;
+    [[nodiscard]] MapleDmaError error() const noexcept;
+    [[nodiscard]] std::optional<std::uint32_t> error_address() const noexcept;
     [[nodiscard]] DreamcastMapleControllerSnapshot snapshot() const;
 
   private:
@@ -88,7 +115,9 @@ class DreamcastMapleController final {
     };
 
     void start_dma();
-    void complete_dma(SchedulerEventId event_id);
+    void complete_dma(SchedulerEventId event_id) noexcept;
+    void cancel_pending() noexcept;
+    void fail(MapleDmaError error, std::optional<std::uint32_t> address = {}) noexcept;
     void handle_scheduler_reset() noexcept;
     [[nodiscard]] bool protected_address(std::uint32_t address, std::size_t size) const noexcept;
     [[nodiscard]] std::pair<std::uint8_t, std::uint8_t>
@@ -107,6 +136,9 @@ class DreamcastMapleController final {
     std::uint32_t trigger_select_ = 0u;
     std::uint32_t enabled_ = 0u;
     std::uint32_t active_ = 0u;
+    MapleDmaState state_ = MapleDmaState::Disabled;
+    MapleDmaError error_ = MapleDmaError::None;
+    std::optional<std::uint32_t> error_address_;
     std::uint32_t system_control_ = 0u;
     std::uint32_t address_protect_ = 0u;
     std::uint32_t msb_select_ = 1u;
@@ -115,6 +147,7 @@ class DreamcastMapleController final {
     std::uint32_t rx_base_ = 0u;
     std::uint64_t completed_dma_count_ = 0u;
     std::uint64_t transferred_word_count_ = 0u;
+    std::uint64_t failed_dma_count_ = 0u;
     bool hard_trigger_failed_ = false;
 };
 

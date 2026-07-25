@@ -83,7 +83,11 @@ CrashReport capture_crash_report(const CpuState& cpu, CrashReportContext context
             canonical_physical_address(context.block_address->physical_address);
     }
     if (cpu.exception_in_delay_slot && !context.delay_slot_owner_pc.has_value()) {
-        context.delay_slot_owner_pc = cpu.spc;
+        context.delay_slot_owner_pc =
+            cpu.last_exception_generation == cpu.exception_generation &&
+                    cpu.last_exception_generation != 0u
+                ? cpu.last_exception_owner_pc
+                : cpu.spc;
     }
     CrashReport report;
     report.context = std::move(context);
@@ -102,8 +106,17 @@ CrashReport capture_crash_report(const CpuState& cpu, CrashReportContext context
     report.intevt = cpu.intevt;
     report.trap_pending = cpu.trap_pending;
     report.exception_generation = cpu.exception_generation;
+    report.last_exception_generation = cpu.last_exception_generation;
     report.exception_cause = cpu.last_exception_cause;
     report.exception_in_delay_slot = cpu.exception_in_delay_slot;
+    report.last_exception_instruction_pc = cpu.last_exception_instruction_pc;
+    report.last_exception_instruction_physical_pc =
+        cpu.last_exception_instruction_physical_pc;
+    report.last_exception_owner_pc = cpu.last_exception_owner_pc;
+    report.attempted_guest_instructions = cpu.attempted_guest_instructions;
+    report.retired_guest_instructions = cpu.retired_guest_instructions;
+    report.total_guest_cycles = cpu.total_guest_cycles;
+    report.pending_guest_cycles = cpu.pending_guest_cycles;
     return report;
 }
 
@@ -132,9 +145,21 @@ std::string serialize_crash_report(const CrashReport& report) {
            << "\",\"intevt\":\"" << hex32(report.intevt)
            << "\",\"trap_pending\":" << (report.trap_pending ? "true" : "false")
            << ",\"exception_generation\":" << report.exception_generation
+           << ",\"last_exception_generation\":" << report.last_exception_generation
            << ",\"exception_cause\":\"" << exception_cause_name(report.exception_cause)
            << "\",\"exception_in_delay_slot\":"
-           << (report.exception_in_delay_slot ? "true" : "false") << '}'
+           << (report.exception_in_delay_slot ? "true" : "false")
+           << ",\"last_exception_instruction_pc\":\""
+           << hex32(report.last_exception_instruction_pc)
+           << "\",\"last_exception_instruction_physical_pc\":\""
+           << hex32(report.last_exception_instruction_physical_pc)
+           << "\",\"last_exception_owner_pc\":\""
+           << hex32(report.last_exception_owner_pc)
+           << "\",\"attempted_guest_instructions\":"
+           << report.attempted_guest_instructions
+           << ",\"retired_guest_instructions\":" << report.retired_guest_instructions
+           << ",\"total_guest_cycles\":" << report.total_guest_cycles
+           << ",\"pending_guest_cycles\":" << report.pending_guest_cycles << '}'
            << ",\"delay_slot_owner_pc\":";
     optional_address(output, context.delay_slot_owner_pc);
     output << ",\"block\":";
@@ -183,6 +208,18 @@ const char* exception_cause_name(const ExceptionCause cause) noexcept {
         return "address-error-read";
     case ExceptionCause::AddressErrorWrite:
         return "address-error-write";
+    case ExceptionCause::TlbMissRead:
+        return "tlb-miss-read";
+    case ExceptionCause::TlbMissWrite:
+        return "tlb-miss-write";
+    case ExceptionCause::InitialPageWrite:
+        return "initial-page-write";
+    case ExceptionCause::TlbProtectionRead:
+        return "tlb-protection-read";
+    case ExceptionCause::TlbProtectionWrite:
+        return "tlb-protection-write";
+    case ExceptionCause::TlbMultipleHit:
+        return "tlb-multiple-hit";
     case ExceptionCause::BusErrorRead:
         return "bus-error-read";
     case ExceptionCause::BusErrorWrite:

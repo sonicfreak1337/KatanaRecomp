@@ -198,6 +198,7 @@ FirmwareHandoffReport run_synthetic_firmware_handoff() {
     report.ram_physical = ram_physical;
 
     CpuState cpu;
+    cpu.write_sr(sr_md_mask);
     cpu.pc = p2_entry;
     prefetch(cpu, p2_entry);
     report.prefetches = cpu.prefetch_count;
@@ -273,13 +274,14 @@ FirmwareHandoffReport run_synthetic_firmware_handoff() {
                                              "copy:synthetic-rom-bootstrap",
                                              false}));
     CpuState dispatch_cpu;
+    dispatch_cpu.write_sr(sr_md_mask);
     const IndirectDispatchRequest request{
         IndirectDispatchKind::TailJump, p2_entry, p2_entry, 0u, {p2_entry, ram_physical}, variant};
     const auto dispatched = dispatch_indirect(dispatch_cpu, table, request);
     BlockExecutionContext context;
     const auto dispatched_block = table.resolve(dispatched.block);
     if (!dispatched_block) throw std::runtime_error("Statischer Runtimeblock wurde stale.");
-    static_cast<void>(dispatched_block->get().function(dispatch_cpu, context));
+    static_cast<void>(execute_runtime_block(dispatched_block->get(), dispatch_cpu, context));
     ++report.executed_blocks;
     const auto old_identity = stable_runtime_block_identity(dispatched_block->get());
     CodeInvalidationResult invalidation;
@@ -316,7 +318,7 @@ FirmwareHandoffReport run_synthetic_firmware_handoff() {
     const auto regenerated = dispatch_indirect(dispatch_cpu, table, regenerated_request);
     const auto regenerated_block = table.resolve(regenerated.block);
     if (!regenerated_block) throw std::runtime_error("Regenerierter Runtimeblock wurde stale.");
-    static_cast<void>(regenerated_block->get().function(dispatch_cpu, context));
+    static_cast<void>(execute_runtime_block(regenerated_block->get(), dispatch_cpu, context));
     ++report.executed_blocks;
     report.dispatch_complete = dispatched.alias_lookup && regenerated.alias_lookup &&
                                !invalidation.invalidated_blocks.empty() &&
@@ -340,7 +342,9 @@ HomebrewHostFrameReport run_homebrew_host_frame() {
     image.add_entry_point(0x8C010000u);
     CpuState cpu;
     cpu.memory = Memory(0u);
-    const auto boot = katana::platform::boot_homebrew(cpu, image);
+    katana::platform::DreamcastBootConfig boot_config;
+    boot_config.status_register = sr_md_mask;
+    const auto boot = katana::platform::boot_homebrew(cpu, image, boot_config);
     if (boot.log.empty() || boot.log.back() != "boot=ready") ++report.silent_failures;
 
     ControllerState first_input;

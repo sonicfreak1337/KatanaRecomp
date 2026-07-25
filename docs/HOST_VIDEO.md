@@ -3,8 +3,8 @@
 KR-4701 definiert `katana-native-video` als Runtimevertrag Version 2. Externe
 Portprojekte erhalten die Schnittstelle ueber `katana_runtime`; die erzeugte
 `game.exe` benoetigt die KatanaRecomp-CLI nicht als Laufzeithuelle.
-Der kumulative Integrationsstand verwendet Runtime-ABI 48, Block-ABI 3,
-Backend-Interface-ABI 3, PlatformServices-ABI 10 und Portprojektvertrag 32.
+Der kumulative Integrationsstand verwendet Runtime-ABI 49, Block-ABI 4,
+Backend-Interface-ABI 3, PlatformServices-ABI 11 und Portprojektvertrag 33.
 
 ## Vertrag
 
@@ -37,6 +37,26 @@ setzt einen abgeschlossenen Parameterstrom am programmierten Objektlistenanfang
 fort, ohne bereits erzeugte Primitive des aktuellen Frames zu verwerfen. Eine
 offene Liste oder ein unvollstaendiger 64-Byte-Parameter ist kein gueltiger
 Fortsetzungspunkt und wird explizit abgewiesen.
+TA-Eingabeablehnungen tragen einen stabilen `PvrTaInputErrorReason`; die Runtime
+klassifiziert sie nicht anhand lokalisierter Ausnahmetexte. Die
+`submit_guest`-Grenze committed keine Teilmutation des abgelehnten Pakets,
+quiesziert den damit unbrauchbaren begonnenen Frame und bewahrt kumulative
+Akzeptanz-/Rejected-Zähler samt erstem Fehler. Das nächste Paket beginnt daher
+an einer sauberen Framegrenze. Pro Frame werden höchstens so viele
+32-Byte-Parameter angenommen, wie in das 8-MiB-TA-Fenster passen.
+Dasselbe gilt fuer Apertur-Basiswechsel und doppelte Parameterbytes: Staging
+und begonnener FIFO-Frame werden gemeinsam verworfen, ohne die kumulative
+Diagnostik zu verlieren.
+
+`STARTRENDER` friert Registersnapshot, TA-Auftrag, Requestnummer,
+Rendergeneration und Startzyklus vor der Schedulerregistrierung ein. Ein
+zweites `STARTRENDER` waehrend eines aktiven Auftrags wird als `Busy` samt
+Overrun-/Fehlerzaehler abgewiesen und ersetzt den ersten Auftrag nicht.
+Capture- oder Schedulerfehler rollen Ereignis und Auftrag gemeinsam zurueck;
+spaeter eintreffende TA-Pakete gehoeren damit erst zum naechsten Renderauftrag.
+Der aktive Payloaddigest bindet nur den eingefrorenen Register-/TA-Inhalt;
+Requestnummer, Generation, Startzyklus und Parserdiagnostik bleiben getrennte
+Snapshotfelder und veraendern diese Payloadidentitaet nicht.
 
 ## Produktpfad und Plattformen
 
@@ -68,7 +88,12 @@ Weave-Geometrie; getrennte Felder werden feldweise ueber den aktuellen
 Ein TA-Renderabschluss speichert fuer jeden final geaenderten Pixel den
 gepackten Zielwert und die geaenderte Bytemaske als monotone
 Generationsevidenz. Direkte Gastwrites setzen backing-byte-adressierte
-Dirty-Evidenz im gemeinsamen VRAM-Backing. Beim VBlank wird sie mit dem
+Dirty-Evidenz im gemeinsamen VRAM-Backing. Zusammenhaengende Bereiche werden
+ueber Bitmap-Wortmasken gesetzt; die interleavte VRAM32-Sicht wird dabei in
+ihre zusammenhaengenden Vier-Byte-Backingbereiche zerlegt. Eine pending
+Direct-FB-Epoche behaelt sowohl die erste als auch die letzte
+Schreibgeneration und reicht beide Werte bis in den Direct-Proof. Beim VBlank
+wird sie mit dem
 vorherigen Scanout-Abbild verglichen; erst ein sichtbar geaenderter,
 tatsaechlich abgetasteter Pixel kann einen Direct-Proof erzeugen.
 `PvrRegisterFile` ruft den Renderer am tatsaechlichen Scheduler-VBlank-In auf.
@@ -123,12 +148,20 @@ Metriken `dropped_render_evidence_generations`,
 Budgetende sichtbar. Scanouts ueber 2048 x 2048 Pixel beziehungsweise
 4.194.304 Pixel insgesamt werden vor Frameallokation abgewiesen.
 
-`pump_guest_frame_proof` meldet den eingefrorenen Proof hostunabhaengig und
-reicht exakt dessen `PvrFrame` optional an `NativeVideoOutput` weiter.
-`KR_FIRST_GUEST_FRAME` entsteht aus `guest_proven`; der getrennte
-`KR_FIRST_PRESENTED_FRAME` erst nach nachweislich erfolgreichem Present. Das
-relocatierte Runtime-SDK linkt die notwendigen Windows-Systembibliotheken
-selbst.
+`pump_guest_frame_proof` meldet den eingefrorenen Proof mit Quelle,
+Rendergeneration und bei Direct-FB mit erster/letzter Schreibgeneration des
+Epochenintervalls hostunabhaengig und reicht exakt dessen `PvrFrame` optional
+an `NativeVideoOutput` weiter. Ein Direct-FB-Marker ohne konsistentes
+Generationsintervall wird nicht akzeptiert. Der titelunabhaengige
+`GuestFrameEvidenceTracker` trennt `KR_FIRST_GUEST_SCANOUT` (Direct-FB oder
+TA), `KR_FIRST_TA_FRAME` und `KR_FIRST_GAMEPLAY_FRAME`. Direct-FB bleibt damit
+echte Gastevidenz, wird aber weder als TA noch als Gameplay bezeichnet. Ein
+Gameplaymarker verlangt Gastprogrammfortschritt und einen TA-Frame nach einem
+Bootstrap- oder bereits bewiesenen Gastscanout. Der kompatible
+`KR_FIRST_GUEST_FRAME` bezeichnet weiterhin nur den ersten echten
+Gastscanout; `KR_FIRST_PRESENTED_FRAME` entsteht getrennt erst nach
+nachweislich erfolgreichem Present. Das relocatierte Runtime-SDK linkt die
+notwendigen Windows-Systembibliotheken selbst.
 
 Der erste private Produktnachweis dieser kombinierten Kette stammt aus einem
 Sonic-Adventure-PAL-AOT-Lauf in der v0.48-Entwicklung. Der recompilierte

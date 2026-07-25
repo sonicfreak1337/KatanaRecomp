@@ -7,14 +7,38 @@
 #include <array>
 #include <cstdint>
 #include <functional>
+#include <optional>
 #include <span>
 #include <stdexcept>
+#include <string>
 
 namespace katana::runtime {
 
 enum class StoreQueueTarget : std::uint8_t { Ram, TileAccelerator };
 enum class CacheMaintenanceOperation : std::uint8_t { Ocbi, Ocbp, Ocbwb, Icbi, MovcaLong };
 enum class OperandCacheRamProfile : std::uint8_t { Reject, Modeled };
+enum class StoreQueueSinkErrorReason : std::uint8_t {
+    DeviceRejected,
+    UnsupportedInput,
+};
+
+class StoreQueueSinkError final : public std::runtime_error {
+  public:
+    StoreQueueSinkError(StoreQueueSinkErrorReason reason, std::string detail);
+    [[nodiscard]] StoreQueueSinkErrorReason reason() const noexcept;
+
+  private:
+    StoreQueueSinkErrorReason reason_;
+};
+
+struct StoreQueueSinkFault {
+    StoreQueueSinkErrorReason reason = StoreQueueSinkErrorReason::DeviceRejected;
+    std::uint32_t source_address = 0u;
+    std::uint32_t target_address = 0u;
+    std::string detail;
+
+    [[nodiscard]] bool operator==(const StoreQueueSinkFault&) const = default;
+};
 
 struct StoreQueueTransfer {
     std::uint8_t queue = 0u;
@@ -23,6 +47,7 @@ struct StoreQueueTransfer {
     StoreQueueTarget target = StoreQueueTarget::Ram;
     GuestInstructionOrigin instruction;
     std::uint64_t retired_guest_instructions = 0u;
+    std::uint64_t attempted_guest_instructions = 0u;
     std::array<std::uint8_t, 32u> bytes{};
 };
 
@@ -43,6 +68,8 @@ struct Sh4StoreQueueSnapshot {
     bool address_translator_bound = false;
     bool code_tracker_bound = false;
     std::uint64_t transfer_count = 0u;
+    std::uint64_t rejected_transfer_count = 0u;
+    std::optional<StoreQueueSinkFault> last_sink_fault;
 
     [[nodiscard]] bool operator==(const Sh4StoreQueueSnapshot&) const = default;
 };
@@ -69,11 +96,15 @@ class Sh4StoreQueues {
     void write_p4(std::uint32_t address, std::uint32_t value, MemoryAccessWidth width);
     [[nodiscard]] bool prefetch(std::uint32_t address,
                                 GuestInstructionOrigin instruction = {},
-                                std::uint64_t retired_guest_instructions = 0u);
+                                std::uint64_t retired_guest_instructions = 0u,
+                                std::uint64_t attempted_guest_instructions = 0u);
     void set_prefetch_address_translator(StoreQueueAddressTranslator translator);
     [[nodiscard]] const std::array<std::uint8_t, 32u>& queue(std::size_t index) const;
     [[nodiscard]] std::uint64_t transfer_count() const noexcept;
-    [[nodiscard]] Sh4StoreQueueSnapshot snapshot() const noexcept;
+    [[nodiscard]] std::uint64_t rejected_transfer_count() const noexcept;
+    [[nodiscard]] const std::optional<StoreQueueSinkFault>& last_sink_fault() const noexcept;
+    [[nodiscard]] Sh4StoreQueueSnapshot snapshot() const;
+    void reset() noexcept;
     [[nodiscard]] CacheMaintenanceResult maintain(CacheMaintenanceOperation operation,
                                                   std::uint32_t address,
                                                   std::uint32_t movca_value = 0u);
@@ -100,6 +131,8 @@ class Sh4StoreQueues {
     std::array<std::uint8_t, 8192u> operand_cache_ram_{};
     bool operand_cache_ram_enabled_ = false;
     std::uint64_t transfer_count_ = 0u;
+    std::uint64_t rejected_transfer_count_ = 0u;
+    std::optional<StoreQueueSinkFault> last_sink_fault_;
 };
 
 } // namespace katana::runtime

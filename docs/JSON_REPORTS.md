@@ -112,7 +112,7 @@ informationsarmen generischen `failed`-Schritts.
 
 ## Systemreplay
 
-`katana-system-replay` verwendet `replay_version=6` und weist den
+`katana-system-replay` verwendet `replay_version=7` und weist den
 `storage_mode` explizit als `exact-events` oder `digest-stream` aus.
 `event_count`, `retained_event_count`, `summarized_event_count` und
 `exact_event_stream` trennen Gesamtstrom, gespeicherte Zeugen und
@@ -128,12 +128,13 @@ noch abgespielt werden. Im Digestmodus sind Ereignisse nach dem Zeugenpraefix
 dagegen `summarized`, nicht `dropped`: Sie fliessen weiter in Sequenzpruefung,
 Coverage, Klassenzaehler und den geordneten FNV-Digest ein. Der ungekeyte
 Digest dient der deterministischen Reproduzierbarkeit und nicht der
-Authentisierung. Schema 6 bindet zusaetzlich die monotone
-Exceptiongeneration in den finalen Gastzustandshash. Sie ist technische
-Steuerflussevidenz und enthaelt weder Gastadressen noch Spieldaten.
+Authentisierung. Schema 7 bindet zusaetzlich UTLB-, Fault-Herkunfts-,
+Exceptiongenerations- und Attempted-/Retired-/Cycle-Zustand in den finalen
+Gastzustandshash. Diese technische Steuerflussevidenz enthaelt keine
+Spieldaten.
 
-`katana.runtime-probe` verwendet Runtime-Probe-Schema 3. Sein Replayobjekt
-ergaenzt `retention_capacity` und dieselben Gesamt-, Behalte-,
+`katana.runtime-probe` verwendet Runtime-Probe-Schema 4 und Device-Schema 3.
+Sein Replayobjekt ergaenzt `retention_capacity` und dieselben Gesamt-, Behalte-,
 Zusammenfassungs- und Exaktheitsfelder. Ein als vollstaendig ausgegebener
 Digeststrom muss dropfrei und coverage-vollstaendig sein; er behauptet bei
 zusammengefassten Ereignissen nicht `exact_event_stream=true`.
@@ -161,6 +162,16 @@ Das oberste Feld `scope` lautet fuer ein einzelnes geladenes Executable-Image
 `executable_image`. Die Disc-CLI setzt explizit
 `native_disc_aot_boot_graph`, weil ihr Bericht IP.BIN und BootExecutable
 gemeinsam umfasst.
+
+Die Summen `known_gap_addresses`, `rejected_addresses` und
+`unmapped_addresses` beschreiben bestaetigte beziehungsweise eindeutig
+abgelehnte Luecken. Nullwerte in diesen Feldern bedeuten nur, dass im
+betrachteten statischen Scope keine solche Luecke belegt wurde. Sie sind kein
+Beweis fuer einen vollstaendig aufgeloesten Hardwarezugriffsgraphen.
+`unresolved_memory_access_sites`, `partial_addresses`, als `unknown`
+klassifizierte Loops und `unresolved_poll_guard_loops` bleiben deshalb
+eigenstaendig sichtbar. Sobald eine dieser Restmengen ungleich null ist, darf
+der Bericht nicht als vollstaendiger Hardwarebeweis zusammengefasst werden.
 
 Area-3-Haupt-RAM-Spiegel werden auf dieselbe physische Herkunft kanonisiert.
 OCRAM bleibt eine Geraeteapertur und erhaelt deshalb keine
@@ -193,3 +204,7 @@ Hardware-Waitloop ausgegeben. Delay-Slot-Doppelkontext, nichtdominierende
 Schleifenkandidaten und eine synthetische 4.096-Block-Skalierungsfixture sichern
 diese Grenze. Lokale Detailberichte duerfen Gastadressen enthalten;
 oeffentliche Aggregate und Fehlerpakete bleiben adress- und inhaltsredigiert.
+Damit sind `--fail-on-gap` und `--strict` Ablehnungspolicies, keine positiven
+Vollstaendigkeitszertifikate. Insbesondere kann ein policy-gruener Bericht
+weiterhin dynamische Speicherstellen oder reine Unknown-Loops ausweisen; jede
+Statusdarstellung muss diese Restmengen neben dem Gapstatus nennen.

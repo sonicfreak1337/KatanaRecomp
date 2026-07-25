@@ -150,11 +150,32 @@ int main() {
     }
 
     cpu.pc = 0x8C000102u;
-    context.delay_slot_owner_pc = 0x8C000100u;
+    context.exception_generation_on_entry = cpu.exception_generation;
+    ++cpu.exception_generation;
+    cpu.last_exception_generation = cpu.exception_generation;
+    cpu.last_exception_instruction_pc = 0x8C000102u;
+    cpu.last_exception_instruction_physical_pc = 0x0D000102u;
+    cpu.last_exception_owner_pc = 0x8C000100u;
+    cpu.exception_in_delay_slot = true;
     context.sync_point = BlockSyncPoint::BackendBoundary;
     const auto delayed = make_block_exit(cpu, context, BlockEndKind::Exception, entry.address);
-    require(delayed.in_delay_slot && delayed.exception_owner_pc == 0x8C000100u,
-            "Delay-Slot-Ausnahme meldet Slot-PC statt Owner-PC.");
+    require(delayed.in_delay_slot && delayed.exception_owner_pc == 0x8C000100u &&
+                delayed.exception_instruction_pc == 0x8C000102u &&
+                delayed.source == BlockAddress{0x8C000102u, 0x0D000102u} &&
+                delayed.exception_cause == ExceptionCause::AddressErrorRead &&
+                delayed.exception_generation == cpu.exception_generation,
+            "Delay-Slot-Ausnahme meldet nicht Fault-PC, physische Herkunft oder Owner-PC.");
+
+    context.exception_generation_on_entry.reset();
+    context.delay_slot_owner_pc.reset();
+    context.sync_point = BlockSyncPoint::BackendBoundary;
+    const BlockAddress direct_source{0x8C000104u, 0x0C000104u};
+    const auto direct_exception =
+        make_block_exit(cpu, context, BlockEndKind::Exception, direct_source);
+    require(direct_exception.source == direct_source &&
+                direct_exception.exception_cause == ExceptionCause::None &&
+                direct_exception.exception_generation == 0u,
+            "Direkter Backendaufruf interpretiert persistente Exceptiondaten als neue Kante.");
 
     context.sync_point = BlockSyncPoint::Entry;
     require(

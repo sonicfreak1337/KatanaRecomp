@@ -237,13 +237,25 @@ std::uint64_t GdRomAsyncReader::submit(const GdRomRequest& request) {
     if (next_request_id_ == 0u) {
         throw std::overflow_error("GD-ROM-Request-ID ist erschoepft.");
     }
-    const auto id = next_request_id_++;
+    const auto id = next_request_id_;
     const auto ready_cycle = scheduler_.current_cycle() + duration;
-    const auto event_id = scheduler_.schedule_at(
-        ready_cycle,
-        [this, id](const auto, const auto cycle) { complete(id, cycle); },
-        SchedulerEventKind::DiscRead);
-    pending_.push_back({id, ready_cycle, request, event_id});
+    if (pending_.size() == std::numeric_limits<std::size_t>::max() ||
+        completed_.size() >
+            std::numeric_limits<std::size_t>::max() - pending_.size() - 1u)
+        throw std::length_error("GD-ROM-Requestqueue ist erschoepft.");
+    pending_.reserve(pending_.size() + 1u);
+    completed_.reserve(completed_.size() + pending_.size() + 1u);
+    pending_.push_back({id, ready_cycle, request, 0u});
+    try {
+        pending_.back().event_id = scheduler_.schedule_at(
+            ready_cycle,
+            [this, id](const auto, const auto cycle) { complete(id, cycle); },
+            SchedulerEventKind::DiscRead);
+    } catch (...) {
+        pending_.pop_back();
+        throw;
+    }
+    ++next_request_id_;
     return id;
 }
 
@@ -276,22 +288,40 @@ void GdRomAsyncReader::reset() noexcept {
     next_request_id_ = 1u;
 }
 
-void GdRomAsyncReader::complete(const std::uint64_t request_id, const std::uint64_t cycle) {
+void GdRomAsyncReader::complete(const std::uint64_t request_id,
+                                const std::uint64_t cycle) noexcept {
     const auto request = std::find_if(pending_.begin(), pending_.end(), [&](const auto& value) {
         return value.request_id == request_id;
     });
-    if (request == pending_.end() || request->ready_cycle != cycle) {
-        throw std::logic_error("GD-ROM-Schedulercompletion besitzt keinen Request.");
-    }
-    completed_.push_back({request->request_id, cycle, drive_.execute(request->request)});
+    if (request == pending_.end() || request->ready_cycle != cycle) return;
+
+    const auto admitted_request = request->request;
+    const auto admitted_id = request->request_id;
     pending_.erase(request);
+    GdRomResponse response;
+    try {
+        response = drive_.execute(admitted_request);
+    } catch (...) {
+        response.status = GdRomStatus::Aborted;
+        response.data.clear();
+        response.transferred_sectors = 0u;
+    }
+    // submit() reserves one completion slot for every admitted pending request before it creates
+    // the scheduler event, so this move cannot allocate in the callback.
+    completed_.push_back({admitted_id, cycle, std::move(response)});
     std::sort(completed_.begin(), completed_.end(), [](const auto& left, const auto& right) {
         if (left.ready_cycle != right.ready_cycle) {
             return left.ready_cycle < right.ready_cycle;
         }
         return left.request_id < right.request_id;
     });
-    if (completion_observer_) completion_observer_(cycle);
+    if (completion_observer_) {
+        try {
+            completion_observer_(cycle);
+        } catch (...) {
+            // The completion remains queued. Host observers cannot unwind through the scheduler.
+        }
+    }
 }
 
 void GdRomAsyncReader::handle_scheduler_reset() noexcept {

@@ -167,8 +167,23 @@ int main() {
     require(source.find("switch (katana::runtime::unrelocate_code_address(cpu.pc))") !=
                 std::string::npos,
             "Der Funktionsswitch normalisiert keine relokierte Runtime-PC-Adresse.");
-    require(source.find("base_guest_cycles_per_instruction * 2u") != std::string::npos,
-            "Owner und Delay Slot werden nicht als zwei Gastinstruktionen berechnet.");
+    const auto call_owner = emitted_instruction(source, "0x8C010000");
+    const auto call_delay_slot = emitted_instruction(source, "0x8C010002");
+    require(call_owner.find(
+                "katana::runtime::GuestInstructionAttempt terminal_instruction_attempt(") !=
+                    std::string_view::npos &&
+                call_owner.find(
+                    "katana::runtime::relocate_code_address(0x8C010000u), 2u);") !=
+                    std::string_view::npos &&
+                call_delay_slot.find(
+                    "katana::runtime::GuestInstructionAttempt guest_instruction_attempt(") !=
+                    std::string_view::npos &&
+                call_delay_slot.find(
+                    "katana::runtime::relocate_code_address(0x8C010002u), 1u);") !=
+                    std::string_view::npos &&
+                source.find("terminal_instruction_attempt.complete();") != std::string::npos &&
+                source.find("katana::runtime::finalize_guest_block(") != std::string::npos,
+            "Owner und Delay Slot besitzen keine getrennten Attempts, Kosten oder Abschlusskante.");
 
     require(source.find("fn_8C010000") != std::string::npos,
             "Die generierte Einstiegsfunktion fehlt.");
@@ -260,13 +275,17 @@ int main() {
                 local_chain_source.find(
                     "note_block_entry(katana::runtime::relocate_code_address(0x8C010000u));") !=
                     std::string::npos &&
-                local_chain_source.find("++cpu.retired_guest_instructions;") != std::string::npos &&
+                local_chain_source.find(
+                    "katana::runtime::GuestInstructionAttempt guest_instruction_attempt(") !=
+                    std::string::npos &&
+                local_chain_source.find("++cpu.retired_guest_instructions;") ==
+                    std::string::npos &&
                 local_chain_source.find("services->consume_guest_cycles(") == std::string::npos &&
                 local_chain_source.find("cpu.pc = !cpu.t ? "
                                         "katana::runtime::relocate_code_address(0x8C010002u) : "
                                         "katana::runtime::relocate_code_address(0x8C010006u);") !=
                     std::string::npos,
-            "Lokales Mehrblock-Chaining besitzt Vorab-Timing oder keinen Retirement-Guard.");
+            "Lokales Mehrblock-Chaining besitzt Vorab-Timing oder keinen Attempt/Retire-Guard.");
 
     constexpr std::array<std::uint8_t, 12> indirect_jump_bytes = {
         0x08u,
@@ -292,18 +311,59 @@ int main() {
     const auto indirect_jump_program = katana::ir::lower_program(
         indirect_jump_lines, indirect_jump_functions, indirect_jump_edges);
     const auto indirect_jump_source = katana::codegen::emit_cpp_program(indirect_jump_program, 0u);
-    require(indirect_jump_source.find("const std::uint32_t jump_target = cpu.r[1];") !=
+    constexpr std::string_view jump_target_latch_text =
+        "const std::uint32_t jump_target = cpu.r[1];";
+    constexpr std::string_view jump_switch_text =
+        "switch (katana::runtime::unrelocate_code_address(jump_target))";
+    constexpr std::string_view jump_case_text = "case 0x00000008u:";
+    const auto jump_target_latch = indirect_jump_source.find(jump_target_latch_text);
+    const auto jump_delay_slot =
+        indirect_jump_source.find("// katana-guest 0x00000004", jump_target_latch);
+    const auto jump_first_completion =
+        indirect_jump_source.find("katana::runtime::finalize_guest_block(", jump_target_latch);
+    const auto jump_first_flush =
+        indirect_jump_source.find(
+            "katana::runtime::flush_pending_guest_cycles(cpu, *services)", jump_target_latch);
+    const auto jump_switch = indirect_jump_source.find(jump_switch_text, jump_delay_slot);
+    const auto jump_case = indirect_jump_source.find(jump_case_text, jump_switch);
+    const auto jump_case_pc = indirect_jump_source.find("cpu.pc = jump_target;", jump_case);
+    const auto jump_case_completion =
+        indirect_jump_source.find("katana::runtime::finalize_guest_block(", jump_case_pc);
+    const auto jump_case_continue = indirect_jump_source.find("continue;", jump_case_completion);
+    const auto jump_default = indirect_jump_source.find("default:", jump_case_continue);
+    const auto jump_fallback_completion =
+        indirect_jump_source.find("katana::runtime::finalize_guest_block(", jump_default);
+    const auto jump_fallback =
+        indirect_jump_source.find("(cpu, jump_target);", jump_fallback_completion);
+    const auto jump_fallback_return = indirect_jump_source.find("return;", jump_fallback);
+    require(jump_target_latch != std::string::npos &&
+                count_occurrences(indirect_jump_source, jump_target_latch_text) == 1u &&
+                jump_delay_slot != std::string::npos && jump_target_latch < jump_delay_slot &&
+                jump_first_completion != std::string::npos &&
+                jump_delay_slot < jump_first_completion &&
+                (jump_first_flush == std::string::npos || jump_delay_slot < jump_first_flush) &&
+                jump_switch != std::string::npos && jump_delay_slot < jump_switch &&
+                jump_case != std::string::npos && jump_switch < jump_case &&
+                jump_case_pc != std::string::npos && jump_case < jump_case_pc &&
+                jump_case_completion != std::string::npos &&
+                jump_case_pc < jump_case_completion &&
+                jump_case_continue != std::string::npos &&
+                jump_case_completion < jump_case_continue &&
+                jump_default != std::string::npos && jump_case_continue < jump_default &&
+                jump_fallback_completion != std::string::npos &&
+                jump_default < jump_fallback_completion &&
+                jump_fallback != std::string::npos &&
+                jump_fallback_completion < jump_fallback &&
+                count_occurrences(indirect_jump_source, "(cpu, jump_target);") == 1u &&
+                jump_fallback_return != std::string::npos &&
+                jump_fallback < jump_fallback_return &&
+                indirect_jump_source.find("services->consume_guest_cycles(") ==
                     std::string::npos &&
-                indirect_jump_source.find(
-                    "switch (katana::runtime::unrelocate_code_address(jump_target))") !=
-                    std::string::npos &&
-                indirect_jump_source.find("case 0x00000008u:") != std::string::npos &&
-                indirect_jump_source.find("cpu.pc = jump_target;") != std::string::npos &&
                 indirect_jump_source.find(
                     "jump_target = katana::runtime::relocate_code_address(cpu.r[1])") ==
                     std::string::npos,
-            "Aufgeloestes absolutes JMP veraendert sein Registerziel oder verliert nativen "
-            "Dispatch.");
+            "Aufgeloestes JMP veraendert sein Registerziel, fallthrought oder verbucht Zeit vor "
+            "dem Block.");
 
     constexpr std::array<std::uint8_t, 18> relative_jump_bytes = {
         0x08u,
@@ -437,6 +497,43 @@ int main() {
                 runtime_only_json.find("\"dynamic_target_class\":\"runtime-only\"") !=
                     std::string::npos,
             "Runtime-only-Klasse erreicht IR-Text, JSON oder validierenden Dispatcher nicht.");
+
+    auto guarded_candidate_program = indirect_call_program;
+    auto* guarded_candidate_call =
+        make_dynamic(guarded_candidate_program, katana::ir::DynamicTargetClass::GuardedPartial);
+    if (guarded_candidate_call == nullptr) {
+        std::cerr << "TEST FEHLGESCHLAGEN: Guarded-IR-Testcallsite fehlt.\n";
+        return EXIT_FAILURE;
+    }
+    guarded_candidate_call->resolved_targets = {0x00001000u};
+    for (auto& function : guarded_candidate_program) {
+        if (std::find(function.indirect_call_sites.begin(),
+                      function.indirect_call_sites.end(),
+                      guarded_candidate_call->source_address) !=
+            function.indirect_call_sites.end()) {
+            function.direct_callees.insert(function.direct_callees.end(),
+                                           guarded_candidate_call->resolved_targets.begin(),
+                                           guarded_candidate_call->resolved_targets.end());
+            std::sort(function.direct_callees.begin(), function.direct_callees.end());
+            function.direct_callees.erase(std::unique(function.direct_callees.begin(),
+                                                      function.direct_callees.end()),
+                                          function.direct_callees.end());
+        }
+    }
+    require(katana::ir::verify_program(guarded_candidate_program).empty(),
+            "Guarded-IR-Testcallsite besitzt inkonsistente Callee-Metadaten.");
+    const auto guarded_candidate_source =
+        katana::codegen::emit_cpp_program(guarded_candidate_program, 0u);
+    const auto guarded_candidate_dispatch =
+        guarded_candidate_source.find("guarded_call(cpu, call_target)");
+    const auto guarded_candidate_completion =
+        guarded_candidate_source.rfind("katana::runtime::finalize_guest_block(",
+                                       guarded_candidate_dispatch);
+    require(guarded_candidate_dispatch != std::string::npos &&
+                guarded_candidate_completion != std::string::npos &&
+                guarded_candidate_completion < guarded_candidate_dispatch,
+            "Ein aufgeloester Guarded-Call betritt sein Ziel vor dem zentralen Blockabschluss.");
+
     auto unresolved_program = dynamic_program;
     static_cast<void>(make_dynamic(unresolved_program, katana::ir::DynamicTargetClass::Unresolved));
     const auto unresolved_source = katana::codegen::emit_cpp_program(unresolved_program, 0u);
@@ -453,6 +550,24 @@ int main() {
     invalid_call->resolved_targets = {12u};
     require(!katana::ir::verify_program(invalid_runtime_only).empty(),
             "Runtime-only-IR akzeptiert geratene statische Zielkandidaten.");
+
+    constexpr std::array<std::uint8_t, 2u> unknown_bytes = {0xFFu, 0xFFu};
+    const auto unknown_lines = katana::sh4::disassemble(unknown_bytes, 0x8C020000u);
+    constexpr std::array<std::uint32_t, 1u> unknown_seeds = {0x8C020000u};
+    const auto unknown_functions =
+        katana::analysis::discover_functions(unknown_lines, unknown_seeds);
+    const auto unknown_program = katana::ir::lower_program(unknown_lines, unknown_functions);
+    const auto unknown_source = katana::codegen::emit_cpp_program(unknown_program, 0x8C020000u);
+    const auto unknown_instruction = emitted_instruction(unknown_source, "0x8C020000u");
+    const auto unknown_raise = unknown_instruction.find("raise_illegal_instruction");
+    const auto unknown_completion =
+        unknown_instruction.find("katana::runtime::finalize_guest_block(", unknown_raise);
+    const auto unknown_return = unknown_instruction.find("return;", unknown_completion);
+    require(unknown_raise != std::string_view::npos &&
+                unknown_completion != std::string_view::npos &&
+                unknown_return != std::string_view::npos &&
+                unknown_raise < unknown_completion && unknown_completion < unknown_return,
+            "Eine unbekannte Instruktion umgeht Attempt-Zeit und zentralen Blockabschluss.");
 
     constexpr std::array<std::uint8_t, 10> delay_memory_bytes = {
         0x01u,
@@ -476,6 +591,10 @@ int main() {
         katana::codegen::emit_cpp_program(delay_memory_program, 0x8C020000u);
     const auto delay_load =
         emitted_instruction(delay_memory_source, "0x8C020002");
+    const auto delay_load_flush =
+        delay_load.find("katana::runtime::flush_pending_guest_cycles(cpu, *services)");
+    const auto delay_load_attempt =
+        delay_load.find("katana::runtime::GuestInstructionAttempt guest_instruction_attempt");
     require(delay_memory_source.find("catch (const katana::runtime::MemoryAccessError& error)") !=
                     std::string::npos &&
                 delay_load.find(
@@ -484,6 +603,9 @@ int main() {
                     std::string_view::npos &&
                 delay_load.find("guest_read_u32_at(cpu, guest_origin, cpu.r[1])") !=
                     std::string_view::npos &&
+                delay_load_flush != std::string_view::npos &&
+                delay_load_attempt != std::string_view::npos &&
+                delay_load_flush < delay_load_attempt &&
                 delay_memory_source.find("enter_memory_exception(cpu, error, "
                                          "katana::runtime::relocate_code_address(0x8C020002u), "
                                          "katana::runtime::relocate_code_address(0x8C020000u));") !=
@@ -546,6 +668,38 @@ int main() {
                     std::string_view::npos,
             "PC-relative MOV.W/MOV.L besitzen keine getrennten Origins, folgen nicht dem "
             "Codetemplate oder veraendern den geladenen Literalwert.");
+
+    auto proven_linear_pc_relative_program = pc_relative_program;
+    for (auto& function : proven_linear_pc_relative_program) {
+        for (auto& block : function.blocks) {
+            for (auto& instruction : block.instructions) {
+                if (instruction.source_address == 0x8C030000u ||
+                    instruction.source_address == 0x8C030002u)
+                    instruction.memory_effects.region =
+                        katana::ir::MemoryRegionKind::NormalRam;
+            }
+        }
+    }
+    const auto proven_linear_pc_relative_source = katana::codegen::emit_cpp_program(
+        proven_linear_pc_relative_program, 0x8C030000u);
+    const auto proven_linear_word =
+        emitted_instruction(proven_linear_pc_relative_source, "0x8C030000");
+    const auto proven_linear_long =
+        emitted_instruction(proven_linear_pc_relative_source, "0x8C030002");
+    require(pc_relative_word.find(
+                "katana::runtime::flush_pending_guest_cycles(cpu, *services)") !=
+                    std::string_view::npos &&
+                pc_relative_long.find(
+                    "katana::runtime::flush_pending_guest_cycles(cpu, *services)") !=
+                    std::string_view::npos &&
+                proven_linear_word.find(
+                    "katana::runtime::flush_pending_guest_cycles(cpu, *services)") ==
+                    std::string_view::npos &&
+                proven_linear_long.find(
+                    "katana::runtime::flush_pending_guest_cycles(cpu, *services)") ==
+                    std::string_view::npos,
+            "Unbewiesene Speicherzugriffe verlieren ihren Flush oder bewiesenes lineares RAM "
+            "wird weiterhin vor jeder Instruktion geflusht.");
 
     constexpr std::array<std::uint8_t, 6> read_modify_write_bytes = {
         0x0Fu,
@@ -655,9 +809,24 @@ int main() {
     timing_function.blocks = {std::move(timing_block)};
     const auto timing_source =
         katana::codegen::emit_cpp_program(std::vector{timing_function}, 0x3000u);
-    require(timing_source.find("base_guest_cycles_per_instruction * 2u") != std::string::npos &&
-                timing_source.find("base_guest_cycles_per_instruction * 3u") == std::string::npos,
-            "Zwei Gastinstruktionen werden nicht als genau zwei Zyklen gezaehlt.");
+    const auto first_timing_source = emitted_instruction(timing_source, "0x00003000");
+    const auto second_timing_source = emitted_instruction(timing_source, "0x00003002");
+    require(first_timing_source.find(
+                "katana::runtime::GuestInstructionAttempt guest_instruction_attempt(") !=
+                    std::string_view::npos &&
+                first_timing_source.find(
+                    "katana::runtime::relocate_code_address(0x00003000u), 1u);") !=
+                    std::string_view::npos &&
+                second_timing_source.find(
+                    "katana::runtime::GuestInstructionAttempt guest_instruction_attempt(") !=
+                    std::string_view::npos &&
+                second_timing_source.find(
+                    "katana::runtime::relocate_code_address(0x00003002u), 1u);") !=
+                    std::string_view::npos &&
+                timing_source.find("katana::runtime::finalize_guest_block(") !=
+                    std::string::npos &&
+                timing_source.find("base_guest_cycles_per_instruction") == std::string::npos,
+            "Zwei NOPs besitzen keine zwei getrennten Ein-Zyklus-Attempts mit Blockabschluss.");
 
     require(
         katana::ir::lowering_operation_for_instruction(katana::sh4::InstructionKind::LoadTlb) ==

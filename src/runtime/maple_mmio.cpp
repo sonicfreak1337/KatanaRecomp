@@ -13,6 +13,21 @@ namespace {
 constexpr std::size_t maximum_dma_descriptors = 1'024u;
 constexpr std::size_t maximum_maple_frame_words = 256u;
 
+class MapleDmaFault final : public std::runtime_error {
+  public:
+    MapleDmaFault(const MapleDmaError error,
+                  const std::uint32_t address,
+                  const std::string& message)
+        : std::runtime_error(message), error_(error), address_(address) {}
+
+    [[nodiscard]] MapleDmaError error() const noexcept { return error_; }
+    [[nodiscard]] std::uint32_t address() const noexcept { return address_; }
+
+  private:
+    MapleDmaError error_ = MapleDmaError::InternalLifecycle;
+    std::uint32_t address_ = 0u;
+};
+
 std::uint32_t swap_word(const std::uint32_t value) noexcept {
     return ((value & 0x000000FFu) << 24u) | ((value & 0x0000FF00u) << 8u) |
            ((value & 0x00FF0000u) >> 8u) | ((value & 0xFF000000u) >> 24u);
@@ -20,7 +35,8 @@ std::uint32_t swap_word(const std::uint32_t value) noexcept {
 
 std::uint32_t checked_address_add(const std::uint32_t address, const std::size_t bytes) {
     if (bytes > std::numeric_limits<std::uint32_t>::max() - address)
-        throw std::out_of_range("Maple-DMA-Adresse laeuft ueber.");
+        throw MapleDmaFault(
+            MapleDmaError::InvalidDescriptor, address, "Maple-DMA-Adresse laeuft ueber.");
     return address + static_cast<std::uint32_t>(bytes);
 }
 } // namespace
@@ -60,7 +76,8 @@ std::uint32_t DreamcastMapleController::read(const std::uint32_t offset) const {
     case SystemControl:
         return system_control_;
     case Status:
-        return hard_trigger_failed_ ? 1u : 0u;
+        return (error_ != MapleDmaError::None || hard_trigger_failed_ ? 1u : 0u) |
+               (static_cast<std::uint32_t>(error_) << 8u);
     case MsbSelect:
         return msb_select_;
     case TxAddressCounter:
@@ -85,21 +102,46 @@ void DreamcastMapleController::write(const std::uint32_t offset, const std::uint
         return;
     case DmaEnable:
         enabled_ = value & 1u;
-        if (enabled_ == 0u && completion_event_) {
-            static_cast<void>(scheduler_.cancel(*completion_event_));
-            completion_event_.reset();
-            pending_responses_.clear();
-            active_ = 0u;
+        if (enabled_ == 0u) {
+            cancel_pending();
+            state_ = MapleDmaState::Disabled;
+            error_ = MapleDmaError::None;
+            error_address_.reset();
+            hard_trigger_failed_ = false;
+        } else if (state_ == MapleDmaState::Disabled) {
+            state_ = MapleDmaState::Completed;
         }
         return;
     case DmaStart:
-        if ((value & 1u) != 0u && enabled_ != 0u) start_dma();
+        if ((value & 1u) == 0u || enabled_ == 0u) return;
+        if (state_ == MapleDmaState::Active || completion_event_)
+            throw MapleDmaFault(MapleDmaError::InvalidConfiguration,
+                                command_table_,
+                                "Maple-DMA wurde waehrend eines aktiven Transfers erneut "
+                                "gestartet.");
+        if (trigger_select_ != 0u) {
+            pending_responses_.clear();
+            active_ = 1u;
+            state_ = MapleDmaState::Armed;
+            error_ = MapleDmaError::None;
+            error_address_.reset();
+            hard_trigger_failed_ = false;
+        } else {
+            start_dma();
+        }
         return;
     case SystemControl:
         system_control_ = value & 0xFFFF130Fu;
         return;
     case HardTriggerClear:
-        if ((value & 1u) != 0u) hard_trigger_failed_ = false;
+        if ((value & 1u) != 0u) {
+            hard_trigger_failed_ = false;
+            error_ = MapleDmaError::None;
+            error_address_.reset();
+            if (state_ == MapleDmaState::Failed)
+                state_ = enabled_ != 0u ? MapleDmaState::Completed
+                                        : MapleDmaState::Disabled;
+        }
         return;
     case DmaAddressProtect:
         if ((value >> 16u) == 0x6155u) address_protect_ = value & 0x00007F7Fu;
@@ -113,14 +155,14 @@ void DreamcastMapleController::write(const std::uint32_t offset, const std::uint
 }
 
 void DreamcastMapleController::reset() noexcept {
-    if (completion_event_ && !scheduler_lifetime_.expired())
-        static_cast<void>(scheduler_.cancel(*completion_event_));
-    completion_event_.reset();
-    pending_responses_.clear();
+    cancel_pending();
     command_table_ = 0u;
     trigger_select_ = 0u;
     enabled_ = 0u;
     active_ = 0u;
+    state_ = MapleDmaState::Disabled;
+    error_ = MapleDmaError::None;
+    error_address_.reset();
     system_control_ = 0x3A980000u;
     address_protect_ = 0x00007F00u;
     msb_select_ = 1u;
@@ -139,7 +181,8 @@ std::uint64_t DreamcastMapleController::transferred_word_count() const noexcept 
 }
 
 void DreamcastMapleController::hardware_trigger() noexcept {
-    if (trigger_select_ == 0u || enabled_ == 0u || active_ != 0u) return;
+    if (trigger_select_ == 0u || enabled_ == 0u || state_ != MapleDmaState::Armed)
+        return;
     try {
         start_dma();
     } catch (...) {
@@ -149,6 +192,18 @@ void DreamcastMapleController::hardware_trigger() noexcept {
 
 bool DreamcastMapleController::hard_trigger_failed() const noexcept {
     return hard_trigger_failed_;
+}
+
+MapleDmaState DreamcastMapleController::state() const noexcept {
+    return state_;
+}
+
+MapleDmaError DreamcastMapleController::error() const noexcept {
+    return error_;
+}
+
+std::optional<std::uint32_t> DreamcastMapleController::error_address() const noexcept {
+    return error_address_;
 }
 
 DreamcastMapleControllerSnapshot DreamcastMapleController::snapshot() const {
@@ -162,6 +217,9 @@ DreamcastMapleControllerSnapshot DreamcastMapleController::snapshot() const {
     result.trigger_select = trigger_select_;
     result.enabled = enabled_;
     result.active = active_;
+    result.state = state_;
+    result.error = error_;
+    result.error_address = error_address_;
     result.system_control = system_control_;
     result.address_protect = address_protect_;
     result.msb_select = msb_select_;
@@ -170,6 +228,7 @@ DreamcastMapleControllerSnapshot DreamcastMapleController::snapshot() const {
     result.rx_base = rx_base_;
     result.completed_dma_count = completed_dma_count_;
     result.transferred_word_count = transferred_word_count_;
+    result.failed_dma_count = failed_dma_count_;
     result.hard_trigger_failed = hard_trigger_failed_;
     return result;
 }
@@ -178,7 +237,7 @@ bool DreamcastMapleController::protected_address(const std::uint32_t address,
                                                  const std::size_t size) const noexcept {
     if (size == 0u) return false;
     const auto bottom = ((address_protect_ & 0x7Fu) << 20u) | 0x08000000u;
-    const auto top = (((address_protect_ >> 8u) & 0x7Fu) << 20u) | 0x080FFFE0u;
+    const auto top = (((address_protect_ >> 8u) & 0x7Fu) << 20u) | 0x080FFFFFu;
     const auto physical = address & 0x1FFFFFFFu;
     if (size - 1u > std::numeric_limits<std::uint32_t>::max() - physical) return false;
     const auto end = physical + static_cast<std::uint32_t>(size - 1u);
@@ -188,31 +247,54 @@ bool DreamcastMapleController::protected_address(const std::uint32_t address,
 std::pair<std::uint8_t, std::uint8_t>
 DreamcastMapleController::decode_recipient(const std::uint8_t bus,
                                            const std::uint8_t recipient) const {
-    if (bus >= maple_port_count) throw std::out_of_range("Maple-DMA-Bus liegt ausserhalb 0..3.");
+    if (bus >= maple_port_count)
+        throw MapleDmaFault(MapleDmaError::InvalidDescriptor,
+                            tx_address_,
+                            "Maple-DMA-Bus liegt ausserhalb 0..3.");
     if ((recipient & 0x20u) != 0u) return {bus, std::uint8_t{0u}};
     for (std::uint8_t bit = 0u; bit < 5u; ++bit)
         if ((recipient & (std::uint8_t{1u} << bit)) != 0u)
             return {bus, static_cast<std::uint8_t>(bit + 1u)};
-    throw std::invalid_argument("Maple-DMA-Empfaenger besitzt keine Geraeteadresse.");
+    throw MapleDmaFault(MapleDmaError::InvalidDescriptor,
+                        tx_address_,
+                        "Maple-DMA-Empfaenger besitzt keine Geraeteadresse.");
 }
 
 void DreamcastMapleController::start_dma() {
-    if (active_ != 0u || completion_event_)
-        throw std::logic_error(
-            "Maple-DMA wurde waehrend eines aktiven Transfers erneut gestartet.");
-    if (!protected_address(command_table_, sizeof(std::uint32_t)))
-        throw std::out_of_range("Maple-DMA-Kommandotabelle liegt ausserhalb des Schutzfensters.");
+    if (state_ == MapleDmaState::Active || completion_event_)
+        throw MapleDmaFault(MapleDmaError::InvalidConfiguration,
+                            command_table_,
+                            "Maple-DMA wurde waehrend eines aktiven Transfers erneut "
+                            "gestartet.");
+    if (enabled_ == 0u)
+        throw MapleDmaFault(MapleDmaError::InvalidConfiguration,
+                            command_table_,
+                            "Maple-DMA wurde im deaktivierten Zustand gestartet.");
 
     active_ = 1u;
+    state_ = MapleDmaState::Active;
+    error_ = MapleDmaError::None;
+    error_address_.reset();
+    hard_trigger_failed_ = false;
     pending_responses_.clear();
     tx_address_ = command_table_;
     std::uint64_t transfer_words = 0u;
     bool last = false;
     try {
+        if (!protected_address(command_table_, sizeof(std::uint32_t)) ||
+            !memory_.is_readable_linear_range(command_table_, sizeof(std::uint32_t)))
+            throw MapleDmaFault(
+                MapleDmaError::ProtectedRange,
+                command_table_,
+                "Maple-DMA-Kommandotabelle liegt ausserhalb des Schutzfensters.");
         for (std::size_t descriptor_index = 0u; descriptor_index < maximum_dma_descriptors && !last;
              ++descriptor_index) {
-            if (!protected_address(tx_address_, 2u * sizeof(std::uint32_t)))
-                throw std::out_of_range(
+            if (!protected_address(tx_address_, 2u * sizeof(std::uint32_t)) ||
+                !memory_.is_readable_linear_range(
+                    tx_address_, 2u * sizeof(std::uint32_t)))
+                throw MapleDmaFault(
+                    MapleDmaError::ProtectedRange,
+                    tx_address_,
                     "Maple-DMA-Deskriptor liegt ausserhalb des Schutzfensters.");
             const auto descriptor = memory_.read_u32(tx_address_);
             const auto destination = memory_.read_u32(tx_address_ + 4u) & 0x1FFFFFE0u;
@@ -223,10 +305,15 @@ void DreamcastMapleController::start_dma() {
 
             if (pattern == 0u) {
                 if (frame_words > maximum_maple_frame_words)
-                    throw std::out_of_range("Maple-DMA-Frame ist groesser als 256 Woerter.");
+                    throw MapleDmaFault(MapleDmaError::InvalidDescriptor,
+                                        tx_address_,
+                                        "Maple-DMA-Frame ist groesser als 256 Woerter.");
                 const auto descriptor_bytes = (2u + frame_words) * sizeof(std::uint32_t);
-                if (!protected_address(tx_address_, descriptor_bytes))
-                    throw std::out_of_range("Maple-DMA-Frame verlaesst das Schutzfenster.");
+                if (!protected_address(tx_address_, descriptor_bytes) ||
+                    !memory_.is_readable_linear_range(tx_address_, descriptor_bytes))
+                    throw MapleDmaFault(MapleDmaError::ProtectedRange,
+                                        tx_address_,
+                                        "Maple-DMA-Frame verlaesst das Schutzfenster.");
                 std::vector<std::uint32_t> frame(frame_words);
                 for (std::size_t word = 0u; word < frame_words; ++word) {
                     auto value =
@@ -237,7 +324,9 @@ void DreamcastMapleController::start_dma() {
                 const auto frame_header = frame.front();
                 const auto payload_words = static_cast<std::size_t>(frame_header >> 24u);
                 if (payload_words + 1u != frame_words)
-                    throw std::invalid_argument(
+                    throw MapleDmaFault(
+                        MapleDmaError::InvalidDescriptor,
+                        tx_address_,
                         "Maple-Frame-Laenge stimmt nicht mit dem Deskriptor ueberein.");
                 const auto recipient = static_cast<std::uint8_t>((frame_header >> 8u) & 0xFFu);
                 const auto sender = static_cast<std::uint8_t>((frame_header >> 16u) & 0xFFu);
@@ -252,7 +341,10 @@ void DreamcastMapleController::start_dma() {
                     auto response = bus_->exchange_without_completion_at(
                         port, unit, request, scheduler_.current_cycle());
                     if (response.payload.size() > 0xFFu)
-                        throw std::out_of_range("Maple-Antwort ueberschreitet 255 Payloadwoerter.");
+                        throw MapleDmaFault(
+                            MapleDmaError::ResponseRange,
+                            destination,
+                            "Maple-Antwort ueberschreitet 255 Payloadwoerter.");
                     const auto response_header =
                         static_cast<std::uint32_t>(response.code) |
                         (static_cast<std::uint32_t>(sender) << 8u) |
@@ -262,8 +354,12 @@ void DreamcastMapleController::start_dma() {
                     output.push_back(response_header);
                     output.insert(output.end(), response.payload.begin(), response.payload.end());
                 }
-                if (!protected_address(destination, output.size() * sizeof(std::uint32_t)))
-                    throw std::out_of_range(
+                const auto response_bytes = output.size() * sizeof(std::uint32_t);
+                if (!protected_address(destination, response_bytes) ||
+                    !memory_.is_writable_linear_range(destination, response_bytes))
+                    throw MapleDmaFault(
+                        MapleDmaError::ResponseRange,
+                        destination,
                         "Maple-DMA-Antwort liegt ausserhalb des Schutzfensters.");
                 if (msb_select_ == 0u)
                     for (auto& word : output)
@@ -276,48 +372,143 @@ void DreamcastMapleController::start_dma() {
                 transfer_words += 1u;
                 tx_address_ = checked_address_add(tx_address_, sizeof(std::uint32_t));
             } else {
-                throw std::invalid_argument("Unbekanntes Maple-DMA-Deskriptormuster.");
+                throw MapleDmaFault(MapleDmaError::UnsupportedDescriptor,
+                                    tx_address_,
+                                    "Unbekanntes Maple-DMA-Deskriptormuster.");
             }
         }
         if (!last)
-            throw std::runtime_error("Maple-DMA-Kommandotabelle besitzt keinen Enddeskriptor.");
+            throw MapleDmaFault(
+                MapleDmaError::InvalidDescriptor,
+                tx_address_,
+                "Maple-DMA-Kommandotabelle besitzt keinen Enddeskriptor.");
         if (transfer_words == 0u ||
             transfer_words > std::numeric_limits<std::uint64_t>::max() / timing_.cycles_per_word)
-            throw std::overflow_error("Maple-DMA-Zeitbudget ist ungueltig oder laeuft ueber.");
+            throw MapleDmaFault(MapleDmaError::InvalidConfiguration,
+                                command_table_,
+                                "Maple-DMA-Zeitbudget ist ungueltig oder laeuft ueber.");
         const auto latency = transfer_words * timing_.cycles_per_word;
-        completion_event_ = scheduler_.schedule_after(
-            latency,
-            [this](const auto event_id, const auto) { complete_dma(event_id); },
-            SchedulerEventKind::MapleDma);
+        try {
+            completion_event_ = scheduler_.schedule_after(
+                latency,
+                [this](const auto event_id, const auto) { complete_dma(event_id); },
+                SchedulerEventKind::MapleDma);
+        } catch (...) {
+            throw MapleDmaFault(MapleDmaError::SchedulerFailure,
+                                command_table_,
+                                "Maple-DMA-Completion konnte nicht geplant werden.");
+        }
         transferred_word_count_ += transfer_words;
+    } catch (const MapleDmaFault& fault) {
+        fail(fault.error(), fault.address());
+        throw;
     } catch (...) {
-        active_ = 0u;
-        pending_responses_.clear();
+        fail(MapleDmaError::InternalLifecycle, tx_address_);
         throw;
     }
 }
 
-void DreamcastMapleController::complete_dma(const SchedulerEventId event_id) {
-    if (!completion_event_ || *completion_event_ != event_id || active_ == 0u)
-        throw std::logic_error("Maple-DMA-Completion besitzt keinen aktiven Transfer.");
-    for (const auto& response : pending_responses_) {
-        for (std::size_t word = 0u; word < response.words.size(); ++word) {
-            const auto address = response.destination + static_cast<std::uint32_t>(word * 4u);
-            memory_.write_u32(address, response.words[word], CodeWriteSource::Dma);
-            rx_address_ = address;
-        }
+void DreamcastMapleController::complete_dma(const SchedulerEventId event_id) noexcept {
+    if (!completion_event_ || *completion_event_ != event_id) return;
+    if (state_ != MapleDmaState::Active || active_ == 0u) {
+        fail(MapleDmaError::InternalLifecycle, tx_address_);
+        return;
     }
-    pending_responses_.clear();
+
+    struct StagedResponse {
+        std::uint32_t destination = 0u;
+        std::vector<std::uint8_t> bytes;
+    };
+
+    try {
+        std::vector<StagedResponse> staged;
+        staged.reserve(pending_responses_.size());
+        for (const auto& response : pending_responses_) {
+            if (response.words.empty() ||
+                response.words.size() >
+                    std::numeric_limits<std::size_t>::max() / sizeof(std::uint32_t)) {
+                fail(MapleDmaError::ResponseRange, response.destination);
+                return;
+            }
+            const auto byte_count = response.words.size() * sizeof(std::uint32_t);
+            if (!protected_address(response.destination, byte_count) ||
+                !memory_.is_writable_linear_range(response.destination, byte_count)) {
+                fail(MapleDmaError::ResponseRange, response.destination);
+                return;
+            }
+            StagedResponse item;
+            item.destination = response.destination;
+            item.bytes.resize(byte_count);
+            for (std::size_t word = 0u; word < response.words.size(); ++word) {
+                const auto value = response.words[word];
+                const auto byte_offset = word * sizeof(value);
+                for (std::size_t byte = 0u; byte < sizeof(value); ++byte)
+                    item.bytes[byte_offset + byte] =
+                        static_cast<std::uint8_t>(value >> (byte * 8u));
+            }
+            staged.push_back(std::move(item));
+        }
+
+        std::vector<LinearMemoryTransactionWrite> writes;
+        writes.reserve(staged.size());
+        for (const auto& response : staged)
+            writes.push_back({response.destination, response.bytes});
+        if (!memory_.commit_linear_transaction_batch(writes, CodeWriteSource::Dma)) {
+            fail(MapleDmaError::AtomicCommitFailure,
+                 staged.empty() ? rx_base_ : staged.front().destination);
+            return;
+        }
+        if (!staged.empty()) {
+            const auto& response = staged.back();
+            rx_address_ =
+                response.destination +
+                static_cast<std::uint32_t>(response.bytes.size() -
+                                           sizeof(std::uint32_t));
+        }
+        pending_responses_.clear();
+        completion_event_.reset();
+        active_ = 0u;
+        state_ = MapleDmaState::Completed;
+        error_ = MapleDmaError::None;
+        error_address_.reset();
+        ++completed_dma_count_;
+        if (completion_observer_) {
+            try {
+                completion_observer_();
+            } catch (...) {
+                fail(MapleDmaError::InternalLifecycle, rx_address_);
+            }
+        }
+    } catch (...) {
+        fail(MapleDmaError::InternalLifecycle, rx_base_);
+    }
+}
+
+void DreamcastMapleController::cancel_pending() noexcept {
+    if (completion_event_ && !scheduler_lifetime_.expired())
+        static_cast<void>(scheduler_.cancel(*completion_event_));
     completion_event_.reset();
+    pending_responses_.clear();
     active_ = 0u;
-    ++completed_dma_count_;
-    if (completion_observer_) completion_observer_();
+}
+
+void DreamcastMapleController::fail(const MapleDmaError error,
+                                    const std::optional<std::uint32_t> address) noexcept {
+    cancel_pending();
+    state_ = MapleDmaState::Failed;
+    error_ = error;
+    error_address_ = address;
+    ++failed_dma_count_;
 }
 
 void DreamcastMapleController::handle_scheduler_reset() noexcept {
     completion_event_.reset();
     pending_responses_.clear();
     active_ = 0u;
+    state_ = enabled_ != 0u ? MapleDmaState::Completed : MapleDmaState::Disabled;
+    error_ = MapleDmaError::None;
+    error_address_.reset();
+    hard_trigger_failed_ = false;
 }
 
 std::shared_ptr<DreamcastMapleController>

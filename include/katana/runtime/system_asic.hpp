@@ -5,10 +5,12 @@
 #include "katana/runtime/scheduler.hpp"
 
 #include <array>
+#include <cstddef>
 #include <cstdint>
+#include <deque>
 #include <functional>
 #include <memory>
-#include <vector>
+#include <optional>
 
 namespace katana::runtime {
 
@@ -139,9 +141,13 @@ struct DreamcastSystemAsicSnapshot {
     std::array<std::uint32_t, 3u> pending{};
     std::array<std::array<std::uint32_t, 3u>, 3u> masks{};
     std::array<std::array<std::uint32_t, 2u>, 2u> dma_trigger_masks{};
-    std::vector<SystemAsicEventRecord> events;
+    std::deque<SystemAsicEventRecord> events;
+    std::optional<SystemAsicEventRecord> last_event;
     std::uint64_t next_sequence = 0u;
     std::uint64_t last_guest_cycle = 0u;
+    std::size_t event_capacity = 0u;
+    std::uint64_t total_events = 0u;
+    std::uint64_t dropped_events = 0u;
 
     [[nodiscard]] bool operator==(const DreamcastSystemAsicSnapshot&) const = default;
 };
@@ -149,13 +155,20 @@ struct DreamcastSystemAsicSnapshot {
 class DreamcastSystemAsic final {
   public:
     using DmaTriggerObserver = std::function<void(SystemAsicEvent)>;
-    explicit DreamcastSystemAsic(PlatformInterruptRouter& router) noexcept;
+    static constexpr std::size_t product_event_capacity = 64u;
+    explicit DreamcastSystemAsic(
+        PlatformInterruptRouter& router,
+        std::size_t event_capacity = product_event_capacity) noexcept;
     void raise(SystemAsicEvent event, std::uint64_t guest_cycle);
     [[nodiscard]] SchedulerEventId
     schedule(EventScheduler& scheduler, SystemAsicEvent event, std::uint64_t guest_cycle);
     [[nodiscard]] std::uint32_t read(std::uint32_t offset) const;
     void write(std::uint32_t offset, std::uint32_t value);
-    [[nodiscard]] const std::vector<SystemAsicEventRecord>& events() const noexcept;
+    [[nodiscard]] const std::deque<SystemAsicEventRecord>& events() const noexcept;
+    [[nodiscard]] const std::optional<SystemAsicEventRecord>& last_event() const noexcept;
+    [[nodiscard]] std::size_t event_capacity() const noexcept;
+    [[nodiscard]] std::uint64_t total_event_count() const noexcept;
+    [[nodiscard]] std::uint64_t dropped_event_count() const noexcept;
     [[nodiscard]] DreamcastSystemAsicSnapshot snapshot() const;
     void set_dma_trigger_observers(DmaTriggerObserver pvr, DmaTriggerObserver g2);
     void reset() noexcept;
@@ -168,9 +181,13 @@ class DreamcastSystemAsic final {
     std::array<std::array<std::uint32_t, 2u>, 2u> dma_trigger_masks_{};
     DmaTriggerObserver pvr_dma_trigger_observer_;
     DmaTriggerObserver g2_dma_trigger_observer_;
-    std::vector<SystemAsicEventRecord> events_;
+    std::deque<SystemAsicEventRecord> events_;
+    std::optional<SystemAsicEventRecord> last_event_;
     std::uint64_t next_sequence_ = 1u;
     std::uint64_t last_guest_cycle_ = 0u;
+    std::size_t event_capacity_ = product_event_capacity;
+    std::uint64_t total_events_ = 0u;
+    std::uint64_t dropped_events_ = 0u;
 };
 
 [[nodiscard]] std::shared_ptr<DreamcastSystemAsic>

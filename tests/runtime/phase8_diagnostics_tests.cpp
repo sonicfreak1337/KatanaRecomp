@@ -61,8 +61,16 @@ int main() {
     cpu.pr = 0x8C010004u;
     cpu.r[3] = 0x12345678u;
     cpu.exception_generation = 9u;
+    cpu.last_exception_generation = 9u;
     cpu.exception_in_delay_slot = true;
     cpu.last_exception_cause = ExceptionCause::AddressErrorRead;
+    cpu.last_exception_instruction_pc = 0x8C020002u;
+    cpu.last_exception_instruction_physical_pc = 0x0C020002u;
+    cpu.last_exception_owner_pc = 0x8C01FFFEu;
+    cpu.attempted_guest_instructions = 12u;
+    cpu.retired_guest_instructions = 10u;
+    cpu.total_guest_cycles = 19u;
+    cpu.pending_guest_cycles = 3u;
     CrashReportContext crash_context;
     crash_context.stop_code = "memory-fault";
     crash_context.block_address = BlockAddress{0x8C020000u, 0x8C020000u};
@@ -76,14 +84,30 @@ int main() {
     crash_context.dispatch_action = "interpreter";
     const auto crash = capture_crash_report(cpu, crash_context);
     const auto crash_json = serialize_crash_report(crash);
-    require(crash.context.delay_slot_owner_pc == cpu.spc &&
+    require(crash.context.delay_slot_owner_pc == cpu.last_exception_owner_pc &&
                 crash.context.block_address->physical_address == 0x0C020000u &&
-                crash_json.find("\"delay_slot_owner_pc\":\"0x8C020000\"") != std::string::npos &&
+                crash_json.find("\"delay_slot_owner_pc\":\"0x8C01FFFE\"") !=
+                    std::string::npos &&
                 crash_json.find("\"watchpoint_generation\":3") != std::string::npos &&
                 crash_json.find("\"pending_events\":2") != std::string::npos &&
                 crash_json.find("\"exception_generation\":9") != std::string::npos &&
+                crash_json.find("\"last_exception_instruction_pc\":\"0x8C020002\"") !=
+                    std::string::npos &&
+                crash_json.find("\"last_exception_instruction_physical_pc\":\"0x0C020002\"") !=
+                    std::string::npos &&
+                crash_json.find("\"attempted_guest_instructions\":12") !=
+                    std::string::npos &&
+                crash_json.find("\"retired_guest_instructions\":10") != std::string::npos &&
+                crash_json.find("\"total_guest_cycles\":19") != std::string::npos &&
+                crash_json.find("\"pending_guest_cycles\":3") != std::string::npos &&
                 crash_json.find("address-error-read") != std::string::npos,
             "Crashbericht verliert Delay-Slot-Owner, kanonische Adresse oder Laufzeitkontext.");
+    cpu.last_exception_owner_pc = 0u;
+    cpu.spc = 0x8C020000u;
+    const auto zero_owner_crash = capture_crash_report(cpu, crash_context);
+    require(zero_owner_crash.context.delay_slot_owner_pc == 0u,
+            "Ein gueltiger Fault-Owner an Adresse null wird durch den SPC-Fallback ersetzt.");
+    cpu.last_exception_owner_pc = 0x8C01FFFEu;
     auto incomplete = crash_context;
     incomplete.block_variant.reset();
     require_failure<std::invalid_argument>(

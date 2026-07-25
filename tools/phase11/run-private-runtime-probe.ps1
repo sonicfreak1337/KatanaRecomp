@@ -1473,11 +1473,19 @@ function Invoke-BudgetedRuntime {
         [uint64]$GuestCycleBudget,
         [bool]$DiagnosticsEnabled,
         [int]$TimeoutSeconds,
-        [int]$MaximumCaptureCharacters = $script:MaximumCaptureCharacters
+        [int]$MaximumCaptureCharacters = $script:MaximumCaptureCharacters,
+        [Threading.EventWaitHandle]$ReadinessSignal = $null,
+        [int]$ReadinessTimeoutSeconds = 0
     )
     if ($MaximumCaptureCharacters -lt 1 -or
         $MaximumCaptureCharacters -gt $script:MaximumCaptureCharacters) {
         Throw-ProbeFailure 'invalid-runtime-capture-limit'
+    }
+    $readinessRequired = $null -ne $ReadinessSignal
+    if (($readinessRequired -and
+            ($ReadinessTimeoutSeconds -lt 1 -or $ReadinessTimeoutSeconds -gt 30)) -or
+        (-not $readinessRequired -and $ReadinessTimeoutSeconds -ne 0)) {
+        Throw-ProbeFailure 'invalid-runtime-readiness'
     }
     $launch = New-RuntimeProcessStartInfo $Executable $Arguments $WorkingDirectory `
         $BaseEnvironment $GuestCycleBudget $DiagnosticsEnabled
@@ -1488,6 +1496,8 @@ function Invoke-BudgetedRuntime {
     $job = [IntPtr]::Zero
     $jobClosed = $false
     $clock = [Diagnostics.Stopwatch]::StartNew()
+    $readinessObserved = -not $readinessRequired
+    $budgetStartMilliseconds = [int64]0
     try {
         try {
             $job = [KatanaProbeProcess.RuntimeSupport]::CreateKillOnCloseJob()
@@ -1519,20 +1529,49 @@ function Invoke-BudgetedRuntime {
         }
 
         $deadlineMilliseconds = [int64]$TimeoutSeconds * 1000
+        $readinessDeadlineMilliseconds = [int64]$ReadinessTimeoutSeconds * 1000
         $finished = $false
         $timedOut = $false
         $captureFailed = $false
         while (-not $finished -and -not $timedOut -and -not $captureFailed) {
+            if (-not $readinessObserved -and $ReadinessSignal.WaitOne(0)) {
+                $readinessObserved = $true
+                $budgetStartMilliseconds = $clock.ElapsedMilliseconds
+            }
             if ($stdoutTask.IsFaulted -or $stdoutTask.IsCanceled -or
                 $stderrTask.IsFaulted -or $stderrTask.IsCanceled) {
                 $captureFailed = $true
                 break
             }
             if ($process.HasExited) {
+                if (-not $readinessObserved -and $ReadinessSignal.WaitOne(0)) {
+                    $readinessObserved = $true
+                    $budgetStartMilliseconds = $clock.ElapsedMilliseconds
+                }
+                if (-not $readinessObserved) {
+                    Throw-ProbeFailure 'runtime-readiness-missing'
+                }
                 $finished = $true
                 break
             }
-            $remaining = $deadlineMilliseconds - $clock.ElapsedMilliseconds
+            if (-not $readinessObserved) {
+                $remainingReadiness =
+                    $readinessDeadlineMilliseconds - $clock.ElapsedMilliseconds
+                if ($remainingReadiness -le 0) {
+                    if ($ReadinessSignal.WaitOne(0)) {
+                        $readinessObserved = $true
+                        $budgetStartMilliseconds = $clock.ElapsedMilliseconds
+                        continue
+                    }
+                    Throw-ProbeFailure 'runtime-readiness-timeout'
+                }
+                [void]$process.WaitForExit(
+                    [int][Math]::Min(50, $remainingReadiness))
+                continue
+            }
+            $budgetElapsedMilliseconds =
+                $clock.ElapsedMilliseconds - $budgetStartMilliseconds
+            $remaining = $deadlineMilliseconds - $budgetElapsedMilliseconds
             if ($remaining -le 0) {
                 $timedOut = $true
                 break
@@ -2443,13 +2482,16 @@ function Assert-SelfTestProcessTerminated {
 function New-SelfTestDescendantCommand {
     param(
         [string]$PidFile,
-        [bool]$RootExits
+        [bool]$RootExits,
+        [string]$ReadinessGateName
     )
     $hostPath = [Diagnostics.Process]::GetCurrentProcess().MainModule.FileName
     $hostBase64 =
         [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($hostPath))
     $pidBase64 =
         [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($PidFile))
+    $readinessBase64 =
+        [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($ReadinessGateName))
     $grandchildCommand = 'Start-Sleep -Seconds 30'
     $grandchildEncoded = [Convert]::ToBase64String(
         [Text.Encoding]::Unicode.GetBytes($grandchildCommand))
@@ -2459,11 +2501,19 @@ function New-SelfTestDescendantCommand {
     [Convert]::FromBase64String('$hostBase64'))
 `$pidFile = [Text.Encoding]::UTF8.GetString(
     [Convert]::FromBase64String('$pidBase64'))
-`$child = Start-Process -FilePath `$hostPath -ArgumentList (
-    '-NoProfile -NonInteractive -EncodedCommand $grandchildEncoded') -PassThru -WindowStyle Hidden
-[IO.File]::WriteAllText(
-    `$pidFile,
-    `$child.Id.ToString([Globalization.CultureInfo]::InvariantCulture))
+`$readinessGateName = [Text.Encoding]::UTF8.GetString(
+    [Convert]::FromBase64String('$readinessBase64'))
+`$readinessGate = [Threading.EventWaitHandle]::OpenExisting(`$readinessGateName)
+try {
+    `$child = Start-Process -FilePath `$hostPath -ArgumentList (
+        '-NoProfile -NonInteractive -EncodedCommand $grandchildEncoded') -PassThru -WindowStyle Hidden
+    [IO.File]::WriteAllText(
+        `$pidFile,
+        `$child.Id.ToString([Globalization.CultureInfo]::InvariantCulture))
+    if (-not `$readinessGate.Set()) { throw 'self-test-readiness-signal-failed' }
+} finally {
+    `$readinessGate.Dispose()
+}
 $tail
 "@
 }
@@ -2475,8 +2525,27 @@ function Invoke-JobAndCaptureSelfTest {
         'katana-runtime-probe-timeout-' + [guid]::NewGuid().ToString('N') + '.pid')
     $exitPid = Join-Path ([IO.Path]::GetTempPath()) (
         'katana-runtime-probe-exit-' + [guid]::NewGuid().ToString('N') + '.pid')
+    $timeoutReadinessName =
+        'Local\KatanaRuntimeProbeSelfTest-' + [guid]::NewGuid().ToString('N')
+    $exitReadinessName =
+        'Local\KatanaRuntimeProbeSelfTest-' + [guid]::NewGuid().ToString('N')
+    $timeoutReadiness = $null
+    $exitReadiness = $null
     try {
-        $timeoutCommand = New-SelfTestDescendantCommand $timeoutPid $false
+        try {
+            $timeoutReadiness = [Threading.EventWaitHandle]::new(
+                $false,
+                [Threading.EventResetMode]::ManualReset,
+                $timeoutReadinessName)
+            $exitReadiness = [Threading.EventWaitHandle]::new(
+                $false,
+                [Threading.EventResetMode]::ManualReset,
+                $exitReadinessName)
+        } catch {
+            Throw-ProbeFailure 'self-test-readiness-gate-create-failed'
+        }
+        $timeoutCommand = New-SelfTestDescendantCommand `
+            $timeoutPid $false $timeoutReadinessName
         $timeoutResult = Invoke-BudgetedRuntime `
             $hostExecutable `
             @('-NoProfile', '-NonInteractive', '-Command', $timeoutCommand) `
@@ -2485,14 +2554,17 @@ function Invoke-JobAndCaptureSelfTest {
             1 `
             $false `
             2 `
-            4096
+            4096 `
+            $timeoutReadiness `
+            10
         if (-not $timeoutResult.timed_out -or
-            $timeoutResult.elapsed_milliseconds -gt 12000) {
+            $timeoutResult.elapsed_milliseconds -gt 18000) {
             Throw-ProbeFailure 'self-test-timeout'
         }
         Assert-SelfTestProcessTerminated $timeoutPid
 
-        $exitCommand = New-SelfTestDescendantCommand $exitPid $true
+        $exitCommand = New-SelfTestDescendantCommand `
+            $exitPid $true $exitReadinessName
         $exitResult = Invoke-BudgetedRuntime `
             $hostExecutable `
             @('-NoProfile', '-NonInteractive', '-Command', $exitCommand) `
@@ -2501,7 +2573,9 @@ function Invoke-JobAndCaptureSelfTest {
             1 `
             $false `
             5 `
-            4096
+            4096 `
+            $exitReadiness `
+            10
         if ($exitResult.timed_out -or $exitResult.exit_code -ne 0) {
             Throw-ProbeFailure 'self-test-root-exit'
         }
@@ -2541,6 +2615,8 @@ function Invoke-JobAndCaptureSelfTest {
             Throw-ProbeFailure 'self-test-capture-limit'
         }
     } finally {
+        if ($null -ne $timeoutReadiness) { $timeoutReadiness.Dispose() }
+        if ($null -ne $exitReadiness) { $exitReadiness.Dispose() }
         foreach ($pidFile in @($timeoutPid, $exitPid)) {
             if (Test-Path -LiteralPath $pidFile -PathType Leaf) {
                 Remove-Item -LiteralPath $pidFile -Force

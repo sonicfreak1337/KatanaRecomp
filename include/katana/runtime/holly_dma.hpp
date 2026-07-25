@@ -135,6 +135,7 @@ struct DreamcastPvrDmaSnapshot {
 
 class DreamcastG2DmaController final {
   public:
+    static constexpr std::uint32_t transfer_chunk_bytes = 2048u;
     DreamcastG2DmaController(Memory& memory,
                              EventScheduler& scheduler,
                              HollyDmaTiming timing = {},
@@ -160,7 +161,9 @@ class DreamcastG2DmaController final {
     void complete(std::size_t channel, SchedulerEventId event_id);
     void cancel_events() noexcept;
     void handle_scheduler_reset() noexcept;
-    void fail(std::size_t channel, HollyDmaFaultReason reason, SystemAsicEvent event) noexcept;
+    void fail(std::size_t channel,
+              HollyDmaFaultReason reason,
+              std::optional<SystemAsicEvent> event) noexcept;
     [[nodiscard]] bool protected_system_range(std::uint32_t address,
                                               std::size_t size) const noexcept;
     Memory& memory_;
@@ -251,6 +254,7 @@ class DreamcastG1BusController final {
 
 class DreamcastPvrDmaController final {
   public:
+    static constexpr std::uint32_t transfer_chunk_bytes = 2048u;
     DreamcastPvrDmaController(Memory& memory,
                               EventScheduler& scheduler,
                               HollyDmaTiming timing = {},
@@ -266,13 +270,16 @@ class DreamcastPvrDmaController final {
     [[nodiscard]] HollyDmaChannelState state() const noexcept;
     [[nodiscard]] const std::optional<HollyDmaFault>& last_fault() const noexcept;
     [[nodiscard]] DreamcastPvrDmaSnapshot snapshot() const noexcept;
+    void set_suspended(bool suspended);
+    void abort() noexcept;
 
   private:
     void start();
+    void schedule_chunk(std::uint64_t cycles = 0u);
     void complete(SchedulerEventId event_id);
     void cancel() noexcept;
     void handle_scheduler_reset() noexcept;
-    void fail(HollyDmaFaultReason reason, SystemAsicEvent event) noexcept;
+    void fail(HollyDmaFaultReason reason, std::optional<SystemAsicEvent> event) noexcept;
     [[nodiscard]] bool protected_system_range(std::uint32_t address,
                                               std::size_t size) const noexcept;
     Memory& memory_;
@@ -289,10 +296,13 @@ class DreamcastPvrDmaController final {
     std::uint32_t trigger_select_ = 0u;
     std::uint32_t enabled_ = 0u;
     std::uint32_t active_ = 0u;
+    std::uint32_t suspend_ = 0u;
     std::uint32_t address_protect_ = 0x00007F00u;
     std::uint32_t pvr_counter_ = 0u;
     std::uint32_t system_counter_ = 0u;
     std::uint32_t remaining_ = 0u;
+    std::uint64_t completion_cycle_ = 0u;
+    std::uint64_t remaining_cycles_ = 0u;
     HollyDmaFaultReason fault_ = HollyDmaFaultReason::None;
     std::uint64_t fault_count_ = 0u;
     std::optional<HollyDmaFault> last_fault_;

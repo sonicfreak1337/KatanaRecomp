@@ -38,6 +38,8 @@ struct ExceptionRequest {
     std::optional<std::uint32_t> fault_address;
     bool interrupt = false;
     bool in_delay_slot = false;
+    std::optional<std::uint32_t> instruction_pc;
+    std::optional<std::uint32_t> delay_slot_owner_pc;
 };
 
 struct ExceptionMetadata {
@@ -51,6 +53,7 @@ struct ExceptionMetadata {
 exception_metadata(ExceptionCause cause, std::uint32_t interrupt_event_code = 0u) noexcept;
 
 void enter_exception(CpuState& cpu, const ExceptionRequest& request) noexcept;
+void request_manual_reset(CpuState& cpu, const ManualResetRequest& request) noexcept;
 
 void raise_trapa(CpuState& cpu, std::uint8_t immediate, std::uint32_t instruction_pc) noexcept;
 

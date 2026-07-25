@@ -15,6 +15,54 @@ namespace {
 
 constexpr std::uint32_t physical_page_size = 4096u;
 
+class ScopedBlockExceptionGeneration final {
+  public:
+    ScopedBlockExceptionGeneration(BlockExecutionContext& context,
+                                   const std::uint64_t generation) noexcept
+        : context_(context), previous_(context.exception_generation_on_entry) {
+        context_.exception_generation_on_entry = generation;
+    }
+
+    ~ScopedBlockExceptionGeneration() noexcept {
+        context_.exception_generation_on_entry = previous_;
+    }
+
+    ScopedBlockExceptionGeneration(const ScopedBlockExceptionGeneration&) = delete;
+    ScopedBlockExceptionGeneration& operator=(const ScopedBlockExceptionGeneration&) = delete;
+
+  private:
+    BlockExecutionContext& context_;
+    std::optional<std::uint64_t> previous_;
+};
+
+class ScopedActiveBlockProvenance final {
+  public:
+    ScopedActiveBlockProvenance(CpuState& cpu, const RuntimeBlock& block) noexcept
+        : cpu_(cpu),
+          previous_virtual_start_(cpu.active_block_virtual_start),
+          previous_physical_start_(cpu.active_block_physical_start),
+          previous_size_(cpu.active_block_size) {
+        cpu_.active_block_virtual_start = block.virtual_start;
+        cpu_.active_block_physical_start = block.physical_origin;
+        cpu_.active_block_size = block.size;
+    }
+
+    ~ScopedActiveBlockProvenance() noexcept {
+        cpu_.active_block_virtual_start = previous_virtual_start_;
+        cpu_.active_block_physical_start = previous_physical_start_;
+        cpu_.active_block_size = previous_size_;
+    }
+
+    ScopedActiveBlockProvenance(const ScopedActiveBlockProvenance&) = delete;
+    ScopedActiveBlockProvenance& operator=(const ScopedActiveBlockProvenance&) = delete;
+
+  private:
+    CpuState& cpu_;
+    std::uint32_t previous_virtual_start_;
+    std::uint32_t previous_physical_start_;
+    std::uint32_t previous_size_;
+};
+
 auto order_key(const RuntimeBlock& block) {
     return std::tie(block.virtual_start,
                     block.variant.address_space_generation,
@@ -90,6 +138,9 @@ BlockExit execute_runtime_block(const RuntimeBlock& block,
     if (block.function == nullptr) {
         throw std::invalid_argument("Runtimeblock besitzt keine ausfuehrbare Backendfunktion.");
     }
+    const ScopedBlockExceptionGeneration exception_generation(
+        context, cpu.exception_generation);
+    const ScopedActiveBlockProvenance active_block(cpu, block);
     if (!block.aot_template) return block.function(cpu, context);
     const ScopedCodeAddressMapping mapping(block.aot_template->mapping);
     return block.function(cpu, context);

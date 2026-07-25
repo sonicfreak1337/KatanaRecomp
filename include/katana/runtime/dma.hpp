@@ -112,6 +112,11 @@ class Sh4Dmac final {
     void write_count(std::size_t channel, std::uint32_t value);
     void write_control(std::size_t channel, std::uint32_t value);
     void write_operation(std::uint32_t value);
+    void start_byte_transfer(std::size_t channel,
+                             std::uint32_t source,
+                             std::uint32_t destination,
+                             std::uint32_t byte_count,
+                             bool interrupt_on_completion = true);
 
     [[nodiscard]] std::uint32_t source(std::size_t channel) const;
     [[nodiscard]] std::uint32_t destination(std::size_t channel) const;
@@ -135,6 +140,9 @@ class Sh4Dmac final {
                                                   std::size_t bytes,
                                                   std::size_t unit_size,
                                                   std::uint8_t expected_request_source = 8u) noexcept;
+    [[nodiscard]] bool progress_external_transfer(std::size_t channel,
+                                                  std::size_t bytes) noexcept;
+    [[nodiscard]] bool finish_external_transfer(std::size_t channel) noexcept;
     void complete_external_transfer(std::size_t channel, std::size_t bytes) noexcept;
     void report_external_fault(std::size_t channel,
                                DmaFaultReason reason,

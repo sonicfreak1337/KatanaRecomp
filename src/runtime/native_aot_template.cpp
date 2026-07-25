@@ -112,9 +112,9 @@ bool linear_instruction_mapping(const CpuState& cpu,
             translated =
                 cpu.address_space
                     ? cpu.address_space
-                          ->translate(virtual_start + offset,
-                                      TranslationAccess::Instruction,
-                                      cpu.privileged_mode())
+                          ->inspect_translation(virtual_start + offset,
+                                                TranslationAccess::Instruction,
+                                                cpu.privileged_mode())
                           .physical_address
                     : canonical_physical_address(virtual_start + offset);
         } catch (const TranslationError&) {
@@ -209,6 +209,7 @@ NativeAotTemplateBindResult NativeAotTemplateBinder::bind(
     if ((target & 1u) != 0u || (physical_origin & 1u) != 0u ||
         (definition.source_start & 3u) != 0u || (mapping.runtime_start & 3u) != 0u ||
         (definition.extent & 3u) != 0u || definition.extent > maximum_template_extent ||
+        definition.source_module_id.empty() || definition.expected_source_identity.empty() ||
         !direct_mapped_alias_range(definition.source_start, definition.extent) ||
         (definition.destination == NativeAotTemplateDestination::VbrRelative &&
          !direct_mapped_alias_range(mapping.runtime_start, mapping.extent)) ||
@@ -224,7 +225,9 @@ NativeAotTemplateBindResult NativeAotTemplateBinder::bind(
         (definition.destination == NativeAotTemplateDestination::LoadedModule &&
          (definition.destination_vbr_delta != 0 ||
           definition.expected_runtime_content_identity.empty() ||
-          definition.expected_runtime_byte_identity.empty() || !definition.patches.empty())) ||
+          definition.expected_runtime_byte_identity.empty() ||
+          definition.expected_source_identity != definition.expected_runtime_byte_identity ||
+          !definition.patches.empty())) ||
         definition.patches.size() > maximum_patch_slots)
         return reject(NativeAotTemplateBindFailure::InvalidDefinition);
 
@@ -265,18 +268,21 @@ NativeAotTemplateBindResult NativeAotTemplateBinder::bind(
             return reject(NativeAotTemplateBindFailure::InvalidDefinition);
     }
 
-    const auto* source_module = modules_.find(definition.source_module_id);
-    if (source_module == nullptr)
-        return reject(NativeAotTemplateBindFailure::SourceModuleMissing);
-    if (definition.expected_source_identity.empty() ||
-        source_module->source_identity != definition.expected_source_identity)
-        return reject(NativeAotTemplateBindFailure::SourceIdentityMismatch);
-    if (!source_module->relocations.empty())
-        return reject(NativeAotTemplateBindFailure::InvalidDefinition);
-    const auto source_module_offset =
-        module_offset(*source_module, definition.source_start, definition.extent);
-    if (!source_module_offset.has_value())
-        return reject(NativeAotTemplateBindFailure::SourceIdentityMismatch);
+    const ExecutableModule* source_module = nullptr;
+    std::optional<std::uint32_t> source_module_offset;
+    if (definition.destination == NativeAotTemplateDestination::VbrRelative) {
+        source_module = modules_.find(definition.source_module_id);
+        if (source_module == nullptr)
+            return reject(NativeAotTemplateBindFailure::SourceModuleMissing);
+        if (source_module->source_identity != definition.expected_source_identity)
+            return reject(NativeAotTemplateBindFailure::SourceIdentityMismatch);
+        if (!source_module->relocations.empty())
+            return reject(NativeAotTemplateBindFailure::InvalidDefinition);
+        source_module_offset =
+            module_offset(*source_module, definition.source_start, definition.extent);
+        if (!source_module_offset.has_value())
+            return reject(NativeAotTemplateBindFailure::SourceIdentityMismatch);
+    }
 
     const auto block_offset = target - mapping.runtime_start;
     if (physical_origin < block_offset)
@@ -289,39 +295,41 @@ NativeAotTemplateBindResult NativeAotTemplateBinder::bind(
     if (!cpu_.memory.contains(runtime_physical, definition.extent))
         return reject(NativeAotTemplateBindFailure::RuntimeBytesMismatch);
 
-    const auto validate_run = [&](const std::uint32_t offset,
-                                  const std::uint32_t size,
-                                  const bool require_original_identity)
-        -> NativeAotTemplateBindFailure {
-        if (size == 0u) return NativeAotTemplateBindFailure::None;
-        if (require_original_identity &&
-            !source_module->contains(definition.source_start + offset, size))
-            return NativeAotTemplateBindFailure::SourceIdentityMismatch;
-        for (std::uint32_t byte = 0u; byte < size; ++byte) {
-            const auto current = offset + byte;
-            const auto runtime_byte = cpu_.memory.read_u8(runtime_physical + current);
+    if (definition.destination == NativeAotTemplateDestination::VbrRelative) {
+        const auto validate_run = [&](const std::uint32_t offset,
+                                      const std::uint32_t size,
+                                      const bool require_original_identity)
+            -> NativeAotTemplateBindFailure {
+            if (size == 0u) return NativeAotTemplateBindFailure::None;
             if (require_original_identity &&
-                runtime_byte != source_module->bytes[*source_module_offset + current])
-                return NativeAotTemplateBindFailure::RuntimeBytesMismatch;
+                !source_module->contains(definition.source_start + offset, size))
+                return NativeAotTemplateBindFailure::SourceIdentityMismatch;
+            for (std::uint32_t byte = 0u; byte < size; ++byte) {
+                const auto current = offset + byte;
+                const auto runtime_byte = cpu_.memory.read_u8(runtime_physical + current);
+                if (require_original_identity &&
+                    runtime_byte != source_module->bytes[*source_module_offset + current])
+                    return NativeAotTemplateBindFailure::RuntimeBytesMismatch;
+            }
+            return NativeAotTemplateBindFailure::None;
+        };
+        std::uint32_t validation_cursor = 0u;
+        for (const auto* patch : ordered_patches) {
+            const auto prefix = patch->source_offset - validation_cursor;
+            if (const auto failure = validate_run(validation_cursor, prefix, true);
+                failure != NativeAotTemplateBindFailure::None)
+                return reject(failure);
+            if (const auto failure =
+                    validate_run(patch->source_offset, sizeof(std::uint32_t), false);
+                failure != NativeAotTemplateBindFailure::None)
+                return reject(failure);
+            validation_cursor = patch->source_offset + sizeof(std::uint32_t);
         }
-        return NativeAotTemplateBindFailure::None;
-    };
-    std::uint32_t validation_cursor = 0u;
-    for (const auto* patch : ordered_patches) {
-        const auto prefix = patch->source_offset - validation_cursor;
-        if (const auto failure = validate_run(validation_cursor, prefix, true);
-            failure != NativeAotTemplateBindFailure::None)
-            return reject(failure);
         if (const auto failure =
-                validate_run(patch->source_offset, sizeof(std::uint32_t), false);
+                validate_run(validation_cursor, definition.extent - validation_cursor, true);
             failure != NativeAotTemplateBindFailure::None)
             return reject(failure);
-        validation_cursor = patch->source_offset + sizeof(std::uint32_t);
     }
-    if (const auto failure =
-            validate_run(validation_cursor, definition.extent - validation_cursor, true);
-        failure != NativeAotTemplateBindFailure::None)
-        return reject(failure);
 
     for (const auto* patch : ordered_patches) {
         const auto runtime_value = read_u32(cpu_.memory, runtime_physical + patch->source_offset);
@@ -357,11 +365,20 @@ NativeAotTemplateBindResult NativeAotTemplateBinder::bind(
         source_block->get().physical_origin != canonical_physical_address(source_address) ||
         source_block->get().size < 2u || (source_block->get().size & 1u) != 0u ||
         source_block->get().size > definition.extent - offset ||
-        source_block->get().size > target_suffix.size() ||
-        !source_module->materializable(source_address, source_block->get().size))
+        source_block->get().size > target_suffix.size())
         return reject(definition.destination == NativeAotTemplateDestination::LoadedModule
                           ? NativeAotTemplateBindFailure::MissingAot
                           : NativeAotTemplateBindFailure::SourceBlockMissing);
+    std::optional<std::uint32_t> loaded_block_offset;
+    if (definition.destination == NativeAotTemplateDestination::LoadedModule) {
+        loaded_block_offset =
+            module_offset(*loaded_module, physical_origin, source_block->get().size);
+        if (!loaded_block_offset.has_value() ||
+            !loaded_module->materializable(physical_origin, source_block->get().size))
+            return reject(NativeAotTemplateBindFailure::MissingAot);
+    } else if (!source_module->materializable(source_address, source_block->get().size)) {
+        return reject(NativeAotTemplateBindFailure::SourceBlockMissing);
+    }
     const auto source_block_end = static_cast<std::uint64_t>(offset) + source_block->get().size;
     if (std::any_of(ordered_patches.begin(), ordered_patches.end(), [&](const auto* patch) {
             const auto patch_end = static_cast<std::uint64_t>(patch->source_offset) +
@@ -370,7 +387,9 @@ NativeAotTemplateBindResult NativeAotTemplateBinder::bind(
         }))
         return reject(NativeAotTemplateBindFailure::SourceBlockMissing);
     for (std::uint32_t byte = 0u; byte < source_block->get().size; ++byte) {
-        if (target_suffix[byte] != cpu_.memory.read_u8(runtime_physical + offset + byte))
+        if (target_suffix[byte] != cpu_.memory.read_u8(runtime_physical + offset + byte) ||
+            (loaded_block_offset.has_value() &&
+             target_suffix[byte] != loaded_module->bytes[*loaded_block_offset + byte]))
             return reject(NativeAotTemplateBindFailure::RuntimeBytesMismatch);
     }
 

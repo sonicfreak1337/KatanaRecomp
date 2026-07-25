@@ -1,4 +1,5 @@
 #include "katana/runtime/bios_abi.hpp"
+#include "katana/runtime/block_guards.hpp"
 #include "katana/runtime/code_invalidation.hpp"
 #include "katana/runtime/dreamcast_boot.hpp"
 #include "katana/runtime/dreamcast_memory.hpp"
@@ -24,6 +25,7 @@ void require(const bool condition, const std::string& message) {
 int main() {
     using namespace katana::runtime;
     CpuState cpu;
+    cpu.write_sr(sr_md_mask);
     cpu.memory = Memory(0u);
     static_cast<void>(map_dreamcast_main_ram(cpu.memory));
     std::vector<std::uint8_t> flash_bytes(dreamcast_flash_size, 0xFFu);
@@ -96,8 +98,14 @@ int main() {
     const auto init_handle = blocks.lookup(vectors[0].handler_address, {});
     const auto init_block = init_handle ? blocks.resolve(*init_handle) : std::nullopt;
     require(init_block.has_value(), "Installierter BIOS-ABI-Block ist nicht aufloesbar.");
-    const auto init_exit = init_block->get().function(cpu, context);
-    require(init_exit.kind == BlockEndKind::Return && cpu.pc == cpu.pr && cpu.r[0] == 0u,
+    const auto init_exit = execute_runtime_block(init_block->get(), cpu, context);
+    require(init_exit.kind == BlockEndKind::Return &&
+                init_exit.source ==
+                    BlockAddress{vectors[0].handler_address,
+                                 canonical_physical_address(vectors[0].handler_address)} &&
+                init_exit.target ==
+                    BlockAddress{cpu.pr, canonical_physical_address(cpu.pr)} &&
+                context.sync_point == BlockSyncPoint::Exit && cpu.pc == cpu.pr && cpu.r[0] == 0u,
             "Installierter BIOS-ABI-Runtimeblock kehrt nicht ueber den gemeinsamen Blockvertrag "
             "zurueck.");
     require(cpu.memory.read_u8(0x8C000068u) == 0xA0u && cpu.memory.read_u8(0x8C00006Fu) == 0xA7u &&
@@ -105,7 +113,7 @@ int main() {
             "SYSINFO_INIT baut den 24-Byte-Systemblock nicht aus Flash und Nullpadding auf.");
     cpu.pc = vectors[0].handler_address;
     cpu.r[7] = 3u;
-    static_cast<void>(init_block->get().function(cpu, context));
+    static_cast<void>(execute_runtime_block(init_block->get(), cpu, context));
     require(cpu.r[0] == 0x8C000068u, "SYSINFO_ID liefert nicht den initialisierten Systemblock.");
     cpu.pc = vectors[0].handler_address;
     cpu.r[7] = 2u;
@@ -116,7 +124,7 @@ int main() {
     require(icon.status == BiosAbiServiceStatus::ServiceUnavailable,
             "Nicht implementierter SYSINFO_ICON-Dienst behauptet weiterhin Erfolg.");
     try {
-        static_cast<void>(init_block->get().function(cpu, context));
+        static_cast<void>(execute_runtime_block(init_block->get(), cpu, context));
         require(false, "SYSINFO_ICON kehrt ohne geschriebene 704 Bytes erfolgreich zurueck.");
     } catch (const BiosAbiDispatchError& error) {
         require(std::string(error.what()).find("service-unavailable:sysinfo-icon") !=
@@ -132,7 +140,7 @@ int main() {
         cpu.pc = vectors[2].handler_address;
         cpu.pr = 0x8C010000u;
         cpu.r[7] = selector;
-        return flash_block->get().function(cpu, context);
+        return execute_runtime_block(flash_block->get(), cpu, context);
     };
     cpu.r[4] = 3u;
     cpu.r[5] = 0x8C002000u;
@@ -177,6 +185,64 @@ int main() {
     static_cast<void>(invoke_flash(1u));
     require(cpu.r[0] == 0xFFFFFFFFu, "FLASHROM_READ akzeptiert einen ueberlaufenden Flashbereich.");
 
+    const auto bios_buffer_address_space = cpu.address_space;
+    const auto bios_buffer_sr = cpu.sr;
+    cpu.address_space = std::make_shared<RuntimeAddressSpace>();
+    cpu.write_sr(sr_md_mask);
+    cpu.address_space->set_mode(AddressTranslationMode::Mmu);
+    cpu.address_space->write_mmucr(1u);
+    cpu.address_space->ldtlb(
+        {0x00100000u, 0x0C008000u, 4096u, 0u, 0u, true, true, true, true, true, true, false});
+    constexpr std::uint32_t mmu_flash_buffer = 0x00100100u;
+    constexpr std::uint32_t mmu_flash_physical = 0x0C008100u;
+    cpu.memory.write_u8(mmu_flash_physical, 0x5Au);
+    cpu.r[4] = 0x31u;
+    cpu.r[5] = mmu_flash_buffer;
+    cpu.r[6] = 1u;
+    static_cast<void>(invoke_flash(2u));
+    cpu.r[4] = 0x20u;
+    cpu.r[5] = mmu_flash_buffer + 4u;
+    cpu.r[6] = 2u;
+    static_cast<void>(invoke_flash(1u));
+    require(cpu.r[0] == 2u &&
+                cpu.memory.read_u8(dreamcast_flash_physical_base + 0x31u) == 0x5Au &&
+                cpu.memory.read_u16(mmu_flash_physical + 4u) == 0x3412u,
+            "Flash-BIOS-Read/-Write folgt aktiven MMU-Abbildungen nicht.");
+
+    cpu.address_space->ldtlb(
+        {0x00200000u, 0x0C009000u, 4096u, 0u, 1u, true, true, true, true, true, true, false});
+    cpu.address_space->ldtlb(
+        {0x00201000u, 0x0C00B000u, 4096u, 0u, 2u, true, true, true, true, true, true, false});
+    constexpr std::uint32_t nonlinear_info_buffer = 0x00200FFCu;
+    constexpr std::uint32_t nonlinear_info_first = 0x0C009FFCu;
+    constexpr std::uint32_t nonlinear_info_second = 0x0C00B000u;
+    cpu.memory.write_u32(nonlinear_info_first, 0xA5A5A5A5u);
+    cpu.memory.write_u32(nonlinear_info_second, 0x5A5A5A5Au);
+    cpu.r[4] = 3u;
+    cpu.r[5] = nonlinear_info_buffer;
+    static_cast<void>(invoke_flash(0u));
+    require(cpu.r[0] == 0xFFFFFFFFu &&
+                cpu.memory.read_u32(nonlinear_info_first) == 0xA5A5A5A5u &&
+                cpu.memory.read_u32(nonlinear_info_second) == 0x5A5A5A5Au,
+            "Nichtlineare Mehrwort-BIOS-Ausgabe schreibt vor der spaeten "
+            "Bereichsablehnung partiell.");
+
+    std::uint32_t bios_mmio_writes = 0u;
+    auto bios_mmio = std::make_shared<MmioMemoryDevice>(
+        4096u,
+        [](const auto, const auto) { return 0u; },
+        [&](const auto, const auto, const auto) { ++bios_mmio_writes; });
+    cpu.memory.map_region("bios-guest-mmio", 0x01000000u, bios_mmio);
+    cpu.address_space->ldtlb(
+        {0x00300000u, 0x01000000u, 4096u, 0u, 3u, true, true, true, true, true, true, false});
+    cpu.r[4] = 3u;
+    cpu.r[5] = 0x00300000u;
+    static_cast<void>(invoke_flash(0u));
+    require(cpu.r[0] == 0xFFFFFFFFu && bios_mmio_writes == 0u,
+            "BIOS-Gastziel akzeptiert MMIO oder schreibt vor der Ablehnung.");
+    cpu.address_space = bios_buffer_address_space;
+    cpu.write_sr(bios_buffer_sr);
+
     const auto system_handle = blocks.lookup(vectors[5].handler_address, {});
     const auto system_block = system_handle ? blocks.resolve(*system_handle) : std::nullopt;
     require(system_block.has_value(), "System-BIOS-ABI-Block ist nicht aufloesbar.");
@@ -201,7 +267,7 @@ int main() {
     require(system_init.selector == 0u && system_init.service == "system-normal-init" &&
                 system_init.status == BiosAbiServiceStatus::Completed,
             "Systemvektor liest den Funktionsselektor nicht aus r4.");
-    static_cast<void>(system_block->get().function(cpu, context));
+    static_cast<void>(execute_runtime_block(system_block->get(), cpu, context));
     require(cpu.r[0] == 0x00C0BEBCu && cpu.pc == cpu.pr &&
                 g1.read(0x04u) == 0x0C004000u && g1.read(0x08u) == 32u &&
                 g1.read(0xF4u) == 0x0C123400u && g1.read(0xF8u) == 0u,
@@ -213,7 +279,7 @@ int main() {
     require(check_disc.service == "system-check-disc" &&
                 check_disc.status == BiosAbiServiceStatus::Completed,
             "System-Disc-Check ist nicht als bekannte Funktion geroutet.");
-    static_cast<void>(system_block->get().function(cpu, context));
+    static_cast<void>(execute_runtime_block(system_block->get(), cpu, context));
     require(cpu.r[0] == 0xFFFFFFFFu,
             "System-Disc-Check meldet ohne angebundenes Laufwerk ein Medium.");
 
@@ -231,7 +297,7 @@ int main() {
                 bios_menu.status == BiosAbiServiceStatus::Completed,
             "SYSTEM 1 ist nicht als nicht zurueckkehrendes BIOS-Menue geroutet.");
     try {
-        static_cast<void>(system_block->get().function(cpu, context));
+        static_cast<void>(execute_runtime_block(system_block->get(), cpu, context));
         require(false, "SYSTEM 1 kehrt in den Gast zurueck.");
     } catch (const PlatformLifecycleExit& exit) {
         const auto& evidence = exit.evidence();
@@ -264,7 +330,7 @@ int main() {
         const auto gdrom_handle = blocks.lookup(vectors[3].handler_address, {});
         const auto gdrom_block = gdrom_handle ? blocks.resolve(*gdrom_handle) : std::nullopt;
         require(gdrom_block.has_value(), "GD-ROM-BIOS-ABI-Block ist nicht aufloesbar.");
-        static_cast<void>(gdrom_block->get().function(cpu, context));
+        static_cast<void>(execute_runtime_block(gdrom_block->get(), cpu, context));
         require(false, "Nicht angebundener GD-ROM-Dienst lief als Erfolg weiter.");
     } catch (const BiosAbiDispatchError& error) {
         require(std::string(error.what()).find("service-unavailable:gdrom-service") !=
@@ -314,7 +380,7 @@ int main() {
         cpu.pc = vectors[3].handler_address;
         cpu.r[6] = 0u;
         cpu.r[7] = selector;
-        return gdrom_block->get().function(cpu, context);
+        return execute_runtime_block(gdrom_block->get(), cpu, context);
     };
 
     cpu.memory.write_u32(callback_parameters, 150u);
@@ -387,7 +453,7 @@ int main() {
     cpu.memory.write_u16(vectors[2].handler_address, 0x0009u);
     cpu.pc = vectors[2].handler_address;
     try {
-        static_cast<void>(flash_block->get().function(cpu, context));
+        static_cast<void>(execute_runtime_block(flash_block->get(), cpu, context));
         require(false,
                 "Mutierte HLE-Handlerbytes bleiben ueber einen alten Funktionshandle "
                 "ausfuehrbar.");

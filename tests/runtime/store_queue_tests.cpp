@@ -6,6 +6,7 @@
 #include <array>
 #include <iostream>
 #include <stdexcept>
+#include <utility>
 #include <vector>
 
 using namespace katana::runtime;
@@ -50,6 +51,7 @@ void require_store_queue_range_write(const GuestMemoryAccessEvent& event,
                                      const bool expected_changed,
                                      const GuestInstructionOrigin instruction,
                                      const std::uint64_t retired_guest_instructions,
+                                     const std::uint64_t attempted_guest_instructions,
                                      const char* const message) {
     require(event.operation == MemoryAccessOperation::Write &&
                 event.access_origin == GuestMemoryAccessOrigin::Memory &&
@@ -62,6 +64,7 @@ void require_store_queue_range_write(const GuestMemoryAccessEvent& event,
                 event.write_source == CodeWriteSource::StoreQueue &&
                 !event.scalar_value_valid && event.bytes_changed == expected_changed &&
                 event.retired_guest_instructions == retired_guest_instructions &&
+                event.attempted_guest_instructions == attempted_guest_instructions &&
                 event.linear_backing != nullptr && event.linear_contiguous &&
                 event.linear_size == expected_size && event.linear_byte_count == 1u,
             message);
@@ -69,6 +72,7 @@ void require_store_queue_range_write(const GuestMemoryAccessEvent& event,
 } // namespace
 
 int main() {
+    static_assert(!noexcept(std::declval<const Sh4StoreQueues&>().snapshot()));
     try {
         Memory memory(0u);
         memory.map_region("ram", 0x0C000000u, std::make_shared<LinearMemoryDevice>(0x20000u));
@@ -118,7 +122,7 @@ int main() {
             static_cast<void>(queues->prefetch(0xE0001002u));
             require(false, "Direktes nicht ausgerichtetes SQ-PREF wurde akzeptiert.");
         } catch (const MemoryAccessError& error) {
-            require(error.reason() == MemoryAccessErrorReason::Unmapped &&
+            require(error.reason() == MemoryAccessErrorReason::Misaligned &&
                         error.operation() == MemoryAccessOperation::Write &&
                         error.address() == 0xE0001002u,
                     "Direktes nicht ausgerichtetes SQ-PREF verliert den Adressfehler.");
@@ -162,9 +166,13 @@ int main() {
         constexpr GuestInstructionOrigin prefetch_origin{
             0x8C012340u, 0x8D012340u, true};
         constexpr std::uint64_t prefetch_retired = 0x123456789ull;
+        constexpr std::uint64_t prefetch_attempted = 0x987654321ull;
         GuestMemoryAccessCapture<4u> direct_accesses;
         memory.set_guest_memory_access_sink(direct_accesses.sink());
-        require(direct->prefetch(0xE0000040u, prefetch_origin, prefetch_retired) &&
+        require(direct->prefetch(0xE0000040u,
+                                 prefetch_origin,
+                                 prefetch_retired,
+                                 prefetch_attempted) &&
                     !direct_tracker.valid("sq-code"),
                 "RAM-SQ-Ziel umgeht Speichernebenwirkung oder Codeinvalidierung.");
         require(direct_accesses.count == 2u && direct_accesses.dropped == 0u,
@@ -176,6 +184,7 @@ int main() {
             true,
             prefetch_origin,
             prefetch_retired,
+            prefetch_attempted,
             "Direktes SQ-PREF verliert Writer-PC, Runtime-PC, Retired-Zahl oder StoreQueue-Quelle.");
         require_store_queue_range_write(
             direct_accesses.events[1u],
@@ -184,8 +193,12 @@ int main() {
             false,
             prefetch_origin,
             prefetch_retired,
+            prefetch_attempted,
             "Direktes SQ-PREF markiert unveraenderte Restbytes als Writer.");
-        require(!direct->prefetch(0x8C000040u, prefetch_origin, prefetch_retired) &&
+        require(!direct->prefetch(0x8C000040u,
+                                  prefetch_origin,
+                                  prefetch_retired,
+                                  prefetch_attempted) &&
                     direct_accesses.count == 2u,
                 "Normales PREF ausserhalb des SQ-Fensters emittiert einen Zielwrite.");
         memory.clear_guest_memory_access_sink();
@@ -226,19 +239,19 @@ int main() {
             static_cast<void>(translate_store_queue_prefetch(no_mmu_cpu, sq_source + 2u));
             require(false, "AT=0-Adressraum akzeptiert ein nicht ausgerichtetes SQ-PREF.");
         } catch (const MemoryAccessError& error) {
-            require(error.reason() == MemoryAccessErrorReason::Unmapped &&
+            require(error.reason() == MemoryAccessErrorReason::Misaligned &&
                         error.operation() == MemoryAccessOperation::Write &&
                         error.address() == sq_source + 2u,
-                    "AT=0-Adressraum verliert den typisierten SQ-Adressfehler.");
+                     "AT=0-Adressraum verliert den typisierten SQ-Adressfehler.");
         }
         try {
             static_cast<void>(translated_queues->prefetch(sq_source + 2u));
             require(false, "Nicht ausgerichtetes SQ-PREF wurde bei AT=0 akzeptiert.");
         } catch (const MemoryAccessError& error) {
-            require(error.reason() == MemoryAccessErrorReason::Unmapped &&
+            require(error.reason() == MemoryAccessErrorReason::Misaligned &&
                         error.operation() == MemoryAccessOperation::Write &&
                         error.address() == sq_source + 2u,
-                    "Nicht ausgerichtetes AT=0-SQ-PREF verliert den typisierten Adressfehler.");
+                     "Nicht ausgerichtetes AT=0-SQ-PREF verliert den typisierten Adressfehler.");
         }
         require(translated_transfers.size() == 1u &&
                     translated_queues->transfer_count() == 1u,
@@ -428,7 +441,10 @@ int main() {
         product_runtime->store_queues->write_p4(
             0xE0000040u, 0x44332211u, MemoryAccessWidth::Word);
         require(product_runtime->store_queues->prefetch(
-                    0xE0000040u, prefetch_origin, prefetch_retired) &&
+                    0xE0000040u,
+                    prefetch_origin,
+                    prefetch_retired,
+                    prefetch_attempted) &&
                     product_runtime->store_queue_transfers->size() == 1u &&
                     product_runtime->store_queue_transfers->front().instruction.source_pc ==
                         prefetch_origin.source_pc &&
@@ -436,6 +452,8 @@ int main() {
                         prefetch_origin.runtime_pc &&
                     product_runtime->store_queue_transfers->front()
                             .retired_guest_instructions == prefetch_retired &&
+                    product_runtime->store_queue_transfers->front()
+                            .attempted_guest_instructions == prefetch_attempted &&
                     product_accesses.count == 2u && product_accesses.dropped == 0u,
                 "Produktiver externer SQ-Sink verliert PREF-Provenienz vor write_bytes_at.");
         require_store_queue_range_write(
@@ -445,6 +463,7 @@ int main() {
             true,
             prefetch_origin,
             prefetch_retired,
+            prefetch_attempted,
             "Produktiver SQ-write_bytes_at-Pfad verliert Writer-Provenienz oder Quelle.");
         require_store_queue_range_write(
             product_accesses.events[1u],
@@ -453,6 +472,7 @@ int main() {
             false,
             prefetch_origin,
             prefetch_retired,
+            prefetch_attempted,
             "Produktiver SQ-write_bytes_at-Pfad markiert No-op-Bytes als Writer.");
         product_cpu->memory.clear_guest_memory_access_sink();
         product_runtime->store_queues->write_qacr(1u, 0x0Cu);
@@ -481,6 +501,28 @@ int main() {
                     product_runtime->store_queue_transfers->back().target_address == ta_target &&
                     product_runtime->pvr_ta_fifo->metrics().packets == 1u,
                 "Produktive Dreamcast-Runtime verdrahtet SQ-PREF bei AT=1 nicht mit UTLB und TA.");
+
+        const auto accepted_sq_transfers =
+            product_runtime->store_queues->transfer_count();
+        const auto accepted_ta_packets =
+            product_runtime->pvr_ta_fifo->metrics().packets;
+        product_runtime->store_queues->write_p4(
+            sq_source, 0x60000000u, MemoryAccessWidth::Word);
+        require(!product_runtime->store_queues->prefetch(sq_source) &&
+                    product_runtime->store_queues->transfer_count() ==
+                        accepted_sq_transfers &&
+                    product_runtime->store_queues->rejected_transfer_count() == 1u &&
+                    product_runtime->store_queues->last_sink_fault() &&
+                    product_runtime->store_queues->last_sink_fault()->reason ==
+                        StoreQueueSinkErrorReason::UnsupportedInput &&
+                    product_runtime->pvr_ta_fifo->metrics().packets ==
+                        accepted_ta_packets &&
+                    product_runtime->pvr_ta_fifo->metrics().rejected_packets == 1u &&
+                    product_runtime->pvr_ta_fifo->snapshot().first_input_error &&
+                    product_runtime->pvr_ta_fifo->snapshot().first_input_error->reason ==
+                        PvrTaInputErrorReason::UnsupportedPacket,
+                "Ungueltiges TA-Paket aus echtem SQ-PREF entkommt als Hostexception "
+                "oder committed Teilzustand.");
 
         ExecutableCodeTracker movca_tracker;
         static_cast<void>(
@@ -514,6 +556,19 @@ int main() {
                     store_queue_snapshot.operand_cache_ram[7u] == 0x5Au &&
                     store_queue_snapshot.code_tracker_bound,
                 "Store-Queue-Snapshot verliert OCRAM-Bytes, Profil oder Trackerbindung.");
+        cache_ops->write_qacr(0u, 0x0Cu);
+        cache_ops->reset();
+        const auto reset_store_queue = cache_ops->snapshot();
+        require(reset_store_queue.queues ==
+                        std::array<std::array<std::uint8_t, 32u>, 2u>{} &&
+                    reset_store_queue.qacr == std::array<std::uint32_t, 2u>{} &&
+                    reset_store_queue.operand_cache_ram ==
+                        std::array<std::uint8_t, 8192u>{} &&
+                    !reset_store_queue.operand_cache_ram_enabled &&
+                    reset_store_queue.transfer_count == 0u &&
+                    reset_store_queue.rejected_transfer_count == 0u &&
+                    !reset_store_queue.last_sink_fault,
+                "Store-Queue-Reset laesst QACR-, Queue-, OCRAM- oder Fehlerzustand stehen.");
         require_rejected(
             [&] {
                 cache_ops->write_operand_cache_ram(8191u, 0xAABBu, MemoryAccessWidth::Halfword);

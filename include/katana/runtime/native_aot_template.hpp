@@ -24,8 +24,10 @@ enum class NativeAotTemplateDestination : std::uint8_t {
     LoadedModule
 };
 
-// Describes proof metadata only. The original template bytes stay in the local
-// disc-backed ExecutableModuleCatalog and are never embedded in an exported port.
+// Describes proof metadata only. VbrRelative templates name their immutable source
+// module. LoadedModule templates instead use source_module_id as a stable template
+// identifier and expected_source_identity as the export-time byte identity; their
+// source payload is not loaded into the runtime catalog at startup.
 struct NativeAotTemplate {
     std::string source_module_id;
     std::string expected_source_identity;

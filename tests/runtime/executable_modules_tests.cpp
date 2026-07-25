@@ -658,6 +658,7 @@ void runtime_write_provenance_regression() {
             "Geaenderter Runtimecode erhielt keinen neuen Provenienz-Snapshot.");
 
     CpuState alias_cpu;
+    alias_cpu.write_sr(sr_md_mask);
     const auto alias_ram = std::make_shared<LinearMemoryDevice>(0x1000u);
     alias_cpu.memory.map_region("runtime-write-p0", 0x0C000000u, alias_ram);
     alias_cpu.memory.map_region("runtime-write-p1", 0x8C000000u, alias_ram);

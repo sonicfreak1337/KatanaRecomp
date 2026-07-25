@@ -3,6 +3,7 @@
 #include "katana/runtime/dreamcast_memory.hpp"
 
 #include <array>
+#include <limits>
 #include <stdexcept>
 #include <utility>
 
@@ -206,8 +207,9 @@ bool DreamcastSystemBusControl::trigger_channel2() {
     return true;
 }
 
-DreamcastSystemAsic::DreamcastSystemAsic(PlatformInterruptRouter& router) noexcept
-    : router_(router) {}
+DreamcastSystemAsic::DreamcastSystemAsic(PlatformInterruptRouter& router,
+                                         const std::size_t event_capacity) noexcept
+    : router_(router), event_capacity_(event_capacity) {}
 
 void DreamcastSystemAsic::synchronize_lines() {
     for (std::size_t line = 0u; line < masks_.size(); ++line) {
@@ -218,11 +220,36 @@ void DreamcastSystemAsic::synchronize_lines() {
     }
 }
 void DreamcastSystemAsic::raise(const SystemAsicEvent event, const std::uint64_t guest_cycle) {
-    if (!events_.empty() && guest_cycle < last_guest_cycle_)
+    if (total_events_ != 0u && guest_cycle < last_guest_cycle_)
         throw std::invalid_argument("System-ASIC-Ereignisse muessen gastzeitmonoton sein.");
+    if (next_sequence_ == 0u)
+        throw std::overflow_error("System-ASIC-Ereignisfolge ist erschoepft.");
     const auto [bank, bit] = event_bit(event);
     pending_[bank] |= bit;
-    events_.push_back({guest_cycle, next_sequence_++, event});
+    const auto sequence = next_sequence_;
+    next_sequence_ =
+        sequence == std::numeric_limits<std::uint64_t>::max() ? 0u : sequence + 1u;
+    const auto record = SystemAsicEventRecord{guest_cycle, sequence, event};
+    last_event_ = record;
+    if (total_events_ != std::numeric_limits<std::uint64_t>::max()) ++total_events_;
+    const auto note_dropped_event = [this] noexcept {
+        if (dropped_events_ != std::numeric_limits<std::uint64_t>::max())
+            ++dropped_events_;
+    };
+    if (event_capacity_ == 0u) {
+        note_dropped_event();
+    } else {
+        if (events_.size() == event_capacity_) {
+            events_.pop_front();
+            note_dropped_event();
+        }
+        try {
+            events_.push_back(record);
+        } catch (...) {
+            // The bounded diagnostic history must never take down the guest interrupt path.
+            note_dropped_event();
+        }
+    }
     last_guest_cycle_ = guest_cycle;
     synchronize_lines();
     if (bank < 2u) {
@@ -288,8 +315,24 @@ void DreamcastSystemAsic::write(const std::uint32_t offset, const std::uint32_t 
     }
     throw std::runtime_error("Unbekannter System-ASIC-MMIO-Schreiboffset.");
 }
-const std::vector<SystemAsicEventRecord>& DreamcastSystemAsic::events() const noexcept {
+const std::deque<SystemAsicEventRecord>& DreamcastSystemAsic::events() const noexcept {
     return events_;
+}
+
+const std::optional<SystemAsicEventRecord>& DreamcastSystemAsic::last_event() const noexcept {
+    return last_event_;
+}
+
+std::size_t DreamcastSystemAsic::event_capacity() const noexcept {
+    return event_capacity_;
+}
+
+std::uint64_t DreamcastSystemAsic::total_event_count() const noexcept {
+    return total_events_;
+}
+
+std::uint64_t DreamcastSystemAsic::dropped_event_count() const noexcept {
+    return dropped_events_;
 }
 
 DreamcastSystemAsicSnapshot DreamcastSystemAsic::snapshot() const {
@@ -298,8 +341,12 @@ DreamcastSystemAsicSnapshot DreamcastSystemAsic::snapshot() const {
         masks_,
         dma_trigger_masks_,
         events_,
+        last_event_,
         next_sequence_,
         last_guest_cycle_,
+        event_capacity_,
+        total_events_,
+        dropped_events_,
     };
 }
 void DreamcastSystemAsic::set_dma_trigger_observers(DmaTriggerObserver pvr,
@@ -312,8 +359,11 @@ void DreamcastSystemAsic::reset() noexcept {
     masks_ = {};
     dma_trigger_masks_ = {};
     events_.clear();
+    last_event_.reset();
     next_sequence_ = 1u;
     last_guest_cycle_ = 0u;
+    total_events_ = 0u;
+    dropped_events_ = 0u;
     synchronize_lines();
 }
 

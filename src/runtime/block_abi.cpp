@@ -145,18 +145,46 @@ BlockExit make_block_exit(const CpuState& cpu,
         throw std::invalid_argument("Der typisierte Blockaustritt benoetigt eine Gastzieladresse.");
     }
     context.sync_point = BlockSyncPoint::Exit;
+    const bool exception_edge =
+        kind == BlockEndKind::Exception &&
+        context.exception_generation_on_entry.has_value() &&
+        cpu.exception_generation != *context.exception_generation_on_entry &&
+        cpu.last_exception_generation == cpu.exception_generation &&
+        cpu.last_exception_generation != 0u;
+    auto actual_source =
+        exception_edge
+            ? BlockAddress{cpu.last_exception_instruction_pc,
+                           cpu.last_exception_instruction_physical_pc}
+            : source;
+    if (!exception_edge && context.exception_generation_on_entry.has_value()) {
+        const auto block_offset =
+            actual_source.virtual_address - cpu.active_block_virtual_start;
+        if (cpu.active_block_size != 0u && block_offset < cpu.active_block_size) {
+            actual_source.physical_address =
+                cpu.active_block_physical_start + block_offset;
+        }
+    }
     return {kind,
-            source,
+            actual_source,
             target,
             context.scheduler_cycle,
             context.scheduler_event_budget,
-            cpu.last_exception_cause,
-            context.delay_slot_owner_pc.has_value(),
-            effective_exception_pc(cpu, context)};
+            exception_edge ? cpu.last_exception_cause : ExceptionCause::None,
+            exception_edge ? cpu.exception_in_delay_slot
+                           : context.delay_slot_owner_pc.has_value(),
+            exception_edge ? cpu.last_exception_owner_pc
+                           : effective_exception_pc(cpu, context),
+            exception_edge ? cpu.last_exception_instruction_pc : actual_source.virtual_address,
+            exception_edge ? cpu.last_exception_generation : 0u};
 }
 
 std::uint32_t effective_exception_pc(const CpuState& cpu,
                                      const BlockExecutionContext& context) noexcept {
+    if (context.exception_generation_on_entry.has_value() &&
+        cpu.exception_generation != *context.exception_generation_on_entry &&
+        cpu.last_exception_generation == cpu.exception_generation &&
+        cpu.last_exception_generation != 0u)
+        return cpu.last_exception_owner_pc;
     return context.delay_slot_owner_pc.value_or(cpu.pc);
 }
 

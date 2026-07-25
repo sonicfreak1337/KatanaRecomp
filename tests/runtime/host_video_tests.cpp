@@ -68,6 +68,7 @@ int main() {
     PvrGuestFrameProof proof;
     proof.render_generation = 7u;
     proof.changed_pixels = 2u;
+    proof.source = PvrGuestFrameProofSource::DirectFramebuffer;
     proof.frame = {2u,
                    1u,
                    {0x10u, 0x20u, 0x30u, 0xFFu, 0x40u, 0x50u, 0x60u, 0xFFu}};
@@ -118,17 +119,70 @@ int main() {
     static_cast<void>(scheduler.advance_to(20u, 8u));
     FakeVideoOutput scheduler_video;
     const auto early_pump = pump_guest_frame_proof(renderer, &scheduler_video);
-    require(!early_pump.guest_frame_proven && !early_pump.frame_presented,
+    require(!early_pump.guest_frame_proven && !early_pump.frame_presented &&
+                !early_pump.proof_source.has_value() && early_pump.render_generation == 0u &&
+                early_pump.write_generation_first == 0u &&
+                early_pump.write_generation_last == 0u,
             "Render nach einem frueheren VBlank wird rueckwirkend als Hostframe gepumpt.");
     static_cast<void>(scheduler.advance_to(110u, 16u));
     const auto vblank_pump = pump_guest_frame_proof(renderer, &scheduler_video);
     require(vblank_pump.guest_frame_proven && vblank_pump.frame_presented &&
+                vblank_pump.proof_source == PvrGuestFrameProofSource::TaRender &&
+                vblank_pump.render_generation != 0u &&
+                vblank_pump.write_generation_first == 0u &&
+                vblank_pump.write_generation_last == 0u &&
                 scheduler_video.presented_frames() == 1u &&
                 scheduler_video.last_frame().width == 1u &&
                 scheduler_video.last_frame().height == 1u &&
                 scheduler_video.last_frame().rgba ==
                     std::vector<std::uint8_t>({0x20u, 0x40u, 0x60u, 0xFFu}),
             "Scheduler-VBlank, Proof-Pump und Fake-Video bilden keinen ausführbaren Markerpfad.");
+    GuestFrameEvidenceTracker evidence;
+    GuestFramePumpResult bootstrap_frame;
+    bootstrap_frame.guest_frame_proven = true;
+    bootstrap_frame.frame_presented = true;
+    bootstrap_frame.proof_source = PvrGuestFrameProofSource::DirectFramebuffer;
+    bootstrap_frame.render_generation = 3u;
+    bootstrap_frame.write_generation_first = 1u;
+    bootstrap_frame.write_generation_last = 3u;
+    const auto bootstrap_observation = evidence.observe(bootstrap_frame, false);
+    require(has_guest_frame_evidence_marker(
+                bootstrap_observation.markers, GuestFrameEvidenceMarker::FirstGuestScanout) &&
+                !has_guest_frame_evidence_marker(
+                    bootstrap_observation.markers, GuestFrameEvidenceMarker::FirstTaFrame) &&
+                !has_guest_frame_evidence_marker(
+                    bootstrap_observation.markers, GuestFrameEvidenceMarker::FirstGameplayFrame) &&
+                bootstrap_observation.write_generation_first == 1u &&
+                bootstrap_observation.write_generation_last == 3u &&
+                evidence.bootstrap_scanout_seen(),
+            "Direct-FB-Bootstrapscanout wird als TA- oder Gameplayframe fehlklassifiziert.");
+    GuestFramePumpResult first_ta_frame;
+    first_ta_frame.guest_frame_proven = true;
+    first_ta_frame.frame_presented = true;
+    first_ta_frame.proof_source = PvrGuestFrameProofSource::TaRender;
+    first_ta_frame.render_generation = 4u;
+    const auto first_ta_observation = evidence.observe(first_ta_frame, true);
+    require(has_guest_frame_evidence_marker(
+                first_ta_observation.markers, GuestFrameEvidenceMarker::FirstTaFrame) &&
+                has_guest_frame_evidence_marker(
+                    first_ta_observation.markers, GuestFrameEvidenceMarker::FirstGameplayFrame),
+            "TA-Frame nach Bootstrapscanout und Gastprogrammfortschritt wird nicht klassifiziert.");
+
+    GuestFrameEvidenceTracker conservative_evidence;
+    const auto first_progressed_ta = conservative_evidence.observe(first_ta_frame, true);
+    require(has_guest_frame_evidence_marker(
+                first_progressed_ta.markers, GuestFrameEvidenceMarker::FirstGuestScanout) &&
+                has_guest_frame_evidence_marker(
+                    first_progressed_ta.markers, GuestFrameEvidenceMarker::FirstTaFrame) &&
+                !has_guest_frame_evidence_marker(
+                    first_progressed_ta.markers, GuestFrameEvidenceMarker::FirstGameplayFrame),
+            "Erster TA-Scanout nach bereits beobachtetem Fortschritt reicht allein als Gameplay.");
+    auto second_ta_frame = first_ta_frame;
+    second_ta_frame.render_generation = 5u;
+    const auto second_progressed_ta = conservative_evidence.observe(second_ta_frame, true);
+    require(has_guest_frame_evidence_marker(
+                second_progressed_ta.markers, GuestFrameEvidenceMarker::FirstGameplayFrame),
+            "Zweiter TA-Scanout nach Gastprogrammfortschritt liefert keinen Gameplaynachweis.");
 #ifdef _WIN32
     require(native_video_available(), "Win32-Hostvideo wird nicht als verfuegbar gemeldet.");
     auto video = create_native_video_output(
