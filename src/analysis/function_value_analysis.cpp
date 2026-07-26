@@ -1483,98 +1483,120 @@ bool merge_candidate_input(CandidateInput& destination,
     }
     AbstractState merged;
     merged.stack_offsets[15u] = 0;
-    const bool all_inputs_observed =
-        !destination.unknown_ingress && !destination.expected_call_sites.empty() &&
-        std::all_of(destination.expected_call_sites.begin(),
-                    destination.expected_call_sites.end(),
-                    [&](const auto call_site) {
-                        return destination.observations.contains(call_site);
-                    });
+    if (destination.unknown_ingress || destination.expected_call_sites.empty() ||
+        !std::all_of(
+            destination.expected_call_sites.begin(),
+            destination.expected_call_sites.end(),
+            [&](const auto call_site) { return destination.observations.contains(call_site); })) {
+        const bool changed = destination.state != merged;
+        destination.state = std::move(merged);
+        return changed;
+    }
     for (std::uint8_t index = 0u; index < 15u; ++index) {
         auto& target = merged[index];
-        bool has_known_value = false;
-        bool all_known = all_inputs_observed;
-        bool overflow = false;
-        bool complete = true;
-        std::set<std::uint32_t> all_call_sites;
-        std::set<std::uint32_t> all_callees;
-        std::set<std::uint32_t> supporting_call_sites;
-        std::set<std::uint32_t> supporting_callees;
+        bool first = true;
+        bool all_known = true;
+        std::set<std::uint32_t> call_sites;
+        std::set<std::uint32_t> callees;
         for (const auto call_site : destination.expected_call_sites) {
-            const auto observed = destination.observations.find(call_site);
-            if (observed == destination.observations.end()) {
-                all_known = false;
-                continue;
-            }
-            const auto& source = observed->second[index];
-            all_call_sites.insert(source.call_sites.begin(), source.call_sites.end());
-            all_callees.insert(source.callees.begin(), source.callees.end());
-            if (source.known || (index >= 4u && index <= 7u))
-                all_call_sites.insert(call_site);
+            const auto& source = destination.observations.at(call_site)[index];
+            call_sites.insert(source.call_sites.begin(), source.call_sites.end());
+            callees.insert(source.callees.begin(), source.callees.end());
+            if (source.known || (index >= 4u && index <= 7u)) call_sites.insert(call_site);
             if (!source.known || source.values.empty()) {
                 all_known = false;
                 continue;
             }
-            has_known_value = true;
-            supporting_call_sites.insert(source.call_sites.begin(), source.call_sites.end());
-            supporting_call_sites.insert(call_site);
-            supporting_callees.insert(source.callees.begin(), source.callees.end());
-            complete = complete && source.complete;
-            if (!overflow) {
+            if (first) {
+                target = source;
+                first = false;
+            } else {
                 target.values.insert(
                     target.values.end(), source.values.begin(), source.values.end());
                 normalize(target.values);
-                if (target.values.size() > maximum_summary_values) {
-                    overflow = true;
-                    target.values.clear();
-                }
+                target.complete = target.complete && source.complete;
+            }
+            target.guarded = true;
+            if (target.values.size() > maximum_summary_values) {
+                all_known = false;
             }
         }
-        if (!has_known_value || overflow) {
-            make_unknown(target);
-            target.call_sites = std::move(all_call_sites);
-            target.callees = std::move(all_callees);
-            continue;
-        }
-        target.known = true;
-        // Merged call-context values are candidate evidence only.  Keep the
-        // live runtime value authoritative even when every known static
-        // callsite currently has an observation.
-        target.guarded = true;
-        target.complete = all_known && complete;
-        target.call_sites = std::move(supporting_call_sites);
-        target.callees = std::move(supporting_callees);
+        if (!all_known || first) make_unknown(target);
+        target.call_sites = std::move(call_sites);
+        target.callees = std::move(callees);
     }
-    if (all_inputs_observed) {
-        const auto first_call_site = *destination.expected_call_sites.begin();
-        merged.memory_values = destination.observations.at(first_call_site).memory_values;
-        for (auto value = merged.memory_values.begin(); value != merged.memory_values.end();) {
-            bool retained = true;
-            for (const auto call_site : destination.expected_call_sites) {
-                if (call_site == first_call_site) continue;
-                const auto& source_values = destination.observations.at(call_site).memory_values;
-                const auto source = source_values.find(value->first);
-                if (source == source_values.end()) {
-                    retained = false;
-                    break;
-                }
-                merge_value(value->second, source->second);
-                if (!value->second.known) {
-                    retained = false;
-                    break;
-                }
+    const auto first_call_site = *destination.expected_call_sites.begin();
+    merged.memory_values = destination.observations.at(first_call_site).memory_values;
+    for (auto value = merged.memory_values.begin(); value != merged.memory_values.end();) {
+        bool retained = true;
+        for (const auto call_site : destination.expected_call_sites) {
+            if (call_site == first_call_site) continue;
+            const auto& source_values = destination.observations.at(call_site).memory_values;
+            const auto source = source_values.find(value->first);
+            if (source == source_values.end()) {
+                retained = false;
+                break;
             }
-            if (!retained)
-                value = merged.memory_values.erase(value);
-            else {
-                value->second.guarded = true;
-                ++value;
+            merge_value(value->second, source->second);
+            if (!value->second.known) {
+                retained = false;
+                break;
             }
+        }
+        if (!retained)
+            value = merged.memory_values.erase(value);
+        else {
+            value->second.guarded = true;
+            ++value;
         }
     }
     const bool changed = destination.state != merged;
     destination.state = std::move(merged);
     return changed;
+}
+
+bool requires_isolated_store_harvest(const CandidateInput& input) {
+    if (input.observations.empty()) return false;
+    if (input.unknown_ingress || input.expected_call_sites.empty() ||
+        !std::all_of(
+            input.expected_call_sites.begin(),
+            input.expected_call_sites.end(),
+            [&](const auto call_site) { return input.observations.contains(call_site); }))
+        return true;
+    for (const auto call_site : input.expected_call_sites) {
+        const auto& observation = input.observations.at(call_site);
+        for (std::uint8_t index = 4u; index <= 7u; ++index) {
+            const auto& observed = observation[index];
+            const auto& merged = input.state[index];
+            if (!observed.known || observed.values.empty()) continue;
+            if (!merged.known ||
+                std::any_of(observed.values.begin(),
+                            observed.values.end(),
+                            [&](const auto value) {
+                                return std::find(
+                                           merged.values.begin(), merged.values.end(), value) ==
+                                       merged.values.end();
+                            }))
+                return true;
+        }
+    }
+    return false;
+}
+
+AbstractState isolated_store_input(const std::uint32_t call_site,
+                                   const AbstractState& observation) {
+    AbstractState input;
+    input.stack_offsets[15u] = 0;
+    for (std::uint8_t index = 4u; index <= 7u; ++index) {
+        input[index] = observation[index];
+        input[index].complete = false;
+        input[index].guarded = input[index].known;
+        input[index].call_sites.insert(call_site);
+        input.stack_offsets[index] = observation.stack_offsets[index];
+        if (input[index].values.size() > maximum_summary_values)
+            make_unknown_preserving_provenance(input[index]);
+    }
+    return input;
 }
 
 } // namespace
@@ -1758,6 +1780,7 @@ analyze_function_values(const katana::io::ExecutableImage& image,
     for (const auto& [address, summary] : summaries)
         result.summaries.push_back(summary);
     report_progress("resolution-start");
+    std::vector<StoredCodeAddressCandidate> isolated_stored_candidates;
     for (const auto& function : functions) {
         auto evaluation = evaluate_function(image,
                                             function,
@@ -1780,10 +1803,49 @@ analyze_function_values(const katana::io::ExecutableImage& image,
                 evaluation.returned_code_address_table_candidates.begin()),
             std::make_move_iterator(
                 evaluation.returned_code_address_table_candidates.end()));
+        const auto& input = candidate_inputs.at(function.entry_address);
+        if (image.guest_call_abi() == katana::io::GuestCallAbi::SuperHC &&
+            !result.budget_exhausted && requires_isolated_store_harvest(input)) {
+            for (const auto& [call_site, observation] : input.observations) {
+                auto isolated_evaluation = evaluate_function(
+                    image,
+                    function,
+                    block_index,
+                    indirect_callees,
+                    summaries,
+                    isolated_store_input(call_site, observation),
+                    true);
+                for (auto& candidate :
+                     isolated_evaluation.stored_code_address_candidates) {
+                    candidate.complete = false;
+                    candidate.guarded = true;
+                    candidate.evidence_call_sites.push_back(call_site);
+                    isolated_stored_candidates.push_back(std::move(candidate));
+                }
+            }
+        }
         ++completed_functions;
         if (completed_functions <= 16u || completed_functions % 128u == 0u ||
             completed_functions == functions.size())
             report_progress("resolution-progress");
+    }
+    std::map<std::uint32_t, std::vector<StoredCodeAddressCandidate>>
+        isolated_candidates_by_store;
+    for (auto& candidate : isolated_stored_candidates) {
+        if (candidate.store_instruction_addresses.size() != 1u) continue;
+        isolated_candidates_by_store[candidate.store_instruction_addresses.front()].push_back(
+            std::move(candidate));
+    }
+    for (auto& [store_address, candidates] : isolated_candidates_by_store) {
+        static_cast<void>(store_address);
+        std::set<std::uint32_t> targets;
+        for (const auto& candidate : candidates)
+            targets.insert(candidate.target_address);
+        if (targets.size() > maximum_summary_values) continue;
+        result.stored_code_address_candidates.insert(
+            result.stored_code_address_candidates.end(),
+            std::make_move_iterator(candidates.begin()),
+            std::make_move_iterator(candidates.end()));
     }
     std::sort(result.resolutions.begin(),
               result.resolutions.end(),

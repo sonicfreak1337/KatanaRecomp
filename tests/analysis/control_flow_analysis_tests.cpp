@@ -297,14 +297,16 @@ int main() {
                                 katana::analysis::FunctionOrigin::StoredCodeAddress},
             "Expliziter Function-Override verlor im echten Seedmerge gegen GuardedPartial.");
 
-    const auto partial_ingress_store_image = [](const bool non_stack_store) {
+    const auto partial_ingress_store_image = [](const bool non_stack_store,
+                                                const bool stack_argument_destination = false) {
         std::vector<std::uint8_t> bytes(0x80u, 0x09u);
         bytes[0x00u] = 0x60u;
         bytes[0x01u] = 0xE5u; // mov #0x60,r5
         bytes[0x02u] = 0x1Du;
         bytes[0x03u] = 0xB0u; // bsr 0x40
-        bytes[0x04u] = 0x09u;
-        bytes[0x05u] = 0x00u; // nop (delay)
+        bytes[0x04u] = stack_argument_destination ? 0xF3u : 0x09u;
+        bytes[0x05u] = stack_argument_destination ? 0x64u : 0x00u;
+        // mov r15,r4 / nop (delay)
         bytes[0x06u] = 0x0Bu;
         bytes[0x07u] = 0x00u; // rts
         bytes[0x08u] = 0x09u;
@@ -314,8 +316,10 @@ int main() {
         bytes[0x42u] = 0xF6u;
         bytes[0x43u] = 0x65u; // mov.l @r15+,r5
         bytes[0x44u] = 0x52u;
-        bytes[0x45u] =
-            non_stack_store ? 0x22u : 0x2Fu; // mov.l r5,@r2 / mov.l r5,@r15
+        bytes[0x45u] = stack_argument_destination
+                           ? 0x24u
+                           : (non_stack_store ? 0x22u : 0x2Fu);
+        // mov.l r5,@r4 / mov.l r5,@r2 / mov.l r5,@r15
         bytes[0x46u] = 0x0Bu;
         bytes[0x47u] = 0x00u; // rts
         bytes[0x48u] = 0x09u;
@@ -368,7 +372,15 @@ int main() {
     require(partial_non_stack_handler != nullptr &&
                 partial_non_stack_handler->origins ==
                     std::vector{katana::analysis::FunctionOrigin::StoredCodeAddress} &&
+                partial_non_stack_handler->evidence ==
+                    katana::analysis::ControlFlowEvidence::GuardedPartial &&
                 has_instruction(partial_non_stack_store, 0x60u) &&
+                std::binary_search(
+                    partial_non_stack_store.recursive.guarded_candidate_instruction_addresses
+                        .begin(),
+                    partial_non_stack_store.recursive.guarded_candidate_instruction_addresses
+                        .end(),
+                    0x60u) &&
                 partial_runtime_dispatch !=
                     partial_non_stack_store.indirect_control_flow.end() &&
                 partial_runtime_dispatch->evidence ==
@@ -384,11 +396,25 @@ int main() {
             "Partieller Callerwert erreichte nach Stackspill keinen bewachten "
             "Non-Stack-Store oder fror den Runtime-Dispatcher statisch ein.");
 
+    auto no_abi_partial_store_image = partial_ingress_store_image(true);
+    no_abi_partial_store_image.set_guest_call_abi(katana::io::GuestCallAbi::Unknown);
+    const auto no_abi_partial_store =
+        katana::analysis::analyze_control_flow(no_abi_partial_store_image);
+    require(find_function(no_abi_partial_store, 0x60u) == nullptr &&
+                !has_instruction(no_abi_partial_store, 0x60u),
+            "Partielle Callsite-Ernte lief ohne belegten Gast-ABI-Vertrag.");
+
     const auto partial_stack_store =
         katana::analysis::analyze_control_flow(partial_ingress_store_image(false));
     require(find_function(partial_stack_store, 0x60u) == nullptr &&
                 !has_instruction(partial_stack_store, 0x60u),
             "Partieller Callerwert an einem Stackstore wurde als Callback katalogisiert.");
+
+    const auto partial_argument_stack_store =
+        katana::analysis::analyze_control_flow(partial_ingress_store_image(true, true));
+    require(find_function(partial_argument_stack_store, 0x60u) == nullptr &&
+                !has_instruction(partial_argument_stack_store, 0x60u),
+            "Partielle Callsite-Ernte verlor Stackprovenienz eines Argumentzeigers.");
 
     const auto widened_partial_store_image = [] {
         std::vector<std::uint8_t> bytes(0xA0u, 0x09u);

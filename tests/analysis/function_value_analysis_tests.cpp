@@ -503,6 +503,21 @@ int main() {
                         std::vector<std::uint32_t>{0x20u},
                 "MOV.L @Rm verlor den einzelnen provenance-starken Callbackslot.");
 
+        auto direct_with_unknown_ingress_image = returned_table_load_image(
+            {mov_r0_r12, nop}, mov_l_at_r12_r3, {0x70u}, {{0x70u, 0xC0u}});
+        direct_with_unknown_ingress_image.add_entry_point(0x20u);
+        const auto direct_with_unknown_ingress =
+            returned_table_values(direct_with_unknown_ingress_image);
+        const auto* preserved_direct_table =
+            returned_table_candidate(direct_with_unknown_ingress, 0x70u);
+        require(preserved_direct_table != nullptr &&
+                    preserved_direct_table->target_addresses ==
+                        std::vector<std::uint32_t>{0xC0u} &&
+                    preserved_direct_table->evidence_call_sites ==
+                        std::vector<std::uint32_t>{0x00u},
+                "Unbekannter zusaetzlicher Callee-Ingress reduzierte den vorhandenen "
+                "Returned-Table-Bestand.");
+
         const auto post_increment = returned_table_values(
             returned_table_load_image({mov_r0_r12, nop},
                                       mov_l_at_r12_post_r3,
@@ -959,22 +974,19 @@ int main() {
     const auto unknown_caller = katana::analysis::analyze_control_flow(unknown_caller_image);
     const auto* unknown_caller_site = site(unknown_caller, 0x22u);
     require(unknown_caller_site != nullptr &&
-                unknown_caller_site->evidence ==
-                    katana::analysis::ControlFlowEvidence::RuntimeOnly &&
+                !katana::analysis::control_flow_evidence_complete(
+                    unknown_caller_site->evidence) &&
                 !unknown_caller_site->target.has_value() &&
                 unknown_caller_site->targets.empty() &&
-                unknown_caller_site->analysis_candidates ==
-                    std::vector<std::uint32_t>{0x50u} &&
-                unknown_caller_site->evidence_call_sites ==
-                    std::vector<std::uint32_t>{0x02u} &&
+                unknown_caller_site->analysis_candidates.empty() &&
                 std::none_of(unknown_caller.resolved_edges.begin(),
                              unknown_caller.resolved_edges.end(),
                              [](const auto& edge) {
                                  return edge.instruction_address == 0x22u &&
                                         edge.target_address == 0x50u;
                              }),
-            "Ein bekannter Caller blieb neben unbekanntem Ingress nicht als "
-            "runtime-autoritativer May-Kandidat erhalten.");
+            "Partielle Callerwerte veraenderten trotz unbekanntem Ingress "
+            "globale Resolutions oder CFG-Kanten.");
 
     std::vector<std::uint8_t> indirect_parameter_bytes(0x60u, 0x09u);
     const std::array<std::uint8_t, 12u> indirect_parameter_caller{
