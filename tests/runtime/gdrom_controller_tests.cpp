@@ -1070,6 +1070,32 @@ int main() {
                 controller.bios_call(cpu, 1u, 0u) == 0u,
             "BIOS REQ_MODE liefert weder den Vierwort-Modus noch den einmaligen Abschluss.");
 
+    constexpr std::uint32_t compact_mode_parameters = 0x8CFFFFFCu;
+    cpu.memory.write_u32(compact_mode_parameters, mode_output);
+    cpu.memory.write_u32(mode_output, 0xFFFFFFFFu);
+    cpu.memory.write_u32(mode_output + 4u, 0xFFFFFFFFu);
+    cpu.memory.write_u32(mode_output + 8u, 0xFFFFFFFFu);
+    cpu.memory.write_u32(mode_output + 12u, 0xFFFFFFFFu);
+    cpu.r[4] = 30u;
+    cpu.r[5] = compact_mode_parameters;
+    const auto compact_request_mode = controller.bios_call(cpu, 0u, 0u);
+    static_cast<void>(controller.bios_call(cpu, 2u, 0u));
+    cpu.r[4] = compact_request_mode;
+    cpu.r[5] = extended_status;
+    require(compact_request_mode >= 1u && controller.bios_call(cpu, 1u, 0u) == 2u &&
+                cpu.memory.read_u32(mode_output) == 0u &&
+                cpu.memory.read_u32(mode_output + 4u) == 0x00B4u &&
+                cpu.memory.read_u32(mode_output + 8u) == 0x19u &&
+                cpu.memory.read_u32(mode_output + 12u) == 0x08u &&
+                controller.bios_call(cpu, 1u, 0u) == 0u,
+            "BIOS REQ_MODE verlangt am RAM-Ende ungenutzte Parameterwoerter.");
+
+    cpu.r[4] = 31u;
+    cpu.r[5] = compact_mode_parameters;
+    require(controller.bios_call(cpu, 0u, 0u) == 0u &&
+                controller.status().bios_requests == 0u,
+            "BIOS SET_MODE akzeptiert am RAM-Ende keinen vollstaendigen Vierwortpuffer.");
+
     cpu.memory.write_u32(parameters, 0xA5u);
     cpu.memory.write_u32(parameters + 4u, 0x3456u);
     cpu.memory.write_u32(parameters + 8u, 0x7Cu);

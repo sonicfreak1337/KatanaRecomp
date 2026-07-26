@@ -31,6 +31,12 @@ constexpr std::uint32_t bios_command_pio_stream = 37u;
 constexpr std::uint32_t bios_command_dma_stream_ex = 38u;
 constexpr std::uint32_t bios_command_pio_stream_ex = 39u;
 
+constexpr std::size_t bios_parameter_word_count(const std::uint32_t command) noexcept {
+    // REQ_MODE defines only its output pointer. Keep the conservative four-word snapshot for
+    // every other command until that command's complete public ABI is represented here.
+    return command == bios_command_request_mode ? 1u : 4u;
+}
+
 std::uint32_t be16(const std::vector<std::uint8_t>& bytes, const std::size_t offset) {
     return (static_cast<std::uint32_t>(bytes.at(offset)) << 8u) | bytes.at(offset + 1u);
 }
@@ -1378,16 +1384,19 @@ std::uint32_t DreamcastGdRomController::bios_call(CpuState& cpu,
         BiosRequest request;
         request.guest_binding = bind_guest_address_space(cpu);
         request.command = cpu.r[4];
-        if (cpu.r[5] != 0u) {
-            constexpr std::size_t parameter_bytes =
-                4u * sizeof(std::uint32_t);
+        const auto parameter_word_count = bios_parameter_word_count(request.command);
+        if (cpu.r[5] != 0u && parameter_word_count != 0u) {
+            const auto parameter_bytes = parameter_word_count * sizeof(std::uint32_t);
             const auto source = resolve_guest_read_buffer(
                 *request.guest_binding, memory_, cpu.r[5], parameter_bytes, 4u);
-            std::array<std::uint8_t, parameter_bytes> bytes{};
-            if (!source || !read_guest_buffer(
-                               *request.guest_binding, memory_, *source, bytes))
+            std::array<std::uint8_t, 4u * sizeof(std::uint32_t)> bytes{};
+            const auto parameter_bytes_view =
+                std::span<std::uint8_t>(bytes).first(parameter_bytes);
+            if (!source ||
+                !read_guest_buffer(
+                    *request.guest_binding, memory_, *source, parameter_bytes_view))
                 return finish(0u);
-            for (std::size_t index = 0u; index < request.parameters.size(); ++index)
+            for (std::size_t index = 0u; index < parameter_word_count; ++index)
                 request.parameters[index] =
                     load_le32(std::span<const std::uint8_t, 4u>(
                         bytes.data() + index * sizeof(std::uint32_t), 4u));
