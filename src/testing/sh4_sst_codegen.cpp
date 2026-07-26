@@ -1,5 +1,7 @@
 #include "katana/testing/sh4_sst_codegen.hpp"
 
+#include "katana/sh4/decoder.hpp"
+
 #include <algorithm>
 #include <array>
 #include <iomanip>
@@ -337,6 +339,29 @@ std::optional<std::uint32_t> canonical_address_for_sst_slot(const SstCodeForm& f
                                                             const std::uint8_t slot) {
     if (slot >= normal_code_slot_count + form.external_slot_count) return std::nullopt;
     return canonical_slot_addresses(form)[slot];
+}
+
+bool sst_code_form_requires_contextual_delay_slot_entries(const SstCodeForm& form) {
+    const auto canonical = canonical_slot_addresses(form);
+    for (std::size_t index = 0u; index + 1u < form.fetch_slots.size(); ++index) {
+        const auto owner_slot = form.fetch_slots[index];
+        const auto delay_slot = form.fetch_slots[index + 1u];
+        if (owner_slot >= normal_code_slot_count + form.external_slot_count ||
+            delay_slot >= normal_code_slot_count + form.external_slot_count)
+            throw SstHarnessInvalid("SST contextual-delay scan references an invalid code slot");
+
+        const auto opcode = opcode_for_slot(form, owner_slot);
+        const auto decoded = katana::sh4::decode(opcode);
+        if (!decoded.has_delay_slot) continue;
+
+        const bool observed_normal_reentry =
+            index + 2u < form.fetch_slots.size() && delay_slot == form.fetch_slots[index + 2u];
+        const auto control = direct_control(opcode, *canonical[owner_slot]);
+        const bool static_normal_entry =
+            control.direct && control.delayed && control.target == *canonical[delay_slot];
+        if (observed_normal_reentry || static_normal_entry) return true;
+    }
+    return false;
 }
 
 std::optional<std::uint32_t> runtime_address_for_sst_slot(const SstTestCase& test,

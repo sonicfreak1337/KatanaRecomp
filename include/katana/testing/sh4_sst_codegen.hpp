@@ -74,6 +74,12 @@ struct SstCodeRelocationRecipe {
 [[nodiscard]] std::optional<std::uint32_t> canonical_address_for_sst_slot(const SstCodeForm& form,
                                                                           std::uint8_t slot);
 
+// Product CFG construction needs independent proven entries whenever one
+// physical instruction can be both an owner's delay slot and a normal target.
+// This includes a statically visible self-slot target even when the concrete
+// four-cycle reference trace does not take that branch.
+[[nodiscard]] bool sst_code_form_requires_contextual_delay_slot_entries(const SstCodeForm& form);
+
 [[nodiscard]] std::optional<std::uint32_t> runtime_address_for_sst_slot(const SstTestCase& test,
                                                                         std::uint8_t slot);
 

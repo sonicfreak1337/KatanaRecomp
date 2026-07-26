@@ -428,16 +428,9 @@ io::ExecutableImage make_synthetic_image(const FormRecord& record,
         if (!address) throw std::runtime_error("external SST slot has no canonical address");
         function_seeds.insert(*address);
     }
-    bool has_dual_role_delay_slot = false;
-    for (std::size_t index = 0u; index + 2u < record.form.fetch_slots.size(); ++index) {
-        const auto owner_slot = record.form.fetch_slots[index];
-        const auto owner_opcode = form_opcode_for_slot(record.form, owner_slot);
-        if (!sh4::decode(owner_opcode).has_delay_slot ||
-            record.form.fetch_slots[index + 1u] != record.form.fetch_slots[index + 2u])
-            continue;
-        has_dual_role_delay_slot = true;
-    }
-    if (has_dual_role_delay_slot) {
+    const bool has_contextual_delay_slot_entry =
+        sst_codegen::sst_code_form_requires_contextual_delay_slot_entries(record.form);
+    if (has_contextual_delay_slot_entry) {
         // The same physical opcode is first executed as an owner's delay slot
         // and then entered normally. Give every compiled slot in this rare
         // four-step form an independent proven image entry, while the owner
@@ -452,7 +445,7 @@ io::ExecutableImage make_synthetic_image(const FormRecord& record,
         }
     }
     function_seeds.erase(*entry);
-    if (!has_dual_role_delay_slot) {
+    if (!has_contextual_delay_slot_entry) {
         for (const auto address : function_seeds)
             overrides.functions.push_back({address, line++});
     }

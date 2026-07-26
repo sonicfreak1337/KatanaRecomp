@@ -107,6 +107,37 @@ int main() {
         require(odd_form.initial_pc_mod4 == 1u,
                 "unaligned upstream PC could not be represented for N/A reporting");
 
+        SstTestCase self_slot_not_taken;
+        self_slot_not_taken.initial.pc = 0x10000000u;
+        self_slot_not_taken.opcodes = {0x0009u, 0x8DFFu, 0x311Cu, 0x0009u, 0x322Cu};
+        for (std::size_t index = 0u; index < self_slot_not_taken.cycles.size(); ++index) {
+            self_slot_not_taken.cycles[index].actions = SstCycle::fetch_action;
+            self_slot_not_taken.cycles[index].fetch_address =
+                self_slot_not_taken.initial.pc + static_cast<std::uint32_t>(index * 2u);
+        }
+        const auto self_slot_not_taken_form = make_sst_code_form(self_slot_not_taken);
+        auto self_slot_taken = self_slot_not_taken;
+        self_slot_taken.cycles.back().fetch_address = self_slot_taken.initial.pc + 4u;
+        const auto self_slot_taken_form = make_sst_code_form(self_slot_taken);
+        auto dynamic_slot_reentry = self_slot_taken;
+        dynamic_slot_reentry.opcodes[1u] = 0x412Bu; // JMP @R1
+        const auto dynamic_slot_reentry_form = make_sst_code_form(dynamic_slot_reentry);
+        auto ordinary_delayed_branch = self_slot_not_taken;
+        ordinary_delayed_branch.opcodes[1u] = 0x8D00u;
+        const auto ordinary_delayed_branch_form = make_sst_code_form(ordinary_delayed_branch);
+        auto non_delayed_next_target = self_slot_not_taken;
+        non_delayed_next_target.opcodes[1u] = 0x8BFFu;
+        const auto non_delayed_next_target_form = make_sst_code_form(non_delayed_next_target);
+        require(
+            sst_code_form_requires_contextual_delay_slot_entries(self_slot_not_taken_form) &&
+                sst_code_form_requires_contextual_delay_slot_entries(self_slot_taken_form) &&
+                sst_code_form_requires_contextual_delay_slot_entries(dynamic_slot_reentry_form) &&
+                !sst_code_form_requires_contextual_delay_slot_entries(
+                    ordinary_delayed_branch_form) &&
+                !sst_code_form_requires_contextual_delay_slot_entries(non_delayed_next_target_form),
+            "Kontextuelle Delay-Slot-Einstiege unterscheiden statisches Ziel, dynamischen "
+            "Wiedereintritt, normalen Delay Slot und nichtverzoegerten Folgesprung falsch.");
+
         std::cout << "SH-4 SST deterministic code-form tests passed.\n";
         return EXIT_SUCCESS;
     } catch (const std::exception& error) {

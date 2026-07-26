@@ -637,6 +637,7 @@ target_include_directories(
 target_link_libraries(
     katana_sh4_sst_codegen_support
     PUBLIC
+        katana_core
         katana_sh4_sst_support
 )
 katana_enable_warnings(katana_sh4_sst_codegen_support)
