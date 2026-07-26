@@ -27,6 +27,7 @@ namespace {
 
 constexpr std::size_t maximum_summary_values = 8u;
 constexpr std::size_t maximum_guarded_code_inventory = 1'024u;
+constexpr std::size_t maximum_forwarded_store_contexts = 64u;
 constexpr std::size_t maximum_memory_values = 256u;
 constexpr std::size_t maximum_fixpoint_iterations = 65'536u;
 constexpr std::int32_t maximum_stack_distance = 4'096;
@@ -1416,20 +1417,52 @@ void observe_stored_code_addresses(
         evidence_call_sites.insert(evidence.call_sites.begin(), evidence.call_sites.end());
         evidence_callees.insert(evidence.callees.begin(), evidence.callees.end());
     };
+    const auto finite_effective_address = [&](std::vector<std::uint32_t> addresses) {
+        return !addresses.empty() &&
+               addresses.size() <= maximum_summary_values;
+    };
     switch (instruction.kind) {
     case K::MovLongStore:
+        supported = true;
+        stack_based =
+            state.inventory_stack_may_alias[instruction.destination_register] &&
+            !finite_effective_address(
+                displaced_addresses(
+                    state[instruction.destination_register], 0u));
+        include_provenance(state[instruction.destination_register]);
+        break;
     case K::MovLongStorePreDecrement:
+        supported = true;
+        stack_based =
+            state.inventory_stack_may_alias[instruction.destination_register] &&
+            !finite_effective_address(
+                displaced_addresses(
+                    state[instruction.destination_register],
+                    static_cast<std::uint32_t>(-4)));
+        include_provenance(state[instruction.destination_register]);
+        break;
     case K::MovLongStoreDisplacement:
         supported = true;
         stack_based =
-            state.inventory_stack_may_alias[instruction.destination_register];
+            state.inventory_stack_may_alias[instruction.destination_register] &&
+            !finite_effective_address(
+                displaced_addresses(
+                    state[instruction.destination_register],
+                    static_cast<std::uint32_t>(
+                        instruction.displacement)));
         include_provenance(state[instruction.destination_register]);
         break;
     case K::MovLongStoreR0Indexed:
         supported = true;
-        stack_based = state.inventory_stack_may_alias[0u] ||
-                      state.inventory_stack_may_alias
-                          [instruction.destination_register];
+        stack_based =
+            (state.inventory_stack_may_alias[0u] ||
+             state.inventory_stack_may_alias
+                 [instruction.destination_register]) &&
+            !finite_effective_address(
+                indexed_addresses(
+                    state[0u],
+                    state[instruction.destination_register],
+                    instruction.destination_register == 0u));
         include_provenance(state[0u]);
         include_provenance(state[instruction.destination_register]);
         break;
@@ -1652,8 +1685,7 @@ FunctionEvaluation evaluate_function(
             const bool call =
                 line.instruction.control_flow == katana::sh4::ControlFlowKind::Call ||
                 line.instruction.control_flow == katana::sh4::ControlFlowKind::IndirectCall;
-            if (collect_resolutions && !call &&
-                guarded_inventory_collector != nullptr) {
+            if (!call && guarded_inventory_collector != nullptr) {
                 std::vector<StoredCodeAddressCandidate> stored_candidates;
                 observe_stored_code_addresses(
                     image, line, state, stored_candidates);
@@ -1995,6 +2027,28 @@ AbstractState isolated_store_input(const std::uint32_t call_site,
     return input;
 }
 
+bool requires_forwarded_isolated_store_harvest(
+    const katana::io::ExecutableImage& image,
+    const AbstractState& observation,
+    const AbstractState& merged_input) {
+    for (std::uint8_t index = 4u; index <= 7u; ++index) {
+        const auto& observed = observation[index];
+        if (!observed.known || observed.values.empty() ||
+            observed.values.size() > maximum_summary_values ||
+            observed.call_sites.empty())
+            continue;
+        const auto& merged = merged_input[index];
+        for (const auto value : observed.values) {
+            if (!validate_decode_candidate(image, value).valid()) continue;
+            if (!merged.known ||
+                std::find(merged.values.begin(), merged.values.end(), value) ==
+                    merged.values.end())
+                return true;
+        }
+    }
+    return false;
+}
+
 } // namespace
 
 FunctionValueAnalysisResult
@@ -2211,11 +2265,71 @@ analyze_function_values(const katana::io::ExecutableImage& image,
                     indirect_callees,
                     summaries,
                     isolated_store_input(call_site, observation),
-                    true,
+                    false,
                     true,
                     &guarded_inventory_collector,
                     call_site);
-                static_cast<void>(isolated_evaluation);
+                struct ForwardedStoreContext {
+                    const FunctionInfo* function = nullptr;
+                    std::uint32_t call_site = 0u;
+                    AbstractState observation;
+                };
+                std::deque<ForwardedStoreContext> forwarded_contexts;
+                std::set<std::pair<std::uint32_t, std::uint32_t>>
+                    visited_forwarded_contexts;
+                std::size_t forwarded_context_count = 0u;
+                const auto enqueue_forwarded =
+                    [&](const FunctionEvaluation::CallArguments& forwarded) {
+                    if (forwarded_context_count + forwarded_contexts.size() >=
+                        maximum_forwarded_store_contexts)
+                        return;
+                    const auto forwarded_function =
+                        function_by_address.find(forwarded.callee);
+                    const auto forwarded_input =
+                        candidate_inputs.find(forwarded.callee);
+                    if (forwarded_function == function_by_address.end() ||
+                        forwarded_input == candidate_inputs.end() ||
+                        !requires_forwarded_isolated_store_harvest(
+                            image, forwarded.state, forwarded_input->second.state))
+                        return;
+                    if (!visited_forwarded_contexts
+                             .emplace(forwarded.callee, forwarded.call_site)
+                             .second)
+                        return;
+                    forwarded_contexts.push_back(
+                        {forwarded_function->second,
+                         forwarded.call_site,
+                         forwarded.state});
+                };
+                for (const auto& forwarded : isolated_evaluation.call_arguments)
+                    enqueue_forwarded(forwarded);
+                // A callback may pass through thin ABI wrappers before the
+                // actual registration store.  Follow only finite code-valued
+                // arguments lost by ordinary merged ingress.  The small
+                // context cap and entry/callsite set make this inventory-only
+                // walk bounded and cycle-safe; it never contributes a CFG edge.
+                while (!forwarded_contexts.empty() &&
+                       forwarded_context_count <
+                           maximum_forwarded_store_contexts) {
+                    auto forwarded = std::move(forwarded_contexts.front());
+                    forwarded_contexts.pop_front();
+                    ++forwarded_context_count;
+                    auto forwarded_evaluation = evaluate_function(
+                        image,
+                        *forwarded.function,
+                        block_index,
+                        indirect_callees,
+                        summaries,
+                        isolated_store_input(forwarded.call_site,
+                                             forwarded.observation),
+                        false,
+                        true,
+                        &guarded_inventory_collector,
+                        call_site);
+                    for (const auto& nested :
+                         forwarded_evaluation.call_arguments)
+                        enqueue_forwarded(nested);
+                }
             }
         }
         ++completed_functions;
