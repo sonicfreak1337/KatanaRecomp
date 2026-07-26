@@ -217,8 +217,6 @@ class GuardedCodeInventoryCollector {
             table_scan_truncated_ =
                 table_scan_truncated_ || candidate.scan_truncated;
             normalize(candidate.target_addresses);
-            std::erase_if(candidate.target_addresses,
-                          [&](const auto target) { return !admit(target); });
             if (candidate.target_addresses.empty()) continue;
             const auto [stored, inserted] =
                 returned_tables_.try_emplace(candidate.table_address,
@@ -248,11 +246,6 @@ class GuardedCodeInventoryCollector {
 
     GuardedCodeInventory finish() {
         GuardedCodeInventory inventory;
-        inventory.candidate_budget = maximum_guarded_code_inventory;
-        inventory.candidate_count = admitted_targets_.size();
-        inventory.candidate_inventory_truncated =
-            candidate_inventory_truncated_;
-        inventory.table_scan_truncated = table_scan_truncated_;
         inventory.stored_code_addresses.reserve(stored_candidates_.size());
         for (auto& [target, candidate] : stored_candidates_) {
             static_cast<void>(target);
@@ -265,12 +258,23 @@ class GuardedCodeInventoryCollector {
         for (auto& [table_address, candidate] : returned_tables_) {
             static_cast<void>(table_address);
             normalize(candidate.target_addresses);
+            // Stored callback addresses carry the strongest inventory
+            // provenance, so admit all of them before broad returned-table
+            // scans compete for the shared bounded candidate budget.
+            std::erase_if(candidate.target_addresses,
+                          [&](const auto target) { return !admit(target); });
+            if (candidate.target_addresses.empty()) continue;
             normalize(candidate.load_instruction_addresses);
             normalize(candidate.evidence_call_sites);
             normalize(candidate.evidence_callees);
             inventory.returned_code_address_tables.push_back(
                 std::move(candidate));
         }
+        inventory.candidate_budget = maximum_guarded_code_inventory;
+        inventory.candidate_count = admitted_targets_.size();
+        inventory.candidate_inventory_truncated =
+            candidate_inventory_truncated_;
+        inventory.table_scan_truncated = table_scan_truncated_;
         return inventory;
     }
 
@@ -1151,6 +1155,17 @@ void apply_transfer(AbstractState& state,
     }
     case katana::sh4::InstructionKind::LoadSpecialRegisterPostIncrement:
         adjust_stack_offset(state, instruction.source_register, 4);
+        return;
+    case katana::sh4::InstructionKind::StoreSpecialRegister:
+        clear_written(state, instruction);
+        if (instruction.special_register == katana::sh4::SpecialRegister::Vbr) {
+            // STC VBR,Rn does not reveal a finite address, but it does establish
+            // that Rn is a vector-base value rather than a caller stack alias.
+            // Keep ordinary memory reasoning conservative while allowing the
+            // inventory-only observer to retain a proven callback subsequently
+            // stored through a VBR-relative address.
+            state.inventory_stack_may_alias[instruction.destination_register] = false;
+        }
         return;
     case katana::sh4::InstructionKind::MovByteLoadR0Indexed:
     case katana::sh4::InstructionKind::MovWordLoadR0Indexed:
