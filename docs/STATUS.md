@@ -38,9 +38,27 @@ ebenfalls abgeschlossen; `KR-4848` und `KR-4913` sind inzwischen ebenfalls
 geschlossen.
 
 Der aktuelle kumulative Vertrag verwendet Runtime-ABI 51, Block-ABI 5,
-Backend-Interface-ABI 4, PlatformServices-ABI 11, Portprojektvertrag 35 und
+Backend-Interface-ABI 4, PlatformServices-ABI 11, Portprojektvertrag 36 und
 Host-Video-Vertrag 2. Systemreplay-Schema 8, Runtime-Probe-Schema 5 und
 Device-Schema 5 binden die aktuellen Replay- und Geraetezustaende.
+
+`KR-4814` ist abgeschlossen. Der generierte Produktport pollt den nativen
+Windows-Controllerpfad an Gast-Safepoints und fuehrt XInput-, WinMM-Joystick-,
+Keyboard-, Hotplug-, Fokus- und Controller-1-Ereignisse durch dieselbe
+monotone `ControllerInputTimeline`. Nur geaenderte Zustaende werden in die
+`HostRuntimeSession` gespiegelt; Maple liest direkt aus der Timeline den
+letzten am jeweiligen Transaktionszyklus sichtbaren Zustand. Normalisierung,
+Deadzones, aktiv-niedrige Buttons, Trigger und beide Analogsticks besitzen
+denselben Vertrag fuer Xbox-, DualSense-, DualShock- und Standardgamepads.
+Deterministische Probes erreichen den nativen Poller nicht und verwenden
+weiterhin Replay- beziehungsweise neutralen Input. `KR-4914` bleibt offen:
+Ohne bootendes Spiel ist eine getrennte interaktive Sitzung noch nicht
+nachweisbar. Sechs fokussierte Controller-, Maple-, Runtime-, Homebrew- und
+Portexporttests bestanden 6/6; der getrennte Produktpfad
+`katana-port-cli-tests` bestand 1/1. Hostvideo, Scheduler-Safepoint und
+PlatformServices bestanden ergaenzend 3/3, der installierte
+SDK-/Packagevertrag 1/1, insgesamt damit 11/11 fokussierte Tests. Ein
+Voll-CTest und eine interaktive Sitzung liefen nicht.
 
 Die Callbackanalyse verwendet fuer CFG/Datenfluss weiterhin maximal acht
 Werte, fuehrt bewachte AOT-Seeds aber in einem getrennten 1.024-Ziele-Inventar.
@@ -598,7 +616,7 @@ ist damit beseitigt. TA/PVR und ein echter Gastframe bleiben fuer den laengeren
 Folgelauf weiterhin offen.
 
 Runtime-ABI 51, Block-ABI 5, Backend-Interface-ABI 4, BIOS-ABI 9,
-PlatformServices-ABI 11, Portprojektvertrag 35 und Host-Video-Vertrag 2 bilden
+PlatformServices-ABI 11, Portprojektvertrag 36 und Host-Video-Vertrag 2 bilden
 den kumulativen v0.48-Stand ab.
 PlatformServices-ABI 10 versioniert zusaetzlich die genaue
 `PREF`-Instruktionsherkunft bis zur Store Queue.

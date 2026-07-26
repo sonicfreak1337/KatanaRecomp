@@ -124,6 +124,11 @@ U32-Sequenzcommits, die Transaktionsgrenze der Produktbatches,
 Systemreplay-Schema 8, Runtime-Probe-Schema 5 und Device-Schema 5. Maple
 trennt darin DMA-Commit und IRQ-/ASIC-Publikation; PVR-Vollreset beginnt eine
 neue Rasterepoche.
+Portprojektvertrag 36 ergaenzt bei unveraenderter Runtime-ABI 51 die
+Controller-Produktintegration: Der generierte Port bindet Maple direkt an
+`ControllerInputTimeline`, pollt XInput und WinMM an Gast-Safepoints und
+fuehrt Keyboard und Fokus durch dieselbe gastzeitliche Ereignisschnittstelle.
+Deterministische Probes verzweigen vor diesem nativen Livepfad.
 
 ## CMake
 

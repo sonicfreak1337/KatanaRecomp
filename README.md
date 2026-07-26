@@ -62,9 +62,25 @@ feste CFG-Kante. Snapshotcache und P2-Aliasaufloesung sind gegen imagefremde
 Beweise abgesichert. Lokale AOT-Blockketten tragen die exakte tatsaechliche
 Terminatorquelle und Siteklasse bis zum externen Dispatch weiter. Der aktuelle
 kumulative Stand verwendet Runtime-ABI 51, Block-ABI 5,
-Backend-Interface-ABI 4, PlatformServices-ABI 11, Portprojektvertrag 35 und
+Backend-Interface-ABI 4, PlatformServices-ABI 11, Portprojektvertrag 36 und
 Host-Video-Vertrag 2. Die aktuelle Beobachtungsgrenze verwendet
 Systemreplay-Schema 8, Runtime-Probe-Schema 5 und Device-Schema 5.
+
+`KR-4814` schliesst den nativen Controller-Produktvertrag. Unter Windows
+liefert XInput aktuelle Xbox-Controller; der WinMM-Joystickpfad normalisiert
+DualSense, DualShock und uebliche Standardgamepads ueber dieselbe
+Hostabstraktion. Gamepad, Keyboard, Hotplug, Fokus und Controller-1-Auswahl
+schreiben nur Aenderungen in eine monotone, gastzyklusgestempelte Timeline.
+Der generierte Port pollt sie an Gast-Safepoints und bindet Maple direkt daran;
+`GetCondition` sieht dadurch den letzten am Transaktionszyklus sichtbaren
+Zustand. Deterministische Probes verzweigen vor dem nativen Polling und
+verwenden weiterhin Replay- beziehungsweise neutralen Input. `KR-4914` bleibt
+fuer die getrennte praktische interaktive Sitzung offen: Ohne Spielboot ist
+Controllerbedienung in einem erreichten Spielpfad noch nicht nachgewiesen.
+Der fokussierte Abschluss bestand 11/11 Tests einschliesslich des getrennten
+Produktpfads, des installierten SDK-/Packagevertrags sowie ergaenzender
+Hostvideo-, Scheduler-Safepoint- und PlatformServices-Regressionen; ein
+Voll-CTest und eine interaktive Sitzung liefen nicht.
 
 Die funktionsweite Wertanalyse behaelt ihr enges Acht-Werte-Limit fuer
 Datenfluss und CFG. Ein getrennter `GuardedCodeInventory`-Kanal sammelt bis zu
@@ -306,8 +322,10 @@ eigentlichen Spielboot. `KR-4915` und `KR-4850` sind durch den vorgezogenen
 IP.BIN-Framepfad erfuellt; die damals offenen `KR-4848`-Ladevorgaenge und der
 Materializer sind inzwischen geschlossen, der TA-/Bootpfad dagegen nicht.
 Der belegte Frame gibt die verbindliche v0.48-
-Controllerarbeit fuer Xbox-, DualSense- und vergleichbare Geraete frei; sie
-bleibt vor der konsolidierten v0.48-Validierung abzuschliessen.
+Controllerarbeit fuer Xbox-, DualSense- und vergleichbare Geraete frei.
+`KR-4814` ist inzwischen abgeschlossen; nur der getrennte interaktive
+Spielpfad-Nachweis aus `KR-4914` bleibt mangels Spielboot vor der
+konsolidierten v0.48-Validierung offen.
 
 Nach dem damaligen ABI-39-Gate wurde der Vertrag-24-Port unter Runtime-ABI 39
 und Block-ABI 3 frisch neu exportiert und gebaut: 1.860 Funktionen, 37

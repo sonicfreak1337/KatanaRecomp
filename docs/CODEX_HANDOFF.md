@@ -391,10 +391,10 @@ bis zum PAL-50-/60-Hz-Menue nachweisen
 
 Abgeschlossen und in Roadmap/Taskliste markiert sind `KR-4831`, `KR-4841`,
 `KR-4842`, `KR-4843`, `KR-4844`, `KR-4845`, `KR-4846`, `KR-4848`,
-`KR-4911`, `KR-4912`, `KR-4913`, `KR-4915` und `KR-4850`. Der aktuelle
-Runtimevertrag steht auf Runtime-ABI 51, Block-ABI 5,
+`KR-4911`, `KR-4912`, `KR-4913`, `KR-4915`, `KR-4850` und `KR-4814`. Der
+aktuelle Runtimevertrag steht auf Runtime-ABI 51, Block-ABI 5,
 Backend-Interface-ABI 4, PlatformServices-ABI 11, BIOS-ABI 9,
-Portprojektvertrag 35, Systemreplay-Schema 8, Runtime-Probe-Schema 5,
+Portprojektvertrag 36, Systemreplay-Schema 8, Runtime-Probe-Schema 5,
 Device-Schema 5 und Host-Video-Vertrag 2.
 Das verbindliche
 XenonRecomp-artige Produktmodell rekompiliert `IP.BIN` und BootExecutable
@@ -757,15 +757,26 @@ KR-4851: Counted-Loop-Bootregression schliessen und PAL-Auswahl nachweisen
 erfuellt. Die offene Bootfront beginnt mit der aktuellen
 Counted-Loop-Commitregression in `KR-4851`; `KR-4849` schliesst den
 produktiven TA/PVR-Vertrag. `KR-4915` und `KR-4850` sind durch den legitimen
-vorgezogenen Direct-Framebuffer-Pfad bereits erfuellt. `KR-4814` und
-`KR-4914` folgen als verbindliche Post-Frame-Arbeit in v0.48 auf `KR-4850`
-und muessen vor `KR-4852` abgeschlossen sein.
+vorgezogenen Direct-Framebuffer-Pfad bereits erfuellt. `KR-4814` ist
+abgeschlossen: Der Produktport pollt XInput/WinMM an Gast-Safepoints, fuehrt
+nativen Controller, Keyboard und Fokus durch eine gastzyklusgestempelte
+Timeline und bindet Maple direkt daran. Deterministische Probes bleiben vor
+diesem Livepfad auf Replay- beziehungsweise neutralem Input. `KR-4914` bleibt
+als verbindliche Post-Frame-Arbeit offen und muss vor `KR-4852` abgeschlossen
+sein. Der fokussierte Abschluss bestand 6/6 Controller-, Maple-, Runtime-,
+Homebrew- und Portexporttests sowie den getrennten Produktpfad
+`katana-port-cli-tests` 1/1. Hostvideo, Scheduler-Safepoint und
+PlatformServices bestanden ergaenzend 3/3, der installierte
+SDK-/Packagevertrag 1/1, insgesamt damit 11/11 fokussierte Tests. Ein
+Voll-CTest und eine interaktive Sitzung liefen nicht.
 
 Ein erster Gastframe und sein Host-Present sind nachgewiesen; BootExecutable
 und Spielboot sind es noch nicht. Moderne Xbox-, DualSense- und vergleichbare
-Hostcontroller gehoeren zu `KR-4814`/`KR-4914` in v0.48; Spielboot bleibt
-dabei P0, Controllerintegration P1. In der Kernrunde nur fokussierte Targets
-ausfuehren. Das einzige finale Vollgate laeuft nach allen v0.48-
+Hostcontroller sind im automatisierten Produktvertrag `KR-4814` abgedeckt.
+Mangels Spielboot ist die praktische interaktive Sitzung aus `KR-4914` noch
+nicht nachweisbar; Spielboot bleibt dabei P0, der interaktive Nachweis P1. In
+der Kernrunde nur fokussierte Targets ausfuehren. Das einzige finale Vollgate
+laeuft nach allen v0.48-
 Implementierungen in `KR-4852`; `KR-4853` uebernimmt dessen unveraenderten
 Bericht und fuehrt weder Build noch Test erneut aus. Der bereits ausgefuehrte
 vorgezogene Lauf ist Diagnoseevidenz, kein Ersatz fuer Spielboot oder

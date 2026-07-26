@@ -4,6 +4,23 @@
 
 ### Geaendert
 
+- `KR-4814` schliesst den nativen Controller-Produktvertrag. Der generierte
+  Port pollt XInput und WinMM an Gast-Safepoints, fuehrt Gamepad, Keyboard,
+  Hotplug, Fokus und Controller-1-Auswahl durch dieselbe
+  gastzyklusgestempelte `ControllerInputTimeline` und bindet Maple direkt
+  daran. `GetCondition` liest den letzten am Transaktionszyklus sichtbaren,
+  atomaren Zustand mit aktiv-niedrigen Buttons sowie normalisierten Triggern
+  und Analogachsen; nur Aenderungen werden in die Hostruntime gespiegelt.
+  Deterministische Probes verzweigen vor dem nativen Polling und bleiben auf
+  Replay- beziehungsweise neutralem Input. Portprojektvertrag 36 versioniert
+  die Produktintegration, Runtime-ABI 51 bleibt unveraendert. Sechs
+  fokussierte Controller-, Maple-, Runtime-, Homebrew- und Portexporttests
+  bestanden 6/6; `katana-port-cli-tests` bestand den getrennten Produktpfad
+  samt deterministischem Gamepad-Timeline-/Maple-End-to-End-Vertrag 1/1.
+  Hostvideo, Scheduler-Safepoint und PlatformServices bestanden
+  ergaenzend 3/3, der installierte SDK-/Packagevertrag 1/1, insgesamt damit
+  11/11 fokussierte Tests. Ein Voll-CTest und eine interaktive Sitzung liefen
+  nicht. `KR-4914` bleibt mangels Spielboot-Nachweis offen.
 - Der aktuelle Abschlussblock bestand 22/22 fokussierte Tests. Der danach
   genau einmal frisch exportierte Runtime-ABI-51-/Portvertrag-35-Produktport
   umfasst 1.952 Funktionen und 38 Partitionen. Sein einziger normaler

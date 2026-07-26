@@ -73,8 +73,8 @@ KR-4812, KR-4823 und KR-4914
 ```
 
 Korrektheit blockiert Performance. Waehrend aller noch offenen v0.48-
-Implementierungsaufgaben einschliesslich `KR-4814` und `KR-4914` werden
-grundsaetzlich nur betroffene Targets und kleine Regressionen ausgefuehrt. Der
+Implementierungsaufgaben einschliesslich `KR-4914` werden grundsaetzlich nur
+betroffene Targets und kleine Regressionen ausgefuehrt. Der
 First-Frame-/KR-4848-Zwischenblock erhielt zusaetzlich auf Quellstand
 `924ea89` ein vollstaendiges CTest-Zwischengate der x64-Desktop-GUI-off-
 Konfiguration mit 183/183 Eintraegen in 312,97 Sekunden bei zwoelf parallelen
@@ -85,11 +85,11 @@ konsolidierte Suite und die privaten Reproduktionslaeufe folgen erst nach
 Abschluss aller v0.48-Implementierungen genau einmal in `KR-4852`. `KR-4853`
 uebernimmt nur den unveraenderten gruenen Bericht. Das Zwischengate schliesst
 `KR-4852`, `KR-4853` oder `KR-4854` nicht ab. Jeder Prozess besitzt ein
-hartes Limit von 15 Minuten. Der moderne Hostcontrollervertrag und die private
-interaktive Sitzung (`KR-4814`/`KR-4914`) gehoeren als Post-Frame-Arbeit zu
-v0.48. Der erste echte Gastframe ist durch `KR-4850` belegt und gibt diese
-Aufgaben damit frei; beide muessen vor `KR-4852` abgeschlossen sein.
-BootExecutable und Spielboot bleiben parallel das aktuelle P0.
+hartes Limit von 15 Minuten. Der moderne Hostcontrollervertrag `KR-4814` ist
+als Post-Frame-Arbeit abgeschlossen. Die private interaktive Sitzung
+`KR-4914` bleibt offen, weil ohne bootendes Spiel noch kein praktischer
+Controllerlauf nachgewiesen werden kann; sie muss vor `KR-4852` abgeschlossen
+sein. BootExecutable und Spielboot bleiben parallel das aktuelle P0.
 
 ---
 
@@ -1132,7 +1132,7 @@ reproduziert beide Marker mit `frames=2`, `pvr_guest_frames=2`,
 `pvr_direct_frames=2` und 302.287 geaenderten Direct-FB-Pixeln; TA,
 Rendergeneration und Materializer bleiben null.
 
-### [ ] KR-4814 - Nativer Controller und gastzeitgebundene Maple-Eingabe
+### [x] KR-4814 - Nativer Controller und gastzeitgebundene Maple-Eingabe
 
 Abhaengigkeiten: KR-4850, KR-4616
 Meilenstein: v0.48, Implementierung nach dem erreichten ersten echten Gastframe
@@ -1163,6 +1163,32 @@ Akzeptanz:
 - deterministisches Replay ist bytegleich
 - keine Eingaberace zwischen Hostpoll und Maple-Read
 
+Abschluss 2026-07-26: Der Windows-Produktpfad pollt XInput sowie den
+WinMM-Joystickpfad fuer DualSense, DualShock und Standardgamepads an
+Gast-Safepoints. Gamepad, Keyboard, Hotplug, Fokus und Controller-1-Auswahl
+laufen durch dieselbe gastzyklusgestempelte `ControllerInputTimeline`; nur
+tatsaechliche Zustandsaenderungen werden in die `HostRuntimeSession`
+gespiegelt. Der generierte Port bindet Maple direkt an diese Timeline, sodass
+`GetCondition` den letzten am Transaktionszyklus sichtbaren Zustand
+aktiv-niedrig und mit normalisierten Triggern und Analogachsen liefert. Die
+deterministische Probe verzweigt vor dem nativen Polling und verwendet
+weiterhin ausschliesslich Replay- beziehungsweise neutralen Input. Die
+fokussierten Controller-, Maple-, Runtime- und Produktpfadregressionen pruefen
+diesen durch Portprojektvertrag 36 versionierten Vertrag. Eine praktische
+Projekt-Homebrew-Strecke leitet dabei Bildfarbe und Geometrie aus gastzeitlich
+getrennten Button-, Trigger- und Achspayloads ab; die Maple-MMIO-Regression
+haelt einen erst nach dem Transaktionszyklus gepollten Zustand aus der
+laufenden DMA-Antwort heraus. Der Produktpfadtest fuehrt eine deterministische
+Gamepadquelle durch Connect, unveraenderten Poll, Fokusreset, Disconnect und
+Reconnect und vergleicht jeden sichtbaren Zustand bitgenau ueber Maple.
+Der fokussierte Abschlusslauf bestand 6/6 Controller-, Maple-, Runtime-,
+Homebrew- und Portexporttests; der getrennte Produktpfad bestand
+`katana-port-cli-tests` 1/1. Hostvideo, Scheduler-Safepoint und
+PlatformServices bestanden ergaenzend 3/3, der installierte
+SDK-/Packagevertrag 1/1, insgesamt damit 11/11 fokussierte Tests. Ein
+Voll-CTest und eine praktische Sitzung mit realer Spielsteuerung liefen nicht;
+letztere bleibt mangels Spielboot-Nachweis ausschliesslich `KR-4914`.
+
 ### [ ] KR-4914 - Private interaktive Runtime-Sitzung mit Controller
 
 Abhaengigkeiten: KR-4814, KR-4850
@@ -1182,6 +1208,11 @@ Akzeptanz:
 - Nutzer kann einen erreichten Gastpfad mit Controller untersuchen
 - interaktive Sitzung wird in keinem Gate als deterministische Evidenz verwendet
 - Crash, Close und Timeout hinterlassen keine Kindprozesse oder Schedulerreste
+
+Offener Nachweis 2026-07-26: Der native Controllervertrag aus `KR-4814` ist
+implementiert und automatisiert pruefbar. Da noch kein Spiel bootet, kann die
+interaktive Bedienung eines erreichten Spielpfads derzeit nicht belegt werden;
+`KR-4914` bleibt deshalb offen.
 
 ### [ ] KR-4851 - Boot- und Frame-Hotpath
 

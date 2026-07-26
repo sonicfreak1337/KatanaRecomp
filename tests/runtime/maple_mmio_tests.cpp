@@ -1,7 +1,9 @@
 #include "katana/runtime/maple_mmio.hpp"
+#include "katana/runtime/host_input.hpp"
 
 #include <cstdlib>
 #include <iostream>
+#include <limits>
 #include <memory>
 #include <stdexcept>
 #include <string>
@@ -23,6 +25,15 @@ template <typename F> bool throws(F&& function) {
     }
     return false;
 }
+
+class TimelineGamepadSource final : public katana::runtime::HostGamepadSource {
+  public:
+    [[nodiscard]] std::vector<katana::runtime::HostControllerSample> poll() override {
+        return samples;
+    }
+
+    std::vector<katana::runtime::HostControllerSample> samples;
+};
 } // namespace
 
 int main() {
@@ -387,6 +398,88 @@ int main() {
                     publication_calls == 2u && observer_saw_publishing,
                 "Maple-Gastfehler verliert bei fehlschlagender "
                 "ASIC-Publikation seine eigene typisierte Ursache.");
+    }
+
+    {
+        Memory timeline_memory(0u);
+        timeline_memory.map_region(
+            "timeline-main-ram",
+            0x0C000000u,
+            std::make_shared<LinearMemoryDevice>(16u * 1024u * 1024u));
+        EventScheduler timeline_scheduler;
+        auto timeline_bus = std::make_shared<MapleBus>();
+        auto timeline_input = std::make_shared<ControllerInputTimeline>(
+            ControllerNormalizationConfig{0u, 0u, 0u});
+        TimelineGamepadSource timeline_source;
+        HostControllerSample first_sample;
+        first_sample.device_id = 1u;
+        first_sample.kind = HostControllerKind::XInput;
+        first_sample.buttons =
+            host_controller_button(HostControllerButton::South);
+        first_sample.left_x = 32'767;
+        first_sample.connected = true;
+        timeline_source.samples = {first_sample};
+        require(timeline_input->poll(timeline_source, 0u).has_value(),
+                "Maple-MMIO-Timeline nimmt den ersten Hostzustand nicht an.");
+        timeline_bus->attach(
+            0u, 0u, std::make_shared<MapleControllerDevice>(timeline_input));
+        const auto timeline_controller = map_dreamcast_maple_controller(
+            timeline_memory,
+            timeline_scheduler,
+            timeline_bus,
+            MapleDmaTiming{10u});
+
+        constexpr std::uint32_t timeline_table = 0x0C005000u;
+        constexpr std::uint32_t timeline_first_response = 0x0C006000u;
+        constexpr std::uint32_t timeline_second_response = 0x0C007000u;
+        const auto write_timeline_request = [&](const std::uint32_t destination) {
+            timeline_memory.write_u32(timeline_table, 0x80000001u);
+            timeline_memory.write_u32(timeline_table + 4u, destination);
+            timeline_memory.write_u32(timeline_table + 8u, request_header);
+            timeline_memory.write_u32(timeline_table + 12u, 0x01000000u);
+            timeline_memory.write_u32(0x005F6C04u, timeline_table);
+            timeline_memory.write_u32(0x005F6C10u, 0u);
+            timeline_memory.write_u32(0x005F6C14u, 1u);
+            timeline_memory.write_u32(0x005F6C18u, 1u);
+        };
+
+        write_timeline_request(timeline_first_response);
+        static_cast<void>(timeline_scheduler.advance_to(5u, 1u));
+        auto second_sample = first_sample;
+        second_sample.buttons =
+            host_controller_button(HostControllerButton::East);
+        second_sample.left_x = std::numeric_limits<std::int16_t>::min();
+        timeline_source.samples = {second_sample};
+        require(timeline_input->poll(timeline_source, 5u).has_value(),
+                "Hostzustandswechsel waehrend Maple-DMA fehlt in der Timeline.");
+        static_cast<void>(timeline_scheduler.advance_to(60u, 1u));
+        const auto first_condition =
+            timeline_memory.read_u32(timeline_first_response + 8u);
+        const auto first_axes =
+            timeline_memory.read_u32(timeline_first_response + 12u);
+        require(
+            (first_condition &
+             static_cast<std::uint16_t>(ControllerButton::A)) == 0u &&
+                (first_condition &
+                 static_cast<std::uint16_t>(ControllerButton::B)) != 0u &&
+                (first_axes & 0xFFu) == 0xFFu,
+            "Maple-DMA verwendet einen erst nach dem Transaktionszyklus sichtbaren Zustand.");
+
+        write_timeline_request(timeline_second_response);
+        static_cast<void>(timeline_scheduler.advance_to(120u, 1u));
+        const auto second_condition =
+            timeline_memory.read_u32(timeline_second_response + 8u);
+        const auto second_axes =
+            timeline_memory.read_u32(timeline_second_response + 12u);
+        require(
+            (second_condition &
+             static_cast<std::uint16_t>(ControllerButton::A)) != 0u &&
+                (second_condition &
+                 static_cast<std::uint16_t>(ControllerButton::B)) == 0u &&
+                (second_axes & 0xFFu) == 0u &&
+                timeline_controller->completed_dma_count() == 2u &&
+                timeline_input->sampled_frames() == 2u,
+            "Naechste Maple-DMA-Transaktion sieht nicht den letzten gastzeitgebundenen Zustand.");
     }
 
     std::cout << "Dreamcast-Maple-MMIO und echter DMA-Responsepfad erfolgreich.\n";

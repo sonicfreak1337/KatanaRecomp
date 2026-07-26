@@ -2977,12 +2977,22 @@ int run_test(const int argc, char* argv[]) {
     const auto runtime_probe_branch_call =
         generated_main.find("return run_deterministic_runtime_probe(",
                             runtime_probe_branch);
+    const auto normal_controller_timeline =
+        generated_main.find("katana::runtime::ControllerInputTimeline",
+                            runtime_probe_branch_call);
+    const auto normal_controller_attach =
+        generated_main.find("katana::runtime::MapleControllerDevice>(\n"
+                            "                controller_input)",
+                            normal_controller_timeline);
     const auto normal_native_video =
         generated_main.find("katana::runtime::native_video_available()",
-                            runtime_probe_branch_call);
+                            normal_controller_attach);
+    const auto normal_native_gamepad =
+        generated_main.find("katana::runtime::create_native_gamepad_source()",
+                            normal_native_video);
     const auto normal_native_audio =
         generated_main.find("katana::runtime::native_audio_available()",
-                            normal_native_video);
+                            normal_native_gamepad);
     const auto normal_host_runtime =
         generated_main.find("katana::runtime::HostRuntimeSession host",
                             normal_native_audio);
@@ -2991,9 +3001,21 @@ int run_test(const int argc, char* argv[]) {
                             normal_host_runtime);
     const auto normal_frame_proof =
         generated_main.find("pump_guest_frame_proof(", normal_frame_pump);
+    const auto normal_host_event_pump =
+        generated_main.find("const auto pump_host_events = [&] {",
+                            normal_frame_proof);
+    const auto normal_focus_reset =
+        generated_main.find("controller_input->set_focus(false, guest_cycle)",
+                            normal_host_event_pump);
+    const auto normal_keyboard_input =
+        generated_main.find("controller_input->keyboard_event(",
+                            normal_focus_reset);
+    const auto normal_gamepad_poll =
+        generated_main.find("controller_input->poll(",
+                            normal_keyboard_input);
     const auto normal_runtime_dispatch = generated_main.find(
         "katana_port_generated::run_runtime(cpu, services, *state.runtime_blocks,",
-        normal_frame_proof);
+        normal_gamepad_poll);
     const auto dispatch_probe_profile =
         runtime_dispatch.find("std::getenv(\"KATANA_RUNTIME_PROBE\")");
     const auto dispatch_probe_determinism =
@@ -3035,6 +3057,8 @@ int run_test(const int argc, char* argv[]) {
             generated_main.find("\"KATANA_PORT_BLOCK_LIMIT\"") !=
                 std::string::npos &&
             generated_main.find("\"KATANA_PORT_IGNORE_FOCUS\"") !=
+                std::string::npos &&
+            generated_main.find("\"KATANA_PORT_CONTROLLER_TEST\"") !=
                 std::string::npos &&
             generated_main.find("\"KATANA_PORT_MEMORY_PROBES\"") !=
                 std::string::npos &&
@@ -3097,6 +3121,9 @@ int run_test(const int argc, char* argv[]) {
                                 runtime_probe_function) >
                 runtime_probe_function_end &&
             generated_main.find("create_native_audio_output",
+                                runtime_probe_function) >
+                runtime_probe_function_end &&
+            generated_main.find("create_native_gamepad_source",
                                 runtime_probe_function) >
                 runtime_probe_function_end &&
             occurrences(generated_main,
@@ -3219,18 +3246,51 @@ int run_test(const int argc, char* argv[]) {
     require(
         runtime_probe_branch != std::string::npos &&
             runtime_probe_branch_call != std::string::npos &&
+            normal_controller_timeline != std::string::npos &&
+            normal_controller_attach != std::string::npos &&
             normal_native_video != std::string::npos &&
+            normal_native_gamepad != std::string::npos &&
             normal_native_audio != std::string::npos &&
             normal_host_runtime != std::string::npos &&
             normal_frame_pump != std::string::npos &&
             normal_frame_proof != std::string::npos &&
+            normal_host_event_pump != std::string::npos &&
+            normal_focus_reset != std::string::npos &&
+            normal_keyboard_input != std::string::npos &&
+            normal_gamepad_poll != std::string::npos &&
             normal_runtime_dispatch != std::string::npos &&
+            generated_main.find("#include \"katana/runtime/host_input.hpp\"") !=
+                std::string::npos &&
+            generated_main.find("else if (lifecycle_test.empty() &&\n"
+                                "            katana::runtime::"
+                                "native_gamepad_input_available())") !=
+                std::string::npos &&
+            generated_main.find("class ControllerContractGamepadSource final") !=
+                std::string::npos &&
+            generated_main.find("controller-contract-change-dedup-mismatch") !=
+                std::string::npos &&
+            generated_main.find("controller-contract-maple-mismatch") !=
+                std::string::npos &&
+            generated_main.find("controller_contract=", normal_host_event_pump) !=
+                std::string::npos &&
+            generated_main.find("if (gamepad_source && controller_input->focused() &&") !=
+                std::string::npos &&
+            generated_main.find("controller_changes=", normal_host_event_pump) !=
+                std::string::npos &&
+            generated_main.find("const auto bit = event.key") == std::string::npos &&
             runtime_probe_branch < runtime_probe_branch_call &&
-            runtime_probe_branch_call < normal_native_video &&
-            normal_native_video < normal_native_audio &&
+            runtime_probe_branch_call < normal_controller_timeline &&
+            normal_controller_timeline < normal_controller_attach &&
+            normal_controller_attach < normal_native_video &&
+            normal_native_video < normal_native_gamepad &&
+            normal_native_gamepad < normal_native_audio &&
             normal_native_audio < normal_host_runtime &&
             normal_host_runtime < normal_frame_pump &&
             normal_frame_pump < normal_frame_proof &&
+            normal_frame_proof < normal_host_event_pump &&
+            normal_host_event_pump < normal_focus_reset &&
+            normal_focus_reset < normal_keyboard_input &&
+            normal_keyboard_input < normal_gamepad_poll &&
             normal_frame_proof < normal_runtime_dispatch &&
             dispatch_probe_profile != std::string::npos &&
             dispatch_probe_determinism != std::string::npos &&
@@ -3238,8 +3298,8 @@ int run_test(const int argc, char* argv[]) {
             dispatch_generic_catch != std::string::npos &&
             dispatch_probe_profile < dispatch_probe_determinism &&
             dispatch_probe_budget_catch < dispatch_generic_catch,
-        "Runtime-Probe liegt nicht vor nativen Hostbackends oder schwaecht den normalen "
-        "Produkt-Frame-/Dispatchpfad ab.");
+        "Runtime-Probe liegt nicht vor nativen Hostbackends oder der normale Produktpfad "
+        "verliert Timeline-, Gamepad-, Keyboard-, Fokus-, Frame- oder Dispatchintegration.");
     const auto memory_probe_begin = generated_main.find(
         "if (const auto* probes = std::getenv(\"KATANA_PORT_MEMORY_PROBES\");");
     const auto memory_probe_end =

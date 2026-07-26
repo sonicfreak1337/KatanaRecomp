@@ -1633,7 +1633,7 @@ katana_enable_warnings(katana-maple-controller-tests)
 add_test(NAME katana-maple-controller-tests COMMAND katana-maple-controller-tests)
 
 add_executable(katana-host-input-tests tests/runtime/host_input_tests.cpp)
-target_link_libraries(katana-host-input-tests PRIVATE katana_runtime)
+target_link_libraries(katana-host-input-tests PRIVATE katana_runtime Threads::Threads)
 katana_enable_warnings(katana-host-input-tests)
 add_test(NAME katana-host-input-tests COMMAND katana-host-input-tests)
 

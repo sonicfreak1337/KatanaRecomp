@@ -1,5 +1,8 @@
 #include "katana/runtime/host_input.hpp"
 
+#include <algorithm>
+#include <array>
+#include <atomic>
 #include <cstdlib>
 #include <iostream>
 #include <limits>
@@ -7,6 +10,7 @@
 #include <optional>
 #include <stdexcept>
 #include <string>
+#include <thread>
 #include <vector>
 
 namespace {
@@ -234,9 +238,94 @@ int main() {
                     [&] { static_cast<void>(timeline->poll(source, 1u)); }),
             "Replaysequenz- oder Gastzyklusregression wird akzeptiert.");
 
+    FakeGamepadSource concurrent_source;
+    auto concurrent_a = sample(300u, HostControllerKind::XInput);
+    concurrent_a.buttons = host_controller_button(HostControllerButton::South);
+    concurrent_a.left_x = std::numeric_limits<std::int16_t>::max();
+    concurrent_a.left_trigger = std::numeric_limits<std::uint16_t>::max();
+    auto concurrent_b = sample(300u, HostControllerKind::XInput);
+    concurrent_b.buttons = host_controller_button(HostControllerButton::East);
+    concurrent_b.left_x = std::numeric_limits<std::int16_t>::min();
+    concurrent_b.right_trigger = std::numeric_limits<std::uint16_t>::max();
+    const auto concurrent_state_a =
+        normalize_host_controller(concurrent_a, {0u, 0u, 0u});
+    const auto concurrent_state_b =
+        normalize_host_controller(concurrent_b, {0u, 0u, 0u});
+    const auto condition_words = [](const ControllerState& state) {
+        return std::array{
+            static_cast<std::uint32_t>(static_cast<std::uint16_t>(
+                ~state.pressed_buttons)) |
+                (static_cast<std::uint32_t>(state.right_trigger) << 16u) |
+                (static_cast<std::uint32_t>(state.left_trigger) << 24u),
+            static_cast<std::uint32_t>(state.joystick_x) |
+                (static_cast<std::uint32_t>(state.joystick_y) << 8u) |
+                (static_cast<std::uint32_t>(state.joystick2_x) << 16u) |
+                (static_cast<std::uint32_t>(state.joystick2_y) << 24u)};
+    };
+    const auto condition_a = condition_words(concurrent_state_a);
+    const auto condition_b = condition_words(concurrent_state_b);
+    concurrent_source.devices = {concurrent_a};
+    auto concurrent_timeline =
+        std::make_shared<ControllerInputTimeline>(
+            ControllerNormalizationConfig{0u, 0u, 0u});
+    require(concurrent_timeline->poll(concurrent_source, 0u).has_value(),
+            "Race-Regression kann den ersten Controllerzustand nicht setzen.");
+    MapleBus concurrent_bus;
+    concurrent_bus.attach(
+        0u, 0u, std::make_shared<MapleControllerDevice>(concurrent_timeline));
+    std::atomic_bool concurrent_start = false;
+    std::atomic_bool torn_state = false;
+    std::thread maple_reader([&] {
+        while (!concurrent_start.load(std::memory_order_acquire))
+            std::this_thread::yield();
+        for (std::size_t sample_index = 0u; sample_index < 4'096u; ++sample_index) {
+            const auto response = concurrent_bus.exchange_at(
+                0u,
+                0u,
+                {MapleCommand::GetCondition, {}},
+                std::numeric_limits<std::uint64_t>::max());
+            const auto complete_a = response.payload.size() == 3u &&
+                                    response.payload[1] == condition_a[0] &&
+                                    response.payload[2] == condition_a[1];
+            const auto complete_b = response.payload.size() == 3u &&
+                                    response.payload[1] == condition_b[0] &&
+                                    response.payload[2] == condition_b[1];
+            if (!complete_a && !complete_b) {
+                torn_state.store(true, std::memory_order_release);
+                return;
+            }
+            if ((sample_index & 7u) == 0u) std::this_thread::yield();
+        }
+    });
+    concurrent_start.store(true, std::memory_order_release);
+    for (std::uint64_t cycle = 1u; cycle <= 2'048u; ++cycle) {
+        concurrent_source.devices = {(cycle & 1u) == 0u ? concurrent_a : concurrent_b};
+        require(concurrent_timeline->poll(concurrent_source, cycle).has_value(),
+                "Alternierender Race-Sample wird als unveraendert verworfen.");
+        if ((cycle & 7u) == 0u) std::this_thread::yield();
+    }
+    maple_reader.join();
+    require(!torn_state.load(std::memory_order_acquire) &&
+                concurrent_timeline->trace().size() == 2'049u,
+            "Gleichzeitiger Hostpoll und Maple-Read sieht einen zerrissenen Zustand.");
+
 #ifdef _WIN32
-    require(native_gamepad_input_available() && create_native_gamepad_source() != nullptr,
+    auto native_source = create_native_gamepad_source();
+    require(native_gamepad_input_available() && native_source != nullptr,
             "Win32 stellt kein hotplugfaehiges XInput-/HID-Backend bereit.");
+    const auto native_samples = native_source->poll();
+    const auto native_samples_valid =
+        std::all_of(native_samples.begin(), native_samples.end(), [](const auto& native_sample) {
+            if (!native_sample.connected || native_sample.device_id == 0u) return false;
+            try {
+                static_cast<void>(normalize_host_controller(native_sample));
+                return true;
+            } catch (...) {
+                return false;
+            }
+        });
+    require(native_samples_valid,
+            "Win32-Gamepadbackend liefert keinen normalisierbaren Samplevertrag.");
 #else
     require(!native_gamepad_input_available() &&
                 throws<std::runtime_error>(

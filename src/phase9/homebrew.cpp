@@ -11,6 +11,7 @@
 #include "katana/runtime/code_invalidation.hpp"
 #include "katana/runtime/dma.hpp"
 #include "katana/runtime/exception.hpp"
+#include "katana/runtime/host_input.hpp"
 #include "katana/runtime/indirect_dispatch.hpp"
 #include "katana/runtime/interrupt.hpp"
 #include "katana/runtime/maple.hpp"
@@ -349,10 +350,30 @@ HomebrewHostFrameReport run_homebrew_host_frame() {
 
     ControllerState first_input;
     first_input.pressed_buttons = static_cast<std::uint16_t>(ControllerButton::A);
+    first_input.left_trigger = 0x55u;
+    first_input.joystick_x = 0x20u;
+    first_input.joystick2_y = 0xE0u;
     ControllerState second_input;
     second_input.pressed_buttons = static_cast<std::uint16_t>(ControllerButton::Start);
-    auto input = std::make_shared<ReplayInputBackend>(
-        std::vector<ControllerState>{first_input, second_input});
+    second_input.right_trigger = 0xAAu;
+    second_input.joystick_y = 0x30u;
+    second_input.joystick2_x = 0xD0u;
+    auto input = std::make_shared<ControllerInputReplay>(
+        std::vector<ControllerInputChange>{
+            {1u,
+             0u,
+             ControllerInputChangeKind::Connected,
+             HostControllerKind::XInput,
+             1u,
+             true,
+             first_input},
+            {2u,
+             3u,
+             ControllerInputChangeKind::State,
+             HostControllerKind::XInput,
+             1u,
+             true,
+             second_input}});
     auto controller = std::make_shared<MapleControllerDevice>(input);
     MapleBus maple;
     maple.attach(0u, 0u, controller);
@@ -363,6 +384,20 @@ HomebrewHostFrameReport run_homebrew_host_frame() {
     framebuffer.configure(320u, 240u, 640u, PvrFramebufferFormat::Rgb565);
     std::vector<std::uint8_t> vram(320u * 240u * 2u, 0u);
     PvrFrame captured;
+    const auto controller_words = [](const ControllerState& state) {
+        return std::array{
+            static_cast<std::uint32_t>(static_cast<std::uint16_t>(
+                ~state.pressed_buttons)) |
+                (static_cast<std::uint32_t>(state.right_trigger) << 16u) |
+                (static_cast<std::uint32_t>(state.left_trigger) << 24u),
+            static_cast<std::uint32_t>(state.joystick_x) |
+                (static_cast<std::uint32_t>(state.joystick_y) << 8u) |
+                (static_cast<std::uint32_t>(state.joystick2_x) << 16u) |
+                (static_cast<std::uint32_t>(state.joystick2_y) << 24u)};
+    };
+    const auto first_controller_words = controller_words(first_input);
+    const auto second_controller_words = controller_words(second_input);
+    std::vector<std::uint64_t> controller_reactions;
 
     AicaMixer mixer;
     RecordingAicaAudioBackend audio;
@@ -388,15 +423,52 @@ HomebrewHostFrameReport run_homebrew_host_frame() {
         scheduler,
         MediaClockConfig{120u, 60u, 120u, 2u},
         [&](const VideoTick& tick) {
-            const auto response = maple.exchange(0u, 0u, {MapleCommand::GetCondition, {1u}});
-            if (response.code != MapleResponseCode::DataTransfer) ++report.silent_failures;
+            const auto response =
+                maple.exchange_at(0u, 0u, {MapleCommand::GetCondition, {1u}}, tick.guest_cycle);
+            const auto& expected =
+                tick.guest_cycle < 3u ? first_controller_words : second_controller_words;
+            if (response.code != MapleResponseCode::DataTransfer ||
+                response.payload.size() != 3u ||
+                response.payload[0] != 0x01000000u ||
+                response.payload[1] != expected[0] ||
+                response.payload[2] != expected[1])
+                ++report.silent_failures;
+            const auto condition = response.payload.size() < 2u ? 0u : response.payload[1];
+            const auto axes = response.payload.size() < 3u ? 0u : response.payload[2];
+            controller_reactions.push_back(
+                (static_cast<std::uint64_t>(condition) << 32u) | axes);
             auto input_event = replay_event(
                 SystemReplayEventKind::ExternalInput, tick.guest_cycle, "controller-condition");
-            input_event.detail = response.payload.empty() ? 0u : response.payload.front();
+            input_event.detail = condition;
+            input_event.auxiliary = axes;
             replay.inject(std::move(input_event));
+            const auto pressed_buttons =
+                static_cast<std::uint16_t>(~static_cast<std::uint16_t>(condition));
+            const auto right_trigger = static_cast<std::uint8_t>(condition >> 16u);
+            const auto left_trigger = static_cast<std::uint8_t>(condition >> 24u);
+            const auto joystick_x = static_cast<std::uint8_t>(axes);
+            const auto joystick_y = static_cast<std::uint8_t>(axes >> 8u);
+            const auto joystick2_x = static_cast<std::uint8_t>(axes >> 16u);
+            const auto joystick2_y = static_cast<std::uint8_t>(axes >> 24u);
+            const auto reaction_color =
+                0xFF000000u | (static_cast<std::uint32_t>(left_trigger) << 16u) |
+                (static_cast<std::uint32_t>(right_trigger) << 8u) |
+                (pressed_buttons & 0xFFu);
             ta.begin_list(PvrListType::Opaque);
-            ta.submit_vertex({16.0f, 16.0f, 0.5f, 0.0f, 0.0f, 0xFFFF8000u}, false);
-            ta.submit_vertex({304.0f, 16.0f, 0.5f, 1.0f, 0.0f, 0xFF00FFFFu}, false);
+            ta.submit_vertex({16.0f + static_cast<float>(joystick_x) / 8.0f,
+                              16.0f + static_cast<float>(joystick_y) / 8.0f,
+                              0.5f,
+                              0.0f,
+                              0.0f,
+                              reaction_color},
+                             false);
+            ta.submit_vertex({272.0f + static_cast<float>(joystick2_x) / 8.0f,
+                              16.0f + static_cast<float>(joystick2_y) / 8.0f,
+                              0.5f,
+                              1.0f,
+                              0.0f,
+                              0xFF00FFFFu},
+                             false);
             ta.submit_vertex({160.0f, 224.0f, 0.5f, 0.5f, 1.0f, 0xFFFFFFFFu}, true);
             ta.end_list();
             const auto ta_frame = ta.finish_frame();
@@ -408,6 +480,10 @@ HomebrewHostFrameReport run_homebrew_host_frame() {
             const auto rgb565 = static_cast<std::uint16_t>((red << 11u) | (green << 5u) | blue);
             vram[0] = static_cast<std::uint8_t>(rgb565);
             vram[1] = static_cast<std::uint8_t>(rgb565 >> 8u);
+            vram[2] = joystick_x;
+            vram[3] = joystick_y;
+            vram[4] = joystick2_x;
+            vram[5] = joystick2_y;
             captured = framebuffer.capture(vram);
             auto event = replay_event(SystemReplayEventKind::Video, tick.guest_cycle, "ta-frame");
             event.detail = ta_frame.primitives.size();
@@ -508,8 +584,15 @@ HomebrewHostFrameReport run_homebrew_host_frame() {
     if (advance.status != SchedulerAdvanceStatus::ReachedTarget || report.pvr_frames < 1u ||
         report.frame_width != 320u || report.frame_height != 240u ||
         report.frame_rgba_bytes != 320u * 240u * 4u || report.audio_buffers == 0u ||
-        report.maple_transactions == 0u || report.dma_units != 1u || report.interrupts != 1u ||
-        replay.dropped_events() != 0u) {
+        report.maple_transactions < 2u || input->sampled_frames() != report.maple_transactions ||
+        controller_reactions.size() != report.maple_transactions ||
+        controller_reactions.front() !=
+            ((static_cast<std::uint64_t>(first_controller_words[0]) << 32u) |
+             first_controller_words[1]) ||
+        controller_reactions.back() !=
+            ((static_cast<std::uint64_t>(second_controller_words[0]) << 32u) |
+             second_controller_words[1]) ||
+        report.dma_units != 1u || report.interrupts != 1u || replay.dropped_events() != 0u) {
         ++report.silent_failures;
     }
     return report;

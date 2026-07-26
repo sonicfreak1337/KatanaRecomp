@@ -121,6 +121,28 @@ if(NOT generated_result EQUAL 0 OR
     "${generated_output} ${generated_error}")
 endif()
 
+set(ENV{KATANA_PORT_CONTROLLER_TEST} "1")
+set(ENV{KATANA_PORT_IGNORE_FOCUS} "1")
+execute_process(
+  COMMAND "${game}" --content "${fixture}/port/user-data/content/game.katana-disc"
+  RESULT_VARIABLE controller_result
+  OUTPUT_VARIABLE controller_output
+  ERROR_VARIABLE controller_error
+)
+unset(ENV{KATANA_PORT_CONTROLLER_TEST})
+unset(ENV{KATANA_PORT_IGNORE_FOCUS})
+if(NOT controller_result EQUAL 0 OR
+   NOT controller_output MATCHES "KR_GUEST_PROGRAM_ENTERED" OR
+   NOT controller_output MATCHES "silent_failures=0" OR
+   NOT controller_output MATCHES "controller_changes=[1-9][0-9]*" OR
+   NOT controller_output MATCHES "controller_samples=[1-9][0-9]*" OR
+   NOT controller_output MATCHES "controller_contract=31")
+  file(REMOVE_RECURSE "${fixture}")
+  message(FATAL_ERROR
+    "Produkt-Controllervertrag erreicht Gamepad-Timeline und Maple nicht: "
+    "${controller_output} ${controller_error}")
+endif()
+
 string(REGEX MATCH "Inkrementeller Hostbuild-Cache: ([^\r\n]+)"
        port_build_cache_match "${port_output}")
 if(NOT port_build_cache_match)

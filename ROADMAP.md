@@ -189,18 +189,20 @@ und Hosteingabevertraege.
 
 ### Post-Frame-Controller-Tasks
 
-- [ ] `KR-4814` - Nativer Controller und gastzeitgebundene Maple-Eingabe
+- [x] `KR-4814` - Nativer Controller und gastzeitgebundene Maple-Eingabe
 - [ ] `KR-4914` - Private interaktive Runtime-Sitzung mit Controller
 
 Beide Controlleraufgaben gehoeren verbindlich zu v0.48. Sie durften erst nach
 dem P0-Framebeweis aus `KR-4850` beginnen; diese Voraussetzung ist inzwischen
-erfuellt. Sie muessen vor der konsolidierten Validierung `KR-4852`
-abgeschlossen sein.
+erfuellt. Der native, automatisiert pruefbare Produktvertrag aus `KR-4814` ist
+abgeschlossen. `KR-4914` bleibt offen, weil ohne bootendes Spiel noch keine
+praktische interaktive Sitzung nachgewiesen werden kann; dieser Nachweis bleibt
+vor der konsolidierten Validierung `KR-4852` verpflichtend.
 
 Der Checkboxstand bleibt bewusst taskbezogen: `KR-4831`, `KR-4841`,
 `KR-4842`, `KR-4843` bis `KR-4846`, `KR-4848`, `KR-4911` bis `KR-4913`,
-`KR-4915` und `KR-4850` sind abgeschlossen. `KR-4842` bindet MMU-bewusste
-lineare Peeks, nicht mutierende
+`KR-4915`, `KR-4850` und `KR-4814` sind abgeschlossen. `KR-4842` bindet
+MMU-bewusste lineare Peeks, nicht mutierende
 Geraetesnapshots, statische Wait-Loop-/Guard-Provenienz und den versionierten
 dynamischen Wait-Loop-Trace an eine deterministische Produktprobe. Der
 Diagnose=0/1-A/B-Lauf bestand mit zwei frischen, identisch auf 100.000
@@ -216,7 +218,8 @@ erreicht hostunabhaengig `KR_FIRST_GUEST_FRAME` und danach
 `KR_FIRST_PRESENTED_FRAME`. Dieser Nachweis schloss `KR-4848`, `KR-4849` und
 den Spielboot damals noch nicht ab; `KR-4848` ist inzwischen geschlossen. Der
 belegte Frame gibt die v0.48-Controlleraufgaben `KR-4814` und `KR-4914` frei;
-beide bleiben vor `KR-4852` verpflichtend.
+`KR-4814` ist inzwischen abgeschlossen. Die praktische interaktive Sitzung in
+`KR-4914` bleibt mangels Spielboot-Nachweis vor `KR-4852` verpflichtend.
 
 Aktueller Kernteilstand: Byteidentische BIOS-/GD-Reloads erhalten vorhandene
 native AOT-Bloecke, waehrend geaenderte Bytes exakt einmal invalidieren. Der
@@ -529,8 +532,8 @@ und das konsolidierte Gate dadurch nicht uebersprungen.
 
 Unabhaengige Aufgaben derselben Stufe duerfen parallel entwickelt werden.
 Waehrend aller noch offenen v0.48-Implementierungsaufgaben einschliesslich
-`KR-4814` und `KR-4914` laufen nur betroffene Targets und kleine, fokussierte
-Regressionen. Vollstaendiges CTest, Sanitizer-Gate, finaler Portexport, finale
+`KR-4914` laufen nur betroffene Targets und kleine, fokussierte Regressionen.
+Vollstaendiges CTest, Sanitizer-Gate, finaler Portexport, finale
 Originaldisc-Installation und die beiden abschliessenden privaten
 Reproduktionslaeufe werden einmal in `KR-4852` gebuendelt. Budgetierte private
 Diagnoselaeufe nach einem konkreten vertikalen Bootfix bleiben davon
