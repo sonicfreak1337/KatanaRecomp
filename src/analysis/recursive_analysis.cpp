@@ -130,8 +130,7 @@ void add_function_evidence(std::unordered_map<std::uint32_t, FunctionCandidate>&
     if (static_cast<int>(confidence) > static_cast<int>(candidate.confidence)) {
         candidate.confidence = confidence;
     }
-    if (control_flow_evidence_strength(evidence) >
-        control_flow_evidence_strength(candidate.evidence))
+    if (control_flow_evidence_preferred_for_static_decode(evidence, candidate.evidence))
         candidate.evidence = evidence;
     if (std::find(candidate.origins.begin(), candidate.origins.end(), origin) ==
         candidate.origins.end()) {
@@ -280,14 +279,22 @@ RecursiveAnalysisResult analyze_reachable_code(const katana::io::ExecutableImage
         result_contexts.push_back(std::move(contextual));
 
         if (!line.instruction.is_known()) {
-            diagnostics.push_back({address, opcode, "unknown-opcode"});
+            diagnostics.push_back({address,
+                                   opcode,
+                                   AnalysisDiagnosticKind::UnknownOpcode,
+                                   "unknown-opcode",
+                                   evidence});
             continue;
         }
 
         if (line.is_delay_slot) {
             delay_slots.insert(address);
             if (line.instruction.changes_control_flow())
-                diagnostics.push_back({address, opcode, "control-flow-in-delay-slot"});
+                diagnostics.push_back({address,
+                                       opcode,
+                                       AnalysisDiagnosticKind::ControlFlowInDelaySlot,
+                                       "control-flow-in-delay-slot",
+                                       evidence});
             continue;
         }
 
@@ -298,14 +305,22 @@ RecursiveAnalysisResult analyze_reachable_code(const katana::io::ExecutableImage
                 enqueue(pending, scheduled, delay_address, address, address, evidence);
                 const auto delay_validation = validate_committed_code_address(image, delay_address);
                 if (!delay_validation.valid()) {
-                    diagnostics.push_back({address, opcode, "delay-slot-unavailable"});
+                    diagnostics.push_back({address,
+                                           opcode,
+                                           AnalysisDiagnosticKind::DelaySlotUnavailable,
+                                           "delay-slot-unavailable",
+                                           evidence});
                     continue;
                 }
                 const auto delay_offset = *delay_validation.segment->byte_offset(delay_address);
                 const auto delay_opcode =
                     katana::io::read_u16_le(delay_validation.segment->bytes, delay_offset);
                 if (!katana::sh4::decode(delay_opcode).is_known()) {
-                    diagnostics.push_back({address, opcode, "delay-slot-unknown-opcode"});
+                    diagnostics.push_back({address,
+                                           opcode,
+                                           AnalysisDiagnosticKind::DelaySlotUnknownOpcode,
+                                           "delay-slot-unknown-opcode",
+                                           evidence});
                     continue;
                 }
             }
@@ -411,7 +426,14 @@ RecursiveAnalysisResult analyze_reachable_code(const katana::io::ExecutableImage
                   if (left.opcode != right.opcode) {
                       return left.opcode < right.opcode;
                   }
-                  return left.reason < right.reason;
+                  if (left.reason != right.reason) {
+                      return left.reason < right.reason;
+                  }
+                  const auto left_blocks = analysis_diagnostic_blocks_codegen(left);
+                  const auto right_blocks = analysis_diagnostic_blocks_codegen(right);
+                  if (left_blocks != right_blocks) return left_blocks;
+                  return control_flow_evidence_preferred_for_static_decode(left.evidence,
+                                                                          right.evidence);
               });
     result.diagnostics.erase(std::unique(result.diagnostics.begin(),
                                          result.diagnostics.end(),
@@ -557,7 +579,10 @@ std::string format_recursive_analysis_report(const RecursiveAnalysisResult& resu
         }
         output << " Opcode=0x" << std::hex << std::uppercase << std::setw(4) << std::setfill('0')
                << diagnostic.opcode << std::dec << std::setfill(' ')
-               << " Grund=" << diagnostic.reason << '\n';
+               << " Grund=" << diagnostic.reason
+               << " Evidenz=" << control_flow_evidence_name(diagnostic.evidence)
+               << " Blockiert-Codegen="
+               << (analysis_diagnostic_blocks_codegen(diagnostic) ? "ja" : "nein") << '\n';
     }
     return output.str();
 }

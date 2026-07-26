@@ -59,7 +59,10 @@ std::uint32_t align_up(const std::uint32_t value, const std::uint32_t alignment)
 }
 
 bool complete_native_graph(const katana::analysis::ControlFlowAnalysisResult& analysis) {
-    if (!analysis.recursive.diagnostics.empty() || analysis.function_budget_exhausted)
+    if (std::any_of(analysis.recursive.diagnostics.begin(),
+                    analysis.recursive.diagnostics.end(),
+                    katana::analysis::analysis_diagnostic_blocks_codegen) ||
+        analysis.function_budget_exhausted)
         return false;
     return std::none_of(
         analysis.indirect_control_flow.begin(),

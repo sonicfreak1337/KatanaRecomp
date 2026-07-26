@@ -953,7 +953,12 @@ AnalysisCoverage analysis_coverage(const io::LoadedProject& project,
                                            coverage.incomplete_initial_required_code_bytes +
                                            coverage.uncovered_runtime_materializable_bytes;
     coverage.functions = analysis.recursive.functions.size();
-    coverage.unknown_instructions = analysis.recursive.diagnostics.size();
+    coverage.unknown_instructions = static_cast<std::size_t>(std::count_if(
+        analysis.recursive.diagnostics.begin(),
+        analysis.recursive.diagnostics.end(),
+        analysis::analysis_diagnostic_blocks_codegen));
+    coverage.candidate_unknown_instructions =
+        analysis.recursive.diagnostics.size() - coverage.unknown_instructions;
     for (const auto& resolution : analysis.indirect_control_flow) {
         switch (analysis::control_flow_report_status(resolution)) {
         case analysis::ControlFlowReportStatus::Resolved:
@@ -978,8 +983,17 @@ AnalysisCoverage analysis_coverage(const io::LoadedProject& project,
     coverage.reachable_abort_edges = coverage.unknown_instructions +
                                      coverage.guarded_partial_control_flow +
                                      coverage.unresolved_control_flow;
+    std::unordered_set<std::uint32_t> statically_required_instruction_addresses;
+    for (const auto& contextual : analysis.recursive.contextual_instructions) {
+        if (analysis::control_flow_evidence_requires_static_decode(contextual.evidence))
+            statically_required_instruction_addresses.insert(contextual.line.address);
+    }
+    const auto statically_required_instruction = [&](const std::uint32_t address) {
+        return statically_required_instruction_addresses.contains(address);
+    };
     std::set<std::pair<std::uint32_t, std::uint32_t>> invalid_edges;
     const auto add_invalid_edge = [&](const std::uint32_t source, const std::uint32_t target) {
+        if (!statically_required_instruction(source)) return;
         if (!analysis::validate_committed_code_address(project.image, target).valid())
             invalid_edges.emplace(source, target);
     };
@@ -1017,9 +1031,12 @@ AnalysisCoverage analysis_coverage(const io::LoadedProject& project,
     std::set<std::uint32_t> required_targets(project.image.entry_points().begin(),
                                              project.image.entry_points().end());
     for (const auto& line : analysis.recursive.instructions)
-        if (line.target_address.has_value()) required_targets.insert(*line.target_address);
+        if (statically_required_instruction(line.address) && line.target_address.has_value())
+            required_targets.insert(*line.target_address);
     for (const auto& edge : analysis.resolved_edges)
-        required_targets.insert(edge.target_address);
+        if (analysis::control_flow_evidence_requires_static_decode(
+                analysis::resolved_edge_evidence(edge)))
+            required_targets.insert(edge.target_address);
     const auto runtime_provenance_covers = [&](const std::uint32_t target) {
         return std::any_of(
             inventory.ranges.begin(), inventory.ranges.end(), [&](const auto& range) {
@@ -1101,6 +1118,8 @@ std::string build_plan_json(const std::string_view status,
            << coverage.guarded_partial_control_flow + coverage.runtime_only_control_flow +
                   coverage.unresolved_control_flow
            << ",\"unknown_instructions\":" << coverage.unknown_instructions
+           << ",\"candidate_unknown_instructions\":"
+           << coverage.candidate_unknown_instructions
            << ",\"reachable_abort_edges\":" << coverage.reachable_abort_edges
            << ",\"executable_byte_classes\":{";
     for (std::size_t current = 0u; current < coverage.executable_byte_classes.size(); ++current) {
@@ -2084,6 +2103,8 @@ std::string format_job_result_json(const JobResult& result) {
                << coverage.guarded_partial_control_flow + coverage.runtime_only_control_flow +
                       coverage.unresolved_control_flow
                << ",\"unknown_instructions\":" << coverage.unknown_instructions
+               << ",\"candidate_unknown_instructions\":"
+               << coverage.candidate_unknown_instructions
                << ",\"reachable_abort_edges\":" << coverage.reachable_abort_edges
                << ",\"executable_byte_classes\":{";
         for (std::size_t current = 0u; current < coverage.executable_byte_classes.size();

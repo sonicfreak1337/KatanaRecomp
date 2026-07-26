@@ -60,8 +60,8 @@ bool add_seed(std::map<std::uint32_t, SeedEvidence>& seeds,
         iterator->second.proven = true;
         changed = true;
     }
-    if (control_flow_evidence_strength(evidence) >
-        control_flow_evidence_strength(iterator->second.evidence)) {
+    if (control_flow_evidence_preferred_for_static_decode(evidence,
+                                                         iterator->second.evidence)) {
         changed = iterator->second.evidence != evidence || changed;
         iterator->second.evidence = evidence;
     }

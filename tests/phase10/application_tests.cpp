@@ -367,6 +367,49 @@ int main() {
                 incomplete_plan_text.find("\"tool_version\":\"0.40.0-dev\"") != std::string::npos,
             "Mixed-Segment-Buildplan verliert den sicheren Ausfuehrungsabdeckungsvertrag.");
 
+    const auto guarded_unknown_raw = fixture.root / "guarded-unknown.bin";
+    std::vector<std::uint8_t> guarded_unknown_program(0x14u);
+    guarded_unknown_program[0] = 0x0Bu;
+    guarded_unknown_program[1] = 0x00u;
+    guarded_unknown_program[2] = 0x09u;
+    guarded_unknown_program[3] = 0x00u;
+    guarded_unknown_program[0x10u] = 0x09u;
+    guarded_unknown_program[0x11u] = 0x00u;
+    guarded_unknown_program[0x12u] = 0xFFu;
+    guarded_unknown_program[0x13u] = 0xFFu;
+    write_binary(guarded_unknown_raw, guarded_unknown_program);
+    const auto guarded_unknown_directives = fixture.root / "guarded-unknown.hints";
+    write_text(guarded_unknown_directives,
+               "schema = katana-analysis-directives\n"
+               "version = 2\n"
+               "mode = hint\n"
+               "function = 0x8C010010\n");
+    auto guarded_unknown_manifest = raw_manifest(guarded_unknown_raw);
+    guarded_unknown_manifest.analysis_overrides_path = guarded_unknown_directives;
+    const auto guarded_unknown_manifest_path = fixture.root / "guarded-unknown.katana";
+    auto guarded_unknown_session =
+        app::ProjectSession::create(guarded_unknown_manifest_path, guarded_unknown_manifest);
+    guarded_unknown_session.save();
+    const auto guarded_unknown_result =
+        service.execute({"guarded-unknown",
+                         app::JobKind::Build,
+                         guarded_unknown_manifest_path,
+                         fixture.root / "guarded-unknown",
+                         "0.40.0-dev"});
+    require(guarded_unknown_result.state == app::JobState::Completed &&
+                guarded_unknown_result.analysis_coverage.has_value() &&
+                guarded_unknown_result.analysis_coverage->unknown_instructions == 0u &&
+                guarded_unknown_result.analysis_coverage->candidate_unknown_instructions == 1u &&
+                guarded_unknown_result.analysis_coverage->reachable_abort_edges == 0u &&
+                guarded_unknown_result.analysis_coverage->control_flow_complete &&
+                std::filesystem::exists(fixture.root / "guarded-unknown" / "generated") &&
+                read_text(fixture.root / "guarded-unknown" / "analysis.json")
+                        .find("\"reason\":\"unknown-opcode\",\"evidence\":\"hint-candidate\","
+                              "\"blocks_codegen\":false") != std::string::npos &&
+                read_text(fixture.root / "guarded-unknown" / "build-plan.json")
+                        .find("\"candidate_unknown_instructions\":1") != std::string::npos,
+            "Nicht bindender Guarded-Hint blockiert den Hostbuild oder verschwindet diagnostisch.");
+
     const auto publication_race = fixture.root / "publication-race";
     std::vector<app::JobEvent> publication_events;
     const auto publication_failure = service.execute(

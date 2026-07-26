@@ -727,16 +727,23 @@ std::string format_control_flow_analysis_json(const ControlFlowAnalysisResult& a
         return left.address < right.address;
     });
     output << ",\"diagnostics\":[";
+    const auto blocking_diagnostics = static_cast<std::size_t>(std::count_if(
+        diagnostics.begin(), diagnostics.end(), analysis_diagnostic_blocks_codegen));
     for (std::size_t index = 0u; index < diagnostics.size(); ++index) {
         if (index != 0u) output << ',';
         output << "{\"address\":" << katana::io::quote_json(hex32(diagnostics[index].address))
                << ",\"opcode\":" << katana::io::quote_json(hex16(diagnostics[index].opcode))
-               << ",\"reason\":" << katana::io::quote_json(diagnostics[index].reason);
+               << ",\"reason\":" << katana::io::quote_json(diagnostics[index].reason)
+               << ",\"evidence\":"
+               << katana::io::quote_json(control_flow_evidence_name(diagnostics[index].evidence))
+               << ",\"blocks_codegen\":"
+               << (analysis_diagnostic_blocks_codegen(diagnostics[index]) ? "true" : "false");
         append_symbol_json(
             output, "symbol", analysis.symbolic_addresses, diagnostics[index].address);
         output << '}';
     }
-    output << "]}\n";
+    output << "],\"diagnostic_summary\":{\"blocking\":" << blocking_diagnostics
+           << ",\"candidate\":" << diagnostics.size() - blocking_diagnostics << "}}\n";
     return output.str();
 }
 

@@ -133,6 +133,7 @@ struct AnalysisCoverage {
     std::size_t runtime_only_control_flow = 0u;
     std::size_t unresolved_control_flow = 0u;
     std::size_t unknown_instructions = 0u;
+    std::size_t candidate_unknown_instructions = 0u;
     std::size_t reachable_abort_edges = 0u;
     std::array<std::uint64_t, 12u> executable_byte_classes{};
     std::array<std::uint64_t, 6u> precompile_classes{};

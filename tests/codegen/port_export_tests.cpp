@@ -179,6 +179,50 @@ std::vector<std::uint8_t> boot_track(
     return bytes;
 }
 
+std::vector<std::uint8_t> stored_unknown_candidate_boot_track() {
+    auto bytes = boot_track();
+    constexpr std::uint32_t boot_size = 0x34u;
+    auto directory = payload_offset(20u);
+    directory +=
+        record(bytes, directory, data_lba + 20u, payload_size, std::string(1u, '\0'), true);
+    directory +=
+        record(bytes, directory, data_lba + 20u, payload_size, std::string(1u, '\1'), true);
+    static_cast<void>(
+        record(bytes, directory, data_lba + 21u, boot_size, "BOOT.BIN;1", false));
+
+    std::vector<std::uint8_t> program(boot_size);
+    for (std::size_t offset = 0u; offset < program.size(); offset += 2u)
+        program[offset] = 0x09u; // nop
+    program[0x00u] = 0x03u;
+    program[0x01u] = 0xD4u; // mov.l @(0x10,pc),r4 -> candidate 0x8C010030
+    program[0x02u] = 0x0Du;
+    program[0x03u] = 0xB0u; // bsr 0x8C010020
+    program[0x04u] = 0x09u;
+    program[0x05u] = 0x00u; // nop (delay)
+    program[0x06u] = 0x0Bu;
+    program[0x07u] = 0x00u; // rts
+    program[0x08u] = 0x09u;
+    program[0x09u] = 0x00u; // nop (delay)
+    constexpr auto candidate_address =
+        katana::platform::dreamcast_disc_boot_address + 0x30u;
+    program[0x10u] = static_cast<std::uint8_t>(candidate_address);
+    program[0x11u] = static_cast<std::uint8_t>(candidate_address >> 8u);
+    program[0x12u] = static_cast<std::uint8_t>(candidate_address >> 16u);
+    program[0x13u] = static_cast<std::uint8_t>(candidate_address >> 24u);
+    program[0x20u] = 0x42u;
+    program[0x21u] = 0x22u; // mov.l r4,@r2 (symbolic non-stack destination)
+    program[0x22u] = 0x0Bu;
+    program[0x23u] = 0x00u; // rts
+    program[0x24u] = 0x09u;
+    program[0x25u] = 0x00u; // nop (delay)
+    program[0x30u] = 0xFFu;
+    program[0x31u] = 0xFFu; // speculative unknown opcode
+    std::copy(program.begin(),
+              program.end(),
+              bytes.begin() + static_cast<std::ptrdiff_t>(payload_offset(21u)));
+    return bytes;
+}
+
 std::vector<std::uint8_t> poll_loop_boot_track() {
     auto bytes = boot_track();
     constexpr std::array<std::uint8_t, 24u> program = {
@@ -235,6 +279,21 @@ void write_fixture(const std::filesystem::path& directory,
     write_binary(directory / "low.bin", low_track);
     write_binary(directory / "audio.raw", std::vector<std::uint8_t>(raw_sector_size));
     write_binary(directory / "high.bin", boot_track(fixture_program));
+    std::ofstream descriptor(directory / "disc.gdi", std::ios::trunc);
+    descriptor << "3\n"
+               << "1 0 4 2352 low.bin 0\n"
+               << "2 30 0 2352 audio.raw 0\n"
+               << "3 " << data_lba << " 4 2352 high.bin 0\n";
+}
+
+void write_stored_unknown_candidate_fixture(const std::filesystem::path& directory) {
+    std::filesystem::create_directories(directory);
+    std::vector<std::uint8_t> low_track(24u * raw_sector_size);
+    for (std::size_t sector = 0u; sector < 24u; ++sector)
+        low_track[sector * raw_sector_size + 15u] = 1u;
+    write_binary(directory / "low.bin", low_track);
+    write_binary(directory / "audio.raw", std::vector<std::uint8_t>(raw_sector_size));
+    write_binary(directory / "high.bin", stored_unknown_candidate_boot_track());
     std::ofstream descriptor(directory / "disc.gdi", std::ios::trunc);
     descriptor << "3\n"
                << "1 0 4 2352 low.bin 0\n"
@@ -675,6 +734,127 @@ int run_test(const int argc, char* argv[]) {
                                     false,
                                     "japan-ntsc",
                                     observe_progress};
+
+    const auto stored_unknown_disc_root = fixture.root / "stored-unknown-disc";
+    write_stored_unknown_candidate_fixture(stored_unknown_disc_root);
+    const auto stored_unknown_gdi = stored_unknown_disc_root / "disc.gdi";
+    const auto stored_unknown_disc =
+        katana::platform::load_dreamcast_gdi_boot(stored_unknown_gdi);
+    auto stored_unknown_image = katana::platform::make_dreamcast_disc_executable(
+        stored_unknown_disc,
+        katana::platform::DreamcastDiscExecutionPath::NativeSystemBootstrap);
+    const auto stored_unknown_analysis =
+        katana::analysis::analyze_control_flow(stored_unknown_image);
+    constexpr auto stored_unknown_candidate =
+        katana::platform::dreamcast_disc_boot_address + 0x30u;
+    const auto stored_unknown_function =
+        std::find_if(stored_unknown_analysis.recursive.functions.begin(),
+                     stored_unknown_analysis.recursive.functions.end(),
+                     [](const auto& function) {
+                         return function.address == stored_unknown_candidate;
+                     });
+    const auto stored_unknown_diagnostic =
+        std::find_if(stored_unknown_analysis.recursive.diagnostics.begin(),
+                     stored_unknown_analysis.recursive.diagnostics.end(),
+                     [](const auto& diagnostic) {
+                         return diagnostic.address == stored_unknown_candidate &&
+                                diagnostic.reason == "unknown-opcode";
+                     });
+    require(
+        stored_unknown_function != stored_unknown_analysis.recursive.functions.end() &&
+            std::find(stored_unknown_function->origins.begin(),
+                      stored_unknown_function->origins.end(),
+                      katana::analysis::FunctionOrigin::StoredCodeAddress) !=
+                stored_unknown_function->origins.end() &&
+            stored_unknown_function->evidence ==
+                katana::analysis::ControlFlowEvidence::GuardedPartial &&
+            std::binary_search(
+                stored_unknown_analysis.recursive.guarded_candidate_instruction_addresses.begin(),
+                stored_unknown_analysis.recursive.guarded_candidate_instruction_addresses.end(),
+                stored_unknown_candidate) &&
+            stored_unknown_diagnostic != stored_unknown_analysis.recursive.diagnostics.end() &&
+            stored_unknown_diagnostic->evidence ==
+                katana::analysis::ControlFlowEvidence::GuardedPartial &&
+            !katana::analysis::analysis_diagnostic_blocks_codegen(*stored_unknown_diagnostic),
+        "Gespeicherter BOOT.BIN-Codekandidat verlor Guarded-Partial-Diagnoseevidenz.");
+    const auto stored_unknown_program = katana::ir::lower_program(stored_unknown_analysis);
+    require(std::none_of(
+                stored_unknown_program.begin(),
+                stored_unknown_program.end(),
+                [](const auto& function) {
+                    return function.entry_address == stored_unknown_candidate ||
+                           std::any_of(
+                               function.blocks.begin(),
+                               function.blocks.end(),
+                               [](const auto& block) {
+                                   return std::any_of(
+                                       block.instructions.begin(),
+                                       block.instructions.end(),
+                                       [](const auto& instruction) {
+                                           return instruction.source_address ==
+                                                  stored_unknown_candidate;
+                                       });
+                               });
+                }),
+            "Guarded-Partial-Unknown wurde als dispatchbares AOT-Inventar abgesenkt.");
+
+    const auto stored_unknown_output = fixture.root / "stored-unknown-port";
+    const auto stored_unknown_export =
+        export_dreamcast_port_project(stored_unknown_gdi, stored_unknown_output, options);
+    const auto stored_unknown_sources = snapshot(stored_unknown_output / "generated");
+    std::string stored_unknown_units;
+    for (const auto& [path, content] : stored_unknown_sources)
+        if (path.starts_with("code/unit-")) stored_unknown_units += content;
+    require(stored_unknown_export.functions != 0u,
+            "Guarded-Partial-Unknown entfernte das gesamte Portprogramm.");
+    require(stored_unknown_units.find("katana-guest 0x8C010030") == std::string::npos,
+            "Guarded-Partial-Unknown blieb als dispatchbares AOT-Inventar erhalten.");
+    require(stored_unknown_sources.at("metadata/port-project.json")
+                    .find("\"diagnostic_partial\":false") != std::string::npos,
+            "Guarded-Partial-Unknown markierte den erfolgreichen Port als partiell.");
+    require(stored_unknown_sources.at("code/runtime-dispatch.cpp")
+                    .find("dynamic_interpreter.hpp") == std::string::npos,
+            "Guarded-Partial-Unknown aktivierte einen Interpreterpfad.");
+
+    auto proven_unknown_image = stored_unknown_image;
+    proven_unknown_image.add_entry_point(stored_unknown_candidate);
+    const auto proven_unknown_analysis =
+        katana::analysis::analyze_control_flow(proven_unknown_image);
+    const auto proven_unknown_diagnostic =
+        std::find_if(proven_unknown_analysis.recursive.diagnostics.begin(),
+                     proven_unknown_analysis.recursive.diagnostics.end(),
+                     [](const auto& diagnostic) {
+                         return diagnostic.address == stored_unknown_candidate &&
+                                diagnostic.reason == "unknown-opcode";
+                     });
+    require(proven_unknown_diagnostic != proven_unknown_analysis.recursive.diagnostics.end() &&
+                proven_unknown_diagnostic->evidence ==
+                    katana::analysis::ControlFlowEvidence::ProvenComplete &&
+                katana::analysis::analysis_diagnostic_blocks_codegen(
+                    *proven_unknown_diagnostic),
+            "Bewiesener BOOT.BIN-Unknown verlor seinen Codegen-Blocker.");
+    const auto proven_unknown_program = katana::ir::lower_program(proven_unknown_analysis);
+    const std::vector<katana::io::InputProvenance> proven_unknown_inputs;
+    bool proven_unknown_rejected = false;
+    try {
+        static_cast<void>(export_dreamcast_port_project(
+            {proven_unknown_image,
+             proven_unknown_analysis,
+             proven_unknown_program,
+             proven_unknown_inputs,
+             katana::platform::dreamcast_system_bootstrap_entry_address,
+             katana::platform::dreamcast_disc_boot_address,
+             stored_unknown_disc.boot_file.size(),
+             "proven-unknown-fixture"},
+            fixture.root / "proven-unknown-port",
+            options));
+    } catch (const std::runtime_error& error) {
+        proven_unknown_rejected =
+            std::string_view(error.what()).find("unbekannte Instruktionen") !=
+            std::string_view::npos;
+    }
+    require(proven_unknown_rejected,
+            "Bewiesener unbekannter Opcode wurde vom Produktport akzeptiert.");
 
     observed_progress.clear();
     const auto first = export_dreamcast_port_project(gdi, output, options);

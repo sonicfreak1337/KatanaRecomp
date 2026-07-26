@@ -231,12 +231,106 @@ int main() {
     require(unknown_result.diagnostics.size() == 1u &&
                 unknown_result.diagnostics[0].address == 2u &&
                 unknown_result.diagnostics[0].opcode == 0xFFFFu &&
-                unknown_result.diagnostics[0].reason == "unknown-opcode",
+                unknown_result.diagnostics[0].kind ==
+                    katana::analysis::AnalysisDiagnosticKind::UnknownOpcode &&
+                unknown_result.diagnostics[0].reason == "unknown-opcode" &&
+                unknown_result.diagnostics[0].evidence ==
+                    katana::analysis::ControlFlowEvidence::ProvenComplete &&
+                katana::analysis::analysis_diagnostic_blocks_codegen(
+                    unknown_result.diagnostics[0]),
             "Unbekannter Opcode wurde nicht stabil diagnostiziert.");
     const auto unknown_report = katana::analysis::format_recursive_analysis_report(unknown_result);
     require(unknown_report.find("Diagnose 0x00000002 Opcode=0xFFFF Grund=unknown-opcode") !=
                 std::string::npos,
             "Bericht nennt Adresse, Opcode und Abbruchgrund nicht.");
+
+    ExecutableImage guarded_unknown;
+    guarded_unknown.add_segment(
+        {".mixed",
+         0u,
+         0u,
+         8u,
+         SegmentKind::Mixed,
+         {true, true, true},
+         {0x0Bu, 0x00u, 0x09u, 0x00u, 0x09u, 0x00u, 0xFFu, 0xFFu}});
+    guarded_unknown.add_entry_point(0u);
+    katana::analysis::RecursiveAnalysisOptions guarded_unknown_options;
+    guarded_unknown_options.additional_seeds.push_back(
+        {4u,
+         {katana::analysis::FunctionOrigin::StoredCodeAddress},
+         true,
+         katana::analysis::ControlFlowEvidence::GuardedPartial});
+    const auto guarded_unknown_result =
+        katana::analysis::analyze_reachable_code(guarded_unknown, guarded_unknown_options);
+    const auto guarded_unknown_diagnostic =
+        std::find_if(guarded_unknown_result.diagnostics.begin(),
+                     guarded_unknown_result.diagnostics.end(),
+                     [](const auto& diagnostic) { return diagnostic.address == 6u; });
+    require(guarded_unknown_diagnostic != guarded_unknown_result.diagnostics.end() &&
+                guarded_unknown_diagnostic->reason == "unknown-opcode" &&
+                guarded_unknown_diagnostic->evidence ==
+                    katana::analysis::ControlFlowEvidence::GuardedPartial &&
+                !katana::analysis::analysis_diagnostic_blocks_codegen(
+                    *guarded_unknown_diagnostic),
+            "Bewachter Stored-Code-Kandidat verlor seine nicht blockierende Diagnoseevidenz.");
+
+    ExecutableImage upgraded_unknown;
+    upgraded_unknown.add_segment(
+        {".mixed",
+         0u,
+         0u,
+         2u,
+         SegmentKind::Mixed,
+         {true, true, true},
+         {0xFFu, 0xFFu}});
+    katana::analysis::RecursiveAnalysisOptions candidate_only_options;
+    candidate_only_options.additional_seeds.push_back(
+        {0u,
+         {katana::analysis::FunctionOrigin::StoredCodeAddress},
+         true,
+         katana::analysis::ControlFlowEvidence::GuardedPartial});
+    const auto candidate_only =
+        katana::analysis::analyze_reachable_code(upgraded_unknown, candidate_only_options);
+    upgraded_unknown.add_entry_point(0u);
+    auto upgraded_options = candidate_only_options;
+    upgraded_options.baseline = &candidate_only;
+    const auto upgraded_result =
+        katana::analysis::analyze_reachable_code(upgraded_unknown, upgraded_options);
+    require(upgraded_result.diagnostics.size() == 1u &&
+                upgraded_result.diagnostics.front().evidence ==
+                    katana::analysis::ControlFlowEvidence::ProvenComplete &&
+                katana::analysis::analysis_diagnostic_blocks_codegen(
+                    upgraded_result.diagnostics.front()),
+            "Staerkere spaetere Diagnoseevidenz ging beim Baseline-Merge verloren.");
+
+    ExecutableImage forced_unknown;
+    forced_unknown.add_segment(
+        {".mixed",
+         0u,
+         0u,
+         2u,
+         SegmentKind::Mixed,
+         {true, true, true},
+         {0xFFu, 0xFFu}});
+    katana::analysis::RecursiveAnalysisOptions forced_unknown_options;
+    forced_unknown_options.additional_seeds.push_back(
+        {0u,
+         {katana::analysis::FunctionOrigin::StoredCodeAddress},
+         true,
+         katana::analysis::ControlFlowEvidence::GuardedPartial});
+    forced_unknown_options.additional_seeds.push_back(
+        {0u,
+         {katana::analysis::FunctionOrigin::UserOverride},
+         false,
+         katana::analysis::ControlFlowEvidence::ForcedOverride});
+    const auto forced_unknown_result =
+        katana::analysis::analyze_reachable_code(forced_unknown, forced_unknown_options);
+    require(forced_unknown_result.diagnostics.size() == 1u &&
+                forced_unknown_result.diagnostics.front().evidence ==
+                    katana::analysis::ControlFlowEvidence::ForcedOverride &&
+                katana::analysis::analysis_diagnostic_blocks_codegen(
+                    forced_unknown_result.diagnostics.front()),
+            "Expliziter Override-Blocker verlor gegen staerkere Kandidatenevidenz.");
 
     ExecutableImage alternate;
     alternate.add_segment({".text",
@@ -298,9 +392,41 @@ int main() {
                         control_in_delay_result.diagnostics.end(),
                         [](const auto& diagnostic) {
                             return diagnostic.address == 2u &&
+                                   diagnostic.kind ==
+                                       katana::analysis::AnalysisDiagnosticKind::
+                                           ControlFlowInDelaySlot &&
                                    diagnostic.reason == "control-flow-in-delay-slot";
                         }),
             "Kontrollfluss im Delay Slot wurde nicht kontexttreu diagnostiziert.");
+    ExecutableImage guarded_control_in_delay;
+    guarded_control_in_delay.add_segment(
+        {".mixed",
+         0u,
+         0u,
+         4u,
+         SegmentKind::Mixed,
+         {true, true, true},
+         {0x00u, 0xB0u, 0xFDu, 0xAFu}});
+    katana::analysis::RecursiveAnalysisOptions guarded_control_in_delay_options;
+    guarded_control_in_delay_options.additional_seeds.push_back(
+        {0u,
+         {katana::analysis::FunctionOrigin::StoredCodeAddress},
+         true,
+         katana::analysis::ControlFlowEvidence::GuardedPartial});
+    const auto guarded_control_in_delay_result = katana::analysis::analyze_reachable_code(
+        guarded_control_in_delay, guarded_control_in_delay_options);
+    require(std::any_of(
+                guarded_control_in_delay_result.diagnostics.begin(),
+                guarded_control_in_delay_result.diagnostics.end(),
+                [](const auto& diagnostic) {
+                    return diagnostic.kind ==
+                               katana::analysis::AnalysisDiagnosticKind::
+                                   ControlFlowInDelaySlot &&
+                           diagnostic.evidence ==
+                               katana::analysis::ControlFlowEvidence::GuardedPartial &&
+                           katana::analysis::analysis_diagnostic_blocks_codegen(diagnostic);
+                }),
+            "Struktureller Kontrollflussfehler wurde durch Kandidatenevidenz entschaerft.");
 
     ExecutableImage missing_delay;
     missing_delay.add_segment(
@@ -309,8 +435,27 @@ int main() {
     const auto missing_delay_result = katana::analysis::analyze_reachable_code(missing_delay);
     require(missing_delay_result.diagnostics.size() == 1u &&
                 missing_delay_result.diagnostics.front().address == 0u &&
+                missing_delay_result.diagnostics.front().kind ==
+                    katana::analysis::AnalysisDiagnosticKind::DelaySlotUnavailable &&
                 missing_delay_result.diagnostics.front().reason == "delay-slot-unavailable",
             "Fehlender Delay Slot wurde nicht am Owner sichtbar diagnostiziert.");
+    ExecutableImage guarded_missing_delay;
+    guarded_missing_delay.add_segment(
+        {".mixed", 0u, 0u, 2u, SegmentKind::Mixed, {true, true, true}, {0x00u, 0xB0u}});
+    katana::analysis::RecursiveAnalysisOptions guarded_missing_delay_options;
+    guarded_missing_delay_options.additional_seeds.push_back(
+        {0u,
+         {katana::analysis::FunctionOrigin::StoredCodeAddress},
+         true,
+         katana::analysis::ControlFlowEvidence::GuardedPartial});
+    const auto guarded_missing_delay_result = katana::analysis::analyze_reachable_code(
+        guarded_missing_delay, guarded_missing_delay_options);
+    require(guarded_missing_delay_result.diagnostics.size() == 1u &&
+                guarded_missing_delay_result.diagnostics.front().evidence ==
+                    katana::analysis::ControlFlowEvidence::GuardedPartial &&
+                katana::analysis::analysis_diagnostic_blocks_codegen(
+                    guarded_missing_delay_result.diagnostics.front()),
+            "Fehlender Candidate-Delay-Slot wurde faelschlich als nicht bindend behandelt.");
 
     ExecutableImage prefetch;
     prefetch.add_segment({".text",

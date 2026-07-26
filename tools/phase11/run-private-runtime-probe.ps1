@@ -34,6 +34,30 @@ function Get-ProbeFailureClass {
     return 'internal-error'
 }
 
+function Resolve-RuntimeProbeSchemaVersion {
+    $sourcePath = Join-Path $script:RepositoryRoot 'include\katana\runtime\runtime_probe.hpp'
+    if (-not (Test-Path -LiteralPath $sourcePath -PathType Leaf)) {
+        Throw-ProbeFailure 'runtime-probe-schema-source-missing'
+    }
+    $content = Get-Content -LiteralPath $sourcePath -Raw
+    $pattern = '(?m)^[ \t]*inline[ \t]+constexpr[ \t]+std::uint32_t[ \t]+' +
+        'runtime_probe_schema_version[ \t]*=[ \t]*(?<version>[1-9][0-9]*)u[ \t]*;[ \t]*$'
+    $matches = [regex]::Matches($content, $pattern)
+    if ($matches.Count -ne 1) {
+        Throw-ProbeFailure 'runtime-probe-schema-source-invalid'
+    }
+    try {
+        return [uint32]::Parse(
+            $matches[0].Groups['version'].Value,
+            [Globalization.NumberStyles]::None,
+            [Globalization.CultureInfo]::InvariantCulture)
+    } catch {
+        Throw-ProbeFailure 'runtime-probe-schema-source-invalid'
+    }
+}
+
+$script:RuntimeProbeSchemaVersion = Resolve-RuntimeProbeSchemaVersion
+
 function Test-IntegralJsonNumber {
     param($Value)
     if ($null -eq $Value) { return $false }
@@ -1962,7 +1986,7 @@ function Read-RuntimeProbeLine {
     if ($probe.schema -isnot [string] -or
         [string]$probe.schema -cne 'katana.runtime-probe' -or
         -not (Test-IntegralJsonNumber $probe.probe_version) -or
-        [decimal]$probe.probe_version -ne 3 -or
+        [decimal]$probe.probe_version -ne [decimal]$script:RuntimeProbeSchemaVersion -or
         $probe.profile -isnot [string] -or
         [string]$probe.profile -cne $script:ProbeProfile -or
         $probe.hash_contract -isnot [string] -or
@@ -2030,7 +2054,7 @@ function Read-RuntimeProbeLine {
     }
     $normative = [ordered]@{
         schema = [string]$probe.schema
-        probe_version = 3
+        probe_version = $script:RuntimeProbeSchemaVersion
         profile = [string]$probe.profile
         hash_contract = [string]$probe.hash_contract
         status = [string]$probe.status
@@ -2215,7 +2239,7 @@ function New-SyntheticProbeJson {
     )
     return ([ordered]@{
         schema = 'katana.runtime-probe'
-        probe_version = 3
+        probe_version = $script:RuntimeProbeSchemaVersion
         profile = 'deterministic-v1'
         hash_contract = 'fnv1a64-le-v1'
         status = 'complete'
@@ -2668,14 +2692,18 @@ function Invoke-SelfTest {
         [string]::IsNullOrWhiteSpace($parsedProbe.normative_json)) {
         Throw-ProbeFailure 'self-test-probe-valid'
     }
+    $probeVersionField =
+        '"probe_version":' +
+        $script:RuntimeProbeSchemaVersion.ToString(
+            [Globalization.CultureInfo]::InvariantCulture)
     foreach ($invalidProbe in @(
         ($script:ProbeMarker + $probeOff + "`n" + $script:ProbeMarker + $probeOff),
         ($script:ProbeMarker + (New-SyntheticProbeJson 101 $false)),
         ($script:ProbeMarker + (New-SyntheticProbeJson 100 $true)),
         ($script:ProbeMarker + (New-SyntheticProbeJson 100 $false 1)),
         ($script:ProbeMarker + $probeOff.Replace(
-            '"probe_version":3',
-            '"probe_version":3,"probe_version":3'))
+            $probeVersionField,
+            ($probeVersionField + ',' + $probeVersionField)))
     )) {
         if (-not (Test-ThrowsProbeFailure {
             [void](Read-RuntimeProbeLine $invalidProbe '' 100 $false)

@@ -283,6 +283,19 @@ int main() {
                         [](const auto& function) { return function.entry_address == 0x30u; }) &&
                 katana::ir::verify_program(stored_callback_ir).empty(),
             "Gespeicherter Codepointer erreichte das native IR-Inventar nicht.");
+    katana::analysis::AnalysisOverrides stored_callback_override;
+    stored_callback_override.source_path = "stored-callback-override.txt";
+    stored_callback_override.functions.push_back({0x30u, 1u});
+    const auto forced_stored_callback = katana::analysis::analyze_control_flow(
+        stored_callback_image, &stored_callback_override);
+    const auto* forced_stored_handler = find_function(forced_stored_callback, 0x30u);
+    require(forced_stored_handler != nullptr &&
+                forced_stored_handler->evidence ==
+                    katana::analysis::ControlFlowEvidence::ForcedOverride &&
+                forced_stored_handler->origins ==
+                    std::vector{katana::analysis::FunctionOrigin::UserOverride,
+                                katana::analysis::FunctionOrigin::StoredCodeAddress},
+            "Expliziter Function-Override verlor im echten Seedmerge gegen GuardedPartial.");
 
     const auto forwarded_store_image = [](std::vector<std::uint8_t> registrar,
                                           std::string name) {

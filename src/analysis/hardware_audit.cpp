@@ -1575,11 +1575,9 @@ DreamcastHardwareAudit audit_dreamcast_hardware(const io::ExecutableImage& image
         diagnostic.address = source.address;
         diagnostic.opcode = source.opcode;
         diagnostic.reason = source.reason;
+        diagnostic.evidence = source.evidence;
         for (const auto& context : analysis.recursive.contextual_instructions) {
             if (context.line.address != source.address) continue;
-            if (control_flow_evidence_strength(context.evidence) >
-                control_flow_evidence_strength(diagnostic.evidence))
-                diagnostic.evidence = context.evidence;
             diagnostic.incoming_addresses.push_back(context.incoming_address);
             if (context.delay_slot_owner)
                 diagnostic.delay_slot_owners.push_back(*context.delay_slot_owner);

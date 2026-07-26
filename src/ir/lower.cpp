@@ -1195,23 +1195,43 @@ std::vector<Function> lower_program(const katana::analysis::ControlFlowAnalysisR
         component_candidates.end());
 
     std::set<std::uint32_t> assigned_blocks;
+    std::unordered_set<std::uint32_t> quarantined_instruction_addresses;
+    for (const auto& diagnostic : analysis.recursive.diagnostics) {
+        if (!katana::analysis::analysis_diagnostic_blocks_codegen(diagnostic))
+            quarantined_instruction_addresses.insert(diagnostic.address);
+    }
     std::vector<katana::analysis::FunctionInfo> supplemental_functions;
     for (const auto candidate : component_candidates) {
         if (assigned_blocks.contains(candidate)) continue;
         katana::analysis::FunctionInfo supplemental;
         supplemental.entry_address = candidate;
         supplemental.evidence = katana::analysis::ControlFlowEvidence::GuardedPartial;
+        bool quarantined = false;
         std::vector<std::uint32_t> pending = {candidate};
         while (!pending.empty()) {
             const auto address = pending.back();
             pending.pop_back();
             if (!assigned_blocks.insert(address).second) continue;
             supplemental.block_addresses.push_back(address);
-            for (const auto successor : missing_blocks.at(address)->successors) {
+            const auto* source_block = missing_blocks.at(address);
+            quarantined =
+                quarantined ||
+                std::any_of(source_block->lines.begin(),
+                            source_block->lines.end(),
+                            [&quarantined_instruction_addresses](const auto& line) {
+                                return quarantined_instruction_addresses.contains(line.address);
+                            });
+            for (const auto successor : source_block->successors) {
                 if (missing_blocks.contains(successor) && !assigned_blocks.contains(successor))
                     pending.push_back(successor);
             }
         }
+        // Candidate-only decode failures are retained in the analysis report but
+        // the entire speculative component is left out of dispatchable AOT
+        // inventory.  If the guest later selects it, the validating runtime
+        // dispatcher reports an unavailable target instead of executing a
+        // guessed Unknown operation.
+        if (quarantined) continue;
         std::sort(supplemental.block_addresses.begin(), supplemental.block_addresses.end());
         supplemental_functions.push_back(std::move(supplemental));
     }

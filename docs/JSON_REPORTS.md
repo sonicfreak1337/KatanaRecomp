@@ -51,13 +51,16 @@ Analyseartefakte bleiben nutzbar, Codegen und Hostkompilierung werden jedoch
 unterdrueckt. Das Feld `analysis` enthaelt committed ausfuehrbare Bytes,
 analysierte und nicht analysierte ausfuehrbare Bytes, Instruktions-/
 Funktionszahlen, vollstaendige und partielle Guards, reine Laufzeit- und
-ungeloeste Kontrollflussstellen, unbekannte Instruktionen, erreichbare
-Abbruchkanten und `control_flow_complete`. Vollstaendig bedeutet exakt: null
-unbekannte Instruktionen, null partielle und ungeloeste Kontrollflussstellen,
-null nicht analysierte committed ausfuehrbare Bytes und null erreichbare
-Abbruchkanten. Reine Laufzeitstellen sind seit KR-4718 vollstaendig abgedeckt,
-wenn ihre IR-Klasse den validierenden Runtime-only-Dispatcher erzwingt. Es gibt
-keine heuristische Prozentgrenze.
+ungeloeste Kontrollflussstellen, statisch verpflichtende unbekannte
+Instruktionen, reine Kandidatendiagnosen, erreichbare Abbruchkanten und
+`control_flow_complete`. `unknown_instructions` zaehlt nur Diagnosen, deren
+Evidenz statischen Decode verlangt; `candidate_unknown_instructions` haelt
+nicht bindende Guard-/Hint-Diagnosen separat sichtbar. Vollstaendig bedeutet
+exakt: null statisch verpflichtende unbekannte Instruktionen, null partielle
+und ungeloeste Kontrollflussstellen, null nicht analysierte committed
+ausfuehrbare Bytes und null erreichbare Abbruchkanten. Reine Laufzeitstellen
+sind seit KR-4718 vollstaendig abgedeckt, wenn ihre IR-Klasse den validierenden
+Runtime-only-Dispatcher erzwingt. Es gibt keine heuristische Prozentgrenze.
 
 `katana-indirect-dispatch-v1` berichtet gesaettigte Gesamt- und Runtime-only-
 Zaehler fuer Hits, Misses und kontrollierte Fallbacks. `first_error` ist `null`

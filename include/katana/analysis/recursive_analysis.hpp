@@ -52,11 +52,33 @@ struct AnalysisConflict {
     AnalysisConflictKind kind = AnalysisConflictKind::FunctionEntryInDelaySlot;
 };
 
+enum class AnalysisDiagnosticKind {
+    UnknownOpcode,
+    ControlFlowInDelaySlot,
+    DelaySlotUnavailable,
+    DelaySlotUnknownOpcode
+};
+
 struct AnalysisDiagnostic {
     std::uint32_t address = 0u;
     std::uint16_t opcode = 0u;
+    AnalysisDiagnosticKind kind = AnalysisDiagnosticKind::UnknownOpcode;
     std::string reason;
+    ControlFlowEvidence evidence = ControlFlowEvidence::ProvenComplete;
 };
+
+[[nodiscard]] constexpr bool
+analysis_diagnostic_blocks_codegen(const AnalysisDiagnostic& diagnostic) noexcept {
+    switch (diagnostic.kind) {
+    case AnalysisDiagnosticKind::UnknownOpcode:
+    case AnalysisDiagnosticKind::DelaySlotUnknownOpcode:
+        return control_flow_evidence_requires_static_decode(diagnostic.evidence);
+    case AnalysisDiagnosticKind::ControlFlowInDelaySlot:
+    case AnalysisDiagnosticKind::DelaySlotUnavailable:
+        return true;
+    }
+    return true;
+}
 
 struct AnalysisSeed {
     std::uint32_t address = 0u;

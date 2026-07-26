@@ -2916,7 +2916,11 @@ PortExportResult export_dreamcast_port_project(const PreparedPortProgram& prepar
         throw std::invalid_argument(
             "Bootprogramm besitzt keine lineare ausfuehrbare Gastprogramm-Range.");
     static_cast<void>(console_profile_enumerator(options.console_profile));
-    if (!options.diagnostic_partial && !prepared.analysis.recursive.diagnostics.empty()) {
+    const auto blocking_diagnostics = std::count_if(
+        prepared.analysis.recursive.diagnostics.begin(),
+        prepared.analysis.recursive.diagnostics.end(),
+        katana::analysis::analysis_diagnostic_blocks_codegen);
+    if (!options.diagnostic_partial && blocking_diagnostics != 0u) {
         throw std::runtime_error("Portanalyse enthaelt unbekannte Instruktionen.");
     }
     const auto incomplete = std::count_if(
