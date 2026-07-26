@@ -73,6 +73,8 @@ struct BlockBinding {
 struct FormRecord {
     sst_codegen::SstCodeForm form;
     sst::SstTestCase representative;
+    std::string representative_filename;
+    std::uint32_t representative_case_index = 0u;
     std::string key;
     std::string digest;
     std::string family;
@@ -938,6 +940,8 @@ int main(const int argc, char** argv) {
                     auto& record = found->second;
                     record.form = form;
                     record.representative = test;
+                    record.representative_filename = filename;
+                    record.representative_case_index = case_index;
                     record.key = key;
                     record.digest = io::sha256_bytes(key).substr(0u, 20u);
                     record.tested_opcode = test.opcodes[1u];
@@ -962,7 +966,15 @@ int main(const int argc, char** argv) {
             forms.push_back(std::move(form));
         }
         for (auto& form : forms) {
-            if (form.supported) generate_form(form);
+            if (!form.supported) continue;
+            try {
+                generate_form(form);
+            } catch (const std::exception& error) {
+                throw std::runtime_error("supported SST form " + form.key + " represented by " +
+                                         form.representative_filename + " case " +
+                                         std::to_string(form.representative_case_index) +
+                                         " failed generation: " + error.what());
+            }
         }
 
         std::vector<std::uint16_t> represented(represented_set.begin(), represented_set.end());
