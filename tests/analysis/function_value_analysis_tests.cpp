@@ -189,6 +189,152 @@ int main() {
                 guarded_return->callees == std::vector<std::uint32_t>{0x20u},
             "Guarded-complete-Callee verlor Ingressguard oder R0-Return-Summary.");
 
+    const auto guarded_return_table_image = [] {
+        std::vector<std::uint8_t> bytes(0x60u, 0x09u);
+        bytes[0x00u] = 0x05u;
+        bytes[0x01u] = 0xD1u; // mov.l @(0x18,pc),r1 -> accessor 0x20
+        bytes[0x02u] = 0x0Bu;
+        bytes[0x03u] = 0x41u; // jsr @r1
+        bytes[0x04u] = 0x09u;
+        bytes[0x05u] = 0x00u; // nop (delay)
+        bytes[0x06u] = 0x03u;
+        bytes[0x07u] = 0x6Cu; // mov r0,r12
+        bytes[0x08u] = 0xC2u;
+        bytes[0x09u] = 0x63u; // mov.l @r12,r3
+        bytes[0x0Au] = 0x0Bu;
+        bytes[0x0Bu] = 0x43u; // jsr @r3
+        bytes[0x0Cu] = 0x09u;
+        bytes[0x0Du] = 0x00u; // nop (delay)
+        bytes[0x0Eu] = 0x0Bu;
+        bytes[0x0Fu] = 0x00u; // rts
+        bytes[0x10u] = 0x09u;
+        bytes[0x11u] = 0x00u; // nop (delay)
+        bytes[0x18u] = 0x20u;
+        bytes[0x19u] = 0x00u;
+        bytes[0x1Au] = 0x00u;
+        bytes[0x1Bu] = 0x00u;
+        bytes[0x20u] = 0x02u;
+        bytes[0x21u] = 0xD0u; // mov.l @(0x2c,pc),r0 -> table 0x40
+        bytes[0x22u] = 0x0Bu;
+        bytes[0x23u] = 0x00u; // rts
+        bytes[0x24u] = 0x09u;
+        bytes[0x25u] = 0x00u; // nop (delay)
+        bytes[0x2Cu] = 0x40u;
+        bytes[0x2Du] = 0x00u;
+        bytes[0x2Eu] = 0x00u;
+        bytes[0x2Fu] = 0x00u;
+        bytes[0x40u] = 0x50u;
+        bytes[0x41u] = 0x00u;
+        bytes[0x42u] = 0x00u;
+        bytes[0x43u] = 0x00u;
+        bytes[0x44u] = 0x54u;
+        bytes[0x45u] = 0x00u;
+        bytes[0x46u] = 0x00u;
+        bytes[0x47u] = 0x00u;
+        bytes[0x48u] = 0x58u;
+        bytes[0x49u] = 0x00u;
+        bytes[0x4Au] = 0x00u;
+        bytes[0x4Bu] = 0x00u;
+        bytes[0x50u] = 0x0Bu;
+        bytes[0x51u] = 0x00u; // handler: rts
+        bytes[0x52u] = 0x09u;
+        bytes[0x53u] = 0x00u; // nop (delay)
+        bytes[0x54u] = 0x0Bu;
+        bytes[0x55u] = 0x00u; // sibling handler: rts
+        bytes[0x56u] = 0x09u;
+        bytes[0x57u] = 0x00u; // nop (delay)
+        bytes[0x58u] = 0x0Bu;
+        bytes[0x59u] = 0x00u; // sibling handler: rts
+        bytes[0x5Au] = 0x09u;
+        bytes[0x5Bu] = 0x00u; // nop (delay)
+        katana::io::ExecutableImage image;
+        image.set_guest_call_abi(katana::io::GuestCallAbi::SuperHC);
+        image.set_initial_snapshot_policy(
+            katana::io::InitialSnapshotPolicy::EntryPointStraightLineQuiescent);
+        image.set_initial_snapshot_entry(0x58u);
+        image.add_segment({".guarded-return-table",
+                           0u,
+                           0u,
+                           bytes.size(),
+                           katana::io::SegmentKind::Mixed,
+                           {true, true, true},
+                           std::move(bytes),
+                           katana::io::ImageSourceKind::DiscBootFile,
+                           katana::io::ImageLoadPhase::Initial,
+                           "synthetic-guarded-return-table"});
+        image.add_entry_point(0u);
+        return image;
+    }();
+    const auto guarded_return_table =
+        katana::analysis::analyze_control_flow(guarded_return_table_image);
+    const auto* guarded_table_summary = summary(guarded_return_table, 0x20u, 0u);
+    const auto* guarded_accessor_dispatch = site(guarded_return_table, 0x02u);
+    const auto* guarded_table_dispatch = site(guarded_return_table, 0x0Au);
+    constexpr std::array guarded_family{0x50u, 0x54u, 0x58u};
+    require(guarded_table_summary != nullptr && !guarded_table_summary->complete &&
+                guarded_table_summary->guarded &&
+                guarded_table_summary->values == std::vector<std::uint32_t>{0x40u} &&
+                guarded_table_summary->reason == "constant-return-candidate",
+            "Endliche Guarded-Partial-Rueckgabe ging in der Funktionssummary verloren.");
+    require(guarded_accessor_dispatch != nullptr &&
+                guarded_accessor_dispatch->status ==
+                    katana::analysis::ResolutionStatus::Unresolved &&
+                guarded_accessor_dispatch->evidence ==
+                    katana::analysis::ControlFlowEvidence::RuntimeOnly &&
+                guarded_accessor_dispatch->targets.empty() &&
+                guarded_accessor_dispatch->analysis_candidates ==
+                    std::vector<std::uint32_t>{0x20u},
+            "Indirekter Guarded-Accessor verlor seinen reinen Runtime-Kandidaten.");
+    require(guarded_table_dispatch != nullptr &&
+                guarded_table_dispatch->status ==
+                    katana::analysis::ResolutionStatus::Unresolved &&
+                guarded_table_dispatch->evidence ==
+                    katana::analysis::ControlFlowEvidence::RuntimeOnly &&
+                guarded_table_dispatch->targets.empty() &&
+                guarded_table_dispatch->analysis_candidates ==
+                    std::vector<std::uint32_t>{0x50u} &&
+                guarded_table_dispatch->reason == "runtime-contract-function-memory",
+            "Guarded-Return-Tabellenload verlor seinen reinen Runtime-Kandidaten.");
+    require(std::all_of(guarded_family.begin(),
+                        guarded_family.end(),
+                        [&](const auto address) {
+                            return std::any_of(
+                                guarded_return_table.recursive.functions.begin(),
+                                guarded_return_table.recursive.functions.end(),
+                                [address](const auto& function) {
+                                    return function.address == address;
+                                });
+                        }),
+            "Guarded-Return-Tabellenfamilie erreichte das AOT-Inventar nicht vollstaendig.");
+    require(std::none_of(guarded_return_table.resolved_edges.begin(),
+                         guarded_return_table.resolved_edges.end(),
+                         [](const auto& edge) {
+                             return (edge.instruction_address == 0x02u &&
+                                     edge.target_address == 0x20u) ||
+                                    (edge.instruction_address == 0x0Au &&
+                                     edge.target_address == 0x50u);
+                         }),
+            "Guarded-Return-Kandidaten wurden faelschlich zu autoritativen CFG-Kanten.");
+    const auto guarded_sibling =
+        std::find_if(guarded_return_table.recursive.functions.begin(),
+                     guarded_return_table.recursive.functions.end(),
+                     [](const auto& function) { return function.address == 0x54u; });
+    require(guarded_sibling != guarded_return_table.recursive.functions.end() &&
+                guarded_sibling->origins ==
+                    std::vector{katana::analysis::FunctionOrigin::GuardedSnapshot},
+            "Nicht direkt geladener Tabellenbruder verlor seine Guarded-Snapshot-Herkunft.");
+
+    auto short_return_table_image = guarded_return_table_image;
+    short_return_table_image.write_u32_le(0x48u, 1u);
+    const auto short_return_table =
+        katana::analysis::analyze_control_flow(short_return_table_image);
+    require(std::none_of(short_return_table.recursive.functions.begin(),
+                         short_return_table.recursive.functions.end(),
+                         [](const auto& function) {
+                             return function.address == 0x54u;
+                         }),
+            "Nicht ausreichend begrenzte Zweiereintragstabelle wurde als Familie expandiert.");
+
     [] {
         const auto multi_image =
             image_with_callee({// bt 0x28; mov #0x10,r0; rts; nop; mov #0x14,r0; rts; nop

@@ -73,10 +73,25 @@ struct StoredCodeAddressCandidate {
     bool operator==(const StoredCodeAddressCandidate&) const = default;
 };
 
+// A bounded initial-snapshot pointer table reached through a finite
+// interprocedural return value and then used as the base of a 32-bit load.
+// Entries are guarded native-inventory candidates only; the live load remains
+// authoritative at runtime.
+struct ReturnedCodeAddressTableCandidate {
+    std::uint32_t table_address = 0u;
+    std::vector<std::uint32_t> target_addresses;
+    std::vector<std::uint32_t> load_instruction_addresses;
+    std::vector<std::uint32_t> evidence_call_sites;
+    std::vector<std::uint32_t> evidence_callees;
+
+    bool operator==(const ReturnedCodeAddressTableCandidate&) const = default;
+};
+
 struct FunctionValueAnalysisResult {
     std::vector<FunctionValueSummary> summaries;
     std::vector<InterproceduralTargetResolution> resolutions;
     std::vector<StoredCodeAddressCandidate> stored_code_address_candidates;
+    std::vector<ReturnedCodeAddressTableCandidate> returned_code_address_table_candidates;
     std::size_t fixpoint_iterations = 0u;
     std::size_t strongly_connected_components = 0u;
     std::size_t unchanged_ingress_skips = 0u;

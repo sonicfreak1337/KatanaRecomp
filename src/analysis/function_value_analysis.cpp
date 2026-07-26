@@ -2,6 +2,7 @@
 
 #include "katana/analysis/code_address.hpp"
 #include "katana/analysis/function_analysis.hpp"
+#include "katana/analysis/jump_table_analysis.hpp"
 #include "katana/analysis/value_analysis.hpp"
 #include "katana/io/binary_reader.hpp"
 #include "katana/sh4/instruction.hpp"
@@ -126,6 +127,7 @@ struct FunctionEvaluation {
     FunctionValueSummary summary;
     std::vector<InterproceduralTargetResolution> resolutions;
     std::vector<StoredCodeAddressCandidate> stored_code_address_candidates;
+    std::vector<ReturnedCodeAddressTableCandidate> returned_code_address_table_candidates;
     struct CallArguments {
         std::uint32_t call_site = 0u;
         std::uint32_t callee = 0u;
@@ -1026,13 +1028,14 @@ void apply_call(AbstractState& state,
             }
         }
         const auto* returned = register_summary(summary->second, 0u);
-        if (returned == nullptr || !returned->complete || returned->values.empty()) {
+        if (returned == nullptr || returned->values.empty()) {
             returned_complete = false;
             continue;
         }
+        if (!returned->complete) returned_complete = false;
         returned_values.insert(
             returned_values.end(), returned->values.begin(), returned->values.end());
-        returned_guarded = returned_guarded || returned->guarded;
+        returned_guarded = returned_guarded || returned->guarded || !returned->complete;
         evidence_callees.insert(candidate);
         evidence_callees.insert(returned->evidence_callees.begin(),
                                 returned->evidence_callees.end());
@@ -1148,6 +1151,56 @@ void observe_stored_code_addresses(
     }
 }
 
+void observe_returned_code_address_tables(
+    const katana::io::ExecutableImage& image,
+    const katana::sh4::DisassemblyLine& line,
+    const AbstractState& state,
+    std::vector<ReturnedCodeAddressTableCandidate>& candidates) {
+    using K = katana::sh4::InstructionKind;
+    std::set<std::uint8_t> base_registers;
+    switch (line.instruction.kind) {
+    case K::MovLongLoad:
+    case K::MovLongLoadPostIncrement:
+    case K::MovLongLoadDisplacement:
+        base_registers.insert(line.instruction.source_register);
+        break;
+    case K::MovLongLoadR0Indexed:
+        base_registers.insert(0u);
+        base_registers.insert(line.instruction.source_register);
+        break;
+    default:
+        return;
+    }
+
+    constexpr std::size_t minimum_table_entries = 3u;
+    for (const auto register_index : base_registers) {
+        if (state.stack_offsets[register_index].has_value()) continue;
+        const auto& base = state[register_index];
+        if (!base.known || base.values.empty() ||
+            base.values.size() > maximum_summary_values || base.call_sites.empty() ||
+            base.callees.empty())
+            continue;
+        for (const auto table_address : base.values) {
+            const auto table = analyze_snapshot_absolute_pointer_candidates(
+                image,
+                line.address,
+                table_address,
+                JumpTableDispatchKind::Call,
+                minimum_table_entries);
+            if (!table.has_value()) continue;
+            ReturnedCodeAddressTableCandidate candidate;
+            candidate.table_address = table->table_address;
+            candidate.target_addresses.reserve(table->entries.size());
+            for (const auto& entry : table->entries)
+                candidate.target_addresses.push_back(entry.target);
+            candidate.load_instruction_addresses = {line.address};
+            candidate.evidence_call_sites.assign(base.call_sites.begin(), base.call_sites.end());
+            candidate.evidence_callees.assign(base.callees.begin(), base.callees.end());
+            candidates.push_back(std::move(candidate));
+        }
+    }
+}
+
 FunctionEvaluation evaluate_function(
     const katana::io::ExecutableImage& image,
     const FunctionInfo& function,
@@ -1234,9 +1287,15 @@ FunctionEvaluation evaluate_function(
             const bool call =
                 line.instruction.control_flow == katana::sh4::ControlFlowKind::Call ||
                 line.instruction.control_flow == katana::sh4::ControlFlowKind::IndirectCall;
-            if (collect_resolutions && !call)
+            if (collect_resolutions && !call) {
                 observe_stored_code_addresses(
                     image, line, state, evaluation.stored_code_address_candidates);
+                observe_returned_code_address_tables(
+                    image,
+                    line,
+                    state,
+                    evaluation.returned_code_address_table_candidates);
+            }
             if (!call) apply_transfer(state, line, image);
             if (delayed_call.has_value()) {
                 apply_call(state,
@@ -1314,26 +1373,37 @@ FunctionEvaluation evaluate_function(
             continue;
         }
         bool complete = !returns.empty();
+        bool finite = !returns.empty();
         std::set<std::uint32_t> values;
         std::set<std::uint32_t> evidence;
         for (const auto& [return_site, state] : returns) {
             static_cast<void>(return_site);
             const auto& value = state[register_index];
-            if (!value.known || !value.complete || value.values.empty()) {
+            if (!value.known || value.values.empty()) {
                 complete = false;
+                finite = false;
                 continue;
             }
+            if (!value.complete) complete = false;
             values.insert(value.values.begin(), value.values.end());
             evidence.insert(value.callees.begin(), value.callees.end());
-            summary.guarded = summary.guarded || value.guarded;
+            summary.guarded = summary.guarded || value.guarded || !value.complete;
         }
-        if (values.size() > maximum_summary_values) complete = false;
+        if (values.size() > maximum_summary_values) {
+            complete = false;
+            finite = false;
+        }
         summary.complete = complete;
-        if (complete) summary.values.assign(values.begin(), values.end());
+        if (finite) summary.values.assign(values.begin(), values.end());
         summary.evidence_callees.assign(evidence.begin(), evidence.end());
-        summary.reason =
-            complete ? (summary.values.size() == 1u ? "constant-return" : "finite-return-set")
-                     : (returns.empty() ? "no-return" : "return-path-unknown");
+        summary.reason = complete
+                             ? (summary.values.size() == 1u ? "constant-return"
+                                                           : "finite-return-set")
+                         : finite ? (summary.values.size() == 1u
+                                         ? "constant-return-candidate"
+                                         : "finite-return-set-candidate")
+                                  : (returns.empty() ? "no-return"
+                                                     : "return-path-unknown");
         evaluation.summary.registers.push_back(std::move(summary));
     }
     evaluation.summary.memory_complete = !returns.empty();
@@ -1645,6 +1715,12 @@ analyze_function_values(const katana::io::ExecutableImage& image,
             result.stored_code_address_candidates.end(),
             std::make_move_iterator(evaluation.stored_code_address_candidates.begin()),
             std::make_move_iterator(evaluation.stored_code_address_candidates.end()));
+        result.returned_code_address_table_candidates.insert(
+            result.returned_code_address_table_candidates.end(),
+            std::make_move_iterator(
+                evaluation.returned_code_address_table_candidates.begin()),
+            std::make_move_iterator(
+                evaluation.returned_code_address_table_candidates.end()));
         ++completed_functions;
         if (completed_functions <= 16u || completed_functions % 128u == 0u ||
             completed_functions == functions.size())
@@ -1694,6 +1770,44 @@ analyze_function_values(const katana::io::ExecutableImage& image,
         normalize(candidate.evidence_callees);
     }
     result.stored_code_address_candidates = std::move(merged_stored_candidates);
+    std::sort(result.returned_code_address_table_candidates.begin(),
+              result.returned_code_address_table_candidates.end(),
+              [](const auto& left, const auto& right) {
+                  if (left.table_address != right.table_address)
+                      return left.table_address < right.table_address;
+                  return left.load_instruction_addresses <
+                         right.load_instruction_addresses;
+              });
+    std::vector<ReturnedCodeAddressTableCandidate> merged_returned_tables;
+    for (auto& candidate : result.returned_code_address_table_candidates) {
+        if (merged_returned_tables.empty() ||
+            merged_returned_tables.back().table_address != candidate.table_address) {
+            merged_returned_tables.push_back(std::move(candidate));
+            continue;
+        }
+        auto& merged_candidate = merged_returned_tables.back();
+        merged_candidate.target_addresses.insert(merged_candidate.target_addresses.end(),
+                                                 candidate.target_addresses.begin(),
+                                                 candidate.target_addresses.end());
+        merged_candidate.load_instruction_addresses.insert(
+            merged_candidate.load_instruction_addresses.end(),
+            candidate.load_instruction_addresses.begin(),
+            candidate.load_instruction_addresses.end());
+        merged_candidate.evidence_call_sites.insert(
+            merged_candidate.evidence_call_sites.end(),
+            candidate.evidence_call_sites.begin(),
+            candidate.evidence_call_sites.end());
+        merged_candidate.evidence_callees.insert(merged_candidate.evidence_callees.end(),
+                                                 candidate.evidence_callees.begin(),
+                                                 candidate.evidence_callees.end());
+    }
+    for (auto& candidate : merged_returned_tables) {
+        normalize(candidate.target_addresses);
+        normalize(candidate.load_instruction_addresses);
+        normalize(candidate.evidence_call_sites);
+        normalize(candidate.evidence_callees);
+    }
+    result.returned_code_address_table_candidates = std::move(merged_returned_tables);
     std::vector<InterproceduralTargetResolution> merged;
     std::unordered_set<std::uint32_t> merged_context_sites;
     for (auto& resolution : result.resolutions) {

@@ -990,6 +990,18 @@ ControlFlowAnalysisResult analyze_control_flow(const katana::io::ExecutableImage
                                ControlFlowEvidence::GuardedPartial) ||
                       changed;
         }
+        for (const auto& table :
+             function_values.returned_code_address_table_candidates) {
+            const std::array origins{FunctionOrigin::GuardedSnapshot};
+            for (const auto target : table.target_addresses) {
+                changed = add_seed(seeds,
+                                   target,
+                                   origins,
+                                   false,
+                                   ControlFlowEvidence::GuardedPartial) ||
+                          changed;
+            }
+        }
         for (auto& proof : function_values.resolutions) {
             if (proof.targets.empty()) continue;
             // A recognized table owns the finite AOT candidate set for this dispatch.  A

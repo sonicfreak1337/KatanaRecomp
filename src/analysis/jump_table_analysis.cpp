@@ -517,6 +517,61 @@ recognize_bounded_relative_jump_table(const katana::io::ExecutableImage& image,
 }
 
 std::optional<JumpTableAnalysis>
+analyze_snapshot_absolute_pointer_candidates(
+    const katana::io::ExecutableImage& image,
+    const std::uint32_t evidence_address,
+    const std::uint32_t table_address,
+    const JumpTableDispatchKind dispatch_kind,
+    const std::size_t minimum_entries) {
+    if (minimum_entries == 0u || minimum_entries > maximum_jump_table_entries)
+        return std::nullopt;
+    const auto resolved_table = image.resolve_segment_address(table_address, 4u);
+    if (!resolved_table.has_value() || (*resolved_table & 3u) != 0u) return std::nullopt;
+    const auto* table_segment = image.find_segment(*resolved_table, 4u);
+    if (table_segment == nullptr || !snapshot_candidate_source(image, *table_segment))
+        return std::nullopt;
+    const auto table_offset = table_segment->byte_offset(*resolved_table);
+    if (!table_offset.has_value() || *table_offset > table_segment->bytes.size())
+        return std::nullopt;
+
+    const auto available_entries = (table_segment->bytes.size() - *table_offset) / 4u;
+    const auto scan_limit = std::min(available_entries, maximum_jump_table_entries);
+    JumpTableAnalysis analysis;
+    analysis.dispatch_address = evidence_address;
+    analysis.table_address = *resolved_table;
+    analysis.dispatch_kind = dispatch_kind;
+    analysis.encoding = JumpTableEncoding::Absolute32;
+    analysis.aot_candidates_only = true;
+    analysis.evidence = ControlFlowEvidence::GuardedPartial;
+    analysis.entries.reserve(scan_limit);
+    for (std::size_t index = 0u; index < scan_limit; ++index) {
+        const auto offset = *table_offset + index * 4u;
+        const auto target = static_cast<std::uint32_t>(
+                                katana::io::read_u16_le(table_segment->bytes, offset)) |
+                            (static_cast<std::uint32_t>(katana::io::read_u16_le(
+                                 table_segment->bytes, offset + 2u))
+                             << 16u);
+        const auto validation = validate_decode_candidate(image, target);
+        if (!validation.valid() || validation.segment == nullptr ||
+            !snapshot_candidate_source(image, *validation.segment))
+            break;
+        analysis.entries.push_back({index,
+                                    *resolved_table + static_cast<std::uint32_t>(index * 4u),
+                                    validation.resolved_address,
+                                    true,
+                                    "snapshot-absolute-target"});
+    }
+    if (analysis.entries.size() < minimum_entries ||
+        (analysis.entries.size() == maximum_jump_table_entries &&
+         available_entries > maximum_jump_table_entries))
+        return std::nullopt;
+    analysis.requested_entries = analysis.entries.size();
+    analysis.resolved = true;
+    analysis.reason = "snapshot-absolute-pointer-candidates";
+    return analysis;
+}
+
+std::optional<JumpTableAnalysis>
 recognize_snapshot_absolute_jump_table_candidates(
     const katana::io::ExecutableImage& image,
     const std::span<const katana::sh4::DisassemblyLine> lines,
@@ -574,51 +629,14 @@ recognize_snapshot_absolute_jump_table_candidates(
         return std::nullopt;
 
     const auto table_pointer = image.read_u32_le(*resolved_literal);
-    const auto resolved_table = image.resolve_segment_address(table_pointer, 4u);
-    if (!resolved_table.has_value() || (*resolved_table & 3u) != 0u) return std::nullopt;
-    const auto* table_segment = image.find_segment(*resolved_table, 4u);
-    if (table_segment == nullptr || !snapshot_candidate_source(image, *table_segment))
-        return std::nullopt;
-    const auto table_offset = table_segment->byte_offset(*resolved_table);
-    if (!table_offset.has_value() || *table_offset > table_segment->bytes.size())
-        return std::nullopt;
-
-    const auto available_entries = (table_segment->bytes.size() - *table_offset) / 4u;
-    const auto scan_limit = std::min(available_entries, maximum_jump_table_entries);
-    JumpTableAnalysis analysis;
-    analysis.dispatch_address = dispatch.address;
-    analysis.table_address = *resolved_table;
-    analysis.dispatch_kind =
+    return analyze_snapshot_absolute_pointer_candidates(
+        image,
+        dispatch.address,
+        table_pointer,
         dispatch.instruction.kind == katana::sh4::InstructionKind::Jsr
             ? JumpTableDispatchKind::Call
-            : JumpTableDispatchKind::Jump;
-    analysis.encoding = JumpTableEncoding::Absolute32;
-    analysis.aot_candidates_only = true;
-    analysis.evidence = ControlFlowEvidence::GuardedPartial;
-    analysis.entries.reserve(scan_limit);
-    for (std::size_t index = 0u; index < scan_limit; ++index) {
-        const auto offset = *table_offset + index * 4u;
-        const auto target = static_cast<std::uint32_t>(
-                                katana::io::read_u16_le(table_segment->bytes, offset)) |
-                            (static_cast<std::uint32_t>(katana::io::read_u16_le(
-                                 table_segment->bytes, offset + 2u))
-                             << 16u);
-        const auto validation = validate_decode_candidate(image, target);
-        if (!validation.valid()) break;
-        analysis.entries.push_back({index,
-                                    *resolved_table + static_cast<std::uint32_t>(index * 4u),
-                                    validation.resolved_address,
-                                    true,
-                                    "snapshot-absolute-target"});
-    }
-    if (analysis.entries.size() < 2u ||
-        (analysis.entries.size() == maximum_jump_table_entries &&
-         available_entries > maximum_jump_table_entries))
-        return std::nullopt;
-    analysis.requested_entries = analysis.entries.size();
-    analysis.resolved = true;
-    analysis.reason = "snapshot-absolute-pointer-candidates";
-    return analysis;
+            : JumpTableDispatchKind::Jump,
+        2u);
 }
 
 std::optional<RelativeCallIslandCandidates>

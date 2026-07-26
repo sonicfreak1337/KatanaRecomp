@@ -94,6 +94,14 @@ recognize_bounded_relative_jump_table(const katana::io::ExecutableImage& image,
                                       JumpTableSnapshotCache* cache = nullptr);
 
 [[nodiscard]] std::optional<JumpTableAnalysis>
+analyze_snapshot_absolute_pointer_candidates(
+    const katana::io::ExecutableImage& image,
+    std::uint32_t evidence_address,
+    std::uint32_t table_address,
+    JumpTableDispatchKind dispatch_kind,
+    std::size_t minimum_entries);
+
+[[nodiscard]] std::optional<JumpTableAnalysis>
 recognize_snapshot_absolute_jump_table_candidates(
     const katana::io::ExecutableImage& image,
     std::span<const katana::sh4::DisassemblyLine> lines,
