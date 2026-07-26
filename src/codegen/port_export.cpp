@@ -46,6 +46,7 @@
 #include <system_error>
 #include <thread>
 #include <tuple>
+#include <unordered_map>
 #include <unordered_set>
 
 namespace katana::codegen {
@@ -124,6 +125,200 @@ bool has_proven_linear_ram_access(const katana::ir::Instruction& instruction) no
            instruction.memory_effects.region == katana::ir::MemoryRegionKind::NormalRam;
 }
 
+struct CountedLoopBatchProof {
+    struct Descriptor {
+        std::uint32_t guard_address = 0u;
+        std::uint32_t increment_address = 0u;
+        std::uint32_t increment_size = 0u;
+        std::uint32_t limit_address = 0u;
+        std::uint32_t store_instruction_address = 0u;
+        std::uint32_t pre_store_instruction_address = 0u;
+        std::int32_t counter_displacement = 0;
+        std::uint8_t counter_base_register = 0u;
+        std::uint8_t limit_register = 0u;
+        std::uint8_t compare_register = 0u;
+        std::uint8_t increment_register = 0u;
+        std::uint8_t step = 0u;
+        std::uint8_t round_instruction_count = 0u;
+        std::uint8_t store_guest_cycles = 0u;
+        bool signed_word_limit = false;
+        std::uint64_t round_guest_cycles = 0u;
+    } descriptor;
+};
+
+std::vector<CountedLoopBatchProof>
+counted_loop_batch_proofs(const std::span<const katana::ir::Function> program) {
+    using Operation = katana::ir::Operation;
+    struct BlockOwner {
+        const katana::ir::Function* function = nullptr;
+        const katana::ir::BasicBlock* block = nullptr;
+    };
+
+    std::unordered_map<std::uint32_t, BlockOwner> blocks;
+    std::unordered_set<std::uint32_t> duplicate_block_addresses;
+    std::unordered_map<std::uint32_t, std::vector<std::uint32_t>> predecessors;
+    for (const auto& function : program) {
+        for (const auto& block : function.blocks) {
+            if (!blocks.emplace(block.start_address, BlockOwner{&function, &block}).second)
+                duplicate_block_addresses.insert(block.start_address);
+            for (const auto successor : block.successors)
+                predecessors[successor].push_back(block.start_address);
+        }
+    }
+
+    const auto no_delay_slots = [](const katana::ir::BasicBlock& block) {
+        return std::all_of(block.instructions.begin(), block.instructions.end(), [](const auto& i) {
+            return i.delay_slot.role == katana::ir::DelaySlotRole::None;
+        });
+    };
+    const auto exact_successors = [](const katana::ir::BasicBlock& block,
+                                     std::initializer_list<std::uint32_t> expected) {
+        auto actual = block.successors;
+        auto wanted = std::vector<std::uint32_t>(expected);
+        std::sort(actual.begin(), actual.end());
+        std::sort(wanted.begin(), wanted.end());
+        return actual == wanted;
+    };
+    const auto exact_contiguous_block = [](const katana::ir::BasicBlock& block,
+                                           const std::size_t expected_instruction_count) {
+        if (block.instructions.size() != expected_instruction_count ||
+            expected_instruction_count == 0u ||
+            expected_instruction_count > std::numeric_limits<std::uint32_t>::max() / 2u)
+            return false;
+        const auto byte_size = static_cast<std::uint64_t>(expected_instruction_count) * 2u;
+        if (static_cast<std::uint64_t>(block.start_address) + byte_size > 0x1'0000'0000ull)
+            return false;
+        for (std::size_t index = 0u; index < block.instructions.size(); ++index) {
+            const auto expected_address =
+                static_cast<std::uint64_t>(block.start_address) + index * 2u;
+            if (block.instructions[index].source_address != expected_address) return false;
+        }
+        return true;
+    };
+
+    std::vector<CountedLoopBatchProof> result;
+    for (const auto& function : program) {
+        for (const auto& guard : function.blocks) {
+            if (duplicate_block_addresses.contains(guard.start_address) ||
+                !exact_contiguous_block(guard, 4u) || guard.has_indirect_successor ||
+                !no_delay_slots(guard))
+                continue;
+            const auto& limit_load = guard.instructions[0];
+            const auto& counter_load = guard.instructions[1];
+            const auto& compare = guard.instructions[2];
+            const auto& branch = guard.instructions[3];
+            const bool signed_word_limit =
+                limit_load.operation == Operation::LoadWordSignedPcRelative;
+            if ((!signed_word_limit && limit_load.operation != Operation::LoadLongPcRelative) ||
+                !limit_load.effective_address.has_value() ||
+                limit_load.memory_effects.access != katana::ir::MemoryAccessKind::Read ||
+                limit_load.memory_effects.access_count != 1u ||
+                limit_load.memory_effects.region != katana::ir::MemoryRegionKind::NormalRam ||
+                counter_load.operation != Operation::LoadLongDisplacement ||
+                counter_load.memory_effects.access != katana::ir::MemoryAccessKind::Read ||
+                counter_load.memory_effects.access_count != 1u ||
+                compare.operation != Operation::CompareGreaterOrEqual ||
+                compare.destination_register != counter_load.destination_register ||
+                compare.source_register != limit_load.destination_register ||
+                branch.operation != Operation::BranchIfFalse || !branch.target_address.has_value())
+                continue;
+
+            const auto increment_found = blocks.find(*branch.target_address);
+            if (increment_found == blocks.end() ||
+                duplicate_block_addresses.contains(*branch.target_address) ||
+                increment_found->second.function != &function)
+                continue;
+            const auto& increment = *increment_found->second.block;
+            if (!exact_contiguous_block(increment, 3u) || increment.has_indirect_successor ||
+                !no_delay_slots(increment))
+                continue;
+            const auto& increment_load = increment.instructions[0];
+            const auto& add = increment.instructions[1];
+            const auto& store = increment.instructions[2];
+            if (increment_load.operation != Operation::LoadLongDisplacement ||
+                increment_load.memory_effects.access != katana::ir::MemoryAccessKind::Read ||
+                increment_load.memory_effects.access_count != 1u ||
+                add.operation != Operation::AddImmediate || add.immediate <= 0 ||
+                add.immediate > 127 ||
+                add.destination_register != increment_load.destination_register ||
+                store.operation != Operation::StoreLongDisplacement ||
+                store.memory_effects.access != katana::ir::MemoryAccessKind::Write ||
+                store.memory_effects.access_count != 1u ||
+                store.destination_register != increment_load.source_register ||
+                store.source_register != increment_load.destination_register ||
+                store.displacement != increment_load.displacement ||
+                counter_load.source_register != increment_load.source_register ||
+                counter_load.displacement != increment_load.displacement)
+                continue;
+
+            if (branch.source_address > std::numeric_limits<std::uint32_t>::max() - 2u) continue;
+            const auto exit_address = branch.source_address + 2u;
+            if (!exact_successors(guard, {increment.start_address, exit_address}) ||
+                !exact_successors(increment, {guard.start_address}))
+                continue;
+            const auto incoming = predecessors.find(increment.start_address);
+            if (incoming == predecessors.end() || incoming->second.size() != 1u ||
+                incoming->second.front() != guard.start_address)
+                continue;
+
+            const auto base_register = increment_load.source_register;
+            const auto limit_register = limit_load.destination_register;
+            const auto compare_register = counter_load.destination_register;
+            const auto increment_register = increment_load.destination_register;
+            const std::array registers{
+                base_register, limit_register, compare_register, increment_register};
+            auto unique_registers = registers;
+            std::sort(unique_registers.begin(), unique_registers.end());
+            if (std::adjacent_find(unique_registers.begin(), unique_registers.end()) !=
+                unique_registers.end())
+                continue;
+
+            std::uint64_t round_cycles = 0u;
+            for (const auto* block : {&guard, &increment}) {
+                for (const auto& instruction : block->instructions)
+                    round_cycles +=
+                        katana::sh4::instruction_timing(instruction.original_opcode).guest_cycles;
+            }
+            const auto store_cycles =
+                katana::sh4::instruction_timing(store.original_opcode).guest_cycles;
+            const auto round_instruction_count =
+                guard.instructions.size() + increment.instructions.size();
+            constexpr auto byte_max =
+                static_cast<std::uint64_t>(std::numeric_limits<std::uint8_t>::max());
+            const auto increment_size =
+                static_cast<std::uint32_t>(increment.instructions.size() * 2u);
+            if (round_cycles == 0u || round_cycles > 4096u || store_cycles == 0u ||
+                store_cycles >= round_cycles || store_cycles > byte_max ||
+                round_instruction_count == 0u || round_instruction_count > byte_max ||
+                increment_size == 0u)
+                continue;
+
+            CountedLoopBatchProof::Descriptor descriptor;
+            descriptor.guard_address = guard.start_address;
+            descriptor.increment_address = increment.start_address;
+            descriptor.increment_size = increment_size;
+            descriptor.limit_address = *limit_load.effective_address;
+            descriptor.store_instruction_address = store.source_address;
+            descriptor.pre_store_instruction_address = add.source_address;
+            descriptor.counter_displacement = increment_load.displacement;
+            descriptor.counter_base_register = base_register;
+            descriptor.limit_register = limit_register;
+            descriptor.compare_register = compare_register;
+            descriptor.increment_register = increment_register;
+            descriptor.step = static_cast<std::uint8_t>(add.immediate);
+            descriptor.round_instruction_count = static_cast<std::uint8_t>(round_instruction_count);
+            descriptor.store_guest_cycles = static_cast<std::uint8_t>(store_cycles);
+            descriptor.signed_word_limit = signed_word_limit;
+            descriptor.round_guest_cycles = round_cycles;
+            result.push_back({descriptor});
+        }
+    }
+    std::sort(result.begin(), result.end(), [](const auto& left, const auto& right) {
+        return left.descriptor.guard_address < right.descriptor.guard_address;
+    });
+    return result;
+}
+
 std::string generated_header(const std::string& entry_namespace) {
     return "#pragma once\n\n"
            "#include \"katana/runtime/block_table.hpp\"\n"
@@ -133,7 +328,8 @@ std::string generated_header(const std::string& entry_namespace) {
            "#include \"katana/runtime/platform_services.hpp\"\n"
            "#include \"katana/runtime/runtime.hpp\"\n"
            "#include \"katana/runtime/system_replay.hpp\"\n"
-           "#include <memory>\n#include <string>\n#include <string_view>\n\n"
+           "#include <cstdint>\n#include <memory>\n#include <string>\n"
+           "#include <string_view>\n\n"
            "namespace " +
            entry_namespace +
            " {\n"
@@ -168,6 +364,29 @@ std::string generated_header(const std::string& entry_namespace) {
            "    std::uint32_t first_failure = 0u;\n"
            "    std::uint32_t first_failure_target = 0u;\n"
            "};\n"
+           "struct CountedLoopBatchDescriptor {\n"
+           "    std::uint32_t guard_address = 0u;\n"
+           "    std::uint32_t increment_address = 0u;\n"
+           "    std::uint32_t increment_size = 0u;\n"
+           "    std::uint32_t limit_address = 0u;\n"
+           "    std::uint32_t store_instruction_address = 0u;\n"
+           "    std::uint32_t pre_store_instruction_address = 0u;\n"
+           "    std::int32_t counter_displacement = 0;\n"
+           "    std::uint8_t counter_base_register = 0u;\n"
+           "    std::uint8_t limit_register = 0u;\n"
+           "    std::uint8_t compare_register = 0u;\n"
+           "    std::uint8_t increment_register = 0u;\n"
+           "    std::uint8_t step = 0u;\n"
+           "    std::uint8_t round_instruction_count = 0u;\n"
+           "    std::uint8_t store_guest_cycles = 0u;\n"
+           "    bool signed_word_limit = false;\n"
+           "    std::uint64_t round_guest_cycles = 0u;\n"
+           "    std::string_view guard_provenance;\n"
+           "};\n"
+           "bool try_product_counted_loop_batch(\n"
+           "    katana::runtime::CpuState&, katana::runtime::PlatformServices&,\n"
+           "    const katana::runtime::RuntimeBlock&,\n"
+           "    const CountedLoopBatchDescriptor&);\n"
            "const RuntimeMaterializationStatus& runtime_materialization_status() noexcept;\n"
            "void register_latent_aot_modules(\n"
            "    std::string_view content_identity,\n"
@@ -494,6 +713,17 @@ std::string handwritten_main(
            "        if (const auto budget = "
            "katana::runtime::guest_cycle_budget_from_environment())\n"
            "            state_.scheduler->set_guest_cycle_budget(*budget);\n"
+           "        counted_loop_batching_enabled_ = !diagnostic_partial_port &&\n"
+           "            !runtime_probe_mode_ && replay_log_ == nullptr;\n"
+           "        constexpr std::array counted_loop_debug_environment{\n"
+           "            \"KATANA_PORT_BLOCK_LIMIT\", \"KATANA_PORT_PROGRESS_INTERVAL\",\n"
+           "            \"KATANA_RUNTIME_PROBE\", \"KATANA_PORT_WAIT_LOOP_TRACE\",\n"
+           "            \"KATANA_PORT_DIAGNOSTICS\", \"KATANA_PORT_DIAGNOSTICS_FULL\",\n"
+           "            \"KATANA_PORT_MEMORY_PROBES\", \"KATANA_PORT_LIFECYCLE_TEST\"};\n"
+           "        for (const auto* name : counted_loop_debug_environment)\n"
+           "            if (const auto* value = std::getenv(name);\n"
+           "                value != nullptr && *value != '\\0')\n"
+           "                counted_loop_batching_enabled_ = false;\n"
            "    }\n"
            "    std::string_view name() const noexcept override { return \"dreamcast-port\"; }\n"
            "    std::uint32_t abi_version() const noexcept override {\n"
@@ -775,6 +1005,297 @@ std::string handwritten_main(
            "        cpu_.active_block_size = found->second.size;\n"
            "        return true;\n"
            "    }\n"
+           "    bool try_counted_loop_batch(\n"
+           "            const katana::runtime::RuntimeBlock& selected_block,\n"
+           "            const " +
+           entry_namespace +
+           "::CountedLoopBatchDescriptor& descriptor) {\n"
+           "        constexpr std::uint64_t quantum = 4'096u;\n"
+           "        if (!counted_loop_batching_enabled_ || cpu_.pending_guest_cycles != 0u ||\n"
+           "            descriptor.round_guest_cycles == 0u ||\n"
+           "            descriptor.round_guest_cycles > quantum || descriptor.step == 0u ||\n"
+           "            descriptor.round_instruction_count == 0u ||\n"
+           "            descriptor.store_guest_cycles == 0u ||\n"
+           "            descriptor.store_guest_cycles >= descriptor.round_guest_cycles ||\n"
+           "            descriptor.increment_size < 2u ||\n"
+           "            descriptor.pre_store_instruction_address <\n"
+           "                descriptor.increment_address ||\n"
+           "            descriptor.store_instruction_address <\n"
+           "                descriptor.increment_address ||\n"
+           "            descriptor.pre_store_instruction_address -\n"
+           "                    descriptor.increment_address >\n"
+           "                descriptor.increment_size - 2u ||\n"
+           "            descriptor.store_instruction_address -\n"
+           "                    descriptor.increment_address >\n"
+           "                descriptor.increment_size - 2u ||\n"
+           "            descriptor.counter_base_register >= cpu_.r.size() ||\n"
+           "            descriptor.limit_register >= cpu_.r.size() ||\n"
+           "            descriptor.compare_register >= cpu_.r.size() ||\n"
+           "            descriptor.increment_register >= cpu_.r.size() ||\n"
+           "            (!cpu_.interrupts_blocked() && cpu_.interrupt_mask() != 15u) ||\n"
+           "            cpu_.memory.watchpoint_count() != 0u ||\n"
+           "            cpu_.memory.has_trace_handler() ||\n"
+           "            cpu_.memory.has_mmio_trace_handler() ||\n"
+           "            cpu_.memory.mmio_access_tracking_enabled() ||\n"
+           "            cpu_.memory.has_guest_memory_access_sink() ||\n"
+           "            !state_.main_ram || !state_.address_space || !state_.scheduler ||\n"
+           "            !state_.code_tracker || !state_.module_catalog ||\n"
+           "            !state_.disc_load_transactions ||\n"
+           "            state_.disc_load_transactions->transaction_active()) return false;\n"
+           "        const auto guard_registration =\n"
+           "            executable_blocks_.find(descriptor.guard_address);\n"
+           "        if (selected_block.runtime_registered || selected_block.aot_template ||\n"
+           "            selected_block.virtual_start != descriptor.guard_address ||\n"
+           "            selected_block.physical_origin !=\n"
+           "                katana::runtime::canonical_physical_address(\n"
+           "                    descriptor.guard_address) ||\n"
+           "            selected_block.size != 8u ||\n"
+           "            selected_block.end_kind !=\n"
+           "                katana::runtime::BlockEndKind::ConditionalBranch ||\n"
+           "            (selected_block.provenance != descriptor.guard_provenance &&\n"
+           "             (selected_block.provenance.size() !=\n"
+           "                      descriptor.guard_provenance.size() + 12u ||\n"
+           "              !selected_block.provenance.starts_with(\n"
+           "                  descriptor.guard_provenance) ||\n"
+           "              !selected_block.provenance.ends_with(\"-mmu-variant\"))) ||\n"
+           "            guard_registration == executable_blocks_.end() ||\n"
+           "            guard_registration->second.physical_origin !=\n"
+           "                selected_block.physical_origin ||\n"
+           "            guard_registration->second.size != selected_block.size ||\n"
+           "            !state_.code_tracker->dispatchable(\n"
+           "                guard_registration->second.identity)) return false;\n"
+           "        const auto direct_main_ram = [&](const std::uint32_t address,\n"
+           "                                         const std::size_t size,\n"
+           "                                         const bool writable)\n"
+           "                -> std::optional<std::uint32_t> {\n"
+           "            if (size == 0u || size > 0x1'0000'0000ull - address)\n"
+           "                return std::nullopt;\n"
+           "            try {\n"
+           "                const auto access = state_.address_space->inspect_translation(\n"
+           "                    address,\n"
+           "                    writable ? katana::runtime::TranslationAccess::Write\n"
+           "                             : katana::runtime::TranslationAccess::Read,\n"
+           "                    cpu_.privileged_mode());\n"
+           "                const auto physical =\n"
+           "                    katana::runtime::canonical_physical_address(\n"
+           "                        access.physical_address);\n"
+           "                if (physical != katana::runtime::canonical_physical_address(address) "
+           "||\n"
+           "                    !cpu_.memory.maps_device(physical, size, state_.main_ram.get()) "
+           "||\n"
+           "                    (writable\n"
+           "                         ? !cpu_.memory.is_writable_linear_range(physical, size)\n"
+           "                         : !cpu_.memory.is_readable_linear_range(physical, size)))\n"
+           "                    return std::nullopt;\n"
+           "                return physical;\n"
+           "            } catch (...) { return std::nullopt; }\n"
+           "        };\n"
+           "        const auto counter_address = static_cast<std::uint32_t>(\n"
+           "            cpu_.r[descriptor.counter_base_register] +\n"
+           "            static_cast<std::uint32_t>(descriptor.counter_displacement));\n"
+           "        const auto limit_size = descriptor.signed_word_limit ? 2u : 4u;\n"
+           "        if ((counter_address & 3u) != 0u ||\n"
+           "            descriptor.limit_address % limit_size != 0u) return false;\n"
+           "        const auto counter_physical = direct_main_ram(counter_address, 4u, true);\n"
+           "        const auto limit_physical =\n"
+           "            direct_main_ram(descriptor.limit_address, limit_size, false);\n"
+           "        if (!counter_physical || !limit_physical ||\n"
+           "            state_.main_ram->size() !=\n"
+           "                katana::runtime::dreamcast_main_ram_size)\n"
+           "            return false;\n"
+           "        const auto main_ram_alias_offset = [](\n"
+           "                const std::uint32_t address, const std::size_t size)\n"
+           "                -> std::optional<std::uint32_t> {\n"
+           "            if (size == 0u ||\n"
+           "                size > katana::runtime::dreamcast_main_ram_size ||\n"
+           "                size > 0x1'0000'0000ull - address)\n"
+           "                return std::nullopt;\n"
+           "            std::optional<std::uint32_t> result;\n"
+           "            const auto access_end =\n"
+           "                static_cast<std::uint64_t>(address) + size;\n"
+           "            for (const auto area_base :\n"
+           "                 katana::runtime::dreamcast_main_ram_area_bases) {\n"
+           "                for (std::size_t mirror = 0u;\n"
+           "                     mirror <\n"
+           "                         katana::runtime::dreamcast_main_ram_mirrors_per_area;\n"
+           "                     ++mirror) {\n"
+           "                    const auto alias_base =\n"
+           "                        static_cast<std::uint64_t>(area_base) +\n"
+           "                        mirror * katana::runtime::dreamcast_main_ram_size;\n"
+           "                    const auto alias_end =\n"
+           "                        alias_base + katana::runtime::dreamcast_main_ram_size;\n"
+           "                    if (address < alias_base || access_end > alias_end) continue;\n"
+           "                    const auto candidate = static_cast<std::uint32_t>(\n"
+           "                        static_cast<std::uint64_t>(address) - alias_base);\n"
+           "                    if (candidate >\n"
+           "                            katana::runtime::dreamcast_main_ram_size - size ||\n"
+           "                        (result && *result != candidate))\n"
+           "                        return std::nullopt;\n"
+           "                    result = candidate;\n"
+           "                }\n"
+           "            }\n"
+           "            return result;\n"
+           "        };\n"
+           "        const auto main_ram_backing_offset = [&main_ram_alias_offset](\n"
+           "                const std::uint32_t virtual_address,\n"
+           "                const std::uint32_t physical_address,\n"
+           "                const std::size_t size) -> std::optional<std::uint32_t> {\n"
+           "            const auto virtual_offset =\n"
+           "                main_ram_alias_offset(virtual_address, size);\n"
+           "            const auto physical_offset =\n"
+           "                main_ram_alias_offset(physical_address, size);\n"
+           "            if (!virtual_offset || !physical_offset ||\n"
+           "                *virtual_offset != *physical_offset)\n"
+           "                return std::nullopt;\n"
+           "            return virtual_offset;\n"
+           "        };\n"
+           "        const auto counter_backing = main_ram_backing_offset(\n"
+           "            counter_address, *counter_physical, 4u);\n"
+           "        const auto limit_backing = main_ram_backing_offset(\n"
+           "            descriptor.limit_address, *limit_physical, limit_size);\n"
+           "        if (!counter_backing || !limit_backing ||\n"
+           "            (*counter_backing < *limit_backing + limit_size &&\n"
+           "             *limit_backing < *counter_backing + 4u) ||\n"
+           "            state_.code_tracker->tracks_address(*counter_physical, 4u))\n"
+           "            return false;\n"
+           "        const auto counter_backing_offset = *counter_backing;\n"
+           "        for (std::uint32_t offset = 0u; offset < 4u; ++offset)\n"
+           "            if (state_.module_catalog->resolve(counter_address + offset, 1u) !=\n"
+           "                    nullptr ||\n"
+           "                state_.module_catalog->resolve(*counter_physical + offset, 1u) !=\n"
+           "                    nullptr) return false;\n"
+           "        const auto increment = executable_blocks_.find(descriptor.increment_address);\n"
+           "        if (increment == executable_blocks_.end() ||\n"
+           "            increment->second.size != descriptor.increment_size ||\n"
+           "            increment->second.physical_origin !=\n"
+           "                katana::runtime::canonical_physical_address(\n"
+           "                    descriptor.increment_address) ||\n"
+           "            !active_block_variant_ ||\n"
+           "            !state_.code_tracker->dispatchable(increment->second.identity))\n"
+           "            return false;\n"
+           "        const auto pre_store_offset =\n"
+           "            descriptor.pre_store_instruction_address -\n"
+           "            descriptor.increment_address;\n"
+           "        const auto store_offset =\n"
+           "            descriptor.store_instruction_address -\n"
+           "            descriptor.increment_address;\n"
+           "        if (increment->second.physical_origin >\n"
+           "                std::numeric_limits<std::uint32_t>::max() - pre_store_offset ||\n"
+           "            increment->second.physical_origin >\n"
+           "                std::numeric_limits<std::uint32_t>::max() - store_offset)\n"
+           "            return false;\n"
+           "        const auto pre_store_physical =\n"
+           "            increment->second.physical_origin + pre_store_offset;\n"
+           "        const auto store_physical =\n"
+           "            increment->second.physical_origin + store_offset;\n"
+           "        try {\n"
+           "            const auto inspected = state_.address_space->inspect_translation(\n"
+           "                descriptor.increment_address,\n"
+           "                katana::runtime::TranslationAccess::Instruction,\n"
+           "                cpu_.privileged_mode());\n"
+           "            if (katana::runtime::canonical_physical_address(\n"
+           "                    inspected.physical_address) != increment->second.physical_origin "
+           "||\n"
+           "                !state_.address_space->prove_instruction_mapping(\n"
+           "                    descriptor.increment_address, increment->second.physical_origin,\n"
+           "                    increment->second.size, cpu_.privileged_mode())) return false;\n"
+           "            const auto current_variant = katana::runtime::block_variant_key(\n"
+           "                state_.address_space->guard_for(\n"
+           "                    descriptor.increment_address, cpu_.read_fpscr(),\n"
+           "                    cpu_.privileged_mode()),\n"
+           "                active_block_variant_->runtime_generation);\n"
+           "            if (current_variant != *active_block_variant_) return false;\n"
+           "        } catch (...) { return false; }\n"
+           "        const auto current_bits =\n"
+           "            state_.main_ram->read_u32(counter_backing_offset);\n"
+           "        const auto limit_bits = descriptor.signed_word_limit\n"
+           "            ? static_cast<std::uint32_t>(static_cast<std::int32_t>(\n"
+           "                  static_cast<std::int16_t>(\n"
+           "                      state_.main_ram->read_u16(*limit_backing))))\n"
+           "            : state_.main_ram->read_u32(*limit_backing);\n"
+           "        const auto current = static_cast<std::int64_t>(\n"
+           "            static_cast<std::int32_t>(current_bits));\n"
+           "        const auto limit = static_cast<std::int64_t>(\n"
+           "            static_cast<std::int32_t>(limit_bits));\n"
+           "        if (current >= limit) return false;\n"
+           "        const auto distance = static_cast<std::uint64_t>(limit - current);\n"
+           "        const auto iterations =\n"
+           "            (distance + descriptor.step - 1u) / descriptor.step;\n"
+           "        const auto iterations_before_signed_overflow =\n"
+           "            static_cast<std::uint64_t>(\n"
+           "                (static_cast<std::int64_t>(\n"
+           "                     std::numeric_limits<std::int32_t>::max()) - current) /\n"
+           "                descriptor.step);\n"
+           "        if (iterations == 0u || iterations > iterations_before_signed_overflow)\n"
+           "            return false;\n"
+           "        auto admitted = std::min(\n"
+           "            iterations, quantum / descriptor.round_guest_cycles);\n"
+           "        const auto scheduler_cycle = state_.scheduler->current_cycle();\n"
+           "        if (const auto event = state_.scheduler->next_event_cycle()) {\n"
+           "            if (*event <= scheduler_cycle) return false;\n"
+           "            admitted = std::min(\n"
+           "                admitted, (*event - scheduler_cycle - 1u) /\n"
+           "                              descriptor.round_guest_cycles);\n"
+           "        }\n"
+           "        if (const auto remaining = state_.scheduler->remaining_guest_cycles()) {\n"
+           "            if (*remaining == 0u) return false;\n"
+           "            admitted = std::min(\n"
+           "                admitted, (*remaining - 1u) / descriptor.round_guest_cycles);\n"
+           "        }\n"
+           "        if (admitted == 0u) return false;\n"
+           "        const auto batch_cycles = admitted * descriptor.round_guest_cycles;\n"
+           "        const auto batch_instructions =\n"
+           "            admitted * descriptor.round_instruction_count;\n"
+           "        if (batch_cycles > std::numeric_limits<std::uint64_t>::max() -\n"
+           "                               cpu_.total_guest_cycles ||\n"
+           "            batch_cycles > std::numeric_limits<std::uint64_t>::max() -\n"
+           "                               scheduler_cycle ||\n"
+           "            batch_instructions > std::numeric_limits<std::uint64_t>::max() -\n"
+           "                                     cpu_.attempted_guest_instructions ||\n"
+           "            batch_instructions > std::numeric_limits<std::uint64_t>::max() -\n"
+           "                                     cpu_.retired_guest_instructions)\n"
+           "            return false;\n"
+           "        const auto final_counter = static_cast<std::uint32_t>(\n"
+           "            current + static_cast<std::int64_t>(admitted * descriptor.step));\n"
+           "        const auto previous_counter = static_cast<std::uint32_t>(\n"
+           "            current + static_cast<std::int64_t>((admitted - 1u) * descriptor.step));\n"
+           "        cpu_.r[descriptor.limit_register] = limit_bits;\n"
+           "        cpu_.r[descriptor.compare_register] = previous_counter;\n"
+           "        cpu_.r[descriptor.increment_register] = final_counter;\n"
+           "        cpu_.t = false;\n"
+           "        cpu_.pc = descriptor.guard_address;\n"
+           "        cpu_.active_block_virtual_start = descriptor.increment_address;\n"
+           "        cpu_.active_block_physical_start = increment->second.physical_origin;\n"
+           "        cpu_.active_block_size = descriptor.increment_size;\n"
+           "        cpu_.active_instruction_pc = descriptor.pre_store_instruction_address;\n"
+           "        cpu_.active_instruction_physical_pc = pre_store_physical;\n"
+           "        cpu_.attempted_guest_instructions += batch_instructions - 1u;\n"
+           "        cpu_.retired_guest_instructions += batch_instructions - 1u;\n"
+           "        const katana::runtime::GuestInstructionOrigin store_origin{\n"
+           "            descriptor.store_instruction_address,\n"
+           "            descriptor.store_instruction_address, true};\n"
+           "        if (admitted > 1u) {\n"
+           "            cpu_.active_instruction_pc = descriptor.store_instruction_address;\n"
+           "            cpu_.active_instruction_physical_pc = store_physical;\n"
+           "            state_.main_ram->write_u32(\n"
+           "                counter_backing_offset, previous_counter);\n"
+           "            cpu_.active_instruction_pc = descriptor.pre_store_instruction_address;\n"
+           "            cpu_.active_instruction_physical_pc = pre_store_physical;\n"
+           "        }\n"
+           "        cpu_.pending_guest_cycles +=\n"
+           "            batch_cycles - descriptor.store_guest_cycles;\n"
+           "        katana::runtime::flush_pending_guest_cycles(cpu_, *this);\n"
+           "        {\n"
+           "            katana::runtime::GuestInstructionAttempt store_attempt(\n"
+           "                cpu_, descriptor.store_instruction_address,\n"
+           "                descriptor.store_guest_cycles);\n"
+           "            katana::runtime::guest_write_u32_at(\n"
+           "                cpu_, store_origin, counter_address, final_counter);\n"
+           "        }\n"
+           "        katana::runtime::flush_pending_guest_cycles(cpu_, *this);\n"
+           "        cpu_.pc = descriptor.guard_address;\n"
+           "        return true;\n"
+           "    }\n"
            "    katana::runtime::ExecutableCodeTracker* executable_code_tracker() noexcept "
            "override {\n"
            "        return state_.code_tracker.get();\n"
@@ -834,6 +1355,7 @@ std::string handwritten_main(
            "    bool eager_host_poll_ = false;\n"
            "    bool runtime_probe_mode_ = false;\n"
            "    bool local_block_chaining_enabled_ = false;\n"
+           "    bool counted_loop_batching_enabled_ = false;\n"
            "    bool fault_emitted_ = false;\n"
            "};\n\n"
            "int run_deterministic_runtime_probe(\n"
@@ -993,6 +1515,21 @@ std::string handwritten_main(
            "    return message;\n"
            "}\n"
            "} // namespace\n\n"
+           "namespace " +
+           entry_namespace +
+           " {\n"
+           "bool try_product_counted_loop_batch(\n"
+           "        katana::runtime::CpuState&,\n"
+           "        katana::runtime::PlatformServices& services,\n"
+           "        const katana::runtime::RuntimeBlock& selected_block,\n"
+           "        const CountedLoopBatchDescriptor& descriptor) {\n"
+           "    auto* const port = dynamic_cast<PortPlatformServices*>(&services);\n"
+           "    return port != nullptr &&\n"
+           "           port->try_counted_loop_batch(selected_block, descriptor);\n"
+           "}\n"
+           "} // namespace " +
+           entry_namespace +
+           "\n\n"
            "int main(const int argc, const char* const* argv) {\n"
            "    std::filesystem::path source;\n"
            "    try {\n"
@@ -1570,6 +2107,7 @@ std::vector<ProjectArtifact> runtime_dispatch_artifacts(
     const std::size_t boot_size,
     const std::span<const PreparedLatentAotModule> latent_modules,
     const std::string_view expected_content_identity) {
+    const auto counted_loops = counted_loop_batch_proofs(program);
     const auto symbol = [](const std::uint32_t address) {
         constexpr std::array digits{
             '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'A', 'B', 'C', 'D', 'E', 'F'};
@@ -2097,11 +2635,12 @@ std::vector<ProjectArtifact> runtime_dispatch_artifacts(
     if (diagnostic_interpreter)
         output << "#include \"katana/runtime/dynamic_interpreter.hpp\"\n"
                << "#include \"katana/sh4/decoder.hpp\"\n";
-    output << "#include <cerrno>\n#include <chrono>\n#include <cstdlib>\n#include "
-              "<iostream>\n#include <limits>\n"
-              "#include <memory>\n#include <span>\n#include <stdexcept>\n#include <string>\n"
-              "#include <string_view>\n#include <thread>\n#include <utility>\n#include <vector>\n\n"
-           << "namespace " << entry_namespace << " {\n";
+    output
+        << "#include <array>\n#include <cerrno>\n#include <chrono>\n#include <cstdlib>\n#include "
+           "<iostream>\n#include <limits>\n"
+           "#include <memory>\n#include <span>\n#include <stdexcept>\n#include <string>\n"
+           "#include <string_view>\n#include <thread>\n#include <utility>\n#include <vector>\n\n"
+        << "namespace " << entry_namespace << " {\n";
     output << "thread_local RuntimeMaterializationStatus last_materialization_status;\n"
            << "const RuntimeMaterializationStatus& runtime_materialization_status() noexcept {\n"
            << "    return last_materialization_status;\n"
@@ -2230,6 +2769,38 @@ std::vector<ProjectArtifact> runtime_dispatch_artifacts(
                   "        katana::runtime::BlockAddress{\n"
                   "            cpu.pc, katana::runtime::canonical_physical_address(cpu.pc)});\n"
                   "}\n";
+    const auto emitted_counted_loop_count =
+        diagnostic_interpreter ? std::size_t{0u} : counted_loops.size();
+    output << "constexpr std::array<CountedLoopBatchDescriptor, " << emitted_counted_loop_count
+           << "u> counted_loop_batch_descriptors{{\n";
+    if (!diagnostic_interpreter) {
+        for (const auto& proof : counted_loops) {
+            const auto& descriptor = proof.descriptor;
+            output << "    {0x" << symbol(descriptor.guard_address) << "u, 0x"
+                   << symbol(descriptor.increment_address) << "u, " << descriptor.increment_size
+                   << "u, 0x" << symbol(descriptor.limit_address) << "u, 0x"
+                   << symbol(descriptor.store_instruction_address) << "u, 0x"
+                   << symbol(descriptor.pre_store_instruction_address) << "u, "
+                   << descriptor.counter_displacement << ", "
+                   << static_cast<unsigned>(descriptor.counter_base_register) << "u, "
+                   << static_cast<unsigned>(descriptor.limit_register) << "u, "
+                   << static_cast<unsigned>(descriptor.compare_register) << "u, "
+                   << static_cast<unsigned>(descriptor.increment_register) << "u, "
+                   << static_cast<unsigned>(descriptor.step) << "u, "
+                   << static_cast<unsigned>(descriptor.round_instruction_count) << "u, "
+                   << static_cast<unsigned>(descriptor.store_guest_cycles) << "u, "
+                   << (descriptor.signed_word_limit ? "true" : "false") << ", "
+                   << descriptor.round_guest_cycles << "u, \"generated-block-"
+                   << symbol(descriptor.guard_address) << "\"},\n";
+        }
+    }
+    output << "}};\n"
+              "const CountedLoopBatchDescriptor* counted_loop_descriptor(\n"
+              "        const std::uint32_t address) noexcept {\n"
+              "    for (const auto& descriptor : counted_loop_batch_descriptors)\n"
+              "        if (descriptor.guard_address == address) return &descriptor;\n"
+              "    return nullptr;\n"
+              "}\n\n";
     output
         << "std::uint64_t configured_block_budget() {\n"
            "    static const auto budget = [] {\n"
@@ -2345,6 +2916,27 @@ std::vector<ProjectArtifact> runtime_dispatch_artifacts(
            "            selected_block->get().physical_origin,\n"
            "            selected_block->get().size,\n"
            "            selected_block->get().variant);\n"
+           "        if (const auto* counted_loop =\n"
+           "                counted_loop_descriptor(selected.diagnostic_target);\n"
+           "            counted_loop != nullptr &&\n"
+           "            try_product_counted_loop_batch(\n"
+           "                cpu, *active_services, selected_block->get(), *counted_loop)) {\n"
+           "            active_context->scheduler_cycle =\n"
+           "                active_services->scheduler_cycle();\n"
+           "            target = cpu.pc;\n"
+           "            dispatch_callsite = counted_loop->store_instruction_address;\n"
+           "            dispatch_source = {\n"
+           "                counted_loop->store_instruction_address,\n"
+           "                katana::runtime::canonical_physical_address(\n"
+           "                    counted_loop->store_instruction_address)};\n"
+           "            kind = katana::runtime::IndirectDispatchKind::TailJump;\n"
+           "            dispatch_class =\n"
+           "                katana::runtime::RuntimeDispatchClass::GuardedFallback;\n"
+           "            dispatch_origin =\n"
+           "                katana::runtime::DispatchResolutionOrigin::TableLookup;\n"
+           "            diagnostic = false;\n"
+           "            continue;\n"
+           "        }\n"
            "        const auto retired_before = cpu.retired_guest_instructions;\n"
            "        const auto exception_generation_before = cpu.exception_generation;\n"
            "        active_exit_source = {selected.diagnostic_target, selected.physical_target};\n"

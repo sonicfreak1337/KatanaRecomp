@@ -243,6 +243,62 @@ std::vector<std::uint8_t> poll_loop_boot_track() {
     return bytes;
 }
 
+std::vector<std::uint8_t> counted_loop_boot_track(const bool valid_step = true,
+                                                  const bool aliased_counter = false) {
+    auto bytes = boot_track();
+    constexpr std::uint32_t boot_size = 0x28u;
+    auto directory = payload_offset(20u);
+    directory +=
+        record(bytes, directory, data_lba + 20u, payload_size, std::string(1u, '\0'), true);
+    directory +=
+        record(bytes, directory, data_lba + 20u, payload_size, std::string(1u, '\1'), true);
+    static_cast<void>(record(bytes, directory, data_lba + 21u, boot_size, "BOOT.BIN;1", false));
+    std::vector<std::uint8_t> program(boot_size, 0x09u);
+    for (std::size_t offset = 1u; offset < program.size(); offset += 2u)
+        program[offset] = 0x00u;
+    if (aliased_counter) {
+        program[0x00u] = 0x01u;
+        program[0x01u] = 0xDFu; // mov.l @(4,pc),r15 -> 0x8D01001C
+        program[0x02u] = 0x08u;
+        program[0x03u] = 0xA0u; // bra 0x8C010016
+        program[0x04u] = 0x09u;
+        program[0x05u] = 0x00u; // delay-slot nop
+        program[0x08u] = 0x1Cu;
+        program[0x09u] = 0x00u;
+        program[0x0Au] = 0x01u;
+        program[0x0Bu] = 0x8Du;
+    } else {
+        program[0x00u] = 0x09u;
+        program[0x01u] = 0xA0u; // bra 0x8C010016: explicit guard block boundary
+        program[0x02u] = 0x09u;
+        program[0x03u] = 0x00u; // delay-slot nop
+    }
+    program[0x10u] = 0xF2u;
+    program[0x11u] = 0x51u; // increment: mov.l @(8,r15),r1
+    program[0x12u] = static_cast<std::uint8_t>(valid_step ? 0x01u : 0x00u);
+    program[0x13u] = 0x71u; // add #1,r1 (add #0 is the negative proof fixture)
+    program[0x14u] = 0x12u;
+    program[0x15u] = 0x1Fu; // mov.l r1,@(8,r15)
+    program[0x16u] = 0x05u;
+    program[0x17u] = 0x93u; // guard: mov.w @(10,pc),r3 -> 0x8C010024
+    program[0x18u] = 0xF2u;
+    program[0x19u] = 0x52u; // mov.l @(8,r15),r2
+    program[0x1Au] = 0x33u;
+    program[0x1Bu] = 0x32u; // cmp/ge r3,r2
+    program[0x1Cu] = 0xF8u;
+    program[0x1Du] = 0x8Bu; // bf 0x8C010010
+    program[0x1Eu] = 0x0Bu;
+    program[0x1Fu] = 0x00u; // exit: rts
+    program[0x20u] = 0x09u;
+    program[0x21u] = 0x00u; // delay-slot nop
+    program[0x24u] = 0x05u;
+    program[0x25u] = 0x00u; // signed loop limit
+    std::copy(program.begin(),
+              program.end(),
+              bytes.begin() + static_cast<std::ptrdiff_t>(payload_offset(21u)));
+    return bytes;
+}
+
 std::vector<std::uint8_t> latent_module_boot_track() {
     auto bytes = boot_track();
     bytes.resize(23u * raw_sector_size);
@@ -385,10 +441,10 @@ void disabled_product_materializer_regression() {
 } // namespace
 
 int run_test(const int argc, char* argv[]) {
-    if (argc == 3 &&
-        (std::string(argv[1]) == "--write-fixture" ||
-         std::string(argv[1]) == "--write-trap-fixture" ||
-         std::string(argv[1]) == "--write-unknown-target-fixture")) {
+    if (argc == 3 && (std::string(argv[1]) == "--write-fixture" ||
+                      std::string(argv[1]) == "--write-trap-fixture" ||
+                      std::string(argv[1]) == "--write-unknown-target-fixture" ||
+                      std::string(argv[1]) == "--write-counted-loop-fixture")) {
         const std::filesystem::path directory(argv[2]);
         std::filesystem::create_directories(directory);
         const auto program = std::string(argv[1]) == "--write-trap-fixture"
@@ -397,6 +453,14 @@ int run_test(const int argc, char* argv[]) {
                                  ? FixtureProgram::UnknownDynamicTarget
                                  : FixtureProgram::Normal;
         write_fixture(directory, program);
+        if (std::string(argv[1]) == "--write-counted-loop-fixture") {
+            const auto track = counted_loop_boot_track();
+            write_binary(directory / "high.bin", track);
+            const auto program_begin =
+                track.begin() + static_cast<std::ptrdiff_t>(payload_offset(21u));
+            write_binary(directory / "program.bin",
+                         std::vector<std::uint8_t>(program_begin, program_begin + 0x28));
+        }
         return EXIT_SUCCESS;
     }
     require(argc == 1, "Unerwartete Argumente fuer den Portexporttest.");
@@ -1065,6 +1129,156 @@ int run_test(const int argc, char* argv[]) {
             poll_main.find("high.bin") == std::string::npos,
         "Generische Poll-Loops werden nicht deterministisch, dedupliziert oder frei von "
         "privaten Quelldaten in den Produkttrace exportiert.");
+    const auto counted_loop_disc_directory = fixture.root / "counted-loop-disc";
+    std::filesystem::create_directories(counted_loop_disc_directory);
+    write_fixture(counted_loop_disc_directory);
+    write_binary(counted_loop_disc_directory / "high.bin", counted_loop_boot_track());
+    const auto counted_loop_gdi = counted_loop_disc_directory / "disc.gdi";
+    const auto counted_loop_output = fixture.root / "counted-loop-port";
+    static_cast<void>(
+        export_dreamcast_port_project(counted_loop_gdi, counted_loop_output, options));
+    const auto counted_loop_dispatch =
+        read_text(counted_loop_output / "generated" / "code" / "runtime-dispatch.cpp");
+    const auto counted_loop_main = read_text(counted_loop_output / "src" / "main.cpp");
+    constexpr std::string_view counted_loop_descriptor =
+        "{0x8C010016u, 0x8C010010u, 6u, 0x8C010024u, 0x8C010014u, "
+        "0x8C010012u, 8, 15u, 3u, 2u, 1u, 1u, 7u, 2u, true, 12u, "
+        "\"generated-block-8C010016\"}";
+    const auto previous_write = counted_loop_main.find("counter_backing_offset, previous_counter");
+    const auto aggregated_cycles =
+        counted_loop_main.find("batch_cycles - descriptor.store_guest_cycles", previous_write);
+    const auto pre_store_flush =
+        counted_loop_main.find("flush_pending_guest_cycles(cpu_, *this)", aggregated_cycles);
+    const auto final_store_attempt =
+        counted_loop_main.find("GuestInstructionAttempt store_attempt", pre_store_flush);
+    const auto final_write =
+        counted_loop_main.find("counter_address, final_counter", final_store_attempt);
+    const auto final_store_flush =
+        counted_loop_main.find("flush_pending_guest_cycles(cpu_, *this)", final_write);
+    const auto counted_loop_call = counted_loop_dispatch.find("try_product_counted_loop_batch(");
+    const auto ordinary_block_execute =
+        counted_loop_dispatch.find("execute_runtime_block(", counted_loop_call);
+    const auto counted_loop_method_begin = counted_loop_main.find("bool try_counted_loop_batch(");
+    const auto counted_loop_method_end = counted_loop_main.find(
+        "ExecutableCodeTracker* executable_code_tracker()", counted_loop_method_begin);
+    const auto counted_loop_method =
+        counted_loop_method_begin == std::string::npos ||
+                counted_loop_method_end == std::string::npos
+            ? std::string_view{}
+            : std::string_view{counted_loop_main}.substr(
+                  counted_loop_method_begin, counted_loop_method_end - counted_loop_method_begin);
+    require(counted_loop_dispatch.find("std::array<CountedLoopBatchDescriptor, 1u> "
+                                       "counted_loop_batch_descriptors") != std::string::npos,
+            "Exakte positive Counted-Loop-Fixture erzeugt nicht genau einen Descriptor.");
+    const auto counted_loop_array = counted_loop_dispatch.find("counted_loop_batch_descriptors{{");
+    require(counted_loop_dispatch.find(counted_loop_descriptor) != std::string::npos,
+            "Counted-Loop-Descriptor verliert Adressen, Register, Timing oder Schrittweite: " +
+                counted_loop_dispatch.substr(counted_loop_array, 320u));
+    require(
+        counted_loop_dispatch.find("selected_block->get(), *counted_loop") != std::string::npos &&
+            counted_loop_dispatch.find("active_context->scheduler_cycle =") != std::string::npos &&
+            counted_loop_call != std::string::npos && ordinary_block_execute != std::string::npos &&
+            counted_loop_call < ordinary_block_execute &&
+            counted_loop_main.find("selected_block.runtime_registered") != std::string::npos &&
+            counted_loop_main.find("selected_block.aot_template") != std::string::npos &&
+            counted_loop_main.find("selected_block.provenance != descriptor.guard_provenance") !=
+                std::string::npos &&
+            counted_loop_main.find("selected_block.provenance.ends_with(\"-mmu-variant\")") !=
+                std::string::npos &&
+            counted_loop_main.find("(counter_address & 3u) != 0u") != std::string::npos &&
+            counted_loop_main.find("descriptor.limit_address % limit_size != 0u") !=
+                std::string::npos &&
+            counted_loop_main.find("module_catalog->resolve(counter_address + offset, 1u)") !=
+                std::string::npos &&
+            counted_loop_main.find("state_.main_ram->size() !=\n"
+                                   "                katana::runtime::dreamcast_main_ram_size") !=
+                std::string::npos &&
+            counted_loop_main.find("katana::runtime::dreamcast_main_ram_area_bases") !=
+                std::string::npos &&
+            counted_loop_main.find("mirror <\n"
+                                   "                         "
+                                   "katana::runtime::dreamcast_main_ram_mirrors_per_area") !=
+                std::string::npos &&
+            counted_loop_main.find("*virtual_offset != *physical_offset") != std::string::npos &&
+            counted_loop_main.find("*counter_backing < *limit_backing + limit_size") !=
+                std::string::npos &&
+            counted_loop_main.find("\"KATANA_PORT_LIFECYCLE_TEST\"") != std::string::npos &&
+            counted_loop_main.find("batch_cycles > std::numeric_limits<std::uint64_t>::max() -\n"
+                                   "                               scheduler_cycle") !=
+                std::string::npos &&
+            counted_loop_main.find("constexpr std::uint64_t quantum = 4'096u") !=
+                std::string::npos &&
+            previous_write != std::string::npos && aggregated_cycles != std::string::npos &&
+            pre_store_flush != std::string::npos && final_store_attempt != std::string::npos &&
+            final_write != std::string::npos && final_store_flush != std::string::npos &&
+            previous_write < aggregated_cycles && aggregated_cycles < pre_store_flush &&
+            pre_store_flush < final_store_attempt && final_store_attempt < final_write &&
+            final_write < final_store_flush &&
+            counted_loop_main.find("descriptor.store_instruction_address, true") !=
+                std::string::npos &&
+            counted_loop_main.find("cpu_.active_instruction_physical_pc = store_physical") !=
+                std::string::npos &&
+            occurrences(counted_loop_method, "guest_write_u32_at(") == 1u &&
+            occurrences(counted_loop_method, "state_.main_ram->write_u32(") == 1u,
+        "Statisch bewiesene Counted-Loops verlieren Produktisolation, exakte "
+        "Store-Provenienz, Schedulergrenzen oder den zweistufigen Write-/Cycle-Commit.");
+
+    auto counted_loop_diagnostic_options = options;
+    counted_loop_diagnostic_options.diagnostic_partial = true;
+    const auto counted_loop_diagnostic_output = fixture.root / "counted-loop-diagnostic-port";
+    static_cast<void>(export_dreamcast_port_project(
+        counted_loop_gdi, counted_loop_diagnostic_output, counted_loop_diagnostic_options));
+    const auto counted_loop_diagnostic_dispatch =
+        read_text(counted_loop_diagnostic_output / "generated" / "code" / "runtime-dispatch.cpp");
+    require(counted_loop_diagnostic_dispatch.find("std::array<CountedLoopBatchDescriptor, 0u> "
+                                                  "counted_loop_batch_descriptors") !=
+                    std::string::npos &&
+                counted_loop_diagnostic_dispatch.find(counted_loop_descriptor) == std::string::npos,
+            "Diagnose-/Interpreterports enthalten einen Produkt-Counted-Loop-Fastpath.");
+
+    write_binary(counted_loop_disc_directory / "high.bin", counted_loop_boot_track(false));
+    const auto rejected_counted_loop_output = fixture.root / "rejected-counted-loop-port";
+    static_cast<void>(
+        export_dreamcast_port_project(counted_loop_gdi, rejected_counted_loop_output, options));
+    const auto rejected_counted_loop_dispatch =
+        read_text(rejected_counted_loop_output / "generated" / "code" / "runtime-dispatch.cpp");
+    require(rejected_counted_loop_dispatch.find("std::array<CountedLoopBatchDescriptor, 0u> "
+                                                "counted_loop_batch_descriptors") !=
+                    std::string::npos &&
+                rejected_counted_loop_dispatch.find(counted_loop_descriptor) == std::string::npos,
+            "Nicht-positive oder semantisch abweichende Counted-Loops wurden gebatcht.");
+
+    const auto aliased_counted_loop_track = counted_loop_boot_track(true, true);
+    const auto aliased_program_offset = payload_offset(21u);
+    require(aliased_counted_loop_track[aliased_program_offset + 0x08u] == 0x1Cu &&
+                aliased_counted_loop_track[aliased_program_offset + 0x09u] == 0x00u &&
+                aliased_counted_loop_track[aliased_program_offset + 0x0Au] == 0x01u &&
+                aliased_counted_loop_track[aliased_program_offset + 0x0Bu] == 0x8Du,
+            "Mirror-Alias-Negativfixture enthaelt nicht die R15-Basis 0x8D01001C.");
+    write_binary(counted_loop_disc_directory / "high.bin", aliased_counted_loop_track);
+    const auto aliased_counted_loop_output = fixture.root / "aliased-counted-loop-port";
+    static_cast<void>(
+        export_dreamcast_port_project(counted_loop_gdi, aliased_counted_loop_output, options));
+    const auto aliased_counted_loop_dispatch =
+        read_text(aliased_counted_loop_output / "generated" / "code" / "runtime-dispatch.cpp");
+    const auto aliased_counted_loop_main =
+        read_text(aliased_counted_loop_output / "src" / "main.cpp");
+    require(aliased_counted_loop_dispatch.find("std::array<CountedLoopBatchDescriptor, 1u> "
+                                               "counted_loop_batch_descriptors") !=
+                    std::string::npos &&
+                aliased_counted_loop_dispatch.find(counted_loop_descriptor) != std::string::npos,
+            "Mirror-Alias-Negativfixture verliert ihren statischen Counted-Loop-Descriptor.");
+    require(
+        aliased_counted_loop_main.find("const auto counter_backing = main_ram_backing_offset(") !=
+                std::string::npos &&
+            aliased_counted_loop_main.find("const auto limit_backing = main_ram_backing_offset(") !=
+                std::string::npos &&
+            aliased_counted_loop_main.find("(*counter_backing < *limit_backing + limit_size &&") !=
+                std::string::npos &&
+            aliased_counted_loop_main.find("*limit_backing < *counter_backing + 4u)") !=
+                std::string::npos,
+        "Counter und Limit in verschiedenen Dreamcast-Mirrors desselben Main-RAM-Backings "
+        "werden nicht vor dem Batch auf Backing-Overlap geprueft.");
     require(unit != generated_before.end(),
             "Portexport besitzt keine deterministische Translation Unit.");
     std::size_t entry_metadata_count = 0u;
