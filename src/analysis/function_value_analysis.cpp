@@ -1483,71 +1483,93 @@ bool merge_candidate_input(CandidateInput& destination,
     }
     AbstractState merged;
     merged.stack_offsets[15u] = 0;
-    if (destination.unknown_ingress || destination.expected_call_sites.empty() ||
-        !std::all_of(
-            destination.expected_call_sites.begin(),
-            destination.expected_call_sites.end(),
-            [&](const auto call_site) { return destination.observations.contains(call_site); })) {
-        const bool changed = destination.state != merged;
-        destination.state = std::move(merged);
-        return changed;
-    }
+    const bool all_inputs_observed =
+        !destination.unknown_ingress && !destination.expected_call_sites.empty() &&
+        std::all_of(destination.expected_call_sites.begin(),
+                    destination.expected_call_sites.end(),
+                    [&](const auto call_site) {
+                        return destination.observations.contains(call_site);
+                    });
     for (std::uint8_t index = 0u; index < 15u; ++index) {
         auto& target = merged[index];
-        bool first = true;
-        bool all_known = true;
-        std::set<std::uint32_t> call_sites;
-        std::set<std::uint32_t> callees;
+        bool has_known_value = false;
+        bool all_known = all_inputs_observed;
+        bool overflow = false;
+        bool complete = true;
+        std::set<std::uint32_t> all_call_sites;
+        std::set<std::uint32_t> all_callees;
+        std::set<std::uint32_t> supporting_call_sites;
+        std::set<std::uint32_t> supporting_callees;
         for (const auto call_site : destination.expected_call_sites) {
-            const auto& source = destination.observations.at(call_site)[index];
-            call_sites.insert(source.call_sites.begin(), source.call_sites.end());
-            callees.insert(source.callees.begin(), source.callees.end());
-            if (source.known || (index >= 4u && index <= 7u)) call_sites.insert(call_site);
+            const auto observed = destination.observations.find(call_site);
+            if (observed == destination.observations.end()) {
+                all_known = false;
+                continue;
+            }
+            const auto& source = observed->second[index];
+            all_call_sites.insert(source.call_sites.begin(), source.call_sites.end());
+            all_callees.insert(source.callees.begin(), source.callees.end());
+            if (source.known || (index >= 4u && index <= 7u))
+                all_call_sites.insert(call_site);
             if (!source.known || source.values.empty()) {
                 all_known = false;
                 continue;
             }
-            if (first) {
-                target = source;
-                first = false;
-            } else {
+            has_known_value = true;
+            supporting_call_sites.insert(source.call_sites.begin(), source.call_sites.end());
+            supporting_call_sites.insert(call_site);
+            supporting_callees.insert(source.callees.begin(), source.callees.end());
+            complete = complete && source.complete;
+            if (!overflow) {
                 target.values.insert(
                     target.values.end(), source.values.begin(), source.values.end());
                 normalize(target.values);
-                target.complete = target.complete && source.complete;
-            }
-            target.guarded = true;
-            if (target.values.size() > maximum_summary_values) {
-                all_known = false;
+                if (target.values.size() > maximum_summary_values) {
+                    overflow = true;
+                    target.values.clear();
+                }
             }
         }
-        if (!all_known || first) make_unknown(target);
-        target.call_sites = std::move(call_sites);
-        target.callees = std::move(callees);
+        if (!has_known_value || overflow) {
+            make_unknown(target);
+            target.call_sites = std::move(all_call_sites);
+            target.callees = std::move(all_callees);
+            continue;
+        }
+        target.known = true;
+        // Merged call-context values are candidate evidence only.  Keep the
+        // live runtime value authoritative even when every known static
+        // callsite currently has an observation.
+        target.guarded = true;
+        target.complete = all_known && complete;
+        target.call_sites = std::move(supporting_call_sites);
+        target.callees = std::move(supporting_callees);
     }
-    const auto first_call_site = *destination.expected_call_sites.begin();
-    merged.memory_values = destination.observations.at(first_call_site).memory_values;
-    for (auto value = merged.memory_values.begin(); value != merged.memory_values.end();) {
-        bool retained = true;
-        for (const auto call_site : destination.expected_call_sites) {
-            if (call_site == first_call_site) continue;
-            const auto& source_values = destination.observations.at(call_site).memory_values;
-            const auto source = source_values.find(value->first);
-            if (source == source_values.end()) {
-                retained = false;
-                break;
+    if (all_inputs_observed) {
+        const auto first_call_site = *destination.expected_call_sites.begin();
+        merged.memory_values = destination.observations.at(first_call_site).memory_values;
+        for (auto value = merged.memory_values.begin(); value != merged.memory_values.end();) {
+            bool retained = true;
+            for (const auto call_site : destination.expected_call_sites) {
+                if (call_site == first_call_site) continue;
+                const auto& source_values = destination.observations.at(call_site).memory_values;
+                const auto source = source_values.find(value->first);
+                if (source == source_values.end()) {
+                    retained = false;
+                    break;
+                }
+                merge_value(value->second, source->second);
+                if (!value->second.known) {
+                    retained = false;
+                    break;
+                }
             }
-            merge_value(value->second, source->second);
-            if (!value->second.known) {
-                retained = false;
-                break;
+            if (!retained)
+                value = merged.memory_values.erase(value);
+            else {
+                value->second.guarded = true;
+                ++value;
             }
-        }
-        if (!retained)
-            value = merged.memory_values.erase(value);
-        else {
-            value->second.guarded = true;
-            ++value;
         }
     }
     const bool changed = destination.state != merged;

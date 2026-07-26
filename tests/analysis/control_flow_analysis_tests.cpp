@@ -297,6 +297,162 @@ int main() {
                                 katana::analysis::FunctionOrigin::StoredCodeAddress},
             "Expliziter Function-Override verlor im echten Seedmerge gegen GuardedPartial.");
 
+    const auto partial_ingress_store_image = [](const bool non_stack_store) {
+        std::vector<std::uint8_t> bytes(0x80u, 0x09u);
+        bytes[0x00u] = 0x60u;
+        bytes[0x01u] = 0xE5u; // mov #0x60,r5
+        bytes[0x02u] = 0x1Du;
+        bytes[0x03u] = 0xB0u; // bsr 0x40
+        bytes[0x04u] = 0x09u;
+        bytes[0x05u] = 0x00u; // nop (delay)
+        bytes[0x06u] = 0x0Bu;
+        bytes[0x07u] = 0x00u; // rts
+        bytes[0x08u] = 0x09u;
+        bytes[0x09u] = 0x00u; // nop (delay)
+        bytes[0x40u] = 0x56u;
+        bytes[0x41u] = 0x2Fu; // mov.l r5,@-r15
+        bytes[0x42u] = 0xF6u;
+        bytes[0x43u] = 0x65u; // mov.l @r15+,r5
+        bytes[0x44u] = 0x52u;
+        bytes[0x45u] =
+            non_stack_store ? 0x22u : 0x2Fu; // mov.l r5,@r2 / mov.l r5,@r15
+        bytes[0x46u] = 0x0Bu;
+        bytes[0x47u] = 0x00u; // rts
+        bytes[0x48u] = 0x09u;
+        bytes[0x49u] = 0x00u; // nop (delay)
+        bytes[0x60u] = 0x0Bu;
+        bytes[0x61u] = 0x00u; // handler: rts
+        bytes[0x62u] = 0x09u;
+        bytes[0x63u] = 0x00u; // nop (delay)
+        bytes[0x70u] = 0x22u;
+        bytes[0x71u] = 0x61u; // mov.l @r2,r1
+        bytes[0x72u] = 0x0Bu;
+        bytes[0x73u] = 0x41u; // jsr @r1
+        bytes[0x74u] = 0x09u;
+        bytes[0x75u] = 0x00u; // nop (delay)
+        bytes[0x76u] = 0x0Bu;
+        bytes[0x77u] = 0x00u; // rts
+        bytes[0x78u] = 0x09u;
+        bytes[0x79u] = 0x00u; // nop (delay)
+        katana::io::ExecutableImage image;
+        image.set_guest_call_abi(katana::io::GuestCallAbi::SuperHC);
+        image.set_initial_snapshot_policy(
+            katana::io::InitialSnapshotPolicy::EntryPointStraightLineQuiescent);
+        image.add_segment({non_stack_store ? ".partial-non-stack-store"
+                                           : ".partial-stack-store",
+                           0u,
+                           0u,
+                           bytes.size(),
+                           katana::io::SegmentKind::Mixed,
+                           {true, true, true},
+                           std::move(bytes),
+                           katana::io::ImageSourceKind::DiscBootFile,
+                           katana::io::ImageLoadPhase::Initial,
+                           non_stack_store ? "synthetic-partial-non-stack-store"
+                                           : "synthetic-partial-stack-store"});
+        image.add_entry_point(0u);
+        image.add_entry_point(0x40u); // unknown additional registrar ingress
+        image.add_entry_point(0x70u);
+        return image;
+    };
+
+    const auto partial_non_stack_store = katana::analysis::analyze_control_flow(
+        partial_ingress_store_image(true));
+    const auto* partial_non_stack_handler = find_function(partial_non_stack_store, 0x60u);
+    const auto partial_runtime_dispatch =
+        std::find_if(partial_non_stack_store.indirect_control_flow.begin(),
+                     partial_non_stack_store.indirect_control_flow.end(),
+                     [](const auto& resolution) {
+                         return resolution.instruction_address == 0x72u;
+                     });
+    require(partial_non_stack_handler != nullptr &&
+                partial_non_stack_handler->origins ==
+                    std::vector{katana::analysis::FunctionOrigin::StoredCodeAddress} &&
+                has_instruction(partial_non_stack_store, 0x60u) &&
+                partial_runtime_dispatch !=
+                    partial_non_stack_store.indirect_control_flow.end() &&
+                partial_runtime_dispatch->evidence ==
+                    katana::analysis::ControlFlowEvidence::RuntimeOnly &&
+                partial_runtime_dispatch->targets.empty() &&
+                partial_runtime_dispatch->analysis_candidates.empty() &&
+                std::none_of(partial_non_stack_store.resolved_edges.begin(),
+                             partial_non_stack_store.resolved_edges.end(),
+                             [](const auto& edge) {
+                                 return edge.instruction_address == 0x72u ||
+                                        edge.target_address == 0x60u;
+                             }),
+            "Partieller Callerwert erreichte nach Stackspill keinen bewachten "
+            "Non-Stack-Store oder fror den Runtime-Dispatcher statisch ein.");
+
+    const auto partial_stack_store =
+        katana::analysis::analyze_control_flow(partial_ingress_store_image(false));
+    require(find_function(partial_stack_store, 0x60u) == nullptr &&
+                !has_instruction(partial_stack_store, 0x60u),
+            "Partieller Callerwert an einem Stackstore wurde als Callback katalogisiert.");
+
+    const auto widened_partial_store_image = [] {
+        std::vector<std::uint8_t> bytes(0xA0u, 0x09u);
+        constexpr std::array<std::uint8_t, 9u> callback_addresses{
+            0x50u, 0x54u, 0x58u, 0x5Cu, 0x60u, 0x64u, 0x68u, 0x6Cu, 0x70u};
+        const auto put_u16 = [&bytes](const std::size_t offset,
+                                      const std::uint16_t value) {
+            bytes[offset] = static_cast<std::uint8_t>(value);
+            bytes[offset + 1u] = static_cast<std::uint8_t>(value >> 8u);
+        };
+        for (std::size_t index = 0u; index < callback_addresses.size(); ++index) {
+            const auto offset = index * 6u;
+            put_u16(offset,
+                    static_cast<std::uint16_t>(0xE400u | callback_addresses[index]));
+            const auto call_address = static_cast<std::uint32_t>(offset + 2u);
+            const auto displacement =
+                static_cast<std::uint16_t>((0x80u - (call_address + 4u)) / 2u);
+            put_u16(offset + 2u, static_cast<std::uint16_t>(0xB000u | displacement));
+            put_u16(offset + 4u, 0x0009u); // nop (delay)
+        }
+        put_u16(0x36u, 0x000Bu); // rts
+        put_u16(0x38u, 0x0009u); // nop (delay)
+        for (const auto address : callback_addresses) {
+            put_u16(address, 0x000Bu); // callback: rts
+            put_u16(address + 2u, 0x0009u); // nop (delay)
+        }
+        put_u16(0x80u, 0x2242u); // mov.l r4,@r2
+        put_u16(0x82u, 0x000Bu); // rts
+        put_u16(0x84u, 0x0009u); // nop (delay)
+        katana::io::ExecutableImage image;
+        image.set_guest_call_abi(katana::io::GuestCallAbi::SuperHC);
+        image.set_initial_snapshot_policy(
+            katana::io::InitialSnapshotPolicy::EntryPointStraightLineQuiescent);
+        image.add_segment({".widened-partial-store",
+                           0u,
+                           0u,
+                           bytes.size(),
+                           katana::io::SegmentKind::Mixed,
+                           {true, true, true},
+                           std::move(bytes),
+                           katana::io::ImageSourceKind::DiscBootFile,
+                           katana::io::ImageLoadPhase::Initial,
+                           "synthetic-widened-partial-store"});
+        image.add_entry_point(0u);
+        image.add_entry_point(0x80u); // unknown additional registrar ingress
+        return std::pair{std::move(image), callback_addresses};
+    }();
+    const auto widened_partial_store =
+        katana::analysis::analyze_control_flow(widened_partial_store_image.first);
+    require(std::count_if(widened_partial_store.recursive.instructions.begin(),
+                          widened_partial_store.recursive.instructions.end(),
+                          [](const auto& line) {
+                              return line.instruction.control_flow ==
+                                         katana::sh4::ControlFlowKind::Call &&
+                                     line.target_address == 0x80u;
+                           }) == 9 &&
+                std::none_of(widened_partial_store_image.second.begin(),
+                             widened_partial_store_image.second.end(),
+                             [&](const auto address) {
+                                 return find_function(widened_partial_store, address) != nullptr ||
+                                        has_instruction(widened_partial_store, address);
+                             }),
+            "Mehr als acht partielle Callerwerte umgingen das Kandidatenlimit.");
+
     const auto destination_forwarded_callback_image = [] {
         std::vector<std::uint8_t> bytes(0x40u, 0x09u);
         bytes[0x00u] = 0x0Eu;
