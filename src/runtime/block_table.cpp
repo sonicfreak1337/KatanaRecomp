@@ -103,6 +103,14 @@ std::uint32_t validation_extent(const RuntimeBlock& block) noexcept {
     return block.aot_template ? block.aot_template->validation_extent : block.size;
 }
 
+std::span<const NativeAotTemplateMutableRange>
+validation_mutable_ranges(const RuntimeBlock& block) noexcept {
+    return block.aot_template
+               ? std::span<const NativeAotTemplateMutableRange>(
+                     block.aot_template->mutable_ranges)
+               : std::span<const NativeAotTemplateMutableRange>{};
+}
+
 } // namespace
 
 std::size_t
@@ -125,6 +133,60 @@ std::uint32_t canonical_physical_address(const std::uint32_t address) noexcept {
     return address < 0xE0000000u ? address & 0x1FFFFFFFu : address;
 }
 
+bool native_aot_mutable_ranges_valid(
+    const std::span<const NativeAotTemplateMutableRange> ranges,
+    const std::uint32_t extent) noexcept {
+    std::uint64_t previous_end = 0u;
+    for (const auto range : ranges) {
+        const auto end = static_cast<std::uint64_t>(range.offset) + range.size;
+        if (range.size == 0u || range.offset < previous_end || end > extent) return false;
+        previous_end = end;
+    }
+    return true;
+}
+
+bool native_aot_offset_is_mutable(
+    const std::span<const NativeAotTemplateMutableRange> ranges,
+    const std::uint32_t offset) noexcept {
+    for (const auto range : ranges) {
+        if (offset < range.offset) return false;
+        if (offset - range.offset < range.size) return true;
+    }
+    return false;
+}
+
+bool native_aot_write_overlaps_immutable(
+    const std::uint32_t tracked_start,
+    const std::uint32_t tracked_extent,
+    const std::span<const NativeAotTemplateMutableRange> mutable_ranges,
+    const std::uint32_t write_start,
+    const std::size_t write_size) noexcept {
+    if (tracked_extent == 0u || write_size == 0u) return false;
+    constexpr auto address_space_end =
+        static_cast<std::uint64_t>(std::numeric_limits<std::uint32_t>::max()) + 1u;
+    if (tracked_extent > address_space_end - tracked_start ||
+        write_size > address_space_end - write_start)
+        return true;
+    const auto tracked_end = static_cast<std::uint64_t>(tracked_start) + tracked_extent;
+    const auto write_end = static_cast<std::uint64_t>(write_start) + write_size;
+    const auto overlap_begin =
+        std::max<std::uint64_t>(tracked_start, static_cast<std::uint64_t>(write_start));
+    const auto overlap_end = std::min(tracked_end, write_end);
+    if (overlap_begin >= overlap_end) return false;
+    if (!native_aot_mutable_ranges_valid(mutable_ranges, tracked_extent)) return true;
+
+    auto cursor = overlap_begin - tracked_start;
+    const auto end_offset = overlap_end - tracked_start;
+    for (const auto range : mutable_ranges) {
+        if (cursor >= end_offset) return false;
+        const auto range_end = static_cast<std::uint64_t>(range.offset) + range.size;
+        if (range_end <= cursor) continue;
+        if (range.offset > cursor) return true;
+        cursor = std::min(end_offset, range_end);
+    }
+    return cursor < end_offset;
+}
+
 std::string stable_runtime_block_identity(const RuntimeBlock& block) {
     std::ostringstream out;
     out << std::hex << std::setfill('0') << "v" << std::setw(8) << block.virtual_start << "-p"
@@ -138,6 +200,8 @@ std::string stable_runtime_block_identity(const RuntimeBlock& block) {
         out << std::hex << "-ts" << std::setw(8) << contract.mapping.source_start << "-tr"
             << std::setw(8) << contract.mapping.runtime_start << std::dec << "-te"
             << contract.mapping.extent << "-tv" << contract.validation_extent;
+        for (const auto range : contract.mutable_ranges)
+            out << "-tm" << range.offset << "x" << range.size;
     }
     return out.str();
 }
@@ -277,7 +341,9 @@ RuntimeBlockHandle RuntimeBlockTable::insert(RuntimeBlock block,
         const auto& contract = *block.aot_template;
         validate_code_address_mapping(contract.mapping);
         if (contract.validation_extent == 0u ||
-            contract.validation_extent < contract.mapping.extent) {
+            contract.validation_extent < contract.mapping.extent ||
+            !native_aot_mutable_ranges_valid(contract.mutable_ranges,
+                                             contract.validation_extent)) {
             throw std::invalid_argument(
                 "AOT-Templatevalidierung muss den vollstaendigen Mappingbereich abdecken: " +
                 block.provenance);
@@ -325,6 +391,18 @@ RuntimeBlockHandle RuntimeBlockTable::insert(RuntimeBlock block,
         if (static_cast<std::uint64_t>(block_offset) + block.size > contract.validation_extent) {
             throw std::invalid_argument(
                 "AOT-Templatevalidierung deckt die Runtimeblockbytes nicht ab: " +
+                block.provenance);
+        }
+        const auto block_end_offset = static_cast<std::uint64_t>(block_offset) + block.size;
+        if (std::any_of(contract.mutable_ranges.begin(),
+                        contract.mutable_ranges.end(),
+                        [&](const auto range) {
+                            const auto range_end =
+                                static_cast<std::uint64_t>(range.offset) + range.size;
+                            return block_offset < range_end && range.offset < block_end_offset;
+                        })) {
+            throw std::invalid_argument(
+                "AOT-Mutable-Range ueberlappt ausfuehrbare Runtimeblockbytes: " +
                 block.provenance);
         }
     }
@@ -709,9 +787,13 @@ RuntimeBlockTable::prepare_disc_load_invalidation(const std::uint32_t physical_a
     for (const auto id : candidates) {
         const auto& record = records_.at(id);
         const auto tracked_start = validation_physical_start(record.block);
-        const auto tracked_end =
-            static_cast<std::uint64_t>(tracked_start) + validation_extent(record.block);
-        if (record.active && tracked_start < write_end && canonical < tracked_end)
+        if (record.active &&
+            native_aot_write_overlaps_immutable(
+                tracked_start,
+                validation_extent(record.block),
+                validation_mutable_ranges(record.block),
+                canonical,
+                static_cast<std::size_t>(write_end - canonical)))
             plan.ids.push_back(id);
     }
     return plan;
@@ -751,9 +833,13 @@ std::size_t RuntimeBlockTable::erase_overlapping_physical(const std::uint32_t ph
     for (const auto id : candidates) {
         const auto& block = records_.at(id).block;
         const auto tracked_start = validation_physical_start(block);
-        const auto tracked_end =
-            static_cast<std::uint64_t>(tracked_start) + validation_extent(block);
-        if (tracked_start < write_end && canonical < tracked_end) invalidated.push_back(id);
+        if (native_aot_write_overlaps_immutable(
+                tracked_start,
+                validation_extent(block),
+                validation_mutable_ranges(block),
+                canonical,
+                static_cast<std::size_t>(write_end - canonical)))
+            invalidated.push_back(id);
     }
     for (const auto id : invalidated)
         deactivate(id);

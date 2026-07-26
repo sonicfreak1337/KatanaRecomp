@@ -21,6 +21,16 @@ struct RuntimeCodePatchCandidate {
     std::uint32_t target_address = 0u;
 };
 
+// A copied template data slot that is overwritten on the straight-line native
+// entry path before its first read, then read back to restore the saved register.
+// This is analysis evidence, not a destination-specific offset convention.
+struct RuntimeCodeMutableRangeCandidate {
+    std::uint32_t store_instruction_address = 0u;
+    std::uint32_t load_instruction_address = 0u;
+    std::uint32_t slot_address = 0u;
+    std::uint32_t size = 0u;
+};
+
 // Describes the statically bounded source side of a runtime code-copy loop.  The destination is
 // deliberately represented as VBR plus a signed delta because VBR is guest state, not an analysis
 // constant.  source_end_inclusive is the address of the final copied 32-bit word.
@@ -32,6 +42,8 @@ struct RuntimeCodeCopy {
     std::uint32_t source_byte_count = 0u;
     std::int32_t destination_vbr_delta = 0;
     std::vector<RuntimeCodePatchCandidate> patch_candidates;
+    std::vector<RuntimeCodeMutableRangeCandidate> mutable_ranges;
+    bool mutable_range_analysis_complete = true;
     ControlFlowEvidence evidence = ControlFlowEvidence::GuardedPartial;
     bool aot_candidates_only = true;
     std::string reason;

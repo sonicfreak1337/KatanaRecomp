@@ -2101,6 +2101,16 @@ int run_test(const int argc, char* argv[]) {
     shard_image.add_entry_point(katana::platform::dreamcast_disc_boot_address);
     katana::analysis::ControlFlowAnalysisResult shard_analysis;
     auto native_template_program = make_shard_program(33u);
+    auto& native_template_blocks = native_template_program.front().blocks;
+    native_template_blocks.erase(native_template_blocks.begin() + 1u,
+                                  native_template_blocks.end() - 1u);
+    native_template_blocks.front().successors.clear();
+    for (std::uint32_t offset = 2u; offset < 8u; offset += 2u) {
+        auto instruction = native_template_blocks.front().instructions.front();
+        instruction.source_address =
+            katana::platform::dreamcast_disc_boot_address + offset;
+        native_template_blocks.front().instructions.push_back(std::move(instruction));
+    }
     auto native_template_analysis = shard_analysis;
     constexpr auto native_template_source = katana::platform::dreamcast_disc_boot_address;
     constexpr auto native_template_patch_slot = native_template_source + 12u;
@@ -2117,6 +2127,11 @@ int run_test(const int argc, char* argv[]) {
            native_template_patch_slot,
            native_template_live_handler,
            native_template_handler}},
+         {{native_template_source + 4u,
+           native_template_source + 6u,
+           native_template_source + 8u,
+           4u}},
+         true,
          katana::analysis::ControlFlowEvidence::GuardedPartial,
          true,
          "synthetic bounded runtime copy"});
@@ -2142,10 +2157,31 @@ int run_test(const int argc, char* argv[]) {
                     std::string::npos &&
                 native_template_dispatch.find("{0xAC010040u,0x8C010040u}") !=
                     std::string::npos &&
+                native_template_dispatch.find(
+                    "NativeAotTemplateDestination::VbrRelative, {}, {}, {{8u,4u},") !=
+                    std::string::npos &&
                 native_template_dispatch.find("{0x8C010040u,0x00000000u}") ==
                     std::string::npos,
             "Portexport verliert Rohzeiger/native Blockadresse oder aktiviert den nativen "
             "Templatebinder nicht.");
+    auto unproven_native_template_analysis = native_template_analysis;
+    unproven_native_template_analysis.runtime_code_copies.copies.front()
+        .mutable_range_analysis_complete = false;
+    require_failure<std::runtime_error>(
+        [&] {
+            static_cast<void>(export_dreamcast_port_project(
+                {shard_image,
+                 unproven_native_template_analysis,
+                 native_template_program,
+                 guarded_inputs,
+                 native_template_source,
+                 native_template_source,
+                 2048u,
+                 "unproven-native-template-fixture"},
+                fixture.root / "unproven-native-template-port",
+                options));
+        },
+        "Portexport akzeptierte einen selbstmodifizierenden Slot ohne Dominanzbeweis.");
     const auto shard_output = fixture.root / "dispatch-shard-port";
     auto shard_program = make_shard_program(513u);
     static_cast<void>(export_dreamcast_port_project(

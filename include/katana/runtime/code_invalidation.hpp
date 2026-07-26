@@ -34,6 +34,7 @@ struct ExecutableBlockRegistration {
     std::string provenance;
     std::set<std::string> incoming_links;
     ExecutableBlockOrigin origin = ExecutableBlockOrigin::ImageSegment;
+    std::vector<NativeAotTemplateMutableRange> mutable_ranges;
 
     [[nodiscard]] bool operator==(const ExecutableBlockRegistration&) const = default;
 };

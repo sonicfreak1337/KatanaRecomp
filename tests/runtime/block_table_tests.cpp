@@ -373,6 +373,38 @@ int main() {
                     !aot_templates.resolve(second_template_handle),
                 "Literalpatch ausserhalb der Blockbytes invalidiert nicht die ganze AOT-Vorlage.");
 
+        RuntimeBlockTable mutable_aot_templates;
+        const RuntimeAotTemplateContract mutable_template_contract{
+            {0x8C500000u, 0xAC210000u, 0x40u}, 0x40u, {{0x30u, 4u}}};
+        auto mutable_first = first_template_block;
+        mutable_first.virtual_start = 0xAC210010u;
+        mutable_first.physical_origin =
+            canonical_physical_address(mutable_first.virtual_start);
+        mutable_first.provenance = "native-template-mutable-first";
+        mutable_first.aot_template = mutable_template_contract;
+        auto mutable_second = second_template_block;
+        mutable_second.virtual_start = 0xAC210020u;
+        mutable_second.physical_origin =
+            canonical_physical_address(mutable_second.virtual_start);
+        mutable_second.provenance = "native-template-mutable-second";
+        mutable_second.aot_template = mutable_template_contract;
+        const auto mutable_first_handle =
+            mutable_aot_templates.register_runtime(mutable_first);
+        const auto mutable_second_handle =
+            mutable_aot_templates.register_runtime(mutable_second);
+        const auto mutable_physical_start = canonical_physical_address(
+            mutable_template_contract.mapping.runtime_start);
+        require(mutable_aot_templates.erase_overlapping_physical(
+                    mutable_physical_start + 0x30u, 4u) == 0u &&
+                    mutable_aot_templates.resolve(mutable_first_handle).has_value() &&
+                    mutable_aot_templates.resolve(mutable_second_handle).has_value(),
+                "Scratchslot-Write invalidierte RuntimeBlockTable-AOT-Bloecke.");
+        require(mutable_aot_templates.erase_overlapping_physical(
+                    mutable_physical_start + 0x33u, 2u) == 2u &&
+                    !mutable_aot_templates.resolve(mutable_first_handle) &&
+                    !mutable_aot_templates.resolve(mutable_second_handle),
+                "Scratchslot/Nachbarbyte-Write invalidierte RuntimeBlockTable nicht.");
+
         RuntimeBlockTable mmu_aot_templates;
         const auto mmu_template_handle = mmu_aot_templates.register_runtime(
             {0x00002010u,
@@ -402,6 +434,11 @@ int main() {
                     throws_any([&] {
                         auto invalid = valid_template_block;
                         invalid.aot_template->validation_extent = 0x20u;
+                        static_cast<void>(invalid_templates.register_runtime(invalid));
+                    }) &&
+                    throws_any([&] {
+                        auto invalid = valid_template_block;
+                        invalid.aot_template->mutable_ranges = {{0x10u, 4u}};
                         static_cast<void>(invalid_templates.register_runtime(invalid));
                     }) &&
                     throws_any([&] {

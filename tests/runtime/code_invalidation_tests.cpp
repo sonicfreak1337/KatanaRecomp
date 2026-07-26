@@ -164,6 +164,40 @@ int main() {
                     tracker.hotspots().at(0x0C004000u) == 1u && tracker.invalidation_count() == 3u,
                 "Copy-Pfad oder Hotspotdiagnose umgeht die Invalidierung.");
 
+        ExecutableCodeTracker mutable_tracker;
+        static_cast<void>(mutable_tracker.register_block(
+            {"mutable-template",
+             0x0C006000u,
+             16u,
+             "native-aot-template",
+             {"mutable-caller"},
+             ExecutableBlockOrigin::RomRamCopy,
+             {{8u, 4u}}}));
+        const auto scratch_write =
+            mutable_tracker.observe_write(0xAC006008u, 4u, CodeWriteSource::Cpu);
+        require(scratch_write.invalidated_blocks.empty() &&
+                    mutable_tracker.valid("mutable-template") &&
+                    mutable_tracker.page_generation(0x0C006008u) == 1u,
+                "Write vollstaendig im bewiesenen Scratchslot invalidierte nativen Code.");
+        const auto crossing_scratch_write =
+            mutable_tracker.observe_write(0x8C00600Bu, 2u, CodeWriteSource::Cpu);
+        require(crossing_scratch_write.invalidated_blocks ==
+                        std::vector<std::string>{"mutable-template"} &&
+                    !mutable_tracker.valid("mutable-template"),
+                "Scratchslot/Nachbarbyte-Write invalidierte den nativen Code nicht.");
+        require(
+            throws<std::invalid_argument>([&] {
+                static_cast<void>(mutable_tracker.register_block(
+                    {"invalid-mutable-range",
+                     0x0C007000u,
+                     16u,
+                     "native-aot-template",
+                     {},
+                     ExecutableBlockOrigin::RomRamCopy,
+                     {{12u, 0u}}}));
+            }),
+            "Ungueltige Mutable-Range wurde in den Code-Tracker aufgenommen.");
+
         ExecutableCodeTracker repeated;
         require(
             repeated.register_block({"fallback-op", 0x0C008000u, 4u, "runtime-op", {"caller"}}) ==

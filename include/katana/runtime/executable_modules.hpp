@@ -354,6 +354,7 @@ class DemandBlockMaterializer final {
         std::uint64_t relocation_generation = 0u;
         RuntimeBlockHandle handle;
         std::shared_ptr<const std::vector<std::uint8_t>> snapshot;
+        std::vector<NativeAotTemplateMutableRange> mutable_ranges;
         bool interpreter_backed = false;
         bool aot_template = false;
     };

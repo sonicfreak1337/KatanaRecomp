@@ -17,6 +17,7 @@ constexpr std::uint64_t guest_address_space_extent =
 constexpr std::uint32_t maximum_template_extent = 4u * 1024u * 1024u;
 constexpr std::size_t maximum_patch_slots = 4096u;
 constexpr std::size_t maximum_patch_targets = 65536u;
+constexpr std::size_t maximum_mutable_ranges = 4096u;
 
 bool direct_mapped_alias_range(const std::uint32_t address,
                                const std::uint32_t extent) noexcept {
@@ -227,8 +228,10 @@ NativeAotTemplateBindResult NativeAotTemplateBinder::bind(
           definition.expected_runtime_content_identity.empty() ||
           definition.expected_runtime_byte_identity.empty() ||
           definition.expected_source_identity != definition.expected_runtime_byte_identity ||
-          !definition.patches.empty())) ||
-        definition.patches.size() > maximum_patch_slots)
+          !definition.patches.empty() || !definition.mutable_ranges.empty())) ||
+        definition.patches.size() > maximum_patch_slots ||
+        definition.mutable_ranges.size() > maximum_mutable_ranges ||
+        !native_aot_mutable_ranges_valid(definition.mutable_ranges, definition.extent))
         return reject(NativeAotTemplateBindFailure::InvalidDefinition);
 
     std::vector<const NativeAotTemplatePatch*> ordered_patches;
@@ -265,6 +268,19 @@ NativeAotTemplateBindResult NativeAotTemplateBinder::bind(
     for (std::size_t index = 1u; index < ordered_patches.size(); ++index) {
         if (ordered_patches[index]->source_offset <
             ordered_patches[index - 1u]->source_offset + sizeof(std::uint32_t))
+            return reject(NativeAotTemplateBindFailure::InvalidDefinition);
+    }
+    for (const auto* patch : ordered_patches) {
+        const auto patch_end =
+            static_cast<std::uint64_t>(patch->source_offset) + sizeof(std::uint32_t);
+        if (std::any_of(definition.mutable_ranges.begin(),
+                        definition.mutable_ranges.end(),
+                        [&](const auto range) {
+                            const auto range_end =
+                                static_cast<std::uint64_t>(range.offset) + range.size;
+                            return patch->source_offset < range_end &&
+                                   range.offset < patch_end;
+                        }))
             return reject(NativeAotTemplateBindFailure::InvalidDefinition);
     }
 
@@ -306,6 +322,9 @@ NativeAotTemplateBindResult NativeAotTemplateBinder::bind(
                 return NativeAotTemplateBindFailure::SourceIdentityMismatch;
             for (std::uint32_t byte = 0u; byte < size; ++byte) {
                 const auto current = offset + byte;
+                if (require_original_identity &&
+                    native_aot_offset_is_mutable(definition.mutable_ranges, current))
+                    continue;
                 const auto runtime_byte = cpu_.memory.read_u8(runtime_physical + current);
                 if (require_original_identity &&
                     runtime_byte != source_module->bytes[*source_module_offset + current])
@@ -386,6 +405,14 @@ NativeAotTemplateBindResult NativeAotTemplateBinder::bind(
             return offset < patch_end && patch->source_offset < source_block_end;
         }))
         return reject(NativeAotTemplateBindFailure::SourceBlockMissing);
+    if (std::any_of(definition.mutable_ranges.begin(),
+                    definition.mutable_ranges.end(),
+                    [&](const auto range) {
+                        const auto range_end =
+                            static_cast<std::uint64_t>(range.offset) + range.size;
+                        return offset < range_end && range.offset < source_block_end;
+                    }))
+        return reject(NativeAotTemplateBindFailure::SourceBlockMissing);
     for (std::uint32_t byte = 0u; byte < source_block->get().size; ++byte) {
         if (target_suffix[byte] != cpu_.memory.read_u8(runtime_physical + offset + byte) ||
             (loaded_block_offset.has_value() &&
@@ -402,7 +429,8 @@ NativeAotTemplateBindResult NativeAotTemplateBinder::bind(
     candidate.block.variant = variant;
     candidate.block.function = source_block->get().function;
     candidate.block.provenance = "native-aot-template:" + definition.source_module_id;
-    candidate.block.aot_template = RuntimeAotTemplateContract{mapping, definition.extent};
+    candidate.block.aot_template =
+        RuntimeAotTemplateContract{mapping, definition.extent, definition.mutable_ranges};
     candidate.decode_candidate_validated = true;
     candidate.interpreter_backed = false;
     candidate.bounded_analysis_complete = true;

@@ -8,6 +8,7 @@
 #include <map>
 #include <optional>
 #include <set>
+#include <span>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -28,6 +29,32 @@ struct BlockVariantKey {
     [[nodiscard]] auto operator<=>(const BlockVariantKey&) const noexcept = default;
 };
 
+// A byte range inside a native AOT template whose previous live value is
+// semantically irrelevant because the proven native entry overwrites it before
+// reading it. The generated block still performs the guest store and later live
+// load, so intervening CPU/DMA writes retain their guest-visible data semantics;
+// only code identity and code invalidation exclude these bytes. Ranges are
+// relative to CodeAddressMapping::{source,runtime}_start.
+struct NativeAotTemplateMutableRange {
+    std::uint32_t offset = 0u;
+    std::uint32_t size = 0u;
+
+    [[nodiscard]] bool operator==(const NativeAotTemplateMutableRange&) const noexcept = default;
+};
+
+[[nodiscard]] bool native_aot_mutable_ranges_valid(
+    std::span<const NativeAotTemplateMutableRange> ranges,
+    std::uint32_t extent) noexcept;
+[[nodiscard]] bool native_aot_offset_is_mutable(
+    std::span<const NativeAotTemplateMutableRange> ranges,
+    std::uint32_t offset) noexcept;
+[[nodiscard]] bool native_aot_write_overlaps_immutable(
+    std::uint32_t tracked_start,
+    std::uint32_t tracked_extent,
+    std::span<const NativeAotTemplateMutableRange> mutable_ranges,
+    std::uint32_t write_start,
+    std::size_t write_size) noexcept;
+
 struct RuntimeAotTemplateContract {
     CodeAddressMapping mapping;
     // Validation starts at the physical byte corresponding to mapping.runtime_start
@@ -35,6 +62,7 @@ struct RuntimeAotTemplateContract {
     // executable range so writes to an adjacent literal pool invalidate every native
     // block backed by the template as well.
     std::uint32_t validation_extent = 0u;
+    std::vector<NativeAotTemplateMutableRange> mutable_ranges;
 
     [[nodiscard]] bool operator==(const RuntimeAotTemplateContract&) const noexcept = default;
 };

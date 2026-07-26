@@ -179,6 +179,330 @@ find_patch_candidates(const katana::io::ExecutableImage& image,
     return result;
 }
 
+struct MutableRangeAnalysis {
+    std::vector<RuntimeCodeMutableRangeCandidate> ranges;
+    bool complete = true;
+};
+
+struct ResolvedMemoryRead {
+    std::uint32_t address = 0u;
+    std::uint8_t width = 0u;
+};
+
+struct MemoryReadResolution {
+    std::vector<ResolvedMemoryRead> reads;
+    bool is_read = false;
+    bool complete = true;
+};
+
+MemoryReadResolution resolve_memory_reads(const katana::sh4::DisassemblyLine& line,
+                                          const RegisterConstants& before) {
+    using K = katana::sh4::InstructionKind;
+    const auto& instruction = line.instruction;
+    MemoryReadResolution result;
+    const auto exact = [&](const std::optional<std::uint32_t> address,
+                           const std::uint8_t width) {
+        result.is_read = true;
+        if (!address.has_value()) {
+            result.complete = false;
+            return;
+        }
+        result.reads.push_back({*address, width});
+    };
+    const auto displaced = [](const std::optional<std::uint32_t> base,
+                              const std::uint32_t displacement)
+        -> std::optional<std::uint32_t> {
+        return base ? std::optional<std::uint32_t>(*base + displacement) : std::nullopt;
+    };
+    const auto indexed = [](const std::optional<std::uint32_t> left,
+                            const std::optional<std::uint32_t> right)
+        -> std::optional<std::uint32_t> {
+        return left && right ? std::optional<std::uint32_t>(*left + *right) : std::nullopt;
+    };
+    switch (instruction.kind) {
+    case K::Unknown:
+        // An undecoded opcode may itself perform a memory read. The mutable
+        // proof must not inherit the later export/decode rejection implicitly.
+        result.is_read = true;
+        result.complete = false;
+        break;
+    case K::MovByteLoad:
+    case K::MovWordLoad:
+    case K::MovLongLoad:
+    case K::MovByteLoadPostIncrement:
+    case K::MovWordLoadPostIncrement:
+    case K::MovLongLoadPostIncrement:
+        exact(before.registers[instruction.source_register],
+              instruction.kind == K::MovByteLoad ||
+                      instruction.kind == K::MovByteLoadPostIncrement
+                  ? 1u
+              : instruction.kind == K::MovWordLoad ||
+                      instruction.kind == K::MovWordLoadPostIncrement
+                  ? 2u
+                  : 4u);
+        break;
+    case K::MovByteLoadDisplacement:
+    case K::MovWordLoadDisplacement:
+    case K::MovLongLoadDisplacement:
+        exact(displaced(before.registers[instruction.source_register],
+                        static_cast<std::uint32_t>(instruction.displacement)),
+              instruction.kind == K::MovByteLoadDisplacement   ? 1u
+              : instruction.kind == K::MovWordLoadDisplacement ? 2u
+                                                                : 4u);
+        break;
+    case K::MovByteLoadR0Indexed:
+    case K::MovWordLoadR0Indexed:
+    case K::MovLongLoadR0Indexed:
+        exact(indexed(before.registers[0u],
+                      before.registers[instruction.source_register]),
+              instruction.kind == K::MovByteLoadR0Indexed   ? 1u
+              : instruction.kind == K::MovWordLoadR0Indexed ? 2u
+                                                             : 4u);
+        break;
+    case K::MovWordLoadPcRelative:
+    case K::MovLongLoadPcRelative:
+        exact(pc_relative_literal_address(
+                  line, instruction.kind == K::MovWordLoadPcRelative ? 2u : 4u),
+              instruction.kind == K::MovWordLoadPcRelative ? 2u : 4u);
+        break;
+    case K::MovByteLoadGbrDisplacement:
+    case K::MovWordLoadGbrDisplacement:
+    case K::MovLongLoadGbrDisplacement:
+    case K::TestByteImmediate:
+    case K::AndByteImmediate:
+    case K::XorByteImmediate:
+    case K::OrByteImmediate:
+        // GBR is not part of RegisterConstants. Never infer a non-aliasing
+        // address from an untracked special register.
+        result.is_read = true;
+        result.complete = false;
+        break;
+    case K::TestAndSetByte:
+        exact(before.registers[instruction.source_register], 1u);
+        break;
+    case K::LoadSpecialRegisterPostIncrement:
+        exact(before.registers[instruction.source_register], 4u);
+        break;
+    case K::MultiplyAccumulateWord:
+    case K::MultiplyAccumulateLong: {
+        const auto width =
+            static_cast<std::uint8_t>(instruction.kind == K::MultiplyAccumulateWord ? 2u : 4u);
+        exact(before.registers[instruction.destination_register], width);
+        auto source = before.registers[instruction.source_register];
+        if (source && instruction.source_register == instruction.destination_register)
+            *source += width;
+        exact(source, width);
+        break;
+    }
+    case K::FmovLoad:
+    case K::FmovLoadPostIncrement:
+    case K::FmovLoadR0Indexed: {
+        const auto address =
+            instruction.kind == K::FmovLoadR0Indexed
+                ? indexed(before.registers[0u],
+                          before.registers[instruction.source_register])
+                : before.registers[instruction.source_register];
+        exact(address, 4u);
+        exact(displaced(address, 4u), 4u);
+        break;
+    }
+    default:
+        break;
+    }
+    return result;
+}
+
+std::uint32_t alias_key(const katana::io::ExecutableImage& image,
+                        const std::uint32_t address) noexcept {
+    const auto resolved = image.resolve_segment_address(address, 1u);
+    const auto value = resolved.value_or(address);
+    return image.address_model() == katana::io::ImageAddressModel::Sh4DirectMapped &&
+                   value < 0xE0000000u
+               ? value & 0x1FFFFFFFu
+               : value;
+}
+
+bool read_may_alias_range(const katana::io::ExecutableImage& image,
+                          const ResolvedMemoryRead read,
+                          const std::uint32_t range_start,
+                          const std::uint32_t range_size) noexcept {
+    for (std::uint32_t read_byte = 0u; read_byte < read.width; ++read_byte) {
+        const auto read_key = alias_key(image, read.address + read_byte);
+        for (std::uint32_t range_byte = 0u; range_byte < range_size; ++range_byte) {
+            if (read_key == alias_key(image, range_start + range_byte)) return true;
+        }
+    }
+    return false;
+}
+
+bool has_alternative_entry(
+    const katana::io::ExecutableImage& image,
+    const std::span<const katana::sh4::DisassemblyLine> instructions,
+    const std::uint32_t source_begin,
+    const std::uint32_t inclusive_end) {
+    const auto inside = [&](const std::uint32_t address) {
+        return address > source_begin && address <= inclusive_end;
+    };
+    if (std::any_of(image.entry_points().begin(), image.entry_points().end(), inside))
+        return true;
+    return std::any_of(instructions.begin(), instructions.end(), [&](const auto& line) {
+        return line.target_address.has_value() && inside(*line.target_address);
+    });
+}
+
+MutableRangeAnalysis
+find_mutable_ranges(const katana::io::ExecutableImage& image,
+                    const std::span<const katana::sh4::DisassemblyLine> instructions,
+                    const std::span<const ConstantTraceEntry> trace,
+                    const RuntimeCodeCopy& copy) {
+    using K = katana::sh4::InstructionKind;
+    MutableRangeAnalysis analysis;
+    const auto entry = std::lower_bound(
+        instructions.begin(),
+        instructions.end(),
+        copy.source_begin,
+        [](const auto& line, const std::uint32_t address) { return line.address < address; });
+    if (entry == instructions.end() || entry->address != copy.source_begin) return analysis;
+    const auto entry_index = static_cast<std::size_t>(entry - instructions.begin());
+
+    for (std::size_t index = entry_index;
+         index < instructions.size() && index < trace.size();
+         ++index) {
+        const auto& line = instructions[index];
+        if (!copied_range_contains(copy, line.address, 2u)) break;
+        if (index != entry_index && !contiguous(instructions[index - 1u], line)) break;
+        if (line.instruction.changes_control_flow()) break;
+
+        const auto& operation = line.instruction;
+        if (operation.kind != K::MovLongStore) continue;
+        const auto address_register = operation.destination_register;
+        const auto& before = trace[index].before;
+        if (!before.registers[address_register].has_value() ||
+            before.sources[address_register] != "pc-relative-address")
+            continue;
+        const auto slot =
+            canonical_data_address(image, *before.registers[address_register], 4u);
+        if (!slot.has_value() || !copied_range_contains(copy, *slot, 4u)) continue;
+
+        // A direct self-write has been found. It may only become mutable when
+        // the exact save/MOVA/store and later restore sequence is proven.
+        if (index < entry_index + 2u || !long_slot_is_not_instruction(instructions, *slot)) {
+            analysis.complete = false;
+            continue;
+        }
+        const auto& save = instructions[index - 2u];
+        const auto& address = instructions[index - 1u];
+        if (!contiguous(save, address) || !contiguous(address, line) ||
+            save.instruction.kind != K::MovRegister ||
+            address.instruction.kind != K::MoveAddressPcRelative ||
+            address.instruction.destination_register != address_register ||
+            save.instruction.source_register != address_register ||
+            save.instruction.destination_register != operation.source_register ||
+            save.instruction.destination_register == address_register) {
+            analysis.complete = false;
+            continue;
+        }
+        const auto raw_slot = pc_relative_literal_address(address, 4u);
+        const auto resolved_slot =
+            raw_slot ? canonical_data_address(image, *raw_slot, 4u) : std::nullopt;
+        if (!resolved_slot.has_value() || *resolved_slot != *slot) {
+            analysis.complete = false;
+            continue;
+        }
+
+        bool unsafe_read_before_store = false;
+        for (std::size_t prior = entry_index; prior < index; ++prior) {
+            const auto reads =
+                resolve_memory_reads(instructions[prior], trace[prior].before);
+            if (!reads.is_read) continue;
+            if (!reads.complete ||
+                std::any_of(reads.reads.begin(), reads.reads.end(), [&](const auto read) {
+                    return read_may_alias_range(
+                        image, read, *slot, sizeof(std::uint32_t));
+                })) {
+                unsafe_read_before_store = true;
+                break;
+            }
+        }
+        if (unsafe_read_before_store) {
+            analysis.complete = false;
+            continue;
+        }
+
+        std::optional<std::uint32_t> restore_address;
+        for (std::size_t restore = index + 1u; restore < instructions.size(); ++restore) {
+            const auto& candidate = instructions[restore];
+            if (!copied_range_contains(copy, candidate.address, 2u) ||
+                !contiguous(instructions[restore - 1u], candidate))
+                break;
+            if (candidate.instruction.changes_control_flow()) break;
+            if (candidate.instruction.kind != K::MovLongLoadPcRelative) continue;
+            const auto raw_read = pc_relative_literal_address(candidate, 4u);
+            const auto resolved_read =
+                raw_read ? canonical_data_address(image, *raw_read, 4u) : std::nullopt;
+            if (!resolved_read.has_value() || *resolved_read != *slot) continue;
+            if (candidate.instruction.destination_register ==
+                save.instruction.source_register)
+                restore_address = candidate.address;
+            break;
+        }
+        if (!restore_address.has_value() ||
+            has_alternative_entry(
+                image, instructions, copy.source_begin, *restore_address)) {
+            analysis.complete = false;
+            continue;
+        }
+        const auto has_other_read = std::any_of(
+            instructions.begin(), instructions.end(), [&](const auto& candidate) {
+                if (candidate.address == *restore_address ||
+                    !copied_range_contains(copy, candidate.address, 2u) ||
+                    candidate.instruction.kind != K::MovLongLoadPcRelative)
+                    return false;
+                const auto raw_read = pc_relative_literal_address(candidate, 4u);
+                const auto resolved_read =
+                    raw_read ? canonical_data_address(image, *raw_read, 4u) : std::nullopt;
+                return resolved_read.has_value() && *resolved_read == *slot;
+            });
+        if (has_other_read) {
+            analysis.complete = false;
+            continue;
+        }
+        analysis.ranges.push_back(
+            {line.address, *restore_address, *slot, sizeof(std::uint32_t)});
+    }
+
+    std::sort(analysis.ranges.begin(), analysis.ranges.end(), [](const auto& left,
+                                                                const auto& right) {
+        return std::tie(left.slot_address,
+                        left.size,
+                        left.store_instruction_address,
+                        left.load_instruction_address) <
+               std::tie(right.slot_address,
+                        right.size,
+                        right.store_instruction_address,
+                        right.load_instruction_address);
+    });
+    analysis.ranges.erase(
+        std::unique(analysis.ranges.begin(),
+                    analysis.ranges.end(),
+                    [](const auto& left, const auto& right) {
+                        return left.slot_address == right.slot_address &&
+                               left.size == right.size;
+                    }),
+        analysis.ranges.end());
+    for (std::size_t index = 1u; index < analysis.ranges.size(); ++index) {
+        const auto previous_end =
+            static_cast<std::uint64_t>(analysis.ranges[index - 1u].slot_address) +
+            analysis.ranges[index - 1u].size;
+        if (analysis.ranges[index].slot_address < previous_end) {
+            analysis.complete = false;
+            analysis.ranges.clear();
+            break;
+        }
+    }
+    return analysis;
+}
+
 std::optional<RuntimeCodeCopy>
 recognize_copy_loop(const katana::io::ExecutableImage& image,
                     const std::span<const katana::sh4::DisassemblyLine> instructions,
@@ -290,8 +614,12 @@ analyze_runtime_code_copies(const katana::io::ExecutableImage& image,
     if (analysis.copies.empty()) return analysis;
 
     const auto trace = propagate_local_constants(instructions, image);
-    for (auto& copy : analysis.copies)
+    for (auto& copy : analysis.copies) {
         copy.patch_candidates = find_patch_candidates(image, instructions, trace, copy);
+        auto mutable_ranges = find_mutable_ranges(image, instructions, trace, copy);
+        copy.mutable_ranges = std::move(mutable_ranges.ranges);
+        copy.mutable_range_analysis_complete = mutable_ranges.complete;
+    }
     std::sort(
         analysis.copies.begin(), analysis.copies.end(), [](const auto& left, const auto& right) {
             if (left.setup_address != right.setup_address)

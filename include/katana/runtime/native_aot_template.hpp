@@ -38,6 +38,7 @@ struct NativeAotTemplate {
     NativeAotTemplateDestination destination = NativeAotTemplateDestination::VbrRelative;
     std::string expected_runtime_content_identity;
     std::string expected_runtime_byte_identity;
+    std::vector<NativeAotTemplateMutableRange> mutable_ranges;
 };
 
 enum class NativeAotTemplateBindFailure : std::uint8_t {

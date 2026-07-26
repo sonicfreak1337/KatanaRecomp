@@ -5,15 +5,6 @@
 #include <stdexcept>
 
 namespace katana::runtime {
-namespace {
-bool overlaps(const std::uint32_t left,
-              const std::uint64_t left_size,
-              const std::uint32_t right,
-              const std::uint64_t right_size) noexcept {
-    return left < static_cast<std::uint64_t>(right) + right_size &&
-           right < static_cast<std::uint64_t>(left) + left_size;
-}
-} // namespace
 
 ExecutableCodeTracker::ExecutableCodeTracker(const std::size_t provenance_capacity)
     : provenance_capacity_(provenance_capacity) {
@@ -34,12 +25,17 @@ BlockRegistrationResult ExecutableCodeTracker::register_block(ExecutableBlockReg
         static_cast<std::uint64_t>(std::numeric_limits<std::uint32_t>::max()) + 1u) {
         throw std::length_error("Ausfuehrbarer Block laeuft ueber den Adressraum hinaus.");
     }
+    if (!native_aot_mutable_ranges_valid(block.mutable_ranges, block.size)) {
+        throw std::invalid_argument(
+            "Mutable Codebereiche muessen sortiert, nicht leer, disjunkt und im Block liegen.");
+    }
     const auto known = identity_index_.find(block.identity);
     if (known != identity_index_.end()) {
         auto& duplicate = blocks_[known->second];
         if (duplicate.block.physical_start != block.physical_start ||
             duplicate.block.size != block.size || duplicate.block.provenance != block.provenance ||
-            duplicate.block.origin != block.origin) {
+            duplicate.block.origin != block.origin ||
+            duplicate.block.mutable_ranges != block.mutable_ranges) {
             throw std::invalid_argument(
                 "Blockidentitaet darf Adresse, Groesse oder Provenienz nicht wechseln.");
         }
@@ -127,7 +123,11 @@ CodeInvalidationResult ExecutableCodeTracker::observe_write(const std::uint32_t 
     for (const auto index : candidates) {
         auto& tracked = blocks_[index];
         if (tracked.valid &&
-            overlaps(tracked.block.physical_start, tracked.block.size, canonical, size)) {
+            native_aot_write_overlaps_immutable(tracked.block.physical_start,
+                                                tracked.block.size,
+                                                tracked.block.mutable_ranges,
+                                                canonical,
+                                                size)) {
             tracked.valid = false;
             result.invalidated_blocks.push_back(tracked.block.identity);
             result.unlinked_sources.insert(result.unlinked_sources.end(),
@@ -190,7 +190,11 @@ ExecutableCodeTracker::prepare_disc_load_write(const std::uint32_t address,
     for (const auto index : candidates) {
         const auto& tracked = blocks_.at(index);
         if (!tracked.valid ||
-            !overlaps(tracked.block.physical_start, tracked.block.size, canonical, size))
+            !native_aot_write_overlaps_immutable(tracked.block.physical_start,
+                                                tracked.block.size,
+                                                tracked.block.mutable_ranges,
+                                                canonical,
+                                                size))
             continue;
         plan.block_indices.push_back(index);
         plan.result.invalidated_blocks.push_back(tracked.block.identity);

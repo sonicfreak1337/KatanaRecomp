@@ -15,9 +15,17 @@ constexpr std::uint32_t base_address = 0x00001000u;
 constexpr std::uint32_t copy_setup = 0x00001006u;
 constexpr std::uint32_t copy_loop = 0x00001010u;
 constexpr std::uint32_t source_begin = 0x00001080u;
-constexpr std::uint32_t source_end_inclusive = 0x00001088u;
-constexpr std::uint32_t patch_slot = 0x00001088u;
+constexpr std::uint32_t source_end_inclusive = 0x0000109Cu;
+constexpr std::uint32_t scratch_slot = 0x00001098u;
+constexpr std::uint32_t patch_slot = 0x0000109Cu;
 constexpr std::uint32_t patch_target = 0x00001100u;
+
+enum class PreStoreRead {
+    None,
+    ExactScratchAlias,
+    ExactNonAlias,
+    UnknownAddress,
+};
 
 void require(const bool condition, const std::string& message) {
     if (!condition) {
@@ -45,7 +53,9 @@ void write_u32(std::vector<std::uint8_t>& bytes,
 }
 
 katana::io::ExecutableImage copy_image(const bool valid_compare = true,
-                                       const std::uint32_t candidate = patch_target) {
+                                       const std::uint32_t candidate = patch_target,
+                                       const bool valid_scratch_restore = true,
+                                       const PreStoreRead pre_store_read = PreStoreRead::None) {
     std::vector<std::uint8_t> bytes(0x120u, 0u);
 
     // A finite pre-copy patch: both the slot address and written handler value come from PC
@@ -75,11 +85,37 @@ katana::io::ExecutableImage copy_image(const bool valid_compare = true,
     write_u32(bytes, 0x1048u, source_begin);
     write_u32(bytes, 0x104Cu, source_end_inclusive);
 
-    // The copied template references 0x1088 as a long literal.  Recursive decoding reaches the
-    // RTS delay slot at 0x1084 but never classifies the patched literal itself as an instruction.
-    write_u16(bytes, 0x1080u, 0xD701u); // mov.l @(4,pc),r7 -> [0x1088]
-    write_u16(bytes, 0x1082u, 0x000Bu); // rts
-    write_u16(bytes, 0x1084u, 0x0009u); // nop
+    // The copied native entry saves R0 into an internal longword slot before its first read,
+    // restores R0 on the same straight-line entry path, and dispatches through the separately
+    // patched literal. Neither data slot is recursively classified as an instruction.
+    switch (pre_store_read) {
+    case PreStoreRead::None:
+        write_u16(bytes, 0x1080u, 0x0009u); // nop
+        write_u16(bytes, 0x1082u, 0x0009u); // nop
+        break;
+    case PreStoreRead::ExactScratchAlias:
+        write_u16(bytes, 0x1080u, 0xC705u); // mova 0x1098,r0
+        write_u16(bytes, 0x1082u, 0x6200u); // mov.b @r0,r2
+        break;
+    case PreStoreRead::ExactNonAlias:
+        write_u16(bytes, 0x1080u, 0xC706u); // mova 0x109c,r0
+        write_u16(bytes, 0x1082u, 0x6200u); // mov.b @r0,r2
+        break;
+    case PreStoreRead::UnknownAddress:
+        write_u16(bytes, 0x1080u, 0x0009u); // nop
+        write_u16(bytes, 0x1082u, 0x6230u); // mov.b @r3,r2
+        break;
+    }
+    write_u16(bytes, 0x1084u, 0x6103u); // mov r0,r1
+    write_u16(bytes, 0x1086u, 0xC704u); // mova @(0x10,pc),r0 -> 0x1098
+    write_u16(bytes, 0x1088u, 0x2012u); // mov.l r1,@r0
+    write_u16(bytes,
+              0x108Au,
+              valid_scratch_restore ? 0xD003u : 0xD203u); // restore R0 (or malformed R2)
+    write_u16(bytes, 0x108Cu, 0xD703u); // mov.l @(0x0c,pc),r7 -> [0x109c]
+    write_u16(bytes, 0x108Eu, 0x472Bu); // jmp @r7
+    write_u16(bytes, 0x1090u, 0x0009u); // nop (delay slot)
+    write_u32(bytes, scratch_slot, 0u);
     write_u32(bytes, patch_slot, 0u);
     write_u16(bytes, patch_target, 0x000Bu);      // rts
     write_u16(bytes, patch_target + 2u, 0x0009u); // nop
@@ -129,7 +165,7 @@ int main() {
     require(initial_copy.setup_address == copy_setup && initial_copy.loop_address == copy_loop &&
                 initial_copy.source_begin == source_begin &&
                 initial_copy.source_end_inclusive == source_end_inclusive &&
-                initial_copy.source_byte_count == 12u &&
+                initial_copy.source_byte_count == 32u &&
                 initial_copy.destination_vbr_delta == -0x600 && initial_copy.aot_candidates_only &&
                 initial_copy.evidence == katana::analysis::ControlFlowEvidence::GuardedPartial,
             "Copy-Grenzen, VBR-Delta oder guarded AOT-Vertrag sind falsch.");
@@ -138,13 +174,22 @@ int main() {
 
     const auto integrated = katana::analysis::analyze_control_flow(image);
     require(integrated.runtime_code_copies.copies.size() == 1u &&
-                integrated.runtime_code_copies.copies.front().patch_candidates.size() == 1u,
-            "Der Fixpunkt hat den bewiesenen Template-Patch nicht nachgezogen.");
-    const auto& patch = integrated.runtime_code_copies.copies.front().patch_candidates.front();
+                integrated.runtime_code_copies.copies.front().patch_candidates.size() == 1u &&
+                integrated.runtime_code_copies.copies.front().mutable_ranges.size() == 1u &&
+                integrated.runtime_code_copies.copies.front().mutable_range_analysis_complete,
+            "Der Fixpunkt hat Patch oder bewiesenen Scratchslot nicht nachgezogen.");
+    const auto& integrated_copy = integrated.runtime_code_copies.copies.front();
+    const auto& patch = integrated_copy.patch_candidates.front();
     require(patch.store_instruction_address == 0x1004u && patch.slot_address == patch_slot &&
                 patch.live_value == patch_target &&
                 patch.target_address == patch_target,
             "Patchslot oder endliches natives Ziel wurde falsch abgeleitet.");
+    const auto& mutable_range = integrated_copy.mutable_ranges.front();
+    require(mutable_range.store_instruction_address == 0x1088u &&
+                mutable_range.load_instruction_address == 0x108Au &&
+                mutable_range.slot_address == scratch_slot &&
+                mutable_range.size == sizeof(std::uint32_t),
+            "Scratchslot wurde nicht aus Save/MOVA/Store/Restore-Evidenz abgeleitet.");
 
     const auto* source = find_function(integrated, source_begin);
     const auto* handler = find_function(integrated, patch_target);
@@ -184,6 +229,39 @@ int main() {
                 invalid_analysis.runtime_code_copies.copies.front().patch_candidates.empty() &&
                 find_function(invalid_analysis, 0xDEADBEEFu) == nullptr,
             "Ein nicht ausführbares Patchziel wurde als nativer Handler geseedet.");
+
+    auto unproven_scratch = copy_image(true, patch_target, false);
+    const auto unproven_analysis = katana::analysis::analyze_control_flow(unproven_scratch);
+    require(unproven_analysis.runtime_code_copies.copies.size() == 1u &&
+                !unproven_analysis.runtime_code_copies.copies.front()
+                     .mutable_range_analysis_complete &&
+                unproven_analysis.runtime_code_copies.copies.front().mutable_ranges.empty(),
+            "Selbstmodifizierender Slot ohne Restore-Beweis wurde nicht fail-closed markiert.");
+
+    const auto exact_alias_analysis = katana::analysis::analyze_control_flow(
+        copy_image(true, patch_target, true, PreStoreRead::ExactScratchAlias));
+    require(exact_alias_analysis.runtime_code_copies.copies.size() == 1u &&
+                !exact_alias_analysis.runtime_code_copies.copies.front()
+                     .mutable_range_analysis_complete &&
+                exact_alias_analysis.runtime_code_copies.copies.front().mutable_ranges.empty(),
+            "Indirekter exakter Scratch-Aliasread vor Store wurde akzeptiert.");
+
+    const auto unknown_read_analysis = katana::analysis::analyze_control_flow(
+        copy_image(true, patch_target, true, PreStoreRead::UnknownAddress));
+    require(unknown_read_analysis.runtime_code_copies.copies.size() == 1u &&
+                !unknown_read_analysis.runtime_code_copies.copies.front()
+                     .mutable_range_analysis_complete &&
+                unknown_read_analysis.runtime_code_copies.copies.front().mutable_ranges.empty(),
+            "Unbekannte Readadresse vor Store wurde nicht fail-closed abgelehnt.");
+
+    const auto exact_non_alias_analysis = katana::analysis::analyze_control_flow(
+        copy_image(true, patch_target, true, PreStoreRead::ExactNonAlias));
+    require(exact_non_alias_analysis.runtime_code_copies.copies.size() == 1u &&
+                exact_non_alias_analysis.runtime_code_copies.copies.front()
+                    .mutable_range_analysis_complete &&
+                exact_non_alias_analysis.runtime_code_copies.copies.front()
+                        .mutable_ranges.size() == 1u,
+            "Bewiesener exakter Non-Aliasread wurde unnoetig abgelehnt.");
 
     std::cout << "Runtime-Code-Copy-Analysetests erfolgreich.\n";
     return EXIT_SUCCESS;

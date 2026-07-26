@@ -110,6 +110,69 @@ int main() {
         require(static_cast<bool>(rebound_after_source_restore),
                 "Eine gueltige Zielkopie hing faelschlich vom spaeteren Live-Quellpuffer ab.");
 
+        auto mutable_templates = templates;
+        mutable_templates[0].mutable_ranges = {{8u, 4u}};
+        NativeAotTemplateBinder mutable_binder(cpu, modules, blocks, mutable_templates);
+        auto scratch_mutated = live;
+        scratch_mutated[8u] ^= 0x5Au;
+        scratch_mutated[11u] ^= 0xA5u;
+        cpu.memory.write_bytes(runtime_physical, scratch_mutated, CodeWriteSource::Cpu);
+        const auto mutable_bound =
+            mutable_binder.bind(runtime, runtime_physical, scratch_mutated, {});
+        require(mutable_bound &&
+                    mutable_bound.candidate.block.aot_template ==
+                        RuntimeAotTemplateContract{
+                            {source, runtime, static_cast<std::uint32_t>(live.size())},
+                            static_cast<std::uint32_t>(live.size()),
+                            {{8u, 4u}}},
+                "Bewiesene Mutation im Scratchslot wurde nicht gebunden oder nicht propagiert.");
+
+        auto adjacent_mutated = scratch_mutated;
+        adjacent_mutated[7u] ^= 0x01u;
+        cpu.memory.write_bytes(runtime_physical, adjacent_mutated, CodeWriteSource::Cpu);
+        const auto adjacent_rejected =
+            mutable_binder.bind(runtime, runtime_physical, adjacent_mutated, {});
+        require(!adjacent_rejected &&
+                    adjacent_rejected.failure ==
+                        NativeAotTemplateBindFailure::RuntimeBytesMismatch,
+                "Mutation direkt neben dem Scratchslot wurde akzeptiert.");
+        cpu.memory.write_bytes(runtime_physical, live, CodeWriteSource::Copy);
+
+        const auto invalid_mutable_definition = [&](auto ranges) {
+            auto definitions = templates;
+            definitions[0].mutable_ranges = std::move(ranges);
+            NativeAotTemplateBinder invalid_binder(cpu, modules, blocks, definitions);
+            const auto rejected_definition =
+                invalid_binder.bind(runtime, runtime_physical, live, {});
+            return !rejected_definition &&
+                   rejected_definition.failure ==
+                       NativeAotTemplateBindFailure::InvalidDefinition;
+        };
+        require(
+            invalid_mutable_definition(
+                std::vector<NativeAotTemplateMutableRange>{{8u, 0u}}) &&
+                invalid_mutable_definition(
+                    std::vector<NativeAotTemplateMutableRange>{{15u, 2u}}) &&
+                invalid_mutable_definition(
+                    std::vector<NativeAotTemplateMutableRange>{{8u, 4u}, {4u, 4u}}) &&
+                invalid_mutable_definition(
+                    std::vector<NativeAotTemplateMutableRange>{{4u, 8u}, {8u, 4u}}) &&
+                invalid_mutable_definition(
+                    std::vector<NativeAotTemplateMutableRange>{{patch_offset, 4u}}),
+            "Leere, ausserhalb liegende, unsortierte, ueberlappende oder Patchslot-"
+            "ueberlappende Mutable-Range wurde akzeptiert.");
+
+        auto executable_overlap_templates = templates;
+        executable_overlap_templates[0].mutable_ranges = {{0u, 4u}};
+        NativeAotTemplateBinder executable_overlap_binder(
+            cpu, modules, blocks, executable_overlap_templates);
+        const auto executable_overlap =
+            executable_overlap_binder.bind(runtime, runtime_physical, live, {});
+        require(!executable_overlap &&
+                    executable_overlap.failure ==
+                        NativeAotTemplateBindFailure::SourceBlockMissing,
+                "Mutable-Range ueber gebundenen Sourceblockbytes wurde akzeptiert.");
+
         const std::array foreign_alias_templates{NativeAotTemplate{
             module.id, module.source_identity, source,
             static_cast<std::uint32_t>(live.size()), 0x600,
@@ -250,6 +313,20 @@ int main() {
                              static_cast<std::uint32_t>(latent_bytes.size())},
                             static_cast<std::uint32_t>(latent_bytes.size())},
                 "Byteidentisches geladenes Discmodul wurde nicht an latentes AOT gebunden.");
+
+        auto mutable_latent_templates = latent_templates;
+        mutable_latent_templates[0].mutable_ranges = {{8u, 4u}};
+        NativeAotTemplateBinder mutable_latent_binder(
+            cpu, latent_modules, latent_blocks, mutable_latent_templates);
+        const auto mutable_latent = mutable_latent_binder.bind(
+            latent_runtime + latent_offset,
+            canonical_physical_address(latent_runtime + latent_offset),
+            std::span<const std::uint8_t>(latent_bytes).subspan(latent_offset),
+            {});
+        require(!mutable_latent &&
+                    mutable_latent.failure ==
+                        NativeAotTemplateBindFailure::InvalidDefinition,
+                "LoadedModule-Template akzeptierte VBR-spezifische Mutable-Ranges.");
 
         auto mismatched_template_identity = latent_templates;
         mismatched_template_identity[0].expected_source_identity =

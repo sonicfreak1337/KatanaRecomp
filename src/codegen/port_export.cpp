@@ -1631,6 +1631,12 @@ std::vector<ProjectArtifact> runtime_dispatch_artifacts(
 
             auto operator<=>(const PatchTarget&) const = default;
         };
+        struct MutableRange {
+            std::uint32_t offset = 0u;
+            std::uint32_t size = 0u;
+
+            auto operator<=>(const MutableRange&) const = default;
+        };
 
         std::string_view module_id;
         std::string expected_source_identity;
@@ -1638,6 +1644,7 @@ std::vector<ProjectArtifact> runtime_dispatch_artifacts(
         std::uint32_t extent = 0u;
         std::int32_t destination_vbr_delta = 0;
         std::map<std::uint32_t, std::vector<PatchTarget>> patch_targets;
+        std::vector<MutableRange> mutable_ranges;
     };
     const auto range_contains = [](const std::uint32_t outer_start,
                                    const std::uint64_t outer_size,
@@ -1648,8 +1655,26 @@ std::vector<ProjectArtifact> runtime_dispatch_artifacts(
         return inner_size != 0u && outer_end <= 0x1'0000'0000ull && inner_end <= 0x1'0000'0000ull &&
                inner_start >= outer_start && inner_end <= outer_end;
     };
+    struct ProgramBlockProof {
+        std::uint32_t start = 0u;
+        std::uint64_t end = 0u;
+    };
+    std::vector<ProgramBlockProof> program_block_proofs;
+    for (const auto& function : program) {
+        for (const auto& block : function.blocks) {
+            auto end = static_cast<std::uint64_t>(block.start_address) + 2u;
+            for (const auto& instruction : block.instructions)
+                end = std::max(
+                    end, static_cast<std::uint64_t>(instruction.source_address) + 2u);
+            program_block_proofs.push_back({block.start_address, end});
+        }
+    }
     std::vector<NativeTemplateEmission> native_templates;
     for (const auto& copy : runtime_code_copies) {
+        if (!copy.mutable_range_analysis_complete)
+            throw std::runtime_error(
+                "Runtime-Codecopy enthaelt einen selbstmodifizierenden Slot ohne "
+                "vollstaendigen Write-before-read-Beweis.");
         if (copy.source_byte_count == 0u ||
             static_cast<std::uint64_t>(copy.source_begin) + copy.source_byte_count >
                 0x1'0000'0000ull ||
@@ -1705,6 +1730,7 @@ std::vector<ProjectArtifact> runtime_dispatch_artifacts(
                                         copy.source_begin,
                                         copy.source_byte_count,
                                         copy.destination_vbr_delta,
+                                        {},
                                         {}});
             existing = std::prev(native_templates.end());
         }
@@ -1717,12 +1743,74 @@ std::vector<ProjectArtifact> runtime_dispatch_artifacts(
             existing->patch_targets[patch.slot_address - copy.source_begin].push_back(
                 {patch.live_value, patch.target_address});
         }
+        for (const auto& range : copy.mutable_ranges) {
+            if (!range_contains(copy.source_begin,
+                                copy.source_byte_count,
+                                range.slot_address,
+                                range.size) ||
+                !range_contains(copy.source_begin,
+                                copy.source_byte_count,
+                                range.store_instruction_address,
+                                2u) ||
+                !range_contains(copy.source_begin,
+                                copy.source_byte_count,
+                                range.load_instruction_address,
+                                2u))
+                throw std::runtime_error(
+                    "Bewiesener Runtime-Codecopy-Mutable-Range liegt ausserhalb der Vorlage.");
+            const auto source_block = std::find_if(
+                program_block_proofs.begin(),
+                program_block_proofs.end(),
+                [&](const auto proof) { return proof.start == copy.source_begin; });
+            const auto range_end =
+                static_cast<std::uint64_t>(range.slot_address) + range.size;
+            if (source_block == program_block_proofs.end() ||
+                (source_block->start < range_end &&
+                 range.slot_address < source_block->end))
+                throw std::runtime_error(
+                    "Runtime-Codecopy-Mutable-Range ueberlappt den nativen Entryblock.");
+            if (std::any_of(program_block_proofs.begin(),
+                            program_block_proofs.end(),
+                            [&](const auto proof) {
+                                return proof.start > copy.source_begin &&
+                                       proof.start <= range.load_instruction_address;
+                            }))
+                throw std::runtime_error(
+                    "Runtime-Codecopy-Scratchslot besitzt einen alternativen nativen "
+                    "Blockentry vor dem bewiesenen Overwrite/Restore.");
+            existing->mutable_ranges.push_back(
+                {range.slot_address - copy.source_begin, range.size});
+        }
     }
     for (auto& native_template : native_templates) {
         for (auto& [offset, targets] : native_template.patch_targets) {
             static_cast<void>(offset);
             std::sort(targets.begin(), targets.end());
             targets.erase(std::unique(targets.begin(), targets.end()), targets.end());
+        }
+        std::sort(native_template.mutable_ranges.begin(),
+                  native_template.mutable_ranges.end());
+        native_template.mutable_ranges.erase(
+            std::unique(native_template.mutable_ranges.begin(),
+                        native_template.mutable_ranges.end()),
+            native_template.mutable_ranges.end());
+        std::uint64_t previous_end = 0u;
+        for (const auto range : native_template.mutable_ranges) {
+            const auto end = static_cast<std::uint64_t>(range.offset) + range.size;
+            if (range.size == 0u || range.offset < previous_end ||
+                end > native_template.extent)
+                throw std::runtime_error(
+                    "Runtime-Codecopy-Mutable-Ranges sind leer, ueberlappend oder ausserhalb.");
+            previous_end = end;
+            for (const auto& [patch_offset, targets] :
+                 native_template.patch_targets) {
+                static_cast<void>(targets);
+                const auto patch_end =
+                    static_cast<std::uint64_t>(patch_offset) + sizeof(std::uint32_t);
+                if (range.offset < patch_end && patch_offset < end)
+                    throw std::runtime_error(
+                        "Runtime-Codecopy-Mutable-Range ueberlappt einen Patchslot.");
+            }
         }
     }
     struct DispatchBlock {
@@ -2454,6 +2542,9 @@ std::vector<ProjectArtifact> runtime_dispatch_artifacts(
             }
             output << "}},";
         }
+        output << "}, katana::runtime::NativeAotTemplateDestination::VbrRelative, {}, {}, {";
+        for (const auto range : native_template.mutable_ranges)
+            output << "{" << range.offset << "u," << range.size << "u},";
         output << "}},\n";
     }
     for (const auto& module : latent_modules) {

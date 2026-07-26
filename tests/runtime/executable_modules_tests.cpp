@@ -2,6 +2,7 @@
 #include "katana/runtime/block_guards.hpp"
 #include "katana/runtime/dreamcast_boot.hpp"
 #include "katana/runtime/indirect_dispatch.hpp"
+#include "katana/runtime/native_aot_template.hpp"
 
 #include <array>
 #include <cstdlib>
@@ -108,9 +109,9 @@ void relocated_module_regression() {
     } catch (const IndirectDispatchError&) {
         changed_addend_rejected = true;
     }
-    require(changed_addend_rejected && callback_calls == 1u &&
+    require(changed_addend_rejected && callback_calls == 2u &&
                 materializer.last_failure() == MaterializationFailure::ByteIdentityMismatch,
-            "Geaenderter Relocation-Addend akzeptiert stale Gastbytes.");
+            "Geaenderter Relocation-Addend akzeptiert stale Gastbytes nach der AOT-Pruefung.");
 
     const auto relocation_generation = modules.find(module.id)->relocation_generation;
     bool unknown_type_rejected = false;
@@ -166,7 +167,10 @@ void native_aot_template_materialization_regression() {
                                        block,
                                        "native-aot-template",
                                        false,
-                                       RuntimeAotTemplateContract{{0x1000u, 0x2000u, 48u}, 56u}};
+                                       RuntimeAotTemplateContract{
+                                           {0x1000u, 0x2000u, 48u},
+                                           56u,
+                                           {{40u, 4u}}}};
             return MaterializedBlockCandidate{std::move(runtime_block),
                                               snapshot.size() >= 4u,
                                               false,
@@ -185,15 +189,32 @@ void native_aot_template_materialization_regression() {
                 tracker.blocks()[0].block.physical_start == 0x2000u &&
                 tracker.blocks()[0].block.size == template_bytes.size() &&
                 tracker.blocks()[0].block.origin == ExecutableBlockOrigin::RomRamCopy &&
+                tracker.blocks()[0].block.mutable_ranges ==
+                    std::vector<NativeAotTemplateMutableRange>{{40u, 4u}} &&
                 materializer.validate_for_dispatch(cpu, *handle, 0x2010u),
             "AOT-Mitteleinstieg trackt nicht die vollstaendige Vorlage samt Literalbereich.");
 
-    cpu.memory.write_u8(0x2034u, static_cast<std::uint8_t>(template_bytes[52] ^ 0xFFu));
+    cpu.memory.write_u8(0x2028u, static_cast<std::uint8_t>(template_bytes[40] ^ 0x5Au));
+    const auto scratch_write =
+        tracker.observe_write(0x2028u, 1u, CodeWriteSource::Cpu);
+    const auto scratch_erased = blocks.erase_overlapping_physical(0x2028u, 1u);
+    require(scratch_write.invalidated_blocks.empty() && scratch_erased == 0u &&
+                blocks.resolve(*handle).has_value() &&
+                materializer.validate_for_dispatch(cpu, *handle, 0x2010u),
+            "Retained Snapshot oder Invalidierung verwarf einen bewiesenen Scratchslot-Write.");
+
+    cpu.memory.write_u8(0x202Cu, static_cast<std::uint8_t>(template_bytes[44] ^ 0xFFu));
     require(!materializer.validate_for_dispatch(cpu, *handle, 0x2010u) &&
                 materializer.last_failure() == MaterializationFailure::AotTemplateMismatch &&
                 materializer.metrics().byte_identity_failures != 0u,
-            "Literalpatch ausserhalb der Blockbytes bleibt fuer nativen AOT-Dispatch unsichtbar.");
-    cpu.memory.write_u8(0x2034u, template_bytes[52]);
+            "Mutation direkt neben dem Scratchslot blieb fuer nativen AOT-Dispatch unsichtbar.");
+    const auto adjacent_write =
+        tracker.observe_write(0x202Cu, 1u, CodeWriteSource::Cpu);
+    require(adjacent_write.invalidated_blocks.size() == 1u &&
+                blocks.erase_overlapping_physical(0x202Cu, 1u) == 1u,
+            "Mutation direkt neben dem Scratchslot invalidierte Tracker/Blocktabelle nicht.");
+    cpu.memory.write_u8(0x2028u, template_bytes[40]);
+    cpu.memory.write_u8(0x202Cu, template_bytes[44]);
 
     RuntimeBlockTable rejected_blocks;
     DemandBlockMaterializer rejected(
@@ -212,6 +233,131 @@ void native_aot_template_materialization_regression() {
     require(!rejected.try_materialize(cpu, 0x2020u, 0x2020u, {}, 0x84u) &&
                 rejected.last_failure() == MaterializationFailure::AotTemplateMismatch,
             "Binder-Ablehnungsgrund wird pauschal als DecodeRejected verschluckt.");
+}
+
+void overlapping_vbr_aot_target_identity_regression() {
+    using namespace katana::runtime;
+    constexpr std::uint32_t source_address = 0x80010000u;
+    constexpr std::uint32_t vbr = 0x80002000u;
+    constexpr std::uint32_t runtime_address = vbr + 0x600u;
+    constexpr std::uint32_t target_module_address = 0xA0002000u;
+    const auto runtime_physical = canonical_physical_address(runtime_address);
+
+    std::vector<std::uint8_t> template_bytes(56u, 0u);
+    for (std::size_t offset = 0u; offset < template_bytes.size(); offset += 2u)
+        template_bytes[offset] = 0x09u;
+    CpuState cpu;
+    cpu.vbr = vbr;
+    cpu.memory.write_bytes(
+        canonical_physical_address(source_address), template_bytes, CodeWriteSource::Copy);
+    cpu.memory.write_bytes(runtime_physical, template_bytes, CodeWriteSource::Copy);
+
+    ExecutableModule source_module;
+    source_module.id = "overlapping-vbr-aot-source";
+    source_module.source_identity = "sha256:overlapping-vbr-aot-source";
+    source_module.guest_start = source_address;
+    source_module.bytes = template_bytes;
+    ExecutableModule target_module;
+    target_module.id = "foreign-bootstrap-alias";
+    target_module.source_identity = "sha256:foreign-bootstrap-alias";
+    target_module.guest_start = target_module_address;
+    target_module.bytes.assign(0x1000u, 0xA5u);
+    ExecutableModuleCatalog modules;
+    modules.publish(source_module);
+    modules.publish(target_module);
+    const auto target_resolved =
+        modules.resolve(runtime_physical, template_bytes.size()) != nullptr;
+    const auto target_matches = modules.validate_bytes_at(cpu.memory,
+                                                          runtime_physical,
+                                                          runtime_physical,
+                                                          template_bytes.size());
+    require(target_resolved && !target_matches,
+            "VBR-AOT-Fixture besitzt keinen abweichenden physischen Zielmodulalias.");
+
+    RuntimeBlockTable blocks;
+    ExecutableCodeTracker tracker;
+    blocks.bind_code_tracker(&tracker);
+    static_cast<void>(blocks.register_static({source_address,
+                                              canonical_physical_address(source_address),
+                                              2u,
+                                              BlockEndKind::Return,
+                                              {},
+                                              block,
+                                              "overlapping-vbr-aot-source-block"}));
+    const std::array templates{NativeAotTemplate{
+        source_module.id,
+        source_module.source_identity,
+        source_address,
+        static_cast<std::uint32_t>(template_bytes.size()),
+        0x600,
+        {}}};
+    NativeAotTemplateBinder binder(cpu, modules, blocks, templates);
+    DemandBlockMaterializer materializer(
+        modules,
+        blocks,
+        &tracker,
+        {true, 4u, 128u},
+        [&binder](const std::uint32_t target,
+                  const std::uint32_t physical_origin,
+                  const std::span<const std::uint8_t> snapshot,
+                  const BlockVariantKey& variant) {
+            auto bound = binder.bind(target, physical_origin, snapshot, variant);
+            return std::move(bound.candidate);
+        });
+    const auto handle = materializer.try_materialize(
+        cpu, runtime_address, runtime_physical, {}, 0x8C10D26Cu);
+    const auto resolved = handle ? blocks.resolve(*handle) : std::nullopt;
+    require(resolved.has_value() && resolved->get().aot_template.has_value() &&
+                resolved->get().aot_template->mapping ==
+                    CodeAddressMapping{source_address,
+                                       runtime_address,
+                                       static_cast<std::uint32_t>(template_bytes.size())} &&
+                materializer.metrics().materializations == 1u &&
+                materializer.metrics().byte_identity_failures == 0u &&
+                materializer.validate_for_dispatch(
+                    cpu, *handle, runtime_address, runtime_physical),
+            "Binder-valides VBR-AOT wurde vom ueberlappenden Zielmodulalias verworfen.");
+
+    RuntimeBlockTable non_aot_blocks;
+    ExecutableCodeTracker non_aot_tracker;
+    non_aot_blocks.bind_code_tracker(&non_aot_tracker);
+    std::size_t non_aot_callbacks = 0u;
+    DemandBlockMaterializer non_aot_materializer(
+        modules,
+        non_aot_blocks,
+        &non_aot_tracker,
+        {true, 4u, 128u},
+        [&non_aot_callbacks](const std::uint32_t target,
+                             const std::uint32_t physical_origin,
+                             const std::span<const std::uint8_t>,
+                             const BlockVariantKey& variant) {
+            ++non_aot_callbacks;
+            return MaterializedBlockCandidate{{target,
+                                               physical_origin,
+                                               2u,
+                                               BlockEndKind::Return,
+                                               variant,
+                                               block,
+                                               "overlapping-vbr-non-aot",
+                                               true},
+                                              true,
+                                              false,
+                                              true,
+                                              true,
+                                              true,
+                                              1u,
+                                              1u,
+                                              1u,
+                                              1u,
+                                              2u};
+        });
+    require(!non_aot_materializer.try_materialize(
+                 cpu, runtime_address, runtime_physical, {}, 0x8C10D26Cu) &&
+                non_aot_callbacks == 1u &&
+                non_aot_materializer.last_failure() ==
+                    MaterializationFailure::ByteIdentityMismatch &&
+                non_aot_materializer.metrics().materializations == 0u,
+            "Non-AOT-Kandidat umging die abweichende Zielmodul-Byteidentitaet.");
 }
 
 void module_incarnation_aba_regression() {
@@ -2219,6 +2365,7 @@ int main() {
 
     relocated_module_regression();
     native_aot_template_materialization_regression();
+    overlapping_vbr_aot_target_identity_regression();
     module_incarnation_aba_regression();
     multi_extent_module_lifecycle_regression();
     relocation_generation_overflow_regression();

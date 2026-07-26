@@ -1735,6 +1735,12 @@ make_runtime_probe_device_snapshot(const RuntimeBlockTableSnapshot& snapshot,
                                hash.append_u32(record.aot_template->mapping.runtime_start);
                                hash.append_u32(record.aot_template->mapping.extent);
                                hash.append_u32(record.aot_template->validation_extent);
+                               hash.append_u64(record.aot_template->mutable_ranges.size());
+                               for (const auto range :
+                                    record.aot_template->mutable_ranges) {
+                                   hash.append_u32(range.offset);
+                                   hash.append_u32(range.size);
+                               }
                            }
                        }
                    });

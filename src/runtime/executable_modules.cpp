@@ -119,6 +119,23 @@ canonical_load_range(const std::uint32_t address, const std::size_t size) noexce
     return std::pair{begin, static_cast<std::uint64_t>(begin) + size};
 }
 
+bool bytes_match_excluding_mutable(
+    const std::span<const std::uint8_t> left,
+    const std::span<const std::uint8_t> right,
+    const std::span<const NativeAotTemplateMutableRange> mutable_ranges) noexcept {
+    if (left.size() != right.size() ||
+        left.size() > std::numeric_limits<std::uint32_t>::max() ||
+        !native_aot_mutable_ranges_valid(
+            mutable_ranges, static_cast<std::uint32_t>(left.size())))
+        return false;
+    for (std::uint32_t offset = 0u; offset < left.size(); ++offset) {
+        if (!native_aot_offset_is_mutable(mutable_ranges, offset) &&
+            left[offset] != right[offset])
+            return false;
+    }
+    return true;
+}
+
 void normalize_active_extents(ExecutableModule& module) {
     if (module.active_extents.empty())
         module.active_extents.push_back(
@@ -1304,11 +1321,8 @@ DemandBlockMaterializer::try_materialize(CpuState& cpu,
     for (std::size_t current = 0u; current < snapshot.size(); ++current)
         snapshot[current] =
             cpu.memory.read_u8(physical_target + static_cast<std::uint32_t>(current));
-    if (!modules_.validate_bytes_at(
-            cpu.memory, physical_target, physical_target, snapshot.size())) {
-        fail(MaterializationFailure::ByteIdentityMismatch, target);
-        return std::nullopt;
-    }
+    const auto target_module_bytes_match = modules_.validate_bytes_at(
+        cpu.memory, physical_target, physical_target, snapshot.size());
     std::optional<std::chrono::steady_clock::time_point> started;
     if (!policy_.deterministic_no_host_time) {
         started = std::chrono::steady_clock::now();
@@ -1320,6 +1334,17 @@ DemandBlockMaterializer::try_materialize(CpuState& cpu,
             static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
                                            std::chrono::steady_clock::now() - *started)
                                            .count());
+    }
+    // A VBR copy may physically overlap an older startup module. Only a fully
+    // proven native-AOT candidate may replace that destination module's generic
+    // byte identity with its source/template snapshot contract below.
+    const auto validated_native_aot_candidate =
+        candidate.decode_candidate_validated && !candidate.interpreter_backed &&
+        candidate.bounded_analysis_complete && candidate.ir_verified &&
+        candidate.code_generated && candidate.block.aot_template.has_value();
+    if (!target_module_bytes_match && !validated_native_aot_candidate) {
+        fail(MaterializationFailure::ByteIdentityMismatch, target);
+        return std::nullopt;
     }
     if (!candidate.decode_candidate_validated) {
         fail(candidate.rejection_failure == MaterializationFailure::None
@@ -1357,6 +1382,7 @@ DemandBlockMaterializer::try_materialize(CpuState& cpu,
         fail(MaterializationFailure::InvalidBlock, target);
         return std::nullopt;
     }
+    const auto aot_template = block.aot_template.has_value();
     const auto* current_module = modules_.find(module_id);
     if (current_module == nullptr) {
         fail(MaterializationFailure::ModuleUnloaded, target);
@@ -1381,7 +1407,7 @@ DemandBlockMaterializer::try_materialize(CpuState& cpu,
             return std::nullopt;
         }
     }
-    if (!modules_.validate_bytes_at(
+    if (!aot_template && !modules_.validate_bytes_at(
             cpu.memory, physical_target, physical_target, block.size)) {
         fail(MaterializationFailure::ByteIdentityMismatch, target);
         return std::nullopt;
@@ -1396,9 +1422,9 @@ DemandBlockMaterializer::try_materialize(CpuState& cpu,
     auto validation_source_identity = source_identity;
     auto validation_module_generation = module_generation;
     auto validation_relocation_generation = relocation_generation;
+    std::vector<NativeAotTemplateMutableRange> validation_mutable_ranges;
     auto validation_snapshot =
         std::vector<std::uint8_t>(snapshot.begin(), snapshot.begin() + block.size);
-    const auto aot_template = block.aot_template.has_value();
     if (aot_template) {
         if (interpreter_backed) {
             fail(MaterializationFailure::InvalidBlock, target);
@@ -1415,6 +1441,8 @@ DemandBlockMaterializer::try_materialize(CpuState& cpu,
             static_cast<std::uint64_t>(contract.mapping.runtime_start) + contract.mapping.extent;
         const auto block_end = static_cast<std::uint64_t>(block.virtual_start) + block.size;
         if (contract.validation_extent < contract.mapping.extent ||
+            !native_aot_mutable_ranges_valid(contract.mutable_ranges,
+                                             contract.validation_extent) ||
             block.virtual_start < contract.mapping.runtime_start || block_end > mapping_end) {
             fail(MaterializationFailure::InvalidBlock, target);
             return std::nullopt;
@@ -1436,6 +1464,7 @@ DemandBlockMaterializer::try_materialize(CpuState& cpu,
         }
         validation_physical_address = physical_target - block_offset;
         validation_size = contract.validation_extent;
+        validation_mutable_ranges = contract.mutable_ranges;
         validation_module_address = contract.mapping.source_start;
         validation_block_module_address = contract.mapping.source_start + block_offset;
         const auto validation_last_offset = validation_size - 1u;
@@ -1489,8 +1518,10 @@ DemandBlockMaterializer::try_materialize(CpuState& cpu,
             origin.source_identity == validation_source_identity &&
             origin.module_generation == validation_module_generation &&
             origin.relocation_generation == validation_relocation_generation &&
-            origin.aot_template == aot_template && origin.snapshot &&
-            *origin.snapshot == validation_snapshot) {
+            origin.aot_template == aot_template &&
+            origin.mutable_ranges == validation_mutable_ranges && origin.snapshot &&
+            bytes_match_excluding_mutable(
+                *origin.snapshot, validation_snapshot, validation_mutable_ranges)) {
             validation_proof = origin.snapshot;
             break;
         }
@@ -1521,6 +1552,7 @@ DemandBlockMaterializer::try_materialize(CpuState& cpu,
         validation_relocation_generation,
         {},
         std::move(validation_proof),
+        validation_mutable_ranges,
         interpreter_backed,
         aot_template};
     origins_.reserve(origins_.size() + 1u);
@@ -1546,7 +1578,8 @@ DemandBlockMaterializer::try_materialize(CpuState& cpu,
                                                         {},
                                                         aot_template
                                                             ? ExecutableBlockOrigin::RomRamCopy
-                                                            : ExecutableBlockOrigin::RuntimeWrite}));
+                                                            : ExecutableBlockOrigin::RuntimeWrite,
+                                                        validation_mutable_ranges}));
         }
     } catch (...) {
         origins_.pop_back();
@@ -1639,6 +1672,9 @@ bool DemandBlockMaterializer::validate_for_dispatch(const CpuState& cpu,
         return false;
     }
     for (std::size_t current = 0u; current < origin->snapshot->size(); ++current) {
+        if (native_aot_offset_is_mutable(origin->mutable_ranges,
+                                         static_cast<std::uint32_t>(current)))
+            continue;
         if (cpu.memory.read_u8(origin->physical_address + static_cast<std::uint32_t>(current)) !=
             (*origin->snapshot)[current]) {
             increment(metrics_.dispatch_validation_failures);
@@ -1704,8 +1740,6 @@ void DemandBlockMaterializer::record_invalidation(const std::uint32_t address,
     const auto logical_end =
         size >= address_space_end - logical_begin ? address_space_end : logical_begin + size;
     const auto overlaps_invalidated_range = [&](const MaterializedOrigin& origin) noexcept {
-        const auto origin_begin = static_cast<std::uint64_t>(origin.physical_address);
-        const auto origin_end = origin_begin + origin.size;
         auto logical = static_cast<std::uint64_t>(address);
         while (logical < logical_end) {
             const auto logical_address = static_cast<std::uint32_t>(logical);
@@ -1718,8 +1752,15 @@ void DemandBlockMaterializer::record_invalidation(const std::uint32_t address,
                 next_boundary = std::min<std::uint64_t>(next_boundary, 0xE0000000ull);
             }
             const auto chunk_end = std::min(logical_end, next_boundary);
-            const auto physical_end = physical_begin + (chunk_end - logical);
-            if (physical_begin < origin_end && origin_begin < physical_end) return true;
+            const auto chunk_size = static_cast<std::size_t>(chunk_end - logical);
+            if (physical_begin <= std::numeric_limits<std::uint32_t>::max() &&
+                native_aot_write_overlaps_immutable(
+                    origin.physical_address,
+                    origin.size,
+                    origin.mutable_ranges,
+                    static_cast<std::uint32_t>(physical_begin),
+                    chunk_size))
+                return true;
             logical = chunk_end;
         }
         return false;
