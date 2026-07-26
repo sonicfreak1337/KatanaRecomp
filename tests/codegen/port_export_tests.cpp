@@ -1955,6 +1955,8 @@ int run_test(const int argc, char* argv[]) {
                 "#if defined(KATANA_INTERNAL_COUNTED_LOOP_DIFFERENTIAL_TEST)") !=
                 std::string::npos &&
             counted_loop_main.find("KATANA_PORT_TEST_ACTIVE_MMU") != std::string::npos &&
+            counted_loop_main.find("KATANA_PORT_TEST_MAPPED_COUNTER_SEGMENT") !=
+                std::string::npos &&
             counted_loop_main.find("KATANA_PORT_TEST_DISABLE_COUNTED_LOOP") !=
                 std::string::npos &&
             counted_loop_main.find("KATANA_COUNTED_LOOP_STATE cpu=") !=
@@ -2001,10 +2003,35 @@ int run_test(const int argc, char* argv[]) {
             counted_runtime_gate.find("state_.main_ram->size() ==\n"
                                       "                katana::runtime::dreamcast_main_ram_size") !=
                 std::string::npos &&
-            counted_runtime_gate.find(
-                "state_.address_space->mode() ==\n"
-                "                katana::runtime::AddressTranslationMode::NoMmu") !=
+            counted_runtime_gate.find("AddressTranslationMode::NoMmu ||") !=
                 std::string::npos &&
+            counted_runtime_gate.find("AddressTranslationMode::Mmu) &&") !=
+                std::string::npos &&
+            counted_loop_main.find(
+                "static bool counted_loop_direct_p1_p2_range(") !=
+                std::string::npos &&
+            counted_loop_main.find("first_segment != 4u && first_segment != 5u") !=
+                std::string::npos &&
+            counted_loop_main.find(
+                "return (last_address >> 29u) == first_segment;") !=
+                std::string::npos &&
+            occurrences(counted_loop_main,
+                        "counted_loop_range_has_no_mmu_side_effects(") == 4u &&
+            counted_loop_main.find("active-mmu-nondirect-range") !=
+                std::string::npos &&
+            counted_contract_proof.find("counter_address_sum < 0") !=
+                std::string::npos &&
+            counted_contract_proof.find("active-mmu-address-overflow") !=
+                std::string::npos &&
+            counted_contract_proof.find(
+                "counter_address, 4u") != std::string::npos &&
+            counted_contract_proof.find(
+                "descriptor.limit_address, limit_size") != std::string::npos &&
+            counted_loop_main.find("constexpr std::uint32_t test_tlb_flags") !=
+                std::string::npos &&
+            occurrences(counted_loop_main, "katana::runtime::load_tlb(cpu);") == 2u &&
+            occurrences(counted_loop_main,
+                        "katana::runtime::translate_guest_address(") >= 3u &&
             counted_loop_main.find("katana::runtime::dreamcast_main_ram_area_bases") !=
                 std::string::npos &&
             counted_loop_main.find(
