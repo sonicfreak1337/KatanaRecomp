@@ -415,18 +415,42 @@ io::ExecutableImage make_synthetic_image(const FormRecord& record,
 
     overrides.source_path = "generated-sh4-sst-analysis-overrides";
     std::size_t line = 1u;
+    std::set<std::uint32_t> function_seeds;
     for (std::uint8_t slot = 0u; slot < sst_codegen::normal_code_slot_count; ++slot) {
         if (observed_slots.contains(slot)) continue;
         const auto address = sst_codegen::canonical_address_for_sst_slot(record.form, slot);
         if (!address) throw std::runtime_error("normal SST slot has no canonical address");
-        overrides.functions.push_back({*address, line++});
+        function_seeds.insert(*address);
     }
     for (std::uint8_t external = 0u; external < record.form.external_slot_count; ++external) {
         const auto address = sst_codegen::canonical_address_for_sst_slot(
             record.form, static_cast<std::uint8_t>(sst_codegen::normal_code_slot_count + external));
         if (!address) throw std::runtime_error("external SST slot has no canonical address");
-        overrides.functions.push_back({*address, line++});
+        function_seeds.insert(*address);
     }
+    bool has_dual_role_delay_slot = false;
+    for (std::size_t index = 0u; index + 2u < record.form.fetch_slots.size(); ++index) {
+        const auto owner_slot = record.form.fetch_slots[index];
+        const auto owner_opcode = form_opcode_for_slot(record.form, owner_slot);
+        if (!sh4::decode(owner_opcode).has_delay_slot ||
+            record.form.fetch_slots[index + 1u] != record.form.fetch_slots[index + 2u])
+            continue;
+        has_dual_role_delay_slot = true;
+    }
+    if (has_dual_role_delay_slot) {
+        // The same physical opcode is first executed as an owner's delay slot
+        // and then entered normally. Give every compiled slot in this rare
+        // four-step form an independent entry, while the owner block retains
+        // its overlapping delay-slot copy.
+        for (const auto slot : compiled_slots) {
+            const auto address = sst_codegen::canonical_address_for_sst_slot(record.form, slot);
+            if (!address) throw std::runtime_error("dual-role SST slot has no canonical address");
+            function_seeds.insert(*address);
+        }
+    }
+    function_seeds.erase(*entry);
+    for (const auto address : function_seeds)
+        overrides.functions.push_back({address, line++});
 
     std::map<std::uint32_t, std::set<std::uint32_t>> dynamic_targets;
     for (std::size_t index = 0u; index < record.form.fetch_slots.size(); ++index) {

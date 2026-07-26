@@ -841,7 +841,7 @@ BoundBlocks bind_generated_blocks(const sst::SstTestCase& test,
     if (blocks.empty())
         throw sst::SstHarnessInvalid(
             "supported generated form has no concrete native block binding");
-    static_cast<void>(result.table.register_static_bulk(std::move(blocks)));
+    static_cast<void>(result.table.register_static_contextual_bulk(std::move(blocks)));
     return result;
 }
 

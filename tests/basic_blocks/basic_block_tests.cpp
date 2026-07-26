@@ -96,6 +96,23 @@ int main() {
                 partial_blocks.front().has_indirect_successor,
             "Eine einzelne vollstaendige Kante entfernte den partiellen Site-Default.");
 
+    auto control_in_delay_lines = katana::sh4::disassemble(
+        std::array<std::uint8_t, 10u>{
+            0x00u, 0xA0u, 0xFFu, 0x8Du, 0x09u, 0x00u, 0x0Bu, 0x00u, 0x09u, 0x00u},
+        0u);
+    control_in_delay_lines[1u].is_delay_slot = true;
+    control_in_delay_lines[2u].is_delay_slot = false;
+    const auto control_in_delay_blocks =
+        katana::analysis::build_basic_blocks(control_in_delay_lines);
+    require(control_in_delay_blocks.front().lines.size() == 2u &&
+                control_in_delay_blocks.front().end_address == 2u &&
+                control_in_delay_blocks.front().lines.back().is_delay_slot &&
+                control_in_delay_blocks.front().successors == std::vector<std::uint32_t>({4u}) &&
+                control_in_delay_blocks[1u].start_address == 4u &&
+                !control_in_delay_blocks[1u].lines.front().is_delay_slot,
+            "Kontrollfluss innerhalb eines Delay Slots wurde faelschlich als neuer "
+            "Delay-Slot-Owner interpretiert.");
+
     for (std::uint32_t mask = 0u; mask < 8u; ++mask) {
         std::array<std::uint8_t, 10u> cfg_bytes{
             0x09u, 0x00u, 0x09u, 0x00u, 0x09u, 0x00u, 0x0Bu, 0x00u, 0x09u, 0x00u};

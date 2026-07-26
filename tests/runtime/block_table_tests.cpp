@@ -92,10 +92,9 @@ int main() {
                 "Deterministischer Lookup schlug fehl.");
         auto mmu_alias_variant = base;
         ++mmu_alias_variant.mmu_generation;
-        const auto mmu_alias = table.register_static_variant(
-            0x00123000u, 0x0C001000u, base, mmu_alias_variant);
-        require(mmu_alias.has_value() &&
-                    resolved(table, mmu_alias).virtual_start == 0x00123000u &&
+        const auto mmu_alias =
+            table.register_static_variant(0x00123000u, 0x0C001000u, base, mmu_alias_variant);
+        require(mmu_alias.has_value() && resolved(table, mmu_alias).virtual_start == 0x00123000u &&
                     resolved(table, mmu_alias).physical_origin == 0x0C001000u &&
                     resolved(table, mmu_alias).variant == mmu_alias_variant &&
                     resolved(table, mmu_alias).function == block_a && table.size() == 3u,
@@ -140,6 +139,89 @@ int main() {
                     "overlap"),
                 "Ueberlappung nennt nicht beide Provenienzen.");
 
+        RuntimeBlockTable contextual;
+        std::vector<RuntimeBlock> contextual_blocks{{0x1000u,
+                                                     0x1000u,
+                                                     4u,
+                                                     BlockEndKind::ConditionalBranch,
+                                                     {},
+                                                     block_a,
+                                                     "delay-owner",
+                                                     false},
+                                                    {0x1002u,
+                                                     0x1002u,
+                                                     4u,
+                                                     BlockEndKind::Fallthrough,
+                                                     {},
+                                                     block_b,
+                                                     "normal-slot-entry",
+                                                     false}};
+        const auto contextual_handles =
+            contextual.register_static_contextual_bulk(std::move(contextual_blocks));
+        require(contextual_handles.size() == 2u && contextual.lookup(0x1000u, {}).has_value() &&
+                    contextual.lookup(0x1002u, {}).has_value() &&
+                    contextual.erase_overlapping_physical(0x1002u, 1u) == 2u &&
+                    !contextual.resolve(contextual_handles[0]) &&
+                    !contextual.resolve(contextual_handles[1]),
+                "Kontextuelle Delay-Slot-Ueberlappung verliert Dispatch oder Invalidierung.");
+        RuntimeBlockTable hidden_contextual_overlap;
+        static_cast<void>(hidden_contextual_overlap.register_static_contextual_bulk(
+            {{0x3000u,
+              0x3000u,
+              0x100u,
+              BlockEndKind::ConditionalBranch,
+              {},
+              block_a,
+              "wide-context-owner",
+              false},
+             {0x3080u,
+              0x3080u,
+              2u,
+              BlockEndKind::Fallthrough,
+              {},
+              block_b,
+              "narrow-context-entry",
+              false}}));
+        require(throws_with(
+                    [&] {
+                        static_cast<void>(
+                            hidden_contextual_overlap.register_runtime({0x3084u,
+                                                                        0x4000u,
+                                                                        2u,
+                                                                        BlockEndKind::Fallthrough,
+                                                                        {},
+                                                                        block_b,
+                                                                        "hidden-runtime-overlap",
+                                                                        false}));
+                    },
+                    "wide-context-owner",
+                    "hidden-runtime-overlap"),
+                "Regulaere Registrierung uebersah ein verdecktes kontextuelles Intervall.");
+        RuntimeBlockTable incompatible_contextual;
+        require(throws_with(
+                    [&] {
+                        static_cast<void>(incompatible_contextual.register_static_contextual_bulk(
+                            {{0x2000u,
+                              0x2000u,
+                              4u,
+                              BlockEndKind::ConditionalBranch,
+                              {},
+                              block_a,
+                              "owner-map",
+                              false},
+                             {0x2002u,
+                              0x3000u,
+                              2u,
+                              BlockEndKind::Fallthrough,
+                              {},
+                              block_b,
+                              "conflicting-map",
+                              false}}));
+                    },
+                    "owner-map",
+                    "conflicting-map"),
+                "Kontextuelle Ueberlappung akzeptiert widerspruechliche physische Bytes.");
+
         auto other_variant = base;
         ++other_variant.mmu_generation;
         static_cast<void>(table.register_runtime({0x8C001000u,
@@ -171,12 +253,11 @@ int main() {
             std::find_if(table_snapshot.records.begin(),
                          table_snapshot.records.end(),
                          [&](const auto& record) { return record.handle == reactivated; });
-        require(reactivated_record != table_snapshot.records.end() &&
-                    reactivated_record->active && reactivated_record->runtime_registered &&
+        require(reactivated_record != table_snapshot.records.end() && reactivated_record->active &&
+                    reactivated_record->runtime_registered &&
                     table_snapshot.next_id > reactivated.id &&
                     table_snapshot.rejected ==
-                        std::vector<RuntimeBlockRejectionSnapshot>{
-                            {0xAC00F000u, base, 1u}},
+                        std::vector<RuntimeBlockRejectionSnapshot>{{0xAC00F000u, base, 1u}},
                 "Blocktabellen-Snapshot verliert Runtimegeneration oder Rejection-FSM.");
 
         const auto retained = table.lookup(0x8C001000u, base);
@@ -219,8 +300,8 @@ int main() {
                 "Trackerinvalidierung zwischen Lookup und Resolve fuehrt stale Code aus.");
 
         RuntimeBlockTable aot_templates;
-        const RuntimeAotTemplateContract template_contract{
-            {0x8C500000u, 0xAC200000u, 0x40u}, 0x80u};
+        const RuntimeAotTemplateContract template_contract{{0x8C500000u, 0xAC200000u, 0x40u},
+                                                           0x80u};
         RuntimeBlock first_template_block{0xAC200010u,
                                           canonical_physical_address(0xAC200010u),
                                           4u,
@@ -241,10 +322,8 @@ int main() {
                                            template_contract};
         const auto first_template_identity = stable_runtime_block_identity(first_template_block);
         const auto second_template_identity = stable_runtime_block_identity(second_template_block);
-        const auto first_template_handle =
-            aot_templates.register_runtime(first_template_block);
-        const auto second_template_handle =
-            aot_templates.register_runtime(second_template_block);
+        const auto first_template_handle = aot_templates.register_runtime(first_template_block);
+        const auto second_template_handle = aot_templates.register_runtime(second_template_block);
         require(first_template_identity != second_template_identity &&
                     first_template_identity.find("-ts8c500000-trac200000-te64-tv128") !=
                         std::string::npos &&
@@ -279,8 +358,8 @@ int main() {
                         static_cast<void>(execute_runtime_block(
                             throwing_template, template_cpu, template_context));
                     },
-                     "expected-backend-throw",
-                     "") &&
+                    "expected-backend-throw",
+                    "") &&
                     template_cpu.active_block_virtual_start == 0x11110000u &&
                     template_cpu.active_block_physical_start == 0x02220000u &&
                     template_cpu.active_block_size == 0x40u &&
@@ -333,10 +412,9 @@ int main() {
                     throws_any([&] {
                         auto invalid = valid_template_block;
                         invalid.virtual_start = 0x9FFFFFF0u;
-                        invalid.physical_origin =
-                            canonical_physical_address(invalid.virtual_start);
-                        invalid.aot_template = RuntimeAotTemplateContract{
-                            {0x8D000000u, 0x9FFFFFF0u, 0x10u}, 0x20u};
+                        invalid.physical_origin = canonical_physical_address(invalid.virtual_start);
+                        invalid.aot_template =
+                            RuntimeAotTemplateContract{{0x8D000000u, 0x9FFFFFF0u, 0x10u}, 0x20u};
                         static_cast<void>(invalid_templates.register_runtime(invalid));
                     }),
                 "Ungueltiger statischer, ausserhalb liegender oder aliasbrechender AOT-Vertrag "
@@ -362,8 +440,7 @@ int main() {
                 "Ungueltige Groesse, Funktion, Provenienz oder Adressraumgrenze wurde akzeptiert.");
         static_cast<void>(
             rejected.register_static({0x2000u, 0x2000u, 4u, {}, {}, block_a, "sealed", false}));
-        require(stable_runtime_block_identity(
-                    resolved(rejected, rejected.lookup(0x2000u, {}))) ==
+        require(stable_runtime_block_identity(resolved(rejected, rejected.lookup(0x2000u, {}))) ==
                     "v00002000-p00002000-s4-e0-a0-m0-w0-f0-r0-sealed",
                 "Statische Blockidentitaet wurde durch optionalen AOT-Vertrag veraendert.");
         rejected.seal_static();

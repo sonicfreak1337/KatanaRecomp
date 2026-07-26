@@ -1,7 +1,7 @@
 #include "katana/runtime/block_table.hpp"
 
-#include "katana/runtime/code_invalidation.hpp"
 #include "katana/runtime/cache_control.hpp"
+#include "katana/runtime/code_invalidation.hpp"
 
 #include <algorithm>
 #include <iomanip>
@@ -38,8 +38,7 @@ class ScopedBlockExceptionGeneration final {
 class ScopedActiveBlockProvenance final {
   public:
     ScopedActiveBlockProvenance(CpuState& cpu, const RuntimeBlock& block) noexcept
-        : cpu_(cpu),
-          previous_virtual_start_(cpu.active_block_virtual_start),
+        : cpu_(cpu), previous_virtual_start_(cpu.active_block_virtual_start),
           previous_physical_start_(cpu.active_block_physical_start),
           previous_size_(cpu.active_block_size) {
         cpu_.active_block_virtual_start = block.virtual_start;
@@ -81,6 +80,17 @@ bool ranges_overlap(const std::uint32_t left_start,
     const auto left_end = static_cast<std::uint64_t>(left_start) + left_size;
     const auto right_end = static_cast<std::uint64_t>(right_start) + right_size;
     return left_start < right_end && right_start < left_end;
+}
+
+bool compatible_physical_overlap(const RuntimeBlock& left, const RuntimeBlock& right) noexcept {
+    const auto overlap_start = std::max(left.virtual_start, right.virtual_start);
+    const auto left_physical =
+        static_cast<std::uint64_t>(canonical_physical_address(left.physical_origin)) +
+        (overlap_start - left.virtual_start);
+    const auto right_physical =
+        static_cast<std::uint64_t>(canonical_physical_address(right.physical_origin)) +
+        (overlap_start - right.virtual_start);
+    return left_physical == right_physical;
 }
 
 std::uint32_t validation_physical_start(const RuntimeBlock& block) noexcept {
@@ -132,14 +142,12 @@ std::string stable_runtime_block_identity(const RuntimeBlock& block) {
     return out.str();
 }
 
-BlockExit execute_runtime_block(const RuntimeBlock& block,
-                                CpuState& cpu,
-                                BlockExecutionContext& context) {
+BlockExit
+execute_runtime_block(const RuntimeBlock& block, CpuState& cpu, BlockExecutionContext& context) {
     if (block.function == nullptr) {
         throw std::invalid_argument("Runtimeblock besitzt keine ausfuehrbare Backendfunktion.");
     }
-    const ScopedBlockExceptionGeneration exception_generation(
-        context, cpu.exception_generation);
+    const ScopedBlockExceptionGeneration exception_generation(context, cpu.exception_generation);
     const ScopedActiveBlockProvenance active_block(cpu, block);
     if (!block.aot_template) return block.function(cpu, context);
     const ScopedCodeAddressMapping mapping(block.aot_template->mapping);
@@ -153,11 +161,11 @@ RuntimeBlockHandle RuntimeBlockTable::register_static(RuntimeBlock block) {
     return insert(std::move(block), false);
 }
 
-std::optional<RuntimeBlockHandle> RuntimeBlockTable::register_static_variant(
-    const std::uint32_t virtual_address,
-    const std::uint32_t physical_address,
-    const BlockVariantKey& source_variant,
-    const BlockVariantKey& target_variant) {
+std::optional<RuntimeBlockHandle>
+RuntimeBlockTable::register_static_variant(const std::uint32_t virtual_address,
+                                           const std::uint32_t physical_address,
+                                           const BlockVariantKey& source_variant,
+                                           const BlockVariantKey& target_variant) {
     if (const auto existing = lookup(virtual_address, target_variant)) return existing;
     auto source = lookup(virtual_address, source_variant);
     if (!source) source = lookup_physical(physical_address, source_variant);
@@ -190,6 +198,45 @@ RuntimeBlockTable::register_static_bulk(std::vector<RuntimeBlock> blocks) {
     return handles;
 }
 
+std::vector<RuntimeBlockHandle>
+RuntimeBlockTable::register_static_contextual_bulk(std::vector<RuntimeBlock> blocks) {
+    if (static_sealed_) {
+        throw std::logic_error("Statische Blockregistry ist bereits versiegelt.");
+    }
+    if (active_count_ != 0u) {
+        throw std::logic_error(
+            "Kontextuell ueberlappende Bloecke brauchen eine leere statische Registry.");
+    }
+    bool has_contextual_overlap = false;
+    for (std::size_t left = 0u; left < blocks.size(); ++left) {
+        for (std::size_t right = left + 1u; right < blocks.size(); ++right) {
+            if (blocks[left].variant != blocks[right].variant ||
+                !ranges_overlap(blocks[left].virtual_start,
+                                blocks[left].size,
+                                blocks[right].virtual_start,
+                                blocks[right].size))
+                continue;
+            has_contextual_overlap = true;
+            if (blocks[left].virtual_start == blocks[right].virtual_start ||
+                !compatible_physical_overlap(blocks[left], blocks[right])) {
+                throw std::invalid_argument(
+                    "Kontextuelle Blockueberlappung ist nicht eindeutig abbildbar: " +
+                    blocks[left].provenance + " <-> " + blocks[right].provenance);
+            }
+        }
+    }
+    std::sort(blocks.begin(), blocks.end(), [](const auto& left, const auto& right) {
+        return order_key(left) < order_key(right);
+    });
+    std::vector<RuntimeBlockHandle> handles;
+    handles.reserve(blocks.size());
+    contextual_virtual_overlaps_ = has_contextual_overlap;
+    for (auto& block : blocks)
+        handles.push_back(insert(std::move(block), false, true));
+    static_sealed_ = true;
+    return handles;
+}
+
 void RuntimeBlockTable::seal_static() noexcept {
     static_sealed_ = true;
 }
@@ -208,7 +255,9 @@ RuntimeBlockHandle RuntimeBlockTable::register_runtime(RuntimeBlock block) {
     return handle;
 }
 
-RuntimeBlockHandle RuntimeBlockTable::insert(RuntimeBlock block, const bool runtime_registered) {
+RuntimeBlockHandle RuntimeBlockTable::insert(RuntimeBlock block,
+                                             const bool runtime_registered,
+                                             const bool allow_contextual_overlap) {
     if (block.size == 0u || block.function == nullptr || block.provenance.empty()) {
         throw std::invalid_argument(
             "Blockeintrag benoetigt Groesse, Backendfunktion und Provenienz.");
@@ -238,8 +287,7 @@ RuntimeBlockHandle RuntimeBlockTable::insert(RuntimeBlock block, const bool runt
         if (block.virtual_start < contract.mapping.runtime_start ||
             virtual_end > mapping_runtime_end) {
             throw std::invalid_argument(
-                "Runtimeblock liegt ausserhalb seiner AOT-Templateabbildung: " +
-                block.provenance);
+                "Runtimeblock liegt ausserhalb seiner AOT-Templateabbildung: " + block.provenance);
         }
         const auto block_offset = block.virtual_start - contract.mapping.runtime_start;
         if (block_offset > block.physical_origin) {
@@ -249,11 +297,9 @@ RuntimeBlockHandle RuntimeBlockTable::insert(RuntimeBlock block, const bool runt
         }
         const auto validation_start = block.physical_origin - block_offset;
         const auto source_validation_end =
-            static_cast<std::uint64_t>(contract.mapping.source_start) +
-            contract.validation_extent;
+            static_cast<std::uint64_t>(contract.mapping.source_start) + contract.validation_extent;
         const auto runtime_validation_end =
-            static_cast<std::uint64_t>(contract.mapping.runtime_start) +
-            contract.validation_extent;
+            static_cast<std::uint64_t>(contract.mapping.runtime_start) + contract.validation_extent;
         const auto validation_end =
             static_cast<std::uint64_t>(validation_start) + contract.validation_extent;
         if (source_validation_end >
@@ -261,7 +307,7 @@ RuntimeBlockHandle RuntimeBlockTable::insert(RuntimeBlock block, const bool runt
             runtime_validation_end >
                 static_cast<std::uint64_t>(std::numeric_limits<std::uint32_t>::max()) + 1u ||
             validation_end >
-            static_cast<std::uint64_t>(std::numeric_limits<std::uint32_t>::max()) + 1u) {
+                static_cast<std::uint64_t>(std::numeric_limits<std::uint32_t>::max()) + 1u) {
             throw std::length_error(
                 "AOT-Templatevalidierung laeuft ueber den Gastadressraum hinaus: " +
                 block.provenance);
@@ -270,15 +316,13 @@ RuntimeBlockHandle RuntimeBlockTable::insert(RuntimeBlock block, const bool runt
         const auto directly_aliased =
             canonical_physical_address(block.virtual_start) == block.physical_origin;
         if (directly_aliased &&
-            canonical_physical_address(contract.mapping.runtime_start +
-                                       validation_last_offset) !=
+            canonical_physical_address(contract.mapping.runtime_start + validation_last_offset) !=
                 validation_start + validation_last_offset) {
             throw std::invalid_argument(
                 "AOT-Templatevalidierung kreuzt eine nicht zusammenhaengende Aliasgrenze: " +
                 block.provenance);
         }
-        if (static_cast<std::uint64_t>(block_offset) + block.size >
-            contract.validation_extent) {
+        if (static_cast<std::uint64_t>(block_offset) + block.size > contract.validation_extent) {
             throw std::invalid_argument(
                 "AOT-Templatevalidierung deckt die Runtimeblockbytes nicht ab: " +
                 block.provenance);
@@ -302,9 +346,18 @@ RuntimeBlockHandle RuntimeBlockTable::insert(RuntimeBlock block, const bool runt
             throw std::logic_error("Nur dynamische Runtimebloecke koennen reaktiviert werden: " +
                                    identity);
         }
-        if (const auto overlap = overlapping_active_virtual(block, known->second)) {
+        if (!allow_contextual_overlap) {
+            if (const auto overlap = overlapping_active_virtual(block, known->second)) {
+                throw std::invalid_argument("Reaktivierter Block ueberlappt einen aktiven Block: " +
+                                            records_.at(*overlap).block.provenance + " <-> " +
+                                            block.provenance);
+            }
+        } else if (const auto same_start =
+                       active_virtual_ranges_.find({block.variant, block.virtual_start});
+                   same_start != active_virtual_ranges_.end() &&
+                   same_start->second != known->second) {
             throw std::invalid_argument("Reaktivierter Block ueberlappt einen aktiven Block: " +
-                                        records_.at(*overlap).block.provenance + " <-> " +
+                                        records_.at(same_start->second).block.provenance + " <-> " +
                                         block.provenance);
         }
         record.block = std::move(block);
@@ -314,9 +367,17 @@ RuntimeBlockHandle RuntimeBlockTable::insert(RuntimeBlock block, const bool runt
         return {known->second, record.generation};
     }
 
-    if (const auto overlap = overlapping_active_virtual(block)) {
-        throw std::invalid_argument("Doppelter oder ueberlappender virtueller Block: " +
-                                    records_.at(*overlap).block.provenance + " <-> " +
+    if (!allow_contextual_overlap) {
+        if (const auto overlap = overlapping_active_virtual(block)) {
+            throw std::invalid_argument("Doppelter oder ueberlappender virtueller Block: " +
+                                        records_.at(*overlap).block.provenance + " <-> " +
+                                        block.provenance);
+        }
+    } else if (const auto same_start =
+                   active_virtual_ranges_.find({block.variant, block.virtual_start});
+               same_start != active_virtual_ranges_.end()) {
+        throw std::invalid_argument("Doppelter kontextueller Blockeinstieg: " +
+                                    records_.at(same_start->second).block.provenance + " <-> " +
                                     block.provenance);
     }
     const auto id = next_id_++;
@@ -333,6 +394,18 @@ std::optional<std::uint64_t>
 RuntimeBlockTable::overlapping_active_virtual(const RuntimeBlock& block,
                                               const std::uint64_t ignored_id) const noexcept {
     const VariantAddressKey key{block.variant, block.virtual_start};
+    if (contextual_virtual_overlaps_) {
+        auto candidate = active_virtual_ranges_.lower_bound({block.variant, 0u});
+        for (;
+             candidate != active_virtual_ranges_.end() && candidate->first.variant == block.variant;
+             ++candidate) {
+            if (candidate->second == ignored_id) continue;
+            const auto& active = records_.at(candidate->second).block;
+            if (ranges_overlap(block.virtual_start, block.size, active.virtual_start, active.size))
+                return candidate->second;
+        }
+        return std::nullopt;
+    }
     const auto next = active_virtual_ranges_.lower_bound(key);
     if (next != active_virtual_ranges_.end() && next->first.variant == block.variant &&
         next->second != ignored_id) {
@@ -644,8 +717,8 @@ RuntimeBlockTable::prepare_disc_load_invalidation(const std::uint32_t physical_a
     return plan;
 }
 
-std::size_t RuntimeBlockTable::commit_disc_load_invalidation(
-    PreparedDiscLoadInvalidation plan) noexcept {
+std::size_t
+RuntimeBlockTable::commit_disc_load_invalidation(PreparedDiscLoadInvalidation plan) noexcept {
     std::size_t invalidated = 0u;
     for (const auto id : plan.ids) {
         const auto found = records_.find(id);
@@ -706,6 +779,7 @@ void RuntimeBlockTable::clear() noexcept {
     active_physical_pages_.clear();
     active_count_ = 0u;
     static_sealed_ = false;
+    contextual_virtual_overlaps_ = false;
     lookup_counters_ = {};
     rejected_generations_.clear();
 }

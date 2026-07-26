@@ -1,6 +1,7 @@
 #include "katana/analysis/control_flow_analysis.hpp"
 #include "katana/analysis/function_analysis.hpp"
 #include "katana/ir/lower.hpp"
+#include "katana/ir/verifier.hpp"
 #include "katana/sh4/disassembler.hpp"
 
 #include <algorithm>
@@ -119,6 +120,54 @@ int main() {
 
     require(katana::ir::operation_name(katana::ir::Operation::MovImmediate) == "mov_imm",
             "Der IR-Operationsname ist falsch.");
+
+    constexpr std::array<std::uint8_t, 8> dual_role_bytes = {
+        0x09u, 0x00u, 0xFFu, 0x8Du, 0x1Cu, 0x31u, 0x09u, 0x00u};
+    constexpr std::uint32_t dual_role_base = 0x10000000u;
+    auto dual_role_lines = katana::sh4::disassemble(dual_role_bytes, dual_role_base);
+    // Recursive discovery retains the normal context when one address is both
+    // the BT/S delay slot and its direct target.
+    dual_role_lines[2].is_delay_slot = false;
+    constexpr std::array<std::uint32_t, 4> dual_role_seeds = {
+        dual_role_base, dual_role_base + 2u, dual_role_base + 4u, dual_role_base + 6u};
+    const auto dual_role_functions =
+        katana::analysis::discover_functions(dual_role_lines, dual_role_seeds);
+    const auto dual_role_program = katana::ir::lower_program(dual_role_lines, dual_role_functions);
+    require(katana::ir::verify_program(dual_role_program).empty(),
+            "BT/S-Ziel am eigenen Delay Slot erzeugt ungueltige IR.");
+    const auto dual_role_owner =
+        std::find_if(dual_role_program.begin(), dual_role_program.end(), [](const auto& function) {
+            return function.entry_address == dual_role_base + 2u;
+        });
+    const auto dual_role_target =
+        std::find_if(dual_role_program.begin(), dual_role_program.end(), [](const auto& function) {
+            return function.entry_address == dual_role_base + 4u;
+        });
+    require(dual_role_program.size() == 4u && dual_role_owner != dual_role_program.end() &&
+                dual_role_owner->blocks.size() == 1u &&
+                dual_role_owner->blocks.front().instructions.size() == 2u &&
+                dual_role_owner->blocks.front().instructions.front().delay_slot.role ==
+                    katana::ir::DelaySlotRole::Owner &&
+                dual_role_owner->blocks.front().instructions.back().delay_slot.role ==
+                    katana::ir::DelaySlotRole::Slot,
+            "BT/S verlor den ueberlappenden Delay-Slot-Kontext.");
+    require(dual_role_target != dual_role_program.end() && dual_role_target->blocks.size() == 1u &&
+                dual_role_target->blocks.front().instructions.front().source_address ==
+                    dual_role_base + 4u &&
+                dual_role_target->blocks.front().instructions.front().delay_slot.role ==
+                    katana::ir::DelaySlotRole::None,
+            "BT/S-Delay-Slot wurde nicht zugleich als normaler Zieleinstieg materialisiert.");
+    auto dual_role_bf_bytes = dual_role_bytes;
+    dual_role_bf_bytes[3] = 0x8Fu;
+    auto dual_role_bf_lines = katana::sh4::disassemble(dual_role_bf_bytes, dual_role_base);
+    dual_role_bf_lines[2].is_delay_slot = false;
+    const auto dual_role_bf_functions =
+        katana::analysis::discover_functions(dual_role_bf_lines, dual_role_seeds);
+    const auto dual_role_bf_program =
+        katana::ir::lower_program(dual_role_bf_lines, dual_role_bf_functions);
+    require(dual_role_bf_program.size() == 4u &&
+                katana::ir::verify_program(dual_role_bf_program).empty(),
+            "BF/S-Ziel am eigenen Delay Slot erzeugt ungueltige IR.");
 
     constexpr std::array<std::uint8_t, 10> guarded_bytes = {
         0x0Bu, 0x00u, 0x09u, 0x00u, 0x01u, 0xE0u, 0x0Bu, 0x00u, 0x09u, 0x00u};

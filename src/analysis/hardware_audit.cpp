@@ -31,8 +31,8 @@ struct AddressDescription {
 bool in_range(const std::uint32_t value,
               const std::uint32_t base,
               const std::uint32_t size) noexcept {
-    return value >= base && static_cast<std::uint64_t>(value) <
-                                static_cast<std::uint64_t>(base) + size;
+    return value >= base &&
+           static_cast<std::uint64_t>(value) < static_cast<std::uint64_t>(base) + size;
 }
 
 std::uint32_t canonical_address(const std::uint32_t address) noexcept {
@@ -43,39 +43,67 @@ std::uint32_t canonical_address(const std::uint32_t address) noexcept {
 }
 
 std::string pvr_register_name(const std::uint32_t offset) {
-    static constexpr std::array names{
-        std::pair{0x000u, "ID"}, std::pair{0x004u, "REVISION"},
-        std::pair{0x008u, "SOFTRESET"}, std::pair{0x014u, "STARTRENDER"},
-        std::pair{0x020u, "PARAM_BASE"}, std::pair{0x02Cu, "REGION_BASE"},
-        std::pair{0x040u, "BORDER_COL"}, std::pair{0x044u, "FB_R_CTRL"},
-        std::pair{0x048u, "FB_W_CTRL"}, std::pair{0x04Cu, "FB_W_LINESTRIDE"},
-        std::pair{0x050u, "FB_R_SOF1"}, std::pair{0x054u, "FB_R_SOF2"},
-        std::pair{0x05Cu, "FB_R_SIZE"}, std::pair{0x060u, "FB_W_SOF1"},
-        std::pair{0x064u, "FB_W_SOF2"}, std::pair{0x068u, "FB_X_CLIP"},
-        std::pair{0x06Cu, "FB_Y_CLIP"}, std::pair{0x074u, "FPU_SHAD_SCALE"},
-        std::pair{0x078u, "FPU_CULL_VAL"}, std::pair{0x07Cu, "FPU_PARAM_CFG"},
-        std::pair{0x080u, "HALF_OFFSET"}, std::pair{0x084u, "FPU_PERP_VAL"},
-        std::pair{0x088u, "ISP_BACKGND_D"}, std::pair{0x08Cu, "ISP_BACKGND_T"},
-        std::pair{0x098u, "ISP_FEED_CFG"}, std::pair{0x0B0u, "FOG_COL_RAM"},
-        std::pair{0x0B4u, "FOG_COL_VERT"}, std::pair{0x0B8u, "FOG_DENSITY"},
-        std::pair{0x0C4u, "SPG_TRIGGER_POS"}, std::pair{0x0C8u, "SPG_HBLANK_INT"},
-        std::pair{0x0CCu, "SPG_VBLANK_INT"}, std::pair{0x0D0u, "SPG_CONTROL"},
-        std::pair{0x0D4u, "SPG_HBLANK"}, std::pair{0x0D8u, "SPG_LOAD"},
-        std::pair{0x0DCu, "SPG_VBLANK"}, std::pair{0x0E0u, "SPG_WIDTH"},
-        std::pair{0x0E4u, "TEXT_CONTROL"}, std::pair{0x0E8u, "VO_CONTROL"},
-        std::pair{0x0ECu, "VO_STARTX"}, std::pair{0x0F0u, "VO_STARTY"},
-        std::pair{0x0F4u, "SCALER_CTL"}, std::pair{0x108u, "PAL_RAM_CTRL"},
-        std::pair{0x10Cu, "SPG_STATUS"}, std::pair{0x114u, "FB_R_SOF_CURRENT"},
-        std::pair{0x11Cu, "PT_ALPHA_REF"}, std::pair{0x124u, "TA_OL_BASE"},
-        std::pair{0x128u, "TA_ISP_BASE"}, std::pair{0x12Cu, "TA_OL_LIMIT"},
-        std::pair{0x130u, "TA_ISP_LIMIT"}, std::pair{0x134u, "TA_NEXT_OPB"},
-        std::pair{0x138u, "TA_ITP_CURRENT"}, std::pair{0x13Cu, "TA_GLOB_TILE_CLIP"},
-        std::pair{0x140u, "TA_ALLOC_CTRL"}, std::pair{0x144u, "TA_LIST_INIT"},
-        std::pair{0x148u, "TA_YUV_TEX_BASE"}, std::pair{0x14Cu, "TA_YUV_TEX_CTRL"},
-        std::pair{0x150u, "TA_YUV_TEX_CNT"}, std::pair{0x160u, "TA_LIST_CONT"},
-        std::pair{0x164u, "TA_NEXT_OPB_INIT"}};
-    const auto found = std::find_if(names.begin(), names.end(),
-                                    [offset](const auto& item) { return item.first == offset; });
+    static constexpr std::array names{std::pair{0x000u, "ID"},
+                                      std::pair{0x004u, "REVISION"},
+                                      std::pair{0x008u, "SOFTRESET"},
+                                      std::pair{0x014u, "STARTRENDER"},
+                                      std::pair{0x020u, "PARAM_BASE"},
+                                      std::pair{0x02Cu, "REGION_BASE"},
+                                      std::pair{0x040u, "BORDER_COL"},
+                                      std::pair{0x044u, "FB_R_CTRL"},
+                                      std::pair{0x048u, "FB_W_CTRL"},
+                                      std::pair{0x04Cu, "FB_W_LINESTRIDE"},
+                                      std::pair{0x050u, "FB_R_SOF1"},
+                                      std::pair{0x054u, "FB_R_SOF2"},
+                                      std::pair{0x05Cu, "FB_R_SIZE"},
+                                      std::pair{0x060u, "FB_W_SOF1"},
+                                      std::pair{0x064u, "FB_W_SOF2"},
+                                      std::pair{0x068u, "FB_X_CLIP"},
+                                      std::pair{0x06Cu, "FB_Y_CLIP"},
+                                      std::pair{0x074u, "FPU_SHAD_SCALE"},
+                                      std::pair{0x078u, "FPU_CULL_VAL"},
+                                      std::pair{0x07Cu, "FPU_PARAM_CFG"},
+                                      std::pair{0x080u, "HALF_OFFSET"},
+                                      std::pair{0x084u, "FPU_PERP_VAL"},
+                                      std::pair{0x088u, "ISP_BACKGND_D"},
+                                      std::pair{0x08Cu, "ISP_BACKGND_T"},
+                                      std::pair{0x098u, "ISP_FEED_CFG"},
+                                      std::pair{0x0B0u, "FOG_COL_RAM"},
+                                      std::pair{0x0B4u, "FOG_COL_VERT"},
+                                      std::pair{0x0B8u, "FOG_DENSITY"},
+                                      std::pair{0x0C4u, "SPG_TRIGGER_POS"},
+                                      std::pair{0x0C8u, "SPG_HBLANK_INT"},
+                                      std::pair{0x0CCu, "SPG_VBLANK_INT"},
+                                      std::pair{0x0D0u, "SPG_CONTROL"},
+                                      std::pair{0x0D4u, "SPG_HBLANK"},
+                                      std::pair{0x0D8u, "SPG_LOAD"},
+                                      std::pair{0x0DCu, "SPG_VBLANK"},
+                                      std::pair{0x0E0u, "SPG_WIDTH"},
+                                      std::pair{0x0E4u, "TEXT_CONTROL"},
+                                      std::pair{0x0E8u, "VO_CONTROL"},
+                                      std::pair{0x0ECu, "VO_STARTX"},
+                                      std::pair{0x0F0u, "VO_STARTY"},
+                                      std::pair{0x0F4u, "SCALER_CTL"},
+                                      std::pair{0x108u, "PAL_RAM_CTRL"},
+                                      std::pair{0x10Cu, "SPG_STATUS"},
+                                      std::pair{0x114u, "FB_R_SOF_CURRENT"},
+                                      std::pair{0x11Cu, "PT_ALPHA_REF"},
+                                      std::pair{0x124u, "TA_OL_BASE"},
+                                      std::pair{0x128u, "TA_ISP_BASE"},
+                                      std::pair{0x12Cu, "TA_OL_LIMIT"},
+                                      std::pair{0x130u, "TA_ISP_LIMIT"},
+                                      std::pair{0x134u, "TA_NEXT_OPB"},
+                                      std::pair{0x138u, "TA_ITP_CURRENT"},
+                                      std::pair{0x13Cu, "TA_GLOB_TILE_CLIP"},
+                                      std::pair{0x140u, "TA_ALLOC_CTRL"},
+                                      std::pair{0x144u, "TA_LIST_INIT"},
+                                      std::pair{0x148u, "TA_YUV_TEX_BASE"},
+                                      std::pair{0x14Cu, "TA_YUV_TEX_CTRL"},
+                                      std::pair{0x150u, "TA_YUV_TEX_CNT"},
+                                      std::pair{0x160u, "TA_LIST_CONT"},
+                                      std::pair{0x164u, "TA_NEXT_OPB_INIT"}};
+    const auto found = std::find_if(
+        names.begin(), names.end(), [offset](const auto& item) { return item.first == offset; });
     if (found != names.end()) return found->second;
     if (offset >= 0x200u && offset < 0x400u) return "FOG_TABLE";
     if (offset >= 0x1000u && offset < 0x2000u) return "PALETTE_RAM";
@@ -85,8 +113,8 @@ std::string pvr_register_name(const std::uint32_t offset) {
 template <std::size_t Size>
 std::string named_offset(const std::array<std::pair<std::uint32_t, const char*>, Size>& names,
                          const std::uint32_t offset) {
-    const auto found = std::find_if(names.begin(), names.end(),
-                                    [offset](const auto& item) { return item.first == offset; });
+    const auto found = std::find_if(
+        names.begin(), names.end(), [offset](const auto& item) { return item.first == offset; });
     return found == names.end() ? std::string{} : std::string{found->second};
 }
 
@@ -96,65 +124,90 @@ std::string dreamcast_register_name(const DreamcastHardwareRegion region,
     switch (region) {
     case DreamcastHardwareRegion::SystemBus: {
         static constexpr std::array names{
-            Pair{0x00u, "SB_C2DSTAT"}, Pair{0x04u, "SB_C2DLEN"},
-            Pair{0x08u, "SB_C2DST"}, Pair{0x10u, "SB_SDSTAW"},
-            Pair{0x14u, "SB_SDBAAW"}, Pair{0x18u, "SB_SDWLT"},
-            Pair{0x1Cu, "SB_SDLAS"}, Pair{0x20u, "SB_SDST"},
-            Pair{0x40u, "SB_DBREQM"}, Pair{0x44u, "SB_BAVLWC"},
-            Pair{0x48u, "SB_C2DPRYC"}, Pair{0x4Cu, "SB_C2DMAXL"},
-            Pair{0x60u, "SB_SDDIV"}, Pair{0x80u, "SB_TFREM"},
-            Pair{0x84u, "SB_LMMODE0"}, Pair{0x88u, "SB_LMMODE1"},
-            Pair{0x8Cu, "SB_FFST"}, Pair{0x90u, "SB_SFRES"},
-            Pair{0x9Cu, "SB_SBREV"}, Pair{0xA0u, "SB_RBSPLT"}};
+            Pair{0x00u, "SB_C2DSTAT"}, Pair{0x04u, "SB_C2DLEN"},  Pair{0x08u, "SB_C2DST"},
+            Pair{0x10u, "SB_SDSTAW"},  Pair{0x14u, "SB_SDBAAW"},  Pair{0x18u, "SB_SDWLT"},
+            Pair{0x1Cu, "SB_SDLAS"},   Pair{0x20u, "SB_SDST"},    Pair{0x40u, "SB_DBREQM"},
+            Pair{0x44u, "SB_BAVLWC"},  Pair{0x48u, "SB_C2DPRYC"}, Pair{0x4Cu, "SB_C2DMAXL"},
+            Pair{0x60u, "SB_SDDIV"},   Pair{0x80u, "SB_TFREM"},   Pair{0x84u, "SB_LMMODE0"},
+            Pair{0x88u, "SB_LMMODE1"}, Pair{0x8Cu, "SB_FFST"},    Pair{0x90u, "SB_SFRES"},
+            Pair{0x9Cu, "SB_SBREV"},   Pair{0xA0u, "SB_RBSPLT"}};
         return named_offset(names, offset);
     }
     case DreamcastHardwareRegion::SystemAsic: {
-        static constexpr std::array names{
-            Pair{0x00u, "ISTNRM"}, Pair{0x04u, "ISTEXT"}, Pair{0x08u, "ISTERR"},
-            Pair{0x10u, "IML2NRM"}, Pair{0x14u, "IML2EXT"}, Pair{0x18u, "IML2ERR"},
-            Pair{0x20u, "IML4NRM"}, Pair{0x24u, "IML4EXT"}, Pair{0x28u, "IML4ERR"},
-            Pair{0x30u, "IML6NRM"}, Pair{0x34u, "IML6EXT"}, Pair{0x38u, "IML6ERR"},
-            Pair{0x40u, "PDTNRM"}, Pair{0x44u, "PDTEXT"},
-            Pair{0x50u, "G2DTNRM"}, Pair{0x54u, "G2DTEXT"}};
+        static constexpr std::array names{Pair{0x00u, "ISTNRM"},
+                                          Pair{0x04u, "ISTEXT"},
+                                          Pair{0x08u, "ISTERR"},
+                                          Pair{0x10u, "IML2NRM"},
+                                          Pair{0x14u, "IML2EXT"},
+                                          Pair{0x18u, "IML2ERR"},
+                                          Pair{0x20u, "IML4NRM"},
+                                          Pair{0x24u, "IML4EXT"},
+                                          Pair{0x28u, "IML4ERR"},
+                                          Pair{0x30u, "IML6NRM"},
+                                          Pair{0x34u, "IML6EXT"},
+                                          Pair{0x38u, "IML6ERR"},
+                                          Pair{0x40u, "PDTNRM"},
+                                          Pair{0x44u, "PDTEXT"},
+                                          Pair{0x50u, "G2DTNRM"},
+                                          Pair{0x54u, "G2DTEXT"}};
         return named_offset(names, offset);
     }
     case DreamcastHardwareRegion::Maple: {
-        static constexpr std::array names{
-            Pair{0x04u, "MDSTAR"}, Pair{0x10u, "MDTSEL"}, Pair{0x14u, "MDEN"},
-            Pair{0x18u, "MDST"}, Pair{0x80u, "MSYS"}, Pair{0x84u, "MST"},
-            Pair{0x88u, "MSHTCL"}, Pair{0x8Cu, "MDAPRO"}, Pair{0xE8u, "MMSEL"},
-            Pair{0xF4u, "MTXDAD"}, Pair{0xF8u, "MRXDAD"}, Pair{0xFCu, "MRXDBD"}};
+        static constexpr std::array names{Pair{0x04u, "MDSTAR"},
+                                          Pair{0x10u, "MDTSEL"},
+                                          Pair{0x14u, "MDEN"},
+                                          Pair{0x18u, "MDST"},
+                                          Pair{0x80u, "MSYS"},
+                                          Pair{0x84u, "MST"},
+                                          Pair{0x88u, "MSHTCL"},
+                                          Pair{0x8Cu, "MDAPRO"},
+                                          Pair{0xE8u, "MMSEL"},
+                                          Pair{0xF4u, "MTXDAD"},
+                                          Pair{0xF8u, "MRXDAD"},
+                                          Pair{0xFCu, "MRXDBD"}};
         return named_offset(names, offset);
     }
     case DreamcastHardwareRegion::GdRom: {
-        static constexpr std::array names{
-            Pair{0x80u, "GD_DATA"}, Pair{0x84u, "GD_ERROR"},
-            Pair{0x88u, "GD_INT_REASON"}, Pair{0x90u, "GD_BYTE_COUNT_LOW"},
-            Pair{0x94u, "GD_BYTE_COUNT_HIGH"}, Pair{0x9Cu, "GD_COMMAND_STATUS"},
-            Pair{0xA0u, "GD_ALT_STATUS_CONTROL"}};
+        static constexpr std::array names{Pair{0x80u, "GD_DATA"},
+                                          Pair{0x84u, "GD_ERROR"},
+                                          Pair{0x88u, "GD_INT_REASON"},
+                                          Pair{0x90u, "GD_BYTE_COUNT_LOW"},
+                                          Pair{0x94u, "GD_BYTE_COUNT_HIGH"},
+                                          Pair{0x9Cu, "GD_COMMAND_STATUS"},
+                                          Pair{0xA0u, "GD_ALT_STATUS_CONTROL"}};
         return named_offset(names, offset);
     }
     case DreamcastHardwareRegion::G1Dma: {
-        static constexpr std::array names{
-            Pair{0x04u, "GDSTAR"}, Pair{0x08u, "GDLEN"}, Pair{0x0Cu, "GDDIR"},
-            Pair{0x14u, "GDEN"}, Pair{0x18u, "GDST"}, Pair{0xB0u, "G1SYSM"},
-            Pair{0xF4u, "GDSTARD"}, Pair{0xF8u, "GDLEND"}};
+        static constexpr std::array names{Pair{0x04u, "GDSTAR"},
+                                          Pair{0x08u, "GDLEN"},
+                                          Pair{0x0Cu, "GDDIR"},
+                                          Pair{0x14u, "GDEN"},
+                                          Pair{0x18u, "GDST"},
+                                          Pair{0xB0u, "G1SYSM"},
+                                          Pair{0xF4u, "GDSTARD"},
+                                          Pair{0xF8u, "GDLEND"}};
         return named_offset(names, offset);
     }
     case DreamcastHardwareRegion::G2Dma:
         if (offset < 0x80u && (offset & 3u) == 0u) {
-            static constexpr std::array suffixes{"STAR", "STAG", "LEN", "DIR",
-                                                  "TSEL", "EN", "ST", "SUSP"};
+            static constexpr std::array suffixes{
+                "STAR", "STAG", "LEN", "DIR", "TSEL", "EN", "ST", "SUSP"};
             return "G2_CH" + std::to_string(offset / 0x20u) + '_' + suffixes[(offset & 0x1Fu) / 4u];
         }
         if (offset == 0xBCu) return "G2APRO";
         return {};
     case DreamcastHardwareRegion::PvrDma: {
-        static constexpr std::array names{
-            Pair{0x00u, "PDSTAP"}, Pair{0x04u, "PDSTAR"}, Pair{0x08u, "PDLEN"},
-            Pair{0x0Cu, "PDDIR"}, Pair{0x10u, "PDTSEL"}, Pair{0x14u, "PDEN"},
-            Pair{0x18u, "PDST"}, Pair{0x80u, "PDAPRO"}, Pair{0xF0u, "PDSTAPD"},
-            Pair{0xF4u, "PDSTARD"}, Pair{0xF8u, "PDLEND"}};
+        static constexpr std::array names{Pair{0x00u, "PDSTAP"},
+                                          Pair{0x04u, "PDSTAR"},
+                                          Pair{0x08u, "PDLEN"},
+                                          Pair{0x0Cu, "PDDIR"},
+                                          Pair{0x10u, "PDTSEL"},
+                                          Pair{0x14u, "PDEN"},
+                                          Pair{0x18u, "PDST"},
+                                          Pair{0x80u, "PDAPRO"},
+                                          Pair{0xF0u, "PDSTAPD"},
+                                          Pair{0xF4u, "PDSTARD"},
+                                          Pair{0xF8u, "PDLEND"}};
         return named_offset(names, offset);
     }
     case DreamcastHardwareRegion::Aica:
@@ -164,12 +217,13 @@ std::string dreamcast_register_name(const DreamcastHardwareRegion region,
         if (offset == 0x28B4u) return "SCIEB";
         if (offset == 0x28B8u) return "SCIPD";
         if (offset == 0x28BCu) return "SCIRE";
-        if (offset < 64u * 0x80u)
-            return "CHANNEL_" + std::to_string(offset / 0x80u);
+        if (offset < 64u * 0x80u) return "CHANNEL_" + std::to_string(offset / 0x80u);
         return {};
     case DreamcastHardwareRegion::AicaRtc:
-        return offset == 0u ? "RTC_HIGH" : offset == 4u ? "RTC_LOW" :
-               offset == 8u ? "RTC_ENABLE" : std::string{};
+        return offset == 0u   ? "RTC_HIGH"
+               : offset == 4u ? "RTC_LOW"
+               : offset == 8u ? "RTC_ENABLE"
+                              : std::string{};
     default:
         return {};
     }
@@ -177,46 +231,82 @@ std::string dreamcast_register_name(const DreamcastHardwareRegion region,
 
 std::string sh4_register_name(const std::uint32_t address) {
     switch (address) {
-    case 0xFF000000u: return "PTEH";
-    case 0xFF000004u: return "PTEL";
-    case 0xFF000008u: return "TTB";
-    case 0xFF00000Cu: return "TEA";
-    case 0xFF000010u: return "MMUCR";
-    case 0xFF00001Cu: return "CCR";
-    case 0xFF000020u: return "TRA";
-    case 0xFF000024u: return "EXPEVT";
-    case 0xFF000028u: return "INTEVT";
-    case 0xFF000034u: return "PTEA";
-    case 0xFF000038u: return "QACR0";
-    case 0xFF00003Cu: return "QACR1";
-    case 0xFF80002Cu: return "PCTRA";
-    case 0xFF800030u: return "PDTRA";
-    case 0xFF800040u: return "PCTRB";
-    case 0xFF800044u: return "PDTRB";
-    case 0xFF800048u: return "GPIOIC";
-    case 0xFFD00000u: return "ICR";
-    case 0xFFD00004u: return "IPRA";
-    case 0xFFD00008u: return "IPRB";
-    case 0xFFD0000Cu: return "IPRC";
-    case 0xFFD80000u: return "TOCR";
-    case 0xFFD80004u: return "TSTR";
-    case 0xFFE80000u: return "SCSMR2";
-    case 0xFFE80004u: return "SCBRR2";
-    case 0xFFE80008u: return "SCSCR2";
-    case 0xFFE8000Cu: return "SCFTDR2";
-    case 0xFFE80010u: return "SCFSR2";
-    case 0xFFE80014u: return "SCFRDR2";
-    case 0xFFE80018u: return "SCFCR2";
-    case 0xFFE8001Cu: return "SCFDR2";
-    case 0xFFE80020u: return "SCSPTR2";
-    case 0xFFE80024u: return "SCLSR2";
-    default: break;
+    case 0xFF000000u:
+        return "PTEH";
+    case 0xFF000004u:
+        return "PTEL";
+    case 0xFF000008u:
+        return "TTB";
+    case 0xFF00000Cu:
+        return "TEA";
+    case 0xFF000010u:
+        return "MMUCR";
+    case 0xFF00001Cu:
+        return "CCR";
+    case 0xFF000020u:
+        return "TRA";
+    case 0xFF000024u:
+        return "EXPEVT";
+    case 0xFF000028u:
+        return "INTEVT";
+    case 0xFF000034u:
+        return "PTEA";
+    case 0xFF000038u:
+        return "QACR0";
+    case 0xFF00003Cu:
+        return "QACR1";
+    case 0xFF80002Cu:
+        return "PCTRA";
+    case 0xFF800030u:
+        return "PDTRA";
+    case 0xFF800040u:
+        return "PCTRB";
+    case 0xFF800044u:
+        return "PDTRB";
+    case 0xFF800048u:
+        return "GPIOIC";
+    case 0xFFD00000u:
+        return "ICR";
+    case 0xFFD00004u:
+        return "IPRA";
+    case 0xFFD00008u:
+        return "IPRB";
+    case 0xFFD0000Cu:
+        return "IPRC";
+    case 0xFFD80000u:
+        return "TOCR";
+    case 0xFFD80004u:
+        return "TSTR";
+    case 0xFFE80000u:
+        return "SCSMR2";
+    case 0xFFE80004u:
+        return "SCBRR2";
+    case 0xFFE80008u:
+        return "SCSCR2";
+    case 0xFFE8000Cu:
+        return "SCFTDR2";
+    case 0xFFE80010u:
+        return "SCFSR2";
+    case 0xFFE80014u:
+        return "SCFRDR2";
+    case 0xFFE80018u:
+        return "SCFCR2";
+    case 0xFFE8001Cu:
+        return "SCFDR2";
+    case 0xFFE80020u:
+        return "SCSPTR2";
+    case 0xFFE80024u:
+        return "SCLSR2";
+    default:
+        break;
     }
     if (in_range(address, 0xFFA00000u, 0x40u)) {
         const auto channel = (address - 0xFFA00000u) / 0x10u;
         const auto offset = (address - 0xFFA00000u) % 0x10u;
-        const char* name = offset == 0u ? "SAR" : offset == 4u ? "DAR" :
-                           offset == 8u ? "DMATCR" : "CHCR";
+        const char* name = offset == 0u   ? "SAR"
+                           : offset == 4u ? "DAR"
+                           : offset == 8u ? "DMATCR"
+                                          : "CHCR";
         return std::string(name) + std::to_string(channel);
     }
     if (address == 0xFFA00040u) return "DMAOR";
@@ -239,24 +329,39 @@ AddressDescription describe(const std::uint32_t address) {
         result.aperture_mapped = runtime_mapped;
         result.name = std::move(name);
     };
-    if (in_range(canonical, 0x005F6800u, 0xB0u)) set(DreamcastHardwareRegion::SystemBus, true);
-    else if (in_range(canonical, 0x005F6900u, 0x58u)) set(DreamcastHardwareRegion::SystemAsic, true);
-    else if (in_range(canonical, 0x005F6C00u, 0x100u)) set(DreamcastHardwareRegion::Maple, true);
-    else if (in_range(canonical, 0x005F7000u, 0x100u)) set(DreamcastHardwareRegion::GdRom, true);
-    else if (in_range(canonical, 0x005F7400u, 0x100u)) set(DreamcastHardwareRegion::G1Dma, true);
-    else if (in_range(canonical, 0x005F7800u, 0x100u)) set(DreamcastHardwareRegion::G2Dma, true);
-    else if (in_range(canonical, 0x005F7C00u, 0x100u)) set(DreamcastHardwareRegion::PvrDma, true);
+    if (in_range(canonical, 0x005F6800u, 0xB0u))
+        set(DreamcastHardwareRegion::SystemBus, true);
+    else if (in_range(canonical, 0x005F6900u, 0x58u))
+        set(DreamcastHardwareRegion::SystemAsic, true);
+    else if (in_range(canonical, 0x005F6C00u, 0x100u))
+        set(DreamcastHardwareRegion::Maple, true);
+    else if (in_range(canonical, 0x005F7000u, 0x100u))
+        set(DreamcastHardwareRegion::GdRom, true);
+    else if (in_range(canonical, 0x005F7400u, 0x100u))
+        set(DreamcastHardwareRegion::G1Dma, true);
+    else if (in_range(canonical, 0x005F7800u, 0x100u))
+        set(DreamcastHardwareRegion::G2Dma, true);
+    else if (in_range(canonical, 0x005F7C00u, 0x100u))
+        set(DreamcastHardwareRegion::PvrDma, true);
     else if (in_range(canonical, 0x005F8000u, 0x2000u))
         set(DreamcastHardwareRegion::Pvr, true, pvr_register_name(canonical - 0x005F8000u));
-    else if (in_range(canonical, 0x00700000u, 0x8000u)) set(DreamcastHardwareRegion::Aica, true);
-    else if (in_range(canonical, 0x00710000u, 0x0Cu)) set(DreamcastHardwareRegion::AicaRtc, true);
-    else if (in_range(canonical, 0x00800000u, 0x00800000u)) set(DreamcastHardwareRegion::AicaRam, true);
-    else if (in_range(canonical, 0x01000000u, 0x00800000u)) set(DreamcastHardwareRegion::TaFifo, true);
-    else if (in_range(canonical, 0x10800000u, 0x00800000u)) set(DreamcastHardwareRegion::TaYuv, true);
-    else if (in_range(canonical, 0x04000000u, 0x00800000u)) set(DreamcastHardwareRegion::Vram64, true);
-    else if (in_range(canonical, 0x05000000u, 0x00800000u)) set(DreamcastHardwareRegion::Vram32, true);
+    else if (in_range(canonical, 0x00700000u, 0x8000u))
+        set(DreamcastHardwareRegion::Aica, true);
+    else if (in_range(canonical, 0x00710000u, 0x0Cu))
+        set(DreamcastHardwareRegion::AicaRtc, true);
+    else if (in_range(canonical, 0x00800000u, 0x00800000u))
+        set(DreamcastHardwareRegion::AicaRam, true);
+    else if (in_range(canonical, 0x01000000u, 0x00800000u))
+        set(DreamcastHardwareRegion::TaFifo, true);
+    else if (in_range(canonical, 0x10800000u, 0x00800000u))
+        set(DreamcastHardwareRegion::TaYuv, true);
+    else if (in_range(canonical, 0x04000000u, 0x00800000u))
+        set(DreamcastHardwareRegion::Vram64, true);
+    else if (in_range(canonical, 0x05000000u, 0x00800000u))
+        set(DreamcastHardwareRegion::Vram32, true);
     else if (in_range(canonical, 0x11000000u, 0x01000000u) ||
-             in_range(canonical, 0x13000000u, 0x01000000u)) set(DreamcastHardwareRegion::TaVram, true);
+             in_range(canonical, 0x13000000u, 0x01000000u))
+        set(DreamcastHardwareRegion::TaVram, true);
     else if (in_range(canonical, 0x7C000000u, 0x04000000u))
         set(DreamcastHardwareRegion::Sh4OnChipRam, true);
     else if (in_range(canonical, 0xE0000000u, 0x04000000u))
@@ -271,33 +376,54 @@ AddressDescription describe(const std::uint32_t address) {
         set(DreamcastHardwareRegion::Sh4Mmu, true, sh4_register_name(canonical));
     else if (in_range(canonical, 0xFF000038u, 8u))
         set(DreamcastHardwareRegion::Sh4Qacr, true, sh4_register_name(canonical));
-    else if (canonical == 0xFF80002Cu || canonical == 0xFF800030u ||
-             canonical == 0xFF800040u || canonical == 0xFF800044u || canonical == 0xFF800048u)
+    else if (canonical == 0xFF80002Cu || canonical == 0xFF800030u || canonical == 0xFF800040u ||
+             canonical == 0xFF800044u || canonical == 0xFF800048u)
         set(DreamcastHardwareRegion::Sh4Io, true, sh4_register_name(canonical));
     else if (in_range(canonical, 0xFFA00000u, 0x44u))
         set(DreamcastHardwareRegion::Sh4Dmac, true, sh4_register_name(canonical));
-    else if (in_range(canonical, 0xFFC80000u, 0x40u)) set(DreamcastHardwareRegion::Sh4Rtc, true);
+    else if (in_range(canonical, 0xFFC80000u, 0x40u))
+        set(DreamcastHardwareRegion::Sh4Rtc, true);
     else if (in_range(canonical, 0xFFD00000u, 0x14u))
         set(DreamcastHardwareRegion::Sh4Intc, true, sh4_register_name(canonical));
     else if (in_range(canonical, 0xFFD80000u, 0x30u))
         set(DreamcastHardwareRegion::Sh4Tmu, true, sh4_register_name(canonical));
     else if (in_range(canonical, 0xFFE80000u, 0x28u))
         set(DreamcastHardwareRegion::Sh4Scif, true, sh4_register_name(canonical));
-    else if (canonical >= 0xFF000000u) set(DreamcastHardwareRegion::Sh4P4, false);
+    else if (canonical >= 0xFF000000u)
+        set(DreamcastHardwareRegion::Sh4P4, false);
     if (result.name.empty() && result.region != DreamcastHardwareRegion::Unknown &&
         canonical < 0xE0000000u) {
         std::uint32_t base = canonical;
         switch (result.region) {
-        case DreamcastHardwareRegion::SystemBus: base = 0x005F6800u; break;
-        case DreamcastHardwareRegion::SystemAsic: base = 0x005F6900u; break;
-        case DreamcastHardwareRegion::Maple: base = 0x005F6C00u; break;
-        case DreamcastHardwareRegion::GdRom: base = 0x005F7000u; break;
-        case DreamcastHardwareRegion::G1Dma: base = 0x005F7400u; break;
-        case DreamcastHardwareRegion::G2Dma: base = 0x005F7800u; break;
-        case DreamcastHardwareRegion::PvrDma: base = 0x005F7C00u; break;
-        case DreamcastHardwareRegion::Aica: base = 0x00700000u; break;
-        case DreamcastHardwareRegion::AicaRtc: base = 0x00710000u; break;
-        default: break;
+        case DreamcastHardwareRegion::SystemBus:
+            base = 0x005F6800u;
+            break;
+        case DreamcastHardwareRegion::SystemAsic:
+            base = 0x005F6900u;
+            break;
+        case DreamcastHardwareRegion::Maple:
+            base = 0x005F6C00u;
+            break;
+        case DreamcastHardwareRegion::GdRom:
+            base = 0x005F7000u;
+            break;
+        case DreamcastHardwareRegion::G1Dma:
+            base = 0x005F7400u;
+            break;
+        case DreamcastHardwareRegion::G2Dma:
+            base = 0x005F7800u;
+            break;
+        case DreamcastHardwareRegion::PvrDma:
+            base = 0x005F7C00u;
+            break;
+        case DreamcastHardwareRegion::Aica:
+            base = 0x00700000u;
+            break;
+        case DreamcastHardwareRegion::AicaRtc:
+            base = 0x00710000u;
+            break;
+        default:
+            break;
         }
         result.name = dreamcast_register_name(result.region, canonical - base);
     }
@@ -318,13 +444,43 @@ bool system_asic_offset(const std::uint32_t offset) noexcept {
 
 HardwareRuntimeSupport system_bus_support(const std::uint32_t offset,
                                           const HardwareAccessKind kind) noexcept {
-    static constexpr std::array readable{0x00u, 0x04u, 0x08u, 0x10u, 0x14u, 0x18u,
-                                         0x1Cu, 0x20u, 0x40u, 0x44u, 0x48u, 0x4Cu,
-                                         0x60u, 0x80u, 0x84u, 0x88u, 0x8Cu, 0x9Cu,
+    static constexpr std::array readable{0x00u,
+                                         0x04u,
+                                         0x08u,
+                                         0x10u,
+                                         0x14u,
+                                         0x18u,
+                                         0x1Cu,
+                                         0x20u,
+                                         0x40u,
+                                         0x44u,
+                                         0x48u,
+                                         0x4Cu,
+                                         0x60u,
+                                         0x80u,
+                                         0x84u,
+                                         0x88u,
+                                         0x8Cu,
+                                         0x9Cu,
                                          0xA0u};
-    static constexpr std::array writable{0x00u, 0x04u, 0x08u, 0x10u, 0x14u, 0x18u,
-                                         0x1Cu, 0x20u, 0x40u, 0x44u, 0x48u, 0x4Cu,
-                                         0x60u, 0x84u, 0x88u, 0x90u, 0xA0u, 0xA4u,
+    static constexpr std::array writable{0x00u,
+                                         0x04u,
+                                         0x08u,
+                                         0x10u,
+                                         0x14u,
+                                         0x18u,
+                                         0x1Cu,
+                                         0x20u,
+                                         0x40u,
+                                         0x44u,
+                                         0x48u,
+                                         0x4Cu,
+                                         0x60u,
+                                         0x84u,
+                                         0x88u,
+                                         0x90u,
+                                         0xA0u,
+                                         0xA4u,
                                          0xACu};
     if (kind == HardwareAccessKind::Read)
         return contains(readable, offset) ? HardwareRuntimeSupport::Implemented
@@ -339,13 +495,12 @@ HardwareRuntimeSupport system_bus_support(const std::uint32_t offset,
 
 HardwareRuntimeSupport maple_support(const std::uint32_t offset,
                                      const HardwareAccessKind kind) noexcept {
-    static constexpr std::array readable{0x04u, 0x10u, 0x14u, 0x18u, 0x80u, 0x84u,
-                                         0xE8u, 0xF4u, 0xF8u, 0xFCu};
-    static constexpr std::array writable{0x04u, 0x10u, 0x14u, 0x18u,
-                                         0x80u, 0x88u, 0x8Cu, 0xE8u};
+    static constexpr std::array readable{
+        0x04u, 0x10u, 0x14u, 0x18u, 0x80u, 0x84u, 0xE8u, 0xF4u, 0xF8u, 0xFCu};
+    static constexpr std::array writable{0x04u, 0x10u, 0x14u, 0x18u, 0x80u, 0x88u, 0x8Cu, 0xE8u};
     if (kind == HardwareAccessKind::Prefetch) return HardwareRuntimeSupport::Rejected;
-    const auto supported = kind == HardwareAccessKind::Read ? contains(readable, offset)
-                                                            : contains(writable, offset);
+    const auto supported =
+        kind == HardwareAccessKind::Read ? contains(readable, offset) : contains(writable, offset);
     return supported ? HardwareRuntimeSupport::Implemented : HardwareRuntimeSupport::Rejected;
 }
 
@@ -354,13 +509,12 @@ HardwareRuntimeSupport gdrom_support(const std::uint32_t offset,
                                      const std::uint8_t width) noexcept {
     if (kind == HardwareAccessKind::Prefetch) return HardwareRuntimeSupport::Rejected;
     if (offset == 0x80u)
-        return width == 2u ? HardwareRuntimeSupport::Implemented
-                           : HardwareRuntimeSupport::Rejected;
+        return width == 2u ? HardwareRuntimeSupport::Implemented : HardwareRuntimeSupport::Rejected;
     if (width != 1u) return HardwareRuntimeSupport::Rejected;
     static constexpr std::array readable{0x84u, 0x88u, 0x90u, 0x94u, 0x9Cu, 0xA0u};
     static constexpr std::array writable{0x90u, 0x94u, 0x9Cu, 0xA0u};
-    const auto supported = kind == HardwareAccessKind::Read ? contains(readable, offset)
-                                                            : contains(writable, offset);
+    const auto supported =
+        kind == HardwareAccessKind::Read ? contains(readable, offset) : contains(writable, offset);
     return supported ? HardwareRuntimeSupport::Implemented : HardwareRuntimeSupport::Rejected;
 }
 
@@ -370,33 +524,45 @@ HardwareRuntimeSupport holly_dma_support(const DreamcastHardwareRegion region,
     if (kind == HardwareAccessKind::Prefetch) return HardwareRuntimeSupport::Rejected;
     if (region == DreamcastHardwareRegion::G2Dma) {
         if (offset < 0x80u && (offset & 3u) == 0u) return HardwareRuntimeSupport::Implemented;
-        static constexpr std::array readable{0x80u, 0x90u, 0x94u, 0x98u, 0x9Cu,
-                                             0xC0u, 0xC4u, 0xC8u, 0xD0u, 0xD4u,
-                                             0xD8u, 0xE0u, 0xE4u, 0xE8u, 0xF0u,
-                                             0xF4u, 0xF8u};
+        static constexpr std::array readable{0x80u,
+                                             0x90u,
+                                             0x94u,
+                                             0x98u,
+                                             0x9Cu,
+                                             0xC0u,
+                                             0xC4u,
+                                             0xC8u,
+                                             0xD0u,
+                                             0xD4u,
+                                             0xD8u,
+                                             0xE0u,
+                                             0xE4u,
+                                             0xE8u,
+                                             0xF0u,
+                                             0xF4u,
+                                             0xF8u};
         static constexpr std::array writable{0x90u, 0x94u, 0x98u, 0x9Cu, 0xBCu};
         const auto supported = kind == HardwareAccessKind::Read ? contains(readable, offset)
                                                                 : contains(writable, offset);
         return supported ? HardwareRuntimeSupport::Implemented : HardwareRuntimeSupport::Rejected;
     }
     if (region == DreamcastHardwareRegion::G1Dma) {
-        static constexpr std::array readable{0x04u, 0x08u, 0x0Cu, 0x14u,
-                                             0x18u, 0xB0u, 0xF4u, 0xF8u};
+        static constexpr std::array readable{
+            0x04u, 0x08u, 0x0Cu, 0x14u, 0x18u, 0xB0u, 0xF4u, 0xF8u};
         static constexpr std::array writable{0x04u, 0x08u, 0x0Cu, 0x14u, 0x18u};
-        static constexpr std::array ignored_writes{0x80u, 0x84u, 0x88u, 0x8Cu, 0x90u, 0x94u,
-                                                   0xA0u, 0xA4u, 0xB4u, 0xB8u, 0xE4u};
+        static constexpr std::array ignored_writes{
+            0x80u, 0x84u, 0x88u, 0x8Cu, 0x90u, 0x94u, 0xA0u, 0xA4u, 0xB4u, 0xB8u, 0xE4u};
         if (kind == HardwareAccessKind::Write && contains(ignored_writes, offset))
             return HardwareRuntimeSupport::Partial;
         const auto supported = kind == HardwareAccessKind::Read ? contains(readable, offset)
                                                                 : contains(writable, offset);
         return supported ? HardwareRuntimeSupport::Implemented : HardwareRuntimeSupport::Rejected;
     }
-    static constexpr std::array readable{0x00u, 0x04u, 0x08u, 0x0Cu, 0x10u,
-                                         0x14u, 0x18u, 0xF0u, 0xF4u, 0xF8u};
-    static constexpr std::array writable{0x00u, 0x04u, 0x08u, 0x0Cu,
-                                         0x10u, 0x14u, 0x18u, 0x80u};
-    const auto supported = kind == HardwareAccessKind::Read ? contains(readable, offset)
-                                                            : contains(writable, offset);
+    static constexpr std::array readable{
+        0x00u, 0x04u, 0x08u, 0x0Cu, 0x10u, 0x14u, 0x18u, 0xF0u, 0xF4u, 0xF8u};
+    static constexpr std::array writable{0x00u, 0x04u, 0x08u, 0x0Cu, 0x10u, 0x14u, 0x18u, 0x80u};
+    const auto supported =
+        kind == HardwareAccessKind::Read ? contains(readable, offset) : contains(writable, offset);
     return supported ? HardwareRuntimeSupport::Implemented : HardwareRuntimeSupport::Rejected;
 }
 
@@ -407,8 +573,7 @@ HardwareRuntimeSupport sh4_tmu_support(const std::uint32_t address,
         return HardwareRuntimeSupport::Implemented;
     if (offset >= 0x08u && offset <= 0x28u) {
         const auto local = (offset - 0x08u) % 0x0Cu;
-        if ((local == 0u || local == 4u) && width == 4u)
-            return HardwareRuntimeSupport::Implemented;
+        if ((local == 0u || local == 4u) && width == 4u) return HardwareRuntimeSupport::Implemented;
         if (local == 8u && width == 2u) return HardwareRuntimeSupport::Implemented;
     }
     return HardwareRuntimeSupport::Rejected;
@@ -423,11 +588,10 @@ HardwareRuntimeSupport sh4_scif_support(const std::uint32_t address,
     if (width != (byte_register ? 1u : 2u)) return HardwareRuntimeSupport::Rejected;
     if (kind == HardwareAccessKind::Read && offset == 0x0Cu)
         return HardwareRuntimeSupport::Rejected;
-    if (kind == HardwareAccessKind::Write &&
-        (offset == 0x14u || offset == 0x1Cu))
+    if (kind == HardwareAccessKind::Write && (offset == 0x14u || offset == 0x1Cu))
         return HardwareRuntimeSupport::Rejected;
-    static constexpr std::array offsets{0x00u, 0x04u, 0x08u, 0x0Cu, 0x10u,
-                                        0x14u, 0x18u, 0x1Cu, 0x20u, 0x24u};
+    static constexpr std::array offsets{
+        0x00u, 0x04u, 0x08u, 0x0Cu, 0x10u, 0x14u, 0x18u, 0x1Cu, 0x20u, 0x24u};
     return contains(offsets, offset) ? HardwareRuntimeSupport::Implemented
                                      : HardwareRuntimeSupport::Rejected;
 }
@@ -472,9 +636,9 @@ HardwareRuntimeSupport assess_support(const AddressDescription& description,
     case Region::PvrDma:
         if (width != 4u) return HardwareRuntimeSupport::Rejected;
         return holly_dma_support(description.region,
-                                 address - (description.region == Region::G1Dma ? 0x005F7400u :
-                                            description.region == Region::G2Dma ? 0x005F7800u :
-                                                                                 0x005F7C00u),
+                                 address - (description.region == Region::G1Dma   ? 0x005F7400u
+                                            : description.region == Region::G2Dma ? 0x005F7800u
+                                                                                  : 0x005F7C00u),
                                  kind);
     case Region::Pvr:
         return pvr_support(address - 0x005F8000u, kind, width);
@@ -485,8 +649,7 @@ HardwareRuntimeSupport assess_support(const AddressDescription& description,
     case Region::AicaRtc:
         return kind != HardwareAccessKind::Prefetch &&
                        (width == 1u || width == 2u || width == 4u) &&
-                       ((address - 0x00710000u) == 0u ||
-                        (address - 0x00710000u) == 4u ||
+                       ((address - 0x00710000u) == 0u || (address - 0x00710000u) == 4u ||
                         (address - 0x00710000u) == 8u)
                    ? HardwareRuntimeSupport::Implemented
                    : HardwareRuntimeSupport::Rejected;
@@ -503,8 +666,7 @@ HardwareRuntimeSupport assess_support(const AddressDescription& description,
     case Region::StoreQueue:
         return HardwareRuntimeSupport::Implemented;
     case Region::Sh4OnChipRam:
-        return kind != HardwareAccessKind::Prefetch &&
-                       (width == 1u || width == 2u || width == 4u)
+        return kind != HardwareAccessKind::Prefetch && (width == 1u || width == 2u || width == 4u)
                    ? HardwareRuntimeSupport::Implemented
                    : HardwareRuntimeSupport::Rejected;
     case Region::Sh4Mmu:
@@ -577,8 +739,7 @@ bool is_memory_access_instruction(const sh4::InstructionKind kind) noexcept {
     const auto effects = ir::instruction_memory_effects(operation);
     // PREF is address-dependent and intentionally has no unconditional IR memory effect,
     // but it remains a hardware-aperture access for this audit.
-    return effects.access != ir::MemoryAccessKind::None ||
-           kind == sh4::InstructionKind::Prefetch;
+    return effects.access != ir::MemoryAccessKind::None || kind == sh4::InstructionKind::Prefetch;
 }
 
 std::optional<std::uint32_t> displaced(const std::optional<std::uint32_t>& base,
@@ -587,10 +748,9 @@ std::optional<std::uint32_t> displaced(const std::optional<std::uint32_t>& base,
     return *base + offset;
 }
 
-EffectiveAccessSet
-effective_accesses(const sh4::DisassemblyLine& line,
-                   const RegisterConstants& before,
-                   const std::optional<std::uint32_t> gbr) {
+EffectiveAccessSet effective_accesses(const sh4::DisassemblyLine& line,
+                                      const RegisterConstants& before,
+                                      const std::optional<std::uint32_t> gbr) {
     using K = sh4::InstructionKind;
     const auto& instruction = line.instruction;
     std::optional<std::uint32_t> address;
@@ -603,31 +763,35 @@ effective_accesses(const sh4::DisassemblyLine& line,
     case K::MovWordStore:
     case K::MovLongStore:
         kind = HardwareAccessKind::Write;
-        width = instruction.kind == K::MovByteStore ? 1u :
-                instruction.kind == K::MovWordStore ? 2u : 4u;
+        width = instruction.kind == K::MovByteStore   ? 1u
+                : instruction.kind == K::MovWordStore ? 2u
+                                                      : 4u;
         address = before.registers[instruction.destination_register];
         break;
     case K::MovByteLoad:
     case K::MovWordLoad:
     case K::MovLongLoad:
-        width = instruction.kind == K::MovByteLoad ? 1u :
-                instruction.kind == K::MovWordLoad ? 2u : 4u;
+        width = instruction.kind == K::MovByteLoad   ? 1u
+                : instruction.kind == K::MovWordLoad ? 2u
+                                                     : 4u;
         address = before.registers[instruction.source_register];
         break;
     case K::MovByteStoreDisplacement:
     case K::MovWordStoreDisplacement:
     case K::MovLongStoreDisplacement:
         kind = HardwareAccessKind::Write;
-        width = instruction.kind == K::MovByteStoreDisplacement ? 1u :
-                instruction.kind == K::MovWordStoreDisplacement ? 2u : 4u;
+        width = instruction.kind == K::MovByteStoreDisplacement   ? 1u
+                : instruction.kind == K::MovWordStoreDisplacement ? 2u
+                                                                  : 4u;
         address = displaced(before.registers[instruction.destination_register],
                             static_cast<std::uint32_t>(instruction.displacement));
         break;
     case K::MovByteLoadDisplacement:
     case K::MovWordLoadDisplacement:
     case K::MovLongLoadDisplacement:
-        width = instruction.kind == K::MovByteLoadDisplacement ? 1u :
-                instruction.kind == K::MovWordLoadDisplacement ? 2u : 4u;
+        width = instruction.kind == K::MovByteLoadDisplacement   ? 1u
+                : instruction.kind == K::MovWordLoadDisplacement ? 2u
+                                                                 : 4u;
         address = displaced(before.registers[instruction.source_register],
                             static_cast<std::uint32_t>(instruction.displacement));
         break;
@@ -635,8 +799,9 @@ effective_accesses(const sh4::DisassemblyLine& line,
     case K::MovWordStoreR0Indexed:
     case K::MovLongStoreR0Indexed:
         kind = HardwareAccessKind::Write;
-        width = instruction.kind == K::MovByteStoreR0Indexed ? 1u :
-                instruction.kind == K::MovWordStoreR0Indexed ? 2u : 4u;
+        width = instruction.kind == K::MovByteStoreR0Indexed   ? 1u
+                : instruction.kind == K::MovWordStoreR0Indexed ? 2u
+                                                               : 4u;
         if (before.registers[0u].has_value() &&
             before.registers[instruction.destination_register].has_value())
             address = *before.registers[0u] + *before.registers[instruction.destination_register];
@@ -644,8 +809,9 @@ effective_accesses(const sh4::DisassemblyLine& line,
     case K::MovByteLoadR0Indexed:
     case K::MovWordLoadR0Indexed:
     case K::MovLongLoadR0Indexed:
-        width = instruction.kind == K::MovByteLoadR0Indexed ? 1u :
-                instruction.kind == K::MovWordLoadR0Indexed ? 2u : 4u;
+        width = instruction.kind == K::MovByteLoadR0Indexed   ? 1u
+                : instruction.kind == K::MovWordLoadR0Indexed ? 2u
+                                                              : 4u;
         if (before.registers[0u].has_value() &&
             before.registers[instruction.source_register].has_value())
             address = *before.registers[0u] + *before.registers[instruction.source_register];
@@ -654,15 +820,17 @@ effective_accesses(const sh4::DisassemblyLine& line,
     case K::MovWordStoreGbrDisplacement:
     case K::MovLongStoreGbrDisplacement:
         kind = HardwareAccessKind::Write;
-        width = instruction.kind == K::MovByteStoreGbrDisplacement ? 1u :
-                instruction.kind == K::MovWordStoreGbrDisplacement ? 2u : 4u;
+        width = instruction.kind == K::MovByteStoreGbrDisplacement   ? 1u
+                : instruction.kind == K::MovWordStoreGbrDisplacement ? 2u
+                                                                     : 4u;
         address = displaced(gbr, static_cast<std::uint32_t>(instruction.displacement));
         break;
     case K::MovByteLoadGbrDisplacement:
     case K::MovWordLoadGbrDisplacement:
     case K::MovLongLoadGbrDisplacement:
-        width = instruction.kind == K::MovByteLoadGbrDisplacement ? 1u :
-                instruction.kind == K::MovWordLoadGbrDisplacement ? 2u : 4u;
+        width = instruction.kind == K::MovByteLoadGbrDisplacement   ? 1u
+                : instruction.kind == K::MovWordLoadGbrDisplacement ? 2u
+                                                                    : 4u;
         address = displaced(gbr, static_cast<std::uint32_t>(instruction.displacement));
         break;
     case K::MovWordLoadPcRelative:
@@ -684,16 +852,18 @@ effective_accesses(const sh4::DisassemblyLine& line,
     case K::MovWordStorePreDecrement:
     case K::MovLongStorePreDecrement:
         kind = HardwareAccessKind::Write;
-        width = instruction.kind == K::MovByteStorePreDecrement ? 1u :
-                instruction.kind == K::MovWordStorePreDecrement ? 2u : 4u;
+        width = instruction.kind == K::MovByteStorePreDecrement   ? 1u
+                : instruction.kind == K::MovWordStorePreDecrement ? 2u
+                                                                  : 4u;
         if (before.registers[instruction.destination_register].has_value())
             address = *before.registers[instruction.destination_register] - width;
         break;
     case K::MovByteLoadPostIncrement:
     case K::MovWordLoadPostIncrement:
     case K::MovLongLoadPostIncrement:
-        width = instruction.kind == K::MovByteLoadPostIncrement ? 1u :
-                instruction.kind == K::MovWordLoadPostIncrement ? 2u : 4u;
+        width = instruction.kind == K::MovByteLoadPostIncrement   ? 1u
+                : instruction.kind == K::MovWordLoadPostIncrement ? 2u
+                                                                  : 4u;
         address = before.registers[instruction.source_register];
         break;
     case K::StoreSpecialRegisterPreDecrement:
@@ -716,8 +886,8 @@ effective_accesses(const sh4::DisassemblyLine& line,
             result.accesses.push_back({*destination, HardwareAccessKind::Read, width});
         if (source.has_value()) {
             const auto source_address =
-                *source + (instruction.source_register == instruction.destination_register ? width
-                                                                                           : 0u);
+                *source +
+                (instruction.source_register == instruction.destination_register ? width : 0u);
             result.accesses.push_back({source_address, HardwareAccessKind::Read, width});
         }
         result.complete = destination.has_value() && source.has_value();
@@ -770,10 +940,10 @@ effective_accesses(const sh4::DisassemblyLine& line,
         fmov_pair = true;
         if (before.registers[0u].has_value() &&
             before.registers[instruction.destination_register].has_value())
-            address =
-                *before.registers[0u] + *before.registers[instruction.destination_register];
+            address = *before.registers[0u] + *before.registers[instruction.destination_register];
         break;
-    default: return {};
+    default:
+        return {};
     }
     if (!address.has_value()) return {};
     if (read_modify_write)
@@ -784,8 +954,7 @@ effective_accesses(const sh4::DisassemblyLine& line,
     // union of its 32-bit bus words: SZ=0 uses the first word, while SZ=1 additionally
     // uses the second.  Predecrement starts at base-8, so the pair also retains the
     // SZ=0 base-4 address.
-    if (fmov_pair)
-        return {{{*address, kind, width}, {*address + 4u, kind, width}}, true};
+    if (fmov_pair) return {{{*address, kind, width}, {*address + 4u, kind, width}}, true};
     return {{{*address, kind, width}}, true};
 }
 
@@ -938,8 +1107,8 @@ std::uint16_t condition_register_mask(const sh4::DecodedInstruction& instruction
     case K::CompareGreaterThan:
     case K::CompareString:
     case K::TestRegister:
-        return static_cast<std::uint16_t>(
-            (1u << instruction.destination_register) | (1u << instruction.source_register));
+        return static_cast<std::uint16_t>((1u << instruction.destination_register) |
+                                          (1u << instruction.source_register));
     case K::ComparePositiveOrZero:
     case K::ComparePositive:
         return static_cast<std::uint16_t>(1u << instruction.destination_register);
@@ -1005,7 +1174,8 @@ guard_input_registers(const sh4::DecodedInstruction& instruction) noexcept {
     case K::MovLongStorePreDecrement:
     case K::StoreSpecialRegisterPreDecrement:
         return destination;
-    default: return std::nullopt;
+    default:
+        return std::nullopt;
     }
 }
 
@@ -1047,15 +1217,20 @@ HardwareLoopClassification classify_loop(const HardwareNaturalLoop& loop) noexce
     for (const auto& access : loop.accesses) {
         if (!access.guards_loop || access.kind != HardwareAccessKind::Read) continue;
         switch (loop_read_storage(access)) {
-        case LoopReadStorage::Ram: ram_poll = true; break;
-        case LoopReadStorage::Mmio: mmio_poll = true; break;
-        case LoopReadStorage::Unknown: unknown_poll = true; break;
+        case LoopReadStorage::Ram:
+            ram_poll = true;
+            break;
+        case LoopReadStorage::Mmio:
+            mmio_poll = true;
+            break;
+        case LoopReadStorage::Unknown:
+            unknown_poll = true;
+            break;
         }
     }
     if (unknown_poll) return HardwareLoopClassification::Unknown;
-    const auto evidence_classes =
-        static_cast<unsigned>(counter) + static_cast<unsigned>(ram_poll) +
-        static_cast<unsigned>(mmio_poll);
+    const auto evidence_classes = static_cast<unsigned>(counter) + static_cast<unsigned>(ram_poll) +
+                                  static_cast<unsigned>(mmio_poll);
     if (evidence_classes > 1u) return HardwareLoopClassification::Mixed;
     if (counter) return HardwareLoopClassification::Counter;
     if (ram_poll) return HardwareLoopClassification::RamPoll;
@@ -1077,22 +1252,21 @@ void repair_contextual_delay_slot_edges(std::vector<BasicBlock>& blocks,
         const auto& control_line = block.lines[control_index];
         const auto& instruction = control_line.instruction;
         if (!instruction.has_delay_slot) continue;
-        const bool paired =
-            control_index + 1u < block.lines.size() &&
-            block.lines[control_index + 1u].address == control_line.address + 2u &&
-            block.lines[control_index + 1u].is_delay_slot;
+        const bool paired = control_index + 1u < block.lines.size() &&
+                            block.lines[control_index + 1u].address == control_line.address + 2u &&
+                            block.lines[control_index + 1u].is_delay_slot;
         if (paired) continue;
 
-        const auto delay_context = std::find_if(
-            analysis.recursive.contextual_instructions.begin(),
-            analysis.recursive.contextual_instructions.end(),
-            [&control_line](const auto& context) {
-                return context.line.address == control_line.address + 2u &&
-                       context.delay_slot_owner == control_line.address &&
-                       control_flow_evidence_proven(context.evidence) &&
-                       context.line.instruction.is_known() &&
-                       !context.line.instruction.changes_control_flow();
-            });
+        const auto delay_context =
+            std::find_if(analysis.recursive.contextual_instructions.begin(),
+                         analysis.recursive.contextual_instructions.end(),
+                         [&control_line](const auto& context) {
+                             return context.line.address == control_line.address + 2u &&
+                                    context.delay_slot_owner == control_line.address &&
+                                    control_flow_evidence_proven(context.evidence) &&
+                                    context.line.instruction.is_known() &&
+                                    !context.line.instruction.changes_control_flow();
+                         });
         if (delay_context == analysis.recursive.contextual_instructions.end()) continue;
 
         const auto fallthrough = control_line.address + 4u;
@@ -1105,8 +1279,11 @@ void repair_contextual_delay_slot_edges(std::vector<BasicBlock>& blocks,
         case sh4::ControlFlowKind::IndirectCall:
             add_loop_cfg_successor(block, fallthrough);
             break;
-        case sh4::ControlFlowKind::IndirectBranch: block.has_indirect_successor = true; break;
-        default: break;
+        case sh4::ControlFlowKind::IndirectBranch:
+            block.has_indirect_successor = true;
+            break;
+        default:
+            break;
         }
         for (const auto& edge : analysis.resolved_edges) {
             if (edge.instruction_address != control_line.address ||
@@ -1331,7 +1508,8 @@ find_natural_hardware_loops(const io::ExecutableImage& image,
                     if (!is_memory_access_instruction(block.lines[line_index].instruction.kind))
                         continue;
                     if (is_syntactic_memory_read(block.lines[line_index].instruction.kind))
-                        syntactic_read_by_instruction.emplace(block.lines[line_index].address, true);
+                        syntactic_read_by_instruction.emplace(block.lines[line_index].address,
+                                                              true);
                     const auto access_set = effective_accesses(
                         block.lines[line_index], trace[line_index].before, gbr_trace[line_index]);
                     for (const auto& access : access_set.accesses) {
@@ -1379,8 +1557,7 @@ find_natural_hardware_loops(const io::ExecutableImage& image,
                 if (block.lines.empty()) continue;
                 const auto control_index = controlling_instruction_index(block);
                 const auto& control = block.lines[control_index].instruction;
-                if (control.control_flow != sh4::ControlFlowKind::ConditionalBranch)
-                    continue;
+                if (control.control_flow != sh4::ControlFlowKind::ConditionalBranch) continue;
                 bool successor_inside = false;
                 bool successor_outside = false;
                 for (const auto successor_address : block.successors) {
@@ -1426,8 +1603,7 @@ find_natural_hardware_loops(const io::ExecutableImage& image,
                 }
                 if (condition.kind == sh4::InstructionKind::TestByteImmediate ||
                     condition.kind == sh4::InstructionKind::TestAndSetByte ||
-                    (condition.kind ==
-                         sh4::InstructionKind::LoadSpecialRegisterPostIncrement &&
+                    (condition.kind == sh4::InstructionKind::LoadSpecialRegisterPostIncrement &&
                      condition.special_register == sh4::SpecialRegister::Sr)) {
                     if (mark_direct_guard_access(condition_line.address) !=
                         GuardReadResolution::ResolvedAddress)
@@ -1475,8 +1651,8 @@ find_natural_hardware_loops(const io::ExecutableImage& image,
                             const auto loaded_outputs =
                                 static_cast<std::uint16_t>(writes & loaded_register);
                             if (loaded_outputs != 0u) {
-                                required_registers = static_cast<std::uint16_t>(
-                                    required_registers & ~loaded_outputs);
+                                required_registers = static_cast<std::uint16_t>(required_registers &
+                                                                                ~loaded_outputs);
                                 if (mark_direct_guard_access(writer.address) !=
                                     GuardReadResolution::ResolvedAddress) {
                                     provenance_complete = false;
@@ -1492,8 +1668,8 @@ find_natural_hardware_loops(const io::ExecutableImage& image,
                                 writer.instruction.kind ==
                                     sh4::InstructionKind::MovLongLoadPostIncrement;
                             if (non_value_outputs != 0u && !postincrement) {
-                                required_registers = static_cast<std::uint16_t>(
-                                    required_registers & ~non_value_outputs);
+                                required_registers = static_cast<std::uint16_t>(required_registers &
+                                                                                ~non_value_outputs);
                                 provenance_complete = false;
                             }
                             continue;
@@ -1535,28 +1711,26 @@ find_natural_hardware_loops(const io::ExecutableImage& image,
                 std::unique(loop.unresolved_guard_read_instruction_addresses.begin(),
                             loop.unresolved_guard_read_instruction_addresses.end()),
                 loop.unresolved_guard_read_instruction_addresses.end());
-            std::sort(loop.accesses.begin(), loop.accesses.end(), [](const auto& left,
-                                                                    const auto& right) {
-                return std::tie(left.instruction_address,
-                                left.guest_address,
-                                left.kind,
-                                left.width) <
-                       std::tie(right.instruction_address,
-                                right.guest_address,
-                                right.kind,
-                                right.width);
-            });
+            std::sort(loop.accesses.begin(),
+                      loop.accesses.end(),
+                      [](const auto& left, const auto& right) {
+                          return std::tie(left.instruction_address,
+                                          left.guest_address,
+                                          left.kind,
+                                          left.width) < std::tie(right.instruction_address,
+                                                                 right.guest_address,
+                                                                 right.kind,
+                                                                 right.width);
+                      });
             loop.classification = classify_loop(loop);
             loops.push_back(std::move(loop));
         }
     }
     std::sort(loops.begin(), loops.end(), [](const auto& left, const auto& right) {
-        return std::tie(left.header_address,
-                        left.latch_address,
-                        left.backedge_instruction_address) <
-               std::tie(right.header_address,
-                        right.latch_address,
-                        right.backedge_instruction_address);
+        return std::tie(
+                   left.header_address, left.latch_address, left.backedge_instruction_address) <
+               std::tie(
+                   right.header_address, right.latch_address, right.backedge_instruction_address);
     });
     return loops;
 }
@@ -1566,7 +1740,8 @@ find_natural_hardware_loops(const io::ExecutableImage& image,
 DreamcastHardwareAudit audit_dreamcast_hardware(const io::ExecutableImage& image,
                                                 const ControlFlowAnalysisResult& analysis) {
     DreamcastHardwareAudit result;
-    for (const auto& segment : image.segments()) result.image_bytes += segment.bytes.size();
+    for (const auto& segment : image.segments())
+        result.image_bytes += segment.bytes.size();
     result.reachable_instructions = analysis.recursive.instructions.size();
     result.reachable_functions = analysis.recursive.functions.size();
     result.unknown_instructions = analysis.recursive.diagnostics.size();
@@ -1592,6 +1767,14 @@ DreamcastHardwareAudit audit_dreamcast_hardware(const io::ExecutableImage& image
             diagnostic.delay_slot_owners.end());
         result.instruction_diagnostics.push_back(std::move(diagnostic));
     }
+    struct AggregatedReference {
+        HardwareAccessReference reference;
+        std::size_t multiplicity = 0u;
+    };
+    using ReferenceKey = std::tuple<std::uint32_t, std::uint32_t, HardwareAccessKind, std::uint8_t>;
+
+    std::map<std::uint32_t, bool> complete_memory_sites;
+    std::map<ReferenceKey, AggregatedReference> aggregated_references;
     if (analysis.instruction_arena) {
         for (const auto& span : analysis.block_spans) {
             const auto lines = span.view(*analysis.instruction_arena);
@@ -1599,14 +1782,12 @@ DreamcastHardwareAudit audit_dreamcast_hardware(const io::ExecutableImage& image
             const auto gbr_trace = propagate_local_gbr(lines, trace);
             for (std::size_t index = 0u; index < lines.size(); ++index) {
                 if (!is_memory_access_instruction(lines[index].instruction.kind)) continue;
-                ++result.memory_access_sites;
                 const auto access_set =
                     effective_accesses(lines[index], trace[index].before, gbr_trace[index]);
-                if (!access_set.complete) {
-                    ++result.unresolved_memory_access_sites;
-                } else {
-                    ++result.resolved_memory_access_sites;
-                }
+                const auto [site, inserted] =
+                    complete_memory_sites.emplace(lines[index].address, access_set.complete);
+                if (!inserted) site->second = site->second && access_set.complete;
+                std::map<ReferenceKey, AggregatedReference> context_references;
                 for (const auto& access : access_set.accesses) {
                     const auto description = describe(access.address);
                     if (description.region == DreamcastHardwareRegion::Unknown) continue;
@@ -1623,17 +1804,48 @@ DreamcastHardwareAudit audit_dreamcast_hardware(const io::ExecutableImage& image
                     reference.support_reason =
                         support_reason(description, reference.runtime_support);
                     reference.register_name = description.name;
-                    result.references.push_back(std::move(reference));
+                    const ReferenceKey key{reference.instruction_address,
+                                           reference.guest_address,
+                                           reference.kind,
+                                           reference.width};
+                    const auto [context, context_inserted] =
+                        context_references.try_emplace(key, AggregatedReference{reference, 0u});
+                    static_cast<void>(context_inserted);
+                    ++context->second.multiplicity;
+                }
+                for (auto& [key, context] : context_references) {
+                    const auto [aggregate, aggregate_inserted] =
+                        aggregated_references.try_emplace(key, context);
+                    if (!aggregate_inserted &&
+                        context.multiplicity > aggregate->second.multiplicity) {
+                        aggregate->second = std::move(context);
+                    }
                 }
             }
         }
     }
-    std::sort(result.references.begin(), result.references.end(), [](const auto& left, const auto& right) {
-        return std::tie(left.guest_address, left.instruction_address, left.kind, left.width) <
-               std::tie(right.guest_address, right.instruction_address, right.kind, right.width);
-    });
+    result.memory_access_sites = complete_memory_sites.size();
+    for (const auto& site : complete_memory_sites) {
+        if (site.second)
+            ++result.resolved_memory_access_sites;
+        else
+            ++result.unresolved_memory_access_sites;
+    }
+    for (const auto& entry : aggregated_references) {
+        for (std::size_t occurrence = 0u; occurrence < entry.second.multiplicity; ++occurrence)
+            result.references.push_back(entry.second.reference);
+    }
+    std::sort(
+        result.references.begin(),
+        result.references.end(),
+        [](const auto& left, const auto& right) {
+            return std::tie(left.guest_address, left.instruction_address, left.kind, left.width) <
+                   std::tie(
+                       right.guest_address, right.instruction_address, right.kind, right.width);
+        });
     for (const auto& reference : result.references) {
-        if (result.addresses.empty() || result.addresses.back().guest_address != reference.guest_address) {
+        if (result.addresses.empty() ||
+            result.addresses.back().guest_address != reference.guest_address) {
             HardwareAddressSummary summary;
             summary.guest_address = reference.guest_address;
             summary.canonical_address = reference.canonical_address;
@@ -1650,9 +1862,12 @@ DreamcastHardwareAudit audit_dreamcast_hardware(const io::ExecutableImage& image
             summary.runtime_support = reference.runtime_support;
             summary.support_reason = reference.support_reason;
         }
-        if (reference.kind == HardwareAccessKind::Read) ++summary.reads;
-        else if (reference.kind == HardwareAccessKind::Write) ++summary.writes;
-        else ++summary.prefetches;
+        if (reference.kind == HardwareAccessKind::Read)
+            ++summary.reads;
+        else if (reference.kind == HardwareAccessKind::Write)
+            ++summary.writes;
+        else
+            ++summary.prefetches;
         if (std::find(summary.widths.begin(), summary.widths.end(), reference.width) ==
             summary.widths.end())
             summary.widths.push_back(reference.width);
@@ -1661,11 +1876,21 @@ DreamcastHardwareAudit audit_dreamcast_hardware(const io::ExecutableImage& image
     for (auto& summary : result.addresses) {
         std::sort(summary.widths.begin(), summary.widths.end());
         switch (summary.runtime_support) {
-        case HardwareRuntimeSupport::Implemented: ++result.implemented_addresses; break;
-        case HardwareRuntimeSupport::Partial: ++result.partial_addresses; break;
-        case HardwareRuntimeSupport::KnownGap: ++result.known_gap_addresses; break;
-        case HardwareRuntimeSupport::Rejected: ++result.rejected_addresses; break;
-        case HardwareRuntimeSupport::Unmapped: ++result.unmapped_addresses; break;
+        case HardwareRuntimeSupport::Implemented:
+            ++result.implemented_addresses;
+            break;
+        case HardwareRuntimeSupport::Partial:
+            ++result.partial_addresses;
+            break;
+        case HardwareRuntimeSupport::KnownGap:
+            ++result.known_gap_addresses;
+            break;
+        case HardwareRuntimeSupport::Rejected:
+            ++result.rejected_addresses;
+            break;
+        case HardwareRuntimeSupport::Unmapped:
+            ++result.unmapped_addresses;
+            break;
         }
     }
     result.loops = find_natural_hardware_loops(image, analysis);
@@ -1675,45 +1900,78 @@ DreamcastHardwareAudit audit_dreamcast_hardware(const io::ExecutableImage& image
 
 const char* dreamcast_hardware_region_name(const DreamcastHardwareRegion region) noexcept {
     switch (region) {
-    case DreamcastHardwareRegion::SystemBus: return "system_bus";
-    case DreamcastHardwareRegion::SystemAsic: return "system_asic";
-    case DreamcastHardwareRegion::Maple: return "maple";
-    case DreamcastHardwareRegion::GdRom: return "gdrom";
-    case DreamcastHardwareRegion::G1Dma: return "g1_dma";
-    case DreamcastHardwareRegion::G2Dma: return "g2_dma";
-    case DreamcastHardwareRegion::PvrDma: return "pvr_dma";
-    case DreamcastHardwareRegion::Pvr: return "pvr";
-    case DreamcastHardwareRegion::Aica: return "aica";
-    case DreamcastHardwareRegion::AicaRtc: return "aica_rtc";
-    case DreamcastHardwareRegion::AicaRam: return "aica_ram";
-    case DreamcastHardwareRegion::TaFifo: return "ta_fifo";
-    case DreamcastHardwareRegion::TaYuv: return "ta_yuv";
-    case DreamcastHardwareRegion::TaVram: return "ta_vram";
-    case DreamcastHardwareRegion::Vram64: return "vram_64";
-    case DreamcastHardwareRegion::Vram32: return "vram_32";
-    case DreamcastHardwareRegion::StoreQueue: return "store_queue";
-    case DreamcastHardwareRegion::Sh4OnChipRam: return "sh4_on_chip_ram";
-    case DreamcastHardwareRegion::Sh4Mmu: return "sh4_mmu";
-    case DreamcastHardwareRegion::Sh4Cache: return "sh4_cache";
-    case DreamcastHardwareRegion::Sh4Exception: return "sh4_exception";
-    case DreamcastHardwareRegion::Sh4Qacr: return "sh4_qacr";
-    case DreamcastHardwareRegion::Sh4Io: return "sh4_io";
-    case DreamcastHardwareRegion::Sh4Dmac: return "sh4_dmac";
-    case DreamcastHardwareRegion::Sh4Rtc: return "sh4_rtc";
-    case DreamcastHardwareRegion::Sh4Intc: return "sh4_intc";
-    case DreamcastHardwareRegion::Sh4Tmu: return "sh4_tmu";
-    case DreamcastHardwareRegion::Sh4Scif: return "sh4_scif";
-    case DreamcastHardwareRegion::Sh4P4: return "sh4_p4_unmapped";
-    case DreamcastHardwareRegion::Unknown: return "unknown";
+    case DreamcastHardwareRegion::SystemBus:
+        return "system_bus";
+    case DreamcastHardwareRegion::SystemAsic:
+        return "system_asic";
+    case DreamcastHardwareRegion::Maple:
+        return "maple";
+    case DreamcastHardwareRegion::GdRom:
+        return "gdrom";
+    case DreamcastHardwareRegion::G1Dma:
+        return "g1_dma";
+    case DreamcastHardwareRegion::G2Dma:
+        return "g2_dma";
+    case DreamcastHardwareRegion::PvrDma:
+        return "pvr_dma";
+    case DreamcastHardwareRegion::Pvr:
+        return "pvr";
+    case DreamcastHardwareRegion::Aica:
+        return "aica";
+    case DreamcastHardwareRegion::AicaRtc:
+        return "aica_rtc";
+    case DreamcastHardwareRegion::AicaRam:
+        return "aica_ram";
+    case DreamcastHardwareRegion::TaFifo:
+        return "ta_fifo";
+    case DreamcastHardwareRegion::TaYuv:
+        return "ta_yuv";
+    case DreamcastHardwareRegion::TaVram:
+        return "ta_vram";
+    case DreamcastHardwareRegion::Vram64:
+        return "vram_64";
+    case DreamcastHardwareRegion::Vram32:
+        return "vram_32";
+    case DreamcastHardwareRegion::StoreQueue:
+        return "store_queue";
+    case DreamcastHardwareRegion::Sh4OnChipRam:
+        return "sh4_on_chip_ram";
+    case DreamcastHardwareRegion::Sh4Mmu:
+        return "sh4_mmu";
+    case DreamcastHardwareRegion::Sh4Cache:
+        return "sh4_cache";
+    case DreamcastHardwareRegion::Sh4Exception:
+        return "sh4_exception";
+    case DreamcastHardwareRegion::Sh4Qacr:
+        return "sh4_qacr";
+    case DreamcastHardwareRegion::Sh4Io:
+        return "sh4_io";
+    case DreamcastHardwareRegion::Sh4Dmac:
+        return "sh4_dmac";
+    case DreamcastHardwareRegion::Sh4Rtc:
+        return "sh4_rtc";
+    case DreamcastHardwareRegion::Sh4Intc:
+        return "sh4_intc";
+    case DreamcastHardwareRegion::Sh4Tmu:
+        return "sh4_tmu";
+    case DreamcastHardwareRegion::Sh4Scif:
+        return "sh4_scif";
+    case DreamcastHardwareRegion::Sh4P4:
+        return "sh4_p4_unmapped";
+    case DreamcastHardwareRegion::Unknown:
+        return "unknown";
     }
     return "unknown";
 }
 
 const char* hardware_access_kind_name(const HardwareAccessKind kind) noexcept {
     switch (kind) {
-    case HardwareAccessKind::Read: return "read";
-    case HardwareAccessKind::Write: return "write";
-    case HardwareAccessKind::Prefetch: return "prefetch";
+    case HardwareAccessKind::Read:
+        return "read";
+    case HardwareAccessKind::Write:
+        return "write";
+    case HardwareAccessKind::Prefetch:
+        return "prefetch";
     }
     return "read";
 }
@@ -1721,22 +1979,32 @@ const char* hardware_access_kind_name(const HardwareAccessKind kind) noexcept {
 const char*
 hardware_loop_classification_name(const HardwareLoopClassification classification) noexcept {
     switch (classification) {
-    case HardwareLoopClassification::Counter: return "counter";
-    case HardwareLoopClassification::RamPoll: return "ram_poll";
-    case HardwareLoopClassification::MmioPoll: return "mmio_poll";
-    case HardwareLoopClassification::Mixed: return "mixed";
-    case HardwareLoopClassification::Unknown: return "unknown";
+    case HardwareLoopClassification::Counter:
+        return "counter";
+    case HardwareLoopClassification::RamPoll:
+        return "ram_poll";
+    case HardwareLoopClassification::MmioPoll:
+        return "mmio_poll";
+    case HardwareLoopClassification::Mixed:
+        return "mixed";
+    case HardwareLoopClassification::Unknown:
+        return "unknown";
     }
     return "unknown";
 }
 
 const char* hardware_runtime_support_name(const HardwareRuntimeSupport support) noexcept {
     switch (support) {
-    case HardwareRuntimeSupport::Implemented: return "implemented";
-    case HardwareRuntimeSupport::Partial: return "partial";
-    case HardwareRuntimeSupport::KnownGap: return "known_gap";
-    case HardwareRuntimeSupport::Rejected: return "rejected";
-    case HardwareRuntimeSupport::Unmapped: return "unmapped";
+    case HardwareRuntimeSupport::Implemented:
+        return "implemented";
+    case HardwareRuntimeSupport::Partial:
+        return "partial";
+    case HardwareRuntimeSupport::KnownGap:
+        return "known_gap";
+    case HardwareRuntimeSupport::Rejected:
+        return "rejected";
+    case HardwareRuntimeSupport::Unmapped:
+        return "unmapped";
     }
     return "unmapped";
 }
@@ -1748,22 +2016,20 @@ std::string format_hardware_audit_text(const DreamcastHardwareAudit& audit) {
            << "Reachable instructions: " << audit.reachable_instructions << "\n"
            << "Reachable functions: " << audit.reachable_functions << "\n"
            << "Unknown instructions: " << audit.unknown_instructions << "\n"
-           << "Memory access sites: " << audit.memory_access_sites << " (constant="
-           << audit.resolved_memory_access_sites << ", dynamic="
-           << audit.unresolved_memory_access_sites << ")\n"
-           << "Hardware addresses: " << audit.addresses.size() << " (implemented="
-           << audit.implemented_addresses << ", partial=" << audit.partial_addresses
-           << ", known_gap=" << audit.known_gap_addresses
-           << ", rejected=" << audit.rejected_addresses
-           << ", unmapped=" << audit.unmapped_addresses << ")\n"
+           << "Memory access sites: " << audit.memory_access_sites
+           << " (constant=" << audit.resolved_memory_access_sites
+           << ", dynamic=" << audit.unresolved_memory_access_sites << ")\n"
+           << "Hardware addresses: " << audit.addresses.size()
+           << " (implemented=" << audit.implemented_addresses
+           << ", partial=" << audit.partial_addresses << ", known_gap=" << audit.known_gap_addresses
+           << ", rejected=" << audit.rejected_addresses << ", unmapped=" << audit.unmapped_addresses
+           << ")\n"
            << "Natural loops: " << audit.loops.size() << "\n"
            << "Unresolved poll/guard loops: " << audit.unresolved_poll_guard_loops << "\n";
     for (const auto& diagnostic : audit.instruction_diagnostics) {
         output << "Instruction diagnostic: address=" << hex8(diagnostic.address)
-               << " opcode=" << hex4(diagnostic.opcode)
-               << " reason=" << diagnostic.reason
-               << " evidence=" << control_flow_evidence_name(diagnostic.evidence)
-               << " incoming=";
+               << " opcode=" << hex4(diagnostic.opcode) << " reason=" << diagnostic.reason
+               << " evidence=" << control_flow_evidence_name(diagnostic.evidence) << " incoming=";
         for (std::size_t index = 0u; index < diagnostic.incoming_addresses.size(); ++index) {
             if (index != 0u) output << ',';
             output << hex8(diagnostic.incoming_addresses[index]);
@@ -1775,8 +2041,7 @@ std::string format_hardware_audit_text(const DreamcastHardwareAudit& audit) {
                << " latch=" << hex8(loop.latch_address)
                << " backedge=" << hex8(loop.backedge_instruction_address)
                << " classification=" << hardware_loop_classification_name(loop.classification)
-               << " unresolved_guard_access="
-               << (loop.unresolved_guard_access ? "yes" : "no")
+               << " unresolved_guard_access=" << (loop.unresolved_guard_access ? "yes" : "no")
                << " unresolved_guard_read_sites=";
         for (std::size_t index = 0u;
              index < loop.unresolved_guard_read_instruction_addresses.size();
@@ -1784,8 +2049,7 @@ std::string format_hardware_audit_text(const DreamcastHardwareAudit& audit) {
             if (index != 0u) output << ',';
             output << hex8(loop.unresolved_guard_read_instruction_addresses[index]);
         }
-        output
-               << " blocks=";
+        output << " blocks=";
         for (std::size_t index = 0u; index < loop.block_addresses.size(); ++index) {
             if (index != 0u) output << ',';
             output << hex8(loop.block_addresses[index]);
@@ -1814,9 +2078,8 @@ std::string format_hardware_audit_text(const DreamcastHardwareAudit& audit) {
                << " region=" << dreamcast_hardware_region_name(address.region)
                << " aperture=" << (address.aperture_mapped ? "mapped" : "unmapped")
                << " support=" << hardware_runtime_support_name(address.runtime_support)
-               << " reason=" << address.support_reason
-               << " reads=" << address.reads << " writes=" << address.writes
-               << " prefetches=" << address.prefetches;
+               << " reason=" << address.support_reason << " reads=" << address.reads
+               << " writes=" << address.writes << " prefetches=" << address.prefetches;
         if (!address.register_name.empty()) output << " register=" << address.register_name;
         output << " widths=";
         for (std::size_t index = 0u; index < address.widths.size(); ++index) {
@@ -1837,8 +2100,8 @@ std::string format_hardware_audit_json(const DreamcastHardwareAudit& audit,
                                        const bool include_accesses) {
     std::ostringstream output;
     io::write_json_report_header(output, "katana.hardware-audit.v4", "dreamcast_hardware_audit");
-    output << ",\"scope\":" << io::quote_json(audit.scope) << ",\"image_bytes\":"
-           << audit.image_bytes
+    output << ",\"scope\":" << io::quote_json(audit.scope)
+           << ",\"image_bytes\":" << audit.image_bytes
            << ",\"reachable_instructions\":" << audit.reachable_instructions
            << ",\"reachable_functions\":" << audit.reachable_functions
            << ",\"unknown_instructions\":" << audit.unknown_instructions
@@ -1858,10 +2121,11 @@ std::string format_hardware_audit_json(const DreamcastHardwareAudit& audit,
         const auto& diagnostic = audit.instruction_diagnostics[index];
         output << "{\"address\":" << io::quote_json(hex8(diagnostic.address))
                << ",\"opcode\":" << io::quote_json(hex4(diagnostic.opcode))
-               << ",\"reason\":" << io::quote_json(diagnostic.reason)
-               << ",\"evidence\":" << io::quote_json(control_flow_evidence_name(diagnostic.evidence))
+               << ",\"reason\":" << io::quote_json(diagnostic.reason) << ",\"evidence\":"
+               << io::quote_json(control_flow_evidence_name(diagnostic.evidence))
                << ",\"incoming_addresses\":[";
-        for (std::size_t incoming = 0u; incoming < diagnostic.incoming_addresses.size(); ++incoming) {
+        for (std::size_t incoming = 0u; incoming < diagnostic.incoming_addresses.size();
+             ++incoming) {
             if (incoming != 0u) output << ',';
             output << io::quote_json(hex8(diagnostic.incoming_addresses[incoming]));
         }
@@ -1880,14 +2144,12 @@ std::string format_hardware_audit_json(const DreamcastHardwareAudit& audit,
         output << "{\"header_address\":" << io::quote_json(hex8(loop.header_address))
                << ",\"latch_address\":" << io::quote_json(hex8(loop.latch_address))
                << ",\"backedge_instruction_address\":"
-               << io::quote_json(hex8(loop.backedge_instruction_address))
-               << ",\"classification\":"
+               << io::quote_json(hex8(loop.backedge_instruction_address)) << ",\"classification\":"
                << io::quote_json(hardware_loop_classification_name(loop.classification))
                << ",\"unresolved_guard_access\":"
                << (loop.unresolved_guard_access ? "true" : "false")
                << ",\"unresolved_guard_read_instruction_addresses\":[";
-        for (std::size_t site = 0u;
-             site < loop.unresolved_guard_read_instruction_addresses.size();
+        for (std::size_t site = 0u; site < loop.unresolved_guard_read_instruction_addresses.size();
              ++site) {
             if (site != 0u) output << ',';
             output << io::quote_json(hex8(loop.unresolved_guard_read_instruction_addresses[site]));
@@ -1904,26 +2166,22 @@ std::string format_hardware_audit_json(const DreamcastHardwareAudit& audit,
             output << io::quote_json(hex8(loop.counter_instruction_addresses[site]));
         }
         output << "],\"accesses\":[";
-        for (std::size_t access_index = 0u; access_index < loop.accesses.size();
-             ++access_index) {
+        for (std::size_t access_index = 0u; access_index < loop.accesses.size(); ++access_index) {
             if (access_index != 0u) output << ',';
             const auto& access = loop.accesses[access_index];
             output << "{\"instruction_address\":"
                    << io::quote_json(hex8(access.instruction_address))
                    << ",\"guest_address\":" << io::quote_json(hex8(access.guest_address))
-                   << ",\"canonical_address\":"
-                   << io::quote_json(hex8(access.canonical_address))
+                   << ",\"canonical_address\":" << io::quote_json(hex8(access.canonical_address))
                    << ",\"region\":"
                    << io::quote_json(dreamcast_hardware_region_name(access.region))
                    << ",\"kind\":" << io::quote_json(hardware_access_kind_name(access.kind))
                    << ",\"width\":" << static_cast<unsigned>(access.width)
                    << ",\"linear_memory\":" << (access.linear_memory ? "true" : "false")
-                   << ",\"aperture_mapped\":"
-                   << (access.aperture_mapped ? "true" : "false")
+                   << ",\"aperture_mapped\":" << (access.aperture_mapped ? "true" : "false")
                    << ",\"runtime_support\":"
                    << io::quote_json(hardware_runtime_support_name(access.runtime_support))
-                   << ",\"guards_loop\":" << (access.guards_loop ? "true" : "false")
-                   << '}';
+                   << ",\"guards_loop\":" << (access.guards_loop ? "true" : "false") << '}';
         }
         output << "]}";
     }
@@ -1963,18 +2221,15 @@ std::string format_hardware_audit_json(const DreamcastHardwareAudit& audit,
             output << "{\"instruction_address\":"
                    << io::quote_json(hex8(reference.instruction_address))
                    << ",\"guest_address\":" << io::quote_json(hex8(reference.guest_address))
-                   << ",\"canonical_address\":"
-                   << io::quote_json(hex8(reference.canonical_address))
+                   << ",\"canonical_address\":" << io::quote_json(hex8(reference.canonical_address))
                    << ",\"region\":"
                    << io::quote_json(dreamcast_hardware_region_name(reference.region))
                    << ",\"kind\":" << io::quote_json(hardware_access_kind_name(reference.kind))
                    << ",\"width\":" << static_cast<unsigned>(reference.width)
-                   << ",\"aperture_mapped\":"
-                   << (reference.aperture_mapped ? "true" : "false")
+                   << ",\"aperture_mapped\":" << (reference.aperture_mapped ? "true" : "false")
                    << ",\"runtime_support\":"
                    << io::quote_json(hardware_runtime_support_name(reference.runtime_support))
-                   << ",\"support_reason\":" << io::quote_json(reference.support_reason)
-                   << "}";
+                   << ",\"support_reason\":" << io::quote_json(reference.support_reason) << "}";
         }
         output << ']';
     }

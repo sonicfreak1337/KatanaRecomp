@@ -35,8 +35,8 @@ void write_u32(std::vector<std::uint8_t>& bytes,
         bytes.at(offset + shift / 8u) = static_cast<std::uint8_t>(value >> shift);
 }
 
-katana::analysis::DreamcastHardwareAudit
-audit_fixture(const std::string& name, std::vector<std::uint8_t> bytes) {
+katana::analysis::DreamcastHardwareAudit audit_fixture(const std::string& name,
+                                                       std::vector<std::uint8_t> bytes) {
     katana::io::ExecutableImage image(name);
     image.add_segment({".text",
                        0u,
@@ -192,8 +192,7 @@ int main() {
     write_u16(gbr_access_bytes, 0x1Au, 0x000Bu); // RTS
     write_u16(gbr_access_bytes, 0x1Cu, 0x0009u); // NOP
     write_u32(gbr_access_bytes, 0x20u, 0x00800000u);
-    const auto gbr_accesses =
-        audit_fixture("gbr-memory-families", std::move(gbr_access_bytes));
+    const auto gbr_accesses = audit_fixture("gbr-memory-families", std::move(gbr_access_bytes));
     const auto references_at = [](const katana::analysis::DreamcastHardwareAudit& source,
                                   const std::uint32_t instruction_address) {
         return static_cast<std::size_t>(std::count_if(
@@ -204,20 +203,20 @@ int main() {
     const auto accesses_of_kind = [](const katana::analysis::DreamcastHardwareAudit& source,
                                      const katana::analysis::HardwareAccessKind kind) {
         return static_cast<std::size_t>(std::count_if(
-            source.references.begin(), source.references.end(),
-            [kind](const auto& reference) { return reference.kind == kind; }));
+            source.references.begin(), source.references.end(), [kind](const auto& reference) {
+                return reference.kind == kind;
+            }));
     };
-    require(gbr_accesses.memory_access_sites == 11u &&
-                gbr_accesses.resolved_memory_access_sites == 11u &&
-                gbr_accesses.unresolved_memory_access_sites == 0u &&
-                gbr_accesses.references.size() == 13u &&
-                accesses_of_kind(gbr_accesses, katana::analysis::HardwareAccessKind::Read) == 7u &&
-                accesses_of_kind(gbr_accesses, katana::analysis::HardwareAccessKind::Write) == 6u &&
-                references_at(gbr_accesses, 0x0Cu) == 1u &&
-                references_at(gbr_accesses, 0x0Eu) == 2u &&
-                references_at(gbr_accesses, 0x10u) == 2u &&
-                references_at(gbr_accesses, 0x12u) == 2u,
-            "GBR-MOV- oder Byte-Read-Modify-Write-Familien fehlen im Hardwareauditor.");
+    require(
+        gbr_accesses.memory_access_sites == 11u &&
+            gbr_accesses.resolved_memory_access_sites == 11u &&
+            gbr_accesses.unresolved_memory_access_sites == 0u &&
+            gbr_accesses.references.size() == 13u &&
+            accesses_of_kind(gbr_accesses, katana::analysis::HardwareAccessKind::Read) == 7u &&
+            accesses_of_kind(gbr_accesses, katana::analysis::HardwareAccessKind::Write) == 6u &&
+            references_at(gbr_accesses, 0x0Cu) == 1u && references_at(gbr_accesses, 0x0Eu) == 2u &&
+            references_at(gbr_accesses, 0x10u) == 2u && references_at(gbr_accesses, 0x12u) == 2u,
+        "GBR-MOV- oder Byte-Read-Modify-Write-Familien fehlen im Hardwareauditor.");
     require(std::all_of(gbr_accesses.references.begin(),
                         gbr_accesses.references.end(),
                         [](const auto& reference) {
@@ -252,7 +251,8 @@ int main() {
                 fmov_accesses.unresolved_memory_access_sites == 0u &&
                 fmov_accesses.references.size() == 14u &&
                 accesses_of_kind(fmov_accesses, katana::analysis::HardwareAccessKind::Read) == 7u &&
-                accesses_of_kind(fmov_accesses, katana::analysis::HardwareAccessKind::Write) == 7u &&
+                accesses_of_kind(fmov_accesses, katana::analysis::HardwareAccessKind::Write) ==
+                    7u &&
                 references_at(fmov_accesses, 0x1Cu) == 2u,
             "FMOV-Buszugriffe oder TAS.B-Read-Modify-Write werden nicht vollstaendig erfasst.");
     require(std::count_if(fmov_accesses.references.begin(),
@@ -313,10 +313,11 @@ int main() {
     write_u32(pc_relative_bytes, 0x0Cu, 0x89ABCDEFu);
     const auto pc_relative_accesses =
         audit_fixture("pc-relative-memory-families", std::move(pc_relative_bytes));
-    require(pc_relative_accesses.memory_access_sites == 2u &&
-                pc_relative_accesses.resolved_memory_access_sites == 2u &&
-                pc_relative_accesses.unresolved_memory_access_sites == 0u,
-            "PC-relative MOV.W-/MOV.L-Reads fehlen gegenueber dem zentralen Memory-Effect-Vertrag.");
+    require(
+        pc_relative_accesses.memory_access_sites == 2u &&
+            pc_relative_accesses.resolved_memory_access_sites == 2u &&
+            pc_relative_accesses.unresolved_memory_access_sites == 0u,
+        "PC-relative MOV.W-/MOV.L-Reads fehlen gegenueber dem zentralen Memory-Effect-Vertrag.");
 
     std::vector<std::uint8_t> special_memory_bytes(0x20u, 0u);
     write_u16(special_memory_bytes, 0x00u, 0xD105u); // MOV.L @(0x18,PC),R1
@@ -414,6 +415,69 @@ int main() {
                     katana::analysis::DreamcastHardwareRegion::Sh4P4,
             "SH-4-Predecrement verliert die 32-Bit-Wraparound-Adresse.");
 
+    constexpr std::uint32_t dual_role_base = 0xFF000000u;
+    std::vector<std::uint8_t> dual_role_delay_slot_bytes(0x0Cu, 0u);
+    write_u16(dual_role_delay_slot_bytes, 0x00u, 0x0009u); // NOP
+    write_u16(dual_role_delay_slot_bytes, 0x02u, 0x8DFFu); // BT/S to its delay slot
+    write_u16(dual_role_delay_slot_bytes, 0x04u, 0xD100u); // MOV.L @(0,PC),R1
+    write_u16(dual_role_delay_slot_bytes, 0x06u, 0x000Bu); // RTS
+    write_u16(dual_role_delay_slot_bytes, 0x08u, 0x0009u); // NOP and literal low word
+    write_u16(dual_role_delay_slot_bytes, 0x0Au, 0x0009u); // literal high word
+    katana::io::ExecutableImage dual_role_delay_slot_image("dual-role-delay-slot-audit");
+    dual_role_delay_slot_image.add_segment({".text",
+                                            dual_role_base,
+                                            0u,
+                                            dual_role_delay_slot_bytes.size(),
+                                            katana::io::SegmentKind::Code,
+                                            {true, false, true},
+                                            std::move(dual_role_delay_slot_bytes)});
+    dual_role_delay_slot_image.add_entry_point(dual_role_base);
+    const auto dual_role_delay_slot_analysis =
+        katana::analysis::analyze_control_flow(dual_role_delay_slot_image);
+    const auto dual_role_delay_slot_audit = katana::analysis::audit_dreamcast_hardware(
+        dual_role_delay_slot_image, dual_role_delay_slot_analysis);
+    require(dual_role_delay_slot_audit.memory_access_sites == 1u &&
+                dual_role_delay_slot_audit.resolved_memory_access_sites == 1u &&
+                dual_role_delay_slot_audit.unresolved_memory_access_sites == 0u &&
+                dual_role_delay_slot_audit.references.size() == 1u &&
+                dual_role_delay_slot_audit.references.front().instruction_address ==
+                    dual_role_base + 4u &&
+                dual_role_delay_slot_audit.references.front().guest_address == dual_role_base + 8u,
+            "Delay-Slot mit zusaetzlichem Normaleinstieg wird im Hardware-Audit nicht als eine "
+            "statische Speicherstelle aggregiert.");
+
+    std::vector<std::uint8_t> mixed_context_delay_slot_bytes(0x14u, 0u);
+    write_u16(mixed_context_delay_slot_bytes, 0x00u, 0xD103u); // MOV.L @(0x10,PC),R1
+    write_u16(mixed_context_delay_slot_bytes, 0x02u, 0x8D03u); // BT/S 0x0C
+    write_u16(mixed_context_delay_slot_bytes, 0x04u, 0x6012u); // MOV.L @R1,R0
+    write_u16(mixed_context_delay_slot_bytes, 0x06u, 0x000Bu); // RTS
+    write_u16(mixed_context_delay_slot_bytes, 0x08u, 0x0009u); // NOP
+    write_u16(mixed_context_delay_slot_bytes, 0x0Cu, 0x000Bu); // RTS
+    write_u16(mixed_context_delay_slot_bytes, 0x0Eu, 0x0009u); // NOP
+    write_u32(mixed_context_delay_slot_bytes, 0x10u, 0xA05F8000u);
+    katana::io::ExecutableImage mixed_context_delay_slot_image("mixed-context-delay-slot-audit");
+    mixed_context_delay_slot_image.add_segment({".text",
+                                                0u,
+                                                0u,
+                                                mixed_context_delay_slot_bytes.size(),
+                                                katana::io::SegmentKind::Code,
+                                                {true, false, true},
+                                                std::move(mixed_context_delay_slot_bytes)});
+    mixed_context_delay_slot_image.add_entry_point(0u);
+    mixed_context_delay_slot_image.add_entry_point(4u);
+    const auto mixed_context_delay_slot_analysis =
+        katana::analysis::analyze_control_flow(mixed_context_delay_slot_image);
+    const auto mixed_context_delay_slot = katana::analysis::audit_dreamcast_hardware(
+        mixed_context_delay_slot_image, mixed_context_delay_slot_analysis);
+    require(mixed_context_delay_slot.memory_access_sites == 2u &&
+                mixed_context_delay_slot.resolved_memory_access_sites == 1u &&
+                mixed_context_delay_slot.unresolved_memory_access_sites == 1u &&
+                mixed_context_delay_slot.references.size() == 1u &&
+                mixed_context_delay_slot.references.front().instruction_address == 0x04u &&
+                mixed_context_delay_slot.references.front().guest_address == 0xA05F8000u,
+            "Hardware-Audit verliert bei mehreren Delay-Slot-Kontexten entweder konservative "
+            "Aufloesung oder konkrete Zugriffsevidenz.");
+
     std::vector<std::uint8_t> forward_counter_bytes(0x14u, 0u);
     write_u16(forward_counter_bytes, 0x00u, 0xA006u); // BRA 0x10
     write_u16(forward_counter_bytes, 0x02u, 0x0009u); // NOP
@@ -425,17 +489,18 @@ int main() {
     write_u16(forward_counter_bytes, 0x12u, 0x0009u); // NOP
     const auto forward_counter =
         audit_fixture("forward-layout-counter-loop", std::move(forward_counter_bytes));
-    require(forward_counter.loops.size() == 1u &&
-                forward_counter.loops.front().header_address == 0x10u &&
-                forward_counter.loops.front().latch_address == 0x08u &&
-                forward_counter.loops.front().backedge_instruction_address == 0x0Au &&
-                forward_counter.loops.front().block_addresses ==
-                    std::vector<std::uint32_t>({0x08u, 0x10u}) &&
-                forward_counter.loops.front().classification ==
-                    katana::analysis::HardwareLoopClassification::Counter &&
-                forward_counter.loops.front().counter_instruction_addresses ==
-                    std::vector<std::uint32_t>({0x08u}),
-            "Vorwaerts angeordnete echte Backedge wird nicht per Dominanz als Counterloop erkannt.");
+    require(
+        forward_counter.loops.size() == 1u &&
+            forward_counter.loops.front().header_address == 0x10u &&
+            forward_counter.loops.front().latch_address == 0x08u &&
+            forward_counter.loops.front().backedge_instruction_address == 0x0Au &&
+            forward_counter.loops.front().block_addresses ==
+                std::vector<std::uint32_t>({0x08u, 0x10u}) &&
+            forward_counter.loops.front().classification ==
+                katana::analysis::HardwareLoopClassification::Counter &&
+            forward_counter.loops.front().counter_instruction_addresses ==
+                std::vector<std::uint32_t>({0x08u}),
+        "Vorwaerts angeordnete echte Backedge wird nicht per Dominanz als Counterloop erkannt.");
 
     const auto ram_poll =
         audit_fixture("backward-layout-ram-poll", backward_poll_fixture(0x0F001000u));
@@ -502,20 +567,19 @@ int main() {
     write_u16(dynamic_guard_bytes, 0x08u, 0x0009u); // NOP
     const auto dynamic_guard =
         audit_fixture("dynamic-address-poll-guard", std::move(dynamic_guard_bytes));
-    require(dynamic_guard.loops.size() == 1u &&
-                dynamic_guard.loops.front().classification ==
-                    katana::analysis::HardwareLoopClassification::Unknown &&
-                dynamic_guard.loops.front().unresolved_guard_access &&
-                dynamic_guard.loops.front().unresolved_guard_read_instruction_addresses ==
-                    std::vector<std::uint32_t>({0x00u}) &&
-                dynamic_guard.loops.front().accesses.empty() &&
-                dynamic_guard.unresolved_poll_guard_loops == 1u &&
-                katana::analysis::is_unresolved_poll_guard_loop(dynamic_guard.loops.front()),
-            "Dynamischer syntaktischer Read verliert seine Poll-/Guard-Provenienz im Strict-Modus.");
-    const auto dynamic_guard_text =
-        katana::analysis::format_hardware_audit_text(dynamic_guard);
-    const auto dynamic_guard_json =
-        katana::analysis::format_hardware_audit_json(dynamic_guard);
+    require(
+        dynamic_guard.loops.size() == 1u &&
+            dynamic_guard.loops.front().classification ==
+                katana::analysis::HardwareLoopClassification::Unknown &&
+            dynamic_guard.loops.front().unresolved_guard_access &&
+            dynamic_guard.loops.front().unresolved_guard_read_instruction_addresses ==
+                std::vector<std::uint32_t>({0x00u}) &&
+            dynamic_guard.loops.front().accesses.empty() &&
+            dynamic_guard.unresolved_poll_guard_loops == 1u &&
+            katana::analysis::is_unresolved_poll_guard_loop(dynamic_guard.loops.front()),
+        "Dynamischer syntaktischer Read verliert seine Poll-/Guard-Provenienz im Strict-Modus.");
+    const auto dynamic_guard_text = katana::analysis::format_hardware_audit_text(dynamic_guard);
+    const auto dynamic_guard_json = katana::analysis::format_hardware_audit_json(dynamic_guard);
     require(dynamic_guard_text.find("unresolved_guard_read_sites=0x00000000") !=
                     std::string::npos &&
                 dynamic_guard_json.find(
@@ -535,16 +599,17 @@ int main() {
     write_u32(overwritten_t_bytes, 0x14u, 0x0C005000u);
     const auto overwritten_t =
         audit_fixture("intervening-t-writer", std::move(overwritten_t_bytes));
-    require(overwritten_t.loops.size() == 1u &&
-                overwritten_t.loops.front().classification ==
-                    katana::analysis::HardwareLoopClassification::Unknown &&
-                overwritten_t.loops.front().unresolved_guard_access &&
-                overwritten_t.loops.front().unresolved_guard_read_instruction_addresses.empty() &&
-                overwritten_t.loops.front().accesses.size() == 2u &&
-                !overwritten_t.loops.front().accesses.back().guards_loop &&
-                overwritten_t.unresolved_poll_guard_loops == 0u &&
-                !katana::analysis::is_unresolved_poll_guard_loop(overwritten_t.loops.front()),
-            "Intervenierender echter T-Schreiber wird faelschlich zum aelteren Poll durchgereicht.");
+    require(
+        overwritten_t.loops.size() == 1u &&
+            overwritten_t.loops.front().classification ==
+                katana::analysis::HardwareLoopClassification::Unknown &&
+            overwritten_t.loops.front().unresolved_guard_access &&
+            overwritten_t.loops.front().unresolved_guard_read_instruction_addresses.empty() &&
+            overwritten_t.loops.front().accesses.size() == 2u &&
+            !overwritten_t.loops.front().accesses.back().guards_loop &&
+            overwritten_t.unresolved_poll_guard_loops == 0u &&
+            !katana::analysis::is_unresolved_poll_guard_loop(overwritten_t.loops.front()),
+        "Intervenierender echter T-Schreiber wird faelschlich zum aelteren Poll durchgereicht.");
 
     std::vector<std::uint8_t> sr_guard_bytes(0x14u, 0u);
     write_u16(sr_guard_bytes, 0x00u, 0xD103u); // MOV.L @(0x10,PC),R1
@@ -714,9 +779,8 @@ int main() {
     write_u16(unknown_bytes, 0x0Au, 0xAFFDu); // BRA 0x08
     write_u16(unknown_bytes, 0x0Cu, 0x0009u); // NOP
     const auto unknown = audit_fixture("unknown-loop", std::move(unknown_bytes));
-    require(unknown.loops.size() == 1u &&
-                unknown.loops.front().classification ==
-                    katana::analysis::HardwareLoopClassification::Unknown,
+    require(unknown.loops.size() == 1u && unknown.loops.front().classification ==
+                                              katana::analysis::HardwareLoopClassification::Unknown,
             "Schleife ohne belastbare Counter- oder Poll-Evidenz wird geraten statt unknown.");
 
     std::vector<std::uint8_t> irreducible_bytes(0x14u, 0u);
@@ -769,12 +833,12 @@ int main() {
     write_u16(rootless_bytes, 0x02u, 0x0009u); // NOP
     katana::io::ExecutableImage rootless_image("rootless-scc");
     rootless_image.add_segment({".text",
-                               0u,
-                               0u,
-                               rootless_bytes.size(),
-                               katana::io::SegmentKind::Code,
-                               {true, false, true},
-                               std::move(rootless_bytes)});
+                                0u,
+                                0u,
+                                rootless_bytes.size(),
+                                katana::io::SegmentKind::Code,
+                                {true, false, true},
+                                std::move(rootless_bytes)});
     rootless_image.add_entry_point(0u);
     auto rootless_analysis = katana::analysis::analyze_control_flow(rootless_image);
     rootless_analysis.recursive.functions.clear();

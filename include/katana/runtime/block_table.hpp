@@ -121,9 +121,8 @@ struct RuntimeBlockTableSnapshot {
 
 [[nodiscard]] std::uint32_t canonical_physical_address(std::uint32_t address) noexcept;
 [[nodiscard]] std::string stable_runtime_block_identity(const RuntimeBlock& block);
-[[nodiscard]] BlockExit execute_runtime_block(const RuntimeBlock& block,
-                                              CpuState& cpu,
-                                              BlockExecutionContext& context);
+[[nodiscard]] BlockExit
+execute_runtime_block(const RuntimeBlock& block, CpuState& cpu, BlockExecutionContext& context);
 
 class RuntimeBlockTable {
   public:
@@ -135,6 +134,11 @@ class RuntimeBlockTable {
                             const BlockVariantKey& target_variant);
     [[nodiscard]] std::vector<RuntimeBlockHandle>
     register_static_bulk(std::vector<RuntimeBlock> blocks);
+    // Contextual entry blocks may share instruction bytes (for example when a
+    // branch target is also its owner's delay slot). Shared virtual bytes must
+    // describe the same physical mapping and every dispatch start stays unique.
+    [[nodiscard]] std::vector<RuntimeBlockHandle>
+    register_static_contextual_bulk(std::vector<RuntimeBlock> blocks);
     void seal_static() noexcept;
     [[nodiscard]] RuntimeBlockHandle register_bootstrap_static(RuntimeBlock block);
     [[nodiscard]] RuntimeBlockHandle register_runtime(RuntimeBlock block);
@@ -200,7 +204,8 @@ class RuntimeBlockTable {
     using PhysicalIndex = std::map<PhysicalLookupKey, std::uint64_t>;
     using AliasIndex = std::map<std::uint32_t, std::set<std::uint64_t>>;
 
-    [[nodiscard]] RuntimeBlockHandle insert(RuntimeBlock block, bool runtime_registered);
+    [[nodiscard]] RuntimeBlockHandle
+    insert(RuntimeBlock block, bool runtime_registered, bool allow_contextual_overlap = false);
     [[nodiscard]] bool dispatchable(const Record& record) const noexcept;
     [[nodiscard]] std::optional<std::uint64_t>
     overlapping_active_virtual(const RuntimeBlock& block,
@@ -235,6 +240,7 @@ class RuntimeBlockTable {
     std::uint64_t next_id_ = 1u;
     std::size_t active_count_ = 0u;
     bool static_sealed_ = false;
+    bool contextual_virtual_overlaps_ = false;
     const ExecutableCodeTracker* code_tracker_ = nullptr;
     RuntimeBlockLookupMode lookup_mode_ = RuntimeBlockLookupMode::Direct;
     mutable RuntimeBlockLookupCounters lookup_counters_;

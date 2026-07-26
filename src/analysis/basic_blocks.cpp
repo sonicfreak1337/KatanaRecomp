@@ -15,9 +15,9 @@ namespace {
 
 std::size_t terminal_index(const std::span<const katana::sh4::DisassemblyLine> lines,
                            const std::size_t control_index) {
-    if (lines[control_index].instruction.has_delay_slot && control_index + 1u < lines.size() &&
-        lines[control_index + 1u].address == lines[control_index].address + 2u &&
-        lines[control_index + 1u].is_delay_slot) {
+    if (!lines[control_index].is_delay_slot && lines[control_index].instruction.has_delay_slot &&
+        control_index + 1u < lines.size() &&
+        lines[control_index + 1u].address == lines[control_index].address + 2u) {
         return control_index + 1u;
     }
 
@@ -119,15 +119,27 @@ build_basic_blocks(const std::span<const katana::sh4::DisassemblyLine> lines,
         const auto end_exclusive = leader_position + 1u < ordered_leaders.size()
                                        ? ordered_leaders[leader_position + 1u]
                                        : lines.size();
+        const bool overlaps_normal_delay_slot =
+            end_exclusive < lines.size() && end_exclusive > first_index &&
+            !lines[end_exclusive].is_delay_slot && !lines[end_exclusive - 1u].is_delay_slot &&
+            lines[end_exclusive - 1u].instruction.has_delay_slot &&
+            lines[end_exclusive].address == lines[end_exclusive - 1u].address + 2u;
+        const auto copy_end = end_exclusive + (overlaps_normal_delay_slot ? 1u : 0u);
 
         BasicBlock block;
         block.id = blocks.size();
         block.start_address = lines[first_index].address;
-        block.end_address = lines[end_exclusive - 1u].address;
+        block.end_address = lines[copy_end - 1u].address;
 
         block.lines.insert(block.lines.end(),
                            lines.begin() + static_cast<std::ptrdiff_t>(first_index),
-                           lines.begin() + static_cast<std::ptrdiff_t>(end_exclusive));
+                           lines.begin() + static_cast<std::ptrdiff_t>(copy_end));
+        if (overlaps_normal_delay_slot) {
+            // A branch may target its own delay-slot address. The physical
+            // instruction then has two contexts: it closes the owner block as
+            // a delay slot and also starts a normal-entry block.
+            block.lines.back().is_delay_slot = true;
+        }
 
         blocks.push_back(std::move(block));
     }
