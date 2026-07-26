@@ -3,8 +3,8 @@
 KR-4701 definiert `katana-native-video` als Runtimevertrag Version 2. Externe
 Portprojekte erhalten die Schnittstelle ueber `katana_runtime`; die erzeugte
 `game.exe` benoetigt die KatanaRecomp-CLI nicht als Laufzeithuelle.
-Der kumulative Integrationsstand verwendet Runtime-ABI 50, Block-ABI 5,
-Backend-Interface-ABI 4, PlatformServices-ABI 11 und Portprojektvertrag 34.
+Der kumulative Integrationsstand verwendet Runtime-ABI 51, Block-ABI 5,
+Backend-Interface-ABI 4, PlatformServices-ABI 11 und Portprojektvertrag 35.
 
 ## Vertrag
 
@@ -30,6 +30,13 @@ Firmware-Handoff wird anhand der Disc-Region PAL-Interlace oder NTSC-Interlace
 aktiviert; PAL/NTSC non-interlaced und VGA stehen als vollstaendig definierte
 Hardwareprofile fuer spaetere Gastumschaltungen bereit. Die Werte stammen aus
 der Sega-Systemarchitektur und sind nicht an einzelne Spieleadressen gebunden.
+
+Ein PVR-Vollreset beginnt am aktuellen Gastzyklus eine neue Rasterepoche,
+setzt Field- und Phasenzustand zurueck, leitet den an Rasterzeile 0 tatsaechlich
+aktiven VBlank auch fuer gewrappte Bereiche neu ab und plant alle
+Scanout-Ereignisse erneut. Diese interne Planung wird vor dem nachgelagerten
+TA-Resetobserver committed; auch ein dort propagierter Host-Lifecyclefehler
+darf den bereits reseteten PVR nicht ohne Rasterereignisse zuruecklassen.
 
 Der vorgelagerte Tile-Accelerator uebernimmt bei `TA_LIST_INIT` die
 dokumentierten OPB-/ISP-Initialwerte in seine Arbeitszeiger. `TA_LIST_CONT`

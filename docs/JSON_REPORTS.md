@@ -150,7 +150,7 @@ informationsarmen generischen `failed`-Schritts.
 
 ## Systemreplay
 
-`katana-system-replay` verwendet `replay_version=7` und weist den
+`katana-system-replay` verwendet `replay_version=8` und weist den
 `storage_mode` explizit als `exact-events` oder `digest-stream` aus.
 `event_count`, `retained_event_count`, `summarized_event_count` und
 `exact_event_stream` trennen Gesamtstrom, gespeicherte Zeugen und
@@ -166,16 +166,20 @@ noch abgespielt werden. Im Digestmodus sind Ereignisse nach dem Zeugenpraefix
 dagegen `summarized`, nicht `dropped`: Sie fliessen weiter in Sequenzpruefung,
 Coverage, Klassenzaehler und den geordneten FNV-Digest ein. Der ungekeyte
 Digest dient der deterministischen Reproduzierbarkeit und nicht der
-Authentisierung. Schema 7 bindet zusaetzlich UTLB-, Fault-Herkunfts-,
+Authentisierung. Schema 8 bindet zusaetzlich UTLB-, Fault-Herkunfts-,
 Exceptiongenerations- und Attempted-/Retired-/Cycle-Zustand in den finalen
-Gastzustandshash. Diese technische Steuerflussevidenz enthaelt keine
-Spieldaten.
+Gastzustandshash. `expected_observed_coverage`, `hooks_complete` und
+`observed_complete` trennen verfuegbare Pflichthooks von tatsaechlich
+beobachteten erwartbar positiven Klassen. Gesamtzahl, beobachtete Coverage
+und alle exakten zwoelf Klassenzaehler gehen in die finale Digestdomain ein.
+Diese technische Steuerflussevidenz enthaelt keine Spieldaten.
 
-`katana.runtime-probe` verwendet Runtime-Probe-Schema 4 und Device-Schema 3.
+`katana.runtime-probe` verwendet Runtime-Probe-Schema 5 und Device-Schema 5.
 Sein Replayobjekt ergaenzt `retention_capacity` und dieselben Gesamt-, Behalte-,
-Zusammenfassungs- und Exaktheitsfelder. Ein als vollstaendig ausgegebener
-Digeststrom muss dropfrei und coverage-vollstaendig sein; er behauptet bei
-zusammengefassten Ereignissen nicht `exact_event_stream=true`.
+Zusammenfassungs-, Exaktheits-, Coverage- und Klassenzaehlerfelder. Ein als
+vollstaendig ausgegebener Digeststrom muss dropfrei sowie Hook- und
+Beobachtungs-vollstaendig sein; er behauptet bei zusammengefassten Ereignissen
+nicht `exact_event_stream=true`.
 
 Der exakte Ereignisvergleich und die kanonischen Hashes bleiben bytegenau. Im
 Standardmodus `serialize_values=false` werden dagegen `code`, `address`,

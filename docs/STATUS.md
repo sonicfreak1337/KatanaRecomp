@@ -6,10 +6,15 @@ Aktuelle P0-Arbeit: Der native IP.BIN-Boot erreicht BootExecutable
 nachweislich; `KR-4913`, `KR-4915` und `KR-4850` sind abgeschlossen. Der erste
 nach dem Sega-Logo belegte `KR-4851`-Hotspot war ein allgemeiner
 Exception-Edge-Fehler im nativen Aufrufpfad und ist synthetisch geschlossen.
-Der frische v7-Produktnachweis verlaesst die alte Zwei-Instruktions-
-JSR-Schleife und endet jetzt eindeutig am typisierten Missing-AOT
-`0x8C65E96A -> 0x8C652150`. Der native PAL-50-/60-Hz-Auswahlbildschirm ist
-noch nicht erreicht.
+Der aktuelle Runtime-ABI-51-/Portvertrag-35-Abschluss bestand 22/22
+fokussierte Tests. Der danach genau einmal frisch exportierte Produktport
+umfasst 1.952 Funktionen und 38 Partitionen. Sein einziger normaler sichtbarer
+Lauf endet nach 3,199 Sekunden vor dem Sega-Bild und vor jedem Gastframe:
+Nach Annahme der Gastzeit lehnt der Counted-Loop-Fastpath seinen vorbereiteten
+U32-Sequenzcommit ab und beendet den Lauf typisiert. Das ist ein
+Bootregressionsbefund gegenueber dem historischen v7-Lauf; der native
+PAL-50-/60-Hz-Auswahlbildschirm ist weiterhin nicht erreicht. Ein zweiter
+Produktlauf, die Vollsuite und `KR-4852` wurden nicht ausgefuehrt.
 `KR-4847` schliesst jetzt auch Scheduler-Admission-Ueberlaeufe fuer PACKET,
 BIOS-Reads und Disc-Streaming ohne Hostexception, Teilwrite oder klemmendes
 `BSY`; offen bleiben EX 38/39 und laufende G1-Overrun-/Timeout-Grenzen.
@@ -32,9 +37,31 @@ freigegebene `KR-4911` ist inzwischen ebenfalls abgeschlossen. `KR-4912` ist
 ebenfalls abgeschlossen; `KR-4848` und `KR-4913` sind inzwischen ebenfalls
 geschlossen.
 
-Der aktuelle kumulative Vertrag verwendet Runtime-ABI 50, Block-ABI 5,
-Backend-Interface-ABI 4, PlatformServices-ABI 11, Portprojektvertrag 34 und
-Host-Video-Vertrag 2.
+Der aktuelle kumulative Vertrag verwendet Runtime-ABI 51, Block-ABI 5,
+Backend-Interface-ABI 4, PlatformServices-ABI 11, Portprojektvertrag 35 und
+Host-Video-Vertrag 2. Systemreplay-Schema 8, Runtime-Probe-Schema 5 und
+Device-Schema 5 binden die aktuellen Replay- und Geraetezustaende.
+
+Die Callbackanalyse verwendet fuer CFG/Datenfluss weiterhin maximal acht
+Werte, fuehrt bewachte AOT-Seeds aber in einem getrennten 1.024-Ziele-Inventar.
+Unabhaengige Registrare verlieren deshalb bei Kandidat neun nicht mehr ihre
+bereits belegten Ziele. Effektivadressen, gleiches `R0`-Indexregister,
+Callsite-Stackprovenienz sowie einzelne, kleine und begrenzt lueckenhafte
+Returned-Table-Scans sind explizit getestet. Budget- und 64-Slot-Scanende
+werden als Truncation berichtet; kein Kandidat wird zur festen CFG-Kante.
+
+Runtime-ABI 51 bindet den atomaren linearen U32-Pattern-Commit mit
+skalaridentischer `GuestWriteEvent`-Folge. Portprojektvertrag 35 bindet den
+streng bewiesenen indirekten Callback-Fill-Fastpath. Counted-, Memory-Fill-
+und Composite-Batches muessen die gesamte Gastzeit vor jedem CPU-/RAM-Commit
+annehmen; ein Lifecycleabbruch darf weder CPU, RAM, Schedulerbeobachtung noch
+Provenienz veraendern. Memory-Fill verlangt einen stabilen Observervertrag,
+Composite-Fill bleibt No-MMU, und Counted Loop darf bei aktiver MMU nur
+bewiesen direkte P1-/P2-Bereiche verwenden. Die ausgefuehrten
+Differentialtests vergleichen den vollstaendigen Architekturzustand gegen
+den nativen Skalarpfad. PVR-Vollreset beginnt eine neue Rasterepoche und
+leitet auch gewrappten VBlank am aktuellen Rasterpunkt ab; Maple trennt den
+abgeschlossenen DMA-Commit von der anschliessenden IRQ-/ASIC-Publikation.
 
 Runtime-ABI 48 trennt den Handler-Lifetime-Pegel `trap_pending` von einer neu
 entstandenen Exceptionkante. Jeder Exceptioneintritt erhoeht eine monotone
@@ -45,7 +72,7 @@ Zustand ist in Probe, Replay-Gastzustandshash, Differentialcheckpoints und
 Crashberichten gebunden. Elf fokussierte Regressionen bestanden 11/11; ein
 Vollgate und `KR-4852` liefen nicht.
 
-Der danach einmalig exportierte und gebaute private v7-Port umfasst
+Der historische, damals einmalig exportierte und gebaute private v7-Port umfasst
 1.873 Funktionen, 37 Partitionen und drei latente Module. Export und
 Hostbuild benoetigten 187,8 Sekunden, die lokale Installation 16,8 Sekunden.
 Der deterministische Probe-Lauf dauerte 73,5 Sekunden, der Detail-Lauf
@@ -56,10 +83,10 @@ und null Fallbacks. Die allgemeine Analyse katalogisiert jetzt endliche
 Codepointer, die mit bewiesener Aufrufargument-Provenienz ueber
 nicht-Stack-bezogene 32-Bit-Stores weitergereicht werden, als bewachte
 AOT-Inventarseeds. Das liefert keine feste Runtime-
-Dispatchkante; der live geladene Wert bleibt massgeblich. Die fokussierten
-Regressionen sind gruen. Ein zweiter privater Build/v8, die Vollsuite und das
-v0.48-Gate wurden bewusst nicht ausgefuehrt. `KR-4851` bleibt offen, v6 bleibt
-erhalten und die Original-GDI blieb unveraendert.
+Dispatchkante; der live geladene Wert bleibt massgeblich. Diese Evidenz
+beschreibt nur v7. Der aktuelle Lauf erreicht wegen der oben genannten
+Counted-Loop-Commitregression nicht mehr das Sega-Bild. `KR-4851` bleibt
+offen.
 
 `KR-4912` modelliert Load, Relocation, Replace und Unload als monotone
 Modulinkarnationen. Byteidentische Multi-Extent-Loads und byteidentische CPU-,
@@ -142,18 +169,23 @@ unveraendertes Executable und Disc-Pack, vollstaendiges und versiegeltes Replay
 sowie null/null Wait-Loop-Tracezeilen. Eine Vollsuite und `KR-4852` wurden
 nicht ausgefuehrt.
 
-Systemreplay-Schema 7 trennt den exakten Ereignisstrom von `DigestStream` und
+Systemreplay-Schema 8 trennt den exakten Ereignisstrom von `DigestStream` und
 bindet UTLB, Fault-Herkunft, Exceptiongeneration sowie
 Attempted-/Retired-/Cycle-Zustand in den finalen Gastzustandshash.
 Der Produktmodus behaelt standardmaessig 4.096 und maximal 65.536
 Praefixzeugen, validiert, zaehlt und hasht aber auch jedes zusammengefasste
 Ereignis. Zusammenfassung ist kein Drop; ein echter Drop verhindert weiterhin
-Versiegelung und Replay. Runtime-Probe-Schema 4 weist Speichermodus,
+Versiegelung und Replay. Runtime-Probe-Schema 5 weist Speichermodus,
 Aufbewahrungskapazitaet, Gesamt-, behaltene und zusammengefasste Ereignisse
-sowie `exact_event_stream` aus. `deterministic-v1` verlangt weiterhin die
+sowie `exact_event_stream`, `hooks_complete`, `observed_complete` und die
+erwartete Positivmaske aus. `deterministic-v1` verlangt weiterhin die
 zwoelf Klassen CPU-Safepoint, Scheduler-Callback, akzeptierter Interrupt,
 Video, Audio, Eingabe, MMIO, DMA, Blockdispatch, Gastexception,
-kontrollierter Fallback und Gastcheckpoint. Eine zentrale Observation-Session
+kontrollierter Fallback und Gastcheckpoint; nur Gastexception und
+kontrollierter Fallback sind kontingente Negativpfade, alle anderen Klassen
+muessen fuer `observed_complete` tatsaechlich vorkommen. Die exakten zwoelf
+Klassenzaehler sind in Probe, Validator und finaler Digestdomain gebunden.
+Eine zentrale Observation-Session
 schreibt Dispatch-Hits und -Misses, Fallbacks, Exceptions und streng monotone
 Checkpoints gegen Gastzyklus und Resetepoche. Der ungekeyte FNV-Digest ist
 deterministische Evidenz, keine Authentisierung.
@@ -565,8 +597,8 @@ MMIO-Zugriff liegt im aktiven OCRAM; der fruehere Abbruch nach 12 Gastzyklen
 ist damit beseitigt. TA/PVR und ein echter Gastframe bleiben fuer den laengeren
 Folgelauf weiterhin offen.
 
-Runtime-ABI 50, Block-ABI 5, Backend-Interface-ABI 4, BIOS-ABI 9,
-PlatformServices-ABI 11, Portprojektvertrag 34 und Host-Video-Vertrag 2 bilden
+Runtime-ABI 51, Block-ABI 5, Backend-Interface-ABI 4, BIOS-ABI 9,
+PlatformServices-ABI 11, Portprojektvertrag 35 und Host-Video-Vertrag 2 bilden
 den kumulativen v0.48-Stand ab.
 PlatformServices-ABI 10 versioniert zusaetzlich die genaue
 `PREF`-Instruktionsherkunft bis zur Store Queue.

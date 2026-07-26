@@ -384,16 +384,18 @@ Typ: Implementierung | Gate-Vorbereitung | interne Freigabe | Release-Gate
 ## Aktuell empfohlener Einstieg
 
 ```text
-v0.48 P0 - den getesteten Stored-Code-Pointer-Fix beim naechsten erlaubten
-privaten Build bis zum PAL-50-/60-Hz-Menue fuer KR-4851 nachweisen
+v0.48 P0 - die im aktuellen Produktlauf vor dem Sega-Bild sichtbare
+Counted-Loop-Commitregression allgemein schliessen und danach KR-4851 erneut
+bis zum PAL-50-/60-Hz-Menue nachweisen
 ```
 
 Abgeschlossen und in Roadmap/Taskliste markiert sind `KR-4831`, `KR-4841`,
 `KR-4842`, `KR-4843`, `KR-4844`, `KR-4845`, `KR-4846`, `KR-4848`,
 `KR-4911`, `KR-4912`, `KR-4913`, `KR-4915` und `KR-4850`. Der aktuelle
-Runtimevertrag steht auf Runtime-ABI 50, Block-ABI 5,
+Runtimevertrag steht auf Runtime-ABI 51, Block-ABI 5,
 Backend-Interface-ABI 4, PlatformServices-ABI 11, BIOS-ABI 9,
-Portprojektvertrag 34 und Host-Video-Vertrag 2.
+Portprojektvertrag 35, Systemreplay-Schema 8, Runtime-Probe-Schema 5,
+Device-Schema 5 und Host-Video-Vertrag 2.
 Das verbindliche
 XenonRecomp-artige Produktmodell rekompiliert `IP.BIN` und BootExecutable
 statisch aus SH-4 in nativen PC-Code. Dreamcast-Komponenten bleiben typisierte,
@@ -434,15 +436,15 @@ Der inkrementelle Reexport dauerte 29,2 Sekunden. Das Portpaket enthaelt null
 Retailsektoren; die lokale Discinstallation war erfolgreich und die
 unveraenderte Original-GDI blieb erhalten.
 
-Ein vorangegangener Produktlauf erreicht 345.609.251 Gastzyklen und einen echten
+Ein historischer Produktlauf erreichte 345.609.251 Gastzyklen und einen echten
 Runtimehandler am architektonischen SH-4-Interruptvektor `VBR + 0x600`.
 Frames, TA-Transfers und Gast-PVR-Frames bleiben null. Eine getrennte begrenzte
 Diagnose beweist ueber Gastwriteprovenienz ein 56-Byte-Copy-plus-Patch-
 Codetemplate und fuehrt daraus 19 bytebewiesene Runtimeinstruktionen aus. Sie
 stoppt danach am naechsten noch nicht statisch gebundenen AOT-Einstieg. Keine
-privaten Bytes oder Adressen als Produkthardcode uebernehmen; die allgemeine
-native Bindung dieses Runtimecodes ist die naechste `KR-4848`-Arbeit und der
-Task bleibt offen.
+privaten Bytes oder Adressen als Produkthardcode uebernehmen. Dieser Absatz
+beschreibt den damaligen Zwischenstand; die allgemeine native Bindung und
+`KR-4848` wurden spaeter geschlossen.
 
 Der Projektschreiber shardet Dispatchregistries nach jeweils maximal 512
 Bloecken, emittiert pro Owner und Shard genau einen Wrapper und routet
@@ -660,7 +662,7 @@ und Portprojektvertrag 32 fuehren eine monotone Exceptiongeneration fuer
 Emitter, Portwrapper und Diagnosegrenze ein; 11/11 fokussierte Regressionen
 sind gruen.
 
-Der danach genau einmal exportierte und gebaute v7-Port umfasst
+Der historische, damals genau einmal exportierte und gebaute v7-Port umfasst
 1.873 Funktionen, 37 Partitionen und drei latente Module. Export und Hostbuild
 dauerten 187,8 Sekunden, die lokale Installation 16,8 Sekunden. Der
 deterministische Probe-Lauf dauerte 73,5 Sekunden, der Detail-Lauf
@@ -673,11 +675,16 @@ allgemeine Quellefix katalogisiert endliche, mit bewiesener
 Aufrufargument-Provenienz ueber nicht-Stack-bezogene 32-Bit-Stores
 weitergereichte Codepointer als bewachte AOT-Inventarseeds, ohne die live
 geladene Dispatchkante fest einzufrieren. Die fokussierten
-Regressionen sind gruen. Auf Nutzerwunsch wurde bewusst kein zweiter privater
-Build/v8 erzeugt; beim naechsten erlaubten Build ist genau dieser Fix bis zum
-nativen PAL-50-/60-Hz-Menue zu pruefen. `KR-4851` bleibt offen, v6 bleibt
-erhalten und die Original-GDI blieb unveraendert. Kein v0.48-Vollgate vor
-Abschluss aller Implementierungsaufgaben starten.
+Regressionen waren gruen. Diese Evidenz beschreibt v7 und bleibt historisch.
+
+Der aktuelle Runtime-ABI-51-/Portvertrag-35-Abschluss bestand 22/22
+fokussierte Tests. Der anschliessend genau einmal frisch exportierte Port
+umfasst 1.952 Funktionen und 38 Partitionen. Sein einziger normaler sichtbarer
+Lauf endet nach 3,199 Sekunden vor dem Sega-Bild und vor jedem Gastframe:
+Der Counted-Loop-Fastpath hat die Gastzeit bereits angenommen, als der
+vorbereitete U32-Sequenzcommit abgelehnt wird. Der Produktlauf endet typisiert
+und belegt damit eine Regression gegenueber v7. Kein zweiter Lauf, keine
+Vollsuite und kein `KR-4852` wurden ausgefuehrt. `KR-4851` bleibt offen.
 
 Der SH-4-DMAC-Channel-2-Pfad verwendet fuer TA den oeffentlichen externen
 Memory-to-Device-Vertrag `RS=2`, 32-Byte-Einheiten, inkrementierende Quelle,
@@ -742,13 +749,13 @@ Weiter offen:
 
 ```text
 KR-4847: EX-38/39-Vertrag und laufende G1-Timeout-/Overrun-Grenzen schliessen
-KR-4848: strukturierte Disc-Ladetransaktionen und Registry latenter nativer Module
 KR-4849: Direct-Texture-Zielprogression und restliche TA/PVR-Eingangskette
+KR-4851: Counted-Loop-Bootregression schliessen und PAL-Auswahl nachweisen
 ```
 
-`KR-4842`, `KR-4911` und `KR-4912` sind als Vorbedingungen erfuellt. Die
-verbindliche Abhaengigkeitsfolge fuer die offenen Bootpfade beginnt jetzt mit
-`KR-4848`; `KR-4849` schliesst den
+`KR-4842`, `KR-4848`, `KR-4911` und `KR-4912` sind als Vorbedingungen
+erfuellt. Die offene Bootfront beginnt mit der aktuellen
+Counted-Loop-Commitregression in `KR-4851`; `KR-4849` schliesst den
 produktiven TA/PVR-Vertrag. `KR-4915` und `KR-4850` sind durch den legitimen
 vorgezogenen Direct-Framebuffer-Pfad bereits erfuellt. `KR-4814` und
 `KR-4914` folgen als verbindliche Post-Frame-Arbeit in v0.48 auf `KR-4850`

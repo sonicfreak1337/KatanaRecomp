@@ -4,23 +4,61 @@
 
 ### Geaendert
 
+- Der aktuelle Abschlussblock bestand 22/22 fokussierte Tests. Der danach
+  genau einmal frisch exportierte Runtime-ABI-51-/Portvertrag-35-Produktport
+  umfasst 1.952 Funktionen und 38 Partitionen. Sein einziger normaler
+  sichtbarer Lauf endet nach 3,199 Sekunden vor dem Sega-Bild und vor jedem
+  Gastframe: Nach Annahme der Gastzeit lehnt der Counted-Loop-Fastpath den
+  vorvalidierten U32-Sequenzcommit ab und beendet den Lauf typisiert. Das ist
+  ein Bootregressionsbefund gegenueber dem historischen v7-Lauf; der
+  PAL-50-/60-Hz-Auswahlbildschirm wurde nicht erreicht. Ein zweiter
+  Produktlauf, eine Vollsuite und `KR-4852` wurden nicht ausgefuehrt.
+- Die nachgelagerte Boot- und Vertragsreview trennt das auf acht Werte
+  begrenzte Datenflussgitter von einem deterministisch auf 1.024 Ziele
+  begrenzten `GuardedCodeInventory`. Callsite-Stackprovenienz verhindert
+  weitergereichte Stackpointer als globale Callbackobjekte; bekannte
+  nicht-Stack-Kandidaten bleiben auch bei unvollstaendigen Callmengen als
+  bewachte, laufzeitvalidierte AOT-Seeds erhalten. `R0 == Rm` bildet nur
+  `2*x`, und Returned-Table-Scans inventarisieren einzelne, kleine und
+  begrenzt lueckenhafte Tabellen bis 64 Slots mit sichtbarer Truncation.
+  Byteidentische Modulbereiche besitzen mehrere logische Owner mit eigener
+  Lebenszeit, Berechtigung und Relocationgeneration; Replace, Relocation,
+  Resolve und Unload koennen auf einen gueltigen Peer wechseln, bevor der
+  letzte Owner gemeinsame Provenienz entfernt.
+  Counted-, Memory-Fill- und Composite-Callback-Batches lassen die gesamte
+  Gastzeit vor dem atomaren RAM-/CPU-Commit annehmen und lassen bei
+  Lifecycleabbruch CPU, RAM, Schedulerbeobachtung und Provenienz am
+  uncommitteten Rand unveraendert. PVR-Vollreset beginnt eine neue Rasterepoche
+  und plant Scanout auch vor einem fehlschlagenden TA-Observer; Maple trennt
+  abgeschlossenen DMA-Commit von der anschliessenden IRQ-/ASIC-Publikation.
+  Nur exakte unveraenderte Runtime-only-Tail-Jumps umgehen den linearen
+  Detailrecorder; Alias-, Call-, Return-, Miss-, Materialisierungs- und
+  Fehlerkanten bleiben diagnostisch sichtbar.
+  Systemreplay-Schema 8 und Runtime-Probe-Schema 5 trennen
+  `hooks_complete` von `observed_complete`, binden die erwartete Positivmaske
+  und alle exakten zwoelf Klassenzaehler in Probe, Validator und finalen
+  Digest. Device-Schema 5 bindet die neuen Maple-Publikationsfelder.
 - Die bootorientierte Gesamtreview schliesst die neuen
   Callbacktabellen-, Produktfastpath- und Hardwarefehlergrenzen. Zurueckgegebene
   `MOV.L`-Tabellen bilden Displacement- und `R0+Rm`-Effektivadressen exakt,
   erlauben bei starker Call-/Return-Provenienz einzelne, kleine und begrenzt
   lueckenhafte Vektoren und bleiben bewachte AOT-Seeds ohne erfundene CFG-Kante.
-  Counted-Loop-Batching ist auf den echten No-MMU-Modus begrenzt; ein
-  ausgefuehrter generierter Port vergleicht Batch und nativen Skalarpfad ueber
-  CPU-, Scheduler-, Speicher-, TLB-/ITLB- und Modulprovenienz-Zustand und
-  belegt die Ablehnung bei aktiver MMU. Store-Queue- und PVR-Renderablehnungen
+  Ein eng bewiesener Composite-Fastpath fasst den indirekten
+  Callback-U32-Pattern-Fill nur im No-MMU-Modus zusammen und behaelt den live
+  geladenen Callbackwert als Laufzeitguard.
+  Counted-Loop-Batching erlaubt unter aktiver MMU nur bewiesen direkte
+  P1-/P2-Bereiche; ein ausgefuehrter generierter Port vergleicht Batch und
+  nativen Skalarpfad ueber CPU-, Scheduler-, Speicher-, TLB-/ITLB- und
+  Modulprovenienz-Zustand und belegt die Ablehnung nichtdirekter Bereiche.
+  Store-Queue- und PVR-Renderablehnungen
   enden strukturiert statt lautlos, GD-ROM dereferenziert nur die
   kommandospezifisch benoetigten Parameter, und `SB_SFRES` erreicht den
   Holly-/PVR-/TA-/DMA-Zustand ohne einen CPU-Power-on-Reset zu erfinden.
   AICA-Narrow-Reads, Maple-Gastfehler und gewrappter initialer VBlank verwenden
   nun dieselben logischen Geraetevertraege wie ihre breiten beziehungsweise
   softwaregetriggerten Gegenstuecke. Der ehemalige Gameplaymarker heisst
-  ehrlich `FirstPostBootstrapTaFrame`. Runtime-ABI 50, Block-ABI 5,
-  Backend-Interface-ABI 4, Portprojektvertrag 34 und Runtime-Probe-Schema 4
+  ehrlich `FirstPostBootstrapTaFrame`. Runtime-ABI 51, Block-ABI 5,
+  Backend-Interface-ABI 4, Portprojektvertrag 35 und Runtime-Probe-Schema 5
   versionieren die geaenderten oeffentlichen Layouts und Portgrenzen.
 - SingleStepTests/sh4 ist als optionales, auf einen festen Commit und
   Manifesthash gebundenes externes SH-4-Semantikorakel integriert. Der
@@ -55,7 +93,7 @@
   Elf fokussierte ausfuehrbare Regressionen bestanden 11/11 in 1,55 Sekunden,
   einschliesslich BSR, BSRF und JSR innerhalb eines bereits aktiven
   Interrupt-Handlers sowie neu im Delay Slot entstehender Fehler.
-- Der daraufhin einmalig exportierte und gebaute private v7-Port umfasst
+- Der historische, damals einmalig exportierte und gebaute private v7-Port umfasst
   1.873 Funktionen, 37 Partitionen und drei latente Module. Export und
   Hostbuild benoetigten 187,8 Sekunden, die lokale Installation 16,8 Sekunden.
   Ein deterministischer Probe-Lauf dauerte 73,5 Sekunden, der anschliessende
@@ -68,11 +106,8 @@
   Aufrufargument-Provenienz ueber nicht-Stack-bezogene 32-Bit-Stores
   weitergereichte Codepointer als bewachte AOT-Inventarseeds.
   Die zur Laufzeit geladene Dispatchkante bleibt dabei `RuntimeOnly` und wird
-  nicht als feste CFG-Kante eingefroren. Die fokussierten Regressionen sind
-  gruen. Bewusst wurden weder ein zweiter privater Build/v8 noch eine
-  Vollsuite oder das v0.48-Freigabegate ausgefuehrt. Der native
-  PAL-50-/60-Hz-Auswahlbildschirm ist noch nicht erreicht, `KR-4851` bleibt
-  offen, v6 bleibt erhalten und die Original-GDI blieb unveraendert.
+  nicht als feste CFG-Kante eingefroren. Dieser Absatz bleibt historische
+  v7-Evidenz; der aktuelle Produktstand ist im ersten Eintrag dokumentiert.
 - KR-4913 ist abgeschlossen. Systemreplay-Schema 5 trennt den exakten
   Ereignisstrom von einem skalierbaren `DigestStream`: Die Produktprobe behaelt
   4.096 Praefixzeugen, validiert, zaehlt und hasht aber jedes weitere Ereignis,
@@ -339,7 +374,7 @@
   Direct-FB-Pixeln. TA, Rendergeneration und Materializer bleiben null; der
   Budget-Exit ist erwartet. Diese Port- und Laufevidenz bleibt ausdruecklich
   historisch und wird nicht als ABI-40-Export ausgegeben.
-- Der aktuelle kumulative Schnittstellenstand verwendet Runtime-ABI 45,
+- Der damalige kumulative Schnittstellenstand verwendete Runtime-ABI 45,
   Block-ABI 3, Backend-Interface-ABI 3, PlatformServices-ABI 10,
   Portprojektvertrag 29 und Host-Video-Vertrag 2. Block-ABI 3 versioniert die virtuelle
   Quell-/Laufzeitadressabbildung source-relativierter nativer AOT-Templates.

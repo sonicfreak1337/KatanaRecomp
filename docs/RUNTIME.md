@@ -6,8 +6,8 @@ ungeloesten Kontrollflusspfaden mehr.
 
 ## ABI
 
-Die aktuelle Runtime-ABI ist Version `45`. Die typisierte Block-ABI ist
-Version `3`; die Backend-Interface-ABI ist Version `3`.
+Die aktuelle Runtime-ABI ist Version `51`. Die typisierte Block-ABI ist
+Version `5`; die Backend-Interface-ABI ist Version `4`.
 
 Generierter Code enthaelt eine Compile-Time-Pruefung gegen diese Version. Eine
 abweichende Runtime wird beim Kompilieren sichtbar abgelehnt. ABI-Version 3
@@ -109,6 +109,21 @@ ein begrenztes Zeugenpraefix, validiert, zaehlt und hasht jedoch jedes
 Ereignis. Der vorbereitete `GuestProgramRangeMatcher` vermeidet auf direkten
 P1-/P2-Pfaden wiederholte Bereichskanonisierung und uebersetzt nur den
 tatsaechlich MMU-abgebildeten Instruktionspfad.
+ABI-Version 48 und Portprojektvertrag 32 trennen den Handler-Lifetime-Pegel
+von einer neu entstandenen Exceptionkante. Die monotone
+`exception_generation` ist Bestandteil von Probe, Replay und
+Differentialzustand.
+ABI-Version 49, Backend-Interface-ABI 4 und Portprojektvertrag 33 binden die
+gemeinsame native AOT-Profilgrenze und die Mutable-Range-Vertraege nativer
+Templates.
+ABI-Version 50, Block-ABI 5 und Portprojektvertrag 34 versionieren die
+erweiterten Template-/Blocklayouts, die exakten
+Callbacktabellen-Effektivadressen und den Counted-Loop-Portvertrag.
+ABI-Version 51 und Portprojektvertrag 35 binden atomare vorvalidierte
+U32-Sequenzcommits, die Transaktionsgrenze der Produktbatches,
+Systemreplay-Schema 8, Runtime-Probe-Schema 5 und Device-Schema 5. Maple
+trennt darin DMA-Commit und IRQ-/ASIC-Publikation; PVR-Vollreset beginnt eine
+neue Rasterepoche.
 
 ## CMake
 
@@ -559,14 +574,18 @@ spaetere Plattformkonfiguration.
   `DreamcastSystemBusControl::snapshot()`-Zustaende fuer Produktdiagnostik;
   auch pending Rendercompletions und aktive Channel-2-Transfers bleiben
   unveraendert und werden weder gepumpt noch quittiert
-- deterministische Systemreplays unter Schema 5 mit den expliziten Modi
+- deterministische Systemreplays unter Schema 8 mit den expliziten Modi
   `ExactEvents` und `DigestStream`. Die Zeugenkapazitaet betraegt
   standardmaessig 4.096 und maximal 65.536 Ereignisse; portable Codes bleiben
   auf 64 Zeichen begrenzt. Nur die Saettigung des exakten Modus ist ein Drop.
   Der Digestmodus fasst den Reststrom zusammen, validiert und bindet ihn aber
-  weiterhin an Gesamtzahl, Coverage, Ereignisklassen und Ordnungsdigest.
-  Runtime-Probe-Schema 2 macht Gesamt-, behaltene und zusammengefasste Anzahl
-  sowie die Verfuegbarkeit eines exakten Stroms sichtbar. Standard-JSON
+  weiterhin an Gesamtzahl, Coverage, die exakten zwoelf Klassenzaehler und
+  Ordnungsdigest. `hooks_complete` und `observed_complete` trennen aktivierte
+  Pflichthooks von den tatsaechlich erwartbar positiven Beobachtungen;
+  Gastexception und kontrollierter Fallback bleiben kontingente Negativpfade.
+  Runtime-Probe-Schema 5 macht Gesamt-, behaltene und zusammengefasste Anzahl,
+  Positivmaske, beide Vollstaendigkeitsaussagen sowie die Verfuegbarkeit eines
+  exakten Stroms sichtbar. Standard-JSON
   redigiert Code, Adresse, Wert, numerische Nutzlasten, Ereignishash und
   Endzustandshash ohne ausdrueckliches lokales Opt-in. Der ungekeyte FNV-Digest
   ist Reproduzierbarkeitsevidenz und keine Authentisierung
@@ -661,9 +680,10 @@ generische C++-Emitter setzt auch bei einem durch Funktionsdiscovery
 nachfolgerlosen Block in jedem Backendmodus `PC` auf die Folgeadresse der
 letzten Gastinstruktion. Die Produktinvariante prueft einen Fallthrough relativ
 zu dieser tatsaechlichen Terminatorquelle und nicht zum Eintritt des
-umgebenden Wrappers. Der kumulative Stand verwendet Runtime-ABI 50, Block-ABI 5,
-Backend-Interface-ABI 4, PlatformServices-ABI 11, Portvertrag 34 und
-Host-Video-Vertrag 2.
+umgebenden Wrappers. Der kumulative Stand verwendet Runtime-ABI 51, Block-ABI 5,
+Backend-Interface-ABI 4, PlatformServices-ABI 11, Portvertrag 35 und
+Host-Video-Vertrag 2; die Beobachtungsgrenze steht auf Systemreplay-Schema 8,
+Runtime-Probe-Schema 5 und Device-Schema 5.
 
 Der Produktfortschritt unterscheidet `GuestProgramDispatched` von
 `GuestProgramProgressed`. Progression verlangt mindestens eine retired

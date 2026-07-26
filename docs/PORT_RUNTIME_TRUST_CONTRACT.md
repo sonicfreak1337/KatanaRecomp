@@ -2,7 +2,7 @@
 
 Der mit KR-4508 eingefuehrte Portprojektvertrag Version 3 trennt
 Analyseerfolg, Eingabeidentitaet und tatsaechliche Gastausfuehrung. Der
-aktuelle kumulative Stand verwendet Portprojektvertrag 34, Runtime-ABI 50,
+aktuelle kumulative Stand verwendet Portprojektvertrag 35, Runtime-ABI 51,
 PlatformServices-ABI 11, Block-ABI 5 und Backend-Interface-ABI 4. Keine der
 Vertrauensaussagen wird aus der blossen Erzeugung oder dem Start eines
 Hostprozesses abgeleitet.
@@ -280,7 +280,7 @@ Nachweis fuer eine neu im aktuellen Block entstandene Exception. Eine monotone
 Generation bindet neue Exceptionkanten in generierten Delay Slots, direkten
 Aufrufketten, Portwrappern, Probe- und Replayhashes.
 
-Der daraufhin einmalig exportierte und gebaute v7-Port mit 1.873 Funktionen,
+Der historische, damals einmalig exportierte und gebaute v7-Port mit 1.873 Funktionen,
 37 Partitionen und drei latenten Modulen erreicht
 `KR_FIRST_GUEST_FRAME` und `KR_FIRST_PRESENTED_FRAME` am sichtbaren Sega-Bild.
 Die alte Zwei-Instruktions-JSR-Schleife ist beseitigt. Der Detail-Lauf endet
@@ -295,11 +295,35 @@ nachgewiesener Aufrufargument-Provenienz ueber nicht-Stack-bezogene
 Solche Seeds erweitern ausschliesslich den vorab kompilierten Bestand: Sie
 erzeugen keine feste CFG- oder Runtime-Dispatchkante und ersetzen nicht den
 live geladenen Zielwert. Gewoehnliche lokale Datenpointer, Stackspills, nicht
-finite Werte und semantisch ungueltige Ziele liefern keinen Seed. Die
-fokussierten Regressionen sind gruen. Ein zweiter privater Build/v8
-und das v0.48-Vollgate wurden bewusst nicht ausgefuehrt. Der native
-PAL-50-/60-Hz-Nachweis bleibt Voraussetzung fuer den Abschluss von `KR-4851`;
-v6 bleibt erhalten und die Original-GDI blieb unveraendert.
+finite Werte und semantisch ungueltige Ziele liefern keinen Seed.
+
+Das Acht-Werte-Limit des allgemeinen Datenflussgitters begrenzt diesen
+Inventarkanal nicht mehr. Bis zu 1.024 deduplizierte, weiterhin bewachte
+Kandidaten werden separat behalten; Budget- und Returned-Table-Scanende sind
+maschinenlesbar als Truncation sichtbar. Callsite-Stack-May-Alias-Provenienz,
+instruktionsgenaue Displacement-/Indexadressen, das korrelierte
+`MOV.L @(R0,R0)` und kleine beziehungsweise begrenzt lueckenhafte Tabellen
+schliessen die bekannten False-Negative-Raender, ohne eine statische
+Dispatchkante zu erfinden.
+
+Der aktuelle Runtime-ABI-51-/Portvertrag-35-Abschluss bestand 22/22
+fokussierte Tests. Der anschliessend genau einmal frisch exportierte
+Produktport umfasst 1.952 Funktionen und 38 Partitionen. Sein einziger
+normaler sichtbarer Lauf endet nach 3,199 Sekunden vor dem Sega-Bild und vor
+jedem Gastframe: Nach bereits angenommener Gastzeit lehnt der
+Counted-Loop-Fastpath seinen vorvalidierten U32-Sequenzcommit ab. Diese
+typisierte Endklasse ist ein Produktregressionsbefund und kein
+PAL-50-/60-Hz-Nachweis. Es liefen weder ein zweiter Produktlauf noch eine
+Vollsuite oder `KR-4852`; `KR-4851` bleibt offen.
+
+Produktbatches besitzen eine harte Transaktionsgrenze: Die gesamte Gastzeit
+muss vor jedem CPU-/RAM-Commit angenommen sein. Ein Lifecycleabbruch davor
+darf weder CPU, RAM, Schedulerbeobachtung noch Code-/Modulprovenienz
+veraendern. Memory-Fill ist nur mit stabiler Observerfaehigkeit und
+skalaridentischer `GuestWriteEvent`-Folge zulaessig. Composite-Callback-Fill
+bleibt No-MMU; Counted Loop darf unter aktiver MMU nur bewiesen direkte
+P1-/P2-Bereiche verwenden. Die Differentialtests vergleichen diese Zustaende
+gegen den nativen Skalarpfad.
 
 ## Konsistenzgrenzen
 
@@ -339,9 +363,10 @@ vorbereiteten Gastprogrammbereich gewaehlt hat. `GuestProgramProgressed`
 verlangt dagegen mindestens eine erfolgreich retired Instruktion, keine neue
 Exceptionkante und keinen Exception-Exit desselben Blockabschlusses. Nur
 dieses zweite Signal erfuellt das Produktgate und fliesst in die konservative
-Gameplay-Evidenz ein.
+`FirstPostBootstrapTaFrame`-Evidenz ein.
 
 Die Frameevidenz meldet den ersten echten Gastscanout, den ersten TA-Frame und
-den ersten Gameplayframe getrennt. `KR_FIRST_GUEST_FRAME` bleibt als
+den ersten `FirstPostBootstrapTaFrame` getrennt. `KR_FIRST_GUEST_FRAME` bleibt als
 Kompatibilitaetsalias des ersten Gastscanouts erhalten.
-Direct-Framebuffer-Evidenz kann niemals den TA- oder Gameplaymarker setzen.
+Direct-Framebuffer-Evidenz kann niemals den TA- oder
+`FirstPostBootstrapTaFrame`-Marker setzen.

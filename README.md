@@ -61,13 +61,26 @@ vorbereitet; der live geladene Dispatch bleibt `RuntimeOnly` und erzeugt keine
 feste CFG-Kante. Snapshotcache und P2-Aliasaufloesung sind gegen imagefremde
 Beweise abgesichert. Lokale AOT-Blockketten tragen die exakte tatsaechliche
 Terminatorquelle und Siteklasse bis zum externen Dispatch weiter. Der aktuelle
-kumulative Stand verwendet Runtime-ABI 50, Block-ABI 5,
-Backend-Interface-ABI 4, PlatformServices-ABI 11, Portprojektvertrag 34 und
-Host-Video-Vertrag 2.
+kumulative Stand verwendet Runtime-ABI 51, Block-ABI 5,
+Backend-Interface-ABI 4, PlatformServices-ABI 11, Portprojektvertrag 35 und
+Host-Video-Vertrag 2. Die aktuelle Beobachtungsgrenze verwendet
+Systemreplay-Schema 8, Runtime-Probe-Schema 5 und Device-Schema 5.
+
+Die funktionsweite Wertanalyse behaelt ihr enges Acht-Werte-Limit fuer
+Datenfluss und CFG. Ein getrennter `GuardedCodeInventory`-Kanal sammelt bis zu
+1.024 bewiesene Callbackziele aus unabhaengigen Registraren und
+zurueckgegebenen Tabellen. Er weist Budget- und Tabellenscan-Truncation
+maschinenlesbar aus, erzeugt nie eine feste CFG-Kante und laesst den live
+geladenen Runtimewert massgeblich. Interprozedurale Stack-May-Alias-Provenienz
+schliesst weitergereichte Stackobjekte aus; `MOV.L @(R0,R0)` erzeugt nur
+korrelierte `2*x`-Adressen.
 
 `KR-4912` schliesst die allgemeine Lebenszeit dynamischer Codebereiche:
 Load, Relocation, Replace und Unload erzeugen monotone Modulinkarnationen,
-byteidentische Multi-Extent-Loads behalten bestehende Bloecke, und bewiesene
+byteidentische Multi-Extent-Loads behalten jeden logischen Owner samt eigener
+Lebenszeit. Replace, Relocation und Unload entfernen physische Provenienz erst
+nach dem letzten Owner; Materializer-Origins koennen auf einen weiterhin
+gueltigen byteidentischen Peer wechseln. Bewiesene
 Runtimewrites koennen einen zusammenhaengenden Tail samt Delay Slot
 provenienzgesichert erweitern. MMU-sichere P0-/P1-/P2-Aliase teilen dieselbe
 physische Blockherkunft. Ein Lifecycle-Wechsel entfernt abhaengige
@@ -78,19 +91,42 @@ im Replay; oeffentliche Berichte redigieren Identitaeten und Gastbytes. Der
 normale Produktport besitzt weiterhin keinen Interpreter und beendet
 unkompilierten Code typisiert. `KR-4848` ist mit atomaren Disc-
 Ladetransaktionen und der Registry latenter AOT-Module abgeschlossen. Die
-fokussierten Regressionen sind gruen; ein privater Retaillauf, eine Vollsuite
-und `KR-4852` wurden fuer diesen Abschluss nicht ausgefuehrt.
+damaligen fokussierten Regressionen waren gruen; fuer diesen einzelnen
+`KR-4912`-Abschluss liefen weder ein privater Retaillauf noch eine Vollsuite
+oder `KR-4852`.
 
-Systemreplay v7 trennt `ExactEvents` von `DigestStream`. Der exakte Modus
+Der aktuelle Abschlussblock bestand 22/22 fokussierte Tests. Der anschliessend
+genau einmal frisch exportierte Produktport umfasst 1.952 Funktionen und
+38 Partitionen. Sein einziger normaler sichtbarer Lauf endet nach 3,199
+Sekunden Produktzeit vor dem Sega-Bild und vor jedem Gastframe: Der
+Counted-Loop-Fastpath nimmt die Gastzeit an, kann danach den vorbereiteten
+U32-Sequenzcommit jedoch nicht abschliessen und beendet den Produktlauf
+typisiert. Das ist ein Bootregressionsbefund gegenueber v7; der
+PAL-50-/60-Hz-Auswahlbildschirm wurde nicht erreicht. Es liefen weder ein
+zweiter Produktversuch noch eine Vollsuite oder `KR-4852`.
+
+Counted-, Memory-Fill- und Composite-Batches nehmen die gesamte Gastzeit vor
+jedem CPU-/RAM-Commit an; ein Lifecycleabbruch darf Schedulerbeobachtung und
+Provenienz nicht veraendern. Memory-Fill verlangt stabile Observerfaehigkeit,
+Composite-Fill bleibt No-MMU und Counted Loop ist unter aktiver MMU auf
+bewiesen direkte P1-/P2-Bereiche begrenzt. PVR-Vollreset beginnt eine neue
+Rasterepoche und leitet gewrappten VBlank korrekt ab; Maple trennt den
+abgeschlossenen DMA-Commit von der IRQ-/ASIC-Publikation.
+
+Systemreplay v8 trennt `ExactEvents` von `DigestStream`. Der exakte Modus
 behaelt den bisherigen begrenzten Vollstromvertrag; eine Saettigung erzeugt
 einen echten Drop und verhindert Versiegelung und Replay. Der skalierbare
 Produktmodus behaelt standardmaessig 4.096 Praefixzeugen, validiert, zaehlt und
 bindet aber jedes weitere Ereignis in Coverage, Klassenzahlen und den
 geordneten FNV-Digest ein. Solche Ereignisse sind `summarized`, nicht
 `dropped`; die Gesamtzahl darf daher die maximale Zeugenkapazitaet
-ueberschreiten. Runtime-Probe-Schema 4 weist Speichermodus, Kapazitaet,
+ueberschreiten. Runtime-Probe-Schema 5 weist Speichermodus, Kapazitaet,
 Gesamt-, behaltene und zusammengefasste Ereignisse sowie
-`exact_event_stream` aus. Der Digest ist eine deterministische Pruefsumme und
+`exact_event_stream` aus. `hooks_complete` bestaetigt die Aktivierung aller
+Pflichthooks; `observed_complete` verlangt zusaetzlich jede erwartbar positive
+Klasse. Gastexception und kontrollierter Fallback bleiben dabei bewusst
+kontingente Negativpfade. Die exakten zwoelf Klassenzaehler sind in Probe,
+Validator und Digest gebunden. Der Digest ist eine deterministische Pruefsumme und
 keine Authentisierung. Portable Ereigniscodes bleiben auf 64 Zeichen
 begrenzt. Das JSON redigiert standardmaessig `code`, `address`, `value`,
 `detail`, `auxiliary`, `event_hash` und `final_guest_state_hash`; exakte
@@ -99,7 +135,9 @@ Das Profil `deterministic-v1` verlangt vor dem ersten Ereignis alle zwoelf
 Klassen CPU-Safepoint, Scheduler-Callback, akzeptierter Interrupt, Video,
 Audio, Eingabe, MMIO, DMA, Blockdispatch, Gastexception, kontrollierter
 Fallback und Gastcheckpoint.
-Aktivierte und tatsaechlich beobachtete Coverage bleiben getrennt sichtbar.
+Aktivierte und tatsaechlich beobachtete Coverage bleiben getrennt sichtbar;
+ein vollstaendiger Produktreplay muss dropfrei sowie Hook- und
+Beobachtungs-vollstaendig sein.
 Die zentrale Observation-Session schreibt Dispatch, Fallbacks, Exceptions und
 streng monotone Checkpoints gegen logische Gastzeit; GD-ROM-, DMA-, PVR- und
 AICA-Schedulerereignisse besitzen stabile Codes. Typisierte Endklassen
@@ -226,7 +264,7 @@ Delay-Slot-Exception verwechselt. Die monotone Exceptiongeneration laesst
 BSR, BSRF und JSR im Handler normal fortsetzen und propagiert nur neu
 entstehende Fehler.
 
-Der danach genau einmal exportierte und gebaute v7-Port verwendet
+Der historische, damals genau einmal exportierte und gebaute v7-Port verwendet
 Runtime-ABI 48 und Portprojektvertrag 32 und enthaelt 1.873 Funktionen,
 37 Partitionen und drei latente Module. Export und Hostbuild dauerten
 187,8 Sekunden, die lokale Installation 16,8 Sekunden, der deterministische
@@ -239,11 +277,10 @@ mit einem Miss sowie 2.609.376 `RuntimeOnly`-Hits mit einem Miss und null
 Fallbacks. Endliche Codepointer, die mit bewiesener Aufrufargument-Provenienz
 ueber nicht-Stack-bezogene 32-Bit-Stores weitergereicht werden, speisen jetzt
 bewacht das AOT-Inventar, ohne den live geladenen Dispatch als feste Kante
-einzufrieren; die
-fokussierten Regressionen sind gruen. Ein zweiter privater Build/v8 und das
-Vollgate wurden bewusst nicht ausgefuehrt. `KR-4851` bleibt offen, bis der
-native PAL-50-/60-Hz-Auswahlbildschirm erreicht ist. v6 bleibt erhalten und
-die Original-GDI blieb unveraendert.
+einzufrieren. Diese v7-Evidenz bleibt historisch; der aktuelle
+Runtime-ABI-51-Lauf erreicht wegen der oben genannten Counted-Loop-
+Commitregression nicht mehr das Sega-Bild. `KR-4851` bleibt offen, bis der
+native PAL-50-/60-Hz-Auswahlbildschirm erreicht ist.
 
 Der vorangegangene optimierte ABI-38-PAL-Port wurde mit zwoelf Jobs in
 140,9 Sekunden
@@ -252,7 +289,7 @@ Funktionen und 37 Codepartitionen, aber weiterhin null Retailsektoren im
 Portpaket. Die lokale Discinstallation war erfolgreich, und die unveraenderte
 Original-GDI blieb erhalten.
 
-Der aktuelle private Sonic-Adventure-PAL-AOT-Lauf erreicht innerhalb eines
+Ein frueherer privater Sonic-Adventure-PAL-AOT-Lauf erreicht innerhalb eines
 50-Millionen-Gastzyklusbudgets in 5,3 Sekunden erstmals
 `KR_FIRST_GUEST_FRAME` und `KR_FIRST_PRESENTED_FRAME`. Der recompilierte
 Discbootstrap `IP.BIN` beschreibt den sichtbaren Dreamcast-Framebuffer direkt;

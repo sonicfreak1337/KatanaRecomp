@@ -103,6 +103,26 @@ Decode-/Imagevalidierung bestehen. Gewoehnliche lokale Datenpointer,
 Stackspills, Byte-/Wortstores, nicht finite Wertmengen und ungueltige Ziele
 erzeugen keinen Seed.
 
+Das allgemeine Datenflussgitter bleibt auf acht Werte begrenzt. Ein davon
+getrennter `GuardedCodeInventory`-Kanal behaelt bis zu 1.024 deduplizierte
+Codeadressen aus unabhaengigen Call-Sites, Stores und Returned Tables.
+Ueberschreitung verwirft nicht rueckwirkend bereits belegte Kandidaten, sondern
+setzt `candidate_inventory_truncated`. Returned Tables duerfen bei starker
+Call-/Return-Provenienz einen oder zwei Eintraege besitzen und innerhalb eines
+64-Slot-Fensters begrenzte Null-/Reservierungsluecken enthalten; ein erreichtes
+Scanlimit setzt die getrennte Table-Truncation. Displacement- und
+`R0+Rm`-Effektivadressen werden instruktionsgenau gebildet. Sind beide
+Operanden dasselbe `R0`, entstehen nur korrelierte `2*x`-Adressen und keine
+historischen Kreuzprodukte.
+
+Stack-May-Alias-Provenienz wird pro Call-Site interprozedural vereinigt.
+Weitergereichte Stackpointer gelten deshalb nicht als globale Callbackobjekte.
+Ein isolierter, bewusst unvollstaendiger Storeharvest darf bereits bewiesene
+Stackwerte ueber unbekannte Zwischenwrites nur als `guarded` und `incomplete`
+behalten; exakte Stackwrites invalidieren weiterhin. Auch diese Kandidaten
+erweitern ausschliesslich den nativen Bestand und koennen zur Laufzeit keinen
+abweichenden Zielwert autorisieren.
+
 Die dafuer verwendeten kandidatenbasierten Aufrufkanten existieren nur
 innerhalb der interprozeduralen Wertanalyse. Sie werden weder als geloeste
 CFG-Kante veroeffentlicht noch in den Produktdispatcher eingefroren. Ebenso
@@ -133,6 +153,16 @@ Provenienzmutation vollstaendig validiert, damit ein abgewiesener Load keinen
 alten gueltigen Zustand teilweise zerstoert. P0/P1/P2-Aliase werden vor
 Ueberlappungspruefung kanonisiert, waehrend Bereiche ueber nichtlineare
 Aliasgrenzen als ungueltig gelten.
+
+Byteidentische physische Extents koennen mehrere aktive Modulowner besitzen.
+Jeder Owner behaelt seine eigene Modulinkarnation, Relocationgeneration,
+Berechtigung und Bereichsrolle. Replace, Relocation und Unload entfernen
+Provenienz und AOT-Bindung nur fuer physische Bytes ohne verbleibenden
+gueltigen Owner. Aufloesung und Kontrolltransfer pruefen alle passenden Owner,
+statt einen fruehen nicht materialisierbaren Treffer einen spaeteren gueltigen
+Peer abschatten zu lassen. Ein Materializer-Origin kann nach einem
+Lifecyclewechsel auf einen byteidentischen, weiterhin berechtigten Owner
+wechseln; erst der letzte Owner invalidiert den gemeinsamen Block.
 
 Das gilt auch fuer einen Ersatz mit derselben Modul-ID: Erst nach vollstaendiger
 Vorvalidierung werden alter Index-, Katalog-, Block-, Tracker- und
@@ -240,9 +270,9 @@ Manifest als `diagnostic-interpreter` aus. Deaktivierung, unbekannte Quelle,
 Byteabweichung, Budgetende und ungueltiger Block bleiben typisierte Misses.
 `KR-4848` ist mit strukturierten Disc-Ladetransaktionen, dem allgemeinen
 nativen Materializer und vorab erzeugten latenten nativen Modulen
-abgeschlossen. Der aktuelle kumulative Vertrag verwendet Runtime-ABI 50,
+abgeschlossen. Der aktuelle kumulative Vertrag verwendet Runtime-ABI 51,
 Block-ABI 5, Backend-Interface-ABI 4, PlatformServices-ABI 11 und
-Portprojektvertrag 34. Systemreplay-Schema 7 und Runtime-Probe-Schema 4
+Portprojektvertrag 35. Systemreplay-Schema 8 und Runtime-Probe-Schema 5
 skalieren die Produktbeobachtung, ohne den interpreterfreien
 Materialisierungsvertrag zu aendern.
 
@@ -308,6 +338,18 @@ selbst ist kein statischer Vollstaendigkeitsbeweis.
 
 ## Aktueller privater Messstand
 
+Der aktuelle Runtime-ABI-51-/Portvertrag-35-Abschluss bestand 22/22
+fokussierte Tests. Der anschliessend genau einmal frisch exportierte
+Produktport umfasst 1.952 Funktionen und 38 Partitionen. Sein einziger
+normaler sichtbarer Lauf endet nach 3,199 Sekunden vor dem Sega-Bild und vor
+jedem Gastframe. Der neue Blocker ist kein Missing-AOT: Der
+Counted-Loop-Fastpath nimmt die Gastzeit an, kann danach seinen
+vorvalidierten U32-Sequenzcommit aber nicht abschliessen und beendet den
+Produktlauf typisiert. Ein zweiter Lauf, die Vollsuite und `KR-4852` wurden
+nicht ausgefuehrt; der PAL-50-/60-Hz-Auswahlbildschirm bleibt unbewiesen.
+
+## Historischer v7-Messstand
+
 Der einmalig exportierte und gebaute v7-Port unter Runtime-ABI 48 und
 Portprojektvertrag 32 umfasst 1.873 Funktionen, 37 Partitionen und drei
 latente Module. Export/Hostbuild, lokale Installation, deterministischer
@@ -316,10 +358,9 @@ Probe-Lauf und Detail-Lauf benoetigten 187,8, 16,8, 73,5 beziehungsweise
 Zwei-Instruktions-JSR-Schleife ist verschwunden. Der Detail-Lauf endet mit
 7.422.352 Dispatch-Hits/1 Miss und 2.609.376 `RuntimeOnly`-Hits/1 Miss/0
 Fallbacks am typisierten Missing-AOT `0x8C65E96A -> 0x8C652150`. Der oben
-beschriebene allgemeine Stored-Code-Pointer-Beleg ist fokussiert
-regressionsgeprueft, aber bewusst noch nicht durch einen zweiten privaten
-Build/v8 nachgewiesen. Der native PAL-50-/60-Hz-Auswahlbildschirm ist noch
-nicht erreicht; v6 bleibt erhalten und die Original-GDI blieb unveraendert.
+beschriebene allgemeine Stored-Code-Pointer-Beleg war fokussiert
+regressionsgeprueft. Diese Werte bleiben historische v7-Evidenz und duerfen
+nicht als aktueller Produktnachweis gelesen werden.
 
 Der reine Analyselauf startete kein Gastprogramm. Von 6.735.296 committed
 ausfuehrbaren Bytes sind 110.404 `initially_reachable`. 16.554 Bytes sind

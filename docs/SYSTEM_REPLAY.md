@@ -9,7 +9,7 @@ Paar aus Resetgeneration und Gastzyklus; innerhalb einer Epoche darf die
 Gastzeit nicht rueckwaerts laufen, waehrend eine neue Epoche wieder bei Zyklus
 null beginnen darf.
 
-Das v5-Format unterscheidet:
+Das v8-Format unterscheidet:
 
 - CPU-Safepoints
 - MMIO-Lese- und Schreibzugriffe
@@ -38,15 +38,22 @@ Gastinstruktion genau die zwoelf Pflichtklassen CPU-Safepoint,
 Schedulercallback, akzeptierter Interrupt, Video, Audio, Input, MMIO, DMA,
 Blockdispatch, Gastexception, kontrollierter Fallback und Gastcheckpoint.
 `enabled_coverage`, `observed_coverage`, `required_coverage`,
-`coverage_complete` und zwoelf getrennte Ereigniszaehler machen den Vertrag
-maschinenlesbar. Vollstaendige Coverage bedeutet, dass alle Pflichthooks
-angebunden sind; nicht jede Klasse muss innerhalb eines kurzen Budgets
-tatsaechlich ein Ereignis erzeugen.
+`expected_observed_coverage`, `hooks_complete`, `observed_complete` und
+zwoelf getrennte Ereigniszaehler machen den Vertrag maschinenlesbar.
+`hooks_complete` bedeutet, dass alle Pflichthooks angebunden sind.
+`observed_complete` verlangt fuer `deterministic-v1` zusaetzlich jede
+erwartbar positive Klasse; Gastexception und kontrollierter Fallback sind
+kontingente Negativpfade und gehoeren deshalb nicht in diese Positivmaske.
+`SystemReplayProfile::General` besitzt keine erwartete Positivmaske.
+`coverage_complete()` bleibt nur als veralteter Kompatibilitaetsalias fuer
+`hooks_complete()` erhalten.
 
 Ein domain-separierter Ordnungsdigest bindet die kanonische Reihenfolge aller
 angenommenen Ereignisse, auch wenn der skalierbare Modus nicht jedes davon als
 Einzelobjekt behaelt. Vertauschte Ereignisse koennen daher nicht durch gleiche
-Summen oder Coverage-Masken als identischer Lauf erscheinen. Der Digest
+Summen oder Coverage-Masken als identischer Lauf erscheinen. Seine finale
+Domain bindet ausserdem Gesamtzahl, beobachtete Coverage und alle exakten
+zwoelf Klassenzaehler. Der Digest
 verwendet ungekeytes FNV-1a und ist deterministische Evidenz, keine
 Authentisierung oder kryptografische Integritaetsgarantie.
 
@@ -114,7 +121,7 @@ optionalen letzten Checkpoint, `replay_complete` und `redacted=true`.
 
 ## Begrenzung und portable Ereigniscodes
 
-Systemreplay-Schema 7 besitzt zwei explizite Speichermodi:
+Systemreplay-Schema 8 besitzt zwei explizite Speichermodi:
 
 - `ExactEvents` behaelt jedes Ereignis. Erreicht `record()` die konfigurierte
   Kapazitaet, markiert es genau einen Drop und bricht sichtbar ab.
@@ -157,15 +164,17 @@ Speicher, MMIO, DMA, Timer, Interrupt- und Medienzustand werden
 ueber diesen Subsystemhash gebunden, ohne rohe Speicher- oder Firmwarebytes im
 Bericht abzulegen.
 
-`DeterministicSystemReplay` akzeptiert ausschliesslich einen vollstaendigen
-`ExactEvents`-Strom und vergleicht jedes beobachtete Ereignis sofort mit dem
+`DeterministicSystemReplay` akzeptiert ausschliesslich einen dropfreien,
+Hook-vollstaendigen und beobachtungsvollstaendigen `ExactEvents`-Strom und
+vergleicht jedes beobachtete Ereignis sofort mit dem
 naechsten erwarteten Eintrag. Ein fehlendes, zusaetzliches, anders sortiertes
 oder inhaltlich abweichendes Ereignis wirft `SystemReplayMismatch` am ersten
 betroffenen Index. Nach dem letzten Ereignis muss auch der Gastzustandshash
 exakt uebereinstimmen.
 
 `DeterministicSystemReplayDigest` ist der getrennte Verifier fuer einen
-versiegelten, dropfreien `DigestStream`. Er prueft das behaltene Zeugenpraefix
+versiegelten, dropfreien, Hook- und beobachtungsvollstaendigen
+`DigestStream`. Er prueft das behaltene Zeugenpraefix
 ereignisgenau und bindet am Ende zusaetzlich Gesamtzahl, Ordnungsdigest,
 beobachtete Coverage, alle Ereignisklassenzaehler und den finalen
 Gastzustandshash. Damit wird ein zusammengefasster Strom nicht faelschlich als
@@ -182,10 +191,12 @@ Integritaets- oder Sicherheitsgarantie.
 
 ## Redigierter JSON-Vertrag
 
-Der v5-JSON-Bericht ist standardmaessig redigiert. Neben
+Der v8-JSON-Bericht ist standardmaessig redigiert. Neben
 `storage_mode` weist er `event_count`, `retained_event_count`,
-`summarized_event_count` und `exact_event_stream` aus. Der
-Runtime-Probe-Bericht Version 2 ergaenzt dazu `retention_capacity`. `code`,
+`summarized_event_count`, `exact_event_stream`, die beiden
+Vollstaendigkeitsaussagen, die erwartete Positivmaske und alle zwoelf
+Klassenzaehler aus. Der Runtime-Probe-Bericht Version 5 ergaenzt dazu
+`retention_capacity`. `code`,
 `address`, `value`,
 `detail` und `auxiliary` werden als `null` ausgegeben. Auch `event_hash` und
 `final_guest_state_hash` bleiben `null`, weil diese Felder sonst weiterhin
