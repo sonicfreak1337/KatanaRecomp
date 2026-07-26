@@ -7,16 +7,24 @@ tausend Zeilen wiederholt.
 ## Regeln
 
 - Eine Implementierung bearbeitet normalerweise genau eine Task-ID.
-- Allgemeine Semantik und verteilbare Regressionen sind Pflicht.
+- Oberste Prioritaet ist die Lauffaehigkeit von Sonic Adventure PAL im
+  normalen nativen Produktport.
+- Der naechste belegte Sonic-Bootfortschritt ist der regulaere Test einer
+  Implementierung. Neue synthetische oder frei lizenzierte Regressionen sind
+  nur fuer einen konkret im Produktlauf beobachteten Blocker zulaessig, wenn
+  sie die Diagnose oder Iteration messbar verkuerzen.
+- Breite CTest-Suites, Funktionsmatrizen und vorsorgliche Tests werden weder
+  routinemaessig ausgefuehrt noch als Nebenarbeit erweitert.
 - Private Retaildaten und daraus erzeugte Artefakte bleiben ausserhalb des Repos.
-- Private Retaillaeufe sind fuer v0.48 nur als budgetierte lokale Diagnose
-  erlaubt; Quell-GDIs werden dabei nie geloescht oder veraendert.
+- Private Retaillaeufe sind die verbindliche lokale Produktevidenz; Quell-GDIs
+  werden dabei nie geloescht oder veraendert.
 - Deterministische Probes und interaktive Sitzungen sind getrennte Modi.
-- Interaktive Sitzungen gelten nie als Gateevidenz.
+- Ein sichtbarer normaler Produktlauf darf die Bootevidenz liefern; Diagnose-
+  und Probemodi duerfen ihn nicht ersetzen.
 - Gate-Vorbereitung stoppt grundsaetzlich fuer das Nutzerreview. Fuer v0.48
   gilt die am 23.07.2026 erteilte Standing Approval: Sind alle
-  Implementierungen abgeschlossen und das finale Gate vollstaendig gruen, ist
-  das Review automatisch bestanden.
+  Implementierungen abgeschlossen und der definierte normale Sonic-
+  Produktfortschritt belegt, ist das Review automatisch bestanden.
 - Gate-Freigaben erzeugen nur dann einen oeffentlichen Release, wenn die Task das
   ausdruecklich verlangt.
 - Eine Task-ID ist ab ihrem ersten Merge semantisch unveraenderlich.
@@ -52,8 +60,8 @@ KR-4847 und KR-4913 -> KR-4849 -> KR-4915 -> KR-4850
 KR-4850 -> KR-4814 -> KR-4914
 KR-4850 -> KR-4851
 KR-4851 und KR-4914
-  -> KR-4852 (einziges finales Vollgate; gruen = Nutzerreview bestanden)
-  -> KR-4853 (uebernimmt den unveraenderten Gatebericht; kein Build oder Test)
+  -> KR-4852 (finaler normaler Sonic-Produktnachweis)
+  -> KR-4853 (uebernimmt die unveraenderte Produktevidenz; kein neuer Lauf)
   -> KR-4854
 
 v0.49 Port-, Harness-, GUI-Integration und Alpha-Candidate:
@@ -72,24 +80,16 @@ KR-4812, KR-4823 und KR-4914
   -> KR-5000
 ```
 
-Korrektheit blockiert Performance. Waehrend aller noch offenen v0.48-
-Implementierungsaufgaben einschliesslich `KR-4914` werden grundsaetzlich nur
-betroffene Targets und kleine Regressionen ausgefuehrt. Der
-First-Frame-/KR-4848-Zwischenblock erhielt zusaetzlich auf Quellstand
-`924ea89` ein vollstaendiges CTest-Zwischengate der x64-Desktop-GUI-off-
-Konfiguration mit 183/183 Eintraegen in 312,97 Sekunden bei zwoelf parallelen
-Jobs, darunter 181 regulaere Passes und zwei erwartete
-Regex-`PASS_REGULAR_EXPRESSION`-Erfolge. Desktop-GUI- und Harness-Tests sind
-nicht Teil dieser 183; der Runner-Selbsttest ist separat gruen. Die finale
-konsolidierte Suite und die privaten Reproduktionslaeufe folgen erst nach
-Abschluss aller v0.48-Implementierungen genau einmal in `KR-4852`. `KR-4853`
-uebernimmt nur den unveraenderten gruenen Bericht. Das Zwischengate schliesst
-`KR-4852`, `KR-4853` oder `KR-4854` nicht ab. Jeder Prozess besitzt ein
-hartes Limit von 15 Minuten. Der moderne Hostcontrollervertrag `KR-4814` ist
-als Post-Frame-Arbeit abgeschlossen. Die private interaktive Sitzung
-`KR-4914` bleibt offen, weil ohne bootendes Spiel noch kein praktischer
-Controllerlauf nachgewiesen werden kann; sie muss vor `KR-4852` abgeschlossen
-sein. BootExecutable und Spielboot bleiben parallel das aktuelle P0.
+Korrektheit und Performance werden am normalen Sonic-Produktpfad beurteilt.
+Der auf Quellstand `924ea89` historische CTest-Stand von 183/183 bleibt als
+damalige Evidenz dokumentiert, begruendet aber keine kuenftige
+Wiederholungspflicht. `KR-4852` fuehrt statt einer konsolidierten Suite den
+frischen normalen Sonic-Produktnachweis aus; `KR-4853` uebernimmt nur diese
+unveraenderte Produktevidenz. Jeder Prozess besitzt ein hartes Limit von
+15 Minuten. Der moderne Hostcontrollervertrag `KR-4814` ist als
+Post-Frame-Arbeit abgeschlossen. `KR-4914` bleibt offen, weil ohne bootendes
+Spiel noch kein praktischer Controllerlauf nachgewiesen werden kann.
+BootExecutable und Spielboot bleiben das aktuelle P0.
 
 ---
 
@@ -1261,13 +1261,13 @@ Abhaengigkeiten: KR-4831, KR-4841 bis KR-4851, KR-4814, KR-4911, KR-4912,
 KR-4913, KR-4914 und KR-4915
 Prioritaet: P0
 
-Erst nach vollstaendiger Implementierung aller v0.48-Aufgaben werden in genau
-einem finalen Gate gebuendelt betroffene Targets, fokussierte Regressionen,
-Gesamtbestand, Sanitizer, frischer Portexport, lokale
-Originaldisc-Installation und zwei private Reproduktionslaeufe ausgefuehrt.
-Waehrend der Implementierungsrunde gibt es kein weiteres Vollgate. Danach
-werden nur konkrete neue Blocker gezielt geprueft. Jeder Einzelprozess endet
-spaetestens nach 15 Minuten samt Prozessbaum.
+Nach vollstaendiger Implementierung aller v0.48-Aufgaben wird genau ein
+frischer normaler Sonic-Produktport exportiert, lokal mit der unveraenderten
+Originaldisc installiert und bis zum fuer die Phase definierten sichtbaren
+Spielmeilenstein ausgefuehrt. Dieser Fortschritt ist die finale Evidenz.
+Gesamtbestand, Sanitizer und breite Regressionen sind kein regulaerer Teil
+dieses Tasks. Jeder Einzelprozess endet spaetestens nach 15 Minuten samt
+Prozessbaum.
 
 ### [ ] KR-4853 - v0.48 Boot-Gate-Vorbereitung
 
@@ -1277,18 +1277,18 @@ Prioritaet: P0
 - STATUS, README, ROADMAP, TASKS und CHANGELOG abgleichen
 - ABI-/Formatversionen aus dem finalen Diff bestimmen
 - nur belegte Testzahlen und keine Retaildaten dokumentieren
-- den unveraenderten gruenen finalen Gatebericht aus `KR-4852` uebernehmen
-- keine neue Semantik, Builds oder Testlaeufe zwischen finalem Gate und
+- die unveraenderte erfolgreiche Sonic-Produktevidenz aus `KR-4852` uebernehmen
+- keine neue Semantik, Builds oder Produktlaeufe zwischen Nachweis und
   Freigabe einfuehren
-- ein vollstaendig gruener Gatebericht erfuellt die Standing Approval vom
+- der belegte definierte Sonic-Spielmeilenstein erfuellt die Standing Approval vom
   23.07.2026 automatisch; kein weiterer Review-Stopp ist erforderlich
 
 ### [ ] KR-4854 - v0.48 interne Freigabe
 
-Abhaengigkeiten: KR-4853 mit vollstaendig gruenem finalem Gate
+Abhaengigkeiten: KR-4853 mit erfolgreicher unveraenderter Sonic-Produktevidenz
 Prioritaet: P0
 
-- nach dem unveraenderten gruenen Gate keine neue Semantik, Builds oder Tests
+- nach dem unveraenderten Produktnachweis keine neue Semantik, Builds oder Tests
   einfuehren
 - `v0.48.0` durch die bestehende Standing Approval automatisch als erreicht
   und release-ready intern freigeben

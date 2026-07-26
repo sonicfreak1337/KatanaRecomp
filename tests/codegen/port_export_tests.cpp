@@ -1,6 +1,7 @@
 #include "katana/codegen/port_export.hpp"
 #include "katana/ir/lower.hpp"
 #include "katana/platform/dreamcast_disc.hpp"
+#include "katana/runtime/cache_control.hpp"
 #include "katana/runtime/disc_install.hpp"
 #include "katana/runtime/dreamcast_boot.hpp"
 #include "katana/runtime/executable_modules.hpp"
@@ -269,9 +270,10 @@ std::vector<std::uint8_t> mmio_wait_loop_boot_track(
 }
 
 std::vector<std::uint8_t> counted_loop_boot_track(const bool valid_step = true,
-                                                  const bool aliased_counter = false) {
+                                                  const bool aliased_counter = false,
+                                                  const bool on_chip_counter = false) {
     auto bytes = boot_track();
-    constexpr std::uint32_t boot_size = 0x28u;
+    const std::uint32_t boot_size = on_chip_counter ? 0x30u : 0x28u;
     auto directory = payload_offset(20u);
     directory +=
         record(bytes, directory, data_lba + 20u, payload_size, std::string(1u, '\0'), true);
@@ -281,7 +283,29 @@ std::vector<std::uint8_t> counted_loop_boot_track(const bool valid_step = true,
     std::vector<std::uint8_t> program(boot_size, 0x09u);
     for (std::size_t offset = 1u; offset < program.size(); offset += 2u)
         program[offset] = 0x00u;
-    if (aliased_counter) {
+    if (on_chip_counter) {
+        constexpr auto synthetic_on_chip_stack =
+            katana::runtime::sh4_on_chip_ram_address + 0x01001230u;
+        program[0x00u] = 0x09u;
+        program[0x01u] = 0xDFu; // mov.l @(36,pc),r15 -> synthetic OCRAM alias
+        program[0x02u] = 0x0Au;
+        program[0x03u] = 0xD1u; // mov.l @(40,pc),r1 -> CCR 0xFF00001C
+        program[0x04u] = 0x20u;
+        program[0x05u] = 0xE0u; // mov #0x20,r0 (operand RAM enable)
+        program[0x06u] = 0x02u;
+        program[0x07u] = 0x21u; // mov.l r0,@r1
+        program[0x08u] = 0x05u;
+        program[0x09u] = 0xA0u; // bra 0x8C010016
+        program[0x0Au] = 0x09u;
+        program[0x0Bu] = 0x00u; // delay-slot nop
+        for (std::size_t byte = 0u; byte < sizeof(synthetic_on_chip_stack); ++byte)
+            program[0x28u + byte] =
+                static_cast<std::uint8_t>(synthetic_on_chip_stack >> (byte * 8u));
+        program[0x2Cu] = 0x1Cu;
+        program[0x2Du] = 0x00u;
+        program[0x2Eu] = 0x00u;
+        program[0x2Fu] = 0xFFu;
+    } else if (aliased_counter) {
         program[0x00u] = 0x01u;
         program[0x01u] = 0xDFu; // mov.l @(4,pc),r15 -> 0x8D01001C
         program[0x02u] = 0x08u;
@@ -618,6 +642,8 @@ int run_test(const int argc, char* argv[]) {
                       std::string(argv[1]) == "--write-trap-fixture" ||
                       std::string(argv[1]) == "--write-unknown-target-fixture" ||
                       std::string(argv[1]) == "--write-counted-loop-fixture" ||
+                      std::string(argv[1]) ==
+                          "--write-counted-loop-on-chip-fixture" ||
                       std::string(argv[1]) == "--write-memory-fill-fixture" ||
                       std::string(argv[1]) == "--write-composite-callback-fixture")) {
         const std::filesystem::path directory(argv[2]);
@@ -628,13 +654,18 @@ int run_test(const int argc, char* argv[]) {
                                  ? FixtureProgram::UnknownDynamicTarget
                                  : FixtureProgram::Normal;
         write_fixture(directory, program);
-        if (std::string(argv[1]) == "--write-counted-loop-fixture") {
-            const auto track = counted_loop_boot_track();
+        if (std::string(argv[1]) == "--write-counted-loop-fixture" ||
+            std::string(argv[1]) == "--write-counted-loop-on-chip-fixture") {
+            const bool on_chip_counter =
+                std::string(argv[1]) == "--write-counted-loop-on-chip-fixture";
+            const auto track = counted_loop_boot_track(true, false, on_chip_counter);
             write_binary(directory / "high.bin", track);
             const auto program_begin =
                 track.begin() + static_cast<std::ptrdiff_t>(payload_offset(21u));
             write_binary(directory / "program.bin",
-                         std::vector<std::uint8_t>(program_begin, program_begin + 0x28));
+                         std::vector<std::uint8_t>(
+                             program_begin,
+                             program_begin + (on_chip_counter ? 0x30u : 0x28u)));
         }
         if (std::string(argv[1]) == "--write-memory-fill-fixture") {
             const auto track = memory_fill_loop_boot_track();
@@ -1720,11 +1751,15 @@ int run_test(const int argc, char* argv[]) {
         memory_fill_method.find("const auto proves_instruction_block");
     const auto memory_fill_limit_read =
         memory_fill_method.find("const auto limit_pointer");
+    const auto memory_fill_prepare = memory_fill_method.find(
+        "cpu_.memory.prepare_prevalidated_linear_fill(",
+        memory_fill_limit_read);
     const auto memory_fill_time_accept = memory_fill_method.find(
         "accept_batch_guest_cycles_before_commit(",
-        memory_fill_limit_read);
+        memory_fill_prepare);
     const auto memory_fill_commit =
-        memory_fill_method.find("cpu_.memory.commit_prevalidated_linear_fill(");
+        memory_fill_method.find("cpu_.memory.commit_prepared_linear_fill(",
+                                memory_fill_time_accept);
     const auto memory_fill_cpu_commit = memory_fill_method.find(
         "cpu_.r[descriptor.cursor_register] = final_cursor",
         memory_fill_commit);
@@ -1823,6 +1858,7 @@ int run_test(const int argc, char* argv[]) {
             memory_fill_registration != std::string::npos &&
             memory_fill_instruction_proof != std::string::npos &&
             memory_fill_limit_read != std::string::npos &&
+            memory_fill_prepare != std::string::npos &&
             memory_fill_time_accept != std::string::npos &&
             memory_fill_commit != std::string::npos &&
             memory_fill_cpu_commit != std::string::npos &&
@@ -1831,9 +1867,18 @@ int run_test(const int argc, char* argv[]) {
             memory_fill_preflush < memory_fill_registration &&
             memory_fill_registration < memory_fill_instruction_proof &&
             memory_fill_instruction_proof < memory_fill_limit_read &&
-            memory_fill_limit_read < memory_fill_time_accept &&
+            memory_fill_limit_read < memory_fill_prepare &&
+            memory_fill_prepare < memory_fill_time_accept &&
             memory_fill_time_accept < memory_fill_commit &&
             memory_fill_commit < memory_fill_cpu_commit &&
+            memory_fill_method.find("if (!prepared_fill)") !=
+                std::string::npos &&
+            memory_fill_method.find(
+                "if (!cpu_.memory.commit_prepared_linear_fill(") ==
+                std::string::npos &&
+            memory_fill_method.find(
+                "Memory-Fill-Commit scheiterte nach Gastzeitannahme") ==
+                std::string::npos &&
             memory_fill_fastpath_snapshot != std::string::npos &&
             memory_fill_fastpath_finalize != std::string::npos &&
             memory_fill_fastpath_target != std::string::npos &&
@@ -1853,7 +1898,7 @@ int run_test(const int argc, char* argv[]) {
                 std::string::npos &&
             memory_fill_method.find(
                 "synthesized_limit_reads,\n"
-                "                synthesized_indexed_region_hits") !=
+                "            synthesized_indexed_region_hits") !=
                 std::string::npos &&
             memory_fill_method.find(
                 "const auto available = *event - scheduler_cycle - 1u") !=
@@ -2009,10 +2054,14 @@ int run_test(const int argc, char* argv[]) {
             : std::string_view{composite_main}.substr(
                   composite_method_begin,
                   composite_method_end - composite_method_begin);
+    const auto composite_prepare =
+        composite_method.find("prepare_prevalidated_linear_u32_pattern(");
     const auto composite_time_accept =
-        composite_method.find("accept_batch_guest_cycles_before_commit(");
+        composite_method.find("accept_batch_guest_cycles_before_commit(",
+                              composite_prepare);
     const auto composite_commit =
-        composite_method.find("commit_prevalidated_linear_u32_pattern(");
+        composite_method.find("commit_prepared_linear_u32_pattern(",
+                              composite_time_accept);
     const auto composite_cpu_commit =
         composite_method.find("cpu_.r[0u] = pattern", composite_commit);
     require(
@@ -2051,11 +2100,21 @@ int run_test(const int argc, char* argv[]) {
                 "guest_write_observer_allows_prevalidated_linear_writes()") !=
                 std::string::npos &&
             composite_method.find("next_event_cycle()") != std::string::npos &&
+            composite_prepare != std::string::npos &&
             composite_time_accept != std::string::npos &&
             composite_commit != std::string::npos &&
             composite_cpu_commit != std::string::npos &&
+            composite_prepare < composite_time_accept &&
             composite_time_accept < composite_commit &&
             composite_commit < composite_cpu_commit &&
+            composite_method.find("return reject(\"memory-prepare\")") !=
+                std::string::npos &&
+            composite_method.find(
+                "if (!cpu_.memory.commit_prepared_linear_u32_pattern(") ==
+                std::string::npos &&
+            composite_method.find(
+                "Composite-Callback-Commit scheiterte nach Gastzeitannahme") ==
+                std::string::npos &&
             composite_method.find(
                 "flush_pending_guest_cycles(cpu_, *this)",
                 composite_commit) == std::string::npos &&
@@ -2260,11 +2319,14 @@ int run_test(const int argc, char* argv[]) {
         counted_loop_method.find("first_round_tail_guest_cycles", counted_scalar_guard);
     const auto counted_synthetic_reads =
         counted_loop_method.find("admitted * 3u - 2u", counted_first_round_tail);
+    const auto counted_sequence_prepare = counted_loop_method.find(
+        "prepare_prevalidated_repeated_u32_sequence(",
+        counted_synthetic_reads);
     const auto counted_time_accept = counted_loop_method.find(
         "accept_batch_guest_cycles_before_commit(",
-        counted_synthetic_reads);
+        counted_sequence_prepare);
     const auto counted_atomic_sequence = counted_loop_method.find(
-        "commit_prevalidated_repeated_u32_sequence(",
+        "commit_prepared_repeated_u32_sequence(",
         counted_time_accept);
     const auto counted_cpu_commit = counted_loop_method.find(
         "cpu_.r[descriptor.limit_register] = limit_bits",
@@ -2541,12 +2603,23 @@ int run_test(const int argc, char* argv[]) {
             counted_scalar_guard != std::string::npos &&
             counted_first_round_tail != std::string::npos &&
             counted_synthetic_reads != std::string::npos &&
+            counted_sequence_prepare != std::string::npos &&
             counted_time_accept != std::string::npos &&
             counted_atomic_sequence != std::string::npos &&
             counted_cpu_commit != std::string::npos &&
-            counted_synthetic_reads < counted_time_accept &&
+            counted_synthetic_reads < counted_sequence_prepare &&
+            counted_sequence_prepare < counted_time_accept &&
             counted_time_accept < counted_atomic_sequence &&
             counted_atomic_sequence < counted_cpu_commit &&
+            counted_loop_method.find(
+                "counted_loop_batch_rejected(\"memory-prepare\")") !=
+                std::string::npos &&
+            counted_loop_method.find(
+                "if (!cpu_.memory.commit_prepared_repeated_u32_sequence(") ==
+                std::string::npos &&
+            counted_loop_method.find(
+                "Counted-Loop-Commit scheiterte nach Gastzeitannahme") ==
+                std::string::npos &&
             counted_loop_method.find(
                 "flush_pending_guest_cycles(cpu_, *this)",
                 counted_atomic_sequence) == std::string::npos &&
@@ -2603,7 +2676,8 @@ int run_test(const int argc, char* argv[]) {
             counted_first_read < counted_scalar_guard &&
             counted_scalar_guard < counted_first_round_tail &&
             counted_first_round_tail < counted_synthetic_reads &&
-            counted_synthetic_reads < counted_time_accept &&
+            counted_synthetic_reads < counted_sequence_prepare &&
+            counted_sequence_prepare < counted_time_accept &&
             counted_time_accept < counted_atomic_sequence &&
             counted_atomic_sequence < counted_cpu_commit &&
             counted_loop_method.find("return false;", counted_prefix_flush) ==
@@ -2620,7 +2694,7 @@ int run_test(const int argc, char* argv[]) {
                 "cpu_.retired_guest_instructions += instructions_through_final_store") !=
                 std::string::npos &&
             counted_loop_method.find(
-                "commit_prevalidated_repeated_u32_sequence(") !=
+                "commit_prepared_repeated_u32_sequence(") !=
                 std::string::npos &&
             counted_loop_method.find(
                 "synthetic_memory_accesses + admitted") !=

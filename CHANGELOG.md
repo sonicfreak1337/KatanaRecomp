@@ -4,6 +4,30 @@
 
 ### Geaendert
 
+- Die projektweite Testrichtlinie verwendet ab sofort den normalen privaten
+  Sonic-Adventure-PAL-Produktlauf als entscheidendes Fortschritts- und
+  Freigabekriterium. Breite Suites, vorsorgliche Funktionsmatrizen und
+  standardmaessig mitgebaute Regressionen duerfen den Bootzyklus nicht mehr
+  verlangsamen. Enge synthetische Tests bleiben nur fuer einen bereits im
+  Produktlauf konkret beobachteten Blocker zulaessig, wenn sie dessen Diagnose
+  oder die naechste Sonic-Iteration messbar verkuerzen.
+- Runtime-ABI 52 und Portprojektvertrag 37 schliessen die bestaetigte
+  Counted-Loop-Produktregression. Fill-, U32-Pattern- und wiederholte
+  U32-Schreibfolgen bereiten Mapping, Backing-Lebenszeit, stabilen
+  Write-Observer, Changed-Flags und alle Allokationen vor Annahme der Gastzeit
+  vor. Der anschliessende Commit ist `void noexcept`, allokationsfrei und
+  nicht mehr ablehnbar; nichtlineares SH-4-OCRAM faellt bereits beim Prepare
+  ohne Schedulerwirkung auf den skalaren Pfad zurueck. Ein ausgefuehrter
+  Produktport-Regressionsfall verwendet die echte Dreamcast-OCRAM-Abbildung
+  und den produktiven Write-Observer und vergleicht den Prepare-Fallback mit
+  dem erzwungenen nativen Skalarpfad.
+- Analyzer-ABI 1 versioniert erstmals die oeffentlichen Layouts und Signaturen
+  von `KatanaRecomp::analyzer` getrennt von der Runtime. Der exportierte
+  Targetwert erzwingt den passenden Compilevertrag, die Layoutheader pruefen
+  ihn per `static_assert`, und eine ABI-spezifische Linkspezialisierung weist
+  wiederverwendete Objektdateien aus einem anderen Analyzervertrag ab. Der
+  installierte Out-of-Tree-Package-Test belegt den aktuellen Positivfall sowie
+  abgewiesene Configure- und Linkfaelle.
 - `KR-4814` schliesst den nativen Controller-Produktvertrag. Der generierte
   Port pollt XInput und WinMM an Gast-Safepoints, fuehrt Gamepad, Keyboard,
   Hotplug, Fokus und Controller-1-Auswahl durch dieselbe

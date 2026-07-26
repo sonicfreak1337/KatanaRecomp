@@ -3,8 +3,9 @@
 KR-4701 definiert `katana-native-video` als Runtimevertrag Version 2. Externe
 Portprojekte erhalten die Schnittstelle ueber `katana_runtime`; die erzeugte
 `game.exe` benoetigt die KatanaRecomp-CLI nicht als Laufzeithuelle.
-Der kumulative Integrationsstand verwendet Runtime-ABI 51, Block-ABI 5,
-Backend-Interface-ABI 4, PlatformServices-ABI 11 und Portprojektvertrag 36.
+Der kumulative Integrationsstand verwendet Runtime-ABI 52, Block-ABI 5,
+Analyzer-ABI 1, Backend-Interface-ABI 4, PlatformServices-ABI 11 und
+Portprojektvertrag 37.
 
 ## Vertrag
 

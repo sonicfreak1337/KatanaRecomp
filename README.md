@@ -20,6 +20,15 @@ Titelhackschicht.
 BIOS-Dateien, Disc-Images, urheberrechtlich geschuetzte Assets und aus
 kommerziellen Spielen erzeugter Code gehoeren nicht in dieses Repository.
 
+Die aktuelle projektweite Entwicklungsrichtlinie priorisiert einen
+lauffaehigen privaten Sonic-Adventure-PAL-Produktport. Reale Fortschritte im
+normalen nativen Spielboot sind das verbindliche Testkriterium. Breite
+Testsuiten und vorsorgliche Funktionsregressionen werden nicht routinemaessig
+erweitert oder ausgefuehrt; ein enger synthetischer Test ist nur fuer einen
+konkret im Produktlauf beobachteten Blocker zulaessig, wenn er die naechste
+Sonic-Iteration messbar beschleunigt. Private Retaildaten bleiben dabei strikt
+aus Repository und verteilbaren Artefakten ausgeschlossen.
+
 ## Status
 
 v0.48 fuehrt den von der Originaldisc lokal installierten Systembootstrap und
@@ -61,9 +70,10 @@ vorbereitet; der live geladene Dispatch bleibt `RuntimeOnly` und erzeugt keine
 feste CFG-Kante. Snapshotcache und P2-Aliasaufloesung sind gegen imagefremde
 Beweise abgesichert. Lokale AOT-Blockketten tragen die exakte tatsaechliche
 Terminatorquelle und Siteklasse bis zum externen Dispatch weiter. Der aktuelle
-kumulative Stand verwendet Runtime-ABI 51, Block-ABI 5,
-Backend-Interface-ABI 4, PlatformServices-ABI 11, Portprojektvertrag 36 und
-Host-Video-Vertrag 2. Die aktuelle Beobachtungsgrenze verwendet
+kumulative Stand verwendet Runtime-ABI 52, Block-ABI 5,
+Analyzer-ABI 1, Backend-Interface-ABI 4, PlatformServices-ABI 11,
+Portprojektvertrag 37 und Host-Video-Vertrag 2. Die aktuelle
+Beobachtungsgrenze verwendet
 Systemreplay-Schema 8, Runtime-Probe-Schema 5 und Device-Schema 5.
 
 `KR-4814` schliesst den nativen Controller-Produktvertrag. Unter Windows

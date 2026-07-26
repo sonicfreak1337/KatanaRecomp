@@ -24,6 +24,21 @@ KR-1101 - SUB, NEG und NOT
 
 Keine benachbarten Roadmap-Punkte werden nebenbei implementiert, ausser sie sind fuer den Task zwingend notwendig und im Ergebnis klar dokumentiert.
 
+Projektweit hat die Lauffaehigkeit des privaten Sonic-Adventure-PAL-
+Produktports Vorrang vor synthetischer Testabdeckung. Der regulaere
+Nachweiszyklus lautet:
+
+```text
+frischer Produktport -> normaler Sonic-Lauf -> naechsten Blocker beheben
+-> sichtbaren Bootfortschritt dokumentieren
+```
+
+Keine breite Suite und keine vorsorgliche Funktionsmatrix darf diesen Zyklus
+verzoegern. Ein enger synthetischer Test ist nur dann gerechtfertigt, wenn er
+einen bereits im Sonic-Lauf konkret beobachteten Fehler schneller isoliert
+oder eine deutlich teurere Retailiteration ersetzt. Der anschliessende normale
+Sonic-Lauf bleibt trotzdem der entscheidende Test.
+
 ## Startprozedur
 
 1. nach jedem neuen Lauf und nach jeder Kontextkomprimierung die gebuendelten
@@ -392,9 +407,9 @@ bis zum PAL-50-/60-Hz-Menue nachweisen
 Abgeschlossen und in Roadmap/Taskliste markiert sind `KR-4831`, `KR-4841`,
 `KR-4842`, `KR-4843`, `KR-4844`, `KR-4845`, `KR-4846`, `KR-4848`,
 `KR-4911`, `KR-4912`, `KR-4913`, `KR-4915`, `KR-4850` und `KR-4814`. Der
-aktuelle Runtimevertrag steht auf Runtime-ABI 51, Block-ABI 5,
-Backend-Interface-ABI 4, PlatformServices-ABI 11, BIOS-ABI 9,
-Portprojektvertrag 36, Systemreplay-Schema 8, Runtime-Probe-Schema 5,
+aktuelle Runtimevertrag steht auf Runtime-ABI 52, Block-ABI 5,
+Analyzer-ABI 1, Backend-Interface-ABI 4, PlatformServices-ABI 11, BIOS-ABI 9,
+Portprojektvertrag 37, Systemreplay-Schema 8, Runtime-Probe-Schema 5,
 Device-Schema 5 und Host-Video-Vertrag 2.
 Das verbindliche
 XenonRecomp-artige Produktmodell rekompiliert `IP.BIN` und BootExecutable

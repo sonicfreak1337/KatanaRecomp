@@ -1262,64 +1262,70 @@ bool Memory::commit_linear_transaction_batch(
     }
 }
 
-bool Memory::commit_prevalidated_linear_fill(const std::uint32_t address,
-                                             const std::size_t size,
-                                             const std::uint8_t value,
-                                             const CodeWriteSource source,
-                                             const std::size_t additional_unobserved_accesses,
-                                             const std::size_t additional_indexed_region_hits) noexcept {
+std::optional<Memory::PreparedLinearFill>
+Memory::prepare_prevalidated_linear_fill(
+    const std::uint32_t address,
+    const std::size_t size,
+    const std::uint8_t value,
+    const CodeWriteSource source,
+    const std::size_t additional_unobserved_accesses,
+    const std::size_t additional_indexed_region_hits) noexcept {
     if (size == 0u || lookup_mode_ != MemoryLookupMode::Indexed ||
         access_observers_active() || mmio_access_tracking_enabled_ ||
         mmio_trace_handler_ || guest_memory_access_sink_ ||
         !guest_write_observer_allows_prevalidated_linear_writes())
-        return false;
-    if (size > address_space_size - static_cast<std::uint64_t>(address)) return false;
-
-    const auto range_end = static_cast<std::uint64_t>(address) + size;
-    const MappedRegion* mapped = indexed_region(address, size, false);
-    if (mapped == nullptr) {
-        for (const auto& candidate : regions_) {
-            const auto region_start = static_cast<std::uint64_t>(candidate.info.base_address);
-            const auto region_end = region_start + candidate.info.size;
-            if (address >= region_start && range_end <= region_end) {
-                if (mapped != nullptr) return false;
-                mapped = &candidate;
-            }
-        }
-    }
-    if (mapped == nullptr || mapped->info.access != MemoryRegionAccess::ReadWrite ||
-        mapped->linear == nullptr)
-        return false;
+        return std::nullopt;
+    const auto* const mapped = prevalidated_writable_linear_region(address, size);
+    if (mapped == nullptr) return std::nullopt;
 
     const auto offset = static_cast<std::size_t>(region_offset(mapped->info, address));
-    auto backing = mapped->linear->writable_bytes();
-    if (offset > backing.size() || size > backing.size() - offset) return false;
-    auto fill_range = backing.subspan(offset, size);
-
-    std::vector<std::uint8_t> changed_bytes;
-    GuestWriteObserver observer;
+    const auto backing = mapped->linear->bytes();
+    PreparedLinearFill prepared;
     try {
-        changed_bytes.reserve(fill_range.size());
-        for (const auto byte : fill_range)
-            changed_bytes.push_back(static_cast<std::uint8_t>(byte != value));
-        observer = guest_write_observer_;
+        prepared.observer_ = guest_write_observer_;
+        if (prepared.observer_) {
+            prepared.changed_bytes_.reserve(size);
+            for (std::size_t index = 0u; index < size; ++index) {
+                prepared.changed_bytes_.push_back(
+                    static_cast<std::uint8_t>(backing[offset + index] != value));
+            }
+        }
     } catch (...) {
-        // Every potentially throwing preparation step happens before the backing is changed.
-        return false;
+        return std::nullopt;
     }
 
-    std::fill(fill_range.begin(), fill_range.end(), value);
-    performance_counters_.unobserved_accesses += size;
-    performance_counters_.unobserved_accesses += additional_unobserved_accesses;
-    performance_counters_.indexed_region_hits += additional_indexed_region_hits;
+    prepared.owner_ = this;
+    prepared.device_lifetime_ = mapped->device;
+    prepared.linear_ = mapped->linear;
+    prepared.offset_ = offset;
+    prepared.address_ = address;
+    prepared.size_ = size;
+    prepared.value_ = value;
+    prepared.source_ = source;
+    prepared.additional_unobserved_accesses_ = additional_unobserved_accesses;
+    prepared.additional_indexed_region_hits_ = additional_indexed_region_hits;
+    return prepared;
+}
 
-    if (observer) {
-        for (std::size_t index = 0u; index < changed_bytes.size(); ++index) {
+void Memory::commit_prepared_linear_fill(PreparedLinearFill prepared) noexcept {
+    auto backing = prepared.linear_->writable_bytes();
+    std::fill_n(backing.data() + static_cast<std::ptrdiff_t>(prepared.offset_),
+                prepared.size_,
+                prepared.value_);
+    prepared.owner_->performance_counters_.unobserved_accesses += prepared.size_;
+    prepared.owner_->performance_counters_.unobserved_accesses +=
+        prepared.additional_unobserved_accesses_;
+    prepared.owner_->performance_counters_.indexed_region_hits +=
+        prepared.additional_indexed_region_hits_;
+
+    if (prepared.observer_) {
+        for (std::size_t index = 0u; index < prepared.changed_bytes_.size(); ++index) {
             try {
-                observer({address + static_cast<std::uint32_t>(index),
-                          1u,
-                          source,
-                          changed_bytes[index] != 0u});
+                prepared.observer_(
+                    {prepared.address_ + static_cast<std::uint32_t>(index),
+                     1u,
+                     prepared.source_,
+                     prepared.changed_bytes_[index] != 0u});
             } catch (...) {
                 // The RAM commit is already globally visible. Resuming the guest after only a
                 // prefix of product-observer updates would make executable provenance unsound.
@@ -1327,10 +1333,28 @@ bool Memory::commit_prevalidated_linear_fill(const std::uint32_t address,
             }
         }
     }
+}
+
+bool Memory::commit_prevalidated_linear_fill(
+    const std::uint32_t address,
+    const std::size_t size,
+    const std::uint8_t value,
+    const CodeWriteSource source,
+    const std::size_t additional_unobserved_accesses,
+    const std::size_t additional_indexed_region_hits) noexcept {
+    auto prepared = prepare_prevalidated_linear_fill(address,
+                                                     size,
+                                                     value,
+                                                     source,
+                                                     additional_unobserved_accesses,
+                                                     additional_indexed_region_hits);
+    if (!prepared) return false;
+    commit_prepared_linear_fill(std::move(*prepared));
     return true;
 }
 
-bool Memory::commit_prevalidated_linear_u32_pattern(
+std::optional<Memory::PreparedLinearU32Pattern>
+Memory::prepare_prevalidated_linear_u32_pattern(
     const std::uint32_t address,
     const std::size_t word_count,
     const std::uint32_t value,
@@ -1342,76 +1366,82 @@ bool Memory::commit_prevalidated_linear_u32_pattern(
         (address & (word_size - 1u)) != 0u || lookup_mode_ != MemoryLookupMode::Indexed ||
         access_observers_active() || mmio_access_tracking_enabled_ || mmio_trace_handler_ ||
         guest_memory_access_sink_ || !guest_write_observer_allows_prevalidated_linear_writes())
-        return false;
+        return std::nullopt;
 
     const auto size = word_count * word_size;
-    if (size > address_space_size - static_cast<std::uint64_t>(address)) return false;
-
-    const auto range_end = static_cast<std::uint64_t>(address) + size;
-    const MappedRegion* mapped = indexed_region(address, size, false);
-    if (mapped == nullptr) {
-        for (const auto& candidate : regions_) {
-            const auto region_start = static_cast<std::uint64_t>(candidate.info.base_address);
-            const auto region_end = region_start + candidate.info.size;
-            if (address >= region_start && range_end <= region_end) {
-                if (mapped != nullptr) return false;
-                mapped = &candidate;
-            }
-        }
-    }
-    if (mapped == nullptr || mapped->info.access != MemoryRegionAccess::ReadWrite ||
-        mapped->linear == nullptr)
-        return false;
+    const auto* const mapped = prevalidated_writable_linear_region(address, size);
+    if (mapped == nullptr) return std::nullopt;
 
     const auto offset = static_cast<std::size_t>(region_offset(mapped->info, address));
-    auto backing = mapped->linear->writable_bytes();
-    if (offset > backing.size() || size > backing.size() - offset) return false;
-    auto pattern_range = backing.subspan(offset, size);
-
-    std::vector<bool> changed_words;
-    GuestWriteObserver observer;
+    const auto backing = mapped->linear->bytes();
+    PreparedLinearU32Pattern prepared;
     try {
-        observer = guest_write_observer_;
-        if (observer) {
-            changed_words.reserve(word_count);
+        prepared.observer_ = guest_write_observer_;
+        if (prepared.observer_) {
+            prepared.changed_words_.reserve(word_count);
             const auto word_changed = [&](const std::size_t word) {
-                const auto byte = word * word_size;
-                return pattern_range[byte] != static_cast<std::uint8_t>(value) ||
-                       pattern_range[byte + 1u] != static_cast<std::uint8_t>(value >> 8u) ||
-                       pattern_range[byte + 2u] != static_cast<std::uint8_t>(value >> 16u) ||
-                       pattern_range[byte + 3u] != static_cast<std::uint8_t>(value >> 24u);
+                const auto byte = offset + word * word_size;
+                return backing[byte] != static_cast<std::uint8_t>(value) ||
+                       backing[byte + 1u] != static_cast<std::uint8_t>(value >> 8u) ||
+                       backing[byte + 2u] != static_cast<std::uint8_t>(value >> 16u) ||
+                       backing[byte + 3u] != static_cast<std::uint8_t>(value >> 24u);
             };
-            for (std::size_t word = 0u; word < word_count; ++word)
-                changed_words.push_back(word_changed(word));
+            for (std::size_t word = 0u; word < word_count; ++word) {
+                prepared.changed_words_.push_back(
+                    static_cast<std::uint8_t>(word_changed(word)));
+            }
         }
     } catch (...) {
-        // Every potentially throwing preparation step happens before the backing is changed.
-        return false;
+        return std::nullopt;
     }
 
+    prepared.owner_ = this;
+    prepared.device_lifetime_ = mapped->device;
+    prepared.linear_ = mapped->linear;
+    prepared.offset_ = offset;
+    prepared.address_ = address;
+    prepared.word_count_ = word_count;
+    prepared.value_ = value;
+    prepared.source_ = source;
+    prepared.additional_unobserved_accesses_ = additional_unobserved_accesses;
+    prepared.additional_indexed_region_hits_ = additional_indexed_region_hits;
+    return prepared;
+}
+
+void Memory::commit_prepared_linear_u32_pattern(
+    PreparedLinearU32Pattern prepared) noexcept {
+    constexpr std::size_t word_size = sizeof(std::uint32_t);
     const std::array pattern{
-        static_cast<std::uint8_t>(value),
-        static_cast<std::uint8_t>(value >> 8u),
-        static_cast<std::uint8_t>(value >> 16u),
-        static_cast<std::uint8_t>(value >> 24u),
+        static_cast<std::uint8_t>(prepared.value_),
+        static_cast<std::uint8_t>(prepared.value_ >> 8u),
+        static_cast<std::uint8_t>(prepared.value_ >> 16u),
+        static_cast<std::uint8_t>(prepared.value_ >> 24u),
     };
-    for (std::size_t word = 0u; word < word_count; ++word)
+    auto backing = prepared.linear_->writable_bytes();
+    auto* const target =
+        backing.data() + static_cast<std::ptrdiff_t>(prepared.offset_);
+    for (std::size_t word = 0u; word < prepared.word_count_; ++word) {
         std::copy(pattern.begin(),
                   pattern.end(),
-                  pattern_range.begin() + static_cast<std::ptrdiff_t>(word * word_size));
+                  target + static_cast<std::ptrdiff_t>(word * word_size));
+    }
 
-    performance_counters_.unobserved_accesses += word_count;
-    performance_counters_.unobserved_accesses += additional_unobserved_accesses;
-    performance_counters_.indexed_region_hits += additional_indexed_region_hits;
+    prepared.owner_->performance_counters_.unobserved_accesses +=
+        prepared.word_count_;
+    prepared.owner_->performance_counters_.unobserved_accesses +=
+        prepared.additional_unobserved_accesses_;
+    prepared.owner_->performance_counters_.indexed_region_hits +=
+        prepared.additional_indexed_region_hits_;
 
-    if (observer) {
-        for (std::size_t word = 0u; word < word_count; ++word) {
+    if (prepared.observer_) {
+        for (std::size_t word = 0u; word < prepared.word_count_; ++word) {
             try {
                 const auto byte_offset = word * word_size;
-                observer({address + static_cast<std::uint32_t>(byte_offset),
-                          word_size,
-                          source,
-                          changed_words[word]});
+                prepared.observer_(
+                    {prepared.address_ + static_cast<std::uint32_t>(byte_offset),
+                     word_size,
+                     prepared.source_,
+                     prepared.changed_words_[word] != 0u});
             } catch (...) {
                 // The complete RAM commit is already visible. Partial provenance updates may
                 // never be followed by resumed guest execution.
@@ -1419,10 +1449,28 @@ bool Memory::commit_prevalidated_linear_u32_pattern(
             }
         }
     }
+}
+
+bool Memory::commit_prevalidated_linear_u32_pattern(
+    const std::uint32_t address,
+    const std::size_t word_count,
+    const std::uint32_t value,
+    const CodeWriteSource source,
+    const std::size_t additional_unobserved_accesses,
+    const std::size_t additional_indexed_region_hits) noexcept {
+    auto prepared = prepare_prevalidated_linear_u32_pattern(address,
+                                                            word_count,
+                                                            value,
+                                                            source,
+                                                            additional_unobserved_accesses,
+                                                            additional_indexed_region_hits);
+    if (!prepared) return false;
+    commit_prepared_linear_u32_pattern(std::move(*prepared));
     return true;
 }
 
-bool Memory::commit_prevalidated_repeated_u32_sequence(
+std::optional<Memory::PreparedRepeatedU32Sequence>
+Memory::prepare_prevalidated_repeated_u32_sequence(
     const std::uint32_t address,
     const std::size_t word_count,
     const std::uint32_t first_value,
@@ -1435,44 +1483,28 @@ bool Memory::commit_prevalidated_repeated_u32_sequence(
         lookup_mode_ != MemoryLookupMode::Indexed || access_observers_active() ||
         mmio_access_tracking_enabled_ || mmio_trace_handler_ || guest_memory_access_sink_ ||
         !guest_write_observer_allows_prevalidated_linear_writes())
-        return false;
-
-    const MappedRegion* mapped = indexed_region(address, word_size, false);
-    if (mapped == nullptr) {
-        for (const auto& candidate : regions_) {
-            const auto region_start = static_cast<std::uint64_t>(candidate.info.base_address);
-            const auto region_end = region_start + candidate.info.size;
-            const auto write_end = static_cast<std::uint64_t>(address) + word_size;
-            if (address >= region_start && write_end <= region_end) {
-                if (mapped != nullptr) return false;
-                mapped = &candidate;
-            }
-        }
-    }
-    if (mapped == nullptr || mapped->info.access != MemoryRegionAccess::ReadWrite ||
-        mapped->linear == nullptr)
-        return false;
+        return std::nullopt;
+    const auto* const mapped =
+        prevalidated_writable_linear_region(address, word_size);
+    if (mapped == nullptr) return std::nullopt;
 
     const auto offset = static_cast<std::size_t>(region_offset(mapped->info, address));
-    auto backing = mapped->linear->writable_bytes();
-    if (offset > backing.size() || word_size > backing.size() - offset) return false;
-    auto target = backing.subspan(offset, word_size);
-
-    std::vector<bool> changed_words;
-    GuestWriteObserver observer;
+    const auto backing = mapped->linear->bytes();
+    PreparedRepeatedU32Sequence prepared;
     std::uint32_t final_value = first_value;
     try {
-        observer = guest_write_observer_;
-        if (observer) {
-            changed_words.reserve(word_count);
+        prepared.observer_ = guest_write_observer_;
+        if (prepared.observer_) {
+            prepared.changed_words_.reserve(word_count);
             std::uint32_t previous =
-                static_cast<std::uint32_t>(target[0u]) |
-                (static_cast<std::uint32_t>(target[1u]) << 8u) |
-                (static_cast<std::uint32_t>(target[2u]) << 16u) |
-                (static_cast<std::uint32_t>(target[3u]) << 24u);
+                static_cast<std::uint32_t>(backing[offset]) |
+                (static_cast<std::uint32_t>(backing[offset + 1u]) << 8u) |
+                (static_cast<std::uint32_t>(backing[offset + 2u]) << 16u) |
+                (static_cast<std::uint32_t>(backing[offset + 3u]) << 24u);
             auto next = first_value;
             for (std::size_t word = 0u; word < word_count; ++word) {
-                changed_words.push_back(previous != next);
+                prepared.changed_words_.push_back(
+                    static_cast<std::uint8_t>(previous != next));
                 previous = next;
                 final_value = next;
                 next += step;
@@ -1483,26 +1515,72 @@ bool Memory::commit_prevalidated_repeated_u32_sequence(
                     static_cast<std::uint64_t>(word_count - 1u) * step);
         }
     } catch (...) {
-        return false;
+        return std::nullopt;
     }
 
-    target[0u] = static_cast<std::uint8_t>(final_value);
-    target[1u] = static_cast<std::uint8_t>(final_value >> 8u);
-    target[2u] = static_cast<std::uint8_t>(final_value >> 16u);
-    target[3u] = static_cast<std::uint8_t>(final_value >> 24u);
-    performance_counters_.unobserved_accesses += word_count;
-    performance_counters_.unobserved_accesses += additional_unobserved_accesses;
-    performance_counters_.indexed_region_hits += additional_indexed_region_hits;
+    prepared.owner_ = this;
+    prepared.device_lifetime_ = mapped->device;
+    prepared.linear_ = mapped->linear;
+    prepared.offset_ = offset;
+    prepared.address_ = address;
+    prepared.word_count_ = word_count;
+    prepared.final_value_ = final_value;
+    prepared.source_ = source;
+    prepared.additional_unobserved_accesses_ = additional_unobserved_accesses;
+    prepared.additional_indexed_region_hits_ = additional_indexed_region_hits;
+    return prepared;
+}
 
-    if (observer) {
-        for (std::size_t word = 0u; word < word_count; ++word) {
+void Memory::commit_prepared_repeated_u32_sequence(
+    PreparedRepeatedU32Sequence prepared) noexcept {
+    constexpr std::size_t word_size = sizeof(std::uint32_t);
+    auto backing = prepared.linear_->writable_bytes();
+    auto* const target =
+        backing.data() + static_cast<std::ptrdiff_t>(prepared.offset_);
+    target[0u] = static_cast<std::uint8_t>(prepared.final_value_);
+    target[1u] = static_cast<std::uint8_t>(prepared.final_value_ >> 8u);
+    target[2u] = static_cast<std::uint8_t>(prepared.final_value_ >> 16u);
+    target[3u] = static_cast<std::uint8_t>(prepared.final_value_ >> 24u);
+    prepared.owner_->performance_counters_.unobserved_accesses +=
+        prepared.word_count_;
+    prepared.owner_->performance_counters_.unobserved_accesses +=
+        prepared.additional_unobserved_accesses_;
+    prepared.owner_->performance_counters_.indexed_region_hits +=
+        prepared.additional_indexed_region_hits_;
+
+    if (prepared.observer_) {
+        for (std::size_t word = 0u; word < prepared.word_count_; ++word) {
             try {
-                observer({address, word_size, source, changed_words[word]});
+                prepared.observer_(
+                    {prepared.address_,
+                     word_size,
+                     prepared.source_,
+                     prepared.changed_words_[word] != 0u});
             } catch (...) {
                 std::terminate();
             }
         }
     }
+}
+
+bool Memory::commit_prevalidated_repeated_u32_sequence(
+    const std::uint32_t address,
+    const std::size_t word_count,
+    const std::uint32_t first_value,
+    const std::uint32_t step,
+    const CodeWriteSource source,
+    const std::size_t additional_unobserved_accesses,
+    const std::size_t additional_indexed_region_hits) noexcept {
+    auto prepared = prepare_prevalidated_repeated_u32_sequence(
+        address,
+        word_count,
+        first_value,
+        step,
+        source,
+        additional_unobserved_accesses,
+        additional_indexed_region_hits);
+    if (!prepared) return false;
+    commit_prepared_repeated_u32_sequence(std::move(*prepared));
     return true;
 }
 
@@ -1791,6 +1869,38 @@ const Memory::MappedRegion* Memory::indexed_region(const std::uint32_t address,
     if (address < region_start || end > region_end) return nullptr;
     if (record_lookup_metrics) ++performance_counters_.indexed_region_hits;
     return &mapped;
+}
+
+const Memory::MappedRegion*
+Memory::prevalidated_writable_linear_region(const std::uint32_t address,
+                                            const std::size_t size) const noexcept {
+    if (lookup_mode_ != MemoryLookupMode::Indexed || size == 0u ||
+        size > address_space_size - static_cast<std::uint64_t>(address))
+        return nullptr;
+
+    const auto range_end = static_cast<std::uint64_t>(address) + size;
+    const MappedRegion* mapped = indexed_region(address, size, false);
+    if (mapped == nullptr) {
+        for (const auto& candidate : regions_) {
+            const auto region_start =
+                static_cast<std::uint64_t>(candidate.info.base_address);
+            const auto region_end = region_start + candidate.info.size;
+            if (address < region_start || range_end > region_end) continue;
+            if (mapped != nullptr) return nullptr;
+            mapped = &candidate;
+        }
+    }
+    if (mapped == nullptr ||
+        mapped->info.access != MemoryRegionAccess::ReadWrite ||
+        mapped->linear == nullptr)
+        return nullptr;
+
+    const auto offset =
+        static_cast<std::size_t>(region_offset(mapped->info, address));
+    const auto backing = mapped->linear->bytes();
+    if (offset > backing.size() || size > backing.size() - offset)
+        return nullptr;
+    return mapped;
 }
 
 void Memory::rebuild_region_index() {

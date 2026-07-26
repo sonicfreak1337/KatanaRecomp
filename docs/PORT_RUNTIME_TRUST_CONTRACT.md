@@ -2,8 +2,9 @@
 
 Der mit KR-4508 eingefuehrte Portprojektvertrag Version 3 trennt
 Analyseerfolg, Eingabeidentitaet und tatsaechliche Gastausfuehrung. Der
-aktuelle kumulative Stand verwendet Portprojektvertrag 36, Runtime-ABI 51,
-PlatformServices-ABI 11, Block-ABI 5 und Backend-Interface-ABI 4. Keine der
+aktuelle kumulative Stand verwendet Portprojektvertrag 37, Runtime-ABI 52,
+Analyzer-ABI 1, PlatformServices-ABI 11, Block-ABI 5 und
+Backend-Interface-ABI 4. Keine der
 Vertrauensaussagen wird aus der blossen Erzeugung oder dem Start eines
 Hostprozesses abgeleitet.
 

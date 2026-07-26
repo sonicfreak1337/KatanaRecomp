@@ -24,7 +24,10 @@ Ein Port darf `find_package(KatanaRecomp CONFIG REQUIRED)` und
 `runtime-sdk` enthaelt nur Runtimeheader, den generierten Buildvertrag, die
 Runtimebibliothek und das CMake-Paket. `analyzer-sdk` ergaenzt
 `KatanaRecomp::analyzer` und alle Analyseheader. Ein Out-of-Tree-Consumer wird
-als `katana-package-contract-tests` installiert, konfiguriert und gebaut.
+als `katana-package-contract-tests` installiert, konfiguriert und gebaut. Ein
+zweiter Consumer prueft den eigenen
+[`Analyzer-ABI-Vertrag`](ANALYZER_ABI.md) einschliesslich absichtlich
+scheiternder Configure- und Linkfaelle.
 
 Der Projektgenerator liefert neben CMake ein eigenstaendig ausfuehrbares
 `build.ninja`. Es konfiguriert einen isolierten inneren Ninja-Build ueber CMake,
@@ -39,10 +42,10 @@ Buildvertrag wirklich inkludieren.
 
 `VERSION` ist die kanonische Projekt- und Paketversion.
 `cmake/KatanaVersions.cmake` validiert sie und ist die einzige Quelle fuer
-Runtime-, Block-, Plattformdienst-, Backend- und Port-ABI-Werte. CMake erzeugt
-daraus `katana/build_contract.hpp` und die Packagevariablen. Inkompatible
-Vertraege werden damit bereits beim Konfigurieren beziehungsweise durch
-`static_assert` sichtbar.
+Runtime-, Block-, Analyzer-, Plattformdienst-, Backend- und
+Port-ABI-Werte. CMake erzeugt daraus `katana/build_contract.hpp` und die
+Packagevariablen. Inkompatible Vertraege werden damit bereits beim
+Konfigurieren, durch `static_assert` oder an der Analyzer-Linkmarke sichtbar.
 
 ## Compiler- und Profilmatrix
 

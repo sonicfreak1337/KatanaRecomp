@@ -2,6 +2,12 @@
 
 Stand: KR-4716
 
+Die oeffentlichen Ergebnislayouts dieser Analyse stehen unter
+[Analyzer-ABI 1](ANALYZER_ABI.md). Layoutaenderungen wie neue Provenienz-,
+Truncation- oder Inventarfelder sind damit vom Runtimevertrag getrennt
+versioniert und koennen nicht mehr unbemerkt mit einem anders gebauten
+Analyzerarchiv gelinkt werden.
+
 Die SH-C-Funktionswertanalyse verfolgt R0 sowie die ABI-erhaltenen Register
 R8 bis R14 getrennt je Funktionskontext. Ein Kontext wird erst dann als
 geschlossen behandelt, wenn alle statisch bekannten direkten Callstellen und

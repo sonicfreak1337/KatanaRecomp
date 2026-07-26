@@ -13,6 +13,8 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <type_traits>
+#include <utility>
 #include <vector>
 
 #ifndef _WIN32
@@ -98,6 +100,23 @@ int main(const int argc, const char* const* argv) {
     using katana::runtime::MemoryLookupMode;
     using katana::runtime::MemoryRegionAccess;
     using katana::runtime::GuestWriteObserverContract;
+
+    static_assert(
+        std::is_nothrow_move_constructible_v<Memory::PreparedLinearFill> &&
+        !std::is_copy_constructible_v<Memory::PreparedLinearFill> &&
+        !std::is_move_assignable_v<Memory::PreparedLinearFill> &&
+        std::is_nothrow_move_constructible_v<Memory::PreparedLinearU32Pattern> &&
+        !std::is_copy_constructible_v<Memory::PreparedLinearU32Pattern> &&
+        !std::is_move_assignable_v<Memory::PreparedLinearU32Pattern> &&
+        std::is_nothrow_move_constructible_v<Memory::PreparedRepeatedU32Sequence> &&
+        !std::is_copy_constructible_v<Memory::PreparedRepeatedU32Sequence> &&
+        !std::is_move_assignable_v<Memory::PreparedRepeatedU32Sequence>);
+    static_assert(noexcept(std::declval<Memory&>().commit_prepared_linear_fill(
+                      std::declval<Memory::PreparedLinearFill>())) &&
+                  noexcept(std::declval<Memory&>().commit_prepared_linear_u32_pattern(
+                      std::declval<Memory::PreparedLinearU32Pattern>())) &&
+                  noexcept(std::declval<Memory&>().commit_prepared_repeated_u32_sequence(
+                      std::declval<Memory::PreparedRepeatedU32Sequence>())));
 
     require(argc > 0 && argv[0] != nullptr,
             "Testprozess besitzt keinen Pfad fuer den Fail-stop-Kindprozess.");
@@ -913,6 +932,125 @@ int main(const int argc, const char* const* argv) {
             pattern_base + 0x20000u, 1u, "Nichtlinearer U32-Mustercommit wurde akzeptiert.");
         require_rejected_without_mutation(
             pattern_base + 0x30000u, 1u, "Unmapped U32-Mustercommit wurde akzeptiert.");
+    }
+
+    {
+        constexpr std::uint32_t base = 0x09000000u;
+        const auto backing = std::make_shared<LinearMemoryDevice>(32u);
+        Memory prepared_memory(0u);
+        prepared_memory.map_region("prepared-two-phase-ram", base, backing);
+        std::vector<katana::runtime::GuestWriteEvent> prepared_events;
+        std::vector<katana::runtime::GuestWriteEvent> replacement_events;
+        prepared_events.reserve(16u);
+        replacement_events.reserve(16u);
+        const auto stable_observer =
+            [&](const katana::runtime::GuestWriteEvent& event) {
+                prepared_events.push_back(event);
+            };
+        prepared_memory.set_guest_write_observer(
+            stable_observer,
+            GuestWriteObserverContract::StableForPrevalidatedLinearWrites);
+
+        auto fill = prepared_memory.prepare_prevalidated_linear_fill(
+            base,
+            4u,
+            0x5Au,
+            katana::runtime::CodeWriteSource::Cpu,
+            2u,
+            1u);
+        require(fill.has_value(),
+                "Zweiphasiger Fill konnte die lineare RAM-Transaktion nicht vorbereiten.");
+
+        // All admission-sensitive state is deliberately changed after preparation. Commit must
+        // use only the frozen transaction and may neither copy the replacement observer nor
+        // revalidate/reject after a caller has accepted guest time.
+        prepared_memory.set_lookup_mode(MemoryLookupMode::Reference);
+        prepared_memory.set_trace_handler([](const auto&) {});
+        prepared_memory.set_mmio_access_tracking(true);
+        std::size_t sink_calls = 0u;
+        prepared_memory.set_guest_memory_access_sink(
+            {&sink_calls, &count_guest_memory_access});
+        prepared_memory.set_guest_write_observer(
+            [&](const auto& event) { replacement_events.push_back(event); });
+        prepared_memory.commit_prepared_linear_fill(std::move(*fill));
+        require(backing->read_u32(0u) == 0x5A5A5A5Au &&
+                    prepared_events.size() == 4u &&
+                    replacement_events.empty() && sink_calls == 0u,
+                "Vorbereiteter Fill validiert nachtraeglich oder verwendet einen nicht "
+                "eingefrorenen Observer.");
+
+        prepared_memory.set_lookup_mode(MemoryLookupMode::Indexed);
+        prepared_memory.clear_trace_handler();
+        prepared_memory.set_mmio_access_tracking(false);
+        prepared_memory.clear_guest_memory_access_sink();
+        prepared_memory.set_guest_write_observer(
+            stable_observer,
+            GuestWriteObserverContract::StableForPrevalidatedLinearWrites);
+
+        auto pattern = prepared_memory.prepare_prevalidated_linear_u32_pattern(
+            base + 8u,
+            2u,
+            0xAABBCCDDu,
+            katana::runtime::CodeWriteSource::Dma,
+            3u,
+            2u);
+        require(pattern.has_value(),
+                "Zweiphasiges U32-Muster konnte nicht vorbereitet werden.");
+        prepared_memory.commit_prepared_linear_u32_pattern(std::move(*pattern));
+        require(backing->read_u32(8u) == 0xAABBCCDDu &&
+                    backing->read_u32(12u) == 0xAABBCCDDu,
+                "Vorbereiteter U32-Mustercommit schreibt nicht das vollstaendige Muster.");
+
+        auto sequence =
+            prepared_memory.prepare_prevalidated_repeated_u32_sequence(
+                base + 24u,
+                3u,
+                10u,
+                2u,
+                katana::runtime::CodeWriteSource::Fallback,
+                4u,
+                3u);
+        require(sequence.has_value(),
+                "Zweiphasige wiederholte U32-Sequenz konnte nicht vorbereitet werden.");
+        prepared_memory.commit_prepared_repeated_u32_sequence(
+            std::move(*sequence));
+        require(backing->read_u32(24u) == 14u &&
+                    prepared_events.size() == 9u &&
+                    prepared_memory.performance_counters().unobserved_accesses ==
+                        18u &&
+                    prepared_memory.performance_counters().indexed_region_hits ==
+                        6u,
+                "Vorbereitete U32-Transaktionen verlieren Endwert, Observerfolge oder "
+                "Accounting.");
+
+        constexpr std::uint32_t on_chip_ram_base = 0x7C000000u;
+        constexpr std::uint32_t synthetic_alias_counter =
+            on_chip_ram_base + 0x01001238u;
+        std::size_t on_chip_ram_writes = 0u;
+        const auto on_chip_ram =
+            std::make_shared<katana::runtime::MmioMemoryDevice>(
+                0x04000000u,
+                [](const auto, const auto) { return 0u; },
+                [&](const auto, const auto, const auto) {
+                    ++on_chip_ram_writes;
+                });
+        Memory on_chip_memory(0u);
+        on_chip_memory.map_region(
+            "sh4-on-chip-ram-aperture", on_chip_ram_base, on_chip_ram);
+        on_chip_memory.set_guest_write_observer(
+            [](const auto&) noexcept {},
+            GuestWriteObserverContract::StableForPrevalidatedLinearWrites);
+        require(!on_chip_memory
+                     .prepare_prevalidated_repeated_u32_sequence(
+                         synthetic_alias_counter,
+                         8u,
+                         1u,
+                         1u,
+                         katana::runtime::CodeWriteSource::Cpu)
+                     .has_value() &&
+                    on_chip_ram_writes == 0u,
+                "OCRAM-artiger MMIO-Counter wurde als lineare, unfehlbare "
+                "U32-Transaktion vorbereitet.");
     }
 
     std::cout << "Regionbasierter Speicherbus erfolgreich.\n";

@@ -248,6 +248,128 @@ struct LinearMemoryTransactionWrite {
 
 class Memory {
   public:
+    class PreparedLinearFill final {
+      public:
+        PreparedLinearFill(const PreparedLinearFill&) = delete;
+        PreparedLinearFill& operator=(const PreparedLinearFill&) = delete;
+        PreparedLinearFill(PreparedLinearFill&& other) noexcept
+            : owner_(std::exchange(other.owner_, nullptr)),
+              device_lifetime_(std::move(other.device_lifetime_)),
+              linear_(std::exchange(other.linear_, nullptr)),
+              offset_(std::exchange(other.offset_, 0u)),
+              address_(std::exchange(other.address_, 0u)),
+              size_(std::exchange(other.size_, 0u)),
+              value_(std::exchange(other.value_, std::uint8_t{0u})),
+              source_(other.source_),
+              additional_unobserved_accesses_(
+                  std::exchange(other.additional_unobserved_accesses_, 0u)),
+              additional_indexed_region_hits_(
+                  std::exchange(other.additional_indexed_region_hits_, 0u)),
+              observer_(std::move(other.observer_)),
+              changed_bytes_(std::move(other.changed_bytes_)) {}
+        PreparedLinearFill& operator=(PreparedLinearFill&&) noexcept = delete;
+        ~PreparedLinearFill() = default;
+
+      private:
+        friend class Memory;
+        PreparedLinearFill() = default;
+
+        Memory* owner_ = nullptr;
+        std::shared_ptr<MemoryDevice> device_lifetime_;
+        LinearMemoryDevice* linear_ = nullptr;
+        std::size_t offset_ = 0u;
+        std::uint32_t address_ = 0u;
+        std::size_t size_ = 0u;
+        std::uint8_t value_ = 0u;
+        CodeWriteSource source_ = CodeWriteSource::Copy;
+        std::size_t additional_unobserved_accesses_ = 0u;
+        std::size_t additional_indexed_region_hits_ = 0u;
+        GuestWriteObserver observer_;
+        std::vector<std::uint8_t> changed_bytes_;
+    };
+
+    class PreparedLinearU32Pattern final {
+      public:
+        PreparedLinearU32Pattern(const PreparedLinearU32Pattern&) = delete;
+        PreparedLinearU32Pattern& operator=(const PreparedLinearU32Pattern&) = delete;
+        PreparedLinearU32Pattern(PreparedLinearU32Pattern&& other) noexcept
+            : owner_(std::exchange(other.owner_, nullptr)),
+              device_lifetime_(std::move(other.device_lifetime_)),
+              linear_(std::exchange(other.linear_, nullptr)),
+              offset_(std::exchange(other.offset_, 0u)),
+              address_(std::exchange(other.address_, 0u)),
+              word_count_(std::exchange(other.word_count_, 0u)),
+              value_(std::exchange(other.value_, 0u)),
+              source_(other.source_),
+              additional_unobserved_accesses_(
+                  std::exchange(other.additional_unobserved_accesses_, 0u)),
+              additional_indexed_region_hits_(
+                  std::exchange(other.additional_indexed_region_hits_, 0u)),
+              observer_(std::move(other.observer_)),
+              changed_words_(std::move(other.changed_words_)) {}
+        PreparedLinearU32Pattern&
+        operator=(PreparedLinearU32Pattern&&) noexcept = delete;
+        ~PreparedLinearU32Pattern() = default;
+
+      private:
+        friend class Memory;
+        PreparedLinearU32Pattern() = default;
+
+        Memory* owner_ = nullptr;
+        std::shared_ptr<MemoryDevice> device_lifetime_;
+        LinearMemoryDevice* linear_ = nullptr;
+        std::size_t offset_ = 0u;
+        std::uint32_t address_ = 0u;
+        std::size_t word_count_ = 0u;
+        std::uint32_t value_ = 0u;
+        CodeWriteSource source_ = CodeWriteSource::Copy;
+        std::size_t additional_unobserved_accesses_ = 0u;
+        std::size_t additional_indexed_region_hits_ = 0u;
+        GuestWriteObserver observer_;
+        std::vector<std::uint8_t> changed_words_;
+    };
+
+    class PreparedRepeatedU32Sequence final {
+      public:
+        PreparedRepeatedU32Sequence(const PreparedRepeatedU32Sequence&) = delete;
+        PreparedRepeatedU32Sequence& operator=(const PreparedRepeatedU32Sequence&) = delete;
+        PreparedRepeatedU32Sequence(PreparedRepeatedU32Sequence&& other) noexcept
+            : owner_(std::exchange(other.owner_, nullptr)),
+              device_lifetime_(std::move(other.device_lifetime_)),
+              linear_(std::exchange(other.linear_, nullptr)),
+              offset_(std::exchange(other.offset_, 0u)),
+              address_(std::exchange(other.address_, 0u)),
+              word_count_(std::exchange(other.word_count_, 0u)),
+              final_value_(std::exchange(other.final_value_, 0u)),
+              source_(other.source_),
+              additional_unobserved_accesses_(
+                  std::exchange(other.additional_unobserved_accesses_, 0u)),
+              additional_indexed_region_hits_(
+                  std::exchange(other.additional_indexed_region_hits_, 0u)),
+              observer_(std::move(other.observer_)),
+              changed_words_(std::move(other.changed_words_)) {}
+        PreparedRepeatedU32Sequence&
+        operator=(PreparedRepeatedU32Sequence&&) noexcept = delete;
+        ~PreparedRepeatedU32Sequence() = default;
+
+      private:
+        friend class Memory;
+        PreparedRepeatedU32Sequence() = default;
+
+        Memory* owner_ = nullptr;
+        std::shared_ptr<MemoryDevice> device_lifetime_;
+        LinearMemoryDevice* linear_ = nullptr;
+        std::size_t offset_ = 0u;
+        std::uint32_t address_ = 0u;
+        std::size_t word_count_ = 0u;
+        std::uint32_t final_value_ = 0u;
+        CodeWriteSource source_ = CodeWriteSource::Copy;
+        std::size_t additional_unobserved_accesses_ = 0u;
+        std::size_t additional_indexed_region_hits_ = 0u;
+        GuestWriteObserver observer_;
+        std::vector<std::uint8_t> changed_words_;
+    };
+
     explicit Memory(std::size_t legacy_size = 1024u * 1024u,
                     MemoryAlignmentPolicy alignment_policy = MemoryAlignmentPolicy::Strict);
 
@@ -366,11 +488,25 @@ class Memory {
     [[nodiscard]] bool commit_linear_transaction_batch(
         std::span<const LinearMemoryTransactionWrite> writes,
         CodeWriteSource source = CodeWriteSource::Copy) noexcept;
-    // A false result proves that no byte or observer-visible state was changed. Once the complete
-    // linear fill is atomically visible, every prepared GuestWriteObserver run is part of that
-    // commit. An observer exception is therefore fail-stop and calls std::terminate instead of
-    // returning to a caller that could resume the guest with partially updated observer state.
-    // This prevalidated fast path is admitted only while Indexed lookup is active.
+    // The two-phase forms below must be used whenever guest time is accepted between admission
+    // and the RAM write. Prepare resolves and retains the linear backing, snapshots the stable
+    // observer, computes every changed flag, and performs every allocation. A missing plan leaves
+    // memory and observer-visible state unchanged. Committing a valid move-only plan is
+    // allocation-free, performs no validation, cannot be rejected, and is noexcept. The backing
+    // and owning Memory must remain live until commit; callers must also prove that no host action
+    // changes the target bytes between prepare and commit.
+    [[nodiscard]] std::optional<PreparedLinearFill>
+    prepare_prevalidated_linear_fill(
+        std::uint32_t address,
+        std::size_t size,
+        std::uint8_t value,
+        CodeWriteSource source = CodeWriteSource::Copy,
+        std::size_t additional_unobserved_accesses = 0u,
+        std::size_t additional_indexed_region_hits = 0u) noexcept;
+    void commit_prepared_linear_fill(PreparedLinearFill prepared) noexcept;
+
+    // Compatibility wrapper for callers that prepare and commit without accepting guest time
+    // between the two operations.
     [[nodiscard]] bool
     commit_prevalidated_linear_fill(std::uint32_t address,
                                     std::size_t size,
@@ -378,11 +514,19 @@ class Memory {
                                     CodeWriteSource source = CodeWriteSource::Copy,
                                     std::size_t additional_unobserved_accesses = 0u,
                                     std::size_t additional_indexed_region_hits = 0u) noexcept;
-    // Atomically commits `word_count` little-endian 32-bit stores of the same value. Stable
-    // observers receive one word-sized event per guest store, including its exact bytes_changed
-    // state, so code/module generations remain scalar-equivalent. Performance counters remain
-    // operation-based, while callers may account separately prevalidated reads or other lookups
-    // skipped by the composite operation.
+    [[nodiscard]] std::optional<PreparedLinearU32Pattern>
+    prepare_prevalidated_linear_u32_pattern(
+        std::uint32_t address,
+        std::size_t word_count,
+        std::uint32_t value,
+        CodeWriteSource source = CodeWriteSource::Copy,
+        std::size_t additional_unobserved_accesses = 0u,
+        std::size_t additional_indexed_region_hits = 0u) noexcept;
+    void
+    commit_prepared_linear_u32_pattern(PreparedLinearU32Pattern prepared) noexcept;
+
+    // Compatibility wrapper for an immediate prepare/commit. Stable observers receive one
+    // word-sized event per guest store, including its exact bytes_changed state.
     [[nodiscard]] bool
     commit_prevalidated_linear_u32_pattern(
         std::uint32_t address,
@@ -391,10 +535,20 @@ class Memory {
         CodeWriteSource source = CodeWriteSource::Copy,
         std::size_t additional_unobserved_accesses = 0u,
         std::size_t additional_indexed_region_hits = 0u) noexcept;
-    // Atomically commits `word_count` scalar 32-bit stores to one prevalidated address. The first
-    // store writes `first_value`; every later value advances by `step` with 32-bit wraparound.
-    // Stable observers receive the exact scalar event sequence although only the final value
-    // becomes visible to concurrent host code.
+    [[nodiscard]] std::optional<PreparedRepeatedU32Sequence>
+    prepare_prevalidated_repeated_u32_sequence(
+        std::uint32_t address,
+        std::size_t word_count,
+        std::uint32_t first_value,
+        std::uint32_t step,
+        CodeWriteSource source = CodeWriteSource::Copy,
+        std::size_t additional_unobserved_accesses = 0u,
+        std::size_t additional_indexed_region_hits = 0u) noexcept;
+    void commit_prepared_repeated_u32_sequence(
+        PreparedRepeatedU32Sequence prepared) noexcept;
+
+    // Compatibility wrapper for an immediate prepare/commit. The first store writes
+    // `first_value`; every later value advances by `step` with 32-bit wraparound.
     [[nodiscard]] bool
     commit_prevalidated_repeated_u32_sequence(
         std::uint32_t address,
@@ -454,6 +608,9 @@ class Memory {
     [[nodiscard]] const MappedRegion* indexed_region(std::uint32_t address,
                                                      std::size_t width,
                                                      bool record_lookup_metrics = true) const noexcept;
+    [[nodiscard]] const MappedRegion*
+    prevalidated_writable_linear_region(std::uint32_t address,
+                                        std::size_t size) const noexcept;
     void rebuild_region_index();
     [[nodiscard]] bool access_observers_active() const noexcept;
     void require_alignment(std::uint32_t address,

@@ -1,5 +1,6 @@
 #pragma once
 
+#include "katana/analysis/abi.hpp"
 #include "katana/analysis/basic_blocks.hpp"
 #include "katana/io/executable_image.hpp"
 #include "katana/sh4/disassembler.hpp"

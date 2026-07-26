@@ -500,6 +500,7 @@ add_library(katana_core STATIC
     src/platform/firmware_diagnostics.cpp
     src/platform/firmware_profile.cpp
     src/platform/phase6_gate.cpp
+    src/analysis/abi.cpp
     src/analysis/disassembler.cpp
     src/analysis/analysis_index.cpp
     src/analysis/code_address.cpp
@@ -552,6 +553,20 @@ target_include_directories(
 )
 
 target_link_libraries(katana_core PUBLIC katana_runtime_core)
+target_compile_definitions(
+    katana_core
+    PUBLIC KATANA_ANALYZER_ABI_VERSION=${KATANA_ANALYZER_ABI_VERSION}
+)
+set_property(
+    TARGET katana_core
+    PROPERTY INTERFACE_KATANA_ANALYZER_ABI_VERSION
+             ${KATANA_ANALYZER_ABI_VERSION}
+)
+set_property(
+    TARGET katana_core
+    APPEND
+    PROPERTY COMPATIBLE_INTERFACE_STRING KATANA_ANALYZER_ABI_VERSION
+)
 set_target_properties(katana_core PROPERTIES EXPORT_NAME analyzer)
 katana_enable_warnings(katana_core)
 
@@ -2432,6 +2447,19 @@ add_test(
 )
 set_tests_properties(
     katana-counted-loop-differential-tests
+    PROPERTIES TIMEOUT 420 RESOURCE_LOCK katana-external-port-build
+)
+add_test(
+    NAME katana-counted-loop-product-commit-regression-tests
+    COMMAND ${CMAKE_COMMAND}
+        -DKATANA_FIXTURE_WRITER=$<TARGET_FILE:katana-port-export-tests>
+        -DKATANA_CLI=$<TARGET_FILE:katana-recomp>
+        -DKATANA_RUNTIME_ROOT=${CMAKE_CURRENT_SOURCE_DIR}
+        -P
+            ${CMAKE_CURRENT_SOURCE_DIR}/tests/codegen/verify_counted_loop_product_commit_regression.cmake
+)
+set_tests_properties(
+    katana-counted-loop-product-commit-regression-tests
     PROPERTIES TIMEOUT 420 RESOURCE_LOCK katana-external-port-build
 )
 add_test(
@@ -4615,6 +4643,7 @@ add_test(
         -DKATANA_CONFIG=$<CONFIG>
         -DKATANA_EXPECTED_VERSION=${PROJECT_VERSION}
         -DKATANA_EXPECTED_RUNTIME_ABI=${KATANA_RUNTIME_ABI_VERSION}
+        -DKATANA_EXPECTED_ANALYZER_ABI=${KATANA_ANALYZER_ABI_VERSION}
         -DKATANA_EXPECTED_PORT_PROJECT_CONTRACT=${KATANA_PORT_PROJECT_CONTRACT_VERSION}
         -P ${CMAKE_SOURCE_DIR}/tests/build/package_contract_tests.cmake
 )

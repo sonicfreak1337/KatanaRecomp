@@ -37,10 +37,11 @@ freigegebene `KR-4911` ist inzwischen ebenfalls abgeschlossen. `KR-4912` ist
 ebenfalls abgeschlossen; `KR-4848` und `KR-4913` sind inzwischen ebenfalls
 geschlossen.
 
-Der aktuelle kumulative Vertrag verwendet Runtime-ABI 51, Block-ABI 5,
-Backend-Interface-ABI 4, PlatformServices-ABI 11, Portprojektvertrag 36 und
-Host-Video-Vertrag 2. Systemreplay-Schema 8, Runtime-Probe-Schema 5 und
-Device-Schema 5 binden die aktuellen Replay- und Geraetezustaende.
+Der aktuelle kumulative Vertrag verwendet Runtime-ABI 52, Block-ABI 5,
+Analyzer-ABI 1, Backend-Interface-ABI 4, PlatformServices-ABI 11,
+Portprojektvertrag 37 und Host-Video-Vertrag 2. Systemreplay-Schema 8,
+Runtime-Probe-Schema 5 und Device-Schema 5 binden die aktuellen Replay- und
+Geraetezustaende.
 
 `KR-4814` ist abgeschlossen. Der generierte Produktport pollt den nativen
 Windows-Controllerpfad an Gast-Safepoints und fuehrt XInput-, WinMM-Joystick-,
@@ -68,12 +69,15 @@ Callsite-Stackprovenienz sowie einzelne, kleine und begrenzt lueckenhafte
 Returned-Table-Scans sind explizit getestet. Budget- und 64-Slot-Scanende
 werden als Truncation berichtet; kein Kandidat wird zur festen CFG-Kante.
 
-Runtime-ABI 51 bindet den atomaren linearen U32-Pattern-Commit mit
-skalaridentischer `GuestWriteEvent`-Folge. Portprojektvertrag 35 bindet den
+Runtime-ABI 52 bindet den zweiphasigen linearen Produktcommit mit
+skalaridentischer `GuestWriteEvent`-Folge. Portprojektvertrag 37 bindet den
 streng bewiesenen indirekten Callback-Fill-Fastpath. Counted-, Memory-Fill-
-und Composite-Batches muessen die gesamte Gastzeit vor jedem CPU-/RAM-Commit
-annehmen; ein Lifecycleabbruch darf weder CPU, RAM, Schedulerbeobachtung noch
-Provenienz veraendern. Memory-Fill verlangt einen stabilen Observervertrag,
+und Composite-Batches muessen Mapping, Observerkopie, Changed-Flags und alle
+Allokationen vor der Gastzeitannahme vorbereiten. Danach ist der RAM-Commit
+`noexcept` und nicht mehr ablehnbar; ein Prepare-Fehler faellt ohne
+Schedulerwirkung skalar zurueck. Ein Lifecycleabbruch darf weder CPU, RAM,
+Schedulerbeobachtung noch Provenienz veraendern. Memory-Fill verlangt einen
+stabilen Observervertrag,
 Composite-Fill bleibt No-MMU, und Counted Loop darf bei aktiver MMU nur
 bewiesen direkte P1-/P2-Bereiche verwenden. Die ausgefuehrten
 Differentialtests vergleichen den vollstaendigen Architekturzustand gegen
@@ -615,9 +619,9 @@ MMIO-Zugriff liegt im aktiven OCRAM; der fruehere Abbruch nach 12 Gastzyklen
 ist damit beseitigt. TA/PVR und ein echter Gastframe bleiben fuer den laengeren
 Folgelauf weiterhin offen.
 
-Runtime-ABI 51, Block-ABI 5, Backend-Interface-ABI 4, BIOS-ABI 9,
-PlatformServices-ABI 11, Portprojektvertrag 36 und Host-Video-Vertrag 2 bilden
-den kumulativen v0.48-Stand ab.
+Runtime-ABI 52, Block-ABI 5, Analyzer-ABI 1, Backend-Interface-ABI 4,
+BIOS-ABI 9, PlatformServices-ABI 11, Portprojektvertrag 37 und
+Host-Video-Vertrag 2 bilden den kumulativen v0.48-Stand ab.
 PlatformServices-ABI 10 versioniert zusaetzlich die genaue
 `PREF`-Instruktionsherkunft bis zur Store Queue.
 

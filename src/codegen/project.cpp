@@ -9,6 +9,7 @@
 #include <stdexcept>
 #include <string_view>
 #include <system_error>
+#include <utility>
 
 namespace katana::codegen {
 namespace {
@@ -291,12 +292,30 @@ ProjectWriteResult write_codegen_project(const std::filesystem::path& output_roo
         }
     }
 
-    std::vector<std::filesystem::path> sources;
+    struct BuildSource {
+        std::filesystem::path path;
+        std::size_t content_size = 0u;
+    };
+    std::vector<BuildSource> scheduled_sources;
     for (const auto& artifact : artifacts) {
         if (artifact.relative_path.extension() == ".cpp") {
-            sources.push_back(artifact.relative_path);
+            scheduled_sources.push_back({artifact.relative_path, artifact.content.size()});
         }
     }
+    // Ninja starts ready compile edges in target-source order. Schedule the largest generated
+    // units first so long-running compiler jobs overlap instead of waiting behind small dispatch
+    // shards. Path order remains the deterministic tie breaker.
+    std::sort(scheduled_sources.begin(),
+              scheduled_sources.end(),
+              [](const auto& left, const auto& right) {
+                  if (left.content_size != right.content_size)
+                      return left.content_size > right.content_size;
+                  return left.path.generic_string() < right.path.generic_string();
+              });
+    std::vector<std::filesystem::path> sources;
+    sources.reserve(scheduled_sources.size());
+    for (auto& source : scheduled_sources)
+        sources.push_back(std::move(source.path));
     const std::array build_files = {
         ProjectArtifact{"CMakeLists.txt", cmake_project(sources)},
         ProjectArtifact{"build.ninja", ninja_project(sources)},

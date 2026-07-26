@@ -6,7 +6,7 @@ ungeloesten Kontrollflusspfaden mehr.
 
 ## ABI
 
-Die aktuelle Runtime-ABI ist Version `51`. Die typisierte Block-ABI ist
+Die aktuelle Runtime-ABI ist Version `52`. Die typisierte Block-ABI ist
 Version `5`; die Backend-Interface-ABI ist Version `4`.
 
 Generierter Code enthaelt eine Compile-Time-Pruefung gegen diese Version. Eine
@@ -129,6 +129,13 @@ Controller-Produktintegration: Der generierte Port bindet Maple direkt an
 `ControllerInputTimeline`, pollt XInput und WinMM an Gast-Safepoints und
 fuehrt Keyboard und Fokus durch dieselbe gastzeitliche Ereignisschnittstelle.
 Deterministische Probes verzweigen vor diesem nativen Livepfad.
+ABI-Version 52 und Portprojektvertrag 37 binden den echten zweiphasigen
+Produktbatch-Commit. Fill-, U32-Pattern- und wiederholte U32-Schreibfolgen
+loesen vor Annahme der Gastzeit ihr eindeutiges lineares Backing auf, frieren
+den stabilen Write-Observer ein und erledigen alle Pruefungen, Reservierungen
+und Changed-Flag-Berechnungen. Erst danach folgt ein allokationsfreier,
+nicht mehr ablehnbarer `noexcept`-Commit. Nichtlineare Bereiche wie das
+SH-4-OCRAM fallen bereits beim Prepare auf den skalaren Pfad zurueck.
 
 ## CMake
 
@@ -685,8 +692,8 @@ generische C++-Emitter setzt auch bei einem durch Funktionsdiscovery
 nachfolgerlosen Block in jedem Backendmodus `PC` auf die Folgeadresse der
 letzten Gastinstruktion. Die Produktinvariante prueft einen Fallthrough relativ
 zu dieser tatsaechlichen Terminatorquelle und nicht zum Eintritt des
-umgebenden Wrappers. Der kumulative Stand verwendet Runtime-ABI 51, Block-ABI 5,
-Backend-Interface-ABI 4, PlatformServices-ABI 11, Portvertrag 35 und
+umgebenden Wrappers. Der kumulative Stand verwendet Runtime-ABI 52, Block-ABI 5,
+Backend-Interface-ABI 4, PlatformServices-ABI 11, Portvertrag 37 und
 Host-Video-Vertrag 2; die Beobachtungsgrenze steht auf Systemreplay-Schema 8,
 Runtime-Probe-Schema 5 und Device-Schema 5.
 
